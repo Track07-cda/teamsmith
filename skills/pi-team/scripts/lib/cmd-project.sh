@@ -44,6 +44,12 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
                  团队状态 + 每个 agent 的会话活动流；按周期顺带跑巡检
   watch [--once] [--interval N] [--ui]      手动/前台巡检（--ui = monitor）
   standby [on|off|status] [--reason "..."]  PM 主动停工：on 之后看门狗不再叫醒（人处理完 off）
+
+  ── 跨项目会议（PM 对 PM 的 peer 交流，不是指令通道） ─────────
+  meeting open <slug> --with <项目>[:<session>] --topic "…" [--ttl 72] [--yes]
+  meeting say <slug> --intent <info|question|report|proposal|request> "…" [--knock]
+  meeting read <slug> [--since N] [--peek] ｜ meeting inbox ｜ meeting list [--all]
+  meeting propose <slug> "…" ｜ meeting agree <slug> <A1> [--note "…"] ｜ meeting close <slug>
   up [--agents] [--print]      恢复 PM：建 tmux 场地 + 把 PM 拉起来（pi -c 保留历史）
   resume [--agent a] [--all] [--dry-run]   PM 的工具：把停了但没交活的 agent 续跑
 

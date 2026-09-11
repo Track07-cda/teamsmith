@@ -84,6 +84,12 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model>
 红线：禁止 push $TEAM_PROTECTED_BRANCH、禁止 force push、禁止 merge PR/MR、禁止 rebase/删除他人分支、
 禁止改仓库设置；禁止把 token/secret 写进代码、日志、提交信息；禁止读取凭据文件（如 ~/.pi/agent/auth.json）。
 
+**边界（跨项目一律不动手）**：只在 $TEAM_MAIN_ROOT 与自己的工作树、以及本团队 tmux session
+（$TEAM_SESSION）内动作。禁止给其他项目/其他 session 的窗口发消息、禁止读写其他项目的仓库与会话文件、
+禁止替其他项目改代码或合并。需要别的项目配合（跨仓库依赖、共享库改动）：在报告里写
+\`BLOCKED:\` + 需要谁做什么 —— **跨项目沟通由 PM 通过 \`$cli meeting\` 进行（peer 交流：接口对接/建议/问题报告），
+worker 不参会**；只有需要用户拍板的跨项目决策才经用户。
+
 **不要在半途停下来征求确认**：只有以下两种情况才结束回合 ——
 (a) 任务书验收命令全部跑完 + 报告写完 + 分支 push 完 + PR/MR 开完（或 local 模式 push 完）；
 (b) 被硬阻塞（缺依赖、要权限、发现别人的 bug）：\`$cli notify $agent "<一句话>"\` 通知 PM，

@@ -53,6 +53,16 @@ PM 读收件箱 → team review <ID>（独立 worktree 复验，跑门禁）
 bash {{SKILL_DIR}}/scripts/team bootstrap        # 幂等：配置+文档骨架+worktree+看门狗（tmux 窗口监视器）+下一步清单
 ```
 
+### 跨项目会议（PM 对 PM）
+
+```bash
+bash {{SKILL_DIR}}/scripts/team meeting inbox          # 待我回应的跨项目会议
+bash {{SKILL_DIR}}/scripts/team meeting say <slug> --intent proposal "…"
+```
+
+允许：接口怎么接、建议+依据、问题报告、约联调窗口。不允许：指挥别的 PM、替对方决策、冒充人类下令。
+共识由双方各自 `agree`；落地永远在各自项目里完成。**worker 不参会**（跨项目沟通只走 PM）。
+
 ### 定时巡检（不是心跳保活）
 
 watchdog 是**叫醒 PM 的节拍器**，不是“让 PM 永远活着”的守护进程：

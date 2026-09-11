@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.7.3"
+TEAM_VERSION="1.8.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -154,6 +154,14 @@ team_load_config() {
   # 看板里的 todo/wip 算不算“要叫醒 PM 的活”：默认不算（backlog 长期存在，不该每 15 分钟敲一次）；
   # blocked / 未读通知 / 待复验 / 停了的 agent 仍然算。想连 backlog 一起提醒就设 1。
   TEAM_WATCH_PENDING_BOARD="${TEAM_WATCH_PENDING_BOARD:-0}"
+  # 边界守卫：只允许往本团队 session 里的窗口打字。
+  # 跨项目讨论走 `team meeting`（文件为真相 + 可选敲门），不允许直接给别的 PM 发消息。
+  TEAM_GUARD_FOREIGN_TARGET="${TEAM_GUARD_FOREIGN_TARGET:-1}"
+  # 跨项目会议：共享区、TTL、每边上限、是否允许敲门
+  TEAM_MEETINGS_DIR="${TEAM_MEETINGS_DIR:-$HOME/.pi/team/meetings}"
+  TEAM_MEETING_TTL_HOURS="${TEAM_MEETING_TTL_HOURS:-72}"
+  TEAM_MEETING_MAX_TURNS="${TEAM_MEETING_MAX_TURNS:-20}"
+  TEAM_MEETING_KNOCK="${TEAM_MEETING_KNOCK:-0}"
   TEAM_WATCH_IMAGE="${TEAM_WATCH_IMAGE:-}"                 # 看门狗容器镜像，空=localhost/pi-team-watch:1
   TEAM_WATCH_BOX="${TEAM_WATCH_BOX:-}"                     # 目标开发容器名，空=自动（当前容器）
   TEAM_WATCH_RETRY_SEC="${TEAM_WATCH_RETRY_SEC:-15}"       # 内层 watch 退出后的重试间隔（秒）
@@ -316,7 +324,42 @@ team_tmux_ensure_session() {
   tmux new-session -d -s "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" 2>/dev/null || true
 }
 
-team_tmux_send_text() { # <session:window> <text>
+team_target_session() { # <session:window> → session 名
+  printf '%s\n' "${1%%:*}"
+}
+
+# 边界守卫：pi-team 只在自己的 tmux session 里动作。
+# 跨项目/跨 session 的沟通不是 agent 的活 —— 要走「本团队 PM → 用户 → 对方」。
+team_foreign_target_ok() { # <session:window> [meeting-slug] → 0=允许
+  [ "${TEAM_GUARD_FOREIGN_TARGET:-1}" = "1" ] || return 0
+  local sess; sess="$(team_target_session "$1")"
+  [ -n "$sess" ] || return 0
+  [ -n "$TEAM_SESSION" ] || return 0
+  [ "$sess" = "$TEAM_SESSION" ] && return 0
+  # 例外：**已登记的会议参与方** —— 只用于会议通知（敲门），不是聊天通道
+  if [ -n "${2:-}" ] && [ -n "${TEAM_MEETINGS_DIR:-$HOME/.pi/team/meetings}" ]; then
+    local map kv
+    map="$(grep -s '^PEER_SESSIONS=' "$(team_meetings_dir 2>/dev/null)/$2/state.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+    for kv in $(printf '%s' "$map" | tr ';' ' '); do
+      case "$kv" in
+        "=$sess"|*=*) [ "${kv#*=}" = "$sess" ] && return 0 ;;
+      esac
+    done
+  fi
+  team_err "拒绝跨 session 操作：目标 $1 不在本团队 session（$TEAM_SESSION）"
+  team_err "边界规则：跨项目讨论走 $TEAM_CLI meeting（PM 对 PM）；不允许直接给别的 session 打字或指挥别的 PM"
+  return 1
+}
+
+team_rule() { # 一条水平线（面板/阅读器用）
+  local w="${1:-74}"
+  printf '%.0s─' $(seq 1 "$w")
+  printf '\n'
+  return 0
+}
+
+team_tmux_send_text() { # <session:window> <text> [meeting-slug]
+  team_foreign_target_ok "$1" "${3:-}" || return 1
   tmux send-keys -t "$1" -l "$2" 2>/dev/null || return 1
   tmux send-keys -t "$1" Enter 2>/dev/null || return 1
 }
@@ -350,6 +393,11 @@ team_shell_running_command() { # <pid> → 0 表示这个 shell 进程在跑脚�
   local args toks=() tok
   args="$(ps -o args= -p "$1" 2>/dev/null | head -1)"
   [ -n "$args" ] || return 1
+  [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg]     shell_running? pid=%s args=[%s]\n' "$1" "$args" >&2
+  # 窗口刚建好的一瞬间，pane_pid 可能还是 tmux 自己（args 里有 -s/-n 这类参数会被误判成"在跑命令"）
+  case "${args%% *}" in
+    */tmux|tmux|*/tmux:*) return 1 ;;
+  esac
   read -r -a toks <<< "$args"
   local i=1
   while [ "$i" -lt "${#toks[@]}" ]; do
@@ -375,19 +423,29 @@ team_pgroup_has_process() { # <pgid> → 0 表示这个进程组里还有活进�
   return 1
 }
 
-team_pane_busy() { # <session:window> → 0 = 里面有东西在跑
-  local target="$1" cmd pid tpgid
+team_pane_busy() { # <session:window> → 0 = 里面有东西在跑（不是空提示符）
+  local target="$1" cmd pid args first
   cmd="$(team_pane_cmd "$target")"
-  team_is_shell_cmd "$cmd" || return 0
+  [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg] busy? %s cmd=%s\n' "$target" "$cmd" >&2
+  team_is_shell_cmd "$cmd" || return 0            # 前台不是 shell（pi/node…）→ 在跑
   pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null)"
   [ -n "$pid" ] || return 1
+  args="$(ps -o args= -p "$pid" 2>/dev/null | head -1)"
+  first="${args%% *}"
+  [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg]   pid=%s args=[%s]\n' "$pid" "$args" >&2
+  # 只有 pane_pid 真的是个 shell 才继续判；
+  # 刚建窗口的一瞬间 pane_pid 可能是 tmux 自己（args 形如 "[tmux: server]"）或空，
+  # 这时当成"没在跑"——否则会把刚建的窗口误判成"忙"，PM 就永远拉不起来。
+  case "$(basename "${first:-}" 2>/dev/null || printf '%s' "${first:-}")" in
+    bash|sh|zsh|fish|dash|ash|ksh|nu|elvish) ;;
+    *) return 1 ;;
+  esac
+  # shell 在跑脚本/子命令：命令行里有非选项参数（如 bash -lc 'exec pi …'）
   team_shell_running_command "$pid" && return 0
+  # job control：前台进程组不是这个 shell 自己 → 有前台命令
+  local tpgid
   tpgid="$(ps -o tpgid= -p "$pid" 2>/dev/null | tr -d ' ')"
-  if [ -n "$tpgid" ] && [ "$tpgid" != "$pid" ]; then
-    # 前台进程组不是 shell 自己，但那个组得真有活进程才算“忙”——
-    # 刚被杀掉的命令会留下陈旧的 tpgid，不排除掉会误判成“还在跑”。
-    team_pgroup_has_process "$tpgid" && return 0
-  fi
+  if [ -n "$tpgid" ] && [ "$tpgid" != "$pid" ]; then return 0; fi
   return 1
 }
 

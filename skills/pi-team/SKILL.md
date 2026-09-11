@@ -3,7 +3,7 @@ name: pi-team
 description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（podman 容器看门狗：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a podman container, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗容器 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.7.3"
+  version: "1.8.0"
 ---
 
 # pi-team · Pi Agent 团队
@@ -64,6 +64,7 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | 看门狗 | `team watchdog up\|down\|restart\|status\|logs`（默认 tmux 后端：同 session 的 `watchdog` 窗口跑监视器；`--container` 换 podman 容器）、`team watch [--once]`（前台巡检） |
 | 监视器 | `team monitor [--once] [--activity]`（**只服务当前 tmux session**：谁在跑/任务/待办/容量；`--activity` 才追加各 agent 会话活动流，默认关）、`team panel` 由它复用 |
 | PM/agent | `team up [--agents]`（恢复 PM）、`team resume`（PM 的工具，续跑停了的 agent）、`team standby on\|off`（PM 主动停工） |
+| 跨项目会议 | `team meeting open/say/read/list/inbox/propose/agree/close`（PM 对 PM 的 peer 交流：接口对接/建议/问题报告；**不是指令通道**，共识需双方 agree） |
 | forge 透传 | `team gh <gh 参数…>`、`team gl <METHOD> <path>`（token 由 wrapper 注入，不回显） |
 | 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测）、`team version` |
 
@@ -92,6 +93,14 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 PM 需要停下来问用户的情况只有：合并/推送等**共享状态变更**（skill 用 `--yes` 表达授权）、
 范围变更、需要用户拍板的选型（先派调研任务取证，再写 `DECISIONS.md`）。
 
+## 跨项目边界（谈事可以，指挥不行）
+
+- **允许**：讨论接口怎么接、提建议+依据、报告问题与复现、约联调窗口、各自认领自己那半边。
+- **不允许**：指挥别的 PM/agent、替对方决策、冒充人类下令、改对方仓库或状态。
+- 跨项目讨论走 `team meeting`（PM 对 PM，文件为真相 + 可选敲门）；**worker 不参会**（在报告里写
+  `BLOCKED:` 由 PM 去谈）。机制里没有 `command` 这种 intent，`--as-user` 只有人类终端能用。
+- 详见 [references/meeting.md](references/meeting.md)。
+
 ## 不可协商的规则（会被复验）
 - **没有真实执行过，不得声称通过**。报告必须带命令与输出尾部；PM 独立复跑。
 - agent 只改自己有归属的目录（`OWNERSHIP.md`）；跨目录 → 报告写 `BLOCKED:`。
@@ -116,6 +125,7 @@ PM 需要停下来问用户的情况只有：合并/推送等**共享状态变�
 |---|---|
 | `references/protocol.md` | 想理解每条规则的理由（独立复验、唤醒机制、容量底线、保活链路、安全模型） |
 | `references/config.md` | 配置键含义、项目落盘布局、环境变量覆盖（环境变量优先于配置文件） |
+| `references/meeting.md` | 跨项目会议：边界（能讨论什么、不能干什么）、共享区、命令、敲门、守卫 |
 | `references/bootstrap.md` | 新项目初始化：一条命令做什么、之后 PM 怎么走 |
 | `references/workflows.md` | 端到端 runbook：建队、派单、复验、合并、**巡检/看门狗容器**、并行扩展、阻塞处理 |
 | `references/troubleshooting.md` | 通知不到、会话丢失、worktree 冲突、forge 403、报告不实 |

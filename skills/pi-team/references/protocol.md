@@ -179,6 +179,18 @@ team merge T1.2 --no-renames --prefer-theirs pnpm-lock.yaml   # 冲突时这些�
   `Content-Type: application/x-www-form-urlencoded`；配成 `application/json` 会被 GitLab 拒
   （`{"error":"Invalid JSON format"}`，PR/MR 开不出来）。JSON 体（`--data/--data-binary`）仍走 `application/json`。
 
+## 8g. 跨项目：谈事可以，指挥不行
+
+- 项目之间**正常交流是允许的**：接口怎么接、建议与依据、问题报告与复现、约联调窗口。
+  **不允许**：指挥别的 PM/agent 做事、替对方决策、冒充人类下指令、改对方仓库或状态。
+- 机制上做到了"想指挥也指挥不了"：`team meeting` 的 `intent` 白名单里**没有 command/order**；
+  `--as-user` 只有人类终端（+`TEAM_MEETING_ALLOW_USER_ID=1`）能用，agent 进程写会被拒；
+  共识必须**双方各自 agree**；会议只写共享区，对对方仓库零写权限。
+- 分工：**worker 不参会**（跨项目沟通只走 PM）；worker 需要外部配合时在报告里写 `BLOCKED:`。
+- 共享区在两个项目之外（`~/.pi/team/meetings/<slug>/`），transcript 是唯一真相；
+  敲门（提醒对方 PM 窗口）默认关闭，只在 `--knock` + `TEAM_MEETING_KNOCK=1` + 对方登记了 session 时发生。
+- 边界守卫：跨 session 打字默认**一律拒绝**，唯一例外是已登记会议的敲门 —— 这条挡住了"顺手插手别的项目"。
+
 ## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
 
 - 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。

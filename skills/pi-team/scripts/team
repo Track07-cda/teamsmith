@@ -89,6 +89,7 @@ case "$CMD" in
   watchdog)           team_cmd_watchdog "$@" ;;
   watchdog-status)    team_cmd_watchdog_status "$@" ;;
   standby)            team_cmd_standby "$@" ;;
+  meeting)            team_cmd_meeting "$@" ;;
   smoke|test) team_cmd_smoke "$@" ;;
   *)          team_usage_die "未知子命令：$CMD" ;;
 esac

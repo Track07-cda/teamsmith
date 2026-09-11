@@ -723,6 +723,117 @@ else
   printf '  (跳过恢复断言：没有 tmux)\n'
 fi
 
+# ---------------------------------------------------------------- 11d. 边界守卫（跨 session 不许打字）
+section "11d · 边界守卫（跨项目/跨 session 通信必须经用户）"
+if [ "$HAVE_TMUX" = "1" ]; then
+  FOREIGN="pi-team-foreign-$$"
+  tmux new-session -d -s "$FOREIGN" -n other >/dev/null 2>&1
+  tmux send-keys -t "$FOREIGN:other" -l "print -r -- SENTINEL-" >/dev/null 2>&1 || true
+  # 通过库函数调用（say/notify 最终都走这里）
+  if TEAM_ROOT="$REPO" bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_tmux_send_text "'$FOREIGN':other" "PWNED-CROSS-PROJECT"' >"$TMP/guard.log" 2>&1; then
+    bad "跨 session 打字应当被拒绝"
+  else ok "跨 session 打字被拒绝"; fi
+  assert_has "$TMP/guard.log" "拒绝跨 session 操作" "报错说明了拒绝原因"
+  assert_has "$TMP/guard.log" "team meeting" "给出了正确的升级路径（走 meeting，PM 对 PM）"
+  if tmux capture-pane -p -t "$FOREIGN:other" 2>/dev/null | grep -q "PWNED-CROSS-PROJECT"; then
+    bad "文本竟然打进了别的 session"
+  else ok "别的 session 里没有被打进任何东西"; fi
+  # 本 session 内照常工作
+  if TEAM_ROOT="$REPO" bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_tmux_send_text "'$SESSION':keep" "ok-own-session"' >/dev/null 2>&1; then
+    ok "本 session 内打字不受影响"
+  else team_dim "（keep 窗口不存在时跳过本 session 断言）"; fi
+  # 显式关掉守卫（TEAM_GUARD_FOREIGN_TARGET=0）才允许
+  if TEAM_ROOT="$REPO" TEAM_GUARD_FOREIGN_TARGET=0 bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_foreign_target_ok "'$FOREIGN':other"' >/dev/null 2>&1; then
+    ok "守卫可显式关闭（TEAM_GUARD_FOREIGN_TARGET=0）"
+  else bad "守卫关闭后仍被拒绝"; fi
+  tmux kill-session -t "$FOREIGN" >/dev/null 2>&1 || true
+else
+  printf '  (跳过边界断言：没有 tmux)\n'
+fi
+# 派单提示词里要写明跨项目边界
+assert_has "$TMP/print.log" "边界（跨项目一律不动手）" "派单提示词写明了跨项目边界"
+assert_has "$TMP/print.log" "meeting" "提示词指明了跨项目沟通走 meeting"
+assert_has "$TMP/print.log" "worker 不参会" "提示词说明 worker 不参会"
+
+# ---------------------------------------------------------------- 11e. 跨项目会议（peer 交流，不是指令通道）
+section "11e · 跨项目会议（meeting mode）"
+export TEAM_MEETINGS_DIR="$TMP/meetings"
+MEET_PROJ="other-$$"
+
+if $TEAM meeting open order-api --with "$MEET_PROJ" --topic "订单接口对接" >"$TMP/mtg-noyes.log" 2>&1; then
+  bad "meeting open 需要显式授权"
+else ok "meeting open 无 --yes 被拒绝（写共享状态要授权）"; fi
+$TEAM meeting open order-api --with "$MEET_PROJ:$SESSION" --topic "订单接口对接" --yes >"$TMP/mtg-open.log" 2>&1 \
+  && ok "meeting open 成功" || { bad "meeting open 失败"; cat "$TMP/mtg-open.log"; }
+assert_file "$TMP/meetings/order-api/state.env" "共享区 state.env 已写"
+assert_file "$TMP/meetings/order-api/agenda.md" "共享区 agenda.md 已写"
+assert_has "$TMP/meetings/order-api/agenda.md" "不产出对另一方的命令" "agenda 写明边界"
+
+# intent 白名单：机制里没有“下令”
+if $TEAM meeting say order-api --intent command "你们必须今天改完" >"$TMP/mtg-cmd.log" 2>&1; then
+  bad "intent=command 应被拒绝"
+else ok "intent=command 被拒绝（会议不提供下令）"; fi
+assert_has "$TMP/mtg-cmd.log" "不能指挥别的 PM" "拒绝理由说明了原因"
+if $TEAM meeting say order-api --intent info "[指令] 照做" >"$TMP/mtg-order.log" 2>&1; then
+  bad "带 [指令] 标记的消息应被拒绝"
+else ok "带 [指令]/[命令] 标记被拒绝"; fi
+
+# 正常发言：先落盘
+$TEAM meeting say order-api --intent proposal "建议 POST /orders 增加 idempotency_key（UUID，必填）" >"$TMP/mtg-say.log" 2>&1 \
+  && ok "proposal 发言成功" || bad "meeting say 失败"
+assert_file "$TMP/meetings/order-api/transcript/0001_$(basename "$REPO")_proposal.md" "发言写进共享区 transcript"
+assert_has "$TMP/meetings/order-api/transcript/0001_"*"_proposal.md" "from: $(basename "$REPO")/pm@" "消息带身份戳（项目/PM@session）"
+assert_has "$TMP/mtg-say.log" "默认关" "默认不敲门（只落盘）"
+
+# agent 不能冒充人类下令
+if $TEAM meeting say order-api --intent info --as-user "我以用户名义下令" >"$TMP/mtg-user.log" 2>&1; then
+  bad "--as-user 在 agent 里应被拒绝"
+else ok "--as-user 被拒绝（agent 不得冒充用户）"; fi
+assert_has "$TMP/mtg-user.log" "冒充" "拒绝理由说明了冒充"
+
+# 未登记的跨 session 打字仍然禁止；会议登记后才允许敲门
+if TEAM_ROOT="$REPO" bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_foreign_target_ok "'$SESSION':keep"' >/dev/null 2>&1; then
+  ok "本 session 目标允许"
+else bad "本 session 目标不该被拒绝"; fi
+if TEAM_ROOT="$REPO" bash -c '. "'$SKILL_DIR'/scripts/common.sh' >/dev/null 2>&1; then :; fi
+if TEAM_ROOT="$REPO" TEAM_MEETINGS_DIR="$TMP/meetings" bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_foreign_target_ok "unregistered-session:pm"' >"$TMP/mtg-foreign.log" 2>&1; then
+  bad "未登记的跨 session 目标应被拒绝"
+else ok "未登记的跨 session 目标被拒绝"; fi
+assert_has "$TMP/mtg-foreign.log" "拒绝跨 session" "拒绝理由明确"
+
+# 读 / inbox / 标记已读
+$TEAM meeting read order-api --peek >"$TMP/mtg-read.log" 2>&1 && ok "meeting read 成功" || bad "meeting read 失败"
+assert_has "$TMP/mtg-read.log" "idempotency_key" "读到对方/自己的发言"
+assert_has "$TMP/mtg-read.log" "intent: proposal" "读到 intent"
+$TEAM meeting list >"$TMP/mtg-list.log" 2>&1
+assert_has "$TMP/mtg-list.log" "order-api" "list 列出会议"
+$TEAM meeting inbox >"$TMP/mtg-inbox.log" 2>&1
+assert_has "$TMP/mtg-inbox.log" "没有待回应" "自己发的不算待我回应"
+
+# 共识：提议 → 对方同意才生效
+$TEAM meeting propose order-api "接口契约 v1：字段/错误码/超时" --sides "我方:api 侧 / 对方:订单侧" >"$TMP/mtg-prop.log" 2>&1 \
+  && ok "propose 成功" || bad "propose 失败"
+if $TEAM meeting agree order-api A1 >/dev/null 2>&1; then bad "不能确认自己提的共识"; else ok "自己提的共识不能自己确认"; fi
+assert_eq "确认前状态 proposed" "$({ grep -c '^agreed-by:' "$TMP/meetings/order-api/agreements/A1.md" 2>/dev/null || true; } | head -1)" "0"
+TEAM_PROJECT="$MEET_PROJ" TEAM_ROOT="$REPO" TEAM_MEETINGS_DIR="$TMP/meetings" \
+  bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; . "'$SKILL_DIR'/scripts/lib/cmd-meeting.sh"; team_load_config; team_meeting_agree order-api A1 --note "对方落地：T5.1"' \
+  >"$TMP/mtg-agree.log" 2>&1 && ok "对方（另一项目身份）确认成功" || { bad "对方确认失败"; cat "$TMP/mtg-agree.log"; }
+assert_has "$TMP/meetings/order-api/agreements/A1.md" "agreed-by: $MEET_PROJ" "共识记录了对方的确认"
+assert_has "$TMP/mtg-agree.log" "各自在自己项目内完成" "确认时说明落地归属"
+
+# 轮次预算（防两个 PM 互相刷额度）
+TEAM_MEETING_MAX_TURNS=1 $TEAM meeting say order-api --intent info "第二条" >"$TMP/mtg-turn.log" 2>&1 \
+  && bad "超过轮次上限应被拒绝" || ok "超过轮次上限被拒绝"
+assert_has "$TMP/mtg-turn.log" "发言已达上限" "轮次上限提示明确"
+
+# close 后冻结
+$TEAM meeting close order-api --summary "契约已定，双方各自落地" >"$TMP/mtg-close.log" 2>&1 \
+  && ok "close 成功" || bad "close 失败"
+$TEAM meeting say order-api --intent info "关了还能说吗" >"$TMP/mtg-after.log" 2>&1 \
+  && bad "close 后不应允许发言" || ok "close 后 transcript 冻结（发言被拒）"
+$TEAM meeting read order-api >/dev/null 2>&1 && ok "close 后仍可读（只读）" || bad "close 后应可读"
+unset TEAM_MEETINGS_DIR
+
 # ---------------------------------------------------------------- 12. 观察类命令
 section "12 · roster / status / ps"
 for c in roster status ps; do
