@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.4.0"
+TEAM_VERSION="1.6.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -135,8 +135,16 @@ team_load_config() {
   TEAM_WATCH_NUDGE_GAP="${TEAM_WATCH_NUDGE_GAP:-900}"      # 同一批待办最快多久再提醒一次（秒）
   TEAM_WATCH_MAX_RESTARTS="${TEAM_WATCH_MAX_RESTARTS:-5}"  # PM 每小时最多自动拉起次数（防崩溃循环）
   TEAM_WATCH_REBUILD_TMUX="${TEAM_WATCH_REBUILD_TMUX:-0}"  # 0=不管 tmux（session/窗口没了只告警）；1=允许重建 PM 窗口
+  TEAM_WATCH_BACKEND="${TEAM_WATCH_BACKEND:-tmux}"         # tmux（默认：同 session 的窗口 + 状态面板）| container
+  TEAM_WATCH_WINDOW="${TEAM_WATCH_WINDOW:-watchdog}"       # tmux 后端的窗口名
+  TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-3}"        # 监视器刷新间隔（秒）
+  TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 每个 agent 显示最近几条事件
+  TEAM_WATCH_IMAGE="${TEAM_WATCH_IMAGE:-}"                 # 看门狗容器镜像，空=localhost/pi-team-watch:1
+  TEAM_WATCH_BOX="${TEAM_WATCH_BOX:-}"                     # 目标开发容器名，空=自动（当前容器）
+  TEAM_WATCH_RETRY_SEC="${TEAM_WATCH_RETRY_SEC:-15}"       # 内层 watch 退出后的重试间隔（秒）
+  TEAM_WATCH_PID_MODE="${TEAM_WATCH_PID_MODE:-}"           # 空=自动（容器内 --pid=container:<当前容器>；裸机 --pid=host）
+  TEAM_WATCH_CONTAINER="${TEAM_WATCH_CONTAINER:-}"         # 空=<project>-pi-team-watch
   TEAM_PM_START_WAIT="${TEAM_PM_START_WAIT:-6}"            # 启动 PM 后等它起来的秒数
-  TEAM_WATCH_SERVICE="${TEAM_WATCH_SERVICE:-}"             # systemd unit 名，默认 <project>-pi-team-watch
   TEAM_NOTIFY_TMUX="${TEAM_NOTIFY_TMUX:-1}"
   TEAM_NOTIFY_DEDUP_SEC="${TEAM_NOTIFY_DEDUP_SEC:-20}"
   TEAM_NOTIFY_LOG="${TEAM_NOTIFY_LOG:-/tmp/pi-team-notify.log}"

@@ -21,6 +21,7 @@ bash <skill>/scripts/team doctor
 ## B. 派第一个任务
 
 ```bash
+# 一条命令初始化（推荐）：bash <skill>/scripts/team bootstrap
 # github 模式：先建 issue（可选，但推荐：issue 是需求口径，任务书是执行口径）
 printf '# 骨架与质量门禁\n\n## DoD\n- ...\n' > /tmp/issue.md
 bash <skill>/scripts/team gh issue create --title "[T1.1] 骨架与质量门禁" --body-file /tmp/issue.md --yes
@@ -142,18 +143,43 @@ bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于 watc
 
 ### 三种部署方式（从弱到强）
 
-| 方式 | 命令 | 能撑住 |
-|---|---|---|
-| 手动 | 发现 PM 停了/睡了就 `team up` | 你自己发现的时候 |
-| tmux 窗口 | `tmux new-window -n watchdog -d -- <skill>/scripts/team watch` | PM 崩/睡（tmux server 还在） |
-| systemd --user | `team install-watchdog --yes` | 上面全部 + watchdog 自己崩（配 `TEAM_WATCH_REBUILD_TMUX=1` 还能扛机器重启） |
+| 方式 | 命令 | 能撑住 | 适合 |
+|---|---|---|---|
+| **tmux 窗口（默认）** | `team watchdog up` | PM 崩/睡；tmux server 活着的范围 | 日常：一个窗口既是看门狗又是**状态监视器** |
+| podman 容器 | `team watchdog up --container` | 看门狗自己崩、机器重启（`--restart=always`） | 想让看门狗独立于 tmux |
+| 手动 | `team up` / `team watch --once` | 你自己发现的时候 | 排障 |
 
 ```bash
-bash <skill>/scripts/team install-watchdog --yes      # 装 + 开机自启（systemd --user）
-bash <skill>/scripts/team watchdog-status             # 看状态与最近巡检
-bash <skill>/scripts/team uninstall-watchdog --yes    # 停掉（--purge 连 unit 文件一起删）
-loginctl enable-linger $USER                          # 建议：没登录时也让 unit 跑
+bash <skill>/scripts/team watchdog up          # 默认：本 session 的 watchdog 窗口跑监视器 + 巡检
+bash <skill>/scripts/team watchdog logs        # 看一眼监视器画面（pane 快照）
+bash <skill>/scripts/team watchdog status      # 窗口/周期/待命/待办/PM 存活/容量
+bash <skill>/scripts/team watchdog down        # 关掉窗口
+bash <skill>/scripts/team monitor --once       # 手动看一屏（不开窗口）
+bash <skill>/scripts/team watchdog up --container --print   # 容器形态长什么样（只打印命令）
 ```
+
+监视器长这样（上半是团队状态，下半是每个 agent 的 Pi 会话活动流）：
+
+```
+pi-team monitor · myproj                       2026-09-11T16:52:03Z  (每 3s 刷新，每 900s 跑一次巡检)
+  巡检        900s（待办才叫醒 PM）｜ 后端 tmux
+  待命        off
+  PM          ● 在运行（pi）
+  待办        未读通知 1 · 待复验 2
+  容量        RAM 可用 6850MB ｜ swap 空闲 57779/80424MB ｜ 估算可再加 10 个 agent
+  dev         ● pi 在跑 ｜ T1.2
+  verify      ○ pi 已退出 ｜ -
+
+agent 活动
+🟢 活跃 dev          [task/T1.2-api*]  已运行 12m04s · 空闲 8s · 事件 57
+     16:51:22 🔧 bash
+     16:51:40 💬 实现完成，正在跑验收命令…
+🟡 静默 verify        [agent/verify]  已运行 3h02m · 空闲 44m10s · 事件 128
+     16:07:03 🔧 read
+```
+
+运行形态（`container/Containerfile` 顶部有说明）：容器里开发时，容器用 `podman-remote exec <你的开发容器>`
+驱动 `team watch` —— tmux/ps/pi 都在原环境里跑（版本一致、看得见 pane 进程），看门狗却活在容器里、与 PM 会话解耦。
 
 每个 tick 三步：① 追一行容量趋势到 `state/capacity.log`；② 算待办（未读通知 / 待复验 / 看板 todo·wip / blocked /
 有任务但停了的 agent）；③ **有待办才叫醒**——PM 在跑就发一句 `[watchdog] 待办：…`（同一批待办按

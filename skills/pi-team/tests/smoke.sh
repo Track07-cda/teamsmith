@@ -124,6 +124,31 @@ section "1 · doctor（未初始化应失败）"
 if $TEAM doctor >"$TMP/doctor-pre.log" 2>&1; then bad "未初始化时 doctor 应失败"; else ok "未初始化时 doctor 正确报错"; fi
 assert_has "$TMP/doctor-pre.log" "config" "doctor 报告了 config 项"
 
+# ---------------------------------------------------------------- 1b. bootstrap（一次性临时仓库）
+section "1b · bootstrap（一条命令初始化）"
+BR="$TMP/bootrepo"; mkdir -p "$BR"; cd "$BR"
+git init -q -b main; git config user.email smoke@pi-team; git config user.name smoke
+echo "# boot" > README.md; git add -A; git commit -qm init
+BSESS="pi-team-smoke-boot-$$"
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog --print >"$TMP/boot-print.log" 2>&1 \
+  && ok "bootstrap --print 退出码 0" || bad "bootstrap --print 失败"
+assert_has "$TMP/boot-print.log" "计划步骤" "打印了计划步骤"
+assert_has "$TMP/boot-print.log" "add-agent dev" "计划里含建 worktree"
+assert_has "$TMP/boot-print.log" "watchdog up" "计划里含起看门狗容器"
+[ -f "$BR/.pi/team/config.sh" ] && bad "--print 不该改任何东西" || ok "--print 确实没改东西"
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot.log" 2>&1 \
+  && ok "bootstrap 退出码 0" || { bad "bootstrap 失败"; cat "$TMP/boot.log"; }
+assert_file "$BR/.pi/team/config.sh" "bootstrap 写了配置"
+assert_has "$BR/.pi/team/config.sh" "TEAM_SESSION=\"$BSESS\"" "把探测/指定的 session 写进配置"
+assert_dir "$BR/docs/team/tasks" "建了文档骨架"
+assert_dir "$BR/.worktrees/dev" "建了 dev worktree"
+assert_dir "$BR/.worktrees/verify" "建了 verify worktree"
+assert_has "$BR/AGENTS.md" "<!-- pi-team:begin -->" "注入了协议段"
+assert_has "$TMP/boot.log" "下一步" "打印了下一步清单"
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot2.log" 2>&1
+assert_eq "bootstrap 幂等（协议段只一份）" "$(grep -cF '<!-- pi-team:begin -->' "$BR/AGENTS.md")" "1"
+cd "$REPO"
+
 # ---------------------------------------------------------------- 2. init
 section "2 · init"
 $TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/init.log" 2>&1 \
@@ -179,7 +204,7 @@ assert_has "$TMP/print.log" "git commit" "提示词要求小步提交"
 
 if [ "$HAVE_TMUX" = "1" ]; then
   # 让 worker 用假 pi 跑（pi-sleep：模拟“pi 正在跑”的窗口，便于验证 say/存活判定）
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 60\n' "$TMP/pi-args.log" > "$FAKE/pi-sleep"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/pi-args.log" > "$FAKE/pi-sleep"
   chmod +x "$FAKE/pi-sleep"
   printf '\nTEAM_PI_BIN="%s"\n' "$FAKE/pi-sleep" >> "$REPO/.pi/team/config.sh"
   $TEAM dispatch dev T1.1 "$TASKFILE" >"$TMP/dispatch.log" 2>&1 || bad "dispatch 失败"
@@ -293,7 +318,7 @@ $TEAM close T1.1 >/dev/null 2>&1 && ok "close 退出码 0" || bad "close 失败"
 
 # ---------------------------------------------------------------- 11b. 保活：team up / watch
 section "11b · 定时巡检：有待办才叫醒 PM（默认 15 分钟）"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 60\n' "$TMP/pm-args.log" > "$FAKE/pi-sleep"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/pm-args.log" > "$FAKE/pi-sleep"
 chmod +x "$FAKE/pi-sleep"
 
 if [ "$HAVE_TMUX" = "1" ]; then
@@ -308,7 +333,12 @@ if [ "$HAVE_TMUX" = "1" ]; then
       | awk -v n="$PMW" '$2==n {print $1}' \
       | while read -r wid; do tmux kill-window -t "$wid" 2>/dev/null || true; done
     tmux new-window -t "$SESSION" -n "$PMW" -d >/dev/null 2>&1 || true
-    sleep 0.8
+    sleep 1.5
+  }
+  start_fake_pm() { # 直接模拟“PM 正在跑”，避免依赖 up 的时序
+    local p; p="$(tmux list-panes -t "$SESSION:$PMW" -F '#{pane_id}' | head -1)"
+    tmux respawn-pane -k -t "$p" "exec $FAKE/pi-sleep --pm" >/dev/null 2>&1 || true
+    sleep 1.5
   }
   kill_all_windows() {
     tmux list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null \
@@ -348,7 +378,7 @@ if [ "$HAVE_TMUX" = "1" ]; then
 
   # 3) 有待办 + PM 在跑 → 只提醒，不重启；同批待办不重复叫
   $TEAM notify dev "T2 的依赖审好了，等 PM 派单" >/dev/null 2>&1
-  $TEAM up >/dev/null 2>&1
+  start_fake_pm
   rm -f "$REPO/.pi/team/state/nudges.log"
   NUDGE_BEFORE="$(pm_lines)"
   $TEAM watch --once >"$TMP/watch-nudge.log" 2>&1 || bad "watch --once（有待办）失败"
@@ -370,6 +400,33 @@ if [ "$HAVE_TMUX" = "1" ]; then
   assert_eq "拉起计数已记录" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
   if [ "$(pm_lines)" -gt "$DEAD_BEFORE" ]; then ok "PM 参数已写入（$DEAD_BEFORE → $(pm_lines)）"
   else bad "PM 没有被拉起（$DEAD_BEFORE → $(pm_lines)）"; fi
+
+  # 4b) 看门狗：tmux 后端（默认，窗口里跑 monitor）+ 容器后端 dry-run
+  $TEAM monitor --once >"$TMP/monitor.log" 2>&1 && ok "monitor --once 退出码 0" || bad "monitor --once 失败"
+  assert_has "$TMP/monitor.log" "pi-team monitor" "monitor 打印了标题"
+  assert_has "$TMP/monitor.log" "agent 活动" "monitor 有 agent 活动段"
+  assert_has "$TMP/monitor.log" "巡检" "monitor 复用了团队状态面板"
+  $TEAM watchdog up >"$TMP/wd-up.log" 2>&1 && ok "watchdog up（tmux 后端）退出码 0" || { bad "watchdog up 失败"; cat "$TMP/wd-up.log"; }
+  assert_eq "看门狗窗口已建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx watchdog || true)" "1"
+  $TEAM watchdog status >"$TMP/wd-status.log" 2>&1
+  assert_has "$TMP/wd-status.log" "tmux 窗口 $SESSION:watchdog 在跑" "status 看到窗口在跑"
+  $TEAM watchdog logs >"$TMP/wd-logs.log" 2>&1 && ok "watchdog logs（pane 快照）退出码 0" || bad "watchdog logs 失败"
+  assert_has "$TMP/wd-logs.log" "pi-team monitor" "logs 显示监视器画面"
+  $TEAM watchdog up >"$TMP/wd-up2.log" 2>&1
+  assert_has "$TMP/wd-up2.log" "已在跑" "up 幂等（不重复起窗口）"
+  $TEAM watchdog down >"$TMP/wd-down.log" 2>&1 && ok "watchdog down 退出码 0" || bad "watchdog down 失败"
+  assert_eq "看门狗窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx watchdog || true)" "0"
+  $TEAM watchdog up --container --print >"$TMP/wd-print.log" 2>&1 && ok "watchdog --container --print 退出码 0" || bad "容器 --print 失败"
+  assert_match "$TMP/wd-print.log" "^podman run --detach" "容器形态打印出 podman run"
+  assert_match "$TMP/wd-print.log" "\-\-restart=always" "容器带 --restart=always"
+  if [ "${TEAM_SMOKE_CONTAINER:-0}" = "1" ]; then
+    $TEAM watchdog up --container >"$TMP/wd-cont.log" 2>&1 && ok "watchdog --container up 退出码 0" || { bad "容器 up 失败"; cat "$TMP/wd-cont.log"; }
+    sleep 20
+    assert_file "$REPO/.pi/team/state/capacity.log" "容器里的巡检真的在写容量日志"
+    $TEAM watchdog down --container >/dev/null 2>&1
+  else
+    printf '  (跳过真实容器：TEAM_SMOKE_CONTAINER=1 才跑)\n'
+  fi
 
   # 5) standby：PM 主动停工，有待办也不叫
   $TEAM standby on --reason "等用户授权合并" >"$TMP/standby-on.log" 2>&1

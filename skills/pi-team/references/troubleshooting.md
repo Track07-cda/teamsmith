@@ -117,12 +117,12 @@ Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复
   人工也可以 `team up --agents` 一次性带上。
 - **PM 反复崩**：自动拉起配额（`TEAM_WATCH_MAX_RESTARTS`，默认 5/小时）会拦下并发告警，防止崩溃循环把机器拖垮；
   先看 `state/watchdog.log` 与 PM 窗口输出找原因（常见：模型额度耗尽、配置写错、依赖缺失）。
-- **watchdog 自己也停了**：`team watchdog-status` 看 systemd 单元是否 active；再不行就 `team install-watchdog --yes` 重装。
-- **机器重启后一片安静**：systemd `--user` 单元需要 `loginctl enable-linger $USER` 才能在未登录时自启；没装就用 `team up` 一键恢复。
-- **systemd 日志里 `Failed to add control inotify watch descriptor ... No space left on device`**：宿主 inotify
-  instance 上限（`fs.inotify.max_user_instances`）太小，不是本工具的错，服务仍会正常运行；想清干净就调大该值。
-- **服务启动失败 `status=203/EXEC` / Permission denied**：`ExecStart` 指向的脚本不可执行。本 skill 的 unit 已用
-  `/usr/bin/env bash <path>` 绕过；若是自定义单元，给脚本 `chmod +x`（`team smoke` 会检查这个位）。
+- **tmux 后端的看门狗窗口被关了**：`team watchdog up` 重开；`team watchdog logs` 看画面快照；
+  监视器下半部分提示“本机没有 node/bun/tsx：跳过 agent 活动流” → 装 node 或 bun 即可（团队状态部分不受影响）。
+- **看门狗自己也停了**：容器有 `--restart=always`，`podman start <name>` 可手动拉起；`team watchdog up` 会按当前配置重建。
+- **机器重启后一片安静**：容器带 `--restart=always`，podman 起来后会自动拉起它（可用 `podman start <name>` 手动）；没配看门狗就 `team up` 一键恢复。
+- **`ExecStart`/脚本权限**：本 skill 全部用 `bash <path>` 调用，不依赖可执行位（但 `scripts/team` 仍是 +x，
+  `team smoke` 会检查）。
 
 ## 12. Pi 相关的通用坑
 

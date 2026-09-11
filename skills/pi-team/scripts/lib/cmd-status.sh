@@ -133,8 +133,17 @@ team_cmd_digest() {
     idle:*)    printf '  PM ○ **未在跑**（空提示符）→ team up' ;;
     *)         printf '  PM ○ 窗口缺失 → team up' ;;
   esac
-  if team_watch_pid_alive; then printf ' ｜ watchdog ● pid %s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"
-  else printf ' ｜ watchdog ○ 未运行（团队无人看守）\n'; fi
+  local wd_state="未配置"
+  if team_podman_ok; then
+    case "$(team_watch_container_state "$(team_watch_container_name)")" in
+      running) wd_state="● 容器在跑" ;;
+      absent)  wd_state="○ 容器未创建（$TEAM_CLI watchdog up）" ;;
+      *)       wd_state="! 容器 $(team_watch_container_state "$(team_watch_container_name)")（$TEAM_CLI watchdog up）" ;;
+    esac
+  elif team_watch_pid_alive; then
+    wd_state="● 前台 watchdog pid $(cat "$TEAM_STATE_DIR/watchdog.pid")"
+  fi
+  printf ' ｜ watchdog %s\n' "$wd_state"
 
   # 待办：这是 watchdog 判断“要不要叫醒 PM”的依据
   local pend; pend="$(team_pending_text || true)"
@@ -234,5 +243,47 @@ team_cmd_inbox() {
     fi
   done
   [ "$ack" = "1" ] && team_ok "已标记为已读（--ack）"
+  return 0
+}
+
+# ---------------------------------------------------------------- 状态面板（watchdog --ui 用）
+team_panel() {
+  local W=74 line
+  line="$(printf '%.0s─' $(seq 1 $W))"
+  printf '%spi-team watchdog · %s%s  %s\n' "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)"
+  printf '%s\n' "$line"
+  printf '  %-9s %ss（待办才叫醒 PM）｜ 后端 %s\n' "巡检" "${TEAM_WATCH_INTERVAL:-900}" "${TEAM_WATCH_BACKEND:-tmux}"
+  if team_in_standby; then
+    printf '  %-9s %son%s（原因：%s → %s standby off）\n' "待命" "$C_YEL" "$C_RESET" "$(team_standby_reason || echo -)" "$TEAM_CLI"
+  else
+    printf '  %-9s off\n' "待命"
+  fi
+  local pm; pm="$(team_pm_state)"
+  case "$pm" in
+    running:*) printf '  %-9s %s●%s 在运行（%s）\n' "PM" "$C_GRN" "$C_RESET" "${pm#running:}" ;;
+    busy:*)    printf '  %-9s %s●%s 窗口有进程在跑（%s）\n' "PM" "$C_GRN" "$C_RESET" "${pm#busy:}" ;;
+    idle:*)    printf '  %-9s %s○%s 未在跑（空提示符）\n' "PM" "$C_YEL" "$C_RESET" ;;
+    *)         printf '  %-9s %s○%s 窗口缺失\n' "PM" "$C_YEL" "$C_RESET" ;;
+  esac
+  local pend; pend="$(team_pending_text)"
+  if [ -n "$pend" ]; then printf '  %-9s %s\n' "待办" "$pend"
+  else printf '  %-9s %s无 —— 不叫醒 PM%s\n' "待办" "$C_DIM" "$C_RESET"; fi
+  printf '  %-9s %s\n' "容量" "$(team_capacity_line)"
+  local a state task
+  for a in $(team_agents); do
+    if team_agent_live "$a"; then state="${C_GRN}●${C_RESET} pi 在跑"
+    elif team_agent_window_exists "$a"; then state="${C_YEL}○${C_RESET} pi 已退出"
+    else state="${C_DIM}·${C_RESET} 无窗口"; fi
+    task="$(team_state_get "$a" task -)"
+    printf '  %-9s %s ｜ %s\n' "$a" "$state" "$task"
+  done
+  printf '%s\n' "$line"
+  printf '  最近动作\n'
+  if [ -f "$TEAM_STATE_DIR/watchdog.log" ]; then
+    tail -6 "$TEAM_STATE_DIR/watchdog.log" | sed -e 's/^\([0-9-]*\)T\([0-9:]*\)Z /    \2 /'
+  else
+    printf '    %s（还没有动作记录）%s\n' "$C_DIM" "$C_RESET"
+  fi
+  printf '%s\n' "$line"
   return 0
 }

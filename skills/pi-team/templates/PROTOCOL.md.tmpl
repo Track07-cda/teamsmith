@@ -37,6 +37,14 @@
   `{{DOCS_DIR}}/reviews/<ID>-verify.log`（已 gitignore）。
 - 任务书可以要求比项目门禁更严的验收命令；以任务书为准。
 
+## 初始化与看门狗（容器）
+
+```bash
+bash {{SKILL_DIR}}/scripts/team bootstrap     # 新项目一条命令：配置+文档骨架+worktree+看门狗容器
+bash {{SKILL_DIR}}/scripts/team watchdog up   # 默认：watchdog 窗口跑监视器 + 巡检（PM 负责配置）
+bash {{SKILL_DIR}}/scripts/team watchdog up --container   # 可选：podman 容器形态（与 tmux 解耦）
+```
+
 ## 保活与定时巡检
 
 - watchdog 是**叫醒 PM 的节拍器**，不是心跳保活：默认每 15 分钟（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）

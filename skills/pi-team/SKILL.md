@@ -1,9 +1,9 @@
 ---
 name: pi-team
-description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与保活自愈（watchdog 自动拉起 PM、续跑停掉的 agent、systemd 用户服务）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, keep an agent team alive / auto-restart the PM / resume stopped agents after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
+description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（podman 容器看门狗：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a podman container, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗容器 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.4.0"
+  version: "1.6.0"
 ---
 
 # pi-team · Pi Agent 团队
@@ -19,6 +19,18 @@ PM(本会话, tmux <session>:pm)          worker agents(各自 .worktrees/<agent
    review(独立 worktree 跑门禁) ────────▶  报告 reports/<ID>-<a>.md + PR/MR
    merge / close   ──────────────────▶  BOARD → done
 ```
+
+## 新项目：一条命令
+
+```bash
+cd <你的项目>                     # 需要是 git 仓库（有提交）
+bash <skill>/scripts/team bootstrap
+```
+
+`bootstrap` 幂等地把项目装到「可以派单」：探测当前 tmux session/窗口 → 写 `.pi/team/config.sh` +
+`docs/team/` 文档骨架 + `AGENTS.md` 协议段 + `.gitignore` → 建每个 agent 的 worktree →
+**起看门狗容器**（`team watchdog up`）→ 打印下一步清单。详见 [references/bootstrap.md](references/bootstrap.md)，
+也可以把 `templates/bootstrap-prompt.md.tmpl` 交给新项目的 PM 让它照做。
 
 ## 30 秒上手
 
@@ -48,7 +60,10 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | 协作 | `team say <a> "<单行消息>"`、`team notify <a> "<一句话>"`（agent→PM） |
 | 复验 | `team review <ID> [--branch b] [--no-gates]` → `reviews/<ID>.md` |
 | 合并/收尾 | `team merge <ID> [--push]`、`team pr <ID>`、`team close <ID>`、`team teardown --agent a [--purge]` |
-| 保活/恢复 | `team up [--agents]`（建 tmux 场地 + 拉起 PM）、`team resume`（PM 的工具）、`team standby on\|off`（PM 主动停工）、`team watch [--once]`（定时巡检：**有待办才叫醒 PM**）、`team install-watchdog --yes`、`team watchdog-status` |
+| 初始化 | `team bootstrap [--agents "dev verify"] [--print]`（推荐）、`team init`、`team doctor` |
+| 看门狗 | `team watchdog up\|down\|restart\|status\|logs`（默认 tmux 后端：同 session 的 `watchdog` 窗口跑监视器；`--container` 换 podman 容器）、`team watch [--once]`（前台巡检） |
+| 监视器 | `team monitor [--once]`（团队状态 + 每个 agent 的会话活动流；看门狗窗口里跑的就是它）、`team panel` 由它复用 |
+| PM/agent | `team up [--agents]`（恢复 PM）、`team resume`（PM 的工具，续跑停了的 agent）、`team standby on\|off`（PM 主动停工） |
 | forge 透传 | `team gh <gh 参数…>`、`team gl <METHOD> <path>`（token 由 wrapper 注入，不回显） |
 | 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测）、`team version` |
 
@@ -84,6 +99,9 @@ PM 需要停下来问用户的情况只有：合并/推送等**共享状态变�
 - token 只由 wrapper 注入（`team gh`/`team gl`/`team pr`），永不回显、永不落盘。
 - 任何改变共享/远端状态的操作需要 `--yes`（= 用户已授权）。
 - 一个 agent 一个长期 worktree：**不要移动它**（Pi session 按 cwd 归属，移动等于丢记忆）。
+- **看门狗由 PM 配置**：`team watchdog up` —— 默认在**同一个 tmux session 的 `watchdog` 窗口**里跑
+  `team monitor`（上半屏团队状态，下半屏每个 agent 的会话活动流），同时每 15 分钟（可配）巡检一次“有没有活儿”。
+  `status` / `logs` / `down` 都支持；想让它在 tmux server 挂了之后也活着，用 `team watchdog up --container`（podman）。
 - **PM 不需要一直运行**：有待办时才需要你在线。默认每 15 分钟一次定时巡检（`TEAM_WATCH_INTERVAL=900`，
   建议 300~3600）：有待办就叫醒你（你现在不在跑就用 `pi -c` 把你拉起来），没待办就什么都不做。
   **确认无事可做 / 需要人工介入时，`team standby on --reason "…"` 主动停工**——之后不会再被叫醒，
@@ -96,7 +114,8 @@ PM 需要停下来问用户的情况只有：合并/推送等**共享状态变�
 |---|---|
 | `references/protocol.md` | 想理解每条规则的理由（独立复验、唤醒机制、容量底线、保活链路、安全模型） |
 | `references/config.md` | 配置键含义、项目落盘布局、环境变量覆盖（环境变量优先于配置文件） |
-| `references/workflows.md` | 端到端 runbook：建队、派单、复验、合并、**保活/恢复**、并行扩展、阻塞处理 |
+| `references/bootstrap.md` | 新项目初始化：一条命令做什么、之后 PM 怎么走 |
+| `references/workflows.md` | 端到端 runbook：建队、派单、复验、合并、**巡检/看门狗容器**、并行扩展、阻塞处理 |
 | `references/troubleshooting.md` | 通知不到、会话丢失、worktree 冲突、forge 403、报告不实 |
 | `templates/` | 需要手写任务书/报告/看板时抄模板 |
 | `scripts/team`、`scripts/lib/*.sh` | 要改行为时（先用 `team <cmd> --print` 看它生成什么） |

@@ -8,9 +8,11 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
 用法： team <command> [args...] [--yes]
 
   ── 第一次使用 ─────────────────────────────────────────────
-  init            把 pi-team 装进当前项目：写 .pi/team/config.sh、
-                  建 <docs>/ 骨架、给 AGENTS.md 追加团队协议、更新 .gitignore
-  doctor          环境自检（git/tmux/pi/gates/forge/内存/扩展）
+  bootstrap [--agents "dev verify"] [--print]   **推荐**：一条命令把项目初始化到可派单状态
+                   （探测当前 tmux session/窗口 → 写配置 + 文档骨架 + AGENTS 段落 → 建 agent worktree
+                    → 起看门狗容器 → 打印下一步清单）；幂等，可反复跑
+  init            只做配置/文档骨架（bootstrap 的其中一步）
+  doctor          环境自检（git/tmux/pi/门禁/forge/容量/容器）
 
   ── 观察 ───────────────────────────────────────────────────
   roster          名册：agent、窗口是否在跑、分支、脏文件、领先提交数
@@ -34,16 +36,16 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
   say <a> "<一句话>"           往 agent 窗口发消息
   notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口）
 
-  ── 保活与定时提醒（watchdog 只管“有没有活儿”，agent 归 PM 管） ─
-  up [--agents] [--print]      恢复 PM：建 tmux 场地、把 PM 拉起来（pi -c 保留历史）；
-                               --agents 才额外续跑停了的 agent
+  ── 定时巡检与看门狗容器（看门狗由 PM 配置和维护） ───────────
+  watchdog up|down|restart|status|logs [--container|--print]
+                 看门狗（默认 tmux 后端：同 session 的 watchdog 窗口跑 monitor；`--container` 用 podman 容器）
+  watchdog-status               `watchdog status` 的旧名
+  monitor [--once] [--interval N] [--events K]  状态监视器（watchdog 窗口跑的就是它）：
+                 团队状态 + 每个 agent 的会话活动流；按周期顺带跑巡检
+  watch [--once] [--interval N] [--ui]      手动/前台巡检（--ui = monitor）
+  standby [on|off|status] [--reason "..."]  PM 主动停工：on 之后看门狗不再叫醒（人处理完 off）
+  up [--agents] [--print]      恢复 PM：建 tmux 场地 + 把 PM 拉起来（pi -c 保留历史）
   resume [--agent a] [--all] [--dry-run]   PM 的工具：把停了但没交活的 agent 续跑
-  watch [--once] [--interval N]             定时巡检（默认 900s，建议 300~3600）：有待办就叫醒/拉起 PM，
-                               没待办就不打扰；不要求 PM 一直运行
-  standby [on|off|status] [--reason "..."]  PM 主动停工：on 之后 watchdog 不再叫醒（人处理完 off）
-  install-watchdog [--yes]      装 systemd --user 服务（开机/崩溃自动拉起 watchdog）
-  uninstall-watchdog [--yes]    停掉并移除 watchdog 服务（--purge 连 unit 文件一起删）
-  watchdog-status               看巡检周期、待命、systemd 状态、待办、PM 存活、容量
 
   ── 复验 / 合并 / 收尾 ─────────────────────────────────────
   review ID [--branch b] [--no-gates]
@@ -268,12 +270,15 @@ team_cmd_doctor() {
       *)         warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在 → team up" ;;
     esac
 
-  check "watchdog"; if team_watch_pid_alive; then
-      pass "前台 watchdog pid $(cat "$TEAM_STATE_DIR/watchdog.pid")"
-    elif team_watch_systemd_ok && systemctl --user is-active "$(team_watch_service_name).service" >/dev/null 2>&1; then
-      pass "systemd --user 服务 $(team_watch_service_name) active"
+  check "看门狗"; if ! team_podman_ok; then
+      warn "本机没 podman：看门狗只能前台跑（$TEAM_CLI watch，或用你自己的 supervisor）"
     else
-      warn "没有 watchdog：PM/agent 挂了没人拉（team watch 或 team install-watchdog --yes）"
+      local cst cname; cname="$(team_watch_container_name)"; cst="$(team_watch_container_state "$cname")"
+      case "$cst" in
+        running) pass "容器 running（$cname，--pid=$(team_watch_pid_mode)）" ;;
+        absent)  warn "容器未创建 → $TEAM_CLI watchdog up（看门狗由 PM 配置）" ;;
+        *)       warn "容器状态 $cst → $TEAM_CLI watchdog up" ;;
+      esac
     fi
 
   check "forge"; case "$TEAM_VCS" in

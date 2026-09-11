@@ -58,6 +58,7 @@ team_load_config
 
 case "$CMD" in
   init)       team_cmd_init "$@" ;;
+  bootstrap)  team_cmd_bootstrap "$@" ;;
   doctor)     team_cmd_doctor "$@" ;;
   roster)     team_cmd_roster "$@" ;;
   status)     team_cmd_status "$@" ;;
@@ -82,8 +83,10 @@ case "$CMD" in
   up)         team_cmd_up "$@" ;;
   resume)     team_cmd_resume "$@" ;;
   watch)      team_cmd_watch "$@" ;;
+  monitor)    team_cmd_monitor "$@" ;;
   install-watchdog)   team_cmd_install_watchdog "$@" ;;
   uninstall-watchdog) team_cmd_uninstall_watchdog "$@" ;;
+  watchdog)           team_cmd_watchdog "$@" ;;
   watchdog-status)    team_cmd_watchdog_status "$@" ;;
   standby)            team_cmd_standby "$@" ;;
   smoke|test) team_cmd_smoke "$@" ;;
