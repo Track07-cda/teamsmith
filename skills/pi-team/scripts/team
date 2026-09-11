@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# pi-team · 单入口 CLI。
+#
+#   team <command> [args...] [--yes]
+#
+# 全局参数（放在子命令前后都可）：
+#   --root <dir>      指定项目根（默认从当前目录向上找 .pi/team/config.sh）
+#   --config <file>   指定配置文件
+#   --yes             对「改变共享/远端状态」的操作给出显式授权
+#   -h|--help         帮助
+#
+# 子命令见 `team help`。
+set -euo pipefail
+
+TEAM_CLI="$(basename "$0")"
+SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$SELF_DIR/lib/common.sh"
+
+# ---------------------------------------------------------------- 全局参数
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) TEAM_ROOT="${2:?--root 需要目录}"; shift 2 ;;
+    --root=*) TEAM_ROOT="${1#*=}"; shift ;;
+    --config) TEAM_CONFIG_FILE="${2:?--config 需要文件}"; shift 2 ;;
+    --config=*) TEAM_CONFIG_FILE="${1#*=}"; shift ;;
+    --yes|-y) TEAM_ASSUME_YES=1; shift ;;
+    -h|--help) ARGS=(help); break ;;
+    --) shift; ARGS+=("$@"); break ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+export TEAM_ROOT="${TEAM_ROOT:-}" TEAM_CONFIG_FILE="${TEAM_CONFIG_FILE:-}" TEAM_ASSUME_YES="${TEAM_ASSUME_YES:-0}"
+
+CMD="${ARGS[0]:-help}"
+if [ "${#ARGS[@]}" -gt 0 ]; then set -- "${ARGS[@]:1}"; else set --; fi
+
+# help/version 不需要配置或 git 仓库
+case "$CMD" in
+  version) printf 'pi-team %s\n' "$TEAM_VERSION"; exit 0 ;;
+esac
+
+TEAM_SKILL_DIR="$(team_skill_dir)"
+for f in "$SELF_DIR"/lib/forge.sh "$SELF_DIR"/lib/cmd-*.sh; do
+  [ -f "$f" ] || continue
+  # shellcheck disable=SC1090
+  . "$f"
+done
+
+if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
+  team_help
+  exit 0
+fi
+
+# 其余命令都需要配置 + git 仓库
+team_load_config
+
+case "$CMD" in
+  init)       team_cmd_init "$@" ;;
+  doctor)     team_cmd_doctor "$@" ;;
+  roster)     team_cmd_roster "$@" ;;
+  status)     team_cmd_status "$@" ;;
+  ps)         team_cmd_ps "$@" ;;
+  digest)     team_cmd_digest "$@" ;;
+  inbox)      team_cmd_inbox "$@" ;;
+  paths)      team_paths_json ;;
+  task)       team_cmd_task "$@" ;;
+  board)      team_cmd_board "$@" ;;
+  thread)     team_cmd_thread "$@" ;;
+  report)     team_cmd_report "$@" ;;
+  add-agent)  team_cmd_add_agent "$@" ;;
+  dispatch)   team_cmd_dispatch "$@" ;;
+  say)        team_cmd_say "$@" ;;
+  notify)     team_cmd_notify "$@" ;;
+  review)     team_cmd_review "$@" ;;
+  merge)      team_cmd_merge "$@" ;;
+  pr)         team_cmd_pr "$@" ;;
+  close)      team_cmd_close "$@" ;;
+  gh|gl)      team_cmd_forge "$CMD" "$@" ;;
+  teardown)   team_cmd_teardown "$@" ;;
+  smoke|test) team_cmd_smoke "$@" ;;
+  *)          team_usage_die "未知子命令：$CMD" ;;
+esac

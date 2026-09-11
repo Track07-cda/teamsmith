@@ -1,0 +1,38 @@
+# {{PROJECT}} · 协作协议（pi-team）
+
+> **本文件是团队的运行规范摘要**，完整版见项目 `AGENTS.md` 的 pi-team 段落与 skill 的 `references/`。
+> 工具入口：`bash {{SKILL_DIR}}/scripts/team help`
+
+## 角色
+
+| 角色 | 在哪 | 职责 | 红线 |
+|---|---|---|---|
+| PM | tmux `{{SESSION}}:pm` | 里程碑/任务板/任务书/决策；派单；独立复验；合并；收尾 | 不得用 agent 自述替代证据；不得把 token 写进任何产物 |
+| agent:<名> | `{{WORKTREES_DIR}}/<名>` | 实现 + 测试 + 报告 + 开 PR/MR | 不得 push 保护分支、force push、merge、越界改目录 |
+
+## 一个任务的生命周期
+
+1. **PM**：写任务书 `{{DOCS_DIR}}/tasks/<ID>-<slug>.md`（背景/交付物/边界/验收命令/报告要求）。
+2. **PM**：`team add-agent <a>` 建长期 worktree → `team dispatch <a> <ID> <taskfile>` 派单。
+3. **agent**：在 worktree 内实现；小步 commit；跑验收命令；写报告 `{{DOCS_DIR}}/reports/<ID>-<a>.md`；
+   push 分支；开 PR/MR；**回合结束时自动通知 PM**（收件箱 + tmux 唤醒）。
+4. **PM**：`team digest` 看待办 → `team review <ID>` 在独立 detached worktree 上复验（跑门禁、看 diff、写
+   `{{DOCS_DIR}}/reviews/<ID>.md`）。
+5. **通过** → `team merge <ID>`（本地 squash）→ `team close <ID>`；**不通过** → `team say <a> "<具体失败证据>"` 退回。
+
+## 硬规则
+
+1. 没有真实执行过验收命令，不得声称通过。PM 独立复验，虚假报告=任务失败。
+2. 一个 agent 一个长期 worktree（Pi session 按 cwd 归属，路径变更会导致不可续）；每个任务在其内新建分支。
+3. 小步提交，禁止攒到最后一次性提交；提交信息带任务 ID 与 `Agent: <名字>` trailer。
+4. 只改 `{{DOCS_DIR}}/OWNERSHIP.md` 里属于自己的目录；跨目录需求 → 报告写 `BLOCKED:`。
+5. 阻塞/发现问题：`team notify <a> "<一句话>"`，写 PARTIAL 报告，然后结束回合。
+6. 保护分支 `main` 只有 PM 能推进；agent 只能 push 自己的任务分支。
+7. 任何 token 只允许由 wrapper 注入（`team gh` / `team gl`），永不回显、永不落盘到项目文件。
+
+## 门禁
+
+- 项目门禁：`{{GATES}}`
+- 复验使用**独立 checkout**：`team review` 会 `git worktree add --detach` 该分支，日志落在
+  `{{DOCS_DIR}}/reviews/<ID>-verify.log`（已 gitignore）。
+- 任务书可以要求比项目门禁更严的验收命令；以任务书为准。

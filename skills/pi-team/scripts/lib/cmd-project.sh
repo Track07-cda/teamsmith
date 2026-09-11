@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# pi-team · init / doctor / help
+
+team_help() {
+  cat <<'EOF'
+pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + worker 并行）
+
+用法： team <command> [args...] [--yes]
+
+  ── 第一次使用 ─────────────────────────────────────────────
+  init            把 pi-team 装进当前项目：写 .pi/team/config.sh、
+                  建 <docs>/ 骨架、给 AGENTS.md 追加团队协议、更新 .gitignore
+  doctor          环境自检（git/tmux/pi/gates/forge/内存/扩展）
+
+  ── 观察 ───────────────────────────────────────────────────
+  roster          名册：agent、窗口是否在跑、分支、脏文件、领先提交数
+  status [ID]     roster + 任务/report 状态；给 ID 时只显示该任务
+  ps              内存与模型并发占用（派单前的容量检查）
+  digest          给 PM 的待办摘要：收件箱未处理项 + 待复验报告 + 任务状态
+  inbox [agent]   打印收件箱（agent 在回合结束时自动追加）
+  paths           打印当前解析出的路径/ session（JSON），排障用
+
+  ── 文档契约（PM 维护） ─────────────────────────────────────
+  task ID --title ... [--agent a] [--deps ...] [--issue N]
+                  生成任务书 <docs>/tasks/ID-slug.md 并在 BOARD.md 建行
+  board add|set|row|ls    BOARD.md 行管理（add / set ID 状态 / row ID / ls）
+  thread <agent> ["msg"]   追加 / 读取消息线程（append-only）
+  report ID <agent> [--force]  生成报告骨架
+
+  ── 派单与协作 ─────────────────────────────────────────────
+  add-agent <a> [--model m]    建长期 worktree（分支 agent/<a>）
+  dispatch <a> <ID> <task-file> [--model m] [--fresh] [--print]
+                  在 tmux 窗口起一个交互式 pi（默认复用会话，可断点续跑）
+  say <a> "<一句话>"           往 agent 窗口发消息
+  notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口）
+
+  ── 复验 / 合并 / 收尾 ─────────────────────────────────────
+  review ID [--branch b] [--no-gates]
+                  独立 detached worktree 上 checkout 分支 → 跑门禁 → 写
+                  <docs>/reviews/ID.md（PM 复验证据，不接受 agent 自述）
+  merge ID [--branch b] [--push]        本地 squash 合并到保护分支（需 --yes）
+  pr ID [--branch b] [--title ...]      通过 forge（github/gitlab）开 PR/MR（需 --yes）
+  close ID [--delete-branch]            收尾：更新 BOARD、zap 窗口、保留 worktree
+  teardown [--agent a] [--all] [--purge]  关窗口 / 删 worktree（--purge 才删 worktree）
+
+  smoke           在临时仓库里端到端自测这套工具（不碰当前项目）
+  gh / gl          forge 透传：team gh pr list、team gl GET /projects/... （token 由 wrapper 注入）
+  version / help
+
+配置：项目根 .pi/team/config.sh（见 references/config.md）。
+协议：<docs>/PROTOCOL.md 或 SKILL.md 里的一页速览。
+EOF
+}
+
+# ---------------------------------------------------------------- init
+team_write_section() { # <file> <begin-marker> <end-marker> <content-file>
+  local target="$1" begin="$2" end="$3" content="$4"
+  mkdir -p "$(dirname "$target")"
+  [ -f "$target" ] || : > "$target"
+  if grep -qF "$begin" "$target"; then
+    awk -v b="$begin" -v e="$end" -v cf="$content" '
+      $0==b { inb=1; print; while ((getline l < cf) > 0) { if (l==b || l==e) continue; print l }; close(cf); next }
+      inb   { if ($0==e) { inb=0; print }; next }
+      { print }
+    ' "$target" > "$target.tmp" && mv "$target.tmp" "$target"
+    team_ok "update $target（协议段落已刷新）"
+  else
+    { [ -s "$target" ] && printf '\n'; printf '%s\n' "$begin"; grep -vFxf <(printf '%s\n%s\n' "$begin" "$end") "$content"; printf '%s\n' "$end"; } >> "$target"
+    team_ok "append $target（团队协议段落）"
+  fi
+}
+
+team_gitignore_add() { # <entry> ...
+  local f="$TEAM_MAIN_ROOT/.gitignore" e added=0
+  touch "$f"
+  grep -q '^# pi-team' "$f" || { printf '\n# pi-team\n' >> "$f"; }
+  for e in "$@"; do
+    grep -qxF "$e" "$f" && continue
+    printf '%s\n' "$e" >> "$f"
+    added=$((added + 1))
+  done
+  [ "$added" -gt 0 ] && team_ok "update .gitignore（$added 条）" || team_dim "skip  .gitignore"
+  return 0
+}
+
+team_detect_gates() {
+  [ -n "$TEAM_GATES" ] && { printf '%s' "$TEAM_GATES"; return; }
+  local pm="-"
+  [ -f "$TEAM_MAIN_ROOT/pnpm-lock.yaml" ] && pm="pnpm"
+  [ -f "$TEAM_MAIN_ROOT/yarn.lock" ] && pm="yarn"
+  [ -f "$TEAM_MAIN_ROOT/bun.lockb" ] && pm="bun"
+  [ -f "$TEAM_MAIN_ROOT/package-lock.json" ] && pm="npm"
+  if [ -f "$TEAM_MAIN_ROOT/package.json" ]; then
+    if grep -q '"verify"[[:space:]]*:' "$TEAM_MAIN_ROOT/package.json"; then
+      case "$pm" in pnpm) printf 'pnpm verify' ;; yarn) printf 'yarn verify' ;; bun) printf 'bun run verify' ;; *) printf 'npm run verify' ;; esac
+      return
+    fi
+    if grep -q '"test"[[:space:]]*:' "$TEAM_MAIN_ROOT/package.json"; then
+      case "$pm" in pnpm) printf 'pnpm test' ;; yarn) printf 'yarn test' ;; bun) printf 'bun test' ;; *) printf 'npm test' ;; esac
+      return
+    fi
+  fi
+  printf ''
+}
+
+team_detect_vcs() {
+  local url; url="$(team_git remote get-url origin 2>/dev/null || true)"
+  case "$url" in
+    *github.com*) printf 'github' ;;
+    *gitlab*)     printf 'gitlab' ;;
+    *)            printf 'local' ;;
+  esac
+}
+
+team_cmd_init() {
+  local session="" agents="" vcs="" gates="" docs="" pmwin="" model="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session) session="${2:?}"; shift 2 ;;
+      --agents) agents="${2:?}"; shift 2 ;;
+      --vcs) vcs="${2:?}"; shift 2 ;;
+      --gates) gates="${2:?}"; shift 2 ;;
+      --docs) docs="${2:?}"; shift 2 ;;
+      --pm-window) pmwin="${2:?}"; shift 2 ;;
+      --model) model="${2:?}"; shift 2 ;;
+      --force) force=1; shift ;;
+      *) team_usage_die "init: 未知参数 $1" ;;
+    esac
+  done
+
+  local project; project="$(basename "$TEAM_MAIN_ROOT")"
+  session="${session:-$project}"
+  agents="${agents:-dev verify}"
+  vcs="${vcs:-$(team_detect_vcs)}"
+  docs="${docs:-docs/team}"
+  pmwin="${pmwin:-pm}"
+  model="${model:-deepseek/deepseek-flash}"
+  gates="${gates:-$(team_detect_gates)}"
+
+  team_hdr "pi-team init → $TEAM_MAIN_ROOT"
+
+  # 1) 配置
+  TEAM_AGENTS="$agents"; TEAM_DOCS_DIR="$docs"
+  local cfg="$TEAM_MAIN_ROOT/.pi/team/config.sh" tmpl; tmpl="$(team_tmpl_dir)/config.sh.tmpl"
+  if [ -f "$cfg" ] && [ "$force" != "1" ]; then
+    team_dim "skip  $cfg（已存在，--force 覆盖）"
+  else
+    mkdir -p "$(dirname "$cfg")"
+    team_render "$tmpl" \
+      "PROJECT=$project" "SESSION=$session" "PM_WINDOW=$pmwin" \
+      "DOCS_DIR=$docs" "AGENTS=$agents" "GATES=$gates" "VCS=$vcs" \
+      "DEFAULT_MODEL=$model" "SKILL_DIR=$TEAM_SKILL_DIR" \
+      "DETECTED_VCS=$(team_detect_vcs)" "TODAY=$(date +%F)" > "$cfg"
+    team_ok "write $cfg"
+  fi
+  chmod 0644 "$cfg"
+
+  # 2) 文档骨架
+  local tdir; tdir="$(team_tmpl_dir)"
+  TEAM_DOCS_ABS="$TEAM_MAIN_ROOT/$docs"
+  mkdir -p "$TEAM_DOCS_ABS"/{tasks,reports,threads,inbox,reviews}
+  team_render_to "$tdir/BOARD.md.tmpl"          "$TEAM_DOCS_ABS/BOARD.md"          "$force" "PROJECT=$project" "TODAY=$(date +%F)"
+  team_render_to "$tdir/ROADMAP.md.tmpl"        "$TEAM_DOCS_ABS/ROADMAP.md"        "$force" "PROJECT=$project"
+  team_render_to "$tdir/OWNERSHIP.md.tmpl"      "$TEAM_DOCS_ABS/OWNERSHIP.md"      "$force" "PROJECT=$project"
+  team_render_to "$tdir/DECISIONS.md.tmpl"      "$TEAM_DOCS_ABS/DECISIONS.md"      "$force" "PROJECT=$project" "TODAY=$(date +%F)"
+  team_render_to "$tdir/threads-README.md"      "$TEAM_DOCS_ABS/threads/README.md" "$force" "PROJECT=$project" "AGENTS=$agents"
+  team_render_to "$tdir/PROTOCOL.md.tmpl"       "$TEAM_DOCS_ABS/PROTOCOL.md"       "$force" \
+    "PROJECT=$project" "DOCS_DIR=$docs" "WORKTREES_DIR=$(basename "${TEAM_WORKTREES_DIR:-.worktrees}")" \
+    "SKILL_DIR=$TEAM_SKILL_DIR" "GATES=${gates:-<未配置>}" "SESSION=$session"
+  for d in tasks reports reviews; do
+    [ -f "$TEAM_DOCS_ABS/$d/.gitkeep" ] || : > "$TEAM_DOCS_ABS/$d/.gitkeep"
+  done
+  printf '# 临时收件箱：agent 回合结束自动追加，不入库\n*\n' > "$TEAM_DOCS_ABS/inbox/.gitignore"
+  printf '# 复验日志：本地证据，不入库\n*.log\n' > "$TEAM_DOCS_ABS/reviews/.gitignore"
+
+  # 3) AGENTS.md 协议段落
+  local section; section="$(mktemp)"
+  team_render "$tdir/AGENTS.section.md.tmpl" \
+    "PROJECT=$project" "DOCS_DIR=$docs" "SESSION=$session" "PM_WINDOW=$pmwin" \
+    "SKILL_DIR=$TEAM_SKILL_DIR" "AGENTS=$agents" "GATES=${gates:-<未配置>}" \
+    "WORKTREES_DIR=${TEAM_WORKTREES_DIR:-.worktrees}" "PROTECTED_BRANCH=main" > "$section"
+  team_write_section "$TEAM_MAIN_ROOT/AGENTS.md" \
+    "<!-- pi-team:begin -->" "<!-- pi-team:end -->" "$section"
+  rm -f "$section"
+
+  # 4) .gitignore
+  team_gitignore_add ".pi/team/state/" "$docs/inbox/" "$docs/reviews/*.log" "${TEAM_WORKTREES_DIR:-.worktrees}/"
+
+  printf '\n'
+  team_hdr "下一步"
+  printf '  1) %s doctor\n' "$TEAM_CLI"
+  printf '  2) 编辑 %s/.pi/team/config.sh（名册 TEAM_AGENTS、门禁 TEAM_GATES、模型）\n' "$project"
+  printf '  3) %s task T1.1 --title "第一个任务" --agent dev\n' "$TEAM_CLI"
+  printf '  4) %s dispatch dev T1.1 %s/tasks/T1.1-*.md\n' "$TEAM_CLI" "$docs"
+  printf '  5) %s digest   # PM 看板\n' "$TEAM_CLI"
+}
+
+# ---------------------------------------------------------------- doctor
+team_cmd_doctor() {
+  local fails=0 warns=0
+  check() { printf '  %-24s ' "$1"; }
+  pass()  { printf '%s✓%s %s\n' "$C_GRN" "$C_RESET" "${1:-}"; }
+  warn()  { printf '%s!%s %s\n' "$C_YEL" "$C_RESET" "$1"; warns=$((warns + 1)); }
+  fail()  { printf '%s✗%s %s\n' "$C_RED" "$C_RESET" "$1"; fails=$((fails + 1)); }
+
+  team_hdr "pi-team doctor · $TEAM_PROJECT"
+  printf '%s\n' "  skill: $TEAM_SKILL_DIR ($TEAM_VERSION)  main: $TEAM_MAIN_ROOT"
+
+  check "config"; if [ -n "$TEAM_CONFIG" ]; then pass "$TEAM_CONFIG"; else warn "未找到 .pi/team/config.sh（先跑 $TEAM_CLI init）"; fi
+  check "docs 骨架"; if [ -d "$TEAM_DOCS_ABS" ]; then pass "$TEAM_DOCS_DIR"; else fail "缺 $TEAM_DOCS_DIR/（先跑 $TEAM_CLI init）"; fi
+  check "bash"; if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then pass "${BASH_VERSION%%(*}"; else fail "需要 bash >= 4"; fi
+  check "git"; if team_have_cmd git; then pass "$(git --version | awk '{print $3}')"; else fail "缺 git"; fi
+
+  check "tmux"; if team_have_cmd tmux; then
+      if team_tmux_has_session "$TEAM_SESSION"; then pass "session $TEAM_SESSION 在运行"
+      else warn "tmux 在，但 session '$TEAM_SESSION' 不存在（dispatch 会创建；PM 需要在 <session>:<pm-window> 里跑）"; fi
+    else warn "无 tmux：agent 无法交互旁观，仅支持 -p 非交互（不建议）"; fi
+
+  check "pi"; if team_have_cmd pi; then
+      local pv; pv="$(pi --version 2>/dev/null | head -1 || true)"
+      if pi --help 2>/dev/null | grep -q -- '--session-id'; then pass "${pv:-present}"; else fail "pi 版本过旧：缺 --session-id"; fi
+    else fail "缺 pi（PATH 里没有）"; fi
+
+  check "门禁 TEAM_GATES"; if [ -n "$TEAM_GATES" ]; then pass "$TEAM_GATES"; else warn "未配置门禁命令：复验无法自动判定，只能靠人读 diff"; fi
+  check "名册 TEAM_AGENTS"; if [ -n "$(team_agents)" ]; then pass "$(team_agents | tr '\n' ' ')"; else fail "名册为空"; fi
+
+  check "worktree 目录"; if [ -d "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR" ]; then
+      pass "$(ls -1 "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR" 2>/dev/null | wc -l) 个"
+    else warn "尚未创建 $TEAM_WORKTREES_DIR/（add-agent 时创建）"; fi
+
+  check "notify 扩展"; local ext="$TEAM_SKILL_DIR/extension/team-notify.ts"
+    if [ -f "$ext" ]; then
+      local tsrunner; tsrunner="$(team_ts_runner)"
+      if [ -n "$tsrunner" ] && $tsrunner -e "await import('$ext')" >/dev/null 2>&1; then
+        pass "可加载（$tsrunner 预检通过；worktree 里需 -e 显式加载）"
+      elif [ -n "$tsrunner" ]; then
+        pass "存在（$tsrunner 未能预检，pi 内部用打包器，通常仍可用）"
+      else
+        pass "存在（本机无 node/bun/tsx 可预检）"
+      fi
+    else fail "缺 $ext"; fi
+
+  check "内存"; local avail; avail="$(team_available_mb)"
+    if [ -n "$avail" ] && [ "$avail" -gt 0 ] 2>/dev/null; then
+      if [ "$TEAM_MIN_FREE_MB" -gt 0 ] && [ "$avail" -lt "$TEAM_MIN_FREE_MB" ]; then
+        warn "可用 ${avail}MB < 阈值 ${TEAM_MIN_FREE_MB}MB：现在派单会被拒绝"
+      else pass "可用 ${avail}MB（阈值 ${TEAM_MIN_FREE_MB:-0}MB）"; fi
+    else warn "无法探测内存"; fi
+
+  check "forge"; case "$TEAM_VCS" in
+      github)
+        if team_have_cmd gh; then
+          local pat="$TEAM_MAIN_ROOT/$TEAM_TOKEN_FILE"
+          if [ -f "$pat" ]; then
+            local mode; mode="$(stat -c '%a' "$pat" 2>/dev/null || stat -f '%Lp' "$pat" 2>/dev/null || echo '?')"
+            case "$mode" in 600|400) pass "gh + PAT（$TEAM_TOKEN_FILE, $mode）" ;; *) warn "PAT 文件权限 $mode（建议 600）" ;; esac
+          else warn "缺 $TEAM_TOKEN_FILE：gh 只能匿名（开 PR 会失败）"; fi
+        else fail "TEAM_VCS=github 但缺 gh"; fi ;;
+      gitlab)
+        if [ -n "$TEAM_GITLAB_HOST" ]; then
+          if [ -f "$TEAM_GITLAB_TOKEN_FILE" ]; then pass "curl API + $TEAM_GITLAB_TOKEN_FILE"
+          else warn "缺 token 文件 $TEAM_GITLAB_TOKEN_FILE"; fi
+        else warn "TEAM_VCS=gitlab 但未设置 TEAM_GITLAB_HOST"; fi ;;
+      local) pass "local（不依赖 forge；merge 在本地完成）" ;;
+      *) fail "TEAM_VCS 取值非法：$TEAM_VCS（local|github|gitlab）" ;;
+    esac
+
+  check "保护分支"; if team_git rev-parse --verify -q "$TEAM_PROTECTED_BRANCH" >/dev/null; then
+      pass "$TEAM_PROTECTED_BRANCH @ $(team_git rev-parse --short "$TEAM_PROTECTED_BRANCH")"
+    else warn "本地没有分支 $TEAM_PROTECTED_BRANCH（配置对吗？）"; fi
+
+  check "gitignore"; local missing=0 e
+    for e in ".pi/team/state/" "$TEAM_DOCS_DIR/inbox/" "${TEAM_WORKTREES_DIR}/"; do
+      grep -qxF "$e" "$TEAM_MAIN_ROOT/.gitignore" 2>/dev/null || missing=$((missing + 1))
+    done
+    if [ "$missing" -eq 0 ]; then pass "临时目录已忽略"; else warn "$missing 条未忽略（收件箱/worktree 会被误提交）"; fi
+
+  check "陈旧 state"; local stale=0 a w
+    for a in $(team_agents); do
+      w="$(team_state_get "$a" window "$a")"
+      if [ -f "$TEAM_STATE_DIR/$a.env" ] && ! team_tmux_has_window "$TEAM_SESSION" "$w"; then stale=$((stale + 1)); fi
+    done
+    if [ "$stale" -eq 0 ]; then pass "干净"; else warn "$stale 个 agent 的 state 与 tmux 不一致（roster 会自动清理）"; fi
+
+  printf '\n'
+  if [ "$fails" -gt 0 ]; then team_err "doctor: $fails 项失败 / $warns 项警告"; return 1; fi
+  if [ "$warns" -gt 0 ]; then team_warn "doctor: 0 项失败 / $warns 项警告（可继续）"; return 0; fi
+  team_ok "doctor: 全部通过"
+}

@@ -1,0 +1,47 @@
+# pi-team 项目配置（由 `team init` 生成，可自由编辑；被 bash source，也被 notify 扩展解析）
+#
+# 解析约定：扁平 `TEAM_KEY="value"`，一行一个，值不要包含换行；
+# notify 扩展只读它需要的少数键，且**不会** source 本文件（不在 agent 进程里执行项目代码）。
+
+# ---- 身份 ----
+TEAM_PROJECT="{{PROJECT}}"
+TEAM_SESSION="{{SESSION}}"            # tmux session 名（PM 与所有 agent 都在这一个 session 里）
+TEAM_PM_WINDOW="{{PM_WINDOW}}"        # PM 会话所在的窗口名；通知会敲进这个窗口
+
+# ---- 名册与模型 ----
+TEAM_AGENTS="{{AGENTS}}"
+# 每个 agent 的默认模型（可缺省，缺省用 TEAM_DEFAULT_MODEL）："dev=deepseek/deepseek-flash verify=xai/grok-4.6"
+TEAM_AGENT_MODELS=""
+TEAM_DEFAULT_MODEL="{{DEFAULT_MODEL}}"
+# 并发上限（"provider/model=N"）；强模型额度有限时很重要，如 "kimi-coding/k3=2 openai-codex/gpt-5.6-sol=1"
+TEAM_MODEL_LIMITS="kimi-coding/k3=2"
+# 派单时追加给 pi 的参数（空格分隔）
+TEAM_EXTRA_PI_ARGS=""
+
+# ---- 工作流 ----
+TEAM_GATES="{{GATES}}"                # 门禁命令（复验时在独立 worktree 里跑）
+TEAM_PI_BIN="pi"                     # pi 可执行文件（PATH 以外的安装位置时写绝对路径，便于脚本/自测）
+TEAM_INSTALL_CMD=""                   # 新建 worktree 后的依赖安装，如 "pnpm install --frozen-lockfile"
+TEAM_DOCS_DIR="{{DOCS_DIR}}"          # 任务书/报告/线程/收件箱所在目录
+TEAM_WORKTREES_DIR=".worktrees"       # 每个 agent 一个长期 worktree
+TEAM_PROTECTED_BRANCH="main"          # 准入门禁分支：agent 不得 push，只能开 PR/MR 或交给 PM 合并
+TEAM_REMOTE="origin"
+
+# ---- 版本控制 / forge ----
+# {{DETECTED_VCS}} 是本仓库自动探测到的；local=不要 forge，PM 本地 squash 合并
+TEAM_VCS="{{VCS}}"
+TEAM_TOKEN_FILE=".gh-pat"             # github：PAT 文件（主工作树根，chmod 600，已 gitignore）
+TEAM_GITLAB_HOST=""                   # gitlab：如 https://gitlab.example.com:8443
+TEAM_GITLAB_PROJECT=""                # gitlab：如 group/sub/project
+TEAM_GITLAB_TOKEN_FILE="$HOME/.gitlab-pa-token"
+TEAM_CONFIRM_WRITES=1                 # 1=所有改变共享状态的操作都要 --yes（建议保持 1）
+
+# ---- 守卫 ----
+TEAM_MIN_FREE_MB=0                    # >0 时：可用内存低于该值拒绝派单（OOM 比排队贵）
+TEAM_NOTIFY_TMUX=1                    # 0=只写收件箱，不敲 PM 窗口
+TEAM_NOTIFY_DEDUP_SEC=20              # 同一简报的去重窗口（Pi 可能连续 settle）
+TEAM_INBOX_MAX_CHARS=150
+TEAM_NOTIFY_LOG="/tmp/{{PROJECT}}-pi-team-notify.log"
+
+# ---- 其它 ----
+# 由 init 记录，仅供人参考：skill 路径 {{SKILL_DIR}}；初始化于 {{TODAY}}

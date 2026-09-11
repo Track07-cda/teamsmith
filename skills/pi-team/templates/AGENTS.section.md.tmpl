@@ -1,0 +1,61 @@
+<!-- pi-team:begin -->
+## 团队协议（pi-team）
+
+本项目用 Pi Agent 组成一个团队：**PM（编排）** 在 tmux `{{SESSION}}:{{PM_WINDOW}}` 里维护任务与合并权，
+**worker agent** 各自在自己的 git worktree 里并行实现。工具：`bash {{SKILL_DIR}}/scripts/team help`。
+
+### 角色与边界
+
+| 角色 | 职责 | 禁止 |
+|---|---|---|
+| PM | 写任务书/路线图/决策日志、派单、独立复验、合并、收尾 | 把「agent 说通过」当证据 |
+| agent:<名> | 只做任务书里的事，写测试与报告，开 PR/MR | push `main`、force push、merge PR/MR、改他人目录 |
+
+名册：{{AGENTS}}（可在 `.pi/team/config.sh` 里改）。
+
+### 必读顺序（每个 agent 开工前）
+
+1. 本文件（尤其本节）
+2. 自己的消息线程 `{{DOCS_DIR}}/threads/<agent>.md`（PM 可能追加了新指令）
+3. 任务书 `{{DOCS_DIR}}/tasks/<ID>-<slug>.md`（范围与验收命令的唯一来源）
+
+### 不可违反的纪律
+
+- **只改自己有归属的目录**（`{{DOCS_DIR}}/OWNERSHIP.md`）；需要跨目录改动 → 报告里写 `BLOCKED:`，交回 PM。
+- **不半途停下征求意见**：要么交付完（门禁跑完 + 报告 + push + PR/MR），要么硬阻塞（notify PM + PARTIAL 报告）。
+- **没有真实执行过命令，不得声称测试通过**。PM 会在独立 worktree 复验；虚假报告视为任务失败。
+- 禁止把任何 token/secret 写进代码、配置、日志、提交信息；禁止读取凭据文件（如 `~/.pi/agent/auth.json`）。
+- 禁止 push `{{PROTECTED_BRANCH}}`、`git push --force`、`gh pr merge`/合并 MR、rebase/删除他人分支。
+- 小步提交：每完成一个可验证的小步就 commit（Conventional Commits + 任务 ID + `Agent: <名字>` trailer）。
+
+### 协作回路
+
+```
+PM 写任务书 + 建 agent worktree
+      │  team dispatch <agent> <ID> <task-file>
+      ▼
+agent 在 worktree 实现 → 小步 commit → 跑门禁 → 写报告 → push 分支 → 开 PR/MR
+      │  回合结束自动：追加 {{DOCS_DIR}}/inbox/<agent>.md + 敲 {{SESSION}}:{{PM_WINDOW}} 唤醒 PM
+      ▼
+PM 读收件箱 → team review <ID>（独立 worktree 复验，跑门禁）
+      ▼
+通过 → team merge <ID>（本地 squash，或按 forge 流程合并）→ team close <ID>
+不通过 → team say <agent> "..." 退回，附具体失败证据
+```
+
+- 阻塞/发现别人的 bug：`bash {{SKILL_DIR}}/scripts/team notify <agent> "<一句话>"`，同时写 PARTIAL 报告。
+- 门禁命令：`{{GATES}}`（任务书里可以写更严格的命令，以任务书为准）。
+- 消息 ≠ 交付物：真正的证据在 `{{DOCS_DIR}}/reports/`、`{{DOCS_DIR}}/reviews/` 和 commit 里。
+
+### 目录
+
+| 路径 | 归属 | 说明 |
+|---|---|---|
+| `{{DOCS_DIR}}/tasks/` | PM | 任务书 |
+| `{{DOCS_DIR}}/reports/` | agent（只写自己的） | 交付报告 |
+| `{{DOCS_DIR}}/reviews/` | PM | 独立复验记录 |
+| `{{DOCS_DIR}}/threads/` | PM + 该 agent（append-only） | 决策/澄清消息 |
+| `{{DOCS_DIR}}/inbox/` | 自动生成（gitignore） | 回合结束简报 |
+| `{{DOCS_DIR}}/{BOARD,ROADMAP,OWNERSHIP,DECISIONS}.md` | PM | 任务板/里程碑/归属/决策 |
+| `{{WORKTREES_DIR}}/<agent>/` | 该 agent | 长期 worktree（session 按 cwd 归属，必须稳定） |
+<!-- pi-team:end -->
