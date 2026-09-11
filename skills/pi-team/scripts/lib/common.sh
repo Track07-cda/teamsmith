@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.9.0"
+TEAM_VERSION="1.10.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -113,7 +113,17 @@ team_load_config() {
   TEAM_TASK_BRANCH_RESET="${TEAM_TASK_BRANCH_RESET:-1}"     # close 后把 agent worktree 切回保护分支（task 模式）
   TEAM_PROTECTED_BRANCH="${TEAM_PROTECTED_BRANCH:-main}"
   TEAM_REMOTE="${TEAM_REMOTE:-origin}"
+  # TEAM_VCS: local | github | gitlab | other（other/未知 = 项目自己的 forge，见 TEAM_PR_CMD）
+  # TEAM_VCS: local | github | gitlab | other（other/未知 = 项目自己的 forge，见 TEAM_PR_CMD）
   TEAM_VCS="${TEAM_VCS:-local}"
+  # 项目自己的 forge 命令模板（可选）。占位符：{branch} {base} {title} {pr} {body} {remote}
+  # 例（Gitea）：TEAM_PR_CMD="tea pr create --base {base} --head {branch} --title {title}"
+  TEAM_PR_CMD="${TEAM_PR_CMD:-}"
+  TEAM_MERGE_PR_CMD="${TEAM_MERGE_PR_CMD:-}"
+  # 项目自己的 forge 命令模板（可选）。占位符：{branch} {base} {title} {pr} {body} {remote}
+  # 例（Gitea）：TEAM_PR_CMD="tea pr create --base {base} --head {branch} --title {title}"
+  TEAM_PR_CMD="${TEAM_PR_CMD:-}"
+  TEAM_MERGE_PR_CMD="${TEAM_MERGE_PR_CMD:-}"
   TEAM_TOKEN_FILE="${TEAM_TOKEN_FILE:-.gh-pat}"
   TEAM_GITLAB_HOST="${TEAM_GITLAB_HOST:-}"
   TEAM_GITLAB_PROJECT="${TEAM_GITLAB_PROJECT:-}"
@@ -252,6 +262,17 @@ team_require_cmd() {
 }
 
 team_have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# 把 {KEY} 占位符替换成值（项目自定义 forge 命令模板用；bash 参数展开，不做 sed 替换）
+team_tpl_fill() { # <template> KEY=VALUE ...
+  local tpl="$1"; shift
+  local kv k v
+  for kv in "$@"; do
+    k="${kv%%=*}"; v="${kv#*=}"
+    tpl="${tpl//\{$k\}/$v}"
+  done
+  printf '%s\n' "$tpl"
+}
 
 team_agents() {
   # 名册：TEAM_AGENTS 空格分隔；也兼容换行

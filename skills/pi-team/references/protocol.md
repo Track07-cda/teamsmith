@@ -191,6 +191,17 @@ team merge T1.2 --no-renames --prefer-theirs pnpm-lock.yaml   # 冲突时这些�
   敲门（提醒对方 PM 窗口）默认关闭，只在 `--knock` + `TEAM_MEETING_KNOCK=1` + 对方登记了 session 时发生。
 - 边界守卫：跨 session 打字默认**一律拒绝**，唯一例外是已登记会议的敲门 —— 这条挡住了"顺手插手别的项目"。
 
+## 8h. git 与 forge 写操作归 PM
+
+- skill **不执行** git 写操作（分支、squash、push、rebase）与 forge 写操作（开/合 PR、留言、关 PR）。
+  `team merge` / `team pr` 只打印**可直接复制的食谱**；`team dispatch` 只**检查**工作树是否可开工。
+- 好处：顺序与权限一清二楚。之前 skill 代做时踩过「先 push main → PR 立刻不可合并 → 错误却归给 PAT 权限」。
+- 幂等习惯保留：BOARD 只在代码**真的进了保护分支**之后才标 `done`（现在这条命令由 PM 自己执行：
+  `team board set <ID> done`）。
+- forge 无关：`TEAM_VCS=local|github|gitlab|other`；非 GitHub/GitLab 用 `TEAM_PR_CMD` / `TEAM_MERGE_PR_CMD`
+  写模板（占位符 `{branch} {base} {title} {pr} {body}`），skill 照着渲染；没配就只给通用提示（网页/自建/SSH 都行）。
+- `team gh` / `team gl` 只读透传；写操作请直接用真实工具（token 从配置的 token 文件读，不要回显）。
+
 ## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
 
 - 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。

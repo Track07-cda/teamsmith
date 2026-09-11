@@ -127,39 +127,34 @@ team_cmd_add_agent() {
 #   task 模式  → task/<ID>-<slug>（不存在就从保护分支新建）
 #   agent 模式 → agent/<name>（长期分支）
 # 有未提交改动时拒绝切换（否则会把上一个任务的活混进来）
-team_prepare_task_branch() { # <agent> <ID> → 设 TEAM_PREPARED_BRANCH（不要从 stdout 取名字：team_ok 也打 stdout）
-  local agent="$1" id="$2" wt branch cur
+# 分支归 PM：skill 只**检查**工作树是否处在可开工的状态，并给出该跑的 git 命令。
+# 旧行为（自动 switch -c task/<ID>）已删除——git 写操作由 PM 直接执行。
+team_check_worktree_for_task() { # <agent> <ID>
+  local agent="$1" id="$2" wt cur dirty want
   wt="$(team_agent_worktree "$agent")"
-  cur="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  branch="$(team_branch_for_agent "$agent" "$id")"
-
-  if ! team_branch_mode_is_task; then
-    if [ "$cur" != "$branch" ]; then
-      if team_git_main show-ref --verify -q "refs/heads/$branch"; then
-        git -C "$wt" switch "$branch" >/dev/null 2>&1 || team_die "切到 $branch 失败（worktree 脏？）"
-      else
-        git -C "$wt" switch -c "$branch" "$TEAM_PROTECTED_BRANCH" >/dev/null 2>&1 || team_die "新建 $branch 失败"
-      fi
-    fi
-    TEAM_PREPARED_BRANCH="$branch"; return 0
+  want="$(team_branch_for_agent "$agent" "$id")"
+  cur="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  dirty="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$dirty" -gt 0 ] 2>/dev/null; then
+    team_err "$wt 有 $dirty 个未提交改动：先收尾（提交或丢弃），再派新任务"
+    git -C "$wt" status --short | head -8 >&2
+    team_dim "  （git 归 PM：skill 不替你 stash/commit）" >&2
+    return 1
   fi
-
-  if [ "$cur" != "$branch" ]; then
-    if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
-      team_err "$wt 有未提交改动（当前分支 $cur）：先提交/丢弃，再切到 $branch"
-      git -C "$wt" status --short | head -10 >&2
-      team_die "拒绝在脏工作区上切分支（避免把上一个任务的改动混进 $id）"
-    fi
-    if team_git_main show-ref --verify -q "refs/heads/$branch"; then
-      git -C "$wt" switch "$branch" >/dev/null 2>&1 || team_die "切到已存在的 $branch 失败"
-      team_ok "worktree 切换到已有任务分支 $branch"
-    else
-      git -C "$wt" switch -c "$branch" "$TEAM_PROTECTED_BRANCH" >/dev/null 2>&1 \
-        || team_die "从 $TEAM_PROTECTED_BRANCH 新建 $branch 失败"
-      team_ok "新建任务分支 $branch（基于 $TEAM_PROTECTED_BRANCH）"
-    fi
-  fi
-  TEAM_PREPARED_BRANCH="$branch"
+  case "$cur" in
+    "$TEAM_PROTECTED_BRANCH")
+      team_warn "$agent 的工作树还在 $TEAM_PROTECTED_BRANCH 上：PM 该先建分支再派单"
+      team_dim "  git -C $wt switch -c $want $TEAM_PROTECTED_BRANCH"
+      return 1 ;;
+    HEAD)
+      if [ -n "$want" ]; then
+        team_warn "$agent 的工作树是 detached HEAD：先切到任务分支"
+        team_dim "  git -C $wt switch -c $want $TEAM_PROTECTED_BRANCH"
+        return 1
+      fi ;;
+  esac
+  TEAM_CHECKED_BRANCH="$cur"
+  return 0
 }
 
 team_cmd_dispatch() {
@@ -192,8 +187,8 @@ team_cmd_dispatch() {
   # 分支准备放在守卫之前（会让 worktree 变状态，失败即停）
   local task_branch=""
   if [ "$printonly" != "1" ]; then
-    team_prepare_task_branch "$agent" "$id" || return 1
-    task_branch="$TEAM_PREPARED_BRANCH"
+    team_check_worktree_for_task "$agent" "$id" || return 1
+    task_branch="$TEAM_CHECKED_BRANCH"
   fi
 
   model="${model:-$(team_state_get "$agent" model "$(team_agent_model "$agent")")}"

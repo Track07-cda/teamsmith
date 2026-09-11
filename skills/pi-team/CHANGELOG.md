@@ -5,6 +5,21 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.10.0 · 2026-09-11
+
+**分工变更：git 与 forge 写操作归 PM，skill 不再代做**
+- `team merge <ID>` / `team pr <ID>` 由"执行合并/建 PR"改成**打印可复制粘贴的食谱**：
+  - `merge`：在主工作树 squash 合并（含 lockfile 用 `--theirs` 的处理提示）→ push → `board set done`
+    → 删分支（可选）；给了 `--pr N` 时按 **forge-first** 排序（先合 PR，再 `fetch + merge --ff-only`）
+  - `pr`：push 分支 + 建 PR/MR 的命令
+- `team dispatch` 不再自动建/切分支：只**检查**工作树（不在保护分支上、不脏），否则拒绝并给出该跑的 git 命令
+- `team close` 只动 BOARD/窗口/状态，不再切/删分支（只提示）
+- 删除 forge 写操作（`forge_open_pr` / `forge_merge_pr` / `forge_pr_record_and_close`）；
+  `team gh` / `team gl` 变成**只读透传**，写命令直接拒绝并指路食谱
+- **forge 无关**：`TEAM_VCS=local|github|gitlab|other`；非 GitHub/GitLab 可用 `TEAM_PR_CMD` /
+  `TEAM_MERGE_PR_CMD` 写命令模板（占位符 `{branch} {base} {title} {pr} {body}`），skill 只负责渲染
+- 任务书文件名：非 ASCII（中文）标题的 slug 退化为 `task`，不再出现 `T1.1-.md`
+
 ## v1.9.0 · 2026-09-11
 
 **更新分发与版本自检（新）**

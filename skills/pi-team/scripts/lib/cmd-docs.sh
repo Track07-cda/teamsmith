@@ -19,6 +19,7 @@ team_cmd_task() {
   [ -n "$title" ] || title="<未命名>"
   agent="${agent:-$(team_agents | head -1)}"
   slug="${slug:-$(team_slug "$title")}"
+  [ -n "$slug" ] || slug="task"      # 非 ASCII 标题（中文）slug 会空 → 用 task 兜底，避免 "T1.1-.md"
   local file="$TEAM_DOCS_ABS/tasks/$id-$slug.md"
   [ -f "$file" ] && team_die "任务书已存在：$file"
 

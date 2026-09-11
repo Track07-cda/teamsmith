@@ -3,7 +3,7 @@ name: pi-team
 description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（podman 容器看门狗：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a podman container, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗容器 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.9.0"
+  version: "1.10.0"
 ---
 
 # pi-team · Pi Agent 团队
@@ -59,7 +59,7 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | 派单 | `team add-agent <a>`、`team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--print]` |
 | 协作 | `team say <a> "<单行消息>" [--no-verify]`（发送后校验送达；agent 没在跑时落收件箱并提示 `resume`）、`team notify <a> "<一句话>"`（agent→PM） |
 | 复验 | `team review <ID> [--branch b] [--no-gates] [--strong]` → `reviews/<ID>.md`（门禁带硬超时；`--strong` 要求对抗性验证包 + finding 翻转证据） |
-| 合并/收尾 | `team merge <ID> [--push] [--pr N] [--no-renames] [--prefer-theirs <path>]`（`--pr` 走 **forge-first**：先合 PR 再快进本地；forge 失败才回落本地 squash+push+留言+关 PR，并打印真实错误；BOARD 只在成功后才标 done）、`team pr <ID>`、`team close <ID> [--delete-branch]`、`team teardown --agent a [--purge]` |
+| 合并/收尾（**只给食谱**） | `team merge <ID> [--branch b] [--pr N]`、`team pr <ID>`：打印**可直接复制的 git / forge 命令**（forge-first 顺序、lockfile 处理、BOARD 收尾），由 PM 执行；`team close <ID>`、`team teardown --agent a [--purge]` |
 | 初始化 | `team bootstrap [--agents "dev verify"] [--print]`（推荐）、`team init`、`team doctor` |
 | 看门狗 | `team watchdog up\|down\|restart\|status\|logs`（默认 tmux 后端：同 session 的 `watchdog` 窗口跑监视器；`--container` 换 podman 容器）、`team watch [--once]`（前台巡检） |
 | 监视器 | `team monitor [--once] [--activity]`（**只服务当前 tmux session**：谁在跑/任务/待办/容量；`--activity` 才追加各 agent 会话活动流，默认关）、`team panel` 由它复用 |
@@ -111,6 +111,19 @@ bash <skill>/scripts/team changelog        # 变更史（--since v1.8.0 只看�
 依据：Pi 的 `/reload` 会重新发现 skill 并重建 system prompt，同时清扩展模块缓存、重新解析
 `--skill`/`-e` 传入的路径。`team version --check` 提示"本会话是旧的"时，按上面表格操作即可；
 不需要重启整个会话（`-c` 重启也不会丢历史，但没必要）。
+
+## 分工：git 与 forge 写操作归 PM（skill 不代做）
+
+现状（v1.10.0 起）：**skill 不执行任何 git 写操作** —— 建/切分支、squash 合并、push、开/合 PR 全由 PM 直接用
+`git` / `gh` / `glab` / 自建脚本完成。skill 只做两件事：
+
+1. **检查**：派单前确认 agent 工作树处在可开工状态（不在保护分支上、不脏），否则拒绝并给出该跑的 git 命令；
+2. **给食谱**：`team merge <ID>` / `team pr <ID>` 按正确顺序打印命令（含 forge-first、lockfile 冲突处理、BOARD 收尾）。
+
+为什么这样：写操作交给 PM 后，顺序与权限问题一目了然（skill 之前替做时踩过「先 push main 导致 PR 不可合并、
+却把错误归给 PAT 权限」这种坑）。**forge 无关**：不是 GitHub 也能用 —— 设 `TEAM_VCS=other`，或用
+`TEAM_PR_CMD` / `TEAM_MERGE_PR_CMD` 把你们 forge 的命令模板写进项目配置（占位符 `{branch} {base} {title} {pr} {body}`）。
+读写边界：`team gh` / `team gl` 只做**只读**透传；需要写就直接用真实工具。
 
 ## 跨项目边界（谈事可以，指挥不行）
 

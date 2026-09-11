@@ -70,7 +70,9 @@ team_cmd_forge() { # team gh|gl <args...>
   local ro=0
   forge_is_read_only "$forge" "$@" && ro=1
   if [ "$ro" != "1" ]; then
-    team_allow_write || return 1
+    team_err "team $forge 只做只读透传：写操作请 PM 直接用 $forge（token 在 token 文件里，不要回显）"
+    team_dim "  开 PR/MR 与合并的顺序见： $TEAM_CLI pr <ID> / $TEAM_CLI merge <ID>（打印食谱）"
+    return 1
   fi
   case "$forge" in
     gh) forge_gh "$@" ;;
@@ -81,32 +83,9 @@ team_cmd_forge() { # team gh|gl <args...>
 }
 
 # 开 PR / MR。body 文件优先用复验/报告，其次任务书。
-forge_open_pr() { # <branch> <title> <body-file>
-  local branch="$1" title="$2" body="$3"
-  [ -f "$body" ] || team_die "body 文件不存在：$body"
-  case "$TEAM_VCS" in
-    github)
-      local pat; pat="$(forge_github_pat)"
-      team_require_cmd gh "TEAM_VCS=github 需要 gh"
-      [ -f "$pat" ] || team_die "找不到 PAT 文件 $TEAM_TOKEN_FILE"
-      GH_TOKEN="$(<"$pat")" gh pr create --base "$TEAM_PROTECTED_BRANCH" --head "$branch" \
-        --title "$title" --body-file "$body" || return 1
-      ;;
-    gitlab)
-      local pid; pid="$(forge_gitlab_project_id)"
-      local desc; desc="$(cat "$body")"
-      forge_gitlab_api POST "/projects/$pid/merge_requests" \
-        --data-urlencode "source_branch=$branch" \
-        --data-urlencode "target_branch=$TEAM_PROTECTED_BRANCH" \
-        --data-urlencode "title=$title" \
-        --data-urlencode "description=$desc" \
-        --data-urlencode "remove_source_branch=true" | head -c 2000
-      printf '\n'
-      ;;
-    *) team_die "TEAM_VCS=local：不开 PR；直接 push 分支，PM 本地合并" ;;
-  esac
-}
-
+# 说明（用户定的原则）：skill **不执行远端写操作**。
+# 开 PR/MR、合并、留言、关闭 —— 全部由 PM 直接用 gh / gl / curl（token 从配置的 token 文件读）。
+# 这里只保留：token 读取 + 只读透传 + PR body 选择（给食谱用）。
 forge_pr_body() { # <ID> → 选一个 body 文件
   local id="$1" f found
   [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && { printf '%s\n' "$TEAM_DOCS_ABS/reviews/$id.md"; return 0; }
@@ -122,42 +101,5 @@ forge_pr_body() { # <ID> → 选一个 body 文件
 
 # 合并 PR/MR。注意：很多 PAT 没有 `pull-requests: write`（CEP 就是 403）。
 # 所以这里返回非 0 让调用方走本地兜底，而不是把失败当致命错误。
-forge_merge_pr() { # <pr-number-or-iid>；失败一律 return 1（让调用方回落，不要 exit）
-  local n="$1"
-  case "$TEAM_VCS" in
-    github)
-      local pat; pat="$(forge_github_pat)"
-      if ! team_have_cmd gh; then team_err "缺 gh（TEAM_VCS=github 需要）"; return 1; fi
-      if [ ! -f "$pat" ]; then team_err "找不到 PAT 文件：$pat"; return 1; fi
-      GH_TOKEN="$(<"$pat")" gh pr merge --squash --delete-branch "$n" || return 1 ;;
-    gitlab)
-      local pid; pid="$(forge_gitlab_project_id)"
-      forge_gitlab_api PUT "/projects/$pid/merge_requests/$n/merge" | head -c 500 ;;
-    *) return 1 ;;
-  esac
-}
 
 # 兜底：PR 合不了（或无权限）时，在 PR 上留记录并关掉它（CEP 的做法）
-forge_pr_record_and_close() { # <pr> <squash-sha> <branch>
-  local n="$1" sha="$2" branch="$3" msg
-  msg="pi-team: 已在本地 squash merge 到 $TEAM_PROTECTED_BRANCH（$sha，来源分支 $branch）。\
-PAT 无 pull-requests: write，故用本地合并 + 关闭本 PR。"
-  case "$TEAM_VCS" in
-    github)
-      local pat; pat="$(forge_github_pat)"
-      [ -f "$pat" ] || return 1
-      GH_TOKEN="$(<"$pat")" gh pr comment "$n" --body "$msg" >/dev/null 2>&1 \
-        && team_ok "PR #$n 已留言记录 squash commit $sha" || team_warn "留言失败（缺 issues: write？）：请手工记录 $sha"
-      GH_TOKEN="$(<"$pat")" gh pr close "$n" >/dev/null 2>&1 \
-        && team_ok "PR #$n 已关闭" || team_warn "关闭 PR 失败：手工 gh pr close $n"
-      ;;
-    gitlab)
-      local pid; pid="$(forge_gitlab_project_id)"
-      forge_gitlab_api POST "/projects/$pid/merge_requests/$n/notes" \
-        --data-urlencode "body=$msg" >/dev/null 2>&1 && team_ok "MR !$n 已留言" || team_warn "留言失败"
-      forge_gitlab_api PUT "/projects/$pid/merge_requests/$n" --data-urlencode "state_event=close" \
-        >/dev/null 2>&1 && team_ok "MR !$n 已关闭" || team_warn "关闭 MR 失败"
-      ;;
-  esac
-  return 0
-}

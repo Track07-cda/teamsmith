@@ -196,6 +196,19 @@ assert_eq "worktree 处于 detached（task 模式）" "$(git -C "$REPO/.worktree
 assert_file "$REPO/.worktrees/dev/README.md" "worktree 内容就绪"
 
 # ---------------------------------------------------------------- 6. dispatch
+section "3b · 分支归 PM（skill 不执行 git 写操作）"
+$TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md --print >/dev/null 2>&1 || true
+if $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md >"$TMP/dispatch-nobranch.log" 2>&1; then
+  bad "工作树不在任务分支时 dispatch 应当拒绝"
+else ok "工作树不在任务分支时 dispatch 拒绝"; fi
+assert_match "$TMP/dispatch-nobranch.log" "switch -c task/|switch -c agent/" "给出了 PM 该跑的分支创建命令"
+git -C "$REPO/.worktrees/dev" switch -c task/T1.1-smoke "$PROTECTED" >/dev/null 2>&1 || git -C "$REPO/.worktrees/dev" switch task/T1.1-smoke >/dev/null 2>&1
+$TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md --print >"$TMP/print-branch.log" 2>&1 && ok "PM 建好分支后 dispatch 可用" || bad "建好分支后 dispatch 仍失败"
+echo dirty > "$REPO/.worktrees/dev/dirty.txt"
+if $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md >"$TMP/dispatch-dirty.log" 2>&1; then bad "脏工作树应当拒绝派单"; else ok "脏工作树拒绝派单"; fi
+assert_has "$TMP/dispatch-dirty.log" "git 归 PM" "说明 git 归 PM"
+rm -f "$REPO/.worktrees/dev/dirty.txt"
+
 section "6 · dispatch"
 $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"assert_has "$TMP/print.log" "--session-id $SESSION-dev" "命令含正确的 session-id"
 assert_has "$TMP/print.log" "team-notify.ts" "命令显式加载 notify 扩展（worktree 不会自动发现）"
@@ -314,66 +327,20 @@ assert_not "$TMP/digest-heur.log" "team review P2 " "结项报告不再出现在
 assert_has "$TMP/digest-heur.log" "P2-closure.md" "忽略清单点名了那份结项报告"
 rm -f "$REPO/docs/team/reports/P2-closure.md" "$REPO/docs/team/reports/T2.6-dev.md"
 
-# ① merge 失败时必须列出冲突文件（用**临时 worktree** 造冲突，不碰 agent 的 worktree）
+# ① merge 只打印食谱（git 写操作归 PM）：不改任何 git 状态
 MAIN_BEFORE="$(git -C "$REPO" rev-parse HEAD)"
-CONFWT="$TMP/conflict-wt"
-git -C "$REPO" worktree add --detach "$CONFWT" "$PROTECTED" >/dev/null 2>&1
-git -C "$CONFWT" switch -c task/T9.9-conflict >/dev/null 2>&1
-printf 'agent side\n' > "$CONFWT/conflict.txt"
-git -C "$CONFWT" add -A >/dev/null 2>&1
-git -C "$CONFWT" -c user.email=a@b -c user.name=a commit -qm "feat: agent side of conflict"
-printf 'main side\n' > "$REPO/conflict.txt"
-# 只提交这一个文件：main 工作树里还有未提交的 BOARD/reviews 等，`add -A` 会把它们卷进提交
-git -C "$REPO" add conflict.txt >/dev/null 2>&1
-git -C "$REPO" -c user.email=a@b -c user.name=a commit -qm "feat: main side of conflict"
-if $TEAM merge T9.9 --branch task/T9.9-conflict --no-review-check --yes >"$TMP/merge-conflict.log" 2>&1; then
-  bad "冲突时 merge 应返回非 0"
-else ok "冲突时 merge 返回非 0"; fi
-assert_has "$TMP/merge-conflict.log" "conflict.txt" "merge 失败时列出了冲突文件"
-assert_has "$TMP/merge-conflict.log" "冲突文件" "明确标出「冲突文件」段"
-# 用 --mixed 回退（保留 main 工作树里其它未提交内容），再删掉测试文件
-git -C "$REPO" reset --mixed "$MAIN_BEFORE" >/dev/null 2>&1
-rm -f "$REPO/conflict.txt"
-git -C "$REPO" worktree remove --force "$CONFWT" >/dev/null 2>&1 || true
-git -C "$REPO" branch -D task/T9.9-conflict >/dev/null 2>&1 || true
-# 冲突失败不能把 BOARD 标成 done（v1.7.1 的 bug：没进 main 却写 done）
-assert_has "$REPO/docs/team/BOARD.md" "| wip |" "冲突失败后 BOARD 保持原状态（不是 done）"
-assert_not "$TMP/merge-conflict.log" "board T1.1 → done" "冲突失败时不打印 board → done"
-assert_has "$TMP/merge-conflict.log" "BOARD 保持" "给出了「BOARD 保持原状态」的说明"
-assert_has "$TMP/merge-conflict.log" "恢复步骤" "给出了可复制粘贴的恢复步骤"
-assert_has "$TMP/merge-conflict.log" "prefer-theirs" "lockfile 场景给出 --prefer-theirs 提示"
-
-# --prefer-theirs：lockfile 类冲突自动取分支侧，合并能走完
-$TEAM task T9.8 --title "lockfile merge" --agent dev >/dev/null 2>&1 || true
-MAIN_BEFORE2="$(git -C "$REPO" rev-parse HEAD)"
-CONFWT2="$TMP/conflict-wt2"
-git -C "$REPO" worktree add --detach "$CONFWT2" "$PROTECTED" >/dev/null 2>&1
-git -C "$CONFWT2" switch -c task/T9.8-lock >/dev/null 2>&1
-printf 'branch lock\n' > "$CONFWT2/pnpm-lock.yaml"
-git -C "$CONFWT2" add -A >/dev/null 2>&1
-git -C "$CONFWT2" -c user.email=a@b -c user.name=a commit -qm "feat: branch lockfile"
-git -C "$REPO" worktree remove --force "$CONFWT2" >/dev/null 2>&1 || true
-printf 'main lock\n' > "$REPO/pnpm-lock.yaml"
-git -C "$REPO" add pnpm-lock.yaml >/dev/null 2>&1
-git -C "$REPO" -c user.email=a@b -c user.name=a commit -qm "feat: main lockfile"
-if $TEAM merge T9.8 --branch task/T9.8-lock --no-review-check --yes --prefer-theirs pnpm-lock.yaml >"$TMP/merge-prefer.log" 2>&1; then
-  ok "--prefer-theirs 让 lockfile 冲突自动解决并合并成功"
-else bad "--prefer-theirs 合并失败"; cat "$TMP/merge-prefer.log"; fi
-assert_has "$TMP/merge-prefer.log" "取分支侧" "打印了取分支侧的动作"
-assert_eq "lockfile 取了分支侧内容" "$(cat "$REPO/pnpm-lock.yaml")" "branch lock"
-assert_eq "合并成功后 BOARD 才标 done" "$(bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_board_field "$(team_board_row T9.8)" status')" "done"
-# 收尾：回滚 T9.8 造出来的 main 提交与 lockfile（回到 6d 开始时）
-SQUASH_SHA="$(git -C "$REPO" rev-parse HEAD)"
-git -C "$REPO" reset --mixed "$MAIN_BEFORE2" >/dev/null 2>&1
-rm -f "$REPO/pnpm-lock.yaml"
-git -C "$REPO" branch -D task/T9.8-lock >/dev/null 2>&1 || true
-assert_eq "T9.8 测试后主工作树已回滚" "$(git -C "$REPO" rev-parse HEAD)" "$MAIN_BEFORE2"
-team_dim "（T9.8 squash commit $SQUASH_SHA 已从 main 摘掉，测试隔离）"
-
-# push 失败也不能标 done（本地合并了但远端没有）
-assert_eq "冲突测试后主工作树已回滚" "$(git -C "$REPO" rev-parse HEAD)" "$MAIN_BEFORE"
-$TEAM board set T1.1 wip >/dev/null 2>&1 || true
-assert_eq "冲突测试没动 agent 的 worktree" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD)" "task/T1.1-smoke-task"
+git -C "$REPO/.worktrees/dev" switch -c task/T9.9-recipe "$PROTECTED" >/dev/null 2>&1 || true
+$TEAM board set T9.9 todo >/dev/null 2>&1 || true
+$TEAM merge T9.9 --branch task/T9.9-recipe >"$TMP/merge-recipe.log" 2>&1 && ok "merge 打印食谱并返回 0" || bad "merge 食谱失败"
+assert_has "$TMP/merge-recipe.log" "请 PM 直接跑" "说明 git 由 PM 执行"
+assert_has "$TMP/merge-recipe.log" "git -C $REPO merge --squash task/T9.9-recipe" "给出正确顺序的 git 命令"
+assert_has "$TMP/merge-recipe.log" "prefer-theirs" "lockfile 冲突给了 --theirs 提示"
+assert_has "$TMP/merge-recipe.log" "board set T9.9 done" "给了 BOARD 收尾命令"
+assert_eq "merge 没有动 git 状态" "$(git -C "$REPO" rev-parse HEAD)" "$MAIN_BEFORE"
+if $TEAM merge T9.9 --branch no-such-branch >"$TMP/merge-nobranch.log" 2>&1; then bad "分支不存在时不应成功"; else ok "分支不存在时明确报错"; fi
+assert_has "$TMP/merge-nobranch.log" "分支不存在" "报错说明分支不存在"
+git -C "$REPO/.worktrees/dev" switch task/T1.1-smoke >/dev/null 2>&1 || true
+git -C "$REPO" branch -D task/T9.9-recipe >/dev/null 2>&1 || true
 
 # ④ 翻转证据进模板与派单提示词
 assert_has "$SKILL_DIR/templates/task.md.tmpl" "翻转证据" "任务书模板要求翻转证据"
@@ -432,15 +399,13 @@ fi
 echo '{"iid":24,"web_url":"https://gl.example/g/p/-/merge_requests/24"}'
 GLSTUB
 chmod +x "$FAKECURL/curl"
-if env PATH="$FAKECURL:$PATH" GL_LOG="$GLLOG" TEAM_ROOT="$REPO" \
+env PATH="$FAKECURL:$PATH" GL_LOG="$GLLOG" TEAM_ROOT="$REPO" \
     TEAM_VCS=gitlab TEAM_GITLAB_HOST=https://gl.example TEAM_GITLAB_PROJECT=g/p \
-    TEAM_GITLAB_TOKEN_FILE="$TOK" $TEAM pr T1.1 --branch task/T1.1-smoke-task --yes >"$TMP/gl-pr-out.log" 2>&1; then
-  ok "GitLab 模式下 team pr 开 MR 成功（头/体一致，桩按 GitLab 规则校验）"
-else bad "GitLab 模式下 team pr 失败"; cat "$TMP/gl-pr-out.log"; fi
-assert_has "$TMP/gl-pr-out.log" "merge_requests/24" "pr 打出了 MR 链接/iid"
-assert_not "$TMP/gl-pr-out.log" "Invalid JSON format" "没有被 GitLab 以 Invalid JSON format 拒绝"
-assert_has "$GLLOG" "application/x-www-form-urlencoded" "pr 调用链发的确实是表单体 + 表单头"
-assert_has "$GLLOG" "source_branch=task/T1.1-smoke-task" "pr 带了 source_branch 字段"
+    TEAM_GITLAB_TOKEN_FILE="$TOK" $TEAM pr T1.1 --branch task/T1.1-smoke-task >"$TMP/gl-pr-out.log" 2>&1 \
+  && ok "GitLab 模式下 team pr 给出食谱" || { bad "GitLab 模式下 team pr 失败"; cat "$TMP/gl-pr-out.log"; }
+assert_match "$TMP/gl-pr-out.log" "glab mr create|merge_requests" "食谱给出 GitLab 的 MR 命令/API"
+assert_not "$TMP/gl-pr-out.log" "Invalid JSON format" "没有去调 GitLab API（因此不会被拒）"
+assert_has "$TMP/gl-pr-out.log" "git -C $REPO push" "食谱含 push 分支"
 
 # ② pi 可执行文件：绝对路径 + 找不到就明确报错（不要再出现窗口里 command not found）
 if TEAM_PI_BIN="definitely-not-a-pi-binary" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/pi-missing.log" 2>&1; then
@@ -520,12 +485,16 @@ assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "恢复门禁后
 
 # ---------------------------------------------------------------- 11. merge / close
 section "11 · merge + close"
-if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 无 --yes 应被拒绝"; else ok "merge 无 --yes 正确拒绝（写操作授权）"; fi
-# 特意在 agent worktree 里调用 merge：验证内部一律锚定主工作树（不是当前 cwd）
-( cd "$REPO/.worktrees/dev" && $TEAM merge T1.1 --yes ) >"$TMP/merge.log" 2>&1 \
-  && ok "merge --yes 成功（在 worktree 内调用也正确锚定主工作树）" || { bad "merge 失败"; cat "$TMP/merge.log"; }
-assert_eq "main 上是 squash 提交" "$(git -C "$REPO" log --oneline -1 | grep -c 'T1.1: Smoke task')" "1"
-assert_eq "merge 后 BOARD → done" "$($TEAM board row T1.1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}')" "done"
+# merge 现在只打印食谱：不需要授权（不写任何远端/共享状态）
+$TEAM merge T1.1 >"$TMP/merge.log" 2>&1 && ok "merge 打印食谱（无需 --yes）" || bad "merge 食谱失败"
+assert_has "$TMP/merge.log" "请 PM 直接跑" "明确 git 由 PM 执行"
+assert_has "$TMP/merge.log" "merge --squash task/T1.1-smoke" "食谱指向正确的任务分支"
+# 在 agent worktree 里调用也锚定主工作树
+( cd "$REPO/.worktrees/dev" && $TEAM merge T1.1 ) >"$TMP/merge-wt.log" 2>&1 && ok "worktree 内调用 merge 也正确锚定主工作树" || bad "worktree 内 merge 失败"
+assert_has "$TMP/merge-wt.log" "git -C $REPO " "命令锚定主工作树"
+assert_eq "merge 食谱没有改 git 状态" "$(git -C "$REPO" log --oneline -1 | grep -c 'T1.1: Smoke task')" "0"
+$TEAM board set T1.1 done >/dev/null 2>&1
+assert_eq "PM 手工收尾后 BOARD → done" "$($TEAM board row T1.1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}')" "done"
 $TEAM close T1.1 >/dev/null 2>&1 && ok "close 退出码 0" || bad "close 失败"
 [ "$HAVE_TMUX" = "1" ] && assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
 
@@ -874,50 +843,24 @@ assert_match "$TMP/doctor-skill.log" "skill|pi-team" "doctor 里能看到 skill 
 
 # ---------------------------------------------------------------- 11g. CEP 三条实测反馈
 section "11g · CEP 反馈（forge-first / say 投递校验 / knock 诊断）"
-# ① --pr 走 forge-first：forge 可用时不再先本地 push（用桩 gh 验证调用顺序）
-FAKEGH="$TMP/fakegh"; mkdir -p "$FAKEGH"
-cat > "$FAKEGH/gh" <<'GHSTUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_LOG"
-case "$1 $2" in
-  "pr merge") exit 0 ;;
-  *) echo '{}' ;;
-esac
-GHSTUB
-chmod +x "$FAKEGH/gh"
-GH_LOG="$TMP/gh-calls.log"; : > "$GH_LOG"
-PATF="$REPO/.gh-pat"; printf 'dummy\n' > "$PATF"; chmod 600 "$PATF"
-(cd "$REPO/.worktrees/dev" && git switch -c task/T9.7-ff >/dev/null 2>&1 && echo ff > ff.txt && git add -A && git -c user.email=a@b -c user.name=a commit -qm "feat: ff test") >/dev/null 2>&1
-MAIN_PRE="$(git -C "$REPO" rev-parse --short HEAD)"
-if env PATH="$FAKEGH:$PATH" GH_LOG="$GH_LOG" TEAM_ROOT="$REPO" TEAM_MEETINGS_DIR="$TMP/meetings" \
-    TEAM_VCS=github TEAM_TOKEN_FILE="$PATF" $TEAM merge T9.7 --branch task/T9.7-ff --pr 42 --yes --no-review-check \
-    >"$TMP/merge-ff.log" 2>&1; then
-  ok "forge-first 合并成功"
-else bad "forge-first 合并失败"; cat "$TMP/merge-ff.log"; fi
-assert_has "$TMP/merge-ff.log" "先合 PR" "先尝试 forge 合并"
-assert_has "$GH_LOG" "pr merge --squash --delete-branch 42" "调用了 gh pr merge（squash）"
-assert_eq "forge-first 时没有本地 squash 提交" "$(git -C "$REPO" rev-parse --short HEAD)" "$MAIN_PRE"
-assert_has "$TMP/merge-ff.log" "board T9.7 → done" "合并成功后标 done"
-git -C "$REPO" branch -D task/T9.7-ff >/dev/null 2>&1 || true
-(cd "$REPO/.worktrees/dev" && git switch --detach main >/dev/null 2>&1) || true
-rm -f "$REPO/ff.txt"
-
-# forge 合并失败：要打印真实错误，并且不再断言“PAT 缺权限”是原因
-cat > "$FAKEGH/gh" <<'GHSTUB'
-#!/usr/bin/env bash
-echo "GraphQL: Pull request is not mergeable (mergePullRequest)" >&2
-exit 1
-GHSTUB
-chmod +x "$FAKEGH/gh"
-(cd "$REPO/.worktrees/dev" && git switch -c task/T9.6-bad >/dev/null 2>&1 && echo bad > bad.txt && git add -A && git -c user.email=a@b -c user.name=a commit -qm "feat: bad pr") >/dev/null 2>&1
-env PATH="$FAKEGH:$PATH" GH_LOG="$GH_LOG" TEAM_ROOT="$REPO" TEAM_VCS=github TEAM_TOKEN_FILE="$PATF" \
-  $TEAM merge T9.6 --branch task/T9.6-bad --pr 43 --yes --no-review-check >"$TMP/merge-badpr.log" 2>&1 || true
-assert_has "$TMP/merge-badpr.log" "not mergeable" "打印了 forge 的真实错误"
-assert_has "$TMP/merge-badpr.log" "不是权限问题" "区分了「不可合并」与「权限」"
-git -C "$REPO" reset --mixed HEAD~1 >/dev/null 2>&1 || true
-git -C "$REPO" branch -D task/T9.6-bad >/dev/null 2>&1 || true
-(cd "$REPO/.worktrees/dev" && git switch --detach main >/dev/null 2>&1) || true
-rm -f "$REPO/bad.txt"
+# ① --pr 食谱按 forge-first 排序（skill 不执行 git/forge 写操作）
+$TEAM merge T9.7 --branch task/T1.1-smoke --pr 42 >"$TMP/merge-ff.log" 2>&1 || true
+assert_has "$TMP/merge-ff.log" "先合 PR" "食谱第一步是合 PR"
+assert_match "$TMP/merge-ff.log" "gh pr merge --squash --delete-branch 42|mr merge 42|TEAM_MERGE_PR_CMD|按你们 forge 的方式" "给出合 PR 的命令（或 forge 提示）"
+assert_has "$TMP/merge-ff.log" "merge --ff-only FETCH_HEAD" "第二步是 fetch + ff-only 快进本地"
+assert_eq "食谱不产生本地提交" "$(git -C "$REPO" rev-parse --short HEAD)" "$(git -C "$REPO" rev-parse --short "$PROTECTED")"
+if env TEAM_ROOT="$REPO" $TEAM gh pr merge 42 --squash >"$TMP/gh-write.log" 2>&1; then
+  bad "team gh 写操作应被拒绝"
+else ok "team gh 写操作被拒绝（只读透传）"; fi
+env TEAM_ROOT="$REPO" TEAM_PR_CMD="tea pr create --base {base} --head {branch} --title {title}" \
+  $TEAM pr T9.7 --branch task/T1.1-smoke >"$TMP/pr-tpl.log" 2>&1 || true
+assert_has "$TMP/pr-tpl.log" "tea pr create --base main --head task/T1.1-smoke" "TEAM_PR_CMD 模板被渲染"
+env TEAM_ROOT="$REPO" TEAM_MERGE_PR_CMD="tea pr merge {pr}" \
+  $TEAM merge T9.7 --branch task/T1.1-smoke --pr 42 >"$TMP/merge-tpl.log" 2>&1 || true
+assert_has "$TMP/merge-tpl.log" "tea pr merge 42" "TEAM_MERGE_PR_CMD 模板被渲染"
+env TEAM_ROOT="$REPO" TEAM_VCS=other $TEAM pr T9.7 --branch task/T1.1-smoke >"$TMP/pr-other.log" 2>&1 || true
+assert_has "$TMP/pr-other.log" "按你们 forge 的方式" "VCS=other 时给通用提示"
+assert_not "$TMP/pr-other.log" "gh pr create" "VCS=other 时不假设 GitHub"
 
 # ② say：agent 没在跑 → 落收件箱 + 明确提示（不再硬失败）
 if [ "$HAVE_TMUX" = "1" ]; then

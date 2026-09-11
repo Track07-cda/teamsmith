@@ -57,13 +57,15 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
   review ID [--branch b] [--no-gates]
                   独立 detached worktree 上 checkout 分支 → 跑门禁 → 写
                   <docs>/reviews/ID.md（PM 复验证据，不接受 agent 自述）
-  merge ID [--branch b] [--push]        本地 squash 合并到保护分支（需 --yes）
-  pr ID [--branch b] [--title ...]      通过 forge（github/gitlab）开 PR/MR（需 --yes）
-  close ID [--delete-branch]            收尾：更新 BOARD、zap 窗口、保留 worktree
+  merge ID [--branch b] [--pr N] [--no-push]   打印合并食谱（forge-first + lockfile + BOARD 收尾）
+                                                —— skill 不执行 git：命令由 PM 直接跑
+  pr ID [--branch b] [--title ...]      打印创建 PR/MR 的食谱（GitHub/GitLab 或 TEAM_PR_CMD 模板）
+  close ID                              收尾：更新 BOARD、关窗口、保留 worktree（git 由 PM 做）
   teardown [--agent a] [--all] [--purge]  关窗口 / 删 worktree（--purge 才删 worktree）
 
   smoke           在临时仓库里端到端自测这套工具（不碰当前项目）
-  gh / gl          forge 透传：team gh pr list、team gl GET /projects/... （token 由 wrapper 注入）
+  gh / gl          forge **只读**透传：team gh pr list、team gl GET /projects/...（token 由 wrapper 注入）
+                   写操作（开/合 PR、留言、关 PR）直接用 gh/glab/自建脚本，skill 不代做
   ── 版本与更新（skill 更新怎么拿到） ─────────────────────────
   mark-loaded [--version X]   记录本会话加载的 skill 版本（PM 开局跑一次）
   version [--check]           看磁盘版本 / SKILL.md 版本 / CHANGELOG / 本会话加载版本；--check 给结论
