@@ -56,8 +56,9 @@ TEAM_NOTIFY_LOG="/tmp/{{PROJECT}}-pi-team-notify.log"
 # ---- 定时巡检（叫醒 PM 的节拍；watchdog 只保 PM 这个进程，agent 归 PM 管） ----
 TEAM_WATCH_BACKEND="tmux"             # tmux（默认：同 session 的 watchdog 窗口 + 状态面板 --ui）| container
 TEAM_WATCH_WINDOW="watchdog"          # tmux 后端的窗口名（里面跑 team monitor）
-TEAM_MONITOR_REFRESH=3                # 监视器刷新间隔（秒）
-TEAM_MONITOR_EVENTS=4                 # 每个 agent 显示最近几条会话事件
+TEAM_MONITOR_REFRESH=5                # 监视器刷新间隔（秒）
+TEAM_MONITOR_ACTIVITY=0               # 1=在面板下方追加“agent 会话活动流”（只列本 session 在跑的窗口）
+TEAM_MONITOR_EVENTS=4                 # 打开活动流时，每个 agent 显示最近几条会话事件
 TEAM_WATCH_INTERVAL=900               # 巡检周期（秒）：默认 15 分钟，建议 300~3600
 TEAM_WATCH_NUDGE_GAP=900              # 同一批待办最快多久再提醒一次（秒）
 TEAM_WATCH_REBUILD_TMUX=0             # 0=不管 tmux（session/窗口没了只告警）；1=允许重建（机器重启也自己回来）

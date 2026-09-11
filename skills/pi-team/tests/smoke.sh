@@ -428,8 +428,12 @@ if [ "$HAVE_TMUX" = "1" ]; then
   # 4b) 看门狗：tmux 后端（默认，窗口里跑 monitor）+ 容器后端 dry-run
   $TEAM monitor --once >"$TMP/monitor.log" 2>&1 && ok "monitor --once 退出码 0" || bad "monitor --once 失败"
   assert_has "$TMP/monitor.log" "pi-team monitor" "monitor 打印了标题"
-  assert_has "$TMP/monitor.log" "agent 活动" "monitor 有 agent 活动段"
   assert_has "$TMP/monitor.log" "巡检" "monitor 复用了团队状态面板"
+  assert_not "$TMP/monitor.log" "agent 活动" "默认不翻各 agent 的会话（活动流 opt-in）"
+  assert_has "$TMP/monitor.log" "只服务本 session" "说明了看门狗的服务范围"
+  $TEAM monitor --once --activity >"$TMP/monitor-act.log" 2>&1 || bad "monitor --activity 失败"
+  assert_has "$TMP/monitor-act.log" "agent 活动" "--activity 显式打开活动流"
+  assert_has "$TMP/monitor-act.log" "仅本 session 在跑的窗口" "活动流只覆盖本 session 的窗口"
   $TEAM watchdog up >"$TMP/wd-up.log" 2>&1 && ok "watchdog up（tmux 后端）退出码 0" || { bad "watchdog up 失败"; cat "$TMP/wd-up.log"; }
   assert_eq "看门狗窗口已建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx watchdog || true)" "1"
   $TEAM watchdog status >"$TMP/wd-status.log" 2>&1

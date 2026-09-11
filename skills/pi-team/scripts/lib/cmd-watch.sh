@@ -292,22 +292,35 @@ team_cmd_watch() {
 # ---------------------------------------------------------------- team monitor
 # tmux 窗口里的「状态监视器」：上面是团队状态（PM/待办/容量），下面是每个 agent 的会话活动流。
 # 顺带按 TEAM_WATCH_INTERVAL 跑看门狗 tick —— 所以一个窗口同时是显示器 + 看门狗。
-team_monitor_activity() { # 调 monitor.mjs 渲染 agent 活动（没有 node/bun/tsx 就降级）
+team_monitor_activity() { # 可选：只渲染「当前 tmux session 里正在跑的窗口」的会话活动
   local runner; runner="$(team_ts_runner)"
   local js="$TEAM_SKILL_DIR/scripts/monitor.mjs"
   if [ -z "$runner" ] || [ ! -f "$js" ]; then
-    team_dim "  （本机没有 node/bun/tsx：跳过 agent 活动流；装任一个即可显示）"
+    team_dim "  （本机没有 node/bun/tsx：活动流不可用）"
     return 0
   fi
-  "$runner" "$js" --root "$TEAM_MAIN_ROOT" --events "${TEAM_MONITOR_EVENTS:-4}" 2>/dev/null || true
+  # 只监视本 session 里活着的人：不在这个 session / 窗口没了的 agent 一律不看（不翻别人的会话）
+  local only="" a w
+  for a in $(team_agents); do
+    w="$(team_state_get "$a" window "$a")"
+    if team_tmux_has_window "$TEAM_SESSION" "$w"; then only="${only:+$only,}$a"; fi
+  done
+  team_pm_window_exists && only="${only:+$only,}pm"
+  if [ -z "$only" ]; then
+    team_dim "  （本 session 里没有在跑的窗口）"
+    return 0
+  fi
+  "$runner" "$js" --root "$TEAM_MAIN_ROOT" --only "$only" --events "${TEAM_MONITOR_EVENTS:-4}" 2>/dev/null || true
 }
 
 team_cmd_monitor() {
-  local once=0 interval="${TEAM_MONITOR_REFRESH:-3}" with_watchdog=1
+  local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_watchdog=1 activity="${TEAM_MONITOR_ACTIVITY:-0}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --once) once=1; shift ;;
       --no-watchdog) with_watchdog=0; shift ;;
+      --activity) activity=1; shift ;;
+      --no-activity) activity=0; shift ;;
       --interval) interval="${2:?}"; shift 2 ;;
       --events) TEAM_MONITOR_EVENTS="${2:?}"; shift 2 ;;
       -*) team_usage_die "monitor: 未知参数 $1" ;;
@@ -322,10 +335,15 @@ team_cmd_monitor() {
       "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)" "$C_DIM" "$interval" \
       "$([ "$with_watchdog" = 1 ] && echo "，每 ${TEAM_WATCH_INTERVAL:-900}s 跑一次巡检" || echo '')" "$C_RESET"
     team_panel | tail -n +2
-    printf '\n  %sagent 活动%s\n' "$C_BOLD" "$C_RESET"
-    team_monitor_activity
-    printf '%s  Ctrl-C 退出本窗口（不影响 PM）｜ %s watchdog status / logs / down ｜ 团队状态每 %ss、活动每 %ss 刷新%s\n' \
-      "$C_DIM" "$TEAM_CLI" "${TEAM_WATCH_INTERVAL:-900}" "$interval" "$C_RESET"
+    if [ "$activity" = "1" ]; then
+      printf '\n  %sagent 活动%s%s（仅本 session 在跑的窗口；--no-activity 关掉）%s\n' \
+        "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
+      team_monitor_activity
+    fi
+    printf '%s  Ctrl-C 退出本窗口（不影响 PM）｜ %s watchdog status / logs / down%s\n' \
+      "$C_DIM" "$TEAM_CLI" "$C_RESET"
+    printf '%s  看门狗只服务本 session：窗口/任务/待办/容量；巡检每 %ss，面板每 %ss%s\n' \
+      "$C_DIM" "${TEAM_WATCH_INTERVAL:-900}" "$interval" "$C_RESET"
     if [ "$with_watchdog" = "1" ]; then
       now="$(date +%s)"
       if [ $((now - last_tick)) -ge "${TEAM_WATCH_INTERVAL:-900}" ]; then

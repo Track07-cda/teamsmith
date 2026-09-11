@@ -145,8 +145,12 @@ team_load_config() {
   TEAM_WATCH_BACKEND="${TEAM_WATCH_BACKEND:-tmux}"         # tmux（默认：同 session 的窗口 + 状态面板）| container
   TEAM_WATCH_WINDOW="${TEAM_WATCH_WINDOW:-watchdog}"       # tmux 后端的窗口名
   TEAM_REVIEW_TIMEOUT="${TEAM_REVIEW_TIMEOUT:-1800}"       # team review 跑门禁的硬超时（秒）
-  TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-3}"        # 监视器刷新间隔（秒）
-  TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 每个 agent 显示最近几条事件
+  TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-5}"        # 监视器刷新间隔（秒）
+  TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 打开活动流时，每个 agent 显示最近几条事件
+  # 活动流（读各 agent 的 Pi 会话 JSONL）默认**关闭**：
+  # 看门狗只服务当前 tmux session（窗口/任务/待办/容量）；翻别人的会话既吵又贵（几 MB/次 × 每几秒）。
+  # 需要时显式打开：team monitor --activity 或 TEAM_MONITOR_ACTIVITY=1
+  TEAM_MONITOR_ACTIVITY="${TEAM_MONITOR_ACTIVITY:-0}"
   TEAM_WATCH_IMAGE="${TEAM_WATCH_IMAGE:-}"                 # 看门狗容器镜像，空=localhost/pi-team-watch:1
   TEAM_WATCH_BOX="${TEAM_WATCH_BOX:-}"                     # 目标开发容器名，空=自动（当前容器）
   TEAM_WATCH_RETRY_SEC="${TEAM_WATCH_RETRY_SEC:-15}"       # 内层 watch 退出后的重试间隔（秒）
