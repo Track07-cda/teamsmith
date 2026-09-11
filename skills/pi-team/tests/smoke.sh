@@ -406,6 +406,41 @@ assert_has "$TMP/curl-args.txt" "application/x-www-form-urlencoded" "表单体�
 run_gl POST /projects/1/merge_requests --data '{"a":1}' >/dev/null 2>&1
 assert_has "$TMP/curl-args.txt" "application/json" "JSON 体仍用 application/json"
 
+# PR 级：用一个“像 GitLab 一样校验头/体”的桩，验证 team pr 真能开出 MR（erp 的复现路径）
+GLLOG="$TMP/gl-pr.log"; : > "$GLLOG"
+cat > "$FAKECURL/curl" <<'GLSTUB'
+#!/usr/bin/env bash
+{ printf '%s\n' "$@"; } >> "$GL_LOG"
+ctype=""; form=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -H) case "$2" in Content-Type:*) ctype="${2#Content-Type: }" ;; esac; shift 2 ;;
+    --data-urlencode|--data-urlencode=*) form=1; shift ;;
+    --data|--data-binary) shift ;;
+    -X) shift 2 ;;
+    *) shift ;;
+  esac
+done
+# GitLab 的真实行为：表单体配 JSON 头 → 直接拒绝
+if [ "$form" = "1" ] && [ "$ctype" = "application/json" ]; then
+  echo '{"error":"Invalid JSON format"}'; exit 1
+fi
+if [ "$form" != "1" ] && [ "$ctype" != "application/json" ]; then
+  echo '{"error":"expected JSON body"}'; exit 1
+fi
+echo '{"iid":24,"web_url":"https://gl.example/g/p/-/merge_requests/24"}'
+GLSTUB
+chmod +x "$FAKECURL/curl"
+if env PATH="$FAKECURL:$PATH" GL_LOG="$GLLOG" TEAM_ROOT="$REPO" \
+    TEAM_VCS=gitlab TEAM_GITLAB_HOST=https://gl.example TEAM_GITLAB_PROJECT=g/p \
+    TEAM_GITLAB_TOKEN_FILE="$TOK" $TEAM pr T1.1 --branch task/T1.1-smoke-task --yes >"$TMP/gl-pr-out.log" 2>&1; then
+  ok "GitLab 模式下 team pr 开 MR 成功（头/体一致，桩按 GitLab 规则校验）"
+else bad "GitLab 模式下 team pr 失败"; cat "$TMP/gl-pr-out.log"; fi
+assert_has "$TMP/gl-pr-out.log" "merge_requests/24" "pr 打出了 MR 链接/iid"
+assert_not "$TMP/gl-pr-out.log" "Invalid JSON format" "没有被 GitLab 以 Invalid JSON format 拒绝"
+assert_has "$GLLOG" "application/x-www-form-urlencoded" "pr 调用链发的确实是表单体 + 表单头"
+assert_has "$GLLOG" "source_branch=task/T1.1-smoke-task" "pr 带了 source_branch 字段"
+
 # ② pi 可执行文件：绝对路径 + 找不到就明确报错（不要再出现窗口里 command not found）
 if TEAM_PI_BIN="definitely-not-a-pi-binary" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/pi-missing.log" 2>&1; then
   bad "TEAM_PI_BIN 不存在时应当报错"
