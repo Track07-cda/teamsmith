@@ -161,7 +161,7 @@ team_cmd_init() {
     mkdir -p "$(dirname "$cfg")"
     team_render "$tmpl" \
       "PROJECT=$project" "SESSION=$session" "PM_WINDOW=$pmwin" \
-      "DOCS_DIR=$docs" "AGENTS=$agents" "GATES=$gates" "VCS=$vcs" \
+      "DOCS_DIR=$docs" "AGENTS=$agents" "GATES=$(team_escape_dq "$gates")" "VCS=$vcs" \
       "DEFAULT_MODEL=$model" "SKILL_DIR=$TEAM_SKILL_DIR" \
       "DETECTED_VCS=$(team_detect_vcs)" "TODAY=$(date +%F)" > "$cfg"
     team_ok "write $cfg"

@@ -166,6 +166,19 @@ team merge T1.2 --no-renames --prefer-theirs pnpm-lock.yaml   # 冲突时这些�
 
 （`--no-renames` 关掉 rename 误配对；`--prefer-theirs` 也可用配置默认给 `TEAM_MERGE_PREFER_THEIRS`。）
 
+## 8f. 模板渲染与派单的坑（erp 实测）
+
+- **渲染不能经过 sed**：替换串里的 `&` 是"命中文本"，`TEAM_GATES="pnpm test && pnpm lint"`
+  会被写成 `pnpm test {{GATES}}{{GATES}} pnpm lint`。现在 `team_render` 用 bash 参数展开，
+  并且显式关掉 bash 5.2+ 的 `patsub_replacement`（它同样把替换串里的 `&` 当命中文本）。
+  `init` 还会把含 `$ \` \ "` 的门禁值转义后写入 config，保证 source 回来与入参一致（不会被执行）。
+- **派单写绝对路径**：窗口 shell 的 PATH/rc 可能还没就绪，直接 exec `pi` 会 `command not found`
+  （erp 复现 2 次）。现在派单前解析 `pi` 的绝对路径、写进窗口命令，并在派单前校验存在性
+  （找不到就直接报错，不会等到窗口里才发现）。
+- **GitLab API 的头/体必须匹配**：`--data-urlencode` 是表单体，就必须配
+  `Content-Type: application/x-www-form-urlencoded`；配成 `application/json` 会被 GitLab 拒
+  （`{"error":"Invalid JSON format"}`，PR/MR 开不出来）。JSON 体（`--data/--data-binary`）仍走 `application/json`。
+
 ## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
 
 - 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。

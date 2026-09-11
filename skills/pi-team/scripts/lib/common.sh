@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.7.2"
+TEAM_VERSION="1.7.3"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -464,7 +464,8 @@ team_pm_start() {
     *)         team_warn "PM 窗口状态异常（$state），不重启；处理完再跑 team up"; return 1 ;;
   esac
   pf="$(team_pm_write_prompt)"
-  cmd="$(printf 'cd %q && exec %q %s @%q' "$TEAM_MAIN_ROOT" "$TEAM_PI_BIN" "$(team_pm_pi_args)" "$pf")"
+  local pi_bin; pi_bin="$(team_pi_bin_path)"
+  cmd="$(printf 'cd %q && exec %q %s @%q' "$TEAM_MAIN_ROOT" "$pi_bin" "$(team_pm_pi_args)" "$pf")"
   tmux respawn-pane -k -t "$target" "$cmd" >/dev/null 2>&1 || {
     team_err "respawn-pane 失败：$target"
     return 1
@@ -876,14 +877,19 @@ team_board_add() { # <id> <title> <agent> <branch> <deps>
 # ---------------------------------------------------------------- 模板渲染
 # 模板里用 {{KEY}} 占位；值里的 sed 元字符会被转义。
 team_render() { # <template-file> [KEY=VALUE ...]
+  # 替换用 bash 参数展开（不经过 sed —— sed 替换串里 & = 命中文本）。
+  # 但 bash 5.2+ 默认打开 patsub_replacement，替换串里的 & 同样会变成"命中文本"：
+  # 于是 TEAM_GATES="a && b" 会渲染成 "a {{GATES}}{{GATES}} b"（erp 实测踩过）。
+  # 所以这里显式关掉它，替换完再恢复。
   local tmpl="$1"; shift
-  local out kv k v esc
+  local out kv k v had_pr=0
+  if shopt -q patsub_replacement 2>/dev/null; then had_pr=1; shopt -u patsub_replacement; fi
   out="$(cat "$tmpl")"
   for kv in "$@"; do
     k="${kv%%=*}"; v="${kv#*=}"
-    esc="$(printf '%s' "$v" | sed -e 's/[&|\\]/\\\\&/g')"
-    out="$(printf '%s\n' "$out" | sed -e "s|{{$k}}|$esc|g")"
+    out="${out//\{\{$k\}\}/$v}"
   done
+  [ "$had_pr" = "1" ] && shopt -s patsub_replacement
   printf '%s\n' "$out"
 }
 
@@ -989,4 +995,24 @@ team_board_row() { # <id> → 整行（列位置由表头决定）
   col="$(team_board_col id)"
   awk -v id="$1" -v c="$col" 'BEGIN{FS="|"}
     /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v); if (v==id) { print; exit } }' "$f"
+}
+
+# ---------------------------------------------------------------- pi 可执行文件（窗口 PATH 就绪竞态，erp 实测）
+# dispatch/resume 在窗口 shell 加载完 PATH 前就 exec pi → "pi: command not found"。
+# 对策：解析成绝对路径写进窗口命令 + 派单前先校验存在。
+team_pi_bin_path() {
+  local bin="${TEAM_PI_BIN:-pi}" p
+  case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
+  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
+}
+
+# 把值转成可以安全放进 config.sh 双引号里的形式（$ ` \ " 在 source 时会被当代码解析）
+team_escape_dq() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  v="${v//\$/\\$}"
+  v="${v//\`/\\\`}"
+  printf '%s\n' "$v"
 }

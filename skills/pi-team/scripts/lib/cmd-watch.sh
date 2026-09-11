@@ -115,7 +115,8 @@ team_cmd_resume() {
       --dry-run) dry=1; shift ;;
       --quiet) quiet=1; shift ;;
       -*) team_usage_die "resume: 未知参数 $1" ;;
-      *) team_usage_die "resume: 多余参数 $1" ;;
+      # 位置参数也当 agent 名（erp 反馈：team resume dev 应该能用）
+      *) if [ -z "$only" ]; then only="$1"; all=0; shift; else team_usage_die "resume: 多余参数 $1"; fi ;;
     esac
   done
   team_require_docs

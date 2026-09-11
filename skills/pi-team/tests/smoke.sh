@@ -379,6 +379,51 @@ assert_has "$SKILL_DIR/templates/task.md.tmpl" "翻转证据" "任务书模板�
 assert_has "$SKILL_DIR/templates/report.md.tmpl" "翻转证据" "报告模板含翻转证据段"
 assert_has "$TMP/print.log" "翻转证据" "派单提示词就要求写翻转证据"
 
+# ---------------------------------------------------------------- 6e. erp 实测反馈（4 条）
+section "6e · erp 实测反馈（render & / GitLab 头 / pi PATH / 非任务报告）"
+
+# ③ 模板渲染不能吃掉 &&（bash 5.2+ 的 patsub_replacement 会把 & 变成“命中文本”）
+BRENDER="$TMP/renderer-repo"; mkdir -p "$BRENDER"; ( cd "$BRENDER" && git init -q -b main && git config user.email a@b && git config user.name a && echo x > a && git add -A && git commit -qm init )
+( cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --session "pi-team-smoke-render-$$" --agents dev --gates "pnpm test && pnpm lint" >/dev/null 2>&1 ) || true
+assert_has "$BRENDER/.pi/team/config.sh" 'TEAM_GATES="pnpm test && pnpm lint"' "init 原样写入含 && 的 TEAM_GATES"
+assert_eq "渲染后没有占位符残留" "$(grep -c '{{GATES}}' "$BRENDER/.pi/team/config.sh" || true)" "0"
+assert_eq "渲染结果可安全 source（值与入参一致）" \
+  "$(env TEAM_ROOT=$BRENDER SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; team_load_config; printf "%s" "$TEAM_GATES"')" "pnpm test && pnpm lint"
+assert_eq "含 shell 特殊字符也不会被当代码执行" \
+  "$(cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --force --session "pi-team-smoke-render-$$" --agents dev --gates 'a && echo PWNED `id` $HOME' >/dev/null 2>&1; env TEAM_ROOT=$BRENDER SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; team_load_config; printf "%s" "$TEAM_GATES"')" 'a && echo PWNED `id` $HOME'
+
+# ① GitLab API：表单体必须配 x-www-form-urlencoded（否则 {"error":"Invalid JSON format"}）
+FAKECURL="$TMP/fakecurl"; mkdir -p "$FAKECURL"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/curl-args.txt"\necho "{}"\n' "$TMP" > "$FAKECURL/curl"
+chmod +x "$FAKECURL/curl"
+TOK="$TMP/gl-token"; printf 'dummy\n' > "$TOK"; chmod 600 "$TOK"
+run_gl() { # <extra args...>
+  env PATH="$FAKECURL:$PATH" TEAM_ROOT="$REPO" TEAM_VCS=gitlab TEAM_GITLAB_HOST=https://gl.example TEAM_GITLAB_PROJECT=g/p \
+      TEAM_GITLAB_TOKEN_FILE="$TOK" SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; . "$SK/scripts/lib/forge.sh"; team_load_config; forge_gitlab_api "$@"' _ "$@"
+}
+run_gl POST /projects/1/merge_requests --data-urlencode "source_branch=task/T1.1" >/dev/null 2>&1
+assert_has "$TMP/curl-args.txt" "application/x-www-form-urlencoded" "表单体用 x-www-form-urlencoded（不再是 application/json）"
+run_gl POST /projects/1/merge_requests --data '{"a":1}' >/dev/null 2>&1
+assert_has "$TMP/curl-args.txt" "application/json" "JSON 体仍用 application/json"
+
+# ② pi 可执行文件：绝对路径 + 找不到就明确报错（不要再出现窗口里 command not found）
+if TEAM_PI_BIN="definitely-not-a-pi-binary" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/pi-missing.log" 2>&1; then
+  bad "TEAM_PI_BIN 不存在时应当报错"
+else ok "TEAM_PI_BIN 不存在时拒绝派单"; fi
+assert_has "$TMP/pi-missing.log" "找不到 pi 可执行文件" "报错说明了 pi 找不到"
+assert_has "$TMP/pi-missing.log" "绝对路径" "给出了「设成绝对路径」的建议"
+assert_match "$TMP/print.log" "^cd .* && /| pi_bin" "派单命令里用的是解析后的路径（见下方 dispatch 断言）"
+
+# ④ 非任务交付物不算待复验（erp: requirements-gap-2026-09-11.md）
+printf '# 需求差距报告\n\n非任务交付物。\n' > "$REPO/docs/team/reports/requirements-gap-2026-09-11.md"
+$TEAM digest >"$TMP/digest-nontask.log" 2>&1 || true
+assert_not "$TMP/digest-nontask.log" "team review requirements" "非任务交付物不再被当成待复验任务"
+assert_has "$TMP/digest-nontask.log" "requirements-gap-2026-09-11.md" "但它会出现在「忽略的非任务报告」里"
+rm -f "$REPO/docs/team/reports/requirements-gap-2026-09-11.md"
+
+# 次要项：team resume 支持位置参数
+$TEAM resume dev --dry-run >"$TMP/resume-pos.log" 2>&1 && ok "resume <agent> 位置参数可用" || bad "resume 位置参数不可用"
+
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"
 $TEAM notify dev "blocked: 缺 dependency X" >/dev/null 2>&1 && ok "notify 退出码 0" || bad "notify 失败"

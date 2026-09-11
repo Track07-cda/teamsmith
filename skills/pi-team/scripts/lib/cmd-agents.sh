@@ -198,13 +198,16 @@ team_cmd_dispatch() {
   team_mem_guard || return 1
   team_model_guard "$model" || return 1
 
+  local pi_bin; pi_bin="$(team_pi_bin_path)"
+  case "$pi_bin" in /*) ;; *) team_warn "TEAM_PI_BIN 不是绝对路径（$pi_bin）：窗口里可能 PATH 未就绪，建议写死绝对路径";; esac
+  command -v "$TEAM_PI_BIN" >/dev/null 2>&1 || team_die "找不到 pi 可执行文件：TEAM_PI_BIN=$TEAM_PI_BIN（设成绝对路径再派单）"
   local prompt; prompt="$(team_build_prompt "$agent" "$id" "$taskfile" "$wt" "$model")"
   local piargs inner
   piargs="$(team_pi_args "$model")"
 
   if [ "$printonly" = "1" ]; then
     printf '=== pi 命令 ===\n'
-    printf 'cd %q && %s %s--session-id %s "$PROMPT"\n' "$wt" "$TEAM_PI_BIN" "$piargs" "$sid"
+    printf 'cd %q && %s %s--session-id %s "$PROMPT"\n' "$wt" "$pi_bin" "$piargs" "$sid"
     printf '\n=== 提示词（%s 字） ===\n%s\n' "${#prompt}" "$prompt"
     return 0
   fi
@@ -216,8 +219,9 @@ team_cmd_dispatch() {
     sleep 1
   fi
 
-  inner="$(printf 'cd %q\nprintf "\\033[2mpi-team agent:%s → %s\\033[0m\\n"\n%s %s--session-id %s "$0"; exec bash' \
-    "$wt" "$agent" "$id" "$(printf '%q' "$TEAM_PI_BIN")" "$piargs" "$sid")"
+  # 命令里写死绝对路径 + 短暂等待（窗口 shell 可能刚起、PATH/rc 还没就绪）
+  inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "\\033[2mpi-team agent:%s → %s\\033[0m\\n"\n%s %s--session-id %s "$0"; exec bash' \
+    "$wt" "$pi_bin" "$agent" "$id" "$(printf '%q' "$pi_bin")" "$piargs" "$sid")"
   tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt"
 
   team_state_set "$agent" model "$model"

@@ -30,9 +30,15 @@ forge_gitlab_api() { # <METHOD> <path> [curl extra args...]
   local method="$1" path="$2"; shift 2
   local tok; tok="$(forge_gitlab_token)"
   [ -n "$TEAM_GITLAB_HOST" ] || team_die "TEAM_VCS=gitlab 需要 TEAM_GITLAB_HOST（如 https://gitlab.example.com）"
+  # --data-urlencode 发的是表单体：Content-Type 必须跟着变，否则 GitLab 直接回
+  # {"error":"Invalid JSON format"}（erp 实测：team pr 开不出 MR，worker 只能用 team gl --data-binary 绕过）
+  local ctype='application/json' a
+  for a in "$@"; do
+    case "$a" in --data-urlencode|--data-urlencode=*) ctype='application/x-www-form-urlencoded' ;; esac
+  done
   curl -sS -X "$method" \
     -H "PRIVATE-TOKEN: $(<"$tok")" \
-    -H 'Content-Type: application/json' \
+    -H "Content-Type: $ctype" \
     "$TEAM_GITLAB_HOST/api/v4$path" "$@"
 }
 
