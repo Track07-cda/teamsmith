@@ -67,3 +67,8 @@ bun  skills/pi-team/tests/skill-load.mjs  # 用 pi 自己的解析器验证 SKIL
 ## License
 
 MIT
+
+## 边界
+
+本仓库的 agent 只在**本仓库**里工作（改 skill、加测试、写文档），不读/不改其他项目的仓库与会话、
+不操作其他项目的 tmux、不替别人合并代码。反馈由用户转达或用户点名文件。详见 [SCOPE.md](SCOPE.md)。
