@@ -15,7 +15,7 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
   ── 观察 ───────────────────────────────────────────────────
   roster          名册：agent、窗口是否在跑、分支、脏文件、领先提交数
   status [ID]     roster + 任务/report 状态；给 ID 时只显示该任务
-  ps              内存与模型并发占用（派单前的容量检查）
+  ps              容量：RAM/swap/还能再跑几个 agent + 模型并发占用（派单前看）
   digest          给 PM 的待办摘要：收件箱未处理项 + 待复验报告 + 任务状态
   inbox [agent]   打印收件箱（agent 在回合结束时自动追加）
   paths           打印当前解析出的路径/ session（JSON），排障用
@@ -33,6 +33,15 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
                   在 tmux 窗口起一个交互式 pi（默认复用会话，可断点续跑）
   say <a> "<一句话>"           往 agent 窗口发消息
   notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口）
+
+  ── 保活与恢复（不依赖任何 agent 自己活着） ──────────────
+  up [--no-agents] [--print]   启动/修复整支团队：建 session、把 PM 拉起来（pi -c 保留历史）、
+                               把有任务但窗口没了的 agent 续跑（--print 只打印 PM 开场提示词）
+  resume [--agent a] [--all] [--dry-run]   续跑停了的 agent（按 state 里的任务书重新派单）
+  watch [--once] [--interval N]             watchdog：记录容量、PM 掉了拉起、agent 掉了续跑
+  install-watchdog [--yes]      装 systemd --user 服务（开机/崩溃自动拉起 watchdog）
+  uninstall-watchdog [--yes]    停掉并移除 watchdog 服务（--purge 连 unit 文件一起删）
+  watchdog-status               看 watchdog 状态、最近巡检、PM 存活、容量
 
   ── 复验 / 合并 / 收尾 ─────────────────────────────────────
   review ID [--branch b] [--no-gates]
@@ -240,12 +249,30 @@ team_cmd_doctor() {
       fi
     else fail "缺 $ext"; fi
 
-  check "内存"; local avail; avail="$(team_available_mb)"
-    if [ -n "$avail" ] && [ "$avail" -gt 0 ] 2>/dev/null; then
-      if [ "$TEAM_MIN_FREE_MB" -gt 0 ] && [ "$avail" -lt "$TEAM_MIN_FREE_MB" ]; then
-        warn "可用 ${avail}MB < 阈值 ${TEAM_MIN_FREE_MB}MB：现在派单会被拒绝"
-      else pass "可用 ${avail}MB（阈值 ${TEAM_MIN_FREE_MB:-0}MB）"; fi
-    else warn "无法探测内存"; fi
+  check "容量 / swap 底线"; local avail swapfree swaptotal
+    read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
+    if [ -n "$avail" ] && [ "${avail:-0}" -gt 0 ] 2>/dev/null; then
+      if [ "$TEAM_MIN_FREE_SWAP_MB" -gt 0 ] && [ "$swapfree" -lt "$TEAM_MIN_FREE_SWAP_MB" ]; then
+        warn "空闲 swap ${swapfree}MB < 底线 ${TEAM_MIN_FREE_SWAP_MB}MB：现在派单会被拒绝"
+      else
+        pass "$(team_capacity_line)"
+      fi
+    else warn "无法探测内存/swap（可设 TEAM_MEMINFO_FILE 指定 meminfo 文件）"; fi
+
+  check "PM 存活"; local pmstate; pmstate="$(team_pm_state)"
+    case "$pmstate" in
+      running:*) pass "pi 在运行（${pmstate#running:}）" ;;
+      idle:*)    warn "窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 停在 ${pmstate#idle:}：PM 没在跑 → team up" ;;
+      *)         warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在 → team up" ;;
+    esac
+
+  check "watchdog"; if team_watch_pid_alive; then
+      pass "前台 watchdog pid $(cat "$TEAM_STATE_DIR/watchdog.pid")"
+    elif team_watch_systemd_ok && systemctl --user is-active "$(team_watch_service_name).service" >/dev/null 2>&1; then
+      pass "systemd --user 服务 $(team_watch_service_name) active"
+    else
+      warn "没有 watchdog：PM/agent 挂了没人拉（team watch 或 team install-watchdog --yes）"
+    fi
 
   check "forge"; case "$TEAM_VCS" in
       github)

@@ -50,11 +50,12 @@ bash $SKILL/scripts/team merge T1.1 --push --yes
 | 原项目做法 | pi-team 的改进 |
 |---|---|
 | `scripts/pm-*.sh` 里硬编码仓库路径、tmux session、章节 | 全部参数化到项目内 `.pi/team/config.sh`；脚本只从 skill 目录读取，升级 skill 即全项目受益 |
-| `scripts/pm-dispatch.sh` 只支持 GitHub + 固定模型 | `TEAM_VCS=local\|github\|gitlab`；模型/并发上限/内存阈值可配置并在派单前守卫 |
+| `scripts/pm-dispatch.sh` 只支持 GitHub + 固定模型 | `TEAM_VCS=local\|github\|gitlab`；模型/并发上限/容量底线可配置并在派单前守卫 |
 | `.pi/extensions/pm-notify.ts` 每个项目复制一份 | 扩展留在 skill 内，`dispatch` 用 `-e` 显式加载（worktree 不会自动发现项目扩展）并新增去重 |
 | `docs/pm/**` 手工维护 | `team task/board/thread/report/review` 生成并维护骨架，状态可机器读取 |
 | 复验靠人记流程 | `team review` 在独立 detached worktree 上跑门禁并写 `reviews/<ID>.md` 证据文件 |
 | 教训散落在 AGENTS.md 各处 | `references/troubleshooting.md` 集中沉淀（通知不达、会话丢失、squash 合并、forge 403…） |
+| 没有保活：PM 或 agent 停了整支团队停摆；内存守卫用“可用 RAM 阈值”，偏保守 | `team up` / `resume` / `watch` / `install-watchdog`：恢复不依赖任何 agent（systemd → watchdog → PM/agent）；容量底线改成 **swap 不被打满**，RAM 紧只警告（允许卡顿，不允许崩） |
 
 ## 自测
 

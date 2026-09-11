@@ -17,7 +17,13 @@ team_inbox_since() { # <agent> → 未 ack 的行
   [ "$start" -gt 0 ] && tail -n +"$((start + 1))" "$f" || cat "$f"
 }
 
-team_agent_live() { # <agent> → 0/1
+team_agent_live() { # <agent> → 0/1：窗口存在**且**里面有进程在跑（空提示符 = pi 已退出）
+  local w; w="$(team_state_get "$1" window "$1")"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || return 1
+  team_pane_busy "$TEAM_SESSION:$w"
+}
+
+team_agent_window_exists() { # <agent> → 0/1：只看窗口存在
   local w; w="$(team_state_get "$1" window "$1")"
   team_tmux_has_window "$TEAM_SESSION" "$w"
 }
@@ -37,25 +43,41 @@ team_git_cols() { # <worktree> → "branch dirty ahead"
 
 team_cmd_roster() {
   team_require_docs
-  printf '%-10s %-8s %-26s %6s %6s  %s\n' AGENT 窗口 分支 脏 领先 任务
-  printf '%-10s %-8s %-26s %6s %6s  %s\n' ----- ------ -------------------------- ------ ------ ----
-  local a w wt live cols branch dirty ahead task
+  printf '%-10s %-12s %-26s %6s %6s  %s\n' AGENT 状态 分支 脏 领先 任务
+  printf '%-10s %-12s %-26s %6s %6s  %s\n' ----- ------ -------------------------- ------ ------ ----
+  local a w wt cols branch dirty ahead task state
   for a in $(team_agents); do
-    w="$(team_state_get "$a" window "$a")"
     wt="$(team_agent_worktree "$a")"
-    if team_agent_live "$a"; then live="●"; else live="○"; fi
+    if team_agent_live "$a"; then state="● pi 在跑"
+    elif team_agent_window_exists "$a"; then state="○ pi 已退出"
+    else state="· 无窗口"; fi
     cols="$(team_git_cols "$wt")"
     IFS=$'\t' read -r branch dirty ahead <<< "$cols"
     task="$(team_state_get "$a" task -)"
-    printf '%-10s %-8s %-26s %6s %6s  %s\n' "$a" "$live $w" "$branch" "$dirty" "$ahead" "$task"
+    printf '%-10s %-12s %-26s %6s %6s  %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$task"
   done
-  printf '\n● 窗口在跑  ○ 未在跑  ｜ 脏=未提交文件数 领先=相对 %s 的提交数\n' "$TEAM_PROTECTED_BRANCH"
+  printf '\n● pi 在跑 ｜ ○ 窗口在但 pi 已退出（team resume 可续）｜ · 无窗口 ｜ 脏=未提交 领先=相对 %s\n' "$TEAM_PROTECTED_BRANCH"
   [ -n "$TEAM_SESSION" ] && team_dim "session: $TEAM_SESSION（attach: tmux attach -t $TEAM_SESSION）"
   return 0
 }
 
 team_cmd_ps() {
-  printf '内存可用：%s MB（派单阈值 TEAM_MIN_FREE_MB=%s）\n' "$(team_available_mb)" "$TEAM_MIN_FREE_MB"
+  team_hdr "容量 · $TEAM_PROJECT"
+  printf '  %s\n' "$(team_capacity_line)"
+  printf '  底线：空闲 swap ≥ %sMB、RAM+swap ≥ %sMB（低于则拒绝派单）；RAM < %sMB 只警告（卡顿）\n' \
+    "$TEAM_MIN_FREE_SWAP_MB" "$TEAM_MIN_TOTAL_MB" "$TEAM_WARN_AVAIL_MB"
+
+  printf '\n存活：\n'
+  local pm; pm="$(team_pm_state)"
+  case "$pm" in
+    running:*) printf '  PM（%s）在运行（%s）\n' "$TEAM_PM_WINDOW" "${pm#running:}" ;;
+    busy:*)    printf '  PM（%s）窗口有进程在跑（%s，视为存活，不打扰）\n' "$TEAM_PM_WINDOW" "${pm#busy:}" ;;
+    idle:*)    printf '  PM（%s）**未在跑**（空提示符）→ team up\n' "$TEAM_PM_WINDOW" ;;
+    *)         printf '  PM 窗口缺失 → team up\n' ;;
+  esac
+  if team_watch_pid_alive; then printf '  watchdog 在跑（pid %s）\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"
+  else printf '  watchdog 未在跑（team watch / team install-watchdog --yes）\n'; fi
+
   printf '\n%-30s %8s %8s\n' MODEL RUNNING LIMIT
   printf '%-30s %8s %8s\n' ----- ------- -----
   local m limit running seen=" "
@@ -70,6 +92,7 @@ team_cmd_ps() {
   done
   printf '\n活跃窗口（%s）：\n' "$TEAM_SESSION"
   team_tmux_windows "$TEAM_SESSION" 2>/dev/null | sed 's/^/  - /' || team_dim "  session 不存在"
+  return 0
 }
 
 team_cmd_status() {
@@ -101,8 +124,17 @@ team_cmd_digest() {
   for a in $(team_agents); do
     total=$((total + 1)); team_agent_live "$a" && live=$((live + 1))
   done
-  printf '\n%s\n' "[1] 容量"
-  printf '  agent %s/%s 在跑 ｜ 内存可用 %s MB（阈值 %s）\n' "$live" "$total" "$(team_available_mb)" "$TEAM_MIN_FREE_MB"
+  printf '\n%s\n' "[1] 容量与存活"
+  printf '  agent %s/%s 在跑 ｜ %s' "$live" "$total" "$(team_capacity_line)"
+  local pm; pm="$(team_pm_state)"
+  case "$pm" in
+    running:*) printf '  PM ● 在运行（%s）' "${pm#running:}" ;;
+    busy:*)    printf '  PM ● 窗口有进程在跑（%s）' "${pm#busy:}" ;;
+    idle:*)    printf '  PM ○ **未在跑**（空提示符）→ team up' ;;
+    *)         printf '  PM ○ 窗口缺失 → team up' ;;
+  esac
+  if team_watch_pid_alive; then printf ' ｜ watchdog ● pid %s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"
+  else printf ' ｜ watchdog ○ 未运行（团队无人看守）\n'; fi
 
   printf '\n%s\n' "[2] 待处理通知"
   local any=0 n

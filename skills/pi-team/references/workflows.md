@@ -50,14 +50,15 @@ bash <skill>/scripts/team thread dev "T1.1 的验收加一条 RLS 测试" --from
 ## D. PM 循环（每 10~30 分钟一次）
 
 ```bash
-bash <skill>/scripts/team digest          # 待办：新通知 + 待复验 + 任务板 + 建议
+bash <skill>/scripts/team digest          # 待办：新通知 + 待复验 + 任务板 + 容量/存活
 bash <skill>/scripts/team inbox --ack     # 读并标记已读
 bash <skill>/scripts/team roster          # 谁在跑、分支、脏文件、领先提交
-bash <skill>/scripts/team ps              # 内存 / 模型并发余量
+bash <skill>/scripts/team ps              # 容量（RAM/swap/还能加几个）+ 模型并发 + PM/watchdog 存活
+bash <skill>/scripts/team up              # 一键修复：session/PM/停了没交活的 agent
 ```
 
 收到「回合结束」通知后先看 `git -C .worktrees/<a> log --oneline -5` 与 `status`，再决定：
-继续派下一个任务、退回、还是复验。
+继续派下一个任务、退回、还是复验。长时间不在（下班、机器重启）回来后：**先 `team up`**。
 
 ## E. 复验（PM 的独立验证，不可跳过）
 
@@ -106,14 +107,15 @@ bash <skill>/scripts/team gl PUT "/projects/<id>/merge_requests/<iid>/merge" --y
 
 ```bash
 bash <skill>/scripts/team add-agent api            # 新 agent（新 worktree + 分支）
-bash <skill>/scripts/team ps                       # 先看内存与模型并发余量再派单
+bash <skill>/scripts/team ps                       # 先看容量与模型并发余量再派单
 bash <skill>/scripts/team dispatch api T2.1 <taskfile>
 bash <skill>/scripts/team teardown --agent api     # 关窗口（保留 worktree）
 bash <skill>/scripts/team teardown --all --purge --force   # 连 worktree 一起删（谨慎）
 ```
 
-规模经验：**并行 agent 数 ≈ min(内存/6GB, 强模型并发上限, 你能复验的带宽)**。
-PM 的复验带宽通常是瓶颈——派单太快只会堆出待复验队列。
+规模经验：**并行 agent 数 ≈ min((RAM+空闲swap)/单 agent 占用, 强模型并发上限, 你能复验的带宽)**。
+内存不再卡卡地设限（底线是 swap 不打满），但 PM 的复验带宽通常是真瓶颈——派单太快只会堆出待复验队列。
+可用 `TEAM_AGENT_MEM_MB`（默认 6144）调估算值；`team ps` 会直接告诉你“还能再加几个”。
 
 ## H. 阻塞、冲突、越界
 
@@ -123,7 +125,50 @@ PM 的复验带宽通常是瓶颈——派单太快只会堆出待复验队列�
 - agent 发现别人的 bug：报告里写 `BLOCKED:`，PM 决定是插新任务还是让原 owner 修。
 - 事实与报告不符：把失败证据贴进 thread，退回；反复出现则换模型族做独立验证。
 
-## I. 持续运行（长项目）
+## I. 保活与恢复（团队不会“全停”）
+
+问题：PM 停了，agent 发完通知也没人处理 → 整支团队停摆。设计原则：**恢复不能依赖任何一个 agent（包括 PM）**。
+
+```bash
+bash <skill>/scripts/team watchdog-status      # 先看：PM 活着吗？watchdog 在跑吗？容量如何？
+bash <skill>/scripts/team up                  # 手动救火：建 session、拉起 PM、把停了的 agent 续跑
+bash <skill>/scripts/team resume --dry-run    # 只看哪些 agent 该续跑
+bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于 watchdog 的一个 tick）
+```
+
+### 三种部署方式（从弱到强）
+
+| 方式 | 命令 | 能撑住 |
+|---|---|---|
+| 手动 | 发现停了就 `team up` | 你自己发现的时候 |
+| tmux 窗口 | `tmux new-window -n watchdog -d -- <skill>/scripts/team watch` | PM/agent 崩（tmux server 还在） |
+| systemd --user | `team install-watchdog --yes` | 上面全部 + watchdog 自己崩 + 重启机器 |
+
+```bash
+bash <skill>/scripts/team install-watchdog --yes      # 装 + 开机自启（systemd --user）
+bash <skill>/scripts/team watchdog-status             # 看状态与最近巡检
+bash <skill>/scripts/team uninstall-watchdog --yes    # 停掉（--purge 连 unit 文件一起删）
+loginctl enable-linger $USER                          # 建议：没登录时也让 unit 跑
+```
+
+watchdog 每个 tick 做四件事：记录容量趋势（`state/capacity.log`）→ 保证 tmux session 在 →
+PM 没了就 `pi -c` 拉起来并注入开场提示词 → 有任务但窗口没了的 agent 重新派单。
+防止失控：PM 重启有配额（`TEAM_WATCH_MAX_RESTARTS`，默认 1 小时 5 次），超了就只告警不再重启。
+
+### 为什么重启后还能接上
+
+所有进度都落在磁盘上：`state/`（任务/任务书/会话）、`docs/team/`（任务书/报告/复验/看板/线程）、
+git 分支。PM 被拉起时用 `pi -c` 延续原会话（历史不丢），并收到一份开场提示词：
+先 `team digest` → `team inbox --ack` → `team resume --dry-run`，然后接着干。
+
+### 停机维护 / 故意停掉
+
+```bash
+bash <skill>/scripts/team teardown --all           # 关所有窗口（worktree/分支/状态保留）
+bash <skill>/scripts/team uninstall-watchdog --yes  # 别让 watchdog 又把它们拉起来
+```
+
+## J. 持续运行（长项目）
 
 - `BOARD.md` 是唯一事实来源；状态只有 todo/wip/review/done/blocked/dropped。
 - 每个里程碑结束：更新 `ROADMAP.md` 状态、把决策写进 `DECISIONS.md`（含理由/影响）。

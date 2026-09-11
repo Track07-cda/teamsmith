@@ -36,12 +36,25 @@ TEAM_GITLAB_PROJECT=""                # gitlab：如 group/sub/project
 TEAM_GITLAB_TOKEN_FILE="$HOME/.gitlab-pa-token"
 TEAM_CONFIRM_WRITES=1                 # 1=所有改变共享状态的操作都要 --yes（建议保持 1）
 
-# ---- 守卫 ----
-TEAM_MIN_FREE_MB=0                    # >0 时：可用内存低于该值拒绝派单（OOM 比排队贵）
+# ---- 守卫（底线是 swap 不见底；RAM 紧张只意味着卡顿，不阻塞干活） ----
+TEAM_MIN_FREE_SWAP_MB=1024            # 空闲 swap 低于此值 → 拒绝派单（打满会被 OOM killer 杀进程）
+TEAM_MIN_TOTAL_MB=512                 # RAM+swap 的绝对底线
+TEAM_WARN_AVAIL_MB=2048               # RAM 可用低于此值 → 只警告（允许变卡）
+TEAM_AGENT_MEM_MB=6144                # 单个 agent 的经验占用，用于 team ps 的估算
 TEAM_NOTIFY_TMUX=1                    # 0=只写收件箱，不敲 PM 窗口
 TEAM_NOTIFY_DEDUP_SEC=20              # 同一简报的去重窗口（Pi 可能连续 settle）
 TEAM_INBOX_MAX_CHARS=150
 TEAM_NOTIFY_LOG="/tmp/{{PROJECT}}-pi-team-notify.log"
+
+# ---- 保活 watchdog（team up / resume / watch / install-watchdog） ----
+TEAM_WATCH_INTERVAL=60                # watchdog 巡检间隔（秒）
+TEAM_WATCH_PM=1                       # 1=PM 没在跑就拉起来（用 pi -c 延续原会话）
+TEAM_WATCH_RESUME=1                   # 1=有未结任务但窗口没了的 agent 自动续跑
+TEAM_WATCH_MAX_RESTARTS=5             # PM 每小时最多重启次数（防崩溃循环）
+TEAM_WATCH_SERVICE=""                 # systemd unit 名，默认 <project>-pi-team-watch
+TEAM_PM_MODEL=""                      # PM 自己的模型，空 = TEAM_DEFAULT_MODEL
+TEAM_PM_SESSION_ID=""                 # 空 = pi -c（延续本目录上个会话，保住 PM 历史）
+TEAM_PM_EXTRA_PI_ARGS=""
 
 # ---- 其它 ----
 # 由 init 记录，仅供人参考：skill 路径 {{SKILL_DIR}}；初始化于 {{TODAY}}

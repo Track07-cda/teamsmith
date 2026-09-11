@@ -53,11 +53,26 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 | `TEAM_GITLAB_TOKEN_FILE` | `$HOME/.gitlab-pa-token` | gitlab：PAT 文件 |
 | `TEAM_CONFIRM_WRITES` | `1` | `1`=写操作必须 `--yes`（**建议保持**） |
 
-### 守卫
+| 守护 | 默认 | 作用 |
+|---|---|---|
+| `TEAM_WATCH_INTERVAL` | `60` | watchdog 巡检间隔（秒） |
+| `TEAM_WATCH_PM` | `1` | `1`=PM 没在跑就拉起来 |
+| `TEAM_WATCH_RESUME` | `1` | `1`=有未结任务但窗口没了的 agent 自动续跑 |
+| `TEAM_WATCH_MAX_RESTARTS` | `5` | PM 每小时最多重启次数（防崩溃循环） |
+| `TEAM_WATCH_SERVICE` | 空 | systemd unit 名，默认 `<project>-pi-team-watch` |
+| `TEAM_PM_MODEL` | 空 | PM 自己的模型，空 = `TEAM_DEFAULT_MODEL` |
+| `TEAM_PM_SESSION_ID` | 空 | 空 = `pi -c`（延续本目录上一个会话，保住 PM 历史） |
+| `TEAM_PM_EXTRA_PI_ARGS` | 空 | 追加给 PM 的 pi 参数 |
+| `TEAM_PM_START_WAIT` | `6` | 启动 PM 后等它起来的秒数 |
+
+### 守卫（容量）
 
 | 键 | 默认 | 作用 |
 |---|---|---|
-| `TEAM_MIN_FREE_MB` | `0`（关闭） | >0 时可用内存低于该值拒绝派单 |
+| `TEAM_MIN_FREE_SWAP_MB` | `1024` | **底线**：空闲 swap 低于此值拒绝派单（打满会被 OOM killer 杀进程） |
+| `TEAM_MIN_TOTAL_MB` | `512` | RAM+swap 的绝对底线 |
+| `TEAM_WARN_AVAIL_MB` | `2048` | RAM 可用低于此值：只警告（允许卡顿），不拒绝 |
+| `TEAM_AGENT_MEM_MB` | `6144` | 单个 agent 的经验占用，用于 `team ps` 的“还能加几个”估算 |
 | `TEAM_NOTIFY_TMUX` | `1` | `0`=只写收件箱，不敲 PM 窗口 |
 | `TEAM_NOTIFY_DEDUP_SEC` | `20` | 去重窗口（秒）；`0`=不去重 |
 | `TEAM_INBOX_MAX_CHARS` | `150` | 简报里 agent 末条消息的截断长度 |
@@ -102,7 +117,8 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 |---|---|
 | `TEAM_ROOT` | 显式指定项目根 |
 | `TEAM_CONFIG_FILE` | 显式指定配置文件（`team --config` 同义） |
-| `TEAM_MIN_FREE_MB` | 临时覆盖内存阈值（`0` 关闭） |
+| `TEAM_MIN_FREE_SWAP_MB` | 临时覆盖 swap 底线 |
+| `TEAM_MEMINFO_FILE` | 指定 meminfo 文件（容器/测试无 `/proc/meminfo` 时用） |
 | `TEAM_MODEL_LIMITS` | 临时放宽/收紧并发（`""` 表示不限） |
 | `TEAM_ASSUME_YES` | `1`=跳过 `--yes`（只建议在自动化脚本里用） |
 | `NO_COLOR` | 关闭颜色 |

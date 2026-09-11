@@ -254,9 +254,17 @@ export default function (pi: ExtensionAPI) {
 
     if (!cfg.notifyTmux || !window) return
     try {
+      // 安全：只有当 PM 窗口里真的在跑 pi 时才敲键盘。
+      // 否则（PM 已退出、窗口停在 shell）send-keys 会被 shell 当命令执行。
+      const target = `${cfg.session}:${cfg.pmWindow}`
+      const paneCmd = run('tmux', ['display-message', '-p', '-t', target, '#{pane_current_command}'])
+      if (!paneCmd || /^(bash|sh|zsh|fish|dash|ash|ksh|nu)$/.test(paneCmd)) {
+        log(`skip tmux notify (pm not running: pane=${paneCmd || 'missing'}) inbox only`, cfg)
+        return
+      }
       const notice = `${summary}${last ? `\n> ${last}` : ''}`
-      execFileSync('tmux', ['send-keys', '-t', `${cfg.session}:${cfg.pmWindow}`, '-l', notice], { timeout: 5000 })
-      execFileSync('tmux', ['send-keys', '-t', `${cfg.session}:${cfg.pmWindow}`, 'Enter'], { timeout: 5000 })
+      execFileSync('tmux', ['send-keys', '-t', target, '-l', notice], { timeout: 5000 })
+      execFileSync('tmux', ['send-keys', '-t', target, 'Enter'], { timeout: 5000 })
     } catch {
       /* PM 窗口不在：只留收件箱 */
     }

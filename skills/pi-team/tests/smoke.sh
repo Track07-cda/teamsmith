@@ -20,6 +20,7 @@ bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
 assert_file()  { [ -f "$1" ] && ok "$2" || bad "$2（缺 $1）"; }
 assert_dir()   { [ -d "$1" ] && ok "$2" || bad "$2（缺目录 $1）"; }
 assert_has()   { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 中找不到 [$2]）"; }
+assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 中没有匹配 [$2]）"; }
 assert_not()   { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
 assert_eq()    { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
 
@@ -65,6 +66,16 @@ chmod +x "$FAKE/pi"
 
 printf 'pi-team smoke · skill=%s · tmp=%s\n' "$SKILL_DIR" "$TMP"
 
+# 假 meminfo：让内存/swap 守卫可测（Linux /proc/meminfo 格式）
+mkfile_meminfo() { # <name> <avail_mb> <swap_free_mb> [swap_total_mb]
+  printf 'MemTotal:       32768000 kB\nMemFree:        1024000 kB\nMemAvailable:   %d kB\nSwapTotal:      %d kB\nSwapFree:       %d kB\n' \
+    "$(( $2 * 1024 ))" "$(( ${4:-16384} * 1024 ))" "$(( $3 * 1024 ))" > "$TMP/meminfo-$1"
+}
+mkfile_meminfo plenty  8000 8000
+mkfile_meminfo lowswap 8000  300
+mkfile_meminfo lowram   600 8000
+mkfile_meminfo doomed   100  100
+
 # ---------------------------------------------------------------- 0. 仓库
 section "0 · 临时仓库"
 cd "$REPO" || exit 1
@@ -86,6 +97,27 @@ if [ -n "$JS_RUNNER" ]; then
 else
   printf '  (跳过：没有可用的 JS 运行时)\n'
 fi
+
+# ---------------------------------------------------------------- 0c. 静态检查：set -e 陷阱
+# 函数最后一条命令若是可能失败的 && 链，调用方（team 主脚本是 set -euo pipefail）会在
+# 函数返回非 0 时直接退出，导致“中间命令成功、整个命令静默失败”这种极难查的 bug。
+section "0c · 静态检查（函数结尾的 set -e 陷阱）"
+trap_hits="$(awk '
+  /^[a-zA-Z_][a-zA-Z0-9_]*\(\) *\{/ { fn=$1; last=""; next }
+  /^}/ && fn!="" { if (last ~ /^[[:space:]]*(\[|test)[^;]*\&\&/ && last !~ /\|\|/) print fn": "last; fn=""; next }
+  fn!="" { if ($0 !~ /^[[:space:]]*$/) last=$0 }
+' "$SKILL_DIR"/scripts/lib/*.sh)"
+if [ -z "$trap_hits" ]; then
+  ok "没有「函数结尾 && 链」陷阱"
+else
+  bad "发现可能让调用方在 set -e 下静默退出的函数："; printf '%s\n' "$trap_hits" | sed 's/^/     /'
+fi
+# team_watch_pid_alive 这类故意返回 1 的判定函数只允许出现在条件里
+assert_has "$SKILL_DIR/scripts/team" "set -euo pipefail" "CLI 主脚本仍启用严格模式"
+if [ -x "$SKILL_DIR/scripts/team" ]; then ok "scripts/team 可执行（systemd ExecStart / 直接调用需要）"
+else bad "scripts/team 没有 +x：systemd 服务会因 Permission denied 启动失败"; fi
+if [ -x "$SKILL_DIR/tests/smoke.sh" ]; then ok "tests/smoke.sh 可执行"
+else bad "tests/smoke.sh 没有 +x"; fi
 
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
@@ -138,8 +170,7 @@ assert_file "$REPO/.worktrees/dev/README.md" "worktree 内容就绪"
 
 # ---------------------------------------------------------------- 6. dispatch
 section "6 · dispatch"
-$TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"
-assert_has "$TMP/print.log" "--session-id $SESSION-dev" "命令含正确的 session-id"
+$TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"assert_has "$TMP/print.log" "--session-id $SESSION-dev" "命令含正确的 session-id"
 assert_has "$TMP/print.log" "team-notify.ts" "命令显式加载 notify 扩展（worktree 不会自动发现）"
 assert_has "$TMP/print.log" "agent:dev" "提示词声明了 agent 身份"
 assert_has "$TMP/print.log" "不要在半途停下来征求确认" "提示词包含「不半途停」纪律"
@@ -147,8 +178,10 @@ assert_has "$TMP/print.log" "reports/T1.1-dev.md" "提示词指明报告路径"
 assert_has "$TMP/print.log" "git commit" "提示词要求小步提交"
 
 if [ "$HAVE_TMUX" = "1" ]; then
-  # 让 worker 用假 pi 跑
-  printf '\nTEAM_PI_BIN="%s"\n' "$FAKE/pi" >> "$REPO/.pi/team/config.sh"
+  # 让 worker 用假 pi 跑（pi-sleep：模拟“pi 正在跑”的窗口，便于验证 say/存活判定）
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 60\n' "$TMP/pi-args.log" > "$FAKE/pi-sleep"
+  chmod +x "$FAKE/pi-sleep"
+  printf '\nTEAM_PI_BIN="%s"\n' "$FAKE/pi-sleep" >> "$REPO/.pi/team/config.sh"
   $TEAM dispatch dev T1.1 "$TASKFILE" >"$TMP/dispatch.log" 2>&1 || bad "dispatch 失败"
   sleep 2.5
   if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx dev; then ok "tmux 窗口 $SESSION:dev 已创建"; else bad "tmux 窗口未创建"; fi
@@ -156,10 +189,38 @@ if [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/pi-args.log" "-e" "pi 收到 -e（扩展）"
   assert_has "$TMP/pi-args.log" "--skill" "pi 收到 --skill（团队协议）"
   assert_eq "state 记录了任务" "$(cat "$REPO/.pi/team/state/dev.env" | grep -c '^task=T1.1$')" "1"
-  $TEAM say dev "ping" >/dev/null 2>&1 && ok "say 能向 agent 窗口发消息" || bad "say 失败"
+  $TEAM roster >"$TMP/roster-live.log" 2>&1
+  assert_has "$TMP/roster-live.log" "pi 在跑" "roster 看到 agent 的 pi 在跑"
+  $TEAM say dev "ping" >/dev/null 2>&1 && ok "say 能向在跑的 agent 发消息" || bad "say 失败"
 else
   printf '  (跳过 tmux 相关断言：没有 tmux)\n'
 fi
+
+# ---------------------------------------------------------------- 6b. 容量守卫（swap 是底线，RAM 紧只警告）
+section "6b · 容量守卫矩阵"
+MEMENV="TEAM_MEMINFO_FILE=$TMP/meminfo"
+if env "$MEMENV-plenty" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-plenty.log" 2>&1; then
+  ok "内存充足 → 允许派单"
+else bad "内存充足时不应拒绝"; fi
+if env "$MEMENV-lowswap" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-lowswap.log" 2>&1; then
+  bad "swap 见底时应当拒绝派单"
+else ok "swap 见底(<1024MB) → 拒绝派单"; fi
+assert_has "$TMP/mem-lowswap.log" "swap 只剩" "拒绝理由指向 swap"
+if env "$MEMENV-lowram" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-lowram.log" 2>&1; then
+  ok "RAM 紧张但 swap 充足 → 允许（只警告卡顿）"
+else bad "RAM 紧张不应拒绝（底线是 swap）"; cat "$TMP/mem-lowram.log"; fi
+assert_has "$TMP/mem-lowram.log" "会开始吃 swap" "给出了卡顿警告"
+if env "$MEMENV-doomed" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-doomed.log" 2>&1; then
+  bad "RAM+swap 都见底时应当拒绝"
+else ok "RAM+swap 双低 → 拒绝派单"; fi
+# swap 底线可显式降为零（自担风险）
+if env "$MEMENV-lowswap" TEAM_MIN_FREE_SWAP_MB=0 $TEAM dispatch dev T1.1 "$TASKFILE" --print >/dev/null 2>&1; then
+  ok "TEAM_MIN_FREE_SWAP_MB=0 可显式绕过底线"
+else bad "显式绕过失败"; fi
+# team ps 必须用同一个数据源
+env "$MEMENV-lowram" $TEAM ps >"$TMP/ps-lowram.log" 2>&1
+assert_has "$TMP/ps-lowram.log" "RAM 可用 600MB" "team ps 显示同一数据源的真实容量"
+assert_has "$TMP/ps-lowram.log" "watchdog" "team ps 显示 watchdog 存活"
 
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"
@@ -230,12 +291,96 @@ assert_eq "merge 后 BOARD → done" "$($TEAM board row T1.1 | awk -F'|' '{gsub(
 $TEAM close T1.1 >/dev/null 2>&1 && ok "close 退出码 0" || bad "close 失败"
 [ "$HAVE_TMUX" = "1" ] && assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
 
+# ---------------------------------------------------------------- 11b. 保活：team up / watch
+section "11b · 保活（team up 把 PM 拉起来）"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 60\n' "$TMP/pm-args.log" > "$FAKE/pi-sleep"
+chmod +x "$FAKE/pi-sleep"
+
+if [ "$HAVE_TMUX" = "1" ]; then
+  # 用长期运行的假 pi 模拟 PM（pi-sleep）：参数写进 pm-args.log，pip 与 agent 的参数不会混
+  sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
+  tmux kill-window -t "$SESSION:pm" 2>/dev/null || true
+  $TEAM up --no-agents >"$TMP/up1.log" 2>&1 && ok "up 退出码 0（含 session 被删后重建）" || { bad "up 失败"; cat "$TMP/up1.log"; }
+  assert_has "$TMP/up1.log" "PM 已启动" "up 报告了 PM 启动"
+  assert_file "$TMP/pm-args.log" "PM 的 pi 真的被拉起（参数已记录）"
+  assert_has "$TMP/pm-args.log" "-c" "PM 用 -c 延续会话（不丢历史）"
+  assert_has "$TMP/pm-args.log" "pm-prompt.md" "PM 用 @文件 传开场提示词（避免 TTY 行长限制）"
+  assert_has "$REPO/.pi/team/state/pm-prompt.md" "team digest" "提示词文件要求先跑 digest"
+  assert_eq "pm 窗口被重建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx pm || true)" "1"
+  $TEAM watchdog-status >"$TMP/wdstatus.log" 2>&1
+  assert_match "$TMP/wdstatus.log" "在运行|视为存活" "watchdog-status 看到 PM 在跑"
+  $TEAM up --no-agents >"$TMP/up2.log" 2>&1
+  assert_match "$TMP/up2.log" "PM 在运行|视为存活" "up 不会重复启动已跑的 PM"
+
+  # 巡检：容量日志 + 时间戳 + 不去碰活着的 PM
+  PM_LINES_BEFORE="$(wc -l < "$TMP/pm-args.log" 2>/dev/null || echo 0)"
+  $TEAM watch --once >"$TMP/watch1.log" 2>&1 && ok "watch --once 退出码 0" || bad "watch --once 失败"
+  assert_file "$REPO/.pi/team/state/watchdog.log" "写了 watchdog 日志"
+  assert_file "$REPO/.pi/team/state/capacity.log" "写了容量趋势日志"
+  assert_file "$REPO/.pi/team/state/watchdog.last" "写了巡检时间戳"
+  assert_eq "PM 活着时不会被重启" "$(wc -l < "$TMP/pm-args.log" 2>/dev/null || echo 0)" "$PM_LINES_BEFORE"
+
+  # PM 挂了 → watchdog 拉起 + 收件箱留记
+  tmux kill-window -t "$SESSION:pm" 2>/dev/null || true
+  rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/docs/team/inbox/pm.md"
+  PM_LINES_DEAD="$(wc -l < "$TMP/pm-args.log" | tr -d ' ')"
+  $TEAM watch --once >"$TMP/watch2.log" 2>&1 || bad "watch --once（PM 挂了）失败"
+  assert_eq "watchdog 重建了 pm 窗口" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx pm || true)" "1"
+  local pm_lines_after
+  pm_lines_after="$(wc -l < "$TMP/pm-args.log" | tr -d ' ')"
+  assert_match "$REPO/.pi/team/state/watchdog.log" "已重启" "watchdog 日志记录了重启"
+  if [ "$pm_lines_after" -gt "$PM_LINES_DEAD" ]; then ok "watchdog 真的把 PM 拉起来了（参数 $PM_LINES_DEAD → $pm_lines_after）"
+  else bad "watchdog 没有拉起 PM（参数计数 $PM_LINES_DEAD → $pm_lines_after）"; fi
+  assert_has "$REPO/docs/team/inbox/pm.md" "watchdog" "watchdog 给 PM 留了收件箱消息"
+  assert_has "$TMP/watch2.log" "已重启" "watchdog 报告了重启动作"
+  assert_eq "重启计数已记录" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
+
+  # 重启配额：防崩溃循环
+  for _ in 1 2 3 4 5; do date +%s >> "$REPO/.pi/team/state/pm-restarts.log"; done
+  tmux kill-window -t "$SESSION:pm" 2>/dev/null || true
+  $TEAM watch --once >"$TMP/watch3.log" 2>&1 || true
+  assert_has "$TMP/watch3.log" "已被重启" "超过配额时拒绝继续重启（告警）"
+  # 收尾：把 PM 拉回来，便于后续小节（清掉配额计数）
+  rm -f "$REPO/.pi/team/state/pm-restarts.log"
+  $TEAM up --no-agents >/dev/null 2>&1 || true
+else
+  printf '  (跳过保活断言：没有 tmux)\n'
+fi
+
+# ---------------------------------------------------------------- 11c. 恢复：resume / watchdog 续跑
+section "11c · 恢复（agent 挂了续跑）"
+if [ "$HAVE_TMUX" = "1" ]; then
+  sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi\"|" "$REPO/.pi/team/config.sh"
+  # 让 dev 处於“有任务但 pi 已退出”的状态
+  $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1
+  sleep 1.5
+  $TEAM roster >"$TMP/roster-dead.log" 2>&1
+  assert_has "$TMP/roster-dead.log" "pi 已退出" "roster 能区分「窗口在但 pi 已退出」"
+  if $TEAM say dev "ping" >/dev/null 2>&1; then bad "agent 没在跑时 say 应当拒绝（防把消息当命令执行）"; else ok "agent 没在跑时 say 拒绝发送"; fi
+  $TEAM resume --dry-run >"$TMP/resume-dry.log" 2>&1
+  assert_has "$TMP/resume-dry.log" "可续跑：T1.1" "resume --dry-run 能识别待续跑任务"
+  $TEAM resume >"$TMP/resume.log" 2>&1 && ok "resume 退出码 0" || bad "resume 失败"
+  assert_has "$TMP/resume.log" "续跑 dev" "resume 重新派单"
+  assert_has "$REPO/.pi/team/state/watchdog.log" "resume agent=dev task=T1.1" "续跑动作记进 watchdog 日志"
+
+  # watchdog 巡检时自动续跑（窗口被删）
+  tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
+  sleep 0.5
+  $TEAM watch --once >"$TMP/watch4.log" 2>&1 || bad "watch --once（agent 挂了）失败"
+  assert_eq "watchdog 把 dev 窗口拉回来了" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "1"
+else
+  printf '  (跳过恢复断言：没有 tmux)\n'
+fi
+
 # ---------------------------------------------------------------- 12. 观察类命令
 section "12 · roster / status / ps"
 for c in roster status ps; do
   $TEAM "$c" >"$TMP/$c.log" 2>&1 && ok "$c 退出码 0" || bad "$c 失败"
   [ -s "$TMP/$c.log" ] && ok "$c 有输出" || bad "$c 无输出"
 done
+$TEAM watchdog-status >"$TMP/wd.log" 2>&1 && ok "watchdog-status 退出码 0" || bad "watchdog-status 失败"
+$TEAM paths >"$TMP/paths.log" 2>&1 && assert_has "$TMP/paths.log" "main_root" "paths 输出主工作树" || bad "paths 失败"
+$TEAM up --print >"$TMP/pmprompt.log" 2>&1 && assert_has "$TMP/pmprompt.log" "team digest" "up --print 输出 PM 开场提示词" || bad "up --print 失败"
 
 # ---------------------------------------------------------------- 13. notify 扩展（Node 直跑）
 section "13 · notify 扩展（去重 + 只在 worktree 触发）"

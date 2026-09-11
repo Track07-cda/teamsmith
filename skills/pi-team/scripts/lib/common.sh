@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.1.0"
+TEAM_VERSION="1.2.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -26,13 +26,14 @@ team_usage_die() { team_err "$*"; printf 'run: %s help\n' "$TEAM_CLI" >&2; exit 
 # ---------------------------------------------------------------- skill 目录
 # 解析 symlink 链，得到 skill 根目录（无论本文件被 source 还是被 -e 加载）。
 team_skill_dir() {
-  local src="${BASH_SOURCE[0]}" dir
+  local src="${BASH_SOURCE[0]}" dir root
   while [ -L "$src" ]; do
-    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    dir="$(cd -P "$(dirname "$src")" && pwd)" || return 1
     src="$(readlink "$src")"
     case "$src" in /*) ;; *) src="$dir/$src" ;; esac
   done
-  ( cd -P "$(dirname "$src")/../.." && pwd )
+  root="$(cd -P "$(dirname "$src")/../.." && pwd)" || return 1
+  printf '%s\n' "$root"
 }
 
 # ---------------------------------------------------------------- git 路径
@@ -47,10 +48,12 @@ team_worktree_top() { team_git rev-parse --show-toplevel 2>/dev/null; }
 
 # 主工作树顶层（worktree 的 `.git` 文件指向主仓库的 .git 目录）
 team_main_root() {
-  local common
+  local common d root
   common="$(team_git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
   [ -n "$common" ] || return 1
-  ( cd "$(dirname "$common")" && pwd )
+  d="$(dirname "$common")"
+  root="$(cd "$d" && pwd)" || return 1
+  printf '%s\n' "$root"
 }
 
 # ---------------------------------------------------------------- 配置
@@ -77,10 +80,21 @@ team_load_config() {
   TEAM_CONFIG="$(team_find_config || true)"
 
   if [ -n "$TEAM_CONFIG" ]; then
+    # 环境变量优先于配置文件：用户临时覆盖（TEAM_MIN_FREE_SWAP_MB=0 team dispatch …）
+    # 必须能赢过文件里的值，否则文档里的“临时绕过”根本不生效。
+    local _env_pairs=() _k
+    for _k in ${!TEAM_@}; do
+      case "$_k" in TEAM_CONFIG_FILE|TEAM_ASSUME_YES|TEAM_CLI) continue ;; esac
+      _env_pairs+=("$_k=${!_k}")
+    done
     set +u
     # shellcheck disable=SC1090
     . "$TEAM_CONFIG"
     set -u
+    for _k in "${_env_pairs[@]:-}"; do
+      [ -n "$_k" ] || continue
+      printf -v "${_k%%=*}" '%s' "${_k#*=}"
+    done
   fi
 
   team_is_git_repo || team_die "当前目录不在 git 仓库内（pi-team 需要 git 来做 worktree 隔离）"
@@ -103,10 +117,25 @@ team_load_config() {
   TEAM_GITLAB_TOKEN_FILE="${TEAM_GITLAB_TOKEN_FILE:-$HOME/.gitlab-pa-token}"
   TEAM_GATES="${TEAM_GATES:-}"
   TEAM_PI_BIN="${TEAM_PI_BIN:-pi}"
+  TEAM_MEMINFO_FILE="${TEAM_MEMINFO_FILE:-}"
   TEAM_INSTALL_CMD="${TEAM_INSTALL_CMD:-}"
   TEAM_DEFAULT_MODEL="${TEAM_DEFAULT_MODEL:-deepseek/deepseek-flash}"
+  # PM 自己的启动参数（team up / watchdog 用）
+  TEAM_PM_MODEL="${TEAM_PM_MODEL:-}"          # 空 = 用 TEAM_DEFAULT_MODEL
+  TEAM_PM_SESSION_ID="${TEAM_PM_SESSION_ID:-}" # 空 = 用 pi -c 延续本目录上一个会话（保住历史）
+  TEAM_PM_EXTRA_PI_ARGS="${TEAM_PM_EXTRA_PI_ARGS:-}"
   TEAM_MODEL_LIMITS="${TEAM_MODEL_LIMITS:-}"
-  TEAM_MIN_FREE_MB="${TEAM_MIN_FREE_MB:-0}"
+  TEAM_MIN_FREE_SWAP_MB="${TEAM_MIN_FREE_SWAP_MB:-1024}"
+  TEAM_MIN_TOTAL_MB="${TEAM_MIN_TOTAL_MB:-512}"            # RAM+swap 的绝对底线
+  TEAM_WARN_AVAIL_MB="${TEAM_WARN_AVAIL_MB:-2048}"         # RAM 低于此值：只警告（允许卡顿）
+  TEAM_AGENT_MEM_MB="${TEAM_AGENT_MEM_MB:-6144}"           # 单个 agent 的经验占用（估算用）
+  # 保活 watchdog
+  TEAM_WATCH_INTERVAL="${TEAM_WATCH_INTERVAL:-60}"         # 检查间隔（秒）
+  TEAM_WATCH_PM="${TEAM_WATCH_PM:-1}"                      # 1=PM 掉了就拉起来
+  TEAM_WATCH_RESUME="${TEAM_WATCH_RESUME:-1}"              # 1=有未结任务但窗口没了的 agent 自动续跑
+  TEAM_WATCH_MAX_RESTARTS="${TEAM_WATCH_MAX_RESTARTS:-5}"  # PM 每小时最多重启次数（防崩溃循环）
+  TEAM_PM_START_WAIT="${TEAM_PM_START_WAIT:-6}"            # 启动 PM 后等它起来的秒数
+  TEAM_WATCH_SERVICE="${TEAM_WATCH_SERVICE:-}"             # systemd unit 名，默认 <project>-pi-team-watch
   TEAM_NOTIFY_TMUX="${TEAM_NOTIFY_TMUX:-1}"
   TEAM_NOTIFY_DEDUP_SEC="${TEAM_NOTIFY_DEDUP_SEC:-20}"
   TEAM_NOTIFY_LOG="${TEAM_NOTIFY_LOG:-/tmp/pi-team-notify.log}"
@@ -217,11 +246,15 @@ team_state_set() { # <agent> <key> <value>
 }
 
 team_state_get() { # <agent> <key> [default]
-  local f="$TEAM_STATE_DIR/$1.env"
-  [ -f "$f" ] || { [ $# -ge 3 ] && printf '%s\n' "$3"; return 0; }
-  local v
-  v="$(grep -s "^$2=" "$f" | head -1 | cut -d= -f2- || true)"
-  if [ -n "$v" ]; then printf '%s\n' "$v"; else [ $# -ge 3 ] && printf '%s\n' "$3"; fi
+  local f="$TEAM_STATE_DIR/$1.env" v=""
+  if [ -f "$f" ]; then
+    v="$(grep -s "^$2=" "$f" | head -1 | cut -d= -f2- || true)"
+  fi
+  if [ -n "$v" ]; then printf '%s\n' "$v"
+  elif [ $# -ge 3 ]; then printf '%s\n' "$3"
+  else printf '\n'
+  fi
+  return 0
 }
 
 team_state_clear() { rm -f "$TEAM_STATE_DIR/$1.env"; }
@@ -245,30 +278,233 @@ team_tmux_send_text() { # <session:window> <text>
   tmux send-keys -t "$1" Enter 2>/dev/null || return 1
 }
 
-# ---------------------------------------------------------------- 门禁
-# 内存守卫：避免在机器已经很吃紧时再起一个 agent（OOM 的代价远高于排队）。
-team_available_mb() {
-  if team_have_cmd free; then
-    free -m | awk '/^Mem:/ {print $7}'
-    return 0
-  fi
-  if team_have_cmd vm_stat; then
-    vm_stat | awk '/page size/ {ps=$8} /Pages free/ {gsub(/\./,"",$3); printf "%d", $3*ps/1048576}'
-    return 0
-  fi
-  printf '0'
+# 只有目标窗口在跑 pi 时才敢打字：往停在提示符的 shell 里 send-keys 等于把那串文本
+# 当命令执行（真实事故）。这种情况只写收件箱，不敲键盘。
+team_tmux_send_to_pi() { # <session:window> <text>
+  team_pane_busy "$1" || return 1
+  team_tmux_send_text "$1" "$2"
 }
 
+team_pane_cmd() { # <session:window> → 前台命令名
+  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
+}
+
+team_is_shell_cmd() { # 空/常见 shell → 窗口可能停在提示符，也可能是 shell 脚本在跑（需再查子进程）
+  case "${1:-}" in
+    bash|sh|zsh|fish|dash|ash|ksh|nu|elvish|'') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# pane 里是否有东西在跑（≠ 空提示符）。
+# 为什么不能只看 pane_current_command：pi 若用 shell wrapper 启动（或自测用假 pi 脚本），
+# 前台名会显示 bash。为什么不能只看“shell 有子进程”：用户 rc 钩子（如 conda shell hook）
+# 会常驻一个子进程，导致空提示符被误判成忙。所以看三点：
+#   1) 前台不是 shell → 在跑
+#   2) pane_pid 的命令行里有非选项参数（shell 在跑脚本/子命令）→ 在跑
+#   3) 前台进程组不是 pane_pid 自己（job control：子命令被放到新进程组）→ 在跑
+team_shell_running_command() { # <pid> → 0 表示这个 shell 进程在跑脚本/子命令
+  local args toks=() tok
+  args="$(ps -o args= -p "$1" 2>/dev/null | head -1)"
+  [ -n "$args" ] || return 1
+  read -r -a toks <<< "$args"
+  local i=1
+  while [ "$i" -lt "${#toks[@]}" ]; do
+    tok="${toks[$i]}"
+    case "$tok" in
+      -*) ;;
+      *) return 0 ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+team_pane_busy() { # <session:window> → 0 = 里面有东西在跑
+  local target="$1" cmd pid tpgid
+  cmd="$(team_pane_cmd "$target")"
+  team_is_shell_cmd "$cmd" || return 0
+  pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null)"
+  [ -n "$pid" ] || return 1
+  team_shell_running_command "$pid" && return 0
+  tpgid="$(ps -o tpgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  if [ -n "$tpgid" ] && [ "$tpgid" != "$pid" ]; then return 0; fi
+  return 1
+}
+
+# ---------------------------------------------------------------- PM 存活
+team_pm_target() { printf '%s:%s\n' "$TEAM_SESSION" "$TEAM_PM_WINDOW"; }
+
+team_pm_window_exists() { team_tmux_has_window "$TEAM_SESSION" "$TEAM_PM_WINDOW"; }
+
+# missing | idle:<cmd> | busy:<cmd> | running:<cmd>
+#   running = 前台不是 shell（pi 本体）
+#   busy    = 前台是 shell 但有子进程（pi 是 shell wrapper 时就是这个；也包含用户在跑别的命令）
+#   idle    = 空提示符（可以安全地替成 pi）
+team_pm_state() {
+  team_pm_window_exists || { printf 'missing'; return 0; }
+  local cmd; cmd="$(team_pane_cmd "$(team_pm_target)")"
+  if ! team_is_shell_cmd "$cmd"; then printf 'running:%s' "$cmd"; return 0; fi
+  if team_pane_busy "$(team_pm_target)"; then printf 'busy:%s' "${cmd:-shell}"; return 0; fi
+  printf 'idle:%s' "${cmd:-shell}"
+}
+
+team_pm_alive() {
+  case "$(team_pm_state)" in running:*|busy:*) return 0 ;; *) return 1 ;; esac
+}
+
+team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 skill 升级）
+  local tmpl="$TEAM_SKILL_DIR/templates/pm-prompt.md.tmpl"
+  if [ ! -f "$tmpl" ]; then
+    printf '你是 %s 的 PM。工具：bash %s/scripts/team help；开局先跑 `team digest` 与 `team inbox --ack`，再继续调度。\n' \
+      "$TEAM_PROJECT" "$TEAM_SKILL_DIR"
+    return 0
+  fi
+  team_render "$tmpl" \
+    "PROJECT=$TEAM_PROJECT" "MAIN_ROOT=$TEAM_MAIN_ROOT" "SKILL_DIR=$TEAM_SKILL_DIR" \
+    "DOCS_DIR=$TEAM_DOCS_DIR" "SESSION=$TEAM_SESSION" "PM_WINDOW=$TEAM_PM_WINDOW" \
+    "AGENTS=$(team_agents | tr '\n' ' ')" "GATES=${TEAM_GATES:-<未配置>}" \
+    "PROTECTED_BRANCH=$TEAM_PROTECTED_BRANCH" "WORKTREES_DIR=$TEAM_WORKTREES_DIR"
+}
+
+team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人）；默认 -c 延续本目录上一个会话以保住历史
+  local model="${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}" args=()
+  args=(--provider "${model%%/*}" --model "${model##*/}")
+  [ -d "$TEAM_SKILL_DIR" ] && args+=(--skill "$TEAM_SKILL_DIR")
+  if [ -n "${TEAM_PM_SESSION_ID:-}" ]; then args+=(--session-id "$TEAM_PM_SESSION_ID")
+  else args+=(-c); fi
+  [ -n "${TEAM_PM_EXTRA_PI_ARGS:-}" ] && args+=($TEAM_PM_EXTRA_PI_ARGS)
+  printf '%q ' "${args[@]}"
+}
+
+# 启动命令里不把提示词直接塞进命令行：一行命令太长会被 TTY 的 4096 字节规范输入限制截断。
+# 改成写文件 + `pi @file`（pi 支持 @file 作为初始消息），命令行保持短。
+team_pm_prompt_file() { printf '%s\n' "$TEAM_STATE_DIR/pm-prompt.md"; }
+
+team_pm_write_prompt() {
+  mkdir -p "$TEAM_STATE_DIR"
+  team_pm_prompt > "$(team_pm_prompt_file)"
+  printf '%s\n' "$(team_pm_prompt_file)"
+}
+
+# 在 PM 窗口启动 PM。
+# 用 respawn-pane 把 pane 的进程直接换成我们的命令，而不是把命令“打字”进去：
+#   - 打字受 TTY 行长限制（4KB）和 shell wrapper/rc 钩子/按键时序影响，不可靠；
+#   - respawn 是确定性的：同一个 pane，命令就是我们要的。
+# 只在 pane 里没有东西在跑（idle/missing）时才 respawn；busy/running 一律不抢。
+team_pm_start() {
+  local target state cmd pf i wait
+  target="$(team_pm_target)"
+  team_pm_window_exists || return 1
+  state="$(team_pm_state)"
+  case "$state" in
+    running:*) team_dim "  PM 已在运行（${state#running:}）"; return 0 ;;
+    busy:*)    team_dim "  PM 窗口里有进程在跑（${state#busy:}）：不动它"
+               return 1 ;;
+    idle:*)    ;;
+    *)         team_warn "PM 窗口状态异常（$state），不重启；处理完再跑 team up"; return 1 ;;
+  esac
+  pf="$(team_pm_write_prompt)"
+  cmd="$(printf 'cd %q && exec %q %s @%q' "$TEAM_MAIN_ROOT" "$TEAM_PI_BIN" "$(team_pm_pi_args)" "$pf")"
+  tmux respawn-pane -k -t "$target" "$cmd" >/dev/null 2>&1 || {
+    team_err "respawn-pane 失败：$target"
+    return 1
+  }
+  wait="${TEAM_PM_START_WAIT:-6}"
+  i=0
+  while [ "$i" -lt "$wait" ]; do
+    [ "${i}" -gt 0 ] && sleep 1
+    team_pm_alive && return 0
+    i=$((i + 1))
+  done
+  team_err "PM 启动后 ${wait}s 内没看到 pi 在跑：检查窗口输出与 $pf"
+  return 1
+}
+
+# 重启配额：防止 PM 反复崩溃把机器打爆（1 小时内最多 TEAM_WATCH_MAX_RESTARTS 次）
+team_pm_can_restart() {
+  local log="$TEAM_STATE_DIR/pm-restarts.log" now win max n
+  now="$(date +%s)"; win=3600; max="${TEAM_WATCH_MAX_RESTARTS:-5}"
+  mkdir -p "$TEAM_STATE_DIR"
+  if [ -f "$log" ]; then
+    n="$(awk -v now="$now" -v win="$win" '$1 > now - win' "$log" | wc -l | tr -d ' ')"
+    if [ "$n" -ge "$max" ]; then
+      team_err "PM 在 1 小时内已被重启 $n 次（上限 $max）：先排查崩溃原因（state/watchdog.log、PM 窗口输出）"
+      return 1
+    fi
+  fi
+  printf '%s %s\n' "$now" "$(team_timestamp)" >> "$log"
+  return 0
+}
+
+# ---------------------------------------------------------------- 门禁
+# 内存守卫（底线 = swap 不见底）：
+#   swap 见底 → 拒绝派单（一打满就会被 OOM killer 杀进程，连带 PM 一起挂）
+#   RAM 紧张 → 只警告，允许继续（代价是卡顿，不是崩）
+# 数据源：TEAM_MEMINFO_FILE（测试/容器显式覆盖）> /proc/meminfo > macOS sysctl > free
+# 输出 "avail_mb swap_free_mb swap_total_mb"
+team_mem_stats() {
+  local f="${TEAM_MEMINFO_FILE:-/proc/meminfo}"
+  if [ -r "$f" ] && grep -q '^MemTotal' "$f" 2>/dev/null; then
+    awk '/^MemAvailable/{a=$2} /^MemFree/{if(a=="")a=$2} /^SwapFree/{s=$2} /^SwapTotal/{t=$2}
+         END{printf "%d %d %d\n", a/1024, s/1024, t/1024}' "$f"
+    return 0
+  fi
+  if team_have_cmd sysctl; then   # macOS
+    local avail swap
+    avail="$(vm_stat 2>/dev/null | awk '/page size/ {ps=$8} /Pages free/ {gsub(/\./,"",$3); printf "%d", $3*ps/1048576}')"
+    swap="$(sysctl -n vm.swapusage 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="free"){gsub(/M/,"",$(i+2)); print $(i+2)}}')"
+    [ -n "$avail" ] && { printf '%s %s 0\n' "$avail" "${swap:-0}"; return 0; }
+  fi
+  if team_have_cmd free; then
+    free -m | awk '/^Mem:/{a=$7} /^Swap:/{s=$4; t=$2} END{printf "%d %d %d\n", a, s, t}'
+    return 0
+  fi
+  printf '0 0 0\n'
+}
+
+team_available_mb() { team_mem_stats | awk '{print $1}'; }
+team_swap_free_mb() { team_mem_stats | awk '{print $2}'; }
+
 team_mem_guard() {
-  [ "${TEAM_MIN_FREE_MB:-0}" -le 0 ] && return 0
-  local avail; avail="$(team_available_mb)"
+  local avail swapfree swaptotal min_swap min_total warn_avail
+  read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
+  min_swap="${TEAM_MIN_FREE_SWAP_MB:-1024}"
+  min_total="${TEAM_MIN_TOTAL_MB:-512}"
+  warn_avail="${TEAM_WARN_AVAIL_MB:-2048}"
   [ -n "$avail" ] || return 0
-  if [ "$avail" -lt "$TEAM_MIN_FREE_MB" ]; then
-    team_err "可用内存 ${avail}MB < TEAM_MIN_FREE_MB=${TEAM_MIN_FREE_MB}MB，拒绝派单（OOM 比排队更贵）"
-    team_err "确认要继续：TEAM_MIN_FREE_MB=0 team dispatch ..."
+
+  if [ "$min_swap" -gt 0 ] && [ "$swapfree" -lt "$min_swap" ]; then
+    team_err "swap 只剩 ${swapfree}MB（底线 ${min_swap}MB）：打满会被 OOM killer 杀进程，拒绝派单"
+    team_err "处理：等一个 agent 结束；或显式冒险 TEAM_MIN_FREE_SWAP_MB=0 team dispatch …"
     return 1
   fi
+  if [ "$min_total" -gt 0 ] && [ "$((avail + swapfree))" -lt "$min_total" ]; then
+    team_err "可用内存+空闲 swap 仅 $((avail + swapfree))MB < 底线 ${min_total}MB，拒绝派单"
+    return 1
+  fi
+  if [ "$warn_avail" -gt 0 ] && [ "$avail" -lt "$warn_avail" ]; then
+    team_warn "可用内存 ${avail}MB < ${warn_avail}MB：新 agent 会开始吃 swap，机器会变卡（允许，继续）"
+  fi
   return 0
+}
+
+# 粗略估算还能再加几个 agent（team ps 显示用；TEAM_AGENT_MEM_MB 是经验值）
+team_agent_capacity() {
+  local avail swapfree per min_total n
+  read -r avail swapfree _ <<< "$(team_mem_stats)"
+  per="${TEAM_AGENT_MEM_MB:-6144}"; min_total="${TEAM_MIN_TOTAL_MB:-512}"
+  [ "$per" -gt 0 ] || { printf '?'; return 0; }
+  n=$(( (avail + swapfree - min_total) / per ))
+  [ "$n" -lt 0 ] && n=0
+  printf '%s' "$n"
+}
+
+team_capacity_line() {
+  local avail swapfree swaptotal
+  read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
+  printf 'RAM 可用 %sMB ｜ swap 空闲 %s/%sMB ｜ 估算可再加 %s 个 agent\n' \
+    "$avail" "$swapfree" "$swaptotal" "$(team_agent_capacity)"
 }
 
 # 模型并发守卫：TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/gpt-5.6-sol=1"
@@ -342,10 +578,15 @@ team_timestamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 team_board_set() { # <id> <status>
   local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" st="$2"
   [ -f "$f" ] || return 1
-  awk -v id="$id" -v st="$st" 'BEGIN{FS=OFS="|"}
+  if awk -v id="$id" -v st="$st" 'BEGIN{FS=OFS="|"}
     /^\|/ && $2 ~ "^[[:space:]]*"id"[[:space:]]*$" { n=NF; gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(n-1)); $(n-1)=" "st" "; print; found=1; next }
     { print }
-  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  ' "$f" > "$f.tmp"; then
+    mv "$f.tmp" "$f"
+    return 0
+  fi
+  rm -f "$f.tmp"
+  return 1
 }
 
 team_board_add() { # <id> <title> <agent> <branch> <deps>

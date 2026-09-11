@@ -55,6 +55,8 @@ for src in "$REPO"/skills/*/; do
   else
     cp -R "${src%/}" "$dest" && echo "复制 $dest"
   fi
+  # 可执行位不能丢（systemd ExecStart、团队直接调用都依赖它）
+  chmod +x "$dest"/scripts/team "$dest"/tests/smoke.sh 2>/dev/null || true
 
   # 冒烟自测（可选，失败不阻塞安装）
   if [ -x "$dest/scripts/team" ]; then

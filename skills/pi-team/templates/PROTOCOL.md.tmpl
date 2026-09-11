@@ -36,3 +36,10 @@
 - 复验使用**独立 checkout**：`team review` 会 `git worktree add --detach` 该分支，日志落在
   `{{DOCS_DIR}}/reviews/<ID>-verify.log`（已 gitignore）。
 - 任务书可以要求比项目门禁更严的验收命令；以任务书为准。
+
+## 保活
+
+- 恢复不依赖任何 agent：`team watch`（推荐 `team install-watchdog --yes` 装成 systemd --user 服务）会在
+  PM 没跑时用 `pi -c` 拉起它、并给停了但没交活的 agent 重新派单；人工救火用 `team up`。
+- 容量底线是 swap 不被打满（`team ps` 看余量），RAM 紧只意味着卡。
+- 故意停工：`team uninstall-watchdog --yes` + `team teardown --all`。

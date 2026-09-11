@@ -39,7 +39,9 @@ Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复
 
 | 报错 | 原因 | 处理 |
 |---|---|---|
-| 可用内存 X MB < 阈值 | `TEAM_MIN_FREE_MB` 守卫 | 等其它 agent 结束；或临时 `TEAM_MIN_FREE_MB=0 team dispatch ...` |
+| swap 只剩 X MB | `TEAM_MIN_FREE_SWAP_MB` 底线（默认 1024） | 等一个 agent 结束；确认可以卡就 `TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` |
+| 可用内存 X MB < 2048 | 只是警告（RAM 紧） | 可继续；嫌卡就降并发。要彻底关掉警告：`TEAM_WARN_AVAIL_MB=0` |
+| 可用内存+空闲 swap 仅 X MB | `TEAM_MIN_TOTAL_MB` 硬底线 | 机器真的没资源了：先停 agent |
 | 模型 X 并发上限 N | `TEAM_MODEL_LIMITS` | 等，或临时 `TEAM_MODEL_LIMITS="" team dispatch ...` |
 | 未知 agent | 名册里没有 | 改 `TEAM_AGENTS` |
 | worktree 不存在 | 没 `add-agent` | dispatch 会自动建，但更推荐显式 `team add-agent <a>` |
@@ -89,6 +91,23 @@ Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复
   所以收件箱总是汇总到主工作树的 `<docs>/inbox/`；若日志显示 root 指向 worktree 路径，说明扩展版本过旧。
 - **路径/配置怀疑错位**：先跑 `team paths`（输出 main_root / worktree / docs / session / pm_window）。
 - **`TEAM_PI_BIN`**：pi 不在 PATH 时（或要拿假 pi 做自测时）在配置里指绝对路径。
+
+## 11. 保活与存活判定
+
+- **“PM 没在跑”是怎么判的**：`pane_current_command` 不是 shell → 在跑；是 shell 但命令行带非选项参数或有前台子命令 → 也当作在跑（`busy`）。
+  这是为了容住 pi 用 shell wrapper 启动的情况（此时前台名显示 bash），以及用户 rc 钩子常驻子进程（不能因为“有子进程”就认定忙）。
+- **team up 会 respawn PM 窗口的 pane**：只有当那里没有 pi 在跑（空提示符）时才动手，且会**替掉原 shell**。
+  所以不要把 PM 窗口当普通终端用；要手动开工就到那个窗口重跑 `pi` 或干脆让 watchdog 拉。
+- **只有“确实在跑”才会被打字**：`say`/`notify`/扩展在目标窗口是空提示符时会拒绝（否则文本会被 shell 当命令执行），
+  只写收件箱等 PM 回来读。
+- **PM 反复崩**：重启配额（`TEAM_WATCH_MAX_RESTARTS`，默认 5/小时）会拦下并发告警，防止崩溃循环把机器拖垮；
+  先看 `state/watchdog.log` 与 PM 窗口输出找原因（常见：模型额度耗尽、配置写错、依赖缺失）。
+- **watchdog 自己也停了**：`team watchdog-status` 看 systemd 单元是否 active；再不行就 `team install-watchdog --yes` 重装。
+- **机器重启后一片安静**：systemd `--user` 单元需要 `loginctl enable-linger $USER` 才能在未登录时自启；没装就用 `team up` 一键恢复。
+- **systemd 日志里 `Failed to add control inotify watch descriptor ... No space left on device`**：宿主 inotify
+  instance 上限（`fs.inotify.max_user_instances`）太小，不是本工具的错，服务仍会正常运行；想清干净就调大该值。
+- **服务启动失败 `status=203/EXEC` / Permission denied**：`ExecStart` 指向的脚本不可执行。本 skill 的 unit 已用
+  `/usr/bin/env bash <path>` 绕过；若是自定义单元，给脚本 `chmod +x`（`team smoke` 会检查这个位）。
 
 ## 12. Pi 相关的通用坑
 

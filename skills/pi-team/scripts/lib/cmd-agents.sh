@@ -158,7 +158,7 @@ team_cmd_dispatch() {
   fi
 
   team_tmux_ensure_session
-  if team_tmux_has_window "$TEAM_SESSION" "$agent"; then
+  if team_agent_window_exists "$agent"; then
     team_warn "窗口 $TEAM_SESSION:$agent 已存在 → 替换（旧回合会被打断）"
     tmux kill-window -t "$TEAM_SESSION:$agent" 2>/dev/null || true
     sleep 1
@@ -185,7 +185,11 @@ team_cmd_say() {
   [ $# -gt 0 ] || team_usage_die "say <agent> <单行消息>"
   local msg="$*" w
   w="$(team_state_get "$agent" window "$agent")"
-  team_tmux_has_window "$TEAM_SESSION" "$w" || team_die "窗口 $TEAM_SESSION:$w 不在（agent 没在跑？）"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || team_die "窗口 $TEAM_SESSION:$w 不在（agent 没在跑？试试 $TEAM_CLI resume --agent $agent）"
+  # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
+  if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
+    team_die "窗口 $TEAM_SESSION:$w 里 pi 没在跑（空提示符），不发送；先 $TEAM_CLI resume --agent $agent 续跑"
+  fi
   case "$msg" in *$'\n'*) team_die "say 只能发单行：多行请写进文件，然后让 agent 去读" ;; esac
   team_tmux_send_text "$TEAM_SESSION:$w" "$msg" || team_die "发送失败"
   team_ok "said to $TEAM_SESSION:$w: $msg"
@@ -204,8 +208,11 @@ team_cmd_notify() {
   team_inbox_append "$agent" manual "$msg"
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
   if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ] \
-     && team_tmux_has_window "$TEAM_SESSION" "$TEAM_PM_WINDOW"; then
-    team_tmux_send_text "$target" "[manual] agent:$agent · $msg" || true
+     && team_pm_alive; then
+    # 只给「正在跑 pi 的 PM」打字：PM 没在跑时写进 shell 会被当命令执行
+    team_tmux_send_to_pi "$target" "[manual] agent:$agent · $msg" || true
+  elif [ "$TEAM_NOTIFY_TMUX" = "1" ] && [ -n "${TMUX:-}" ] && team_have_cmd tmux && ! team_pm_alive; then
+    team_warn "PM 不在运行：消息只落收件箱（watchdog 会把 PM 拉起后读到）"
   fi
   team_ok "notified pm: $msg"
 }

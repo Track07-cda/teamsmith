@@ -1,9 +1,9 @@
 ---
 name: pi-team
-description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, or resume/coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent」时同样适用。
+description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与保活自愈（watchdog 自动拉起 PM、续跑停掉的 agent、systemd 用户服务）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, keep an agent team alive / auto-restart the PM / resume stopped agents after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # pi-team · Pi Agent 团队
@@ -41,17 +41,20 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | 目的 | 命令 |
 |---|---|
 | 初始化 / 自检 | `team init [--session s] [--agents "a b"] [--vcs local\|github\|gitlab]`、`team doctor` |
-| 观察 | `team roster`（窗口/分支/脏/领先）、`team status [ID]`、`team ps`（内存+模型并发）、`team digest`（PM 待办） |
+| 观察 | `team roster`（窗口/分支/脏/领先）、`team status [ID]`、`team ps`（容量+模型并发+PM/watchdog 存活）、`team digest`（PM 待办） |
 | 收件箱 | `team inbox [agent] [--ack] [--all]` |
 | 文档契约 | `team task <ID> --title ... --agent a`、`team board add\|set\|ls`、`team thread <a> "..." --from pm --re <ID>`、`team report <ID> <a>` |
 | 派单 | `team add-agent <a>`、`team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--print]` |
 | 协作 | `team say <a> "<单行消息>"`、`team notify <a> "<一句话>"`（agent→PM） |
 | 复验 | `team review <ID> [--branch b] [--no-gates]` → `reviews/<ID>.md` |
 | 合并/收尾 | `team merge <ID> [--push]`、`team pr <ID>`、`team close <ID>`、`team teardown --agent a [--purge]` |
+| 保活/恢复 | `team up`（建 session + 拉起 PM + 续跑停了的 agent）、`team resume`、`team watch [--once]`、`team install-watchdog --yes`、`team watchdog-status` |
 | forge 透传 | `team gh <gh 参数…>`、`team gl <METHOD> <path>`（token 由 wrapper 注入，不回显） |
 | 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测）、`team version` |
 
 ## 作为 PM 的循环（你该怎么做）
+
+> 开局（或被 watchdog 拉起后）先跑：`team digest` → `team inbox --ack` → `team resume --dry-run` → `team watchdog-status`。
 
 1. **建模**：`team doctor`，必要时 `init`；把用户需求拆成里程碑写进 `ROADMAP.md`，
    每个任务写成**自包含**任务书（背景/交付物/边界/可复制的验收命令/报告要求）——
@@ -71,21 +74,22 @@ PM 需要停下来问用户的情况只有：合并/推送等**共享状态变�
 范围变更、需要用户拍板的选型（先派调研任务取证，再写 `DECISIONS.md`）。
 
 ## 不可协商的规则（会被复验）
-
 - **没有真实执行过，不得声称通过**。报告必须带命令与输出尾部；PM 独立复跑。
 - agent 只改自己有归属的目录（`OWNERSHIP.md`）；跨目录 → 报告写 `BLOCKED:`。
 - agent 禁止 push 保护分支、force push、merge PR/MR、rebase/删除他人分支。
 - token 只由 wrapper 注入（`team gh`/`team gl`/`team pr`），永不回显、永不落盘。
 - 任何改变共享/远端状态的操作需要 `--yes`（= 用户已授权）。
 - 一个 agent 一个长期 worktree：**不要移动它**（Pi session 按 cwd 归属，移动等于丢记忆）。
+- **团队必须能无人看守地活下去**：装 `team install-watchdog --yes`（或至少开一个 `team watch` 窗口）。
+  恢复不依赖任何 agent——PM 挂了由 watchdog 用 `pi -c` 拉起并喂开场提示词，agent 挂了按 state 里记的任务书续跑。
 
 ## 深入阅读（按需，不要一次全读）
 
 | 文件 | 什么时候读 |
 |---|---|
-| `references/protocol.md` | 想理解每条规则的理由（独立复验、唤醒机制、模型策略、安全模型） |
-| `references/config.md` | 配置键含义、项目落盘布局、环境变量覆盖 |
-| `references/workflows.md` | 端到端 runbook：新项目建队、派单、复验、合并、并行扩展、阻塞处理 |
+| `references/protocol.md` | 想理解每条规则的理由（独立复验、唤醒机制、容量底线、保活链路、安全模型） |
+| `references/config.md` | 配置键含义、项目落盘布局、环境变量覆盖（环境变量优先于配置文件） |
+| `references/workflows.md` | 端到端 runbook：建队、派单、复验、合并、**保活/恢复**、并行扩展、阻塞处理 |
 | `references/troubleshooting.md` | 通知不到、会话丢失、worktree 冲突、forge 403、报告不实 |
 | `templates/` | 需要手写任务书/报告/看板时抄模板 |
 | `scripts/team`、`scripts/lib/*.sh` | 要改行为时（先用 `team <cmd> --print` 看它生成什么） |

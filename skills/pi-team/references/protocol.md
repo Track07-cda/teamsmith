@@ -73,8 +73,9 @@ agent 回合结束（Pi 的 agent_settled：不会再自动继续的那个点）
 | 高强度评审/难点 | 订阅额度紧张 → 用 `TEAM_MODEL_LIMITS` 限并发，一次只跑一个 |
 | 长上下文难题 | 慢且并发受限，PM 点名才用 |
 
-`team dispatch` 会在派单前检查 `TEAM_MODEL_LIMITS` 与可用内存（`TEAM_MIN_FREE_MB`）：
-**OOM 一次重启的代价远高于排队 10 分钟**。
+`team dispatch` 会在派单前检查 `TEAM_MODEL_LIMITS` 与容量：**底线是 swap 不被打满**
+（打满就会被 OOM killer 杀进程，连 PM 一起带走），RAM 紧张只意味着卡顿，只给警告不拦。
+原因很直接：一次 OOM 重启的代价远高于排队十分钟，而变卡只是慢一点。
 
 ## 7. 安全红线（不可协商）
 
@@ -83,7 +84,21 @@ agent 回合结束（Pi 的 agent_settled：不会再自动继续的那个点）
 - agent 禁止阅读凭据/账户文件（如 `~/.pi/agent/auth.json`）。
 - 任何改变共享/远端状态的操作都要 `--yes`（用户显式授权）。skill 不替用户做主。
 
-## 8. 决策日志与调研规则
+## 8. 保活：不让整支团队停摆
+
+- 恢复链路不依赖任何 agent：`systemd --user` 周期拉起 watchdog → watchdog 拉起 PM（`pi -c`，历史不丢）→
+  按 `state/` 里记的任务书续跑停了的 agent。
+- 粒度：PM 窗口里没有 pi 运行（空提示符）才动手，且用 `respawn-pane` 替掉那个 pane；窗口里在跑别的东西就不抢。
+- 防失控：PM 重启配额默认 1 小时 5 次，超了只告警。所有容量/重启/续跑动作都写 `state/watchdog.log` 与 `state/capacity.log`。
+- 人不在（下班、重启机器）回来后只需一条：`team up`。
+
+## 9. 容量：底线是 swap 不见底
+
+- 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。
+- RAM 紧张（< `TEAM_WARN_AVAIL_MB`）只警告：允许卡顿，因为慢不等于崩；OOM 才是真事故。
+- `team ps` / `team doctor` 直接用同一数据源报数，并给出“还能再加几个 agent”的估算（`TEAM_AGENT_MEM_MB`）。
+
+## 10. 决策日志与调研规则
 
 - 技术栈/选型（语言、框架、库、存储、协议）**先派 research agent 取证**（① 本机实测 > ② 官方文档 >
   ③ 二手资料；无实测必须标注），PM 复验证据链后才写「决定」。

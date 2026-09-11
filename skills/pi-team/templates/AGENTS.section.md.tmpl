@@ -47,6 +47,16 @@ PM 读收件箱 → team review <ID>（独立 worktree 复验，跑门禁）
 - 门禁命令：`{{GATES}}`（任务书里可以写更严格的命令，以任务书为准）。
 - 消息 ≠ 交付物：真正的证据在 `{{DOCS_DIR}}/reports/`、`{{DOCS_DIR}}/reviews/` 和 commit 里。
 
+### 保活（团队不能“全停”）
+
+恢复不依赖任何 agent：watchdog（`team watch`，推荐用 `team install-watchdog --yes` 装成 systemd --user 服务）
+会周期检查——PM 窗口里没有 pi 运行就用 `pi -c` 拉起并喂开场提示词，有未结任务但窗口没了的 agent 按
+`state/` 里记的任务书重新派单。人工救火一条命令：`team up`（建 session + 拉起 PM + 续跑停了的 agent）。
+
+- 回来上班/机器重启后：先 `team up`，再 `team digest`。
+- 被 watchdog 拉起时要先搞清楚断点：`team digest` → `team inbox --ack` → `team resume --dry-run`。
+- 容量底线是 **swap 不被打满**（RAM 紧张只会卡，不会拦）；`team ps` 看余量。
+
 ### 目录
 
 | 路径 | 归属 | 说明 |
