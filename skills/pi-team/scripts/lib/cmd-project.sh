@@ -64,6 +64,11 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
 
   smoke           在临时仓库里端到端自测这套工具（不碰当前项目）
   gh / gl          forge 透传：team gh pr list、team gl GET /projects/... （token 由 wrapper 注入）
+  ── 版本与更新（skill 更新怎么拿到） ─────────────────────────
+  mark-loaded [--version X]   记录本会话加载的 skill 版本（PM 开局跑一次）
+  version [--check]           看磁盘版本 / SKILL.md 版本 / CHANGELOG / 本会话加载版本；--check 给结论
+  changelog [--since X]       看 skill 变更史
+  reload [--done]             请求重载（在 Pi 里 /reload 或 /pi-team-reload 立即生效）
   version / help
 
 配置：项目根 .pi/team/config.sh（见 references/config.md）。
@@ -203,7 +208,9 @@ team_cmd_init() {
   rm -f "$section"
 
   # 4) .gitignore
-  team_gitignore_add ".pi/team/state/" "$docs/inbox/" "$docs/reviews/*.log" "${TEAM_WORKTREES_DIR:-.worktrees}/"
+  # token 文件必须默认忽略（PAT 泄漏是最容易犯的事）
+  team_gitignore_add ".pi/team/state/" "$docs/inbox/" "$docs/reviews/*.log" "${TEAM_WORKTREES_DIR:-.worktrees}/" \
+    "${TEAM_TOKEN_FILE:-.gh-pat}" "${TEAM_GITLAB_TOKEN_FILE:-.gitlab-pat}"
 
   printf '\n'
   team_hdr "下一步"

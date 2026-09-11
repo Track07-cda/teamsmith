@@ -123,6 +123,9 @@ team_cmd_digest() {
   for a in $(team_agents); do
     total=$((total + 1)); team_agent_live "$a" && live=$((live + 1))
   done
+  # skill 版本：本会话加载的 vs 磁盘（skill 更新靠 /reload）
+  printf '  %s\n' "$(team_update_notice)"
+
   printf '\n%s\n' "[1] 容量与存活"
   printf '  agent %s/%s 在跑 ｜ %s' "$live" "$total" "$(team_capacity_line)"
   local pm; pm="$(team_pm_state)"
@@ -176,7 +179,23 @@ team_cmd_digest() {
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
-  printf '\n%s\n' "[4] 任务板"
+  # 待收尾：agent 做了活但没收干净（脏工作区 / 未 push / 报告缺失）——CEP 实测的盲区
+  printf '\n%s\n' "[4] 待收尾（脏工作区 / 未 push）"
+  local sa swt sbranch sdirty sahead stask sany=0
+  for sa in $(team_agents); do
+    swt="$(team_agent_worktree "$sa")"
+    [ -d "$swt" ] || continue
+    IFS=$'\t' read -r sbranch sdirty sahead <<< "$(team_git_cols "$swt")"
+    [ "${sdirty:-0}" -gt 0 ] 2>/dev/null || [ "${sahead:-0}" -gt 0 ] 2>/dev/null || continue
+    sany=1
+    stask="$(team_state_get "$sa" task '-')"
+    printf '  %-10s 脏 %-3s 领先 %-3s ｜ %s ｜ %s\n' "$sa" "$sdirty" "$sahead" "$sbranch" "$stask"
+    printf '             → %s say %s "收尾：提交并 push"
+' "$TEAM_CLI" "$sa"
+  done
+  [ "$sany" -eq 0 ] && team_dim "  （无：没有脏工作区或未 push 的提交）"
+
+  printf '\n%s\n' "[5] 任务板"
   grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null | tail -n +3 | awk -F'|' 'NF>2{
     st=$(NF-1); gsub(/^[ \t]+|[ \t]+$/,"",st);
     if (st=="done") d++; else if (st=="wip") w++; else if (st=="review") r++; else if (st=="blocked") b++; else t++

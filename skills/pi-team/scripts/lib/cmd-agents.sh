@@ -243,19 +243,68 @@ team_cmd_dispatch() {
   team_dim "  旁观：tmux attach -t $TEAM_SESSION ｜ 追问：$TEAM_CLI say $agent \"...\""
 }
 
+team_pane_snapshot() { # <target> → pane 内容指纹（用于确认投递真的落到 TUI）
+  tmux capture-pane -p -t "$1" 2>/dev/null | tail -c 400 | cksum | tr -d ' \n'
+}
+
+# agent 没在跑时：消息仍然要落到收件箱（durable），但绝不打字（空提示符会当命令执行）
+team_say_offline() { # <agent> <msg> <原因>
+  local agent="$1" msg="$2" why="$3"
+  team_inbox_append "$agent" pm "（PM 消息，agent 未在跑：$why）$msg"
+  team_warn "say: $agent 没在跑（$why）—— 消息已落收件箱（$TEAM_DOCS_DIR/inbox/$agent.md）"
+  team_dim "  他起来后（或 $TEAM_CLI resume --agent $agent 续跑后）会读到；要立刻投递先让他跑起来"
+  return 0
+}
+
 team_cmd_say() {
-  local agent="${1:?usage: say <agent> <单行消息>}"; shift
-  [ $# -gt 0 ] || team_usage_die "say <agent> <单行消息>"
-  local msg="$*" w
-  w="$(team_state_get "$agent" window "$agent")"
-  team_tmux_has_window "$TEAM_SESSION" "$w" || team_die "窗口 $TEAM_SESSION:$w 不在（agent 没在跑？试试 $TEAM_CLI resume --agent $agent）"
+  local agent="" msg="" verify=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-verify) verify=0; shift ;;
+      -*) team_usage_die "say: 未知参数 $1" ;;
+      *) if [ -z "$agent" ]; then agent="$1"; elif [ -z "$msg" ]; then msg="$1"; else msg="$msg $1"; fi; shift ;;
+    esac
+  done
+  [ -n "$agent" ] && [ -n "$msg" ] || team_usage_die "say <agent> <单行消息> [--no-verify]"
+  case "$msg" in *$'\n'*) team_die "say 只能发单行：多行请写进文件，然后让 agent 去读" ;; esac
+  local w; w="$(team_state_get "$agent" window "$agent")"
+  team_tmux_has_window "$TEAM_SESSION" "$w" \
+    || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 0; }
   # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
   if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
-    team_die "窗口 $TEAM_SESSION:$w 里 pi 没在跑（空提示符），不发送；先 $TEAM_CLI resume --agent $agent 续跑"
+    team_say_offline "$agent" "$msg" "pi 已退出（空提示符）"
+    return 0
   fi
-  case "$msg" in *$'\n'*) team_die "say 只能发单行：多行请写进文件，然后让 agent 去读" ;; esac
-  team_tmux_send_text "$TEAM_SESSION:$w" "$msg" || team_die "发送失败"
-  team_ok "said to $TEAM_SESSION:$w: $msg"
+
+  local target="$TEAM_SESSION:$w"
+  local before=""; [ "$verify" = "1" ] && before="$(team_pane_snapshot "$target")"
+  team_tmux_send_text "$target" "$msg" || team_die "发送失败"
+  if [ "$verify" != "1" ]; then
+    team_ok "said to $target: $msg"
+    return 0
+  fi
+  # 投递校验（CEP 实测：agent 刚 settle 时 send-keys 可能被 TUI 吃掉——文本进去了/Enter 太早）
+  local i after
+  for i in 1 2 3 4 5 6; do
+    sleep 0.3
+    after="$(team_pane_snapshot "$target")"
+    [ "$after" != "$before" ] && { team_ok "said to $target: $msg（已确认送达）"; return 0; }
+    # 2、4 次没动静就补一次 Enter（TUI 有时只吃了文本）
+    case "$i" in 2|4) tmux send-keys -t "$target" Enter 2>/dev/null || true ;; esac
+  done
+  # 最后再整条重发一次
+  team_warn "第一次投递没看到 pane 变化，重发一次…"
+  team_tmux_send_text "$target" "$msg" || true
+  for i in 1 2 3 4; do
+    sleep 0.3
+    after="$(team_pane_snapshot "$target")"
+    [ "$after" != "$before" ] && { team_ok "said to $target: $msg（重发后确认送达）"; return 0; }
+    [ "$i" = "2" ] && tmux send-keys -t "$target" Enter 2>/dev/null || true
+  done
+  team_inbox_append "$agent" pm "（PM 消息，投递未确认）$msg"
+  team_err "投递未确认：$target 的 pane 没有变化（消息已写入收件箱 $TEAM_DOCS_DIR/inbox/$agent.md）"
+  team_dim "  手工兜底：tmux send-keys -t $target -l \"<消息>\"; tmux send-keys -t $target Enter" >&2
+  return 1
 }
 
 team_inbox_append() { # <agent> <tag> <msg>

@@ -213,13 +213,50 @@ team_cmd_merge() {
     team_die "先提交或撤销这些改动：git -C $TEAM_MAIN_ROOT status"
   fi
 
-  # --pr 意味着远端保护分支必须先更新，否则 forge 侧永远合不动
-  if [ -n "$pr" ] && [ "$push" != "1" ]; then push=1; team_dim "  给了 --pr：自动带上 --push"; fi
+  # --pr：**forge-first**。
+  # CEP 实测（2026-09-11）：旧顺序是"先本地 squash + push main，再合 PR"，主分支一被本地提交推进，
+  # PR 立刻不可合并（内容等价但提交不同），API 拒绝——而错误提示却甩锅给权限（细粒度 PAT 其实有 pull-requests: write）。
+  # 正确顺序：先让 forge 合（历史里保留真合并提交与 PR 链接），成功后 `git fetch && merge --ff-only` 更新本地。
   # 失败时要把 BOARD 还原成合并前的状态（不能“没进 main 却写 done”）
   local prev_status; prev_status="$(team_board_field "$(team_board_row "$id" 2>/dev/null || true)" status 2>/dev/null || true)"
   case "$prev_status" in ""|-|"—") prev_status="review" ;; esac
   local title merge_log; title="$(team_task_title "$id")"
   merge_log="$(mktemp)"
+
+  # ---------- forge-first：有 --pr 时先合 PR ----------
+  if [ -n "$pr" ]; then
+    local flog; flog="$(mktemp)"
+    team_info "先合 PR/MR #$pr（forge-first）："
+    if forge_merge_pr "$pr" > "$flog" 2>&1; then
+      team_ok "PR/MR #$pr 已由 forge 合并（squash）"
+      if team_git_main fetch --quiet "$TEAM_REMOTE" "$TEAM_PROTECTED_BRANCH" 2>/dev/null \
+         && team_git_main merge --ff-only FETCH_HEAD >/dev/null 2>&1; then
+        team_ok "本地 $TEAM_PROTECTED_BRANCH 已快进到 $(team_git_main rev-parse --short HEAD)"
+      else
+        team_warn "本地没快进（有本地提交或 fetch 失败）：手工 git -C $TEAM_MAIN_ROOT pull --ff-only $TEAM_REMOTE $TEAM_PROTECTED_BRANCH"
+      fi
+      if [ "$push" = "1" ]; then :; fi   # forge 侧已经更新了远端
+      if [ "$delete_branch" = "1" ]; then
+        team_git_main branch -D "$branch" >/dev/null 2>&1 && team_ok "deleted 本地分支 $branch"
+      fi
+      rm -f "$flog" "$merge_log"
+      team_board_set "$id" done 2>/dev/null || true
+      team_ok "board $id → done（PR #$pr 已合并）"
+      return 0
+    fi
+    # 失败：把 forge 的**真实错误**打出来，别再猜权限
+    team_warn "forge 合并 PR/MR #$pr 失败，输出如下："
+    tail -8 "$flog" | sed 's/^/    /' >&2
+    case "$(cat "$flog" 2>/dev/null)" in
+      *"not mergeable"*|*"405"*|*"422"*|*"conflict"*|*"不可合并"*)
+        team_dim "  这通常是「PR 与 base 分支冲突 / 已不可合并」，不是权限问题（细粒度 PAT 也可能有 pull-requests: write）" >&2 ;;
+      *"403"*|*"Forbidden"*|*"not authorized"*)
+        team_dim "  这看起来是权限/授权问题（检查 PAT scope 与仓库权限）" >&2 ;;
+    esac
+    team_dim "  回落到本地路径：squash → push → 留言记录 → 关闭该 PR" >&2
+    rm -f "$flog"
+    push=1
+  fi
   local merge_args=(merge --squash)
   [ "$no_renames" = "1" ] && merge_args=(-c merge.renames=false merge --squash)
   # 失败收口：还原 BOARD 状态 + 给可复制粘贴的恢复步骤
@@ -296,12 +333,8 @@ team_cmd_merge() {
   team_ok "board $id → done"
 
   if [ -n "$pr" ]; then
-    if forge_merge_pr "$pr" >/dev/null 2>&1; then
-      team_ok "PR #$pr 已由 forge 合并（squash）"
-    else
-      team_warn "forge 合并 PR #$pr 失败（常见：PAT 缺 pull-requests: write）"
-      forge_pr_record_and_close "$pr" "$(team_git_main rev-parse --short HEAD)" "$branch" || true
-    fi
+    # 走到这里说明 forge-first 已经失败过（前面已打印真实错误并回落到本地路径）
+    forge_pr_record_and_close "$pr" "$(team_git_main rev-parse --short HEAD)" "$branch" || true
   fi
 }
 

@@ -74,6 +74,16 @@ team meeting close order-api --summary "契约已定；遗留：批量提交的�
   前提：① 全局开关 `TEAM_MEETING_KNOCK=1`；② `open` 时登记了对方 session；③ 对方窗口里正在跑 pi。
 - 敲门是**唯一**允许的跨 session 动作，且只发"有消息"这一行——不替对方做任何决定。
 
+## 敲门失败怎么查
+
+```bash
+team meeting peer <slug> <项目>:<session>   # 事后登记/更新对方 session（open 时没写也能补）
+team meeting knock <slug>                   # 登记完重敲最后一条发言
+```
+
+`knock` 会按顺序报五件事：① `TEAM_MEETING_KNOCK` 开关 ② 对方 session 是否登记 ③ tmux 里有没有那个
+session ④ 对方 PM 窗口里是否真的在跑 pi ⑤ 边界守卫是否放行。**敲门失败不影响消息**——它已经在共享区里。
+
 ## 守卫（代码级）
 
 | 守卫 | 行为 |

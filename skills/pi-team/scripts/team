@@ -38,7 +38,8 @@ if [ "${#ARGS[@]}" -gt 0 ]; then set -- "${ARGS[@]:1}"; else set --; fi
 
 # help/version 不需要配置或 git 仓库
 case "$CMD" in
-  version) printf 'pi-team %s\n' "$TEAM_VERSION"; exit 0 ;;
+  # `team version`（无参）走快路径；`version --check` 需要项目上下文，交给下面的分发
+  version) if [ $# -eq 0 ]; then printf 'pi-team %s\n' "$TEAM_VERSION"; exit 0; fi ;;
 esac
 
 TEAM_SKILL_DIR="$(team_skill_dir)"
@@ -90,6 +91,10 @@ case "$CMD" in
   watchdog-status)    team_cmd_watchdog_status "$@" ;;
   standby)            team_cmd_standby "$@" ;;
   meeting)            team_cmd_meeting "$@" ;;
+  version)            if [ "${1:-}" = "--check" ] || [ "${1:-}" = "check" ]; then team_cmd_version_check; else team_cmd_version_brief; fi ;;
+  mark-loaded)        team_cmd_mark_loaded "$@" ;;
+  reload)             team_cmd_reload "$@" ;;
+  changelog)          team_cmd_changelog "$@" ;;
   smoke|test) team_cmd_smoke "$@" ;;
   *)          team_usage_die "未知子命令：$CMD" ;;
 esac

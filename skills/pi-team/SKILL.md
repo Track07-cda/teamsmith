@@ -3,7 +3,7 @@ name: pi-team
 description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（podman 容器看门狗：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a podman container, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗容器 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.8.0"
+  version: "1.9.0"
 ---
 
 # pi-team · Pi Agent 团队
@@ -57,15 +57,16 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | 收件箱 | `team inbox [agent] [--ack] [--all]` |
 | 文档契约 | `team task <ID> --title ... --agent a`、`team board add\|set\|ls`、`team thread <a> "..." --from pm --re <ID>`、`team report <ID> <a>` |
 | 派单 | `team add-agent <a>`、`team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--print]` |
-| 协作 | `team say <a> "<单行消息>"`、`team notify <a> "<一句话>"`（agent→PM） |
+| 协作 | `team say <a> "<单行消息>" [--no-verify]`（发送后校验送达；agent 没在跑时落收件箱并提示 `resume`）、`team notify <a> "<一句话>"`（agent→PM） |
 | 复验 | `team review <ID> [--branch b] [--no-gates] [--strong]` → `reviews/<ID>.md`（门禁带硬超时；`--strong` 要求对抗性验证包 + finding 翻转证据） |
-| 合并/收尾 | `team merge <ID> [--push] [--pr N] [--no-renames] [--prefer-theirs <path>]`（`--pr` 顺手合 PR 并自动带 `--push`；无权限时走本地兜底；BOARD 只在 merge+push 都成功后标 done）、`team pr <ID>`、`team close <ID> [--delete-branch]`、`team teardown --agent a [--purge]` |
+| 合并/收尾 | `team merge <ID> [--push] [--pr N] [--no-renames] [--prefer-theirs <path>]`（`--pr` 走 **forge-first**：先合 PR 再快进本地；forge 失败才回落本地 squash+push+留言+关 PR，并打印真实错误；BOARD 只在成功后才标 done）、`team pr <ID>`、`team close <ID> [--delete-branch]`、`team teardown --agent a [--purge]` |
 | 初始化 | `team bootstrap [--agents "dev verify"] [--print]`（推荐）、`team init`、`team doctor` |
 | 看门狗 | `team watchdog up\|down\|restart\|status\|logs`（默认 tmux 后端：同 session 的 `watchdog` 窗口跑监视器；`--container` 换 podman 容器）、`team watch [--once]`（前台巡检） |
 | 监视器 | `team monitor [--once] [--activity]`（**只服务当前 tmux session**：谁在跑/任务/待办/容量；`--activity` 才追加各 agent 会话活动流，默认关）、`team panel` 由它复用 |
 | PM/agent | `team up [--agents]`（恢复 PM）、`team resume`（PM 的工具，续跑停了的 agent）、`team standby on\|off`（PM 主动停工） |
 | 跨项目会议 | `team meeting open/say/read/list/inbox/propose/agree/close`（PM 对 PM 的 peer 交流：接口对接/建议/问题报告；**不是指令通道**，共识需双方 agree） |
 | forge 透传 | `team gh <gh 参数…>`、`team gl <METHOD> <path>`（token 由 wrapper 注入，不回显） |
+| 更新 | `team mark-loaded`（开局记版本）、`team version --check`（是否该刷新）、`team changelog [--since X]`、`team reload` |
 | 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测）、`team version` |
 
 ## 作为 PM 的循环（你该怎么做）
@@ -92,6 +93,24 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 
 PM 需要停下来问用户的情况只有：合并/推送等**共享状态变更**（skill 用 `--yes` 表达授权）、
 范围变更、需要用户拍板的选型（先派调研任务取证，再写 `DECISIONS.md`）。
+
+## 拿到 skill 更新（三条路径）
+
+```bash
+bash <skill>/scripts/team mark-loaded      # PM 开局记一次：我这一会话加载的是哪个版本
+bash <skill>/scripts/team version --check  # 任何时候：磁盘版本 vs 本会话版本 + 生效方式
+bash <skill>/scripts/team changelog        # 变更史（--since v1.8.0 只看新的）
+```
+
+| 内容 | 生效方式 |
+|---|---|
+| `scripts/**`（CLI） | **零操作**：每次调用现读盘 |
+| `SKILL.md` / `references/**` / `templates/**` | 在 Pi 里输入 **`/reload`**（或 `/pi-team-reload`，或让模型调 `reload_skills` 工具） |
+| `extension/team-notify.ts` | 同上（`/reload` 会清扩展缓存并重新 import） |
+
+依据：Pi 的 `/reload` 会重新发现 skill 并重建 system prompt，同时清扩展模块缓存、重新解析
+`--skill`/`-e` 传入的路径。`team version --check` 提示"本会话是旧的"时，按上面表格操作即可；
+不需要重启整个会话（`-c` 重启也不会丢历史，但没必要）。
 
 ## 跨项目边界（谈事可以，指挥不行）
 

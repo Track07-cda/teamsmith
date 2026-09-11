@@ -19,6 +19,7 @@ ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
 assert_file()  { [ -f "$1" ] && ok "$2" || bad "$2（缺 $1）"; }
 assert_dir()   { [ -d "$1" ] && ok "$2" || bad "$2（缺目录 $1）"; }
+assert_not_file() { [ ! -e "$1" ] && ok "$2" || bad "$2（$1 不该存在）"; }
 assert_has()   { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 中找不到 [$2]）"; }
 assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 中没有匹配 [$2]）"; }
 assert_not()   { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
@@ -699,7 +700,8 @@ if [ "$HAVE_TMUX" = "1" ]; then
   sleep 1.5
   $TEAM roster >"$TMP/roster-dead.log" 2>&1
   assert_has "$TMP/roster-dead.log" "pi 已退出" "roster 能区分「窗口在但 pi 已退出」"
-  if $TEAM say dev "ping" >/dev/null 2>&1; then bad "agent 没在跑时 say 应当拒绝（防把消息当命令执行）"; else ok "agent 没在跑时 say 拒绝发送"; fi
+  if $TEAM say dev "ping" >"$TMP/say-idle.log" 2>&1; then ok "agent 没在跑时 say 落收件箱并返回 0"; else bad "say 不应硬失败（应落收件箱）"; fi
+  assert_has "$TMP/say-idle.log" "收件箱" "说明消息进了收件箱（而不是打进 shell）"
 
   # watchdog 不该替 PM 做决定：跑一轮巡检，dev 仍未被续跑
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
@@ -834,6 +836,113 @@ $TEAM meeting say order-api --intent info "关了还能说吗" >"$TMP/mtg-after.
 $TEAM meeting read order-api >/dev/null 2>&1 && ok "close 后仍可读（只读）" || bad "close 后应可读"
 unset TEAM_MEETINGS_DIR
 
+# ---------------------------------------------------------------- 11f. 更新分发与版本自检
+section "11f · 更新与版本自检（mark-loaded / version --check / changelog）"
+assert_file "$SKILL_DIR/CHANGELOG.md" "skill 带 CHANGELOG"
+CODE_V="$(grep -m1 '^TEAM_VERSION=' "$SKILL_DIR/scripts/lib/common.sh" | cut -d'"' -f2)"
+DOC_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKILL_DIR/SKILL.md" | head -1)"
+LOG_V="$(sed -n 's/^##[[:space:]]*\[*v\?\([0-9.]*\)\]*.*/\1/p' "$SKILL_DIR/CHANGELOG.md" | head -1)"
+assert_eq "版本号三处一致（common/SKILL/CHANGELOG）" "$CODE_V|$DOC_V|$LOG_V" "$CODE_V|$CODE_V|$CODE_V"
+
+$TEAM mark-loaded >"$TMP/mark.log" 2>&1 && ok "mark-loaded 退出码 0" || bad "mark-loaded 失败"
+assert_has "$TMP/mark.log" "$CODE_V" "mark-loaded 记录了当前版本"
+assert_file "$REPO/.pi/team/state/pm-loaded.env" "版本记录写进 state"
+assert_has "$REPO/.pi/team/state/pm-loaded.env" "HASH=" "记录里含内容指纹"
+
+$TEAM version --check >"$TMP/vcheck.log" 2>&1 && ok "version --check 退出码 0" || bad "version --check 失败"
+assert_has "$TMP/vcheck.log" "一致" "本会话与磁盘一致时给出「一致」"
+assert_has "$TMP/vcheck.log" "CHANGELOG" "打印了 CHANGELOG 版本"
+
+# 模拟“本会话是旧的”：提示要给出 /reload 与三条生效路径
+$TEAM mark-loaded --version 1.7.0 >/dev/null 2>&1
+$TEAM version --check >"$TMP/vcheck-old.log" 2>&1 || true
+assert_has "$TMP/vcheck-old.log" "本会话是旧的" "旧版本会话被识别"
+assert_has "$TMP/vcheck-old.log" "/reload" "提示了 /reload 生效方式"
+assert_has "$TMP/vcheck-old.log" "scripts/**" "说明了 scripts 不需要刷新"
+$TEAM mark-loaded >/dev/null 2>&1
+
+$TEAM changelog >"$TMP/changelog.log" 2>&1 && assert_has "$TMP/changelog.log" "$CODE_V" "changelog 打印当前版本" || bad "changelog 失败"
+$TEAM reload >"$TMP/reload-req.log" 2>&1 && assert_file "$REPO/.pi/team/state/reload-requested" "reload 写了请求标记" || bad "reload 失败"
+$TEAM reload --done >/dev/null 2>&1
+assert_not_file "$REPO/.pi/team/state/reload-requested" "reload --done 清掉标记"
+
+# digest / doctor 要带版本行
+$TEAM digest >"$TMP/digest-skill.log" 2>&1 || true
+assert_has "$TMP/digest-skill.log" "skill " "digest 显示 skill 版本行"
+$TEAM doctor >"$TMP/doctor-skill.log" 2>&1 || true
+assert_match "$TMP/doctor-skill.log" "skill|pi-team" "doctor 里能看到 skill 信息"
+
+# ---------------------------------------------------------------- 11g. CEP 三条实测反馈
+section "11g · CEP 反馈（forge-first / say 投递校验 / knock 诊断）"
+# ① --pr 走 forge-first：forge 可用时不再先本地 push（用桩 gh 验证调用顺序）
+FAKEGH="$TMP/fakegh"; mkdir -p "$FAKEGH"
+cat > "$FAKEGH/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$1 $2" in
+  "pr merge") exit 0 ;;
+  *) echo '{}' ;;
+esac
+GHSTUB
+chmod +x "$FAKEGH/gh"
+GH_LOG="$TMP/gh-calls.log"; : > "$GH_LOG"
+PATF="$REPO/.gh-pat"; printf 'dummy\n' > "$PATF"; chmod 600 "$PATF"
+(cd "$REPO/.worktrees/dev" && git switch -c task/T9.7-ff >/dev/null 2>&1 && echo ff > ff.txt && git add -A && git -c user.email=a@b -c user.name=a commit -qm "feat: ff test") >/dev/null 2>&1
+MAIN_PRE="$(git -C "$REPO" rev-parse --short HEAD)"
+if env PATH="$FAKEGH:$PATH" GH_LOG="$GH_LOG" TEAM_ROOT="$REPO" TEAM_MEETINGS_DIR="$TMP/meetings" \
+    TEAM_VCS=github TEAM_TOKEN_FILE="$PATF" $TEAM merge T9.7 --branch task/T9.7-ff --pr 42 --yes --no-review-check \
+    >"$TMP/merge-ff.log" 2>&1; then
+  ok "forge-first 合并成功"
+else bad "forge-first 合并失败"; cat "$TMP/merge-ff.log"; fi
+assert_has "$TMP/merge-ff.log" "先合 PR" "先尝试 forge 合并"
+assert_has "$GH_LOG" "pr merge --squash --delete-branch 42" "调用了 gh pr merge（squash）"
+assert_eq "forge-first 时没有本地 squash 提交" "$(git -C "$REPO" rev-parse --short HEAD)" "$MAIN_PRE"
+assert_has "$TMP/merge-ff.log" "board T9.7 → done" "合并成功后标 done"
+git -C "$REPO" branch -D task/T9.7-ff >/dev/null 2>&1 || true
+(cd "$REPO/.worktrees/dev" && git switch --detach main >/dev/null 2>&1) || true
+rm -f "$REPO/ff.txt"
+
+# forge 合并失败：要打印真实错误，并且不再断言“PAT 缺权限”是原因
+cat > "$FAKEGH/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+echo "GraphQL: Pull request is not mergeable (mergePullRequest)" >&2
+exit 1
+GHSTUB
+chmod +x "$FAKEGH/gh"
+(cd "$REPO/.worktrees/dev" && git switch -c task/T9.6-bad >/dev/null 2>&1 && echo bad > bad.txt && git add -A && git -c user.email=a@b -c user.name=a commit -qm "feat: bad pr") >/dev/null 2>&1
+env PATH="$FAKEGH:$PATH" GH_LOG="$GH_LOG" TEAM_ROOT="$REPO" TEAM_VCS=github TEAM_TOKEN_FILE="$PATF" \
+  $TEAM merge T9.6 --branch task/T9.6-bad --pr 43 --yes --no-review-check >"$TMP/merge-badpr.log" 2>&1 || true
+assert_has "$TMP/merge-badpr.log" "not mergeable" "打印了 forge 的真实错误"
+assert_has "$TMP/merge-badpr.log" "不是权限问题" "区分了「不可合并」与「权限」"
+git -C "$REPO" reset --mixed HEAD~1 >/dev/null 2>&1 || true
+git -C "$REPO" branch -D task/T9.6-bad >/dev/null 2>&1 || true
+(cd "$REPO/.worktrees/dev" && git switch --detach main >/dev/null 2>&1) || true
+rm -f "$REPO/bad.txt"
+
+# ② say：agent 没在跑 → 落收件箱 + 明确提示（不再硬失败）
+if [ "$HAVE_TMUX" = "1" ]; then
+  tmux kill-window -t "$SESSION:dev" >/dev/null 2>&1 || true
+  $TEAM say dev "收尾：提交这 2 个文件并 push" >"$TMP/say-offline.log" 2>&1 && ok "say 在 agent 没跑时返回 0（落收件箱）" \
+    || bad "say 在 agent 没跑时不应硬失败"
+  assert_has "$TMP/say-offline.log" "收件箱" "提示消息已落收件箱"
+  assert_has "$REPO/docs/team/inbox/dev.md" "收尾：提交这 2 个文件并 push" "消息确实写进收件箱"
+  assert_has "$TMP/say-offline.log" "resume" "推荐用 resume 让人回来读"
+fi
+
+# ③ knock 诊断 + meeting peer / knock 命令
+export TEAM_MEETINGS_DIR="$TMP/meetings"
+$TEAM meeting open knock-test --with "other-$$" --topic "敲门测试" --yes >/dev/null 2>&1 || true
+$TEAM meeting peer knock-test "other-$$:$SESSION" >"$TMP/peer.log" 2>&1 && ok "meeting peer 登记 session" || { bad "meeting peer 失败"; cat "$TMP/peer.log"; }
+assert_has "$TMP/peer.log" "已登记" "登记有回显"
+$TEAM meeting say knock-test --intent info "敲门测试消息" >/dev/null 2>&1 || true
+TEAM_MEETING_KNOCK=0 $TEAM meeting knock knock-test >"$TMP/knock-off.log" 2>&1 || true
+assert_has "$TMP/knock-off.log" "TEAM_MEETING_KNOCK=0" "敲门被全局开关拦住时说明原因"
+TEAM_MEETING_KNOCK=1 $TEAM meeting knock knock-test >"$TMP/knock-on.log" 2>&1 || true
+assert_match "$TMP/knock-on.log" "敲门排查|只落盘|已敲门" "开门时给出结论或排查清单"
+$TEAM meeting knock no-such-meeting >"$TMP/knock-bad.log" 2>&1 || true
+assert_has "$TMP/knock-bad.log" "会议不存在" "不存在的会议给出明确报错"
+unset TEAM_MEETINGS_DIR
+
 # ---------------------------------------------------------------- 12. 观察类命令
 section "12 · roster / status / ps"
 for c in roster status ps; do
@@ -855,7 +964,12 @@ delete process.env.TMUX_PANE
 delete process.env.TMUX
 const mod = await import(ext)
 let handler = null
-mod.default({ on: (name, fn) => { if (name === 'agent_settled') handler = fn } })
+const registered = { commands: [], tools: [] }
+mod.default({
+  on: (name, fn) => { if (name === 'agent_settled') handler = fn },
+  registerCommand: (name) => { registered.commands.push(name) },
+  registerTool: (def) => { registered.tools.push(def?.name) },
+})
 if (!handler) { console.error('FAIL: 没有注册 agent_settled'); process.exit(3) }
 const inbox = join(root, 'docs/team/inbox/dev.md')
 rmSync(inbox, { force: true })
@@ -872,6 +986,8 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
 const before = readFileSync(inbox, 'utf8')
 await handler({}, { cwd: root, sessionManager: { getEntries: () => [] } })   // 主工作树不该触发
 if (readFileSync(inbox, 'utf8') !== before) { console.error('FAIL: 非 worktree 路径也写了收件箱'); process.exit(7) }
+if (!registered.commands.includes('pi-team-reload')) { console.error('FAIL: 没注册 /pi-team-reload 命令'); process.exit(8) }
+if (!registered.tools.includes('reload_skills')) { console.error('FAIL: 没注册 reload_skills 工具'); process.exit(9) }
 console.log('ext-ok')
 EOF
   if $TS_RUNNER "$TMP/ext-test.mjs" "$SKILL_DIR/extension/team-notify.ts" "$REPO" "$REPO/.worktrees/dev" >"$TMP/ext.log" 2>&1; then

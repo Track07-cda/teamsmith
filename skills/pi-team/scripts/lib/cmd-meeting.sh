@@ -121,11 +121,13 @@ team_cmd_meeting() {
     read)    team_meeting_read "$@" ;;
     list)    team_meeting_list "$@" ;;
     inbox)   team_meeting_inbox "$@" ;;
+    peer)    team_meeting_peer "$@" ;;
+    knock)   team_meeting_knock_cmd "$@" ;;
     propose) team_meeting_propose "$@" ;;
     agree)   team_meeting_agree "$@" ;;
     close)   team_meeting_close "$@" ;;
     help|--help|-h) team_meeting_help ;;
-    *) team_usage_die "meeting: 未知子命令 $sub（open|say|read|list|inbox|propose|agree|close）" ;;
+    *) team_usage_die "meeting: 未知子命令 $sub（open|say|read|list|inbox|peer|knock|propose|agree|close）" ;;
   esac
 }
 
@@ -304,10 +306,24 @@ team_meeting_say() {
 }
 
 # 敲门：唯一允许的跨 session 动作 —— 只发一条"有会议消息"通知，对方自己决定怎么回
+# 敲门失败的排查清单（CEP 报过"敲门失败"却不知道卡在哪）
+team_meeting_knock_diag() { # <slug> <target> <peer_sess>
+  local slug="$1" target="$2" peer_sess="$3"
+  printf '  敲门排查（按顺序）：\n'
+  printf '    1) 全局开关        %s\n' "$([ "${TEAM_MEETING_KNOCK:-0}" = "1" ] && echo "TEAM_MEETING_KNOCK=1 ✓" || echo "TEAM_MEETING_KNOCK=0 ✗ ← 用它拦住的；设 1 才允许敲门")"
+  printf '    2) 对方 session    %s\n' "${peer_sess:-（未登记）← 跑 $TEAM_CLI meeting peer $slug <项目>:<session>}"
+  printf '    3) session 存在    %s\n' "$(tmux has-session -t "$peer_sess" 2>/dev/null && echo "✓ $peer_sess" || echo "✗ tmux 里没有 $peer_sess")"
+  printf '    4) PM 窗口在跑 pi %s\n' "$(team_pane_busy "$target" && echo "✓ $target" || echo "✗ $target 没在跑 pi（空提示符/不存在）")"
+  printf '    5) 边界守卫        %s\n' "$(team_foreign_target_ok "$target" "$slug" >/dev/null 2>&1 && echo "✓ 已登记会议的敲门放行" || echo "✗ 目标 session 不在本会议登记里")"
+  printf '  注：敲门失败不影响消息——它已经在共享区，对方 $TEAM_CLI meeting inbox 能看到。\n'
+  return 0
+}
+
 team_meeting_knock() { # <slug> <sender> <intent>
   local slug="$1" sender="$2" intent="$3"
   if [ "${TEAM_MEETING_KNOCK:-0}" != "1" ]; then
     team_dim "  --knock 被全局开关拦住（TEAM_MEETING_KNOCK=0）：只落盘不打扰对方"
+    team_dim "  要允许敲门：在双方项目 config 里设 TEAM_MEETING_KNOCK=1（或临时 TEAM_MEETING_KNOCK=1 $TEAM_CLI meeting say … --knock）"
     return 0
   fi
   team_have_cmd tmux || { team_warn "没有 tmux：敲门跳过（消息仍在共享区）"; return 0; }
@@ -320,17 +336,23 @@ team_meeting_knock() { # <slug> <sender> <intent>
     esac
   done
   if [ -z "$peer_sess" ]; then
-    team_dim "  对方 session 未知（open 时用 --with <项目>:<session> 登记后就能敲门）"
+    team_dim "  对方 session 未知 → 只落盘"
+    team_dim "  登记方式：$TEAM_CLI meeting peer $slug ${peer_proj:-<对方项目>}:<对方 session>（然后重敲：$TEAM_CLI meeting knock $slug）"
     return 0
   fi
   local target="$peer_sess:$(team_meeting_state "$slug" PM_WINDOW pm)"
-  team_foreign_target_ok "$target" "$slug" || { team_warn "敲门被边界守卫拒绝：$target"; return 1; }
-  if ! team_have_cmd tmux || ! tmux has-session -t "$peer_sess" 2>/dev/null; then
+  if ! team_foreign_target_ok "$target" "$slug"; then
+    team_meeting_knock_diag "$slug" "$target" "$peer_sess"
+    return 1
+  fi
+  if ! tmux has-session -t "$peer_sess" 2>/dev/null; then
     team_dim "  对方 session 不在（$peer_sess）：只落盘"
+    team_meeting_knock_diag "$slug" "$target" "$peer_sess"
     return 0
   fi
   if ! team_pane_busy "$target"; then
     team_dim "  对方 PM 窗口没在跑 pi（$target）：只落盘（等他起来看 inbox）"
+    team_meeting_knock_diag "$slug" "$target" "$peer_sess"
     return 0
   fi
   local notice="[meeting:$slug] $sender 有新发言（intent=$intent）→ 跑 $TEAM_CLI meeting read $slug"
@@ -342,6 +364,49 @@ team_meeting_knock() { # <slug> <sender> <intent>
     team_warn "敲门失败（消息仍在共享区）"
   fi
   return 0
+}
+
+team_meeting_peer() { # <slug> <项目>[:<session>] —— 登记/更新参与方的 tmux session（敲门用）
+  local slug="${1:?usage: meeting peer <slug> <项目>[:<session>]}"; shift || true
+  team_meeting_require_open "$slug" say
+  local spec="${1:?需要 <项目>[:<session>]}"
+  local proj="${spec%%:*}" sess=""
+  case "$spec" in *:*) sess="${spec#*:}" ;; esac
+  [ -n "$sess" ] || team_die "需要 session：$TEAM_CLI meeting peer $slug $proj:<session>（用 tmux ls 看）"
+  case ",$(team_meeting_participants "$slug")," in
+    *",$proj,"*) ;;
+    *) team_die "$proj 不是本会议参与方（参与方：$(team_meeting_participants "$slug")）" ;;
+  esac
+  local map newmap="" kv found=0
+  map="$(team_meeting_peer_sessions "$slug")"
+  for kv in $(printf '%s' "$map" | tr ';' ' '); do
+    case "$kv" in
+      ""|"$proj="*) [ -n "$kv" ] && newmap="${newmap:+$newmap;}$proj=$sess" && found=1 ;;
+      *) newmap="${newmap:+$newmap;}$kv" ;;
+    esac
+  done
+  [ "$found" = "0" ] && newmap="${newmap:+$newmap;}$proj=$sess"
+  team_meeting_set "$slug" PEER_SESSIONS "$newmap"
+  team_ok "已登记 $proj=$sess（敲门目标 $sess:$(team_meeting_state "$slug" PM_WINDOW pm)）"
+  [ "$proj" != "$TEAM_PROJECT" ] && team_dim "  提示：登记的是对方 session；对方也可以自己登记自己的（以他那边的为准）"
+  return 0
+}
+
+team_meeting_knock_cmd() { # <slug> —— 重新敲门（登记 session 之后用）
+  local slug="${1:?usage: meeting knock <slug>}"
+  team_meeting_require_open "$slug" say
+  local last_intent="" f seq="" from=""
+  f="$(ls "$(team_meeting_dir "$slug")/transcript/"*.md 2>/dev/null | sort | tail -1)"
+  if [ -z "$f" ]; then
+    team_warn "这个会议还没有发言：先 $TEAM_CLI meeting say $slug --intent info \"…\"，再敲门"
+    return 0
+  fi
+  from="$(grep -s '^from:' "$f" | head -1 | cut -d: -f2- | tr -d ' ')"
+  last_intent="$(grep -s '^intent:' "$f" | head -1 | cut -d: -f2- | tr -d ' ')"
+  seq="$(basename "$f" | cut -c1-4)"
+  seq=$((10#${seq:-0}))
+  team_info "重敲最后一条发言（#$seq from=${from:-?} intent=${last_intent:-?}）"
+  team_meeting_knock "$slug" "${from:-$TEAM_PROJECT}" "${last_intent:-info}"
 }
 
 # ---------------------------------------------------------------- read / list / inbox

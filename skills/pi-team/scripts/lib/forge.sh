@@ -5,7 +5,12 @@
 #   - token 只从文件读取，且只在 exec 的环境里注入，绝不回显、绝不进日志/命令行/提交信息；
 #   - 任何写操作都必须带 --yes（用户显式授权），skill 不替用户改远端状态。
 
-forge_github_pat() { printf '%s\n' "$TEAM_MAIN_ROOT/$TEAM_TOKEN_FILE"; }
+forge_github_pat() { # 支持绝对路径（否则按主工作树相对路径解析）
+  case "$TEAM_TOKEN_FILE" in
+    /*) printf '%s\n' "$TEAM_TOKEN_FILE" ;;
+    *)  printf '%s\n' "$TEAM_MAIN_ROOT/$TEAM_TOKEN_FILE" ;;
+  esac
+}
 
 forge_gh() { # <gh args...>
   local pat; pat="$(forge_github_pat)"
@@ -15,8 +20,10 @@ forge_gh() { # <gh args...>
 }
 
 forge_gitlab_token() {
-  [ -f "$TEAM_GITLAB_TOKEN_FILE" ] || team_die "找不到 GitLab token 文件：$TEAM_GITLAB_TOKEN_FILE"
-  printf '%s\n' "$TEAM_GITLAB_TOKEN_FILE"
+  local f="$TEAM_GITLAB_TOKEN_FILE"
+  case "$f" in /*) ;; *) f="$TEAM_MAIN_ROOT/${f:-.gitlab-pat}" ;; esac
+  [ -f "$f" ] || team_die "找不到 GitLab token 文件：$f"
+  printf '%s\n' "$f"
 }
 
 # GitLab 项目路径 → API 用的 URL 编码 id
@@ -115,14 +122,14 @@ forge_pr_body() { # <ID> → 选一个 body 文件
 
 # 合并 PR/MR。注意：很多 PAT 没有 `pull-requests: write`（CEP 就是 403）。
 # 所以这里返回非 0 让调用方走本地兜底，而不是把失败当致命错误。
-forge_merge_pr() { # <pr-number-or-iid>
+forge_merge_pr() { # <pr-number-or-iid>；失败一律 return 1（让调用方回落，不要 exit）
   local n="$1"
   case "$TEAM_VCS" in
     github)
       local pat; pat="$(forge_github_pat)"
-      team_require_cmd gh "TEAM_VCS=github 需要 gh"
-      [ -f "$pat" ] || team_die "找不到 PAT 文件 $TEAM_TOKEN_FILE"
-      GH_TOKEN="$(<"$pat")" gh pr merge --squash --delete-branch "$n" ;;
+      if ! team_have_cmd gh; then team_err "缺 gh（TEAM_VCS=github 需要）"; return 1; fi
+      if [ ! -f "$pat" ]; then team_err "找不到 PAT 文件：$pat"; return 1; fi
+      GH_TOKEN="$(<"$pat")" gh pr merge --squash --delete-branch "$n" || return 1 ;;
     gitlab)
       local pid; pid="$(forge_gitlab_project_id)"
       forge_gitlab_api PUT "/projects/$pid/merge_requests/$n/merge" | head -c 500 ;;

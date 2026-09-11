@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.8.0"
+TEAM_VERSION="1.9.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -973,7 +973,8 @@ team_main_dirty_external() {
     [ -n "$line" ] || continue
     path="${line:3}"; path="${path##* -> }"
     case "$path" in
-      "$TEAM_DOCS_DIR/"*|.pi/team/*) [ "${TEAM_DEBUG:-0}" = "1" ] && printf 'ignored: %s\n' "$line" >&2 ; continue ;;
+      "$TEAM_DOCS_DIR/"*|.pi/team/*|"${TEAM_TOKEN_FILE:-.gh-pat}"|"${TEAM_GITLAB_TOKEN_FILE:-.gitlab-pat}")
+        [ "${TEAM_DEBUG:-0}" = "1" ] && printf 'ignored: %s\n' "$line" >&2 ; continue ;;
       *) printf '%s\n' "$line" ;;
     esac
   done

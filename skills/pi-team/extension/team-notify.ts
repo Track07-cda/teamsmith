@@ -193,6 +193,8 @@ export default function (pi: ExtensionAPI) {
     const task = /^(?:task|agent)\/([^/]+)/.exec(branch)?.[1] ?? ''
     const id = task.split('-')[0] || 'unknown'
     const dirty = run('git', ['-C', cwd, 'status', '--porcelain']).split('\n').filter(Boolean).length
+    // 未提交 = 没交付干净：让 PM 一眼看出来（CEP 实测：这种状态和"干净交付"在通知里长得一样）
+    const dirtyFlag = dirty > 0 ? `⚠ 未提交 ${dirty} 个文件 · ` : '' 
     const upstream = run('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
     const unpushed = upstream
       ? run('git', ['-C', cwd, 'rev-list', '--count', '@{upstream}..HEAD']) || '?'
@@ -242,7 +244,7 @@ export default function (pi: ExtensionAPI) {
       return
     }
 
-    const line = `${new Date().toISOString()} ${summary}${last ? ` :: ${last}` : ''}`
+    const line = `${new Date().toISOString()} ${dirtyFlag}${summary}${last ? ` :: ${last}` : ''}`
     try {
       const dir = join(root, cfg.docsDir, 'inbox')
       mkdirSync(dir, { recursive: true })
@@ -262,11 +264,56 @@ export default function (pi: ExtensionAPI) {
         log(`skip tmux notify (pm not running: pane=${paneCmd || 'missing'}) inbox only`, cfg)
         return
       }
-      const notice = `${summary}${last ? `\n> ${last}` : ''}`
+      const notice = `${dirtyFlag}${summary}${last ? `\n> ${last}` : ''}`
       execFileSync('tmux', ['send-keys', '-t', target, '-l', notice], { timeout: 5000 })
       execFileSync('tmux', ['send-keys', '-t', target, 'Enter'], { timeout: 5000 })
     } catch {
       /* PM 窗口不在：只留收件箱 */
     }
   })
+
+  // ---------------------------------------------------------------------------
+  // skill 热重载：/pi-team-reload（/reload 的别名，语义更直白）
+  //
+  // 为什么需要：skill 更新后，`scripts/**` 立刻生效，但 SKILL.md 的清单/描述
+  // 只在下一次资源加载时才刷新。Pi 的 /reload 会重新发现 skills 并重建 system prompt，
+  // 所以 PM 发现版本落后时跑这个命令即可，不必重启会话。
+  // 工具 reload_skills 让模型也能自助触发：Pi 的工具跑在 ExtensionContext 里，
+  // 不能直接调 ctx.reload()，得把命令作为 follow-up 消息排队（官方推荐做法）。
+  if (typeof (pi as any).registerCommand === 'function') pi.registerCommand('pi-team-reload', {
+    description: '重新加载 skills/扩展（等同于 /reload）——skill 更新后用它生效',
+    handler: async (_args: string, ctx: any) => {
+      try {
+        log('pi-team-reload: reloading resources', readCfg(findRoot(ctx?.cwd ?? process.cwd()) ?? process.cwd()))
+      } catch {
+        /* ignore */
+      }
+      await ctx.reload()
+      return
+    },
+  })
+
+  if (typeof (pi as any).registerTool === 'function') pi.registerTool({
+    name: 'reload_skills',
+    description:
+      '重新加载 skill/扩展定义（等同于 /reload）。当 team version --check 提示 skill 已更新时调用它。',
+    parameters: { type: 'object', properties: {}, additionalProperties: false } as any,
+    async execute(_toolCallId: string, _params: any, _signal: any, _onUpdate: any, ctx: any) {
+      const prompt = '/pi-team-reload'
+      if (typeof ctx?.queueFollowUp === 'function') {
+        await ctx.queueFollowUp(prompt)
+      } else if (typeof ctx?.pi?.queueFollowUp === 'function') {
+        await ctx.pi.queueFollowUp(prompt)
+      } else if (typeof ctx?.sendMessage === 'function') {
+        await ctx.sendMessage(prompt)
+      } else {
+        return {
+          content: [
+            { type: 'text', text: `请手动运行 ${prompt}（当前上下文不支持排队 follow-up 消息）` },
+          ],
+        }
+      }
+      return { content: [{ type: 'text', text: `已排队 ${prompt}：本回合结束后会自动重新加载 skill。` }] }
+    },
+  } as any)
 }
