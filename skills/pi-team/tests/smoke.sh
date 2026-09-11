@@ -292,63 +292,123 @@ $TEAM close T1.1 >/dev/null 2>&1 && ok "close 退出码 0" || bad "close 失败"
 [ "$HAVE_TMUX" = "1" ] && assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
 
 # ---------------------------------------------------------------- 11b. 保活：team up / watch
-section "11b · 保活（team up 把 PM 拉起来）"
+section "11b · 定时巡检：有待办才叫醒 PM（默认 15 分钟）"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 60\n' "$TMP/pm-args.log" > "$FAKE/pi-sleep"
 chmod +x "$FAKE/pi-sleep"
 
 if [ "$HAVE_TMUX" = "1" ]; then
-  # 用长期运行的假 pi 模拟 PM（pi-sleep）：参数写进 pm-args.log，pip 与 agent 的参数不会混
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
-  tmux kill-window -t "$SESSION:pm" 2>/dev/null || true
-  $TEAM up --no-agents >"$TMP/up1.log" 2>&1 && ok "up 退出码 0（含 session 被删后重建）" || { bad "up 失败"; cat "$TMP/up1.log"; }
+  PMW="$($TEAM paths | sed -n 's/.*"pm_window": "\([^"]*\)".*/\1/p')"
+  [ -n "$PMW" ] || PMW=pm
+  # 制造“PM 窗口在、里面是空提示符”的现场（pi 退出后的样子），并用占位窗口保住 session
+  make_pm_idle() {
+    tmux new-window -t "$SESSION" -n keep -d >/dev/null 2>&1 || true
+    # 先把所有名为 $PMW 的窗口关干净（可能积了多个），再建一个干净的
+    tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null \
+      | awk -v n="$PMW" '$2==n {print $1}' \
+      | while read -r wid; do tmux kill-window -t "$wid" 2>/dev/null || true; done
+    tmux new-window -t "$SESSION" -n "$PMW" -d >/dev/null 2>&1 || true
+    sleep 0.8
+  }
+  kill_all_windows() {
+    tmux list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null \
+      | while read -r wid; do tmux kill-window -t "$wid" 2>/dev/null || true; done
+    sleep 0.5
+  }
+  pm_lines() { wc -l < "$TMP/pm-args.log" 2>/dev/null | tr -d ' ' || echo 0; }
+
+  # 1) team up 把 PM 拉起来（含 session 被删后重建）
+  tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true
+  tmux kill-window -t "$SESSION:keep" 2>/dev/null || true
+  $TEAM up >"$TMP/up1.log" 2>&1 && ok "up 退出码 0（含 session 被删后重建）" || { bad "up 失败"; cat "$TMP/up1.log"; }
   assert_has "$TMP/up1.log" "PM 已启动" "up 报告了 PM 启动"
   assert_file "$TMP/pm-args.log" "PM 的 pi 真的被拉起（参数已记录）"
   assert_has "$TMP/pm-args.log" "-c" "PM 用 -c 延续会话（不丢历史）"
   assert_has "$TMP/pm-args.log" "pm-prompt.md" "PM 用 @文件 传开场提示词（避免 TTY 行长限制）"
   assert_has "$REPO/.pi/team/state/pm-prompt.md" "team digest" "提示词文件要求先跑 digest"
-  assert_eq "pm 窗口被重建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx pm || true)" "1"
+  assert_eq "pm 窗口被重建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx "$PMW" || true)" "1"
   $TEAM watchdog-status >"$TMP/wdstatus.log" 2>&1
   assert_match "$TMP/wdstatus.log" "在运行|视为存活" "watchdog-status 看到 PM 在跑"
-  $TEAM up --no-agents >"$TMP/up2.log" 2>&1
+  assert_has "$TMP/wdstatus.log" "900s" "巡检周期默认 15 分钟（可配 5~60 分钟）"
+  $TEAM up >"$TMP/up2.log" 2>&1
   assert_match "$TMP/up2.log" "PM 在运行|视为存活" "up 不会重复启动已跑的 PM"
 
-  # 巡检：容量日志 + 时间戳 + 不去碰活着的 PM
-  PM_LINES_BEFORE="$(wc -l < "$TMP/pm-args.log" 2>/dev/null || echo 0)"
-  $TEAM watch --once >"$TMP/watch1.log" 2>&1 && ok "watch --once 退出码 0" || bad "watch --once 失败"
-  assert_file "$REPO/.pi/team/state/watchdog.log" "写了 watchdog 日志"
+  # 2) 没待办：不叫醒、不启动（不要求 PM 一直运行）
+  $TEAM inbox --ack >/dev/null 2>&1
+  $TEAM watchdog-status >"$TMP/wd-idle.log" 2>&1
+  assert_match "$TMP/wd-idle.log" "待办 *无" "尚无待办：watchdog 不会打扰"
+  make_pm_idle
+  QUIET_BEFORE="$(pm_lines)"
+  $TEAM watch --once >"$TMP/watch-quiet.log" 2>&1 || bad "watch --once 失败"
   assert_file "$REPO/.pi/team/state/capacity.log" "写了容量趋势日志"
   assert_file "$REPO/.pi/team/state/watchdog.last" "写了巡检时间戳"
-  assert_eq "PM 活着时不会被重启" "$(wc -l < "$TMP/pm-args.log" 2>/dev/null || echo 0)" "$PM_LINES_BEFORE"
+  assert_match "$TMP/watch-quiet.log" "无待办" "明确说了“无待办”"
+  assert_not "$TMP/watch-quiet.log" "已拉起" "没待办时不会拉起 PM"
+  assert_eq "没待办时 PM 没被启动" "$(pm_lines)" "$QUIET_BEFORE"
 
-  # PM 挂了 → watchdog 拉起 + 收件箱留记
-  tmux kill-window -t "$SESSION:pm" 2>/dev/null || true
+  # 3) 有待办 + PM 在跑 → 只提醒，不重启；同批待办不重复叫
+  $TEAM notify dev "T2 的依赖审好了，等 PM 派单" >/dev/null 2>&1
+  $TEAM up >/dev/null 2>&1
+  rm -f "$REPO/.pi/team/state/nudges.log"
+  NUDGE_BEFORE="$(pm_lines)"
+  $TEAM watch --once >"$TMP/watch-nudge.log" 2>&1 || bad "watch --once（有待办）失败"
+  assert_match "$TMP/watch-nudge.log" "已提醒 PM" "有待办时叫醒 PM"
+  assert_has "$REPO/.pi/team/state/nudges.log" "未读通知" "提醒内容写进 nudges.log"
+  assert_eq "提醒不会重启 PM" "$(pm_lines)" "$NUDGE_BEFORE"
+  N1="$(wc -l < "$REPO/.pi/team/state/nudges.log" | tr -d ' ')"
+  $TEAM watch --once >/dev/null 2>&1
+  assert_eq "同一批待办不会反复叫" "$(wc -l < "$REPO/.pi/team/state/nudges.log" | tr -d ' ')" "$N1"
+
+  # 4) 有待办 + PM 不在跑 → 拉起（记 inbox + 计数）
   rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/docs/team/inbox/pm.md"
-  PM_LINES_DEAD="$(wc -l < "$TMP/pm-args.log" | tr -d ' ')"
+  make_pm_idle
+  DEAD_BEFORE="$(pm_lines)"
   $TEAM watch --once >"$TMP/watch2.log" 2>&1 || bad "watch --once（PM 挂了）失败"
-  assert_eq "watchdog 重建了 pm 窗口" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx pm || true)" "1"
-  local pm_lines_after
-  pm_lines_after="$(wc -l < "$TMP/pm-args.log" | tr -d ' ')"
-  assert_match "$REPO/.pi/team/state/watchdog.log" "已重启" "watchdog 日志记录了重启"
-  if [ "$pm_lines_after" -gt "$PM_LINES_DEAD" ]; then ok "watchdog 真的把 PM 拉起来了（参数 $PM_LINES_DEAD → $pm_lines_after）"
-  else bad "watchdog 没有拉起 PM（参数计数 $PM_LINES_DEAD → $pm_lines_after）"; fi
-  assert_has "$REPO/docs/team/inbox/pm.md" "watchdog" "watchdog 给 PM 留了收件箱消息"
-  assert_has "$TMP/watch2.log" "已重启" "watchdog 报告了重启动作"
-  assert_eq "重启计数已记录" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
+  assert_match "$TMP/watch2.log" "已拉起" "watchdog 在有待办时把 PM 拉起来"
+  assert_has "$REPO/.pi/team/state/watchdog.log" "→ 已拉起" "日志记录拉起动作"
+  assert_has "$REPO/docs/team/inbox/pm.md" "watchdog" "给 PM 留了收件箱消息"
+  assert_eq "拉起计数已记录" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
+  if [ "$(pm_lines)" -gt "$DEAD_BEFORE" ]; then ok "PM 参数已写入（$DEAD_BEFORE → $(pm_lines)）"
+  else bad "PM 没有被拉起（$DEAD_BEFORE → $(pm_lines)）"; fi
 
-  # 重启配额：防崩溃循环
+  # 5) standby：PM 主动停工，有待办也不叫
+  $TEAM standby on --reason "等用户授权合并" >"$TMP/standby-on.log" 2>&1
+  assert_has "$TMP/standby-on.log" "已进入待命" "standby on 生效"
+  make_pm_idle
+  SB_BEFORE="$(pm_lines)"
+  $TEAM watch --once >"$TMP/watch-sb.log" 2>&1 || true
+  assert_eq "待命期间不叫醒、不拉起" "$(pm_lines)" "$SB_BEFORE"
+  assert_has "$REPO/.pi/team/state/watchdog.log" "standby 中" "日志记录“待命所以不叫醒”"
+  $TEAM standby off >/dev/null 2>&1
+  $TEAM watch --once >"$TMP/watch-sb2.log" 2>&1 || true
+  assert_match "$TMP/watch-sb2.log" "已拉起" "standby off 后有待办就继续拉起"
+
+  # 6) 不管 tmux：session 丢了只告警；开关打开才重建
+  $TEAM notify dev "新待办：T3 计划待确认" >/dev/null 2>&1   # 待办变化 → 告警会重新出现（同批不重复）
+  kill_all_windows
+  $TEAM watch --once >"$TMP/watch4.log" 2>&1 || true
+  if tmux has-session -t "$SESSION" 2>/dev/null; then bad "watchdog 不该重建 tmux session（默认不管 tmux）"; else ok "session 丢了 watchdog 不重建（默认不管 tmux）"; fi
+  assert_match "$TMP/watch4.log" "不管 tmux|人工" "给出了“需要人工 up”的提示"
+  TEAM_WATCH_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/watch5.log" 2>&1 || true
+  assert_eq "开关打开后才重建 pm 窗口" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$PMW" || true)" "1"
+  assert_match "$TMP/watch5.log" "已拉起" "重建后把 PM 拉起来了"
+
+  # 7) 自动拉起配额：防崩溃循环
+  make_pm_idle
   for _ in 1 2 3 4 5; do date +%s >> "$REPO/.pi/team/state/pm-restarts.log"; done
-  tmux kill-window -t "$SESSION:pm" 2>/dev/null || true
   $TEAM watch --once >"$TMP/watch3.log" 2>&1 || true
-  assert_has "$TMP/watch3.log" "已被重启" "超过配额时拒绝继续重启（告警）"
-  # 收尾：把 PM 拉回来，便于后续小节（清掉配额计数）
+  assert_has "$TMP/watch3.log" "已被重启" "超过配额时拒绝继续拉起（告警）"
+  # 收尾：清配额/占位窗口，把 PM 拉回来
   rm -f "$REPO/.pi/team/state/pm-restarts.log"
-  $TEAM up --no-agents >/dev/null 2>&1 || true
+  tmux kill-window -t "$SESSION:keep" 2>/dev/null || true
+  $TEAM inbox --ack >/dev/null 2>&1
+  $TEAM up >/dev/null 2>&1 || true
 else
-  printf '  (跳过保活断言：没有 tmux)\n'
+  printf '  (跳过巡检断言：没有 tmux)\n'
 fi
 
 # ---------------------------------------------------------------- 11c. 恢复：resume / watchdog 续跑
-section "11c · 恢复（agent 挂了续跑）"
+section "11c · agent 续跑是 PM 的事（watchdog 不碰）"
 if [ "$HAVE_TMUX" = "1" ]; then
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi\"|" "$REPO/.pi/team/config.sh"
   # 让 dev 处於“有任务但 pi 已退出”的状态
@@ -357,17 +417,25 @@ if [ "$HAVE_TMUX" = "1" ]; then
   $TEAM roster >"$TMP/roster-dead.log" 2>&1
   assert_has "$TMP/roster-dead.log" "pi 已退出" "roster 能区分「窗口在但 pi 已退出」"
   if $TEAM say dev "ping" >/dev/null 2>&1; then bad "agent 没在跑时 say 应当拒绝（防把消息当命令执行）"; else ok "agent 没在跑时 say 拒绝发送"; fi
-  $TEAM resume --dry-run >"$TMP/resume-dry.log" 2>&1
-  assert_has "$TMP/resume-dry.log" "可续跑：T1.1" "resume --dry-run 能识别待续跑任务"
-  $TEAM resume >"$TMP/resume.log" 2>&1 && ok "resume 退出码 0" || bad "resume 失败"
-  assert_has "$TMP/resume.log" "续跑 dev" "resume 重新派单"
-  assert_has "$REPO/.pi/team/state/watchdog.log" "resume agent=dev task=T1.1" "续跑动作记进 watchdog 日志"
 
-  # watchdog 巡检时自动续跑（窗口被删）
+  # watchdog 不该替 PM 做决定：跑一轮巡检，dev 仍未被续跑
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
   sleep 0.5
-  $TEAM watch --once >"$TMP/watch4.log" 2>&1 || bad "watch --once（agent 挂了）失败"
-  assert_eq "watchdog 把 dev 窗口拉回来了" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "1"
+  $TEAM watch --once >"$TMP/watch4.log" 2>&1 || bad "watch --once 失败"
+  assert_eq "watchdog 不续跑 agent（窗口仍不在）" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "0"
+  assert_not "$TMP/watch4.log" "续跑" "watchdog 输出里没有 agent 续跑动作"
+
+  # PM 的工具仍然可用
+  $TEAM resume --dry-run >"$TMP/resume-dry.log" 2>&1
+  assert_has "$TMP/resume-dry.log" "可续跑：T1.1" "resume --dry-run 能识别待续跑任务"
+  $TEAM resume >"$TMP/resume.log" 2>&1 && ok "resume（PM 工具）退出码 0" || bad "resume 失败"
+  assert_has "$TMP/resume.log" "续跑 dev" "resume 重新派单"
+  assert_eq "resume 后 dev 窗口回来了" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "1"
+
+  # 人工一条命令也能顺手把 agent 带上（up --agents）
+  tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
+  $TEAM up --agents >"$TMP/up-agents.log" 2>&1 || bad "up --agents 失败"
+  assert_has "$TMP/up-agents.log" "续跑 dev" "up --agents 才会续跑 agent"
 else
   printf '  (跳过恢复断言：没有 tmux)\n'
 fi

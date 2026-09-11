@@ -3,7 +3,7 @@ name: pi-team
 description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与保活自愈（watchdog 自动拉起 PM、续跑停掉的 agent、systemd 用户服务）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, keep an agent team alive / auto-restart the PM / resume stopped agents after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.4.0"
 ---
 
 # pi-team · Pi Agent 团队
@@ -48,13 +48,17 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | 协作 | `team say <a> "<单行消息>"`、`team notify <a> "<一句话>"`（agent→PM） |
 | 复验 | `team review <ID> [--branch b] [--no-gates]` → `reviews/<ID>.md` |
 | 合并/收尾 | `team merge <ID> [--push]`、`team pr <ID>`、`team close <ID>`、`team teardown --agent a [--purge]` |
-| 保活/恢复 | `team up`（建 session + 拉起 PM + 续跑停了的 agent）、`team resume`、`team watch [--once]`、`team install-watchdog --yes`、`team watchdog-status` |
+| 保活/恢复 | `team up [--agents]`（建 tmux 场地 + 拉起 PM）、`team resume`（PM 的工具）、`team standby on\|off`（PM 主动停工）、`team watch [--once]`（定时巡检：**有待办才叫醒 PM**）、`team install-watchdog --yes`、`team watchdog-status` |
 | forge 透传 | `team gh <gh 参数…>`、`team gl <METHOD> <path>`（token 由 wrapper 注入，不回显） |
 | 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测）、`team version` |
 
 ## 作为 PM 的循环（你该怎么做）
 
-> 开局（或被 watchdog 拉起后）先跑：`team digest` → `team inbox --ack` → `team resume --dry-run` → `team watchdog-status`。
+> 开局（或被叫醒后）先跑：`team digest` → `team inbox --ack` → `team resume --dry-run` → `team watchdog-status`。
+> 职责划分：**watchdog 是“定时看看有没有活儿”的节拍器**（默认 15 分钟一次）：有待办才叫醒你，
+> 没待办就不打扰，不要求你一直运行。agent 的启停/续跑、复验、合并都是你的事。
+> 如果你确认无事可做或需要人工介入：`team standby on --reason "…"` 主动停工（之后不会再被叫醒，
+> 人处理完 `team standby off`）。
 
 1. **建模**：`team doctor`，必要时 `init`；把用户需求拆成里程碑写进 `ROADMAP.md`，
    每个任务写成**自包含**任务书（背景/交付物/边界/可复制的验收命令/报告要求）——
@@ -80,8 +84,11 @@ PM 需要停下来问用户的情况只有：合并/推送等**共享状态变�
 - token 只由 wrapper 注入（`team gh`/`team gl`/`team pr`），永不回显、永不落盘。
 - 任何改变共享/远端状态的操作需要 `--yes`（= 用户已授权）。
 - 一个 agent 一个长期 worktree：**不要移动它**（Pi session 按 cwd 归属，移动等于丢记忆）。
-- **团队必须能无人看守地活下去**：装 `team install-watchdog --yes`（或至少开一个 `team watch` 窗口）。
-  恢复不依赖任何 agent——PM 挂了由 watchdog 用 `pi -c` 拉起并喂开场提示词，agent 挂了按 state 里记的任务书续跑。
+- **PM 不需要一直运行**：有待办时才需要你在线。默认每 15 分钟一次定时巡检（`TEAM_WATCH_INTERVAL=900`，
+  建议 300~3600）：有待办就叫醒你（你现在不在跑就用 `pi -c` 把你拉起来），没待办就什么都不做。
+  **确认无事可做 / 需要人工介入时，`team standby on --reason "…"` 主动停工**——之后不会再被叫醒，
+  待办积压仍会记进 `state/watchdog.log`，人处理完 `team standby off`。
+  巡检**不管 tmux 布局、不管 agent**；停了的 agent 由你用 `team resume` 决定续不续。
 
 ## 深入阅读（按需，不要一次全读）
 

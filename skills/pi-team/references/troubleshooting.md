@@ -96,11 +96,26 @@ Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复
 
 - **“PM 没在跑”是怎么判的**：`pane_current_command` 不是 shell → 在跑；是 shell 但命令行带非选项参数或有前台子命令 → 也当作在跑（`busy`）。
   这是为了容住 pi 用 shell wrapper 启动的情况（此时前台名显示 bash），以及用户 rc 钩子常驻子进程（不能因为“有子进程”就认定忙）。
-- **team up 会 respawn PM 窗口的 pane**：只有当那里没有 pi 在跑（空提示符）时才动手，且会**替掉原 shell**。
+- **team up 会 respawn PM 窗口的 pane**：只有当那里没有 pi 在跑（空提示符）时才动手。
   所以不要把 PM 窗口当普通终端用；要手动开工就到那个窗口重跑 `pi` 或干脆让 watchdog 拉。
+  注：`pi` 是 pane 的进程本身（我们用 `exec`），所以 pi 退出时 pane 会关、窗口会消失——
+  这正是 watchdog 报 `missing` 的场景（对应 `TEAM_WATCH_REBUILD_TMUX` 开关）。
 - **只有“确实在跑”才会被打字**：`say`/`notify`/扩展在目标窗口是空提示符时会拒绝（否则文本会被 shell 当命令执行），
   只写收件箱等 PM 回来读。
-- **PM 反复崩**：重启配额（`TEAM_WATCH_MAX_RESTARTS`，默认 5/小时）会拦下并发告警，防止崩溃循环把机器拖垮；
+- **watchdog 到底管什么**：定时算一遍待办（未读通知/待复验/看板 todo·wip/blocked/有任务但停了的 agent），
+  **有待办才叫醒 PM**（在跑就发一句提醒；不在跑就用 `pi -c` 拉起）。没待办就什么都不做。
+  它不会替你续跑 agent、不建 tmux session/窗口（除非 `TEAM_WATCH_REBUILD_TMUX=1`）、不合并代码。
+- **PM 总是被叫醒/不想被叫**：`team standby on --reason "…"` 让 PM 主动停工（无需人工介入的“真没活”
+  或“卡着等人”都属于这种情况）；`team standby off` 恢复。待命期间待办仍会记进 `state/watchdog.log`。
+- **叫醒频率**：默认 15 分钟一次（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）；同一批待办按
+  `TEAM_WATCH_NUDGE_GAP` 限制重复提醒。想更慢/更快直接改这两个值。
+- **PM 被“叫了两次”**：agent 回合结束的即时通知（notify 扩展）与 watchdog 的定时提醒是两回事——
+  后者是对未处理待办的兜底。把待办处理/ack 掉就不会再提。
+- **watchdog 说“PM 找不到（missing）…请人工 team up”**：tmux session/窗口没了（比如你关了窗口、机器重启），
+  而默认不管 tmux。处理：`team up`；想让它自己处理就设 `TEAM_WATCH_REBUILD_TMUX=1`。
+- **agent 停了不会自动续跑**（设计如此）：PM 自己说 `team resume --dry-run` 看、再 `team resume` 续；
+  人工也可以 `team up --agents` 一次性带上。
+- **PM 反复崩**：自动拉起配额（`TEAM_WATCH_MAX_RESTARTS`，默认 5/小时）会拦下并发告警，防止崩溃循环把机器拖垮；
   先看 `state/watchdog.log` 与 PM 窗口输出找原因（常见：模型额度耗尽、配置写错、依赖缺失）。
 - **watchdog 自己也停了**：`team watchdog-status` 看 systemd 单元是否 active；再不行就 `team install-watchdog --yes` 重装。
 - **机器重启后一片安静**：systemd `--user` 单元需要 `loginctl enable-linger $USER` 才能在未登录时自启；没装就用 `team up` 一键恢复。

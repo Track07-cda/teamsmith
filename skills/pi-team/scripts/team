@@ -85,6 +85,7 @@ case "$CMD" in
   install-watchdog)   team_cmd_install_watchdog "$@" ;;
   uninstall-watchdog) team_cmd_uninstall_watchdog "$@" ;;
   watchdog-status)    team_cmd_watchdog_status "$@" ;;
+  standby)            team_cmd_standby "$@" ;;
   smoke|test) team_cmd_smoke "$@" ;;
   *)          team_usage_die "未知子命令：$CMD" ;;
 esac

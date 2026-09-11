@@ -47,14 +47,27 @@ PM 读收件箱 → team review <ID>（独立 worktree 复验，跑门禁）
 - 门禁命令：`{{GATES}}`（任务书里可以写更严格的命令，以任务书为准）。
 - 消息 ≠ 交付物：真正的证据在 `{{DOCS_DIR}}/reports/`、`{{DOCS_DIR}}/reviews/` 和 commit 里。
 
-### 保活（团队不能“全停”）
+### 定时巡检（不是心跳保活）
 
-恢复不依赖任何 agent：watchdog（`team watch`，推荐用 `team install-watchdog --yes` 装成 systemd --user 服务）
-会周期检查——PM 窗口里没有 pi 运行就用 `pi -c` 拉起并喂开场提示词，有未结任务但窗口没了的 agent 按
-`state/` 里记的任务书重新派单。人工救火一条命令：`team up`（建 session + 拉起 PM + 续跑停了的 agent）。
+watchdog 是**叫醒 PM 的节拍器**，不是“让 PM 永远活着”的守护进程：
 
-- 回来上班/机器重启后：先 `team up`，再 `team digest`。
-- 被 watchdog 拉起时要先搞清楚断点：`team digest` → `team inbox --ack` → `team resume --dry-run`。
+- 默认每 **15 分钟**（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）看一次“有没有活儿要 PM 处理”：
+  未读通知 / 待复验报告 / 看板 todo·wip / blocked / 有任务但停了的 agent。
+- **有待办** → 叫醒 PM（在跑就发一句 `[watchdog] 待办：…`；不在跑就把它拉起来）；
+  **没待办** → 什么都不做（不叫醒、不启动）——团队自然静默，不要求 PM 一直运行。
+- PM 如果确认无事可做或需要人工介入，可以 `team standby on --reason "…"` 主动停工；
+  待命期间 watchdog 不再叫醒（待办积压仍记进 `state/watchdog.log`），人处理完 `team standby off`。
+- 它**不管 tmux 布局、不管 agent**（agent 归 PM 管：`team resume`）。
+
+```bash
+bash <skill>/scripts/team watchdog-status      # 看周期/待命/待办/systemd/PM 状态
+bash <skill>/scripts/team standby on --reason "等用户拍板选型"
+bash <skill>/scripts/team standby off
+bash <skill>/scripts/team up                  # 人工救火：建 tmux 场地 + 把 PM 拉起来（不动 agent）
+bash <skill>/scripts/team up --agents         # 顺手把“有任务但窗口没了”的 agent 也续起来
+bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于一个 tick）
+```
+
 - 容量底线是 **swap 不被打满**（RAM 紧张只会卡，不会拦）；`team ps` 看余量。
 
 ### 目录

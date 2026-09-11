@@ -125,14 +125,18 @@ bash <skill>/scripts/team teardown --all --purge --force   # 连 worktree 一起
 - agent 发现别人的 bug：报告里写 `BLOCKED:`，PM 决定是插新任务还是让原 owner 修。
 - 事实与报告不符：把失败证据贴进 thread，退回；反复出现则换模型族做独立验证。
 
-## I. 保活与恢复（团队不会“全停”）
+## I. 定时巡检与 PM 节拍（watchdog 只管这一件事）
 
-问题：PM 停了，agent 发完通知也没人处理 → 整支团队停摆。设计原则：**恢复不能依赖任何一个 agent（包括 PM）**。
+问题：PM（pi 进程）停了/睡了，agent 发了通知没人处理。定位：**watchdog 不是保活心跳，而是定时问一句
+“现在有没有活儿”**——有就叫醒 PM，没有就不打扰（不要求 PM 一直运行）。agent 的启停/续跑仍是 PM 的事。
 
 ```bash
-bash <skill>/scripts/team watchdog-status      # 先看：PM 活着吗？watchdog 在跑吗？容量如何？
-bash <skill>/scripts/team up                  # 手动救火：建 session、拉起 PM、把停了的 agent 续跑
-bash <skill>/scripts/team resume --dry-run    # 只看哪些 agent 该续跑
+bash <skill>/scripts/team watchdog-status      # 看巡检周期、待命、待办、PM 状态、容量
+bash <skill>/scripts/team standby on --reason "等用户拍板选型"   # PM 主动停工（不再被叫醒）
+bash <skill>/scripts/team standby off         # 恢复叫醒
+bash <skill>/scripts/team up                  # 人工救火：建 tmux 场地 + 把 PM 拉起来（不动 agent）
+bash <skill>/scripts/team up --agents         # 顺手把“有任务但窗口没了”的 agent 也续起来
+bash <skill>/scripts/team resume --dry-run    # PM 自己看：哪些 agent 该续跑
 bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于 watchdog 的一个 tick）
 ```
 
@@ -140,9 +144,9 @@ bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于 watc
 
 | 方式 | 命令 | 能撑住 |
 |---|---|---|
-| 手动 | 发现停了就 `team up` | 你自己发现的时候 |
-| tmux 窗口 | `tmux new-window -n watchdog -d -- <skill>/scripts/team watch` | PM/agent 崩（tmux server 还在） |
-| systemd --user | `team install-watchdog --yes` | 上面全部 + watchdog 自己崩 + 重启机器 |
+| 手动 | 发现 PM 停了/睡了就 `team up` | 你自己发现的时候 |
+| tmux 窗口 | `tmux new-window -n watchdog -d -- <skill>/scripts/team watch` | PM 崩/睡（tmux server 还在） |
+| systemd --user | `team install-watchdog --yes` | 上面全部 + watchdog 自己崩（配 `TEAM_WATCH_REBUILD_TMUX=1` 还能扛机器重启） |
 
 ```bash
 bash <skill>/scripts/team install-watchdog --yes      # 装 + 开机自启（systemd --user）
@@ -151,21 +155,44 @@ bash <skill>/scripts/team uninstall-watchdog --yes    # 停掉（--purge 连 uni
 loginctl enable-linger $USER                          # 建议：没登录时也让 unit 跑
 ```
 
-watchdog 每个 tick 做四件事：记录容量趋势（`state/capacity.log`）→ 保证 tmux session 在 →
-PM 没了就 `pi -c` 拉起来并注入开场提示词 → 有任务但窗口没了的 agent 重新派单。
-防止失控：PM 重启有配额（`TEAM_WATCH_MAX_RESTARTS`，默认 1 小时 5 次），超了就只告警不再重启。
+每个 tick 三步：① 追一行容量趋势到 `state/capacity.log`；② 算待办（未读通知 / 待复验 / 看板 todo·wip / blocked /
+有任务但停了的 agent）；③ **有待办才叫醒**——PM 在跑就发一句 `[watchdog] 待办：…`（同一批待办按
+`TEAM_WATCH_NUDGE_GAP` 限制重复频率），不在跑就用 `pi -c` 在原窗口拉起；**没待办就什么都不做**。
+`team standby on --reason "…"` 可让 PM 主动停工（之后 watchdog 不再叫醒，待办积压仍会记日志）。
+
+### 边界（故意的）
+
+- **不管 tmux 布局**：session/窗口丢了只告警，不自己建（`TEAM_WATCH_REBUILD_TMUX=0`，默认）。
+  想让它连“机器重启/窗口被关”也能自己回来：设 `TEAM_WATCH_REBUILD_TMUX=1`。
+- **不管 agent**：有任务但窗口没了的 agent 不会自动续跑——那是 PM 的判断（PM 开场跑
+  `team resume --dry-run` 自己决定；人工一条 `team up --agents` 可以代劳）。
+- **不管模型额度、不自动合并**：这些是 PM 的活。
+- **不要求 PM 一直运行**：没待办的时段 PM 可以安静地待着（甚至不在跑）；watchdog 不会为了“保活”而叫它。
+- 防失控：PM 自动拉起配额（`TEAM_WATCH_MAX_RESTARTS`，默认 1 小时 5 次）超了只告警；watchdog 自身有 pid 锁。
+
+### 待命（PM 或人主动停工）
+
+```bash
+bash <skill>/scripts/team standby on --reason "等用户授权合并"   # watchdog 不再叫醒
+bash <skill>/scripts/team standby status                        # 看原因/开始时间/积压待办
+bash <skill>/scripts/team standby off                          # 处理完了，恢复叫醒
+```
+
+适用场景：确实没活可推、需要人工介入（授权/选型/外部信息）。进入待命不会丢事：
+待办积压仍会写进 `state/watchdog.log`，`team digest` 也会显示。
 
 ### 为什么重启后还能接上
 
-所有进度都落在磁盘上：`state/`（任务/任务书/会话）、`docs/team/`（任务书/报告/复验/看板/线程）、
-git 分支。PM 被拉起时用 `pi -c` 延续原会话（历史不丢），并收到一份开场提示词：
-先 `team digest` → `team inbox --ack` → `team resume --dry-run`，然后接着干。
+进度都在磁盘上：`state/`（模型/窗口/worktree/任务/任务书）、`docs/team/`（任务书/报告/复验/看板/线程）、
+git 分支与 worktree。PM 被拉起时用 `pi -c` 延续原会话（历史不丢），并收到开场提示词：
+先 `team digest` → `team inbox --ack` → `team resume --dry-run`，再接着干。
 
 ### 停机维护 / 故意停掉
 
 ```bash
-bash <skill>/scripts/team teardown --all           # 关所有窗口（worktree/分支/状态保留）
-bash <skill>/scripts/team uninstall-watchdog --yes  # 别让 watchdog 又把它们拉起来
+bash <skill>/scripts/team standby on --reason "手动检修"   # 临时：别再叫醒 PM
+bash <skill>/scripts/team teardown --all                   # 关所有窗口（worktree/分支/状态保留）
+bash <skill>/scripts/team uninstall-watchdog --yes          # 彻底：连 watchdog 也停
 ```
 
 ## J. 持续运行（长项目）

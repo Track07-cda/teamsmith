@@ -34,14 +34,16 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
   say <a> "<一句话>"           往 agent 窗口发消息
   notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口）
 
-  ── 保活与恢复（不依赖任何 agent 自己活着） ──────────────
-  up [--no-agents] [--print]   启动/修复整支团队：建 session、把 PM 拉起来（pi -c 保留历史）、
-                               把有任务但窗口没了的 agent 续跑（--print 只打印 PM 开场提示词）
-  resume [--agent a] [--all] [--dry-run]   续跑停了的 agent（按 state 里的任务书重新派单）
-  watch [--once] [--interval N]             watchdog：记录容量、PM 掉了拉起、agent 掉了续跑
+  ── 保活与定时提醒（watchdog 只管“有没有活儿”，agent 归 PM 管） ─
+  up [--agents] [--print]      恢复 PM：建 tmux 场地、把 PM 拉起来（pi -c 保留历史）；
+                               --agents 才额外续跑停了的 agent
+  resume [--agent a] [--all] [--dry-run]   PM 的工具：把停了但没交活的 agent 续跑
+  watch [--once] [--interval N]             定时巡检（默认 900s，建议 300~3600）：有待办就叫醒/拉起 PM，
+                               没待办就不打扰；不要求 PM 一直运行
+  standby [on|off|status] [--reason "..."]  PM 主动停工：on 之后 watchdog 不再叫醒（人处理完 off）
   install-watchdog [--yes]      装 systemd --user 服务（开机/崩溃自动拉起 watchdog）
   uninstall-watchdog [--yes]    停掉并移除 watchdog 服务（--purge 连 unit 文件一起删）
-  watchdog-status               看 watchdog 状态、最近巡检、PM 存活、容量
+  watchdog-status               看巡检周期、待命、systemd 状态、待办、PM 存活、容量
 
   ── 复验 / 合并 / 收尾 ─────────────────────────────────────
   review ID [--branch b] [--no-gates]

@@ -84,13 +84,24 @@ agent 回合结束（Pi 的 agent_settled：不会再自动继续的那个点）
 - agent 禁止阅读凭据/账户文件（如 `~/.pi/agent/auth.json`）。
 - 任何改变共享/远端状态的操作都要 `--yes`（用户显式授权）。skill 不替用户做主。
 
-## 8. 保活：不让整支团队停摆
+## 8. 定时巡检：不许“监视一切”，只负责叫醒
 
-- 恢复链路不依赖任何 agent：`systemd --user` 周期拉起 watchdog → watchdog 拉起 PM（`pi -c`，历史不丢）→
-  按 `state/` 里记的任务书续跑停了的 agent。
-- 粒度：PM 窗口里没有 pi 运行（空提示符）才动手，且用 `respawn-pane` 替掉那个 pane；窗口里在跑别的东西就不抢。
-- 防失控：PM 重启配额默认 1 小时 5 次，超了只告警。所有容量/重启/续跑动作都写 `state/watchdog.log` 与 `state/capacity.log`。
-- 人不在（下班、重启机器）回来后只需一条：`team up`。
+watchdog 不是保活心跳，而是一个**节拍器**：定时问一句“现在有没有活儿要 PM 处理”。
+
+- 默认每 15 分钟（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）算一次待办：未读通知 / 待复验报告 /
+  看板 todo·wip / blocked / 有任务但停了的 agent。
+- **有待办** → 叫醒 PM（在跑就发一句提醒；不在跑就用 `pi -c` 拉起，开场提示词 `@state/pm-prompt.md`）；
+  **没待办** → 不叫醒、不启动 —— 不要求 PM 一直运行，静默也是一种正确状态。
+- PM 可主动停工：`team standby on --reason "…"`（无事可做/需人工介入），之后不再被叫醒，
+  待办积压仍记日志；人处理完 `team standby off`。
+- 同一批待办按 `TEAM_WATCH_NUDGE_GAP` 限制重复提醒频率；PM 正在忙时可直接忽略提醒。
+- 与即时通知的分工：agent 回合结束的通知是**即时**的（notify 扩展：写 inbox + 敲 PM 窗口）；
+  watchdog 的提醒是**定时兜底**：只要那批待办还是未读/未处理，下一轮（或待办变化时）会再提一次。
+- 边界：不管 tmux 布局（`TEAM_WATCH_REBUILD_TMUX=0`，丢了只告警）、不管 agent（PM 的活）、
+  不管模型额度、不自动合并。防失控：自动拉起配额 1 小时 5 次 + watchdog 自身 pid 锁。
+
+为什么把边界画这么窄：一个“什么都管”的守护进程会同时操纵 tmux 布局、agent 生命周期、模型额度，
+出事时无法判断是谁改坏了状态；而且“保活”越多，就越容易把本应人工介入的事默默掩盖。
 
 ## 9. 容量：底线是 swap 不见底
 

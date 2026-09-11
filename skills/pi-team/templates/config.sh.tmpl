@@ -46,11 +46,11 @@ TEAM_NOTIFY_DEDUP_SEC=20              # 同一简报的去重窗口（Pi 可能�
 TEAM_INBOX_MAX_CHARS=150
 TEAM_NOTIFY_LOG="/tmp/{{PROJECT}}-pi-team-notify.log"
 
-# ---- 保活 watchdog（team up / resume / watch / install-watchdog） ----
-TEAM_WATCH_INTERVAL=60                # watchdog 巡检间隔（秒）
-TEAM_WATCH_PM=1                       # 1=PM 没在跑就拉起来（用 pi -c 延续原会话）
-TEAM_WATCH_RESUME=1                   # 1=有未结任务但窗口没了的 agent 自动续跑
-TEAM_WATCH_MAX_RESTARTS=5             # PM 每小时最多重启次数（防崩溃循环）
+# ---- 定时巡检（叫醒 PM 的节拍；watchdog 只保 PM 这个进程，agent 归 PM 管） ----
+TEAM_WATCH_INTERVAL=900               # 巡检周期（秒）：默认 15 分钟，建议 300~3600
+TEAM_WATCH_NUDGE_GAP=900              # 同一批待办最快多久再提醒一次（秒）
+TEAM_WATCH_REBUILD_TMUX=0             # 0=不管 tmux（session/窗口没了只告警）；1=允许重建（机器重启也自己回来）
+TEAM_WATCH_MAX_RESTARTS=5             # PM 每小时最多自动拉起次数（防崩溃循环）
 TEAM_WATCH_SERVICE=""                 # systemd unit 名，默认 <project>-pi-team-watch
 TEAM_PM_MODEL=""                      # PM 自己的模型，空 = TEAM_DEFAULT_MODEL
 TEAM_PM_SESSION_ID=""                 # 空 = pi -c（延续本目录上个会话，保住 PM 历史）

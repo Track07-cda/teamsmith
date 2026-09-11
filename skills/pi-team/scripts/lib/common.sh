@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.2.0"
+TEAM_VERSION="1.4.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -130,10 +130,11 @@ team_load_config() {
   TEAM_WARN_AVAIL_MB="${TEAM_WARN_AVAIL_MB:-2048}"         # RAM 低于此值：只警告（允许卡顿）
   TEAM_AGENT_MEM_MB="${TEAM_AGENT_MEM_MB:-6144}"           # 单个 agent 的经验占用（估算用）
   # 保活 watchdog
-  TEAM_WATCH_INTERVAL="${TEAM_WATCH_INTERVAL:-60}"         # 检查间隔（秒）
-  TEAM_WATCH_PM="${TEAM_WATCH_PM:-1}"                      # 1=PM 掉了就拉起来
-  TEAM_WATCH_RESUME="${TEAM_WATCH_RESUME:-1}"              # 1=有未结任务但窗口没了的 agent 自动续跑
-  TEAM_WATCH_MAX_RESTARTS="${TEAM_WATCH_MAX_RESTARTS:-5}"  # PM 每小时最多重启次数（防崩溃循环）
+  # 定时巡检（叫醒 PM 的节拍；不是心跳保活）——默认 15 分钟，推荐 5~60 分钟
+  TEAM_WATCH_INTERVAL="${TEAM_WATCH_INTERVAL:-900}"       # 巡检周期（秒）
+  TEAM_WATCH_NUDGE_GAP="${TEAM_WATCH_NUDGE_GAP:-900}"      # 同一批待办最快多久再提醒一次（秒）
+  TEAM_WATCH_MAX_RESTARTS="${TEAM_WATCH_MAX_RESTARTS:-5}"  # PM 每小时最多自动拉起次数（防崩溃循环）
+  TEAM_WATCH_REBUILD_TMUX="${TEAM_WATCH_REBUILD_TMUX:-0}"  # 0=不管 tmux（session/窗口没了只告警）；1=允许重建 PM 窗口
   TEAM_PM_START_WAIT="${TEAM_PM_START_WAIT:-6}"            # 启动 PM 后等它起来的秒数
   TEAM_WATCH_SERVICE="${TEAM_WATCH_SERVICE:-}"             # systemd unit 名，默认 <project>-pi-team-watch
   TEAM_NOTIFY_TMUX="${TEAM_NOTIFY_TMUX:-1}"
@@ -320,6 +321,18 @@ team_shell_running_command() { # <pid> → 0 表示这个 shell 进程在跑脚�
   return 1
 }
 
+team_pgroup_has_process() { # <pgid> → 0 表示这个进程组里还有活进程
+  local g="${1:-}"
+  [ -n "$g" ] || return 1
+  if team_have_cmd ps; then
+    [ -n "$(ps -eo pgid=,pid= 2>/dev/null | awk -v g="$g" '$1==g {print $2; exit}')" ] && return 0
+  fi
+  if team_have_cmd pgrep; then
+    [ -n "$(pgrep -g "$g" 2>/dev/null | head -1)" ] && return 0
+  fi
+  return 1
+}
+
 team_pane_busy() { # <session:window> → 0 = 里面有东西在跑
   local target="$1" cmd pid tpgid
   cmd="$(team_pane_cmd "$target")"
@@ -328,7 +341,11 @@ team_pane_busy() { # <session:window> → 0 = 里面有东西在跑
   [ -n "$pid" ] || return 1
   team_shell_running_command "$pid" && return 0
   tpgid="$(ps -o tpgid= -p "$pid" 2>/dev/null | tr -d ' ')"
-  if [ -n "$tpgid" ] && [ "$tpgid" != "$pid" ]; then return 0; fi
+  if [ -n "$tpgid" ] && [ "$tpgid" != "$pid" ]; then
+    # 前台进程组不是 shell 自己，但那个组得真有活进程才算“忙”——
+    # 刚被杀掉的命令会留下陈旧的 tpgid，不排除掉会误判成“还在跑”。
+    team_pgroup_has_process "$tpgid" && return 0
+  fi
   return 1
 }
 
@@ -505,6 +522,85 @@ team_capacity_line() {
   read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
   printf 'RAM 可用 %sMB ｜ swap 空闲 %s/%sMB ｜ 估算可再加 %s 个 agent\n' \
     "$avail" "$swapfree" "$swaptotal" "$(team_agent_capacity)"
+}
+
+# ---------------------------------------------------------------- 巡检待办
+# “有没有值得把 PM 叫醒的事”——只统计团队需要 PM 处理的事，
+# 不把 watchdog 自己写的记录算进去（否则会造成“自己叫醒自己”的循环）。
+team_reports_pending() { # 报告已交但未复验的任务数（主工作树 + 各 agent worktree）
+  local f base id ids=" " n=0 glob
+  for glob in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
+    [ -f "$glob" ] || continue
+    base="$(basename "$glob" .md)"; id="${base%%-*}"
+    [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
+    case "$ids" in *" $id "*) continue ;; esac
+    ids="$ids$id "; n=$((n + 1))
+  done
+  printf '%s\n' "$n"
+}
+
+team_board_counts() { # → "todo wip review blocked"
+  local f="$TEAM_DOCS_ABS/BOARD.md"
+  [ -f "$f" ] || { printf '0 0 0 0\n'; return 0; }
+  awk -F'|' 'NF>2 { st=$(NF-1); gsub(/^[ \t]+|[ \t]+$/, "", st);
+      if (st=="todo") t++; else if (st=="wip") w++; else if (st=="review") r++; else if (st=="blocked") b++ }
+    END { printf "%d %d %d %d\n", t+0, w+0, r+0, b+0 }' "$f"
+}
+
+team_pending_counts() { # → "inbox reports todo wip review blocked stopped"
+  local a n inbox=0 stopped=0 task
+  for a in $(team_agents); do
+    n="$(team_inbox_new "$a")"; inbox=$((inbox + n))
+    task="$(team_state_get "$a" task '')"
+    if [ -n "$task" ] && ! team_agent_live "$a"; then stopped=$((stopped + 1)); fi
+  done
+  local bc; bc="$(team_board_counts)"
+  local todo wip review blocked; read -r todo wip review blocked <<< "$bc"
+  printf '%s %s %s %s %s %s %s\n' "$inbox" "$(team_reports_pending)" "$todo" "$wip" "$review" "$blocked" "$stopped"
+}
+
+team_pending_text() { # <counts> → 人类可读摘要（空字符串 = 无待办）
+  local inbox reports todo wip review blocked stopped
+  read -r inbox reports todo wip review blocked stopped <<< "${1:-$(team_pending_counts)}"
+  local parts=()
+  [ "$inbox" -gt 0 ] && parts+=("未读通知 ${inbox}")
+  [ "$reports" -gt 0 ] && parts+=("待复验 ${reports}")
+  [ "$todo" -gt 0 ] && parts+=("todo ${todo}")
+  [ "$wip" -gt 0 ] && parts+=("wip ${wip}")
+  [ "$review" -gt 0 ] && parts+=("review ${review}")
+  [ "$blocked" -gt 0 ] && parts+=("blocked ${blocked}")
+  [ "$stopped" -gt 0 ] && parts+=("停了的 agent ${stopped}")
+  [ "${#parts[@]}" -eq 0 ] && return 0
+  local out="" p
+  for p in "${parts[@]}"; do out="${out}${out:+ · }$p"; done
+  printf '%s\n' "$out"
+}
+
+team_pending_sig() { team_hash "${1:-$(team_pending_counts)}"; }
+
+# ---------------------------------------------------------------- 待命（PM 主动停工）
+team_standby_file() { printf '%s\n' "$TEAM_STATE_DIR/standby"; }
+team_standby_on() { # <reason>
+  mkdir -p "$TEAM_STATE_DIR"
+  printf '%s %s\n' "$(team_timestamp)" "${1:--}" > "$(team_standby_file)"
+}
+team_standby_off() { rm -f "$(team_standby_file)"; }
+team_standby_reason() {
+  local f; f="$(team_standby_file)"
+  [ -f "$f" ] || return 1
+  sed -n '1p' "$f" | cut -d' ' -f2-
+}
+team_in_standby() { [ -f "$(team_standby_file)" ]; }
+
+# 提醒（叫醒）PM：只写记录 + 尽力敲一下窗口，不靠它保证送达
+team_nudge() { # <摘要文本>
+  local text="$1" msg
+  mkdir -p "$TEAM_STATE_DIR"
+  printf '%s %s\n' "$(team_timestamp)" "$text" >> "$TEAM_STATE_DIR/nudges.log"
+  printf '%s %s\n' "$(date +%s)" "$(team_pending_sig)" > "$TEAM_STATE_DIR/watchdog.nudge"
+  msg="[watchdog] 待办：$text → 跑 $TEAM_CLI digest 看详情；若确实没活可推或需人工介入，跑 $TEAM_CLI standby on --reason \"…\" 让自己停下（之后不会再叫醒你）"
+  if team_pm_alive; then team_tmux_send_to_pi "$(team_pm_target)" "$msg" >/dev/null 2>&1 || true; fi
+  return 0
 }
 
 # 模型并发守卫：TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/gpt-5.6-sol=1"

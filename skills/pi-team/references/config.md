@@ -55,10 +55,11 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 
 | 守护 | 默认 | 作用 |
 |---|---|---|
-| `TEAM_WATCH_INTERVAL` | `60` | watchdog 巡检间隔（秒） |
-| `TEAM_WATCH_PM` | `1` | `1`=PM 没在跑就拉起来 |
-| `TEAM_WATCH_RESUME` | `1` | `1`=有未结任务但窗口没了的 agent 自动续跑 |
-| `TEAM_WATCH_MAX_RESTARTS` | `5` | PM 每小时最多重启次数（防崩溃循环） |
+| watchdog 只做“算待办 + 叫醒 PM”（有待办才叫）；agent 的启停/续跑是 PM 的活（`team resume`） |
+| `TEAM_WATCH_INTERVAL` | `900` | 巡检周期（秒）：默认 15 分钟，建议 300~3600。这是“定时看看有没有活儿”的节拍，不是心跳 |
+| `TEAM_WATCH_NUDGE_GAP` | `900` | 同一批待办最快多久再提醒一次（秒） |
+| `TEAM_WATCH_REBUILD_TMUX` | `0` | `0`=不管 tmux（session/窗口没了只告警）；`1`=允许重建 session/PM 窗口（机器重启自恢复） |
+| `TEAM_WATCH_MAX_RESTARTS` | `5` | PM 每小时最多自动拉起次数（防崩溃循环） |
 | `TEAM_WATCH_SERVICE` | 空 | systemd unit 名，默认 `<project>-pi-team-watch` |
 | `TEAM_PM_MODEL` | 空 | PM 自己的模型，空 = `TEAM_DEFAULT_MODEL` |
 | `TEAM_PM_SESSION_ID` | 空 | 空 = `pi -c`（延续本目录上一个会话，保住 PM 历史） |

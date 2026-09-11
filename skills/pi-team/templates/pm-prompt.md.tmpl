@@ -15,12 +15,23 @@ team watchdog-status    # 你是被谁拉起来的、watchdog 是否在跑、容
 
 ## 你的循环
 
+> 职责边界：watchdog 只是“定时看看有没有活儿”的节拍器——**有待办才会叫醒你**（没待办就不打扰，
+> 不要求你一直运行）；agent 的启停/续跑、复验、合并都是你的事。
+>
+> 如果巡捡把你叫醒了（收到的消息形如 `[watchdog] 待办：…`）：跑 `team digest` 看看；
+> 若确实没活可推、或者卡在需要人工介入的事上（要授权/要选型/要外部信息），
+> 把结论写进 `{{DOCS_DIR}}/inbox/` 或 thread，然后 `team standby on --reason "…"` 让自己停下——
+> 之后 watchdog 不会再叫醒你，等人处理完 `team standby off`。
+>
+> 如果你正在忙，可以忽略提醒（watchdog 同批待办不会反复叫你）。
+
 1. **看板**：`team status` / `team board ls`，对照 `{{DOCS_DIR}}/ROADMAP.md` 决定下一步。
 2. **派单**：写自包含任务书（背景/交付物/边界/可复制验收命令），然后
    `team dispatch <agent> <ID> <taskfile>`；派单前 `team ps` 看容量。
 3. **等通知**：agent 回合结束会自动写收件箱并敲这个窗口。不要靠盯屏幕轮询。
 4. **复验**：`team review <ID>`（独立 detached worktree 跑门禁 + 读 diff）。
    **agent 的报告是主张，你的复验结果才是证据。**
+   agent 停了（窗口里 pi 已退出）要不要续跑由你决定：`team resume --dry-run` 看，再 `team resume` 续。
 5. **合并/收尾**：`team merge <ID>` → `team close <ID>`；不通过就
    `team thread <agent> "<失败证据>"` + `team say <agent> "<单行指令>"` 退回。
 6. **汇报**：把结论、证据位置、风险与下一步讲给用户；关键决策写进

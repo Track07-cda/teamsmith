@@ -55,7 +55,7 @@ bash $SKILL/scripts/team merge T1.1 --push --yes
 | `docs/pm/**` 手工维护 | `team task/board/thread/report/review` 生成并维护骨架，状态可机器读取 |
 | 复验靠人记流程 | `team review` 在独立 detached worktree 上跑门禁并写 `reviews/<ID>.md` 证据文件 |
 | 教训散落在 AGENTS.md 各处 | `references/troubleshooting.md` 集中沉淀（通知不达、会话丢失、squash 合并、forge 403…） |
-| 没有保活：PM 或 agent 停了整支团队停摆；内存守卫用“可用 RAM 阈值”，偏保守 | `team up` / `resume` / `watch` / `install-watchdog`：恢复不依赖任何 agent（systemd → watchdog → PM/agent）；容量底线改成 **swap 不被打满**，RAM 紧只警告（允许卡顿，不允许崩） |
+| 没有保活：PM 停了整支团队断线；内存守卫用“可用 RAM 阈值”，偏保守 | `team watch` + `install-watchdog`：**只保 PM 一个进程**的自愈守护（systemd → watchdog → PM，agent 归 PM 管）；人工救火 `team up`。容量底线改成 **swap 不被打满**，RAM 紧只警告（允许卡顿，不允许崩） |
 
 ## 自测
 

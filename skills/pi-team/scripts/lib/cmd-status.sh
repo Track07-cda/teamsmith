@@ -136,6 +136,17 @@ team_cmd_digest() {
   if team_watch_pid_alive; then printf ' ｜ watchdog ● pid %s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"
   else printf ' ｜ watchdog ○ 未运行（团队无人看守）\n'; fi
 
+  # 待办：这是 watchdog 判断“要不要叫醒 PM”的依据
+  local pend; pend="$(team_pending_text || true)"
+  if team_in_standby; then
+    printf '  待命             on（原因：%s）→ watchdog 不会叫醒 PM；%s standby off 恢复\n' "$(team_standby_reason || echo -)" "$TEAM_CLI"
+  fi
+  if [ -n "$pend" ]; then
+    printf '  待办             %s%s\n' "$pend" "$(team_pm_alive && echo '' || echo '（PM 未在跑：watchdog 会拉起）')"
+  else
+    printf '  待办             无（watchdog 不会打扰 PM）\n'
+  fi
+
   printf '\n%s\n' "[2] 待处理通知"
   local any=0 n
   for a in $(team_agents); do
