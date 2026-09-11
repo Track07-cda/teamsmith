@@ -190,7 +190,7 @@ assert_eq "BOARD 建行（todo）" "$($TEAM board row T1.1 2>/dev/null | awk -F'
 section "5 · add-agent"
 $TEAM add-agent dev --no-install >"$TMP/add.log" 2>&1 || bad "add-agent 失败"
 assert_dir "$REPO/.worktrees/dev" "创建 agent worktree"
-assert_eq "worktree 分支" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD)" "agent/dev"
+assert_eq "worktree 处于 detached（task 模式）" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD)" "HEAD"
 assert_file "$REPO/.worktrees/dev/README.md" "worktree 内容就绪"
 
 # ---------------------------------------------------------------- 6. dispatch
@@ -221,31 +221,55 @@ else
   printf '  (跳过 tmux 相关断言：没有 tmux)\n'
 fi
 
-# ---------------------------------------------------------------- 6b. 容量守卫（swap 是底线，RAM 紧只警告）
-section "6b · 容量守卫矩阵"
+# ---------------------------------------------------------------- 6b. 容量守卫矩阵（D2：zram 不当额度）
+section "6b · 容量守卫矩阵（zram / 磁盘 swap 分账）"
 MEMENV="TEAM_MEMINFO_FILE=$TMP/meminfo"
-if env "$MEMENV-plenty" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-plenty.log" 2>&1; then
+# 造 /proc/swaps 替身：zram0 近乎打满 + /var/swapfile 充足
+cat > "$TMP/swaps" <<'SWAPS'
+Filename				Type		Size		Used		Priority
+/var/swapfile                           file		67108860	1048576		-1
+/dev/zram0                              partition	15245728	14000000	100
+SWAPS
+SWAPENV="TEAM_SWAPFILE_PATH=$TMP/swaps"
+
+if env "$MEMENV-plenty" "$SWAPENV" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-plenty.log" 2>&1; then
   ok "内存充足 → 允许派单"
-else bad "内存充足时不应拒绝"; fi
-if env "$MEMENV-lowswap" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-lowswap.log" 2>&1; then
-  bad "swap 见底时应当拒绝派单"
-else ok "swap 见底(<1024MB) → 拒绝派单"; fi
-assert_has "$TMP/mem-lowswap.log" "swap 只剩" "拒绝理由指向 swap"
-if env "$MEMENV-lowram" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-lowram.log" 2>&1; then
-  ok "RAM 紧张但 swap 充足 → 允许（只警告卡顿）"
-else bad "RAM 紧张不应拒绝（底线是 swap）"; cat "$TMP/mem-lowram.log"; fi
-assert_has "$TMP/mem-lowram.log" "会开始吃 swap" "给出了卡顿警告"
-if env "$MEMENV-doomed" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-doomed.log" 2>&1; then
+else bad "内存充足时不应拒绝"; cat "$TMP/mem-plenty.log"; fi
+env "$MEMENV-plenty" "$SWAPENV" $TEAM ps >"$TMP/ps-cap.log" 2>&1 || true
+assert_has "$TMP/ps-cap.log" "zram 用" "容量读数区分 zram 与磁盘 swap"
+assert_has "$TMP/ps-cap.log" "磁盘 swap 空闲" "容量读数给出磁盘 swap 空闲"
+
+# zram 打满但 RAM 充足：只警告（zram 只是卡顿来源，安全网是磁盘 swap）
+if env "$MEMENV-zramfull" "$SWAPENV" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-zram.log" 2>&1; then
+  ok "zram 打满但 RAM/磁盘 swap 充足 → 仍允许（只警告）"
+else bad "zram 占用不应直接拒绝"; cat "$TMP/mem-zram.log"; fi
+assert_has "$TMP/mem-zram.log" "zram 已用" "给出了 zram 警告"
+
+# RAM 见底：硬线（CEP 的 OOM 就是 RAM+zram 同时见底）
+if env "$MEMENV-lowram" "$SWAPENV" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-lowram.log" 2>&1; then
+  bad "MemAvailable 见底时应当拒绝"
+else ok "MemAvailable < 底线 → 拒绝派单"; fi
+assert_has "$TMP/mem-lowram.log" "MemAvailable 只剩" "拒绝理由指向 MemAvailable"
+
+# 磁盘 swap 见底（zram 还有很多）：硬线 —— 因为 zram 占的就是 RAM，不算安全网
+cat > "$TMP/swaps-low" <<'SWAPS'
+Filename				Type		Size		Used		Priority
+/var/swapfile                           file		67108860	67000000	-1
+/dev/zram0                              partition	15245728	1048576		100
+SWAPS
+if env "$MEMENV-zramok" "TEAM_SWAPFILE_PATH=$TMP/swaps-low" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-lowswap.log" 2>&1; then
+  bad "磁盘 swap 见底时应当拒绝"
+else ok "磁盘 swap 见底（不计 zram）→ 拒绝派单"; fi
+assert_has "$TMP/mem-lowswap.log" "磁盘 swap 只剩" "拒绝理由指向磁盘 swap"
+
+if env "$MEMENV-doomed" "$SWAPENV" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/mem-doomed.log" 2>&1; then
   bad "RAM+swap 都见底时应当拒绝"
 else ok "RAM+swap 双低 → 拒绝派单"; fi
-# swap 底线可显式降为零（自担风险）
-if env "$MEMENV-lowswap" TEAM_MIN_FREE_SWAP_MB=0 $TEAM dispatch dev T1.1 "$TASKFILE" --print >/dev/null 2>&1; then
-  ok "TEAM_MIN_FREE_SWAP_MB=0 可显式绕过底线"
-else bad "显式绕过失败"; fi
-# team ps 必须用同一个数据源
-env "$MEMENV-lowram" $TEAM ps >"$TMP/ps-lowram.log" 2>&1
-assert_has "$TMP/ps-lowram.log" "RAM 可用 600MB" "team ps 显示同一数据源的真实容量"
-assert_has "$TMP/ps-lowram.log" "watchdog" "team ps 显示 watchdog 存活"
+
+# 模型限额通配（D8）
+section "6c · 模型并发限额（含通配）"
+assert_eq "openai-codex/* 通配上限生效" "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_model_limit openai-codex/gpt-5.4-codex')" "1"
+assert_eq "kimi-coding/k3 精确上限生效" "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_model_limit kimi-coding/k3')" "2"
 
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"

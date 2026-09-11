@@ -75,8 +75,7 @@ team_cmd_ps() {
     idle:*)    printf '  PM（%s）**未在跑**（空提示符）→ team up\n' "$TEAM_PM_WINDOW" ;;
     *)         printf '  PM 窗口缺失 → team up\n' ;;
   esac
-  if team_watch_pid_alive; then printf '  watchdog 在跑（pid %s）\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"
-  else printf '  watchdog 未在跑（team watch / team install-watchdog --yes）\n'; fi
+  printf '  watchdog %s\n' "$(team_watchdog_state_text)"
 
   printf '\n%-30s %8s %8s\n' MODEL RUNNING LIMIT
   printf '%-30s %8s %8s\n' ----- ------- -----
@@ -133,17 +132,7 @@ team_cmd_digest() {
     idle:*)    printf '  PM ○ **未在跑**（空提示符）→ team up' ;;
     *)         printf '  PM ○ 窗口缺失 → team up' ;;
   esac
-  local wd_state="未配置"
-  if team_podman_ok; then
-    case "$(team_watch_container_state "$(team_watch_container_name)")" in
-      running) wd_state="● 容器在跑" ;;
-      absent)  wd_state="○ 容器未创建（$TEAM_CLI watchdog up）" ;;
-      *)       wd_state="! 容器 $(team_watch_container_state "$(team_watch_container_name)")（$TEAM_CLI watchdog up）" ;;
-    esac
-  elif team_watch_pid_alive; then
-    wd_state="● 前台 watchdog pid $(cat "$TEAM_STATE_DIR/watchdog.pid")"
-  fi
-  printf ' ｜ watchdog %s\n' "$wd_state"
+  printf ' ｜ watchdog %s\n' "$(team_watchdog_state_text)"
 
   # 待办：这是 watchdog 判断“要不要叫醒 PM”的依据
   local pend; pend="$(team_pending_text || true)"

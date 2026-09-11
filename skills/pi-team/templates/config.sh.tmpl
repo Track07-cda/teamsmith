@@ -14,7 +14,7 @@ TEAM_AGENTS="{{AGENTS}}"
 TEAM_AGENT_MODELS=""
 TEAM_DEFAULT_MODEL="{{DEFAULT_MODEL}}"
 # 并发上限（"provider/model=N"）；强模型额度有限时很重要，如 "kimi-coding/k3=2 openai-codex/gpt-5.6-sol=1"
-TEAM_MODEL_LIMITS="kimi-coding/k3=2"
+TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/*=1"   # 支持通配：低额度订阅一次只跑一个
 # 派单时追加给 pi 的参数（空格分隔）
 TEAM_EXTRA_PI_ARGS=""
 
@@ -23,7 +23,11 @@ TEAM_GATES="{{GATES}}"                # 门禁命令（复验时在独立 worktr
 TEAM_PI_BIN="pi"                     # pi 可执行文件（PATH 以外的安装位置时写绝对路径，便于脚本/自测）
 TEAM_INSTALL_CMD=""                   # 新建 worktree 后的依赖安装，如 "pnpm install --frozen-lockfile"
 TEAM_DOCS_DIR="{{DOCS_DIR}}"          # 任务书/报告/线程/收件箱所在目录
-TEAM_WORKTREES_DIR=".worktrees"       # 每个 agent 一个长期 worktree
+TEAM_WORKTREES_DIR=".worktrees"
+# 分支模型：task（默认，一任务一分支：复验/合并/回滚的单位都是任务）| agent（一 agent 一长期分支）
+TEAM_BRANCH_MODE="task"
+TEAM_TASK_BRANCH_PREFIX="task"
+TEAM_TASK_BRANCH_RESET=1              # close 后把 agent worktree 切回保护分支
 TEAM_PROTECTED_BRANCH="main"          # 准入门禁分支：agent 不得 push，只能开 PR/MR 或交给 PM 合并
 TEAM_REMOTE="origin"
 
@@ -39,7 +43,10 @@ TEAM_CONFIRM_WRITES=1                 # 1=所有改变共享状态的操作都�
 # ---- 守卫（底线是 swap 不见底；RAM 紧张只意味着卡顿，不阻塞干活） ----
 TEAM_MIN_FREE_SWAP_MB=1024            # 空闲 swap 低于此值 → 拒绝派单（打满会被 OOM killer 杀进程）
 TEAM_MIN_TOTAL_MB=512                 # RAM+swap 的绝对底线
-TEAM_WARN_AVAIL_MB=2048               # RAM 可用低于此值 → 只警告（允许变卡）
+TEAM_REVIEW_TIMEOUT=1800              # team review 门禁硬超时（秒）；超时判定 TIMEOUT→FAIL
+TEAM_MIN_AVAIL_MB=1024                # MemAvailable 硬底线（CEP 那台机器设 4096）
+TEAM_WARN_AVAIL_MB=4096               # MemAvailable 低于此值 → 只警告（允许变卡）
+TEAM_ZRAM_WARN_PCT=85                 # zram 占用超过该百分比只警告（zram 空间存在 RAM 里）
 TEAM_AGENT_MEM_MB=6144                # 单个 agent 的经验占用，用于 team ps 的估算
 TEAM_NOTIFY_TMUX=1                    # 0=只写收件箱，不敲 PM 窗口
 TEAM_NOTIFY_DEDUP_SEC=20              # 同一简报的去重窗口（Pi 可能连续 settle）

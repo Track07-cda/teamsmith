@@ -460,6 +460,42 @@ team_watch_run_cmd() { # 人类可读（--print 也用它）
   printf '%s\n' "$out"
 }
 
+# 统一的后端无关存活判定（ps / digest / doctor / watchdog status 都用它）
+# 输出 "tmux:<session>:<window>" | "fg:<pid>" | "container:<name>" | "off"
+team_watchdog_state() {
+  local backend="${TEAM_WATCH_BACKEND:-tmux}" w st
+  if [ "$backend" = "tmux" ]; then
+    w="$(team_watch_window)"
+    st="$(team_watch_window_state)"
+    case "$st" in
+      running) printf 'tmux:%s:%s\n' "$TEAM_SESSION" "$w"; return 0 ;;
+    esac
+  fi
+  if team_watch_pid_alive; then printf 'fg:%s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"; return 0; fi
+  if team_podman_ok; then
+    case "$(team_watch_container_state "$(team_watch_container_name)")" in
+      running) printf 'container:%s\n' "$(team_watch_container_name)"; return 0 ;;
+    esac
+  fi
+  # 后端与预期不符时，只要任一形态在跑就算在跑（避免误报“未创建”）
+  w="$(team_watch_window)"
+  if team_tmux_has_window "$TEAM_SESSION" "$w" && team_pane_busy "$TEAM_SESSION:$w"; then
+    printf 'tmux:%s:%s\n' "$TEAM_SESSION" "$w"; return 0
+  fi
+  printf 'off\n'
+}
+
+team_watchdog_state_text() {
+  local st; st="$(team_watchdog_state)"
+  case "$st" in
+    tmux:*:*)    printf '● tmux 窗口 %s 在跑' "${st#tmux:}" ;;
+    fg:*)        printf '● 前台 watchdog pid %s' "${st#fg:}" ;;
+    container:*) printf '● 容器 %s 在跑' "${st#container:}" ;;
+    *)           printf '○ 未在跑（%s watchdog up）' "$TEAM_CLI" ;;
+  esac
+  return 0
+}
+
 # tmux 后端（默认）：看门狗就住在同一个 tmux session 的 `watchdog` 窗口里。
 # 好处：① 与开发环境同版本（tmux/ps/git/pi 都在原环境）；② 顺手就是个状态监视器（--ui 面板）；
 #       ③ 少一层容器。代价：tmux server 死了它也死（但那时 PM 也死了，重建时一起起来）。

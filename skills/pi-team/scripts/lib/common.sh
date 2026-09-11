@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.6.0"
+TEAM_VERSION="1.7.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -108,6 +108,9 @@ team_load_config() {
   TEAM_WORKTREES_DIR="${TEAM_WORKTREES_DIR:-.worktrees}"
   TEAM_AGENT_BRANCH_PREFIX="${TEAM_AGENT_BRANCH_PREFIX:-agent}"
   TEAM_TASK_BRANCH_PREFIX="${TEAM_TASK_BRANCH_PREFIX:-task}"
+  # 分支模型：task（默认，一任务一分支，复验/合并/回滚的单位都是任务）| agent（一 agent 一长期分支）
+  TEAM_BRANCH_MODE="${TEAM_BRANCH_MODE:-task}"
+  TEAM_TASK_BRANCH_RESET="${TEAM_TASK_BRANCH_RESET:-1}"     # close 后把 agent worktree 切回保护分支（task 模式）
   TEAM_PROTECTED_BRANCH="${TEAM_PROTECTED_BRANCH:-main}"
   TEAM_REMOTE="${TEAM_REMOTE:-origin}"
   TEAM_VCS="${TEAM_VCS:-local}"
@@ -124,8 +127,12 @@ team_load_config() {
   TEAM_PM_MODEL="${TEAM_PM_MODEL:-}"          # 空 = 用 TEAM_DEFAULT_MODEL
   TEAM_PM_SESSION_ID="${TEAM_PM_SESSION_ID:-}" # 空 = 用 pi -c 延续本目录上一个会话（保住历史）
   TEAM_PM_EXTRA_PI_ARGS="${TEAM_PM_EXTRA_PI_ARGS:-}"
-  TEAM_MODEL_LIMITS="${TEAM_MODEL_LIMITS:-}"
-  TEAM_MIN_FREE_SWAP_MB="${TEAM_MIN_FREE_SWAP_MB:-1024}"
+  # 模型并发上限：支持通配（如 openai-codex/*=1）。默认给低额度订阅留出安全边界。
+  TEAM_MODEL_LIMITS="${TEAM_MODEL_LIMITS:-kimi-coding/k3=2 openai-codex/*=1}"
+  # 容量硬线（zram 页存在 RAM 里，不能当并发额度；所以「磁盘 swap 空闲」单独算）
+  TEAM_MIN_FREE_SWAP_MB="${TEAM_MIN_FREE_SWAP_MB:-1024}"    # 磁盘 swap 空闲底线（不含 zram）
+  TEAM_MIN_AVAIL_MB="${TEAM_MIN_AVAIL_MB:-1024}"            # MemAvailable 底线（CEP 用的 4096）
+  TEAM_ZRAM_WARN_PCT="${TEAM_ZRAM_WARN_PCT:-85}"            # zram 占用超过该百分比只警告
   TEAM_MIN_TOTAL_MB="${TEAM_MIN_TOTAL_MB:-512}"            # RAM+swap 的绝对底线
   TEAM_WARN_AVAIL_MB="${TEAM_WARN_AVAIL_MB:-2048}"         # RAM 低于此值：只警告（允许卡顿）
   TEAM_AGENT_MEM_MB="${TEAM_AGENT_MEM_MB:-6144}"           # 单个 agent 的经验占用（估算用）
@@ -137,6 +144,7 @@ team_load_config() {
   TEAM_WATCH_REBUILD_TMUX="${TEAM_WATCH_REBUILD_TMUX:-0}"  # 0=不管 tmux（session/窗口没了只告警）；1=允许重建 PM 窗口
   TEAM_WATCH_BACKEND="${TEAM_WATCH_BACKEND:-tmux}"         # tmux（默认：同 session 的窗口 + 状态面板）| container
   TEAM_WATCH_WINDOW="${TEAM_WATCH_WINDOW:-watchdog}"       # tmux 后端的窗口名
+  TEAM_REVIEW_TIMEOUT="${TEAM_REVIEW_TIMEOUT:-1800}"       # team review 跑门禁的硬超时（秒）
   TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-3}"        # 监视器刷新间隔（秒）
   TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 每个 agent 显示最近几条事件
   TEAM_WATCH_IMAGE="${TEAM_WATCH_IMAGE:-}"                 # 看门狗容器镜像，空=localhost/pi-team-watch:1
@@ -179,6 +187,25 @@ team_find_report() { # <ID> → 路径（无则返回 1）
 }
 team_agent_worktree() { printf '%s\n' "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/$1"; }
 team_agent_branch() { printf '%s\n' "$TEAM_AGENT_BRANCH_PREFIX/$1"; }
+
+team_branch_slug() { # <文本> → 分支名用的 slug（非 ASCII 直接退化为空）
+  printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's/[^a-z0-9]\+/-/g' -e 's/^-\+//' -e 's/-\+$//' | cut -c1-28
+}
+
+team_task_branch_for_id() { # <ID> [title] → task/<ID>-<slug>
+  local id="$1" title="${2:-}" slug
+  [ -n "$title" ] || title="$(team_task_title "$id" 2>/dev/null || true)"
+  slug="$(team_branch_slug "$title")"
+  [ -n "$slug" ] || slug="$(team_branch_slug "$id")"
+  printf '%s/%s-%s\n' "$TEAM_TASK_BRANCH_PREFIX" "$id" "${slug:-task}"
+}
+
+team_branch_mode_is_task() { [ "${TEAM_BRANCH_MODE:-task}" = "task" ]; }
+
+team_branch_for_agent() { # <agent> <ID> → 该 agent 在这个任务上应该用的分支名
+  if team_branch_mode_is_task; then team_task_branch_for_id "$2"
+  else team_agent_branch "$1"; fi
+}
 
 # 输出一份「可直接写进派单提示词」的路径清单
 team_paths_json() {
@@ -463,7 +490,7 @@ team_pm_can_restart() {
 }
 
 # ---------------------------------------------------------------- 门禁
-# 内存守卫（底线 = swap 不见底）：
+# 内存守卫（底线 = 不把 RAM/zram 一起打满）：
 #   swap 见底 → 拒绝派单（一打满就会被 OOM killer 杀进程，连带 PM 一起挂）
 #   RAM 紧张 → 只警告，允许继续（代价是卡顿，不是崩）
 # 数据源：TEAM_MEMINFO_FILE（测试/容器显式覆盖）> /proc/meminfo > macOS sysctl > free
@@ -491,33 +518,82 @@ team_mem_stats() {
 team_available_mb() { team_mem_stats | awk '{print $1}'; }
 team_swap_free_mb() { team_mem_stats | awk '{print $2}'; }
 
+# zram / 磁盘 swap 分账（CEP 的教训：zram 的页存在 RAM 里，空闲 swap 里混着被压缩的 RAM）
+# 输出 "disk_free disk_total zram_used_pct zram_phys_mb"
+team_swap_breakdown() {
+  local swapfile="${TEAM_SWAPFILE_PATH:-/proc/swaps}"
+  local zram_used=0 zram_total=0 zram_pct=0 zram_phys=0
+  local disk_free=0 disk_total=0
+  if [ -r "$swapfile" ]; then
+    # 逐行看 /proc/swaps：Filename Type Size Used Priority
+    while read -r dev type size used prio; do
+      case "$dev" in Filename*) continue ;; esac
+      # /proc/swaps 的单位是 KB → 统一换成 MB
+      size=$((size / 1024)); used=$((used / 1024))
+      case "$dev" in
+        /dev/zram*) zram_used=$((zram_used + used)); zram_total=$((zram_total + size)) ;;
+        *) disk_free=$((disk_free + size - used)); disk_total=$((disk_total + size)) ;;
+      esac
+    done < "$swapfile"
+  fi
+  [ "$zram_total" -gt 0 ] && zram_pct=$((zram_used * 100 / zram_total))
+  # zram 物理占用（mm_stat 的 mem_used，优先原值 mem_used，其次 mem_used_total）
+  local d mm
+  for d in /sys/block/zram*/mm_stat; do
+    [ -r "$d" ] || continue
+    mm="$(awk '{for(i=1;i<=NF;i++) if ($i ~ /^mem_used/) {print $(i+1); exit}}' "$d" 2>/dev/null || true)"
+    if [ -n "$mm" ] && [ "$mm" -gt 0 ] 2>/dev/null; then zram_phys=$((zram_phys + mm / 1048576))
+    else
+      mm="$(awk '{print $3}' "$d" 2>/dev/null || true)"
+      [ -n "$mm" ] && [ "$mm" -gt 0 ] 2>/dev/null && zram_phys=$((zram_phys + mm / 1048576))
+    fi
+  done
+  printf '%s %s %s %s\n' "$disk_free" "$disk_total" "$zram_pct" "$zram_phys"
+}
+
 team_mem_guard() {
-  local avail swapfree swaptotal min_swap min_total warn_avail
+  local avail swapfree swaptotal min_swap min_total warn_avail min_avail zram_warn
   read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
+  local diskfree disktotal zram_pct zram_phys
+  read -r diskfree disktotal zram_pct zram_phys <<< "$(team_swap_breakdown)"
   min_swap="${TEAM_MIN_FREE_SWAP_MB:-1024}"
   min_total="${TEAM_MIN_TOTAL_MB:-512}"
-  warn_avail="${TEAM_WARN_AVAIL_MB:-2048}"
+  warn_avail="${TEAM_WARN_AVAIL_MB:-4096}"
+  min_avail="${TEAM_MIN_AVAIL_MB:-1024}"
+  zram_warn="${TEAM_ZRAM_WARN_PCT:-85}"
   [ -n "$avail" ] || return 0
 
-  if [ "$min_swap" -gt 0 ] && [ "$swapfree" -lt "$min_swap" ]; then
-    team_err "swap 只剩 ${swapfree}MB（底线 ${min_swap}MB）：打满会被 OOM killer 杀进程，拒绝派单"
-    team_err "处理：等一个 agent 结束；或显式冒险 TEAM_MIN_FREE_SWAP_MB=0 team dispatch …"
+  # 硬线 ①：MemAvailable（zram 里的页也算在 RAM 里，所以这条最能反映真实余量）
+  if [ "$min_avail" -gt 0 ] && [ "$avail" -lt "$min_avail" ]; then
+    team_err "MemAvailable 只剩 ${avail}MB（底线 ${min_avail}MB）：拒绝派单（机上有 zram=${zram_pct}%）"
+    team_err "处理：等一个 agent 结束；或显式冒险 TEAM_MIN_AVAIL_MB=0 team dispatch …"
     return 1
   fi
-  if [ "$min_total" -gt 0 ] && [ "$((avail + swapfree))" -lt "$min_total" ]; then
-    team_err "可用内存+空闲 swap 仅 $((avail + swapfree))MB < 底线 ${min_total}MB，拒绝派单"
+  # 硬线 ②：磁盘 swap 空闲（**不计 zram** —— zram 占的是 RAM，不是安全网）
+  if [ "$disktotal" -gt 0 ] && [ "$min_swap" -gt 0 ] && [ "$diskfree" -lt "$min_swap" ]; then
+    team_err "磁盘 swap 只剩 ${diskfree}MB（底线 ${min_swap}MB，不计 zram）：拒绝派单"
+    return 1
+  fi
+  # 硬线 ③：RAM + 磁盘 swap 的总余量
+  if [ "$min_total" -gt 0 ] && [ "$((avail + diskfree))" -lt "$min_total" ]; then
+    team_err "MemAvailable + 磁盘 swap 空闲仅 $((avail + diskfree))MB < 底线 ${min_total}MB，拒绝派单"
     return 1
   fi
   if [ "$warn_avail" -gt 0 ] && [ "$avail" -lt "$warn_avail" ]; then
-    team_warn "可用内存 ${avail}MB < ${warn_avail}MB：新 agent 会开始吃 swap，机器会变卡（允许，继续）"
+    team_warn "MemAvailable ${avail}MB < ${warn_avail}MB：新 agent 会开始吃 swap/zram，机器会变卡（允许，继续）"
+  fi
+  if [ "$zram_warn" -gt 0 ] && [ "$zram_pct" -ge "$zram_warn" ]; then
+    team_warn "zram 已用 ${zram_pct}%（≥${zram_warn}%，物理 ${zram_phys}MB 压在 RAM 里）：zram 满后基本常满，注意 RAM"
   fi
   return 0
 }
 
 # 粗略估算还能再加几个 agent（team ps 显示用；TEAM_AGENT_MEM_MB 是经验值）
 team_agent_capacity() {
-  local avail swapfree per min_total n
+  local avail swapfree per min_total n diskfree
   read -r avail swapfree _ <<< "$(team_mem_stats)"
+  read -r diskfree _ _ _ <<< "$(team_swap_breakdown)"
+  swapfree="$diskfree"   # 只把磁盘 swap 当余量
   per="${TEAM_AGENT_MEM_MB:-6144}"; min_total="${TEAM_MIN_TOTAL_MB:-512}"
   [ "$per" -gt 0 ] || { printf '?'; return 0; }
   n=$(( (avail + swapfree - min_total) / per ))
@@ -526,10 +602,13 @@ team_agent_capacity() {
 }
 
 team_capacity_line() {
-  local avail swapfree swaptotal
+  local avail swapfree swaptotal diskfree disktotal zram_pct zram_phys
   read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
-  printf 'RAM 可用 %sMB ｜ swap 空闲 %s/%sMB ｜ 估算可再加 %s 个 agent\n' \
-    "$avail" "$swapfree" "$swaptotal" "$(team_agent_capacity)"
+  read -r diskfree disktotal zram_pct zram_phys <<< "$(team_swap_breakdown)"
+  local zram_note=""
+  [ "$zram_pct" -gt 0 ] && zram_note="，zram 用 ${zram_pct}%${zram_phys:+/物理 ${zram_phys}MB}"
+  printf 'RAM 可用 %sMB%s ｜ 磁盘 swap 空闲 %sMB%s ｜ 估算可再加 %s 个 agent\n' \
+    "$avail" "" "${diskfree}" "$zram_note" "$(team_agent_capacity)"
 }
 
 # ---------------------------------------------------------------- 巡检待办
@@ -613,24 +692,48 @@ team_nudge() { # <摘要文本>
 
 # 模型并发守卫：TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/gpt-5.6-sol=1"
 team_model_limit() {
-  local want="$1" pair
+  local want="$1" pair pat
+  local best=0
   for pair in $(printf '%s' "$TEAM_MODEL_LIMITS" | tr '\n\t' '  '); do
-    case "$pair" in
-      "$want"=*) printf '%s\n' "${pair#*=}"; return 0 ;;
+    case "$pair" in *=*) ;; *) continue ;; esac
+    pat="${pair%=*}"
+    case "$want" in
+      "$pat") printf '%s\n' "${pair#*=}"; return 0 ;;     # 精确匹配优先
+    esac
+    # 通配（openai-codex/*=1 这种）：取满足的最严格（最小）上限
+    case "$want" in
+      $pat)
+        if [ "$best" -eq 0 ] || [ "${pair#*=}" -lt "$best" ]; then best="${pair#*=}"; fi ;;
     esac
   done
-  printf '0'
+  printf '%s\n' "$best"
 }
 
-team_model_running() { # 统计「活着且用了该模型」的 agent 数
+team_model_running() { # 统计「活着且用了该模型」的 agent 数（支持通配上限的归组统计）
   local want="$1" n=0 a w m
   for a in $(team_agents); do
     m="$(team_state_get "$a" model '')"
-    [ "$m" = "$want" ] || continue
+    if [ "$m" != "$want" ]; then
+      # 同一个通配上限下的其它模型也算进并发（例如 openai-codex/* = 1）
+      local pat; pat="$(team_model_limit_pattern_for "$want")"
+      [ -n "$pat" ] && [ "$pat" != "$want" ] || continue
+      case "$m" in $pat) ;; *) continue ;; esac
+    fi
     w="$(team_state_get "$a" window "$a")"
     if team_tmux_has_window "$TEAM_SESSION" "$w"; then n=$((n + 1)); else team_state_clear "$a"; fi
   done
   printf '%s\n' "$n"
+}
+
+team_model_limit_pattern_for() { # <model> → 命中的通配模式（没有则是空）
+  local want="$1" pair pat
+  for pair in $(printf '%s' "$TEAM_MODEL_LIMITS" | tr '\n\t' '  '); do
+    case "$pair" in *=*) ;; *) continue ;; esac
+    pat="${pair%=*}"
+    case "$pat" in *\**) ;; *) continue ;; esac
+    case "$want" in $pat) printf '%s\n' "$pat"; return 0 ;; esac
+  done
+  return 1
 }
 
 team_model_guard() {

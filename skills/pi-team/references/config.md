@@ -86,6 +86,15 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 | `TEAM_INBOX_MAX_CHARS` | `150` | 简报里 agent 末条消息的截断长度 |
 | `TEAM_NOTIFY_LOG` | `/tmp/<project>-pi-team-notify.log` | 扩展调试日志（排查通知问题看这里） |
 
+### 分支模型（D1）
+
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `TEAM_BRANCH_MODE` | `task` | `task`=一任务一分支（`task/<ID>-<slug>`；复验/合并/回滚单位=任务）｜`agent`=一 agent 一长期分支 |
+| `TEAM_TASK_BRANCH_PREFIX` | `task` | 任务分支前缀 |
+| `TEAM_TASK_BRANCH_RESET` | `1` | `close` 后 worktree 退回 `detached@保护分支` |
+| `TEAM_AGENT_BRANCH_PREFIX` | `agent` | `agent` 模式的前缀 |
+
 ## 3. 项目内落盘布局
 
 ```
@@ -125,7 +134,11 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 |---|---|
 | `TEAM_ROOT` | 显式指定项目根 |
 | `TEAM_CONFIG_FILE` | 显式指定配置文件（`team --config` 同义） |
-| `TEAM_MIN_FREE_SWAP_MB` | 临时覆盖 swap 底线 |
+| `TEAM_MIN_AVAIL_MB` | `1024` | **硬线**：MemAvailable 底线（CEP 机器设 4096，对应两次 OOM 的教训） |
+| `TEAM_MIN_FREE_SWAP_MB` | `1024` | **硬线**：磁盘 swap 空闲底线（**不含 zram**） |
+| `TEAM_ZRAM_WARN_PCT` | `85` | zram 占用超此值只警告 |
+| `TEAM_REVIEW_TIMEOUT` | `1800` | `team review` 跑门禁的硬超时（秒）；超时 → `TIMEOUT`（按 FAIL 处理） |
+| `TEAM_MIN_FREE_SWAP_MB` | 临时覆盖磁盘 swap 底线 |
 | `TEAM_MEMINFO_FILE` | 指定 meminfo 文件（容器/测试无 `/proc/meminfo` 时用） |
 | `TEAM_MODEL_LIMITS` | 临时放宽/收紧并发（`""` 表示不限） |
 | `TEAM_ASSUME_YES` | `1`=跳过 `--yes`（只建议在自动化脚本里用） |

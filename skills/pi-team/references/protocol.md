@@ -73,9 +73,18 @@ agent 回合结束（Pi 的 agent_settled：不会再自动继续的那个点）
 | 高强度评审/难点 | 订阅额度紧张 → 用 `TEAM_MODEL_LIMITS` 限并发，一次只跑一个 |
 | 长上下文难题 | 慢且并发受限，PM 点名才用 |
 
-`team dispatch` 会在派单前检查 `TEAM_MODEL_LIMITS` 与容量：**底线是 swap 不被打满**
-（打满就会被 OOM killer 杀进程，连 PM 一起带走），RAM 紧张只意味着卡顿，只给警告不拦。
-原因很直接：一次 OOM 重启的代价远高于排队十分钟，而变卡只是慢一点。
+`team dispatch` 会在派单前检查 `TEAM_MODEL_LIMITS` 与容量：规则（来自 CEP 的两次 OOM 事故，其中一次是 RAM + zram 同时见底）：
+
+| 线 | 默认 | 语义 |
+|---|---|---|
+| `TEAM_MIN_AVAIL_MB` | 1024 | **硬线**：`MemAvailable` 低于它就拒绝派单（CEP 那台机器设 4096） |
+| `TEAM_MIN_FREE_SWAP_MB` | 1024 | **硬线**：**磁盘 swap** 空闲低于它拒绝派单（**不计 zram**） |
+| `TEAM_MIN_TOTAL_MB` | 512 | 硬线：`MemAvailable + 磁盘 swap 空闲` |
+| `TEAM_WARN_AVAIL_MB` | 4096 | 只警告：RAM 偏紧，允许卡顿 |
+| `TEAM_ZRAM_WARN_PCT` | 85 | 只警告：zram 占用过高（zram 的页存在 RAM 里，是卡顿来源不是安全网） |
+
+为什么把 zram 单独看：`/dev/zram0` 的“可用空间”其实是 RAM 里被压缩的页，一满就基本常满；
+把它算进并发额度会系统性高估余量，OOM 时 RAM 与 zram 会一起见底。
 
 ## 7. 安全红线（不可协商）
 
@@ -103,11 +112,37 @@ watchdog 不是保活心跳，而是一个**节拍器**：定时问一句“现�
 为什么把边界画这么窄：一个“什么都管”的守护进程会同时操纵 tmux 布局、agent 生命周期、模型额度，
 出事时无法判断是谁改坏了状态；而且“保活”越多，就越容易把本应人工介入的事默默掩盖。
 
-## 9. 容量：底线是 swap 不见底
+## 8b. 分支模型：一任务一分支（默认）
+
+- `TEAM_BRANCH_MODE=task`（默认）：`dispatch` 在 agent 的长期 worktree 里从保护分支切出
+  `task/<ID>-<slug>`；`review/merge/close` 的单位都是这个任务分支 → **复验范围 = 一个任务的 diff**、
+  回滚粒度 = 一个任务、PR 描述 = 任务书引用。任务 `close` 后 worktree 退回 `detached@保护分支`，下一个任务干净开始。
+- `TEAM_BRANCH_MODE=agent`：一 agent 一长期分支 `agent/<name>`（适合长线重构、或一个 agent 只做一件事的团队）。
+- worktree 脏时拒绝切分支（否则会把上一个任务的改动混进新任务）；这条是硬规则，不是提醒。
+
+## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
 
 - 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。
 - RAM 紧张（< `TEAM_WARN_AVAIL_MB`）只警告：允许卡顿，因为慢不等于崩；OOM 才是真事故。
 - `team ps` / `team doctor` 直接用同一数据源报数，并给出“还能再加几个 agent”的估算（`TEAM_AGENT_MEM_MB`）。
+
+## 9b. 测试与门禁必须有超时（不可协商）
+
+- 事实：一个被故意改坏的实现让 PG 集成测试永久等待连接（池无超时 + `--test-timeout` 缺失 +
+  bash `timeout` 被设成 1800000s）→ 脚本挂 **85 分钟**、期间零输出。
+- 因此：`team review` 跑门禁时**一律套硬超时**（`TEAM_REVIEW_TIMEOUT`，默认 1800s；超时判定 `TIMEOUT`，
+  按 FAIL 处理并写进复验记录）。门禁命令自身也应带 `timeout`（如 `timeout 900 pnpm test:unit`）。
+- 任务书里的验收命令要自带超时；破坏性实验脚本必须 `trap 'git checkout -- …' EXIT` 还原现场。
+
+## 9c. 强复验（对抗性验证包 + finding 翻转，里程碑收口用）
+
+`team review <ID> --strong` 会额外检查两件事，并把结论写进复验记录：
+
+1. **对抗性验证包**：验证 agent 在**独立包**里写测试（不复用被测项目的夹具，避免“用被验证对象验证它自己”）；
+2. **finding 翻转**：修复者把「记录缺陷的 finding 测试」翻转为守门测试，报告给出「修复前红 → 修复后绿」；
+   更狠的做法是**故意破坏实现 → 守门测试必须失败**（证明测试不是表演）。
+
+成本更高，适合里程碑/收口轮；日常任务跑普通门禁即可。
 
 ## 10. 决策日志与调研规则
 

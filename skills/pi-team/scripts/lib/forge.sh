@@ -106,3 +106,45 @@ forge_pr_body() { # <ID> → 选一个 body 文件
   printf '# %s\n\npi-team: 由 `%s` 生成的 PR 占位说明（请补交付物与验证证据）。\n' "$id" "$TEAM_CLI" > "$tmp"
   printf '%s\n' "$tmp"
 }
+
+# 合并 PR/MR。注意：很多 PAT 没有 `pull-requests: write`（CEP 就是 403）。
+# 所以这里返回非 0 让调用方走本地兜底，而不是把失败当致命错误。
+forge_merge_pr() { # <pr-number-or-iid>
+  local n="$1"
+  case "$TEAM_VCS" in
+    github)
+      local pat; pat="$(forge_github_pat)"
+      team_require_cmd gh "TEAM_VCS=github 需要 gh"
+      [ -f "$pat" ] || team_die "找不到 PAT 文件 $TEAM_TOKEN_FILE"
+      GH_TOKEN="$(<"$pat")" gh pr merge --squash --delete-branch "$n" ;;
+    gitlab)
+      local pid; pid="$(forge_gitlab_project_id)"
+      forge_gitlab_api PUT "/projects/$pid/merge_requests/$n/merge" | head -c 500 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 兜底：PR 合不了（或无权限）时，在 PR 上留记录并关掉它（CEP 的做法）
+forge_pr_record_and_close() { # <pr> <squash-sha> <branch>
+  local n="$1" sha="$2" branch="$3" msg
+  msg="pi-team: 已在本地 squash merge 到 $TEAM_PROTECTED_BRANCH（$sha，来源分支 $branch）。\
+PAT 无 pull-requests: write，故用本地合并 + 关闭本 PR。"
+  case "$TEAM_VCS" in
+    github)
+      local pat; pat="$(forge_github_pat)"
+      [ -f "$pat" ] || return 1
+      GH_TOKEN="$(<"$pat")" gh pr comment "$n" --body "$msg" >/dev/null 2>&1 \
+        && team_ok "PR #$n 已留言记录 squash commit $sha" || team_warn "留言失败（缺 issues: write？）：请手工记录 $sha"
+      GH_TOKEN="$(<"$pat")" gh pr close "$n" >/dev/null 2>&1 \
+        && team_ok "PR #$n 已关闭" || team_warn "关闭 PR 失败：手工 gh pr close $n"
+      ;;
+    gitlab)
+      local pid; pid="$(forge_gitlab_project_id)"
+      forge_gitlab_api POST "/projects/$pid/merge_requests/$n/notes" \
+        --data-urlencode "body=$msg" >/dev/null 2>&1 && team_ok "MR !$n 已留言" || team_warn "留言失败"
+      forge_gitlab_api PUT "/projects/$pid/merge_requests/$n" --data-urlencode "state_event=close" \
+        >/dev/null 2>&1 && team_ok "MR !$n 已关闭" || team_warn "关闭 MR 失败"
+      ;;
+  esac
+  return 0
+}

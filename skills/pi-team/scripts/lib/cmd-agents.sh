@@ -13,6 +13,11 @@ team_worktree_add() { # <agent> [--no-install]
   mkdir -p "$(dirname "$wt")"
   if [ -d "$wt" ]; then
     team_ok "worktree 已存在：$wt"
+  elif team_branch_mode_is_task; then
+    # task 模式：worktree 先 detached 在保护分支上（`git switch -c task/<ID>-…` 由 dispatch 做）；
+    # 不能直接 checkout 保护分支 —— 主工作树已经占着它。
+    team_git_main worktree add --detach "$wt" "$TEAM_PROTECTED_BRANCH" >/dev/null
+    team_ok "worktree $wt ← detached@$TEAM_PROTECTED_BRANCH（任务分支由 dispatch 建）"
   else
     if team_git_main show-ref --verify -q "refs/heads/$branch"; then
       team_git_main worktree add "$wt" "$branch" >/dev/null
@@ -110,6 +115,45 @@ team_cmd_add_agent() {
   team_worktree_add "$agent" $noinstall
 }
 
+# 让 agent worktree 处于「本任务的分支」上：
+#   task 模式  → task/<ID>-<slug>（不存在就从保护分支新建）
+#   agent 模式 → agent/<name>（长期分支）
+# 有未提交改动时拒绝切换（否则会把上一个任务的活混进来）
+team_prepare_task_branch() { # <agent> <ID> → 设 TEAM_PREPARED_BRANCH（不要从 stdout 取名字：team_ok 也打 stdout）
+  local agent="$1" id="$2" wt branch cur
+  wt="$(team_agent_worktree "$agent")"
+  cur="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  branch="$(team_branch_for_agent "$agent" "$id")"
+
+  if ! team_branch_mode_is_task; then
+    if [ "$cur" != "$branch" ]; then
+      if team_git_main show-ref --verify -q "refs/heads/$branch"; then
+        git -C "$wt" switch "$branch" >/dev/null 2>&1 || team_die "切到 $branch 失败（worktree 脏？）"
+      else
+        git -C "$wt" switch -c "$branch" "$TEAM_PROTECTED_BRANCH" >/dev/null 2>&1 || team_die "新建 $branch 失败"
+      fi
+    fi
+    TEAM_PREPARED_BRANCH="$branch"; return 0
+  fi
+
+  if [ "$cur" != "$branch" ]; then
+    if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+      team_err "$wt 有未提交改动（当前分支 $cur）：先提交/丢弃，再切到 $branch"
+      git -C "$wt" status --short | head -10 >&2
+      team_die "拒绝在脏工作区上切分支（避免把上一个任务的改动混进 $id）"
+    fi
+    if team_git_main show-ref --verify -q "refs/heads/$branch"; then
+      git -C "$wt" switch "$branch" >/dev/null 2>&1 || team_die "切到已存在的 $branch 失败"
+      team_ok "worktree 切换到已有任务分支 $branch"
+    else
+      git -C "$wt" switch -c "$branch" "$TEAM_PROTECTED_BRANCH" >/dev/null 2>&1 \
+        || team_die "从 $TEAM_PROTECTED_BRANCH 新建 $branch 失败"
+      team_ok "新建任务分支 $branch（基于 $TEAM_PROTECTED_BRANCH）"
+    fi
+  fi
+  TEAM_PREPARED_BRANCH="$branch"
+}
+
 team_cmd_dispatch() {
   team_require_cmd tmux "agent 在 tmux 窗口里跑，PM 需要能旁观与追问"
   local agent="" id="" taskfile="" model="" fresh=0 printonly=0
@@ -137,6 +181,12 @@ team_cmd_dispatch() {
 
   local wt; wt="$(team_agent_worktree "$agent")"
   [ -d "$wt" ] || { team_warn "worktree 不存在，自动创建"; team_worktree_add "$agent"; }
+  # 分支准备放在守卫之前（会让 worktree 变状态，失败即停）
+  local task_branch=""
+  if [ "$printonly" != "1" ]; then
+    team_prepare_task_branch "$agent" "$id" || return 1
+    task_branch="$TEAM_PREPARED_BRANCH"
+  fi
 
   model="${model:-$(team_state_get "$agent" model "$(team_agent_model "$agent")")}"
   local provider="${model%%/*}"
@@ -173,6 +223,7 @@ team_cmd_dispatch() {
   team_state_set "$agent" worktree "$wt"
   team_state_set "$agent" task "$id"
   team_state_set "$agent" taskfile "$taskfile"
+  [ -n "$task_branch" ] && team_state_set "$agent" branch "$task_branch"
   team_state_set "$agent" started "$(team_timestamp)"
   team_board_set "$id" wip 2>/dev/null || true
 

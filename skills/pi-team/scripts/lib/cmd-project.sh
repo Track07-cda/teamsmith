@@ -270,16 +270,10 @@ team_cmd_doctor() {
       *)         warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在 → team up" ;;
     esac
 
-  check "看门狗"; if ! team_podman_ok; then
-      warn "本机没 podman：看门狗只能前台跑（$TEAM_CLI watch，或用你自己的 supervisor）"
-    else
-      local cst cname; cname="$(team_watch_container_name)"; cst="$(team_watch_container_state "$cname")"
-      case "$cst" in
-        running) pass "容器 running（$cname，--pid=$(team_watch_pid_mode)）" ;;
-        absent)  warn "容器未创建 → $TEAM_CLI watchdog up（看门狗由 PM 配置）" ;;
-        *)       warn "容器状态 $cst → $TEAM_CLI watchdog up" ;;
-      esac
-    fi
+  check "看门狗"; case "$(team_watchdog_state)" in
+      off) warn "没在跑 → $TEAM_CLI watchdog up（看门狗由 PM 配置）" ;;
+      *)   pass "$(team_watchdog_state_text)" ;;
+    esac
 
   check "forge"; case "$TEAM_VCS" in
       github)

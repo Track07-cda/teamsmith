@@ -10,6 +10,9 @@ team_resolve_branch() { # <ID> [--branch b]
   if [ -n "$branch" ]; then printf '%s\n' "$branch"; return 0; fi
   for a in $(team_agents); do
     [ "$(team_state_get "$a" task '')" = "$id" ] || continue
+    # ① state 里记的分支最可靠（task 模式切换任务后仍能定位）
+    b="$(team_state_get "$a" branch '')"
+    case "$b" in ""|HEAD|"$TEAM_PROTECTED_BRANCH") ;; *) printf '%s\n' "$b"; return 0 ;; esac
     wt="$(team_agent_worktree "$a")"
     [ -d "$wt" ] || continue
     b="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -44,16 +47,17 @@ team_task_title() { # <ID> → 标题（BOARD 行第 3 列，其次任务书第�
 
 team_cmd_review() {
   team_require_docs
-  local id="" branch="" no_gates=0
+  local id="" branch="" no_gates=0 strong=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
       --no-gates) no_gates=1; shift ;;
+      --strong) strong=1; shift ;;          # 强复验：要求对抗性验证包 + finding 翻转证据
       -*) team_usage_die "review: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "review <ID> [--branch b] [--no-gates]"
+  [ -n "$id" ] || team_usage_die "review <ID> [--branch b] [--no-gates] [--strong]"
   branch="$(team_resolve_branch "$id" "$branch")"
 
   local revdir="$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/review-$id"
@@ -85,17 +89,27 @@ team_cmd_review() {
 
   mkdir -p "$TEAM_DOCS_ABS/reviews"
   local log="$TEAM_DOCS_ABS/reviews/$id-verify.log"
-  local verdict="PASS" gates_out=""
+  local verdict="PASS" gates_out="" gate_timeout="${TEAM_REVIEW_TIMEOUT:-1800}"
   if [ "$no_gates" = "1" ]; then
     verdict="SKIPPED"; gates_out="（--no-gates：PM 选择人工看 diff）"
   elif [ -z "$TEAM_GATES" ]; then
     verdict="UNKNOWN"; gates_out="（TEAM_GATES 未配置：无法自动判定，只能人工评审）"
   else
-    team_info "跑门禁：$TEAM_GATES"
-    if ( cd "$revdir" && eval "$TEAM_GATES" ) > "$log" 2>&1; then
+    # CEP 教训：池无超时 × 测试无 --test-timeout × bash timeout 设成 1800000s → 门禁挂死 85 分钟。
+    # 所以门禁一律套硬超时；超时按 FAIL 处理并明确写进复验记录。
+    local runner=()
+    if team_have_cmd timeout && [ "${gate_timeout:-0}" -gt 0 ] 2>/dev/null; then
+      runner=(timeout --signal=TERM --kill-after=60 "$gate_timeout")
+    fi
+    team_info "跑门禁：$TEAM_GATES（硬超时 ${gate_timeout}s；可调 TEAM_REVIEW_TIMEOUT）"
+    if ( cd "$revdir" && "${runner[@]}" bash -c "$TEAM_GATES" ) > "$log" 2>&1; then
       verdict="PASS"
     else
       verdict="FAIL"
+      if [ "${#runner[@]}" -gt 0 ] && grep -q "timeout" "$log" 2>/dev/null; then
+        verdict="TIMEOUT"
+        printf '\n[pi-team] 门禁在 %ss 未结束，被硬超时终止（判定 TIMEOUT）\n' "$gate_timeout" >> "$log"
+      fi
     fi
     gates_out="$(tail -25 "$log")"
     team_ok "门禁输出：${log#"$TEAM_MAIN_ROOT"/}（${verdict}）"
@@ -106,13 +120,27 @@ team_cmd_review() {
   commits="$(git -C "$revdir" log --oneline --no-decorate "$TEAM_PROTECTED_BRANCH..HEAD" 2>/dev/null | head -40 || true)"
   changed="$(git -C "$revdir" diff --name-status "$TEAM_PROTECTED_BRANCH...HEAD" 2>/dev/null | head -200 || true)"
 
+  # 强复验（CEP 的实践）：要求证据表明「测试真的会失败」——对抗性验证包 + finding 测试翻转
+  local strong_lines=""
+  if [ "$strong" = "1" ]; then
+    local flip=0 indep=0 notes=""
+    printf '%s' "$report_excerpt" | grep -qE '翻转|会失败|破坏性验证|control experiment|guard test|regression test' \
+      && flip=1
+    printf '%s' "$report_excerpt" | grep -qE 'packages/verification|独立(验证)?包|independent (package|suite)' && indep=1
+    strong_lines="## 强复验（对抗性验证包 / finding 翻转）\n\n"
+    strong_lines="${strong_lines}- 破坏性验证证据（故意改坏实现 → 守门测试必须失败）：$([ "$flip" = 1 ] && echo '有（报告里能找到）' || echo '**缺**：要求 agent 补「修复前红 → 修复后绿」或破坏实验）')\n"
+    strong_lines="${strong_lines}- 独立验证包（不复用被测夹具）：$([ "$indep" = 1 ] && echo '有' || echo '**缺**：让 verify agent 在独立包里写对抗测试')\n"
+    strong_lines="${strong_lines}- 判定：$([ "$flip" = 1 ] && [ "$indep" = 1 ] && echo '满足强复验' || echo '不满足（不阻塞合并，但里程碑收口前应补齐）')\n"
+    [ "$flip" = 1 ] && [ "$indep" = 1 ] || team_warn "强复验证据不完整（flip=$flip independent=$indep）：看复验记录里的清单"
+  fi
+
   local report="$TEAM_DOCS_ABS/reviews/$id.md"
   {
     printf '# %s · PM 独立复验\n\n' "$id"
     printf '时间: %s · 分支: `%s` · HEAD: `%s` · 判定: **%s**\n\n' "$(team_timestamp)" "$branch" "${head:0:9}" "$verdict"
     printf '## 复验方式\n\n'
     printf -- '- 独立 worktree：`%s`（detached checkout，不信任 agent 工作区）\n' "${revdir#"$TEAM_MAIN_ROOT"/}"
-    printf -- '- 门禁命令：`%s`\n' "${TEAM_GATES:-<未配置>}"
+    printf -- '- 门禁命令：`%s`（硬超时 %ss；超时判定 TIMEOUT→按 FAIL 处理）\n' "${TEAM_GATES:-<未配置>}" "${TEAM_REVIEW_TIMEOUT:-1800}"
     printf -- '- 输出：`%s`\n' "${log#"$TEAM_MAIN_ROOT"/}"
     if team_find_report "$id" >/dev/null 2>&1; then
       printf -- '- agent 报告：`%s`\n' "$(team_find_report "$id")"
@@ -120,6 +148,7 @@ team_cmd_review() {
       printf -- '- agent 报告：**缺失**（没有报告本身就是问题）\n'
     fi
     printf '\n'
+    [ -n "$strong_lines" ] && printf '%b\n' "$strong_lines"
     printf '## 变更概览\n\n```\n%s\n```\n\n' "${diffstat:-（无）}"
     printf '## 提交\n\n```\n%s\n```\n\n' "${commits:-（无）}"
     printf '## 文件\n\n```\n%s\n```\n\n' "${changed:-（无）}"
@@ -144,25 +173,26 @@ team_cmd_review() {
 
 team_cmd_merge() {
   team_require_docs
-  local id="" branch="" push=0 delete_branch=0 no_review=0
+  local id="" branch="" push=0 delete_branch=0 no_review=0 pr=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
       --push) push=1; shift ;;
       --delete-branch) delete_branch=1; shift ;;
+      --pr) pr="${2:?}"; shift 2 ;;          # 合并后顺手合 PR/MR；403 就自动本地兜底
       --no-review-check) no_review=1; shift ;;
       -*) team_usage_die "merge: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "merge <ID> [--branch b] [--push] [--delete-branch]"
+  [ -n "$id" ] || team_usage_die "merge <ID> [--branch b] [--push] [--delete-branch] [--pr N]"
   team_allow_write || return 1
   branch="$(team_resolve_branch "$id" "$branch")"
 
   if [ "$no_review" != "1" ] && [ ! -f "$TEAM_DOCS_ABS/reviews/$id.md" ]; then
     team_die "没有复验记录：先跑 $TEAM_CLI review $id（或显式 --no-review-check）"
   fi
-  if [ "$no_review" != "1" ] && grep -qE '判定: \*\*FAIL\*\*|判定: \*\*UNKNOWN\*\*' "$TEAM_DOCS_ABS/reviews/$id.md" 2>/dev/null; then
+  if [ "$no_review" != "1" ] && grep -qE '判定: \*\*(FAIL|UNKNOWN|TIMEOUT)\*\*' "$TEAM_DOCS_ABS/reviews/$id.md" 2>/dev/null; then
     team_warn "复验判定不是 PASS：确认无误后再合并（当前是 PM 的判断责任）"
   fi
 
@@ -198,6 +228,15 @@ team_cmd_merge() {
   fi
   team_board_set "$id" done 2>/dev/null || true
   team_ok "board $id → done"
+
+  if [ -n "$pr" ]; then
+    if forge_merge_pr "$pr" >/dev/null 2>&1; then
+      team_ok "PR #$pr 已由 forge 合并（squash）"
+    else
+      team_warn "forge 合并 PR #$pr 失败（常见：PAT 缺 pull-requests: write）"
+      forge_pr_record_and_close "$pr" "$(team_git_main rev-parse --short HEAD)" "$branch" || true
+    fi
+  fi
 }
 
 team_cmd_pr() {
@@ -218,6 +257,17 @@ team_cmd_pr() {
   title="${title:-$id: $(team_task_title "$id")}"
   body="${body:-$(forge_pr_body "$id")}"
   forge_open_pr "$branch" "$title" "$body"
+}
+
+# PR/MR 合不动时的本地兜底（CEP 的 PAT 没有 pull-requests: write）：
+#   local squash merge → push → 在 PR 上留言记录 squash commit → 关闭 PR
+team_pr_local_fallback() { # <ID> <pr> <branch>
+  local id="$1" pr="$2" branch="$3" sha
+  team_warn "走本地兜底（PAT 缺 pull-requests: write）：squash merge → push → 留言 → 关 PR"
+  team_cmd_merge "$id" --branch "$branch" --push || return 1
+  sha="$(team_git_main rev-parse --short HEAD)"
+  forge_pr_record_and_close "$pr" "$sha" "$branch" || true
+  team_ok "兜底完成：$TEAM_PROTECTED_BRANCH @ $sha（PR #$pr 已记录并关闭）"
 }
 
 team_cmd_close() {

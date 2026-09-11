@@ -126,6 +126,18 @@ bash <skill>/scripts/team teardown --all --purge --force   # 连 worktree 一起
 - agent 发现别人的 bug：报告里写 `BLOCKED:`，PM 决定是插新任务还是让原 owner 修。
 - 事实与报告不符：把失败证据贴进 thread，退回；反复出现则换模型族做独立验证。
 
+## H2. 分支与合并（task 模式）
+
+```bash
+git -C .worktrees/dev branch --show-current      # task/T1.2-api-health
+bash <skill>/scripts/team review T1.2            # 复验范围 = 这个任务的 diff（门禁带硬超时）
+bash <skill>/scripts/team review T1.2 --strong   # 强复验：要求对抗性验证包 + finding 翻转证据
+bash <skill>/scripts/team merge T1.2 --push --pr 17   # squash 入保护分支；PR 合不动就走本地兜底
+```
+
+- 任务分支从保护分支切出；worktree 脏时 `dispatch` 会拒绝切分支（避免两个任务混在一个 diff 里）。
+- `close T1.2` 之后 worktree 退回 `detached@保护分支`（`TEAM_TASK_BRANCH_RESET=1`），下一个任务干净开始。
+
 ## I. 定时巡检与 PM 节拍（watchdog 只管这一件事）
 
 问题：PM（pi 进程）停了/睡了，agent 发了通知没人处理。定位：**watchdog 不是保活心跳，而是定时问一句
