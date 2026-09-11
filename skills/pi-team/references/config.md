@@ -138,6 +138,7 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 | `TEAM_MIN_AVAIL_MB` | `1024` | **硬线**：MemAvailable 底线（CEP 机器设 4096，对应两次 OOM 的教训） |
 | `TEAM_MIN_FREE_SWAP_MB` | `1024` | **硬线**：磁盘 swap 空闲底线（**不含 zram**） |
 | `TEAM_ZRAM_WARN_PCT` | `85` | zram 占用超此值只警告 |
+| `TEAM_MERGE_PREFER_THEIRS` | 空 | `merge` 冲突时默认取分支侧的路径（逗号分隔，如 `pnpm-lock.yaml`） |
 | `TEAM_REVIEW_TIMEOUT` | `1800` | `team review` 跑门禁的硬超时（秒）；超时 → `TIMEOUT`（按 FAIL 处理） |
 | `TEAM_MIN_FREE_SWAP_MB` | 临时覆盖磁盘 swap 底线 |
 | `TEAM_MEMINFO_FILE` | 指定 meminfo 文件（容器/测试无 `/proc/meminfo` 时用） |

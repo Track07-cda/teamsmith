@@ -335,7 +335,43 @@ git -C "$REPO" reset --mixed "$MAIN_BEFORE" >/dev/null 2>&1
 rm -f "$REPO/conflict.txt"
 git -C "$REPO" worktree remove --force "$CONFWT" >/dev/null 2>&1 || true
 git -C "$REPO" branch -D task/T9.9-conflict >/dev/null 2>&1 || true
+# 冲突失败不能把 BOARD 标成 done（v1.7.1 的 bug：没进 main 却写 done）
+assert_has "$REPO/docs/team/BOARD.md" "| wip |" "冲突失败后 BOARD 保持原状态（不是 done）"
+assert_not "$TMP/merge-conflict.log" "board T1.1 → done" "冲突失败时不打印 board → done"
+assert_has "$TMP/merge-conflict.log" "BOARD 保持" "给出了「BOARD 保持原状态」的说明"
+assert_has "$TMP/merge-conflict.log" "恢复步骤" "给出了可复制粘贴的恢复步骤"
+assert_has "$TMP/merge-conflict.log" "prefer-theirs" "lockfile 场景给出 --prefer-theirs 提示"
+
+# --prefer-theirs：lockfile 类冲突自动取分支侧，合并能走完
+$TEAM task T9.8 --title "lockfile merge" --agent dev >/dev/null 2>&1 || true
+MAIN_BEFORE2="$(git -C "$REPO" rev-parse HEAD)"
+CONFWT2="$TMP/conflict-wt2"
+git -C "$REPO" worktree add --detach "$CONFWT2" "$PROTECTED" >/dev/null 2>&1
+git -C "$CONFWT2" switch -c task/T9.8-lock >/dev/null 2>&1
+printf 'branch lock\n' > "$CONFWT2/pnpm-lock.yaml"
+git -C "$CONFWT2" add -A >/dev/null 2>&1
+git -C "$CONFWT2" -c user.email=a@b -c user.name=a commit -qm "feat: branch lockfile"
+git -C "$REPO" worktree remove --force "$CONFWT2" >/dev/null 2>&1 || true
+printf 'main lock\n' > "$REPO/pnpm-lock.yaml"
+git -C "$REPO" add pnpm-lock.yaml >/dev/null 2>&1
+git -C "$REPO" -c user.email=a@b -c user.name=a commit -qm "feat: main lockfile"
+if $TEAM merge T9.8 --branch task/T9.8-lock --no-review-check --yes --prefer-theirs pnpm-lock.yaml >"$TMP/merge-prefer.log" 2>&1; then
+  ok "--prefer-theirs 让 lockfile 冲突自动解决并合并成功"
+else bad "--prefer-theirs 合并失败"; cat "$TMP/merge-prefer.log"; fi
+assert_has "$TMP/merge-prefer.log" "取分支侧" "打印了取分支侧的动作"
+assert_eq "lockfile 取了分支侧内容" "$(cat "$REPO/pnpm-lock.yaml")" "branch lock"
+assert_eq "合并成功后 BOARD 才标 done" "$(bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_board_field "$(team_board_row T9.8)" status')" "done"
+# 收尾：回滚 T9.8 造出来的 main 提交与 lockfile（回到 6d 开始时）
+SQUASH_SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" reset --mixed "$MAIN_BEFORE2" >/dev/null 2>&1
+rm -f "$REPO/pnpm-lock.yaml"
+git -C "$REPO" branch -D task/T9.8-lock >/dev/null 2>&1 || true
+assert_eq "T9.8 测试后主工作树已回滚" "$(git -C "$REPO" rev-parse HEAD)" "$MAIN_BEFORE2"
+team_dim "（T9.8 squash commit $SQUASH_SHA 已从 main 摘掉，测试隔离）"
+
+# push 失败也不能标 done（本地合并了但远端没有）
 assert_eq "冲突测试后主工作树已回滚" "$(git -C "$REPO" rev-parse HEAD)" "$MAIN_BEFORE"
+$TEAM board set T1.1 wip >/dev/null 2>&1 || true
 assert_eq "冲突测试没动 agent 的 worktree" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD)" "task/T1.1-smoke-task"
 
 # ④ 翻转证据进模板与派单提示词

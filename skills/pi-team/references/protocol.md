@@ -145,6 +145,27 @@ CEP 实测踩过的三处，现在都有明确的宽容规则：
   （add/add 常常是 git 的 rename 检测把 `reports/<ID>-x.md` 与 `reviews/<ID>.md` 配成了一对）。
   不再只丢一句"冲突/失败"让人手工重跑。
 
+## 8e. BOARD 的状态只在「真的进了保护分支」之后才写 done
+
+CEP 踩过：冲突失败路径上 BOARD 已经被标 `done`，而代码没进 `main`（PR 还开着）——状态与事实相反，
+是比失败本身更危险的事。现在的顺序与收口：
+
+1. 校验分支存在（`--branch` 拼错不会被误报成"冲突"）；
+2. `merge --squash` → `commit` → **`push`（若 `--push`/`--pr`）** 全部成功；
+3. 才 `board set <ID> done`。
+
+任何一步失败（冲突 / commit 失败 / push 失败）：`merge --abort` 收尾 + **把 BOARD 还原成合并前的状态**
+（通常 `review`，空则 `review`）+ 打印可复制粘贴的恢复步骤。给 `--pr N` 会自动带上 `--push`
+（否则远端保护分支没更新，forge 侧永远合不动）。
+
+lockfile 类冲突（`pnpm-lock.yaml` 等）有一条命令的重试路径：
+
+```bash
+team merge T1.2 --no-renames --prefer-theirs pnpm-lock.yaml   # 冲突时这些路径取分支侧，然后继续
+```
+
+（`--no-renames` 关掉 rename 误配对；`--prefer-theirs` 也可用配置默认给 `TEAM_MERGE_PREFER_THEIRS`。）
+
 ## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
 
 - 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。

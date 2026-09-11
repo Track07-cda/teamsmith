@@ -174,6 +174,7 @@ team_cmd_review() {
 team_cmd_merge() {
   team_require_docs
   local id="" branch="" push=0 delete_branch=0 no_review=0 pr="" no_renames="${TEAM_MERGE_NO_RENAMES:-0}"
+  local prefer="${TEAM_MERGE_PREFER_THEIRS:-}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
@@ -181,14 +182,19 @@ team_cmd_merge() {
       --delete-branch) delete_branch=1; shift ;;
       --pr) pr="${2:?}"; shift 2 ;;          # 合并后顺手合 PR/MR；403 就自动本地兜底
       --no-renames) no_renames=1; shift ;;   # 关掉 merge 的 rename 检测（add/add 误配对时用）
+      --prefer-theirs) prefer="${prefer:+$prefer,}${2:?}"; shift 2 ;;   # 冲突时这些路径取分支侧（lockfile 常用）
       --no-review-check) no_review=1; shift ;;
       -*) team_usage_die "merge: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "merge <ID> [--branch b] [--push] [--delete-branch] [--pr N] [--no-renames]"
+  [ -n "$id" ] || team_usage_die "merge <ID> [--branch b] [--push] [--delete-branch] [--pr N] [--no-renames] [--prefer-theirs <path>]"
   team_allow_write || return 1
   branch="$(team_resolve_branch "$id" "$branch")"
+  # 分支必须真实存在：否则 git 会说 "not something we can merge"，看起来像冲突
+  if ! team_git_main rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+    team_die "分支不存在：$branch（--branch 拼错了？现有候选：$(team_git_main branch --list "*$id*" | tr -d ' *' | tr '\n' ' ')）"
+  fi
 
   if [ "$no_review" != "1" ] && [ ! -f "$TEAM_DOCS_ABS/reviews/$id.md" ]; then
     team_die "没有复验记录：先跑 $TEAM_CLI review $id（或显式 --no-review-check）"
@@ -207,43 +213,85 @@ team_cmd_merge() {
     team_die "先提交或撤销这些改动：git -C $TEAM_MAIN_ROOT status"
   fi
 
+  # --pr 意味着远端保护分支必须先更新，否则 forge 侧永远合不动
+  if [ -n "$pr" ] && [ "$push" != "1" ]; then push=1; team_dim "  给了 --pr：自动带上 --push"; fi
+  # 失败时要把 BOARD 还原成合并前的状态（不能“没进 main 却写 done”）
+  local prev_status; prev_status="$(team_board_field "$(team_board_row "$id" 2>/dev/null || true)" status 2>/dev/null || true)"
+  case "$prev_status" in ""|-|"—") prev_status="review" ;; esac
   local title merge_log; title="$(team_task_title "$id")"
   merge_log="$(mktemp)"
   local merge_args=(merge --squash)
   [ "$no_renames" = "1" ] && merge_args=(-c merge.renames=false merge --squash)
+  # 失败收口：还原 BOARD 状态 + 给可复制粘贴的恢复步骤
+  local install_hint="${TEAM_INSTALL_CMD:-pnpm install --lockfile-only}"
+  merge_fail() { # <原因>
+    rm -f "$merge_log"
+    team_git_main merge --abort >/dev/null 2>&1 || team_git_main reset --merge >/dev/null 2>&1 || true
+    team_board_set "$id" "$prev_status" 2>/dev/null || true
+    team_err "合并未完成：$1"
+    team_dim "  BOARD 保持「$prev_status」（没进 $TEAM_PROTECTED_BRANCH 就不算 done）" >&2
+    printf '%s\n' "" "  恢复步骤（复制粘贴）：" \
+      "    git -C $TEAM_MAIN_ROOT merge --squash $branch        # 重跑，保留冲突现场" \
+      "    git -C $TEAM_MAIN_ROOT status --short | grep '^U'     # 看冲突文件" \
+      "    # lockfile 类（pnpm-lock.yaml / package-lock.json / yarn.lock）：取分支侧再装依赖" \
+      "    git -C $TEAM_MAIN_ROOT checkout --theirs -- pnpm-lock.yaml && (cd $TEAM_MAIN_ROOT && $install_hint)" \
+      "    git -C $TEAM_MAIN_ROOT add -A && git -C $TEAM_MAIN_ROOT commit -m \"$id: $title\"" \
+      "    git -C $TEAM_MAIN_ROOT push $TEAM_REMOTE $TEAM_PROTECTED_BRANCH   # 需要时" \
+      "    $TEAM_CLI board set $id done                        # 确认进了保护分支再标 done" \
+      "" "  或者一条命令重试（自动取分支侧 lockfile + 关掉 rename 检测）：" \
+      "    $TEAM_CLI merge $id --no-renames --prefer-theirs pnpm-lock.yaml" >&2
+    team_die "$1（BOARD 保持 $prev_status）"
+  }
+
   if ! team_git_main "${merge_args[@]}" "$branch" > "$merge_log" 2>&1; then
     team_err "squash merge 失败：$branch → $TEAM_PROTECTED_BRANCH"
-    # 列出冲突/未合并的文件（UU/AA/DU/UD/AU/UA/DD）——不列的话 PM 只能手工重跑才知道是哪个文件
+    # 先按 --prefer-theirs 自动解决指定路径（lockfile 这类“永远取分支侧”的文件）
+    if [ -n "$prefer" ]; then
+      local one
+      for one in $(printf '%s' "$prefer" | tr ',' ' '); do
+        [ -n "$one" ] || continue
+        if team_git_main checkout --theirs -- "$one" >/dev/null 2>&1; then
+          team_git_main add -- "$one" >/dev/null 2>&1 || true
+          team_ok "冲突文件 $one → 取分支侧（--prefer-theirs）"
+        fi
+      done
+    fi
+    # 列出仍未合并的文件（UU/AA/DU/UD/AU/UA/DD）——不列的话 PM 只能手工重跑才知道是哪个文件
     local conflicts
     conflicts="$(team_git_main status --porcelain 2>/dev/null | grep -E '^(UU|AA|DD|AU|UA|DU|UD) ' || true)"
     if [ -n "$conflicts" ]; then
       team_err "冲突文件："
       printf '%s\n' "$conflicts" | sed 's/^/  /' >&2
       case "$conflicts" in
-        *"^"*|*AA*)
+        *AA*)
           # add/add 常常是 git 的 rename 检测把两个不同路径配成了一对
           team_dim "  （AA=两边都新增。若是 docs 下的 reports/reviews 被误配对：重试加 --no-renames）" >&2 ;;
       esac
-    else
-      team_err "merge 输出（尾部）："
-      tail -12 "$merge_log" | sed 's/^/  /' >&2
+      merge_fail "有未解决的冲突"
     fi
-    team_git_main merge --abort >/dev/null 2>&1 || team_git_main reset --merge >/dev/null 2>&1 || true
-    rm -f "$merge_log"
-    team_die "先解决冲突再合并：git -C $TEAM_MAIN_ROOT status"
+    # 冲突都按 --prefer-theirs 解决完了：继续走 commit
+    team_ok "冲突已按 --prefer-theirs 全部解决（分支侧优先）"
   fi
   rm -f "$merge_log"
-  team_git_main commit -q -m "$id: $title" -m "pi-team: squash merge of $branch" || team_die "commit 失败"
-  team_ok "merged $branch → $TEAM_PROTECTED_BRANCH @ $(team_git_main rev-parse --short HEAD)"
+  team_git_main commit -q -m "$id: $title" -m "pi-team: squash merge of $branch" \
+    || merge_fail "squash 提交失败"
+  local squashed; squashed="$(team_git_main rev-parse --short HEAD)"
+  team_ok "merged $branch → $TEAM_PROTECTED_BRANCH @ $squashed"
 
   if [ "$push" = "1" ]; then
-    team_git_main push "$TEAM_REMOTE" "$TEAM_PROTECTED_BRANCH" && team_ok "pushed $TEAM_PROTECTED_BRANCH"
+    if team_git_main push "$TEAM_REMOTE" "$TEAM_PROTECTED_BRANCH"; then
+      team_ok "pushed $TEAM_PROTECTED_BRANCH"
+    else
+      # 本地已合并但远端没更新：不能标 done（否则远端 main 永远缺这段代码）
+      merge_fail "push $TEAM_REMOTE/$TEAM_PROTECTED_BRANCH 失败（本地已 squash 到 $squashed）"
+    fi
   else
     team_dim "  未推送：确认后执行 git -C $TEAM_MAIN_ROOT push $TEAM_REMOTE $TEAM_PROTECTED_BRANCH"
   fi
   if [ "$delete_branch" = "1" ]; then
     team_git_main branch -D "$branch" >/dev/null && team_ok "deleted branch $branch"
   fi
+  # 只有「合并 + 推送」都成功才标 done
   team_board_set "$id" done 2>/dev/null || true
   team_ok "board $id → done"
 
