@@ -1,15 +1,33 @@
 #!/usr/bin/env bash
 # pi-team · agent 生命周期：add-agent / dispatch / say / notify / teardown
 
-team_worktree_add() { # <agent> [--no-install]
+team_worktree_add() { # <agent> [--create] [--no-install]
   local agent="$1"; shift || true
-  local noinstall=0
+  local noinstall=0 do_create="${TEAM_CREATE_WORKTREE:-0}"
   while [ $# -gt 0 ]; do
-    case "$1" in --no-install) noinstall=1; shift ;; *) team_usage_die "add-agent: 未知参数 $1" ;; esac
+    case "$1" in
+      --create) do_create=1; shift ;;
+      --print-only|--print) do_create=0; shift ;;
+      --no-install) noinstall=1; shift ;;
+      *) team_usage_die "add-agent: 未知参数 $1" ;;
+    esac
   done
   team_require_agent "$agent"
   local wt branch; wt="$(team_agent_worktree "$agent")"; branch="$(team_agent_branch "$agent")"
 
+  # 幂等的 git worktree add —— 由 PM 执行（skill 不碰 git）；--create 才代建
+  if [ "$do_create" != "1" ]; then
+    team_dim "  需要 PM 执行（本命令不代做 git）："
+    if [ -d "$wt" ]; then
+      printf '    （已存在，无需创建）%s\n' "$wt"
+    else
+      printf '    git -C %s worktree add -b %s %s %s\n' "$TEAM_MAIN_ROOT" "$branch" "$wt" "$TEAM_PROTECTED_BRANCH"
+    fi
+    team_state_set "$agent" model "$(team_agent_model "$agent")"
+    team_state_set "$agent" window "$agent"
+    team_state_set "$agent" worktree "$wt"
+    return 0
+  fi
   mkdir -p "$(dirname "$wt")"
   if [ -d "$wt" ]; then
     team_ok "worktree 已存在：$wt"
@@ -110,17 +128,19 @@ PROMPT
 }
 
 team_cmd_add_agent() {
-  local agent="" noinstall=""
+  local agent="" extra=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --no-install) noinstall="--no-install"; shift ;;
+      --no-install) extra+=(--no-install); shift ;;
+      --create) extra+=(--create); shift ;;          # 明确要求代建 worktree（默认只打印 git 命令）
+      --print-only|--print) extra+=(--print-only); shift ;;
       -*) team_usage_die "add-agent: 未知参数 $1" ;;
       *) [ -z "$agent" ] || team_usage_die "add-agent: 多余参数 $1"
          agent="$1"; shift ;;
     esac
   done
-  [ -n "$agent" ] || team_usage_die "add-agent <agent> [--no-install]"
-  team_worktree_add "$agent" $noinstall
+  [ -n "$agent" ] || team_usage_die "add-agent <agent> [--create] [--no-install]"
+  if [ "${#extra[@]}" -gt 0 ]; then team_worktree_add "$agent" "${extra[@]}"; else team_worktree_add "$agent"; fi
 }
 
 # 让 agent worktree 处于「本任务的分支」上：
@@ -183,7 +203,11 @@ team_cmd_dispatch() {
   taskfile="$(cd "$(dirname "$taskfile")" && pwd)/$(basename "$taskfile")"
 
   local wt; wt="$(team_agent_worktree "$agent")"
-  [ -d "$wt" ] || { team_warn "worktree 不存在，自动创建"; team_worktree_add "$agent"; }
+  if [ ! -d "$wt" ]; then
+    team_err "worktree 不存在：$wt（skill 不代做 git）"
+    team_dim "  先由 PM 建： git -C $TEAM_MAIN_ROOT worktree add -b $(team_branch_for_agent "$agent" "$id") $wt $TEAM_PROTECTED_BRANCH" >&2
+    return 1
+  fi
   # 分支准备放在守卫之前（会让 worktree 变状态，失败即停）
   local task_branch=""
   if [ "$printonly" != "1" ]; then

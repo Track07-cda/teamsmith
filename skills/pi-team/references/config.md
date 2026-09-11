@@ -92,10 +92,8 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 | 键 | 默认 | 作用 |
 |---|---|---|
 | `TEAM_VCS` | `local` | `local`\|`github`\|`gitlab`\|`other`（other=项目自己的 forge，见下两行） |
-| `TEAM_PR_CMD` | 空 | 你们的 forge 创建 PR/MR 的命令模板；占位符 `{branch} {base} {title} {body}` |
-| `TEAM_MERGE_PR_CMD` | 空 | 你们 forge 合并 PR/MR 的命令模板；占位符 `{pr} {branch} {base} {title}` |
 
-> 分支模型的键（见下）现在只是**命名约定**：skill 用它生成食谱里的分支名，切/建分支由 PM 执行。
+> 分支模型的键（见下）只是**命名约定**（skill 不建/不切分支；`dispatch` 只用它给出提示）。
 
 | `TEAM_BRANCH_MODE` | `task` | `task`=一任务一分支（`task/<ID>-<slug>`；复验/合并/回滚单位=任务）｜`agent`=一 agent 一长期分支 |
 | `TEAM_TASK_BRANCH_PREFIX` | `task` | 任务分支前缀 |

@@ -143,8 +143,11 @@ $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/bo
 assert_file "$BR/.pi/team/config.sh" "bootstrap 写了配置"
 assert_has "$BR/.pi/team/config.sh" "TEAM_SESSION=\"$BSESS\"" "把探测/指定的 session 写进配置"
 assert_dir "$BR/docs/team/tasks" "建了文档骨架"
-assert_dir "$BR/.worktrees/dev" "建了 dev worktree"
-assert_dir "$BR/.worktrees/verify" "建了 verify worktree"
+assert_has "$TMP/boot.log" "worktree add -b agent/dev" "bootstrap 只打印 worktree 命令（git 归 PM）"
+assert_not_file "$BR/.worktrees/dev" "默认不代建 dev worktree"
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog --create-worktrees >"$TMP/boot2.log" 2>&1 || true
+assert_dir "$BR/.worktrees/dev" "--create-worktrees 才代建 dev worktree"
+assert_dir "$BR/.worktrees/verify" "--create-worktrees 才代建 verify worktree"
 assert_has "$BR/AGENTS.md" "<!-- pi-team:begin -->" "注入了协议段"
 assert_has "$TMP/boot.log" "下一步" "打印了下一步清单"
 $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot2.log" 2>&1
@@ -190,13 +193,27 @@ assert_eq "BOARD 建行（todo）" "$($TEAM board row T1.1 2>/dev/null | awk -F'
 
 # ---------------------------------------------------------------- 5. add-agent
 section "5 · add-agent"
-$TEAM add-agent dev --no-install >"$TMP/add.log" 2>&1 || bad "add-agent 失败"
+$TEAM add-agent dev --create --no-install >"$TMP/add.log" 2>&1 || bad "add-agent 失败"
 assert_dir "$REPO/.worktrees/dev" "创建 agent worktree"
 assert_eq "worktree 处于 detached（task 模式）" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD)" "HEAD"
 assert_file "$REPO/.worktrees/dev/README.md" "worktree 内容就绪"
 
 # ---------------------------------------------------------------- 6. dispatch
-section "3b · 分支归 PM（skill 不执行 git 写操作）"
+section "3b · git 归 PM（skill 不执行、也不过度包装 git）"
+# add-agent 默认只打印 git 命令（不代建 worktree）
+AG2="$TMP/gitfree-repo"; mkdir -p "$AG2"; ( cd "$AG2" && git init -q -b main && git config user.email a@b && git config user.name a && echo x > a && git add -A && git commit -qm init )
+( cd "$AG2" && bash "$SKILL_DIR/scripts/team" init --session "pi-team-smoke-gitfree-$$" --agents nobody >/dev/null 2>&1 ) || true
+( cd "$AG2" && bash "$SKILL_DIR/scripts/team" add-agent nobody >"$TMP/addagent-print.log" 2>&1 ) || true
+assert_has "$TMP/addagent-print.log" "worktree add -b agent/nobody" "add-agent 只打印 git worktree 命令"
+assert_not_file "$AG2/.worktrees/nobody" "默认不代建 worktree"
+( cd "$AG2" && bash "$SKILL_DIR/scripts/team" add-agent nobody --create --no-install >/dev/null 2>&1 ) || true
+assert_dir "$AG2/.worktrees/nobody" "--create 才代建 worktree"
+# merge / pr 已从 CLI 移除（不再包装 git/forge）
+if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应该已移除"; else ok "merge 命令已移除（git 由 PM 直接做）"; fi
+if $TEAM pr T1.1 >/dev/null 2>&1; then bad "pr 应该已移除"; else ok "pr 命令已移除"; fi
+if $TEAM gh pr list >/dev/null 2>&1; then bad "team gh 应该已移除"; else ok "team gh 透传已移除"; fi
+assert_has "$SKILL_DIR/references/workflows.md" "git -C" "文档里给出 PM 直接跑的 git 步骤"
+
 $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md --print >/dev/null 2>&1 || true
 if $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md >"$TMP/dispatch-nobranch.log" 2>&1; then
   bad "工作树不在任务分支时 dispatch 应当拒绝"
@@ -327,20 +344,11 @@ assert_not "$TMP/digest-heur.log" "team review P2 " "结项报告不再出现在
 assert_has "$TMP/digest-heur.log" "P2-closure.md" "忽略清单点名了那份结项报告"
 rm -f "$REPO/docs/team/reports/P2-closure.md" "$REPO/docs/team/reports/T2.6-dev.md"
 
-# ① merge 只打印食谱（git 写操作归 PM）：不改任何 git 状态
-MAIN_BEFORE="$(git -C "$REPO" rev-parse HEAD)"
-git -C "$REPO/.worktrees/dev" switch -c task/T9.9-recipe "$PROTECTED" >/dev/null 2>&1 || true
-$TEAM board set T9.9 todo >/dev/null 2>&1 || true
-$TEAM merge T9.9 --branch task/T9.9-recipe >"$TMP/merge-recipe.log" 2>&1 && ok "merge 打印食谱并返回 0" || bad "merge 食谱失败"
-assert_has "$TMP/merge-recipe.log" "请 PM 直接跑" "说明 git 由 PM 执行"
-assert_has "$TMP/merge-recipe.log" "git -C $REPO merge --squash task/T9.9-recipe" "给出正确顺序的 git 命令"
-assert_has "$TMP/merge-recipe.log" "prefer-theirs" "lockfile 冲突给了 --theirs 提示"
-assert_has "$TMP/merge-recipe.log" "board set T9.9 done" "给了 BOARD 收尾命令"
-assert_eq "merge 没有动 git 状态" "$(git -C "$REPO" rev-parse HEAD)" "$MAIN_BEFORE"
-if $TEAM merge T9.9 --branch no-such-branch >"$TMP/merge-nobranch.log" 2>&1; then bad "分支不存在时不应成功"; else ok "分支不存在时明确报错"; fi
-assert_has "$TMP/merge-nobranch.log" "分支不存在" "报错说明分支不存在"
-git -C "$REPO/.worktrees/dev" switch task/T1.1-smoke >/dev/null 2>&1 || true
-git -C "$REPO" branch -D task/T9.9-recipe >/dev/null 2>&1 || true
+# ① merge/pr 已从 CLI 移除：git 与 forge 由 PM 直接用真实工具
+if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应已移除"; else ok "merge 已移除（不再包装 git）"; fi
+if $TEAM pr T1.1 >/dev/null 2>&1; then bad "pr 应已移除"; else ok "pr 已移除"; fi
+assert_has "$SKILL_DIR/references/workflows.md" "git -C" "workflows 文档给出 PM 直接跑的 git 步骤"
+assert_has "$SKILL_DIR/references/protocol.md" "不执行" "protocol 写明 skill 不执行 git/forge 写操作"
 
 # ④ 翻转证据进模板与派单提示词
 assert_has "$SKILL_DIR/templates/task.md.tmpl" "翻转证据" "任务书模板要求翻转证据"
@@ -360,52 +368,9 @@ assert_eq "渲染结果可安全 source（值与入参一致）" \
 assert_eq "含 shell 特殊字符也不会被当代码执行" \
   "$(cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --force --session "pi-team-smoke-render-$$" --agents dev --gates 'a && echo PWNED `id` $HOME' >/dev/null 2>&1; env TEAM_ROOT=$BRENDER SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; team_load_config; printf "%s" "$TEAM_GATES"')" 'a && echo PWNED `id` $HOME'
 
-# ① GitLab API：表单体必须配 x-www-form-urlencoded（否则 {"error":"Invalid JSON format"}）
-FAKECURL="$TMP/fakecurl"; mkdir -p "$FAKECURL"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/curl-args.txt"\necho "{}"\n' "$TMP" > "$FAKECURL/curl"
-chmod +x "$FAKECURL/curl"
-TOK="$TMP/gl-token"; printf 'dummy\n' > "$TOK"; chmod 600 "$TOK"
-run_gl() { # <extra args...>
-  env PATH="$FAKECURL:$PATH" TEAM_ROOT="$REPO" TEAM_VCS=gitlab TEAM_GITLAB_HOST=https://gl.example TEAM_GITLAB_PROJECT=g/p \
-      TEAM_GITLAB_TOKEN_FILE="$TOK" SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; . "$SK/scripts/lib/forge.sh"; team_load_config; forge_gitlab_api "$@"' _ "$@"
-}
-run_gl POST /projects/1/merge_requests --data-urlencode "source_branch=task/T1.1" >/dev/null 2>&1
-assert_has "$TMP/curl-args.txt" "application/x-www-form-urlencoded" "表单体用 x-www-form-urlencoded（不再是 application/json）"
-run_gl POST /projects/1/merge_requests --data '{"a":1}' >/dev/null 2>&1
-assert_has "$TMP/curl-args.txt" "application/json" "JSON 体仍用 application/json"
-
-# PR 级：用一个“像 GitLab 一样校验头/体”的桩，验证 team pr 真能开出 MR（erp 的复现路径）
-GLLOG="$TMP/gl-pr.log"; : > "$GLLOG"
-cat > "$FAKECURL/curl" <<'GLSTUB'
-#!/usr/bin/env bash
-{ printf '%s\n' "$@"; } >> "$GL_LOG"
-ctype=""; form=0
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -H) case "$2" in Content-Type:*) ctype="${2#Content-Type: }" ;; esac; shift 2 ;;
-    --data-urlencode|--data-urlencode=*) form=1; shift ;;
-    --data|--data-binary) shift ;;
-    -X) shift 2 ;;
-    *) shift ;;
-  esac
-done
-# GitLab 的真实行为：表单体配 JSON 头 → 直接拒绝
-if [ "$form" = "1" ] && [ "$ctype" = "application/json" ]; then
-  echo '{"error":"Invalid JSON format"}'; exit 1
-fi
-if [ "$form" != "1" ] && [ "$ctype" != "application/json" ]; then
-  echo '{"error":"expected JSON body"}'; exit 1
-fi
-echo '{"iid":24,"web_url":"https://gl.example/g/p/-/merge_requests/24"}'
-GLSTUB
-chmod +x "$FAKECURL/curl"
-env PATH="$FAKECURL:$PATH" GL_LOG="$GLLOG" TEAM_ROOT="$REPO" \
-    TEAM_VCS=gitlab TEAM_GITLAB_HOST=https://gl.example TEAM_GITLAB_PROJECT=g/p \
-    TEAM_GITLAB_TOKEN_FILE="$TOK" $TEAM pr T1.1 --branch task/T1.1-smoke-task >"$TMP/gl-pr-out.log" 2>&1 \
-  && ok "GitLab 模式下 team pr 给出食谱" || { bad "GitLab 模式下 team pr 失败"; cat "$TMP/gl-pr-out.log"; }
-assert_match "$TMP/gl-pr-out.log" "glab mr create|merge_requests" "食谱给出 GitLab 的 MR 命令/API"
-assert_not "$TMP/gl-pr-out.log" "Invalid JSON format" "没有去调 GitLab API（因此不会被拒）"
-assert_has "$TMP/gl-pr-out.log" "git -C $REPO push" "食谱含 push 分支"
+# ① forge 透传/包装已移除（token 只作为项目配置，PM 直接用真实工具）
+assert_has "$SKILL_DIR/references/protocol.md" "直接用" "protocol 说明写操作用真实工具"
+assert_not_file "$SKILL_DIR/scripts/lib/forge.sh" "不再有 forge 包装模块"
 
 # ② pi 可执行文件：绝对路径 + 找不到就明确报错（不要再出现窗口里 command not found）
 if TEAM_PI_BIN="definitely-not-a-pi-binary" $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/pi-missing.log" 2>&1; then
@@ -465,40 +430,36 @@ assert_eq "分支有 1 个提交" "$(git -C "$REPO/.worktrees/dev" rev-list --co
 
 # ---------------------------------------------------------------- 10. review
 section "10 · review（独立 worktree + 门禁）"
-$TEAM review T1.1 >"$TMP/review.log" 2>&1 && ok "review 门禁 PASS 退出码 0" || bad "review 失败"
+REV_WT="$TMP/review-checkout"
+git -C "$REPO" worktree add --detach "$REV_WT" task/T1.1-smoke >/dev/null 2>&1 || true
+$TEAM review T1.1 --dir "$REV_WT" >"$TMP/review.log" 2>&1 && ok "review 门禁 PASS 退出码 0" || { bad "review 失败"; cat "$TMP/review.log"; }
+if $TEAM review T1.1 >"$TMP/review-nodir.log" 2>&1; then bad "review 缺 --dir 应报错"; else ok "review 缺 --dir 明确报错（skill 不碰 git）"; fi
+assert_has "$TMP/review-nodir.log" "PM 自己准备独立 checkout" "报错里给出 git 命令"
 assert_file "$REPO/docs/team/reviews/T1.1.md" "写复验记录"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "复验判定 PASS"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "feature.txt" "复验记录含变更文件"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "agent 报告原文" "复验记录摘录了 agent 报告（不需向主工作树拷文件）"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "状态: DONE" "摘录的是报告内容本体"
-assert_dir "$REPO/.worktrees/review-T1.1" "复验用独立 worktree"
+assert_dir "$REV_WT" "复验用 PM 提供的独立 checkout"
 assert_eq "复验不会把主工作树弄脏（仅允许 docs/team、.pi/team 下的变动）" \
   "$(git -C "$REPO" status --porcelain | grep -vE '^(\?\?| ?M|M |MM|A | ?D) (\.pi/team/|docs/team/)' | grep -c . || true)" "0"
 
 # 门禁失败路径
 sed -i 's/^TEAM_GATES="true"/TEAM_GATES="false"/' "$REPO/.pi/team/config.sh"
-if $TEAM review T1.1 >"$TMP/review-fail.log" 2>&1; then bad "门禁失败时 review 应返回非 0"; else ok "门禁失败时 review 返回非 0"; fi
+if $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-fail.log" 2>&1; then bad "门禁失败时 review 应返回非 0"; else ok "门禁失败时 review 返回非 0"; fi
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **FAIL**" "复验记录标记 FAIL"
 sed -i 's/^TEAM_GATES="false"/TEAM_GATES="true"/' "$REPO/.pi/team/config.sh"
-$TEAM review T1.1 >/dev/null 2>&1
+$TEAM review T1.1 --dir "$REV_WT" >/dev/null 2>&1
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "恢复门禁后复验 PASS"
 
 # ---------------------------------------------------------------- 11. merge / close
-section "11 · merge + close"
-# merge 现在只打印食谱：不需要授权（不写任何远端/共享状态）
-$TEAM merge T1.1 >"$TMP/merge.log" 2>&1 && ok "merge 打印食谱（无需 --yes）" || bad "merge 食谱失败"
-assert_has "$TMP/merge.log" "请 PM 直接跑" "明确 git 由 PM 执行"
-assert_has "$TMP/merge.log" "merge --squash task/T1.1-smoke" "食谱指向正确的任务分支"
-# 在 agent worktree 里调用也锚定主工作树
-( cd "$REPO/.worktrees/dev" && $TEAM merge T1.1 ) >"$TMP/merge-wt.log" 2>&1 && ok "worktree 内调用 merge 也正确锚定主工作树" || bad "worktree 内 merge 失败"
-assert_has "$TMP/merge-wt.log" "git -C $REPO " "命令锚定主工作树"
-assert_eq "merge 食谱没有改 git 状态" "$(git -C "$REPO" log --oneline -1 | grep -c 'T1.1: Smoke task')" "0"
+section "11 · 收尾（merge 已移除，close 保留）"
+if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应已移除"; else ok "merge 已移除（PM 用 git）"; fi
 $TEAM board set T1.1 done >/dev/null 2>&1
-assert_eq "PM 手工收尾后 BOARD → done" "$($TEAM board row T1.1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}')" "done"
+assert_eq "BOARD 可由 PM 直接收尾" "$($TEAM board row T1.1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}')" "done"
 $TEAM close T1.1 >/dev/null 2>&1 && ok "close 退出码 0" || bad "close 失败"
 [ "$HAVE_TMUX" = "1" ] && assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
 
-# ---------------------------------------------------------------- 11b. 保活：team up / watch
 section "11b · 定时巡检：有待办才叫醒 PM（默认 15 分钟）"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/pm-args.log" > "$FAKE/pi-sleep"
 chmod +x "$FAKE/pi-sleep"
@@ -843,24 +804,10 @@ assert_match "$TMP/doctor-skill.log" "skill|pi-team" "doctor 里能看到 skill 
 
 # ---------------------------------------------------------------- 11g. CEP 三条实测反馈
 section "11g · CEP 反馈（forge-first / say 投递校验 / knock 诊断）"
-# ① --pr 食谱按 forge-first 排序（skill 不执行 git/forge 写操作）
-$TEAM merge T9.7 --branch task/T1.1-smoke --pr 42 >"$TMP/merge-ff.log" 2>&1 || true
-assert_has "$TMP/merge-ff.log" "先合 PR" "食谱第一步是合 PR"
-assert_match "$TMP/merge-ff.log" "gh pr merge --squash --delete-branch 42|mr merge 42|TEAM_MERGE_PR_CMD|按你们 forge 的方式" "给出合 PR 的命令（或 forge 提示）"
-assert_has "$TMP/merge-ff.log" "merge --ff-only FETCH_HEAD" "第二步是 fetch + ff-only 快进本地"
-assert_eq "食谱不产生本地提交" "$(git -C "$REPO" rev-parse --short HEAD)" "$(git -C "$REPO" rev-parse --short "$PROTECTED")"
-if env TEAM_ROOT="$REPO" $TEAM gh pr merge 42 --squash >"$TMP/gh-write.log" 2>&1; then
-  bad "team gh 写操作应被拒绝"
-else ok "team gh 写操作被拒绝（只读透传）"; fi
-env TEAM_ROOT="$REPO" TEAM_PR_CMD="tea pr create --base {base} --head {branch} --title {title}" \
-  $TEAM pr T9.7 --branch task/T1.1-smoke >"$TMP/pr-tpl.log" 2>&1 || true
-assert_has "$TMP/pr-tpl.log" "tea pr create --base main --head task/T1.1-smoke" "TEAM_PR_CMD 模板被渲染"
-env TEAM_ROOT="$REPO" TEAM_MERGE_PR_CMD="tea pr merge {pr}" \
-  $TEAM merge T9.7 --branch task/T1.1-smoke --pr 42 >"$TMP/merge-tpl.log" 2>&1 || true
-assert_has "$TMP/merge-tpl.log" "tea pr merge 42" "TEAM_MERGE_PR_CMD 模板被渲染"
-env TEAM_ROOT="$REPO" TEAM_VCS=other $TEAM pr T9.7 --branch task/T1.1-smoke >"$TMP/pr-other.log" 2>&1 || true
-assert_has "$TMP/pr-other.log" "按你们 forge 的方式" "VCS=other 时给通用提示"
-assert_not "$TMP/pr-other.log" "gh pr create" "VCS=other 时不假设 GitHub"
+# ① forge 相关的包装全部移除；git/forge 由 PM 直接用真实工具
+if $TEAM gh pr list >/dev/null 2>&1; then bad "team gh 应已移除"; else ok "team gh 透传已移除"; fi
+if $TEAM gl GET /projects >/dev/null 2>&1; then bad "team gl 应已移除"; else ok "team gl 透传已移除"; fi
+assert_not_file "$SKILL_DIR/scripts/lib/forge.sh" "forge 包装模块已删除"
 
 # ② say：agent 没在跑 → 落收件箱 + 明确提示（不再硬失败）
 if [ "$HAVE_TMUX" = "1" ]; then

@@ -36,6 +36,7 @@ team_cmd_bootstrap() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) agents="${2:?}"; shift 2 ;;
+      --create-worktrees) TEAM_CREATE_WORKTREE=1; shift ;;
       --session) session="${2:?}"; shift 2 ;;
       --pm-window) pmwin="${2:?}"; shift 2 ;;
       --no-watchdog) with_watchdog=0; shift ;;
@@ -91,11 +92,18 @@ team_cmd_bootstrap() {
   [ -n "$TEAM_GATES" ] || { [ -n "$gates" ] && team_config_set_in_file "$TEAM_CONFIG" TEAM_GATES "$gates" && team_info "  写入 TEAM_GATES=$gates"; }
   [ -n "$TEAM_INSTALL_CMD" ] || { [ -n "$install_cmd" ] && team_config_set_in_file "$TEAM_CONFIG" TEAM_INSTALL_CMD "$install_cmd" && team_info "  写入 TEAM_INSTALL_CMD=$install_cmd"; }
 
-  # ③ agent worktree
+  # ③ agent worktree（git 归 PM：默认只打印命令，--create-worktrees 才代建）
   local a
-  for a in $agents; do
-    team_worktree_add "$a"
-  done
+  if [ "${TEAM_CREATE_WORKTREE:-0}" = "1" ]; then
+    for a in $agents; do team_worktree_add "$a" --create; done
+  else
+    team_info ""
+    team_info "  ③ 请 PM 执行这些 git 命令（skill 不代做 git；想让它代建就加 --create-worktrees）："
+    for a in $agents; do
+      local wt; wt="$TEAM_MAIN_ROOT/$(team_agent_worktree "$a" | sed "s|^$TEAM_MAIN_ROOT/||")"
+      printf '      git -C %s worktree add -b %s %s %s\n' "$TEAM_MAIN_ROOT" "$(team_agent_branch "$a")" "$wt" "$TEAM_PROTECTED_BRANCH"
+    done
+  fi
 
   # ④ 看门狗容器（PM 负责配置；失败不算致命，只提示）
   if [ "$with_watchdog" = "1" ] && team_podman_ok; then

@@ -33,11 +33,7 @@ TEAM_REMOTE="origin"
 
 # ---- 版本控制 / forge ----
 # {{DETECTED_VCS}} 是本仓库自动探测到的；local=不要 forge，PM 本地 squash 合并
-TEAM_VCS="{{VCS}}"                    # local | github | gitlab | other（或你们自己的 forge 名）
-# 非 GitHub/GitLab 的 forge：写命令模板（可选；占位符 {branch} {base} {title} {pr} {body}）
-# 例（Gitea）：TEAM_PR_CMD="tea pr create --base {base} --head {branch} --title {title}"
-TEAM_PR_CMD=""
-TEAM_MERGE_PR_CMD=""
+TEAM_VCS="{{VCS}}"                    # local | github | gitlab | other（仅记录，skill 不调用任何 forge 命令）
 TEAM_TOKEN_FILE=".gh-pat"             # github：PAT 文件（主工作树根，chmod 600，已 gitignore）
 TEAM_GITLAB_HOST=""                   # gitlab：如 https://gitlab.example.com:8443
 TEAM_GITLAB_PROJECT=""                # gitlab：如 group/sub/project

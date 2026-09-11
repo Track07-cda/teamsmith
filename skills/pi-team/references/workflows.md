@@ -130,9 +130,10 @@ bash <skill>/scripts/team teardown --all --purge --force   # 连 worktree 一起
 
 ```bash
 git -C .worktrees/dev branch --show-current      # task/T1.2-api-health
-bash <skill>/scripts/team review T1.2            # 复验范围 = 这个任务的 diff（门禁带硬超时）
-bash <skill>/scripts/team review T1.2 --strong   # 强复验：要求对抗性验证包 + finding 翻转证据
-bash <skill>/scripts/team merge T1.2 --push --pr 17   # squash 入保护分支；PR 合不动就走本地兜底
+git -C <root> worktree add --detach /tmp/review-T1.2 task/T1.2-api   # PM 准备独立 checkout
+bash <skill>/scripts/team review T1.2 --dir /tmp/review-T1.2 --strong # 门禁带硬超时 + 强复验检查
+gh pr merge --squash --delete-branch 17 && git -C <root> fetch origin main && git -C <root> merge --ff-only FETCH_HEAD
+bash <skill>/scripts/team board set T1.2 done        # 确认进 main 之后才标 done
 ```
 
 - 任务分支从保护分支切出；worktree 脏时 `dispatch` 会拒绝切分支（避免两个任务混在一个 diff 里）。

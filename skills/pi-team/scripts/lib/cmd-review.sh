@@ -47,36 +47,31 @@ team_task_title() { # <ID> → 标题（BOARD 的「任务」列，其次任务�
 
 team_cmd_review() {
   team_require_docs
-  local id="" branch="" no_gates=0 strong=0
+  local id="" branch="" no_gates=0 strong=0 revdir=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
       --no-gates) no_gates=1; shift ;;
       --strong) strong=1; shift ;;          # 强复验：要求对抗性验证包 + finding 翻转证据
+      --dir) revdir="${2:?}"; shift 2 ;;    # PM 准备好的独立 checkout（skill 不碰 git）
       -*) team_usage_die "review: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "review <ID> [--branch b] [--no-gates] [--strong]"
+  [ -n "$id" ] || team_usage_die "review <ID> --dir <独立checkout> [--no-gates] [--strong]"
+  [ -n "$revdir" ] || team_die "review 需要 --dir <路径>：请 PM 自己准备独立 checkout（skill 不执行 git）
+  例： git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id <branch>
+        $TEAM_CLI review $id --dir /tmp/review-$id"
   branch="$(team_resolve_branch "$id" "$branch")"
 
-  local revdir="$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/review-$id"
-  local ref="$branch"
-  if team_git_main remote get-url "$TEAM_REMOTE" >/dev/null 2>&1; then
-    if team_git_main fetch --quiet "$TEAM_REMOTE" "$branch" 2>/dev/null; then
-      ref="FETCH_HEAD"
-      team_ok "fetched $TEAM_REMOTE/$branch"
-    else
-      team_warn "fetch $TEAM_REMOTE $branch 失败：用本地分支复验"
-    fi
-  fi
-  if [ -d "$revdir" ]; then
-    team_warn "清理旧复验 worktree $revdir"
-    team_git_main worktree remove --force "$revdir" >/dev/null 2>&1 || rm -rf "$revdir"
-  fi
-  team_git_main worktree add --detach "$revdir" "$ref" >/dev/null
+  # 用 PM 给的 checkout（只读使用：不 fetch、不 checkout、不改它）
+  [ -d "$revdir" ] || team_die "目录不存在：$revdir"
+  revdir="$(cd "$revdir" && pwd)"
+  git -C "$revdir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || team_die "$revdir 不是 git checkout"
+  local branch_now; branch_now="$(git -C "$revdir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+  [ -z "$branch" ] && branch="$branch_now"
   local head; head="$(git -C "$revdir" rev-parse HEAD)"
-  team_ok "review worktree: ${revdir#"$TEAM_MAIN_ROOT"/} @ ${head:0:9}"
+  team_ok "review checkout: $revdir @ ${head:0:9}"
 
   # 报告提交在 agent 分支上（合并前不出现在主工作树）：直接摘录进复验记录，
   # 不往主工作树拷文件（否则会让主工作树变脏、阻塞后续 squash merge）
@@ -139,7 +134,7 @@ team_cmd_review() {
     printf '# %s · PM 独立复验\n\n' "$id"
     printf '时间: %s · 分支: `%s` · HEAD: `%s` · 判定: **%s**\n\n' "$(team_timestamp)" "$branch" "${head:0:9}" "$verdict"
     printf '## 复验方式\n\n'
-    printf -- '- 独立 worktree：`%s`（detached checkout，不信任 agent 工作区）\n' "${revdir#"$TEAM_MAIN_ROOT"/}"
+    printf -- '- 独立 checkout：`%s`（PM 提供，skill 只读；不信任 agent 工作区）\n' "$revdir"
     printf -- '- 门禁命令：`%s`（硬超时 %ss；超时判定 TIMEOUT→按 FAIL 处理）\n' "${TEAM_GATES:-<未配置>}" "${TEAM_REVIEW_TIMEOUT:-1800}"
     printf -- '- 输出：`%s`\n' "${log#"$TEAM_MAIN_ROOT"/}"
     if team_find_report "$id" >/dev/null 2>&1; then
@@ -171,114 +166,13 @@ team_cmd_review() {
   return 0
 }
 
-# ---------------------------------------------------------------- merge：只给食谱，不执行 git
-# 分工（用户定的原则）：**skill 不执行任何 git 写操作** —— 分支、squash、push、PR 全由 PM 直接用 git/gh 做。
-# 这个命令负责：把该做的 git 命令按正确顺序、带好任务标题与 BOARD 收尾，打印成可直接复制的食谱。
-team_cmd_merge() {
-  team_require_docs
-  local id="" branch="" pr="" push=1
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --branch) branch="${2:?}"; shift 2 ;;
-      --pr) pr="${2:?}"; shift 2 ;;            # 有 PR 时给出 forge-first 的顺序
-      --no-push) push=0; shift ;;
-      -*) team_usage_die "merge: 未知参数 $1（现在只打印食谱，不执行 git）" ;;
-      *) id="$1"; shift ;;
-    esac
-  done
-  [ -n "$id" ] || team_usage_die "merge <ID> [--branch b] [--pr N] [--no-push]"
-  branch="$(team_resolve_branch "$id" "$branch")"
-  if ! team_git_main rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
-    team_die "分支不存在：$branch（--branch 拼错了？现有候选：$(team_git_main branch --list "*$id*" | tr -d ' *' | tr '\n' ' ')）"
-  fi
-  local title; title="$(team_task_title "$id")"
-  local prev_status; prev_status="$(team_board_field "$(team_board_row "$id" 2>/dev/null || true)" status 2>/dev/null || true)"
-  case "$prev_status" in ""|-|"—") prev_status="review" ;; esac
-  local rev; rev="$(team_find_report "$id" 2>/dev/null || true)"
-
-  team_hdr "合并食谱 · $id（skill 不执行 git，请 PM 直接跑）"
-  printf '  分支 %s → %s ｜ BOARD 当前状态：%s\n\n' "$branch" "$TEAM_PROTECTED_BRANCH" "$prev_status"
-
-  if [ -n "$pr" ]; then
-    printf '%s\n' "  ① 先合 PR/MR（forge-first —— 先本地 push 会让 PR 立刻不可合并）："
-    if [ -n "$TEAM_MERGE_PR_CMD" ]; then
-      printf '       %s\n' "$(team_tpl_fill "$TEAM_MERGE_PR_CMD" "branch=$branch" "base=$TEAM_PROTECTED_BRANCH" "pr=$pr" "title=$title" "remote=$TEAM_REMOTE")"
-    else
-      case "$TEAM_VCS" in
-        github) printf '       GH_TOKEN="$(< %s)" gh pr merge --squash --delete-branch %s\n' "$(forge_github_pat 2>/dev/null || echo "$TEAM_TOKEN_FILE")" "$pr" ;;
-        gitlab) printf '       glab mr merge %s --squash --remove-source-branch    # 或 team gl PUT "/projects/<id>/merge_requests/%s/merge"\n' "$pr" "$pr" ;;
-        *) printf '       # 本项目不是 GitHub/GitLab：按你们 forge 的方式合并 PR/MR #%s（网页、自建脚本、SSH 都行）\n' "$pr"
-           printf '       # 也可以把它写进 config：TEAM_MERGE_PR_CMD="<你们的命令> {pr}"\n' ;;
-      esac
-    fi
-    printf '       git -C %s fetch %s %s && git -C %s merge --ff-only FETCH_HEAD\n' "$TEAM_MAIN_ROOT" "$TEAM_REMOTE" "$TEAM_PROTECTED_BRANCH" "$TEAM_MAIN_ROOT"
-  else
-    printf '%s\n' "  ① 在主工作树 squash 合并（先确认工作树干净、在 $TEAM_PROTECTED_BRANCH 上）："
-    printf '       git -C %s status --short\n' "$TEAM_MAIN_ROOT"
-    printf '       git -C %s switch %s\n' "$TEAM_MAIN_ROOT" "$TEAM_PROTECTED_BRANCH"
-    printf '       git -C %s merge --squash %s\n' "$TEAM_MAIN_ROOT" "$branch"
-    printf '       # 冲突时：只用 --prefer-theirs 处理 lockfile 那些“永远取分支侧”的文件：\n'
-    printf '       git -C %s checkout --theirs -- pnpm-lock.yaml && git -C %s merge --continue   # 或 add 后 commit\n' "$TEAM_MAIN_ROOT" "$TEAM_MAIN_ROOT"
-    printf '       git -C %s commit -m "%s: %s" -m "squash of %s"\n' "$TEAM_MAIN_ROOT" "$id" "$title" "$branch"
-  fi
-  if [ "$push" = "1" ]; then
-    printf '\n%s\n' "  ② 推送（确认无误再推）："
-    printf '       git -C %s push %s %s\n' "$TEAM_MAIN_ROOT" "$TEAM_REMOTE" "$TEAM_PROTECTED_BRANCH"
-  fi
-  printf '\n%s\n' "  ③ 收尾（BOARD 只在代码真的进了保护分支之后才标 done）："
-  printf '       %s board set %s done\n' "$TEAM_CLI" "$id"
-  [ "$prev_status" != "done" ] && printf '       # 没进 main 就别标 done：保持 %s，或 %s board set %s blocked\n' "$prev_status" "$TEAM_CLI" "$id"
-  printf '\n%s\n' "  ④ 清理（可选）："
-  printf '       git -C %s branch -D %s\n' "$TEAM_MAIN_ROOT" "$branch"
-  [ -n "$rev" ] && printf '\n  复验记录：%s\n' "$rev"
-  printf '\n%s\n' "  说明：以前这条命令会替你做①②，但 git 写操作现在归 PM —— 顺序错一次就会踩「PR 不可合并」那种坑。"
-  return 0
-}
-
-# pr：同样只给食谱（创建 PR/MR 由 PM 跑）
-team_cmd_pr() {
-  team_require_docs
-  local id="" branch="" title=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --branch) branch="${2:?}"; shift 2 ;;
-      --title) title="${2:?}"; shift 2 ;;
-      -*) team_usage_die "pr: 未知参数 $1（现在只打印食谱）" ;;
-      *) id="$1"; shift ;;
-    esac
-  done
-  [ -n "$id" ] || team_usage_die "pr <ID> [--branch b] [--title \"...\"]"
-  branch="$(team_resolve_branch "$id" "$branch")"
-  title="${title:-$id: $(team_task_title "$id")}"
-  local body; body="$(forge_pr_body "$id" 2>/dev/null || true)"
-  team_hdr "PR 食谱 · $id（skill 不创建 PR，请 PM 直接跑；forge 无关）"
-  printf '       git -C %s push -u %s %s\n' "$TEAM_MAIN_ROOT" "$TEAM_REMOTE" "$branch"
-  if [ -n "$TEAM_PR_CMD" ]; then
-    printf '       %s\n' "$(team_tpl_fill "$TEAM_PR_CMD" "branch=$branch" "base=$TEAM_PROTECTED_BRANCH" "title=$title" "body=${body:-<复验记录或任务书>}" "remote=$TEAM_REMOTE")"
-  else
-    case "$TEAM_VCS" in
-      github)
-        printf '       GH_TOKEN="$(< %s)" gh pr create --base %s --head %s --title "%s" --body-file %s\n' \
-          "$(forge_github_pat 2>/dev/null || echo "$TEAM_TOKEN_FILE")" "$TEAM_PROTECTED_BRANCH" "$branch" "$title" "${body:-<复验记录或任务书>}" ;;
-      gitlab)
-        printf '       glab mr create --source-branch %s --target-branch %s --title "%s"   # 或 team gl POST "/projects/<id>/merge_requests" --data-urlencode ...\n' "$branch" "$TEAM_PROTECTED_BRANCH" "$title" ;;
-      *)
-        printf '       # 本项目不是 GitHub/GitLab：按你们 forge 的方式创建 PR/MR（网页、自建脚本、SSH + 工单都行）\n'
-        printf '       # 也可以把它写进 config：TEAM_PR_CMD="<你们的命令> --base {base} --head {branch} --title {title}"\n' ;;
-    esac
-  fi
-  [ -n "$body" ] && printf '\n  body 建议用：%s\n' "$body"
-  return 0
-}
-
 team_cmd_close() {
   team_require_docs
-  local id="" status="done" keep_window=0 delete_branch=0
+  local id="" status="done" keep_window=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --status) status="${2:?}"; shift 2 ;;
       --keep-window) keep_window=1; shift ;;
-      --delete-branch) delete_branch=1; shift ;;   # 兼容旧调用：只提示，不执行 git
       -*) team_usage_die "close: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
@@ -293,10 +187,12 @@ team_cmd_close() {
       tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && team_ok "kill window $TEAM_SESSION:$w"
     fi
     team_state_set "$a" task ""
-    if [ "$delete_branch" = "1" ]; then
-      b="$(git -C "$(team_agent_worktree "$a")" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-      case "$b" in ""|HEAD|"$TEAM_PROTECTED_BRANCH") ;; *) team_git_main branch -D "$b" >/dev/null 2>&1 && team_ok "delete branch $b" ;; esac
-    fi
+    # git 归 PM：这里只提示，不切分支、不删分支
+    b="$(git -C "$(team_agent_worktree "$a")" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    case "$b" in
+      ""|HEAD|"$TEAM_PROTECTED_BRANCH") ;;
+      *) team_dim "  $a 仍在分支 $b 上：需要清理请自己跑 git -C $(team_agent_worktree "$a") switch --detach $TEAM_PROTECTED_BRANCH" ;;
+    esac
   done
   team_board_set "$id" "$status" 2>/dev/null || team_warn "BOARD 未更新（$id 不在表里？）"
   team_ok "closed $id（status=$status）"

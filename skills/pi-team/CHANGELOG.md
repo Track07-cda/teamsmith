@@ -5,6 +5,19 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.0 · 2026-09-11
+
+**收窄到"不包装已有工具"（用户原则）**
+- **删除** `team merge` / `team pr`（连"打印食谱"也算包装）：合并与开 PR 由 PM 直接用 git/gh/glab/tea/网页；
+  步骤写进 `SKILL.md`、`references/workflows.md`、`references/protocol.md §8h`
+- **删除** `team gh` / `team gl` 透传与 `scripts/lib/forge.sh`（token 只作为项目配置；PM 自己注入）
+- `team review <ID>` 现在**要求 `--dir <PM 准备的独立 checkout>`**：skill 只跑门禁 + 写证据，不碰 git
+- `team add-agent` / `bootstrap` 默认**只打印** `git worktree add` 命令（git 归 PM）；
+  想让它代建加 `--create` / `--create-worktrees`；`dispatch` 不再代建 worktree
+- `team close <ID>` 也彻底不碰 git（不再 `--delete-branch`；只在输出里提示 PM 自己跑 switch/删分支）
+- 保留（这些不是已有工具的包装）：任务书/看板/线程/报告/收件箱/digest、派单与提示词、
+  看门狗与巡检、容量守卫、监视器、跨项目会议、版本与更新
+
 ## v1.10.0 · 2026-09-11
 
 **分工变更：git 与 forge 写操作归 PM，skill 不再代做**

@@ -191,16 +191,18 @@ team merge T1.2 --no-renames --prefer-theirs pnpm-lock.yaml   # 冲突时这些�
   敲门（提醒对方 PM 窗口）默认关闭，只在 `--knock` + `TEAM_MEETING_KNOCK=1` + 对方登记了 session 时发生。
 - 边界守卫：跨 session 打字默认**一律拒绝**，唯一例外是已登记会议的敲门 —— 这条挡住了"顺手插手别的项目"。
 
-## 8h. git 与 forge 写操作归 PM
+## 8h. git 与 forge 归 PM：skill 不执行、也不包装
 
-- skill **不执行** git 写操作（分支、squash、push、rebase）与 forge 写操作（开/合 PR、留言、关 PR）。
-  `team merge` / `team pr` 只打印**可直接复制的食谱**；`team dispatch` 只**检查**工作树是否可开工。
-- 好处：顺序与权限一清二楚。之前 skill 代做时踩过「先 push main → PR 立刻不可合并 → 错误却归给 PAT 权限」。
-- 幂等习惯保留：BOARD 只在代码**真的进了保护分支**之后才标 `done`（现在这条命令由 PM 自己执行：
-  `team board set <ID> done`）。
-- forge 无关：`TEAM_VCS=local|github|gitlab|other`；非 GitHub/GitLab 用 `TEAM_PR_CMD` / `TEAM_MERGE_PR_CMD`
-  写模板（占位符 `{branch} {base} {title} {pr} {body}`），skill 照着渲染；没配就只给通用提示（网页/自建/SSH 都行）。
-- `team gh` / `team gl` 只读透传；写操作请直接用真实工具（token 从配置的 token 文件读，不要回显）。
+- skill **不执行** git 写操作（建/切分支、squash、push）与 forge 写操作（开/合 PR、留言、关 PR）；
+  **也不打印"食谱"**——那属于过度包装已有工具。PM 直接用 `git` / `gh` / `glab` / `tea` / 网页。
+- skill 在 git 上只做三件事（都是只读或记录）：
+  1. **检查**：`dispatch` 前确认工作树不脏、不在保护分支上（否则拒绝并说明原因）；
+  2. **只读观察**：`roster` / `digest` 显示分支、脏文件数、领先提交、"待收尾"清单；
+  3. **复验证据**：`review <ID> --dir <PM 准备的 checkout>` 跑门禁并写 `reviews/<ID>.md`（git 由 PM 准备）。
+- 约定（写在 SKILL.md 与项目 PROTOCOL 里，PM 照做即可）：一 agent 一长期 worktree；
+  任务分支从保护分支切出；复验用 detached 独立 checkout；合并 = squash 进保护分支（有 PR 时先合 PR 再 `fetch + merge --ff-only`）；
+  **BOARD 只在代码真的进了保护分支之后才标 done**。
+- forge 无关：不假设 GitHub/GitLab；token 从项目配置的 token 文件读，只在调用命令时注入，不回显。
 
 ## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
 

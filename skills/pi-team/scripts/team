@@ -76,10 +76,7 @@ case "$CMD" in
   say)        team_cmd_say "$@" ;;
   notify)     team_cmd_notify "$@" ;;
   review)     team_cmd_review "$@" ;;
-  merge)      team_cmd_merge "$@" ;;
-  pr)         team_cmd_pr "$@" ;;
   close)      team_cmd_close "$@" ;;
-  gh|gl)      team_cmd_forge "$CMD" "$@" ;;
   teardown)   team_cmd_teardown "$@" ;;
   up)         team_cmd_up "$@" ;;
   resume)     team_cmd_resume "$@" ;;
