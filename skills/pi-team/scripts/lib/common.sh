@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.7.0"
+TEAM_VERSION="1.7.1"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -151,6 +151,9 @@ team_load_config() {
   # 看门狗只服务当前 tmux session（窗口/任务/待办/容量）；翻别人的会话既吵又贵（几 MB/次 × 每几秒）。
   # 需要时显式打开：team monitor --activity 或 TEAM_MONITOR_ACTIVITY=1
   TEAM_MONITOR_ACTIVITY="${TEAM_MONITOR_ACTIVITY:-0}"
+  # 看板里的 todo/wip 算不算“要叫醒 PM 的活”：默认不算（backlog 长期存在，不该每 15 分钟敲一次）；
+  # blocked / 未读通知 / 待复验 / 停了的 agent 仍然算。想连 backlog 一起提醒就设 1。
+  TEAM_WATCH_PENDING_BOARD="${TEAM_WATCH_PENDING_BOARD:-0}"
   TEAM_WATCH_IMAGE="${TEAM_WATCH_IMAGE:-}"                 # 看门狗容器镜像，空=localhost/pi-team-watch:1
   TEAM_WATCH_BOX="${TEAM_WATCH_BOX:-}"                     # 目标开发容器名，空=自动（当前容器）
   TEAM_WATCH_RETRY_SEC="${TEAM_WATCH_RETRY_SEC:-15}"       # 内层 watch 退出后的重试间隔（秒）
@@ -618,22 +621,55 @@ team_capacity_line() {
 # ---------------------------------------------------------------- 巡检待办
 # “有没有值得把 PM 叫醒的事”——只统计团队需要 PM 处理的事，
 # 不把 watchdog 自己写的记录算进去（否则会造成“自己叫醒自己”的循环）。
-team_reports_pending() { # 报告已交但未复验的任务数（主工作树 + 各 agent worktree）
-  local f base id ids=" " n=0 glob
+# 报告算不算“待复验”：必须像一份**任务**报告 ——
+#   ① 文件名前缀是任务 ID，且 ② 该 ID 在 BOARD 里有行（或 docs/<docs>/tasks/<ID>-*.md 存在）
+# 这样 PM 自己的里程碑/结项报告（reports/P2-closure.md 之类）不会被一直当成待复验。
+team_report_is_task() { # <file> <id>
+  local f="$1" id="$2"
+  [ -n "$id" ] || return 1
+  case "$id" in _*|.*) return 1 ;; esac
+  case "$(basename "$f")" in
+    *-closure*|*-summary*|*-milestone*|*closure-*|*summary-*) return 1 ;;
+  esac
+  # 标题必须是 "# <ID> · …"（ID 打头），否则视为非任务报告
+  sed -n '1{/^#[[:space:]]/p}' "$f" | grep -qE "^#[[:space:]]+$id([[:space:]]|·|:|$)" || return 1
+  if team_board_row "$id" >/dev/null 2>&1; then return 0; fi
+  local t
+  for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do [ -f "$t" ] && return 0; done
+  return 1
+}
+
+team_reports_pending_list() { # → 每行 "<显示名>\t<路径>"，只列**真任务**报告（主工作树 + 各 agent worktree）
+  local glob base id ids=" "
   for glob in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
     [ -f "$glob" ] || continue
     base="$(basename "$glob" .md)"; id="${base%%-*}"
     [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
     case "$ids" in *" $id "*) continue ;; esac
-    ids="$ids$id "; n=$((n + 1))
+    team_report_is_task "$glob" "$id" || continue
+    ids="$ids$id "
+    printf '%s\t%s\n' "$base" "$glob"
   done
-  printf '%s\n' "$n"
+}
+
+team_reports_pending() { # 报告已交但未复验的**任务**数
+  team_reports_pending_list | wc -l | tr -d ' '
+}
+
+team_reports_ignored() { # 被上面规则排除掉的报告（供 digest 提示，不静默丢）
+  local f base id glob
+  for glob in "$TEAM_DOCS_ABS/reports/"*.md; do
+    [ -f "$glob" ] || continue
+    base="$(basename "$glob" .md)"; id="${base%%-*}"
+    [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
+    team_report_is_task "$glob" "$id" || printf '%s\n' "$(basename "$glob")"
+  done
 }
 
 team_board_counts() { # → "todo wip review blocked"
   local f="$TEAM_DOCS_ABS/BOARD.md"
   [ -f "$f" ] || { printf '0 0 0 0\n'; return 0; }
-  awk -F'|' 'NF>2 { st=$(NF-1); gsub(/^[ \t]+|[ \t]+$/, "", st);
+  awk -F'|' -v sc="$(team_board_col status)" 'NF>2 { st=$(sc); gsub(/^[ \t]+|[ \t]+$/, "", st);
       if (st=="todo") t++; else if (st=="wip") w++; else if (st=="review") r++; else if (st=="blocked") b++ }
     END { printf "%d %d %d %d\n", t+0, w+0, r+0, b+0 }' "$f"
 }
@@ -647,6 +683,10 @@ team_pending_counts() { # → "inbox reports todo wip review blocked stopped"
   done
   local bc; bc="$(team_board_counts)"
   local todo wip review blocked; read -r todo wip review blocked <<< "$bc"
+  if [ "${TEAM_WATCH_PENDING_BOARD:-0}" != "1" ]; then
+    # 只保留“现在就等 PM 处理”的信号：todo/wip/review 列仍会在面板与 digest 里显示
+    todo=0; wip=0; review=0
+  fi
   printf '%s %s %s %s %s %s %s\n' "$inbox" "$(team_reports_pending)" "$todo" "$wip" "$review" "$blocked" "$stopped"
 }
 
@@ -659,7 +699,7 @@ team_pending_text() { # <counts> → 人类可读摘要（空字符串 = 无待�
   [ "$todo" -gt 0 ] && parts+=("todo ${todo}")
   [ "$wip" -gt 0 ] && parts+=("wip ${wip}")
   [ "$review" -gt 0 ] && parts+=("review ${review}")
-  [ "$blocked" -gt 0 ] && parts+=("blocked ${blocked}")
+  [ "$blocked" -gt 0 ] && parts+=("blocked ${blocked}" "需 PM 处理")
   [ "$stopped" -gt 0 ] && parts+=("停了的 agent ${stopped}")
   [ "${#parts[@]}" -eq 0 ] && return 0
   local out="" p
@@ -787,10 +827,12 @@ team_timestamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # BOARD.md 行更新：| ID | 任务 | Agent | 分支 | 依赖 | 状态 |
 team_board_set() { # <id> <status>
-  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" st="$2"
+  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" st="$2" idcol stcol
   [ -f "$f" ] || return 1
-  if awk -v id="$id" -v st="$st" 'BEGIN{FS=OFS="|"}
-    /^\|/ && $2 ~ "^[[:space:]]*"id"[[:space:]]*$" { n=NF; gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(n-1)); $(n-1)=" "st" "; print; found=1; next }
+  idcol="$(team_board_col id)"; stcol="$(team_board_col status)"
+  if awk -v id="$id" -v st="$st" -v ic="$idcol" -v sc="$stcol" 'BEGIN{FS=OFS="|"}
+    /^\|/ { v=$(ic); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
+             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(sc)); $(sc)=" "st" "; print; next } }
     { print }
   ' "$f" > "$f.tmp"; then
     mv "$f.tmp" "$f"
@@ -803,7 +845,32 @@ team_board_set() { # <id> <status>
 team_board_add() { # <id> <title> <agent> <branch> <deps>
   local f="$TEAM_DOCS_ABS/BOARD.md"
   [ -f "$f" ] || return 1
-  printf '| %s | %s | %s | %s | %s | todo |\n' "$1" "$2" "$3" "$4" "${5:--}" >> "$f"
+  # 与文件现有列数对齐：额外的列填 -（这样加了自定义列也不会错位）
+  local ncols idcol taskcol agentcol branchcol depscol stcol cells=() i
+  # 列数取「任务表表头行」的列数（文件里可能还有别的表，取最后一行会数错）
+  ncols="$(awk 'BEGIN{FS="|"} /^\|/ { v=$2; gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID") { print NF; exit } }' "$f")"
+  [ -n "$ncols" ] || ncols=8
+  idcol="$(team_board_col id)"; taskcol="$(team_board_col task)"; agentcol="$(team_board_col agent)"
+  branchcol="$(team_board_col branch)"; depscol="$(team_board_col deps)"; stcol="$(team_board_col status)"
+  for ((i=1;i<ncols;i++)); do cells+=( " " ); done
+  cells[$((idcol-1))]=" $1 "; cells[$((taskcol-1))]=" $2 "; cells[$((agentcol-1))]=" $3 "
+  cells[$((branchcol-1))]=" $4 "; cells[$((depscol-1))]=" ${5:--} "; cells[$((stcol-1))]=" todo "
+  # 字段 1 是行首的空单元（在第一个 | 之前），要打印的是字段 2..ncols-1 → cells[1..ncols-2]
+  local row="|"
+  for ((i=1;i<ncols-1;i++)); do row="$row${cells[$i]:- }|"; done
+  # 插到「任务表」的最后一行之后（模板末尾还有别的表：直接 append 会跑到别的表里去）
+  local hdr last
+  hdr="$(awk 'BEGIN{FS="|"} /^\|/ { v=$'"$idcol"'; gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID") { print NR; exit } }' "$f")"
+  if [ -n "$hdr" ]; then
+    last="$(awk -v start="$hdr" 'NR>=start { if ($0 ~ /^\|/) last=NR; else if (last) exit } END{print last}' "$f")"
+  else
+    last="$(awk '/^\|/ { last=NR } END{print last}' "$f")"
+  fi
+  if [ -n "$last" ]; then
+    awk -v at="$last" -v row="$row" 'NR==at { print; print row; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  else
+    printf '%s\n' "$row" >> "$f"
+  fi
 }
 
 # ---------------------------------------------------------------- 模板渲染
@@ -850,8 +917,76 @@ team_main_dirty_external() {
 
 # ---------------------------------------------------------------- BOARD
 # BOARD.md 行更新：| ID | 任务 | Agent | 分支 | 依赖 | 状态 |
-team_board_row() { # <id> → 整行
+
+# ---------------------------------------------------------------- BOARD 列映射（②）
+# BOARD 的列必须可容忍额外列：按表头名字定位，而不是硬编码列号。
+# 输出 "<id> <task> <agent> <branch> <deps> <status>"（1-based 列号；缺表头时用默认 2 3 4 5 6 7）
+team_board_cols() {
+  local f="$TEAM_DOCS_ABS/BOARD.md"
+  if [ -f "$f" ]; then
+    awk 'BEGIN{FS="|"}
+      /^\|/ {
+        line=$0
+        if (line !~ /[Ii][Dd]/) next
+        n=NF
+        for (i=2;i<n;i++) { name=$(i); gsub(/^[ \t]+|[ \t]+$/,"",name)
+          if (name=="ID"||name=="编号") id=i
+          else if (name=="任务"||name=="标题"||name=="Title"||name=="Task") task=i
+          else if (name ~ /^[Aa]gent$/) agent=i
+          else if (name=="分支"||name=="Branch") branch=i
+          else if (name=="依赖"||name=="Deps"||name=="Depends") deps=i
+          else if (name=="状态"||name=="Status") status=i
+        }
+        if (id && task && status) { printf "%d %d %d %d %d %d\n", id, task, agent?agent:0, branch?branch:0, deps?deps:0, status; exit }
+      }' "$f"
+  fi
+}
+
+team_board_col() { # <name> → 列号（找不到时给默认）
+  local name="$1" cols
+  cols="$(team_board_cols)"
+  if [ -n "$cols" ]; then
+    local id task agent branch deps status
+    read -r id task agent branch deps status <<< "$cols"
+    case "$name" in
+      id) printf '%s\n' "$id"; return 0 ;;
+      task) printf '%s\n' "$task"; return 0 ;;
+      agent) [ "$agent" -gt 0 ] && { printf '%s\n' "$agent"; return 0; }; printf '4\n'; return 0 ;;
+      branch) [ "$branch" -gt 0 ] && { printf '%s\n' "$branch"; return 0; }; printf '5\n'; return 0 ;;
+      deps) [ "$deps" -gt 0 ] && { printf '%s\n' "$deps"; return 0; }; printf '6\n'; return 0 ;;
+      status) printf '%s\n' "$status"; return 0 ;;
+    esac
+  fi
+  case "$name" in
+    id) printf '2\n' ;; task) printf '3\n' ;; agent) printf '4\n' ;;
+    branch) printf '5\n' ;; deps) printf '6\n' ;; status) printf '7\n' ;;
+  esac
+}
+
+team_board_field() { # <row-line> <name> → 值（去掉首尾空白）
+  local line="$1" name="$2" col
+  col="$(team_board_col "$name")"
+  printf '%s\n' "$line" | awk -v c="$col" 'BEGIN{FS="|"} { v=$(c); gsub(/^[ \t]+|[ \t]+$/,"",v); print v }'
+}
+
+# 表头与期望列不一致时给出提醒（board ls / digest 用）
+team_board_layout_warning() {
   local f="$TEAM_DOCS_ABS/BOARD.md"
   [ -f "$f" ] || return 1
-  awk -v id="$1" 'BEGIN{FS="|"} /^\|/ && $2 ~ "^[[:space:]]*"id"[[:space:]]*$" {print}' "$f"
+  local cols; cols="$(team_board_cols)"
+  [ -n "$cols" ] || { printf 'BOARD.md 找不到带 ID/任务/状态 的表头行：列解析会退回默认位置\n'; return 0; }
+  local id task agent branch deps status
+  read -r id task agent branch deps status <<< "$cols"
+  if [ "$id" != "2" ] || [ "$task" != "3" ] || [ "$status" != "7" ]; then
+    printf 'BOARD.md 是非标准列布局（ID=%s 任务=%s 状态=%s）：按表头名解析，能容忍额外列\n' "$id" "$task" "$status"
+  fi
+  return 0
+}
+
+team_board_row() { # <id> → 整行（列位置由表头决定）
+  local f="$TEAM_DOCS_ABS/BOARD.md" col
+  [ -f "$f" ] || return 1
+  col="$(team_board_col id)"
+  awk -v id="$1" -v c="$col" 'BEGIN{FS="|"}
+    /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v); if (v==id) { print; exit } }' "$f"
 }

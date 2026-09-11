@@ -93,6 +93,8 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model>
 1. 真实执行任务书里的验收命令；**没有实际运行，不得声称通过**（PM 会独立复验，虚假报告视为任务失败）。
 2. 每完成一个可验证的小步就 \`git commit\`（Conventional Commits + 任务 ID + trailer \`Agent: $agent\`${issue:+ + \`Refs #$issue\`}），不要攒到最后一次性提交。
 3. 写报告 \`$rel_report\`（在你自己的分支上提交；格式见 AGENTS.md 的报告模板，含真实命令与输出尾部）。
+   若是**缺陷修复**类任务，报告必须有「翻转证据」：修复前红 → 修复后绿，或"破坏实现 → 守门测试失败 → 还原"
+   （PM 会用 \`$cli review $id --strong\` 检查这一节，缺了会被退回）。
 4. \`git push -u $TEAM_REMOTE HEAD\`。
 5. $pr_step。
 

@@ -166,11 +166,14 @@ bash <skill>/scripts/team watchdog up          # 默认：本 session 的 watchd
 bash <skill>/scripts/team watchdog logs        # 看一眼监视器画面（pane 快照）
 bash <skill>/scripts/team watchdog status      # 窗口/周期/待命/待办/PM 存活/容量
 bash <skill>/scripts/team watchdog down        # 关掉窗口
-bash <skill>/scripts/team monitor --once       # 手动看一屏（不开窗口）
+bash <skill>/scripts/team monitor --once       # 手动看一屏（只服务当前 session 的状态）
+bash <skill>/scripts/team monitor --activity   # 需要时才追看各 agent 的会话活动流（默认关）
 bash <skill>/scripts/team watchdog up --container --print   # 容器形态长什么样（只打印命令）
 ```
 
-监视器长这样（上半是团队状态，下半是每个 agent 的 Pi 会话活动流）：
+监视器只服务**当前 tmux session**：窗口在不在跑、任务是什么、待办与容量。
+各 agent 的会话活动流默认关闭（`TEAM_MONITOR_ACTIVITY=0`）——翻别人的会话既吵又贵
+（6 个 agent ≈ 每次读 ~9MB JSONL，实测 RSS 7MB→67MB）；需要时 `--activity` 打开，且只列本 session 里活着的窗口。
 
 ```
 pi-team monitor · myproj                       2026-09-11T16:52:03Z  (每 3s 刷新，每 900s 跑一次巡检)

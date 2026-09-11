@@ -120,6 +120,31 @@ watchdog 不是保活心跳，而是一个**节拍器**：定时问一句“现�
 - `TEAM_BRANCH_MODE=agent`：一 agent 一长期分支 `agent/<name>`（适合长线重构、或一个 agent 只做一件事的团队）。
 - worktree 脏时拒绝切分支（否则会把上一个任务的改动混进新任务）；这条是硬规则，不是提醒。
 
+## 8c. 看门狗的服务范围：只服务当前 tmux session
+
+- 看门狗（`watchdog` 窗口里的 `team monitor`）只回答本 session 的问题：谁在跑、在做什么任务、有什么待办、容量如何；
+  **不去翻别的 agent 的会话内容**（那是 PM 用 `inbox`/报告/`digest` 该看的）。
+- 会话活动流是 opt-in：`team monitor --activity`（且只列本 session 里活着的窗口）。
+  默认关闭的原因很实际：6 个 agent ≈ 每次渲染读 ~9MB JSONL（实测 7MB→67MB RSS、3s 一刷），噪音还盖住真正要看的状态。
+- 面板刷新默认 5s，巡检节拍仍是 `TEAM_WATCH_INTERVAL`（默认 900s）。
+- **什么叫"有待办"**：未读通知 / 待复验报告 / `blocked` 行 / 停了的 agent（还有任务没交活）。
+  看板的 `todo/wip` **默认不算**——backlog 常年存在，每 15 分钟敲一次纯属噪音；
+  想连 backlog 一起提醒就设 `TEAM_WATCH_PENDING_BOARD=1`（面板与 digest 里始终能看到它们）。
+
+## 8d. 看板与报告的解析要容忍人的手工改动
+
+CEP 实测踩过的三处，现在都有明确的宽容规则：
+
+- **BOARD 列数**：按**表头名字**定位 `ID/任务/Agent/分支/依赖/状态`，允许手工插列（例如加 `Issue` 列）；
+  `board ls` 会提示"非标准列布局"但照常工作；`team board set` 只改状态列，不动你加的那列；
+  新建行按现有列数对齐（未知列留空）。以前按固定列号解析，加列后会读出 `—` 当标题。
+- **待复验的启发式**：`reports/*.md` 只有同时满足「文件名前缀是任务 ID」+「标题是 `# <ID> · …`」+
+  「该 ID 在 BOARD 里（或有任务书）」才算待复验；PM 自己的里程碑/结项报告（`P2-closure.md` 等）
+  会被 `digest` 归到"忽略的非任务报告"里——不静默丢，也不会一直催你复验。
+- **merge 冲突**：失败时直接列出未合并文件（`UU/AA/DD/AU/UA/DU/UD`），并提示 `--no-renames`
+  （add/add 常常是 git 的 rename 检测把 `reports/<ID>-x.md` 与 `reviews/<ID>.md` 配成了一对）。
+  不再只丢一句"冲突/失败"让人手工重跑。
+
 ## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
 
 - 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。

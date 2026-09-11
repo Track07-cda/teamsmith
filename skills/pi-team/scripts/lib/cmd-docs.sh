@@ -41,6 +41,10 @@ team_cmd_board() {
   case "$sub" in
     ls)
       grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null || team_warn "BOARD.md 还没有行"
+      local warn; warn="$(team_board_layout_warning || true)"
+      [ -n "$warn" ] && team_dim "  $warn"
+      local ign; ign="$(team_reports_ignored || true)"
+      [ -n "$ign" ] && team_dim "  （reports/ 里按规则忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')）"
       ;;
     add)
       local id="${1:?usage: board add <ID> <title> [agent] [deps]}" title="${2:?}" agent="${3:-$(team_agents | head -1)}" deps="${4:--}"

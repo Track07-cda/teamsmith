@@ -30,12 +30,12 @@ team_resolve_branch() { # <ID> [--branch b]
   esac
 }
 
-team_task_title() { # <ID> → 标题（BOARD 行第 3 列，其次任务书第一行 #）
+team_task_title() { # <ID> → 标题（BOARD 的「任务」列，其次任务书第一行 #）
   local row t f
   row="$(team_board_row "$1" 2>/dev/null || true)"
   if [ -n "$row" ]; then
-    t="$(printf '%s' "$row" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}')"
-    [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
+    t="$(team_board_field "$row" task)"
+    case "$t" in ""|-|"—") ;; *) [ -n "$t" ] && { printf '%s\n' "$t"; return 0; } ;; esac
   fi
   for f in "$TEAM_DOCS_ABS/tasks/$1-"*.md; do
     [ -f "$f" ] || continue
@@ -173,19 +173,20 @@ team_cmd_review() {
 
 team_cmd_merge() {
   team_require_docs
-  local id="" branch="" push=0 delete_branch=0 no_review=0 pr=""
+  local id="" branch="" push=0 delete_branch=0 no_review=0 pr="" no_renames="${TEAM_MERGE_NO_RENAMES:-0}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
       --push) push=1; shift ;;
       --delete-branch) delete_branch=1; shift ;;
       --pr) pr="${2:?}"; shift 2 ;;          # 合并后顺手合 PR/MR；403 就自动本地兜底
+      --no-renames) no_renames=1; shift ;;   # 关掉 merge 的 rename 检测（add/add 误配对时用）
       --no-review-check) no_review=1; shift ;;
       -*) team_usage_die "merge: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "merge <ID> [--branch b] [--push] [--delete-branch] [--pr N]"
+  [ -n "$id" ] || team_usage_die "merge <ID> [--branch b] [--push] [--delete-branch] [--pr N] [--no-renames]"
   team_allow_write || return 1
   branch="$(team_resolve_branch "$id" "$branch")"
 
@@ -206,15 +207,32 @@ team_cmd_merge() {
     team_die "先提交或撤销这些改动：git -C $TEAM_MAIN_ROOT status"
   fi
 
-  local title; title="$(team_task_title "$id")"
-  if ! team_git_main merge --squash "$branch" >/dev/null 2>&1; then
-    team_git_main merge --abort >/dev/null 2>&1 || team_git_main reset --merge >/dev/null 2>&1 || true
-    if [ -n "$(team_git_main status --porcelain)" ]; then
-      team_err "squash merge 冲突/失败，主工作树需要人工处理："
-      team_git_main status --short | head -20 >&2
+  local title merge_log; title="$(team_task_title "$id")"
+  merge_log="$(mktemp)"
+  local merge_args=(merge --squash)
+  [ "$no_renames" = "1" ] && merge_args=(-c merge.renames=false merge --squash)
+  if ! team_git_main "${merge_args[@]}" "$branch" > "$merge_log" 2>&1; then
+    team_err "squash merge 失败：$branch → $TEAM_PROTECTED_BRANCH"
+    # 列出冲突/未合并的文件（UU/AA/DU/UD/AU/UA/DD）——不列的话 PM 只能手工重跑才知道是哪个文件
+    local conflicts
+    conflicts="$(team_git_main status --porcelain 2>/dev/null | grep -E '^(UU|AA|DD|AU|UA|DU|UD) ' || true)"
+    if [ -n "$conflicts" ]; then
+      team_err "冲突文件："
+      printf '%s\n' "$conflicts" | sed 's/^/  /' >&2
+      case "$conflicts" in
+        *"^"*|*AA*)
+          # add/add 常常是 git 的 rename 检测把两个不同路径配成了一对
+          team_dim "  （AA=两边都新增。若是 docs 下的 reports/reviews 被误配对：重试加 --no-renames）" >&2 ;;
+      esac
+    else
+      team_err "merge 输出（尾部）："
+      tail -12 "$merge_log" | sed 's/^/  /' >&2
     fi
-    team_die "squash merge 失败：$branch → $TEAM_PROTECTED_BRANCH"
+    team_git_main merge --abort >/dev/null 2>&1 || team_git_main reset --merge >/dev/null 2>&1 || true
+    rm -f "$merge_log"
+    team_die "先解决冲突再合并：git -C $TEAM_MAIN_ROOT status"
   fi
+  rm -f "$merge_log"
   team_git_main commit -q -m "$id: $title" -m "pi-team: squash merge of $branch" || team_die "commit 失败"
   team_ok "merged $branch → $TEAM_PROTECTED_BRANCH @ $(team_git_main rev-parse --short HEAD)"
 

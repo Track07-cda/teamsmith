@@ -156,32 +156,25 @@ team_cmd_digest() {
     fi
   done
   [ "$any" -eq 0 ] && team_dim "  （无）"
+  local ign; ign="$(team_reports_ignored || true)"
+  [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
-  printf '\n%s\n' "[3] 待复验（有报告、无复验记录）"
+  printf '\n%s\n' "[3] 待复验（真任务报告、无复验记录）"
   any=0
-  local rep base id
-  for rep in "$TEAM_DOCS_ABS/reports/"*.md; do
-    [ -f "$rep" ] || continue
-    base="$(basename "$rep" .md)"; id="${base%%-*}"
-    if [ ! -f "$TEAM_DOCS_ABS/reviews/$id.md" ]; then
-      any=1
-      printf '  %s  →  %s review %s\n' "$base" "$TEAM_CLI" "$id"
-    fi
-  done
-  # 报告常常还在 agent 分支上（合并前不入主工作树）
-  local a wt
-  for a in $(team_agents); do
-    wt="$(team_agent_worktree "$a")"
-    [ -d "$wt/$TEAM_DOCS_DIR/reports" ] || continue
-    for rep in "$wt/$TEAM_DOCS_DIR/reports/"*.md; do
-      [ -f "$rep" ] || continue
-      base="$(basename "$rep" .md)"; id="${base%%-*}"
-      [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
-      any=1
-      printf '  %s（在 %s 分支上）  →  %s review %s\n' "$base" "$a" "$TEAM_CLI" "$id"
-    done
-  done
+  local rep disp
+  while IFS=$'\t' read -r disp rep; do
+    [ -n "$disp" ] || continue
+    any=1
+    case "$rep" in
+      "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) 
+        local who="${rep#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
+        printf '  %s（在 %s 分支上）  →  %s review %s\n' "$disp" "$who" "$TEAM_CLI" "${disp%%-*}" ;;
+      *) printf '  %s  →  %s review %s\n' "$disp" "$TEAM_CLI" "${disp%%-*}" ;;
+    esac
+  done < <(team_reports_pending_list)
   [ "$any" -eq 0 ] && team_dim "  （无）"
+  local ign; ign="$(team_reports_ignored || true)"
+  [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
   printf '\n%s\n' "[4] 任务板"
   grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null | tail -n +3 | awk -F'|' 'NF>2{

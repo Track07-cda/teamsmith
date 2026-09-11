@@ -26,6 +26,7 @@ assert_eq()    { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$
 
 TMP="$(mktemp -d /tmp/pi-team-smoke.XXXXXX)"
 SESSION="pi-team-smoke-$$"
+PROTECTED="main"   # 与 TEAM_PROTECTED_BRANCH 默认值一致
 REPO="$TMP/repo"
 FAKE="$TMP/fake-bin"
 mkdir -p "$REPO" "$FAKE"
@@ -271,6 +272,77 @@ section "6c · 模型并发限额（含通配）"
 assert_eq "openai-codex/* 通配上限生效" "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_model_limit openai-codex/gpt-5.4-codex')" "1"
 assert_eq "kimi-coding/k3 精确上限生效" "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_model_limit kimi-coding/k3')" "2"
 
+# ---------------------------------------------------------------- 6d. CEP 实测反馈 ①②③④
+section "6d · CEP 实测反馈（board 额外列 / merge 冲突列表 / 待复验启发式 / 翻转证据）"
+
+# ② board 手工加了 Issue 列后仍要能正确解析（标题不再被当成 "—"）
+python3 - <<'PYB'
+import pathlib
+p = pathlib.Path("docs/team/BOARD.md"); lines = p.read_text().split("\n"); out = []
+for l in lines:
+    if l.startswith("| ID |"):
+        out.append("| ID | Issue | 任务 | Agent | 分支 | 依赖 | 状态 |")
+    elif l.startswith("|") and set(l) <= set("|-"):
+        out.append("|---|---|---|---|---|---|---|")
+    elif l.startswith("|") and l.count("|") >= 6:
+        c = [x for x in l.split("|")[1:-1]]
+        out.append("| " + " | ".join([c[0].strip(), "-"] + [x.strip() for x in c[1:]]) + " |")
+    else:
+        out.append(l)
+p.write_text("\n".join(out))
+PYB
+assert_eq "额外列：列映射按表头名定位" \
+  "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_board_cols')" "2 4 5 6 7 8"
+assert_eq "额外列：任务标题仍解析正确" \
+  "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_board_field "$(team_board_row T1.1)" task')" "Smoke task"
+$TEAM board set T1.1 wip >/dev/null 2>&1 || true
+assert_has "$REPO/docs/team/BOARD.md" "| wip |" "额外列布局下状态写进状态列"
+$TEAM board ls >"$TMP/board-ls.log" 2>&1 || true
+assert_has "$TMP/board-ls.log" "非标准列布局" "board ls 提示列布局非标准（但不报错）"
+$TEAM task T2.6 --title "third task" --agent dev >/dev/null 2>&1 || true
+assert_has "$REPO/docs/team/BOARD.md" "| T2.6 |" "新行按现有列数对齐写入"
+
+# ③ 里程碑/结项报告不算待复验
+mkdir -p "$REPO/docs/team/reports"
+printf '# P2 · 里程碑结项\n\n不是任务报告。\n' > "$REPO/docs/team/reports/P2-closure.md"
+printf '# T2.6 · 真实任务报告\n\nagent: dev\n状态: DONE\n' > "$REPO/docs/team/reports/T2.6-dev.md"
+$TEAM digest >"$TMP/digest-heur.log" 2>&1 || true
+assert_has "$TMP/digest-heur.log" "T2.6-dev" "真任务报告算待复验"
+assert_has "$TMP/digest-heur.log" "忽略的非任务报告" "结项报告被显式忽略而不是一直提示"
+assert_not "$TMP/digest-heur.log" "team review P2 " "结项报告不再出现在待复验行动项里"
+assert_has "$TMP/digest-heur.log" "P2-closure.md" "忽略清单点名了那份结项报告"
+rm -f "$REPO/docs/team/reports/P2-closure.md" "$REPO/docs/team/reports/T2.6-dev.md"
+
+# ① merge 失败时必须列出冲突文件（用**临时 worktree** 造冲突，不碰 agent 的 worktree）
+MAIN_BEFORE="$(git -C "$REPO" rev-parse HEAD)"
+CONFWT="$TMP/conflict-wt"
+git -C "$REPO" worktree add --detach "$CONFWT" "$PROTECTED" >/dev/null 2>&1
+git -C "$CONFWT" switch -c task/T9.9-conflict >/dev/null 2>&1
+printf 'agent side\n' > "$CONFWT/conflict.txt"
+git -C "$CONFWT" add -A >/dev/null 2>&1
+git -C "$CONFWT" -c user.email=a@b -c user.name=a commit -qm "feat: agent side of conflict"
+printf 'main side\n' > "$REPO/conflict.txt"
+# 只提交这一个文件：main 工作树里还有未提交的 BOARD/reviews 等，`add -A` 会把它们卷进提交
+git -C "$REPO" add conflict.txt >/dev/null 2>&1
+git -C "$REPO" -c user.email=a@b -c user.name=a commit -qm "feat: main side of conflict"
+if $TEAM merge T9.9 --branch task/T9.9-conflict --no-review-check --yes >"$TMP/merge-conflict.log" 2>&1; then
+  bad "冲突时 merge 应返回非 0"
+else ok "冲突时 merge 返回非 0"; fi
+assert_has "$TMP/merge-conflict.log" "conflict.txt" "merge 失败时列出了冲突文件"
+assert_has "$TMP/merge-conflict.log" "冲突文件" "明确标出「冲突文件」段"
+# 用 --mixed 回退（保留 main 工作树里其它未提交内容），再删掉测试文件
+git -C "$REPO" reset --mixed "$MAIN_BEFORE" >/dev/null 2>&1
+rm -f "$REPO/conflict.txt"
+git -C "$REPO" worktree remove --force "$CONFWT" >/dev/null 2>&1 || true
+git -C "$REPO" branch -D task/T9.9-conflict >/dev/null 2>&1 || true
+assert_eq "冲突测试后主工作树已回滚" "$(git -C "$REPO" rev-parse HEAD)" "$MAIN_BEFORE"
+assert_eq "冲突测试没动 agent 的 worktree" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD)" "task/T1.1-smoke-task"
+
+# ④ 翻转证据进模板与派单提示词
+assert_has "$SKILL_DIR/templates/task.md.tmpl" "翻转证据" "任务书模板要求翻转证据"
+assert_has "$SKILL_DIR/templates/report.md.tmpl" "翻转证据" "报告模板含翻转证据段"
+assert_has "$TMP/print.log" "翻转证据" "派单提示词就要求写翻转证据"
+
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"
 $TEAM notify dev "blocked: 缺 dependency X" >/dev/null 2>&1 && ok "notify 退出码 0" || bad "notify 失败"
@@ -370,13 +442,21 @@ if [ "$HAVE_TMUX" = "1" ]; then
     sleep 0.5
   }
   pm_lines() { wc -l < "$TMP/pm-args.log" 2>/dev/null | tr -d ' ' || echo 0; }
+  wait_for() { # <文件> [秒]
+    local f="$1" i=0 max="${2:-10}"
+    while [ "$i" -lt "$max" ]; do [ -f "$f" ] && [ -s "$f" ] && return 0; sleep 1; i=$((i+1)); done
+    return 1
+  }
 
   # 1) team up 把 PM 拉起来（含 session 被删后重建）
   tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true
   tmux kill-window -t "$SESSION:keep" 2>/dev/null || true
   $TEAM up >"$TMP/up1.log" 2>&1 && ok "up 退出码 0（含 session 被删后重建）" || { bad "up 失败"; cat "$TMP/up1.log"; }
   assert_has "$TMP/up1.log" "PM 已启动" "up 报告了 PM 启动"
-  assert_file "$TMP/pm-args.log" "PM 的 pi 真的被拉起（参数已记录）"
+  if ! wait_for "$TMP/pm-args.log" 10; then
+    team_dbg="$(tmux capture-pane -p -t "$SESSION:$PMW" 2>/dev/null | tail -5 | tr '\n' ' ')"
+    bad "PM 的 pi 真的被拉起（参数已记录）（窗口内容：$team_dbg）"
+  else ok "PM 的 pi 真的被拉起（参数已记录）"; fi
   assert_has "$TMP/pm-args.log" "-c" "PM 用 -c 延续会话（不丢历史）"
   assert_has "$TMP/pm-args.log" "pm-prompt.md" "PM 用 @文件 传开场提示词（避免 TTY 行长限制）"
   assert_has "$REPO/.pi/team/state/pm-prompt.md" "team digest" "提示词文件要求先跑 digest"
@@ -423,6 +503,8 @@ if [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$REPO/docs/team/inbox/pm.md" "watchdog" "给 PM 留了收件箱消息"
   assert_eq "拉起计数已记录" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
   if [ "$(pm_lines)" -gt "$DEAD_BEFORE" ]; then ok "PM 参数已写入（$DEAD_BEFORE → $(pm_lines)）"
+  elif tmux list-panes -t "$SESSION:$PMW" -F '#{pane_pid}' | head -1 | xargs -r ps -o args= -p 2>/dev/null | grep -q pi-sleep; then
+    ok "PM 已被拉起（窗口里跑着 pi，日志尚未落盘）"
   else bad "PM 没有被拉起（$DEAD_BEFORE → $(pm_lines)）"; fi
 
   # 4b) 看门狗：tmux 后端（默认，窗口里跑 monitor）+ 容器后端 dry-run

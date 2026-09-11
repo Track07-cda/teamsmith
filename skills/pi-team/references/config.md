@@ -62,7 +62,8 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 | `TEAM_WATCH_MAX_RESTARTS` | `5` | PM 每小时最多自动拉起次数（防崩溃循环） |
 | `TEAM_WATCH_BACKEND` | `tmux` | `tmux`（同 session 的窗口跑监视器）/ `container`（podman） |
 | `TEAM_WATCH_WINDOW` | `watchdog` | tmux 后端的窗口名 |
-| `TEAM_MONITOR_REFRESH` | `3` | 监视器刷新间隔（秒） |
+| `TEAM_MONITOR_REFRESH` | `5` | 监视器刷新间隔（秒） |
+| `TEAM_MONITOR_ACTIVITY` | `0` | `1`=面板下方追加各 agent 会话活动流（只列本 session 在跑的窗口）；默认关 |
 | `TEAM_MONITOR_EVENTS` | `4` | 每个 agent 显示最近几条会话事件 |
 | `TEAM_WATCH_IMAGE` | 空 | 看门狗容器镜像；空 = `localhost/pi-team-watch:<Containerfile 哈希>`（改 Containerfile 自动重建） |
 | `TEAM_WATCH_BOX` | 空 | 目标开发容器名；空 = 自动（当前容器，从 `/run/.containerenv` 读） |
