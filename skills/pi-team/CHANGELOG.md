@@ -5,6 +5,16 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.2 · 2026-09-12
+
+**`/reload` 的语义说清 + 自动重读**
+- 事实（读 Pi 实现确认）：`/reload` 会重新发现 skills、重建 system prompt（清单与描述）并清扩展缓存，
+  **但不会改写对话历史里已经 `read` 过的 `SKILL.md` 正文** —— 那段旧文本仍在 context 里。
+- 因此：reload 后需要**重新读一遍** `SKILL.md`。扩展现在会在 `session_start(reason="reload")` 时
+  自动发一条 follow-up（`triggerTurn`）提示 agent 重读，并顺手清掉 `state/reload-requested` 标记
+  → 不需要人提醒、也不需要 agent 自己记得。
+- `team version --check` 仍是发现"我是旧的"的入口；`mark-loaded` 记录新版本。
+
 ## v1.11.1 · 2026-09-12
 
 - **自解释的破坏性变更**：已删除的命令在最需要的地方给出替代做法 ——

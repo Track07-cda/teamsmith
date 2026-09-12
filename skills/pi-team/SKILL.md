@@ -3,7 +3,7 @@ name: pi-team
 description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（podman 容器看门狗：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a podman container, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗容器 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.11.1"
+  version: "1.11.2"
 ---
 
 # pi-team · Pi Agent 团队
@@ -105,7 +105,7 @@ bash <skill>/scripts/team changelog        # 变更史（--since v1.8.0 只看�
 | 内容 | 生效方式 |
 |---|---|
 | `scripts/**`（CLI） | **零操作**：每次调用现读盘 |
-| `SKILL.md` / `references/**` / `templates/**` | 在 Pi 里输入 **`/reload`**（或 `/pi-team-reload`，或让模型调 `reload_skills` 工具） |
+| `SKILL.md` / `references/**` / `templates/**` | 在 Pi 里输入 **`/reload`**（或 `/pi-team-reload`，或让模型调 `reload_skills` 工具）。**注意**：`/reload` 只刷新技能清单/描述（system prompt）与扩展；**已经读进对话历史的正文不会变**，所以 reload 后要重新 `read <skill>/SKILL.md`（本扩展会在 reload 后自动发一条 follow-up 提示，触发这轮重读） |
 | `extension/team-notify.ts` | 同上（`/reload` 会清扩展缓存并重新 import） |
 
 依据：Pi 的 `/reload` 会重新发现 skill 并重建 system prompt，同时清扩展模块缓存、重新解析

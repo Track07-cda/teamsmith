@@ -19,8 +19,9 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 type Cfg = {
   session: string
@@ -42,6 +43,25 @@ const DEFAULTS: Cfg = {
   dedupSec: 20,
   maxChars: 150,
   log: '/tmp/pi-team-notify.log',
+}
+
+/** 本扩展所在 skill 的目录（<skill>/extension/team-notify.ts） */
+function skillDir(): string {
+  try {
+    return resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  } catch {
+    return ''
+  }
+}
+
+/** 从 <skill>/scripts/lib/common.sh 读 TEAM_VERSION */
+function skillVersion(): string {
+  try {
+    const f = join(skillDir(), 'scripts/lib/common.sh')
+    return /^TEAM_VERSION="([^"]+)"/m.exec(readFileSync(f, 'utf8'))?.[1] ?? ''
+  } catch {
+    return ''
+  }
 }
 
 function run(cmd: string, args: string[], cwd?: string): string {
@@ -291,6 +311,38 @@ export default function (pi: ExtensionAPI) {
       await ctx.reload()
       return
     },
+  })
+
+  // ---------------------------------------------------------------------------
+  // /reload 之后：历史里已经读过的 SKILL.md 是旧文本（Pi 不会改写历史消息），
+  // 所以这里主动提醒 agent 重新 read 一遍 skill —— 否则"重载"只刷新了清单/描述，
+  // 正文仍是旧的。顺带清掉 team reload 留下的请求标记。
+  pi.on('session_start', async (event: any, ctx: any) => {
+    try {
+      if (event?.reason !== 'reload') return
+      const cwd = ctx?.cwd ?? process.cwd()
+      const root = findRoot(cwd)
+      if (!root) return
+      const v = skillVersion()
+      const dir = skillDir()
+      // 重载已完成 → 清掉请求标记
+      try {
+        const marker = join(root, '.pi/team/state/reload-requested')
+        if (existsSync(marker)) rmSync(marker, { force: true })
+      } catch {
+        /* ignore */
+      }
+      const text =
+        `[pi-team] skill 已重载${v ? `（v${v}）` : ''}：**历史里读过的 SKILL.md 是旧版**，` +
+        `当前会话不会自动更新那段文本。请现在重新 read ${dir}/SKILL.md` +
+        `（需要时再读 references/ 或 templates/），然后跑 \`team version --check\` 记录新版本。`
+      ;(pi as any).sendMessage(
+        { customType: 'pi-team-reloaded', content: text, display: true },
+        { deliverAs: 'followUp', triggerTurn: true },
+      )
+    } catch {
+      /* 重载提示绝不能影响会话 */
+    }
   })
 
   if (typeof (pi as any).registerTool === 'function') pi.registerTool({

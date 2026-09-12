@@ -863,11 +863,17 @@ delete process.env.TMUX_PANE
 delete process.env.TMUX
 const mod = await import(ext)
 let handler = null
+let sessionStart = null
+const sent = []
 const registered = { commands: [], tools: [] }
 mod.default({
-  on: (name, fn) => { if (name === 'agent_settled') handler = fn },
+  on: (name, fn) => {
+    if (name === 'agent_settled') handler = fn
+    if (name === 'session_start') sessionStart = fn
+  },
   registerCommand: (name) => { registered.commands.push(name) },
   registerTool: (def) => { registered.tools.push(def?.name) },
+  sendMessage: (msg, opts) => { sent.push({ msg, opts }) },
 })
 if (!handler) { console.error('FAIL: 没有注册 agent_settled'); process.exit(3) }
 const inbox = join(root, 'docs/team/inbox/dev.md')
@@ -885,6 +891,17 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
 const before = readFileSync(inbox, 'utf8')
 await handler({}, { cwd: root, sessionManager: { getEntries: () => [] } })   // 主工作树不该触发
 if (readFileSync(inbox, 'utf8') !== before) { console.error('FAIL: 非 worktree 路径也写了收件箱'); process.exit(7) }
+// /reload：必须提醒重新 read SKILL.md（历史里的旧文本不会被改写）
+if (!sessionStart) { console.error('FAIL: 没注册 session_start'); process.exit(10) }
+await sessionStart({ reason: 'startup' }, { cwd: wt })
+if (sent.length !== 0) { console.error('FAIL: startup 不该发消息'); process.exit(11) }
+await sessionStart({ reason: 'reload' }, { cwd: wt })
+const reloadMsg = sent[sent.length - 1]
+if (!reloadMsg) { console.error('FAIL: reload 没有提醒重读 skill'); process.exit(12) }
+if (!String(reloadMsg.msg?.content ?? '').includes('SKILL.md')) { console.error('FAIL: reload 提示没让重读 SKILL.md'); process.exit(13) }
+if (reloadMsg.opts?.triggerTurn !== true) { console.error('FAIL: reload 提示应当触发一轮'); process.exit(14) }
+// 主工作树（非 worktree）也要提示：skill 重载与 agent 位置无关
+if (!String(reloadMsg.msg?.content ?? '').includes('已重载')) { console.error('FAIL: reload 提示文案不对'); process.exit(15) }
 if (!registered.commands.includes('pi-team-reload')) { console.error('FAIL: 没注册 /pi-team-reload 命令'); process.exit(8) }
 if (!registered.tools.includes('reload_skills')) { console.error('FAIL: 没注册 reload_skills 工具'); process.exit(9) }
 console.log('ext-ok')
