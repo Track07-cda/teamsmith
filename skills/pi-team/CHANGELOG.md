@@ -5,6 +5,15 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.1 · 2026-09-12
+
+- **自解释的破坏性变更**：已删除的命令在最需要的地方给出替代做法 ——
+  `team merge` / `team pr` 提示用 git/gh 的完整步骤（含 forge-first 顺序与 `board set done` 前提），
+  `team gh` / `team gl` 提示直接用真实工具并给出带 token 注入的示例；
+  未知子命令提示 `team help` 与 `team version --check`
+- 若本会话加载的版本早于磁盘，上面这些提示会附带一句「输入 /reload 刷新 skill 描述」
+  → **别的项目不需要人额外通知，也不需要专门迁移说明**：`/reload` 一次即可，漏了也会在报错处得到指引
+
 ## v1.11.0 · 2026-09-11
 
 **收窄到"不包装已有工具"（用户原则）**

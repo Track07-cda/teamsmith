@@ -93,5 +93,22 @@ case "$CMD" in
   reload)             team_cmd_reload "$@" ;;
   changelog)          team_cmd_changelog "$@" ;;
   smoke|test) team_cmd_smoke "$@" ;;
-  *)          team_usage_die "未知子命令：$CMD" ;;
+  # 已移除 / 不认识的子命令：在这里就把"该用什么替代"说清楚，
+  # 这样别的项目即使会话里还是旧版 skill，也会在使用点得到指引，不需要人额外通知。
+  merge|pr)
+    team_err "$CMD 已移除（v1.11.0）：skill 不再包装 git/forge —— 合并与开 PR 请你直接用真实工具"
+    team_dim "  合并：git -C $TEAM_MAIN_ROOT merge --squash <分支> && git -C $TEAM_MAIN_ROOT commit -m \"<ID>: <标题>\""
+    team_dim "  有 PR：先 gh pr merge --squash --delete-branch <PR>，再 git -C $TEAM_MAIN_ROOT fetch origin $TEAM_PROTECTED_BRANCH && git -C $TEAM_MAIN_ROOT merge --ff-only FETCH_HEAD"
+    team_dim "  收尾：代码确认进 $TEAM_PROTECTED_BRANCH 之后再 $TEAM_CLI board set <ID> done"
+    team_dim "  步骤全文：$TEAM_SKILL_DIR/SKILL.md「git 与 forge」一节"
+    if [ -n "$(team_loaded_version 2>/dev/null || true)" ]; then
+      team_dim "  你这一会话加载的是 v$(team_loaded_version)：在 Pi 里输入 /reload 刷新 skill 描述"
+    fi
+    exit 2 ;;
+  gh|gl)
+    team_err "$CMD 透传已移除（v1.11.0）：请直接用真实 gh / glab / curl（token 从项目 token 文件读）"
+    local tf="$TEAM_MAIN_ROOT/${TEAM_TOKEN_FILE:-.gh-pat}"
+    team_dim "  例：GH_TOKEN=\"\$(< ${TEAM_TOKEN_FILE:-.gh-pat})\" gh pr list    # token 文件：$tf"
+    exit 2 ;;
+  *)          team_usage_die "未知子命令：$CMD（team help 看全部；最近有破坏性变更，team version --check 检查 skill 版本）" ;;
 esac

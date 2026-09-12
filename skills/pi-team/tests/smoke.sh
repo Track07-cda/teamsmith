@@ -209,9 +209,18 @@ assert_not_file "$AG2/.worktrees/nobody" "默认不代建 worktree"
 ( cd "$AG2" && bash "$SKILL_DIR/scripts/team" add-agent nobody --create --no-install >/dev/null 2>&1 ) || true
 assert_dir "$AG2/.worktrees/nobody" "--create 才代建 worktree"
 # merge / pr 已从 CLI 移除（不再包装 git/forge）
-if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应该已移除"; else ok "merge 命令已移除（git 由 PM 直接做）"; fi
+if $TEAM merge T1.1 >"$TMP/merge-gone.log" 2>&1; then bad "merge 应该已移除"; else ok "merge 命令已移除（git 由 PM 直接做）"; fi
+assert_has "$TMP/merge-gone.log" "merge --squash" "merge 已移除时给替代做法"
+assert_has "$TMP/merge-gone.log" "board set" "提示 BOARD 收尾前提"
 if $TEAM pr T1.1 >/dev/null 2>&1; then bad "pr 应该已移除"; else ok "pr 命令已移除"; fi
-if $TEAM gh pr list >/dev/null 2>&1; then bad "team gh 应该已移除"; else ok "team gh 透传已移除"; fi
+if $TEAM gh pr list >"$TMP/gh-gone.log" 2>&1; then bad "team gh 应该已移除"; else ok "team gh 透传已移除"; fi
+assert_has "$TMP/gh-gone.log" "直接用真实 gh" "gh 已移除时说明替代"
+
+# 会话版本落后时，已移除的命令要顺带提示 /reload
+$TEAM mark-loaded --version 1.0.0 >/dev/null 2>&1
+$TEAM merge T1.1 >"$TMP/merge-gone-old.log" 2>&1 || true
+assert_has "$TMP/merge-gone-old.log" "/reload" "版本落后时提示 /reload"
+$TEAM mark-loaded >/dev/null 2>&1
 assert_has "$SKILL_DIR/references/workflows.md" "git -C" "文档里给出 PM 直接跑的 git 步骤"
 
 $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md --print >/dev/null 2>&1 || true
