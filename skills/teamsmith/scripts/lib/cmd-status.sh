@@ -45,18 +45,19 @@ team_cmd_roster() {
   team_require_docs
   printf '%-10s %-12s %-26s %6s %6s  %s\n' AGENT 状态 分支 脏 领先 任务
   printf '%-10s %-12s %-26s %6s %6s  %s\n' ----- ------ -------------------------- ------ ------ ----
-  local a w wt cols branch dirty ahead task state
+  local a w wt cols branch dirty ahead task state cli
+  cli="$(team_agent_cli_name)"
   for a in $(team_agents); do
     wt="$(team_agent_worktree "$a")"
-    if team_agent_live "$a"; then state="● pi 在跑"
-    elif team_agent_window_exists "$a"; then state="○ pi 已退出"
+    if team_agent_live "$a"; then state="● $cli 在跑"
+    elif team_agent_window_exists "$a"; then state="○ $cli 已退出"
     else state="· 无窗口"; fi
     cols="$(team_git_cols "$wt")"
     IFS=$'\t' read -r branch dirty ahead <<< "$cols"
     task="$(team_state_get "$a" task -)"
     printf '%-10s %-12s %-26s %6s %6s  %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$task"
   done
-  printf '\n● pi 在跑 ｜ ○ 窗口在但 pi 已退出（team resume 可续）｜ · 无窗口 ｜ 脏=未提交 领先=相对 %s\n' "$TEAM_PROTECTED_BRANCH"
+  printf '\n● %s 在跑 ｜ ○ 窗口在但 %s 已退出（team resume 可续）｜ · 无窗口 ｜ 脏=未提交 领先=相对 %s\n' "$cli" "$cli" "$TEAM_PROTECTED_BRANCH"
   [ -n "$TEAM_SESSION" ] && team_dim "session: $TEAM_SESSION（attach: tmux attach -t $TEAM_SESSION）"
   return 0
 }
@@ -270,10 +271,11 @@ team_panel() {
   if [ -n "$pend" ]; then printf '  %-9s %s\n' "待办" "$pend"
   else printf '  %-9s %s无 —— 不叫醒 PM%s\n' "待办" "$C_DIM" "$C_RESET"; fi
   printf '  %-9s %s\n' "容量" "$(team_capacity_line)"
-  local a state task
+  local a state task cli
+  cli="$(team_agent_cli_name)"
   for a in $(team_agents); do
-    if team_agent_live "$a"; then state="${C_GRN}●${C_RESET} pi 在跑"
-    elif team_agent_window_exists "$a"; then state="${C_YEL}○${C_RESET} pi 已退出"
+    if team_agent_live "$a"; then state="${C_GRN}●${C_RESET} $cli 在跑"
+    elif team_agent_window_exists "$a"; then state="${C_YEL}○${C_RESET} $cli 已退出"
     else state="${C_DIM}·${C_RESET} 无窗口"; fi
     task="$(team_state_get "$a" task -)"
     printf '  %-9s %s ｜ %s\n' "$a" "$state" "$task"

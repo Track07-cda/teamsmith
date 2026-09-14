@@ -71,9 +71,9 @@ team_pi_args() { # <model> → 打印已转义的 pi 参数
 }
 
 # 派单提示词：把 CEP 的「不半途停、小步提交、必写报告、被阻塞就 notify」固化成模板。
-team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model>
-  local agent="$1" id="$2" taskfile="$3" wt="$4" model="$5"
-  local issue="" cli="$TEAM_SKILL_DIR/scripts/team" rel abs_docs rel_report
+team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session_id>]
+  local agent="$1" id="$2" taskfile="$3" wt="$4" model="$5" sid="${6:-$TEAM_SESSION-$1}"
+  local issue="" cli="$TEAM_SKILL_DIR/scripts/team" rel abs_docs rel_report notify_block=""
   rel="$(printf '%s' "$taskfile" | sed "s|^$TEAM_MAIN_ROOT/||")"
   abs_docs="$TEAM_DOCS_ABS"
   rel_report="$TEAM_DOCS_DIR/reports/$id-$agent.md"
@@ -87,6 +87,15 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model>
     *)        pr_step="交付方式由 PM 决定：把分支 push 到你们的远端（如有），开 PR/MR 与否听 PM 安排
      （skill 不代做、也不假设 gh/glab；需要你手动调 API 时按 PM 给的方式做，token 不要读进上下文）" ;;
   esac
+
+  # 非 Pi 的 agent：没有自动通知扩展，必须在提示词里给出「回合结束怎么通知 PM」的具体命令
+  # 注意：提示词走 English-first（v1.14.0），而且要给**具体示例摘要**（不是字面 {summary}）——
+  # 弱一点的模型会把字面占位符原样执行。（曾经因为 team_agent_notify_cmd 多传了一个参数，
+  # 把 prompt 文件路径渲染成了摘要；smoke 6f 的「提示词里是可改写的示例摘要」断言就是盯这个的）
+  if [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ]; then
+    notify_block="$(printf '\n**Notify the PM when your turn ends** (this project uses an agent adapter, not Pi, so there is no automatic notification): replace the summary inside the quotes below with your own one-liner (what you delivered / status / next step) and run it once.\nDo **not** send a temporary file name or any path as the summary:\n    %s\n' \
+      "$(team_agent_notify_cmd "$agent" "$sid" "$wt" "$(team_agent_prompt_file "$agent" "$id")" "$id done: <one-line summary>")")"
+  fi
 
   cat <<PROMPT
 You are agent:$agent for the **$TEAM_PROJECT** project, dispatched by the PM through teamsmith. Your worktree is
@@ -132,7 +141,7 @@ Delivery process:
 4. \`git push -u $TEAM_REMOTE HEAD\`.
 5. $pr_step.
 
-Task: **$id**${issue:+ (issue #$issue)}. The brief \`$taskfile\` is the PM's read-only file -- do not modify it.
+Task: **$id**${issue:+ (issue #$issue)}. The brief \`$taskfile\` is the PM's read-only file -- do not modify it.${notify_block}
 If this is a resumed run: start with \`git status\` / \`git log --oneline -5\` to see how far you got, and continue
 from that point instead of starting over.
 PROMPT
@@ -242,16 +251,42 @@ team_cmd_dispatch() {
   team_mem_guard || return 1
   team_model_guard "$model" || return 1
 
-  local pi_bin; pi_bin="$(team_pi_bin_path)"
-  case "$pi_bin" in /*) ;; *) team_warn "TEAM_PI_BIN 不是绝对路径（$pi_bin）：窗口里可能 PATH 未就绪，建议写死绝对路径";; esac
-  command -v "$TEAM_PI_BIN" >/dev/null 2>&1 || team_die "找不到 pi 可执行文件：TEAM_PI_BIN=$TEAM_PI_BIN（设成绝对路径再派单）"
-  local prompt; prompt="$(team_build_prompt "$agent" "$id" "$taskfile" "$wt" "$model")"
-  local piargs inner
-  piargs="$(team_pi_args "$model")"
+  # agent adapter：空配置 = 内置 Pi（老路径，报错文案也不变）
+  team_agent_check_launch
+  local agent_bin; agent_bin="$(team_agent_bin_path)"
+  if [ -n "${TEAM_AGENT_CMD:-}${TEAM_AGENT_BIN:-}" ]; then
+    # 自定义 adapter（codex/opencode/…）：只看配好的可执行文件能不能解析到
+    case "$agent_bin" in /*) ;; *) team_warn "agent 可执行文件不是绝对路径（$agent_bin）：窗口里可能 PATH 未就绪，建议用 TEAM_AGENT_BIN 写死绝对路径";; esac
+    command -v "$agent_bin" >/dev/null 2>&1 || team_die "找不到 agent 可执行文件：$agent_bin（检查 TEAM_AGENT_BIN 或 TEAM_AGENT_CMD 的首词）"
+  else
+    case "$agent_bin" in /*) ;; *) team_warn "TEAM_PI_BIN 不是绝对路径（$agent_bin）：窗口里可能 PATH 未就绪，建议写死绝对路径";; esac
+    command -v "$TEAM_PI_BIN" >/dev/null 2>&1 || team_die "找不到 pi 可执行文件：TEAM_PI_BIN=$TEAM_PI_BIN（设成绝对路径再派单）"
+  fi
+  local prompt prompt_file agent_cmd inner
+  prompt="$(team_build_prompt "$agent" "$id" "$taskfile" "$wt" "$model" "$sid")"
+  # 提示词落盘：模板里的 {prompt_file} 用它，排查“到底派了什么”也看它（state/ 已 gitignore）
+  prompt_file="$(team_agent_prompt_file "$agent" "$id")"
+  mkdir -p "$TEAM_STATE_DIR"
+  printf '%s\n' "$prompt" > "$prompt_file"
+  agent_cmd="$(team_agent_launch_cmd "$agent" "$sid" "$wt" "$prompt_file")"
+
+  # 非 Pi 的 notify 模板坏掉时不阻塞派单，但必须说清楚（否则 worker 回合结束没人知道）
+  if [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ]; then
+    local nre=""
+    if ! nre="$(team_agent_notify_check)"; then
+      team_warn "TEAM_AGENT_NOTIFY_CMD 看起来不可用：$nre"
+    fi
+  fi
 
   if [ "$printonly" = "1" ]; then
-    printf '=== pi 命令 ===\n'
-    printf 'cd %q && %s %s--session-id %s "$PROMPT"\n' "$wt" "$pi_bin" "$piargs" "$sid"
+    printf '=== agent 命令（adapter: %s）===\n' "$(team_agent_adapter_label)"
+    printf 'cd %q && %s\n' "$wt" "$agent_cmd"
+    printf '   （命令里的 "$0" = 窗口 harness 以 argv[0] 传入的提示词；模板里写 {prompt} 就是它）\n'
+    printf '   prompt file（模板里的 {prompt_file}）：%s\n' "$prompt_file"
+    if [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ]; then
+      printf '   回合结束通知（TEAM_AGENT_NOTIFY_CMD，{summary} 换成摘要）：\n     %s\n' \
+        "$(team_agent_notify_cmd "$agent" "$sid" "$wt" "$prompt_file" '{summary}')"
+    fi
     printf '\n=== 提示词（%s 字） ===\n%s\n' "${#prompt}" "$prompt"
     return 0
   fi
@@ -264,8 +299,8 @@ team_cmd_dispatch() {
   fi
 
   # 命令里写死绝对路径 + 短暂等待（窗口 shell 可能刚起、PATH/rc 还没就绪）
-  inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s %s--session-id %s "$0"; exec bash' \
-    "$wt" "$pi_bin" "$agent" "$id" "$(printf '%q' "$pi_bin")" "$piargs" "$sid")"
+  inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s; exec bash' \
+    "$wt" "$agent_bin" "$agent" "$id" "$agent_cmd")"
   tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt"
 
   team_state_set "$agent" model "$model"
@@ -310,7 +345,7 @@ team_cmd_say() {
     || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 0; }
   # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
   if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
-    team_say_offline "$agent" "$msg" "pi 已退出（空提示符）"
+    team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"
     return 0
   fi
 

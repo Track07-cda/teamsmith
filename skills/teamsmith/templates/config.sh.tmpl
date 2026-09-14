@@ -19,6 +19,22 @@ TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/*=1"
 # Extra arguments appended to the agent CLI on dispatch (space separated)
 TEAM_EXTRA_PI_ARGS=""
 
+# ---- agent adapter (workers may be any TUI agent; leave all four empty for the built-in Pi behaviour) ----
+# launch template; placeholders: {cwd} {session_id} {model} {provider} {prompt_file} {prompt}
+#                             {skill_dir} {notify_ext} {extra_args}   (unknown placeholder fails the dispatch)
+TEAM_AGENT_CMD=""
+# end-of-turn notification for non-Pi agents; placeholders: {summary} {agent} {cwd} {session_id} {model} {provider} {skill_dir}
+TEAM_AGENT_NOTIFY_CMD=""
+# log source for `team monitor --activity` ({agent} = agent name), e.g. '~/.local/share/opencode/log/*.log'
+TEAM_AGENT_LOG_GLOB=""
+# adapter binary (window readiness wait / existence checks); empty = first word of TEAM_AGENT_CMD
+TEAM_AGENT_BIN=""
+# example (opencode):
+#   TEAM_AGENT_CMD='opencode run --model {provider}/{model} --dir {cwd} "$(cat {prompt_file})"'
+#   TEAM_AGENT_BIN="$HOME/.opencode/bin/opencode"
+#   TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm "{summary}"'
+#   TEAM_AGENT_MODELS="dev=google/gemini-3-flash-preview"
+
 # ---- workflow ----
 TEAM_GATES="{{GATES}}"                # gate command; verification runs it on an independent checkout
 TEAM_PI_BIN="pi"                      # agent CLI binary (use an absolute path if it is not on PATH)

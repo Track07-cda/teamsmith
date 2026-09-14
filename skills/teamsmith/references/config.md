@@ -42,6 +42,17 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 | `TEAM_PROTECTED_BRANCH` | `main` | 只有 PM 能推进的分支 |
 | `TEAM_REMOTE` | `origin` | 远端名（local 模式也要有，用于 push 分支） |
 
+### agent adapter（worker 用任意 TUI agent；四个都留空 = 内置 Pi，历史行为不变）
+
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `TEAM_AGENT_CMD` | 空 | 启动 agent CLI 的命令模板；空 = 内置 Pi 命令。占位符：`{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{notify_ext}` `{extra_args}`；未知占位符 → `dispatch` 直接失败并列出支持集 |
+| `TEAM_AGENT_NOTIFY_CMD` | 空 | 非 Pi worker 回合结束通知 PM 的命令模板（`{summary}` `{agent}` `{cwd}` `{session_id}` `{model}` `{provider}` `{skill_dir}`）；空 = Pi 通知扩展；设了会在派单提示词里渲染成参考命令，模板看着不可用时只警告 |
+| `TEAM_AGENT_LOG_GLOB` | 空 | `team monitor --activity` 的活动来源：最新匹配文件的尾部（`*` `?` `**`、行首 `~`、`{agent}` = agent 名）；空 = Pi 会话文件；没匹配到就退回「无会话」并说明原因 |
+| `TEAM_AGENT_BIN` | 空 | 窗口 PATH 就绪等待 / 存在性检查 / `doctor` 用的可执行文件；空 = `TEAM_AGENT_CMD` 首词，否则 `TEAM_PI_BIN` |
+
+> 契约（teamsmith 负责什么 / adapter 负责什么）、占位符语义、codex 与 opencode 实测例子、验证清单与明确不支持的事：见 [agent-adapters.md](agent-adapters.md)。
+
 ### forge
 
 | 键 | 默认 | 作用 |
@@ -104,7 +115,8 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 <项目根>/
 ├── .pi/team/
 │   ├── config.sh          # 配置（入库，团队共享）
-│   └── state/             # 运行时状态（gitignore）：<agent>.env、notify-dedup
+│   └── state/             # 运行时状态（gitignore）：<agent>.env、notify-dedup、
+│                          #   prompt-<agent>-<ID>.md（本次派单的提示词；{prompt_file} 指向它）
 ├── AGENTS.md              # 含 <!-- teamsmith:begin --> 协议段落（init 写入/刷新）
 ├── .worktrees/
 │   ├── <agent>/           # 每个 agent 的长期 worktree（分支 agent/<名>）

@@ -492,6 +492,204 @@ rm -f "$REPO/docs/team/reports/requirements-gap-2026-09-11.md"
 # 次要项：team resume 支持位置参数
 $TEAM resume dev --dry-run >"$TMP/resume-pos.log" 2>&1 && ok "resume <agent> 位置参数可用" || bad "resume 位置参数不可用"
 
+# ---------------------------------------------------------------- 6f. agent adapter（任意 TUI agent）
+section "6f · agent adapter（任意 TUI agent）：渲染 / 占位符 / 文档契约 / 降级"
+
+adapter_launch_support() { # → 引擎支持的 launch 占位符（空格分隔）
+  TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_agent_placeholders launch' | tr '\n' ' '
+}
+adapter_doc_tokens() { # <doc> → 文档表格第一列里出现的占位符（每行一个）
+  grep -oE '^\| *`\{[A-Za-z_][A-Za-z0-9_]*\}`' "$1" | grep -oE '\{[A-Za-z_][A-Za-z0-9_]*\}' | sort -u
+}
+adapter_doc_unsupported() { # <doc> → 文档里列了、但引擎不认识的占位符（每行一个）
+  local t support=" $(adapter_launch_support) "
+  for t in $(adapter_doc_tokens "$1"); do
+    case "$support" in *" $t "*) ;; *) printf '%s\n' "$t" ;; esac
+  done
+}
+ADOC="$SKILL_DIR/references/agent-adapters.md"
+
+# ① 默认不变：还是内置 Pi 命令
+assert_has "$TMP/print.log" 'adapter: built-in (Pi)' "默认仍是内置 Pi adapter（--print 标明）"
+assert_not "$TMP/print.log" 'adapter: custom:' "没配 TEAM_AGENT_CMD 时不会变成 custom"
+assert_has "$TMP/print.log" "--session-id $SESSION-dev" "默认命令仍带 --session-id（Pi 路径不变）"
+assert_has "$TMP/print.log" "--skill" "默认命令仍带 --skill（Pi 路径不变）"
+
+# ② 自定义模板：渲染成可读的单行命令，不留占位符
+APLACE='myagent run --model {model} --prov {provider} --dir {cwd} --sid {session_id} --prompt {prompt} --file {prompt_file} --skill {skill_dir} {extra_args}'
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-custom.log" 2>&1 \
+  || { bad "自定义 adapter 的 dispatch --print 失败"; cat "$TMP/print-custom.log"; }
+grep -m1 '^cd ' "$TMP/print-custom.log" > "$TMP/cmdline-custom.log" || true
+assert_file "$TMP/cmdline-custom.log" "--print 给出了完整命令（cd … && <cmd>）"
+assert_has "$TMP/cmdline-custom.log" "myagent run --model deepseek-flash" "{model} 渲染成模型名"
+assert_has "$TMP/cmdline-custom.log" "--prov deepseek" "{provider} 渲染成 provider"
+assert_has "$TMP/cmdline-custom.log" "--dir $REPO/.worktrees/dev" "{cwd} 渲染成 agent worktree"
+assert_has "$TMP/cmdline-custom.log" "--sid $SESSION-dev" "{session_id} 渲染成 teamsmith session id"
+assert_has "$TMP/cmdline-custom.log" "--skill $SKILL_DIR" "{skill_dir} 渲染成 skill 目录"
+assert_has "$TMP/cmdline-custom.log" "$REPO/.pi/team/state/prompt-dev-T1.1.md" "{prompt_file} 指向落盘的提示词"
+assert_has "$TMP/cmdline-custom.log" '--prompt "$0"' "{prompt} 展开成窗口 harness 的 argv[0]（提示词不进命令行）"
+assert_not "$TMP/cmdline-custom.log" "{" "渲染后的命令没有残留占位符"
+assert_has "$TMP/print-custom.log" 'adapter: custom: myagent run' "--print 标明自定义 adapter"
+assert_file "$REPO/.pi/team/state/prompt-dev-T1.1.md" "派单把提示词落盘（{prompt_file} 的内容）"
+assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" "agent:dev" "落盘的确实是本次派单提示词"
+
+# ③ notify 模板：进提示词 + 只警告不阻断
+ANOTIFY='bash {skill_dir}/scripts/team notify pm "{summary}"'
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD="$ANOTIFY" \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify.log" 2>&1 || true
+assert_has "$TMP/print-notify.log" "Notify the PM when your turn ends" "有 notify 模板时提示词含通知段落"
+assert_has "$TMP/print-notify.log" "notify pm \"{summary}\"" "渲染出具体命令（{summary} 留给 worker 换）"
+# 提示词（worker 真读的那份）给的是**示例摘要**，不是字面 {summary}：弱模型会把占位符原样执行
+assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" "Notify the PM when your turn ends" "落盘提示词也含通知段落"
+assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" 'notify pm "T1.1 done' "提示词里是可改写的示例摘要（不是字面 {summary}）"
+assert_not "$REPO/.pi/team/state/prompt-dev-T1.1.md" 'notify pm "{summary}"' "提示词里没有给弱模型留字面占位符"
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='nosuchcli notify {summary}' \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-bad.log" 2>&1 \
+  && ok "notify 模板首词不可执行时不阻断派单（只警告）" || bad "坏 notify 模板不应让 dispatch 失败"
+assert_has "$TMP/print-notify-bad.log" "TEAM_AGENT_NOTIFY_CMD 看起来不可用" "警告点名了坏模板"
+
+# ④ 未知占位符 → 明确失败（列出支持集）
+if env TEAM_AGENT_CMD='myagent {sessionid} {prompt}' $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/adapter-bogus.log" 2>&1; then
+  bad "未知占位符应当让派单失败"
+else ok "未知占位符 → 派单直接失败（不静默）"; fi
+assert_has "$TMP/adapter-bogus.log" "{sessionid}" "报错点名了写错的占位符"
+assert_has "$TMP/adapter-bogus.log" "{cwd}" "报错列出支持的占位符"
+assert_has "$TMP/adapter-bogus.log" "TEAM_AGENT_CMD" "报错指明了是哪个配置键"
+
+# ⑤ 文档 ↔ 代码契约（翻转自测：文档里混进未支持的占位符必须被抓到）
+assert_file "$ADOC" "新文档 references/agent-adapters.md 在"
+DOC_UNSUPPORTED="$(adapter_doc_unsupported "$ADOC" | tr '\n' ' ')"
+assert_eq "文档占位符表里的 token 都被引擎支持" "${DOC_UNSUPPORTED:-无}" "无"
+DOC_MISSING=""
+for _t in $(adapter_launch_support); do
+  grep -qF "$_t" "$ADOC" || DOC_MISSING="$DOC_MISSING $_t"
+done
+assert_eq "每个 launch 占位符都在文档里出现过" "${DOC_MISSING:-无}" "无"
+AFLIP="$TMP/agent-adapters-flip.md"
+cp "$ADOC" "$AFLIP"
+printf '| `{bogus_placeholder}` | 注入的坏占位符（翻转自测） |\n' >> "$AFLIP"
+FLIP_HITS="$(adapter_doc_unsupported "$AFLIP" | tr '\n' ' ')"
+assert_eq "翻转自测：文档里混进未支持的占位符会被抓到" "${FLIP_HITS% }" "{bogus_placeholder}"
+
+# ⑥ paths / doctor 报适配器；只有「配了但解析不到」才 fail
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash $TEAM paths >"$TMP/paths-adapter.log" 2>&1 || true
+assert_has "$TMP/paths-adapter.log" '"agent_adapter": "custom: myagent run' "paths 报告当前 adapter"
+assert_has "$TMP/paths-adapter.log" '"agent_bin":' "paths 报告解析到的可执行文件"
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash $TEAM doctor >"$TMP/doctor-adapter.log" 2>&1 || true
+assert_has "$TMP/doctor-adapter.log" "agent adapter" "doctor 新增 adapter 项"
+assert_match "$TMP/doctor-adapter.log" "custom: myagent run" "doctor 显示自定义 adapter"
+assert_has "$TMP/doctor-adapter.log" "不需要 pi" "自定义 adapter 下不再要求 pi"
+env TEAM_AGENT_CMD='nosuchcli {prompt}' $TEAM doctor >"$TMP/doctor-badadapter.log" 2>&1 \
+  && bad "配了不可解析的 adapter 时 doctor 应当失败" || ok "adapter 可执行文件解析不到 → doctor 失败"
+assert_has "$TMP/doctor-badadapter.log" "解析不到" "失败原因说明是解析不到"
+# 内置路径 + 根本没有 pi → doctor 仍然失败（今天的行为不能变）
+# 影子 PATH：把现有 PATH 里的可执行文件全部软链过来，**除了 pi**
+NOPI="$TMP/no-pi-bin"; mkdir -p "$NOPI"
+for _d in ${PATH//:/ }; do [ -d "$_d" ] && ln -sf "$_d"/* "$NOPI/" 2>/dev/null; done
+rm -f "$NOPI/pi"
+assert_eq "影子 PATH 里确实没有 pi" "$(env PATH="$NOPI" bash -c 'command -v pi || echo MISSING')" "MISSING"
+env PATH="$NOPI" $TEAM doctor >"$TMP/doctor-nopi.log" 2>&1 \
+  && bad "内置路径缺 pi 时 doctor 应当失败" || ok "内置路径缺 pi → doctor 失败（行为不变）"
+assert_has "$TMP/doctor-nopi.log" "缺 pi" "失败原因仍是缺 pi"
+
+# ⑦ monitor 活动流：TEAM_AGENT_LOG_GLOB 显示日志尾部；没会话/没命中则优雅降级（纯逻辑，不需 tmux）
+if [ -n "$JS_RUNNER" ]; then
+  printf 'agent log line 1\nagent log line 2\n' > "$TMP/agentlog-dev.log"
+  "$JS_RUNNER" "$SKILL_DIR/scripts/monitor.mjs" --root "$REPO" --only dev --events 2 \
+    --log-glob "$TMP/agentlog-{agent}.log" --json >"$TMP/monlog-json.log" 2>&1 || bad "monitor --log-glob 失败"
+  assert_has "$TMP/monlog-json.log" '"source": "log"' "--log-glob 命中 → source=log"
+  assert_has "$TMP/monlog-json.log" "agent log line 2" "显示的是最新匹配文件的尾部"
+  "$JS_RUNNER" "$SKILL_DIR/scripts/monitor.mjs" --root "$REPO" --only dev --json >"$TMP/monlog-none.log" 2>&1 \
+    || bad "monitor 在无 Pi 会话时失败"
+  assert_has "$TMP/monlog-none.log" '"source": "none"' "没有 Pi 会话也不炸（source=none）"
+  "$JS_RUNNER" "$SKILL_DIR/scripts/monitor.mjs" --root "$REPO" --only dev \
+    --log-glob "$TMP/definitely-missing/*.log" >"$TMP/monlog-miss.log" 2>&1 || bad "monitor glob 未命中时失败"
+  assert_has "$TMP/monlog-miss.log" "无会话" "glob 未命中 → 退回「无会话」"
+  assert_has "$TMP/monlog-miss.log" "未匹配到文件" "并说明是 glob 没匹配到"
+else
+  printf '  (跳过活动流断言：本机没有 node/bun 可直接跑 monitor.mjs)\n'
+fi
+
+# ---------------------------------------------------------------- 6g. 非 Pi agent 端到端（真窗口）
+section "6g · 非 Pi agent 端到端（假 agent，完全没有 Pi）"
+if [ "$FAST" = "1" ]; then
+  fast_skip "6g·非 Pi agent 端到端" "要真实 tmux 窗口 + 假 agent 进程 + 等待它跑完"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  # 假「非 Pi」agent：写文件 + 提交 + 写报告 + 通知 PM（全部靠自己，不依赖 Pi/扩展）
+  ADAPTER_AGENT="adapter"
+  ADAPTER_ID="T1.2"
+  ADAPTER_MARK="$TMP/fake-agent.mark"
+  ADAPTER_DONE="$TMP/fake-agent.done"
+  cat > "$FAKE/fake-agent.sh" <<EOF
+#!/usr/bin/env bash
+# 假的「非 Pi」agent：证明 adapter 在完全没有 Pi 的环境里能跑完一条完整回路
+set -uo pipefail
+wt="\$1"; sid="\$2"; pf="\$3"; skill="\$4"
+printf 'cwd=%s sid=%s prompt=%s\n' "\$wt" "\$sid" "\$pf" > "$ADAPTER_MARK"
+cd "\$wt" || exit 1
+echo hello-from-non-pi-agent > agent-artifact.txt
+git add agent-artifact.txt && git commit -qm "feat($ADAPTER_ID): 非 Pi agent 产物"
+mkdir -p docs/team/reports
+printf '# $ADAPTER_ID · 非 Pi adapter 冒烟\n\n' > docs/team/reports/$ADAPTER_ID-$ADAPTER_AGENT.md
+printf -- '- agent-artifact.txt\n' >> docs/team/reports/$ADAPTER_ID-$ADAPTER_AGENT.md
+git add docs/team/reports/$ADAPTER_ID-$ADAPTER_AGENT.md
+git commit -qm "docs($ADAPTER_ID): 非 Pi adapter 报告"
+bash "\$skill/scripts/team" notify pm "$ADAPTER_ID 完成：非 Pi adapter 跑通"
+printf 'done\n' > "$ADAPTER_DONE"
+EOF
+  chmod +x "$FAKE/fake-agent.sh"
+  ACMD="$FAKE/fake-agent.sh {cwd} {session_id} {prompt_file} {skill_dir}"
+  ATASK="$TMP/$ADAPTER_ID-task.md"
+  printf '# %s · 非 Pi adapter 冒烟\n\ntask: %s\nagent: %s\n' "$ADAPTER_ID" "$ADAPTER_ID" "$ADAPTER_AGENT" > "$ATASK"
+  # 第二个 worker（agent 模式名册里新增一个），自己的 worktree/分支：不动 dev 的账
+  git -C "$REPO" worktree add -b "task/$ADAPTER_ID-agent-adapter" "$REPO/.worktrees/$ADAPTER_AGENT" "$PROTECTED" >/dev/null 2>&1 || true
+  AENV="TEAM_AGENTS=dev verify $ADAPTER_AGENT"
+  env TEAM_AGENTS="dev verify $ADAPTER_AGENT" TEAM_AGENT_CMD="$ACMD" TEAM_AGENT_BIN="$FAKE/fake-agent.sh" \
+    TEAM_AGENT_NOTIFY_CMD="bash {skill_dir}/scripts/team notify pm \"{summary}\"" \
+    $TEAM dispatch "$ADAPTER_AGENT" "$ADAPTER_ID" "$ATASK" --print >"$TMP/print-nonpi.log" 2>&1 || true
+  grep -m1 '^cd ' "$TMP/print-nonpi.log" > "$TMP/cmdline-nonpi.log" || true
+  assert_has "$TMP/cmdline-nonpi.log" "$FAKE/fake-agent.sh" "非 Pi 命令用的是配置的假 agent"
+  assert_has "$TMP/cmdline-nonpi.log" "$REPO/.worktrees/$ADAPTER_AGENT" "{cwd} 指向它自己的 worktree"
+  assert_has "$TMP/cmdline-nonpi.log" "$SESSION-$ADAPTER_AGENT" "{session_id} 是 teamsmith 的 session"
+  assert_not "$TMP/cmdline-nonpi.log" "{" "非 Pi 命令里没有残留占位符"
+  env TEAM_AGENTS="dev verify $ADAPTER_AGENT" TEAM_AGENT_CMD="$ACMD" TEAM_AGENT_BIN="$FAKE/fake-agent.sh" \
+    TEAM_AGENT_NOTIFY_CMD="bash {skill_dir}/scripts/team notify pm \"{summary}\"" \
+    $TEAM dispatch "$ADAPTER_AGENT" "$ADAPTER_ID" "$ATASK" >"$TMP/dispatch-nonpi.log" 2>&1 \
+    || { bad "非 Pi dispatch 失败"; cat "$TMP/dispatch-nonpi.log"; }
+  assert_not "$TMP/dispatch-nonpi.log" "找不到 pi" "非 Pi 路径不会因为「没有 pi」而报错"
+  _i=0; while [ "$_i" -lt 60 ] && [ ! -f "$ADAPTER_DONE" ]; do sleep 0.5; _i=$((_i + 1)); done
+  assert_file "$ADAPTER_DONE" "非 Pi agent 跑完整条回路（写文件 → 提交 → 报告 → 通知）"
+  assert_file "$ADAPTER_MARK" "非 Pi agent 真的在窗口里跑起来了"
+  assert_has "$ADAPTER_MARK" "sid=$SESSION-$ADAPTER_AGENT" "它拿到了 teamsmith 的 session id"
+  assert_has "$ADAPTER_MARK" "prompt=$REPO/.pi/team/state/prompt-$ADAPTER_AGENT-$ADAPTER_ID.md" "{prompt_file} 也是真的"
+  assert_eq "窗口在（agent:$ADAPTER_AGENT）" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx "$ADAPTER_AGENT" || true)" "1"
+  assert_eq "非 Pi agent 的提交落在它自己的分支上" "$(git -C "$REPO/.worktrees/$ADAPTER_AGENT" rev-list --count "$PROTECTED"..HEAD)" "2"
+  assert_file "$REPO/.worktrees/$ADAPTER_AGENT/docs/team/reports/$ADAPTER_ID-$ADAPTER_AGENT.md" "它写了自己的报告"
+  assert_has "$REPO/.worktrees/$ADAPTER_AGENT/docs/team/reports/$ADAPTER_ID-$ADAPTER_AGENT.md" "agent-artifact.txt" "报告内容来自它自己"
+  assert_has "$REPO/docs/team/inbox/pm.md" "$ADAPTER_ID 完成：非 Pi adapter 跑通" "PM 收到了它的通知（走 TEAM_AGENT_NOTIFY_CMD）"
+  assert_eq "dev 的账没被搅动" "$(git -C "$REPO/.worktrees/dev" rev-list --count "$PROTECTED"..HEAD)" "0"
+  # 活动流：配了 TEAM_AGENT_LOG_GLOB 就显示这个 agent 的日志尾部
+  printf 'non-pi log A\nnon-pi log B\n' > "$TMP/agentlog-$ADAPTER_AGENT.log"
+  env TEAM_AGENTS="dev verify $ADAPTER_AGENT" TEAM_AGENT_LOG_GLOB="$TMP/agentlog-{agent}.log" \
+    $TEAM monitor --once --no-watchdog --activity >"$TMP/monitor-nonpi.log" 2>&1 || true
+  assert_has "$TMP/monitor-nonpi.log" "TEAM_AGENT_LOG_GLOB" "monitor 说明了活动流来源"
+  assert_has "$TMP/monitor-nonpi.log" "non-pi log B" "活动流显示日志尾部（没有 Pi 会话也行）"
+  tmux kill-window -t "$SESSION:$ADAPTER_AGENT" 2>/dev/null || true
+  # 清场：这个假 agent 的 worktree/分支/报告不能留成「待复验」——那会污染后面的巡检断言
+  # （team_reports_pending 扫 .worktrees/*，和名册无关）；清完顺手验一下真的干净了。
+  git -C "$REPO" worktree remove --force "$REPO/.worktrees/$ADAPTER_AGENT" >/dev/null 2>&1 || true
+  git -C "$REPO" branch -D "task/$ADAPTER_ID-agent-adapter" >/dev/null 2>&1 || true
+  rm -f "$REPO/.pi/team/state/$ADAPTER_AGENT.env"
+  APEND="$($TEAM watchdog-status 2>/dev/null || true)"
+  case "$APEND" in
+    *"待复验 [1-9]"*) bad "清场没干净：watchdog-status 里还有待复验（会污染后面的巡检断言）" ;;
+    *) ok "清场后不再有待复验报告（不影响后面的巡检断言）" ;;
+  esac
+else
+  printf '  (跳过非 Pi 端到端断言：没有 tmux)\n'
+fi
+
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"
 $TEAM notify dev "blocked: 缺 dependency X" >/dev/null 2>&1 && ok "notify 退出码 0" || bad "notify 失败"
@@ -1232,7 +1430,7 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
-  for seg in "6·dispatch 真拉起" "11·close 后窗口" "11b·巡检/watchdog" "11c·agent 续跑" \
+  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "11·close 后窗口" "11b·巡检/watchdog" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
     else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi

@@ -171,6 +171,25 @@ Forge-agnostic: GitHub via `gh`, GitLab via `glab`/`curl`, Gitea via `tea`, or t
 the skill assumes nothing. Tokens stay in the project's token files (`TEAM_TOKEN_FILE` /
 `TEAM_GITLAB_TOKEN_FILE`) and are injected only when the PM calls a tool: never echoed, never logged.
 
+## Agent adapters (any TUI agent can be a worker)
+
+Pi is the default worker; to use another CLI set four keys in `.pi/team/config.sh` (**all empty = Pi behaviour
+byte-for-byte unchanged**):
+
+| Key | Purpose | When empty |
+|---|---|---|
+| `TEAM_AGENT_CMD` | launch template for the agent CLI | built-in Pi command |
+| `TEAM_AGENT_NOTIFY_CMD` | how a worker tells the PM its turn ended | Pi notify extension (inbox + knock) |
+| `TEAM_AGENT_LOG_GLOB` | which logs `team monitor --activity` reads (`{agent}` = agent name) | Pi session files |
+| `TEAM_AGENT_BIN` | binary for the window-readiness wait and existence checks | first word of `TEAM_AGENT_CMD`, else `TEAM_PI_BIN` |
+
+- Template placeholders: `{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{notify_ext}` `{extra_args}`;
+  an unknown `{...}` **fails the dispatch** with the supported list, and `team dispatch … --print` renders the command first.
+- `team doctor` / `team paths` print the resolved adapter (`built-in (Pi)` or `custom: …`); only a *configured*
+  adapter whose binary cannot be resolved fails.
+- Contract, worked codex/opencode examples, a verification checklist and the unsupported list:
+  see [references/agent-adapters.md](references/agent-adapters.md).
+
 ## Cross-project boundary (you may talk; you may not command)
 
 - **Allowed**: discussing interfaces, advice with evidence, problem reports with reproduction, scheduling a joint
@@ -212,18 +231,23 @@ the skill assumes nothing. Tokens stay in the project's token files (`TEAM_TOKEN
 | `references/philosophy.md` | **The PM creed**: judgement standards and their failure modes (read this first) |
 | `references/protocol.md` | Why each rule exists (independent verification, wake-up loop, capacity floor, safety model) |
 | `references/config.md` | Config keys, on-disk layout, env overrides (env beats config) |
+| `references/agent-adapters.md` | To run workers with codex/opencode/any TUI agent: the contract, placeholder tables, worked examples, a verification checklist |
 | `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
 | `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
 | `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/watchdog, scaling, blockers |
 | `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |
 | `templates/` | Copy when you need to hand-write a brief/report/board |
 | `scripts/team`, `scripts/lib/*.sh` | When changing behaviour (use `team <cmd> --print` to see what it generates) |
-| `tests/smoke.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, window/close behaviour, the watchdog waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release |
+| `tests/smoke.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, the non-Pi agent end-to-end segment, window/close behaviour, the watchdog waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release |
 
 ## Requirements
 
 **Only four hard dependencies**: `bash` ≥ 4, `git` (≥ 2.31, uses `--path-format=absolute`), `tmux`, and `pi`
 (needs `--session-id`/`-e`/`--skill`). No jq/python/node dependency.
+> When only the *workers* move to another CLI: with `TEAM_AGENT_CMD` set, workers no longer need `pi`
+> (`team doctor` judges by the configured adapter) — but **the PM side still runs Pi** (`pi -c` restarts,
+> the PM prompt, `extension/team-notify.ts`), and the watchdog only wakes the PM. See
+> [references/agent-adapters.md](references/agent-adapters.md).
 
 - **No forge dependency**: the skill never probes or calls `gh`/`glab`/`tea` and never reads tokens; opening a
   PR/MR is the PM's job via `git` plus `curl`/any CLI/web UI (`TEAM_VCS` is only a wording label).

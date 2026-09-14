@@ -247,10 +247,30 @@ team_cmd_doctor() {
       else warn "tmux 在，但 session '$TEAM_SESSION' 不存在（dispatch 会创建；PM 需要在 <session>:<pm-window> 里跑）"; fi
     else warn "无 tmux：agent 无法交互旁观，仅支持 -p 非交互（不建议）"; fi
 
-  check "pi"; if team_have_cmd pi; then
+  check "pi"; if [ -n "${TEAM_AGENT_CMD:-}" ]; then
+      pass "本项目用自定义 agent adapter：不需要 pi"
+    elif team_have_cmd pi; then
       local pv; pv="$(pi --version 2>/dev/null | head -1 || true)"
       if pi --help 2>/dev/null | grep -q -- '--session-id'; then pass "${pv:-present}"; else fail "pi 版本过旧：缺 --session-id"; fi
     else fail "缺 pi（PATH 里没有）"; fi
+
+  # agent adapter：空 TEAM_AGENT_CMD = 内置 Pi（默认）；配了就用任意 TUI agent 的命令模板。
+  # 判定口径：只有「配了但可执行文件根本解析不到」才算 fail；默认路径仍然由上面那条 pi 检查负责。
+  check "agent adapter"
+  local adapt_bin; adapt_bin="$(team_agent_bin_path)"
+  if [ -z "${TEAM_AGENT_CMD:-}${TEAM_AGENT_BIN:-}" ]; then pass "$(team_agent_adapter_label) → $adapt_bin"
+  elif command -v "$adapt_bin" >/dev/null 2>&1; then pass "$(team_agent_adapter_label) → $adapt_bin"
+  else fail "$(team_agent_adapter_label) → 解析不到可执行文件：$adapt_bin（看 TEAM_AGENT_BIN / TEAM_AGENT_CMD 首词）"; fi
+
+  check "agent notify"
+  if [ -z "${TEAM_AGENT_NOTIFY_CMD:-}" ]; then
+    if [ -n "${TEAM_AGENT_CMD:-}" ]; then warn "自定义 adapter 但没配 TEAM_AGENT_NOTIFY_CMD：worker 回合结束不会自动通知 PM"
+    else pass "Pi notify 扩展（内置）"; fi
+  else
+    local nre=""
+    if nre="$(team_agent_notify_check)"; then pass "$TEAM_AGENT_NOTIFY_CMD"
+    else warn "$TEAM_AGENT_NOTIFY_CMD（$nre）"; fi
+  fi
 
   check "门禁 TEAM_GATES"; if [ -n "$TEAM_GATES" ]; then pass "$TEAM_GATES"; else warn "未配置门禁命令：复验无法自动判定，只能靠人读 diff"; fi
   check "名册 TEAM_AGENTS"; if [ -n "$(team_agents)" ]; then pass "$(team_agents | tr '\n' ' ')"; else fail "名册为空"; fi

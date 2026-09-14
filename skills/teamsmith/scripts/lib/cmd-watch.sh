@@ -318,7 +318,7 @@ team_cmd_watch() {
 # tmux 窗口里的「状态监视器」：上面是团队状态（PM/待办/容量），下面是每个 agent 的会话活动流。
 # 顺带按 TEAM_WATCH_INTERVAL 跑看门狗 tick —— 所以一个窗口同时是显示器 + 看门狗。
 team_monitor_activity() { # 可选：只渲染「当前 tmux session 里正在跑的窗口」的会话活动
-  local runner; runner="$(team_ts_runner)"
+  local runner; runner="$(team_js_runner)"
   local js="$TEAM_SKILL_DIR/scripts/monitor.mjs"
   if [ -z "$runner" ] || [ ! -f "$js" ]; then
     team_dim "  （本机没有 node/bun/tsx：活动流不可用）"
@@ -335,7 +335,11 @@ team_monitor_activity() { # 可选：只渲染「当前 tmux session 里正在�
     team_dim "  （本 session 里没有在跑的窗口）"
     return 0
   fi
-  "$runner" "$js" --root "$TEAM_MAIN_ROOT" --only "$only" --events "${TEAM_MONITOR_EVENTS:-4}" 2>/dev/null || true
+  # 非 Pi agent：可选的日志/会话文件通配（TEAM_AGENT_LOG_GLOB）→ 显示最新匹配文件的尾部
+  local globargs=()
+  [ -n "${TEAM_AGENT_LOG_GLOB:-}" ] && globargs=(--log-glob "$TEAM_AGENT_LOG_GLOB")
+  "$runner" "$js" --root "$TEAM_MAIN_ROOT" --only "$only" --events "${TEAM_MONITOR_EVENTS:-4}" \
+    ${globargs[@]+"${globargs[@]}"} 2>/dev/null || true
 }
 
 team_cmd_monitor() {
@@ -363,6 +367,8 @@ team_cmd_monitor() {
     if [ "$activity" = "1" ]; then
       printf '\n  %sagent 活动%s%s（仅本 session 在跑的窗口；--no-activity 关掉）%s\n' \
         "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
+      [ -n "${TEAM_AGENT_LOG_GLOB:-}" ] && \
+        printf '  %s源：TEAM_AGENT_LOG_GLOB=%s（非 Pi agent 显示最新日志尾部）%s\n' "$C_DIM" "$TEAM_AGENT_LOG_GLOB" "$C_RESET"
       team_monitor_activity
     fi
     printf '%s  Ctrl-C 退出本窗口（不影响 PM）｜ %s watchdog status / logs / down%s\n' \

@@ -185,6 +185,15 @@ team_load_config() {
   TEAM_AGENTS="${TEAM_AGENTS:-}"
   TEAM_AGENT_MODELS="${TEAM_AGENT_MODELS:-}"
   TEAM_EXTRA_PI_ARGS="${TEAM_EXTRA_PI_ARGS:-}"
+  # ---- agent adapter（任意 TUI agent）：空值 = 内置 Pi 行为（历史默认，逐字节不变） ----
+  # TEAM_AGENT_CMD       ：启动 agent CLI 的命令模板（占位符见 references/agent-adapters.md）
+  # TEAM_AGENT_NOTIFY_CMD：非 Pi agent 在回合结束时通知 PM 的命令模板（{summary} 等占位符）
+  # TEAM_AGENT_LOG_GLOB  ：可选的日志/会话文件通配（monitor --activity 用；{agent} = agent 名）
+  # TEAM_AGENT_BIN       ：可选的可执行文件（doctor/dispatch 的就绪与存在性检查）；空 = 从上面推断
+  TEAM_AGENT_CMD="${TEAM_AGENT_CMD:-}"
+  TEAM_AGENT_NOTIFY_CMD="${TEAM_AGENT_NOTIFY_CMD:-}"
+  TEAM_AGENT_LOG_GLOB="${TEAM_AGENT_LOG_GLOB:-}"
+  TEAM_AGENT_BIN="${TEAM_AGENT_BIN:-}"
 
   TEAM_DOCS_ABS="$TEAM_MAIN_ROOT/$TEAM_DOCS_DIR"
   TEAM_STATE_DIR="$TEAM_MAIN_ROOT/.pi/team/state"
@@ -230,10 +239,22 @@ team_branch_for_agent() { # <agent> <ID> → 该 agent 在这个任务上应该�
   else team_agent_branch "$1"; fi
 }
 
-# 输出一份「可直接写进派单提示词」的路径清单
+# 输出一份「可直接写进派单提示词」的路径清单（agent_adapter = 当前生效的 agent 适配器）
 team_paths_json() {
-  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s" }\n' \
-    "$TEAM_PROJECT" "$TEAM_MAIN_ROOT" "$TEAM_ROOT" "$TEAM_DOCS_ABS" "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR" "$TEAM_SESSION" "$TEAM_PM_WINDOW"
+  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s" }\n' \
+    "$(team_json_escape "$TEAM_PROJECT")" "$(team_json_escape "$TEAM_MAIN_ROOT")" "$(team_json_escape "$TEAM_ROOT")" \
+    "$(team_json_escape "$TEAM_DOCS_ABS")" "$(team_json_escape "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR")" \
+    "$(team_json_escape "$TEAM_SESSION")" "$(team_json_escape "$TEAM_PM_WINDOW")" \
+    "$(team_json_escape "$(team_agent_adapter_label)")" "$(team_json_escape "$(team_agent_bin_path)")"
+}
+
+# 能跑普通 .mjs 的运行时（monitor.mjs 是普通 JS，不需要 TS 剥离能力；
+# 之前复用了 team_ts_runner，于是只有“老 node、无 bun/tsx”的机器上活动流会被误判为不可用）
+team_js_runner() {
+  if team_have_cmd node; then printf 'node'
+  elif team_have_cmd bun; then printf 'bun'
+  elif team_have_cmd tsx; then printf 'tsx'
+  fi
 }
 
 # 能直接 import .ts 的运行时（node 需启用类型剥离，否则用 bun/tsx）
@@ -1197,8 +1218,165 @@ team_board_row() { # <id> → 整行（列位置由表头决定）
 # ---------------------------------------------------------------- pi 可执行文件（窗口 PATH 就绪竞态，erp 实测）
 # dispatch/resume 在窗口 shell 加载完 PATH 前就 exec pi → "pi: command not found"。
 # 对策：解析成绝对路径写进窗口命令 + 派单前先校验存在。
+# 注：team_pi_bin_path 定义在本节末尾（agent adapter 的兜底分支会调用它）。
+# JSON 字符串转义（paths --json 要让机器读得懂）
+team_json_escape() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  printf '%s\n' "$v"
+}
+
+# ---------------------------------------------------------------- agent adapter（任意 TUI agent）
+# 契约：teamsmith 负责「在 tmux 窗口里 cd 到 worktree、等二进制就绪、把提示词交给 agent CLI」，
+# 而「agent CLI 怎么调用」由 TEAM_AGENT_CMD 模板描述；为空时走内置 Pi 命令（与历史逐字节一致）。
+# 占位符清单是**唯一真相**：错误信息、校验、文档与 smoke 自测都从这几个函数取，不各写一份。
+team_agent_placeholders() { # <launch|notify> → 每行一个支持的占位符
+  case "${1:-launch}" in
+    launch) printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{notify_ext}' '{extra_args}' ;;
+    notify) printf '%s\n' '{summary}' '{agent}' '{cwd}' '{session_id}' '{model}' '{provider}' '{skill_dir}' ;;
+    *) team_die "team_agent_placeholders: 未知 kind ${1:-}（launch|notify）" ;;
+  esac
+}
+
+team_agent_kind_var() { # <launch|notify> → 对应的配置键名（错误信息用）
+  case "$1" in notify) printf '%s\n' 'TEAM_AGENT_NOTIFY_CMD' ;; *) printf '%s\n' 'TEAM_AGENT_CMD' ;; esac
+}
+
+team_agent_adapter_label() { # → "built-in (Pi)" | "custom: <cmd>"
+  if [ -n "${TEAM_AGENT_CMD:-}" ]; then printf 'custom: %s\n' "$TEAM_AGENT_CMD"
+  else printf 'built-in (Pi)\n'; fi
+}
+
+team_agent_check_launch() { # 派单前校验 TEAM_AGENT_CMD：未知占位符直接 die（单一明确的报错入口）
+  local unknown
+  [ -n "${TEAM_AGENT_CMD:-}" ] || return 0
+  unknown="$(team_agent_unknown_placeholders launch "$TEAM_AGENT_CMD")"
+  if [ -n "$unknown" ]; then
+    team_die "TEAM_AGENT_CMD 里有未知占位符：$(printf '%s' "$unknown" | tr '\n' ' ')（支持：$(team_agent_support_list launch)）"
+  fi
+}
+
+team_agent_prompt_file() { # <agent> <ID> → 本次派单的提示词文件（{prompt_file} 与排障用）
+  printf '%s\n' "$TEAM_STATE_DIR/prompt-$1-$2.md"
+}
+
+team_agent_support_list() { # <kind> → 支持的占位符，空格分隔（错误信息用，无尾随空格）
+  local s; s="$(team_agent_placeholders "$1" | tr '\n' ' ')"
+  printf '%s\n' "${s% }"
+}
+
+team_agent_cli_name() { # → 给人看的 CLI 名（roster/say 的存活文案；默认仍是 pi）
+  if [ -n "${TEAM_AGENT_CMD:-}${TEAM_AGENT_BIN:-}" ]; then basename "$(team_agent_bin_path)"
+  else printf 'pi'; fi
+}
+
+team_agent_unknown_placeholders() { # <kind> <模板> → 每行一个未知占位符（空 = 全认识）
+  local kind="$1" tpl="$2" tok known
+  known="$(team_agent_placeholders "$kind" | tr '\n' ' ')"
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case " $known" in *" $tok "*) ;; *) printf '%s\n' "$tok" ;; esac
+  done < <(printf '%s' "$tpl" | grep -oE '\{[A-Za-z_][A-Za-z0-9_]*\}' | sort -u)
+}
+
+# 展开模板：值统一 %q 转义（命令一定是「可直接交给 shell 的单行」）。
+# 例外：{prompt} → "$0"（窗口 harness 以 argv[0] 传提示词，避免超长命令行）；
+#       {extra_args} / {summary} → 原样插入（引号由模板作者负责）。
+team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_file> [summary]
+  local kind="$1" tpl="$2" agent="$3" sid="$4" wt="$5" prompt_file="$6" summary="${7-}"
+  local unknown tok val model provider
+  unknown="$(team_agent_unknown_placeholders "$kind" "$tpl")"
+  if [ -n "$unknown" ]; then
+    team_die "$(team_agent_kind_var "$kind") 里有未知占位符：$(printf '%s' "$unknown" | tr '\n' ' ')（支持：$(team_agent_support_list "$kind")）"
+  fi
+  model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
+  provider="${model%%/*}"
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case "$tok" in
+      '{cwd}')         val="$(printf '%q' "$wt")" ;;
+      '{session_id}')  val="$(printf '%q' "$sid")" ;;
+      '{model}')       val="$(printf '%q' "${model##*/}")" ;;
+      '{provider}')    val="$(printf '%q' "$provider")" ;;
+      '{prompt_file}') val="$(printf '%q' "$prompt_file")" ;;
+      '{prompt}')      val='"$0"' ;;
+      '{skill_dir}')   val="$(printf '%q' "$TEAM_SKILL_DIR")" ;;
+      '{notify_ext}')  val="$(printf '%q' "$TEAM_SKILL_DIR/extension/team-notify.ts")" ;;
+      '{extra_args}')  val="${TEAM_EXTRA_PI_ARGS:-}" ;;
+      '{summary}')     val="$summary" ;;
+      '{agent}')       val="$(printf '%q' "$agent")" ;;
+      *) team_die "team_agent_expand: 未知占位符 $tok" ;;
+    esac
+    tpl="${tpl//"$tok"/$val}"
+  done < <(printf '%s' "$tpl" | grep -oE '\{[A-Za-z_][A-Za-z0-9_]*\}' | sort -u)
+  printf '%s\n' "$tpl"
+}
+
+# 启动命令：空 TEAM_AGENT_CMD → 内置 Pi（默认路径，输出与历史逐字节一致）；否则展开模板。
+# 提示词通过窗口 harness 的 argv[0]（shell 里的 "$0"）传入，模板里用 {prompt} 取。
+team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file>
+  local agent="$1" sid="$2" wt="$3" prompt_file="$4" model pi_bin piargs
+  if [ -n "${TEAM_AGENT_CMD:-}" ]; then
+    team_agent_expand launch "$TEAM_AGENT_CMD" "$agent" "$sid" "$wt" "$prompt_file"
+    return 0
+  fi
+  model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
+  pi_bin="$(team_pi_bin_path)"
+  piargs="$(team_pi_args "$model")"
+  printf '%s %s--session-id %q "$0"' "$(printf '%q' "$pi_bin")" "$piargs" "$sid"
+}
+
+# 回合结束通知命令（非 Pi agent 用）；{summary} 由调用方给（原样插入，引号由模板作者负责）。
+team_agent_notify_cmd() { # <agent> <session_id> <worktree> <prompt_file> <summary>
+  [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ] || return 0
+  team_agent_expand notify "$TEAM_AGENT_NOTIFY_CMD" "$1" "$2" "$3" "$4" "$5"
+}
+
+# 校验 notify 模板是否「看起来可用」（dispatch 只警告一次，不阻断派单）：
+# ① 无未知占位符；② 展开后的首词能在 PATH 里解析到。
+team_agent_notify_check() { # → 0=可用；1=有问题（原因打到 stdout）
+  [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ] || return 0
+  local unknown expanded first agent
+  unknown="$(team_agent_unknown_placeholders notify "$TEAM_AGENT_NOTIFY_CMD")"
+  if [ -n "$unknown" ]; then
+    printf '未知占位符：%s（支持：%s）\n' "$(printf '%s' "$unknown" | tr '\n' ' ')" "$(team_agent_support_list notify)"
+    return 1
+  fi
+  agent="${TEAM_AGENTS%% *}"; agent="${agent:-dev}"
+  expanded="$(team_agent_expand notify "$TEAM_AGENT_NOTIFY_CMD" "$agent" "${TEAM_SESSION:-teamsmith}-$agent" \
+    "$(team_agent_worktree "$agent")" "$(team_agent_prompt_file "$agent" sample)" '一句话摘要')"
+  first="$(printf '%s' "$expanded" | awk '{print $1}')"
+  command -v "$first" >/dev/null 2>&1 || { printf '首词不可执行：%s\n' "$first"; return 1; }
+  return 0
+}
+
+# adapter 的可执行文件：TEAM_AGENT_BIN > TEAM_AGENT_CMD 首词 > TEAM_PI_BIN。
+# 用于 dispatch 的「窗口 PATH 就绪」等位与存在性检查，以及 doctor 的解析结论。
+team_agent_cmd_first_word() { # <模板> → 首词（带占位符时先用样本值展开，便于检查）
+  local tpl="$1" expanded agent
+  agent="${TEAM_AGENTS%% *}"; agent="${agent:-dev}"
+  case "$tpl" in
+    *'{'*)
+      # 未知占位符交给 team_agent_check_launch / team_agent_expand 报错（这里不抢报，避免重复刷屏）
+      if [ -n "$(team_agent_unknown_placeholders launch "$tpl")" ]; then expanded="$tpl"
+      else expanded="$(team_agent_expand launch "$tpl" "$agent" "${TEAM_SESSION:-teamsmith}-$agent" "$TEAM_MAIN_ROOT" "$(team_agent_prompt_file "$agent" sample)")"; fi ;;
+    *)     expanded="$tpl" ;;
+  esac
+  printf '%s' "$expanded" | awk '{print $1}'
+}
+
 team_pi_bin_path() {
   local bin="${TEAM_PI_BIN:-pi}" p
+  case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
+  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
+}
+
+team_agent_bin_path() { # → 绝对路径（在 PATH 里）或原样首词
+  local bin="${TEAM_AGENT_BIN:-}" p
+  if [ -z "$bin" ] && [ -n "${TEAM_AGENT_CMD:-}" ]; then bin="$(team_agent_cmd_first_word "$TEAM_AGENT_CMD")"; fi
+  if [ -z "$bin" ]; then team_pi_bin_path; return 0; fi
   case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
   p="$(command -v "$bin" 2>/dev/null | head -1)"
   if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi

@@ -5,6 +5,26 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+**未发布（版号由 PM 定；这里刻意不用 `##` 标题——版本解析取第一个 `##` 行，会被当成空版本号）**
+
+**agent adapter：worker 可以是任意 TUI agent（Pi 仍是默认）**
+
+- 新增四个配置键，**全留空时行为与之前逐字节一致**（Pi 命令、报错文案、断言都不变）：
+  `TEAM_AGENT_CMD`（启动模板）、`TEAM_AGENT_NOTIFY_CMD`（回合结束通知）、
+  `TEAM_AGENT_LOG_GLOB`（`monitor --activity` 的日志来源）、`TEAM_AGENT_BIN`（就绪/存在性检查）。
+- 提示词里的「回合结束通知 PM」示例走 English-first（v1.14.0 之后提示词是英文），示例摘要也给成
+  具体的 `T1.1 done: <one-line summary>`（不是字面 `{summary}`：弱模型会把占位符原样执行）。
+- 启动模板占位符：`{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}`
+  `{notify_ext}` `{extra_args}`；未知占位符 → 派单**直接失败**并列出支持集（不静默）。
+  提示词落盘到 `state/prompt-<agent>-<ID>.md`（`{prompt_file}` 指向它，也方便排查“派了什么”）。
+- `team doctor` / `team paths` 新增 adapter 行（`built-in (Pi)` 或 `custom: …`）；只有「配了但解析不到
+  可执行文件」才 fail，默认路径仍由 `pi` 检查负责。`roster`/`say` 的存活文案也跟着换 CLI 名。
+- `team monitor --activity` 配了 `TEAM_AGENT_LOG_GLOB` 就显示最新匹配文件的尾部（无依赖的 `*` `?` `**`、
+  `~`、`{agent}`）；没匹配到/没 Pi 会话/没配 glob 都只降级成「无会话」并说明原因，面板不受影响；
+  `--json` 多一个 `source: pi|log|none` 字段。
+- 新文档 `references/agent-adapters.md`：契约、占位符表、**codex 与 opencode 实测例子**、新 adapter 验证清单、
+  以及明确不支持的事（不模拟各家内部回合事件、不从共享日志里分流转、PM 自己仍然是 Pi）。
+
 ## v1.14.0 · 2026-09-14
 
 **English-first prompt surface** (README, skill description, every prompt, every template)
