@@ -2928,6 +2928,204 @@ else
   printf '  \033[2m·\033[0m %s\n' "（grep -P 不可用：跳过「references 无中文」这条检查）"
 fi
 
+# ---------------------------------------------------------------- 18. 英文正文不变量 + 安装器入口（M7.3）
+# 两个「声明过但没人守」的保证，M7.3 起由本段守门：
+#   ① 英文不变量：`references/**` 与 `SCOPE.md` 的**正文**必须全英文；**行内代码**（`…`）与
+#      **围栏代码块**（``` 或 ~~~）里的中文是**故意**的 —— 那是在引用真实的中文 CLI 输出串
+#      （D8：CLI 面保持中文）。这条规则以前只写在任务书里，一个版本就烂了（M6.2 加了两行中文引用
+#      没人拦），所以这里落成检查器 + 双向翻转自测（正文必须报红 / 只在代码里必须不报红）。
+#   ② install.sh 只装规范目录：`skills/pi-team` 是指向 teamsmith 的**兼容软链**，不是第二个 skill
+#      （M7.1 报告 Finding 2：装进去会在目标目录造出两个同名 skill 的发现入口）。
+# 纯逻辑（临时目录 + 两次安装，不碰 tmux / 真 pi 进程），快慢模式都跑。
+section "18 · 英文正文不变量与安装器唯一入口（M7.3）"
+
+SRC_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
+assert_dir "$SRC_ROOT/skills/teamsmith/references" "扫描根存在（references/**）"
+assert_file "$SRC_ROOT/SCOPE.md" "扫描根存在（SCOPE.md）"
+# 测试卫生（实测的坑）：本段只允许写临时目录，**不许往真树里写**。夹具里 `ln -s … <dest>` 的 dest
+# 若已存在且是「指向目录的软链」，ln 会**钻进去**在真仓库里建文件（pre-fix 安装器 + 卸载夹具就踩过：
+# 目标里的 pi-team 指向真 skills/teamsmith，于是 ln 在真树里建出 skills/teamsmith/teamsmith）。
+# 所以：夹具先 rm -rf 再建链，并且段末对比真树清单 —— 污染了就报红，别让它悄悄留在仓库里。
+M73_TREE_BEFORE="$(cd "$SRC_ROOT" && find skills -mindepth 1 -maxdepth 3 | sort)"
+
+if ! command -v perl >/dev/null 2>&1; then
+  # 这条规则不能静默跳过（跳过就等于没有守门：M7.1 的教训）——缺依赖就如实报红。
+  bad "没有 perl：英文正文不变量无法检查（装上 perl 才能跑这条门禁）"
+else
+  # 口径 = 实现：剥掉围栏代码块（``` / ~~~ 成对）与**同行**行内 span（`…`；本项目不用多行 span），
+  # 再匹配 CJK 表意文字（U+3400–4DBF 扩展 A / U+4E00–9FFF / U+F900–FAFF 兼容表意），
+  # 命中打 `相对路径:行号: 原文`（路径相对扫描根，读者能直接 grep 到）。
+  # 全角标点（U+FF00–FFEF）**不在**口径内：config.md / workflows.md 用 `｜`（U+FF5C）当表格与样例输出
+  # 里的竖线（避开 Markdown 表格分隔符），那是刻意的排版，不等于「文档变回了中文」。
+  doc_cjk_hits() { # <扫描根> [raw]：默认剥代码；raw=1 原样扫（用来证明豁免的正是代码 span）
+    local root="$1" mode="${2:-}" files
+    [ -d "$root/skills/teamsmith/references" ] || return 0
+    files="$( cd "$root" && find skills/teamsmith/references -type f | sort )"
+    [ -f "$root/SCOPE.md" ] && files="$files SCOPE.md"
+    [ -n "$files" ] || return 0
+    ( cd "$root" || return 0
+      if [ "$mode" = "raw" ]; then DOC_CJK_RAW=1; else unset DOC_CJK_RAW; fi
+      export DOC_CJK_RAW
+      # shellcheck disable=SC2086
+      perl -CSD -e '
+        my $raw = $ENV{DOC_CJK_RAW} ? 1 : 0;
+        my $fence = 0;
+        while (my $line = <>) {
+          if ($raw) {
+            # 原样：连围栏块/行内 span 里的中文一起算命中
+          } elsif ($fence) {
+            $fence = 0 if $line =~ /^[ \t]*(?:```|~~~)/;
+            next;
+          } elsif ($line =~ /^[ \t]*(?:```|~~~)/) {
+            $fence = 1;
+            next;
+          } else {
+            $line =~ s/`[^`\n]*`//g;   # 行内代码：里面是引用的中文 CLI 输出串，故意豁免
+          }
+          next unless $line =~ /[\x{3400}-\x{4dbf}\x{4e00}-\x{9fff}\x{f900}-\x{faff}]/;
+          chomp $line;
+          print "$ARGV:$.: $line\n";
+        } continue { close ARGV if eof }
+      ' $files
+    )
+  }
+
+  # 真树：正文必须全英文。原始扫描同时留作证据（命中应当**只**在代码 span 里；写进报告用）。
+  M73_RAW="$(doc_cjk_hits "$SRC_ROOT" raw || true)"
+  M73_PROSE="$(doc_cjk_hits "$SRC_ROOT" || true)"
+  if [ -n "$M73_PROSE" ]; then
+    bad "英文正文不变量被破坏（references/** 或 SCOPE.md 的正文里有 CJK）："
+    printf '%s\n' "$M73_PROSE" | head -5 | sed 's/^/     /'
+  else
+    ok "references/** 与 SCOPE.md 的正文全英文（CJK 只出现在代码 span / 围栏块里）"
+  fi
+  [ -n "$M73_RAW" ] && ok "正对照：真树原始扫到 $(printf '%s\n' "$M73_RAW" | grep -c .) 行 CJK，全部在代码里被豁免" \
+    || ok "正对照：真树原始扫描没有 CJK（引用已被改写）——由翻转自测保证检查器不瞎"
+
+  # 翻转自测（关键）：检查器必须**两个方向**都对。往 references 的沙箱副本里注入。
+  #   红：正文里的中文必须被报出来（含「同行还有代码 span」的那类，防「有反引号就整行豁免」）；
+  #   净：只在行内代码 / 只在围栏块里的中文不得误报（否则 protocol.md 的中文引用只能被删掉）。
+  CJK_SB="$TMP/m73-cjk"; rm -rf "$CJK_SB"; mkdir -p "$CJK_SB/skills/teamsmith"
+  cp -r "$SKILL_DIR/references" "$CJK_SB/skills/teamsmith/references"
+  cp "$SRC_ROOT/SCOPE.md" "$CJK_SB/SCOPE.md" 2>/dev/null || true
+  : > "$TMP/m73-cjk-red.log"
+  cjk_flip() { # <red|clean> <说明> <相对文件> <追加内容>
+    local want="$1" what="$2" file="$3" text="$4" got
+    rm -rf "$CJK_SB-x"; cp -r "$CJK_SB" "$CJK_SB-x"
+    printf '%s\n' "$text" >> "$CJK_SB-x/$file"
+    got="$(doc_cjk_hits "$CJK_SB-x" || true)"
+    if [ "$want" = "red" ]; then
+      printf '%s\n' "$got" >> "$TMP/m73-cjk-red.log"
+      [ -n "$got" ] && ok "翻转自测（红）：$what 会被抓到" \
+        || bad "翻转自测（红）：$what 竟然漏报（检查器太弱）"
+    else
+      [ -z "$got" ] && ok "翻转自测（净）：$what 不误报（代码豁免有效）" \
+        || bad "翻转自测（净）：$what 被误报：$(printf '%s' "$got" | head -1)"
+    fi
+  }
+  cjk_flip "red"   "正文里的中文" "skills/teamsmith/references/protocol.md" \
+    'The record says 不满足 and warns.'
+  cjk_flip "red"   "同行既有代码 span 又有正文中文" "skills/teamsmith/references/protocol.md" \
+    'See `team review` and 不满足 here.'
+  cjk_flip "clean" "只有行内代码里有中文" "skills/teamsmith/references/protocol.md" \
+    'The record says `不满足` and warns.'
+  cjk_flip "clean" "只有围栏代码块里有中文" "skills/teamsmith/references/protocol.md" \
+    $'```\n$ team review 1 --strong\n不满足（不阻塞合并，但里程碑收口前应补齐）\n```'
+  cjk_flip "red"   "SCOPE.md 正文里的中文" "SCOPE.md" 'Boundary: 不要越界。'
+  rm -rf "$CJK_SB-x"
+  # 报告形态：必须 `相对路径:行号: 原文`（读者能照着 grep / 定位）
+  assert_match "$TMP/m73-cjk-red.log" \
+    '^skills/teamsmith/references/protocol\.md:[0-9]+: The record says 不满足 and warns\.$' \
+    "命中格式是 file:line: <原文>（含真实行号）"
+  assert_match "$TMP/m73-cjk-red.log" '^SCOPE\.md:[0-9]+: Boundary: 不要越界。$' \
+    "SCOPE.md 命中也带 file:line 前缀"
+  # 正对照：干净副本（注入前的沙箱）不得报红 —— 排除「检查器见了沙箱就报」
+  [ -z "$(doc_cjk_hits "$CJK_SB" || true)" ] && ok "翻转自测：干净副本不误报（正对照）" \
+    || bad "干净副本被误报"
+fi
+
+# ── ② 安装器：软链别名不得变成第二个 skill 发现入口 ──────────────────────────
+INSTALL_SH="$SRC_ROOT/install.sh"
+assert_file "$INSTALL_SH" "仓库根有 install.sh"
+assert_eq "skills/pi-team 仍是指向 teamsmith 的兼容软链（老项目的绝对路径靠它活着）" \
+  "$(readlink "$SRC_ROOT/skills/pi-team" 2>/dev/null || true)" "teamsmith"
+inst_entries() { # <目标目录>：会被 pi 发现成 skill 的条目（跟随软链），每行是 SKILL.md 里的 name
+  local t="$1" d
+  for d in "$t"/*; do
+    [ -e "$d" ] || continue
+    if [ -f "$d/SKILL.md" ]; then
+      grep -m1 '^name:' "$d/SKILL.md" | sed 's/^name:[[:space:]]*//'
+    else
+      basename "$d"
+    fi
+  done | sort
+}
+real_skill_count() { # 仓库里**真实**（非软链）的 skill 目录数 —— 安装器应该恰好装出这么多个入口
+  local d n=0
+  for d in "$SRC_ROOT"/skills/*/; do
+    [ -f "$d/SKILL.md" ] && [ ! -L "${d%/}" ] && n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+for m73mode in link copy; do
+  m73t="$TMP/m73-install-$m73mode"; rm -rf "$m73t"
+  m73flag=""; [ "$m73mode" = "copy" ] && m73flag="--copy"
+  if bash "$INSTALL_SH" $m73flag --target "$m73t" >"$TMP/m73-install-$m73mode.log" 2>&1; then
+    ok "install.sh $m73mode 模式跑通（临时目标 $m73t）"
+  else
+    bad "install.sh $m73mode 模式失败"; sed 's/^/     /' "$TMP/m73-install-$m73mode.log"
+  fi
+  assert_eq "$m73mode 模式：目标条目数 == 仓库里真实 skill 目录数（软链别名不算一个 skill）" \
+    "$(inst_entries "$m73t" | wc -l | tr -d ' ')" "$(real_skill_count)"
+  assert_eq "$m73mode 模式：teamsmith 只被发现一次" \
+    "$(inst_entries "$m73t" | grep -c '^teamsmith$')" "1"
+  assert_eq "$m73mode 模式：没有重名的发现入口（同一 skill 不得出现两次）" \
+    "$(inst_entries "$m73t" | sort | uniq -d | wc -l | tr -d ' ')" "0"
+  if [ -e "$m73t/pi-team" ] || [ -L "$m73t/pi-team" ]; then
+    bad "$m73mode 模式：目标里还有 pi-team —— 兼容软链被当成第二个 skill 装进来了"
+  else
+    ok "$m73mode 模式：没有 pi-team 第二入口"
+  fi
+  if [ "$m73mode" = "copy" ]; then
+    if [ -x "$m73t/teamsmith/scripts/team" ] && [ -x "$m73t/teamsmith/tests/smoke.sh" ]; then
+      ok "copy 模式：可执行位保留（scripts/team、tests/smoke.sh）"
+    else
+      bad "copy 模式：可执行位丢了"
+    fi
+  fi
+done
+# 为什么目标里只有一个条目：安装器必须**明说**跳过的是兼容软链（不然读者会以为漏装了东西）
+assert_has "$TMP/m73-install-link.log" "跳过 pi-team" "install.sh 说明了为什么跳过兼容软链"
+# 卸载要能顺手清掉旧版本装出来的 pi-team 入口（否则旧副本永远留在磁盘上，发现入口又变两个）。
+# 夹具手工搭（不要拿安装器刚产出的目标当输入 —— 那条路径在**坏实现**下会把软链变成真树里的文件）。
+M73_UNINST="$TMP/m73-install-legacy"; rm -rf "$M73_UNINST"; mkdir -p "$M73_UNINST"
+ln -s "$SRC_ROOT/skills/teamsmith" "$M73_UNINST/teamsmith"
+ln -s teamsmith "$M73_UNINST/pi-team"
+if bash "$INSTALL_SH" --uninstall --target "$M73_UNINST" >"$TMP/m73-uninstall.log" 2>&1; then
+  ok "install.sh --uninstall 跑通"
+else
+  bad "install.sh --uninstall 失败"; sed 's/^/     /' "$TMP/m73-uninstall.log"
+fi
+if [ -e "$M73_UNINST/pi-team" ] || [ -L "$M73_UNINST/pi-team" ]; then
+  bad "卸载后 pi-team 入口还在（旧版装出来的副本没人清）"
+else
+  ok "卸载顺手清掉旧版的 pi-team 入口"
+fi
+if [ -e "$M73_UNINST/teamsmith" ] || [ -L "$M73_UNINST/teamsmith" ]; then
+  bad "卸载后 teamsmith 还在"
+else
+  ok "卸载后目标目录干净"
+fi
+
+# 段末：真树的文件清单必须和入段时一致（上面那些夹具一个字节都不许写进仓库）
+M73_TREE_AFTER="$(cd "$SRC_ROOT" && find skills -mindepth 1 -maxdepth 3 | sort)"
+if [ "$M73_TREE_BEFORE" = "$M73_TREE_AFTER" ]; then
+  ok "本段的翻转夹具没有污染真树（skills/ 清单前后一致）"
+else
+  bad "本段往真树里写了东西（skills/ 清单变了）："
+  diff <(printf '%s\n' "$M73_TREE_BEFORE") <(printf '%s\n' "$M73_TREE_AFTER") | sed 's/^/     /'
+fi
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

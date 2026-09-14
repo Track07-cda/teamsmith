@@ -33,6 +33,16 @@ status=0
 for src in "$REPO"/skills/*/; do
   name="$(basename "$src")"
   [ -f "$src/SKILL.md" ] || { echo "跳过 $name（无 SKILL.md）"; continue; }
+
+  # M7.3：skills/pi-team 是指向 teamsmith 的**兼容软链**（老项目配置里的绝对路径靠它活着），
+  #   不是一个独立 skill。安装时跳过软链条目，否则目标目录里会出现两个同名 skill 的发现入口
+  #   （链接模式两条软链指向同一份代码，复制模式会把软链再复制一份）。
+  #   卸载时不跳过：旧版本装出来的 pi-team 入口要能顺手清掉（见下面的 uninstall 分支）。
+  if [ "$ACTION" = "install" ] && [ -L "${src%/}" ]; then
+    echo "跳过 $name（兼容软链 ${src%/} → $(readlink "${src%/}")；安装规范目录即可，避免同名 skill 出现两个入口）"
+    continue
+  fi
+
   dest="$TARGET/$name"
 
   if [ "$ACTION" = "uninstall" ]; then
