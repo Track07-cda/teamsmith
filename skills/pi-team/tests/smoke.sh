@@ -10,6 +10,15 @@ set -uo pipefail
 
 SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEAM="bash $SKILL_DIR/scripts/team"
+
+# ── 身份隔离（必须最先做）：绝不继承调用者的团队身份 ────────────────────────────
+# 事故背景（v1.11.3 实测）：smoke 从 worker 的 Pi 会话里被调用时继承了 TEAM_ROOT，
+# 于是 `team` 读到的是**真实项目**的配置（session/agents/gates 全是真实的），
+# 测试里的 tmux/watchdog 段落因此作用到真实 session 上 —— 把 PM 自己的窗口全打掉了。
+# 教训：测试必须显式声明「我只服务自己的临时仓库和自己的 session」。
+unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
+      TEAM_SESSION TEAM_SESSION_FROM TEAM_PM_WINDOW TEAM_AGENTS TEAM_DOCS_DIR \
+      TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION 2>/dev/null || true
 KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 
@@ -166,6 +175,43 @@ assert_file "$REPO/docs/team/PROTOCOL.md" "写入 PROTOCOL"
 assert_file "$REPO/docs/team/threads/README.md" "写入 threads/README"
 assert_has "$REPO/AGENTS.md" "<!-- pi-team:begin -->" "AGENTS.md 注入协议段"
 assert_has "$REPO/.gitignore" ".worktrees/" ".gitignore 忽略 worktree"
+
+# 隔离自检（关键）：team 必须把自己当成临时仓库 + 本测试 session
+ISOLATE="$($TEAM paths 2>/dev/null || true)"
+if printf '%s' "$ISOLATE" | grep -qF "\"main_root\": \"$REPO\"" \
+   && printf '%s' "$ISOLATE" | grep -qF "\"session\": \"$SESSION\""; then
+  ok "身份隔离：team 认的是临时仓库 + 本测试 session"
+else
+  bad "身份隔离失败（team 认错项目/session）：$ISOLATE"
+  printf '\n=== 中止：为避免误伤真实项目/session，不再继续跑 ===\n' >&2
+  exit 1
+fi
+
+# ③ 安全守卫：继承的环境不能改变「根 / 配置 / session」；空目标必须被拒
+FAKE_ROOT="$TMP/foreign"; mkdir -p "$FAKE_ROOT/.pi/team"   # 造一个"别的项目"（真 git 仓库，最贴近现实）
+( cd "$FAKE_ROOT" && git init -q -b main && git commit -q --allow-empty -m x )
+printf 'TEAM_PROJECT="foreign"\nTEAM_SESSION="foreign-session"\nTEAM_AGENTS="intruder"\n' > "$FAKE_ROOT/.pi/team/config.sh"
+( cd "$REPO" && TEAM_ROOT="$FAKE_ROOT" $TEAM paths ) >"$TMP/paths-inherit.log" 2>&1 || true
+assert_has "$TMP/paths-inherit.log" "\"main_root\": \"$REPO\"" "继承的 TEAM_ROOT 不生效：根仍取 cwd 的仓库"
+( cd "$REPO" && TEAM_ROOT="$FAKE_ROOT" $TEAM up ) >"$TMP/guard-foreign-up.log" 2>&1; RC3=$?
+assert_eq "在别的项目里做破坏性操作（up）被拒" "$([ "$RC3" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has "$TMP/guard-foreign-up.log" "被拒" "拒绝时说明了原因（并给授权方式）"
+assert_not "$TMP/paths-inherit.log" "intruder" "名册不会从继承的别的项目里读"
+tmux kill-session -t foreign-session 2>/dev/null || true   # 万一被建出来，清理掉（测试不该留下东西）
+# 空目标 = 当前窗口/会话（tmux 的 `-t ""` 语义），必须拒绝
+( . "$SKILL_DIR/scripts/lib/common.sh"; team_tmux_kill_window "" ) >"$TMP/guard-empty.log" 2>&1; RC=$?
+assert_eq "空目标的 kill-window 被拒（退出码 1）" "$RC" "1"
+assert_has "$TMP/guard-empty.log" "目标为空" "空目标拒绝有明确说明"
+( . "$SKILL_DIR/scripts/lib/common.sh"; team_tmux_respawn_pane "" true ) >"$TMP/guard-empty2.log" 2>&1; RC2=$?
+assert_eq "空目标的 respawn-pane 被拒（退出码 1）" "$RC2" "1"
+# 探测守卫：在「别的项目」的 tmux pane 里 bootstrap，不许把对方的 session 当成自己的
+PROBE="$TMP/probe-repo"; mkdir -p "$PROBE"; ( cd "$PROBE" && git init -q -b main && git commit -q --allow-empty -m x )
+( cd "$PROBE" && $TEAM bootstrap --agents dev --no-watchdog --print ) >"$TMP/boot-probe.log" 2>&1 || true
+if [ "${HAVE_TMUX:-0}" = "1" ] && [ -n "${TMUX:-}" ]; then
+  assert_has "$TMP/boot-probe.log" "不属于本项目" "探测守卫：不认别的项目的 tmux session"
+else
+  printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过探测守卫断言）"
+fi
 assert_has "$REPO/.gitignore" "docs/team/inbox/" ".gitignore 忽略收件箱"
 assert_has "$REPO/.gitignore" ".pi/team/state/" ".gitignore 忽略运行时状态"
 # 模板渲染不能有残留占位符
@@ -482,7 +528,7 @@ if [ "$HAVE_TMUX" = "1" ]; then
     tmux new-window -t "$SESSION" -n keep -d >/dev/null 2>&1 || true
     tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null \
       | awk -v n="$PMW" '$2==n {print $1}' \
-      | while read -r wid; do tmux kill-window -t "$wid" 2>/dev/null || true; done
+      | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
     tmux new-window -t "$SESSION" -n "$PMW" -d >/dev/null 2>&1 || true
     local i cmd=""
     for i in $(seq 1 20); do
@@ -496,13 +542,15 @@ if [ "$HAVE_TMUX" = "1" ]; then
   }
 
   start_fake_pm() { # 直接模拟“PM 正在跑”，避免依赖 up 的时序
-    local p; p="$(tmux list-panes -t "$SESSION:$PMW" -F '#{pane_id}' | head -1)"
+    local p; p="$(tmux list-panes -t "$SESSION:$PMW" -F '#{pane_id}' 2>/dev/null | head -1)"
+    # 空目标 = 当前 pane（会把调用者自己打掉）——这正是 v1.11.3 事故的直接原因
+    [ -n "$p" ] || { bad "start_fake_pm：拿不到 pane（$SESSION:$PMW 不存在），跳过以免误伤"; return 1; }
     tmux respawn-pane -k -t "$p" "exec $FAKE/pi-sleep --pm" >/dev/null 2>&1 || true
     sleep 1.5
   }
   kill_all_windows() {
     tmux list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null \
-      | while read -r wid; do tmux kill-window -t "$wid" 2>/dev/null || true; done
+      | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
     sleep 0.5
   }
   pm_lines() { wc -l < "$TMP/pm-args.log" 2>/dev/null | tr -d ' ' || echo 0; }

@@ -150,16 +150,24 @@ team_cmd_add_agent() {
 # 分支归 PM：skill 只**检查**工作树是否处在可开工的状态，并给出该跑的 git 命令。
 # 旧行为（自动 switch -c task/<ID>）已删除——git 写操作由 PM 直接执行。
 team_check_worktree_for_task() { # <agent> <ID>
-  local agent="$1" id="$2" wt cur dirty want
+  local agent="$1" id="$2" wt cur dirty want prev_task
   wt="$(team_agent_worktree "$agent")"
   want="$(team_branch_for_agent "$agent" "$id")"
   cur="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
   dirty="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  prev_task="$(team_state_get "$agent" task '')"
   if [ "$dirty" -gt 0 ] 2>/dev/null; then
-    team_err "$wt 有 $dirty 个未提交改动：先收尾（提交或丢弃），再派新任务"
-    git -C "$wt" status --short | head -8 >&2
-    team_dim "  （git 归 PM：skill 不替你 stash/commit）" >&2
-    return 1
+    # 同一个任务的「断点续跑」允许脏工作区：那些改动正是它没提交完的活。
+    # 只有「换任务」（新的 ID）才要求先收尾，避免把上个任务的半成品带进新任务。
+    if [ "$prev_task" = "$id" ]; then
+      team_dim "  断点续跑：$wt 有 $dirty 个未提交改动，属于本任务（$id），允许继续"
+    else
+      team_err "$wt 有 $dirty 个未提交改动（属于上一个任务 ${prev_task:-?}）：先收尾（提交或丢弃），再派新任务"
+      git -C "$wt" status --short | head -8 >&2
+      team_dim "  想直接续跑同一个任务：$TEAM_CLI resume --agent $agent（或 dispatch 同一个 ID）" >&2
+      team_dim "  （git 归 PM：skill 不替你 stash/commit）" >&2
+      return 1
+    fi
   fi
   case "$cur" in
     "$TEAM_PROTECTED_BRANCH")

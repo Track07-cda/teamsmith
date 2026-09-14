@@ -59,6 +59,7 @@ team_cmd_up() {
 
   team_require_docs
   team_require_cmd tmux "team up 需要 tmux（PM 跑在 tmux 窗口里）"
+  team_assert_own_session "team up" || team_die "team up 拒绝在「不属于本项目的 session」上动手（见上）"
   team_hdr "pi-team up · $TEAM_PROJECT（只负责 PM）"
 
   # 1) tmux 场地：人跑 up 就是明确要求“把工地建起来”，所以这里允许建 session/窗口
@@ -68,7 +69,7 @@ team_cmd_up() {
     tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
   fi
   if ! team_pm_window_exists; then
-    tmux new-window -t "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" -d >/dev/null 2>&1 || true
+    team_tmux_new_window "$TEAM_SESSION" "$TEAM_PM_WINDOW" || true
     team_ok "创建 PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW"
   fi
 
@@ -144,8 +145,8 @@ team_cmd_resume() {
       if team_cmd_dispatch "$a" "$task" "$taskfile"; then
         team_wlog "resume agent=$a task=$task"
       else
-        # 容量/并发守卫拦下：这是正常排队，不是错误
-        team_warn "$a 续跑被守卫拦下（容量/并发），下一轮再试"
+        # 常见两类：容量/并发排队（正常），或工作树状态不允许（需要 PM 处理）
+        team_warn "$a 续跑没成功：看上面一行原因（容量/并发属正常排队；工作树脏/分支不对要 PM 处理）"
       fi
     fi
   done
@@ -230,6 +231,10 @@ team_watch_once() {
     idle:*) ;;
     *)
       if [ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ]; then
+        if ! team_assert_own_session "watchdog 重建 tmux"; then
+          team_wlog "拒绝重建：session '${TEAM_SESSION:-}' 不属于本项目（授权后加 --yes 或 TEAM_ALLOW_FOREIGN_SESSION=1）"
+          return 0
+        fi
         if ! team_tmux_has_session "$TEAM_SESSION"; then
           team_wlog "tmux session 丢失，重建（TEAM_WATCH_REBUILD_TMUX=1）"
           team_tmux_ensure_session
@@ -237,7 +242,7 @@ team_watch_once() {
         fi
         if ! team_pm_window_exists; then
           team_wlog "PM 窗口丢失，重建（TEAM_WATCH_REBUILD_TMUX=1）"
-          tmux new-window -t "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" -d >/dev/null 2>&1 || true
+          team_tmux_new_window "$TEAM_SESSION" "$TEAM_PM_WINDOW" || true
         fi
       else
         if [ "$sig" != "$(team_state_get _watch last_sig '')" ]; then

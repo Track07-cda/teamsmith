@@ -57,7 +57,7 @@ team_main_root() {
 }
 
 # ---------------------------------------------------------------- 配置
-# 查找顺序：$TEAM_CONFIG_FILE → 从 $TEAM_ROOT/$PWD 向上找 .pi/team/config.sh
+# 查找顺序：$TEAM_CONFIG_FILE → 从 $TEAM_ROOT（没有就用 $PWD）向上找 .pi/team/config.sh
 team_find_config() {
   if [ -n "${TEAM_CONFIG_FILE:-}" ]; then
     [ -f "$TEAM_CONFIG_FILE" ] && { printf '%s\n' "$TEAM_CONFIG_FILE"; return 0; }
@@ -102,7 +102,9 @@ team_load_config() {
   TEAM_MAIN_ROOT="${TEAM_MAIN_ROOT:-$(team_main_root)}"
 
   TEAM_PROJECT="${TEAM_PROJECT:-$(basename "$TEAM_MAIN_ROOT")}"
+  _team_session_preset="${TEAM_SESSION:-}"
   TEAM_SESSION="${TEAM_SESSION:-$TEAM_PROJECT}"
+  TEAM_SESSION_FROM="${TEAM_SESSION_FROM:-$([ -n "$_team_session_preset" ] && echo explicit || echo default)}"
   TEAM_PM_WINDOW="${TEAM_PM_WINDOW:-pm}"
   TEAM_DOCS_DIR="${TEAM_DOCS_DIR:-docs/team}"
   TEAM_WORKTREES_DIR="${TEAM_WORKTREES_DIR:-.worktrees}"
@@ -341,8 +343,70 @@ team_tmux_windows() { tmux list-windows -t "$1" -F '#{window_name}' 2>/dev/null;
 team_tmux_has_window() { team_tmux_windows "$1" | grep -qx "$2"; }
 
 team_tmux_ensure_session() {
+  team_assert_own_session "建 tmux session" || return 1
   team_tmux_has_session "$TEAM_SESSION" && return 0
   tmux new-session -d -s "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" 2>/dev/null || true
+}
+
+# 破坏性 tmux 操作前调用：只允许操作「本项目自己的 session」，且目标必须非空。
+# 事故背景：tmux 的 `-t ""` 等于「当前窗口/会话」，测试里一个空变量就能把调用者的窗口打掉。
+team_assert_own_session() { # <操作名>
+  local op="${1:-tmux 操作}"
+  if [ -z "${TEAM_SESSION:-}" ]; then
+    team_err "$op 被拒：TEAM_SESSION 为空（空目标等于当前窗口/会话，禁止操作）"
+    return 1
+  fi
+  # 「运行在本项目里」：cwd 的仓库必须就是 TEAM_ROOT —— 防止在别的项目里嵌套调用时误伤
+  local _cwd_root _root_real
+  _cwd_root="$(team_git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [ -n "$_cwd_root" ] && _cwd_root="$(cd "$(dirname "$_cwd_root")" 2>/dev/null && pwd -P || echo "")"
+  _root_real="$(cd "${TEAM_ROOT:-}" 2>/dev/null && pwd -P || echo "${TEAM_ROOT:-}")"
+  local _root_common=""
+  if [ -n "$_root_real" ]; then
+    _root_common="$(team_git -C "$_root_real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    [ -n "$_root_common" ] && _root_common="$(cd "$(dirname "$_root_common")" 2>/dev/null && pwd -P || echo "")"
+  fi
+  # 「同一个仓库」判定用 git common dir：这样在 worktree 里调用也算本项目的操作
+  if [ -n "$_cwd_root" ] && [ -n "$_root_common" ] && [ "$_cwd_root" != "$_root_common" ] \
+     && [ "${TEAM_ASSUME_YES:-0}" != "1" ] && [ "${TEAM_ALLOW_FOREIGN_SESSION:-0}" != "1" ]; then
+    team_err "$op 被拒：当前目录属于 '$(basename "$_cwd_root")'，而要被操作的是 '$TEAM_PROJECT'（$_root_real）"
+    team_dim "  这通常意味着继承了别的项目的 TEAM_ROOT（测试/门禁/嵌套调用）。" >&2
+    team_dim "  确认要操作它：TEAM_ALLOW_FOREIGN_SESSION=1 …（或 --yes）" >&2
+    return 1
+  fi
+  if [ "$(team_session_from 2>/dev/null || echo default)" != "explicit" ] \
+     && [ "$TEAM_SESSION" != "$TEAM_PROJECT" ] \
+     && [ "${TEAM_ASSUME_YES:-0}" != "1" ] && [ "${TEAM_ALLOW_FOREIGN_SESSION:-0}" != "1" ]; then
+    team_err "$op 被拒：session '$TEAM_SESSION' 既不是配置/环境显式指定的，也不等于项目名 '$TEAM_PROJECT'"
+    team_dim "  这通常意味着继承了别的项目的环境（TEAM_ROOT/TEAM_SESSION）。" >&2
+    team_dim "  确认要操作它：TEAM_ALLOW_FOREIGN_SESSION=1 …（或 --yes）" >&2
+    return 1
+  fi
+  return 0
+}
+
+team_session_from() { printf '%s\n' "${TEAM_SESSION_FROM:-default}"; }
+
+# 安全包装：拒绝空目标，避免 `-t ""` 打到当前窗口/会话
+team_tmux_kill_window() { # <session:window>
+  local t="${1:-}"
+  [ -n "$t" ] || { team_err "kill-window 被拒：目标为空（会误伤当前窗口）"; return 1; }
+  tmux kill-window -t "$t" 2>/dev/null
+}
+team_tmux_kill_session() { # <session>
+  local t="${1:-}"
+  [ -n "$t" ] || { team_err "kill-session 被拒：目标为空（会误伤当前会话）"; return 1; }
+  tmux kill-session -t "$t" 2>/dev/null
+}
+team_tmux_new_window() { # <session> <name>
+  local t="${1:-}" n="${2:-}"
+  [ -n "$t" ] || { team_err "new-window 被拒：session 为空"; return 1; }
+  tmux new-window -t "$t" -n "$n" -d 2>/dev/null
+}
+team_tmux_respawn_pane() { # <pane-or-target> <cmd>
+  local t="${1:-}" cmd="${2:-}"
+  [ -n "$t" ] || { team_err "respawn-pane 被拒：目标为空（会误伤当前 pane：本次事故的直接原因）"; return 1; }
+  tmux respawn-pane -k -t "$t" "$cmd" 2>/dev/null
 }
 
 team_target_session() { # <session:window> → session 名
@@ -545,7 +609,7 @@ team_pm_start() {
   pf="$(team_pm_write_prompt)"
   local pi_bin; pi_bin="$(team_pi_bin_path)"
   cmd="$(printf 'cd %q && exec %q %s @%q' "$TEAM_MAIN_ROOT" "$pi_bin" "$(team_pm_pi_args)" "$pf")"
-  tmux respawn-pane -k -t "$target" "$cmd" >/dev/null 2>&1 || {
+  team_tmux_respawn_pane "$target" "$cmd" || {
     team_err "respawn-pane 失败：$target"
     return 1
   }

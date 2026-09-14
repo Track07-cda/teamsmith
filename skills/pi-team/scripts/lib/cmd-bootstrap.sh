@@ -51,10 +51,18 @@ team_cmd_bootstrap() {
   local had_config=0; [ -n "$TEAM_CONFIG" ] && had_config=1
 
   # ① 探测 PM 自己所在的 tmux session/窗口
-  local det_sess="" det_win=""
+  local det_sess="" det_win="" det_cwd=""
   if [ -n "${TMUX:-}" ] && team_have_cmd tmux; then
     det_sess="$(tmux display-message -p '#{session_name}' 2>/dev/null || true)"
     det_win="$(tmux display-message -p '#{window_name}' 2>/dev/null || true)"
+    det_cwd="$(tmux display-message -p '#{pane_current_path}' 2>/dev/null || true)"
+    # 探测守卫：只有当「当前 tmux pane 的目录就在本项目里」时才认这个 session。
+    # 否则（例如测试/门禁在别的项目的 pane 里跑）会把别人的 session 当成自己的场地 ——
+    # v1.11.3 实测：smoke 因此把 PM 自己的 session 当成了测试目标。
+    case "${det_cwd:-}" in
+      "$TEAM_MAIN_ROOT"/*|"$TEAM_MAIN_ROOT") ;;
+      *) [ -n "$det_cwd" ] && { det_sess=""; det_win=""; } ;;
+    esac
   fi
   session="${session:-${det_sess:-$TEAM_SESSION}}"
   pmwin="${pmwin:-${det_win:-$TEAM_PM_WINDOW}}"
@@ -65,7 +73,8 @@ team_cmd_bootstrap() {
 
   team_hdr "pi-team bootstrap · $project"
   printf '  仓库        %s\n' "$TEAM_MAIN_ROOT"
-  printf '  tmux        %s:%s%s\n' "$session" "$pmwin" "$([ -n "$det_sess" ] && echo '（探测自当前窗口）' || echo '')"
+  printf '  tmux        %s:%s%s\n' "$session" "$pmwin" \
+     "$([ -n "$det_sess" ] && echo '（探测自当前窗口）' || ([ -n "${TMUX:-}" ] && echo '（当前窗口不属于本项目 → 用配置/项目名）' || echo ''))"
   printf '  名册        %s\n' "$agents"
   printf '  版本控制    %s ｜ 门禁 %s ｜ 安装 %s\n' "$vcs" "${gates:-<无>}" "${install_cmd:-<无>}"
   printf '  看门狗      %s\n' "$([ "$with_watchdog" = "1" ] && echo "容器（$([ "$(team_watch_pid_mode)" = host ] && echo --pid=host || echo "shared-pid $(team_watch_pid_mode)")）" || echo '跳过')"
