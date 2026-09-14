@@ -66,7 +66,7 @@ done
 
 if [ "$ACTION" = "install" ]; then
   echo
-  echo "完成。在项目里：bash $TARGET/pi-team/scripts/team init"
+  echo "完成。在项目里：bash $TARGET/teamsmith/scripts/team init"
   echo "（或把 '$TARGET' 加进 ~/.pi/agent/settings.json 的 skills 数组）"
 fi
 exit "$status"

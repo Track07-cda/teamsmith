@@ -1,0 +1,35 @@
+---
+name: teamsmith-bootstrap
+description: 新项目里把这个 teamsmith skill 初始化成可派单状态的一句话指令（交给新项目的 PM 执行）。Use when starting teamsmith in a new project, or when the user asks to initialize/装备 the agent team for a repo.
+---
+
+# 新项目开工：把 teamsmith 初始化（交给 PM 的指令）
+
+你在一个还没用过 teamsmith 的项目里。**先跑这一条，再干别的**：
+
+```bash
+bash <skill>/scripts/team bootstrap
+```
+
+它会（幂等，可反复跑）：
+1. 探测你所在的 tmux session/窗口（就是你现在的窗口）→ 写进 `.pi/team/config.sh`；
+2. 写配置 + `docs/team/` 文档骨架（ROADMAP/BOARD/OWNERSHIP/DECISIONS/PROTOCOL/threads）+ 给 `AGENTS.md` 追加团队协议段 + 更新 `.gitignore`；
+3. 按名册建每个 agent 的长期 worktree（`.worktrees/<agent>`）；
+4. **起看门狗窗口**（`team watchdog up`：同 session 的 `watchdog` 窗口跑监视器 + 定时巡检）；
+5. 打印「下一步清单」。
+
+常用参数：`--agents "dev verify"`（名册）、`--session <名>`/`--pm-window <名>`（默认自动探测）、`--no-watchdog`、`--print`（只看计划）。
+
+## 之后按顺序做
+
+```bash
+bash <skill>/scripts/team watchdog status     # 确认看门狗窗口在跑
+# 1) 填 docs/team/ROADMAP.md（目标/里程碑/退出标准）与 OWNERSHIP.md（目录归属）
+# 2) 建第一个任务
+bash <skill>/scripts/team task T1.1 --title "…" --agent dev
+$EDITOR docs/team/tasks/T1.1-*.md             # 背景/交付物/边界/可复制验收命令
+bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
+bash <skill>/scripts/team digest              # 待办看板
+```
+
+约定：**看门狗由 PM 配置并维护**（`team watchdog up|status|logs|down`）；agent 的启停/续跑是 PM 的活（`team resume`）。

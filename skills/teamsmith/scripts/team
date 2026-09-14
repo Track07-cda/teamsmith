@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# teamsmith · 单入口 CLI。
+#
+#   team <command> [args...] [--yes]
+#
+# 全局参数（放在子命令前后都可）：
+#   --root <dir>      指定项目根（默认从当前目录向上找 .pi/team/config.sh）
+#   --config <file>   指定配置文件
+#   --yes             对「改变共享/远端状态」的操作给出显式授权
+#   -h|--help         帮助
+#
+# 子命令见 `team help`。
+set -euo pipefail
+
+TEAM_CLI="$(basename "$0")"
+SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+. "$SELF_DIR/lib/common.sh"
+
+# ---------------------------------------------------------------- 全局参数
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) TEAM_ROOT="${2:?--root 需要目录}"; shift 2 ;;
+    --root=*) TEAM_ROOT="${1#*=}"; shift ;;
+    --config) TEAM_CONFIG_FILE="${2:?--config 需要文件}"; shift 2 ;;
+    --config=*) TEAM_CONFIG_FILE="${1#*=}"; shift ;;
+    --yes|-y) TEAM_ASSUME_YES=1; shift ;;
+    -h|--help) ARGS=(help); break ;;
+    --) shift; ARGS+=("$@"); break ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+export TEAM_ROOT="${TEAM_ROOT:-}" TEAM_CONFIG_FILE="${TEAM_CONFIG_FILE:-}" TEAM_ASSUME_YES="${TEAM_ASSUME_YES:-0}"
+
+CMD="${ARGS[0]:-help}"
+if [ "${#ARGS[@]}" -gt 0 ]; then set -- "${ARGS[@]:1}"; else set --; fi
+
+# help/version 不需要配置或 git 仓库
+case "$CMD" in
+  # `team version`（无参）走快路径；`version --check` 需要项目上下文，交给下面的分发
+  version) if [ $# -eq 0 ]; then printf 'teamsmith %s\n' "$TEAM_VERSION"; exit 0; fi ;;
+esac
+
+TEAM_SKILL_DIR="$(team_skill_dir)"
+for f in "$SELF_DIR"/lib/cmd-*.sh; do
+  [ -f "$f" ] || continue
+  # shellcheck disable=SC1090
+  . "$f"
+done
+
+if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
+  team_help
+  exit 0
+fi
+
+# 其余命令都需要配置 + git 仓库
+team_load_config
+
+case "$CMD" in
+  init)       team_cmd_init "$@" ;;
+  bootstrap)  team_cmd_bootstrap "$@" ;;
+  doctor)     team_cmd_doctor "$@" ;;
+  roster)     team_cmd_roster "$@" ;;
+  status)     team_cmd_status "$@" ;;
+  ps)         team_cmd_ps "$@" ;;
+  digest)     team_cmd_digest "$@" ;;
+  inbox)      team_cmd_inbox "$@" ;;
+  paths)      team_paths_json ;;
+  task)       team_cmd_task "$@" ;;
+  board)      team_cmd_board "$@" ;;
+  thread)     team_cmd_thread "$@" ;;
+  report)     team_cmd_report "$@" ;;
+  add-agent)  team_cmd_add_agent "$@" ;;
+  dispatch)   team_cmd_dispatch "$@" ;;
+  say)        team_cmd_say "$@" ;;
+  notify)     team_cmd_notify "$@" ;;
+  review)     team_cmd_review "$@" ;;
+  close)      team_cmd_close "$@" ;;
+  teardown)   team_cmd_teardown "$@" ;;
+  up)         team_cmd_up "$@" ;;
+  resume)     team_cmd_resume "$@" ;;
+  watch)      team_cmd_watch "$@" ;;
+  monitor)    team_cmd_monitor "$@" ;;
+  install-watchdog)   team_cmd_install_watchdog "$@" ;;
+  uninstall-watchdog) team_cmd_uninstall_watchdog "$@" ;;
+  watchdog)           team_cmd_watchdog "$@" ;;
+  watchdog-status)    team_cmd_watchdog_status "$@" ;;
+  standby)            team_cmd_standby "$@" ;;
+  meeting)            team_cmd_meeting "$@" ;;
+  version)            if [ "${1:-}" = "--check" ] || [ "${1:-}" = "check" ]; then team_cmd_version_check; else team_cmd_version_brief; fi ;;
+  mark-loaded)        team_cmd_mark_loaded "$@" ;;
+  reload)             team_cmd_reload "$@" ;;
+  changelog)          team_cmd_changelog "$@" ;;
+  smoke|test) team_cmd_smoke "$@" ;;
+  # 已移除 / 不认识的子命令：在这里就把"该用什么替代"说清楚，
+  # 这样别的项目即使会话里还是旧版 skill，也会在使用点得到指引，不需要人额外通知。
+  merge|pr)
+    team_err "$CMD 已移除（v1.11.0）：skill 不再包装 git/forge —— 合并与开 PR 请你直接用真实工具"
+    team_dim "  合并：git -C $TEAM_MAIN_ROOT merge --squash <分支> && git -C $TEAM_MAIN_ROOT commit -m \"<ID>: <标题>\""
+    team_dim "  有 PR：先 gh pr merge --squash --delete-branch <PR>，再 git -C $TEAM_MAIN_ROOT fetch origin $TEAM_PROTECTED_BRANCH && git -C $TEAM_MAIN_ROOT merge --ff-only FETCH_HEAD"
+    team_dim "  收尾：代码确认进 $TEAM_PROTECTED_BRANCH 之后再 $TEAM_CLI board set <ID> done"
+    team_dim "  步骤全文：$TEAM_SKILL_DIR/SKILL.md「git 与 forge」一节"
+    if [ -n "$(team_loaded_version 2>/dev/null || true)" ]; then
+      team_dim "  你这一会话加载的是 v$(team_loaded_version)：在 Pi 里输入 /reload 刷新 skill 描述"
+    fi
+    exit 2 ;;
+  gh|gl)
+    team_err "$CMD 透传已移除（v1.11.0）：请直接用真实 gh / glab / curl（token 从项目 token 文件读）"
+    local tf="$TEAM_MAIN_ROOT/${TEAM_TOKEN_FILE:-.gh-pat}"
+    team_dim "  例：GH_TOKEN=\"\$(< ${TEAM_TOKEN_FILE:-.gh-pat})\" gh pr list    # token 文件：$tf"
+    exit 2 ;;
+  *)          team_usage_die "未知子命令：$CMD（team help 看全部；最近有破坏性变更，team version --check 检查 skill 版本）" ;;
+esac

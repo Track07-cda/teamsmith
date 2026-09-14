@@ -1,0 +1,75 @@
+# teamsmith 项目配置（由 `team init` 生成，可自由编辑；被 bash source，也被 notify 扩展解析）
+#
+# 解析约定：扁平 `TEAM_KEY="value"`，一行一个，值不要包含换行；
+# notify 扩展只读它需要的少数键，且**不会** source 本文件（不在 agent 进程里执行项目代码）。
+
+# ---- 身份 ----
+TEAM_PROJECT="{{PROJECT}}"
+TEAM_SESSION="{{SESSION}}"            # tmux session 名（PM 与所有 agent 都在这一个 session 里）
+TEAM_PM_WINDOW="{{PM_WINDOW}}"        # PM 会话所在的窗口名；通知会敲进这个窗口
+
+# ---- 名册与模型 ----
+TEAM_AGENTS="{{AGENTS}}"
+# 每个 agent 的默认模型（可缺省，缺省用 TEAM_DEFAULT_MODEL）："dev=deepseek/deepseek-flash verify=xai/grok-4.6"
+TEAM_AGENT_MODELS=""
+TEAM_DEFAULT_MODEL="{{DEFAULT_MODEL}}"
+# 并发上限（"provider/model=N"）；强模型额度有限时很重要，如 "kimi-coding/k3=2 openai-codex/gpt-5.6-sol=1"
+TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/*=1"   # 支持通配：低额度订阅一次只跑一个
+# 派单时追加给 pi 的参数（空格分隔）
+TEAM_EXTRA_PI_ARGS=""
+
+# ---- 工作流 ----
+TEAM_GATES="{{GATES}}"                # 门禁命令（复验时在独立 worktree 里跑）
+TEAM_PI_BIN="pi"                     # pi 可执行文件（PATH 以外的安装位置时写绝对路径，便于脚本/自测）
+TEAM_INSTALL_CMD=""                   # 新建 worktree 后的依赖安装，如 "pnpm install --frozen-lockfile"
+TEAM_DOCS_DIR="{{DOCS_DIR}}"          # 任务书/报告/线程/收件箱所在目录
+TEAM_WORKTREES_DIR=".worktrees"
+# 分支模型：task（默认，一任务一分支：复验/合并/回滚的单位都是任务）| agent（一 agent 一长期分支）
+TEAM_BRANCH_MODE="task"
+TEAM_TASK_BRANCH_PREFIX="task"
+TEAM_TASK_BRANCH_RESET=1              # close 后把 agent worktree 切回保护分支
+TEAM_PROTECTED_BRANCH="main"          # 准入门禁分支：agent 不得 push，只能开 PR/MR 或交给 PM 合并
+TEAM_REMOTE="origin"
+
+# ---- 版本控制 / forge ----
+# {{DETECTED_VCS}} 是本仓库自动探测到的；local=不要 forge，PM 本地 squash 合并
+TEAM_VCS="{{VCS}}"                    # local | github | gitlab | other（仅记录，skill 不调用任何 forge 命令）
+TEAM_TOKEN_FILE=".gh-pat"             # github：PAT 文件（主工作树根，chmod 600，已 gitignore）
+TEAM_GITLAB_HOST=""                   # gitlab：如 https://gitlab.example.com:8443
+TEAM_GITLAB_PROJECT=""                # gitlab：如 group/sub/project
+TEAM_GITLAB_TOKEN_FILE="$HOME/.gitlab-pa-token"
+TEAM_CONFIRM_WRITES=1                 # 1=所有改变共享状态的操作都要 --yes（建议保持 1）
+
+# ---- 守卫（底线是 swap 不见底；RAM 紧张只意味着卡顿，不阻塞干活） ----
+TEAM_MIN_FREE_SWAP_MB=1024            # 空闲 swap 低于此值 → 拒绝派单（打满会被 OOM killer 杀进程）
+TEAM_MIN_TOTAL_MB=512                 # RAM+swap 的绝对底线
+TEAM_REVIEW_TIMEOUT=1800              # team review 门禁硬超时（秒）；超时判定 TIMEOUT→FAIL
+TEAM_MIN_AVAIL_MB=1024                # MemAvailable 硬底线（CEP 那台机器设 4096）
+TEAM_WARN_AVAIL_MB=4096               # MemAvailable 低于此值 → 只警告（允许变卡）
+TEAM_ZRAM_WARN_PCT=85                 # zram 占用超过该百分比只警告（zram 空间存在 RAM 里）
+TEAM_AGENT_MEM_MB=6144                # 单个 agent 的经验占用，用于 team ps 的估算
+TEAM_NOTIFY_TMUX=1                    # 0=只写收件箱，不敲 PM 窗口
+TEAM_NOTIFY_DEDUP_SEC=20              # 同一简报的去重窗口（Pi 可能连续 settle）
+TEAM_INBOX_MAX_CHARS=150
+TEAM_NOTIFY_LOG="/tmp/{{PROJECT}}-teamsmith-notify.log"
+
+# ---- 定时巡检（叫醒 PM 的节拍；watchdog 只保 PM 这个进程，agent 归 PM 管） ----
+TEAM_WATCH_WINDOW="watchdog"          # tmux 后端的窗口名（里面跑 team monitor）
+TEAM_MONITOR_REFRESH=5                # 监视器刷新间隔（秒）
+TEAM_WATCH_PENDING_BOARD=0            # 0=看板 todo/wip 不算“叫我起来干活”的信号（blocked/未读/待复验/停了的 agent 才算）
+TEAM_MONITOR_ACTIVITY=0               # 1=在面板下方追加“agent 会话活动流”（只列本 session 在跑的窗口）
+TEAM_MONITOR_EVENTS=4                 # 打开活动流时，每个 agent 显示最近几条会话事件
+# PM 记忆（可选依赖）：magic-context 让长期会话能跨压缩/跨重启检索历史。
+# 0 = 推荐但只警告；1 = doctor 把它当硬依赖（没装就 fail）。探测位置可用 TEAM_PI_SETTINGS_FILE 覆盖（测试用）。
+TEAM_REQUIRE_MAGIC_CONTEXT=0
+TEAM_PI_SETTINGS_FILE="$HOME/.pi/agent/settings.json"
+TEAM_WATCH_INTERVAL=900               # 巡检周期（秒）：默认 15 分钟，建议 300~3600
+TEAM_WATCH_NUDGE_GAP=900              # 同一批待办最快多久再提醒一次（秒）
+TEAM_WATCH_REBUILD_TMUX=0             # 0=不管 tmux（session/窗口没了只告警）；1=允许重建（机器重启也自己回来）
+TEAM_WATCH_MAX_RESTARTS=5             # PM 每小时最多自动拉起次数（防崩溃循环）
+TEAM_PM_MODEL=""                      # PM 自己的模型，空 = TEAM_DEFAULT_MODEL
+TEAM_PM_SESSION_ID=""                 # 空 = pi -c（延续本目录上个会话，保住 PM 历史）
+TEAM_PM_EXTRA_PI_ARGS=""
+
+# ---- 其它 ----
+# 由 init 记录，仅供人参考：skill 路径 {{SKILL_DIR}}；初始化于 {{TODAY}}
