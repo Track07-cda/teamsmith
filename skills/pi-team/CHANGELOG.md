@@ -5,6 +5,19 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.4 · 2026-09-14
+
+**修一个会把 PM 自己打死的 bug：测试隔离 + 破坏性 tmux 守卫**
+
+- 事故：V1.1 复验的门禁（全量 smoke）从 PM 的 Pi 会话里跑，继承了 `TEAM_ROOT` →
+  `team` 读到**真实项目**的配置（session=`pm-skills`、pm_window=`pi`）→ smoke 里的
+  tmux/watchdog 段落作用到真实 session 上：空目标的 `tmux respawn-pane -k -t ""`
+  （tmux 里等于"当前 pane"）杀掉了 PM 自己的 pi 进程，真实 session 的 dev/verify/watchdog 窗口一并消失。
+- 修复：`team_assert_own_session`（cwd 仓库 == TEAM_ROOT 仓库 + session 显式/等于项目名）、
+  四个安全 tmux 包装（拒绝空目标）、`init/bootstrap` 的 session 探测守卫（pane 目录必须在项目内）、
+  `tests/smoke.sh` 身份隔离自检 + 危险助手防空目标。
+- 新增 4 条断言（继承 TEAM_ROOT 不改根解析 / 别的项目里的 up 被拒 / 空目标被拒 / 探测守卫生效）。
+
 ## v1.11.3 · 2026-09-14
 
 **文档与代码对齐（把 v1.10/v1.11 的残留清干净）**
