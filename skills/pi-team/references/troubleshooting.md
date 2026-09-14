@@ -68,7 +68,7 @@ Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复
   退回本地 squash + 评论 + 关 PR（见 `workflows.md` F）。
 - GitLab 403：token 需要 `api` scope 且有 Developer 以上角色；MR 目标分支若受保护，
   Developer 角色可能无法合并。
-- 永远用 `team gh` / `team gl` / `team pr`，不要自己 `cat` token；不要 `export GH_TOKEN`。
+- 用真实工具时按需注入（`GH_TOKEN="$(< .gh-pat)" gh …`），不要长期 `export GH_TOKEN`，也不要 `cat` token 到屏幕/日志。
 
 ## 8. 报告与实际不符
 

@@ -29,7 +29,7 @@
 4. 只改 `{{DOCS_DIR}}/OWNERSHIP.md` 里属于自己的目录；跨目录需求 → 报告写 `BLOCKED:`。
 5. 阻塞/发现问题：`team notify <a> "<一句话>"`，写 PARTIAL 报告，然后结束回合。
 6. 保护分支 `main` 只有 PM 能推进；agent 只能 push 自己的任务分支。
-7. 任何 token 只允许由 wrapper 注入（`team gh` / `team gl`），永不回显、永不落盘到项目文件。
+7. token 只允许在 PM 调用真实工具时注入（`GH_TOKEN="$(< .gh-pat)" gh …`），永不回显、永不落盘到项目文件。
 
 ## 门禁
 

@@ -71,7 +71,23 @@ team_cmd_review() {
   local branch_now; branch_now="$(git -C "$revdir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
   [ -z "$branch" ] && branch="$branch_now"
   local head; head="$(git -C "$revdir" rev-parse HEAD)"
-  team_ok "review checkout: $revdir @ ${head:0:9}"
+
+  # ── checkout 必须真的对应该任务分支（V1.1 对抗性复核实测：拿 main / 别的任务分支 / 子目录
+  #    都能拿到 PASS，而记录抬头照样写着任务分支 —— 复验就变成了"验错东西还盖章"）
+  local revroot; revroot="$(git -C "$revdir" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$revroot" ] || team_die "$revdir 不是 git checkout（没有仓库根）"
+  if [ "$(cd "$revroot" && pwd -P)" != "$(cd "$revdir" && pwd -P)" ]; then
+    team_die "--dir 必须是 checkout 的**根目录**：$revdir 在仓库 $revroot 的子目录里
+  → 换成根目录，或重新准备：git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id $branch"
+  fi
+  local want_head=""
+  want_head="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"
+  if [ -n "$want_head" ] && [ "$want_head" != "$head" ] && [ "${TEAM_REVIEW_ANY_DIR:-0}" != "1" ]; then
+    team_die "checkout 与任务分支不一致（复验会验错东西）：分支 $branch = ${want_head:0:9}，--dir 的 HEAD = ${head:0:9}
+  → 重新准备：git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id $branch
+  → 确实要用这个 checkout（比如复验一个历史提交）：TEAM_REVIEW_ANY_DIR=1 $TEAM_CLI review $id --dir $revdir --branch ${head:0:9}"
+  fi
+  team_ok "review checkout: $revdir @ ${head:0:9}（分支 $branch）"
 
   # 报告提交在 agent 分支上（合并前不出现在主工作树）：直接摘录进复验记录，
   # 不往主工作树拷文件（否则会让主工作树变脏、阻塞后续 squash merge）
@@ -155,7 +171,7 @@ team_cmd_review() {
     fi
     printf '## PM 结论\n\n'
     case "$verdict" in
-      PASS) printf -- '- [ ] 已读 diff，与任务书交付物一致\n- [ ] 未发现「报告与实际不符」\n- [ ] 可以合并（`%s merge %s`）\n' "$TEAM_CLI" "$id" ;;
+      PASS) printf -- '- [ ] 已读 diff，与任务书交付物一致\n- [ ] 未发现「报告与实际不符」\n- [ ] 可以合并：squash 到 `%s` 并 push 之后，再 `%s board set %s done`\n' "$TEAM_PROTECTED_BRANCH" "$TEAM_CLI" "$id" ;;
       FAIL) printf -- '- [ ] 门禁失败：退回 agent（`%s say <agent> "..."`）或 PM 自行修复\n' "$TEAM_CLI" ;;
       *)    printf -- '- [ ] 人工评审（门禁未跑/未配置）\n' ;;
     esac

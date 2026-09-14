@@ -41,6 +41,11 @@ REPO="$TMP/repo"
 FAKE="$TMP/fake-bin"
 mkdir -p "$REPO" "$FAKE"
 
+# 环境兜底：PATH 里没有 pi 时把下面的假 pi 放进 PATH（见"假 pi"那段），
+# 这样缺 pi 只是少跑真进程相关的断言，而不是级联 14 条红（V1.1 实测）。
+NEED_PI_STUB=0
+command -v pi >/dev/null 2>&1 || NEED_PI_STUB=1
+
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   if [ "$KEEP" = "1" ]; then
@@ -66,14 +71,23 @@ JS_RUNNER=""
 command -v node >/dev/null 2>&1 && JS_RUNNER="node"
 [ -z "$JS_RUNNER" ] && command -v bun >/dev/null 2>&1 && JS_RUNNER="bun"
 
-# 假 pi：只记录参数，验证 dispatch 命令行是否正确（不真的起模型）
+# 假 pi：记录参数（验证 dispatch 命令行）+ 对 --version/--help 给出"像样"的回答
+# （doctor 会检查 `pi --help` 里有没有 --session-id；没有真 pi 时也要能跑完，不要级联成红）
 cat > "$FAKE/pi" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >> "$TMP/pi-args.log"
-printf 'fake pi: %s\n' "\$*"
+case "\${1:-}" in
+  --version|-v) printf 'pi 0.0.0 (smoke-fake)\n' ;;
+  --help|-h)    printf 'usage: pi [--session-id <id>] [-e <ext>] [--skill <dir>]\n' ;;
+  *)            printf 'fake pi: %s\n' "\$*" ;;
+esac
 exit 0
 EOF
 chmod +x "$FAKE/pi"
+if [ "$NEED_PI_STUB" = "1" ]; then
+  export PATH="$FAKE:$PATH"
+  printf '  \033[2m·\033[0m %s\n' "PATH 里没有 pi → 用假 pi 顶替（真进程相关断言本来就走假 pi）"
+fi
 
 printf 'pi-team smoke · skill=%s · tmp=%s\n' "$SKILL_DIR" "$TMP"
 
@@ -492,12 +506,31 @@ if $TEAM review T1.1 >"$TMP/review-nodir.log" 2>&1; then bad "review 缺 --dir �
 assert_has "$TMP/review-nodir.log" "PM 自己准备独立 checkout" "报错里给出 git 命令"
 assert_file "$REPO/docs/team/reviews/T1.1.md" "写复验记录"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "复验判定 PASS"
+assert_not "$REPO/docs/team/reviews/T1.1.md" "team merge" "复验清单不再教已删命令（改为 git 步骤）"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "feature.txt" "复验记录含变更文件"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "agent 报告原文" "复验记录摘录了 agent 报告（不需向主工作树拷文件）"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "状态: DONE" "摘录的是报告内容本体"
 assert_dir "$REV_WT" "复验用 PM 提供的独立 checkout"
 assert_eq "复验不会把主工作树弄脏（仅允许 docs/team、.pi/team 下的变动）" \
   "$(git -C "$REPO" status --porcelain | grep -vE '^(\?\?| ?M|M |MM|A | ?D) (\.pi/team/|docs/team/)' | grep -c . || true)" "0"
+
+# 判定可信度（V1.1 实测的误判面）：拿错 checkout 不许给 PASS
+WRONG_WT="$TMP/review-wrong"
+git -C "$REPO" worktree add --detach "$WRONG_WT" "$PROTECTED" >/dev/null 2>&1 || true
+if $TEAM review T1.1 --dir "$WRONG_WT" >"$TMP/review-wrong.log" 2>&1; then
+  bad "拿 main 的 checkout 复验竟然 PASS（会验错东西还盖章）"
+else
+  ok "checkout 与任务分支不一致 → 拒绝复验"
+fi
+assert_has "$TMP/review-wrong.log" "不一致" "拒绝时说明是 checkout 与分支不一致"
+assert_has "$TMP/review-wrong.log" "worktree add --detach" "给出重新准备 checkout 的命令"
+# 子目录不算 checkout（git 对子目录也会说 is-inside-work-tree）
+mkdir -p "$REV_WT/sub"; if $TEAM review T1.1 --dir "$REV_WT/sub" >"$TMP/review-sub.log" 2>&1; then
+  bad "子目录竟然被当成 checkout"
+else
+  ok "子目录被拒（必须是 checkout 根目录）"
+fi
+assert_has "$TMP/review-sub.log" "根目录" "说明了必须传根目录"
 
 # 门禁失败路径
 sed -i 's/^TEAM_GATES="true"/TEAM_GATES="false"/' "$REPO/.pi/team/config.sh"
@@ -898,13 +931,62 @@ $TEAM meeting knock no-such-meeting >"$TMP/knock-bad.log" 2>&1 || true
 assert_has "$TMP/knock-bad.log" "会议不存在" "不存在的会议给出明确报错"
 unset TEAM_MEETINGS_DIR
 
-# 文档一致性：已删除的命令不能再出现在文档/模板里
-section_doc_grep() { grep -rn -- "$1" "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" 2>/dev/null; }
-for gone in "team merge" "team pr " "team gh " "team gl " "forge.sh"; do
-  hits="$(section_doc_grep "$gone" | grep -v "已移除\|已删\|不再包装\|不包装\|不执行\|删掉\|没有包装" || true)"
-  if [ -n "$hits" ]; then bad "文档里还残留已删命令 [$gone]：$(printf '%s' "$hits" | head -1)"; else ok "文档无残留：[$gone]"; fi
-done
-# ---------------------------------------------------------------- 12. 观察类命令
+# ---------------------------------------------------------------- 14b. 文档一致性（防回退）
+section "14b · 文档一致性：已删命令不得回潮（词边界 + 扫描范围 + 翻转自测）"
+
+# 扫描范围：读者会照着敲的地方（SKILL.md / references / templates / README / scripts）。
+# 故意不扫：tests（断言字符串）、CHANGELOG（历史记录）、docs/**（历史决策与回复）。
+# 判据用**词边界**（不是尾随空格）：team  merge / team(TAB)merge / `team gh` 都要抓到。
+doc_stale_hits() { # <skill 目录>
+  local d="$1" out="" extra
+  for extra in "$d/SKILL.md" "$d/references" "$d/templates" "$d/scripts" "$d/README.md" "$d/../README.md" "$d/../../README.md"; do
+    [ -e "$extra" ] || continue
+    out="$out$(grep -rEn --include='*.md' --include='*.tmpl' --include='*.sh' --include='team' \
+        '(^|[^[:alnum:]_-])team[[:space:]]+(merge|pr|gh|gl)([^[:alnum:]_-]|$)' "$extra" 2>/dev/null || true)
+"
+  done
+  # 说明句豁免要**精确**：同一行里既有删除词、命令又用反引号包着（例如 "`team merge` 已删"）。
+  # 不做整行豁免 —— 否则同行里的真残留会被一起吞掉（V1.1 实测的第 7 类漏报）。
+  printf '%s\n' "$out" | grep -v '^$' | while IFS= read -r line; do
+    case "$line" in
+      *已删*|*已移除*|*不再*|*废弃*|*历史*) case "$line" in *'`'*) continue ;; *) printf '%s\n' "$line" ;; esac ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done
+}
+
+REAL_HITS="$(doc_stale_hits "$SKILL_DIR")"
+if [ -n "$REAL_HITS" ]; then
+  bad "真树里有已删命令的用法：$(printf '%s' "$REAL_HITS" | head -1)"
+else
+  ok "真树无残留（词边界口径：team merge|pr|gh|gl）"
+fi
+
+# 翻转自测（关键）：往 skill 的沙箱副本里注入变体，检查器**必须**报红。
+# 没有这一步，"无残留 ✓" 可能只是检查器太弱（V1.1 实测：旧口径漏掉 8 类写法，真树假绿）。
+SANDBOX="$TMP/docsandbox"; rm -rf "$SANDBOX"; mkdir -p "$SANDBOX"
+cp -r "$SKILL_DIR"/SKILL.md "$SKILL_DIR"/references "$SKILL_DIR"/templates "$SKILL_DIR"/scripts "$SANDBOX/" 2>/dev/null || true
+printf '# README\n' > "$TMP/README.md"
+inject_and_expect() { # <说明> <相对文件> <追加内容>
+  local what="$1" file="$2" text="$3" got
+  rm -rf "$SANDBOX-x"; cp -r "$SANDBOX" "$SANDBOX-x"
+  printf '%s\n' "$text" >> "$SANDBOX-x/$file"
+  got="$(doc_stale_hits "$SANDBOX-x")"
+  [ -n "$got" ] && ok "翻转自测：$what 会被抓到" || bad "翻转自测：$what 竟然漏报（检查器太弱）"
+}
+inject_and_expect "双空格（team  merge）" "references/protocol.md" '用 team  merge 合并'
+inject_and_expect "制表符（team⇥pr）" "references/protocol.md" "$(printf '用 team\tpr 开 MR')"
+inject_and_expect "反引号紧贴（\`team gh\`）" "templates/PROTOCOL.md.tmpl" '用 `team gh` 开 PR'
+inject_and_expect "行尾裸命令（$ team pr）" "references/workflows.md" '$ team pr'
+inject_and_expect "同行既有删除词又有真用法" "SKILL.md" '已删的写法里还有 team gl GET /projects'
+rm -rf "$SANDBOX-x"
+CLEAN_HITS="$(doc_stale_hits "$SANDBOX")"
+[ -z "$CLEAN_HITS" ] && ok "翻转自测：干净副本不误报（正对照）" || bad "干净副本被误报：$(printf '%s' "$CLEAN_HITS" | head -1)"
+
+# 用法级不变量（verify 建议）：文档里出现 `team review <ID>` 就必须带 --dir（v1.11 起签名变了）
+USAGE_HITS="$(grep -rEn 'team review[[:space:]]+[A-Za-z0-9]' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/../README.md" 2>/dev/null | grep -v -- '--dir' | grep -vE '不再|已删|旧签名|v1\.11' || true)"
+if [ -n "$USAGE_HITS" ]; then bad "文档在教「没有 --dir 的 review」：$(printf '%s' "$USAGE_HITS" | head -1)"; else ok "review 用法都带 --dir"; fi
+
 section "12 · roster / status / ps"
 for c in roster status ps; do
   $TEAM "$c" >"$TMP/$c.log" 2>&1 && ok "$c 退出码 0" || bad "$c 失败"

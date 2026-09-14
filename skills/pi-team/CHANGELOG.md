@@ -5,6 +5,26 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.5 · 2026-09-14
+
+**按 V1.1 对抗性复验（agent:verify）的 finding 修**
+
+- **复验判定可信度**（最严重的一条）：`team review <ID> --dir <checkout>` 以前只校验"是个 git worktree"，
+  拿 **main 的 checkout / 别的任务分支 / checkout 的子目录** 都能拿到 `判定: PASS`，而记录抬头照样写着任务分支。
+  现在：必须传 checkout **根目录**；`--dir` 的 HEAD 必须等于任务分支的 HEAD，否则拒绝并给重新准备 checkout 的命令
+  （确要复验历史提交：`TEAM_REVIEW_ANY_DIR=1` + `--branch <sha>`）。
+- **文档一致性不变量重写**：改用**词边界**（`team[[:space:]]+(merge|pr|gh|gl)`）而不是尾随空格，
+  扫描范围补上 `README.md` 与 `scripts/**`；豁免只对"删除词 + 反引号包裹"的说明句生效（不再整行豁免）。
+  并新增**翻转自测**：往 skill 沙箱副本里注入 5 类变体（双空格/制表符/反引号紧贴/行尾裸命令/
+  同行既有删除词又有真用法），断言检查器必须报红 —— 防止"无残留 ✓"其实是检查器太弱（真树假绿）。
+  这条新口径当场又抓出 3 处真残留：`references/protocol.md`、`references/troubleshooting.md`、
+  `templates/PROTOCOL.md.tmpl`（都在教已删的 `team gh/gl/pr`）。
+- **用法级不变量**：文档里出现 `team review <ID>` 就必须带 `--dir`（`references/workflows.md`
+  与仓库 `README.md` 之前还在教旧签名 + 已删的 `team merge`）。
+- 复验记录里 PASS 清单不再教已删命令（改为「squash 到保护分支并 push 之后再 `board set done`」）。
+- `pi` 不在 PATH 时 smoke 不再级联 14 条红：改用统一的假 pi（对 `--version/--help` 给出像样回答），
+  无 pi 环境实测 ✓ 311 / ✗ 0（原来 ✓ 280 / ✗ 14）。
+
 ## v1.11.4 · 2026-09-14
 
 **修一个会把 PM 自己打死的 bug：测试隔离 + 破坏性 tmux 守卫**

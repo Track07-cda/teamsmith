@@ -35,8 +35,9 @@ bash $SKILL/scripts/team task T1.1 --title "第一个任务" --agent dev
 bash $SKILL/scripts/team add-agent dev
 bash $SKILL/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 bash $SKILL/scripts/team digest                # PM 待办
-bash $SKILL/scripts/team review T1.1           # 独立 worktree 复验（跑门禁）
-bash $SKILL/scripts/team merge T1.1 --push --yes
+git -C . worktree add --detach /tmp/review-T1.1 task/T1.1-*   # PM 准备独立 checkout
+bash $SKILL/scripts/team review T1.1 --dir /tmp/review-T1.1      # 只跑门禁 + 写复验记录
+# 合并由 PM 自己跑：git merge --squash <分支> && git commit && git push，然后 team board set T1.1 done
 ```
 
 完整命令与流程见 [`skills/pi-team/SKILL.md`](skills/pi-team/SKILL.md) 与

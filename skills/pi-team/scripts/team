@@ -43,7 +43,7 @@ case "$CMD" in
 esac
 
 TEAM_SKILL_DIR="$(team_skill_dir)"
-for f in "$SELF_DIR"/lib/forge.sh "$SELF_DIR"/lib/cmd-*.sh; do
+for f in "$SELF_DIR"/lib/cmd-*.sh; do
   [ -f "$f" ] || continue
   # shellcheck disable=SC1090
   . "$f"

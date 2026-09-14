@@ -88,7 +88,7 @@ agent 回合结束（Pi 的 agent_settled：不会再自动继续的那个点）
 
 ## 7. 安全红线（不可协商）
 
-- token 只在 wrapper 内部注入（`team gh` / `team gl` / `team pr`），永不回显、永不落进项目文件或日志。
+- token 只在 PM **调用真实工具**时注入（`GH_TOKEN="$(< .gh-pat)" gh …`），永不回显、永不落进项目文件或日志。
 - agent 禁止：push 保护分支、force push、merge、rebase/删除他人分支、改仓库设置。
 - agent 禁止阅读凭据/账户文件（如 `~/.pi/agent/auth.json`）。
 - 任何改变共享/远端状态的操作都要 `--yes`（用户显式授权）。skill 不替用户做主。

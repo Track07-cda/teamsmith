@@ -64,8 +64,9 @@ bash <skill>/scripts/team up              # 一键修复：session/PM/停了没�
 ## E. 复验（PM 的独立验证，不可跳过）
 
 ```bash
-bash <skill>/scripts/team review T1.1                      # 自动找分支 → detached worktree → 跑门禁
-bash <skill>/scripts/team review T1.1 --branch task/T1.1-x --no-gates   # 只做人工评审
+git -C <root> worktree add --detach /tmp/review-T1.1 task/T1.1-*   # PM 准备独立 checkout
+bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1      # 只跑门禁 + 写复验记录
+bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1 --no-gates   # 只做人工评审
 ```
 
 产物 `docs/team/reviews/T1.1.md`：HEAD、diffstat、提交列表、文件清单、门禁输出尾部、结论清单。
