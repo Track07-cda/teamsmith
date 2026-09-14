@@ -168,8 +168,10 @@ bash <skill>/scripts/team board set T1.2 done        # only mark done once it is
 
 - Task branches come off the protected branch; when the worktree is dirty, `dispatch` refuses to switch branches (so
   two tasks never end up in one diff).
-- After `close T1.2` the worktree goes back to `detached@protected branch` (`TEAM_TASK_BRANCH_RESET=1`), so the next
-  task starts clean.
+- After `close T1.2` the worktree is normally still on `task/T1.2-*`: `close` **prints** the exact
+  `git -C .worktrees/dev switch --detach main` command to run (`TEAM_TASK_BRANCH_RESET=1`; `0` silences it) and never
+  runs git itself, so the next task starts clean only after the PM runs that command. See protocol.md §8e for the
+  `done` gate that sits in front of `close`/`board set … done`.
 
 ## I. Periodic patrol and the PM's rhythm (the watchdog only does this one thing)
 

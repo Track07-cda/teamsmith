@@ -199,18 +199,52 @@ $dirty_list
 
 team_cmd_close() {
   team_require_docs
-  local id="" status="done" keep_window=0
+  local id="" status="done" keep_window=0 force=0 reason=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --status) status="${2:?}"; shift 2 ;;
       --keep-window) keep_window=1; shift ;;
+      --force) force=1; shift ;;
+      --reason) reason="${2:?--reason 需要文本}"; shift 2 ;;
       -*) team_usage_die "close: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "close <ID> [--status done|blocked|dropped] [--keep-window]"
+  [ -n "$id" ] || team_usage_die "close <ID> [--status done|blocked|dropped] [--keep-window] [--force --reason <文本>]"
+  case "$status" in
+    todo|wip|review|done|blocked|dropped) ;;
+    *) team_die "状态非法：$status（todo|wip|review|done|blocked|dropped）" ;;
+  esac
 
-  local a w b
+  # ① 「有东西可关吗」：没有的话就不是成功，而是打错字（F29 的同一个原则：no-op 不能看起来像写入）
+  local a w b known=0 ids
+  for a in $(team_agents); do
+    [ "$(team_state_get "$a" task '')" = "$id" ] && known=1
+  done
+  team_board_has "$id" && known=1
+  if [ "$known" != "1" ]; then
+    team_err "close $id：BOARD 里没有这一行，也没有 agent 在跑这个任务（没有可关闭的东西）"
+    ids="$(team_board_ids | tr '\n' ' ')"
+    [ -n "${ids// /}" ] && team_err "  现有 id：${ids% }"
+    team_die "  → 新增一行：$TEAM_CLI board add $id <标题>，或先用 $TEAM_CLI task 建任务书"
+  fi
+
+  # ② done 的准入证据（F1）：**先核对、后动手**；被拒时窗口与状态原样不动
+  local done_ev="" done_label=""
+  if [ "$force" = "1" ] && [ "$status" != "done" ]; then
+    team_warn "--force/--reason 只对 --status done 有意义（当前 status=$status）：已忽略"
+  fi
+  if [ "$status" = "done" ]; then
+    done_label="$TEAM_CLI close $id --status done"
+    if [ "$force" = "1" ]; then
+      [ -n "$(team_trim "$reason")" ] || team_die "--force 需要 --reason \"为什么\"：覆盖会记进 $TEAM_DOCS_DIR/reviews/$id-done.md"
+      done_ev="$(TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="$reason" team_done_gate "$id" "$done_label")" || return 1
+    else
+      done_ev="$(team_done_gate "$id" "$done_label")" || return 1
+    fi
+    team_dim "  done 证据：$(printf '%s' "$done_ev" | head -1)"
+  fi
+
   for a in $(team_agents); do
     [ "$(team_state_get "$a" task '')" = "$id" ] || continue
     w="$(team_state_get "$a" window "$a")"
@@ -218,14 +252,28 @@ team_cmd_close() {
       tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && team_ok "kill window $TEAM_SESSION:$w"
     fi
     team_state_set "$a" task ""
-    # git 归 PM：这里只提示，不切分支、不删分支
+    # 分支归 PM：这里只说清楚「现在在哪、复位命令是什么」，不替 PM 切分支（见 openspec board-and-status）
     b="$(git -C "$(team_agent_worktree "$a")" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
     case "$b" in
       ""|HEAD|"$TEAM_PROTECTED_BRANCH") ;;
-      *) team_dim "  $a 仍在分支 $b 上：需要清理请自己跑 git -C $(team_agent_worktree "$a") switch --detach $TEAM_PROTECTED_BRANCH" ;;
+      *)
+        if team_branch_mode_is_task && [ "${TEAM_TASK_BRANCH_RESET:-1}" = "1" ]; then
+          team_dim "  $a 仍在 $b 上 → 复位（git 归 PM：下面这条由你跑，CLI 不碰 git）："
+          team_dim "    git -C $(team_agent_worktree "$a") switch --detach $TEAM_PROTECTED_BRANCH"
+        else
+          team_dim "  $a 仍在 $b 上（TEAM_TASK_BRANCH_RESET=0：CLI 不复位、也不提复位命令）"
+        fi ;;
     esac
   done
-  team_board_set "$id" "$status" 2>/dev/null || team_warn "BOARD 未更新（$id 不在表里？）"
+  if team_board_write "$id" "$status"; then
+    [ -n "$done_ev" ] && team_done_record "$id" "$done_label" "$done_ev"
+  else
+    team_warn "BOARD 未更新（$id 不在表里？）"
+  fi
   team_ok "closed $id（status=$status）"
-  team_dim "  复验记录 $TEAM_DOCS_DIR/reviews/$id.md 保留；agent worktree 保留（复用）"
+  if [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ]; then
+    team_dim "  复验记录 $TEAM_DOCS_DIR/reviews/$id.md 保留；agent worktree 保留（复用）"
+  else
+    team_dim "  没有复验记录（$TEAM_DOCS_DIR/reviews/$id.md 不存在）；agent worktree 保留（复用）"
+  fi
 }

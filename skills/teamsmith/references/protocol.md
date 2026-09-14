@@ -199,6 +199,45 @@ current order and the closing move:
 If any step fails (conflict / failed commit / failed push): **the BOARD keeps its pre-merge state** (usually
 `review`), and `done` is not set — code that never reached the protected branch is not finished.
 
+### The tool checks step 3 instead of trusting it
+
+Since v1.20.0 `team board set <ID> done` (and `team close <ID>`, whose default status is `done`) **refuses** unless
+it can point at something checkable at that moment:
+
+- `<docs>/reviews/<ID>.md` exists and its verdict is not `FAIL`/`TIMEOUT` (`PASS`; `UNKNOWN`/`SKIPPED` are accepted
+  as an explicit manual review and named as such in the output), **or**
+- the task branch tip is already contained in the protected branch (`git merge-base --is-ancestor`, i.e. a real
+  merge / fast-forward). A **squash** merge does not satisfy this — the branch commits are not ancestors — so in the
+  usual squash workflow the review record is what unlocks `done`.
+
+Every accepted transition appends what it checked to `<docs>/reviews/<ID>-done.md` (append-only; the forced case is
+marked `FORCED`), so "what did it verify at that moment" survives the terminal:
+
+```
+- <timestamp> · `team board set M5.2 done` · OK：the evidence line for that moment
+                                      (e.g. "review record <docs>/reviews/M5.2.md, verdict PASS")
+```
+
+If neither condition holds and the PM is sure anyway, the override has to carry a reason:
+
+```bash
+TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="hotfix pushed by hand; PR #12 is the record" \
+  team board set <ID> done                 # or: team close <ID> --status done --force --reason "…"
+```
+
+A missing reason is refused, and the transition is recorded as `FORCED` together with the failed checks — an
+override is allowed, a silent one is not. Nothing is written when the gate refuses.
+
+### What the tool cannot check (the PM's own checklist)
+
+The "pushed" half is the PM's:
+
+- `git -C <root> merge-base --is-ancestor <branch> <protected>` exits 0, and `git -C <root> status -sb` shows the
+  protected branch is not ahead of its upstream;
+- `team review <ID> --dir <independent checkout>` recorded `PASS` on the revision you are about to merge
+  (`--strong` for a milestone);
+- only then `team board set <ID> done` and `team close <ID>`.
+
 Conflict handling (the PM runs all of this itself):
 
 ```bash

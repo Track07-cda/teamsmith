@@ -979,6 +979,12 @@ team_model_limit() {
   printf '%s\n' "$best"
 }
 
+# 模型并发计数：**只读**。窗口不在了 = 这个槽位自动释放（不计数），但绝不顺手删状态文件。
+# F28 事故背景（V4.0）：这里曾经对「窗口没了」的 agent 调 team_state_clear，于是 `team ps` 这种
+# 只读命令跑一次，崩溃 agent 的 task/branch/worktree 记录就没了 —— digest 报「无待办」、resume 说
+# 「没有需要续跑的 agent」，工具正好在它存在的意义上瞎了。
+# 现在的口径：状态文件是「这个 agent 在干什么」的持久记录（只有 dispatch/close/teardown 这类真改状态
+# 的命令才写它）；「还在不在跑」是 tmux 的现场事实，每次查询现算。
 team_model_running() { # 统计「活着且用了该模型」的 agent 数（支持通配上限的归组统计）
   local want="$1" n=0 a w m
   for a in $(team_agents); do
@@ -990,7 +996,7 @@ team_model_running() { # 统计「活着且用了该模型」的 agent 数（支
       case "$m" in $pat) ;; *) continue ;; esac
     fi
     w="$(team_state_get "$a" window "$a")"
-    if team_tmux_has_window "$TEAM_SESSION" "$w"; then n=$((n + 1)); else team_state_clear "$a"; fi
+    team_tmux_has_window "$TEAM_SESSION" "$w" && n=$((n + 1))
   done
   printf '%s\n' "$n"
 }
@@ -1052,20 +1058,141 @@ team_append() { # <file> <block>
 team_timestamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # BOARD.md 行更新：| ID | 任务 | Agent | 分支 | 依赖 | 状态 |
-team_board_set() { # <id> <status>
+team_board_ids() { # → 表里现有的 id（每行一个，给「未知 id」的报错用）
+  local f="$TEAM_DOCS_ABS/BOARD.md" col
+  [ -f "$f" ] || return 0
+  col="$(team_board_col id)"
+  awk -v c="$col" 'BEGIN{FS="|"}
+    /^\|/ { v=$(c); gsub(/^[ \t]+|[ \t]+$/,"",v)
+            if (v=="" || v=="ID" || v=="编号" || v ~ /^-+$/) next
+            print v }' "$f"
+  return 0
+}
+
+# 注意：team_board_row 对「没有这一行」也返回 0（awk 正常结束），所以判存在必须看输出
+# 是否非空 —— F29 的根因就是「写」从不检查行是否存在。
+team_board_has() { # <id> → 0=表里有这一行
+  [ -n "$(team_board_row "$1" 2>/dev/null || true)" ]
+}
+
+# 只写状态列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
+# 于是 `board set NOSUCH done` 会打印 ✓ 而文件一个字节都没变（md5 相同）。
+team_board_write() { # <id> <status> → 0=真的改了那一行；1=没有这个 id（不碰文件）
   local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" st="$2" idcol stcol
   [ -f "$f" ] || return 1
   idcol="$(team_board_col id)"; stcol="$(team_board_col status)"
-  if awk -v id="$id" -v st="$st" -v ic="$idcol" -v sc="$stcol" 'BEGIN{FS=OFS="|"}
+  awk -v id="$id" -v st="$st" -v ic="$idcol" -v sc="$stcol" 'BEGIN{FS=OFS="|"}
     /^\|/ { v=$(ic); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
-             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(sc)); $(sc)=" "st" "; print; next } }
+             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(sc)); $(sc)=" "st" "; print; found=1; next } }
     { print }
-  ' "$f" > "$f.tmp"; then
-    mv "$f.tmp" "$f"
+    END { exit(found ? 0 : 1) }
+  ' "$f" > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
+  mv "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }
+  return 0
+}
+
+# ---------------------------------------------------------------- done 的准入证据（F1）
+# 「状态是承诺」：`done` 必须当场有可核对的东西（只读检查，skill 不碰 git 写操作）：
+#   ① 复验记录 <docs>/reviews/<ID>.md 存在，且判定不是 FAIL/TIMEOUT；或
+#   ② 任务分支的 tip 已经在保护分支里（真 merge/fast-forward）。**squash 合并不会满足 ②**，
+#      所以走 squash 流程时靠 ① 解锁。
+# 覆盖：PM 显式给理由（TEAM_BOARD_DONE_FORCE=1 + TEAM_BOARD_DONE_REASON="…"），并落盘审计。
+team_review_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN|none|missing
+  local f="$TEAM_DOCS_ABS/reviews/$1.md" v=""
+  [ -f "$f" ] || { printf 'missing\n'; return 0; }
+  v="$(grep -m1 -oE '判定: \*\*[A-Za-z]+\*\*' "$f" 2>/dev/null | tr -d '*' | sed 's/^判定: //' || true)"
+  printf '%s\n' "${v:-none}"
+  return 0
+}
+
+team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证据（stdout 检查明细）
+  local id="$1" rel="$TEAM_DOCS_DIR/reviews/$id.md" verdict branch tip detail=""
+  verdict="$(team_review_verdict "$id")"
+  case "$verdict" in
+    PASS)    printf '复验记录 %s（判定 PASS）\n' "$rel"; return 0 ;;
+    UNKNOWN) printf '复验记录 %s（判定 UNKNOWN：门禁未配置，人工评审）\n' "$rel"; return 0 ;;
+    SKIPPED) printf '复验记录 %s（判定 SKIPPED：PM 选择人工看 diff）\n' "$rel"; return 0 ;;
+    missing) detail="不存在" ;;
+    none)    detail="存在，但没有「判定: **…**」这一行（不能当作已复验的证据）" ;;
+    *)       detail="存在但判定是 $verdict（FAIL/TIMEOUT 不算证据）" ;;
+  esac
+  branch="$(team_resolve_branch "$id" "" 2>/dev/null || true)"
+  tip=""
+  if [ -n "$branch" ]; then
+    tip="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"
+  fi
+  if [ -n "$tip" ] && git -C "$TEAM_MAIN_ROOT" merge-base --is-ancestor "$tip" "$TEAM_PROTECTED_BRANCH" 2>/dev/null; then
+    printf '分支 %s（%s）已经是 %s 的祖先（代码真的落地了）\n' "$branch" "${tip:0:9}" "$TEAM_PROTECTED_BRANCH"
     return 0
   fi
-  rm -f "$f.tmp"
+  printf '  - ① 复验记录 %s：%s\n' "$rel" "$detail"
+  if [ -z "$branch" ]; then
+    printf '  - ② 分支是否已并入 %s：找不到 %s 的分支\n' "$TEAM_PROTECTED_BRANCH" "$id"
+  elif [ -z "$tip" ]; then
+    printf '  - ② 分支是否已并入 %s：分支 %s 解析不到 commit\n' "$TEAM_PROTECTED_BRANCH" "$branch"
+  else
+    printf '  - ② 分支是否已并入 %s：%s（%s）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）\n' \
+      "$TEAM_PROTECTED_BRANCH" "$branch" "${tip:0:9}"
+  fi
   return 1
+}
+
+# done 的闸门：证据 / 显式覆盖。成功时 stdout 第一行是「判定行」（OK/FORCED），后面是证据明细；
+# 失败时 stdout 空、明细与继续办法都打到 stderr（调用方照原样返回 1 即可）。
+team_done_gate() { # <ID> <命令标签>
+  local id="$1" label="$2" ev reason=""
+  if ev="$(team_done_evidence "$id")"; then
+    printf 'OK：%s\n' "$ev"
+    return 0
+  fi
+  if [ "${TEAM_BOARD_DONE_FORCE:-0}" = "1" ]; then
+    reason="${TEAM_BOARD_DONE_REASON:-}"
+    if [ -z "$(team_trim "$reason")" ]; then
+      team_err "TEAM_BOARD_DONE_FORCE=1 但 TEAM_BOARD_DONE_REASON 是空的：覆盖要写清楚为什么，否则审计里只有一个'forced'"
+      printf '%s\n' "$ev" >&2
+      return 1
+    fi
+    printf 'FORCED：PM 显式覆盖（理由：%s）\n%s\n' "$reason" "$ev"
+    return 0
+  fi
+  printf '%s\n' "$ev" >&2
+  team_err "没有可核对的证据（BOARD 未改动）——done 是一句承诺，不能只凭手写"
+  team_err "  ① 先复验（判定 PASS）或先合并到 $TEAM_PROTECTED_BRANCH：$TEAM_CLI review $id --dir <独立checkout>"
+  team_err "  ② PM 确认可以直接 done：TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON=\"为什么\" $label"
+  return 1
+}
+
+# 审计：每次真的写上 done 都留一条（含当时核对了什么 / 为什么覆盖）
+team_done_record() { # <ID> <命令标签> <team_done_gate 的判定行及明细>
+  local id="$1" label="$2" ev="$3" f
+  f="$TEAM_DOCS_ABS/reviews/$id-done.md"
+  mkdir -p "$(dirname "$f")"
+  {
+    [ -s "$f" ] && printf '\n'
+    printf -- '- %s · `%s` · %s\n' "$(team_timestamp)" "$label" "$(printf '%s' "$ev" | head -1)"
+    printf '%s' "$ev" | tail -n +2 | sed 's/^/  - /'
+  } >> "$f"
+  return 0
+}
+
+team_board_set() { # <id> <status> → 未知 id / done 无证据：返回 1 且**不写文件**
+  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" st="$2" ev="" label
+  [ -f "$f" ] || return 1
+  if ! team_board_has "$id"; then
+    team_err "BOARD 里没有 $id：没有改动，也不算「更新成功」"
+    local ids; ids="$(team_board_ids | tr '\n' ' ')"
+    [ -n "${ids// /}" ] && team_err "  现有 id：${ids% }"
+    team_err "  新增一行：$TEAM_CLI board add $id <标题>（或先 $TEAM_CLI task $id --title …）"
+    return 1
+  fi
+  label="$TEAM_CLI board set $id $st"
+  if [ "$st" = "done" ]; then
+    ev="$(team_done_gate "$id" "$label")" || return 1
+    team_dim "  done 证据：$(printf '%s' "$ev" | head -1)"
+  fi
+  team_board_write "$id" "$st" || return 1
+  [ "$st" = "done" ] && team_done_record "$id" "$label" "$ev"
+  return 0
 }
 
 team_board_add() { # <id> <title> <agent> <branch> <deps>

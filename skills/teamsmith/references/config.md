@@ -114,7 +114,7 @@ literals or simple `$VAR`.
 
 | `TEAM_BRANCH_MODE` | `task` | `task` = one branch per task (`task/<ID>-<slug>`; the unit of verification/merge/rollback is the task) ｜ `agent` = one long-lived branch per agent |
 | `TEAM_TASK_BRANCH_PREFIX` | `task` | task branch prefix |
-| `TEAM_TASK_BRANCH_RESET` | `1` | after `close` the worktree goes back to `detached@protected branch` |
+| `TEAM_TASK_BRANCH_RESET` | `1` | `close` prints the exact `git -C <worktree> switch --detach <protected>` command for a worktree still sitting on that task's branch (the CLI never runs git); `0` = say nothing about the reset |
 | `TEAM_AGENT_BRANCH_PREFIX` | `agent` | prefix used in `agent` mode |
 
 ## 3. On-disk layout inside a project
@@ -123,8 +123,9 @@ literals or simple `$VAR`.
 <project root>/
 ├── .pi/team/
 │   ├── config.sh          # configuration (committed, shared by the team)
-│   └── state/             # runtime state (gitignored): <agent>.env, notify-dedup,
-│                          #   prompt-<agent>-<ID>.md (the prompt of this dispatch; {prompt_file} points at it)
+│   └── state/             # runtime state (gitignored): <agent>.env (the durable record),
+│                          #   notify-dedup, prompt-<agent>-<ID>.md (the prompt of this dispatch;
+│                          #   {prompt_file} points at it), watchdog/capacity logs
 ├── AGENTS.md              # carries the <!-- teamsmith:begin --> protocol section (written/refreshed by init)
 ├── .worktrees/
 │   ├── <agent>/           # each agent's long-lived worktree (branch agent/<name>)
@@ -138,6 +139,8 @@ literals or simple `$VAR`.
     ├── tasks/<ID>-<slug>.md
     ├── reports/<ID>-<agent>.md
     ├── reviews/<ID>.md  + <ID>-verify.log     # verification records (the log is gitignored)
+    ├── reviews/<ID>-done.md                   # append-only audit of every `done` transition
+    │                                          #   (which evidence was checked / why it was forced)
     ├── threads/<agent>.md                     # append-only message thread
     └── inbox/<agent>.md                       # automatic briefings (gitignored)
 ```
@@ -150,6 +153,19 @@ literals or simple `$VAR`.
 <docs>/reviews/*.log
 .worktrees/
 ```
+
+### What is durable in `state/` and what is derived (read-only commands never mutate the record)
+
+`state/<agent>.env` is the **durable record** of an agent: `task`, `taskfile`, `branch`, `worktree`, `model`,
+`window`, `started`, `inbox_lines`. Only the commands that really change the team write it (`dispatch`, `resume`,
+`add-agent`, `close`, `teardown`, `inbox --ack`).
+
+Liveness is **not** stored: whether an agent is running — and therefore which model-concurrency slot it holds —
+is derived from tmux (`has-window`) at query time. A crashed window therefore frees its slot while the record
+stays, and the read-only commands (`roster`, `status`, `ps`, `digest`, `inbox`, `paths`, `watchdog-status`) write
+nothing at all. This is a tested invariant (smoke: state hash before/after), not a convention: an earlier version
+had the model counter call `team_state_clear` for dead windows, so a single `team ps` deleted a crashed agent's
+`task`/`branch` — after which `digest` reported "nothing to do" and `team resume` had nothing to resume.
 
 ## 4. Environment variables (usable without writing them into the config)
 
@@ -166,4 +182,6 @@ literals or simple `$VAR`.
 | `TEAM_MEMINFO_FILE` | point at another meminfo file (for containers/tests without `/proc/meminfo`) |
 | `TEAM_MODEL_LIMITS` | temporarily loosen/tighten concurrency (`""` means unlimited) |
 | `TEAM_ASSUME_YES` | `1` = skip `--yes` (only recommended inside automation scripts) |
+| `TEAM_BOARD_DONE_FORCE` | `1` = PM override for the `done` gate: write `done` even though neither a usable review record nor a merged branch exists (`close --status done` has the `--force` flag for the same thing) |
+| `TEAM_BOARD_DONE_REASON` | the reason recorded in `<docs>/reviews/<ID>-done.md` when `TEAM_BOARD_DONE_FORCE=1`; required, otherwise the override is refused |
 | `NO_COLOR` | turn colours off |

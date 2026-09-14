@@ -62,7 +62,16 @@ assert_not_file() { [ ! -e "$1" ] && ok "$2" || bad "$2（$1 不该存在）"; }
 assert_has()   { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 中找不到 [$2]）"; }
 assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 中没有匹配 [$2]）"; }
 assert_not()   { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
+# 断言「字符串 $1 里含子串 $2」（assert_has 是查文件；旧模板那条用的是字符串）
+assert_has_echo() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3（[$1] 里找不到 [$2]）" ;; esac; }
 assert_eq()    { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
+# M6.1：state/ 的字节指纹 —— 只读命令不许改运行时状态（F28 的守门断言）
+state_fp() {
+  ( cd "$REPO/.pi/team/state" 2>/dev/null || return 0
+    find . -type f | sort | while IFS= read -r f; do printf '%s ' "$f"; md5sum "$f" | cut -d' ' -f1; done ) \
+    | md5sum | awk '{print $1}'
+}
+board_status() { $TEAM board row "$1" 2>/dev/null | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}'; }
 
 TMP="$(mktemp -d /tmp/teamsmith-smoke.XXXXXX)"
 SESSION="teamsmith-smoke-$$"
@@ -166,6 +175,16 @@ if [ -z "$trap_hits" ]; then
   ok "没有「函数结尾 && 链」陷阱"
 else
   bad "发现可能让调用方在 set -e 下静默退出的函数："; printf '%s\n' "$trap_hits" | sed 's/^/     /'
+fi
+# 每个用到的 assert_* 都必须有定义：M5.1 遗留了一个没定义的 assert_has_echo，
+# 于是那条断言静默空跑了很久（测试自己「谎报覆盖」）——这里把它钉死。
+UNDEF_ASSERTS="$(grep -oE '\bassert_[a-z_]+' "$SKILL_DIR/tests/smoke.sh" | sort -u | while IFS= read -r fn; do
+  grep -qE "^$fn\\(\\)" "$SKILL_DIR/tests/smoke.sh" || printf '%s\n' "$fn"
+done)"
+if [ -n "$UNDEF_ASSERTS" ]; then
+  bad "smoke 用了没定义的断言函数（会静默空跑）：$(printf '%s' "$UNDEF_ASSERTS" | tr '\n' ' ')"
+else
+  ok "smoke 里的 assert_* 都有定义（没有静默空跑的断言）"
 fi
 # team_watch_pid_alive 这类故意返回 1 的判定函数只允许出现在条件里
 assert_has "$SKILL_DIR/scripts/team" "set -euo pipefail" "CLI 主脚本仍启用严格模式"
@@ -310,6 +329,43 @@ assert_file "$TASKFILE" "生成任务书"
 assert_has "$TASKFILE" "agent:  dev" "任务书含 agent 字段"
 assert_has "$TASKFILE" "true" "任务书写入门禁命令"
 assert_eq "BOARD 建行（todo）" "$($TEAM board row T1.1 2>/dev/null | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}' || true)" "todo"
+
+# ---------------------------------------------------------------- 4b. 状态诚实（M6.1 F29/F1）
+section "4b · 状态诚实：未知 id 不假装写入 + done 要证据（M6.1 F29/F1）"
+BOARD_BEFORE="$(md5sum "$REPO/docs/team/BOARD.md" | cut -d' ' -f1)"
+if $TEAM board set NOSUCH done >"$TMP/board-nosuch.log" 2>&1; then bad "未知 id 写 BOARD 应当失败"; else ok "未知 id 写 BOARD 被拒（非 0）"; fi
+assert_has "$TMP/board-nosuch.log" "BOARD 里没有 NOSUCH" "报错点明是未知 id"
+assert_has "$TMP/board-nosuch.log" "board add" "给出新增行的办法"
+assert_not "$TMP/board-nosuch.log" "✓ board NOSUCH" "没有打印成功行"
+assert_eq "未知 id 的写入真的没碰文件" "$(md5sum "$REPO/docs/team/BOARD.md" | cut -d' ' -f1)" "$BOARD_BEFORE"
+# done 的闸门：既没有复验记录、分支也没落地 → 拒绝
+if env TEAM_BOARD_DONE_FORCE=0 $TEAM board set T1.1 done >"$TMP/done-nogate.log" 2>&1; then bad "没有证据也允许 done"; else ok "没有证据时 done 被拒（非 0）"; fi
+assert_has "$TMP/done-nogate.log" "复验记录" "说明检查了复验记录"
+assert_has "$TMP/done-nogate.log" "分支是否已并入" "说明检查了分支是否落地"
+assert_has "$TMP/done-nogate.log" "TEAM_BOARD_DONE_FORCE" "给出 PM 覆盖方式"
+assert_eq "被拒的 done 没有改状态" "$(board_status T1.1)" "todo"
+# 判定 FAIL 的复验记录不算证据
+mkdir -p "$REPO/docs/team/reviews"
+printf '# T1.1 · PM 独立复验\n\n时间: 2026-01-01T00:00:00Z · 判定: **FAIL**\n' > "$REPO/docs/team/reviews/T1.1.md"
+if env TEAM_BOARD_DONE_FORCE=0 $TEAM board set T1.1 done >"$TMP/done-fail.log" 2>&1; then bad "FAIL 的复验记录被当成证据"; else ok "FAIL 的复验记录不算证据"; fi
+assert_has "$TMP/done-fail.log" "FAIL" "报错点名判定的问题"
+rm -f "$REPO/docs/team/reviews/T1.1.md"
+# 覆盖必须给理由；给了才允许，而且落盘审计
+if env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="" $TEAM board set T1.1 done >"$TMP/done-noreason.log" 2>&1; then bad "覆盖没给理由也允许"; else ok "覆盖没给理由被拒"; fi
+assert_has "$TMP/done-noreason.log" "TEAM_BOARD_DONE_REASON" "报错要求写理由"
+env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="smoke: 手工确认" $TEAM board set T1.1 done >"$TMP/done-force.log" 2>&1 \
+  && ok "给了理由的覆盖 → 允许 done" || bad "给了理由的覆盖仍被拒"
+assert_eq "覆盖后状态是 done" "$(board_status T1.1)" "done"
+assert_file "$REPO/docs/team/reviews/T1.1-done.md" "done 写审计文件"
+assert_has "$REPO/docs/team/reviews/T1.1-done.md" "FORCED" "覆盖记成 FORCED"
+assert_has "$REPO/docs/team/reviews/T1.1-done.md" "smoke: 手工确认" "覆盖理由落盘"
+$TEAM board set T1.1 todo >/dev/null 2>&1
+# 或条件②：分支 tip 已经在保护分支里 → 没有复验记录也允许（正对照：闸门不是「一律拒绝」）
+git -C "$REPO" branch task/T9.8-ancestor "$PROTECTED" >/dev/null 2>&1
+$TEAM board add T9.8 "ancestor case" dev "-" >/dev/null 2>&1
+env TEAM_BOARD_DONE_FORCE=0 $TEAM board set T9.8 done >"$TMP/done-ancestor.log" 2>&1 \
+  && ok "分支已并入保护分支 → 允许 done" || bad "条件② 没生效（分支真的落地了却被拒）"
+assert_has "$TMP/done-ancestor.log" "已经是 main 的祖先" "成功输出写明证据是分支落地"
 
 # ---------------------------------------------------------------- 5. add-agent
 section "5 · add-agent"
@@ -992,14 +1048,37 @@ assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "恢复门禁后
 # ---------------------------------------------------------------- 11. merge / close
 section "11 · 收尾（merge 已移除，close 保留）"
 if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应已移除"; else ok "merge 已移除（PM 用 git）"; fi
-$TEAM board set T1.1 done >/dev/null 2>&1
-assert_eq "BOARD 可由 PM 直接收尾" "$($TEAM board row T1.1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}')" "done"
-$TEAM close T1.1 >/dev/null 2>&1 && ok "close 退出码 0" || bad "close 失败"
+$TEAM board set T1.1 done >"$TMP/board-done.log" 2>&1 && ok "有 PASS 复验记录时 done 允许" || { bad "有复验记录却被拒"; cat "$TMP/board-done.log"; }
+assert_has "$TMP/board-done.log" "判定 PASS" "done 成功输出写明核对到的证据"
+assert_eq "BOARD 可由 PM 直接收尾" "$(board_status T1.1)" "done"
+assert_has "$REPO/docs/team/reviews/T1.1-done.md" "判定 PASS" "done 审计记下当时核对的证据"
+# close：未知 id 不假装关闭；有复验记录时给出真实路径（F2）；复位命令是打印而不是执行（F5）
+if $TEAM close NOSUCH >"$TMP/close-nosuch.log" 2>&1; then bad "close 未知 id 应被拒"; else ok "close 未知 id 被拒（不假装关闭）"; fi
+assert_has "$TMP/close-nosuch.log" "没有可关闭的东西" "说清楚没有可关的东西"
+$TEAM close T1.1 >"$TMP/close.log" 2>&1 && ok "close 退出码 0" || bad "close 失败"
+assert_has "$TMP/close.log" "复验记录 docs/team/reviews/T1.1.md 保留" "close 报的是真实存在的复验记录"
+assert_has "$SKILL_DIR/scripts/lib/cmd-review.sh" "TEAM_TASK_BRANCH_RESET" "close 真的读了这个配置键（F5 不再是死配置）"
+assert_not "$SKILL_DIR/references/workflows.md" "goes back to" "workflows.md 不再宣称 close 自动复位"
+# 没有证据的 done（close 的默认状态）也被拒；--force --reason 才允许，而且说谎要留痕
+$TEAM board add T9.9 "No review yet" dev - >/dev/null 2>&1
+assert_eq "T9.9 是表里的一行（下面两条 close 的前置）" "$(board_status T9.9)" "todo"
+if $TEAM close T9.9 >"$TMP/close-norev.log" 2>&1; then bad "close 没有证据也应被拒"; else ok "close 没有 done 证据被拒"; fi
+$TEAM close T9.9 --force --reason "smoke: 直接收尾" >"$TMP/close-t99.log" 2>&1 \
+  && ok "close --force --reason 允许收尾" || { bad "close --force 失败"; cat "$TMP/close-t99.log"; }
+assert_has "$TMP/close-t99.log" "没有复验记录" "close 明说没有复验记录"
+assert_not "$TMP/close-t99.log" "复验记录 docs/team/reviews/T9.9.md 保留" "不宣称保留一个不存在的文件"
+assert_has "$REPO/docs/team/reviews/T9.9-done.md" "FORCED" "close 的覆盖也落盘"
 if [ "$FAST" = "1" ]; then
   fast_skip "11·close 后窗口" "窗口断言要有 tmux 场地（快模式不建场地）"
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
+  assert_has "$TMP/close.log" "switch --detach main" "close 打印确切的复位命令"
+  assert_eq "close 没替 PM 切分支（worktree 仍在任务分支上）" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD 2>/dev/null)" "task/T1.1-smoke"
+  # TEAM_TASK_BRANCH_RESET=0：复位提示可以关掉（配置键真的有作用）
+  $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1 || true
+  TEAM_TASK_BRANCH_RESET=0 $TEAM close T1.1 >"$TMP/close-reset0.log" 2>&1 || true
+  assert_not "$TMP/close-reset0.log" "switch --detach" "TEAM_TASK_BRANCH_RESET=0 时不打复位命令"
 fi
 
 section "11b · 定时巡检：有待办才叫醒 PM（默认 15 分钟）"
@@ -1221,6 +1300,18 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # watchdog 不该替 PM 做决定：跑一轮巡检，dev 仍未被续跑
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
   sleep 0.5
+  # F28：只读命令不许毁掉崩溃 agent 的持久记录（否则 resume 会「没东西可续」）
+  EQ_STATE_BEFORE="$(state_fp)"
+  $TEAM ps >"$TMP/ps-crash.log" 2>&1 || true
+  $TEAM digest >"$TMP/digest-crash.log" 2>&1 || true
+  $TEAM roster >/dev/null 2>&1 || true
+  $TEAM paths >/dev/null 2>&1 || true
+  assert_eq "读命令之后 state/ 一个字节没变（F28）" "$(state_fp)" "$EQ_STATE_BEFORE"
+  assert_has "$REPO/.pi/team/state/dev.env" "task=T1.1" "崩溃 agent 的任务记录还在"
+  assert_match "$TMP/digest-crash.log" "停了的 agent [0-9]" "digest 仍把崩溃 agent 算成待办"
+  EQ_MODEL="$(sed -n 's/^model=//p' "$REPO/.pi/team/state/dev.env" | head -1)"
+  assert_eq "死窗口释放模型槽位（RUNNING=0）" \
+    "$(grep -E "^$EQ_MODEL[[:space:]]" "$TMP/ps-crash.log" | head -1 | awk '{print $2}')" "0"
   $TEAM watch --once >"$TMP/watch4.log" 2>&1 || bad "watch --once 失败"
   assert_eq "watchdog 不续跑 agent（窗口仍不在）" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "0"
   assert_not "$TMP/watch4.log" "续跑" "watchdog 输出里没有 agent 续跑动作"
@@ -1576,6 +1667,29 @@ for c in roster status ps; do
   $TEAM "$c" >"$TMP/$c.log" 2>&1 && ok "$c 退出码 0" || bad "$c 失败"
   [ -s "$TMP/$c.log" ] && ok "$c 有输出" || bad "$c 无输出"
 done
+# M6.1 F28：只读命令对 state/ 必须是零写入（快慢模式都跑；快模式下没有 tmux 窗口，
+# 旧实现会在 team ps 里把 dev.env 删掉 —— 这条断言就是那个回归的守门人）
+STATE_FP_BEFORE="$(state_fp)"
+for c in paths roster status ps digest inbox watchdog-status; do
+  $TEAM "$c" >/dev/null 2>&1 || true
+done
+assert_eq "只读命令零写入 state/（F28）" "$(state_fp)" "$STATE_FP_BEFORE"
+# F28 的最小现场（快模式也能验）：状态里写一条「还在跑某个模型、但窗口不在」的记录 —— 这就是崩溃 agent 的样子。
+# 旧实现（team_model_running 对死窗口调 team_state_clear）会把整份文件删掉，下一行断言就会红。
+if [ -f "$REPO/.pi/team/state/dev.env" ]; then cp "$REPO/.pi/team/state/dev.env" "$TMP/dev.env.f28bak"; F28_HAD=1; else F28_HAD=0; fi
+F28_MODEL="$(sed -n 's/^model=//p' "$REPO/.pi/team/state/dev.env" 2>/dev/null | head -1)"
+[ -n "$F28_MODEL" ] || F28_MODEL="$(sed -n 's/^TEAM_DEFAULT_MODEL="\([^"]*\)".*/\1/p' "$REPO/.pi/team/config.sh" | head -1)"
+printf 'model=%s\nwindow=no-such-window-f28\ntask=R98.1\nbranch=task/R98.1-ghost\ntaskfile=%s\nworktree=%s\n' \
+  "$F28_MODEL" "$TASKFILE" "$REPO/.worktrees/dev" > "$REPO/.pi/team/state/dev.env"
+GRD_BEFORE="$(cat "$REPO/.pi/team/state/dev.env")"
+$TEAM ps >/dev/null 2>&1 || true
+$TEAM digest >/dev/null 2>&1 || true
+$TEAM roster >/dev/null 2>&1 || true
+$TEAM paths >/dev/null 2>&1 || true
+assert_eq "读命令没删掉崩溃 agent 的状态文件（F28）" "$(cat "$REPO/.pi/team/state/dev.env" 2>/dev/null)" "$GRD_BEFORE"
+assert_has "$REPO/.pi/team/state/dev.env" "task=R98.1" "崩溃 agent 的 task 记录还在"
+assert_has "$REPO/.pi/team/state/dev.env" "branch=task/R98.1-ghost" "崩溃 agent 的 branch 记录还在"
+[ "$F28_HAD" = "1" ] && cp "$TMP/dev.env.f28bak" "$REPO/.pi/team/state/dev.env" || rm -f "$REPO/.pi/team/state/dev.env"
 $TEAM watchdog-status >"$TMP/wd.log" 2>&1 && ok "watchdog-status 退出码 0" || bad "watchdog-status 失败"
 $TEAM paths >"$TMP/paths.log" 2>&1 && assert_has "$TMP/paths.log" "main_root" "paths 输出主工作树" || bad "paths 失败"
 $TEAM up --print >"$TMP/pmprompt.log" 2>&1 && assert_has "$TMP/pmprompt.log" "team digest" "up --print 输出 PM 开场提示词" || bad "up --print 失败"
