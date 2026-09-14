@@ -153,6 +153,13 @@ team_load_config() {
   # TEAM_REQUIRE_MAGIC_CONTEXT=0 降级为只警告（环境特殊 / 临时验查时用）。
   TEAM_REQUIRE_MAGIC_CONTEXT="${TEAM_REQUIRE_MAGIC_CONTEXT:-1}"
   TEAM_PI_SETTINGS_FILE="${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}"
+  # M4.3：会话规模守卫（复用大会话 + 小窗口模型 = 必然 wedge；现场见 DECISIONS D9 事件 A）
+  TEAM_PI_AGENT_DIR="${TEAM_PI_AGENT_DIR:-$(dirname "$TEAM_PI_SETTINGS_FILE")}"  # Pi 的 agent 目录（sessions/ 与模型目录都在它下面）
+  TEAM_MODEL_WINDOWS="${TEAM_MODEL_WINDOWS:-}"                    # "provider/model=272000 …" 显式覆盖窗口（Pi 目录解析不到时用）
+  TEAM_SESSION_WARN_TOKENS="${TEAM_SESSION_WARN_TOKENS:-200000}"  # 窗口解析不到时的保守阈值（tokens）
+  TEAM_DISPATCH_VERIFY_SEC="${TEAM_DISPATCH_VERIFY_SEC:-8}"       # 派单后等「启动证据」的秒数（M4.3 B）
+  TEAM_DISPATCH_ALIVE_SEC="${TEAM_DISPATCH_ALIVE_SEC:-1}"         # 拿到启动证据后再确认「进程还在」的秒数（只对内置 Pi；0=跳过）
+  TEAM_SQUASH_LOOKBACK="${TEAM_SQUASH_LOOKBACK:-200}"             # 判定「squash 已合并」时回看保护分支的提交数
   # 规格管理（依赖）：OpenSpec 负责“为什么改/改成什么”，teamsmith 不再长第二套 spec 体系。
   # 两个键分别管「CLI 能不能解析」与「项目里的 spec 根目录存不存在」。
   TEAM_REQUIRE_OPENSPEC="${TEAM_REQUIRE_OPENSPEC:-1}"
@@ -374,7 +381,11 @@ team_state_get() { # <agent> <key> [default]
   return 0
 }
 
-team_state_clear() { rm -f "$TEAM_STATE_DIR/$1.env"; }
+team_state_clear() {
+  rm -f "$TEAM_STATE_DIR/$1.env"
+  # M4.3 B：启动证据文件也属于这个 agent 的运行时状态（teardown/close 时一起清）
+  rm -f "$TEAM_STATE_DIR/dispatch-$1.spawn"
+}
 
 # ---------------------------------------------------------------- tmux
 team_tmux_enabled() { [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ]; }
@@ -917,6 +928,143 @@ team_pm_can_restart() {
   fi
   printf '%s %s\n' "$now" "$(team_timestamp)" >> "$log"
   return 0
+}
+
+# ---------------------------------------------------------------- agent 会话与模型窗口（M4.3）
+# 事故（DECISIONS D9 事件 A）：verify 的会话累积到 ~361k tokens（JSONL 1.6MB），用 272k 窗口的模型重派 →
+# 立刻 `Context full` + `Connection error` 循环，而 roster 仍显示「pi 在跑」——PM 只能靠读 pane 才发现。
+# 这里的零件让「会话大小 vs 模型窗口」在**派单时**和**状态视图里**都看得见。代价约定：
+#   * 只 stat 会话 JSONL 的**字节数**，不读内容（roster/ps 每次渲染都会用到它）；
+#   * token ≈ 字节 / 4 —— 粗糙估算，只用来发现**数量级**不匹配，别当精确值。
+team_pi_agent_dir() { # Pi 的 agent 目录（sessions/ 与模型目录都在它下面）；跟着 TEAM_PI_SETTINGS_FILE 走
+  printf '%s\n' "${TEAM_PI_AGENT_DIR:-$(dirname "${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}")}"
+}
+
+team_pi_session_dir() { # <worktree> → Pi 给这个 cwd 用的会话目录（cwd 编码规则与 Pi 一致）
+  local wt="${1:-}" safe
+  safe="$(printf '%s' "$wt" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
+  printf '%s/sessions/--%s--\n' "$(team_pi_agent_dir)" "$safe"
+}
+
+team_file_bytes() { # <file> → 字节数（stat；不支持时退回 wc -c）
+  local f="$1" n
+  n="$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) printf '0\n' ;; *) printf '%s\n' "$n" ;; esac
+}
+
+team_session_files() { # <session-id> <worktree> → 该会话的 JSONL（同 id 可能建过多次）
+  local sid="${1:-}" wt="${2:-}" d f
+  [ -n "$sid" ] || return 0
+  d="$(team_pi_session_dir "$wt")"
+  [ -d "$d" ] || return 0
+  for f in "$d"/*_"$sid".jsonl; do [ -f "$f" ] && printf '%s\n' "$f"; done
+  return 0
+}
+
+team_session_file() { # <session-id> <worktree> → 最大的那份（没有 → 非 0）
+  local f best="" b bestb=-1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    b="$(team_file_bytes "$f")"
+    if [ "$b" -gt "$bestb" ]; then best="$f"; bestb="$b"; fi
+  done < <(team_session_files "${1:-}" "${2:-}")
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
+team_session_bytes() { # <session-id> <worktree> → 字节数（0 = 没有会话文件）
+  local f; f="$(team_session_file "${1:-}" "${2:-}" 2>/dev/null || true)"
+  if [ -n "$f" ]; then team_file_bytes "$f"; else printf '0\n'; fi
+}
+
+team_session_tokens_est() { # <bytes> → token 估算（字节/4；粗糙，够发现数量级不匹配）
+  local b="${1:-0}"
+  case "$b" in ''|*[!0-9]*) b=0 ;; esac
+  printf '%s\n' "$((b / 4))"
+}
+
+team_tokens_human() { # <tokens> → 361k / 1.0M / 512 / ?
+  local t="${1:-0}"
+  case "$t" in ''|*[!0-9]*) printf '?\n'; return 0 ;; esac
+  if [ "$t" -ge 1000000 ]; then awk -v t="$t" 'BEGIN{printf "%.1fM", t/1000000}'
+  elif [ "$t" -ge 1000 ]; then printf '%dk' $(((t + 500) / 1000))
+  else printf '%d' "$t"; fi
+  printf '\n'
+}
+
+# 模型窗口（tokens）：TEAM_MODEL_WINDOWS 显式覆盖 → Pi 的模型目录（models.json / models-store.json）。
+# 解析不到 → **空**：调用方必须明说自己不知道并退回保守阈值，绝不猜一个数字出来
+# （猜错会让守卫误拦合法派单，或者误放行一个必然 wedge 的组合）。
+team_model_window() { # <provider/model 或 model>
+  local want="${1:-}" pair pat w
+  [ -n "$want" ] || return 0
+  for pair in $(printf '%s' "${TEAM_MODEL_WINDOWS:-}" | tr '\n\t' '  '); do
+    case "$pair" in *=*) ;; *) continue ;; esac
+    pat="${pair%=*}"; w="${pair#*=}"
+    case "$w" in ''|*[!0-9]*) continue ;; esac
+    case "$want" in "$pat"|*/"$pat") printf '%s\n' "$w"; return 0 ;; esac
+  done
+  team_model_window_from_pi "$want"
+}
+
+# 从 Pi 的模型目录解析窗口：models.json（providers.<p>.models[]）与 models-store.json（<p>.models[]）。
+# 宽容的 awk 解析（两种形状都认：provider 键在缩进 ≤ 4 的对象键上，id/contextWindow 同级）；
+# 任何解析不到的情况返回空 —— 不猜。
+team_model_window_from_pi() { # <provider/model>
+  local want="${1:-}" prov model f got
+  [ -n "$want" ] || return 0
+  case "$want" in */*) prov="${want%%/*}"; model="${want##*/}" ;; *) prov=""; model="$want" ;; esac
+  for f in "$(team_pi_agent_dir)/models.json" "$(team_pi_agent_dir)/models-store.json"; do
+    [ -f "$f" ] || continue
+    got="$(awk -v want_prov="$prov" -v want_model="$model" '
+      function lvl(s) { return index(s, "\"") - 1 }
+      function keyof(s) { if (s !~ /^[ \t]*"[^"]+"/) return ""; sub(/^[ \t]*"/, "", s); sub(/".*$/, "", s); return s }
+      function valof(s) { if (s !~ /:[ \t]*"/) return ""; sub(/^[^:]*:[ \t]*"/, "", s); sub(/".*$/, "", s); return s }
+      function numof(s) { if (s !~ /:[ \t]*[0-9]/) return ""; sub(/^[^:]*:[ \t]*/, "", s); sub(/[^0-9].*$/, "", s); return s }
+      function field_str(s, key,   t) { if (!match(s, "\"" key "\"[ \t]*:[ \t]*\"")) return ""; t = substr(s, RSTART + RLENGTH); sub(/".*$/, "", t); return t }
+      function field_num(s, key,   t) { if (!match(s, "\"" key "\"[ \t]*:[ \t]*[0-9]")) return ""; t = substr(s, RSTART + RLENGTH - 1); sub(/[^0-9].*$/, "", t); return t }
+      BEGIN { prov = ""; id = ""; idlv = -1 }
+      {
+        # 紧凑写法：整个 model 对象在一行里（{"id": "…", … "contextWindow": N}）
+        if ($0 ~ /"id"[ \t]*:/ && $0 ~ /"contextWindow"[ \t]*:/) {
+          mid = field_str($0, "id"); mn = field_num($0, "contextWindow")
+          if (mid != "" && mn != "" && mid == want_model && (want_prov == "" || prov == want_prov || index($0, "\"" want_prov "\"") > 0)) { print mn; exit }
+          next
+        }
+        k = keyof($0)
+        if (k == "") next
+        if ($0 ~ /\{[ \t]*$/ && k != "providers" && lvl($0) <= 4) { prov = k; id = ""; idlv = -1; next }
+        if (k == "id") { id = valof($0); idlv = lvl($0); next }
+        if (k == "contextWindow" && id != "" && lvl($0) == idlv) {
+          n = numof($0)
+          if (n != "" && id == want_model && (want_prov == "" || prov == want_prov)) { print n; exit }
+        }
+      }' "$f" 2>/dev/null || true)"
+    if [ -n "$got" ]; then printf '%s\n' "$got"; return 0; fi
+  done
+  return 0
+}
+
+# 一个 agent 的「模型 · 会话大小」原始列：model<TAB>tokens<TAB>window<TAB>bytes<TAB>file
+team_agent_session_cols() { # <agent>
+  local a="$1" wt sid model f b
+  wt="$(team_agent_worktree "$a")"
+  model="$(team_state_get "$a" model "$(team_agent_model "$a")")"
+  sid="$TEAM_SESSION-$a"
+  f="$(team_session_file "$sid" "$wt" 2>/dev/null || true)"
+  b=0; [ -n "$f" ] && b="$(team_file_bytes "$f")"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$model" "$(team_session_tokens_est "$b")" "$(team_model_window "$model")" "$b" "${f:-}"
+}
+
+# 人看的会话大小："361k/272k ⚠"（无会话 → "-"；窗口解析不到 → "361k/?"）
+team_session_size_text() { # <tokens> <window>
+  local t="${1:-0}" w="${2:-}"
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac
+  [ "$t" -gt 0 ] || { printf '%s\n' '-'; return 0; }
+  if [ -n "$w" ]; then
+    if [ "$t" -gt "$w" ]; then printf '%s/%s ⚠\n' "$(team_tokens_human "$t")" "$(team_tokens_human "$w")"
+    else printf '%s/%s\n' "$(team_tokens_human "$t")" "$(team_tokens_human "$w")"; fi
+  else printf '%s/?\n' "$(team_tokens_human "$t")"; fi
 }
 
 # ---------------------------------------------------------------- 门禁
@@ -1757,14 +1905,18 @@ team_agent_summary_ref() { # <前一个字符> <后一个字符> <summary 文件
 #       {extra_args} → 原样插入（引号由模板作者负责）；
 #       {summary} → 文件读取引用（见 team_agent_summary_ref，摘要永远是数据）。
 # **单趟从左到右扫描**：插入的值不会再被当模板扫一遍（{extra_args} 里写 {cwd} 也不会二次展开）。
-team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_file> [<summary_file>] [<summary_text>]
-  local kind="$1" tpl="$2" agent="$3" sid="$4" wt="$5" prompt_file="$6" sfile="${7-}" stext="${8-}"
+team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_file> [<summary_file>] [<summary_text>] [<model>]
+  local kind="$1" tpl="$2" agent="$3" sid="$4" wt="$5" prompt_file="$6" sfile="${7-}" stext="${8-}" model_arg="${9-}"
   local bad tok val model provider out="" head prev next
   bad="$(team_agent_bogus_tokens "$kind" "$tpl")"
   if [ -n "$bad" ]; then
     team_die "$(team_agent_kind_var "$kind") 里有未知占位符（含空格/双花括号/引号等畸形写法）：$(printf '%s' "$bad" | tr '\n' ' ')（支持：$(team_agent_support_list "$kind")）$(team_agent_bogus_hint "$bad")"
   fi
-  model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
+  # M4.3：{model}/{provider} 用**本次派单选的**模型（dispatch 传入），不再回读 state ——
+  # 旧行为靠 state，而 state 是在启动之后才写的，所以 `--model` 在“第一次派单/换模型”时
+  # 会被静默忽略：派单印着 sub2api，实际拉起来的是默认模型（team_agent_launch_cmd 同理）。
+  model="$model_arg"
+  [ -n "$model" ] || model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
   provider="${model%%/*}"
   while [ -n "$tpl" ]; do
     case "$tpl" in
@@ -1802,13 +1954,14 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
 
 # 启动命令：空 TEAM_AGENT_CMD → 内置 Pi（默认路径，输出与历史逐字节一致）；否则展开模板。
 # 提示词通过窗口 harness 的 argv[0]（shell 里的 "$0"）传入，模板里用 {prompt} 取。
-team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file>
-  local agent="$1" sid="$2" wt="$3" prompt_file="$4" model pi_bin piargs
+team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file> [model]
+  local agent="$1" sid="$2" wt="$3" prompt_file="$4" model="${5:-}" pi_bin piargs
   if [ -n "${TEAM_AGENT_CMD:-}" ]; then
-    team_agent_expand launch "$TEAM_AGENT_CMD" "$agent" "$sid" "$wt" "$prompt_file"
+    team_agent_expand launch "$TEAM_AGENT_CMD" "$agent" "$sid" "$wt" "$prompt_file" "" "" "$model"
     return 0
   fi
-  model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
+  # M4.3：显式传入的模型优先（否则回读 state —— state 是启动后才写的，第一次派单会拿到旧值）
+  [ -n "$model" ] || model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
   pi_bin="$(team_pi_bin_path)"
   piargs="$(team_pi_args "$model")"
   printf '%s %s--session-id %q "$0"' "$(printf '%q' "$pi_bin")" "$piargs" "$sid"

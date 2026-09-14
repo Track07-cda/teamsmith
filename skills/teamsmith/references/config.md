@@ -42,6 +42,12 @@ literals or simple `$VAR`.
 | `TEAM_WORKTREES_DIR` | `.worktrees` | long-lived worktree directory (also how "this is an agent session" is recognised) |
 | `TEAM_PROTECTED_BRANCH` | `main` | the branch only the PM may advance |
 | `TEAM_REMOTE` | `origin` | remote name (present even in local mode, used when pushing branches) |
+| `TEAM_PI_AGENT_DIR` | the directory of `TEAM_PI_SETTINGS_FILE` | where Pi keeps `sessions/` and its model catalog — the only place the session-size guard and the model windows are read from (read-only: `stat` of the session file, the catalog files) |
+| `TEAM_MODEL_WINDOWS` | empty | explicit context windows, `provider/model=272000` space separated (also accepts a bare model name); wins over Pi's catalog and covers providers Pi does not know |
+| `TEAM_SESSION_WARN_TOKENS` | `200000` | conservative threshold used when the selected model's window cannot be resolved (the message says so instead of guessing) |
+| `TEAM_DISPATCH_VERIFY_SEC` | `8` | how long a dispatch waits for the pane's launch proof before it kills the window and retries |
+| `TEAM_DISPATCH_ALIVE_SEC` | `1` | after the launch proof, how long to observe whether the agent is still in the window (built-in Pi only; `0` = skip the observation). A subsequent exit is reported as a warning, never as a failed dispatch |
+| `TEAM_SQUASH_LOOKBACK` | `200` | how many commits on the protected branch are scanned when deciding "this branch was already squash-merged" (one tree comparison per agent row; a heuristic, see workflows.md) |
 
 ### agent adapter (workers may be any TUI agent; leave all four empty for the built-in Pi behaviour)
 

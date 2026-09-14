@@ -31,7 +31,7 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
 
   ── 派单与协作 ─────────────────────────────────────────────
   add-agent <a> [--model m]    建长期 worktree（分支 agent/<a>）
-  dispatch <a> <ID> <task-file> [--model m] [--fresh] [--print]
+  dispatch <a> <ID> <task-file> [--model m] [--fresh] [--allow-overflow] [--print]
                   在 tmux 窗口起一个交互式 pi（默认复用会话，可断点续跑）
   say <a> "<一句话>"           往 agent 窗口发消息
   notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口）

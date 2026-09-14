@@ -1015,6 +1015,171 @@ else
   printf '  (跳过非 Pi 端到端断言：没有 tmux)\n'
 fi
 
+# ---------------------------------------------------------------- 6h. 派单：会话规模 + 启动证据（M4.3 A/B）
+section "6h · 派单：会话规模 vs 模型窗口（M4.3 A）+ 启动证据（M4.3 B）"
+
+# 夹具：Pi 的 agent 目录（模型目录：sub2api/gpt-5.6-sol = 272k，big/wide = 1000k）
+#      + 一个 1.6MB 的 dev 会话（≈400k tok —— 现场 D9 事件 A 的 361k 同一个数量级）
+M43_AGENT_DIR="$TMP/piagent-m43"
+M43_SESS_DIR="$M43_AGENT_DIR/sessions/--$(printf '%s' "$REPO/.worktrees/dev" | sed -e 's|^/||' -e 's|[/\\:]|-|g')--"
+mkdir -p "$M43_SESS_DIR"
+cat > "$M43_AGENT_DIR/models.json" <<'JSON'
+{
+  "providers": {
+    "sub2api": {
+      "name": "sub2api",
+      "models": [
+        { "id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "contextWindow": 272000 }
+      ]
+    },
+    "big": {
+      "name": "big",
+      "models": [
+        { "id": "wide", "name": "Wide", "contextWindow": 1000000 }
+      ]
+    }
+  }
+}
+JSON
+head -c 1600000 /dev/zero | tr '\0' 'x' > "$M43_SESS_DIR/2026-01-01T00-00-00-000Z_$SESSION-dev.jsonl"
+M43_MODEL="$(sed -n 's/^model=//p' "$REPO/.pi/team/state/dev.env" 2>/dev/null | head -1)"
+[ -n "$M43_MODEL" ] || M43_MODEL="$(sed -n 's/^TEAM_DEFAULT_MODEL="\([^"]*\)".*/\1/p' "$REPO/.pi/team/config.sh" 2>/dev/null | head -1)"
+m43() { env TEAM_PI_AGENT_DIR="$M43_AGENT_DIR" "$@"; }
+
+# A1：小窗口模型 + 大会话 → 默认拒绝（旧行为：欣然派出去，然后 agent 陷在 Context full 循环里）
+if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol >"$TMP/m43-a1.log" 2>&1; then
+  bad "M4.3 A1：大会话 + 小窗口模型应当被拒"
+else ok "M4.3 A1：大会话 + 小窗口模型被拒（不再派出去等 wedge）"; fi
+assert_has "$TMP/m43-a1.log" "拒绝复用这个会话" "A1：拒绝理由说清楚是「复用会话」"
+assert_has "$TMP/m43-a1.log" "272000" "A1：报出选中模型的窗口（来自 Pi 模型目录，不是猜的）"
+assert_has "$TMP/m43-a1.log" "÷ 4" "A1：说清 token 是粗糙估算（JSONL 字节 ÷ 4）"
+assert_has "$TMP/m43-a1.log" "--fresh" "A1：给出 --fresh 出路"
+assert_has "$TMP/m43-a1.log" "--allow-overflow" "A1：给出显式放行的出路"
+assert_not "$TMP/m43-a1.log" "含启动校验" "A1：没有真的派单"
+
+# A2：--print 也走守卫（不生成一份注定 wedge 的计划）
+if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --print >"$TMP/m43-a2.log" 2>&1; then
+  bad "M4.3 A2：--print 也应被守卫拦住"
+else ok "M4.3 A2：--print 也被拒（不会先打印一份注定 wedge 的计划）"; fi
+
+# A3：窗口更大的模型 → 允许复用同一个会话
+if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model big/wide --print >"$TMP/m43-a3.log" 2>&1; then
+  ok "M4.3 A3：大窗口模型可以复用同一会话"
+else bad "M4.3 A3：大窗口模型被误拒"; cat "$TMP/m43-a3.log"; fi
+assert_match "$TMP/m43-a3.log" "--session-id $SESSION-dev[ '\"]" "A3：复用的是同一个 session id"
+
+# A4：--allow-overflow 是显式且醒目的（不是静默放行）
+if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --allow-overflow --print >"$TMP/m43-a4.log" 2>&1; then
+  ok "M4.3 A4：--allow-overflow 显式放行"
+else bad "M4.3 A4：--allow-overflow 仍被拒"; fi
+assert_has "$TMP/m43-a4.log" "你显式放行了偏大的会话" "A4：放行是醒目的警告（不是静默）"
+
+# A5：--fresh = 新会话，不看历史
+if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --fresh --print >"$TMP/m43-a5.log" 2>&1; then
+  ok "M4.3 A5：--fresh 不受历史会话大小影响"
+else bad "M4.3 A5：--fresh 被误拒"; fi
+assert_match "$TMP/m43-a5.log" "--session-id $SESSION-dev-[0-9]+" "A5：--fresh 用带时间戳的新 session id"
+
+# A6：窗口解析不到 → 保守阈值，并且明说「我不知道」
+if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model nope/unknown >"$TMP/m43-a6.log" 2>&1; then
+  bad "M4.3 A6：未知窗口 + 大会话应当被拒"
+else ok "M4.3 A6：未知窗口按保守阈值拒绝"; fi
+assert_has "$TMP/m43-a6.log" "解析不到 nope/unknown 的窗口" "A6：明说窗口解析不到"
+assert_has "$TMP/m43-a6.log" "保守阈值 ${TEAM_SESSION_WARN_TOKENS:-200000}" "A6：报出用的是保守阈值（不小于 200k）"
+
+# A7：TEAM_MODEL_WINDOWS 显式覆盖 → 以项目配置为准
+if m43 TEAM_MODEL_WINDOWS="sub2api/gpt-5.6-sol=1000000" $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --print >"$TMP/m43-a7.log" 2>&1; then
+  ok "M4.3 A7：TEAM_MODEL_WINDOWS 可显式覆盖窗口"
+else bad "M4.3 A7：显式窗口覆盖没生效"; cat "$TMP/m43-a7.log"; fi
+
+# A8（子发现 A′）：--model 必须在**第一次派单**就真的生效。旧实现回读 state（state 在启动后才写）→
+#    派单日志印 sub2api，实际拉起的是 state 里的旧/默认模型 —— 而 A 的守卫正是按那个模型在判。
+m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --allow-overflow --print >"$TMP/m43-a8.log" 2>&1 || true
+assert_has "$TMP/m43-a8.log" "--provider sub2api --model gpt-5.6-sol" "A8：启动命令用的是本次 --model（不是 state 里的旧模型）"
+
+# A9：roster / ps 把「会话大小 vs 模型窗口」放在模型旁边
+m43 TEAM_MODEL_WINDOWS="$M43_MODEL=272000" $TEAM roster >"$TMP/m43-roster.log" 2>&1 && ok "M4.3 A9：roster 退出码 0" || bad "M4.3 A9：roster 失败"
+assert_has "$TMP/m43-roster.log" "$M43_MODEL" "A9：roster 显示 agent 的模型"
+assert_has "$TMP/m43-roster.log" "400k/272k ⚠" "A9：roster 显示已用/窗口并标出超窗"
+assert_has "$TMP/m43-roster.log" "会话=估算 tok/模型窗口" "A9：roster 说明会话数字的口径"
+m43 TEAM_MODEL_WINDOWS="$M43_MODEL=272000" $TEAM ps >"$TMP/m43-ps.log" 2>&1 || true
+assert_has "$TMP/m43-ps.log" "agent 会话（估算 tok / 模型窗口）" "A9：ps 有会话大小区块"
+assert_has "$TMP/m43-ps.log" "400k/272k" "A9：ps 显示 dev 的会话大小"
+
+# B1（楔死现场，D9 事件 B）：new-window 声称成功，命令却被卡死的进程吞掉 —— 什么都不跑。
+# shim 语义：new-window「建成」窗口（state 文件在）但从不跑我们的命令；kill-window 能清掉它。
+mkdir -p "$TMP/m43-wedge"
+: > "$TMP/m43-wedge.log"
+: > "$TMP/m43-wedge-pids.log"
+M43_WEDGE_WIN="$TMP/m43-wedge-window"
+rm -f "$M43_WEDGE_WIN"
+cat > "$TMP/m43-wedge/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP/m43-wedge.log"
+case " \$* " in
+  *" list-windows "*)
+      [ -f "$M43_WEDGE_WIN" ] && printf 'dev\n'
+      exit 0 ;;
+  *" new-window "*)
+      : > "$M43_WEDGE_WIN"
+      sleep 300 >/dev/null 2>&1 &
+      printf '%s\n' "\$!" >> "$TMP/m43-wedge-pids.log"
+      exit 0 ;;
+  *" kill-window "*)
+      rm -f "$M43_WEDGE_WIN"
+      exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP/m43-wedge/tmux"
+if env PATH="$TMP/m43-wedge:$PATH" TEAM_PI_AGENT_DIR="$M43_AGENT_DIR" TEAM_DISPATCH_VERIFY_SEC=1 TEAM_DISPATCH_ALIVE_SEC=0 \
+     $TEAM dispatch dev T1.1 "$TASKFILE" --fresh >"$TMP/m43-b1.log" 2>&1; then
+  bad "M4.3 B1：楔死的窗口不该报成功"
+else ok "M4.3 B1：派单进楔死窗口 → 如实报失败"; fi
+assert_has "$TMP/m43-b1.log" "派单已发出但未能确认启动" "B1：标题就是「未能确认启动」（不是成功）"
+assert_has "$TMP/m43-b1.log" "启动证据" "B1：说清缺的是什么证据"
+assert_has "$TMP/m43-b1.log" "已重试 1 次" "B1：按约定重试了一次"
+assert_has "$TMP/m43-b1.log" "杀掉" "B1：说明窗口被清掉（不留半启动现场）"
+assert_not "$TMP/m43-b1.log" "含启动校验" "B1：没有假成功"
+assert_eq "B1：new-window 试了两次（首发 + 重试）" "$(grep -c -- 'new-window' "$TMP/m43-wedge.log" 2>/dev/null | tr -d ' ')" "2"
+assert_eq "B1：残留窗口被显式 kill-window（失败路径也是真做，不是只在文案里说）" "$(grep -c -- 'kill-window' "$TMP/m43-wedge.log" 2>/dev/null | tr -d ' ')" "2"
+assert_eq "B1：失败后的窗口终态 = 不存在" "$(env PATH="$TMP/m43-wedge:$PATH" tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr -d ' \n')" ""
+while IFS= read -r m43_wp; do case "$m43_wp" in ''|*[!0-9]*) ;; *) kill "$m43_wp" 2>/dev/null || true ;; esac; done < "$TMP/m43-wedge-pids.log"
+
+# B2（真窗口 + 真启动证据）：只在有 tmux 时跑
+if [ "$FAST" = "1" ]; then
+  fast_skip "6h·派单启动证据（真窗口）" "要真实 tmux 窗口 + 假 pi 进程（现场看窗口 harness 写下的证据）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  printf '#!/usr/bin/env bash\nsleep 120\n' > "$FAKE/pi-m43-live"
+  chmod +x "$FAKE/pi-m43-live"
+  if env TEAM_PI_BIN="$FAKE/pi-m43-live" TEAM_PI_AGENT_DIR="$M43_AGENT_DIR" TEAM_DISPATCH_VERIFY_SEC=6 TEAM_DISPATCH_ALIVE_SEC=2 \
+       $TEAM dispatch dev T1.1 "$TASKFILE" --fresh >"$TMP/m43-b2.log" 2>&1; then
+    ok "M4.3 B2：真窗口派单成功"
+  else bad "M4.3 B2：真窗口派单失败"; cat "$TMP/m43-b2.log"; fi
+  assert_has "$TMP/m43-b2.log" "含启动校验" "B2：成功报告写明含启动校验"
+  assert_match "$TMP/m43-b2.log" "proof=spawn pid=[0-9]+" "B2：成功报告带非空启动证据"
+  assert_file "$REPO/.pi/team/state/dispatch-dev.spawn" "B2：启动证据落盘（state/dispatch-dev.spawn）"
+  # B3：agent 秒退（内置 Pi 路径）→ 启动证据仍成立（harness 跑了），所以不谎报失败；
+  # 但必须明确说出来「窗口里的 agent 已经退出」，否则 PM 会以为它在干活。
+  printf '#!/usr/bin/env bash\nexit 3\n' > "$FAKE/pi-m43-dead"
+  chmod +x "$FAKE/pi-m43-dead"
+  if env TEAM_PI_BIN="$FAKE/pi-m43-dead" TEAM_PI_AGENT_DIR="$M43_AGENT_DIR" TEAM_DISPATCH_VERIFY_SEC=4 TEAM_DISPATCH_ALIVE_SEC=1 \
+       $TEAM dispatch dev T1.1 "$TASKFILE" --fresh >"$TMP/m43-b3.log" 2>&1; then
+    ok "M4.3 B3：有启动证据 → 派单成立（不因 agent 秒退而谎报失败）"
+  else bad "M4.3 B3：有启动证据时不该报失败"; cat "$TMP/m43-b3.log"; fi
+  assert_has "$TMP/m43-b3.log" "含启动校验" "B3：成功报告写明含启动校验"
+  assert_has "$TMP/m43-b3.log" "已经退出" "B3：agent 秒退被明确说出来（不假装一切正常）"
+  assert_has "$TMP/m43-b3.log" "resume" "B3：给出续跑办法"
+  assert_has "$REPO/.pi/team/state/dev.env" "task=T1.1" "B3：派单成立时仍写下任务记录（否则 PM 无法续跑）"
+  # 恢复现场：让后面的段落看到的 dev 窗口和改造前一样（活着的假 pi）
+  sed -i 's|^TEAM_PI_BIN=.*|TEAM_PI_BIN="'"$FAKE/pi-sleep"'"|' "$REPO/.pi/team/config.sh"
+  env TEAM_PI_AGENT_DIR="$TMP/piagent-empty" $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1 \
+    || team_dim "  （恢复 dev 窗口失败：后续段落自己会重建）"
+else
+  printf '  (跳过真窗口启动证据断言：没有 tmux)\n'
+fi
+
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"
 $TEAM notify dev "blocked: 缺 dependency X" >/dev/null 2>&1 && ok "notify 退出码 0" || bad "notify 失败"
@@ -2115,6 +2280,59 @@ assert_has "$TMP/f19-legacy-read.log" "已过期" "F19：read 同时标注已过
 assert_has "$TMP/f19-legacy-read.log" "不会永生" "F19：read 说明登记值不可用、按默认算"
 unset TEAM_MEETINGS_DIR
 
+# ---------------------------------------------------------------- 11i. 信号诚实：草稿 vs squash 合并（M4.3 C/D）
+section "11i · 信号诚实：报告草稿不指 review、squash 合并不喊 push（M4.3 C/D）"
+
+# C 夹具（D9 事件 C 的形状）：报告只存在于 agent 工作区（未提交）—— `team review` 从分支 checkout
+# 里摘录报告，所以那个信号「早于可操作」。
+C43WT="$REPO/.worktrees/m43c"
+C43BR="task/M43C-demo"
+$TEAM task M43C --title "report draft demo" --agent dev >/dev/null 2>&1 || true
+git -C "$REPO" worktree add -q -b "$C43BR" "$C43WT" main >/dev/null 2>&1 || true
+mkdir -p "$C43WT/docs/team/reports"
+printf '# M43C · report draft demo\n\nagent: dev   status: DONE\n\n## Deliverables\n- draft\n' > "$C43WT/docs/team/reports/M43C-dev.md"
+$TEAM digest >"$TMP/m43c-draft.log" 2>&1 || bad "M4.3 C：digest（草稿）失败"
+assert_has "$TMP/m43c-draft.log" "report 未提交：先等 agent 交付" "C：未提交的草稿被明确标出"
+assert_not "$TMP/m43c-draft.log" "review M43C" "C：草稿不指向复验（checkout 里摘不到它）"
+assert_has "$TMP/m43c-draft.log" "M43C-dev" "C：草稿仍然被列出来（不静默丢）"
+git -C "$C43WT" add -A >/dev/null 2>&1 && git -C "$C43WT" commit -qm "docs(M43C): report" >/dev/null 2>&1
+$TEAM digest >"$TMP/m43c-committed.log" 2>&1 || bad "M4.3 C：digest（已提交）失败"
+assert_has "$TMP/m43c-committed.log" "review M43C" "C：提交后恢复指向复验（可操作）"
+assert_not "$TMP/m43c-committed.log" "report 未提交" "C：已提交的报告不再标草稿"
+# 清场：报告已提交会被算成「待复验」——别污染后面的巡检/看板断言
+git -C "$REPO" worktree remove --force "$C43WT" >/dev/null 2>&1 || true
+git -C "$REPO" branch -D "$C43BR" >/dev/null 2>&1 || true
+$TEAM board set M43C dropped >/dev/null 2>&1 || true
+
+# D 夹具（D9 事件 D）：PM 用 squash 把任务分支合进保护分支（local 模式的常规路径）——
+# 分支还带着原提交，于是「领先 N」与「收尾：提交并 push」会永久留着噪音。
+D43WT="$REPO/.worktrees/m43d"
+D43BR="task/M43D-demo"
+git -C "$REPO" worktree add -q -b "$D43BR" "$D43WT" main >/dev/null 2>&1 || true
+printf 'd43\n' > "$D43WT/m43d.txt"
+git -C "$D43WT" add -A >/dev/null 2>&1 && git -C "$D43WT" commit -qm "feat(M43D): demo" >/dev/null 2>&1
+TEAM_AGENTS=m43d $TEAM digest >"$TMP/m43d-before.log" 2>&1 || bad "M4.3 D：digest（合并前）失败"
+assert_has "$TMP/m43d-before.log" "领先 main 1" "D：未合并的分支照旧报「领先 main N」"
+assert_not "$TMP/m43d-before.log" "已合并（squash" "D：未合并的分支不会被说成已合并"
+if git -C "$REPO" merge --squash "$D43BR" >/dev/null 2>&1 && git -C "$REPO" commit -qm "M43D: demo (squash)" >/dev/null 2>&1; then
+  ok "D 夹具：squash 合并进 main（PM 的常规路径）"
+else bad "D 夹具：squash 合并失败"; fi
+TEAM_AGENTS=m43d $TEAM digest >"$TMP/m43d-after.log" 2>&1 || bad "M4.3 D：digest（squash 合并后）失败"
+assert_has "$TMP/m43d-after.log" "已合并（squash，内容一致）" "D：squash 合并后被认出来（内容一致）"
+assert_has "$TMP/m43d-after.log" "无需 push" "D：不再暗示要 push（内容已在保护分支）"
+assert_not "$TMP/m43d-after.log" "收尾：提交并 push" "D：不再给出「收尾：提交并 push」"
+assert_not "$TMP/m43d-after.log" "领先 main 1" "D：不再把已合并的分支报成待收尾的领先"
+TEAM_AGENTS=m43d $TEAM roster >"$TMP/m43d-roster.log" 2>&1 || bad "M4.3 D：roster 失败"
+assert_has "$TMP/m43d-roster.log" "已合并" "D：roster 把 squash 合并与真领先分开显示"
+# 正对照：分支上再落一个无关提交 → 回到诚实的「领先 N」（没把信号整体静音）
+printf 'more\n' >> "$D43WT/m43d.txt"
+git -C "$D43WT" commit -qam "feat(M43D): more" >/dev/null 2>&1
+TEAM_AGENTS=m43d $TEAM digest >"$TMP/m43d-extra.log" 2>&1 || bad "M4.3 D：digest（又领先）失败"
+assert_has "$TMP/m43d-extra.log" "领先 main 2" "D：分支又有内容时回到「领先 N」"
+assert_not "$TMP/m43d-extra.log" "已合并（squash" "D：tree 不同时不再说已合并"
+git -C "$REPO" worktree remove --force "$D43WT" >/dev/null 2>&1 || true
+git -C "$REPO" branch -D "$D43BR" >/dev/null 2>&1 || true
+
 # ---------------------------------------------------------------- 14b. 文档一致性（防回退）
 section "14b · 文档一致性：已删命令不得回潮（词边界 + 扫描范围 + 翻转自测）"
 
@@ -2292,6 +2510,8 @@ $TEAM up --print >"$TMP/pmprompt.log" 2>&1 && assert_has "$TMP/pmprompt.log" "te
 
 # ---------------------------------------------------------------- 13. notify 扩展（Node 直跑）
 section "13 · notify 扩展（去重 + 只在 worktree 触发）"
+# 注意：夹具里的 assistant 消息都带 stopReason（M4.3 E 起，“完成”）—— Pi 持久化的消息本来就带
+# （docs/session-format.md），旧夹具省了它；不带 stopReason 的消息不再算完成回合（见 13b）。
 if [ -n "$TS_RUNNER" ]; then
   cat > "$TMP/ext-test.mjs" <<'EOF'
 import { readFileSync, rmSync } from 'node:fs'
@@ -2318,7 +2538,7 @@ const inbox = join(root, 'docs/team/inbox/dev.md')
 rmSync(inbox, { force: true })
 const ctx = {
   cwd: wt,
-  sessionManager: { getEntries: () => [{ message: { role: 'assistant', content: [{ text: 'ALLDONE feature implemented' }] } }] },
+  sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text: 'ALLDONE feature implemented' }] } }] },
 }
 await handler({}, ctx)
 await handler({}, ctx)              // 去重窗口内，第二次必须被抑制
@@ -2331,7 +2551,7 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
   rmSync(inbox, { force: true })
   rmSync(join(root, '.pi/team/state/notify-dedup'), { force: true })
   const prefix = 'All gates are green. I delivered the parser fix; the remaining work on this branch is'
-  const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', content: [{ text }] } }] } })
+  const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text }] } }] } })
   for (const tail of [' the retry path.', ' the cache warm-up.', ' error mapping.']) await handler({}, ctxN(prefix + tail))
   const n = readFileSync(inbox, 'utf8').trim().split('\n').length
   if (n !== 3) { console.error(`FAIL: F17 三条不同简报被去重吞掉（期望 3 行，实际 ${n}）`); process.exit(20) }
@@ -2366,6 +2586,106 @@ else
   printf '  (跳过扩展测试：node 未启用类型剥离，且没有 bun/tsx)\n'
 fi
 
+# ---------------------------------------------------------------- 13b. 通知的语义（M4.3 E）
+# 现场（D9 事件 E）：dev 的一个长回合里发生内部生命周期事件（压缩/会话重启）→ settle 触发简报，
+# 而“最后消息”取到了**本轮开头**那句（"I'll start by reading the required files in order."），
+# PM 于是花一个周期诊断一个正在干活的 agent。通知只能意味着一件事：**回合结束、在等 PM**。
+section "13b · 通知只代表「回合结束」（M4.3 E：内部生命周期不得被广播成交付）"
+if [ -n "$TS_RUNNER" ]; then
+  # 假 tmux：只在 PATH 里，用来抓「敲 PM 窗口」的调用（E2 是必须敲的对照组，E1/E4 必须一次都不敲）
+  mkdir -p "$TMP/ext-shim"
+  cat > "$TMP/ext-shim/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP/ext-tmux.log"
+case "\$*" in
+  *pane_current_command*) printf 'pi\n' ;;
+  *window_name*) printf 'dev\n' ;;
+  *session_name*) printf '$SESSION\n' ;;
+esac
+exit 0
+EOF
+  chmod +x "$TMP/ext-shim/tmux"
+  : > "$TMP/ext-tmux.log"
+  cat > "$TMP/ext-e-test.mjs" <<'EOF'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+const [, , ext, root, wt] = process.argv
+process.env.TMUX_PANE = 'smoke-fake-pane'        // 有 pane 才会走“敲门”那条路
+const mod = await import(ext)
+const handlers = {}
+mod.default({
+  on: (name, fn) => { (handlers[name] ||= []).push(fn) },
+  registerCommand: () => {},
+  registerTool: () => {},
+  sendMessage: () => {},
+})
+const emit = async (name, ...args) => { for (const fn of handlers[name] ?? []) await fn(...args) }
+const inbox = join(root, 'docs/team/inbox/dev.md')
+const dedup = join(root, '.pi/team/state/notify-dedup')
+const knockLog = process.env.EXT_TMUX_LOG
+const reset = () => { rmSync(inbox, { force: true }); rmSync(dedup, { force: true }); writeFileSync(knockLog, '') }
+const cx = (list) => ({ cwd: wt, sessionManager: { getEntries: () => list.map(m => ({ message: m })) } })
+const lines = () => existsSync(inbox) ? readFileSync(inbox, 'utf8').trim().split('\n').filter(Boolean) : []
+const knocks = () => readFileSync(knockLog, 'utf8').split('\n').filter(l => l.includes('send-keys')).length
+const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exit(40) }
+const midTurn = { role: 'assistant', stopReason: 'toolUse', content: [{ text: "I'll start by reading the required files in order." }] }
+const earlier = { role: 'assistant', stopReason: 'stop', content: [{ text: 'EARLIER-DELIVERED-TEXT' }] }
+const finalAns = { role: 'assistant', stopReason: 'stop', content: [{ text: 'M43-DONE genuine turn end' }] }
+
+// E1：回合内压缩（内部生命周期）+ 回合未完成 → 不发简报、不敲门
+reset()
+await emit('before_agent_start', { type: 'before_agent_start', prompt: 'go' }, cx([]))
+await emit('session_compact', { type: 'session_compact', reason: 'threshold' }, cx([]))
+await emit('agent_settled', {}, cx([earlier, midTurn]))
+if (lines().length !== 0) fail('E1：内部生命周期中的 settle 仍写了收件箱')
+if (knocks() !== 0) fail('E1：内部生命周期中的 settle 仍在敲 PM 窗口')
+console.log('E1 回合内重启/压缩：没有收件箱行、没有敲门')
+
+// E2（对照组）：同一回合里压缩过，但回合真的完成 → 照常一行 + 敲门（不许过度抑制）
+reset()
+await emit('before_agent_start', { type: 'before_agent_start', prompt: 'go' }, cx([]))
+await emit('session_compact', { type: 'session_compact', reason: 'threshold' }, cx([]))
+await emit('agent_settled', {}, cx([midTurn, finalAns]))
+let ls = lines()
+if (ls.length !== 1) fail(`E2：完成的回合应当只有一行（实际 ${ls.length}）`)
+if (!ls[0].includes('[auto]')) fail('E2：完成的回合应带 [auto] 标签')
+if (!ls[0].includes('M43-DONE genuine turn end')) fail('E2：完成的回合应带它的最终文本')
+if (knocks() < 1) fail('E2：完成的回合应敲 PM 窗口（对照组）')
+console.log('E2 压缩过但已完成：一行 + 敲门（对照组）')
+
+// E3：被中断（Esc/错误）且没有生命周期事件 → 仍然告诉 PM，但绝不带摘要文本
+reset()
+await emit('before_agent_start', { type: 'before_agent_start', prompt: 'go' }, cx([]))
+await emit('agent_settled', {}, cx([earlier, midTurn]))
+ls = lines()
+if (ls.length !== 1) fail(`E3：被中断的回合仍应告诉 PM（期望 1 行，实际 ${ls.length}）`)
+if (!ls[0].includes('[auto·interrupted]')) fail('E3：被中断的回合必须显式标记，不能冒充交付')
+if (ls[0].includes('EARLIER-DELIVERED-TEXT') || ls[0].includes("I'll start by reading")) fail('E3：不许拿未完成回合的文本当摘要')
+console.log('E3 被中断：一行、显式标记、没有编造的摘要')
+
+// E4：session_start(reload) 也算内部生命周期 → 未完成的 settle 同样不发
+reset()
+await emit('before_agent_start', { type: 'before_agent_start', prompt: 'go' }, cx([]))
+await emit('session_start', { type: 'session_start', reason: 'reload' }, cx([]))
+await emit('agent_settled', {}, cx([midTurn]))
+if (lines().length !== 0) fail('E4：reload 之后的未完成 settle 仍写了收件箱')
+console.log('E4 reload 打断的回合：没有收件箱行')
+console.log('ext-e-ok')
+EOF
+  if env PATH="$TMP/ext-shim:$PATH" EXT_TMUX_LOG="$TMP/ext-tmux.log" \
+      $TS_RUNNER "$TMP/ext-e-test.mjs" "$SKILL_DIR/extension/team-notify.ts" "$REPO" "$REPO/.worktrees/dev" >"$TMP/ext-e.log" 2>&1; then
+    ok "扩展 E：内部生命周期不被广播成交付（runner=$TS_RUNNER）"
+  else
+    bad "M4.3 E 扩展测试失败（runner=$TS_RUNNER）"; cat "$TMP/ext-e.log"
+  fi
+  assert_has "$TMP/ext-e.log" "E1 回合内重启/压缩：没有收件箱行、没有敲门" "E1：存在压缩的未完成回合不发简报、不敲门"
+  assert_has "$TMP/ext-e.log" "E2 压缩过但已完成：一行 + 敲门（对照组）" "E2：同回合压缩但已完成 → 照常通知（不过度抑制）"
+  assert_has "$TMP/ext-e.log" "E3 被中断：一行、显式标记、没有编造的摘要" "E3：被中断的回合显式标记且不编造摘要"
+  assert_has "$TMP/ext-e.log" "E4 reload 打断的回合：没有收件箱行" "E4：reload 打断的回合不发简报"
+else
+  printf '  (跳过扩展 E 测试：node 未启用类型剥离，且没有 bun/tsx)\n'
+fi
+
 # ---------------------------------------------------------------- 14. teardown
 section "14 · teardown"
 $TEAM teardown --agent dev --purge >"$TMP/teardown.log" 2>&1 && ok "teardown 退出码 0" || bad "teardown 失败"
@@ -2391,7 +2711,7 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
-  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
+  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
              "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"

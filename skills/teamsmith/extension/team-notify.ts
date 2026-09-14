@@ -146,6 +146,23 @@ function tail(line: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
+/** 一条 assistant 消息里的文本（字符串或 content parts） */
+function messageText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map(part => (part && typeof part === 'object' && 'text' in part ? String((part as { text?: unknown }).text ?? '') : ''))
+      .join(' ')
+  }
+  return ''
+}
+
+/** 回合是否真的完成了：模型给了最终答复（stop/length）才算。
+ *  toolUse = 还在调工具（mid-turn）；aborted/error = 被中断。M4.3 E：只有前者能当「最后消息」。 */
+function isCompletedTurn(stopReason: string): boolean {
+  return stopReason === 'stop' || stopReason === 'length'
+}
+
 function log(line: string, cfg: Cfg): void {
   try {
     appendFileSync(cfg.log, `${new Date().toISOString()} ${line}\n`)
@@ -193,6 +210,27 @@ function isDuplicate(key: string, sec: number, stateDir: string): boolean {
 export default function (pi: ExtensionAPI) {
   let count = 0
 
+  // M4.3 E：内部生命周期事件（压缩 / 会话重启 / reload）会以**同一个回合里的 settle** 形式冒出来，
+  // 而那不是「agent 交回合了、在等 PM」（现场：PM 收到一条读起来像「agent 停了但还有未提交文件」的
+  // 通知，其实 agent 正 mid-turn）。这里记「本回合内发生过什么」，settle 时据此判断真伪。
+  // 回合边界用 before_agent_start（一次用户提交只发一次；继续/重试/压缩不走它）。
+  let lifecycleDuringTurn = ''
+  const noteLifecycle = (what: string): void => {
+    lifecycleDuringTurn = what
+  }
+  pi.on('before_agent_start', async () => {
+    lifecycleDuringTurn = ''
+  })
+  pi.on('session_start', async (event: any) => {
+    // startup 是正常开局；reload/new/resume/fork 都是「会话被换掉了」的内部事件
+    const reason = String(event?.reason ?? '')
+    if (reason && reason !== 'startup') noteLifecycle(`session_start(${reason})`)
+  })
+  pi.on('session_before_compact', async () => noteLifecycle('compaction'))
+  pi.on('session_compact', async (event: any) => noteLifecycle(`compaction(${String(event?.reason ?? '?')})`))
+  pi.on('session_compact_failed', async () => noteLifecycle('compaction-failed'))
+  pi.on('session_shutdown', async (event: any) => noteLifecycle(`session_shutdown(${String(event?.reason ?? '?')})`))
+
   pi.on('agent_settled', async (_event, ctx) => {
     const cwd = ctx.cwd ?? process.cwd()
     const root = findRoot(cwd)
@@ -230,40 +268,45 @@ export default function (pi: ExtensionAPI) {
       ? run('git', ['-C', cwd, 'rev-list', '--count', '@{upstream}..HEAD']) || '?'
       : run('git', ['-C', cwd, 'rev-list', '--count', 'HEAD', '--not', '--remotes']) || '?'
 
+    // 最后一条 assistant 消息才是「本轮的最后消息」；只有**完成了的回合**才允许当摘要（M4.3 E）。
+    // 旧实现在回合未完成时从末尾往前找第一条有文本的消息 —— 于是一轮长工具调用里的开头那句
+    // （"I'll start by reading the required files in order."）被当成结论报给 PM，读起来像「agent 停了」。
     let last = ''
+    let completed = false
     try {
-      const entries = ctx.sessionManager.getEntries() as Array<{ message?: { role?: string; content?: unknown } }>
+      const entries = ctx.sessionManager.getEntries() as Array<{ message?: { role?: string; stopReason?: string; content?: unknown } }>
       for (let i = entries.length - 1; i >= 0; i--) {
         const message = entries[i]?.message
         if (message?.role !== 'assistant') continue
-        const content = message.content
-        const text = typeof content === 'string'
-          ? content
-          : Array.isArray(content)
-            ? content
-                .map(part => (part && typeof part === 'object' && 'text' in part ? String((part as { text?: unknown }).text ?? '') : ''))
-                .join(' ')
-            : ''
-        if (text.trim()) {
-          last = tail(text, cfg.maxChars)
-          break
-        }
+        completed = isCompletedTurn(String(message.stopReason ?? ''))
+        if (completed) last = tail(messageText(message.content), cfg.maxChars)
+        break
       }
     } catch {
       /* 通知绝不能打断会话 */
     }
 
-    count++
     const summary = [
-      `[auto] agent:${agent}`,
+      `agent:${agent}`,
       id,
       `branch=${branch || '-'}`,
       `uncommitted=${dirty}`,
       `unpushed=${unpushed}${upstream ? '' : '(no-upstream)'}`,
     ].join(' · ')
+    // 未完成的回合 + 本轮内有过生命周期事件 = 内部重启/压缩的产物，不是交付：不发简报、不敲门。
+    // 未完成但**没有**生命周期事件（Esc / 错误）仍然告诉 PM，只是绝不带摘要（不编造「最后消息」）。
+    if (!completed && lifecycleDuringTurn) {
+      log(`skip settle (${lifecycleDuringTurn} 期间的 settle，回合未完成 → 不是交付) ${summary}`, cfg)
+      lifecycleDuringTurn = ''
+      return
+    }
+    lifecycleDuringTurn = ''
+
+    count++
+    const tag = completed ? '[auto]' : '[auto·interrupted]'
     // 去重键：整条末消息的「长度+指纹」，而不是它的前 60 个字符。
     // 老键（last[0:60]）会把三条开头相同、后半不同的简报当成同一条吞掉（M6.3 F17）。
-    const key = `${agent}|${summary}|${last.length}:${fingerprint(last)}`
+    const key = `${agent}|${tag}|${summary}|${last.length}:${fingerprint(last)}`
 
     const stateDir = join(root, '.pi/team/state')
     try {
@@ -276,12 +319,12 @@ export default function (pi: ExtensionAPI) {
       return
     }
 
-    const line = `${new Date().toISOString()} ${dirtyFlag}${summary}${last ? ` :: ${last}` : ''}`
+    const line = `${new Date().toISOString()} ${dirtyFlag}${tag} ${summary}${completed && last ? ` :: ${last}` : ''}`
     try {
       const dir = join(root, cfg.docsDir, 'inbox')
       mkdirSync(dir, { recursive: true })
       appendFileSync(join(dir, `${agent}.md`), `- ${line}\n`)
-      log(`inbox ${summary}`, cfg)
+      log(`inbox ${tag} ${summary}`, cfg)
     } catch (error) {
       log(`inbox write failed: ${String(error)}`, cfg)
     }
@@ -296,7 +339,7 @@ export default function (pi: ExtensionAPI) {
         log(`skip tmux notify (pm not running: pane=${paneCmd || 'missing'}) inbox only`, cfg)
         return
       }
-      const notice = `${dirtyFlag}${summary}${last ? `\n> ${last}` : ''}`
+      const notice = `${dirtyFlag}${tag} ${summary}${completed && last ? `\n> ${last}` : ''}`
       execFileSync('tmux', ['send-keys', '-t', target, '-l', notice], { timeout: 5000 })
       execFileSync('tmux', ['send-keys', '-t', target, 'Enter'], { timeout: 5000 })
     } catch {

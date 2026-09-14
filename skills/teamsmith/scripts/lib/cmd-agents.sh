@@ -262,13 +262,78 @@ team_check_worktree_for_task() { # <agent> <ID>
   return 0
 }
 
+# ---------------------------------------------------------------- 派单前的会话规模守卫（M4.3 A）
+# 复用大会话 + 小窗口模型 = 必然 wedge（现场见 DECISIONS D9 事件 A：361k tok 的会话配 272k 窗口的模型
+# → 立刻 Context full / 连接错误循环，而 roster 仍显示「pi 在跑」）。
+# 默认**拒绝**并给出 --fresh；确实要复用（例如换成窗口更大的模型）时用 --allow-overflow 显式放行。
+# 口径写入消息：token ≈ 会话 JSONL 字节 / 4（粗糙）；窗口解析不到时明说用的是保守阈值。
+team_guard_resume_session() { # <agent> <model> <sid> <worktree> <fresh> <allow-overflow>
+  local agent="$1" model="$2" sid="$3" wt="$4" fresh="${5:-0}" allow="${6:-0}"
+  [ "$fresh" = "1" ] && return 0                # --fresh = 新会话，历史留在旧文件里
+  local f b t w limit note mb
+  f="$(team_session_file "$sid" "$wt" 2>/dev/null || true)"
+  [ -n "$f" ] || return 0                         # 没有历史会话：没什么可复用的
+  b="$(team_file_bytes "$f")"
+  t="$(team_session_tokens_est "$b")"
+  [ "$t" -gt 0 ] || return 0
+  mb="$(awk -v b="$b" 'BEGIN{printf "%.1f", b/1048576}')"
+  w="$(team_model_window "$model")"
+  if [ -n "$w" ]; then
+    limit="$w"; note="模型 $model 的窗口 $w tok"
+  else
+    limit="${TEAM_SESSION_WARN_TOKENS:-200000}"
+    case "$limit" in ''|*[!0-9]*) limit=200000 ;; esac   # 配置写成垃圾值时退回默认，而不是静默不守
+    note="解析不到 $model 的窗口（Pi 的模型目录里没有它）→ 保守阈值 $limit tok"
+  fi
+  [ "$t" -gt "$limit" ] || return 0
+  local size="~$(team_tokens_human "$t") tok（估算：JSONL ${mb}MB ÷ 4，粗糙）"
+  if [ "$allow" = "1" ]; then
+    team_warn "你显式放行了偏大的会话：$size > $note"
+    team_dim "  若它 wedge（Context full / 连接错误循环）：杀掉窗口后用 --fresh 重派（roster 仍会显示「pi 在跑」）"
+    return 0
+  fi
+  team_err "拒绝复用这个会话：$size > $note"
+  team_dim "  会话文件：$f" >&2
+  team_dim "  复用它极可能直接 Context full / 连接错误循环，而 roster 还会显示「pi 在跑」" >&2
+  team_dim "  两条出路：" >&2
+  team_dim "    · 换新会话（推荐；旧历史仍在原文件里）：$TEAM_CLI dispatch $agent <ID> <task-file> --fresh" >&2
+  team_dim "    · 确认要复用（例如换成窗口更大的模型）：… --allow-overflow（显式放行会醒目警告）" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------- 派单启动校验（M4.3 B）
+# 启动证据：窗口里的 harness 在**跑 agent 之前**把 "<nonce> <pane-shell-pid>" 写进这个文件。
+# 为什么需要：旧实现只要 `tmux new-window` 返回 0 就报成功 —— 命令要是被一个卡死的进程的输入缓冲
+# 吃掉（现场 D9 事件 B：新 session id 从未出现、什么都没跑），派单照样「成功」。
+# nonce 只在**我们的 harness 真的在窗口里执行了**时才出现：换窗口、打字进旧进程、别的进程占着
+# 窗口都不会产生它（F30 的 spawn 证据同源）。
+team_dispatch_spawn_file() { printf '%s\n' "$TEAM_STATE_DIR/dispatch-$1.spawn"; }
+
+# 等启动证据。成功 → stdout 打印 pane shell 的 pid；失败 → 非 0。
+team_wait_launch_proof() { # <agent> <nonce> [秒]
+  local agent="$1" nonce="$2" wait="${3:-${TEAM_DISPATCH_VERIFY_SEC:-8}}" steps got pid i=0
+  case "$wait" in ''|*[!0-9]*) wait=8 ;; esac
+  steps=$((wait * 4)); [ "$steps" -gt 0 ] || steps=4
+  while [ "$i" -lt "$steps" ]; do
+    [ "$i" -gt 0 ] && sleep 0.25
+    got="$(head -1 "$(team_dispatch_spawn_file "$agent")" 2>/dev/null || true)"
+    case "$got" in
+      "$nonce "*) pid="${got#* }"
+        case "$pid" in ''|*[!0-9]*) : ;; *) printf '%s\n' "$pid"; return 0 ;; esac ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
 team_cmd_dispatch() {
   team_require_cmd tmux "agent 在 tmux 窗口里跑，PM 需要能旁观与追问"
-  local agent="" id="" taskfile="" model="" fresh=0 printonly=0
+  local agent="" id="" taskfile="" model="" fresh=0 printonly=0 overflow=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --model) model="${2:?}"; shift 2 ;;
       --fresh) fresh=1; shift ;;
+      --allow-overflow) overflow=1; shift ;;
       --print) printonly=1; shift ;;
       -*) team_usage_die "dispatch: 未知参数 $1" ;;
       *) if [ -z "$agent" ]; then agent="$1"
@@ -279,7 +344,7 @@ team_cmd_dispatch() {
     esac
   done
   [ -n "$agent" ] && [ -n "$id" ] && [ -n "$taskfile" ] || \
-    team_usage_die "dispatch <agent> <ID> <task-file> [--model m] [--fresh] [--print]"
+    team_usage_die "dispatch <agent> <ID> <task-file> [--model m] [--fresh] [--allow-overflow] [--print]"
   team_require_agent "$agent"
 
   # 任务书路径：先按 cwd 解析，再按主工作树解析
@@ -318,6 +383,8 @@ team_cmd_dispatch() {
 
   team_mem_guard || return 1
   team_model_guard "$model" || return 1
+  # M4.3 A：会话规模 vs 模型窗口（默认拒绝，--fresh / --allow-overflow 是出路）
+  team_guard_resume_session "$agent" "$model" "$sid" "$wt" "$fresh" "$overflow" || return 1
 
   # agent adapter：空配置 = 内置 Pi（老路径，报错文案也不变）
   team_agent_check_launch
@@ -340,7 +407,7 @@ team_cmd_dispatch() {
   prompt_file="$(team_agent_prompt_file "$agent" "$id")"
   mkdir -p "$TEAM_STATE_DIR"
   printf '%s\n' "$prompt" > "$prompt_file"
-  agent_cmd="$(team_agent_launch_cmd "$agent" "$sid" "$wt" "$prompt_file")"
+  agent_cmd="$(team_agent_launch_cmd "$agent" "$sid" "$wt" "$prompt_file" "$model")"
 
   # notify 模板坏掉时不阻塞派单，但必须说清楚（否则 worker 回合结束没人知道）；
   # 提示词那侧会用同一个判断把通知段换成「写进报告」（F8）。
@@ -366,16 +433,53 @@ team_cmd_dispatch() {
   fi
 
   team_tmux_ensure_session
-  if team_agent_window_exists "$agent"; then
-    team_warn "窗口 $TEAM_SESSION:$agent 已存在 → 替换（旧回合会被打断）"
-    tmux kill-window -t "$TEAM_SESSION:$agent" 2>/dev/null || true
-    sleep 1
+  # 启动 + 校验（M4.3 B）：最多两次（第一次没证据 → 杀窗口重试一次）。
+  # 只有拿到**本轮 nonce** 的启动证据才算「发出去了」；失败则如实报告并杀掉窗口（不留半启动现场）。
+  local marker nonce inner pid="" attempt=0 exited=""
+  marker="$(team_dispatch_spawn_file "$agent")"
+  mkdir -p "$TEAM_STATE_DIR"
+  while [ "$attempt" -lt 2 ] && [ -z "$pid" ]; do
+    attempt=$((attempt + 1))
+    if team_agent_window_exists "$agent"; then
+      if [ "$attempt" = "1" ]; then team_warn "窗口 $TEAM_SESSION:$agent 已存在 → 替换（旧回合会被打断）"
+      else team_dim "  （重试：窗口还在 → 先杀掉）"; fi
+      team_tmux_kill_window "$TEAM_SESSION:$agent" >/dev/null 2>&1 || true
+      sleep 0.5
+    fi
+    # 每轮换 nonce：证据必须来自这一轮的启动（上一轮留在盘上的不算数）
+    nonce="$(date +%s)-$$-$RANDOM-$attempt"
+    rm -f "$marker"
+    # 命令里写死绝对路径 + 短暂等待（窗口 shell 可能刚起、PATH/rc 还没就绪）；
+    # 拿到可执行文件后先写下 (nonce, pid)，再跑 agent —— 这一行就是「harness 真的执行了」的证据。
+    inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s; exec bash' \
+      "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd")"
+    tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
+    pid="$(team_wait_launch_proof "$agent" "$nonce" 2>/dev/null || true)"
+    # 额外观察（不复报成功就完事）：启动证据拿到后，agent 可能立刻退出（可执行文件/模型/provider 起不来）。
+    # 内置 Pi 路径下“秒退”值得一提；脚本型 adapter 秒退完成工作反而是正常的，不做这个观察。
+    # 绝不用它当失败依据：harness 确实跑了（有证据），而 TEAM_PI_BIN 也允许指向短命 CLI。
+    if [ -n "$pid" ] && [ -z "${TEAM_AGENT_CMD:-}" ]; then
+      local alive_sec="${TEAM_DISPATCH_ALIVE_SEC:-1}"
+      case "$alive_sec" in ''|*[!0-9]*) alive_sec=1 ;; esac
+      [ "$alive_sec" -gt 0 ] && sleep "$alive_sec"
+      team_pane_busy "$TEAM_SESSION:$agent" || exited="1"
+    fi
+  done
+  if [ -z "$pid" ]; then
+    team_err "派单已发出但未能确认启动：$([ -n "$exited" ] && printf '%s' "$exited" || printf '%s s 内没等到窗口里的启动证据（%s 里没有本轮 nonce）' "${TEAM_DISPATCH_VERIFY_SEC:-8}" "$marker")"
+    # 终态必须已知且是真的：把残留窗口真的杀掉（不是只在文案里说「已杀掉」——
+    # 「状态即承诺」同样适用于失败路径）。
+    if team_agent_window_exists "$agent"; then
+      team_tmux_kill_window "$TEAM_SESSION:$agent" >/dev/null 2>&1 || true
+      team_warn "已重试 1 次，并把窗口 $TEAM_SESSION:$agent 杀掉：不留半启动的现场（roster 会显示「无窗口」）"
+    else
+      team_warn "已重试 1 次；没有留下半启动的窗口（roster 会显示「无窗口」）"
+    fi
+    team_dim "  排查：tmux 里手动跑一次 —— cd $wt 然后跑 dispatch --print 打出的那条命令；看 agent 自己的报错"
+    team_dim "  常见原因：可执行文件/模型/provider 不可用；旧会话楔死（换新会话：--fresh）；内存/磁盘不足"
+    team_dim "  重派：$TEAM_CLI dispatch $agent $id $taskfile --fresh"
+    return 1
   fi
-
-  # 命令里写死绝对路径 + 短暂等待（窗口 shell 可能刚起、PATH/rc 还没就绪）
-  inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s; exec bash' \
-    "$wt" "$agent_bin" "$agent" "$id" "$agent_cmd")"
-  tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt"
 
   team_state_set "$agent" model "$model"
   team_state_set "$agent" window "$agent"
@@ -386,7 +490,9 @@ team_cmd_dispatch() {
   team_state_set "$agent" started "$(team_timestamp)"
   team_board_set "$id" wip 2>/dev/null || true
 
-  team_ok "dispatched $id → $TEAM_SESSION:$agent（provider=$provider model=${model##*/} session=$sid）"
+  team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；provider=$provider model=${model##*/} session=$sid）"
+  # 观察结论也要说出来（不是只报“成功”）：内建的 Pi 路径若秒退，PM 至少要看到「窗口在但 pi 已退出」。
+  [ -n "$exited" ] && team_warn "但窗口里的 agent 已经退出（回到 shell）：$TEAM_CLI roster 会显示「$(team_agent_cli_name) 已退出」（续跑：$TEAM_CLI resume --agent $agent）"
   team_dim "  旁观：tmux attach -t $TEAM_SESSION ｜ 追问：$TEAM_CLI say $agent \"...\""
 }
 

@@ -36,6 +36,43 @@ team_agent_window_exists() { # <agent> → 0/1：只看窗口存在
   team_tmux_has_window "$TEAM_SESSION" "$w"
 }
 
+# ---------------------------------------------------------------- M4.3 C：报告草稿 vs 已交付
+# `team review` 从任务分支的 checkout 里**摘录**报告，所以工作区里的草稿根本摘不到：
+# 旧实现对草稿也喊「→ team review」，PM 于是收到一个**还不能执行**的待办（DECISIONS D9 事件 C）。
+# 判定「在 HEAD 里」：跟踪了、且工作区与 HEAD 一致（改过/只 staged 的都算草稿）。
+team_report_committed() { # <报告路径>
+  local f="$1" dir
+  [ -f "$f" ] || return 1
+  dir="$(git -C "$(dirname "$f")" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$dir" ] || return 1
+  git -C "$dir" ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || return 1
+  git -C "$dir" diff --quiet HEAD -- "$f" 2>/dev/null || return 1
+  return 0
+}
+
+# ---------------------------------------------------------------- M4.3 D：squash 合并后的分支
+# PM 在 local 模式 squash 合并后，agent 分支仍持有原提交：`领先 N` 与「收尾：提交并 push」会永远留着噪音。
+# 判据是**启发式**且很便宜：分支 tip 的 tree 出现在保护分支最近 TEAM_SQUASH_LOOKBACK 个提交的 tree 里
+# （squash 合并且没有别的改动时正是这个形状：内容相同、却没有共同提交）。
+# 窗口外/部分 squash 会落回诚实的「领先 N」；文档里写明这是启发式（references/workflows.md）。
+team_branch_squash_merged() { # <worktree> → 0=内容已在保护分支里
+  local wt="${1:-}" tree lookback="${TEAM_SQUASH_LOOKBACK:-200}"
+  [ -d "$wt" ] || return 1
+  case "$lookback" in ''|*[!0-9]*) lookback=200 ;; esac
+  tree="$(git -C "$wt" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+  [ -n "$tree" ] || return 1
+  git -C "$wt" log --format=%T --max-count="$lookback" "$TEAM_PROTECTED_BRANCH" 2>/dev/null | grep -qx "$tree"
+}
+
+# 这个 worktree 是不是「已 squash 合并、且没有别的未收尾信号」：脏工作区/真的未 push 优先说了算。
+team_wrapup_is_squash_merged() { # <worktree> <dirty> <ahead> <upstream-ahead>
+  local wt="$1" dirty="${2:-0}" ahead="${3:-0}" upahead="${4:--}"
+  [ "${dirty:-0}" -eq 0 ] 2>/dev/null || return 1
+  [ "${ahead:-0}" -gt 0 ] 2>/dev/null || return 1
+  case "${upahead:-}" in ''|-) ;; *) return 1 ;; esac
+  team_branch_squash_merged "$wt"
+}
+
 # ---------------------------------------------------------------- 待复验清单（复验证据感知版）
 # M6.2 · F3 + F12：common.sh 里那版是「reviews/<ID>.md 存在 == 已复验」，于是
 #   ① 记录永远压制待办（分支后来又交付了提交，digest 也不再提示）；
@@ -94,9 +131,9 @@ team_git_cols() { # <worktree> → "branch dirty ahead-of-protected ahead-of-ups
 
 team_cmd_roster() {
   team_require_docs
-  printf '%-10s %-12s %-26s %6s %6s %8s  %s\n' AGENT 状态 分支 脏 领先 未push 任务
-  printf '%-10s %-12s %-26s %6s %6s %8s  %s\n' ----- ------ -------------------------- ------ ------ ------ ----
-  local a w wt cols branch dirty ahead upahead task state cli
+  printf '%-10s %-12s %-26s %4s %8s %7s  %-30s %-16s %s\n' AGENT 状态 分支 脏 领先 未push 模型 会话 任务
+  printf '%-10s %-12s %-26s %4s %8s %7s  %-30s %-16s %s\n' ----- ------ -------------------------- ---- ------ ------- ------------------------------ ---------------- ----
+  local a w wt cols branch dirty ahead upahead task state cli model mtok mwin mbytes mfile size
   cli="$(team_agent_cli_name)"
   for a in $(team_agents); do
     wt="$(team_agent_worktree "$a")"
@@ -105,11 +142,17 @@ team_cmd_roster() {
     else state="· 无窗口"; fi
     cols="$(team_git_cols "$wt")"
     IFS=$'\t' read -r branch dirty ahead upahead <<< "$cols"
+    # M4.3 D：内容已在保护分支里的分支不再计「领先 N」（squash 合并的形状）
+    if [ "${ahead:-0}" -gt 0 ] 2>/dev/null && team_branch_squash_merged "$wt"; then ahead="已合并"; fi
+    # M4.3 A：会话大小 vs 模型窗口（只 stat 字节数，不读内容）
+    IFS=$'\t' read -r model mtok mwin mbytes mfile <<< "$(team_agent_session_cols "$a")"
+    size="$(team_session_size_text "$mtok" "$mwin")"
     task="$(team_state_get "$a" task -)"
-    printf '%-10s %-12s %-26s %6s %6s %8s  %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$upahead" "$task"
+    printf '%-10s %-12s %-26s %4s %8s %7s  %-30s %-16s %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$upahead" "$model" "$size" "$task"
   done
   printf '\n● %s 在跑 ｜ ○ 窗口在但 %s 已退出（team resume 可续）｜ · 无窗口\n' "$cli" "$cli"
-  printf '  脏=未提交 ｜ 领先=相对 %s ｜ 未push=相对 @{upstream}（- = 没有 upstream，无法判定）\n' "$TEAM_PROTECTED_BRANCH"
+  printf '  脏=未提交 ｜ 领先=相对 %s（已合并=squash 后的内容已在 %s 里）｜ 未push=相对 @{upstream}（- = 没有 upstream，无法判定）\n' "$TEAM_PROTECTED_BRANCH" "$TEAM_PROTECTED_BRANCH"
+  printf '  会话=估算 tok/模型窗口（JSONL 字节÷4，粗糙；窗口 ? = 解析不到 → 派单用保守阈值 %s）⚠=已超窗口\n' "${TEAM_SESSION_WARN_TOKENS:-200000}"
   [ -n "$TEAM_SESSION" ] && team_dim "session: $TEAM_SESSION（attach: tmux attach -t $TEAM_SESSION）"
   return 0
 }
@@ -133,9 +176,9 @@ team_cmd_ps() {
   esac
   printf '  watchdog %s\n' "$(team_watchdog_state_text)"
 
-  printf '\n%-30s %8s %8s\n' MODEL RUNNING LIMIT
-  printf '%-30s %8s %8s\n' ----- ------- -----
-  local m limit running seen=" "
+  printf '\n%-30s %8s %8s %9s\n' MODEL RUNNING LIMIT WINDOW
+  printf '%-30s %8s %8s %9s\n' ----- ------- ----- ---------
+  local m limit running seen=" " win
   for m in $TEAM_DEFAULT_MODEL $TEAM_AGENT_MODELS; do
     case "$m" in *=*) m="${m#*=}" ;; esac
     [ -n "$m" ] || continue
@@ -143,8 +186,27 @@ team_cmd_ps() {
     seen="$seen$m "
     running="$(team_model_running "$m")"
     limit="$(team_model_limit "$m")"; [ "$limit" = "0" ] && limit="-"
-    printf '%-30s %8s %8s\n' "$m" "$running" "$limit"
+    win="$(team_model_window "$m")"
+    [ -n "$win" ] && win="$(team_tokens_human "$win")" || win="?"
+    printf '%-30s %8s %8s %9s\n' "$m" "$running" "$limit" "$win"
   done
+  team_dim "  WINDOW = 模型上下文窗口（? = 解析不到：TEAM_MODEL_WINDOWS 或 Pi 的模型目录里没有它）"
+  # M4.3 A：每个 agent 的会话大小 vs 它当前模型的窗口（只 stat 字节数，不读内容）
+  printf '\nagent 会话（估算 tok / 模型窗口）：\n'
+  local asess any_sess=0 amodel atok awin abytes afile atext a
+  for a in $(team_agents); do
+    IFS=$'\t' read -r amodel atok awin abytes afile <<< "$(team_agent_session_cols "$a")"
+    case "$atok" in ''|*[!0-9]*) continue ;; esac
+    [ "$atok" -gt 0 ] || continue
+    any_sess=1
+    atext="$(team_session_size_text "$atok" "$awin")"
+    printf '  %-10s %-30s %10s' "$a" "$amodel" "$atext"
+    if [ -n "$awin" ] && [ "$atok" -gt "$awin" ]; then
+      printf '  ← 超过窗口：复用会被 dispatch 拒绝（--fresh / --allow-overflow）'
+    fi
+    printf '\n'
+  done
+  [ "$any_sess" -eq 0 ] && team_dim "  （无：还没有 agent 会话文件）"
   printf '\n活跃窗口（%s）：\n' "$TEAM_SESSION"
   team_tmux_windows "$TEAM_SESSION" 2>/dev/null | sed 's/^/  - /' || team_dim "  session 不存在"
   return 0
@@ -231,18 +293,30 @@ team_cmd_digest() {
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
-  printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁）"
+  printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标）"
   any=0
-  local rid disp rep
+  local rid disp rep where act
   while IFS=$'\t' read -r rid disp rep; do
     [ -n "$disp" ] || continue
     any=1
+    where=""
     case "$rep" in
-      "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) 
+      "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*)
         local who="${rep#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
-        printf '  %s（在 %s 分支上）  →  %s review %s\n' "$disp" "$who" "$TEAM_CLI" "${rid:-${disp%%-*}}" ;;
-      *) printf '  %s  →  %s review %s\n' "$disp" "$TEAM_CLI" "${rid:-${disp%%-*}}" ;;
+        where="（在 $who 分支上）" ;;
     esac
+    # M4.3 C：`team review` 从任务分支的 checkout 里摘录报告 —— 还在 agent 工作区里的草稿摘不到，
+    # 所以草稿不能指向 review（“signal 早于可操作”的现场），只说明等交付；仍然列出来（不静默丢）。
+    # 只对 **agent 工作树里的报告** 这么判：主工作树里的是 PM 侧副本，review 的候选链本来就会回退到它
+    # （cmd-review.sh 的 F14 设计），那里“文件存在”就是可用的。
+    local is_agent_rep=0
+    case "$rep" in "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) is_agent_rep=1 ;; esac
+    if [ "$is_agent_rep" = "1" ] && ! team_report_committed "$rep"; then
+      act="report 未提交：先等 agent 交付（不指 review：这份报告还不在任务分支的 HEAD 里）"
+    else
+      act="→  $TEAM_CLI review ${rid:-${disp%%-*}}"
+    fi
+    printf '  %s%s  %s\n' "$disp" "$where" "$act"
   done < <(team_reports_pending_list)
   [ "$any" -eq 0 ] && team_dim "  （无）"
   local ign; ign="$(team_reports_ignored || true)"
@@ -250,12 +324,21 @@ team_cmd_digest() {
 
   # 待收尾：agent 做了活但没收干净（脏工作区 / 相对 upstream 有未 push 的提交）——CEP 实测的盲区。
   # F4：这里只对「真的没 push 出去」报警；领先保护分支是**另一个指标**，单独标出来（旧实现混为一谈）。
-  printf '\n%s\n' "[4] 待收尾（脏工作区 / 相对 upstream 未 push 的提交；领先按 $TEAM_PROTECTED_BRANCH 另计）"
+  printf '\n%s\n' "[4] 待收尾（脏工作区 / 相对 upstream 未 push 的提交；领先按 $TEAM_PROTECTED_BRANCH 另计；squash 已合并单独标注）"
   local sa swt sbranch sdirty sahead supahead stask sany=0 sfacts supnote sact
   for sa in $(team_agents); do
     swt="$(team_agent_worktree "$sa")"
     [ -d "$swt" ] || continue
     IFS=$'\t' read -r sbranch sdirty sahead supahead <<< "$(team_git_cols "$swt")"
+    # M4.3 D：squash 合并后的分支不是「待收尾」（内容已在保护分支里）：不喊 push、不给 say 建议。
+    # 脏工作区 / 真的未 push 优先：那种情况下这个判定不成立，走下面的旧逻辑。
+    if team_wrapup_is_squash_merged "$swt" "$sdirty" "$sahead" "$supahead"; then
+      sany=1
+      stask="$(team_state_get "$sa" task '-')"
+      printf '  %-10s %-52s ｜ %s ｜ %s\n' "$sa" "已合并（squash，内容一致）· 无需 push" "$sbranch" "$stask"
+      printf '             %s\n' "（启发式：tip 的 tree 出现在 $TEAM_PROTECTED_BRANCH 最近 ${TEAM_SQUASH_LOOKBACK:-200} 个提交里；不放心就 git diff $TEAM_PROTECTED_BRANCH..$sbranch）"
+      continue
+    fi
     sfacts=""; supnote=""
     [ "${sdirty:-0}" -gt 0 ] 2>/dev/null && sfacts="脏 $sdirty"
     case "${supahead:-}" in

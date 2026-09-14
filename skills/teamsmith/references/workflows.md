@@ -55,10 +55,25 @@ bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md --print   # just want to see the prompt
 ```
 
-Dispatch does this: guards (memory/model concurrency) → builds the prompt (scope, red lines, delivery process) →
-starts an interactive pi in `<session>:dev` (`--session-id <session>-dev`, `-e` loading the notify extension,
-`--skill` loading this skill).
-Resuming after an interruption: dispatch the same agent again and the session is reused; `--fresh` starts a new one.
+Dispatch does this: guards (memory, model concurrency, **session size vs the model window**) → builds the prompt
+(scope, red lines, delivery process) → starts an interactive pi in `<session>:dev` (`--session-id <session>-dev`,
+`-e` loading the notify extension, `--skill` loading this skill) → **waits for launch proof**: the pane harness
+writes a per-attempt nonce right before it execs the agent, and only that proof is reported as success (the line
+says the launch was verified). No proof → the window is killed, one retry is made, and the command reports a clear
+failure ("the dispatch was sent but the launch could not be confirmed") with what to check. A dispatch never claims
+success for a command that never ran.
+
+Resuming: dispatch the same agent for the same task and the session is reused; `--fresh` starts a new one
+(`<session>-<agent>-<timestamp>`; the old history stays in its own file). Use `--fresh` when the task is new and the
+session carries a long history from an earlier task, when you switch model family/provider, or when the session is
+wedged (the `Context full` / connection-error loop — troubleshooting §4a).
+
+Before resuming, dispatch compares the session's size with the selected model's window (estimate = session JSONL
+bytes ÷ 4, crude on purpose; the window comes from `TEAM_MODEL_WINDOWS`, otherwise from Pi's model directory,
+otherwise a conservative `TEAM_SESSION_WARN_TOKENS`) and **refuses** when the history does not fit. Two ways out:
+`--fresh` (recommended) or `--allow-overflow` (you accept the risk; the refusal becomes a loud warning).
+`team roster` and `team ps` show the same numbers next to the model (`used/window`, `?` when the window cannot be
+resolved), so the mismatch is visible before dispatching; `--print` is guarded the same way.
 
 ## C. Watching / asking / steering
 
@@ -86,6 +101,17 @@ treating that as "unpushed" sent the PM after a task that was already finished. 
 different columns — `ahead` (vs the protected branch) and `unpushed` (vs `@{upstream}`, where `-` means there is no
 upstream at all, so the push state **cannot be judged**). §[4] only asks for a push when there really are unpushed
 commits, says `no upstream (cannot judge unpushed)` when there is none, and keeps "ahead of main" as its own label.
+
+A **squash-merged** branch is recognised instead of being reported as pending wrap-up: when the branch tip's tree
+equals the tree of one of the last `TEAM_SQUASH_LOOKBACK` commits on the protected branch, `roster`/`digest` say
+"already merged (squash, same content)" and stop suggesting a push. It is a documented heuristic (one tree
+comparison); a squash older than that window, or one that changed something else as well, falls back to the honest
+`ahead N` — the safe direction.
+
+§[3] only points the PM at `team review <ID>` when the report is **committed on the task branch**, because the
+reviewer reads the report from a checkout of that branch. A report that still lives only in an agent's working tree
+is listed as "report not committed yet — wait for the agent to deliver" instead (the line stays visible; nothing is
+silently dropped).
 
 When a "turn ended" notification arrives, look at `git -C .worktrees/<a> log --oneline -5` and `status` first, then
 decide: dispatch the next task, send it back, or verify. After a long absence (end of day, machine reboot): **run
@@ -117,6 +143,11 @@ git -C <root> push origin <protected-branch>
 bash <skill>/scripts/team board set T1.1 done   # only mark done once it is really in the protected branch
 bash <skill>/scripts/team close T1.1            # close the window, clear the task
 ```
+
+> After a squash merge the branch still holds its own commits, so it stays "ahead of main" (and, with a forge,
+> may even look "unpushed"). `roster`/`digest` recognise the usual case (same content) and say "already merged
+> (squash)" — see section D for the heuristic and its limits. `board set <ID> done` + `close <ID>` is what actually
+> finishes the task.
 
 **With a PR/MR (forge-first: merge the PR, then fast-forward locally)**:
 

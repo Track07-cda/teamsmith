@@ -24,6 +24,13 @@ Check in order of likelihood:
 7. **Not inside tmux**: `TMUX_PANE` is empty → the extension cannot determine the window name and skips. Either run
    inside tmux, or set `TEAM_NOTIFY_TMUX=0` and set the window name for the agent explicitly (not supported today,
    a known limitation).
+8. **The turn never ended**: a notification means exactly one thing — *this agent's turn ended and it is waiting for
+   the PM*. A settle triggered by an internal lifecycle event (compaction, session restart, reload) while the agent
+   is still working on the same task is **not** emitted at all (it is only written to `TEAM_NOTIFY_LOG`), and a run
+   that was interrupted (Esc, provider error) is emitted with an explicit `interrupted` tag and **never** carries the
+   unfinished turn's text as its summary. So a line without a summary is deliberate: there was no completed turn to
+   quote, and the old behaviour (reporting the turn's opening line as if it were a conclusion) is what made a busy
+   agent look stopped.
 
 ## 2. An agent session "cannot be found again" / its memory broke
 
@@ -54,6 +61,55 @@ effect. Mitigations:
 | unknown agent | not in the roster | edit `TEAM_AGENTS` |
 | worktree does not exist | `add-agent` was never run | dispatch creates it automatically, but an explicit `team add-agent <a>` is preferable |
 | window exists → replacing | the previous turn is still running | dispatch only after checking: replacing interrupts it (ask for progress with `team say` first) |
+| the session does not fit the model window | the resume guard: session size (JSONL bytes ÷ 4) exceeds the selected model's window, or the conservative `TEAM_SESSION_WARN_TOKENS` when the window cannot be resolved | `--fresh` for a new session, or `--allow-overflow` if you really mean to reuse it (it warns loudly) |
+| the launch could not be confirmed | the pane never wrote the per-attempt launch proof, so tmux/the pane swallowed the command | see 4b below |
+
+### 4a. An agent loops on `Context full` / connection errors right after a resume
+
+Symptom: the dispatch succeeds, the pane immediately prints `Context full — /ctx-flush or /clear to continue.` and
+then a stream of `Connection error.` with `↑0 ↓0` tokens, while `team roster` still reports the agent as running —
+the process is alive, it just cannot do anything.
+
+Cause: the session was resumed with a model whose context window is smaller than the history it carries. Observed
+live: ~361k tokens of history (a 1.6 MB session JSONL) resumed with a 272k-window model.
+
+What the tool does now: dispatch estimates the session size (JSONL bytes ÷ 4 — crude on purpose) and refuses when it
+exceeds the window it resolved for the selected model, naming both ways out. `team roster`/`team ps` show the same
+numbers next to the model, so the mismatch is visible before dispatching.
+
+What to do:
+
+- usual case: `team dispatch <agent> <ID> <brief> --fresh` (new session; the old history stays in its own file);
+- you really want the history (e.g. you also moved to a bigger-window model): add `--allow-overflow`;
+- already wedged: kill the window (`tmux kill-window -t <session>:<agent>`) and dispatch again with `--fresh`; the
+  pane is the truth, `roster`'s "running" only proves the process exists.
+
+### 4b. `team dispatch` says the launch could not be confirmed
+
+A dispatch no longer reports success just because tmux accepted the command. The pane harness writes a per-attempt
+nonce immediately before it execs the agent, and only that proof counts. Without it the tool kills the window,
+retries once, and — if the retry also fails — reports the failure, kills the window again and says what to check.
+The window is left in a known state: it does not exist (`roster` shows "no window").
+
+Observed shape (live incident): a dispatch into a wedged pane printed "window exists → replacing" and reported
+success, but the command only landed in the stuck process's input buffer — the new session id never appeared and
+nothing ever ran.
+
+What to do:
+
+- reproduce it by hand: `team dispatch … --print` prints the exact command; run it in the pane and read the output;
+- usual causes: the binary, provider or model is unavailable, the old session is wedged (`--fresh`), the machine is
+  out of memory or disk;
+- with a custom `TEAM_PI_BIN`: make sure it is an absolute path and executable from the pane;
+- if the launch proof arrives but the agent has **already exited** (the dispatch prints a warning and `roster` shows
+  "pi exited"), that is the honest `pi exited` state: `team resume --agent <a>` continues the task.
+
+### 4c. `digest` says a report is "not committed yet"
+
+The report exists only in the agent's working tree, and the reviewer reads the report from a checkout of the task
+branch — so the signal would arrive before it is actionable. The tool therefore lists it as "report not committed
+(spelling out that review is not the next step)" instead of pointing at `team review <ID>`; nothing is dropped. Ask
+the agent to commit it, and the normal "awaiting review" line plus the review command come back.
 
 ## 5. git worktree errors
 
@@ -66,7 +122,11 @@ effect. Mitigations:
 ## 6. Merging and deciding "is it merged?"
 
 - After `git merge --squash` the task branch is **not** an ancestor of the protected branch, so `git branch --merged`
-  cannot tell you anything. Trust the `BOARD.md` status plus the `reviews/<ID>.md` record, not ancestry.
+  cannot tell you anything. Trust the `BOARD.md` status plus the `reviews/<ID>.md` record, not ancestry. `roster` and
+  `digest` go one step further for the **usual** squash case: when the branch tip's tree equals the tree of one of the
+  last `TEAM_SQUASH_LOOKBACK` commits on the protected branch, they report "already merged (squash, same content)"
+  and stop suggesting a push. It is a heuristic — an older squash, or one that also changed something else, shows up
+  as `ahead N` again (the safe direction: the signal comes back, it is never suppressed silently).
 - Conflicts: `git merge --squash` leaves the conflict state behind; inspect it with
   `git status --porcelain | grep '^U'`, then either `git add -A && git commit` or `git merge --abort` to start over.
 - Before merging, the main worktree must be clean and on the protected branch — deliberately so: it stops an agent's
