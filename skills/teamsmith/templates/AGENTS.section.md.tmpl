@@ -1,104 +1,112 @@
 <!-- teamsmith:begin -->
-## 团队协议（teamsmith）
+## Team protocol (teamsmith)
 
-本项目用 Pi Agent 组成一个团队：**PM（编排）** 在 tmux `{{SESSION}}:{{PM_WINDOW}}` 里维护任务与合并权，
-**worker agent** 各自在自己的 git worktree 里并行实现。工具：`bash {{SKILL_DIR}}/scripts/team help`。
+This project runs a team of agents: a **PM (orchestrator)** in tmux `{{SESSION}}:{{PM_WINDOW}}` owns tasks and merge
+authority, while **worker agents** implement in parallel inside their own git worktrees.
+Tooling: `bash {{SKILL_DIR}}/scripts/team help`.
 
-### 角色与边界
+### Roles and boundaries
 
-| 角色 | 职责 | 禁止 |
+| Role | Owns | Must not |
 |---|---|---|
-| PM | 写任务书/路线图/决策日志、派单、独立复验、合并、收尾 | 把「agent 说通过」当证据 |
-| agent:<名> | 只做任务书里的事，写测试与报告，开 PR/MR | push `main`、force push、merge PR/MR、改他人目录 |
+| PM | Briefs / roadmap / decision log, dispatch, independent verification, merging, wrap-up | Treat "the agent says it passed" as evidence |
+| agent:<name> | Exactly the brief, tests and reports, opening PR/MRs | push `main`, force-push, merge PR/MRs, touch other people's directories |
 
-名册：{{AGENTS}}（可在 `.pi/team/config.sh` 里改）。
+Roster: {{AGENTS}} (editable in `.pi/team/config.sh`).
 
-### 必读顺序（每个 agent 开工前）
+### Reading order (before any agent starts)
 
-1. 本文件（尤其本节）
-2. 自己的消息线程 `{{DOCS_DIR}}/threads/<agent>.md`（PM 可能追加了新指令）
-3. 任务书 `{{DOCS_DIR}}/tasks/<ID>-<slug>.md`（范围与验收命令的唯一来源）
+1. This file (especially this section)
+2. Your own thread `{{DOCS_DIR}}/threads/<agent>.md` (the PM may have added instructions)
+3. The task brief `{{DOCS_DIR}}/tasks/<ID>-<slug>.md` (the single source of scope and acceptance commands)
 
-### 不可违反的纪律
+### Non-negotiable discipline
 
-- **只改自己有归属的目录**（`{{DOCS_DIR}}/OWNERSHIP.md`）；需要跨目录改动 → 报告里写 `BLOCKED:`，交回 PM。
-- **不半途停下征求意见**：要么交付完（门禁跑完 + 报告 + push + PR/MR），要么硬阻塞（notify PM + PARTIAL 报告）。
-- **没有真实执行过命令，不得声称测试通过**。PM 会在独立 worktree 复验；虚假报告视为任务失败。
-- 禁止把任何 token/secret 写进代码、配置、日志、提交信息；禁止读取凭据文件（如 `~/.pi/agent/auth.json`）。
-- 禁止 push `{{PROTECTED_BRANCH}}`、`git push --force`、`gh pr merge`/合并 MR、rebase/删除他人分支。
-- 小步提交：每完成一个可验证的小步就 commit（Conventional Commits + 任务 ID + `Agent: <名字>` trailer）。
+- **Only change directories you own** (`{{DOCS_DIR}}/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
+  the report and hand it back to the PM.
+- **Never stop mid-task to ask for confirmation**: either deliver (gates run + report + push + PR/MR) or be
+  hard-blocked (notify the PM + PARTIAL report).
+- **Never claim tests passed without having run them.** The PM re-runs in an independent worktree; a false report
+  fails the task.
+- Never write tokens/secrets into code, config, logs or commit messages; never read credential files
+  (e.g. `~/.pi/agent/auth.json`).
+- Never push `{{PROTECTED_BRANCH}}`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
+- Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
 
-### 协作回路
+### Collaboration loop
 
 ```
-PM 写任务书 + 建 agent worktree
+PM writes the brief + creates the agent worktree
       │  team dispatch <agent> <ID> <task-file>
       ▼
-agent 在 worktree 实现 → 小步 commit → 跑门禁 → 写报告 → push 分支 → 开 PR/MR
-      │  回合结束自动：追加 {{DOCS_DIR}}/inbox/<agent>.md + 敲 {{SESSION}}:{{PM_WINDOW}} 唤醒 PM
+agent implements in its worktree → small commits → runs gates → writes report → pushes branch → opens PR/MR
+      │  on turn end, automatically: appends {{DOCS_DIR}}/inbox/<agent>.md + knocks {{SESSION}}:{{PM_WINDOW}}
       ▼
-PM 读收件箱 → team review <ID>（独立 worktree 复验，跑门禁）
+PM reads the inbox → team review <ID> (independent worktree, runs gates)
       ▼
-通过 → PM 自己跑 git（`merge --squash` + commit + push；有 PR 先合 PR 再 `fetch && merge --ff-only`）→
-  `team board set <ID> done` → `team close <ID>`
-不通过 → team say <agent> "..." 退回，附具体失败证据
+pass → the PM runs git itself (`merge --squash` + commit + push; with a PR, merge the PR first then
+  `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`
+fail → team say <agent> "..." with the concrete failure evidence
 ```
 
-- 阻塞/发现别人的 bug：`bash {{SKILL_DIR}}/scripts/team notify <agent> "<一句话>"`，同时写 PARTIAL 报告。
-- 门禁命令：`{{GATES}}`（任务书里可以写更严格的命令，以任务书为准）。
-- 消息 ≠ 交付物：真正的证据在 `{{DOCS_DIR}}/reports/`、`{{DOCS_DIR}}/reviews/` 和 commit 里。
+- Blocked, or found someone else's bug: `bash {{SKILL_DIR}}/scripts/team notify <agent> "<one line>"`, and write a
+  PARTIAL report.
+- Gates: `{{GATES}}` (a brief may require stricter commands; the brief wins).
+- Messages are not deliverables: the real evidence lives in `{{DOCS_DIR}}/reports/`, `{{DOCS_DIR}}/reviews/` and commits.
 
-### 初始化（新项目第一步）
+### Bootstrap (first step in a new project)
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team bootstrap        # 幂等：配置+文档骨架+worktree+看门狗（tmux 窗口监视器）+下一步清单
+bash {{SKILL_DIR}}/scripts/team bootstrap   # idempotent: config + docs skeleton + worktrees + watchdog window + next steps
 ```
 
-### 跨项目会议（PM 对 PM）
+### Cross-project meetings (PM to PM)
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team meeting inbox          # 待我回应的跨项目会议
+bash {{SKILL_DIR}}/scripts/team meeting inbox          # meetings waiting for my reply
 bash {{SKILL_DIR}}/scripts/team meeting say <slug> --intent proposal "…"
 ```
 
-允许：接口怎么接、建议+依据、问题报告、约联调窗口。不允许：指挥别的 PM、替对方决策、冒充人类下令。
-共识由双方各自 `agree`；落地永远在各自项目里完成。**worker 不参会**（跨项目沟通只走 PM）。
+Allowed: interface work, advice with evidence, problem reports, scheduling joint test windows. Not allowed:
+commanding another PM, deciding on their behalf, impersonating a human. Consensus requires both sides to `agree`;
+landing the work always happens in each side's own project. **Workers do not attend** (cross-project traffic is PM-only).
 
-### 定时巡检（不是心跳保活）
+### Periodic patrol (not a heartbeat)
 
-watchdog 是**叫醒 PM 的节拍器**，不是“让 PM 永远活着”的守护进程：
+The watchdog is a **metronome that wakes the PM**, not a daemon that keeps it alive:
 
-- **看门狗由 PM 配置和维护**：`team watchdog up|status|logs|down` —— 默认在同一个 tmux session 的 `watchdog`
-  窗口里跑 `team monitor`（上半屏团队状态，下半屏每个 agent 的 Pi 会话活动流），并按周期巡检；
-  （只有一个后端：同 session 的 `watchdog` 窗口；不再有容器/systemd 形态。）
-- 默认每 **15 分钟**（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）看一次“有没有活儿要 PM 处理”：
-  未读通知 / 待复验报告 / 看板 todo·wip / blocked / 有任务但停了的 agent。
-- **有待办** → 叫醒 PM（在跑就发一句 `[watchdog] 待办：…`；不在跑就把它拉起来）；
-  **没待办** → 什么都不做（不叫醒、不启动）——团队自然静默，不要求 PM 一直运行。
-- PM 如果确认无事可做或需要人工介入，可以 `team standby on --reason "…"` 主动停工；
-  待命期间 watchdog 不再叫醒（待办积压仍记进 `state/watchdog.log`），人处理完 `team standby off`。
-- 它**不管 tmux 布局、不管 agent**（agent 归 PM 管：`team resume`）。
+- **The PM owns the watchdog**: `team watchdog up|status|logs|down` -- by default it runs `team monitor` in a
+  `watchdog` window of the same tmux session (team status on top, per-agent activity below, optional) and patrols
+  on an interval. There is exactly one backend (that window) -- no container, no systemd.
+- Every **15 minutes** by default (`TEAM_WATCH_INTERVAL=900`, 300-3600 recommended) it asks "is there work for the
+  PM?": unread notifications / reports awaiting verification / board todo·wip (opt-in) / blocked / agents with
+  unfinished tasks that stopped running.
+- **Pending work** → wake the PM (nudge it if running, start it if not). **Nothing pending** → do nothing at all --
+  the team stays quiet and the PM is not required to be running.
+- If there is nothing to do, or a human is needed, the PM can `team standby on --reason "…"` and stand down; the
+  watchdog stops waking it (backlog still lands in `state/watchdog.log`). A human runs `team standby off`.
+- It **does not manage tmux layout or agents** (agents belong to the PM: `team resume`).
 
 ```bash
-bash <skill>/scripts/team watchdog-status      # 看周期/待命/待办/systemd/PM 状态
-bash <skill>/scripts/team standby on --reason "等用户拍板选型"
+bash <skill>/scripts/team watchdog-status      # interval / standby / pending / PM state
+bash <skill>/scripts/team standby on --reason "waiting for the user to pick a stack"
 bash <skill>/scripts/team standby off
-bash <skill>/scripts/team up                  # 人工救火：建 tmux 场地 + 把 PM 拉起来（不动 agent）
-bash <skill>/scripts/team up --agents         # 顺手把“有任务但窗口没了”的 agent 也续起来
-bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于一个 tick）
+bash <skill>/scripts/team up                  # manual rescue: build the tmux stage + start the PM (agents untouched)
+bash <skill>/scripts/team up --agents         # also resume agents that have tasks but no window
+bash <skill>/scripts/team watch --once        # run a single patrol tick
 ```
 
-- 容量底线是 **swap 不被打满**（RAM 紧张只会卡，不会拦）；`team ps` 看余量。
+- The capacity floor is **swap must not be exhausted** (tight RAM only means slowness, not refusal); `team ps` shows headroom.
 
-### 目录
+### Directories
 
-| 路径 | 归属 | 说明 |
+| Path | Owner | Purpose |
 |---|---|---|
-| `{{DOCS_DIR}}/tasks/` | PM | 任务书 |
-| `{{DOCS_DIR}}/reports/` | agent（只写自己的） | 交付报告 |
-| `{{DOCS_DIR}}/reviews/` | PM | 独立复验记录 |
-| `{{DOCS_DIR}}/threads/` | PM + 该 agent（append-only） | 决策/澄清消息 |
-| `{{DOCS_DIR}}/inbox/` | 自动生成（gitignore） | 回合结束简报 |
-| `{{DOCS_DIR}}/{BOARD,ROADMAP,OWNERSHIP,DECISIONS}.md` | PM | 任务板/里程碑/归属/决策 |
-| `{{WORKTREES_DIR}}/<agent>/` | 该 agent | 长期 worktree（session 按 cwd 归属，必须稳定） |
+| `{{DOCS_DIR}}/tasks/` | PM | Task briefs |
+| `{{DOCS_DIR}}/reports/` | agent (its own file only) | Delivery reports |
+| `{{DOCS_DIR}}/reviews/` | PM | Independent verification records |
+| `{{DOCS_DIR}}/threads/` | PM + that agent (append-only) | Decision/clarification messages |
+| `{{DOCS_DIR}}/inbox/` | generated (gitignored) | Turn-end briefings |
+| `{{DOCS_DIR}}/{BOARD,ROADMAP,OWNERSHIP,DECISIONS}.md` | PM | Board / milestones / ownership / decisions |
+| `{{WORKTREES_DIR}}/<agent>/` | that agent | Long-lived worktree (sessions are keyed by cwd -- keep it stable) |
 <!-- teamsmith:end -->

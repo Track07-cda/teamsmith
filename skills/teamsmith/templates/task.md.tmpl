@@ -4,49 +4,52 @@
 task:   {{ID}}
 agent:  {{AGENT}}
 issue:  {{ISSUE}}
-依赖:   {{DEPS}}
-状态:   todo
-预计:   <1 个工作块；超时先交 PARTIAL 报告，不要静默卡死>
+deps:   {{DEPS}}
+status: todo
+budget: <one work block; if it runs long, deliver a PARTIAL report rather than silently hanging>
 ```
 
-> 任务书写给「没有上下文的弱模型」看：范围、边界、验收命令、报告格式都要自包含。
-> PM 派单：`team dispatch {{AGENT}} {{ID}} {{DOCS_DIR}}/tasks/{{ID}}-{{SLUG}}.md`
+> Write briefs for a **weak model with no context**: scope, boundaries, acceptance commands and the report
+> format must be self-contained. PM dispatch: `team dispatch {{AGENT}} {{ID}} {{DOCS_DIR}}/tasks/{{ID}}-{{SLUG}}.md`
 
-## 验证证据要求
+## Required evidence
 
-**缺陷修复类任务必须给出「翻转证据」**（PM 用 `team review <ID> --strong` 会检查）：
+### Flip evidence (required for defect-fix tasks)
 
-- 「修复前红 → 修复后绿」：修复前那条 finding 测试失败的输出 + 修复后通过的输出；或
-- 「破坏实现 → 守门测试必须失败」：临时改坏实现，证明该测试真的会失败，然后还原。
+**Defect-fix tasks must provide flip evidence** (the PM checks this with `team review <ID> --strong`):
 
-对抗性/独立验证类任务另外要求：测试写在**独立包**里（不复用被测项目的夹具），
-避免"用被验证对象验证它自己"。
+- "red before → green after": the failing output of the finding's test before the fix, plus the passing output
+  after it; or
+- "break the implementation → the guard test must fail → restore it": prove the test is not theatre.
 
-## 背景
+Adversarial / independent-verification tasks additionally require tests written in an **independent package**
+(do not reuse the tested project's fixtures) so that the thing under test is not used to verify itself.
 
-<为什么做这件事；相关文档/ADR/既有代码在哪；不要贴大段代码>
+## Context
 
-## 交付物
+<Why this work exists; where the related docs/ADRs/existing code are; do not paste large code blocks>
 
-1. `<文件路径>` — <做什么；关键接口/函数签名>
-2. `测试` — <必须覆盖的行为，逐条列出>
-3. `<文档>` — <需要写什么>
+## Deliverables
 
-## 边界（不要做）
+1. `<file path>` — <what to do; key interfaces/function signatures>
+2. `tests` — <behaviour that must be covered, item by item>
+3. `<docs>` — <what must be written>
 
-- 不要修改 `<他人目录>`（归属见 {{DOCS_DIR}}/OWNERSHIP.md）。
-- 不要 <明显会被顺手做的事>。
-- 不引入新依赖；需要 → 报告里提出。
+## Boundaries (do not do)
 
-## 验收（必须真实执行，输出写进报告）
+- Do not modify `<someone else's directory>` (ownership: {{DOCS_DIR}}/OWNERSHIP.md).
+- Do not <the obvious thing a model would do while "helpfully" expanding scope>.
+- Do not add new dependencies; if you need one, raise it in the report.
+
+## Acceptance (must actually be run; put the output in the report)
 
 ```sh
 {{GATES}}
-# <本任务特有的、更严格的命令，例如：pnpm --filter <pkg> test>
+# <task-specific, stricter commands, e.g. pnpm --filter <pkg> test>
 ```
 
-## 报告
+## Report
 
-写入 `{{DOCS_DIR}}/reports/{{ID}}-{{AGENT}}.md`（格式见 `{{DOCS_DIR}}/PROTOCOL.md` 或
-skill 的 `templates/report.md.tmpl`）。报告必须包含：交付物、真实命令与输出尾部、
-未验证部分/风险、偏离任务书之处、下一步建议。
+Write it to `{{DOCS_DIR}}/reports/{{ID}}-{{AGENT}}.md` (format: `{{DOCS_DIR}}/PROTOCOL.md` or the skill's
+`templates/report.md.tmpl`). It must contain: deliverables, the real commands with output tails, anything not
+verified / risks, deviations from this brief, and next-step suggestions.

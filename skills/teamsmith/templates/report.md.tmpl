@@ -1,36 +1,36 @@
-# {{ID}} · <标题>
+# {{ID}} · <title>
 
-agent: {{AGENT}}   状态: {{STATUS}}   时间: {{TIME}}
-branch: `{{BRANCH}}`   PR/MR: <链接或 -> 
+agent: {{AGENT}}   status: {{STATUS}}   time: {{TIME}}
+branch: `{{BRANCH}}`   PR/MR: <link or ->
 
-## 交付物
+## Deliverables
 
-| 路径 | 内容 |
+| Path | What |
 |---|---|
-| `<文件>` | <做了什么> |
+| `<file>` | <what was done> |
 
-## 验证证据（必须真实执行过）
-
-```
-$ <命令>
-<关键输出尾部>
-```
-
-- 结论：<通过/失败/未跑>
-- 说明：未验证的部分、已知风险、TODO（**不要含糊**：没跑就写没跑）
-
-## 翻转证据（缺陷修复类任务必填）
+## Verification evidence (must have actually been run)
 
 ```
-$ <修复前的失败输出（贴关键几行）>
-$ <修复后的通过输出>
+$ <command>
+<tail of the important output>
 ```
-或："故意破坏实现 → 守门测试失败 → 还原" 的命令与输出。
 
-## 决策与偏离
+- Verdict: <pass / fail / not run>
+- Notes: what was not verified, known risks, TODOs (**be explicit**: if you did not run it, say so)
 
-- <与任务书不同的地方 + 理由；0 项写「无」>
+## Flip evidence (required for defect-fix tasks)
 
-## 下一步建议
+```
+$ <failing output before the fix (key lines)>
+$ <passing output after the fix>
+```
+or the commands and output for "deliberately break the implementation → the guard test fails → restore it".
 
-- <给 PM 的信息；被阻塞时写清 `BLOCKED:` + 需要谁做什么>
+## Decisions and deviations
+
+- <Anything that differs from the brief, with the reason; write "none" if there is nothing>
+
+## Suggested next steps
+
+- <Information for the PM; when blocked, write `BLOCKED:` plus who needs to do what>

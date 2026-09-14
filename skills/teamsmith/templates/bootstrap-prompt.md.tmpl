@@ -1,35 +1,46 @@
----
-name: teamsmith-bootstrap
-description: 新项目里把这个 teamsmith skill 初始化成可派单状态的一句话指令（交给新项目的 PM 执行）。Use when starting teamsmith in a new project, or when the user asks to initialize/装备 the agent team for a repo.
----
+# Bootstrap a new project with teamsmith
 
-# 新项目开工：把 teamsmith 初始化（交给 PM 的指令）
+You are being asked to bring **this project** to the point where work can be dispatched. Follow these steps and
+report back concisely. Do not invent scope beyond them.
 
-你在一个还没用过 teamsmith 的项目里。**先跑这一条，再干别的**：
+## 0. Preconditions
 
-```bash
-bash <skill>/scripts/team bootstrap
-```
+- A git repository with at least one commit (teamsmith uses git worktrees for isolation).
+- `tmux` available, and `team` usable: `bash {{SKILL_DIR}}/scripts/team help`.
 
-它会（幂等，可反复跑）：
-1. 探测你所在的 tmux session/窗口（就是你现在的窗口）→ 写进 `.pi/team/config.sh`；
-2. 写配置 + `docs/team/` 文档骨架（ROADMAP/BOARD/OWNERSHIP/DECISIONS/PROTOCOL/threads）+ 给 `AGENTS.md` 追加团队协议段 + 更新 `.gitignore`；
-3. 按名册建每个 agent 的长期 worktree（`.worktrees/<agent>`）；
-4. **起看门狗窗口**（`team watchdog up`：同 session 的 `watchdog` 窗口跑监视器 + 定时巡检）；
-5. 打印「下一步清单」。
-
-常用参数：`--agents "dev verify"`（名册）、`--session <名>`/`--pm-window <名>`（默认自动探测）、`--no-watchdog`、`--print`（只看计划）。
-
-## 之后按顺序做
+## 1. Bring the project up
 
 ```bash
-bash <skill>/scripts/team watchdog status     # 确认看门狗窗口在跑
-# 1) 填 docs/team/ROADMAP.md（目标/里程碑/退出标准）与 OWNERSHIP.md（目录归属）
-# 2) 建第一个任务
-bash <skill>/scripts/team task T1.1 --title "…" --agent dev
-$EDITOR docs/team/tasks/T1.1-*.md             # 背景/交付物/边界/可复制验收命令
-bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
-bash <skill>/scripts/team digest              # 待办看板
+bash {{SKILL_DIR}}/scripts/team bootstrap --agents "<dev verify>" --session "<session>"   # idempotent
+bash {{SKILL_DIR}}/scripts/team doctor
 ```
 
-约定：**看门狗由 PM 配置并维护**（`team watchdog up|status|logs|down`）；agent 的启停/续跑是 PM 的活（`team resume`）。
+`bootstrap` does all of this idempotently:
+
+1. writes `.pi/team/config.sh` (session, roster, gates, models, guards);
+2. writes the `docs/team/` skeleton (BOARD / ROADMAP / OWNERSHIP / PROTOCOL / DECISIONS / tasks / reports / reviews / threads / inbox);
+3. **prints** the `git worktree add` command for each agent (git stays with you; `--create-worktrees` creates them);
+4. starts the watchdog (`watchdog` window in the same session);
+5. prints the next steps.
+
+## 2. Fill in the project-specific parts (this is your work, not the tool's)
+
+- `{{DOCS_DIR}}/ROADMAP.md` -- product goal, milestones with **executable** exit criteria, and explicit non-goals.
+- `{{DOCS_DIR}}/OWNERSHIP.md` -- which directories belong to which agent; everything unlisted belongs to you.
+- `.pi/team/config.sh` -- `TEAM_GATES` (the command that decides pass/fail during verification), the roster and
+  per-agent models, and `TEAM_MODEL_LIMITS` if a provider has a tight quota.
+- `AGENTS.md` -- the protocol section is injected automatically; make sure the project-specific red lines are there.
+
+## 3. Make the first task real
+
+```bash
+bash {{SKILL_DIR}}/scripts/team task T1.1 --title "<first slice>" --agent dev
+$EDITOR {{DOCS_DIR}}/tasks/T1.1-*.md      # context / deliverables / boundaries / acceptance commands
+bash {{SKILL_DIR}}/scripts/team dispatch dev T1.1 {{DOCS_DIR}}/tasks/T1.1-*.md
+```
+
+## 4. Report back
+
+State, in a few lines: what you configured (with the file paths), what the gates are, the first task, and anything
+you need from the user (authorization, credentials, a decision). Evidence over prose: quote the commands you ran
+and their outcome.

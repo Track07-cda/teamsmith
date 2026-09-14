@@ -329,7 +329,7 @@ section "6 · dispatch"
 $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"assert_has "$TMP/print.log" "--session-id $SESSION-dev" "命令含正确的 session-id"
 assert_has "$TMP/print.log" "team-notify.ts" "命令显式加载 notify 扩展（worktree 不会自动发现）"
 assert_has "$TMP/print.log" "agent:dev" "提示词声明了 agent 身份"
-assert_has "$TMP/print.log" "不要在半途停下来征求确认" "提示词包含「不半途停」纪律"
+assert_has "$TMP/print.log" "Never stop mid-task to ask for confirmation" "dispatch prompt states the no-mid-task-stop rule"
 assert_has "$TMP/print.log" "reports/T1.1-dev.md" "提示词指明报告路径"
 assert_has "$TMP/print.log" "git commit" "提示词要求小步提交"
 
@@ -453,9 +453,9 @@ assert_has "$SKILL_DIR/references/workflows.md" "git -C" "workflows 文档给出
 assert_has "$SKILL_DIR/references/protocol.md" "不执行" "protocol 写明 skill 不执行 git/forge 写操作"
 
 # ④ 翻转证据进模板与派单提示词
-assert_has "$SKILL_DIR/templates/task.md.tmpl" "翻转证据" "任务书模板要求翻转证据"
-assert_has "$SKILL_DIR/templates/report.md.tmpl" "翻转证据" "报告模板含翻转证据段"
-assert_has "$TMP/print.log" "翻转证据" "派单提示词就要求写翻转证据"
+assert_has "$SKILL_DIR/templates/task.md.tmpl" "Flip evidence" "task template requires flip evidence"
+assert_has "$SKILL_DIR/templates/report.md.tmpl" "Flip evidence" "report template has the flip-evidence section"
+assert_has "$TMP/print.log" "flip evidence" "dispatch prompt requires flip evidence"
 
 # ---------------------------------------------------------------- 6e. erp 实测反馈（4 条）
 section "6e · erp 实测反馈（render & / GitLab 头 / pi PATH / 非任务报告）"
@@ -874,9 +874,9 @@ else
   printf '  (跳过边界断言：没有 tmux)\n'
 fi
 # 派单提示词里要写明跨项目边界
-assert_has "$TMP/print.log" "边界（跨项目一律不动手）" "派单提示词写明了跨项目边界"
+assert_has "$TMP/print.log" "Cross-project boundary" "dispatch prompt states the cross-project boundary"
 assert_has "$TMP/print.log" "meeting" "提示词指明了跨项目沟通走 meeting"
-assert_has "$TMP/print.log" "worker 不参会" "提示词说明 worker 不参会"
+assert_has "$TMP/print.log" "workers do not attend" "dispatch prompt says workers do not attend meetings"
 
 # ---------------------------------------------------------------- 11e. 跨项目会议（peer 交流，不是指令通道）
 section "11e · 跨项目会议（meeting mode）"
@@ -1101,7 +1101,7 @@ fi
 _OLD="pi""-team"
 OLDNAME_HITS="$(grep -rIn "$_OLD" "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" \
     "$SKILL_DIR/extension" "$SKILL_DIR/../README.md" 2>/dev/null \
-  | grep -vE '兼容|旧名|迁移|别名|v1\.13|begin|end|reload|smoke' || true)"
+  | grep -vE '兼容|旧名|迁移|别名|v1\.13|begin|end|reload|smoke|compatibility|former name|renamed|alias' || true)"
 if [ -n "$OLDNAME_HITS" ]; then bad "还有旧名 pi-team 的残留：$(printf '%s' "$OLDNAME_HITS" | head -1)"; else ok "名字一致性：除兼容说明外无旧名残留"; fi
 # 兼容软链必须存在（老项目配置里的绝对路径靠它活着）
 [ -L "$SKILL_DIR/../pi-team" ] && ok "兼容软链 skills/pi-team → teamsmith 在位" || bad "缺兼容软链 skills/pi-team"
@@ -1116,8 +1116,8 @@ fi
 
 # 哲学与记忆：信条要有落盘位置，PM 提示词要带 credo
 assert_file "$SKILL_DIR/references/philosophy.md" "信条文档存在"
-assert_has "$SKILL_DIR/references/philosophy.md" "状态即承诺" "信条内容落地（状态即承诺）"
-assert_has "$SKILL_DIR/templates/pm-prompt.md.tmpl" "你的信条" "PM 提示词顶部带 credo"
+assert_has "$SKILL_DIR/references/philosophy.md" "Status is a promise" "creed content present (status is a promise)"
+assert_has "$SKILL_DIR/templates/pm-prompt.md.tmpl" "Your creed" "PM prompt carries the creed at the top"
 assert_has "$SKILL_DIR/SKILL.md" "references/philosophy.md" "SKILL 指向信条文档"
 assert_file "$SKILL_DIR/templates/memory-seed.md.tmpl" "项目记忆种子模板存在"
 # doctor 的 PM 记忆三态（不依赖真装：用假 settings.json）

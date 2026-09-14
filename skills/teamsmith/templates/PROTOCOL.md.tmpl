@@ -1,59 +1,62 @@
-# {{PROJECT}} · 协作协议（teamsmith）
+# {{PROJECT}} · Collaboration protocol (teamsmith)
 
-> **本文件是团队的运行规范摘要**，完整版见项目 `AGENTS.md` 的 teamsmith 段落与 skill 的 `references/`。
-> 工具入口：`bash {{SKILL_DIR}}/scripts/team help`
+> **This file is the short operational summary.** The full version lives in the teamsmith section of the project's
+> `AGENTS.md` plus the skill's `references/`. Tooling entry point: `bash {{SKILL_DIR}}/scripts/team help`
 
-## 角色
+## Roles
 
-| 角色 | 在哪 | 职责 | 红线 |
+| Role | Where | Owns | Red lines |
 |---|---|---|---|
-| PM | tmux `{{SESSION}}:pm` | 里程碑/任务板/任务书/决策；派单；独立复验；合并；收尾 | 不得用 agent 自述替代证据；不得把 token 写进任何产物 |
-| agent:<名> | `{{WORKTREES_DIR}}/<名>` | 实现 + 测试 + 报告 + 开 PR/MR | 不得 push 保护分支、force push、merge、越界改目录 |
+| PM | tmux `{{SESSION}}:pm` | Milestones/board/briefs/decisions; dispatch; independent verification; merging; wrap-up | Never let an agent's own account replace evidence; never write tokens into any artifact |
+| agent:<name> | `{{WORKTREES_DIR}}/<name>` | Implementation + tests + report + PR/MR | Never push the protected branch, force-push, merge, or change directories it does not own |
 
-## 一个任务的生命周期
+## Lifecycle of a task
 
-1. **PM**：写任务书 `{{DOCS_DIR}}/tasks/<ID>-<slug>.md`（背景/交付物/边界/验收命令/报告要求）。
-2. **PM**：`team add-agent <a>` 建长期 worktree → `team dispatch <a> <ID> <taskfile>` 派单。
-3. **agent**：在 worktree 内实现；小步 commit；跑验收命令；写报告 `{{DOCS_DIR}}/reports/<ID>-<a>.md`；
-   push 分支；开 PR/MR；**回合结束时自动通知 PM**（收件箱 + tmux 唤醒）。
-4. **PM**：`team digest` 看待办 → `team review <ID>` 在独立 detached worktree 上复验（跑门禁、看 diff、写
-   `{{DOCS_DIR}}/reviews/<ID>.md`）。
-5. **通过** → PM 自己跑 git：`merge --squash` + commit + push（有 PR 就先合 PR 再 `fetch && merge --ff-only`）→
-   `team board set <ID> done` → `team close <ID>`；**不通过** → `team say <a> "<具体失败证据>"` 退回。
+1. **PM**: write the brief `{{DOCS_DIR}}/tasks/<ID>-<slug>.md` (context / deliverables / boundaries / acceptance commands / report requirements).
+2. **PM**: `team add-agent <a>` for the long-lived worktree → `team dispatch <a> <ID> <taskfile>`.
+3. **agent**: implement in the worktree; commit in small steps; run the acceptance commands; write the report
+   `{{DOCS_DIR}}/reports/<ID>-<a>.md`; push the branch; open a PR/MR; **the PM is notified automatically when the
+   turn ends** (inbox + tmux wake-up).
+4. **PM**: `team digest` for pending work → `team review <ID> --dir <independent checkout>` (run gates, read the
+   diff, write `{{DOCS_DIR}}/reviews/<ID>.md`).
+5. **Pass** → the PM runs git: `merge --squash` + commit + push (with a PR, merge the PR first and then
+   `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`.
+   **Fail** → `team say <a> "<concrete failure evidence>"` and send it back.
 
-## 硬规则
+## Hard rules
 
-1. 没有真实执行过验收命令，不得声称通过。PM 独立复验，虚假报告=任务失败。
-2. 一个 agent 一个长期 worktree（Pi session 按 cwd 归属，路径变更会导致不可续）；每个任务在其内新建分支。
-3. 小步提交，禁止攒到最后一次性提交；提交信息带任务 ID 与 `Agent: <名字>` trailer。
-4. 只改 `{{DOCS_DIR}}/OWNERSHIP.md` 里属于自己的目录；跨目录需求 → 报告写 `BLOCKED:`。
-5. 阻塞/发现问题：`team notify <a> "<一句话>"`，写 PARTIAL 报告，然后结束回合。
-6. 保护分支 `main` 只有 PM 能推进；agent 只能 push 自己的任务分支。
-7. token 只允许在 PM 调用真实工具时注入（`GH_TOKEN="$(< .gh-pat)" gh …`），永不回显、永不落盘到项目文件。
+1. Never claim the acceptance commands passed without having run them. The PM re-runs independently; a false report fails the task.
+2. One long-lived worktree per agent (sessions are keyed by cwd; moving the path makes them un-resumable); each task gets its own branch inside it.
+3. Commit in small steps -- never one dump at the end; include the task ID and an `Agent: <name>` trailer.
+4. Only change directories assigned to you in `{{DOCS_DIR}}/OWNERSHIP.md`; cross-directory needs → write `BLOCKED:` in the report.
+5. Blocked, or you found a bug: `team notify <a> "<one line>"`, write a PARTIAL report, then end the turn.
+6. Only the PM advances the protected branch (`main` by default); agents push their own task branches only.
+7. Tokens are injected only when the PM calls a real tool (`GH_TOKEN="$(< .gh-pat)" gh …`); never echoed, never written into project files.
 
-## 门禁
+## Gates
 
-- 项目门禁：`{{GATES}}`
-- 复验使用**独立 checkout**：`team review` 会 `git worktree add --detach` 该分支，日志落在
-  `{{DOCS_DIR}}/reviews/<ID>-verify.log`（已 gitignore）。
-- 任务书可以要求比项目门禁更严的验收命令；以任务书为准。
+- Project gates: `{{GATES}}`
+- Verification uses an **independent checkout**: the PM prepares it (`git worktree add --detach`), then
+  `team review <ID> --dir <checkout>` runs the gates and writes the evidence.
+- A brief may require stricter commands than the project gates; the brief wins.
 
-## 初始化与看门狗
+## Bootstrap and watchdog
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team bootstrap     # 新项目一条命令：配置+文档骨架+worktree+看门狗窗口
-bash {{SKILL_DIR}}/scripts/team watchdog up   # 默认：watchdog 窗口跑监视器 + 巡检（PM 负责配置）
-bash {{SKILL_DIR}}/scripts/team watchdog up   # 起看门狗窗口（同 session；只有一个后端）
+bash {{SKILL_DIR}}/scripts/team bootstrap     # new project in one command: config + docs skeleton + worktrees + watchdog window
+bash {{SKILL_DIR}}/scripts/team watchdog up   # the watchdog window runs the monitor + patrols (PM-configured)
 ```
 
-## 保活与定时巡检
+## Liveness and periodic patrol
 
-- watchdog 是**叫醒 PM 的节拍器**，不是心跳保活：默认每 15 分钟（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）
-  看一次“有没有活儿”（未读通知 / 待复验 / 看板 todo·wip / blocked / 有任务但停了的 agent）。
-  有待办 → 叫醒 PM（在跑就提醒，不在跑就用 `pi -c` 拉起）；没待办 → 不打扰、不启动。
-- PM 确认无事可做或需要人工介入：`team standby on --reason "…"` 主动停工，之后不会再被叫醒；
-  人处理完 `team standby off`。
-- 它不管 tmux 布局与 agent：session/窗口没了只告警（人工 `team up`，或设 `TEAM_WATCH_REBUILD_TMUX=1`）；
-  agent 的启停/续跑是 PM 的活（`team resume [--dry-run]`，人工代劳 `team up --agents`）。
-- 容量底线是 swap 不被打满（`team ps` 看余量），RAM 紧只意味着卡。
-- 彻底停工：`team standby on`（临时）或 `team uninstall-watchdog --yes` + `team teardown --all`。
+- The watchdog is a **metronome that wakes the PM**, not a heartbeat: every 15 minutes by default
+  (`TEAM_WATCH_INTERVAL=900`, 300-3600 recommended) it checks for work (unread notifications / reports awaiting
+  verification / board todo·wip / blocked / agents with unfinished tasks that stopped). With work → wake the PM
+  (nudge if running, start with `pi -c` if not). Without work → stay silent, start nothing.
+- Nothing to do, or a human is needed: `team standby on --reason "…"`. No further wake-ups; a human runs
+  `team standby off`.
+- It does not manage tmux layout or agents: a missing session/window is only reported (a human runs `team up`, or
+  set `TEAM_WATCH_REBUILD_TMUX=1`); starting/resuming agents is the PM's job (`team resume [--dry-run]`,
+  or a human runs `team up --agents`).
+- The capacity floor is swap must not be exhausted (`team ps` shows headroom); tight RAM only means slowness.
+- Standing the team down completely: `team standby on` (temporary), or `team teardown --all` for teardown.

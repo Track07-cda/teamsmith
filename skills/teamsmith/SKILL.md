@@ -1,216 +1,235 @@
 ---
 name: teamsmith
-description: teamsmith 让一个 agent 当项目经理（默认 Pi，设计上适配任意 TUI Agent）：派单、独立复验、合并、留账：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（看门狗窗口：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a tmux window, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗窗口 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
+description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A watchdog window wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project.
 license: MIT
 metadata:
-  version: "1.13.0"
+  version: "1.14.0"
 ---
 
-# teamsmith · 让一个 agent 真正负责项目
+# teamsmith · one agent that actually owns the project
 
-把「一个 PM 会话 + 若干 worker agent」的工作方式固化成一键可用的工具：PM 写任务书并派单，
-worker 在各自的 worktree 里并行实现、写报告、开 PR/MR，PM 在独立 checkout 上复验后合并。
-**你自己通常就是那个 PM**：用户让你「组建团队/派单/并行开发」时，按下面的 PM 循环来做。
+teamsmith turns "one PM session + several worker agents" into a one-command setup: the PM writes task briefs and
+dispatches them, workers implement in parallel inside their own worktrees, the PM verifies on an independent
+checkout, then merges. **You usually are that PM**: when the user asks to "set up a team / dispatch tasks /
+run agents in parallel", follow the PM loop below.
 
 ```
-PM(本会话, tmux <session>:pm)          worker agents(各自 .worktrees/<agent>)
-   task / dispatch ──────────────────▶  pi --session-id <s>-<a>（交互式，可旁观）
-   digest / inbox  ◀── 回合结束自动通知 ──  extension/team-notify.ts → inbox + tmux 唤醒
-   review(PM 给的独立 checkout 跑门禁) ──▶  报告 reports/<ID>-<a>.md + PR/MR
+PM(this session, tmux <session>:pm)     worker agents(each in .worktrees/<agent>)
+   task / dispatch ──────────────────▶  pi --session-id <s>-<a>  (interactive, watchable)
+   digest / inbox  ◀── auto-notify on turn end ── extension/team-notify.ts → inbox + tmux wake-up
+   review(independent checkout, run gates) ──▶  reports/<ID>-<a>.md + PR/MR
    merge / close   ──────────────────▶  BOARD → done
 ```
 
-## 新项目：一条命令
+## New project: one command
 
 ```bash
-cd <你的项目>                     # 需要是 git 仓库（有提交）
+cd <your project>                 # must be a git repo with at least one commit
 bash <skill>/scripts/team bootstrap
 ```
 
-`bootstrap` 幂等地把项目装到「可以派单」：探测当前 tmux session/窗口 → 写 `.pi/team/config.sh` +
-`docs/team/` 文档骨架 + `AGENTS.md` 协议段 + `.gitignore` → **打印**每个 agent 的
-`git worktree add` 命令（git 归 PM；想让它代建就加 `--create-worktrees`）→ 起看门狗（默认同 session 的
-`watchdog` 窗口）→ 打印下一步清单。详见 [references/bootstrap.md](references/bootstrap.md)，
-也可以把 `templates/bootstrap-prompt.md.tmpl` 交给新项目的 PM 让它照做。
+`bootstrap` idempotently brings a project to "ready to dispatch": detect the current tmux session/window →
+write `.pi/team/config.sh` + the `docs/team/` skeleton + the `AGENTS.md` protocol section + `.gitignore` →
+**print** the `git worktree add` command for each agent (git stays with the PM; add `--create-worktrees` to have
+it create them) → start the watchdog (a `watchdog` window in the same session) → print next steps.
+See [references/bootstrap.md](references/bootstrap.md); you can also hand
+`templates/bootstrap-prompt.md.tmpl` to a new project's PM and let it follow along.
 
-## 名字与兼容（旧名 pi-team）
+## Name and compatibility (former name: pi-team)
 
-- 本 skill 旧名 **`pi-team`**，v1.13.0 起改名 **`teamsmith`**（仓库名同）。
-- **契约不变**：命令仍是 **`team`**；项目配置仍是 **`.pi/team/config.sh`**；环境变量仍是 **`TEAM_*`**；
-  团队文档仍是 **`docs/team/**`**。旧项目无需任何改动。
-- 旧路径 `skills/pi-team` 保留为**兼容软链** → `skills/teamsmith`（老配置里的绝对路径继续可用）。
-- 旧项目 `AGENTS.md` 里的 `<!-- pi-team:begin -->` 标记会在下次 `team init/bootstrap` 时就地迁移为新标记。
-- Pi 里的热重载命令：`/teamsmith-reload`（旧名 `/pi-team-reload` 仍注册，做兼容别名）。
+- Renamed from **`pi-team`** to **`teamsmith`** in v1.13.0 (repo name included).
+- **Contracts unchanged**: the command is still **`team`**; project config is still **`.pi/team/config.sh`**;
+  env vars are still **`TEAM_*`**; team docs are still **`docs/team/**`**. Existing projects need no changes.
+- The old path `skills/pi-team` is kept as a **compatibility symlink** to `skills/teamsmith`, so older
+  absolute paths keep working.
+- An `AGENTS.md` section marked `<!-- pi-team:begin -->` is migrated in place to the new marker by the next
+  `team init`/`bootstrap`.
+- Hot-reload command in Pi: `/teamsmith-reload` (the old `/pi-team-reload` stays registered as an alias).
 
-## 30 秒上手
+## 30-second start
 
 ```bash
-SKILL=~/.agents/skills/teamsmith                       # 本 skill 目录
-TEAM="bash $SKILL/scripts/team"                      # 单入口 CLI（`team help` 看全部子命令）
+SKILL=~/.agents/skills/teamsmith                     # this skill's directory
+TEAM="bash $SKILL/scripts/team"                      # single-entry CLI (`team help` lists everything)
 
-cd <你的项目>                                        # 必须已经是 git 仓库且有提交
-$TEAM init --session myproj --agents "dev verify"    # 写配置+文档骨架+AGENTS.md 协议段
-$TEAM doctor                                         # 环境自检（git/tmux/pi/门禁/forge/内存）
+cd <your project>                                    # must already be a git repo with commits
+$TEAM init --session myproj --agents "dev verify"    # config + docs skeleton + AGENTS.md section
+$TEAM doctor                                         # environment self-check
 
-tmux new -s myproj -n pm                             # PM 会话（通知会敲进这个窗口），里面跑 pi
-$TEAM task T1.1 --title "第一个任务" --agent dev      # 生成任务书
-$EDITOR docs/team/tasks/T1.1-*.md                    # 写清背景/交付物/边界/验收命令
-$TEAM add-agent dev --create                        # --create 才代建 worktree（默认只打印 git 命令）
+tmux new -s myproj -n pm                             # PM session (notifications are typed into this window)
+$TEAM task T1.1 --title "first task" --agent dev      # generate a task brief
+$EDITOR docs/team/tasks/T1.1-*.md                     # make it self-contained
+$TEAM add-agent dev --create                          # --create builds the worktree (default prints the git command)
 $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 ```
 
-## 命令表
+## Command table
 
-| 目的 | 命令 |
+| Goal | Command |
 |---|---|
-| 初始化 / 自检 | `team init [--session s] [--agents "a b"] [--vcs local\|github\|gitlab]`、`team doctor` |
-| 观察 | `team roster`（窗口/分支/脏/领先）、`team status [ID]`、`team ps`（容量+模型并发+PM/watchdog 存活）、`team digest`（PM 待办） |
-| 收件箱 | `team inbox [agent] [--ack] [--all]` |
-| 文档契约 | `team task <ID> --title ... --agent a`、`team board add\|set\|ls`、`team thread <a> "..." --from pm --re <ID>`、`team report <ID> <a>` |
-| 派单 | `team add-agent <a>`、`team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--print]` |
-| 协作 | `team say <a> "<单行消息>" [--no-verify]`（发送后校验送达；agent 没在跑时落收件箱并提示 `resume`）、`team notify <a> "<一句话>"`（agent→PM） |
-| 复验 | `team review <ID> --dir <PM 准备的独立 checkout> [--no-gates] [--strong]` → `reviews/<ID>.md`（只跑门禁 + 写证据；`--strong` 要求对抗性验证包 + finding 翻转证据） |
-| 收尾 | `team close <ID> [--keep-window]`（只动 BOARD/状态/窗口，不碰 git）、`team teardown --agent a [--purge]`（模块化的窗口/worktree 清理，需显式指定） |
-| 初始化 | `team bootstrap [--agents "dev verify"] [--print]`（推荐）、`team init`、`team doctor` |
-| 看门狗 | `team watchdog up\|down\|restart\|status\|logs`（同 session 的 `watchdog` 窗口跑监视器 + 定时巡检；只有一个后端）、`team watch [--once]`（前台巡检） |
-| 监视器 | `team monitor [--once] [--activity]`（**只服务当前 tmux session**：谁在跑/任务/待办/容量；`--activity` 才追加各 agent 会话活动流，默认关）、`team panel` 由它复用 |
-| PM/agent | `team up [--agents]`（恢复 PM）、`team resume`（PM 的工具，续跑停了的 agent）、`team standby on\|off`（PM 主动停工） |
-| 跨项目会议 | `team meeting open/say/read/list/inbox/propose/agree/close`（PM 对 PM 的 peer 交流：接口对接/建议/问题报告；**不是指令通道**，共识需双方 agree） |
-| 更新 | `team mark-loaded`（开局记版本）、`team version --check`（是否该刷新）、`team changelog [--since X]`、`team reload` |
-| 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测；`TEAM_SMOKE_FAST=1 team smoke` = **快模式**，只跑纯逻辑段，约 10 秒，跳过的真进程段会打印 `SKIP（FAST 模式）`）、`team version` |
+| Init / self-check | `team init [--session s] [--agents "a b"] [--vcs local\|remote]`, `team doctor` |
+| Observe | `team roster` (windows/branch/dirty/ahead), `team status [ID]`, `team ps` (capacity + model limits + PM/watchdog liveness), `team digest` (PM's pending work) |
+| Inbox | `team inbox [agent] [--ack] [--all]` |
+| Document contracts | `team task <ID> --title ... --agent a`, `team board add\|set\|ls`, `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
+| Dispatch | `team add-agent <a>`, `team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--print]` |
+| Collaborate | `team say <a> "<one-line message>" [--no-verify]` (verifies delivery; falls back to the inbox when the agent is not running), `team notify <a> "<one line>"` (agent → PM) |
+| Verify | `team review <ID> --dir <PM-prepared independent checkout> [--no-gates] [--strong]` → `reviews/<ID>.md` (runs gates + writes evidence; `--strong` also requires an adversarial package and flip evidence) |
+| Wrap up | `team close <ID> [--keep-window]` (BOARD/state/window only, never git), `team teardown --agent a [--purge]` (explicit cleanup) |
+| Bootstrap | `team bootstrap [--agents "dev verify"] [--print]` (recommended), `team init`, `team doctor` |
+| Watchdog | `team watchdog up\|down\|restart\|status\|logs` (a `watchdog` window in the same session runs the monitor + periodic patrol; single backend), `team watch [--once]` (foreground patrol) |
+| Monitor | `team monitor [--once] [--activity]` (**serves the current tmux session only**: who is running / tasks / pending / capacity; `--activity` adds per-agent activity streams, off by default), `team panel` reuses it |
+| PM/agent lifecycle | `team up [--agents]` (recover the PM), `team resume` (PM's tool: continue stopped agents), `team standby on\|off` (PM deliberately stands down) |
+| Cross-project meetings | `team meeting open/say/read/list/inbox/propose/agree/close` (PM-to-PM peer exchange: interface work, advice, problem reports; **not a command channel** — consensus needs both sides) |
+| Updates | `team mark-loaded` (record the version at session start), `team version --check` (should I reload?), `team changelog [--since X]`, `team reload` |
+| Diagnostics | `team paths` (resolved paths/session), `team smoke` (end-to-end self-test; `TEAM_SMOKE_FAST=1 team smoke` = **fast mode**, pure-logic sections only, ~10s, skipped process sections print `SKIP (FAST mode)`), `team version` |
 
-## 先读信条，再看流程
+## Read the creed first, then the process
 
-PM 的判断标准写在 [references/philosophy.md](references/philosophy.md)（8 条信念 + 每条的反面案例）：
-**交付物必须能被独立验证 · 状态即承诺 · 少管等于可靠 · 失败是信息（假绿比没做更危险）·
-重复的问题必须变成机制 · 一切可交接 · 长期主义与预算意识 · 权威来自证据与授权**。
-下面的流程只是这些信条的实现方式；两者冲突时以信条为准，并回来改流程。
+The PM's judgement standard lives in [references/philosophy.md](references/philosophy.md) (8 principles, each with
+its failure mode): **deliverables must be independently verifiable · status is a promise · govern less to be
+reliable · failure is information (a false green is worse than nothing) · repeated problems must become
+mechanisms · everything must be handover-ready · long-termism and budget awareness · authority comes from
+evidence and authorization, not from a title**. The loop below is just how those principles are implemented;
+when they conflict, the creed wins and the process gets fixed.
 
-## 作为 PM 的循环（你该怎么做）
+## The PM loop (what you actually do)
 
-> 开局（或被叫醒后）先跑：`team digest` → `team inbox --ack` → `team resume --dry-run` → `team watchdog-status`。
-> 职责划分：**watchdog 是“定时看看有没有活儿”的节拍器**（默认 15 分钟一次）：有待办才叫醒你，
-> 没待办就不打扰，不要求你一直运行。agent 的启停/续跑、复验、合并都是你的事。
-> 如果你确认无事可做或需要人工介入：`team standby on --reason "…"` 主动停工（之后不会再被叫醒，
-> 人处理完 `team standby off`）。
+> On start (or after being woken): `team digest` → `team inbox --ack` → `team resume --dry-run` → `team watchdog-status`.
+> Division of labour: **the watchdog is a metronome** ("is there work?" every 15 minutes by default): it wakes you
+> only when there is pending work, stays silent otherwise, and does not require you to keep running. Starting,
+> stopping and resuming agents, verification and merging are all yours.
+> If you have nothing to push or need a human decision: `team standby on --reason "…"` to stand down
+> (you will not be woken again until someone runs `team standby off`).
 
-1. **建模**：`team doctor`，必要时 `init`；把用户需求拆成里程碑写进 `ROADMAP.md`，
-   每个任务写成**自包含**任务书（背景/交付物/边界/可复制的验收命令/报告要求）——
-   默认开发模型是便宜模型，它不会纠正模糊需求。
-2. **派单**：`team dispatch <a> <ID> <taskfile>`。派单前先 `team ps`（内存/模型并发）。
-   一个 agent 一个长期 worktree；同一 agent 再派单即复用会话（断点续跑），要开新会话用 `--fresh`。
-3. **等通知**：worker 回合结束会自动写 `inbox/<agent>.md` 并敲你的窗口叫醒你。
-   不要轮询 agent 的屏幕；读 `team inbox --ack` 与 `team digest`。
-4. **复验（不可跳过）**：`team review <ID>` —— 在独立 detached worktree 上跑门禁，产出
-   `reviews/<ID>.md`。**报告是主张，复验结果是证据**；自己再读一遍 diff 是否满足任务书。
-5. **通过** → 你自己跑 git/forge：squash 合并（有 PR 就先 `gh pr merge --squash --delete-branch <PR>` 再
-   `git fetch && git merge --ff-only`）→ `team board set <ID> done` → `team close <ID>`。
-   **不通过** → `team thread <a> "<失败证据 + 期望>"` + `team say <a> "<单行指令>"` 退回。
-6. **收尾 / 汇报**：更新 `BOARD.md`（`team board set`）、把关键决策写进 `DECISIONS.md`（含理由与影响），
-   向用户汇报「交付了什么 + 证据在哪 + 下一步」。用户要的是结论与风险，不是命令流水。
+1. **Model the work**: `team doctor`, `init` if needed; break the user's request into milestones in `ROADMAP.md`
+   and write each task as a **self-contained brief** (context / deliverables / boundaries / copy-pasteable
+   acceptance commands / report requirements) — the default worker model is cheap and will not fix vague requests.
+2. **Dispatch**: `team dispatch <a> <ID> <taskfile>`. Check `team ps` (memory / model concurrency) first.
+   One long-lived worktree per agent; dispatching again to the same agent resumes its session, use `--fresh` for a
+   new one.
+3. **Wait for notifications**: when a worker's turn ends it appends to `inbox/<agent>.md` and knocks on your
+   window. Do not poll agent screens; read `team inbox --ack` and `team digest`.
+4. **Verify (never skip)**: `team review <ID> --dir <checkout>` — run the gates on a clean, independent checkout
+   and write `reviews/<ID>.md`. **A report is a claim; your verification is the evidence.** Re-read the diff
+   yourself against the brief.
+5. **Pass** → run git/forge yourself: squash-merge (with a PR: `gh pr merge --squash --delete-branch <PR>` first,
+   then `git fetch && git merge --ff-only`) → `team board set <ID> done` → `team close <ID>`.
+   **Fail** → `team thread <a> "<failure evidence + expectation>"` + `team say <a> "<one-line instruction>"`.
+6. **Wrap up / report**: update `BOARD.md`, record key decisions in `DECISIONS.md` (with rationale and impact),
+   and report to the user as "delivered + where the evidence is + next step". Users want conclusions and risk,
+   not a command log.
 
-PM 需要停下来问用户的情况只有：合并/推送等**共享状态变更**（skill 用 `--yes` 表达授权）、
-范围变更、需要用户拍板的选型（先派调研任务取证，再写 `DECISIONS.md`）。
+The only reasons to stop and ask the user: **shared-state changes** (merge/push — the skill expresses
+authorization with `--yes`), scope changes, and decisions that need the user's call (dispatch a research task
+first, then write `DECISIONS.md`).
 
-## 拿到 skill 更新（三条路径）
+## Getting skill updates (three paths)
 
 ```bash
-bash <skill>/scripts/team mark-loaded      # PM 开局记一次：我这一会话加载的是哪个版本
-bash <skill>/scripts/team version --check  # 任何时候：磁盘版本 vs 本会话版本 + 生效方式
-bash <skill>/scripts/team changelog        # 变更史（--since v1.8.0 只看新的）
+bash <skill>/scripts/team mark-loaded      # once per PM session: record the version this session loaded
+bash <skill>/scripts/team version --check  # anytime: disk version vs session version + how to apply
+bash <skill>/scripts/team changelog        # change history (--since v1.8.0 for recent only)
 ```
 
-| 内容 | 生效方式 |
+| Content | How it takes effect |
 |---|---|
-| `scripts/**`（CLI） | **零操作**：每次调用现读盘 |
-| `SKILL.md` / `references/**` / `templates/**` | 在 Pi 里输入 **`/reload`**（或 `/teamsmith-reload`，或让模型调 `reload_skills` 工具）。**注意**：`/reload` 只刷新技能清单/描述（system prompt）与扩展；**已经读进对话历史的正文不会变**，所以 reload 后要重新 `read <skill>/SKILL.md`（本扩展会在 reload 后自动发一条 follow-up 提示，触发这轮重读） |
-| `extension/team-notify.ts` | 同上（`/reload` 会清扩展缓存并重新 import） |
+| `scripts/**` (CLI) | **Nothing to do**: every call reads from disk |
+| `SKILL.md` / `references/**` / `templates/**` | Type **`/reload`** in Pi (or `/teamsmith-reload`, or let the model call the `reload_skills` tool). **Note**: `/reload` refreshes the skill list/descriptions (system prompt) and extensions; **text already read into the conversation history does not change**, so after reloading you must `read <skill>/SKILL.md` again (the extension sends a follow-up prompt that triggers that re-read) |
+| `extension/team-notify.ts` | Same as above (`/reload` clears the extension cache and re-imports) |
 
-依据：Pi 的 `/reload` 会重新发现 skill 并重建 system prompt，同时清扩展模块缓存、重新解析
-`--skill`/`-e` 传入的路径。`team version --check` 提示"本会话是旧的"时，按上面表格操作即可；
-不需要重启整个会话（`-c` 重启也不会丢历史，但没必要）。
+Rationale: Pi's `/reload` rediscovers skills and rebuilds the system prompt, clears the extension module cache,
+and re-resolves `--skill`/`-e` paths. When `team version --check` says your session is stale, follow the table
+above; restarting the whole session is unnecessary (`-c` keeps history, but it is not needed).
 
-## git 与 forge：PM 直接用工具，skill 不包装
+## git and forge: the PM uses the tools; the skill does not wrap them
 
-skill **不执行**、也**不代打印** git/forge 命令——那属于"过度包装已有工具"。PM 按下面的约定直接用 `git` / `gh` / `glab`：
+The skill **does not run** and **does not print recipes for** git/forge operations — that would be wrapping tools
+that already exist. The PM uses `git` and whatever forge tooling fits:
 
 ```bash
-# ① 准备（每个 agent 一个长期 worktree；v1.11 起由 PM 建）
-git -C <root> worktree add -b <分支> <root>/.worktrees/<agent> <保护分支>
+# 1) Preparation (one long-lived worktree per agent)
+git -C <root> worktree add -b <branch> <root>/.worktrees/<agent> <protected-branch>
 
-# ② 开工前（dispatch 只检查、不代做）：工作树不脏、不在保护分支上
+# 2) Before work starts (dispatch only checks, never does it): worktree clean, not on the protected branch
 git -C <root>/.worktrees/<agent> status --short
 
-# ③ 复验（PM 自己准备独立 checkout；skill 只跑门禁 + 写证据）
-git -C <root> worktree add --detach /tmp/review-<ID> <分支>
+# 3) Verification (the PM prepares the checkout; the skill only runs gates and writes evidence)
+git -C <root> worktree add --detach /tmp/review-<ID> <branch>
 team review <ID> --dir /tmp/review-<ID> --strong
 
-# ④ 合并（有 PR：先合 PR 再快进本地；没 PR：本地 squash）
-gh pr merge --squash --delete-branch <PR>          # 或 glab mr merge
-git -C <root> fetch origin <保护分支> && git -C <root> merge --ff-only FETCH_HEAD
-# 无 PR：git -C <root> merge --squash <分支> && git -C <root> commit -m "<ID>: <标题>"
-git -C <root> push origin <保护分支>
+# 4) Merge (with a PR: merge the PR first, then fast-forward locally; without: squash locally)
+gh pr merge --squash --delete-branch <PR>          # or glab mr merge, or a curl/HTTP call
+git -C <root> fetch origin <protected-branch> && git -C <root> merge --ff-only FETCH_HEAD
+# no PR: git -C <root> merge --squash <branch> && git -C <root> commit -m "<ID>: <title>"
+git -C <root> push origin <protected-branch>
 
-# ⑤ 收尾：代码真的进了保护分支之后才标 done
+# 5) Wrap up: mark done only after the code really landed on the protected branch
 team board set <ID> done
 ```
 
-forge 无关：GitHub 用 `gh`、GitLab 用 `glab`/`curl`、Gitea 用 `tea`、没有 CLI 就网页操作——**都由 PM 决定**，
-skill 不假设任何 forge。token 从配置的 token 文件读（`TEAM_TOKEN_FILE` / `TEAM_GITLAB_TOKEN_FILE`），
-只在调用命令时注入，不回显、不写日志。
+Forge-agnostic: GitHub via `gh`, GitLab via `glab`/`curl`, Gitea via `tea`, or the web UI — **the PM decides**;
+the skill assumes nothing. Tokens stay in the project's token files (`TEAM_TOKEN_FILE` /
+`TEAM_GITLAB_TOKEN_FILE`) and are injected only when the PM calls a tool: never echoed, never logged.
 
-## 跨项目边界（谈事可以，指挥不行）
+## Cross-project boundary (you may talk; you may not command)
 
-- **允许**：讨论接口怎么接、提建议+依据、报告问题与复现、约联调窗口、各自认领自己那半边。
-- **不允许**：指挥别的 PM/agent、替对方决策、冒充人类下令、改对方仓库或状态。
-- 跨项目讨论走 `team meeting`（PM 对 PM，文件为真相 + 可选敲门）；**worker 不参会**（在报告里写
-  `BLOCKED:` 由 PM 去谈）。机制里没有 `command` 这种 intent，`--as-user` 只有人类终端能用。
-- 详见 [references/meeting.md](references/meeting.md)。
+- **Allowed**: discussing interfaces, advice with evidence, problem reports with reproduction, scheduling a joint
+  test window, each side taking its own half.
+- **Not allowed**: commanding another PM/agent, deciding on their behalf, impersonating a human, modifying their
+  repo or state.
+- Cross-project discussion goes through `team meeting` (PM to PM, files are the source of truth, optional knock);
+  **workers do not attend** (they write `BLOCKED:` in their report and the PM takes it up). The mechanism has no
+  `command` intent, and `--as-user` only works from a human terminal.
+- Details: [references/meeting.md](references/meeting.md).
 
-## 不可协商的规则（会被复验）
-- **没有真实执行过，不得声称通过**。报告必须带命令与输出尾部；PM 独立复跑。
-- agent 只改自己有归属的目录（`OWNERSHIP.md`）；跨目录 → 报告写 `BLOCKED:`。
-- agent 禁止 push 保护分支、force push、merge PR/MR、rebase/删除他人分支。
-- token 放在项目里的 token 文件（`TEAM_TOKEN_FILE`/`TEAM_GITLAB_TOKEN_FILE`，`.gitignore` 忽略），
-  由 PM 在调用真实工具时注入（`GH_TOKEN="$(< .gh-pat)" gh …`）；**永不回显、永不落盘、不进提交**。
-- 会写共享状态的操作需要 `--yes`（= 用户已授权）：`team meeting open/close/agree` 等。
-  git/forge 的写操作不经过 skill —— 由 PM 自己判断并执行（也是共享状态变更，同样要有授权）。
-- 一个 agent 一个长期 worktree：**不要移动它**（Pi session 按 cwd 归属，移动等于丢记忆）。
-- 默认 `TEAM_BRANCH_MODE=task`：**一任务一分支**（`task/<ID>-<slug>`，从保护分支切出），复验/合并/回滚的单位都是任务；
-  想要一 agent 一长期分支就设 `agent`。
-- **看门狗由 PM 配置**：`team watchdog up` —— 默认在**同一个 tmux session 的 `watchdog` 窗口**里跑
-  `team monitor`（上半屏团队状态，下半屏每个 agent 的会话活动流），同时每 15 分钟（可配）巡检一次“有没有活儿”。
-  `status` / `logs` / `down` 都支持。只有一个后端（同 session 的窗口）——不引入容器/systemd：
-  依赖越少越可靠，tmux server 没了 PM 也没了，重建时 `team up` 一起起来。
-- **PM 不需要一直运行**：有待办时才需要你在线。默认每 15 分钟一次定时巡检（`TEAM_WATCH_INTERVAL=900`，
-  建议 300~3600）：有待办就叫醒你（你现在不在跑就用 `pi -c` 把你拉起来），没待办就什么都不做。
-  **确认无事可做 / 需要人工介入时，`team standby on --reason "…"` 主动停工**——之后不会再被叫醒，
-  待办积压仍会记进 `state/watchdog.log`，人处理完 `team standby off`。
-  巡检**不管 tmux 布局、不管 agent**；停了的 agent 由你用 `team resume` 决定续不续。
+## Non-negotiable rules (verified during review)
+- **Never claim something passed without having run it.** Reports must include commands and output tails; the PM
+  re-runs independently.
+- Agents only touch directories they own (`OWNERSHIP.md`); cross-directory needs → write `BLOCKED:` in the report.
+- Agents must not push the protected branch, force-push, merge PR/MRs, or rebase/delete other people's branches.
+- Tokens live in project token files (`TEAM_TOKEN_FILE` / `TEAM_GITLAB_TOKEN_FILE`, gitignored) and are injected by
+  the PM when calling real tools (`GH_TOKEN="$(< .gh-pat)" gh …`); **never echoed, never written, never committed**.
+- Operations that change shared state require `--yes` (meaning the user authorized it): `team meeting open/close/agree`, etc.
+  git/forge writes do not go through the skill — the PM executes them (they are shared-state changes too, so they need authorization).
+- One long-lived worktree per agent: **do not move it** (sessions are keyed by cwd; moving loses the agent's memory).
+- Default `TEAM_BRANCH_MODE=task`: **one branch per task** (`task/<ID>-<slug>` cut from the protected branch); the task
+  is the unit of verification, merge and rollback. Set `agent` for one long-lived branch per agent.
+- **The watchdog is configured by the PM**: `team watchdog up` runs `team monitor` in a `watchdog` window **in the
+  same tmux session** and patrols every 15 minutes (configurable) for pending work. `status` / `logs` / `down` are
+  supported. There is exactly one backend (the tmux window) — no container, no systemd: fewer moving parts is more
+  reliable, and if the tmux server dies the PM is gone too, so `team up` rebuilds both.
+- **The PM does not need to run continuously**: you are only needed when there is work. Patrols default to every
+  15 minutes (`TEAM_WATCH_INTERVAL=900`, 300–3600 recommended): pending work wakes you (if you are not running it
+  starts you with `pi -c`), otherwise it does nothing. **When there is nothing to do or a human is needed,
+  `team standby on --reason "…"` stands you down** — no further wake-ups; backlog still lands in
+  `state/watchdog.log`, and a human runs `team standby off`. Patrols **do not manage tmux layout or agents**;
+  resuming stopped agents is your call via `team resume`.
 
-## 深入阅读（按需，不要一次全读）
+## Deeper reading (read on demand, not all at once)
 
-| 文件 | 什么时候读 |
+| File | When |
 |---|---|
-| `references/philosophy.md` | **PM 的信条**：判断标准与反面案例（先读这个，再读流程） |
-| `references/protocol.md` | 想理解每条规则的理由（独立复验、唤醒机制、容量底线、保活链路、安全模型） |
-| `references/config.md` | 配置键含义、项目落盘布局、环境变量覆盖（环境变量优先于配置文件） |
-| `references/meeting.md` | 跨项目会议：边界（能讨论什么、不能干什么）、共享区、命令、敲门、守卫 |
-| `references/bootstrap.md` | 新项目初始化：一条命令做什么、之后 PM 怎么走 |
-| `references/workflows.md` | 端到端 runbook：建队、派单、复验、合并、**巡检/看门狗窗口**、并行扩展、阻塞处理 |
-| `references/troubleshooting.md` | 通知不到、会话丢失、worktree 冲突、forge 403、报告不实 |
-| `templates/` | 需要手写任务书/报告/看板时抄模板 |
-| `scripts/team`、`scripts/lib/*.sh` | 要改行为时（先用 `team <cmd> --print` 看它生成什么） |
-| `tests/smoke.sh`、`tests/skill-load.mjs` | 想确认这套工具在本机可用：`team smoke`（临时仓库端到端自测，不碰本项目）。**快模式**：`TEAM_SMOKE_FAST=1 team smoke`（或 `TEAM_SMOKE_FAST=1 bash tests/smoke.sh`）只跑不依赖真 tmux 场地/真实 pi 进程的段落，适合派单/复验的日常门禁；**不覆盖**：派单真拉起 pi、窗口/close 后窗口、watchdog 拉起 PM 与 standby·monitor、agent 真实续跑、跨 session 打字守卫、say 离线投递、敲门 session 探测 —— 这些段在快模式下只打印 `SKIP（FAST 模式）`，改这些链路或发版时仍要跑全量（不设 `TEAM_SMOKE_FAST`） |
+| `references/philosophy.md` | **The PM creed**: judgement standards and their failure modes (read this first) |
+| `references/protocol.md` | Why each rule exists (independent verification, wake-up loop, capacity floor, safety model) |
+| `references/config.md` | Config keys, on-disk layout, env overrides (env beats config) |
+| `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
+| `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
+| `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/watchdog, scaling, blockers |
+| `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |
+| `templates/` | Copy when you need to hand-write a brief/report/board |
+| `scripts/team`, `scripts/lib/*.sh` | When changing behaviour (use `team <cmd> --print` to see what it generates) |
+| `tests/smoke.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, window/close behaviour, the watchdog waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release |
 
-## 环境要求
+## Requirements
 
-**硬依赖只有四项**：`bash` ≥4、`git`（≥2.31，用 `--path-format=absolute`）、`tmux`、`pi`
-（需支持 `--session-id`/`-e`/`--skill`）。无 jq/python/node 依赖。
+**Only four hard dependencies**: `bash` ≥ 4, `git` (≥ 2.31, uses `--path-format=absolute`), `tmux`, and `pi`
+(needs `--session-id`/`-e`/`--skill`). No jq/python/node dependency.
 
-- **没有 forge 依赖**：skill 不探测、不调用 gh/glab/tea，也不读 token；开 PR/MR 由 PM 用
-  `git` + `curl`/任意 CLI/网页完成（`TEAM_VCS` 只是措辞标签）。
-- **没有容器依赖**：看门狗就是同 session 的 `watchdog` 窗口（`team watchdog up`），只有一个后端。
-- 推荐（不要求）：**magic-context**（`@cortexkit/pi-magic-context`）——PM 是长期会话，靠它做跨会话记忆与检索；
-  `team doctor` 会提示有没有装（`TEAM_REQUIRE_MAGIC_CONTEXT=1` 可要求必须有）。
-- 可选小工具：`timeout`（门禁硬超时；没有则降级并警告）、`lsof`（无 `/proc` 的环境才需要）。
+- **No forge dependency**: the skill never probes or calls `gh`/`glab`/`tea` and never reads tokens; opening a
+  PR/MR is the PM's job via `git` plus `curl`/any CLI/web UI (`TEAM_VCS` is only a wording label).
+- **No container dependency**: the watchdog is a `watchdog` window in the same tmux session (`team watchdog up`).
+- Recommended (not required): **magic-context** (`@cortexkit/pi-magic-context`) — the PM is a long-lived session,
+  and this gives it cross-session memory and retrieval; `team doctor` reports whether it is installed
+  (`TEAM_REQUIRE_MAGIC_CONTEXT=1` makes it mandatory).
+- Optional helpers: `timeout` (hard timeout for gates; degrades with a warning), `lsof` (needed only where
+  `/proc` is unavailable).
