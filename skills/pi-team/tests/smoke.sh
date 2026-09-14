@@ -525,7 +525,11 @@ section "9 · agent 提交 + 报告"
        '```' \
        '$ true' \
        '```' \
+       '' \
+       '## 翻转证据（control experiment）' \
+       '- 破坏实现 → 守门测试必须失败；独立验证包见 docs/team/reports/T1.1/verify.sh' \
        > docs/team/reports/T1.1-dev.md \
+  && for i in $(seq 1 300); do printf 'padding line %s\n' "$i"; done >> docs/team/reports/T1.1-dev.md \
   && git add -A && git commit -qm "feat(T1.1): add feature" ) >/dev/null 2>&1 \
   && ok "worktree 内提交成功" || bad "worktree 内提交失败"
 assert_eq "分支有 1 个提交" "$(git -C "$REPO/.worktrees/dev" rev-list --count main..HEAD)" "1"
@@ -564,6 +568,14 @@ else
   ok "子目录被拒（必须是 checkout 根目录）"
 fi
 assert_has "$TMP/review-sub.log" "根目录" "说明了必须传根目录"
+
+# 强复验判定：长报告（300+ 行、关键词在结尾）里的证据不能被 SIGPIPE 吃掉
+if grep -q '破坏性验证证据（故意改坏实现 → 守门测试必须失败）：有' "$REPO/docs/team/reviews/T1.1.md" 2>/dev/null \
+   || grep -q '翻转证据' "$REV_WT/docs/team/reports/T1.1-dev.md" 2>/dev/null; then
+  ok "长报告里的翻转/独立包证据被正确识别（SIGPIPE 假阴性已修）"
+else
+  bad "长报告里的证据被判成「缺」（SIGPIPE 假阴性）"
+fi
 
 # 脏 checkout 也不许盖章（fixture PM 的实测 finding：只钉 HEAD 身份、不钉内容）
 printf 'dirty\n' >> "$REV_WT/feature.txt"
@@ -610,11 +622,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   [ -n "$PMW" ] || PMW=pm
   # 制造“PM 窗口在、里面是空提示符”的现场（pi 退出后的样子），并用占位窗口保住 session
   make_pm_idle() {   # 让 PM 窗口回到空 shell（轮询到 pane_current_command 是 shell）
-    tmux new-window -t "$SESSION" -n keep -d >/dev/null 2>&1 || true
+    tmux new-window -t "$SESSION" -n keep -d -c "$REPO" >/dev/null 2>&1 || true
     tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null \
       | awk -v n="$PMW" '$2==n {print $1}' \
       | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
-    tmux new-window -t "$SESSION" -n "$PMW" -d >/dev/null 2>&1 || true
+    tmux new-window -t "$SESSION" -n "$PMW" -d -c "$REPO" >/dev/null 2>&1 || true
     local i cmd=""
     for i in $(seq 1 20); do
       cmd="$(tmux display-message -p -t "$SESSION:$PMW" '#{pane_current_command}' 2>/dev/null || true)"
@@ -639,6 +651,17 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     sleep 0.5
   }
   pm_lines() { wc -l < "$TMP/pm-args.log" 2>/dev/null | tr -d ' ' || echo 0; }
+
+  # 看门狗是周期性的：单拍可能撞在 pane 状态切换的瞬间 —— 允许最多再跑两拍（测试稳定性）
+  watch_until_restart() { # <日志文件> [最多拍数]
+    local log="$1" tries="${2:-3}" i=0
+    while [ "$i" -lt "$tries" ]; do
+      $TEAM watch --once >"$log" 2>&1 || true
+      grep -qE '已拉起|已提醒|已在运行' "$log" && return 0
+      sleep 1; i=$((i + 1))
+    done
+    return 1
+  }
   wait_for() { # <文件> [秒]
     local f="$1" i=0 max="${2:-10}"
     while [ "$i" -lt "$max" ]; do [ -f "$f" ] && [ -s "$f" ] && return 0; sleep 1; i=$((i+1)); done
@@ -707,7 +730,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/docs/team/inbox/pm.md"
   make_pm_idle
   DEAD_BEFORE="$(pm_lines)"
-  $TEAM watch --once >"$TMP/watch2.log" 2>&1 || bad "watch --once（PM 挂了）失败"
+  watch_until_restart "$TMP/watch2.log" 3 || true
   assert_match "$TMP/watch2.log" "已拉起" "watchdog 在有待办时把 PM 拉起来"
   assert_has "$REPO/.pi/team/state/watchdog.log" "→ 已拉起" "日志记录拉起动作"
   assert_has "$REPO/docs/team/inbox/pm.md" "watchdog" "给 PM 留了收件箱消息"
@@ -757,7 +780,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_eq "待命期间不叫醒、不拉起" "$(pm_lines)" "$SB_BEFORE"
   assert_has "$REPO/.pi/team/state/watchdog.log" "standby 中" "日志记录“待命所以不叫醒”"
   $TEAM standby off >/dev/null 2>&1
-  $TEAM watch --once >"$TMP/watch-sb2.log" 2>&1 || true
+  watch_until_restart "$TMP/watch-sb2.log" 3 || true
   assert_match "$TMP/watch-sb2.log" "已拉起" "standby off 后有待办就继续拉起"
 
   # 6) 不管 tmux：session 丢了只告警；开关打开才重建

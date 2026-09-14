@@ -5,6 +5,18 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.8 · 2026-09-14
+
+**强复验的假阴性（SIGPIPE）+ 门禁测试场地**
+
+- **修一个静默假阴性**：`team review --strong` 判定「有没有翻转证据」用的是
+  `printf '%s' "$报告正文" | grep -q …`。在 `set -o pipefail` 下，grep 命中后提前退出会让 printf 收到 SIGPIPE（141），
+  于是**报告越长、证据写得越靠后，越被判成"缺"**（实测：V1.1 报告 7 处「翻转」被判 flip=0）。
+  现在改成写入临时文件再 grep。独立包的关键词也放宽到任务书的说法（独立验证包/对抗性包/不复用被测夹具）。
+  新增回归断言：300+ 行报告、关键词在结尾 → 必须判「有」。
+- smoke 的 tmux 场地显式 `-c "$REPO"`：新加的「进程 cwd 归属」校验本来会把测试自己的 PM 判成 foreign。
+- 看门狗断言容忍单拍抖动（最多重跑 3 拍）——消掉一个偶发 flake。
+
 ## v1.11.7 · 2026-09-14
 
 **smoke 快慢分层：门禁有 60 秒内的快模式（`TEAM_SMOKE_FAST=1`）**

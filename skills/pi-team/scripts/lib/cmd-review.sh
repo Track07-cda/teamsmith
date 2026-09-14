@@ -145,10 +145,14 @@ $dirty_list
   # 强复验（CEP 的实践）：要求证据表明「测试真的会失败」——对抗性验证包 + finding 测试翻转
   local strong_lines=""
   if [ "$strong" = "1" ]; then
-    local flip=0 indep=0 notes=""
-    printf '%s' "$report_excerpt" | grep -qE '翻转|会失败|破坏性验证|control experiment|guard test|regression test' \
-      && flip=1
-    printf '%s' "$report_excerpt" | grep -qE 'packages/verification|独立(验证)?包|independent (package|suite)' && indep=1
+    local flip=0 indep=0 notes="" _rep
+    # 注意：这里必须落到文件再 grep。`printf '%s' "$big" | grep -q` 在 `set -o pipefail` 下
+    # 会因为 grep 提前退出触发 SIGPIPE（141），于是**长报告里的证据被误判成"缺"**（实测过）。
+    _rep="$(mktemp)"
+    printf '%s' "$report_excerpt" > "$_rep"
+    grep -qE '翻转|会失败|破坏性验证|control experiment|guard test|regression test' "$_rep" && flip=1
+    grep -qE 'packages/verification|独立(验证)?(包|脚本|套件)|对抗(性)?(验证)?包|independent (package|suite)|不(复用|依赖)(被测|被验)' "$_rep" && indep=1
+    rm -f "$_rep"
     strong_lines="## 强复验（对抗性验证包 / finding 翻转）\n\n"
     strong_lines="${strong_lines}- 破坏性验证证据（故意改坏实现 → 守门测试必须失败）：$([ "$flip" = 1 ] && echo '有（报告里能找到）' || echo '**缺**：要求 agent 补「修复前红 → 修复后绿」或破坏实验）')\n"
     strong_lines="${strong_lines}- 独立验证包（不复用被测夹具）：$([ "$indep" = 1 ] && echo '有' || echo '**缺**：让 verify agent 在独立包里写对抗测试')\n"
