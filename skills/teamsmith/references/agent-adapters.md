@@ -91,6 +91,47 @@ Degradation is explicit: if nothing matches, or there are no Pi sessions and no 
 `⚫ 无会话` and says why; the team status panel above it is untouched. `--json` tags every block with
 `"source": "pi" | "log" | "none"`.
 
+### Bounded reads and display safety (F2/F3, M3.3)
+
+Activity streams are **untrusted input** (another process writes those files), so the monitor treats them
+as data, not as text for your terminal:
+
+- **Only the tail is read, never the whole file.** A log tail is at most
+  `--log-tail-bytes` / `TEAM_AGENT_LOG_TAIL_BYTES` bytes — default **64 KiB (65536)**, hard cap **1 MiB
+  (1048576)**; a larger value is clamped, a non-numeric/zero value falls back to the default with a
+  warning on stderr. Files smaller than the window are read whole (byte-for-byte the old behaviour). A Pi
+  session file is read as *head window (`64 KiB`, for the `session` header) + tail window* — the middle is
+  skipped. Measured with a 256 MiB log: **~573 MB → 60 MB peak RSS**, and under
+  `--max-old-space-size=64` it used to abort with exit 134 and now exits 0.
+- `count` in the `log` block means "lines inside the read window" (for `pi` blocks: events inside the
+  windows), and every block carries the bounds it used, so a truncated view is visible instead of
+  implied. `--json` adds `tail_limit`, `tail_bytes`, `file_bytes`, `truncated`, `available`, `reason` and
+  `sessionPath` (existing fields keep their meaning; nothing is removed).
+- **Control sequences are stripped before rendering** — in the text panel, in live mode and in `--json`
+  alike: `OSC` (`ESC ]`, e.g. window title, `OSC 52` clipboard writes), `CSI` (`ESC [`, clear/colour),
+  C1 CSI, bare `ESC`, `BEL`, `BS`, `CR`, other C0/C1 controls (except `\n`/`\t`) and bidi control
+  characters. Displayed text must not be able to touch the PM's terminal or lie about it.
+- **Unreadable files degrade instead of crashing or silently blanking**: permissions (`EACCES`), FIFOs,
+  devices/sockets, a file deleted between glob and read (`ENOENT`), a symlink pointing at a directory, or
+  content with NUL bytes (binary) render as `日志不可读` / `会话不可读` + a human-readable `reason`, with
+  `"available": false`. FIFOs and devices are never `open`ed for reading (the old whole-file read could
+  block forever and freeze the watchdog window). A glob that matches nothing, or one that matches a plain
+  directory, still degrades to `⚫ 无会话` exactly as before.
+
+How to change the window:
+
+```sh
+# one-off / shell only
+TEAM_AGENT_LOG_TAIL_BYTES=262144 team monitor --activity
+node scripts/monitor.mjs --root . --log-glob '…' --log-tail-bytes 262144   # direct call
+
+# .pi/team/config.sh — note the export: `team monitor` forwards only TEAM_AGENT_LOG_GLOB explicitly,
+# so a plain assignment stays a shell variable and never reaches monitor.mjs
+export TEAM_AGENT_LOG_TAIL_BYTES=262144
+```
+
+The flag wins over the environment variable; the cap wins over both.
+
 ## 5. Worked example: codex
 
 ```sh
