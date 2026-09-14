@@ -168,3 +168,14 @@ effect. Mitigations:
 - A long task with no progress: have the agent drop a status line into the report every 30 minutes, or ask for
   progress with `team say`.
 - Strong models are slow and quota-limited: run one at a time (`TEAM_MODEL_LIMITS`), and do not dispatch two at once.
+
+## 13. team doctor fails on a required dependency
+
+Both magic-context and OpenSpec are required dependencies (D10): `doctor` fails when one is missing, `dispatch`
+warns one line without blocking the worker.
+
+| Symptom (check label) | Fix |
+|---|---|
+| the PM memory check reports that magic-context is not detected | install the Pi package `@cortexkit/pi-magic-context`; if the settings file lives somewhere unusual, point `TEAM_PI_SETTINGS_FILE` at it; for an environment that genuinely cannot have it, set `TEAM_REQUIRE_MAGIC_CONTEXT=0` (doctor then warns instead of failing) |
+| the OpenSpec CLI check cannot resolve the binary | install the OpenSpec CLI and put it on `PATH`, or set `TEAM_OPENSPEC_BIN` to its absolute path; `TEAM_REQUIRE_OPENSPEC=0` downgrades it to a warning |
+| the OpenSpec spec-directory check reports a missing `openspec/` | run `openspec init --tools none` in the project (the spec root is `TEAM_SPEC_DIR`, relative to the main worktree) |

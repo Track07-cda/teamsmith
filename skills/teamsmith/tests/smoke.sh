@@ -205,6 +205,14 @@ assert_has "$BR/AGENTS.md" "<!-- teamsmith:begin -->" "注入了协议段"
 assert_has "$TMP/boot.log" "下一步" "打印了下一步清单"
 $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot2.log" 2>&1
 assert_eq "bootstrap 幂等（协议段只一份）" "$(grep -cF '<!-- teamsmith:begin -->' "$BR/AGENTS.md")" "1"
+# 必需依赖预检（D10）：配置写完后就要体检；缺了不阻塞，但每条都要给出修复/降级办法
+env TEAM_PI_SETTINGS_FILE="$TMP/mc-none/settings.json" TEAM_OPENSPEC_BIN=/nonexistent \
+  $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot-deps.log" 2>&1 \
+  && ok "缺依赖时 bootstrap 仍然退出码 0（不阻塞初始化）" || { bad "缺依赖不该让 bootstrap 失败"; tail -5 "$TMP/boot-deps.log"; }
+assert_has "$TMP/boot-deps.log" "必需依赖还没就绪" "bootstrap 提示必需依赖"
+assert_has "$TMP/boot-deps.log" "@cortexkit/pi-magic-context" "bootstrap 给出 magic-context 的修复办法"
+assert_has "$TMP/boot-deps.log" "openspec init --tools none" "bootstrap 给出 spec 目录的确切修复命令"
+assert_has "$TMP/boot-deps.log" "TEAM_OPENSPEC_BIN" "bootstrap 给出 CLI 解析的降级/指定办法"
 cd "$REPO"
 
 # ---------------------------------------------------------------- 2. init
@@ -266,11 +274,33 @@ else ok "模板全部渲染（无 {{ 残留）"; fi
 $TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team >/dev/null 2>&1
 assert_eq "AGENTS.md 协议段幂等（只出现一次）" "$(grep -cF '<!-- teamsmith:begin -->' "$REPO/AGENTS.md")" "1"
 
+# 必需依赖（D10）的确定性夹具：magic-context 用假 settings + 假包，OpenSpec 用假 CLI + 假 spec 目录。
+# 都在 $TMP 下、用绝对路径 —— 本机装没装都不影响断言。
+M51_AGENT="$TMP/m51-agent"; mkdir -p "$M51_AGENT/npm/node_modules/@cortexkit/pi-magic-context"
+printf '{"packages":["npm:@cortexkit/pi-magic-context"]}\n' > "$M51_AGENT/settings.json"
+printf '{"name":"@cortexkit/pi-magic-context","version":"9.9.9"}\n' > "$M51_AGENT/npm/node_modules/@cortexkit/pi-magic-context/package.json"
+M51_SPEC="$TMP/m51-spec"; mkdir -p "$M51_SPEC"
+cat > "$FAKE/openspec" <<'OPSEOF'
+#!/usr/bin/env bash
+[ "${1:-}" = "--version" ] && printf 'openspec 9.9.9 (smoke-fake)\n'
+exit 0
+OPSEOF
+chmod +x "$FAKE/openspec"
+{
+  printf 'TEAM_PI_SETTINGS_FILE="%s"\n' "$M51_AGENT/settings.json"
+  printf 'TEAM_OPENSPEC_BIN="%s"\n' "$FAKE/openspec"
+  printf 'TEAM_SPEC_DIR="%s"\n' "$M51_SPEC"
+} >> "$REPO/.pi/team/config.sh"
+
 git add -A && git commit -qm "chore: teamsmith init" && ok "提交 init 产物（PM 的文档要入库）"
 
 section "3 · doctor（初始化后）"
 if $TEAM doctor >"$TMP/doctor.log" 2>&1; then ok "doctor 通过"; else bad "doctor 失败"; cat "$TMP/doctor.log"; fi
 assert_has "$TMP/doctor.log" "notify 扩展" "doctor 检查了 notify 扩展"
+assert_has "$TMP/doctor.log" "PM 记忆 magic-context" "doctor 检查 PM 记忆（必需依赖）"
+assert_match "$TMP/doctor.log" "magic-context [0-9]" "装了 → 报版本"
+assert_has "$TMP/doctor.log" "OpenSpec CLI" "doctor 检查 OpenSpec CLI"
+assert_has "$TMP/doctor.log" "OpenSpec 规格目录" "doctor 检查 spec 目录"
 
 # ---------------------------------------------------------------- 4. task / board
 section "4 · task + board"
@@ -1158,6 +1188,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 7) 自动拉起配额：防崩溃循环
   make_pm_idle
   for _ in 1 2 3 4 5; do date +%s >> "$REPO/.pi/team/state/pm-restarts.log"; done
+  # 配额只在「有待办」时才会被检查（没待办直接 ③a 返回「不叫醒」）。
+  # 前面几拍可能已经把待办清空 → 这条断言曾偶发假红（实测 2 红 1 绿）；
+  # 显式造一个未读通知，让这一拍一定走到配额分支。
+  $TEAM notify pm "配额自检：有待办" >/dev/null 2>&1 || true
   $TEAM watch --once >"$TMP/watch3.log" 2>&1 || true
   assert_has "$TMP/watch3.log" "已被重启" "超过配额时拒绝继续拉起（告警）"
   # 收尾：清配额/占位窗口，把 PM 拉回来
@@ -1483,16 +1517,55 @@ assert_has "$SKILL_DIR/references/philosophy.md" "Status is a promise" "creed co
 assert_has "$SKILL_DIR/templates/pm-prompt.md.tmpl" "Your creed" "PM prompt carries the creed at the top"
 assert_has "$SKILL_DIR/SKILL.md" "references/philosophy.md" "SKILL 指向信条文档"
 assert_file "$SKILL_DIR/templates/memory-seed.md.tmpl" "项目记忆种子模板存在"
-# doctor 的 PM 记忆三态（不依赖真装：用假 settings.json）
-printf '{"packages":["npm:@cortexkit/pi-magic-context"]}\n' > "$TMP/mc-yes.json"
-printf '{"packages":[]}\n' > "$TMP/mc-no.json"
-TEAM_PI_SETTINGS_FILE="$TMP/mc-yes.json" $TEAM doctor >"$TMP/mc-yes.log" 2>&1 || true
-assert_has "$TMP/mc-yes.log" "PM 记忆（可选）" "doctor 报告 PM 记忆（可选）这一项"
-assert_match "$TMP/mc-yes.log" "magic-context [0-9]" "装了 → 报版本"
-TEAM_PI_SETTINGS_FILE="$TMP/mc-no.json" $TEAM doctor >"$TMP/mc-no.log" 2>&1 || true
-assert_has "$TMP/mc-no.log" "未检测到 magic-context" "没装 → 只警告（不阻塞）"
-TEAM_PI_SETTINGS_FILE="$TMP/mc-no.json" TEAM_REQUIRE_MAGIC_CONTEXT=1 $TEAM doctor >"$TMP/mc-req.log" 2>&1 && bad "要求必须有 magic-context 时 doctor 应失败" || ok "TEAM_REQUIRE_MAGIC_CONTEXT=1 → doctor 失败"
-assert_has "$TMP/mc-req.log" "TEAM_REQUIRE_MAGIC_CONTEXT=1" "失败原因写明是配置要求"
+# 必需依赖矩阵（D10）：全部用 $TMP 夹具，不读本机真实状态
+section "15b · 必需依赖：doctor 三态 + paths + dispatch 预检"
+printf '{"packages":[]}\n' > "$TMP/mc-no.json"      # 有 settings 文件但没装这个包
+
+# ⓪ 默认值本身就是「要求」（空 env + 无配置）：破坏默认值这条断言会红
+M51_BARE="$TMP/m51-bare"; mkdir -p "$M51_BARE"; ( cd "$M51_BARE" && git init -q -b main )
+M51_DEFAULTS="$( cd "$M51_BARE" && env -i PATH="$PATH" HOME="$HOME" TEAM_ROOT="$M51_BARE" bash -c \
+  '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1 || true; printf "%s|%s|%s|%s" "$TEAM_REQUIRE_MAGIC_CONTEXT" "$TEAM_REQUIRE_OPENSPEC" "$TEAM_OPENSPEC_BIN" "$TEAM_SPEC_DIR"' )"
+assert_eq "默认值：两个依赖都要求、CLI=openspec、spec 目录=openspec" "$M51_DEFAULTS" "1|1|openspec|openspec"
+
+# ① magic-context 缺 + 默认（要求）→ 失败，且失败行给出安装与降级办法
+if env TEAM_PI_SETTINGS_FILE="$TMP/mc-no.json" TEAM_OPENSPEC_BIN="$FAKE/openspec" TEAM_SPEC_DIR="$M51_SPEC" \
+   $TEAM doctor >"$TMP/mc-req.log" 2>&1; then bad "缺 magic-context（默认要求）时 doctor 应失败"; else ok "缺 magic-context → doctor 失败"; fi
+assert_has "$TMP/mc-req.log" "PM 记忆 magic-context" "失败行点名这一项"
+assert_has "$TMP/mc-req.log" "@cortexkit/pi-magic-context" "失败行给出要装的包"
+assert_has "$TMP/mc-req.log" "TEAM_PI_SETTINGS_FILE" "失败行说明 settings 位置可覆盖"
+assert_has "$TMP/mc-req.log" "TEAM_REQUIRE_MAGIC_CONTEXT=0" "失败行给出降级开关"
+# ② magic-context 缺 + 显式降级 → 只警告、退出码 0
+if env TEAM_PI_SETTINGS_FILE="$TMP/mc-no.json" TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_REQUIRE_OPENSPEC=0 \
+   $TEAM doctor >"$TMP/mc-warn.log" 2>&1; then ok "TEAM_REQUIRE_MAGIC_CONTEXT=0 → 只警告（exit 0）"; else bad "降级后 doctor 不该失败"; cat "$TMP/mc-warn.log"; fi
+assert_has "$TMP/mc-warn.log" "已降级" "降级时说明是配置降级"
+# ③ OpenSpec CLI 找不到 → 失败；spec 目录缺失 → 失败（并给出确切修复命令）
+if env TEAM_OPENSPEC_BIN=/nonexistent TEAM_SPEC_DIR="$M51_SPEC" $TEAM doctor >"$TMP/os-nobin.log" 2>&1; then bad "OpenSpec CLI 找不到时 doctor 应失败"; else ok "OpenSpec CLI 找不到 → doctor 失败"; fi
+assert_has "$TMP/os-nobin.log" "OpenSpec CLI" "失败行点名 OpenSpec CLI"
+assert_has "$TMP/os-nobin.log" "TEAM_OPENSPEC_BIN" "失败行给出解析开关"
+if env TEAM_OPENSPEC_BIN="$FAKE/openspec" TEAM_SPEC_DIR="$TMP/m51-no-such-spec" $TEAM doctor >"$TMP/os-nodir.log" 2>&1; then bad "spec 目录缺失时 doctor 应失败"; else ok "spec 目录缺失 → doctor 失败"; fi
+assert_has "$TMP/os-nodir.log" "openspec init --tools none" "失败行给出确切的修复命令"
+# ④ 显式降级 OpenSpec → 只警告、退出码 0
+if env TEAM_OPENSPEC_BIN=/nonexistent TEAM_REQUIRE_OPENSPEC=0 $TEAM doctor >"$TMP/os-warn.log" 2>&1; then ok "TEAM_REQUIRE_OPENSPEC=0 → 只警告（exit 0）"; else bad "OpenSpec 降级后 doctor 不该失败"; cat "$TMP/os-warn.log"; fi
+# ⑤ paths 暴露解析结果（PM/脚本不用猜）
+$TEAM paths >"$TMP/paths-deps.log" 2>&1 || true
+assert_has "$TMP/paths-deps.log" '"openspec_bin": "' "paths 暴露 openspec_bin"
+assert_has "$TMP/paths-deps.log" '"spec_dir": "' "paths 暴露 spec_dir"
+assert_has "$TMP/paths-deps.log" '"require_magic_context": "1"' "paths 暴露 require_magic_context（默认 1）"
+assert_has "$TMP/paths-deps.log" '"require_openspec": "1"' "paths 暴露 require_openspec（默认 1）"
+env TEAM_SPEC_DIR=openspec $TEAM paths >"$TMP/paths-spec-rel.log" 2>&1 || true
+assert_has "$TMP/paths-spec-rel.log" "\"spec_dir\": \"$REPO/openspec\"" "相对 spec 目录按主工作树解析"
+# ⑥ dispatch：缺依赖 → 告警一行、不阻塞派单
+RC=0
+env TEAM_PI_SETTINGS_FILE="$TMP/mc-no.json" TEAM_OPENSPEC_BIN=/nonexistent TEAM_AGENT_BIN=bash \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/dispatch-deps.log" 2>&1 || RC=$?
+assert_eq "缺依赖不阻塞派单（--print 退出码 0）" "$RC" "0"
+assert_has "$TMP/dispatch-deps.log" "依赖缺失（不阻塞派单）" "dispatch 告警依赖缺失"
+assert_has "$TMP/dispatch-deps.log" "magic-context" "告警点名 magic-context"
+assert_has "$TMP/dispatch-deps.log" "OpenSpec" "告警点名 OpenSpec"
+assert_eq "告警每次派单只一行" "$(grep -c '依赖缺失（不阻塞派单）' "$TMP/dispatch-deps.log")" "1"
+# ⑦ 齐备时不告警（夹具齐全 → dispatch 输出里没有这句）
+env TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/dispatch-deps-ok.log" 2>&1 || true
+assert_not "$TMP/dispatch-deps-ok.log" "依赖缺失" "依赖齐备时 dispatch 不告警"
 
 # 用法级不变量（verify 建议）：文档里出现 `team review <ID>` 就必须带 --dir（v1.11 起签名变了）
 USAGE_HITS="$(grep -rEn 'team review[[:space:]]+[A-Za-z0-9]' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/../README.md" 2>/dev/null | grep -v -- '--dir' | grep -vE '不再|已删|旧签名|v1\.11' || true)"

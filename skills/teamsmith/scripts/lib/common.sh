@@ -148,10 +148,16 @@ team_load_config() {
   TEAM_AGENT_MEM_MB="${TEAM_AGENT_MEM_MB:-6144}"           # 单个 agent 的经验占用（估算用）
   # 保活 watchdog
   # 定时巡检（叫醒 PM 的节拍；不是心跳保活）——默认 15 分钟，推荐 5~60 分钟
-  # PM 记忆（可选依赖）：magic-context 让 PM 的长期会话能跨压缩/跨重启检索历史。
-  # 默认"推荐但不要求"；TEAM_REQUIRE_MAGIC_CONTEXT=1 时 doctor 会把它当硬依赖。
-  TEAM_REQUIRE_MAGIC_CONTEXT="${TEAM_REQUIRE_MAGIC_CONTEXT:-0}"
+  # PM 记忆（依赖）：magic-context 让 PM 的长期会话能跨压缩/跨重启检索历史。
+  # 默认要求（D10）：缺它时 PM 的记忆层是空的，doctor 会判失败。
+  # TEAM_REQUIRE_MAGIC_CONTEXT=0 降级为只警告（环境特殊 / 临时验查时用）。
+  TEAM_REQUIRE_MAGIC_CONTEXT="${TEAM_REQUIRE_MAGIC_CONTEXT:-1}"
   TEAM_PI_SETTINGS_FILE="${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}"
+  # 规格管理（依赖）：OpenSpec 负责“为什么改/改成什么”，teamsmith 不再长第二套 spec 体系。
+  # 两个键分别管「CLI 能不能解析」与「项目里的 spec 根目录存不存在」。
+  TEAM_REQUIRE_OPENSPEC="${TEAM_REQUIRE_OPENSPEC:-1}"
+  TEAM_OPENSPEC_BIN="${TEAM_OPENSPEC_BIN:-openspec}"
+  TEAM_SPEC_DIR="${TEAM_SPEC_DIR:-openspec}"
   TEAM_WATCH_INTERVAL="${TEAM_WATCH_INTERVAL:-900}"       # 巡检周期（秒）
   TEAM_WATCH_NUDGE_GAP="${TEAM_WATCH_NUDGE_GAP:-900}"      # 同一批待办最快多久再提醒一次（秒）
   TEAM_WATCH_MAX_RESTARTS="${TEAM_WATCH_MAX_RESTARTS:-5}"  # PM 每小时最多自动拉起次数（防崩溃循环）
@@ -241,11 +247,13 @@ team_branch_for_agent() { # <agent> <ID> → 该 agent 在这个任务上应该�
 
 # 输出一份「可直接写进派单提示词」的路径清单（agent_adapter = 当前生效的 agent 适配器）
 team_paths_json() {
-  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s" }\n' \
+  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s", "openspec_bin": "%s", "spec_dir": "%s", "require_magic_context": "%s", "require_openspec": "%s" }\n' \
     "$(team_json_escape "$TEAM_PROJECT")" "$(team_json_escape "$TEAM_MAIN_ROOT")" "$(team_json_escape "$TEAM_ROOT")" \
     "$(team_json_escape "$TEAM_DOCS_ABS")" "$(team_json_escape "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR")" \
     "$(team_json_escape "$TEAM_SESSION")" "$(team_json_escape "$TEAM_PM_WINDOW")" \
-    "$(team_json_escape "$(team_agent_adapter_label)")" "$(team_json_escape "$(team_agent_bin_path)")"
+    "$(team_json_escape "$(team_agent_adapter_label)")" "$(team_json_escape "$(team_agent_bin_path)")" \
+    "$(team_json_escape "$(team_openspec_bin_path)")" "$(team_json_escape "$(team_spec_dir_abs)")" \
+    "$(team_json_escape "$TEAM_REQUIRE_MAGIC_CONTEXT")" "$(team_json_escape "$TEAM_REQUIRE_OPENSPEC")"
 }
 
 # 能跑普通 .mjs 的运行时（monitor.mjs 是普通 JS，不需要 TS 剥离能力；
@@ -1520,6 +1528,57 @@ team_agent_bin_path() { # → 绝对路径（在 PATH 里）或原样首词
   case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
   p="$(command -v "$bin" 2>/dev/null | head -1)"
   if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
+}
+
+# ---------------------------------------------------------------- 必需依赖（D10）：magic-context + OpenSpec
+# 两者都不是可选项：缺 magic-context → PM 的长期记忆是空的（只能靠 /compact + 落盘）；
+# 缺 OpenSpec → 项目没有「为什么改/改成什么」的规格层（teamsmith 不再长第二套 spec 体系）。
+# 缺它们**不阻止**派单（worker 照样能干活），但 doctor 会判失败、dispatch 会告警，让 PM 看见。
+
+# magic-context 的版本（检测不到 → 空）：只看 Pi 的 settings.json 里有没有这个包，
+# 再去包自己的 package.json 取版本。**不读任何凭据文件。**
+# 包的位置跟着 settings 文件走（默认 $HOME/.pi/agent/settings.json → $HOME/.pi/agent/npm/node_modules/…），
+# 所以 TEAM_PI_SETTINGS_FILE 指向别处（测试/多用户）时也能一致地找到包。
+team_magic_context_version() {
+  local settings="${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}" pkg
+  [ -f "$settings" ] || return 0
+  grep -q 'pi-magic-context' "$settings" 2>/dev/null || return 0
+  pkg="$(dirname "$settings")/npm/node_modules/@cortexkit/pi-magic-context/package.json"
+  sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pkg" 2>/dev/null | head -1
+}
+
+# OpenSpec CLI：绝对路径优先，否则在 PATH 里解析（与 TEAM_PI_BIN 同一套路）
+team_openspec_bin_path() {
+  local bin="${TEAM_OPENSPEC_BIN:-openspec}" p
+  case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
+  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
+}
+
+# 项目里的 spec 根目录（TEAM_SPEC_DIR 相对路径按主工作树解析）
+team_spec_dir_abs() {
+  case "${TEAM_SPEC_DIR:-openspec}" in
+    /*) printf '%s\n' "$TEAM_SPEC_DIR" ;;
+    *)  printf '%s\n' "$TEAM_MAIN_ROOT/${TEAM_SPEC_DIR:-openspec}" ;;
+  esac
+}
+
+# 必需依赖的体检：每行一个「问题 + 修复/降级说明」（空 = 都齐）。
+# dispatch 用它告警、bootstrap 用它打修复命令，doctor 用上面的小函数逐项报三态。
+team_required_dep_issues() {
+  local bin
+  if [ "${TEAM_REQUIRE_MAGIC_CONTEXT:-1}" = "1" ]; then
+    [ -n "$(team_magic_context_version)" ] || \
+      printf 'magic-context 没检测到：装 pi 包 @cortexkit/pi-magic-context（settings 在非标准位置时设 TEAM_PI_SETTINGS_FILE；环境特殊可 TEAM_REQUIRE_MAGIC_CONTEXT=0 降级）\n'
+  fi
+  if [ "${TEAM_REQUIRE_OPENSPEC:-1}" = "1" ]; then
+    bin="$(team_openspec_bin_path)"
+    command -v "$bin" >/dev/null 2>&1 || \
+      printf 'OpenSpec CLI 找不到（%s）：装上它并确保在 PATH 里，或设 TEAM_OPENSPEC_BIN 指向绝对路径（临时可 TEAM_REQUIRE_OPENSPEC=0 降级）\n' "$bin"
+    [ -d "$(team_spec_dir_abs)" ] || \
+      printf 'spec 目录不存在（%s）：在项目里跑 openspec init --tools none\n' "$TEAM_SPEC_DIR"
+  fi
+  return 0
 }
 
 # 把值转成可以安全放进 config.sh 双引号里的形式（$ ` \ " 在 source 时会被当代码解析）

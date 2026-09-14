@@ -20,6 +20,7 @@ Or hand the contents of `templates/bootstrap-prompt.md.tmpl` (placeholders subst
 |---|---|---|
 | Detect tmux | adopts the `session:window` the PM itself runs in and writes it into the config (no manual fill-in) | recomputed every run |
 | Write config | `.pi/team/config.sh` (identity/roster/models/gates/install command/forge/guards/watchdog) | if it exists it is kept; only missing entries are filled in |
+| Required dependencies | checks magic-context (Pi package `@cortexkit/pi-magic-context`) and OpenSpec (CLI resolvable + the spec dir); a missing one prints its exact fix/downgrade command, and does not block the setup | ✔ |
 | Docs skeleton | `docs/team/{ROADMAP,BOARD,OWNERSHIP,DECISIONS,PROTOCOL}.md`, `tasks/`, `reports/`, `reviews/`, `threads/`, `inbox/` | skipped when present |
 | Team protocol | injects the `<!-- teamsmith:begin --> … end -->` section into `AGENTS.md` (**refreshes** it instead of appending twice) | ✔ |
 | `.gitignore` | `.pi/team/state/`, `docs/team/inbox/`, `docs/team/reviews/*.log`, `.worktrees/` | ✔ |
@@ -30,6 +31,7 @@ Or hand the contents of `templates/bootstrap-prompt.md.tmpl` (placeholders subst
 ## What the PM does afterwards
 
 ```bash
+openspec init --tools none      # required dependency: create the project's spec root (TEAM_SPEC_DIR)
 team watchdog status            # watchdog window / patrol interval / pending work / PM liveness / capacity
 team task T1.1 --title "…" --agent dev
 team dispatch dev T1.1 docs/team/tasks/T1.1-*.md

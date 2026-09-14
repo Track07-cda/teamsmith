@@ -71,8 +71,11 @@ literals or simple `$VAR`.
 | Guard | Default | Purpose |
 |---|---|---|
 | the watchdog only "counts pending work + wakes the PM" (it only wakes when there is work); starting, stopping and resuming agents is the PM's job (`team resume`) |
-| `TEAM_REQUIRE_MAGIC_CONTEXT` | `0` | `1` = treat magic-context (PM memory) as a hard dependency: `team doctor` fails without it |
-| `TEAM_PI_SETTINGS_FILE` | `~/.pi/agent/settings.json` | where Pi extensions (magic-context) are detected; overridable for tests/multi-user setups |
+| `TEAM_REQUIRE_MAGIC_CONTEXT` | `1` | `1` = magic-context (PM memory) is a hard dependency: `team doctor` fails without it, `dispatch` warns (never blocks). `0` downgrades it to a warning |
+| `TEAM_PI_SETTINGS_FILE` | `~/.pi/agent/settings.json` | where Pi extensions (magic-context) are detected, and where the package is resolved from (`<settings dir>/npm/node_modules/…`); overridable for tests/multi-user setups |
+| `TEAM_REQUIRE_OPENSPEC` | `1` | `1` = OpenSpec (the spec layer) is a hard dependency: `doctor` fails when the CLI or the spec dir is missing, `dispatch` warns. `0` downgrades it to a warning |
+| `TEAM_OPENSPEC_BIN` | `openspec` | the OpenSpec CLI to resolve (an absolute path is allowed, same pattern as `TEAM_PI_BIN`) |
+| `TEAM_SPEC_DIR` | `openspec` | the project's OpenSpec root; a relative path is resolved against the main worktree |
 | `TEAM_WATCH_INTERVAL` | `900` | patrol period (seconds): 15 minutes by default, 300~3600 recommended. This is the beat of "look for work on a timer", not a heartbeat |
 | `TEAM_WATCH_NUDGE_GAP` | `900` | the shortest interval before the same batch of pending work is reminded again (seconds) |
 | `TEAM_WATCH_REBUILD_TMUX` | `0` | `0` = leave tmux alone (a missing session/window is only reported); `1` = allow rebuilding the session/PM window (self-recovery after a reboot) |

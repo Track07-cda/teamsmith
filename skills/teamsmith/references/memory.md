@@ -1,9 +1,9 @@
 # PM memory: what to remember, what to write down
 
 > This document is about the **PM's own memory**: what belongs in it, what must go to disk instead, and what
-> survives compaction, restarts and `/reload`. Everything here is optional tooling around a workflow that already
-> works without it — the skill itself has no memory and needs none
-> (`team doctor` reports whether the optional dependency is installed).
+> survives compaction, restarts and `/reload`. magic-context is a **required dependency** since D10 — the skill's
+> files never hold memory, so without the extension the PM's memory layer is simply empty
+> (`team doctor` fails; `TEAM_REQUIRE_MAGIC_CONTEXT=0` downgrades that to a warning for odd environments).
 
 ## 1. Why the PM is the role that needs memory
 
@@ -95,13 +95,18 @@ What magic-context honestly does **not** do:
 - it does not verify anything: an entry is a claim the PM wrote, exactly like a report is a claim an agent wrote;
 - it does not survive the session being deleted — prune or revert a session and its memory goes with it.
 
-## 6. Working without it
+## 6. When it is missing (and what "required" means)
 
-`team doctor` reports the optional dependency: detected (`magic-context <version>`), or **not detected** — the
-line says it could not find magic-context and that a long-lived PM then has to rely on compaction plus the files on
-disk. It is a warning, not a failure, and nothing in the workflow depends on it. (The CLI still prints its output
-strings in Chinese; the wording there is the "not detected" warning, see
-[troubleshooting.md](troubleshooting.md).)
+Since D10 magic-context is a **required dependency**, not a recommendation: `team doctor` fails without it, and
+`dispatch` prints a one-line warning (it does not block a worker — the evidence/spec layer is what is incomplete,
+not the task). `TEAM_REQUIRE_MAGIC_CONTEXT=0` downgrades the failure to a warning for odd environments; the skill
+then behaves exactly as it did when memory was optional.
+
+With the dependency missing and downgraded, the routine below is what a session actually does — it is a degraded
+mode, not an equivalent one: read `DECISIONS.md` (with rationale and impact), the roadmap's leftovers, the newest
+entries of `threads/<agent>.md` and the last review records, and walk `templates/memory-seed.md.tmpl` as a
+checklist instead of expecting recall. (The CLI still prints its output strings in Chinese; the line there is the
+"not detected" warning, see [troubleshooting.md](troubleshooting.md).)
 
 The fallback routine is the disk: read `DECISIONS.md` (with rationale and impact), the roadmap's leftovers, the
 newest entries of `threads/<agent>.md`, and the last review records. `templates/memory-seed.md.tmpl` doubles as a

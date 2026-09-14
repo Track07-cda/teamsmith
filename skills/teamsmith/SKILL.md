@@ -243,8 +243,14 @@ byte-for-byte unchanged**):
 
 ## Requirements
 
-**Only four hard dependencies**: `bash` ≥ 4, `git` (≥ 2.31, uses `--path-format=absolute`), `tmux`, and `pi`
-(needs `--session-id`/`-e`/`--skill`). No jq/python/node dependency.
+**Hard dependencies**: `bash` ≥ 4, `git` (≥ 2.31, uses `--path-format=absolute`), `tmux`, an agent CLI
+(the built-in Pi needs `--session-id`/`-e`/`--skill`), **magic-context** (the PM's cross-session memory:
+`@cortexkit/pi-magic-context`) and **OpenSpec** (the spec layer: why a change happens and what it changes).
+`team doctor` checks all of them and fails when one is missing, `dispatch` warns in one line without blocking, and
+`bootstrap` prints the exact fix. No jq/python/node dependency.
+> Odd environments can downgrade the two tooling dependencies explicitly — `TEAM_REQUIRE_MAGIC_CONTEXT=0` /
+> `TEAM_REQUIRE_OPENSPEC=0` make `doctor` warn instead of failing; the keys, the spec dir and the CLI resolution
+> (`TEAM_OPENSPEC_BIN`, `TEAM_SPEC_DIR`) are in [references/config.md](references/config.md).
 > When only the *workers* move to another CLI: with `TEAM_AGENT_CMD` set, workers no longer need `pi`
 > (`team doctor` judges by the configured adapter) — but **the PM side still runs Pi** (`pi -c` restarts,
 > the PM prompt, `extension/team-notify.ts`), and the watchdog only wakes the PM. See
@@ -253,9 +259,7 @@ byte-for-byte unchanged**):
 - **No forge dependency**: the skill never probes or calls `gh`/`glab`/`tea` and never reads tokens; opening a
   PR/MR is the PM's job via `git` plus `curl`/any CLI/web UI (`TEAM_VCS` is only a wording label).
 - **No container dependency**: the watchdog is a `watchdog` window in the same tmux session (`team watchdog up`).
-- Recommended (not required): **magic-context** (`@cortexkit/pi-magic-context`) — the PM is a long-lived session,
-  and this gives it cross-session memory and retrieval; `team doctor` reports whether it is installed
-  (`TEAM_REQUIRE_MAGIC_CONTEXT=1` makes it mandatory). What to remember, what belongs on disk instead, and the
-  fallback without it: [references/memory.md](references/memory.md).
+- What to remember, what belongs on disk instead, and what happens when the memory dependency is missing:
+  [references/memory.md](references/memory.md).
 - Optional helpers: `timeout` (hard timeout for gates; degrades with a warning), `lsof` (needed only where
   `/proc` is unavailable).

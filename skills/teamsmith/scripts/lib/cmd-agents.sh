@@ -270,6 +270,10 @@ team_cmd_dispatch() {
 
   # agent adapter：空配置 = 内置 Pi（老路径，报错文案也不变）
   team_agent_check_launch
+  # 必需依赖体检（D10）：缺依赖**不拒绝**派单（worker 照样能干活），但 PM 必须知道证据/spec 层是缺的。
+  # 一行、每次派单只说一次。
+  local dep_issues; dep_issues="$(team_required_dep_issues)"
+  [ -n "$dep_issues" ] && team_warn "依赖缺失（不阻塞派单）：$(printf '%s' "$dep_issues" | tr '\n' '; ')"
   local agent_bin; agent_bin="$(team_agent_bin_path)"
   if [ -n "${TEAM_AGENT_CMD:-}${TEAM_AGENT_BIN:-}" ]; then
     # 自定义 adapter（codex/opencode/…）：只看配好的可执行文件能不能解析到

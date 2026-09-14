@@ -101,6 +101,15 @@ team_cmd_bootstrap() {
   [ -n "$TEAM_GATES" ] || { [ -n "$gates" ] && team_config_set_in_file "$TEAM_CONFIG" TEAM_GATES "$gates" && team_info "  写入 TEAM_GATES=$gates"; }
   [ -n "$TEAM_INSTALL_CMD" ] || { [ -n "$install_cmd" ] && team_config_set_in_file "$TEAM_CONFIG" TEAM_INSTALL_CMD "$install_cmd" && team_info "  写入 TEAM_INSTALL_CMD=$install_cmd"; }
 
+  # ②b 必需依赖体检（D10）：配置写完后立即查 magic-context 与 OpenSpec；
+  # 缺了不阻塞 bootstrap，但每一条都把确切的修复/降级命令打出来。
+  local dep_issues; dep_issues="$(team_required_dep_issues)"
+  if [ -n "$dep_issues" ]; then
+    team_info ""
+    team_warn "必需依赖还没就绪（不阻塞 bootstrap；装好之前 doctor 会失败）："
+    printf '%s\n' "$dep_issues" | sed 's/^/      - /'
+  fi
+
   # ③ agent worktree（git 归 PM：默认只打印命令，--create-worktrees 才代建）
   local a
   if [ "${TEAM_CREATE_WORKTREE:-0}" = "1" ]; then

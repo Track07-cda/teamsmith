@@ -291,18 +291,38 @@ team_cmd_doctor() {
       fi
     else fail "缺 $ext"; fi
 
-  # PM 记忆（可选但推荐）：magic-context 是 Pi 侧扩展（npm 包），PM 靠它做跨会话记忆/检索。
-  # 这里只读 settings.json 的 packages 与包自身版本，不做任何安装/改动。
-  check "PM 记忆（可选）"
-  local mc_settings="$TEAM_PI_SETTINGS_FILE" mc_pkg mc_ver
-  if [ -f "$mc_settings" ] && grep -q 'pi-magic-context' "$mc_settings" 2>/dev/null; then
-    mc_pkg="$HOME/.pi/agent/npm/node_modules/@cortexkit/pi-magic-context/package.json"
-    mc_ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$mc_pkg" 2>/dev/null | head -1)"
-    pass "magic-context ${mc_ver:-?}（跨会话记忆可用：ctx_search / ctx_memory / ctx_note）"
-  elif [ "${TEAM_REQUIRE_MAGIC_CONTEXT:-0}" = "1" ]; then
-    fail "TEAM_REQUIRE_MAGIC_CONTEXT=1 但没检测到 magic-context（配置：$mc_settings）"
+  # PM 记忆（必需依赖，D10）：magic-context 是 Pi 侧扩展（npm 包），PM 靠它做跨会话记忆/检索。
+  # 只读 settings.json 与包自身的 package.json，不做任何安装/改动，也不读凭据文件。
+  check "PM 记忆 magic-context"
+  local mc_settings="$TEAM_PI_SETTINGS_FILE" mc_ver
+  mc_ver="$(team_magic_context_version)"
+  if [ -n "$mc_ver" ]; then
+    pass "magic-context $mc_ver（跨会话记忆可用：ctx_search / ctx_memory / ctx_note）"
+  elif [ "${TEAM_REQUIRE_MAGIC_CONTEXT:-1}" = "1" ]; then
+    fail "没检测到：装 pi 包 @cortexkit/pi-magic-context（settings 在别处时设 TEAM_PI_SETTINGS_FILE；环境特殊可 TEAM_REQUIRE_MAGIC_CONTEXT=0 降级）"
   else
-    warn "未检测到 magic-context：PM 长会话只能靠 /compact + 落盘（不阻塞；装上更好，见 references/philosophy.md 第 6 条）"
+    warn "没检测到（TEAM_REQUIRE_MAGIC_CONTEXT=0 已降级）：PM 长会话只能靠 /compact + 落盘"
+  fi
+
+  # 规格层（必需依赖，D10）：OpenSpec 管「为什么改/改成什么」；缺 CLI 或缺 spec 目录都算失败
+  check "OpenSpec CLI"
+  local os_bin os_ver
+  os_bin="$(team_openspec_bin_path)"
+  if command -v "$os_bin" >/dev/null 2>&1; then
+    os_ver="$("$os_bin" --version 2>/dev/null | head -1)"
+    pass "${os_ver:-已解析}（$os_bin）"
+  elif [ "${TEAM_REQUIRE_OPENSPEC:-1}" = "1" ]; then
+    fail "找不到：$os_bin（装上 OpenSpec CLI 并确保在 PATH 里，或设 TEAM_OPENSPEC_BIN；临时可 TEAM_REQUIRE_OPENSPEC=0 降级）"
+  else
+    warn "找不到：$os_bin（TEAM_REQUIRE_OPENSPEC=0 已降级）"
+  fi
+  check "OpenSpec 规格目录"
+  if [ -d "$(team_spec_dir_abs)" ]; then
+    pass "$TEAM_SPEC_DIR"
+  elif [ "${TEAM_REQUIRE_OPENSPEC:-1}" = "1" ]; then
+    fail "缺 $TEAM_SPEC_DIR/：在项目里跑 openspec init --tools none"
+  else
+    warn "缺 $TEAM_SPEC_DIR/（TEAM_REQUIRE_OPENSPEC=0 已降级）：跑 openspec init --tools none"
   fi
 
   check "容量 / swap 底线"; local avail swapfree swaptotal
