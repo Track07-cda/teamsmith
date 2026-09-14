@@ -3,7 +3,7 @@ name: teamsmith
 description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A watchdog window wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project.
 license: MIT
 metadata:
-  version: "1.18.0"
+  version: "1.19.0"
 ---
 
 # teamsmith · one agent that actually owns the project
@@ -123,6 +123,26 @@ The only reasons to stop and ask the user: **shared-state changes** (merge/push 
 authorization with `--yes`), scope changes, and decisions that need the user's call (dispatch a research task
 first, then write `DECISIONS.md`).
 
+## Specs (OpenSpec)
+
+What the product **must hold** lives in `openspec/specs/<capability>/spec.md` as requirements with falsifiable
+scenarios; teamsmith keeps the **evidence** (briefs, reports, reviews, decisions) in `docs/team/`. Do not grow a
+second spec system: if a promise belongs to the product it goes into a spec, if it is reasoning or guidance it goes
+into `references/`.
+
+```bash
+openspec list --specs                      # what the tool promises
+openspec list                              # open changes (proposal → specs → tasks)
+openspec validate --all --strict           # part of TEAM_GATES: an invalid spec fails the PM's review
+openspec change show <change>              # what a change proposes
+openspec archive -y <change>               # after the code landed and reviews/<ID>.md exists
+```
+
+Division of labour: a **change** is the requirement-level unit; a **task brief** is one work slice that names the
+change id and the scenarios it must satisfy; the **report/review** pair is the evidence; **archive** closes the
+change. A change too big for one brief becomes several tasks against the same change. Full details:
+[references/openspec.md](references/openspec.md).
+
 ## Getting skill updates (three paths)
 
 ```bash
@@ -236,6 +256,7 @@ byte-for-byte unchanged**):
 | `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
 | `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
 | `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/watchdog, scaling, blockers |
+| `references/openspec.md` | Specs and the change workflow (OpenSpec): division of labour with the task ledger, the day-to-day commands, and what a PM does when a change is bigger than one task |
 | `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |
 | `templates/` | Copy when you need to hand-write a brief/report/board |
 | `scripts/team`, `scripts/lib/*.sh` | When changing behaviour (use `team <cmd> --print` to see what it generates) |

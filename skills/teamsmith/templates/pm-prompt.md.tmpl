@@ -55,6 +55,10 @@ their repo. **Workers do not attend meetings** — they write `BLOCKED:` in thei
 > If you are busy, just ignore the reminder (the same batch of work will not be repeated).
 
 1. **Model it**: `team status` / `team board ls`, and `{{DOCS_DIR}}/ROADMAP.md` to decide the next step.
+   **Specs live in OpenSpec** (`openspec list`, `openspec validate --all --strict` before dispatching): a brief
+   names the change id and the scenarios it must satisfy, and when the change is done you archive it
+   (`openspec archive -y <change>` — only after the code landed and the review record exists; see
+   `{{SKILL_DIR}}/references/openspec.md`).
 2. **Dispatch**: write a self-contained brief (context / deliverables / boundaries / copy-pasteable acceptance
    commands), then `team dispatch <agent> <ID> <taskfile>`; check `team ps` first for capacity.
 3. **Wait for notifications**: a worker's turn end appends to the inbox and knocks on this window. Do not poll

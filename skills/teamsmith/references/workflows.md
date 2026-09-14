@@ -5,6 +5,24 @@ is on PATH or symlinked, just `team`).
 
 ---
 
+## 0. The spec layer (OpenSpec): idea → change → tasks → archive
+
+What the tool **must hold** is written as OpenSpec requirements; a task brief is one work slice that satisfies some
+of them (reasoning and guidance stay in `references/` — see [openspec.md](openspec.md)).
+
+```bash
+openspec list --specs                    # capabilities and their requirement counts
+openspec new change <name>               # open a change: proposal + delta specs + tasks
+openspec change show <name>              # what the change proposes (proposal / deltas / tasks)
+openspec validate --all --strict         # fast structural gate — it runs as the first half of TEAM_GATES
+openspec archive -y <name>               # after the code landed and reviews/<ID>.md exists
+```
+
+Flow: idea → `openspec new change <name>` (fill `proposal.md`, `specs/<capability>/spec.md`, `tasks.md`) →
+the PM writes briefs that name the change id and the scenarios they satisfy → dispatch → verify → merge →
+`openspec archive -y <name>`, which merges the deltas into `openspec/specs/` and moves the change to
+`changes/archive/`. A change that needs more than one work block stays open across several tasks.
+
 ## A. Assembling a team in a new project
 
 ```bash
@@ -104,6 +122,12 @@ bash <skill>/scripts/team board set <ID> done
 > commits), while the error is often misread as "the PAT lacks pull-requests:write". Merging the PR first avoids the
 > whole problem.
 > For a forge without a CLI (Gitea/self-hosted): use `tea` or the web UI, same order.
+
+When the whole change (not just this task) is done, close the spec side too:
+
+```bash
+openspec archive -y <change>        # merges the deltas into openspec/specs/ and archives the change (see §0)
+```
 
 ## G. Scaling up / down
 

@@ -24,6 +24,22 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.19.0 · 2026-09-14
+
+**必需依赖 + OpenSpec 规格层（"不重复造轮子"）**
+
+- **BREAKING**：`TEAM_REQUIRE_MAGIC_CONTEXT` 默认从 `0` 变 `1`；新增 `TEAM_REQUIRE_OPENSPEC=1`、
+  `TEAM_OPENSPEC_BIN=openspec`、`TEAM_SPEC_DIR=openspec`。缺任一项 `team doctor` **失败**并给出安装/初始化命令
+  （`openspec init --tools none`）；`team paths` 暴露解析结果；`dispatch` 缺依赖时明确警告（不阻断）。
+- **OpenSpec 接管规格与变更流程**：本仓库 `openspec/` 落地，`config.yaml` 的 context/rules/operations 写入
+  我们的工作规则（验收命令必须可复制可跑、需求必须有可证伪场景、缺陷修复必须写翻转证据、边界必写）；
+  8 个 capability 规格（dispatch / verification / board-and-status / watchdog / notify-and-inbox / meeting /
+  memory-and-deps / boundary）共 45 条需求 / 77 个场景；`openspec validate --all --strict` 已加入 `TEAM_GATES`
+  （在 smoke 之前）。
+- 新文档 `references/openspec.md`（分工：规格=必须成立什么，简报=一个工作切片，报告/复验=证据，archive=关闭变更）
+  + `workflows.md` runbook 的规格步骤 + 简报/PM 提示词接上变更 id 与场景。
+- 顺手修掉一个真实 flake：11b 的"超过配额拒绝拉起"断言依赖"此刻有待办"，会偶发假红；现在先造一条未读通知。
+
 ## v1.18.0 · 2026-09-14
 
 **新增 `references/memory.md`：长期 PM 的记忆手册**
