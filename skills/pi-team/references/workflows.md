@@ -24,12 +24,12 @@ bash <skill>/scripts/team doctor
 # 一条命令初始化（推荐）：bash <skill>/scripts/team bootstrap
 # github 模式：先建 issue（可选，但推荐：issue 是需求口径，任务书是执行口径）
 printf '# 骨架与质量门禁\n\n## DoD\n- ...\n' > /tmp/issue.md
-bash <skill>/scripts/team gh issue create --title "[T1.1] 骨架与质量门禁" --body-file /tmp/issue.md --yes
+gh issue create --title "[T1.1] 骨架与质量门禁" --body-file /tmp/issue.md    # 直接用 gh（skill 不包装）
 
 bash <skill>/scripts/team task T1.1 --title "骨架与质量门禁" --agent dev --issue 12
 $EDITOR docs/team/tasks/T1.1-*.md      # 写清背景/交付物/边界/验收命令
 
-bash <skill>/scripts/team add-agent dev
+bash <skill>/scripts/team add-agent dev --create   # --create 才代建 worktree（默认只打印 git 命令）
 bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md --print   # 只想看提示词
 ```
@@ -75,34 +75,28 @@ bash <skill>/scripts/team review T1.1 --branch task/T1.1-x --no-gates   # 只做
 
 ## F. 合并与收尾
 
-local 模式：
+**没有 PR（local 模式）**：
 
 ```bash
-git -C .worktrees/dev switch main 2>/dev/null || true    # （worktree 不切 main；主工作树才是主）
-git -C <main-root> status                                 # 必须干净且在保护分支
-bash <skill>/scripts/team merge T1.1 --push               # 默认本地 squash → 需要 --yes
-bash <skill>/scripts/team close T1.1                      # 关窗口、清任务、BOARD → done
+git -C <root> status                    # 主工作树必须干净、在保护分支上
+git -C <root> merge --squash <分支>      # 冲突处理见 protocol.md §8e
+git -C <root> commit -m "T1.1: <标题>"
+git -C <root> push origin <保护分支>
+bash <skill>/scripts/team board set T1.1 done   # 确认进了保护分支才标 done
+bash <skill>/scripts/team close T1.1            # 关窗口、清任务
 ```
 
-github 模式：
+**有 PR/MR（forge-first：先合 PR，再快进本地）**：
 
 ```bash
-bash <skill>/scripts/team pr T1.1 --yes                   # 用复验记录/报告作为 body
-bash <skill>/scripts/team gh pr checks                    # 只读命令无需 --yes
-bash <skill>/scripts/team gh pr merge <N> --squash --yes  # PAT 有 pull-requests:write 才行
+gh pr merge --squash --delete-branch <PR>                  # GitLab: glab mr merge <iid> --squash
+git -C <root> fetch origin <保护分支> && git -C <root> merge --ff-only FETCH_HEAD
+bash <skill>/scripts/team board set <ID> done
 ```
 
-gitlab 模式：
-
-```bash
-bash <skill>/scripts/team pr T1.1 --yes                                   # POST merge_requests
-bash <skill>/scripts/team gl GET "/projects/<id>/merge_requests?state=opened"
-bash <skill>/scripts/team gl PUT "/projects/<id>/merge_requests/<iid>/merge" --yes
-```
-
-> 若 PAT 没有合并权限（返回 403），退回 CEP 的做法：
-> 本地 `git fetch origin <branch> && git merge --squash FETCH_HEAD && git commit && git push`，
-> 然后 `team gh pr comment <N> --body "squash 合并于 <sha>"` + 关闭 PR。
+> 顺序很重要：**先本地 push 会让 PR 立刻变成不可合并**（内容等价但提交不同），
+> 报错却常被误读成"PAT 缺 pull-requests:write"。先合 PR 就没有这个问题。
+> forge 没有 CLI（Gitea/自建）：用 `tea` 或网页操作，顺序同上。
 
 ## G. 并行扩展 / 收缩
 

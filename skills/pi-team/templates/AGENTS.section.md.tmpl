@@ -39,7 +39,8 @@ agent 在 worktree 实现 → 小步 commit → 跑门禁 → 写报告 → push
       ▼
 PM 读收件箱 → team review <ID>（独立 worktree 复验，跑门禁）
       ▼
-通过 → team merge <ID>（本地 squash，或按 forge 流程合并）→ team close <ID>
+通过 → PM 自己跑 git（`merge --squash` + commit + push；有 PR 先合 PR 再 `fetch && merge --ff-only`）→
+  `team board set <ID> done` → `team close <ID>`
 不通过 → team say <agent> "..." 退回，附具体失败证据
 ```
 

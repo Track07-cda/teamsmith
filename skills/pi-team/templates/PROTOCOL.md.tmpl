@@ -18,7 +18,8 @@
    push 分支；开 PR/MR；**回合结束时自动通知 PM**（收件箱 + tmux 唤醒）。
 4. **PM**：`team digest` 看待办 → `team review <ID>` 在独立 detached worktree 上复验（跑门禁、看 diff、写
    `{{DOCS_DIR}}/reviews/<ID>.md`）。
-5. **通过** → `team merge <ID>`（本地 squash）→ `team close <ID>`；**不通过** → `team say <a> "<具体失败证据>"` 退回。
+5. **通过** → PM 自己跑 git：`merge --squash` + commit + push（有 PR 就先合 PR 再 `fetch && merge --ff-only`）→
+   `team board set <ID> done` → `team close <ID>`；**不通过** → `team say <a> "<具体失败证据>"` 退回。
 
 ## 硬规则
 

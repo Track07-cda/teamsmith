@@ -154,17 +154,21 @@ CEP 踩过：冲突失败路径上 BOARD 已经被标 `done`，而代码没进 `
 2. `merge --squash` → `commit` → **`push`（若 `--push`/`--pr`）** 全部成功；
 3. 才 `board set <ID> done`。
 
-任何一步失败（冲突 / commit 失败 / push 失败）：`merge --abort` 收尾 + **把 BOARD 还原成合并前的状态**
-（通常 `review`，空则 `review`）+ 打印可复制粘贴的恢复步骤。给 `--pr N` 会自动带上 `--push`
-（否则远端保护分支没更新，forge 侧永远合不动）。
+任何一步失败（冲突 / commit 失败 / push 失败）：**BOARD 保持合并前的状态**（通常 `review`），
+不要标 `done` —— 代码没进保护分支就不算完成。
 
-lockfile 类冲突（`pnpm-lock.yaml` 等）有一条命令的重试路径：
+冲突处理（这些都是 PM 自己跑）：
 
 ```bash
-team merge T1.2 --no-renames --prefer-theirs pnpm-lock.yaml   # 冲突时这些路径取分支侧，然后继续
+git -C <root> merge --abort                                  # 想放弃重来
+git -C <root> status --porcelain | grep '^U'                 # 看冲突文件（UU/AA/…）
+# lockfile 类冲突（pnpm-lock.yaml 等）：取分支侧再装依赖
+git -C <root> checkout --theirs -- pnpm-lock.yaml && (cd <root> && pnpm install --lockfile-only)
+git -C <root> add -A && git -C <root> commit -m "<ID>: <标题>"
 ```
 
-（`--no-renames` 关掉 rename 误配对；`--prefer-theirs` 也可用配置默认给 `TEAM_MERGE_PREFER_THEIRS`。）
+坑：add/add 冲突常是 git 的 rename 检测把两个不同路径配成一对（例如 `reviews/<ID>.md` 与
+`reports/<ID>-<agent>.md`）。用 `git -c merge.renames=false merge --squash <分支>` 重试即可。
 
 ## 8f. 模板渲染与派单的坑（erp 实测）
 

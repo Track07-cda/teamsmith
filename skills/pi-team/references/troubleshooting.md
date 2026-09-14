@@ -58,7 +58,8 @@ Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复
 
 - `git merge --squash` 后，任务分支**不是**保护分支的祖先，所以 `git branch --merged` 判断不出来。
   靠 `BOARD.md` 状态 + `reviews/<ID>.md` 记录，别靠 ancestry。
-- 冲突：`team merge` 会尝试 abort 并打印冲突文件；处理完再重跑。
+- 冲突：`git merge --squash` 会留下冲突现场；`git status --porcelain | grep '^U'` 看冲突文件，
+  处理完 `git add -A && git commit`，或 `git merge --abort` 放弃重来。
 - 合并前主工作树必须干净且在保护分支 —— 这是刻意的：避免把 agent 的脏状态混进合并提交。
 
 ## 7. forge（github / gitlab）

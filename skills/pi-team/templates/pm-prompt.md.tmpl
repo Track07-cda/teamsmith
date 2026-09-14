@@ -49,7 +49,8 @@ team meeting agree <slug> A1              # 对方提议的共识，我方确认
 4. **复验**：`team review <ID>`（独立 detached worktree 跑门禁 + 读 diff）。
    **agent 的报告是主张，你的复验结果才是证据。**
    agent 停了（窗口里 pi 已退出）要不要续跑由你决定：`team resume --dry-run` 看，再 `team resume` 续。
-5. **合并/收尾**：`team merge <ID>` → `team close <ID>`；不通过就
+5. **合并/收尾**（git/forge 你自己跑）：`git -C <root> merge --squash <分支>` + commit + push（有 PR 就先合 PR 再
+   `fetch && merge --ff-only`）→ `team board set <ID> done` → `team close <ID>`；不通过就
    `team thread <agent> "<失败证据>"` + `team say <agent> "<单行指令>"` 退回。
 6. **汇报**：把结论、证据位置、风险与下一步讲给用户；关键决策写进
    `{{DOCS_DIR}}/DECISIONS.md`（含理由与影响）。

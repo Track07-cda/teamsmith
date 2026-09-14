@@ -5,6 +5,19 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.3 · 2026-09-14
+
+**文档与代码对齐（把 v1.10/v1.11 的残留清干净）**
+- 起因：一份会话里加载的 SKILL.md（v1.10 era）仍写着 `team merge` / `team pr` / `team gh` / `team gl` /
+  `review <ID> [--branch]` / "token 只由 wrapper 注入" / bootstrap "建每个 agent 的 worktree"。
+  核查后发现**磁盘上也有同类残留**（SKILL.md 7 处、references 4 处、templates 3 处），已全部改为
+  "PM 直接用 git/gh"的说法。
+- 新增 smoke 不变量：**文档/模板里不得再出现已删除的命令**（`team merge`/`team pr `/`team gh `/`team gl `/`forge.sh`），
+  否则用例失败 —— 防止"代码删了、文档还在"这类漂移再次发生。
+- `team watch`：每次 tick 都打印一行结论（`watchdog: 无待办（PM 在跑：不打扰）` / `有待办 … 已提醒` / `已拉起`），
+  日志仍保持去重（不刷屏）；便于人看与脚本断言。
+- smoke 的 `make_pm_idle` 改为**轮询** pane 落回 shell（不再靠固定 sleep），消除偶发 flake；连跑 3 次全绿。
+
 ## v1.11.2 · 2026-09-12
 
 **`/reload` 的语义说清 + 自动重读**

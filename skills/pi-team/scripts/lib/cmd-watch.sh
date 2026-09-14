@@ -195,8 +195,13 @@ team_watch_once() {
   if [ -z "$text" ]; then
     if [ "$(team_state_get _watch last_sig '')" != "$sig" ]; then
       team_state_set _watch last_sig "$sig"
-      team_wlog "无待办：不叫醒 PM"
-      if ! team_pm_alive; then team_dim "无待办，PM 未在跑：不启动（有活出现时再叫醒）"; fi
+      team_wlog "无待办：不叫醒 PM"          # 日志去重（避免每 15 分钟刷一行）
+    fi
+    # CLI 每次都明确说结论（便于人看、便于脚本断言）
+    if team_pm_alive; then
+      team_dim "watchdog: 无待办（PM 在跑：不打扰）"
+    else
+      team_dim "watchdog: 无待办（PM 未在跑：不启动，等有活再叫）"
     fi
     return 0
   fi

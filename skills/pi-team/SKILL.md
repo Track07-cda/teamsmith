@@ -3,7 +3,7 @@ name: pi-team
 description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（podman 容器看门狗：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a podman container, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗容器 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.11.2"
+  version: "1.11.3"
 ---
 
 # pi-team · Pi Agent 团队
@@ -16,7 +16,7 @@ worker 在各自的 worktree 里并行实现、写报告、开 PR/MR，PM 在独
 PM(本会话, tmux <session>:pm)          worker agents(各自 .worktrees/<agent>)
    task / dispatch ──────────────────▶  pi --session-id <s>-<a>（交互式，可旁观）
    digest / inbox  ◀── 回合结束自动通知 ──  extension/team-notify.ts → inbox + tmux 唤醒
-   review(独立 worktree 跑门禁) ────────▶  报告 reports/<ID>-<a>.md + PR/MR
+   review(PM 给的独立 checkout 跑门禁) ──▶  报告 reports/<ID>-<a>.md + PR/MR
    merge / close   ──────────────────▶  BOARD → done
 ```
 
@@ -28,8 +28,9 @@ bash <skill>/scripts/team bootstrap
 ```
 
 `bootstrap` 幂等地把项目装到「可以派单」：探测当前 tmux session/窗口 → 写 `.pi/team/config.sh` +
-`docs/team/` 文档骨架 + `AGENTS.md` 协议段 + `.gitignore` → 建每个 agent 的 worktree →
-**起看门狗容器**（`team watchdog up`）→ 打印下一步清单。详见 [references/bootstrap.md](references/bootstrap.md)，
+`docs/team/` 文档骨架 + `AGENTS.md` 协议段 + `.gitignore` → **打印**每个 agent 的
+`git worktree add` 命令（git 归 PM；想让它代建就加 `--create-worktrees`）→ 起看门狗（默认同 session 的
+`watchdog` 窗口，`--container` 换 podman）→ 打印下一步清单。详见 [references/bootstrap.md](references/bootstrap.md)，
 也可以把 `templates/bootstrap-prompt.md.tmpl` 交给新项目的 PM 让它照做。
 
 ## 30 秒上手
@@ -45,7 +46,8 @@ $TEAM doctor                                         # 环境自检（git/tmux/p
 tmux new -s myproj -n pm                             # PM 会话（通知会敲进这个窗口），里面跑 pi
 $TEAM task T1.1 --title "第一个任务" --agent dev      # 生成任务书
 $EDITOR docs/team/tasks/T1.1-*.md                    # 写清背景/交付物/边界/验收命令
-$TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
+$TEAM add-agent dev --create                        # --create 才代建 worktree（默认只打印 git 命令）
+$TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 ```
 
 ## 命令表
@@ -58,14 +60,13 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | 文档契约 | `team task <ID> --title ... --agent a`、`team board add\|set\|ls`、`team thread <a> "..." --from pm --re <ID>`、`team report <ID> <a>` |
 | 派单 | `team add-agent <a>`、`team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--print]` |
 | 协作 | `team say <a> "<单行消息>" [--no-verify]`（发送后校验送达；agent 没在跑时落收件箱并提示 `resume`）、`team notify <a> "<一句话>"`（agent→PM） |
-| 复验 | `team review <ID> [--branch b] [--no-gates] [--strong]` → `reviews/<ID>.md`（门禁带硬超时；`--strong` 要求对抗性验证包 + finding 翻转证据） |
+| 复验 | `team review <ID> --dir <PM 准备的独立 checkout> [--no-gates] [--strong]` → `reviews/<ID>.md`（只跑门禁 + 写证据；`--strong` 要求对抗性验证包 + finding 翻转证据） |
 | 收尾 | `team close <ID> [--keep-window]`（只动 BOARD/状态/窗口，不碰 git）、`team teardown --agent a [--purge]`（模块化的窗口/worktree 清理，需显式指定） |
 | 初始化 | `team bootstrap [--agents "dev verify"] [--print]`（推荐）、`team init`、`team doctor` |
 | 看门狗 | `team watchdog up\|down\|restart\|status\|logs`（默认 tmux 后端：同 session 的 `watchdog` 窗口跑监视器；`--container` 换 podman 容器）、`team watch [--once]`（前台巡检） |
 | 监视器 | `team monitor [--once] [--activity]`（**只服务当前 tmux session**：谁在跑/任务/待办/容量；`--activity` 才追加各 agent 会话活动流，默认关）、`team panel` 由它复用 |
 | PM/agent | `team up [--agents]`（恢复 PM）、`team resume`（PM 的工具，续跑停了的 agent）、`team standby on\|off`（PM 主动停工） |
 | 跨项目会议 | `team meeting open/say/read/list/inbox/propose/agree/close`（PM 对 PM 的 peer 交流：接口对接/建议/问题报告；**不是指令通道**，共识需双方 agree） |
-| forge 透传 | `team gh <gh 参数…>`、`team gl <METHOD> <path>`（token 由 wrapper 注入，不回显） |
 | 更新 | `team mark-loaded`（开局记版本）、`team version --check`（是否该刷新）、`team changelog [--since X]`、`team reload` |
 | 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测）、`team version` |
 
@@ -86,7 +87,8 @@ $TEAM add-agent dev && $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
    不要轮询 agent 的屏幕；读 `team inbox --ack` 与 `team digest`。
 4. **复验（不可跳过）**：`team review <ID>` —— 在独立 detached worktree 上跑门禁，产出
    `reviews/<ID>.md`。**报告是主张，复验结果是证据**；自己再读一遍 diff 是否满足任务书。
-5. **通过** → `team merge <ID>`（或 `team pr <ID>` 走 forge）→ `team close <ID>`。
+5. **通过** → 你自己跑 git/forge：squash 合并（有 PR 就先 `gh pr merge --squash --delete-branch <PR>` 再
+   `git fetch && git merge --ff-only`）→ `team board set <ID> done` → `team close <ID>`。
    **不通过** → `team thread <a> "<失败证据 + 期望>"` + `team say <a> "<单行指令>"` 退回。
 6. **收尾 / 汇报**：更新 `BOARD.md`（`team board set`）、把关键决策写进 `DECISIONS.md`（含理由与影响），
    向用户汇报「交付了什么 + 证据在哪 + 下一步」。用户要的是结论与风险，不是命令流水。
@@ -153,8 +155,10 @@ skill 不假设任何 forge。token 从配置的 token 文件读（`TEAM_TOKEN_F
 - **没有真实执行过，不得声称通过**。报告必须带命令与输出尾部；PM 独立复跑。
 - agent 只改自己有归属的目录（`OWNERSHIP.md`）；跨目录 → 报告写 `BLOCKED:`。
 - agent 禁止 push 保护分支、force push、merge PR/MR、rebase/删除他人分支。
-- token 只由 wrapper 注入（`team gh`/`team gl`/`team pr`），永不回显、永不落盘。
-- 任何改变共享/远端状态的操作需要 `--yes`（= 用户已授权）。
+- token 放在项目里的 token 文件（`TEAM_TOKEN_FILE`/`TEAM_GITLAB_TOKEN_FILE`，`.gitignore` 忽略），
+  由 PM 在调用真实工具时注入（`GH_TOKEN="$(< .gh-pat)" gh …`）；**永不回显、永不落盘、不进提交**。
+- 会写共享状态的操作需要 `--yes`（= 用户已授权）：`team meeting open/close/agree` 等。
+  git/forge 的写操作不经过 skill —— 由 PM 自己判断并执行（也是共享状态变更，同样要有授权）。
 - 一个 agent 一个长期 worktree：**不要移动它**（Pi session 按 cwd 归属，移动等于丢记忆）。
 - 默认 `TEAM_BRANCH_MODE=task`：**一任务一分支**（`task/<ID>-<slug>`，从保护分支切出），复验/合并/回滚的单位都是任务；
   想要一 agent 一长期分支就设 `agent`。
@@ -183,5 +187,5 @@ skill 不假设任何 forge。token 从配置的 token 文件读（`TEAM_TOKEN_F
 
 ## 环境要求
 
-git（≥2.31，用 `--path-format=absolute`）、bash ≥4、tmux、pi（支持 `--session-id`/`-e`/`--skill`）、
-可选 `gh`（github 模式）或 curl + PAT（gitlab 模式）。无 jq/python/node 依赖。
+git（≥2.31，用 `--path-format=absolute`）、bash ≥4、tmux、pi（支持 `--session-id`/`-e`/`--skill`）。
+可选：`gh`/`glab`（PM 自己用；`team doctor` 只做存在性提示）、podman（看门狗容器后端）。无 jq/python/node 依赖。

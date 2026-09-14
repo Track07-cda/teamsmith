@@ -478,15 +478,23 @@ if [ "$HAVE_TMUX" = "1" ]; then
   PMW="$($TEAM paths | sed -n 's/.*"pm_window": "\([^"]*\)".*/\1/p')"
   [ -n "$PMW" ] || PMW=pm
   # 制造“PM 窗口在、里面是空提示符”的现场（pi 退出后的样子），并用占位窗口保住 session
-  make_pm_idle() {
+  make_pm_idle() {   # 让 PM 窗口回到空 shell（轮询到 pane_current_command 是 shell）
     tmux new-window -t "$SESSION" -n keep -d >/dev/null 2>&1 || true
-    # 先把所有名为 $PMW 的窗口关干净（可能积了多个），再建一个干净的
     tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null \
       | awk -v n="$PMW" '$2==n {print $1}' \
       | while read -r wid; do tmux kill-window -t "$wid" 2>/dev/null || true; done
     tmux new-window -t "$SESSION" -n "$PMW" -d >/dev/null 2>&1 || true
-    sleep 1.5
+    local i cmd=""
+    for i in $(seq 1 20); do
+      cmd="$(tmux display-message -p -t "$SESSION:$PMW" '#{pane_current_command}' 2>/dev/null || true)"
+      case "$cmd" in
+        zsh|bash|sh|dash|ash|ksh|fish) break ;;
+      esac
+      sleep 0.3
+    done
+    sleep 0.5
   }
+
   start_fake_pm() { # 直接模拟“PM 正在跑”，避免依赖 up 的时序
     local p; p="$(tmux list-panes -t "$SESSION:$PMW" -F '#{pane_id}' | head -1)"
     tmux respawn-pane -k -t "$p" "exec $FAKE/pi-sleep --pm" >/dev/null 2>&1 || true
@@ -842,6 +850,12 @@ $TEAM meeting knock no-such-meeting >"$TMP/knock-bad.log" 2>&1 || true
 assert_has "$TMP/knock-bad.log" "会议不存在" "不存在的会议给出明确报错"
 unset TEAM_MEETINGS_DIR
 
+# 文档一致性：已删除的命令不能再出现在文档/模板里
+section_doc_grep() { grep -rn -- "$1" "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" 2>/dev/null; }
+for gone in "team merge" "team pr " "team gh " "team gl " "forge.sh"; do
+  hits="$(section_doc_grep "$gone" | grep -v "已移除\|已删\|不再包装\|不包装\|不执行\|删掉\|没有包装" || true)"
+  if [ -n "$hits" ]; then bad "文档里还残留已删命令 [$gone]：$(printf '%s' "$hits" | head -1)"; else ok "文档无残留：[$gone]"; fi
+done
 # ---------------------------------------------------------------- 12. 观察类命令
 section "12 · roster / status / ps"
 for c in roster status ps; do
