@@ -1,0 +1,8 @@
+
+# pi-team
+.pi/team/state/
+docs/team/inbox/
+docs/team/reviews/*.log
+.worktrees/
+.gh-pat
+<home>/.gitlab-pa-token
