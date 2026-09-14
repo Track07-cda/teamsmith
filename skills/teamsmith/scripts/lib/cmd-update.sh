@@ -94,17 +94,18 @@ team_update_notice() { # 给 digest/doctor/watch 用的一行（无更新则空�
     "$loaded" "$disk" "$loaded" "$tail_note" "$TEAM_CLI"
 }
 
-team_cmd_reload() { # 让 PM 自助刷新 skill（等价于 /reload）
+team_cmd_reload() { # 让 PM 自助刷新 skill（写一个请求标记 + 告诉你在会话里怎么真的生效）
   local req="${1:-}"
   case "$req" in
     ""|--request)
-      # 有 watchdog：写 marker，由它重启；否则提示手动 /reload
       mkdir -p "$TEAM_STATE_DIR"
       printf '%s %s\n' "$(date +%s)" "$(team_timestamp)" > "$TEAM_STATE_DIR/reload-requested"
       team_ok "已请求重载 skill（等价 /reload）"
-      team_dim "  在 Pi 会话里直接输入 /reload（或 /teamsmith-reload，或用 reload_skills 工具）即可即时生效"
-      team_dim "  若你有 watchdog：它看到 marker 后会重启 PM 会话（pi -c 保留历史）"
-      team_dim "  marker：.pi/team/state/reload-requested（生效后可删）" ;;
+      team_dim "  在 Pi 会话里直接输入 /reload（或 /teamsmith-reload，或用 reload_skills 工具）才能生效"
+      # F23：旧文案说「watchdog 看到 marker 后会重启 PM 会话」——没有任何组件读这个 marker
+      # （watchdog 不读，扩展只在 /reload 之后把它删掉），这是对机制的不存在的承诺。现在只说实的。
+      team_dim "  marker（.pi/team/state/reload-requested）仅用于记账：/reload 完成后扩展会把它删掉"
+      team_dim "  没有任何组件会因为 marker 重启会话（要重启 PM 用 $TEAM_CLI up；watchdog 不读它）" ;;
     --done)
       rm -f "$TEAM_STATE_DIR/reload-requested"
       team_ok "已清除重载请求标记" ;;
@@ -150,7 +151,11 @@ team_cmd_version_check() {
   team_dim "  看了 CHANGELOG 如果不想升：把 $TEAM_STATE_DIR/pm-loaded.env 里的 VERSION 改成 $disk 即可静音"
   if [ -f "$(team_skill_changelog)" ]; then
     printf '\n  最新变更：\n'
-    sed -n '/^## /,$p' "$(team_skill_changelog)" | head -14 | sed 's/^/    /'
+    # F21：这里原来是 `sed -n '/^## /,$p' … | head -14 | sed 's/^/    /'`。`head` 读够就退出，
+    # 上游 sed 被 SIGPIPE（141），而主脚本是 set -euo pipefail —— 于是「你是旧的」这条**只读报告**
+    # 以 141 收尾，`team version --check && 下一步` 把它当成崩溃。
+    # 改用单个 awk：读完整个文件、只打印前 14 行（没有下游早退，不会 SIGPIPE）。
+    awk 'BEGIN{n=0} /^## /{show=1} show && n<14 {print "    " $0; n++}' "$(team_skill_changelog)"
   fi
   return 0
 }

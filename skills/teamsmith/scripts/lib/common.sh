@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.20.0"
+TEAM_VERSION="1.21.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -1047,6 +1047,35 @@ team_capacity_line() {
 # 报告算不算“待复验”：必须像一份**任务**报告 ——
 #   ① 文件名前缀是任务 ID，且 ② 该 ID 在 BOARD 里有行（或 docs/<docs>/tasks/<ID>-*.md 存在）
 # 这样 PM 自己的里程碑/结项报告（reports/P2-closure.md 之类）不会被一直当成待复验。
+# F6：任务 id 里**可以带 '-'**（API-2、M6.4-verify…）。旧实现用 `id="${base%%-*}"` 切名字，
+# reports/API-2-dev.md 会被判成 id=API 的报告：真报告掉进「忽略的非任务报告」，永远不变成待复验。
+# 现在按「最长已知任务 id 前缀」匹配；已知来源 = BOARD 行 + docs/<docs>/tasks/<id>-*.md。
+team_task_id_known() { # <候选 id> → 0=看起来是个真任务 id
+  local id="$1" t
+  [ -n "$id" ] || return 1
+  [ -n "$(team_board_row "$id" 2>/dev/null || true)" ] && return 0
+  [ -f "$TEAM_DOCS_ABS/tasks/$id.md" ] && return 0
+  for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do [ -f "$t" ] && return 0; done
+  return 1
+}
+
+team_report_task_id() { # <报告文件> → 任务 id
+  # 逐个前缀试（长 → 短）：API-2-dev → API-2-dev / API-2 / API，第一个「已知」的胜出；
+  # 都不认识时退回旧的「第一个 '-' 前」启发式（行为不变，非任务报告照样被忽略但可见）。
+  local f="$1" base p c
+  base="$(basename "$f" .md)"
+  local -a cands=()
+  p="$base"
+  while :; do
+    cands+=("$p")
+    case "$p" in *-*) p="${p%-*}" ;; *) break ;; esac
+  done
+  for c in "${cands[@]}"; do
+    team_task_id_known "$c" && { printf '%s\n' "$c"; return 0; }
+  done
+  printf '%s\n' "${base%%-*}"
+}
+
 team_report_is_task() { # <file> <id>
   local f="$1" id="$2"
   [ -n "$id" ] || return 1
@@ -1066,7 +1095,7 @@ team_reports_pending_list() { # → 每行 "<显示名>\t<路径>"，只列**真
   local glob base id ids=" "
   for glob in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
     [ -f "$glob" ] || continue
-    base="$(basename "$glob" .md)"; id="${base%%-*}"
+    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"
     [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
     case "$ids" in *" $id "*) continue ;; esac
     team_report_is_task "$glob" "$id" || continue
@@ -1083,7 +1112,7 @@ team_reports_ignored() { # 被上面规则排除掉的报告（供 digest 提示
   local f base id glob
   for glob in "$TEAM_DOCS_ABS/reports/"*.md; do
     [ -f "$glob" ] || continue
-    base="$(basename "$glob" .md)"; id="${base%%-*}"
+    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"
     [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
     team_report_is_task "$glob" "$id" || printf '%s\n' "$(basename "$glob")"
   done

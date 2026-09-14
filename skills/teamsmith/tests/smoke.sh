@@ -1988,6 +1988,133 @@ $TEAM meeting knock no-such-meeting >"$TMP/knock-bad.log" 2>&1 || true
 assert_has "$TMP/knock-bad.log" "会议不存在" "不存在的会议给出明确报错"
 unset TEAM_MEETINGS_DIR
 
+# ---------------------------------------------------------------- 11h. 信号与承诺的诚实（V4.0 F4/F6/F19/F21/F23）
+section "11h · 信号与承诺的诚实（V4.0 F4/F6/F19/F21/F23）"
+
+# F4：push 状态必须相对 @{upstream} 量，不是相对保护分支。旧实现拿保护分支当代理：
+# 分支 push 过、又被 squash 合并后，相对保护分支永远「领先 N」→ digest 永远喊「提交并 push」。
+# 夹具：一个真的有 upstream 的 agent worktree（远端是本地 bare 仓，不碰网络）。
+F4WT="$REPO/.worktrees/f4"
+git -C "$REPO" init -q --bare "$TMP/f4-origin.git"
+if git -C "$REPO" worktree add -q -b task/F4-demo "$F4WT" main >/dev/null 2>&1; then ok "F4 夹具：建一个带 upstream 的 worktree"
+else bad "F4 夹具 worktree 建不起来"; fi
+printf 'f4\n' > "$F4WT/f4.txt"
+git -C "$F4WT" add -A >/dev/null 2>&1 && git -C "$F4WT" commit -qm "feat(F4): demo commit" >/dev/null 2>&1
+git -C "$REPO" remote add f4origin "$TMP/f4-origin.git" >/dev/null 2>&1 || true
+git -C "$F4WT" push -q -u f4origin task/F4-demo >/dev/null 2>&1 && ok "F4 夹具：分支已 push（@{upstream}..HEAD = 0）" || bad "F4 夹具 push 失败"
+assert_eq "F4 夹具：相对 upstream 确实没有未 push 的提交" "$(git -C "$F4WT" rev-list --count '@{upstream}..HEAD' 2>/dev/null)" "0"
+assert_eq "F4 夹具：相对 main 仍领先 1（旧实现正是把这个数当成未 push）" "$(git -C "$F4WT" rev-list --count main..HEAD)" "1"
+
+# 名册只有 f4（环境变量临时覆盖名册；digest 只读，不需要 tmux）
+TEAM_AGENTS=f4 $TEAM digest >"$TMP/f4-pushed.log" 2>&1 || bad "F4：digest（名册 f4）失败"
+assert_not "$TMP/f4-pushed.log" "收尾：提交并 push" "F4：已 push 的分支不再被当成未收尾（旧实现会喊 push）"
+assert_not "$TMP/f4-pushed.log" "未 push 1" "F4：已 push 的分支没有假的未 push 计数"
+assert_has "$TMP/f4-pushed.log" "相对 upstream" "F4：digest [4] 说明自己量的是相对 upstream 的未 push"
+TEAM_AGENTS=f4 $TEAM roster >"$TMP/f4-roster.log" 2>&1 || bad "F4：roster（名册 f4）失败"
+assert_has "$TMP/f4-roster.log" "未push=相对 @{upstream}" "F4：roster 说明未push 相对 @{upstream}"
+assert_has "$TMP/f4-roster.log" "领先=相对 main" "F4：roster 把「领先 main」与「未 push」分开说明"
+
+# 正对照：真的多出一个没 push 的提交时必须报警（不是把信号整体静音）
+printf 'more\n' >> "$F4WT/f4.txt"
+git -C "$F4WT" commit -qam "feat(F4): unpushed commit" >/dev/null 2>&1
+TEAM_AGENTS=f4 $TEAM digest >"$TMP/f4-unpushed.log" 2>&1 || bad "F4：digest（未 push 场景）失败"
+assert_has "$TMP/f4-unpushed.log" "未 push 1（相对 @{upstream}）" "F4：真的未 push 的提交仍被列出"
+assert_has "$TMP/f4-unpushed.log" "收尾：提交并 push" "F4：真的未 push 时仍给出 push 建议"
+assert_has "$TMP/f4-unpushed.log" "领先 main 2" "F4：领先保护分支单独成标签（不再冒充未 push）"
+
+# 没有 upstream 时：push 状态无法判定，不许冒充「未 push N」
+git -C "$F4WT" branch --unset-upstream >/dev/null 2>&1
+TEAM_AGENTS=f4 $TEAM digest >"$TMP/f4-noup.log" 2>&1 || bad "F4：digest（无 upstream 场景）失败"
+assert_has "$TMP/f4-noup.log" "无 upstream（未 push 无法判定）" "F4：没有 upstream 时明说无法判定"
+assert_not "$TMP/f4-noup.log" "未 push 2" "F4：没有 upstream 时不给假的未 push 计数"
+assert_has "$TMP/f4-noup.log" "领先 main 2" "F4：没有 upstream 时仍能看到领先 main 多少"
+git -C "$REPO" worktree remove --force "$F4WT" >/dev/null 2>&1 || true
+
+# F6：任务 id 里可以带 '-'（API-2）。老实现用「第一个 '-' 前」当 id，于是 reports/API-2-dev.md 被
+# 当成 id=API 的报告（标题对不上）→ 掉进「忽略的非任务报告」，永远不变成「待复验」。
+$TEAM task API-2 --title "add the api-2 endpoint" --agent dev >"$TMP/f6-task.log" 2>&1 \
+  && ok "F6 夹具：team task API-2（id 自带 '-'）" || bad "F6 夹具 team task 失败"
+mkdir -p "$REPO/docs/team/reports/API-2-dev"
+printf '%s\n' '# API-2 · add the api-2 endpoint' '' 'agent: dev   status: DONE' '' '## Deliverables' '' '- endpoint' \
+  > "$REPO/docs/team/reports/API-2-dev.md"
+printf '#!/usr/bin/env bash\necho flip\n' > "$REPO/docs/team/reports/API-2-dev/run.sh"
+# 第二个夹具：文件名里有**两处** '-'（agent 名也带 '-'）——仍然属于 API-2
+printf '%s\n' '# API-2 · add the api-2 endpoint' '' 'agent: dev-2   status: DONE' \
+  > "$REPO/docs/team/reports/API-2-dev-2.md"
+# 非任务报告的回退行为不变（P2 不在 BOARD 里 → 仍按旧启发式得到 P2，再由标题/文件名规则忽略）
+printf '%s\n' '# P2 · closure' '' 'agent: pm' > "$REPO/docs/team/reports/P2-closure.md"
+
+f6_id_of() { # <报告路径> → 实现派生出的 id（直调被验代码，不猜）
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_report_task_id "$1"' _ "$1" )
+}
+assert_eq "F6：API-2-dev.md 的 id 是 API-2（不是 API）" "$(f6_id_of "$REPO/docs/team/reports/API-2-dev.md")" "API-2"
+assert_eq "F6：API-2-dev-2.md（stem 里两处 '-'）也是 API-2" "$(f6_id_of "$REPO/docs/team/reports/API-2-dev-2.md")" "API-2"
+assert_eq "F6：非任务报告（P2-closure）仍退回旧启发式 P2" "$(f6_id_of "$REPO/docs/team/reports/P2-closure.md")" "P2"
+
+$TEAM digest >"$TMP/f6-digest.log" 2>&1 || bad "F6：digest 失败"
+assert_has "$TMP/f6-digest.log" "review API-2" "F6：待复验给出完整 id（不是 API）"
+assert_eq "F6：没有残缺 id 的复验命令（review API）" "$(grep -cE 'review API$' "$TMP/f6-digest.log" || true)" "0"
+assert_not "$TMP/f6-digest.log" "忽略的非任务报告：API-2-dev.md" "F6：id 带 '-' 的报告不再被判成非任务报告"
+assert_not "$TMP/f6-digest.log" "忽略的非任务报告：API-2-dev-2.md" "F6：两处 '-' 的报告也不再被判成非任务报告"
+assert_has "$TMP/f6-digest.log" "忽略的非任务报告：P2-closure.md" "F6：真正非任务的报告仍然被忽略（但可见）"
+
+# F21：只读的版本自检不能因为 SIGPIPE 以 141 收尾。旧实现用 `sed … | head -14 | sed …` 打 CHANGELOG
+# 摘要，head 一退出就把上游 sed 打成 141，pipefail 把它传给了调用方（`version --check && …` 把「你是旧的」当崩溃）。
+$TEAM mark-loaded --version 0.0.1 >/dev/null 2>&1
+$TEAM version --check >"$TMP/f21-stale.log" 2>&1; F21_RC=$?
+assert_eq "F21：旧会话的 version --check 退出码 0（不是 141/SIGPIPE）" "$F21_RC" "0"
+assert_has "$TMP/f21-stale.log" "本会话是旧的" "F21：仍然打印「本会话是旧的」"
+assert_has "$TMP/f21-stale.log" "最新变更" "F21：旧会话仍然打印 CHANGELOG 摘要（没被半路打断）"
+$TEAM mark-loaded >/dev/null 2>&1
+$TEAM version --check >"$TMP/f21-fresh.log" 2>&1; F21_RC2=$?
+assert_eq "F21：一致时退出码 0" "$F21_RC2" "0"
+
+# F23：team reload 不能承诺一个不存在的 watchdog 行为。marker 的唯一消费者是 notify 扩展
+# （/reload 完成后把它删掉）；脚本侧没有任何组件读它，所以「watchdog 看到 marker 会重启 PM 会话」是假承诺。
+$TEAM reload >"$TMP/f23-reload.log" 2>&1 || bad "F23：team reload 失败"
+assert_file "$REPO/.pi/team/state/reload-requested" "F23：reload 仍然写 marker（请求仍然留痕）"
+assert_not "$TMP/f23-reload.log" "重启 PM 会话" "F23：不再承诺 watchdog 会重启 PM 会话"
+assert_has "$TMP/f23-reload.log" "没有任何组件会因为 marker 重启会话" "F23：明说 marker 不会重启任何东西"
+assert_has "$TMP/f23-reload.log" "/reload" "F23：给出真正生效的方式（会话内 /reload）"
+F23_READERS="$(grep -rl 'reload-requested' "$SKILL_DIR/scripts" 2>/dev/null | grep -v 'cmd-update.sh' || true)"
+assert_eq "F23：scripts/ 里除 cmd-update.sh 外没有组件读 marker" "${F23_READERS:-无}" "无"
+assert_has "$SKILL_DIR/extension/team-notify.ts" "rmSync(marker, { force: true })" "F23：扩展侧确实只在 /reload 后清掉 marker（文案与实现一致）"
+$TEAM reload --done >/dev/null 2>&1
+assert_not_file "$REPO/.pi/team/state/reload-requested" "F23：reload --done 仍然能清掉 marker"
+
+# F19：会议 TTL。旧实现：open 不校验（--ttl 0/-5/abc 原样写进 state.env），is_expired 把
+# 0/负数/非数字当成「永不过期」，read 印 "/ TTL abch" —— 一次 --ttl 0 就得到永生会议。
+export TEAM_MEETINGS_DIR="$TMP/meetings-f19"
+F19_PEER="other-$$"
+if $TEAM meeting open ttl-zero --with "$F19_PEER" --topic "ttl 0" --ttl 0 --yes >"$TMP/f19-zero.log" 2>&1; then
+  bad "F19：--ttl 0 应被拒绝"
+else ok "F19：--ttl 0 被拒绝（不再变成永生会议）"; fi
+assert_has "$TMP/f19-zero.log" "正整数小时" "F19：拒绝理由说明必须正整数小时"
+assert_not_file "$TMP/meetings-f19/ttl-zero/state.env" "F19：被拒的 ttl 没有留下会议记录"
+if $TEAM meeting open ttl-neg --with "$F19_PEER" --topic "ttl -5" --ttl -5 --yes >"$TMP/f19-neg.log" 2>&1; then bad "F19：--ttl -5 应被拒绝"; else ok "F19：--ttl -5 被拒绝"; fi
+if $TEAM meeting open ttl-abc --with "$F19_PEER" --topic "ttl abc" --ttl abc --yes >"$TMP/f19-abc.log" 2>&1; then bad "F19：--ttl abc 应被拒绝"; else ok "F19：--ttl abc 被拒绝"; fi
+$TEAM meeting open ttl-ok --with "$F19_PEER" --topic "ttl 24" --ttl 24 --yes >"$TMP/f19-ok.log" 2>&1 && ok "F19：--ttl 24 正常开会" || bad "F19：--ttl 24 开会失败"
+assert_has "$TMP/meetings-f19/ttl-ok/state.env" "TTL_HOURS=24" "F19：合法 ttl 原样登记"
+$TEAM meeting read ttl-ok --peek >"$TMP/f19-read.log" 2>&1 || bad "F19：meeting read 失败"
+assert_has "$TMP/f19-read.log" "TTL 24h" "F19：read 打印登记的 TTL"
+$TEAM meeting open ttl-high --with "$F19_PEER" --topic "ttl high" --ttl 999999 --yes >"$TMP/f19-high.log" 2>&1 || true
+assert_has "$TMP/meetings-f19/ttl-high/state.env" "TTL_HOURS=8760" "F19：过大的 ttl 被夹到一年（8760h）"
+assert_has "$TMP/f19-high.log" "8760" "F19：夹住时给出告警"
+# 历史遗留（手改/旧版本写的）非法登记值：不能永生，read 要打印有效值并说明
+$TEAM meeting open ttl-legacy --with "$F19_PEER" --topic "legacy" --yes >/dev/null 2>&1
+sed -i 's/^TTL_HOURS=.*/TTL_HOURS=abc/' "$TMP/meetings-f19/ttl-legacy/state.env"
+sed -i 's/^OPENED_EPOCH=.*/OPENED_EPOCH=1000/' "$TMP/meetings-f19/ttl-legacy/state.env"
+if $TEAM meeting say ttl-legacy --intent info "54 年后还能说吗" >"$TMP/f19-say.log" 2>&1; then
+  bad "F19：非法 TTL 的历史会议不该永生（say 竟然成功）"
+else ok "F19：非法 TTL 按默认值判定过期（say 被拒）"; fi
+assert_has "$TMP/f19-say.log" "已过期" "F19：拒绝理由说明会议已过期"
+$TEAM meeting read ttl-legacy --peek >"$TMP/f19-legacy-read.log" 2>&1 || true
+assert_has "$TMP/f19-legacy-read.log" "TTL 72h" "F19：read 对非法登记值打印有效 TTL（72）"
+assert_has "$TMP/f19-legacy-read.log" "已过期" "F19：read 同时标注已过期"
+assert_has "$TMP/f19-legacy-read.log" "不会永生" "F19：read 说明登记值不可用、按默认算"
+unset TEAM_MEETINGS_DIR
+
 # ---------------------------------------------------------------- 14b. 文档一致性（防回退）
 section "14b · 文档一致性：已删命令不得回潮（词边界 + 扫描范围 + 翻转自测）"
 

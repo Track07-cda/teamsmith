@@ -62,11 +62,37 @@ team_meeting_is_mine() { # <slug>
 
 team_meeting_is_closed() { [ "$(team_meeting_state "$1" STATUS open)" = "closed" ]; }
 
-team_meeting_is_expired() { # TTL 到期 → 只读
+# F19：TTL 必须是正整数小时。旧实现里：open 不校验（`--ttl 0/-5/abc` 直接写进 state.env），
+# is_expired 把 0/负数/非数字当成「永不过期」（`[ "$ttl" -gt 0 ] 2>/dev/null || return 1`），
+# read 还把 'abc' 印成 "TTL abch"。这里把「有效 TTL」收成一个函数，双方都用它。
+team_meeting_ttl_default() { # 文档默认值；环境变量本身非法也退回 72
+  case "${TEAM_MEETING_TTL_HOURS:-}" in
+    ''|*[!0-9]*) printf '72\n' ;;
+    *) if [ "$TEAM_MEETING_TTL_HOURS" -gt 0 ] 2>/dev/null; then printf '%s\n' "$TEAM_MEETING_TTL_HOURS"; else printf '72\n'; fi ;;
+  esac
+}
+
+team_meeting_ttl_hours() { # <slug> → 有效 TTL（正整数小时）；登记值不可用 → 文档默认值，绝不永生
+  local raw; raw="$(team_meeting_state "$1" TTL_HOURS '')"
+  case "$raw" in
+    ''|*[!0-9]*) printf '%s\n' "$(team_meeting_ttl_default)" ;;
+    *) if [ "$raw" -gt 0 ] 2>/dev/null; then printf '%s\n' "$raw"; else printf '%s\n' "$(team_meeting_ttl_default)"; fi ;;
+  esac
+}
+
+team_meeting_ttl_note() { # <slug> → "" 或「登记值不可用，按默认算」的说明（read 用）
+  local raw; raw="$(team_meeting_state "$1" TTL_HOURS '')"
+  case "$raw" in
+    ''|*[!0-9]*) printf '（登记值 %s 不可用：按文档默认 %sh 计，不会永生）' "${raw:-缺失}" "$(team_meeting_ttl_hours "$1")" ;;
+    *) [ "$raw" -gt 0 ] 2>/dev/null || printf '（登记值 %s 非正：按文档默认 %sh 计，不会永生）' "$raw" "$(team_meeting_ttl_hours "$1")" ;;
+  esac
+}
+
+team_meeting_is_expired() { # TTL 到期 → 只读（F19：非法/缺失 TTL 按文档默认值算，不静默变成永生）
   local ttl opened now
-  ttl="$(team_meeting_state "$1" TTL_HOURS "${TEAM_MEETING_TTL_HOURS:-72}")"
+  ttl="$(team_meeting_ttl_hours "$1")"
   opened="$(team_meeting_state "$1" OPENED_EPOCH 0)"
-  [ "$ttl" -gt 0 ] 2>/dev/null || return 1
+  case "$opened" in ''|*[!0-9]*) opened=0 ;; esac   # 时间戳不可用 → 当 0（比任何 TTL 都早），不给永生后门
   now="$(date +%s)"
   [ $((now - opened)) -gt $((ttl * 3600)) ]
 }
@@ -80,7 +106,7 @@ team_meeting_require_open() { # <slug> <动作>
   fi
   if team_meeting_is_expired "$1"; then
     [ "$2" = "read" ] && return 0
-    team_die "会议 $1 已过期（TTL $(team_meeting_state "$1" TTL_HOURS)h）：先 $TEAM_CLI meeting close $1，或 open --force 续期"
+    team_die "会议 $1 已过期（TTL $(team_meeting_ttl_hours "$1")h）：先 $TEAM_CLI meeting close $1，或 open --force 续期"
   fi
   return 0
 }
@@ -137,6 +163,7 @@ team meeting —— 跨项目会议（peer 交流，不是指挥通道）
 
   open <slug> --with <项目>[:<session>] --topic "…" [--ttl 72] [--force] [--yes]
       开会（需要 --yes：这是写共享状态）。发起方 = 当前项目（$TEAM_PROJECT）。
+      --ttl 是正整数小时（默认 $(team_meeting_ttl_default)，>8760 按 8760 计；非法值直接拒绝）；到期后只读。
   say <slug> --intent <info|question|report|proposal|request> "…" [--knock]
       发言：先写共享区 transcript（唯一真相），--knock 才提醒对方 PM 窗口（需 TEAM_MEETING_KNOCK=1）。
       **没有 command/order 这类 intent** —— 机制上不提供"下令"动作。
@@ -154,7 +181,7 @@ HELP
 }
 
 team_meeting_open() {
-  local slug="" peer="" topic="" ttl="${TEAM_MEETING_TTL_HOURS:-72}" force=0
+  local slug="" peer="" topic="" ttl="$(team_meeting_ttl_default)" force=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --with) peer="${2:?}"; shift 2 ;;
@@ -168,6 +195,16 @@ team_meeting_open() {
   done
   [ -n "$slug" ] || team_usage_die "meeting open <slug> --with <项目>[:<session>] --topic \"…\""
   [ -n "$peer" ] || team_usage_die "meeting open: 需要 --with <项目>[:<session>]"
+  # F19：TTL 必须在开会时就校验。旧实现把 0/负数/非数字原样写进 state.env，
+  # 而 is_expired 把这类值当「永不过期」——一次 --ttl 0 就得到一个永远合法的会议。
+  case "$ttl" in
+    ''|*[!0-9]*) team_usage_die "meeting open: --ttl 必须是正整数小时（收到 '$ttl'；不传则用默认 $(team_meeting_ttl_default)）" ;;
+  esac
+  [ "$ttl" -gt 0 ] 2>/dev/null || team_usage_die "meeting open: --ttl 必须是正整数小时（收到 '$ttl'；不传则用默认 $(team_meeting_ttl_default)）"
+  if [ "$ttl" -gt 8760 ]; then
+    team_warn "meeting open: --ttl $ttl 超过一年（8760 小时）：按 8760 计"
+    ttl=8760
+  fi
   team_meeting_validate_slug "$slug"
   team_allow_write || return 1     # 写共享区 = 改共享状态，需要显式授权
 
@@ -424,11 +461,12 @@ team_meeting_read() {
   team_meeting_require_open "$slug" read
   local d; d="$(team_meeting_dir "$slug")"
   team_hdr "meeting $slug · $(team_meeting_state "$slug" TOPIC -)"
-  printf '  参与方 %s ｜ 状态 %s%s ｜ TTL %sh\n' \
+  printf '  参与方 %s ｜ 状态 %s%s ｜ TTL %sh%s\n' \
     "$(team_meeting_state "$slug" PARTICIPANTS -)" \
     "$(team_meeting_state "$slug" STATUS open)" \
     "$(team_meeting_is_expired "$slug" && echo '（已过期）' || true)" \
-    "$(team_meeting_state "$slug" TTL_HOURS -)"
+    "$(team_meeting_ttl_hours "$slug")" \
+    "$(team_meeting_ttl_note "$slug")"
   local f n last=0
   for f in "$d/transcript/"*.md; do
     [ -f "$f" ] || continue

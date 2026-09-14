@@ -74,10 +74,17 @@ bash <skill>/scripts/team thread dev "add an RLS test to T1.1 acceptance" --from
 ```bash
 bash <skill>/scripts/team digest          # pending work: new notifications + reports to verify + board + capacity/liveness
 bash <skill>/scripts/team inbox --ack     # read and mark as read
-bash <skill>/scripts/team roster          # who is running, branch, dirty files, commits ahead
+bash <skill>/scripts/team roster          # who is running, branch, dirty files, ahead of the protected branch, unpushed commits
 bash <skill>/scripts/team ps              # capacity (RAM/swap/how many more fit) + model concurrency + PM/watchdog liveness
 bash <skill>/scripts/team up              # one-shot repair: session/PM/agents that stopped without delivering
 ```
+
+`digest` §[4] measures the push state **against `@{upstream}`** (`git rev-list --count @{upstream}..HEAD`), never
+against the protected branch: a branch that was pushed and then squash-merged stays "1 ahead of main" forever, and
+treating that as "unpushed" sent the PM after a task that was already finished. `roster` therefore prints two
+different columns — `ahead` (vs the protected branch) and `unpushed` (vs `@{upstream}`, where `-` means there is no
+upstream at all, so the push state **cannot be judged**). §[4] only asks for a push when there really are unpushed
+commits, says `no upstream (cannot judge unpushed)` when there is none, and keeps "ahead of main" as its own label.
 
 When a "turn ended" notification arrives, look at `git -C .worktrees/<a> log --oneline -5` and `status` first, then
 decide: dispatch the next task, send it back, or verify. After a long absence (end of day, machine reboot): **run

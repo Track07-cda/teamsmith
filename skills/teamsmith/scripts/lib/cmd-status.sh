@@ -47,28 +47,41 @@ team_agent_window_exists() { # <agent> → 0/1：只看窗口存在
 # 这样“没跑过门禁的复验”和“分支在复验后又动了”都看得见。
 # 注意：这是对 common.sh 同名函数的**覆盖**（cmd-status.sh 在它之后 source）；pending 逻辑
 # 归 M6.2（见 M6.2 任务书），M6.1 负责的状态/看板函数不动。
-team_reports_pending_list() { # → 每行 "<显示名[ 标记]>\t<路径>"
+team_reports_pending_list() { # → 每行 "<id>\t<显示名[ 标记]>\t<路径>"
   local glob base id ids=" " note
   for glob in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
     [ -f "$glob" ] || continue
-    base="$(basename "$glob" .md)"; id="${base%%-*}"
+    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"   # F6：id 可以带 '-'，按最长已知前缀取
     case "$ids" in *" $id "*) continue ;; esac
     team_report_is_task "$glob" "$id" || continue
     if [ -f "$(team_review_record_path "$id")" ]; then
       note="$(team_review_record_note "$id")"
       [ -n "$note" ] || continue          # 记录有效且新鲜 → 不算待办
       ids="$ids$id "
-      printf '%s\t%s\n' "$base [$note]" "$glob"
+      printf '%s\t%s\t%s\n' "$id" "$base [$note]" "$glob"
     else
       ids="$ids$id "
-      printf '%s\t%s\n' "$base" "$glob"
+      printf '%s\t%s\t%s\n' "$id" "$base" "$glob"
     fi
   done
 }
 
-team_git_cols() { # <worktree> → "branch dirty ahead"
+# F4：push 状态必须相对 @{upstream} 量。旧实现拿保护分支当代理 —— 分支 push 过、又被 squash 合并后，
+# 相对保护分支永远「领先 N」，digest 便永远喊「未 push」（头写着未 push，量的却是别的 ref）。
+#   <n>  相对 @{upstream} 的领先提交数
+#   -    没有 upstream（push 状态**无法判定**，不等于「未 push」）
+#   ?    配了 upstream 但解析不到（例如远端分支已被删/被 prune 掉）
+team_git_upstream_ahead() { # <worktree> → 见上
+  local wt="$1" up
+  [ -d "$wt" ] || { printf -- '-\n'; return 0; }
+  up="$(git -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  [ -n "$up" ] || { printf -- '-\n'; return 0; }
+  git -C "$wt" rev-list --count '@{upstream}..HEAD' 2>/dev/null || printf '?\n'
+}
+
+team_git_cols() { # <worktree> → "branch dirty ahead-of-protected ahead-of-upstream"
   local wt="$1" branch dirty ahead
-  [ -d "$wt" ] || { printf -- '-\t-\t-\n'; return 0; }
+  [ -d "$wt" ] || { printf -- '-\t-\t-\t-\n'; return 0; }
   branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-')"
   dirty="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
   if git -C "$wt" rev-parse --verify -q "$TEAM_PROTECTED_BRANCH" >/dev/null 2>&1; then
@@ -76,14 +89,14 @@ team_git_cols() { # <worktree> → "branch dirty ahead"
   else
     ahead="?"
   fi
-  printf '%s\t%s\t%s\n' "$branch" "$dirty" "$ahead"
+  printf '%s\t%s\t%s\t%s\n' "$branch" "$dirty" "$ahead" "$(team_git_upstream_ahead "$wt")"
 }
 
 team_cmd_roster() {
   team_require_docs
-  printf '%-10s %-12s %-26s %6s %6s  %s\n' AGENT 状态 分支 脏 领先 任务
-  printf '%-10s %-12s %-26s %6s %6s  %s\n' ----- ------ -------------------------- ------ ------ ----
-  local a w wt cols branch dirty ahead task state cli
+  printf '%-10s %-12s %-26s %6s %6s %8s  %s\n' AGENT 状态 分支 脏 领先 未push 任务
+  printf '%-10s %-12s %-26s %6s %6s %8s  %s\n' ----- ------ -------------------------- ------ ------ ------ ----
+  local a w wt cols branch dirty ahead upahead task state cli
   cli="$(team_agent_cli_name)"
   for a in $(team_agents); do
     wt="$(team_agent_worktree "$a")"
@@ -91,11 +104,12 @@ team_cmd_roster() {
     elif team_agent_window_exists "$a"; then state="○ $cli 已退出"
     else state="· 无窗口"; fi
     cols="$(team_git_cols "$wt")"
-    IFS=$'\t' read -r branch dirty ahead <<< "$cols"
+    IFS=$'\t' read -r branch dirty ahead upahead <<< "$cols"
     task="$(team_state_get "$a" task -)"
-    printf '%-10s %-12s %-26s %6s %6s  %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$task"
+    printf '%-10s %-12s %-26s %6s %6s %8s  %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$upahead" "$task"
   done
-  printf '\n● %s 在跑 ｜ ○ 窗口在但 %s 已退出（team resume 可续）｜ · 无窗口 ｜ 脏=未提交 领先=相对 %s\n' "$cli" "$cli" "$TEAM_PROTECTED_BRANCH"
+  printf '\n● %s 在跑 ｜ ○ 窗口在但 %s 已退出（team resume 可续）｜ · 无窗口\n' "$cli" "$cli"
+  printf '  脏=未提交 ｜ 领先=相对 %s ｜ 未push=相对 @{upstream}（- = 没有 upstream，无法判定）\n' "$TEAM_PROTECTED_BRANCH"
   [ -n "$TEAM_SESSION" ] && team_dim "session: $TEAM_SESSION（attach: tmux attach -t $TEAM_SESSION）"
   return 0
 }
@@ -219,36 +233,56 @@ team_cmd_digest() {
 
   printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁）"
   any=0
-  local rep disp
-  while IFS=$'\t' read -r disp rep; do
+  local rid disp rep
+  while IFS=$'\t' read -r rid disp rep; do
     [ -n "$disp" ] || continue
     any=1
     case "$rep" in
       "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) 
         local who="${rep#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
-        printf '  %s（在 %s 分支上）  →  %s review %s\n' "$disp" "$who" "$TEAM_CLI" "${disp%%-*}" ;;
-      *) printf '  %s  →  %s review %s\n' "$disp" "$TEAM_CLI" "${disp%%-*}" ;;
+        printf '  %s（在 %s 分支上）  →  %s review %s\n' "$disp" "$who" "$TEAM_CLI" "${rid:-${disp%%-*}}" ;;
+      *) printf '  %s  →  %s review %s\n' "$disp" "$TEAM_CLI" "${rid:-${disp%%-*}}" ;;
     esac
   done < <(team_reports_pending_list)
   [ "$any" -eq 0 ] && team_dim "  （无）"
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
-  # 待收尾：agent 做了活但没收干净（脏工作区 / 未 push / 报告缺失）——CEP 实测的盲区
-  printf '\n%s\n' "[4] 待收尾（脏工作区 / 未 push）"
-  local sa swt sbranch sdirty sahead stask sany=0
+  # 待收尾：agent 做了活但没收干净（脏工作区 / 相对 upstream 有未 push 的提交）——CEP 实测的盲区。
+  # F4：这里只对「真的没 push 出去」报警；领先保护分支是**另一个指标**，单独标出来（旧实现混为一谈）。
+  printf '\n%s\n' "[4] 待收尾（脏工作区 / 相对 upstream 未 push 的提交；领先按 $TEAM_PROTECTED_BRANCH 另计）"
+  local sa swt sbranch sdirty sahead supahead stask sany=0 sfacts supnote sact
   for sa in $(team_agents); do
     swt="$(team_agent_worktree "$sa")"
     [ -d "$swt" ] || continue
-    IFS=$'\t' read -r sbranch sdirty sahead <<< "$(team_git_cols "$swt")"
-    [ "${sdirty:-0}" -gt 0 ] 2>/dev/null || [ "${sahead:-0}" -gt 0 ] 2>/dev/null || continue
+    IFS=$'\t' read -r sbranch sdirty sahead supahead <<< "$(team_git_cols "$swt")"
+    sfacts=""; supnote=""
+    [ "${sdirty:-0}" -gt 0 ] 2>/dev/null && sfacts="脏 $sdirty"
+    case "${supahead:-}" in
+      -)  # 没有 upstream：push 状态无法判定，绝不冒充「未 push N」
+          supnote="无 upstream（未 push 无法判定）"
+          if [ "${sahead:-0}" -gt 0 ] 2>/dev/null; then
+            if [ "${TEAM_VCS:-local}" = "local" ]; then supnote="$supnote · 领先 $TEAM_PROTECTED_BRANCH $sahead（本地模式：PM 合并，不需要 push）"
+            else supnote="$supnote · 领先 $TEAM_PROTECTED_BRANCH $sahead（要 push 先 git push -u $TEAM_REMOTE HEAD）"; fi
+          fi ;;
+      '?') sfacts="${sfacts:+$sfacts · }未 push ?（upstream 解析不到）" ;;
+      *)   if [ "${supahead:-0}" -gt 0 ] 2>/dev/null; then
+             sfacts="${sfacts:+$sfacts · }未 push $supahead（相对 @{upstream}）· 领先 $TEAM_PROTECTED_BRANCH ${sahead:-?}"
+           fi ;;
+    esac
+    [ -n "$sfacts" ] || [ -n "$supnote" ] || continue
     sany=1
     stask="$(team_state_get "$sa" task '-')"
-    printf '  %-10s 脏 %-3s 领先 %-3s ｜ %s ｜ %s\n' "$sa" "$sdirty" "$sahead" "$sbranch" "$stask"
-    printf '             → %s say %s "收尾：提交并 push"
-' "$TEAM_CLI" "$sa"
+    sact="${sfacts:-—}"; [ -n "$supnote" ] && sact="${sact}${sact:+ ｜ }$supnote"
+    printf '  %-10s %-52s ｜ %s ｜ %s\n' "$sa" "$sact" "$sbranch" "$stask"
+    if [ -n "$sfacts" ]; then
+      case "${supahead:-}" in
+        '?') printf '             → %s say %s "收尾：提交并 push（upstream 解析不到：先 git fetch --prune 或重设 upstream）"\n' "$TEAM_CLI" "$sa" ;;
+        *)   printf '             → %s say %s "收尾：提交并 push"\n' "$TEAM_CLI" "$sa" ;;
+      esac
+    fi
   done
-  [ "$sany" -eq 0 ] && team_dim "  （无：没有脏工作区或未 push 的提交）"
+  [ "$sany" -eq 0 ] && team_dim "  （无：没有脏工作区，也没有相对 upstream 的未 push 提交）"
 
   printf '\n%s\n' "[5] 任务板"
   grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null | tail -n +3 | awk -F'|' 'NF>2{

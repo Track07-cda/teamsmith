@@ -37,7 +37,7 @@ reports); it is not a chat room and certainly not a command channel.
 ## Commands
 
 ```bash
-team meeting open <slug> --with <project>[:<session>] --topic "order API integration" --ttl 72 --yes
+team meeting open <slug> --with <project>[:<session>] --topic "order API integration" --ttl 72 --yes   # --ttl = positive integer hours
 team meeting say <slug> --intent proposal "POST /orders should take an idempotency_key (UUID, required)" [--knock]
 team meeting read <slug> [--since N] [--peek]      # marks what it reads by default
 team meeting inbox                                  # which meetings are waiting for my reply
@@ -103,7 +103,7 @@ guard lets it through. **A failed knock does not affect the message** — it is 
 | Impersonating a human refused | `--as-user` needs a human terminal + `TEAM_MEETING_ALLOW_USER_ID=1`; an agent process is refused |
 | Giving orders refused | anything outside the `intent` whitelist is refused; a body carrying an order marker (`[order]`/`[command]`, or the Chinese equivalents) is refused too |
 | Rate limit | `MAX_TURNS` per side (default 20, taken from the meeting record; a stricter env `TEAM_MEETING_MAX_TURNS` wins) |
-| Expiry | after `TTL_HOURS` (default 72) the meeting is read-only; it needs `close` or `open --force` to continue |
+| Expiry | after `TTL_HOURS` the meeting is read-only; it needs `close` or `open --force` to continue. `--ttl` must be a **positive integer number of hours** (`0`, negative values and non-numeric input are refused at open time, so a meeting can never be opened as "never expires"); `--ttl` above 8760 (one year) is clamped to 8760 with a warning, and a stored `TTL_HOURS` that is missing or not a positive integer falls back to the documented default instead of granting immortality |
 | Zero writes to others | the meeting path only writes the shared area; it has no write permission in the peer's repository |
 
 ## Configuration
@@ -111,7 +111,7 @@ guard lets it through. **A failed knock does not affect the message** — it is 
 | Key | Default | Meaning |
 |---|---|---|
 | `TEAM_MEETINGS_DIR` | `~/.pi/team/meetings` | shared-area location (outside both projects, never inside one of the repositories) |
-| `TEAM_MEETING_TTL_HOURS` | `72` | meeting lifetime; read-only afterwards |
+| `TEAM_MEETING_TTL_HOURS` | `72` | meeting lifetime in hours; read-only afterwards. Must be a positive integer — anything else falls back to `72` |
 | `TEAM_MEETING_MAX_TURNS` | `20` | per-side turn budget (a hard limit; wins when it is stricter than the meeting record) |
 | `TEAM_MEETING_KNOCK` | `0` | `1` = allow `--knock` to nudge the peer PM's window |
 | `TEAM_MEETING_ALLOW_USER_ID` | empty | `1` = allow a human terminal to use `--as-user` (cross-project instructions come from the user only) |
