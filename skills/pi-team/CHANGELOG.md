@@ -5,6 +5,22 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.6 · 2026-09-14
+
+**PM 身份归属校验 + 复验的干净度校验（实测踩到才发现的）**
+
+- `team_pm_state` 以前只看「PM 窗口在 + 前台不是 shell」→ **任何** pi 都算本项目的 PM。
+  实测现场：smoke 残留的一个 dummy PM（cwd 是已删除的 `/tmp/pi-team-smoke.*/repo`）挂在我
+  session 的 `pi` 窗口里，团队工具一直拿它当 PM（叫醒、digest、看门狗判活全打到它身上）。
+  现在：读该窗口进程的 cwd（Linux `/proc/<pid>/cwd`，macOS 退 `lsof`），不在本项目（含其 worktree）
+  就判 `foreign:<cmd>`；`team_pm_alive` 为假。
+- `team up` / `team_pm_start`：PM 窗口被外来进程占用时**不覆盖、也不新开第二个 `pi` 窗口**
+  （这正是双窗口/双 PM 的来源），要显式 `TEAM_REPLACE_FOREIGN_PM=1` 才覆盖。
+- `team review <ID> --dir`：checkout **脏**（有未提交改动）时拒绝盖章 —— 复验证据必须能复现；
+  要跑脏树得显式 `TEAM_REVIEW_ALLOW_DIRTY=1`（这条来自那个 dummy PM 的独立观察）。
+- smoke 新增 4 条断言：foreign 判定、`cwd` 归属判定、`team up` 拒绝 + 不新开窗口、显式覆盖生效；
+  另加「脏 checkout 被拒」。全量 ✓ 320 / ✗ 0。
+
 ## v1.11.5 · 2026-09-14
 
 **按 V1.1 对抗性复验（agent:verify）的 finding 修**

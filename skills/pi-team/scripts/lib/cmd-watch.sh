@@ -84,6 +84,19 @@ team_cmd_up() {
                else
                  team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 pi"
                fi ;;
+    foreign:*)
+               local _cwd; _cwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')"
+               if [ "${TEAM_REPLACE_FOREIGN_PM:-0}" = "1" ]; then
+                 team_warn "PM 窗口被外来进程占用（cwd=$_cwd）：按 TEAM_REPLACE_FOREIGN_PM=1 覆盖"
+                 if team_pm_start; then
+                   team_ok "PM 已启动（覆盖了外来进程）"
+                 else
+                   team_err "覆盖失败：看上面的原因"
+                 fi
+               else
+                 team_warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 被不属于本项目的进程占用（cwd=$_cwd）：不覆盖、也不新开窗口"
+                 team_dim "  关掉那个窗口（或改窗口名）后重跑 $TEAM_CLI up；确认要覆盖：TEAM_REPLACE_FOREIGN_PM=1 $TEAM_CLI up"
+               fi ;;
     *)         team_warn "PM 窗口状态异常（$pm_state）：不抢窗口" ;;
   esac
 

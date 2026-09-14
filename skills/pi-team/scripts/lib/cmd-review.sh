@@ -87,7 +87,18 @@ team_cmd_review() {
   → 重新准备：git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id $branch
   → 确实要用这个 checkout（比如复验一个历史提交）：TEAM_REVIEW_ANY_DIR=1 $TEAM_CLI review $id --dir $revdir --branch ${head:0:9}"
   fi
-  team_ok "review checkout: $revdir @ ${head:0:9}（分支 $branch）"
+  # 内容校验：checkout 必须是**干净的**（复验证据要能复现；脏树可能是别人/上个任务留下的改动）
+  local dirty_n dirty_list
+  dirty_n="$(git -C "$revdir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${dirty_n:-0}" -gt 0 ] 2>/dev/null && [ "${TEAM_REVIEW_ALLOW_DIRTY:-0}" != "1" ]; then
+    dirty_list="$(git -C "$revdir" status --short | head -5)"
+    team_die "checkout 有 $dirty_n 处未提交改动：复验必须在干净提交上跑（否则盖章的不是分支上的代码）
+$dirty_list
+  → 看是什么：git -C $revdir status --short
+  → 干净重建：git -C $TEAM_MAIN_ROOT worktree remove --force $revdir && git -C $TEAM_MAIN_ROOT worktree add --detach $revdir $branch
+  → 确认要在脏树上跑：TEAM_REVIEW_ALLOW_DIRTY=1 $TEAM_CLI review $id --dir $revdir"
+  fi
+  team_ok "review checkout: $revdir @ ${head:0:9}（分支 $branch，干净）"
 
   # 报告提交在 agent 分支上（合并前不出现在主工作树）：直接摘录进复验记录，
   # 不往主工作树拷文件（否则会让主工作树变脏、阻塞后续 squash merge）

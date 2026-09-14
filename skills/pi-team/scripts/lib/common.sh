@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.11.5"
+TEAM_VERSION="1.11.6"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -539,6 +539,52 @@ team_pm_target() { printf '%s:%s\n' "$TEAM_SESSION" "$TEAM_PM_WINDOW"; }
 
 team_pm_window_exists() { team_tmux_has_window "$TEAM_SESSION" "$TEAM_PM_WINDOW"; }
 
+# ---------------------------------------------------------------- 进程 / 归属
+# 为什么需要：`team_pm_state` 以前只看「窗口在 + 前台不是 shell」，
+# 于是**任何** pi 都会被当成本项目的 PM —— 实测踩过：smoke 留下的 dummy fixture PM
+# （cwd 是已删除的 /tmp/pi-team-smoke.*/repo）在窗口里挂着，团队工具一直把它当真 PM。
+team_proc_cwd() { # <pid> → 该进程的 cwd（Linux /proc；macOS 退 lsof）
+  [ -n "${1:-}" ] || return 1
+  if [ -e "/proc/$1/cwd" ]; then
+    readlink -f "/proc/$1/cwd" 2>/dev/null && return 0
+  fi
+  if team_have_cmd lsof; then
+    local out; out="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+  fi
+  return 1
+}
+
+# 窗口里的「真正在跑的进程」：前台不是 shell 就是它；是 shell 就看它的子进程（pi 常见形态）
+team_pane_proc_pid() { # <session:window>
+  local target="$1" pid cmd child
+  pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
+  [ -n "$pid" ] || return 1
+  cmd="$(team_pane_cmd "$target")"
+  if [ -n "$cmd" ] && ! team_is_shell_cmd "$cmd"; then printf '%s\n' "$pid"; return 0; fi
+  child="$(ps -o pid= --ppid "$pid" 2>/dev/null | head -1 | tr -d ' ')"
+  [ -n "$child" ] && printf '%s\n' "$child" || printf '%s\n' "$pid"
+}
+
+team_pane_cwd() { # <session:window> → 窗口里那个进程的 cwd
+  local pid; pid="$(team_pane_proc_pid "${1:-}")" || return 1
+  team_proc_cwd "$pid"
+}
+
+team_cwd_in_project() { # <cwd> → 0=属于本项目（含它的 worktree）
+  local c="${1:-}" common
+  [ -n "$c" ] || return 1
+  case "$c" in
+    "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) return 0 ;;
+  esac
+  common="$(team_git -C "$c" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [ -n "$common" ] || return 1
+  if [ "$(cd "$(dirname "$common")" 2>/dev/null && pwd -P)" = "$TEAM_MAIN_ROOT" ]; then
+    return 0
+  fi
+  return 1
+}
+
 # missing | idle:<cmd> | busy:<cmd> | running:<cmd>
 #   running = 前台不是 shell（pi 本体）
 #   busy    = 前台是 shell 但有子进程（pi 是 shell wrapper 时就是这个；也包含用户在跑别的命令）
@@ -546,6 +592,11 @@ team_pm_window_exists() { team_tmux_has_window "$TEAM_SESSION" "$TEAM_PM_WINDOW"
 team_pm_state() {
   team_pm_window_exists || { printf 'missing'; return 0; }
   local cmd; cmd="$(team_pane_cmd "$(team_pm_target)")"
+  # 归属校验：窗口里的进程 cwd 必须在本项目里（否则是别的项目/测试残留占着这个窗口）
+  local cwd; cwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || true)"
+  if [ -n "$cwd" ] && ! team_cwd_in_project "$cwd"; then
+    printf 'foreign:%s' "${cmd:-unknown}"; return 0
+  fi
   if ! team_is_shell_cmd "$cmd"; then printf 'running:%s' "$cmd"; return 0; fi
   if team_pane_busy "$(team_pm_target)"; then printf 'busy:%s' "${cmd:-shell}"; return 0; fi
   printf 'idle:%s' "${cmd:-shell}"
@@ -604,6 +655,12 @@ team_pm_start() {
     busy:*)    team_dim "  PM 窗口里有进程在跑（${state#busy:}）：不动它"
                return 1 ;;
     idle:*)    ;;
+    foreign:*)
+      local fcwd; fcwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"
+      team_err "PM 窗口 $target 被**不属于本项目**的进程占用（cwd=$fcwd）：不覆盖它"
+      team_dim "  （实测踩过：smoke 残留的 dummy PM 挂着，工具却把它当本项目的 PM）" >&2
+      team_dim "  处理：关掉那个窗口/改窗口名，或用 TEAM_REPLACE_FOREIGN_PM=1 显式覆盖（会杀掉它）" >&2
+      [ "${TEAM_REPLACE_FOREIGN_PM:-0}" = "1" ] || return 1 ;;
     *)         team_warn "PM 窗口状态异常（$state），不重启；处理完再跑 team up"; return 1 ;;
   esac
   pf="$(team_pm_write_prompt)"

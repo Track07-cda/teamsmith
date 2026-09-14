@@ -532,6 +532,17 @@ else
 fi
 assert_has "$TMP/review-sub.log" "根目录" "说明了必须传根目录"
 
+# 脏 checkout 也不许盖章（fixture PM 的实测 finding：只钉 HEAD 身份、不钉内容）
+printf 'dirty\n' >> "$REV_WT/feature.txt"
+if $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-dirty.log" 2>&1; then
+  bad "脏 checkout 竟然还能盖章（复验证据不可复现）"
+else
+  ok "脏 checkout 被拒（复验必须干净）"
+fi
+assert_has "$TMP/review-dirty.log" "未提交" "拒绝时说明是「未提交改动」"
+assert_has "$TMP/review-dirty.log" "TEAM_REVIEW_ALLOW_DIRTY" "给了显式覆盖开关"
+git -C "$REV_WT" checkout -- . >/dev/null 2>&1 || true
+
 # 门禁失败路径
 sed -i 's/^TEAM_GATES="true"/TEAM_GATES="false"/' "$REPO/.pi/team/config.sh"
 if $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-fail.log" 2>&1; then bad "门禁失败时 review 应返回非 0"; else ok "门禁失败时 review 返回非 0"; fi
@@ -637,6 +648,19 @@ if [ "$HAVE_TMUX" = "1" ]; then
   N1="$(wc -l < "$REPO/.pi/team/state/nudges.log" | tr -d ' ')"
   $TEAM watch --once >/dev/null 2>&1
   assert_eq "同一批待办不会反复叫" "$(wc -l < "$REPO/.pi/team/state/nudges.log" | tr -d ' ')" "$N1"
+
+  # 3b) PM 归属校验：窗口被「不属于本项目」的进程占着时，不算 PM、也不许覆盖
+  tmux respawn-pane -k -t "$SESSION:$PMW" "cd /tmp && exec bash -lc 'sleep 300'" >/dev/null 2>&1 || true
+  sleep 1
+  (. "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_pm_state) >"$TMP/pmstate-foreign.log" 2>&1 || true
+  assert_match "$TMP/pmstate-foreign.log" "^foreign:" "别的项目的进程占着 PM 窗口 → 判定为 foreign（不算 PM）"
+  MAINROOT_STATE="$(. "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_cwd_in_project /tmp && echo yes || echo no)"
+  assert_eq "cwd 归属判定：/tmp 不属于本项目" "$MAINROOT_STATE" "no"
+  $TEAM up >"$TMP/up-foreign.log" 2>&1 || true
+  assert_has "$TMP/up-foreign.log" "不属于本项目" "team up 明确拒绝覆盖外来进程"
+  assert_eq "拒绝后没有新开第二个 PM 窗口" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$PMW" || true)" "1"
+  TEAM_REPLACE_FOREIGN_PM=1 $TEAM up >"$TMP/up-force.log" 2>&1 || true
+  assert_match "$TMP/up-force.log" "PM 已启动|已在运行" "显式 TEAM_REPLACE_FOREIGN_PM=1 才允许覆盖"
 
   # 4) 有待办 + PM 不在跑 → 拉起（记 inbox + 计数）
   rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/docs/team/inbox/pm.md"
