@@ -24,6 +24,18 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.25.0 · 2026-09-14
+
+**PM 侧也成了一个 adapter：`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`（M8.1）**
+
+- 三键默认全空 = Pi 行为**逐字节不变**（PM 用 old/new 两条 CLI 在同一夹具里 diff 了渲染出的窗口命令，除夹具路径外完全相同）。
+- 非 Pi PM 可真跑：用 `codex` 当 PM，`team up` 启动后 codex 真的收到简报并开始当 PM 干活；`TEAM_PM_RESUME_ARGS` 为空时
+  工具**如实说明"这次不延续历史"**并给出接手路径（`docs/team/**` + `team inbox`）。
+- **退回返工修掉的真缺陷**：窗口 harness 用 `bash -lc`，而本机登录 shell 的 PATH 不含 `~/.bun/bin`，于是文档示例里的
+  **裸可执行名**（`codex exec {prompt}`）必然启动失败、且失败清理会把窗口连诊断一起杀掉。现在：模板首词替换为解析出的
+  绝对路径；启动失败保留诊断（窗口末尾 + 渲染命令 + 解析到的可执行文件）到 `state/pm-launch-failed.log`，错误行给出退出码。
+- **worker 侧同洞已被测量**（裸名字时 CLI 从未运行却打印 `✓ dispatched … proof=spawn`）→ 触发下一任务 M8.2。
+
 ## v1.24.0 · 2026-09-14
 
 **派单退出通知改为"事件证据"（M7.5）+ 修掉 v1.23.0 遗留的 main 红**
