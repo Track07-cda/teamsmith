@@ -98,6 +98,7 @@ one-line reaction.
 | the watchdog is a `watchdog` window in **the project's own** tmux session, and `TEAM_SESSION` must match that session name | v1.12.0 (single backend) | `team watchdog status`; after renaming a session, update `TEAM_SESSION` in `.pi/team/config.sh`. Real example: on 2026-09-14 this project's session was renamed while the config kept the old name, so `dispatch`/`watchdog` reported a missing session and the PM as not running until the config was fixed |
 | long-lived sessions are checked against the model's context window; `--fresh` starts a new one | v1.22.0 | before switching an agent to a model with a smaller window, dispatch with `--fresh` (or accept the refusal); `team ps` / `roster` show used/window |
 | reports that are not committed yet no longer point at a review, and a squash-merged branch reports "already merged (squash, same content) — no push needed" | v1.22.0 | read the wording before acting: both lines exist to stop a PM from reviewing or pushing something that is already done |
+| the PM's own CLI is configurable (`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`) | M8.1 | nothing to do — all three keys are empty by default and the built-in Pi command is byte-for-byte unchanged; set them only to run the PM under another TUI agent (`references/agent-adapters.md` §2) |
 
 ## 6. Upgrade recipe
 

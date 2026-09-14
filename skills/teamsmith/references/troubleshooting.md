@@ -273,3 +273,30 @@ warns one line without blocking the worker.
 | the PM memory check reports that magic-context is not detected | install the Pi package `@cortexkit/pi-magic-context`; if the settings file lives somewhere unusual, point `TEAM_PI_SETTINGS_FILE` at it; for an environment that genuinely cannot have it, set `TEAM_REQUIRE_MAGIC_CONTEXT=0` (doctor then warns instead of failing) |
 | the OpenSpec CLI check cannot resolve the binary | install the OpenSpec CLI and put it on `PATH`, or set `TEAM_OPENSPEC_BIN` to its absolute path; `TEAM_REQUIRE_OPENSPEC=0` downgrades it to a warning |
 | the OpenSpec spec-directory check reports a missing `openspec/` | run `openspec init --tools none` in the project (the spec root is `TEAM_SPEC_DIR`, relative to the main worktree) |
+
+## 14. The PM does not come up with my CLI
+
+`team up` — and the watchdog's restart path — starts the PM with `TEAM_PM_CMD`, or with the built-in Pi command
+when that key is empty. A custom PM CLI that refuses to start almost always fails in one of these places:
+
+| Symptom | Cause / fix |
+|---|---|
+| `TEAM_PM_CMD` is rejected with an unknown-placeholder error *before* anything is started | the template uses a token that is not a PM placeholder, or a near-miss such as `{ cwd }`. The PM set is `{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{extra_args}` `{resume_args}`; `{notify_ext}` and `{summary}` are **worker** placeholders and are rejected here |
+| the error says the template is blank or multi-line | an adapter template is exactly one non-blank line — the second line would be executed as its own command by the window shell |
+| `找不到 PM 可执行文件：<word>` ("cannot find the PM executable") | `TEAM_PM_BIN`, or the template's **first word**, does not resolve on *this* shell's `PATH`. The first word must be a bare executable name: no quotes, no `VAR=…` prefix, no `cd … &&`. A bare name that *does* resolve is fine — teamsmith renders the absolute path into the window command (see the next row) |
+| `team up` says `PM 已启动` but the window shows the CLI's own error and `state/pm.pid` stays empty / dies | the CLI started and exited (unknown flag, missing auth, model not available). Read `state/pm-launch-failed.log`: the tool writes the window's last output, the rendered command, the resolved executable and the CLI's exit code (e.g. `exit : 7`) on the failure path, and `team up` then exits non-zero. The window is **not** killed any more, so the CLI's own error stays visible in `tmux attach -t <session>`; the briefing that was passed is `state/pm-prompt.md`. Reproduce the command by hand: `bash -c '. <skill>/scripts/lib/common.sh; team_load_config; team_pm_launch_cmd <main>/.pi/team/state/pm-prompt.md <main>/.pi/team/state/pm.pid.spawn'` in the project root, then run it in a shell |
+| `team watchdog-status` reports `unknown:<cmd>` for the PM window right after a manual start | the foreground process is neither a shell nor the PM binary. Check that `TEAM_PM_BIN` names the CLI you actually ran; a wrapper that starts the CLI as a **child** (no `exec`) is reported this way — see the wrapper caveat in `references/agent-adapters.md` §2. A wrapper that `exec`s the CLI is fine: `team up` then reports `proof=spawn` |
+| `team up` cannot find the CLI even though it works in your shell | it is a bare name that resolves on **your** `PATH`, so the tool renders the absolute path it resolved to and the window uses that — nothing to do. If it renders nothing absolute (the name is unresolvable here), set `TEAM_PM_BIN` to an absolute path |
+| `team up` exits non-zero and `state/pm-launch-failed.log` says the CLI exited immediately | that is the honest report of a failed start (the window's login shell `PATH` is not your interactive `PATH`; an unknown flag/auth error is the CLI's own). The file also holds the first non-blank lines of the window, so `state/pm-launch-tail.txt` and the pane stay readable |
+
+## 15. A restart lost the PM's context
+
+The PM only continues its previous conversation if its CLI is told to; teamsmith never guesses on the PM's behalf.
+
+| Case | What happens | Fix |
+|---|---|---|
+| built-in Pi, `TEAM_PM_SESSION_ID` empty | `pi -c` continues the previous session in the main worktree — history kept | nothing (this is the default) |
+| built-in Pi, `TEAM_PM_SESSION_ID=<id>` | that session id is continued (`--session-id <id>`) | keep the id stable per project |
+| custom `TEAM_PM_CMD`, `TEAM_PM_RESUME_ARGS` empty | the restart is a **fresh** session; `team up` says `这次启动**不延续** PM 的历史上下文` and points at `docs/team/**` + `team inbox` | accept it — the durable record *is* the handoff, and the briefing starts with `team digest` — or configure the resume arguments (next row) |
+| custom `TEAM_PM_CMD`, `TEAM_PM_RESUME_ARGS` set but the template has no `{resume_args}` | the arguments are **not** passed; `team up` reports `lost:… 没有 {resume_args}` | reference the placeholder where the CLI expects it, e.g. `TEAM_PM_CMD='codex {resume_args} {prompt}'` (for codex: `TEAM_PM_RESUME_ARGS='resume --last'`) |
+| the CLI has its own session store and you restored that instead | teamsmith's `{session_id}` is *teamsmith's* dispatch id, not the vendor's session id | keep using the vendor's own resume flag as above; `team thread <agent> "…"` and `docs/team/**` stay the portable handoff |

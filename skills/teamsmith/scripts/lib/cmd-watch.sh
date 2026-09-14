@@ -2,7 +2,7 @@
 # teamsmith · PM 相关：up（恢复 PM）/ resume（PM 工具）/ watch（前台巡检）/ watchdog（看门狗窗口）/ standby（PM 停工）
 #
 # 设计前提：**不依赖任何 agent（包括 PM）来负责恢复**。
-#   - PM 没在跑且有待办 → watchdog 用 pi -c 把它拉起来（历史不丢）
+#   - PM 没在跑且有待办 → watchdog 用配置的 PM CLI 把它拉起来（Pi 默认 = -c，历史不丢；M8.1 起可用 TEAM_PM_CMD）
 #   - agent 停了 → 不管（agent 归 PM 管：team resume）
 #   - watchdog 自己挂了 → 由 PM 手动 `team watchdog up` 重建（**只有一个后端**：同 session 的 tmux 窗口；
 #     不引入第二个运行时不代表没有恢复能力：PM 被叫醒后第一件事就是看 watchdog-status）
@@ -46,7 +46,7 @@ team_watch_unlock() { rm -f "$TEAM_STATE_DIR/watchdog.pid"; }
 # 人来跑的工具：把 PM 恢复起来。
 # agent 归 PM 管，所以默认不动 agent；要顺手把停了的 agent 也续起来就加 --agents。
 team_cmd_up() {
-  local with_agents=0 show_prompt=0
+  local with_agents=0 show_prompt=0 pm_fail=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) with_agents=1; shift ;;
@@ -82,11 +82,12 @@ team_cmd_up() {
                # M7.2：启动在飞行中（另一支巡检/另一条 up 已经拉过它）——再 respawn 一次会杀掉正在起来的 PM
                team_warn "PM 正在启动（${pm_state#starting:}；证据：$(team_pm_evidence "$pm_state")）：不重复拉起"
                team_dim "  等它起来；若卡住：启动标记会过期（TEAM_PM_START_WAIT=${TEAM_PM_START_WAIT:-6}s + 5s），过期后再跑 $TEAM_CLI up；证据看 $TEAM_CLI watchdog-status" ;;
-    idle:*)    team_warn "PM 没在跑（空提示符）：启动 pi"
+    idle:*)    team_warn "PM 没在跑（空提示符）：启动 $(team_pm_cli_name)"
                if team_pm_start; then
-                 team_ok "PM 已启动（proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}，$([ -n "$TEAM_PM_SESSION_ID" ] && echo "--session-id $TEAM_PM_SESSION_ID" || echo "-c 延续上一会话")）"
+                 team_ok "PM 已启动（cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
                else
-                 team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 pi"
+                 pm_fail=1
+                 team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 $(team_pm_bin_path)；诊断见 $(team_pm_launch_failed_log)"
                fi ;;
     unknown:*)
                # 窗口里是本项目 cwd 的**非 PM** 进程（新建空窗的瞬态、sleep、编辑器…）：
@@ -94,9 +95,10 @@ team_cmd_up() {
                local _ucwd; _ucwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')"
                team_warn "PM 窗口里有非 PM 进程（${pm_state#unknown:}，cwd=$_ucwd）：不算存活"
                if team_pm_start; then
-                 team_ok "PM 已启动（替换了非 PM 进程；proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
+                 team_ok "PM 已启动（替换了非 PM 进程；cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
                else
-                 team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 pi"
+                 pm_fail=1
+                 team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 $(team_pm_bin_path)；诊断见 $(team_pm_launch_failed_log)"
                fi ;;
     foreign:*)
                local _cwd; _cwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')"
@@ -108,10 +110,11 @@ team_cmd_up() {
                    team_err "覆盖失败：看上面的原因"
                  fi
                else
+                 pm_fail=1
                  team_warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 被不属于本项目的进程占用（cwd=$_cwd）：不覆盖、也不新开窗口"
                  team_dim "  关掉那个窗口（或改窗口名）后重跑 $TEAM_CLI up；确认要覆盖：TEAM_REPLACE_FOREIGN_PM=1 $TEAM_CLI up"
                fi ;;
-    *)         team_warn "PM 窗口状态异常（$pm_state）：不抢窗口" ;;
+    *)         pm_fail=1; team_warn "PM 窗口状态异常（$pm_state）：不抢窗口" ;;
   esac
 
   # 3) 可选：agent 续跑（默认不做：agent 由 PM 决定）
@@ -129,6 +132,8 @@ team_cmd_up() {
   team_info ""
   team_capacity_line
   team_dim "  旁观：tmux attach -t $TEAM_SESSION ｜ 待办：$TEAM_CLI digest"
+  # 状态就是承诺：PM 没起来就不许退 0（否则脚本里的 `team up && …` 会把失败当成功）
+  [ "$pm_fail" = "1" ] && return 1
   return 0
 }
 
@@ -305,7 +310,7 @@ team_watch_once() {
     team_state_set _watch last_sig "$sig"
     team_wlog "PM 未在运行（$st；证据：$(team_pm_evidence "$st")）→ 已拉起（待办：$text）"
     team_ok "watchdog: 有待办（$text）但 PM 没在跑（$st）→ 已拉起"
-    team_inbox_append pm watchdog "PM 会话曾停止（状态 $st），watchdog 因有待办（$text）而用 pi -c 拉起它并注入开场提示词（state/pm-prompt.md）"
+    team_inbox_append pm watchdog "PM 会话曾停止（状态 $st），watchdog 因有待办（$text）而用 $(team_pm_cli_name) 拉起它并注入开场提示词（state/pm-prompt.md）"
   else
     team_wlog "PM 拉起失败（$st；证据：$(team_pm_evidence "$st")；未计入配额；待办：$text）"
     team_warn "watchdog: PM 拉起失败（$st；待办：$text）—— 未计入重启配额（只有真的重启才计数）"
@@ -338,7 +343,7 @@ team_cmd_watch() {
   team_watch_lock || return 1
   trap 'team_watch_unlock' EXIT INT TERM
   team_hdr "teamsmith watchdog · $TEAM_PROJECT（每 ${interval}s 一次；Ctrl-C 退出）"
-  team_dim "  只做两件事：记录容量趋势 ｜ PM 没在跑就在它的窗口里把 pi 拉起来"
+  team_dim "  只做两件事：记录容量趋势 ｜ PM 没在跑就在它的窗口里把 $(team_pm_cli_name) 拉起来"
   team_dim "  不管 tmux 布局，不管 agent（agent 归 PM 管：team resume）"
   while :; do
     team_watch_once

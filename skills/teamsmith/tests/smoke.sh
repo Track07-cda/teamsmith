@@ -1244,6 +1244,392 @@ else
   printf '  (跳过真窗口启动证据断言：没有 tmux)\n'
 fi
 
+# ---------------------------------------------------------------- 6i. PM adapter（PM 也能跑在任意 TUI agent 上）
+# M8.1：产品承诺是「PM 可以跑在任何 TUI agent CLI 上」。worker 侧早就可配（TEAM_AGENT_CMD），
+# PM 侧以前写死 Pi：启动命令是 pi -c + @prompt-file，存活身份按 **worker 的 adapter** 解析可执行文件，
+# 文案也写死叫用户去跑 pi。这里钉住三件事：
+#   ① 三个新键全空时渲染出的 PM 命令与历史**逐字节一致**（同 M3.0 对 worker 的 invariance 证法）；
+#   ② 模板复用同一个占位符引擎（畸形/未知占位符照样响亮失败），提示词仍落盘 state/pm-prompt.md，
+#      {prompt} 走窗口 harness 的 argv[0]（提示词不进命令行）；
+#   ③ 存活身份按 **PM 的** CLI 解析（不叫 pi 也算、wrapper 也算），真窗口端到端：拉起/崩溃重启/watchdog 拉起。
+section "6i · PM adapter（任意 TUI agent 当 PM）：默认不变 / 模板 / 存活 / 真窗口"
+
+# 在夹具仓库里跑一段 bash（新进程）：TEAM_* 赋值在 source/team_load_config **之前** export，
+# 所以既不污染 smoke 自己的环境，又能覆盖夹具配置（环境变量优先于 config.sh）。
+pm_bash() { # <bash 片段> [VAR=VALUE …]
+  local body="$1"; shift
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c 'for _a in "$@"; do export "$_a"; done; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; '"$body" _ "$@" )
+}
+pm_probe() { pm_bash "$@"; }
+# 渲染 PM 启动命令（默认/模板都走同一个 team_pm_launch_cmd）
+pm_render() { # <prompt_file> [<spawn_file>] [VAR=VALUE …]
+  local pf="$1" sp="${2:-/tmp/never.spawn}"; shift 2 2>/dev/null || shift "$#"
+  pm_bash 'team_pm_launch_cmd "'"$pf"'" "'"$sp"'"' "$@"
+}
+PM_PF="$REPO/.pi/team/state/pm-prompt.md"
+PM_SPAWN="$REPO/.pi/team/state/pm.pid.spawn"
+PM_SUPPORT="$(pm_probe 'team_agent_placeholders pm' "TEAM_PI_BIN=$FAKE/pi" | tr '\n' ' ')"
+PM_SUPPORT="${PM_SUPPORT% }"
+
+# ① 默认不变（M3.0 的 invariance 证法）：三个键全空 → 与历史的那条 printf 逐字节一致
+#    历史渲染式（改动前 team_pm_start 里的那行）与历史参数都**字面写死**在测试里 —— 参考值不调实现，
+#    否则函数内部一改（比如把默认的 -c 删了）两边会一起动，assert_eq 就白写了。
+#      printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' <root> <spawn> <pi> "$(team_pm_pi_args)" <prompt>
+#      （team_pm_pi_args 每个参数 %q 后带一个空格 → 最后是 `-c` + 一个空格，格式里 @ 前又有一个空格）
+LEGACY_REF="cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
+DEFAULT_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
+assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_has_echo "$DEFAULT_CMD" " -c  @$PM_PF" "默认仍是 pi -c + @prompt-file（历史行为）"
+# 显式配了续跑键就在内置 Pi 路径生效（同一套键也服务于自定义 CLI）
+SID_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_SESSION_ID=pm-fixed')"
+assert_has_echo "$SID_CMD" "--session-id pm-fixed" "TEAM_PM_SESSION_ID 仍走 --session-id"
+case "$SID_CMD" in *' -c '*) bad "配了 SESSION_ID 还带 -c（重复续跑）";; *) ok "配了 SESSION_ID 就不再带 -c";; esac
+RESUME_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_RESUME_ARGS=--continue')"
+assert_has_echo "$RESUME_CMD" " --continue " "显式 TEAM_PM_RESUME_ARGS 替换掉默认的 -c"
+case "$RESUME_CMD" in *' -c '*) bad "显式 resume 参数下仍带 -c";; *) ok "显式 resume 参数下没有多余的 -c";; esac
+
+# ② 模板：同一个占位符引擎（PM 专有 {resume_args}），提示词仍走文件 + argv[0]
+PM_TPL='mycli run --model {model} --prov {provider} --dir {cwd} --pf {prompt_file} --ask {prompt} --skill {skill_dir} {resume_args} {extra_args}'
+TPL_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$PM_TPL" 'TEAM_PM_BIN=bash' 'TEAM_PM_MODEL=demo/demo-model' \
+  'TEAM_PM_RESUME_ARGS=--continue' 'TEAM_PM_EXTRA_PI_ARGS=--verbose' 'TEAM_EXTRA_PI_ARGS=--worker-only')"
+assert_has_echo "$TPL_CMD" "mycli run" "模板被展开成一条命令"
+assert_has_echo "$TPL_CMD" "--model demo-model" "{model} 渲染成模型名"
+assert_has_echo "$TPL_CMD" "--prov demo" "{provider} 渲染成 provider"
+assert_has_echo "$TPL_CMD" "--dir $REPO" "{cwd} 是主工作树（PM 的 cwd）"
+assert_has_echo "$TPL_CMD" "--pf $PM_PF" "{prompt_file} 指向落盘的 PM 提示词"
+assert_has_echo "$TPL_CMD" '--ask "$0"' "{prompt} 展开成窗口 harness 的 argv[0]（提示词不进命令行）"
+assert_has_echo "$TPL_CMD" "--skill $SKILL_DIR" "{skill_dir} 渲染成 skill 目录"
+assert_has_echo "$TPL_CMD" " --continue " "{resume_args} 渲染成 TEAM_PM_RESUME_ARGS"
+assert_has_echo "$TPL_CMD" " --verbose" "{extra_args} 在 PM 模板里取 TEAM_PM_EXTRA_PI_ARGS"
+case "$TPL_CMD" in *--worker-only*) bad "PM 模板的 {extra_args} 误用了 worker 的 TEAM_EXTRA_PI_ARGS";; *) ok "PM 的 {extra_args} 与 worker 的互不串线";; esac
+# M8.1：判据不能再是「整串里有没有 `{`」—— harness 自己合法地含 ${TMUX_PANE:-} / $(date +%s)。
+# 占位符的形状是 {名字}（`${…}` 是 shell 语法，不是模板占位符）。
+if printf '%s' "$TPL_CMD" | grep -Eq '\{[A-Za-z_][A-Za-z0-9_]*\}'; then
+  bad "渲染后的命令还有残留占位符：$TPL_CMD"
+else ok "渲染后的命令没有残留占位符"; fi
+assert_has_echo "$TPL_CMD" "exec bash -lc" "模板路径走窗口 harness（argv[0] = 提示词）"
+CATP="\$(cat '$PM_PF')"
+assert_has_echo "$TPL_CMD" "\"$CATP\"" "提示词以 \"\$(cat <prompt_file>)\" 作为 \$0 交给模板"
+assert_has_echo "$TPL_CMD" 'printf "%s\n" "$BASHPID" >' "spawn 证据（F30）是子 shell 的 pid（它 exec 成 CLI；不是还没 exec 的 harness）"
+assert_has_echo "$TPL_CMD" "pm.pid.spawn" "上面那行写的就是 state/pm.pid.spawn（启动证据的路径）"
+assert_has_echo "$TPL_CMD" 'exec bash' "CLI 退出后窗口留在提示符（诊断不随窗口消失，退回点 2）"
+assert_has_echo "$TPL_CMD" "pm-launch.exit" "harness 把 CLI 的退出码写进 state/pm-launch.exit"
+# ②d 尾屏归一化（M8.1 实测的第二只虫子）：capture-pane 抓的是整屏 —— 「报错在最上面几行 + 后面几十行
+#     空行」是**常态**，而以前诊断对这份文件取 `tail -30`：唯一的信号会被空行挤掉，看起来像「窗口没输出」。
+NORM_IN="$(printf 'boom: cannot start\n'; printf '\n%.0s' $(seq 1 60))"
+assert_eq "尾屏归一化：一堆空行不掩盖唯一的一行报错" "$(printf '%s' "$NORM_IN" | pm_bash 'team_pane_tail_normalize')" "boom: cannot start"
+assert_eq "尾屏归一化：全空屏 → 空（不编造内容）" "$(printf '\n\n\n' | pm_bash 'team_pane_tail_normalize')" ""
+assert_eq "尾屏归一化：空行不参与输出（前导空行也不许留下）" \
+  "$( (printf '\n\n\n'; printf 'boom: cannot start\n'; printf '\n%.0s' $(seq 1 30)) | pm_bash 'team_pane_tail_normalize')" "boom: cannot start"
+assert_has_echo "$(seq 1 40 | sed 's/^/line /' | pm_bash 'team_pane_tail_normalize')" "共 40 行非空输出，只留了前 30 行" "超过 30 行非空输出时说明截断"
+
+# ②c 裸名字（M8.1 退回点 1）：模板首词在**调用者 PATH** 里、但**不在登录 bash PATH** 里时，
+#     渲染出的命令必须是那个绝对路径 —— 否则窗口里 `exec 裸名字` 会 command not found。
+BARE_DIR="$TMP/m81-bare-bin"; mkdir -p "$BARE_DIR"
+printf '#!/bin/sh\nsleep 300\n' > "$BARE_DIR/pm-bare"; chmod +x "$BARE_DIR/pm-bare"
+assert_eq "夹具有效：登录 bash 看不到 $BARE_DIR（否则下面那条是假绿）" \
+  "$(env PATH="$BARE_DIR:$PATH" bash -lc 'command -v pm-bare || echo MISSING')" "MISSING"
+assert_eq "夹具有效：调用者 PATH 看得到它" \
+  "$(env PATH="$BARE_DIR:$PATH" bash -c 'command -v pm-bare || echo MISSING')" "$BARE_DIR/pm-bare"
+BARE_RENDER="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" "PATH=$BARE_DIR:$PATH" \
+  'TEAM_PM_CMD=pm-bare --pf {prompt_file} --ask {prompt}')"
+assert_has_echo "$BARE_RENDER" "exec $BARE_DIR/pm-bare " "裸名字被换成调用者 PATH 解析出的绝对路径（登录 bash 里没有它）"
+case "$BARE_RENDER" in *'exec pm-bare '*) bad "渲染出的命令还在用裸名字（窗口里必然 command not found）";; *) ok "渲染出的命令不再出现裸名字";; esac
+# 解析不到的裸名字才该报错（文案要指向真正的病根：PATH）
+pm_expect_fail_bin() { # <模板> <期望片段>
+  local tpl="$1" want="$2" log
+  log="$TMP/pm-adapter-bin-$(printf '%s' "$tpl" | tr -c 'a-z0-9' _).log"
+  if pm_probe 'team_pm_check_bin' "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$tpl" >"$log" 2>&1; then
+    bad "解析不到的 PM CLI「$tpl」竟然通过了预检"
+  else ok "解析不到的 PM CLI → 预检就失败"; fi
+  assert_has "$log" "$want" "预检报错指向病根（$tpl）"
+}
+pm_expect_fail_bin 'nosuchcli {prompt}' "它不在你的 PATH 里"
+
+# ②b 校验复用 worker 引擎：畸形/未知/空白/多行照样响亮失败（PM 键名进报错）
+pm_expect_fail() { # <名字> <模板> <期望片段>
+  local name="$1" tpl="$2" want="$3" log="$TMP/pm-adapter-$1.log"
+  if pm_probe 'team_pm_check_launch' "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$tpl" >"$log" 2>&1; then
+    bad "$name：坏的 PM 模板竟然被接受"
+  else ok "$name：坏 PM 模板 → 直接失败"; fi
+  assert_has "$log" "$want" "$name：报错说明原因"
+}
+pm_expect_fail bogus     'mycli {sessionid} {prompt}'      "{sessionid}"
+pm_expect_fail malformed 'mycli { cwd } {prompt}'          "{ cwd }"
+pm_expect_fail blank     '   '                            "只有空白"
+PM_MARK="$TMP/pm-adapter-second-line-ran"; rm -f "$PM_MARK"
+pm_expect_fail multiline "mycli {prompt}"$'\n'"touch $PM_MARK" "含换行"
+assert_not_file "$PM_MARK" "多行 PM 模板的第二行没有机会被执行"
+# PM 没有 notify 扩展 / 没有 worker 的摘要通道：这些占位符在 PM 模板里必须是未知的
+pm_expect_fail noext   'mycli {notify_ext} {prompt}'       "{notify_ext}"
+pm_expect_fail nosum   'mycli {summary} {prompt}'          "{summary}"
+assert_has "$TMP/pm-adapter-bogus.log" "TEAM_PM_CMD" "报错点名了配置键"
+assert_has "$TMP/pm-adapter-bogus.log" "{resume_args}" "报错列出支持的占位符（含 PM 专有键）"
+# 反向：worker 模板里写 {resume_args} 依旧报未知（不改 worker 语义）
+if env TEAM_AGENT_CMD='workercli {resume_args} {prompt}' TEAM_AGENT_BIN=bash \
+     $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/pm-adapter-worker-resume.log" 2>&1; then
+  bad "worker 模板里的 {resume_args} 不该被接受"
+else ok "worker 模板里的 {resume_args} → 派单照旧失败（worker 语义没变）"; fi
+assert_has "$TMP/pm-adapter-worker-resume.log" "{resume_args}" "worker 侧报错点名了那个占位符"
+assert_has "$TMP/pm-adapter-worker-resume.log" "TEAM_AGENT_CMD" "worker 侧报错点名的是它自己的键"
+
+# ③ 可执行文件解析 + 存活身份（不叫 pi 也算）
+assert_eq "TEAM_PM_BIN 优先" "$(pm_probe 'team_pm_bin_path' "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_BIN=bash')" "$(command -v bash | head -1)"
+assert_eq "没配 BIN 时取模板首词" "$(pm_probe 'team_pm_bin_path' "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_CMD=mycli {prompt}')" "mycli"
+assert_eq "两个新键都空 → 还是 TEAM_PI_BIN" "$(pm_probe 'team_pm_bin_path' "TEAM_PI_BIN=$FAKE/pi")" "$FAKE/pi"
+assert_eq "PM CLI 名（文案用）" "$(pm_probe 'team_pm_cli_name' "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_BIN=$FAKE/fake-pm-name")" "fake-pm-name"
+assert_eq "默认 CLI 名仍是 pi" "$(pm_probe 'team_pm_cli_name' "TEAM_PI_BIN=$FAKE/pi")" "pi"
+printf '#!/bin/sh\nsleep 300\n' > "$FAKE/fake-pm-name"; chmod +x "$FAKE/fake-pm-name"
+"$FAKE/fake-pm-name" --manual-pm & PM_IDP=$!
+sleep 0.5
+assert_eq "身份：命令行里有配置的 PM CLI 就算（哪怕不叫 pi）" \
+  "$(pm_probe "team_proc_is_pm_bin $PM_IDP && echo yes || echo no" 'TEAM_PI_BIN=/definitely-not-pi' "TEAM_PM_BIN=$FAKE/fake-pm-name")" "yes"
+assert_eq "身份：没配这个 CLI 就不算（同一个 pid）" \
+  "$(pm_probe "team_proc_is_pm_bin $PM_IDP && echo yes || echo no" 'TEAM_PI_BIN=/definitely-not-pi' "TEAM_PM_BIN=$FAKE/pi")" "no"
+kill "$PM_IDP" 2>/dev/null || true
+# 配了不可解析的 PM CLI：启动前就说清楚（不是拉一个空窗口再说“看不到 agent 进程”）
+if pm_probe 'team_pm_check_bin' "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_CMD=nosuchcli {prompt}' >"$TMP/pm-adapter-nobin.log" 2>&1; then
+  bad "不可解析的 PM CLI 应当在启动前被拒"
+else ok "不可解析的 PM CLI → 启动前失败"; fi
+assert_has "$TMP/pm-adapter-nobin.log" "找不到 PM 可执行文件" "报错说明了是哪个可执行文件"
+assert_has "$TMP/pm-adapter-nobin.log" "TEAM_PM_BIN" "报错指向 TEAM_PM_BIN"
+
+# ③b 续跑语义：Pi 默认延续；自定义 CLI 没配 resume 参数就说清楚「历史不延续」
+assert_eq "Pi 路径：默认 -c（延续）" "$(pm_probe 'team_pm_continuity' "TEAM_PI_BIN=$FAKE/pi")" "continued:pi -c（本目录上一个会话）"
+case "$(pm_probe 'team_pm_continuity' "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_CMD=mycli {prompt}' 'TEAM_PM_BIN=bash')" in
+  lost:*) ok "自定义 CLI + 空 resume 参数 → 明确报「不延续」";; *) bad "自定义 CLI 空 resume 参数没有被报成 lost";; esac
+assert_eq "自定义 CLI + resume + 模板带 {resume_args}" \
+  "$(pm_probe 'team_pm_continuity' "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_CMD=mycli {resume_args} {prompt}' 'TEAM_PM_RESUME_ARGS=--continue' 'TEAM_PM_BIN=bash')" \
+  "continued:--continue（模板里的 {resume_args}）"
+case "$(pm_probe 'team_pm_continuity' "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_CMD=mycli {prompt}' 'TEAM_PM_RESUME_ARGS=--continue' 'TEAM_PM_BIN=bash')" in
+  *lost:*'{resume_args}'*) ok "配了 resume 但模板没写 {resume_args} → 报 lost 并点名原因";; *) bad "resume 参数没被模板引用时没有被发现";; esac
+
+# ③c 文档 ↔ 代码契约（PM 段用显式标记划界；worker 段的表格仍由 6f 的扫描器管）
+PM_DOC="$SKILL_DIR/references/agent-adapters.md"
+pm_doc_bad_tokens() { # <doc> → PM 段里列了、但引擎不认识的占位符（每行一个）
+  local t
+  for t in $(awk '/<!-- pm-side:begin -->/{f=1;next} /<!-- pm-side:end -->/{f=0} f' "$1" \
+               | grep -oE '\{[A-Za-z_][A-Za-z0-9_]*\}' | sort -u); do
+    case " $PM_SUPPORT " in *" $t "*) ;; *) printf '%s\n' "$t" ;; esac
+  done
+}
+assert_file "$PM_DOC" "PM 侧契约文档在"
+assert_eq "文档 PM 段里的占位符都被引擎支持" "$(pm_doc_bad_tokens "$PM_DOC" | tr '\n' ' ')" ""
+PM_DOC_MISSING=""
+for _t in $PM_SUPPORT; do grep -qF "$_t" "$PM_DOC" || PM_DOC_MISSING="$PM_DOC_MISSING $_t"; done
+assert_eq "每个 PM 占位符都在文档里出现过" "${PM_DOC_MISSING:-无}" "无"
+PM_DOC_FLIP="$TMP/agent-adapters-pm-flip.md"
+awk '/<!-- pm-side:end -->/{if(!done){print "| `{bogus_pm_placeholder}` | 注入的坏占位符（翻转自测） |"; done=1}} {print}' "$PM_DOC" > "$PM_DOC_FLIP"
+assert_eq "翻转自测：PM 段里混进未支持的占位符会被抓到" "$(pm_doc_bad_tokens "$PM_DOC_FLIP" | tr '\n' ' ')" "{bogus_pm_placeholder} "
+
+# ④ 真窗口端到端：非 Pi PM 被拉起 / 提示词真的交给它 / 崩溃重启（明说历史不延续）/ watchdog 拉起
+if [ "$FAST" = "1" ]; then
+  fast_skip "6i·非 Pi PM 端到端" "要真实 tmux 窗口 + 假 PM 进程（拉起/崩溃重启/watchdog 拉起）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  PMW="$($TEAM paths | sed -n 's/.*"pm_window": "\([^"]*\)".*/\1/p')"; [ -n "$PMW" ] || PMW=pm
+  PM_LOG="$TMP/pm-adapter-args.log"; : > "$PM_LOG"
+  PM_SEEN="$TMP/pm-adapter-seen.txt"; rm -f "$PM_SEEN"
+  # 假「非 Pi」PM CLI：把 argv/cwd/拿到的提示词落盘，然后按提示词的意思跑 team 命令（真 PM 的第一件事）
+  cat > "$FAKE/fake-pm.sh" <<EOF
+#!/usr/bin/env bash
+# 假的非 Pi PM CLI：证明 teamsmith 在没有 Pi 的情况下也能启动 PM、把提示词交给它、让它在团队里干活
+printf 'cwd=%s\n' "\$PWD" >> "$PM_LOG"
+i=0; for a in "\$@"; do i=\$((i+1)); printf 'arg%d=%s\n' "\$i" "\$a" >> "$PM_LOG"; done
+pf=""; ask=""
+while [ \$# -gt 0 ]; do case "\$1" in --pf) pf="\$2"; shift 2 ;; --ask) ask="\$2"; shift 2 ;; *) shift ;; esac; done
+{ printf 'prompt_file=%s\n' "\$pf"
+  printf 'prompt_file_md5=%s\n' "\$(md5sum "\$pf" 2>/dev/null | cut -d' ' -f1)"
+  printf 'argv_prompt_md5=%s\n' "\$(printf '%s' "\$ask" | md5sum | cut -d' ' -f1)"
+  printf 'first_line=%s\n' "\$(head -1 "\$pf" 2>/dev/null)"
+} > "$PM_SEEN"
+printf -- '--- fake-pm: team digest ---\n' >> "$PM_LOG"
+bash "$SKILL_DIR/scripts/team" digest >> "$PM_LOG" 2>&1 || true
+printf -- '--- fake-pm: team board ls ---\n' >> "$PM_LOG"
+bash "$SKILL_DIR/scripts/team" board ls >> "$PM_LOG" 2>&1 || true
+printf -- '--- fake-pm: team dispatch --print ---\n' >> "$PM_LOG"
+bash "$SKILL_DIR/scripts/team" dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md --print >> "$PM_LOG" 2>&1 || true
+printf 'PM_FAKE_READY\n' >> "$PM_LOG"
+sleep 600
+EOF
+  chmod +x "$FAKE/fake-pm.sh"
+  PMCMD="$FAKE/fake-pm.sh --pf {prompt_file} --ask {prompt}"
+  # TEAM_PI_BIN 指向不存在的东西：这一段证明 PM 侧真的不再需要 Pi
+  pm_env() { env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$PMCMD" TEAM_PM_BIN="$FAKE/fake-pm.sh" "$@"; }
+  pm_seen_field() { sed -n "s/^$1=//p" "$PM_SEEN" 2>/dev/null | head -1; }
+  pm_wait_seen() { local i=0; while [ "$i" -lt 60 ]; do [ -s "$PM_SEEN" ] && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
+  pm_lines() { wc -l < "$PM_LOG" 2>/dev/null | tr -d ' ' || echo 0; }
+  pm_close_windows() { tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true; sleep 0.3; }
+
+  # 1) team up 拉起非 Pi 的 PM（窗口/进程都没有 Pi）
+  pm_close_windows
+  pm_env $TEAM up >"$TMP/pm-adapter-up1.log" 2>&1 || { bad "非 Pi PM：up 失败"; cat "$TMP/pm-adapter-up1.log"; }
+  assert_has "$TMP/pm-adapter-up1.log" "PM 已启动" "非 Pi PM 被拉起"
+  assert_has "$TMP/pm-adapter-up1.log" "cli=fake-pm.sh" "启动文案报的是配置的 PM CLI（不是 pi）"
+  assert_has "$TMP/pm-adapter-up1.log" "不延续" "resume 参数为空 → 明说历史上下文不延续"
+  assert_has "$TMP/pm-adapter-up1.log" "team digest" "并给出接手方式（正式记录 + digest）"
+  if pm_wait_seen; then ok "假 PM 在窗口里真的跑起来了（写下了自己看到的东西）"; else bad "假 PM 没跑起来（$PM_SEEN 空）"; fi
+  assert_eq "提示词文件的内容真的交给它了（argv[0] 与文件同源）" "$(pm_seen_field argv_prompt_md5)" "$(printf '%s' "$(cat "$PM_PF" 2>/dev/null)" | md5sum | cut -d' ' -f1)"
+  assert_has "$PM_SEEN" "prompt_file=$PM_PF" "模板里的 {prompt_file} 是落盘的 PM 提示词"
+  PM_FIRST="$(head -1 "$PM_PF" 2>/dev/null)"
+  assert_eq "argv 里拿到的提示词首行 == 提示词文件首行" "$(pm_seen_field first_line)" "$PM_FIRST"
+  assert_has "$PM_LOG" "cwd=$REPO" "PM 的 cwd 是项目主工作树"
+  assert_has "$PM_LOG" "--- fake-pm: team digest ---" "它拿到提示词后第一件事是 team digest"
+  assert_has "$PM_LOG" "--- fake-pm: team board ls ---" "它也能用 team board ls"
+  assert_has "$PM_LOG" "--- fake-pm: team dispatch --print ---" "它也能用 team dispatch --print"
+  assert_has "$PM_LOG" "PM_FAKE_READY" "它跑完了整段（不是半死在那里）"
+  assert_not "$PM_LOG" "pi-args.log" "PM 侧没有碰 Pi（TEAM_PI_BIN 指向不存在的东西）"
+  pm_env $TEAM ps >"$TMP/pm-adapter-wd1.log" 2>&1 || true
+  assert_match "$TMP/pm-adapter-wd1.log" "PM（$PMW）在运行" "team ps 看到 PM 在跑"
+  pm_env $TEAM watchdog-status >"$TMP/pm-adapter-wd1b.log" 2>&1 || true
+  assert_match "$TMP/pm-adapter-wd1b.log" "PM +在运行" "watchdog-status 也看到 PM 在跑"
+  assert_has "$TMP/pm-adapter-wd1b.log" "proof=" "并显示启动证据（proof=）"
+  PM_PID1="$(tr -dc '0-9' < "$REPO/.pi/team/state/pm.pid" 2>/dev/null || true)"
+  if [ -n "$PM_PID1" ] && kill -0 "$PM_PID1" 2>/dev/null; then ok "state/pm.pid 记录的是活着的非 Pi PM"; else bad "state/pm.pid 无效（[$PM_PID1]）"; fi
+  # M8.1：记下的必须是 **CLI 进程**，而不是「CLI 退出后还活着」的 harness 壳 ——
+  # 后者（EOF 后 exec bash）会让 PM 永远被判成在跑（假存活）。
+  PM_ARGS1="$(ps -o args= -p "$PM_PID1" 2>/dev/null | head -1)"
+  case "$PM_ARGS1" in
+    *"-lc"*|*pm.pid.spawn*) bad "state/pm.pid 记的是 harness 壳（$PM_ARGS1）：CLI 死了它还活着 → 假存活" ;;
+    *fake-pm.sh*)            ok "state/pm.pid 记的是 CLI 进程本身（不是 harness 壳）" ;;
+    *)                       bad "state/pm.pid 指向意外进程：$PM_ARGS1" ;;
+  esac
+
+  # 2) 崩溃 → 重新 up：PM 回来；resume 参数为空时工具必须明说历史不延续
+  LINES1="$(pm_lines)"; rm -f "$PM_SEEN"
+  pm_close_windows
+  pm_env $TEAM up >"$TMP/pm-adapter-up2.log" 2>&1 || true
+  assert_has "$TMP/pm-adapter-up2.log" "PM 已启动" "崩溃后重新 up 能把它拉回来"
+  assert_has "$TMP/pm-adapter-up2.log" "不延续" "并再次明说历史不延续（resume 参数为空）"
+  assert_has "$TMP/pm-adapter-up2.log" "inbox" "给出接手指引（inbox / docs/team/**）"
+  assert_eq "这一轮确实是新的 PM 进程（argv 日志增长）" "$([ "$(pm_lines)" -gt "$LINES1" ] && echo grew || echo same)" "grew"
+
+  # 2b) 对照：配上 resume 参数（模板里用 {resume_args}）→ 文案变成「续跑」，参数真的进了 argv
+  PMCMD_R="$FAKE/fake-pm.sh {resume_args} --pf {prompt_file} --ask {prompt}"
+  LINES2="$(pm_lines)"; rm -f "$PM_SEEN"
+  pm_close_windows
+  env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$PMCMD_R" TEAM_PM_BIN="$FAKE/fake-pm.sh" \
+    TEAM_PM_RESUME_ARGS='--continue' $TEAM up >"$TMP/pm-adapter-up3.log" 2>&1 || true
+  assert_has "$TMP/pm-adapter-up3.log" "续跑：--continue" "配了 {resume_args} → 文案说明怎么延续"
+  assert_not "$TMP/pm-adapter-up3.log" "不延续" "不再说「历史不延续」"
+  sed -n "$((LINES2 + 1)),\$p" "$PM_LOG" > "$TMP/pm-adapter-delta3.log" 2>/dev/null || true
+  assert_has "$TMP/pm-adapter-delta3.log" "arg1=--continue" "resume 参数真的进了这一轮的 argv"
+
+  # 3) watchdog：有待办 + PM 不在 → 同一套启动路径把它拉起来（非 Pi 也一样）
+  $TEAM notify pm "M8.1 巡检：有待办" >/dev/null 2>&1 || true
+  rm -f "$REPO/.pi/team/state/nudges.log" "$REPO/.pi/team/state/pm-restarts.log"
+  LINES3="$(pm_lines)"; rm -f "$PM_SEEN"
+  pm_close_windows
+  tmux new-window -t "$SESSION" -n "$PMW" -d -c "$REPO" >/dev/null 2>&1 || true   # 窗口在、里面是空提示符
+  PM_TICKS=0
+  while [ "$PM_TICKS" -lt 3 ]; do
+    pm_env $TEAM watch --once >"$TMP/pm-adapter-tick.log" 2>&1 || true
+    grep -q '已拉起' "$TMP/pm-adapter-tick.log" && break
+    PM_TICKS=$((PM_TICKS + 1)); sleep 1
+  done
+  assert_match "$TMP/pm-adapter-tick.log" "已拉起" "watchdog 在有待办时用同一个 helper 拉起非 Pi PM"
+  assert_has "$REPO/.pi/team/state/watchdog.log" "已拉起" "watchdog 日志记录了这次拉起"
+  assert_eq "重启配额只记了一次真实重启" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
+  assert_eq "这一轮真的拉起了新的 PM 进程" "$([ "$(pm_lines)" -gt "$LINES3" ] && echo grew || echo same)" "grew"
+  assert_has "$TMP/pm-adapter-tick.log" "不延续" "watchdog 的拉起文案同样说清延续与否"
+
+  # 4) wrapper PM：脚本 exec 掉自己之后进程映像换了名字 —— spawn 证据必须接住（F30 的非 Pi 版）
+  printf '#!/bin/sh\nexec "%s" --wrapped "$@"\n' "$FAKE/fake-pm.sh" > "$FAKE/pm-wrapper"
+  chmod +x "$FAKE/pm-wrapper"
+  rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
+  pm_close_windows; rm -f "$PM_SEEN"
+  env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$FAKE/pm-wrapper --pf {prompt_file} --ask {prompt}" TEAM_PM_BIN="$FAKE/pm-wrapper" \
+    $TEAM up >"$TMP/pm-adapter-wrap.log" 2>&1 || true
+  assert_has "$TMP/pm-adapter-wrap.log" "PM 已启动" "wrapper PM 被报为已启动"
+  assert_has "$TMP/pm-adapter-wrap.log" "proof=spawn" "wrapper exec 掉自己 → 证据是 spawn（不是 argv）"
+  if pm_wait_seen; then ok "wrapper 也真的把 CLI 跑起来了"; else bad "wrapper PM 没跑起来"; fi
+  assert_has "$PM_LOG" "arg1=--wrapped" "wrapper 的额外参数原样传给了真 CLI"
+  env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$FAKE/pm-wrapper --pf {prompt_file} --ask {prompt}" TEAM_PM_BIN="$FAKE/pm-wrapper" \
+    $TEAM ps >"$TMP/pm-adapter-wrap-wd.log" 2>&1 || true
+  assert_match "$TMP/pm-adapter-wrap-wd.log" "PM（$PMW）在运行" "wrapper PM 之后仍被判为在运行"
+  # 4b) 人工在窗口里启动一个「不叫 pi」的 PM：没有 spawn 记录也要认得出来（身份按 PM 的 CLI 解析）
+  tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec $FAKE/fake-pm.sh --manual" >/dev/null 2>&1 || true
+  sleep 1
+  rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
+  pm_env $TEAM ps >"$TMP/pm-adapter-manual.log" 2>&1 || true
+  assert_match "$TMP/pm-adapter-manual.log" "PM（$PMW）在运行" "人工启动的非 Pi PM 被认出（身份不认名字 pi）"
+  case "$(pm_probe 'team_pm_state' 'TEAM_PI_BIN=/definitely-not-pi' "TEAM_PM_CMD=$PMCMD" "TEAM_PM_BIN=$FAKE/fake-pm.sh")" in
+    running:*) ok "身份判定就是配置的 PM CLI（状态 $(pm_probe 'team_pm_state' 'TEAM_PI_BIN=/definitely-not-pi' "TEAM_PM_CMD=$PMCMD" "TEAM_PM_BIN=$FAKE/fake-pm.sh")）" ;;
+    *) bad "人工启动的非 Pi PM 没被身份判定认出（$(pm_probe 'team_pm_state' 'TEAM_PI_BIN=/definitely-not-pi' "TEAM_PM_CMD=$PMCMD" "TEAM_PM_BIN=$FAKE/fake-pm.sh")）" ;;
+  esac
+  case "$(pm_probe 'team_pm_state' 'TEAM_PI_BIN=/definitely-not-pi' "TEAM_PM_CMD=$PMCMD" "TEAM_PM_BIN=$FAKE/pi")" in
+    running:*) bad "没配这个 CLI 却仍被判成 running（身份判定没按 TEAM_PM_BIN 走）" ;;
+    *) ok "同一个窗口：换成不匹配的 TEAM_PM_BIN 就不再算 PM" ;;
+  esac
+
+  # 5) 裸名字（退回点 1）：CLI 只在调用者 PATH 里、登录 bash 看不到 —— 必须仍然启动成功
+  BARE_DIR="$TMP/m81-bare-bin"; mkdir -p "$BARE_DIR"
+  printf '#!/usr/bin/env bash\nprintf "bare-pm-ran %%s\\n" "$*" >> "%s"\nsleep 600\n' "$TMP/pm-bare.log" > "$BARE_DIR/pm-bare"
+  chmod +x "$BARE_DIR/pm-bare"
+  pm_close_windows; rm -f "$TMP/pm-bare.log"
+  rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
+  env PATH="$BARE_DIR:$PATH" TEAM_PI_BIN=/definitely-not-pi \
+    TEAM_PM_CMD='pm-bare --pf {prompt_file} --ask {prompt}' TEAM_PM_BIN= \
+    $TEAM up >"$TMP/pm-adapter-bare.log" 2>&1 || true
+  assert_has "$TMP/pm-adapter-bare.log" "PM 已启动" "裸名字（只在调用者 PATH 里）也能启动 PM"
+  assert_has "$TMP/pm-adapter-bare.log" "cli=pm-bare" "启动文案报的是这个名字"
+  assert_has "$TMP/pm-adapter-bare.log" "proof=" "并给出启动证据"
+  if [ -s "$TMP/pm-bare.log" ]; then ok "裸名字的 CLI 真的在窗口里跑起来了（登录 bash 里没有这个目录）"; else bad "裸名字的 CLI 没跑起来（$TMP/pm-bare.log 空）"; fi
+  env PATH="$BARE_DIR:$PATH" TEAM_PI_BIN=/definitely-not-pi \
+    TEAM_PM_CMD='pm-bare --pf {prompt_file} --ask {prompt}' TEAM_PM_BIN= \
+    $TEAM ps >"$TMP/pm-adapter-bare-ps.log" 2>&1 || true
+  assert_match "$TMP/pm-adapter-bare-ps.log" "PM（$PMW）在运行" "裸名字启动后的 PM 也算在运行"
+
+  # 5b) 重抹窗口输出也不能丢最上面的报错行（M8.1 实测的第二只虫子）
+  #     capture-pane 抓到的是整屏：CLI 的报错在最上面几行，后面跟着几十行空行。以前这里对整屏取 tail -30，
+  #     信号被空行挤掉 —— 诊断看起来像「窗口没输出」。夹具里真的把报错写在最上面、后面垫 40 行空行。
+  tmux respawn-pane -k -t "$SESSION:$PMW" \
+    "printf 'PANE-MARKER-1\\n'; printf '\\n%.0s' \$(seq 1 40); printf 'PANE-MARKER-2\\n'; sleep 30" >/dev/null 2>&1 || true
+  sleep 0.6
+  PN_FROM_PANE="$(pm_probe 'team_pm_pane_tail 3')"
+  assert_has_echo "$PN_FROM_PANE" "PANE-MARKER-1" "重抹窗口输出保留最上面的报错行（不再被空行挤掉）"
+  assert_has_echo "$PN_FROM_PANE" "PANE-MARKER-2" "空行之后的内容也还在"
+
+  # 6) 启动失败必须留下诊断（退回点 2）：窗口最后几行 + 渲染出的命令 + CLI 退出码
+  cat > "$FAKE/fake-pm-fail.sh" <<EOF
+#!/usr/bin/env bash
+echo "FAKE-PM-FAIL: cannot start (intentional)" >&2
+exit 7
+EOF
+  chmod +x "$FAKE/fake-pm-fail.sh"
+  pm_close_windows
+  rm -f "$REPO/.pi/team/state/pm-launch-failed.log" "$REPO/.pi/team/state/pm-launch.exit"
+  if env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$FAKE/fake-pm-fail.sh {prompt}" TEAM_PM_BIN="$FAKE/fake-pm-fail.sh" \
+       TEAM_PM_START_WAIT=2 $TEAM up >"$TMP/pm-adapter-upfail.log" 2>&1; then
+    bad "启动失败的 up 不该退出 0"
+  else ok "启动失败 → up 非 0（不假报成功）"; fi
+  assert_has "$TMP/pm-adapter-upfail.log" "pm-launch-failed.log" "错误信息给出诊断文件路径"
+  # 断言读的是**复制到 $TMP 的那份**：6i 收尾会把 state/ 里的现场清掉（后面的段落要看到改造前的现场），
+  # 而失败现场值得留档（排查时不用重跑整个 smoke）。
+  cp "$REPO/.pi/team/state/pm-launch-failed.log" "$TMP/pm-adapter-upfail-diag.log" 2>/dev/null || true
+  assert_has "$TMP/pm-adapter-upfail-diag.log" "FAKE-PM-FAIL" "诊断里有窗口最后几行（CLI 自己的报错）"
+  assert_has "$TMP/pm-adapter-upfail-diag.log" "exit   : 7" "诊断里有 harness 记下的 CLI 退出码"
+  assert_has "$TMP/pm-adapter-upfail-diag.log" "render : exec bash -lc" "诊断里有渲染出的命令（可手工复现）"
+  assert_match "$TMP/pm-adapter-upfail-diag.log" "^pane   : .*（[0-9]+ 字节）" "诊断记下了尾屏抓取落盘的大小（0 字节也看得见）"
+  # 归一化那块也得钉住：capture-pane 抓的是整屏（报错在最上面几行 + 后面几十行空行），
+  # 以前诊断用 `tail -30` 取，只留下空行、看起来像「窗口没输出」（M8.1 实测的第二只虫子）。
+  assert_has "$REPO/.pi/team/state/pm-launch-tail.txt" "FAKE-PM-FAIL" "尾屏文件里既有报错行也有后续空行（夹具与真实形态一致）"
+  assert_match "$TMP/pm-adapter-upfail-diag.log" "^--- pane（CLI 退出那一刻，harness 自抓）---$" "诊断用的是 harness 自抓的那份（不必事后重抓）"
+  tmux capture-pane -p -t "$SESSION:$PMW" -S -50 >"$TMP/pm-adapter-failpane.txt" 2>/dev/null || true
+  assert_has "$TMP/pm-adapter-failpane.txt" "FAKE-PM-FAIL" "窗口没被连诊断一起杀掉（报错还在 pane 里）"
+
+  # 收尾：后面的段落要看到和改造前一样的现场（dev 窗口还在、PM 侧清理干净）
+  pm_close_windows
+  rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn" \
+        "$REPO/.pi/team/state/pm.pid.starting" "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/nudges.log" \
+        "$REPO/.pi/team/state/pm-launch.exit" "$REPO/.pi/team/state/pm-launch-failed.log"
+  $TEAM inbox --ack >/dev/null 2>&1 || true
+  sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
+else
+  printf '  (跳过非 Pi PM 端到端断言：没有 tmux)\n'
+fi
+
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"
 $TEAM notify dev "blocked: 缺 dependency X" >/dev/null 2>&1 && ok "notify 退出码 0" || bad "notify 失败"
@@ -2232,10 +2618,13 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/resume.log" "续跑 dev" "resume 重新派单"
   assert_eq "resume 后 dev 窗口回来了" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "1"
 
-  # 人工一条命令也能顺手把 agent 带上（up --agents）
+  # 人工一条命令也能顺手把 agent 带上（up --agents）。
+  # 注：本段的假 pi（$FAKE/pi）写完参数就 exit 0，PM 根本起不来 —— `team up` 现在会如实退非 0
+  # （状态就是承诺：以前它报完“启动失败”还会退 0）。这里验的是 --agents 那段把 agent 续起来。
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
-  $TEAM up --agents >"$TMP/up-agents.log" 2>&1 || bad "up --agents 失败"
+  $TEAM up --agents >"$TMP/up-agents.log" 2>&1 || true
   assert_has "$TMP/up-agents.log" "续跑 dev" "up --agents 才会续跑 agent"
+  assert_has "$TMP/up-agents.log" "PM 启动失败" "（假 pi 秒退：up 同时也如实报了 PM 没起来）"
 else
   printf '  (跳过恢复断言：没有 tmux)\n'
 fi
@@ -3009,7 +3398,7 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
-  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
+  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
              "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"

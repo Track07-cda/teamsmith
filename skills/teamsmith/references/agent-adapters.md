@@ -1,9 +1,9 @@
-# Agent adapters · run workers with any TUI agent
+# Agent adapters · run workers (and the PM) with any TUI agent
 
-teamsmith's default worker is **Pi**, but the workflow never depends on Pi: the PM owns *windows,
+teamsmith's default CLI is **Pi**, but the workflow never depends on Pi: the PM owns *windows,
 worktrees, task briefs, reports, gates and the inbox contract*, and "how do I start this agent CLI"
-is pluggable. Four config keys make that explicit — **all of them empty by default, which keeps the
-Pi behaviour byte-for-byte identical**.
+is pluggable — on the **worker side** (four keys) and on the **PM side** (three keys, §2). **All of them
+empty by default, which keeps the Pi behaviour byte-for-byte identical.**
 
 | Key | Meaning | Empty (default) |
 |---|---|---|
@@ -33,7 +33,97 @@ teamsmith owns (identical for every adapter):
 The adapter owns: how to start its CLI, how that CLI is told which model/prompt/session to use, and how
 the worker notifies the PM at turn end.
 
-## 2. Launch: `TEAM_AGENT_CMD`
+## 2. The PM side: `TEAM_PM_CMD`
+
+The PM is an adapter too. Workers describe their CLI with `TEAM_AGENT_CMD`; the PM describes its own with
+`TEAM_PM_CMD`, and an empty value means "the built-in Pi command", unchanged.
+
+| Key | Meaning | Empty (default) |
+|---|---|---|
+| `TEAM_PM_CMD` | launch template for the PM | built-in Pi command: `TEAM_PI_BIN --provider P --model M --skill <skill dir> -c @<state>/pm-prompt.md` |
+| `TEAM_PM_BIN` | binary used for the start-time existence check and for the liveness **identity** check | first word of `TEAM_PM_CMD`, else `TEAM_PI_BIN` |
+| `TEAM_PM_RESUME_ARGS` | arguments that continue the PM's previous session | on the Pi path the historical `-c` / `--session-id <id>`; on a custom CLI: **nothing — the restart does not continue the history** |
+
+<!-- pm-side:begin -->
+PM placeholders — same engine, same rules as §3 (a blank or multi-line template, an unknown token and a
+malformed one such as `{ cwd }` all fail loudly, and the error names `TEAM_PM_CMD`):
+
+- `{cwd}` — the project's **main worktree** (the PM's working directory)
+- `{session_id}` — `TEAM_PM_SESSION_ID`, empty by default (only meaningful if your CLI has its own session ids)
+- `{model}` — the model-name part of `TEAM_PM_MODEL` (default `TEAM_DEFAULT_MODEL`)
+- `{provider}` — the provider part
+- `{prompt_file}` — path of `state/pm-prompt.md`, the PM briefing (`team up --print` prints the same text)
+- `{prompt}` — `"$0"`: the briefing as a single argv token handed over by the window harness (keep the quotes)
+- `{skill_dir}` — the teamsmith skill directory
+- `{extra_args}` — `TEAM_PM_EXTRA_PI_ARGS`, the PM's own key, **not** the worker's `TEAM_EXTRA_PI_ARGS`
+- `{resume_args}` — `TEAM_PM_RESUME_ARGS` (PM-only; a **worker** template that uses it still fails as unknown)
+<!-- pm-side:end -->
+
+The worker placeholders `{notify_ext}` and `{summary}` are not part of the PM set, and asserting them in a PM
+template is rejected too. (The placeholder table in §3 is the worker list; this section is the PM list — the smoke
+suite keeps both in sync with the engine.)
+
+Launch contract, identical to the worker side: teamsmith writes the briefing to `state/pm-prompt.md`,
+`cd`s to the main worktree, records the pid that is about to become the agent in `state/pm.pid.spawn` and
+only then `exec`s the template. The briefing itself never lands on the command line: the window harness
+passes it as `argv[0]`, which is what `{prompt}` reads — use `{prompt_file}` when your CLI can read a file.
+
+Two details of that harness matter when you write a template or debug one:
+
+- **The first word is resolved, not guessed.** The window command runs under `bash -lc`, whose `PATH` comes from
+  `/etc/profile` and `~/.bash_profile` — typically *without* the directories your interactive shell adds
+  (`~/.bun/bin`, version-manager shims). teamsmith therefore resolves the template's bare first word on the
+  **caller's** `PATH` and renders the absolute path into the command, so `TEAM_PM_CMD='codex exec {prompt}'` works
+  even where `bash -lc 'command -v codex'` fails. A first word that already contains `/`, quotes, `$` or `{` is
+  left exactly as written (that is more than a bare executable name, so it is your command to own).
+- **A failed start leaves evidence and does not take the window with it.** The CLI runs inside a subshell, so when
+  it exits the window returns to a prompt instead of vanishing; the launcher then writes
+  `state/pm-launch-failed.log` with the CLI's exit code, the rendered command, the resolved executable and the
+  window's last non-blank output (the raw capture lives next to it as `state/pm-launch-tail.txt`). `team up` exits
+  non-zero in that case — a failed start is never reported as success. The next `team up` or watchdog tick treats
+  the idle prompt as "no PM" and replaces it.
+
+### What the PM does **not** get
+
+- **No turn-end notification, and no auto-nudge event.** `TEAM_AGENT_NOTIFY_CMD` and the Pi notify extension
+  are *worker* features: a worker tells the PM when its turn ended. For the PM that direction is inverted — the
+  PM is the recipient. A non-Pi PM is started/restarted by `team up` and by the watchdog's pending-work check
+  (`watch --once`: unread inbox, reports to verify, blocked or stopped agents) and reads `team inbox` itself.
+- **No guaranteed session continuity.** With `TEAM_PM_RESUME_ARGS` empty, a restart begins a *fresh* session,
+  and the tool says so in plain words instead of implying a continuation. The handoff is the durable record —
+  `docs/team/**` (BOARD, DECISIONS, threads, reports) plus `team inbox` — and the briefing itself tells the new
+  PM to start with `team digest`. If your CLI supports continuing (`--continue`, `resume --last`,
+  `--session <id>`, …), put those arguments in `TEAM_PM_RESUME_ARGS` **and** reference `{resume_args}` in
+  `TEAM_PM_CMD`; `team up` then reports how the session is continued instead of warning. Putting arguments in
+  the key without the placeholder is detected and reported as "the arguments are configured but not used".
+- **No model/CLI compatibility guarantee.** `{model}` comes from teamsmith's registry; a CLI that does not know
+  that model fails inside the CLI, exactly like a worker adapter would.
+
+### Liveness identity and the wrapper caveat
+
+`state/pm.pid` (the pid teamsmith spawned, or the pid the pane's foreground process had when it was recognised)
+plus a cwd inside the project is the strongest evidence; the fallback is "the foreground process in the PM window
+is `TEAM_PM_BIN`". Either way the check resolves **the PM's** executable (`TEAM_PM_BIN` > first word of
+`TEAM_PM_CMD` > `TEAM_PI_BIN`) — it does not require the name `pi`, and a PM whose CLI is not Pi counts.
+
+- **Wrapper scripts**: if `TEAM_PM_BIN` is a wrapper that `exec`s the real CLI, the process image changes name the
+  moment it `exec`s, so argv-based recognition stops matching. The *spawn* proof (`proof=spawn`, the pid written to
+  `state/pm.pid.spawn` before `exec`) keeps the PM "running" — this is the same mechanism that covers a wrapped
+  `pi` (M6.3 F30).
+- Do **not** wrap the PM with something that starts the CLI as a *child* (`sh -c 'codex …'` without `exec`, a
+  supervisor, a shell function): the recorded pid is then the wrapper, and liveness is lost as soon as it exits.
+  `exec` (or `TEAM_PM_BIN` pointing straight at the CLI) is what the contract expects.
+- `team doctor`'s worker-adapter check proves the **worker** CLI; it says nothing about the PM CLI. The PM CLI is
+  checked at start time (`team up`, the watchdog): a missing or unresolvable executable fails before anything is
+  respawned, naming `TEAM_PM_BIN` and the template's first word.
+
+**Verified on this machine** (2026-09-16): `codex` as the PM CLI in a scratch project — `team up` started it,
+the briefing was delivered (its first action was `team digest`), it drove `team board ls` / `team dispatch --print`
+from that session, a killed window was restarted by `team up` (with the explicit "history is not continued"
+notice), and `team watch --once` (with pending work) restarted it the same way. The evidence is in the M8.1
+delivery report; the smoke suite repeats the same four scenarios against a fake non-Pi PM (`tests/smoke.sh`, §6i).
+
+## 3. Launch: `TEAM_AGENT_CMD`
 
 One shell command line, run in the worktree. Placeholders (values are `%q`-quoted by teamsmith):
 
@@ -73,7 +163,7 @@ Rules:
 - The rendered command is executed by `bash -lc` in the window; the usual quoting rules of your shell
   apply, and nothing is `eval`-ed twice.
 
-## 3. Notify: `TEAM_AGENT_NOTIFY_CMD`
+## 4. Notify: `TEAM_AGENT_NOTIFY_CMD`
 
 **A worker's summary text is data, never code.** The worker writes its one-line summary into a file and runs a
 fixed command; nothing the worker types is ever interpolated into a shell line.
@@ -122,7 +212,7 @@ last assistant message — not the first 60 characters of it, so two different b
 are both delivered. Content changes (branch, uncommitted, unpushed) are part of the summary, so a changed state
 re-sends; only a byte-identical repeat inside the window is dropped.
 
-## 4. Logs / activity: `TEAM_AGENT_LOG_GLOB`
+## 5. Logs / activity: `TEAM_AGENT_LOG_GLOB`
 
 `team monitor --activity` renders Pi session JSONL by default. With `TEAM_AGENT_LOG_GLOB` set, the
 **tail of the newest matching file** is rendered as that agent's activity instead (`{agent}` in the
@@ -181,7 +271,7 @@ export TEAM_AGENT_LOG_TAIL_BYTES=262144
 
 The flag wins over the environment variable; the cap wins over both.
 
-## 5. Worked example: codex
+## 6. Worked example: codex
 
 ```sh
 # .pi/team/config.sh
@@ -208,7 +298,7 @@ Notes:
 - codex is not on the PATH in this environment (`~/.bun/bin/codex`); pinning `TEAM_AGENT_BIN` to the
   absolute path is exactly what that key is for.
 
-## 6. Worked example: opencode
+## 7. Worked example: opencode
 
 ```sh
 TEAM_AGENT_CMD='opencode run --model {provider}/{model} --dir {cwd} "$(cat {prompt_file})"'
@@ -226,7 +316,7 @@ report keeps the window command, the agent's output tail, the produced report an
 `opencode run` starts a fresh session per call; use `--continue` / `--session <id>` if you want it to
 continue (opencode's session ids are its own — see the note under codex).
 
-## 7. Verifying a new adapter (checklist)
+## 8. Verifying a new adapter (checklist)
 
 1. `team doctor` → the `agent adapter` line resolves the binary; `team paths` shows `agent_adapter`.
 2. `team dispatch <agent> <ID> <task> --print` → read the rendered command: no leftover `{`, and the
@@ -238,19 +328,25 @@ continue (opencode's session ids are its own — see the note under codex).
 5. `team monitor --once --activity` → the agent's block shows its Pi session or the configured log tail.
 6. Only then rely on it — gates, reports and `team review` work the same for every adapter.
 
-## 8. Intentionally unsupported
+## 9. Intentionally unsupported
 
 - **Emulating an agent's internal turn events.** teamsmith does not parse a vendor's private protocol to
   guess "the agent finished thinking". Turn-end notification is the adapter's job
   (`TEAM_AGENT_NOTIFY_CMD`), plus the PM side (`team say`, `inbox`, `roster`).
+- **A notifying PM.** The PM's own CLI is configurable (`TEAM_PM_CMD`, §2), but the notification direction is not
+  symmetric: teamsmith has no "the PM's CLI finished a turn" event. A non-Pi PM is woken by the watchdog's
+  pending-work check (or by a human running `team up`) and reads `team inbox`; it never pushes a turn-end event of
+  its own. The built-in Pi PM is nudged by typing into its window when it is alive (`team notify pm`, the watchdog
+  nudge) — that path works for a non-Pi PM too, because it only checks that the pane is busy, not which CLI runs.
 - **Interpolating worker text into a shell line.** A summary is data: it arrives through a file
   (`{summary_file}` / `team notify --from-file`). `{summary}` is rendered as a quoted file read for
   compatibility, but nothing a worker writes is ever re-interpreted by a shell — there is no supported way
   to make a summary part of a command's text.
 - **Multiplexing per-agent streams out of one shared log.** `{agent}` is a filename placeholder, not a
   stream splitter; point the glob at per-agent files (or accept one shared tail).
-- **Replacing the PM's own agent.** The PM (and the watchdog's `pi -c` restart, the PM prompt files, the
-  notify extension) is still Pi; adapters are for worker agents.
+- **Replacing the PM's own CLI by *guessing* it.** The PM side is adaptable (§2), but teamsmith will not infer a
+  launch command for you: without `TEAM_PM_CMD` it uses the built-in Pi command, and a custom CLI needs an explicit
+  template (otherwise the same `pi` command is attempted and fails inside `pi`).
 - **CLIs that cannot accept a prompt non-interactively** (prompt only via a human TUI). Use
   `{prompt_file}` if the CLI can read a file or stdin; otherwise the agent cannot be dispatched by
   teamsmith.

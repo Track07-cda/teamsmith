@@ -207,6 +207,14 @@ team_load_config() {
   TEAM_AGENT_NOTIFY_CMD="${TEAM_AGENT_NOTIFY_CMD:-}"
   TEAM_AGENT_LOG_GLOB="${TEAM_AGENT_LOG_GLOB:-}"
   TEAM_AGENT_BIN="${TEAM_AGENT_BIN:-}"
+  # ---- PM adapter（PM 也能跑在任意 TUI agent 上）：空值 = 内置 Pi 行为（历史默认，逐字节不变） ----
+  # TEAM_PM_CMD        ：启动 PM 的命令模板（占位符见 references/agent-adapters.md 的 PM side）
+  # TEAM_PM_BIN        ：PM 的可执行文件（存在性检查 + 存活身份判定）；空 = 从 TEAM_PM_CMD 首词推断，再退回 TEAM_PI_BIN
+  # TEAM_PM_RESUME_ARGS：延续 PM 上一会话的参数（模板里用 {resume_args} 取）。Pi 路径下空值 = 沿用历史的
+  #                      -c / --session-id；自定义 CLI 下空值 = **不延续历史**（watchdog/up 会明说）
+  TEAM_PM_CMD="${TEAM_PM_CMD:-}"
+  TEAM_PM_BIN="${TEAM_PM_BIN:-}"
+  TEAM_PM_RESUME_ARGS="${TEAM_PM_RESUME_ARGS:-}"
 
   TEAM_DOCS_ABS="$TEAM_MAIN_ROOT/$TEAM_DOCS_DIR"
   TEAM_STATE_DIR="$TEAM_MAIN_ROOT/.pi/team/state"
@@ -518,8 +526,10 @@ team_tmux_send_text() { # <session:window> <text> [meeting-slug]
   tmux send-keys -t "$1" Enter 2>/dev/null || return 1
 }
 
-# 只有目标窗口在跑 pi 时才敢打字：往停在提示符的 shell 里 send-keys 等于把那串文本
+# 只有目标窗口在跑 agent CLI 时才敢打字：往停在提示符的 shell 里 send-keys 等于把那串文本
 # 当命令执行（真实事故）。这种情况只写收件箱，不敲键盘。
+# 名字里的 pi 是历史（内置路径）；行为与 CLI 无关：M8.1 起 PM 也能是任意 TUI agent，
+# 判据是「pane 忙不忙」而不是「进程叫什么」（team_pane_busy）。
 team_tmux_send_to_pi() { # <session:window> <text>
   team_tmux_target_required "send-to-pi" "${1:-}" || return 1
   team_pane_busy "$1" || return 1
@@ -667,8 +677,8 @@ team_cwd_in_project() { # <cwd> → 0=属于本项目（含它的 worktree）
 #
 # 现在的规则：
 #   ① 我们自己启动过 PM（state/pm.pid）→ 该 pid 活着 **且** cwd 在本项目里 = running（最强证据）；
-#   ② 人工在窗口里起的 PM → 窗口里（pane_pid 本身或它的直接子进程）命令行中出现**配置的 agent
-#      可执行文件**（解析顺序与 dispatch 一致：TEAM_AGENT_BIN > TEAM_AGENT_CMD 首词 > TEAM_PI_BIN）
+#   ② 人工在窗口里起的 PM → 窗口里（pane_pid 本身或它的直接子进程）命令行中出现**配置的 PM
+#      可执行文件**（M8.1：解析顺序 TEAM_PM_BIN > TEAM_PM_CMD 首词 > TEAM_PI_BIN，见 team_pm_bin_path）
 #      **且** cwd 在本项目里 = running；
 #   ③ 占用者 cwd 不属于本项目 = foreign:<cmd>（up 默认拒绝覆盖，TEAM_REPLACE_FOREIGN_PM=1 才动）；
 #   ④ 本项目 cwd 里的非 agent 进程 = unknown:<cmd>（新建空窗、sleep/编辑器/tmux 瞬态都在这里）：
@@ -737,18 +747,16 @@ team_pm_pid_live() {
   team_cwd_in_project "$cwd"
 }
 
-# 这个 pid 的命令行里有没有「配置的 agent 可执行文件」？
+# 这个 pid 的命令行里有没有「某个可执行文件」？
 # 不能只看 argv[0]：pi 可能是 node/bun 脚本（前台名 node/bun），经 shell 包装启动时还会多一层
 # `bash /path/pi-sleep …`。所以按分词找，命中任一个词的 basename 即可（cwd 归属另判）。
 # M7.2：**我们自己的启动命令不算证据** —— 启动命令形如
 #   bash -c 'cd <root> && printf…> <state>/pm.pid.spawn && exec <agent> …'
 # 那个 shell 的命令行里也有 agent 路径，但它还没 exec，不是 PM。
 # （不排除它的话，启动窗口里会把 shell 报成 running:bash，进而跳过「正在启动」这个状态。）
-team_proc_is_agent_bin() { # <pid>
-  local pid="${1:-}" want base args tok
-  [ -n "$pid" ] || return 1
-  want="$(team_agent_bin_path 2>/dev/null || true)"
-  [ -n "$want" ] || return 1
+team_proc_cmdline_is_bin() { # <pid> <可执行文件路径或名字>
+  local pid="${1:-}" want="${2:-}" base args tok
+  [ -n "$pid" ] && [ -n "$want" ] || return 1
   case "$want" in
     /*) base="$(basename "$want")" ;;
     *)  base="$want" ;;
@@ -756,16 +764,27 @@ team_proc_is_agent_bin() { # <pid>
   [ -n "$base" ] || return 1
   args="$(ps -o args= -p "$pid" 2>/dev/null | head -1)"
   [ -n "$args" ] || return 1
+  # M8.1：**我们自己的启动命令不算证据** —— harness 的命令行里就写着 spawn 文件路径
+  # （`( printf "%s\n" "$BASHPID" > <state>/pm.pid.spawn`）：出现它就说明这个进程是那个
+  # 「还没 exec 完的壳」，不是 PM。整串判断（而不是逐 token）：单引号引用被 `'\''` 拆开后，
+  # token 可能以 `spawn'\''` 结尾，逐 token 的尾匹配会漏掉，而 harness 又是个活得很久的父 shell ——
+  # 漏掉就会把一个永不退出的 pid 记成 PM（假存活）。
+  case "$args" in *pm.pid.spawn*) return 1 ;; esac
   for tok in $args; do
     [ -n "$tok" ] || continue
-    # M7.2：启动命令里的 spawn 文件（`bash -c '… > <state>/pm.pid.spawn && exec <agent> …'`）
-    # 一出场就说明这个进程还没 exec —— 它只是命令行里提到 agent，不是 PM。
-    case "$tok" in *pm.pid.spawn|*pm.pid.spawn\'|*pm.pid.spawn\") return 1 ;; esac
     case "${tok##*/}" in
       "$base") return 0 ;;
     esac
   done
   return 1
+}
+
+# 这个 pid 是不是「本项目的 PM」的 CLI 进程？M8.1：身份按 **PM 的**可执行文件判定
+# （team_pm_bin_path = TEAM_PM_BIN > TEAM_PM_CMD 首词 > TEAM_PI_BIN），不再按 worker adapter 的
+# TEAM_AGENT_BIN/CMD —— 于是「worker 用 codex、PM 还是 pi」这种组合下，人工启动的 Pi PM 也认得出来，
+# 而且 PM 的 CLI 不叫 pi 也算数（wrapper 脚本在 exec 掉自己之前也带着配置的名字；exec 之后靠 spawn 证据）。
+team_proc_is_pm_bin() { # <pid>
+  team_proc_cmdline_is_bin "${1:-}" "$(team_pm_bin_path 2>/dev/null || true)"
 }
 
 # ---------------------------------------------------------------- PM 启动在飞行中（M7.2）
@@ -808,15 +827,15 @@ team_pm_starting() {
   return 0
 }
 
-# 窗口里跑着配置的 agent 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
+# 窗口里跑着配置的 PM CLI 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
 team_pm_pane_agent_pid() { # <session:window>
   local target="${1:-}" pane p
   [ -n "$target" ] || return 1
   pane="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
   [ -n "$pane" ] || return 1
-  team_proc_is_agent_bin "$pane" && { printf '%s\n' "$pane"; return 0; }
+  team_proc_is_pm_bin "$pane" && { printf '%s\n' "$pane"; return 0; }
   for p in $(ps -o pid= --ppid "$pane" 2>/dev/null | tr -d ' '); do
-    team_proc_is_agent_bin "$p" && { printf '%s\n' "$p"; return 0; }
+    team_proc_is_pm_bin "$p" && { printf '%s\n' "$p"; return 0; }
   done
   return 1
 }
@@ -873,7 +892,7 @@ team_pm_evidence() { # [state]
       if team_pm_pid_live; then
         printf 'state/pm.pid=%s（proof=%s）' "$(team_pm_recorded_pid)" "$(team_pm_proof || echo '?')"
       else
-        printf 'PM 窗口里的进程=%s（argv 命中配置的 agent）' "${st#running:}"
+        printf 'PM 窗口里的进程=%s（argv 命中配置的 PM CLI）' "${st#running:}"
       fi ;;
     starting:*)
       f="$(team_pm_starting_file)"
@@ -924,7 +943,10 @@ team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人）；默�
   local model="${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}" args=()
   args=(--provider "${model%%/*}" --model "${model##*/}")
   [ -d "$TEAM_SKILL_DIR" ] && args+=(--skill "$TEAM_SKILL_DIR")
+  # 续跑参数（M8.1）：TEAM_PM_SESSION_ID > 显式 TEAM_PM_RESUME_ARGS > 历史的 -c。
+  # 默认三个都空 = 与历史逐字节一致；显式配了 resume 参数就换掉默认的 -c（同一套键也服务于自定义 CLI）。
   if [ -n "${TEAM_PM_SESSION_ID:-}" ]; then args+=(--session-id "$TEAM_PM_SESSION_ID")
+  elif [ -n "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then args+=($TEAM_PM_RESUME_ARGS)
   else args+=(-c); fi
   [ -n "${TEAM_PM_EXTRA_PI_ARGS:-}" ] && args+=($TEAM_PM_EXTRA_PI_ARGS)
   printf '%q ' "${args[@]}"
@@ -938,6 +960,238 @@ team_pm_write_prompt() {
   mkdir -p "$TEAM_STATE_DIR"
   team_pm_prompt > "$(team_pm_prompt_file)"
   printf '%s\n' "$(team_pm_prompt_file)"
+}
+
+# ---------------------------------------------------------------- PM adapter（PM 也能跑在任意 TUI agent 上）
+# 契约与 worker adapter 共用同一个占位符引擎（team_agent_*），只多一个 PM 专有的 {resume_args}：
+#   TEAM_PM_CMD 为空 → team_pm_launch_cmd 走内置 Pi 分支（与历史逐字节一致，见团队测试的 invariance 段）；
+#   TEAM_PM_CMD 非空 → 展开模板。提示词仍然落盘 state/pm-prompt.md：{prompt_file} 是它的引用路径，
+#   {prompt} 走窗口 harness 的 argv[0]（$0）—— 与 worker 的 {prompt} 同一条路，提示词不进命令行。
+# 与 worker 的差别：PM 没有 notify 扩展（它就是收件人），收不到自动通知；非 Pi 的 PM 由
+# watchdog 的「有待办 → 拉起/提醒」逻辑唤醒，靠 `team inbox` 读消息（见 references/agent-adapters.md）。
+team_pm_cli_name() { # → 给人看的 PM CLI 名（默认仍是 pi）
+  local bin
+  if [ -n "$(team_trim "${TEAM_PM_CMD:-}${TEAM_PM_BIN:-}")" ]; then bin="$(team_pm_bin_path)"; basename "$bin"
+  else printf 'pi'; fi
+}
+
+# PM 的可执行文件：TEAM_PM_BIN > TEAM_PM_CMD 首词 > TEAM_PI_BIN。
+# 默认路径（两个新键都空）= team_pi_bin_path，所以内置 Pi 的解析结果一字不变。
+# 存活身份检查（team_proc_is_pm_bin）用它：**不要求名字叫 pi**，wrapper 脚本也算。
+team_pm_bin_path() {
+  local bin p cmd
+  cmd="$(team_trim "${TEAM_PM_CMD:-}")"
+  bin="$(team_trim "${TEAM_PM_BIN:-}")"
+  if [ -z "$bin" ] && [ -n "$cmd" ]; then bin="$(team_agent_cmd_first_word pm "$cmd" pm)"; fi
+  if [ -z "$bin" ]; then team_pi_bin_path; return 0; fi
+  case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
+  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
+}
+
+# 启动前校验 TEAM_PM_CMD：畸形/未知占位符、纯空白、多行 → 直接失败（复用 worker 引擎的判定，不另写一套）
+team_pm_check_launch() {
+  local cmd="${TEAM_PM_CMD-}" bad
+  [ -n "$cmd" ] || return 0                       # 未配置 → 内置 Pi
+  [ -n "$(team_trim "$cmd")" ] || \
+    team_die "TEAM_PM_CMD 只有空白（配了等于没配）：要么留空走内置 Pi，要么写一条真正的命令"
+  case "$cmd" in
+    *$'\n'*) team_die "TEAM_PM_CMD 含换行：adapter 模板必须是**一条**命令行（第二行会被窗口 shell 当新命令执行）" ;;
+  esac
+  bad="$(team_agent_bogus_tokens pm "$cmd")"
+  if [ -n "$bad" ]; then
+    team_die "TEAM_PM_CMD 里有未知占位符（含空格/双花括号/引号等畸形写法）：$(printf '%s' "$bad" | tr '\n' ' ')（支持：$(team_agent_support_list pm)）$(team_agent_bogus_hint "$bad")"
+  fi
+  return 0
+}
+
+# 配了自定义 PM CLI 时，可执行文件必须解析得到（写错名字 → 现在就说，而不是拉起来一个空窗口）
+# M8.1 退回点 1：解析到绝对路径的裸名字**是**合法配置（文档示例就写裸名字）——
+# 启动时会把首词换成这个绝对路径，所以这里只要求「能解析到」：解析不到才是错。
+team_pm_check_bin() {
+  local bin
+  [ -n "$(team_trim "${TEAM_PM_CMD:-}${TEAM_PM_BIN:-}")" ] || return 0   # 内置 Pi 路径由启动后的证据说话
+  bin="$(team_pm_bin_path)"
+  case "$bin" in
+    /*) [ -x "$bin" ] || team_die "PM 可执行文件不存在或不可执行：$bin（检查 TEAM_PM_BIN / TEAM_PM_CMD 的首词）" ;;
+    *)  team_die "找不到 PM 可执行文件：$bin（它不在你的 PATH 里，窗口里也不会凭空有 —— 把绝对路径写进 TEAM_PM_BIN）" ;;
+  esac
+  return 0
+}
+
+# 模板首词的「裸名字 → 绝对路径」替换（M8.1 退回点 1）。
+# 为什么需要：模板命令在窗口里由 `bash -lc` 执行，而登录 bash 的 PATH 来自 /etc/profile + ~/.bash_profile，
+# 常常没有用户交互式 rc 里加的目录。实测（本机）：调用者 PATH 里有 ~/.bun/bin，而
+#   bash -lc 'command -v codex'  →  NOT-FOUND-IN-LOGIN-BASH
+# 于是 `exec codex …` 直接 command not found、窗口消失，而工具的预检（在调用者 PATH 里解析）却过了。
+# 为什么选「替换首词」而不是「把 bin 目录前置进窗口 PATH」：① 启动用的二进制 == 存活身份检查看的那个
+# 二进制，不会出现「跑的是 PATH 里的 A、身份找的是 B」；② 不往窗口里塞一个会遮蔽 node/npm 的目录
+# （~/.bun/bin 就在 PATH 首位就会遮蔽同名命令）；③ 与内置 Pi 分支（命令里写绝对路径）同一形状。
+# 首词不是裸名字（含 / 引号 $ { }）时原样交回：那种模板已经越出「首词是裸可执行名」的契约，
+# team_pm_check_bin 会先报错。
+team_pm_subst_first_word() { # <已展开的模板> <替换词（已引用）>
+  local tpl="$1" word="$2" first rest
+  first="${tpl%%[[:space:]]*}"
+  case "$first" in
+    ''|*/*|*\"*|*\'*|*'$'*|*'{'*|*'}'*) printf '%s\n' "$tpl"; return 0 ;;
+  esac
+  rest="${tpl#"$first"}"
+  printf '%s%s\n' "$word" "$rest"
+}
+
+# PM 启动失败时的诊断（M8.1 退回点 2）：以前只留一句「6s 内没看到…」——
+# 而窗口里的 `command not found`（登录 PATH 没有那个目录）会连窗口一起消失，用户拿不到任何线索。
+# 现在：harness 用子 shell 跑 CLI、CLI 退出后回到一个可交互的 shell（窗口不消失），失败路径把
+# 窗口最后几行 + 渲染出的命令 + 解析到的可执行文件 + CLI 退出码一次写进 state/pm-launch-failed.log。
+team_pm_launch_exit_file() { printf '%s\n' "$TEAM_STATE_DIR/pm-launch.exit"; }
+team_pm_launch_tail_file() { printf '%s\n' "$TEAM_STATE_DIR/pm-launch-tail.txt"; }
+team_pm_launch_failed_log() { printf '%s\n' "$TEAM_STATE_DIR/pm-launch-failed.log"; }
+
+team_pm_launch_exit_code() { # → harness 记下的 CLI 退出码（没有/不可解析 → 空）
+  local f; f="$(team_pm_launch_exit_file)"
+  [ -f "$f" ] || return 0
+  # 文件是 `<epoch> <code>`；只有一个字段时也认（旧的/手写的）
+  awk 'NR==1{print (NF>1 ? $2 : $1)}' "$f" 2>/dev/null | tr -dc '0-9'
+}
+
+# 「窗口里有没有值得写进诊断的东西」：pane 是**渲染后**的屏幕，pty 输出到 tmux 屏幕之间有极短的竞态——
+# 刚抓到一片空白并不代表 CLI 什么都没说（M8.1 实测：诊断里出现空屏，而 CLI 的报错几百毫秒后才上屏）。
+# 于是：抓到空白就再等一拍（有界重试，不是无限等），并且把「全空白」当成**没有抓到**。
+team_text_has_content() { # 0=有非空白内容
+  case "${1:-}" in *[![:space:]]*) return 0 ;; *) return 1 ;; esac
+}
+
+# 尾屏归一化（M8.1 实测的第二只虫子）：capture-pane 抓的是**整屏 + 历史** —— 一个刚起来的窗口里
+# 往往是「CLI 的报错在最上面几行 + 后面几十行空行」。对这样的文件用 `tail -30` 会把**唯一的信号**丢掉
+# （只剩空行），于是诊断看起来像「窗口没输出」。这里：去掉空行、每行截到 300 字、最多留 30 行非空输出。
+# 注释里说的「最后 30 行」在实现上就是这份归一化输出；空行本来就不携带信息。
+team_pane_tail_normalize() { # stdin → stdout
+  local all n
+  all="$(sed -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' | cut -c1-300)"
+  team_text_has_content "$all" || return 0
+  n="$(printf '%s\n' "$all" | wc -l | tr -d ' ')"
+  printf '%s\n' "$all" | head -30
+  [ "$n" -gt 30 ] && printf '……（共 %s 行非空输出，只留了前 30 行）\n' "$n"
+  return 0
+}
+
+team_pm_pane_tail() { # [<重试次数>] → stdout = 窗口输出（归一化；窗口不存在/始终空白 → 空）
+  local tries="${1:-12}" i=0 out=""
+  team_pm_window_exists || return 0
+  while :; do
+    out="$(tmux capture-pane -p -t "$(team_pm_target)" -S -200 2>/dev/null || true)"
+    team_text_has_content "$out" && break
+    [ "$i" -ge "$tries" ] && break
+    i=$((i + 1)); sleep 0.1
+  done
+  team_text_has_content "$out" || return 0
+  printf '%s\n' "$out" | team_pane_tail_normalize
+  return 0
+}
+
+team_pm_launch_diag() { # <原因> [<渲染出的命令>] → 诊断文件路径（同时把内容追加进去）
+  local reason="$1" cmd="${2:-}" f rc
+  f="$(team_pm_launch_failed_log)"; mkdir -p "$TEAM_STATE_DIR"
+  rc="$(team_pm_launch_exit_code)"
+  {
+    printf '==== %s · PM 启动失败 ====\n' "$(team_timestamp)"
+    printf 'reason : %s\n' "$reason"
+    printf 'target : %s\n' "$(team_pm_target)"
+    printf 'state  : %s\n' "$(team_pm_state 2>/dev/null || echo '?')"
+    printf 'cmd    : TEAM_PM_CMD=%s\n' "$(printf '%q' "${TEAM_PM_CMD:-}")"
+    printf 'bin    : %s\n' "$(team_pm_bin_path 2>/dev/null || echo '?')"
+    [ -n "$rc" ] && printf 'exit   : %s（harness 记录的 CLI 退出码）\n' "$rc"
+    [ -n "$cmd" ] && printf 'render : %s\n' "$cmd"
+    # 窗口输出：优先用 harness **在 CLI 退出那一刻** 自己抓的那份（pm-launch-tail.txt）——
+    # CLI 退出后容器的 shell 启动链有可能清屏，事后从外面 capture 可能只拿到一片空。
+    # 「只有空白」不算抓到了（见 team_pane_tail_normalize 的注释）：这时从外面重抓（带同样的有界重试）。
+    local tailf pane src
+    tailf="$(team_pm_launch_tail_file)"; pane=""; src=""
+    printf 'pane   : %s（%s 字节）\n' "$tailf" "$(wc -c < "$tailf" 2>/dev/null | tr -dc '0-9' || echo 0)"
+    if [ -s "$tailf" ] && grep -q '[^[:space:]]' "$tailf" 2>/dev/null; then
+      src="CLI 退出那一刻，harness 自抓"
+      pane="$(team_pane_tail_normalize < "$tailf")"
+    elif team_pm_window_exists; then
+      src="重新抓取"
+      pane="$(team_pm_pane_tail)"
+    fi
+    if team_text_has_content "$pane"; then
+      printf -- '--- pane（%s）---\n%s\n--- end ---\n' "$src" "$pane"
+    else
+      printf -- '--- pane ---\n（窗口已不存在或始终空白：用上面的 render 命令手工跑一次看它的报错）\n'
+    fi
+  } >> "$f"
+  printf '%s\n' "$f"
+}
+
+# POSIX 单引号引用（不依赖 bash 的 %q：respawn 的命令字符串会被**窗口的 shell** 解析，可能是 dash）
+team_squote() { local s="${1//\'/\'\\\'\'}"; printf "'%s'" "$s"; }
+
+team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-command
+  local pf="$1" spawnfile="$2" pi_bin expanded inner pm_bin exitfile tailfile
+  # 内置 Pi（默认）：与历史逐字节一致 —— cd && 写 spawn pid && exec pi <args> @<prompt 文件>
+  if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
+    pi_bin="$(team_pm_bin_path)"
+    printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
+      "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
+    return 0
+  fi
+  expanded="$(team_agent_expand pm "$TEAM_PM_CMD" pm "${TEAM_PM_SESSION_ID:-}" \
+    "$TEAM_MAIN_ROOT" "$pf" "" "" "${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}")"
+  # 裸名字 → 解析出的绝对路径（M8.1 退回点 1；见 team_pm_subst_first_word 的注释）。
+  # 只在「要执行的二进制 == 身份检查看的二进制」时替换：TEAM_PM_BIN 为空时它俩本来就是一个；
+  # 显式把 TEAM_PM_BIN 指向**另一个**名字（例如 TEAM_PM_BIN=bash 配一个脚本型 CLI）时，
+  # 命令要不要改是模板作者的事，工具不去改他写的命令行。
+  pm_bin="$(team_pm_bin_path)"
+  case "$pm_bin" in
+    /*)
+      if [ -z "$(team_trim "${TEAM_PM_BIN:-}")" ] \
+         || [ "${expanded%%[[:space:]]*}" = "$pm_bin" ] \
+         || [ "$(basename "${expanded%%[[:space:]]*}")" = "$(basename "$pm_bin")" ]; then
+        expanded="$(team_pm_subst_first_word "$expanded" "$(printf '%q' "$pm_bin")")"
+      fi ;;
+  esac
+  # 提示词走 argv[0]：`bash -lc '<inner>' "$(cat <prompt_file>)"` —— 命令行短、提示词不做 shell 解释。
+  # CLI 用**子 shell**跑（`( … exec <cli> )`），而不是直接 exec：
+  #   - spawn 证据（F30）仍是被 exec 成 agent 的那个 pid（子 shell 的 $BASHPID），
+  #   - CLI 退出后窗口**留在提示符**（最后几行还在），失败路径才抓得到诊断（M8.1 退回点 2），
+  #     下一拍 up/watchdog 把空提示符当「没有 PM」照样会替换它。
+  exitfile="$(team_pm_launch_exit_file)"
+  tailfile="$(team_pm_launch_tail_file)"
+  # 尾屏抓取带**有界重试**：pty 输出 → tmux 屏幕是异步的（初次 capture 可能还是一片空屏，
+  # 而空白也是「有内容」的字节），所以抓到非空白才停（最多 ~1s，然后照抓一份，供诊断说明情况）。
+  inner="$(printf 'cd %s\n( printf "%%s\\n" "$BASHPID" > %s\nexec %s )\nrc=$?\nprintf "%%s %%s\\n" "$(date +%%s)" "$rc" > %s\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %s 2>/dev/null; grep -q "[^[:space:]]" %s && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
+    "$(team_squote "$TEAM_MAIN_ROOT")" "$(team_squote "$spawnfile")" "$expanded" \
+    "$(team_squote "$exitfile")" "$(team_squote "$tailfile")" "$(team_squote "$tailfile")")"
+  printf 'exec bash -lc %s "$(cat %s)"' "$(team_squote "$inner")" "$(team_squote "$pf")"
+}
+
+# 这次启动会不会延续 PM 的历史？（up / watchdog 的成功文案共用；也是「没延续」时的行动指引）
+# → continued:<怎么延续的> | lost:<为什么没延续>
+team_pm_continuity() {
+  if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
+    if [ -n "${TEAM_PM_SESSION_ID:-}" ]; then printf 'continued:--session-id %s\n' "$TEAM_PM_SESSION_ID"; return 0; fi
+    if [ -n "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then
+      printf 'continued:TEAM_PM_RESUME_ARGS=%s\n' "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")"; return 0; fi
+    printf 'continued:pi -c（本目录上一个会话）\n'; return 0
+  fi
+  if [ -z "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then
+    printf 'lost:TEAM_PM_RESUME_ARGS 为空（%s 的续跑参数没配）\n' "$(team_pm_cli_name)"; return 0
+  fi
+  case "${TEAM_PM_CMD:-}" in
+    *'{resume_args}'*) printf 'continued:%s（模板里的 {resume_args}）\n' "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ;;
+    *) printf 'lost:TEAM_PM_RESUME_ARGS 配了，但 TEAM_PM_CMD 里没有 {resume_args}（参数不会带上）\n' ;;
+  esac
+}
+
+team_pm_continuity_note() { # 打在启动成功之后：延续 or 明确说「不延续 + 该靠什么接手」
+  local c; c="$(team_pm_continuity)"
+  case "$c" in
+    continued:*) team_dim "  续跑：${c#continued:}" ;;
+    lost:*)      team_warn "  这次启动**不延续** PM 的历史上下文：${c#lost:}"
+                 team_dim "  接着干：正式记录在 $TEAM_DOCS_DIR/**（BOARD/DECISIONS/threads/reports）与 $TEAM_CLI inbox；开局先跑 $TEAM_CLI digest" ;;
+  esac
+  return 0
 }
 
 # 在 PM 窗口启动 PM。
@@ -978,24 +1232,28 @@ team_pm_start() {
       [ "${TEAM_REPLACE_FOREIGN_PM:-0}" = "1" ] || return 1 ;;
     *)         team_warn "PM 窗口状态异常（$state），不重启；处理完再跑 team up"; return 1 ;;
   esac
+  # 启动前的两道门（M8.1）：畸形的 PM adapter 模板 / 解析不到的 PM 可执行文件，都在这里就失败 ——
+  # 不 respawn 一条半截命令、也不留下一枚没人清的 starting 标记。
+  team_pm_check_launch
+  team_pm_check_bin
   pf="$(team_pm_write_prompt)"
-  local pi_bin; pi_bin="$(team_pi_bin_path)"
   # spawn 证明（M6.3 F30）：让 pane 里的 shell 在 exec 之前把自己的 pid 写盘。
   # wrapper agent（脚本最后 exec 掉自己，用来钉环境变量/flags）会换掉进程映像，
   # 配置的 agent 名字就看不到了 —— 但那个 pid 仍然是我们启动的、还在本项目里。
   local spawnfile; spawnfile="$(team_pm_spawn_file)"
-  cmd="$(printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
-    "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf")"
+  # 命令由 team_pm_launch_cmd 渲染：TEAM_PM_CMD 空 = 内置 Pi（与历史逐字节一致），
+  # 非空 = 模板 + 窗口 harness（提示词以 argv[0] 交给 {prompt}，见那边的注释）。
+  cmd="$(team_pm_launch_cmd "$pf" "$spawnfile")"
   team_pm_starting_begin "$target"   # 启动在飞行中：别的拍从此看到 starting 而不是「没有 PM」
   team_pm_pid_clear      # 旧记录先作废（pid + 证据标记）：这一行下面是“换进程”
-  rm -f "$spawnfile"
+  rm -f "$spawnfile" "$(team_pm_launch_exit_file)" "$(team_pm_launch_tail_file)"    # 上一轮的 pid/退出码/尾屏不许当成这一轮的证据
   team_tmux_respawn_pane "$target" "$cmd" || {
     team_err "respawn-pane 失败：$target"
     team_pm_starting_end
     return 1
   }
   # 记录 pid = **等到有证据**才把 pid 写盘。证据二选一：
-  #   (a) 窗口里的进程就是配置的 agent 可执行文件（人工启动的 PM 也走这条）；
+  #   (a) 窗口里的进程就是配置的 PM 可执行文件（人工启动的 PM 也走这条）；
   #   (b) 我们 spawn 出来并写下自己 pid 的那个进程还活着且 cwd 在本项目里。
   # 不能 respawn 完立刻读 pane_pid：那一瞬间 tmux 可能还报自己（这正是 M6.5 假存活的来源）。
   # 判据仍是「非 shell 不算证据」：没写下 pid 的进程（比如别人放的 sleep）永远走不到 (b)。
@@ -1007,18 +1265,30 @@ team_pm_start() {
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record argv
       team_pm_starting_end
+      team_pm_continuity_note   # 延续了就说怎么延续；没延续就明说 + 指出靠 docs/team/** 与 inbox 接手
       return 0
     fi
     apid="$(team_pm_spawn_pid 2>/dev/null || true)"
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record spawn
       team_pm_starting_end
+      team_pm_continuity_note
       return 0
     fi
     i=$((i + 1))
   done
   team_pm_starting_end
-  team_err "PM 启动后 ${wait}s 内既没看到配置的 agent 进程，也没等到我们 spawn 的 pid 写盘：检查窗口输出与 $pf"
+  # 失败必须留下证据（M8.1 退回点 2）：先把窗口最后几行 + 渲染出的命令 + CLI 退出码写进 state/pm-launch-failed.log，
+  # 再报错（窗口现在会停在提示符，不会「连诊断一起消失」；下一拍 up/watchdog 把空提示符当没有 PM 照样替换）。
+  local diag why ec
+  ec="$(team_pm_launch_exit_code 2>/dev/null || true)"
+  if [ -n "$ec" ]; then why="窗口里的 $(team_pm_cli_name) 立刻退出了（exit code $ec）"
+  else why="${wait}s 内既没看到配置的 PM 进程，也没等到我们 spawn 的 pid 写盘"; fi
+  diag="$(team_pm_launch_diag "$why" "$cmd")"
+  team_err "PM 启动失败：$why"
+  team_err "  诊断（窗口最后 30 行 + 渲染出的命令 + 解析到的可执行文件）已写入：$diag"
+  team_dim "  手工复现：到 $target 里跑上面 render 那行；或写绝对路径：TEAM_PM_BIN=/abs/path/<cli> $TEAM_CLI up" >&2
+  team_dim "  常见原因：CLI 在窗口的登录 PATH 里不存在（本工具已把裸名字换成解析出的绝对路径）、参数/模型不认、未登录" >&2
   return 1
 }
 
@@ -1887,11 +2157,14 @@ team_json_escape() {
 # 契约：teamsmith 负责「在 tmux 窗口里 cd 到 worktree、等二进制就绪、把提示词交给 agent CLI」，
 # 而「agent CLI 怎么调用」由 TEAM_AGENT_CMD 模板描述；为空时走内置 Pi 命令（与历史逐字节一致）。
 # 占位符清单是**唯一真相**：错误信息、校验、文档与 smoke 自测都从这几个函数取，不各写一份。
-team_agent_placeholders() { # <launch|notify> → 每行一个支持的占位符
+team_agent_placeholders() { # <launch|notify|pm> → 每行一个支持的占位符
   case "${1:-launch}" in
     launch) printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{notify_ext}' '{extra_args}' ;;
     notify) printf '%s\n' '{summary}' '{summary_file}' '{agent}' '{cwd}' '{session_id}' '{model}' '{provider}' '{skill_dir}' ;;
-    *) team_die "team_agent_placeholders: 未知 kind ${1:-}（launch|notify）" ;;
+    # M8.1 PM adapter：与 launch 同一套（PM 没有 notify 扩展 → 没有 {notify_ext}），多一个 PM 专有的
+    # {resume_args}（延续上一会话的参数：TEAM_PM_RESUME_ARGS）。worker 模板里写 {resume_args} 照样报未知。
+    pm)     printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{extra_args}' '{resume_args}' ;;
+    *) team_die "team_agent_placeholders: 未知 kind ${1:-}（launch|notify|pm）" ;;
   esac
 }
 
@@ -1976,8 +2249,12 @@ team_agent_bogus_hint() { # 畸形 token 的补充说明（只差空格/花括�
   done
 }
 
-team_agent_kind_var() { # <launch|notify> → 对应的配置键名（错误信息用）
-  case "$1" in notify) printf '%s\n' 'TEAM_AGENT_NOTIFY_CMD' ;; *) printf '%s\n' 'TEAM_AGENT_CMD' ;; esac
+team_agent_kind_var() { # <launch|notify|pm> → 对应的配置键名（错误信息用）
+  case "$1" in
+    notify) printf '%s\n' 'TEAM_AGENT_NOTIFY_CMD' ;;
+    pm)     printf '%s\n' 'TEAM_PM_CMD' ;;
+    *)      printf '%s\n' 'TEAM_AGENT_CMD' ;;
+  esac
 }
 
 team_agent_adapter_label() { # → "built-in (Pi)" | "custom: <cmd>"
@@ -2081,7 +2358,10 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
       '{prompt}')      val='"$0"' ;;
       '{skill_dir}')   val="$(printf '%q' "$TEAM_SKILL_DIR")" ;;
       '{notify_ext}')  val="$(printf '%q' "$TEAM_SKILL_DIR/extension/team-notify.ts")" ;;
-      '{extra_args}')  val="${TEAM_EXTRA_PI_ARGS:-}" ;;
+      '{extra_args}')
+        # PM 的「额外参数」是 PM 自己的键（TEAM_PM_EXTRA_PI_ARGS）；worker 那边是 TEAM_EXTRA_PI_ARGS。
+        if [ "$kind" = "pm" ]; then val="${TEAM_PM_EXTRA_PI_ARGS:-}"; else val="${TEAM_EXTRA_PI_ARGS:-}"; fi ;;
+      '{resume_args}') val="${TEAM_PM_RESUME_ARGS:-}" ;;   # 仅 PM 模板支持（见 team_agent_placeholders）
       '{summary_file}') val="$(printf '%q' "$sfile")" ;;
       '{summary}')
         prev=""; next=""
