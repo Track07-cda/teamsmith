@@ -133,6 +133,38 @@ now".
   overwritten without `TEAM_REPLACE_FOREIGN_PM=1`) or `unknown:<cmd>` (in-project cwd, but not the agent). `unknown`
   never suppresses starting the PM: a freshly created, empty pane is not a running PM, and claiming otherwise is how
   `team up` once printed "PM is running" while starting nothing (M6.5).
+- **`starting` is a state of its own (M7.2)**: between `respawn-pane` and the moment a start's evidence lands, the PM
+  pane is a shell running the start command — in-project, but not the agent. While that start is in flight the tool
+  keeps `state/pm.pid.starting` (epoch, starter pid, target; fresh for `TEAM_PM_START_WAIT + 5s`) and every surface
+  reports `starting:<age>`: it is not "running" (there is no proof yet) and it is **not** "no PM" either. A tick that
+  sees it neither nudges nor starts a second PM — a second `respawn-pane` would kill the PM that is just coming up,
+  and the restart quota would count one start twice. A stale marker (the starter crashed) is ignored: it is evidence,
+  never a lock.
+- **One tick, one state read**: the patrol derives every conclusion (nudge / start / stay quiet) from a single
+  `team_pm_state` read, and `state/pm-restarts.log` records **real restarts only** — the quota is checked before
+  starting, the line (epoch, timestamp, evidence) is written after a successful start. Every attempt is recorded in
+  `state/pm-start-attempts.log` with the evidence, and the quota counts both files (`TEAM_WATCH_MAX_RESTARTS` per
+  hour), so a start loop that spawns but never confirms cannot run away while "the PM was restarted N times in the
+  last hour" stays a fact and not a count of attempts. A failed or timed-out attempt is logged in
+  `state/watchdog.log` as not counted. `watchdog-status`, `digest`, `ps` and the monitor panel print the same state
+  and name the evidence behind it (`state/pm.pid=<pid> proof=spawn|argv`, the starting marker, the empty prompt, the
+  occupant).
+
+What each liveness state means and what the PM should do:
+
+| state | meaning | what to do |
+|---|---|---|
+| `running:<pid\|cmd>` | proof: the recorded pid is alive with an in-project cwd (`proof=spawn` / `proof=argv`), or the window's process is the configured agent binary | nothing; a nudge means "there is pending work" |
+| `starting:<age>` | a start is in flight (fresh `state/pm.pid.starting`) | nothing — the tick will not start a second PM; wait for `running` (the marker expires after `TEAM_PM_START_WAIT + 5s`) |
+| `idle:<shell>` | empty prompt | `team up`, or let the watchdog start it when there is pending work |
+| `unknown:<cmd>` | in-project occupant that is not the agent (fresh pane, `sleep`, editor) | `team up` replaces it; it never suppresses a start |
+| `foreign:<cmd>` | occupant whose cwd belongs to another project | close that window, or `TEAM_REPLACE_FOREIGN_PM=1 team up` |
+| `missing` | the PM window does not exist | `team up`; `TEAM_WATCH_REBUILD_TMUX=1` lets the watchdog rebuild it |
+
+`busy` is not a liveness state of its own: a pane whose foreground process is the agent is `running`, and a pane that is
+merely busy with something else in this project (the pre-`exec` start command, a `sleep`, an editor) is `unknown:<cmd>`
+— it does not suppress starting the PM. The internal pane-busy probe is only used to tell an empty prompt (`idle`) from
+an occupant (`unknown`).
 - The PM can stand down deliberately: `team standby on --reason "…"` (nothing to do / a human has to step in), after
   which it is not woken; a backlog is still logged; once a human has dealt with it, `team standby off`.
 - Repeated reminders for the same batch are limited by `TEAM_WATCH_NUDGE_GAP`; a PM that is busy can simply ignore a

@@ -78,6 +78,10 @@ team_cmd_up() {
   local pm_state; pm_state="$(team_pm_state)"
   case "$pm_state" in
     running:*) team_ok "PM 在运行（${pm_state#running:}）" ;;
+    starting:*)
+               # M7.2：启动在飞行中（另一支巡检/另一条 up 已经拉过它）——再 respawn 一次会杀掉正在起来的 PM
+               team_warn "PM 正在启动（${pm_state#starting:}；证据：$(team_pm_evidence "$pm_state")）：不重复拉起"
+               team_dim "  等它起来；若卡住：启动标记会过期（TEAM_PM_START_WAIT=${TEAM_PM_START_WAIT:-6}s + 5s），过期后再跑 $TEAM_CLI up；证据看 $TEAM_CLI watchdog-status" ;;
     idle:*)    team_warn "PM 没在跑（空提示符）：启动 pi"
                if team_pm_start; then
                  team_ok "PM 已启动（proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}，$([ -n "$TEAM_PM_SESSION_ID" ] && echo "--session-id $TEAM_PM_SESSION_ID" || echo "-c 延续上一会话")）"
@@ -230,8 +234,10 @@ team_watch_once() {
     return 0
   fi
 
-  # ③b 有待办
-  if team_pm_alive; then
+  # ③b 有待办：按**一次**状态读取定结论。以前这里是先读 team_pm_alive、③c 再读一次 team_pm_state，
+  #     两次读取之间状态会变 —— 同一拍里既报「PM 在跑」又按「没在跑」去启动（M7.2 的抖动来源之一）。
+  local st; st="$(team_pm_state)"
+  if [ "${st%%:*}" = "running" ]; then
     local last_epoch last_sig gap now
     now="$(date +%s)"
     last_epoch="$(team_state_get _watch nudge_epoch 0)"
@@ -248,9 +254,16 @@ team_watch_once() {
     return 0
   fi
 
+  # ③b' 有启动在飞行中（state/pm.pid.starting 新鲜）：既不能当它是活的去提醒，更不能当它不在再拉一个 ——
+  #      再 respawn 一次会杀掉正在起来的 PM，配额也会把一次启动记成两次（M7.2 实测的根因）。
+  if [ "${st%%:*}" = "starting" ]; then
+    team_wlog "PM 正在启动（证据：$(team_pm_evidence "$st")）→ 不重复拉起、不计数（待办：$text）"
+    team_dim "watchdog: PM 正在启动（${st#starting:}）→ 不重复拉起（待办：$text）"
+    return 0
+  fi
+
   # ③c 有待办但 PM 没在跑 → 把它拉起来（除非 tmux 场地不在且不允许重建）
   #     idle（空提示符）与 unknown（本项目里的非 PM 占用者）都算「没有 PM」；foreign 不碰。
-  local st; st="$(team_pm_state)"
   case "$st" in
     idle:*) ;;
     unknown:*) team_wlog "PM 窗口里不是 PM（$st）：按「没有 PM」处理" ;;
@@ -272,21 +285,30 @@ team_watch_once() {
       else
         if [ "$sig" != "$(team_state_get _watch last_sig '')" ]; then
           team_state_set _watch last_sig "$sig"
-          team_wlog "有待办（$text）但 PM 找不到（$st）：watchdog 不管 tmux，不重建；请人工 $TEAM_CLI up"
+          team_wlog "有待办（$text）但 PM 找不到（$st；证据：$(team_pm_evidence "$st")）：watchdog 不管 tmux，不重建；请人工 $TEAM_CLI up"
           team_warn "watchdog: 有待办（$text）但 PM 找不到（$st）—— tmux 场地不在，需要人工 $TEAM_CLI up（不想人工就设 TEAM_WATCH_REBUILD_TMUX=1）"
         fi
         return 0
       fi ;;
   esac
 
-  if team_pm_can_restart && team_pm_start; then
+  # 配额只拦「真的再拉一次」；记账（pm-restarts.log）推迟到拉起成功之后 ——
+  # 失败/超时不再吃掉一次配额（以前失败也记一行，日志里的「重启 N 次」就不是事实）。
+  if ! team_pm_restart_allowed; then
+    team_wlog "PM 拉起被配额拦下（$st；证据：$(team_pm_evidence "$st")；待办：$text）"
+    team_warn "watchdog: PM 拉起失败或被配额拦下（$st；待办：$text）"
+    return 0
+  fi
+  team_pm_attempt_record "state=${st%%:*} evidence=$(team_pm_evidence "$st")"
+  if team_pm_start; then
+    team_pm_restart_record "state=${st%%:*} evidence=$(team_pm_evidence "$st")"
     team_state_set _watch last_sig "$sig"
-    team_wlog "PM 未在运行（$st）→ 已拉起（待办：$text）"
+    team_wlog "PM 未在运行（$st；证据：$(team_pm_evidence "$st")）→ 已拉起（待办：$text）"
     team_ok "watchdog: 有待办（$text）但 PM 没在跑（$st）→ 已拉起"
     team_inbox_append pm watchdog "PM 会话曾停止（状态 $st），watchdog 因有待办（$text）而用 pi -c 拉起它并注入开场提示词（state/pm-prompt.md）"
   else
-    team_wlog "PM 拉起失败或被配额拦下（$st；待办：$text）"
-    team_warn "watchdog: PM 拉起失败或被配额拦下（$st；待办：$text）"
+    team_wlog "PM 拉起失败（$st；证据：$(team_pm_evidence "$st")；未计入配额；待办：$text）"
+    team_warn "watchdog: PM 拉起失败（$st；待办：$text）—— 未计入重启配额（只有真的重启才计数）"
   fi
   return 0
 }
@@ -531,13 +553,19 @@ team_cmd_watchdog_status() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) team_ok "  PM              在运行（${pm#running:}$(team_pm_proof_suffix)）" ;;
+    starting:*) team_info "  PM              正在启动（${pm#starting:}；证据：$(team_pm_evidence "$pm")）：不重复拉起，等它起来" ;;
     idle:*)    team_warn "  PM              未在跑（空提示符）；有待办时看门狗会拉起它（$TEAM_CLI up 手动）" ;;
     unknown:*) team_warn "  PM              窗口里不是 PM（${pm#unknown:}，cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：**不算存活**；$TEAM_CLI up 会替换它" ;;
     foreign:*) team_warn "  PM              窗口被**不属于本项目**的进程占用（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
     *)         team_warn "  PM              窗口缺失（有待办时：$TEAM_CLI up，或设 TEAM_WATCH_REBUILD_TMUX=1）" ;;
   esac
   local pend; pend="$(team_pending_text)"
-  printf '  待办             %s\n' "${pend:-无（不叫醒 PM）}"
+  if [ -n "$pend" ]; then
+    # 同一拍里 PM 行与待办行必须一致：suffix 由那**一次** team_pm_state 读取决定（M7.2）
+    printf '  待办             %s%s\n' "$pend" "$(team_pm_pending_suffix "$pm")"
+  else
+    printf '  待办             %s\n' "无（不叫醒 PM）"
+  fi
   printf '  %s\n' "$(team_capacity_line)"
   printf '\n  职责：定时看看有没有活儿 + 容量留痕；不管 tmux 布局、不管 agent（agent 归 PM 管）\n'
   if team_in_standby; then

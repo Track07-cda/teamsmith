@@ -220,6 +220,21 @@ the agent to commit it, and the normal "awaiting review" line plus the review co
   this itself, set `TEAM_WATCH_REBUILD_TMUX=1`.
 - **A stopped agent is not resumed automatically** (by design): the PM looks with `team resume --dry-run` and then
   resumes with `team resume`; a human can also do `team up --agents` to bring them along in one go.
+- **The PM was starting and the watchdog stayed quiet**: that is deliberate (M7.2). Between `respawn-pane` and the
+  start's evidence, the PM pane is a shell running the start command, not a PM. `state/pm.pid.starting` marks that
+  attempt and every surface reports `starting:<age>`; a tick that sees it logs "PM 正在启动 → 不重复拉起" and neither
+  starts a second PM nor counts a restart (a second `respawn-pane` would kill the PM that was coming up, and the
+  quota would count one start twice). If the window stays in `starting` for longer than `TEAM_PM_START_WAIT + 5s` the
+  marker has expired — run `team up` again; `team watchdog-status` names the evidence (`pm.pid.starting` age and
+  starter, or the recorded pid with its `proof`). The same applies to manual starts: `team up` refuses to respawn
+  over a start that is still in flight and says so.
+- **"PM restarted N times" but I only saw one restart**: `state/pm-restarts.log` has one line per **real** start
+  (epoch, timestamp, evidence). Every attempt (successful or not) is recorded in `state/pm-start-attempts.log`; a
+  failed or timed-out attempt is also logged in `state/watchdog.log` with `未计入配额` and consumes no *restart*
+  quota, so the restart count is a fact and not a count of attempts. The hourly limit (`TEAM_WATCH_MAX_RESTARTS`)
+  applies to the attempts file too — a loop that keeps respawning without ever confirming is refused, and the warning
+  names both numbers. Read `watchdog.log` for the decisions and `state/pm.pid.starting` for an attempt that is still
+  in flight.
 - **The PM keeps crashing**: the automatic-restart quota (`TEAM_WATCH_MAX_RESTARTS`, default 5/hour) stops it and
   warns, so a crash loop cannot drag the machine down; look in `state/watchdog.log` and the PM window output for the
   cause first (common: model quota exhausted, a config typo, a missing dependency).

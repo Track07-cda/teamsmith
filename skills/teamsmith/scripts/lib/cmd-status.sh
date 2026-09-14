@@ -167,6 +167,8 @@ team_cmd_ps() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) printf '  PM（%s）在运行（%s%s）\n' "$TEAM_PM_WINDOW" "${pm#running:}" "$(team_pm_proof_suffix)" ;;
+    starting:*) printf '  PM（%s）正在启动（%s；证据：%s）：不重复拉起\n' \
+                 "$TEAM_PM_WINDOW" "${pm#starting:}" "$(team_pm_evidence "$pm")" ;;
     idle:*)    printf '  PM（%s）**未在跑**（空提示符）→ team up\n' "$TEAM_PM_WINDOW" ;;
     unknown:*) printf '  PM（%s）窗口里是**非 PM 进程**（%s，cwd=%s）：不算存活 → team up\n' \
                  "$TEAM_PM_WINDOW" "${pm#unknown:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
@@ -258,6 +260,7 @@ team_cmd_digest() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) printf '  PM ● 在运行（%s%s）' "${pm#running:}" "$(team_pm_proof_suffix)" ;;
+    starting:*) printf '  PM ○ 正在启动（%s；不重复拉起）' "${pm#starting:}" ;;
     idle:*)    printf '  PM ○ **未在跑**（空提示符）→ team up' ;;
     unknown:*) printf '  PM ○ 窗口里是非 PM 进程（%s）→ team up' "${pm#unknown:}" ;;
     foreign:*) printf '  PM ○ 窗口被别的项目占着（不覆盖）' ;;
@@ -271,7 +274,8 @@ team_cmd_digest() {
     printf '  待命             on（原因：%s）→ watchdog 不会叫醒 PM；%s standby off 恢复\n' "$(team_standby_reason || echo -)" "$TEAM_CLI"
   fi
   if [ -n "$pend" ]; then
-    printf '  待办             %s%s\n' "$pend" "$(team_pm_alive && echo '' || echo '（PM 未在跑：watchdog 会拉起）')"
+    # 同一拍里 PM 行与待办行必须一致：suffix 由那**一次** team_pm_state 读取决定（M7.2）
+    printf '  待办             %s%s\n' "$pend" "$(team_pm_pending_suffix "$pm")"
   else
     printf '  待办             无（watchdog 不会打扰 PM）\n'
   fi
@@ -435,6 +439,7 @@ team_panel() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) printf '  %-9s %s●%s 在运行（%s）\n' "PM" "$C_GRN" "$C_RESET" "${pm#running:}" ;;
+    starting:*) printf '  %-9s %s…%s 正在启动（%s，不重复拉起）\n' "PM" "$C_YEL" "$C_RESET" "${pm#starting:}" ;;
     idle:*)    printf '  %-9s %s○%s 未在跑（空提示符）\n' "PM" "$C_YEL" "$C_RESET" ;;
     unknown:*) printf '  %-9s %s○%s 窗口里是非 PM 进程（%s）\n' "PM" "$C_YEL" "$C_RESET" "${pm#unknown:}" ;;
     foreign:*) printf '  %-9s %s○%s 窗口被别的项目占着\n' "PM" "$C_YEL" "$C_RESET" ;;

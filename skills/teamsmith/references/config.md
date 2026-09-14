@@ -88,7 +88,7 @@ literals or simple `$VAR`.
 | `TEAM_WATCH_INTERVAL` | `900` | patrol period (seconds): 15 minutes by default, 300~3600 recommended. This is the beat of "look for work on a timer", not a heartbeat |
 | `TEAM_WATCH_NUDGE_GAP` | `900` | the shortest interval before the same batch of pending work is reminded again (seconds) |
 | `TEAM_WATCH_REBUILD_TMUX` | `0` | `0` = leave tmux alone (a missing session/window is only reported); `1` = allow rebuilding the session/PM window (self-recovery after a reboot) |
-| `TEAM_WATCH_MAX_RESTARTS` | `5` | maximum automatic PM restarts per hour (guards against a crash loop) |
+| `TEAM_WATCH_MAX_RESTARTS` | `5` | maximum automatic PM starts per hour (guards against a crash loop). Counted from `state/pm-restarts.log` (real restarts) **and** `state/pm-start-attempts.log` (every attempt), so a start loop that never confirms is bounded too |
 | `TEAM_WATCH_WINDOW` | `watchdog` | window name for the tmux backend |
 | `TEAM_MONITOR_REFRESH` | `5` | monitor refresh interval (seconds) |
 | `TEAM_MONITOR_ACTIVITY` | `0` | `1` = append each agent's session activity stream below the panel (only windows running in this session); off by default |
@@ -97,7 +97,7 @@ literals or simple `$VAR`.
 | `TEAM_PM_MODEL` | empty | the PM's own model; empty = `TEAM_DEFAULT_MODEL` |
 | `TEAM_PM_SESSION_ID` | empty | empty = `pi -c` (continue the previous session in this directory, keeping the PM's history) |
 | `TEAM_PM_EXTRA_PI_ARGS` | empty | extra pi arguments for the PM |
-| `TEAM_PM_START_WAIT` | `6` | seconds to wait for the PM to come up after starting it — the pid is recorded in `state/pm.pid` only once the configured agent binary is really running in that window |
+| `TEAM_PM_START_WAIT` | `6` | seconds to wait for the PM to come up after starting it — the pid is recorded in `state/pm.pid` only once the configured agent binary is really running in that window. The start-in-flight marker `state/pm.pid.starting` stays fresh for this value **+ 5s**, and while it is fresh no tick starts a second PM over the one that is coming up |
 | `TEAM_REPLACE_FOREIGN_PM` | `0` | `1` = allow `team up` to overwrite a process in the PM window whose cwd is **outside** this project (a non-PM process with an in-project cwd is always replaceable — it is reported as `unknown:<cmd>`) |
 
 ### Guards (capacity)

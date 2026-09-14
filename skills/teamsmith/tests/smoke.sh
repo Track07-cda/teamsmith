@@ -1916,6 +1916,208 @@ else
   printf '  (跳过 PM 存活证据链：没有 tmux)\n'
 fi
 
+# ---------------------------------------------------------------- 11b3. 启动在飞行中（M7.2）
+# 根因（逐拍采样见 tests/flip-m7.2.sh）：从 respawn 到「拿到启动证据」之间，PM 窗口里是一个正在跑
+# 启动命令的 shell —— 项目内、非 agent，team_pm_state 只能报 unknown。没有「正在启动」这个状态时，
+# **另一拍**会把它当成「没有 PM」再拉起一次：respawn-pane **杀掉刚起来的 PM**，配额把一次启动
+# 记成两次（实测：1 个活 PM、2 行 pm-restarts.log、24 行 agent argv = 第一个 PM 被写了一半就杀了）。
+# 这里钉住新规则：启动在飞行中 = 一个状态（不重复拉起、不计数），且同一拍里的说法必须自洽。
+section "11b3 · 启动中的 PM：一拍只拉起一次（M7.2）"
+if [ "$FAST" = "1" ]; then
+  fast_skip "11b3·启动中的 PM（M7.2）" "要真实 tmux 窗口 + 并发两拍巡检（真进程）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  start_count() { local n; n="$(grep -c 'pm-prompt.md' "$TMP/pm-args.log" 2>/dev/null || true)"; printf '%s\n' "${n:-0}"; }
+  pm_pane_pid() { tmux display-message -p -t "$SESSION:$PMW" '#{pane_pid}' 2>/dev/null || true; }
+  mark_file() { printf '%s\n' "$REPO/.pi/team/state/pm.pid.starting"; }
+  # 沙箱（M7.2 教训）：这一段会写盘（notify + 多拍巡检），先证明身份真的在夹具仓库里，
+  # 再给本轮取一个唯一签名 —— 跑完拿它去真实账本里搜：搜到就是夹具把幻影待办喂进了真账本。
+  M72_SIG="M7.2 $SESSION：启动中的 PM 也有待办"
+  $TEAM paths >"$TMP/m72-paths.json" 2>&1 || true
+  assert_eq "沙箱断言：team paths 的 main_root 就是夹具仓库" \
+    "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m72-paths.json")" "$REPO"
+  assert_has "$TMP/m72-paths.json" "\"session\": \"$SESSION\"" "沙箱断言：身份用的就是本轮临时 session"
+  m72_real_main() { # 真实团队的主工作树（skill 仓库的 git-common-dir 父目录）
+    local common d
+    common="$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || { printf '%s' "$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null)"; return 0; }
+    d="$(dirname "$common")"; (cd "$d" 2>/dev/null && pwd -P) || printf '%s' "$d"
+  }
+  m72_ledger_fp() { # <root>：inbox+state 的文件指纹（路径 + md5）
+    local root="$1" dir f
+    for dir in "$root/docs/team/inbox" "$root/.pi/team/state"; do
+      [ -d "$dir" ] || continue
+      find "$dir" -type f 2>/dev/null | sort | while IFS= read -r f; do
+        printf '%s %s\n' "$f" "$(md5sum "$f" 2>/dev/null | cut -d' ' -f1)"
+      done
+    done | md5sum | awk '{print $1}'
+  }
+  M72_REAL_MAIN="$(m72_real_main)"
+  M72_LEDGER_BEFORE="$(m72_ledger_fp "$M72_REAL_MAIN")"
+
+  # ① 真正的一场比赛：第一拍在后台拉起 PM；pane 一换进程（= respawn 已发生）就立刻打第二拍。
+  #    注意：**真实**启动的「正在启动」窗口有多宽取决于 spawn 文件何时落盘（可能只几十 ms），
+  #    所以这里只钉与时间无关的结果（不重复拉起/不计数/不动 pane/只起一个）；
+  #    「starting 这个状态本身」由下面 ③ 用确定性的标记现场钉死（真实路径的窗口见 tests/flip-m7.2.sh）。
+  rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log" \
+        "$TMP/m72-tick1.log" "$TMP/m72-tick2.log"
+  make_pm_idle
+  PRE_PANE="$(pm_pane_pid)"
+  $TEAM notify dev "$M72_SIG" >/dev/null 2>&1 || true
+  STARTS_BEFORE="$(start_count)"
+  $TEAM watch --once >"$TMP/m72-tick1.log" 2>&1 &
+  TICK1=$!
+  i=0
+  while [ "$i" -lt 60 ]; do
+    [ "$(pm_pane_pid)" != "$PRE_PANE" ] && break
+    sleep 0.05; i=$((i + 1))
+  done
+  MID_PANE="$(pm_pane_pid)"
+  assert_eq "第一拍已经把 pane 换成新进程（respawn 真的发生了）" \
+    "$([ -n "$MID_PANE" ] && [ "$MID_PANE" != "$PRE_PANE" ] && echo yes || echo no)" "yes"
+  $TEAM watch --once >"$TMP/m72-tick2.log" 2>&1 || true
+  assert_not "$TMP/m72-tick2.log" "已拉起" "第二拍没有重复拉起"
+  assert_not "$TMP/m72-tick2.log" "已被重启" "第二拍没有配额告警（启动中的一拍不计数）"
+  wait "$TICK1" 2>/dev/null || true
+  assert_eq "第一拍真的拉起了 PM" "$(grep -c 已拉起 "$TMP/m72-tick1.log" 2>/dev/null || true)" "1"
+  assert_eq "重启配额只记 1 次（一次启动一行）" \
+    "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" 2>/dev/null | tr -d ' ')" "1"
+  assert_eq "配额那行带证据（state=… evidence=…）" \
+    "$(grep -c 'state=.*evidence=' "$REPO/.pi/team/state/pm-restarts.log" 2>/dev/null || true)" "1"
+  assert_eq "PM 只被启动了一次（argv 里只有一个 @pm-prompt.md）" \
+    "$(( $(start_count) - STARTS_BEFORE ))" "1"
+  assert_eq "第二拍没有杀掉刚起来的 PM（pane 没换）" "$(pm_pane_pid)" "$MID_PANE"
+  assert_eq "启动标记用完就撤" "$([ -f "$(mark_file)" ] && echo present || echo gone)" "gone"
+  case "$(pm_state_now)" in
+    running:*) ok "启动完成后状态是 running（$(pm_state_now)）" ;;
+    *)         bad "启动完成后不是 running（$(pm_state_now)）" ;;
+  esac
+  # 第三拍（PM 已在跑）：只提醒、不再拉起 —— 连续几拍都不得出现配额告警
+  $TEAM watch --once >"$TMP/m72-tick3.log" 2>&1 || true
+  assert_not "$TMP/m72-tick3.log" "已被重启" "第三拍没有配额告警"
+  assert_not "$TMP/m72-tick3.log" "已拉起" "第三拍不再拉起（PM 已在跑）"
+  assert_eq "第三拍之后配额仍是 1 行" \
+    "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" 2>/dev/null | tr -d ' ')" "1"
+
+  # ② 代理进程退出：下一拍必须恰好看到一次「停了的 PM」（一次启动、一行配额）
+  rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log"
+  STARTS_BEFORE="$(start_count)"
+  M72_PID="$(tr -dc '0-9' < "$REPO/.pi/team/state/pm.pid" 2>/dev/null || true)"
+  if [ -n "$M72_PID" ]; then kill -9 "$M72_PID" 2>/dev/null || true; fi
+  sleep 1
+  case "$(pm_state_now)" in
+    running:*) bad "代理进程被杀后仍报 running（$(pm_state_now)）" ;;
+    *)         ok "代理进程退出后不再是 running（$(pm_state_now)）" ;;
+  esac
+  TEAM_WATCH_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/m72-tick4.log" 2>&1 || true
+  assert_match "$TMP/m72-tick4.log" "已拉起" "代理退出后下一拍把它拉起来"
+  assert_eq "代理退出后恰好记 1 行重启" \
+    "$(cat "$REPO/.pi/team/state/pm-restarts.log" 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_eq "代理退出后只启动一次" "$(( $(start_count) - STARTS_BEFORE ))" "1"
+  assert_eq "停了的 PM 只被看见一次（再打一拍不再拉起）" \
+    "$(TEAM_WATCH_REBUILD_TMUX=1 $TEAM watch --once 2>&1 | grep -c 已拉起 || true)" "0"
+  # 日志要说清楚「凭什么」启动（证据；M7.2 的诚实性要求）
+  assert_match "$REPO/.pi/team/state/watchdog.log" "证据：.*(pm.pid|窗口)" "watchdog.log 记录了拉起决策的证据"
+
+  # ③ 确定性（不靠时序）：标记在，就必须是一个状态 —— 不重复拉起、不计数，且各视图说法一致
+  make_pm_idle
+  rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log"
+  STARTS_BEFORE="$(start_count)"
+  ( . "$SKILL_DIR/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_pm_starting_begin "$SESSION:$PMW" )
+  case "$(pm_state_now)" in
+    starting:*) ok "手动落下的启动标记 → team_pm_state 报 starting:*（$(pm_state_now)）" ;;
+    *)          bad "有启动标记却报 $(pm_state_now)（应为 starting:*）" ;;
+  esac
+  $TEAM watchdog-status >"$TMP/m72-wd.log" 2>&1 || true
+  assert_has "$TMP/m72-wd.log" "正在启动" "watchdog-status：启动中如实说「正在启动」"
+  assert_not "$TMP/m72-wd.log" "在运行" "watchdog-status：不把启动中说成「在运行」"
+  assert_not "$TMP/m72-wd.log" "会拉起" "watchdog-status：启动中不再说「watchdog 会拉起」（同一拍自相矛盾）"
+  $TEAM digest >"$TMP/m72-digest.log" 2>&1 || true
+  assert_has "$TMP/m72-digest.log" "正在启动" "digest：启动中如实说「正在启动」"
+  assert_not "$TMP/m72-digest.log" "在运行" "digest：不把启动中说成「在运行」"
+  assert_not "$TMP/m72-digest.log" "会拉起" "digest：启动中不再说「会拉起」"
+  $TEAM up >"$TMP/m72-up2.log" 2>&1 || true
+  assert_has "$TMP/m72-up2.log" "正在启动" "up 也认这个状态（不重复拉起）"
+  assert_not "$TMP/m72-up2.log" "PM 已启动" "up 在启动进行中不启动第二个 PM"
+  $TEAM watch --once >"$TMP/m72-tick8.log" 2>&1 || true
+  assert_has "$TMP/m72-tick8.log" "不重复拉起" "启动中的一拍明确说「不重复拉起」"
+  assert_not "$TMP/m72-tick8.log" "已拉起" "启动中的一拍没有拉起"
+  assert_not "$TMP/m72-tick8.log" "已被重启" "启动中的一拍不发配额告警"
+  assert_eq "启动中的一拍不吃配额" \
+    "$([ -f "$REPO/.pi/team/state/pm-restarts.log" ] && wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ' || echo 0)" "0"
+  assert_eq "启动中的一拍不启动 PM" "$(( $(start_count) - STARTS_BEFORE ))" "0"
+
+  # ④ 陈旧标记不是锁：启动器崩了留下的标记过期后，下一拍照样能拉起
+  rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log"
+  sed -i "s/^[0-9][0-9]* /$(( $(date +%s) - 600 )) /" "$(mark_file)"
+  case "$(pm_state_now)" in
+    starting:*) bad "陈旧的启动标记仍然被当成 starting:*（锁死了）" ;;
+    *)          ok "陈旧标记过期后不再报 starting:*（$(pm_state_now)）" ;;
+  esac
+  $TEAM watch --once >"$TMP/m72-tick5.log" 2>&1 || true
+  assert_match "$TMP/m72-tick5.log" "已拉起" "陈旧标记不阻塞拉起"
+  assert_eq "陈旧标记之后配额 +1（上一拍没计过）" \
+    "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" 2>/dev/null | tr -d ' ')" "1"
+  assert_eq "陈旧标记之后只启动一次" "$(( $(start_count) - STARTS_BEFORE ))" "1"
+
+  # ⑤ 失败/超时的拉起尝试不吃配额：记账发生在真的拉起之后（M7.2 的另一半诚实性）
+  make_pm_idle
+  rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log"
+  STARTS_BEFORE="$(start_count)"
+  TEAM_PM_START_WAIT=0 $TEAM watch --once >"$TMP/m72-tick6.log" 2>&1 || true
+  assert_match "$TMP/m72-tick6.log" "拉起失败" "TEAM_PM_START_WAIT=0：这一拍如实报「拉起失败」"
+  assert_not "$TMP/m72-tick6.log" "已拉起" "失败的一拍不报「已拉起」"
+  assert_eq "失败的拉起尝试不吃配额（0 行）" \
+    "$([ -f "$REPO/.pi/team/state/pm-restarts.log" ] && wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ' || echo 0)" "0"
+  assert_has "$REPO/.pi/team/state/watchdog.log" "未计入配额" "日志写明失败的尝试不计数"
+  assert_eq "失败的尝试记进了 attempts 日志（决策 + 证据）" \
+    "$(cat "$REPO/.pi/team/state/pm-start-attempts.log" 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_has "$REPO/.pi/team/state/pm-start-attempts.log" "state=idle" "attempts 行带决策证据（state=…）"
+  assert_eq "失败路径也撤掉了启动标记" "$([ -f "$(mark_file)" ] && echo present || echo gone)" "gone"
+  # 那次尝试其实已经把进程起来了（respawn 在「等证据」之前），只是来不及写下 pm.pid ——
+  # 下一拍必须靠**窗口证据**认出它，而不是再拉一次（没有记录 ≠ 没有 PM；再拉一次就是重复启动）
+  i=0
+  while [ "$i" -lt 30 ] && [ "$(( $(start_count) - STARTS_BEFORE ))" -lt 1 ]; do sleep 0.1; i=$((i + 1)); done
+  assert_eq "失败的一拍确实已经把进程起来了（argv 落盘）" "$(( $(start_count) - STARTS_BEFORE ))" "1"
+  $TEAM watch --once >"$TMP/m72-tick7.log" 2>&1 || true
+  assert_not "$TMP/m72-tick7.log" "已拉起" "窗口里已有 PM → 下一拍不再拉起（即使没有 pm.pid 证据）"
+  assert_not "$TMP/m72-tick7.log" "已被重启" "也不再发配额告警"
+  assert_eq "配额仍然 0 行（失败的尝试一次都没记）" \
+    "$([ -f "$REPO/.pi/team/state/pm-restarts.log" ] && wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ' || echo 0)" "0"
+  assert_eq "只起过一个 PM（没有重复启动）" "$(( $(start_count) - STARTS_BEFORE ))" "1"
+  case "$(pm_state_now)" in
+    running:*) ok "状态是 running（靠窗口证据，而不是 pm.pid）：$(pm_state_now)" ;;
+    *)         bad "期望 running:*（窗口里的进程就是配置的 agent），实际 $(pm_state_now)" ;;
+  esac
+
+  # ⑥ 限流也认「尝试」：拉起反复失败（每次都留一行 attempts）也必须被拦住 ——
+  # respawn 已经把进程拉起来了，不然失败循环就没有上限（规范：1 小时内最多 TEAM_WATCH_MAX_RESTARTS 次）
+  make_pm_idle
+  rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log"
+  STARTS_BEFORE="$(start_count)"
+  for _ in 1 2 3 4 5; do date +%s >> "$REPO/.pi/team/state/pm-start-attempts.log"; done
+  $TEAM watch --once >"$TMP/m72-tick9.log" 2>&1 || true
+  assert_has "$TMP/m72-tick9.log" "已尝试拉起" "拉起反复失败也受限流（attempts 计数）"
+  assert_not "$TMP/m72-tick9.log" "已拉起" "被 attempts 限流的那一拍没有拉起"
+  assert_eq "被 attempts 限流时也没有启动进程" "$(( $(start_count) - STARTS_BEFORE ))" "0"
+  rm -f "$REPO/.pi/team/state/pm-start-attempts.log"
+
+  # 收尾（+反向守卫）：清配额/待办与标记，让后面的段落（11c 起）回到干净现场，
+  # 并证明这一段没有把幻影待办写进真实账本（M7.2 现场教训：夹具曾在调用者 cwd 里跑 team）。
+  M72_REAL_LEAK="$(grep -rlF "$M72_SIG" "$M72_REAL_MAIN/docs/team/inbox" "$M72_REAL_MAIN/.pi/team/state" 2>/dev/null | head -3 || true)"
+  assert_eq "反向守卫：真实账本（$M72_REAL_MAIN）里没有本夹具的签名" "${M72_REAL_LEAK:-none}" "none"
+  M72_LEDGER_AFTER="$(m72_ledger_fp "$M72_REAL_MAIN")"
+  if [ "$M72_LEDGER_BEFORE" = "$M72_LEDGER_AFTER" ]; then
+    ok "反向守卫：真实账本 inbox+state 一个字节没变（指纹 ${M72_LEDGER_AFTER}）"
+  else
+    printf '  \033[33mℹ\033[0m 反向守卫：真实账本在本段里有别的写入（%s → %s；上面已证明其中没有夹具签名）\n' \
+      "$M72_LEDGER_BEFORE" "$M72_LEDGER_AFTER"
+  fi
+  rm -f "$(mark_file)" "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log"
+  $TEAM inbox --ack >/dev/null 2>&1 || true
+else
+  printf '  (跳过启动中的 PM 断言：没有 tmux)\n'
+fi
+
 # ---------------------------------------------------------------- 11c. 恢复：resume / watchdog 续跑
 section "11c · agent 续跑是 PM 的事（watchdog 不碰）"
 if [ "$FAST" = "1" ]; then
@@ -2735,7 +2937,7 @@ if [ "$FAST_REQ" = "1" ]; then
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
   for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
-             "11c·agent 续跑" \
+             "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
     else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi

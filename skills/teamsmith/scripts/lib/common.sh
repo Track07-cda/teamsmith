@@ -740,6 +740,10 @@ team_pm_pid_live() {
 # 这个 pid 的命令行里有没有「配置的 agent 可执行文件」？
 # 不能只看 argv[0]：pi 可能是 node/bun 脚本（前台名 node/bun），经 shell 包装启动时还会多一层
 # `bash /path/pi-sleep …`。所以按分词找，命中任一个词的 basename 即可（cwd 归属另判）。
+# M7.2：**我们自己的启动命令不算证据** —— 启动命令形如
+#   bash -c 'cd <root> && printf…> <state>/pm.pid.spawn && exec <agent> …'
+# 那个 shell 的命令行里也有 agent 路径，但它还没 exec，不是 PM。
+# （不排除它的话，启动窗口里会把 shell 报成 running:bash，进而跳过「正在启动」这个状态。）
 team_proc_is_agent_bin() { # <pid>
   local pid="${1:-}" want base args tok
   [ -n "$pid" ] || return 1
@@ -754,11 +758,54 @@ team_proc_is_agent_bin() { # <pid>
   [ -n "$args" ] || return 1
   for tok in $args; do
     [ -n "$tok" ] || continue
+    # M7.2：启动命令里的 spawn 文件（`bash -c '… > <state>/pm.pid.spawn && exec <agent> …'`）
+    # 一出场就说明这个进程还没 exec —— 它只是命令行里提到 agent，不是 PM。
+    case "$tok" in *pm.pid.spawn|*pm.pid.spawn\'|*pm.pid.spawn\") return 1 ;; esac
     case "${tok##*/}" in
       "$base") return 0 ;;
     esac
   done
   return 1
+}
+
+# ---------------------------------------------------------------- PM 启动在飞行中（M7.2）
+# 事故（M7.2）：从「决定启动」到「拿到启动证据」之间有一个窗口，窗口里的 pane 是一个正在跑启动命令的
+# shell（cwd 在本项目里、命令行里带 agent 路径）——`team_pm_state` 那时只能报 `unknown`（或刚 respawn
+# 完的 `unknown:tmux`）。于是**另一拍**（同一个 watchdog 窗口的巡检、人跑的 `team up`、并发的
+# `watch --once`）把它当成「没有 PM」再拉起一次：`respawn-pane` 会**杀掉刚刚起来的那个 PM**，
+# 配额日志也把一次启动记成两次（实测：24 行 agent argv、2 行 pm-restarts.log、1 个活着的 PM）。
+# 所以启动前先落一枚「正在启动」标记：读到的每一拍都能区分「没有 PM」与「PM 正在起来」。
+# 标记是**证据**不是锁：只有新鲜（TEAM_PM_START_WAIT + 5 秒内）才算数，过期的标记一律忽略；
+# 读命令不写状态（M6.1 F28），清理只发生在启动路径里。
+team_pm_starting_file() { printf '%s\n' "$TEAM_STATE_DIR/pm.pid.starting"; }
+
+team_pm_starting_begin() { # [target]：落标记（epoch / 发起者 pid / 目标窗口）
+  mkdir -p "$TEAM_STATE_DIR"
+  printf '%s %s %s\n' "$(date +%s)" "$$" "${1:-$(team_pm_target)}" > "$(team_pm_starting_file)"
+}
+
+team_pm_starting_end() { rm -f "$(team_pm_starting_file)"; }
+
+team_pm_starting_age() { # → 标记存在了多少秒（没有/不可解析 → 非 0）
+  local f started
+  f="$(team_pm_starting_file)"
+  [ -f "$f" ] || return 1
+  started="$(awk 'NR==1{print $1}' "$f" 2>/dev/null | tr -dc '0-9')"
+  [ -n "$started" ] || return 1
+  printf '%s\n' "$(( $(date +%s) - started ))"
+}
+
+# 有启动在飞行中吗？新鲜 **且** 是给当前 PM 窗口的标记才算（别的窗口的标记不该压住这一拍）。
+team_pm_starting() {
+  local f want age limit
+  f="$(team_pm_starting_file)"
+  [ -f "$f" ] || return 1
+  want="$(awk 'NR==1{print $3}' "$f" 2>/dev/null)"
+  [ -z "$want" ] || [ "$want" = "$(team_pm_target)" ] || return 1
+  age="$(team_pm_starting_age)" || return 1
+  limit=$(( ${TEAM_PM_START_WAIT:-6} + 5 ))
+  [ "$age" -le "$limit" ] || return 1
+  return 0
 }
 
 # 窗口里跑着配置的 agent 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
@@ -796,21 +843,67 @@ team_pm_state() {
   done
   # ② 我们自己启动过，而且它还活着、还在本项目里
   if team_pm_pid_live; then printf 'running:%s' "$(team_pm_recorded_pid)"; return 0; fi
-  # ③ 人工启动的 PM：窗口里的进程就是配置的 agent 可执行文件（cwd 已在上面的归属校验里过）
+  # ③ 有启动在飞行中（标记新鲜）：不是「证明在跑」，但**必须**压住第二次拉起
+  #    （放在窗口证据之前：启动命令自己的命令行里就提到 agent 路径，没 exec 完的启动不能算 running；
+  #      放在空提示符之前：启动中的 pane 也不能被当成空提示符）
+  if team_pm_starting; then printf 'starting:%ss' "$(team_pm_starting_age)"; return 0; fi
+  # ④ 人工启动的 PM：窗口里的进程就是配置的 agent 可执行文件（cwd 已在上面的归属校验里过）
   apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
   if [ -n "$apid" ]; then
     cwd="$(team_proc_cwd "$apid" 2>/dev/null || true)"
     [ -n "$cwd" ] && team_cwd_in_project "$cwd" && { printf 'running:%s' "${cmd:-agent}"; return 0; }
   fi
-  # ④ 空提示符：可以安全地替换成 PM
+  # ⑤ 空提示符：可以安全地替换成 PM
   if team_is_shell_cmd "$cmd" && ! team_pane_busy "$target"; then printf 'idle:%s' "${cmd:-shell}"; return 0; fi
-  # ⑤ 本项目里的非 agent 占用者：不是 PM，也就不能压制启动
+  # ⑥ 本项目里的非 agent 占用者：不是 PM，也就不能压制启动
   printf 'unknown:%s' "${cmd:-unknown}"
 }
 
-# 只有 running 才算「PM 在跑」：unknown:/foreign: 都不是 PM（否则就会出现 M6.5 那个假存活）
+# 只有 running 才算「PM 在跑」：starting:/unknown:/foreign: 都不是 PM（否则就会出现 M6.5 那个假存活）。
+# 注意 starting 的用法：它不是存活，但**也不能**被当成「没有 PM」而再拉一个（那会杀掉刚起来的 PM）。
 team_pm_alive() {
   case "$(team_pm_state)" in running:*) return 0 ;; *) return 1 ;; esac
+}
+
+# 这一拍凭什么说 PM 是这个状态（M7.2：拉起/不拉起的决策必须能说出证据；日志和状态视图共用）
+team_pm_evidence() { # [state]
+  local st="${1:-$(team_pm_state)}" f want age
+  case "$st" in
+    running:*)
+      if team_pm_pid_live; then
+        printf 'state/pm.pid=%s（proof=%s）' "$(team_pm_recorded_pid)" "$(team_pm_proof || echo '?')"
+      else
+        printf 'PM 窗口里的进程=%s（argv 命中配置的 agent）' "${st#running:}"
+      fi ;;
+    starting:*)
+      f="$(team_pm_starting_file)"
+      want="$(awk 'NR==1{print $3}' "$f" 2>/dev/null || true)"
+      age="$(team_pm_starting_age || echo '?')"
+      printf 'state/pm.pid.starting（%ss 前由 pid %s 发起，target=%s）' \
+        "$age" "$(awk 'NR==1{print $2}' "$f" 2>/dev/null || echo '?')" "${want:-?}" ;;
+    idle:*)    printf 'PM 窗口是空提示符（cmd=%s）' "${st#idle:}" ;;
+    unknown:*) printf 'PM 窗口里是项目内非 agent 进程（cmd=%s，cwd=%s）' \
+                 "${st#unknown:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
+    foreign:*) printf 'PM 窗口被不属于本项目的进程占用（cmd=%s，cwd=%s）' \
+                 "${st#foreign:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
+    *)         printf 'PM 窗口不存在' ;;
+  esac
+}
+
+# 待办那一行能不能说「PM 未在跑：watchdog 会拉起」：只有真的会拉起才能印
+# （M7.2：同一拍里 PM 行说「在跑/正在启动」而待办行说「会拉起」是自相矛盾）
+team_pm_pending_suffix() { # <state>
+  case "${1:-}" in
+    running:*)  printf '' ;;
+    starting:*) printf '（PM 正在启动：watchdog 不重复拉起）' ;;
+    foreign:*)  printf '（PM 窗口被别的项目占用：watchdog 不覆盖）' ;;
+    missing|missing:*) if [ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ]; then
+                 printf '（PM 窗口不存在：watchdog 会重建并拉起）'
+               else
+                 printf '（PM 窗口不存在：需要人工 %s up）' "$TEAM_CLI"
+               fi ;;
+    *)          printf '（PM 未在跑：watchdog 会拉起）' ;;
+  esac
 }
 
 team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 skill 升级）
@@ -855,10 +948,20 @@ team_pm_write_prompt() {
 # 「没有 PM」；foreign（别的项目的进程）默认不抢，要 TEAM_REPLACE_FOREIGN_PM=1 显式授权。
 # 启动成功后把**证明了是 agent 的那个 pid** 写进 state/pm.pid —— 这是后续 team_pm_alive 的证据，
 # 而不再是「窗口在 + 前台不是 shell」这种猜测（M6.5）。
+# M7.2：启动全程在 state/pm.pid.starting 里留下「正在启动」标记（见 team_pm_starting）——
+# 否则从 respawn 到拿到证据之间那一拍看起来像「没有 PM」，并发的另一拍会把刚刚起来的 PM 杀掉。
 team_pm_start() {
-  local target state cmd pf i wait apid
+  local target state cmd pf i wait apid age
   target="$(team_pm_target)"
   team_pm_window_exists || return 1
+  # 已经有一次启动在飞行中（同一窗口、标记新鲜）→ 不重复拉起：再 respawn 一次会把
+  # 那个正在起来的 PM 直接杀掉（M7.2 的实测就是 1 个 PM、2 次拉起、2 行配额）。
+  # 标记过期（TEAM_PM_START_WAIT+5s）后自然失效，所以卡在启动中的窗口不会永久锁死。
+  if team_pm_starting; then
+    age="$(team_pm_starting_age || echo '?')"
+    team_dim "  PM 正在启动（${age}s 前发起，证据：$(team_pm_evidence)）：不重复拉起"
+    return 0
+  fi
   state="$(team_pm_state)"
   case "$state" in
     running:*) team_dim "  PM 已在运行（${state#running:}）"; return 0 ;;
@@ -883,10 +986,12 @@ team_pm_start() {
   local spawnfile; spawnfile="$(team_pm_spawn_file)"
   cmd="$(printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
     "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf")"
+  team_pm_starting_begin "$target"   # 启动在飞行中：别的拍从此看到 starting 而不是「没有 PM」
   team_pm_pid_clear      # 旧记录先作废（pid + 证据标记）：这一行下面是“换进程”
   rm -f "$spawnfile"
   team_tmux_respawn_pane "$target" "$cmd" || {
     team_err "respawn-pane 失败：$target"
+    team_pm_starting_end
     return 1
   }
   # 记录 pid = **等到有证据**才把 pid 写盘。证据二选一：
@@ -901,22 +1006,28 @@ team_pm_start() {
     apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record argv
+      team_pm_starting_end
       return 0
     fi
     apid="$(team_pm_spawn_pid 2>/dev/null || true)"
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record spawn
+      team_pm_starting_end
       return 0
     fi
     i=$((i + 1))
   done
+  team_pm_starting_end
   team_err "PM 启动后 ${wait}s 内既没看到配置的 agent 进程，也没等到我们 spawn 的 pid 写盘：检查窗口输出与 $pf"
   return 1
 }
 
-# 重启配额：防止 PM 反复崩溃把机器打爆（1 小时内最多 TEAM_WATCH_MAX_RESTARTS 次）
-team_pm_can_restart() {
-  local log="$TEAM_STATE_DIR/pm-restarts.log" now win max n
+# 重启配额：防止 PM 反复崩溃把机器打爆（1 小时内最多 TEAM_WATCH_MAX_RESTARTS 次）。
+# M7.2 起这里**只检查**：记账（team_pm_restart_record）发生在真拉起成功之后。
+# 以前把「拉起尝试」当「重启」记，失败/超时也吃掉一次配额，于是日志说重启了 2 次而窗口里只有 1 个 PM。
+team_pm_restart_allowed() {
+  local log attempts now win max n a
+  log="$TEAM_STATE_DIR/pm-restarts.log"; attempts="$(team_pm_attempts_file)"
   now="$(date +%s)"; win=3600; max="${TEAM_WATCH_MAX_RESTARTS:-5}"
   mkdir -p "$TEAM_STATE_DIR"
   if [ -f "$log" ]; then
@@ -926,7 +1037,40 @@ team_pm_can_restart() {
       return 1
     fi
   fi
-  printf '%s %s\n' "$now" "$(team_timestamp)" >> "$log"
+  # 失败/超时的尝试不记「重启」，但 respawn 已经把进程拉起来了 —— 也受限流（否则失败循环没有上限）
+  if [ -f "$attempts" ]; then
+    a="$(awk -v now="$now" -v win="$win" '$1 > now - win' "$attempts" | wc -l | tr -d ' ')"
+    if [ "$a" -ge "$max" ]; then
+      team_err "PM 在 1 小时内已尝试拉起 $a 次（上限 $max；成功次数见 state/pm-restarts.log）：先排查拉起失败的原因"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# 兼容旧名：V4.0 独立包直接调它检查配额（语义 = 只检查，不记账）
+team_pm_can_restart() { team_pm_restart_allowed; }
+
+# 记一次**真的**重启（第 1 列必须是 epoch：配额与历史包都按它算窗口）
+team_pm_restart_record() { # <evidence>
+  mkdir -p "$TEAM_STATE_DIR"
+  printf '%s %s %s\n' "$(date +%s)" "$(team_timestamp)" "${1:--}" >> "$TEAM_STATE_DIR/pm-restarts.log"
+  return 0
+}
+
+# 拉起**尝试**日志（与 pm-restarts.log 分开）：失败的尝试不算「重启」，否则 "PM 重启了 N 次" 就不是事实；
+# 但 respawn 本身会拉起进程，一个「每次都拉不起来」的循环不能无上限（teamsmith 的规范：1 小时内最多
+# TEAM_WATCH_MAX_RESTARTS 次），所以配额也看这份计数。行尾带决策证据，出问题时能直接看到为什么拉。
+team_pm_attempts_file() { printf '%s\n' "$TEAM_STATE_DIR/pm-start-attempts.log"; }
+
+team_pm_attempt_record() { # <evidence>
+  local f
+  mkdir -p "$TEAM_STATE_DIR"
+  f="$(team_pm_attempts_file)"
+  printf '%s %s %s\n' "$(date +%s)" "$(team_timestamp)" "${1:--}" >> "$f"
+  if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 500 ]; then
+    tail -n 500 "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
   return 0
 }
 
