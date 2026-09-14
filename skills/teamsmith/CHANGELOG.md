@@ -5,7 +5,9 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
-**未发布（版号由 PM 定；这里刻意不用 `##` 标题——版本解析取第一个 `##` 行，会被当成空版本号）**
+## v1.15.0 · 2026-09-14
+
+未发布（版号由 PM 定；这里刻意不用 `##` 标题——版本解析取第一个 `##` 行，会被当成空版本号）**
 
 **agent adapter：worker 可以是任意 TUI agent（Pi 仍是默认）**
 
