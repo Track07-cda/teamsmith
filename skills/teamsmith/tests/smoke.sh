@@ -2349,9 +2349,13 @@ doc_stale_hits() { # <skill 目录>
   done
   # 说明句豁免要**精确**：同一行里既有删除词、命令又用反引号包着（例如 "`team merge` 已删"）。
   # 不做整行豁免 —— 否则同行里的真残留会被一起吞掉（V1.1 实测的第 7 类漏报）。
+  # M7.1 补上英文删除词：references/** 自 v1.16.0 起 English-first，迁移指南必须能**如实记载删了什么**
+  #   （否则英文文档为了过这条检查只能用中文豁免词，豁免就成了特例）。判据不变：同行还要有反引号；
+  #   双向翻转自测在本段末尾（inject_expect_clean 正向 / inject_and_expect 反向），防止豁免变成整行豁免。
   printf '%s\n' "$out" | grep -v '^$' | while IFS= read -r line; do
     case "$line" in
-      *已删*|*已移除*|*不再*|*废弃*|*历史*) case "$line" in *'`'*) continue ;; *) printf '%s\n' "$line" ;; esac ;;
+      *已删*|*已移除*|*不再*|*废弃*|*历史*|*removed*|*removal*|*deleted*|*renamed*|*legacy*|*"no longer"*)
+        case "$line" in *'`'*) continue ;; *) printf '%s\n' "$line" ;; esac ;;
       *) printf '%s\n' "$line" ;;
     esac
   done
@@ -2381,6 +2385,25 @@ inject_and_expect "制表符（team⇥pr）" "references/protocol.md" "$(printf 
 inject_and_expect "反引号紧贴（\`team gh\`）" "templates/PROTOCOL.md.tmpl" '用 `team gh` 开 PR'
 inject_and_expect "行尾裸命令（$ team pr）" "references/workflows.md" '$ team pr'
 inject_and_expect "同行既有删除词又有真用法" "SKILL.md" '已删的写法里还有 team gl GET /projects'
+rm -rf "$SANDBOX-x"
+
+# M7.1：英文说明句豁免必须**双向**成立 —— 正向：英文迁移说明（删除词 + 反引号）不得误报；
+#   反向：把已删命令当用法教（没有删除词 / 有删除词但没反引号）必须报红。
+#   没有正向这一条，"真树无残留 ✓" 可能在英文文档上只是靠中文豁免词侥幸；
+#   没有反向这一条，豁免就可能退化成"整行豁免"（V1.1 第 7 类漏报）。
+inject_expect_clean() { # <说明> <相对文件> <追加内容>：断言**不**报红
+  local what="$1" file="$2" text="$3" got
+  rm -rf "$SANDBOX-x"; cp -r "$SANDBOX" "$SANDBOX-x"
+  printf '%s\n' "$text" >> "$SANDBOX-x/$file"
+  got="$(doc_stale_hits "$SANDBOX-x")"
+  [ -z "$got" ] && ok "翻转自测：$what 不误报（说明句豁免有效）" || bad "翻转自测：$what 被误报：$(printf '%s' "$got" | head -1)"
+}
+inject_expect_clean "英文迁移说明（removed + 反引号）" "references/migration.md" \
+  '- `team merge` was removed in v1.11.0; the PM runs git directly instead.'
+inject_and_expect "英文里把已删命令当用法教（没有删除词）" "references/migration.md" \
+  'Then reopen it with `team gh` pr view 12.'
+inject_and_expect "英文删除词但没有反引号（不许整行豁免）" "references/migration.md" \
+  'We removed team gl in v1.11.0; call glab yourself.'
 rm -rf "$SANDBOX-x"
 CLEAN_HITS="$(doc_stale_hits "$SANDBOX")"
 [ -z "$CLEAN_HITS" ] && ok "翻转自测：干净副本不误报（正对照）" || bad "干净副本被误报：$(printf '%s' "$CLEAN_HITS" | head -1)"
@@ -2815,6 +2838,94 @@ if sl_run "$SL_REAL"; then
   assert_has "$TMP/spec-lint.out" "$SL_SCEN scenario(s)" "lint 报的 scenario 数与真树一致（$SL_SCEN）"
 else
   bad "真 openspec 树没通过 spec lint"; sed 's/^/     /' "$TMP/spec-lint.out"
+fi
+
+# ---------------------------------------------------------------- 17. 迁移指南（M7.1）
+# 一个用旧版本（或旧名）建起来的项目，必须能在一个地方查到「要改什么」。指南本身是文档，但两件可机器验证
+# 的事在这里钉死：
+#   ① doctor 只在真的需要迁移时打**一行**指引（旧标记 / 本会话版本比磁盘旧），而且不因此变红；
+#   ② init 必须把旧标记就地改写（幂等、单块），改完之后指引消失。
+# 纯逻辑（不建 tmux、不起 pi 进程），所以快慢模式都跑。
+# 夹具复用 15b 造的假 settings/openspec/spec 目录，否则 doctor 会因为缺必需依赖而失败，
+# 那样「指引消失」就可能是被别的失败淹没了——所以下面还断言干净夹具 doctor rc=0。
+section "17 · 迁移指南与 doctor 指引（M7.1）"
+
+MDOC="$SKILL_DIR/references/migration.md"
+M71="$TMP/m71-repo"; rm -rf "$M71"; mkdir -p "$M71"
+( cd "$M71" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && git commit -q --allow-empty -m init )
+( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >"$TMP/m71-init.log" 2>&1 \
+  || bad "夹具 init 失败（见 $TMP/m71-init.log）"
+{
+  printf 'TEAM_PI_SETTINGS_FILE="%s"\n' "$M51_AGENT/settings.json"
+  printf 'TEAM_OPENSPEC_BIN="%s"\n' "$FAKE/openspec"
+  printf 'TEAM_SPEC_DIR="%s"\n' "$M51_SPEC"
+} >> "$M71/.pi/team/config.sh"
+assert_eq "夹具 init 后是 teamsmith 标记" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-clean.log" 2>&1; M71RC=$?
+assert_eq "干净夹具 doctor 退出码 0（指引的消失不是因为别的东西挂了）" "$M71RC" "0"
+assert_not "$TMP/m71-doctor-clean.log" "references/migration.md" "无需迁移时不打指引"
+
+# ① 旧名标记 → doctor 打一行指引；rc 仍为 0（提示不等于失败）
+sed -i 's|<!-- teamsmith:begin -->|<!-- pi-team:begin -->|; s|<!-- teamsmith:end -->|<!-- pi-team:end -->|' "$M71/AGENTS.md"
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-legacy.log" 2>&1; M71RC=$?
+assert_eq "旧标记时 doctor 仍然退出码 0（只是提示）" "$M71RC" "0"
+assert_has "$TMP/m71-doctor-legacy.log" "references/migration.md" "旧标记 → doctor 指向迁移指南"
+assert_has "$TMP/m71-doctor-legacy.log" "旧名标记" "指引说明的是标记这一条判据（不是蹭版本那条）"
+assert_eq "指引只打一行" "$(grep -c 'references/migration.md' "$TMP/m71-doctor-legacy.log")" "1"
+
+# ② init 就地改写旧标记（幂等、单块），指引随之消失
+( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+assert_eq "init 改掉了旧标记" "$(grep -cF '<!-- pi-team:begin -->' "$M71/AGENTS.md")" "0"
+assert_eq "改写后协议段只有一块" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
+( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+assert_eq "再 init 一次仍然只有一块（幂等）" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-after.log" 2>&1
+assert_not "$TMP/m71-doctor-after.log" "references/migration.md" "标记迁移后指引消失"
+
+# ③ 第二条判据：本会话加载的版本比磁盘旧 → 指引出现；mark-loaded 之后消失
+mkdir -p "$M71/.pi/team/state"
+printf 'VERSION=0.0.1\nHASH=stale\n' > "$M71/.pi/team/state/pm-loaded.env"
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-stale.log" 2>&1
+assert_has "$TMP/m71-doctor-stale.log" "references/migration.md" "旧会话版本 → doctor 指向迁移指南"
+assert_has "$TMP/m71-doctor-stale.log" "本会话加载 0.0.1" "指引说明的是版本这一条判据"
+( cd "$M71" && $TEAM mark-loaded ) >/dev/null 2>&1
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-current.log" 2>&1
+assert_not "$TMP/m71-doctor-current.log" "references/migration.md" "版本一致后指引消失"
+
+# ④ 两条判据同时成立也只打一行（不重复刷屏）
+sed -i 's|<!-- teamsmith:begin -->|<!-- pi-team:begin -->|; s|<!-- teamsmith:end -->|<!-- pi-team:end -->|' "$M71/AGENTS.md"
+printf 'VERSION=0.0.1\nHASH=stale\n' > "$M71/.pi/team/state/pm-loaded.env"
+( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-both.log" 2>&1
+assert_eq "两条判据同时成立仍然只打一行" "$(grep -c 'references/migration.md' "$TMP/m71-doctor-both.log")" "1"
+
+# ⑤ 指南本身：八节都在、关键命令/开关在、篇幅不是占位符
+for m71sec in "What is stable" "The rename" "Removed commands" "New required dependencies" \
+              "Behaviour changes" "Upgrade recipe" "Rolling back" "not supported"; do
+  assert_has "$MDOC" "$m71sec" "migration.md 有这一节：$m71sec"
+done
+assert_has "$MDOC" "pi install npm:@cortexkit/pi-magic-context" "指南给出 magic-context 的安装命令"
+assert_has "$MDOC" "openspec init --tools none" "指南给出 spec 根目录的初始化命令"
+assert_has "$MDOC" "TEAM_REQUIRE_OPENSPEC=0" "指南给出必需依赖的降级开关"
+assert_has "$MDOC" "TEAM_SESSION" "指南提醒 session 名必须与 watchdog 的一致"
+assert_has "$MDOC" "--fresh" "指南提到长会话换小窗口模型要用 --fresh"
+[ "$(wc -l < "$MDOC")" -ge 120 ] && ok "指南篇幅 ≥ 120 行（不是占位符）" \
+  || bad "指南只有 $(wc -l < "$MDOC") 行：太短"
+# 读者入口：SKILL.md 阅读表 + bootstrap/config 各一行（不新增子命令）
+assert_has "$SKILL_DIR/SKILL.md" "references/migration.md" "SKILL.md 阅读表指向迁移指南"
+assert_has "$SKILL_DIR/references/bootstrap.md" "migration.md" "bootstrap.md 指向迁移指南"
+assert_has "$SKILL_DIR/references/config.md" "migration.md" "config.md 指向迁移指南"
+# 英文文档不变量（M4.1 的口径）：这里只覆盖本任务交付/改过的三份 references 文档。
+# 为什么不是整个 references/**：protocol.md 里还有 2 行**引用中文 CLI 输出串**（review 的翻转证据关键词），
+#   那是 M6.2 引入的、属于 PM 的文件（不在本任务边界内）——已作为 finding 交回，不在测试里给它开口子。
+#   复现：grep -rnP '[\x{4e00}-\x{9fff}]' skills/teamsmith/references
+if printf '中\n' | grep -qP '[\x{4e00}-\x{9fff}]' 2>/dev/null; then
+  M71_CJK="$(grep -lP '[\x{4e00}-\x{9fff}]' "$MDOC" "$SKILL_DIR/references/config.md" \
+    "$SKILL_DIR/references/bootstrap.md" 2>/dev/null || true)"
+  [ -z "$M71_CJK" ] && ok "本任务交付的 references 文档全英文（无 CJK）" \
+    || bad "references 里有中文：$(printf '%s' "$M71_CJK" | head -2 | tr '\n' ' ')"
+else
+  printf '  \033[2m·\033[0m %s\n' "（grep -P 不可用：跳过「references 无中文」这条检查）"
 fi
 
 # ---------------------------------------------------------------- 15. 结束

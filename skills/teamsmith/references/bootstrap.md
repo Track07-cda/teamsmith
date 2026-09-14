@@ -3,6 +3,9 @@
 The shortest path for a new project (or a PM taking over a repository for the first time).
 **The PM owns the setup, including configuring the watchdog.**
 
+> Upgrading a project that was set up earlier (including one still carrying the former name `pi-team`), or rolling a
+> bad upgrade back: see [migration.md](migration.md).
+
 ## In one line
 
 ```bash

@@ -255,6 +255,7 @@ byte-for-byte unchanged**):
 | `references/agent-adapters.md` | To run workers with codex/opencode/any TUI agent: the contract, placeholder tables, worked examples, a verification checklist |
 | `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
 | `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
+| `references/migration.md` | The project was set up with an older version (or with the former name `pi-team`): renames, removed commands, new required dependencies, behaviour changes, the upgrade recipe and rollback |
 | `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/watchdog, scaling, blockers |
 | `references/openspec.md` | Specs and the change workflow (OpenSpec): division of labour with the task ledger, the day-to-day commands, and what a PM does when a change is bigger than one task |
 | `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |

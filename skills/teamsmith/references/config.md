@@ -14,6 +14,9 @@ the git main worktree. `$VAR` / `${VAR}` inside values are expanded from `proces
 
 ## 2. Config keys (`.pi/team/config.sh`)
 
+> Keys are added over time and always ship with a default, so an older config file keeps working. What changed
+> between versions, and what a project set up earlier has to do about it: [migration.md](migration.md).
+
 The config file is sourced by bash, so `$HOME` and conditional logic are allowed; but the notify extension can only
 read **flat single-line assignments**, so the keys it cares about (session/pm-window/worktrees/docs/notify) should stay
 literals or simple `$VAR`.

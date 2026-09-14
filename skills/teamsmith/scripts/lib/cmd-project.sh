@@ -228,6 +228,24 @@ team_cmd_init() {
 }
 
 # ---------------------------------------------------------------- doctor
+# M7.1：这个项目要不要读迁移指南？两个判据都来自可查的真实状态，不猜：
+#   ① AGENTS.md 里还是旧名标记 <!-- pi-team:begin -->（init/bootstrap 会就地改写；改写后不再触发）
+#   ② 本会话加载的 skill 比磁盘旧（mark-loaded 记的版本/指纹与磁盘不一致）—— 与 version --check 同口径
+# 干净项目上保持静默（doctor 不该多刷一行）；返回原因字符串，没有原因则返回空。
+team_migration_reasons() {
+  local reasons="" f="$TEAM_MAIN_ROOT/AGENTS.md" loaded
+  if [ -f "$f" ] && grep -qF '<!-- pi-team:begin -->' "$f"; then
+    reasons="AGENTS.md 还是旧名标记"
+  fi
+  loaded="$(team_loaded_version 2>/dev/null || true)"
+  if [ -n "$loaded" ] \
+     && { [ "$loaded" != "$TEAM_VERSION" ] || [ "$(team_loaded_hash 2>/dev/null || true)" != "$(team_skill_hash 2>/dev/null || true)" ]; }; then
+    reasons="${reasons:+$reasons；}本会话加载 $loaded、磁盘 $TEAM_VERSION"
+  fi
+  [ -n "$reasons" ] && printf '%s' "$reasons"
+  return 0
+}
+
 team_cmd_doctor() {
   local fails=0 warns=0
   check() { printf '  %-24s ' "$1"; }
@@ -373,6 +391,12 @@ team_cmd_doctor() {
       if [ -f "$TEAM_STATE_DIR/$a.env" ] && ! team_tmux_has_window "$TEAM_SESSION" "$w"; then stale=$((stale + 1)); fi
     done
     if [ "$stale" -eq 0 ]; then pass "干净"; else warn "$stale 个 agent 的 state 与 tmux 不一致（roster 会自动清理）"; fi
+
+  # 迁移/升级指引（M7.1）：只在真的需要迁移时多打一行，指向 references/migration.md（不新增子命令）。
+  local mig; mig="$(team_migration_reasons)"
+  if [ -n "$mig" ]; then
+    check "迁移指引"; warn "$mig：读 $TEAM_SKILL_DIR/references/migration.md（重命名 / 已删命令 / 必需依赖 / 行为变更 / 升级配方 / 回滚）"
+  fi
 
   printf '\n'
   if [ "$fails" -gt 0 ]; then team_err "doctor: $fails 项失败 / $warns 项警告"; return 1; fi
