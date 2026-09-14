@@ -52,6 +52,26 @@ team_task_title() { # <ID> → 标题（BOARD 的「任务」列，其次任务�
 # 抬头里的 `分支: `x`` / `HEAD: `sha`` / `判定: **X**` 因此是稳定接口（改抬头要同步这些读取函数）。
 team_review_record_path() { printf '%s\n' "$TEAM_DOCS_ABS/reviews/$1.md"; }
 
+# 128+n → 信号名（写复验记录用；认不出来就给数字，不编名字）
+team_review_signal_name() { # <signal number> → SIGTERM / SIGKILL / SIG<n>
+  local n="${1:-}" name=""
+  case "$n" in
+    1)  name=SIGHUP ;;
+    2)  name=SIGINT ;;
+    3)  name=SIGQUIT ;;
+    6)  name=SIGABRT ;;
+    9)  name=SIGKILL ;;
+    14) name=SIGALRM ;;
+    15) name=SIGTERM ;;
+  esac
+  if [ -z "$name" ] && team_have_cmd kill; then
+    name="$(kill -l "$n" 2>/dev/null | head -1 || true)"
+    case "$name" in ''|*[!A-Za-z]*) name="" ;; *) name="SIG$name" ;; esac
+  fi
+  [ -n "$name" ] || name="SIG$n"
+  printf '%s\n' "$name"
+}
+
 team_review_record_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN（没有记录 → 空）
   local f v; f="$(team_review_record_path "$1")"
   [ -f "$f" ] || return 0
@@ -404,6 +424,7 @@ $(printf '%s\n' "$ignored_list" | head -5)
   mkdir -p "$TEAM_DOCS_ABS/reviews"
   local log="$TEAM_DOCS_ABS/reviews/$id-verify.log"
   local verdict="PASS" gates_out="" gate_timeout="${TEAM_REVIEW_TIMEOUT:-1800}" gates_marker="ran"
+  local gate_elapsed="" gate_signal=""   # 门禁实际用时 / 被信号终止的信号名（写进复验记录）
   if [ "$no_gates" = "1" ]; then
     verdict="SKIPPED"; gates_marker="none"
     gates_out="（--no-gates：PM 选择人工看 diff；**没有跑过任何门禁**，本记录不是 PASS 证据）"
@@ -416,29 +437,51 @@ $(printf '%s\n' "$ignored_list" | head -5)
     # F10/F11（V4.0）：判定只认 timeout **包装器**的退出码（124=TERM 生效；137=TERM 被忽略后
     # 被 kill-after KILL），绝不 grep 门禁自己的日志 —— 旧实现既漏掉真挂死（GNU timeout 默认
     # 不打字），又把「日志里恰好有 timeout 字样」的普通失败记成 TIMEOUT。
+    # F15（M6.5）：124/137 只是「可能是超时」，不是证据本身 —— 门禁自己 exit 124、或套件里某个测试
+    # 把 124 传上来，也会被记成「被 deadline 杀死」（实测：同一次 smoke 一次记 TIMEOUT、一次记 FAIL）。
+    # 现在两条证据都要：包装器退出码 **且** 实际用时确实贴住 deadline；否则就是 FAIL（被信号终止时
+    # 把信号名字也记下来，不拿「超时」顶替「被杀」）。
     local runner=() used_timeout=0
     if team_have_cmd timeout && [ "${gate_timeout:-0}" -gt 0 ] 2>/dev/null; then
       runner=(timeout --verbose --signal=TERM --kill-after=60 "$gate_timeout")
       used_timeout=1
     fi
     team_info "跑门禁：$TEAM_GATES（硬超时 ${gate_timeout}s；可调 TEAM_REVIEW_TIMEOUT）"
-    local gate_rc=0
+    local gate_rc=0 gate_started grace deadline_min
+    gate_started="$(date +%s)"
     ( cd "$revdir" && "${runner[@]}" bash -c "$TEAM_GATES" ) > "$log" 2>&1 || gate_rc=$?
+    gate_elapsed=$(( $(date +%s) - gate_started ))
+    grace="${TEAM_REVIEW_TIMEOUT_GRACE:-2}"
+    case "$grace" in ''|*[!0-9]*) grace=2 ;; esac
+    deadline_min=$(( gate_timeout - grace ))
+    [ "$deadline_min" -lt 0 ] && deadline_min=0
     if [ "$gate_rc" -eq 0 ]; then
       verdict="PASS"
     else
       verdict="FAIL"
-      if [ "$used_timeout" = "1" ]; then
+      if [ "$used_timeout" = "1" ] && [ "$gate_elapsed" -ge "$deadline_min" ]; then
         case "$gate_rc" in
           124) verdict="TIMEOUT"
-               printf '\n[teamsmith] 门禁在 %ss 未结束，被硬超时终止（timeout 包装器退出码 124：TERM 生效；判定 TIMEOUT→按失败处理）\n' "$gate_timeout" >> "$log" ;;
+               printf '\n[teamsmith] 门禁在 %ss 未结束，被硬超时终止（timeout 包装器退出码 124：TERM 生效；实际用时 %ss；判定 TIMEOUT→按失败处理）\n' "$gate_timeout" "$gate_elapsed" >> "$log" ;;
           137) verdict="TIMEOUT"
-               printf '\n[teamsmith] 门禁在 %ss 未结束，TERM 被忽略后被 kill-after KILL（timeout 包装器退出码 137；判定 TIMEOUT→按失败处理）\n' "$gate_timeout" >> "$log" ;;
+               printf '\n[teamsmith] 门禁在 %ss 未结束，TERM 被忽略后被 kill-after KILL（timeout 包装器退出码 137；实际用时 %ss；判定 TIMEOUT→按失败处理）\n' "$gate_timeout" "$gate_elapsed" >> "$log" ;;
+        esac
+      fi
+      if [ "$verdict" = "FAIL" ]; then
+        case "$gate_rc" in
+          124) printf '\n[teamsmith] 门禁退出码 124，但实际只跑了 %ss（< 硬超时 %ss − %ss 宽限）：这是门禁**自己**返回 124，不是被 deadline 杀死的 → 判定 FAIL\n' "$gate_elapsed" "$gate_timeout" "$grace" >> "$log" ;;
+          137) gate_signal="SIGKILL"
+               printf '\n[teamsmith] 门禁退出码 137（SIGKILL），但实际只跑了 %ss（< 硬超时 %ss − %ss 宽限）：不是被 deadline 杀死的（外部 kill -9 / OOM 也会这样） → 判定 FAIL\n' "$gate_elapsed" "$gate_timeout" "$grace" >> "$log" ;;
+          125) printf '\n[teamsmith] timeout 包装器自身失败（退出码 125，如不支持 --verbose）：门禁结果未知 → 判定 FAIL（实际用时 %ss）\n' "$gate_elapsed" >> "$log" ;;
+          *)   if [ "$gate_rc" -gt 128 ]; then
+                 gate_signal="$(team_review_signal_name "$(( gate_rc - 128 ))")"
+                 printf '\n[teamsmith] 门禁被信号终止（退出码 %s，$gate_signal；实际用时 %ss）：不是超时 → 判定 FAIL\n' "$gate_rc" "$gate_elapsed" >> "$log"
+               fi ;;
         esac
       fi
     fi
     gates_out="$(tail -25 "$log")"
-    team_ok "门禁输出：${log#"$TEAM_MAIN_ROOT"/}（${verdict}）"
+    team_ok "门禁输出：${log#"$TEAM_MAIN_ROOT"/}（${verdict}，${gate_elapsed}s）"
   fi
 
   # F9 的后半：门禁自己会在 checkout 里造东西（未跟踪/被忽略的产物）——
@@ -473,13 +516,19 @@ $(printf '%s\n' "$ignored_list" | head -5)
   [ "$ignored_override" = "1" ] && head_flags="$head_flags · checkout: ignored $ignored_n artifact(s) (override)"
   [ "$unresolved_override" = "1" ] && head_flags="$head_flags · branch-unresolved (override)"
   [ "$gates_marker" = "none" ] && head_flags="$head_flags · gates: none"
+  # 被信号终止（不是超时）：把信号名写进抬头，别拿「超时」顶替「被杀」（M6.5 / F15）
+  [ -n "$gate_signal" ] && head_flags="$head_flags · gate killed: $gate_signal"
   {
     printf '# %s · PM 独立复验\n\n' "$id"
     printf '时间: %s · 分支: `%s` · HEAD: `%s` · 判定: **%s**%s\n\n' "$(team_timestamp)" "$branch" "${head:0:9}" "$verdict" "$head_flags"
     printf '## 复验方式\n\n'
     printf -- '- 独立 checkout：`%s`（PM 提供，skill 只读；不信任 agent 工作区）\n' "$revdir"
     printf -- '- 记录绑定：本判定只对上面的 HEAD `%s` 负责（分支再动一格，digest/status 会把它重新列为待复验）\n' "${head:0:9}"
-    printf -- '- 门禁命令：`%s`（硬超时 %ss；判定只认 timeout 包装器退出码 124/137→TIMEOUT，按失败处理）\n' "${TEAM_GATES:-<未配置>}" "${TEAM_REVIEW_TIMEOUT:-1800}"
+    printf -- '- 门禁命令：`%s`（硬超时 %ss%s；TIMEOUT 需要「包装器 124/137 + 用时贴住 deadline」两条证据，按失败处理）\n' \
+      "${TEAM_GATES:-<未配置>}" "${TEAM_REVIEW_TIMEOUT:-1800}" "${gate_elapsed:+，实际用时 ${gate_elapsed}s}"
+    if [ -n "$gate_signal" ]; then
+      printf -- '- 门禁被信号终止：**%s**（实际用时 %ss，**不是**被 deadline 杀死 → 判定 FAIL）\n' "$gate_signal" "$gate_elapsed"
+    fi
     case "$gates_marker" in
       none)         printf -- '- 门禁：**none（--no-gates：没有跑过任何门禁）** —— 本记录不是 PASS 证据，digest 会继续把它列为待复验\n' ;;
       unconfigured) printf -- '- 门禁：**unconfigured（TEAM_GATES 未配置）** —— 没有自动判定，只能人工评审\n' ;;
@@ -526,7 +575,10 @@ $(printf '%s\n' "$ignored_list" | head -5)
     printf '## PM 结论\n\n'
     case "$verdict" in
       PASS) printf -- '- [ ] 已读 diff，与任务书交付物一致\n- [ ] 未发现「报告与实际不符」\n- [ ] 可以合并：squash 到 `%s` 并 push 之后，再 `%s board set %s done`\n' "$TEAM_PROTECTED_BRANCH" "$TEAM_CLI" "$id" ;;
-      FAIL) printf -- '- [ ] 门禁失败：退回 agent（`%s say <agent> "..."`）或 PM 自行修复\n' "$TEAM_CLI" ;;
+      FAIL) printf -- '- [ ] 门禁失败：退回 agent（`%s say <agent> "..."`）或 PM 自行修复\n' "$TEAM_CLI"
+            if [ -n "$gate_signal" ]; then
+              printf -- '- [ ] 门禁是被信号 %s 终止的（**不是超时**——先看是不是 OOM/外部 kill，再查门禁自己）\n' "$gate_signal"
+            fi ;;
       TIMEOUT) printf -- '- [ ] 门禁被硬超时终止（TIMEOUT→按失败处理）：查门禁自己为何挂死，或调 `TEAM_REVIEW_TIMEOUT` 后重跑\n' ;;
       *)    printf -- '- [ ] 人工评审（门禁未跑/未配置：这不等于通过，digest 会继续把它列为待复验）\n' ;;
     esac

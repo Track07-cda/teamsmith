@@ -88,7 +88,8 @@ literals or simple `$VAR`.
 | `TEAM_PM_MODEL` | empty | the PM's own model; empty = `TEAM_DEFAULT_MODEL` |
 | `TEAM_PM_SESSION_ID` | empty | empty = `pi -c` (continue the previous session in this directory, keeping the PM's history) |
 | `TEAM_PM_EXTRA_PI_ARGS` | empty | extra pi arguments for the PM |
-| `TEAM_PM_START_WAIT` | `6` | seconds to wait for the PM to come up after starting it |
+| `TEAM_PM_START_WAIT` | `6` | seconds to wait for the PM to come up after starting it — the pid is recorded in `state/pm.pid` only once the configured agent binary is really running in that window |
+| `TEAM_REPLACE_FOREIGN_PM` | `0` | `1` = allow `team up` to overwrite a process in the PM window whose cwd is **outside** this project (a non-PM process with an in-project cwd is always replaceable — it is reported as `unknown:<cmd>`) |
 
 ### Guards (capacity)
 
@@ -124,6 +125,7 @@ literals or simple `$VAR`.
 ├── .pi/team/
 │   ├── config.sh          # configuration (committed, shared by the team)
 │   └── state/             # runtime state (gitignored): <agent>.env (the durable record),
+│                          #   pm.pid (pid of the PM this tool started: the liveness proof),
 │                          #   notify-dedup, prompt-<agent>-<ID>.md (the prompt of this dispatch;
 │                          #   {prompt_file} points at it), watchdog/capacity logs
 ├── AGENTS.md              # carries the <!-- teamsmith:begin --> protocol section (written/refreshed by init)
@@ -160,12 +162,18 @@ literals or simple `$VAR`.
 `window`, `started`, `inbox_lines`. Only the commands that really change the team write it (`dispatch`, `resume`,
 `add-agent`, `close`, `teardown`, `inbox --ack`).
 
-Liveness is **not** stored: whether an agent is running — and therefore which model-concurrency slot it holds —
-is derived from tmux (`has-window`) at query time. A crashed window therefore frees its slot while the record
+Liveness is **not** stored for agents: whether an agent is running — and therefore which model-concurrency slot it
+holds — is derived from tmux (`has-window`) at query time. A crashed window therefore frees its slot while the record
 stays, and the read-only commands (`roster`, `status`, `ps`, `digest`, `inbox`, `paths`, `watchdog-status`) write
 nothing at all. This is a tested invariant (smoke: state hash before/after), not a convention: an earlier version
 had the model counter call `team_state_clear` for dead windows, so a single `team ps` deleted a crashed agent's
 `task`/`branch` — after which `digest` reported "nothing to do" and `team resume` had nothing to resume.
+
+The PM is the one exception, and only because a guess about it was proven to lie (M6.5): the start path
+(`team up` / the watchdog) records the pid of the agent process it launched in `state/pm.pid`, and liveness means
+"that pid is alive **and** its cwd is inside this project". The file is written by the start path only
+(`team_pm_start`); the read-only commands read it and never remove a stale entry (a dead pid simply fails the
+check). Without it, a freshly created, still-empty pane was reported as `running:tmux`.
 
 ## 4. Environment variables (usable without writing them into the config)
 
@@ -177,7 +185,8 @@ had the model counter call `team_state_clear` for dead windows, so a single `tea
 | `TEAM_MIN_FREE_SWAP_MB` | `1024` | **hard line**: the free **disk swap** floor (**zram excluded**) |
 | `TEAM_ZRAM_WARN_PCT` | `85` | above this zram usage, warn only |
 | `TEAM_MERGE_PREFER_THEIRS` | empty | paths that default to the branch side on a `merge` conflict (comma separated, e.g. `pnpm-lock.yaml`) |
-| `TEAM_REVIEW_TIMEOUT` | `1800` | hard timeout for the gates `team review` runs (seconds); the verdict comes from the `timeout` wrapper's exit code (124/137) → `TIMEOUT` (treated as FAIL), never from the gate's own log text |
+| `TEAM_REVIEW_TIMEOUT` | `1800` | hard timeout for the gates `team review` runs (seconds); a verdict of `TIMEOUT` needs **both** the `timeout` wrapper's exit code (124/137) **and** an elapsed time within `TEAM_REVIEW_TIMEOUT_GRACE` of the deadline — a gate that exits 124 by itself, or one killed by a signal, is recorded as `FAIL` (with the signal named), never as a timeout; log text never decides |
+| `TEAM_REVIEW_TIMEOUT_GRACE` | `2` | slack (seconds) around `TEAM_REVIEW_TIMEOUT` when deciding whether the wrapper really hit the deadline |
 | `TEAM_REVIEW_ALLOW_DIRTY` | `0` | `1` = review a checkout with uncommitted changes anyway (the only override that works); the verification record then states `checkout dirty: N files (override …)` + the file list |
 | `TEAM_REVIEW_ALLOW_IGNORED` | `0` | `1` = review a checkout that contains `.gitignore`d artefacts (invisible to `git status --porcelain`, yet readable by the gates); the record lists them |
 | `TEAM_REVIEW_ALLOW_UNRESOLVED_BRANCH` | `0` | `1` = stamp a review for a `--branch`/revision that does not resolve in the main worktree (deleted branch, external commit); the record says `branch-unresolved (override)` |

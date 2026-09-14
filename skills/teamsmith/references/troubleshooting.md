@@ -112,15 +112,31 @@ effect. Mitigations:
 
 ## 11. Keep-alive and liveness decisions
 
-- **How "the PM is not running" is decided**: `pane_current_command` not being a shell → running; being a shell whose
-  command line carries a non-option argument or a foreground subcommand → also treated as running (`busy`).
-  This is to accommodate pi started through a shell wrapper (where the foreground name shows bash) and user rc hooks
-  that keep a child alive (so "it has a child process" cannot be taken as busy).
-- **team up respawns the PM window's pane**: only when no pi is running there (an empty prompt).
-  So do not treat the PM window as a normal terminal; to start working manually, re-run `pi` in that window or simply
-  let the watchdog bring it up.
-  Note: `pi` is the pane's own process (we `exec` it), so when pi exits the pane closes and the window disappears —
-  exactly the `missing` case the watchdog reports (corresponding to the `TEAM_WATCH_REBUILD_TMUX` switch).
+- **How "the PM is running" is decided**: only a **proof** counts (M6.5). The PM is running when either
+  ① this tool started it and `state/pm.pid` still points at a live process whose cwd is inside the project, or
+  ② the process in the PM window is the configured agent binary (resolved the same way `dispatch` resolves it:
+  `TEAM_AGENT_BIN` > first word of `TEAM_AGENT_CMD` > `TEAM_PI_BIN`) and its cwd is in the project.
+  Everything else is reported as `foreign:<cmd>` (the occupant's cwd is not this project: `team up` refuses to
+  overwrite it unless `TEAM_REPLACE_FOREIGN_PM=1`) or `unknown:<cmd>` (cwd is inside the project but it is not the
+  agent: a just-created pane, a `sleep`, an editor). `unknown` is **not** a PM, so it never suppresses starting one —
+  `team up` replaces it and says so. `watchdog-status`, `ps`, `digest` and the monitor panel use the same proof, so
+  no surface prints "the PM is running" without it.
+  Why this is strict: the old rule ("the window exists and its foreground process is not a shell") reported a
+  *just-created* pane — where `pane_current_command` is still `tmux` — as `running:tmux`. `team up` then printed
+  "PM is running" without starting anything, `watchdog-status` repeated it, and the project's own smoke suite went
+  from green to 7 failures after the machine restarted. Status is a promise: a liveness signal that is inferred
+  instead of proven hides the exact failure the tool exists to surface.
+- **A shell wrapper still counts as the PM**: `team_pm_state` looks at the pane's own process *and* its direct
+  children and matches any word of the command line against the agent binary, so `bash /path/to/pi …`
+  (or a Pi started through a login shell) is recognised as the agent. A child that is *not* the agent does not make
+  the window a PM.
+- **team up respawns the PM window's pane**: only when no PM is running there — an empty prompt (`idle`) or a
+  non-PM process whose cwd is inside the project (`unknown`). Do not treat the PM window as a normal terminal; to
+  start working manually, re-run the agent in that window or simply let the watchdog bring it up.
+  Note: the agent is the pane's own process (we `exec` it), so when it exits the pane closes and the window
+  disappears — exactly the `missing` case the watchdog reports (corresponding to the `TEAM_WATCH_REBUILD_TMUX`
+  switch). After a successful start the pid is written to `state/pm.pid`, which is what makes a later
+  "is it still alive?" question a fact rather than a guess (the read-only commands only read it).
 - **Typing only happens when something is really running**: `say`/`notify`/the extension refuse when the target window
   sits at an empty prompt (otherwise the text would be executed by the shell as a command) and only write the inbox
   for the PM to read later.

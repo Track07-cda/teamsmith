@@ -1118,6 +1118,31 @@ assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **FAIL**" "F11 打印 time
 assert_not "$REPO/docs/team/reviews/T1.1.md" "判定: **TIMEOUT**" "F11 不因日志字样被误判成 TIMEOUT"
 rec_reset
 
+# F15（M6.5 finding 2）：门禁**自己** exit 124 ≠ 超时。旧实现只看包装器退出码，把这条记成
+# 「被 deadline 杀死」（实测：同一次 smoke 一次记 TIMEOUT、一次记 FAIL）。
+env TEAM_REVIEW_TIMEOUT=60 TEAM_GATES='echo "self-inflicted 124"; exit 124' $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f15.log" 2>&1 \
+  && bad "F15 门禁自己 exit 124 不该 PASS" || ok "F15 门禁自己 exit 124 返回非 0"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **FAIL**" "F15 门禁自己的 124 → FAIL（不是 TIMEOUT）"
+assert_not "$REPO/docs/team/reviews/T1.1.md" "判定: **TIMEOUT**" "F15 不把门禁自己的 124 记成「被 deadline 杀死」"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "实际用时" "F15 记录写明实际用时（判定必须能解释自己）"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "不是被 deadline 杀死的" "F15 记录解释了为什么不是超时"
+rec_reset
+
+# F16（M6.5 finding 2）：被信号终止 ≠ 超时 —— 信号名要写进记录，不拿「超时」顶替「被杀」
+env TEAM_REVIEW_TIMEOUT=60 TEAM_GATES='kill -TERM $$; sleep 5' $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f16.log" 2>&1 \
+  && bad "F16 被 SIGTERM 终止的门禁不该 PASS" || ok "F16 被信号终止返回非 0"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **FAIL**" "F16 被信号终止 → FAIL（不是 TIMEOUT）"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "gate killed: SIGTERM" "F16 抬头写明是哪个信号杀的"
+assert_not "$REPO/docs/team/reviews/T1.1.md" "判定: **TIMEOUT**" "F16 不把「被杀」记成「超时」"
+rec_reset
+
+# F17（M6.5 finding 2）：真超时仍然 TIMEOUT，且记录写明实际用时（与 F10 配对：一条钉 deadline，一条钉用时）
+env TEAM_REVIEW_TIMEOUT=2 TEAM_GATES='echo start; sleep 30' $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f17.log" 2>&1 \
+  && bad "F17 真挂死的门禁不该 PASS" || ok "F17 睡过 deadline 的门禁被硬超时终止"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **TIMEOUT**" "F17 用时贴住 deadline → TIMEOUT"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "实际用时" "F17 记录写明实际用时"
+rec_reset
+
 # F12：--no-gates 不是证据：digest 继续列为待复验（带 gates: none），status 打印判定
 $TEAM review T1.1 --dir "$REV_WT" --no-gates >"$TMP/review-f12.log" 2>&1 && ok "F12 --no-gates 正常写记录" || bad "F12 --no-gates 失败"
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **SKIPPED** · gates: none" "F12 记录抬头标注 gates: none"
@@ -1453,6 +1478,110 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   $TEAM up >/dev/null 2>&1 || true
 else
   printf '  (跳过巡检断言：没有 tmux)\n'
+fi
+
+# ---------------------------------------------------------------- 11b2. PM 存活的证据链（M6.5）
+# 事故：新建的、**空的** session 窗口被报成「PM 在运行（tmux）」—— `team up` 什么也没启动却说成功，
+# watchdog-status / ps / digest 照抄这个谎，环境重启后 7 条 smoke 断言变红。
+# 这里钉住新规则：存活必须是「证明」（state/pm.pid 活着且 cwd 在本项目，或窗口里就是配置的 agent），
+# 其它一律不算 PM，也**不得**压制启动。
+section "11b2 · PM 存活必须被证明（M6.5：空窗 ≠ PM 在运行）"
+if [ "$FAST" = "1" ]; then
+  fast_skip "11b2·PM 存活证据链" "要真实 tmux 窗口 + 假 pi 进程（空 session / 非 PM 占用 / 杀 pid / 外来进程）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  # 注意：teamsmith 自己就是被这个 smoke 拉起来的，所以断言必须通过 `team` CLI 与 state/ 读，
+  # 不依赖调用者的 shell、也不读开发者自己的 session。
+  pm_state_now() { ( . "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_pm_state ); }
+  # 造「新建的 session + 空的 pm 窗口」：这就是环境重启后的现场，也是 M6.5 的确定性复现。
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 0.5
+  $TEAM up >"$TMP/m65-up-fresh.log" 2>&1 && ok "M6.5 ①：session 完全不在时 up 退出码 0" || { bad "M6.5 ①：up 失败"; cat "$TMP/m65-up-fresh.log"; }
+  assert_has "$TMP/m65-up-fresh.log" "PM 已启动" "M6.5 ①：空 session 里 up 真的启动了 PM（旧实现说「PM 在运行（tmux）」却什么也没跑）"
+  assert_not "$TMP/m65-up-fresh.log" "PM 在运行（tmux）" "M6.5 ①：不再把 tmux 自己报成运行中的 PM"
+  FRESH_AFTER="$(pm_lines)"
+  assert_eq "M6.5 ①：假 agent 真的被拉起（argv 落盘）" "$([ "$FRESH_AFTER" -gt 0 ] && echo yes || echo no)" "yes"
+  case "$(pm_state_now)" in
+    running:*) ok "M6.5 ①：启动后状态是 running（$(pm_state_now)）" ;;
+    *) bad "M6.5 ①：启动后状态不是 running（$(pm_state_now)）" ;;
+  esac
+  M65_PID="$(cat "$REPO/.pi/team/state/pm.pid" 2>/dev/null | tr -dc '0-9')"
+  if [ -n "$M65_PID" ] && kill -0 "$M65_PID" 2>/dev/null; then ok "M6.5 ①：state/pm.pid 记录了活着的 PM pid"; else bad "M6.5 ①：state/pm.pid 缺失或指向死进程（[$M65_PID]）"; fi
+  # ①b 复现 PM 报告的确切格子（thread 第 2/3 条）：cwd 在项目内 + 前台进程名是 `tmux`。
+  # 老规则（窗口在 + 前台不是 shell）在这里就会输出 `running:tmux`；新规则必须报 unknown/idle
+  # 且 up 真的把 PM 拉起来（argv 日志里出现 -c 与 @pm-prompt.md）。
+  tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec tmux wait-for teamsmith-m65-never" >/dev/null 2>&1 || true
+  sleep 1
+  case "$(pm_state_now)" in
+    running:*)          bad "M6.5 ①b：前台是 tmux 的空窗被当成了 PM（$(pm_state_now)）" ;;
+    unknown:tmux|idle:*) ok "M6.5 ①b：前台是 tmux 的窗口不算 PM（$(pm_state_now)）" ;;
+    *)                  bad "M6.5 ①b：期望 unknown:tmux/idle:*，实际 $(pm_state_now)" ;;
+  esac
+  $TEAM watchdog-status >"$TMP/m65-wd-tmux.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-tmux.log" "在运行" "M6.5 ①b：watchdog-status 不把 tmux 报成「PM 在运行」"
+  BEFORE_TMUX="$(pm_lines)"
+  $TEAM up >"$TMP/m65-up-tmux.log" 2>&1 || true
+  assert_has "$TMP/m65-up-tmux.log" "PM 已启动" "M6.5 ①b：前台是 tmux 也不压制启动（PM 报告的原症状）"
+  assert_eq "M6.5 ①b：假 agent 的 argv 落盘" "$([ "$(pm_lines)" -gt "$BEFORE_TMUX" ] && echo grew || echo same)" "grew"
+  tail -n +"$((BEFORE_TMUX + 1))" "$TMP/pm-args.log" > "$TMP/m65-pm-args-delta-tmux.log" 2>/dev/null || true
+  assert_has "$TMP/m65-pm-args-delta-tmux.log" "-c" "M6.5 ①b：这一轮真的用 -c 拉起 PM（不丢历史）"
+  assert_has "$TMP/m65-pm-args-delta-tmux.log" "pm-prompt.md" "M6.5 ①b：这一轮真的用 @ 提示词文件拉起 PM"
+  M65_PID="$(cat "$REPO/.pi/team/state/pm.pid" 2>/dev/null | tr -dc '0-9')"
+  # ② 记录的 pid 是证据本身：杀掉它 → 必须立刻不再算存活
+  kill -9 "$M65_PID" 2>/dev/null || true
+  sleep 1
+  case "$(pm_state_now)" in
+    running:*) bad "M6.5 ②：记录的 pid 已被杀，却还报 running（$(pm_state_now)）" ;;
+    *)         ok "M6.5 ②：记录的 pid 死了 → 不再算存活（$(pm_state_now)）" ;;
+  esac
+  $TEAM watchdog-status >"$TMP/m65-wd-dead.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-dead.log" "在运行" "M6.5 ②：watchdog-status 不再宣称 PM 在运行"
+  # ③ 本项目 cwd 里的非 PM 进程（sleep）占着 pm 窗口：unknown:*，不算存活，up 会替换
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux new-session -d -s "$SESSION" -n "$PMW" -c "$REPO" 2>/dev/null || true
+  tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec sleep 300" >/dev/null 2>&1 || true
+  sleep 1
+  case "$(pm_state_now)" in
+    unknown:*) ok "M6.5 ③：本项目里的非 PM 进程 → unknown:*（$(pm_state_now)）" ;;
+    *)         bad "M6.5 ③：期望 unknown:*，实际 $(pm_state_now)" ;;
+  esac
+  $TEAM watchdog-status >"$TMP/m65-wd-unknown.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-unknown.log" "在运行" "M6.5 ③：watchdog-status 不把非 PM 进程当成运行中的 PM"
+  BEFORE_UNKNOWN="$(pm_lines)"
+  $TEAM up >"$TMP/m65-up-unknown.log" 2>&1 || true
+  assert_has "$TMP/m65-up-unknown.log" "PM 已启动" "M6.5 ③：非 PM 占用不压制启动（up 真的拉起 PM）"
+  assert_eq "M6.5 ③：假 agent 的 argv 又落盘了" "$([ "$(pm_lines)" -gt "$BEFORE_UNKNOWN" ] && echo grew || echo same)" "grew"
+  # 只看这一轮新增的 argv：证明拉起的是真 PM 命令（-c 延续会话 + @pm-prompt.md），不是旧日志在充数
+  tail -n +"$((BEFORE_UNKNOWN + 1))" "$TMP/pm-args.log" > "$TMP/m65-pm-args-delta.log" 2>/dev/null || true
+  assert_has "$TMP/m65-pm-args-delta.log" "-c" "M6.5 ③：这一轮真的用 -c 拉起 PM（不丢历史）"
+  assert_has "$TMP/m65-pm-args-delta.log" "pm-prompt.md" "M6.5 ③：这一轮真的用 @ 提示词文件拉起 PM"
+  # ④ 外来进程（cwd 不在本项目）占着 pm 窗口：foreign:*，不算存活，up 默认拒绝覆盖
+  tmux respawn-pane -k -t "$SESSION:$PMW" "cd /tmp && exec sleep 300" >/dev/null 2>&1 || true
+  sleep 1
+  case "$(pm_state_now)" in
+    foreign:*) ok "M6.5 ④：别的项目的进程 → foreign:*（$(pm_state_now)）" ;;
+    *)         bad "M6.5 ④：期望 foreign:*，实际 $(pm_state_now)" ;;
+  esac
+  case "$(pm_state_now)" in
+    running:*) bad "M6.5 ④：外来进程被当成运行中的 PM" ;;
+    *)         ok "M6.5 ④：外来进程不算 PM（不撒谎）" ;;
+  esac
+  $TEAM watchdog-status >"$TMP/m65-wd-foreign.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-foreign.log" "在运行" "M6.5 ④：watchdog-status 不把外来进程当成运行中的 PM"
+  $TEAM up >"$TMP/m65-up-foreign2.log" 2>&1 || true
+  assert_has "$TMP/m65-up-foreign2.log" "不属于本项目" "M6.5 ④：up 明确拒绝覆盖外来进程"
+  # ④b 窗口里的进程就是配置的 agent（人工启动的 PM）→ running（不是 unknown）
+  tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec $FAKE/pi-sleep --manual-pm" >/dev/null 2>&1 || true
+  sleep 1
+  rm -f "$REPO/.pi/team/state/pm.pid"    # 拿掉「我们启动过」这个证据，只留窗口证据
+  case "$(pm_state_now)" in
+    running:*) ok "M6.5 ④b：人工在窗口里启动的 agent 被认成 running（$(pm_state_now)）" ;;
+    *)         bad "M6.5 ④b：人工启动的 agent 没被认出（$(pm_state_now)）" ;;
+  esac
+  # 收尾：把 PM 拉回来，后面的段落（11c 起）按原来的现场跑
+  $TEAM up >/dev/null 2>&1 || true
+else
+  printf '  (跳过 PM 存活证据链：没有 tmux)\n'
 fi
 
 # ---------------------------------------------------------------- 11c. 恢复：resume / watchdog 续跑
@@ -1955,7 +2084,8 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
-  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "11·close 后窗口" "11b·巡检/watchdog" "11c·agent 续跑" \
+  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
+             "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
     else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi

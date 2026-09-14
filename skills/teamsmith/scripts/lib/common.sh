@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.19.0"
+TEAM_VERSION="1.20.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -610,25 +610,126 @@ team_cwd_in_project() { # <cwd> → 0=属于本项目（含它的 worktree）
   return 1
 }
 
-# missing | idle:<cmd> | busy:<cmd> | running:<cmd>
-#   running = 前台不是 shell（pi 本体）
-#   busy    = 前台是 shell 但有子进程（pi 是 shell wrapper 时就是这个；也包含用户在跑别的命令）
-#   idle    = 空提示符（可以安全地替成 pi）
-team_pm_state() {
-  team_pm_window_exists || { printf 'missing'; return 0; }
-  local cmd; cmd="$(team_pane_cmd "$(team_pm_target)")"
-  # 归属校验：窗口里的进程 cwd 必须在本项目里（否则是别的项目/测试残留占着这个窗口）
-  local cwd; cwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || true)"
-  if [ -n "$cwd" ] && ! team_cwd_in_project "$cwd"; then
-    printf 'foreign:%s' "${cmd:-unknown}"; return 0
-  fi
-  if ! team_is_shell_cmd "$cmd"; then printf 'running:%s' "$cmd"; return 0; fi
-  if team_pane_busy "$(team_pm_target)"; then printf 'busy:%s' "${cmd:-shell}"; return 0; fi
-  printf 'idle:%s' "${cmd:-shell}"
+# ---------------------------------------------------------------- PM 存活：是「证明」，不是「猜」
+# 事故（M6.5）：旧 `team_pm_state` 只问「窗口在 + 前台不是 shell」，于是**刚建好的空窗口**
+# （pane 那一瞬间的进程名是 tmux 自己）被判成 running:tmux → `team up` 打印「PM 在运行」却
+# 什么也没启动，watchdog-status / ps / digest 照抄这个谎，环境重启后 7 条 smoke 断言变红。
+# 这也是「status 就是承诺」那一类：工具存在的意义是暴露问题，不是把问题盖住。
+#
+# 现在的规则：
+#   ① 我们自己启动过 PM（state/pm.pid）→ 该 pid 活着 **且** cwd 在本项目里 = running（最强证据）；
+#   ② 人工在窗口里起的 PM → 窗口里（pane_pid 本身或它的直接子进程）命令行中出现**配置的 agent
+#      可执行文件**（解析顺序与 dispatch 一致：TEAM_AGENT_BIN > TEAM_AGENT_CMD 首词 > TEAM_PI_BIN）
+#      **且** cwd 在本项目里 = running；
+#   ③ 占用者 cwd 不属于本项目 = foreign:<cmd>（up 默认拒绝覆盖，TEAM_REPLACE_FOREIGN_PM=1 才动）；
+#   ④ 本项目 cwd 里的非 agent 进程 = unknown:<cmd>（新建空窗、sleep/编辑器/tmux 瞬态都在这里）：
+#      **不是 PM**，所以不得压制恢复 —— `team up` 会替换它，并且明确说自己在替换。
+# 读命令绝不改状态（M6.1 F28）：这里只读 pm.pid，不删。
+team_pm_pid_file() { printf '%s\n' "$TEAM_STATE_DIR/pm.pid"; }
+
+team_pm_pid_record() { # <pid>：记下「本工具启动的 PM」的 pid
+  local p="${1:-}"
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  mkdir -p "$TEAM_STATE_DIR"
+  printf '%s\n' "$p" > "$(team_pm_pid_file)"
 }
 
+team_pm_pid_clear() { rm -f "$(team_pm_pid_file)"; }
+
+team_pm_recorded_pid() { # → 记录的 pid（没有/不合法 → 非 0）
+  local f p
+  f="$(team_pm_pid_file)"
+  [ -f "$f" ] || return 1
+  p="$(head -1 "$f" 2>/dev/null | tr -dc '0-9')"
+  [ -n "$p" ] || return 1
+  printf '%s\n' "$p"
+}
+
+# 记录的 pid 还算不算「本项目的 PM」：活着 + cwd 属于本项目
+# （只 pid 活着不够：pid 会被回收，别的项目/别的目录的进程都可能顶替这个号）
+team_pm_pid_live() {
+  local pid cwd
+  pid="$(team_pm_recorded_pid)" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
+  [ -n "$cwd" ] || return 1
+  team_cwd_in_project "$cwd"
+}
+
+# 这个 pid 的命令行里有没有「配置的 agent 可执行文件」？
+# 不能只看 argv[0]：pi 可能是 node/bun 脚本（前台名 node/bun），经 shell 包装启动时还会多一层
+# `bash /path/pi-sleep …`。所以按分词找，命中任一个词的 basename 即可（cwd 归属另判）。
+team_proc_is_agent_bin() { # <pid>
+  local pid="${1:-}" want base args tok
+  [ -n "$pid" ] || return 1
+  want="$(team_agent_bin_path 2>/dev/null || true)"
+  [ -n "$want" ] || return 1
+  case "$want" in
+    /*) base="$(basename "$want")" ;;
+    *)  base="$want" ;;
+  esac
+  [ -n "$base" ] || return 1
+  args="$(ps -o args= -p "$pid" 2>/dev/null | head -1)"
+  [ -n "$args" ] || return 1
+  for tok in $args; do
+    [ -n "$tok" ] || continue
+    case "${tok##*/}" in
+      "$base") return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# 窗口里跑着配置的 agent 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
+team_pm_pane_agent_pid() { # <session:window>
+  local target="${1:-}" pane p
+  [ -n "$target" ] || return 1
+  pane="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
+  [ -n "$pane" ] || return 1
+  team_proc_is_agent_bin "$pane" && { printf '%s\n' "$pane"; return 0; }
+  for p in $(ps -o pid= --ppid "$pane" 2>/dev/null | tr -d ' '); do
+    team_proc_is_agent_bin "$p" && { printf '%s\n' "$p"; return 0; }
+  done
+  return 1
+}
+
+# missing | idle:<cmd> | running:<cmd> | foreign:<cmd> | unknown:<cmd>
+#   running = **证明**是本项目的 PM（记录的 pid 活着且在本项目，或窗口里的进程就是配置的 agent）
+#   idle    = 空提示符（可以安全地 respawn 成 PM）
+#   foreign = 占用者 cwd 不属于本项目（up 默认不覆盖）
+#   unknown = 占用者 cwd 在本项目里、但不是我们的 agent（刚建好的空窗 / sleep / 编辑器 / tmux 瞬态）
+team_pm_state() {
+  team_pm_window_exists || { printf 'missing'; return 0; }
+  local target cmd pane pid cwd apid
+  target="$(team_pm_target)"
+  cmd="$(team_pane_cmd "$target")"
+  pane="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
+  pid="$(team_pane_proc_pid "$target" 2>/dev/null || true)"
+  # ① 归属：占用者不在本项目里 → foreign（先判，绝不给别的项目的进程发「PM 在运行」的证书）
+  for pid in ${pid:-} ${pane:-}; do
+    [ -n "$pid" ] || continue
+    cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
+    if [ -n "$cwd" ] && ! team_cwd_in_project "$cwd"; then
+      printf 'foreign:%s' "${cmd:-unknown}"; return 0
+    fi
+  done
+  # ② 我们自己启动过，而且它还活着、还在本项目里
+  if team_pm_pid_live; then printf 'running:%s' "$(team_pm_recorded_pid)"; return 0; fi
+  # ③ 人工启动的 PM：窗口里的进程就是配置的 agent 可执行文件（cwd 已在上面的归属校验里过）
+  apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
+  if [ -n "$apid" ]; then
+    cwd="$(team_proc_cwd "$apid" 2>/dev/null || true)"
+    [ -n "$cwd" ] && team_cwd_in_project "$cwd" && { printf 'running:%s' "${cmd:-agent}"; return 0; }
+  fi
+  # ④ 空提示符：可以安全地替换成 PM
+  if team_is_shell_cmd "$cmd" && ! team_pane_busy "$target"; then printf 'idle:%s' "${cmd:-shell}"; return 0; fi
+  # ⑤ 本项目里的非 agent 占用者：不是 PM，也就不能压制启动
+  printf 'unknown:%s' "${cmd:-unknown}"
+}
+
+# 只有 running 才算「PM 在跑」：unknown:/foreign: 都不是 PM（否则就会出现 M6.5 那个假存活）
 team_pm_alive() {
-  case "$(team_pm_state)" in running:*|busy:*) return 0 ;; *) return 1 ;; esac
+  case "$(team_pm_state)" in running:*) return 0 ;; *) return 1 ;; esac
 }
 
 team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 skill 升级）
@@ -669,17 +770,22 @@ team_pm_write_prompt() {
 # 用 respawn-pane 把 pane 的进程直接换成我们的命令，而不是把命令“打字”进去：
 #   - 打字受 TTY 行长限制（4KB）和 shell wrapper/rc 钩子/按键时序影响，不可靠；
 #   - respawn 是确定性的：同一个 pane，命令就是我们要的。
-# 只在 pane 里没有东西在跑（idle/missing）时才 respawn；busy/running 一律不抢。
+# 只在 pane 里没有真 PM 时才 respawn：idle（空提示符）/ unknown（本项目里的非 PM 占用者）都算
+# 「没有 PM」；foreign（别的项目的进程）默认不抢，要 TEAM_REPLACE_FOREIGN_PM=1 显式授权。
+# 启动成功后把**证明了是 agent 的那个 pid** 写进 state/pm.pid —— 这是后续 team_pm_alive 的证据，
+# 而不再是「窗口在 + 前台不是 shell」这种猜测（M6.5）。
 team_pm_start() {
-  local target state cmd pf i wait
+  local target state cmd pf i wait apid
   target="$(team_pm_target)"
   team_pm_window_exists || return 1
   state="$(team_pm_state)"
   case "$state" in
     running:*) team_dim "  PM 已在运行（${state#running:}）"; return 0 ;;
-    busy:*)    team_dim "  PM 窗口里有进程在跑（${state#busy:}）：不动它"
-               return 1 ;;
     idle:*)    ;;
+    unknown:*)
+      local ucwd; ucwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"
+      team_warn "PM 窗口 $target 里的进程不是 PM（${state#unknown:}，cwd=$ucwd）：按 up 的语义替换它"
+      team_dim "  那是你手动在跑的东西？先退出或挪到别的窗口；不想被替换就别跑 up" >&2 ;;
     foreign:*)
       local fcwd; fcwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"
       team_err "PM 窗口 $target 被**不属于本项目**的进程占用（cwd=$fcwd）：不覆盖它"
@@ -691,18 +797,25 @@ team_pm_start() {
   pf="$(team_pm_write_prompt)"
   local pi_bin; pi_bin="$(team_pi_bin_path)"
   cmd="$(printf 'cd %q && exec %q %s @%q' "$TEAM_MAIN_ROOT" "$pi_bin" "$(team_pm_pi_args)" "$pf")"
+  team_pm_pid_clear      # 旧记录先作废：这一行下面是“换进程”，不能留下旧 pid 冒充新 PM
   team_tmux_respawn_pane "$target" "$cmd" || {
     team_err "respawn-pane 失败：$target"
     return 1
   }
+  # 记录 pid = **等到窗口里真的跑着配置的 agent 可执行文件**，才把它的 pid 写盘。
+  # 不能 respawn 完立刻读 pane_pid：那一瞬间 tmux 可能还报自己（这正是 M6.5 假存活的来源）。
   wait="${TEAM_PM_START_WAIT:-6}"
   i=0
   while [ "$i" -lt "$wait" ]; do
     [ "${i}" -gt 0 ] && sleep 1
-    team_pm_alive && return 0
+    apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
+    if [ -n "$apid" ]; then
+      team_pm_pid_record "$apid"
+      return 0
+    fi
     i=$((i + 1))
   done
-  team_err "PM 启动后 ${wait}s 内没看到 pi 在跑：检查窗口输出与 $pf"
+  team_err "PM 启动后 ${wait}s 内没在窗口 $target 里看到配置的 agent 进程：检查窗口输出与 $pf"
   return 1
 }
 

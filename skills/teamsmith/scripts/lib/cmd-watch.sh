@@ -78,10 +78,19 @@ team_cmd_up() {
   local pm_state; pm_state="$(team_pm_state)"
   case "$pm_state" in
     running:*) team_ok "PM 在运行（${pm_state#running:}）" ;;
-    busy:*)    team_ok "PM 窗口有进程在跑（${pm_state#busy:}，视为存活；不重复启动）" ;;
     idle:*)    team_warn "PM 没在跑（空提示符）：启动 pi"
                if team_pm_start; then
                  team_ok "PM 已启动（model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}，$([ -n "$TEAM_PM_SESSION_ID" ] && echo "--session-id $TEAM_PM_SESSION_ID" || echo "-c 延续上一会话")）"
+               else
+                 team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 pi"
+               fi ;;
+    unknown:*)
+               # 窗口里是本项目 cwd 的**非 PM** 进程（新建空窗的瞬态、sleep、编辑器…）：
+               # 不是 PM 就不能压制恢复（M6.5 就是「空窗被当成 PM，up 什么也不干还说成功」）
+               local _ucwd; _ucwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')"
+               team_warn "PM 窗口里有非 PM 进程（${pm_state#unknown:}，cwd=$_ucwd）：不算存活"
+               if team_pm_start; then
+                 team_ok "PM 已启动（替换了非 PM 进程；model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
                else
                  team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 pi"
                fi ;;
@@ -240,9 +249,11 @@ team_watch_once() {
   fi
 
   # ③c 有待办但 PM 没在跑 → 把它拉起来（除非 tmux 场地不在且不允许重建）
+  #     idle（空提示符）与 unknown（本项目里的非 PM 占用者）都算「没有 PM」；foreign 不碰。
   local st; st="$(team_pm_state)"
   case "$st" in
     idle:*) ;;
+    unknown:*) team_wlog "PM 窗口里不是 PM（$st）：按「没有 PM」处理" ;;
     *)
       if [ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ]; then
         if ! team_assert_own_session "watchdog 重建 tmux"; then
@@ -520,8 +531,8 @@ team_cmd_watchdog_status() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) team_ok "  PM              在运行（${pm#running:}）" ;;
-    busy:*)    team_ok "  PM              窗口有进程在跑（${pm#busy:}，视为存活）" ;;
     idle:*)    team_warn "  PM              未在跑（空提示符）；有待办时看门狗会拉起它（$TEAM_CLI up 手动）" ;;
+    unknown:*) team_warn "  PM              窗口里不是 PM（${pm#unknown:}，cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：**不算存活**；$TEAM_CLI up 会替换它" ;;
     foreign:*) team_warn "  PM              窗口被**不属于本项目**的进程占用（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
     *)         team_warn "  PM              窗口缺失（有待办时：$TEAM_CLI up，或设 TEAM_WATCH_REBUILD_TMUX=1）" ;;
   esac

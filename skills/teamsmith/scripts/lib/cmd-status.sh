@@ -102,8 +102,11 @@ team_cmd_ps() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) printf '  PM（%s）在运行（%s）\n' "$TEAM_PM_WINDOW" "${pm#running:}" ;;
-    busy:*)    printf '  PM（%s）窗口有进程在跑（%s，视为存活，不打扰）\n' "$TEAM_PM_WINDOW" "${pm#busy:}" ;;
     idle:*)    printf '  PM（%s）**未在跑**（空提示符）→ team up\n' "$TEAM_PM_WINDOW" ;;
+    unknown:*) printf '  PM（%s）窗口里是**非 PM 进程**（%s，cwd=%s）：不算存活 → team up\n' \
+                 "$TEAM_PM_WINDOW" "${pm#unknown:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
+    foreign:*) printf '  PM（%s）窗口被**别的项目**的进程占着（cwd=%s）：不覆盖\n' \
+                 "$TEAM_PM_WINDOW" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
     *)         printf '  PM 窗口缺失 → team up\n' ;;
   esac
   printf '  watchdog %s\n' "$(team_watchdog_state_text)"
@@ -171,8 +174,9 @@ team_cmd_digest() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) printf '  PM ● 在运行（%s）' "${pm#running:}" ;;
-    busy:*)    printf '  PM ● 窗口有进程在跑（%s）' "${pm#busy:}" ;;
     idle:*)    printf '  PM ○ **未在跑**（空提示符）→ team up' ;;
+    unknown:*) printf '  PM ○ 窗口里是非 PM 进程（%s）→ team up' "${pm#unknown:}" ;;
+    foreign:*) printf '  PM ○ 窗口被别的项目占着（不覆盖）' ;;
     *)         printf '  PM ○ 窗口缺失 → team up' ;;
   esac
   printf ' ｜ watchdog %s\n' "$(team_watchdog_state_text)"
@@ -302,8 +306,9 @@ team_panel() {
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) printf '  %-9s %s●%s 在运行（%s）\n' "PM" "$C_GRN" "$C_RESET" "${pm#running:}" ;;
-    busy:*)    printf '  %-9s %s●%s 窗口有进程在跑（%s）\n' "PM" "$C_GRN" "$C_RESET" "${pm#busy:}" ;;
     idle:*)    printf '  %-9s %s○%s 未在跑（空提示符）\n' "PM" "$C_YEL" "$C_RESET" ;;
+    unknown:*) printf '  %-9s %s○%s 窗口里是非 PM 进程（%s）\n' "PM" "$C_YEL" "$C_RESET" "${pm#unknown:}" ;;
+    foreign:*) printf '  %-9s %s○%s 窗口被别的项目占着\n' "PM" "$C_YEL" "$C_RESET" ;;
     *)         printf '  %-9s %s○%s 窗口缺失\n' "PM" "$C_YEL" "$C_RESET" ;;
   esac
   local pend; pend="$(team_pending_text)"

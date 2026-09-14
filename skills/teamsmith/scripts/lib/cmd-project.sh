@@ -340,6 +340,8 @@ team_cmd_doctor() {
     case "$pmstate" in
       running:*) pass "pi 在运行（${pmstate#running:}）" ;;
       idle:*)    warn "窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 停在 ${pmstate#idle:}：PM 没在跑 → team up" ;;
+      unknown:*) warn "窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 里不是 PM（${pmstate#unknown:}）：不算存活 → team up（会替换它）" ;;
+      foreign:*) warn "窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 被别的项目的进程占着（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
       *)         warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在 → team up" ;;
     esac
 

@@ -127,6 +127,12 @@ now".
 - **Pending work** → wake the PM (nudge it if it is running; if not, start it with `pi -c` and the kick-off prompt
   `@state/pm-prompt.md`); **nothing pending** → do not wake it, do not start it — the PM is not required to run
   continuously, and being quiet is a valid state.
+- **"The PM is running" is a proof, not an inference**: either `state/pm.pid` (recorded by the start path) points at
+  a live process whose cwd is inside the project, or the process in the PM window is the configured agent binary and
+  its cwd is in the project. A window occupied by anything else is `foreign:<cmd>` (another project's cwd — not
+  overwritten without `TEAM_REPLACE_FOREIGN_PM=1`) or `unknown:<cmd>` (in-project cwd, but not the agent). `unknown`
+  never suppresses starting the PM: a freshly created, empty pane is not a running PM, and claiming otherwise is how
+  `team up` once printed "PM is running" while starting nothing (M6.5).
 - The PM can stand down deliberately: `team standby on --reason "…"` (nothing to do / a human has to step in), after
   which it is not woken; a backlog is still logged; once a human has dealt with it, `team standby off`.
 - Repeated reminders for the same batch are limited by `TEAM_WATCH_NUDGE_GAP`; a PM that is busy can simply ignore a
@@ -322,10 +328,12 @@ A trap: an add/add conflict is often git's rename detection pairing two differen
   output.
 - Therefore: `team review` **always wraps the gates in a hard timeout** (`TEAM_REVIEW_TIMEOUT`, 1800s by default; a
   timeout is recorded as `TIMEOUT`, treated as FAIL and written into the verification record). The verdict is taken from
-  the `timeout` **wrapper's exit code** (124 = TERM fired, 137 = the child ignored TERM and was KILLed), never from a
-  substring of the gate's own log — otherwise a hung gate reads as a plain failure and a gate that merely *prints*
-  “using timeout 5” reads as a timeout. Gate commands should
-  carry their own `timeout` too (e.g. `timeout 900 pnpm test:unit`).
+  the `timeout` **wrapper's exit code together with the elapsed time** (124 = TERM fired, 137 = the child ignored TERM
+  and was KILLed), never from a substring of the gate's own log — otherwise a hung gate reads as a plain failure and a
+  gate that merely *prints* “using timeout 5” reads as a timeout. Requiring **both** signals is what stops the opposite
+  error: a gate that exits 124 by itself (or a suite whose inner test propagates 124) used to be recorded as "killed at
+  the deadline"; it is now `FAIL` (a signal-terminated gate is recorded as `FAIL` with the signal named). Gate commands
+  should carry their own `timeout` too (e.g. `timeout 900 pnpm test:unit`).
 - Acceptance commands in a brief should carry their own timeout as well; destructive experiment scripts must restore
   the scene with `trap 'git checkout -- …' EXIT`.
 
