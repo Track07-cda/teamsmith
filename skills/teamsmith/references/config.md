@@ -177,7 +177,11 @@ had the model counter call `team_state_clear` for dead windows, so a single `tea
 | `TEAM_MIN_FREE_SWAP_MB` | `1024` | **hard line**: the free **disk swap** floor (**zram excluded**) |
 | `TEAM_ZRAM_WARN_PCT` | `85` | above this zram usage, warn only |
 | `TEAM_MERGE_PREFER_THEIRS` | empty | paths that default to the branch side on a `merge` conflict (comma separated, e.g. `pnpm-lock.yaml`) |
-| `TEAM_REVIEW_TIMEOUT` | `1800` | hard timeout for the gates `team review` runs (seconds); a timeout → `TIMEOUT` (treated as FAIL) |
+| `TEAM_REVIEW_TIMEOUT` | `1800` | hard timeout for the gates `team review` runs (seconds); the verdict comes from the `timeout` wrapper's exit code (124/137) → `TIMEOUT` (treated as FAIL), never from the gate's own log text |
+| `TEAM_REVIEW_ALLOW_DIRTY` | `0` | `1` = review a checkout with uncommitted changes anyway (the only override that works); the verification record then states `checkout dirty: N files (override …)` + the file list |
+| `TEAM_REVIEW_ALLOW_IGNORED` | `0` | `1` = review a checkout that contains `.gitignore`d artefacts (invisible to `git status --porcelain`, yet readable by the gates); the record lists them |
+| `TEAM_REVIEW_ALLOW_UNRESOLVED_BRANCH` | `0` | `1` = stamp a review for a `--branch`/revision that does not resolve in the main worktree (deleted branch, external commit); the record says `branch-unresolved (override)` |
+| `TEAM_REVIEW_ANY_DIR` | `0` | `1` = skip the “checkout HEAD == branch tip” guard when deliberately reviewing a historical revision (pair it with `--branch <sha>`) |
 | `TEAM_MIN_FREE_SWAP_MB` | temporarily override the disk swap floor |
 | `TEAM_MEMINFO_FILE` | point at another meminfo file (for containers/tests without `/proc/meminfo`) |
 | `TEAM_MODEL_LIMITS` | temporarily loosen/tighten concurrency (`""` means unlimited) |

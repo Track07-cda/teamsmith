@@ -976,8 +976,15 @@ section "9 · agent 提交 + 报告"
        '```' \
        '' \
        '## 翻转证据（control experiment）' \
-       '- 破坏实现 → 守门测试必须失败；独立验证包见 docs/team/reports/T1.1/verify.sh' \
+       '- 破坏实验：把实现改坏 → 守门测试退出码 1（red）' \
+       '- 恢复实现：守门测试退出码 0，全部通过（green）' \
+       '- 独立验证包（不复用被测夹具）：docs/team/reports/T1.1/verify.sh' \
+       '```' \
+       '$ bash docs/team/reports/T1.1/verify.sh' \
+       '```' \
        > docs/team/reports/T1.1-dev.md \
+  && mkdir -p docs/team/reports/T1.1 \
+  && printf '#!/usr/bin/env bash\necho "flip package"\n' > docs/team/reports/T1.1/verify.sh \
   && for i in $(seq 1 300); do printf 'padding line %s\n' "$i"; done >> docs/team/reports/T1.1-dev.md \
   && git add -A && git commit -qm "feat(T1.1): add feature" ) >/dev/null 2>&1 \
   && ok "worktree 内提交成功" || bad "worktree 内提交失败"
@@ -1018,13 +1025,13 @@ else
 fi
 assert_has "$TMP/review-sub.log" "根目录" "说明了必须传根目录"
 
-# 强复验判定：长报告（300+ 行、关键词在结尾）里的证据不能被 SIGPIPE 吃掉
-if grep -q '破坏性验证证据（故意改坏实现 → 守门测试必须失败）：有' "$REPO/docs/team/reviews/T1.1.md" 2>/dev/null \
-   || grep -q '翻转证据' "$REV_WT/docs/team/reports/T1.1-dev.md" 2>/dev/null; then
-  ok "长报告里的翻转/独立包证据被正确识别（SIGPIPE 假阴性已修）"
-else
-  bad "长报告里的证据被判成「缺」（SIGPIPE 假阴性）"
-fi
+# 强复验判定：长报告（300+ 行、证据在结尾）必须被结构化认出来
+# （F13/F14：不靠关键词蒙；英文-first 写法也不能漏；记录要能解释自己）
+$TEAM review T1.1 --dir "$REV_WT" --strong >"$TMP/review-strong.log" 2>&1 || true
+assert_has "$REPO/docs/team/reviews/T1.1.md" "| **判定** | **满足强复验** |" "长报告里的翻转/独立包证据被结构化识别"
+assert_match "$REPO/docs/team/reviews/T1.1.md" '\| 翻转结果 red（失败侧） \| 有 \|' "强复验清单逐条列出 red 侧证据"
+assert_match "$REPO/docs/team/reviews/T1.1.md" '\| 翻转结果 green（通过侧） \| 有 \|' "强复验清单逐条列出 green 侧证据"
+assert_match "$REPO/docs/team/reviews/T1.1.md" 'checkout 里存在（文件：docs/team/reports/T1\.1/verify\.sh）' "强复验清单检查了包路径真的在 checkout 里"
 
 # 脏 checkout 也不许盖章（fixture PM 的实测 finding：只钉 HEAD 身份、不钉内容）
 printf 'dirty\n' >> "$REV_WT/feature.txt"
@@ -1044,6 +1051,172 @@ assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **FAIL**" "复验记录标
 sed -i 's/^TEAM_GATES="false"/TEAM_GATES="true"/' "$REPO/.pi/team/config.sh"
 $TEAM review T1.1 --dir "$REV_WT" >/dev/null 2>&1
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "恢复门禁后复验 PASS"
+
+# ---------------------------------------------------------------- 10b. 复验证据完整性（M6.2 / V4.0 F7–F14 · F3）
+section "10b · 复验证据完整性（记录必须描述真的验过什么）"
+
+# 备份一份正常的 PASS 记录；下面的破坏性用例跑完再重建现场
+cp "$REPO/docs/team/reviews/T1.1.md" "$TMP/record-ok.md"
+rec_reset() { rm -f "$REPO/docs/team/reviews/T1.1.md" "$REPO/docs/team/reviews/T1.1-verify.log"; }
+rev_refresh() { git -C "$REPO" worktree remove --force "$REV_WT" >/dev/null 2>&1; git -C "$REPO" worktree add -q --detach "$REV_WT" task/T1.1-smoke >/dev/null 2>&1; }
+rec_reset   # 先清掉 10 节留下的记录，后面的断言才是在看“本次到底写没写”
+
+# F7：--branch 解析不到 → 默认拒绝（不许跳过 checkout 一致性守卫、把记录盖到不存在的 revision 上）
+if $TEAM review T1.1 --dir "$REV_WT" --branch no-such-branch >"$TMP/review-f7.log" 2>&1; then
+  bad "F7 --branch 解析不到时 review 仍 PASS（守卫被跳过）"
+else
+  ok "F7 --branch 解析不到 → 默认拒绝（fail closed）"
+fi
+assert_has "$TMP/review-f7.log" "分支解析不到" "F7 拒绝理由写明是分支解析不到"
+assert_has "$TMP/review-f7.log" "期望：" "F7 说明期望解析什么 ref"
+assert_has "$TMP/review-f7.log" "task/T1.1-smoke" "F7 列出找到的候选分支"
+assert_has "$TMP/review-f7.log" "allow-unresolved-branch" "F7 给出显式覆盖开关"
+assert_not_file "$REPO/docs/team/reviews/T1.1.md" "F7 被拒时不写复验记录"
+$TEAM review T1.1 --dir "$REV_WT" --branch no-such-branch --allow-unresolved-branch >"$TMP/review-f7b.log" 2>&1 \
+  && ok "F7 --allow-unresolved-branch 是唯一的覆盖路径" || bad "F7 显式覆盖没生效"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "分支未解析" "F7 覆盖时记录里标注了分支未解析"
+rec_reset
+
+# F8：TEAM_REVIEW_ALLOW_DIRTY=1 的覆盖必须写进记录，不许再说“干净”
+printf 'dirty-line\n' >> "$REV_WT/feature.txt"
+env TEAM_REVIEW_ALLOW_DIRTY=1 $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f8.log" 2>&1 \
+  && ok "F8 ALLOW_DIRTY 覆盖仍可用（只走显式开关）" || bad "F8 ALLOW_DIRTY 覆盖失效"
+assert_not "$TMP/review-f8.log" "干净" "F8 覆盖时 CLI 不再谎称“干净”"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "checkout dirty: 1 files (override TEAM_REVIEW_ALLOW_DIRTY=1)" "F8 记录写明 dirty N files（override）"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "feature.txt" "F8 记录列出脏文件（路径头部）"
+git -C "$REV_WT" checkout -q -- feature.txt
+rec_reset
+
+# F9：被 .gitignore 忽略的产物（status --porcelain 看不见）默认拒绝；覆盖时记进记录
+mkdir -p "$REV_WT/.pi/team/state" && printf 'probe\n' > "$REV_WT/.pi/team/state/probe.txt"
+assert_eq "F9 现场：ignored 产物对 status --porcelain 不可见" "$(git -C "$REV_WT" status --porcelain | grep -c . || true)" "0"
+if env TEAM_GATES='test -f .pi/team/state/probe.txt' $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f9.log" 2>&1; then
+  bad "F9 门禁读到 ignored 产物（不在提交里）时仍然 PASS"
+else
+  ok "F9 ignored 产物默认拒绝（不再静默信任 status --porcelain）"
+fi
+assert_has "$TMP/review-f9.log" "忽略" "F9 拒绝时说明是 ignored 产物"
+assert_has "$TMP/review-f9.log" "TEAM_REVIEW_ALLOW_IGNORED" "F9 给出显式覆盖开关"
+env TEAM_REVIEW_ALLOW_IGNORED=1 TEAM_GATES='test -f .pi/team/state/probe.txt' $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f9b.log" 2>&1 \
+  && ok "F9 ALLOW_IGNORED 覆盖生效" || bad "F9 覆盖没生效"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "ignored artifacts: 1" "F9 记录写明 ignored N"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "probe.txt" "F9 记录列出被忽略的路径"
+rm -rf "$REV_WT/.pi/team/state"
+rec_reset
+
+# F10：真挂死 → TIMEOUT（只认 timeout 包装器退出码 124/137，不 grep 门禁日志）
+env TEAM_REVIEW_TIMEOUT=1 TEAM_GATES='echo start; sleep 30' $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f10.log" 2>&1 \
+  && bad "F10 挂死的门禁不该 PASS" || ok "F10 挂死的门禁被硬超时终止且返回非 0"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **TIMEOUT**" "F10 记录判定 TIMEOUT（与 FAIL 区分）"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "硬超时终止" "F10 记录里有“被硬超时终止”那句"
+rec_reset
+
+# F11：门禁只是打印 'timeout' 字样 + 普通失败 → FAIL（不许因为日志字样记成 TIMEOUT）
+env TEAM_GATES='echo "using timeout 5 for the probe"; exit 3' $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review-f11.log" 2>&1 \
+  && bad "F11 失败门禁不该 PASS" || ok "F11 普通失败返回非 0"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **FAIL**" "F11 打印 timeout 字样的普通失败记为 FAIL"
+assert_not "$REPO/docs/team/reviews/T1.1.md" "判定: **TIMEOUT**" "F11 不因日志字样被误判成 TIMEOUT"
+rec_reset
+
+# F12：--no-gates 不是证据：digest 继续列为待复验（带 gates: none），status 打印判定
+$TEAM review T1.1 --dir "$REV_WT" --no-gates >"$TMP/review-f12.log" 2>&1 && ok "F12 --no-gates 正常写记录" || bad "F12 --no-gates 失败"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **SKIPPED** · gates: none" "F12 记录抬头标注 gates: none"
+$TEAM digest >"$TMP/digest-f12.log" 2>&1 || true
+assert_has "$TMP/digest-f12.log" "T1.1-dev [gates: none]" "F12 digest 继续列为待复验并标 gates: none"
+$TEAM status T1.1 >"$TMP/status-f12.log" 2>&1 || true
+assert_has "$TMP/status-f12.log" "判定: SKIPPED · HEAD " "F12 status 在记录路径旁打印判定"
+
+# F13：只“提到”关键词的报告不算证据（旧实现会判成“满足强复验”）
+{ printf '# T1.1 · keyword-only\n\n'
+  printf 'There is no 翻转 evidence in this report and no 独立验证包: those two words appear only as a sentence\n'
+  printf 'about what is missing. Nothing was broken on purpose.\n'; } > "$REPO/.worktrees/dev/docs/team/reports/T1.1-dev.md"
+git -C "$REPO/.worktrees/dev" add -A && git -C "$REPO/.worktrees/dev" commit -qm "docs(T1.1): report that only mentions the keywords"
+rev_refresh; rec_reset
+$TEAM review T1.1 --dir "$REV_WT" --strong >"$TMP/review-f13.log" 2>&1 || true
+assert_has "$REPO/docs/team/reviews/T1.1.md" "不满足（不阻塞合并" "F13 只提关键词的报告 → 不满足强复验"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "翻转小节 | 缺" "F13 记录说明缺的是「翻转小节」"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定规则" "F13 记录解释判定规则（看了什么）"
+assert_has "$TMP/review-f13.log" "强复验证据不完整" "F13 缺证据时 CLI 明确告警"
+
+# F14：真正的英文写法（flip 小节 + red→green + 独立包路径）必须被认出来
+{ printf '# T1.1 · genuine english report\n\n'
+  printf '## Flip evidence\n\n'
+  printf 'Red before -> green after: I broke the implementation on purpose and the guard test failed, then I restored it.\n\n'
+  printf 'The reproduction lives in an independent verification package (docs/team/reports/T1.1/pkg) written from\n'
+  printf 'scratch; it does not reuse the implementation fixtures. Red/green logs are in the same directory.\n'; } > "$REPO/.worktrees/dev/docs/team/reports/T1.1-dev.md"
+git -C "$REPO/.worktrees/dev" add -A && git -C "$REPO/.worktrees/dev" commit -qm "docs(T1.1): genuine english flip evidence"
+rev_refresh; rec_reset
+$TEAM review T1.1 --dir "$REV_WT" --strong >"$TMP/review-f14.log" 2>&1 || true
+assert_has "$REPO/docs/team/reviews/T1.1.md" "| **判定** | **满足强复验** |" "F14 English-first 的翻转+独立包证据被认出"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "Flip evidence" "F14 记录给出命中的小节标题"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "checkout 里没有这个路径" "F14 老实记下包路径未随分支提交（提示项，不阻塞）"
+
+# F14b（PM 退回的复现）：报告措辞直接取自我们自己的模板 —— 检查器不能只认自己的正则，
+# 否则「检查器 ↔ 模板」会漂移（模板改写后真报告又被判“缺证据”）
+TMPL_FLIP_HEAD="$(grep -m1 -E '^#{2,3}[[:space:]].*[Ff]lip' "$SKILL_DIR/templates/report.md.tmpl" | sed 's/[[:space:]]*$//')"
+[ -n "$TMPL_FLIP_HEAD" ] || TMPL_FLIP_HEAD='## Flip evidence'
+{ printf '# T1.1 · template shaped report\n\n'
+  printf '%s\n\n' "$TMPL_FLIP_HEAD"
+  printf '```\n$ bash docs/team/reports/T1.1-dev/pkg/run.sh --flip\n'
+  printf 'before the fix: guard test failed (red)\n'
+  printf 'after the fix:  guard test passed (green)\n```\n\n'
+  printf 'The reproduction lives in docs/team/reports/T1.1-dev/pkg (independent package, does not reuse the implementation fixtures).\n'; } > "$REPO/.worktrees/dev/docs/team/reports/T1.1-dev.md"
+mkdir -p "$REPO/.worktrees/dev/docs/team/reports/T1.1-dev/pkg"
+printf '#!/usr/bin/env bash\necho "red before"; echo "green after"\n' > "$REPO/.worktrees/dev/docs/team/reports/T1.1-dev/pkg/run.sh"
+git -C "$REPO/.worktrees/dev" add -A && git -C "$REPO/.worktrees/dev" commit -qm "docs(T1.1): report shaped like our template"
+rev_refresh; rec_reset
+$TEAM review T1.1 --dir "$REV_WT" --strong >"$TMP/review-f14b.log" 2>&1 || true
+assert_has "$REPO/docs/team/reviews/T1.1.md" "| **判定** | **满足强复验** |" "F14b 模板措辞的真报告 → 满足（检查器与模板对齐）"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "$TMPL_FLIP_HEAD" "F14b 记录引用的就是模板里的真实小节标题"
+assert_match "$REPO/docs/team/reviews/T1.1.md" 'checkout 里存在（(文件|目录)：docs/team/reports/T1.1-dev/pkg' "F14b 真实存在的 pkg 路径被认出"
+
+# F14c（PM 复现报的形状）：Red before / Green after + `pkg/run.sh`（相对报告目录解析）
+{ printf '# T1.1 · PM shaped report\n\n'
+  printf '## Flip evidence\nRed before: guard test failed (see pkg/flip red log)\nGreen after: guard test passes\n\n'
+  printf '## Independent verification package\npkg/run.sh (written for this task, does not reuse the implementation fixtures)\n'; } > "$REPO/.worktrees/dev/docs/team/reports/T1.1-dev.md"
+git -C "$REPO/.worktrees/dev" add -A && git -C "$REPO/.worktrees/dev" commit -qm "docs(T1.1): PM shaped report"
+rev_refresh; rec_reset
+$TEAM review T1.1 --dir "$REV_WT" --strong >"$TMP/review-f14c.log" 2>&1 || true
+assert_has "$REPO/docs/team/reviews/T1.1.md" "| **判定** | **满足强复验** |" "F14c PM 复现的形状（Red before/Green after + pkg/run.sh）→ 满足"
+assert_has "$REPO/docs/team/reviews/T1.1.md" "独立性声明（提示项） | 有" "F14c 独立性声明被记录（提示项）"
+assert_not "$TMP/review-f14c.log" "强复验证据不完整" "F14c 满足时不误报“证据不完整”（SIGPIPE 假告警）"
+
+# F14d：报告不在被验 checkout 里（只在主工作树/agent worktree）——只看 checkout 会把真报告判成“缺证据”
+RF="$TMP/review-fallback-repo"; mkdir -p "$RF"
+( cd "$RF" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo x > README.md && git add -A && git commit -qm init \
+  && bash "$SKILL_DIR/scripts/team" init --session "teamsmith-smoke-fb-$$" --agents dev --gates true >/dev/null 2>&1 ) \
+  && ok "F14d 现场：第二个临时项目就绪" || bad "F14d 现场初始化失败"
+git -C "$RF" add -A && git -C "$RF" commit -qm "chore: teamsmith init"
+( cd "$RF" && bash "$SKILL_DIR/scripts/team" task T7.7 --title "fallback" --agent dev >/dev/null 2>&1 )
+mkdir -p "$RF/docs/team/reports/T7.7-dev/pkg"
+{ printf '# T7.7 · fallback report\n\n'
+  printf '## Flip evidence\nRed before: guard test failed (see pkg/flip)\nGreen after: guard test passed\n\n'
+  printf '## Independent verification package\npkg/run.sh (written for this task, does not reuse the implementation fixtures)\n'; } > "$RF/docs/team/reports/T7.7-dev.md"
+printf '#!/usr/bin/env bash\necho red; echo green\n' > "$RF/docs/team/reports/T7.7-dev/pkg/run.sh"
+git -C "$RF" worktree add -q -b task/T7.7-smoke "$RF/.worktrees/dev" main
+printf 'code\n' > "$RF/.worktrees/dev/code.txt"
+git -C "$RF/.worktrees/dev" add -A && git -C "$RF/.worktrees/dev" commit -qm "feat(T7.7): code (no report on the branch)"
+git -C "$RF" worktree add -q --detach "$TMP/review-fb-checkout" task/T7.7-smoke
+( cd "$RF" && bash "$SKILL_DIR/scripts/team" review T7.7 --dir "$TMP/review-fb-checkout" --strong --no-gates ) >"$TMP/review-f14d.log" 2>&1 || true
+assert_has "$RF/docs/team/reviews/T7.7.md" "| **判定** | **满足强复验** |" "F14d 报告不在 checkout 里时不再误判“缺证据”"
+assert_has "$RF/docs/team/reviews/T7.7.md" "不在 checkout 里" "F14d 记录写明采用的是 checkout 外的那份报告"
+
+# F3：记录只对它验过的 revision 负责 —— 分支再动一格，待复验信号必须回来
+git -C "$REPO/.worktrees/dev" commit -q --allow-empty -m "feat(T1.1): another commit after verification"
+$TEAM digest >"$TMP/digest-f3.log" 2>&1 || true
+assert_match "$TMP/digest-f3.log" 'T1\.1-dev \[stale: verified [0-9a-f]+, branch now [0-9a-f]+\]' "F3 分支又动了 → digest 重新列为待复验（带 stale 标记）"
+$TEAM status T1.1 >"$TMP/status-f3.log" 2>&1 || true
+assert_match "$TMP/status-f3.log" 'stale: verified [0-9a-f]+, branch now [0-9a-f]+' "F3 status 也标出记录已过期"
+assert_eq "F3 分支已被合并删除（解析不到）→ 不算过期（否则合并后任务永远待办）" \
+  "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; . "'$SKILL_DIR'/scripts/lib/cmd-review.sh"; team_load_config; team_resolve_branch() { printf "no-such-branch\\n"; }; team_review_branch_tip T1.1')" ""
+
+# 10b 收尾：重建一条正常的 PASS 记录，后续小节的现场与改造前一致
+rev_refresh; rec_reset
+$TEAM review T1.1 --dir "$REV_WT" >/dev/null 2>&1
+assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "10b 收尾：恢复干净 checkout 上的 PASS 记录"
+$TEAM digest >"$TMP/digest-10b-end.log" 2>&1 || true
+assert_not "$TMP/digest-10b-end.log" "T1.1-dev" "10b 收尾：记录有效后不再列为待复验"
 
 # ---------------------------------------------------------------- 11. merge / close
 section "11 · 收尾（merge 已移除，close 保留）"

@@ -45,20 +45,265 @@ team_task_title() { # <ID> → 标题（BOARD 的「任务」列，其次任务�
   printf '%s\n' "$1"
 }
 
+# ---------------------------------------------------------------- 复验记录的读取与判定
+# 复验记录是 PM 合并的许可证，所以它必须能被账本重新读出来：
+#   · digest/status 用「判定 + 被验 HEAD」判断这条记录还新不新鲜（F3：记录只对它验过的 revision 负责）；
+#   · 一条“没跑过门禁”的记录（--no-gates → SKIPPED / 未配置 → UNKNOWN）不算证据（F12）。
+# 抬头里的 `分支: `x`` / `HEAD: `sha`` / `判定: **X**` 因此是稳定接口（改抬头要同步这些读取函数）。
+team_review_record_path() { printf '%s\n' "$TEAM_DOCS_ABS/reviews/$1.md"; }
+
+team_review_record_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN（没有记录 → 空）
+  local f v; f="$(team_review_record_path "$1")"
+  [ -f "$f" ] || return 0
+  v="$(grep -m1 -oE '判定: \*\*[A-Z]+\*\*' "$f" 2>/dev/null || true)"
+  [ -n "$v" ] || return 0
+  printf '%s\n' "$v" | tr -d '*' | sed 's/^判定: //'
+}
+
+team_review_record_head() { # <ID> → 记录里被验的 HEAD（9 位）
+  local f h; f="$(team_review_record_path "$1")"
+  [ -f "$f" ] || return 0
+  h="$(grep -m1 -oE 'HEAD: `[0-9a-f]{7,40}`' "$f" 2>/dev/null || true)"
+  [ -n "$h" ] || return 0
+  printf '%s\n' "$h" | sed -e 's/^HEAD: //' -e 's/`//g'
+}
+
+team_review_branch_tip() { # <ID> → 任务分支当前 tip（解析不到 → 空。分支已被合并删除时为空，不算“过期”）
+  local b; b="$(team_resolve_branch "$1" 2>/dev/null || true)"
+  [ -n "$b" ] || return 0
+  git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0
+}
+
+team_review_record_note() { # <ID> → "" / 一行标记：gates: none / stale: verified A, branch now B
+  local id="$1" verdict rec_head tip
+  verdict="$(team_review_record_verdict "$id")"
+  [ -n "$verdict" ] || return 0
+  case "$verdict" in
+    SKIPPED) printf 'gates: none\n'; return 0 ;;
+    UNKNOWN) printf 'gates: unconfigured\n'; return 0 ;;
+  esac
+  rec_head="$(team_review_record_head "$id")"
+  [ -n "$rec_head" ] || { printf 'verified revision unknown\n'; return 0; }
+  tip="$(team_review_branch_tip "$id")"
+  [ -n "$tip" ] || return 0
+  case "$tip" in "$rec_head"*) return 0 ;; esac
+  printf 'stale: verified %s, branch now %s\n' "$rec_head" "${tip:0:9}"
+}
+
+# ---------------------------------------------------------------- checkout 内容真相（F8/F9）
+team_review_ignored_paths() { # <checkout> → 被 .gitignore 忽略、不在提交里的路径（逐行）
+  local d="$1" out=""
+  out="$(git -C "$d" status --porcelain --ignored=matching --untracked-files=all 2>/dev/null | sed -n 's/^!! //p' || true)"
+  if [ -z "$out" ]; then
+    # 老 git 不认 --ignored=matching：退回传统 --ignored（只说目录名，够用）
+    out="$(git -C "$d" status --porcelain --ignored 2>/dev/null | sed -n 's/^!! //p' || true)"
+  fi
+  printf '%s' "$out" | sed '/^$/d'
+}
+
+team_review_artifacts() { # <checkout> → 不在提交里的产物："ignored\t<path>" / "untracked\t<path>"
+  local d="$1"
+  git -C "$d" status --porcelain --untracked-files=all 2>/dev/null | sed -n 's/^?? /untracked\t/p' || true
+  team_review_ignored_paths "$d" | sed 's/^/ignored\t/'
+}
+
+# ---------------------------------------------------------------- 强复验证据的结构化判定（F13/F14）
+# 旧实现是纯关键词 grep：报告只要“提到”翻转 / 独立验证包就被判成“满足”，而 M4.1 之后的
+# 英文写法（independent verification package / red before → green after）反倒判“缺”。
+# 现在按结构判定，并把「看了什么、命中了哪一行、缺哪一条」写进复验记录（判定必须能解释自己）：
+#   翻转   = 有「flip / 翻转 / red→green / 破坏实现」小节，且该小节里同时出现失败(red)与通过(green)结果；
+#   独立包 = 报告里给出一条**指向包/脚本的路径**（只说“独立”不提路径不算）+ 独立性声明。
+# 命令行、路径是否存在只作为提示项记进记录，不参与判定。
+team_strong_cell() { # <"行号:文本"> → 表格单元格用的短文本（去行号、压空白、转义竖线）
+  printf '%s' "$1" | sed -e 's/^[^:]*://' -e 's/[[:space:]]\{1,\}/ /g' -e 's/|/\\|/g' | cut -c1-110
+}
+
+team_strong_resolve() { # <路径tok> <checkout> <报告> → 解析到的真实路径（按报告里常见的 4 个基准依次尝试）
+  local tok="$1" revdir="$2" rep="$3" cand
+  for cand in "$revdir/$tok" "$(dirname "$rep")/$tok" "${rep%.md}/$tok"; do
+    [ -e "$cand" ] && { printf '%s\n' "$cand"; return 0; }
+  done
+  if [ -n "${TEAM_MAIN_ROOT:-}" ] && [ -e "$TEAM_MAIN_ROOT/$tok" ]; then
+    printf '%s\n' "$TEAM_MAIN_ROOT/$tok"
+  fi
+  return 0
+}
+
+# 报告候选（PM 复现过：只看 checkout 会把“报告在主工作树/agent worktree、checkout 是干净分支”
+# 判成“缺证据”，而那正是 F14 这条 finding 本身）：
+#   ① checkout 里的报告（在被验 revision 上，最权威）
+#   ② 记录里实际会摘录的那份（team_find_report：主工作树 / agent worktree）
+# 逐个候选解析，取“证据最全”的那份（翻转有+独立包有 > 一个 > 没有；并列时 checkout 优先），
+# 并把候选清单/采用哪份/那份是否在 checkout 里都写进记录。
+team_strong_parse() { # <报告> <checkout>；结果写入调用方的 STRONG_* 变量（动态作用域）
+  local rep="$1" revdir="$2"
+  STRONG_REP="$rep"; STRONG_OK=0; STRONG_SCORE=0; STRONG_IN_CHECKOUT=0
+  STRONG_FLIP_HDR=""; STRONG_FLIP_LN=""; STRONG_RED=""; STRONG_RED_LN=""
+  STRONG_GREEN=""; STRONG_GREEN_LN=""; STRONG_CMD=""; STRONG_CMD_LN=""
+  STRONG_PATH=""; STRONG_PATH_STATE="（报告里没有给出包/脚本路径）"; STRONG_PATH_SRC=""
+  STRONG_INDEP=""; STRONG_INDEP_LN=""
+  STRONG_FLIP_STATUS="缺"; STRONG_PKG_STATUS="缺"; STRONG_FLIP_WHY=""; STRONG_PKG_WHY=""
+
+  case "$rep" in
+    "") STRONG_DISP="（没有找到任务报告）"; STRONG_FLIP_WHY="没有找到任务报告"; STRONG_PKG_WHY="没有找到任务报告"; return 0 ;;
+    "$revdir"/*) STRONG_DISP="${rep#"$revdir"/}"; STRONG_IN_CHECKOUT=1 ;;
+    *) STRONG_DISP="$rep" ;;
+  esac
+  [ -f "$rep" ] || { STRONG_FLIP_WHY="报告文件不存在：$rep"; STRONG_PKG_WHY="报告文件不存在"; return 0; }
+
+  # ① 翻转小节：标题措辞对齐 templates/report.md.tmpl 与 references/protocol.md 里实际用的写法
+  #    （flip evidence / flip / red before … green after / break the implementation / 翻转 / 破坏 …）
+  STRONG_FLIP_HDR="$(grep -m1 -nEi '^#{1,6}[[:space:]].*(flip|red[[:space:]]+before|green[[:space:]]+after|red[[:space:]]*(->|→|/|vs)|红[[:space:]]*(→|->)|翻转|破坏|break[[:space:]]+(the[[:space:]]+)?implementation|回归|regression|guard[[:space:]]+test|守门|adversar|对抗|control[[:space:]]+experiment)' "$rep" 2>/dev/null || true)"
+  local sect="" sect_end=""
+  if [ -n "$STRONG_FLIP_HDR" ]; then
+    STRONG_FLIP_LN="${STRONG_FLIP_HDR%%:*}"
+    sect_end="$(awk -v s="$STRONG_FLIP_LN" 'NR>s && /^#{1,6}[[:space:]]/ {print NR-1; exit}' "$rep" 2>/dev/null || true)"
+    [ -n "$sect_end" ] || sect_end="$(grep -c '' "$rep" 2>/dev/null || true)"
+    sect="$(sed -n "${STRONG_FLIP_LN},${sect_end}p" "$rep" 2>/dev/null || true)"
+    STRONG_RED="$(printf '%s\n' "$sect" | grep -m1 -nEi '(^|[^a-z])(red|fail|failed|failing|before|broken)([^a-z]|$)|✗|×|红|失败|未通过|退出码[[:space:]]*[1-9]|rc[[:space:]]*=[[:space:]]*[1-9]|exit[[:space:]]+[1-9]' 2>/dev/null || true)"
+    STRONG_GREEN="$(printf '%s\n' "$sect" | grep -m1 -nEi '(^|[^a-z])(green|pass|passed|after|restore|restored)([^a-z]|$)|✓|绿|通过|恢复|退出码[[:space:]]*0|rc[[:space:]]*=[[:space:]]*0|exit[[:space:]]+0' 2>/dev/null || true)"
+    STRONG_CMD="$(printf '%s\n' "$sect" | grep -m1 -nE '^[[:space:]]*(\$[[:space:]]|bash[[:space:]]|sh[[:space:]]|git[[:space:]]|team[[:space:]]|python3?[[:space:]]|node[[:space:]]|bun[[:space:]]|npm[[:space:]]|pnpm[[:space:]]|make[[:space:]]|cargo[[:space:]]|go[[:space:]]|pytest|\./|[A-Za-z0-9_.@+-]+/[A-Za-z0-9_.@+-]*\.sh)' 2>/dev/null || true)"
+    [ -n "$STRONG_RED" ] && STRONG_RED_LN="$((STRONG_FLIP_LN + ${STRONG_RED%%:*} - 1))"
+    [ -n "$STRONG_GREEN" ] && STRONG_GREEN_LN="$((STRONG_FLIP_LN + ${STRONG_GREEN%%:*} - 1))"
+    [ -n "$STRONG_CMD" ] && STRONG_CMD_LN="$((STRONG_FLIP_LN + ${STRONG_CMD%%:*} - 1))"
+  fi
+  if [ -n "$STRONG_FLIP_HDR" ] && [ -n "$STRONG_RED" ] && [ -n "$STRONG_GREEN" ]; then
+    STRONG_FLIP_STATUS="有"
+  elif [ -z "$STRONG_FLIP_HDR" ]; then
+    STRONG_FLIP_WHY="没有 flip/翻转/red before…green after/破坏实现 小节标题"
+  elif [ -z "$STRONG_RED" ]; then
+    STRONG_FLIP_WHY="翻转小节里没有失败(red)结果"
+  else
+    STRONG_FLIP_WHY="翻转小节里没有通过(green)结果"
+  fi
+
+  # ② 独立验证包：一条**路径**（不是词）+ 独立性声明
+  #    路径接受：存在的脚本/目录（PM 要求：任何指向脚本/目录且真实存在的路径）、
+  #    包形状路径（.../pkg/run.sh、docs/team/reports/<ID>-<agent>/pkg/...，未提交也算——
+  #    记录里会注明“checkout 里没有这个路径”）。
+  STRONG_INDEP="$(grep -nEi 'independent|not[[:space:]]+re(using|use)|does[[:space:]]+not[[:space:]]+reuse|from[[:space:]]+scratch|不复用|不依赖|独立(验证|复验|包|测试)|自写|从零|自有' "$rep" 2>/dev/null | grep -viE 'no[[:space:]]|没有|不存在|缺|merely|只是提到' | head -1 || true)"
+  if [ -n "$STRONG_INDEP" ]; then STRONG_INDEP_LN="${STRONG_INDEP%%:*}"; fi
+  local rep_rel="" tmp="" best_tok="" best_score=0 tok score pkgish script exists real
+  case "$rep" in "$revdir"/*) rep_rel="${rep#"$revdir"/}" ;; esac
+  tmp="$(mktemp)"
+  sed 's#https\{0,1\}://[^ )]*##g' "$rep" > "$tmp" 2>/dev/null || cp "$rep" "$tmp"
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    tok="$(printf '%s' "$tok" | sed 's/[.,;:)（(]*$//')"
+    [ -n "$tok" ] || continue
+    [ "$tok" = "$rep_rel" ] && continue
+    local resp=""; resp="$(team_strong_resolve "$tok" "$revdir" "$rep")"
+    exists=0; [ -n "$resp" ] && exists=1
+    pkgish=0; script=0
+    case "$tok" in
+      *.sh|*.mjs|*.js|*.ts|*.py) script=1 ;;
+    esac
+    real=0
+    # 「真实存在的脚本/目录」：目录 / 可执行 / 脚本后缀都算（`bash pkg/run.sh` 不需要 +x）
+    if [ "$exists" = "1" ] && { [ -d "$resp" ] || [ -x "$resp" ] || [ "$script" = "1" ]; }; then real=1; fi
+    case "$tok" in
+      *pkg*|*package*|*verif*|*adversar*|*attack*|*flip*|*repro*) pkgish=1 ;;
+    esac
+    [ "$real" = "1" ] || [ "$pkgish" = "1" ] || [ "$script" = "1" ] || continue
+    score=$((real * 4 + pkgish * 2 + script))
+    if [ "$score" -gt "$best_score" ]; then best_score="$score"; best_tok="$tok"; fi
+  done < <( { grep -nEo '([A-Za-z0-9_.@+-]+/)+[A-Za-z0-9_.@+-]+' "$tmp" 2>/dev/null || true; \
+              grep -nEo '[A-Za-z0-9_.@+-]+\.(sh|mjs|js|ts|py)' "$tmp" 2>/dev/null || true; } | sed 's/^[0-9]*://' )
+  rm -f "$tmp"
+  if [ -n "$best_tok" ]; then
+    STRONG_PATH="$best_tok"
+    local res; res="$(team_strong_resolve "$best_tok" "$revdir" "$rep")"
+    if [ -n "$res" ]; then
+      case "$res" in
+        "$revdir"/*) STRONG_PATH_STATE="checkout 里存在（$([ -d "$res" ] && echo 目录 || echo 文件)：${res#"$revdir"/}）" ;;
+        *) STRONG_PATH_STATE="**不在 checkout 里**，但相对主工作树存在：${res#"$TEAM_MAIN_ROOT"/}（未随被验分支提交）" ;;
+      esac
+    else
+      STRONG_PATH_STATE="**checkout 里没有这个路径（未随分支提交）**"
+    fi
+  fi
+  if [ -n "$STRONG_PATH" ]; then
+    STRONG_PKG_STATUS="有"
+  else
+    STRONG_PKG_WHY="报告里没有给出包/脚本的路径（只出现“独立”这种词不算；路径可以是 .../pkg/run.sh、docs/team/reports/<ID>-<agent>/pkg/… 或任何真实存在的脚本/目录）"
+  fi
+
+  [ "$STRONG_FLIP_STATUS" = "有" ] && STRONG_SCORE=$((STRONG_SCORE + 2))
+  [ "$STRONG_PKG_STATUS" = "有" ] && STRONG_SCORE=$((STRONG_SCORE + 1))
+  [ "$STRONG_FLIP_STATUS" = "有" ] && [ "$STRONG_PKG_STATUS" = "有" ] && STRONG_OK=1
+  return 0
+}
+
+team_strong_scan() { # <checkout> <ID> → 打印复验记录用的「强复验」markdown 块
+  local revdir="$1" id="$2" c r chosen="" best_rep="" best_score=-1 cand_list=""
+  local -a cands=()
+  for c in "$revdir/$TEAM_DOCS_DIR/reports/$id-"*.md; do [ -f "$c" ] && cands+=("$c"); done
+  c="$(team_find_report "$id" 2>/dev/null || true)"
+  if [ -n "$c" ] && [ -f "$c" ]; then
+    local cr cd dup=0
+    cr="$(readlink -f "$c" 2>/dev/null || printf '%s' "$c")"
+    for cd in "${cands[@]:-}"; do
+      [ -n "$cd" ] || continue
+      [ "$(readlink -f "$cd" 2>/dev/null || printf '%s' "$cd")" = "$cr" ] && dup=1
+    done
+    [ "$dup" = "1" ] || cands+=("$c")
+  fi
+  for c in "${cands[@]:-}"; do
+    [ -n "$c" ] || continue
+    case "$c" in "$revdir"/*) cand_list="$cand_list\`${c#"$revdir"/}\`（checkout 内）　" ;; *) cand_list="$cand_list\`$c\`（主工作树/agent worktree）　" ;; esac
+  done
+  for c in "${cands[@]:-}"; do
+    [ -n "$c" ] || continue
+    team_strong_parse "$c" "$revdir"
+    if [ "$STRONG_OK" = "1" ]; then chosen="$c"; best_rep="$c"; best_score=9; break; fi
+    if [ "$STRONG_SCORE" -gt "$best_score" ]; then best_score="$STRONG_SCORE"; best_rep="$c"; fi
+  done
+  team_strong_parse "$best_rep" "$revdir"     # 重新解析被选中的那份（所有 STRONG_* 都用它渲染）
+
+  printf '## 强复验（结构化判定：翻转证据 + 独立验证包）\n\n'
+  printf -- '- 报告候选（%s）：%s\n' "${#cands[@]}" "${cand_list:-（无）}"
+  if [ -n "$STRONG_REP" ]; then
+    printf -- '- 采用：`%s`［%s］\n' "$STRONG_DISP" "$([ "$STRONG_IN_CHECKOUT" = "1" ] && echo '在被验的 checkout 里' || echo '不在 checkout 里（被验 revision 上没有这份报告）')"
+  else
+    printf -- '- 采用：（没有找到任务报告）\n'
+  fi
+  printf -- '- 判定规则（大小写不敏感，措辞对齐 templates/report.md.tmpl 与 references/protocol.md）：\n'
+  printf -- '  **翻转** = 有「flip / flip evidence / red before…green after / break the implementation / 翻转 / 破坏」小节，且该小节里同时出现失败(red)与通过(green)结果；\n'
+  printf -- '  **独立包** = 报告里给出一条**路径**（形如 `.../pkg/run.sh`、`docs/team/reports/<ID>-<agent>/pkg/...`，或任何真实存在的脚本/目录）；独立性声明只作提示项记录。\n'
+  printf -- '- 命令行、路径是否存在只作提示项记录，不参与判定（避免“结论看起来比证据强”）。\n\n'
+  printf '| 证据 | 结果 | 依据（文件:行 · 命中文本） |\n'
+  printf '| --- | --- | --- |\n'
+  printf '| 翻转小节 | %s | %s |\n' "$STRONG_FLIP_STATUS" "$([ -n "$STRONG_FLIP_LN" ] && printf '`%s:%s`「%s」' "$STRONG_DISP" "$STRONG_FLIP_LN" "$(team_strong_cell "$STRONG_FLIP_HDR")" || printf '（无）')"
+  printf '| 翻转结果 red（失败侧） | %s | %s |\n' "$([ -n "$STRONG_RED" ] && echo 有 || echo 缺)" "$([ -n "$STRONG_RED_LN" ] && printf '`%s:%s`「%s」' "$STRONG_DISP" "$STRONG_RED_LN" "$(team_strong_cell "$STRONG_RED")" || printf '（无）')"
+  printf '| 翻转结果 green（通过侧） | %s | %s |\n' "$([ -n "$STRONG_GREEN" ] && echo 有 || echo 缺)" "$([ -n "$STRONG_GREEN_LN" ] && printf '`%s:%s`「%s」' "$STRONG_DISP" "$STRONG_GREEN_LN" "$(team_strong_cell "$STRONG_GREEN")" || printf '（无）')"
+  printf '| 可复现命令（提示项） | %s | %s |\n' "$([ -n "$STRONG_CMD" ] && echo 有 || echo 缺)" "$([ -n "$STRONG_CMD_LN" ] && printf '`%s:%s`「%s」' "$STRONG_DISP" "$STRONG_CMD_LN" "$(team_strong_cell "$STRONG_CMD")" || printf '（无：证据可以只是一个包路径，只要另一半有命令即可复核）')"
+  printf '| 独立包路径 | %s | %s |\n' "$([ -n "$STRONG_PATH" ] && echo 有 || echo 缺)" "$([ -n "$STRONG_PATH" ] && printf '`%s`「%s」→ %s' "$STRONG_DISP" "$STRONG_PATH" "$STRONG_PATH_STATE" || printf '（无）')"
+  printf '| 独立性声明（提示项） | %s | %s |\n' "$([ -n "$STRONG_INDEP" ] && echo 有 || echo 缺)" "$([ -n "$STRONG_INDEP" ] && printf '`%s:%s`「%s」' "$STRONG_DISP" "$STRONG_INDEP_LN" "$(team_strong_cell "$STRONG_INDEP")" || printf '（无）')"
+  if [ "$STRONG_OK" = "1" ]; then
+    printf '| **判定** | **满足强复验** | 翻转证据与独立包路径都可结构化复核%s |\n' "$([ -n "$STRONG_INDEP" ] && echo '' || echo '（提示：报告里没有独立性声明）')"
+  else
+    local why=""
+    [ "$STRONG_FLIP_STATUS" = "缺" ] && why="翻转：$STRONG_FLIP_WHY"
+    [ "$STRONG_PKG_STATUS" = "缺" ] && why="${why:+$why；}独立包：$STRONG_PKG_WHY"
+    printf '| **判定** | **不满足（不阻塞合并，但里程碑收口前应补齐）** | 缺：%s |\n' "$why"
+  fi
+}
+
 team_cmd_review() {
   team_require_docs
-  local id="" branch="" no_gates=0 strong=0 revdir=""
+  local id="" branch="" no_gates=0 strong=0 revdir="" allow_unresolved=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
       --no-gates) no_gates=1; shift ;;
-      --strong) strong=1; shift ;;          # 强复验：要求对抗性验证包 + finding 翻转证据
+      --strong) strong=1; shift ;;          # 强复验：结构化判定对抗性验证包 + finding 翻转证据（team_strong_scan）
+      --allow-unresolved-branch) allow_unresolved=1; shift ;;   # 显式覆盖：给解析不到的分支/提交盖章（会写进记录）
       --dir) revdir="${2:?}"; shift 2 ;;    # PM 准备好的独立 checkout（skill 不碰 git）
       -*) team_usage_die "review: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "review <ID> --dir <独立checkout> [--no-gates] [--strong]"
+  [ -n "$id" ] || team_usage_die "review <ID> --dir <独立checkout> [--no-gates] [--strong] [--allow-unresolved-branch]"
   [ -n "$revdir" ] || team_die "review 需要 --dir <路径>：请 PM 自己准备独立 checkout（skill 不执行 git）
   例： git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id <branch>
         $TEAM_CLI review $id --dir /tmp/review-$id"
@@ -80,25 +325,72 @@ team_cmd_review() {
     team_die "--dir 必须是 checkout 的**根目录**：$revdir 在仓库 $revroot 的子目录里
   → 换成根目录，或重新准备：git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id $branch"
   fi
-  local want_head=""
+  # ── F7（V4.0·high）：--branch 解析不到时旧实现整段跳过一致性守卫 —— 任何干净的 checkout
+  #    都能被盖上「分支: no-such-branch」的章，记录从此与真实验过的 revision 不符。
+  #    现在默认 **fail closed**：解析不到就拒绝，并说清期望什么 ref、找到了哪些候选。
+  #    合法场景（复验已删分支的历史提交）→ --allow-unresolved-branch，且写进复验记录。
+  local want_head="" unresolved_override=0
   want_head="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"
+  if [ -z "$want_head" ]; then
+    if [ "$allow_unresolved" = "1" ] || [ "${TEAM_REVIEW_ALLOW_UNRESOLVED_BRANCH:-0}" = "1" ]; then
+      unresolved_override=1
+      team_warn "分支 $branch 在主工作树里解析不到：--allow-unresolved-branch 显式覆盖（会写进复验记录）"
+    else
+      local cands
+      cands="$(git -C "$TEAM_MAIN_ROOT" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null | grep -F -- "$id" | head -5 || true)"
+      [ -n "$cands" ] || cands="（没有名字里带 $id 的本地分支）"
+      team_die "分支解析不到（不拒绝就会盖章到一个不存在的 revision）：$branch
+  期望：在 $TEAM_MAIN_ROOT 里 \`$branch^{commit}\` 能解析成一个提交；实际解析不到
+  --dir 的 HEAD：$(git -C "$revdir" rev-parse --short HEAD)（checkout 现在在：$branch_now）
+  名字里带 $id 的本地分支：
+$(printf '%s\n' "$cands" | sed 's/^/    /')
+  → 用真实存在的分支重跑：$TEAM_CLI review $id --dir $revdir --branch <existing-branch>
+  → 确实要给一个解析不到的分支/提交盖章（已删分支、外部 revision）：加 --allow-unresolved-branch（会写进复验记录）"
+    fi
+  fi
   if [ -n "$want_head" ] && [ "$want_head" != "$head" ] && [ "${TEAM_REVIEW_ANY_DIR:-0}" != "1" ]; then
     team_die "checkout 与任务分支不一致（复验会验错东西）：分支 $branch = ${want_head:0:9}，--dir 的 HEAD = ${head:0:9}
   → 重新准备：git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id $branch
   → 确实要用这个 checkout（比如复验一个历史提交）：TEAM_REVIEW_ANY_DIR=1 $TEAM_CLI review $id --dir $revdir --branch ${head:0:9}"
   fi
-  # 内容校验：checkout 必须是**干净的**（复验证据要能复现；脏树可能是别人/上个任务留下的改动）
-  local dirty_n dirty_list
-  dirty_n="$(git -C "$revdir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-  if [ "${dirty_n:-0}" -gt 0 ] 2>/dev/null && [ "${TEAM_REVIEW_ALLOW_DIRTY:-0}" != "1" ]; then
-    dirty_list="$(git -C "$revdir" status --short | head -5)"
-    team_die "checkout 有 $dirty_n 处未提交改动：复验必须在干净提交上跑（否则盖章的不是分支上的代码）
-$dirty_list
+  # ── F8 + F9（V4.0）：“干净”必须是真的。
+  #    F8：TEAM_REVIEW_ALLOW_DIRTY=1 覆盖时旧实现照样打印「干净」、记录里没有脏树标注；
+  #    F9：git status --porcelain 看不见 ignored 文件，门禁能读一个不在提交里的产物而记录说 PASS。
+  #    现在：脏树/被忽略产物都记进记录（数量 + 路径头部 + 用的是哪个覆盖开关）；ignored 默认拒绝。
+  local dirty_n=0 dirty_override=0 ignored_n=0 ignored_override=0 ignored_list="" artifacts_before=""
+  dirty_n="$(git -C "$revdir" status --porcelain 2>/dev/null | grep -c . || true)"
+  ignored_list="$(team_review_ignored_paths "$revdir")"
+  ignored_n="$(printf '%s' "$ignored_list" | grep -c . || true)"
+  artifacts_before="$(team_review_artifacts "$revdir")"
+  if [ "${dirty_n:-0}" -gt 0 ] 2>/dev/null; then
+    if [ "${TEAM_REVIEW_ALLOW_DIRTY:-0}" != "1" ]; then
+      team_die "checkout 有 $dirty_n 处未提交改动：复验必须在干净提交上跑（否则盖章的不是分支上的代码）
+$(git -C "$revdir" status --short | head -5)
   → 看是什么：git -C $revdir status --short
   → 干净重建：git -C $TEAM_MAIN_ROOT worktree remove --force $revdir && git -C $TEAM_MAIN_ROOT worktree add --detach $revdir $branch
   → 确认要在脏树上跑：TEAM_REVIEW_ALLOW_DIRTY=1 $TEAM_CLI review $id --dir $revdir"
+    fi
+    dirty_override=1
   fi
-  team_ok "review checkout: $revdir @ ${head:0:9}（分支 $branch，干净）"
+  if [ "${ignored_n:-0}" -gt 0 ] 2>/dev/null; then
+    if [ "${TEAM_REVIEW_ALLOW_IGNORED:-0}" != "1" ]; then
+      team_die "checkout 里有 $ignored_n 个被 .gitignore 忽略、不在提交里的产物（门禁会读到它们，而 status --porcelain 看不见）：
+$(printf '%s\n' "$ignored_list" | head -5)
+  → 干净重建：git -C $TEAM_MAIN_ROOT worktree remove --force $revdir && git -C $TEAM_MAIN_ROOT worktree add --detach $revdir $branch
+  → 确认要在这种树上跑：TEAM_REVIEW_ALLOW_IGNORED=1 $TEAM_CLI review $id --dir $revdir"
+    fi
+    ignored_override=1
+  fi
+  local dir_state=""
+  if [ "$dirty_override" = "1" ]; then dir_state="dirty: $dirty_n 处未提交改动（TEAM_REVIEW_ALLOW_DIRTY=1 覆盖）"; fi
+  if [ "$ignored_override" = "1" ]; then dir_state="${dir_state:+$dir_state；}ignored: $ignored_n 个未提交产物（TEAM_REVIEW_ALLOW_IGNORED=1 覆盖）"; fi
+  if [ "$unresolved_override" = "1" ]; then dir_state="${dir_state:+$dir_state；}分支 $branch 未解析（--allow-unresolved-branch 覆盖）"; fi
+  [ -n "$dir_state" ] || dir_state="干净"
+  if [ "$dirty_override$ignored_override$unresolved_override" = "000" ]; then
+    team_ok "review checkout: $revdir @ ${head:0:9}（分支 $branch，$dir_state）"
+  else
+    team_warn "review checkout: $revdir @ ${head:0:9}（分支 $branch，$dir_state）"
+  fi
 
   # 报告提交在 agent 分支上（合并前不出现在主工作树）：直接摘录进复验记录，
   # 不往主工作树拷文件（否则会让主工作树变脏、阻塞后续 squash merge）
@@ -111,70 +403,117 @@ $dirty_list
 
   mkdir -p "$TEAM_DOCS_ABS/reviews"
   local log="$TEAM_DOCS_ABS/reviews/$id-verify.log"
-  local verdict="PASS" gates_out="" gate_timeout="${TEAM_REVIEW_TIMEOUT:-1800}"
+  local verdict="PASS" gates_out="" gate_timeout="${TEAM_REVIEW_TIMEOUT:-1800}" gates_marker="ran"
   if [ "$no_gates" = "1" ]; then
-    verdict="SKIPPED"; gates_out="（--no-gates：PM 选择人工看 diff）"
+    verdict="SKIPPED"; gates_marker="none"
+    gates_out="（--no-gates：PM 选择人工看 diff；**没有跑过任何门禁**，本记录不是 PASS 证据）"
   elif [ -z "$TEAM_GATES" ]; then
-    verdict="UNKNOWN"; gates_out="（TEAM_GATES 未配置：无法自动判定，只能人工评审）"
+    verdict="UNKNOWN"; gates_marker="unconfigured"
+    gates_out="（TEAM_GATES 未配置：无法自动判定，只能人工评审）"
   else
     # CEP 教训：池无超时 × 测试无 --test-timeout × bash timeout 设成 1800000s → 门禁挂死 85 分钟。
-    # 所以门禁一律套硬超时；超时按 FAIL 处理并明确写进复验记录。
-    local runner=()
+    # 所以门禁一律套硬超时；超时按失败处理并明确写进复验记录。
+    # F10/F11（V4.0）：判定只认 timeout **包装器**的退出码（124=TERM 生效；137=TERM 被忽略后
+    # 被 kill-after KILL），绝不 grep 门禁自己的日志 —— 旧实现既漏掉真挂死（GNU timeout 默认
+    # 不打字），又把「日志里恰好有 timeout 字样」的普通失败记成 TIMEOUT。
+    local runner=() used_timeout=0
     if team_have_cmd timeout && [ "${gate_timeout:-0}" -gt 0 ] 2>/dev/null; then
-      runner=(timeout --signal=TERM --kill-after=60 "$gate_timeout")
+      runner=(timeout --verbose --signal=TERM --kill-after=60 "$gate_timeout")
+      used_timeout=1
     fi
     team_info "跑门禁：$TEAM_GATES（硬超时 ${gate_timeout}s；可调 TEAM_REVIEW_TIMEOUT）"
-    if ( cd "$revdir" && "${runner[@]}" bash -c "$TEAM_GATES" ) > "$log" 2>&1; then
+    local gate_rc=0
+    ( cd "$revdir" && "${runner[@]}" bash -c "$TEAM_GATES" ) > "$log" 2>&1 || gate_rc=$?
+    if [ "$gate_rc" -eq 0 ]; then
       verdict="PASS"
     else
       verdict="FAIL"
-      if [ "${#runner[@]}" -gt 0 ] && grep -q "timeout" "$log" 2>/dev/null; then
-        verdict="TIMEOUT"
-        printf '\n[teamsmith] 门禁在 %ss 未结束，被硬超时终止（判定 TIMEOUT）\n' "$gate_timeout" >> "$log"
+      if [ "$used_timeout" = "1" ]; then
+        case "$gate_rc" in
+          124) verdict="TIMEOUT"
+               printf '\n[teamsmith] 门禁在 %ss 未结束，被硬超时终止（timeout 包装器退出码 124：TERM 生效；判定 TIMEOUT→按失败处理）\n' "$gate_timeout" >> "$log" ;;
+          137) verdict="TIMEOUT"
+               printf '\n[teamsmith] 门禁在 %ss 未结束，TERM 被忽略后被 kill-after KILL（timeout 包装器退出码 137；判定 TIMEOUT→按失败处理）\n' "$gate_timeout" >> "$log" ;;
+        esac
       fi
     fi
     gates_out="$(tail -25 "$log")"
     team_ok "门禁输出：${log#"$TEAM_MAIN_ROOT"/}（${verdict}）"
   fi
 
+  # F9 的后半：门禁自己会在 checkout 里造东西（未跟踪/被忽略的产物）——
+  # 也要记进记录（前/后对比），这样“盖章的代码”和“门禁实际读到的树”之间的差别是可见的。
+  local artifacts_after="" artifacts_new=""
+  artifacts_after="$(team_review_artifacts "$revdir")"
+  artifacts_new="$(comm -13 <(printf '%s\n' "$artifacts_before" | sort -u) <(printf '%s\n' "$artifacts_after" | sort -u) 2>/dev/null | sed '/^$/d' || true)"
+
   local diffstat commits changed
   diffstat="$(git -C "$revdir" diff --stat "$TEAM_PROTECTED_BRANCH...HEAD" 2>/dev/null | tail -1 || true)"
   commits="$(git -C "$revdir" log --oneline --no-decorate "$TEAM_PROTECTED_BRANCH..HEAD" 2>/dev/null | head -40 || true)"
   changed="$(git -C "$revdir" diff --name-status "$TEAM_PROTECTED_BRANCH...HEAD" 2>/dev/null | head -200 || true)"
 
-  # 强复验（CEP 的实践）：要求证据表明「测试真的会失败」——对抗性验证包 + finding 测试翻转
+  # 强复验（CEP 的实践）：要求证据表明「测试真的会失败」——对抗性验证包 + finding 测试翻转。
+  # F13/F14（V4.0）：旧实现是纯关键词 grep（提到就“有”，按 M4.1 的英文写法却“缺”），
+  # 现在由 team_strong_scan 按结构判定，并把「看了什么、命中哪一行、缺哪一条」写进复验记录。
   local strong_lines=""
   if [ "$strong" = "1" ]; then
-    local flip=0 indep=0 notes="" _rep
-    # 注意：这里必须落到文件再 grep。`printf '%s' "$big" | grep -q` 在 `set -o pipefail` 下
-    # 会因为 grep 提前退出触发 SIGPIPE（141），于是**长报告里的证据被误判成"缺"**（实测过）。
-    _rep="$(mktemp)"
-    printf '%s' "$report_excerpt" > "$_rep"
-    grep -qE '翻转|会失败|破坏性验证|control experiment|guard test|regression test' "$_rep" && flip=1
-    grep -qE 'packages/verification|独立(验证)?(包|脚本|套件)|对抗(性)?(验证)?包|independent (package|suite)|不(复用|依赖)(被测|被验)' "$_rep" && indep=1
-    rm -f "$_rep"
-    strong_lines="## 强复验（对抗性验证包 / finding 翻转）\n\n"
-    strong_lines="${strong_lines}- 破坏性验证证据（故意改坏实现 → 守门测试必须失败）：$([ "$flip" = 1 ] && echo '有（报告里能找到）' || echo '**缺**：要求 agent 补「修复前红 → 修复后绿」或破坏实验）')\n"
-    strong_lines="${strong_lines}- 独立验证包（不复用被测夹具）：$([ "$indep" = 1 ] && echo '有' || echo '**缺**：让 verify agent 在独立包里写对抗测试')\n"
-    strong_lines="${strong_lines}- 判定：$([ "$flip" = 1 ] && [ "$indep" = 1 ] && echo '满足强复验' || echo '不满足（不阻塞合并，但里程碑收口前应补齐）')\n"
-    [ "$flip" = 1 ] && [ "$indep" = 1 ] || team_warn "强复验证据不完整（flip=$flip independent=$indep）：看复验记录里的清单"
+    strong_lines="$(team_strong_scan "$revdir" "$id")"
+    # 注意：别用 `printf ... | grep -q`（grep 提前退出 + pipefail ⇒ 误报“证据不完整”）
+    case "$strong_lines" in
+      *'| **判定** | **满足强复验** |'*) ;;
+      *) team_warn "强复验证据不完整：看复验记录里的结构化清单（缺什么、在哪一行看到的）" ;;
+    esac
   fi
 
   local report="$TEAM_DOCS_ABS/reviews/$id.md"
+  # F8/F9/F12：抬头里把这些“本记录不是在干净树上跑的门禁结果”的事实一次性标清，
+  # 读到记录/摘要的人不需要再去 checkout 现场猜。
+  local head_flags=""
+  [ "$dirty_override" = "1" ] && head_flags="$head_flags · checkout: dirty $dirty_n file(s) (override)"
+  [ "$ignored_override" = "1" ] && head_flags="$head_flags · checkout: ignored $ignored_n artifact(s) (override)"
+  [ "$unresolved_override" = "1" ] && head_flags="$head_flags · branch-unresolved (override)"
+  [ "$gates_marker" = "none" ] && head_flags="$head_flags · gates: none"
   {
     printf '# %s · PM 独立复验\n\n' "$id"
-    printf '时间: %s · 分支: `%s` · HEAD: `%s` · 判定: **%s**\n\n' "$(team_timestamp)" "$branch" "${head:0:9}" "$verdict"
+    printf '时间: %s · 分支: `%s` · HEAD: `%s` · 判定: **%s**%s\n\n' "$(team_timestamp)" "$branch" "${head:0:9}" "$verdict" "$head_flags"
     printf '## 复验方式\n\n'
     printf -- '- 独立 checkout：`%s`（PM 提供，skill 只读；不信任 agent 工作区）\n' "$revdir"
-    printf -- '- 门禁命令：`%s`（硬超时 %ss；超时判定 TIMEOUT→按 FAIL 处理）\n' "${TEAM_GATES:-<未配置>}" "${TEAM_REVIEW_TIMEOUT:-1800}"
+    printf -- '- 记录绑定：本判定只对上面的 HEAD `%s` 负责（分支再动一格，digest/status 会把它重新列为待复验）\n' "${head:0:9}"
+    printf -- '- 门禁命令：`%s`（硬超时 %ss；判定只认 timeout 包装器退出码 124/137→TIMEOUT，按失败处理）\n' "${TEAM_GATES:-<未配置>}" "${TEAM_REVIEW_TIMEOUT:-1800}"
+    case "$gates_marker" in
+      none)         printf -- '- 门禁：**none（--no-gates：没有跑过任何门禁）** —— 本记录不是 PASS 证据，digest 会继续把它列为待复验\n' ;;
+      unconfigured) printf -- '- 门禁：**unconfigured（TEAM_GATES 未配置）** —— 没有自动判定，只能人工评审\n' ;;
+      *)            printf -- '- 门禁：ran（判定 %s）\n' "$verdict" ;;
+    esac
     printf -- '- 输出：`%s`\n' "${log#"$TEAM_MAIN_ROOT"/}"
+    if [ "$dirty_override" = "1" ]; then
+      printf -- '- **checkout dirty: %s files (override TEAM_REVIEW_ALLOW_DIRTY=1)** —— 门禁在**脏树**上跑的，本记录的判定不可复现\n' "$dirty_n"
+      printf '```\n%s\n```\n' "$(git -C "$revdir" status --short | head -10)"
+    else
+      printf -- '- checkout clean：`git status --porcelain` 无输出（被验内容 == 提交内容）\n'
+    fi
+    if [ "${ignored_n:-0}" -gt 0 ] 2>/dev/null; then
+      local ignored_suffix=""
+      if [ "$ignored_override" = "1" ]; then ignored_suffix="（override TEAM_REVIEW_ALLOW_IGNORED=1：门禁可能读到了它们）"; fi
+      printf -- '- **ignored artifacts: %s**（不在提交里；`status --porcelain` 看不见它们）%s\n' "$ignored_n" "$ignored_suffix"
+      printf '```\n%s\n```\n' "$(printf '%s\n' "$ignored_list" | head -10)"
+    else
+      printf -- '- ignored artifacts: 0（`git status --porcelain --ignored=matching` 无输出）\n'
+    fi
+    if [ -n "$artifacts_new" ]; then
+      printf -- '- 门禁跑完后新增的未跟踪/忽略产物：%s 个（门禁确实在 checkout 里写了东西；下次复验前先清场）\n' "$(printf '%s\n' "$artifacts_new" | grep -c . || true)"
+      printf '```\n%s\n```\n' "$(printf '%s\n' "$artifacts_new" | head -10)"
+    fi
+    if [ "$unresolved_override" = "1" ]; then
+      printf -- '- **分支未解析（--allow-unresolved-branch）**：`%s` 在主工作树里解析不到，checkout 一致性无法自动校验\n' "$branch"
+    fi
     if team_find_report "$id" >/dev/null 2>&1; then
       printf -- '- agent 报告：`%s`\n' "$(team_find_report "$id")"
     else
       printf -- '- agent 报告：**缺失**（没有报告本身就是问题）\n'
     fi
     printf '\n'
-    [ -n "$strong_lines" ] && printf '%b\n' "$strong_lines"
+    [ -n "$strong_lines" ] && printf '%s\n' "$strong_lines"
     printf '## 变更概览\n\n```\n%s\n```\n\n' "${diffstat:-（无）}"
     printf '## 提交\n\n```\n%s\n```\n\n' "${commits:-（无）}"
     printf '## 文件\n\n```\n%s\n```\n\n' "${changed:-（无）}"
@@ -188,12 +527,13 @@ $dirty_list
     case "$verdict" in
       PASS) printf -- '- [ ] 已读 diff，与任务书交付物一致\n- [ ] 未发现「报告与实际不符」\n- [ ] 可以合并：squash 到 `%s` 并 push 之后，再 `%s board set %s done`\n' "$TEAM_PROTECTED_BRANCH" "$TEAM_CLI" "$id" ;;
       FAIL) printf -- '- [ ] 门禁失败：退回 agent（`%s say <agent> "..."`）或 PM 自行修复\n' "$TEAM_CLI" ;;
-      *)    printf -- '- [ ] 人工评审（门禁未跑/未配置）\n' ;;
+      TIMEOUT) printf -- '- [ ] 门禁被硬超时终止（TIMEOUT→按失败处理）：查门禁自己为何挂死，或调 `TEAM_REVIEW_TIMEOUT` 后重跑\n' ;;
+      *)    printf -- '- [ ] 人工评审（门禁未跑/未配置：这不等于通过，digest 会继续把它列为待复验）\n' ;;
     esac
   } > "$report"
   team_ok "复验记录：${report#"$TEAM_MAIN_ROOT"/}（$verdict）"
 
-  [ "$verdict" = "FAIL" ] && return 1
+  case "$verdict" in FAIL|TIMEOUT) return 1 ;; esac
   return 0
 }
 

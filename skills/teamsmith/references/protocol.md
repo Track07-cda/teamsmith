@@ -321,20 +321,37 @@ A trap: an add/add conflict is often git's rename detection pairing two differen
   timeout + a missing `--test-timeout` + bash `timeout` set to 1800000s) → the script hung for **85 minutes** with zero
   output.
 - Therefore: `team review` **always wraps the gates in a hard timeout** (`TEAM_REVIEW_TIMEOUT`, 1800s by default; a
-  timeout is recorded as `TIMEOUT`, treated as FAIL and written into the verification record). Gate commands should
+  timeout is recorded as `TIMEOUT`, treated as FAIL and written into the verification record). The verdict is taken from
+  the `timeout` **wrapper's exit code** (124 = TERM fired, 137 = the child ignored TERM and was KILLed), never from a
+  substring of the gate's own log — otherwise a hung gate reads as a plain failure and a gate that merely *prints*
+  “using timeout 5” reads as a timeout. Gate commands should
   carry their own `timeout` too (e.g. `timeout 900 pnpm test:unit`).
 - Acceptance commands in a brief should carry their own timeout as well; destructive experiment scripts must restore
   the scene with `trap 'git checkout -- …' EXIT`.
 
 ## 9c. Strong verification (adversarial package + finding flips, for milestones)
 
-`team review <ID> --strong` checks two extra things and writes the conclusion into the verification record:
+`team review <ID> --strong` checks two extra things and writes the conclusion into the verification record. The check is
+**structural**, not a keyword grep (a report that merely *mentions* “flip evidence” or “independent package” does not
+pass; an English-first report with real evidence does), the wording is the one this repo's own
+`templates/report.md.tmpl` / protocol use, and the record shows what was looked for, what was found (file + line) and
+which half is missing:
 
-1. **Adversarial verification package**: the verifying agent writes tests in an **independent package** (not reusing
-   the tested project's fixtures, which would be "using the object under test to verify itself");
-2. **Finding flips**: the fixer turns the "finding test that recorded a defect" into a guard test and the report shows
-   "red before the fix → green after"; the sharper version is **deliberately break the implementation → the guard test
-   must fail** (proof that the test is not a performance).
+1. **Flip evidence**: a section whose heading names the flip (`flip`, `flip evidence`, `red before … green after`,
+   “break the implementation”, `翻转`, `破坏`) **and** which contains both a failing (red) and a passing (green) result —
+   “red before the fix → green after”, or “break the implementation → the guard test must fail”. A command line is
+   recorded as an extra hint;
+2. **Independent verification package**: a **path** in the report that points at the package/script — `…/pkg/run.sh`,
+   `docs/team/reports/<ID>-<agent>/pkg/…`, a script (`.sh`/`.mjs`/`.js`/`.ts`/`.py`) or any *really existing* directory
+   in the checkout. Bare words (“an independent package exists”) do not count. A statement of independence is recorded
+   as a hint, and the record also says whether that path is actually present in the reviewed checkout.
+
+The report is looked up in the reviewed checkout first and then in the PM's/agent's worktrees (a report that is not
+committed in the verified revision is still read, and the record states that it was taken from outside the checkout).
+
+A missing half is recorded as `不满足（不阻塞合并，但里程碑收口前应补齐）` and warns; it does not block the merge. The
+sharper kind of flip — **deliberately break the implementation → the guard test must fail** — is exactly what a heading
+like `## Flip evidence` with both outcomes is expected to contain.
 
 It costs more, so it fits milestones and closure rounds; everyday tasks run the ordinary gates.
 

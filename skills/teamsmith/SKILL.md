@@ -73,7 +73,7 @@ $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | Document contracts | `team task <ID> --title ... --agent a`, `team board add\|set\|ls`, `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
 | Dispatch | `team add-agent <a>`, `team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--print]` |
 | Collaborate | `team say <a> "<one-line message>" [--no-verify]` (verifies delivery; falls back to the inbox when the agent is not running), `team notify <a> "<one line>"` (agent → PM) |
-| Verify | `team review <ID> --dir <PM-prepared independent checkout> [--no-gates] [--strong]` → `reviews/<ID>.md` (runs gates + writes evidence; `--strong` also requires an adversarial package and flip evidence) |
+| Verify | `team review <ID> --dir <PM-prepared independent checkout> [--no-gates] [--strong] [--allow-unresolved-branch]` → `reviews/<ID>.md` (runs gates + writes evidence; refuses a dirty or `.gitignore`d checkout / an unresolvable `--branch` unless the matching `TEAM_REVIEW_ALLOW_*` override is used and recorded; `--strong` structurally checks flip evidence + a path to an independent package) |
 | Wrap up | `team close <ID> [--keep-window]` (BOARD/state/window only, never git), `team teardown --agent a [--purge]` (explicit cleanup) |
 | Bootstrap | `team bootstrap [--agents "dev verify"] [--print]` (recommended), `team init`, `team doctor` |
 | Watchdog | `team watchdog up\|down\|restart\|status\|logs` (a `watchdog` window in the same session runs the monitor + periodic patrol; single backend), `team watch [--once]` (foreground patrol) |

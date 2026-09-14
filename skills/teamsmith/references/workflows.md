@@ -161,10 +161,19 @@ Tune the estimate with `TEAM_AGENT_MEM_MB` (default 6144); `team ps` tells you d
 ```bash
 git -C .worktrees/dev branch --show-current      # task/T1.2-api-health
 git -C <root> worktree add --detach /tmp/review-T1.2 task/T1.2-api   # the PM prepares an independent checkout
-bash <skill>/scripts/team review T1.2 --dir /tmp/review-T1.2 --strong # gates with a hard timeout + strong-verification checks
+bash <skill>/scripts/team review T1.2 --dir /tmp/review-T1.2 --strong # gates with a hard timeout + structural strong-verification checks
 gh pr merge --squash --delete-branch 17 && git -C <root> fetch origin main && git -C <root> merge --ff-only FETCH_HEAD
 bash <skill>/scripts/team board set T1.2 done        # only mark done once it is confirmed in main
 ```
+
+`review` **fails closed** on evidence that does not describe what it stamps: an unresolvable `--branch` (the old code
+skipped the branch guard, so any clean checkout could be stamped with a branch name that does not exist), a dirty
+checkout, or a checkout containing `.gitignore`d artefacts the gates can read but the commit does not. Each refusal
+names the matching `TEAM_REVIEW_ALLOW_DIRTY` / `TEAM_REVIEW_ALLOW_IGNORED` / `TEAM_REVIEW_ALLOW_UNRESOLVED_BRANCH`
+override and, when used, the record states the truth (`checkout dirty: 3 files (override)`, `ignored artifacts: 2`,
+`branch-unresolved (override)`). `--no-gates` writes `SKIPPED` and is **not** evidence: the record carries `gates: none`
+and `digest` keeps listing the task as awaiting verification. A record is bound to the revision it verified, so once
+the branch moves on, `digest`/`team status` flag it again (`stale: verified <A>, branch now <B>`).
 
 - Task branches come off the protected branch; when the worktree is dirty, `dispatch` refuses to switch branches (so
   two tasks never end up in one diff).

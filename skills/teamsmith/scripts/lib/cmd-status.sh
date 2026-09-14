@@ -28,6 +28,36 @@ team_agent_window_exists() { # <agent> → 0/1：只看窗口存在
   team_tmux_has_window "$TEAM_SESSION" "$w"
 }
 
+# ---------------------------------------------------------------- 待复验清单（复验证据感知版）
+# M6.2 · F3 + F12：common.sh 里那版是「reviews/<ID>.md 存在 == 已复验」，于是
+#   ① 记录永远压制待办（分支后来又交付了提交，digest 也不再提示）；
+#   ② --no-gates 写的 SKIPPED 记录和 PASS 一样被当成证据。
+# 这里覆盖成：只有「记录有效」才算复验过 —— 判定是跑过门禁的
+# （PASS/FAIL/TIMEOUT）**且**记录里的 HEAD 就是任务分支当前 tip；
+# 分支已被合并删除（解析不到）时记录仍算有效，否则合并后的任务会永远待办。
+# 无效的记录不会被静默藏起来：仍列在 digest [3] 里，显示名后带 gates: none / stale: … 标记，
+# 这样“没跑过门禁的复验”和“分支在复验后又动了”都看得见。
+# 注意：这是对 common.sh 同名函数的**覆盖**（cmd-status.sh 在它之后 source）；pending 逻辑
+# 归 M6.2（见 M6.2 任务书），M6.1 负责的状态/看板函数不动。
+team_reports_pending_list() { # → 每行 "<显示名[ 标记]>\t<路径>"
+  local glob base id ids=" " note
+  for glob in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
+    [ -f "$glob" ] || continue
+    base="$(basename "$glob" .md)"; id="${base%%-*}"
+    case "$ids" in *" $id "*) continue ;; esac
+    team_report_is_task "$glob" "$id" || continue
+    if [ -f "$(team_review_record_path "$id")" ]; then
+      note="$(team_review_record_note "$id")"
+      [ -n "$note" ] || continue          # 记录有效且新鲜 → 不算待办
+      ids="$ids$id "
+      printf '%s\t%s\n' "$base [$note]" "$glob"
+    else
+      ids="$ids$id "
+      printf '%s\t%s\n' "$base" "$glob"
+    fi
+  done
+}
+
 team_git_cols() { # <worktree> → "branch dirty ahead"
   local wt="$1" branch dirty ahead
   [ -d "$wt" ] || { printf -- '-\t-\t-\n'; return 0; }
@@ -108,7 +138,16 @@ team_cmd_status() {
     else
       printf '  报告：缺失\n'
     fi
-    [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && printf '  复验 %s\n' "$TEAM_DOCS_ABS/reviews/$id.md"
+    [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && {
+      # F12：路径旁边必须带判定（否则“没跑过门禁的 SKIPPED”和 PASS 在账本上长得一样）
+      local rv rhead rnote rextra=""
+      rv="$(team_review_record_verdict "$id")"
+      rhead="$(team_review_record_head "$id")"
+      rnote="$(team_review_record_note "$id")"
+      [ -n "$rhead" ] && rextra=" · HEAD $rhead"
+      [ -n "$rnote" ] && rextra="$rextra · $rnote"
+      printf '  复验 %s（判定: %s%s）\n' "$TEAM_DOCS_ABS/reviews/$id.md" "${rv:-未知}" "$rextra"
+    }
   else
     printf 'BOARD：\n'
     grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null | tail -n +3 | sed 's/^/  /' || true
@@ -163,7 +202,7 @@ team_cmd_digest() {
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
-  printf '\n%s\n' "[3] 待复验（真任务报告、无复验记录）"
+  printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁）"
   any=0
   local rep disp
   while IFS=$'\t' read -r disp rep; do

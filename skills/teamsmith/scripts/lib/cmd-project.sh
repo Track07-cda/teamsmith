@@ -54,9 +54,10 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   resume [--agent a] [--all] [--dry-run]   PM 的工具：把停了但没交活的 agent 续跑
 
   ── 复验 / 合并 / 收尾 ─────────────────────────────────────
-  review ID --dir <独立checkout> [--no-gates] [--strong]
+  review ID --dir <独立checkout> [--no-gates] [--strong] [--allow-unresolved-branch]
                   独立 detached worktree 上 checkout 分支 → 跑门禁 → 写
                   <docs>/reviews/ID.md（PM 复验证据，不接受 agent 自述）
+                  脏树 / 被忽略产物 / --branch 解析不到 → 默认拒绝（覆盖开关 TEAM_REVIEW_ALLOW_*）
   close ID                              收尾：更新 BOARD、关窗口、保留 worktree（git 由 PM 做）
   teardown [--agent a] [--all] [--purge]  关窗口 / 删 worktree（--purge 才删 worktree）
 
