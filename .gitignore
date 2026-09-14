@@ -6,3 +6,6 @@ docs/team/reviews/*.log
 .worktrees/
 .gh-pat
 <home>/.gitlab-pa-token
+
+# GitHub PAT
+.github-pat
