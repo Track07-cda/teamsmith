@@ -46,8 +46,8 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 
 | 键 | 默认 | 作用 |
 |---|---|---|
-| `TEAM_AGENT_CMD` | 空 | 启动 agent CLI 的命令模板；空 = 内置 Pi 命令。占位符：`{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{notify_ext}` `{extra_args}`；未知占位符 → `dispatch` 直接失败并列出支持集 |
-| `TEAM_AGENT_NOTIFY_CMD` | 空 | 非 Pi worker 回合结束通知 PM 的命令模板（`{summary}` `{agent}` `{cwd}` `{session_id}` `{model}` `{provider}` `{skill_dir}`）；空 = Pi 通知扩展；设了会在派单提示词里渲染成参考命令，模板看着不可用时只警告 |
+| `TEAM_AGENT_CMD` | 空 | 启动 agent CLI 的命令模板；空 = 内置 Pi 命令。占位符：`{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{notify_ext}` `{extra_args}`；未知**或畸形**占位符（`{ cwd }`/`{{cwd}}`…）→ `dispatch` 直接失败并列出支持集；纯空白/多行模板同样被拒（首词必须是裸可执行名） |
+| `TEAM_AGENT_NOTIFY_CMD` | 空 | worker 回合结束通知 PM 的命令模板（`{summary_file}` `{summary}` `{agent}` `{cwd}` `{session_id}` `{model}` `{provider}` `{skill_dir}`）；空 = Pi 通知扩展。**摘要是数据**：worker 先写进 `{summary_file}`，再原样跑渲染出的固定命令（推荐 `… notify pm --from-file {summary_file}`）；`{summary}` 只为兼容保留，渲染成「读该文件的引用」，不做文本插值。模板不可用时只警告，且提示词整段换成「写进报告」 |
 | `TEAM_AGENT_LOG_GLOB` | 空 | `team monitor --activity` 的活动来源：最新匹配文件的**尾部**（`*` `?` `**`、行首 `~`、`{agent}` = agent 名）；空 = Pi 会话文件；没匹配到就退回「无会话」并说明原因 |
 | `TEAM_AGENT_LOG_TAIL_BYTES` | 空（=64KiB） | 日志尾部最多读多少字节（正整数，硬上限 1MiB；超上限夹住、坏值回默认并在 stderr 警告）。**注意**：`team monitor` 只把 `TEAM_AGENT_LOG_GLOB` 显式转发给 monitor.mjs，所以想用这个键必须在 `.pi/team/config.sh` 里写成 `export TEAM_AGENT_LOG_TAIL_BYTES=…`（或直接在 shell 里 export / 给 monitor.mjs 传 `--log-tail-bytes`），普通赋值到不了子进程 |
 | `TEAM_AGENT_BIN` | 空 | 窗口 PATH 就绪等待 / 存在性检查 / `doctor` 用的可执行文件；空 = `TEAM_AGENT_CMD` 首词，否则 `TEAM_PI_BIN` |

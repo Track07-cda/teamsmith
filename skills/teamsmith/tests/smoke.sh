@@ -533,20 +533,76 @@ assert_has "$TMP/print-custom.log" 'adapter: custom: myagent run' "--print 标�
 assert_file "$REPO/.pi/team/state/prompt-dev-T1.1.md" "派单把提示词落盘（{prompt_file} 的内容）"
 assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" "agent:dev" "落盘的确实是本次派单提示词"
 
-# ③ notify 模板：进提示词 + 只警告不阻断
+# ③ notify：摘要是数据（F1）—— worker 写文件、跑固定命令；提示词里没有任何 worker 文本
 ANOTIFY='bash {skill_dir}/scripts/team notify pm "{summary}"'
+M32_PF="$REPO/.pi/team/state/prompt-dev-T1.1.md"
+M32_SF="$REPO/.pi/team/state/summary-dev-T1.1.md"
 env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD="$ANOTIFY" \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify.log" 2>&1 || true
 assert_has "$TMP/print-notify.log" "Notify the PM when your turn ends" "有 notify 模板时提示词含通知段落"
-assert_has "$TMP/print-notify.log" "notify pm \"{summary}\"" "渲染出具体命令（{summary} 留给 worker 换）"
-# 提示词（worker 真读的那份）给的是**示例摘要**，不是字面 {summary}：弱模型会把占位符原样执行
-assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" "Notify the PM when your turn ends" "落盘提示词也含通知段落"
-assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" 'notify pm "T1.1 done' "提示词里是可改写的示例摘要（不是字面 {summary}）"
-assert_not "$REPO/.pi/team/state/prompt-dev-T1.1.md" 'notify pm "{summary}"' "提示词里没有给弱模型留字面占位符"
-env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='nosuchcli notify {summary}' \
+assert_has "$TMP/print-notify.log" "$M32_SF" "--print 给出 worker 要写的摘要文件"
+assert_has "$M32_PF" "Notify the PM when your turn ends" "落盘提示词含通知段落"
+assert_has "$M32_PF" "not Pi" "自定义 CLI → 明说不是 Pi（没有自动通知）"
+assert_has "$M32_PF" "$M32_SF" "提示词给出摘要文件路径（teamsmith 生成的）"
+assert_has "$M32_PF" "no substitutions, no extra arguments and no quotes" "让 worker 原样跑固定命令"
+assert_not "$M32_PF" "{summary}" "提示词里没有字面 {summary}（弱模型会原样执行）"
+assert_not "$M32_PF" "<one-line summary>" "提示词里没有要 worker 自己替换的示例文本"
+M32_NCMD="$(grep -E 'notify pm' "$M32_PF" | tail -1 | sed 's/^[[:space:]]*//')"
+assert_has_echo "$M32_NCMD" "cat $M32_SF" "旧模板的 {summary} 渲染成「读摘要文件」的引用（不做文本插值）"
+assert_not "$M32_NCMD" "{summary}" "渲染出的命令里没有残留占位符"
+
+# ③b 敌意摘要矩阵：写进文件 → 跑提示词那条命令 → 不执行 + 逐字节送达
+M32_DET="$TMP/m32-det"; mkdir -p "$M32_DET"
+m32_deliver() { # <名字> <摘要原文> [<期望送达文本>]
+  local name="$1" text="$2" want="${3:-$2}" got rc
+  rm -f "$M32_DET/mark"; : > "$REPO/docs/team/inbox/pm.md"
+  printf '%s' "$text" > "$M32_SF"
+  ( cd "$REPO" && bash -c "$M32_NCMD" ) >"$TMP/m32-$name.out" 2>&1; rc=$?
+  got="$(tail -1 "$REPO/docs/team/inbox/pm.md" 2>/dev/null | sed 's/.*· //')"
+  assert_eq "敌意摘要[$name] 不执行任何东西" "$([ -e "$M32_DET/mark" ] && echo EXEC || echo noexec)" "noexec"
+  assert_eq "敌意摘要[$name] 逐字节送达 PM 收件箱" "$got" "$want"
+  assert_eq "敌意摘要[$name] 通知命令退出码 0" "$rc" "0"
+}
+m32_deliver control 'shipped the parser'
+m32_deliver dquote 'fixed the "no session" hint'
+m32_deliver subst "\$(touch $M32_DET/mark)"
+m32_deliver breakout "x\"; touch $M32_DET/mark; echo \""
+m32_deliver backtick "\`touch $M32_DET/mark\`"
+m32_deliver apostrophe "it's fixed"
+m32_deliver braces 'see {agent} and {summary_file} and {cwd}'
+m32_deliver newline "$(printf 'first line\nsecond line')" 'first line second line'
+# 缺文件 / 空文件：真失败（非 0 + 不写收件箱），不会假报「已通知」
+rm -f "$M32_SF"; : > "$REPO/docs/team/inbox/pm.md"
+( cd "$REPO" && bash -c "$M32_NCMD" ) >"$TMP/m32-nofile.out" 2>&1 \
+  && bad "摘要文件不存在时 notify 不该成功" || ok "摘要文件不存在 → notify 非 0（不会假报已通知）"
+assert_eq "缺文件时不写收件箱" "$(wc -l < "$REPO/docs/team/inbox/pm.md" | tr -d ' ')" "0"
+: > "$M32_SF"
+( cd "$REPO" && bash -c "$M32_NCMD" ) >"$TMP/m32-empty.out" 2>&1 \
+  && bad "摘要文件为空时 notify 不该成功" || ok "摘要文件为空 → notify 非 0"
+# ③c 推荐形态：{summary_file} + --from-file（命令里连 $(cat …) 都没有）
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash \
+  TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}' \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-file.log" 2>&1 || true
+assert_has "$M32_PF" "notify pm --from-file $M32_SF" "{summary_file} 渲染成路径（推荐形态，shell 里不读文件）"
+# ③d F7：内置 Pi（TEAM_AGENT_CMD 空）+ notify 键 → 不能说「不是 Pi、没有自动通知」
+env TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD="$ANOTIFY" \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-pi.log" 2>&1 || true
+# F7：内置 Pi 有自己的通知扩展 → 不把「回合结束跑这条」塞给 worker（也不谎称「不是 Pi」）
+assert_not "$M32_PF" "Notify the PM when your turn ends" "Pi 路径不给 worker 塞额外通知段（F7）"
+assert_not "$M32_PF" "not Pi, so there is no automatic notification" "Pi 路径下没有「不是 Pi」的谎话（F7）"
+assert_has "$TMP/print-notify-pi.log" "TEAM_AGENT_CMD 为空" "并解释这段配置在 Pi 路径下不生效（F7）"
+# ③e F8：坏 notify 模板 → 只警告 + 提示词整段换成「写进报告」
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm {bogus}' \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-bad.log" 2>&1 \
-  && ok "notify 模板首词不可执行时不阻断派单（只警告）" || bad "坏 notify 模板不应让 dispatch 失败"
+  && ok "notify 模板不可用时不阻断派单（只警告）" || bad "坏 notify 模板不应让 dispatch 失败"
 assert_has "$TMP/print-notify-bad.log" "TEAM_AGENT_NOTIFY_CMD 看起来不可用" "警告点名了坏模板"
+assert_has "$M32_PF" "is unusable" "坏模板 → 提示词通知段改成「配置不可用」（F8）"
+assert_has "$M32_PF" "into the report" "并告诉 worker 把摘要写进报告（F8）"
+assert_not "$M32_PF" "scripts/team notify pm" "坏模板下不给半截 notify 命令（F8）"
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='nosuchcli notify {summary}' \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-nocli.log" 2>&1 \
+  && ok "notify 模板首词不可执行时不阻断派单（只警告）" || bad "首词不可执行的 notify 模板不应让 dispatch 失败"
+assert_has "$TMP/print-notify-nocli.log" "TEAM_AGENT_NOTIFY_CMD 看起来不可用" "警告点名了首词问题"
 
 # ④ 未知占位符 → 明确失败（列出支持集）
 if env TEAM_AGENT_CMD='myagent {sessionid} {prompt}' $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/adapter-bogus.log" 2>&1; then
@@ -677,6 +733,47 @@ if [ -n "$JS_RUNNER" ]; then
 else
   printf '  (跳过活动流断言：本机没有 node/bun 可直接跑 monitor.mjs)\n'
 fi
+
+# ⑧ 模板校验：畸形占位符 / 空白 / 多行都必须让派单失败（F4/F5/F6）+ 两条 nit
+M32_MARK="$TMP/m32-second-line-ran"
+rm -f "$M32_MARK"
+m32_expect_fail() { # <名字> <模板> <日志> <期望报错里的片段>
+  local name="$1" tpl="$2" log="$3" want="$4"
+  if env TEAM_AGENT_CMD="$tpl" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$log" 2>&1; then
+    bad "$name 竟然被接受（会静默生成坏窗口/坏命令）"
+  else ok "$name → 派单直接失败"; fi
+  assert_has "$log" "$want" "$name 的报错说明原因"
+}
+m32_expect_fail "F4 占位符 { cwd }"    'myagent { cwd } {prompt}'  "$TMP/m32-bad-sp.log"  "{ cwd }"
+m32_expect_fail "F4 占位符 {cwd }"     'myagent {cwd } {prompt}'   "$TMP/m32-bad-sp2.log" "{cwd }"
+m32_expect_fail "F4 占位符 {{cwd}}"    'myagent {{cwd}} {prompt}'  "$TMP/m32-bad-dbl.log" "{{cwd}"
+m32_expect_fail "F4 占位符 {cwd'}'"    "myagent {cwd'}' {prompt}" "$TMP/m32-bad-q.log"   "{cwd'}"
+m32_expect_fail "F5 纯空白模板"        '   '                      "$TMP/m32-blank.log"   "只有空白"
+m32_expect_fail "F6 多行模板"          "myagent {prompt}"$'\n'"touch $M32_MARK" "$TMP/m32-nl.log" "含换行"
+assert_not_file "$M32_MARK" "F6：多行模板的第二行没有机会被窗口 shell 执行"
+assert_has "$TMP/m32-bad-sp.log" "TEAM_AGENT_CMD" "F4 的报错点名配置键"
+assert_has "$TMP/m32-bad-sp.log" "{cwd}" "F4 的报错列出支持的占位符"
+# 合法写法不能被误伤：JSON body / awk 程序 / ${HOME} / 两个占位符相邻
+if env TEAM_AGENT_CMD='myagent {prompt} -d {"a":1}' TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-json.log" 2>&1; then
+  ok "JSON body 里的花括号不被当成占位符"
+else bad "JSON body 被误判成畸形占位符"; cat "$TMP/m32-json.log"; fi
+if env TEAM_AGENT_CMD='myagent {prompt} ${HOME} {cwd}{prompt_file}' TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-env.log" 2>&1; then
+  ok "\${HOME} 与相邻占位符都能通过校验"
+else bad "合法的 \${HOME}/相邻占位符被误判"; cat "$TMP/m32-env.log"; fi
+# nit：{extra_args} 的值只插一次，不会被当模板再扫一遍
+env TEAM_EXTRA_PI_ARGS='--x {cwd}' TEAM_AGENT_CMD='myagent {prompt} {extra_args}' TEAM_AGENT_BIN=bash \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-extra.log" 2>&1 || true
+grep -m1 '^cd ' "$TMP/m32-extra.log" > "$TMP/m32-extra-cmd.log" || true
+assert_has "$TMP/m32-extra-cmd.log" '--x {cwd}' "nit：{extra_args} 里的 {cwd} 没有被二次展开"
+# nit：分支提示里的路径是 %q 引用过的（带空格的路径也能安全复制粘贴）
+M32_SP="m32 dir with space"
+git -C "$REPO" worktree add --detach "$REPO/$M32_SP/dev" "$PROTECTED" >/dev/null 2>&1 || true
+( cd "$REPO" && env TEAM_WORKTREES_DIR="$M32_SP" TEAM_AGENTS=dev TEAM_AGENT_BIN=bash \
+    $TEAM dispatch dev T1.1 "$TASKFILE" ) >"$TMP/m32-hint.log" 2>&1 || true
+assert_has "$TMP/m32-hint.log" "switch -c" "工作树不在任务分支时仍给出分支提示"
+assert_has "$TMP/m32-hint.log" 'm32\ dir\ with\ space' "nit：提示里的路径带空格时被 %q 转义（可安全复制）"
+assert_not "$TMP/m32-hint.log" "$M32_SP/dev switch" "（提示里不是未转义的裸路径）"
+git -C "$REPO" worktree remove --force "$REPO/$M32_SP/dev" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------- 6g. 非 Pi agent 端到端（真窗口）
 section "6g · 非 Pi agent 端到端（假 agent，完全没有 Pi）"

@@ -88,13 +88,29 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session
      （skill 不代做、也不假设 gh/glab；需要你手动调 API 时按 PM 给的方式做，token 不要读进上下文）" ;;
   esac
 
-  # 非 Pi 的 agent：没有自动通知扩展，必须在提示词里给出「回合结束怎么通知 PM」的具体命令
-  # 注意：提示词走 English-first（v1.14.0），而且要给**具体示例摘要**（不是字面 {summary}）——
-  # 弱一点的模型会把字面占位符原样执行。（曾经因为 team_agent_notify_cmd 多传了一个参数，
-  # 把 prompt 文件路径渲染成了摘要；smoke 6f 的「提示词里是可改写的示例摘要」断言就是盯这个的）
-  if [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ]; then
-    notify_block="$(printf '\n**Notify the PM when your turn ends** (this project uses an agent adapter, not Pi, so there is no automatic notification): replace the summary inside the quotes below with your own one-liner (what you delivered / status / next step) and run it once.\nDo **not** send a temporary file name or any path as the summary:\n    %s\n' \
-      "$(team_agent_notify_cmd "$agent" "$sid" "$wt" "$(team_agent_prompt_file "$agent" "$id")" "$id done: <one-line summary>")")"
+  # 通知段（F1/F7/F8）：worker 的摘要是**数据**，永远走文件通道 —— 提示词里不含任何 worker 文本，
+  # 而 worker 要跑的命令是 teamsmith 渲染好的固定行（无需替换/引号/加参数）。
+  # 「不是 Pi、没有自动通知」只属于自定义 adapter（F7：内置 Pi 路径下这句话就是诳 worker）。
+  # 模板不可用（坏占位符/多行/纯空白/首词不可执行）时整段换成「写进报告」，不给半截命令（F8）。
+  # 只有「启动命令也是自定义 adapter」时才需要 worker 手动通知：内置 Pi 有自己的扩展，
+  # 把额外命令塞给它只会诱导重复通知（F7 / V3.0 d6）；那种配置由 dispatch/doctor 警告「没生效」。
+  if [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ] && [ -n "$(team_trim "${TEAM_AGENT_CMD:-}")" ]; then
+    local notify_issues="" sfile why ncmd
+    notify_issues="$(team_agent_notify_issues)"
+    if [ -n "$notify_issues" ]; then
+      notify_block="$(printf '\n**Notify the PM when your turn ends**: the notify configuration of this project is unusable (%s), so there is\nnothing for you to run. Put your one-line summary (what you delivered / status / next step) into the report\n`%s` instead -- the PM reads reports.\n' \
+        "$(printf '%s' "$notify_issues" | tr '\n' '; ')" "$rel_report")"
+    else
+      sfile="$(team_agent_summary_file "$agent" "$id")"
+      if [ -n "${TEAM_AGENT_CMD:-}" ]; then
+        why="This project runs a custom agent CLI, not Pi, so there is no automatic notification."
+      else
+        why="Your CLI is the built-in Pi, whose notify extension already tells the PM when your turn ends; run the command below only if the PM asked you to."
+      fi
+      ncmd="$(team_agent_notify_cmd "$agent" "$sid" "$wt" "$sfile")"
+      notify_block="$(printf '\n**Notify the PM when your turn ends.** %s Write your one-line summary (what you delivered /\nstatus / next step) into this file with whatever file-writing you normally do (create or overwrite it):\n\n    %s\n\nthen run exactly this command, with no substitutions, no extra arguments and no quotes:\n\n    %s\n' \
+        "$why" "$sfile" "$ncmd")"
+    fi
   fi
 
   cat <<PROMPT
@@ -192,12 +208,12 @@ team_check_worktree_for_task() { # <agent> <ID>
   case "$cur" in
     "$TEAM_PROTECTED_BRANCH")
       team_warn "$agent 的工作树还在 $TEAM_PROTECTED_BRANCH 上：PM 该先建分支再派单"
-      team_dim "  git -C $wt switch -c $want $TEAM_PROTECTED_BRANCH"
+      team_dim "$(printf '  git -C %q switch -c %q %q' "$wt" "$want" "$TEAM_PROTECTED_BRANCH")"
       return 1 ;;
     HEAD)
       if [ -n "$want" ]; then
         team_warn "$agent 的工作树是 detached HEAD：先切到任务分支"
-        team_dim "  git -C $wt switch -c $want $TEAM_PROTECTED_BRANCH"
+        team_dim "$(printf '  git -C %q switch -c %q %q' "$wt" "$want" "$TEAM_PROTECTED_BRANCH")"
         return 1
       fi ;;
   esac
@@ -233,7 +249,8 @@ team_cmd_dispatch() {
   local wt; wt="$(team_agent_worktree "$agent")"
   if [ ! -d "$wt" ]; then
     team_err "worktree 不存在：$wt（skill 不代做 git）"
-    team_dim "  先由 PM 建： git -C $TEAM_MAIN_ROOT worktree add -b $(team_branch_for_agent "$agent" "$id") $wt $TEAM_PROTECTED_BRANCH" >&2
+    team_dim "$(printf '  先由 PM 建： git -C %q worktree add -b %q %q %q' \
+      "$TEAM_MAIN_ROOT" "$(team_branch_for_agent "$agent" "$id")" "$wt" "$TEAM_PROTECTED_BRANCH")" >&2
     return 1
   fi
   # 分支准备放在守卫之前（会让 worktree 变状态，失败即停）
@@ -270,11 +287,12 @@ team_cmd_dispatch() {
   printf '%s\n' "$prompt" > "$prompt_file"
   agent_cmd="$(team_agent_launch_cmd "$agent" "$sid" "$wt" "$prompt_file")"
 
-  # 非 Pi 的 notify 模板坏掉时不阻塞派单，但必须说清楚（否则 worker 回合结束没人知道）
+  # notify 模板坏掉时不阻塞派单，但必须说清楚（否则 worker 回合结束没人知道）；
+  # 提示词那侧会用同一个判断把通知段换成「写进报告」（F8）。
   if [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ]; then
     local nre=""
     if ! nre="$(team_agent_notify_check)"; then
-      team_warn "TEAM_AGENT_NOTIFY_CMD 看起来不可用：$nre"
+      team_warn "TEAM_AGENT_NOTIFY_CMD 看起来不可用：$(printf '%s' "$nre" | tr '\n' '; ')（提示词会把通知段换成「写进报告」）"
     fi
   fi
 
@@ -284,8 +302,9 @@ team_cmd_dispatch() {
     printf '   （命令里的 "$0" = 窗口 harness 以 argv[0] 传入的提示词；模板里写 {prompt} 就是它）\n'
     printf '   prompt file（模板里的 {prompt_file}）：%s\n' "$prompt_file"
     if [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ]; then
-      printf '   回合结束通知（TEAM_AGENT_NOTIFY_CMD，{summary} 换成摘要）：\n     %s\n' \
-        "$(team_agent_notify_cmd "$agent" "$sid" "$wt" "$prompt_file" '{summary}')"
+      local nfile; nfile="$(team_agent_summary_file "$agent" "$id")"
+      printf '   回合结束通知（TEAM_AGENT_NOTIFY_CMD；worker 先把摘要写进 %s，再原样跑下面这条）：\n     %s\n' \
+        "$nfile" "$(team_agent_notify_cmd "$agent" "$sid" "$wt" "$nfile")"
     fi
     printf '\n=== 提示词（%s 字） ===\n%s\n' "${#prompt}" "$prompt"
     return 0
@@ -387,9 +406,24 @@ team_inbox_append() { # <agent> <tag> <msg>
 }
 
 team_cmd_notify() {
-  local agent="${1:?usage: notify <agent> <单行消息>}"; shift
-  [ $# -gt 0 ] || team_usage_die "notify <agent> <单行消息>"
-  local msg="$*"
+  local from_file="" msg
+  local agent="${1:?usage: notify <agent> <单行消息> | notify <agent> --from-file <摘要文件>}"; shift
+  if [ "${1:-}" = "--from-file" ]; then
+    from_file="${2:?notify --from-file 需要摘要文件路径}"; shift 2
+  fi
+  # 摘要始终是**数据**：--from-file 从文件读（worker 的文本不经过 shell）；两种路径都归一化成单行，
+  # 但除换行/回车/尾部空白外**逐字节保留**（引号、$、反引号、{} 都原样进收件箱）。
+  if [ -n "$from_file" ]; then
+    [ -f "$from_file" ] || team_die "notify --from-file：文件不存在（$from_file）——worker 要先把摘要写进去"
+    msg="$(team_one_line "$(cat "$from_file")")"
+  else
+    [ $# -gt 0 ] || team_usage_die "notify <agent> <单行消息> | notify <agent> --from-file <摘要文件>"
+    msg="$(team_one_line "$*")"
+  fi
+  if [ -z "$(team_trim "$msg")" ]; then
+    if [ -n "$from_file" ]; then team_die "notify --from-file：摘要文件是空的（$from_file）"
+    else team_die "notify：摘要不能为空（收到空参数；如果用 \"\$(cat <摘要文件>)\" 取摘要，先确认那个文件写好且非空）"; fi
+  fi
   team_inbox_append "$agent" manual "$msg"
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
   if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ] \

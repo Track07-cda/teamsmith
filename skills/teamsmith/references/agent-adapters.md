@@ -51,11 +51,21 @@ One shell command line, run in the worktree. Placeholders (values are `%q`-quote
 
 Rules:
 
-- **Unknown `{placeholder}` → the dispatch fails** and prints the supported list. A typo must never
-  silently produce a broken window. `team dispatch … --print` renders the command for inspection, and
-  the smoke suite asserts that a rendered command contains no leftover `{`.
-- `{prompt}`, `{extra_args}` and (in the notify template) `{summary}` are inserted **verbatim** — you own
-  the quoting for those. Everything else is quoted for you.
+- **Any brace-delimited token that is not exactly a supported placeholder aborts the dispatch** and prints the
+  supported list plus the config key. That covers plain typos *and* near-misses that used to slip through
+  silently: whitespace inside the braces, a trailing space, doubled braces, stray quotes. JSON bodies
+  (`-d '{"a":1}'`), awk programs (`'{print $1}'`), shell variables (`${HOME}`) and brace expansion (`{a,b}`) are
+  not placeholders and stay untouched. `team dispatch … --print` renders the command for inspection, and the
+  smoke suite asserts a rendered command contains no leftover `{`.
+- An adapter template must be **non-blank** and **single-line**: a whitespace-only `TEAM_AGENT_CMD` is rejected
+  instead of silently rendering `cd <worktree> &&` (a window that never starts an agent), and a newline is rejected
+  because the second line would be executed as its own command by the window shell.
+- `{prompt}` and `{extra_args}` are inserted **verbatim** — you own the quoting for those. Everything else is quoted
+  for you. Expansion is a **single left-to-right pass**, so a value that happens to contain `{cwd}` (e.g. inside
+  `TEAM_EXTRA_PI_ARGS`) is never expanded a second time.
+- The template's first word must be a **bare executable name** (no quotes): `TEAM_AGENT_BIN`, `team doctor` and the
+  window-readiness wait resolve it with `command -v`, which cannot see `"my agent"`. If your CLI really has a space
+  in its name, set `TEAM_AGENT_BIN` to its absolute path.
 - `{model}`/`{provider}` come from teamsmith's model registry (`TEAM_DEFAULT_MODEL`,
   `TEAM_AGENT_MODELS`), not from the CLI. For a custom CLI either hardcode the model in the template or
   set `TEAM_AGENT_MODELS="dev=<provider>/<model>"` so `{model}` matches what the CLI really uses — that
@@ -65,13 +75,44 @@ Rules:
 
 ## 3. Notify: `TEAM_AGENT_NOTIFY_CMD`
 
-Placeholders: `{summary}` (verbatim — quote it yourself), `{agent}`, `{cwd}`, `{session_id}`, `{model}`,
-`{provider}`, `{skill_dir}`.
+**A worker's summary text is data, never code.** The worker writes its one-line summary into a file and runs a
+fixed command; nothing the worker types is ever interpolated into a shell line.
 
-When set, the dispatch prompt gains an explicit **"回合结束通知 PM"** paragraph containing the fully
-rendered command, so the worker knows exactly what to run when it finishes its turn. `team dispatch`
-warns once (without blocking) when the template has unknown placeholders or when its first word is not
-executable.
+Placeholders: `{summary_file}`, `{summary}`, `{agent}`, `{cwd}`, `{session_id}`, `{model}`, `{provider}`, `{skill_dir}`.
+
+- `{summary_file}` — the path teamsmith reserves for the summary (`<state>/summary-<agent>-<ID>.md`, `%q`-quoted).
+  Use it with a CLI that reads a file: `… notify pm --from-file {summary_file}`.
+- `{summary}` — **kept for compatibility, but never interpolated as text**: for a worker's command it expands to
+  a quoted read of the same summary file (`"$(cat '…')"`, and inside `'{summary}'` the single-quote-safe form), so
+  existing templates keep working without turning a worker's summary into shell code. Tooling that calls the
+  helper with an explicit summary string (the old five-argument call) gets it back `%q`-quoted as a single word —
+  still never evaluated.
+- `{agent}` `{cwd}` `{session_id}` `{model}` `{provider}` `{skill_dir}` — the same values as in the launch
+  template, `%q`-quoted.
+
+The two supported ways to receive the summary:
+
+```sh
+# recommended: the CLI reads the file itself (no file read in the shell at all)
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
+# also fine: teamsmith renders a quoted file read, the command shape stays yours
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
+```
+
+The rendered prompt section contains only teamsmith-owned paths plus that command, and instructs the worker:
+write your one-line summary into the file, then run **exactly this command, with no substitutions, no extra
+arguments and no quotes**.
+
+`team notify <agent> --from-file <path>` normalises the file to a single line (CR removed, newlines → spaces,
+ trailing blanks stripped) so the inbox keeps one entry per line, and preserves every other byte — quotes,
+`$`, backticks and `{agent}`-looking text arrive verbatim. A missing or empty summary file is a real failure
+(non-zero exit, nothing appended), so a hop-through-empty-file is never silently reported as “notified”.
+
+Dispatch **warns but never blocks** when `TEAM_AGENT_NOTIFY_CMD` looks unusable (unknown placeholder, newline,
+whitespace-only, unexecutable first word) — that is the M3.0 contract. When that happens the prompt section is
+replaced by “the notify configuration is unusable; put your summary in the report instead”, so a worker never gets
+a half command to copy. If your CLI is the built-in Pi (empty `TEAM_AGENT_CMD`), the section says so: Pi's notify
+extension already reports the turn end, and the extra command is only run if the PM asked for it.
 
 ## 4. Logs / activity: `TEAM_AGENT_LOG_GLOB`
 
@@ -138,7 +179,7 @@ The flag wins over the environment variable; the cap wins over both.
 # .pi/team/config.sh
 TEAM_AGENT_CMD='codex exec -C {cwd} -m {model} -s workspace-write "$(cat {prompt_file})"'
 TEAM_AGENT_BIN="$HOME/.bun/bin/codex"
-TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm "{summary}"'
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
 TEAM_AGENT_LOG_GLOB='~/.codex/sessions/**/*.jsonl'
 TEAM_AGENT_MODELS="dev=openai/gpt-5.6-terra"   # {model} → gpt-5.6-terra（codex 自己认的模型名）
 ```
@@ -151,9 +192,8 @@ Notes:
 - **Verified on this machine** (2026-09-14, `codex-cli 0.146.1`, `~/.bun/bin/codex`): the dispatch
   window ran codex, which created and committed `greeting-codex.txt` and wrote its report; its notify
   call landed in `docs/team/inbox/pm.md`. (The first run notified the *prompt-file path* instead of a
-  summary — that turned out to be a teamsmith bug in how the prompt rendered the notify example, not a
-  codex quirk; the smoke suite now asserts the rendered example, and the prompt tells the worker not to
-  send a path.)
+  summary — that was a teamsmith bug in how the prompt rendered the notify example; since M3.2 the prompt
+  never contains worker text at all, the summary goes through `--from-file`.)
 - codex keeps its own sessions under `~/.codex/sessions/**`; teamsmith's `{session_id}` is *not* a codex
   session id. `team resume` means "dispatch the same task again in the same worktree/window"; resuming a
   codex conversation is a codex concern (`codex exec resume …`) and can be added to the template.
@@ -165,7 +205,7 @@ Notes:
 ```sh
 TEAM_AGENT_CMD='opencode run --model {provider}/{model} --dir {cwd} "$(cat {prompt_file})"'
 TEAM_AGENT_BIN="$HOME/.opencode/bin/opencode"
-TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm "{summary}"'
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
 TEAM_AGENT_LOG_GLOB='~/.local/share/opencode/log/*.log'
 TEAM_AGENT_MODELS="dev=google/gemini-3-flash-preview"
 ```
@@ -185,7 +225,8 @@ continue (opencode's session ids are its own — see the note under codex).
    `prompt file` path it prints exists.
 3. Run that command by hand inside the worktree (auth, flags, cwd) before trusting tmux to do it.
 4. Real dispatch, then check: the window shows the CLI; the worker's writes land in the worktree; the
-   notify command lands in `docs/team/inbox/pm.md` (or the PM window).
+   worker writes its summary file and the notify command lands in `docs/team/inbox/pm.md` (or the PM
+   window) with the summary byte-exact (`TEAM_AGENT_NOTIFY_CMD` with `{summary_file}`).
 5. `team monitor --once --activity` → the agent's block shows its Pi session or the configured log tail.
 6. Only then rely on it — gates, reports and `team review` work the same for every adapter.
 
@@ -194,6 +235,10 @@ continue (opencode's session ids are its own — see the note under codex).
 - **Emulating an agent's internal turn events.** teamsmith does not parse a vendor's private protocol to
   guess "the agent finished thinking". Turn-end notification is the adapter's job
   (`TEAM_AGENT_NOTIFY_CMD`), plus the PM side (`team say`, `inbox`, `roster`).
+- **Interpolating worker text into a shell line.** A summary is data: it arrives through a file
+  (`{summary_file}` / `team notify --from-file`). `{summary}` is rendered as a quoted file read for
+  compatibility, but nothing a worker writes is ever re-interpreted by a shell — there is no supported way
+  to make a summary part of a command's text.
 - **Multiplexing per-agent streams out of one shared log.** `{agent}` is a filename placeholder, not a
   stream splitter; point the glob at per-agent files (or accept one shared tail).
 - **Replacing the PM's own agent.** The PM (and the watchdog's `pi -c` restart, the PM prompt files, the

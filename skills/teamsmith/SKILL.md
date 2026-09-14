@@ -179,7 +179,7 @@ byte-for-byte unchanged**):
 | Key | Purpose | When empty |
 |---|---|---|
 | `TEAM_AGENT_CMD` | launch template for the agent CLI | built-in Pi command |
-| `TEAM_AGENT_NOTIFY_CMD` | how a worker tells the PM its turn ended | Pi notify extension (inbox + knock) |
+| `TEAM_AGENT_NOTIFY_CMD` | how a worker tells the PM its turn ended (`{summary_file}` — the summary is data, never interpolated) | Pi notify extension (inbox + knock) |
 | `TEAM_AGENT_LOG_GLOB` | which logs `team monitor --activity` reads (`{agent}` = agent name) | Pi session files |
 | `TEAM_AGENT_BIN` | binary for the window-readiness wait and existence checks | first word of `TEAM_AGENT_CMD`, else `TEAM_PI_BIN` |
 

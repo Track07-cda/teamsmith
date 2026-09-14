@@ -1234,9 +1234,90 @@ team_json_escape() {
 team_agent_placeholders() { # <launch|notify> → 每行一个支持的占位符
   case "${1:-launch}" in
     launch) printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{notify_ext}' '{extra_args}' ;;
-    notify) printf '%s\n' '{summary}' '{agent}' '{cwd}' '{session_id}' '{model}' '{provider}' '{skill_dir}' ;;
+    notify) printf '%s\n' '{summary}' '{summary_file}' '{agent}' '{cwd}' '{session_id}' '{model}' '{provider}' '{skill_dir}' ;;
     *) team_die "team_agent_placeholders: 未知 kind ${1:-}（launch|notify）" ;;
   esac
+}
+
+team_trim() { # 去掉首尾空白（含换行）
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s\n' "$s"
+}
+
+team_one_line() { # <文本> → 单行（收件箱是一行一条）；不做任何 shell 解释，其余字节原样
+  local s="$1"
+  s="$(printf '%s' "$s" | tr -d '\r' | tr '\n' ' ')"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s\n' "$s"
+}
+
+# 模板里所有「看起来想当占位符」的 token（含畸形形态：{ cwd } / {cwd } / {{cwd}} / {cwd'}'）。
+# 规则：从 { 起找到第一个 }，中间去掉首尾空白/花括号/引号后形如标识符 → 是占位符候选；
+# 跳过 ${VAR}（前面是 $，那是 shell 变量展开，不是我们的占位符）。
+# 用 awk 逐字符扫，是为了 catch 那些「既不展开也不报错、原样进命令行」的 typo（F4）。
+team_agent_token_candidates() { # <模板> → 每行一个候选（原样，含花括号）
+  printf '%s' "$1" | awk '
+    { s = s $0 "\n" }
+    END {
+      q = sprintf("%c", 39); d = sprintf("%c", 34)
+      n = length(s); i = 1
+      while (i <= n) {
+        if (substr(s, i, 1) == "{" && (i == 1 || substr(s, i-1, 1) != "$")) {
+          rest = substr(s, i+1); j = index(rest, "}")
+          if (j > 0) {
+            mid = substr(rest, 1, j-1)
+            if (mid ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+              print "{" mid "}"          # 正常形态：就是它，别再吞后面的引号/括号
+              i = i + 1 + j
+              continue
+            }
+            t = mid
+            gsub("^[[:space:]{}]+", "", t)
+            gsub("[[:space:]{}]+", "", t)
+            gsub("^[" q "]+", "", t); gsub("[" q "]+$", "", t)
+            if (t ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+              # 畸形写法：把紧跟其后的多余 } 与引号一起算进来，报错里原样回显他敲的东西
+              ext = 0
+              while (1) {
+                c = substr(rest, j+1+ext, 1)
+                if (c == "}" || c == q || c == d) ext++
+                else break
+              }
+              print "{" mid substr(rest, j, 1+ext)
+              i = i + 1 + j + ext
+              continue
+            }
+            i = i + 1 + j
+            continue
+          }
+        }
+        i++
+      }
+    }'
+}
+
+# 不是「原样写成 {name} 且在支持集里」的候选 → 全都是错的（含只差空格/双花括号的近似写法）。
+team_agent_bogus_tokens() { # <kind> <模板> → 每行一个不合法 token
+  local kind="$1" tpl="$2" tok known=""
+  known="$(team_agent_placeholders "$kind" | tr '\n' ' ')"
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case " $known" in *" $tok "*) ;; *) printf '%s\n' "$tok" ;; esac
+  done < <(team_agent_token_candidates "$tpl" | sort -u)
+}
+
+team_agent_bogus_hint() { # 畸形 token 的补充说明（只差空格/花括号/引号的写法最容易被写出来）
+  local tok
+  for tok in $1; do
+    case "$tok" in
+      "{"*)
+        case "$tok" in
+          *" "*|*'{'*"{"*|*\'*) printf '（注意：占位符必须原样写成 {name}，不能加空格、双花括号或引号）' ;;
+        esac ;;
+    esac
+  done
 }
 
 team_agent_kind_var() { # <launch|notify> → 对应的配置键名（错误信息用）
@@ -1248,17 +1329,27 @@ team_agent_adapter_label() { # → "built-in (Pi)" | "custom: <cmd>"
   else printf 'built-in (Pi)\n'; fi
 }
 
-team_agent_check_launch() { # 派单前校验 TEAM_AGENT_CMD：未知占位符直接 die（单一明确的报错入口）
-  local unknown
-  [ -n "${TEAM_AGENT_CMD:-}" ] || return 0
-  unknown="$(team_agent_unknown_placeholders launch "$TEAM_AGENT_CMD")"
-  if [ -n "$unknown" ]; then
-    team_die "TEAM_AGENT_CMD 里有未知占位符：$(printf '%s' "$unknown" | tr '\n' ' ')（支持：$(team_agent_support_list launch)）"
+team_agent_check_launch() { # 派单前校验 TEAM_AGENT_CMD：畸形/未知占位符、纯空白、多行 → 直接 die
+  local cmd="${TEAM_AGENT_CMD-}" bad
+  [ -n "$cmd" ] || return 0                       # 未配置 → 内置 Pi
+  [ -n "$(team_trim "$cmd")" ] || \
+    team_die "TEAM_AGENT_CMD 只有空白（配了等于没配）：找不到 agent 可执行文件；要么留空走内置 Pi，要么写一条真正的命令"
+  case "$cmd" in
+    *$'\n'*) team_die "TEAM_AGENT_CMD 含换行：adapter 模板必须是**一条**命令行（第二行会被窗口 shell 当新命令执行）" ;;
+  esac
+  bad="$(team_agent_bogus_tokens launch "$cmd")"
+  if [ -n "$bad" ]; then
+    team_die "TEAM_AGENT_CMD 里有未知占位符（含空格/双花括号/引号等畸形写法）：$(printf '%s' "$bad" | tr '\n' ' ')（支持：$(team_agent_support_list launch)）$(team_agent_bogus_hint "$bad")"
   fi
+  return 0
 }
 
 team_agent_prompt_file() { # <agent> <ID> → 本次派单的提示词文件（{prompt_file} 与排障用）
   printf '%s\n' "$TEAM_STATE_DIR/prompt-$1-$2.md"
+}
+
+team_agent_summary_file() { # <agent> <ID> → worker 写「回合结束摘要」的文件（{summary_file} / {summary}）
+  printf '%s\n' "$TEAM_STATE_DIR/summary-$1-$2.md"
 }
 
 team_agent_support_list() { # <kind> → 支持的占位符，空格分隔（错误信息用，无尾随空格）
@@ -1267,33 +1358,60 @@ team_agent_support_list() { # <kind> → 支持的占位符，空格分隔（错
 }
 
 team_agent_cli_name() { # → 给人看的 CLI 名（roster/say 的存活文案；默认仍是 pi）
-  if [ -n "${TEAM_AGENT_CMD:-}${TEAM_AGENT_BIN:-}" ]; then basename "$(team_agent_bin_path)"
+  local bin
+  if [ -n "$(team_trim "${TEAM_AGENT_CMD:-}${TEAM_AGENT_BIN:-}")" ]; then bin="$(team_agent_bin_path)"; basename "$bin"
   else printf 'pi'; fi
 }
 
-team_agent_unknown_placeholders() { # <kind> <模板> → 每行一个未知占位符（空 = 全认识）
-  local kind="$1" tpl="$2" tok known
-  known="$(team_agent_placeholders "$kind" | tr '\n' ' ')"
-  while IFS= read -r tok; do
-    [ -n "$tok" ] || continue
-    case " $known" in *" $tok "*) ;; *) printf '%s\n' "$tok" ;; esac
-  done < <(printf '%s' "$tpl" | grep -oE '\{[A-Za-z_][A-Za-z0-9_]*\}' | sort -u)
+team_agent_unknown_placeholders() { # <kind> <模板> → 每行一个不合法占位符（空 = 全认识）
+  team_agent_bogus_tokens "$1" "$2"
+}
+
+# {summary} 的安全替换文本：永远展开成「一个词」的文件读取（$(cat '<path>')），
+# 所以 worker 的摘要**不可能**被当 shell 代码执行；按模板里占位符两侧的引号选形态：
+#   "{summary}" → $(cat '…')      （外层双引号由模板保留）
+#   '{summary}' → '"$(cat '…')'"  （闭合单引号、双引号内取值、再开单引号）
+#   其余        → "$(cat '…')"    （自己带一对双引号）
+team_agent_summary_ref() { # <前一个字符> <后一个字符> <summary 文件> [<摘要文本>]
+  local prev="$1" next="$2" f="$3" text="${4-}" val
+  # 调用方直接给了摘要文本（老签名/工具）→ 强引用成「一个词」：能单引号就单引号（可读、字节原样），
+  # 含单引号/换行时退回 %q；两条路都不会让文本被 shell 解释。
+  # 渲染给 worker 的提示词（没给文本）→ 读摘要文件的引用：$(cat '<path>')
+  if [ -n "$text" ]; then
+    case "$text" in
+      *"'"*|*$'\n'*) val="$(printf '%q' "$text")" ;;
+      *)              val="'${text}'" ;;
+    esac
+  else val="$(printf '$(cat %q)' "$f")"; fi
+  if [ "$prev" = '"' ] && [ "$next" = '"' ]; then printf '%s\n' "$val"
+  elif [ "$prev" = "'" ] && [ "$next" = "'" ]; then printf "'%s'\n" "\"$val\""
+  else printf '"%s"\n' "$val"; fi
 }
 
 # 展开模板：值统一 %q 转义（命令一定是「可直接交给 shell 的单行」）。
 # 例外：{prompt} → "$0"（窗口 harness 以 argv[0] 传提示词，避免超长命令行）；
-#       {extra_args} / {summary} → 原样插入（引号由模板作者负责）。
-team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_file> [summary]
-  local kind="$1" tpl="$2" agent="$3" sid="$4" wt="$5" prompt_file="$6" summary="${7-}"
-  local unknown tok val model provider
-  unknown="$(team_agent_unknown_placeholders "$kind" "$tpl")"
-  if [ -n "$unknown" ]; then
-    team_die "$(team_agent_kind_var "$kind") 里有未知占位符：$(printf '%s' "$unknown" | tr '\n' ' ')（支持：$(team_agent_support_list "$kind")）"
+#       {extra_args} → 原样插入（引号由模板作者负责）；
+#       {summary} → 文件读取引用（见 team_agent_summary_ref，摘要永远是数据）。
+# **单趟从左到右扫描**：插入的值不会再被当模板扫一遍（{extra_args} 里写 {cwd} 也不会二次展开）。
+team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_file> [<summary_file>] [<summary_text>]
+  local kind="$1" tpl="$2" agent="$3" sid="$4" wt="$5" prompt_file="$6" sfile="${7-}" stext="${8-}"
+  local bad tok val model provider out="" head prev next
+  bad="$(team_agent_bogus_tokens "$kind" "$tpl")"
+  if [ -n "$bad" ]; then
+    team_die "$(team_agent_kind_var "$kind") 里有未知占位符（含空格/双花括号/引号等畸形写法）：$(printf '%s' "$bad" | tr '\n' ' ')（支持：$(team_agent_support_list "$kind")）$(team_agent_bogus_hint "$bad")"
   fi
   model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
   provider="${model%%/*}"
-  while IFS= read -r tok; do
-    [ -n "$tok" ] || continue
+  while [ -n "$tpl" ]; do
+    case "$tpl" in
+      *'{'*) ;;
+      *) out="$out$tpl"; break ;;
+    esac
+    head="${tpl%%\{*}"                 # 第一个 { 之前
+    out="$out$head"
+    tpl="${tpl#"$head"}"
+    tok="${tpl%%\}*}"; tok="${tok}}"  # 从 { 到第一个 }（含）
+    tpl="${tpl#"${tok%\}}"}"; tpl="${tpl#\}}"
     case "$tok" in
       '{cwd}')         val="$(printf '%q' "$wt")" ;;
       '{session_id}')  val="$(printf '%q' "$sid")" ;;
@@ -1304,13 +1422,18 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
       '{skill_dir}')   val="$(printf '%q' "$TEAM_SKILL_DIR")" ;;
       '{notify_ext}')  val="$(printf '%q' "$TEAM_SKILL_DIR/extension/team-notify.ts")" ;;
       '{extra_args}')  val="${TEAM_EXTRA_PI_ARGS:-}" ;;
-      '{summary}')     val="$summary" ;;
+      '{summary_file}') val="$(printf '%q' "$sfile")" ;;
+      '{summary}')
+        prev=""; next=""
+        [ -n "$head" ] && prev="${head: -1}"
+        [ -n "$tpl" ] && next="${tpl:0:1}"
+        val="$(team_agent_summary_ref "$prev" "$next" "$sfile" "$stext")" ;;
       '{agent}')       val="$(printf '%q' "$agent")" ;;
-      *) team_die "team_agent_expand: 未知占位符 $tok" ;;
+      *) val="$tok" ;;                 # 不是占位符的花括号（JSON body、awk 程序…）原样保留
     esac
-    tpl="${tpl//"$tok"/$val}"
-  done < <(printf '%s' "$tpl" | grep -oE '\{[A-Za-z_][A-Za-z0-9_]*\}' | sort -u)
-  printf '%s\n' "$tpl"
+    out="$out$val"
+  done
+  printf '%s\n' "$out"
 }
 
 # 启动命令：空 TEAM_AGENT_CMD → 内置 Pi（默认路径，输出与历史逐字节一致）；否则展开模板。
@@ -1327,40 +1450,55 @@ team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file>
   printf '%s %s--session-id %q "$0"' "$(printf '%q' "$pi_bin")" "$piargs" "$sid"
 }
 
-# 回合结束通知命令（非 Pi agent 用）；{summary} 由调用方给（原样插入，引号由模板作者负责）。
-team_agent_notify_cmd() { # <agent> <session_id> <worktree> <prompt_file> <summary>
+# 回合结束通知命令（worker 的摘要永远走文件通道：写进 <summary_file>，命令里不含 worker 文本）。
+team_agent_notify_cmd() { # <agent> <session_id> <worktree> <summary_file> [<摘要文本（会被 %q 引用，工具/测试用）>]
   [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ] || return 0
-  team_agent_expand notify "$TEAM_AGENT_NOTIFY_CMD" "$1" "$2" "$3" "$4" "$5"
+  team_agent_expand notify "$TEAM_AGENT_NOTIFY_CMD" "$1" "$2" "$3" "" "$4" "${5-}"
 }
 
-# 校验 notify 模板是否「看起来可用」（dispatch 只警告一次，不阻断派单）：
-# ① 无未知占位符；② 展开后的首词能在 PATH 里解析到。
-team_agent_notify_check() { # → 0=可用；1=有问题（原因打到 stdout）
-  [ -n "${TEAM_AGENT_NOTIFY_CMD:-}" ] || return 0
-  local unknown expanded first agent
-  unknown="$(team_agent_unknown_placeholders notify "$TEAM_AGENT_NOTIFY_CMD")"
-  if [ -n "$unknown" ]; then
-    printf '未知占位符：%s（支持：%s）\n' "$(printf '%s' "$unknown" | tr '\n' ' ')" "$(team_agent_support_list notify)"
-    return 1
+# notify 模板「看起来可用吗」：有问题时每行一条原因打到 stdout（dispatch 只警告、不阻断派单 ——
+# 这是 M3.0 的契约；提示词那边会用同一个判断把整段换成「写进报告」，见 F8）。
+# 检查项：① 不是纯空白；② 单行；③ 无畸形/未知占位符；④ 首词能解析到（首词带 $/{/引号时跳过，那是命令替换不是可执行名）。
+team_agent_notify_issues() {
+  local tpl="${TEAM_AGENT_NOTIFY_CMD:-}" bad agent first
+  [ -n "$tpl" ] || return 0
+  if [ -z "$(team_trim "$tpl")" ]; then printf '只有空白\n'; return 0; fi
+  if [ -z "$(team_trim "${TEAM_AGENT_CMD:-}")" ]; then
+    printf 'TEAM_AGENT_CMD 为空（内置 Pi 用自己的通知扩展，提示词不会带这段）：要自定义通知就同时配 TEAM_AGENT_CMD\n'
   fi
+  case "$tpl" in *$'\n'*) printf '是多行模板（notify 命令必须单行）\n' ;; esac
+  bad="$(team_agent_bogus_tokens notify "$tpl")"
+  [ -n "$bad" ] && printf '占位符不认识：%s（支持：%s）\n' "$(printf '%s' "$bad" | tr '\n' ' ')" "$(team_agent_support_list notify)"
   agent="${TEAM_AGENTS%% *}"; agent="${agent:-dev}"
-  expanded="$(team_agent_expand notify "$TEAM_AGENT_NOTIFY_CMD" "$agent" "${TEAM_SESSION:-teamsmith}-$agent" \
-    "$(team_agent_worktree "$agent")" "$(team_agent_prompt_file "$agent" sample)" '一句话摘要')"
-  first="$(printf '%s' "$expanded" | awk '{print $1}')"
-  command -v "$first" >/dev/null 2>&1 || { printf '首词不可执行：%s\n' "$first"; return 1; }
+  first="$(team_agent_cmd_first_word notify "$tpl" "$agent")"
+  case "$first" in
+    ''|*'$'*|*'{'*|*'"'*|*"'"*) ;;      # 命令替换/占位符开头 → 无法用 command -v 判，跳过
+    *) command -v "$first" >/dev/null 2>&1 || printf '首词不可执行：%s\n' "$first" ;;
+  esac
   return 0
+}
+
+# 兼容旧名（M3.0 的测试与文档提到过它）：返回非 0 表示「有问题」，原因打到 stdout。
+team_agent_notify_check() {
+  local issues; issues="$(team_agent_notify_issues)"
+  [ -z "$issues" ] && return 0
+  printf '%s\n' "$issues"
+  return 1
 }
 
 # adapter 的可执行文件：TEAM_AGENT_BIN > TEAM_AGENT_CMD 首词 > TEAM_PI_BIN。
 # 用于 dispatch 的「窗口 PATH 就绪」等位与存在性检查，以及 doctor 的解析结论。
-team_agent_cmd_first_word() { # <模板> → 首词（带占位符时先用样本值展开，便于检查）
-  local tpl="$1" expanded agent
-  agent="${TEAM_AGENTS%% *}"; agent="${agent:-dev}"
+# 首词必须是个**裸**可执行名（不带引号）：带引号的 "my agent" 无法在 shell 外解析成可执行文件，
+# 这种模板要么把名字写裸，要么用 TEAM_AGENT_BIN 显式指定。
+team_agent_cmd_first_word() { # <launch|notify> <模板> [<agent>]
+  local kind="${1:-launch}" tpl="$2" agent="${3:-}" expanded sfile
+  [ -n "$agent" ] || { agent="${TEAM_AGENTS%% *}"; agent="${agent:-dev}"; }
+  sfile="$(team_agent_summary_file "$agent" sample)"
   case "$tpl" in
     *'{'*)
-      # 未知占位符交给 team_agent_check_launch / team_agent_expand 报错（这里不抢报，避免重复刷屏）
-      if [ -n "$(team_agent_unknown_placeholders launch "$tpl")" ]; then expanded="$tpl"
-      else expanded="$(team_agent_expand launch "$tpl" "$agent" "${TEAM_SESSION:-teamsmith}-$agent" "$TEAM_MAIN_ROOT" "$(team_agent_prompt_file "$agent" sample)")"; fi ;;
+      # 不合法占位符交给 team_agent_check_launch / team_agent_expand 报错（这里不抢报，避免重复刷屏）
+      if [ -n "$(team_agent_bogus_tokens "$kind" "$tpl")" ]; then expanded="$tpl"
+      else expanded="$(team_agent_expand "$kind" "$tpl" "$agent" "${TEAM_SESSION:-teamsmith}-$agent" "$TEAM_MAIN_ROOT" "$(team_agent_prompt_file "$agent" sample)" "$sfile")"; fi ;;
     *)     expanded="$tpl" ;;
   esac
   printf '%s' "$expanded" | awk '{print $1}'
@@ -1374,8 +1512,10 @@ team_pi_bin_path() {
 }
 
 team_agent_bin_path() { # → 绝对路径（在 PATH 里）或原样首词
-  local bin="${TEAM_AGENT_BIN:-}" p
-  if [ -z "$bin" ] && [ -n "${TEAM_AGENT_CMD:-}" ]; then bin="$(team_agent_cmd_first_word "$TEAM_AGENT_CMD")"; fi
+  local bin p cmd
+  cmd="$(team_trim "${TEAM_AGENT_CMD:-}")"
+  bin="$(team_trim "${TEAM_AGENT_BIN:-}")"
+  if [ -z "$bin" ] && [ -n "$cmd" ]; then bin="$(team_agent_cmd_first_word launch "$cmd")"; fi
   if [ -z "$bin" ]; then team_pi_bin_path; return 0; fi
   case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
   p="$(command -v "$bin" 2>/dev/null | head -1)"
