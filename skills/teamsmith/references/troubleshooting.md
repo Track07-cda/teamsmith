@@ -1,135 +1,170 @@
-# 排障（实战踩坑清单）
+# Troubleshooting (hard-won lessons)
 
-先跑 `team doctor`；再看扩展日志 `tail -f $(grep TEAM_NOTIFY_LOG .pi/team/config.sh)`。
+Run `team doctor` first; then look at the extension log with `tail -f $(grep TEAM_NOTIFY_LOG .pi/team/config.sh)`.
 
 ---
 
-## 1. PM 收不到 agent 的「回合结束」通知
+## 1. The PM never receives an agent's "turn ended" notification
 
-按概率排查：
+Check in order of likelihood:
 
-1. **扩展没加载**：linked worktree 里 Pi **不会**自动发现项目本地 `.pi/extensions/`。必须由
-   `team dispatch` 传 `-e <skill>/extension/team-notify.ts`。手动起 agent 时要自己加。
-2. **cwd 不在 worktree 下**：扩展只在 `<root>/<TEAM_WORKTREES_DIR>/...` 内触发。改了
-   `TEAM_WORKTREES_DIR` 就要同步配置（扩展读同一份 `config.sh`）。
-3. **窗口名等于 PM 窗口名**：会跳过（防自触发）。agent 窗口名必须与 agent 名一致——`team dispatch` 已保证。
-4. **tmux session 不匹配**：扩展比较 `#{session_name}` 与 `TEAM_SESSION`。PM 会话必须在同名 session 里。
-5. **去重**：`TEAM_NOTIFY_DEDUP_SEC`（默认 20s）内的相同简报只发一次。想调试就设 0。
-6. **PM 窗口不存在**：只写收件箱，不敲窗口。`team doctor` 会警告。
-7. **非 tmux 环境**：`TMUX_PANE` 为空 → 扩展判定不了窗口名，直接跳过。要么在 tmux 里跑，
-   要么把 `TEAM_NOTIFY_TMUX=0` 并为 agent 显式设窗口名（目前不支持，属已知限制）。
+1. **The extension is not loaded**: in a linked worktree Pi does **not** auto-discover the project-local
+   `.pi/extensions/`. `team dispatch` must pass `-e <skill>/extension/team-notify.ts`. When you start an agent by
+   hand you have to add it yourself.
+2. **cwd is not under the worktree**: the extension only fires inside `<root>/<TEAM_WORKTREES_DIR>/...`. If you change
+   `TEAM_WORKTREES_DIR` you must update the configuration too (the extension reads the same `config.sh`).
+3. **The window name equals the PM window name**: it is skipped (to prevent self-triggering loops). An agent window
+   must be named after the agent — `team dispatch` already guarantees that.
+4. **tmux session mismatch**: the extension compares `#{session_name}` with `TEAM_SESSION`. The PM session must live
+   in the session of the same name.
+5. **Deduplication**: an identical briefing within `TEAM_NOTIFY_DEDUP_SEC` (default 20s) is only sent once. Set it to
+   0 while debugging.
+6. **The PM window does not exist**: the message only lands in the inbox, nothing is typed into a window.
+   `team doctor` warns about this.
+7. **Not inside tmux**: `TMUX_PANE` is empty → the extension cannot determine the window name and skips. Either run
+   inside tmux, or set `TEAM_NOTIFY_TMUX=0` and set the window name for the agent explicitly (not supported today,
+   a known limitation).
 
-## 2. agent 会话「找不回来」/ 记忆断了
+## 2. An agent session "cannot be found again" / its memory broke
 
-Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复用。
+A Pi session belongs to a **cwd**: `--session-id` can only be reused under the same project path.
 
-- 不要移动/重命名 agent 的 worktree；不要 `rm -rf .worktrees/<agent>` 后重建到别的路径。
-- 重建过就 `team dispatch <agent> ... --fresh`（新会话），并在 thread 里记一笔为什么重来。
-- session id 规则：`<TEAM_SESSION>-<agent>`（`--fresh` 会追加时间戳）。
+- Never move or rename an agent's worktree; never `rm -rf .worktrees/<agent>` and recreate it at a different path.
+- If you already did, use `team dispatch <agent> ... --fresh` (a new session) and note in the agent's thread why it
+  had to start over.
+- Session id rule: `<TEAM_SESSION>-<agent>` (`--fresh` appends a timestamp).
 
-## 3. 通知文本和 PM 的输入粘在一起
+## 3. Notification text gets glued to what the PM is typing
 
-`tmux send-keys` 是把文本「敲」进 PM 会话的输入行，等于替你打字。已知副作用。缓解：
+`tmux send-keys` literally "types" the text into the PM session's input line, as if you had typed it. A known side
+effect. Mitigations:
 
-- 读通知后立刻回一个短句（清空输入行）。
-- 调低信息量：`TEAM_INBOX_MAX_CHARS`；或 `TEAM_NOTIFY_TMUX=0`，只用 `team digest` 主动看。
-- 不要在 PM 的输入框里长时间悬着半句没发出去的话。
+- Answer with a short sentence right after reading a notification (which clears the input line).
+- Lower the information volume: `TEAM_INBOX_MAX_CHARS`; or `TEAM_NOTIFY_TMUX=0` and read `team digest` yourself.
+- Do not leave half a sentence hanging in the PM's input box for a long time.
 
-## 4. `team dispatch` 拒绝派单
+## 4. `team dispatch` refuses to dispatch
 
-| 报错 | 原因 | 处理 |
+| Error | Cause | What to do |
 |---|---|---|
-| swap 只剩 X MB | `TEAM_MIN_FREE_SWAP_MB` 底线（默认 1024） | 等一个 agent 结束；确认可以卡就 `TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` |
-| 可用内存 X MB < 2048 | 只是警告（RAM 紧） | 可继续；嫌卡就降并发。要彻底关掉警告：`TEAM_WARN_AVAIL_MB=0` |
-| 可用内存+空闲 swap 仅 X MB | `TEAM_MIN_TOTAL_MB` 硬底线 | 机器真的没资源了：先停 agent |
-| 模型 X 并发上限 N | `TEAM_MODEL_LIMITS` | 等，或临时 `TEAM_MODEL_LIMITS="" team dispatch ...` |
-| 未知 agent | 名册里没有 | 改 `TEAM_AGENTS` |
-| worktree 不存在 | 没 `add-agent` | dispatch 会自动建，但更推荐显式 `team add-agent <a>` |
-| 窗口已存在 → 替换 | 上一个回合还在跑 | 确认后再派：替换会打断它（先 `team say` 问进度） |
+| only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for an agent to finish; if slowness is acceptable, `TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` |
+| available memory X MB < 2048 | a warning only (RAM is tight) | you may continue; lower concurrency if it feels sluggish. To silence it completely: `TEAM_WARN_AVAIL_MB=0` |
+| available memory + free swap only X MB | the hard `TEAM_MIN_TOTAL_MB` floor | the machine really is out of resources: stop an agent first |
+| model X concurrency limit N | `TEAM_MODEL_LIMITS` | wait, or temporarily `TEAM_MODEL_LIMITS="" team dispatch ...` |
+| unknown agent | not in the roster | edit `TEAM_AGENTS` |
+| worktree does not exist | `add-agent` was never run | dispatch creates it automatically, but an explicit `team add-agent <a>` is preferable |
+| window exists → replacing | the previous turn is still running | dispatch only after checking: replacing interrupts it (ask for progress with `team say` first) |
 
-## 5. git worktree 报错
+## 5. git worktree errors
 
-- `fatal: '<branch>' is already checked out`：该分支已在别的 worktree 里。用 `git worktree list` 找，
-  或给复验用 detached checkout（`team review` 已经这么做）。
-- 残留的 worktree 锁：`git worktree prune`。
-- 删不掉（脏）：先 `git -C <wt> status`，确认无价值再 `team teardown --purge --force`。
+- `fatal: '<branch>' is already checked out`: that branch lives in another worktree. Find it with `git worktree list`,
+  or use a detached checkout for verification (which is what `team review` does).
+- A stale worktree lock: `git worktree prune`.
+- Cannot remove it (dirty): run `git -C <wt> status` first, and only use `team teardown --purge --force` once you are
+  sure nothing is worth keeping.
 
-## 6. 合并与「已合并」判断
+## 6. Merging and deciding "is it merged?"
 
-- `git merge --squash` 后，任务分支**不是**保护分支的祖先，所以 `git branch --merged` 判断不出来。
-  靠 `BOARD.md` 状态 + `reviews/<ID>.md` 记录，别靠 ancestry。
-- 冲突：`git merge --squash` 会留下冲突现场；`git status --porcelain | grep '^U'` 看冲突文件，
-  处理完 `git add -A && git commit`，或 `git merge --abort` 放弃重来。
-- 合并前主工作树必须干净且在保护分支 —— 这是刻意的：避免把 agent 的脏状态混进合并提交。
+- After `git merge --squash` the task branch is **not** an ancestor of the protected branch, so `git branch --merged`
+  cannot tell you anything. Trust the `BOARD.md` status plus the `reviews/<ID>.md` record, not ancestry.
+- Conflicts: `git merge --squash` leaves the conflict state behind; inspect it with
+  `git status --porcelain | grep '^U'`, then either `git add -A && git commit` or `git merge --abort` to start over.
+- Before merging, the main worktree must be clean and on the protected branch — deliberately so: it stops an agent's
+  dirty state from slipping into the merge commit.
 
-## 7. forge（github / gitlab）
+## 7. forge (github / gitlab)
 
-- `gh` 401/403：PAT 文件路径/权限/scope。合并需要 `pull-requests: write`，很多 PAT 没有 →
-  退回本地 squash + 评论 + 关 PR（见 `workflows.md` F）。
-- GitLab 403：token 需要 `api` scope 且有 Developer 以上角色；MR 目标分支若受保护，
-  Developer 角色可能无法合并。
-- 用真实工具时按需注入（`GH_TOKEN="$(< .gh-pat)" gh …`），不要长期 `export GH_TOKEN`，也不要 `cat` token 到屏幕/日志。
+- `gh` 401/403: the PAT file path/permissions/scope. Merging needs `pull-requests: write`, which many PATs do not
+  have → fall back to a local squash + a comment + closing the PR (see `workflows.md` F).
+- GitLab 403: the token needs the `api` scope and at least the Developer role; if the MR target branch is protected,
+  the Developer role may be unable to merge.
+- When using a real tool, inject on demand (`GH_TOKEN="$(< .gh-pat)" gh …`); do not `export GH_TOKEN` permanently and
+  do not `cat` a token onto the screen or into a log.
 
-## 8. 报告与实际不符
+## 8. A report does not match reality
 
-- 症状：报告说「测试通过」，复验挂。
-- 动作：贴失败输出到 thread → 退回 → 在任务书里补「必须先复现失败测试」的要求。
-- 制度层面：`team review` 必须真的跑门禁（不要习惯性 `--no-gates`）。
-- 反复出现同一 agent 同类型问题：换模型族做独立验证，或把验收命令写得可复制粘贴。
+- Symptom: the report says "tests pass", verification fails.
+- Action: paste the failing output into the thread → send it back → add "you must reproduce the failing test first" to
+  the brief.
+- At the process level: `team review` must actually run the gates (do not fall into always passing `--no-gates`).
+- The same agent making the same kind of mistake repeatedly: switch to a different model family for the independent
+  verification, or make the acceptance commands copy-pasteable.
 
-## 9. agent 越界改了别人的目录
+## 9. An agent crossed the boundary and edited someone else's directory
 
-- 立刻 `team say <agent> "停：<path> 不属于你，回退你的改动（git checkout -- <path>）"`。
-- 在 `OWNERSHIP.md`/任务书里补明确的所有权行——越界多数是任务书没写清。
-- 已经提交的越界改动：在复验时拒绝，让 agent 用 `git revert` 或重做分支。
+- Immediately `team say <agent> "stop: <path> is not yours, roll your change back (git checkout -- <path>)"`.
+- Add an explicit ownership line to `OWNERSHIP.md`/the brief — most crossings come from a brief that did not say.
+- If the crossing was already committed: reject it during verification and have the agent `git revert` it, or redo the
+  branch.
 
-## 11. 其它已知坑
+## 11. Other known traps
 
-- **skill 没被注入到系统提示**：pi 只在“有能读文件的工具”（`read` 或 `bash`）时才把 skills 写进系统提示。
-  用 `--no-tools` 跑时看不到 skill 是正常现象，不是安装失败。验证方法：`bash tests/smoke.sh`
-  或 `bun tests/skill-load.mjs`（用 pi 自己的解析器加载本 skill，零模型调用）。
-- **收件箱到底写到哪**：notify 扩展优先认 git 主工作树（agent 的 worktree 里也有 `config.sh` 的副本），
-  所以收件箱总是汇总到主工作树的 `<docs>/inbox/`；若日志显示 root 指向 worktree 路径，说明扩展版本过旧。
-- **路径/配置怀疑错位**：先跑 `team paths`（输出 main_root / worktree / docs / session / pm_window）。
-- **`TEAM_PI_BIN`**：pi 不在 PATH 时（或要拿假 pi 做自测时）在配置里指绝对路径。
+- **The skill was not injected into the system prompt**: pi only writes skills into the system prompt when a tool that
+  can read files (`read` or `bash`) is available. Running with `--no-tools` means not seeing the skill is normal, not
+  a failed installation. How to verify: `bash tests/smoke.sh` or `bun tests/skill-load.mjs` (loads this skill through
+  pi's own parser, zero model calls).
+- **Where the inbox is really written**: the notify extension prefers the git main worktree (an agent's worktree has
+  its own copy of `config.sh`), so inboxes always end up in the main worktree's `<docs>/inbox/`; if a log shows the
+  root pointing at a worktree path, the extension is too old.
+- **Suspect paths or a mismatched config**: run `team paths` first (it prints main_root / worktree / docs / session /
+  pm_window).
+- **`TEAM_PI_BIN`**: point it at an absolute path when pi is not on PATH (or when you want a fake pi for self-tests).
 
-## 11. 保活与存活判定
+## 11. Keep-alive and liveness decisions
 
-- **“PM 没在跑”是怎么判的**：`pane_current_command` 不是 shell → 在跑；是 shell 但命令行带非选项参数或有前台子命令 → 也当作在跑（`busy`）。
-  这是为了容住 pi 用 shell wrapper 启动的情况（此时前台名显示 bash），以及用户 rc 钩子常驻子进程（不能因为“有子进程”就认定忙）。
-- **team up 会 respawn PM 窗口的 pane**：只有当那里没有 pi 在跑（空提示符）时才动手。
-  所以不要把 PM 窗口当普通终端用；要手动开工就到那个窗口重跑 `pi` 或干脆让 watchdog 拉。
-  注：`pi` 是 pane 的进程本身（我们用 `exec`），所以 pi 退出时 pane 会关、窗口会消失——
-  这正是 watchdog 报 `missing` 的场景（对应 `TEAM_WATCH_REBUILD_TMUX` 开关）。
-- **只有“确实在跑”才会被打字**：`say`/`notify`/扩展在目标窗口是空提示符时会拒绝（否则文本会被 shell 当命令执行），
-  只写收件箱等 PM 回来读。
-- **watchdog 到底管什么**：定时算一遍待办（未读通知/待复验/看板 todo·wip/blocked/有任务但停了的 agent），
-  **有待办才叫醒 PM**（在跑就发一句提醒；不在跑就用 `pi -c` 拉起）。没待办就什么都不做。
-  它不会替你续跑 agent、不建 tmux session/窗口（除非 `TEAM_WATCH_REBUILD_TMUX=1`）、不合并代码。
-- **PM 总是被叫醒/不想被叫**：`team standby on --reason "…"` 让 PM 主动停工（无需人工介入的“真没活”
-  或“卡着等人”都属于这种情况）；`team standby off` 恢复。待命期间待办仍会记进 `state/watchdog.log`。
-- **叫醒频率**：默认 15 分钟一次（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）；同一批待办按
-  `TEAM_WATCH_NUDGE_GAP` 限制重复提醒。想更慢/更快直接改这两个值。
-- **PM 被“叫了两次”**：agent 回合结束的即时通知（notify 扩展）与 watchdog 的定时提醒是两回事——
-  后者是对未处理待办的兜底。把待办处理/ack 掉就不会再提。
-- **watchdog 说“PM 找不到（missing）…请人工 team up”**：tmux session/窗口没了（比如你关了窗口、机器重启），
-  而默认不管 tmux。处理：`team up`；想让它自己处理就设 `TEAM_WATCH_REBUILD_TMUX=1`。
-- **agent 停了不会自动续跑**（设计如此）：PM 自己说 `team resume --dry-run` 看、再 `team resume` 续；
-  人工也可以 `team up --agents` 一次性带上。
-- **PM 反复崩**：自动拉起配额（`TEAM_WATCH_MAX_RESTARTS`，默认 5/小时）会拦下并发告警，防止崩溃循环把机器拖垮；
-  先看 `state/watchdog.log` 与 PM 窗口输出找原因（常见：模型额度耗尽、配置写错、依赖缺失）。
-- **tmux 后端的看门狗窗口被关了**：`team watchdog up` 重开；`team watchdog logs` 看画面快照；
-  监视器下半部分提示“本机没有 node/bun/tsx：跳过 agent 活动流” → 装 node 或 bun 即可（团队状态部分不受影响）。
-- **看门狗自己也停了**：`team watchdog status` 看窗口是否还在；`team watchdog up` 会重建（只有一个后端，没有容器可查）。
-- **机器重启后一片安静**：tmux server 与里面的窗口都没了 → `team up` 一键恢复（PM 窗口 + 看门狗窗口）；也可 `team watchdog up` 单独起看门狗。
-- **`ExecStart`/脚本权限**：本 skill 全部用 `bash <path>` 调用，不依赖可执行位（但 `scripts/team` 仍是 +x，
-  `team smoke` 会检查）。
+- **How "the PM is not running" is decided**: `pane_current_command` not being a shell → running; being a shell whose
+  command line carries a non-option argument or a foreground subcommand → also treated as running (`busy`).
+  This is to accommodate pi started through a shell wrapper (where the foreground name shows bash) and user rc hooks
+  that keep a child alive (so "it has a child process" cannot be taken as busy).
+- **team up respawns the PM window's pane**: only when no pi is running there (an empty prompt).
+  So do not treat the PM window as a normal terminal; to start working manually, re-run `pi` in that window or simply
+  let the watchdog bring it up.
+  Note: `pi` is the pane's own process (we `exec` it), so when pi exits the pane closes and the window disappears —
+  exactly the `missing` case the watchdog reports (corresponding to the `TEAM_WATCH_REBUILD_TMUX` switch).
+- **Typing only happens when something is really running**: `say`/`notify`/the extension refuse when the target window
+  sits at an empty prompt (otherwise the text would be executed by the shell as a command) and only write the inbox
+  for the PM to read later.
+- **What the watchdog actually manages**: it recomputes the pending work on a timer (unread notifications / reports
+  awaiting verification / board todo·wip / blocked / agents with an unfinished task that stopped), and **only wakes the
+  PM when there is pending work** (nudge it while running; `pi -c` when it is not). With nothing pending it does
+  nothing at all.
+  It will not resume agents for you, does not create tmux sessions/windows (unless `TEAM_WATCH_REBUILD_TMUX=1`), and
+  does not merge code.
+- **The PM keeps being woken / does not want to be woken**: `team standby on --reason "…"` deliberately stands the PM
+  down (both "there really is nothing to do without a human" and "stuck waiting for someone" qualify); `team standby
+  off` resumes. While on standby the backlog is still recorded in `state/watchdog.log`.
+- **Wake-up frequency**: every 15 minutes by default (`TEAM_WATCH_INTERVAL=900`, 300~3600 recommended); repeated
+  reminders for the same pending work are limited by `TEAM_WATCH_NUDGE_GAP`. To go slower or faster, change these two
+  values.
+- **The PM was "woken twice"**: the instant notification at the end of an agent's turn (the notify extension) and the
+  watchdog's timed reminder are two different things — the latter is a fallback for unprocessed pending work. Handle
+  or ack the pending work and it stops.
+- **The watchdog says "PM not found (missing) … run team up manually"**: the tmux session/window is gone (you closed
+  the window, the machine rebooted) and by default it does not touch tmux. Fix it with `team up`; to have it handle
+  this itself, set `TEAM_WATCH_REBUILD_TMUX=1`.
+- **A stopped agent is not resumed automatically** (by design): the PM looks with `team resume --dry-run` and then
+  resumes with `team resume`; a human can also do `team up --agents` to bring them along in one go.
+- **The PM keeps crashing**: the automatic-restart quota (`TEAM_WATCH_MAX_RESTARTS`, default 5/hour) stops it and
+  warns, so a crash loop cannot drag the machine down; look in `state/watchdog.log` and the PM window output for the
+  cause first (common: model quota exhausted, a config typo, a missing dependency).
+- **The watchdog window of the tmux backend was closed**: reopen it with `team watchdog up`; `team watchdog logs`
+  shows a screen snapshot; when the lower half of the monitor says "no node/bun/tsx on this machine: skipping the agent
+  activity stream" → install node or bun (the team status part is unaffected).
+- **The watchdog itself stopped**: `team watchdog status` shows whether the window is still there; `team watchdog up`
+  rebuilds it (there is only one backend, so there is no container to inspect).
+- **Everything is silent after a machine reboot**: the tmux server and its windows are gone → `team up` restores both
+  (PM window + watchdog window) in one shot; `team watchdog up` can start the watchdog alone as well.
+- **`ExecStart`/script permissions**: this skill is always invoked as `bash <path>` and does not depend on the
+  executable bit (but `scripts/team` is still +x, and `team smoke` checks it).
 
-## 12. Pi 相关的通用坑
+## 12. General Pi traps
 
-- **测试结论必须来自当次真实执行**：把命令与输出尾部写进报告，PM 复跑。
-- 类型导入（`import type`）在开启 `verbatimModuleSyntax` 等项目下是硬要求——这类项目规则
-  要写进 `AGENTS.md`，否则弱模型会反复踩。
-- 终端抓屏不可靠（TUI 刷新/换行），别把 tmux scrollback 当证据；报告与日志才是。
-- 长任务无进展：让 agent 每 30 分钟在报告里落一次状态，或 `team say` 问一次进度。
-- 强模型很慢且额度低：一次只跑一个（`TEAM_MODEL_LIMITS`），PM 别同时派两个。
+- **A test conclusion must come from a real run of this round**: put the command and the tail of its output into the
+  report, and the PM re-runs it.
+- Type-only imports (`import type`) are mandatory in projects with `verbatimModuleSyntax` and the like — such project
+  rules belong in `AGENTS.md`, otherwise weaker models trip over them again and again.
+- Screen scraping is unreliable (TUI refreshes/line wraps), so never treat tmux scrollback as evidence; reports and
+  logs are.
+- A long task with no progress: have the agent drop a status line into the report every 30 minutes, or ask for
+  progress with `team say`.
+- Strong models are slow and quota-limited: run one at a time (`TEAM_MODEL_LIMITS`), and do not dispatch two at once.

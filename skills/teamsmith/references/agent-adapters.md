@@ -129,7 +129,7 @@ TEAM_AGENT_LOG_GLOB='~/.local/share/opencode/log/*.log'     # opencode rolling l
 ```
 
 Degradation is explicit: if nothing matches, or there are no Pi sessions and no glob, the block stays
-`⚫ 无会话` and says why; the team status panel above it is untouched. `--json` tags every block with
+`⚫ no session` and says why; the team status panel above it is untouched. `--json` tags every block with
 `"source": "pi" | "log" | "none"`.
 
 ### Bounded reads and display safety (F2/F3, M3.3)
@@ -154,10 +154,10 @@ as data, not as text for your terminal:
   characters. Displayed text must not be able to touch the PM's terminal or lie about it.
 - **Unreadable files degrade instead of crashing or silently blanking**: permissions (`EACCES`), FIFOs,
   devices/sockets, a file deleted between glob and read (`ENOENT`), a symlink pointing at a directory, or
-  content with NUL bytes (binary) render as `日志不可读` / `会话不可读` + a human-readable `reason`, with
+  content with NUL bytes (binary) render as `log unreadable` / `session unreadable` + a human-readable `reason`, with
   `"available": false`. FIFOs and devices are never `open`ed for reading (the old whole-file read could
   block forever and freeze the watchdog window). A glob that matches nothing, or one that matches a plain
-  directory, still degrades to `⚫ 无会话` exactly as before.
+  directory, still degrades to `⚫ no session` exactly as before.
 
 How to change the window:
 
@@ -181,7 +181,7 @@ TEAM_AGENT_CMD='codex exec -C {cwd} -m {model} -s workspace-write "$(cat {prompt
 TEAM_AGENT_BIN="$HOME/.bun/bin/codex"
 TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
 TEAM_AGENT_LOG_GLOB='~/.codex/sessions/**/*.jsonl'
-TEAM_AGENT_MODELS="dev=openai/gpt-5.6-terra"   # {model} → gpt-5.6-terra（codex 自己认的模型名）
+TEAM_AGENT_MODELS="dev=openai/gpt-5.6-terra"   # {model} → gpt-5.6-terra (the model name codex itself knows)
 ```
 
 Notes:

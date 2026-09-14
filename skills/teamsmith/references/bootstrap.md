@@ -1,57 +1,62 @@
-# 在项目里初始化 teamsmith（bootstrap）
+# Bootstrapping teamsmith in a project
 
-给新项目（或第一次接手某个仓库的 PM）用的最短路径。**PM 负责初始化，包括配置看门狗。**
+The shortest path for a new project (or a PM taking over a repository for the first time).
+**The PM owns the setup, including configuring the watchdog.**
 
-## 一句话
+## In one line
 
 ```bash
-bash <skill>/scripts/team bootstrap              # 幂等；自动探测当前 tmux session/窗口
-bash <skill>/scripts/team bootstrap --agents "dev verify api"   # 自定义名册
-bash <skill>/scripts/team bootstrap --print      # 只看计划，不动任何东西
+bash <skill>/scripts/team bootstrap              # idempotent; detects the current tmux session/window
+bash <skill>/scripts/team bootstrap --agents "dev verify api"   # custom roster
+bash <skill>/scripts/team bootstrap --print      # print the plan, change nothing
 ```
 
-或者把 `templates/bootstrap-prompt.md.tmpl` 的内容（替换占位符后）直接交给新项目里的 PM：
-「读一遍，然后执行」。
+Or hand the contents of `templates/bootstrap-prompt.md.tmpl` (placeholders substituted) to the PM of the new project:
+"read this, then execute it".
 
-## bootstrap 具体做什么
+## What bootstrap actually does
 
-| 步骤 | 结果 | 幂等性 |
+| Step | Result | Idempotence |
 |---|---|---|
-| 探测 tmux | 采用 PM 自己所在的 `session:window` 写进配置（不用手填） | 每次重算 |
-| 写配置 | `.pi/team/config.sh`（身份/名册/模型/门禁/安装命令/forge/守卫/看门狗） | 已存在则保留，只补空缺项 |
-| 文档骨架 | `docs/team/{ROADMAP,BOARD,OWNERSHIP,DECISIONS,PROTOCOL}.md`、`tasks/`、`reports/`、`reviews/`、`threads/`、`inbox/` | 存在则跳过 |
-| 团队协议 | 往 `AGENTS.md` 注入 `<!-- teamsmith:begin --> … end -->` 段落（**刷新**而非重复追加） | ✔ |
-| `.gitignore` | `.pi/team/state/`、`docs/team/inbox/`、`docs/team/reviews/*.log`、`.worktrees/` | ✔ |
-| agent worktree | 每个名册成员一个长期 `.worktrees/<agent>`（分支 `agent/<agent>`），有 `TEAM_INSTALL_CMD` 时顺手装依赖 | 已存在则跳过 |
-| 看门狗 | `team watchdog up`：同 session 的 `watchdog` 窗口跑监视器（默认每 15 分钟巡检一次） | 已在跑则跳过 |
-| 清单 | 打印「下一步」（ROADMAP/OWNERSHIP → 第一个任务 → 派单 → digest） | — |
+| Detect tmux | adopts the `session:window` the PM itself runs in and writes it into the config (no manual fill-in) | recomputed every run |
+| Write config | `.pi/team/config.sh` (identity/roster/models/gates/install command/forge/guards/watchdog) | if it exists it is kept; only missing entries are filled in |
+| Docs skeleton | `docs/team/{ROADMAP,BOARD,OWNERSHIP,DECISIONS,PROTOCOL}.md`, `tasks/`, `reports/`, `reviews/`, `threads/`, `inbox/` | skipped when present |
+| Team protocol | injects the `<!-- teamsmith:begin --> … end -->` section into `AGENTS.md` (**refreshes** it instead of appending twice) | ✔ |
+| `.gitignore` | `.pi/team/state/`, `docs/team/inbox/`, `docs/team/reviews/*.log`, `.worktrees/` | ✔ |
+| Agent worktrees | one long-lived `.worktrees/<agent>` per roster member (branch `agent/<agent>`), installing dependencies when `TEAM_INSTALL_CMD` is set | skipped when present |
+| Watchdog | `team watchdog up`: a `watchdog` window in the same session runs the monitor (patrolling every 15 minutes by default) | skipped when already running |
+| Checklist | prints "what next" (ROADMAP/OWNERSHIP → first task → dispatch → digest) | — |
 
-## 之后 PM 的动作
+## What the PM does afterwards
 
 ```bash
-team watchdog status            # 看门狗窗口 / 巡检周期 / 待办 / PM 存活 / 容量
+team watchdog status            # watchdog window / patrol interval / pending work / PM liveness / capacity
 team task T1.1 --title "…" --agent dev
 team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
-team digest                     # 待办：通知 + 待复验 + 看板
+team digest                     # pending work: notifications + reports awaiting verification + board
 ```
 
-## 看门狗是窗口，且由 PM 配置
+## The watchdog is a window, configured by the PM
 
-- `team watchdog up|down|restart|status|logs`（**只有一个后端**：同 session 的 `watchdog` 窗口）。
-- **默认（tmux）**：在同一个 session 起 `watchdog` 窗口跑 `team monitor` ——
-  上半屏是团队状态（PM/待办/容量/待命），下半屏是每个 agent 的 Pi 会话活动流（谁在干什么、空闲多久、最近事件），
-  同时按 `TEAM_WATCH_INTERVAL` 做巡检。`team watchdog logs` 看画面快照。
-- 为什么只有一个后端（v1.12.0 起不再有 podman/容器/systemd 形态）：**依赖越少越可靠**——
-  少一个运行时、少一层 socket/权限/镜像问题，出事时只有一个地方要查。看门狗不需要跨 tmux server 存活：
-  server 没了 PM 也没了，重建时 `team up` / `team watchdog up` 一起起来就行。
-- 看门狗自己也挂了怎么办：`team watchdog status` 会发现它不在；`team watchdog up` 重建窗口。没人会自动重启它（这也是"少管"的代价，换来的是零额外运行时）。
-- 改巡检周期：改 `.pi/team/config.sh` 的 `TEAM_WATCH_INTERVAL` 后 `team watchdog restart`。
-- 别再引入第二个后端（容器/systemd）：换来的那点存活能力，要靠多一层运行时/权限/socket 去换，不值。
+- `team watchdog up|down|restart|status|logs` (**there is exactly one backend**: a `watchdog` window in the same session).
+- **Default (tmux)**: start a `watchdog` window in the same session that runs `team monitor` —
+  the top half is team status (PM/pending work/capacity/standby), the bottom half is each agent's Pi session activity
+  (who is doing what, how long they have been idle, recent events), and it patrols on `TEAM_WATCH_INTERVAL` at the same
+  time. `team watchdog logs` shows a snapshot of the screen.
+- Why only one backend (since v1.12.0 there is no podman/container/systemd form): **fewer dependencies are more
+  reliable** — one less runtime, one less layer of socket/permission/image problems, and only one place to look when
+  something breaks. The watchdog does not need to survive the tmux server: if the server is gone the PM is gone too,
+  and rebuilding brings `team up` / `team watchdog up` back together.
+- What if the watchdog itself died: `team watchdog status` notices it is not there; `team watchdog up` rebuilds the
+  window. Nothing restarts it automatically (that is the price of "managing less", paid for with zero extra runtime).
+- Changing the patrol period: edit `TEAM_WATCH_INTERVAL` in `.pi/team/config.sh`, then `team watchdog restart`.
+- Do not introduce a second backend (container/systemd): the little bit of extra survivability costs another runtime,
+  permission model and socket, which is not worth it.
 
-## 常见问题
+## Common problems
 
-| 现象 | 处理 |
+| Symptom | What to do |
 |---|---|
-| `容器未创建` | `team watchdog up`（首次会构建镜像，需要网络拉基础镜像 alpine） |
-| 窗口在但没巡检 | `team watchdog logs` 看面板输出；`team watch --once` 手动跑一拍定位 |
-| 想彻底停掉 | `team watchdog down`（再 `team standby on` 可让 PM 不再被叫醒） |
+| `container not created` | `team watchdog up` (on first use it builds the image, which needs network access to pull the alpine base image) |
+| The window is there but nothing patrols | `team watchdog logs` to read the panel; `team watch --once` runs a single patrol tick to locate the problem |
+| Want to shut it down completely | `team watchdog down` (followed by `team standby on` so the PM stops being woken) |

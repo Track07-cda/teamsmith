@@ -1,244 +1,309 @@
-# 协议：为什么这样组织一支 Pi Agent 团队
+# Protocol: why a Pi agent team is organised this way
 
-这份文档是 `AGENTS.md` 团队协议段落的「理由版」。规则本身很短，理由是让未来的你和 agent
-不再把规则当成官僚流程而绕过。
+This document is the "why" behind the team protocol section of `AGENTS.md`. The rules themselves are short; the
+reasons are what stop a future you (and future agents) from treating them as bureaucracy to route around.
 
-> **信念层在 [philosophy.md](philosophy.md)**（8 条判断标准 + 反面案例）。本文解释"为什么这样定规则"，
-> 那份解释"为什么这个角色应当这样想"。两者冲突时以信条为准，并回来改规则。
+> **The belief layer lives in [philosophy.md](philosophy.md)** (8 judgement standards plus their failure modes). This
+> file explains "why the rules are what they are", that one explains "why this role should think this way". When the
+> two disagree the creed wins, and the rule gets fixed afterwards.
 
 ---
 
-## 1. 角色：PM 不是「更聪明的 agent」，而是唯一有权合并的角色
+## 1. Roles: the PM is not "a smarter agent", it is the only role allowed to merge
 
-| | PM（orchestrator） | worker agent |
+| | PM (orchestrator) | worker agent |
 |---|---|---|
-| 上下文 | 长驻、跨任务，持有路线图与决策历史 | 每任务一段，聚焦实现 |
-| 输出 | 任务书、决策日志、复验记录、合并 | 代码、测试、报告、PR/MR |
-| 权限 | 保护分支、forge 写操作、仓库设置 | 自己的任务分支 |
+| Context | long-lived, across tasks, holds the roadmap and the decision history | one stretch per task, focused on implementation |
+| Output | briefs, decision log, verification records, merges | code, tests, reports, PR/MR |
+| Authority | the protected branch, forge writes, repository settings | its own task branch |
 
-把「写代码」和「判定代码合格」拆给不同会话，是为了制造**独立复验**：agent 的报告是**主张**，
-PM 在独立 worktree 上跑出来的门禁结果是**证据**。
+Splitting "writing code" from "judging whether the code is acceptable" across different sessions is what creates
+**independent verification**: the agent's report is a **claim**, the gate results the PM obtains on an independent
+worktree are **evidence**.
 
-> CEP 的真实教训：某次报告声称 28/28 测试通过，PM 复跑时 4 个 spec 全挂（原因是
-> `verbatimModuleSyntax` 下用值导入导入了纯类型）。结论：报告 ≠ 证据，复验必须制度化。
+> A real CEP lesson: a report claimed 28/28 tests passing, the PM re-ran it and 4 specs failed (the cause was a value
+> import used to import a pure type under `verbatimModuleSyntax`). Conclusion: a report ≠ evidence, verification has
+> to be institutionalised.
 
-## 2. 证据模型（三层，逐层可信度上升）
+## 2. The evidence model (three layers, each more trustworthy than the last)
 
-1. **主张**：agent 在报告里写的结论（最低可信）。
-2. **可复核产物**：commit、测试文件、日志文件、diff。
-3. **独立复验**：PM 在**另一个 checkout** 上跑同一命令得到的结果（最高可信）。
+1. **Claim**: the conclusion an agent writes in its report (least trustworthy).
+2. **Checkable artefact**: commits, test files, log files, diffs.
+3. **Independent verification**: the result the PM gets by running the same commands on **another checkout** (most
+   trustworthy).
 
-任何「通过/完成」都必须落到第 2、3 层。任务书里的验收命令 + PM 的 `team review` 就是这条链路的实现。
+Any "passes/done" has to land in layers 2 and 3. The acceptance commands in a brief plus the PM's `team review` are
+the implementation of that chain.
 
-## 3. 隔离：worktree + 分支 + 长期 cwd
+## 3. Isolation: worktree + branch + a long-lived cwd
 
-- **一 agent 一 worktree**（长期），每个任务在其内新建分支。
-- 为什么长期：Pi 的 session 是按 **cwd** 归属的。worktree 路径一变，旧会话就找不回来（CEP 踩过）。
-- 为什么不用「一任务一 worktree」：会话会碎，追问与断点续跑都更难；长期 worktree 让 agent 保持记忆。
-- 主工作树（main）只属于 PM：合并、复验、写文档都在这里，避免与 agent 抢工作区。
+- **One worktree per agent** (long-lived), with a new branch per task inside it.
+- Why long-lived: a Pi session is keyed by **cwd**. Move the worktree path and the old session cannot be found again
+  (CEP has been there).
+- Why not "one worktree per task": sessions fragment, and both follow-up questions and resuming from a checkpoint get
+  harder; a long-lived worktree lets the agent keep its memory.
+- The main worktree (main) belongs to the PM alone: merges, verification and documentation happen there, so nobody
+  fights an agent over the workspace.
 
-## 4. 唤醒回路：异步工作的 agent 必须能主动叫醒 PM
+## 4. The wake-up loop: an asynchronous agent must be able to wake the PM by itself
 
-PM 不能靠轮询（浪费上下文、延迟高），也不该等用户转达。机制（`extension/team-notify.ts`）：
+The PM cannot poll (wastes context, high latency) and should not wait for the user to relay things. The mechanism
+(`extension/team-notify.ts`):
 
 ```
-agent 回合结束（Pi 的 agent_settled：不会再自动继续的那个点）
-   ├─ 追加 <root>/<docs>/inbox/<agent>.md      ← 持久，PM 随时可读
-   └─ tmux send-keys -t <session>:<pm-window>  ← 作为用户消息提交给 PM 会话，把它唤醒
+agent turn ends (Pi's agent_settled: the point where it will not continue on its own)
+   ├─ append <root>/<docs>/inbox/<agent>.md      ← durable, the PM can read it at any time
+   └─ tmux send-keys -t <session>:<pm-window>    ← submitted to the PM session as a user message, which wakes it
 ```
 
-守卫与限制：
-- 只在 cwd 位于 `<worktrees>/` 之下时触发；窗口名等于 PM 窗口名时跳过（防自触发循环）。
-- **linked worktree 里 Pi 不会自动发现项目本地 `.pi/extensions/`**，所以 `team dispatch` 必须用
-  `-e <skill>/extension/team-notify.ts` 显式加载（CEP 已实测）。
-- 通知文本会进入 PM 的输入行；如果用户此刻正在打字，可能与用户输入拼接（已知副作用）。
-- 收件箱是临时状态（gitignore），持久记录仍是报告 + 复验 + 决策日志。
-- 同一简报在 `TEAM_NOTIFY_DEDUP_SEC` 秒内只发一次：Pi 可能在一次工作里连续 settle 多次。
-- 主动通知（阻塞、发现别人的 bug）用 `team notify <agent> "<一句话>"`，比自动通知更早到达。
+Guards and limitations:
+- It only fires when the cwd is under `<worktrees>/`; when the window name equals the PM window name it is skipped (to
+  prevent a self-triggering loop).
+- **In a linked worktree Pi does not auto-discover the project-local `.pi/extensions/`**, so `team dispatch` must load
+  it explicitly with `-e <skill>/extension/team-notify.ts` (measured on CEP).
+- The notification text lands in the PM's input line; if the user is typing at that moment it can be concatenated with
+  their input (a known side effect).
+- The inbox is transient state (gitignored); the durable record is still the report + verification + decision log.
+- The same briefing is sent once per `TEAM_NOTIFY_DEDUP_SEC` seconds: Pi may settle several times inside one stretch
+  of work.
+- For a proactive notification (blocked, someone else's bug) use `team notify <agent> "<one line>"`, which arrives
+  earlier than the automatic one.
 
-## 5. 任务书：写给「没有上下文的弱模型」
+## 5. Task briefs: written for "a weak model without context"
 
-默认开发模型是便宜快速的模型（如 `deepseek/deepseek-flash`）。它**不会主动纠正模糊需求**，
-所以任务书必须自包含：
+The default development model is a cheap, fast one (e.g. `deepseek/deepseek-flash`). It **will not correct an
+ambiguous requirement on its own**, so a brief has to be self-contained:
 
-- 背景：为什么做、相关文档在哪（不要贴大段代码）。
-- 交付物：逐项写清文件路径 + 关键签名/行为。
-- 边界：明确「不要做」什么（比「要做什么」更能防止跑偏）。
-- 验收：**可复制的命令**，以及报告要求。
-- 报告格式固定（交付物/证据/偏离/下一步），便于 PM 机器式阅读。
+- Background: why this is being done, where the relevant docs are (do not paste large chunks of code).
+- Deliverables: file paths plus key signatures/behaviour, item by item.
+- Boundaries: spell out what **not** to do (this prevents more drift than saying what to do).
+- Acceptance: **copy-pasteable commands**, plus the report requirements.
+- A fixed report format (deliverables/evidence/deviations/next steps), so the PM can read it mechanically.
 
-## 6. 模型策略：便宜模型干活，不同族模型做对抗验证
+## 6. Model strategy: cheap models do the work, a different family does the adversarial verification
 
-| 用途 | 选择原则 |
+| Use | Selection principle |
 |---|---|
-| 实现/测试/文档 | 便宜、无并发限制的模型；任务书写好就够用 |
-| 独立验证/对抗分析 | 换一个模型族（避免同源盲区），如 grok 系 |
-| 高强度评审/难点 | 订阅额度紧张 → 用 `TEAM_MODEL_LIMITS` 限并发，一次只跑一个 |
-| 长上下文难题 | 慢且并发受限，PM 点名才用 |
+| Implementation/tests/docs | a cheap model without concurrency limits; a good brief is enough |
+| Independent verification/adversarial analysis | switch model families (to avoid the same blind spots), e.g. the grok family |
+| Heavy review/hard problems | subscription quota is tight → cap concurrency with `TEAM_MODEL_LIMITS`, run one at a time |
+| Long-context hard problems | slow and concurrency-limited; only when the PM explicitly asks |
 
-`team dispatch` 会在派单前检查 `TEAM_MODEL_LIMITS` 与容量：规则（来自 CEP 的两次 OOM 事故，其中一次是 RAM + zram 同时见底）：
+`team dispatch` checks `TEAM_MODEL_LIMITS` and capacity before dispatching: the rules (from two OOM incidents on CEP,
+one of which hit RAM and zram bottom at the same time):
 
-| 线 | 默认 | 语义 |
+| Line | Default | Meaning |
 |---|---|---|
-| `TEAM_MIN_AVAIL_MB` | 1024 | **硬线**：`MemAvailable` 低于它就拒绝派单（CEP 那台机器设 4096） |
-| `TEAM_MIN_FREE_SWAP_MB` | 1024 | **硬线**：**磁盘 swap** 空闲低于它拒绝派单（**不计 zram**） |
-| `TEAM_MIN_TOTAL_MB` | 512 | 硬线：`MemAvailable + 磁盘 swap 空闲` |
-| `TEAM_WARN_AVAIL_MB` | 4096 | 只警告：RAM 偏紧，允许卡顿 |
-| `TEAM_ZRAM_WARN_PCT` | 85 | 只警告：zram 占用过高（zram 的页存在 RAM 里，是卡顿来源不是安全网） |
+| `TEAM_MIN_AVAIL_MB` | 1024 | **hard line**: refuse to dispatch below this `MemAvailable` (that CEP machine sets 4096) |
+| `TEAM_MIN_FREE_SWAP_MB` | 1024 | **hard line**: refuse to dispatch below this much free **disk swap** (**zram excluded**) |
+| `TEAM_MIN_TOTAL_MB` | 512 | hard line: `MemAvailable + free disk swap` |
+| `TEAM_WARN_AVAIL_MB` | 4096 | warn only: RAM is tight, slowness is allowed |
+| `TEAM_ZRAM_WARN_PCT` | 85 | warn only: zram usage is too high (zram pages live in RAM, so it is a source of slowness, not a safety net) |
 
-为什么把 zram 单独看：`/dev/zram0` 的“可用空间”其实是 RAM 里被压缩的页，一满就基本常满；
-把它算进并发额度会系统性高估余量，OOM 时 RAM 与 zram 会一起见底。
+Why zram is looked at separately: the "free space" of `/dev/zram0` is really compressed pages in RAM, and once full it
+stays essentially full; counting it towards the concurrency budget systematically overestimates the headroom, and when
+an OOM happens RAM and zram bottom out together.
 
-## 7. 安全红线（不可协商）
+## 7. Security red lines (non-negotiable)
 
-- token 只在 PM **调用真实工具**时注入（例如 `GH_TOKEN="$(< .gh-pat)" gh …`），永不回显、永不落进项目文件或日志。
-  skill 与 forge 完全解耦：不探测 gh/glab、不读 token、不代开 PR/MR（v1.12.0）。
-- agent 禁止：push 保护分支、force push、merge、rebase/删除他人分支、改仓库设置。
-- agent 禁止阅读凭据/账户文件（如 `~/.pi/agent/auth.json`）。
-- 任何改变共享/远端状态的操作都要 `--yes`（用户显式授权）。skill 不替用户做主。
+- A token is injected only when the PM **calls a real tool** (e.g. `GH_TOKEN="$(< .gh-pat)" gh …`); it is never echoed
+  and never lands in a project file or a log.
+  The skill is fully decoupled from forges: it does not probe gh/glab, does not read tokens and does not open PR/MRs
+  for you (v1.12.0).
+- Agents may not: push the protected branch, force-push, merge, rebase/delete someone else's branch, change repository
+  settings.
+- Agents may not read credential/account files (such as `~/.pi/agent/auth.json`).
+- Any operation that changes shared/remote state needs `--yes` (explicit user authorization). The skill never decides
+  for the user.
 
-## 8. 定时巡检：不许“监视一切”，只负责叫醒
+## 8. Periodic patrol: no "watch everything", only waking people up
 
-watchdog 不是保活心跳，而是一个**节拍器**：定时问一句“现在有没有活儿要 PM 处理”。
+The watchdog is not a keep-alive heartbeat but a **metronome**: on a timer it asks "is there work for the PM right
+now".
 
-- 默认每 15 分钟（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）算一次待办：未读通知 / 待复验报告 /
-  看板 todo·wip / blocked / 有任务但停了的 agent。
-- **有待办** → 叫醒 PM（在跑就发一句提醒；不在跑就用 `pi -c` 拉起，开场提示词 `@state/pm-prompt.md`）；
-  **没待办** → 不叫醒、不启动 —— 不要求 PM 一直运行，静默也是一种正确状态。
-- PM 可主动停工：`team standby on --reason "…"`（无事可做/需人工介入），之后不再被叫醒，
-  待办积压仍记日志；人处理完 `team standby off`。
-- 同一批待办按 `TEAM_WATCH_NUDGE_GAP` 限制重复提醒频率；PM 正在忙时可直接忽略提醒。
-- 与即时通知的分工：agent 回合结束的通知是**即时**的（notify 扩展：写 inbox + 敲 PM 窗口）；
-  watchdog 的提醒是**定时兜底**：只要那批待办还是未读/未处理，下一轮（或待办变化时）会再提一次。
-- 边界：不管 tmux 布局（`TEAM_WATCH_REBUILD_TMUX=0`，丢了只告警）、不管 agent（PM 的活）、
-  不管模型额度、不自动合并。防失控：自动拉起配额 1 小时 5 次 + watchdog 自身 pid 锁。
+- Every 15 minutes by default (`TEAM_WATCH_INTERVAL=900`, 300~3600 recommended) it computes the pending work: unread
+  notifications / reports awaiting verification / board todo·wip / blocked / agents with an unfinished task that
+  stopped.
+- **Pending work** → wake the PM (nudge it if it is running; if not, start it with `pi -c` and the kick-off prompt
+  `@state/pm-prompt.md`); **nothing pending** → do not wake it, do not start it — the PM is not required to run
+  continuously, and being quiet is a valid state.
+- The PM can stand down deliberately: `team standby on --reason "…"` (nothing to do / a human has to step in), after
+  which it is not woken; a backlog is still logged; once a human has dealt with it, `team standby off`.
+- Repeated reminders for the same batch are limited by `TEAM_WATCH_NUDGE_GAP`; a PM that is busy can simply ignore a
+  reminder.
+- Division of labour with instant notifications: the notification at the end of an agent's turn is **instant** (the
+  notify extension: write the inbox + knock on the PM window); the watchdog's reminder is a **timed fallback**: as
+  long as that batch is unread/unhandled, the next round (or a change in pending work) raises it again.
+- Boundaries: it does not manage tmux layout (`TEAM_WATCH_REBUILD_TMUX=0`, a lost state is only reported), does not
+  manage agents (the PM's job), does not manage model quota and never merges automatically. Runaway protection: the
+  auto-start quota of 5 per hour plus the watchdog's own pid lock.
 
-为什么把边界画这么窄：一个“什么都管”的守护进程会同时操纵 tmux 布局、agent 生命周期、模型额度，
-出事时无法判断是谁改坏了状态；而且“保活”越多，就越容易把本应人工介入的事默默掩盖。
+Why the boundaries are drawn this narrow: an "everything-managing" daemon would manipulate tmux layout, agent
+lifecycles and model quota at the same time, and when something breaks nobody can tell who corrupted the state;
+furthermore, the more "keep-alive" it does, the easier it is to silently paper over something that should have needed
+a human.
 
-## 8b. 分支模型：一任务一分支（默认）
+## 8b. Branch model: one branch per task (default)
 
-- `TEAM_BRANCH_MODE=task`（默认）：`dispatch` 在 agent 的长期 worktree 里从保护分支切出
-  `task/<ID>-<slug>`；`review/merge/close` 的单位都是这个任务分支 → **复验范围 = 一个任务的 diff**、
-  回滚粒度 = 一个任务、PR 描述 = 任务书引用。任务 `close` 后 worktree 退回 `detached@保护分支`，下一个任务干净开始。
-- `TEAM_BRANCH_MODE=agent`：一 agent 一长期分支 `agent/<name>`（适合长线重构、或一个 agent 只做一件事的团队）。
-- worktree 脏时拒绝切分支（否则会把上一个任务的改动混进新任务）；这条是硬规则，不是提醒。
+- `TEAM_BRANCH_MODE=task` (default): `dispatch` cuts `task/<ID>-<slug>` off the protected branch inside the agent's
+  long-lived worktree; `review/merge/close` all operate on that task branch → **the verification scope is one task's
+  diff**, the rollback granularity is one task, and the PR description is a reference to the brief. After a task is
+  `close`d the worktree returns to `detached@protected branch`, so the next task starts clean.
+- `TEAM_BRANCH_MODE=agent`: one long-lived branch `agent/<name>` per agent (fits long refactors, or a team where each
+  agent only ever does one thing).
+- When the worktree is dirty, switching branches is refused (otherwise the previous task's changes leak into the new
+  task); that is a hard rule, not a reminder.
 
-## 8c. 看门狗的服务范围：只服务当前 tmux session
+## 8c. The watchdog's scope: it serves the current tmux session only
 
-- 看门狗（`watchdog` 窗口里的 `team monitor`）只回答本 session 的问题：谁在跑、在做什么任务、有什么待办、容量如何；
-  **不去翻别的 agent 的会话内容**（那是 PM 用 `inbox`/报告/`digest` 该看的）。
-- 会话活动流是 opt-in：`team monitor --activity`（且只列本 session 里活着的窗口）。
-  默认关闭的原因很实际：6 个 agent ≈ 每次渲染读 ~9MB JSONL（实测 7MB→67MB RSS、3s 一刷），噪音还盖住真正要看的状态。
-- 面板刷新默认 5s，巡检节拍仍是 `TEAM_WATCH_INTERVAL`（默认 900s）。
-- **什么叫"有待办"**：未读通知 / 待复验报告 / `blocked` 行 / 停了的 agent（还有任务没交活）。
-  看板的 `todo/wip` **默认不算**——backlog 常年存在，每 15 分钟敲一次纯属噪音；
-  想连 backlog 一起提醒就设 `TEAM_WATCH_PENDING_BOARD=1`（面板与 digest 里始终能看到它们）。
+- The watchdog (`team monitor` in the `watchdog` window) only answers questions about this session: who is running,
+  what task they are on, what is pending, how the capacity looks; it **never digs through another agent's session
+  content** (that is what the PM reads via `inbox`/reports/`digest`).
+- The session activity stream is opt-in: `team monitor --activity` (and it only lists live windows in this session).
+  It is off by default for a very practical reason: 6 agents ≈ ~9MB of JSONL read per render (measured 7MB→67MB RSS,
+  refreshed every 3s), and the noise covers up the state you actually needed to see.
+- The panel refreshes every 5s by default while the patrol beat stays `TEAM_WATCH_INTERVAL` (900s by default).
+- **What counts as "pending work"**: unread notifications / reports awaiting verification / a `blocked` row / agents
+  that stopped (with a task that was never delivered).
+  The board's `todo/wip` **do not count by default** — a backlog is always there and knocking every 15 minutes would
+  be pure noise; to include the backlog in reminders set `TEAM_WATCH_PENDING_BOARD=1` (the panel and the digest always
+  show them anyway).
 
-## 8d. 看板与报告的解析要容忍人的手工改动
+## 8d. Board and report parsing must tolerate human edits
 
-CEP 实测踩过的三处，现在都有明确的宽容规则：
+Three places CEP hit in practice, all of which now have explicit tolerance rules:
 
-- **BOARD 列数**：按**表头名字**定位 `ID/任务/Agent/分支/依赖/状态`，允许手工插列（例如加 `Issue` 列）；
-  `board ls` 会提示"非标准列布局"但照常工作；`team board set` 只改状态列，不动你加的那列；
-  新建行按现有列数对齐（未知列留空）。以前按固定列号解析，加列后会读出 `—` 当标题。
-- **待复验的启发式**：`reports/*.md` 只有同时满足「文件名前缀是任务 ID」+「标题是 `# <ID> · …`」+
-  「该 ID 在 BOARD 里（或有任务书）」才算待复验；PM 自己的里程碑/结项报告（`P2-closure.md` 等）
-  会被 `digest` 归到"忽略的非任务报告"里——不静默丢，也不会一直催你复验。
-- **merge 冲突**：失败时直接列出未合并文件（`UU/AA/DD/AU/UA/DU/UD`），并提示 `--no-renames`
-  （add/add 常常是 git 的 rename 检测把 `reports/<ID>-x.md` 与 `reviews/<ID>.md` 配成了一对）。
-  不再只丢一句"冲突/失败"让人手工重跑。
+- **BOARD column count**: `ID/task/Agent/branch/dependency/status` are located **by header name**, so columns may be
+  inserted by hand (e.g. an `Issue` column); `board ls` reports a "non-standard column layout" but keeps working;
+  `team board set` only writes the status column and never touches a column you added; new rows are aligned to the
+  existing column count (unknown columns stay empty). Parsing used to be positional, and after adding a column it
+  would read a `—` as the title.
+- **The pending-report heuristic**: a file under `reports/*.md` only counts as awaiting verification when its
+  file-name prefix is a task ID **and** its title is `# <ID> · …` **and** that ID is on the BOARD (or has a brief);
+  the PM's own milestone/closure reports (`P2-closure.md` and the like) are grouped by `digest` under "ignored
+  non-task reports" — not silently dropped, and not nagged about either.
+- **merge conflicts**: on failure the unmerged files are listed directly (`UU/AA/DD/AU/UA/DU/UD`) together with a hint
+  about `--no-renames` (add/add is often git's rename detection pairing `reports/<ID>-x.md` with `reviews/<ID>.md`).
+  It no longer just drops a "conflict/failed" on you to re-run by hand.
 
-## 8e. BOARD 的状态只在「真的进了保护分支」之后才写 done
+## 8e. A BOARD status only becomes done after the code really reached the protected branch
 
-CEP 踩过：冲突失败路径上 BOARD 已经被标 `done`，而代码没进 `main`（PR 还开着）——状态与事实相反，
-是比失败本身更危险的事。现在的顺序与收口：
+CEP has been there: on a failed conflict path the BOARD had already been marked `done` while the code never reached
+`main` (the PR was still open) — a status contradicting the facts is more dangerous than the failure itself. The
+current order and the closing move:
 
-1. 校验分支存在（`--branch` 拼错不会被误报成"冲突"）；
-2. `merge --squash` → `commit` → **`push`（若 `--push`/`--pr`）** 全部成功；
-3. 才 `board set <ID> done`。
+1. verify the branch exists (a mistyped `--branch` is not misreported as a "conflict");
+2. `merge --squash` → `commit` → **`push` (when `--push`/`--pr`)** all succeed;
+3. only then `board set <ID> done`.
 
-任何一步失败（冲突 / commit 失败 / push 失败）：**BOARD 保持合并前的状态**（通常 `review`），
-不要标 `done` —— 代码没进保护分支就不算完成。
+If any step fails (conflict / failed commit / failed push): **the BOARD keeps its pre-merge state** (usually
+`review`), and `done` is not set — code that never reached the protected branch is not finished.
 
-冲突处理（这些都是 PM 自己跑）：
+Conflict handling (the PM runs all of this itself):
 
 ```bash
-git -C <root> merge --abort                                  # 想放弃重来
-git -C <root> status --porcelain | grep '^U'                 # 看冲突文件（UU/AA/…）
-# lockfile 类冲突（pnpm-lock.yaml 等）：取分支侧再装依赖
+git -C <root> merge --abort                                  # want to give up and start over
+git -C <root> status --porcelain | grep '^U'                 # list the conflicted files (UU/AA/…)
+# lockfile-style conflicts (pnpm-lock.yaml and friends): take the branch side, then reinstall
 git -C <root> checkout --theirs -- pnpm-lock.yaml && (cd <root> && pnpm install --lockfile-only)
-git -C <root> add -A && git -C <root> commit -m "<ID>: <标题>"
+git -C <root> add -A && git -C <root> commit -m "<ID>: <title>"
 ```
 
-坑：add/add 冲突常是 git 的 rename 检测把两个不同路径配成一对（例如 `reviews/<ID>.md` 与
-`reports/<ID>-<agent>.md`）。用 `git -c merge.renames=false merge --squash <分支>` 重试即可。
+A trap: an add/add conflict is often git's rename detection pairing two different paths (e.g. `reviews/<ID>.md` and
+`reports/<ID>-<agent>.md`). Retry with `git -c merge.renames=false merge --squash <branch>` and it goes away.
 
-## 8f. 模板渲染与派单的坑（erp 实测）
+## 8f. Template rendering and dispatch traps (measured on erp)
 
-- **渲染不能经过 sed**：替换串里的 `&` 是"命中文本"，`TEAM_GATES="pnpm test && pnpm lint"`
-  会被写成 `pnpm test {{GATES}}{{GATES}} pnpm lint`。现在 `team_render` 用 bash 参数展开，
-  并且显式关掉 bash 5.2+ 的 `patsub_replacement`（它同样把替换串里的 `&` 当命中文本）。
-  `init` 还会把含 `$ \` \ "` 的门禁值转义后写入 config，保证 source 回来与入参一致（不会被执行）。
-- **派单写绝对路径**：窗口 shell 的 PATH/rc 可能还没就绪，直接 exec `pi` 会 `command not found`
-  （erp 复现 2 次）。现在派单前解析 `pi` 的绝对路径、写进窗口命令，并在派单前校验存在性
-  （找不到就直接报错，不会等到窗口里才发现）。
-- **GitLab API 的头/体必须匹配**：`--data-urlencode` 是表单体，就必须配
-  `Content-Type: application/x-www-form-urlencoded`；配成 `application/json` 会被 GitLab 拒
-  （`{"error":"Invalid JSON format"}`，PR/MR 开不出来）。JSON 体（`--data/--data-binary`）仍走 `application/json`。
+- **Rendering must not go through sed**: `&` inside the replacement string means "the matched text", so
+  `TEAM_GATES="pnpm test && pnpm lint"` was written out as `pnpm test {{GATES}}{{GATES}} pnpm lint`. `team_render` now
+  uses bash parameter expansion and explicitly disables bash 5.2+'s `patsub_replacement` (which likewise treats `&`
+  in the replacement as the matched text).
+  `init` also escapes gate values containing `$ \` \ "` before writing them into the config, so sourcing it back
+  yields the same value as the input (and is never executed).
+- **Dispatch writes absolute paths**: the window shell's PATH/rc may not be ready yet, so exec'ing `pi` directly ends
+  in `command not found` (reproduced twice on erp). Dispatch now resolves pi's absolute path first, writes it into the
+  window command, and checks that it exists before dispatching (a missing binary fails immediately instead of being
+  discovered inside the window).
+- **GitLab API headers and bodies must match**: if `--data-urlencode` is the form body, then
+  `Content-Type: application/x-www-form-urlencoded` must go with it; setting `application/json` gets rejected by
+  GitLab (`{"error":"Invalid JSON format"}`, and the PR/MR never opens). A JSON body (`--data/--data-binary`) still
+  uses `application/json`.
 
-## 8g. 跨项目：谈事可以，指挥不行
+## 8g. Across projects: you may talk, you may not command
 
-- 项目之间**正常交流是允许的**：接口怎么接、建议与依据、问题报告与复现、约联调窗口。
-  **不允许**：指挥别的 PM/agent 做事、替对方决策、冒充人类下指令、改对方仓库或状态。
-- 机制上做到了"想指挥也指挥不了"：`team meeting` 的 `intent` 白名单里**没有 command/order**；
-  `--as-user` 只有人类终端（+`TEAM_MEETING_ALLOW_USER_ID=1`）能用，agent 进程写会被拒；
-  共识必须**双方各自 agree**；会议只写共享区，对对方仓库零写权限。
-- 分工：**worker 不参会**（跨项目沟通只走 PM）；worker 需要外部配合时在报告里写 `BLOCKED:`。
-- 共享区在两个项目之外（`~/.pi/team/meetings/<slug>/`），transcript 是唯一真相；
-  敲门（提醒对方 PM 窗口）默认关闭，只在 `--knock` + `TEAM_MEETING_KNOCK=1` + 对方登记了 session 时发生。
-- 边界守卫：跨 session 打字默认**一律拒绝**，唯一例外是已登记会议的敲门 —— 这条挡住了"顺手插手别的项目"。
+- **Normal conversation between projects is allowed**: how an interface connects, advice with its basis, problem
+  reports with reproductions, scheduling a joint test window.
+  **Not allowed**: telling another PM/agent what to do, deciding on the other side's behalf, impersonating a human to
+  issue instructions, changing the other side's repository or state.
+- The mechanism makes "wanting to command but being unable to" real: the `intent` whitelist of `team meeting` has
+  **no command/order**; `--as-user` only works from a human terminal (+ `TEAM_MEETING_ALLOW_USER_ID=1`), so an agent
+  process writing it is refused; consensus requires **both sides to agree separately**; the meeting only writes the
+  shared area and has zero write permission in the peer's repository.
+- Division of labour: **workers do not attend** (cross-project communication goes through the PM); a worker that needs
+  outside cooperation writes `BLOCKED:` in its report.
+- The shared area lives outside both projects (`~/.pi/team/meetings/<slug>/`) and the transcript is the only truth;
+  knocking (nudging the peer PM's window) is off by default and only happens with `--knock` + `TEAM_MEETING_KNOCK=1`
+  + a registered peer session.
+- Boundary guard: cross-session typing is refused **by default without exception**; the single exception is knocking
+  for a registered meeting — which is what stops "casually reaching into another project".
 
-## 8h. git 与 forge 归 PM：skill 不执行、也不包装
+## 8h. git and forges belong to the PM: the skill neither performs nor wraps them
 
-- skill **不执行** git 写操作（建/切分支、squash、push）与 forge 写操作（开/合 PR、留言、关 PR）；
-  **也不打印"食谱"**——那属于过度包装已有工具。PM 直接用 `git` 与任意 forge 手段（`curl` 调 API、`gh`/`glab`、网页都行）。
-- skill 在 git 上只做三件事（都是只读或记录）：
-  1. **检查**：`dispatch` 前确认工作树不脏、不在保护分支上（否则拒绝并说明原因）；
-  2. **只读观察**：`roster` / `digest` 显示分支、脏文件数、领先提交、"待收尾"清单；
-  3. **复验证据**：`review <ID> --dir <PM 准备的 checkout>` 跑门禁并写 `reviews/<ID>.md`（git 由 PM 准备）。
-- 约定（写在 SKILL.md 与项目 PROTOCOL 里，PM 照做即可）：一 agent 一长期 worktree；
-  任务分支从保护分支切出；复验用 detached 独立 checkout；合并 = squash 进保护分支（有 PR 时先合 PR 再 `fetch + merge --ff-only`）；
-  **BOARD 只在代码真的进了保护分支之后才标 done**。
-- forge 无关：不假设 GitHub/GitLab；token 从项目配置的 token 文件读，只在调用命令时注入，不回显。
+- The skill **does not perform** git writes (creating/switching branches, squash, push) or forge writes (open/merge a
+  PR, comment, close a PR); **and it does not print "recipes"** either — that would be over-packaging tools that
+  already exist. The PM uses the **real tools** directly: `git`, plus whatever forge access it has (`curl` against an
+  API, `gh`/`glab`, the web UI).
+- On git the skill does exactly three things (all read-only or bookkeeping):
+  1. **Checks**: before `dispatch` it confirms the worktree is clean and not on the protected branch (otherwise it
+     refuses and explains why);
+  2. **Read-only observation**: `roster` / `digest` show the branch, dirty file count, commits ahead and a
+     "waiting to be wrapped up" list;
+  3. **Verification evidence**: `review <ID> --dir <the checkout the PM prepared>` runs the gates and writes
+     `reviews/<ID>.md` (git is prepared by the PM).
+- The conventions (written in SKILL.md and the project's PROTOCOL, for the PM to follow): one long-lived worktree per
+  agent; task branches cut off the protected branch; verification on a detached independent checkout; merging =
+  squashing into the protected branch (with a PR, merge the PR first and then `fetch + merge --ff-only`);
+  **the BOARD is only marked done after the code has really reached the protected branch**.
+- Forge-agnostic: GitHub/GitLab are not assumed; a token is read from the project's configured token file and injected
+  only for the duration of a command, never echoed.
 
-## 9. 容量：底线是 RAM 与磁盘 swap 都不见底（zram 不算额度）
+## 9. Capacity: the floor is that neither RAM nor disk swap bottoms out (zram does not count)
 
-- 拒绝派单的条件只有一个：空闲 swap < `TEAM_MIN_FREE_SWAP_MB`（默认 1024MB）或 RAM+swap < `TEAM_MIN_TOTAL_MB`。
-- RAM 紧张（< `TEAM_WARN_AVAIL_MB`）只警告：允许卡顿，因为慢不等于崩；OOM 才是真事故。
-- `team ps` / `team doctor` 直接用同一数据源报数，并给出“还能再加几个 agent”的估算（`TEAM_AGENT_MEM_MB`）。
+- There is only one condition for refusing a dispatch: free swap below `TEAM_MIN_FREE_SWAP_MB` (1024MB by default) or
+  RAM+swap below `TEAM_MIN_TOTAL_MB`.
+- Tight RAM (below `TEAM_WARN_AVAIL_MB`) only warns: slowness is acceptable, because slow is not broken; an OOM is the
+  real accident.
+- `team ps` / `team doctor` report from the same data source and add an estimate of "how many more agents fit"
+  (`TEAM_AGENT_MEM_MB`).
 
-## 9b. 测试与门禁必须有超时（不可协商）
+## 9b. Tests and gates must have a timeout (non-negotiable)
 
-- 事实：一个被故意改坏的实现让 PG 集成测试永久等待连接（池无超时 + `--test-timeout` 缺失 +
-  bash `timeout` 被设成 1800000s）→ 脚本挂 **85 分钟**、期间零输出。
-- 因此：`team review` 跑门禁时**一律套硬超时**（`TEAM_REVIEW_TIMEOUT`，默认 1800s；超时判定 `TIMEOUT`，
-  按 FAIL 处理并写进复验记录）。门禁命令自身也应带 `timeout`（如 `timeout 900 pnpm test:unit`）。
-- 任务书里的验收命令要自带超时；破坏性实验脚本必须 `trap 'git checkout -- …' EXIT` 还原现场。
+- The fact: a deliberately broken implementation made a PG integration test wait for a connection forever (no pool
+  timeout + a missing `--test-timeout` + bash `timeout` set to 1800000s) → the script hung for **85 minutes** with zero
+  output.
+- Therefore: `team review` **always wraps the gates in a hard timeout** (`TEAM_REVIEW_TIMEOUT`, 1800s by default; a
+  timeout is recorded as `TIMEOUT`, treated as FAIL and written into the verification record). Gate commands should
+  carry their own `timeout` too (e.g. `timeout 900 pnpm test:unit`).
+- Acceptance commands in a brief should carry their own timeout as well; destructive experiment scripts must restore
+  the scene with `trap 'git checkout -- …' EXIT`.
 
-## 9c. 强复验（对抗性验证包 + finding 翻转，里程碑收口用）
+## 9c. Strong verification (adversarial package + finding flips, for milestones)
 
-`team review <ID> --strong` 会额外检查两件事，并把结论写进复验记录：
+`team review <ID> --strong` checks two extra things and writes the conclusion into the verification record:
 
-1. **对抗性验证包**：验证 agent 在**独立包**里写测试（不复用被测项目的夹具，避免“用被验证对象验证它自己”）；
-2. **finding 翻转**：修复者把「记录缺陷的 finding 测试」翻转为守门测试，报告给出「修复前红 → 修复后绿」；
-   更狠的做法是**故意破坏实现 → 守门测试必须失败**（证明测试不是表演）。
+1. **Adversarial verification package**: the verifying agent writes tests in an **independent package** (not reusing
+   the tested project's fixtures, which would be "using the object under test to verify itself");
+2. **Finding flips**: the fixer turns the "finding test that recorded a defect" into a guard test and the report shows
+   "red before the fix → green after"; the sharper version is **deliberately break the implementation → the guard test
+   must fail** (proof that the test is not a performance).
 
-成本更高，适合里程碑/收口轮；日常任务跑普通门禁即可。
+It costs more, so it fits milestones and closure rounds; everyday tasks run the ordinary gates.
 
-## 10. 决策日志与调研规则
+## 10. Decision log and research rules
 
-- 技术栈/选型（语言、框架、库、存储、协议）**先派 research agent 取证**（① 本机实测 > ② 官方文档 >
-  ③ 二手资料；无实测必须标注），PM 复验证据链后才写「决定」。
-- 每个决策必须写**理由**与**影响**：只写结论的决策日志在半年后等于没有。
-- agent 可以用自己的证据推翻 PM 的暂定判断——这是设计意图，不是越权。
+- For a stack/technology choice (language, framework, library, storage, protocol) a **research agent gathers evidence
+  first** (① measured on this machine > ② official documentation > ③ secondary sources; anything unmeasured must be
+  marked as such), and the PM only writes a "decision" after verifying that evidence chain.
+- Every decision must record its **reason** and its **impact**: a decision log with conclusions only is worth nothing
+  six months later.
+- An agent may overturn the PM's provisional judgement with its own evidence — that is by design, not overreach.

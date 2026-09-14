@@ -1,241 +1,269 @@
-# 流程手册（runbook）
+# Runbook
 
-每条都是可直接照抄的命令序列。默认 `team` 指 `bash <skill>/scripts/team`（若已加 PATH 或软链，直接 `team`）。
+Every section is a command sequence you can copy as is. By default `team` means `bash <skill>/scripts/team` (once it
+is on PATH or symlinked, just `team`).
 
 ---
 
-## A. 在一个新项目里组建团队
+## A. Assembling a team in a new project
 
 ```bash
-# 0) 前提到位：git 仓库、tmux、pi 都在；仓库至少有一个提交
+# 0) prerequisites: a git repository, tmux and pi are present; the repository has at least one commit
 bash <skill>/scripts/team init --session myproj --agents "dev verify" --vcs local
-#   → 写 .pi/team/config.sh、建 docs/team/ 骨架、给 AGENTS.md 追加协议段、更新 .gitignore
+#   → writes .pi/team/config.sh, creates the docs/team/ skeleton, appends the protocol section to AGENTS.md, updates .gitignore
 
-# 1) PM 会话：在 tmux 里跑 pi（通知要敲进这个窗口）
-tmux new -s myproj -n pm          # 然后在里面启动：pi
+# 1) PM session: run pi inside tmux (notifications are typed into this window)
+tmux new -s myproj -n pm          # then start: pi
 
-# 2) 编辑 .pi/team/config.sh：门禁、安装命令、模型与并发上限
+# 2) edit .pi/team/config.sh: gates, install command, models and concurrency limits
 bash <skill>/scripts/team doctor
 ```
 
-## B. 派第一个任务
+## B. Dispatching the first task
 
 ```bash
-# 一条命令初始化（推荐）：bash <skill>/scripts/team bootstrap
-# github 模式：先建 issue（可选，但推荐：issue 是需求口径，任务书是执行口径）
-printf '# 骨架与质量门禁\n\n## DoD\n- ...\n' > /tmp/issue.md
-# 用你们自己的方式建 issue：gh / curl 调 API / 网页（skill 不参与、不假设任何 forge）
-gh issue create --title "[T1.1] 骨架与质量门禁" --body-file /tmp/issue.md
+# one-command setup (recommended): bash <skill>/scripts/team bootstrap
+# github mode: create the issue first (optional but recommended: the issue is the requirement, the brief is the execution)
+printf '# skeleton and quality gates\n\n## DoD\n- ...\n' > /tmp/issue.md
+# create the issue your own way: gh / curl against the API / the web UI (the skill neither takes part nor assumes a forge)
+gh issue create --title "[T1.1] skeleton and quality gates" --body-file /tmp/issue.md
 
-bash <skill>/scripts/team task T1.1 --title "骨架与质量门禁" --agent dev --issue 12
-$EDITOR docs/team/tasks/T1.1-*.md      # 写清背景/交付物/边界/验收命令
+bash <skill>/scripts/team task T1.1 --title "skeleton and quality gates" --agent dev --issue 12
+$EDITOR docs/team/tasks/T1.1-*.md      # write background/deliverables/boundaries/acceptance commands
 
-bash <skill>/scripts/team add-agent dev --create   # --create 才代建 worktree（默认只打印 git 命令）
+bash <skill>/scripts/team add-agent dev --create   # only --create creates the worktree (the default prints the git command)
 bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
-bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md --print   # 只想看提示词
+bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md --print   # just want to see the prompt
 ```
 
-派单做了这些事：守卫（内存/模型并发）→ 组提示词（范围、红线、交付流程）→ 在
-`<session>:dev` 起交互式 pi（`--session-id <session>-dev`，`-e` 加载 notify 扩展，`--skill` 加载本 skill）。
-断点续跑：再次 `dispatch` 同一个 agent 即复用会话；要开新会话用 `--fresh`。
+Dispatch does this: guards (memory/model concurrency) → builds the prompt (scope, red lines, delivery process) →
+starts an interactive pi in `<session>:dev` (`--session-id <session>-dev`, `-e` loading the notify extension,
+`--skill` loading this skill).
+Resuming after an interruption: dispatch the same agent again and the session is reused; `--fresh` starts a new one.
 
-## C. 围观 / 追问 / 重新引导
+## C. Watching / asking / steering
 
 ```bash
-tmux attach -t myproj            # 直接旁观（Ctrl-b d 退出）
-bash <skill>/scripts/team say dev "先别动 packages/api，那是 api 的目录"   # 单行消息（多行写文件让 agent 读）
-bash <skill>/scripts/team thread dev "T1.1 的验收加一条 RLS 测试" --from pm --re T1.1
+tmux attach -t myproj            # watch directly (Ctrl-b d to leave)
+bash <skill>/scripts/team say dev "hands off packages/api for now, that is api's directory"   # one-line message (for multi-line, write a file for the agent to read)
+bash <skill>/scripts/team thread dev "add an RLS test to T1.1 acceptance" --from pm --re T1.1
 ```
 
-**追问要具体**：指出失败命令、期望 vs 实际、以及要求它先复现再修。
+**Be specific when asking**: name the failing command, expected vs. actual, and require a reproduction before the fix.
 
-## D. PM 循环（每 10~30 分钟一次）
+## D. The PM loop (every 10~30 minutes)
 
 ```bash
-bash <skill>/scripts/team digest          # 待办：新通知 + 待复验 + 任务板 + 容量/存活
-bash <skill>/scripts/team inbox --ack     # 读并标记已读
-bash <skill>/scripts/team roster          # 谁在跑、分支、脏文件、领先提交
-bash <skill>/scripts/team ps              # 容量（RAM/swap/还能加几个）+ 模型并发 + PM/watchdog 存活
-bash <skill>/scripts/team up              # 一键修复：session/PM/停了没交活的 agent
+bash <skill>/scripts/team digest          # pending work: new notifications + reports to verify + board + capacity/liveness
+bash <skill>/scripts/team inbox --ack     # read and mark as read
+bash <skill>/scripts/team roster          # who is running, branch, dirty files, commits ahead
+bash <skill>/scripts/team ps              # capacity (RAM/swap/how many more fit) + model concurrency + PM/watchdog liveness
+bash <skill>/scripts/team up              # one-shot repair: session/PM/agents that stopped without delivering
 ```
 
-收到「回合结束」通知后先看 `git -C .worktrees/<a> log --oneline -5` 与 `status`，再决定：
-继续派下一个任务、退回、还是复验。长时间不在（下班、机器重启）回来后：**先 `team up`**。
+When a "turn ended" notification arrives, look at `git -C .worktrees/<a> log --oneline -5` and `status` first, then
+decide: dispatch the next task, send it back, or verify. After a long absence (end of day, machine reboot): **run
+`team up` first**.
 
-## E. 复验（PM 的独立验证，不可跳过）
+## E. Verification (the PM's independent check, never skipped)
 
 ```bash
-git -C <root> worktree add --detach /tmp/review-T1.1 task/T1.1-*   # PM 准备独立 checkout
-bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1      # 只跑门禁 + 写复验记录
-bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1 --no-gates   # 只做人工评审
+git -C <root> worktree add --detach /tmp/review-T1.1 task/T1.1-*   # the PM prepares an independent checkout
+bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1      # runs gates only + writes the verification record
+bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1 --no-gates   # manual review only
 ```
 
-产物 `docs/team/reviews/T1.1.md`：HEAD、diffstat、提交列表、文件清单、门禁输出尾部、结论清单。
-门禁失败时命令返回非 0 —— 别忽略。
+Artefact `docs/team/reviews/T1.1.md`: HEAD, diffstat, commit list, file list, tail of the gate output, verdict
+checklist. When the gates fail the command returns non-zero — do not ignore it.
 
-**PM 自己也要读 diff**：门禁只证明「现有测试没挂」，不证明「实现符合任务书」。
+**The PM also has to read the diff**: gates only prove "the existing tests did not fail", not "the implementation
+matches the brief".
 
-## F. 合并与收尾
+## F. Merging and wrapping up
 
-**没有 PR（local 模式）**：
+**Without a PR (local mode)**:
 
 ```bash
-git -C <root> status                    # 主工作树必须干净、在保护分支上
-git -C <root> merge --squash <分支>      # 冲突处理见 protocol.md §8e
-git -C <root> commit -m "T1.1: <标题>"
-git -C <root> push origin <保护分支>
-bash <skill>/scripts/team board set T1.1 done   # 确认进了保护分支才标 done
-bash <skill>/scripts/team close T1.1            # 关窗口、清任务
+git -C <root> status                    # the main worktree must be clean and on the protected branch
+git -C <root> merge --squash <branch>    # conflict handling: see protocol.md §8e
+git -C <root> commit -m "T1.1: <title>"
+git -C <root> push origin <protected-branch>
+bash <skill>/scripts/team board set T1.1 done   # only mark done once it is really in the protected branch
+bash <skill>/scripts/team close T1.1            # close the window, clear the task
 ```
 
-**有 PR/MR（forge-first：先合 PR，再快进本地）**：
+**With a PR/MR (forge-first: merge the PR, then fast-forward locally)**:
 
 ```bash
 gh pr merge --squash --delete-branch <PR>                  # GitLab: glab mr merge <iid> --squash
-git -C <root> fetch origin <保护分支> && git -C <root> merge --ff-only FETCH_HEAD
+git -C <root> fetch origin <protected-branch> && git -C <root> merge --ff-only FETCH_HEAD
 bash <skill>/scripts/team board set <ID> done
 ```
 
-> 顺序很重要：**先本地 push 会让 PR 立刻变成不可合并**（内容等价但提交不同），
-> 报错却常被误读成"PAT 缺 pull-requests:write"。先合 PR 就没有这个问题。
-> forge 没有 CLI（Gitea/自建）：用 `tea` 或网页操作，顺序同上。
+> The order matters: **pushing locally first makes the PR unmergeable right away** (equivalent content, different
+> commits), while the error is often misread as "the PAT lacks pull-requests:write". Merging the PR first avoids the
+> whole problem.
+> For a forge without a CLI (Gitea/self-hosted): use `tea` or the web UI, same order.
 
-## G. 并行扩展 / 收缩
+## G. Scaling up / down
 
 ```bash
-bash <skill>/scripts/team add-agent api            # 新 agent（新 worktree + 分支）
-bash <skill>/scripts/team ps                       # 先看容量与模型并发余量再派单
+bash <skill>/scripts/team add-agent api            # new agent (new worktree + branch)
+bash <skill>/scripts/team ps                       # check remaining capacity and model concurrency before dispatching
 bash <skill>/scripts/team dispatch api T2.1 <taskfile>
-bash <skill>/scripts/team teardown --agent api     # 关窗口（保留 worktree）
-bash <skill>/scripts/team teardown --all --purge --force   # 连 worktree 一起删（谨慎）
+bash <skill>/scripts/team teardown --agent api     # close the window (keep the worktree)
+bash <skill>/scripts/team teardown --all --purge --force   # delete the worktrees too (careful)
 ```
 
-规模经验：**并行 agent 数 ≈ min((RAM+空闲swap)/单 agent 占用, 强模型并发上限, 你能复验的带宽)**。
-内存不再卡卡地设限（底线是 swap 不打满），但 PM 的复验带宽通常是真瓶颈——派单太快只会堆出待复验队列。
-可用 `TEAM_AGENT_MEM_MB`（默认 6144）调估算值；`team ps` 会直接告诉你“还能再加几个”。
+Sizing rule of thumb: **parallel agents ≈ min((RAM+free swap)/one-agent footprint, strong-model concurrency limit,
+the verification bandwidth you actually have)**.
+Memory no longer limits you so tightly (the floor is "do not fill swap"), but the PM's verification bandwidth is
+usually the real bottleneck — dispatching too fast just builds a queue of reports waiting to be verified.
+Tune the estimate with `TEAM_AGENT_MEM_MB` (default 6144); `team ps` tells you directly "how many more fit".
 
-## H. 阻塞、冲突、越界
+## H. Blockers, conflicts, boundary crossings
 
-- agent 被阻塞：它会 `team notify` + 写 PARTIAL 报告。PM 的动作：补任务书 → `team say` 唤醒续跑。
-- 两个 agent 改了同一文件：让先交付的那个先合并，另一个 `dispatch` 续跑做 rebase/重做（**不要**让 agent
-  rebase 别人的分支）。
-- agent 发现别人的 bug：报告里写 `BLOCKED:`，PM 决定是插新任务还是让原 owner 修。
-- 事实与报告不符：把失败证据贴进 thread，退回；反复出现则换模型族做独立验证。
+- An agent is blocked: it calls `team notify` + writes a PARTIAL report. The PM's move: extend the brief → `team say`
+  to wake it up and let it continue.
+- Two agents touched the same file: merge whoever delivered first, then `dispatch` the other to rebase/redo
+  (never have an agent rebase someone else's branch).
+- An agent finds someone else's bug: write `BLOCKED:` in the report; the PM decides whether to insert a new task or
+  have the original owner fix it.
+- Facts do not match the report: paste the failure evidence into the thread, send it back; if it keeps happening,
+  switch model families for the independent verification.
 
-## H2. 分支与合并（task 模式）
+## H2. Branches and merging (task mode)
 
 ```bash
 git -C .worktrees/dev branch --show-current      # task/T1.2-api-health
-git -C <root> worktree add --detach /tmp/review-T1.2 task/T1.2-api   # PM 准备独立 checkout
-bash <skill>/scripts/team review T1.2 --dir /tmp/review-T1.2 --strong # 门禁带硬超时 + 强复验检查
+git -C <root> worktree add --detach /tmp/review-T1.2 task/T1.2-api   # the PM prepares an independent checkout
+bash <skill>/scripts/team review T1.2 --dir /tmp/review-T1.2 --strong # gates with a hard timeout + strong-verification checks
 gh pr merge --squash --delete-branch 17 && git -C <root> fetch origin main && git -C <root> merge --ff-only FETCH_HEAD
-bash <skill>/scripts/team board set T1.2 done        # 确认进 main 之后才标 done
+bash <skill>/scripts/team board set T1.2 done        # only mark done once it is confirmed in main
 ```
 
-- 任务分支从保护分支切出；worktree 脏时 `dispatch` 会拒绝切分支（避免两个任务混在一个 diff 里）。
-- `close T1.2` 之后 worktree 退回 `detached@保护分支`（`TEAM_TASK_BRANCH_RESET=1`），下一个任务干净开始。
+- Task branches come off the protected branch; when the worktree is dirty, `dispatch` refuses to switch branches (so
+  two tasks never end up in one diff).
+- After `close T1.2` the worktree goes back to `detached@protected branch` (`TEAM_TASK_BRANCH_RESET=1`), so the next
+  task starts clean.
 
-## I. 定时巡检与 PM 节拍（watchdog 只管这一件事）
+## I. Periodic patrol and the PM's rhythm (the watchdog only does this one thing)
 
-问题：PM（pi 进程）停了/睡了，agent 发了通知没人处理。定位：**watchdog 不是保活心跳，而是定时问一句
-“现在有没有活儿”**——有就叫醒 PM，没有就不打扰（不要求 PM 一直运行）。agent 的启停/续跑仍是 PM 的事。
+The problem: the PM (a pi process) stopped or went to sleep, an agent sent a notification, and nobody handled it.
+The framing: **the watchdog is not a keep-alive heartbeat, it asks on a timer "is there work right now"** — if there
+is, it wakes the PM; if not, it stays quiet (the PM is not required to be running). Starting, stopping and resuming
+agents is still the PM's job.
 
 ```bash
-bash <skill>/scripts/team watchdog-status      # 看巡检周期、待命、待办、PM 状态、容量
-bash <skill>/scripts/team standby on --reason "等用户拍板选型"   # PM 主动停工（不再被叫醒）
-bash <skill>/scripts/team standby off         # 恢复叫醒
-bash <skill>/scripts/team up                  # 人工救火：建 tmux 场地 + 把 PM 拉起来（不动 agent）
-bash <skill>/scripts/team up --agents         # 顺手把“有任务但窗口没了”的 agent 也续起来
-bash <skill>/scripts/team resume --dry-run    # PM 自己看：哪些 agent 该续跑
-bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于 watchdog 的一个 tick）
+bash <skill>/scripts/team watchdog-status      # patrol interval, standby, pending work, PM state, capacity
+bash <skill>/scripts/team standby on --reason "waiting for the user to pick a stack"   # the PM stands down (no more wake-ups)
+bash <skill>/scripts/team standby off         # resume wake-ups
+bash <skill>/scripts/team up                  # manual rescue: build the tmux stage + start the PM (agents untouched)
+bash <skill>/scripts/team up --agents         # also resume agents that have a task but no window
+bash <skill>/scripts/team resume --dry-run    # the PM looks for itself: which agents should be resumed
+bash <skill>/scripts/team watch --once        # run one patrol tick (one watchdog tick, equivalently)
 ```
 
-### 三种部署方式（从弱到强）
+### Three deployment shapes (weakest to strongest)
 
-| 方式 | 命令 | 能撑住 | 适合 |
+| Shape | Command | What it survives | Fits |
 |---|---|---|---|
-| **tmux 窗口（默认）** | `team watchdog up` | PM 崩/睡；tmux server 活着的范围 | 日常：一个窗口既是看门狗又是**状态监视器** |
-| 看门狗窗口 | `team watchdog up` | tmux server / 窗口没了 | 只有这一个后端（无容器依赖） |
-| 手动 | `team up` / `team watch --once` | 你自己发现的时候 | 排障 |
+| **tmux window (default)** | `team watchdog up` | the PM crashing/sleeping, as long as the tmux server lives | everyday: one window is both the watchdog and the **status monitor** |
+| watchdog window | `team watchdog up` | the tmux server / window disappearing | there is only this one backend (no container dependency) |
+| manual | `team up` / `team watch --once` | whenever you notice yourself | troubleshooting |
 
 ```bash
-bash <skill>/scripts/team watchdog up          # 默认：本 session 的 watchdog 窗口跑监视器 + 巡检
-bash <skill>/scripts/team watchdog logs        # 看一眼监视器画面（pane 快照）
-bash <skill>/scripts/team watchdog status      # 窗口/周期/待命/待办/PM 存活/容量
-bash <skill>/scripts/team watchdog down        # 关掉窗口
-bash <skill>/scripts/team monitor --once       # 手动看一屏（只服务当前 session 的状态）
-bash <skill>/scripts/team monitor --activity   # 需要时才追看各 agent 的会话活动流（默认关）
-bash <skill>/scripts/team watchdog up --print                # 看它会起哪个窗口/什么周期（不执行）
+bash <skill>/scripts/team watchdog up          # default: a watchdog window in this session runs the monitor + patrols
+bash <skill>/scripts/team watchdog logs        # look at the monitor screen (a pane snapshot)
+bash <skill>/scripts/team watchdog status      # window/period/standby/pending work/PM liveness/capacity
+bash <skill>/scripts/team watchdog down        # close the window
+bash <skill>/scripts/team monitor --once       # one screenful by hand (only the current session's state)
+bash <skill>/scripts/team monitor --activity   # opt in to each agent's session activity stream (off by default)
+bash <skill>/scripts/team watchdog up --print                # show which window/period it would use (without doing it)
 ```
 
-监视器只服务**当前 tmux session**：窗口在不在跑、任务是什么、待办与容量。
-各 agent 的会话活动流默认关闭（`TEAM_MONITOR_ACTIVITY=0`）——翻别人的会话既吵又贵
-（6 个 agent ≈ 每次读 ~9MB JSONL，实测 RSS 7MB→67MB）；需要时 `--activity` 打开，且只列本 session 里活着的窗口。
+The monitor serves **the current tmux session only**: whether windows are running, what the task is, pending work and
+capacity.
+Each agent's session activity stream is off by default (`TEAM_MONITOR_ACTIVITY=0`) — reading other people's sessions
+is both noisy and expensive (6 agents ≈ ~9MB of JSONL per refresh, measured RSS 7MB→67MB); turn it on with
+`--activity` when you need it, and even then only live windows in this session are listed.
 
 ```
-teamsmith monitor · myproj                       2026-09-11T16:52:03Z  (每 3s 刷新，每 900s 跑一次巡检)
-  巡检        900s（待办才叫醒 PM）｜ 后端 tmux
-  待命        off
-  PM          ● 在运行（pi）
-  待办        未读通知 1 · 待复验 2
-  容量        RAM 可用 6850MB ｜ swap 空闲 57779/80424MB ｜ 估算可再加 10 个 agent
-  dev         ● pi 在跑 ｜ T1.2
-  verify      ○ pi 已退出 ｜ -
+teamsmith monitor · myproj                       2026-09-11T16:52:03Z  (refresh every 3s, patrol every 900s)
+  patrol      900s (pending work wakes the PM) ｜ backend tmux
+  standby     off
+  PM          ● running (pi)
+  pending     1 unread notification · 2 to verify
+  capacity    RAM available 6850MB ｜ swap free 57779/80424MB ｜ about 10 more agents fit
+  dev         ● pi running ｜ T1.2
+  verify      ○ pi exited ｜ -
 
-agent 活动
-🟢 活跃 dev          [task/T1.2-api*]  已运行 12m04s · 空闲 8s · 事件 57
+agent activity
+🟢 active dev          [task/T1.2-api*]  running 12m04s · idle 8s · events 57
      16:51:22 🔧 bash
-     16:51:40 💬 实现完成，正在跑验收命令…
-🟡 静默 verify        [agent/verify]  已运行 3h02m · 空闲 44m10s · 事件 128
+     16:51:40 💬 implementation done, running the acceptance commands…
+🟡 quiet verify        [agent/verify]  running 3h02m · idle 44m10s · events 128
      16:07:03 🔧 read
 ```
 
-看门狗就是同 session 的 `watchdog` 窗口：跑 `team monitor`（状态面板）+ 按 `TEAM_WATCH_INTERVAL` 定时巡检。
-它与 PM 的**取值依赖**解耦（只看磁盘状态与 tmux pane），但不试图脱离 tmux——不再需要 podman/镜像/socket。
+The watchdog *is* the `watchdog` window in the same session: it runs `team monitor` (the status panel) and patrols on
+`TEAM_WATCH_INTERVAL`. It is decoupled from the PM's **value dependencies** (it only looks at on-disk state and tmux
+panes) but does not try to leave tmux behind — since v1.12.0 it no longer needs podman/images/sockets.
 
-每个 tick 三步：① 追一行容量趋势到 `state/capacity.log`；② 算待办（未读通知 / 待复验 / 看板 todo·wip / blocked /
-有任务但停了的 agent）；③ **有待办才叫醒**——PM 在跑就发一句 `[watchdog] 待办：…`（同一批待办按
-`TEAM_WATCH_NUDGE_GAP` 限制重复频率），不在跑就用 `pi -c` 在原窗口拉起；**没待办就什么都不做**。
-`team standby on --reason "…"` 可让 PM 主动停工（之后 watchdog 不再叫醒，待办积压仍会记日志）。
+Every tick has three steps: ① append one capacity trend line to `state/capacity.log`; ② compute the pending work
+(unread notifications / reports to verify / board todo·wip / blocked / agents with an unfinished task that stopped);
+③ **only wake the PM when there is pending work** — while it is running, send one `[watchdog] pending: …` line (the
+same batch is rate-limited by `TEAM_WATCH_NUDGE_GAP`), otherwise bring it up in its original window with `pi -c`;
+**with nothing pending it does nothing at all**.
+`team standby on --reason "…"` lets the PM stand down deliberately (the watchdog stops waking it; the backlog is still
+logged).
 
-### 边界（故意的）
+### Boundaries (deliberate)
 
-- **不管 tmux 布局**：session/窗口丢了只告警，不自己建（`TEAM_WATCH_REBUILD_TMUX=0`，默认）。
-  想让它连“机器重启/窗口被关”也能自己回来：设 `TEAM_WATCH_REBUILD_TMUX=1`。
-- **不管 agent**：有任务但窗口没了的 agent 不会自动续跑——那是 PM 的判断（PM 开场跑
-  `team resume --dry-run` 自己决定；人工一条 `team up --agents` 可以代劳）。
-- **不管模型额度、不自动合并**：这些是 PM 的活。
-- **不要求 PM 一直运行**：没待办的时段 PM 可以安静地待着（甚至不在跑）；watchdog 不会为了“保活”而叫它。
-- 防失控：PM 自动拉起配额（`TEAM_WATCH_MAX_RESTARTS`，默认 1 小时 5 次）超了只告警；watchdog 自身有 pid 锁。
+- **It does not manage tmux layout**: a missing session/window is only reported, never rebuilt
+  (`TEAM_WATCH_REBUILD_TMUX=0`, the default).
+  To let it recover from "the machine rebooted / the window was closed" by itself, set `TEAM_WATCH_REBUILD_TMUX=1`.
+- **It does not manage agents**: an agent with a task whose window is gone is not resumed automatically — that is the
+  PM's call (the PM runs `team resume --dry-run` at the start of its shift and decides; a human can do it in one shot
+  with `team up --agents`).
+- **It does not manage model quota and never merges**: those are the PM's job.
+- **The PM is not required to run continuously**: between pending batches the PM may sit quietly (or not be running at
+  all); the watchdog will not wake it just to "keep it alive".
+- Runaway protection: a restart quota for the PM (`TEAM_WATCH_MAX_RESTARTS`, default 5 per hour) turns into a warning
+  when exceeded; the watchdog itself holds a pid lock.
 
-### 待命（PM 或人主动停工）
-
-```bash
-bash <skill>/scripts/team standby on --reason "等用户授权合并"   # watchdog 不再叫醒
-bash <skill>/scripts/team standby status                        # 看原因/开始时间/积压待办
-bash <skill>/scripts/team standby off                          # 处理完了，恢复叫醒
-```
-
-适用场景：确实没活可推、需要人工介入（授权/选型/外部信息）。进入待命不会丢事：
-待办积压仍会写进 `state/watchdog.log`，`team digest` 也会显示。
-
-### 为什么重启后还能接上
-
-进度都在磁盘上：`state/`（模型/窗口/worktree/任务/任务书）、`docs/team/`（任务书/报告/复验/看板/线程）、
-git 分支与 worktree。PM 被拉起时用 `pi -c` 延续原会话（历史不丢），并收到开场提示词：
-先 `team digest` → `team inbox --ack` → `team resume --dry-run`，再接着干。
-
-### 停机维护 / 故意停掉
+### Standby (the PM or a human deliberately stops)
 
 ```bash
-bash <skill>/scripts/team standby on --reason "手动检修"   # 临时：别再叫醒 PM
-bash <skill>/scripts/team teardown --all                   # 关所有窗口（worktree/分支/状态保留）
-bash <skill>/scripts/team uninstall-watchdog --yes          # 彻底：连 watchdog 也停
+bash <skill>/scripts/team standby on --reason "waiting for user authorization to merge"   # the watchdog stops waking it
+bash <skill>/scripts/team standby status                        # see reason/start time/backlog
+bash <skill>/scripts/team standby off                          # done, resume wake-ups
 ```
 
-## J. 持续运行（长项目）
+When it applies: there really is nothing to push forward, or a human has to step in (authorization/choice of stack/
+outside information). Going on standby loses nothing: the backlog still lands in `state/watchdog.log` and
+`team digest` still shows it.
 
-- `BOARD.md` 是唯一事实来源；状态只有 todo/wip/review/done/blocked/dropped。
-- 每个里程碑结束：更新 `ROADMAP.md` 状态、把决策写进 `DECISIONS.md`（含理由/影响）。
-- 定期归档：已完成的报告与复验记录可移到 `docs/team/archive/`，线程保留（append-only）。
-- worktree 长期不清理会占磁盘：`git worktree list` 检查，`teardown --purge` 清理不用的。
+### Why it can pick up again after a restart
+
+All progress is on disk: `state/` (model/window/worktree/task/taskfile), `docs/team/` (briefs/reports/reviews/board/
+threads), git branches and worktrees. When the PM is brought back it continues its original session with `pi -c` (no
+history lost) and receives a kick-off prompt: run `team digest` → `team inbox --ack` → `team resume --dry-run`, and
+then carry on.
+
+### Maintenance downtime / shutting it down on purpose
+
+```bash
+bash <skill>/scripts/team standby on --reason "manual maintenance"   # temporarily: stop waking the PM
+bash <skill>/scripts/team teardown --all                   # close every window (worktrees/branches/state are kept)
+bash <skill>/scripts/team uninstall-watchdog --yes          # completely: the watchdog goes too
+```
+
+## J. Running for a long time (long projects)
+
+- `BOARD.md` is the single source of truth; statuses are only todo/wip/review/done/blocked/dropped.
+- At the end of every milestone: update the status in `ROADMAP.md` and write the decision into `DECISIONS.md`
+  (with reasons/impact).
+- Archive periodically: finished reports and verification records can move to `docs/team/archive/`; threads stay
+  (append-only).
+- Worktrees left around eat disk: check with `git worktree list` and clean unused ones with `teardown --purge`.

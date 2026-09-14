@@ -450,7 +450,7 @@ rm -f "$REPO/docs/team/reports/P2-closure.md" "$REPO/docs/team/reports/T2.6-dev.
 if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应已移除"; else ok "merge 已移除（不再包装 git）"; fi
 if $TEAM pr T1.1 >/dev/null 2>&1; then bad "pr 应已移除"; else ok "pr 已移除"; fi
 assert_has "$SKILL_DIR/references/workflows.md" "git -C" "workflows 文档给出 PM 直接跑的 git 步骤"
-assert_has "$SKILL_DIR/references/protocol.md" "不执行" "protocol 写明 skill 不执行 git/forge 写操作"
+assert_has "$SKILL_DIR/references/protocol.md" "does not perform" "protocol 写明 skill 不执行 git/forge 写操作"
 
 # ④ 翻转证据进模板与派单提示词
 assert_has "$SKILL_DIR/templates/task.md.tmpl" "Flip evidence" "task template requires flip evidence"
@@ -471,7 +471,7 @@ assert_eq "含 shell 特殊字符也不会被当代码执行" \
   "$(cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --force --session "teamsmith-smoke-render-$$" --agents dev --gates 'a && echo PWNED `id` $HOME' >/dev/null 2>&1; env TEAM_ROOT=$BRENDER SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; team_load_config; printf "%s" "$TEAM_GATES"')" 'a && echo PWNED `id` $HOME'
 
 # ① forge 透传/包装已移除（token 只作为项目配置，PM 直接用真实工具）
-assert_has "$SKILL_DIR/references/protocol.md" "直接用" "protocol 说明写操作用真实工具"
+assert_has "$SKILL_DIR/references/protocol.md" "real tools" "protocol 说明写操作用真实工具"
 assert_not_file "$SKILL_DIR/scripts/lib/forge.sh" "不再有 forge 包装模块"
 
 # ② pi 可执行文件：绝对路径 + 找不到就明确报错（不要再出现窗口里 command not found）

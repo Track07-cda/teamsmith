@@ -24,6 +24,18 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.17.0 · 2026-09-14
+
+**文档面全英文收口**（`references/**` + `SCOPE.md`）
+
+- 翻译：`protocol.md`（规则的理由，最长一篇）、`workflows.md`（端到端 runbook）、`troubleshooting.md`、
+  `config.md`、`meeting.md`（跨项目会议）、`bootstrap.md`、`SCOPE.md`，以及 `agent-adapters.md` 里残留的中文。
+- 结构保真：每篇的标题 / 代码块 / 表格行数与原文一致，行数只随英文变长而增加；规则**理由**逐条保留
+  （PM 抽查了 zram 分账、worktree 长期制、forge 403 三处）。
+- 同步了 2 条检查中文内容的断言（`不执行`→`does not perform`、`直接用`→`real tools`），语义不变。
+- 可机器校验的不变量：`grep -rP '[\x{4e00}-\x{9fff}]' skills/teamsmith/references SCOPE.md` 必须为空。
+- 边界（DECISIONS D8）：CLI 输出、`team help`、smoke 断言**标签**仍为中文，属有意保留（要做就是独立的 M4.2）。
+
 ## v1.16.0 · 2026-09-14
 
 **安全加固：worker 摘要不再是 shell 代码（V3.0 对抗性复核的 F1–F8）+ monitor 内存/显示安全（F2/F3）**
