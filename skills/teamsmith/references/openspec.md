@@ -51,7 +51,8 @@ openspec list --specs                    # capabilities + requirement counts (th
 openspec list                            # open changes
 openspec change show <change>            # proposal, deltas and tasks of one change
 openspec context                         # the project context + rules the AI sees when creating artifacts
-openspec validate --all --strict         # structure + strict mode; this is the first half of TEAM_GATES
+openspec validate --all --strict         # structure + strict mode; the first step of TEAM_GATES
+bash skills/teamsmith/tests/spec-lint.sh # falsifiability (requirements/scenarios); the second step
 openspec archive -y <change>             # merge the deltas into specs/ and move the change to archive/
 ```
 
@@ -59,10 +60,41 @@ openspec archive -y <change>             # merge the deltas into specs/ and move
 `openspec`), and `team doctor` fails when the CLI or the spec directory is missing while `TEAM_REQUIRE_OPENSPEC=1`
 (the default — OpenSpec is a required dependency, see `openspec/specs/memory-and-deps/spec.md`).
 
-The gate command runs the spec check **before** the smoke suite, because it is fast and structural: a spec that no
-longer parses (missing scenario, missing SHALL, a delta header in a main spec) fails the PM's review. Note that the
-CLI must be on `PATH` for the gate — for a bun-built install that is `~/.bun/bin`, so either put it on `PATH` or
-pass an absolute path.
+The gate command runs the spec checks **before** the smoke suite, because they are fast and structural: a spec that
+no longer parses (missing scenario, missing SHALL, a delta header in a main spec) fails the PM's review, and so does
+a spec that parses but cannot fail (see the next section). Note that the CLI must be on `PATH` for the gate — for a
+bun-built install that is `~/.bun/bin`, so either put it on `PATH` or pass an absolute path.
+
+### The falsifiability companion (`tests/spec-lint.sh`)
+
+`openspec validate` owns *shape*, not *falsifiability*: deleting a scenario's `THEN`, deleting the scenario (leaving
+its requirement scenario-less) or reducing a `spec.md` to a heading still validates green, so the CLI alone can
+pass with a spec that cannot fail. `skills/teamsmith/tests/spec-lint.sh` is the project-level companion that closes
+that hole (it is also a smoke-suite section, so both directions are tested):
+
+```bash
+bash skills/teamsmith/tests/spec-lint.sh            # default root: $TEAM_SPEC_DIR, else openspec
+bash skills/teamsmith/tests/spec-lint.sh path/to/openspec
+```
+
+It prints one `path:line: rule: detail` line per violation and exits 1; exit 0 prints the file/requirement/scenario
+counts, and exit 2 means the root itself is unusable (missing `specs/`). The rules, by name:
+
+| Rule | Fails when |
+|---|---|
+| `no-specs` | `specs/` contains no `specs/*/spec.md` at all |
+| `no-requirements` | a main `spec.md` has no `### Requirement:` block |
+| `requirement-without-scenario` | a requirement has no `#### Scenario:` block |
+| `scenario-without-when` | a scenario has no `WHEN` bullet (an assertion with no trigger) |
+| `scenario-without-then` | a scenario has no `THEN`/`AND` bullet (a trigger with no assertion) |
+| `scenario-placeholder` | a `WHEN`/`THEN` bullet is empty or vacuous (`THEN it works`, `... as expected`) |
+| `change-incomplete` | a `changes/<id>/` without a `specs/` delta, `proposal.md` or `tasks.md` |
+| `delta-requirement-without-scenario` | an `ADDED`/`MODIFIED` delta requirement has no scenario |
+
+Changes are proposals, so the checker is deliberately tolerant there: a `REMOVED`/`RENAMED` requirement may be
+scenario-less and `changes/archive/` is history, not a promise. Anything the lint refuses in a main spec is either a
+missing scenario (write one) or a statement that cannot be made observable (move it to `references/` prose — the
+`rules:` in `openspec/config.yaml` say so).
 
 ## 4. Threading a change through a task
 

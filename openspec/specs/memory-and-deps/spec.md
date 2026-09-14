@@ -54,9 +54,9 @@ cannot be made falsifiable yet MUST be written as prose in `references/` instead
 #### Scenario: An invalid spec fails the project gate
 
 - **GIVEN** a spec whose requirement has no scenario
-- **WHEN** `openspec validate --all --strict` (part of `TEAM_GATES`) runs
-- **THEN** it exits non-zero and names the offending spec
-- **AND** restoring the scenario makes it exit 0 again
+- **WHEN** the project gate runs (`TEAM_GATES`; `openspec validate --all --strict` alone stays green here)
+- **THEN** `bash skills/teamsmith/tests/spec-lint.sh` exits non-zero and names the offending spec
+- **AND** restoring the scenario makes the lint and the gate exit 0 again
 
 ### Requirement: The disk is the source of truth, memory is a convenience
 

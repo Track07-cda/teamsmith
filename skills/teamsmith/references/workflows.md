@@ -14,7 +14,8 @@ of them (reasoning and guidance stay in `references/` — see [openspec.md](open
 openspec list --specs                    # capabilities and their requirement counts
 openspec new change <name>               # open a change: proposal + delta specs + tasks
 openspec change show <name>              # what the change proposes (proposal / deltas / tasks)
-openspec validate --all --strict         # fast structural gate — it runs as the first half of TEAM_GATES
+openspec validate --all --strict         # fast structural gate — the first step of TEAM_GATES
+bash skills/teamsmith/tests/spec-lint.sh # falsifiability: every requirement has a scenario, every scenario a WHEN+THEN
 openspec archive -y <name>               # after the code landed and reviews/<ID>.md exists
 ```
 

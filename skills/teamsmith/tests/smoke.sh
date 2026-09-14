@@ -2399,6 +2399,104 @@ if [ "$FAST_REQ" = "1" ]; then
   done
 fi
 
+# ---------------------------------------------------------------- 16. spec lint（可证伪性门禁，M5.3）
+# `openspec validate --all --strict` 只管结构：删掉 scenario 的 THEN、删掉整个 scenario、把 spec.md 只剩标题，
+# 它都照样绿 —— 门禁就会在一份无法失败的 spec 上给绿灯。tests/spec-lint.sh 必须让这些删除变红，所以这一节
+# 两个方向都测：坏 spec 必须红（且报对规则码），真 spec 必须绿。没有这段，「spec lint ✓」可能只是一个永远
+# 绿的检查器（假绿比不查更糟）；反过来把 lint 写死成拒绝一切，正对照也会红。
+section "16 · spec lint（spec 可证伪性）"
+SL_ROOT="$TMP/spec-lint"; rm -rf "$SL_ROOT"; mkdir -p "$SL_ROOT/good/specs/demo"
+cat > "$SL_ROOT/good/specs/demo/spec.md" <<'EOF'
+# demo Specification
+
+## Purpose
+
+Fixture for the falsifiability lint.
+
+## Requirements
+
+### Requirement: A thing MUST happen
+
+The tool MUST do the thing when asked.
+
+#### Scenario: Happy path
+
+- **GIVEN** a wired thing
+- **WHEN** `thing run` runs
+- **THEN** it exits 0 and prints `ok`
+EOF
+sl_tree() { # <名字> → 复制正样本并回显路径（调用方再把它改坏）
+  rm -rf "$SL_ROOT/$1"; cp -r "$SL_ROOT/good" "$SL_ROOT/$1"; printf '%s' "$SL_ROOT/$1"
+}
+sl_run() { bash "$SKILL_DIR/tests/spec-lint.sh" "$1" >"$TMP/spec-lint.out" 2>&1; }
+sl_green() { # <说明> <树>
+  if sl_run "$2"; then ok "$1"; else bad "$1（应当绿）"; sed 's/^/     /' "$TMP/spec-lint.out"; fi
+}
+sl_red() { # <说明> <期望规则码> <树>
+  if sl_run "$3"; then bad "lint 漏报：$1（应当非 0）"
+  elif grep -qF -- "$2" "$TMP/spec-lint.out"; then ok "lint 报红：$1（$2）"
+  else bad "lint 报红但规则码不对：$1（期望 $2）"; sed 's/^/     /' "$TMP/spec-lint.out"; fi
+}
+sl_rc() { # <说明> <期望退出码> <树>
+  sl_run "$3"; local rc=$?
+  [ "$rc" = "$2" ] && ok "$1" || bad "$1（期望 rc=$2，实际 $rc）"
+}
+
+sl_green "正对照：合法 spec 通过（检查器不是永远红）" "$SL_ROOT/good"
+
+# 坏样本：每个只破坏一件事，期望的规则码必须出现在 lint 输出里
+SLT="$(sl_tree no-then)"
+awk '/^- \*\*THEN\*\*/{next} {print}' "$SLT/specs/demo/spec.md" > "$SLT/spec.md" && mv "$SLT/spec.md" "$SLT/specs/demo/spec.md"
+sl_red "删掉 scenario 的 THEN（有触发、没断言）" "scenario-without-then" "$SLT"
+
+SLT="$(sl_tree no-when)"
+awk '/^- \*\*WHEN\*\*/{next} {print}' "$SLT/specs/demo/spec.md" > "$SLT/spec.md" && mv "$SLT/spec.md" "$SLT/specs/demo/spec.md"
+sl_red "删掉 scenario 的 WHEN（有断言、没触发）" "scenario-without-when" "$SLT"
+
+SLT="$(sl_tree no-scenario)"
+awk '/^#### Scenario:/{exit} {print}' "$SLT/specs/demo/spec.md" > "$SLT/spec.md" && mv "$SLT/spec.md" "$SLT/specs/demo/spec.md"
+sl_red "删掉整个 scenario（requirement 没有可证伪的场景）" "requirement-without-scenario" "$SLT"
+
+SLT="$(sl_tree empty-spec)"
+printf '# demo Specification\n' > "$SLT/specs/demo/spec.md"
+sl_red "spec.md 只剩标题（空壳 spec）" "no-requirements" "$SLT"
+
+SLT="$(sl_tree placeholder)"
+awk '/^- \*\*THEN\*\*/{$0="- **THEN** it works"} {print}' "$SLT/specs/demo/spec.md" > "$SLT/spec.md" && mv "$SLT/spec.md" "$SLT/specs/demo/spec.md"
+sl_red "占位断言（THEN it works）" "scenario-placeholder" "$SLT"
+
+SLT="$(sl_tree no-spec-files)"; rm -f "$SLT"/specs/demo/spec.md; touch "$SLT/specs/README.txt"
+sl_red "specs/ 里没有 spec.md（查不到东西的绿灯不是绿灯）" "no-specs" "$SLT"
+
+sl_rc "不存在的 spec 根目录 → rc=2（用法错误，不是校验失败）" 2 "$SL_ROOT/does-not-exist"
+
+# changes/ 是提案：目录本身要有内容，ADDED/MODIFIED delta 仍要有 scenario，REMOVED 允许没有
+SLT="$(sl_tree change-empty)"; mkdir -p "$SLT/changes/wip"
+sl_red "change 目录里什么都没有" "change-incomplete" "$SLT"
+
+SLT="$(sl_tree change-proposal)"; mkdir -p "$SLT/changes/wip"; echo '# why' > "$SLT/changes/wip/proposal.md"
+sl_green "只有 proposal.md 的 change（提案早期，不该被拦）" "$SLT"
+
+SLT="$(sl_tree change-baddelta)"; mkdir -p "$SLT/changes/wip/specs/demo"
+printf '# demo delta\n\n## ADDED Requirements\n\n### Requirement: New thing MUST happen\n\nText.\n' > "$SLT/changes/wip/specs/demo/spec.md"
+sl_red "ADDED delta 的 requirement 没有 scenario" "delta-requirement-without-scenario" "$SLT"
+
+SLT="$(sl_tree change-removed)"; mkdir -p "$SLT/changes/wip/specs/demo"
+printf '# demo delta\n\n## REMOVED Requirements\n\n### Requirement: Old thing\n' > "$SLT/changes/wip/specs/demo/spec.md"
+sl_green "REMOVED delta 允许无 scenario（删除不是新承诺）" "$SLT"
+
+# 真树：既必须绿，报告的计数也必须与 grep 出来的事实一致（不硬编码数字，spec 增删不会误报）
+SL_REAL="$(cd "$SKILL_DIR/../.." && pwd)/openspec"
+if sl_run "$SL_REAL"; then
+  SL_REQ="$(grep -rhc '^### Requirement:' "$SL_REAL"/specs/*/spec.md | awk '{s+=$1} END{print s+0}')"
+  SL_SCEN="$(grep -rhc '^#### Scenario:' "$SL_REAL"/specs/*/spec.md | awk '{s+=$1} END{print s+0}')"
+  ok "真 openspec 树通过 spec lint"
+  assert_has "$TMP/spec-lint.out" "$SL_REQ requirement(s)" "lint 报的 requirement 数与真树一致（$SL_REQ）"
+  assert_has "$TMP/spec-lint.out" "$SL_SCEN scenario(s)" "lint 报的 scenario 数与真树一致（$SL_SCEN）"
+else
+  bad "真 openspec 树没通过 spec lint"; sed 's/^/     /' "$TMP/spec-lint.out"
+fi
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

@@ -105,6 +105,7 @@ touching git itself.
 
 #### Scenario: The leftover branch is reported, not switched
 
-- **GIVEN** the agent worktree is still on `task/T1.1-*` when `team close T1.1` runs
+- **GIVEN** the agent worktree is still on `task/T1.1-*`
+- **WHEN** `team close T1.1` runs
 - **THEN** the output contains a `git ... switch --detach <protected-branch>` command to run, and the worktree's
   branch is unchanged by the command
