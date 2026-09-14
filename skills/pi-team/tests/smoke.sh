@@ -2,10 +2,17 @@
 # pi-team 冒烟自测：在 /tmp 的临时 git 仓库里端到端跑一遍全流程，绝不碰当前项目。
 #
 #   bash tests/smoke.sh [--keep]      # --keep 保留临时目录用于排查
+#   TEAM_SMOKE_FAST=1 bash tests/smoke.sh   # 快模式：只跑纯逻辑段落（目标 < 60s）
 #
 # 覆盖：doctor 负例 → init → 模板渲染 → task/board → add-agent → dispatch(假 pi) →
 #      say/notify/inbox/digest → worktree 内提交与报告 → review(PASS/FAIL 两条路径) →
 #      merge(squash) → close → roster/ps/status → notify 扩展(Node 直跑，含去重) → teardown
+#
+# 快慢分层（TEAM_SMOKE_FAST=1）：只跑不依赖「真实 tmux 场地 / 真实 pi 进程 / podman 容器」的段落，
+#   被跳过的段落一律显式打印 `SKIP（FAST 模式）`（不静默少跑），结尾 14c 再自检
+#   「真进程段落一次都没跑 + 预期段落都确实被跳过」。默认（不设该变量）行为与改造前完全一致：
+#   断言一条不少、顺序不变、退出码语义不变（有失败→非 0，全绿→0）。
+#   注：身份隔离自检（第 2 节）与文档一致性自检（14b）都是纯逻辑，快模式**照跑不跳过**。
 set -uo pipefail
 
 SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +28,29 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
       TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION 2>/dev/null || true
 KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
+
+# 快模式开关（TEAM_SMOKE_FAST=1）：只跑纯逻辑段落，跳过需要真进程的段落（tmux/真实 pi/podman）。
+#   FAST_REQ = 用户是不是要了快模式（原始诉求）：快模式自检与结果行用它——就算有人把内部开关
+#              FAST 改成 0（就等于“照跑全量”），自检仍然会跑并在 LIVE_RAN>0 时报红。
+#   FAST     = 各段落据此分类的内部开关（必须 = FAST_REQ）
+# 不认识的值直接报错（不要静默掉回全量：那样“以为跑了快模式，其实在慢慢跑”）。
+FAST_REQ=0
+case "${TEAM_SMOKE_FAST:-0}" in
+  0|""|no|NO|false|FALSE|off|OFF) FAST_REQ=0 ;;
+  1|y|Y|yes|YES|true|TRUE|on|ON) FAST_REQ=1 ;;
+  *) printf 'TEAM_SMOKE_FAST=%s 不认识（用 1=快模式 / 0=全量）\n' "${TEAM_SMOKE_FAST}" >&2; exit 2 ;;
+esac
+FAST=$FAST_REQ
+LIVE_RAN=0     # 真进程段落实际执行了几次（FAST 模式下必须保持 0）
+SKIP_SEGS=""   # FAST 显式跳过的段落标记（末尾自检用）
+SKIP_N=0
+live_mark() { LIVE_RAN=$((LIVE_RAN + 1)); }
+fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯一的出口（必须打印）
+  SKIP_N=$((SKIP_N + 1))
+  SKIP_SEGS="${SKIP_SEGS}|$1"
+  printf '  \033[33mSKIP（FAST 模式）\033[0m %s —— %s\n' "$1" "$2"
+}
+skipped() { case "|$SKIP_SEGS|" in *"|$1|"*) return 0 ;; *) return 1 ;; esac; }   # 首尾补 | ，最后一段也能匹配
 
 PASS=0; FAIL=0
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
@@ -303,7 +333,10 @@ assert_has "$TMP/print.log" "不要在半途停下来征求确认" "提示词包
 assert_has "$TMP/print.log" "reports/T1.1-dev.md" "提示词指明报告路径"
 assert_has "$TMP/print.log" "git commit" "提示词要求小步提交"
 
-if [ "$HAVE_TMUX" = "1" ]; then
+if [ "$FAST" = "1" ]; then
+  fast_skip "6·dispatch 真拉起" "要真实 tmux 窗口 + 假 pi 进程（pi-sleep，sleep 600）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
   # 让 worker 用假 pi 跑（pi-sleep：模拟“pi 正在跑”的窗口，便于验证 say/存活判定）
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/pi-args.log" > "$FAKE/pi-sleep"
   chmod +x "$FAKE/pi-sleep"
@@ -557,13 +590,21 @@ if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应已移除"; else ok "mer
 $TEAM board set T1.1 done >/dev/null 2>&1
 assert_eq "BOARD 可由 PM 直接收尾" "$($TEAM board row T1.1 | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}')" "done"
 $TEAM close T1.1 >/dev/null 2>&1 && ok "close 退出码 0" || bad "close 失败"
-[ "$HAVE_TMUX" = "1" ] && assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
+if [ "$FAST" = "1" ]; then
+  fast_skip "11·close 后窗口" "窗口断言要有 tmux 场地（快模式不建场地）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
+fi
 
 section "11b · 定时巡检：有待办才叫醒 PM（默认 15 分钟）"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/pm-args.log" > "$FAKE/pi-sleep"
 chmod +x "$FAKE/pi-sleep"
 
-if [ "$HAVE_TMUX" = "1" ]; then
+if [ "$FAST" = "1" ]; then
+  fast_skip "11b·巡检/watchdog" "要真实 tmux + 假 pi 进程（up/watch/standby/monitor/容器 dry-run，含多处 sleep）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
   PMW="$($TEAM paths | sed -n 's/.*"pm_window": "\([^"]*\)".*/\1/p')"
   [ -n "$PMW" ] || PMW=pm
@@ -745,7 +786,10 @@ fi
 
 # ---------------------------------------------------------------- 11c. 恢复：resume / watchdog 续跑
 section "11c · agent 续跑是 PM 的事（watchdog 不碰）"
-if [ "$HAVE_TMUX" = "1" ]; then
+if [ "$FAST" = "1" ]; then
+  fast_skip "11c·agent 续跑" "要真实 tmux 窗口 + 真实窗口现场（roster 区分「窗口在但 pi 已退出」）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi\"|" "$REPO/.pi/team/config.sh"
   # 让 dev 处於“有任务但 pi 已退出”的状态
   $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1
@@ -779,7 +823,10 @@ fi
 
 # ---------------------------------------------------------------- 11d. 边界守卫（跨 session 不许打字）
 section "11d · 边界守卫（跨项目/跨 session 通信必须经用户）"
-if [ "$HAVE_TMUX" = "1" ]; then
+if [ "$FAST" = "1" ]; then
+  fast_skip "11d·边界守卫（真打字）" "要在真实 tmux 里建外部 session 并验证「拒绝打字」"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
   FOREIGN="pi-team-foreign-$$"
   tmux new-session -d -s "$FOREIGN" -n other >/dev/null 2>&1
   tmux send-keys -t "$FOREIGN:other" -l "print -r -- SENTINEL-" >/dev/null 2>&1 || true
@@ -932,7 +979,10 @@ if $TEAM gl GET /projects >/dev/null 2>&1; then bad "team gl 应已移除"; else
 assert_not_file "$SKILL_DIR/scripts/lib/forge.sh" "forge 包装模块已删除"
 
 # ② say：agent 没在跑 → 落收件箱 + 明确提示（不再硬失败）
-if [ "$HAVE_TMUX" = "1" ]; then
+if [ "$FAST" = "1" ]; then
+  fast_skip "11g②·say 离线投递" "要 tmux 窗口状态（窗口不在 → 落收件箱）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
   tmux kill-window -t "$SESSION:dev" >/dev/null 2>&1 || true
   $TEAM say dev "收尾：提交这 2 个文件并 push" >"$TMP/say-offline.log" 2>&1 && ok "say 在 agent 没跑时返回 0（落收件箱）" \
     || bad "say 在 agent 没跑时不应硬失败"
@@ -949,8 +999,12 @@ assert_has "$TMP/peer.log" "已登记" "登记有回显"
 $TEAM meeting say knock-test --intent info "敲门测试消息" >/dev/null 2>&1 || true
 TEAM_MEETING_KNOCK=0 $TEAM meeting knock knock-test >"$TMP/knock-off.log" 2>&1 || true
 assert_has "$TMP/knock-off.log" "TEAM_MEETING_KNOCK=0" "敲门被全局开关拦住时说明原因"
-TEAM_MEETING_KNOCK=1 $TEAM meeting knock knock-test >"$TMP/knock-on.log" 2>&1 || true
-assert_match "$TMP/knock-on.log" "敲门排查|只落盘|已敲门" "开门时给出结论或排查清单"
+if [ "$FAST" = "1" ]; then
+  fast_skip "11g③·敲门探测" "开门路径要用 tmux 二进制探测对方 session/pane"
+else
+  TEAM_MEETING_KNOCK=1 $TEAM meeting knock knock-test >"$TMP/knock-on.log" 2>&1 || true
+  assert_match "$TMP/knock-on.log" "敲门排查|只落盘|已敲门" "开门时给出结论或排查清单"
+fi
 $TEAM meeting knock no-such-meeting >"$TMP/knock-bad.log" 2>&1 || true
 assert_has "$TMP/knock-bad.log" "会议不存在" "不存在的会议给出明确报错"
 unset TEAM_MEETINGS_DIR
@@ -1089,10 +1143,40 @@ $TEAM teardown --agent dev --purge >"$TMP/teardown.log" 2>&1 && ok "teardown 退
 [ -d "$REPO/.worktrees/dev" ] && bad "worktree 应被 --purge 删除" || ok "worktree 已删除"
 assert_not "$REPO/.pi/team/state/dev.env" "task=T1.1" "state 已清理"
 
+# ---------------------------------------------------------------- 14c. 快模式自检
+# 「快」不能靠静默少跑换来：FAST 模式下必须①一次真进程段落都没执行；②预期段落都确实跳过了
+# （跳过会显式打印 SKIP）。真把分层改坏（例如 FAST 仍跑 tmux 段、或跳过被改成静默 continue）
+# 时，这一节会红——这是本次改动的守门断言。
+# 编号说明：14b 是「文档一致性」自检（纯逻辑，快慢都跑）；本节的 14c 只在快模式跑。
+if [ "$FAST_REQ" = "1" ]; then
+  section "14c · 快模式自检（跳过必须是显式的、且没有偷偷跑真进程）"
+  assert_eq "FAST 没有执行任何真进程段落" "$LIVE_RAN" "0"
+  # 注：不能拿 pi-args.log / $FAKE/pi-sleep 文件当信号 ——
+  #   ①v1.11.5 起纯逻辑段落也会调 PATH 里的「假 pi」（NEED_PI_STUB，对 --help 给像样回答）；
+  #   ②假 pi-sleep 脚本本身就是段外准备好的（写文件无副作用）。
+  # 真正只属于真进程段落的信号是：假 PM 的参数文件 / 巡检容量日志 / **有没有 pi-sleep 进程在跑**。
+  if command -v pgrep >/dev/null 2>&1; then
+    assert_eq "FAST 没有在跑的假 pi 进程（pi-sleep）" "$(pgrep -fc "$FAKE/pi-sleep" 2>/dev/null || true)" "0"
+  else
+    printf '  (未装 pgrep：跳过「无 pi-sleep 进程」这一条检查)\n'
+  fi
+  assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
+  assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
+  for seg in "6·dispatch 真拉起" "11·close 后窗口" "11b·巡检/watchdog" "11c·agent 续跑" \
+             "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
+    if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
+    else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi
+  done
+fi
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
+if [ "$FAST_REQ" = "1" ]; then
+  printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \
+    "$SKIP_N" "${SKIP_SEGS#|}"
+fi
 [ "$FAIL" -eq 0 ] && { printf '\033[32msmoke 全绿\033[0m\n'; exit 0; }
 printf '\033[31msmoke 有失败项（--keep 保留现场）\033[0m\n'
 exit 1

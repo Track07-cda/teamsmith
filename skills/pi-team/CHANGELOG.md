@@ -5,6 +5,22 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.11.7 · 2026-09-14
+
+**smoke 快慢分层：门禁有 60 秒内的快模式（`TEAM_SMOKE_FAST=1`）**
+
+- 起因：全量门禁要建真实 tmux 场地、拉起假 pi 进程、跑看门狗/容器 dry-run，跑一次几十秒；
+  派单/复验时嫌慢就想跳过门禁。
+- 新增快模式：`TEAM_SMOKE_FAST=1 bash skills/pi-team/tests/smoke.sh`（或 `TEAM_SMOKE_FAST=1 team smoke`）
+  只跑不依赖真进程的段落。需要真进程的 7 段 —— 派单真拉起、close 后窗口、巡检/watchdog、agent 续跑、
+  跨 session 打字守卫、say 离线投递、敲门 session 探测 —— 每段都打印 `SKIP（FAST 模式）` + 原因，不静默少跑。
+  **身份隔离自检（第 2 节）与文档一致性自检（14b）是纯逻辑，快模式照跑不跳**（安全断言不能被快模式绕过）。
+- 新增「快模式自检」（14c 节，只在快模式跑）：①一次真进程段都没执行（假 pi 参数文件 / PM 参数文件 /
+  容量日志都不该存在）；②预期跳过的 7 段都在 SKIP 名单里。把分层改坏（FAST 仍跑全量、或把跳过改成静默）时，
+  这一节必红 —— 它按“用户要没要快模式”（`FAST_REQ`）判定，所以把内部开关 `FAST` 改成 0 也关不掉它。
+- 默认行为不变：不设 `TEAM_SMOKE_FAST` 时断言数量、顺序、退出码与改造前一致（断言标签集合逐条相同）。
+  `TEAM_SMOKE_FAST` 只认 1/0（或 yes/no/true/false/on/off），别的值直接退出码 2，不静默掉回全量。
+
 ## v1.11.6 · 2026-09-14
 
 **PM 身份归属校验 + 复验的干净度校验（实测踩到才发现的）**

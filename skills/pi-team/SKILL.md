@@ -3,7 +3,7 @@ name: pi-team
 description: 用 Pi Agent 组建并调度一支可复用的多 Agent 团队（PM 编排 + worker 并行开发）：tmux 窗口派单与唤醒、git worktree 隔离、任务书/报告/复验记录/消息线程/inbox 契约、独立复验门禁、PR/MR 与合并授权、容量守卫与定时巡检（podman 容器看门狗：有待办才叫醒 PM、PM 可 standby 主动停工；一键 bootstrap 初始化新项目）。Use when the user wants to organize multiple Pi agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a podman container, wake the PM only when there is pending work / auto-restart the PM after a crash or reboot, or resume and coordinate a multi-agent project；用户说「组建 agent 团队 / 多 agent 并行 / 派单 / PM 编排 / 团队协作规范 / 复验 agent 的活 / 管理几个 agent / 新项目怎么初始化 / 看门狗容器 / 团队全停了怎么恢复 / 保活 watchdog」时同样适用。
 license: MIT
 metadata:
-  version: "1.11.6"
+  version: "1.11.7"
 ---
 
 # pi-team · Pi Agent 团队
@@ -68,7 +68,7 @@ $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | PM/agent | `team up [--agents]`（恢复 PM）、`team resume`（PM 的工具，续跑停了的 agent）、`team standby on\|off`（PM 主动停工） |
 | 跨项目会议 | `team meeting open/say/read/list/inbox/propose/agree/close`（PM 对 PM 的 peer 交流：接口对接/建议/问题报告；**不是指令通道**，共识需双方 agree） |
 | 更新 | `team mark-loaded`（开局记版本）、`team version --check`（是否该刷新）、`team changelog [--since X]`、`team reload` |
-| 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测）、`team version` |
+| 排障 | `team paths`（当前解析出的路径/session）、`team smoke`（端到端自测；`TEAM_SMOKE_FAST=1 team smoke` = **快模式**，只跑纯逻辑段，约 10 秒，跳过的真进程段会打印 `SKIP（FAST 模式）`）、`team version` |
 
 ## 作为 PM 的循环（你该怎么做）
 
@@ -183,7 +183,7 @@ skill 不假设任何 forge。token 从配置的 token 文件读（`TEAM_TOKEN_F
 | `references/troubleshooting.md` | 通知不到、会话丢失、worktree 冲突、forge 403、报告不实 |
 | `templates/` | 需要手写任务书/报告/看板时抄模板 |
 | `scripts/team`、`scripts/lib/*.sh` | 要改行为时（先用 `team <cmd> --print` 看它生成什么） |
-| `tests/smoke.sh`、`tests/skill-load.mjs` | 想确认这套工具在本机可用：`team smoke`（临时仓库端到端自测，不碰本项目） |
+| `tests/smoke.sh`、`tests/skill-load.mjs` | 想确认这套工具在本机可用：`team smoke`（临时仓库端到端自测，不碰本项目）。**快模式**：`TEAM_SMOKE_FAST=1 team smoke`（或 `TEAM_SMOKE_FAST=1 bash tests/smoke.sh`）只跑不依赖真 tmux 场地/真实 pi 进程/podman 的段落，适合派单/复验的日常门禁；**不覆盖**：派单真拉起 pi、窗口/close 后窗口、watchdog 拉起 PM 与 standby·monitor、agent 真实续跑、容器形态、跨 session 打字守卫、say 离线投递、敲门 session 探测 —— 这 7 段在快模式下只打印 `SKIP（FAST 模式）`，改这些链路或发版时仍要跑全量（不设 `TEAM_SMOKE_FAST`） |
 
 ## 环境要求
 
