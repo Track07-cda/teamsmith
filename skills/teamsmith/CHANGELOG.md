@@ -24,6 +24,18 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.18.0 · 2026-09-14
+
+**新增 `references/memory.md`：长期 PM 的记忆手册**
+
+- 说清三层记忆的分工：**会话记忆**（magic-context，PM 的快捷方式）/ **落盘证据**（reports、reviews、BOARD、
+  threads、DECISIONS —— 唯一被他人和别的工具信任的东西）/ **技能版本状态**（`mark-loaded`、`version --check`、`/reload`）。
+- 明确规则：结论必须落盘，"我记得"永远不是证据；**记忆与磁盘冲突时磁盘赢，然后修记忆**。
+- 讲清什么该进项目记忆（项目事实、信条里的工作规则、本项目特有的坑）与什么不该（当天的任务状态、秘密、长日志、
+  本来就在磁盘上的证据），并指向 `templates/memory-seed.md.tmpl`。
+- 讲清生命周期：`/compact`、重启（`pi -c`）、`/reload`、移动 worktree 各会怎样；以及没有 magic-context 时的替代流程。
+- SKILL.md 阅读表与 memory-seed 模板头部都加了指向。
+
 ## v1.17.0 · 2026-09-14
 
 **文档面全英文收口**（`references/**` + `SCOPE.md`）

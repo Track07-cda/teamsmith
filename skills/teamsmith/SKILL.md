@@ -3,7 +3,7 @@ name: teamsmith
 description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A watchdog window wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project.
 license: MIT
 metadata:
-  version: "1.17.0"
+  version: "1.18.0"
 ---
 
 # teamsmith · one agent that actually owns the project
@@ -231,6 +231,7 @@ byte-for-byte unchanged**):
 | `references/philosophy.md` | **The PM creed**: judgement standards and their failure modes (read this first) |
 | `references/protocol.md` | Why each rule exists (independent verification, wake-up loop, capacity floor, safety model) |
 | `references/config.md` | Config keys, on-disk layout, env overrides (env beats config) |
+| `references/memory.md` | What the PM's project memory is for, what belongs in it, what survives compaction/restart/`/reload`, and how to work without it |
 | `references/agent-adapters.md` | To run workers with codex/opencode/any TUI agent: the contract, placeholder tables, worked examples, a verification checklist |
 | `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
 | `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
@@ -254,6 +255,7 @@ byte-for-byte unchanged**):
 - **No container dependency**: the watchdog is a `watchdog` window in the same tmux session (`team watchdog up`).
 - Recommended (not required): **magic-context** (`@cortexkit/pi-magic-context`) — the PM is a long-lived session,
   and this gives it cross-session memory and retrieval; `team doctor` reports whether it is installed
-  (`TEAM_REQUIRE_MAGIC_CONTEXT=1` makes it mandatory).
+  (`TEAM_REQUIRE_MAGIC_CONTEXT=1` makes it mandatory). What to remember, what belongs on disk instead, and the
+  fallback without it: [references/memory.md](references/memory.md).
 - Optional helpers: `timeout` (hard timeout for gates; degrades with a warning), `lsof` (needed only where
   `/proc` is unavailable).
