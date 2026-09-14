@@ -80,11 +80,12 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model>
   grep -qE '^[[:space:]]*issue:' "$taskfile" 2>/dev/null && \
     issue="$(grep -E '^[[:space:]]*issue:' "$taskfile" | head -1 | grep -oE '[0-9]+' | head -1 || true)"
 
+  # 交付步骤与 forge 无关：skill 不假设任何 forge CLI（gh/glab/tea/curl 都行，由 PM 决定）
   local pr_step
   case "$TEAM_VCS" in
-    github) pr_step="用 \`$cli pr $id --branch \$(git rev-parse --abbrev-ref HEAD) --title \"$id: <概括>\" --yes\`（内部走 gh wrapper 注入 PAT，禁止自己读 token 文件）开 PR" ;;
-    gitlab) pr_step="用 \`$cli pr $id --branch \$(git rev-parse --abbrev-ref HEAD) --title \"$id: <概括>\" --yes\` 开 MR（需要用户已授权）" ;;
-    *)      pr_step="TEAM_VCS=local：不开 PR，把分支 push 到 $TEAM_REMOTE（\`git push -u $TEAM_REMOTE HEAD\`）即可，由 PM 复验后本地合并" ;;
+    local|"") pr_step="本仓库是 local 模式（没有远端）：**不用 push**，把分支留在本地即可，PM 复验后本地合并" ;;
+    *)        pr_step="交付方式由 PM 决定：把分支 push 到你们的远端（如有），开 PR/MR 与否听 PM 安排
+     （skill 不代做、也不假设 gh/glab；需要你手动调 API 时按 PM 给的方式做，token 不要读进上下文）" ;;
   esac
 
   cat <<PROMPT

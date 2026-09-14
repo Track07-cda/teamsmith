@@ -70,7 +70,7 @@ watchdog 是**叫醒 PM 的节拍器**，不是“让 PM 永远活着”的守�
 
 - **看门狗由 PM 配置和维护**：`team watchdog up|status|logs|down` —— 默认在同一个 tmux session 的 `watchdog`
   窗口里跑 `team monitor`（上半屏团队状态，下半屏每个 agent 的 Pi 会话活动流），并按周期巡检；
-  想让它在 tmux 之外独立存活就用 `team watchdog up --container`（podman，`--restart=always`）。
+  （只有一个后端：同 session 的 `watchdog` 窗口；不再有容器/systemd 形态。）
 - 默认每 **15 分钟**（`TEAM_WATCH_INTERVAL=900`，建议 300~3600）看一次“有没有活儿要 PM 处理”：
   未读通知 / 待复验报告 / 看板 todo·wip / blocked / 有任务但停了的 agent。
 - **有待办** → 叫醒 PM（在跑就发一句 `[watchdog] 待办：…`；不在跑就把它拉起来）；

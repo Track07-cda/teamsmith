@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="1.11.8"
+TEAM_VERSION="1.12.0"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -115,8 +115,6 @@ team_load_config() {
   TEAM_TASK_BRANCH_RESET="${TEAM_TASK_BRANCH_RESET:-1}"     # close 后把 agent worktree 切回保护分支（task 模式）
   TEAM_PROTECTED_BRANCH="${TEAM_PROTECTED_BRANCH:-main}"
   TEAM_REMOTE="${TEAM_REMOTE:-origin}"
-  # TEAM_VCS: local | github | gitlab | other（other/未知 = 项目自己的 forge，见 TEAM_PR_CMD）
-  # TEAM_VCS: local | github | gitlab | other（other/未知 = 项目自己的 forge，见 TEAM_PR_CMD）
   TEAM_VCS="${TEAM_VCS:-local}"
   # 项目自己的 forge 命令模板（可选）。占位符：{branch} {base} {title} {pr} {body} {remote}
   # 例（Gitea）：TEAM_PR_CMD="tea pr create --base {base} --head {branch} --title {title}"
@@ -150,11 +148,14 @@ team_load_config() {
   TEAM_AGENT_MEM_MB="${TEAM_AGENT_MEM_MB:-6144}"           # 单个 agent 的经验占用（估算用）
   # 保活 watchdog
   # 定时巡检（叫醒 PM 的节拍；不是心跳保活）——默认 15 分钟，推荐 5~60 分钟
+  # PM 记忆（可选依赖）：magic-context 让 PM 的长期会话能跨压缩/跨重启检索历史。
+  # 默认"推荐但不要求"；TEAM_REQUIRE_MAGIC_CONTEXT=1 时 doctor 会把它当硬依赖。
+  TEAM_REQUIRE_MAGIC_CONTEXT="${TEAM_REQUIRE_MAGIC_CONTEXT:-0}"
+  TEAM_PI_SETTINGS_FILE="${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}"
   TEAM_WATCH_INTERVAL="${TEAM_WATCH_INTERVAL:-900}"       # 巡检周期（秒）
   TEAM_WATCH_NUDGE_GAP="${TEAM_WATCH_NUDGE_GAP:-900}"      # 同一批待办最快多久再提醒一次（秒）
   TEAM_WATCH_MAX_RESTARTS="${TEAM_WATCH_MAX_RESTARTS:-5}"  # PM 每小时最多自动拉起次数（防崩溃循环）
   TEAM_WATCH_REBUILD_TMUX="${TEAM_WATCH_REBUILD_TMUX:-0}"  # 0=不管 tmux（session/窗口没了只告警）；1=允许重建 PM 窗口
-  TEAM_WATCH_BACKEND="${TEAM_WATCH_BACKEND:-tmux}"         # tmux（默认：同 session 的窗口 + 状态面板）| container
   TEAM_WATCH_WINDOW="${TEAM_WATCH_WINDOW:-watchdog}"       # tmux 后端的窗口名
   TEAM_REVIEW_TIMEOUT="${TEAM_REVIEW_TIMEOUT:-1800}"       # team review 跑门禁的硬超时（秒）
   TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-5}"        # 监视器刷新间隔（秒）
@@ -174,11 +175,6 @@ team_load_config() {
   TEAM_MEETING_TTL_HOURS="${TEAM_MEETING_TTL_HOURS:-72}"
   TEAM_MEETING_MAX_TURNS="${TEAM_MEETING_MAX_TURNS:-20}"
   TEAM_MEETING_KNOCK="${TEAM_MEETING_KNOCK:-0}"
-  TEAM_WATCH_IMAGE="${TEAM_WATCH_IMAGE:-}"                 # 看门狗容器镜像，空=localhost/pi-team-watch:1
-  TEAM_WATCH_BOX="${TEAM_WATCH_BOX:-}"                     # 目标开发容器名，空=自动（当前容器）
-  TEAM_WATCH_RETRY_SEC="${TEAM_WATCH_RETRY_SEC:-15}"       # 内层 watch 退出后的重试间隔（秒）
-  TEAM_WATCH_PID_MODE="${TEAM_WATCH_PID_MODE:-}"           # 空=自动（容器内 --pid=container:<当前容器>；裸机 --pid=host）
-  TEAM_WATCH_CONTAINER="${TEAM_WATCH_CONTAINER:-}"         # 空=<project>-pi-team-watch
   TEAM_PM_START_WAIT="${TEAM_PM_START_WAIT:-6}"            # 启动 PM 后等它起来的秒数
   TEAM_NOTIFY_TMUX="${TEAM_NOTIFY_TMUX:-1}"
   TEAM_NOTIFY_DEDUP_SEC="${TEAM_NOTIFY_DEDUP_SEC:-20}"

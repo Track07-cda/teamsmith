@@ -3,7 +3,7 @@
 #
 # 设计给 PM 用：PM 在新项目里被启动后的第一件事就是跑它。它会
 #   ① 探测当前 tmux session/窗口（PM 自己就在里面）→ 写进配置   ② init 配置 + 文档骨架 + AGENTS 段落
-#   ③ 按名册建 agent worktree                                    ④ 起看门狗容器（PM 负责配置看门狗）
+#   ③ 按名册建 agent worktree                                    ④ 起看门狗窗口（PM 负责配置看门狗）
 #   ⑤ 打印“下一步清单”（PM 照做即可开始派单）
 #
 # 不碰远端：不 push、不建 issue、不改仓库设置。
@@ -77,7 +77,7 @@ team_cmd_bootstrap() {
      "$([ -n "$det_sess" ] && echo '（探测自当前窗口）' || ([ -n "${TMUX:-}" ] && echo '（当前窗口不属于本项目 → 用配置/项目名）' || echo ''))"
   printf '  名册        %s\n' "$agents"
   printf '  版本控制    %s ｜ 门禁 %s ｜ 安装 %s\n' "$vcs" "${gates:-<无>}" "${install_cmd:-<无>}"
-  printf '  看门狗      %s\n' "$([ "$with_watchdog" = "1" ] && echo "容器（$([ "$(team_watch_pid_mode)" = host ] && echo --pid=host || echo "shared-pid $(team_watch_pid_mode)")）" || echo '跳过')"
+  printf '  看门狗      %s\n' "$([ "$with_watchdog" = "1" ] && echo "tmux 窗口 $(team_slug "$session" 2>/dev/null || echo ''):watchdog（同 session）" || echo '跳过')"
 
   if [ "$print_only" = "1" ]; then
     printf '\n（--print：只看计划，什么都没改）\n'
@@ -85,7 +85,7 @@ team_cmd_bootstrap() {
     printf '  1. %s init --session %s --pm-window %s --agents "%s" --vcs %s\n' "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs"
     printf '  2. 把门禁/安装命令写进 .pi/team/config.sh（%s / %s）\n' "${gates:-无}" "${install_cmd:-无}"
     printf '  3. 为每个 agent 建 worktree：%s\n' "$(printf 'add-agent %s; ' $agents)"
-    printf '  4. %s watchdog up（容器化看门狗）\n' "$TEAM_CLI"
+    printf '  4. %s watchdog up（看门狗窗口：同 session 的 watchdog 窗口跑 monitor + 定时巡检）\n' "$TEAM_CLI"
     printf '  5. 打印下一步清单\n'
     return 0
   fi
@@ -114,12 +114,10 @@ team_cmd_bootstrap() {
     done
   fi
 
-  # ④ 看门狗容器（PM 负责配置；失败不算致命，只提示）
-  if [ "$with_watchdog" = "1" ] && team_podman_ok; then
+  # ④ 看门狗（PM 负责配置；失败不算致命，只提示）
+  if [ "$with_watchdog" = "1" ]; then
     team_info ""
     team_cmd_watchdog up || team_warn "看门狗没起来：稍后再跑 $TEAM_CLI watchdog up（不影响派单）"
-  elif [ "$with_watchdog" = "1" ]; then
-    team_warn "没有 podman：看门狗没配。可临时开一个窗口跑 $TEAM_CLI watch（或装 podman 后 $TEAM_CLI watchdog up）"
   fi
 
   # ⑤ 下一步清单

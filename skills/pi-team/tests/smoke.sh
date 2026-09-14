@@ -8,7 +8,7 @@
 #      say/notify/inbox/digest → worktree 内提交与报告 → review(PASS/FAIL 两条路径) →
 #      merge(squash) → close → roster/ps/status → notify 扩展(Node 直跑，含去重) → teardown
 #
-# 快慢分层（TEAM_SMOKE_FAST=1）：只跑不依赖「真实 tmux 场地 / 真实 pi 进程 / podman 容器」的段落，
+# 快慢分层（TEAM_SMOKE_FAST=1）：只跑不依赖「真实 tmux 场地 / 真实 pi 进程」的段落，
 #   被跳过的段落一律显式打印 `SKIP（FAST 模式）`（不静默少跑），结尾 14c 再自检
 #   「真进程段落一次都没跑 + 预期段落都确实被跳过」。默认（不设该变量）行为与改造前完全一致：
 #   断言一条不少、顺序不变、退出码语义不变（有失败→非 0，全绿→0）。
@@ -29,7 +29,7 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
 KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 
-# 快模式开关（TEAM_SMOKE_FAST=1）：只跑纯逻辑段落，跳过需要真进程的段落（tmux/真实 pi/podman）。
+# 快模式开关（TEAM_SMOKE_FAST=1）：只跑纯逻辑段落，跳过需要真进程的段落（tmux/真实 pi）。
 #   FAST_REQ = 用户是不是要了快模式（原始诉求）：快模式自检与结果行用它——就算有人把内部开关
 #              FAST 改成 0（就等于“照跑全量”），自检仍然会跑并在 LIVE_RAN>0 时报红。
 #   FAST     = 各段落据此分类的内部开关（必须 = FAST_REQ）
@@ -189,7 +189,7 @@ $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog --print >
   && ok "bootstrap --print 退出码 0" || bad "bootstrap --print 失败"
 assert_has "$TMP/boot-print.log" "计划步骤" "打印了计划步骤"
 assert_has "$TMP/boot-print.log" "add-agent dev" "计划里含建 worktree"
-assert_has "$TMP/boot-print.log" "watchdog up" "计划里含起看门狗容器"
+assert_has "$TMP/boot-print.log" "watchdog up" "计划里含起看门狗窗口"
 [ -f "$BR/.pi/team/config.sh" ] && bad "--print 不该改任何东西" || ok "--print 确实没改东西"
 $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot.log" 2>&1 \
   && ok "bootstrap 退出码 0" || { bad "bootstrap 失败"; cat "$TMP/boot.log"; }
@@ -614,7 +614,7 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/pm
 chmod +x "$FAKE/pi-sleep"
 
 if [ "$FAST" = "1" ]; then
-  fast_skip "11b·巡检/watchdog" "要真实 tmux + 假 pi 进程（up/watch/standby/monitor/容器 dry-run，含多处 sleep）"
+  fast_skip "11b·巡检/watchdog" "要真实 tmux + 假 pi 进程（up/watch/standby/monitor，含多处 sleep）"
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
@@ -740,7 +740,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     ok "PM 已被拉起（窗口里跑着 pi，日志尚未落盘）"
   else bad "PM 没有被拉起（$DEAD_BEFORE → $(pm_lines)）"; fi
 
-  # 4b) 看门狗：tmux 后端（默认，窗口里跑 monitor）+ 容器后端 dry-run
+  # 4b) 看门狗：**只有一个后端**（同 session 的窗口里跑 monitor）
   $TEAM monitor --once >"$TMP/monitor.log" 2>&1 && ok "monitor --once 退出码 0" || bad "monitor --once 失败"
   assert_has "$TMP/monitor.log" "pi-team monitor" "monitor 打印了标题"
   assert_has "$TMP/monitor.log" "巡检" "monitor 复用了团队状态面板"
@@ -759,17 +759,16 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/wd-up2.log" "已在跑" "up 幂等（不重复起窗口）"
   $TEAM watchdog down >"$TMP/wd-down.log" 2>&1 && ok "watchdog down 退出码 0" || bad "watchdog down 失败"
   assert_eq "看门狗窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx watchdog || true)" "0"
-  $TEAM watchdog up --container --print >"$TMP/wd-print.log" 2>&1 && ok "watchdog --container --print 退出码 0" || bad "容器 --print 失败"
-  assert_match "$TMP/wd-print.log" "^podman run --detach" "容器形态打印出 podman run"
-  assert_match "$TMP/wd-print.log" "\-\-restart=always" "容器带 --restart=always"
-  if [ "${TEAM_SMOKE_CONTAINER:-0}" = "1" ]; then
-    $TEAM watchdog up --container >"$TMP/wd-cont.log" 2>&1 && ok "watchdog --container up 退出码 0" || { bad "容器 up 失败"; cat "$TMP/wd-cont.log"; }
-    sleep 20
-    assert_file "$REPO/.pi/team/state/capacity.log" "容器里的巡检真的在写容量日志"
-    $TEAM watchdog down --container >/dev/null 2>&1
+  $TEAM watchdog up --print >"$TMP/wd-print.log" 2>&1 && ok "watchdog up --print 退出码 0" || bad "watchdog --print 失败"
+  assert_has "$TMP/wd-print.log" "$SESSION:watchdog" "--print 指明它要起的窗口"
+  assert_has "$TMP/wd-print.log" "巡检周期" "--print 说明巡检周期"
+  # 容器后端已移除（v1.12.0）：必须明确拒绝，而不是静默忽略
+  if $TEAM watchdog up --container >"$TMP/wd-cont.log" 2>&1; then
+    bad "watchdog --container 应被明确拒绝（容器后端已移除）"
   else
-    printf '  (跳过真实容器：TEAM_SMOKE_CONTAINER=1 才跑)\n'
+    ok "watchdog --container 被明确拒绝"
   fi
+  assert_has "$TMP/wd-cont.log" "容器后端已移除" "拒绝时说明原因（并指向 watchdog up）"
 
   # 5) standby：PM 主动停工，有待办也不叫
   $TEAM standby on --reason "等用户授权合并" >"$TMP/standby-on.log" 2>&1
@@ -1083,6 +1082,35 @@ inject_and_expect "同行既有删除词又有真用法" "SKILL.md" '已删的�
 rm -rf "$SANDBOX-x"
 CLEAN_HITS="$(doc_stale_hits "$SANDBOX")"
 [ -z "$CLEAN_HITS" ] && ok "翻转自测：干净副本不误报（正对照）" || bad "干净副本被误报：$(printf '%s' "$CLEAN_HITS" | head -1)"
+
+# 依赖收窄不变量（v1.12.0）：文档/模板里不得再把容器后端或 forge CLI 当依赖
+DEP_HITS="$(grep -rniE 'podman|\-\-container|看门狗容器|Containerfile' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" 2>/dev/null | grep -vE '不再需要|不再有|已移除|v1\.12' || true)"
+if [ -n "$DEP_HITS" ]; then bad "文档还在把容器当依赖：$(printf '%s' "$DEP_HITS" | head -1)"; else ok "文档不再把容器当前提（只有一个后端）"; fi
+FORGE_HITS="$(grep -rniE '缺 (gh|glab)|TEAM_VCS=github 但|gh wrapper' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" 2>/dev/null || true)"
+if [ -n "$FORGE_HITS" ]; then bad "还有把 forge CLI 当依赖的表述：$(printf '%s' "$FORGE_HITS" | head -1)"; else ok "forge 完全解耦（不探测/不调用/不读 token）"; fi
+# 派单提示词不得再教已删命令（v1.11 的团队 pr 曾残留在这里）
+$TEAM dispatch dev T1.1 "$REPO/docs/team/tasks/T1.1-smoke.md" --print >"$TMP/prompt-forge.log" 2>&1 || true
+if grep -qE 'team pr |\$cli pr ' "$TMP/prompt-forge.log" 2>/dev/null; then
+  bad "派单提示词还在教已删的 team pr"
+else
+  ok "派单交付步骤与 forge 无关（不出现 team pr）"
+fi
+# 哲学与记忆：信条要有落盘位置，PM 提示词要带 credo
+assert_file "$SKILL_DIR/references/philosophy.md" "信条文档存在"
+assert_has "$SKILL_DIR/references/philosophy.md" "状态即承诺" "信条内容落地（状态即承诺）"
+assert_has "$SKILL_DIR/templates/pm-prompt.md.tmpl" "你的信条" "PM 提示词顶部带 credo"
+assert_has "$SKILL_DIR/SKILL.md" "references/philosophy.md" "SKILL 指向信条文档"
+assert_file "$SKILL_DIR/templates/memory-seed.md.tmpl" "项目记忆种子模板存在"
+# doctor 的 PM 记忆三态（不依赖真装：用假 settings.json）
+printf '{"packages":["npm:@cortexkit/pi-magic-context"]}\n' > "$TMP/mc-yes.json"
+printf '{"packages":[]}\n' > "$TMP/mc-no.json"
+TEAM_PI_SETTINGS_FILE="$TMP/mc-yes.json" $TEAM doctor >"$TMP/mc-yes.log" 2>&1 || true
+assert_has "$TMP/mc-yes.log" "PM 记忆（可选）" "doctor 报告 PM 记忆（可选）这一项"
+assert_match "$TMP/mc-yes.log" "magic-context [0-9]" "装了 → 报版本"
+TEAM_PI_SETTINGS_FILE="$TMP/mc-no.json" $TEAM doctor >"$TMP/mc-no.log" 2>&1 || true
+assert_has "$TMP/mc-no.log" "未检测到 magic-context" "没装 → 只警告（不阻塞）"
+TEAM_PI_SETTINGS_FILE="$TMP/mc-no.json" TEAM_REQUIRE_MAGIC_CONTEXT=1 $TEAM doctor >"$TMP/mc-req.log" 2>&1 && bad "要求必须有 magic-context 时 doctor 应失败" || ok "TEAM_REQUIRE_MAGIC_CONTEXT=1 → doctor 失败"
+assert_has "$TMP/mc-req.log" "TEAM_REQUIRE_MAGIC_CONTEXT=1" "失败原因写明是配置要求"
 
 # 用法级不变量（verify 建议）：文档里出现 `team review <ID>` 就必须带 --dir（v1.11 起签名变了）
 USAGE_HITS="$(grep -rEn 'team review[[:space:]]+[A-Za-z0-9]' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/../README.md" 2>/dev/null | grep -v -- '--dir' | grep -vE '不再|已删|旧签名|v1\.11' || true)"

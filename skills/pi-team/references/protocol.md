@@ -3,6 +3,9 @@
 这份文档是 `AGENTS.md` 团队协议段落的「理由版」。规则本身很短，理由是让未来的你和 agent
 不再把规则当成官僚流程而绕过。
 
+> **信念层在 [philosophy.md](philosophy.md)**（8 条判断标准 + 反面案例）。本文解释"为什么这样定规则"，
+> 那份解释"为什么这个角色应当这样想"。两者冲突时以信条为准，并回来改规则。
+
 ---
 
 ## 1. 角色：PM 不是「更聪明的 agent」，而是唯一有权合并的角色
@@ -88,7 +91,8 @@ agent 回合结束（Pi 的 agent_settled：不会再自动继续的那个点）
 
 ## 7. 安全红线（不可协商）
 
-- token 只在 PM **调用真实工具**时注入（`GH_TOKEN="$(< .gh-pat)" gh …`），永不回显、永不落进项目文件或日志。
+- token 只在 PM **调用真实工具**时注入（例如 `GH_TOKEN="$(< .gh-pat)" gh …`），永不回显、永不落进项目文件或日志。
+  skill 与 forge 完全解耦：不探测 gh/glab、不读 token、不代开 PR/MR（v1.12.0）。
 - agent 禁止：push 保护分支、force push、merge、rebase/删除他人分支、改仓库设置。
 - agent 禁止阅读凭据/账户文件（如 `~/.pi/agent/auth.json`）。
 - 任何改变共享/远端状态的操作都要 `--yes`（用户显式授权）。skill 不替用户做主。
@@ -198,7 +202,7 @@ git -C <root> add -A && git -C <root> commit -m "<ID>: <标题>"
 ## 8h. git 与 forge 归 PM：skill 不执行、也不包装
 
 - skill **不执行** git 写操作（建/切分支、squash、push）与 forge 写操作（开/合 PR、留言、关 PR）；
-  **也不打印"食谱"**——那属于过度包装已有工具。PM 直接用 `git` / `gh` / `glab` / `tea` / 网页。
+  **也不打印"食谱"**——那属于过度包装已有工具。PM 直接用 `git` 与任意 forge 手段（`curl` 调 API、`gh`/`glab`、网页都行）。
 - skill 在 git 上只做三件事（都是只读或记录）：
   1. **检查**：`dispatch` 前确认工作树不脏、不在保护分支上（否则拒绝并说明原因）；
   2. **只读观察**：`roster` / `digest` 显示分支、脏文件数、领先提交、"待收尾"清单；

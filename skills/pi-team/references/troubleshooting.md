@@ -120,8 +120,8 @@ Pi session 按 **cwd** 归属：`--session-id` 只在同一项目路径下能复
   先看 `state/watchdog.log` 与 PM 窗口输出找原因（常见：模型额度耗尽、配置写错、依赖缺失）。
 - **tmux 后端的看门狗窗口被关了**：`team watchdog up` 重开；`team watchdog logs` 看画面快照；
   监视器下半部分提示“本机没有 node/bun/tsx：跳过 agent 活动流” → 装 node 或 bun 即可（团队状态部分不受影响）。
-- **看门狗自己也停了**：容器有 `--restart=always`，`podman start <name>` 可手动拉起；`team watchdog up` 会按当前配置重建。
-- **机器重启后一片安静**：容器带 `--restart=always`，podman 起来后会自动拉起它（可用 `podman start <name>` 手动）；没配看门狗就 `team up` 一键恢复。
+- **看门狗自己也停了**：`team watchdog status` 看窗口是否还在；`team watchdog up` 会重建（只有一个后端，没有容器可查）。
+- **机器重启后一片安静**：tmux server 与里面的窗口都没了 → `team up` 一键恢复（PM 窗口 + 看门狗窗口）；也可 `team watchdog up` 单独起看门狗。
 - **`ExecStart`/脚本权限**：本 skill 全部用 `bash <path>` 调用，不依赖可执行位（但 `scripts/team` 仍是 +x，
   `team smoke` 会检查）。
 

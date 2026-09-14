@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# pi-team · PM 相关：up（恢复 PM）/ resume（PM 工具）/ watch（前台巡检）/ watchdog（容器管理）/ standby（PM 停工）
+# pi-team · PM 相关：up（恢复 PM）/ resume（PM 工具）/ watch（前台巡检）/ watchdog（看门狗窗口）/ standby（PM 停工）
 #
 # 设计前提：**不依赖任何 agent（包括 PM）来负责恢复**。
 #   - PM 没在跑且有待办 → watchdog 用 pi -c 把它拉起来（历史不丢）
 #   - agent 停了 → 不管（agent 归 PM 管：team resume）
-#   - watchdog 自己挂了 → podman 容器（--restart=always）拉起它；机器重启后同样
+#   - watchdog 自己挂了 → 由 PM 手动 `team watchdog up` 重建（**只有一个后端**：同 session 的 tmux 窗口；
+#     不引入第二个运行时不代表没有恢复能力：PM 被叫醒后第一件事就是看 watchdog-status）
 # 所有状态都在磁盘上（state/ + docs/ + git 分支），所以任何一环重启都是可续的。
 
 team_watch_log() { printf '%s\n' "$TEAM_STATE_DIR/watchdog.log"; }
@@ -385,142 +386,25 @@ team_cmd_monitor() {
   return 0
 }
 
-# ---------------------------------------------------------------- watchdog 后端：tmux（默认）/ 容器（可选）
-# 由 PM（或人）用 `team watchdog up` 启动：一个 podman 容器常驻跑 `team watch`。
-# 与 PM 的 pi 进程/会话解耦——PM 崩了、会话重启了，看门狗都还在。
-# 两个关键点：
-#   1) 容器必须能“看见” PM 窗口里的进程（存活判定要用 ps）：
-#        在容器里（distrobox 等）→ --pid=container:<当前容器名> --cgroups=enabled
-#        裸机                    → --pid=host
-#   2) tmux socket 目录与项目目录按**相同绝对路径**挂进容器，脚本才照常工作。
-
-team_podman() { # 容器内通过 distrobox-host-exec 回到宿主的 podman
-  if team_have_cmd podman; then
-    command podman "$@"
-  elif team_have_cmd distrobox-host-exec; then
-    distrobox-host-exec podman "$@"
-  else
-    team_die "找不到 podman（容器内需 distrobox-host-exec podman；裸机需装 podman）"
-  fi
-}
-
-team_podman_ok() { team_have_cmd podman || team_have_cmd distrobox-host-exec; }
-
-team_watch_box_name() { # 目标容器名：TEAM_WATCH_BOX 覆盖 > 当前容器（distrobox 写 /run/.containerenv）
-  if [ -n "${TEAM_WATCH_BOX:-}" ]; then printf '%s\n' "$TEAM_WATCH_BOX"; return 0; fi
-  local f=/run/.containerenv n
-  [ -r "$f" ] || return 1
-  n="$(sed -n 's/^name="\(.*\)"$/\1/p' "$f" | head -1)"
-  [ -n "$n" ] || return 1
-  printf '%s\n' "$n"
-}
-
-team_watch_pid_mode() { # container:<box> | host
-  if [ -n "${TEAM_WATCH_PID_MODE:-}" ]; then printf '%s\n' "$TEAM_WATCH_PID_MODE"; return 0; fi
-  local box; box="$(team_watch_box_name || true)"
-  if [ -n "$box" ]; then printf 'container:%s\n' "$box"; else printf 'host\n'; fi
-}
-
-team_watch_container_name() {
-  printf '%s\n' "${TEAM_WATCH_CONTAINER:-$(team_slug "$TEAM_PROJECT")-pi-team-watch}"
-}
-
-team_watch_image() {
-  if [ -n "${TEAM_WATCH_IMAGE:-}" ]; then printf '%s\n' "$TEAM_WATCH_IMAGE"; return 0; fi
-  # 默认镜像 tag 跟着 Containerfile 内容走：改了就自动重建，不会用到过期的旧镜像
-  local cf="$TEAM_SKILL_DIR/container/Containerfile" tag="base"
-  [ -f "$cf" ] && tag="$(team_hash "$(cat "$cf")")"
-  printf 'localhost/pi-team-watch:%s\n' "$tag"
-}
-
-team_watch_container_state() { # running|exited|absent
-  local cname="$1" st
-  st="$(team_podman inspect "$cname" --format '{{.State.Status}}' 2>/dev/null | head -1)"
-  if [ -n "$st" ]; then printf '%s\n' "$st"; else printf 'absent\n'; fi
-}
-
-team_tmux_sock_dir() {
-  if [ -n "${TMUX_TMPDIR:-}" ]; then printf '%s/tmux-%s\n' "${TMUX_TMPDIR%/}" "$(id -u)"
-  else printf '/tmp/tmux-%s\n' "$(id -u)"; fi
-}
-
-team_watch_ensure_image() {
-  local img; img="$(team_watch_image)"
-  if team_podman image exists "$img" >/dev/null 2>&1; then return 0; fi
-  local ctx="$TEAM_SKILL_DIR/container"
-  [ -f "$ctx/Containerfile" ] || team_die "镜像 $img 不存在，且缺 $ctx/Containerfile（可设 TEAM_WATCH_IMAGE 用现成镜像）"
-  team_info "构建看门狗镜像 $img（首次需要网络）" >&2
-  team_podman build -t "$img" "$ctx" >&2 || team_die "镜像构建失败"
-}
-
-team_host_podman_sock() { # 宿主 podman 的 socket 路径（问宿主 podman 自己 —— 容器里看不见宿主的 /run/user）
-  local p
-  p="$(team_podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | head -1)"
-  if [ -n "$p" ]; then printf '%s\n' "$p"; return 0; fi
-  return 1
-}
-
-team_watch_build_args() { # 构造 podman run 参数数组 TEAM_WD_ARGS（两种形态见 Containerfile 顶部注释）
-  local box sock proj img cname inner
-  box="$(team_watch_box_name || true)"
-  proj="$TEAM_MAIN_ROOT"
-  img="$(team_watch_image)"
-  cname="$(team_watch_container_name)"
-  TEAM_WD_ARGS=(run --detach --name "$cname" --restart=always)
-  if [ -n "$box" ]; then
-    # 形态 A：容器只守着，真正的 watch 在开发容器里跑（tmux/ps/pi 都在那儿，版本一致）
-    # 以项目属主身份进去（否则 git 会因 dubious ownership 拒绝），并带上 HOME 让 git 配置可用
-    local proj_uid proj_home
-    proj_uid="$(stat -c %u "$proj" 2>/dev/null || id -u)"
-    proj_home="${HOME:-/root}"
-    inner="while :; do podman-remote exec --user $proj_uid -e HOME=$proj_home -w $proj -e TEAM_ROOT=$proj $box bash $TEAM_SKILL_DIR/scripts/team watch; rc=\$?; echo \"[watchdog] inner watch 退出（rc=\$rc），${TEAM_WATCH_RETRY_SEC:-15}s 后重试\"; sleep ${TEAM_WATCH_RETRY_SEC:-15}; done"
-    sock="$(team_host_podman_sock || true)"
-    if [ -n "$sock" ]; then
-      TEAM_WD_ARGS+=(--env "CONTAINER_HOST=unix://$sock" --volume "$sock:$sock")
-    else
-      team_warn "问不到宿主 podman socket：容器里的看门狗可能连不上 podman（可手动设 CONTAINER_HOST）"
-    fi
-    TEAM_WD_ARGS+=(--env "TEAM_WATCH_BOX=$box")
-  else
-    # 形态 B：裸机，直接在容器里跑 watch
-    inner="exec bash $TEAM_SKILL_DIR/scripts/team watch"
-    TEAM_WD_ARGS+=(--pid=host)
-    local tmsock; tmsock="$(team_tmux_sock_dir)"
-    [ -d "$tmsock" ] && TEAM_WD_ARGS+=(--volume "$tmsock:$tmsock")
-    TEAM_WD_ARGS+=(-w "$proj" --env "TEAM_ROOT=$proj" --volume "$proj:$proj")
-  fi
-  TEAM_WD_ARGS+=(--volume "$TEAM_SKILL_DIR:$TEAM_SKILL_DIR:ro")
-  TEAM_WD_ARGS+=(--entrypoint /bin/bash "$img" -c "$inner")
-  TEAM_WD_BOX="$box"
-  return 0
-}
-
-team_watch_run_cmd() { # 人类可读（--print 也用它）
-  team_watch_build_args
-  local a out="podman"
-  for a in "${TEAM_WD_ARGS[@]}"; do out="$out $(printf '%q' "$a")"; done
-  printf '%s\n' "$out"
-}
+# ---------------------------------------------------------------- watchdog：只有一个后端（tmux 窗口）
+# 由 PM（或人）用 `team watchdog up` 启动：同一个 tmux session 的 `watchdog` 窗口常驻跑
+# `team monitor`（上半屏团队状态，下半屏可选活动流），并按其内部节拍做定时巡检。
+# 为什么不做第二个后端（容器/systemd 等）：本 skill 的底线是**依赖越少越可靠**——
+# 少一个运行时、少一层 socket/权限/镜像问题，出问题时只有一个地方要查；
+# 看门狗的职责只是"定时看看有没有活儿、有待办就叫醒 PM"，它不需要跨 tmux server 存活
+# （tmux server 没了 PM 也没了，重建时一起起来即可，`team up` / `watchdog up` 都在）。
 
 # 统一的后端无关存活判定（ps / digest / doctor / watchdog status 都用它）
 # 输出 "tmux:<session>:<window>" | "fg:<pid>" | "container:<name>" | "off"
 team_watchdog_state() {
-  local backend="${TEAM_WATCH_BACKEND:-tmux}" w st
-  if [ "$backend" = "tmux" ]; then
-    w="$(team_watch_window)"
-    st="$(team_watch_window_state)"
-    case "$st" in
-      running) printf 'tmux:%s:%s\n' "$TEAM_SESSION" "$w"; return 0 ;;
-    esac
-  fi
-  if team_watch_pid_alive; then printf 'fg:%s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"; return 0; fi
-  if team_podman_ok; then
-    case "$(team_watch_container_state "$(team_watch_container_name)")" in
-      running) printf 'container:%s\n' "$(team_watch_container_name)"; return 0 ;;
-    esac
-  fi
-  # 后端与预期不符时，只要任一形态在跑就算在跑（避免误报“未创建”）
+  local w st
   w="$(team_watch_window)"
+  st="$(team_watch_window_state)"
+  case "$st" in
+    running) printf 'tmux:%s:%s\n' "$TEAM_SESSION" "$w"; return 0 ;;
+  esac
+  if team_watch_pid_alive; then printf 'fg:%s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"; return 0; fi
+  # 窗口在、但前台不是我们认识的面板命令（比如 pager/子进程）→ 只要 pane 忙就算在跑，避免误报
   if team_tmux_has_window "$TEAM_SESSION" "$w" && team_pane_busy "$TEAM_SESSION:$w"; then
     printf 'tmux:%s:%s\n' "$TEAM_SESSION" "$w"; return 0
   fi
@@ -532,7 +416,7 @@ team_watchdog_state_text() {
   case "$st" in
     tmux:*:*)    printf '● tmux 窗口 %s 在跑' "${st#tmux:}" ;;
     fg:*)        printf '● 前台 watchdog pid %s' "${st#fg:}" ;;
-    container:*) printf '● 容器 %s 在跑' "${st#container:}" ;;
+
     *)           printf '○ 未在跑（%s watchdog up）' "$TEAM_CLI" ;;
   esac
   return 0
@@ -550,7 +434,7 @@ team_watch_window_state() { # running:<cmd> | idle:<cmd> | absent
 }
 
 team_watch_tmux_up() {
-  team_require_cmd tmux "tmux 后端需要 tmux（容器后端：team watchdog up --container）"
+  team_require_cmd tmux "看门狗需要 tmux（它就跑在同 session 的窗口里）"
   team_tmux_ensure_session
   tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
   local w st; w="$(team_watch_window)"; st="$(team_watch_window_state)"
@@ -583,82 +467,31 @@ team_watch_tmux_logs() { # 打印面板最近若干行（pane 快照）
 }
 
 team_cmd_watchdog() {
-  local sub="status" print_only=0 no_build=0 cname st cmd
-  local backend="${TEAM_WATCH_BACKEND:-tmux}"
+  local sub="status" print_only=0
   while [ $# -gt 0 ]; do
     case "$1" in
       up|down|restart|status|logs) sub="$1"; shift ;;
-      --print) print_only=1; shift ;;
-      --no-build) no_build=1; shift ;;
-      --tmux) backend=tmux; shift ;;
-      --container) backend=container; shift ;;
+      --print) print_only=1; shift ;;     # 打印它会做什么（不执行）
+      --container) team_usage_die "watchdog: 容器后端已移除（v1.12.0）——看门狗就是同 session 的 watchdog 窗口；用 team watchdog up" ;;
       -*) team_usage_die "watchdog: 未知参数 $1" ;;
       *) team_usage_die "watchdog: 多余参数 $1" ;;
     esac
   done
   team_require_docs
 
-  if [ "$backend" = "tmux" ]; then
-    case "$sub" in
-      up)      team_watch_tmux_up ;;
-      down)    team_watch_tmux_down ;;
-      restart) team_watch_tmux_down >/dev/null 2>&1 || true; team_watch_tmux_up ;;
-      logs)    team_watch_tmux_logs ;;
-      status)  team_cmd_watchdog_status ;;
-    esac
-    return $?
+  if [ "$print_only" = "1" ]; then
+    printf 'tmux 窗口：%s:%s → bash %s/scripts/team monitor\n' "$TEAM_SESSION" "$(team_watch_window)" "$TEAM_SKILL_DIR"
+    printf '巡检周期：%ss（TEAM_WATCH_INTERVAL）\n' "${TEAM_WATCH_INTERVAL:-900}"
+    return 0
   fi
-
   case "$sub" in
-  up)
-    if [ "$print_only" = "1" ]; then
-      team_watch_run_cmd
-      return 0
-    fi
-    team_podman_ok || team_die "没有 podman：容器内需 distrobox-host-exec podman；裸机请装 podman"
-    cname="$(team_watch_container_name)"
-    st="$(team_watch_container_state "$cname")"
-    if [ "$st" = "running" ]; then team_ok "看门狗容器已在跑：$cname"; return 0; fi
-    [ "$no_build" = "1" ] || team_watch_ensure_image
-    if [ "$st" != "absent" ]; then
-      team_warn "已有同名的停止容器：删除并按当前配置重建（$cname）"
-      team_podman rm -f "$cname" >/dev/null 2>&1 || true
-    fi
-    cmd="$(team_watch_run_cmd)"
-    team_watch_build_args
-    if team_podman "${TEAM_WD_ARGS[@]}" >/dev/null 2>&1; then
-      sleep 1
-      st="$(team_watch_container_state "$cname")"
-      if [ "$st" = "running" ]; then
-        team_ok "看门狗容器已启动：$cname${TEAM_WD_BOX:+（守着 $TEAM_WD_BOX 里的 watch，每 ${TEAM_WATCH_INTERVAL:-900}s 一次）}（日志：$TEAM_CLI watchdog logs）"
-      else
-        team_err "容器没跑起来（状态 $st）：$TEAM_CLI watchdog logs 看原因"
-        return 1
-      fi
-    else
-      team_err "podman run 失败：podman $cmd"
-      return 1
-    fi
-    ;;
-  down)
-    team_podman_ok || team_die "没有 podman"
-    cname="$(team_watch_container_name)"
-    if team_podman rm -f "$cname" >/dev/null 2>&1; then team_ok "已停并删除看门狗容器：$cname"
-    else team_dim "没有在跑的看门狗容器（$cname）"; fi
-    ;;
-  restart)
-    team_cmd_watchdog down >/dev/null 2>&1 || true
-    team_cmd_watchdog up
-    ;;
-  logs)
-    team_podman_ok || team_die "没有 podman"
-    team_podman logs --tail 50 --follow "$(team_watch_container_name)"
-    ;;
-  status)
-    team_cmd_watchdog_status
-    ;;
+    up)      team_watch_tmux_up ;;
+    down)    team_watch_tmux_down ;;
+    restart) team_watch_tmux_down >/dev/null 2>&1 || true; team_watch_tmux_up ;;
+    logs)    team_watch_tmux_logs ;;
+    status)  team_cmd_watchdog_status ;;
   esac
-  return 0
+  return $?
 }
 
 # 兼容旧名字：install/uninstall-watchdog 现在是 watchdog up/down 的别名
@@ -667,72 +500,35 @@ team_cmd_uninstall_watchdog() { team_cmd_watchdog down "$@"; }
 
 team_cmd_watchdog_status() {
   team_hdr "pi-team watchdog · $TEAM_PROJECT"
-  local backend="${TEAM_WATCH_BACKEND:-tmux}" cname st img
-  if [ "$backend" = "tmux" ]; then
-    local w tst; w="$(team_watch_window)"; tst="$(team_watch_window_state)"
-    case "$tst" in
-      running) team_ok "  看门狗           tmux 窗口 $TEAM_SESSION:$w 在跑（--ui 面板）" ;;
-      idle)    team_warn "  看门狗           窗口 $w 停在空提示符 → $TEAM_CLI watchdog up" ;;
-      *)       team_dim "  看门狗           未起 → $TEAM_CLI watchdog up（也可 --container）" ;;
-    esac
-    printf '  后端             tmux（同 session 的窗口；容器后端：watchdog up --container）\n'
-    printf '  日志             %s watchdog logs ／ tmux attach -t %s\n' "$TEAM_CLI" "$TEAM_SESSION"
-  fi
-  cname="$(team_watch_container_name)"
-  st="$(team_watch_container_state "$cname")"
-  if [ "$backend" = "container" ]; then
-    case "$st" in
-      running)     team_ok "  容器             running（$cname）" ;;
-      absent)      team_dim "  容器             未创建 → $TEAM_CLI watchdog up" ;;
-      *)           team_warn "  容器             $st（$cname）→ $TEAM_CLI watchdog up" ;;
-    esac
-  fi
-  img="$(team_watch_image)"
-  printf '  镜像             %s%s\n' "$img" "$(team_podman_ok && echo '' || echo '（本机没 podman）')"
-  local box; box="$(team_watch_box_name || true)"
-  if [ -n "$box" ]; then
-    printf '  运行形态         容器守着（容器内 podman-remote exec %s 跑 watch）\n' "$box"
-  else
-    printf '  运行形态         容器内直跑（--pid=host，需镜像里的 tmux 与宿主协议兼容）\n'
-  fi
+  local w tst
+  w="$(team_watch_window)"; tst="$(team_watch_window_state)"
+  case "$tst" in
+    running) team_ok "  看门狗           tmux 窗口 $TEAM_SESSION:$w 在跑（--ui 面板）" ;;
+    idle)    team_warn "  看门狗           窗口 $w 停在空提示符 → $TEAM_CLI watchdog up" ;;
+    *)       team_dim "  看门狗           未起 → $TEAM_CLI watchdog up" ;;
+  esac
+  printf '  后端             tmux（同 session 的窗口 —— 只有一个后端，无容器依赖）\n'
+  printf '  日志             %s watchdog logs ／ tmux attach -t %s\n' "$TEAM_CLI" "$TEAM_SESSION"
   printf '  巡检周期         %ss（建议 300~3600；不是心跳保活，是定时看看有没有活儿）\n' "${TEAM_WATCH_INTERVAL:-900}"
   printf '  tmux 重建         %s\n' "$([ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ] && echo '允许（TEAM_WATCH_REBUILD_TMUX=1）' || echo '不接管（session/窗口没了只告警）')"
-  if team_in_standby; then
-    team_warn "  待命             on（PM 主动停工，原因：$(team_standby_reason || echo -)；$TEAM_CLI standby off 恢复）"
-  else
-    team_dim "  待命             off"
-  fi
-  local last="$TEAM_STATE_DIR/watchdog.last"
-  if [ -f "$last" ]; then
-    team_dim "  最近一次巡检     $(cat "$last" | awk '{print $2, $3}')"
-  else
-    team_dim "  最近一次巡检     从未"
-  fi
-  if [ -f "$TEAM_STATE_DIR/nudges.log" ]; then
-    team_dim "  最近一次提醒     $(tail -1 "$TEAM_STATE_DIR/nudges.log" | cut -d' ' -f1-2)"
-  else
-    team_dim "  最近一次提醒     无"
-  fi
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) team_ok "  PM              在运行（${pm#running:}）" ;;
     busy:*)    team_ok "  PM              窗口有进程在跑（${pm#busy:}，视为存活）" ;;
     idle:*)    team_warn "  PM              未在跑（空提示符）；有待办时看门狗会拉起它（$TEAM_CLI up 手动）" ;;
+    foreign:*) team_warn "  PM              窗口被**不属于本项目**的进程占用（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
     *)         team_warn "  PM              窗口缺失（有待办时：$TEAM_CLI up，或设 TEAM_WATCH_REBUILD_TMUX=1）" ;;
   esac
   local pend; pend="$(team_pending_text)"
   printf '  待办             %s\n' "${pend:-无（不叫醒 PM）}"
   printf '  %s\n' "$(team_capacity_line)"
   printf '\n  职责：定时看看有没有活儿 + 容量留痕；不管 tmux 布局、不管 agent（agent 归 PM 管）\n'
-  if [ "$st" = "running" ]; then
-    printf '\n  容器最近输出：\n'
-    team_podman logs --tail 5 "$cname" 2>/dev/null | sed 's/^/    /' || team_dim "    （无）"
+  if team_in_standby; then
+    printf '  待命             on（原因：%s）—— 不叫醒 PM；累积的待办仍记在 watchdog.log\n' "$(team_standby_reason || echo -)"
   fi
   return 0
 }
 
-# ---------------------------------------------------------------- team standby
-# PM（或用户）主动停工："确实没活可推" 或 "需要人工介入" 时调它，watchdog 就不再叫醒。
 team_cmd_standby() {
   local action="status" reason="-"
   while [ $# -gt 0 ]; do

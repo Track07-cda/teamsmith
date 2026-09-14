@@ -5,6 +5,36 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v1.12.0 · 2026-09-14
+
+**依赖收窄（BREAKING）+ PM 信条落盘 + 可选记忆依赖（magic-context）**
+
+### BREAKING
+- **看门狗只剩一个后端**：同 session 的 `watchdog` 窗口（`team watchdog up`）。
+  容器形态（podman/镜像/socket/`--container`/`TEAM_WATCH_*` 容器键）**整体删除**，`container/` 目录也删了。
+  `team watchdog up --container` 会明确拒绝并说明原因（不是静默忽略）。
+  理由（信条第 3 条"少管等于可靠"）：容器换来的那点"脱离 tmux 也能活"的存活能力，
+  要靠多一层运行时/权限/socket 去换；而 tmux server 没了 PM 也没了，`team up` 一起重建即可。
+- **skill 与 forge 完全解耦**：`team doctor` 不再探测 `gh`/`glab`/PAT/host（以前 `TEAM_VCS=github` 缺 `gh` 会 **fail**）；
+  派单提示词不再教已删的 `team pr`（**这就是一处真 drift**：v1.11 删了命令，提示词还在教）；
+  `TEAM_VCS` 降级为**纯措辞标签**；token 文件键保留但标注"仅供 PM 手动调用工具，skill 不读"。
+
+### 新增
+- **`references/philosophy.md`：PM 的信条（8 条）**——交付物必须能被独立验证 / 状态即承诺 / 少管等于可靠 /
+  失败是信息（假绿比没做更危险）/ 重复的问题必须变成机制 / 一切可交接 / 长期主义与预算意识 /
+  权威来自证据与授权。每条都带"推论"与"反面"。SKILL.md 与 protocol.md 都指向它（冲突时以信条为准），
+  `templates/pm-prompt.md.tmpl` 顶部加了 5 行 credo（PM 每次启动都会读到）。
+- **magic-context 作为"可选但推荐"依赖**（PM 长期会话的跨会话记忆）：`team doctor` 新增「PM 记忆（可选）」
+  三态检查（装了报版本 / 没装只警告 / `TEAM_REQUIRE_MAGIC_CONTEXT=1` 时失败）；
+  新键 `TEAM_PI_SETTINGS_FILE`（探测位置，测试用）；`templates/memory-seed.md.tmpl`（项目记忆种子：把跨任务规则写进项目记忆）；
+  PM 提示词加"开局先检索既有决策、收尾把跨任务规则记进项目记忆"两条；文档写清边界：**记忆是 PM 的快捷方式，证据仍以落盘文件为准**。
+- 环境要求收紧为四项硬依赖（bash ≥4 / git / tmux / pi），可选只剩 `timeout`、`lsof`（+ 推荐的 magic-context）。
+
+### 测试
+- smoke：336 断言全绿。新增：容器后端被明确拒绝、`up --print` 指明窗口与周期、
+  文档不得再把容器/forge CLI 当依赖、派单提示词不得出现 `team pr`、信条与记忆种子存在、
+  doctor 的 PM 记忆三态（用假 settings.json，不依赖真装）。
+
 ## v1.11.8 · 2026-09-14
 
 **强复验的假阴性（SIGPIPE）+ 门禁测试场地**

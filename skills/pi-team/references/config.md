@@ -56,18 +56,16 @@ notify 扩展（在 agent 进程内，**不 source 配置、不执行项目代�
 | 守护 | 默认 | 作用 |
 |---|---|---|
 | watchdog 只做“算待办 + 叫醒 PM”（有待办才叫）；agent 的启停/续跑是 PM 的活（`team resume`） |
+| `TEAM_REQUIRE_MAGIC_CONTEXT` | `0` | `1` = 把 magic-context（PM 记忆）当硬依赖：没装则 `team doctor` 失败 |
+| `TEAM_PI_SETTINGS_FILE` | `~/.pi/agent/settings.json` | 探测 Pi 扩展（magic-context）的位置；测试/多用户环境可覆盖 |
 | `TEAM_WATCH_INTERVAL` | `900` | 巡检周期（秒）：默认 15 分钟，建议 300~3600。这是“定时看看有没有活儿”的节拍，不是心跳 |
 | `TEAM_WATCH_NUDGE_GAP` | `900` | 同一批待办最快多久再提醒一次（秒） |
 | `TEAM_WATCH_REBUILD_TMUX` | `0` | `0`=不管 tmux（session/窗口没了只告警）；`1`=允许重建 session/PM 窗口（机器重启自恢复） |
 | `TEAM_WATCH_MAX_RESTARTS` | `5` | PM 每小时最多自动拉起次数（防崩溃循环） |
-| `TEAM_WATCH_BACKEND` | `tmux` | `tmux`（同 session 的窗口跑监视器）/ `container`（podman） |
 | `TEAM_WATCH_WINDOW` | `watchdog` | tmux 后端的窗口名 |
 | `TEAM_MONITOR_REFRESH` | `5` | 监视器刷新间隔（秒） |
 | `TEAM_MONITOR_ACTIVITY` | `0` | `1`=面板下方追加各 agent 会话活动流（只列本 session 在跑的窗口）；默认关 |
 | `TEAM_MONITOR_EVENTS` | `4` | 每个 agent 显示最近几条会话事件 |
-| `TEAM_WATCH_IMAGE` | 空 | 看门狗容器镜像；空 = `localhost/pi-team-watch:<Containerfile 哈希>`（改 Containerfile 自动重建） |
-| `TEAM_WATCH_BOX` | 空 | 目标开发容器名；空 = 自动（当前容器，从 `/run/.containerenv` 读） |
-| `TEAM_WATCH_RETRY_SEC` | `15` | 容器里内层 `watch` 退出后的重试间隔（秒） |
 
 | `TEAM_PM_MODEL` | 空 | PM 自己的模型，空 = `TEAM_DEFAULT_MODEL` |
 | `TEAM_PM_SESSION_ID` | 空 | 空 = `pi -c`（延续本目录上一个会话，保住 PM 历史） |

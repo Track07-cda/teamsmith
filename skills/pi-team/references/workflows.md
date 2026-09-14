@@ -24,7 +24,8 @@ bash <skill>/scripts/team doctor
 # 一条命令初始化（推荐）：bash <skill>/scripts/team bootstrap
 # github 模式：先建 issue（可选，但推荐：issue 是需求口径，任务书是执行口径）
 printf '# 骨架与质量门禁\n\n## DoD\n- ...\n' > /tmp/issue.md
-gh issue create --title "[T1.1] 骨架与质量门禁" --body-file /tmp/issue.md    # 直接用 gh（skill 不包装）
+# 用你们自己的方式建 issue：gh / curl 调 API / 网页（skill 不参与、不假设任何 forge）
+gh issue create --title "[T1.1] 骨架与质量门禁" --body-file /tmp/issue.md
 
 bash <skill>/scripts/team task T1.1 --title "骨架与质量门禁" --agent dev --issue 12
 $EDITOR docs/team/tasks/T1.1-*.md      # 写清背景/交付物/边界/验收命令
@@ -154,7 +155,7 @@ bash <skill>/scripts/team watch --once        # 跑一次巡检（等价于 watc
 | 方式 | 命令 | 能撑住 | 适合 |
 |---|---|---|---|
 | **tmux 窗口（默认）** | `team watchdog up` | PM 崩/睡；tmux server 活着的范围 | 日常：一个窗口既是看门狗又是**状态监视器** |
-| podman 容器 | `team watchdog up --container` | 看门狗自己崩、机器重启（`--restart=always`） | 想让看门狗独立于 tmux |
+| 看门狗窗口 | `team watchdog up` | tmux server / 窗口没了 | 只有这一个后端（无容器依赖） |
 | 手动 | `team up` / `team watch --once` | 你自己发现的时候 | 排障 |
 
 ```bash
@@ -164,7 +165,7 @@ bash <skill>/scripts/team watchdog status      # 窗口/周期/待命/待办/PM 
 bash <skill>/scripts/team watchdog down        # 关掉窗口
 bash <skill>/scripts/team monitor --once       # 手动看一屏（只服务当前 session 的状态）
 bash <skill>/scripts/team monitor --activity   # 需要时才追看各 agent 的会话活动流（默认关）
-bash <skill>/scripts/team watchdog up --container --print   # 容器形态长什么样（只打印命令）
+bash <skill>/scripts/team watchdog up --print                # 看它会起哪个窗口/什么周期（不执行）
 ```
 
 监视器只服务**当前 tmux session**：窗口在不在跑、任务是什么、待办与容量。
@@ -189,8 +190,8 @@ agent 活动
      16:07:03 🔧 read
 ```
 
-运行形态（`container/Containerfile` 顶部有说明）：容器里开发时，容器用 `podman-remote exec <你的开发容器>`
-驱动 `team watch` —— tmux/ps/pi 都在原环境里跑（版本一致、看得见 pane 进程），看门狗却活在容器里、与 PM 会话解耦。
+看门狗就是同 session 的 `watchdog` 窗口：跑 `team monitor`（状态面板）+ 按 `TEAM_WATCH_INTERVAL` 定时巡检。
+它与 PM 的**取值依赖**解耦（只看磁盘状态与 tmux pane），但不试图脱离 tmux——不再需要 podman/镜像/socket。
 
 每个 tick 三步：① 追一行容量趋势到 `state/capacity.log`；② 算待办（未读通知 / 待复验 / 看板 todo·wip / blocked /
 有任务但停了的 agent）；③ **有待办才叫醒**——PM 在跑就发一句 `[watchdog] 待办：…`（同一批待办按

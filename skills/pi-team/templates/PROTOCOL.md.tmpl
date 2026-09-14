@@ -38,12 +38,12 @@
   `{{DOCS_DIR}}/reviews/<ID>-verify.log`（已 gitignore）。
 - 任务书可以要求比项目门禁更严的验收命令；以任务书为准。
 
-## 初始化与看门狗（容器）
+## 初始化与看门狗
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team bootstrap     # 新项目一条命令：配置+文档骨架+worktree+看门狗容器
+bash {{SKILL_DIR}}/scripts/team bootstrap     # 新项目一条命令：配置+文档骨架+worktree+看门狗窗口
 bash {{SKILL_DIR}}/scripts/team watchdog up   # 默认：watchdog 窗口跑监视器 + 巡检（PM 负责配置）
-bash {{SKILL_DIR}}/scripts/team watchdog up --container   # 可选：podman 容器形态（与 tmux 解耦）
+bash {{SKILL_DIR}}/scripts/team watchdog up   # 起看门狗窗口（同 session；只有一个后端）
 ```
 
 ## 保活与定时巡检

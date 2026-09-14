@@ -10,7 +10,7 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
   ── 第一次使用 ─────────────────────────────────────────────
   bootstrap [--agents "dev verify"] [--print]   **推荐**：一条命令把项目初始化到可派单状态
                    （探测当前 tmux session/窗口 → 写配置 + 文档骨架 + AGENTS 段落 → 建 agent worktree
-                    → 起看门狗容器 → 打印下一步清单）；幂等，可反复跑
+                    → 起看门狗窗口 → 打印下一步清单）；幂等，可反复跑
   init            只做配置/文档骨架（bootstrap 的其中一步）
   doctor          环境自检（git/tmux/pi/门禁/forge/容量/容器）
 
@@ -36,9 +36,9 @@ pi-team — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 + 
   say <a> "<一句话>"           往 agent 窗口发消息
   notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口）
 
-  ── 定时巡检与看门狗容器（看门狗由 PM 配置和维护） ───────────
-  watchdog up|down|restart|status|logs [--container|--print]
-                 看门狗（默认 tmux 后端：同 session 的 watchdog 窗口跑 monitor；`--container` 用 podman 容器）
+  ── 定时巡检与看门狗（看门狗由 PM 配置和维护） ───────────────
+  watchdog up|down|restart|status|logs [--print]
+                 看门狗（同 session 的 watchdog 窗口跑 monitor + 定时巡检；只有一个后端，无容器依赖）
   watchdog-status               `watchdog status` 的旧名
   monitor [--once] [--interval N] [--events K]  状态监视器（watchdog 窗口跑的就是它）：
                  团队状态 + 每个 agent 的会话活动流；按周期顺带跑巡检
@@ -263,6 +263,20 @@ team_cmd_doctor() {
       fi
     else fail "缺 $ext"; fi
 
+  # PM 记忆（可选但推荐）：magic-context 是 Pi 侧扩展（npm 包），PM 靠它做跨会话记忆/检索。
+  # 这里只读 settings.json 的 packages 与包自身版本，不做任何安装/改动。
+  check "PM 记忆（可选）"
+  local mc_settings="$TEAM_PI_SETTINGS_FILE" mc_pkg mc_ver
+  if [ -f "$mc_settings" ] && grep -q 'pi-magic-context' "$mc_settings" 2>/dev/null; then
+    mc_pkg="$HOME/.pi/agent/npm/node_modules/@cortexkit/pi-magic-context/package.json"
+    mc_ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$mc_pkg" 2>/dev/null | head -1)"
+    pass "magic-context ${mc_ver:-?}（跨会话记忆可用：ctx_search / ctx_memory / ctx_note）"
+  elif [ "${TEAM_REQUIRE_MAGIC_CONTEXT:-0}" = "1" ]; then
+    fail "TEAM_REQUIRE_MAGIC_CONTEXT=1 但没检测到 magic-context（配置：$mc_settings）"
+  else
+    warn "未检测到 magic-context：PM 长会话只能靠 /compact + 落盘（不阻塞；装上更好，见 references/philosophy.md 第 6 条）"
+  fi
+
   check "容量 / swap 底线"; local avail swapfree swaptotal
     read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
     if [ -n "$avail" ] && [ "${avail:-0}" -gt 0 ] 2>/dev/null; then
@@ -285,22 +299,11 @@ team_cmd_doctor() {
       *)   pass "$(team_watchdog_state_text)" ;;
     esac
 
+  # forge：不探测、不假设（v1.12.0 起 skill 与 forge 完全解耦）
+  # PM 自己用 git / curl / gh / glab / 网页；这里只把项目登记的标签打出来，缺命令行工具不算问题。
   check "forge"; case "$TEAM_VCS" in
-      github)
-        if team_have_cmd gh; then
-          local pat="$TEAM_MAIN_ROOT/$TEAM_TOKEN_FILE"
-          if [ -f "$pat" ]; then
-            local mode; mode="$(stat -c '%a' "$pat" 2>/dev/null || stat -f '%Lp' "$pat" 2>/dev/null || echo '?')"
-            case "$mode" in 600|400) pass "gh + PAT（$TEAM_TOKEN_FILE, $mode）" ;; *) warn "PAT 文件权限 $mode（建议 600）" ;; esac
-          else warn "缺 $TEAM_TOKEN_FILE：gh 只能匿名（开 PR 会失败）"; fi
-        else fail "TEAM_VCS=github 但缺 gh"; fi ;;
-      gitlab)
-        if [ -n "$TEAM_GITLAB_HOST" ]; then
-          if [ -f "$TEAM_GITLAB_TOKEN_FILE" ]; then pass "curl API + $TEAM_GITLAB_TOKEN_FILE"
-          else warn "缺 token 文件 $TEAM_GITLAB_TOKEN_FILE"; fi
-        else warn "TEAM_VCS=gitlab 但未设置 TEAM_GITLAB_HOST"; fi ;;
-      local) pass "local（不依赖 forge；merge 在本地完成）" ;;
-      *) fail "TEAM_VCS 取值非法：$TEAM_VCS（local|github|gitlab）" ;;
+      local|"") pass "local（不依赖 forge；合并由 PM 用 git 完成）" ;;
+      *)        pass "$TEAM_VCS（仅登记：PM 自己用 git/curl/任意 CLI 调 forge，skill 不参与）" ;;
     esac
 
   check "保护分支"; if team_git rev-parse --verify -q "$TEAM_PROTECTED_BRANCH" >/dev/null; then

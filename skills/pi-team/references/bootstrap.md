@@ -23,37 +23,35 @@ bash <skill>/scripts/team bootstrap --print      # 只看计划，不动任何�
 | 团队协议 | 往 `AGENTS.md` 注入 `<!-- pi-team:begin --> … end -->` 段落（**刷新**而非重复追加） | ✔ |
 | `.gitignore` | `.pi/team/state/`、`docs/team/inbox/`、`docs/team/reviews/*.log`、`.worktrees/` | ✔ |
 | agent worktree | 每个名册成员一个长期 `.worktrees/<agent>`（分支 `agent/<agent>`），有 `TEAM_INSTALL_CMD` 时顺手装依赖 | 已存在则跳过 |
-| 看门狗 | `team watchdog up`：podman 容器常驻（默认每 15 分钟巡检一次） | 已在跑则跳过 |
+| 看门狗 | `team watchdog up`：同 session 的 `watchdog` 窗口跑监视器（默认每 15 分钟巡检一次） | 已在跑则跳过 |
 | 清单 | 打印「下一步」（ROADMAP/OWNERSHIP → 第一个任务 → 派单 → digest） | — |
 
 ## 之后 PM 的动作
 
 ```bash
-team watchdog status            # 看门狗容器 / 巡检周期 / 待办 / PM 存活 / 容量
+team watchdog status            # 看门狗窗口 / 巡检周期 / 待办 / PM 存活 / 容量
 team task T1.1 --title "…" --agent dev
 team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 team digest                     # 待办：通知 + 待复验 + 看板
 ```
 
-## 看门狗是容器，且由 PM 配置
+## 看门狗是窗口，且由 PM 配置
 
-- `team watchdog up|down|restart|status|logs`（默认 tmux 后端；容器：加 `--container`）。
+- `team watchdog up|down|restart|status|logs`（**只有一个后端**：同 session 的 `watchdog` 窗口）。
 - **默认（tmux）**：在同一个 session 起 `watchdog` 窗口跑 `team monitor` ——
   上半屏是团队状态（PM/待办/容量/待命），下半屏是每个 agent 的 Pi 会话活动流（谁在干什么、空闲多久、最近事件），
   同时按 `TEAM_WATCH_INTERVAL` 做巡检。`team watchdog logs` 看画面快照。
-- 两种运行形态（容器后端，见 `container/Containerfile` 顶部注释）：
-  - **容器里开发（推荐）**：看门狗容器用 `podman-remote exec <你的开发容器> …watch` 驱动 ——
-    `tmux`/`ps`/`pi` 都在原环境里跑（版本一致、看得见 pane 进程），看门狗却活在容器里、与 PM 会话解耦。
-  - **裸机**：直接在容器里跑 `watch`（`--pid=host`，需要镜像里的 tmux 与宿主协议兼容）。
-- 容器带 `--restart=always`：看门狗自己崩了/机器重启后由 podman 拉起；它再把 PM 拉起来。
+- 为什么只有一个后端（v1.12.0 起不再有 podman/容器/systemd 形态）：**依赖越少越可靠**——
+  少一个运行时、少一层 socket/权限/镜像问题，出事时只有一个地方要查。看门狗不需要跨 tmux server 存活：
+  server 没了 PM 也没了，重建时 `team up` / `team watchdog up` 一起起来就行。
+- 看门狗自己也挂了怎么办：`team watchdog status` 会发现它不在；`team watchdog up` 重建窗口。没人会自动重启它（这也是"少管"的代价，换来的是零额外运行时）。
 - 改巡检周期：改 `.pi/team/config.sh` 的 `TEAM_WATCH_INTERVAL` 后 `team watchdog restart`。
-- 改 `container/Containerfile` 会在下次 `up` 时自动重建镜像（tag = Containerfile 内容哈希）。
+- 别再引入第二个后端（容器/systemd）：换来的那点存活能力，要靠多一层运行时/权限/socket 去换，不值。
 
 ## 常见问题
 
 | 现象 | 处理 |
 |---|---|
 | `容器未创建` | `team watchdog up`（首次会构建镜像，需要网络拉基础镜像 alpine） |
-| `podman: command not found` | 容器里用 `distrobox-host-exec podman`（skill 会自动这么做）；裸机装 podman |
-| 容器在跑但没有巡检 | `team watchdog logs`；常见是 podman socket 挂载失败（看 `CONTAINER_HOST`） |
+| 窗口在但没巡检 | `team watchdog logs` 看面板输出；`team watch --once` 手动跑一拍定位 |
 | 想彻底停掉 | `team watchdog down`（再 `team standby on` 可让 PM 不再被叫醒） |

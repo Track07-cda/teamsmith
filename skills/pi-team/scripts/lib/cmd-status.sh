@@ -253,7 +253,7 @@ team_panel() {
   line="$(printf '%.0s─' $(seq 1 $W))"
   printf '%spi-team watchdog · %s%s  %s\n' "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)"
   printf '%s\n' "$line"
-  printf '  %-9s %ss（待办才叫醒 PM）｜ 后端 %s\n' "巡检" "${TEAM_WATCH_INTERVAL:-900}" "${TEAM_WATCH_BACKEND:-tmux}"
+  printf '  %-9s %ss（待办才叫醒 PM；看门狗 = 同 session 的 watchdog 窗口）\n' "巡检" "${TEAM_WATCH_INTERVAL:-900}"
   if team_in_standby; then
     printf '  %-9s %son%s（原因：%s → %s standby off）\n' "待命" "$C_YEL" "$C_RESET" "$(team_standby_reason || echo -)" "$TEAM_CLI"
   else

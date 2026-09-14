@@ -1,0 +1,42 @@
+# {{PROJECT}} · PM 项目记忆种子（可选）
+
+> 用途：**PM 是长期会话**，每次被 watchdog 拉起或换会话，都要重新"认识"这个项目。
+> 装了 magic-context（`@cortexkit/pi-magic-context`）时，把下面这些**跨任务都成立**的事实
+> 写进项目记忆（`ctx_memory`），之后每个 PM 会话开局就自动带上，不必重新解释。
+> 没装也能用：把这份文件当开场清单读一遍即可（`team doctor` 会提示装没装）。
+
+## 建议写进项目记忆的条目（逐条都是"一句独立事实"）
+
+### 项目事实（每条都要能被验证）
+- 项目：{{PROJECT}}；主工作树 `{{MAIN_ROOT}}`；团队文档 `{{DOCS_DIR}}`。
+- tmux session/窗口：`{{SESSION}}:{{PM_WINDOW}}`（PM）、agent 窗口按名册；看门狗窗口 `watchdog`。
+- 名册：{{AGENTS}}；门禁命令：`{{GATES}}`。
+- 保护分支 `{{PROTECTED_BRANCH}}` 只有 PM 能推进；agent 一任务一分支 `task/<ID>-<slug>`。
+- 分支模型：`{{BRANCH_MODE}}`；agent worktree：`{{WORKTREES_DIR}}/<agent>`（**不要移动**：Pi 会话按 cwd 归属）。
+
+### 工作规则（这套 skill 的信条，跨项目通用）
+- 交付物必须能被独立验证：agent 的报告是主张，PM 在独立 checkout 上跑门禁才是证据。
+- 状态即承诺：`done` 只在代码真的进了保护分支并推上去之后写；失败时保持旧状态。
+- 少管等于可靠：skill 不包装 git/forge，PM 不写实现；看门狗只负责"叫醒"。
+- 失败是信息：假绿比没做更危险；门禁必须有硬超时；跳过要显式声明。
+- 重复的问题必须变成机制：事故 → 守卫/断言/规范，而不是"下次注意"。
+- 一切可交接：落盘 > 记忆；决策写理由与影响。
+
+### 本项目特有的坑（用过就补到这里）
+- <例：`TEAM_GATES` 里的 e2e 需要先 `pnpm build`，否则门禁红>
+- <例：某个测试有 5% flake，复验时先重跑一次再判定>
+- <例：门禁必须带 `timeout`，否则一次挂死 85 分钟>
+
+## 怎么用（PM 的两个时点）
+
+```bash
+# 开局（被拉起/新会话）：
+#   1) 在 Pi 里用记忆工具检索："项目 <名> 的约束/上次进展/被否决的方案"；没有记忆工具就看 DECISIONS.md + ROADMAP 遗留项
+#   2) team digest + team inbox --ack
+# 收尾（任务交付/决策产生时）：
+#   1) 结论与本轮证据落盘（报告 / reviews / BOARD / DECISIONS）
+#   2) 跨任务仍成立的新事实 → 写进项目记忆；"以后要做" → note 或 ROADMAP 遗留项
+```
+
+> 边界：**项目记忆是 PM 的快捷记忆，不是证据**。别人（没装 magic-context 的人/别的工具）
+> 只认 `{{DOCS_DIR}}/**` 里的文件与 commit —— 所以两者都要写。
