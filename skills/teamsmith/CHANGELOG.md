@@ -24,6 +24,23 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.16.0 · 2026-09-14
+
+**安全加固：worker 摘要不再是 shell 代码（V3.0 对抗性复核的 F1–F8）+ monitor 内存/显示安全（F2/F3）**
+
+- **BREAKING（行为）**：通知通道改为**数据通道**——`{summary_file}` 占位符（teamsmith 生成、`%q` 引用）
+  与 `team notify <agent> --from-file <path>`；渲染出的提示词里**不再有 worker 可替换的摘要槽位**
+  （旧写法让 worker 把摘要写进双引号里，摘要里的 `$(...)`/反引号/引号破出会**真的执行**）。
+  旧配置的 `{summary}` 仍可用，但文档与示例默认给出安全写法。
+- 模板校验变严：畸形占位符（`{ cwd }` / `{cwd }` / `{{cwd}}` / 未闭合）、纯空白模板、多行模板
+  一律**让派单失败**（多行模板此前会把第二行当命令执行）。
+- 提示词不再说谎：只有配了 `TEAM_AGENT_CMD` 才提"非 Pi 无自动通知"；notify 模板不可用时不再给 worker 一条空命令。
+- monitor（F2/F3）：日志只读**尾窗**（默认 64KiB、硬上限 1MiB，`TEAM_AGENT_LOG_TAIL_BYTES`），
+  只认普通文件（FIFO/设备不再可能挂死看门狗），读不到就 `available:false` + 原因；
+  渲染前剥掉 OSC/CSI/C0·C1/双向控制字符（此前会把窗口标题、清屏、剪贴板序列喷进 PM 终端）。
+- 实测数字：256MB 日志 **584MB → 59.7MB RSS**；64MB 堆上限下 **exit 134 → exit 0**；敌意日志 ESC 字节 **6 → 0**。
+- 门禁：smoke 425 断言全绿；新增 M3.2/M3.3 两个 PM 可复跑的独立验证包（`docs/team/reports/M3.{2,3}-*/pkg/run.sh`）。
+
 ## v1.15.0 · 2026-09-14
 
 **agent adapter：worker 可以是任意 TUI agent（Pi 仍是默认）**
