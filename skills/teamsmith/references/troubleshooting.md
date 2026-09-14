@@ -101,8 +101,11 @@ What to do:
 - usual causes: the binary, provider or model is unavailable, the old session is wedged (`--fresh`), the machine is
   out of memory or disk;
 - with a custom `TEAM_PI_BIN`: make sure it is an absolute path and executable from the pane;
-- if the launch proof arrives but the agent has **already exited** (the dispatch prints a warning and `roster` shows
-  "pi exited"), that is the honest `pi exited` state: `team resume --agent <a>` continues the task.
+- if the launch proof arrives but the agent has **already exited** (the dispatch prints a warning carrying the
+  agent's exit code, and `roster` shows "pi exited"), that is the honest `pi exited` state: `team resume --agent <a>`
+  continues the task. That exit code is written by the window harness itself when the agent process returns, so the
+  warning does not depend on how long the pane takes to come back to a shell (and `TEAM_DISPATCH_ALIVE_SEC` is the
+  time the dispatch waits for that record, not a sleep before a single look at the pane).
 
 ### 4c. `digest` says a report is "not committed yet"
 
@@ -222,7 +225,7 @@ the agent to commit it, and the normal "awaiting review" line plus the review co
   resumes with `team resume`; a human can also do `team up --agents` to bring them along in one go.
 - **The PM was starting and the watchdog stayed quiet**: that is deliberate (M7.2). Between `respawn-pane` and the
   start's evidence, the PM pane is a shell running the start command, not a PM. `state/pm.pid.starting` marks that
-  attempt and every surface reports `starting:<age>`; a tick that sees it logs "PM 正在启动 → 不重复拉起" and neither
+  attempt and every surface reports `starting:<age>`; a tick that sees it logs `PM 正在启动 → 不重复拉起` and neither
   starts a second PM nor counts a restart (a second `respawn-pane` would kill the PM that was coming up, and the
   quota would count one start twice). If the window stays in `starting` for longer than `TEAM_PM_START_WAIT + 5s` the
   marker has expired — run `team up` again; `team watchdog-status` names the evidence (`pm.pid.starting` age and

@@ -309,6 +309,33 @@ team_guard_resume_session() { # <agent> <model> <sid> <worktree> <fresh> <allow-
 # 窗口都不会产生它（F30 的 spawn 证据同源）。
 team_dispatch_spawn_file() { printf '%s\n' "$TEAM_STATE_DIR/dispatch-$1.spawn"; }
 
+# 退出证据：窗口 harness 在 agent 进程返回后立刻把 "<本轮 nonce> <退出码>" 写进这个文件。
+# 为什么需要它（M7.5 的 flake）：旧实现是「睡 ALIVE_SEC 后**采样一次** team_pane_busy」——
+# 那是一个瞬时判断，而 agent 退出后窗口要经过一段**非确定性的 shell 回退过程**
+# （本容器实测：bash -lc → 交互 bash 读 ~/.bashrc → `exec /usr/bin/zsh -l` → 登录 zsh 启动
+#  churn：conda hook / 前台子进程换进程组），期间 pane_current_command 与前台进程组来回变；
+# 采样点落进那一段就会把「已经退出」误报成「还在跑」→ 通知整条消失（同一提交 904/2 与 906/0
+# 交替出现）。退出码由 agent 的**父 shell** 亲手写下，是事件而不是采样：与 shell 启动快慢无关。
+team_dispatch_exit_file() { printf '%s\n' "$TEAM_STATE_DIR/dispatch-$1.exit"; }
+
+# 等退出证据。成功 → stdout 打印退出码；窗口里还没退出（或本轮没写）→ 非 0。
+team_wait_agent_exit() { # <agent> <nonce> [秒]
+  local agent="$1" nonce="$2" wait="${3:-${TEAM_DISPATCH_ALIVE_SEC:-1}}" steps got code i=0
+  case "$wait" in ''|*[!0-9]*) wait=1 ;; esac
+  [ "$wait" -gt 0 ] || return 1
+  steps=$((wait * 20)); [ "$steps" -gt 0 ] || steps=20
+  while [ "$i" -lt "$steps" ]; do
+    [ "$i" -gt 0 ] && sleep 0.05
+    got="$(head -1 "$(team_dispatch_exit_file "$agent")" 2>/dev/null || true)"
+    case "$got" in
+      "$nonce "*) code="${got#* }"
+        case "$code" in ''|*[!0-9]*) : ;; *) printf '%s\n' "$code"; return 0 ;; esac ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # 等启动证据。成功 → stdout 打印 pane shell 的 pid；失败 → 非 0。
 team_wait_launch_proof() { # <agent> <nonce> [秒]
   local agent="$1" nonce="$2" wait="${3:-${TEAM_DISPATCH_VERIFY_SEC:-8}}" steps got pid i=0
@@ -435,8 +462,9 @@ team_cmd_dispatch() {
   team_tmux_ensure_session
   # 启动 + 校验（M4.3 B）：最多两次（第一次没证据 → 杀窗口重试一次）。
   # 只有拿到**本轮 nonce** 的启动证据才算「发出去了」；失败则如实报告并杀掉窗口（不留半启动现场）。
-  local marker nonce inner pid="" attempt=0 exited=""
+  local marker exitfile nonce inner pid="" attempt=0 exit_code="" observed=0
   marker="$(team_dispatch_spawn_file "$agent")"
+  exitfile="$(team_dispatch_exit_file "$agent")"
   mkdir -p "$TEAM_STATE_DIR"
   while [ "$attempt" -lt 2 ] && [ -z "$pid" ]; do
     attempt=$((attempt + 1))
@@ -448,11 +476,13 @@ team_cmd_dispatch() {
     fi
     # 每轮换 nonce：证据必须来自这一轮的启动（上一轮留在盘上的不算数）
     nonce="$(date +%s)-$$-$RANDOM-$attempt"
-    rm -f "$marker"
+    rm -f "$marker" "$exitfile"
     # 命令里写死绝对路径 + 短暂等待（窗口 shell 可能刚起、PATH/rc 还没就绪）；
     # 拿到可执行文件后先写下 (nonce, pid)，再跑 agent —— 这一行就是「harness 真的执行了」的证据。
-    inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s; exec bash' \
-      "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd")"
+    # agent 返回后**立刻**把 (nonce, $?) 写进退出证据文件，然后才 exec 回 shell：
+    # 证据属于「agent 退了」这个事件（M7.5），不依赖窗口回 shell 的快慢。
+    inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s\nprintf "%%s %%s\\n" %s "$?" > %q\nexec bash' \
+      "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd" "$(printf '%q' "$nonce")" "$exitfile")"
     tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
     pid="$(team_wait_launch_proof "$agent" "$nonce" 2>/dev/null || true)"
     # 额外观察（不复报成功就完事）：启动证据拿到后，agent 可能立刻退出（可执行文件/模型/provider 起不来）。
@@ -461,12 +491,14 @@ team_cmd_dispatch() {
     if [ -n "$pid" ] && [ -z "${TEAM_AGENT_CMD:-}" ]; then
       local alive_sec="${TEAM_DISPATCH_ALIVE_SEC:-1}"
       case "$alive_sec" in ''|*[!0-9]*) alive_sec=1 ;; esac
-      [ "$alive_sec" -gt 0 ] && sleep "$alive_sec"
-      team_pane_busy "$TEAM_SESSION:$agent" || exited="1"
+      # 等的是「agent 进程返回」这条事件（上一条证据行），不是「看一眼 pane 忙不忙」的采样；
+      # ALIVE_SEC 现在= 最多等它多久（0 = 不等，直接按「还在跑」报）。
+      [ "$alive_sec" -gt 0 ] && exit_code="$(team_wait_agent_exit "$agent" "$nonce" "$alive_sec" 2>/dev/null || true)"
+      observed=1
     fi
   done
   if [ -z "$pid" ]; then
-    team_err "派单已发出但未能确认启动：$([ -n "$exited" ] && printf '%s' "$exited" || printf '%s s 内没等到窗口里的启动证据（%s 里没有本轮 nonce）' "${TEAM_DISPATCH_VERIFY_SEC:-8}" "$marker")"
+    team_err "派单已发出但未能确认启动：${TEAM_DISPATCH_VERIFY_SEC:-8} s 内没等到窗口里的启动证据（$marker 里没有本轮 nonce）"
     # 终态必须已知且是真的：把残留窗口真的杀掉（不是只在文案里说「已杀掉」——
     # 「状态即承诺」同样适用于失败路径）。
     if team_agent_window_exists "$agent"; then
@@ -491,8 +523,16 @@ team_cmd_dispatch() {
   team_board_set "$id" wip 2>/dev/null || true
 
   team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；provider=$provider model=${model##*/} session=$sid）"
-  # 观察结论也要说出来（不是只报“成功”）：内建的 Pi 路径若秒退，PM 至少要看到「窗口在但 pi 已退出」。
-  [ -n "$exited" ] && team_warn "但窗口里的 agent 已经退出（回到 shell）：$TEAM_CLI roster 会显示「$(team_agent_cli_name) 已退出」（续跑：$TEAM_CLI resume --agent $agent）"
+  # 观察结论也要说出来（不是只报“成功”）：内建 Pi 路径下，agent 是「已经退出」还是「还在跑」，
+  # PM 都要拿到**观察到的事实**（退出码来自窗口 harness 写下的事件证据，不是猜的；也不再假设
+  # 「窗口一定已经回到 shell」——那正是 M7.5 里被环境 churn 打脸的那句话）。
+  if [ "$observed" = "1" ]; then
+    if [ -n "$exit_code" ]; then
+      team_warn "但窗口里的 agent 已经退出（exit code $exit_code）：$TEAM_CLI roster 会显示「$(team_agent_cli_name) 已退出」（续跑：$TEAM_CLI resume --agent $agent）"
+    else
+      team_dim "  窗口里的 agent 还在跑（${TEAM_DISPATCH_ALIVE_SEC:-1}s 内没等到退出证据）"
+    fi
+  fi
   team_dim "  旁观：tmux attach -t $TEAM_SESSION ｜ 追问：$TEAM_CLI say $agent \"...\""
 }
 

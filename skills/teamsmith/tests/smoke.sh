@@ -498,7 +498,12 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   chmod +x "$FAKE/pi-sleep"
   printf '\nTEAM_PI_BIN="%s"\n' "$FAKE/pi-sleep" >> "$REPO/.pi/team/config.sh"
   $TEAM dispatch dev T1.1 "$TASKFILE" >"$TMP/dispatch.log" 2>&1 || bad "dispatch 失败"
-  sleep 2.5
+  # M7.5：不再固定 sleep 2.5 赌假 pi 起没起来（那是在赌机器速度）—— 有界轮询它的参数日志
+  # （最多 10s）；超时后面的断言照样报红，只是失败信息里已经有足够现场。
+  S6_WAIT=0
+  while [ "$S6_WAIT" -lt 100 ] && [ ! -s "$TMP/pi-args.log" ]; do sleep 0.1; S6_WAIT=$((S6_WAIT + 1)); done
+  [ "$S6_WAIT" -ge 100 ] && printf '    现场（有界轮询 10s 内没等到假 pi 的参数日志）：窗口=[%s] dispatch 尾=[%s]\n' \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr '\n' ',')" "$(tail -2 "$TMP/dispatch.log" 2>/dev/null | tr '\n' '|')"
   if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx dev; then ok "tmux 窗口 $SESSION:dev 已创建"; else bad "tmux 窗口未创建"; fi
   assert_file "$TMP/pi-args.log" "假 pi 被拉起（记录了参数）"
   assert_has "$TMP/pi-args.log" "-e" "pi 收到 -e（扩展）"
@@ -1146,6 +1151,24 @@ assert_eq "B1：残留窗口被显式 kill-window（失败路径也是真做，�
 assert_eq "B1：失败后的窗口终态 = 不存在" "$(env PATH="$TMP/m43-wedge:$PATH" tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr -d ' \n')" ""
 while IFS= read -r m43_wp; do case "$m43_wp" in ''|*[!0-9]*) ;; *) kill "$m43_wp" 2>/dev/null || true ;; esac; done < "$TMP/m43-wedge-pids.log"
 
+# M7.5：退出通知的证据链是**事件**（窗口 harness 在 agent 返回后写下的 (nonce, 退出码)），
+# 不是「睡一会儿再看一眼 pane 忙不忙」的采样 —— 采样点会落进「窗口回 shell」那段非确定性过程
+# （本容器：交互 bash 读 ~/.bashrc → exec zsh -l → 登录 zsh 启动 churn），把已经退出的 agent
+# 谎报成还在跑（同一提交 904/2 与 906/0 交替）。下面先做纯逻辑部分（快模式照跑）：
+#   nonce 对不上（上一轮/上一个 agent 留的旧记录）→ 不算证据；本轮 nonce → 返回真实退出码。
+m75_exit_probe() { # <在夹具仓库里执行的一小段（已加载配置）>
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$1" )
+}
+mkdir -p "$REPO/.pi/team/state"
+printf 'stale-nonce 3\n' > "$REPO/.pi/team/state/dispatch-dev.exit"
+assert_eq "M7.5 B4a：旧 nonce 的退出记录不算本轮证据（不谎报已退出）" \
+  "$(m75_exit_probe 'team_wait_agent_exit dev fresh-nonce 1 >/dev/null && echo matched || echo none')" "none"
+printf 'fresh-nonce 7\n' > "$REPO/.pi/team/state/dispatch-dev.exit"
+assert_eq "M7.5 B4a：本轮 nonce → 报出真实退出码" \
+  "$(m75_exit_probe 'team_wait_agent_exit dev fresh-nonce 1')" "7"
+rm -f "$REPO/.pi/team/state/dispatch-dev.exit"
+
 # B2（真窗口 + 真启动证据）：只在有 tmux 时跑
 if [ "$FAST" = "1" ]; then
   fast_skip "6h·派单启动证据（真窗口）" "要真实 tmux 窗口 + 假 pi 进程（现场看窗口 harness 写下的证据）"
@@ -1160,6 +1183,9 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/m43-b2.log" "含启动校验" "B2：成功报告写明含启动校验"
   assert_match "$TMP/m43-b2.log" "proof=spawn pid=[0-9]+" "B2：成功报告带非空启动证据"
   assert_file "$REPO/.pi/team/state/dispatch-dev.spawn" "B2：启动证据落盘（state/dispatch-dev.spawn）"
+  # M7.5：反方向也要守 —— 还在跑的 agent 不能被说成「已经退出」（否则通知只是噪声）
+  assert_not "$TMP/m43-b2.log" "已经退出" "B2：还在跑的 agent 不会被误报成已退出"
+  assert_has "$TMP/m43-b2.log" "还在跑" "B2：观察结论明说 agent 还在跑（沉默不是结论）"
   # B3：agent 秒退（内置 Pi 路径）→ 启动证据仍成立（harness 跑了），所以不谎报失败；
   # 但必须明确说出来「窗口里的 agent 已经退出」，否则 PM 会以为它在干活。
   printf '#!/usr/bin/env bash\nexit 3\n' > "$FAKE/pi-m43-dead"
@@ -1172,6 +1198,44 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/m43-b3.log" "已经退出" "B3：agent 秒退被明确说出来（不假装一切正常）"
   assert_has "$TMP/m43-b3.log" "resume" "B3：给出续跑办法"
   assert_has "$REPO/.pi/team/state/dev.env" "task=T1.1" "B3：派单成立时仍写下任务记录（否则 PM 无法续跑）"
+  # M7.5：通知里的退出码 + 证据文件必须来自**本轮窗口 harness**（nonce 与启动证据同源）。
+  assert_file "$REPO/.pi/team/state/dispatch-dev.exit" "B3：退出证据落盘（state/dispatch-dev.exit）"
+  assert_has "$TMP/m43-b3.log" "exit code 3" "B3：通知报出的是真实退出码（不是「大概退了」）"
+  assert_eq "B3：退出证据与本轮启动证据同一个 nonce（同一轮，不是上一轮留的）" \
+    "$(cut -d' ' -f1 "$REPO/.pi/team/state/dispatch-dev.exit" 2>/dev/null | tr -d ' ')" \
+    "$(cut -d' ' -f1 "$REPO/.pi/team/state/dispatch-dev.spawn" 2>/dev/null | tr -d ' ')"
+  assert_eq "B3：退出证据里的码来自 agent 自己的退出状态" \
+    "$(cut -d' ' -f2 "$REPO/.pi/team/state/dispatch-dev.exit" 2>/dev/null | tr -d ' ')" "3"
+  # 措辞守门：不得再声称「窗口已经回到 shell」—— 这不是我们在那一刻观察到的事实（M7.5 的教训）
+  assert_not "$TMP/m43-b3.log" "回到 shell" "B3：不再声称「窗口已回到 shell」（未观察到的状态不许写进结论）"
+  # M7.5 B4：同一场景重复 5 次 —— 「已经退出 + 退出码 + 续跑办法」必须是每次都拿到的结论，
+  # 不能靠「睡一会儿再采样一次」撞运气（旧实现正是那样，现场 904/2 与 906/0 交替）。
+  printf '#!/usr/bin/env bash\nexit 7\n' > "$FAKE/pi-m43-exit7"
+  chmod +x "$FAKE/pi-m43-exit7"
+  B4_ROUND=1
+  while [ "$B4_ROUND" -le 5 ]; do
+    # 先清掉证据：「文件写进来了」才能证明是本轮窗口 harness 写的（不是上一轮留的）
+    rm -f "$REPO/.pi/team/state/dispatch-dev.exit"
+    env TEAM_PI_BIN="$FAKE/pi-m43-exit7" TEAM_PI_AGENT_DIR="$M43_AGENT_DIR" TEAM_DISPATCH_VERIFY_SEC=4 TEAM_DISPATCH_ALIVE_SEC=1 \
+      $TEAM dispatch dev T1.1 "$TASKFILE" --fresh >"$TMP/m43-b4-$B4_ROUND.log" 2>&1 || true
+    # 有界轮询（不固定 sleep）：等 dispatch 把该写的写完（一条同步命令，这里确认落盘）
+    B4_WAIT=0
+    while [ "$B4_WAIT" -lt 40 ] && ! grep -qF "exit code 7" "$TMP/m43-b4-$B4_ROUND.log"; do sleep 0.05; B4_WAIT=$((B4_WAIT + 1)); done
+    if grep -qF "exit code 7" "$TMP/m43-b4-$B4_ROUND.log" && grep -qF "resume" "$TMP/m43-b4-$B4_ROUND.log" \
+       && grep -qE '^[^ ]+ 7$' "$REPO/.pi/team/state/dispatch-dev.exit" 2>/dev/null; then
+      ok "M7.5 B4：第 $B4_ROUND/5 次秒退仍报出退出码 7 + 续跑办法（事件证据，不靠采样）"
+    else
+      # 失败诊断：有界轮询窗口回到 shell（最多 2s），把**最终观察到的**现场写进失败信息
+      B4_PANE=""; B4_WAIT=0
+      while [ "$B4_WAIT" -lt 40 ]; do
+        B4_PANE="$(tmux display-message -p -t "$SESSION:dev" '#{pane_id} #{pane_pid} #{pane_current_command}' 2>/dev/null | tr -d '\n')"
+        case "${B4_PANE##* }" in bash|zsh|sh|fish|dash|ash|ksh) break ;; esac
+        sleep 0.05; B4_WAIT=$((B4_WAIT + 1))
+      done
+      bad "M7.5 B4：第 $B4_ROUND/5 次秒退没报出来（观察到的现场：pane=[${B4_PANE:-none}]（等了 $((B4_WAIT * 50))ms 等它回 shell） exit-record=[$(head -1 "$REPO/.pi/team/state/dispatch-dev.exit" 2>/dev/null || printf missing)] 日志尾=$(tail -3 "$TMP/m43-b4-$B4_ROUND.log" 2>/dev/null | tr '\n' '|')）"
+    fi
+    B4_ROUND=$((B4_ROUND + 1))
+  done
   # 恢复现场：让后面的段落看到的 dev 窗口和改造前一样（活着的假 pi）
   sed -i 's|^TEAM_PI_BIN=.*|TEAM_PI_BIN="'"$FAKE/pi-sleep"'"|' "$REPO/.pi/team/config.sh"
   env TEAM_PI_AGENT_DIR="$TMP/piagent-empty" $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1 \
@@ -2125,11 +2189,20 @@ if [ "$FAST" = "1" ]; then
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi\"|" "$REPO/.pi/team/config.sh"
-  # 让 dev 处於“有任务但 pi 已退出”的状态
+  # 让 dev 处于“有任务但 pi 已退出”的状态
   $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1
-  sleep 1.5
+  # M7.5：不再固定 sleep 1.5 赌 roster 已经看准 —— agent 退出后「窗口回 shell」不是瞬时事件
+  # （本容器：交互 bash → ~/.bashrc 的 exec /usr/bin/zsh -l → 登录 zsh 启动 churn），
+  # 而 roster 的存活判定是采样式的。有界轮询 roster 本身（最多 5s），超时就把最后看到的现场打出来。
+  R_WAIT=0
+  R_T0="$(date +%s)"
+  while [ "$R_WAIT" -lt 20 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
+  [ "$R_WAIT" -ge 20 ] && printf '    现场（有界轮询 %ss 内 roster 没看到「pi 已退出」）：窗口=[%s] pane=[%s]\n' \
+    "$(( $(date +%s) - R_T0 ))" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr '\n' ',')" \
+    "$(tmux display-message -p -t "$SESSION:dev" '#{pane_current_command}' 2>/dev/null)"
   $TEAM roster >"$TMP/roster-dead.log" 2>&1
-  assert_has "$TMP/roster-dead.log" "pi 已退出" "roster 能区分「窗口在但 pi 已退出」"
+  assert_has "$TMP/roster-dead.log" "pi 已退出" "roster 能区分「窗口在但 pi 已退出」（有界轮询，不是赌一次 sleep）"
   if $TEAM say dev "ping" >"$TMP/say-idle.log" 2>&1; then ok "agent 没在跑时 say 落收件箱并返回 0"; else bad "say 不应硬失败（应落收件箱）"; fi
   assert_has "$TMP/say-idle.log" "收件箱" "说明消息进了收件箱（而不是打进 shell）"
 
