@@ -154,6 +154,16 @@ function log(line: string, cfg: Cfg): void {
   }
 }
 
+/** 内容指纹（FNV-1a 32 位）：去重键必须能区分「前缀相同、后半不同」的简报（M6.3 F17） */
+function fingerprint(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
 /** 同一条简报在 dedupSec 秒内只发一次 */
 function isDuplicate(key: string, sec: number, stateDir: string): boolean {
   if (sec <= 0) return false
@@ -251,7 +261,9 @@ export default function (pi: ExtensionAPI) {
       `uncommitted=${dirty}`,
       `unpushed=${unpushed}${upstream ? '' : '(no-upstream)'}`,
     ].join(' · ')
-    const key = `${agent}|${summary}|${last.slice(0, 60)}`
+    // 去重键：整条末消息的「长度+指纹」，而不是它的前 60 个字符。
+    // 老键（last[0:60]）会把三条开头相同、后半不同的简报当成同一条吞掉（M6.3 F17）。
+    const key = `${agent}|${summary}|${last.length}:${fingerprint(last)}`
 
     const stateDir = join(root, '.pi/team/state')
     try {

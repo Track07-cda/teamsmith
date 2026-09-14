@@ -114,6 +114,14 @@ replaced by “the notify configuration is unusable; put your summary in the rep
 a half command to copy. If your CLI is the built-in Pi (empty `TEAM_AGENT_CMD`), the section says so: Pi's notify
 extension already reports the turn end, and the extra command is only run if the PM asked for it.
 
+### What counts as “the same briefing” (built-in Pi extension)
+
+`extension/team-notify.ts` suppresses an **identical** briefing inside `TEAM_NOTIFY_DEDUP_SEC` (default 20s; `0`
+disables it). The dedup key covers the agent, the summary line, and the length plus a fingerprint of the **whole**
+last assistant message — not the first 60 characters of it, so two different briefings that only share an opening
+are both delivered. Content changes (branch, uncommitted, unpushed) are part of the summary, so a changed state
+re-sends; only a byte-identical repeat inside the window is dropped.
+
 ## 4. Logs / activity: `TEAM_AGENT_LOG_GLOB`
 
 `team monitor --activity` renders Pi session JSONL by default. With `TEAM_AGENT_LOG_GLOB` set, the

@@ -72,6 +72,12 @@ state_fp() {
     | md5sum | awk '{print $1}'
 }
 board_status() { $TEAM board row "$1" 2>/dev/null | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}'; }
+# M6.3 F16：dispatch 会拿工作树的分支与「本任务的规范分支」对照（team_branch_for_agent）。
+# 夹具必须真的建在规范分支上；这里用实现自己的函数算，避免测试再猜一次名字。
+canon_branch() { # <agent> <ID>
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent "'"$1"'" "'"$2"'"' )
+}
 
 TMP="$(mktemp -d /tmp/teamsmith-smoke.XXXXXX)"
 SESSION="teamsmith-smoke-$$"
@@ -102,6 +108,9 @@ if command -v node >/dev/null 2>&1 && node -e 'process.exit(process.features.typ
   TS_RUNNER="node"
 elif command -v bun >/dev/null 2>&1 && bun -e '1' >/dev/null 2>&1; then
   TS_RUNNER="bun"
+elif [ -x "$HOME/.bun/bin/bun" ] && "$HOME/.bun/bin/bun" -e '1' >/dev/null 2>&1; then
+  # bun 装在家目录但不在 PATH（这台机器的实际情况）——不探测它，扩展段落会被静默跳过
+  TS_RUNNER="$HOME/.bun/bin/bun"
 elif command -v tsx >/dev/null 2>&1; then
   TS_RUNNER="tsx"
 fi
@@ -221,6 +230,7 @@ $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog --create-
 assert_dir "$BR/.worktrees/dev" "--create-worktrees 才代建 dev worktree"
 assert_dir "$BR/.worktrees/verify" "--create-worktrees 才代建 verify worktree"
 assert_has "$BR/AGENTS.md" "<!-- teamsmith:begin -->" "注入了协议段"
+assert_has "$BR/AGENTS.md" "Specs (OpenSpec)" "bootstrap 注入的协议段也告诉 agent specs 在哪（M6.3）"
 assert_has "$TMP/boot.log" "下一步" "打印了下一步清单"
 $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot2.log" 2>&1
 assert_eq "bootstrap 幂等（协议段只一份）" "$(grep -cF '<!-- teamsmith:begin -->' "$BR/AGENTS.md")" "1"
@@ -243,6 +253,15 @@ assert_file "$REPO/docs/team/BOARD.md" "写入 BOARD"
 assert_file "$REPO/docs/team/OWNERSHIP.md" "写入 OWNERSHIP"
 assert_file "$REPO/docs/team/DECISIONS.md" "写入 DECISIONS"
 assert_file "$REPO/docs/team/PROTOCOL.md" "写入 PROTOCOL"
+# M6.3：agent 读的第一份文件（AGENTS 协议段 + PROTOCOL）必须告诉它 specs 在哪。
+# OpenSpec 是必需依赖，但以前只写在 SKILL.md/references 里 —— 新项目从来不会知道。
+assert_has "$REPO/AGENTS.md" "Specs (OpenSpec)" "AGENTS.md 协议段指向 openspec/"
+assert_has "$REPO/AGENTS.md" "openspec init --tools none" "AGENTS.md 给出建 spec 目录的命令"
+assert_has "$REPO/AGENTS.md" "openspec validate --all --strict" "AGENTS.md 写明 OpenSpec 校验是门禁的一部分"
+assert_has "$REPO/AGENTS.md" "parallel spec system" "AGENTS.md 禁止另建一套 spec 系统"
+assert_has "$REPO/docs/team/PROTOCOL.md" "openspec change show" "PROTOCOL.md 给出日常 OpenSpec 命令"
+assert_has "$REPO/docs/team/PROTOCOL.md" "openspec archive -y" "PROTOCOL.md 说明归档命令"
+assert_has "$REPO/docs/team/PROTOCOL.md" "references/openspec.md" "PROTOCOL.md 指向 references/openspec.md"
 assert_file "$REPO/docs/team/threads/README.md" "写入 threads/README"
 assert_has "$REPO/AGENTS.md" "<!-- teamsmith:begin -->" "AGENTS.md 注入协议段"
 assert_has "$REPO/.gitignore" ".worktrees/" ".gitignore 忽略 worktree"
@@ -275,6 +294,20 @@ assert_eq "空目标的 kill-window 被拒（退出码 1）" "$RC" "1"
 assert_has "$TMP/guard-empty.log" "目标为空" "空目标拒绝有明确说明"
 ( . "$SKILL_DIR/scripts/lib/common.sh"; team_tmux_respawn_pane "" true ) >"$TMP/guard-empty2.log" 2>&1; RC2=$?
 assert_eq "空目标的 respawn-pane 被拒（退出码 1）" "$RC2" "1"
+# M6.3 F27：send_text（say/notify/nudge 的打字通道）过去是这一族里的例外。
+# 这里用「记录调用的 tmux shim」证明拒绝发生在调用 tmux **之前** —— 探针永远不可能落地，
+# 而且不需要真 tmux（快模式照跑）。`-t ""` 的语义是「当前 pane」，所以这条断言不许用真 tmux。
+mkdir -p "$TMP/tmux-shim"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$TMP/tmux-shim.log" > "$TMP/tmux-shim/tmux"
+chmod +x "$TMP/tmux-shim/tmux"
+( PATH="$TMP/tmux-shim:$PATH"; . "$SKILL_DIR/scripts/lib/common.sh"; team_tmux_send_text "" "EMPTY-TARGET-PROBE" ) >"$TMP/guard-empty-send.log" 2>&1; RCE=$?
+assert_eq "空目标的 send_text 被拒（退出码 1）" "$RCE" "1"
+assert_has "$TMP/guard-empty-send.log" "目标为空" "send_text 空目标拒绝有明确说明"
+assert_not_file "$TMP/tmux-shim.log" "空目标探针没有到达 tmux（拒绝在调用之前）"
+( PATH="$TMP/tmux-shim:$PATH"; . "$SKILL_DIR/scripts/lib/common.sh"; team_tmux_send_text "   " "WS-TARGET-PROBE" ) >"$TMP/guard-ws-send.log" 2>&1; RCW=$?
+assert_eq "纯空白目标的 send_text 被拒（退出码 1）" "$RCW" "1"
+assert_has "$TMP/guard-ws-send.log" "空白" "纯空白目标拒绝有明确说明"
+assert_not_file "$TMP/tmux-shim.log" "纯空白目标的探针也没有到达 tmux"
 # 探测守卫：在「别的项目」的 tmux pane 里 bootstrap，不许把对方的 session 当成自己的
 PROBE="$TMP/probe-repo"; mkdir -p "$PROBE"; ( cd "$PROBE" && git init -q -b main && git commit -q --allow-empty -m x )
 ( cd "$PROBE" && $TEAM bootstrap --agents dev --no-watchdog --print ) >"$TMP/boot-probe.log" 2>&1 || true
@@ -404,15 +437,52 @@ if $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md >"$TMP/dispatch-no
   bad "工作树不在任务分支时 dispatch 应当拒绝"
 else ok "工作树不在任务分支时 dispatch 拒绝"; fi
 assert_match "$TMP/dispatch-nobranch.log" "switch -c task/|switch -c agent/" "给出了 PM 该跑的分支创建命令"
-git -C "$REPO/.worktrees/dev" switch -c task/T1.1-smoke "$PROTECTED" >/dev/null 2>&1 || git -C "$REPO/.worktrees/dev" switch task/T1.1-smoke >/dev/null 2>&1
+# 规范分支由实现计算（BOARD 标题 "Smoke task" → task/T1.1-smoke-task）
+T1_BRANCH="$(canon_branch dev T1.1)"
+git -C "$REPO/.worktrees/dev" switch -c "$T1_BRANCH" "$PROTECTED" >/dev/null 2>&1 || git -C "$REPO/.worktrees/dev" switch "$T1_BRANCH" >/dev/null 2>&1
 $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md --print >"$TMP/print-branch.log" 2>&1 && ok "PM 建好分支后 dispatch 可用" || bad "建好分支后 dispatch 仍失败"
 echo dirty > "$REPO/.worktrees/dev/dirty.txt"
 if $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-smoke-task.md >"$TMP/dispatch-dirty.log" 2>&1; then bad "脏工作树应当拒绝派单"; else ok "脏工作树拒绝派单"; fi
 assert_has "$TMP/dispatch-dirty.log" "git 归 PM" "说明 git 归 PM"
 rm -f "$REPO/.worktrees/dev/dirty.txt"
+# M6.3 F16：停在**别的任务**的分支上必须拒绝，点名两个分支，并给出确切的切换命令。
+# （旧实现只查脏/保护分支/detached，干净工作树停在 task/T8.8-other 时会直接派单，
+#   并把那个分支记成 T1.1 的复验目标。）
+OTHER_BRANCH="task/T8.8-other"
+git -C "$REPO/.worktrees/dev" switch -c "$OTHER_BRANCH" "$PROTECTED" >/dev/null 2>&1 || git -C "$REPO/.worktrees/dev" switch "$OTHER_BRANCH" >/dev/null 2>&1
+if $TEAM dispatch dev T1.1 "$TASKFILE" >"$TMP/dispatch-wrongbranch.log" 2>&1; then
+  bad "F16：工作树停在别的任务的分支上时 dispatch 应当拒绝"
+else ok "F16：工作树停在别的任务的分支上 → dispatch 拒绝"; fi
+assert_has "$TMP/dispatch-wrongbranch.log" "$OTHER_BRANCH" "F16：报错点名了工作树当前的分支"
+assert_has "$TMP/dispatch-wrongbranch.log" "$T1_BRANCH" "F16：报错点名了本任务的规范分支"
+assert_match "$TMP/dispatch-wrongbranch.log" "git -C .* switch" "F16：给出 PM 该跑的 git switch 命令"
+assert_not "$TMP/dispatch-wrongbranch.log" "dispatched" "F16：没有真的派单"
+# 例外：**续跑同一个任务**时允许旧 slug 的分支（标题改过 → 分支名漂移），
+# 因为 state 里的 task 已经证明这条分支就是这个任务的；但不能借这个口子换任务。
+git -C "$REPO/.worktrees/dev" switch "$T1_BRANCH" >/dev/null 2>&1 || true
+git -C "$REPO/.worktrees/dev" switch -c "task/T1.1-legacy" "$PROTECTED" >/dev/null 2>&1 || git -C "$REPO/.worktrees/dev" switch "task/T1.1-legacy" >/dev/null 2>&1
+( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_state_set dev task T1.1' )
+if $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/dispatch-resume.log" 2>&1; then
+  ok "F16：续跑同一个任务时允许旧 slug 的分支"
+else bad "F16：续跑被误拒（见 $TMP/dispatch-resume.log）"; fi
+assert_has "$TMP/dispatch-resume.log" "续跑" "F16：说明这是续跑（不是新派单）"
+git -C "$REPO/.worktrees/dev" switch "$T1_BRANCH" >/dev/null 2>&1 || true
+git -C "$REPO/.worktrees/dev" branch -D "task/T1.1-legacy" >/dev/null 2>&1 || true
+[ -f "$REPO/.pi/team/state/dev.env" ] && sed -i '/^task=T1.1$/d' "$REPO/.pi/team/state/dev.env" || true
+# M6.3 F15：项目外的任务书必须被拒。旧行为：--print 成功，还把 /tmp/x.md 标成 "repo-relative
+# path"；而同一份提示词命令 worker "work only inside <project>" —— 自相矛盾。
+OUTSIDE_BRIEF="$TMP/outside-brief.md"
+printf '# X1 · outside\n\n```\ntask: X1\nagent: dev\n```\n' > "$OUTSIDE_BRIEF"
+if $TEAM dispatch dev T1.1 "$OUTSIDE_BRIEF" --print >"$TMP/dispatch-outside.log" 2>&1; then
+  bad "F15：项目外任务书应当被拒"
+else ok "F15：项目外任务书被拒（--print 也不放行）"; fi
+assert_has "$TMP/dispatch-outside.log" "不在本项目里" "F15：报错说明任务书在项目外"
+assert_has "$TMP/dispatch-outside.log" "$REPO" "F15：报错点名项目主工作树"
+assert_not "$TMP/dispatch-outside.log" "repo-relative" "F15：不再把项目外路径称作 repo-relative"
 
 section "6 · dispatch"
-$TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"assert_has "$TMP/print.log" "--session-id $SESSION-dev" "命令含正确的 session-id"
+$TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"
+assert_has "$TMP/print.log" "--session-id $SESSION-dev" "命令含正确的 session-id"
 assert_has "$TMP/print.log" "team-notify.ts" "命令显式加载 notify 扩展（worktree 不会自动发现）"
 assert_has "$TMP/print.log" "agent:dev" "提示词声明了 agent 身份"
 assert_has "$TMP/print.log" "Never stop mid-task to ask for confirmation" "dispatch prompt states the no-mid-task-stop rule"
@@ -891,10 +961,14 @@ printf 'done\n' > "$ADAPTER_DONE"
 EOF
   chmod +x "$FAKE/fake-agent.sh"
   ACMD="$FAKE/fake-agent.sh {cwd} {session_id} {prompt_file} {skill_dir}"
-  ATASK="$TMP/$ADAPTER_ID-task.md"
+  # 任务书必须在项目内（M6.3 F15 的守卫）；放 state/ 而不是 docs/team/tasks/，
+  # 这样 T1.2 的报告仍然按「非任务报告」被忽略 —— 不改变本节之外的 pending 计数。
+  mkdir -p "$REPO/.pi/team/state"
+  ATASK="$REPO/.pi/team/state/$ADAPTER_ID-nonpi-brief.md"
   printf '# %s · 非 Pi adapter 冒烟\n\ntask: %s\nagent: %s\n' "$ADAPTER_ID" "$ADAPTER_ID" "$ADAPTER_AGENT" > "$ATASK"
   # 第二个 worker（agent 模式名册里新增一个），自己的 worktree/分支：不动 dev 的账
-  git -C "$REPO" worktree add -b "task/$ADAPTER_ID-agent-adapter" "$REPO/.worktrees/$ADAPTER_AGENT" "$PROTECTED" >/dev/null 2>&1 || true
+  ADAPTER_BRANCH="$(canon_branch "$ADAPTER_AGENT" "$ADAPTER_ID")"
+  git -C "$REPO" worktree add -b "$ADAPTER_BRANCH" "$REPO/.worktrees/$ADAPTER_AGENT" "$PROTECTED" >/dev/null 2>&1 || true
   AENV="TEAM_AGENTS=dev verify $ADAPTER_AGENT"
   env TEAM_AGENTS="dev verify $ADAPTER_AGENT" TEAM_AGENT_CMD="$ACMD" TEAM_AGENT_BIN="$FAKE/fake-agent.sh" \
     TEAM_AGENT_NOTIFY_CMD="bash {skill_dir}/scripts/team notify pm \"{summary}\"" \
@@ -930,7 +1004,7 @@ EOF
   # 清场：这个假 agent 的 worktree/分支/报告不能留成「待复验」——那会污染后面的巡检断言
   # （team_reports_pending 扫 .worktrees/*，和名册无关）；清完顺手验一下真的干净了。
   git -C "$REPO" worktree remove --force "$REPO/.worktrees/$ADAPTER_AGENT" >/dev/null 2>&1 || true
-  git -C "$REPO" branch -D "task/$ADAPTER_ID-agent-adapter" >/dev/null 2>&1 || true
+  git -C "$REPO" branch -D "$ADAPTER_BRANCH" >/dev/null 2>&1 || true
   rm -f "$REPO/.pi/team/state/$ADAPTER_AGENT.env"
   APEND="$($TEAM watchdog-status 2>/dev/null || true)"
   case "$APEND" in
@@ -952,6 +1026,48 @@ assert_has "$TMP/digest.log" "blocked: 缺 dependency X" "digest 引用了新通
 $TEAM inbox --ack >/dev/null 2>&1
 $TEAM digest >"$TMP/digest2.log" 2>&1
 assert_not "$TMP/digest2.log" "blocked: 缺 dependency X" "ack 后不再重复出现"
+# M6.3 F26：PM 自己的收件箱（worker 走 notify pm --from-file，agent-adapters.md 推荐的通道）
+# 必须与名册成员一样被看见/计数 —— 旧实现只遍历名册，PM 不在跑时这条通知等于消失。
+printf 'worker summary awaiting the PM\n' > "$TMP/m63-pm-summary.txt"
+$TEAM notify pm --from-file "$TMP/m63-pm-summary.txt" >/dev/null 2>&1 && ok "notify pm 退出码 0" || bad "notify pm 失败"
+assert_has "$REPO/docs/team/inbox/pm.md" "worker summary awaiting the PM" "PM 自己的收件箱写入"
+$TEAM digest >"$TMP/digest-pm.log" 2>&1 || true
+assert_has "$TMP/digest-pm.log" "PM 自己的收件箱" "F26：digest [2] 标注 PM 自己的收件箱"
+assert_has "$TMP/digest-pm.log" "worker summary awaiting the PM" "F26：digest 引用了这条通知"
+assert_has "$TMP/digest-pm.log" "未读通知" "F26：digest 的待办里算上它"
+$TEAM inbox >"$TMP/inbox-pm.log" 2>&1 || true
+assert_has "$TMP/inbox-pm.log" "PM 自己的收件箱" "F26：team inbox 显示 PM 自己的收件箱"
+# 非名册收件人（打错的名字）也有文件即收件人：不会变成没人读的死信
+printf '%s\n' '- x [manual] agent:devv · stray' >> "$REPO/docs/team/inbox/devv.md"
+$TEAM digest >"$TMP/digest-stray.log" 2>&1 || true
+assert_has "$TMP/digest-stray.log" "devv" "F26：非名册收件人在 digest [2] 可见"
+$TEAM standby status >"$TMP/standby-pm.log" 2>&1 || true
+assert_has "$TMP/standby-pm.log" "未读通知 2" "F26：待办计数（watchdog 的输入）把 pm + devv 都算上"
+$TEAM inbox --ack >/dev/null 2>&1
+$TEAM digest >"$TMP/digest-pm2.log" 2>&1 || true
+assert_not "$TMP/digest-pm2.log" "worker summary awaiting the PM" "F26：ack 之后不再重复"
+# ack 基线失效要能自愈：文件被清掉重建到比 ack 时更短（比如清了现场），新的一行不能永远看不见
+printf '%s\n' '- x [manual] agent:dev · rebuilt inbox line 1' '- x [manual] agent:dev · rebuilt inbox line 2' > "$REPO/docs/team/inbox/dev.md"
+$TEAM inbox --ack >/dev/null 2>&1                       # acked=2
+printf '%s\n' '- x [manual] agent:dev · rebuilt inbox after shrink' > "$REPO/docs/team/inbox/dev.md"
+$TEAM digest >"$TMP/digest-rebuilt.log" 2>&1 || true
+assert_has "$TMP/digest-rebuilt.log" "rebuilt inbox after shrink" "F26：收件箱被重建到更短后新消息仍然可见（旧 ack 计数不会把它藏起来）"
+$TEAM inbox --ack >/dev/null 2>&1
+rm -f "$REPO/docs/team/inbox/devv.md"
+# M6.3 F18：打错的收件人不能静默吞消息（写进没人读的收件箱 = 死信）
+if $TEAM say devv "typo?" >"$TMP/say-unknown.log" 2>&1; then bad "say 未知收件人应当非 0 退出"; else ok "say 未知收件人非 0 退出"; fi
+assert_has "$TMP/say-unknown.log" "不在名册里" "报错说明收件人不在名册里"
+assert_has "$TMP/say-unknown.log" "dev" "报错点名名册成员"
+assert_has "$TMP/say-unknown.log" "--any" "给出 --any 强制投递的出路"
+assert_not_file "$REPO/docs/team/inbox/devv.md" "未知收件人没有写出死信收件箱"
+$TEAM say devv --any "forced for a non-roster name" >"$TMP/say-any.log" 2>&1 && ok "say --any 强制投递成功" || bad "say --any 失败"
+assert_has "$REPO/docs/team/inbox/devv.md" "forced for a non-roster name" "--any 的消息真的落盘"
+assert_has "$REPO/.pi/team/state/inbox-unknown.log" "devv" "--any 的越权投递留痕（state/inbox-unknown.log）"
+if $TEAM notify devv "typo?" >"$TMP/notify-unknown.log" 2>&1; then bad "notify 未知收件人也应当非 0"; else ok "notify 未知收件人非 0 退出"; fi
+assert_has "$TMP/notify-unknown.log" "--any" "notify 的报错也给出 --any"
+$TEAM notify pm "pm 是合法收件人" >/dev/null 2>&1 && ok "notify pm 仍然合法（PM 自己的收件箱）" || bad "notify pm 被误拒"
+rm -f "$REPO/docs/team/inbox/devv.md"
+$TEAM inbox --ack >/dev/null 2>&1
 
 # ---------------------------------------------------------------- 8. 从 worktree 里也能用
 section "8 · 从 agent worktree 调用 CLI"
@@ -993,7 +1109,7 @@ assert_eq "分支有 1 个提交" "$(git -C "$REPO/.worktrees/dev" rev-list --co
 # ---------------------------------------------------------------- 10. review
 section "10 · review（独立 worktree + 门禁）"
 REV_WT="$TMP/review-checkout"
-git -C "$REPO" worktree add --detach "$REV_WT" task/T1.1-smoke >/dev/null 2>&1 || true
+git -C "$REPO" worktree add --detach "$REV_WT" "$T1_BRANCH" >/dev/null 2>&1 || true
 $TEAM review T1.1 --dir "$REV_WT" >"$TMP/review.log" 2>&1 && ok "review 门禁 PASS 退出码 0" || { bad "review 失败"; cat "$TMP/review.log"; }
 if $TEAM review T1.1 >"$TMP/review-nodir.log" 2>&1; then bad "review 缺 --dir 应报错"; else ok "review 缺 --dir 明确报错（skill 不碰 git）"; fi
 assert_has "$TMP/review-nodir.log" "PM 自己准备独立 checkout" "报错里给出 git 命令"
@@ -1058,7 +1174,7 @@ section "10b · 复验证据完整性（记录必须描述真的验过什么）"
 # 备份一份正常的 PASS 记录；下面的破坏性用例跑完再重建现场
 cp "$REPO/docs/team/reviews/T1.1.md" "$TMP/record-ok.md"
 rec_reset() { rm -f "$REPO/docs/team/reviews/T1.1.md" "$REPO/docs/team/reviews/T1.1-verify.log"; }
-rev_refresh() { git -C "$REPO" worktree remove --force "$REV_WT" >/dev/null 2>&1; git -C "$REPO" worktree add -q --detach "$REV_WT" task/T1.1-smoke >/dev/null 2>&1; }
+rev_refresh() { git -C "$REPO" worktree remove --force "$REV_WT" >/dev/null 2>&1; git -C "$REPO" worktree add -q --detach "$REV_WT" "$T1_BRANCH" >/dev/null 2>&1; }
 rec_reset   # 先清掉 10 节留下的记录，后面的断言才是在看“本次到底写没写”
 
 # F7：--branch 解析不到 → 默认拒绝（不许跳过 checkout 一致性守卫、把记录盖到不存在的 revision 上）
@@ -1069,7 +1185,7 @@ else
 fi
 assert_has "$TMP/review-f7.log" "分支解析不到" "F7 拒绝理由写明是分支解析不到"
 assert_has "$TMP/review-f7.log" "期望：" "F7 说明期望解析什么 ref"
-assert_has "$TMP/review-f7.log" "task/T1.1-smoke" "F7 列出找到的候选分支"
+assert_has "$TMP/review-f7.log" "$T1_BRANCH" "F7 列出找到的候选分支"
 assert_has "$TMP/review-f7.log" "allow-unresolved-branch" "F7 给出显式覆盖开关"
 assert_not_file "$REPO/docs/team/reviews/T1.1.md" "F7 被拒时不写复验记录"
 $TEAM review T1.1 --dir "$REV_WT" --branch no-such-branch --allow-unresolved-branch >"$TMP/review-f7b.log" 2>&1 \
@@ -1272,7 +1388,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   assert_eq "close 后窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx dev || true)" "0"
   assert_has "$TMP/close.log" "switch --detach main" "close 打印确切的复位命令"
-  assert_eq "close 没替 PM 切分支（worktree 仍在任务分支上）" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD 2>/dev/null)" "task/T1.1-smoke"
+  assert_eq "close 没替 PM 切分支（worktree 仍在任务分支上）" "$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD 2>/dev/null)" "$T1_BRANCH"
   # TEAM_TASK_BRANCH_RESET=0：复位提示可以关掉（配置键真的有作用）
   $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1 || true
   TEAM_TASK_BRANCH_RESET=0 $TEAM close T1.1 >"$TMP/close-reset0.log" 2>&1 || true
@@ -1455,6 +1571,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 6) 不管 tmux：session 丢了只告警；开关打开才重建
   $TEAM notify dev "新待办：T3 计划待确认" >/dev/null 2>&1   # 待办变化 → 告警会重新出现（同批不重复）
   kill_all_windows
+  tmux kill-session -t "$SESSION" 2>/dev/null || true      # 确保“session 丢了”的前提真的成立
+  # 看门狗的告警按「待办批次」去重（sig）；把上一批的 sig 打旧，这一拍才会走到
+  # “session 丢了 → 请人工 up”的告警分支（否则同一批待办会被有意静音）。
+  TEAM_ROOT="$REPO" bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_state_set _watch last_sig m63-step6-stale'
   $TEAM watch --once >"$TMP/watch4.log" 2>&1 || true
   if tmux has-session -t "$SESSION" 2>/dev/null; then bad "watchdog 不该重建 tmux session（默认不管 tmux）"; else ok "session 丢了 watchdog 不重建（默认不管 tmux）"; fi
   assert_match "$TMP/watch4.log" "不管 tmux|人工" "给出了“需要人工 up”的提示"
@@ -1476,6 +1596,22 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   tmux kill-window -t "$SESSION:keep" 2>/dev/null || true
   $TEAM inbox --ack >/dev/null 2>&1
   $TEAM up >/dev/null 2>&1 || true
+
+  # 8) M6.3 F26（真进程证据）：PM 不在跑时，worker 的通知走「PM 自己的收件箱」也必须叫醒它。
+  #    旧实现只遍历名册：这条 durable 通道不在待办里，只有 TMUX 敲门（PM 必须在跑）。
+  rm -f "$REPO/docs/team/inbox/pm.md" "$REPO/.pi/team/state/pm-restarts.log"
+  $TEAM inbox --ack >/dev/null 2>&1
+  printf 'M6.3 F26 live: worker summary awaiting the PM\n' > "$TMP/m63-pm-summary.txt"
+  make_pm_idle
+  M63_PM_BEFORE="$(pm_lines)"
+  $TEAM notify pm --from-file "$TMP/m63-pm-summary.txt" >"$TMP/m63-notify-pm.log" 2>&1 || bad "notify pm 失败"
+  assert_has "$REPO/docs/team/inbox/pm.md" "M6.3 F26 live" "F26：PM 自己的收件箱真的写了（PM 不在跑也不丢）"
+  $TEAM watchdog-status >"$TMP/m63-wd-pm.log" 2>&1 || true
+  assert_has "$TMP/m63-wd-pm.log" "未读通知" "F26：watchdog-status 把它算作待办"
+  watch_until_restart "$TMP/m63-watch-pm.log" 3 || true
+  assert_match "$TMP/m63-watch-pm.log" "已拉起" "F26：watchdog 因为 PM 自己的收件箱把 PM 拉起来"
+  assert_eq "F26：PM 真的被拉起（argv 落盘）" "$([ "$(pm_lines)" -gt "$M63_PM_BEFORE" ] && echo grew || echo same)" "grew"
+  $TEAM inbox --ack >/dev/null 2>&1   # 收尾：把待办清回基线（后面的段落按“无待办”跑）
 else
   printf '  (跳过巡检断言：没有 tmux)\n'
 fi
@@ -1578,6 +1714,37 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     running:*) ok "M6.5 ④b：人工在窗口里启动的 agent 被认成 running（$(pm_state_now)）" ;;
     *)         bad "M6.5 ④b：人工启动的 agent 没被认出（$(pm_state_now)）" ;;
   esac
+  # ⑤ M6.3 F30：wrapper agent（脚本最后 exec 掉自己）必须被报为已启动，证据 = spawn。
+  # 旧实现只认「窗口里的进程 == 配置的 agent 可执行文件」：exec 换掉进程映像后永远认不出来，
+  # 于是给一个活得好好的 PM 报「启动失败」（PM 在 /tmp/pm-freeze2 复现过）。
+  M63_WRAP="$TMP/m63-pm-wrapper"
+  printf '#!/bin/sh\nexec sleep 300\n' > "$M63_WRAP"; chmod +x "$M63_WRAP"
+  sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$M63_WRAP\"|" "$REPO/.pi/team/config.sh"
+  tmux kill-session -t "$SESSION" 2>/dev/null || true   # 从「场地不在」开始，up 自己要建
+  sleep 0.5
+  rm -f "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
+  $TEAM up >"$TMP/m63-f30-up.log" 2>&1 || true
+  assert_has "$TMP/m63-f30-up.log" "PM 已启动" "F30：wrapper agent 被报为已启动（不再误报「看不到 agent 进程」）"
+  assert_has "$TMP/m63-f30-up.log" "proof=spawn" "F30：启动证据就是 spawn（argv 认不出 exec 之后的进程）"
+  assert_eq "F30：state/pm.pid.proof 记录了证据" "$(cat "$REPO/.pi/team/state/pm.pid.proof" 2>/dev/null)" "spawn"
+  M63_SPID="$(tr -dc '0-9' < "$REPO/.pi/team/state/pm.pid" 2>/dev/null || true)"
+  if [ -n "$M63_SPID" ] && kill -0 "$M63_SPID" 2>/dev/null; then ok "F30：pm.pid 记录的是我们 spawn 的活 pid"; else bad "F30：pm.pid 无效（[$M63_SPID]）"; fi
+  case "$(pm_state_now)" in
+    running:*) ok "F30：wrapper PM 之后仍是 running（$(pm_state_now)）" ;;
+    *)         bad "F30：启动后状态不是 running（$(pm_state_now)）" ;;
+  esac
+  $TEAM watchdog-status >"$TMP/m63-f30-wd.log" 2>&1 || true
+  assert_has "$TMP/m63-f30-wd.log" "proof=spawn" "F30：watchdog-status 显示证据来源"
+  # 没有我们的 pid 记录时，窗口里的 sleep（cwd 在本项目）依旧不算 PM：非 shell 不是证据
+  tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec sleep 300" >/dev/null 2>&1 || true
+  rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
+  sleep 1
+  case "$(pm_state_now)" in
+    running:*) bad "F30：别人放的 sleep 被当成运行中的 PM（$(pm_state_now)）" ;;
+    unknown:*) ok "F30：别人放的 sleep 只是 unknown（$(pm_state_now)）" ;;
+    *)         bad "F30：期望 unknown:sleep，实际 $(pm_state_now)" ;;
+  esac
+  sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
   # 收尾：把 PM 拉回来，后面的段落（11c 起）按原来的现场跑
   $TEAM up >/dev/null 2>&1 || true
 else
@@ -2032,6 +2199,19 @@ let lines = readFileSync(inbox, 'utf8').trim().split('\n')
 if (lines.length !== 1) { console.error(`FAIL: 期望 1 行（去重），实际 ${lines.length}`); process.exit(4) }
 if (!lines[0].includes('ALLDONE feature implemented')) { console.error('FAIL: 没有带上 agent 末条消息'); process.exit(5) }
 if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错误'); process.exit(6) }
+// M6.3 F17：去重键必须能区分「开头 60 字符相同、后半不同」的简报（旧键只取前缀 → 会吞掉）
+{
+  rmSync(inbox, { force: true })
+  rmSync(join(root, '.pi/team/state/notify-dedup'), { force: true })
+  const prefix = 'All gates are green. I delivered the parser fix; the remaining work on this branch is'
+  const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', content: [{ text }] } }] } })
+  for (const tail of [' the retry path.', ' the cache warm-up.', ' error mapping.']) await handler({}, ctxN(prefix + tail))
+  const n = readFileSync(inbox, 'utf8').trim().split('\n').length
+  if (n !== 3) { console.error(`FAIL: F17 三条不同简报被去重吞掉（期望 3 行，实际 ${n}）`); process.exit(20) }
+  await handler({}, ctxN(prefix + ' the retry path.'))     // 字节相同的一条：仍然要抑制
+  const n2 = readFileSync(inbox, 'utf8').trim().split('\n').length
+  if (n2 !== 3) { console.error(`FAIL: F17 重复的同一条没有被去重（${n2} 行）`); process.exit(21) }
+}
 const before = readFileSync(inbox, 'utf8')
 await handler({}, { cwd: root, sessionManager: { getEntries: () => [] } })   // 主工作树不该触发
 if (readFileSync(inbox, 'utf8') !== before) { console.error('FAIL: 非 worktree 路径也写了收件箱'); process.exit(7) }

@@ -7,13 +7,21 @@ team_inbox_total() { local f; f="$(team_inbox_file "$1")"; [ -f "$f" ] && wc -l 
 
 team_inbox_new() { # <agent> → 未 ack 的行数
   local total acked; total="$(team_inbox_total "$1")"; acked="$(team_state_get "$1" inbox_lines 0)"
+  # 文件被截短/重建（acked > total）时 ack 基线失效：把剩下的行当未读重新展示一次。
+  # 不这样，一条新消息会因为旧的 ack 计数比文件行数大而**永远看不见**（F26 的 live 现场）。
+  case "$acked" in ''|*[!0-9]*) acked=0 ;; esac
+  [ "$acked" -gt "$total" ] && acked=0
   [ "$total" -gt "$acked" ] && printf '%s\n' "$((total - acked))" || printf '0\n'
 }
 
 team_inbox_since() { # <agent> → 未 ack 的行
-  local f start; f="$(team_inbox_file "$1")"
+  local f start total
+  f="$(team_inbox_file "$1")"
   [ -f "$f" ] || return 0
   start="$(team_state_get "$1" inbox_lines 0)"
+  case "$start" in ''|*[!0-9]*) start=0 ;; esac
+  total="$(team_inbox_total "$1")"
+  [ "$start" -gt "$total" ] && start=0          # 与 team_inbox_new 的失效基线保持一致
   [ "$start" -gt 0 ] && tail -n +"$((start + 1))" "$f" || cat "$f"
 }
 
@@ -101,7 +109,7 @@ team_cmd_ps() {
   printf '\n存活：\n'
   local pm; pm="$(team_pm_state)"
   case "$pm" in
-    running:*) printf '  PM（%s）在运行（%s）\n' "$TEAM_PM_WINDOW" "${pm#running:}" ;;
+    running:*) printf '  PM（%s）在运行（%s%s）\n' "$TEAM_PM_WINDOW" "${pm#running:}" "$(team_pm_proof_suffix)" ;;
     idle:*)    printf '  PM（%s）**未在跑**（空提示符）→ team up\n' "$TEAM_PM_WINDOW" ;;
     unknown:*) printf '  PM（%s）窗口里是**非 PM 进程**（%s，cwd=%s）：不算存活 → team up\n' \
                  "$TEAM_PM_WINDOW" "${pm#unknown:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
@@ -173,7 +181,7 @@ team_cmd_digest() {
   printf '  agent %s/%s 在跑 ｜ %s' "$live" "$total" "$(team_capacity_line)"
   local pm; pm="$(team_pm_state)"
   case "$pm" in
-    running:*) printf '  PM ● 在运行（%s）' "${pm#running:}" ;;
+    running:*) printf '  PM ● 在运行（%s%s）' "${pm#running:}" "$(team_pm_proof_suffix)" ;;
     idle:*)    printf '  PM ○ **未在跑**（空提示符）→ team up' ;;
     unknown:*) printf '  PM ○ 窗口里是非 PM 进程（%s）→ team up' "${pm#unknown:}" ;;
     foreign:*) printf '  PM ○ 窗口被别的项目占着（不覆盖）' ;;
@@ -193,12 +201,15 @@ team_cmd_digest() {
   fi
 
   printf '\n%s\n' "[2] 待处理通知"
-  local any=0 n
-  for a in $(team_agents); do
+  local any=0 n rlabel
+  # 收件人 = 名册 + inbox/ 里实际存在的文件（含 PM 自己的收件箱与打错名字的收件箱）：
+  # 写了一行却没人看见是 M6.3 F26/F18 的根因。
+  for a in $(team_inbox_recipients); do
     n="$(team_inbox_new "$a")"
     if [ "$n" -gt 0 ]; then
       any=1
-      printf '  %s · %s 条新\n' "$a" "$n"
+      rlabel=""; [ "$a" = "pm" ] && rlabel="（PM 自己的收件箱）"
+      printf '  %s%s · %s 条新\n' "$a" "$rlabel" "$n"
       team_inbox_since "$a" | tail -3 | sed 's/^/      /'
     fi
   done
@@ -269,18 +280,19 @@ team_cmd_inbox() {
     esac
   done
   local targets=()
-  if [ -n "$agent" ]; then targets=("$agent"); else mapfile -t targets < <(team_agents); fi
-  local a n f
+  if [ -n "$agent" ]; then targets=("$agent"); else mapfile -t targets < <(team_inbox_recipients); fi
+  local a n f label
   for a in "${targets[@]}"; do
     f="$(team_inbox_file "$a")"
     n="$(team_inbox_new "$a")"
+    label=""; [ "$a" = "pm" ] && label="（PM 自己的收件箱）"
     if [ "$all" = "1" ]; then
       [ -f "$f" ] || continue
-      printf '%s === %s（全部 %s 行）%s\n' "$C_BOLD" "$a" "$(team_inbox_total "$a")" "$C_RESET"
+      printf '%s === %s%s（全部 %s 行）%s\n' "$C_BOLD" "$a" "$label" "$(team_inbox_total "$a")" "$C_RESET"
       sed 's/^/  /' "$f"
     else
       [ "$n" -gt 0 ] || continue
-      printf '%s === %s（新 %s 条）%s\n' "$C_BOLD" "$a" "$n" "$C_RESET"
+      printf '%s === %s%s（新 %s 条）%s\n' "$C_BOLD" "$a" "$label" "$n" "$C_RESET"
       team_inbox_since "$a" | sed 's/^/  /'
     fi
     if [ "$ack" = "1" ]; then

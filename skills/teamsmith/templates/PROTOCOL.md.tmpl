@@ -40,6 +40,21 @@
   `team review <ID> --dir <checkout>` runs the gates and writes the evidence.
 - A brief may require stricter commands than the project gates; the brief wins.
 
+## Specs (OpenSpec)
+
+Specs and change proposals live in `openspec/` (required dependency; `openspec init --tools none`). Read the
+proposal of the change you implement and the capability spec it touches **before** writing code;
+`openspec validate --all --strict` is part of the gate. Day to day:
+
+```bash
+openspec list                    # open changes
+openspec change show <id>        # one proposal: deltas + tasks
+openspec validate --all --strict # gate: every proposal/spec must validate
+openspec archive -y <id>         # only after the PM's review record exists (team review <ID> -> PASS)
+```
+
+Do **not** create a parallel spec system in task briefs or docs. Detail: `{{SKILL_DIR}}/references/openspec.md`.
+
 ## Bootstrap and watchdog
 
 ```bash

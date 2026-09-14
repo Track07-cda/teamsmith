@@ -73,8 +73,15 @@ team_pi_args() { # <model> → 打印已转义的 pi 参数
 # 派单提示词：把 CEP 的「不半途停、小步提交、必写报告、被阻塞就 notify」固化成模板。
 team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session_id>]
   local agent="$1" id="$2" taskfile="$3" wt="$4" model="$5" sid="${6:-$TEAM_SESSION-$1}"
-  local issue="" cli="$TEAM_SKILL_DIR/scripts/team" rel abs_docs rel_report notify_block=""
-  rel="$(printf '%s' "$taskfile" | sed "s|^$TEAM_MAIN_ROOT/||")"
+  local issue="" cli="$TEAM_SKILL_DIR/scripts/team" rel abs_docs rel_report rel_note notify_block=""
+  case "$taskfile" in
+    "$TEAM_MAIN_ROOT"/*) rel="${taskfile#"$TEAM_MAIN_ROOT"/}" ;;
+    *) rel="" ;;
+  esac
+  # 只有真的在项目里才敢叫它 repo-relative（M6.3 F15：绝对路径被标成 repo-relative，
+  # 而同一份提示词又命令 worker 只在本项目里干活）。
+  if [ -n "$rel" ]; then rel_note=" (same file, repo-relative path: \`$rel\`)"
+  else rel_note=" (absolute path; it is outside the project main worktree)"; fi
   abs_docs="$TEAM_DOCS_ABS"
   rel_report="$TEAM_DOCS_DIR/reports/$id-$agent.md"
   grep -qE '^[[:space:]]*issue:' "$taskfile" 2>/dev/null && \
@@ -121,7 +128,7 @@ anyone else's branch.
 Read these first, in order:
 1. \`AGENTS.md\` (contains the teamsmith team protocol section)
 2. Your thread \`$abs_docs/threads/$agent.md\` (the PM may have added instructions before you started)
-3. The task brief \`$taskfile\`${rel:+ (same file, repo-relative path: \`$rel\`)} -- the single source of scope and acceptance commands
+3. The task brief \`$taskfile\`$rel_note -- the single source of scope and acceptance commands
 
 Scope discipline: do only what the brief says, and only change directories that OWNERSHIP assigns to you.
 For cross-directory work, do not do it yourself: write \`BLOCKED:\` in your report naming who should change what,
@@ -179,6 +186,21 @@ team_cmd_add_agent() {
   if [ "${#extra[@]}" -gt 0 ]; then team_worktree_add "$agent" "${extra[@]}"; else team_worktree_add "$agent"; fi
 }
 
+# 这个分支属不属于这个任务：
+#   task 模式  → task/<ID>-<任意 slug>（slug 由标题生成、可能改过，所以不要求逐字符相等）
+#   agent 模式 → agent/<name>（长期分支，就是 team_branch_for_agent 算出来的那个）
+# 注意：只接受**同一个 ID**；task/P2-smoke 永远不会被当成 P1 的分支。
+team_branch_is_for_task() { # <branch> <agent> <ID>
+  local br="$1" agent="$2" id="$3" want
+  [ -n "$br" ] || return 1
+  want="$(team_branch_for_agent "$agent" "$id")"
+  [ "$br" = "$want" ] && return 0
+  if team_branch_mode_is_task; then
+    case "$br" in "task/$id-"*) return 0 ;; esac
+  fi
+  return 1
+}
+
 # 让 agent worktree 处于「本任务的分支」上：
 #   task 模式  → task/<ID>-<slug>（不存在就从保护分支新建）
 #   agent 模式 → agent/<name>（长期分支）
@@ -217,6 +239,25 @@ team_check_worktree_for_task() { # <agent> <ID>
         return 1
       fi ;;
   esac
+  # M6.3 F16：工作树必须停在**这个任务**的分支上。
+  # 只看「脏不脏 / 保护分支 / detached」会放过停在 task/P2-smoke 的工作树：派 P1 直接成功，
+  # state 把 P2 的分支记成 P1 的复验目标，随后 review P1 在 P2 的提交上盖章。
+  if [ -n "$want" ] && [ "$cur" != "$want" ]; then
+    if [ "$prev_task" = "$id" ] && team_branch_is_for_task "$cur" "$agent" "$id"; then
+      # 同一个任务的续跑：slug 可能因为标题改过而不一致，分支确实属于本任务，放行。
+      team_dim "  续跑：$wt 的分支 $cur 属于本任务（$id；规范名 $want），继续"
+    else
+      team_err "$wt 停在不属于本任务（$id）的分支上："
+      team_err "  现在的分支：$cur ｜ 本任务要的分支：$want"
+      if git -C "$wt" show-ref --verify --quiet "refs/heads/$want"; then
+        team_dim "$(printf '  切过去：git -C %q switch %q' "$wt" "$want")" >&2
+      else
+        team_dim "$(printf '  建好并切过去：git -C %q switch -c %q %q' "$wt" "$want" "$TEAM_PROTECTED_BRANCH")" >&2
+      fi
+      team_dim "  （拒绝的理由：复验/交付记录会以工作树的分支为证据，不能张冠李戴）" >&2
+      return 1
+    fi
+  fi
   TEAM_CHECKED_BRANCH="$cur"
   return 0
 }
@@ -245,6 +286,16 @@ team_cmd_dispatch() {
   [ -f "$taskfile" ] || taskfile="$TEAM_MAIN_ROOT/$taskfile"
   [ -f "$taskfile" ] || team_die "找不到任务书：$taskfile"
   taskfile="$(cd "$(dirname "$taskfile")" && pwd)/$(basename "$taskfile")"
+  # M6.3 F15：任务书必须在项目主工作树里。提示词命令 worker「work only inside <project>」，
+  # 却把 /tmp/... 称为 "repo-relative path"（自相矛盾）；而且项目外的文件不归项目管。
+  case "$taskfile" in
+    "$TEAM_MAIN_ROOT"/*) ;;
+    *)
+      team_err "任务书不在本项目里：$taskfile"
+      team_dim "  项目主工作树：$TEAM_MAIN_ROOT"
+      team_dim "  把任务书放进项目再派单（例如 $TEAM_DOCS_DIR/tasks/）：worker 只被授权在项目内工作" >&2
+      return 1 ;;
+  esac
 
   local wt; wt="$(team_agent_worktree "$agent")"
   if [ ! -d "$wt" ]; then
@@ -253,12 +304,12 @@ team_cmd_dispatch() {
       "$TEAM_MAIN_ROOT" "$(team_branch_for_agent "$agent" "$id")" "$wt" "$TEAM_PROTECTED_BRANCH")" >&2
     return 1
   fi
-  # 分支准备放在守卫之前（会让 worktree 变状态，失败即停）
+  # 分支准备放在守卫之前（会让 worktree 变状态，失败即停）。
+  # M6.3 F16：**--print 也检查** —— 打印出来的计划里已经写着这个任务的复验目标分支，
+  # 不能在别的任务的分支上生成一份“看起来对”的提示词。
   local task_branch=""
-  if [ "$printonly" != "1" ]; then
-    team_check_worktree_for_task "$agent" "$id" || return 1
-    task_branch="$TEAM_CHECKED_BRANCH"
-  fi
+  team_check_worktree_for_task "$agent" "$id" || return 1
+  task_branch="$TEAM_CHECKED_BRANCH"
 
   model="${model:-$(team_state_get "$agent" model "$(team_agent_model "$agent")")}"
   local provider="${model%%/*}"
@@ -340,6 +391,7 @@ team_cmd_dispatch() {
 }
 
 team_pane_snapshot() { # <target> → pane 内容指纹（用于确认投递真的落到 TUI）
+  team_tmux_target_required "capture-pane" "${1:-}" || return 1
   tmux capture-pane -p -t "$1" 2>/dev/null | tail -c 400 | cksum | tr -d ' \n'
 }
 
@@ -352,17 +404,38 @@ team_say_offline() { # <agent> <msg> <原因>
   return 0
 }
 
+# 收件人必须是名册里的 agent，或者特殊收件人 pm（PM 自己的收件箱）。
+# 为什么：say devv 会把消息写进 inbox/devv.md，而那个名字从来没窗口、没人读 ——
+# 打错一个字母就等于消息静默蒸发（M6.3 F18）。--any 是显式越权：允许，但必须留痕。
+team_require_recipient() { # <recipient> <是否 --any> <命令名>
+  local r="$1" any="${2:-0}" what="${3:-say}"
+  [ -n "$r" ] || return 0
+  [ "$r" = "pm" ] && return 0
+  team_agent_known "$r" && return 0
+  if [ "$any" = "1" ]; then
+    printf '%s %s -> %s（非名册收件人，--any 强制）\n' "$(team_timestamp)" "$what" "$r" >> "$(team_state_dir)/inbox-unknown.log"
+    team_warn "$what：$r 不在名册里 —— --any 已按要求投递，并记入 state/inbox-unknown.log"
+    return 0
+  fi
+  team_err "$what：收件人 '$r' 不在名册里（没有它的窗口，也没有人会读它的收件箱 → 消息会变成死信）"
+  team_dim "  名册：$(team_agents | tr '\n' ' ')｜ PM 自己的收件箱：pm" >&2
+  team_dim "  确认要投给这个名字：$TEAM_CLI $what $r --any \"...\"（越权投递会记进 state/inbox-unknown.log）" >&2
+  return 1
+}
+
 team_cmd_say() {
-  local agent="" msg="" verify=1
+  local agent="" msg="" verify=1 any=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-verify) verify=0; shift ;;
+      --any) any=1; shift ;;
       -*) team_usage_die "say: 未知参数 $1" ;;
       *) if [ -z "$agent" ]; then agent="$1"; elif [ -z "$msg" ]; then msg="$1"; else msg="$msg $1"; fi; shift ;;
     esac
   done
-  [ -n "$agent" ] && [ -n "$msg" ] || team_usage_die "say <agent> <单行消息> [--no-verify]"
+  [ -n "$agent" ] && [ -n "$msg" ] || team_usage_die "say <agent> <单行消息> [--no-verify] [--any]"
   case "$msg" in *$'\n'*) team_die "say 只能发单行：多行请写进文件，然后让 agent 去读" ;; esac
+  team_require_recipient "$agent" "$any" say || return 1
   local w; w="$(team_state_get "$agent" window "$agent")"
   team_tmux_has_window "$TEAM_SESSION" "$w" \
     || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 0; }
@@ -410,11 +483,14 @@ team_inbox_append() { # <agent> <tag> <msg>
 }
 
 team_cmd_notify() {
-  local from_file="" msg
+  local from_file="" msg any=0
+  while [ "${1:-}" = "--any" ]; do any=1; shift; done
   local agent="${1:?usage: notify <agent> <单行消息> | notify <agent> --from-file <摘要文件>}"; shift
+  while [ "${1:-}" = "--any" ]; do any=1; shift; done
   if [ "${1:-}" = "--from-file" ]; then
     from_file="${2:?notify --from-file 需要摘要文件路径}"; shift 2
   fi
+  while [ "${1:-}" = "--any" ]; do any=1; shift; done
   # 摘要始终是**数据**：--from-file 从文件读（worker 的文本不经过 shell）；两种路径都归一化成单行，
   # 但除换行/回车/尾部空白外**逐字节保留**（引号、$、反引号、{} 都原样进收件箱）。
   if [ -n "$from_file" ]; then
@@ -428,6 +504,7 @@ team_cmd_notify() {
     if [ -n "$from_file" ]; then team_die "notify --from-file：摘要文件是空的（$from_file）"
     else team_die "notify：摘要不能为空（收到空参数；如果用 \"\$(cat <摘要文件>)\" 取摘要，先确认那个文件写好且非空）"; fi
   fi
+  team_require_recipient "$agent" "$any" notify || return 1
   team_inbox_append "$agent" manual "$msg"
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
   if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ] \

@@ -209,6 +209,24 @@ team_load_config() {
 team_docs_abs() { printf '%s\n' "$TEAM_DOCS_ABS"; }
 team_inbox_dir() { printf '%s\n' "$TEAM_DOCS_ABS/inbox"; }
 
+# 收件人 = 名册 agent + inbox/ 里真实存在的 *.md 文件名。
+# 为什么：收件箱是 durable 通道，文件名就是真相 —— PM 自己的收件箱（team notify pm，
+# references/agent-adapters.md 推荐的那条通道）和打错名字的收件箱都写了一行，
+# 但以前只有名册里的名字会被统计/展示，于是“无待办”把 PM 的未读通知吞掉（M6.3 F26/F18）。
+# 顺序：名册在前（旧输出稳定），随后是文件里多出来的名字；去重。
+team_inbox_recipients() {
+  local dir; dir="$(team_inbox_dir)"
+  { team_agents
+    if [ -d "$dir" ]; then
+      local f
+      for f in "$dir"/*.md; do
+        [ -f "$f" ] || continue
+        basename "$f" .md
+      done
+    fi
+  } | awk 'NF && !seen[$0]++'
+}
+
 # 找报告：主工作树 → 各 agent worktree → 复验 worktree（报告提交在 agent 分支上，
 # 合并前不会出现在主工作树，所以不能只看主工作树）
 team_find_report() { # <ID> → 路径（无则返回 1）
@@ -412,25 +430,39 @@ team_assert_own_session() { # <操作名>
 
 team_session_from() { printf '%s\n' "${TEAM_SESSION_FROM:-default}"; }
 
+# 空/纯空白目标 = tmux 的「当前窗口 / pane / 会话」：测试里一个空变量就能把调用者的现场打掉
+# （真实事故发生过两次，见 M6.3 F27）。所以「目标必须非空」集中在这里，所有 tmux 包装都走它，
+# 不再各写各的 —— 这一条不变量的唯一来源就是本函数。
+# 只判空白字符（空格/制表/换行），不判 `:` 这类「session 名是空」的间接目标：
+# 那些要看调用方拿到的 session 变量，属于 team_assert_own_session 的职责。
+team_tmux_target_required() { # <操作名> <target>
+  local op="${1:-tmux 操作}" t="${2:-}"
+  case "$t" in
+    '') team_err "$op 被拒：目标为空（空目标 = 当前窗口/pane/会话，会误伤调用者）"; return 1 ;;
+    *[![:space:]]*) return 0 ;;
+    *) team_err "$op 被拒：目标只有空白（空目标 = 当前窗口/pane/会话，会误伤调用者）"; return 1 ;;
+  esac
+}
+
 # 安全包装：拒绝空目标，避免 `-t ""` 打到当前窗口/会话
 team_tmux_kill_window() { # <session:window>
   local t="${1:-}"
-  [ -n "$t" ] || { team_err "kill-window 被拒：目标为空（会误伤当前窗口）"; return 1; }
+  team_tmux_target_required "kill-window" "$t" || return 1
   tmux kill-window -t "$t" 2>/dev/null
 }
 team_tmux_kill_session() { # <session>
   local t="${1:-}"
-  [ -n "$t" ] || { team_err "kill-session 被拒：目标为空（会误伤当前会话）"; return 1; }
+  team_tmux_target_required "kill-session" "$t" || return 1
   tmux kill-session -t "$t" 2>/dev/null
 }
 team_tmux_new_window() { # <session> <name>
   local t="${1:-}" n="${2:-}"
-  [ -n "$t" ] || { team_err "new-window 被拒：session 为空"; return 1; }
+  team_tmux_target_required "new-window" "$t" || return 1
   tmux new-window -t "$t" -n "$n" -d 2>/dev/null
 }
 team_tmux_respawn_pane() { # <pane-or-target> <cmd>
   local t="${1:-}" cmd="${2:-}"
-  [ -n "$t" ] || { team_err "respawn-pane 被拒：目标为空（会误伤当前 pane：本次事故的直接原因）"; return 1; }
+  team_tmux_target_required "respawn-pane" "$t" || return 1
   tmux respawn-pane -k -t "$t" "$cmd" 2>/dev/null
 }
 
@@ -469,6 +501,7 @@ team_rule() { # 一条水平线（面板/阅读器用）
 }
 
 team_tmux_send_text() { # <session:window> <text> [meeting-slug]
+  team_tmux_target_required "send-text" "${1:-}" || return 1
   team_foreign_target_ok "$1" "${3:-}" || return 1
   tmux send-keys -t "$1" -l "$2" 2>/dev/null || return 1
   tmux send-keys -t "$1" Enter 2>/dev/null || return 1
@@ -477,11 +510,13 @@ team_tmux_send_text() { # <session:window> <text> [meeting-slug]
 # 只有目标窗口在跑 pi 时才敢打字：往停在提示符的 shell 里 send-keys 等于把那串文本
 # 当命令执行（真实事故）。这种情况只写收件箱，不敲键盘。
 team_tmux_send_to_pi() { # <session:window> <text>
+  team_tmux_target_required "send-to-pi" "${1:-}" || return 1
   team_pane_busy "$1" || return 1
   team_tmux_send_text "$1" "$2"
 }
 
 team_pane_cmd() { # <session:window> → 前台命令名
+  team_tmux_target_required "pane_current_command" "${1:-}" || { printf '%s\n' ""; return 1; }
   tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
 }
 
@@ -534,7 +569,8 @@ team_pgroup_has_process() { # <pgid> → 0 表示这个进程组里还有活进�
 }
 
 team_pane_busy() { # <session:window> → 0 = 里面有东西在跑（不是空提示符）
-  local target="$1" cmd pid args first
+  local target="${1:-}" cmd pid args first
+  team_tmux_target_required "pane_busy" "$target" || return 1
   cmd="$(team_pane_cmd "$target")"
   [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg] busy? %s cmd=%s\n' "$target" "$cmd" >&2
   team_is_shell_cmd "$cmd" || return 0            # 前台不是 shell（pi/node…）→ 在跑
@@ -582,7 +618,8 @@ team_proc_cwd() { # <pid> → 该进程的 cwd（Linux /proc；macOS 退 lsof）
 
 # 窗口里的「真正在跑的进程」：前台不是 shell 就是它；是 shell 就看它的子进程（pi 常见形态）
 team_pane_proc_pid() { # <session:window>
-  local target="$1" pid cmd child
+  local target="${1:-}" pid cmd child
+  team_tmux_target_required "pane_pid" "$target" || return 1
   pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
   [ -n "$pid" ] || return 1
   cmd="$(team_pane_cmd "$target")"
@@ -592,6 +629,7 @@ team_pane_proc_pid() { # <session:window>
 }
 
 team_pane_cwd() { # <session:window> → 窗口里那个进程的 cwd
+  team_tmux_target_required "pane_cwd" "${1:-}" || return 1
   local pid; pid="$(team_pane_proc_pid "${1:-}")" || return 1
   team_proc_cwd "$pid"
 }
@@ -634,7 +672,39 @@ team_pm_pid_record() { # <pid>：记下「本工具启动的 PM」的 pid
   printf '%s\n' "$p" > "$(team_pm_pid_file)"
 }
 
-team_pm_pid_clear() { rm -f "$(team_pm_pid_file)"; }
+team_pm_pid_clear() { rm -f "$(team_pm_pid_file)" "$(team_pm_proof_file)"; }
+
+# 启动证据（M6.3 F30）：argv = 窗口里的进程就是配置的 agent 可执行文件；
+# spawn = 我们 spawn 出来并写下自己 pid 的进程还活着且 cwd 在本项目里
+# （wrapper agent（脚本 exec 掉自己）会换掉进程映像，argv 认不出来，但 pid 仍然是我们的）。
+team_pm_proof_file() { printf '%s\n' "$TEAM_STATE_DIR/pm.pid.proof"; }
+
+team_pm_proof_record() { # argv|spawn
+  case "${1:-}" in argv|spawn) ;; *) return 1 ;; esac
+  mkdir -p "$TEAM_STATE_DIR"
+  printf '%s\n' "$1" > "$(team_pm_proof_file)"
+}
+
+team_pm_proof() { head -1 "$(team_pm_proof_file)" 2>/dev/null || true; }
+
+team_pm_proof_suffix() { local p; p="$(team_pm_proof)"; [ -n "$p" ] && printf '，proof=%s' "$p"; }
+
+# 启动命令里让 pane 里的 shell 在 exec 之前把 **自己的 pid** 写盘（exec 不换 pid）
+team_pm_spawn_file() { printf '%s\n' "$TEAM_STATE_DIR/pm.pid.spawn"; }
+
+# 我们 spawn 的那个 pid 还算不算「我们启动的 PM」：活着 + cwd 在本项目里
+team_pm_spawn_pid() {
+  local f p cwd
+  f="$(team_pm_spawn_file)"
+  [ -f "$f" ] || return 1
+  p="$(head -1 "$f" 2>/dev/null | tr -dc '0-9')"
+  [ -n "$p" ] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  cwd="$(team_proc_cwd "$p" 2>/dev/null || true)"
+  [ -n "$cwd" ] || return 1
+  team_cwd_in_project "$cwd" || return 1
+  printf '%s\n' "$p"
+}
 
 team_pm_recorded_pid() { # → 记录的 pid（没有/不合法 → 非 0）
   local f p
@@ -796,26 +866,40 @@ team_pm_start() {
   esac
   pf="$(team_pm_write_prompt)"
   local pi_bin; pi_bin="$(team_pi_bin_path)"
-  cmd="$(printf 'cd %q && exec %q %s @%q' "$TEAM_MAIN_ROOT" "$pi_bin" "$(team_pm_pi_args)" "$pf")"
-  team_pm_pid_clear      # 旧记录先作废：这一行下面是“换进程”，不能留下旧 pid 冒充新 PM
+  # spawn 证明（M6.3 F30）：让 pane 里的 shell 在 exec 之前把自己的 pid 写盘。
+  # wrapper agent（脚本最后 exec 掉自己，用来钉环境变量/flags）会换掉进程映像，
+  # 配置的 agent 名字就看不到了 —— 但那个 pid 仍然是我们启动的、还在本项目里。
+  local spawnfile; spawnfile="$(team_pm_spawn_file)"
+  cmd="$(printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
+    "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf")"
+  team_pm_pid_clear      # 旧记录先作废（pid + 证据标记）：这一行下面是“换进程”
+  rm -f "$spawnfile"
   team_tmux_respawn_pane "$target" "$cmd" || {
     team_err "respawn-pane 失败：$target"
     return 1
   }
-  # 记录 pid = **等到窗口里真的跑着配置的 agent 可执行文件**，才把它的 pid 写盘。
+  # 记录 pid = **等到有证据**才把 pid 写盘。证据二选一：
+  #   (a) 窗口里的进程就是配置的 agent 可执行文件（人工启动的 PM 也走这条）；
+  #   (b) 我们 spawn 出来并写下自己 pid 的那个进程还活着且 cwd 在本项目里。
   # 不能 respawn 完立刻读 pane_pid：那一瞬间 tmux 可能还报自己（这正是 M6.5 假存活的来源）。
+  # 判据仍是「非 shell 不算证据」：没写下 pid 的进程（比如别人放的 sleep）永远走不到 (b)。
   wait="${TEAM_PM_START_WAIT:-6}"
   i=0
   while [ "$i" -lt "$wait" ]; do
     [ "${i}" -gt 0 ] && sleep 1
     apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
     if [ -n "$apid" ]; then
-      team_pm_pid_record "$apid"
+      team_pm_pid_record "$apid"; team_pm_proof_record argv
+      return 0
+    fi
+    apid="$(team_pm_spawn_pid 2>/dev/null || true)"
+    if [ -n "$apid" ]; then
+      team_pm_pid_record "$apid"; team_pm_proof_record spawn
       return 0
     fi
     i=$((i + 1))
   done
-  team_err "PM 启动后 ${wait}s 内没在窗口 $target 里看到配置的 agent 进程：检查窗口输出与 $pf"
+  team_err "PM 启动后 ${wait}s 内既没看到配置的 agent 进程，也没等到我们 spawn 的 pid 写盘：检查窗口输出与 $pf"
   return 1
 }
 
@@ -1015,8 +1099,11 @@ team_board_counts() { # → "todo wip review blocked"
 
 team_pending_counts() { # → "inbox reports todo wip review blocked stopped"
   local a n inbox=0 stopped=0 task
-  for a in $(team_agents); do
+  # 未读通知按**收件人**算（含 pm 与任何有收件箱文件的名字），不是只按名册
+  for a in $(team_inbox_recipients); do
     n="$(team_inbox_new "$a")"; inbox=$((inbox + n))
+  done
+  for a in $(team_agents); do
     task="$(team_state_get "$a" task '')"
     if [ -n "$task" ] && ! team_agent_live "$a"; then stopped=$((stopped + 1)); fi
   done

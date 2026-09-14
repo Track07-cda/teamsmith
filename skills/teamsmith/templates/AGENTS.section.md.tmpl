@@ -20,6 +20,14 @@ Roster: {{AGENTS}} (editable in `.pi/team/config.sh`).
 2. Your own thread `{{DOCS_DIR}}/threads/<agent>.md` (the PM may have added instructions)
 3. The task brief `{{DOCS_DIR}}/tasks/<ID>-<slug>.md` (the single source of scope and acceptance commands)
 
+### Specs (OpenSpec)
+
+Specs and change proposals live in `openspec/` -- a **required dependency** (`openspec init --tools none` creates
+it). Before implementing a change, read its proposal in `openspec/changes/<id>/` and the capability spec it touches
+(`openspec/specs/<capability>/spec.md`; finished changes move to `openspec/changes/archive/`).
+`openspec validate --all --strict` is part of the gate. **Do not create a parallel spec system**: no requirement
+lists, spec copies or design sections in task briefs or docs -- if it must hold, it goes into a spec.
+
 ### Non-negotiable discipline
 
 - **Only change directories you own** (`{{DOCS_DIR}}/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in

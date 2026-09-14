@@ -80,7 +80,7 @@ team_cmd_up() {
     running:*) team_ok "PM 在运行（${pm_state#running:}）" ;;
     idle:*)    team_warn "PM 没在跑（空提示符）：启动 pi"
                if team_pm_start; then
-                 team_ok "PM 已启动（model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}，$([ -n "$TEAM_PM_SESSION_ID" ] && echo "--session-id $TEAM_PM_SESSION_ID" || echo "-c 延续上一会话")）"
+                 team_ok "PM 已启动（proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}，$([ -n "$TEAM_PM_SESSION_ID" ] && echo "--session-id $TEAM_PM_SESSION_ID" || echo "-c 延续上一会话")）"
                else
                  team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 pi"
                fi ;;
@@ -90,7 +90,7 @@ team_cmd_up() {
                local _ucwd; _ucwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')"
                team_warn "PM 窗口里有非 PM 进程（${pm_state#unknown:}，cwd=$_ucwd）：不算存活"
                if team_pm_start; then
-                 team_ok "PM 已启动（替换了非 PM 进程；model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
+                 team_ok "PM 已启动（替换了非 PM 进程；proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
                else
                  team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 pi"
                fi ;;
@@ -99,7 +99,7 @@ team_cmd_up() {
                if [ "${TEAM_REPLACE_FOREIGN_PM:-0}" = "1" ]; then
                  team_warn "PM 窗口被外来进程占用（cwd=$_cwd）：按 TEAM_REPLACE_FOREIGN_PM=1 覆盖"
                  if team_pm_start; then
-                   team_ok "PM 已启动（覆盖了外来进程）"
+                   team_ok "PM 已启动（覆盖了外来进程；proof=$(team_pm_proof || echo '?')）"
                  else
                    team_err "覆盖失败：看上面的原因"
                  fi
@@ -530,7 +530,7 @@ team_cmd_watchdog_status() {
   printf '  tmux 重建         %s\n' "$([ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ] && echo '允许（TEAM_WATCH_REBUILD_TMUX=1）' || echo '不接管（session/窗口没了只告警）')"
   local pm; pm="$(team_pm_state)"
   case "$pm" in
-    running:*) team_ok "  PM              在运行（${pm#running:}）" ;;
+    running:*) team_ok "  PM              在运行（${pm#running:}$(team_pm_proof_suffix)）" ;;
     idle:*)    team_warn "  PM              未在跑（空提示符）；有待办时看门狗会拉起它（$TEAM_CLI up 手动）" ;;
     unknown:*) team_warn "  PM              窗口里不是 PM（${pm#unknown:}，cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：**不算存活**；$TEAM_CLI up 会替换它" ;;
     foreign:*) team_warn "  PM              窗口被**不属于本项目**的进程占用（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
