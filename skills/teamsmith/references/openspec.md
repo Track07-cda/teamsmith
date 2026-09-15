@@ -7,6 +7,10 @@ process is run here** — which phase runs, in whose hands, and what has to be t
 It deliberately does not repeat OpenSpec's own documentation (artifact anatomy, requirement/scenario syntax, the
 CLI reference, `validate` output). Those live where they are generated and maintained; §0 says where.
 
+> Scope note (D23): teamsmith **uses** OpenSpec, it does not re-implement its validation. There is no custom
+> delta-semantics checker in the gate; delta mistakes surface at the trial archive above. If the same class bites
+> twice in real work, the answer is an upstream issue against `@fission-ai/openspec`, not a local mirror.
+
 ## 0. Where the authoritative OpenSpec documentation is
 
 - **The phase commands themselves** — `.pi/prompts/opsx-*.md` and `.pi/skills/openspec-*/SKILL.md`, generated for
@@ -117,7 +121,7 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 | propose | `openspec/changes/<id>/` end to end | both spec gates green and all eight checklist points pass | `docs/team/reviews/<change>-proposal.md` = ACCEPTED (or NEEDS-CHANGES + per-item findings) |
 | apply | the brief, the change, the branch, the report | the branch carries exactly the change's scenarios; the acceptance commands really ran; nothing outside the boundaries was touched | the verify brief (a different agent) |
 | verify | the change, the landed code, the verification record, the diff | every scenario was exercised with red/green evidence, on a clean independent checkout | `docs/team/reviews/<ID>.md`; then `team board set <ID> done` after re-running the gate on the merged tree |
-| archive | the verified change + the user's confirmation | every task of the change is done and landed, and the specs after the deltas describe exactly what shipped | `openspec archive -y <id>` and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
+| archive | the verified change + the user's confirmation | every task of the change is done and landed; **trial archive first**: `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y <id>)` — OpenSpec catches some delta defects (a MODIFIED naming a requirement the base lacks, an ADDED collision, …) *only here*; the trial surfaces them while fixing is cheap, and a failure hands the change back to apply with the archiver's message | then `openspec archive -y <id>` for real, and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
 
 `team board set <ID> done` reads those same phases from the brief: `explore` is done on the PM's recorded
 acceptance (a `DECISIONS.md` entry whose heading names the task, or `reviews/<ID>.md`), `propose` only on an `ACCEPTED`
