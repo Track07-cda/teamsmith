@@ -50,6 +50,20 @@ team_report_committed() { # <报告路径>
   return 0
 }
 
+# M9.8：**草稿**（agent 工作树里还没提交的报告）= 太早的信号：PM 现在动不了它，digest [3] 也只说
+# 「先等 agent 交付」。所以这个判据只写一遍，**列表显示**与**唤醒计数**共用它 —— 两处各判一次
+# 就是 M9.8 的现场（唤醒理由「待复验 6」而 digest 清单空）的温床。
+# 只对 agent 工作树里的报告这么判：主工作树里的是 PM 侧副本，`team review` 的候选链本来就会回退到它
+# （cmd-review.sh 的 F14 设计），那里「文件存在」就是可用的。
+team_report_is_draft() { # <报告路径> → 0=草稿
+  case "$1" in
+    "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) ;;
+    *) return 1 ;;
+  esac
+  team_report_committed "$1" && return 1
+  return 0
+}
+
 # ---------------------------------------------------------------- M4.3 D：squash 合并后的分支
 # PM 在 local 模式 squash 合并后，agent 分支仍持有原提交：`领先 N` 与「收尾：提交并 push」会永远留着噪音。
 # 判据是**启发式**且很便宜：分支 tip 的 tree 出现在保护分支最近 TEAM_SQUASH_LOOKBACK 个提交的 tree 里
@@ -93,13 +107,24 @@ team_wrapup_is_squash_merged() { # <worktree> <dirty> <ahead> <upstream-ahead>
 #      说成「在 <别人的> 分支上」。
 # 候选清单可以**传进来**：digest 在同一拍里要问两遍（列出来的 + 被看板跳过的），
 # 传进来就只解析一轮 BOARD/工作树（几十个文件 × awk + git，不复用就是白花一倍时间）。
-team_reports_pending_list() { # [候选清单] → 每行 "<id>\t<显示名[ 标记]>\t<路径>"
-  local cands="${1:-}" id path base note
+team_reports_pending_list() { # [候选清单] [--actionable] → 每行 "<id>\t<显示名[ 标记]>\t<路径>"
+  # --actionable = 只要**现在能动的**（草稿要等交付，PM 动不了）：digest [3] 用全量（草稿照旧列出来并
+  # 标注），唤醒计数用 --actionable。两边是**同一个函数**、同一套过滤，唯一差别是这一个开关。
+  local cands="" only_actionable=0 arg id path base note
+  for arg in "$@"; do
+    case "$arg" in
+      --actionable) only_actionable=1 ;;
+      --*) ;;
+      *) [ -n "$cands" ] || cands="$arg" ;;
+    esac
+  done
   [ -n "$cands" ] || cands="$(team_report_primary_candidates)"
   while IFS=$'\t' read -r id path; do
     [ -n "$id" ] || continue
     # M9.4 ③：看板已裁决（done/closed）→ 不列。跳过的那些由 team_reports_skipped_by_board 点名。
     case "$(team_board_status "$id")" in done|closed) continue ;; esac
+    # M9.8：草稿不叫醒（标注但不计数）。
+    if [ "$only_actionable" = "1" ] && team_report_is_draft "$path"; then continue; fi
     base="$(basename "$path" .md)"
     if [ -f "$(team_review_record_path "$id")" ]; then
       note="$(team_review_record_note "$id")"
@@ -163,6 +188,14 @@ team_report_primary_candidates() { # → 每行 "<id>\t<路径>"
     printf '%s\t%s\n' "$id" "$path"
   done < <(team_report_candidates)
 }
+
+# M9.8：唤醒判定的「待复验」= digest [3] **可行动**列表的行数：同一个函数、同一套过滤
+# （看板 done/closed 跳过、草稿标注但不计数、verify 任务按绑定 revision 判）。
+# 这是对 common.sh 同名实现的**覆盖**（cmd-status.sh 在它之后 source）：旧实现自己数一遍报告数，
+# M9.4 给清单加上看板/副本过滤之后就分家了 —— 现场 2026-09-15：watchdog 的唤醒理由「待复验 6」，
+# 同一时刻 digest [3] 的清单是空的（那 6 份全是看板已裁决的）。改这里的过滤 = 同时改唤醒理由与
+# digest 清单，这正是要的：一份判据，两个出口。
+team_reports_pending() { team_reports_pending_list --actionable | wc -l | tr -d ' '; }
 
 # <ID> → 0=这份报告在「看板没裁决」时会列为待复验（M6.2 的记录规则：没有记录 / 记录过期 / 没跑门禁）
 team_report_unverified() { # <ID>
@@ -431,11 +464,9 @@ team_cmd_digest() {
     esac
     # M4.3 C：`team review` 从任务分支的 checkout 里摘录报告 —— 还在 agent 工作区里的草稿摘不到，
     # 所以草稿不能指向 review（“signal 早于可操作”的现场），只说明等交付；仍然列出来（不静默丢）。
-    # 只对 **agent 工作树里的报告** 这么判：主工作树里的是 PM 侧副本，review 的候选链本来就会回退到它
-    # （cmd-review.sh 的 F14 设计），那里“文件存在”就是可用的。
-    local is_agent_rep=0
-    case "$rep" in "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) is_agent_rep=1 ;; esac
-    if [ "$is_agent_rep" = "1" ] && ! team_report_committed "$rep"; then
+    # M9.8：草稿判据只有一份实现（team_report_is_draft）—— 它同时决定「算不算唤醒」（不算）；
+    # 两边各判一次就会分家：digest 说「等交付」、watchdog 却按它叫醒你。
+    if team_report_is_draft "$rep"; then
       act="report 未提交：先等 agent 交付（不指 review：这份报告还不在任务分支的 HEAD 里）"
     else
       # M9.4：声明了 phase 的任务按 M9.2 的阶段证据给下一步（不是那句通用的 team review）

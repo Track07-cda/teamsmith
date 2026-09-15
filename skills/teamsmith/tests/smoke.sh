@@ -4844,6 +4844,185 @@ printf '\n## D96 · smoke — accept M96F exploration\n\n- **决策**：接受 M
 assert_eq "M9.6-⑥（控制组）：阶段证据到位 → 允许 done（报告要求不施加在阶段任务上）" "$(m96_done M96F)" "0"
 assert_has "$TMP/m96-M96F.log" "PM 接受记录" "成功输出说明用的是阶段证据（不是代码路线）"
 
+# ---------------------------------------------------------------- 25. 唤醒计数 = digest 的可行动列表（M9.8）
+# 契约（真实假信号：watchdog 的唤醒理由「待复验 6」，而同一时刻 digest [3] 的清单是空的）：
+#   ① 「待复验 N」就是 digest [3] **可行动**列表的行数 —— 同一个函数、同一套过滤
+#      （看板 done/closed 跳过、草稿标注但不计数、verify 按绑定 revision 判）；
+#   ② 草稿（agent 工作树里没提交的报告）仍然列在 digest [3]（标注「未提交」）但**不**叫醒 PM ——
+#      PM 现在动不了它；
+#   ③ 真有 1 份待复验 / 有未读通知 / 有 blocked 行 / 有任务但 agent 停了 → 照旧叫醒（对照）；
+#   ④ 长命巡检进程的代码快照过期时，判定必须切到磁盘上的代码：现场是 watchdog 窗口里跑着前一天
+#      14:12 起来的 v1.19.0（内存里还是旧规则），而 digest 是新进程。
+# 全部在自己的临时仓库里跑（先证明身份），快慢模式都跑。
+section "25 · 唤醒计数 = digest 的可行动列表（M9.8）"
+
+M98="$TMP/m98repo"; rm -rf "$M98"; mkdir -p "$M98"
+( cd "$M98" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# m98' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+M98SES="teamsmith-smoke-m98-$$"
+( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$M98SES" --agents dev --vcs local --gates "true" --docs docs/team ) >"$TMP/m98-init.log" 2>&1 \
+  && ok "M9.8 夹具仓库 init 成功" || bad "M9.8 夹具仓库 init 失败（见 $TMP/m98-init.log）"
+( cd "$M98" && git add -A && git commit -qm "chore: m98 init" ) >/dev/null 2>&1
+
+# 身份隔离（M7.2 纪律）：**写盘之前**先证明 team 认的是这个临时仓库 + 这个临时 session
+( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/m98-paths.json" 2>&1 || true
+assert_eq "M9.8 隔离：team paths 的 main_root 就是 M9.8 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m98-paths.json")" "$M98"
+assert_has "$TMP/m98-paths.json" "\"session\": \"$M98SES\"" "M9.8 隔离：身份用的是本轮临时 session"
+
+m98() { ( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+m98_lib() { # <函数> [参数…]：按 CLI 的方式加载库后调用（digest 与唤醒读的是同一批函数）
+  local fn="$1"; shift
+  ( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$fn"' "$@"' _ "$@" )
+}
+m98_brief() { # <ID>：最小任务书（头块与 PM 的模板同形）
+  mkdir -p "$M98/docs/team/tasks"
+  printf '# %s · smoke M9.8 fixture\n\ntask:   %s\nagent:  dev\ndeps:   -\nstatus: todo\n' "$1" "$1" \
+    > "$M98/docs/team/tasks/$1-m98-smoke.md"
+}
+m98_report() { # <ID> [目录]
+  local dir="${2:-$M98/docs/team/reports}"
+  mkdir -p "$dir"
+  printf '# %s · smoke M9.8 fixture\n\nagent:  dev   状态: DONE\n\n## 交付物\n- fixture（只关心它在待复验清单/唤醒计数里的样子）\n' \
+    "$1" > "$dir/$1-dev.md"
+}
+m98_add() { # <ID>：BOARD 行 + 任务书 + 已提交报告（主工作树里）
+  m98 $TEAM board add "$1" "M9.8 fixture $1" dev - >/dev/null 2>&1 || true
+  m98_brief "$1"; m98_report "$1"
+}
+m98_done() { # <ID>：看板标 done（没有复验记录 → 用 PM 的显式覆盖，形状与 P1 现场一致）
+  m98 env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="smoke M9.8 fixture" $TEAM board set "$1" done >/dev/null 2>&1 || true
+}
+m98_count()      { m98_lib team_reports_pending; }                     # 唤醒理由里的「待复验 N」
+m98_wake()       { m98_lib team_pending_text; }                        # team_watch_once 的唤醒输入（空 = 不叫醒）
+m98_actionable() { m98_lib team_reports_pending_list --actionable; }   # 可行动清单（计数的那一份）
+m98_list_all()   { m98_lib team_reports_pending_list; }                # digest [3] 的那一份（含草稿）
+m98_wait_log() { # <文件> <模式> [秒]：有界轮询（M9.7：不赌固定 sleep 采样过渡态）
+  local f="$1" pat="$2" i=0 max="$(( ${3:-20} * 10 ))"
+  while [ "$i" -lt "$max" ]; do grep -q -- "$pat" "$f" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done
+  return 1
+}
+
+# ① 5 份「看板已 done」的报告 + 0 未读 → **不叫醒**
+for i in A B C D E; do m98_add "M98$i"; m98_done "M98$i"; done
+M98_DONE_OK=0
+for i in A B C D E; do [ "$(m98_lib team_board_status "M98$i")" = "done" ] && M98_DONE_OK=$((M98_DONE_OK + 1)); done
+assert_eq "M9.8-①夹具有效：5 份报告 + 看板 done" "$M98_DONE_OK" "5"
+assert_eq "M9.8-①：看板已裁决的 5 份不计入唤醒（待复验 0）" "$(m98_count)" "0"
+assert_eq "M9.8-①：唤醒理由为空 → 不叫醒 PM" "$(m98_wake)" ""
+assert_eq "M9.8-①：可行动清单也是空（计数与清单同源）" "$(m98_actionable | wc -l | tr -d ' ')" "0"
+m98 $TEAM watch --once >"$TMP/m98-a-watch.log" 2>&1 || bad "M9.8-①：watch --once 失败（见 $TMP/m98-a-watch.log）"
+assert_has "$TMP/m98-a-watch.log" "无待办" "M9.8-①：这一拍明确说「无待办：不叫醒 PM」"
+assert_not "$TMP/m98-a-watch.log" "有待办" "M9.8-①：没有把看板 done 的报告当成待办"
+m98 $TEAM digest >"$TMP/m98-a-digest.log" 2>&1 || true
+assert_has "$TMP/m98-a-digest.log" "已按看板跳过 5 份报告" "M9.8-①：digest 点名它们为什么没被列（不静默丢）"
+
+# ② 1 份真待复验 → 叫醒（计数 = digest [3] 可行动清单的行数）
+m98_add M98F
+assert_eq "M9.8-②：1 份真待复验 → 待复验 1" "$(m98_count)" "1"
+assert_eq "M9.8-②：唤醒理由点名「待复验 1」" "$(m98_wake)" "待复验 1"
+assert_eq "M9.8-②：计数 = 可行动清单行数（同一套过滤的硬断言）" "$(m98_count)" "$(m98_actionable | wc -l | tr -d ' ')"
+m98 $TEAM watch --once >"$TMP/m98-b-watch.log" 2>&1 || true
+assert_has "$TMP/m98-b-watch.log" "待复验 1" "M9.8-②：这一拍按「待复验 1」判成有待办"
+assert_not "$TMP/m98-b-watch.log" "无待办" "M9.8-②：真的有待办时不会说不叫醒"
+m98 $TEAM digest >"$TMP/m98-b-digest.log" 2>&1 || true
+assert_has "$TMP/m98-b-digest.log" "M98F-dev" "M9.8-②：digest [3] 列的就是这一份"
+
+# ③ 未读通知 → 叫醒（对照）；唤醒理由与 digest [2] 同源
+m98 $TEAM notify dev "M9.8 fixture: unread" >/dev/null 2>&1 || true
+assert_eq "M9.8-③对照：未读通知进入唤醒理由" "$(m98_wake)" "未读通知 1 · 待复验 1"
+m98 $TEAM digest >"$TMP/m98-c-digest.log" 2>&1 || true
+assert_has "$TMP/m98-c-digest.log" "1 条新" "M9.8-③：digest [2] 与唤醒理由同源（同一个未读通知）"
+m98 $TEAM watch --once >"$TMP/m98-c-watch.log" 2>&1 || true
+assert_has "$TMP/m98-c-watch.log" "未读通知 1" "M9.8-③：未读通知照旧叫醒（对照）"
+
+# ④ 草稿（agent 工作树里的未提交报告）：digest 标注但不计数 —— 标注与不计数只有一份判据
+git -C "$M98" worktree add -q -b task/M98G-m98 "$M98/.worktrees/dev" "$PROTECTED" 2>/dev/null || true
+m98_add M98G
+mv "$M98/docs/team/reports/M98G-dev.md" "$M98/.worktrees/dev/docs/team/reports/M98G-dev.md"
+assert_file "$M98/.worktrees/dev/docs/team/reports/M98G-dev.md" "M9.8-④夹具：报告只存在于 agent 工作树（草稿）"
+assert_eq "M9.8-④：草稿仍列在清单里（不静默丢）" "$(m98_list_all | grep -c '^M98G' || true)" "1"
+assert_eq "M9.8-④：草稿不计入唤醒（标注但不计数）" "$(m98_count)" "1"
+assert_eq "M9.8-④：唤醒理由没有因草稿变多" "$(m98_wake)" "未读通知 1 · 待复验 1"
+assert_eq "M9.8-④：可行动清单 = 唤醒计数的同一套过滤" "$(m98_actionable | wc -l | tr -d ' ')" "$(m98_count)"
+m98 $TEAM digest >"$TMP/m98-d-digest.log" 2>&1 || true
+assert_has "$TMP/m98-d-digest.log" "M98G-dev" "M9.8-④：digest [3] 仍然列出草稿"
+assert_has "$TMP/m98-d-digest.log" "report 未提交" "M9.8-④：digest [3] 把草稿标注成「未提交」"
+assert_not "$TMP/m98-d-digest.log" "team review M98G" "M9.8-④：草稿不给 review 待办（还没交付）"
+
+# ⑤ 其它唤醒理由与 digest 的口径同源：blocked 行 / 有任务但 agent 停了（[5] 任务板与建议）
+m98 $TEAM board set M98F blocked >/dev/null 2>&1 || true
+assert_eq "M9.8-⑤：blocked 看板行进唤醒理由" "$(m98_wake)" "未读通知 1 · 待复验 1 · blocked 1 · 需 PM 处理"
+m98_lib team_state_set dev task M98F >/dev/null 2>&1 || true
+assert_eq "M9.8-⑤：有任务但窗口不在的 agent 也进唤醒理由" "$(m98_wake)" "未读通知 1 · 待复验 1 · blocked 1 · 需 PM 处理 · 停了的 agent 1"
+m98 $TEAM digest >"$TMP/m98-e-digest.log" 2>&1 || true
+assert_has "$TMP/m98-e-digest.log" "blocked=1" "M9.8-⑤：digest [5] 的看板计数与唤醒理由同源（blocked）"
+assert_has "$TMP/m98-e-digest.log" "M98F" "M9.8-⑤：digest [5] 里能看到那行 blocked"
+assert_has "$TMP/m98-e-digest.log" "未在跑但仍有任务 M98F" "M9.8-⑤：digest [5] 建议与「停了的 agent」同源"
+
+# ⑥ 长命巡检进程的代码快照：磁盘代码变了 → 用自己的新代码重启（现场：窗口里跑前一天的 v1.19.0）
+#    判据钉的是**决策**而不是「第二个版本标记」：基线是「无待办」（5 份看板 done + 0 未读），随后把
+#    **能改变决策的**新规则写进磁盘（可行动清单永远有 1 行）。进程若会重读磁盘代码 → 下一拍必然出现
+#    「待复验 1」；进程若按内存旧快照跑 → 永远停在「无待办」。用第二个夹具仓库（$M98B）：上一段的
+#    $M98 到这里已经有 blocked/草稿/未读，「待复验 1」会撞字符串、决策变化就测不出来。
+#    先等日志行再写第二个标记的那种写法有个 M9.7 式竞态（日志行先于 exec 落盘），这里不赌它。
+M98B="$TMP/m98repo2"; rm -rf "$M98B"; mkdir -p "$M98B"
+( cd "$M98B" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# m98b' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+( cd "$M98B" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "teamsmith-smoke-m98b-$$" --agents dev --vcs local --gates "true" --docs docs/team ) >"$TMP/m98b-init.log" 2>&1
+( cd "$M98B" && git add -A && git commit -qm "chore: m98b init" ) >/dev/null 2>&1
+m98b() { ( cd "$M98B" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+for i in A B C D E; do
+  m98b $TEAM board add "M98$i" "M9.8 fixture" dev - >/dev/null 2>&1 || true
+  mkdir -p "$M98B/docs/team/tasks" "$M98B/docs/team/reports"
+  printf '# %s · smoke M9.8 fixture\n\ntask:   %s\nagent:  dev\ndeps:   -\nstatus: todo\n' "M98$i" "M98$i" \
+    > "$M98B/docs/team/tasks/M98$i-m98.md"
+  printf '# %s · smoke M9.8 fixture\n\nagent:  dev   状态: DONE\n' "M98$i" > "$M98B/docs/team/reports/M98$i-dev.md"
+  m98b env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON=fx $TEAM board set "M98$i" done >/dev/null 2>&1 || true
+done
+M98COPY="$TMP/m98-skill"; rm -rf "$M98COPY"; cp -r "$SKILL_DIR" "$M98COPY"
+M98B_WDLOG="$M98B/.pi/team/state/watchdog.log"
+( cd "$M98B" && exec env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+    TEAM_WATCH_INTERVAL=1 bash "$M98COPY/scripts/team" monitor --interval 1 ) >"$TMP/m98-monitor.log" 2>&1 &
+M98MON=$!
+if m98_wait_log "$TMP/m98-monitor.log" "teamsmith monitor" 20; then ok "M9.8-⑥：夹具巡检进程起来了（面板已渲染）"
+else bad "M9.8-⑥：夹具巡检进程没起来"; fi
+if m98_wait_log "$M98B_WDLOG" "无待办" 20; then ok "M9.8-⑥：第一拍 5 份看板 done → 无待办（不叫醒）"
+else bad "M9.8-⑥：第一拍没有写出「无待办」（基线不对：$(tail -1 "$M98B_WDLOG" 2>/dev/null)）"; fi
+assert_not "$M98B_WDLOG" "代码快照过期" "M9.8-⑥控制组：代码没变时巡检进程不重启"
+printf '\nteam_reports_pending_list() { printf "DRIFT\tDRIFT\t/tmp/drift.md\n"; }\n' >> "$M98COPY/scripts/lib/cmd-status.sh"
+if m98_wait_log "$M98B_WDLOG" "待复验 1" 25; then
+  ok "M9.8-⑥：磁盘代码变了 → 巡检进程用**新代码**重判（日志里出现「待复验 1」）"
+else bad "M9.8-⑥：磁盘代码变了 25s 仍按内存旧快照判定（「待复验 1」没出现）—— 唤醒理由会比 digest 旧"; fi
+assert_has "$M98B_WDLOG" "代码快照过期" "M9.8-⑥：重启的理由写进了巡检日志（不静默换掉自己）"
+assert_match "$M98B_WDLOG" "本进程 v" "M9.8-⑥：重启日志点名了它内存里那份代码（指纹 + 版本）"
+kill -0 "$M98MON" 2>/dev/null && ok "M9.8-⑥：重启后巡检循环还在跑（窗口不被拆掉）" || bad "M9.8-⑥：重启后进程没了"
+kill "$M98MON" 2>/dev/null || true
+wait "$M98MON" 2>/dev/null || true
+
+# ⑦ exec 重启不换 PID → 锁必须认自己（否则重启后的 watchdog 会拒绝启动、巡检整条死掉）
+m98_lock_rc() { # <self|pid>：把锁文件写成自己/给定的 pid，调用 team_watch_lock，输出退出码
+  ( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1
+               case "${1:-}" in self) printf "%s\n" "$$" ;; *) printf "%s\n" "$1" ;; esac > "$TEAM_STATE_DIR/watchdog.pid"
+               if team_watch_lock >/dev/null 2>&1; then echo 0; else echo 1; fi' _ "$1" )
+}
+assert_eq "M9.8-⑦：锁认自己（exec 重启后 PID 不变 → 不能拒绝启动）" "$(m98_lock_rc self)" "0"
+# 对照片用的是**本轮 smoke 自己的 PID**（一定活着且我们有权发信号）：pid 1 不能当夹具 ——
+# 非 root 对它 kill -0 会因 EPERM 失败，于是「活着的进程」会被误看成陈旧 pid（老实现的同一个坑）。
+assert_eq "M9.8-⑦对照：别人（活着的进程）持锁仍然拒绝" "$(m98_lock_rc $$)" "1"
+assert_eq "M9.8-⑦对照：陈旧的 pid 文件不阻塞（旧行为不变）" "$(m98_lock_rc 99999999)" "0"
+
+# 隔离证据（M7.2 纪律）：夹具的痕迹不得出现在真实账本里。用**内容签名**判定，不做前后 hash 对比 ——
+# 真实 watchdog 每 15 分钟自己就会写 state/**，hash 对比会把它的正常写入误判成夹具泄漏。
+M98_REAL_MAIN="$(dirname "$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "$SKILL_DIR" rev-parse --show-toplevel)")"
+M98_PHANTOM="$(grep -rlE "M98[.A-G]|$M98SES" "$M98_REAL_MAIN/docs/team/inbox" "$M98_REAL_MAIN/.pi/team/state" 2>/dev/null || true)"
+if [ -n "$M98_PHANTOM" ]; then bad "M9.8 隔离：夹具的痕迹出现在真实账本里：$(printf '%s' "$M98_PHANTOM" | tr '\n' ' ')"
+else ok "M9.8 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

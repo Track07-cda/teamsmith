@@ -138,6 +138,11 @@ reviewer reads the report from a checkout of that branch. A report that still li
 is listed as "report not committed yet — wait for the agent to deliver" instead (the line stays visible; nothing is
 silently dropped).
 
+The same list is the watchdog's wake-up counter — `pending verification N` is computed by the very function §[3]
+renders (board `done`/`closed` skipped, drafts listed but *not* counted), and a long-lived patrol process
+re-executes itself as soon as `scripts/lib/**` changes on disk, so the reason it wakes the PM is never older than
+the digest the PM then reads.
+
 When a "turn ended" notification arrives, look at `git -C .worktrees/<a> log --oneline -5` and `status` first, then
 decide: dispatch the next task, send it back, or verify. After a long absence (end of day, machine reboot): **run
 `team up` first**.

@@ -30,17 +30,85 @@ team_watch_pid_alive() {
   return 1
 }
 
-team_watch_lock() { # 防止两个 watchdog 打架
-  if team_watch_pid_alive; then
-    team_err "watchdog 已在运行（pid $(cat "$TEAM_STATE_DIR/watchdog.pid")）；停止它：`team watchdog status` 看详情，kill 掉即可"
-    return 1
-  fi
+team_watch_lock() { # 防止两个 watchdog 打架（**自己持有**的锁不是冲突：代码漂移重启用 exec，PID 不变）
+  local pid
+  pid="$(cat "$TEAM_STATE_DIR/watchdog.pid" 2>/dev/null || true)"
+  case "${pid:-}" in
+    ''|*[!0-9]*) ;;
+    "${BASHPID:-$$}"|"$$") ;;   # 上一版代码就是我们自己（exec 重启）：续用这把锁
+    *) if kill -0 "$pid" 2>/dev/null; then
+         team_err "watchdog 已在运行（pid $pid）；停止它：`team watchdog status` 看详情，kill 掉即可"
+         return 1
+       fi ;;
+  esac
   mkdir -p "$TEAM_STATE_DIR"
   printf '%s\n' "$$" > "$TEAM_STATE_DIR/watchdog.pid"
   return 0
 }
 
 team_watch_unlock() { rm -f "$TEAM_STATE_DIR/watchdog.pid"; }
+
+# ---------------------------------------------------------------- 代码快照漂移（M9.8）
+# 巡检进程是**长命的**：watchdog 窗口里的 `team monitor` 可以跑几天，而磁盘上的代码随时在更新
+# （每次交付都在改 scripts/lib/**）。2026-09-15 的现场：窗口里的进程是前一天 14:12 起来的（v1.19.0），
+# 它按旧规则算出「待复验 6」，而同一时刻新进程的 digest 清单是空的 —— 唤醒理由与 digest 分家，
+# 根因不是规则写得不一样（早就是同一个函数了），而是**进程里的代码快照过期**。
+# 纪律：判定「要不要叫醒 PM」必须用**磁盘上的代码**。所以每一圈先比一次指纹，变了就把自己 exec 成
+# 新进程（exec 保留 PID、tmux pane 与 PM 会话，只有代码被换掉），理由写进 watchdog.log 与面板。
+# 说明：指纹用文件清单（大小 + mtime + 名字）而不是版本号 —— 版本号靠人记得改，代码改了没升版就测不出来。
+team_watch_lib_files() { # → "<大小> <mtime> <名字>" 每行一个（稳定排序；读不到 → 空）
+  local d="$TEAM_SKILL_DIR/scripts/lib"
+  [ -d "$d" ] || return 0
+  ( cd "$d" && ls -l --time-style=+%s ./*.sh 2>/dev/null ) | awk '{print $5, $6, $7}' | sort
+}
+
+team_watch_code_fp() { # → 本进程加载的 lib 代码**内容**指纹（读不到 → "-"）
+  # 内容而不是版本号：版本靠人记得改（改代码没升版就测不出漂移）；内容级也不漏「同一秒、同样大小的改动」。
+  local d="$TEAM_SKILL_DIR/scripts/lib" fp
+  [ -d "$d" ] || { printf -- '-\n'; return 0; }
+  fp="$(cat "$d"/*.sh 2>/dev/null | cksum | awk '{print $1}')"
+  if [ -n "$fp" ]; then printf '%s\n' "$fp"; else printf -- '-\n'; fi
+}
+
+team_watch_code_newest_mtime() { # → 磁盘上 lib 文件里最新的 mtime（读不到 → 空）
+  team_watch_lib_files | awk '{ if ($2 + 0 > m) m = $2 + 0 } END { if (m > 0) print m }'
+}
+
+# <启动指纹> <子命令> [子命令参数…]：磁盘上的代码与本进程启动时不同 → 用新代码 exec 自己。
+team_watch_reexec_if_stale() { # <启动指纹> <子命令> [子命令参数…]
+  local fp0="${1:-}" cmd="${2:-}" fp
+  [ -n "$cmd" ] || return 0
+  shift 2
+  fp="$(team_watch_code_fp)"
+  case "${fp:-}" in ''|'-') return 0 ;; esac
+  [ "$fp" = "$fp0" ] && return 0
+  team_wlog "巡检进程的代码快照过期（本进程 v$TEAM_VERSION，$fp0 → 磁盘 $fp）→ 用磁盘上的代码重启本进程"
+  team_warn "巡检进程的代码不是磁盘上的最新版（本进程 v$TEAM_VERSION）：用磁盘上的代码重启它，窗口与 PM 不受影响"
+  exec bash "$TEAM_SKILL_DIR/scripts/team" "$cmd" "$@"
+}
+
+# 窗口里的巡检进程是什么时候起来的（watchdog-status 用它报「代码快照过旧」）。
+team_watch_process_start_epoch() { # <tmux 目标> → 进程启动的 epoch 秒（判不出 → 空）
+  local pid et
+  pid="$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null | head -1 || true)"
+  case "${pid:-}" in ''|*[!0-9]*) return 0 ;; esac
+  et="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  case "${et:-}" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s\n' "$(( $(date +%s) - et ))"
+}
+
+team_watch_snapshot_line() { # <窗口进程启动 epoch|空> → 一行说明（空 = 判不出）
+  local started="${1:-}" newest
+  case "$started" in ''|*[!0-9]*) return 0 ;; esac
+  newest="$(team_watch_code_newest_mtime)"
+  case "$newest" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$newest" -gt "$started" ]; then
+    printf '★ 过旧：窗口里的巡检进程启动于 %ss 前，之后 scripts/lib 又更新过 → 唤醒理由可能比 digest 旧；跑 %s watchdog restart\n' \
+      "$(( $(date +%s) - started ))" "$TEAM_CLI"
+  else
+    printf '与磁盘上的 scripts/lib 一致（进程起来之后代码没变过）\n'
+  fi
+}
 
 # ---------------------------------------------------------------- team up
 # 人来跑的工具：把 PM 恢复起来。
@@ -323,6 +391,7 @@ team_watch_once() {
 
 team_cmd_watch() {
   local once=0 interval="${TEAM_WATCH_INTERVAL:-900}" ui=0
+  local argv=("$@") fp0=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --once) once=1; shift ;;
@@ -345,10 +414,13 @@ team_cmd_watch() {
   team_require_cmd tmux "watchdog 需要 tmux 来拉起 PM/agent"
   team_watch_lock || return 1
   trap 'team_watch_unlock' EXIT INT TERM
+  fp0="$(team_watch_code_fp)"
   team_hdr "teamsmith watchdog · $TEAM_PROJECT（每 ${interval}s 一次；Ctrl-C 退出）"
   team_dim "  只做两件事：记录容量趋势 ｜ PM 没在跑就在它的窗口里把 $(team_pm_cli_name) 拉起来"
   team_dim "  不管 tmux 布局，不管 agent（agent 归 PM 管：team resume）"
   while :; do
+    # M9.8：判定必须用磁盘上的代码（漂移就重启本进程）—— 否则唤醒理由可能比 digest 旧
+    team_watch_reexec_if_stale "$fp0" watch ${argv[@]+"${argv[@]}"}
     team_watch_once
     sleep "$interval"
   done
@@ -385,6 +457,7 @@ team_monitor_activity() { # 可选：只渲染「当前 tmux session 里正在�
 
 team_cmd_monitor() {
   local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_watchdog=1 activity="${TEAM_MONITOR_ACTIVITY:-0}"
+  local argv=("$@") fp0=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --once) once=1; shift ;;
@@ -398,8 +471,11 @@ team_cmd_monitor() {
     esac
   done
   team_require_docs
+  fp0="$(team_watch_code_fp)"
   local ticklog="$TEAM_STATE_DIR/watchdog.tick.log" last_tick=0 now
   while :; do
+    # M9.8：面板与巡检判定都必须用磁盘上的代码（漂移就重启本进程）—— 现场就是窗口里跑着前一天的代码
+    team_watch_reexec_if_stale "$fp0" monitor ${argv[@]+"${argv[@]}"}
     clear
     printf '%steamsmith monitor · %s%s  %s  %s(每 %ss 刷新%s)%s\n' \
       "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)" "$C_DIM" "$interval" \
@@ -557,6 +633,11 @@ team_cmd_watchdog_status() {
   printf '  后端             tmux（同 session 的窗口 —— 只有一个后端，无容器依赖）\n'
   printf '  日志             %s watchdog logs ／ tmux attach -t %s\n' "$TEAM_CLI" "$TEAM_SESSION"
   printf '  巡检周期         %ss（建议 300~3600；不是心跳保活，是定时看看有没有活儿）\n' "${TEAM_WATCH_INTERVAL:-900}"
+  # M9.8：唤醒理由必须由磁盘上的代码算出 —— 窗口里的进程比磁盘上的 lib 旧时明说（现场：唤醒
+  # 「待复验 6」而 digest 清单是空的，根因就是窗口里跑着前一天起来的进程）。
+  local snap; snap="$(team_watch_snapshot_line "$(team_watch_process_start_epoch "$TEAM_SESSION:$w")")"
+  if [ -n "$snap" ]; then printf '  代码快照         %s\n' "$snap"
+  else printf '  代码快照         判不出（窗口不在，或 ps/tmux 不可用）\n'; fi
   printf '  tmux 重建         %s\n' "$([ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ] && echo '允许（TEAM_WATCH_REBUILD_TMUX=1）' || echo '不接管（session/窗口没了只告警）')"
   local pm; pm="$(team_pm_state)"
   case "$pm" in
