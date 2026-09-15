@@ -24,6 +24,18 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.26.0 · 2026-09-14
+
+**worker 侧的两个"静默失败"修掉（M8.2）**
+
+- **裸可执行名会被解析**：窗口 harness 走 `bash -lc`，本机登录 shell 的 PATH 不含 `~/.bun/bin`，于是 `TEAM_AGENT_CMD`
+  首词写裸名字（文档示例写法）时 CLI **从未运行**，而 dispatch 仍打印 `✓ dispatched … proof=spawn`。现在首词替换为解析出的
+  绝对路径（复用 M8.1 的通用 helper）；PM 实测：只在 caller PATH 里可见的 CLI 真的跑起来了（它自己的日志记下了收到的 argv）。
+- **"harness 起来了"与"agent 真起来了"分开**：CLI 立刻退出时如实报
+  `✗ 派单失败：harness 起来了，但 agent 立刻退出了（exit=N）—— agent 没跑起来`，退出码非 0，
+  并把诊断（窗口尾屏 + 渲染命令 + 解析到的可执行文件）落盘 `state/dispatch-<agent>-launch-failed.log`。
+- 发布流程按 D13 走链式顺序（门禁 → bump → 提交 → tag/release），本次是第一次在顺序上真的做到。
+
 ## v1.25.0 · 2026-09-14
 
 **PM 侧也成了一个 adapter：`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`（M8.1）**
