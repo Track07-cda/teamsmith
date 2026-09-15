@@ -3,7 +3,7 @@ name: teamsmith
 description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A watchdog window wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project.
 license: MIT
 metadata:
-  version: "1.30.0"
+  version: "1.31.0"
 ---
 
 # teamsmith · one agent that actually owns the project
