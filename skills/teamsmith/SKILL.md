@@ -130,18 +130,12 @@ scenarios; teamsmith keeps the **evidence** (briefs, reports, reviews, decisions
 second spec system: if a promise belongs to the product it goes into a spec, if it is reasoning or guidance it goes
 into `references/`.
 
-```bash
-openspec list --specs                      # what the tool promises
-openspec list                              # open changes (proposal → specs → tasks)
-openspec validate --all --strict           # part of TEAM_GATES: an invalid spec fails the PM's review
-openspec change show <change>              # what a change proposes
-openspec archive -y <change>               # after the code landed and reviews/<ID>.md exists
-```
-
-Division of labour: a **change** is the requirement-level unit; a **task brief** is one work slice that names the
-change id and the scenarios it must satisfy; the **report/review** pair is the evidence; **archive** closes the
-change. A change too big for one brief becomes several tasks against the same change. Full details:
-[references/openspec.md](references/openspec.md).
+A change runs as **five phases, one brief each, one owner each**: `opsx-explore` (an explorer) → `opsx-propose` (the
+same explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (a **different** agent) → `opsx-archive` (the
+PM). Two hard rules: **an `apply` brief starts only after the PM's proposal review is ACCEPTED**
+(`docs/team/reviews/<change>-proposal.md`), and **the PM never archives without independent verification and the
+user's confirmation**. `openspec validate --all --strict` is part of `TEAM_GATES`; the phase table, the gates and
+the PM's review checklist are in [references/openspec.md](references/openspec.md).
 
 ## Getting skill updates (three paths)
 
@@ -257,7 +251,7 @@ byte-for-byte unchanged**):
 | `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
 | `references/migration.md` | The project was set up with an older version (or with the former name `pi-team`): renames, removed commands, new required dependencies, behaviour changes, the upgrade recipe and rollback |
 | `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/watchdog, scaling, blockers |
-| `references/openspec.md` | Specs and the change workflow (OpenSpec): division of labour with the task ledger, the day-to-day commands, and what a PM does when a change is bigger than one task |
+| `references/openspec.md` | The OpenSpec pipeline: five phases, their owners, the gate before each next phase, and the PM's proposal-review checklist |
 | `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |
 | `templates/` | Copy when you need to hand-write a brief/report/board |
 | `scripts/team`, `scripts/lib/*.sh` | When changing behaviour (use `team <cmd> --print` to see what it generates) |

@@ -5,24 +5,32 @@ is on PATH or symlinked, just `team`).
 
 ---
 
-## 0. The spec layer (OpenSpec): idea → change → tasks → archive
+## 0. The OpenSpec pipeline: five phases, five gates
 
 What the tool **must hold** is written as OpenSpec requirements; a task brief is one work slice that satisfies some
-of them (reasoning and guidance stay in `references/` — see [openspec.md](openspec.md)).
+of them (reasoning and guidance stay in `references/`). A change runs as **five phases, one brief and one owner
+each** — the reasoning, owners and gates are in [openspec.md](openspec.md):
+
+| # | Phase | Owner | Gate before the next phase |
+|---|---|---|---|
+| 1 | `opsx-explore` | an explorer worker (never the eventual implementer) | the PM accepts the approach, records it in `DECISIONS.md`, writes the propose brief |
+| 2 | `opsx-propose` | the explorer, same agent (planning only — no code) | the PM's **proposal review is ACCEPTED** in `reviews/<change>-proposal.md`: both spec gates green + the eight-point checklist |
+| 3 | `opsx-apply` | a dev worker | independent verification is dispatched to a different agent |
+| 4 | `opsx-verify` | an **independent** verify agent | the PM re-runs the gate on the merged tree and sets `done` |
+| 5 | `opsx-archive` | the PM | the user confirms (the PM may act as the user's proxy only when it says so and records why) |
 
 ```bash
 openspec list --specs                    # capabilities and their requirement counts
-openspec new change <name>               # open a change: proposal + delta specs + tasks
-openspec change show <name>              # what the change proposes (proposal / deltas / tasks)
-openspec validate --all --strict         # fast structural gate — the first step of TEAM_GATES
-bash skills/teamsmith/tests/spec-lint.sh # falsifiability: every requirement has a scenario, every scenario a WHEN+THEN
-openspec archive -y <name>               # after the code landed and reviews/<ID>.md exists
+openspec validate --all --strict         # structural gate — the first step of TEAM_GATES
+bash skills/teamsmith/tests/spec-lint.sh # falsifiability companion (a scenario that cannot fail is red)
+openspec archive -y <name>               # merges the deltas into openspec/specs/ and moves the change to changes/archive/
 ```
 
-Flow: idea → `openspec new change <name>` (fill `proposal.md`, `specs/<capability>/spec.md`, `tasks.md`) →
-the PM writes briefs that name the change id and the scenarios they satisfy → dispatch → verify → merge →
-`openspec archive -y <name>`, which merges the deltas into `openspec/specs/` and moves the change to
-`changes/archive/`. A change that needs more than one work block stays open across several tasks.
+The phase commands are generated per project: `openspec init --tools pi` writes `.pi/prompts/opsx-*.md`, and
+`openspec update` refreshes them (`openspec init --tools none` creates only the spec root). The two hard rules:
+**no `apply` brief before the PM's proposal review is ACCEPTED**, and **no archive before independent verification
+plus the user's confirmation**. A change that needs more than one work block stays open across several briefs,
+verified one by one, archived only after the last one landed.
 
 ## A. Assembling a team in a new project
 
@@ -162,7 +170,8 @@ bash <skill>/scripts/team board set <ID> done
 > whole problem.
 > For a forge without a CLI (Gitea/self-hosted): use `tea` or the web UI, same order.
 
-When the whole change (not just this task) is done, close the spec side too:
+When the whole change (not just this task) is done, close the spec side too — **after** the verification record
+exists, the code landed, and the user confirmed:
 
 ```bash
 openspec archive -y <change>        # merges the deltas into openspec/specs/ and archives the change (see §0)

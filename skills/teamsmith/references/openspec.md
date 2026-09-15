@@ -1,124 +1,145 @@
-# OpenSpec: the spec and change layer
+# OpenSpec: the five-phase pipeline and its gates
 
-teamsmith keeps the **evidence** (task briefs, reports, reviews, decisions). OpenSpec owns **what must hold**
-(requirements with scenarios) and the **change workflow** (proposal → specs → design → tasks → archive). There is no
-second spec system: if a promise belongs to the product it goes into a spec; if it is reasoning or guidance it goes
-into `references/`.
+OpenSpec owns **what must hold** (requirements with scenarios) and the change artifacts; teamsmith owns the
+**evidence** (briefs, reports, reviews, decisions). This document covers the part OpenSpec cannot know: **how the
+process is run here** — which phase runs, in whose hands, and what has to be true before the next one starts.
 
-## 1. Division of labour
+It deliberately does not repeat OpenSpec's own documentation (artifact anatomy, requirement/scenario syntax, the
+CLI reference, `validate` output). Those live where they are generated and maintained; §0 says where.
 
-| Layer | Owns | Lives in |
-|---|---|---|
-| OpenSpec | requirements + their scenarios; changes; archive | `openspec/specs/`, `openspec/changes/` |
-| teamsmith | one work slice: brief, dispatch, verification, merge, ledger | `docs/team/**`, `.pi/team/**` |
-| the PM | writing briefs that name the change, running the gates, archiving when the change is done | — |
+## 0. Where the authoritative OpenSpec documentation is
 
-The mapping is: **change** = requirement-level unit; **brief** = one work slice that satisfies some scenarios;
-**report** = the worker's claim; **review** = the PM's evidence; **archive** = close the change once the code landed.
+- **The phase commands themselves** — `.pi/prompts/opsx-*.md` and `.pi/skills/openspec-*/SKILL.md`, generated for
+  this project's agent tool (`openspec init --tools pi`). That is what an agent actually follows. They describe the
+  *mechanics* of a phase (how to explore, how to write the artifacts); **who may invoke a phase, and behind which
+  gate, is teamsmith's rule, not theirs** — see §1, §2 and §4.
+- **The artifact instructions** — `openspec instructions <artifact>` (proposal / specs / design / tasks / apply /
+  archive) and `openspec context` (the project context and rules an AI sees).
+- **The workflow schema** — `openspec/config.yaml` (`schema: spec-driven` plus the project's per-artifact rules).
 
-## 2. Artifacts and what they look like
+Two teamsmith-side facts frame everything below: OpenSpec is a **required dependency** (`team doctor` and
+`team paths` resolve `TEAM_OPENSPEC_BIN` / `TEAM_SPEC_DIR`), and `tests/spec-lint.sh` is the falsifiability
+companion of `openspec validate` — structure alone can be green on a spec that cannot fail, so the gate runs both.
 
-```
-openspec/
-  config.yaml                     # context + rules (proposal/specs/tasks) + apply/archive guidance
-  specs/<capability>/spec.md      # the contract: ## Purpose + ## Requirements
-  changes/<change>/
-    proposal.md                   # Why / What Changes / Capabilities / Impact
-    specs/<capability>/spec.md    # ADDED/MODIFIED/REMOVED/RENAMED deltas
-    tasks.md                      # the implementation checklist
-  changes/archive/<change>/       # finished changes (history; not a spec)
-```
+## 1. The pipeline: five phases, five owners, five gates
 
-A main-spec requirement is a level-3 header inside `## Requirements`, must contain SHALL or MUST, and needs at least
-one level-4 scenario; scenarios use WHEN/THEN bullets with concrete commands or observable outcomes. A requirement
-without a scenario that can fail is a smell — either make it observable or leave it as prose in `references/`.
+In Pi the commands are `/opsx-explore`, `/opsx-propose`, `/opsx-apply`, `/opsx-verify`, `/opsx-archive`; in another
+CLI they are the equivalent prompt/skill files (§0).
+
+| # | Phase (command) | Owner | Hand-in | Hand-out (artifact) | Gate before the next phase |
+|---|---|---|---|---|---|
+| 1 | `opsx-explore` | an **explorer** worker — never the eventual implementer (the verify agent, or a dedicated explorer) | the user's request / problem statement, existing specs and code | exploration report: options, risks, recommended approach, effort — written as the task's report | **PM**: accepts the approach, records the decision in `docs/team/DECISIONS.md`, and writes the propose brief |
+| 2 | `opsx-propose` | the **explorer** (the same agent — it holds the context) | the accepted approach | `openspec/changes/<id>/` (proposal, delta specs, design, tasks) — **planning only, no code** (the workflow itself states this boundary) | **PM proposal review — a recorded gate, same standing as `team review`**: `openspec validate --all --strict` + `tests/spec-lint.sh` green **and** the verdict written to `docs/team/reviews/<change>-proposal.md` as ACCEPTED (§4). **No apply brief may be dispatched before that.** |
+| 3 | `opsx-apply` | a **dev** agent, different from 1 and 4 | the change + the brief | code committed on its task branch + report | **independent verification** is dispatched to a different agent |
+| 4 | `opsx-verify` | an **independent verify** agent (never the implementer) | the change, the landed code, the report | verification record `docs/team/reviews/<ID>.md` + findings; every scenario of the change exercised, with red/green evidence | **PM**: re-runs the gate on the merged tree, decides `done`, and only then proposes archiving |
+| 5 | `opsx-archive` | **PM** (it changes the ledger) | the verified change | `openspec/changes/archive/<date>-<id>/` + updated capability specs | **the user** confirms; the PM may confirm as the user's proxy only when it states that plainly and records why (small, reversible, already covered by the approved approach) |
+
+An exploration whose conclusion is "not worth doing", and a verification that fails twice, do not advance: see §7.
+
+## 2. One phase = one task = one owner
+
+- The phases are **never merged into a single brief**: explore, propose, apply, verify and archive are five briefs
+  (or five gate decisions for the phases the PM owns), each with its own `task:` id, `agent:`, `deps:` and `phase:`
+  header line.
+- **No agent verifies its own work** — the `team review` rule applied to the OpenSpec phases. The verify phase is
+  owned by an agent that did not implement, and the apply phase by an agent that did not propose. Explore and
+  propose may be the same agent (it holds the context) — but neither may apply its own proposal.
+- A phase is not a formality: its hand-out is the **artifact on disk**, and the PM checks the artifact, not the
+  agent's account of it. Reports and reviews stay the evidence; nothing here replaces `reports/` + `reviews/`.
+
+## 3. How it maps onto teamsmith
+
+| OpenSpec object | teamsmith object |
+|---|---|
+| change (`openspec/changes/<id>/`) | the requirement-level unit; its id goes in the brief's `change:` line |
+| the five phases | the brief's `phase:` line (`explore\|propose\|apply\|verify\|archive`) |
+| who runs a phase | the brief's `agent:` line |
+| the phase order | `deps:` in the briefs (propose depends on the accepted exploration, apply on the ACCEPTED proposal review, verify on the landed branch) |
+| the gates | `docs/team/reviews/**` records, `team board set <ID> done`, `BOARD.md` |
+| the artifacts | `openspec/changes/<id>/`, and after archive `openspec/specs/<capability>/spec.md` |
+
+The board carries the tasks, the change carries the requirements, the ledger carries the evidence. There is still
+only **one** spec system: a promise that must hold goes into a spec; reasoning and guidance go into `references/`;
+an execution slice goes into a brief. Never grow requirement lists or spec copies inside briefs, reports or
+`docs/team/**`.
+
+## 4. The PM proposal review: a recorded gate between propose and apply
+
+After `opsx-propose` and **before the first apply brief**, the PM reviews the change artifacts and writes the
+verdict down. It is not "the PM glanced at it": it has the same standing as `team review <ID>`, and its record is
+`docs/team/reviews/<change>-proposal.md`:
 
 ```md
-### Requirement: Empty or relative tmux targets are refused
+# <change> · PM proposal review
 
-Every destructive or typing operation MUST reject an empty or relative target before calling tmux.
+time: 2026-01-01T00:00:00Z · reviewer: pm · verdict: **ACCEPTED**   # or **NEEDS-CHANGES**
 
-#### Scenario: An empty target cannot hit the caller
+## Commands run (real output, not a promise)
+$ openspec validate --all --strict        # → … exit 0
+$ bash skills/teamsmith/tests/spec-lint.sh # → … 0 violation(s)
+$ <a command the proposal itself promises> # → spot-checked: it exists and runs
 
-- **WHEN** an internal kill-window call is made with an empty target
-- **THEN** it exits non-zero and no window or pane is affected
+## Findings (one line per checklist item)
+1. matches the approved exploration — PASS
+2. observable … — PASS
+
+## Required changes (NEEDS-CHANGES only)
+- <item> · <what must change> · <who changes it>
 ```
 
-## 3. Day-to-day commands
+- **No apply task may be dispatched before the verdict is ACCEPTED.** A revised proposal is re-reviewed and the
+  record updated; a change that was agreed in conversation is still not an accepted proposal.
+- A **NEEDS-CHANGES** verdict names the checklist item, the evidence that is missing, and the owner of the fix.
+- The review looks at the **planning artifacts**, not at code — proposals are planning only.
 
-```bash
-openspec list --specs                    # capabilities + requirement counts (the tool's promises)
-openspec list                            # open changes
-openspec change show <change>            # proposal, deltas and tasks of one change
-openspec context                         # the project context + rules the AI sees when creating artifacts
-openspec validate --all --strict         # structure + strict mode; the first step of TEAM_GATES
-bash skills/teamsmith/tests/spec-lint.sh # falsifiability (requirements/scenarios); the second step
-openspec archive -y <change>             # merge the deltas into specs/ and move the change to archive/
-```
+### The PM's proposal review checklist (eight points, followed literally)
 
-`team paths` prints the resolved OpenSpec CLI and spec root (`TEAM_OPENSPEC_BIN`, `TEAM_SPEC_DIR`; both default to
-`openspec`), and `team doctor` fails when the CLI or the spec directory is missing while `TEAM_REQUIRE_OPENSPEC=1`
-(the default — OpenSpec is a required dependency, see `openspec/specs/memory-and-deps/spec.md`).
+1. **Matches the approved exploration** — no silent widening or narrowing of scope; call out scope creep *and*
+   scope cuts.
+2. **Observable** — the delta specs describe only externally observable behavior (commands, exit codes, files on
+   disk), and every scenario can fail.
+3. **Closed coverage, both ways** — every affected requirement has at least one task item, and every task item
+   points at a requirement or scenario (no orphan tasks).
+4. **Explicit boundaries** — the proposal states what is out of scope, and who may not touch which paths.
+5. **Acceptance commands** — copy-pasteable and existing: the PM runs `openspec validate --all --strict` and
+   `tests/spec-lint.sh`, then spot-checks the commands the proposal itself promises.
+6. **Defect fixes state the flip** — red → green, or "break the implementation → the guard must fail → restore it".
+7. **No conflict with existing specs** — grep `openspec/specs/` before accepting a statement: a duplicate or a
+   supersession must be a MODIFIED/REMOVED delta, not a parallel statement in a new requirement.
+8. **Granularity** — can one apply brief finish it? If not, the split and its order are named (several briefs
+   under the same change, applied and verified one by one).
 
-The gate command runs the spec checks **before** the smoke suite, because they are fast and structural: a spec that
-no longer parses (missing scenario, missing SHALL, a delta header in a main spec) fails the PM's review, and so does
-a spec that parses but cannot fail (see the next section). Note that the CLI must be on `PATH` for the gate — for a
-bun-built install that is `~/.bun/bin`, so either put it on `PATH` or pass an absolute path.
+## 5. What the PM does at each gate
 
-### The falsifiability companion (`tests/spec-lint.sh`)
+| Phase | Read | Must be true | Write |
+|---|---|---|---|
+| explore | the exploration report, the specs and code it cites | the recommendation is one option with its risks and effort, and the scope is the user's request — not a wish list | the decision in `docs/team/DECISIONS.md` + the propose brief |
+| propose | `openspec/changes/<id>/` end to end | both spec gates green and all eight checklist points pass | `docs/team/reviews/<change>-proposal.md` = ACCEPTED (or NEEDS-CHANGES + per-item findings) |
+| apply | the brief, the change, the branch, the report | the branch carries exactly the change's scenarios; the acceptance commands really ran; nothing outside the boundaries was touched | the verify brief (a different agent) |
+| verify | the change, the landed code, the verification record, the diff | every scenario was exercised with red/green evidence, on a clean independent checkout | `docs/team/reviews/<ID>.md`; then `team board set <ID> done` after re-running the gate on the merged tree |
+| archive | the verified change + the user's confirmation | every task of the change is done and landed, and the specs after the deltas describe exactly what shipped | `openspec archive -y <id>` and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
 
-`openspec validate` owns *shape*, not *falsifiability*: deleting a scenario's `THEN`, deleting the scenario (leaving
-its requirement scenario-less) or reducing a `spec.md` to a heading still validates green, so the CLI alone can
-pass with a spec that cannot fail. `skills/teamsmith/tests/spec-lint.sh` is the project-level companion that closes
-that hole (it is also a smoke-suite section, so both directions are tested):
+## 6. Preconditions
 
-```bash
-bash skills/teamsmith/tests/spec-lint.sh            # default root: $TEAM_SPEC_DIR, else openspec
-bash skills/teamsmith/tests/spec-lint.sh path/to/openspec
-```
+- The phase commands must be generated for the agents' tool: `openspec init --tools pi` writes
+  `.pi/prompts/opsx-*.md` and `.pi/skills/openspec-*/SKILL.md` (use the tool's own id for a non-Pi CLI). Once a
+  project has them, `openspec update` refreshes them; it finds the configured tools from the generated files and
+  answers "No configured tools found" when there are none. Commit the generated files with the project.
+- Without them, a phase cannot be invoked **as a command**: an agent can still do the same steps by hand from
+  OpenSpec's own docs, but then the PM cannot check that the phase really ran its workflow, the planning-only
+  boundary of propose is only a convention, and the numbered phases in a brief point at nothing. Prefer generating
+  and committing them.
+- Resolve the CLI and the spec root: `team paths` (and `team doctor`) print `TEAM_OPENSPEC_BIN` / `TEAM_SPEC_DIR`;
+  with `TEAM_REQUIRE_OPENSPEC=1` (the default) a missing CLI or spec directory fails the doctor. The gate needs the
+  CLI on `PATH` (or an absolute path in `TEAM_OPENSPEC_BIN`).
 
-It prints one `path:line: rule: detail` line per violation and exits 1; exit 0 prints the file/requirement/scenario
-counts, and exit 2 means the root itself is unusable (missing `specs/`). The rules, by name:
+## 7. Escalation: stopping a change
 
-| Rule | Fails when |
-|---|---|
-| `no-specs` | `specs/` contains no `specs/*/spec.md` at all |
-| `no-requirements` | a main `spec.md` has no `### Requirement:` block |
-| `requirement-without-scenario` | a requirement has no `#### Scenario:` block |
-| `scenario-without-when` | a scenario has no `WHEN` bullet (an assertion with no trigger) |
-| `scenario-without-then` | a scenario has no `THEN`/`AND` bullet (a trigger with no assertion) |
-| `scenario-placeholder` | a `WHEN`/`THEN` bullet is empty or vacuous (`THEN it works`, `... as expected`) |
-| `change-incomplete` | a `changes/<id>/` without a `specs/` delta, `proposal.md` or `tasks.md` |
-| `delta-requirement-without-scenario` | an `ADDED`/`MODIFIED` delta requirement has no scenario |
-
-Changes are proposals, so the checker is deliberately tolerant there: a `REMOVED`/`RENAMED` requirement may be
-scenario-less and `changes/archive/` is history, not a promise. Anything the lint refuses in a main spec is either a
-missing scenario (write one) or a statement that cannot be made observable (move it to `references/` prose — the
-`rules:` in `openspec/config.yaml` say so).
-
-## 4. Threading a change through a task
-
-1. The PM opens (or picks) a change: `openspec new change <name>`, then fills `proposal.md`, the delta spec and
-   `tasks.md` (the `rules:` in `openspec/config.yaml` say what a proposal and a task list must contain).
-2. Each brief names the change and the scenarios it must satisfy (`change:` / `specs:` in the brief header) and its
-   acceptance commands show how those scenarios are exercised.
-3. The worker implements, runs the brief's commands and reports; the PM verifies on an independent checkout
-   (`team review <ID> --dir <checkout> --strong` for milestone work).
-4. When the change is fully implemented and landed, the PM archives it: `openspec archive -y <change>`. Archive is
-   the last step — not a substitute for the ledger: `docs/team/reviews/<ID>.md` and the reports stay as the evidence.
-
-## 5. When a change is bigger than one task
-
-Keep the change open and split it into several briefs against the same change (one capability or one scenario group
-per task). Sequence them by dependency (`deps:` in the brief), verify each one on its own, and merge them one by one.
-Archive only when the last task has landed — a half-applied change stays in `openspec/changes/` where the next PM can
-see it.
-
-## 6. What deliberately stays as prose
-
-Some promises cannot be made falsifiable yet (a style of writing, "the PM should be sceptical", a policy that needs
-human judgement). Those live in `references/` as prose and MUST NOT be turned into requirements with scenarios that
-cannot fail — an unfalsifiable green is worse than no requirement. The rules in `openspec/config.yaml` encode this:
-specs need observable scenarios, proposals need copy-pasteable acceptance commands plus explicit boundaries, and a
-defect fix must state its flip (red before → green after, or a destructive test that must fail when the guard is
-removed).
+- **Exploration says "not worth doing"** → the PM records the decision in `DECISIONS.md`, does not dispatch
+  propose, and says so in the ledger. Nothing is archived, nothing is left half-planned.
+- **Verification fails twice** → the PM **stops the change**: leave it in `openspec/changes/<id>/` with a note
+  naming the blocker (and the failed findings), rather than pushing it through. The next PM can see it.
+- **The user is not available for the archive decision** → the change stays open; the code can already be merged
+  and `done` on the board (the ledger proves it), only the archive waits for the user.
+- Never archive to make a red thing disappear: `openspec archive` merges the deltas into `specs/` — after it, the
+  spec set claims the change is real. Archive only after the gate passed and the user confirmed.

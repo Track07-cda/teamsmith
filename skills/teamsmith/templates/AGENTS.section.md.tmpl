@@ -23,10 +23,19 @@ Roster: {{AGENTS}} (editable in `.pi/team/config.sh`).
 ### Specs (OpenSpec)
 
 Specs and change proposals live in `openspec/` -- a **required dependency** (`openspec init --tools none` creates
-it). Before implementing a change, read its proposal in `openspec/changes/<id>/` and the capability spec it touches
-(`openspec/specs/<capability>/spec.md`; finished changes move to `openspec/changes/archive/`).
-`openspec validate --all --strict` is part of the gate. **Do not create a parallel spec system**: no requirement
-lists, spec copies or design sections in task briefs or docs -- if it must hold, it goes into a spec.
+the spec root; `openspec init --tools pi` also generates the five phase commands, see
+`{{SKILL_DIR}}/references/openspec.md`). Before implementing a change, read its proposal in
+`openspec/changes/<id>/` and the capability spec it touches (`openspec/specs/<capability>/spec.md`; finished changes
+move to `openspec/changes/archive/`). `openspec validate --all --strict` is part of the gate. **Do not create a
+parallel spec system**: no requirement lists, spec copies or design sections in task briefs or docs -- if it must
+hold, it goes into a spec.
+
+A change runs as **five phases, one brief and one owner each**: an explorer runs `opsx-explore`, then
+`opsx-propose` (planning only); a dev runs `opsx-apply`; a **different** agent runs `opsx-verify`; the PM runs
+`opsx-archive`. Two hard rules: **no `apply` brief before the PM's proposal review
+(`{{DOCS_DIR}}/reviews/<change>-proposal.md`) is ACCEPTED**, and no agent verifies its own work; the PM archives
+only after independent verification **and the user's confirmation**. The phase names go in the brief's `phase:`
+line; the full pipeline and its gates are in `{{SKILL_DIR}}/references/openspec.md`.
 
 ### Non-negotiable discipline
 

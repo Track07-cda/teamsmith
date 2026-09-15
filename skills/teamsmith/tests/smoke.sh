@@ -3912,6 +3912,125 @@ else
   diff <(printf '%s\n' "$M73_TREE_BEFORE") <(printf '%s\n' "$M73_TREE_AFTER") | sed 's/^/     /'
 fi
 
+# ---------------------------------------------------------------- 19. OpenSpec 五阶段流水线（M9.1）
+# 契约：五阶段必须「可照着做」—— 每个阶段一行（阶段命令 + 所有者 + 门禁），两条硬规则
+#   （独立复验；归档要用户确认），propose→apply 之间的**记录式**提案审查（八条清单），
+#   以及「不重复抄 OpenSpec 手册」（指南只留指针，不得再长出 requirement/scenario 语法样板）。
+# 纯逻辑（只读文件），快慢模式都跑。
+# 判据在 os_pipeline_hits 里，违规行格式固定为 `<相对文件>: <REASON>[ <detail>]`；
+#   末尾的翻转夹具按 REASON 断言 —— **不是**「能报红就算过」，而是「删掉哪一条，就点名哪一条」。
+section "19 · OpenSpec 五阶段流水线：每阶段有所有者与门禁（M9.1）"
+
+OS_PHASES="explore propose apply verify archive"
+OS_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
+
+os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
+  local d="$1" f="$1/references/openspec.md" p t n
+  if [ ! -f "$f" ]; then printf 'references/openspec.md: GUIDE-MISSING\n'; return 0; fi
+  # ① 五个阶段各一行：第 3 列是 `opsx-<phase>`，第 4 列（所有者）与第 7 列（门禁）必须非空
+  for p in $OS_PHASES; do
+    awk -F'|' -v p="$p" '
+      $3 ~ ("`opsx-" p "`") {
+        row = 1
+        owner = $4; gate = $7
+        gsub(/[[:space:]]/, "", owner); gsub(/[[:space:]]/, "", gate)
+        if (owner == "") print "OWNER-EMPTY " p
+        if (gate == "") print "GATE-EMPTY " p
+      }
+      END { if (!row) print "ROW-MISSING " p }
+    ' "$f" | sed 's|^|references/openspec.md: |'
+  done
+  # ② 两条硬规则：没人复验自己的工作；归档要用户确认
+  grep -qi 'verifies its own work' "$f" || printf 'references/openspec.md: RULE-INDEPENDENT-MISSING\n'
+  grep -qEi 'user[^|]*confirm|confirm[^|]*user' "$f" || printf 'references/openspec.md: RULE-USER-CONFIRM-MISSING\n'
+  # ③ propose→apply 的记录式门：记录路径 + 判定词 + 「未 ACCEPTED 不得派 apply」
+  grep -q 'reviews/<change>-proposal.md' "$f" || printf 'references/openspec.md: PROPOSAL-RECORD-MISSING\n'
+  grep -q 'ACCEPTED' "$f" || printf 'references/openspec.md: PROPOSAL-VERDICT-MISSING\n'
+  grep -qi 'no apply brief' "$f" || printf 'references/openspec.md: APPLY-GATE-MISSING\n'
+  # ④ 八条审查清单逐条可照做：数量写死 8，砍掉一条就报红
+  n="$(awk '/^### The PM/ {on=1; next} /^## / {on=0} on && /^[0-9]+\./ {c++} END {print c+0}' "$f")"
+  [ "$n" = "8" ] || printf 'references/openspec.md: CHECKLIST-COUNT %s\n' "$n"
+  # ⑤ 指向 OpenSpec 自己的文档（而不是抄一遍），并写明阶段命令从哪来
+  grep -q 'openspec instructions' "$f" || printf 'references/openspec.md: DOCS-POINTER-MISSING\n'
+  grep -q 'openspec init --tools pi' "$f" || printf 'references/openspec.md: PRECONDITION-MISSING\n'
+  grep -qE '^### Requirement:' "$f" && printf 'references/openspec.md: ARTIFACT-SYNTAX-COPIED\n'
+  # ⑥ 这条门必须写进 agent/PM 真正读的文件 —— 只活在指南里 = 没人会照做
+  for t in templates/AGENTS.section.md.tmpl templates/PROTOCOL.md.tmpl SKILL.md references/workflows.md; do
+    if [ ! -f "$d/$t" ]; then printf '%s: FILE-MISSING\n' "$t"; continue; fi
+    grep -q 'opsx-apply' "$d/$t" || printf '%s: PHASE-NAMES-MISSING\n' "$t"
+    grep -q 'ACCEPTED' "$d/$t" || printf '%s: APPLY-GATE-MISSING\n' "$t"
+    grep -qi 'independent' "$d/$t" || printf '%s: INDEPENDENT-VERIFY-MISSING\n' "$t"
+  done
+  # ⑥b 任务书模板：`phase:` 头 + 五阶段枚举 + apply 门（这一份是 PM 抄着写简报的底稿）
+  t=templates/task.md.tmpl
+  if [ ! -f "$d/$t" ]; then printf '%s: FILE-MISSING\n' "$t"; else
+    grep -qE '^phase:' "$d/$t" || printf '%s: PHASE-FIELD-MISSING\n' "$t"
+    grep -q 'explore|propose|apply|verify|archive' "$d/$t" || printf '%s: PHASE-ENUM-MISSING\n' "$t"
+    grep -q 'ACCEPTED' "$d/$t" || printf '%s: APPLY-GATE-MISSING\n' "$t"
+  fi
+  for t in templates/AGENTS.section.md.tmpl templates/PROTOCOL.md.tmpl SKILL.md references/workflows.md references/openspec.md; do
+    grep -qEi 'user[^|]*confirm|confirm[^|]*user' "$d/$t" || printf '%s: USER-CONFIRM-MISSING\n' "$t"
+  done
+  return 0
+}
+
+OS_HITS="$(os_pipeline_hits "$SKILL_DIR")"
+if [ -z "$OS_HITS" ]; then
+  ok "五阶段各有所有者与门禁；两条硬规则、记录式提案审查与八条清单都在（指南 + 模板 + SKILL + runbook）"
+else
+  bad "五阶段契约被破坏："
+  printf '%s\n' "$OS_HITS" | head -5 | sed 's/^/     /'
+fi
+# 阶段命令必须真的存在（否则「跑 opsx-propose」只是名字，不是能敲的命令）
+for p in $OS_PHASES; do
+  assert_file "$OS_ROOT/.pi/prompts/opsx-$p.md" "本仓库为 Pi 生成了相位命令 opsx-$p"
+done
+for p in explore:openspec-explore propose:openspec-propose apply:openspec-apply-change verify:openspec-verify-change archive:openspec-archive-change; do
+  assert_file "$OS_ROOT/.pi/skills/${p#*:}/SKILL.md" "相位 skill ${p#*:} 在位（${p%%:*} 阶段）"
+done
+
+# 翻转夹具：沙箱副本里逐项破坏契约，检查器必须**点名**报红。
+#   红 = 破坏哪一条就报哪一条；净 = 干净副本不误报（正对照，排除「见了沙箱就报」）。
+OS_SB="$TMP/m91-sandbox"; rm -rf "$OS_SB"; mkdir -p "$OS_SB"
+cp -r "$SKILL_DIR"/references "$SKILL_DIR"/templates "$OS_SB/" 2>/dev/null || true
+cp "$SKILL_DIR/SKILL.md" "$OS_SB/" 2>/dev/null || true
+
+os_flip_red() { # <说明> <期望 REASON> <相对文件> <sed 参数...>
+  local what="$1" reason="$2" file="$3"; shift 3
+  local got
+  rm -rf "$OS_SB-x"; cp -r "$OS_SB" "$OS_SB-x"
+  sed -i "$@" "$OS_SB-x/$file"
+  got="$(os_pipeline_hits "$OS_SB-x")"
+  if printf '%s\n' "$got" | grep -q -- "$reason"; then
+    ok "翻转自测：$what → 点名 $reason"
+  else
+    bad "翻转自测：$what 漏报（期望 $reason，实际 [$(printf '%s' "$got" | head -1)]）"
+  fi
+  rm -rf "$OS_SB-x"
+}
+OS_CLEAN_HITS="$(os_pipeline_hits "$OS_SB")"
+[ -z "$OS_CLEAN_HITS" ] && ok "翻转自测：干净副本不误报（正对照）" \
+  || bad "翻转自测：干净副本被误报：$(printf '%s' "$OS_CLEAN_HITS" | head -1)"
+
+os_flip_red "指南里删掉 apply 那一行" "ROW-MISSING apply" "references/openspec.md" '/^| 3 | /d'
+os_flip_red "掏空 verify 行的所有者单元格" "OWNER-EMPTY verify" "references/openspec.md" \
+  's/^| 4 | `opsx-verify` |[^|]*|/| 4 | `opsx-verify` |  |/'
+os_flip_red "掏空 propose 行的门禁单元格" "GATE-EMPTY propose" "references/openspec.md" \
+  's/\(^| 2 | .*`opsx-propose`.*\)|[^|]*|$/\1|  |/'
+os_flip_red "删掉「未 ACCEPTED 不得派 apply」" "APPLY-GATE-MISSING" "references/openspec.md" '/No apply brief may be dispatched/d'
+os_flip_red "删掉「没人复验自己的工作」" "RULE-INDEPENDENT-MISSING" "references/openspec.md" '/verifies its own work/d'
+os_flip_red "抹掉「归档要用户确认」" "RULE-USER-CONFIRM-MISSING" "references/openspec.md" \
+  -E 's/user[^|]*confirm[^|]*/ACCOUNTABILITY-REMOVED/g'
+os_flip_red "删掉提案审查记录路径" "PROPOSAL-RECORD-MISSING" "references/openspec.md" '/reviews\/<change>-proposal/d'
+os_flip_red "把八条清单砍成七条" "CHECKLIST-COUNT 7" "references/openspec.md" '/^8\. \*\*Granularity\*\*/d'
+os_flip_red "删掉阶段命令的启用前提" "PRECONDITION-MISSING" "references/openspec.md" '/openspec init --tools pi/d'
+os_flip_red "指南把 requirement 语法样板抄回来" "ARTIFACT-SYNTAX-COPIED" "references/openspec.md" '$a ### Requirement: Copied syntax'
+os_flip_red "任务书模板不再提 apply 门" "APPLY-GATE-MISSING" "templates/task.md.tmpl" '/ACCEPTED/d'
+os_flip_red "AGENTS 协议段不再提用户确认" "USER-CONFIRM-MISSING" "templates/AGENTS.section.md.tmpl" \
+  -E 's/user[^|]*confirm[^|]*/ACCOUNTABILITY-REMOVED/g'
+os_flip_red "任务书模板删掉 phase: 头" "PHASE-FIELD-MISSING" "templates/task.md.tmpl" '/^phase:/d'
+os_flip_red "runbook 里的 verify 不再写独立" "INDEPENDENT-VERIFY-MISSING" "references/workflows.md" '/independent/d'
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

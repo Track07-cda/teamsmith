@@ -6,6 +6,7 @@ agent:  {{AGENT}}
 issue:  {{ISSUE}}
 change: -            # OpenSpec change id this brief implements (`openspec list`, e.g. add-agent-timeout); "-" if no requirement changes
 specs:  -            # requirements/scenarios it must satisfy, e.g. `dispatch: a brief is self-contained`; "-" if none
+phase:  -            # OpenSpec pipeline phase this brief runs: explore|propose|apply|verify|archive ("-" for work outside the pipeline); one phase = one brief = one owner
 deps:   {{DEPS}}
 status: todo
 budget: <one work block; if it runs long, deliver a PARTIAL report rather than silently hanging>
@@ -15,6 +16,9 @@ budget: <one work block; if it runs long, deliver a PARTIAL report rather than s
 > format must be self-contained. PM dispatch: `team dispatch {{AGENT}} {{ID}} {{DOCS_DIR}}/tasks/{{ID}}-{{SLUG}}.md`
 > When the brief names a change and scenarios, its acceptance must show how those scenarios are exercised
 > (`openspec validate --all --strict` is part of `{{GATES}}`); the spec text itself stays in `openspec/specs/`.
+> The five phases are `explore|propose|apply|verify|archive` and the `phase:` line names the one this brief runs.
+> **An `apply` brief may not start before the PM's proposal review is ACCEPTED** in
+> `{{DOCS_DIR}}/reviews/<change>-proposal.md` (the PM's recorded gate — see the skill's `references/openspec.md`).
 
 ## Required evidence
 
