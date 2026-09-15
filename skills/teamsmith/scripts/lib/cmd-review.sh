@@ -50,6 +50,8 @@ team_task_title() { # <ID> → 标题（BOARD 的「任务」列，其次任务�
 #   · digest/status 用「判定 + 被验 HEAD」判断这条记录还新不新鲜（F3：记录只对它验过的 revision 负责）；
 #   · 一条“没跑过门禁”的记录（--no-gates → SKIPPED / 未配置 → UNKNOWN）不算证据（F12）。
 # 抬头里的 `分支: `x`` / `HEAD: `sha`` / `判定: **X**` 因此是稳定接口（改抬头要同步这些读取函数）。
+# M9.5：新鲜度还按**阶段**取被判对象 —— verify 的记录绑定的是被验分支（抬头 `分支:`），复验者自己的
+# 分支不是被判对象；其余任务仍是任务分支当前 tip。
 team_review_record_path() { printf '%s\n' "$TEAM_DOCS_ABS/reviews/$1.md"; }
 
 # 128+n → 信号名（写复验记录用；认不出来就给数字，不编名字）
@@ -94,6 +96,37 @@ team_review_branch_tip() { # <ID> → 任务分支当前 tip（解析不到 → 
   git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0
 }
 
+# M9.5：verify 任务的被判对象是**记录验过的那个 revision**，不是复验者自己的分支。
+# 复验者会把报告提交在自己的分支上（记录写完之后它还会动一格），拿它当判据会把一份「被验东西什么都没变」
+# 的记录每拍标成过期 —— 真实现场：V2 的 PASS 记录绑着 P2.1 的 398716887，digest 却按 verify 自己的
+# task/V2-… 分支判它 stale。记录抬头里已经写着被验分支，verify 阶段就读它。
+team_review_record_branch() { # <ID> → 记录抬头 `时间: … · 分支: \`x\`` 里的分支（没有这个形状 → 空）
+  local f b; f="$(team_review_record_path "$1")"
+  [ -f "$f" ] || return 0
+  # 只认抬头行的形状：正文里引用同一条格式（V1.1/V4.0 的报告里就有）不算
+  b="$(awk -F'分支: `' '/^时间: / && NF>1 { split($2, a, "`"); print a[1]; exit }' "$f" 2>/dev/null || true)"
+  [ -n "$b" ] || return 0
+  printf '%s\n' "$b"
+}
+
+# staleness 判定用的「被判对象当前 tip」：
+#   apply / 未声明 phase → 任务分支当前 tip（M6.2 的行为，逐字不变）；
+#   verify             → 记录绑定的被验分支当前 tip。
+# 解析不到（记录没写分支 / 写的是 HEAD / 分支已被合并删除 / 记录绑的是 sha）→ 空 = 无法判定「又动了」。
+# 与既有规则一致：解析不到不算过期，否则合并后的任务会永远待办。
+team_review_subject_tip() { # <ID> → 被判对象的当前 tip（无法判定 → 空）
+  local id="$1" phase b
+  phase="$(team_task_phase "$id")"
+  if [ "$phase" = "verify" ]; then
+    b="$(team_review_record_branch "$id")"
+    [ -n "$b" ] || return 0
+    case "$b" in HEAD|-|—) return 0 ;; esac
+    git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0
+    return 0
+  fi
+  team_review_branch_tip "$id"
+}
+
 team_review_record_note() { # <ID> → "" / 一行标记：gates: none / stale: verified A, branch now B
   local id="$1" verdict rec_head tip
   verdict="$(team_review_record_verdict "$id")"
@@ -104,7 +137,7 @@ team_review_record_note() { # <ID> → "" / 一行标记：gates: none / stale: 
   esac
   rec_head="$(team_review_record_head "$id")"
   [ -n "$rec_head" ] || { printf 'verified revision unknown\n'; return 0; }
-  tip="$(team_review_branch_tip "$id")"
+  tip="$(team_review_subject_tip "$id")"
   [ -n "$tip" ] || return 0
   case "$tip" in "$rec_head"*) return 0 ;; esac
   printf 'stale: verified %s, branch now %s\n' "$rec_head" "${tip:0:9}"

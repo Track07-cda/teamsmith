@@ -133,6 +133,12 @@ second-guess it), and while a phase task is still in progress the digest names t
 `explore`/`propose`/`archive` the deliverable does not live on a code branch, so a generic `team review <ID>` would
 send the PM at the wrong artifact.
 
+Staleness is judged per phase against the revision a record is bound to: for a `verify` task that is the branch named
+in the record's header (`分支:`) — the verifier's own branch carries its report commit, so a new commit there does not
+expire the record, while a new commit on the reviewed branch does and puts the task back on the pending list — and for
+tasks with no `phase:` (including `apply`) it stays the code-task rule, the record against the task branch's current
+tip.
+
 ## 6. Preconditions
 
 - The phase commands must be generated for the agents' tool: `openspec init --tools pi` writes

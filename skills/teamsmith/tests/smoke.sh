@@ -4550,6 +4550,121 @@ else bad "M9.3-⑤：只剩一份任务书仍被拒（见 $TMP/m93-f-single.log�
 assert_has "$TMP/m93-f-single.log" "=== agent 命令" "控制组真的走到派单计划"
 assert_has "$TMP/m93-f-single.log" "prompt-m93c-M93E.md" "控制组派的就是 M93E 这一次的 scope"
 
+# ---------------------------------------------------------------- 23. verify 的待复验判据 = 记录绑定的 revision（M9.5）
+# 契约（真实假信号：V2 的 PASS 记录绑着 P2.1 的 398716887，digest 却按复验者自己的 task/V2-… 分支把它标成
+# stale「verified 398716887, branch now 44788f09b」）：
+#   ① verify 任务：记录只对它验过的 revision 负责 —— 被判对象是记录抬头里的 `分支:`（被验分支），
+#      复验者自己随后在报告分支上落的提交**不算**过期；
+#   ② 真信号不许被吞掉：被验分支在记录之后又前进一格 → 仍然列为待复验，并点名两个 revision；
+#   ③ 控制组：未声明 phase 的任务照旧「记录 vs 任务分支当前 tip」（M6.2/F3 行为逐字不变）。
+# 纯逻辑（夹具自己的任务书/报告/分支/记录 + 与 digest 同一批函数），快慢模式都跑。
+section "23 · verify 任务的待复验判据 = 记录绑定的 revision（M9.5）"
+cd "$REPO" || exit 1
+
+m95_brief() { # <ID> <phase|->：最小任务书（头块与 PM 的模板同形）
+  mkdir -p "$REPO/docs/team/tasks"
+  { printf '# %s · smoke M9.5 fixture\n\ntask:   %s\nagent:  dev\n' "$1" "$1"
+    [ "$2" = "-" ] || printf 'phase:  %s\n' "$2"
+    printf 'change: -\ndeps:   -\nstatus: todo\n'; } > "$REPO/docs/team/tasks/$1-m95-smoke.md"
+}
+m95_add() { # <ID> <phase|->：BOARD 行 + 任务书（看板保持 wip：M9.4 的「已裁决不列」不会插进来）
+  $TEAM board add "$1" "M9.5 fixture $1" dev - >/dev/null 2>&1 || true
+  m95_brief "$1" "$2"
+  $TEAM board set "$1" wip >/dev/null 2>&1 || true
+}
+m95_report() { # <ID>：任务报告（主工作树；标题让 team_report_is_task 认得）
+  mkdir -p "$REPO/docs/team/reports"
+  printf '# %s · smoke M9.5 fixture\n\nagent:  dev   状态: DONE\n\n## 交付物\n- fixture（只关心待复验清单怎么判它）\n' \
+    "$1" > "$REPO/docs/team/reports/$1-dev.md"
+}
+m95_lib() { # <函数> [参数…]：在夹具仓库里按 CLI 的方式加载库后调用（digest 用的是同一批函数）
+  local fn="$1"; shift
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$fn"' "$@"' _ "$@" )
+}
+m95_head()        { m95_lib team_review_record_head   "$1"; }   # 记录绑定的 revision（9 位）
+m95_note()        { m95_lib team_review_record_note   "$1"; }   # digest 读的 staleness 标记
+m95_old_subject() { m95_lib team_review_branch_tip "$1"; }      # 旧判据 = 任务分支当前 tip（M6.2）
+m95_pending()     { m95_lib team_reports_pending_list; }
+m95_commit() { # <工作树> <提交信息>：夹具提交（作者固定，不碰仓库/全局 git 配置）
+  git -C "$1" add -A >/dev/null 2>&1 || true
+  git -C "$1" -c user.email=smoke@local -c user.name=smoke commit -qm "$2" >/dev/null 2>&1 || true
+}
+m95_wt_remove() { git -C "$REPO" worktree remove --force "$1" >/dev/null 2>&1 || true; }
+
+# ① verify：记录绑定被验分支 X，复验者自己的分支 Y（它把报告提交在这里）≠ X → 不算过期
+V95X_BR="task/P95A-reviewed"        # 被验分支（记录抬头 `分支:`）
+V95Y_BR="task/V95A-verify-report"   # 复验者自己的分支（旧判据会命中它）
+V95X_WT="$TMP/m95-x-wt"; V95Y_WT="$TMP/m95-y-wt"; V95X_CO="$TMP/m95-x-checkout"
+m95_wt_remove "$V95X_WT"; m95_wt_remove "$V95Y_WT"; m95_wt_remove "$V95X_CO"
+git -C "$REPO" branch -D "$V95X_BR" "$V95Y_BR" >/dev/null 2>&1 || true
+m95_add V95A verify
+m95_report V95A
+git -C "$REPO" worktree add -q -b "$V95X_BR" "$V95X_WT" "$PROTECTED" \
+  && ok "M9.5-①现场：被验分支 X 就绪" || bad "M9.5-①现场：建不出被验分支 X"
+printf 'the revision that was reviewed\n' > "$V95X_WT/impl.txt"
+m95_commit "$V95X_WT" "feat(P95A): the reviewed revision"
+git -C "$REPO" worktree add -q -b "$V95Y_BR" "$V95Y_WT" "$V95X_BR"
+printf 'verifier own-branch note (report commit)\n' > "$V95Y_WT/own-branch.txt"
+m95_commit "$V95Y_WT" "docs(V95A): the verifier's own commit on its branch"
+git -C "$REPO" worktree add -q --detach "$V95X_CO" "$V95X_BR"
+( cd "$REPO" && $TEAM review V95A --dir "$V95X_CO" --branch "$V95X_BR" ) >"$TMP/m95-a-review.log" 2>&1 \
+  && ok "M9.5-①现场：被验分支上写出一条 PASS 记录" || bad "M9.5-①现场：review 失败（见 $TMP/m95-a-review.log）"
+assert_has "$REPO/docs/team/reviews/V95A.md" "判定: **PASS**" "M9.5-①记录判定 PASS（staleness 判定会继续往下走）"
+V95A_REC="$(m95_head V95A)"; V95A_X="$(git -C "$REPO" rev-parse --short=9 "$V95X_BR")"; V95A_Y="$(git -C "$REPO" rev-parse --short=9 "$V95Y_BR")"
+assert_eq "M9.5-①夹具有效：记录绑定的就是被验分支 X 的 revision" "$V95A_REC" "$V95A_X"
+assert_eq "M9.5-①夹具有效：旧判据命中的是复验者自己的分支 Y" "$(m95_old_subject V95A | cut -c1-9)" "$V95A_Y"
+assert_eq "M9.5-①夹具有效：Y ≠ X（旧实现一定会判 stale，测得到这次回归）" "$([ "$V95A_Y" != "$V95A_X" ] && echo yes || echo no)" "yes"
+assert_eq "M9.5-①：verify 记录绑定 X、自己的分支 Y 又动了 → 不算过期" "$(m95_note V95A)" ""
+m95_pending >"$TMP/m95-a-pending.log"
+assert_not "$TMP/m95-a-pending.log" "V95A" "M9.5-①：不再列为待复验"
+$TEAM digest >"$TMP/m95-a-digest.log" 2>&1 || true
+assert_not "$TMP/m95-a-digest.log" "team review V95A" "M9.5-①：digest 也不给它 review 待办"
+
+# ② 真信号：被验分支在记录之后又前进一格 → 仍然过期（点名两个 revision，行动照旧 team review）
+printf 'a commit after the record\n' > "$V95X_WT/impl2.txt"
+m95_commit "$V95X_WT" "fix(P95A): a commit after the verification record"
+V95A_X2="$(git -C "$REPO" rev-parse --short=9 "$V95X_BR")"
+assert_eq "M9.5-②夹具有效：被验分支确实又动了（X 新 tip ≠ 记录 HEAD）" "$([ "$V95A_X2" != "$V95A_REC" ] && echo yes || echo no)" "yes"
+assert_eq "M9.5-②：被验 revision 之后又落了提交 → stale（两个 revision 都点名）" \
+  "$(m95_note V95A)" "stale: verified $V95A_REC, branch now $V95A_X2"
+m95_pending >"$TMP/m95-b-pending.log"
+assert_has "$TMP/m95-b-pending.log" "V95A-dev [stale: verified $V95A_REC, branch now $V95A_X2]" \
+  "M9.5-②：清单里点名两个 revision（真信号没被吞掉）"
+$TEAM digest >"$TMP/m95-b-digest.log" 2>&1 || true
+assert_has "$TMP/m95-b-digest.log" "V95A-dev [stale: verified $V95A_REC, branch now $V95A_X2]" "M9.5-②：digest 同样标出过期"
+assert_has "$TMP/m95-b-digest.log" "team review V95A" "M9.5-②：digest 给出下一步"
+
+# ②c 被验分支已合并删除（记录里的分支解析不到）→ 无法判定「又动了」，记录仍然有效
+#    （与 M6.2 对已删分支的既有规则一致：解析不到不等于过期，否则合并后的任务会永远待办）
+m95_wt_remove "$V95X_WT"; m95_wt_remove "$V95X_CO"
+git -C "$REPO" branch -D "$V95X_BR" >/dev/null 2>&1 || true
+assert_eq "M9.5-②c：被验分支已删除（解析不到）→ 不算过期" "$(m95_note V95A)" ""
+m95_pending >"$TMP/m95-b2-pending.log"
+assert_not "$TMP/m95-b2-pending.log" "V95A" "M9.5-②c：已删被验分支的 verify 记录不再列为待复验"
+
+# ③ 控制组：没有 phase 的任务照旧「记录 vs 任务分支当前 tip」（M6.2/F3，行为逐字不变）
+V95C_BR="task/V95C-impl"; V95C_WT="$TMP/m95-c-wt"; V95C_CO="$TMP/m95-c-checkout"
+m95_wt_remove "$V95C_WT"; m95_wt_remove "$V95C_CO"
+git -C "$REPO" branch -D "$V95C_BR" >/dev/null 2>&1 || true
+m95_add V95C -
+m95_report V95C
+git -C "$REPO" worktree add -q -b "$V95C_BR" "$V95C_WT" "$PROTECTED"
+printf 'code under review\n' > "$V95C_WT/code.txt"
+m95_commit "$V95C_WT" "feat(V95C): the reviewed code"
+git -C "$REPO" worktree add -q --detach "$V95C_CO" "$V95C_BR"
+( cd "$REPO" && $TEAM review V95C --dir "$V95C_CO" --branch "$V95C_BR" ) >"$TMP/m95-c-review.log" 2>&1 \
+  && ok "M9.5-③现场：代码任务写出一条 PASS 记录" || bad "M9.5-③现场：review 失败（见 $TMP/m95-c-review.log）"
+V95C_REC="$(m95_head V95C)"
+assert_eq "M9.5-③控制组：刚写完的记录不算过期（与改动前一致）" "$(m95_note V95C)" ""
+printf 'a commit after the record\n' > "$V95C_WT/code2.txt"
+m95_commit "$V95C_WT" "feat(V95C): a commit after the verification record"
+V95C_TIP="$(git -C "$REPO" rev-parse --short=9 "$V95C_BR")"
+assert_eq "M9.5-③控制组：任务分支又动了 → 照旧 stale（消息形状不变）" \
+  "$(m95_note V95C)" "stale: verified $V95C_REC, branch now $V95C_TIP"
+m95_pending >"$TMP/m95-c-pending.log"
+assert_has "$TMP/m95-c-pending.log" "V95C-dev [stale: verified $V95C_REC, branch now $V95C_TIP]" "M9.5-③控制组照旧列为待复验"
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
