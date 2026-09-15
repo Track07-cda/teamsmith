@@ -4156,6 +4156,128 @@ printf '\n## D94 · smoke — accept X9.10\n' >> "$REPO/docs/team/DECISIONS.md"
 assert_eq "控制：未知 phase 值不解释（= 没有 phase）→ 拒绝" "$(m92_done X9.10)" "1"
 assert_not "$TMP/m92-X9.10.log" "阶段" "未知 phase 的拒绝信息也不提阶段路线"
 
+# ---------------------------------------------------------------- 21. 待复验清单不得越过看板决定（M9.4）
+# 契约（真实假信号：P1 已 REVIEW+done 还每拍被列为待复验）：
+#   ① 看板已裁决（done/closed）的任务**永远不列**在待复验里 —— 证据是在看板转变那一刻核对的
+#      （M9.2），清单不得反过来质疑看板；
+#   ② 还挂在 todo/wip 的任务保持 M6.2 的旧规则（控制组：跳过只能来自看板，不能来自文件名）；
+#   ③ 声明了 phase 的任务给的是**阶段**的下一步 —— explore/propose/archive 的交付不在代码分支上，
+#      那句通用的 `team review <ID>` 会让 PM 去验错东西；
+#   ④ 叠分支（apply 建在 propose 上，D16）带来的报告副本不能抢走正本，也不能被说成「在别人的分支上」；
+#   ⑤ 跳过的报告不静默丢：digest 用一行点名，team status <ID> 也说明为什么。
+# 纯逻辑（只写夹具自己的 docs/team + 夹具工作树），快慢模式都跑。
+section "21 · 待复验清单不得越过看板决定（M9.4）"
+cd "$REPO" || exit 1
+
+m94_brief() { # <ID> <phase|-> <change|->：与 PM 的模板同形的最小任务书
+  local id="$1" phase="$2" change="$3"
+  mkdir -p "$REPO/docs/team/tasks"
+  {
+    printf '# %s · smoke M9.4 fixture\n\n```\ntask:   %s\nagent:  dev\n' "$id" "$id"
+    [ "$phase" = "-" ] || printf 'phase:  %s\n' "$phase"
+    printf 'change: %s\ndeps:   -\nstatus: todo\n```\n' "$change"
+  } > "$REPO/docs/team/tasks/$id-smoke.md"
+}
+m94_add() { # <ID> <agent> <phase|-> <change|->：BOARD 建行 + 任务书
+  $TEAM board add "$1" "pending fixture" "$2" "-" >/dev/null 2>&1 || true
+  m94_brief "$1" "$3" "$4"
+}
+m94_report() { # <ID> <agent> [目录]：写一份任务报告（标题与文件名都要让 team_report_is_task 认得）
+  local dir="${3:-$REPO/docs/team/reports}"
+  mkdir -p "$dir"
+  printf '# %s · smoke M9.4 fixture\n\nagent: %s   状态: DONE\n\n## 交付物\n- fixture（本用例只关心它出现在待复验清单里的方式）\n' \
+    "$1" "$2" > "$dir/$1-$2.md"
+}
+m94_review() { # <change> <判定>：写一份提案审查记录
+  mkdir -p "$REPO/docs/team/reviews"
+  printf '# %s · PM proposal review\n\nverdict: **%s**\n' "$1" "$2" > "$REPO/docs/team/reviews/$1-proposal.md"
+}
+m94_pending() { # → 待复验清单（与 CLI 同一个函数：每行 "<id>\t<显示名>\t<路径>"）
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_reports_pending_list' )
+}
+
+# ① phase=propose + 提案审查记录 ACCEPTED + 看板 done → **不列**
+#    （done 的证据是 M9.2 核对的提案记录，不是 reviews/<任务ID>.md）
+m94_add M94A dev propose m94-change-a
+m94_report M94A dev
+m94_review m94-change-a ACCEPTED
+env TEAM_BOARD_DONE_FORCE=0 $TEAM board set M94A done >"$TMP/m94-a-done.log" 2>&1 || true
+assert_eq "M9.4-①：propose 任务的阶段证据（ACCEPTED）允许看板 done" "$(board_status M94A)" "done"
+m94_pending >"$TMP/m94-a-pending.log"
+assert_not "$TMP/m94-a-pending.log" "M94A" "看板 done 的 phase 任务不再列为待复验"
+$TEAM digest >"$TMP/m94-a-digest.log" 2>&1 || true
+assert_not "$TMP/m94-a-digest.log" "team review M94A" "digest 不再给 done 的 phase 任务派 review 待办"
+assert_has "$TMP/m94-a-digest.log" "已按看板跳过" "digest 用一行说明它为什么没被列（不静默跳过）"
+assert_has "$TMP/m94-a-digest.log" "M94A-dev" "跳过行点名了那份报告"
+
+# ② 控制组：同一个夹具只把看板换成 wip → **仍然在清单里**（跳过只能来自看板，不能来自文件名）
+m94_add M94B dev propose m94-change-b
+m94_report M94B dev
+m94_review m94-change-b ACCEPTED
+$TEAM board set M94B wip >/dev/null 2>&1 || true
+m94_pending >"$TMP/m94-b-pending.log"
+assert_has "$TMP/m94-b-pending.log" "M94B" "看板还没裁决时，propose 任务的报告仍然列出来（控制组）"
+$TEAM digest >"$TMP/m94-b-digest.log" 2>&1 || true
+assert_has "$TMP/m94-b-digest.log" "阶段证据已就绪" "wip 的 phase 任务给的是阶段下一步（M9.2 的证据）"
+assert_has "$TMP/m94-b-digest.log" "m94-change-b-proposal.md" "阶段下一步点名了提案审查记录"
+assert_not "$TMP/m94-b-digest.log" "team review M94B" "不再给 phase 任务一句通用的 team review"
+
+# ③ 普通代码任务 + 看板 done（无复验记录，照搬 P1 现场的 FORCED）→ **不列**，但 digest 必须说出来
+m94_add M94C dev - -
+m94_report M94C dev
+env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="smoke M9.4: 看板裁决先于复验记录（真实 P1 现场）" \
+  $TEAM board set M94C done >"$TMP/m94-c-done.log" 2>&1 || true
+assert_eq "M9.4-③：没有记录时 done 要靠 PM 显式覆盖（与 P1 现场一致）" "$(board_status M94C)" "done"
+m94_pending >"$TMP/m94-c-pending.log"
+assert_not "$TMP/m94-c-pending.log" "M94C" "看板 done 的代码任务不再列为待复验（哪怕没有复验记录）"
+$TEAM digest >"$TMP/m94-c-digest.log" 2>&1 || true
+assert_has "$TMP/m94-c-digest.log" "已按看板跳过" "digest 点名说明了为什么没列"
+assert_has "$TMP/m94-c-digest.log" "M94C-dev" "跳过行点名了那份报告"
+assert_not "$TMP/m94-c-digest.log" "team review M94C" "跳过之后 digest 不再给 review 待办"
+$TEAM status M94C >"$TMP/m94-c-status.log" 2>&1 || true
+assert_has "$TMP/m94-c-status.log" "不列" "team status <ID> 也说明这份报告为什么不列"
+
+# ④ 控制组：没有 phase、看板 wip 的报告 → 行与行动照旧（行为不变）
+m94_add M94D dev - -
+m94_report M94D dev
+$TEAM board set M94D wip >/dev/null 2>&1 || true
+m94_pending >"$TMP/m94-d-pending.log"
+assert_has "$TMP/m94-d-pending.log" "M94D" "控制组：没有 phase 的报告照旧列为待复验"
+$TEAM digest >"$TMP/m94-d-digest.log" 2>&1 || true
+assert_has "$TMP/m94-d-digest.log" "team review M94D" "代码任务照旧给 team review 待办"
+
+# ⑤ 叠分支（D16）：apply 分支建在 propose 分支上 → 同一份报告出现在两份工作树里。
+#    工作树名字故意让**副本**排在字母前面（m94a < m94z）：只按 glob 顺序挑副本的实现会把这份报告
+#    说成「在 m94a 的分支上」（归错任务），也把正本（m94z）挤掉。
+M94_Z="$REPO/.worktrees/m94z"    # propose：报告的正本（作者 == 工作树名）
+M94_A="$REPO/.worktrees/m94a"    # apply：基于 propose，继承同一份报告（字母序在前）
+git -C "$REPO" worktree remove --force "$M94_Z" >/dev/null 2>&1 || true
+git -C "$REPO" worktree remove --force "$M94_A" >/dev/null 2>&1 || true
+git -C "$REPO" branch -D task/M94E-propose task/M94P-apply >/dev/null 2>&1 || true
+m94_add M94E m94z propose m94-change-e
+m94_review m94-change-e ACCEPTED
+git -C "$REPO" worktree add -q -b task/M94E-propose "$M94_Z" main
+m94_report M94E m94z "$M94_Z/docs/team/reports"
+git -C "$M94_Z" add -A
+git -C "$M94_Z" -c user.email=smoke@local -c user.name=smoke commit -qm "docs(M94E): propose report"
+git -C "$REPO" worktree add -q -b task/M94P-apply "$M94_A" task/M94E-propose
+assert_file "$M94_A/docs/team/reports/M94E-m94z.md" "叠分支夹具：副本确实出现在 apply 工作树里"
+$TEAM board set M94E wip >/dev/null 2>&1 || true
+m94_pending >"$TMP/m94-e-pending.log"
+assert_eq "M9.4-④：同一个任务只列一行（副本不重复计数）" "$(grep -c '^M94E' "$TMP/m94-e-pending.log" || true)" "1"
+assert_match "$TMP/m94-e-pending.log" 'm94z/docs/team/reports/M94E-m94z\.md$' \
+  "留下的是归属副本（m94z 自己的分支），字母序不再说了算"
+$TEAM digest >"$TMP/m94-e-digest.log" 2>&1 || true
+assert_has "$TMP/m94-e-digest.log" "M94E-m94z（在 m94z 分支上）" "digest 把报告归到它自己的工作树"
+assert_not "$TMP/m94-e-digest.log" "在 m94a 分支上" "不会把副本说成「在 m94a 分支上」（归错任务）"
+# 正本的工作树不在了（任务收尾、agent 换了分支）：只剩副本时必须说出来是副本 —— 不静默丢，也不乱归属
+git -C "$REPO" worktree remove --force "$M94_Z" >/dev/null 2>&1 || true
+m94_pending >"$TMP/m94-e2-pending.log"
+assert_match "$TMP/m94-e2-pending.log" '/m94a/' "正本不在本地时仍然列出这份报告（不静默丢）"
+$TEAM digest >"$TMP/m94-e2-digest.log" 2>&1 || true
+assert_has "$TMP/m94-e2-digest.log" "副本：在 m94a 的工作树里" "digest 明说这是副本，不把归属算到 m94a 头上"
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

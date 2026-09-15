@@ -2306,6 +2306,15 @@ team_board_row() { # <id> → 整行（列位置由表头决定）
     /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v); if (v==id) { print; exit } }' "$f"
 }
 
+# M9.4：某个任务在看板上的状态（BOARD 里没有这一行 → 空）。调用方用它判断「看板已经裁决过了吗」：
+# done/closed 的行不能同时又「等 PM 复验」——清单不得反过来质疑看板的决定。
+team_board_status() { # <id> → todo|wip|review|done|blocked|dropped|closed|…（没有这一行 → 空）
+  local row
+  row="$(team_board_row "$1" 2>/dev/null || true)"
+  [ -n "$row" ] || return 0
+  team_board_field "$row" status
+}
+
 # ---------------------------------------------------------------- pi 可执行文件（窗口 PATH 就绪竞态，erp 实测）
 # dispatch/resume 在窗口 shell 加载完 PATH 前就 exec pi → "pi: command not found"。
 # 对策：解析成绝对路径写进窗口命令 + 派单前先校验存在。

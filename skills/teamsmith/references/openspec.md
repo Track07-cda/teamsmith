@@ -127,6 +127,12 @@ record, and `archive` once the change id appears under `openspec/changes/archive
 exactly the code-task rule — the guard is never widened for tasks that do not declare a phase, and an archived
 directory is evidence of the archive, not of the user's confirmation.
 
+The same phase evidence is what clears a phase task from the digest's pending-verification list: a board row the PM
+has already moved to `done` is never listed again (the evidence was checked at the transition, so the list does not
+second-guess it), and while a phase task is still in progress the digest names the phase's own next step — for
+`explore`/`propose`/`archive` the deliverable does not live on a code branch, so a generic `team review <ID>` would
+send the PM at the wrong artifact.
+
 ## 6. Preconditions
 
 - The phase commands must be generated for the agents' tool: `openspec init --tools pi` writes

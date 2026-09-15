@@ -73,7 +73,7 @@ team_wrapup_is_squash_merged() { # <worktree> <dirty> <ahead> <upstream-ahead>
   team_branch_squash_merged "$wt"
 }
 
-# ---------------------------------------------------------------- 待复验清单（复验证据感知版）
+# ---------------------------------------------------------------- 待复验清单（复验证据 + 看板感知版）
 # M6.2 · F3 + F12：common.sh 里那版是「reviews/<ID>.md 存在 == 已复验」，于是
 #   ① 记录永远压制待办（分支后来又交付了提交，digest 也不再提示）；
 #   ② --no-gates 写的 SKIPPED 记录和 PASS 一样被当成证据。
@@ -84,23 +84,124 @@ team_wrapup_is_squash_merged() { # <worktree> <dirty> <ahead> <upstream-ahead>
 # 这样“没跑过门禁的复验”和“分支在复验后又动了”都看得见。
 # 注意：这是对 common.sh 同名函数的**覆盖**（cmd-status.sh 在它之后 source）；pending 逻辑
 # 归 M6.2（见 M6.2 任务书），M6.1 负责的状态/看板函数不动。
-team_reports_pending_list() { # → 每行 "<id>\t<显示名[ 标记]>\t<路径>"
-  local glob base id ids=" " note
-  for glob in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
-    [ -f "$glob" ] || continue
-    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"   # F6：id 可以带 '-'，按最长已知前缀取
-    case "$ids" in *" $id "*) continue ;; esac
-    team_report_is_task "$glob" "$id" || continue
+# M9.4 再加两条（都是真实假信号：P1 已 done 还每拍被列出来）：
+#   ③ **看板已裁决的不列**：done/closed 的行不能同时又「等 PM 复验」——证据是在看板转变那一刻
+#      核对的（M9.2 的 team_done_evidence），清单不得反过来质疑看板。跳过的报告不静默丢：
+#      digest 用一行点名（team_reports_skipped_by_board），team status <ID> 也说明为什么；
+#   ④ **副本归属**：叠分支（apply 建在 propose 上，DECISIONS D16）会把 propose 阶段的报告带进
+#      apply 的工作树。同一个 id 有多份副本时先归属副本、后继承副本，digest 也不会把继承副本
+#      说成「在 <别人的> 分支上」。
+# 候选清单可以**传进来**：digest 在同一拍里要问两遍（列出来的 + 被看板跳过的），
+# 传进来就只解析一轮 BOARD/工作树（几十个文件 × awk + git，不复用就是白花一倍时间）。
+team_reports_pending_list() { # [候选清单] → 每行 "<id>\t<显示名[ 标记]>\t<路径>"
+  local cands="${1:-}" id path base note
+  [ -n "$cands" ] || cands="$(team_report_primary_candidates)"
+  while IFS=$'\t' read -r id path; do
+    [ -n "$id" ] || continue
+    # M9.4 ③：看板已裁决（done/closed）→ 不列。跳过的那些由 team_reports_skipped_by_board 点名。
+    case "$(team_board_status "$id")" in done|closed) continue ;; esac
+    base="$(basename "$path" .md)"
     if [ -f "$(team_review_record_path "$id")" ]; then
       note="$(team_review_record_note "$id")"
       [ -n "$note" ] || continue          # 记录有效且新鲜 → 不算待办
-      ids="$ids$id "
-      printf '%s\t%s\t%s\n' "$id" "$base [$note]" "$glob"
+      printf '%s\t%s [%s]\t%s\n' "$id" "$base" "$note" "$path"
     else
-      ids="$ids$id "
-      printf '%s\t%s\t%s\n' "$id" "$base" "$glob"
+      printf '%s\t%s\t%s\n' "$id" "$base" "$path"
     fi
+  done <<< "$cands"
+}
+
+# 报告候选：主工作树 + 各 agent 工作树（**全部**目录，不只名册：叠分支的副本会落在别人的工作树里）。
+# 输出顺序即优先级（team_report_primary_candidates 的去重取第一个）：主工作树 → 归属副本 → 继承副本。
+team_report_candidates() { # → 每行 "<id>\t<路径>"
+  local glob base id rank pass
+  for glob in "$TEAM_DOCS_ABS/reports/"*.md; do
+    [ -f "$glob" ] || continue
+    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"   # F6：id 可以带 '-'，按最长已知前缀取
+    team_report_is_task "$glob" "$id" || continue
+    printf '%s\t%s\n' "$id" "$glob"
   done
+  for pass in 1 2; do
+    for glob in "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
+      [ -f "$glob" ] || continue
+      base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"
+      team_report_is_task "$glob" "$id" || continue
+      rank="$(team_report_copy_rank "$glob" "$id")"
+      [ "$rank" = "$pass" ] || continue
+      printf '%s\t%s\n' "$id" "$glob"
+    done
+  done
+}
+
+# M9.4 ④：这份工作树里的报告是**本任务的**（正本），还是叠分支带过来的旧拷贝？
+#   0 = 主工作树（PM 侧副本，本来就不是「在谁的分支上」）
+#   1 = 归属工作树：报告文件名里的作者就是这份工作树的主人（<ID>-<agent>.md 在 .worktrees/<agent>/），
+#       或派单记录说它现在的任务就是这个（team_state_get），或它 HEAD 就是 task/<ID>
+#   2 = 继承副本：以上都不是 —— 文件是历史/叠分支带过来的（apply 分支建在 propose 分支上，D16）
+team_report_copy_rank() { # <报告路径> <id> → 0|1|2
+  local rep="$1" id="$2" who wt branch
+  case "$rep" in
+    "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) ;;
+    *) printf '0\n'; return 0 ;;
+  esac
+  who="${rep#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
+  case "$(basename "$rep" .md)" in "$id-$who") printf '1\n'; return 0 ;; esac
+  [ "$(team_state_get "$who" task '')" = "$id" ] && { printf '1\n'; return 0; }
+  wt="$(team_agent_worktree "$who")"
+  branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  case "$branch" in "$TEAM_TASK_BRANCH_PREFIX/$id") printf '1\n'; return 0 ;; esac
+  printf '2\n'
+}
+
+# 每个任务只留一份副本（优先级见 team_report_candidates）；返回的这份就是 digest / status 说的那份。
+team_report_primary_candidates() { # → 每行 "<id>\t<路径>"
+  local id path ids=" "
+  while IFS=$'\t' read -r id path; do
+    [ -n "$id" ] || continue
+    case "$ids" in *" $id "*) continue ;; esac
+    ids="$ids$id "
+    printf '%s\t%s\n' "$id" "$path"
+  done < <(team_report_candidates)
+}
+
+# <ID> → 0=这份报告在「看板没裁决」时会列为待复验（M6.2 的记录规则：没有记录 / 记录过期 / 没跑门禁）
+team_report_unverified() { # <ID>
+  [ -f "$(team_review_record_path "$1")" ] || return 0
+  [ -n "$(team_review_record_note "$1")" ] || return 1
+  return 0
+}
+
+# M9.4：待复验条目给的「下一步」。声明了 phase 的任务里，explore/propose/archive 的交付**不在代码分支上**
+# （探索结论 / 提案审查记录 / 归档目录），那句通用的 `team review <ID>` 会让 PM 去验错东西；
+# 这三类阶段给出阶段证据（M9.2 的 team_done_phase_evidence）与下一步。apply/verify 的交付就是代码与复验
+# 记录本身，动作与未声明 phase 的任务逐字一致（不借 phase 把行动搅浑）。
+team_report_pending_action() { # <ID> → 一行「下一步」
+  local id="$1" phase change pev
+  phase="$(team_task_phase "$id")"
+  case "$phase" in
+    explore|propose|archive)
+      change="$(team_task_change "$id")"
+      if pev="$(team_done_phase_evidence "$id" "$phase" "$change")"; then
+        printf '阶段证据已就绪（%s）→ 等 PM 把看板移入 done\n' "$pev"
+      else
+        printf '阶段 %s 证据未就绪：%s\n' "$phase" "$pev"
+      fi
+      return 0 ;;
+  esac
+  printf '→  %s review %s\n' "$TEAM_CLI" "$id"
+}
+
+# M9.4 ③：因为看板已裁决而**不列**、但本来会被列出来的报告（digest 用一行点名；静默跳过 = 假阴性藏身处）。
+team_reports_skipped_by_board() { # [候选清单] → 每行 "<id>\t<显示名>\t<路径>"
+  local cands="${1:-}" id path st
+  [ -n "$cands" ] || cands="$(team_report_primary_candidates)"
+  while IFS=$'\t' read -r id path; do
+    [ -n "$id" ] || continue
+    st="$(team_board_status "$id")"
+    case "$st" in done|closed) ;; *) continue ;; esac
+    team_report_unverified "$id" || continue
+    printf '%s\t%s\t%s\n' "$id" "$(basename "$path" .md)" "$path"
+  done <<< "$cands"
 }
 
 # F4：push 状态必须相对 @{upstream} 量。旧实现拿保护分支当代理 —— 分支 push 过、又被 squash 合并后，
@@ -237,6 +338,18 @@ team_cmd_status() {
       [ -n "$rnote" ] && rextra="$rextra · $rnote"
       printf '  复验 %s（判定: %s%s）\n' "$TEAM_DOCS_ABS/reviews/$id.md" "${rv:-未知}" "$rextra"
     }
+    # M9.4：看板已裁决（done/closed）→ 这份报告不列在待复验里。为什么必须说出来：
+    # 静默跳过是假阴性藏身的地方，PM 看不到“它没被列”就只能猜。
+    local bst brp
+    bst="$(team_board_status "$id")"
+    case "$bst" in
+      done|closed)
+        brp="$(team_find_report "$id" 2>/dev/null || true)"
+        if [ -n "$brp" ] && team_report_unverified "$id"; then
+          printf '  待复验：**不列**（看板是 %s；报告的证据在看板转变时核对，见 %s/reviews/%s-done.md）\n' \
+            "$bst" "$TEAM_DOCS_DIR" "$id"
+        fi ;;
+    esac
   else
     printf 'BOARD：\n'
     grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null | tail -n +3 | sed 's/^/  /' || true
@@ -297,8 +410,10 @@ team_cmd_digest() {
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
-  printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标）"
+  printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标；看板已 done/closed 的不列）"
   any=0
+  # M9.4：候选清单只解析一轮，列清单与被看板跳过的清单共用它（这个段落每次巡检都跑）
+  local cands; cands="$(team_report_primary_candidates)"
   local rid disp rep where act
   while IFS=$'\t' read -r rid disp rep; do
     [ -n "$disp" ] || continue
@@ -307,7 +422,12 @@ team_cmd_digest() {
     case "$rep" in
       "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*)
         local who="${rep#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
-        where="（在 $who 分支上）" ;;
+        # M9.4 ④：叠分支会把别的任务的报告带进这个工作树 —— 那是副本，不是「在它的分支上」。
+        if [ "$(team_report_copy_rank "$rep" "${rid:-${disp%%-*}}")" = "1" ]; then
+          where="（在 $who 分支上）"
+        else
+          where="（副本：在 $who 的工作树里，本任务自己的工作树里没有它）"
+        fi ;;
     esac
     # M4.3 C：`team review` 从任务分支的 checkout 里摘录报告 —— 还在 agent 工作区里的草稿摘不到，
     # 所以草稿不能指向 review（“signal 早于可操作”的现场），只说明等交付；仍然列出来（不静默丢）。
@@ -318,13 +438,25 @@ team_cmd_digest() {
     if [ "$is_agent_rep" = "1" ] && ! team_report_committed "$rep"; then
       act="report 未提交：先等 agent 交付（不指 review：这份报告还不在任务分支的 HEAD 里）"
     else
-      act="→  $TEAM_CLI review ${rid:-${disp%%-*}}"
+      # M9.4：声明了 phase 的任务按 M9.2 的阶段证据给下一步（不是那句通用的 team review）
+      act="$(team_report_pending_action "${rid:-${disp%%-*}}")"
     fi
     printf '  %s%s  %s\n' "$disp" "$where" "$act"
-  done < <(team_reports_pending_list)
+  done < <(team_reports_pending_list "$cands")
   [ "$any" -eq 0 ] && team_dim "  （无）"
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
+  # M9.4 ③：被看板跳过的要点名（静默跳过 = 假阴性藏身处）。只报「本来会被列出来」的那些：
+  # 有有效记录的报告本来也不列，把它们混进来只会制造新噪音。
+  local sskip sid sname spath sname_list="" sn=0
+  sskip="$(team_reports_skipped_by_board "$cands" || true)"
+  while IFS=$'\t' read -r sid sname spath; do
+    [ -n "$sid" ] || continue
+    sn=$((sn + 1)); sname_list="${sname_list:+$sname_list、}$sname"
+  done <<< "$sskip"
+  if [ "$sn" -gt 0 ]; then
+    team_dim "  已按看板跳过 ${sn} 份报告（任务已 done/closed）：$sname_list · 证据在 board set 时核对（M9.2），这里不重复质疑"
+  fi
 
   # 待收尾：agent 做了活但没收干净（脏工作区 / 相对 upstream 有未 push 的提交）——CEP 实测的盲区。
   # F4：这里只对「真的没 push 出去」报警；领先保护分支是**另一个指标**，单独标出来（旧实现混为一谈）。
