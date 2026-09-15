@@ -24,6 +24,20 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.27.0 · 2026-09-14
+
+**OpenSpec 指引重写为"流程管理"（M9.1）**
+
+- `references/openspec.md` 从"复述 OpenSpec 手册"改为"**谁在什么时候跑哪个阶段、门在哪里**"：五阶段
+  （`opsx-explore → propose → apply → verify → archive`）各带 owner / 输入 / 产出 / 门；一个阶段 = 一个任务 = 一个 owner；
+  与 teamsmith 的简报/看板/账本如何对应；PM 在每个门的清单；前置条件（必须为 agent 的 CLI 生成这些命令）；以及"不值得做就停"的升级路径。
+- **propose 与 apply 之间加了记录式 PM 产物审查**：判定写在 `docs/team/reviews/<change>-proposal.md`
+  （ACCEPTED / NEEDS-CHANGES + 逐条 findings + PM 实际跑过的命令），**未 ACCEPTED 不得派 apply**；附八条审查清单。
+- 两条硬规则写进 agent 最先读的模板（AGENTS.section / PROTOCOL）：**验证必须独立**（不许自验），**归档需用户确认**
+  （PM 只有在明确声明并记录理由时才能以用户角度代为确认）。
+- 本仓库跑 `openspec update --tools pi`，生成 `.pi/prompts/opsx-*.md` 与 `.pi/skills/openspec-*`；smoke 新增 §19
+  逐条断言五阶段契约（翻转时点名被破坏的那条规则）。
+
 ## v1.26.0 · 2026-09-14
 
 **worker 侧的两个"静默失败"修掉（M8.2）**
