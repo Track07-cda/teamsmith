@@ -1884,9 +1884,12 @@ team_board_write() { # <id> <status> → 0=真的改了那一行；1=没有这�
 
 # ---------------------------------------------------------------- done 的准入证据（F1）
 # 「状态是承诺」：`done` 必须当场有可核对的东西（只读检查，skill 不碰 git 写操作）：
-#   ① 复验记录 <docs>/reviews/<ID>.md 存在，且判定不是 FAIL/TIMEOUT；或
-#   ② 任务分支的 tip 已经在保护分支里（真 merge/fast-forward）。**squash 合并不会满足 ②**，
-#      所以走 squash 流程时靠 ① 解锁。
+#   ① 复验记录 <docs>/reviews/<ID>.md 存在，且判定不是 FAIL/TIMEOUT（PASS/UNKNOWN/SKIPPED 都算）；或
+#   ② 任务分支的 tip 已经在保护分支里（真 merge/fast-forward）**且该分支的提交里有一份已提交的报告**
+#      <docs>/reports/<ID>-*.md（M9.6）。**squash 合并不会满足 ②**，所以走 squash 流程时靠 ① 解锁。
+# M9.6：② 为什么要报告 —— 「tip 是祖先」对**刚建出来、一个提交都没有**的分支同样成立
+#   （`main..tip` 对「合并了」和「没动过」都是 0），git 分不出这两者。提交进分支的报告才是
+#   「这个分支真的干过活」的形状；报告路径规则与 M4.3-C 同源（草稿不算，git 里只有提交）。
 # 覆盖：PM 显式给理由（TEAM_BOARD_DONE_FORCE=1 + TEAM_BOARD_DONE_REASON="…"），并落盘审计。
 team_review_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN|none|missing
   local f="$TEAM_DOCS_ABS/reviews/$1.md" v=""
@@ -1972,6 +1975,27 @@ team_proposal_verdict() { # <change>
        | sed -E 's/^(verdict|判定): //' | tr '[:lower:]' '[:upper:]' || true)"
   printf '%s\n' "${v:-none}"
   return 0
+}
+
+# M9.6：分支/提交里**已提交**的报告（`<docs>/reports/<ID>-*.md`）。M4.3-C 的「草稿不算」在 git 里的版本：
+# 只认提交树里的文件 —— 未跟踪 / 改过 / 只 staged 的草稿一律不算（那正是「报告写在别人工作区里」的形状）。
+# 为什么 ② 需要它：「分支 tip 是保护分支的祖先」对**刚建出来、一个提交都没有**的分支同样成立
+# （`main..tip` 对「合并了」和「没动过」都是 0），git 分不出这两者。任务分支的提交树里有一份报告，
+# 才是「这个分支真的干过活」的形状（M4.3-C 的草稿规则 + F14 的「报告是交付物」）。
+# <ID> <rev> → 0=找到（stdout 分支里的路径）/1=没有
+team_committed_report() {
+  local id="$1" rev="$2" p base
+  [ -n "$id" ] && [ -n "$rev" ] || return 1
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    base="${p##*/}"
+    case "$base" in "$id"-*.md) ;; *) continue ;; esac
+    # 非任务报告（closure/summary/milestone 之类）不算交付 —— 与 team_report_is_task 的排除一致
+    case "$base" in *-closure*|*-summary*|*-milestone*) continue ;; esac
+    printf '%s\n' "$p"
+    return 0
+  done < <(git -C "$TEAM_MAIN_ROOT" ls-tree -r --name-only "$rev" -- "$TEAM_DOCS_DIR/reports/" 2>/dev/null || true)
+  return 1
 }
 
 # 阶段专属交付证据：stdout = 一行「找到了什么」（成立）或「差什么、去哪找」（不成立）；0=成立。
@@ -2061,6 +2085,7 @@ team_done_phase_next() { # <ID>
 
 team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证据（stdout 检查明细）
   local id="$1" rel="$TEAM_DOCS_DIR/reviews/$id.md" verdict branch tip detail="" phase="" change="" pev=""
+  local rep_glob="$TEAM_DOCS_DIR/reports/$id-*.md" rep="" report_detail=""
   verdict="$(team_review_verdict "$id")"
   case "$verdict" in
     PASS)    printf '复验记录 %s（判定 PASS）\n' "$rel"; return 0 ;;
@@ -2076,8 +2101,14 @@ team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证�
     tip="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"
   fi
   if [ -n "$tip" ] && git -C "$TEAM_MAIN_ROOT" merge-base --is-ancestor "$tip" "$TEAM_PROTECTED_BRANCH" 2>/dev/null; then
-    printf '分支 %s（%s）已经是 %s 的祖先（代码真的落地了）\n' "$branch" "${tip:0:9}" "$TEAM_PROTECTED_BRANCH"
-    return 0
+    # M9.6：祖先还不够 —— 刚建出来、一个提交都没有的分支 tip 同样是祖先（git 分不出「合并了」和「没动过」）。
+    # 这条路线再要求分支的提交里有一份报告：报告是交付物，空分支交不出来。
+    if rep="$(team_committed_report "$id" "$tip")"; then
+      printf '分支 %s（%s）已经是 %s 的祖先，且提交里有报告 %s（代码真的落地了）\n' \
+        "$branch" "${tip:0:9}" "$TEAM_PROTECTED_BRANCH" "$rep"
+      return 0
+    fi
+    report_detail="分支 $branch（${tip:0:9}）已经是 $TEAM_PROTECTED_BRANCH 的祖先，但它的提交里没有报告 $rep_glob（刚建出来、一个提交都没有的分支也长这样 —— 报告要提交进 git，工作区里的草稿不算）"
   fi
   # M9.2：声明了已知 phase 的任务再给一条**阶段专属**的证据路线；phase 为空（未声明/`-`/不认识）
   # 时整段跳过 —— 旧规则逐字不变。
@@ -2090,7 +2121,9 @@ team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证�
     fi
   fi
   printf '  - ① 复验记录 %s：%s\n' "$rel" "$detail"
-  if [ -z "$branch" ]; then
+  if [ -n "$report_detail" ]; then
+    printf '  - ② 分支是否已并入 %s：%s\n' "$TEAM_PROTECTED_BRANCH" "$report_detail"
+  elif [ -z "$branch" ]; then
     printf '  - ② 分支是否已并入 %s：找不到 %s 的分支\n' "$TEAM_PROTECTED_BRANCH" "$id"
   elif [ -z "$tip" ]; then
     printf '  - ② 分支是否已并入 %s：分支 %s 解析不到 commit\n' "$TEAM_PROTECTED_BRANCH" "$branch"
@@ -2139,7 +2172,8 @@ team_done_gate() { # <ID> <命令标签>
   fi
   printf '%s\n' "$ev" >&2
   team_err "没有可核对的证据（BOARD 未改动）——done 是一句承诺，不能只凭手写"
-  team_err "  ① 先复验（判定 PASS）或先合并到 $TEAM_PROTECTED_BRANCH：$TEAM_CLI review $id --dir <独立checkout>"
+  team_err "  ① 先复验（判定 PASS），或把**带已提交报告**（$TEAM_DOCS_DIR/reports/$id-*.md）的分支并入 $TEAM_PROTECTED_BRANCH（M9.6：合并与报告要同时在）"
+  team_err "     复验：$TEAM_CLI review $id --dir <独立checkout>"
   team_err "  ② PM 确认可以直接 done：TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON=\"为什么\" $label"
   # 声明了 phase 的任务再把**阶段专属**的下一步写出来（没声明 → hint 为空，消息与以前逐字相同）
   phase="$(team_task_phase "$id")"

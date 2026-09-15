@@ -127,7 +127,9 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 acceptance (a `DECISIONS.md` entry whose heading names the task, or `reviews/<ID>.md`), `propose` only on an `ACCEPTED`
 `reviews/<change>-proposal.md` (a `NEEDS-CHANGES` record refuses and says so), `verify` on the task's review
 record, and `archive` once the change id appears under `openspec/changes/archive/`; `apply` keeps the code-task rule
-(non-`FAIL` review record or merged branch tip). A brief with no `phase:` line (or `-`, or an unknown value) keeps
+(non-`FAIL` review record, or a merged branch tip **whose commits carry the task's report** `<docs>/reports/<ID>-*.md`
+— a branch created a minute ago is an ancestor of the protected branch too, so the committed report is what tells
+"merged with content" apart from "created and never touched"). A brief with no `phase:` line (or `-`, or an unknown value) keeps
 exactly the code-task rule — the guard is never widened for tasks that do not declare a phase, and an archived
 directory is evidence of the archive, not of the user's confirmation.
 

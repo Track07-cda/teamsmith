@@ -393,12 +393,24 @@ assert_file "$REPO/docs/team/reviews/T1.1-done.md" "done 写审计文件"
 assert_has "$REPO/docs/team/reviews/T1.1-done.md" "FORCED" "覆盖记成 FORCED"
 assert_has "$REPO/docs/team/reviews/T1.1-done.md" "smoke: 手工确认" "覆盖理由落盘"
 $TEAM board set T1.1 todo >/dev/null 2>&1
-# 或条件②：分支 tip 已经在保护分支里 → 没有复验记录也允许（正对照：闸门不是「一律拒绝」）
+# 或条件②：分支 tip 已经在保护分支里（**且分支的提交里有一份报告**，M9.6）→ 没有复验记录也允许
+# （正对照：闸门不是「一律拒绝」；零提交的空分支是 M9.6 的反面夹具，见第 24 节）
 git -C "$REPO" branch task/T9.8-ancestor "$PROTECTED" >/dev/null 2>&1
 $TEAM board add T9.8 "ancestor case" dev "-" >/dev/null 2>&1
+# 夹具：分支上真的干过活（一份提交进 git 的报告），再 fast-forward 进保护分支
+m96_anc_wt="$TMP/done-ancestor-wt"
+git -C "$REPO" worktree remove --force "$m96_anc_wt" >/dev/null 2>&1 || true
+git -C "$REPO" worktree add -q "$m96_anc_wt" task/T9.8-ancestor
+mkdir -p "$m96_anc_wt/docs/team/reports"
+printf '# T9.8 · smoke\n\nreport (M9.6 fixture)\n' > "$m96_anc_wt/docs/team/reports/T9.8-dev.md"
+git -C "$m96_anc_wt" add -- docs/team/reports/T9.8-dev.md >/dev/null 2>&1
+git -C "$m96_anc_wt" -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "docs(T9.8): report (M9.6 fixture)" >/dev/null 2>&1
+git -C "$REPO" worktree remove --force "$m96_anc_wt" >/dev/null 2>&1 || true
+if git -C "$REPO" merge -q --ff-only task/T9.8-ancestor >/dev/null 2>&1; then :; else bad "夹具：T9.8 的分支没能 fast-forward 进 $PROTECTED"; fi
 env TEAM_BOARD_DONE_FORCE=0 $TEAM board set T9.8 done >"$TMP/done-ancestor.log" 2>&1 \
   && ok "分支已并入保护分支 → 允许 done" || bad "条件② 没生效（分支真的落地了却被拒）"
 assert_has "$TMP/done-ancestor.log" "已经是 main 的祖先" "成功输出写明证据是分支落地"
+assert_has "$TMP/done-ancestor.log" "T9.8-dev.md" "成功输出点名分支里那份已提交的报告（M9.6）"
 
 # ---------------------------------------------------------------- 5. add-agent
 section "5 · add-agent"
@@ -4664,6 +4676,109 @@ assert_eq "M9.5-③控制组：任务分支又动了 → 照旧 stale（消息�
   "$(m95_note V95C)" "stale: verified $V95C_REC, branch now $V95C_TIP"
 m95_pending >"$TMP/m95-c-pending.log"
 assert_has "$TMP/m95-c-pending.log" "V95C-dev [stale: verified $V95C_REC, branch now $V95C_TIP]" "M9.5-③控制组照旧列为待复验"
+# ---------------------------------------------------------------- 24. done 证据：零提交的分支不能冒充「代码落地」（M9.6）
+# 契约：没声明 phase 的代码任务仍是老两条路线，但 ② 加了**报告**要求 —— 任务分支的**提交树里**要有
+#   <docs>/reports/<ID>-*.md（M4.3-C：草稿不算）。根因：刚建出来、一个提交都没有的分支，tip 同样是
+#   保护分支的祖先（`main..tip` 对「合并了」和「没动过」都是 0），git 分不出这两者；提交进分支的
+#   报告才是「这个分支真的干过活」的形状。下面的夹具按任务书列的五个形状：空分支拒绝（点名报告）/
+#   有报告未合并拒绝（点名合并）/ 草稿不算 / 报告+复验记录通过 / 已合并+报告通过（控制组），
+#   外加 phase 任务不变（控制组）。纯逻辑（只读文件 + 只写夹具自己的 docs/team），快慢模式都跑。
+section "24 · done 证据：② 要求分支里已提交的报告（M9.6）"
+cd "$REPO" || exit 1
+assert_eq "M9.6 夹具前置：主工作树停在 $PROTECTED（下面要建分支 + ff 合并）" \
+  "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" "$PROTECTED"
+
+m96_brief() { # <ID> [phase]：最小任务书（头块字段与 PM 的模板同形）
+  local id="$1" phase="${2:-}"
+  mkdir -p "$REPO/docs/team/tasks"
+  {
+    printf '# %s · smoke M9.6 fixture\n\n```\ntask:   %s\nagent:  dev\n' "$id" "$id"
+    [ -n "$phase" ] && printf 'phase:  %s\n' "$phase"
+    printf 'change: -\ndeps:   -\nstatus: todo\n```\n'
+  } > "$REPO/docs/team/tasks/$id-smoke.md"
+}
+m96_add() { # <ID> [phase]：BOARD 行 + 任务书
+  $TEAM board add "$1" "M9.6 fixture $1" dev "-" >/dev/null 2>&1 || true
+  m96_brief "$1" "${2:-}"
+}
+m96_done() { # <ID> → 打印 done 的退出码（0=过闸），日志留在 $TMP/m96-<ID>.log
+  # TEAM_SPEC_DIR 显式钉成 openspec：本文件更早的第 15b 节往夹具仓库的 config.sh 里追加过绝对路径的
+  # spec 目录；不钉住的话下面那条 phase 控制组测的就不是「阶段证据」而是那份残留配置。
+  if env TEAM_BOARD_DONE_FORCE=0 TEAM_SPEC_DIR=openspec $TEAM board set "$1" done >"$TMP/m96-$1.log" 2>&1; then
+    printf '0\n'
+  else
+    printf '1\n'
+  fi
+}
+m96_branch() { # <branch> <ID> [--merge]：建分支并在分支上**提交**一份报告；--merge 再 ff 进保护分支
+  local br="$1" id="$2" merge="${3:-}" wt="$TMP/m96-wt-$2"
+  git -C "$REPO" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  git -C "$REPO" branch -D "$br" >/dev/null 2>&1 || true
+  git -C "$REPO" worktree add -q -b "$br" "$wt" "$PROTECTED"
+  mkdir -p "$wt/docs/team/reports"
+  printf '# %s · smoke M9.6 report\n\nreport fixture\n' "$id" > "$wt/docs/team/reports/$id-dev.md"
+  git -C "$wt" add -- "docs/team/reports/$id-dev.md" >/dev/null 2>&1
+  git -C "$wt" -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "docs($id): report (M9.6 fixture)" >/dev/null 2>&1
+  git -C "$REPO" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  if [ "$merge" = "--merge" ]; then
+    git -C "$REPO" merge -q --ff-only "$br" >/dev/null 2>&1 \
+      && ok "M9.6 夹具：$br 已 fast-forward 进 $PROTECTED（合并控制组的前置）" \
+      || bad "M9.6 夹具：$br 没能 fast-forward 进 $PROTECTED"
+  fi
+}
+
+# ① 形状一：刚建出来的空分支（零提交，旧实现的假绿：自称「代码真的落地了」）
+m96_add M96A
+git -C "$REPO" branch task/M96A-fresh "$PROTECTED" >/dev/null 2>&1
+assert_eq "M9.6-①：零提交的空分支 → 拒绝" "$(m96_done M96A)" "1"
+assert_has "$TMP/m96-M96A.log" "reports/M96A-*.md" "拒绝信息点名缺的是那份报告"
+assert_has "$TMP/m96-M96A.log" "一个提交都没有的分支" "拒绝信息解释零提交分支的形状"
+assert_not "$TMP/m96-M96A.log" "代码真的落地了" "空分支不再被说成「代码真的落地了」"
+assert_eq "M9.6-①：被拒后 BOARD 没动" "$(board_status M96A)" "todo"
+assert_not_file "$REPO/docs/team/reviews/M96A-done.md" "M9.6-①：被拒时不写 done 审计"
+
+# ② 形状二：分支上**提交了**报告，但还没并进保护分支 → 拒绝（缺的是合并这一层，不是报告）
+m96_add M96B
+m96_branch task/M96B-unmerged M96B
+assert_eq "M9.6-②：报告已提交、但分支还没合并 → 拒绝" "$(m96_done M96B)" "1"
+assert_has "$TMP/m96-M96B.log" "提交还不在里面" "拒绝信息点名缺的是「并入保护分支」"
+assert_not "$TMP/m96-M96B.log" "但它的提交里没有报告" "报告没问题时不再喊缺报告（三个层次分得开）"
+
+# ③ 形状三：报告只躺在工作区（草稿，未提交）→ 拒绝：git 里只有提交算交付（M4.3-C 的规则）
+m96_add M96C
+mkdir -p "$REPO/docs/team/reports"
+printf '# M96C · smoke draft\n' > "$REPO/docs/team/reports/M96C-dev.md"
+git -C "$REPO" branch task/M96C-draft "$PROTECTED" >/dev/null 2>&1
+assert_eq "M9.6-③：报告只是工作区草稿（未提交）→ 拒绝" "$(m96_done M96C)" "1"
+assert_has "$TMP/m96-M96C.log" "工作区里的草稿不算" "拒绝信息解释草稿为什么不算"
+assert_has "$TMP/m96-M96C.log" "reports/M96C-*.md" "草稿不算的同时仍然点名要找的那份报告"
+rm -f "$REPO/docs/team/reports/M96C-dev.md"
+
+# ④ 形状四：报告已提交 + 复验记录（判定 PASS，分支没合并）→ 允许（① 路线不因 ② 的新要求变难）
+m96_add M96D
+m96_branch task/M96D-review M96D
+mkdir -p "$REPO/docs/team/reviews"
+printf '# M96D · smoke review\n\n时间: 2026-09-15T00:00:00Z · 判定: **PASS**\n' > "$REPO/docs/team/reviews/M96D.md"
+assert_eq "M9.6-④：报告 + PASS 复验记录（分支未合并）→ 允许 done" "$(m96_done M96D)" "0"
+assert_has "$TMP/m96-M96D.log" "判定 PASS" "成功输出说明用的是复验记录"
+
+# ⑤ 形状五（控制组）：报告已提交 + 分支已并入保护分支 → 允许 done（正对照，扫旧分支不误伤真交付）
+m96_add M96E
+m96_branch task/M96E-merged M96E --merge
+assert_eq "M9.6-⑤（控制组）：已合并的分支 + 报告 → 允许 done" "$(m96_done M96E)" "0"
+assert_has "$TMP/m96-M96E.log" "已经是 main 的祖先" "成功输出写明合并这一层"
+assert_has "$TMP/m96-M96E.log" "M96E-dev.md" "成功输出点名分支里那份已提交的报告"
+assert_has "$REPO/docs/team/reviews/M96E-done.md" "M96E-dev.md" "done 审计记下当时核对到的那份报告"
+
+# ⑥ 控制组：声明了 phase 的任务规则不变 —— 阶段证据（explore 的 DECISIONS 标题条目）照样解锁，
+#    哪怕它的分支是零提交的空分支（报告要求只加在代码任务的 ② 上，不得施加到阶段路线）
+m96_add M96F explore
+git -C "$REPO" branch task/M96F-phase "$PROTECTED" >/dev/null 2>&1
+assert_eq "M9.6-⑥（控制组）：phase=explore 还没有接受记录 → 仍然拒绝" "$(m96_done M96F)" "1"
+assert_has "$TMP/m96-M96F.log" "阶段 explore 的交付" "phase 任务的拒绝信息仍给阶段路线"
+printf '\n## D96 · smoke — accept M96F exploration\n\n- **决策**：接受 M96F 的探索结论。\n' >> "$REPO/docs/team/DECISIONS.md"
+assert_eq "M9.6-⑥（控制组）：阶段证据到位 → 允许 done（报告要求不施加在阶段任务上）" "$(m96_done M96F)" "0"
+assert_has "$TMP/m96-M96F.log" "PM 接受记录" "成功输出说明用的是阶段证据（不是代码路线）"
 
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
