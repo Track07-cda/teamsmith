@@ -217,6 +217,16 @@ paths listed: clean up the briefs instead of letting glob order choose the scope
 - **Suspect paths or a mismatched config**: run `team paths` first (it prints main_root / worktree / docs / session /
   pm_window).
 - **`TEAM_PI_BIN`**: point it at an absolute path when pi is not on PATH (or when you want a fake pi for self-tests).
+- **A live fixture sleeps instead of waiting for the state it asserts**: the same class has now cost M7.2, M7.5 and
+  M9.7. A fixed `sleep` followed by one sample of `team_pm_state` (or of a log file) turns a nondeterministic
+  transition into a fake red: §11b3's `attempts 行带决策证据` failed because a freshly recreated window was still
+  `unknown:zsh` when the watch sampled it (the old `make_pm_idle` polled `pane_current_command` and then slept
+  0.5 s), and §11i-D's squash heuristic lost one run in ~8. `tests/smoke.sh` waits with a deadline for the real
+  condition instead (`pm_state_until`, `pm_state_until_not`, `wait_session_gone`, `wait_window_gone`,
+  `d43_digest_until`) and names the last state seen on timeout. Two rules: when the condition involves a freshly
+  created tmux pane, require it to **hold** (two samples ~0.5 s apart) — the instant right after `new-window` can
+  report a false `idle:*` before the pane has exec'd its command; and never let the wait replace the assertion's
+  failure path — a persistent regression must still be red, just later and with better evidence.
 
 ## 11. Keep-alive and liveness decisions
 

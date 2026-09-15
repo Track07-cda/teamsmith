@@ -2143,22 +2143,91 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
   PMW="$($TEAM paths | sed -n 's/.*"pm_window": "\([^"]*\)".*/\1/p')"
   [ -n "$PMW" ] || PMW=pm
+  # M9.7：这一段的 fixture 以前是「动作 + 固定 sleep + 采样一次状态」——采样撞上过渡态就假红
+  # （实测：§11b3 ⑤ 的 attempts 行记成 state=unknown 而不是 state=idle；注入 1.2s 的窗口过渡
+  # 1/1 次可复现，见 docs/team/reports/M9.7-dev2/）。改成有界轮询**实际条件**（状态真的变成我们要的
+  # 样子），超时把「最后看到的状态」原样报出来。等待**不是**「把红等成绿」：它带 deadline，超时由
+  # 调用方报红（持续回归只是晚 10s 红），超时信息里带最后看到的状态，下一次发生不必再考古。
+  pm_state_now() { ( . "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_pm_state ); }
+  pm_state_until() { # <case 模式…> [最多等秒] → 0=等到了；最后状态留在 PM_STATE_LAST
+    # 多个模式是「或」关系（每个模式单独做 case 匹配：模式里的 | 在变量展开后不会被当成分隔符，
+    # 所以 `pm_state_until 'unknown:tmux' 'idle:*' 10` 而不是 'unknown:tmux|idle:*'）。
+    local secs="${!#:-10}" i=0 ticks p
+    ticks=$(( secs * 4 ))
+    PM_STATE_LAST=""
+    while [ "$i" -lt "$ticks" ]; do
+      PM_STATE_LAST="$(pm_state_now 2>/dev/null || true)"
+      for p in "${@:1:$#-1}"; do
+        case "$PM_STATE_LAST" in $p) return 0 ;; esac
+      done
+      sleep 0.25
+      i=$((i + 1))
+    done
+    return 1
+  }
+  pm_state_until_not() { # <case 模式> [最多等秒] → 0=状态不再是该模式
+    local avoid="$1" secs="${2:-10}" i=0 ticks
+    ticks=$(( secs * 4 ))
+    PM_STATE_LAST=""
+    while [ "$i" -lt "$ticks" ]; do
+      PM_STATE_LAST="$(pm_state_now 2>/dev/null || true)"
+      case "$PM_STATE_LAST" in $avoid) ;; *) return 0 ;; esac
+      sleep 0.25
+      i=$((i + 1))
+    done
+    return 1
+  }
+  wait_session_gone() { # <session> [最多等秒]
+    local s="${1:-}" secs="${2:-5}" i=0 ticks
+    ticks=$(( secs * 20 ))
+    while [ "$i" -lt "$ticks" ]; do
+      tmux has-session -t "$s" 2>/dev/null || return 0
+      sleep 0.05
+      i=$((i + 1))
+    done
+    return 1
+  }
+  wait_window_gone() { # <窗口名> [最多等秒]（沿用本段的 $SESSION）
+    local n="${1:-}" secs="${2:-5}" i=0 ticks
+    ticks=$(( secs * 20 ))
+    while [ "$i" -lt "$ticks" ]; do
+      tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$n" || return 0
+      sleep 0.05
+      i=$((i + 1))
+    done
+    return 1
+  }
+
   # 制造“PM 窗口在、里面是空提示符”的现场（pi 退出后的样子），并用占位窗口保住 session
-  make_pm_idle() {   # 让 PM 窗口回到空 shell（轮询到 pane_current_command 是 shell）
+  make_pm_idle() {   # 让 PM 窗口回到空 shell（等 team_pm_state 真的报 idle:*，不是赌一次 sleep）
     tmux new-window -t "$SESSION" -n keep -d -c "$REPO" >/dev/null 2>&1 || true
     tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null \
       | awk -v n="$PMW" '$2==n {print $1}' \
       | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
     tmux new-window -t "$SESSION" -n "$PMW" -d -c "$REPO" >/dev/null 2>&1 || true
-    local i cmd=""
-    for i in $(seq 1 20); do
+    # 旧实现轮询 pane_current_command + sleep 0.5；只采样一次 team_pm_state 也不够：
+    # 窗口刚建好的一瞬间 pane 还没 exec 出前台命令，team_pm_state 会**假**报 idle（空 cmd），
+    # 紧接着启动命令就把它变成 unknown:*（§11b3 ⑤ 的 attempts 行正是这么记错的；注入 1.2s 的
+    # 启动命令后，在负载下这次假 idle 稳定复现）。判据：连续两次采样（间隔 0.5s）都是 idle:*，
+    # 且两次都看到前台命令是真正的 shell。
+    local i=0 st="" cmd="" ok=0
+    while [ "$i" -lt 40 ]; do
+      st="$(pm_state_now 2>/dev/null || true)"
       cmd="$(tmux display-message -p -t "$SESSION:$PMW" '#{pane_current_command}' 2>/dev/null || true)"
-      case "$cmd" in
-        zsh|bash|sh|dash|ash|ksh|fish) break ;;
+      case "$st" in idle:*)
+        case "$cmd" in
+          zsh|bash|sh|dash|ash|ksh|fish)
+            [ "$ok" = "1" ] && { PM_STATE_LAST="$st"; return 0; }
+            ok=1 ;;
+          *) ok=0 ;;
+        esac ;;
+      *) ok=0 ;;
       esac
-      sleep 0.3
+      sleep 0.5
+      i=$((i + 1))
     done
-    sleep 0.5
+    PM_STATE_LAST="$st"
+    bad "make_pm_idle：等了 20s 窗口也没稳定在空提示符（最后状态 ${st:-?}，前台命令 [${cmd:-}]）"
   }
 
   start_fake_pm() { # 直接模拟“PM 正在跑”，避免依赖 up 的时序
@@ -2166,12 +2235,19 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     # 空目标 = 当前 pane（会把调用者自己打掉）——这正是 v1.11.3 事故的直接原因
     [ -n "$p" ] || { bad "start_fake_pm：拿不到 pane（$SESSION:$PMW 不存在），跳过以免误伤"; return 1; }
     tmux respawn-pane -k -t "$p" "exec $FAKE/pi-sleep --pm" >/dev/null 2>&1 || true
-    sleep 1.5
+    pm_state_until 'running:*' 10 || bad "start_fake_pm：等了 10s 假 PM 也没被认成 running:*（最后看到：${PM_STATE_LAST:-?}）"
   }
   kill_all_windows() {
     tmux list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null \
       | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
-    sleep 0.5
+    # 不等固定 0.5s：窗口列表真的空了才算关完（调用方随后可能删 session）
+    local i=0
+    while [ "$i" -lt 100 ]; do
+      [ -z "$(tmux list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null)" ] && return 0
+      sleep 0.05
+      i=$((i + 1))
+    done
+    bad "kill_all_windows：5s 内 $SESSION 还有窗口（$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr '\n' ',')）"
   }
   pm_lines() { wc -l < "$TMP/pm-args.log" 2>/dev/null | tr -d ' ' || echo 0; }
 
@@ -2238,9 +2314,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
 
   # 3b) PM 归属校验：窗口被「不属于本项目」的进程占着时，不算 PM、也不许覆盖
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd /tmp && exec bash -lc 'sleep 300'" >/dev/null 2>&1 || true
-  sleep 1
-  (. "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_pm_state) >"$TMP/pmstate-foreign.log" 2>&1 || true
-  assert_match "$TMP/pmstate-foreign.log" "^foreign:" "别的项目的进程占着 PM 窗口 → 判定为 foreign（不算 PM）"
+  if pm_state_until 'foreign:*' 10; then
+    ok "别的项目的进程占着 PM 窗口 → 判定为 foreign（不算 PM）（$PM_STATE_LAST）"
+  else
+    bad "别的项目的进程占着 PM 窗口：等了 10s 也没判成 foreign:*（最后看到：${PM_STATE_LAST:-?}）"
+  fi
   MAINROOT_STATE="$(. "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_cwd_in_project /tmp && echo yes || echo no)"
   assert_eq "cwd 归属判定：/tmp 不属于本项目" "$MAINROOT_STATE" "no"
   $TEAM up >"$TMP/up-foreign.log" 2>&1 || true
@@ -2365,10 +2443,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   # 注意：teamsmith 自己就是被这个 smoke 拉起来的，所以断言必须通过 `team` CLI 与 state/ 读，
   # 不依赖调用者的 shell、也不读开发者自己的 session。
-  pm_state_now() { ( . "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_pm_state ); }
+  # （pm_state_now 的定义在 §11b 的 helpers 里——M9.7 把它上移，供有界轮询复用。）
   # 造「新建的 session + 空的 pm 窗口」：这就是环境重启后的现场，也是 M6.5 的确定性复现。
   tmux kill-session -t "$SESSION" 2>/dev/null || true
-  sleep 0.5
+  wait_session_gone "$SESSION" 5 || bad "M6.5 ① 夹具：5s 内 session $SESSION 还在（「session 完全不在」的前提没成立）"
   $TEAM up >"$TMP/m65-up-fresh.log" 2>&1 && ok "M6.5 ①：session 完全不在时 up 退出码 0" || { bad "M6.5 ①：up 失败"; cat "$TMP/m65-up-fresh.log"; }
   assert_has "$TMP/m65-up-fresh.log" "PM 已启动" "M6.5 ①：空 session 里 up 真的启动了 PM（旧实现说「PM 在运行（tmux）」却什么也没跑）"
   assert_not "$TMP/m65-up-fresh.log" "PM 在运行（tmux）" "M6.5 ①：不再把 tmux 自己报成运行中的 PM"
@@ -2384,12 +2462,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 老规则（窗口在 + 前台不是 shell）在这里就会输出 `running:tmux`；新规则必须报 unknown/idle
   # 且 up 真的把 PM 拉起来（argv 日志里出现 -c 与 @pm-prompt.md）。
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec tmux wait-for teamsmith-m65-never" >/dev/null 2>&1 || true
-  sleep 1
-  case "$(pm_state_now)" in
-    running:*)          bad "M6.5 ①b：前台是 tmux 的空窗被当成了 PM（$(pm_state_now)）" ;;
-    unknown:tmux|idle:*) ok "M6.5 ①b：前台是 tmux 的窗口不算 PM（$(pm_state_now)）" ;;
-    *)                  bad "M6.5 ①b：期望 unknown:tmux/idle:*，实际 $(pm_state_now)" ;;
-  esac
+  if pm_state_until 'unknown:tmux' 'idle:*' 10; then
+    ok "M6.5 ①b：前台是 tmux 的窗口不算 PM（$PM_STATE_LAST）"
+  else
+    bad "M6.5 ①b：期望 unknown:tmux/idle:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+  fi
   $TEAM watchdog-status >"$TMP/m65-wd-tmux.log" 2>&1 || true
   assert_not "$TMP/m65-wd-tmux.log" "在运行" "M6.5 ①b：watchdog-status 不把 tmux 报成「PM 在运行」"
   BEFORE_TMUX="$(pm_lines)"
@@ -2402,22 +2479,22 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   M65_PID="$(cat "$REPO/.pi/team/state/pm.pid" 2>/dev/null | tr -dc '0-9')"
   # ② 记录的 pid 是证据本身：杀掉它 → 必须立刻不再算存活
   kill -9 "$M65_PID" 2>/dev/null || true
-  sleep 1
-  case "$(pm_state_now)" in
-    running:*) bad "M6.5 ②：记录的 pid 已被杀，却还报 running（$(pm_state_now)）" ;;
-    *)         ok "M6.5 ②：记录的 pid 死了 → 不再算存活（$(pm_state_now)）" ;;
-  esac
+  if pm_state_until_not 'running:*' 10; then
+    ok "M6.5 ②：记录的 pid 死了 → 不再算存活（$PM_STATE_LAST）"
+  else
+    bad "M6.5 ②：记录的 pid 已被杀，等了 10s 仍报 $PM_STATE_LAST"
+  fi
   $TEAM watchdog-status >"$TMP/m65-wd-dead.log" 2>&1 || true
   assert_not "$TMP/m65-wd-dead.log" "在运行" "M6.5 ②：watchdog-status 不再宣称 PM 在运行"
   # ③ 本项目 cwd 里的非 PM 进程（sleep）占着 pm 窗口：unknown:*，不算存活，up 会替换
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   tmux new-session -d -s "$SESSION" -n "$PMW" -c "$REPO" 2>/dev/null || true
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec sleep 300" >/dev/null 2>&1 || true
-  sleep 1
-  case "$(pm_state_now)" in
-    unknown:*) ok "M6.5 ③：本项目里的非 PM 进程 → unknown:*（$(pm_state_now)）" ;;
-    *)         bad "M6.5 ③：期望 unknown:*，实际 $(pm_state_now)" ;;
-  esac
+  if pm_state_until 'unknown:*' 10; then
+    ok "M6.5 ③：本项目里的非 PM 进程 → unknown:*（$PM_STATE_LAST）"
+  else
+    bad "M6.5 ③：期望 unknown:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+  fi
   $TEAM watchdog-status >"$TMP/m65-wd-unknown.log" 2>&1 || true
   assert_not "$TMP/m65-wd-unknown.log" "在运行" "M6.5 ③：watchdog-status 不把非 PM 进程当成运行中的 PM"
   BEFORE_UNKNOWN="$(pm_lines)"
@@ -2430,11 +2507,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/m65-pm-args-delta.log" "pm-prompt.md" "M6.5 ③：这一轮真的用 @ 提示词文件拉起 PM"
   # ④ 外来进程（cwd 不在本项目）占着 pm 窗口：foreign:*，不算存活，up 默认拒绝覆盖
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd /tmp && exec sleep 300" >/dev/null 2>&1 || true
-  sleep 1
-  case "$(pm_state_now)" in
-    foreign:*) ok "M6.5 ④：别的项目的进程 → foreign:*（$(pm_state_now)）" ;;
-    *)         bad "M6.5 ④：期望 foreign:*，实际 $(pm_state_now)" ;;
-  esac
+  if pm_state_until 'foreign:*' 10; then
+    ok "M6.5 ④：别的项目的进程 → foreign:*（$PM_STATE_LAST）"
+  else
+    bad "M6.5 ④：期望 foreign:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+  fi
   case "$(pm_state_now)" in
     running:*) bad "M6.5 ④：外来进程被当成运行中的 PM" ;;
     *)         ok "M6.5 ④：外来进程不算 PM（不撒谎）" ;;
@@ -2445,12 +2522,12 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/m65-up-foreign2.log" "不属于本项目" "M6.5 ④：up 明确拒绝覆盖外来进程"
   # ④b 窗口里的进程就是配置的 agent（人工启动的 PM）→ running（不是 unknown）
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec $FAKE/pi-sleep --manual-pm" >/dev/null 2>&1 || true
-  sleep 1
   rm -f "$REPO/.pi/team/state/pm.pid"    # 拿掉「我们启动过」这个证据，只留窗口证据
-  case "$(pm_state_now)" in
-    running:*) ok "M6.5 ④b：人工在窗口里启动的 agent 被认成 running（$(pm_state_now)）" ;;
-    *)         bad "M6.5 ④b：人工启动的 agent 没被认出（$(pm_state_now)）" ;;
-  esac
+  if pm_state_until 'running:*' 10; then
+    ok "M6.5 ④b：人工在窗口里启动的 agent 被认成 running（$PM_STATE_LAST）"
+  else
+    bad "M6.5 ④b：人工启动的 agent 没被认出（等了 10s 最后看到 ${PM_STATE_LAST:-?}）"
+  fi
   # ⑤ M6.3 F30：wrapper agent（脚本最后 exec 掉自己）必须被报为已启动，证据 = spawn。
   # 旧实现只认「窗口里的进程 == 配置的 agent 可执行文件」：exec 换掉进程映像后永远认不出来，
   # 于是给一个活得好好的 PM 报「启动失败」（PM 在 /tmp/pm-freeze2 复现过）。
@@ -2458,7 +2535,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   printf '#!/bin/sh\nexec sleep 300\n' > "$M63_WRAP"; chmod +x "$M63_WRAP"
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$M63_WRAP\"|" "$REPO/.pi/team/config.sh"
   tmux kill-session -t "$SESSION" 2>/dev/null || true   # 从「场地不在」开始，up 自己要建
-  sleep 0.5
+  wait_session_gone "$SESSION" 5 || bad "F30 夹具：5s 内 session $SESSION 还在（「场地不在」的前提没成立）"
   rm -f "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
   $TEAM up >"$TMP/m63-f30-up.log" 2>&1 || true
   assert_has "$TMP/m63-f30-up.log" "PM 已启动" "F30：wrapper agent 被报为已启动（不再误报「看不到 agent 进程」）"
@@ -2475,12 +2552,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 没有我们的 pid 记录时，窗口里的 sleep（cwd 在本项目）依旧不算 PM：非 shell 不是证据
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec sleep 300" >/dev/null 2>&1 || true
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
-  sleep 1
-  case "$(pm_state_now)" in
-    running:*) bad "F30：别人放的 sleep 被当成运行中的 PM（$(pm_state_now)）" ;;
-    unknown:*) ok "F30：别人放的 sleep 只是 unknown（$(pm_state_now)）" ;;
-    *)         bad "F30：期望 unknown:sleep，实际 $(pm_state_now)" ;;
-  esac
+  if pm_state_until 'unknown:*' 10; then
+    ok "F30：别人放的 sleep 只是 unknown（$PM_STATE_LAST）"
+  else
+    bad "F30：期望 unknown:sleep（非 shell 不是证据），等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+  fi
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
   # 收尾：把 PM 拉回来，后面的段落（11c 起）按原来的现场跑
   $TEAM up >/dev/null 2>&1 || true
@@ -2575,11 +2651,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   STARTS_BEFORE="$(start_count)"
   M72_PID="$(tr -dc '0-9' < "$REPO/.pi/team/state/pm.pid" 2>/dev/null || true)"
   if [ -n "$M72_PID" ]; then kill -9 "$M72_PID" 2>/dev/null || true; fi
-  sleep 1
-  case "$(pm_state_now)" in
-    running:*) bad "代理进程被杀后仍报 running（$(pm_state_now)）" ;;
-    *)         ok "代理进程退出后不再是 running（$(pm_state_now)）" ;;
-  esac
+  if pm_state_until_not 'running:*' 10; then
+    ok "代理进程退出后不再是 running（$PM_STATE_LAST）"
+  else
+    bad "代理进程被杀后，等了 10s 仍报 running（$PM_STATE_LAST）"
+  fi
   TEAM_WATCH_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/m72-tick4.log" 2>&1 || true
   assert_match "$TMP/m72-tick4.log" "已拉起" "代理退出后下一拍把它拉起来"
   assert_eq "代理退出后恰好记 1 行重启" \
@@ -2716,7 +2792,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
 
   # watchdog 不该替 PM 做决定：跑一轮巡检，dev 仍未被续跑
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
-  sleep 0.5
+  wait_window_gone dev 5 || bad "§11c 夹具：5s 内 dev 窗口还在（「窗口仍不在」的前提没成立）"
   # F28：只读命令不许毁掉崩溃 agent 的持久记录（否则 resume 会「没东西可续」）
   EQ_STATE_BEFORE="$(state_fp)"
   $TEAM ps >"$TMP/ps-crash.log" 2>&1 || true
@@ -3097,23 +3173,54 @@ D43BR="task/M43D-demo"
 git -C "$REPO" worktree add -q -b "$D43BR" "$D43WT" main >/dev/null 2>&1 || true
 printf 'd43\n' > "$D43WT/m43d.txt"
 git -C "$D43WT" add -A >/dev/null 2>&1 && git -C "$D43WT" commit -qm "feat(M43D): demo" >/dev/null 2>&1
-TEAM_AGENTS=m43d $TEAM digest >"$TMP/m43d-before.log" 2>&1 || bad "M4.3 D：digest（合并前）失败"
+# M9.7：不再「跑一次 digest 就断言」——实测（V3：约 1/8 次全量）出现过一次瞬时失败：D 夹具成功合并，
+# digest 仍走「领先 main 1」分支，重跑即绿。等的是**digest 认出来**这个条件（输出里出现期望行），
+# 有界轮询；超过 deadline 打印决定性证据，再由下面的断言报红（瞬时失败不再假红，真失败仍红且带证据）。
+d43_digest_until() { # <期望子串> <日志> [最多等秒] → 0=出现了；尝试次数在 D43_TRIES
+  local needle="$1" log="$2" secs="${3:-10}" i=0 ticks
+  ticks=$(( secs * 4 ))
+  D43_TRIES=0
+  while [ "$i" -lt "$ticks" ]; do
+    TEAM_AGENTS=m43d $TEAM digest >"$log" 2>&1 || bad "M4.3 D：digest 失败"
+    D43_TRIES=$((D43_TRIES + 1))
+    grep -qF "$needle" "$log" && return 0
+    sleep 0.25
+    i=$((i + 1))
+  done
+  return 1
+}
+d43_digest_until "领先 main 1" "$TMP/m43d-before.log" \
+  || bad "D：合并前的 digest 没报「领先 main 1」（跑了 $D43_TRIES 次；看 $TMP/m43d-before.log）"
 assert_has "$TMP/m43d-before.log" "领先 main 1" "D：未合并的分支照旧报「领先 main N」"
 assert_not "$TMP/m43d-before.log" "已合并（squash" "D：未合并的分支不会被说成已合并"
 if git -C "$REPO" merge --squash "$D43BR" >/dev/null 2>&1 && git -C "$REPO" commit -qm "M43D: demo (squash)" >/dev/null 2>&1; then
   ok "D 夹具：squash 合并进 main（PM 的常规路径）"
 else bad "D 夹具：squash 合并失败"; fi
-TEAM_AGENTS=m43d $TEAM digest >"$TMP/m43d-after.log" 2>&1 || bad "M4.3 D：digest（squash 合并后）失败"
+if d43_digest_until "已合并（squash，内容一致）" "$TMP/m43d-after.log"; then
+  [ "$D43_TRIES" -gt 1 ] && printf '  \033[33mℹ\033[0m M4.3 D：digest 第 %s 次才认出 squash 合并（前 %s 次的输出不含该行；最后一次见 %s）\n' \
+    "$D43_TRIES" "$((D43_TRIES - 1))" "$TMP/m43d-after.log"
+else
+  printf '  \033[33mℹ\033[0m M4.3 D：%s 次 digest、10s 内始终没认出 squash 合并。决定性证据：\n' "$D43_TRIES"
+  printf '      分支 tip tree = %s\n' "$(git -C "$D43WT" rev-parse 'HEAD^{tree}' 2>&1 | tr '\n' ' ')"
+  printf '      main 最近 3 个 tree = %s\n' "$(git -C "$D43WT" log --format=%T --max-count=3 main 2>&1 | tr '\n' ' ')"
+  printf '      分支 dirty = [%s]；main=%s；digest 里的 m43d 行：\n' \
+    "$(git -C "$D43WT" status --porcelain 2>&1 | tr '\n' ' ')" \
+    "$(git -C "$D43WT" rev-parse --short main 2>&1)"
+  grep -aF 'm43d' "$TMP/m43d-after.log" | sed 's/^/      /' || true
+fi
 assert_has "$TMP/m43d-after.log" "已合并（squash，内容一致）" "D：squash 合并后被认出来（内容一致）"
 assert_has "$TMP/m43d-after.log" "无需 push" "D：不再暗示要 push（内容已在保护分支）"
 assert_not "$TMP/m43d-after.log" "收尾：提交并 push" "D：不再给出「收尾：提交并 push」"
 assert_not "$TMP/m43d-after.log" "领先 main 1" "D：不再把已合并的分支报成待收尾的领先"
 TEAM_AGENTS=m43d $TEAM roster >"$TMP/m43d-roster.log" 2>&1 || bad "M4.3 D：roster 失败"
-assert_has "$TMP/m43d-roster.log" "已合并" "D：roster 把 squash 合并与真领先分开显示"
+# M9.7：旧断言是 assert_has "已合并" —— 而 roster 的**说明行**（「已合并=squash 后的内容已在 main 里」）
+# 永远含这三个字，等于恒真（V3 复验时正是这个假守卫让 digest 的失败看起来自相矛盾）。改成认 m43d 那一行。
+assert_match "$TMP/m43d-roster.log" "^m43d.*已合并" "D：roster 把 squash 合并与真领先分开显示"
 # 正对照：分支上再落一个无关提交 → 回到诚实的「领先 N」（没把信号整体静音）
 printf 'more\n' >> "$D43WT/m43d.txt"
 git -C "$D43WT" commit -qam "feat(M43D): more" >/dev/null 2>&1
-TEAM_AGENTS=m43d $TEAM digest >"$TMP/m43d-extra.log" 2>&1 || bad "M4.3 D：digest（又领先）失败"
+d43_digest_until "领先 main 2" "$TMP/m43d-extra.log" \
+  || bad "D：分支又领先时 digest 没回到「领先 main 2」（跑了 $D43_TRIES 次；看 $TMP/m43d-extra.log）"
 assert_has "$TMP/m43d-extra.log" "领先 main 2" "D：分支又有内容时回到「领先 N」"
 assert_not "$TMP/m43d-extra.log" "已合并（squash" "D：tree 不同时不再说已合并"
 git -C "$REPO" worktree remove --force "$D43WT" >/dev/null 2>&1 || true
