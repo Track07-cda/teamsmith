@@ -480,6 +480,24 @@ else bad "F16：续跑被误拒（见 $TMP/dispatch-resume.log）"; fi
 assert_has "$TMP/dispatch-resume.log" "续跑" "F16：说明这是续跑（不是新派单）"
 git -C "$REPO/.worktrees/dev" switch "$T1_BRANCH" >/dev/null 2>&1 || true
 git -C "$REPO/.worktrees/dev" branch -D "task/T1.1-legacy" >/dev/null 2>&1 || true
+# F3（P4 裁决）：base 场景原来说 `team status` 会显示 worktree —— 实测不显示（那个视图不存在）。场景已按现实
+# 改写（本 change 的 MODIFIED 块），这里钉住现实的两半：roster 的行 = 工作树当时的分支 + 记录下来的任务；
+# `team status <ID>` 打印同一行，外加该任务的看板行与报告行。
+$TEAM roster >"$TMP/roster-branch.log" 2>&1 && ok "F3：roster 退出码 0" || bad "F3：roster 失败"
+DEV_ROW="$(awk '$1=="dev"{print; exit}' "$TMP/roster-branch.log")"
+case "$DEV_ROW" in
+  *"$T1_BRANCH"*) ok "F3：roster 的 dev 行显示工作树当前的分支（$T1_BRANCH）" ;;
+  *) bad "F3：roster 的 dev 行里没有 $T1_BRANCH（行=[$DEV_ROW]）" ;;
+esac
+case "$DEV_ROW" in
+  *T1.1*) ok "F3：roster 的 dev 行显示记录下来的任务（state 里的 T1.1）" ;;
+  *) bad "F3：roster 的 dev 行里没有 T1.1（行=[$DEV_ROW]）" ;;
+esac
+$TEAM status T1.1 >"$TMP/status-branch.log" 2>&1 || true
+assert_eq "F3：team status 打印的是同一份 roster 行" \
+  "$(awk '$1=="dev"{print; exit}' "$TMP/status-branch.log")" "$DEV_ROW"
+assert_has "$TMP/status-branch.log" "任务 T1.1：" "F3：team status 打印该任务的标题行"
+assert_has "$TMP/status-branch.log" "报告" "F3：team status 打印该任务的报告行"
 [ -f "$REPO/.pi/team/state/dev.env" ] && sed -i '/^task=T1.1$/d' "$REPO/.pi/team/state/dev.env" || true
 # M6.3 F15：项目外的任务书必须被拒。旧行为：--print 成功，还把 /tmp/x.md 标成 "repo-relative
 # path"；而同一份提示词命令 worker "work only inside <project>" —— 自相矛盾。
@@ -491,6 +509,19 @@ else ok "F15：项目外任务书被拒（--print 也不放行）"; fi
 assert_has "$TMP/dispatch-outside.log" "不在本项目里" "F15：报错说明任务书在项目外"
 assert_has "$TMP/dispatch-outside.log" "$REPO" "F15：报错点名项目主工作树"
 assert_not "$TMP/dispatch-outside.log" "repo-relative" "F15：不再把项目外路径称作 repo-relative"
+# F2（P4 裁决）：同一个拒绝必须发生在**开窗之前** —— 用一个只会记账的 tmux shim 证明它一次都没被要求建窗口，
+# 而不是靠「大概不会走到那一步」。
+F15_SHIM="$TMP/f15-tmux-shim"; mkdir -p "$F15_SHIM"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "\$*" >> "%s"\nexit 0\n' "$TMP/f15-tmux-calls.log" > "$F15_SHIM/tmux"
+chmod +x "$F15_SHIM/tmux"
+: > "$TMP/f15-tmux-calls.log"
+if env PATH="$F15_SHIM:$PATH" $TEAM dispatch dev T1.1 "$OUTSIDE_BRIEF" >"$TMP/dispatch-outside-noprint.log" 2>&1; then
+  bad "F15：项目外任务书不带 --print 也应当被拒"
+else ok "F15：项目外任务书被拒（不带 --print 同样拒绝）"; fi
+assert_has "$TMP/dispatch-outside-noprint.log" "不在本项目里" "F15：不带 --print 的报错同样说明任务书在项目外"
+assert_eq "F15：拒绝发生在开窗之前（tmux 一次都没被要求建窗口）" \
+  "$(grep -cE 'new-window|respawn-pane|new-session' "$TMP/f15-tmux-calls.log" 2>/dev/null || true)" "0"
+assert_not "$TMP/dispatch-outside-noprint.log" "含启动校验" "F15：不带 --print 也没有真的派单"
 
 section "6 · dispatch"
 $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print.log" 2>&1 || bad "dispatch --print 失败"
@@ -3689,6 +3720,27 @@ sl_rc() { # <说明> <期望退出码> <树>
   sl_run "$3"; local rc=$?
   [ "$rc" = "$2" ] && ok "$1" || bad "$1（期望 rc=$2，实际 $rc）"
 }
+# P4 F6：lint 的统计口径是 specs/*/spec.md **加上**活动 change 的 delta（tests/spec-lint.sh 扫
+# changes/*/specs/**；changes/archive/ 是历史，跳过）。旧断言只数 specs/，于是任何 active change 都会让它红；
+# 这条口径 —— 以及它的对照组 —— 是 C0 的 2.3 随 C0 撤销后的正当继承者。
+sl_scope_files() { # <spec 根> → 参与计数的文件（与 lint 同口径）
+  local root="$1" d
+  find "$root/specs" -type f -name 'spec.md' 2>/dev/null
+  for d in "$root"/changes/*/; do
+    [ -d "$d" ] || continue
+    [ "$(basename "$d")" = archive ] && continue
+    find "${d}specs" -type f -name '*.md' 2>/dev/null
+  done | sort
+}
+sl_count() { # <spec 根> <grep 模式> → 同口径计数
+  local root="$1" pat="$2" n=0 c
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    c="$(grep -hc -- "$pat" "$f" 2>/dev/null || true)"
+    n=$((n + ${c:-0}))
+  done < <(sl_scope_files "$root")
+  printf '%s\n' "$n"
+}
 
 sl_green "正对照：合法 spec 通过（检查器不是永远红）" "$SL_ROOT/good"
 
@@ -3733,14 +3785,26 @@ SLT="$(sl_tree change-removed)"; mkdir -p "$SLT/changes/wip/specs/demo"
 printf '# demo delta\n\n## REMOVED Requirements\n\n### Requirement: Old thing\n' > "$SLT/changes/wip/specs/demo/spec.md"
 sl_green "REMOVED delta 允许无 scenario（删除不是新承诺）" "$SLT"
 
-# 真树：既必须绿，报告的计数也必须与 grep 出来的事实一致（不硬编码数字，spec 增删不会误报）
+# 真树：既必须绿，报告的计数也必须与 lint 同口径的事实一致（不硬编码数字，spec 增删不会误报）
 SL_REAL="$(cd "$SKILL_DIR/../.." && pwd)/openspec"
 if sl_run "$SL_REAL"; then
-  SL_REQ="$(grep -rhc '^### Requirement:' "$SL_REAL"/specs/*/spec.md | awk '{s+=$1} END{print s+0}')"
-  SL_SCEN="$(grep -rhc '^#### Scenario:' "$SL_REAL"/specs/*/spec.md | awk '{s+=$1} END{print s+0}')"
-  ok "真 openspec 树通过 spec lint"
-  assert_has "$TMP/spec-lint.out" "$SL_REQ requirement(s)" "lint 报的 requirement 数与真树一致（$SL_REQ）"
-  assert_has "$TMP/spec-lint.out" "$SL_SCEN scenario(s)" "lint 报的 scenario 数与真树一致（$SL_SCEN）"
+  SL_BASE_REQ="$(grep -rhc '^### Requirement:' "$SL_REAL"/specs/*/spec.md | awk '{s+=$1} END{print s+0}')"
+  SL_REQ="$(sl_count "$SL_REAL" '^### Requirement:')"
+  SL_SCEN="$(sl_count "$SL_REAL" '^#### Scenario:')"
+  SL_DELTA_REQ=$((SL_REQ - SL_BASE_REQ))
+  ok "真 openspec 树通过 spec lint（口径 = specs/ $SL_BASE_REQ + 活动 delta $SL_DELTA_REQ requirement(s)）"
+  assert_has "$TMP/spec-lint.out" "$SL_REQ requirement(s)" "lint 报的 requirement 数与真树同口径（$SL_REQ = base $SL_BASE_REQ + delta $SL_DELTA_REQ）"
+  assert_has "$TMP/spec-lint.out" "$SL_SCEN scenario(s)" "lint 报的 scenario 数与真树同口径（$SL_SCEN）"
+  # 对照组（P4 F6）：光把期望值放宽不算修 —— 口径自己得能区分「干净树」与「有活动 delta」。
+  # ① 没有活动 change 时 == 只数 specs/（干净 main 的形状）；② 同一个夹具多一个活动 delta，必须算进去。
+  SLT="$(sl_tree count-scope)"
+  SLT_BASE="$(grep -rhc '^### Requirement:' "$SLT"/specs/*/spec.md | awk '{s+=$1} END{print s+0}')"
+  assert_eq "计数口径对照（干净树）：没有活动 change 时 == 只数 specs/（干净 main 的形状）" \
+    "$(sl_count "$SLT" '^### Requirement:')" "$SLT_BASE"
+  mkdir -p "$SLT/changes/wip/specs/demo"
+  printf '# demo delta\n\n## ADDED Requirements\n\n### Requirement: Delta thing MUST happen\n\nText.\n\n#### Scenario: Delta path\n\n- **WHEN** x runs\n- **THEN** y happens\n' > "$SLT/changes/wip/specs/demo/spec.md"
+  assert_eq "计数口径对照（有 delta）：活动 delta 必须被算进去（否则真树断言可能永远绿）" \
+    "$(sl_count "$SLT" '^### Requirement:')" "$((SLT_BASE + 1))"
 else
   bad "真 openspec 树没通过 spec lint"; sed 's/^/     /' "$TMP/spec-lint.out"
 fi
