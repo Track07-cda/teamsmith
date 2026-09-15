@@ -1896,8 +1896,158 @@ team_review_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN|none|missin
   return 0
 }
 
+# —— M9.2：阶段感知的交付证据 ——
+# OpenSpec 流水线（references/openspec.md §1）里的阶段任务**合法地不产出代码**：explore 的交付是
+# 「PM 接受方案」（写进 DECISIONS.md）、propose 的交付是提案审查记录（reviews/<change>-proposal.md，
+# 判定 ACCEPTED）、archive 是 PM 的动作、连分支都没有。任务书声明了 `phase:` 时，done **额外**接受一条
+# 该阶段专属的交付证据；没有 phase、值是 `-`、或值不认识的任务，规则**一字不改** —— 不得放宽
+# 未声明阶段的任务（这条不变量比阶段路线本身更重要）。
+
+# ERE 元字符转义（task id 常规是字母数字与 . - _；其余字符也兜住，宁可匹配不上也不误配）
+team_regex_escape() { # <字符串> → 转义后的 ERE
+  local s="$1" out="" ch i
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    case "$ch" in
+      .|'['|']'|'\'|'^'|'$'|'*'|'+'|'?'|'('|')'|'{'|'}'|'|') out="$out\\$ch" ;;
+      *) out="$out$ch" ;;
+    esac
+  done
+  printf '%s\n' "$out"
+}
+
+# 任务书头块里的一行字段（值里的注释与首尾空白去掉；只认第一个匹配行）
+team_brief_field() { # <任务书> <字段名> → 值（没有该字段 → 空）
+  local f="$1" key="$2"
+  [ -f "$f" ] || return 0
+  awk -v key="$key" '$0 ~ ("^[[:space:]]*" key ":") {
+      sub("^[[:space:]]*" key ":[[:space:]]*", ""); sub(/[[:space:]]*#.*$/, "");
+      gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$f" 2>/dev/null || true
+  return 0
+}
+
+team_task_brief() { # <ID> → 任务书路径（team task 建的是 <ID>-<slug>.md；没有 → 空）
+  local id="$1" t
+  [ -f "$TEAM_DOCS_ABS/tasks/$id.md" ] && { printf '%s\n' "$TEAM_DOCS_ABS/tasks/$id.md"; return 0; }
+  for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do
+    [ -f "$t" ] && { printf '%s\n' "$t"; return 0; }
+  done
+  return 0
+}
+
+team_task_phase() { # <ID> → explore|propose|apply|verify|archive（未声明 / `-` / 不认识 → 空）
+  local p
+  p="$(team_brief_field "$(team_task_brief "$1")" phase)"
+  case "$p" in explore|propose|apply|verify|archive) printf '%s\n' "$p" ;; esac
+  return 0
+}
+
+team_task_change() { # <ID> → 任务书 change: 行的 change id（`-`/空 → 空）
+  local c
+  c="$(team_brief_field "$(team_task_brief "$1")" change)"
+  case "$c" in ""|-|—) return 0 ;; esac
+  printf '%s\n' "$c"
+  return 0
+}
+
+# 提案审查记录的判定（抬头 `verdict: **ACCEPTED**` 或 `判定: **ACCEPTED**`）
+# → ACCEPTED|NEEDS-CHANGES|none|missing
+team_proposal_verdict() { # <change>
+  local f="$TEAM_DOCS_ABS/reviews/$1-proposal.md" v
+  [ -f "$f" ] || { printf 'missing\n'; return 0; }
+  v="$(grep -m1 -oE '(verdict|判定): \*\*[A-Za-z_-]+\*\*' "$f" 2>/dev/null | tr -d '*' \
+       | sed -E 's/^(verdict|判定): //' | tr '[:lower:]' '[:upper:]' || true)"
+  printf '%s\n' "${v:-none}"
+  return 0
+}
+
+# 阶段专属交付证据：stdout = 一行「找到了什么」（成立）或「差什么、去哪找」（不成立）；0=成立。
+team_done_phase_evidence() { # <ID> <phase> <change>
+  local id="$1" phase="$2" change="$3" f rel v d spec_root
+  rel="$TEAM_DOCS_DIR/reviews/$id.md"
+  case "$phase" in
+    explore)
+      f="$TEAM_DOCS_ABS/DECISIONS.md"
+      # 「PM 接受记录」= DECISIONS.md 里一个**标题条目**点名任务 id。正文里顺带提一句不算：
+      # 旧条目的正文经常提到别的任务 id，那会变成「提过就算接受」——把守卫放宽。
+      if [ -f "$f" ] && grep -E '^#{1,6}[[:space:]]' "$f" \
+           | grep -qE "(^|[^[:alnum:]_])$(team_regex_escape "$id")([^[:alnum:]_]|$)"; then
+        printf 'PM 接受记录 %s（标题点名 %s）\n' "$TEAM_DOCS_DIR/DECISIONS.md" "$id"; return 0
+      fi
+      v="$(team_review_verdict "$id")"
+      case "$v" in
+        PASS|UNKNOWN|SKIPPED) printf '复验记录 %s（判定 %s：PM 的记录式接受）\n' "$rel" "$v"; return 0 ;;
+        missing)  printf '既没有标题点名 %s 的 %s，也没有 %s\n' "$id" "$TEAM_DOCS_DIR/DECISIONS.md" "$rel" ;;
+        *)        printf '%s 存在，但判定是 %s（FAIL/TIMEOUT 不是「接受」）\n' "$rel" "$v" ;;
+      esac
+      return 1 ;;
+    propose)
+      if [ -z "$change" ]; then
+        printf '任务书没有 change: 行 —— 提案审查记录按它命名（PM 补上 change id）\n'; return 1
+      fi
+      rel="$TEAM_DOCS_DIR/reviews/$change-proposal.md"
+      v="$(team_proposal_verdict "$change")"
+      case "$v" in
+        ACCEPTED)      printf '提案审查记录 %s（判定 ACCEPTED）\n' "$rel"; return 0 ;;
+        NEEDS-CHANGES) printf '%s 的判定是 NEEDS-CHANGES（先按 findings 改提案并复审，再 done）\n' "$rel"; return 1 ;;
+        missing)       printf '%s 不存在\n' "$rel"; return 1 ;;
+        *)             printf '%s 没有可识别的判定行（要 `verdict: **ACCEPTED**`）\n' "$rel"; return 1 ;;
+      esac ;;
+    apply)
+      printf 'apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 %s）；没有额外的阶段证据\n' \
+        "$TEAM_PROTECTED_BRANCH"
+      return 1 ;;
+    verify)
+      printf 'verify 的交付就是复验记录 %s（用 ① 的 team review 生成，判定 PASS）\n' "$rel"
+      return 1 ;;
+    archive)
+      if [ -z "$change" ]; then
+        printf '任务书没有 change: 行 —— 归档目录按 change id 匹配（PM 补上 change id）\n'; return 1
+      fi
+      spec_root="$(team_spec_dir_abs)"
+      for d in "$spec_root/changes/archive/$change" "$spec_root/changes/archive/"*"-$change"; do
+        if [ -d "$d" ]; then
+          printf '归档目录 %s\n' "${d#"$TEAM_MAIN_ROOT"/}"
+          return 0
+        fi
+      done
+      printf '%s 下没有 %s（或 *-%s）目录\n' "$TEAM_SPEC_DIR/changes/archive" "$change" "$change"
+      return 1 ;;
+  esac
+  return 1
+}
+
+# 拒绝时给 PM 的「阶段专属下一步」（没声明 phase → 空；调用方据此决定要不要打印 ③）
+team_done_phase_next() { # <ID>
+  local id="$1" phase change
+  phase="$(team_task_phase "$id")"
+  [ -n "$phase" ] || return 0
+  change="$(team_task_change "$id")"
+  case "$phase" in
+    explore) printf 'PM 把接受结论落盘：%s/DECISIONS.md 里用一个标题条目点名 %s，或写 %s/reviews/%s.md\n' \
+               "$TEAM_DOCS_DIR" "$id" "$TEAM_DOCS_DIR" "$id" ;;
+    propose)
+      if [ -n "$change" ]; then
+        printf 'PM 对 change %s 的提案给出结论：%s/reviews/%s-proposal.md 判定 ACCEPTED（NEEDS-CHANGES 不算）\n' \
+          "$change" "$TEAM_DOCS_DIR" "$change"
+      else
+        printf '先给任务书补 change: 行（提案审查记录按它命名）\n'
+      fi ;;
+    apply)   printf 'apply 沿用上面 ①/②，没有额外的阶段证据\n' ;;
+    verify)  printf 'verify 的交付就是复验记录：跑 ① 的命令并让判定为 PASS\n' ;;
+    archive)
+      if [ -n "$change" ]; then
+        printf 'PM 归档 change %s（openspec archive -y %s）后，%s 下会出现 *-%s 目录\n' \
+          "$change" "$change" "$TEAM_SPEC_DIR/changes/archive" "$change"
+      else
+        printf '先给任务书补 change: 行（归档目录按 change id 匹配）\n'
+      fi ;;
+  esac
+  return 0
+}
+
 team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证据（stdout 检查明细）
-  local id="$1" rel="$TEAM_DOCS_DIR/reviews/$id.md" verdict branch tip detail=""
+  local id="$1" rel="$TEAM_DOCS_DIR/reviews/$id.md" verdict branch tip detail="" phase="" change="" pev=""
   verdict="$(team_review_verdict "$id")"
   case "$verdict" in
     PASS)    printf '复验记录 %s（判定 PASS）\n' "$rel"; return 0 ;;
@@ -1916,6 +2066,16 @@ team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证�
     printf '分支 %s（%s）已经是 %s 的祖先（代码真的落地了）\n' "$branch" "${tip:0:9}" "$TEAM_PROTECTED_BRANCH"
     return 0
   fi
+  # M9.2：声明了已知 phase 的任务再给一条**阶段专属**的证据路线；phase 为空（未声明/`-`/不认识）
+  # 时整段跳过 —— 旧规则逐字不变。
+  phase="$(team_task_phase "$id")"
+  if [ -n "$phase" ]; then
+    change="$(team_task_change "$id")"
+    if pev="$(team_done_phase_evidence "$id" "$phase" "$change")"; then
+      printf '阶段 %s 的交付证据：%s\n' "$phase" "$pev"
+      return 0
+    fi
+  fi
   printf '  - ① 复验记录 %s：%s\n' "$rel" "$detail"
   if [ -z "$branch" ]; then
     printf '  - ② 分支是否已并入 %s：找不到 %s 的分支\n' "$TEAM_PROTECTED_BRANCH" "$id"
@@ -1925,13 +2085,14 @@ team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证�
     printf '  - ② 分支是否已并入 %s：%s（%s）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）\n' \
       "$TEAM_PROTECTED_BRANCH" "$branch" "${tip:0:9}"
   fi
+  [ -n "$phase" ] && printf '  - ③ 阶段 %s 的交付证据：%s\n' "$phase" "$pev"
   return 1
 }
 
 # done 的闸门：证据 / 显式覆盖。成功时 stdout 第一行是「判定行」（OK/FORCED），后面是证据明细；
 # 失败时 stdout 空、明细与继续办法都打到 stderr（调用方照原样返回 1 即可）。
 team_done_gate() { # <ID> <命令标签>
-  local id="$1" label="$2" ev reason=""
+  local id="$1" label="$2" ev reason="" phase="" hint=""
   if ev="$(team_done_evidence "$id")"; then
     printf 'OK：%s\n' "$ev"
     return 0
@@ -1950,6 +2111,10 @@ team_done_gate() { # <ID> <命令标签>
   team_err "没有可核对的证据（BOARD 未改动）——done 是一句承诺，不能只凭手写"
   team_err "  ① 先复验（判定 PASS）或先合并到 $TEAM_PROTECTED_BRANCH：$TEAM_CLI review $id --dir <独立checkout>"
   team_err "  ② PM 确认可以直接 done：TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON=\"为什么\" $label"
+  # 声明了 phase 的任务再把**阶段专属**的下一步写出来（没声明 → hint 为空，消息与以前逐字相同）
+  phase="$(team_task_phase "$id")"
+  hint="$(team_done_phase_next "$id")"
+  [ -n "$phase" ] && team_err "  ③ 阶段 $phase 的交付：$hint"
   return 1
 }
 

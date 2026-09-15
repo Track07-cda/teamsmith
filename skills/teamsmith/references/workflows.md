@@ -228,7 +228,12 @@ the branch moves on, `digest`/`team status` flag it again (`stale: verified <A>,
 - After `close T1.2` the worktree is normally still on `task/T1.2-*`: `close` **prints** the exact
   `git -C .worktrees/dev switch --detach main` command to run (`TEAM_TASK_BRANCH_RESET=1`; `0` silences it) and never
   runs git itself, so the next task starts clean only after the PM runs that command. See protocol.md §8e for the
-  `done` gate that sits in front of `close`/`board set … done`.
+  `done` gate that sits in front of `close`/`board set … done`; it is **phase-aware**: a brief that declares `phase:`
+  is accepted on that phase's artifact (`explore` = the PM's recorded acceptance in `DECISIONS.md` (a heading
+  entry naming the task), or `reviews/<ID>.md`; `propose` = only an `ACCEPTED` `reviews/<change>-proposal.md`; `verify` = the task's review
+  record; `archive` = the change id under `openspec/changes/archive/`), while `apply` keeps the code-task rule. A
+  brief with no `phase:` line (or `-`, or an unknown value) keeps the two original routes unchanged — the gate is
+  never widened for tasks that do not declare a phase.
 
 ## I. Periodic patrol and the PM's rhythm (the watchdog only does this one thing)
 

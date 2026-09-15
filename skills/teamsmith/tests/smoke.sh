@@ -4031,6 +4031,131 @@ os_flip_red "AGENTS 协议段不再提用户确认" "USER-CONFIRM-MISSING" "temp
 os_flip_red "任务书模板删掉 phase: 头" "PHASE-FIELD-MISSING" "templates/task.md.tmpl" '/^phase:/d'
 os_flip_red "runbook 里的 verify 不再写独立" "INDEPENDENT-VERIFY-MISSING" "references/workflows.md" '/independent/d'
 
+# ---------------------------------------------------------------- 20. done 证据的阶段感知（M9.2）
+# 契约：任务书声明 `phase:` 时，done **额外**接受该阶段的交付证据（OpenSpec 五阶段各一条路线，
+#   见 references/openspec.md §1/§5）；没有 phase / 值是 `-` / 值不认识 → 旧规则一字不改。
+#   最后两条夹具是**控制组**：把阶段专属证据全部摆到桌面上，未声明 phase / 未知 phase 的任务
+#   照样被拒 —— 证明这次改动没有把守卫放宽成「随便就能 done」。
+# 纯逻辑（只读文件 + 只写夹具自己的 docs/team），快慢模式都跑。
+section "20 · done 证据的阶段感知（M9.2）"
+cd "$REPO" || exit 1
+
+m92_brief() { # <ID> <phase|-> <change|->：写一份最小任务书（头块字段与 PM 的模板同形）
+  local id="$1" phase="$2" change="$3"
+  mkdir -p "$REPO/docs/team/tasks"
+  {
+    printf '# %s · smoke phase fixture\n\n```\ntask:   %s\nagent:  dev\n' "$id" "$id"
+    [ "$phase" = "-" ] || printf 'phase:  %s\n' "$phase"
+    printf 'change: %s\ndeps:   -\nstatus: todo\n```\n' "$change"
+  } > "$REPO/docs/team/tasks/$id-smoke.md"
+}
+m92_add() { # <ID> <phase|-> <change|->：BOARD 建行 + 任务书
+  $TEAM board add "$1" "phase fixture ($2)" dev "-" >/dev/null 2>&1 || true
+  m92_brief "$1" "$2" "$3"
+}
+m92_done() { # <ID> → 打印 done 的退出码（0=过闸），日志留在 $TMP/m92-<ID>.log
+  # TEAM_SPEC_DIR 显式钉成 openspec：本文件更早的 doctor 夹具往夹具仓库的 config.sh 里追加过
+  # 绝对路径的 spec 目录（第 15b 节），不钉住的话这里测的就不是「归档证据」而是那份残留配置。
+  if env TEAM_BOARD_DONE_FORCE=0 TEAM_SPEC_DIR=openspec $TEAM board set "$1" done >"$TMP/m92-$1.log" 2>&1; then
+    printf '0\n'
+  else
+    printf '1\n'
+  fi
+}
+
+# ① explore：交付 = PM 的接受记录（DECISIONS.md 里一个**标题条目**点名任务 id，或一份复验记录）
+m92_add X9.1 explore -
+assert_eq "explore：没有任何接受记录 → 拒绝" "$(m92_done X9.1)" "1"
+assert_has "$TMP/m92-X9.1.log" "DECISIONS.md" "explore 拒绝信息点名 DECISIONS.md"
+assert_has "$TMP/m92-X9.1.log" "reviews/X9.1.md" "explore 拒绝信息点名复验记录"
+assert_has "$TMP/m92-X9.1.log" "阶段 explore 的交付" "explore 拒绝信息给出阶段路线"
+assert_eq "explore：被拒后 BOARD 没动" "$(board_status X9.1)" "todo"
+assert_not_file "$REPO/docs/team/reviews/X9.1-done.md" "被拒时不写 done 审计"
+# 正文提及 ≠ 接受条目：旧条目的正文经常提到别的任务 id，那会变成「提过就算接受」——把守卫放宽
+printf '\n- **备注**：X9.1 的探索结论值得再读一遍（正文提及，不是接受条目）。\n' >> "$REPO/docs/team/DECISIONS.md"
+assert_eq "explore：只有正文提及、没有标题条目 → 仍然拒绝" "$(m92_done X9.1)" "1"
+printf '\n## D92 · smoke — accept X9.1 exploration\n\n- **决策**：接受 X9.1 的探索结论。\n' >> "$REPO/docs/team/DECISIONS.md"
+assert_eq "explore：DECISIONS.md 标题条目点名任务 → 允许 done" "$(m92_done X9.1)" "0"
+assert_has "$TMP/m92-X9.1.log" "PM 接受记录" "成功输出说明找到的是 DECISIONS.md 的记录"
+assert_has "$TMP/m92-X9.1.log" "DECISIONS.md" "成功输出给出记录路径"
+assert_has "$REPO/docs/team/reviews/X9.1-done.md" "阶段 explore 的交付证据" "审计写下当时核对了什么（阶段证据）"
+m92_add X9.2 explore -
+printf '# X9.2 · smoke\n\n判定: **PASS**\n' > "$REPO/docs/team/reviews/X9.2.md"
+assert_eq "explore：复验记录同样算接受 → 允许 done" "$(m92_done X9.2)" "0"
+assert_has "$TMP/m92-X9.2.log" "复验记录" "成功输出说明找到的是复验记录"
+m92_add X9.3 explore -
+printf '# X9.3 · smoke\n\n判定: **FAIL**\n' > "$REPO/docs/team/reviews/X9.3.md"
+assert_eq "explore：判定 FAIL 的记录不是「接受」→ 拒绝" "$(m92_done X9.3)" "1"
+assert_has "$TMP/m92-X9.3.log" "FAIL" "explore 拒绝信息点名 FAIL"
+
+# ② propose：交付 = PM 提案审查记录 reviews/<change>-proposal.md，判定 ACCEPTED
+m92_add X9.4 propose demo-change-a
+assert_eq "propose：没有提案审查记录 → 拒绝" "$(m92_done X9.4)" "1"
+assert_has "$TMP/m92-X9.4.log" "demo-change-a-proposal.md" "propose 拒绝信息按 change id 点名记录"
+printf '# demo-change-a · PM proposal review\n\ntime: 2026-09-15T00:00:00Z · verdict: **NEEDS-CHANGES**\n' \
+  > "$REPO/docs/team/reviews/demo-change-a-proposal.md"
+assert_eq "propose：NEEDS-CHANGES → 拒绝" "$(m92_done X9.4)" "1"
+assert_has "$TMP/m92-X9.4.log" "NEEDS-CHANGES" "propose 拒绝信息点名 NEEDS-CHANGES"
+printf '# demo-change-a · PM proposal review\n\ntime: 2026-09-15T00:00:00Z · verdict: **ACCEPTED**\n' \
+  > "$REPO/docs/team/reviews/demo-change-a-proposal.md"
+assert_eq "propose：ACCEPTED → 允许 done" "$(m92_done X9.4)" "0"
+assert_has "$TMP/m92-X9.4.log" "判定 ACCEPTED" "成功输出说明判定是 ACCEPTED"
+m92_add X9.4b propose demo-change-a2
+printf '# demo-change-a2 · PM proposal review\n\n判定: **ACCEPTED**\n' \
+  > "$REPO/docs/team/reviews/demo-change-a2-proposal.md"
+assert_eq "propose：中文抬头 判定: **ACCEPTED** 同样认" "$(m92_done X9.4b)" "0"
+m92_add X9.4c propose -
+assert_eq "propose：任务书没有 change: 行 → 拒绝（不猜对哪一份提案）" "$(m92_done X9.4c)" "1"
+assert_has "$TMP/m92-X9.4c.log" "change:" "propose 拒绝信息说明缺 change: 行"
+
+# ③ apply：与代码任务同规则（今天的规则不变）
+m92_add X9.5 apply -
+assert_eq "apply：没有证据 → 拒绝（规则不变）" "$(m92_done X9.5)" "1"
+assert_has "$TMP/m92-X9.5.log" "① 复验记录" "apply 仍走 ① 复验记录"
+printf '# X9.5 · smoke\n\n判定: **PASS**\n' > "$REPO/docs/team/reviews/X9.5.md"
+assert_eq "apply：判定 PASS 的复验记录 → 允许 done" "$(m92_done X9.5)" "0"
+
+# ④ verify：交付 = 该任务的复验记录
+m92_add X9.6 verify -
+assert_eq "verify：没有复验记录 → 拒绝" "$(m92_done X9.6)" "1"
+assert_has "$TMP/m92-X9.6.log" "阶段 verify 的交付" "verify 拒绝信息给出阶段路线"
+printf '# X9.6 · smoke\n\n判定: **PASS**\n' > "$REPO/docs/team/reviews/X9.6.md"
+assert_eq "verify：复验记录 → 允许 done" "$(m92_done X9.6)" "0"
+
+# ⑤ archive：交付 = change id 出现在 openspec/changes/archive/ 下（目录匹配即可）
+m92_add X9.7 archive demo-change-b
+assert_eq "archive：change 还没归档 → 拒绝" "$(m92_done X9.7)" "1"
+assert_has "$TMP/m92-X9.7.log" "demo-change-b" "archive 拒绝信息点名 change id"
+assert_has "$TMP/m92-X9.7.log" "changes/archive" "archive 拒绝信息给出归档目录"
+mkdir -p "$REPO/openspec/changes/archive/2026-09-15-demo-change-b"
+assert_eq "archive：归档目录出现 → 允许 done" "$(m92_done X9.7)" "0"
+assert_has "$TMP/m92-X9.7.log" "2026-09-15-demo-change-b" "成功输出给出实际归档目录"
+m92_add X9.8 archive demo-change-c
+assert_eq "archive：别的 change 归档了不算它归档 → 拒绝" "$(m92_done X9.8)" "1"
+
+# ⑥ 解析：PM 常在模板上直接改，值后面还挂着 `# ...` 同行注释 —— 注释不能把 phase/change 弄坏
+$TEAM board add X9.11 "template-shaped fixture" dev "-" >/dev/null 2>&1 || true
+printf '# X9.11 · template-shaped fixture\n\n```\ntask:   X9.11\nagent:  dev\nissue:  -\nchange: demo-change-f            # OpenSpec change id this brief implements\nspecs:  -            # requirements/scenarios it must satisfy\nphase:  propose       # OpenSpec pipeline phase this brief runs\ndeps:   -\nstatus: todo\n```\n' \
+  > "$REPO/docs/team/tasks/X9.11-tmpl.md"
+printf '# demo-change-f · PM proposal review\n\nverdict: **ACCEPTED**\n' \
+  > "$REPO/docs/team/reviews/demo-change-f-proposal.md"
+assert_eq "解析：模板头块的同行注释不影响 phase/change" "$(m92_done X9.11)" "0"
+assert_has "$TMP/m92-X9.11.log" "demo-change-f-proposal.md" "解析出的 change id 就是注释前面的那个"
+
+# ⑦ 控制组：阶段专属证据全部摆上桌，但任务书没有 phase（或 phase 值不认识）→ 旧规则照样拒绝
+m92_add X9.9 - demo-change-d
+printf '\n## D93 · smoke — accept X9.9\n' >> "$REPO/docs/team/DECISIONS.md"
+mkdir -p "$REPO/openspec/changes/archive/2026-09-15-demo-change-d"
+printf '# demo-change-d · PM proposal review\n\nverdict: **ACCEPTED**\n' \
+  > "$REPO/docs/team/reviews/demo-change-d-proposal.md"
+assert_eq "控制：未声明 phase 的任务，阶段证据一律不算（守卫不得放宽）" "$(m92_done X9.9)" "1"
+assert_not "$TMP/m92-X9.9.log" "阶段" "未声明 phase 时拒绝信息不提阶段路线"
+assert_eq "控制：被拒后 BOARD 状态仍 todo" "$(board_status X9.9)" "todo"
+m92_add X9.10 banana demo-change-d
+printf '\n## D94 · smoke — accept X9.10\n' >> "$REPO/docs/team/DECISIONS.md"
+assert_eq "控制：未知 phase 值不解释（= 没有 phase）→ 拒绝" "$(m92_done X9.10)" "1"
+assert_not "$TMP/m92-X9.10.log" "阶段" "未知 phase 的拒绝信息也不提阶段路线"
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

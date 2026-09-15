@@ -119,6 +119,14 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 | verify | the change, the landed code, the verification record, the diff | every scenario was exercised with red/green evidence, on a clean independent checkout | `docs/team/reviews/<ID>.md`; then `team board set <ID> done` after re-running the gate on the merged tree |
 | archive | the verified change + the user's confirmation | every task of the change is done and landed, and the specs after the deltas describe exactly what shipped | `openspec archive -y <id>` and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
 
+`team board set <ID> done` reads those same phases from the brief: `explore` is done on the PM's recorded
+acceptance (a `DECISIONS.md` entry whose heading names the task, or `reviews/<ID>.md`), `propose` only on an `ACCEPTED`
+`reviews/<change>-proposal.md` (a `NEEDS-CHANGES` record refuses and says so), `verify` on the task's review
+record, and `archive` once the change id appears under `openspec/changes/archive/`; `apply` keeps the code-task rule
+(non-`FAIL` review record or merged branch tip). A brief with no `phase:` line (or `-`, or an unknown value) keeps
+exactly the code-task rule — the guard is never widened for tasks that do not declare a phase, and an archived
+directory is evidence of the archive, not of the user's confirmation.
+
 ## 6. Preconditions
 
 - The phase commands must be generated for the agents' tool: `openspec init --tools pi` writes
