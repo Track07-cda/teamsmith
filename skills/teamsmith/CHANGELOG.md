@@ -24,6 +24,18 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.28.0 · 2026-09-14
+
+**`done` 的证据按 pipeline 阶段判定（M9.2）**
+
+- 起因：F1 守卫只认"代码任务"的证据，而 M9.1 的流水线里 explore/propose 阶段**本来就不产出代码**——E1 只能靠
+  `TEAM_BOARD_DONE_FORCE` 加一句自由文本理由（那正是会侵蚀守卫的习惯）。
+- 现在按阶段给证据：`explore` → `DECISIONS.md` 里**标题条目**点名任务（正文提一句不算——老条目会提到别的任务，那样等于放宽守卫）
+  或复验记录；`propose` → `docs/team/reviews/<change>-proposal.md` 判定 **ACCEPTED**（NEEDS-CHANGES 拒绝，且拒绝信息点名文件并说明原因）；
+  `verify` → 该任务的复验记录；`archive` → change 出现在 `openspec/changes/archive/` 下；**未声明 phase → 与原样完全一致**（这条控制我亲自验了）。
+- PM 复验：独立 checkout 门禁 PASS；逐条探针（无证据拒绝 / 标题点名通过 / NEEDS-CHANGES 拒绝 / ACCEPTED 通过 / 未声明阶段不变）
+  全绿；并再次确认"夹具本身要先验"——我自己的探针因**同一任务 ID 的重复 stub 任务书**读错文件两次。
+
 ## v1.27.0 · 2026-09-14
 
 **OpenSpec 指引重写为"流程管理"（M9.1）**
