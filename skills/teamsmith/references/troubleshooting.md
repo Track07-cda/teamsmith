@@ -62,6 +62,8 @@ effect. Mitigations:
 | worktree does not exist | `add-agent` was never run | dispatch creates it automatically, but an explicit `team add-agent <a>` is preferable |
 | window exists → replacing | the previous turn is still running | dispatch only after checking: replacing interrupts it (ask for progress with `team say` first) |
 | the session does not fit the model window | the resume guard: session size (JSONL bytes ÷ 4) exceeds the selected model's window, or the conservative `TEAM_SESSION_WARN_TOKENS` when the window cannot be resolved | `--fresh` for a new session, or `--allow-overflow` if you really mean to reuse it (it warns loudly) |
+| the agent still carries another unfinished task | the stacking guard: `state/<agent>.env` records task X, X has no non-`FAIL` review record, its branch tip is not in the protected branch and the board is not `done`/`closed`/`dropped`, while the worktree sits on a task branch | finish X first (`team resume --agent <a>`, then verify/merge) — or take the window over on purpose with `--force`; see 4e below |
+| the task id matches more than one brief | two files `docs/team/tasks/<ID>-*.md` (a title change created a second slug); the branch name would come from the stale one | rename/remove the stale brief or give it its own id: dispatch refuses instead of picking one by glob order |
 | the launch could not be confirmed | the pane never wrote the per-attempt launch proof, so tmux/the pane swallowed the command | see 4b below |
 | the harness started but the agent exited immediately (`exit=…`) | a **custom adapter** CLI that could not start (missing binary/flag/auth, or a first word the window's login shell cannot resolve) | the CLI's own output, the rendered command and the resolved binary are in `state/dispatch-<agent>-launch-failed.log`; see 4d below |
 
@@ -131,6 +133,31 @@ wrong, or a wrapper script is missing. Reproduce by hand with the `render :` lin
 means "command not found" *inside the window's login shell*; `exit=1`/`exit=2` are usually the CLI rejecting its
 arguments. An adapter that exits **0** right away is not a failure: script-style CLIs finish and exit, and dispatch
 says so.
+
+### 4e. `team dispatch` refuses because the agent still has an unfinished task
+
+This is the guard for the D16 accident shape: one agent carried M9.2 while the PM dispatched P2 to the same agent,
+which replaced the window/session and forced a hand-over. The tool knew the agent's task and branch the whole time.
+Now, before starting anything, dispatch reads `state/<agent>.env` (the task the agent was dispatched for), the board
+row for that task and the branch the worktree is on. If that task is another id and it is not finished — no non-`FAIL`
+review record, its branch tip is not an ancestor of the protected branch, and the board is not `done`/`closed`/
+`dropped` — the dispatch is refused (before any window is touched) and the refusal prints the task, its board status,
+the branch the worktree is on, why the task still counts as unfinished, and the two ways forward:
+
+```bash
+bash <skill>/scripts/team resume --agent dev            # finish what is already there (then review/merge)
+bash <skill>/scripts/team dispatch dev T2.1 <brief> --force   # take the window over on purpose
+```
+
+`--force` is the explicit override: the dispatch output states what it covers (which task gives way) and
+`state/watchdog.log` gets an audit line, so an intentional takeover is never silent. It covers **only** this refusal —
+a worktree still parked on the old task's branch is refused by the branch-identity guard (F16), which is a different
+problem: move the worktree to the new task's branch with git first. Two paths are deliberately not refused:
+re-dispatching the agent's **own** task (that is `resume`, not stacking) and any previous task that is reviewed,
+merged or decided by the board. When the state cannot be determined — no `state/<agent>.env`, an empty `task=`, no
+worktree, a detached/unreadable branch — dispatch proceeds and prints one line naming the missing signal; it does not
+guess. A dispatch whose id matches two briefs is refused for the same reason (`docs/team/tasks/<ID>-*.md`), with both
+paths listed: clean up the briefs instead of letting glob order choose the scope.
 
 ## 5. git worktree errors
 

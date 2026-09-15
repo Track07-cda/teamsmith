@@ -1935,6 +1935,19 @@ team_task_brief() { # <ID> → 任务书路径（team task 建的是 <ID>-<slug>
   return 0
 }
 
+# M9.3（D16 的工具侧）：同一个 ID 的**全部**任务书（不是「第一份」）。改了标题再 `team task <ID>` 会多出
+# 一份（<ID>-<旧slug>.md + <ID>-<新slug>.md），而旧实现按 glob 顺序取第一份：算分支名时用旧 slug
+# （撞名 `fatal: a branch named … already exists`），更糟的是把旧任务书的 scope 派出去。
+# 给出全部候选，让调用方自己决定怎么处理（派单一律拒绝，不猜）。
+team_task_briefs() { # <ID> → 每行一份任务书路径（没有 → 空）
+  local id="$1" t
+  [ -f "$TEAM_DOCS_ABS/tasks/$id.md" ] && printf '%s\n' "$TEAM_DOCS_ABS/tasks/$id.md"
+  for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do
+    [ -f "$t" ] && printf '%s\n' "$t"
+  done
+  return 0
+}
+
 team_task_phase() { # <ID> → explore|propose|apply|verify|archive（未声明 / `-` / 不认识 → 空）
   local p
   p="$(team_brief_field "$(team_task_brief "$1")" phase)"
@@ -2086,6 +2099,23 @@ team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证�
       "$TEAM_PROTECTED_BRANCH" "$branch" "${tip:0:9}"
   fi
   [ -n "$phase" ] && printf '  - ③ 阶段 %s 的交付证据：%s\n' "$phase" "$pev"
+  return 1
+}
+
+# M9.3（D16 的工具侧）：这个任务**结束了吗**？—— 派单前用它判断「是不是在同一个 agent 上叠第二个任务」。
+# 判据与 done 闸门同源（① 复验记录 / ② 已并入保护分支 / ③ 阶段证据），再加看板裁决：
+# done·closed·dropped 是在看板转变那一刻核对过证据的（M9.2/M9.4），这里不反过来质疑它。
+# 0 → stdout 一行「凭什么算结束」；1 → stdout 一行「为什么还没结束」（看板状态 + 交付证据的明细）。
+team_task_open_reason() { # <ID> → 0=已结束 / 1=还没结束（stdout 都是一行，供消息直接引用）
+  local id="$1" st ev detail
+  st="$(team_board_status "$id")"
+  case "$st" in
+    done|closed|dropped) printf '看板状态 %s\n' "$st"; return 0 ;;
+  esac
+  if ev="$(team_done_evidence "$id" 2>/dev/null)"; then printf '%s\n' "$ev"; return 0; fi
+  # 没结束：把 team_done_evidence 的明细（每行 "  - …"）压成一行 —— 不另写一套判据，免得两处漂移
+  detail="$(printf '%s\n' "$ev" | sed -n 's/^  - /；/p' | tr -d '\n')"
+  printf '看板状态 %s%s\n' "${st:-（BOARD 里没有这一行）}" "${detail:-（没有交付证据）}"
   return 1
 }
 

@@ -418,14 +418,76 @@ team_dispatch_launch_diag() { # <agent> <ID> <渲染出的命令> <解析到的�
   printf '%s\n' "$f"
 }
 
+# ---------------------------------------------------------------- 派单不许叠任务（M9.3 / DECISIONS D16）
+# 现场（PM 自己的事故）：M9.2 还在 dev 手上，PM 又把 P2 派给同一个 agent —— 新派单接管了它的窗口与 state，
+# M9.2 只好临时换人交接。工具当时**知道**那个 agent 的任务与分支（state/<agent>.env、BOARD、工作树），
+# 却什么都没说。这条守卫把「派单前先看它手上有没有没结束的活」从纪律变成机制（D16 的工具侧）。
+# 三条信号同时成立才拒绝（缺一条就照旧派单，不猜）：
+#   ① state 记着这个 agent 的另一个任务 X（`task=`）；
+#   ② X 还没结束（M9.2 的交付证据 + 看板裁决 —— team_task_open_reason）；
+#   ③ 工作树能定位，且确实停在一条任务分支上（不是保护分支、不是 detached）。
+# 不拦：派的就是 X 自己（resume / 断点续跑是「继续」，不是「叠」）；X 已经结束；判不出来（说清缺哪个信号）。
+# `--force` 是显式覆盖：把「覆盖了什么」打进输出（不静默接管），真实派单时再落一条审计日志。
+team_dispatch_stack_guard() { # <agent> <ID> <force> → 0=继续 / 1=拒绝（原因已打印）
+  local agent="$1" id="$2" force="${3:-0}"
+  local prev wt wt_branch prev_branch reason st
+  TEAM_DISPATCH_STACK_PREV=""          # 只有真的覆盖了才置位（同一进程里连续派单也不串台）
+  prev="$(team_state_get "$agent" task '')"
+  if [ -z "$prev" ]; then
+    team_dim "  $agent 没有在飞的任务记录（state/$agent.env 的 task= 为空或文件不存在）：判不出它手上有没有没结束的活，这次不拦"
+    return 0
+  fi
+  [ "$prev" = "$id" ] && return 0     # 同一个任务 = resume / 断点续跑：这是「继续」，不是「叠」
+  wt="$(team_state_get "$agent" worktree '')"
+  if [ -z "$wt" ] || [ ! -d "$wt" ]; then wt="$(team_agent_worktree "$agent")"; fi
+  if [ ! -d "$wt" ]; then
+    team_dim "  $agent 记着的任务 $prev 找不到工作树（$wt）：判不出它是否还压在这个任务上，这次不拦"
+    return 0
+  fi
+  wt_branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ -z "$wt_branch" ] || [ "$wt_branch" = "HEAD" ]; then
+    team_dim "  $agent 的工作树 $wt 不在任何分支上（detached 或不是 git 仓库）：判不出它是否还压着 $prev，这次不拦"
+    return 0
+  fi
+  if [ "$wt_branch" = "$TEAM_PROTECTED_BRANCH" ]; then
+    # 保护分支上的工作树本来就不允许开工（team_check_worktree_for_task 会给出该跑的 git 命令）：
+    # 这里不重复报同一件事，只把「它手上还有 X」说出来
+    team_dim "  $agent 的工作树在 $TEAM_PROTECTED_BRANCH 上，而它手上还有没结束的任务 $prev：先收尾再派（下面按常规守卫处理）"
+    return 0
+  fi
+  if reason="$(team_task_open_reason "$prev")"; then return 0; fi   # X 已结束：输出与以前逐字相同
+  prev_branch="$(team_state_get "$agent" branch '')"
+  st="$(team_board_status "$prev")"
+  if [ "$force" = "1" ]; then
+    team_warn "显式覆盖（--force）：$agent 上还有没结束的任务 $prev —— 这次派 $id 会接管它的窗口与 state"
+    team_dim "  被让位的任务：$prev ｜看板：${st:-没有这一行} ｜分支：$wt_branch（state 记的是 ${prev_branch:-未记}）" >&2
+    team_dim "  它还没结束：$reason" >&2
+    TEAM_DISPATCH_STACK_PREV="$prev"    # 真实派单路径据此写审计（--print 不写）
+    return 0
+  fi
+  team_err "拒绝派单：$agent 上还有一个没结束的任务（$prev）—— 这样会把这次的任务叠上去，接管它的窗口与 state"
+  team_err "  任务    ：$prev（看板状态：${st:-BOARD 里没有这一行}）"
+  if [ "$wt_branch" = "$prev_branch" ] || team_branch_is_for_task "$wt_branch" "$agent" "$prev"; then
+    team_err "  分支    ：$wt_branch（工作树 $wt 还停在它上面）"
+  else
+    team_err "  分支    ：工作树 $wt 停在 $wt_branch（state 记的是 ${prev_branch:-没有记录}）"
+  fi
+  team_err "  没结束  ：$reason"
+  team_err "  两条出路："
+  team_err "    · 先收尾：$TEAM_CLI resume --agent $agent（继续 $prev；复验/合并后再 team board set $prev done）"
+  team_err "    · 要它让位：$TEAM_CLI dispatch $agent $id <task-file> --force（显式覆盖，输出里会写明）"
+  return 1
+}
+
 team_cmd_dispatch() {
   team_require_cmd tmux "agent 在 tmux 窗口里跑，PM 需要能旁观与追问"
-  local agent="" id="" taskfile="" model="" fresh=0 printonly=0 overflow=0
+  local agent="" id="" taskfile="" model="" fresh=0 printonly=0 overflow=0 force=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --model) model="${2:?}"; shift 2 ;;
       --fresh) fresh=1; shift ;;
       --allow-overflow) overflow=1; shift ;;
+      --force) force=1; shift ;;
       --print) printonly=1; shift ;;
       -*) team_usage_die "dispatch: 未知参数 $1" ;;
       *) if [ -z "$agent" ]; then agent="$1"
@@ -436,7 +498,7 @@ team_cmd_dispatch() {
     esac
   done
   [ -n "$agent" ] && [ -n "$id" ] && [ -n "$taskfile" ] || \
-    team_usage_die "dispatch <agent> <ID> <task-file> [--model m] [--fresh] [--allow-overflow] [--print]"
+    team_usage_die "dispatch <agent> <ID> <task-file> [--model m] [--fresh] [--allow-overflow] [--force] [--print]"
   team_require_agent "$agent"
 
   # 任务书路径：先按 cwd 解析，再按主工作树解析
@@ -453,6 +515,27 @@ team_cmd_dispatch() {
       team_dim "  把任务书放进项目再派单（例如 $TEAM_DOCS_DIR/tasks/）：worker 只被授权在项目内工作" >&2
       return 1 ;;
   esac
+
+  # M9.3 ⑥：同一个 ID 有多份任务书 —— 认不出哪一份是这次的 scope。旧实现按 glob 顺序悄悄用第一份：
+  # 分支名可能算成旧 slug（撞名 `fatal: a branch named … already exists`），更糟的是派错 scope。
+  # 确定性做法：拒绝并列出全部（--force 不适用：认错任务不是「你说了算」的事）。
+  local briefs nbrief
+  briefs="$(team_task_briefs "$id")"
+  nbrief="$(printf '%s\n' "$briefs" | grep -c . || true)"
+  if [ "${nbrief:-0}" -gt 1 ]; then
+    team_err "拒绝派单：$id 有多份任务书（$nbrief 份）—— 认不出哪一份是这次的 scope，不猜"
+    while IFS= read -r b; do
+      [ -n "$b" ] && team_err "    ${b#"$TEAM_MAIN_ROOT"/}"
+    done <<< "$briefs"
+    team_err "  旧实现按 glob 顺序取第一份：分支名可能算成旧 slug（撞名 fatal: a branch named … already exists），"
+    team_err "  更糟的是把旧任务书的 scope 派出去。"
+    team_err "  确定性做法：只留一份 —— 把过期的那份改名/删掉（或给它自己的 ID），再派单。"
+    return 1
+  fi
+
+  # M9.3 ①-⑤：这个 agent 上是不是还压着一个没结束的任务（resume / up --agents 也走这里：
+  # 它们派的永远是 agent 自己记着的任务 → 同一任务短路，所以那两扇门的语义不变）
+  team_dispatch_stack_guard "$agent" "$id" "$force" || return 1
 
   local wt; wt="$(team_agent_worktree "$agent")"
   if [ ! -d "$wt" ]; then
@@ -607,6 +690,10 @@ team_cmd_dispatch() {
   team_state_set "$agent" started "$(team_timestamp)"
   team_board_set "$id" wip 2>/dev/null || true
 
+  # M9.3：`--force` 接管了另一个没结束的任务 —— 审计里留一条（输出里已经写明，这里落盘）
+  if [ -n "${TEAM_DISPATCH_STACK_PREV:-}" ]; then
+    team_wlog "dispatch $agent: 显式覆盖叠任务（${TEAM_DISPATCH_STACK_PREV} 让位给 $id）"
+  fi
   team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；provider=$provider model=${model##*/} session=$sid）"
   # 观察结论也要说出来（不是只报“成功”）：内建 Pi 路径下，agent 是「已经退出」还是「还在跑」，
   # PM 都要拿到**观察到的事实**（退出码来自窗口 harness 写下的事件证据，不是猜的；也不再假设

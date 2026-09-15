@@ -76,6 +76,23 @@ Resuming: dispatch the same agent for the same task and the session is reused; `
 session carries a long history from an earlier task, when you switch model family/provider, or when the session is
 wedged (the `Context full` / connection-error loop — troubleshooting §4a).
 
+**One agent, one unfinished task.** Before launching, dispatch also reads what that agent is already carrying: the
+recorded task (`state/<agent>.env`), its board row and the worktree's checked-out branch. If another task is still
+unfinished — no non-`FAIL` review record, its branch tip is not in the protected branch, the board is not
+`done`/`closed`/`dropped` — the dispatch is **refused**. The refusal names that task, its board status, the branch
+the worktree sits on now, why the task still counts as unfinished, and the two ways out: finish it
+(`team resume --agent <a>`, then verify/merge) or take the window over on purpose with
+`team dispatch <a> <ID> <taskfile> --force`. `--force` prints the override in the dispatch output and appends a line
+to `state/watchdog.log`, so a takeover is never silent; it covers only this refusal — a worktree parked on another
+task's branch is still refused by the branch-identity guard (troubleshooting §4e).
+
+Nothing changes on the paths that are not stacking: re-dispatching the agent's **own** task is the resume/recovery
+path and is never refused, a task that is already reviewed, merged or decided by the board behaves exactly as before,
+and when the state cannot be determined (no `state/<agent>.env`, an empty `task=`, no worktree, an unreadable
+branch) the dispatch proceeds and prints one line naming the missing signal instead of guessing. One id that matches
+**more than one** brief (`docs/team/tasks/<ID>-*.md`, e.g. after the title changed) is refused with both paths
+listed: the glob order is not a decision procedure, so rename or drop the stale brief (or give it its own id) first.
+
 Before resuming, dispatch compares the session's size with the selected model's window (estimate = session JSONL
 bytes ÷ 4, crude on purpose; the window comes from `TEAM_MODEL_WINDOWS`, otherwise from Pi's model directory,
 otherwise a conservative `TEAM_SESSION_WARN_TOKENS`) and **refuses** when the history does not fit. Two ways out:

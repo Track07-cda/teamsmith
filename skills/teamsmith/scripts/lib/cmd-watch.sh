@@ -174,6 +174,9 @@ team_cmd_resume() {
       printf '  %s 可续跑：%s → %s\n' "$a" "$task" "$taskfile"
     else
       team_info "  续跑 $a · $task"
+      # M9.3：resume / `up --agents` 与 dispatch 共用同一扇门，而它们派的**永远是这个 agent 自己
+      # 记着的任务** —— 在叠任务守卫眼里就是「同一任务 = 继续」，不会被拦；要拦的是「另一个任务
+      # 压着这个 agent」（state 与这次要派的 ID 不一致），那由 dispatch 里的守卫统一负责。
       if team_cmd_dispatch "$a" "$task" "$taskfile"; then
         team_wlog "resume agent=$a task=$task"
       else

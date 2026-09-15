@@ -4278,6 +4278,171 @@ assert_match "$TMP/m94-e2-pending.log" '/m94a/' "正本不在本地时仍然列�
 $TEAM digest >"$TMP/m94-e2-digest.log" 2>&1 || true
 assert_has "$TMP/m94-e2-digest.log" "副本：在 m94a 的工作树里" "digest 明说这是副本，不把归属算到 m94a 头上"
 
+# ---------------------------------------------------------------- 22. 派单不许叠任务（M9.3 / D16）
+# 契约（真实事故 D16 #1：M9.2 还在 dev 手上，PM 把 P2 派给同一个 agent —— 新派单接管了它的窗口与 state，
+# M9.2 只好临时换人交接。工具当时就知道那个 agent 的任务/分支：state/<agent>.env、BOARD、工作树）：
+#   ① agent 记着一个**没结束**的任务 X（没有复验记录 / 没并进保护分支 / 看板不是 done·closed·dropped），
+#      而这次要派的是另一个 ID → 默认拒绝：点名 X、它的看板状态、分支，以及两条出路（resume / --force）。
+#   ② `--force` 是显式覆盖，并且**打印出来**（不许静默接管）；覆盖只针对「叠任务」这一条守卫 ——
+#      工作树的分支身份（M6.3 F16）照旧独立生效。
+#   ③ 派的就是 X 自己 → 一律不拦（resume / 断点续跑是「继续」，不是「叠」）。
+#   ④ X 已经结束（复验记录 / 已并入保护分支 / 看板裁决）→ 输出与以前逐字一样。
+#   ⑤ state 判不出来（没有 state / task= 为空 / 找不到工作树 / 读不到分支）→ 不猜：照旧派单，但说清缺哪个信号。
+#   ⑥ 同一个 ID 有多份任务书 → 拒绝并列出全部（旧实现按 glob 第一份算 slug：撞分支名 / 拿错 scope）。
+# 纯逻辑（夹具自己的 state + `--print`），快慢模式都跑；真拉起仍由 6 / 6h / 11c 覆盖。
+section "22 · 派单不许叠任务（M9.3 / D16）"
+cd "$REPO" || exit 1
+
+M93_AGENTS="dev verify m93a m93b m93c"
+m93_run() { env TEAM_AGENTS="$M93_AGENTS" $TEAM "$@"; }   # 三个夹具 agent 只在本节的名册里
+m93_brief() { # <ID> <agent>：最小任务书（头块与 PM 的模板同形）
+  mkdir -p "$REPO/docs/team/tasks"
+  printf '# %s · M9.3 smoke fixture\n\ntask:   %s\nagent:  %s\ndeps:   -\nstatus: todo\n' \
+    "$1" "$1" "$2" > "$REPO/docs/team/tasks/$1-m93-smoke.md"
+}
+m93_add() { # <ID> <agent>：BOARD 行 + 任务书
+  $TEAM board add "$1" "M9.3 fixture $1" "$2" - >/dev/null 2>&1 || true
+  m93_brief "$1" "$2"
+}
+m93_wt() { # <agent> <ID> → 把它的工作树切到该 ID 的规范分支（分支身份守卫要求工作树停在本次任务的分支上）
+  local a="$1" id="$2" wt="$REPO/.worktrees/$1" br
+  br="$(canon_branch "$a" "$id")"
+  git -C "$REPO" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  git -C "$REPO" branch -D "$br" >/dev/null 2>&1 || true
+  git -C "$REPO" worktree add -q -b "$br" "$wt" "$PROTECTED"
+  printf '%s\n' "$br"
+}
+_git_add_commit() { # <工作树> <提交信息>：夹具提交（作者固定，不碰仓库/全局 git 配置）
+  git -C "$1" add -A >/dev/null 2>&1 || true
+  git -C "$1" -c user.email=smoke@local -c user.name=smoke commit -qm "$2" >/dev/null 2>&1 || true
+}
+m93_state() { # <agent> <task> <taskfile> <branch>：夹具 state（键与 dispatch 写下的同形）
+  mkdir -p "$REPO/.pi/team/state"
+  { printf 'model=deepseek/deepseek-flash\nwindow=%s\nworktree=%s\n' "$1" "$REPO/.worktrees/$1"
+    printf 'task=%s\ntaskfile=%s\nbranch=%s\nstarted=2026-09-15T00:00:00Z\n' "$2" "$3" "$4"
+  } > "$REPO/.pi/team/state/$1.env"
+}
+
+# ① 叠任务的形状（D16 #1）：state 记着 M93A1（分支上真的有未交付的提交），工作树已被准备好接 M93A2
+m93_add M93A1 m93a
+m93_add M93A2 m93a
+$TEAM board set M93A1 wip >/dev/null 2>&1 || true
+M93A1_BR="$(m93_wt m93a M93A1)"
+printf 'wip(M93A1)\n' > "$REPO/.worktrees/m93a/wip.txt"   # 夹具：M93A1 有还没并进 main 的提交
+_git_add_commit "$REPO/.worktrees/m93a" "wip(M93A1): fixture"
+m93_state m93a M93A1 "$REPO/docs/team/tasks/M93A1-m93-smoke.md" "$M93A1_BR"
+M93A2_BR="$(m93_wt m93a M93A2)"
+M93A2_BRIEF="$REPO/docs/team/tasks/M93A2-m93-smoke.md"
+if m93_run dispatch m93a M93A2 "$M93A2_BRIEF" --print >"$TMP/m93-a-refuse.log" 2>&1; then
+  bad "M9.3-①：M93A1 没结束就派 M93A2 —— 应当拒绝"
+else ok "M9.3-①：另一个没结束的任务压着这个 agent → 默认拒绝"; fi
+assert_has "$TMP/m93-a-refuse.log" "M93A1" "拒绝信息点名它手上那个任务"
+assert_has "$TMP/m93-a-refuse.log" "wip" "拒绝信息带上看板状态"
+assert_has "$TMP/m93-a-refuse.log" "$M93A2_BR" "拒绝信息带上工作树现在停的分支"
+assert_has "$TMP/m93-a-refuse.log" "resume" "出路一：先收尾（resume）"
+assert_has "$TMP/m93-a-refuse.log" "--force" "出路二：显式覆盖 --force"
+assert_not "$TMP/m93-a-refuse.log" "=== agent 命令" "被拒时没有派单计划（不留半启动）"
+assert_has "$REPO/.pi/team/state/m93a.env" "task=M93A1" "被拒时 state 没被改写"
+if m93_run dispatch m93a M93A2 "$M93A2_BRIEF" --print --force >"$TMP/m93-a-force.log" 2>&1; then
+  ok "M9.3-①：--force 是显式覆盖 → 放行"
+else bad "M9.3-①：--force 应当放行（见 $TMP/m93-a-force.log）"; fi
+assert_has "$TMP/m93-a-force.log" "显式覆盖" "--force 的输出里写明这是覆盖（不静默接管）"
+assert_has "$TMP/m93-a-force.log" "M93A1" "覆盖输出点名被压住的任务"
+assert_has "$TMP/m93-a-force.log" "=== agent 命令" "覆盖后真的走到派单计划"
+assert_has "$REPO/.pi/team/state/m93a.env" "task=M93A1" "（--print 无副作用：state 仍记着 M93A1）"
+
+# ①b 另一种形状：工作树还停在旧任务的分支上。--force 只覆盖「叠任务」这一条，分支身份守卫照旧生效
+git -C "$REPO/.worktrees/m93a" switch -q "$M93A1_BR"
+if m93_run dispatch m93a M93A2 "$M93A2_BRIEF" --print >"$TMP/m93-b-refuse.log" 2>&1; then
+  bad "M9.3-①b：工作树还在 M93A1 的分支上 → 应当拒绝"
+else ok "M9.3-①b：工作树仍停在没结束的任务分支上 → 拒绝"; fi
+assert_has "$TMP/m93-b-refuse.log" "M93A1" "拒绝信息点名它手上那个任务"
+if m93_run dispatch m93a M93A2 "$M93A2_BRIEF" --print --force >"$TMP/m93-b-force.log" 2>&1; then
+  bad "M9.3-①b：分支不属于 M93A2 时 --force 不该放行（分支身份是另一条独立的守卫）"
+else ok "M9.3-①b：--force 只覆盖叠任务；停错分支仍被分支守卫拒绝"; fi
+assert_has "$TMP/m93-b-force.log" "停在不属于本任务" "拒绝来自分支身份守卫（M6.3 F16）"
+assert_not "$TMP/m93-b-force.log" "=== agent 命令" "仍然没有派单计划"
+
+# ② 上一个任务已经结束（复验记录 PASS）→ 输出与以前逐字一样
+git -C "$REPO/.worktrees/m93a" switch -q "$M93A2_BR"
+mkdir -p "$REPO/docs/team/reviews"
+printf '# M93A1 · smoke\n\n判定: **PASS**\n' > "$REPO/docs/team/reviews/M93A1.md"
+if m93_run dispatch m93a M93A2 "$M93A2_BRIEF" --print >"$TMP/m93-c-finished.log" 2>&1; then
+  ok "M9.3-②：上一个任务有复验记录 → 照旧派单"
+else bad "M9.3-②：已结束的任务不该拦（见 $TMP/m93-c-finished.log）"; fi
+assert_not "$TMP/m93-c-finished.log" "拒绝派单" "已结束时输出里没有拒绝"
+assert_not "$TMP/m93-c-finished.log" "显式覆盖" "已结束时不需要覆盖"
+assert_has "$TMP/m93-c-finished.log" "=== agent 命令" "照旧打印派单计划"
+# 看板裁决（done）同样算结束：不靠复验记录也放行（M9.4 的同一原则：清单不得反过来质疑看板）
+m93_add M93B1 m93b
+M93B1_BR="$(m93_wt m93b M93B1)"
+m93_state m93b M93B1 "$REPO/docs/team/tasks/M93B1-m93-smoke.md" "$M93B1_BR"
+env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="smoke M9.3: 看板裁决先于复验记录" \
+  $TEAM board set M93B1 done >/dev/null 2>&1 || true
+assert_eq "M9.3-②：夹具的看板状态是 done" "$(board_status M93B1)" "done"
+if m93_run dispatch m93b M93B1 "$REPO/docs/team/tasks/M93B1-m93-smoke.md" --print >"$TMP/m93-c-boarddone.log" 2>&1; then
+  ok "M9.3-②：看板 done（裁决过了）→ 照旧派单"
+else bad "M9.3-②：看板 done 时不该拦"; fi
+assert_not "$TMP/m93-c-boarddone.log" "拒绝派单" "看板 done 时没有拒绝"
+assert_has "$TMP/m93-c-boarddone.log" "=== agent 命令" "照旧打印派单计划"
+
+# ③ 重新派同一个任务（resume 的形状）→ 一律不拦
+m93_add M93C1 m93c
+M93C1_BR="$(m93_wt m93c M93C1)"
+M93C1_BRIEF="$REPO/docs/team/tasks/M93C1-m93-smoke.md"
+m93_state m93c M93C1 "$M93C1_BRIEF" "$M93C1_BR"
+if m93_run dispatch m93c M93C1 "$M93C1_BRIEF" --print >"$TMP/m93-d-same.log" 2>&1; then
+  ok "M9.3-③：同一个任务的断点续跑 → 不拦（resume 的路径）"
+else bad "M9.3-③：续跑被叠任务守卫误拦"; fi
+assert_not "$TMP/m93-d-same.log" "拒绝派单" "续跑的输出里没有拒绝"
+assert_has "$TMP/m93-d-same.log" "=== agent 命令" "续跑照旧打印派单计划"
+# 第二扇门（resume）也只派它自己记着的任务 → 同一任务 = 继续，不该被拦
+m93_run resume --agent m93c --dry-run >"$TMP/m93-d-resume.log" 2>&1 || true
+assert_has "$TMP/m93-d-resume.log" "可续跑：M93C1" "resume --dry-run 仍把 M93C1 当成可续跑"
+assert_not "$TMP/m93-d-resume.log" "拒绝" "resume 不被叠任务守卫拦（同一任务 = 继续）"
+
+# ④ 状态判不出来 → 不猜：照旧派单，但说清缺哪个信号
+rm -f "$REPO/.pi/team/state/m93c.env"
+if m93_run dispatch m93c M93C1 "$M93C1_BRIEF" --print >"$TMP/m93-e-nostate.log" 2>&1; then
+  ok "M9.3-④：没有 state 文件 → 不猜，照旧派单（第一次派单不该被拦死）"
+else bad "M9.3-④：没有 state 时不该拒绝（见 $TMP/m93-e-nostate.log）"; fi
+assert_has "$TMP/m93-e-nostate.log" "task=" "说明缺的信号是 state 里的 task="
+assert_has "$TMP/m93-e-nostate.log" "m93c.env" "点名是哪个 state 文件"
+assert_has "$TMP/m93-e-nostate.log" "=== agent 命令" "照旧打印派单计划"
+# state 在、但 task= 是空的（close 之后的正常状态，team close 就是这么清的）：同样不猜
+m93_state m93c "" "$M93C1_BRIEF" ""
+if m93_run dispatch m93c M93C1 "$M93C1_BRIEF" --print >"$TMP/m93-e-emptytask.log" 2>&1; then
+  ok "M9.3-④：state 里 task= 为空 → 同样照旧派单"
+else bad "M9.3-④：task= 为空时不该拒绝"; fi
+assert_has "$TMP/m93-e-emptytask.log" "task=" "空 task= 也说清缺的是哪个信号"
+assert_has "$TMP/m93-e-emptytask.log" "=== agent 命令" "照旧打印派单计划"
+
+# ⑤ 同一个 ID 有多份任务书 → 拒绝并列出全部（旧实现按 glob 第一份算 slug：撞分支名 / 拿错 scope）
+$TEAM board add M93E "M9.3 fixture M93E" m93c - >/dev/null 2>&1 || true
+M93E_BR="$(m93_wt m93c M93E)"
+assert_eq "M9.3-⑤ 夹具有效：m93c 的工作树停在 M93E 的规范分支上" \
+  "$(git -C "$REPO/.worktrees/m93c" rev-parse --abbrev-ref HEAD)" "$M93E_BR"
+printf '# M93E · 旧的那份\n\ntask: M93E\nagent: m93c\n' > "$REPO/docs/team/tasks/M93E-legacy.md"
+printf '# M93E · 新的那份\n\ntask: M93E\nagent: m93c\n' > "$REPO/docs/team/tasks/M93E-reverify.md"
+M93E_BRIEF="$REPO/docs/team/tasks/M93E-reverify.md"
+if m93_run dispatch m93c M93E "$M93E_BRIEF" --print >"$TMP/m93-f-ambiguous.log" 2>&1; then
+  bad "M9.3-⑤：两份任务书时不该猜哪一份是这次的 scope"
+else ok "M9.3-⑤：ID 有歧义 → 拒绝（不猜）"; fi
+assert_has "$TMP/m93-f-ambiguous.log" "M93E-legacy.md" "拒绝信息列出第一份候选"
+assert_has "$TMP/m93-f-ambiguous.log" "M93E-reverify.md" "拒绝信息列出第二份候选"
+assert_not "$TMP/m93-f-ambiguous.log" "=== agent 命令" "歧义时没有派单计划"
+if m93_run dispatch m93c M93E "$M93E_BRIEF" --print --force >"$TMP/m93-f-force.log" 2>&1; then
+  bad "M9.3-⑤：歧义不该被 --force 放过（认错 scope 不是「你说了算」的事）"
+else ok "M9.3-⑤：--force 也不放过歧义（先收拾任务书，确定性优先）"; fi
+assert_not "$TMP/m93-f-force.log" "=== agent 命令" "歧义时 --force 同样没有派单计划"
+# 控制组：前缀相同的另一个 ID（M93E9-…）不属于 M93E，不该被算成歧义
+mv "$REPO/docs/team/tasks/M93E-legacy.md" "$REPO/docs/team/tasks/M93E9-other.md"
+if m93_run dispatch m93c M93E "$M93E_BRIEF" --print >"$TMP/m93-f-single.log" 2>&1; then
+  ok "M9.3-⑤：只剩一份任务书 → 照旧派单（前缀相同的另一个 ID 不算歧义）"
+else bad "M9.3-⑤：只剩一份任务书仍被拒（见 $TMP/m93-f-single.log）"; fi
+assert_has "$TMP/m93-f-single.log" "=== agent 命令" "控制组真的走到派单计划"
+assert_has "$TMP/m93-f-single.log" "prompt-m93c-M93E.md" "控制组派的就是 M93E 这一次的 scope"
+
 # ---------------------------------------------------------------- 15. 结束
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
