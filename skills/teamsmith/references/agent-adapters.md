@@ -162,6 +162,19 @@ Rules:
   also keeps `TEAM_MODEL_LIMITS` (model concurrency) meaningful.
 - The rendered command is executed by `bash -lc` in the window; the usual quoting rules of your shell
   apply, and nothing is `eval`-ed twice.
+- **The first word is resolved, not guessed** (the same rule as the PM side, §2): the window shell is
+  `bash -lc`, whose `PATH` typically lacks the directories your interactive shell adds, so a bare first word is
+  resolved on the **caller's** `PATH` and the absolute path is rendered into the command. `TEAM_AGENT_CMD='codex …'`
+  therefore works even where `bash -lc 'command -v codex'` fails. A first word that already contains `/`, quotes,
+  `$` or `{` is left exactly as written, and when `TEAM_AGENT_BIN` explicitly names a **different** binary the
+  template is not touched.
+- **"The harness started" is not "the agent started".** The window harness records the agent's exit code
+  (`state/dispatch-<agent>.exit`, same nonce as the spawn proof), and a worker CLI that exits non-zero within
+  `TEAM_DISPATCH_ALIVE_SEC` (default 1s) makes the dispatch **fail**: it prints `exit=<code>` and writes
+  `state/dispatch-<agent>-launch-failed.log` (rendered command, resolved binary, exit code, window tail). An
+  adapter that exits 0 is reported as finished — normal for script-style CLIs — and one that keeps running as
+  still running. The built-in Pi path keeps its old contract (a short-lived `TEAM_PI_BIN` is allowed), so an
+  immediately exiting `pi` is still a success with a warning.
 
 ## 4. Notify: `TEAM_AGENT_NOTIFY_CMD`
 

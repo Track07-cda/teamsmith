@@ -63,6 +63,7 @@ effect. Mitigations:
 | window exists → replacing | the previous turn is still running | dispatch only after checking: replacing interrupts it (ask for progress with `team say` first) |
 | the session does not fit the model window | the resume guard: session size (JSONL bytes ÷ 4) exceeds the selected model's window, or the conservative `TEAM_SESSION_WARN_TOKENS` when the window cannot be resolved | `--fresh` for a new session, or `--allow-overflow` if you really mean to reuse it (it warns loudly) |
 | the launch could not be confirmed | the pane never wrote the per-attempt launch proof, so tmux/the pane swallowed the command | see 4b below |
+| the harness started but the agent exited immediately (`exit=…`) | a **custom adapter** CLI that could not start (missing binary/flag/auth, or a first word the window's login shell cannot resolve) | the CLI's own output, the rendered command and the resolved binary are in `state/dispatch-<agent>-launch-failed.log`; see 4d below |
 
 ### 4a. An agent loops on `Context full` / connection errors right after a resume
 
@@ -113,6 +114,23 @@ The report exists only in the agent's working tree, and the reviewer reads the r
 branch — so the signal would arrive before it is actionable. The tool therefore lists it as "report not committed
 (spelling out that review is not the next step)" instead of pointing at `team review <ID>`; nothing is dropped. Ask
 the agent to commit it, and the normal "awaiting review" line plus the review command come back.
+
+### 4d. A worker adapter's CLI never started (`exit=…`)
+
+A dispatch proves two different things, and it now reports them separately: the **harness** started (the per-attempt
+spawn proof) and the **agent** started (the exit event `state/dispatch-<agent>.exit`). With `TEAM_AGENT_CMD` set, an
+immediate **non-zero** exit is a failed dispatch — it prints `派单失败：harness 起来了，但 agent 立刻退出了（exit=<code>）`,
+leaves the window in place (the CLI's own error stays on screen) and writes
+`state/dispatch-<agent>-launch-failed.log`: the rendered command, the resolved executable, the exit code and the
+window's last non-blank lines (captured by the harness the moment the CLI exited, so a shell that clears the screen
+does not erase it). Nothing is recorded against the task — `roster` will not show it as running the task.
+
+Common causes: the template's first word is a bare name that does not resolve on the caller's `PATH` either (dispatch
+refuses that earlier), `TEAM_AGENT_BIN` names a different binary than the template runs, the CLI's flags/auth are
+wrong, or a wrapper script is missing. Reproduce by hand with the `render :` line in the diagnostic. `exit=127`
+means "command not found" *inside the window's login shell*; `exit=1`/`exit=2` are usually the CLI rejecting its
+arguments. An adapter that exits **0** right away is not a failure: script-style CLIs finish and exit, and dispatch
+says so.
 
 ## 5. git worktree errors
 

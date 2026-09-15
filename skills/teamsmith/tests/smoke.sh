@@ -1630,6 +1630,128 @@ else
   printf '  (跳过非 Pi PM 端到端断言：没有 tmux)\n'
 fi
 
+# ---------------------------------------------------------------- 6j. worker adapter：裸名字 + 启动证据（M8.2）
+# M8.1 修了 PM 侧的同一只虫子（6i ②c），并按 brief 的边界只**测量**了 worker 侧；M8.2 收口两件事：
+#   ① 模板首词是裸名字、只存在于**调用者 PATH** 里 → 渲染成解析到的绝对路径（窗口 harness 是 bash -lc）；
+#   ② 「harness 起来了」≠「agent 跑起来了」：adapter 立刻非 0 退出 = 派单失败 + 诊断文件，不再 ✓。
+section "6j · worker adapter：裸名字解析 + agent 没跑起来必须响亮失败（M8.2）"
+
+# ① 纯逻辑（快模式照跑）：渲染与守卫
+M82_BARE_DIR="$TMP/m82-bare-bin"; mkdir -p "$M82_BARE_DIR"
+printf '#!/bin/sh\nsleep 300\n' > "$M82_BARE_DIR/worker-bare"; chmod +x "$M82_BARE_DIR/worker-bare"
+assert_eq "M8.2 夹具有效：登录 bash 看不到 $M82_BARE_DIR（否则下面那条是假绿）" \
+  "$(env PATH="$M82_BARE_DIR:$PATH" bash -lc 'command -v worker-bare || echo MISSING')" "MISSING"
+assert_eq "M8.2 夹具有效：调用者 PATH 看得到它" \
+  "$(env PATH="$M82_BARE_DIR:$PATH" bash -c 'command -v worker-bare || echo MISSING')" "$M82_BARE_DIR/worker-bare"
+env PATH="$M82_BARE_DIR:$PATH" TEAM_AGENT_CMD='worker-bare --pf {prompt_file} --ask {prompt}' \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m82-print-bare.log" 2>&1 \
+  || { bad "M8.2：裸名字的 dispatch --print 失败"; cat "$TMP/m82-print-bare.log"; }
+grep -m1 '^cd ' "$TMP/m82-print-bare.log" > "$TMP/m82-cmdline-bare.log" || true
+assert_has "$TMP/m82-cmdline-bare.log" "$M82_BARE_DIR/worker-bare --pf" "M8.2：裸名字被换成调用者 PATH 解析出的绝对路径"
+assert_not "$TMP/m82-cmdline-bare.log" "&& worker-bare " "M8.2：渲染出的命令不再出现裸名字"
+# 已经是绝对路径的首词原样保留（重复替换/加引号都是回归）
+env TEAM_AGENT_CMD="$M82_BARE_DIR/worker-bare --pf {prompt_file}" TEAM_AGENT_BIN="$M82_BARE_DIR/worker-bare" \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m82-print-abs.log" 2>&1 || true
+grep -m1 '^cd ' "$TMP/m82-print-abs.log" > "$TMP/m82-cmdline-abs.log" || true
+assert_has "$TMP/m82-cmdline-abs.log" "$M82_BARE_DIR/worker-bare --pf" "M8.2：已经是绝对路径的首词原样保留"
+# 显式 TEAM_AGENT_BIN 指向**另一个**名字时不改模板（与 PM 侧同一守卫；6f ② 的 myagent+bash 同样守着它）
+env TEAM_AGENT_CMD='myagent run --ask {prompt}' TEAM_AGENT_BIN=bash \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m82-print-otherbin.log" 2>&1 || true
+grep -m1 '^cd ' "$TMP/m82-print-otherbin.log" > "$TMP/m82-cmdline-otherbin.log" || true
+assert_has "$TMP/m82-cmdline-otherbin.log" "myagent run --ask" "M8.2：TEAM_AGENT_BIN 指向别的名字时不改模板首词"
+# 文档契约（一两行就够，但必须和行为同一句话）
+M82_TROUBLE="$SKILL_DIR/references/troubleshooting.md"
+assert_has "$ADOC" 'resolved on the **caller' "M8.2 文档：worker 侧首词按调用者 PATH 解析"
+assert_has "$ADOC" "dispatch-<agent>-launch-failed.log" "M8.2 文档：启动失败写出诊断文件"
+assert_has "$M82_TROUBLE" 'state/dispatch-<agent>.exit' "M8.2 文档：退出事件是独立证据（harness ≠ agent）"
+assert_has "$M82_TROUBLE" "exit=127" "M8.2 文档：exit=127 的含义（窗口里 command not found）"
+
+# ② 真窗口：裸名字的 CLI 真的被拉起；秒退非 0 的 adapter 必须失败 + 留诊断
+if [ "$FAST" = "1" ]; then
+  fast_skip "6j·worker adapter 启动证据（真窗口）" "要真实 tmux 窗口 + 假 adapter CLI（启动 / 秒退两条路径）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  M82_AGENT="adapter2"
+  M82_ID="T1.3"
+  M82_BRANCH="$(canon_branch "$M82_AGENT" "$M82_ID")"
+  git -C "$REPO" worktree add -b "$M82_BRANCH" "$REPO/.worktrees/$M82_AGENT" "$PROTECTED" >/dev/null 2>&1 || true
+  # 任务书放 state/（像 6g 那样）：T1.3 不进 BOARD，本节不改动「待复验」计数
+  mkdir -p "$REPO/.pi/team/state"
+  M82_TASK="$REPO/.pi/team/state/$M82_ID-m82-brief.md"
+  printf '# %s · M8.2 adapter 启动证据\n\ntask: %s\nagent: %s\n' "$M82_ID" "$M82_ID" "$M82_AGENT" > "$M82_TASK"
+  M82_DIAG="$REPO/.pi/team/state/dispatch-$M82_AGENT-launch-failed.log"
+  # (a) 裸名字：CLI 只存在于调用者 PATH（登录 bash 看不到，① 已证）
+  cat > "$M82_BARE_DIR/worker-live" <<EOF
+#!/usr/bin/env bash
+printf 'worker-live-ran %s\n' "\$*" > "$TMP/m82-bare-ran.log"
+sleep 120
+EOF
+  chmod +x "$M82_BARE_DIR/worker-live"
+  env TEAM_AGENTS="dev verify $M82_AGENT" PATH="$M82_BARE_DIR:$PATH" \
+    TEAM_AGENT_CMD='worker-live --pf {prompt_file} --ask {prompt}' \
+    $TEAM dispatch "$M82_AGENT" "$M82_ID" "$M82_TASK" --fresh >"$TMP/m82-bare-dispatch.log" 2>&1 \
+    || { bad "M8.2：裸名字 adapter 派单失败"; cat "$TMP/m82-bare-dispatch.log"; }
+  assert_has "$TMP/m82-bare-dispatch.log" "含启动校验" "M8.2：裸名字 adapter 派单成立（有启动证据）"
+  assert_match "$TMP/m82-bare-dispatch.log" "proof=spawn pid=[0-9]+" "M8.2：成功行仍带非空启动证据"
+  M82_WAIT=0
+  while [ "$M82_WAIT" -lt 60 ] && [ ! -s "$TMP/m82-bare-ran.log" ]; do sleep 0.25; M82_WAIT=$((M82_WAIT + 1)); done
+  assert_file "$TMP/m82-bare-ran.log" "M8.2：裸名字的 CLI 真的在窗口里跑起来了（它自己的日志）"
+  assert_has "$TMP/m82-bare-ran.log" "--pf $REPO/.pi/team/state/prompt-$M82_AGENT-$M82_ID.md" "M8.2：它拿到的是落盘的提示词"
+  assert_has "$TMP/m82-bare-dispatch.log" "还在跑" "M8.2：还活着的 adapter 被如实报成「还在跑」"
+  # (b) adapter 立刻以非 0 退出：派单必须失败，并留下可复查的诊断
+  cat > "$FAKE/worker-die" <<'M82EOF'
+#!/usr/bin/env bash
+echo "M82-WORKER-DIE: cannot start (intentional)" >&2
+exit 7
+M82EOF
+  chmod +x "$FAKE/worker-die"
+  rm -f "$REPO/.pi/team/state/$M82_AGENT.env" "$M82_DIAG" "$REPO/.pi/team/state/dispatch-$M82_AGENT-tail.txt"
+  if env TEAM_AGENTS="dev verify $M82_AGENT" TEAM_AGENT_CMD="$FAKE/worker-die --ask {prompt}" TEAM_AGENT_BIN="$FAKE/worker-die" \
+       $TEAM dispatch "$M82_AGENT" "$M82_ID" "$M82_TASK" --fresh >"$TMP/m82-die.log" 2>&1; then
+    bad "M8.2：agent 秒退非 0 时派单不该报成功"
+  else ok "M8.2：agent 秒退非 0 → 派单失败（不再假成功）"; fi
+  assert_not "$TMP/m82-die.log" "含启动校验" "M8.2：失败路径没有假成功行"
+  assert_has "$TMP/m82-die.log" "exit=7" "M8.2：失败文案报出真实退出码（exit=7）"
+  assert_has "$TMP/m82-die.log" "dispatch-$M82_AGENT-launch-failed.log" "M8.2：失败文案给出诊断文件路径"
+  assert_not_file "$REPO/.pi/team/state/$M82_AGENT.env" "M8.2：失败的派单不写任务记录（roster 不会说它接过这个任务）"
+  # 读**复制到 $TMP 的那份**：收尾会清现场，而失败现场值得留档（像 6i 对 pm-launch-failed.log 那样）
+  cp "$M82_DIAG" "$TMP/m82-die-diag.log" 2>/dev/null || true
+  assert_has "$TMP/m82-die-diag.log" "M82-WORKER-DIE: cannot start (intentional)" "M8.2：诊断里有 CLI 自己的报错（harness 自抓的尾屏）"
+  assert_has "$TMP/m82-die-diag.log" "exit   : 7" "M8.2：诊断里有 harness 记下的退出码"
+  assert_has "$TMP/m82-die-diag.log" "render : $FAKE/worker-die --ask" "M8.2：诊断里有渲染出的命令（可手工复现）"
+  assert_has "$TMP/m82-die-diag.log" "bin    : $FAKE/worker-die" "M8.2：诊断里有解析到的可执行文件"
+  assert_match "$TMP/m82-die-diag.log" '^pane   : .*（[0-9]+ 字节）' "M8.2：诊断记下尾屏抓取落盘的大小"
+  assert_match "$TMP/m82-die-diag.log" '^--- pane（agent 退出那一刻，harness 自抓）---$' "M8.2：诊断用的是 harness 自抓的那份（CLI 退出后 shell 可能清屏）"
+  tmux capture-pane -p -t "$SESSION:$M82_AGENT" -S -50 >"$TMP/m82-die-pane.txt" 2>/dev/null || true
+  assert_has "$TMP/m82-die-pane.txt" "M82-WORKER-DIE" "M8.2：窗口没被连诊断一起杀掉（报错还在 pane 里）"
+  # (c) 正常 adapter 不受影响：6g 的假 agent（绝对路径、跑完退出 0）就是这条路径，这里再钉一次
+  #     「以非 0 秒退才算失败」的另一半——退出码 0 的秒退只如实报告，不算失败。
+  cat > "$FAKE/worker-done" <<'M82EOF'
+#!/usr/bin/env bash
+echo done
+M82EOF
+  chmod +x "$FAKE/worker-done"
+  if env TEAM_AGENTS="dev verify $M82_AGENT" TEAM_AGENT_CMD="$FAKE/worker-done --ask {prompt}" TEAM_AGENT_BIN="$FAKE/worker-done" \
+       $TEAM dispatch "$M82_AGENT" "$M82_ID" "$M82_TASK" --fresh >"$TMP/m82-done.log" 2>&1; then
+    ok "M8.2：秒退但 exit 0 的 adapter 不算失败（脚本型 CLI 干完活就退）"
+  else bad "M8.2：exit 0 的 adapter 被误判成失败"; cat "$TMP/m82-done.log"; fi
+  assert_has "$TMP/m82-done.log" "含启动校验" "M8.2：exit 0 的 adapter 仍报派单成立"
+  assert_has "$TMP/m82-done.log" "exit code 0" "M8.2：并如实说出「已退出（exit code 0）」（不假装它还在跑）"
+  # 收尾：这一节不留窗口/worktree/分支/state（后面的段落要看到和改造前一样的现场）
+  tmux kill-window -t "$SESSION:$M82_AGENT" 2>/dev/null || true
+  git -C "$REPO" worktree remove --force "$REPO/.worktrees/$M82_AGENT" >/dev/null 2>&1 || true
+  git -C "$REPO" branch -D "$M82_BRANCH" >/dev/null 2>&1 || true
+  rm -f "$REPO/.pi/team/state/$M82_AGENT.env" "$REPO/.pi/team/state/dispatch-$M82_AGENT.exit" \
+        "$REPO/.pi/team/state/dispatch-$M82_AGENT.spawn" "$REPO/.pi/team/state/dispatch-$M82_AGENT-tail.txt" "$M82_DIAG"
+  M82_PEND="$($TEAM watchdog-status 2>/dev/null || true)"
+  case "$M82_PEND" in
+    *"待复验 [1-9]"*) bad "M8.2 清场没干净：watchdog-status 里还有待复验（会污染后面的巡检断言）" ;;
+    *) ok "M8.2 清场后不再有待复验报告（不影响后面的巡检断言）" ;;
+  esac
+else
+  printf '  (跳过 worker adapter 启动证据断言：没有 tmux)\n'
+fi
+
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
 section "7 · notify / inbox / digest"
 $TEAM notify dev "blocked: 缺 dependency X" >/dev/null 2>&1 && ok "notify 退出码 0" || bad "notify 失败"
@@ -3398,7 +3520,7 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
-  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
+  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
              "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"

@@ -353,6 +353,71 @@ team_wait_launch_proof() { # <agent> <nonce> [秒]
   return 1
 }
 
+# ---------------------------------------------------------------- 启动失败诊断（M8.2）
+# 尾屏：harness 在 agent 退出那一刻自己抓一份（见 team_cmd_dispatch 里的 inner）——
+# CLI 退出后容器 shell 的启动链可能清屏，事后再从外面 capture 也许只剩空屏（PM 侧 M8.1 实测过）。
+team_dispatch_tail_file() { printf '%s\n' "$TEAM_STATE_DIR/dispatch-$1-tail.txt"; }
+
+# 启动失败诊断：worker 侧的 sibling of state/pm-launch-failed.log（M8.1）。按 agent 分文件，
+# 两个 worker 同时失败不会互相覆盖。
+team_dispatch_launch_failed_log() { printf '%s\n' "$TEAM_STATE_DIR/dispatch-$1-launch-failed.log"; }
+
+# worker 窗口的尾屏（M8.2）：与 PM 侧 team_pm_pane_tail 同一形状（有界重试 + 归一化），
+# 只是目标是 worker 窗口。窗口不存在/始终空白 → 空（不编造内容）。
+team_agent_pane_tail() { # <agent> [<重试次数>] → stdout
+  local agent="${1:-}" tries="${2:-12}" i=0 out="" t
+  [ -n "$agent" ] || return 0
+  team_agent_window_exists "$agent" || return 0
+  t="$TEAM_SESSION:$agent"
+  while :; do
+    out="$(tmux capture-pane -p -t "$t" -S -200 2>/dev/null || true)"
+    team_text_has_content "$out" && break
+    [ "$i" -ge "$tries" ] && break
+    i=$((i + 1)); sleep 0.1
+  done
+  team_text_has_content "$out" || return 0
+  printf '%s\n' "$out" | team_pane_tail_normalize
+  return 0
+}
+
+# 把「agent 没跑起来」的现场写进 state/dispatch-<agent>-launch-failed.log（PM 侧 pm-launch-failed.log 的 sibling）：
+# 渲染出的命令 + 解析到的可执行文件 + harness 记下的退出码 + 窗口尾屏（优先用 harness 自抓的那份）。
+team_dispatch_launch_diag() { # <agent> <ID> <渲染出的命令> <解析到的可执行文件> <退出码> → 诊断文件路径（追加）
+  local agent="$1" id="$2" cmd="$3" bin="$4" rc="$5" f tailf pane src i=0
+  f="$(team_dispatch_launch_failed_log "$agent")"; mkdir -p "$TEAM_STATE_DIR"
+  tailf="$(team_dispatch_tail_file "$agent")"; pane=""; src=""
+  # harness 写下退出证据**之后**才抓尾屏（事件语义优先：退出码不能等抓屏），所以文件可能还差一拍：
+  # 有界等它出现（最多 ~1s）——那一份是 agent 退出那一刻的屏幕；始终没有则从外面重抓（见下）。
+  while [ "$i" -lt 20 ]; do
+    if [ -s "$tailf" ] && grep -q '[^[:space:]]' "$tailf" 2>/dev/null; then break; fi
+    i=$((i + 1)); sleep 0.05
+  done
+  {
+    printf '==== %s · agent 启动失败 ====\n' "$(team_timestamp)"
+    printf 'agent  : %s\n' "$agent"
+    printf 'task   : %s\n' "$id"
+    printf 'target : %s:%s\n' "$TEAM_SESSION" "$agent"
+    printf 'cmd    : TEAM_AGENT_CMD=%s\n' "$(printf '%q' "${TEAM_AGENT_CMD:-}")"
+    printf 'bin    : %s\n' "$bin"
+    printf 'exit   : %s（窗口 harness 记录的 agent 退出码）\n' "$rc"
+    [ -n "$cmd" ] && printf 'render : %s\n' "$cmd"
+    printf 'pane   : %s（%s 字节）\n' "$tailf" "$(wc -c < "$tailf" 2>/dev/null | tr -dc '0-9' || echo 0)"
+    if [ -s "$tailf" ] && grep -q '[^[:space:]]' "$tailf" 2>/dev/null; then
+      src="agent 退出那一刻，harness 自抓"
+      pane="$(team_pane_tail_normalize < "$tailf")"
+    else
+      src="重新抓取"
+      pane="$(team_agent_pane_tail "$agent")"
+    fi
+    if team_text_has_content "$pane"; then
+      printf -- '--- pane（%s）---\n%s\n--- end ---\n' "$src" "$pane"
+    else
+      printf -- '--- pane ---\n（窗口已不存在或始终空白：用上面的 render 命令手工跑一次看它的报错）\n'
+    fi
+  } >> "$f"
+  printf '%s\n' "$f"
+}
+
 team_cmd_dispatch() {
   team_require_cmd tmux "agent 在 tmux 窗口里跑，PM 需要能旁观与追问"
   local agent="" id="" taskfile="" model="" fresh=0 printonly=0 overflow=0
@@ -462,9 +527,10 @@ team_cmd_dispatch() {
   team_tmux_ensure_session
   # 启动 + 校验（M4.3 B）：最多两次（第一次没证据 → 杀窗口重试一次）。
   # 只有拿到**本轮 nonce** 的启动证据才算「发出去了」；失败则如实报告并杀掉窗口（不留半启动现场）。
-  local marker exitfile nonce inner pid="" attempt=0 exit_code="" observed=0
+  local marker exitfile nonce inner pid="" attempt=0 exit_code="" observed=0 tailfile
   marker="$(team_dispatch_spawn_file "$agent")"
   exitfile="$(team_dispatch_exit_file "$agent")"
+  tailfile="$(team_dispatch_tail_file "$agent")"
   mkdir -p "$TEAM_STATE_DIR"
   while [ "$attempt" -lt 2 ] && [ -z "$pid" ]; do
     attempt=$((attempt + 1))
@@ -476,19 +542,21 @@ team_cmd_dispatch() {
     fi
     # 每轮换 nonce：证据必须来自这一轮的启动（上一轮留在盘上的不算数）
     nonce="$(date +%s)-$$-$RANDOM-$attempt"
-    rm -f "$marker" "$exitfile"
+    rm -f "$marker" "$exitfile" "$tailfile"
     # 命令里写死绝对路径 + 短暂等待（窗口 shell 可能刚起、PATH/rc 还没就绪）；
     # 拿到可执行文件后先写下 (nonce, pid)，再跑 agent —— 这一行就是「harness 真的执行了」的证据。
     # agent 返回后**立刻**把 (nonce, $?) 写进退出证据文件，然后才 exec 回 shell：
     # 证据属于「agent 退了」这个事件（M7.5），不依赖窗口回 shell 的快慢。
-    inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s\nprintf "%%s %%s\\n" %s "$?" > %q\nexec bash' \
-      "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd" "$(printf '%q' "$nonce")" "$exitfile")"
+    # M8.2：退出那一刻再自抓一份尾屏（有界重试到非空白）—— CLI 退出后 shell 启动链可能清屏，
+    # 事后再从外面 capture 也许只剩空屏（PM 侧 M8.1 实测过）；失败诊断靠它保留 CLI 自己的报错。
+    inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s\nprintf "%%s %%s\\n" %s "$?" > %q\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %q 2>/dev/null; grep -q "[^[:space:]]" %q && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
+      "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd" "$(printf '%q' "$nonce")" "$exitfile" "$(printf '%q' "$tailfile")" "$(printf '%q' "$tailfile")")"
     tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
     pid="$(team_wait_launch_proof "$agent" "$nonce" 2>/dev/null || true)"
     # 额外观察（不复报成功就完事）：启动证据拿到后，agent 可能立刻退出（可执行文件/模型/provider 起不来）。
-    # 内置 Pi 路径下“秒退”值得一提；脚本型 adapter 秒退完成工作反而是正常的，不做这个观察。
-    # 绝不用它当失败依据：harness 确实跑了（有证据），而 TEAM_PI_BIN 也允许指向短命 CLI。
-    if [ -n "$pid" ] && [ -z "${TEAM_AGENT_CMD:-}" ]; then
+    # M8.2：**adapter 路径也看这条事件** —— 裸名字解析失败（exit 127）时 harness 确实跑了，
+    # 但 agent 没跑起来；旧实现只给内置 Pi 路径一句提醒，adapter 连提醒都没有（派单照样 ✓）。
+    if [ -n "$pid" ]; then
       local alive_sec="${TEAM_DISPATCH_ALIVE_SEC:-1}"
       case "$alive_sec" in ''|*[!0-9]*) alive_sec=1 ;; esac
       # 等的是「agent 进程返回」这条事件（上一条证据行），不是「看一眼 pane 忙不忙」的采样；
@@ -513,6 +581,23 @@ team_cmd_dispatch() {
     return 1
   fi
 
+  # 「harness 起来了」≠「agent 跑起来了」（M8.2）：自定义 adapter 立刻以非 0 退出就是派单失败。
+  # 为什么只对 adapter 严格：内置 Pi 路径的契约允许启动用例指向短命 CLI（M4.3 B3：假 pi `exit 3`
+  # 仍算派单成立，只如实提醒退出码）；而 adapter 模板跑的就是**要干活的 CLI**，它秒退非 0
+  # 只能意味着没跑起来（裸名字 127、参数错、CLI 自己拒绝启动）。
+  # 为什么秒退但 0 不算失败：脚本型 adapter 干完活就退是正常的（下面如实说出来，不假装它还在跑）。
+  if [ -n "$pid" ] && [ -n "${TEAM_AGENT_CMD:-}" ] && [ -n "$exit_code" ] && [ "$exit_code" != "0" ]; then
+    local diag
+    diag="$(team_dispatch_launch_diag "$agent" "$id" "$agent_cmd" "$agent_bin" "$exit_code")"
+    team_err "派单失败：harness 起来了，但 agent 立刻退出了（exit=$exit_code）—— agent 没跑起来"
+    team_dim "  不写任务/分支记录（roster 不会显示它接过这个任务）；窗口保留，CLI 自己的报错还在屏幕上"
+    team_err "  诊断（窗口尾屏 + 渲染出的命令 + 解析到的可执行文件）已写入：$diag"
+    team_dim "  手工复现：cd $(printf '%q' "$wt") && $agent_cmd"
+    team_dim "  常见原因：首词不在窗口（登录 bash）的 PATH 里（现在会被解析成绝对路径，除非 TEAM_AGENT_BIN 指向别的名字）；CLI 参数/认证被拒"
+    team_dim "  重派：$TEAM_CLI dispatch $agent $id $taskfile"
+    return 1
+  fi
+
   team_state_set "$agent" model "$model"
   team_state_set "$agent" window "$agent"
   team_state_set "$agent" worktree "$wt"
@@ -528,7 +613,12 @@ team_cmd_dispatch() {
   # 「窗口一定已经回到 shell」——那正是 M7.5 里被环境 churn 打脸的那句话）。
   if [ "$observed" = "1" ]; then
     if [ -n "$exit_code" ]; then
-      team_warn "但窗口里的 agent 已经退出（exit code $exit_code）：$TEAM_CLI roster 会显示「$(team_agent_cli_name) 已退出」（续跑：$TEAM_CLI resume --agent $agent）"
+      if [ -n "${TEAM_AGENT_CMD:-}" ]; then
+        # adapter 秒退但 0：脚本型 CLI 干完活就退是正常的 —— 如实说出来（不假装它还在跑，也不算失败）
+        team_dim "  窗口里的 agent 已经跑完并退出（exit code 0）：$TEAM_CLI roster 会显示「$(team_agent_cli_name) 已退出」"
+      else
+        team_warn "但窗口里的 agent 已经退出（exit code $exit_code）：$TEAM_CLI roster 会显示「$(team_agent_cli_name) 已退出」（续跑：$TEAM_CLI resume --agent $agent）"
+      fi
     else
       team_dim "  窗口里的 agent 还在跑（${TEAM_DISPATCH_ALIVE_SEC:-1}s 内没等到退出证据）"
     fi

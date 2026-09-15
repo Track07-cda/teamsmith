@@ -2379,9 +2379,29 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
 # 启动命令：空 TEAM_AGENT_CMD → 内置 Pi（默认路径，输出与历史逐字节一致）；否则展开模板。
 # 提示词通过窗口 harness 的 argv[0]（shell 里的 "$0"）传入，模板里用 {prompt} 取。
 team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file> [model]
-  local agent="$1" sid="$2" wt="$3" prompt_file="$4" model="${5:-}" pi_bin piargs
+  local agent="$1" sid="$2" wt="$3" prompt_file="$4" model="${5:-}" pi_bin piargs expanded agent_bin first
   if [ -n "${TEAM_AGENT_CMD:-}" ]; then
-    team_agent_expand launch "$TEAM_AGENT_CMD" "$agent" "$sid" "$wt" "$prompt_file" "" "" "$model"
+    expanded="$(team_agent_expand launch "$TEAM_AGENT_CMD" "$agent" "$sid" "$wt" "$prompt_file" "" "" "$model")"
+    # 裸名字 → 解析出的绝对路径（M8.2；与 PM 侧 M8.1 的 team_pm_launch_cmd 同一形状）。
+    # 为什么需要：命令在窗口里由 `bash -lc` 执行，登录 bash 的 PATH（/etc/profile + ~/.bash_profile）
+    # 常常没有用户交互式 rc 里加的目录 —— 模板首词写裸名字时窗口里就是 command not found，
+    # 而派单预检（在调用者 PATH 里解析）却过了。实测：`bash -lc 'command -v codex'` 找不到，调用者找得到。
+    # 为什么是替换首词而不是把 bin 目录前置进窗口 PATH：与 PM 侧同样的三条理由 ——
+    # ① 启动的二进制 == 身份检查看的二进制；② 不遮蔽 node/npm 之类的同名 shim；
+    # ③ 与内置 Pi 分支（命令里写绝对路径）同一形状。
+    # 只在「要执行的二进制 == 身份检查看的二进制」时替换：TEAM_AGENT_BIN 显式指向**另一个**名字
+    # （例如 TEAM_AGENT_BIN=bash 配一个脚本型 CLI）时，命令要不要改是模板作者的事，工具不去改。
+    agent_bin="$(team_agent_bin_path)"
+    case "$agent_bin" in
+      /*)
+        first="${expanded%%[[:space:]]*}"
+        if [ -z "$(team_trim "${TEAM_AGENT_BIN:-}")" ] \
+           || [ "$first" = "$agent_bin" ] \
+           || [ "$(basename "$first")" = "$(basename "$agent_bin")" ]; then
+          expanded="$(team_pm_subst_first_word "$expanded" "$(printf '%q' "$agent_bin")")"
+        fi ;;
+    esac
+    printf '%s\n' "$expanded"
     return 0
   fi
   # M4.3：显式传入的模型优先（否则回读 state —— state 是启动后才写的，第一次派单会拿到旧值）
