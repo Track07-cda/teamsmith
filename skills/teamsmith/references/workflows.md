@@ -115,7 +115,7 @@ bash <skill>/scripts/team thread dev "add an RLS test to T1.1 acceptance" --from
 bash <skill>/scripts/team digest          # pending work: new notifications + reports to verify + board + capacity/liveness
 bash <skill>/scripts/team inbox --ack     # read and mark as read
 bash <skill>/scripts/team roster          # who is running, branch, dirty files, ahead of the protected branch, unpushed commits
-bash <skill>/scripts/team ps              # capacity (RAM/swap/how many more fit) + model concurrency + PM/watchdog liveness
+bash <skill>/scripts/team ps              # capacity (RAM/swap/how many more fit) + model concurrency + PM/pulse liveness
 bash <skill>/scripts/team up              # one-shot repair: session/PM/agents that stopped without delivering
 ```
 
@@ -137,7 +137,7 @@ reviewer reads the report from a checkout of that branch. A report that still li
 is listed as "report not committed yet — wait for the agent to deliver" instead (the line stays visible; nothing is
 silently dropped).
 
-The same list is the watchdog's wake-up counter — `pending verification N` is computed by the very function §[3]
+The same list is the pulse's wake-up counter — `pending verification N` is computed by the very function §[3]
 renders (board `done`/`closed` skipped, drafts listed but *not* counted), and a long-lived patrol process
 re-executes itself as soon as `scripts/lib/**` changes on disk, so the reason it wakes the PM is never older than
 the digest the PM then reads.
@@ -256,39 +256,44 @@ the branch moves on, `digest`/`team status` flag it again (`stale: verified <A>,
   brief with no `phase:` line (or `-`, or an unknown value) keeps the two original routes unchanged — the gate is
   never widened for tasks that do not declare a phase.
 
-## I. Periodic patrol and the PM's rhythm (the watchdog only does this one thing)
+## I. Periodic patrol and the PM's rhythm (the pulse only does this one thing)
+
+> The patrol was called `watchdog` until v1.36.0; its old command names are aliases (`team watchdog …`,
+> `install-watchdog`, `uninstall-watchdog`), the `watchdog` window name and the `TEAM_WATCH_*` variables still work
+> as aliases/fallbacks until v2.0.0; `team pulse status` names every legacy variable in effect, and
+> `team pulse restart` swaps a still-running `watchdog` window for a `pulse` one.
 
 The problem: the PM (a pi process) stopped or went to sleep, an agent sent a notification, and nobody handled it.
-The framing: **the watchdog is not a keep-alive heartbeat, it asks on a timer "is there work right now"** — if there
+The framing: **the pulse is not a keep-alive heartbeat, it asks on a timer "is there work right now"** — if there
 is, it wakes the PM; if not, it stays quiet (the PM is not required to be running). Starting, stopping and resuming
 agents is still the PM's job.
 
 ```bash
-bash <skill>/scripts/team watchdog-status      # patrol interval, standby, pending work, PM state, capacity
+bash <skill>/scripts/team pulse status        # patrol interval, standby, pending work, PM state, capacity
 bash <skill>/scripts/team standby on --reason "waiting for the user to pick a stack"   # the PM stands down (no more wake-ups)
 bash <skill>/scripts/team standby off         # resume wake-ups
 bash <skill>/scripts/team up                  # manual rescue: build the tmux stage + start the PM (agents untouched)
 bash <skill>/scripts/team up --agents         # also resume agents that have a task but no window
 bash <skill>/scripts/team resume --dry-run    # the PM looks for itself: which agents should be resumed
-bash <skill>/scripts/team watch --once        # run one patrol tick (one watchdog tick, equivalently)
+bash <skill>/scripts/team watch --once        # run one patrol tick (one pulse tick, equivalently)
 ```
 
 ### Three deployment shapes (weakest to strongest)
 
 | Shape | Command | What it survives | Fits |
 |---|---|---|---|
-| **tmux window (default)** | `team watchdog up` | the PM crashing/sleeping, as long as the tmux server lives | everyday: one window is both the watchdog and the **status monitor** |
-| watchdog window | `team watchdog up` | the tmux server / window disappearing | there is only this one backend (no container dependency) |
+| **tmux window (default)** | `team pulse up` | the PM crashing/sleeping, as long as the tmux server lives | everyday: one window is both the pulse and the **status monitor** |
+| pulse window | `team pulse up` | the tmux server / window disappearing | there is only this one backend (no container dependency) |
 | manual | `team up` / `team watch --once` | whenever you notice yourself | troubleshooting |
 
 ```bash
-bash <skill>/scripts/team watchdog up          # default: a watchdog window in this session runs the monitor + patrols
-bash <skill>/scripts/team watchdog logs        # look at the monitor screen (a pane snapshot)
-bash <skill>/scripts/team watchdog status      # window/period/standby/pending work/PM liveness/capacity
-bash <skill>/scripts/team watchdog down        # close the window
+bash <skill>/scripts/team pulse up             # default: a pulse window in this session runs the monitor + patrols
+bash <skill>/scripts/team pulse logs           # look at the monitor screen (a pane snapshot)
+bash <skill>/scripts/team pulse status         # window/period/standby/pending work/PM liveness/capacity
+bash <skill>/scripts/team pulse down           # close the window
 bash <skill>/scripts/team monitor --once       # one screenful by hand (only the current session's state)
 bash <skill>/scripts/team monitor --activity   # opt in to each agent's session activity stream (off by default)
-bash <skill>/scripts/team watchdog up --print                # show which window/period it would use (without doing it)
+bash <skill>/scripts/team pulse up --print                   # show which window/period it would use (without doing it)
 ```
 
 The monitor serves **the current tmux session only**: whether windows are running, what the task is, pending work and
@@ -315,36 +320,36 @@ agent activity
      16:07:03 🔧 read
 ```
 
-The watchdog *is* the `watchdog` window in the same session: it runs `team monitor` (the status panel) and patrols on
-`TEAM_WATCH_INTERVAL`. It is decoupled from the PM's **value dependencies** (it only looks at on-disk state and tmux
+The pulse *is* the `pulse` window in the same session: it runs `team monitor` (the status panel) and patrols on
+`TEAM_PULSE_INTERVAL`. It is decoupled from the PM's **value dependencies** (it only looks at on-disk state and tmux
 panes) but does not try to leave tmux behind — since v1.12.0 it no longer needs podman/images/sockets.
 
 Every tick has three steps: ① append one capacity trend line to `state/capacity.log`; ② compute the pending work
 (unread notifications / reports to verify / board todo·wip / blocked / agents with an unfinished task that stopped);
-③ **only wake the PM when there is pending work** — while it is running, send one `[watchdog] pending: …` line (the
-same batch is rate-limited by `TEAM_WATCH_NUDGE_GAP`), otherwise bring it up in its original window with `pi -c`;
+③ **only wake the PM when there is pending work** — while it is running, send one `[pulse] pending: …` line (the
+same batch is rate-limited by `TEAM_PULSE_NUDGE_GAP`), otherwise bring it up in its original window with `pi -c`;
 **with nothing pending it does nothing at all**.
-`team standby on --reason "…"` lets the PM stand down deliberately (the watchdog stops waking it; the backlog is still
+`team standby on --reason "…"` lets the PM stand down deliberately (the pulse stops waking it; the backlog is still
 logged).
 
 ### Boundaries (deliberate)
 
 - **It does not manage tmux layout**: a missing session/window is only reported, never rebuilt
-  (`TEAM_WATCH_REBUILD_TMUX=0`, the default).
-  To let it recover from "the machine rebooted / the window was closed" by itself, set `TEAM_WATCH_REBUILD_TMUX=1`.
+  (`TEAM_PULSE_REBUILD_TMUX=0`, the default).
+  To let it recover from "the machine rebooted / the window was closed" by itself, set `TEAM_PULSE_REBUILD_TMUX=1`.
 - **It does not manage agents**: an agent with a task whose window is gone is not resumed automatically — that is the
   PM's call (the PM runs `team resume --dry-run` at the start of its shift and decides; a human can do it in one shot
   with `team up --agents`).
 - **It does not manage model quota and never merges**: those are the PM's job.
 - **The PM is not required to run continuously**: between pending batches the PM may sit quietly (or not be running at
-  all); the watchdog will not wake it just to "keep it alive".
-- Runaway protection: a restart quota for the PM (`TEAM_WATCH_MAX_RESTARTS`, default 5 per hour) turns into a warning
-  when exceeded; the watchdog itself holds a pid lock.
+  all); the pulse will not wake it just to "keep it alive".
+- Runaway protection: a restart quota for the PM (`TEAM_PULSE_MAX_RESTARTS`, default 5 per hour) turns into a warning
+  when exceeded; the pulse itself holds a pid lock.
 
 ### Standby (the PM or a human deliberately stops)
 
 ```bash
-bash <skill>/scripts/team standby on --reason "waiting for user authorization to merge"   # the watchdog stops waking it
+bash <skill>/scripts/team standby on --reason "waiting for user authorization to merge"   # the pulse stops waking it
 bash <skill>/scripts/team standby status                        # see reason/start time/backlog
 bash <skill>/scripts/team standby off                          # done, resume wake-ups
 ```
@@ -364,8 +369,8 @@ then carry on.
 
 ```bash
 bash <skill>/scripts/team standby on --reason "manual maintenance"   # temporarily: stop waking the PM
+bash <skill>/scripts/team pulse down                        # the pulse window goes (patrol stops)
 bash <skill>/scripts/team teardown --all                   # close every window (worktrees/branches/state are kept)
-bash <skill>/scripts/team uninstall-watchdog --yes          # completely: the watchdog goes too
 ```
 
 ## J. Running for a long time (long projects)

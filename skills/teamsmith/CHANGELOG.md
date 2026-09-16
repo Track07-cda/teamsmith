@@ -26,6 +26,30 @@
 
 ## v1.36.0 · 2026-09-16
 
+## v1.37.0 · 2026-09-16
+
+**巡检改名：watchdog → pulse（openspec change `rename-watchdog-to-pulse`，P7/P8）**
+
+「watchdog」像一个长活 daemon 的名字，而它从来不是——它是个节拍器：有活才叫 PM，没活安静。改成 pulse
+是把这个事实写进名字。别名期到 v2.0.0，**现有项目零操作可继续跑**：
+
+- **命令**：`team pulse up|down|restart|status|logs`（裸 `team pulse` = `status`）；`paths`/`doctor`/`help`/
+  `bootstrap --print`、monitor 的 nudge 文案（`[pulse] pending: …`）与面板标题同步改名。
+- **旧命令名是别名**：`team watchdog …`、`watchdog-status`、`install-watchdog`、`uninstall-watchdog` 照常工作——
+  先往 stdout 印一行 `[deprecated]`，然后逐字执行 pulse 实现（tooling 内部路径直调实现，不印提示）。
+- **窗口名**：`TEAM_PULSE_WINDOW` 默认 `pulse`；还在跑的 `watchdog` 窗口被识别为后端（status/doctor 点名并指向
+  `team pulse restart`——restart 把它换成 `pulse` 窗口；`up` 绝不在旧窗口旁边再开一个巡检；`down` 两个名字都收）。
+- **变量**：每个巡检键的生效值为 `TEAM_PULSE_<NAME>` ＞ `TEAM_WATCH_<NAME>` ＞ 默认（单点解析在
+  `team_load_config`）；新模板写新名并留一行旧名注释；旧配置原样生效，`team pulse status`/`team doctor`
+  点名仍在生效的旧变量。
+- **state 文件名不动**：`state/watchdog.pid/.log/.last/.nudge/.tick.log` 在别名期保持原名——两个巡检并存
+  （双重 nudge、双重拉起）是改名期唯一不能发生的事；同一把 `watchdog.pid` 锁照常拒绝第二个 watch 循环。
+
+迁移（想彻底改名时）：把 `.pi/team/config.sh` 里的六个 `TEAM_WATCH_*` 键改成 `TEAM_PULSE_*`（值不动），
+再 `team pulse restart` 换窗口名。详见 references/migration.md §2b。
+
+## v1.36.0 · 2026-09-16
+
 **延后投递 + 人类草稿入口（D20——用户亲历的事故）**
 
 自动消息（通知/叫醒/敲门）不再往正在打字的输入框里打：检测到非空就进持久队列，等框空了再投递；

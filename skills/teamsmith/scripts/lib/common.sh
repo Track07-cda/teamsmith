@@ -74,6 +74,39 @@ team_find_config() {
 }
 
 # 载入配置 + 填默认值。TEAM_CWD 固定为调用时的工作目录（后续 cd 不影响 git 定位）。
+
+# ---------------------------------------------------------------- TEAM_PULSE_* 解析（D22 改名）
+# 巡检在 v1.36.0 由 watchdog 改名 pulse。别名期（→ v2.0.0）六个变量的有效值一律是：
+#   TEAM_PULSE_<NAME>（非空）＞ TEAM_WATCH_<NAME>（非空，用到就点名）＞ 文档默认值
+# 优先级只许存在这一个函数里；脚本各处只读解析结果 $TEAM_PULSE_*，不再各自拼兜底。
+TEAM_PULSE_VAR_NAMES="INTERVAL NUDGE_GAP MAX_RESTARTS PENDING_BOARD REBUILD_TMUX WINDOW"
+
+team_pulse_var() { # <NAME> <默认值> → 有效值（必须在 team_load_config 覆盖 TEAM_PULSE_* 之前调用）
+  local pn="TEAM_PULSE_$1" wn="TEAM_WATCH_$1"
+  if [ -n "${!pn:-}" ]; then printf '%s\n' "${!pn}"; return 0; fi
+  if [ -n "${!wn:-}" ]; then printf '%s\n' "${!wn}"; return 0; fi
+  printf '%s\n' "$2"
+}
+
+team_pulse_legacy_vars() { # → 别名期里**正在生效**的旧变量名（空格分隔；必须在 TEAM_PULSE_* 被填默认前调用）
+  local n pn wn out=""
+  for n in $TEAM_PULSE_VAR_NAMES; do
+    pn="TEAM_PULSE_$n"; wn="TEAM_WATCH_$n"
+    if [ -z "${!pn:-}" ] && [ -n "${!wn:-}" ]; then out="${out:+$out }$wn"; fi
+  done
+  printf '%s\n' "$out"
+}
+
+team_pulse_legacy_suffix() { # → “（legacy: TEAM_WATCH_INTERVAL=17 …）”；没有旧变量在生效 → 空
+  local n v out=""
+  for n in ${TEAM_PULSE_LEGACY_USED:-}; do
+    v="${!n:-}"
+    out="${out:+$out }$n=$v"
+  done
+  [ -n "$out" ] && printf '（legacy: %s）\n' "$out"
+  return 0
+}
+
 team_load_config() {
   TEAM_CWD="${TEAM_CWD:-$PWD}"
   TEAM_SKILL_DIR="${TEAM_SKILL_DIR:-$(team_skill_dir)}"
@@ -133,7 +166,7 @@ team_load_config() {
   TEAM_MEMINFO_FILE="${TEAM_MEMINFO_FILE:-}"
   TEAM_INSTALL_CMD="${TEAM_INSTALL_CMD:-}"
   TEAM_DEFAULT_MODEL="${TEAM_DEFAULT_MODEL:-deepseek/deepseek-flash}"
-  # PM 自己的启动参数（team up / watchdog 用）
+  # PM 自己的启动参数（team up / pulse 用）
   TEAM_PM_MODEL="${TEAM_PM_MODEL:-}"          # 空 = 用 TEAM_DEFAULT_MODEL
   TEAM_PM_SESSION_ID="${TEAM_PM_SESSION_ID:-}" # 空 = 用 pi -c 延续本目录上一个会话（保住历史）
   TEAM_PM_EXTRA_PI_ARGS="${TEAM_PM_EXTRA_PI_ARGS:-}"
@@ -146,8 +179,6 @@ team_load_config() {
   TEAM_MIN_TOTAL_MB="${TEAM_MIN_TOTAL_MB:-512}"            # RAM+swap 的绝对底线
   TEAM_WARN_AVAIL_MB="${TEAM_WARN_AVAIL_MB:-2048}"         # RAM 低于此值：只警告（允许卡顿）
   TEAM_AGENT_MEM_MB="${TEAM_AGENT_MEM_MB:-6144}"           # 单个 agent 的经验占用（估算用）
-  # 保活 watchdog
-  # 定时巡检（叫醒 PM 的节拍；不是心跳保活）——默认 15 分钟，推荐 5~60 分钟
   # PM 记忆（依赖）：magic-context 让 PM 的长期会话能跨压缩/跨重启检索历史。
   # 默认要求（D10）：缺它时 PM 的记忆层是空的，doctor 会判失败。
   # TEAM_REQUIRE_MAGIC_CONTEXT=0 降级为只警告（环境特殊 / 临时验查时用）。
@@ -165,21 +196,24 @@ team_load_config() {
   TEAM_REQUIRE_OPENSPEC="${TEAM_REQUIRE_OPENSPEC:-1}"
   TEAM_OPENSPEC_BIN="${TEAM_OPENSPEC_BIN:-openspec}"
   TEAM_SPEC_DIR="${TEAM_SPEC_DIR:-openspec}"
-  TEAM_WATCH_INTERVAL="${TEAM_WATCH_INTERVAL:-900}"       # 巡检周期（秒）
-  TEAM_WATCH_NUDGE_GAP="${TEAM_WATCH_NUDGE_GAP:-900}"      # 同一批待办最快多久再提醒一次（秒）
-  TEAM_WATCH_MAX_RESTARTS="${TEAM_WATCH_MAX_RESTARTS:-5}"  # PM 每小时最多自动拉起次数（防崩溃循环）
-  TEAM_WATCH_REBUILD_TMUX="${TEAM_WATCH_REBUILD_TMUX:-0}"  # 0=不管 tmux（session/窗口没了只告警）；1=允许重建 PM 窗口
-  TEAM_WATCH_WINDOW="${TEAM_WATCH_WINDOW:-watchdog}"       # tmux 后端的窗口名
+  # 巡检（pulse；D22 改名，别名期到 v2.0.0）：有效值 = TEAM_PULSE_<NAME> ＞ TEAM_WATCH_<NAME> ＞ 默认。
+  # TEAM_PULSE_LEGACY_USED 必须在填默认之前抓（抓到的是 env/配置文件的原始值）；status/doctor 靠它点名旧变量。
+  TEAM_PULSE_LEGACY_USED="$(team_pulse_legacy_vars)"
+  TEAM_PULSE_INTERVAL="$(team_pulse_var INTERVAL 900)"         # 巡检周期（秒）
+  TEAM_PULSE_NUDGE_GAP="$(team_pulse_var NUDGE_GAP 900)"       # 同一批待办最快多久再提醒一次（秒）
+  TEAM_PULSE_MAX_RESTARTS="$(team_pulse_var MAX_RESTARTS 5)"   # PM 每小时最多自动拉起次数（防崩溃循环）
+  TEAM_PULSE_REBUILD_TMUX="$(team_pulse_var REBUILD_TMUX 0)"   # 0=不管 tmux（session/窗口没了只告警）；1=允许重建 PM 窗口
+  TEAM_PULSE_WINDOW="$(team_pulse_var WINDOW pulse)"           # tmux 后端的窗口名（旧窗口名 watchdog 的迁移见 team_pulse_legacy_window）
   TEAM_REVIEW_TIMEOUT="${TEAM_REVIEW_TIMEOUT:-1800}"       # team review 跑门禁的硬超时（秒）
   TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-5}"        # 监视器刷新间隔（秒）
   TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 打开活动流时，每个 agent 显示最近几条事件
   # 活动流（读各 agent 的 Pi 会话 JSONL）默认**关闭**：
-  # 看门狗只服务当前 tmux session（窗口/任务/待办/容量）；翻别人的会话既吵又贵（几 MB/次 × 每几秒）。
+  # 巡检只服务当前 tmux session（窗口/任务/待办/容量）；翻别人的会话既吵又贵（几 MB/次 × 每几秒）。
   # 需要时显式打开：team monitor --activity 或 TEAM_MONITOR_ACTIVITY=1
   TEAM_MONITOR_ACTIVITY="${TEAM_MONITOR_ACTIVITY:-0}"
   # 看板里的 todo/wip 算不算“要叫醒 PM 的活”：默认不算（backlog 长期存在，不该每 15 分钟敲一次）；
   # blocked / 未读通知 / 待复验 / 停了的 agent 仍然算。想连 backlog 一起提醒就设 1。
-  TEAM_WATCH_PENDING_BOARD="${TEAM_WATCH_PENDING_BOARD:-0}"
+  TEAM_PULSE_PENDING_BOARD="$(team_pulse_var PENDING_BOARD 0)"
   # 边界守卫：只允许往本团队 session 里的窗口打字。
   # 跨项目讨论走 `team meeting`（文件为真相 + 可选敲门），不允许直接给别的 PM 发消息。
   TEAM_GUARD_FOREIGN_TARGET="${TEAM_GUARD_FOREIGN_TARGET:-1}"
@@ -211,7 +245,7 @@ team_load_config() {
   # TEAM_PM_CMD        ：启动 PM 的命令模板（占位符见 references/agent-adapters.md 的 PM side）
   # TEAM_PM_BIN        ：PM 的可执行文件（存在性检查 + 存活身份判定）；空 = 从 TEAM_PM_CMD 首词推断，再退回 TEAM_PI_BIN
   # TEAM_PM_RESUME_ARGS：延续 PM 上一会话的参数（模板里用 {resume_args} 取）。Pi 路径下空值 = 沿用历史的
-  #                      -c / --session-id；自定义 CLI 下空值 = **不延续历史**（watchdog/up 会明说）
+  #                      -c / --session-id；自定义 CLI 下空值 = **不延续历史**（pulse/up 会明说）
   TEAM_PM_CMD="${TEAM_PM_CMD:-}"
   TEAM_PM_BIN="${TEAM_PM_BIN:-}"
   TEAM_PM_RESUME_ARGS="${TEAM_PM_RESUME_ARGS:-}"
@@ -282,13 +316,14 @@ team_branch_for_agent() { # <agent> <ID> → 该 agent 在这个任务上应该�
 
 # 输出一份「可直接写进派单提示词」的路径清单（agent_adapter = 当前生效的 agent 适配器）
 team_paths_json() {
-  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s", "openspec_bin": "%s", "spec_dir": "%s", "require_magic_context": "%s", "require_openspec": "%s" }\n' \
+  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s", "openspec_bin": "%s", "spec_dir": "%s", "require_magic_context": "%s", "require_openspec": "%s", "pulse_window": "%s", "pulse_interval": "%s" }\n' \
     "$(team_json_escape "$TEAM_PROJECT")" "$(team_json_escape "$TEAM_MAIN_ROOT")" "$(team_json_escape "$TEAM_ROOT")" \
     "$(team_json_escape "$TEAM_DOCS_ABS")" "$(team_json_escape "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR")" \
     "$(team_json_escape "$TEAM_SESSION")" "$(team_json_escape "$TEAM_PM_WINDOW")" \
     "$(team_json_escape "$(team_agent_adapter_label)")" "$(team_json_escape "$(team_agent_bin_path)")" \
     "$(team_json_escape "$(team_openspec_bin_path)")" "$(team_json_escape "$(team_spec_dir_abs)")" \
-    "$(team_json_escape "$TEAM_REQUIRE_MAGIC_CONTEXT")" "$(team_json_escape "$TEAM_REQUIRE_OPENSPEC")"
+    "$(team_json_escape "$TEAM_REQUIRE_MAGIC_CONTEXT")" "$(team_json_escape "$TEAM_REQUIRE_OPENSPEC")" \
+    "$(team_json_escape "$(team_pulse_window)")" "$(team_json_escape "$TEAM_PULSE_INTERVAL")"
 }
 
 # 能跑普通 .mjs 的运行时（monitor.mjs 是普通 JS，不需要 TS 剥离能力；
@@ -911,19 +946,19 @@ team_pm_evidence() { # [state]
   esac
 }
 
-# 待办那一行能不能说「PM 未在跑：watchdog 会拉起」：只有真的会拉起才能印
+# 待办那一行能不能说「PM 未在跑：pulse 会拉起」：只有真的会拉起才能印
 # （M7.2：同一拍里 PM 行说「在跑/正在启动」而待办行说「会拉起」是自相矛盾）
 team_pm_pending_suffix() { # <state>
   case "${1:-}" in
     running:*)  printf '' ;;
-    starting:*) printf '（PM 正在启动：watchdog 不重复拉起）' ;;
-    foreign:*)  printf '（PM 窗口被别的项目占用：watchdog 不覆盖）' ;;
-    missing|missing:*) if [ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ]; then
-                 printf '（PM 窗口不存在：watchdog 会重建并拉起）'
+    starting:*) printf '（PM 正在启动：pulse 不重复拉起）' ;;
+    foreign:*)  printf '（PM 窗口被别的项目占用：pulse 不覆盖）' ;;
+    missing|missing:*) if [ "$TEAM_PULSE_REBUILD_TMUX" = "1" ]; then
+                 printf '（PM 窗口不存在：pulse 会重建并拉起）'
                else
                  printf '（PM 窗口不存在：需要人工 %s up）' "$TEAM_CLI"
                fi ;;
-    *)          printf '（PM 未在跑：watchdog 会拉起）' ;;
+    *)          printf '（PM 未在跑：pulse 会拉起）' ;;
   esac
 }
 
@@ -1294,13 +1329,13 @@ team_pm_start() {
   return 1
 }
 
-# 重启配额：防止 PM 反复崩溃把机器打爆（1 小时内最多 TEAM_WATCH_MAX_RESTARTS 次）。
+# 重启配额：防止 PM 反复崩溃把机器打爆（1 小时内最多 TEAM_PULSE_MAX_RESTARTS 次）。
 # M7.2 起这里**只检查**：记账（team_pm_restart_record）发生在真拉起成功之后。
 # 以前把「拉起尝试」当「重启」记，失败/超时也吃掉一次配额，于是日志说重启了 2 次而窗口里只有 1 个 PM。
 team_pm_restart_allowed() {
   local log attempts now win max n a
   log="$TEAM_STATE_DIR/pm-restarts.log"; attempts="$(team_pm_attempts_file)"
-  now="$(date +%s)"; win=3600; max="${TEAM_WATCH_MAX_RESTARTS:-5}"
+  now="$(date +%s)"; win=3600; max="$TEAM_PULSE_MAX_RESTARTS"
   mkdir -p "$TEAM_STATE_DIR"
   if [ -f "$log" ]; then
     n="$(awk -v now="$now" -v win="$win" '$1 > now - win' "$log" | wc -l | tr -d ' ')"
@@ -1332,7 +1367,7 @@ team_pm_restart_record() { # <evidence>
 
 # 拉起**尝试**日志（与 pm-restarts.log 分开）：失败的尝试不算「重启」，否则 "PM 重启了 N 次" 就不是事实；
 # 但 respawn 本身会拉起进程，一个「每次都拉不起来」的循环不能无上限（teamsmith 的规范：1 小时内最多
-# TEAM_WATCH_MAX_RESTARTS 次），所以配额也看这份计数。行尾带决策证据，出问题时能直接看到为什么拉。
+# TEAM_PULSE_MAX_RESTARTS 次），所以配额也看这份计数。行尾带决策证据，出问题时能直接看到为什么拉。
 team_pm_attempts_file() { printf '%s\n' "$TEAM_STATE_DIR/pm-start-attempts.log"; }
 
 team_pm_attempt_record() { # <evidence>
@@ -1702,7 +1737,7 @@ team_pending_counts() { # → "inbox reports todo wip review blocked stopped"
   done
   local bc; bc="$(team_board_counts)"
   local todo wip review blocked; read -r todo wip review blocked <<< "$bc"
-  if [ "${TEAM_WATCH_PENDING_BOARD:-0}" != "1" ]; then
+  if [ "$TEAM_PULSE_PENDING_BOARD" != "1" ]; then
     # 只保留“现在就等 PM 处理”的信号：todo/wip/review 列仍会在面板与 digest 里显示
     todo=0; wip=0; review=0
   fi
@@ -1748,11 +1783,11 @@ team_nudge() { # <摘要文本>
   mkdir -p "$TEAM_STATE_DIR"
   printf '%s %s\n' "$(team_timestamp)" "$text" >> "$TEAM_STATE_DIR/nudges.log"
   printf '%s %s\n' "$(date +%s)" "$(team_pending_sig)" > "$TEAM_STATE_DIR/watchdog.nudge"
-  msg="[watchdog] 待办：$text → 跑 $TEAM_CLI digest 看详情；若确实没活可推或需人工介入，跑 $TEAM_CLI standby on --reason \"…\" 让自己停下（之后不会再叫醒你）"
+  msg="[pulse] 待办：$text → 跑 $TEAM_CLI digest 看详情；若确实没活可推或需人工介入，跑 $TEAM_CLI standby on --reason \"…\" 让自己停下（之后不会再叫醒你）"
   # 叫醒语也走投递守卫（delivery-guard）：PM 输入框里有草稿时入队，不粘字。
-  # nudges.log / watchdog.nudge 的 durable 记录已经在上面写完了，所以排队不会丢消息。
+  # nudges.log / watchdog.nudge 的 durable 记录（state 文件名别名期不动，D22）已经在上面写完了，所以排队不会丢消息。
   if team_pm_alive; then
-    team_send_guarded "$(team_pm_target)" "$msg" nudge --from watchdog >/dev/null 2>&1 || true
+    team_send_guarded "$(team_pm_target)" "$msg" nudge --from pulse >/dev/null 2>&1 || true
     [ "${TEAM_SEND_OUTCOME:-}" = "queued" ] && team_dim "  PM 输入框里有草稿：叫醒语已入队（$TEAM_CLI outbox list），清空后自动投递"
   fi
   return 0

@@ -1,6 +1,6 @@
 # {{PROJECT}} · PM memory seed (optional)
 
-> The PM is a long-lived session: every time the watchdog raises it or a new session starts, it has to
+> The PM is a long-lived session: every time the pulse raises it or a new session starts, it has to
 > re-learn the project. With magic-context installed (`@cortexkit/pi-magic-context`), write the facts below into
 > project memory (`ctx_memory`) so each PM session starts with them instead of re-deriving them.
 > Without magic-context it still works: treat this file as a reading checklist at the start of a session
@@ -11,7 +11,7 @@
 
 ### Project facts (each one verifiable)
 - Project: {{PROJECT}}; main worktree `{{MAIN_ROOT}}`; team docs `{{DOCS_DIR}}`.
-- tmux session/window: `{{SESSION}}:{{PM_WINDOW}}` (PM), agent windows per roster, watchdog window `watchdog`.
+- tmux session/window: `{{SESSION}}:{{PM_WINDOW}}` (PM), agent windows per roster, pulse window `pulse`.
 - Roster: {{AGENTS}}; gates command: `{{GATES}}`.
 - The protected branch `{{PROTECTED_BRANCH}}` is PM-only; one branch per task `task/<ID>-<slug>`.
 - Branch mode: `{{BRANCH_MODE}}`; agent worktrees: `{{WORKTREES_DIR}}/<agent>` (**never move them**: sessions are keyed by cwd).
@@ -20,7 +20,7 @@
 - Deliverables must be independently verifiable: an agent's report is a claim; the PM's gates on an independent
   checkout are the evidence.
 - Status is a promise: `done` only after the code really landed on the protected branch; on failure keep the old state.
-- Govern less to be reliable: the skill does not wrap git/forge, the PM does not implement, the watchdog only wakes.
+- Govern less to be reliable: the skill does not wrap git/forge, the PM does not implement, the pulse only wakes.
 - Failure is information: a false green is worse than nothing; gates need hard timeouts; skips must be declared.
 - Repeated problems must become mechanisms: incident → guard/assertion/spec, never "be careful next time".
 - Everything must be handover-ready: disk beats memory; decisions carry their rationale.
@@ -33,7 +33,7 @@
 ## How to use it (two moments for the PM)
 
 ```bash
-# On start (raised by the watchdog, or a new session):
+# On start (raised by the pulse, or a new session):
 #   1) with memory tooling, search for "project <name> constraints / last progress / rejected options";
 #      without it, read DECISIONS.md and the roadmap's leftovers
 #   2) team digest + team inbox --ack

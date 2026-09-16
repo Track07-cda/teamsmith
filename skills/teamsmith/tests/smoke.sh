@@ -25,7 +25,9 @@ TEAM="bash $SKILL_DIR/scripts/team"
 # 教训：测试必须显式声明「我只服务自己的临时仓库和自己的 session」。
 unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
       TEAM_SESSION TEAM_SESSION_FROM TEAM_PM_WINDOW TEAM_AGENTS TEAM_DOCS_DIR \
-      TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION 2>/dev/null || true
+      TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION \
+      TEAM_PULSE_WINDOW TEAM_PULSE_INTERVAL TEAM_PULSE_NUDGE_GAP TEAM_PULSE_REBUILD_TMUX TEAM_PULSE_MAX_RESTARTS TEAM_PULSE_PENDING_BOARD \
+      TEAM_WATCH_WINDOW TEAM_WATCH_INTERVAL TEAM_WATCH_NUDGE_GAP TEAM_WATCH_REBUILD_TMUX TEAM_WATCH_MAX_RESTARTS TEAM_WATCH_PENDING_BOARD 2>/dev/null || true
 KEEP="${TEAM_SMOKE_KEEP:-0}"
 [ "${1:-}" = "--keep" ] && KEEP=1
 
@@ -228,29 +230,31 @@ git init -q -b main; git config user.email smoke@teamsmith; git config user.name
 echo "# boot" > README.md; git add -A; git commit -qm init
 BSESS="teamsmith-smoke-boot-$$"
 $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog --print >"$TMP/boot-print.log" 2>&1 \
-  && ok "bootstrap --print 退出码 0" || bad "bootstrap --print 失败"
+  && ok "bootstrap --print 退出码 0（--no-watchdog 旧旗标别名期仍被接受）" || bad "bootstrap --print 失败"
 assert_has "$TMP/boot-print.log" "计划步骤" "打印了计划步骤"
 assert_has "$TMP/boot-print.log" "add-agent dev" "计划里含建 worktree"
-assert_has "$TMP/boot-print.log" "watchdog up" "计划里含起看门狗窗口"
+assert_has "$TMP/boot-print.log" "pulse up" "计划里含起巡检窗口（pulse）"
 [ -f "$BR/.pi/team/config.sh" ] && bad "--print 不该改任何东西" || ok "--print 确实没改东西"
-$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot.log" 2>&1 \
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse >"$TMP/boot.log" 2>&1 \
   && ok "bootstrap 退出码 0" || { bad "bootstrap 失败"; cat "$TMP/boot.log"; }
 assert_file "$BR/.pi/team/config.sh" "bootstrap 写了配置"
 assert_has "$BR/.pi/team/config.sh" "TEAM_SESSION=\"$BSESS\"" "把探测/指定的 session 写进配置"
+assert_has "$BR/.pi/team/config.sh" "TEAM_PULSE_INTERVAL=900" "生成的配置写 TEAM_PULSE_*（v1.36.0 新名）"
+grep -qE '^TEAM_WATCH_INTERVAL=' "$BR/.pi/team/config.sh" && bad "生成的配置不该再写旧变量名" || ok "旧变量名只出现在配置注释里"
 assert_dir "$BR/docs/team/tasks" "建了文档骨架"
 assert_has "$TMP/boot.log" "worktree add -b agent/dev" "bootstrap 只打印 worktree 命令（git 归 PM）"
 assert_not_file "$BR/.worktrees/dev" "默认不代建 dev worktree"
-$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog --create-worktrees >"$TMP/boot2.log" 2>&1 || true
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse --create-worktrees >"$TMP/boot2.log" 2>&1 || true
 assert_dir "$BR/.worktrees/dev" "--create-worktrees 才代建 dev worktree"
 assert_dir "$BR/.worktrees/verify" "--create-worktrees 才代建 verify worktree"
 assert_has "$BR/AGENTS.md" "<!-- teamsmith:begin -->" "注入了协议段"
 assert_has "$BR/AGENTS.md" "Specs (OpenSpec)" "bootstrap 注入的协议段也告诉 agent specs 在哪（M6.3）"
 assert_has "$TMP/boot.log" "下一步" "打印了下一步清单"
-$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot2.log" 2>&1
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse >"$TMP/boot2.log" 2>&1
 assert_eq "bootstrap 幂等（协议段只一份）" "$(grep -cF '<!-- teamsmith:begin -->' "$BR/AGENTS.md")" "1"
 # 必需依赖预检（D10）：配置写完后就要体检；缺了不阻塞，但每条都要给出修复/降级办法
 env TEAM_PI_SETTINGS_FILE="$TMP/mc-none/settings.json" TEAM_OPENSPEC_BIN=/nonexistent \
-  $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-watchdog >"$TMP/boot-deps.log" 2>&1 \
+  $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse >"$TMP/boot-deps.log" 2>&1 \
   && ok "缺依赖时 bootstrap 仍然退出码 0（不阻塞初始化）" || { bad "缺依赖不该让 bootstrap 失败"; tail -5 "$TMP/boot-deps.log"; }
 assert_has "$TMP/boot-deps.log" "必需依赖还没就绪" "bootstrap 提示必需依赖"
 assert_has "$TMP/boot-deps.log" "@cortexkit/pi-magic-context" "bootstrap 给出 magic-context 的修复办法"
@@ -1059,7 +1063,7 @@ EOF
   # 活动流：配了 TEAM_AGENT_LOG_GLOB 就显示这个 agent 的日志尾部
   printf 'non-pi log A\nnon-pi log B\n' > "$TMP/agentlog-$ADAPTER_AGENT.log"
   env TEAM_AGENTS="dev verify $ADAPTER_AGENT" TEAM_AGENT_LOG_GLOB="$TMP/agentlog-{agent}.log" \
-    $TEAM monitor --once --no-watchdog --activity >"$TMP/monitor-nonpi.log" 2>&1 || true
+    $TEAM monitor --once --no-pulse --activity >"$TMP/monitor-nonpi.log" 2>&1 || true
   assert_has "$TMP/monitor-nonpi.log" "TEAM_AGENT_LOG_GLOB" "monitor 说明了活动流来源"
   assert_has "$TMP/monitor-nonpi.log" "non-pi log B" "活动流显示日志尾部（没有 Pi 会话也行）"
   tmux kill-window -t "$SESSION:$ADAPTER_AGENT" 2>/dev/null || true
@@ -1068,9 +1072,9 @@ EOF
   git -C "$REPO" worktree remove --force "$REPO/.worktrees/$ADAPTER_AGENT" >/dev/null 2>&1 || true
   git -C "$REPO" branch -D "$ADAPTER_BRANCH" >/dev/null 2>&1 || true
   rm -f "$REPO/.pi/team/state/$ADAPTER_AGENT.env"
-  APEND="$($TEAM watchdog-status 2>/dev/null || true)"
+  APEND="$($TEAM pulse status 2>/dev/null || true)"
   case "$APEND" in
-    *"待复验 [1-9]"*) bad "清场没干净：watchdog-status 里还有待复验（会污染后面的巡检断言）" ;;
+    *"待复验 [1-9]"*) bad "清场没干净：pulse status 里还有待复验（会污染后面的巡检断言）" ;;
     *) ok "清场后不再有待复验报告（不影响后面的巡检断言）" ;;
   esac
 else
@@ -1544,8 +1548,8 @@ EOF
   assert_not "$PM_LOG" "pi-args.log" "PM 侧没有碰 Pi（TEAM_PI_BIN 指向不存在的东西）"
   pm_env $TEAM ps >"$TMP/pm-adapter-wd1.log" 2>&1 || true
   assert_match "$TMP/pm-adapter-wd1.log" "PM（$PMW）在运行" "team ps 看到 PM 在跑"
-  pm_env $TEAM watchdog-status >"$TMP/pm-adapter-wd1b.log" 2>&1 || true
-  assert_match "$TMP/pm-adapter-wd1b.log" "PM +在运行" "watchdog-status 也看到 PM 在跑"
+  pm_env $TEAM pulse status >"$TMP/pm-adapter-wd1b.log" 2>&1 || true
+  assert_match "$TMP/pm-adapter-wd1b.log" "PM +在运行" "pulse status 也看到 PM 在跑"
   assert_has "$TMP/pm-adapter-wd1b.log" "proof=" "并显示启动证据（proof=）"
   PM_PID1="$(tr -dc '0-9' < "$REPO/.pi/team/state/pm.pid" 2>/dev/null || true)"
   if [ -n "$PM_PID1" ] && kill -0 "$PM_PID1" 2>/dev/null; then ok "state/pm.pid 记录的是活着的非 Pi PM"; else bad "state/pm.pid 无效（[$PM_PID1]）"; fi
@@ -1827,9 +1831,9 @@ M82EOF
   git -C "$REPO" branch -D "$M82_BRANCH" >/dev/null 2>&1 || true
   rm -f "$REPO/.pi/team/state/$M82_AGENT.env" "$REPO/.pi/team/state/dispatch-$M82_AGENT.exit" \
         "$REPO/.pi/team/state/dispatch-$M82_AGENT.spawn" "$REPO/.pi/team/state/dispatch-$M82_AGENT-tail.txt" "$M82_DIAG"
-  M82_PEND="$($TEAM watchdog-status 2>/dev/null || true)"
+  M82_PEND="$($TEAM pulse status 2>/dev/null || true)"
   case "$M82_PEND" in
-    *"待复验 [1-9]"*) bad "M8.2 清场没干净：watchdog-status 里还有待复验（会污染后面的巡检断言）" ;;
+    *"待复验 [1-9]"*) bad "M8.2 清场没干净：pulse status 里还有待复验（会污染后面的巡检断言）" ;;
     *) ok "M8.2 清场后不再有待复验报告（不影响后面的巡检断言）" ;;
   esac
 else
@@ -2221,7 +2225,7 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/pm
 chmod +x "$FAKE/pi-sleep"
 
 if [ "$FAST" = "1" ]; then
-  fast_skip "11b·巡检/watchdog" "要真实 tmux + 假 pi 进程（up/watch/standby/monitor，含多处 sleep）"
+  fast_skip "11b·巡检/pulse" "要真实 tmux + 假 pi 进程（up/watch/standby/monitor，含多处 sleep）"
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
@@ -2364,15 +2368,15 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/pm-args.log" "pm-prompt.md" "PM 用 @文件 传开场提示词（避免 TTY 行长限制）"
   assert_has "$REPO/.pi/team/state/pm-prompt.md" "team digest" "提示词文件要求先跑 digest"
   assert_eq "pm 窗口被重建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx "$PMW" || true)" "1"
-  $TEAM watchdog-status >"$TMP/wdstatus.log" 2>&1
-  assert_match "$TMP/wdstatus.log" "在运行|视为存活" "watchdog-status 看到 PM 在跑"
+  $TEAM pulse status >"$TMP/wdstatus.log" 2>&1
+  assert_match "$TMP/wdstatus.log" "在运行|视为存活" "pulse status 看到 PM 在跑"
   assert_has "$TMP/wdstatus.log" "900s" "巡检周期默认 15 分钟（可配 5~60 分钟）"
   $TEAM up >"$TMP/up2.log" 2>&1
   assert_match "$TMP/up2.log" "PM 在运行|视为存活" "up 不会重复启动已跑的 PM"
 
   # 2) 没待办：不叫醒、不启动（不要求 PM 一直运行）
   $TEAM inbox --ack >/dev/null 2>&1
-  $TEAM watchdog-status >"$TMP/wd-idle.log" 2>&1
+  $TEAM pulse status >"$TMP/wd-idle.log" 2>&1
   assert_match "$TMP/wd-idle.log" "待办 *无" "尚无待办：watchdog 不会打扰"
   make_pm_idle
   QUIET_BEFORE="$(pm_lines)"
@@ -2418,42 +2422,42 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   watch_until_restart "$TMP/watch2.log" 3 || true
   assert_match "$TMP/watch2.log" "已拉起" "watchdog 在有待办时把 PM 拉起来"
   assert_has "$REPO/.pi/team/state/watchdog.log" "→ 已拉起" "日志记录拉起动作"
-  assert_has "$REPO/docs/team/inbox/pm.md" "watchdog" "给 PM 留了收件箱消息"
+  assert_has "$REPO/docs/team/inbox/pm.md" "pulse" "给 PM 留了收件箱消息（[pulse] 待办）"
   assert_eq "拉起计数已记录" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
   if [ "$(pm_lines)" -gt "$DEAD_BEFORE" ]; then ok "PM 参数已写入（$DEAD_BEFORE → $(pm_lines)）"
   elif tmux list-panes -t "$SESSION:$PMW" -F '#{pane_pid}' | head -1 | xargs -r ps -o args= -p 2>/dev/null | grep -q pi-sleep; then
     ok "PM 已被拉起（窗口里跑着 pi，日志尚未落盘）"
   else bad "PM 没有被拉起（$DEAD_BEFORE → $(pm_lines)）"; fi
 
-  # 4b) 看门狗：**只有一个后端**（同 session 的窗口里跑 monitor）
+  # 4b) pulse：**只有一个后端**（同 session 的窗口里跑 monitor）
   $TEAM monitor --once >"$TMP/monitor.log" 2>&1 && ok "monitor --once 退出码 0" || bad "monitor --once 失败"
   assert_has "$TMP/monitor.log" "teamsmith monitor" "monitor 打印了标题"
   assert_has "$TMP/monitor.log" "巡检" "monitor 复用了团队状态面板"
   assert_not "$TMP/monitor.log" "agent 活动" "默认不翻各 agent 的会话（活动流 opt-in）"
-  assert_has "$TMP/monitor.log" "只服务本 session" "说明了看门狗的服务范围"
+  assert_has "$TMP/monitor.log" "只服务本 session" "说明了 pulse 的服务范围"
   $TEAM monitor --once --activity >"$TMP/monitor-act.log" 2>&1 || bad "monitor --activity 失败"
   assert_has "$TMP/monitor-act.log" "agent 活动" "--activity 显式打开活动流"
   assert_has "$TMP/monitor-act.log" "仅本 session 在跑的窗口" "活动流只覆盖本 session 的窗口"
-  $TEAM watchdog up >"$TMP/wd-up.log" 2>&1 && ok "watchdog up（tmux 后端）退出码 0" || { bad "watchdog up 失败"; cat "$TMP/wd-up.log"; }
-  assert_eq "看门狗窗口已建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx watchdog || true)" "1"
-  $TEAM watchdog status >"$TMP/wd-status.log" 2>&1
-  assert_has "$TMP/wd-status.log" "tmux 窗口 $SESSION:watchdog 在跑" "status 看到窗口在跑"
-  $TEAM watchdog logs >"$TMP/wd-logs.log" 2>&1 && ok "watchdog logs（pane 快照）退出码 0" || bad "watchdog logs 失败"
+  $TEAM pulse up >"$TMP/wd-up.log" 2>&1 && ok "pulse up（tmux 后端）退出码 0" || { bad "pulse up 失败"; cat "$TMP/wd-up.log"; }
+  assert_eq "pulse 窗口已建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx pulse || true)" "1"
+  $TEAM pulse status >"$TMP/wd-status.log" 2>&1
+  assert_has "$TMP/wd-status.log" "tmux 窗口 $SESSION:pulse 在跑" "status 看到窗口在跑"
+  $TEAM pulse logs >"$TMP/wd-logs.log" 2>&1 && ok "pulse logs（pane 快照）退出码 0" || bad "pulse logs 失败"
   assert_has "$TMP/wd-logs.log" "teamsmith monitor" "logs 显示监视器画面"
-  $TEAM watchdog up >"$TMP/wd-up2.log" 2>&1
+  $TEAM pulse up >"$TMP/wd-up2.log" 2>&1
   assert_has "$TMP/wd-up2.log" "已在跑" "up 幂等（不重复起窗口）"
-  $TEAM watchdog down >"$TMP/wd-down.log" 2>&1 && ok "watchdog down 退出码 0" || bad "watchdog down 失败"
-  assert_eq "看门狗窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx watchdog || true)" "0"
-  $TEAM watchdog up --print >"$TMP/wd-print.log" 2>&1 && ok "watchdog up --print 退出码 0" || bad "watchdog --print 失败"
-  assert_has "$TMP/wd-print.log" "$SESSION:watchdog" "--print 指明它要起的窗口"
+  $TEAM pulse down >"$TMP/wd-down.log" 2>&1 && ok "pulse down 退出码 0" || bad "pulse down 失败"
+  assert_eq "pulse 窗口已关" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx pulse || true)" "0"
+  $TEAM pulse up --print >"$TMP/wd-print.log" 2>&1 && ok "pulse up --print 退出码 0" || bad "pulse --print 失败"
+  assert_has "$TMP/wd-print.log" "$SESSION:pulse" "--print 指明它要起的窗口"
   assert_has "$TMP/wd-print.log" "巡检周期" "--print 说明巡检周期"
   # 容器后端已移除（v1.12.0）：必须明确拒绝，而不是静默忽略
-  if $TEAM watchdog up --container >"$TMP/wd-cont.log" 2>&1; then
-    bad "watchdog --container 应被明确拒绝（容器后端已移除）"
+  if $TEAM pulse up --container >"$TMP/wd-cont.log" 2>&1; then
+    bad "pulse up --container 应被明确拒绝（容器后端已移除）"
   else
-    ok "watchdog --container 被明确拒绝"
+    ok "pulse up --container 被明确拒绝"
   fi
-  assert_has "$TMP/wd-cont.log" "容器后端已移除" "拒绝时说明原因（并指向 watchdog up）"
+  assert_has "$TMP/wd-cont.log" "容器后端已移除" "拒绝时说明原因（并指向 pulse up）"
 
   # 5) standby：PM 主动停工，有待办也不叫
   $TEAM standby on --reason "等用户授权合并" >"$TMP/standby-on.log" 2>&1
@@ -2475,9 +2479,9 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # “session 丢了 → 请人工 up”的告警分支（否则同一批待办会被有意静音）。
   TEAM_ROOT="$REPO" bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_state_set _watch last_sig m63-step6-stale'
   $TEAM watch --once >"$TMP/watch4.log" 2>&1 || true
-  if tmux has-session -t "$SESSION" 2>/dev/null; then bad "watchdog 不该重建 tmux session（默认不管 tmux）"; else ok "session 丢了 watchdog 不重建（默认不管 tmux）"; fi
+  if tmux has-session -t "$SESSION" 2>/dev/null; then bad "pulse 不该重建 tmux session（默认不管 tmux）"; else ok "session 丢了 pulse 不重建（默认不管 tmux）"; fi
   assert_match "$TMP/watch4.log" "不管 tmux|人工" "给出了“需要人工 up”的提示"
-  TEAM_WATCH_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/watch5.log" 2>&1 || true
+  TEAM_PULSE_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/watch5.log" 2>&1 || true
   assert_eq "开关打开后才重建 pm 窗口" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$PMW" || true)" "1"
   assert_match "$TMP/watch5.log" "已拉起" "重建后把 PM 拉起来了"
 
@@ -2505,8 +2509,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   M63_PM_BEFORE="$(pm_lines)"
   $TEAM notify pm --from-file "$TMP/m63-pm-summary.txt" >"$TMP/m63-notify-pm.log" 2>&1 || bad "notify pm 失败"
   assert_has "$REPO/docs/team/inbox/pm.md" "M6.3 F26 live" "F26：PM 自己的收件箱真的写了（PM 不在跑也不丢）"
-  $TEAM watchdog-status >"$TMP/m63-wd-pm.log" 2>&1 || true
-  assert_has "$TMP/m63-wd-pm.log" "未读通知" "F26：watchdog-status 把它算作待办"
+  $TEAM pulse status >"$TMP/m63-wd-pm.log" 2>&1 || true
+  assert_has "$TMP/m63-wd-pm.log" "未读通知" "F26：pulse status 把它算作待办"
   watch_until_restart "$TMP/m63-watch-pm.log" 3 || true
   assert_match "$TMP/m63-watch-pm.log" "已拉起" "F26：watchdog 因为 PM 自己的收件箱把 PM 拉起来"
   assert_eq "F26：PM 真的被拉起（argv 落盘）" "$([ "$(pm_lines)" -gt "$M63_PM_BEFORE" ] && echo grew || echo same)" "grew"
@@ -2551,8 +2555,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     bad "M6.5 ①b：期望 unknown:tmux/idle:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
   fi
-  $TEAM watchdog-status >"$TMP/m65-wd-tmux.log" 2>&1 || true
-  assert_not "$TMP/m65-wd-tmux.log" "在运行" "M6.5 ①b：watchdog-status 不把 tmux 报成「PM 在运行」"
+  $TEAM pulse status >"$TMP/m65-wd-tmux.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-tmux.log" "在运行" "M6.5 ①b：pulse status 不把 tmux 报成「PM 在运行」"
   BEFORE_TMUX="$(pm_lines)"
   $TEAM up >"$TMP/m65-up-tmux.log" 2>&1 || true
   assert_has "$TMP/m65-up-tmux.log" "PM 已启动" "M6.5 ①b：前台是 tmux 也不压制启动（PM 报告的原症状）"
@@ -2568,8 +2572,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     bad "M6.5 ②：记录的 pid 已被杀，等了 10s 仍报 $PM_STATE_LAST"
   fi
-  $TEAM watchdog-status >"$TMP/m65-wd-dead.log" 2>&1 || true
-  assert_not "$TMP/m65-wd-dead.log" "在运行" "M6.5 ②：watchdog-status 不再宣称 PM 在运行"
+  $TEAM pulse status >"$TMP/m65-wd-dead.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-dead.log" "在运行" "M6.5 ②：pulse status 不再宣称 PM 在运行"
   # ③ 本项目 cwd 里的非 PM 进程（sleep）占着 pm 窗口：unknown:*，不算存活，up 会替换
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   tmux new-session -d -s "$SESSION" -n "$PMW" -c "$REPO" 2>/dev/null || true
@@ -2579,8 +2583,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     bad "M6.5 ③：期望 unknown:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
   fi
-  $TEAM watchdog-status >"$TMP/m65-wd-unknown.log" 2>&1 || true
-  assert_not "$TMP/m65-wd-unknown.log" "在运行" "M6.5 ③：watchdog-status 不把非 PM 进程当成运行中的 PM"
+  $TEAM pulse status >"$TMP/m65-wd-unknown.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-unknown.log" "在运行" "M6.5 ③：pulse status 不把非 PM 进程当成运行中的 PM"
   BEFORE_UNKNOWN="$(pm_lines)"
   $TEAM up >"$TMP/m65-up-unknown.log" 2>&1 || true
   assert_has "$TMP/m65-up-unknown.log" "PM 已启动" "M6.5 ③：非 PM 占用不压制启动（up 真的拉起 PM）"
@@ -2600,8 +2604,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     running:*) bad "M6.5 ④：外来进程被当成运行中的 PM" ;;
     *)         ok "M6.5 ④：外来进程不算 PM（不撒谎）" ;;
   esac
-  $TEAM watchdog-status >"$TMP/m65-wd-foreign.log" 2>&1 || true
-  assert_not "$TMP/m65-wd-foreign.log" "在运行" "M6.5 ④：watchdog-status 不把外来进程当成运行中的 PM"
+  $TEAM pulse status >"$TMP/m65-wd-foreign.log" 2>&1 || true
+  assert_not "$TMP/m65-wd-foreign.log" "在运行" "M6.5 ④：pulse status 不把外来进程当成运行中的 PM"
   $TEAM up >"$TMP/m65-up-foreign2.log" 2>&1 || true
   assert_has "$TMP/m65-up-foreign2.log" "不属于本项目" "M6.5 ④：up 明确拒绝覆盖外来进程"
   # ④b 窗口里的进程就是配置的 agent（人工启动的 PM）→ running（不是 unknown）
@@ -2631,8 +2635,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     running:*) ok "F30：wrapper PM 之后仍是 running（$(pm_state_now)）" ;;
     *)         bad "F30：启动后状态不是 running（$(pm_state_now)）" ;;
   esac
-  $TEAM watchdog-status >"$TMP/m63-f30-wd.log" 2>&1 || true
-  assert_has "$TMP/m63-f30-wd.log" "proof=spawn" "F30：watchdog-status 显示证据来源"
+  $TEAM pulse status >"$TMP/m63-f30-wd.log" 2>&1 || true
+  assert_has "$TMP/m63-f30-wd.log" "proof=spawn" "F30：pulse status 显示证据来源"
   # 没有我们的 pid 记录时，窗口里的 sleep（cwd 在本项目）依旧不算 PM：非 shell 不是证据
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec sleep 300" >/dev/null 2>&1 || true
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
@@ -2740,13 +2744,13 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     bad "代理进程被杀后，等了 10s 仍报 running（$PM_STATE_LAST）"
   fi
-  TEAM_WATCH_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/m72-tick4.log" 2>&1 || true
+  TEAM_PULSE_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/m72-tick4.log" 2>&1 || true
   assert_match "$TMP/m72-tick4.log" "已拉起" "代理退出后下一拍把它拉起来"
   assert_eq "代理退出后恰好记 1 行重启" \
     "$(cat "$REPO/.pi/team/state/pm-restarts.log" 2>/dev/null | wc -l | tr -d ' ')" "1"
   assert_eq "代理退出后只启动一次" "$(( $(start_count) - STARTS_BEFORE ))" "1"
   assert_eq "停了的 PM 只被看见一次（再打一拍不再拉起）" \
-    "$(TEAM_WATCH_REBUILD_TMUX=1 $TEAM watch --once 2>&1 | grep -c 已拉起 || true)" "0"
+    "$(TEAM_PULSE_REBUILD_TMUX=1 $TEAM watch --once 2>&1 | grep -c 已拉起 || true)" "0"
   # 日志要说清楚「凭什么」启动（证据；M7.2 的诚实性要求）
   assert_match "$REPO/.pi/team/state/watchdog.log" "证据：.*(pm.pid|窗口)" "watchdog.log 记录了拉起决策的证据"
 
@@ -2759,10 +2763,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     starting:*) ok "手动落下的启动标记 → team_pm_state 报 starting:*（$(pm_state_now)）" ;;
     *)          bad "有启动标记却报 $(pm_state_now)（应为 starting:*）" ;;
   esac
-  $TEAM watchdog-status >"$TMP/m72-wd.log" 2>&1 || true
-  assert_has "$TMP/m72-wd.log" "正在启动" "watchdog-status：启动中如实说「正在启动」"
-  assert_not "$TMP/m72-wd.log" "在运行" "watchdog-status：不把启动中说成「在运行」"
-  assert_not "$TMP/m72-wd.log" "会拉起" "watchdog-status：启动中不再说「watchdog 会拉起」（同一拍自相矛盾）"
+  $TEAM pulse status >"$TMP/m72-wd.log" 2>&1 || true
+  assert_has "$TMP/m72-wd.log" "正在启动" "pulse status：启动中如实说「正在启动」"
+  assert_not "$TMP/m72-wd.log" "在运行" "pulse status：不把启动中说成「在运行」"
+  assert_not "$TMP/m72-wd.log" "会拉起" "pulse status：启动中不再说「会拉起」（同一拍自相矛盾）"
   $TEAM digest >"$TMP/m72-digest.log" 2>&1 || true
   assert_has "$TMP/m72-digest.log" "正在启动" "digest：启动中如实说「正在启动」"
   assert_not "$TMP/m72-digest.log" "在运行" "digest：不把启动中说成「在运行」"
@@ -2850,8 +2854,8 @@ else
   printf '  (跳过启动中的 PM 断言：没有 tmux)\n'
 fi
 
-# ---------------------------------------------------------------- 11c. 恢复：resume / watchdog 续跑
-section "11c · agent 续跑是 PM 的事（watchdog 不碰）"
+# ---------------------------------------------------------------- 11c. 恢复：resume / pulse 续跑
+section "11c · agent 续跑是 PM 的事（pulse 不碰）"
 if [ "$FAST" = "1" ]; then
   fast_skip "11c·agent 续跑" "要真实 tmux 窗口 + 真实窗口现场（roster 区分「窗口在但 pi 已退出」）"
 elif [ "$HAVE_TMUX" = "1" ]; then
@@ -2874,7 +2878,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   if $TEAM say dev "ping" >"$TMP/say-idle.log" 2>&1; then ok "agent 没在跑时 say 落收件箱并返回 0"; else bad "say 不应硬失败（应落收件箱）"; fi
   assert_has "$TMP/say-idle.log" "收件箱" "说明消息进了收件箱（而不是打进 shell）"
 
-  # watchdog 不该替 PM 做决定：跑一轮巡检，dev 仍未被续跑
+  # pulse 不该替 PM 做决定：跑一轮巡检，dev 仍未被续跑
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
   wait_window_gone dev 5 || bad "§11c 夹具：5s 内 dev 窗口还在（「窗口仍不在」的前提没成立）"
   # F28：只读命令不许毁掉崩溃 agent 的持久记录（否则 resume 会「没东西可续」）
@@ -2890,8 +2894,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_eq "死窗口释放模型槽位（RUNNING=0）" \
     "$(grep -E "^$EQ_MODEL[[:space:]]" "$TMP/ps-crash.log" | head -1 | awk '{print $2}')" "0"
   $TEAM watch --once >"$TMP/watch4.log" 2>&1 || bad "watch --once 失败"
-  assert_eq "watchdog 不续跑 agent（窗口仍不在）" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "0"
-  assert_not "$TMP/watch4.log" "续跑" "watchdog 输出里没有 agent 续跑动作"
+  assert_eq "pulse 不续跑 agent（窗口仍不在）" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx dev || true)" "0"
+  assert_not "$TMP/watch4.log" "续跑" "pulse 输出里没有 agent 续跑动作"
 
   # PM 的工具仍然可用
   $TEAM resume --dry-run >"$TMP/resume-dry.log" 2>&1
@@ -3311,6 +3315,153 @@ git -C "$REPO" worktree remove --force "$D43WT" >/dev/null 2>&1 || true
 git -C "$REPO" branch -D "$D43BR" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------- 14b. 文档一致性（防回退）
+# ---------------------------------------------------------------- 11j · pulse 改名（D22）：别名期兼容
+section "11j · pulse 改名与别名期兼容（D22）"
+# 改名期的唯一硬规则：绝不能让两个巡检并存（state 文件名为此保持不动，见 P7 design §3.4）。
+# 本段钉死：① 旧命令名是别名（stdout 首行弃用提示 + 其余输出 = pulse 实现）；
+#           ② TEAM_PULSE_* ＞ TEAM_WATCH_* ＞ 默认 的单点优先级，旧变量生效必被点名；
+#           ③ 迁移夹具（旧配置 / 旧窗口名）升级后新旧两条路都工作；④ state 文件名不动。
+P8_DEP='[deprecated] team watchdog 已改名 team pulse（别名保留到 v2.0.0）'
+
+# help：主表面是 pulse，旧名带弃用标注
+$TEAM help >"$TMP/p8-help.log" 2>&1 || bad "team help 失败"
+assert_has "$TMP/p8-help.log" "pulse up|down|restart|status|logs" "help 的主表面是 pulse"
+assert_has "$TMP/p8-help.log" "弃用" "help 标注旧命令名已弃用"
+
+# ① 别名：首行弃用提示；pulse 自身不印；其余输出 = pulse 实现
+$TEAM pulse status >"$TMP/p8-new-status.log" 2>&1 && ok "pulse status 退出码 0" || bad "pulse status 失败"
+head -1 "$TMP/p8-new-status.log" | grep -qF "$P8_DEP" \
+  && bad "pulse status 不该印弃用行" || ok "pulse status 不印弃用行（内部路径直达实现）"
+for p8alias in watchdog-status "watchdog status" "watchdog"; do
+  $TEAM $p8alias >"$TMP/p8-alias.log" 2>&1 && ok "\`$p8alias\` 退出码 0" || bad "\`$p8alias\` 失败"
+  assert_eq "\`$p8alias\` stdout 首行是弃用提示" "$(head -1 "$TMP/p8-alias.log")" "$P8_DEP"
+  # 其余输出 = pulse status 的输出（容量行是活体内存读数，比对前抹掉）
+  if diff <(tail -n +2 "$TMP/p8-alias.log" | grep -v 'RAM 可用') \
+          <(grep -v 'RAM 可用' "$TMP/p8-new-status.log") >/dev/null 2>&1; then
+    ok "\`$p8alias\` 其余输出与 pulse status 一致"
+  else
+    bad "\`$p8alias\` 与 pulse status 输出不一致：$(diff <(tail -n +2 "$TMP/p8-alias.log" | grep -v 'RAM 可用') <(grep -v 'RAM 可用' "$TMP/p8-new-status.log") | head -4 | tr '\n' ' ')"
+  fi
+done
+for p8alias in install-watchdog uninstall-watchdog; do
+  $TEAM $p8alias --print >"$TMP/p8-alias.log" 2>&1 && ok "\`$p8alias --print\` 退出码 0" || bad "\`$p8alias --print\` 失败"
+  assert_eq "\`$p8alias --print\` stdout 首行是弃用提示" "$(head -1 "$TMP/p8-alias.log")" "$P8_DEP"
+done
+
+# ② 优先级夹具：配置里 TEAM_PULSE_INTERVAL 未设（= spec 场景的前提），env 控制新旧变量
+P8E="$TMP/p8-env-repo"; mkdir -p "$P8E"
+( cd "$P8E" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+( cd "$P8E" && $TEAM init --session "p8-env-$$" --agents dev ) >"$TMP/p8-env-init.log" 2>&1 \
+  || bad "P8 env 夹具 init 失败（见 $TMP/p8-env-init.log）"
+sed -i '/^TEAM_PULSE_INTERVAL=/d' "$P8E/.pi/team/config.sh"
+( cd "$P8E" && TEAM_WATCH_INTERVAL=17 $TEAM pulse status ) >"$TMP/p8-e1.log" 2>&1 || true
+assert_has "$TMP/p8-e1.log" "17s" "TEAM_PULSE 未设时 TEAM_WATCH_INTERVAL=17 生效"
+assert_has "$TMP/p8-e1.log" "TEAM_WATCH_INTERVAL" "并点名旧变量"
+( cd "$P8E" && TEAM_WATCH_INTERVAL=17 $TEAM pulse up --print ) >"$TMP/p8-e1p.log" 2>&1 || true
+assert_has "$TMP/p8-e1p.log" "17s" "--print 同样尊重旧变量兜底"
+assert_has "$TMP/p8-e1p.log" "TEAM_WATCH_INTERVAL" "--print 说明实际来源"
+( cd "$P8E" && TEAM_PULSE_INTERVAL=11 TEAM_WATCH_INTERVAL=17 $TEAM pulse status ) >"$TMP/p8-e2.log" 2>&1 || true
+assert_has "$TMP/p8-e2.log" "11s" "TEAM_PULSE_INTERVAL 赢过 TEAM_WATCH_INTERVAL"
+assert_not "$TMP/p8-e2.log" "TEAM_WATCH_INTERVAL" "新变量生效时不点名旧变量"
+# doctor：后端叫 pulse，且点名生效中的旧变量
+( cd "$P8E" && TEAM_WATCH_INTERVAL=17 $TEAM doctor ) >"$TMP/p8-doctor.log" 2>&1 || true
+assert_has "$TMP/p8-doctor.log" "巡检（pulse）" "doctor 的后端名叫 pulse"
+assert_has "$TMP/p8-doctor.log" "TEAM_WATCH_INTERVAL=17" "doctor 点名生效中的旧变量"
+# paths：暴露解析后的窗口名与巡检周期
+$TEAM paths >"$TMP/p8-paths.log" 2>&1 || bad "paths 失败"
+assert_has "$TMP/p8-paths.log" '"pulse_window"' "paths 有 pulse_window 键"
+assert_has "$TMP/p8-paths.log" '"pulse_interval"' "paths 有 pulse_interval 键"
+assert_has "$TMP/p8-paths.log" '"pulse_window": "pulse"' "paths 解析出新窗口名"
+( cd "$P8E" && TEAM_WATCH_INTERVAL=17 $TEAM paths ) >"$TMP/p8-paths2.log" 2>&1 || true
+assert_has "$TMP/p8-paths2.log" '"pulse_interval": "17"' "paths 的 pulse_interval 走同一优先级"
+
+# ④ state 文件名别名期不动（两个巡检并存是改名期唯一不能发生的事）
+( cd "$P8E" && $TEAM watch --once ) >"$TMP/p8-once.log" 2>&1 || true
+assert_file "$P8E/.pi/team/state/watchdog.last" "别名期仍写 state/watchdog.last"
+assert_file "$P8E/.pi/team/state/capacity.log" "巡检仍写 state/capacity.log"
+assert_eq "别名期不产生任何 state/pulse.*" \
+  "$(find "$P8E/.pi/team/state" -maxdepth 1 -name 'pulse.*' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# ⑤ [real] 迁移夹具：旧窗口名还在跑 → 绝不双开；restart 换名后恰好一个 pulse 窗口
+if [ "$FAST" = "1" ]; then
+  if fast_skip "11j·pulse 迁移夹具" "要真 tmux 窗口（旧窗口名迁移 + watch 循环锁）"; then :; fi
+elif [ "${HAVE_TMUX:-0}" = "1" ]; then
+  live_mark
+  # 同一把锁（state/watchdog.pid）：两个 watch 循环必须拒开第二个
+  # （exec 让 $! 就是巡检进程本身；等锁就位再派第二个——加载慢的机器上睡定长是竞态；
+  #   timeout 兜底：锁若回潮，红的是断言而不是整条冒烟挂死）
+  ( cd "$P8E" && exec $TEAM watch --interval 3600 ) >"$TMP/p8-loop1.log" 2>&1 &
+  P8_LOOP1=$!
+  P8_LOCKPID=""
+  for _ in $(seq 1 40); do
+    P8_LOCKPID="$(cat "$P8E/.pi/team/state/watchdog.pid" 2>/dev/null || true)"
+    [ -n "$P8_LOCKPID" ] && kill -0 "$P8_LOCKPID" 2>/dev/null && break
+    kill -0 "$P8_LOOP1" 2>/dev/null || break
+    sleep 0.25
+  done
+  if ! { [ -n "$P8_LOCKPID" ] && kill -0 "$P8_LOCKPID" 2>/dev/null; }; then
+    bad "P8 锁测试：第一个 watch 循环 10s 内没握住锁（见 $TMP/p8-loop1.log）"
+  fi
+  ( cd "$P8E" && timeout 30 $TEAM watch --interval 3600 ) >"$TMP/p8-loop2.log" 2>&1
+  P8_RC2=$?
+  kill "$P8_LOOP1" 2>/dev/null || true
+  for _ in $(seq 1 20); do kill -0 "$P8_LOOP1" 2>/dev/null || break; sleep 0.25; done
+  kill -9 "$P8_LOOP1" 2>/dev/null || true; wait "$P8_LOOP1" 2>/dev/null || true
+  if kill -0 "$P8_LOOP1" 2>/dev/null; then bad "P8 锁测试：watch 循环 TERM+5s 后仍未退出"; else ok "watch 循环被 TERM 收掉（trap 不再吞信号）"; fi
+  assert_eq "第二个 watch 循环被拒（同一把 watchdog.pid 锁）" "$P8_RC2" "1"
+  assert_has "$TMP/p8-loop2.log" "巡检已在运行" "拒绝说明点名已在运行的 pid"
+
+  # 形状 A：旧配置（窗口解析名仍是 watchdog）—— 命令照旧打在旧窗口上
+  P8A="$TMP/p8-migA-repo"; mkdir -p "$P8A"
+  ( cd "$P8A" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+  ( cd "$P8A" && $TEAM init --session "p8-migA-$$" --agents dev ) >"$TMP/p8-migA-init.log" 2>&1 \
+    || bad "P8 迁移夹具 A init 失败（见 $TMP/p8-migA-init.log）"
+  sed -i 's/^TEAM_PULSE_WINDOW="pulse"/TEAM_WATCH_WINDOW="watchdog"/' "$P8A/.pi/team/config.sh"
+  ( cd "$P8A" && $TEAM pulse up ) >"$TMP/p8-a-up.log" 2>&1 || { bad "夹具 A pulse up 失败"; cat "$TMP/p8-a-up.log"; }
+  assert_eq "夹具 A：旧配置的项目窗口名保持 watchdog" \
+    "$(tmux list-windows -t "p8-migA-$$" -F '#{window_name}' 2>/dev/null | grep -cx watchdog || true)" "1"
+  ( cd "$P8A" && $TEAM watchdog status ) >"$TMP/p8-a-alias.log" 2>&1
+  assert_eq "夹具 A：旧命令名 stdout 首行是弃用提示" "$(head -1 "$TMP/p8-a-alias.log")" "$P8_DEP"
+  assert_has "$TMP/p8-a-alias.log" "tmux 窗口 p8-migA-$$:watchdog 在跑" "夹具 A：旧命令名看到旧窗口后端"
+  ( cd "$P8A" && $TEAM pulse down ) >/dev/null 2>&1 || true
+  assert_eq "夹具 A：pulse down 关掉旧名窗口" \
+    "$(tmux list-windows -t "p8-migA-$$" -F '#{window_name}' 2>/dev/null | grep -cx watchdog || true)" "0"
+  tmux kill-session -t "p8-migA-$$" 2>/dev/null || true
+
+  # 形状 B：窗口解析名已是 pulse，但旧名窗口还在跑（升级前的进程）
+  P8B="$TMP/p8-migB-repo"; mkdir -p "$P8B"
+  ( cd "$P8B" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+  ( cd "$P8B" && $TEAM init --session "p8-migB-$$" --agents dev ) >"$TMP/p8-migB-init.log" 2>&1 \
+    || bad "P8 迁移夹具 B init 失败（见 $TMP/p8-migB-init.log）"
+  tmux new-session -d -s "p8-migB-$$" -n pm -x 200 -y 50
+  tmux new-window -t "p8-migB-$$" -n watchdog -d -- bash -c 'while :; do sleep 5; done'
+  sleep 0.3
+  ( cd "$P8B" && $TEAM pulse status ) >"$TMP/p8-b-status.log" 2>&1
+  assert_has "$TMP/p8-b-status.log" "旧窗口 p8-migB-$$:watchdog 仍在跑" "夹具 B：status 认出旧窗口后端"
+  assert_has "$TMP/p8-b-status.log" "team pulse restart" "夹具 B：status 指 restart 迁移"
+  ( cd "$P8B" && $TEAM pulse up ) >"$TMP/p8-b-up.log" 2>&1
+  assert_has "$TMP/p8-b-up.log" "team pulse restart" "夹具 B：up 指 restart（不另起窗口）"
+  assert_eq "夹具 B：up 绝不开第二个巡检（没有 pulse 窗口）" \
+    "$(tmux list-windows -t "p8-migB-$$" -F '#{window_name}' 2>/dev/null | grep -cx pulse || true)" "0"
+  ( cd "$P8B" && $TEAM pulse logs ) >"$TMP/p8-b-logs.log" 2>&1 \
+    && ok "夹具 B：pulse logs 对旧名窗口也能看（迁移前它也是后端）" || bad "夹具 B：pulse logs 失败"
+  ( cd "$P8B" && $TEAM pulse restart ) >"$TMP/p8-b-restart.log" 2>&1 || { bad "夹具 B pulse restart 失败"; cat "$TMP/p8-b-restart.log"; }
+  sleep 1
+  P8B_WINS="$(tmux list-windows -t "p8-migB-$$" -F '#{window_name}' 2>/dev/null)"
+  assert_eq "夹具 B：restart 后恰好一个巡检窗口" "$(printf '%s\n' "$P8B_WINS" | grep -cxc pulse || true)" "1"
+  assert_eq "夹具 B：旧名窗口已收" "$(printf '%s\n' "$P8B_WINS" | grep -cxc watchdog || true)" "0"
+  ( cd "$P8B" && $TEAM watchdog down ) >"$TMP/p8-b-down.log" 2>&1
+  assert_eq "夹具 B：旧命令 down 首行弃用提示" "$(head -1 "$TMP/p8-b-down.log")" "$P8_DEP"
+  assert_eq "夹具 B：旧命令 down 两个名字都收（pulse 窗口也没了）" \
+    "$(tmux list-windows -t "p8-migB-$$" -F '#{window_name}' 2>/dev/null | grep -Ec '^(pulse|watchdog)$' || true)" "0"
+  tmux kill-session -t "p8-migB-$$" 2>/dev/null || true
+else
+  printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过 pulse 迁移夹具与 watch 循环锁）"
+fi
+
 section "14b · 文档一致性：已删命令不得回潮（词边界 + 扫描范围 + 翻转自测）"
 
 # 扫描范围：读者会照着敲的地方（SKILL.md / references / templates / README / scripts）。
@@ -3484,7 +3635,7 @@ done
 # M6.1 F28：只读命令对 state/ 必须是零写入（快慢模式都跑；快模式下没有 tmux 窗口，
 # 旧实现会在 team ps 里把 dev.env 删掉 —— 这条断言就是那个回归的守门人）
 STATE_FP_BEFORE="$(state_fp)"
-for c in paths roster status ps digest inbox watchdog-status; do
+for c in paths roster status ps digest inbox pulse watchdog-status; do
   $TEAM "$c" >/dev/null 2>&1 || true
 done
 assert_eq "只读命令零写入 state/（F28）" "$(state_fp)" "$STATE_FP_BEFORE"
@@ -3504,7 +3655,7 @@ assert_eq "读命令没删掉崩溃 agent 的状态文件（F28）" "$(cat "$REP
 assert_has "$REPO/.pi/team/state/dev.env" "task=R98.1" "崩溃 agent 的 task 记录还在"
 assert_has "$REPO/.pi/team/state/dev.env" "branch=task/R98.1-ghost" "崩溃 agent 的 branch 记录还在"
 [ "$F28_HAD" = "1" ] && cp "$TMP/dev.env.f28bak" "$REPO/.pi/team/state/dev.env" || rm -f "$REPO/.pi/team/state/dev.env"
-$TEAM watchdog-status >"$TMP/wd.log" 2>&1 && ok "watchdog-status 退出码 0" || bad "watchdog-status 失败"
+$TEAM pulse status >"$TMP/wd.log" 2>&1 && ok "pulse status 退出码 0" || bad "pulse status 失败"
 $TEAM paths >"$TMP/paths.log" 2>&1 && assert_has "$TMP/paths.log" "main_root" "paths 输出主工作树" || bad "paths 失败"
 $TEAM up --print >"$TMP/pmprompt.log" 2>&1 && assert_has "$TMP/pmprompt.log" "team digest" "up --print 输出 PM 开场提示词" || bad "up --print 失败"
 
@@ -4366,9 +4517,9 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
-  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "11·close 后窗口" "11b·巡检/watchdog" "11b2·PM 存活证据链" \
+  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "11·close 后窗口" "11b·巡检/pulse" "11b2·PM 存活证据链" \
              "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
-             "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测"; do
+             "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测" "11j·pulse 迁移夹具"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
     else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi
   done
@@ -4441,7 +4592,7 @@ done
 assert_has "$MDOC" "pi install npm:@cortexkit/pi-magic-context" "指南给出 magic-context 的安装命令"
 assert_has "$MDOC" "openspec init --tools none" "指南给出 spec 根目录的初始化命令"
 assert_has "$MDOC" "TEAM_REQUIRE_OPENSPEC=0" "指南给出必需依赖的降级开关"
-assert_has "$MDOC" "TEAM_SESSION" "指南提醒 session 名必须与 watchdog 的一致"
+assert_has "$MDOC" "TEAM_SESSION" "指南提醒 session 名必须与巡检窗口（pulse）的一致"
 assert_has "$MDOC" "--fresh" "指南提到长会话换小窗口模型要用 --fresh"
 [ "$(wc -l < "$MDOC")" -ge 120 ] && ok "指南篇幅 ≥ 120 行（不是占位符）" \
   || bad "指南只有 $(wc -l < "$MDOC") 行：太短"
@@ -5551,7 +5702,7 @@ done
 M98COPY="$TMP/m98-skill"; rm -rf "$M98COPY"; cp -r "$SKILL_DIR" "$M98COPY"
 M98B_WDLOG="$M98B/.pi/team/state/watchdog.log"
 ( cd "$M98B" && exec env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
-    TEAM_WATCH_INTERVAL=1 bash "$M98COPY/scripts/team" monitor --interval 1 ) >"$TMP/m98-monitor.log" 2>&1 &
+    TEAM_PULSE_INTERVAL=1 bash "$M98COPY/scripts/team" monitor --interval 1 ) >"$TMP/m98-monitor.log" 2>&1 &
 M98MON=$!
 if m98_wait_log "$TMP/m98-monitor.log" "teamsmith monitor" 20; then ok "M9.8-⑥：夹具巡检进程起来了（面板已渲染）"
 else bad "M9.8-⑥：夹具巡检进程没起来"; fi

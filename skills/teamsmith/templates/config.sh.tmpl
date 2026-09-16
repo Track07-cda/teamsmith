@@ -78,9 +78,11 @@ TEAM_DEFER_TTL=300                    # seconds a queued message may wait before
 TEAM_OUTBOX_MAX=200                   # maximum active queue entries (the oldest escalates to held/ beyond it)
 
 # ---- periodic patrol (the metronome that wakes the PM) ----
-TEAM_WATCH_WINDOW="watchdog"          # tmux window running the monitor
+# Renamed watchdog → pulse in v1.36.0: the legacy TEAM_WATCH_* names keep working as fallbacks until v2.0.0
+# (precedence: TEAM_PULSE_<NAME> > TEAM_WATCH_<NAME> > default; `team pulse status` names any legacy variable in effect).
+TEAM_PULSE_WINDOW="pulse"           # tmux window running the monitor
 TEAM_MONITOR_REFRESH=5                # monitor refresh interval (seconds)
-TEAM_WATCH_PENDING_BOARD=0            # 0 = board todo/wip is not a wake-up signal (blocked/unread/awaiting review/stopped agents are)
+TEAM_PULSE_PENDING_BOARD=0            # 0 = board todo/wip is not a wake-up signal (blocked/unread/awaiting review/stopped agents are)
 TEAM_MONITOR_ACTIVITY=0               # 1 = append per-agent activity streams below the panel (current session only)
 TEAM_MONITOR_EVENTS=4                 # recent events per agent when activity is enabled
 # Required dependencies: magic-context (the PM's cross-compaction, cross-restart memory) and OpenSpec
@@ -91,10 +93,10 @@ TEAM_PI_SETTINGS_FILE="$HOME/.pi/agent/settings.json"   # where the extension is
 TEAM_REQUIRE_OPENSPEC=1
 TEAM_OPENSPEC_BIN="openspec"                           # absolute path allowed, same pattern as TEAM_PI_BIN
 TEAM_SPEC_DIR="openspec"                              # the project's OpenSpec root (relative to the main worktree)
-TEAM_WATCH_INTERVAL=900               # patrol interval (seconds): 15 minutes by default, 300-3600 recommended
-TEAM_WATCH_NUDGE_GAP=900              # minimum gap before the same backlog is mentioned again (seconds)
-TEAM_WATCH_REBUILD_TMUX=0             # 0 = leave tmux alone (report a missing session/window); 1 = allow rebuilding
-TEAM_WATCH_MAX_RESTARTS=5             # maximum automatic PM restarts per hour (crash-loop guard)
+TEAM_PULSE_INTERVAL=900               # patrol interval (seconds): 15 minutes by default, 300-3600 recommended
+TEAM_PULSE_NUDGE_GAP=900              # minimum gap before the same backlog is mentioned again (seconds)
+TEAM_PULSE_REBUILD_TMUX=0             # 0 = leave tmux alone (report a missing session/window); 1 = allow rebuilding
+TEAM_PULSE_MAX_RESTARTS=5             # maximum automatic PM restarts per hour (crash-loop guard)
 TEAM_PM_MODEL=""                      # the PM's own model; empty = TEAM_DEFAULT_MODEL
 TEAM_PM_SESSION_ID=""                 # empty = `pi -c` (continue the previous session in this directory, keeping history)
 TEAM_PM_EXTRA_PI_ARGS=""

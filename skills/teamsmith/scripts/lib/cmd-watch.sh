@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# teamsmith · PM 相关：up（恢复 PM）/ resume（PM 工具）/ watch（前台巡检）/ watchdog（看门狗窗口）/ standby（PM 停工）
+# teamsmith · PM 相关：up（恢复 PM）/ resume（PM 工具）/ watch（前台巡检）/ pulse（巡检窗口）/ standby（PM 停工）
 #
 # 设计前提：**不依赖任何 agent（包括 PM）来负责恢复**。
-#   - PM 没在跑且有待办 → watchdog 用配置的 PM CLI 把它拉起来（Pi 默认 = -c，历史不丢；M8.1 起可用 TEAM_PM_CMD）
+#   - PM 没在跑且有待办 → pulse 用配置的 PM CLI 把它拉起来（Pi 默认 = -c，历史不丢；M8.1 起可用 TEAM_PM_CMD）
 #   - agent 停了 → 不管（agent 归 PM 管：team resume）
-#   - watchdog 自己挂了 → 由 PM 手动 `team watchdog up` 重建（**只有一个后端**：同 session 的 tmux 窗口；
-#     不引入第二个运行时不代表没有恢复能力：PM 被叫醒后第一件事就是看 watchdog-status）
+#   - pulse 自己挂了 → 由 PM 手动 `team pulse up` 重建（**只有一个后端**：同 session 的 tmux 窗口；
+#     不引入第二个运行时不代表没有恢复能力：PM 被叫醒后第一件事就是看 pulse status）
 # 所有状态都在磁盘上（state/ + docs/ + git 分支），所以任何一环重启都是可续的。
+# （v1.36.0 前命令组叫 `team watchdog`、窗口叫 `watchdog`：别名期旧名照用，印一行弃用提示。）
 
 team_watch_log() { printf '%s\n' "$TEAM_STATE_DIR/watchdog.log"; }
 
@@ -37,7 +38,7 @@ team_watch_lock() { # 防止两个 watchdog 打架（**自己持有**的锁不�
     ''|*[!0-9]*) ;;
     "${BASHPID:-$$}"|"$$") ;;   # 上一版代码就是我们自己（exec 重启）：续用这把锁
     *) if kill -0 "$pid" 2>/dev/null; then
-         team_err "watchdog 已在运行（pid $pid）；停止它：`team watchdog status` 看详情，kill 掉即可"
+         team_err "巡检已在运行（pid $pid）；停止它：\`team pulse status\` 看详情，kill 掉即可"
          return 1
        fi ;;
   esac
@@ -103,7 +104,7 @@ team_watch_snapshot_line() { # <窗口进程启动 epoch|空> → 一行说明�
   newest="$(team_watch_code_newest_mtime)"
   case "$newest" in ''|*[!0-9]*) return 0 ;; esac
   if [ "$newest" -gt "$started" ]; then
-    printf '★ 过旧：窗口里的巡检进程启动于 %ss 前，之后 scripts/lib 又更新过 → 唤醒理由可能比 digest 旧；跑 %s watchdog restart\n' \
+    printf '★ 过旧：窗口里的巡检进程启动于 %ss 前，之后 scripts/lib 又更新过 → 唤醒理由可能比 digest 旧；跑 %s pulse restart\n' \
       "$(( $(date +%s) - started ))" "$TEAM_CLI"
   else
     printf '与磁盘上的 scripts/lib 一致（进程起来之后代码没变过）\n'
@@ -149,7 +150,7 @@ team_cmd_up() {
     starting:*)
                # M7.2：启动在飞行中（另一支巡检/另一条 up 已经拉过它）——再 respawn 一次会杀掉正在起来的 PM
                team_warn "PM 正在启动（${pm_state#starting:}；证据：$(team_pm_evidence "$pm_state")）：不重复拉起"
-               team_dim "  等它起来；若卡住：启动标记会过期（TEAM_PM_START_WAIT=${TEAM_PM_START_WAIT:-6}s + 5s），过期后再跑 $TEAM_CLI up；证据看 $TEAM_CLI watchdog-status" ;;
+               team_dim "  等它起来；若卡住：启动标记会过期（TEAM_PM_START_WAIT=${TEAM_PM_START_WAIT:-6}s + 5s），过期后再跑 $TEAM_CLI up；证据看 $TEAM_CLI pulse status" ;;
     idle:*)    team_warn "PM 没在跑（空提示符）：启动 $(team_pm_cli_name)"
                if team_pm_start; then
                  team_ok "PM 已启动（cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
@@ -190,11 +191,11 @@ team_cmd_up() {
     team_info ""
     team_cmd_resume
   else
-    team_dim "  agent 不归 watchdog/up 管：需要续跑时跑 $TEAM_CLI resume [--dry-run]"
+    team_dim "  agent 不归 pulse/up 管：需要续跑时跑 $TEAM_CLI resume [--dry-run]"
   fi
 
   if team_in_standby; then
-    team_warn "注意：当前 standby on（原因：$(team_standby_reason || echo -)）。watchdog 不会自动叫醒 PM；处理好后跑 $TEAM_CLI standby off"
+    team_warn "注意：当前 standby on（原因：$(team_standby_reason || echo -)）。pulse 不会自动叫醒 PM；处理好后跑 $TEAM_CLI standby off"
   fi
 
   team_info ""
@@ -233,8 +234,8 @@ team_cmd_resume() {
     taskfile="$(team_state_get "$a" taskfile '')"
     if [ ! -f "$taskfile" ]; then
       team_warn "$a：任务 $task 的任务书不见了（$taskfile）→ 写 thread，跳过"
-      team_cmd_thread "$a" --re "$task" "watchdog 想续跑 $task，但任务书 $taskfile 不存在。请 PM 重新生成或改用 --task 指定。" >/dev/null 2>&1 || true
-      team_inbox_append "$a" blocked "watchdog: 任务书丢失，无法续跑 $task"
+      team_cmd_thread "$a" --re "$task" "pulse 想续跑 $task，但任务书 $taskfile 不存在。请 PM 重新生成或改用 --task 指定。" >/dev/null 2>&1 || true
+      team_inbox_append "$a" blocked "pulse: 任务书丢失，无法续跑 $task"
       continue
     fi
     n=$((n + 1))
@@ -260,13 +261,13 @@ team_cmd_resume() {
 }
 
 # ---------------------------------------------------------------- team watch
-# watchdog 就是“定时看看有没有活儿，并叫醒 PM”：
+# pulse 就是“定时看看有没有活儿，并叫醒 PM”：
 #   ① 每次记一行容量趋势
 #   ② 算一下待办（未读通知/待复验/看板/pM 仍归它管的 agent 停了）
 #   ③ 有待办 → 叫醒 PM（在跑就发一句提醒；不在跑且非待命就把它拉起来）
 #      没待办 → 不叫醒、不启动（不要求 PM 一直运行）
 #   ④ PM 主动 standby 期间，一律不叫醒（人处理后 standby off）
-# 不管 tmux 布局（除非 TEAM_WATCH_REBUILD_TMUX=1），不管 agent（那是 PM 的事）。
+# 不管 tmux 布局（除非 TEAM_PULSE_REBUILD_TMUX=1），不管 agent（那是 PM 的事）。
 team_watch_once() {
   mkdir -p "$TEAM_STATE_DIR"
 
@@ -308,9 +309,9 @@ team_watch_once() {
     fi
     # CLI 每次都明确说结论（便于人看、便于脚本断言）
     if team_pm_alive; then
-      team_dim "watchdog: 无待办（PM 在跑：不打扰）"
+      team_dim "pulse: 无待办（PM 在跑：不打扰）"
     else
-      team_dim "watchdog: 无待办（PM 未在跑：不启动，等有活再叫）"
+      team_dim "pulse: 无待办（PM 未在跑：不启动，等有活再叫）"
     fi
     return 0
   fi
@@ -323,14 +324,14 @@ team_watch_once() {
     now="$(date +%s)"
     last_epoch="$(team_state_get _watch nudge_epoch 0)"
     last_sig="$(team_state_get _watch nudge_sig '')"
-    gap="${TEAM_WATCH_NUDGE_GAP:-900}"
+    gap="$TEAM_PULSE_NUDGE_GAP"
     if [ "$sig" != "$last_sig" ] || [ $((now - last_epoch)) -ge "$gap" ]; then
       team_nudge "$text"
       team_state_set _watch nudge_epoch "$now"
       team_state_set _watch nudge_sig "$sig"
       team_state_set _watch last_sig "$sig"
       team_wlog "叫醒 PM：$text"
-      team_ok "watchdog: 有待办（$text）→ 已提醒 PM"
+      team_ok "pulse: 有待办（$text）→ 已提醒 PM"
     fi
     return 0
   fi
@@ -339,7 +340,7 @@ team_watch_once() {
   #      再 respawn 一次会杀掉正在起来的 PM，配额也会把一次启动记成两次（M7.2 实测的根因）。
   if [ "${st%%:*}" = "starting" ]; then
     team_wlog "PM 正在启动（证据：$(team_pm_evidence "$st")）→ 不重复拉起、不计数（待办：$text）"
-    team_dim "watchdog: PM 正在启动（${st#starting:}）→ 不重复拉起（待办：$text）"
+    team_dim "pulse: PM 正在启动（${st#starting:}）→ 不重复拉起（待办：$text）"
     return 0
   fi
 
@@ -349,25 +350,25 @@ team_watch_once() {
     idle:*) ;;
     unknown:*) team_wlog "PM 窗口里不是 PM（$st）：按「没有 PM」处理" ;;
     *)
-      if [ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ]; then
-        if ! team_assert_own_session "watchdog 重建 tmux"; then
+      if [ "$TEAM_PULSE_REBUILD_TMUX" = "1" ]; then
+        if ! team_assert_own_session "pulse 重建 tmux"; then
           team_wlog "拒绝重建：session '${TEAM_SESSION:-}' 不属于本项目（授权后加 --yes 或 TEAM_ALLOW_FOREIGN_SESSION=1）"
           return 0
         fi
         if ! team_tmux_has_session "$TEAM_SESSION"; then
-          team_wlog "tmux session 丢失，重建（TEAM_WATCH_REBUILD_TMUX=1）"
+          team_wlog "tmux session 丢失，重建（TEAM_PULSE_REBUILD_TMUX=1）"
           team_tmux_ensure_session
           tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
         fi
         if ! team_pm_window_exists; then
-          team_wlog "PM 窗口丢失，重建（TEAM_WATCH_REBUILD_TMUX=1）"
+          team_wlog "PM 窗口丢失，重建（TEAM_PULSE_REBUILD_TMUX=1）"
           team_tmux_new_window "$TEAM_SESSION" "$TEAM_PM_WINDOW" || true
         fi
       else
         if [ "$sig" != "$(team_state_get _watch last_sig '')" ]; then
           team_state_set _watch last_sig "$sig"
-          team_wlog "有待办（$text）但 PM 找不到（$st；证据：$(team_pm_evidence "$st")）：watchdog 不管 tmux，不重建；请人工 $TEAM_CLI up"
-          team_warn "watchdog: 有待办（$text）但 PM 找不到（$st）—— tmux 场地不在，需要人工 $TEAM_CLI up（不想人工就设 TEAM_WATCH_REBUILD_TMUX=1）"
+          team_wlog "有待办（$text）但 PM 找不到（$st；证据：$(team_pm_evidence "$st")）：pulse 不管 tmux，不重建；请人工 $TEAM_CLI up"
+          team_warn "pulse: 有待办（$text）但 PM 找不到（$st）—— tmux 场地不在，需要人工 $TEAM_CLI up（不想人工就设 TEAM_PULSE_REBUILD_TMUX=1）"
         fi
         return 0
       fi ;;
@@ -377,7 +378,7 @@ team_watch_once() {
   # 失败/超时不再吃掉一次配额（以前失败也记一行，日志里的「重启 N 次」就不是事实）。
   if ! team_pm_restart_allowed; then
     team_wlog "PM 拉起被配额拦下（$st；证据：$(team_pm_evidence "$st")；待办：$text）"
-    team_warn "watchdog: PM 拉起失败或被配额拦下（$st；待办：$text）"
+    team_warn "pulse: PM 拉起失败或被配额拦下（$st；待办：$text）"
     return 0
   fi
   team_pm_attempt_record "state=${st%%:*} evidence=$(team_pm_evidence "$st")"
@@ -385,17 +386,17 @@ team_watch_once() {
     team_pm_restart_record "state=${st%%:*} evidence=$(team_pm_evidence "$st")"
     team_state_set _watch last_sig "$sig"
     team_wlog "PM 未在运行（$st；证据：$(team_pm_evidence "$st")）→ 已拉起（待办：$text）"
-    team_ok "watchdog: 有待办（$text）但 PM 没在跑（$st）→ 已拉起"
-    team_inbox_append pm watchdog "PM 会话曾停止（状态 $st），watchdog 因有待办（$text）而用 $(team_pm_cli_name) 拉起它并注入开场提示词（state/pm-prompt.md）"
+    team_ok "pulse: 有待办（$text）但 PM 没在跑（$st）→ 已拉起"
+    team_inbox_append pm pulse "PM 会话曾停止（状态 $st），pulse 因有待办（$text）而用 $(team_pm_cli_name) 拉起它并注入开场提示词（state/pm-prompt.md）"
   else
     team_wlog "PM 拉起失败（$st；证据：$(team_pm_evidence "$st")；未计入配额；待办：$text）"
-    team_warn "watchdog: PM 拉起失败（$st；待办：$text）—— 未计入重启配额（只有真的重启才计数）"
+    team_warn "pulse: PM 拉起失败（$st；待办：$text）—— 未计入重启配额（只有真的重启才计数）"
   fi
   return 0
 }
 
 team_cmd_watch() {
-  local once=0 interval="${TEAM_WATCH_INTERVAL:-900}" ui=0
+  local once=0 interval="$TEAM_PULSE_INTERVAL" ui=0
   local argv=("$@") fp0=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -416,25 +417,30 @@ team_cmd_watch() {
     return 0
   fi
 
-  team_require_cmd tmux "watchdog 需要 tmux 来拉起 PM/agent"
+  team_require_cmd tmux "pulse 需要 tmux 来拉起 PM/agent"
   team_watch_lock || return 1
-  trap 'team_watch_unlock' EXIT INT TERM
+  trap 'team_watch_unlock' EXIT
+  # INT/TERM 必须立刻生效：sleep 放后台 + wait（被捕获的信号会立刻打断 wait），handler 里 exit 走 EXIT trap 解锁。
+  # 原来是 trap '…' EXIT INT TERM 一把抓：bash 会把前台的 sleep 跑完才执行 handler，解了锁还继续巡 ——
+  # Ctrl-C 和 kill 都停不下巡检循环（P8 实测：kill TERM 后 wait 永久阻塞）。
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   fp0="$(team_watch_code_fp)"
-  team_hdr "teamsmith watchdog · $TEAM_PROJECT（每 ${interval}s 一次；Ctrl-C 退出）"
+  team_hdr "teamsmith pulse · $TEAM_PROJECT（每 ${interval}s 一次；Ctrl-C 退出）"
   team_dim "  只做两件事：记录容量趋势 ｜ PM 没在跑就在它的窗口里把 $(team_pm_cli_name) 拉起来"
   team_dim "  不管 tmux 布局，不管 agent（agent 归 PM 管：team resume）"
   while :; do
     # M9.8：判定必须用磁盘上的代码（漂移就重启本进程）—— 否则唤醒理由可能比 digest 旧
     team_watch_reexec_if_stale "$fp0" watch ${argv[@]+"${argv[@]}"}
     team_watch_once
-    sleep "$interval"
+    sleep "$interval" & wait $!
   done
 }
 
 
 # ---------------------------------------------------------------- team monitor
 # tmux 窗口里的「状态监视器」：上面是团队状态（PM/待办/容量），下面是每个 agent 的会话活动流。
-# 顺带按 TEAM_WATCH_INTERVAL 跑看门狗 tick —— 所以一个窗口同时是显示器 + 看门狗。
+# 顺带按 TEAM_PULSE_INTERVAL 跑巡检 tick —— 所以一个窗口同时是显示器 + 巡检（pulse）。
 team_monitor_activity() { # 可选：只渲染「当前 tmux session 里正在跑的窗口」的会话活动
   local runner; runner="$(team_js_runner)"
   local js="$TEAM_SKILL_DIR/scripts/monitor.mjs"
@@ -461,12 +467,13 @@ team_monitor_activity() { # 可选：只渲染「当前 tmux session 里正在�
 }
 
 team_cmd_monitor() {
-  local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_watchdog=1 activity="${TEAM_MONITOR_ACTIVITY:-0}"
+  local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_pulse=1 activity="${TEAM_MONITOR_ACTIVITY:-0}"
   local argv=("$@") fp0=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --once) once=1; shift ;;
-      --no-watchdog) with_watchdog=0; shift ;;
+      --no-pulse) with_pulse=0; shift ;;
+      --no-watchdog) with_pulse=0; shift ;;   # 旧旗标（别名期保留到 v2.0.0）：与 --no-pulse 同义，不印弃用行（面板清屏会把它抹掉）
       --activity) activity=1; shift ;;
       --no-activity) activity=0; shift ;;
       --interval) interval="${2:?}"; shift 2 ;;
@@ -484,7 +491,7 @@ team_cmd_monitor() {
     clear
     printf '%steamsmith monitor · %s%s  %s  %s(每 %ss 刷新%s)%s\n' \
       "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)" "$C_DIM" "$interval" \
-      "$([ "$with_watchdog" = 1 ] && echo "，每 ${TEAM_WATCH_INTERVAL:-900}s 跑一次巡检" || echo '')" "$C_RESET"
+      "$([ "$with_pulse" = 1 ] && echo "，每 ${TEAM_PULSE_INTERVAL}s 跑一次巡检" || echo '')" "$C_RESET"
     team_panel | tail -n +2
     if [ "$activity" = "1" ]; then
       printf '\n  %sagent 活动%s%s（仅本 session 在跑的窗口；--no-activity 关掉）%s\n' \
@@ -493,13 +500,13 @@ team_cmd_monitor() {
         printf '  %s源：TEAM_AGENT_LOG_GLOB=%s（非 Pi agent 显示最新日志尾部）%s\n' "$C_DIM" "$TEAM_AGENT_LOG_GLOB" "$C_RESET"
       team_monitor_activity
     fi
-    printf '%s  Ctrl-C 退出本窗口（不影响 PM）｜ %s watchdog status / logs / down%s\n' \
+    printf '%s  Ctrl-C 退出本窗口（不影响 PM）｜ %s pulse status / logs / down%s\n' \
       "$C_DIM" "$TEAM_CLI" "$C_RESET"
-    printf '%s  看门狗只服务本 session：窗口/任务/待办/容量；巡检每 %ss，面板每 %ss%s\n' \
-      "$C_DIM" "${TEAM_WATCH_INTERVAL:-900}" "$interval" "$C_RESET"
-    if [ "$with_watchdog" = "1" ]; then
+    printf '%s  巡检只服务本 session：窗口/任务/待办/容量；巡检每 %ss，面板每 %ss%s\n' \
+      "$C_DIM" "${TEAM_PULSE_INTERVAL}" "$interval" "$C_RESET"
+    if [ "$with_pulse" = "1" ]; then
       now="$(date +%s)"
-      if [ $((now - last_tick)) -ge "${TEAM_WATCH_INTERVAL:-900}" ]; then
+      if [ $((now - last_tick)) -ge "${TEAM_PULSE_INTERVAL}" ]; then
         last_tick="$now"
         mkdir -p "$TEAM_STATE_DIR"
         team_watch_once >>"$ticklog" 2>&1
@@ -514,156 +521,201 @@ team_cmd_monitor() {
   return 0
 }
 
-# ---------------------------------------------------------------- watchdog：只有一个后端（tmux 窗口）
-# 由 PM（或人）用 `team watchdog up` 启动：同一个 tmux session 的 `watchdog` 窗口常驻跑
+# ---------------------------------------------------------------- pulse：只有一个后端（tmux 窗口）
+# 由 PM（或人）用 `team pulse up` 启动：同一个 tmux session 的 `pulse` 窗口常驻跑
 # `team monitor`（上半屏团队状态，下半屏可选活动流），并按其内部节拍做定时巡检。
 # 为什么不做第二个后端（容器/systemd 等）：本 skill 的底线是**依赖越少越可靠**——
 # 少一个运行时、少一层 socket/权限/镜像问题，出问题时只有一个地方要查；
-# 看门狗的职责只是"定时看看有没有活儿、有待办就叫醒 PM"，它不需要跨 tmux server 存活
-# （tmux server 没了 PM 也没了，重建时一起起来即可，`team up` / `watchdog up` 都在）。
+# 巡检的职责只是"定时看看有没有活儿、有待办就叫醒 PM"，它不需要跨 tmux server 存活
+# （tmux server 没了 PM 也没了，重建时一起起来即可，`team up` / `pulse up` 都在）。
+# （v1.36.0 起由 watchdog 改名 pulse：别名期旧命令/旧窗口名/TEAM_WATCH_* 照用，见下。）
 
-# 统一的后端无关存活判定（ps / digest / doctor / watchdog status 都用它）
-# 输出 "tmux:<session>:<window>" | "fg:<pid>" | "container:<name>" | "off"
-team_watchdog_state() {
-  local w st
-  w="$(team_watch_window)"
-  st="$(team_watch_window_state)"
-  case "$st" in
-    running) printf 'tmux:%s:%s\n' "$TEAM_SESSION" "$w"; return 0 ;;
-  esac
-  if team_watch_pid_alive; then printf 'fg:%s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"; return 0; fi
-  # 窗口在、但前台不是我们认识的面板命令（比如 pager/子进程）→ 只要 pane 忙就算在跑，避免误报
+# 窗口解析：TEAM_PULSE_WINDOW（＞ 别名期的 TEAM_WATCH_WINDOW）＞ 默认 pulse
+team_pulse_window() { printf '%s\n' "${TEAM_PULSE_WINDOW:-pulse}"; }
+
+# 旧名窗口探针（别名期）：解析出的窗口不在、但旧名 `watchdog` 窗口在（且解析名本身就不是 watchdog）→
+# 后端就是那个旧窗口。它里面跑着**升级前的代码**：这时绝不能再开一个巡检 ——
+# 两个巡检并存正是 state 文件名在别名期保持不变要防的事（它们共享 pid 锁与提醒签名，但旧进程
+# 不会认识新代码的判定规则，唤醒理由会分家）。
+team_pulse_legacy_window() { # → 旧窗口名（不适用/不在 → 返回 1）
+  local w; w="$(team_pulse_window)"
+  [ "$w" = "watchdog" ] && return 1
+  team_tmux_has_window "$TEAM_SESSION" "$w" && return 1
+  team_tmux_has_window "$TEAM_SESSION" watchdog || return 1
+  printf 'watchdog\n'
+}
+
+# 实际当作后端的窗口：解析名在 → 解析名；不在而旧名在 → 旧名；都不在 → 解析名（缺席）。
+team_pulse_backend_window() {
+  local lw
+  if lw="$(team_pulse_legacy_window 2>/dev/null)"; then printf '%s\n' "$lw"; else team_pulse_window; fi
+}
+
+# 统一的后端无关存活判定（ps / digest / doctor / pulse status 都用它）
+# 输出 "tmux:<session>:<window>" | "fg:<pid>" | "off"
+team_pulse_state() {
+  local w; w="$(team_pulse_backend_window)"
   if team_tmux_has_window "$TEAM_SESSION" "$w" && team_pane_busy "$TEAM_SESSION:$w"; then
     printf 'tmux:%s:%s\n' "$TEAM_SESSION" "$w"; return 0
   fi
+  # 窗口在、但前台不是我们认识的面板命令（比如 pager/子进程）→ 只要 pane 忙就算在跑，避免误报
+  # （上面已覆盖；fg: 是前台 `team watch` 的存活证据）
+  if team_watch_pid_alive; then printf 'fg:%s\n' "$(cat "$TEAM_STATE_DIR/watchdog.pid")"; return 0; fi
   printf 'off\n'
 }
 
-team_watchdog_state_text() {
-  local st; st="$(team_watchdog_state)"
+team_pulse_state_text() {
+  local st; st="$(team_pulse_state)"
   case "$st" in
-    tmux:*:*)    printf '● tmux 窗口 %s 在跑' "${st#tmux:}" ;;
-    fg:*)        printf '● 前台 watchdog pid %s' "${st#fg:}" ;;
-
-    *)           printf '○ 未在跑（%s watchdog up）' "$TEAM_CLI" ;;
+    tmux:*:*)
+      if [ "${st##*:}" != "$(team_pulse_window)" ]; then
+        printf '● tmux 窗口 %s 在跑（旧名窗口 → %s pulse restart 换成 %s）' "${st#tmux:}" "$TEAM_CLI" "$(team_pulse_window)"
+      else
+        printf '● tmux 窗口 %s 在跑' "${st#tmux:}"
+      fi ;;
+    fg:*)        printf '● 前台巡检 pid %s' "${st#fg:}" ;;
+    *)           printf '○ 未在跑（%s pulse up）' "$TEAM_CLI" ;;
   esac
   return 0
 }
 
-# tmux 后端（默认）：看门狗就住在同一个 tmux session 的 `watchdog` 窗口里。
-# 好处：① 与开发环境同版本（tmux/ps/git/pi 都在原环境）；② 顺手就是个状态监视器（--ui 面板）；
-#       ③ 少一层容器。代价：tmux server 死了它也死（但那时 PM 也死了，重建时一起起来）。
-team_watch_window() { printf '%s\n' "${TEAM_WATCH_WINDOW:-watchdog}"; }
-
-team_watch_window_state() { # running:<cmd> | idle:<cmd> | absent
-  local w; w="$(team_watch_window)"
+# 解析出的窗口自己的状态（up/down 的建窗决策只看它；旧名窗口走 team_pulse_legacy_window）
+team_pulse_window_state() { # running | idle | absent
+  local w; w="$(team_pulse_window)"
   team_tmux_has_window "$TEAM_SESSION" "$w" || { printf 'absent'; return 0; }
   if team_pane_busy "$TEAM_SESSION:$w"; then printf 'running'; else printf 'idle'; fi
 }
 
-team_watch_tmux_up() {
-  team_require_cmd tmux "看门狗需要 tmux（它就跑在同 session 的窗口里）"
+# tmux 后端（默认）：巡检就住在同一个 tmux session 的 `pulse` 窗口里。
+# 好处：① 与开发环境同版本（tmux/ps/git/pi 都在原环境）；② 顺手就是个状态监视器（--ui 面板）；
+#       ③ 少一层容器。代价：tmux server 死了它也死（但那时 PM 也死了，重建时一起起来）。
+team_pulse_tmux_up() {
+  team_require_cmd tmux "巡检需要 tmux（它就跑在同 session 的窗口里）"
   team_tmux_ensure_session
   tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
-  local w st; w="$(team_watch_window)"; st="$(team_watch_window_state)"
-  if [ "$st" = "running" ]; then team_ok "看门狗已在跑：$TEAM_SESSION:$w（面板：tmux attach -t $TEAM_SESSION）"; return 0; fi
+  local w st lw; w="$(team_pulse_window)"; st="$(team_pulse_window_state)"
+  if [ "$st" = "running" ]; then team_ok "巡检已在跑：$TEAM_SESSION:$w（面板：tmux attach -t $TEAM_SESSION）"; return 0; fi
+  # 别名期：旧名窗口还在跑 = 后端已存在（升级前的进程）——不开第二个巡检，只指迁移路径
+  lw="$(team_pulse_legacy_window 2>/dev/null || true)"
+  if [ -n "$lw" ]; then
+    team_warn "旧窗口 $TEAM_SESSION:$lw 仍在跑 → $TEAM_CLI pulse restart 换成 $TEAM_SESSION:$w（up 不开第二个巡检）"
+    return 0
+  fi
   [ "$st" = "idle" ] && { team_warn "窗口 $w 停在空提示符：重开"; tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null || true; }
   tmux new-window -t "$TEAM_SESSION" -n "$w" -d -- bash "$TEAM_SKILL_DIR/scripts/team" monitor
   sleep 1.5
-  st="$(team_watch_window_state)"
+  st="$(team_pulse_window_state)"
   if [ "$st" = "running" ]; then
-    team_ok "看门狗已在 $TEAM_SESSION:$w 跑（每 ${TEAM_WATCH_INTERVAL:-900}s 一屏；logs: $TEAM_CLI watchdog logs）"
+    team_ok "巡检已在 $TEAM_SESSION:$w 跑（每 ${TEAM_PULSE_INTERVAL}s 一屏；logs: $TEAM_CLI pulse logs）"
   else
     team_err "窗口起来了但没在跑（$st）：tmux attach -t $TEAM_SESSION 看输出"
     return 1
   fi
 }
 
-team_watch_tmux_down() {
-  local w; w="$(team_watch_window)"
+team_pulse_tmux_down() {
+  local w found=0; w="$(team_pulse_window)"
   if team_tmux_has_window "$TEAM_SESSION" "$w"; then
-    tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && team_ok "已关掉看门狗窗口：$TEAM_SESSION:$w" || team_warn "关窗口失败"
-  else
-    team_dim "没有看门狗窗口（$TEAM_SESSION:$w）"
+    tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && { team_ok "已关掉巡检窗口：$TEAM_SESSION:$w"; found=1; } || team_warn "关窗口失败"
   fi
+  # 别名期：结束巡检 = 两个名字都结束（旧窗口里可能是升级前的进程）
+  if [ "$w" != "watchdog" ] && team_tmux_has_window "$TEAM_SESSION" watchdog; then
+    tmux kill-window -t "$TEAM_SESSION:watchdog" 2>/dev/null && { team_ok "已关掉旧名巡检窗口：$TEAM_SESSION:watchdog"; found=1; } || team_warn "关旧名窗口失败"
+  fi
+  [ "$found" = "0" ] && team_dim "没有巡检窗口（$TEAM_SESSION:$w）"
+  return 0
 }
 
-team_watch_tmux_logs() { # 打印面板最近若干行（pane 快照）
-  local w; w="$(team_watch_window)"
-  team_tmux_has_window "$TEAM_SESSION" "$w" || { team_err "没有看门狗窗口（$TEAM_SESSION:$w）；$TEAM_CLI watchdog up 起一个"; return 1; }
+team_pulse_tmux_logs() { # 打印面板最近若干行（pane 快照；旧名窗口也是后端，迁移前照样能看）
+  local w; w="$(team_pulse_backend_window)"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || { team_err "没有巡检窗口（$TEAM_SESSION:$w）；$TEAM_CLI pulse up 起一个"; return 1; }
   tmux capture-pane -p -t "$TEAM_SESSION:$w" -S -60 2>/dev/null | sed '/^$/d' | tail -60
 }
 
-team_cmd_watchdog() {
+team_cmd_pulse() {
   local sub="status" print_only=0
   while [ $# -gt 0 ]; do
     case "$1" in
       up|down|restart|status|logs) sub="$1"; shift ;;
       --print) print_only=1; shift ;;     # 打印它会做什么（不执行）
-      --container) team_usage_die "watchdog: 容器后端已移除（v1.12.0）——看门狗就是同 session 的 watchdog 窗口；用 team watchdog up" ;;
-      -*) team_usage_die "watchdog: 未知参数 $1" ;;
-      *) team_usage_die "watchdog: 多余参数 $1" ;;
+      --container) team_usage_die "pulse: 容器后端已移除（v1.12.0）——巡检就是同 session 的 pulse 窗口；用 team pulse up" ;;
+      -*) team_usage_die "pulse: 未知参数 $1" ;;
+      *) team_usage_die "pulse: 多余参数 $1" ;;
     esac
   done
   team_require_docs
 
   if [ "$print_only" = "1" ]; then
-    printf 'tmux 窗口：%s:%s → bash %s/scripts/team monitor\n' "$TEAM_SESSION" "$(team_watch_window)" "$TEAM_SKILL_DIR"
-    printf '巡检周期：%ss（TEAM_WATCH_INTERVAL）\n' "${TEAM_WATCH_INTERVAL:-900}"
+    printf 'tmux 窗口：%s:%s → bash %s/scripts/team monitor\n' "$TEAM_SESSION" "$(team_pulse_window)" "$TEAM_SKILL_DIR"
+    local ivnote="（TEAM_PULSE_INTERVAL）"
+    case " ${TEAM_PULSE_LEGACY_USED:-} " in *" TEAM_WATCH_INTERVAL "*) ivnote="（来源：TEAM_WATCH_INTERVAL，别名期兜底）" ;; esac
+    printf '巡检周期：%ss%s\n' "$TEAM_PULSE_INTERVAL" "$ivnote"
     return 0
   fi
   case "$sub" in
-    up)      team_watch_tmux_up ;;
-    down)    team_watch_tmux_down ;;
-    restart) team_watch_tmux_down >/dev/null 2>&1 || true; team_watch_tmux_up ;;
-    logs)    team_watch_tmux_logs ;;
-    status)  team_cmd_watchdog_status ;;
+    up)      team_pulse_tmux_up ;;
+    down)    team_pulse_tmux_down ;;
+    restart) team_pulse_tmux_down >/dev/null 2>&1 || true; team_pulse_tmux_up ;;
+    logs)    team_pulse_tmux_logs ;;
+    status)  team_cmd_pulse_status ;;
   esac
   return $?
 }
 
-# 兼容旧名字：install/uninstall-watchdog 现在是 watchdog up/down 的别名
-team_cmd_install_watchdog() { team_cmd_watchdog up "$@"; }
-team_cmd_uninstall_watchdog() { team_cmd_watchdog down "$@"; }
+# 旧命令名（别名期保留到 v2.0.0）：stdout 第一行印弃用提示，然后把活原样交给 pulse 实现。
+# 内部调用者（bootstrap 等）直接调 team_cmd_pulse / team_pulse_tmux_*，不经过这里，所以不会印这行。
+team_watchdog_deprecated() { printf '[deprecated] team watchdog 已改名 team pulse（别名保留到 v2.0.0）\n'; }
+team_cmd_watchdog()           { team_watchdog_deprecated; team_cmd_pulse "$@"; }
+team_cmd_watchdog_status()    { team_watchdog_deprecated; team_cmd_pulse_status "$@"; }
+team_cmd_install_watchdog()   { team_watchdog_deprecated; team_cmd_pulse up "$@"; }
+team_cmd_uninstall_watchdog() { team_watchdog_deprecated; team_cmd_pulse down "$@"; }
 
-team_cmd_watchdog_status() {
-  team_hdr "teamsmith watchdog · $TEAM_PROJECT"
-  local w tst
-  w="$(team_watch_window)"; tst="$(team_watch_window_state)"
+team_cmd_pulse_status() {
+  team_hdr "teamsmith pulse · $TEAM_PROJECT"
+  local w tst lw
+  w="$(team_pulse_window)"; tst="$(team_pulse_window_state)"
+  lw="$(team_pulse_legacy_window 2>/dev/null || true)"
   case "$tst" in
-    running) team_ok "  看门狗           tmux 窗口 $TEAM_SESSION:$w 在跑（--ui 面板）" ;;
-    idle)    team_warn "  看门狗           窗口 $w 停在空提示符 → $TEAM_CLI watchdog up" ;;
-    *)       team_dim "  看门狗           未起 → $TEAM_CLI watchdog up" ;;
+    running) team_ok "  巡检              tmux 窗口 $TEAM_SESSION:$w 在跑（--ui 面板）" ;;
+    idle)    team_warn "  巡检              窗口 $w 停在空提示符 → $TEAM_CLI pulse up" ;;
+    *)       if [ -n "$lw" ]; then
+               team_warn "  巡检              旧窗口 $TEAM_SESSION:$lw 仍在跑 → $TEAM_CLI pulse restart 换成 $TEAM_SESSION:$w"
+             else
+               team_dim "  巡检              未起 → $TEAM_CLI pulse up"
+             fi ;;
   esac
-  printf '  后端             tmux（同 session 的窗口 —— 只有一个后端，无容器依赖）\n'
-  printf '  日志             %s watchdog logs ／ tmux attach -t %s\n' "$TEAM_CLI" "$TEAM_SESSION"
-  printf '  巡检周期         %ss（建议 300~3600；不是心跳保活，是定时看看有没有活儿）\n' "${TEAM_WATCH_INTERVAL:-900}"
+  printf '  后端              tmux（同 session 的窗口 —— 只有一个后端，无容器依赖）\n'
+  printf '  日志              %s pulse logs ／ tmux attach -t %s\n' "$TEAM_CLI" "$TEAM_SESSION"
+  printf '  巡检周期          %ss（建议 300~3600；不是心跳保活，是定时看看有没有活儿）%s\n' "$TEAM_PULSE_INTERVAL" "$(team_pulse_legacy_suffix)"
+  if [ -n "${TEAM_PULSE_LEGACY_USED:-}" ]; then
+    printf '  旧变量            别名期兜底生效中：%s（v2.0.0 前请改名 TEAM_PULSE_*）\n' "$TEAM_PULSE_LEGACY_USED"
+  fi
   # M9.8：唤醒理由必须由磁盘上的代码算出 —— 窗口里的进程比磁盘上的 lib 旧时明说（现场：唤醒
   # 「待复验 6」而 digest 清单是空的，根因就是窗口里跑着前一天起来的进程）。
-  local snap; snap="$(team_watch_snapshot_line "$(team_watch_process_start_epoch "$TEAM_SESSION:$w")")"
-  if [ -n "$snap" ]; then printf '  代码快照         %s\n' "$snap"
-  else printf '  代码快照         判不出（窗口不在，或 ps/tmux 不可用）\n'; fi
-  printf '  tmux 重建         %s\n' "$([ "${TEAM_WATCH_REBUILD_TMUX:-0}" = "1" ] && echo '允许（TEAM_WATCH_REBUILD_TMUX=1）' || echo '不接管（session/窗口没了只告警）')"
+  local snap; snap="$(team_watch_snapshot_line "$(team_watch_process_start_epoch "$TEAM_SESSION:$(team_pulse_backend_window)")")"
+  if [ -n "$snap" ]; then printf '  代码快照          %s\n' "$snap"
+  else printf '  代码快照          判不出（窗口不在，或 ps/tmux 不可用）\n'; fi
+  printf '  tmux 重建         %s\n' "$([ "$TEAM_PULSE_REBUILD_TMUX" = "1" ] && echo '允许（TEAM_PULSE_REBUILD_TMUX=1）' || echo '不接管（session/窗口没了只告警）')"
   local pm; pm="$(team_pm_state)"
   case "$pm" in
     running:*) team_ok "  PM              在运行（${pm#running:}$(team_pm_proof_suffix)）" ;;
     starting:*) team_info "  PM              正在启动（${pm#starting:}；证据：$(team_pm_evidence "$pm")）：不重复拉起，等它起来" ;;
-    idle:*)    team_warn "  PM              未在跑（空提示符）；有待办时看门狗会拉起它（$TEAM_CLI up 手动）" ;;
+    idle:*)    team_warn "  PM              未在跑（空提示符）；有待办时 pulse 会拉起它（$TEAM_CLI up 手动）" ;;
     unknown:*) team_warn "  PM              窗口里不是 PM（${pm#unknown:}，cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：**不算存活**；$TEAM_CLI up 会替换它" ;;
     foreign:*) team_warn "  PM              窗口被**不属于本项目**的进程占用（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
-    *)         team_warn "  PM              窗口缺失（有待办时：$TEAM_CLI up，或设 TEAM_WATCH_REBUILD_TMUX=1）" ;;
+    *)         team_warn "  PM              窗口缺失（有待办时：$TEAM_CLI up，或设 TEAM_PULSE_REBUILD_TMUX=1）" ;;
   esac
   local pend; pend="$(team_pending_text)"
   if [ -n "$pend" ]; then
     # 同一拍里 PM 行与待办行必须一致：suffix 由那**一次** team_pm_state 读取决定（M7.2）
-    printf '  待办             %s%s\n' "$pend" "$(team_pm_pending_suffix "$pm")"
+    printf '  待办              %s%s\n' "$pend" "$(team_pm_pending_suffix "$pm")"
   else
-    printf '  待办             %s\n' "无（不叫醒 PM）"
+    printf '  待办              %s\n' "无（不叫醒 PM）"
   fi
   printf '  %s\n' "$(team_capacity_line)"
   printf '\n  职责：定时看看有没有活儿 + 容量留痕；不管 tmux 布局、不管 agent（agent 归 PM 管）\n'
   if team_in_standby; then
-    printf '  待命             on（原因：%s）—— 不叫醒 PM；累积的待办仍记在 watchdog.log\n' "$(team_standby_reason || echo -)"
+    printf '  待命              on（原因：%s）—— 不叫醒 PM；累积的待办仍记在 watchdog.log\n' "$(team_standby_reason || echo -)"
   fi
   return 0
 }
@@ -682,7 +734,7 @@ team_cmd_standby() {
     on)
       team_standby_on "$reason"
       team_wlog "standby on（原因：$reason）"
-      team_ok "已进入待命：watchdog 不会再叫醒 PM（原因：$reason）"
+      team_ok "已进入待命：pulse 不会再叫醒 PM（原因：$reason）"
       team_dim "  待办不会丢：积压会记进 ${TEAM_STATE_DIR#"$TEAM_MAIN_ROOT"/}/watchdog.log；恢复用 $TEAM_CLI standby off"
       ;;
     off)

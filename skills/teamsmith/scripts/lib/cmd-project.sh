@@ -10,7 +10,7 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   ── 第一次使用 ─────────────────────────────────────────────
   bootstrap [--agents "dev verify"] [--print]   **推荐**：一条命令把项目初始化到可派单状态
                    （探测当前 tmux session/窗口 → 写配置 + 文档骨架 + AGENTS 段落 → 建 agent worktree
-                    → 起看门狗窗口 → 打印下一步清单）；幂等，可反复跑
+                    → 起巡检窗口 → 打印下一步清单）；幂等，可反复跑
   init            只做配置/文档骨架（bootstrap 的其中一步）
   doctor          环境自检（git/tmux/pi/门禁/forge/容量/容器）
 
@@ -42,14 +42,15 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   outbox flush [--now]        立刻排水（--now = 跳过守卫直投，留审计）
   outbox drop <n|all>        人显式丢弃队列条目
 
-  ── 定时巡检与看门狗（看门狗由 PM 配置和维护） ───────────────
-  watchdog up|down|restart|status|logs [--print]
-                 看门狗（同 session 的 watchdog 窗口跑 monitor + 定时巡检；只有一个后端，无容器依赖）
-  watchdog-status               `watchdog status` 的旧名
-  monitor [--once] [--interval N] [--events K]  状态监视器（watchdog 窗口跑的就是它）：
+  ── 定时巡检（pulse 由 PM 配置和维护） ────────────────────
+  pulse up|down|restart|status|logs [--print]
+                 巡检（同 session 的 pulse 窗口跑 monitor + 定时巡检；只有一个后端，无容器依赖）
+  watchdog …／watchdog-status／install-watchdog／uninstall-watchdog
+                 pulse 的旧名（别名期保留到 v2.0.0；先印一行弃用提示，再转交 pulse）
+  monitor [--once] [--interval N] [--events K] [--no-pulse]  状态监视器（pulse 窗口跑的就是它）：
                  团队状态 + 每个 agent 的会话活动流；按周期顺带跑巡检
   watch [--once] [--interval N] [--ui]      手动/前台巡检（--ui = monitor）
-  standby [on|off|status] [--reason "..."]  PM 主动停工：on 之后看门狗不再叫醒（人处理完 off）
+  standby [on|off|status] [--reason "..."]  PM 主动停工：on 之后 pulse 不再叫醒（人处理完 off）
 
   ── 跨项目会议（PM 对 PM 的 peer 交流，不是指令通道） ─────────
   meeting open <slug> --with <项目>[:<session>] --topic "…" [--ttl 72] [--yes]
@@ -369,9 +370,10 @@ team_cmd_doctor() {
       *)         warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在 → team up" ;;
     esac
 
-  check "看门狗"; case "$(team_watchdog_state)" in
-      off) warn "没在跑 → $TEAM_CLI watchdog up（看门狗由 PM 配置）" ;;
-      *)   pass "$(team_watchdog_state_text)" ;;
+  check "巡检（pulse）"; local legacy_note; legacy_note="$(team_pulse_legacy_suffix)"
+    case "$(team_pulse_state)" in
+      off) warn "没在跑 → $TEAM_CLI pulse up（pulse 由 PM 配置）$legacy_note" ;;
+      *)   pass "$(team_pulse_state_text)$legacy_note" ;;
     esac
 
   # forge：不探测、不假设（v1.12.0 起 skill 与 forge 完全解耦）

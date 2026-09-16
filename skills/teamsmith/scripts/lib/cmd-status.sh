@@ -310,7 +310,7 @@ team_cmd_ps() {
                  "$TEAM_PM_WINDOW" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
     *)         printf '  PM 窗口缺失 → team up\n' ;;
   esac
-  printf '  watchdog %s\n' "$(team_watchdog_state_text)"
+  printf '  pulse %s\n' "$(team_pulse_state_text)"
 
   printf '\n%-30s %8s %8s %9s\n' MODEL RUNNING LIMIT WINDOW
   printf '%-30s %8s %8s %9s\n' ----- ------- ----- ---------
@@ -418,16 +418,16 @@ team_cmd_digest() {
   # 延后投递：队列非空才打印（delivery-guard：排队/held 必须看得见；空队列一个字都不加）
   team_outbox_status_line "  " || true
 
-  # 待办：这是 watchdog 判断“要不要叫醒 PM”的依据
+  # 待办：这是 pulse 判断“要不要叫醒 PM”的依据
   local pend; pend="$(team_pending_text || true)"
   if team_in_standby; then
-    printf '  待命             on（原因：%s）→ watchdog 不会叫醒 PM；%s standby off 恢复\n' "$(team_standby_reason || echo -)" "$TEAM_CLI"
+    printf '  待命             on（原因：%s）→ pulse 不会叫醒 PM；%s standby off 恢复\n' "$(team_standby_reason || echo -)" "$TEAM_CLI"
   fi
   if [ -n "$pend" ]; then
     # 同一拍里 PM 行与待办行必须一致：suffix 由那**一次** team_pm_state 读取决定（M7.2）
     printf '  待办             %s%s\n' "$pend" "$(team_pm_pending_suffix "$pm")"
   else
-    printf '  待办             无（watchdog 不会打扰 PM）\n'
+    printf '  待办             无（pulse 不会打扰 PM）\n'
   fi
 
   printf '\n%s\n' "[2] 待处理通知"
@@ -591,13 +591,13 @@ team_cmd_inbox() {
   return 0
 }
 
-# ---------------------------------------------------------------- 状态面板（watchdog --ui 用）
+# ---------------------------------------------------------------- 状态面板（pulse 窗口跑的就是它）
 team_panel() {
   local W=74 line
   line="$(printf '%.0s─' $(seq 1 $W))"
-  printf '%steamsmith watchdog · %s%s  %s\n' "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)"
+  printf '%steamsmith pulse · %s%s  %s\n' "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)"
   printf '%s\n' "$line"
-  printf '  %-9s %ss（待办才叫醒 PM；看门狗 = 同 session 的 watchdog 窗口）\n' "巡检" "${TEAM_WATCH_INTERVAL:-900}"
+  printf '  %-9s %ss（待办才叫醒 PM；巡检 = 同 session 的 %s 窗口）\n' "巡检" "$TEAM_PULSE_INTERVAL" "$(team_pulse_window)"
   if team_in_standby; then
     printf '  %-9s %son%s（原因：%s → %s standby off）\n' "待命" "$C_YEL" "$C_RESET" "$(team_standby_reason || echo -)" "$TEAM_CLI"
   else

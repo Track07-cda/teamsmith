@@ -343,11 +343,11 @@ paths listed: clean up the briefs instead of letting glob order choose the scope
   Everything else is reported as `foreign:<cmd>` (the occupant's cwd is not this project: `team up` refuses to
   overwrite it unless `TEAM_REPLACE_FOREIGN_PM=1`) or `unknown:<cmd>` (cwd is inside the project but it is not the
   agent: a just-created pane, a `sleep`, an editor). `unknown` is **not** a PM, so it never suppresses starting one —
-  `team up` replaces it and says so. `watchdog-status`, `ps`, `digest` and the monitor panel use the same proof, so
+  `team up` replaces it and says so. `pulse status`, `ps`, `digest` and the monitor panel use the same proof, so
   no surface prints "the PM is running" without it.
   Why this is strict: the old rule ("the window exists and its foreground process is not a shell") reported a
   *just-created* pane — where `pane_current_command` is still `tmux` — as `running:tmux`. `team up` then printed
-  "PM is running" without starting anything, `watchdog-status` repeated it, and the project's own smoke suite went
+  "PM is running" without starting anything, `pulse status` repeated it, and the project's own smoke suite went
   from green to 7 failures after the machine restarted. Status is a promise: a liveness signal that is inferred
   instead of proven hides the exact failure the tool exists to surface.
 - **A shell wrapper still counts as the PM**: `team_pm_state` looks at the pane's own process *and* its direct
@@ -356,59 +356,59 @@ paths listed: clean up the briefs instead of letting glob order choose the scope
   the window a PM.
 - **team up respawns the PM window's pane**: only when no PM is running there — an empty prompt (`idle`) or a
   non-PM process whose cwd is inside the project (`unknown`). Do not treat the PM window as a normal terminal; to
-  start working manually, re-run the agent in that window or simply let the watchdog bring it up.
+  start working manually, re-run the agent in that window or simply let the pulse bring it up.
   Note: the agent is the pane's own process (we `exec` it), so when it exits the pane closes and the window
-  disappears — exactly the `missing` case the watchdog reports (corresponding to the `TEAM_WATCH_REBUILD_TMUX`
+  disappears — exactly the `missing` case the pulse reports (corresponding to the `TEAM_PULSE_REBUILD_TMUX`
   switch). After a successful start the pid is written to `state/pm.pid`, which is what makes a later
   "is it still alive?" question a fact rather than a guess (the read-only commands only read it).
 - **Typing only happens when something is really running**: `say`/`notify`/the extension refuse when the target window
   sits at an empty prompt (otherwise the text would be executed by the shell as a command) and only write the inbox
   for the PM to read later.
-- **What the watchdog actually manages**: it recomputes the pending work on a timer (unread notifications / reports
+- **What the pulse actually manages**: it recomputes the pending work on a timer (unread notifications / reports
   awaiting verification / board todo·wip / blocked / agents with an unfinished task that stopped), and **only wakes the
   PM when there is pending work** (nudge it while running; `pi -c` when it is not). With nothing pending it does
   nothing at all.
-  It will not resume agents for you, does not create tmux sessions/windows (unless `TEAM_WATCH_REBUILD_TMUX=1`), and
+  It will not resume agents for you, does not create tmux sessions/windows (unless `TEAM_PULSE_REBUILD_TMUX=1`), and
   does not merge code.
 - **The PM keeps being woken / does not want to be woken**: `team standby on --reason "…"` deliberately stands the PM
   down (both "there really is nothing to do without a human" and "stuck waiting for someone" qualify); `team standby
   off` resumes. While on standby the backlog is still recorded in `state/watchdog.log`.
-- **Wake-up frequency**: every 15 minutes by default (`TEAM_WATCH_INTERVAL=900`, 300~3600 recommended); repeated
-  reminders for the same pending work are limited by `TEAM_WATCH_NUDGE_GAP`. To go slower or faster, change these two
+- **Wake-up frequency**: every 15 minutes by default (`TEAM_PULSE_INTERVAL=900`, 300~3600 recommended); repeated
+  reminders for the same pending work are limited by `TEAM_PULSE_NUDGE_GAP`. To go slower or faster, change these two
   values.
 - **The PM was "woken twice"**: the instant notification at the end of an agent's turn (the notify extension) and the
-  watchdog's timed reminder are two different things — the latter is a fallback for unprocessed pending work. Handle
+  pulse's timed reminder are two different things — the latter is a fallback for unprocessed pending work. Handle
   or ack the pending work and it stops.
-- **The watchdog says "PM not found (missing) … run team up manually"**: the tmux session/window is gone (you closed
+- **The pulse says "PM not found (missing) … run team up manually"**: the tmux session/window is gone (you closed
   the window, the machine rebooted) and by default it does not touch tmux. Fix it with `team up`; to have it handle
-  this itself, set `TEAM_WATCH_REBUILD_TMUX=1`.
+  this itself, set `TEAM_PULSE_REBUILD_TMUX=1`.
 - **A stopped agent is not resumed automatically** (by design): the PM looks with `team resume --dry-run` and then
   resumes with `team resume`; a human can also do `team up --agents` to bring them along in one go.
-- **The PM was starting and the watchdog stayed quiet**: that is deliberate (M7.2). Between `respawn-pane` and the
+- **The PM was starting and the pulse stayed quiet**: that is deliberate (M7.2). Between `respawn-pane` and the
   start's evidence, the PM pane is a shell running the start command, not a PM. `state/pm.pid.starting` marks that
   attempt and every surface reports `starting:<age>`; a tick that sees it logs `PM 正在启动 → 不重复拉起` and neither
   starts a second PM nor counts a restart (a second `respawn-pane` would kill the PM that was coming up, and the
   quota would count one start twice). If the window stays in `starting` for longer than `TEAM_PM_START_WAIT + 5s` the
-  marker has expired — run `team up` again; `team watchdog-status` names the evidence (`pm.pid.starting` age and
+  marker has expired — run `team up` again; `team pulse status` names the evidence (`pm.pid.starting` age and
   starter, or the recorded pid with its `proof`). The same applies to manual starts: `team up` refuses to respawn
   over a start that is still in flight and says so.
 - **"PM restarted N times" but I only saw one restart**: `state/pm-restarts.log` has one line per **real** start
   (epoch, timestamp, evidence). Every attempt (successful or not) is recorded in `state/pm-start-attempts.log`; a
   failed or timed-out attempt is also logged in `state/watchdog.log` with `未计入配额` and consumes no *restart*
-  quota, so the restart count is a fact and not a count of attempts. The hourly limit (`TEAM_WATCH_MAX_RESTARTS`)
+  quota, so the restart count is a fact and not a count of attempts. The hourly limit (`TEAM_PULSE_MAX_RESTARTS`)
   applies to the attempts file too — a loop that keeps respawning without ever confirming is refused, and the warning
   names both numbers. Read `watchdog.log` for the decisions and `state/pm.pid.starting` for an attempt that is still
   in flight.
-- **The PM keeps crashing**: the automatic-restart quota (`TEAM_WATCH_MAX_RESTARTS`, default 5/hour) stops it and
+- **The PM keeps crashing**: the automatic-restart quota (`TEAM_PULSE_MAX_RESTARTS`, default 5/hour) stops it and
   warns, so a crash loop cannot drag the machine down; look in `state/watchdog.log` and the PM window output for the
   cause first (common: model quota exhausted, a config typo, a missing dependency).
-- **The watchdog window of the tmux backend was closed**: reopen it with `team watchdog up`; `team watchdog logs`
+- **The pulse window of the tmux backend was closed**: reopen it with `team pulse up`; `team pulse logs`
   shows a screen snapshot; when the lower half of the monitor says "no node/bun/tsx on this machine: skipping the agent
   activity stream" → install node or bun (the team status part is unaffected).
-- **The watchdog itself stopped**: `team watchdog status` shows whether the window is still there; `team watchdog up`
+- **The pulse itself stopped**: `team pulse status` shows whether the window is still there; `team pulse up`
   rebuilds it (there is only one backend, so there is no container to inspect).
 - **Everything is silent after a machine reboot**: the tmux server and its windows are gone → `team up` restores both
-  (PM window + watchdog window) in one shot; `team watchdog up` can start the watchdog alone as well.
+  (PM window + pulse window) in one shot; `team pulse up` can start the pulse alone as well.
 - **`ExecStart`/script permissions**: this skill is always invoked as `bash <path>` and does not depend on the
   executable bit (but `scripts/team` is still +x, and `team smoke` checks it).
 
@@ -437,7 +437,7 @@ warns one line without blocking the worker.
 
 ## 14. The PM does not come up with my CLI
 
-`team up` — and the watchdog's restart path — starts the PM with `TEAM_PM_CMD`, or with the built-in Pi command
+`team up` — and the pulse's restart path — starts the PM with `TEAM_PM_CMD`, or with the built-in Pi command
 when that key is empty. A custom PM CLI that refuses to start almost always fails in one of these places:
 
 | Symptom | Cause / fix |
@@ -446,7 +446,7 @@ when that key is empty. A custom PM CLI that refuses to start almost always fail
 | the error says the template is blank or multi-line | an adapter template is exactly one non-blank line — the second line would be executed as its own command by the window shell |
 | `找不到 PM 可执行文件：<word>` ("cannot find the PM executable") | `TEAM_PM_BIN`, or the template's **first word**, does not resolve on *this* shell's `PATH`. The first word must be a bare executable name: no quotes, no `VAR=…` prefix, no `cd … &&`. A bare name that *does* resolve is fine — teamsmith renders the absolute path into the window command (see the next row) |
 | `team up` says `PM 已启动` but the window shows the CLI's own error and `state/pm.pid` stays empty / dies | the CLI started and exited (unknown flag, missing auth, model not available). Read `state/pm-launch-failed.log`: the tool writes the window's last output, the rendered command, the resolved executable and the CLI's exit code (e.g. `exit : 7`) on the failure path, and `team up` then exits non-zero. The window is **not** killed any more, so the CLI's own error stays visible in `tmux attach -t <session>`; the briefing that was passed is `state/pm-prompt.md`. Reproduce the command by hand: `bash -c '. <skill>/scripts/lib/common.sh; team_load_config; team_pm_launch_cmd <main>/.pi/team/state/pm-prompt.md <main>/.pi/team/state/pm.pid.spawn'` in the project root, then run it in a shell |
-| `team watchdog-status` reports `unknown:<cmd>` for the PM window right after a manual start | the foreground process is neither a shell nor the PM binary. Check that `TEAM_PM_BIN` names the CLI you actually ran; a wrapper that starts the CLI as a **child** (no `exec`) is reported this way — see the wrapper caveat in `references/agent-adapters.md` §2. A wrapper that `exec`s the CLI is fine: `team up` then reports `proof=spawn` |
+| `team pulse status` reports `unknown:<cmd>` for the PM window right after a manual start | the foreground process is neither a shell nor the PM binary. Check that `TEAM_PM_BIN` names the CLI you actually ran; a wrapper that starts the CLI as a **child** (no `exec`) is reported this way — see the wrapper caveat in `references/agent-adapters.md` §2. A wrapper that `exec`s the CLI is fine: `team up` then reports `proof=spawn` |
 | `team up` cannot find the CLI even though it works in your shell | it is a bare name that resolves on **your** `PATH`, so the tool renders the absolute path it resolved to and the window uses that — nothing to do. If it renders nothing absolute (the name is unresolvable here), set `TEAM_PM_BIN` to an absolute path |
 | `team up` exits non-zero and `state/pm-launch-failed.log` says the CLI exited immediately | that is the honest report of a failed start (the window's login shell `PATH` is not your interactive `PATH`; an unknown flag/auth error is the CLI's own). The file also holds the first non-blank lines of the window, so `state/pm-launch-tail.txt` and the pane stay readable |
 

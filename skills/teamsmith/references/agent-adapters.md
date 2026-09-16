@@ -80,14 +80,14 @@ Two details of that harness matter when you write a template or debug one:
   it exits the window returns to a prompt instead of vanishing; the launcher then writes
   `state/pm-launch-failed.log` with the CLI's exit code, the rendered command, the resolved executable and the
   window's last non-blank output (the raw capture lives next to it as `state/pm-launch-tail.txt`). `team up` exits
-  non-zero in that case — a failed start is never reported as success. The next `team up` or watchdog tick treats
+  non-zero in that case — a failed start is never reported as success. The next `team up` or pulse tick treats
   the idle prompt as "no PM" and replaces it.
 
 ### What the PM does **not** get
 
 - **No turn-end notification, and no auto-nudge event.** `TEAM_AGENT_NOTIFY_CMD` and the Pi notify extension
   are *worker* features: a worker tells the PM when its turn ended. For the PM that direction is inverted — the
-  PM is the recipient. A non-Pi PM is started/restarted by `team up` and by the watchdog's pending-work check
+  PM is the recipient. A non-Pi PM is started/restarted by `team up` and by the pulse's pending-work check
   (`watch --once`: unread inbox, reports to verify, blocked or stopped agents) and reads `team inbox` itself.
 - **No guaranteed session continuity.** With `TEAM_PM_RESUME_ARGS` empty, a restart begins a *fresh* session,
   and the tool says so in plain words instead of implying a continuation. The handoff is the durable record —
@@ -114,7 +114,7 @@ is `TEAM_PM_BIN`". Either way the check resolves **the PM's** executable (`TEAM_
   supervisor, a shell function): the recorded pid is then the wrapper, and liveness is lost as soon as it exits.
   `exec` (or `TEAM_PM_BIN` pointing straight at the CLI) is what the contract expects.
 - `team doctor`'s worker-adapter check proves the **worker** CLI; it says nothing about the PM CLI. The PM CLI is
-  checked at start time (`team up`, the watchdog): a missing or unresolvable executable fails before anything is
+  checked at start time (`team up`, the pulse): a missing or unresolvable executable fails before anything is
   respawned, naming `TEAM_PM_BIN` and the template's first word.
 
 **Verified on this machine** (2026-09-16): `codex` as the PM CLI in a scratch project — `team up` started it,
@@ -267,7 +267,7 @@ as data, not as text for your terminal:
   devices/sockets, a file deleted between glob and read (`ENOENT`), a symlink pointing at a directory, or
   content with NUL bytes (binary) render as `log unreadable` / `session unreadable` + a human-readable `reason`, with
   `"available": false`. FIFOs and devices are never `open`ed for reading (the old whole-file read could
-  block forever and freeze the watchdog window). A glob that matches nothing, or one that matches a plain
+  block forever and freeze the pulse window). A glob that matches nothing, or one that matches a plain
   directory, still degrades to `⚫ no session` exactly as before.
 
 How to change the window:
@@ -347,9 +347,9 @@ continue (opencode's session ids are its own — see the note under codex).
   guess "the agent finished thinking". Turn-end notification is the adapter's job
   (`TEAM_AGENT_NOTIFY_CMD`), plus the PM side (`team say`, `inbox`, `roster`).
 - **A notifying PM.** The PM's own CLI is configurable (`TEAM_PM_CMD`, §2), but the notification direction is not
-  symmetric: teamsmith has no "the PM's CLI finished a turn" event. A non-Pi PM is woken by the watchdog's
+  symmetric: teamsmith has no "the PM's CLI finished a turn" event. A non-Pi PM is woken by the pulse's
   pending-work check (or by a human running `team up`) and reads `team inbox`; it never pushes a turn-end event of
-  its own. The built-in Pi PM is nudged by typing into its window when it is alive (`team notify pm`, the watchdog
+  its own. The built-in Pi PM is nudged by typing into its window when it is alive (`team notify pm`, the pulse
   nudge) — that path works for a non-Pi PM too, because it only checks that the pane is busy, not which CLI runs.
 - **Interpolating worker text into a shell line.** A summary is data: it arrives through a file
   (`{summary_file}` / `team notify --from-file`). `{summary}` is rendered as a quoted file read for

@@ -29,7 +29,7 @@ attractively; mark stale conclusions stale.
 
 ## 3. Govern less to be reliable
 
-The narrower the responsibility, the easier it is to locate the fault. The watchdog only wakes the PM; the skill
+The narrower the responsibility, the easier it is to locate the fault. The pulse only wakes the PM; the skill
 does not wrap tools that already exist (git/forge belong to the PM); the PM does not implement (briefs,
 verification, decisions only). Every extra responsibility is one more component that cannot be blamed cleanly.
 

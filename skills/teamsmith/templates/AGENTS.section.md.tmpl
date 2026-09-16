@@ -74,7 +74,7 @@ fail → team say <agent> "..." with the concrete failure evidence
 ### Bootstrap (first step in a new project)
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team bootstrap   # idempotent: config + docs skeleton + worktrees + watchdog window + next steps
+bash {{SKILL_DIR}}/scripts/team bootstrap   # idempotent: config + docs skeleton + worktrees + pulse window + next steps
 ```
 
 ### Cross-project meetings (PM to PM)
@@ -90,22 +90,22 @@ landing the work always happens in each side's own project. **Workers do not att
 
 ### Periodic patrol (not a heartbeat)
 
-The watchdog is a **metronome that wakes the PM**, not a daemon that keeps it alive:
+The pulse is a **metronome that wakes the PM**, not a daemon that keeps it alive:
 
-- **The PM owns the watchdog**: `team watchdog up|status|logs|down` -- by default it runs `team monitor` in a
-  `watchdog` window of the same tmux session (team status on top, per-agent activity below, optional) and patrols
+- **The PM owns the pulse**: `team pulse up|status|logs|down` -- by default it runs `team monitor` in a
+  `pulse` window of the same tmux session (team status on top, per-agent activity below, optional) and patrols
   on an interval. There is exactly one backend (that window) -- no container, no systemd.
-- Every **15 minutes** by default (`TEAM_WATCH_INTERVAL=900`, 300-3600 recommended) it asks "is there work for the
+- Every **15 minutes** by default (`TEAM_PULSE_INTERVAL=900`, 300-3600 recommended) it asks "is there work for the
   PM?": unread notifications / reports awaiting verification / board todo·wip (opt-in) / blocked / agents with
   unfinished tasks that stopped running.
 - **Pending work** → wake the PM (nudge it if running, start it if not). **Nothing pending** → do nothing at all --
   the team stays quiet and the PM is not required to be running.
 - If there is nothing to do, or a human is needed, the PM can `team standby on --reason "…"` and stand down; the
-  watchdog stops waking it (backlog still lands in `state/watchdog.log`). A human runs `team standby off`.
+  pulse stops waking it (backlog still lands in `state/watchdog.log`). A human runs `team standby off`.
 - It **does not manage tmux layout or agents** (agents belong to the PM: `team resume`).
 
 ```bash
-bash <skill>/scripts/team watchdog-status      # interval / standby / pending / PM state
+bash <skill>/scripts/team pulse status        # interval / standby / pending / PM state
 bash <skill>/scripts/team standby on --reason "waiting for the user to pick a stack"
 bash <skill>/scripts/team standby off
 bash <skill>/scripts/team up                  # manual rescue: build the tmux stage + start the PM (agents untouched)

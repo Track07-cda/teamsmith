@@ -53,23 +53,23 @@ same explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (an **i
 (`{{DOCS_DIR}}/reviews/<change>-proposal.md`) is **ACCEPTED**, and no agent verifies its own work. The pipeline, its
 gates and the PM's review checklist: `{{SKILL_DIR}}/references/openspec.md`.
 
-## Bootstrap and watchdog
+## Bootstrap and pulse
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team bootstrap     # new project in one command: config + docs skeleton + worktrees + watchdog window
-bash {{SKILL_DIR}}/scripts/team watchdog up   # the watchdog window runs the monitor + patrols (PM-configured)
+bash {{SKILL_DIR}}/scripts/team bootstrap     # new project in one command: config + docs skeleton + worktrees + pulse window
+bash {{SKILL_DIR}}/scripts/team pulse up      # the pulse window runs the monitor + patrols (PM-configured)
 ```
 
 ## Liveness and periodic patrol
 
-- The watchdog is a **metronome that wakes the PM**, not a heartbeat: every 15 minutes by default
-  (`TEAM_WATCH_INTERVAL=900`, 300-3600 recommended) it checks for work (unread notifications / reports awaiting
+- The pulse is a **metronome that wakes the PM**, not a heartbeat: every 15 minutes by default
+  (`TEAM_PULSE_INTERVAL=900`, 300-3600 recommended) it checks for work (unread notifications / reports awaiting
   verification / board todo·wip / blocked / agents with unfinished tasks that stopped). With work → wake the PM
   (nudge if running, start with `pi -c` if not). Without work → stay silent, start nothing.
 - Nothing to do, or a human is needed: `team standby on --reason "…"`. No further wake-ups; a human runs
   `team standby off`.
 - It does not manage tmux layout or agents: a missing session/window is only reported (a human runs `team up`, or
-  set `TEAM_WATCH_REBUILD_TMUX=1`); starting/resuming agents is the PM's job (`team resume [--dry-run]`,
+  set `TEAM_PULSE_REBUILD_TMUX=1`); starting/resuming agents is the PM's job (`team resume [--dry-run]`,
   or a human runs `team up --agents`).
 - The capacity floor is swap must not be exhausted (`team ps` shows headroom); tight RAM only means slowness.
 - Standing the team down completely: `team standby on` (temporary), or `team teardown --all` for teardown.

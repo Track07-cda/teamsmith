@@ -3,7 +3,7 @@
 #
 # 设计给 PM 用：PM 在新项目里被启动后的第一件事就是跑它。它会
 #   ① 探测当前 tmux session/窗口（PM 自己就在里面）→ 写进配置   ② init 配置 + 文档骨架 + AGENTS 段落
-#   ③ 按名册建 agent worktree                                    ④ 起看门狗窗口（PM 负责配置看门狗）
+#   ③ 按名册建 agent worktree                                    ④ 起巡检窗口（PM 负责配置 pulse）
 #   ⑤ 打印“下一步清单”（PM 照做即可开始派单）
 #
 # 不碰远端：不 push、不建 issue、不改仓库设置。
@@ -32,14 +32,15 @@ team_detect_install_cmd() {
 }
 
 team_cmd_bootstrap() {
-  local agents="" session="" pmwin="" with_watchdog=1 print_only=0
+  local agents="" session="" pmwin="" with_pulse=1 print_only=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) agents="${2:?}"; shift 2 ;;
       --create-worktrees) TEAM_CREATE_WORKTREE=1; shift ;;
       --session) session="${2:?}"; shift 2 ;;
       --pm-window) pmwin="${2:?}"; shift 2 ;;
-      --no-watchdog) with_watchdog=0; shift ;;
+      --no-pulse) with_pulse=0; shift ;;
+      --no-watchdog) with_pulse=0; shift ;;   # 旧旗标（别名期保留到 v2.0.0）：与 --no-pulse 同义
       --print) print_only=1; shift ;;
       -*) team_usage_die "bootstrap: 未知参数 $1" ;;
       *) team_usage_die "bootstrap: 多余参数 $1" ;;
@@ -77,7 +78,7 @@ team_cmd_bootstrap() {
      "$([ -n "$det_sess" ] && echo '（探测自当前窗口）' || ([ -n "${TMUX:-}" ] && echo '（当前窗口不属于本项目 → 用配置/项目名）' || echo ''))"
   printf '  名册        %s\n' "$agents"
   printf '  版本控制    %s ｜ 门禁 %s ｜ 安装 %s\n' "$vcs" "${gates:-<无>}" "${install_cmd:-<无>}"
-  printf '  看门狗      %s\n' "$([ "$with_watchdog" = "1" ] && echo "tmux 窗口 $(team_slug "$session" 2>/dev/null || echo ''):watchdog（同 session）" || echo '跳过')"
+  printf '  巡检        %s\n' "$([ "$with_pulse" = "1" ] && echo "tmux 窗口 $(team_slug "$session" 2>/dev/null || echo ''):$(team_pulse_window)（同 session）" || echo '跳过')"
 
   if [ "$print_only" = "1" ]; then
     printf '\n（--print：只看计划，什么都没改）\n'
@@ -85,7 +86,7 @@ team_cmd_bootstrap() {
     printf '  1. %s init --session %s --pm-window %s --agents "%s" --vcs %s\n' "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs"
     printf '  2. 把门禁/安装命令写进 .pi/team/config.sh（%s / %s）\n' "${gates:-无}" "${install_cmd:-无}"
     printf '  3. 为每个 agent 建 worktree：%s\n' "$(printf 'add-agent %s; ' $agents)"
-    printf '  4. %s watchdog up（看门狗窗口：同 session 的 watchdog 窗口跑 monitor + 定时巡检）\n' "$TEAM_CLI"
+    printf '  4. %s pulse up（巡检窗口：同 session 的 %s 窗口跑 monitor + 定时巡检）\n' "$TEAM_CLI" "$(team_pulse_window)"
     printf '  5. 打印下一步清单\n'
     return 0
   fi
@@ -123,10 +124,10 @@ team_cmd_bootstrap() {
     done
   fi
 
-  # ④ 看门狗（PM 负责配置；失败不算致命，只提示）
-  if [ "$with_watchdog" = "1" ]; then
+  # ④ 巡检（PM 负责配置；失败不算致命，只提示）
+  if [ "$with_pulse" = "1" ]; then
     team_info ""
-    team_cmd_watchdog up || team_warn "看门狗没起来：稍后再跑 $TEAM_CLI watchdog up（不影响派单）"
+    team_cmd_pulse up || team_warn "巡检没起来：稍后再跑 $TEAM_CLI pulse up（不影响派单）"
   fi
 
   # ⑤ 下一步清单
@@ -136,8 +137,8 @@ team_cmd_bootstrap() {
   printf '  2) 建第一个任务：%s task T1.1 --title "…" --agent %s\n' "$TEAM_CLI" "$(printf '%s' "$agents" | awk '{print $1}')"
   printf '     → 编辑任务书（背景/交付物/边界/可复制验收命令）\n'
   printf '  3) 派单：%s dispatch %s T1.1 %s/tasks/T1.1-*.md\n' "$TEAM_CLI" "$(printf '%s' "$agents" | awk '{print $1}')" "$TEAM_DOCS_DIR"
-  printf '  4) 看板：%s digest ｜ 看门狗：%s watchdog status\n' "$TEAM_CLI" "$TEAM_CLI"
+  printf '  4) 看板：%s digest ｜ 巡检：%s pulse status\n' "$TEAM_CLI" "$TEAM_CLI"
   printf '  5) 建议把脚手架提交：git add -A && git commit -m "chore: teamsmith 初始化"\n'
-  printf '\n  约定：看门狗由 PM 配置并维护（%s watchdog up/status/logs）；agent 归 PM 管（%s resume）。\n' "$TEAM_CLI" "$TEAM_CLI"
+  printf '\n  约定：pulse 由 PM 配置并维护（%s pulse up/status/logs）；agent 归 PM 管（%s resume）。\n' "$TEAM_CLI" "$TEAM_CLI"
   return 0
 }

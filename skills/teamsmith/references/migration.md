@@ -43,6 +43,25 @@ Note on absolute paths: the compatibility symlink follows the **repository**, so
 made before the release where `pi-team` was renamed keeps a frozen directory with no symlink inside; re-run
 `./install.sh` there.
 
+## 2b. The rename: `watchdog` → `pulse` (v1.36.0)
+
+The periodic patrol was renamed. During the alias period (until v2.0.0) **nothing needs to change**:
+
+- **Commands**: `team pulse up|down|restart|status|logs` (bare `team pulse` = `status`). The old names
+  (aliases: `team watchdog …`, `watchdog-status`, `install-watchdog`, `uninstall-watchdog`) still work — they print one
+  `[deprecated]` line on stdout and then do exactly what the `pulse` form does.
+- **Window**: the default window name is now `pulse` (`TEAM_PULSE_WINDOW`). A still-running `watchdog` window is
+  recognized as the backend: `team pulse status` / `team doctor` say so and point at `team pulse restart`, which
+  swaps it for a `pulse` window. `team pulse up` never opens a second patrol next to a legacy one.
+- **Variables**: each `TEAM_PULSE_<NAME>` wins over `TEAM_WATCH_<NAME>`, which wins over the default. Freshly
+  generated configs write the new names; an old config keeps working, and `team pulse status` / `team doctor`
+  name every legacy variable still in effect.
+- **State files stay put**: `state/watchdog.pid/.log/.last/.nudge/.tick.log` keep their names during the alias
+  period — two patrols side by side (double nudges, double restarts) is the one thing that must never happen.
+
+To migrate fully: rename the six `TEAM_WATCH_*` keys in `.pi/team/config.sh` to `TEAM_PULSE_*` (values unchanged),
+then `team pulse restart` to swap the window name.
+
 ## 3. Removed commands (v1.10 → v1.11) and what replaced them
 
 The skill stopped wrapping tools that already exist. Rolling those wrappers back is not on the roadmap; the
@@ -95,7 +114,7 @@ one-line reaction.
 | `team board set <ID> done` requires evidence | v1.20.0 | the branch must be merged into the protected branch or a review record must exist; the only override is `TEAM_BOARD_DONE_FORCE=1` **plus** `TEAM_BOARD_DONE_REASON="…"`, and it is recorded in `reviews/<ID>-done.md` |
 | a review must run in a clean checkout of the task branch, and the record is bound to that revision | v1.20.0 | prepare a detached worktree per review; if the branch moves afterwards `digest` lists the task for re-verification; `TEAM_REVIEW_ALLOW_DIRTY` / `…_IGNORED` / `…_ANY_DIR` are explicit, recorded overrides |
 | empty or whitespace-only tmux targets are refused in every wrapper | v1.21.0 | nothing to do — this guard is what stops a wrapper from typing into (or killing) the *current* pane; only custom scripts that build a target from a variable need to prove it is non-empty |
-| the watchdog is a `watchdog` window in **the project's own** tmux session, and `TEAM_SESSION` must match that session name | v1.12.0 (single backend) | `team watchdog status`; after renaming a session, update `TEAM_SESSION` in `.pi/team/config.sh`. Real example: on 2026-09-14 this project's session was renamed while the config kept the old name, so `dispatch`/`watchdog` reported a missing session and the PM as not running until the config was fixed |
+| the patrol is a `pulse` window in **the project's own** tmux session, and `TEAM_SESSION` must match that session name | v1.12.0 (single backend); renamed `watchdog` → `pulse` in v1.36.0 (§2b) | `team pulse status`; after renaming a session, update `TEAM_SESSION` in `.pi/team/config.sh`. Real example: on 2026-09-14 this project's session was renamed while the config kept the old name, so `dispatch` and the patrol reported a missing session and the PM as not running until the config was fixed |
 | long-lived sessions are checked against the model's context window; `--fresh` starts a new one | v1.22.0 | before switching an agent to a model with a smaller window, dispatch with `--fresh` (or accept the refusal); `team ps` / `roster` show used/window |
 | reports that are not committed yet no longer point at a review, and a squash-merged branch reports "already merged (squash, same content) — no push needed" | v1.22.0 | read the wording before acting: both lines exist to stop a PM from reviewing or pushing something that is already done |
 | the PM's own CLI is configurable (`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`) | M8.1 | nothing to do — all three keys are empty by default and the built-in Pi command is byte-for-byte unchanged; set them only to run the PM under another TUI agent (`references/agent-adapters.md` §2) |
@@ -126,9 +145,11 @@ openspec init --tools none
 # 6) put the spec gate into TEAM_GATES in .pi/team/config.sh
 #    TEAM_GATES="openspec validate --all --strict && <old gates>"
 
-# 7) rebuild the watchdog window and look at it
-team watchdog up
-team watchdog status
+# 7) rebuild the pulse window and look at it (renamed from `watchdog` in v1.36.0 — §2b:
+#    the old commands/window/variables still work; a running `watchdog` window is adopted
+#    and `team pulse restart` swaps it for a `pulse` one)
+team pulse up
+team pulse status
 
 # 8) prove the tooling end to end in a throwaway repository (never touches this project)
 bash skills/teamsmith/tests/smoke.sh                        # full suite (tens of seconds idle, minutes on a loaded box)
@@ -175,9 +196,9 @@ team mark-loaded                               # re-record what this session sho
 - **The PM side is Pi.** Only *workers* can be another TUI agent, via the four `TEAM_AGENT_*` keys; the PM prompt,
   `pi -c` restarts and the notify extension stay Pi. Contract, worked examples and the unsupported list:
   [agent-adapters.md](agent-adapters.md).
-- **The old Podman/container and systemd watchdog backends** (removed in v1.12.0). There is exactly one backend
-  now: the `watchdog` window in the project's own tmux session. If the tmux server dies, the PM is gone too, and
-  `team up` / `team watchdog up` rebuild both.
+- **The old Podman/container and systemd patrol backends** (removed in v1.12.0). There is exactly one backend
+  now: the `pulse` window in the project's own tmux session. If the tmux server dies, the PM is gone too, and
+  `team up` / `team pulse up` rebuild both.
 - **git and forge wrappers** (`team merge`, `team pr`, `team gh`, `team gl`, a forge library script), removed in
   v1.11.0: the PM runs git and the forge's own CLI. See §3 and `SKILL.md`.
 - The repository's own boundary — what this project will and will not do on someone else's machine — is in

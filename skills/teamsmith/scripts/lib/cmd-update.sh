@@ -103,9 +103,9 @@ team_cmd_reload() { # 让 PM 自助刷新 skill（写一个请求标记 + 告诉
       team_ok "已请求重载 skill（等价 /reload）"
       team_dim "  在 Pi 会话里直接输入 /reload（或 /teamsmith-reload，或用 reload_skills 工具）才能生效"
       # F23：旧文案说「watchdog 看到 marker 后会重启 PM 会话」——没有任何组件读这个 marker
-      # （watchdog 不读，扩展只在 /reload 之后把它删掉），这是对机制的不存在的承诺。现在只说实的。
+      # （pulse 不读，扩展只在 /reload 之后把它删掉），这是对机制的不存在的承诺。现在只说实的。
       team_dim "  marker（.pi/team/state/reload-requested）仅用于记账：/reload 完成后扩展会把它删掉"
-      team_dim "  没有任何组件会因为 marker 重启会话（要重启 PM 用 $TEAM_CLI up；watchdog 不读它）" ;;
+      team_dim "  没有任何组件会因为 marker 重启会话（要重启 PM 用 $TEAM_CLI up；pulse 不读它）" ;;
     --done)
       rm -f "$TEAM_STATE_DIR/reload-requested"
       team_ok "已清除重载请求标记" ;;

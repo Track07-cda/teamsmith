@@ -84,10 +84,11 @@ case "$CMD" in
   resume)     team_cmd_resume "$@" ;;
   watch)      team_cmd_watch "$@" ;;
   monitor)    team_cmd_monitor "$@" ;;
-  install-watchdog)   team_cmd_install_watchdog "$@" ;;
-  uninstall-watchdog) team_cmd_uninstall_watchdog "$@" ;;
-  watchdog)           team_cmd_watchdog "$@" ;;
-  watchdog-status)    team_cmd_watchdog_status "$@" ;;
+  pulse)              team_cmd_pulse "$@" ;;
+  install-watchdog)   team_cmd_install_watchdog "$@" ;;    # 旧名（别名期到 v2.0.0）：印弃用提示后转 pulse
+  uninstall-watchdog) team_cmd_uninstall_watchdog "$@" ;;  # 同上
+  watchdog)           team_cmd_watchdog "$@" ;;            # 同上
+  watchdog-status)    team_cmd_watchdog_status "$@" ;;     # 同上
   standby)            team_cmd_standby "$@" ;;
   meeting)            team_cmd_meeting "$@" ;;
   version)            if [ "${1:-}" = "--check" ] || [ "${1:-}" = "check" ]; then team_cmd_version_check; else team_cmd_version_brief; fi ;;

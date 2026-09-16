@@ -1,6 +1,6 @@
 ---
 name: teamsmith
-description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A watchdog window wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the watchdog as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project.
+description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project.
 license: MIT
 metadata:
   version: "1.36.0"
@@ -31,7 +31,7 @@ bash <skill>/scripts/team bootstrap
 `bootstrap` idempotently brings a project to "ready to dispatch": detect the current tmux session/window →
 write `.pi/team/config.sh` + the `docs/team/` skeleton + the `AGENTS.md` protocol section + `.gitignore` →
 **print** the `git worktree add` command for each agent (git stays with the PM; add `--create-worktrees` to have
-it create them) → start the watchdog (a `watchdog` window in the same session) → print next steps.
+it create them) → start the pulse (a `pulse` window in the same session) → print next steps.
 See [references/bootstrap.md](references/bootstrap.md); you can also hand
 `templates/bootstrap-prompt.md.tmpl` to a new project's PM and let it follow along.
 
@@ -68,7 +68,7 @@ $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | Goal | Command |
 |---|---|
 | Init / self-check | `team init [--session s] [--agents "a b"] [--vcs local\|remote]`, `team doctor` |
-| Observe | `team roster` (windows/branch/dirty/ahead), `team status [ID]`, `team ps` (capacity + model limits + PM/watchdog liveness), `team digest` (PM's pending work) |
+| Observe | `team roster` (windows/branch/dirty/ahead), `team status [ID]`, `team ps` (capacity + model limits + PM/pulse liveness), `team digest` (PM's pending work) |
 | Inbox | `team inbox [agent] [--ack] [--all]` |
 | Document contracts | `team task <ID> --title ... --agent a`, `team board add\|set\|ls`, `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
 | Dispatch | `team add-agent <a>`, `team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--allow-overflow] [--force] [--print]` (`--force` overrides the "this agent still carries an unfinished task" refusal; the override is printed and logged) |
@@ -77,7 +77,7 @@ $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | Verify | `team review <ID> --dir <PM-prepared independent checkout> [--no-gates] [--strong] [--allow-unresolved-branch]` → `reviews/<ID>.md` (runs gates + writes evidence; refuses a dirty or `.gitignore`d checkout / an unresolvable `--branch` unless the matching `TEAM_REVIEW_ALLOW_*` override is used and recorded; `--strong` structurally checks flip evidence + a path to an independent package) |
 | Wrap up | `team close <ID> [--keep-window]` (BOARD/state/window only, never git), `team teardown --agent a [--purge]` (explicit cleanup) |
 | Bootstrap | `team bootstrap [--agents "dev verify"] [--print]` (recommended), `team init`, `team doctor` |
-| Watchdog | `team watchdog up\|down\|restart\|status\|logs` (a `watchdog` window in the same session runs the monitor + periodic patrol; single backend), `team watch [--once]` (foreground patrol) |
+| Patrol (pulse) | `team pulse up\|down\|restart\|status\|logs` (a `pulse` window in the same session runs the monitor + periodic patrol; single backend). Renamed from `watchdog` in v1.36.0: `team watchdog …`, `watchdog-status`, `install-watchdog`, `uninstall-watchdog` still work as aliases until v2.0.0 (they print a one-line deprecation notice first). `team watch [--once]` (foreground patrol) |
 | Monitor | `team monitor [--once] [--activity]` (**serves the current tmux session only**: who is running / tasks / pending / capacity; `--activity` adds per-agent activity streams, off by default), `team panel` reuses it |
 | PM/agent lifecycle | `team up [--agents]` (recover the PM), `team resume` (PM's tool: continue stopped agents), `team standby on\|off` (PM deliberately stands down) |
 | Cross-project meetings | `team meeting open/say/read/list/inbox/propose/agree/close` (PM-to-PM peer exchange: interface work, advice, problem reports; **not a command channel** — consensus needs both sides) |
@@ -95,8 +95,8 @@ when they conflict, the creed wins and the process gets fixed.
 
 ## The PM loop (what you actually do)
 
-> On start (or after being woken): `team digest` → `team inbox --ack` → `team resume --dry-run` → `team watchdog-status`.
-> Division of labour: **the watchdog is a metronome** ("is there work?" every 15 minutes by default): it wakes you
+> On start (or after being woken): `team digest` → `team inbox --ack` → `team resume --dry-run` → `team pulse status`.
+> Division of labour: **the pulse is a metronome** ("is there work?" every 15 minutes by default): it wakes you
 > only when there is pending work, stays silent otherwise, and does not require you to keep running. Starting,
 > stopping and resuming agents, verification and merging are all yours.
 > If you have nothing to push or need a human decision: `team standby on --reason "…"` to stand down
@@ -228,12 +228,17 @@ byte-for-byte unchanged**):
 - One long-lived worktree per agent: **do not move it** (sessions are keyed by cwd; moving loses the agent's memory).
 - Default `TEAM_BRANCH_MODE=task`: **one branch per task** (`task/<ID>-<slug>` cut from the protected branch); the task
   is the unit of verification, merge and rollback. Set `agent` for one long-lived branch per agent.
-- **The watchdog is configured by the PM**: `team watchdog up` runs `team monitor` in a `watchdog` window **in the
+- **The pulse is configured by the PM**: `team pulse up` runs `team monitor` in a `pulse` window **in the
   same tmux session** and patrols every 15 minutes (configurable) for pending work. `status` / `logs` / `down` are
   supported. There is exactly one backend (the tmux window) — no container, no systemd: fewer moving parts is more
   reliable, and if the tmux server dies the PM is gone too, so `team up` rebuilds both.
+  The name: it was called `watchdog` until v1.36.0 — the old command names, the `watchdog` window name and the
+  `TEAM_WATCH_*` variables keep working as aliases/fallbacks until v2.0.0 (`team pulse status` names every legacy
+  variable still in effect; a still-running `watchdog` window is recognized as the backend and `team pulse restart`
+  swaps it for a `pulse` window). The `state/watchdog.*` file names stay unchanged during the alias period —
+  never run two patrols side by side.
 - **The PM does not need to run continuously**: you are only needed when there is work. Patrols default to every
-  15 minutes (`TEAM_WATCH_INTERVAL=900`, 300–3600 recommended): pending work wakes you (if you are not running it
+  15 minutes (`TEAM_PULSE_INTERVAL=900`, 300–3600 recommended): pending work wakes you (if you are not running it
   starts you with `pi -c`), otherwise it does nothing. **When there is nothing to do or a human is needed,
   `team standby on --reason "…"` stands you down** — no further wake-ups; backlog still lands in
   `state/watchdog.log`, and a human runs `team standby off`. Patrols **do not manage tmux layout or agents**;
@@ -251,12 +256,12 @@ byte-for-byte unchanged**):
 | `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
 | `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
 | `references/migration.md` | The project was set up with an older version (or with the former name `pi-team`): renames, removed commands, new required dependencies, behaviour changes, the upgrade recipe and rollback |
-| `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/watchdog, scaling, blockers |
+| `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/pulse, scaling, blockers |
 | `references/openspec.md` | The OpenSpec pipeline: five phases, their owners, the gate before each next phase, and the PM's proposal-review checklist |
 | `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |
 | `templates/` | Copy when you need to hand-write a brief/report/board |
 | `scripts/team`, `scripts/lib/*.sh` | When changing behaviour (use `team <cmd> --print` to see what it generates) |
-| `tests/smoke.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, the non-Pi agent end-to-end segment, window/close behaviour, the watchdog waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release |
+| `tests/smoke.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, the non-Pi agent end-to-end segment, window/close behaviour, the pulse waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release |
 
 ## Requirements
 
@@ -270,12 +275,12 @@ byte-for-byte unchanged**):
 > (`TEAM_OPENSPEC_BIN`, `TEAM_SPEC_DIR`) are in [references/config.md](references/config.md).
 > When only the *workers* move to another CLI: with `TEAM_AGENT_CMD` set, workers no longer need `pi`
 > (`team doctor` judges by the configured adapter) — but **the PM side still runs Pi** (`pi -c` restarts,
-> the PM prompt, `extension/team-notify.ts`), and the watchdog only wakes the PM. See
+> the PM prompt, `extension/team-notify.ts`), and the pulse only wakes the PM. See
 > [references/agent-adapters.md](references/agent-adapters.md).
 
 - **No forge dependency**: the skill never probes or calls `gh`/`glab`/`tea` and never reads tokens; opening a
   PR/MR is the PM's job via `git` plus `curl`/any CLI/web UI (`TEAM_VCS` is only a wording label).
-- **No container dependency**: the watchdog is a `watchdog` window in the same tmux session (`team watchdog up`).
+- **No container dependency**: the pulse is a `pulse` window in the same tmux session (`team pulse up`).
 - What to remember, what belongs on disk instead, and what happens when the memory dependency is missing:
   [references/memory.md](references/memory.md).
 - Optional helpers: `timeout` (hard timeout for gates; degrades with a warning), `lsof` (needed only where

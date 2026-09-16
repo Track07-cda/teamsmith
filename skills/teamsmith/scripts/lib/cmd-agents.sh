@@ -853,7 +853,7 @@ team_cmd_notify() {
       offline|unknown-failed) team_warn "敲门没落地（PM 窗口不可投）：消息只落收件箱" ;;
     esac
   elif [ "$TEAM_NOTIFY_TMUX" = "1" ] && [ -n "${TMUX:-}" ] && team_have_cmd tmux && ! team_pm_alive; then
-    team_warn "PM 不在运行：消息只落收件箱（watchdog 会把 PM 拉起后读到）"
+    team_warn "PM 不在运行：消息只落收件箱（pulse 会把 PM 拉起后读到）"
   elif [ "$TEAM_NOTIFY_TMUX" = "1" ] && { [ -z "${TMUX:-}" ] || ! team_have_cmd tmux; }; then
     # V7-F6：敲门依赖 TMUX 环境变量——不设就静默整条跳过是不行的；明说，收件箱记录不受影响
     team_warn "不在 tmux 会话里（TMUX 未设置）：敲门不试、不入队，消息只落收件箱"

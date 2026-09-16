@@ -79,17 +79,21 @@ literals or simple `$VAR`.
 
 | Guard | Default | Purpose |
 |---|---|---|
-| the watchdog only "counts pending work + wakes the PM" (it only wakes when there is work); starting, stopping and resuming agents is the PM's job (`team resume`) |
+| the pulse only "counts pending work + wakes the PM" (it only wakes when there is work); starting, stopping and resuming agents is the PM's job (`team resume`) |
 | `TEAM_REQUIRE_MAGIC_CONTEXT` | `1` | `1` = magic-context (PM memory) is a hard dependency: `team doctor` fails without it, `dispatch` warns (never blocks). `0` downgrades it to a warning |
 | `TEAM_PI_SETTINGS_FILE` | `~/.pi/agent/settings.json` | where Pi extensions (magic-context) are detected, and where the package is resolved from (`<settings dir>/npm/node_modules/…`); overridable for tests/multi-user setups |
 | `TEAM_REQUIRE_OPENSPEC` | `1` | `1` = OpenSpec (the spec layer) is a hard dependency: `doctor` fails when the CLI or the spec dir is missing, `dispatch` warns. `0` downgrades it to a warning |
 | `TEAM_OPENSPEC_BIN` | `openspec` | the OpenSpec CLI to resolve (an absolute path is allowed, same pattern as `TEAM_PI_BIN`) |
 | `TEAM_SPEC_DIR` | `openspec` | the project's OpenSpec root; a relative path is resolved against the main worktree |
-| `TEAM_WATCH_INTERVAL` | `900` | patrol period (seconds): 15 minutes by default, 300~3600 recommended. This is the beat of "look for work on a timer", not a heartbeat |
-| `TEAM_WATCH_NUDGE_GAP` | `900` | the shortest interval before the same batch of pending work is reminded again (seconds) |
-| `TEAM_WATCH_REBUILD_TMUX` | `0` | `0` = leave tmux alone (a missing session/window is only reported); `1` = allow rebuilding the session/PM window (self-recovery after a reboot) |
-| `TEAM_WATCH_MAX_RESTARTS` | `5` | maximum automatic PM starts per hour (guards against a crash loop). Counted from `state/pm-restarts.log` (real restarts) **and** `state/pm-start-attempts.log` (every attempt), so a start loop that never confirms is bounded too |
-| `TEAM_WATCH_WINDOW` | `watchdog` | window name for the tmux backend |
+The patrol keys were renamed `TEAM_WATCH_*` → `TEAM_PULSE_*` in v1.36.0. During the alias period (until v2.0.0)
+the effective value of each is `TEAM_PULSE_<NAME>` > `TEAM_WATCH_<NAME>` > the default, and `team pulse status` /
+`team doctor` name every legacy variable still in effect.
+
+| `TEAM_PULSE_INTERVAL` | `900` | patrol period (seconds): 15 minutes by default, 300~3600 recommended. This is the beat of "look for work on a timer", not a heartbeat |
+| `TEAM_PULSE_NUDGE_GAP` | `900` | the shortest interval before the same batch of pending work is reminded again (seconds) |
+| `TEAM_PULSE_REBUILD_TMUX` | `0` | `0` = leave tmux alone (a missing session/window is only reported); `1` = allow rebuilding the session/PM window (self-recovery after a reboot) |
+| `TEAM_PULSE_MAX_RESTARTS` | `5` | maximum automatic PM starts per hour (guards against a crash loop). Counted from `state/pm-restarts.log` (real restarts) **and** `state/pm-start-attempts.log` (every attempt), so a start loop that never confirms is bounded too |
+| `TEAM_PULSE_WINDOW` | `pulse` | window name for the tmux backend. Alias period: a still-running legacy `watchdog` window is recognized as the backend; `team pulse restart` swaps it for the resolved name |
 | `TEAM_MONITOR_REFRESH` | `5` | monitor refresh interval (seconds) |
 | `TEAM_MONITOR_ACTIVITY` | `0` | `1` = append each agent's session activity stream below the panel (only windows running in this session); off by default |
 | `TEAM_MONITOR_EVENTS` | `4` | how many recent session events are shown per agent |
@@ -99,7 +103,7 @@ literals or simple `$VAR`.
 | `TEAM_PM_EXTRA_PI_ARGS` | empty | extra pi arguments for the PM (`{extra_args}` in a `TEAM_PM_CMD` template) |
 | `TEAM_PM_CMD` | empty | **launch template for the PM's own CLI** (the PM side of the adapter, M8.1). Placeholders: `{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{extra_args}` `{resume_args}`. Empty = the built-in Pi command, byte-for-byte the pre-M8.1 behaviour; the rules (unknown/malformed placeholder, blank or multi-line template) are shared with `TEAM_AGENT_CMD` and fail loudly. See [agent-adapters.md](agent-adapters.md) §2. A start that fails leaves a diagnosis (window output, the rendered command, the CLI's exit code) in `state/pm-launch-failed.log`, and `team up` exits non-zero |
 | `TEAM_PM_BIN` | empty | executable used for the PM's start-time existence check and its liveness identity check; empty = the first word of `TEAM_PM_CMD`, else `TEAM_PI_BIN`. The name does not have to be `pi` (a wrapper that `exec`s the real CLI is covered by the spawn proof). A **bare** first word is resolved on the *caller's* `PATH` and the rendered command uses the absolute path it resolved to — the window runs under `bash -lc`, whose `PATH` does not have your interactive rc-file additions |
-| `TEAM_PM_RESUME_ARGS` | empty | arguments that continue the PM's previous session when `team up`/the watchdog restarts it (`{resume_args}`). Built-in Pi path: empty = the historical `-c`; a value replaces it. Custom CLI: empty = **no continuity** (the restart starts fresh, and `team up` says so and points at `docs/team/**` + `team inbox`); a value is only used if the template contains `{resume_args}` |
+| `TEAM_PM_RESUME_ARGS` | empty | arguments that continue the PM's previous session when `team up`/the pulse restarts it (`{resume_args}`). Built-in Pi path: empty = the historical `-c`; a value replaces it. Custom CLI: empty = **no continuity** (the restart starts fresh, and `team up` says so and points at `docs/team/**` + `team inbox`); a value is only used if the template contains `{resume_args}` |
 | `TEAM_PM_START_WAIT` | `6` | seconds to wait for the PM to come up after starting it — the pid is recorded in `state/pm.pid` only once the configured agent binary is really running in that window. The start-in-flight marker `state/pm.pid.starting` stays fresh for this value **+ 5s**, and while it is fresh no tick starts a second PM over the one that is coming up |
 | `TEAM_REPLACE_FOREIGN_PM` | `0` | `1` = allow `team up` to overwrite a process in the PM window whose cwd is **outside** this project (a non-PM process with an in-project cwd is always replaceable — it is reported as `unknown:<cmd>`) |
 
@@ -149,7 +153,7 @@ one audit line to `state/outbox/forced.log`; `team outbox drop <n|all>` discards
 │   └── state/             # runtime state (gitignored): <agent>.env (the durable record),
 │                          #   pm.pid (pid of the PM this tool started: the liveness proof),
 │                          #   notify-dedup, prompt-<agent>-<ID>.md (the prompt of this dispatch;
-│                          #   {prompt_file} points at it), watchdog/capacity logs
+│                          #   {prompt_file} points at it), patrol (watchdog.*)/capacity logs
 ├── AGENTS.md              # carries the <!-- teamsmith:begin --> protocol section (written/refreshed by init)
 ├── .worktrees/
 │   ├── <agent>/           # each agent's long-lived worktree (branch agent/<name>)
@@ -186,13 +190,13 @@ one audit line to `state/outbox/forced.log`; `team outbox drop <n|all>` discards
 
 Liveness is **not** stored for agents: whether an agent is running — and therefore which model-concurrency slot it
 holds — is derived from tmux (`has-window`) at query time. A crashed window therefore frees its slot while the record
-stays, and the read-only commands (`roster`, `status`, `ps`, `digest`, `inbox`, `paths`, `watchdog-status`) write
+stays, and the read-only commands (`roster`, `status`, `ps`, `digest`, `inbox`, `paths`, `pulse status`) write
 nothing at all. This is a tested invariant (smoke: state hash before/after), not a convention: an earlier version
 had the model counter call `team_state_clear` for dead windows, so a single `team ps` deleted a crashed agent's
 `task`/`branch` — after which `digest` reported "nothing to do" and `team resume` had nothing to resume.
 
 The PM is the one exception, and only because a guess about it was proven to lie (M6.5): the start path
-(`team up` / the watchdog) records the pid of the agent process it launched in `state/pm.pid`, and liveness means
+(`team up` / the pulse) records the pid of the agent process it launched in `state/pm.pid`, and liveness means
 "that pid is alive **and** its cwd is inside this project". The file is written by the start path only
 (`team_pm_start`); the read-only commands read it and never remove a stale entry (a dead pid simply fails the
 check). Without it, a freshly created, still-empty pane was reported as `running:tmux`.

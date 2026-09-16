@@ -120,10 +120,11 @@ an OOM happens RAM and zram bottom out together.
 
 ## 8. Periodic patrol: no "watch everything", only waking people up
 
-The watchdog is not a keep-alive heartbeat but a **metronome**: on a timer it asks "is there work for the PM right
-now".
+The pulse (called `watchdog` before v1.36.0 — the old command/window/variable names still work as aliases and
+fallbacks until v2.0.0) is not a keep-alive heartbeat but a **metronome**: on a timer it asks "is there work for
+the PM right now".
 
-- Every 15 minutes by default (`TEAM_WATCH_INTERVAL=900`, 300~3600 recommended) it computes the pending work: unread
+- Every 15 minutes by default (`TEAM_PULSE_INTERVAL=900`, 300~3600 recommended) it computes the pending work: unread
   notifications / reports awaiting verification / board todo·wip / blocked / agents with an unfinished task that
   stopped.
 - **Pending work** → wake the PM (nudge it if it is running; if not, start it with `pi -c` and the kick-off prompt
@@ -145,10 +146,10 @@ now".
 - **One tick, one state read**: the patrol derives every conclusion (nudge / start / stay quiet) from a single
   `team_pm_state` read, and `state/pm-restarts.log` records **real restarts only** — the quota is checked before
   starting, the line (epoch, timestamp, evidence) is written after a successful start. Every attempt is recorded in
-  `state/pm-start-attempts.log` with the evidence, and the quota counts both files (`TEAM_WATCH_MAX_RESTARTS` per
+  `state/pm-start-attempts.log` with the evidence, and the quota counts both files (`TEAM_PULSE_MAX_RESTARTS` per
   hour), so a start loop that spawns but never confirms cannot run away while "the PM was restarted N times in the
   last hour" stays a fact and not a count of attempts. A failed or timed-out attempt is logged in
-  `state/watchdog.log` as not counted. `watchdog-status`, `digest`, `ps` and the monitor panel print the same state
+  `state/watchdog.log` as not counted. `pulse status`, `digest`, `ps` and the monitor panel print the same state
   and name the evidence behind it (`state/pm.pid=<pid> proof=spawn|argv`, the starting marker, the empty prompt, the
   occupant).
 
@@ -158,10 +159,10 @@ What each liveness state means and what the PM should do:
 |---|---|---|
 | `running:<pid\|cmd>` | proof: the recorded pid is alive with an in-project cwd (`proof=spawn` / `proof=argv`), or the window's process is the configured agent binary | nothing; a nudge means "there is pending work" |
 | `starting:<age>` | a start is in flight (fresh `state/pm.pid.starting`) | nothing — the tick will not start a second PM; wait for `running` (the marker expires after `TEAM_PM_START_WAIT + 5s`) |
-| `idle:<shell>` | empty prompt | `team up`, or let the watchdog start it when there is pending work |
+| `idle:<shell>` | empty prompt | `team up`, or let the pulse start it when there is pending work |
 | `unknown:<cmd>` | in-project occupant that is not the agent (fresh pane, `sleep`, editor) | `team up` replaces it; it never suppresses a start |
 | `foreign:<cmd>` | occupant whose cwd belongs to another project | close that window, or `TEAM_REPLACE_FOREIGN_PM=1 team up` |
-| `missing` | the PM window does not exist | `team up`; `TEAM_WATCH_REBUILD_TMUX=1` lets the watchdog rebuild it |
+| `missing` | the PM window does not exist | `team up`; `TEAM_PULSE_REBUILD_TMUX=1` lets the pulse rebuild it |
 
 `busy` is not a liveness state of its own: a pane whose foreground process is the agent is `running`, and a pane that is
 merely busy with something else in this project (the pre-`exec` start command, a `sleep`, an editor) is `unknown:<cmd>`
@@ -169,14 +170,14 @@ merely busy with something else in this project (the pre-`exec` start command, a
 an occupant (`unknown`).
 - The PM can stand down deliberately: `team standby on --reason "…"` (nothing to do / a human has to step in), after
   which it is not woken; a backlog is still logged; once a human has dealt with it, `team standby off`.
-- Repeated reminders for the same batch are limited by `TEAM_WATCH_NUDGE_GAP`; a PM that is busy can simply ignore a
+- Repeated reminders for the same batch are limited by `TEAM_PULSE_NUDGE_GAP`; a PM that is busy can simply ignore a
   reminder.
 - Division of labour with instant notifications: the notification at the end of an agent's turn is **instant** (the
-  notify extension: write the inbox + knock on the PM window); the watchdog's reminder is a **timed fallback**: as
+  notify extension: write the inbox + knock on the PM window); the pulse's reminder is a **timed fallback**: as
   long as that batch is unread/unhandled, the next round (or a change in pending work) raises it again.
-- Boundaries: it does not manage tmux layout (`TEAM_WATCH_REBUILD_TMUX=0`, a lost state is only reported), does not
+- Boundaries: it does not manage tmux layout (`TEAM_PULSE_REBUILD_TMUX=0`, a lost state is only reported), does not
   manage agents (the PM's job), does not manage model quota and never merges automatically. Runaway protection: the
-  auto-start quota of 5 per hour plus the watchdog's own pid lock.
+  auto-start quota of 5 per hour plus the pulse's own pid lock.
 
 Why the boundaries are drawn this narrow: an "everything-managing" daemon would manipulate tmux layout, agent
 lifecycles and model quota at the same time, and when something breaks nobody can tell who corrupted the state;
@@ -194,19 +195,19 @@ a human.
 - When the worktree is dirty, switching branches is refused (otherwise the previous task's changes leak into the new
   task); that is a hard rule, not a reminder.
 
-## 8c. The watchdog's scope: it serves the current tmux session only
+## 8c. The pulse's scope: it serves the current tmux session only
 
-- The watchdog (`team monitor` in the `watchdog` window) only answers questions about this session: who is running,
+- The pulse (`team monitor` in the `pulse` window) only answers questions about this session: who is running,
   what task they are on, what is pending, how the capacity looks; it **never digs through another agent's session
   content** (that is what the PM reads via `inbox`/reports/`digest`).
 - The session activity stream is opt-in: `team monitor --activity` (and it only lists live windows in this session).
   It is off by default for a very practical reason: 6 agents ≈ ~9MB of JSONL read per render (measured 7MB→67MB RSS,
   refreshed every 3s), and the noise covers up the state you actually needed to see.
-- The panel refreshes every 5s by default while the patrol beat stays `TEAM_WATCH_INTERVAL` (900s by default).
+- The panel refreshes every 5s by default while the patrol beat stays `TEAM_PULSE_INTERVAL` (900s by default).
 - **What counts as "pending work"**: unread notifications / reports awaiting verification / a `blocked` row / agents
   that stopped (with a task that was never delivered).
   The board's `todo/wip` **do not count by default** — a backlog is always there and knocking every 15 minutes would
-  be pure noise; to include the backlog in reminders set `TEAM_WATCH_PENDING_BOARD=1` (the panel and the digest always
+  be pure noise; to include the backlog in reminders set `TEAM_PULSE_PENDING_BOARD=1` (the panel and the digest always
   show them anyway).
 
 ## 8d. Board and report parsing must tolerate human edits

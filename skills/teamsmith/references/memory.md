@@ -9,7 +9,7 @@
 
 The PM is the only role that spans tasks, restarts and time: a worker agent is one short session with one brief,
 while the PM holds the roadmap, the decision history and the constraints that were learned the hard way. When the
-watchdog raises the PM again — or a human opens a new session — someone has to know *why* the interface looks like
+the pulse raises the PM again — or a human opens a new session — someone has to know *why* the interface looks like
 this, which option was already rejected, and which trap cost a day last time.
 
 Memory is what stops three failure modes we have actually hit:
@@ -63,10 +63,10 @@ placeholder values, so the first session can copy it into memory entry by entry.
 
 The PM prompt gives the two moments; in detail:
 
-**On start** (raised by the watchdog, or a new session): with memory available, `ctx_search` for the project's
+**On start** (raised by the pulse, or a new session): with memory available, `ctx_search` for the project's
 existing constraints, the last progress and the options that were already rejected — *before* re-deriving them.
 Without it, read `DECISIONS.md`, the roadmap's leftovers and the newest thread entries. Then the ordinary waking
-routine: `team watchdog status` → `team digest` → `team inbox --ack` → `team resume --dry-run`
+routine: `team pulse status` → `team digest` → `team inbox --ack` → `team resume --dry-run`
 (see [workflows.md](workflows.md) I).
 
 **On wrap-up** (after a delivery or a decision): ① land the conclusion and this round's evidence on disk — report,
@@ -82,7 +82,7 @@ it is interesting. A memory entry that survived a rewrite of the thing it descri
 | Event | What happens to memory | What to do |
 |---|---|---|
 | `/compact` (or automatic compaction) | history is summarised; the raw turns stay retrievable through `ctx_search` / `ctx_expand` | nothing — this is what memory tooling is for |
-| Restart (`pi -c`, or the watchdog bringing the PM up) | the session continues, so the memory attached to it continues too | re-read `state/watchdog.log` and the newest thread entries to find where you stopped; do not redo finished work |
+| Restart (`pi -c`, or the pulse bringing the PM up) | the session continues, so the memory attached to it continues too | re-read `state/watchdog.log` and the newest thread entries to find where you stopped; do not redo finished work |
 | `/reload` (skill updated on disk) | the skill text in the *current context* may still be the old one | re-read the file you are about to rely on; `team version --check` tells you whether the loaded version is current |
 | The worktree is moved or renamed | sessions are keyed by **cwd**, so the memory of that path can be orphaned | never move an agent worktree ([protocol.md](protocol.md) §3, [troubleshooting.md](troubleshooting.md) §2); if it already happened, treat it as a new session and rebuild from disk |
 | A different machine | nothing is shared: memory is per session and per machine | anything that must travel goes to disk or a `team meeting` — see §7 |
