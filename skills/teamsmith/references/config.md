@@ -171,7 +171,8 @@ one audit line to `state/outbox/forced.log`; `team outbox drop <n|all>` discards
 │   └── state/             # runtime state (gitignored): <agent>.env (the durable record),
 │                          #   pm.pid (pid of the PM this tool started: the liveness proof),
 │                          #   notify-dedup, prompt-<agent>-<ID>.md (the prompt of this dispatch;
-│                          #   {prompt_file} points at it), patrol (watchdog.*)/capacity logs
+│                          #   {prompt_file} points at it), patrol (watchdog.*)/capacity logs,
+│                          #   draft.md (the console's compose draft)
 ├── AGENTS.md              # carries the <!-- teamsmith:begin --> protocol section (written/refreshed by init)
 ├── .worktrees/
 │   ├── <agent>/           # each agent's long-lived worktree (branch agent/<name>)
@@ -218,6 +219,11 @@ The PM is the one exception, and only because a guess about it was proven to lie
 "that pid is alive **and** its cwd is inside this project". The file is written by the start path only
 (`team_pm_start`); the read-only commands read it and never remove a stale entry (a dead pid simply fails the
 check). Without it, a freshly created, still-empty pane was reported as `running:tmux`.
+
+`state/draft.md` is the console's compose draft (pulse-console B2): written only by the panel process while a
+human types in the input line, restored by the next `m`, and cleared once a send lands (delivered, queued or
+held). A missing file means an empty draft — the next compose starts blank. `--print`/`--json` never read it,
+and no command other than `team monitor`'s TUI writes it.
 
 ## 4. Environment variables (usable without writing them into the config)
 

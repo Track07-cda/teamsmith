@@ -43,26 +43,26 @@ This batch is the D26 precondition: the compose entry must not ship on the block
 
 ### 2. The input line and the draft (`panel`: "A human can write to the PM from any page")
 
-- [ ] 2.1 `m` opens the bottom input line on the (single) page; CJK-wide cursor and codepoint backspace.
+- [x] 2.1 `m` opens the bottom input line on the (single) page; CJK-wide cursor and codepoint backspace.
   Verify: pty fixture — after typing `中文ab`, `tmux display -p '#{cursor_x}'` reads 8 (E6 §1.2's shape).
-- [ ] 2.2 Ref-first draft state, `state/draft.md` persistence, `\r` normalization on intake. Verify: Esc → quit
+- [x] 2.2 Ref-first draft state, `state/draft.md` persistence, `\r` normalization on intake. Verify: Esc → quit
   → relaunch → `m` restores the draft; a pasted payload containing `\r` renders as separate lines.
-- [ ] 2.3 `C-e` editor relay with the render callback explicitly gated during `$EDITOR`. Verify: the vi fixture
+- [x] 2.3 `C-e` editor relay with the render callback explicitly gated during `$EDITOR`. Verify: the vi fixture
   round-trips a second line and the frame is intact (E6 drive2 T5's shape).
-- [ ] 2.4 Send runs `team draft send`; the receipt maps rc + outcome token to delivered / queued / held; the
+- [x] 2.4 Send runs `team draft send`; the receipt maps rc + outcome token to delivered / queued / held; the
   renderer never pastes into the PM pane. Verify: the busy-box fixture shows queued with one entry in
   `state/outbox/` and the PM pane's draft byte-identical; the clear-box fixture shows delivered.
-- [ ] 2.5 Compose-pause fixture `[real]`: with the slow reader stub, a refresh completes mid-compose.
+- [x] 2.5 Compose-pause fixture `[real]`: with the slow reader stub, a refresh completes mid-compose.
   Verify: the draft is intact and another block's timestamp advanced.
-- [ ] 2.6 Paste-is-one-message fixture: bracketed and plain paste of three lines. Verify: exactly one outbox
+- [x] 2.6 Paste-is-one-message fixture: bracketed and plain paste of three lines. Verify: exactly one outbox
   entry holding all three lines in both runs.
 
 ### 3. The action layer (`panel`: "The console is read-only except through three commands"; "The
    deferred-delivery queue is read, counted and never touched")
 
-- [ ] 3.1 `f` runs `team outbox flush` as a subprocess and shows its outcome; `s` runs `team standby on|off`.
+- [x] 3.1 `f` runs `team outbox flush` as a subprocess and shows its outcome; `s` runs `team standby on|off`.
   Verify: the fixture shows flush's own log line and `team watchdog status` reporting standby toggled twice.
-- [ ] 3.2 Write-sweep guard test: hash `state/`, `docs/`, the inbox; exercise every navigation key and several
+- [x] 3.2 Write-sweep guard test: hash `state/`, `docs/`, the inbox; exercise every navigation key and several
   undocumented keys. Verify: no file outside `state/draft.md`, `state/panel.conf`, `state/panel-page` changed.
 
 ## B3 — the console surface (apply brief 3)

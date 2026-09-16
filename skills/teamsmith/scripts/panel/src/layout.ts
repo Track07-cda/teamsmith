@@ -14,7 +14,7 @@ import type { ActivityBlock, FrameInput, PanelAgent, PanelData } from './types.j
 import { cell, dispWidth, rule, truncateW, truncateWStart } from './width.js'
 
 export const RESERVED_LABEL = '◇ 预留（第二步）：board 泳道 · reports/OpenSpec 计数 · 每 agent 成本/时长趋势'
-export const KEY_BAND = 'q 退出 · ↑/↓ 滚动 · r 刷新 · --print 纯文本 · --no-activity 关活动列'
+export const KEY_BAND = 'm 写信 · f 冲刷 · s 待命 · q 退出 · ↑/↓ 滚动 · r 刷新 · --print 纯文本'
 export const ACTIVITY_HEADING = '活动（仅本 session 在跑的窗口）'
 export const RECENT_HEADING = '最近动作'
 export const AGENT_HEADER = 'AGENT'

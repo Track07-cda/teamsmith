@@ -18,6 +18,25 @@ team monitor --json             # {"panel": {...}, "activity": [...]} (same guar
 team monitor --width N --height N
 ```
 
+## Compose and the three actions (pulse-console B2)
+
+`m` opens a bottom input line on the page; Enter sends through the guarded delivery path and the receipt is
+one of three honest states — **delivered**, **queued** (the PM's box is busy) or **held** (the payload is in
+`state/outbox/held/`). Esc keeps the draft in `state/draft.md` and the next `m` brings it back; `C-e` hands the
+draft to `$EDITOR` with rendering suspended for the whole handoff. `f` runs `team outbox flush` and `s`
+toggles standby (switching it on asks for a one-line reason in the same input line). The console itself never
+types into the PM's pane — every delivery is the owning command's, and the input line keeps refreshing the
+rest of the frame while it is open.
+
+The receipt is mapped from the send command's machine tokens, never from its human prose:
+`draft-send.sh` runs the same guarded `team draft send` function in one shell (the CLI's
+`TEAM_SEND_OUTCOME` / `TEAM_OUTBOX_RESULT` cannot cross a process boundary) and prints
+`rc=<n> outcome=<token> result=<token>` for the console to parse. It lives under `scripts/panel/**` and
+changes nothing in the CLI's own files.
+
+The console's own files live in the project's state directory (`--state-dir`, passed by `team monitor`):
+`state/draft.md` today (`state/panel.conf` and `state/panel-page` arrive with B3).
+
 ## What is committed, and why
 
 | Path | What it is |
@@ -26,6 +45,7 @@ team monitor --width N --height N
 | `src/*.tsx`, `src/*.ts` | the sources (layout, Ink app, width table, sanitizer, the bash data adapter, the CLI) |
 | `package.json`, `bun.lock` | the pinned build-time dependencies (`bun install --frozen-lockfile` is part of the build) |
 | `build.sh` | the one build command; it writes `panel.js` |
+| `draft-send.sh` | the send bridge: the guarded `team draft send` run in one shell, printing one machine line (rc + outcome tokens) for the receipt |
 | `tsconfig.json` | types only (`bunx tsc --noEmit` is a development check, not a gate) |
 
 ## Rebuilding it
@@ -44,8 +64,8 @@ The committed artifact at the time of writing:
 
 ```
 file:   skills/teamsmith/scripts/panel/panel.js
-size:   836171 bytes
-sha256: 6756491363e8a5615e02c14d209a2eab0e2e8606b3717ea0431cf05622707b79
+size:   843210 bytes
+sha256: ebed65002612aa02d240269df20a333a9901cbf77df5e12ee98a36eb824beb23
 pins:   ink 7.1.1 · react 19.3.0 · runtime floor: node >= 20 | bun >= 1.3
 ```
 

@@ -797,7 +797,7 @@ team_panel_text() {
 
 team_cmd_monitor() {
   local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_pulse=1
-  local mode="" width="" height="" activity_arg="" events=""
+  local mode="" width="" height="" activity_arg="" events="" state_dir=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --once) once=1; shift ;;
@@ -811,6 +811,7 @@ team_cmd_monitor() {
       --events) events="${2:?monitor: --events 需要数字}"; shift 2 ;;
       --width) width="${2:?monitor: --width 需要列数}"; shift 2 ;;
       --height) height="${2:?monitor: --height 需要行数}"; shift 2 ;;
+      --state-dir) state_dir="${2:?monitor: --state-dir 需要目录}"; shift 2 ;;
       -*) team_usage_die "monitor: 未知参数 $1" ;;
       *) team_usage_die "monitor: 多余参数 $1" ;;
     esac
@@ -822,6 +823,7 @@ team_cmd_monitor() {
   panel="$TEAM_SKILL_DIR/scripts/panel/panel.js"
   [ -f "$panel" ] || team_die "team monitor: 面板 bundle 缺失（$panel）——skills/teamsmith 安装不完整"
   local -a args=("$panel" --root "$TEAM_ROOT" --team-cli "$TEAM_SKILL_DIR/scripts/team"
+                 --state-dir "${state_dir:-$TEAM_STATE_DIR}"
                  --events "${events:-${TEAM_MONITOR_EVENTS:-4}}" --refresh "$interval"
                  --tick-every "$TEAM_PULSE_INTERVAL" --tick-log "$TEAM_STATE_DIR/watchdog.tick.log")
   [ -n "$mode" ] && args+=("$mode")
