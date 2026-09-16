@@ -260,6 +260,130 @@ assert_has "$TMP/boot-deps.log" "必需依赖还没就绪" "bootstrap 提示必�
 assert_has "$TMP/boot-deps.log" "@cortexkit/pi-magic-context" "bootstrap 给出 magic-context 的修复办法"
 assert_has "$TMP/boot-deps.log" "openspec init --tools none" "bootstrap 给出 spec 目录的确切修复命令"
 assert_has "$TMP/boot-deps.log" "TEAM_OPENSPEC_BIN" "bootstrap 给出 CLI 解析的降级/指定办法"
+
+# ---------------------------------------------------------------- 1c. bootstrap 的 PM 窗口名（M11）
+section "1c · bootstrap 的 PM 窗口名：约定不是现场（M11）"
+# 事故（本项目实测）：配置里 TEAM_PM_WINDOW="pi" —— bootstrap 把「当前窗口碰巧叫的名字」当成了约定
+# （旧写法 ${pmwin:-${det_win:-$TEAM_PM_WINDOW}}）。窗口后来一改名，配置和现场就互相撒谎：面板报
+# 「PM 窗口缺失」而 PM 明明活着，照着提示 up 还会另开一个窗口（两个 PM）。
+# 这一节钉死两件事：写进配置的永远是约定（pm），当前窗口顺手对到约定上；医生要能把漂移说成人话。
+#
+# 假 tmux：回答「当前窗口叫什么 / session 里有哪些窗口 / 哪个 pane 里跑着谁」，并把每次调用记进日志。
+# 真 tmux 会碰调用者自己的现场，而这里要证明的是「工具下了什么命令」，所以用 shim
+# （与 §2 的空目标 send_text 夹具同族；rename 真的落地由本节 ⑥ 的真沙盒窗口证明）。
+M11_SHIM="$TMP/m11-shim"; mkdir -p "$M11_SHIM"
+cat > "$M11_SHIM/tmux" <<'M11SHIM'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${M11_SHIM_LOG:-/dev/null}"
+case "${1:-}" in
+  display-message)
+    case "$*" in
+      *pane_pid*)
+        case "$*" in
+          *":${M11_SHIM_PANE_WIN:-pm}"*) printf '%s\n' "${M11_SHIM_PANE_PID:-1}" ;;
+          *) printf '1\n' ;;
+        esac ;;
+      *window_name*)       printf '%s\n' "${M11_SHIM_WIN:-pm}" ;;
+      *session_name*)      printf '%s\n' "${M11_SHIM_SESSION:-m11-shim}" ;;
+      *pane_current_path*) printf '%s\n' "${M11_SHIM_CWD:-/tmp}" ;;
+      *)                   printf '\n' ;;
+    esac ;;
+  list-windows) printf '%s\n' ${M11_SHIM_WINDOWS:-pm} ;;
+  has-session)  [ "${M11_SHIM_HAS_SESSION:-1}" = "1" ] || exit 1 ;;
+esac
+exit 0
+M11SHIM
+chmod +x "$M11_SHIM/tmux"
+m11_repo() { # <目录>：一个新的 git 仓库（bootstrap 要能写配置）
+  rm -rf "$1"; mkdir -p "$1"
+  ( cd "$1" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+      && echo "# $1" > README.md && git add -A && git commit -qm init )
+}
+m11_boot() { # <仓库> <session> <当前窗口名> <标记> [额外参数...]
+  local repo="$1" sess="$2" win="$3" tag="$4"; shift 4
+  : > "$TMP/m11-calls-$tag.log"
+  ( cd "$repo" && PATH="$M11_SHIM:$PATH" TMUX=/m11-fake TMUX_PANE=%1 \
+      M11_SHIM_LOG="$TMP/m11-calls-$tag.log" M11_SHIM_WIN="$win" M11_SHIM_SESSION="$sess" \
+      M11_SHIM_CWD="$repo" M11_SHIM_WINDOWS="$win" \
+      $TEAM bootstrap --agents dev --session "$sess" --no-pulse "$@" ) >"$TMP/m11-boot-$tag.log" 2>&1
+}
+
+# ① --print 只看计划：不改名、不改文件，计划里的 PM 窗口名已经是约定 pm
+M11A="$TMP/m11-print-repo"; m11_repo "$M11A"
+m11_boot "$M11A" m11-print-sess pi print --print \
+  && ok "M11 ①：--print 退出码 0" || { bad "M11 ①：--print 失败"; tail -5 "$TMP/m11-boot-print.log"; }
+assert_has "$TMP/m11-boot-print.log" "--pm-window pm" "M11 ①：计划里的 PM 窗口名是约定 pm"
+assert_has "$TMP/m11-boot-print.log" "rename-window -t m11-print-sess:pi pm" "M11 ①：--print 给出确切的改名命令"
+assert_not "$TMP/m11-calls-print.log" "rename-window" "M11 ①：--print 一个键都没按"
+assert_not_file "$M11A/.pi/team/config.sh" "M11 ①：--print 没写配置"
+
+# ② 当前窗口叫 pi：配置必须写 pm，并把当前窗口改名成 pm（约定 > 现场）
+M11B="$TMP/m11-conv-repo"; m11_repo "$M11B"
+m11_boot "$M11B" m11-conv-sess pi conv \
+  && ok "M11 ②：bootstrap 退出码 0" || { bad "M11 ②：bootstrap 失败"; tail -5 "$TMP/m11-boot-conv.log"; }
+assert_has "$M11B/.pi/team/config.sh" 'TEAM_PM_WINDOW="pm"' "M11 ②：配置写的是约定 pm，不是当前窗口 pi"
+assert_has "$TMP/m11-calls-conv.log" "rename-window -t m11-conv-sess:pi pm" "M11 ②：下了确切的改名命令"
+assert_has "$TMP/m11-boot-conv.log" "当前窗口 pi → pm" "M11 ②：输出里说明改了名"
+
+# ③ 窗口已经叫 pm：什么都不用动（幂等、不乱按键）
+M11C="$TMP/m11-same-repo"; m11_repo "$M11C"
+m11_boot "$M11C" m11-same-sess pm same
+assert_has "$M11C/.pi/team/config.sh" 'TEAM_PM_WINDOW="pm"' "M11 ③：本来就一致时也写 pm"
+assert_not "$TMP/m11-calls-same.log" "rename-window" "M11 ③：一致时不改任何名字"
+
+# ④ --pm-window 是人给的约定：写配置照给，但**不**替人搬窗口（只打印命令）
+M11D="$TMP/m11-explicit-repo"; m11_repo "$M11D"
+m11_boot "$M11D" m11-exp-sess pi explicit --pm-window tool
+assert_has "$M11D/.pi/team/config.sh" 'TEAM_PM_WINDOW="tool"' "M11 ④：显式 --pm-window 照给"
+assert_not "$TMP/m11-calls-explicit.log" "rename-window" "M11 ④：只有 pm 这个约定才代改名，别的名字只打印命令"
+assert_has "$TMP/m11-boot-explicit.log" "改名：tmux rename-window -t m11-exp-sess:pi tool" "M11 ④：打印出确切的改名命令"
+
+# ⑤ doctor：配置说 pi、现场窗口 pm 里跑着配置的 PM CLI → 说人话报警（并且不劝人直接 up）
+M11E="$TMP/m11-drift-repo"; m11_repo "$M11E"
+mkdir -p "$M11E/.pi/team" "$M11E/docs/team"
+printf 'TEAM_PROJECT="m11-drift"\nTEAM_SESSION="m11-drift-sess"\nTEAM_PM_WINDOW="pi"\nTEAM_AGENTS="dev"\nTEAM_DOCS_DIR="docs/team"\nTEAM_PI_BIN="sleep"\n' \
+  > "$M11E/.pi/team/config.sh"
+( cd "$M11E" && exec sleep 300 ) & M11_PID=$!   # 真进程顶替 PM CLI：argv（sleep）与 cwd（本项目）都是真的
+sleep 0.3
+m11_drift_doctor() { # <配置里的 PM 窗口名> <日志文件>
+  sed -i "s|^TEAM_PM_WINDOW=.*|TEAM_PM_WINDOW=\"$1\"|" "$M11E/.pi/team/config.sh"
+  ( cd "$M11E" && PATH="$M11_SHIM:$PATH" M11_SHIM_LOG="$TMP/m11-doctor-calls.log" \
+      M11_SHIM_WIN=pm M11_SHIM_SESSION=m11-drift-sess M11_SHIM_WINDOWS="pm bash" \
+      M11_SHIM_PANE_WIN=pm M11_SHIM_PANE_PID="$M11_PID" $TEAM doctor ) >"$2" 2>&1 || true
+}
+m11_drift_doctor pi "$TMP/m11-doctor-drift.log"
+assert_has "$TMP/m11-doctor-drift.log" "PM 窗口名" "M11 ⑤：doctor 有「PM 窗口名」这一条"
+assert_has "$TMP/m11-doctor-drift.log" "改名漂移" "M11 ⑤：点明是改名漂移（不是笼统的「窗口缺失」）"
+assert_has "$TMP/m11-doctor-drift.log" "在跑 PM 的窗口叫 'pm'" "M11 ⑤：点名现场窗口"
+assert_has "$TMP/m11-doctor-drift.log" "rename-window -t m11-drift-sess:pm pi" "M11 ⑤：给出对齐名字的确切命令"
+assert_has "$TMP/m11-doctor-drift.log" "两个 PM" "M11 ⑤：点明直接 up 的后果（会开出第二个 PM）"
+m11_drift_doctor pm "$TMP/m11-doctor-ok.log"
+assert_not "$TMP/m11-doctor-ok.log" "改名漂移" "M11 ⑤（负对照）：配置与现场一致时不刷漂移行"
+kill "$M11_PID" 2>/dev/null || true
+
+# ⑥ 真沙盒：窗口碰巧叫 pi 的 session 里跑 bootstrap —— 配置写 pm，窗口真的被 rename-window 改掉。
+# ⑤ 用的是假 tmux（证明命令），这里用真 tmux（证明落地）：两条一起才叫「顺手改了名」。
+if [ "$FAST" = "1" ]; then
+  fast_skip "1c·M11 真沙盒窗口" "要真实 tmux 窗口（假 tmux 证明不了 rename-window 真的落地）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  M11L="$TMP/m11-live-repo"; m11_repo "$M11L"
+  M11_SESS="teamsmith-smoke-m11-$$"
+  tmux kill-session -t "$M11_SESS" 2>/dev/null || true
+  tmux new-session -d -s "$M11_SESS" -n pi -c "$M11L" 2>/dev/null || true
+  tmux set-window-option -t "$M11_SESS:pi" automatic-rename off 2>/dev/null || true
+  tmux respawn-pane -k -t "$M11_SESS:pi" \
+    "cd '$M11L' && bash '$SKILL_DIR/scripts/team' bootstrap --agents dev --session $M11_SESS --no-pulse >'$TMP/m11-live.log' 2>&1; echo \$? >'$TMP/m11-live.rc'; exec sleep 300"
+  for i in $(seq 1 80); do [ -s "$TMP/m11-live.rc" ] && break; sleep 0.25; done
+  assert_eq "M11 ⑥（真沙盒）：bootstrap 退出码 0" "$(tr -dc 0-9 < "$TMP/m11-live.rc" 2>/dev/null)" "0"
+  assert_has "$M11L/.pi/team/config.sh" 'TEAM_PM_WINDOW="pm"' "M11 ⑥（真沙盒）：配置写约定 pm（不是窗口碰巧的名字）"
+  assert_eq "M11 ⑥（真沙盒）：窗口真的被改名成 pm" \
+    "$(tmux list-windows -t "$M11_SESS" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')" "pm "
+  assert_has "$TMP/m11-live.log" "当前窗口 pi → pm" "M11 ⑥（真沙盒）：输出里说了改名"
+  tmux kill-session -t "$M11_SESS" 2>/dev/null || true
+else
+  printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过 M11 真沙盒夹具）"
+fi
 cd "$REPO"
 
 # ---------------------------------------------------------------- 2. init
@@ -4521,7 +4645,8 @@ if [ "$FAST_REQ" = "1" ]; then
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
   for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "11·close 后窗口" "11b·巡检/pulse" "11b2·PM 存活证据链" \
              "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
-             "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测" "11j·pulse 迁移夹具"; do
+             "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测" "11j·pulse 迁移夹具" \
+             "1c·M11 真沙盒窗口"; do
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
     else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi
   done

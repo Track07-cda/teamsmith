@@ -254,6 +254,44 @@ team_migration_reasons() {
   return 0
 }
 
+# ---------------------------------------------------------------- PM 窗口名漂移（M11）
+# 「配置里的 PM 窗口名」与「现场窗口」不符时，医生必须把这句人话说出来：
+# 事故（本项目实测）：bootstrap 把当时窗口碰巧的名字写进配置（写成 pi），窗口后来被改回 pm、配置不改 ——
+# 面板报「PM 窗口缺失」而 PM 明明活着；更糟的是照着「→ team up」会照配置另开一个窗口（两个 PM）。
+# 判据与 team_pm_state 的「人工启动的 PM」同一标准（argv 命中配置的 PM CLI + cwd 在本项目里），
+# 再排掉名册 / 巡检 / 草稿窗口（它们跑的是同一个 agent 可执行文件）。认不出来就返回空 ——
+# 这条检查宁可沉默，也不许猜一个窗口名字出来。
+team_is_agentish_window() { # <窗口名> → 0 = 名册 / 巡检 / 草稿窗口（不能当成 PM 现场）
+  local w="${1:-}" a
+  [ -n "$w" ] || return 1
+  [ "$w" = "$(team_pulse_window)" ] && return 0
+  case "$w" in pulse|watchdog|draft) return 0 ;; esac
+  for a in $(team_agents); do
+    [ "$w" = "$a" ] && return 0
+    [ "$w" = "$(team_state_get "$a" window "$a")" ] && return 0
+  done
+  return 1
+}
+
+team_pm_window_drift() { # → 现场像 PM 的窗口名（空格分隔，可能多个）；没有则空
+  local w pid cwd out=""
+  team_have_cmd tmux || return 0
+  team_tmux_has_session "$TEAM_SESSION" || return 0
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    [ "$w" = "$TEAM_PM_WINDOW" ] && continue
+    team_is_agentish_window "$w" && continue
+    pid="$(team_pm_pane_agent_pid "$TEAM_SESSION:$w" 2>/dev/null || true)"
+    [ -n "$pid" ] || continue
+    cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
+    [ -n "$cwd" ] || continue
+    team_cwd_in_project "$cwd" || continue
+    out="${out:+$out }$w"
+  done < <(team_tmux_windows "$TEAM_SESSION")
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 team_cmd_doctor() {
   local fails=0 warns=0
   check() { printf '  %-24s ' "$1"; }
@@ -383,13 +421,29 @@ team_cmd_doctor() {
       fi
     else warn "无法探测内存/swap（可设 TEAM_MEMINFO_FILE 指定 meminfo 文件）"; fi
 
+  # M11：PM 窗口名漂移（配置说 A、现场的 PM 在 B）。只在真看得见漂移时开口（干净项目不刷行，
+  # 与「迁移指引」同一风格），而且必须把话说到底：up 只认配置，会另开一个 A 窗口 → 两个 PM。
+  local pmwin_drift=""
+  if team_have_cmd tmux && team_tmux_has_session "$TEAM_SESSION" \
+     && ! team_tmux_has_window "$TEAM_SESSION" "$TEAM_PM_WINDOW"; then
+    pmwin_drift="$(team_pm_window_drift)"
+    if [ -n "$pmwin_drift" ]; then
+      check "PM 窗口名"
+      warn "配置写的是 '$TEAM_PM_WINDOW'，但 $TEAM_SESSION 里在跑 PM 的窗口叫 '$pmwin_drift'（改名漂移）：先对齐名字再动手 —— $TEAM_CLI up 只认配置，会另开一个 '$TEAM_PM_WINDOW' 窗口（两个 PM）。二选一：tmux rename-window -t $TEAM_SESSION:${pmwin_drift%% *} $TEAM_PM_WINDOW ／ 把配置改成 TEAM_PM_WINDOW=\"${pmwin_drift%% *}\""
+    fi
+  fi
+
   check "PM 存活"; local pmstate; pmstate="$(team_pm_state)"
     case "$pmstate" in
       running:*) pass "pi 在运行（${pmstate#running:}）" ;;
       idle:*)    warn "窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 停在 ${pmstate#idle:}：PM 没在跑 → team up" ;;
       unknown:*) warn "窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 里不是 PM（${pmstate#unknown:}）：不算存活 → team up（会替换它）" ;;
       foreign:*) warn "窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 被别的项目的进程占着（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
-      *)         warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在 → team up" ;;
+      *) if [ -n "$pmwin_drift" ]; then
+           warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在，但 '$pmwin_drift' 里跑着 PM（见上一条「PM 窗口名」）→ 先对齐名字，别直接 up"
+         else
+           warn "PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW 不存在 → team up"
+         fi ;;
     esac
 
   check "巡检（pulse）"; local legacy_note; legacy_note="$(team_pulse_legacy_suffix)"

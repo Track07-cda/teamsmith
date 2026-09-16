@@ -2,7 +2,7 @@
 # teamsmith · bootstrap：一条命令把项目初始化到“可以派单”的状态（幂等，可反复跑）
 #
 # 设计给 PM 用：PM 在新项目里被启动后的第一件事就是跑它。它会
-#   ① 探测当前 tmux session/窗口（PM 自己就在里面）→ 写进配置   ② init 配置 + 文档骨架 + AGENTS 段落
+#   ① 探测当前 tmux session（PM 自己就在里面）→ 写进配置；PM 窗口名一律用约定（pm，M11）   ② init 配置 + 文档骨架 + AGENTS 段落
 #   ③ 按名册建 agent worktree                                    ④ 起巡检窗口（PM 负责配置 pulse）
 #   ⑤ 打印“下一步清单”（PM 照做即可开始派单）
 #
@@ -16,6 +16,14 @@ team_config_set_in_file() { # <file> <KEY> <value>
   else
     printf '%s="%s"\n' "$k" "$v" >> "$f"
   fi
+}
+
+# 把「当前窗口」改名成 PM 窗口名（M11）。只在已经证明过这个窗口属于本项目、且目标名没被别的窗口占着时
+# 才调用；空目标一律拒绝 —— tmux 的 `-t ""` 等于「当前窗口」，一个空变量就能改错别人的窗口（M6.3 那族）。
+team_bootstrap_rename_pm_window() { # <session> <from> <to>
+  local sess="${1:-}" from="${2:-}" to="${3:-}"
+  [ -n "$sess" ] && [ -n "$from" ] && [ -n "$to" ] || return 1
+  tmux rename-window -t "$sess:$from" "$to" 2>/dev/null
 }
 
 team_detect_install_cmd() {
@@ -66,7 +74,31 @@ team_cmd_bootstrap() {
     esac
   fi
   session="${session:-${det_sess:-$TEAM_SESSION}}"
-  pmwin="${pmwin:-${det_win:-$TEAM_PM_WINDOW}}"
+  # M11：PM 窗口名是**约定**（TEAM_PM_WINDOW，默认 pm），不是「当前窗口碰巧叫什么」。
+  # 旧写法 ${pmwin:-${det_win:-$TEAM_PM_WINDOW}} 把现场当成了约定：配置里写下「当时正好是这样」的名字
+  # （本项目实测写进去过 pi），窗口后来一改名，配置和现场就互相撒谎 —— 面板报「PM 窗口缺失」而 PM
+  # 明明活着，照着提示 up 还会另开一个窗口（两个 PM）。--pm-window 是人给的约定，照给。
+  pmwin="${pmwin:-${TEAM_PM_WINDOW:-pm}}"
+  # 现场对齐：当前窗口不叫 pmwin 时把账当场结清 —— 属于本项目、目标名没被占、而且目标就是约定名 pm
+  # 时顺手改名；其它情形只把确切的命令打出来，不替人搬窗口。
+  local rename_cmd="" rename_note=""
+  if [ -n "$det_win" ] && [ "$det_win" != "$pmwin" ]; then
+    rename_cmd="tmux rename-window -t $session:$det_win $pmwin"
+    if [ "$print_only" = "1" ]; then
+      rename_note="当前窗口叫 $det_win ≠ PM 窗口 $pmwin（--print：只看计划）"
+    elif [ "$det_sess" != "$session" ]; then
+      rename_note="当前窗口叫 $det_win（属于 $det_sess），不是要写的 $session：不代改"
+    elif team_tmux_has_window "$session" "$pmwin"; then
+      rename_note="当前窗口叫 $det_win，但 $session:$pmwin 已经有窗口了：不代改"
+    elif [ "$pmwin" != "pm" ]; then
+      rename_note="当前窗口叫 $det_win ≠ 配置里的 PM 窗口 $pmwin：不代改（约定名是 pm）"
+    elif team_bootstrap_rename_pm_window "$session" "$det_win" pm; then
+      rename_note="当前窗口 $det_win → pm（PM 窗口名是约定，不跟着现场走）"
+      rename_cmd=""
+    else
+      rename_note="当前窗口叫 $det_win，改名失败：请手动改名"
+    fi
+  fi
   agents="${agents:-${TEAM_AGENTS:-dev}}"
   local gates; gates="$(team_detect_gates)"
   local install_cmd; install_cmd="$(team_detect_install_cmd)"
@@ -76,6 +108,8 @@ team_cmd_bootstrap() {
   printf '  仓库        %s\n' "$TEAM_MAIN_ROOT"
   printf '  tmux        %s:%s%s\n' "$session" "$pmwin" \
      "$([ -n "$det_sess" ] && echo '（探测自当前窗口）' || ([ -n "${TMUX:-}" ] && echo '（当前窗口不属于本项目 → 用配置/项目名）' || echo ''))"
+  if [ -n "$rename_note" ]; then printf '      %s\n' "$rename_note"; fi
+  if [ -n "$rename_cmd" ]; then printf '      %s\n' "改名：$rename_cmd"; fi
   printf '  名册        %s\n' "$agents"
   printf '  版本控制    %s ｜ 门禁 %s ｜ 安装 %s\n' "$vcs" "${gates:-<无>}" "${install_cmd:-<无>}"
   printf '  巡检        %s\n' "$([ "$with_pulse" = "1" ] && echo "tmux 窗口 $(team_slug "$session" 2>/dev/null || echo ''):$(team_pulse_window)（同 session）" || echo '跳过')"
