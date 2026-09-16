@@ -24,8 +24,6 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
-## v1.36.0 · 2026-09-16
-
 ## v1.37.0 · 2026-09-16
 
 **巡检改名：watchdog → pulse（openspec change `rename-watchdog-to-pulse`，P7/P8）**

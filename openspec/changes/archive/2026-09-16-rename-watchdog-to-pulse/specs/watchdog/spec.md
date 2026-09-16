@@ -42,6 +42,13 @@ With nothing pending it MUST do nothing beyond the log line: no message typed in
 - **WHEN** `team watch --once` runs
 - **THEN** the tick logs the pending batch and the PM window receives one `[pulse] pending: …` line
 
+#### Scenario: A dirty PM input box holds the wake instead of gluing it
+
+- **GIVEN** `docs/team/inbox/pm.md` contains an unread line and the PM window's input box holds a draft
+- **WHEN** `team watch --once` runs
+- **THEN** the PM window still shows exactly that draft, `state/nudges.log` gained one line, and `state/outbox/` holds
+  one entry whose payload is the `[pulse] pending: …` text
+
 ### Requirement: Repeated reminders for the same batch are rate limited
 
 The pulse SHALL NOT repeat a reminder for an unchanged pending batch more often than `TEAM_PULSE_NUDGE_GAP`
@@ -53,6 +60,13 @@ seconds (default 900).
 - **WHEN** `team watch --once` runs again
 - **THEN** no new `[pulse] pending:` line is typed into the PM window
 
+
+#### Scenario: Standby suppresses the nudge
+
+- **GIVEN** `team standby on --reason "waiting for the user"` and a pending batch
+- **WHEN** `team watch --once` runs
+- **THEN** the PM window receives no nudge, the tick is logged in `state/watchdog.log`, and
+  `team standby status` reports standby on with that reason
 ### Requirement: Standby stops the wake-ups but keeps the backlog visible
 
 With `team standby on --reason "…"`, patrol ticks MUST NOT nudge or start the PM; the pending work MUST still be
@@ -73,6 +87,17 @@ names (`state/watchdog.log`, `state/watchdog.pid`, `state/watchdog.last`, `state
 - **WHEN** `team watch --once` runs
 - **THEN** `state/watchdog.last` is updated and no `state/pulse.*` file exists
 
+
+#### Scenario: The quota refuses further restarts
+
+- **GIVEN** the PM is not running and the restart log already shows `TEAM_WATCH_MAX_RESTARTS` starts in the last hour
+- **WHEN** a tick with pending work runs
+- **THEN** it does not start a PM process and logs a warning about the exceeded quota
+
+#### Scenario: Capacity is recorded per tick
+
+- **WHEN** two patrol ticks run
+- **THEN** `state/capacity.log` has two new lines, each with a timestamp and the memory/swap figures
 ### Requirement: Restart quota and capacity logging
 
 The pulse SHALL start the PM at most `TEAM_PULSE_MAX_RESTARTS` times per hour (default 5). Beyond that it MUST
