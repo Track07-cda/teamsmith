@@ -6638,6 +6638,160 @@ else
   cond_skip "26-m·真 pane" "本机没有 tmux"
 fi
 
+# ---------------------------------------------------------------- 27. 面板异步数据层（pulse-console B1，P12）
+# 契约来源：openspec/changes/pulse-console/specs/panel/spec.md「Frame assembly is asynchronous,
+# cached and never blocks input」+ tasks.md B1（0.1/1.1–1.6）。
+# 分段：27-a 块协议（一帧多块、坏块只坏自己）/ 27-b 源坏 → 只降级那一块 / 27-c 快速读者与旧读者同值 /
+#      27-d 装配红线 + 渲染路径无同步 spawn。真进程部分（按键失真、60s CPU）是
+#      tests/panel-keyprobe.sh 与 tests/panel-cpu.sh（报告里贴日志），smoke 只钉可判定的。
+section "27 · 面板异步数据层（pulse-console B1：块协议 / 块隔离 / 快速读者等价 / 装配时间）"
+
+P27R="$TMP/p27-repo"
+P27SESS="teamsmith-smoke-p27-$$"
+mkdir -p "$P27R"
+( cd "$P27R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo "# p27" > README.md && git add -A && git commit -qm init )
+p27() { ( cd "$P27R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+            -u TEAM_STATE_DIR -u TEAM_JS_BIN -u TEAM_REQUIRE_JS -u TEAM_MONITOR_ACTIVITY -u TEAM_MONITOR_UI \
+            -u TEAM_AGENT_LOG_GLOB "$@" ); }
+p27 $TEAM init --session "$P27SESS" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/p27-init.log" 2>&1 \
+  && ok "27 夹具：沙盒 init 退出码 0" || { bad "27 夹具：init 失败"; tail -3 "$TMP/p27-init.log"; }
+mkdir -p "$P27R/openspec" "$P27R/.pi/team/state" "$P27R/docs/team/reports" "$P27R/docs/team/reviews"
+printf '2026-01-01T00:00:01Z RAM 可用 4000MB ｜ 磁盘 swap 空闲 3000MB ｜ 估算可再加 5 个 agent\n' \
+  > "$P27R/.pi/team/state/capacity.log"
+
+# 报告夹具：todo 行（真待复验）、done 行（看板已裁决）、未知 id、closure 名字、草稿、继承副本、
+# 带 '-' 的任务 id（最长前缀解析）、主工作树与工作树副本（rank 1/2）
+p27 $TEAM board add P27A "P27 夹具报告" dev - >/dev/null 2>&1 || true
+p27 $TEAM board add P27B "P27 夹具报告" dev - >/dev/null 2>&1 || true
+p27 $TEAM board add P27-2 "P27 夹具报告" dev - >/dev/null 2>&1 || true
+p27 $TEAM board set P27B done >/dev/null 2>&1 || true
+printf '# P27A · 夹具报告\n\nagent: dev\n' > "$P27R/docs/team/reports/P27A-dev.md"
+printf '# P27B · 夹具报告\n\nagent: dev\n' > "$P27R/docs/team/reports/P27B-dev.md"
+printf '# P27-2 · 夹具报告\n\nagent: dev\n' > "$P27R/docs/team/reports/P27-2-dev.md"
+printf '# P27C · 结项\n' > "$P27R/docs/team/reports/P27C-closure.md"
+printf '# 未知任务 · 不是报告\n' > "$P27R/docs/team/reports/P27D-dev.md"
+printf '# P27A · 复验\n' > "$P27R/docs/team/reviews/P27A.md"
+( cd "$P27R" && git worktree add -q -b task/P27E-x .worktrees/dev main ) >/dev/null 2>&1 || true
+P27WT="$P27R/.worktrees/dev"
+printf 'task=P27G\n' > "$P27R/.pi/team/state/dev.env"
+if [ -d "$P27WT" ]; then
+  mkdir -p "$P27WT/docs/team/reports"
+  printf '# P27E · 工作树正本\n' > "$P27WT/docs/team/reports/P27E-dev.md"     # rank 1：文件名归属
+  printf '# P27B · 继承副本\n' > "$P27WT/docs/team/reports/P27B-verify.md"   # rank 2：别人的旧拷贝
+  printf '# P27H · 继承副本（本树没有正本）\n' > "$P27WT/docs/team/reports/P27H-verify.md"  # rank 2，主树无副本
+  p27 $TEAM board add P27E "P27 夹具报告" dev - >/dev/null 2>&1 || true
+  p27 $TEAM board add P27G "P27 夹具报告" dev - >/dev/null 2>&1 || true
+  p27 $TEAM board add P27H "P27 夹具报告" dev - >/dev/null 2>&1 || true
+  ( cd "$P27WT" && git add -A && git commit -qm "P27 夹具：工作树报告" ) >/dev/null 2>&1 || true
+  printf '# P27G · 还没提交的草稿\n' > "$P27WT/docs/team/reports/P27G-dev.md"   # 草稿：未提交
+fi
+
+# ---- 27-a 块协议：一帧拆成块，块名是闭集，每块自己一份 JSON
+p27 $TEAM __panel-data --block frame >"$TMP/p27-frame.json" 2>"$TMP/p27-frame.err"
+if [ $? -eq 0 ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "project" in d and "standby" in d' "$TMP/p27-frame.json" 2>/dev/null; then
+  ok "27-a 块协议：--block frame 一份合法 JSON（project/standby）"
+else
+  bad "27-a 块协议：--block frame 失败"; tail -2 "$TMP/p27-frame.err"
+fi
+P27_BLOCK_BAD=0
+for _b in frame pm pending outbox capacity agents recent activity; do
+  p27 $TEAM __panel-data --block "$_b" >"$TMP/p27-block-$_b.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/p27-block-$_b.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
+done
+assert_eq "27-a 块协议：八个块名都是 rc=0 + 合法 JSON" "$P27_BLOCK_BAD" "0"
+if p27 $TEAM __panel-data --block nope >/dev/null 2>&1; then
+  bad "27-a 块协议：未知块名应非 0"
+else
+  ok "27-a 块协议：未知块名非 0（闭集）"
+fi
+assert_has "$SKILL_DIR/scripts/panel/src/data.ts" "--block" "27-a 块协议：data.ts 用的是块协议"
+if grep -n 'spawnSync' "$SKILL_DIR/scripts/panel/src/data.ts" >"$TMP/p27-spawnsync.log" 2>&1; then
+  bad "27-a 无同步 spawn：data.ts 里还有 spawnSync（$(head -1 "$TMP/p27-spawnsync.log")）"
+else
+  ok "27-a 无同步 spawn：data.ts 里没有 spawnSync（渲染路径不再阻塞事件循环）"
+fi
+
+# ---- 27-b 源坏了只降级那一块：BOARD.md 不可读 + 没有 capacity.log
+chmod 000 "$P27R/docs/team/BOARD.md"
+rm -f "$P27R/.pi/team/state/capacity.log"
+p27 $TEAM monitor --print --width 120 --height 29 >"$TMP/p27-degraded.txt" 2>"$TMP/p27-degraded.err"
+P27_DEG_RC=$?
+assert_eq "27-b 块隔离：--print 在坏源下退出 0" "$P27_DEG_RC" "0"
+assert_has "$TMP/p27-degraded.txt" "待办 —" "27-b 块隔离：读不了的 BOARD 让待办块渲染 —"
+assert_has "$TMP/p27-degraded.txt" "容量 —" "27-b 块隔离：没有 capacity.log 让容量块渲染 —"
+assert_has "$TMP/p27-degraded.txt" "AGENT" "27-b 块隔离：其余块照常渲染（agent 表）"
+assert_has "$TMP/p27-degraded.txt" "PM " "27-b 块隔离：其余块照常渲染（PM 行）"
+assert_not "$TMP/p27-degraded.txt" "延后投递 —" "27-b 块隔离：队列块没有被牵连"
+p27 $TEAM __panel-data --block pending >/dev/null 2>&1
+assert_eq "27-b 块隔离：--block pending 对坏源返回非 0" "$?" "1"
+p27 $TEAM __panel-data --block capacity >/dev/null 2>&1
+assert_eq "27-b 块隔离：--block capacity 对坏源返回非 0" "$?" "1"
+p27 $TEAM __panel-data --block pm >/dev/null 2>&1
+assert_eq "27-b 块隔离：--block pm 不受影响（rc=0）" "$?" "0"
+chmod 644 "$P27R/docs/team/BOARD.md"
+printf '2026-01-01T00:00:02Z RAM 可用 4001MB ｜ 磁盘 swap 空闲 3000MB ｜ 估算可再加 5 个 agent\n' \
+  > "$P27R/.pi/team/state/capacity.log"
+
+# ---- 27-c 快速读者与旧读者同值（同一份夹具、逐行对照）
+cat > "$TMP/p27-cmp.sh" <<'EOS'
+set -uo pipefail
+export TEAM_ROOT="$1" TEAM_CONFIG_FILE="" TEAM_ASSUME_YES=0 TEAM_SKILL_DIR_OVERRIDE=""
+D="$2/scripts"
+TEAM_SKILL_DIR="$2"
+# shellcheck disable=SC1090
+. "$D/lib/common.sh"
+TEAM_SKILL_DIR="$(team_skill_dir)"
+for f in "$D"/lib/cmd-*.sh; do
+  # shellcheck disable=SC1090
+  . "$f"
+done
+team_load_config
+team_require_docs
+team_report_primary_candidates > "$3"
+team_panel_report_primary_candidates_fast > "$4"
+printf 'canonical_reports=%s\n' "$(team_reports_pending)"
+printf 'fast_reports=%s\n' "$(team_panel_reports_pending_fast)"
+printf 'canonical_counts=%s\n' "$(team_pending_counts)"
+printf 'fast_counts=%s\n' "$(team_panel_pending_counts_fast)"
+EOS
+# TEAM_SKILL_DIR 由 team_skill_dir 从脚本位置解析，夹具里没有第二个 skill；显式传给子 shell。
+(cd "$P27R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+  bash "$TMP/p27-cmp.sh" "$P27R" "$SKILL_DIR" "$TMP/p27-cand-canonical.txt" "$TMP/p27-cand-fast.txt" \
+  > "$TMP/p27-cmp.out" 2>"$TMP/p27-cmp.err")
+if [ -s "$TMP/p27-cand-canonical.txt" ] && cmp -s "$TMP/p27-cand-canonical.txt" "$TMP/p27-cand-fast.txt"; then
+  ok "27-c 快速读者：候选清单与 canonical 逐行一致（$(wc -l < "$TMP/p27-cand-canonical.txt" | tr -d ' ') 行）"
+else
+  bad "27-c 快速读者：候选清单与 canonical 不一致"; diff "$TMP/p27-cand-canonical.txt" "$TMP/p27-cand-fast.txt" | head -4
+fi
+P27_CANON_REPORTS="$(sed -n 's/^canonical_reports=//p' "$TMP/p27-cmp.out")"
+P27_FAST_REPORTS="$(sed -n 's/^fast_reports=//p' "$TMP/p27-cmp.out")"
+P27_CANON_COUNTS="$(sed -n 's/^canonical_counts=//p' "$TMP/p27-cmp.out")"
+P27_FAST_COUNTS="$(sed -n 's/^fast_counts=//p' "$TMP/p27-cmp.out")"
+assert_eq "27-c 快速读者：待复验数与 canonical 同值" "$P27_FAST_REPORTS" "$P27_CANON_REPORTS"
+assert_eq "27-c 快速读者：整条待办计数与 canonical 同值" "$P27_FAST_COUNTS" "$P27_CANON_COUNTS"
+if [ -z "$P27_CANON_REPORTS" ]; then
+  bad "27-c 夹具自检：等价断言跑空了（canonical 没给出数）"
+else
+  ok "27-c 夹具自检：等价断言真的在比一个数（reports=$P27_CANON_REPORTS）"
+fi
+
+# ---- 27-d 装配红线：一帧（不带 tick）在 2s 内装完
+P27_T0="$(date +%s%3N)"
+p27 $TEAM monitor --print --no-activity >"$TMP/p27-timed.txt" 2>/dev/null
+P27_MS=$(( $(date +%s%3N) - P27_T0 ))
+if [ "$P27_MS" -le 2000 ]; then
+  ok "27-d 装配红线：夹具上一帧 ${P27_MS}ms ≤ 2000ms"
+else
+  bad "27-d 装配红线：夹具上一帧 ${P27_MS}ms（> 2000ms）"
+fi
+p27 $TEAM monitor --json >"$TMP/p27-json.json" 2>/dev/null
+if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=d["panel"]; assert set(["project","timestamp","interval","standby","pm","pending","outbox","capacity","agents","recent"]).issubset(p)' "$TMP/p27-json.json" 2>/dev/null; then
+  ok "27-d JSON 形状：健康夹具下 panel 的块字段一个不少（只增不减）"
+else
+  bad "27-d JSON 形状：health 夹具下 panel 缺块字段"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"

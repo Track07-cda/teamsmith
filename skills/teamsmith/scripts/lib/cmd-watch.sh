@@ -285,9 +285,9 @@ team_watch_once() {
   #     也不该因为 PM standby 而烂在队列里。没有 daemon：不新建窗口、不留后台进程。
   team_outbox_drain --quiet
 
-  # ② 待办
+  # ② 待办（快速读者：与 team_pending_counts 同值，见 team_panel_pending_counts_fast）
   local counts text sig
-  counts="$(team_pending_counts)"
+  counts="$(team_panel_pending_counts_fast || true)"
   text="$(team_pending_text "$counts")"
   sig="$(team_pending_sig "$counts")"
 
@@ -499,13 +499,14 @@ team_panel_outbox_json() {
 
 # 容量：RAM/磁盘 swap/还能再加几个 + capacity.log 尾部的迷你图。zram 物理 MB **不进面板**
 # （它留在 `team pulse status`）；所以这里自己算，不直接用 team_capacity_line 的整行。
+# 源不可用（没有可读、非空的 capacity.log）= 这个块降级：打印尽力而为的 JSON 并返回非 0，面板渲染 `—`。
 team_panel_capacity_json() {
   local avail swapfree swaptotal diskfree disktotal zram_pct zram_phys
   read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
   read -r diskfree disktotal zram_pct zram_phys <<< "$(team_swap_breakdown)"
-  local f="$TEAM_STATE_DIR/capacity.log" spark="[]" ram="$avail" joined="" v
+  local f="$TEAM_STATE_DIR/capacity.log" spark="[]" ram="$avail" joined="" v degraded=1
   local -a vals=()
-  if [ -f "$f" ]; then
+  if [ -r "$f" ]; then
     while IFS= read -r v; do
       [ -n "$v" ] && vals+=("$v")
     done < <(sed -n 's/.*RAM 可用 \([0-9][0-9]*\)MB.*/\1/p' "$f" | tail -40)
@@ -514,11 +515,13 @@ team_panel_capacity_json() {
     ram="${vals[${#vals[@]}-1]}"
     for v in "${vals[@]}"; do joined="${joined:+$joined, }$v"; done
     spark="[$joined]"
+    degraded=0
   fi
   [ -n "${ram:-}" ] || ram=0
-  printf '{"ram_avail_mb": %s, "swap_free_mb": %s, "agents": %s, "spark": %s}' \
+  printf '{"ram_avail_mb": %s, "swap_free_mb": %s, "agents": %s, "spark": %s}\n' \
     "$(team_panel_num "$ram")" "$(team_panel_num "$diskfree")" \
     "$(team_panel_num "$(team_agent_capacity)")" "$spark"
+  [ "$degraded" = "0" ]
 }
 
 # agent 表：状态/任务（state 文件）+ 分支/脏/领先（team_git_cols）+ 会话规模（team_session_*）。
@@ -588,22 +591,135 @@ team_panel_standby_json() {
   fi
 }
 
-team_panel_json() { # → panel 对象（严格只读：不 mkdir、不 tick、不改任何文件）
-  local counts inbox reports todo wip review blocked stopped total pendtext
-  counts="$(team_pending_counts)"
+# 面板专用的快速候选枚举：与 cmd-status.sh 的 team_report_candidates +
+# team_report_primary_candidates + team_report_copy_rank 同序同集，但每个报告文件的
+# basename/id/首行/看板/任务书检查全部走 bash 内建（旧路径 177 个文件 × sed|grep|awk|basename
+# ≈ 4300 次进程调用，光枚举就 9s；这里是 1 次 awk + 每个工作树 1 次 git）。
+# **过滤一行都不复制**：看板 done/closed、草稿、复验记录仍然交给 cmd-status.sh 的
+# team_reports_pending_list --actionable。等价性由 smoke 的同夹具逐行对照断言钉住。
+team_panel_report_primary_candidates_fast() { # → 每行 "<id>\t<路径>"（同序同集）
+  local -A board_ids=() seen=() wt_ready=() wt_path=() wt_task=() wt_branch=()
+  local board="$TEAM_DOCS_ABS/BOARD.md" f base id cand first who rank pass col
+  if [ -f "$board" ]; then
+    col="$(team_board_col id)"
+    while IFS= read -r id; do
+      [ -n "$id" ] && board_ids[$id]=1
+    done < <(awk -v c="$col" 'BEGIN{FS="|"} /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); if (v != "") print v }' "$board")
+  fi
+  for pass in 0 1 2; do
+    for f in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
+      [ -f "$f" ] || continue
+      case "$f" in
+        "$TEAM_DOCS_ABS/reports/"*) [ "$pass" = "0" ] || continue ;;
+        *) [ "$pass" != "0" ] || continue ;;
+      esac
+      base="${f##*/}"; base="${base%.md}"
+      case "$base" in *-closure*|*-summary*|*-milestone*|*closure-*|*summary-*) continue ;; esac
+      id=""
+      cand="$base"
+      while :; do
+        if [ -n "${board_ids[$cand]:-}" ] || [ -f "$TEAM_DOCS_ABS/tasks/$cand.md" ] \
+           || compgen -G "$TEAM_DOCS_ABS/tasks/$cand-*.md" >/dev/null; then
+          id="$cand"; break
+        fi
+        case "$cand" in *-*) cand="${cand%-*}" ;; *) break ;; esac
+      done
+      [ -n "$id" ] || id="${base%%-*}"
+      # team_report_is_task：id 形状 → 首行标题 → 看板行/任务书（与 cmd-status.sh 同顺序同判据）
+      case "$id" in _*|.*) continue ;; esac
+      [ -n "$id" ] || continue
+      first=""
+      IFS= read -r first < "$f" || true
+      [ -n "$first" ] || continue
+      [[ "$first" =~ ^#[[:space:]]+${id}([[:space:]]|·|:|$) ]] || continue
+      if [ -z "${board_ids[$id]:-}" ] && ! compgen -G "$TEAM_DOCS_ABS/tasks/$id-*.md" >/dev/null; then continue; fi
+      if [ "$pass" != "0" ]; then
+        who="${f#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
+        rank=2
+        case "$base" in "$id-$who") rank=1 ;; esac
+        if [ "$rank" != "1" ]; then
+          if [ -z "${wt_ready[$who]:-}" ]; then
+            wt_ready[$who]=1
+            wt_path[$who]="$(team_agent_worktree "$who")"
+            wt_task[$who]="$(team_state_get "$who" task '')"
+            wt_branch[$who]="$(git -C "${wt_path[$who]}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+          fi
+          [ "${wt_task[$who]:-}" = "$id" ] && rank=1
+          [ "${wt_branch[$who]:-}" = "$TEAM_TASK_BRANCH_PREFIX/$id" ] && rank=1
+        fi
+        [ "$rank" = "$pass" ] || continue
+      fi
+      [ -n "${seen[$id]:-}" ] && continue
+      seen[$id]=1
+      printf '%s\t%s\n' "$id" "$f"
+    done
+  done
+}
+
+# 待复验计数（面板口径）：快速枚举 + cmd-status.sh 的同一套过滤（--actionable）。
+team_panel_reports_pending_fast() { # → 与 team_reports_pending 相同的数
+  local cands
+  cands="$(team_panel_report_primary_candidates_fast)"
+  [ -n "$cands" ] || { printf '0\n'; return 0; }
+  team_reports_pending_list --actionable "$cands" | wc -l | tr -d ' '
+}
+
+# 待办计数（面板与巡检共用）：与 team_pending_counts 同值，只把待复验换成快速枚举。
+# BOARD.md 存在但读不了 = 源坏：仍打印计数形状，但返回非 0（面板降级为 `—`，巡检忽略 rc）。
+team_panel_pending_counts_fast() { # → "inbox reports todo wip review blocked stopped"
+  local board="$TEAM_DOCS_ABS/BOARD.md" a n inbox=0 stopped=0 task board_ok=1
+  if [ -e "$board" ] && [ ! -r "$board" ]; then board_ok=0; fi
+  for a in $(team_inbox_recipients); do
+    n="$(team_inbox_new "$a")"; inbox=$((inbox + n))
+  done
+  for a in $(team_agents); do
+    task="$(team_state_get "$a" task '')"
+    if [ -n "$task" ] && ! team_agent_live "$a"; then stopped=$((stopped + 1)); fi
+  done
+  local todo=0 wip=0 review=0 blocked=0 bc
+  if [ "$board_ok" = "1" ]; then
+    bc="$(team_board_counts)"
+    read -r todo wip review blocked <<< "$bc"
+  fi
+  if [ "$TEAM_PULSE_PENDING_BOARD" != "1" ]; then
+    # 只保留“现在就等 PM 处理”的信号：todo/wip/review 列仍会在面板与 digest 里显示
+    todo=0; wip=0; review=0
+  fi
+  printf '%s %s %s %s %s %s %s\n' "$inbox" "$(team_panel_reports_pending_fast)" \
+    "$todo" "$wip" "$review" "$blocked" "$stopped"
+  [ "$board_ok" = "1" ]
+}
+
+team_panel_pending_json() {
+  local counts="" rc=0
+  counts="$(team_panel_pending_counts_fast)" || rc=$?
+  local inbox reports todo wip review blocked stopped
   read -r inbox reports todo wip review blocked stopped <<< "$counts"
-  pendtext="$(team_pending_text "$counts")"
-  total=$(( $(team_panel_num "$inbox") + $(team_panel_num "$reports") + $(team_panel_num "$todo") \
-          + $(team_panel_num "$wip") + $(team_panel_num "$review") + $(team_panel_num "$blocked") \
-          + $(team_panel_num "$stopped") ))
+  local total=$(( $(team_panel_num "$inbox") + $(team_panel_num "$reports") + $(team_panel_num "$todo") \
+                  + $(team_panel_num "$wip") + $(team_panel_num "$review") + $(team_panel_num "$blocked") \
+                  + $(team_panel_num "$stopped") ))
+  printf '{"inbox": %s, "reports": %s, "todo": %s, "wip": %s, "review": %s, "blocked": %s, "stopped": %s, "total": %s, "text": %s}\n' \
+    "$(team_panel_num "$inbox")" "$(team_panel_num "$reports")" "$(team_panel_num "$todo")" \
+    "$(team_panel_num "$wip")" "$(team_panel_num "$review")" "$(team_panel_num "$blocked")" \
+    "$(team_panel_num "$stopped")" "$total" "$(team_panel_json_str "$(team_pending_text "$counts")")"
+  return "$rc"
+}
+
+# frame 块：项目/时刻/巡检周期/待命/活动源（极便宜，跟每个 tick 重建）。
+team_panel_frame_json() {
+  printf '{"project": %s, "timestamp": %s, "interval": %s, "standby": %s, "activity_source": %s}\n' \
+    "$(team_panel_json_str "$TEAM_PROJECT")" "$(team_panel_json_str "$(team_timestamp)")" \
+    "$(team_panel_num "$TEAM_PULSE_INTERVAL")" "$(team_panel_standby_json)" \
+    "$(team_panel_json_str "${TEAM_AGENT_LOG_GLOB:-}")"
+}
+
+team_panel_json() { # → panel 对象（严格只读：不 mkdir、不 tick、不改任何文件）
+  # 兼容路径（旧 bundle / 人工调用）：与块模式同一批读者，键与顺序与 P10 的契约一致。
   printf '{ "project": %s, "timestamp": %s, "interval": %s, "standby": %s, "pm": %s, "pending": %s, "outbox": %s, "capacity": %s, "agents": %s, "recent": %s, "activity_source": %s }' \
     "$(team_panel_json_str "$TEAM_PROJECT")" "$(team_panel_json_str "$(team_timestamp)")" \
     "$(team_panel_num "$TEAM_PULSE_INTERVAL")" "$(team_panel_standby_json)" "$(team_panel_pm_json)" \
-    "$(printf '{"inbox": %s, "reports": %s, "todo": %s, "wip": %s, "review": %s, "blocked": %s, "stopped": %s, "total": %s, "text": %s}' \
-        "$(team_panel_num "$inbox")" "$(team_panel_num "$reports")" "$(team_panel_num "$todo")" \
-        "$(team_panel_num "$wip")" "$(team_panel_num "$review")" "$(team_panel_num "$blocked")" \
-        "$(team_panel_num "$stopped")" "$total" "$(team_panel_json_str "$pendtext")")" \
-    "$(team_panel_outbox_json)" "$(team_panel_capacity_json)" "$(team_panel_agents_json)" \
+    "$(team_panel_pending_json || true)" "$(team_panel_outbox_json)" \
+    "$(team_panel_capacity_json || true)" "$(team_panel_agents_json)" \
     "$(team_panel_recent_json)" "$(team_panel_json_str "${TEAM_AGENT_LOG_GLOB:-}")"
 }
 
@@ -631,19 +747,41 @@ team_panel_activity_json() { # <1|0> <events>
   esac
 }
 
-# 内部命令：给 panel.js 一个 JSON（{panel, activity}）。名字带 __ 前缀 = 不是给人用的命令面。
+# 块分发：一个块一个子进程（panel.js 用 --block 起一片），源坏时打印尽力而为的片段并返回非 0，
+# 由渲染层把那一块画成 `—`，其余块照常渲染。
+team_panel_block() { # <块名> <activity 1|0> <events>
+  case "$1" in
+    frame)    team_panel_frame_json ;;
+    pm)       team_panel_pm_json ;;
+    pending)  team_panel_pending_json ;;
+    outbox)   team_panel_outbox_json ;;
+    capacity) team_panel_capacity_json ;;
+    agents)   team_panel_agents_json ;;
+    recent)   team_panel_recent_json ;;
+    activity) team_panel_activity_json "${2:-1}" "${3:-4}" ;;
+    *) team_usage_die "__panel-data: 未知块名 $1" ;;
+  esac
+}
+
+# 内部命令：给 panel.js 一个 JSON（{panel, activity}）或一个块（--block <名>）。
+# 名字带 __ 前缀 = 不是给人用的命令面。
 team_cmd_panel_data() {
-  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}"
+  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-activity) activity=0; shift ;;
       --activity) activity=1; shift ;;
       --events) events="${2:?__panel-data: --events 需要数字}"; shift 2 ;;
+      --block) block="${2:?__panel-data: --block 需要块名}"; shift 2 ;;
       -*) team_usage_die "__panel-data: 未知参数 $1" ;;
       *) team_usage_die "__panel-data: 多余参数 $1" ;;
     esac
   done
   team_require_docs
+  if [ -n "$block" ]; then
+    team_panel_block "$block" "$activity" "$events"
+    return $?
+  fi
   printf '{"panel": %s, "activity": %s}\n' "$(team_panel_json)" "$(team_panel_activity_json "$activity" "$events")"
 }
 
@@ -884,7 +1022,7 @@ team_cmd_pulse_status() {
     foreign:*) team_warn "  PM              窗口被**不属于本项目**的进程占用（cwd=$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')）：不覆盖" ;;
     *)         team_warn "  PM              窗口缺失（有待办时：$TEAM_CLI up，或设 TEAM_PULSE_REBUILD_TMUX=1）" ;;
   esac
-  local pend; pend="$(team_pending_text)"
+  local pend; pend="$(team_pending_text "$(team_panel_pending_counts_fast || true)")"
   if [ -n "$pend" ]; then
     # 同一拍里 PM 行与待办行必须一致：suffix 由那**一次** team_pm_state 读取决定（M7.2）
     printf '  待办              %s%s\n' "$pend" "$(team_pm_pending_suffix "$pm")"
@@ -928,7 +1066,7 @@ team_cmd_standby() {
       else
         printf 'standby: off\n'
       fi
-      local pend; pend="$(team_pending_text)"
+      local pend; pend="$(team_pending_text "$(team_panel_pending_counts_fast || true)")"
       printf '待办：%s\n' "${pend:-无}"
       ;;
   esac

@@ -5,6 +5,11 @@ front end that draws one frame per `TEAM_MONITOR_REFRESH`, runs one patrol tick 
 consumes the existing data layer unchanged (`scripts/monitor.mjs --json` for the activity stream, the bash
 readers for the team fields). `team monitor` never reads state files itself.
 
+The team fields arrive **per block**: `data.ts` spawns one `team __panel-data --block <name>` child per block,
+asynchronously and with its own timeout, and the renderer only ever reads the in-memory cache. A source that is
+missing, unreadable, too slow or failing renders its own band as `—` and never delays the rest of the frame or a
+keystroke (see `openspec/changes/pulse-console`).
+
 ```
 team monitor                    # TUI in a terminal; plain text when stdout is not a TTY
 team monitor --once             # one frame through the same renderer selection, plus the due tick
@@ -39,8 +44,8 @@ The committed artifact at the time of writing:
 
 ```
 file:   skills/teamsmith/scripts/panel/panel.js
-size:   832541 bytes
-sha256: 5977a3f3791da60d7889cca2bfb6d31128bdb5c2b7c3d0cd705b971b67d33710
+size:   836171 bytes
+sha256: 6756491363e8a5615e02c14d209a2eab0e2e8606b3717ea0431cf05622707b79
 pins:   ink 7.1.1 · react 19.3.0 · runtime floor: node >= 20 | bun >= 1.3
 ```
 

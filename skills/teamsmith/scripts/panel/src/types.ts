@@ -91,16 +91,17 @@ export interface ActivityBlock {
 }
 
 export interface PanelData {
-  project: string
-  timestamp: string
-  interval: number
-  standby: PanelStandby
-  pm: PanelPm
-  pending: PanelPending
-  outbox: PanelOutbox
-  capacity: PanelCapacity
-  agents: PanelAgent[]
-  recent: string[]
+  /** Filled by the `frame` block; absent means that block is degraded (rendered as `—`). */
+  project?: string
+  timestamp?: string
+  interval?: number
+  standby?: PanelStandby
+  pm?: PanelPm
+  pending?: PanelPending
+  outbox?: PanelOutbox
+  capacity?: PanelCapacity
+  agents?: PanelAgent[]
+  recent?: string[]
   /** TEAM_AGENT_LOG_GLOB when it is set (the activity column's source hint). */
   activity_source?: string
 }
@@ -109,6 +110,8 @@ export interface FrameInput {
   panel: PanelData
   /** The data layer's blocks (`monitor.mjs --json`), already sanitized. */
   activityBlocks: ActivityBlock[]
+  /** Blocks whose source failed in this assembly; their band renders `—`. */
+  degraded?: string[]
   width: number
   height: number
   /** Whether the activity column is on for this frame. */

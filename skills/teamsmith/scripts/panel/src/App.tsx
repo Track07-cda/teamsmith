@@ -42,6 +42,13 @@ export function App({ frame, refresh, reload, once }: AppProps) {
   const scrollRef = useRef(0)
   const dataRef = useRef(frame)
 
+  // The parent owns the assembly (it is asynchronous now): a fresh frame arrives as a prop and is
+  // adopted here, while `reload()` still answers synchronously with the current cache snapshot.
+  useEffect(() => {
+    dataRef.current = frame
+    setData(frame)
+  }, [frame])
+
   const lines = useMemo(
     () => buildFrame({ ...data, width: size.columns, height: size.rows, scroll }),
     [data, size, scroll],

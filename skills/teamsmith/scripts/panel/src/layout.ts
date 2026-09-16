@@ -29,26 +29,35 @@ function agentStateText(a: PanelAgent): string {
   return `${GLYPH[a.state] ?? '?'} ${AGENT_TEXT[a.state] ?? a.state}`
 }
 
-function pmLine(panel: PanelData): string {
-  const pm = panel.pm
-  const detail = pm.detail ? `（${pm.detail}）` : ''
-  const pmText = `PM ${pm.state}${detail} · ${PM_TEXT[pm.state] ?? pm.state}`
-  const pend = `待办 ${panel.pending.text || '无'}`
+function pmLine(input: FrameInput): string {
+  const panel = input.panel
+  const deg = new Set(input.degraded ?? [])
+  const pmText = !panel.pm || deg.has('pm')
+    ? 'PM —'
+    : `PM ${panel.pm.state}${panel.pm.detail ? `（${panel.pm.detail}）` : ''} · ${PM_TEXT[panel.pm.state] ?? panel.pm.state}`
+  const pend = !panel.pending || deg.has('pending') ? '待办 —' : `待办 ${panel.pending.text || '无'}`
   const ob = panel.outbox
-  const queue = `延后投递 ${ob.queued}${ob.held > 0 ? `（扣住 ${ob.held}）` : ''}`
+  const queue =
+    !ob || deg.has('outbox') ? '延后投递 —' : `延后投递 ${ob.queued}${ob.held > 0 ? `（扣住 ${ob.held}）` : ''}`
   return ` ${pmText}    ${pend}    ${queue}`
 }
 
-function capacityLine(panel: PanelData, sparkW: number): string {
-  const c = panel.capacity
+function capacityLine(input: FrameInput, sparkW: number): string {
+  const c = input.panel.capacity
+  if (!c || (input.degraded ?? []).includes('capacity')) return ' 容量 —'
   const spark = sparkline(c.spark, sparkW)
   return ` 容量 RAM ${fmtMB(c.ram_avail_mb)} ｜ swap ${fmtMB(c.swap_free_mb)} ｜ 可再加 ${c.agents} 个 agent${spark ? `  ${spark}` : ''}`
 }
 
-function titleLine(panel: PanelData, width: number): string {
-  const left = `teamsmith pulse · ${panel.project}`
-  const standby = panel.standby.on ? `待命 on（原因：${panel.standby.reason || '-'}）` : '待命 off'
-  const right = `${clockOf(panel.timestamp)}  巡检 ${panel.interval}s · ${standby}`
+function titleLine(input: FrameInput, width: number): string {
+  const panel = input.panel
+  const left = `teamsmith pulse · ${panel.project || '—'}`
+  const standby = !panel.standby
+    ? '待命 —'
+    : panel.standby.on
+      ? `待命 on（原因：${panel.standby.reason || '-'}）`
+      : '待命 off'
+  const right = `${panel.timestamp ? clockOf(panel.timestamp) : '—'}  巡检 ${panel.interval || '—'}s · ${standby}`
   const room = width - dispWidth(left) - 2
   if (room >= dispWidth(right)) return `${left}  ${right}`
   return truncateW(`${left}  ${right}`, width)
@@ -71,7 +80,9 @@ export function activityLines(activity: ActivityBlock[]): string[] {
   return out
 }
 
-function agentTable(panel: PanelData, leftW: number): string[] {
+function agentTable(input: FrameInput, leftW: number): string[] {
+  const panel = input.panel
+  if (!panel.agents || (input.degraded ?? []).includes('agents')) return ['  —']
   const agents = panel.agents ?? []
   const fixed = { name: 10, state: 8, task: 7, session: 7 }
   const widths = { ...fixed }
@@ -116,18 +127,29 @@ function agentTable(panel: PanelData, leftW: number): string[] {
 
 function rightColumn(input: FrameInput, rightW: number, rows: number): string[] {
   const lines: string[] = []
+  const deg = new Set(input.degraded ?? [])
   if (input.activity) {
     lines.push(truncateW(` ${ACTIVITY_HEADING}`, rightW))
-    // The source hint keeps its label and drops the head of the path (a glob reads best from the tail).
-    if (input.panel.activity_source) {
-      const label = '源 '
-      lines.push(truncateW(` ${label}${truncateWStart(input.panel.activity_source, rightW - dispWidth(label) - 1)}`, rightW))
+    if (deg.has('activity')) {
+      lines.push(truncateW('  —', rightW))
+    } else {
+      // The source hint keeps its label and drops the head of the path (a glob reads best from the tail).
+      if (input.panel.activity_source) {
+        const label = '源 '
+        lines.push(
+          truncateW(` ${label}${truncateWStart(input.panel.activity_source, rightW - dispWidth(label) - 1)}`, rightW),
+        )
+      }
+      const evs = activityLines(input.activityBlocks).slice(Math.max(0, input.scroll ?? 0))
+      if (!evs.length) lines.push(truncateW('  （没有会话活动）', rightW))
+      for (const e of evs) lines.push(truncateW(e, rightW))
     }
-    const evs = activityLines(input.activityBlocks).slice(Math.max(0, input.scroll ?? 0))
-    if (!evs.length) lines.push(truncateW('  （没有会话活动）', rightW))
-    for (const e of evs) lines.push(truncateW(e, rightW))
   }
   lines.push(truncateW(` ${RECENT_HEADING}`, rightW))
+  if (deg.has('recent') || !input.panel.recent) {
+    lines.push(truncateW('  —', rightW))
+    return lines.slice(0, Math.max(0, rows))
+  }
   const recent = (input.panel.recent ?? []).slice(-6)
   if (!recent.length) lines.push(truncateW('  （还没有动作记录）', rightW))
   for (const r of recent) lines.push(truncateW(` ${r}`, rightW))
@@ -149,14 +171,14 @@ export function buildFrame(input: FrameInput): string[] {
   const fixed = (capOwn ? 5 : 4) + 1 + (withMiddle ? 2 : 0)
 
   const lines: string[] = []
-  lines.push(titleLine(panel, W))
+  lines.push(titleLine(input, W))
   lines.push(rule(W))
-  const pm = pmLine(panel)
+  const pm = pmLine(input)
   if (capOwn) {
     lines.push(pm)
-    lines.push(capacityLine(panel, Math.min(18, Math.max(0, W - dispWidth(pm) - 8))))
+    lines.push(capacityLine(input, Math.min(18, Math.max(0, W - dispWidth(pm) - 8))))
   } else {
-    lines.push(truncateW(`${pm}   ${capacityLine(panel, 12)}`, W))
+    lines.push(truncateW(`${pm}   ${capacityLine(input, 12)}`, W))
   }
   lines.push(rule(W))
 
@@ -165,7 +187,7 @@ export function buildFrame(input: FrameInput): string[] {
     const twoCols = W >= WIDTH_TWO_COLUMNS
     const leftW = twoCols ? Math.max(24, Math.floor((W - 3) * 0.56)) : W
     const rightW = twoCols ? Math.max(8, W - leftW - 3) : 0
-    const left = agentTable(panel, leftW)
+    const left = agentTable(input, leftW)
     const right = twoCols ? rightColumn(input, rightW, bodyRows) : []
     if (!twoCols) {
       // Narrow frames stack: the table first, then the activity/recent block.
