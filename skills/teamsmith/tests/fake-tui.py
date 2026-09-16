@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""teamsmith 测试夹具：一个「像 Pi 的」TUI pane（输入框 + 会回显提交的对话区）。
+
+为什么需要它（D20 / E3 §1.1(e)）：真实事故是「自动化消息被 send-keys 打进一个已经写了草稿的
+输入框，草稿被粘在消息前面一起提交」。要复现/证伪这条，夹具 pane 必须：
+
+  - 画一个带上下边框的输入框（`─`×宽度），光标落在内容行上（守卫是光标锚定的）；
+  - 把已经提交的消息画在框上方（这样 pane 指纹会变，投递确认才有意义）；
+  - 理解 bracketed paste（`ESC[200~ … ESC[201~`）：真实 Pi 把粘贴当**一个输入内容**，
+    没有这个语义，三行草稿会被拆成三条提交（E3 §3.2 实测）；
+  - 把人打进框里的字符与已有草稿**拼接**（旧实现下这就是「草稿被粘走」的现场）。
+
+env：
+  FAKE_TUI_DRAFT             输入框初始内容（可含 \n）
+  FAKE_TUI_SUBMIT_LOG        每次提交追加一行 `SUBMIT:<payload，\n 转义成 \\n>`
+  FAKE_TUI_CURSOR_TRAILING=1 光标放在最后一行草稿**后面**的空行（E3 §1.5 状态 8）
+  FAKE_TUI_DRAFT_ON_PASTE    开始粘贴时把这段文字插到框里（模拟「检查与粘贴之间有人开始打字」）
+  FAKE_TUI_CURSOR_TOP=1      光标放在内容区**第一行**（配一个以空行开头的 DRAFT，就造出
+                             V7-F1 的形状：文字全部在光标行下方）
+  FAKE_TUI_MARKER=<n>        超过 n 行的 bracketed paste 折叠成 `[paste #1 +K lines]` 占位符
+                             （真实 Pi v0.85.1 实测形状；0 = 不折叠）
+  FAKE_TUI_PASTE_STALL_MS=<ms> 折叠占位符先画一半（`[paste #N +1`），ms 毫秒后才补全（V8-N3 中间帧）
+  FAKE_TUI_STATIC_FOOTER=1   提交后 pane 尾部不变：不在对话区回显已提交消息（真实事故里
+                             「页脚一动不动」的 TUI 让尾部 400 字节指纹失效，V7-F4）
+  FAKE_TUI_EAT_ENTER=1       吞掉 Enter：清空输入框但不提交、不回显（V9-B5「清空未提交」事故形状）
+  FAKE_TUI_COLS              绘制宽度（默认 80；测试按 pane 宽度显式给，避免依赖 pty 尺寸）
+
+退出：stdin 关闭（pane 被杀）即退出。
+"""
+import codecs
+import os
+import select
+import time
+import unicodedata
+import sys
+import termios
+import tty
+
+RULE = "\u2500"
+
+
+def _cell_width(ch: str) -> int:
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def _clip(text: str, width: int) -> str:
+    """按**显示宽度**裁剪：CJK 是双宽字符，按字符数裁会折行、打乱行号模型。"""
+    out = []
+    used = 0
+    for ch in text:
+        w = _cell_width(ch)
+        if used + w > width:
+            break
+        out.append(ch)
+        used += w
+    return "".join(out)
+
+
+def _wrap(text: str, width: int) -> list:
+    """按显示宽度折行（真实 TUI 的行为）：超过宽度的内容出现在下一行，不是被裁掉。
+    P6 返工时修：旧版 _clip 把超长行裁掉了，导致长指针在框里「看不见尾巴」、指纹误判成外来文字。"""
+    if width <= 0:
+        return [text]
+    lines, cur, used = [], [], 0
+    for ch in text:
+        w = _cell_width(ch)
+        if used + w > width:
+            lines.append("".join(cur))
+            cur, used = [], 0
+        cur.append(ch)
+        used += w
+    lines.append("".join(cur))
+    return lines
+
+
+def _paste_text(raw: bytes) -> str:
+    """粘贴内容：tmux 的 paste-buffer 默认把 LF 换成 CR，真实 TUI 把 CR 当换行 —— 夹具照样归一化。"""
+    return raw.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+class Tui:
+    def __init__(self) -> None:
+        # 宽度不能靠 pty（tmux 的 -x/-y 与实际 pty 尺寸可能不一致，长短行会被折行、行号模型就错了）：
+        # 显式给宽度，并且规则行用固定长度 —— 守卫只要求「整行都是 ─」/「以 ── 开头」。
+        self.cols = int(os.environ.get("FAKE_TUI_COLS") or 80)
+        self.committed = os.environ.get("FAKE_TUI_DRAFT", "")
+        self.typed = ""
+        self.trailing = os.environ.get("FAKE_TUI_CURSOR_TRAILING", "0") == "1"
+        self.cursor_top = os.environ.get("FAKE_TUI_CURSOR_TOP", "0") == "1"
+        self.draft_on_paste = os.environ.get("FAKE_TUI_DRAFT_ON_PASTE", "")
+        self.marker = int(os.environ.get("FAKE_TUI_MARKER") or 0)
+        self.stall_ms = int(os.environ.get("FAKE_TUI_PASTE_STALL_MS") or 0)
+        self._stall = None   # (deadline, paste_n, k, idx)：半成品占位符的补全计划
+        self.paste_n = 0
+        self.static_footer = os.environ.get("FAKE_TUI_STATIC_FOOTER", "0") == "1"
+        # V9-B5：TUI 吞掉 Enter（覆盖层/转义处理/重绘吞键）——输入框被清空，但消息从没进过
+        # 对话区。「清空未提交」形状：旧判据（框空=已送达）在这里把消息报成已送达并删条目。
+        self.eat_enter = os.environ.get("FAKE_TUI_EAT_ENTER", "0") == "1"
+        self.log = os.environ.get("FAKE_TUI_SUBMIT_LOG", "/tmp/teamsmith-fake-tui.log")
+        self.conversation: list[str] = []
+        # 不支持 bracketed paste 的目标 TUI（规格里的 fallback 分支）：不发 DECSET 2004
+        self.bracketed = os.environ.get("FAKE_TUI_NO_BRACKETED_PASTE", "0") != "1"
+        # 逐字节读入时不能按字节 decode（多字节 UTF-8 会被拆成替换字符）：用增量解码器
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+    # ------------------------------------------------------------------ 渲染
+    def text(self) -> str:
+        return self.committed + self.typed
+
+    def draw(self) -> None:
+        body = self.text().split("\n")
+        # 像真实 TUI 一样折行（不裁字）：超长行的尾巴出现在下一个可见行上
+        shown = [r for line in body for r in _wrap(line, self.cols)]
+        shown = shown[:3] + [""] * max(0, 3 - len(shown[:3]))
+        # 像真实 TUI 一样打开 bracketed paste（DECSET 2004）：tmux 的 paste-buffer -p
+        # 只有在 pane 请求过这个模式时才会真正加包装（tmux 3.7 手册）。没有它，
+        # 三行粘贴就会被拆成三条提交 —— 这正是要拿它当证伪器的那条差异。
+        out = [("\x1b[?2004h" if self.bracketed else ""), "\x1b[2J\x1b[H"]
+        row = 1
+        head = ["fixture TUI \u00b7 idle"]
+        if not self.static_footer:
+            for m in self.conversation[-3:]:
+                head.append("> " + m.replace("\n", " \u23ce "))
+        head.append("")
+        for line in head:
+            out.append(_clip(line, self.cols) + "\r\n")
+            row += 1
+        out.append(RULE * self.cols + "\r\n")
+        row += 1
+        rows = []
+        for c in shown:
+            rows.append(row)
+            out.append(_clip(c, self.cols) + "\r\n")
+            row += 1
+        out.append(" fake-pi 1.0 ".ljust(self.cols) + "\r\n")
+        out.append(RULE * self.cols + "\r\n")
+        out.append("footer".ljust(self.cols) + "\r\n")
+        n = len(body)
+        if self.cursor_top:
+            # V7-F1：光标停在内容区第一行（真实 Pi 里 Up 键把光标移到草稿上方的空行）
+            crow, ccol = rows[0], 1
+        elif self.text() == "":
+            crow, ccol = rows[0], 1
+        elif self.trailing:
+            crow, ccol = rows[min(n, 3) - 1], 1
+        else:
+            crow = rows[min(n, 3) - 1]
+            ccol = min(len(_clip(body[min(n, 3) - 1], self.cols)), self.cols - 1) + 1
+        out.append("\x1b[%d;%dH" % (crow, ccol))
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+
+    def submit(self) -> None:
+        payload = self.text()
+        with open(self.log, "a") as fh:
+            fh.write("SUBMIT:" + payload.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r") + "\n")
+        self.conversation.append(payload)
+        self.committed = ""
+        self.typed = ""
+
+    # ------------------------------------------------------------------ 事件循环
+    def _accept_paste(self, raw: bytes, final: bool = True) -> None:
+        """一块 bracketed-paste 内容进框。FAKE_TUI_MARKER 打开时，整次粘贴超过阈值行数就
+        折叠成一行占位符（真实 Pi v0.85.1：14 行文件 → `[paste #1 +15 lines]`，K = 换行数+1）。"""
+        if not hasattr(self, "_paste_buf"):
+            self._paste_buf = b""
+        self._paste_buf += raw
+        if not final:
+            return
+        text = _paste_text(self._paste_buf)
+        self._paste_buf = b""
+        nlines = text.count("\n")
+        if self.marker and nlines > self.marker:
+            self.paste_n += 1
+            if self.stall_ms:
+                # V8-N3：真实 TUI 是异步渲染的——折叠占位符不是一帧画完的。先画一半
+                # （`[paste #N +1`），stall_ms 之后才补全成完整占位符。
+                idx = len(self.typed)
+                self.typed += f"[paste #{self.paste_n} +1"
+                self._stall = (time.monotonic() + self.stall_ms / 1000.0, self.paste_n, nlines + 1, idx)
+            else:
+                self.typed += f"[paste #{self.paste_n} +{nlines + 1} lines]"
+        else:
+            self.typed += text
+
+    TERM = b"\x1b[201~"
+
+    @staticmethod
+    def _prefix_len(buf: bytes, term: bytes) -> int:
+        """buf 的末尾有多少字节可能是 term 的开头（终止符被拆包时不能吞掉它）。"""
+        for k in range(min(len(buf), len(term) - 1), 0, -1):
+            if buf[-k:] == term[:k]:
+                return k
+        return 0
+
+    def run(self) -> None:
+        self.draw()
+        base = termios.tcgetattr(0)
+        tty.setraw(0)
+        paste = False
+        pending = b""
+        need_more = False
+        try:
+            while True:
+                if self._stall is not None:
+                    timeout = max(0.0, self._stall[0] - time.monotonic())
+                    ready, _, _ = select.select([0], [], [], timeout)
+                    if not ready:
+                        # 补全半成品占位符（期间到达的键接在占位符后面，与真实 TUI 一致）
+                        _, n, k, idx = self._stall
+                        partial = f"[paste #{n} +1"
+                        assert self.typed[idx : idx + len(partial)] == partial
+                        self.typed = self.typed[:idx] + f"[paste #{n} +{k} lines]" + self.typed[idx + len(partial) :]
+                        self._stall = None
+                        self.draw()
+                        continue
+                data = os.read(0, 4096)
+                if not data:
+                    return
+                pending += data
+                need_more = False
+                while pending and not need_more:
+                    if paste:
+                        end = pending.find(self.TERM)
+                        if end != -1:
+                            self._accept_paste(pending[:end])
+                            pending = pending[end + len(self.TERM) :]
+                            paste = False
+                            self.draw()
+                            continue
+                        keep = self._prefix_len(pending, self.TERM)
+                        if keep >= len(pending):
+                            need_more = True
+                            continue
+                        chunk = pending[: len(pending) - keep]
+                        pending = pending[len(pending) - keep :]
+                        self._accept_paste(chunk, final=False)
+                        self.draw()
+                        continue
+                    if pending.startswith(b"\x1b[200~"):
+                        pending = pending[6:]
+                        paste = True
+                        if self.draft_on_paste:
+                            # 「检查 → 粘贴」之间有人开始打字：起草稿，粘贴内容接在它后面
+                            self.committed = self.draft_on_paste + self.committed
+                            self.draft_on_paste = ""
+                        continue
+                    if pending[0:1] == b"\x1b":
+                        # 其它控制序列：吞掉 ESC 加后续字节（夹具不解释它们）
+                        pending = pending[2:] if len(pending) >= 2 else b""
+                        continue
+                    ch = pending[0:1]
+                    pending = pending[1:]
+                    if ch in (b"\r", b"\n"):
+                        if self.text() != "":
+                            if self.eat_enter:
+                                # 吞掉 Enter：框清了，没有提交（对话区永远不会有这条）
+                                self.committed = ""
+                                self.typed = ""
+                            else:
+                                self.submit()
+                        self.draw()
+                        continue
+                    if ch == b"\x7f":
+                        if self.typed:
+                            self.typed = self.typed[:-1]
+                        else:
+                            self.committed = self.committed[:-1]
+                        self.draw()
+                        continue
+                    if ch == b"\x15":
+                        self.committed = ""
+                        self.typed = ""
+                        self.draw()
+                        continue
+                    self.typed += self.decoder.decode(ch)
+                    self.draw()
+        finally:
+            termios.tcsetattr(0, termios.TCSADRAIN, base)
+
+
+if __name__ == "__main__":
+    Tui().run()

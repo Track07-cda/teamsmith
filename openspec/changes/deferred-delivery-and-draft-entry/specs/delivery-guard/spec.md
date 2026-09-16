@@ -1,0 +1,407 @@
+## Purpose
+
+The delivery guard: no automated sender may type into a TUI input box that already holds a draft, so the message is
+held in `state/outbox/` and delivered when the box is free. It exists because `send-keys` + `Enter` on a non-empty
+box glued a watchdog notice to a half-written human draft and pushed the draft out the door (D20; reproduced in
+E3 §1.1(e)); the queue file format is the interface a future PM-side delivery channel reuses. Why a queued message
+must stay visible, bounded and recoverable: `references/philosophy.md` (principle 2) and
+`references/troubleshooting.md` §3.
+
+## ADDED Requirements
+
+### Requirement: An automated send never types into a non-empty input box
+
+Every sender that would type into a TUI input box (`team say`'s pane delivery, `team notify`'s pane delivery, the
+watchdog wake line, the notify extension's knock) SHALL locate the target pane's input box from the captured pane
+and, when the box holds text, MUST send no key at all — neither the payload nor an `Enter`; it MUST hold the message
+in `state/outbox/` instead. The check MUST be cursor-anchored (the box is not pinned to the pane bottom, so the
+top/bottom borders are found from the cursor row), and the border pairing MUST reject rule-looking rows that
+cannot be borders: a top border is either a full-rule row whose width equals the bottom border's or a
+spinner-shaped row (a `── ` prefix with a long trailing rule run — the E3-observed working-Pi shape; Pi 0.85.1
+draws its working row as ` ⠋ Blanching… · 0s` — a braille glyph plus text, drawn on its own row ABOVE the box
+(its top border stays a full rule row and tier1 still locates it) — which is deliberately NOT an eligible border,
+V9-D2: admitting a row that normally sits above the box would extend the box over conversation text and read
+busy forever, so the documented fallback applies instead — if a future TUI promotes that row to the top border,
+the pairing finds no box and the pane is typed as today with one warning). When several rows qualify, the top border is the HIGHEST qualifying row above the
+bottom border, never the nearest one (V9-A4/A5/A8/A10: a rule row the draft itself draws — equal-width, wider, or
+spinner-shaped — must become box content, so the box reads busy; the old nearest-candidate rule let such a draft
+row pose as the border and reproduced the dirty-box-misread-as-empty incident again). The cost is documented:
+on a TUI that CLIPS long lines to the pane width, an over-long draft line can read as an equal-width rule row and
+enlarge the located box — the verdict errs to busy, never to gluing (real Pi 0.85.1 wraps content at one column
+short of the border width, so an equal-width content row is unreachable there; V9 90.C/90.F measurements), so a
+short full-rule row inside the human's
+draft (a pasted markdown separator or table border; V8-N1 replayed the original incident on real Pi through that
+hole) is never mistaken for the box edge. The check MUST examine every content row of the located box — not only
+rows at or above the cursor, because a draft typed after a leading newline or recalled with `Up` sits BELOW the
+cursor row (V7-F1 reproduced the original D20 incident through that hole) — and MUST NOT assume a particular
+empty-box shape (a package-provided hint row and a spinner during work are both normal; the hint row is excluded
+by slot, not by matching its text). That slot exclusion is itself a known miss: the row immediately above the
+bottom border is never read as content, so a single-line draft sitting exactly on it is invisible and a send may
+glue onto it (V9-C3), while a hint row bumped off the slot reads the box busy — a conservative false-busy, never
+a glue (V9-C1); both MUST be named in `references/troubleshooting.md` §3. The guard MUST be re-checked immediately before the `Enter` by comparing the
+box's content fingerprint with what the check saw — verbatim, trimmed, or as a suffix/prefix of the visible
+content are the acceptable verbatim shapes, and the only acceptable folded shape is the whole box being exactly
+ONE `[paste #N +K lines]` placeholder whose `+K` equals the payload's line count (two folded pastes — ours and
+the human's — MUST count as a race, V8-N4; the payload's own text MUST be compared verbatim before any
+placeholder stripping, because a payload that literally contains `[paste #N +K lines]` text is not a folded
+box, V8-N2); a length comparison MUST NOT be used, because a TUI that folds a long paste makes every length
+heuristic fire (V7-F2) — so a draft that appeared between the check and the paste holds the message instead of
+gluing it. A half-rendered placeholder frame (`[paste #N +1` without the completed pattern) is neither "settled"
+nor foreign text: the re-check SHALL keep waiting for the render to finish (bounded, on the order of a second)
+instead of judging that frame a race (V8-N3) — and when that bound is exhausted while the frames were still
+half-rendered, the outcome MUST NOT be the terminal `draft-raced` hold: the payload was never submitted by the
+drain, so the entry is held with reason `stall-timeout` and a later drain MUST retry it in resume mode —
+completing the pending `Enter` when the box still holds only that payload (verbatim or `+K`-matched folded
+placeholder) and never pasting it again; if the box no longer holds only the payload, the entry stays in `held/`
+for the human to verify and drop or re-send, because a repaste could double-send (V9-B6). The mid-render test MUST match a whole content line
+(`[paste #N +<digits>` occupying an entire row, without the completed `lines]` suffix) — never a substring — and
+the settle loop MUST first check whether the payload is already verbatim in the box: a clean payload that
+literally contains half-placeholder text like `[paste #` is not a rendering-in-progress frame, and waiting for
+such a frame to finish would hold a clean message forever (V9-B1 reproduced that on real Pi).
+A box whose only content is whitespace is one known miss of the box-content detector: the guard reports it
+free (the capture trims trailing blanks), and that limitation MUST be enumerated together with the other
+same-class holes in `references/troubleshooting.md` §3 — the ones fixed by the highest-candidate rule
+(equal-width draft rules, spinner-shaped draft rows, a cursor resting on the draft's own rule row: V9-A4/A5/A8/A10)
+and the ones deliberately still open (the whitespace-only draft; a single-line draft exactly on the hint slot,
+V9-C3) — so the document never implies the detector has no other hole. It MUST NOT be silently wrong.
+The remaining documented edges (all named in `references/troubleshooting.md` §3): notification-shaped text inside
+the conversation transcript can look like box content when the box borders are mis-paired — measured: a
+spinner-shaped row standing in as the top border reads that text as box content and the verdict is busy (a
+conservative hold, V9-C2), and when the hint row is bumped off its slot the same conservative busy follows
+(V9-C1); only a transcript with no rule-looking row at all pairs no box and fails safe to UNKNOWN — the
+prefix/suffix acceptance
+window accepts a frame where only a prefix of the payload rendered (V8-N6); when that frame goes on to the
+`Enter`, the submission is not credited as confirmed (B5 evidence), so the entry stays in `held/` with the full
+payload in its durable inbox copy — the message is never silently deleted, even though the partially rendered
+text may have been submitted (V9-B3); and a folded paste by the human whose line count
+equals the payload's is geometrically indistinguishable from ours (V8-N4 residual) — the payload is visible in
+the box in that case, and the human is holding the pane.
+A pane whose input-box shape cannot be located MUST be treated as "deliver as today" with one warning, never as a
+permanent hold — and because no box can be read there, no submission proof can be collected either, so such a pane
+is NEVER reported as confirmed; its output names the unknown shape (V9-C3).
+
+#### Scenario: An empty box with a package hint row is free
+
+- **GIVEN** a captured pane in the PM-faithful shape: full-rule top and bottom borders, blank content rows and the
+  hint row ` k3  Kimi Coding  max` between them, with the cursor on the first blank content row
+- **WHEN** the guard is evaluated on that pane
+- **THEN** it reports the box free and no key is sent for the message
+
+#### Scenario: A multi-line draft keeps the box busy and survives the send
+
+- **GIVEN** a fixture pane whose box holds three lines and whose cursor sits on the blank row after them
+- **WHEN** `team say dev "check the failing test"` runs
+- **THEN** the pane still shows those three lines and nothing else, no `Enter` was sent, and `state/outbox/` holds
+  exactly one entry whose payload is that message
+
+#### Scenario: The whitespace-only draft is a documented miss
+
+- **GIVEN** a fixture pane whose box holds three spaces and nothing else
+- **WHEN** the guard is evaluated on the captured pane
+- **THEN** it reports the box free (one known miss of the same class), and `references/troubleshooting.md` §3 names
+  that limitation together with the other members of the class (V9-C4)
+
+#### Scenario: A draft containing a rule line keeps the box busy
+
+- **GIVEN** a fixture pane whose box holds a draft of two content rows — `half a sentence` and a short full-rule
+  row (a pasted markdown separator) — with the cursor on the blank row after them
+- **WHEN** the guard is evaluated on that pane
+- **THEN** it reports the box busy (the draft's own rule row is not the box border), no key is sent, and
+  `state/outbox/` holds exactly one entry
+
+#### Scenario: A draft below the cursor row keeps the box busy
+
+- **GIVEN** a fixture pane whose box holds a draft that starts on the row below the cursor (a leading newline, or
+  an old draft recalled with `Up`)
+- **WHEN** the guard is evaluated on that pane
+- **THEN** it reports the box busy, no key is sent, and the draft is unchanged
+
+#### Scenario: A draft rule row as wide as the box border keeps the box busy
+
+- **GIVEN** a fixture pane whose box holds a draft containing a full-rule row exactly as wide as the box border
+  (or wider than it), with the cursor on a blank row below the draft
+- **WHEN** the guard is evaluated on that pane
+- **THEN** it reports the box busy (the top border is the highest qualifying row, so the draft's own rule row is
+  box content), no key is sent, and the draft is unchanged
+
+#### Scenario: An unknown pane shape delivers as today
+
+- **GIVEN** a busy fixture pane that draws no input-box border under the cursor
+- **WHEN** `team say dev "check the failing test"` runs
+- **THEN** the message is typed as today, the output warns once that the input-box shape is unknown, and
+  `state/outbox/` holds no entry
+
+#### Scenario: A draft appearing before the Enter holds the message
+
+- **GIVEN** a fixture pane that reports an empty box at the check and a non-empty box at the pre-`Enter` re-check
+- **WHEN** a send runs
+- **THEN** no `Enter` is sent, the fixture's draft is unchanged, and the message is one entry in `state/outbox/`
+
+### Requirement: Queue entries are immutable files under the team state directory
+
+A held message SHALL be exactly one file under `$TEAM_STATE_DIR/outbox/` named `<epoch-ms>-<zero-padded seq>-<target>.msg`,
+written atomically (temporary file + rename) so a reader never observes a partial entry and the name sorts in
+enqueue order. The file SHALL start with the header fields `kind`, `target`, `from`, `created` and an optional
+`dedup`, then a `---` line, then the payload verbatim; an entry MUST NOT be modified after it is written. The queue
+location MUST follow `TEAM_STATE_DIR` alone, so a fixture that points it at a temporary directory writes nothing
+into the repository.
+
+#### Scenario: The entry carries the documented header and a verbatim payload
+
+- **GIVEN** a dirty box and a message containing `$(touch <sentinel>)`, backticks and a newline
+- **WHEN** the message is enqueued
+- **THEN** the entry's header lines are `kind`, `target`, `from`, `created` and `dedup`, followed by `---` and the
+  payload byte for byte, `<sentinel>` does not exist, and no `*.tmp` file remains in `outbox/`
+
+#### Scenario: Entries drain in enqueue order
+
+- **GIVEN** three messages enqueued in the order `one`, `two`, `three` while the box is dirty
+- **WHEN** the box clears and `team outbox flush` runs
+- **THEN** the pane shows `one`, then `two`, then `three` in that order and `outbox/` is empty
+
+#### Scenario: TEAM_STATE_DIR moves the queue
+
+- **GIVEN** a fixture project with `TEAM_STATE_DIR=<temp>`
+- **WHEN** a message is enqueued
+- **THEN** the entry exists under `<temp>/outbox/` and `<repo>/.pi/team/state/outbox/` does not exist
+
+### Requirement: One drain delivers each entry once, and claims it before typing
+
+A drain SHALL select entries whose target box is free, claim an entry (under the queue's lock or by renaming it to a
+delivery-in-progress name) before any key is typed, so two concurrent drains deliver one entry exactly once, and
+remove the entry only after the delivery is confirmed. The drain MUST be one code path that the sender's bounded
+retry, the watchdog tick and `team outbox flush` all call; it MUST NOT introduce a background daemon (the watchdog
+stays a metronome, `watchdog`).
+
+#### Scenario: Flush delivers a queued message when the box clears
+
+- **GIVEN** one entry for a fixture pane and a box that has become empty
+- **WHEN** `team outbox flush` runs
+- **THEN** the pane holds the message, `outbox/` is empty, and the output names the delivered entry
+
+#### Scenario: Two concurrent drains deliver one entry once
+
+- **GIVEN** one entry and a box that has become empty
+- **WHEN** `team outbox flush` and a `team watch --once` tick run at the same time
+- **THEN** the pane contains the message exactly once and `outbox/` is empty
+
+#### Scenario: The watchdog tick drains without becoming a delivery daemon
+
+- **GIVEN** one entry and a box that has become empty
+- **WHEN** `team watch --once` runs
+- **THEN** the message is typed exactly once, `outbox/` is empty, and the tick created no new tmux window and left no
+  new background process behind
+
+### Requirement: Delivery is confirmed by the pane, and a queued message is reported as queued
+
+`team say` and `team notify` SHALL report a held message as queued (exit code 0, the literal token `queued`, never
+`已确认送达`) and MUST return before the pane-verification loop, because a queued message provokes no pane change.
+Delivery is confirmed by reading the pane back after the `Enter` (V9-B5): the delivery SHALL count as confirmed
+only when the payload has left the box **and** a new submission proof appeared in the conversation area above the
+box — the count of the payload's signature there (its first non-blank line, whitespace-stripped, up to 48 bytes,
+compared byte-wise) exceeds the count taken before typing, or a `[paste #N +K lines]` bubble whose `+K` equals the
+payload's line count newly appears. A box that is merely empty again is NOT proof: a TUI can swallow the `Enter`
+(clearing the box without ever submitting — an overlay, escape handling or a redraw), and reporting that shape as
+delivered loses the message silently (V9-B5 reproduced it end to end: reported delivered, entry deleted, zero
+submissions, no inbox row). A send that cannot produce new proof SHALL be reported as unconfirmed — never as
+delivered — and the entry held; a TUI that never echoes submissions (a static-footer pane shows nothing new after
+a real submit; V7-F4) honestly degrades to "unconfirmed": the `Enter` did land exactly once, but the tool cannot
+prove it, so the entry is held (terminal) with a durable inbox copy for the human to verify and drop. A pane-
+fingerprint comparison MUST NOT be used as the confirmation for a readable box. While the box still holds only
+the payload the drain SHALL send at most one extra `Enter`; when the box then still is not empty
+the drain SHALL move the entry to `outbox/held/` immediately — it MUST NOT wait for the TTL (V8-F4b) —
+and it MUST NOT paste the payload again as a second message.
+An unconfirmed entry is terminal (V8-F4c): the stuck payload may ride the human's next `Enter` to the agent,
+and no automatic path — `team outbox flush --now` included — SHALL paste it again; an unconfirmed
+entry MUST NOT be deleted as if delivered. A pane whose box shape cannot be located is typed as today (one
+warning) and is NEVER reported as confirmed — its output names the unknown shape instead. A send that
+found a draft at the pre-`Enter` re-check is
+terminal (V7-F3): the payload already reached the input box once and may have ridden the human's own submit to
+the agent, so no automatic path — `team outbox flush --now` included — SHALL paste it again; the entry stays under
+`outbox/held/` until the human drops it or re-sends the content explicitly.
+
+#### Scenario: A queued message says queued, not delivered
+
+- **GIVEN** a dirty box
+- **WHEN** `team say dev "check the failing test"` runs
+- **THEN** it exits 0, the output contains `queued` and does not contain `已确认送达`, and `state/outbox/` holds
+  exactly one entry for `dev`
+
+#### Scenario: A clean box still confirms delivery
+
+- **GIVEN** an empty box in a fixture pane that renders the message when it arrives
+- **WHEN** `team say dev "check the failing test"` runs
+- **THEN** the output reports the confirmed delivery and `state/outbox/` stays empty
+
+#### Scenario: An unconfirmed delivery is held, not duplicated
+
+- **GIVEN** one entry and a fixture pane whose input box still shows the payload after the `Enter` and after one
+  extra `Enter`
+- **WHEN** the drain runs
+- **THEN** the payload was pasted once with at most one extra `Enter`, the entry is under `outbox/held/`, and no
+  second copy of it exists in the queue
+
+#### Scenario: A cleared box without submission proof is held, never reported delivered
+
+- **GIVEN** one entry and a fixture pane whose TUI swallows the `Enter` (the box clears, the message never
+  appears in the conversation area)
+- **WHEN** the drain runs
+- **THEN** the output never says `已确认送达`, the entry is under `outbox/held/` with reason `unconfirmed` (not
+  deleted), a durable copy sits in `docs/team/inbox/<target>.md`, zero submissions happened, and both
+  `team outbox flush` and `team outbox flush --now` leave it untouched
+
+#### Scenario: A static-footer pane degrades to unconfirmed and holds
+
+- **GIVEN** a fixture pane that submits normally but never echoes the submission (static footer)
+- **WHEN** `team say dev "static footer probe"` runs
+- **THEN** exactly one submission happened, the output does not claim a confirmed delivery, the entry is under
+  `outbox/held/` (terminal — a later flush pastes nothing), and the inbox holds the durable copy
+
+#### Scenario: A draft-raced entry is never pasted again
+
+- **GIVEN** one entry under `outbox/held/` whose hold reason is `draft-raced`
+- **WHEN** `team outbox flush` and `team outbox flush --now` run
+- **THEN** the pane receives no key for it, the entry stays under `outbox/held/`, and no `forced.log` line is
+  written
+
+#### Scenario: A slow fold is held recoverably and completed by the next drain
+
+- **GIVEN** a fixture pane that folds a large paste but draws the placeholder slower than the bounded mid-render
+  wait, so the first drain ends with the half-drawn placeholder still on screen (no `Enter` sent)
+- **WHEN** the first `team draft send` returns and a later drain (`team outbox flush`) runs after the render
+  finished
+- **THEN** the first drain holds the entry with reason `stall-timeout` (not `draft-raced`) and sends no `Enter`;
+  the later drain completes the pending submission with exactly one `Enter`, pastes the payload no second time
+  (exactly one submission overall), and clears the entry from `held/`
+
+### Requirement: Expiry holds a message, it never types it
+
+An entry that cannot be delivered within `TEAM_DEFER_TTL` seconds (default 300) SHALL be moved to `outbox/held/` with
+its hold time and attempt count, and one line SHALL be appended to `outbox/HOLDING.log`; expiry MUST NOT type
+anything into the box, and the payload MUST already be durable in `docs/team/inbox/<target>.md` (or, for a watchdog
+wake line, in `state/nudges.log`) before the entry can expire — the inbox row is written as part of the hold, never
+after it, and a message the drain confirmed as delivered MUST NOT appear in the inbox at all (a confirmed `say`
+that also writes the inbox forges a pending item there; V7-F5). A held entry whose reason is `draft-raced` or
+`unconfirmed` is
+terminal (see the confirmation requirement) and SHALL NOT be delivered by a later drain; any other held entry
+SHALL still be deliverable by a later drain once the box clears — for a `stall-timeout` entry that later drain
+resumes rather than repastes (one completion `Enter` at most, and only while the box still holds only that
+payload). The queue (active + held) SHALL be capped at `TEAM_OUTBOX_MAX` entries (default 200);
+beyond the cap the oldest entry MUST be escalated like an expired one and the cap event MUST be visible in the held
+count. `team outbox flush --now` and `team outbox drop <n|all>` are the human's explicit exits.
+
+#### Scenario: Holding past the TTL types nothing
+
+- **GIVEN** a dirty box, one queued entry and `TEAM_DEFER_TTL=1`
+- **WHEN** the TTL passes and a drain runs
+- **THEN** the pane still shows only the draft, the entry is under `outbox/held/`, `outbox/HOLDING.log` gained one
+  line, and the message is already present in `docs/team/inbox/pm.md`
+
+#### Scenario: A held entry is delivered after the box clears
+
+- **GIVEN** one entry in `outbox/held/` (not `draft-raced`) and an empty box
+- **WHEN** `team outbox flush` runs
+- **THEN** the pane holds the message once and the entry is removed from `outbox/held/`
+
+#### Scenario: The queue cap escalates the oldest entry
+
+- **GIVEN** `TEAM_OUTBOX_MAX=2`, a dirty box and two queued entries
+- **WHEN** a third message is enqueued
+- **THEN** `outbox/` never holds more than two entries, the oldest one is in `outbox/held/`, and the output names the
+  cap
+
+### Requirement: A duplicate notice is neither queued nor delivered twice
+
+Enqueue SHALL reject a message whose dedup key matches a queued, held or recently delivered entry inside
+`TEAM_NOTIFY_DEDUP_SEC` (default 20 s) and SHALL tell the sender it was a duplicate. The notify extension SHALL pass
+its own dedup key into the queue entry, so the extension's suppression and the queue's cannot disagree.
+
+#### Scenario: Two identical notices become one entry
+
+- **GIVEN** a dirty PM box and `TEAM_NOTIFY_DEDUP_SEC=20`
+- **WHEN** `team notify pm --from-file <file>` runs twice with the same content
+- **THEN** `state/outbox/` holds exactly one entry and the second run reports a duplicate
+
+#### Scenario: The extension's dedup key is carried into the entry
+
+- **GIVEN** one entry enqueued with `--dedup 'dev|[auto]|abc'`
+- **WHEN** `team outbox enqueue` runs again with the same key and payload
+- **THEN** no second entry is created and the duplicate is reported
+
+### Requirement: Queued and held deliveries are visible in status and digest
+
+`team status` and `team digest` SHALL print one line containing `outbox` with the combined queued+held count and the
+age of the oldest entry whenever the queue is non-empty, and MUST NOT print such a line when the queue is empty.
+
+#### Scenario: Two held entries are reported
+
+- **GIVEN** two entries under `state/outbox/held/`
+- **WHEN** `team status` and `team digest` run
+- **THEN** each output contains one line with `outbox`, the count `2` and an age for the oldest entry
+
+#### Scenario: An empty queue prints no held line
+
+- **GIVEN** `state/outbox/` is empty
+- **WHEN** `team status` runs
+- **THEN** its output contains no line with `outbox`
+
+### Requirement: The human draft entry is a file, and the guard delivers it
+
+`team draft pm` SHALL create or reuse a tmux window named `draft` in the team session, without focusing it, running
+`$EDITOR` on `$TEAM_STATE_DIR/draft-pm.md`; no teamsmith path MUST ever send keys into that window. When the editor
+exits after a save, the wrapper SHALL enqueue the file through the same guarded path, print the acknowledgement (the
+entry name and the queued-or-delivered outcome) in that window, and re-seed the file. `team draft send [<file>]`
+SHALL be the headless form: it enqueues the file's content verbatim, so the file is the interface and the wrapper is
+convenience. A multi-line payload SHALL reach a Pi TUI as one input-box content using bracketed paste
+(`load-buffer` + `paste-buffer -p`) followed by one `Enter`; a target that does not understand bracketed paste keeps
+today's rule (multi-line goes to a file and the message points at it).
+
+#### Scenario: A three-line draft becomes one user message
+
+- **GIVEN** a file with `alpha line one`, `beta line two`, `gamma line three` and a fixture Pi pane with an empty box
+- **WHEN** `team draft send <file>` runs
+- **THEN** the pane shows one user message containing the three lines in order, and `outbox/` is empty
+
+#### Scenario: The editor wrapper enqueues what was saved
+
+- **GIVEN** `EDITOR` is a script that writes `interrupted once` into the draft file and exits
+- **WHEN** `team draft pm` runs
+- **THEN** the session has a `draft` window, `state/outbox/` holds one entry whose payload is `interrupted once`, the
+  draft file no longer contains that text, and the window shows the acknowledgement
+
+#### Scenario: A second draft while the first is queued is a second entry
+
+- **GIVEN** one queued entry produced from a draft and a still-dirty box
+- **WHEN** a second `team draft send` runs with different content
+- **THEN** `outbox/` holds two entries, the first entry's payload is unchanged, and both are delivered in order once
+  the box clears
+
+#### Scenario: The draft window is never a target
+
+- **GIVEN** the `draft` window exists with the editor open
+- **WHEN** `team say pm`, `team notify pm` and a `team watch --once` tick run
+- **THEN** the draft window's pane content is unchanged
+
+### Requirement: Which senders defer is explicit, and `--now` is the audited override
+
+`team say` SHALL defer for every target whose box is busy (worker targets included, not only the PM); `team say
+--now` and `team outbox flush --now` SHALL type immediately even into a non-empty box and SHALL append one line
+naming the sender, the target and the entry to `state/outbox/forced.log`. A `team dispatch` prompt SHALL NOT be
+deferred by the guard (it travels as the agent CLI's argument, not through the input box), a meeting knock SHALL keep
+today's behaviour (cross-project), and with `TEAM_NOTIFY_TMUX=0` no knock is attempted and no queue entry is created.
+When `TMUX` is unset (a non-tmux shell, CI) the knock path is likewise not attempted and no queue entry is created,
+but the command MUST say so with one warning line instead of staying silent (V7-F6); the inbox record is written in
+all cases.
+
+#### Scenario: --now types into a dirty box and is logged
+
+- **GIVEN** a dirty box
+- **WHEN** `team say dev "check the failing test" --now` runs
+- **THEN** the pane holds the draft followed by the message (today's behaviour), and `state/outbox/forced.log` gained
+  one line naming `say` and the target
+
+#### Scenario: The inbox-only switch creates no queue entry
+
+- **GIVEN** `TEAM_NOTIFY_TMUX=0` and a dirty PM box
+- **WHEN** `team notify pm --from-file <file>` runs
+- **THEN** `docs/team/inbox/pm.md` gains one line and `state/outbox/` stays empty

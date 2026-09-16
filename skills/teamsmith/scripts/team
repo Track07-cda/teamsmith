@@ -75,6 +75,8 @@ case "$CMD" in
   dispatch)   team_cmd_dispatch "$@" ;;
   say)        team_cmd_say "$@" ;;
   notify)     team_cmd_notify "$@" ;;
+  outbox)     team_cmd_outbox "$@" ;;
+  draft)      team_cmd_draft "$@" ;;
   review)     team_cmd_review "$@" ;;
   close)      team_cmd_close "$@" ;;
   teardown)   team_cmd_teardown "$@" ;;

@@ -217,7 +217,9 @@ team_load_config() {
   TEAM_PM_RESUME_ARGS="${TEAM_PM_RESUME_ARGS:-}"
 
   TEAM_DOCS_ABS="$TEAM_MAIN_ROOT/$TEAM_DOCS_DIR"
-  TEAM_STATE_DIR="$TEAM_MAIN_ROOT/.pi/team/state"
+  # TEAM_STATE_DIR 可以被显式指定（夹具把它指到临时目录 → 队列/收件箱一点都不写进真仓库；
+  # delivery-guard 的 spec 场景「TEAM_STATE_DIR moves the queue」就是这一条）
+  TEAM_STATE_DIR="${TEAM_STATE_DIR:-$TEAM_MAIN_ROOT/.pi/team/state}"
   TEAM_CLI="${TEAM_CLI:-team}"
 }
 
@@ -1747,7 +1749,12 @@ team_nudge() { # <摘要文本>
   printf '%s %s\n' "$(team_timestamp)" "$text" >> "$TEAM_STATE_DIR/nudges.log"
   printf '%s %s\n' "$(date +%s)" "$(team_pending_sig)" > "$TEAM_STATE_DIR/watchdog.nudge"
   msg="[watchdog] 待办：$text → 跑 $TEAM_CLI digest 看详情；若确实没活可推或需人工介入，跑 $TEAM_CLI standby on --reason \"…\" 让自己停下（之后不会再叫醒你）"
-  if team_pm_alive; then team_tmux_send_to_pi "$(team_pm_target)" "$msg" >/dev/null 2>&1 || true; fi
+  # 叫醒语也走投递守卫（delivery-guard）：PM 输入框里有草稿时入队，不粘字。
+  # nudges.log / watchdog.nudge 的 durable 记录已经在上面写完了，所以排队不会丢消息。
+  if team_pm_alive; then
+    team_send_guarded "$(team_pm_target)" "$msg" nudge --from watchdog >/dev/null 2>&1 || true
+    [ "${TEAM_SEND_OUTCOME:-}" = "queued" ] && team_dim "  PM 输入框里有草稿：叫醒语已入队（$TEAM_CLI outbox list），清空后自动投递"
+  fi
   return 0
 }
 
@@ -2771,6 +2778,14 @@ team_required_dep_issues() {
   fi
   return 0
 }
+
+# ---------------------------------------------------------------- 投递守卫 + 延后队列
+# 单独一个文件、单独一份契约（references/troubleshooting.md §3 / 规格 delivery-guard）：
+# outbox.sh 里的函数是**唯一**允许往 TUI 输入框打字的实现，见该文件头部注释。
+_team_lib_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/outbox.sh
+[ -f "$_team_lib_dir/outbox.sh" ] && . "$_team_lib_dir/outbox.sh"
+unset _team_lib_dir
 
 # 把值转成可以安全放进 config.sh 双引号里的形式（$ ` \ " 在 source 时会被当代码解析）
 team_escape_dq() {

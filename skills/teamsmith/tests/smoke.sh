@@ -26,7 +26,7 @@ TEAM="bash $SKILL_DIR/scripts/team"
 unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
       TEAM_SESSION TEAM_SESSION_FROM TEAM_PM_WINDOW TEAM_AGENTS TEAM_DOCS_DIR \
       TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION 2>/dev/null || true
-KEEP=0
+KEEP="${TEAM_SMOKE_KEEP:-0}"
 [ "${1:-}" = "--keep" ] && KEEP=1
 
 # 快模式开关（TEAM_SMOKE_FAST=1）：只跑纯逻辑段落，跳过需要真进程的段落（tmux/真实 pi）。
@@ -51,6 +51,12 @@ fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯
   printf '  \033[33mSKIP（FAST 模式）\033[0m %s —— %s\n' "$1" "$2"
 }
 skipped() { case "|$SKIP_SEGS|" in *"|$1|"*) return 0 ;; *) return 1 ;; esac; }   # 首尾补 | ，最后一段也能匹配
+
+cond_skip() { # <段落标记> [<原因>]：条件不满足时的跳过出口（V7-F6：skip 是约定不是 FAIL，必须打印）
+  SKIP_N=$((SKIP_N + 1))
+  SKIP_SEGS="${SKIP_SEGS}|$1"
+  printf '  \033[33mSKIP（条件不满足）\033[0m %s\n' "$1${2:+ —— $2}"
+}
 
 PASS=0; FAIL=0
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
@@ -78,6 +84,14 @@ canon_branch() { # <agent> <ID>
   ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
       bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent "'"$1"'" "'"$2"'"' )
 }
+
+# 调用方项目（跑 smoke 的那个仓库）：新夹具必须证明自己没有写它的 inbox/state（M7.2 教训）
+SMOKE_INVOKE_ROOT="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | xargs -r dirname || true)"
+SMOKE_INVOKE_MAIN="$SMOKE_INVOKE_ROOT"
+if [ -n "$SMOKE_INVOKE_ROOT" ]; then
+  SMOKE_INVOKE_MAIN="$(git -C "$SMOKE_INVOKE_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | xargs -r dirname || true)"
+  [ -n "$SMOKE_INVOKE_MAIN" ] || SMOKE_INVOKE_MAIN="$SMOKE_INVOKE_ROOT"
+fi
 
 TMP="$(mktemp -d /tmp/teamsmith-smoke.XXXXXX)"
 SESSION="teamsmith-smoke-$$"
@@ -1502,6 +1516,10 @@ EOF
   pm_env() { env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$PMCMD" TEAM_PM_BIN="$FAKE/fake-pm.sh" "$@"; }
   pm_seen_field() { sed -n "s/^$1=//p" "$PM_SEEN" 2>/dev/null | head -1; }
   pm_wait_seen() { local i=0; while [ "$i" -lt 60 ]; do [ -s "$PM_SEEN" ] && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
+  # V9-E1：假 PM 把「看到的东西」写在开头，而 digest → board ls → dispatch --print 这条链
+  # 要跑完才写 PM_FAKE_READY。只等 PM_SEEN 就断言会在负载高时提前读到半截日志（实测抖出
+  # 3 条假红）。所以先等 READY（有界 30s），再断言——真死掉的 adapter 仍然会被下面抓到。
+  pm_wait_ready() { local i=0; while [ "$i" -lt 60 ]; do grep -q "PM_FAKE_READY" "$PM_LOG" 2>/dev/null && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
   pm_lines() { wc -l < "$PM_LOG" 2>/dev/null | tr -d ' ' || echo 0; }
   pm_close_windows() { tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true; sleep 0.3; }
 
@@ -1513,6 +1531,7 @@ EOF
   assert_has "$TMP/pm-adapter-up1.log" "不延续" "resume 参数为空 → 明说历史上下文不延续"
   assert_has "$TMP/pm-adapter-up1.log" "team digest" "并给出接手方式（正式记录 + digest）"
   if pm_wait_seen; then ok "假 PM 在窗口里真的跑起来了（写下了自己看到的东西）"; else bad "假 PM 没跑起来（$PM_SEEN 空）"; fi
+  pm_wait_ready || true   # 等它把 digest → board ls → dispatch --print 跑完整段再断言（V9-E1）
   assert_eq "提示词文件的内容真的交给它了（argv[0] 与文件同源）" "$(pm_seen_field argv_prompt_md5)" "$(printf '%s' "$(cat "$PM_PF" 2>/dev/null)" | md5sum | cut -d' ' -f1)"
   assert_has "$PM_SEEN" "prompt_file=$PM_PF" "模板里的 {prompt_file} 是落盘的 PM 提示词"
   PM_FIRST="$(head -1 "$PM_PF" 2>/dev/null)"
@@ -1708,6 +1727,28 @@ assert_has "$ADOC" 'resolved on the **caller' "M8.2 文档：worker 侧首词按
 assert_has "$ADOC" "dispatch-<agent>-launch-failed.log" "M8.2 文档：启动失败写出诊断文件"
 assert_has "$M82_TROUBLE" 'state/dispatch-<agent>.exit' "M8.2 文档：退出事件是独立证据（harness ≠ agent）"
 assert_has "$M82_TROUBLE" "exit=127" "M8.2 文档：exit=127 的含义（窗口里 command not found）"
+
+# V9 返工 4 · 文档诚实性钉（C1/C2/C4/D2 + B6）：防止「去掉一句不实话」再长回来。
+# spec 的位置随 OpenSpec 生命周期变（活动 change → archive → 主 spec），所以按序解析第一个存在的。
+V94_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
+V94_SPEC=""
+for _cand in "$V94_ROOT/openspec/changes/deferred-delivery-and-draft-entry/specs/delivery-guard/spec.md" \
+             "$V94_ROOT"/openspec/changes/archive/*deferred-delivery-and-draft-entry*/specs/delivery-guard/spec.md \
+             "$V94_ROOT/openspec/specs/delivery-guard/spec.md"; do
+  [ -f "$_cand" ] && { V94_SPEC="$_cand"; break; }
+done
+assert_has "$M82_TROUBLE" "not the only one" "V9-C4：whitespace 条目是同类洞枚举，不是「唯一已知漏判」"
+assert_has "$M82_TROUBLE" "stall-timeout" "V9-B6：troubleshooting 写明 stall-timeout 可恢复"
+assert_has "$M82_TROUBLE" "braille" "V9-D2：0.85.1 工作行按实测形状（braille + 文字）写"
+if grep -q "Nothing else in the detector has this hole" "$M82_TROUBLE"; then
+  bad "V9-C4：绝对句「检测器没有别的洞」又回来了"
+else ok "V9-C4：绝对句不在（同类洞逐条列出）"; fi
+if [ -n "$V94_SPEC" ]; then
+  assert_has "$V94_SPEC" "stall-timeout" "V9-B6：spec 写明 stall-timeout 与 resume 语义"
+  assert_has "$V94_SPEC" "the ones deliberately still open" "V9-C4：spec 把同类漏判当成一列表（含仍开的）"
+else
+  printf '  (跳过 V9 spec 钉：找不到 delivery-guard spec)\n'
+fi
 
 # ② 真窗口：裸名字的 CLI 真的被拉起；秒退非 0 的 adapter 必须失败 + 留诊断
 if [ "$FAST" = "1" ]; then
@@ -3644,6 +3685,661 @@ EOF
 else
   printf '  (跳过扩展 E 测试：node 未启用类型剥离，且没有 bun/tsx)\n'
 fi
+
+# ---------------------------------------------------------------- 12b. 延后投递与草稿入口（delivery-guard）
+# 事故背景（D20）：自动化消息 send-keys 到「人正在写草稿」的输入框，草稿被粘走、一起被提交。
+# 这一节把守卫/队列/排水/草稿入口按规格逐条钉住：先用**假 tmux**（headless，快模式也跑）打**
+# 判定与格式**，再用**真 pane（假 TUI）**打端到端形状（多行 = 一次提交、清空后只投一次、等等）。
+#
+# 隔离（M7.2 教训 / 规格 tasks 7.2）：夹具全部跑在临时仓库里，继承的 TEAM_* 已经在开头清掉；
+# 每个夹具写之前先断言 `team paths` 指向临时根；结尾比对**调用方项目**的 inbox/state 指纹。
+section "12b · 延后投递与草稿入口（delivery-guard：守卫 / 队列 / 排水 / 草稿）"
+
+ob_hash_real() { # 调用方项目（+ 它的主工作树）的 docs/team/inbox 与 .pi/team/state 指纹
+  { for r in "$SMOKE_INVOKE_ROOT" "$SMOKE_INVOKE_MAIN"; do
+      [ -n "$r" ] || continue
+      for d in "$r/docs/team/inbox" "$r/.pi/team/state"; do
+        if [ -d "$d" ]; then
+          ( cd "$d" && find . -type f 2>/dev/null | sort | while IFS= read -r f; do printf '%s ' "$f"; md5sum "$f" 2>/dev/null | cut -d' ' -f1; done )
+        else
+          printf 'missing %s\n' "$d"
+        fi
+      done
+    done; } | md5sum | awk '{print $1}'
+}
+# 真项目的 state/inbox **本来就在被真团队写**（capacity.log/nudges.log 每一拍都动），所以「整目录哈希不变」
+# 在真项目活着时必然为假。承重的判据因此是「**夹具的痕迹**有没有出现在真项目里」：夹具的 payload 与 target
+# 都带得出自己的名字（沙盒 session 名 + 夹具专用串），一条都搜不到才算没污染。
+ob_leak_scan() { # → 命中行（空 = 没有污染）
+  local pats="$SESSION|半句草稿 half a sentence|never lands|held body|race claim|OB-EXT-KNOCK|ob-nudge-new-work|alpha line one|interrupted once|deliver as today|flush now|vis1|dropme"
+  { for r in "$SMOKE_INVOKE_ROOT" "$SMOKE_INVOKE_MAIN"; do
+      [ -n "$r" ] || continue
+      for d in "$r/docs/team/inbox" "$r/.pi/team/state"; do
+        [ -d "$d" ] || continue
+        grep -rlE "$pats" "$d" 2>/dev/null || true
+      done
+    done; } | sort -u
+}
+ob_paths_ok() { # 写之前必须证明 team paths 指向临时根（不是真项目）
+  local p; p="$( $TEAM paths 2>/dev/null )"
+  case "$p" in *"\"main_root\": \"$REPO\""*) return 0 ;; *) return 1 ;; esac
+}
+
+REAL_FP_BEFORE="$(ob_hash_real)"
+if ob_paths_ok; then ok "12b 隔离：team paths 指向临时根（$REPO）"; else bad "12b 隔离：team paths 不是临时根"; fi
+
+# 夹具 pane 的形状（E3 §1.1(a)/(b)）：上边框 / 3 行内容 / 提示行 / 下边框，光标落在第 2 行内容行
+ob_box_empty_txt() { printf '%s\n' "$(printf '%.0s─' $(seq 1 80))" "" "" "" " k3  Kimi Coding  max" "$(printf '%.0s─' $(seq 1 80))" "footer"; }
+ob_box_draft_txt() { printf '%s\n' "$(printf '%.0s─' $(seq 1 80))" "" "半句草稿 half a sentence" "" " k3  Kimi Coding  max" "$(printf '%.0s─' $(seq 1 80))" "footer"; }
+
+# 假 tmux：只服务 headless 夹具。capture-pane 的输出由 OB_BOX 决定；OB_SWITCH_AFTER=N 表示
+# 「第 N 次之后的 capture-pane 换成 OB_BOX2」（用来造「检查与粘贴之间状态变了」的世界）。
+OB_SHIM="$TMP/ob-shim"; mkdir -p "$OB_SHIM"
+cat > "$OB_SHIM/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$OB_LOG"
+case "\$*" in
+  *cursor_y*) printf '%s\n' "\${OB_CURSOR_Y:-2}" ; exit 0 ;;
+esac
+case "\$*" in
+  *capture-pane*)
+    n=0
+    [ -f "\$OB_COUNT" ] && n="\$(cat "\$OB_COUNT")"
+    n=\$((n + 1))
+    printf '%s' "\$n" > "\$OB_COUNT"
+    # OB_ECHO=1：模拟真实 TUI 的气泡区——凡是在最后一次 Enter 之前用 send-keys -l 打进去的
+    # 文本，都作为对话区行回显在输入框**上方**（V9-B5：生产代码的送达确认要看提交证据）。
+    if [ "\${OB_ECHO:-}" = "1" ]; then
+      e=\$(awk '/Enter/{n=NR} END{print n+0}' "\$OB_LOG" 2>/dev/null)
+      [ "\$e" -gt 0 ] && awk -v e="\$e" 'index(\$0," -l ")>0 && NR<e { sub(/.* -l /,""); print }' "\$OB_LOG"
+    fi
+    if [ -n "\${OB_SWITCH_AFTER:-}" ] && [ "\$n" -gt "\$OB_SWITCH_AFTER" ] && [ -n "\${OB_BOX2:-}" ]; then
+      cat "\$OB_BOX2"
+    else
+      cat "\$OB_BOX"
+    fi
+    exit 0 ;;
+esac
+case "\$*" in
+  *pane_current_command*) printf 'pi\n' ;;
+  *pane_id*)              printf '%%1\n' ;;
+  *pane_pid*)             printf '%s\n' "\$OB_PANE_PID" ;;
+  *bracket_paste_flag*)   printf '1\n' ;;
+  *window_name*)          printf '%s\n' "\${OB_WINDOW:-dev}" ;;
+  *session_name*)         printf '%s\n' "$SESSION" ;;
+  *list-windows*)         printf '%s\n' "\${OB_WINDOW:-dev}" ;;
+  *has-session*)          exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$OB_SHIM/tmux"
+ob_box_empty_txt > "$TMP/ob-box-empty"
+ob_box_draft_txt > "$TMP/ob-box-draft"
+OB_BOX="$TMP/ob-box-empty"
+OB_ENV=(env "PATH=$OB_SHIM:$PATH" "OB_LOG=$TMP/ob-calls.log" "OB_COUNT=$TMP/ob-count"
+        "OB_CURSOR_Y=2" "OB_PANE_PID=$$" "OB_WINDOW=dev")
+ob_run()  { "${OB_ENV[@]}" "$@"; }           # headless：tmux 全部走假 shim
+ob_live() { "$@"; }                          # 真 pane 段落：必须用真 tmux（不能带 shim）
+ob_box()  { OB_BOX="$1"; }                   # 夹具当前要假 tmux 报出的输入框内容
+ob_reset() { : > "$TMP/ob-calls.log"; printf '0' > "$TMP/ob-count"; rm -rf "$REPO/.pi/team/state/outbox"; }
+
+# ---------------------------------------------------------------- 12b-a. 守卫状态矩阵（E3 §1.5）
+if bash "$SKILL_DIR/tests/guard-matrix.sh" >"$TMP/ob-guard.log" 2>&1; then
+  ok "12b-a 守卫矩阵：E3 §1.5 + V7-F1 的 13 个实测状态全部与真值一致（含唯一允许的盲区：纯空白草稿）"
+else
+  bad "12b-a 守卫矩阵失败"; cat "$TMP/ob-guard.log"
+fi
+assert_has "$TMP/ob-guard.log" "guard matrix 全绿" "12b-a 矩阵自报全绿（不是只看退出码）"
+
+# ---------------------------------------------------------------- 12b-b. 队列文件即契约（规格 requirement 2）
+ob_reset
+printf 'echo $(touch %s) `backtick` 多行第二行\n' "$TMP/ob-sentinel" > "$TMP/ob-payload"
+ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --from pm --from-file "$TMP/ob-payload" >"$TMP/ob-enq.log" 2>&1
+ENTRY="$(head -1 "$TMP/ob-enq.log")"
+assert_file "$ENTRY" "12b-b enqueue 写出条目（stdout 给路径）"
+assert_has "$ENTRY" "kind: say" "12b-b 头字段 kind"
+assert_has "$ENTRY" "target: $SESSION:dev" "12b-b 头字段 target"
+assert_has "$ENTRY" "from: pm" "12b-b 头字段 from"
+assert_has "$ENTRY" "created: " "12b-b 头字段 created"
+assert_has "$ENTRY" "dedup: -" "12b-b 头字段 dedup（没有键时是 -）"
+assert_match "$ENTRY" "^---$" "12b-b 头与 payload 之间是 ---（字面量）"
+assert_eq "12b-b payload 逐字节原样" "$(LC_ALL=C awk 'seen{print} $0=="---"{seen=1}' "$ENTRY")" "$(cat "$TMP/ob-payload")"
+assert_not_file "$TMP/ob-sentinel" "12b-b payload 里的 \$(touch …) 没有被执行"
+assert_eq "12b-b 没有留下 *.tmp" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.tmp' 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_not "$TMP/ob-calls.log" "send-keys" "12b-b 入队不写任何键"
+
+# FIFO：三条按 enqueue 顺序排队，list 的编号也是这个顺序
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+for m in one two three; do ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --from pm --payload "$m" >/dev/null 2>&1; done
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox list >"$TMP/ob-list.log" 2>&1
+assert_has "$TMP/ob-list.log" "队列 3 条" "12b-b list 数到 3 条"
+assert_match "$TMP/ob-list.log" "#1  \[queued\] [0-9]+-0001-" "12b-b #1 是最早的条目（FIFO）"
+assert_eq "12b-b list #1 = 名字最小的条目（FIFO 头）" \
+  "$(awk '/^  #1  / {print $3}' "$TMP/ob-list.log")" \
+  "$(ls -1 "$REPO/.pi/team/state/outbox"/*.msg 2>/dev/null | xargs -r -n1 basename | LC_ALL=C sort | head -1)"
+assert_eq "12b-b list #3 = 名字最大的条目（FIFO 尾）" \
+  "$(awk '/^  #3  / {print $3}' "$TMP/ob-list.log")" \
+  "$(ls -1 "$REPO/.pi/team/state/outbox"/*.msg 2>/dev/null | xargs -r -n1 basename | LC_ALL=C sort | tail -1)"
+
+# TEAM_STATE_DIR 搬走整个队列（规格 scenario：TEAM_STATE_DIR moves the queue）
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+rm -rf "$TMP/ob-altstate"
+ob_run env OB_BOX="$OB_BOX" TEAM_STATE_DIR="$TMP/ob-altstate" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "alt state" >/dev/null 2>&1
+assert_eq "12b-b TEAM_STATE_DIR 搬家：条目落在 <temp>/outbox/" "$(find "$TMP/ob-altstate/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null 2>/dev/null | wc -l | tr -d ' ')" "1"
+assert_eq "12b-b 搬家时仓库里不留下这份条目" "$(grep -rl "alt state" "$REPO/.pi/team/state/outbox" 2>/dev/null 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# flush --now：排水的逃生门 —— 跳过守卫直投（旧行为）+ forced.log 记下条目
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --from pm --payload "flush now" >/dev/null 2>&1
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox flush --now >"$TMP/ob-flushnow.log" 2>&1 || true
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-b flush --now 真的打字"
+assert_has "$REPO/.pi/team/state/outbox/forced.log" "entry=" "12b-b flush --now 的审计行点名条目"
+assert_eq "12b-b flush --now 之后队列空了" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# ---------------------------------------------------------------- 12b-c. 忙框：queued 不是 delivered（规格 requirement 4）
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+ob_run env OB_BOX="$OB_BOX" $TEAM say dev "check the failing test" >"$TMP/ob-say-dirty.log" 2>&1 && ok "12b-c 脏输入框：say 退出码 0" || bad "12b-c 脏输入框：say 不该失败"
+assert_has "$TMP/ob-say-dirty.log" "queued" "12b-c 输出含 queued"
+assert_not "$TMP/ob-say-dirty.log" "已确认送达" "12b-c 排队时绝不说「已确认送达」"
+assert_eq "12b-c 队列里恰好一条 dev 条目" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name "*dev*.msg" 2>/dev/null | wc -l | tr -d ' ')" "1"
+assert_not "$TMP/ob-calls.log" "send-keys" "12b-c 一个键都没发"
+assert_has "$REPO/docs/team/inbox/dev.md" "check the failing test" "12b-c durable 兜底：消息同时进了收件箱"
+
+# --now：跳过守卫（旧行为）+ 审计
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+ob_run env OB_BOX="$OB_BOX" $TEAM say dev "forced message" --now >"$TMP/ob-say-now.log" 2>&1 || true
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-c --now 真的打字（跳过守卫）"
+assert_has "$REPO/.pi/team/state/outbox/forced.log" "kind=say" "12b-c --now 写 forced.log"
+assert_has "$REPO/.pi/team/state/outbox/forced.log" "$SESSION:dev" "12b-c forced.log 点名目标"
+assert_eq "12b-c --now 不入队" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# UNKNOWN pane（找不到输入框形状，例如非 Pi TUI）：按今天的行为投递 + 一行警告 + queue 不留条目
+ob_reset
+printf 'working…\nworking…\nworking…\n' > "$TMP/ob-box-unknown"
+ob_run env OB_BOX="$TMP/ob-box-unknown" $TEAM say dev "deliver as today" >"$TMP/ob-unknown.log" 2>&1 || true
+assert_has "$TMP/ob-unknown.log" "输入框形状无法识别" "12b-c 形状未知：给一行警告（不静默）"
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-c 形状未知：按今天的行为投递（真的打字）"
+assert_eq "12b-c 形状未知：不留队列条目" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# ---------------------------------------------------------------- 12b-d. 去重 / TTL / 上限（规格 requirement 5、6）
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind knock --target "$SESSION:dev" --dedup 'dev|[auto]|abc' --payload 'same notice' >/dev/null 2>&1
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind knock --target "$SESSION:dev" --dedup 'dev|[auto]|abc' --payload 'same notice' >"$TMP/ob-dup.log" 2>&1 || true
+assert_has "$TMP/ob-dup.log" "duplicate" "12b-d 同一个 dedup 键第二次被拒（输出 duplicate）"
+assert_eq "12b-d 重复通知只有一个条目" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind knock --target "$SESSION:dev" --dedup 'dev|[auto]|abc' --payload 'different body' >"$TMP/ob-dup2.log" 2>&1 || true
+assert_has "$TMP/ob-dup2.log" "duplicate" "12b-d 同键不同正文也算重复（键是契约，不是正文）"
+
+# TTL：脏框 + TEAM_DEFER_TTL=1 → 排水时转 held，一个键都不打
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+printf 'held body\n' > "$TMP/ob-held.txt"
+ob_run env OB_BOX="$OB_BOX" $TEAM notify pm --from-file "$TMP/ob-held.txt" >/dev/null 2>&1 || true   # PM 没在跑：只落收件箱
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind notify --target "$SESSION:pm" --from dev --payload 'held body' >/dev/null 2>&1
+sleep 2
+ob_run env OB_BOX="$OB_BOX" TEAM_DEFER_TTL=1 $TEAM outbox flush >"$TMP/ob-ttl.log" 2>&1 || true
+assert_eq "12b-d TTL 到了 → 条目进 held/" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=expired-ttl" "12b-d HOLDING.log 记下原因"
+assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "held-since=" "12b-d HOLDING.log 记下 hold 时刻"
+assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "attempts=" "12b-d HOLDING.log 记下尝试次数"
+assert_has "$REPO/docs/team/inbox/pm.md" "held body" "12b-d 过期前 payload 已经是 durable 的（收件箱里有）"
+assert_not "$TMP/ob-calls.log" "send-keys" "12b-d 过期不投递（不写一个键）"
+
+# 上限：MAX=2 时第三条把最老的挤进 held/（cap 事件可见）
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+for m in m1 m2 m3; do ob_run env OB_BOX="$OB_BOX" TEAM_OUTBOX_MAX=2 $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "$m" >/dev/null 2>&1; done
+assert_eq "12b-d 活动条目不超过 TEAM_OUTBOX_MAX" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "2"
+assert_eq "12b-d 最老的那条被升级到 held/" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=cap" "12b-d cap 事件写进 HOLDING.log"
+
+# drop：人显式丢弃
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "dropme" >/dev/null 2>&1
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox drop 1 >"$TMP/ob-drop.log" 2>&1 && ok "12b-d drop 退出码 0" || bad "12b-d drop 失败"
+assert_has "$TMP/ob-drop.log" "已丢弃" "12b-d drop 打印丢了什么"
+assert_eq "12b-d drop 之后队列空了" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# 第二份草稿：第一条条目不变，两条按 FIFO 顺序投出去（规格 scenario）
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+printf 'first draft body\n' > "$TMP/ob-d1.txt"
+printf 'second draft body\n' > "$TMP/ob-d2.txt"
+ob_run env OB_BOX="$OB_BOX" $TEAM draft send "$TMP/ob-d1.txt" --target "$SESSION:dev" >/dev/null 2>&1 || true
+FIRST_ENTRY="$(ls -1 "$REPO/.pi/team/state/outbox"/*.msg 2>/dev/null | head -1)"
+ob_run env OB_BOX="$OB_BOX" $TEAM draft send "$TMP/ob-d2.txt" --target "$SESSION:dev" >/dev/null 2>&1 || true
+assert_eq "12b-d 两份草稿 = 两条条目" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "2"
+assert_eq "12b-d 第一条条目的 payload 没有被改写" "$(LC_ALL=C awk 'seen{print} $0=="---"{seen=1}' "$FIRST_ENTRY")" "first draft body"
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 TEAM_DEFER_TTL=1 $TEAM outbox flush >"$TMP/ob-dflush.log" 2>&1 || true
+ob_first_ln="$(grep -n 'send-keys .*-l first draft body' "$TMP/ob-calls.log" | head -1 | cut -d: -f1)"
+ob_second_ln="$(grep -n 'send-keys .*-l second draft body' "$TMP/ob-calls.log" | head -1 | cut -d: -f1)"
+assert_eq "12b-d 两条都打了字，且第一条在前（FIFO）" \
+  "$([ -n "$ob_first_ln" ] && [ -n "$ob_second_ln" ] && [ "$ob_first_ln" -lt "$ob_second_ln" ] && echo yes || echo no)" "yes"
+
+# ---------------------------------------------------------------- 12b-e. 排水的 claim 与「确认不了就 held，绝不重复粘贴」
+# 「payload 卡在框里一直不消失」的 pane：V7-F4 把判据改成「payload 离开输入框」，所以这个夹具
+# 必须是「打完字后框里一直显示 payload」—— OB_SWITCH_AFTER=6：前 6 次 capture（两轮守卫检查各 2 次 /
+# 指纹快照 / Enter 前复检）看空框，第 7 次起换成 payload 卡在框里的样子 → 补一次 Enter 也没用 → held。旧的
+# 「指纹永远不变」夹具在新判据下不成立：框从 EMPTY 变成 BUSY 本身就 readable，投递成立。
+ob_reset; OB_BOX="$TMP/ob-box-empty"
+printf '%s\n' "$(printf '%.0s─' $(seq 1 80))" "never lands" "" "" " k3  Kimi Coding  max" "$(printf '%.0s─' $(seq 1 80))" "footer" > "$TMP/ob-box-stuck"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --inbox-defer dev --payload "never lands" >/dev/null 2>&1
+assert_not "$REPO/docs/team/inbox/dev.md" "never lands" "12b-e F5：--inbox-defer 入队时不写收件箱（还不是 durable 待办）"
+# V8-F4b：held 必须**立即**发生（补 Enter 后框仍非空的那一刻），不许等 TTL——TTL=300 下依然 held 才算
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_SWITCH_AFTER=6 OB_BOX2="$TMP/ob-box-stuck" TEAM_DEFER_TTL=300 $TEAM outbox flush >"$TMP/ob-unconfirmed.log" 2>&1 || true
+assert_eq "12b-e 未确认的条目立即进 held/（F4b：不等 TTL）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=unconfirmed" "12b-e held 原因 = unconfirmed"
+assert_eq "12b-e 没有第二条副本（绝不重复粘贴）" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_eq "12b-e payload 只打了一次" "$(grep -c "send-keys.*never lands" "$TMP/ob-calls.log" || true)" "1"
+assert_eq "12b-e Enter = 1 次原始 + 至多 1 次补发" "$(grep -c "Enter" "$TMP/ob-calls.log" || true)" "2"
+assert_has "$REPO/docs/team/inbox/dev.md" "never lands" "12b-e F5：进 held/ 那一刻 durable 行落进收件箱"
+# V8-F4c：unconfirmed 是终态——之后的排水（含 flush --now）绝不重贴（人自己的 Enter 可能已把卡在框里的
+# payload 提交过一次，再贴就是第二遍）
+ob_run env OB_BOX="$TMP/ob-box-empty" $TEAM outbox flush >/dev/null 2>&1 || true
+assert_eq "12b-e unconfirmed 终态：第二次 flush 不重贴" "$(grep -c "send-keys.*never lands" "$TMP/ob-calls.log" || true)" "1"
+ob_run env OB_BOX="$TMP/ob-box-empty" $TEAM outbox flush --now >/dev/null 2>&1 || true
+assert_eq "12b-e unconfirmed 终态：flush --now 也不重贴" "$(grep -c "send-keys.*never lands" "$TMP/ob-calls.log" || true)" "1"
+assert_eq "12b-e unconfirmed 终态：没有 forced.log（--now 一个键都没发）" "$(wc -l < "$REPO/.pi/team/state/outbox/forced.log" 2>/dev/null | tr -d ' ' || echo 0)" "0"
+assert_eq "12b-e unconfirmed 终态：条目留在 held/（可见、可 drop）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+
+# claim：两个排水并发时一个条目只投一次
+ob_reset; OB_BOX="$TMP/ob-box-empty"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "race claim" >/dev/null 2>&1
+( ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 TEAM_DEFER_TTL=0 $TEAM outbox flush >"$TMP/ob-race-a.log" 2>&1 || true ) &
+( ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 TEAM_DEFER_TTL=0 $TEAM outbox flush >"$TMP/ob-race-b.log" 2>&1 || true ) &
+wait
+assert_eq "12b-e 并发排水：payload 只打了一次" "$(grep -c "send-keys.*race claim" "$TMP/ob-calls.log" || true)" "1"
+assert_eq "12b-e 并发排水：条目只投一次且队列清空（V7-F4：空框回读=已投递，不再是旧指纹判据的 unconfirmed+held）" "$(find "$REPO/.pi/team/state/outbox" "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# 巡检的一拍也排水，但**不变成投递 daemon**：不新建窗口、不留后台进程（规格 requirement 3 scenario）
+# 真跑一拍 `watch --once` 会写 capacity.log / watchdog.last（真实的巡检留痕）——FAST 模式有
+# 「capacity.log 不得存在」的全局不变量，所以这一段只在完整门禁跑；FAST 里显式 SKIP。
+if [ "${TEAM_SMOKE_FAST:-0}" = "1" ]; then
+  fast_skip "12b-e·巡检一拍排水" "真跑一拍会写 capacity.log（FAST 的全局不变量不许）——完整门禁覆盖"
+else
+ob_reset; OB_BOX="$TMP/ob-box-draft"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "tick holds" >/dev/null 2>&1
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$OB_BOX" $TEAM watch --once >"$TMP/ob-tick.log" 2>&1 || true
+assert_not "$TMP/ob-calls.log" "new-window" "12b-e 巡检一拍没有新建 tmux 窗口"
+assert_not "$TMP/ob-calls.log" "new-session" "12b-e 巡检一拍没有新建 tmux session"
+assert_not "$TMP/ob-calls.log" "split-window" "12b-e 巡检一拍没有开新 pane"
+assert_not "$TMP/ob-calls.log" "run-shell" "12b-e 巡检一拍没有起后台 shell"
+# 「不留后台进程」：只看**我们夹具的**进程（别的项目/别的会话的进程不归这里管），失败时把现场打出来
+ob_ling="$(ps -eo args= 2>/dev/null | grep -F 'outbox flush' | grep -F "$REPO" || true)"
+assert_eq "12b-e 巡检一拍之后没有残留的夹具进程" "$([ -z "$ob_ling" ] && echo none || printf '%s' "$ob_ling" | head -1 | cut -c1-100)" "none"
+assert_eq "12b-e 巡检一拍没有留下 claim 残迹" "$(find "$REPO/.pi/team/state/outbox" -name '*.claim' 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_eq "12b-e 脏框下巡检一拍把条目留在队列里" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+fi
+
+# ---------------------------------------------------------------- 12b-f. 竞态：检查与打字之间出现草稿（规格 requirement 1 第 4 条）
+# 第 1 次 capture-pane 看到空框（判定 EMPTY），第 2 次（打字前的复检）看到草稿 → 一个键都不该写
+ob_reset; OB_BOX="$TMP/ob-box-empty"
+ob_run env OB_BOX="$OB_BOX" OB_SWITCH_AFTER=1 OB_BOX2="$TMP/ob-box-draft" $TEAM say dev "must not type" >"$TMP/ob-race-say.log" 2>&1 || true
+assert_has "$TMP/ob-race-say.log" "queued" "12b-f 复检发现草稿 → 报 queued"
+assert_not "$TMP/ob-calls.log" "send-keys" "12b-f 一个键都没发（连 Enter 都没有）"
+assert_eq "12b-f 消息进了队列" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+
+# ---------------------------------------------------------------- 12b-g. 可见性（规格 requirement 8）
+ob_reset
+for i in 1 2; do ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "vis$i" >/dev/null 2>&1; done
+mkdir -p "$REPO/.pi/team/state/outbox/held"
+for f in "$REPO/.pi/team/state/outbox"/*.msg; do mv "$f" "$REPO/.pi/team/state/outbox/held/" 2>/dev/null || true; done
+ob_run env OB_BOX="$OB_BOX" $TEAM status >"$TMP/ob-status.log" 2>&1 || true
+ob_run env OB_BOX="$OB_BOX" $TEAM digest >"$TMP/ob-digest.log" 2>&1 || true
+assert_has "$TMP/ob-status.log" "outbox 2 条待投递" "12b-g status 打印 outbox 行（含条数）"
+assert_has "$TMP/ob-digest.log" "outbox 2 条待投递" "12b-g digest 打印同一个 outbox 行"
+ob_reset
+ob_run env OB_BOX="$OB_BOX" $TEAM status >"$TMP/ob-status-empty.log" 2>&1 || true
+assert_not "$TMP/ob-status-empty.log" "outbox" "12b-g 空队列时 status 一行都不加"
+: > "$REPO/.pi/team/state/outbox/forced.log"
+ob_run env OB_BOX="$OB_BOX" $TEAM status >"$TMP/ob-status-empty2.log" 2>&1 || true
+assert_not "$TMP/ob-status-empty2.log" "outbox" "12b-g 空队列（只剩 forced.log）时也不加行"
+
+# ---------------------------------------------------------------- 12b-h. 真 pane 端到端（假 TUI）
+if [ "$FAST" = "1" ]; then
+  fast_skip "12b-h·真 pane 端到端（守卫/排水/草稿窗口）" "要真 tmux pane + python3 夹具 TUI（清空输入框、多行粘贴、draft 窗口）"
+elif [ "$HAVE_TMUX" != "1" ] || ! command -v python3 >/dev/null 2>&1; then
+  printf '  (跳过 12b-h：本机没有 tmux 或 python3)\n'
+else
+  live_mark
+  FTUI="$SKILL_DIR/tests/fake-tui.py"
+  OB_SUBMIT="$TMP/ob-submit.log"; : > "$OB_SUBMIT"
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux new-session -d -s "$SESSION" -n pm -x 120 -y 30 -c "$REPO" 2>/dev/null || true
+  # 假 PM 可执行文件：argv 里留着 fake-pm-bin 这个名字，PM 存活判据才认它（M6.5）
+  printf '#!/usr/bin/env bash\npython3 %q\n' "$FTUI" > "$TMP/fake-pm-bin"
+  chmod +x "$TMP/fake-pm-bin"
+  ob_pm_state() {
+    ( cd "$REPO" && env TEAM_PM_BIN="$TMP/fake-pm-bin" bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_pm_state' )
+  }
+  ob_pm_wait() { # 等假 PM 被认作 running（M6.5 的存活判据要看到 argv 里的 fake-pm-bin）
+    local i st=""
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      st="$(ob_pm_state)"
+      case "$st" in running:*) return 0 ;; esac
+      sleep 0.4
+    done
+    printf '  \033[2m·\033[0m PM 状态持续为 [%s]\n' "$st"
+    return 1
+  }
+  ob_tui() { # <窗口> <草稿> [额外 env...]
+    # pm 窗口跑假 PM 可执行文件（不是裸 python3）：M6.5 的存活判据要看到 argv 里的可执行名
+    local win="$1" draft="$2" cmd; shift 2
+    if [ "$win" = "pm" ]; then
+      cmd="$(printf 'FAKE_TUI_DRAFT=%q FAKE_TUI_COLS=100 FAKE_TUI_SUBMIT_LOG=%q %s %q' "$draft" "$OB_SUBMIT" "$*" "$TMP/fake-pm-bin")"
+    else
+      cmd="$(printf 'FAKE_TUI_DRAFT=%q FAKE_TUI_COLS=100 FAKE_TUI_SUBMIT_LOG=%q %s python3 %q' "$draft" "$OB_SUBMIT" "$*" "$FTUI")"
+    fi
+    tmux kill-window -t "$SESSION:$win" 2>/dev/null || true
+    tmux new-window -d -t "$SESSION" -n "$win" -c "$REPO" "$cmd" 2>/dev/null || true
+    sleep 0.9
+  }
+  ob_submits() { grep -c '^SUBMIT:' "$OB_SUBMIT" 2>/dev/null || true; }
+
+  # 前面段落（11b2/11b3）可能留下 PM 状态残迹：先清掉，否则「假 PM 在跑」判不出来
+  rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" \
+        "$REPO/.pi/team/state/pm.pid.spawn" "$REPO/.pi/team/state/pm.pid.starting"
+
+  # ① 脏框：say 排队、草稿不动、没有提交
+  : > "$OB_SUBMIT"
+  ob_tui dev '半句草稿 half a sentence'
+  ob_live env $TEAM say dev "check the failing test" >"$TMP/ob-h-say.log" 2>&1 || true
+  assert_has "$TMP/ob-h-say.log" "queued" "12b-h ① 真 pane：脏框 → queued"
+  assert_eq "12b-h ① 真 pane：没有发生提交（草稿没被粘走）" "$(ob_submits)" "0"
+  tmux capture-pane -p -t "$SESSION:dev" | grep -qF '半句草稿 half a sentence' \
+    && ok "12b-h ① 真 pane：草稿还在输入框里" || bad "12b-h ① 真 pane：草稿不见了"
+
+  # ② 清空后 flush：只投一次，队列清空
+  tmux send-keys -t "$SESSION:dev" C-u; sleep 0.4
+  ob_live env $TEAM outbox flush >"$TMP/ob-h-flush.log" 2>&1 || true
+  assert_has "$TMP/ob-h-flush.log" "已投递" "12b-h ② 清空后 flush 报已投递"
+  assert_eq "12b-h ② 只投一次" "$(ob_submits)" "1"
+  assert_has "$OB_SUBMIT" "check the failing test" "12b-h ② 投递内容正确"
+  assert_eq "12b-h ② 队列清空" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  # ③ 三行草稿 = 一次提交（bracketed paste），顺序保持
+  : > "$OB_SUBMIT"
+  printf 'alpha line one\nbeta line two\ngamma line three\n' > "$TMP/ob-three.txt"
+  ob_live env $TEAM draft send "$TMP/ob-three.txt" --target "$SESSION:dev" >"$TMP/ob-h-draft.log" 2>&1 || true
+  assert_eq "12b-h ③ 三行 = 一次提交" "$(ob_submits)" "1"
+  assert_eq "12b-h ③ 三行顺序保持" "$(sed -n 's/^SUBMIT://p' "$OB_SUBMIT")" 'alpha line one\nbeta line two\ngamma line three'
+
+  # ④ 不支持 bracketed paste 的目标：多行落成文件 + 一行指针（旧规矩）
+  : > "$OB_SUBMIT"
+  ob_tui nobrk '' 'FAKE_TUI_NO_BRACKETED_PASTE=1'
+  ob_live env $TEAM draft send "$TMP/ob-three.txt" --target "$SESSION:nobrk" >"$TMP/ob-h-nobrk.log" 2>&1 || true
+  assert_eq "12b-h ④ 不支持 bracketed paste → 只提交一行指针" "$(ob_submits)" "1"
+  assert_has "$OB_SUBMIT" "多行消息已存到" "12b-h ④ 指针消息点名文件"
+  ob_saved="$(grep -rl 'alpha line one' "$REPO/.pi/team/state/draft" 2>/dev/null | head -1)"
+  assert_file "$ob_saved" "12b-h ④ 多行内容真的落成文件"
+  assert_has "$ob_saved" "gamma line three" "12b-h ④ 落下的文件是完整三行（不是被截断的指针）"
+
+  # ⑤⑥ 敲门/巡检只在 tmux 里有意义：没有 TMUX 就明确 SKIP（V7-F6：skip 是约定，不是 FAIL）
+  # PM 窗口本身两种模式都建（⑦ draft pm 依赖它）；只把敲门/巡检断言放进条件分支。
+  ob_tui pm 'PM 的半句草稿'
+  if [ -z "${TMUX:-}" ]; then
+    cond_skip "12b-h ⑤ 假 PM 敲门（收件箱路径要求 TMUX 内运行）"
+    cond_skip "12b-h ⑥ watchdog 敲门 + 排水（收件箱路径要求 TMUX 内运行）"
+  else
+  # ⑤ PM 窗口的敲门：脏 PM 框 → 入队、草稿不动
+  : > "$OB_SUBMIT"
+  if ob_pm_wait; then ok "12b-h ⑤ 假 PM 被认作 running（argv 命中 fake-pm-bin）"
+  else bad "12b-h ⑤ 假 PM 没有被认作 running —— 后面的敲门/巡检断言都会失真"; fi
+  printf 'worker turn summary\n' > "$TMP/ob-sum.txt"
+  ob_live env TEAM_PM_BIN="$TMP/fake-pm-bin" $TEAM notify pm --from-file "$TMP/ob-sum.txt" >"$TMP/ob-h-notify.log" 2>&1 || true
+  assert_has "$TMP/ob-h-notify.log" "敲门入队" "12b-h ⑤ 脏 PM 框：敲门报入队"
+  assert_eq "12b-h ⑤ 脏 PM 框：敲门没有提交" "$(ob_submits)" "0"
+  assert_eq "12b-h ⑤ 敲门入队一条" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_has "$REPO/docs/team/inbox/pm.md" "worker turn summary" "12b-h ⑤ 收件箱照写"
+
+  # ⑥ watchdog：一拍排水 + nudge 走守卫
+  tmux send-keys -t "$SESSION:pm" C-u; sleep 0.4
+  ob_live env TEAM_PM_BIN="$TMP/fake-pm-bin" $TEAM watch --once >"$TMP/ob-h-watch.log" 2>&1 || true
+  assert_has "$OB_SUBMIT" "worker turn summary" "12b-h ⑥ tick 把排队的敲门投出去了"
+  assert_eq "12b-h ⑥ tick 之后队列空了" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+  : > "$OB_SUBMIT"
+  tmux send-keys -t "$SESSION:pm" -l 'PM 又开始写草稿'; sleep 0.4
+  printf '%s\n' '- 2026-01-01T00:00:00Z [manual] agent:dev · ob-nudge-new-work' >> "$REPO/docs/team/inbox/pm.md"
+  ob_live env TEAM_PM_BIN="$TMP/fake-pm-bin" TEAM_WATCH_NUDGE_GAP=0 $TEAM watch --once >"$TMP/ob-h-watch2.log" 2>&1 || true
+  assert_has "$TMP/ob-h-watch2.log" "已入队" "12b-h ⑥ 脏 PM 框：叫醒语入队而不是粘字"
+  assert_eq "12b-h ⑥ 脏 PM 框：nudge 没有提交" "$(ob_submits)" "0"
+  assert_has "$REPO/.pi/team/state/nudges.log" "未读通知" "12b-h ⑥ nudges.log 仍然照写（durable 记录不丢：队列只延后投递，不替代记录）"
+  assert_eq "12b-h ⑥ 队列里恰好一条叫醒语条目" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  fi
+
+  # ⑦ 草稿窗口：回执 + 重填 + 永不被投递
+  tmux send-keys -t "$SESSION:pm" C-u; sleep 0.3
+  rm -f "$REPO/.pi/team/state/draft-pm.md"
+  printf '#!/usr/bin/env bash\nprintf "interrupted once\\n" > "$1"\n' > "$TMP/fake-editor"; chmod +x "$TMP/fake-editor"
+  ob_live env EDITOR="$TMP/fake-editor" TEAM_PM_BIN="$TMP/fake-pm-bin" $TEAM draft pm >"$TMP/ob-h-draftwin.log" 2>&1 || true
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    grep -qF 'interrupted once' "$OB_SUBMIT" 2>/dev/null && break
+    sleep 0.5
+  done
+  tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx draft \
+    && ok "12b-h ⑦ draft 窗口已建（不抢焦点）" || bad "12b-h ⑦ draft 窗口没建起来"
+  assert_has "$OB_SUBMIT" "interrupted once" "12b-h ⑦ 编辑器保存的内容被投递"
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(wc -c < "$REPO/.pi/team/state/draft-pm.md" 2>/dev/null | tr -d ' ')" = "0" ] && break
+    sleep 0.5
+  done
+  assert_eq "12b-h ⑦ 草稿文件被重填成空种子" "$(wc -c < "$REPO/.pi/team/state/draft-pm.md" | tr -d ' ')" "0"
+  for _i in 1 2 3 4 5 6 7 8 9 10; do
+    tmux display-message -p -t "$SESSION:draft" '#{pane_dead}' 2>/dev/null | grep -qx 1 && break
+    sleep 0.4
+  done
+  tmux capture-pane -p -t "$SESSION:draft" > "$TMP/ob-h-draftpane.log" 2>/dev/null || true
+  assert_match "$TMP/ob-h-draftpane.log" "回执|已确认送达|queued" "12b-h ⑦ 回执打印在 draft 窗口里"
+  # ⑦b draft 窗口永远不是投递目标：say/notify/tick 之后 pane 逐字节不变
+  draft_before="$(md5sum < "$TMP/ob-h-draftpane.log")"
+  ob_live env $TEAM say pm --any "do not touch the draft window" >/dev/null 2>&1 || true
+  ob_live env TEAM_PM_BIN="$TMP/fake-pm-bin" $TEAM notify pm --from-file "$TMP/ob-sum.txt" >/dev/null 2>&1 || true
+  ob_live env TEAM_PM_BIN="$TMP/fake-pm-bin" $TEAM watch --once >/dev/null 2>&1 || true
+  tmux capture-pane -p -t "$SESSION:draft" > "$TMP/ob-h-draftpane2.log" 2>/dev/null || true
+  assert_eq "12b-h ⑦b draft 窗口的 pane 逐字节不变" "$(md5sum < "$TMP/ob-h-draftpane2.log")" "$draft_before"
+
+  # ⑨ 粘贴期间有草稿介入：不按 Enter（消息进 held/），草稿原样留着
+  : > "$OB_SUBMIT"
+  ob_tui race '' 'FAKE_TUI_DRAFT_ON_PASTE=HUMAN_DRAFT_'
+  ob_live $TEAM draft send "$TMP/ob-three.txt" --target "$SESSION:race" >"$TMP/ob-h-race.log" 2>&1 || true
+  assert_eq "12b-h ⑨ 打字期间有草稿介入 → 没有提交" "$(ob_submits)" "0"
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "draft-raced" "12b-h ⑨ 条目进 held/（原因 draft-raced）"
+  tmux capture-pane -p -t "$SESSION:race" 2>/dev/null | grep -qF 'HUMAN_DRAFT_alpha line one' \
+    && ok "12b-h ⑨ 人的草稿还在框里（没被粘出去提交）" || bad "12b-h ⑨ 草稿没有留在框里"
+  # V7-F3：draft-raced 是终态 —— payload 已经进过人的框一次（可能随人的提交到了 agent），
+  # 任何自动路径（含 flush --now）都不许再投；留在 held/ 可见，durable 副本在收件箱。
+  ob_live $TEAM outbox flush >"$TMP/ob-h-race-flush.log" 2>&1 || true
+  assert_eq "12b-h ⑨b draft-raced 终态：再 flush 仍然 0 提交" "$(ob_submits)" "0"
+  assert_eq "12b-h ⑨b draft-raced 终态：条目留在 held/（可见、可 drop）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_has "$TMP/ob-h-race-flush.log" "draft-raced" "12b-h ⑨b 排水报告点名终态原因（不是静默跳过）"
+  ob_live $TEAM outbox flush --now >"$TMP/ob-h-race-flushnow.log" 2>&1 || true
+  assert_eq "12b-h ⑨b flush --now 也不重投 draft-raced（它不属于 forced.log 管辖）" "$(ob_submits)" "0"
+  assert_not "$REPO/.pi/team/state/outbox/forced.log" "alpha line one" "12b-h ⑨b draft-raced 不进 forced.log（没有 forced 投递发生）"
+
+  # ⑩ held 的条目在框清空后仍然投递（规格 requirement 5 的 scenario）
+  ob_reset
+  tmux send-keys -t "$SESSION:dev" C-u; sleep 0.3
+  : > "$OB_SUBMIT"
+  tmux send-keys -t "$SESSION:dev" -l '人的草稿'; sleep 0.4          # 真 pane：直接把框弄脏
+  ob_live $TEAM say dev "held one" >/dev/null 2>&1 || true
+  ob_live env TEAM_OUTBOX_MAX=1 $TEAM say dev "held two" >/dev/null 2>&1 || true
+  assert_eq "12b-h ⑩ 上限触发：最老的进 held/" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  tmux send-keys -t "$SESSION:dev" C-u; sleep 0.3
+  ob_live $TEAM outbox flush >"$TMP/ob-h-held.log" 2>&1 || true
+  assert_eq "12b-h ⑩ held 的条目也投了（两条都到）" "$(ob_submits)" "2"
+  assert_eq "12b-h ⑩ held/ 清空" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  # ⑧ TEAM_NOTIFY_TMUX=0：只写收件箱，不排队
+  ob_reset
+  ob_live env TEAM_NOTIFY_TMUX=0 TEAM_PM_BIN="$TMP/fake-pm-bin" $TEAM notify pm --from-file "$TMP/ob-sum.txt" >/dev/null 2>&1 || true
+  assert_eq "12b-h ⑧ TEAM_NOTIFY_TMUX=0：不建队列条目" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  # ⑪ V7-F1 真实形状：光标停在空白行、草稿文字在光标行下方（leading newline + Up）。
+  #    v2 光标相对判定在这里判 EMPTY → D20 原样重演；整框扫描必须 BUSY → 排队、零提交、草稿不动。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui dev $'\nBODY-1\nBODY-2' 'FAKE_TUI_CURSOR_TOP=1'
+  ob_live $TEAM say dev "cursor-top probe" >"$TMP/ob-h-f1.log" 2>&1 || true
+  assert_has "$TMP/ob-h-f1.log" "queued" "12b-h ⑪ V7-F1：光标行下方的草稿 → queued"
+  assert_eq "12b-h ⑪ V7-F1：没有发生提交（D20 不再重演）" "$(ob_submits)" "0"
+  tmux capture-pane -p -t "$SESSION:dev" 2>/dev/null | grep -qF 'BODY-2' \
+    && ok "12b-h ⑪ V7-F1：草稿原样还在框里" || bad "12b-h ⑪ V7-F1：草稿不见了"
+
+  # ⑫ V7-F2 真实形状：大粘贴被 TUI 折叠成 [paste #1 +K lines]，竞态期间人开始打字。
+  #    长度启发式在这里必然放行（可见字符 << payload）；指纹判据必须拦住 → 不按 Enter → held。
+  ob_reset; : > "$OB_SUBMIT"
+  printf 'line-%s\n' $(seq -w 1 14) > "$TMP/ob-big.txt"
+  ob_tui race2 '' 'FAKE_TUI_MARKER=10 FAKE_TUI_DRAFT_ON_PASTE=HI-'
+  ob_live $TEAM draft send "$TMP/ob-big.txt" --target "$SESSION:race2" >"$TMP/ob-h-f2.log" 2>&1 || true
+  assert_eq "12b-h ⑫ V7-F2：折叠粘贴 + 竞态打字 → 没有提交（草稿没被粘走）" "$(ob_submits)" "0"
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "draft-raced" "12b-h ⑫ V7-F2：条目进 held/（draft-raced）"
+  tmux capture-pane -p -t "$SESSION:race2" 2>/dev/null | grep -qE 'HI-\[paste #1 \+[0-9]+ lines\]' \
+    && ok "12b-h ⑫ V7-F2：框里正是真实 Pi 的折叠形状 + 人的字" || bad "12b-h ⑫ V7-F2：折叠形状不对"
+  # 同一形状、没人打字时必须放行（阴性对照：占位符本身不是 BUSY 的理由）
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui race2 '' 'FAKE_TUI_MARKER=10'
+  ob_live $TEAM draft send "$TMP/ob-big.txt" --target "$SESSION:race2" >"$TMP/ob-h-f2b.log" 2>&1 || true
+  assert_eq "12b-h ⑫b 干净的折叠粘贴 → 正常投递（折叠≠脏框）" "$(ob_submits)" "1"
+
+  # ⑬ V9-B5（取代 V7-F4 旧语义）：静态页脚 TUI 不回显提交气泡（draw 不画 conversation）。
+  #    投递确认按「出框 + 对话区出现提交证据」：这类 pane 给不出证据 → 诚实降级为「未确认」——
+  #    恰好一次提交（Enter 确实生效了，但工具无法证明）、立即进 held/（终态，绝不重贴）、
+  #    收件箱留 durable 副本（人可以核实后 drop）。这不是造假待办：held 就是真实待办。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui dev '' 'FAKE_TUI_STATIC_FOOTER=1'
+  ob_live $TEAM say dev "static footer probe" >"$TMP/ob-h-f4.log" 2>&1 || true
+  assert_not "$TMP/ob-h-f4.log" "已确认送达" "12b-h ⑬ V9-B5：静态页脚 pane 拿不出提交证据 → 绝不报已确认送达"
+  assert_eq "12b-h ⑬ V9-B5：恰好一次提交（Enter 生效过一次，只是工具证明不了）" "$(ob_submits)" "1"
+  assert_eq "12b-h ⑬ V9-B5：立即进 held/（未确认 = 终态，不是删除）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_eq "12b-h ⑬ V9-B5：队列清空（不留 active 等下一拍重投）" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+  ob_live $TEAM outbox flush >"$TMP/ob-h-f4b.log" 2>&1 || true
+  assert_eq "12b-h ⑬ V9-B5：再 flush 不重投（绝不重复粘贴）" "$(ob_submits)" "1"
+  assert_has "$REPO/docs/team/inbox/dev.md" "static footer probe" "12b-h ⑬ V9-B5/F5：held 的 durable 副本落收件箱（人可以核实后 drop）"
+
+  # ⑮ V9-B5 核心事故形状：TUI 吞掉 Enter（清空未提交）。框空了、对话区永远没有这条消息 →
+  #    不许报「已送达」、条目不许删：立即 held（终态，永不重贴），durable 副本落收件箱，零提交。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui dev '' 'FAKE_TUI_EAT_ENTER=1'
+  ob_live $TEAM say dev "eaten enter probe" >"$TMP/ob-h-b5.log" 2>&1 || true
+  assert_eq "12b-h ⑮ V9-B5：清空未提交 → 零提交" "$(ob_submits)" "0"
+  assert_not "$TMP/ob-h-b5.log" "已确认送达" "12b-h ⑮ V9-B5：绝不把「清空未提交」报成已送达"
+  assert_eq "12b-h ⑮ V9-B5：条目立即进 held/（不是被删除）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=unconfirmed" "12b-h ⑮ V9-B5：held 原因 = unconfirmed"
+  assert_has "$REPO/docs/team/inbox/dev.md" "eaten enter probe" "12b-h ⑮ V9-B5：durable 副本落收件箱（消息不静默丢）"
+  ob_live $TEAM outbox flush >/dev/null 2>&1 || true
+  ob_live $TEAM outbox flush --now >/dev/null 2>&1 || true
+  assert_eq "12b-h ⑮ V9-B5：终态——flush / flush --now 后仍然零提交（永不重贴）" "$(ob_submits)" "0"
+  assert_eq "12b-h ⑮ V9-B5：终态——条目还在 held/（可见、可 drop）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+
+  # ⑭ V8-N3：折叠占位符的中间帧（`[paste #1 +1` 半成品，700ms 后才补全）。旧静止判定在半成品帧上
+  #    「连续两次相同」→ 提前跳出 → 指纹判据撞上半成品 → 误判竞态 → 干净消息被终态扣在 held/。
+  #    修复后：中间帧不算停下来也不算别人的字 → 等渲染完成 → 恰好一次投递、不入 held。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui race2 '' 'FAKE_TUI_MARKER=10 FAKE_TUI_PASTE_STALL_MS=700'
+  ob_live $TEAM draft send "$TMP/ob-big.txt" --target "$SESSION:race2" >"$TMP/ob-h-n3.log" 2>&1 || true
+  assert_eq "12b-h ⑭ V8-N3：半成品占位符帧 → 等渲染完成后恰好投递一次（不判竞态）" "$(ob_submits)" "1"
+  assert_eq "12b-h ⑭ V8-N3：干净消息没有进 held/" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+  assert_not "$REPO/.pi/team/state/outbox/HOLDING.log" "draft-raced" "12b-h ⑭ V8-N3：半成品帧没有被误判成 draft-raced"
+
+  # ⑯ V9-B1/B2 的双向回归：payload 正文自带折叠标记字样时，既不能被误判成渲染中间帧（B1），
+  #    也不能被占位符路径压住（B2）。两个方向都用会回显的真夹具端到端钉住。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui dev ''
+  ob_live $TEAM say dev 'the guard waits while the TUI draws [paste #1 +1 frames' >"$TMP/ob-h-b1a.log" 2>&1 || true
+  assert_eq "12b-h ⑯a V9-B1：正文含半成品字样 → 恰好一次提交" "$(ob_submits)" "1"
+  assert_has "$TMP/ob-h-b1a.log" "已确认送达" "12b-h ⑯a V9-B1：没被中间帧判据永远扣住（确认送达）"
+  assert_eq "12b-h ⑯a V9-B1：队列清空、不入 held/" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui dev ''
+  ob_live $TEAM say dev 'see [paste #1 +3 lines] and more text' >"$TMP/ob-h-b2.log" 2>&1 || true
+  assert_eq "12b-h ⑯b V9-B2：正文含完整占位符字样 → 恰好一次提交（不被压住）" "$(ob_submits)" "1"
+  assert_has "$TMP/ob-h-b2.log" "已确认送达" "12b-h ⑯b V9-B2：正常送达（占位符字样不触发折叠路径）"
+
+  # ⑰ V9-B6：折叠渲染的停顿超过等待上限（≈1.6s）——不是竞态、**不是终态**：
+  #    held 原因 = stall-timeout；下个排水周期只补 Enter（--resume），绝不重贴。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui race3 '' 'FAKE_TUI_MARKER=10 FAKE_TUI_PASTE_STALL_MS=2500'
+  ob_live $TEAM draft send "$TMP/ob-big.txt" --target "$SESSION:race3" >"$TMP/ob-h-b6.log" 2>&1 || true
+  assert_eq "12b-h ⑰a V9-B6：停顿超过等待上限 → 第一拍不提交（保守）" "$(ob_submits)" "0"
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=stall-timeout" "12b-h ⑰a V9-B6：held 原因 = stall-timeout（不是 draft-raced 终态）"
+  assert_eq "12b-h ⑰a V9-B6：条目在 held/（可恢复）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  sleep 2.6
+  ob_live $TEAM outbox flush >"$TMP/ob-h-b6b.log" 2>&1 || true
+  assert_eq "12b-h ⑰b V9-B6：重试只补 Enter（不重贴）→ 恰好一次提交" "$(ob_submits)" "1"
+  assert_has "$TMP/ob-h-b6b.log" "已投递" "12b-h ⑰b V9-B6：重试完成投递（已确认送达）"
+  assert_eq "12b-h ⑰b V9-B6：held/ 清空、不留活动条目" "$(find "$REPO/.pi/team/state/outbox" "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+fi
+
+# ---------------------------------------------------------------- 12b-i. 扩展：入队而不是打字（规格 requirement 6 第 2 条）
+if [ -z "$TS_RUNNER" ]; then
+  printf '  (跳过 12b-i：没有能跑 .ts 的运行时)\n'
+else
+  mkdir -p "$TMP/ob-ext-shim" "$REPO/.worktrees/dev"
+  rm -rf "$REPO/.pi/team/state/outbox"
+  cat > "$TMP/ob-ext-shim/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP/ob-ext-tmux.log"
+case "\$*" in
+  *window_name*)          printf 'dev\n' ;;
+  *session_name*)         printf '%s\n' "$SESSION" ;;
+  *pane_current_command*) printf 'pi\n' ;;
+  *cursor_y*)             printf '2\n' ;;
+  *pane_id*)              printf '%%1\n' ;;
+  *bracket_paste_flag*)   printf '1\n' ;;
+  *pane_pid*)             printf '%s\n' "\$\$" ;;
+  *capture-pane*)         cat "$TMP/ob-box-draft" ;;
+  *list-windows*)         printf 'pm\n' ;;
+  *has-session*)          exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$TMP/ob-ext-shim/tmux"
+  : > "$TMP/ob-ext-tmux.log"
+  cat > "$TMP/ob-ext.mjs" <<'OBEXT'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+const [, , ext, root, wt] = process.argv
+process.env.TMUX_PANE = 'ob-fake-pane'          // 有 pane 才走敲门那条路
+const mod = await import(ext)
+const handlers = {}
+mod.default({ on: (n, f) => { (handlers[n] ||= []).push(f) }, registerCommand: () => {}, registerTool: () => {}, sendMessage: () => {} })
+const emit = async (n, ...a) => { for (const f of handlers[n] ?? []) await f(...a) }
+const inbox = join(root, 'docs/team/inbox/dev.md')
+rmSync(inbox, { force: true })
+rmSync(join(root, '.pi/team/state/notify-dedup'), { force: true })
+const cx = (l) => ({ cwd: wt, sessionManager: { getEntries: () => l.map(m => ({ message: m })) } })
+await emit('before_agent_start', { type: 'before_agent_start', prompt: 'go' }, cx([]))
+await emit('agent_settled', {}, cx([{ role: 'assistant', stopReason: 'stop', content: [{ text: 'OB-EXT-KNOCK' }] }]))
+const n = existsSync(inbox) ? readFileSync(inbox, 'utf8').trim().split('\n').filter(Boolean).length : 0
+if (n !== 1) { console.error(`FAIL: 期望 1 行收件箱，实际 ${n}`); process.exit(40) }
+console.log('ob-ext-ok')
+OBEXT
+  if env PATH="$TMP/ob-ext-shim:$PATH" $TS_RUNNER "$TMP/ob-ext.mjs" "$SKILL_DIR/extension/team-notify.ts" "$REPO" "$REPO/.worktrees/dev" >"$TMP/ob-ext.log" 2>&1; then
+    ok "12b-i 扩展：脏 PM 框下照常写收件箱（runner=$TS_RUNNER）"
+  else
+    bad "12b-i 扩展运行失败（runner=$TS_RUNNER）"; cat "$TMP/ob-ext.log"
+  fi
+  assert_eq "12b-i 扩展自己不敲键盘（零 send-keys / paste-buffer）" "$(grep -c 'send-keys\|paste-buffer' "$TMP/ob-ext-tmux.log" || true)" "0"
+  assert_eq "12b-i 扩展把敲门入队一条" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_has "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' | head -1)" "dedup: dev|[auto]|" "12b-i 扩展把自己的去重键带进条目"
+fi
+
+# ---------------------------------------------------------------- 12b-j. 隔离收尾
+ob_leaks="$(ob_leak_scan)"
+assert_eq "12b-j 隔离：调用方项目的 inbox/state 里没有夹具痕迹" "$([ -z "$ob_leaks" ] && echo none || printf '%s' "$ob_leaks" | head -3 | tr '\n' '|')" "none"
+
+# 负对照（tasks 7.2）：泄漏扫描本身必须**能红**——否则它是个永远报绿的假守卫。
+# 把夹具痕迹（沙盒 session 名）栽进一个假「真项目」目录，同一个扫描函数必须把它揪出来。
+OB_NEG="$TMP/ob-negroot"; mkdir -p "$OB_NEG/.pi/team/state"
+printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/planted.log"
+ob_neg_hits="$(SMOKE_INVOKE_ROOT="$OB_NEG" SMOKE_INVOKE_MAIN="" ob_leak_scan)"
+assert_eq "12b-j 负对照：栽进去的夹具痕迹必须被同一个扫描揪出来" "$([ -n "$ob_neg_hits" ] && echo caught || echo missed)" "caught"
+rm -rf "$OB_NEG"
+
+if [ "$(ob_hash_real)" = "$REAL_FP_BEFORE" ]; then
+  ok "12b-j 隔离：调用方项目 inbox/state 的指纹也没变（整段夹具期间真团队没有活动）"
+else
+  printf '  \033[2m·\033[0m %s\n' "12b-j 提示：真项目 state 在夹具期间有自己的活动（真团队在跑）——指纹变了，但夹具痕迹扫描为零"
+fi
+rm -rf "$TMP/ob-altstate"
 
 # ---------------------------------------------------------------- 14. teardown
 section "14 · teardown"

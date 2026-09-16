@@ -435,6 +435,26 @@ function logActivity(name, cwd) {
   }
 }
 
+// 延后投递队列的一行摘要（delivery-guard）：队列为空返回空字符串。
+// 队列文件格式是契约（见 scripts/lib/outbox.sh）：<epoch-ms>-<seq>-<target>.msg，年龄从文件名算。
+function outboxSummary(root) {
+  const dir = join(root, '.pi/team/state/outbox')
+  const list = (p) => {
+    try {
+      return readdirSync(p).filter((n) => n.endsWith('.msg'))
+    } catch {
+      return []
+    }
+  }
+  const active = list(dir)
+  const held = list(join(dir, 'held'))
+  const all = [...active, ...held].sort()
+  if (!all.length) return ''
+  const ms = Number(String(all[0]).split('-')[0])
+  const age = Number.isFinite(ms) && ms > 0 ? fmtDur(Date.now() / 1000 - ms / 1000) : '?'
+  return `outbox ${all.length} 条待投递（held ${held.length}）· 最老 ${age} · team outbox list`
+}
+
 function fmtDur(seconds) {
   const s = Math.max(0, Math.floor(seconds))
   if (s < 60) return `${s}s`
@@ -551,6 +571,10 @@ if (asJson) {
   console.log(JSON.stringify(clean, null, 2))
 } else {
   const width = 112
+  // 延后投递（delivery-guard）：队列非空时补一行（空队列不加任何东西）。
+  // 数据源就是队列目录本身：<root>/.pi/team/state/outbox/*.msg（held/ 里的也算）
+  const obox = outboxSummary(root)
+  if (obox) console.log(obox)
   if (!clean.length) {
     console.log('（没有可监视的 agent：先 team add-agent <名字>）')
   }

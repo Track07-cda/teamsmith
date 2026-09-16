@@ -115,6 +115,16 @@ literals or simple `$VAR`.
 | `TEAM_NOTIFY_DEDUP_SEC` | `20` | deduplication window (seconds); `0` = no deduplication |
 | `TEAM_INBOX_MAX_CHARS` | `150` | truncation length of the agent's last message inside a briefing |
 | `TEAM_NOTIFY_LOG` | `/tmp/<project>-teamsmith-notify.log` | extension debug log (look here when notifications misbehave) |
+| `TEAM_DEFER_TTL` | `300` | delivery guard: seconds a queued message may wait before it is moved to `state/outbox/held/` (holding never types anything; the payload is already in the recipient's inbox) |
+| `TEAM_OUTBOX_MAX` | `200` | delivery guard: maximum active queue entries; beyond it the oldest entry is escalated to `held/` |
+
+### Deferred delivery (`delivery-guard`)
+
+Automatic senders never type into an input box that already holds a draft: the message is queued in
+`state/outbox/` (one immutable file per message) and delivered when the box is free. The escape hatches are explicit:
+`team say <agent> "…" --now` and `team outbox flush --now` type immediately **even into a non-empty box** and append
+one audit line to `state/outbox/forced.log`; `team outbox drop <n|all>` discards entries; `team draft pm`
+(`state/draft-pm.md`) is the human entry point. See `references/troubleshooting.md` §3 for the detector's known edges.
 
 ### Branch model (D1)
 

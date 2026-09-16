@@ -73,6 +73,9 @@ TEAM_NOTIFY_TMUX=1                    # 0 = write the inbox only, never knock on
 TEAM_NOTIFY_DEDUP_SEC=20              # dedup window for identical briefings (Pi may settle repeatedly)
 TEAM_INBOX_MAX_CHARS=150
 TEAM_NOTIFY_LOG="/tmp/{{PROJECT}}-teamsmith-notify.log"
+# ---- deferred delivery (delivery-guard: never type into an input box that already holds a draft) ----
+TEAM_DEFER_TTL=300                    # seconds a queued message may wait before it moves to state/outbox/held/
+TEAM_OUTBOX_MAX=200                   # maximum active queue entries (the oldest escalates to held/ beyond it)
 
 # ---- periodic patrol (the metronome that wakes the PM) ----
 TEAM_WATCH_WINDOW="watchdog"          # tmux window running the monitor

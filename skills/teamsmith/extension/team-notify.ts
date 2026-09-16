@@ -330,21 +330,44 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (!cfg.notifyTmux || !window) return
+    const target = `${cfg.session}:${cfg.pmWindow}`
     try {
       // 安全：只有当 PM 窗口里真的在跑 pi 时才敲键盘。
       // 否则（PM 已退出、窗口停在 shell）send-keys 会被 shell 当命令执行。
-      const target = `${cfg.session}:${cfg.pmWindow}`
       const paneCmd = run('tmux', ['display-message', '-p', '-t', target, '#{pane_current_command}'])
       if (!paneCmd || /^(bash|sh|zsh|fish|dash|ash|ksh|nu)$/.test(paneCmd)) {
         log(`skip tmux notify (pm not running: pane=${paneCmd || 'missing'}) inbox only`, cfg)
         return
       }
-      const notice = `${dirtyFlag}${tag} ${summary}${completed && last ? `\n> ${last}` : ''}`
-      execFileSync('tmux', ['send-keys', '-t', target, '-l', notice], { timeout: 5000 })
-      execFileSync('tmux', ['send-keys', '-t', target, 'Enter'], { timeout: 5000 })
     } catch {
       /* PM 窗口不在：只留收件箱 */
+      return
     }
+    // 敲门不再自己 send-keys：交给 teamsmith 的投递守卫 + 延后队列（delivery-guard）。
+    // 为什么：扩展原来直接 `send-keys -l` + Enter，人正在 PM 输入框里写草稿时会把草稿粘走
+    // （D20 的原始事故）。入队时带上扩展自己的去重键（key），两层抑制不会打架。
+    // 失败只记日志：绝不回退到打字（那会悄悄重建同一个 bug）。
+    const notice = `${dirtyFlag}${tag} ${summary}${completed && last ? `\n> ${last}` : ''}`
+    const cli = join(skillDir(), 'scripts/team')
+    const tmp = join(stateDir, `knock-${process.pid}-${Date.now()}.txt`)
+    try {
+      writeFileSync(tmp, notice)
+      const out = execFileSync(
+        'bash',
+        [cli, '--root', root, 'outbox', 'enqueue', '--kind', 'knock', '--target', target,
+         '--from', agent, '--dedup', key, '--from-file', tmp],
+        { encoding: 'utf8', timeout: 5000 },
+      )
+      log(`knock queued (${String(out).trim() || 'entry written'})`, cfg)
+    } catch (error) {
+      log(`knock enqueue failed — inbox line kept, NOT falling back to typing: ${String(error)}`, cfg)
+    } finally {
+      try { rmSync(tmp, { force: true }) } catch { /* ignore */ }
+    }
+    try {
+      // 一次有界排水：PM 输入框空则立刻投递；有草稿则留在队列（下一次 tick / flush 再送）
+      execFileSync('bash', [cli, '--root', root, 'outbox', 'flush', '--quiet'], { timeout: 5000 })
+    } catch { /* PM 窗口不在或队列不可写：条目已经落盘，下一次 drain 再送 */ }
   })
 
   // ---------------------------------------------------------------------------

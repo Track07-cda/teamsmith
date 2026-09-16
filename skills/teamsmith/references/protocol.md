@@ -53,7 +53,7 @@ The PM cannot poll (wastes context, high latency) and should not wait for the us
 ```
 agent turn ends (Pi's agent_settled: the point where it will not continue on its own)
    ├─ append <root>/<docs>/inbox/<agent>.md      ← durable, the PM can read it at any time
-   └─ tmux send-keys -t <session>:<pm-window>    ← submitted to the PM session as a user message, which wakes it
+   └─ enqueue into <root>/.pi/team/state/outbox/ (one immutable entry) and drain it
 ```
 
 Guards and limitations:
@@ -61,8 +61,10 @@ Guards and limitations:
   prevent a self-triggering loop).
 - **In a linked worktree Pi does not auto-discover the project-local `.pi/extensions/`**, so `team dispatch` must load
   it explicitly with `-e <skill>/extension/team-notify.ts` (measured on CEP).
-- The notification text lands in the PM's input line; if the user is typing at that moment it can be concatenated with
-  their input (a known side effect).
+- **The knock goes through the delivery guard** (`delivery-guard`, see `troubleshooting.md` §3): the extension calls
+  `team outbox enqueue --dedup <its own key>` + one `team outbox flush` instead of typing, so a notice can no longer
+  be concatenated with what the human is typing. On a dirty PM box the entry waits in `state/outbox/`; the extension
+  never falls back to `send-keys`, and a failed enqueue is logged while the inbox line stays.
 - The inbox is transient state (gitignored); the durable record is still the report + verification + decision log.
 - The same briefing is sent once per `TEAM_NOTIFY_DEDUP_SEC` seconds: Pi may settle several times inside one stretch
   of work.

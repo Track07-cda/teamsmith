@@ -279,6 +279,11 @@ team_watch_once() {
   fi
   printf '%s %s\n' "$(date +%s)" "$(team_timestamp)" > "$TEAM_STATE_DIR/watchdog.last"
 
+  # ①b 延后投递：一拍排一次水（delivery-guard 的第二个调用者）。
+  #     放在待办/待命判断之前：队列里的消息是人或别的路径明确要投的，不属于「待办」，
+  #     也不该因为 PM standby 而烂在队列里。没有 daemon：不新建窗口、不留后台进程。
+  team_outbox_drain --quiet
+
   # ② 待办
   local counts text sig
   counts="$(team_pending_counts)"

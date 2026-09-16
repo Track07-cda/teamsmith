@@ -352,6 +352,8 @@ team_cmd_status() {
   team_require_docs
   local id="${1:-}"
   team_cmd_roster
+  # 延后队列非空时补一行（delivery-guard 的可见性；空队列不打印任何东西）
+  team_outbox_status_line "" || true
   printf '\n'
   if [ -n "$id" ]; then
     printf '任务 %s：\n' "$id"
@@ -413,6 +415,8 @@ team_cmd_digest() {
     *)         printf '  PM ○ 窗口缺失 → team up' ;;
   esac
   printf ' ｜ watchdog %s\n' "$(team_watchdog_state_text)"
+  # 延后投递：队列非空才打印（delivery-guard：排队/held 必须看得见；空队列一个字都不加）
+  team_outbox_status_line "  " || true
 
   # 待办：这是 watchdog 判断“要不要叫醒 PM”的依据
   local pend; pend="$(team_pending_text || true)"
@@ -612,6 +616,10 @@ team_panel() {
   if [ -n "$pend" ]; then printf '  %-9s %s\n' "待办" "$pend"
   else printf '  %-9s %s无 —— 不叫醒 PM%s\n' "待办" "$C_DIM" "$C_RESET"; fi
   printf '  %-9s %s\n' "容量" "$(team_capacity_line)"
+  # 延后投递：队列非空时补一行（delivery-guard 的可见性；空队列不加任何东西）
+  local obox=""
+  obox="$(team_outbox_status_line "  " 2>/dev/null || true)"
+  [ -n "$obox" ] && printf '%s\n' "$obox"
   local a state task cli
   cli="$(team_agent_cli_name)"
   for a in $(team_agents); do

@@ -41,14 +41,118 @@ A Pi session belongs to a **cwd**: `--session-id` can only be reused under the s
   had to start over.
 - Session id rule: `<TEAM_SESSION>-<agent>` (`--fresh` appends a timestamp).
 
-## 3. Notification text gets glued to what the PM is typing
+## 3. Notification text used to get glued to what the PM is typing
 
-`tmux send-keys` literally "types" the text into the PM session's input line, as if you had typed it. A known side
-effect. Mitigations:
+**This is fixed by the delivery guard.** Every automated sender (`team say`, `team notify`, the watchdog wake line,
+and the notify extension's knock) locates the target pane's input box before typing and reads **every content row
+of the box** — including rows below the cursor, because a draft typed after a leading newline or recalled with `Up`
+sits below the cursor row. If the box already holds text, the sender writes **no key at all**: the message goes
+into `state/outbox/` as one immutable entry and is delivered when the box is free (`team outbox list` shows what is
+waiting, `team outbox flush` drains it, and every watchdog tick drives one drain as well). A message that was held
+is reported as **`queued`**, never as delivered.
 
-- Answer with a short sentence right after reading a notification (which clears the input line).
-- Lower the information volume: `TEAM_INBOX_MAX_CHARS`; or `TEAM_NOTIFY_TMUX=0` and read `team digest` yourself.
-- Do not leave half a sentence hanging in the PM's input box for a long time.
+What this means for you:
+
+- Keep typing. Your draft stays in the box; the notice waits outside it.
+- If the queue bothers you: `team outbox drop <n|all>` discards entries, and `team status` / `team digest` print one
+  `outbox …` line as long as anything is waiting (nothing when it is empty).
+- `team say <agent> "…" --now` (and `team outbox flush --now`) deliberately types into a non-empty box — that is
+the old behaviour on purpose, and it appends one line to `state/outbox/forced.log`. Use it only when you really
+  want the text glued.
+- The human entry point is `team draft pm`: an editor window on `state/draft-pm.md` (nothing automated ever types
+  into it); saving and quitting enqueues the file through the same guarded path and prints the acknowledgement in
+  that window. `team draft send <file>` is the headless form of the same thing.
+
+Honest edges (documented, not hidden):
+
+- **A whitespace-only draft is one known miss, and it is not the only one.** The guard reads the pane, and
+  `tmux capture-pane` trims trailing blanks, so a box holding only spaces looks empty and the message is
+  delivered (i.e. glued to your spaces). The same class of hole — a dirty box read as empty — has these members,
+  so this list, not any absolute claim, is the boundary: equal-width draft rule rows (a pasted separator clipped
+  to the pane width, or a table border) and spinner-shaped draft rows are **fixed** (the top border is the
+  highest qualifying row, so such a row is content and the box reads busy; V9-A4/A5/A8), a cursor resting on the
+  draft's own equal-width rule row is **fixed** (the bottom border is searched strictly below the cursor row;
+  V9-A10), and **still open** are the whitespace-only draft and a single-line draft sitting exactly on the hint
+  slot (V9-C3, see that bullet).
+- **Confirmation means the payload left the box AND the conversation shows a new copy of it (V9-B5).** After the
+  `Enter` the drain reads the box back AND counts the payload's signature in the conversation area above the box
+  (first non-blank line, whitespace-stripped, compared byte-wise, or a `[paste #N +K lines]` bubble whose `+K`
+  matches the payload's line count): more copies than before typing = delivered. **An empty box alone is not
+  proof** — a TUI can swallow the `Enter` (overlay, escape handling, redraw), clearing the box while the message
+  never reaches the conversation; an older version of this guard reported exactly that shape as delivered and
+  deleted the entry (zero submissions, no inbox row — the message was silently lost). Now such a send is
+  reported **unconfirmed** and the entry goes to `held/` **immediately** (not after the TTL) and is **terminal** —
+  never pasted a second time, `flush --now` included. A TUI that never echoes submissions (static footer)
+  degrades honestly the same way: the `Enter` did land once, the tool just cannot prove it — the held entry and
+  its durable inbox copy are there for you to verify and `team outbox drop`.
+- **The hint row is excluded by slot, and that slot is a known miss.** The row immediately above the bottom
+  border is assumed to be the package's chrome (the ` k3  Kimi Coding  max` hint) and is never read as content.
+  Two honest consequences (V9-C1/C3): (a) if the hint row is bumped OFF that slot (e.g. a blank row appears
+  beneath it), the box reads **busy** — a conservative false-busy that holds the message, never a glue; (b) a
+  **single-line draft sitting exactly on that slot is invisible** — the box can read empty and a send may glue
+  onto it. Any draft of two lines or more, or a single line on any other row, is caught. This is geometrically
+  forced without matching the hint's text, which varies across Pi versions.
+- **A draft-raced entry is terminal.** If a draft appeared between the check and the paste (the pre-`Enter`
+  fingerprint comparison catches it, even when the TUI folded your paste into `[paste #N +K lines]`), the payload
+  already reached the box once — it may have ridden your own submit to the agent. No automatic path, `flush --now`
+  included, ever pastes it again: it stays in `held/` until you drop it or re-send the content yourself.
+- **Rule-looking rows inside your own draft are not borders.** A pasted markdown separator or table border is a
+  `─` row; the guard pairs the bottom border with the **highest** qualifying row above it (a full-rule row of
+  equal width, or the E3-era spinner shape), so a short draft rule row — and also an equal-width or wider one
+  (V9-A4/A5/A8/A10) — counts as box content and the box reads busy. Two documented costs: on a TUI that **clips**
+  long lines to the pane width, an over-long draft line can read as an equal-width rule row and enlarge the located
+  box (the verdict errs to busy, never to gluing; real Pi 0.85.1 wraps one column short of the border width, so
+  the shape is unreachable there); and the `── ␣…`-plus-long-trailing-rule shape is accepted as a top-border
+  candidate on purpose (it was measured on the E3 Pi), so a draft line with that exact shape reads as box content
+  and the box reads busy — never as a border. The working row of Pi 0.85.1 is a different shape altogether
+  (` ⠋ Blanching… · 0s`, braille glyph plus text, drawn on its own row **above** the box, top border still a full
+  rule): it is not a border candidate, tier1 keeps locating the box, and if a future TUI ever moved that row into
+  the border position the pairing would find no box and the pane would be typed as today with one warning
+  (V9-D2) — never a silent hold.
+- **Folded pastes are checked by shape, not by stripping.** The box counts as "only ours" when it holds exactly
+  ONE `[paste #N +K lines]` placeholder whose `+K` equals the payload's line count. Two folded pastes (yours and
+  ours) always count as a race (V8-N4). Residue: if your own paste folded with the same line count as ours, the
+  two are geometrically indistinguishable — but then your payload is visible in the box, and you are holding the
+  pane.
+- **Half-rendered frames are waited out.** While the TUI is still drawing a folded paste (`[paste #N +1` without
+  the completed placeholder, occupying a whole line), the guard neither settles nor calls it a race — it waits
+  (about a second, bounded) for the render to finish (V8-N3). The test matches a whole line, never a substring,
+  and the payload itself is checked verbatim first — so a message whose own text contains `[paste #` delivers
+  normally (V8-N2/V9-B1).
+- **Two narrow acceptance windows, on purpose.** (a) When the visible box holds only a prefix/suffix of the
+  payload, the re-check accepts it (scrolling and truncated display windows look exactly like that; V8-N6). If
+  an `Enter` lands in that window while the paste is still arriving — yours or the drain's own — a partial paste
+  can be submitted; the submission is not credited as confirmed (no new conversation copy), so the entry is held
+  as `unconfirmed` and never re-pasted, with the full payload in its durable inbox copy — nothing is silently
+  deleted, the affected entry is visible and can be re-sent (V8-N6/V9-B3; V9-C5 measured the drain's-own-`Enter`
+  branch: the entry is held, not deleted).
+  (b) Notification-shaped text inside the conversation transcript could in principle be misread as
+  box content if the borders were mis-paired (V8-N5) — measured: when a spinner-shaped row stands in as the top
+  border, conversation text below it IS read as box content and the verdict is **busy** (a conservative hold,
+  not `UNKNOWN`; V9-C2), while a transcript without any rule-looking row simply pairs no box and fails safe to
+  `UNKNOWN`.
+- **A pane whose input box cannot be located** (a non-Pi TUI, a theme that breaks the geometry) is treated as
+  "deliver as today" plus one warning line — never as a permanent hold, and nothing is queued for it. Because no
+  box can be read there, no submission proof can be collected either: such a delivery is reported as
+  **unknown-shape, unconfirmed** (`输入框形状未知：按旧行为投递`), never as `已确认送达` (V9-C3).
+- **Check → type is not atomic.** The guard re-checks immediately before typing and again (by fingerprint) before
+  pressing Enter, and holds the message when a draft appeared in between; the residual window is one command wide
+  (no retry loop).
+- **A stalled render is held but recoverable (V9-B6).** When the TUI draws a folded paste slower than the bounded
+  wait, the drain sends no `Enter` and holds the entry with reason `stall-timeout` — **not** the terminal
+  `draft-raced`: a later drain (watchdog tick or `team outbox flush`) finishes the job by pressing the single
+  missing `Enter` while the box still holds only that payload, and never pastes it again. If the box no longer
+  holds only the payload (you typed, or you already submitted it with your own `Enter`), the entry stays in
+  `held/` for you to verify and drop or re-send — the tool will not risk a second paste.
+- **Expiry holds, it never types:** after `TEAM_DEFER_TTL` (default 300 s) an undeliverable entry moves to
+  `state/outbox/held/` with a line in `state/outbox/HOLDING.log`, and a later drain still delivers it once the box
+  clears (unless its reason is `draft-raced` or `unconfirmed`, which are terminal). The payload is always already durable in the
+  recipient's inbox (or `state/nudges.log` for a wake) by the time the hold completes, so an expired hold can
+  never lose a message — and a delivery the drain confirmed never appears in the inbox at all.
+
+If a notification really did get glued (e.g. the whitespace-only case), the mitigations from before still apply:
+answer with a short sentence right after reading it, lower the volume with `TEAM_INBOX_MAX_CHARS`, or set
+`TEAM_NOTIFY_TMUX=0` and read `team digest` yourself.
 
 ## 4. `team dispatch` refuses to dispatch
 

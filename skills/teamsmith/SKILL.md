@@ -73,6 +73,7 @@ $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 | Document contracts | `team task <ID> --title ... --agent a`, `team board add\|set\|ls`, `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
 | Dispatch | `team add-agent <a>`, `team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--allow-overflow] [--force] [--print]` (`--force` overrides the "this agent still carries an unfinished task" refusal; the override is printed and logged) |
 | Collaborate | `team say <a> "<one-line message>" [--no-verify]` (verifies delivery; falls back to the inbox when the agent is not running), `team notify <a> "<one line>"` (agent → PM) |
+| Draft / deferred delivery | `team draft [pm]` opens an editor window on `state/draft-pm.md` (nothing automated ever types into it; save+quit enqueues through the guarded path and prints the ack there), `team draft send [<file>] [--now]` (headless form), `team outbox [list]` (what is waiting, with `held` reasons), `team outbox flush [--now]`, `team outbox drop <n\|all>`. Every automated sender refuses to type into an input box that already holds a draft: the message is queued in `state/outbox/` and reported as `queued`, and `--now` is the audited override that types anyway (`state/outbox/forced.log`). See `references/troubleshooting.md` §3 |
 | Verify | `team review <ID> --dir <PM-prepared independent checkout> [--no-gates] [--strong] [--allow-unresolved-branch]` → `reviews/<ID>.md` (runs gates + writes evidence; refuses a dirty or `.gitignore`d checkout / an unresolvable `--branch` unless the matching `TEAM_REVIEW_ALLOW_*` override is used and recorded; `--strong` structurally checks flip evidence + a path to an independent package) |
 | Wrap up | `team close <ID> [--keep-window]` (BOARD/state/window only, never git), `team teardown --agent a [--purge]` (explicit cleanup) |
 | Bootstrap | `team bootstrap [--agents "dev verify"] [--print]` (recommended), `team init`, `team doctor` |
@@ -114,7 +115,7 @@ when they conflict, the creed wins and the process gets fixed.
    yourself against the brief.
 5. **Pass** → run git/forge yourself: squash-merge (with a PR: `gh pr merge --squash --delete-branch <PR>` first,
    then `git fetch && git merge --ff-only`) → `team board set <ID> done` → `team close <ID>`.
-   **Fail** → `team thread <a> "<failure evidence + expectation>"` + `team say <a> "<one-line instruction>"`.
+   **Fail** → `team thread <a> "<failure evidence + expectation>"` + `team say <a> "<one-line instruction>"` (if the target's input box holds a draft the instruction is queued instead of typed — `team outbox list` shows it, and it is delivered once the box clears).
 6. **Wrap up / report**: update `BOARD.md`, record key decisions in `DECISIONS.md` (with rationale and impact),
    and report to the user as "delivered + where the evidence is + next step". Users want conclusions and risk,
    not a command log.

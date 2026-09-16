@@ -747,16 +747,17 @@ team_require_recipient() { # <recipient> <是否 --any> <命令名>
 }
 
 team_cmd_say() {
-  local agent="" msg="" verify=1 any=0
+  local agent="" msg="" verify=1 any=0 now=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-verify) verify=0; shift ;;
       --any) any=1; shift ;;
+      --now) now=1; shift ;;
       -*) team_usage_die "say: 未知参数 $1" ;;
       *) if [ -z "$agent" ]; then agent="$1"; elif [ -z "$msg" ]; then msg="$1"; else msg="$msg $1"; fi; shift ;;
     esac
   done
-  [ -n "$agent" ] && [ -n "$msg" ] || team_usage_die "say <agent> <单行消息> [--no-verify] [--any]"
+  [ -n "$agent" ] && [ -n "$msg" ] || team_usage_die "say <agent> <单行消息> [--no-verify] [--any] [--now]"
   case "$msg" in *$'\n'*) team_die "say 只能发单行：多行请写进文件，然后让 agent 去读" ;; esac
   team_require_recipient "$agent" "$any" say || return 1
   local w; w="$(team_state_get "$agent" window "$agent")"
@@ -769,40 +770,50 @@ team_cmd_say() {
   fi
 
   local target="$TEAM_SESSION:$w"
-  local before=""; [ "$verify" = "1" ] && before="$(team_pane_snapshot "$target")"
-  team_tmux_send_text "$target" "$msg" || team_die "发送失败"
-  if [ "$verify" != "1" ]; then
-    team_ok "said to $target: $msg"
-    return 0
-  fi
-  # 投递校验（CEP 实测：agent 刚 settle 时 send-keys 可能被 TUI 吃掉——文本进去了/Enter 太早）
-  local i after
-  for i in 1 2 3 4 5 6; do
-    sleep 0.3
-    after="$(team_pane_snapshot "$target")"
-    [ "$after" != "$before" ] && { team_ok "said to $target: $msg（已确认送达）"; return 0; }
-    # 2、4 次没动静就补一次 Enter（TUI 有时只吃了文本）
-    case "$i" in 2|4) tmux send-keys -t "$target" Enter 2>/dev/null || true ;; esac
-  done
-  # 最后再整条重发一次
-  team_warn "第一次投递没看到 pane 变化，重发一次…"
-  team_tmux_send_text "$target" "$msg" || true
-  for i in 1 2 3 4; do
-    sleep 0.3
-    after="$(team_pane_snapshot "$target")"
-    [ "$after" != "$before" ] && { team_ok "said to $target: $msg（重发后确认送达）"; return 0; }
-    [ "$i" = "2" ] && tmux send-keys -t "$target" Enter 2>/dev/null || true
-  done
-  team_inbox_append "$agent" pm "（PM 消息，投递未确认）$msg"
-  team_err "投递未确认：$target 的 pane 没有变化（消息已写入收件箱 $TEAM_DOCS_DIR/inbox/$agent.md）"
-  team_dim "  手工兜底：tmux send-keys -t $target -l \"<消息>\"; tmux send-keys -t $target Enter" >&2
-  return 1
+  # 投递一律走守卫（delivery-guard）：输入框里有草稿 → 不写一个键，消息进 state/outbox/ 排队。
+  # --now 是人的显式逃生门（故意重建旧行为，留审计）；--no-verify 保留旧语义。
+  local sargs=()
+  [ "$verify" = "1" ] || sargs+=(--no-verify)
+  [ "$now" = "1" ] && sargs+=(--now)
+  team_send_guarded "$target" "$msg" say --from pm --inbox "$agent" ${sargs[@]+"${sargs[@]}"}
+  case "$TEAM_SEND_OUTCOME" in
+    delivered)
+      team_ok "said to $target: $msg（已确认送达）"
+      return 0 ;;
+    queued)
+      # 契约：排队 ≠ 送达 —— 输出里只许有 queued，绝不能写「已确认送达」
+      team_ok "queued for $target: $msg（目标输入框里有草稿：没有写任何键；条目已入 state/outbox/，清空后自动投递）"
+      team_dim "  原因/条目：$TEAM_CLI outbox list ｜ 投递未确认的兜底：消息已在 $TEAM_DOCS_DIR/inbox/$agent.md"
+      return 0 ;;
+    forced)
+      team_ok "said to $target: $msg（--now：跳过守卫直投，记入 outbox/forced.log）"
+      return 0 ;;
+    unknown-sent)
+      team_ok "said to $target: $msg（输入框形状未知：按旧行为投递）"
+      return 0 ;;
+    unknown-failed)
+      team_inbox_append "$agent" pm "（PM 消息，投递未确认）$msg"
+      team_err "投递未确认：$target（输入框形状未知且 pane 无变化；消息已写入收件箱 $TEAM_DOCS_DIR/inbox/$agent.md）"
+      return 1 ;;
+    *)
+      team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"
+      return 0 ;;
+  esac
 }
 
 team_inbox_append() { # <agent> <tag> <msg>
   local dir; dir="$(team_inbox_dir)"
   mkdir -p "$dir"
   printf -- '- %s [%s] agent:%s · %s\n' "$(team_timestamp)" "$2" "$1" "$3" >> "$dir/$1.md"
+}
+
+# notify 的去重键：内容 + 长度（同一份通知在 TEAM_NOTIFY_DEDUP_SEC 内只入队/投递一次）。
+# 扩展走的是它自己的键（<agent>|<tag>|<summary>|<len>:<hash>），两边都进同一个队列条目。
+team_notify_dedup_key() { # <agent> <msg>
+  local len sum
+  len="$(printf '%s' "$2" | wc -c | tr -d ' ')"
+  sum="$(printf '%s' "$2" | cksum | awk '{print $1}')"
+  printf 'notify|%s|%s:%s\n' "$1" "$len" "$sum"
 }
 
 team_cmd_notify() {
@@ -832,10 +843,20 @@ team_cmd_notify() {
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
   if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ] \
      && team_pm_alive; then
-    # 只给「正在跑 pi 的 PM」打字：PM 没在跑时写进 shell 会被当命令执行
-    team_tmux_send_to_pi "$target" "[manual] agent:$agent · $msg" || true
+    # 只给「正在跑 pi 的 PM」打字：PM 没在跑时写进 shell 会被当命令执行。
+    # 敲门也走投递守卫：输入框里有草稿 → 入队，草稿不动（规格 notify-and-inbox 的 dirty-PM 场景）
+    team_send_guarded "$target" "[manual] agent:$agent · $msg" knock --from "$agent" \
+      --dedup "$(team_notify_dedup_key "$agent" "$msg")"
+    case "$TEAM_SEND_OUTCOME" in
+      queued) team_dim "  PM 输入框里有草稿：敲门入队（$TEAM_CLI outbox list），清空后自动投递" ;;
+      duplicate) team_dim "  duplicate：同一份通知在 ${TEAM_NOTIFY_DEDUP_SEC:-20}s 内已经投过（没有重复入队）" ;;
+      offline|unknown-failed) team_warn "敲门没落地（PM 窗口不可投）：消息只落收件箱" ;;
+    esac
   elif [ "$TEAM_NOTIFY_TMUX" = "1" ] && [ -n "${TMUX:-}" ] && team_have_cmd tmux && ! team_pm_alive; then
     team_warn "PM 不在运行：消息只落收件箱（watchdog 会把 PM 拉起后读到）"
+  elif [ "$TEAM_NOTIFY_TMUX" = "1" ] && { [ -z "${TMUX:-}" ] || ! team_have_cmd tmux; }; then
+    # V7-F6：敲门依赖 TMUX 环境变量——不设就静默整条跳过是不行的；明说，收件箱记录不受影响
+    team_warn "不在 tmux 会话里（TMUX 未设置）：敲门不试、不入队，消息只落收件箱"
   fi
   team_ok "notified pm: $msg"
 }

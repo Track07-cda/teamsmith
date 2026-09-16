@@ -33,8 +33,14 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   add-agent <a> [--model m]    建长期 worktree（分支 agent/<a>）
   dispatch <a> <ID> <task-file> [--model m] [--fresh] [--allow-overflow] [--print]
                   在 tmux 窗口起一个交互式 pi（默认复用会话，可断点续跑）
-  say <a> "<一句话>"           往 agent 窗口发消息
-  notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口）
+  say <a> "<一句话>" [--now]      往 agent 窗口发消息；目标输入框里有草稿就**延后投递**（state/outbox/
+                   + 返回 queued）；--now = 故意跳过守卫粘字（记入 outbox/forced.log）
+  notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口；草稿窗口忙则入队）
+  draft [pm]                  人的草稿入口：开/复用 draft 窗口跑 $EDITOR，保存退出后自动入队（不抢焦点）
+  draft send [<文件>] [--now] 无头形式：把草稿文件整段投递（守卫路径）
+  outbox [list]               延后队列：待投递条目（活动 + held，编号供 drop）
+  outbox flush [--now]        立刻排水（--now = 跳过守卫直投，留审计）
+  outbox drop <n|all>        人显式丢弃队列条目
 
   ── 定时巡检与看门狗（看门狗由 PM 配置和维护） ───────────────
   watchdog up|down|restart|status|logs [--print]
