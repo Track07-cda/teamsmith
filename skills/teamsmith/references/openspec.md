@@ -21,9 +21,14 @@ CLI reference, `validate` output). Those live where they are generated and maint
   archive) and `openspec context` (the project context and rules an AI sees).
 - **The workflow schema** — `openspec/config.yaml` (`schema: spec-driven` plus the project's per-artifact rules).
 
-Two teamsmith-side facts frame everything below: OpenSpec is a **required dependency** (`team doctor` and
-`team paths` resolve `TEAM_OPENSPEC_BIN` / `TEAM_SPEC_DIR`), and `tests/spec-lint.sh` is the falsifiability
-companion of `openspec validate` — structure alone can be green on a spec that cannot fail, so the gate runs both.
+One teamsmith-side fact frames everything below: OpenSpec is a **required dependency** (`team doctor` and
+`team paths` resolve `TEAM_OPENSPEC_BIN` / `TEAM_SPEC_DIR`) and it **owns spec management** — the spec gate is
+`openspec validate --all --strict`, and a defect validate cannot see surfaces at the trial archive (§5), where
+OpenSpec's own machinery speaks.
+
+The writing convention survives as **convention, not gate**: every requirement still carries testable scenarios —
+a scenario that cannot fail is worthless, and the PM's proposal review (§4) still rejects such a delta by
+judgement. What is gone is the separate checker; no project script re-judges OpenSpec's files.
 
 ## 1. The pipeline: five phases, five owners, five gates
 
@@ -33,7 +38,7 @@ CLI they are the equivalent prompt/skill files (§0).
 | # | Phase (command) | Owner | Hand-in | Hand-out (artifact) | Gate before the next phase |
 |---|---|---|---|---|---|
 | 1 | `opsx-explore` | an **explorer** worker — never the eventual implementer (the verify agent, or a dedicated explorer) | the user's request / problem statement, existing specs and code | exploration report: options, risks, recommended approach, effort — written as the task's report | **PM**: accepts the approach, records the decision in `docs/team/DECISIONS.md`, and writes the propose brief |
-| 2 | `opsx-propose` | the **explorer** (the same agent — it holds the context) | the accepted approach | `openspec/changes/<id>/` (proposal, delta specs, design, tasks) — **planning only, no code** (the workflow itself states this boundary) | **PM proposal review — a recorded gate, same standing as `team review`**: `openspec validate --all --strict` + `tests/spec-lint.sh` green **and** the verdict written to `docs/team/reviews/<change>-proposal.md` as ACCEPTED (§4). **No apply brief may be dispatched before that.** |
+| 2 | `opsx-propose` | the **explorer** (the same agent — it holds the context) | the accepted approach | `openspec/changes/<id>/` (proposal, delta specs, design, tasks) — **planning only, no code** (the workflow itself states this boundary) | **PM proposal review — a recorded gate, same standing as `team review`**: `openspec validate --all --strict` green **and** the verdict written to `docs/team/reviews/<change>-proposal.md` as ACCEPTED (§4). **No apply brief may be dispatched before that.** |
 | 3 | `opsx-apply` | a **dev** agent, different from 1 and 4 | the change + the brief | code committed on its task branch + report | **independent verification** is dispatched to a different agent |
 | 4 | `opsx-verify` | an **independent verify** agent (never the implementer) | the change, the landed code, the report | verification record `docs/team/reviews/<ID>.md` + findings; every scenario of the change exercised, with red/green evidence | **PM**: re-runs the gate on the merged tree, decides `done`, and only then proposes archiving |
 | 5 | `opsx-archive` | **PM** (it changes the ledger) | the verified change | `openspec/changes/archive/<date>-<id>/` + updated capability specs | **the user** confirms; the PM may confirm as the user's proxy only when it states that plainly and records why (small, reversible, already covered by the approved approach) |
@@ -80,7 +85,6 @@ time: 2026-01-01T00:00:00Z · reviewer: pm · verdict: **ACCEPTED**   # or **NEE
 
 ## Commands run (real output, not a promise)
 $ openspec validate --all --strict        # → … exit 0
-$ bash skills/teamsmith/tests/spec-lint.sh # → … 0 violation(s)
 $ <a command the proposal itself promises> # → spot-checked: it exists and runs
 
 ## Findings (one line per checklist item)
@@ -105,8 +109,8 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 3. **Closed coverage, both ways** — every affected requirement has at least one task item, and every task item
    points at a requirement or scenario (no orphan tasks).
 4. **Explicit boundaries** — the proposal states what is out of scope, and who may not touch which paths.
-5. **Acceptance commands** — copy-pasteable and existing: the PM runs `openspec validate --all --strict` and
-   `tests/spec-lint.sh`, then spot-checks the commands the proposal itself promises.
+5. **Acceptance commands** — copy-pasteable and existing: the PM runs `openspec validate --all --strict`,
+   then spot-checks the commands the proposal itself promises.
 6. **Defect fixes state the flip** — red → green, or "break the implementation → the guard must fail → restore it".
 7. **No conflict with existing specs** — grep `openspec/specs/` before accepting a statement: a duplicate or a
    supersession must be a MODIFIED/REMOVED delta, not a parallel statement in a new requirement.
@@ -118,7 +122,7 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 | Phase | Read | Must be true | Write |
 |---|---|---|---|
 | explore | the exploration report, the specs and code it cites | the recommendation is one option with its risks and effort, and the scope is the user's request — not a wish list | the decision in `docs/team/DECISIONS.md` + the propose brief |
-| propose | `openspec/changes/<id>/` end to end | both spec gates green and all eight checklist points pass | `docs/team/reviews/<change>-proposal.md` = ACCEPTED (or NEEDS-CHANGES + per-item findings) |
+| propose | `openspec/changes/<id>/` end to end | `openspec validate --all --strict` green and all eight checklist points pass | `docs/team/reviews/<change>-proposal.md` = ACCEPTED (or NEEDS-CHANGES + per-item findings) |
 | apply | the brief, the change, the branch, the report | the branch carries exactly the change's scenarios; the acceptance commands really ran; nothing outside the boundaries was touched | the verify brief (a different agent) |
 | verify | the change, the landed code, the verification record, the diff | every scenario was exercised with red/green evidence, on a clean independent checkout | `docs/team/reviews/<ID>.md`; then `team board set <ID> done` after re-running the gate on the merged tree |
 | archive | the verified change + the user's confirmation | every task of the change is done and landed; **trial archive first**: `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y <id>)` — OpenSpec catches some delta defects (a MODIFIED naming a requirement the base lacks, an ADDED collision, …) *only here*; the trial surfaces them while fixing is cheap, and a failure hands the change back to apply with the archiver's message | then `openspec archive -y <id>` for real, and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |

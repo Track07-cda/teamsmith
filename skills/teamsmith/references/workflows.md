@@ -14,7 +14,7 @@ each** — the reasoning, owners and gates are in [openspec.md](openspec.md):
 | # | Phase | Owner | Gate before the next phase |
 |---|---|---|---|
 | 1 | `opsx-explore` | an explorer worker (never the eventual implementer) | the PM accepts the approach, records it in `DECISIONS.md`, writes the propose brief |
-| 2 | `opsx-propose` | the explorer, same agent (planning only — no code) | the PM's **proposal review is ACCEPTED** in `reviews/<change>-proposal.md`: both spec gates green + the eight-point checklist |
+| 2 | `opsx-propose` | the explorer, same agent (planning only — no code) | the PM's **proposal review is ACCEPTED** in `reviews/<change>-proposal.md`: `openspec validate --all --strict` green + the eight-point checklist |
 | 3 | `opsx-apply` | a dev worker | independent verification is dispatched to a different agent |
 | 4 | `opsx-verify` | an **independent** verify agent | the PM re-runs the gate on the merged tree and sets `done` |
 | 5 | `opsx-archive` | the PM | the user confirms (the PM may act as the user's proxy only when it says so and records why) |
@@ -22,7 +22,6 @@ each** — the reasoning, owners and gates are in [openspec.md](openspec.md):
 ```bash
 openspec list --specs                    # capabilities and their requirement counts
 openspec validate --all --strict         # structural gate — the first step of TEAM_GATES
-bash skills/teamsmith/tests/spec-lint.sh # falsifiability companion (a scenario that cannot fail is red)
 openspec archive -y <name>               # merges the deltas into openspec/specs/ and moves the change to changes/archive/
 ```
 

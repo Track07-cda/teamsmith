@@ -74,7 +74,7 @@ openspec init --tools none                    # the project's spec root (TEAM_SP
   package (read from `TEAM_PI_SETTINGS_FILE`, default `~/.pi/agent/settings.json`) and for the OpenSpec CLI
   (`TEAM_OPENSPEC_BIN`, default `openspec`), plus a separate line for the spec directory (`TEAM_SPEC_DIR`).
 - The project gate should carry the spec layer as well — `TEAM_GATES` is the config key:
-  `openspec validate --all --strict && bash skills/teamsmith/tests/spec-lint.sh && <your old gates>`.
+  `openspec validate --all --strict && <your old gates>`.
 - Escape hatch for unusual environments: `TEAM_REQUIRE_MAGIC_CONTEXT=0` and `TEAM_REQUIRE_OPENSPEC=0` downgrade the
   two checks from failure to warning, and `TEAM_PI_SETTINGS_FILE` / `TEAM_OPENSPEC_BIN` point the checks at a
   non-standard location. `dispatch` only warns about a missing dependency, it never blocks.
@@ -124,7 +124,7 @@ team init
 openspec init --tools none
 
 # 6) put the spec gate into TEAM_GATES in .pi/team/config.sh
-#    TEAM_GATES="openspec validate --all --strict && bash skills/teamsmith/tests/spec-lint.sh && <old gates>"
+#    TEAM_GATES="openspec validate --all --strict && <old gates>"
 
 # 7) rebuild the watchdog window and look at it
 team watchdog up
