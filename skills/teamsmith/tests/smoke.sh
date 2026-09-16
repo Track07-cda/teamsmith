@@ -1643,13 +1643,49 @@ EOF
   # TEAM_PI_BIN 指向不存在的东西：这一段证明 PM 侧真的不再需要 Pi
   pm_env() { env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$PMCMD" TEAM_PM_BIN="$FAKE/fake-pm.sh" "$@"; }
   pm_seen_field() { sed -n "s/^$1=//p" "$PM_SEEN" 2>/dev/null | head -1; }
-  pm_wait_seen() { local i=0; while [ "$i" -lt 60 ]; do [ -s "$PM_SEEN" ] && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
+  pm_lines() { wc -l < "$PM_LOG" 2>/dev/null | tr -d ' ' || echo 0; }
+  # ── M12：夹具产物的有界等待（M9.7 纪律：轮询**实际条件**，不赌固定 sleep）──────────────
+  # 事故形状（V9-E1 的同类残余）：`up` 的承诺只是「PM 进程起来了」（proof=spawn/argv），**不是**
+  # 「CLI 已经写出第 N 行」；夹具（假 PM）落盘晚于 up 返回是**合法**时序。测试以前用固定 sleep /
+  # 立刻采样来「同步」，负载下就随机读到半截或空文件 → 与产品行为无关的假红（门禁可信度被腐蚀）。
+  # 等待**不是**把红等成绿：带 deadline，超时由下面每条断言照旧报红，并把最后看到的现场打出来。
+  pm_wait() { # <秒> <判据…> → 0=判据成立（每 0.1s 轮询一次）
+    local secs="${1:-5}"; shift
+    local i=0 ticks=$(( ${secs:-5} * 10 ))
+    while [ "$i" -lt "$ticks" ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done
+    return 1
+  }
+  pm_grew() { [ "$(pm_lines)" -gt "${1:-0}" ]; }                    # 夹具的 argv 日志比基线长了
+  pm_dead() { ! pm_probe 'team_pm_pid_live' >/dev/null 2>&1; }      # 上一条 PM 不再算「活着的本项目 PM」
+  pm_file() { [ -s "$1" ]; }                                        # 夹具产物已落盘且非空
+  pm_ran_manual() { grep -qF -- 'arg1=--manual' "$PM_LOG" 2>/dev/null; }
+  pm_wait_delta() { # <秒> <起始行数> <正则>：等 PM_LOG 的新增行里出现模式
+    local secs="$1" from="$2" pat="$3" i=0 ticks=$(( ${1:-5} * 10 ))
+    while [ "$i" -lt "$ticks" ]; do
+      sed -n "$((from + 1)),\$p" "$PM_LOG" 2>/dev/null | grep -qE -- "$pat" && return 0
+      sleep 0.1; i=$((i + 1))
+    done
+    return 1
+  }
+  pm_pane_has() { # <标记>：PM 窗口尾屏里有这个标记（pty → tmux 屏幕是异步的）
+    case "$(pm_probe 'team_pm_pane_tail 3' 2>/dev/null || true)" in *"$1"*) return 0 ;; *) return 1 ;; esac
+  }
+  pm_scene() { # <说明>：有界等待超时时的现场（失败行自带证据，不必再考古）
+    printf '    现场（%s）：argv 日志=%s 行，尾=[%s]\n' "$1" "$(pm_lines)" "$(tail -2 "$PM_LOG" 2>/dev/null | tr '\n' '|')"
+  }
+  # 夹具写 PM_SEEN 是逐字段追加：等**完整记录**（最后一个字段 first_line 出现）——只等「文件非空」
+  # 会在负载下读到半截（argv_prompt_md5 可能还没写）。
+  pm_wait_seen() { pm_wait 30 grep -q '^first_line=' "$PM_SEEN" 2>/dev/null; }
   # V9-E1：假 PM 把「看到的东西」写在开头，而 digest → board ls → dispatch --print 这条链
   # 要跑完才写 PM_FAKE_READY。只等 PM_SEEN 就断言会在负载高时提前读到半截日志（实测抖出
   # 3 条假红）。所以先等 READY（有界 30s），再断言——真死掉的 adapter 仍然会被下面抓到。
-  pm_wait_ready() { local i=0; while [ "$i" -lt 60 ]; do grep -q "PM_FAKE_READY" "$PM_LOG" 2>/dev/null && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
-  pm_lines() { wc -l < "$PM_LOG" 2>/dev/null | tr -d ' ' || echo 0; }
-  pm_close_windows() { tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true; sleep 0.3; }
+  pm_wait_ready() { pm_wait 30 grep -q "PM_FAKE_READY" "$PM_LOG" 2>/dev/null; }
+  # 关窗口后等**上一条 PM 真的死了**再返回：进程没死透时 up 会把它当 running → 不启动新 PM
+  # （旧实现的固定 sleep 0.3 正是在负载下把这条变成随机的）。
+  pm_close_windows() {
+    tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true
+    pm_wait 5 pm_dead
+  }
 
   # 1) team up 拉起非 Pi 的 PM（窗口/进程都没有 Pi）
   pm_close_windows
@@ -1693,6 +1729,8 @@ EOF
   assert_has "$TMP/pm-adapter-up2.log" "PM 已启动" "崩溃后重新 up 能把它拉回来"
   assert_has "$TMP/pm-adapter-up2.log" "不延续" "并再次明说历史不延续（resume 参数为空）"
   assert_has "$TMP/pm-adapter-up2.log" "inbox" "给出接手指引（inbox / docs/team/**）"
+  # M12：up 返回 ≠ 夹具已落盘 —— 等它真的长起来再断言（超时由下面那条报红，现场留在 pm_scene）
+  pm_wait 5 pm_grew "$LINES1" || pm_scene "有界轮询 5s 内 argv 日志没长过基线（$LINES1 行）"
   assert_eq "这一轮确实是新的 PM 进程（argv 日志增长）" "$([ "$(pm_lines)" -gt "$LINES1" ] && echo grew || echo same)" "grew"
 
   # 2b) 对照：配上 resume 参数（模板里用 {resume_args}）→ 文案变成「续跑」，参数真的进了 argv
@@ -1703,6 +1741,8 @@ EOF
     TEAM_PM_RESUME_ARGS='--continue' $TEAM up >"$TMP/pm-adapter-up3.log" 2>&1 || true
   assert_has "$TMP/pm-adapter-up3.log" "续跑：--continue" "配了 {resume_args} → 文案说明怎么延续"
   assert_not "$TMP/pm-adapter-up3.log" "不延续" "不再说「历史不延续」"
+  pm_wait_delta 5 "$LINES2" '^arg1=--continue$' \
+    || pm_scene "有界轮询 5s 内新增行里没有 arg1=--continue（基线 $LINES2 行）"
   sed -n "$((LINES2 + 1)),\$p" "$PM_LOG" > "$TMP/pm-adapter-delta3.log" 2>/dev/null || true
   assert_has "$TMP/pm-adapter-delta3.log" "arg1=--continue" "resume 参数真的进了这一轮的 argv"
 
@@ -1721,6 +1761,7 @@ EOF
   assert_match "$TMP/pm-adapter-tick.log" "已拉起" "watchdog 在有待办时用同一个 helper 拉起非 Pi PM"
   assert_has "$REPO/.pi/team/state/watchdog.log" "已拉起" "watchdog 日志记录了这次拉起"
   assert_eq "重启配额只记了一次真实重启" "$(wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ')" "1"
+  pm_wait 5 pm_grew "$LINES3" || pm_scene "有界轮询 5s 内 argv 日志没长过基线（$LINES3 行）"
   assert_eq "这一轮真的拉起了新的 PM 进程" "$([ "$(pm_lines)" -gt "$LINES3" ] && echo grew || echo same)" "grew"
   assert_has "$TMP/pm-adapter-tick.log" "不延续" "watchdog 的拉起文案同样说清延续与否"
 
@@ -1740,7 +1781,7 @@ EOF
   assert_match "$TMP/pm-adapter-wrap-wd.log" "PM（$PMW）在运行" "wrapper PM 之后仍被判为在运行"
   # 4b) 人工在窗口里启动一个「不叫 pi」的 PM：没有 spawn 记录也要认得出来（身份按 PM 的 CLI 解析）
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec $FAKE/fake-pm.sh --manual" >/dev/null 2>&1 || true
-  sleep 1
+  pm_wait 5 pm_ran_manual || pm_scene "有界轮询 5s 内人工启动的 CLI 没写下 argv"
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
   pm_env $TEAM ps >"$TMP/pm-adapter-manual.log" 2>&1 || true
   assert_match "$TMP/pm-adapter-manual.log" "PM（$PMW）在运行" "人工启动的非 Pi PM 被认出（身份不认名字 pi）"
@@ -1765,6 +1806,7 @@ EOF
   assert_has "$TMP/pm-adapter-bare.log" "PM 已启动" "裸名字（只在调用者 PATH 里）也能启动 PM"
   assert_has "$TMP/pm-adapter-bare.log" "cli=pm-bare" "启动文案报的是这个名字"
   assert_has "$TMP/pm-adapter-bare.log" "proof=" "并给出启动证据"
+  pm_wait 5 pm_file "$TMP/pm-bare.log" || pm_scene "有界轮询 5s 内裸名字 CLI 没落盘"
   if [ -s "$TMP/pm-bare.log" ]; then ok "裸名字的 CLI 真的在窗口里跑起来了（登录 bash 里没有这个目录）"; else bad "裸名字的 CLI 没跑起来（$TMP/pm-bare.log 空）"; fi
   env PATH="$BARE_DIR:$PATH" TEAM_PI_BIN=/definitely-not-pi \
     TEAM_PM_CMD='pm-bare --pf {prompt_file} --ask {prompt}' TEAM_PM_BIN= \
@@ -1776,7 +1818,8 @@ EOF
   #     信号被空行挤掉 —— 诊断看起来像「窗口没输出」。夹具里真的把报错写在最上面、后面垫 40 行空行。
   tmux respawn-pane -k -t "$SESSION:$PMW" \
     "printf 'PANE-MARKER-1\\n'; printf '\\n%.0s' \$(seq 1 40); printf 'PANE-MARKER-2\\n'; sleep 30" >/dev/null 2>&1 || true
-  sleep 0.6
+  pm_wait 5 pm_pane_has "PANE-MARKER-2" \
+    || printf '    现场（有界轮询 5s 内窗口没渲染出标记）：尾屏=[%s]\n' "$(pm_probe 'team_pm_pane_tail 3' 2>/dev/null | tr '\n' '|')"
   PN_FROM_PANE="$(pm_probe 'team_pm_pane_tail 3')"
   assert_has_echo "$PN_FROM_PANE" "PANE-MARKER-1" "重抹窗口输出保留最上面的报错行（不再被空行挤掉）"
   assert_has_echo "$PN_FROM_PANE" "PANE-MARKER-2" "空行之后的内容也还在"
@@ -6061,7 +6104,17 @@ fi
 assert_eq "26-b 观察者：临时 state 目录逐字节不变（含已有文件与新增文件）" "$P10_OBS_AFTER" "$P10_OBS_BEFORE"
 
 # ---------------------------------------------------------------- 26-c. 纯文本契约（--print / 重定向 / UI=text）
-p10m $TEAM monitor --print >"$TMP/p10-print.txt" 2>"$TMP/p10-print.err"
+# M12 追加：下面两条断言把两次**实时执行**逐字对比 ⇒ 容量数据源必须钉住：默认读 /proc/meminfo 与
+# /proc/swaps，数值天然会动（实测 MemAvailable ±100MB/s；「可再加 N 个」= (avail+disk_free−512)/6144，
+# 在边界附近两次采样就能差 1 —— PM 复验就在这里红过，而报错把原因说成了 ESC）。
+# 只钉 TEAM_MEMINFO_FILE 不够：面板的 swap 列与「可再加」还走 team_swap_breakdown(/proc/swaps)，
+# 所以连 6b 造的 swaps 夹具一起钉。
+p10cap=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps")
+p10c() { p10m env "${p10cap[@]}" "$@"; }                 # 26-c 里所有真跑：带容量夹具
+p10_norm() { sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "${1:-/dev/null}"; }
+p10_diff1() { diff <(p10_norm "$1") <(p10_norm "$2") 2>/dev/null | head -4 | tr '\n' ' '; }  # 失败信息里的首个差异
+
+p10c $TEAM monitor --print >"$TMP/p10-print.txt" 2>"$TMP/p10-print.err"
 P10_RC=$?
 if [ "$P10_RC" = "0" ] && [ "$(p10_esc "$TMP/p10-print.txt")" = "0" ]; then
   ok "26-c 纯文本：--print 退出 0 且 0 个 ESC 字节"
@@ -6070,25 +6123,28 @@ else
 fi
 assert_has "$TMP/p10-print.txt" "· $(basename "$P10R")" "26-c 纯文本：第一行点名项目"
 assert_has "$TMP/p10-print.txt" "巡检 900s" "26-c 纯文本：第一行点名巡检周期"
-p10m $TEAM monitor --once --no-pulse >"$TMP/p10-once-redirect.txt" 2>/dev/null
-if [ "$(p10_esc "$TMP/p10-once-redirect.txt")" = "0" ] \
-   && diff <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-print.txt") \
-           <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-once-redirect.txt") >/dev/null; then
+# 失败信息分开报：① ESC（=控制字节）与 ② 内容 diff 是两回事，后者要带首个差异（否则又要考古）
+p10c $TEAM monitor --once --no-pulse >"$TMP/p10-once-redirect.txt" 2>/dev/null
+P10_ONCE_ESC="$(p10_esc "$TMP/p10-once-redirect.txt")"
+if [ "$P10_ONCE_ESC" != "0" ]; then
+  bad "26-c 纯文本：重定向的 --once 里有 ESC 控制字节（ESC=$P10_ONCE_ESC）：纯文本路径没走到"
+elif ! diff <(p10_norm "$TMP/p10-print.txt") <(p10_norm "$TMP/p10-once-redirect.txt") >/dev/null; then
+  bad "26-c 纯文本：重定向的 --once 与 --print 内容不一致（ESC=0，时间戳已归一）：$(p10_diff1 "$TMP/p10-print.txt" "$TMP/p10-once-redirect.txt")"
+else
   ok "26-c 纯文本：重定向的 --once 与 --print 只差时间戳（且 0 ESC）"
-else
-  bad "26-c 纯文本：重定向的 --once 与 --print 不一致（ESC=$(p10_esc "$TMP/p10-once-redirect.txt")）"
 fi
-p10m env TEAM_MONITOR_UI=text $TEAM monitor --once --no-pulse >"$TMP/p10-ui-text.txt" 2>/dev/null
-if [ "$(p10_esc "$TMP/p10-ui-text.txt")" = "0" ] \
-   && diff <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-print.txt") \
-           <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-ui-text.txt") >/dev/null; then
-  ok "26-c 纯文本：TEAM_MONITOR_UI=text 走同一渲染（与 --print 只差时间戳）"
+p10c env TEAM_MONITOR_UI=text $TEAM monitor --once --no-pulse >"$TMP/p10-ui-text.txt" 2>/dev/null
+P10_UITEXT_ESC="$(p10_esc "$TMP/p10-ui-text.txt")"
+if [ "$P10_UITEXT_ESC" != "0" ]; then
+  bad "26-c 纯文本：TEAM_MONITOR_UI=text 渲染出了 ESC 控制字节（ESC=$P10_UITEXT_ESC）：没走纯文本路径"
+elif ! diff <(p10_norm "$TMP/p10-print.txt") <(p10_norm "$TMP/p10-ui-text.txt") >/dev/null; then
+  bad "26-c 纯文本：TEAM_MONITOR_UI=text 与 --print 内容不一致（ESC=0，时间戳已归一）：$(p10_diff1 "$TMP/p10-print.txt" "$TMP/p10-ui-text.txt")"
 else
-  bad "26-c 纯文本：TEAM_MONITOR_UI=text 没有走纯文本路径（ESC=$(p10_esc "$TMP/p10-ui-text.txt")）"
+  ok "26-c 纯文本：TEAM_MONITOR_UI=text 走同一渲染（与 --print 只差时间戳）"
 fi
 # Ink 在 stdout 不是 TTY 时**不写控制序列**（实测）：所以「tui 强制走 TUI 路径」在这条路上只能观察到
 # 「仍然渲染出一帧、退出 0、不报未知参数」。渲染器本身由真 pane 段落（26-m 的 capture + 0 ESC）钉住。
-p10m env TEAM_MONITOR_UI=tui $TEAM monitor --once --no-pulse >"$TMP/p10-ui-tui.txt" 2>"$TMP/p10-ui-tui.err"
+p10c env TEAM_MONITOR_UI=tui $TEAM monitor --once --no-pulse >"$TMP/p10-ui-tui.txt" 2>"$TMP/p10-ui-tui.err"
 if [ $? -eq 0 ] && grep -q 'teamsmith pulse' "$TMP/p10-ui-tui.txt" && ! grep -q '未知参数' "$TMP/p10-ui-tui.err"; then
   ok "26-c 纯文本：TEAM_MONITOR_UI=tui 被接受并渲染一帧（重定向下 Ink 不写控制字节，由 26-m 钉渲染器）"
 else
