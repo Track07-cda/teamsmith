@@ -2,29 +2,39 @@
 //
 //   panel.js [--root DIR] [--print | --json | --once] [--width N] [--height N]
 //            [--activity | --no-activity] [--events N] [--refresh N] [--no-pulse] [--version]
+//            [--headless] [--snapshot] [--palette] [--theme dark|light] [--page 1|2|3] [--lang zh|en]
 //
 // Modes (the `panel` contract):
-//   --print      one plain-text frame, no escape sequence, writes nothing, never ticks
+//   --print      one plain-text frame (the overview), no escape sequence, writes nothing, never ticks
 //   --json       {"panel": {...}, "activity": [...]}, writes nothing, never ticks
 //   --once       one frame through the renderer selection, keeps today's tick semantics
 //   (default)    the TUI in a terminal; stdout not a TTY selects the plain-text path unless
 //                TEAM_MONITOR_UI=tui forces the renderer
+//   --headless   the tick loop only (no renderer) — the shape the console collapses into
+//   --snapshot   one themed frame with SGR bytes (the snapshot suite's deterministic exit)
+//   --palette    the declared palettes + their contrast pairs as JSON (the gate script's input)
 //
 // Everything on screen comes from `team __panel-data`; the tick is `team watch --once`.
+// `--print`/`--json` never read `state/panel.conf` or the page file: the machine exits are frozen.
 
 import React from 'react'
 import { writeSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { render } from 'ink'
-import { App } from './App.js'
+import { App, frameSignature } from './App.js'
 import type { PanelApi } from './App.js'
-import { BLOCK_NAMES, createPanelCache, findTeamCli, loadPanelData, panelDirOf, runTick } from './data.js'
-import type { DataResult, PanelCache } from './data.js'
+import { BLOCK_NAMES, MACHINE_BLOCKS, createPanelCache, findTeamCli, loadPanelData, panelDirOf, runTick } from './data.js'
+import type { DataOptions, DataResult, PanelCache } from './data.js'
 import { normalizeNewlines, parseSendResult, mapReceipt, DRAFT_FILE } from './compose.js'
 import type { Receipt } from './compose.js'
-import { buildFrame, buildJson } from './layout.js'
-import type { FrameInput } from './types.js'
+import { buildJson, layout, renderAnsi, renderPlain } from './layout.js'
+import type { LayoutInput } from './layout.js'
+import { fill, stringsFor } from './strings/index.js'
+import { PANEL_CONF_FILE, PANEL_PAGE_FILE, readPage, readSettings, writePage, writeSettings } from './settings.js'
+import type { Settings } from './settings.js'
+import { contrastPairs, PALETTES, resolveTheme } from './theme.js'
+import type { FrameInput, PageId, ViewState } from './types.js'
 
 declare const __PIN_INK__: string | undefined
 declare const __PIN_REACT__: string | undefined
@@ -45,7 +55,7 @@ function argOf(name: string): string | undefined {
   return v && !v.startsWith('--') ? v : undefined
 }
 
-const has = (name: string) => process.argv.includes(`--${name}`)
+const has = (name: string): boolean => process.argv.includes(`--${name}`)
 
 /** Machine-readable output must not be lost to an async pipe write. */
 function out(text: string): void {
@@ -59,18 +69,27 @@ function fail(message: string): never {
 const root = argOf('root') || process.cwd()
 const teamCli = argOf('team-cli') || findTeamCli(panelDirOf(import.meta.url)) || undefined
 const events = Number(argOf('events') ?? 4) || 4
-const refresh = Math.max(1, Number(argOf('refresh') ?? 5) || 5)
+const refresh = Math.max(1, Number(argOf('refresh') ?? 3) || 3)
 const tickEvery = Number(argOf('tick-every') ?? 0) || 0
 const noPulse = has('no-pulse') || has('no-watchdog')
 const once = has('once')
 const wantJson = has('json')
 const wantPrint = has('print')
+const wantSnapshot = has('snapshot')
+const wantPalette = has('palette')
+const headless = has('headless')
 const widthArg = Number(argOf('width') ?? 0)
 const heightArg = Number(argOf('height') ?? 0)
 const ui = String(process.env.TEAM_MONITOR_UI || argOf('ui') || 'auto')
 const noActivity = has('no-activity')
 const yesActivity = has('activity')
-const activityOn = yesActivity || (!noActivity && String(process.env.TEAM_MONITOR_ACTIVITY ?? '1') !== '0')
+const activityPinned = yesActivity || noActivity
+const activityFlag = yesActivity ? true : noActivity ? false : null
+const envActivity = String(process.env.TEAM_MONITOR_ACTIVITY ?? '1') !== '0'
+const rawActivityOn = activityFlag ?? envActivity
+const themeArg = argOf('theme')
+const pageArg = argOf('page')
+const langArg = argOf('lang')
 
 if (has('version')) {
   out(`teamsmith panel ${PANEL_VERSION} · ink ${PIN_INK} · react ${PIN_REACT}\nbuilt by: ${BUILD_CMD}\n`)
@@ -78,18 +97,21 @@ if (has('version')) {
 }
 if (has('help')) {
   out(
-    'usage: panel.js [--root DIR] [--state-dir DIR] [--print|--json|--once] [--width N] [--height N]\n' +
-      '                [--activity|--no-activity] [--events N] [--refresh N] [--no-pulse] [--version]\n',
+    'usage: panel.js [--root DIR] [--state-dir DIR] [--print|--json|--once|--headless|--snapshot|--palette]\n' +
+      '                [--width N] [--height N] [--activity|--no-activity] [--events N] [--refresh N]\n' +
+      '                [--no-pulse] [--theme dark|light] [--page 1|2|3] [--lang zh|en] [--version]\n',
   )
   process.exit(0)
 }
 
-// The console's own state files (draft.md today, panel.conf/panel-page in B3) live in the
-// project's state directory. The launcher passes it explicitly; the tick log path and the
-// project root are the fallbacks, so a direct `panel.js` invocation still finds it.
+// The console's own state files live in the project's state directory. The launcher passes it
+// explicitly; the tick log path and the project root are the fallbacks, so a direct `panel.js`
+// invocation still finds it.
 const tickLogArg = argOf('tick-log') || ''
 const stateDir = argOf('state-dir') || (tickLogArg ? dirname(tickLogArg) : join(root, '.pi/team/state'))
 const draftFile = join(stateDir, DRAFT_FILE)
+const confFile = join(stateDir, PANEL_CONF_FILE)
+const pageFile = join(stateDir, PANEL_PAGE_FILE)
 
 type Mode = 'text' | 'json' | 'tui'
 function pickMode(): Mode {
@@ -100,9 +122,30 @@ function pickMode(): Mode {
   return process.stdout.isTTY ? 'tui' : 'text'
 }
 
-const mode = pickMode()
+const mode: Mode | 'snapshot' | 'palette' | 'headless' = wantPalette
+  ? 'palette'
+  : wantSnapshot
+    ? 'snapshot'
+    : headless
+      ? 'headless'
+      : pickMode()
 const stdoutColumns = process.stdout.columns || 0
 const stdoutRows = process.stdout.rows || 0
+
+// ---------------------------------------------------------------- machine-only exits
+if (mode === 'palette') {
+  out(
+    `${JSON.stringify(
+      {
+        palettes: PALETTES,
+        pairs: { dark: contrastPairs(PALETTES.dark), light: contrastPairs(PALETTES.light) },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  process.exit(0)
+}
 
 // ---------------------------------------------------------------- the tick loop (owned here)
 let lastTick = 0
@@ -124,38 +167,90 @@ async function runTickIfDue(): Promise<void> {
   await runTick(teamCli, root, tickLog)
 }
 
-function frameOf(res: DataResult, scroll?: number): FrameInput {
+function frameOf(res: DataResult, activity: boolean, scroll?: number): FrameInput {
   return {
     panel: res.data ?? { project: '', timestamp: '', interval: 0 },
-    activityBlocks: activityOn ? res.activity ?? [] : [],
+    activityBlocks: activity ? res.activity ?? [] : [],
+    blocks: res.blocks ?? {},
     degraded: res.degraded ?? [],
     width: widthArg || stdoutColumns || 100,
     height: heightArg || stdoutRows || 0,
-    activity: activityOn,
-    scroll,
+    activity,
   }
 }
 
 /** A frame where every block failed is not a frame: fail loudly like the old data path did. */
-function frameOrFail(res: DataResult): FrameInput {
-  const allDown = (res.degraded ?? []).length === BLOCK_NAMES.length
+function frameOrFail(res: DataResult, activity: boolean, wanted: readonly string[] = BLOCK_NAMES): FrameInput {
+  const allDown = wanted.every((name) => (res.degraded ?? []).includes(name as never))
   if (!res.ok || !res.data || allDown) {
     const first = res.error || Object.values(res.errors ?? {})[0] || 'panel: data read failed'
     fail(res.error || `panel: every block failed (${first})`)
   }
-  return frameOf(res)
+  return frameOf(res, activity)
+}
+
+function defaultView(lang: string, page: PageId): ViewState {
+  return {
+    page,
+    density: 'comfortable',
+    lang,
+    mouseOn: false,
+    tui: false,
+    overlay: false,
+    overlayIndex: 0,
+    viewEntry: null,
+    scroll: 0,
+  }
 }
 
 async function main(): Promise<void> {
   if (mode === 'json') {
-    out(`${JSON.stringify(buildJson(frameOrFail(await loadPanelData({ root, teamCli, activity: activityOn, events }))))}\n`)
+    const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events, blocks: MACHINE_BLOCKS })
+    out(`${JSON.stringify(buildJson(frameOrFail(res, rawActivityOn, MACHINE_BLOCKS), refresh))}\n`)
     process.exit(0)
+  }
+
+  if (mode === 'snapshot') {
+    // One themed frame, deterministic: the snapshot suite pins the tier × theme matrix through this
+    // exit. It is not `--print` (which must stay escape-free), so the SGR bytes are expected.
+    const settings = readSettings(confFile)
+    const themeName = themeArg === 'dark' || themeArg === 'light' ? themeArg : resolveTheme(settings.theme)
+    const lang = langArg === 'en' || langArg === 'zh' ? langArg : settings.lang
+    const page = pageArg === '1' || pageArg === '2' || pageArg === '3' ? (Number(pageArg) as PageId) : settings.defaultPage
+    const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events })
+    const frame = frameOrFail(res, rawActivityOn)
+    const view: ViewState = { ...defaultView(lang, page), tui: true, mouseOn: settings.mouse }
+    const themed = layout({
+      ...frame,
+      strings: stringsFor(lang),
+      height: heightArg || 0,
+      view,
+    } as LayoutInput)
+    if (has('targets')) {
+      // The click-target map of the same frame the snapshot renders: one entry per documented key
+      // (and per page tab / queue row). The gate asserts the set, so a key without a target fails.
+      out(`${JSON.stringify(themed.targets.map((t) => ({ row: t.row, action: t.hit.action })))}\n`)
+      process.exit(0)
+    }
+    out(`${renderAnsi(themed, PALETTES[themeName], { truecolor: true }).join('\n')}\n`)
+    process.exit(0)
+  }
+
+  if (mode === 'headless') {
+    // The tick loop with no renderer. `team monitor --headless` is the bash loop (lock + drift
+    // reexec); this branch serves a direct bundle invocation and keeps the same cadence.
+    for (;;) {
+      await runTickIfDue()
+      sleepSync(Math.max(1, tickEvery || refresh) * 1000)
+    }
   }
 
   if (mode === 'text') {
     if (once || wantPrint) {
       // One frame; `--once` then keeps today's tick semantics, `--print` (the observer) never ticks.
-      out(`${buildFrame(frameOrFail(await loadPanelData({ root, teamCli, activity: activityOn, events }))).join('\n')}\n`)
+      const frame = frameOrFail(await loadPanelData({ root, teamCli, activity: rawActivityOn, events, blocks: MACHINE_BLOCKS }), rawActivityOn, MACHINE_BLOCKS)
+      const themed = layout({ ...frame, strings: stringsFor('zh'), view: defaultView('zh', 1) } as LayoutInput)
+      out(`${renderPlain(themed).join('\n')}\n`)
       if (once) await runTickIfDue()
       process.exit(0)
     }
@@ -163,7 +258,9 @@ async function main(): Promise<void> {
     // tick period) with the control bytes removed — a redirected `team monitor` no longer clears the
     // caller's output. One frame per iteration, no clear, never a TUI escape sequence.
     for (;;) {
-      out(`${buildFrame(frameOrFail(await loadPanelData({ root, teamCli, activity: activityOn, events }))).join('\n')}\n`)
+      const frame = frameOrFail(await loadPanelData({ root, teamCli, activity: rawActivityOn, events, blocks: MACHINE_BLOCKS }), rawActivityOn, MACHINE_BLOCKS)
+      const themed = layout({ ...frame, strings: stringsFor('zh'), view: defaultView('zh', 1) } as LayoutInput)
+      out(`${renderPlain(themed).join('\n')}\n`)
       await runTickIfDue()
       sleepSync(Math.max(1, refresh) * 1000)
     }
@@ -171,28 +268,54 @@ async function main(): Promise<void> {
 
   // TUI: the run owns the loop — one frame per TEAM_MONITOR_REFRESH, one tick per the tick period,
   // no second window and no background worker. The data assembly is asynchronous and cached: a
-  // refresh in flight never delays a keystroke (tasks.md 1.4), and only the blocks whose TTL
-  // expired are rebuilt (tasks.md 1.3).
-  const cache: PanelCache = createPanelCache({ root, teamCli, activity: activityOn, events })
+  // refresh in flight never delays a keystroke, and only the blocks whose TTL expired are rebuilt.
+  const settings = readSettings(confFile)
+  const effectiveLang = settings.lang
+  const s = stringsFor(effectiveLang)
+  const palette = PALETTES[resolveTheme(settings.theme)]
+  // Activity precedence inside the TUI: CLI flag > panel.conf > TEAM_MONITOR_ACTIVITY.
+  const activityOn = activityPinned ? rawActivityOn : settings.activity
+  const opts: DataOptions = { root, teamCli, activity: activityOn, events }
+  const cache: PanelCache = createPanelCache(opts)
   const first = await cache.refresh({ force: true })
-  let current = frameOrFail(first)
+  let current = frameOrFail(first, activityOn)
+  /** The signature of the frame Ink last drew; an unchanged frame must not repaint. */
+  let renderedSig = frameSignature(current)
   let app: ReturnType<typeof render> | undefined
   /** True while an external program (the editor relay) owns the terminal. */
   let editorActive = false
+  let mouseEnabled = settings.mouse
   const panelDir = panelDirOf(import.meta.url)
   const bridge = existsSync(join(panelDir, 'draft-send.sh'))
     ? join(panelDir, 'draft-send.sh')
     : join(panelDir, '..', 'draft-send.sh')
+  const page = readPage(pageFile, settings.defaultPage)
 
   const panelElement = (): React.ReactElement =>
-    React.createElement(App, { frame: current, refresh, reload, once, api })
+    React.createElement(App, {
+      frame: current,
+      refresh,
+      reload,
+      once,
+      api,
+      settings,
+      page,
+      palette,
+      activityPinned,
+    })
 
   const adopt = (res: DataResult): void => {
-    if (!res.ok || !res.data || (res.degraded ?? []).length === BLOCK_NAMES.length) return
-    current = frameOf(res)
+    if (!res.ok || !res.data || BLOCK_NAMES.every((name) => (res.degraded ?? []).includes(name))) return
+    const next = frameOf(res, activityPinned ? rawActivityOn : opts.activity, current.height)
+    const sig = frameSignature(next)
+    const changed = sig !== renderedSig
+    current = next
+    renderedSig = sig
     // The render callback is explicitly gated while `$EDITOR` owns the terminal: Ink must not
-    // touch the screen between the handoff and the editor's exit.
-    if (editorActive) return
+    // touch the screen between the handoff and the editor's exit. A frame that did not change must
+    // not repaint either: Ink reconciles the whole element tree on `rerender`, and at a 3s cadence
+    // that alone is several times the console's CPU budget.
+    if (editorActive || !changed) return
     try {
       app?.rerender(panelElement())
     } catch {
@@ -209,7 +332,7 @@ async function main(): Promise<void> {
     void cache.refresh({ force: true }).then(adopt)
   }
 
-  // ---------------------------------------------------------------- the console's three actions
+  // ---------------------------------------------------------------- the console's actions
   function readDraft(): string {
     try {
       return normalizeNewlines(readFileSync(draftFile, 'utf8'))
@@ -283,7 +406,7 @@ async function main(): Promise<void> {
     const parsed = parseSendResult(res.out)
     const detail = firstLine(res.err)
     if (!parsed) {
-      return { state: 'error', token: `rc=${res.rc} no-token`, detail: detail || '投递未确认（没有拿到结果码）' }
+      return { state: 'error', token: `rc=${res.rc} no-token`, detail: detail || s.sendUnconfirmed }
     }
     const receipt = mapReceipt(parsed.rc, parsed.outcome, parsed.result, detail)
     refreshNow()
@@ -291,15 +414,18 @@ async function main(): Promise<void> {
   }
 
   async function flushQueue(): Promise<{ ok: boolean; line: string }> {
-    if (!teamCli) return { ok: false, line: '✗ 冲刷失败：找不到 teamsmith CLI' }
+    if (!teamCli) return { ok: false, line: `✗ ${s.noTeamCli}` }
     const res = await run([teamCli, '--root', root, 'outbox', 'flush'])
     const line = firstLine(res.err) || firstLine(res.out)
     refreshNow()
-    return { ok: res.rc === 0, line: res.rc === 0 ? `✓ 冲刷 · ${line}` : `✗ 冲刷失败 · ${line}` }
+    return {
+      ok: res.rc === 0,
+      line: res.rc === 0 ? fill(s.flushOk, { detail: line }) : fill(s.flushFail, { detail: line }),
+    }
   }
 
   async function setStandby(on: boolean, reason: string): Promise<{ ok: boolean; line: string }> {
-    if (!teamCli) return { ok: false, line: '✗ 待命失败：找不到 teamsmith CLI' }
+    if (!teamCli) return { ok: false, line: `✗ ${s.noTeamCli}` }
     const args = on
       ? [teamCli, '--root', root, 'standby', 'on', '--reason', reason || '-']
       : [teamCli, '--root', root, 'standby', 'off']
@@ -308,7 +434,12 @@ async function main(): Promise<void> {
     refreshNow()
     return {
       ok: res.rc === 0,
-      line: res.rc === 0 ? `✓ 待命 ${on ? `on（原因：${reason || '-'}）` : 'off'}` : `✗ 待命失败 · ${line}`,
+      line:
+        res.rc === 0
+          ? on
+            ? fill(s.standbyOkOn, { reason: reason || '-' })
+            : s.standbyOkOff
+          : fill(s.standbyFail, { detail: line }),
     }
   }
 
@@ -372,6 +503,34 @@ async function main(): Promise<void> {
     })
   }
 
+  /** `q`: rebuild this very window as the headless tick loop (`team pulse collapse`). */
+  async function collapse(): Promise<{ ok: boolean; line: string }> {
+    if (mouseEnabled) {
+      try {
+        writeSync(1, '\u001b[?1000l\u001b[?1006l')
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!teamCli) return { ok: false, line: `✗ ${s.noTeamCli}` }
+    if (!process.env.TMUX) {
+      // Not inside a tmux window (a direct bundle run): there is nothing to respawn.
+      exitSoon()
+      return { ok: true, line: '' }
+    }
+    const res = await run([teamCli, '--root', root, 'pulse', 'collapse'])
+    if (res.rc !== 0) return { ok: false, line: fill(s.flushFail, { detail: firstLine(res.err) || firstLine(res.out) }) }
+    exitSoon()
+    return { ok: true, line: '' }
+  }
+
+  let exiting = false
+  function exitSoon(): void {
+    if (exiting) return
+    exiting = true
+    setTimeout(() => process.exit(0), 150)
+  }
+
   const api: PanelApi = {
     readDraft,
     writeDraft,
@@ -382,6 +541,19 @@ async function main(): Promise<void> {
     editDraft,
     refreshNow,
     suspended: () => editorActive,
+    saveSettings: (next: Settings) => {
+      mouseEnabled = next.mouse
+      writeSettings(confFile, next)
+    },
+    savePage: (next: PageId) => {
+      writePage(pageFile, next)
+    },
+    setActivity: (on: boolean) => {
+      if (activityPinned) return
+      opts.activity = on
+      refreshNow()
+    },
+    collapse,
   }
 
   /** stdin/stdout are set up by the caller; `resize` is emitted by Node's tty stream. */
@@ -413,17 +585,37 @@ async function main(): Promise<void> {
     }
   })
 
+  const restoreTerminal = (): void => {
+    if (!mouseEnabled) return
+    try {
+      writeSync(1, '\u001b[?1000l\u001b[?1006l')
+    } catch {
+      /* ignore */
+    }
+  }
+  process.on('exit', restoreTerminal)
+  process.on('SIGTERM', () => {
+    restoreTerminal()
+    process.exit(143)
+  })
+  process.on('SIGHUP', () => {
+    restoreTerminal()
+    process.exit(129)
+  })
+
   if (once) await runTickIfDue()
   await app.waitUntilExit()
+  restoreTerminal()
   cache.dispose()
   process.exit(0)
 }
 
+
 void main()
 
 function sleepSync(ms: number): void {
-  // Blocking sleep on the main thread; no child process, no busy loop. Only the plain-text run
-  // (a machine consumer with no input line) uses it.
+  // Blocking sleep on the main thread; no child process, no busy loop. Only the plain-text and
+  // headless runs (a machine consumer with no input line) use it.
   try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
   } catch {

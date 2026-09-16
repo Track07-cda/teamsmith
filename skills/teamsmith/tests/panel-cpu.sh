@@ -70,6 +70,7 @@ cpu_ticks_of() { # <pid>
 
 printf '== console CPU over %ss (pane %s → node %s, refresh %ss, hz %s) ==\n' \
   "$secs" "$time_pid" "$pane_pid" "$refresh" "$hz"
+printf '== measured process: %s\n' "$(ps -o args= -p "$pane_pid" 2>/dev/null | cut -c1-120)"
 printf '%s\n' "   t   ps_lifetime%  pane_delta%  tree_now%"
 t0="$(date +%s%3N)"
 pane_prev="$(cpu_ticks_of "$pane_pid")"
@@ -90,9 +91,11 @@ while :; do
 done
 span_ms=$(( $(date +%s%3N) - t0 ))
 
-# Ask the console to quit so `/usr/bin/time` can report the tree total.
+# Ask the console to quit so `/usr/bin/time` can report the tree total. `q` collapses the window into
+# the headless loop (B3), which leaves the wrapper killed by the respawn and the summary unwritten —
+# so the fixture signals the console process directly instead of relying on a key.
 for _ in $(seq 1 20); do
-  tmux -L "$sock" send-keys -t "$sess:console" q 2>/dev/null || true
+  kill -TERM "$pane_pid" 2>/dev/null || true
   sleep 0.5
   pgrep -P "$time_pid" >/dev/null 2>&1 || break
 done

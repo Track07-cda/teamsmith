@@ -22,11 +22,51 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { sanitizeDeep } from './sanitize.js'
-import type { ActivityBlock, PanelData } from './types.js'
+import type { ActivityBlock, PanelBlocks, PanelData } from './types.js'
 
 /** The blocks the bash data command serves, one child each. */
-export const BLOCK_NAMES = ['frame', 'pm', 'pending', 'outbox', 'capacity', 'agents', 'recent', 'activity'] as const
+export const BLOCK_NAMES = [
+  'frame',
+  'pm',
+  'pending',
+  'outbox',
+  'capacity',
+  'agents',
+  'recent',
+  'activity',
+  // pulse-console B3: the console-only readers (the machine exits never render them).
+  'board',
+  'changes',
+  'specs',
+  'decisions',
+  'outbox_list',
+  'inbox',
+  'patrol',
+  'health',
+] as const
 export type BlockName = (typeof BLOCK_NAMES)[number]
+
+/**
+ * The blocks the **machine exits** (`--print` / `--json`) assemble: the original eight plus the
+ * four the overview renders (progress, changes, specs, decisions). The page-2/3-only readers
+ * (`outbox_list`, `inbox`, `patrol`, `health`) are console-only: `--print`/`--json` never render
+ * them, so they are not spawned there — `--json`'s cost and keys stay exactly as before, and a
+ * `doctor` run never sits on a machine exit's path.
+ */
+export const MACHINE_BLOCKS = [
+  'frame',
+  'pm',
+  'pending',
+  'outbox',
+  'capacity',
+  'agents',
+  'recent',
+  'activity',
+  'board',
+  'changes',
+  'specs',
+  'decisions',
+] as const satisfies readonly BlockName[]
 
 export interface DataOptions {
   root: string
@@ -35,12 +75,16 @@ export interface DataOptions {
   activity: boolean
   events: number
   timeoutMs?: number
+  /** Which blocks to assemble; default = every block (the console's set). */
+  blocks?: readonly BlockName[]
 }
 
 export interface DataResult {
   ok: boolean
   data?: PanelData
   activity?: ActivityBlock[]
+  /** The console-only readers (`board`, `changes`, …), keyed by block name. */
+  blocks?: PanelBlocks
   /** Blocks whose source failed, timed out or is unreadable in this snapshot (rendered as `—`). */
   degraded?: BlockName[]
   /** Why each degraded block is degraded (diagnostics; never rendered as data). */
@@ -56,19 +100,42 @@ interface BlockSpec {
 }
 
 const BLOCK_SPECS: Record<BlockName, BlockSpec> = {
-  frame: { ttlMs: 3000, timeoutMs: 10000 },
-  pm: { ttlMs: 3000, timeoutMs: 10000 },
-  pending: { ttlMs: 10000, timeoutMs: 10000 },
-  outbox: { ttlMs: 3000, timeoutMs: 10000 },
-  capacity: { ttlMs: 5000, timeoutMs: 10000 },
-  agents: { ttlMs: 10000, timeoutMs: 10000 },
-  recent: { ttlMs: 3000, timeoutMs: 10000 },
+  // The banner and the queue — the console's "is there work" surface. The three actions invalidate
+  // the cache explicitly (`refreshNow`), so the TTL only has to feel live, not be 3s.
+  // The banner (project/interval/standby/clock): the cheapest block (~0.04s, one `date`) and the one
+  // a human watches for the effect of an action. A TTL below the shortest cadence means every
+  // cadence re-assembles it, so an outside change to the banner shows up within one cadence.
+  frame: { ttlMs: 500, timeoutMs: 10000 },
+  pm: { ttlMs: 9000, timeoutMs: 10000 },
+  pending: { ttlMs: 15000, timeoutMs: 10000 },
+  outbox: { ttlMs: 9000, timeoutMs: 10000 },
+  capacity: { ttlMs: 9000, timeoutMs: 10000 },
+  agents: { ttlMs: 15000, timeoutMs: 15000 },
+  recent: { ttlMs: 9000, timeoutMs: 10000 },
+  // The activity column is the design's 3s live view (the one block that must keep the cadence);
+  // everything else trades freshness for the <1%-of-one-core red line. Measured on the reference
+  // checkout: rebuilding every block on the 3s cadence put the pane process at ~1.2%, one Ink
+  // `rerender` per cadence alone cost ~20ms, and the expensive readers (the report scan, the
+  // per-agent git reads, `doctor`) each burn 0.2-0.5s of child CPU per rebuild.
   activity: {
     ttlMs: 3000,
     timeoutMs: 15000,
     extraArgs: (opts) => (opts.activity ? [] : ['--no-activity']),
   },
+  // Console-only readers: the board parses every row of BOARD.md (73 rows on the reference
+  // checkout), the patrol log grows every 15 minutes, and the OpenSpec-CLI blocks plus `doctor` are
+  // the heaviest of all — they are far apart on purpose.
+  board: { ttlMs: 15000, timeoutMs: 10000 },
+  changes: { ttlMs: 180000, timeoutMs: 20000 },
+  specs: { ttlMs: 180000, timeoutMs: 20000 },
+  decisions: { ttlMs: 60000, timeoutMs: 10000 },
+  outbox_list: { ttlMs: 9000, timeoutMs: 10000 },
+  inbox: { ttlMs: 60000, timeoutMs: 10000 },
+  patrol: { ttlMs: 15000, timeoutMs: 10000 },
+  health: { ttlMs: 600000, timeoutMs: 30000 },
 }
+
+
 
 /**
  * Find `scripts/team` relative to the bundle. `panel.js` lives at `<skill>/scripts/panel/panel.js`;
@@ -224,6 +291,12 @@ interface BlockState {
   error?: string
 }
 
+const PANEL_BLOCK_NAMES: readonly BlockName[] = ['board', 'changes', 'specs', 'decisions', 'outbox_list', 'inbox', 'patrol', 'health']
+
+function isPanelBlock(name: BlockName): boolean {
+  return PANEL_BLOCK_NAMES.includes(name)
+}
+
 function emptyPanel(): PanelData {
   return { project: '', timestamp: '', interval: 0 }
 }
@@ -239,6 +312,7 @@ export interface PanelCache {
 
 export function createPanelCache(opts: DataOptions): PanelCache {
   const cli = opts.teamCli || findTeamCli(panelDirOf(import.meta.url))
+  const wanted = opts.blocks ?? BLOCK_NAMES
   const state: Record<string, BlockState> = {}
   for (const name of BLOCK_NAMES) state[name] = { at: 0 }
   let inFlight: Partial<Record<BlockName, Promise<void>>> = {}
@@ -249,10 +323,12 @@ export function createPanelCache(opts: DataOptions): PanelCache {
       return { ok: false, error: 'panel: cannot locate the teamsmith CLI next to the bundle (scripts/team)' }
     }
     const data = emptyPanel()
+    const blocks: PanelBlocks = {}
     const degraded: BlockName[] = []
     const errors: Partial<Record<BlockName, string>> = {}
     let activity: ActivityBlock[] = []
     for (const name of BLOCK_NAMES) {
+      if (!wanted.includes(name)) continue
       const s = state[name]
       const fresh = s.at > 0 && !s.error
       if (!fresh) {
@@ -264,10 +340,14 @@ export function createPanelCache(opts: DataOptions): PanelCache {
         activity = Array.isArray(s.value) ? (s.value as ActivityBlock[]) : []
         continue
       }
+      if (isPanelBlock(name)) {
+        ;(blocks as Record<string, unknown>)[name] = s.value
+        continue
+      }
       applyBlock(data, name, s.value)
     }
     mergeActivity(data, activity)
-    return { ok: true, data, activity, degraded, errors }
+    return { ok: true, data, activity, blocks, degraded, errors }
   }
 
   function build(name: BlockName): Promise<void> {
@@ -289,6 +369,7 @@ export function createPanelCache(opts: DataOptions): PanelCache {
     if (!cli) return snapshot()
     const now = Date.now()
     for (const name of BLOCK_NAMES) {
+      if (!wanted.includes(name)) continue
       const s = state[name]
       const due = refreshOpts.force || s.at === 0 || now - s.at >= BLOCK_SPECS[name].ttlMs
       if (!due) continue

@@ -28,15 +28,22 @@ const WIDE: readonly Range[] = [
   [0x20000, 0x3fffd], // CJK ext B+
 ]
 
+/** Display width of one code point: wide/fullwidth/emoji count 2, zero-width marks count 0. */
+export function charWidth(ch: string): number {
+  const cp = ch.codePointAt(0) ?? 0
+  // Zero-width joiner, variation selector 16 and combining marks add no columns.
+  if (cp === 0x200d || cp === 0xfe0f || (cp >= 0x0300 && cp <= 0x036f)) return 0
+  for (let i = 0; i < WIDE.length; i++) {
+    const [a, b] = WIDE[i]
+    if (cp >= a && cp <= b) return 2
+  }
+  return 1
+}
+
 /** Display width of a string: wide/fullwidth/emoji count 2, zero-width marks count 0. */
 export function dispWidth(s: string): number {
   let w = 0
-  for (const ch of String(s)) {
-    const cp = ch.codePointAt(0) ?? 0
-    // Zero-width joiner, variation selector 16 and combining marks add no columns.
-    if (cp === 0x200d || cp === 0xfe0f || (cp >= 0x0300 && cp <= 0x036f)) continue
-    w += WIDE.some(([a, b]) => cp >= a && cp <= b) ? 2 : 1
-  }
+  for (const ch of String(s)) w += charWidth(ch)
   return w
 }
 
@@ -46,28 +53,44 @@ export function padEndW(s: string, w: number): string {
   return d > 0 ? str + ' '.repeat(d) : str
 }
 
-/** Cut to at most `w` columns; when something was cut the result ends in `…` (still ≤ w). */
+/**
+ * Cut to at most `w` columns; when something was cut the result ends in `…` (still ≤ w).
+ * The width is accumulated per code point — a `dispWidth(out + ch)` per character would be O(n²),
+ * and this runs for every row of every frame.
+ */
 export function truncateW(s: string, w: number): string {
-  const str = String(s)
   if (w <= 0) return ''
-  if (dispWidth(str) <= w) return str
+  const str = String(s)
+  const chars = [...str]
+  let total = 0
+  for (let i = 0; i < chars.length; i++) total += charWidth(chars[i])
+  if (total <= w) return str
+  let used = 0
   let out = ''
-  for (const ch of str) {
-    if (dispWidth(out + ch) > w - 1) break
-    out += ch
+  for (let i = 0; i < chars.length; i++) {
+    const cw = charWidth(chars[i])
+    if (used + cw > w - 1) break
+    used += cw
+    out += chars[i]
   }
-  return out + '…'
+  return `${out}…`
 }
 
 /** Cut to at most `w` columns, keeping the *end* of the string (paths/globs read best from the tail). */
 export function truncateWStart(s: string, w: number): string {
-  const str = String(s)
   if (w <= 0) return ''
-  if (dispWidth(str) <= w) return str
+  const str = String(s)
+  const chars = [...str]
+  let total = 0
+  for (let i = 0; i < chars.length; i++) total += charWidth(chars[i])
+  if (total <= w) return str
+  let used = 0
   let out = ''
-  for (const ch of [...str].reverse()) {
-    if (dispWidth(out + ch) > w - 1) break
-    out = ch + out
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const cw = charWidth(chars[i])
+    if (used + cw > w - 1) break
+    used += cw
+    out = chars[i] + out
   }
   return `…${out}`
 }

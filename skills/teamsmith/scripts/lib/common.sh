@@ -205,7 +205,7 @@ team_load_config() {
   TEAM_PULSE_REBUILD_TMUX="$(team_pulse_var REBUILD_TMUX 0)"   # 0=不管 tmux（session/窗口没了只告警）；1=允许重建 PM 窗口
   TEAM_PULSE_WINDOW="$(team_pulse_var WINDOW pulse)"           # tmux 后端的窗口名（旧窗口名 watchdog 的迁移见 team_pulse_legacy_window）
   TEAM_REVIEW_TIMEOUT="${TEAM_REVIEW_TIMEOUT:-1800}"       # team review 跑门禁的硬超时（秒）
-  TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-5}"        # 监视器刷新间隔（秒）
+  TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-3}"        # 控制台的数据刷新节拍（秒；B3 起默认 5→3，见 openspec panel 能力）
   TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 活动列里每个 agent 显示最近几条事件
   # 活动列默认**打开**（v1.38.0 的契约变更，见 openspec panel 能力）：新布局给了它专门一列，
   # 默认关等于留一列空白。仍然只覆盖本 session 在跑的窗口，仍然是有界尾窗（64KiB）。

@@ -747,6 +747,289 @@ team_panel_activity_json() { # <1|0> <events>
   esac
 }
 
+# ---------------------------------------------------------------- B3 只读读者（控制台页面）
+# 三页控制台要的块：BOARD 行、活动变更+阶段、规格计数、最近决策、延后队列逐条、收件箱/缐道、
+# 巡检日志尾、健康（技能版本 + doctor；上次门禁 v1 恒为 —）。全部只读：不 mkdir、不排水、不改文件；
+# 源坏就非 0（渲染层画 `—`），其余块照常。机读出口 --print/--json 不渲染这些块。
+
+# 多行 JSON 字符串：team_panel_json_str 把换行折成空格（表格字段要单行），队列全文要保留换行。
+team_panel_json_str_ml() { # <文本> → JSON 字符串字面量（换行转义为 \n）
+  local v; v="$(team_panel_clean "${1:-}")"
+  v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; v="${v//$'\r'/}"; v="${v//$'\n'/\\n}"; v="${v//$'\t'/\\t}"
+  printf '"%s"' "$v"
+}
+
+team_panel_mtime_age() { # <文件> → 秒数（不可读/判不出时不打印）
+  local f="$1" mt now
+  [ -f "$f" ] || return 1
+  mt="$(stat -c %Y "$f" 2>/dev/null || true)"
+  case "$mt" in ''|*[!0-9]*) return 1 ;; esac
+  now="$(date +%s)"
+  [ "$now" -gt "$mt" ] && printf '%s' "$((now - mt))" || printf '0'
+}
+
+team_panel_tail_line() { # <文件> → 最后一条非空行（净化后，截 120 列内）
+  local f="$1" line
+  [ -f "$f" ] || return 0
+  line="$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | tail -1 || true)"
+  printf '%s' "$(team_panel_clean "$line" | head -c 480 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)"
+}
+
+# BOARD.md 行与计数：**一次 awk 出一整段 JSON**。此前是「每行 6 次 $(team_panel_json_str)」——
+# 73 行的看板要起 400+ 个子 shell（实测 1.5s CPU/次），控制台的 <1% 红线就是这么被吃掉的。
+# 过滤规则不变（列号跟头部走；表头/占位/空行跳过），转义在 awk 里做。
+team_panel_board_awk() { # 内部：把列号拼成 awk 参数
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$(team_board_col id)" "$(team_board_col task)" "$(team_board_col agent)" \
+    "$(team_board_col branch)" "$(team_board_col deps)" "$(team_board_col status)"
+}
+
+# 最近交付：reports/ 里最新的三个报告文件（身份从文件名拆：<id>-<agent>.md）。
+team_panel_deliveries_json() { # → JSON 数组
+  local dir="$TEAM_DOCS_ABS/reports" out="[" first=1 line mt f base id agent at
+  [ -d "$dir" ] || { printf '[]'; return 0; }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    mt="${line%% *}"; f="${line#* }"
+    base="${f##*/}"; base="${base%.md}"
+    case "$base" in *-*) id="${base%-*}"; agent="${base##*-}" ;; *) id="$base"; agent="-" ;; esac
+    # The *mtime clock*, not an age: an age makes two identical runs seconds apart render different
+    # frames (26-c's byte-stability), while the clock only changes when a delivery really lands.
+    at="$(date -u -d "@${mt%.*}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out{\"id\": $(team_panel_json_str "$id"), \"agent\": $(team_panel_json_str "$agent"), \"at\": $(team_panel_json_str "$at")}"
+  done < <(find "$dir" -maxdepth 1 -name '*.md' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -3)
+  printf '%s]' "$out"
+}
+
+team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最近交付；BOARD 在但读不了 = 非 0
+  local f="$TEAM_DOCS_ABS/BOARD.md"
+  [ -e "$f" ] || return 0
+  [ -r "$f" ] || return 1
+  local cols ic tc ac bc dc sc rows counts todo wip review blocked done dropped total
+  cols="$(team_panel_board_awk)"
+  { read -r ic; read -r tc; read -r ac; read -r bc; read -r dc; read -r sc; } <<< "$cols"
+  rows="$(awk -F'|' -v ic="$ic" -v tc="$tc" -v ac="$ac" -v bc="$bc" -v dc="$dc" -v sc="$sc" '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, " ", s); gsub(/\r/, "", s); return s }
+    function keep(id, st) {
+      if (id == "" || st == "") return 0
+      if (st == "state" || st == "状态" || st == "status") return 0
+      if (id ~ /^[-–—]+$/ || id == "ID") return 0
+      return 1
+    }
+    /^\|/ {
+      id = trim($(ic)); st = trim($(sc))
+      if (!keep(id, st)) next
+      printf "%s{\"id\": \"%s\", \"title\": \"%s\", \"agent\": \"%s\", \"branch\": \"%s\", \"deps\": \"%s\", \"state\": \"%s\"}", (n++ ? ", " : ""), esc(id), esc(trim($(tc))), esc(trim($(ac))), esc(trim($(bc))), esc(trim($(dc))), esc(st)
+    }' "$f")"
+  counts="$(awk -F'|' -v ic="$ic" -v sc="$sc" '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    function keep(id, st) {
+      if (id == "" || st == "") return 0
+      if (st == "state" || st == "状态" || st == "status") return 0
+      if (id ~ /^[-–—]+$/ || id == "ID") return 0
+      return 1
+    }
+    /^\|/ {
+      id = trim($(ic)); st = trim($(sc))
+      if (!keep(id, st)) next
+      total++
+      if (st == "todo") todo++
+      else if (st == "wip") wip++
+      else if (st == "review") review++
+      else if (st == "blocked") blocked++
+      else if (st == "done") done++
+      else if (st == "dropped") dropped++
+    }
+    END { printf "%d %d %d %d %d %d %d", todo+0, wip+0, review+0, blocked+0, done+0, dropped+0, total+0 }' "$f")"
+  read -r todo wip review blocked done dropped total <<< "$counts"
+  printf '{"rows": [%s], "counts": {"todo": %s, "wip": %s, "review": %s, "blocked": %s, "done": %s, "dropped": %s}, "total": %s, "deliveries": %s}' \
+    "$rows" "$todo" "$wip" "$review" "$blocked" "$done" "$dropped" "$total" "$(team_panel_deliveries_json)"
+}
+
+team_panel_change_phase() { # <change 目录> → explore|propose|apply|verify
+  local d="$1" total done
+  if [ ! -f "$d/tasks.md" ]; then
+    [ -f "$d/proposal.md" ] && printf 'propose' || printf 'explore'
+    return 0
+  fi
+  total="$(grep -cE '^- \[[ xX]\]' "$d/tasks.md" 2>/dev/null || true)"
+  done="$(grep -cE '^- \[[xX]\]' "$d/tasks.md" 2>/dev/null || true)"
+  if [ "${total:-0}" -gt 0 ] && [ "${done:-0}" -ge "${total:-0}" ]; then printf 'verify'; else printf 'apply'; fi
+}
+
+team_panel_change_age() { # <change 目录> → 人类可读年龄（无 mtime 时 "-"）
+  local age
+  age="$(team_panel_mtime_age "$1/tasks.md" 2>/dev/null || true)"
+  case "${age:-}" in
+    ''|*[!0-9]*) printf -- '-' ;;
+    *) if [ "$age" -lt 3600 ]; then printf '%sm' "$((age / 60))"; \
+       elif [ "$age" -lt 86400 ]; then printf '%sh' "$((age / 3600))"; \
+       else printf '%sd' "$((age / 86400))"; fi ;;
+  esac
+}
+
+# 活动变更 + 阶段：优先 `openspec list`（约 1s，TTL 30s），CLI 不可用/失败 → 目录扫描。
+team_panel_changes_json() {
+  local spec_dir dir bin listed="" src="dir" out="[" first=1 id done total age phase n_changes=0
+  spec_dir="$(team_spec_dir_abs)"; dir="$spec_dir/changes"
+  bin="$(team_openspec_bin_path 2>/dev/null || true)"
+  if [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1 && [ -d "$TEAM_MAIN_ROOT" ]; then
+    listed="$(cd "$TEAM_MAIN_ROOT" && "$bin" list 2>/dev/null | sed -n 's/^[[:space:]]\{2,\}\([^[:space:]]*\)[[:space:]]\{1,\}\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1\t\2\t\3/p' || true)"
+    [ -n "$listed" ] && src="openspec"
+  fi
+  if [ -n "$listed" ]; then
+    while IFS=$'\t' read -r id done total; do
+      [ -n "$id" ] || continue
+      n_changes=$((n_changes + 1))
+      phase="$(team_panel_change_phase "$dir/$id")"; age="$(team_panel_change_age "$dir/$id")"
+      [ "$first" = "1" ] || out="$out, "
+      first=0
+      out="$out{\"id\": $(team_panel_json_str "$id"), \"done\": $(team_panel_num "$done"), \"total\": $(team_panel_num "$total"), \"age\": $(team_panel_json_str "$age"), \"phase\": $(team_panel_json_str "$phase")}"
+    done <<< "$listed"
+  else
+    [ -d "$dir" ] || { printf '{"available": false, "source": "none", "changes": [], "count": 0}'; return 0; }
+    local d
+    for d in "$dir"/*/; do
+      [ -d "$d" ] || continue
+      id="${d%/}"; id="${id##*/}"
+      [ "$id" = "archive" ] && continue
+      n_changes=$((n_changes + 1))
+      total="$(grep -cE '^- \[[ xX]\]' "$d/tasks.md" 2>/dev/null || true)"
+      done="$(grep -cE '^- \[[xX]\]' "$d/tasks.md" 2>/dev/null || true)"
+      phase="$(team_panel_change_phase "$d")"; age="$(team_panel_change_age "$d")"
+      [ "$first" = "1" ] || out="$out, "
+      first=0
+      out="$out{\"id\": $(team_panel_json_str "$id"), \"done\": $(team_panel_num "$done"), \"total\": $(team_panel_num "$total"), \"age\": $(team_panel_json_str "$age"), \"phase\": $(team_panel_json_str "$phase")}"
+    done
+  fi
+  out="$out]"
+  printf '{"available": true, "source": %s, "count": %s, "changes": %s}' \
+    "$(team_panel_json_str "$src")" "$n_changes" "$out"
+}
+
+# 规格计数：`openspec list --specs`，失败 → specs/*/spec.md 的目录扫描 + Requirement 数。
+team_panel_specs_json() {
+  local spec_dir bin listed="" src="dir" out="[" first=1 name reqs count=0 total=0 line
+  spec_dir="$(team_spec_dir_abs)"
+  bin="$(team_openspec_bin_path 2>/dev/null || true)"
+  if [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1 && [ -d "$TEAM_MAIN_ROOT" ]; then
+    listed="$(cd "$TEAM_MAIN_ROOT" && "$bin" list --specs 2>/dev/null | sed -n 's/^[[:space:]]\{2,\}\([^[:space:]]*\)[[:space:]]\{1,\}requirements[[:space:]]\{1,\}\([0-9][0-9]*\).*/\1\t\2/p' || true)"
+    [ -n "$listed" ] && src="openspec"
+  fi
+  if [ -z "$listed" ]; then
+    if [ -d "$spec_dir/specs" ]; then
+      local f
+      listed=""
+      for f in "$spec_dir/specs"/*/spec.md; do
+        [ -f "$f" ] || continue
+        name="${f%/spec.md}"; name="${name##*/}"
+        reqs="$(grep -cE '^### Requirement:' "$f" 2>/dev/null || true)"
+        if [ -z "$listed" ]; then listed="$name"$'\t'"${reqs:-0}"; else listed="$listed"$'\n'"$name"$'\t'"${reqs:-0}"; fi
+      done
+    fi
+  fi
+  if [ -z "$listed" ]; then
+    printf '{"available": false, "count": 0, "requirements": 0, "specs": []}'
+    return 0
+  fi
+  while IFS=$'\t' read -r name reqs; do
+    [ -n "$name" ] || continue
+    count=$((count + 1)); total=$((total + $(team_panel_num "$reqs")))
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out{\"name\": $(team_panel_json_str "$name"), \"requirements\": $(team_panel_num "$reqs")}"
+  done <<< "$listed"
+  out="$out]"
+  printf '{"available": true, "count": %s, "requirements": %s, "specs": %s}' "$count" "$total" "$out"
+}
+
+team_panel_decisions_json() { # DECISIONS.md：标题数 + 最新三条（新→旧）
+  local f="$TEAM_DOCS_ABS/DECISIONS.md" out="[" first=1 line count=0
+  [ -f "$f" ] || { printf '{"count": 0, "recent": []}'; return 0; }
+  count="$(grep -c '^## ' "$f" 2>/dev/null || true)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out$(team_panel_json_str "$line")"
+  done < <(grep '^## ' "$f" 2>/dev/null | tail -3 | awk '{a[NR]=$0} END {for (i=NR; i>=1; i--) print a[i]}' | sed 's/^## //')
+  printf '{"count": %s, "recent": %s}' "$(team_panel_num "$count")" "$out]"
+}
+
+# 延后队列逐条（只读）：queued + held，年龄、头部字段、净化后的全文（上限 4KiB/条）。
+team_panel_outbox_list_json() {
+  local dir="$TEAM_STATE_DIR/outbox" q=0 h=0 out="[" first=1 e state age_json age target kind from reason text
+  [ -d "$dir" ] || { printf '{"entries": [], "queued": 0, "held": 0}'; return 0; }
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    state="$(team_outbox_entry_state "$e")"
+    [ "$state" = "held" ] && h=$((h + 1)) || q=$((q + 1))
+    age="$(team_entry_age_sec "$e" 2>/dev/null || true)"
+    age_json=null; case "${age:-}" in ''|*[!0-9]*) ;; *) age_json="$age" ;; esac
+    target="$(team_outbox_header "$e" target)"
+    kind="$(team_outbox_header "$e" kind)"
+    from="$(team_outbox_header "$e" from)"
+    reason="-"; [ "$state" = "held" ] && reason="$(team_outbox_hold_reason "$e" 2>/dev/null || true)"
+    text="$(team_outbox_payload "$e" 2>/dev/null | head -c 4096 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)"
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out{\"name\": $(team_panel_json_str "$(basename "$e")"), \"state\": $(team_panel_json_str "$state"), \
+\"age_s\": $age_json, \"target\": $(team_panel_json_str "$target"), \"kind\": $(team_panel_json_str "$kind"), \
+\"from\": $(team_panel_json_str "$from"), \"reason\": $(team_panel_json_str "${reason:--}"), \"text\": $(team_panel_json_str_ml "$text")}"
+  done < <(team_outbox_entries)
+  printf '{"entries": %s], "queued": %s, "held": %s}' "$out" "$q" "$h"
+}
+
+# 收件箱与缐道：每个收件人一行（行数/未读/年龄/尾行）——只读，不 ack。
+team_panel_inbox_json() {
+  local out="[" first=1 a f tf new lines thread_lines age thread_age tail ttail
+  for a in $(team_inbox_recipients); do
+    [ -n "$a" ] || continue
+    f="$TEAM_DOCS_ABS/inbox/$a.md"; tf="$TEAM_DOCS_ABS/threads/$a.md"
+    new="$(team_inbox_new "$a" 2>/dev/null || echo 0)"
+    lines=0; [ -f "$f" ] && lines="$(grep -c . "$f" 2>/dev/null || true)"
+    thread_lines=0; [ -f "$tf" ] && thread_lines="$(grep -c . "$tf" 2>/dev/null || true)"
+    age="$(team_panel_mtime_age "$f" 2>/dev/null || true)"; [ -n "$age" ] || age=null
+    thread_age="$(team_panel_mtime_age "$tf" 2>/dev/null || true)"; [ -n "$thread_age" ] || thread_age=null
+    tail="$(team_panel_tail_line "$f")"; ttail="$(team_panel_tail_line "$tf")"
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out{\"agent\": $(team_panel_json_str "$a"), \"inbox_new\": $(team_panel_num "$new"), \"inbox_lines\": $(team_panel_num "$lines"), \
+\"inbox_age_s\": $age, \"inbox_tail\": $(team_panel_json_str "$tail"), \"thread_lines\": $(team_panel_num "$thread_lines"), \
+\"thread_age_s\": $thread_age, \"thread_tail\": $(team_panel_json_str "$ttail")}"
+  done
+  printf '{"agents": %s]}' "$out"
+}
+
+team_panel_patrol_json() { # 巡检日志尾（watchdog.log，最多 12 行）
+  local f="$TEAM_STATE_DIR/watchdog.log" out="[" first=1 line count=0
+  [ -f "$f" ] || { printf '{"lines": [], "count": 0}'; return 0; }
+  count="$(grep -c . "$f" 2>/dev/null || true)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out$(team_panel_json_str "$line")"
+  done < <(tail -12 "$f")
+  printf '{"lines": %s], "count": %s}' "$out" "$(team_panel_num "$count")"
+}
+
+# 健康：技能版本（本进程的 TEAM_VERSION + SKILL.md frontmatter）+ doctor rc；上次门禁 v1 恒为 —
+# （没有任何文件记录 gate 运行，tasks.md 4.2 / design §8 明说用它当占位）。
+team_panel_health_json() {
+  local version="${TEAM_VERSION:-}" doc doctor="unavailable" rc=0
+  doc="$(team_skill_doc_version 2>/dev/null || true)"
+  if [ -x "$TEAM_SKILL_DIR/scripts/team" ]; then
+    "$TEAM_SKILL_DIR/scripts/team" --root "$TEAM_MAIN_ROOT" doctor >/dev/null 2>&1 || rc=$?
+    [ "$rc" = "0" ] && doctor="ok" || doctor="fail"
+  fi
+  printf '{"version": %s, "doc_version": %s, "doctor": %s, "gates": "—"}' \
+    "$(team_panel_json_str "$version")" "$(team_panel_json_str "$doc")" "$(team_panel_json_str "$doctor")"
+}
+
 # 块分发：一个块一个子进程（panel.js 用 --block 起一片），源坏时打印尽力而为的片段并返回非 0，
 # 由渲染层把那一块画成 `—`，其余块照常渲染。
 team_panel_block() { # <块名> <activity 1|0> <events>
@@ -758,6 +1041,14 @@ team_panel_block() { # <块名> <activity 1|0> <events>
     capacity) team_panel_capacity_json ;;
     agents)   team_panel_agents_json ;;
     recent)   team_panel_recent_json ;;
+    board)    team_panel_board_json ;;
+    changes)  team_panel_changes_json ;;
+    specs)    team_panel_specs_json ;;
+    decisions) team_panel_decisions_json ;;
+    outbox_list) team_panel_outbox_list_json ;;
+    inbox)    team_panel_inbox_json ;;
+    patrol)   team_panel_patrol_json ;;
+    health)   team_panel_health_json ;;
     activity) team_panel_activity_json "${2:-1}" "${3:-4}" ;;
     *) team_usage_die "__panel-data: 未知块名 $1" ;;
   esac
@@ -796,11 +1087,12 @@ team_panel_text() {
 }
 
 team_cmd_monitor() {
-  local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_pulse=1
+  local once=0 interval="${TEAM_MONITOR_REFRESH:-3}" with_pulse=1 headless=0
   local mode="" width="" height="" activity_arg="" events="" state_dir=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --once) once=1; shift ;;
+      --headless) headless=1; shift ;;
       --print) mode="--print"; shift ;;
       --json) mode="--json"; shift ;;
       --no-pulse) with_pulse=0; shift ;;
@@ -817,7 +1109,13 @@ team_cmd_monitor() {
     esac
   done
   team_require_docs
-  # 运行时是硬要求：四个模式都过这一关（TEAM_REQUIRE_JS=0 只管 doctor 那一行）
+  # --headless：控制台 "q 收起" 后同一个窗口里跑的形态——纯巡检循环（tick 不中断），没有渲染器，
+  # 也不需要 JS 运行时。锁、代码漂移重 exec、INT/TERM 语义都复用 watch 循环那一份实现。
+  if [ "$headless" = "1" ]; then
+    team_cmd_watch
+    return $?
+  fi
+  # 运行时是硬要求：其余四个模式都过这一关（TEAM_REQUIRE_JS=0 只管 doctor 那一行）
   team_require_js_runtime "team monitor"
   local runner panel; runner="$(team_js_runner)"
   panel="$TEAM_SKILL_DIR/scripts/panel/panel.js"
@@ -902,6 +1200,23 @@ team_pulse_window_state() { # running | idle | absent
   if team_pane_busy "$TEAM_SESSION:$w"; then printf 'running'; else printf 'idle'; fi
 }
 
+# 窗口的两个形态（D26 §7）：console = 渲染器进程持有 tick（`team monitor` → panel.js）；
+# headless = 同一窗口重建的无界面循环（`team monitor --headless` → watch 循环）。
+# 从 pane 的进程命令行判，不依赖新写的状态文件（控制台不许写 patrol state）。
+team_pulse_shape() { # console | headless | unknown
+  local w pane args
+  w="$(team_pulse_backend_window)"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || { printf 'unknown'; return 0; }
+  pane="$(tmux list-panes -t "$TEAM_SESSION:$w" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  case "${pane:-}" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
+  args="$(ps -o args= -p "$pane" 2>/dev/null || true)"
+  case "$args" in
+    *panel.js*) printf 'console' ;;
+    *"monitor --headless"*|*"team watch"*) printf 'headless' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
 # tmux 后端（默认）：巡检就住在同一个 tmux session 的 `pulse` 窗口里。
 # 好处：① 与开发环境同版本（tmux/ps/git/pi 都在原环境）；② 顺手就是个状态监视器（--ui 面板）；
 #       ③ 少一层容器。代价：tmux server 死了它也死（但那时 PM 也死了，重建时一起起来）。
@@ -912,8 +1227,22 @@ team_pulse_tmux_up() {
   team_require_js_runtime "team pulse up"
   team_tmux_ensure_session
   tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
-  local w st lw; w="$(team_pulse_window)"; st="$(team_pulse_window_state)"
-  if [ "$st" = "running" ]; then team_ok "巡检已在跑：$TEAM_SESSION:$w（面板：tmux attach -t $TEAM_SESSION）"; return 0; fi
+  local w st lw shape; w="$(team_pulse_window)"; st="$(team_pulse_window_state)"
+  if [ "$st" = "running" ]; then
+    # 无界面形态（q 收起过）→ 同一窗口原地恢复控制台，不开第二个窗口。
+    shape="$(team_pulse_shape)"
+    if [ "$shape" = "headless" ]; then
+      tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash "$TEAM_SKILL_DIR/scripts/team" monitor
+      sleep 1.5
+      if [ "$(team_pulse_window_state)" = "running" ] && [ "$(team_pulse_shape)" = "console" ]; then
+        team_ok "已把无界面巡检恢复成控制台（$TEAM_SESSION:$w）"
+        return 0
+      fi
+      team_err "窗口重建后没看到控制台（形态 $(team_pulse_shape)）：tmux attach -t $TEAM_SESSION 看输出"
+      return 1
+    fi
+    team_ok "巡检已在跑：$TEAM_SESSION:$w（面板：tmux attach -t $TEAM_SESSION）"; return 0
+  fi
   # 别名期：旧名窗口还在跑 = 后端已存在（升级前的进程）——不开第二个巡检，只指迁移路径
   lw="$(team_pulse_legacy_window 2>/dev/null || true)"
   if [ -n "$lw" ]; then
@@ -951,11 +1280,28 @@ team_pulse_tmux_logs() { # 打印面板最近若干行（pane 快照；旧名窗
   tmux capture-pane -p -t "$TEAM_SESSION:$w" -S -60 2>/dev/null | sed '/^$/d' | tail -60
 }
 
+# `q` 收起控制台：同一个窗口原地 respawn 成无界面循环。窗口在、形态是 console 才动手。
+team_pulse_tmux_collapse() {
+  team_require_cmd tmux "收起面板需要 tmux（窗口就在这里）"
+  local w shape; w="$(team_pulse_window)"
+  if ! team_tmux_has_window "$TEAM_SESSION" "$w"; then
+    team_err "没有巡检窗口（$TEAM_SESSION:$w）：$TEAM_CLI pulse up 起一个"
+    return 1
+  fi
+  shape="$(team_pulse_shape)"
+  if [ "$shape" != "console" ]; then
+    team_dim "巡检窗口已经是无界面形态（$shape）：不需要收起"
+    return 0
+  fi
+  tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash "$TEAM_SKILL_DIR/scripts/team" monitor --headless
+  team_ok "已收起控制台：$TEAM_SESSION:$w 改为无界面巡检（tick 继续，$TEAM_CLI pulse up 恢复）"
+}
+
 team_cmd_pulse() {
   local sub="status" print_only=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      up|down|restart|status|logs) sub="$1"; shift ;;
+      up|down|restart|status|logs|collapse) sub="$1"; shift ;;
       --print) print_only=1; shift ;;     # 打印它会做什么（不执行）
       --container) team_usage_die "pulse: 容器后端已移除（v1.12.0）——巡检就是同 session 的 pulse 窗口；用 team pulse up" ;;
       -*) team_usage_die "pulse: 未知参数 $1" ;;
@@ -975,6 +1321,7 @@ team_cmd_pulse() {
     up)      team_pulse_tmux_up ;;
     down)    team_pulse_tmux_down ;;
     restart) team_pulse_tmux_down >/dev/null 2>&1 || true; team_pulse_tmux_up ;;
+    collapse) team_pulse_tmux_collapse ;;
     logs)    team_pulse_tmux_logs ;;
     status)  team_cmd_pulse_status ;;
   esac
@@ -995,7 +1342,13 @@ team_cmd_pulse_status() {
   w="$(team_pulse_window)"; tst="$(team_pulse_window_state)"
   lw="$(team_pulse_legacy_window 2>/dev/null || true)"
   case "$tst" in
-    running) team_ok "  巡检              tmux 窗口 $TEAM_SESSION:$w 在跑（--ui 面板）" ;;
+    running)
+      local shape; shape="$(team_pulse_shape)"
+      case "$shape" in
+        console)  team_ok "  巡检              tmux 窗口 $TEAM_SESSION:$w 在跑（控制台）" ;;
+        headless) team_ok "  巡检              tmux 窗口 $TEAM_SESSION:$w 在跑（无界面 tick；$TEAM_CLI pulse up 恢复控制台）" ;;
+        *)        team_ok "  巡检              tmux 窗口 $TEAM_SESSION:$w 在跑（形态判不出）" ;;
+      esac ;;
     idle)    team_warn "  巡检              窗口 $w 停在空提示符 → $TEAM_CLI pulse up" ;;
     *)       if [ -n "$lw" ]; then
                team_warn "  巡检              旧窗口 $TEAM_SESSION:$lw 仍在跑 → $TEAM_CLI pulse restart 换成 $TEAM_SESSION:$w"

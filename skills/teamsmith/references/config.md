@@ -94,7 +94,7 @@ the effective value of each is `TEAM_PULSE_<NAME>` > `TEAM_WATCH_<NAME>` > the d
 | `TEAM_PULSE_REBUILD_TMUX` | `0` | `0` = leave tmux alone (a missing session/window is only reported); `1` = allow rebuilding the session/PM window (self-recovery after a reboot) |
 | `TEAM_PULSE_MAX_RESTARTS` | `5` | maximum automatic PM starts per hour (guards against a crash loop). Counted from `state/pm-restarts.log` (real restarts) **and** `state/pm-start-attempts.log` (every attempt), so a start loop that never confirms is bounded too |
 | `TEAM_PULSE_WINDOW` | `pulse` | window name for the tmux backend. Alias period: a still-running legacy `watchdog` window is recognized as the backend; `team pulse restart` swaps it for the resolved name |
-| `TEAM_MONITOR_REFRESH` | `5` | the TUI's redraw period (seconds). Each redraw reads the data layer once — it is a redraw period, not a polling loop |
+| `TEAM_MONITOR_REFRESH` | `3` | the console's data-refresh cadence (seconds): each cadence rebuilds the cached blocks once — it is a redraw period, not a polling loop, and the effective value is visible as `panel.refresh_s` in `--json`. **The default changed from `5` to `3` with the console (pulse-console B3)** — the 3-second cadence plus the <1%-of-one-core red line is the performance contract. `--print`/`--json` never tick |
 | `TEAM_MONITOR_ACTIVITY` | `1` | `1` = the activity column is part of the layout (only windows running in this session, read as a bounded tail); `0` = the pre-v1.38.0 layout without it. **The default changed from `0` to `1` in v1.38.0** — this is the one default the panel rewrite moved. `--activity` / `--no-activity` still override the key in both directions |
 | `TEAM_MONITOR_EVENTS` | `4` | how many recent session events the activity column starts with per agent |
 | `TEAM_MONITOR_UI` | `auto` | which renderer to use: `auto` = the TUI when stdout is a terminal and plain text otherwise; `tui` forces the TUI renderer even when stdout is redirected; `text` forces the plain-text frame (no escape sequences, no screen clear) |
@@ -172,7 +172,9 @@ one audit line to `state/outbox/forced.log`; `team outbox drop <n|all>` discards
 │                          #   pm.pid (pid of the PM this tool started: the liveness proof),
 │                          #   notify-dedup, prompt-<agent>-<ID>.md (the prompt of this dispatch;
 │                          #   {prompt_file} points at it), patrol (watchdog.*)/capacity logs,
-│                          #   draft.md (the console's compose draft)
+│                          #   draft.md (the console's compose draft),
+│                          #   panel.conf (the console's preferences) and
+│                          #   panel-page (the page it last showed)
 ├── AGENTS.md              # carries the <!-- teamsmith:begin --> protocol section (written/refreshed by init)
 ├── .worktrees/
 │   ├── <agent>/           # each agent's long-lived worktree (branch agent/<name>)
@@ -224,6 +226,16 @@ check). Without it, a freshly created, still-empty pane was reported as `running
 human types in the input line, restored by the next `m`, and cleared once a send lands (delivered, queued or
 held). A missing file means an empty draft — the next compose starts blank. `--print`/`--json` never read it,
 and no command other than `team monitor`'s TUI writes it.
+
+`state/panel.conf` and `state/panel-page` are the console's runtime preferences (pulse-console B3). The
+overlay (`,`) edits exactly five: `lang` (`zh`/`en`), `page` (the default page, 1–3), `activity` (the activity
+column for TUI sessions), `mouse` and `density` (`comfortable`/`compact`); a sixth key, `theme`
+(`dark`/`light`/`auto`), pins the palette and is not an overlay item. The file is read **by the TUI only**:
+`--print`/`--json` never look at it, so the machine exits stay byte-stable under any preference. A missing,
+unreadable or corrupt file falls back to the defaults (zh, page 1, activity and mouse on, comfortable,
+auto), and unknown keys are ignored. `panel-page` is one number: the page the human last showed, restored on
+the next start (the `page` preference is the fallback when it is absent). Neither file is the project
+contract — `.pi/team/config.sh` keeps that role, and nothing moves between the two.
 
 ## 4. Environment variables (usable without writing them into the config)
 

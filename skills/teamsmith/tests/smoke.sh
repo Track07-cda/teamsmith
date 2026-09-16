@@ -6177,34 +6177,40 @@ else
   bad "26-d JSON：activity 的键与 monitor.mjs --json 不一致"
 fi
 
-# ---------------------------------------------------------------- 26-e. 布局：四带顺序 + 降级
-p10m $TEAM monitor --print --width 120 --height 29 >"$TMP/p10-h29.txt" 2>/dev/null
-p10m $TEAM monitor --print --width 120 --height 16 >"$TMP/p10-h16.txt" 2>/dev/null
-p10m $TEAM monitor --print --width 120 --height 10 >"$TMP/p10-h10.txt" 2>/dev/null
-for _h in 29 16 10; do
-  if grep -q 'teamsmith pulse' "$TMP/p10-h$_h.txt"; then ok "26-e 夹具：height $_h 的帧非空"
-  else bad "26-e 夹具：height $_h 没有输出（后面的断言会空跑）"; fi
+# ---------------------------------------------------------------- 26-e. 布局：四档宽度 + 高度上限
+# B3 起布局合同换成「几何纯函数 + 四档宽度」（spec：The layout is a pure function of geometry with
+# four width tiers）；旧的「四带顺序 / 高度降级」断言随 REMOVED 需求一起退休。这里钉四件事：
+#   * ≥160 双列（agent 表头与右栏标题同一行）、<100 单列（两者不同行）；
+#   * PM 行在 agent 行之前，键位行永远是最后一行；
+#   * 高度是硬上限；
+#   * 60x8 的极小 pane 不越界（显示宽度 ≤ 60；强版本在 tests/panel-snapshots.sh）。
+p10m $TEAM monitor --print --width 160 --height 29 >"$TMP/p10-w160.txt" 2>/dev/null
+p10m $TEAM monitor --print --width 99 --height 29 >"$TMP/p10-w99.txt" 2>/dev/null
+p10m $TEAM monitor --print --width 59 --height 29 >"$TMP/p10-w59.txt" 2>/dev/null
+p10m $TEAM monitor --print --width 60 --height 8 >"$TMP/p10-tiny.txt" 2>/dev/null
+for _f in w160 w99 w59 tiny; do
+  if grep -q 'teamsmith pulse' "$TMP/p10-$_f.txt"; then ok "26-e 夹具：$_f 的帧非空"
+  else bad "26-e 夹具：$_f 没有输出（后面的断言会空跑）"; fi
 done
-P10_PM_LINE="$(grep -n 'PM ' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
-P10_AGENT_LINE="$(grep -n 'AGENT' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
-P10_RESERVED_LINE="$(grep -n '预留' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
-P10_KEY_LINE="$(grep -n 'q 退出' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
-if [ -n "$P10_PM_LINE" ] && [ -n "$P10_AGENT_LINE" ] && [ "$P10_PM_LINE" -lt "$P10_AGENT_LINE" ] \
-   && [ -n "$P10_RESERVED_LINE" ] && [ -n "$P10_KEY_LINE" ] && [ "$P10_RESERVED_LINE" -lt "$P10_KEY_LINE" ]; then
-  ok "26-e 布局：PM/待办行在 agent 行之前，预留带标签在键位行之前（120x29）"
+if grep -qE 'AGENT.*活动（仅本 session' "$TMP/p10-w160.txt"; then ok "26-e 档位：160 列是双列（表头与右栏标题同一行）"
+else bad "26-e 档位：160 列没有双列"; fi
+if grep -qE 'AGENT.*活动（仅本 session' "$TMP/p10-w99.txt"; then bad "26-e 档位：99 列不该是双列"
+else ok "26-e 档位：99 列单列（表头与右栏标题不同行）"; fi
+P10_PM_LINE="$(grep -n 'PM ' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
+P10_AGENT_LINE="$(grep -n 'AGENT' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
+P10_KEY_LINE="$(grep -n 'q 收起' "$TMP/p10-w160.txt" | tail -1 | cut -d: -f1)"
+if [ -n "$P10_PM_LINE" ] && [ -n "$P10_AGENT_LINE" ] && [ "$P10_PM_LINE" -lt "$P10_AGENT_LINE" ] && [ -n "$P10_KEY_LINE" ]; then
+  ok "26-e 布局：PM/待办行在 agent 行之前，键位行存在（160x29）"
 else
-  bad "26-e 布局：四带顺序不对（PM=$P10_PM_LINE AGENT=$P10_AGENT_LINE 预留=$P10_RESERVED_LINE 键位=$P10_KEY_LINE）"
+  bad "26-e 布局：行序不对（PM=$P10_PM_LINE AGENT=$P10_AGENT_LINE 键位=$P10_KEY_LINE）"
 fi
-assert_eq "26-e 布局：键位行是最后一行" "$(grep -n . "$TMP/p10-h29.txt" | tail -1 | cut -d: -f1)" "$P10_KEY_LINE"
-assert_not "$TMP/p10-h16.txt" "预留" "26-e 降级：height 16 没有预留带"
-assert_not "$TMP/p10-h10.txt" "预留" "26-e 降级：height 10 没有预留带"
-assert_match "$TMP/p10-h16.txt" "^ 容量 RAM " "26-e 降级：height 16 容量独占一行"
-assert_not "$TMP/p10-h10.txt" "^ 容量 RAM " "26-e 降级：height 10 容量不再独占一行"
-assert_has "$TMP/p10-h10.txt" "容量 RAM" "26-e 降级：height 10 容量折进 PM 行"
-assert_eq "26-e 降级：h10 的 PM 行同时带 PM 与容量" "$(grep -c 'PM .*容量 RAM' "$TMP/p10-h10.txt")" "1"
-assert_eq "26-e 布局：h29 不超过 29 行" "$(wc -l < "$TMP/p10-h29.txt" | tr -d ' ')" "$(grep -c . "$TMP/p10-h29.txt")"
-if [ "$(wc -l < "$TMP/p10-h29.txt" | tr -d ' ')" -le 29 ]; then ok "26-e 布局：h29 总行数 ≤ 29"
-else bad "26-e 布局：h29 输出超过高度"; fi
+assert_eq "26-e 布局：键位行是最后一行" "$(grep -n . "$TMP/p10-w160.txt" | tail -1 | cut -d: -f1)" "$P10_KEY_LINE"
+if [ "$(grep -c . "$TMP/p10-w160.txt")" -le 29 ]; then ok "26-e 布局：160x29 的帧 ≤ 29 行"
+else bad "26-e 布局：160x29 输出超过高度（$(grep -c . "$TMP/p10-w160.txt") 行）"; fi
+if [ "$(grep -c . "$TMP/p10-tiny.txt")" -le 8 ]; then ok "26-e 极小 pane：60x8 的帧 ≤ 8 行"
+else bad "26-e 极小 pane：60x8 输出超过 8 行"; fi
+if [ "$(wc -L < "$TMP/p10-tiny.txt" | tr -d ' ')" -le 60 ]; then ok "26-e 极小 pane：最长行 ≤ 60 字符（显示宽度由 panel-snapshots 钉）"
+else bad "26-e 极小 pane：有行超过 60 列"; fi
 
 # ---------------------------------------------------------------- 26-f. 状态带（band A）
 p10_check "$TMP/p10-json.json" 'p["pm"]["state"] == "absent"' "26-f 状态带：无 PM 窗口 → panel.pm.state=absent"
@@ -6554,6 +6560,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     ok "26-m 会话范围：本 session 的 dev 窗口出现在活动列"
   else
     bad "26-m 会话范围：本 session 的 dev 活动没出现"
+    # 失败必须带现场（否则只能靠猜）：面板块、窗口尺寸与活动块的原样输出。
+    printf '     pane=%sx%s 窗口尺寸
+' "$(tmux display -p -t "$P10_SCOPE:$P10_W1" '#{pane_width}' 2>/dev/null)" "$(tmux display -p -t "$P10_SCOPE:$P10_W1" '#{pane_height}' 2>/dev/null)"
+    printf '%s\n' "$P10_CAP" | head -14 | sed 's/^/     /'
+    ( cd "$P10R" && TEAM_AGENT_LOG_GLOB="$P10_LEFT_LOG" bash "$SKILL_DIR/scripts/team" __panel-data --block activity 2>&1 | head -c 300 | sed 's/^/     activity: /' ) || true
   fi
   if printf '%s' "$P10_CAP" | grep -qF 'FOREIGN-MARKER'; then
     bad "26-m 会话范围：另一个 session 的窗口被显示出来了"
@@ -6569,6 +6580,32 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     bad "26-m 重绘：1.5s 后时间戳没变（$P10_TS1 / $P10_TS2）"
   fi
+  # 标题带的时间戳由活时钟给（每秒自走），所以还要两条**数据**证据，把「动作即时回响」与
+  # 「节拍重建缓存」分开钉住（V14/F1：动作不能等到 TTL 到期才上屏）：
+  # ① 面板里的动作：按 s → 输入理由 → Enter，1.5s 内标题带必须出现原因（动作后强制失效 + 立即重绘）。
+  tmux send-keys -t "$P10_SCOPE:$P10_W1" s 2>/dev/null || true
+  sleep 0.7
+  tmux send-keys -l -t "$P10_SCOPE:$P10_W1" "action-proof" 2>/dev/null || true
+  sleep 0.3
+  tmux send-keys -t "$P10_SCOPE:$P10_W1" Enter 2>/dev/null || true
+  sleep 1.5
+  P10_TITLE_ACT="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | head -1)"
+  case "$P10_TITLE_ACT" in
+    *"待命 on（原因：action-proof）"*)
+      ok "26-m 回响：面板里按 s 进待命，原因 1.5s 内落到标题带（动作后强制失效缓存 + 立即重绘）" ;;
+    *)
+      bad "26-m 回响：按 s 后 1.5s 内标题带没出现待命原因（现在的标题行：$P10_TITLE_ACT）" ;;
+  esac
+  # ② 面板外的改动：只能靠节拍（frame 块 TTL 0.5s < 1s 节拍），1.5s 内标题带必须回到 off。
+  ( cd "$P10R" && TEAM_STATE_DIR="$P10_TRUE_STATE" bash "$SKILL_DIR/scripts/team" --root "$P10R" standby off ) >/dev/null 2>&1 || true
+  sleep 1.5
+  P10_TITLE_EXT="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | head -1)"
+  case "$P10_TITLE_EXT" in
+    *"待命 off"*)
+      ok "26-m 节拍：面板外的 standby off 1.5s 内落到标题带（每拍重建一次缓存）" ;;
+    *)
+      bad "26-m 节拍：面板外的改动没在 1.5s 内落到标题带（现在的标题行：$P10_TITLE_EXT）" ;;
+  esac
   tmux kill-window -t "$P10_SCOPE:$P10_W1" 2>/dev/null || true
   # ② 60x8：不超过窗格
   tmux kill-session -t "$P10_W2" 2>/dev/null || true
@@ -6695,11 +6732,13 @@ else
   bad "27-a 块协议：--block frame 失败"; tail -2 "$TMP/p27-frame.err"
 fi
 P27_BLOCK_BAD=0
-for _b in frame pm pending outbox capacity agents recent activity; do
+# B3 起 __panel-data 服务的块是这 16 个（B1 的 8 个 + 控制台三页要的 8 个）：每个都必须 rc=0 + 合法 JSON。
+for _b in frame pm pending outbox capacity agents recent activity \
+          board changes specs decisions outbox_list inbox patrol health; do
   p27 $TEAM __panel-data --block "$_b" >"$TMP/p27-block-$_b.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
   python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/p27-block-$_b.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
 done
-assert_eq "27-a 块协议：八个块名都是 rc=0 + 合法 JSON" "$P27_BLOCK_BAD" "0"
+assert_eq "27-a 块协议：16 个块名都是 rc=0 + 合法 JSON" "$P27_BLOCK_BAD" "0"
 if p27 $TEAM __panel-data --block nope >/dev/null 2>&1; then
   bad "27-a 块协议：未知块名应非 0"
 else
@@ -6791,6 +6830,163 @@ if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=d["panel"]; as
 else
   bad "27-d JSON 形状：health 夹具下 panel 缺块字段"
 fi
+
+section "28 · 控制台表面（pulse-console B3：i18n 键集合 / 调色板对比度 / 四档快照 / refresh_s / panel.conf 边界）"
+# 这四条断言是任务书 6.1 / 5.3 / 7.2 的「进门禁」出口；每条都有翻转（删一个键 / 坏一组对比度）。
+P28_TESTS="$SKILL_DIR/tests"
+P28_PANEL="$SKILL_DIR/scripts/panel/panel.js"
+
+# ---- 28-a 字符串表：键集合 + 占位符 + 表外无 CJK 正文；翻转 = 删掉 en 的一个键
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$SRC_ROOT" >"$TMP/p28-strings.log" 2>&1
+if [ $? -eq 0 ] && grep -q 'panel-strings: ok' "$TMP/p28-strings.log"; then
+  ok "28-a i18n：zh/en 键集合、占位符、表外无 CJK 全部通过"
+else
+  bad "28-a i18n：字符串表断言失败"; tail -3 "$TMP/p28-strings.log"
+fi
+P28_TREE="$TMP/p28-tree"; rm -rf "$P28_TREE"
+mkdir -p "$P28_TREE/skills/teamsmith/scripts/panel"
+cp -r "$SKILL_DIR/scripts/panel/src" "$P28_TREE/skills/teamsmith/scripts/panel/src"
+sed -i '/^  keyCompose:/d' "$P28_TREE/skills/teamsmith/scripts/panel/src/strings/en.ts"
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_TREE" >"$TMP/p28-strings-flip.log" 2>&1
+P28_SRC_RC=$?
+if [ "$P28_SRC_RC" -ne 0 ] && grep -q 'keyCompose' "$TMP/p28-strings-flip.log"; then
+  ok "28-a 翻转：删掉 en.keyCompose 后断言非 0 且点名 keyCompose"
+else
+  bad "28-a 翻转：删掉 en 的键没被抓住（rc=$P28_SRC_RC）"; tail -3 "$TMP/p28-strings-flip.log"
+fi
+
+# ---- 28-b 调色板对比度 ≥ 4.5:1；翻转 = 把 dark.text 压到与背景同色
+"$JS_RUNNER" "$P28_TESTS/panel-contrast.mjs" "$P28_PANEL" >"$TMP/p28-contrast.log" 2>&1
+if [ $? -eq 0 ] && grep -q 'panel-contrast: ok' "$TMP/p28-contrast.log"; then
+  ok "28-b 调色板：深浅两套主题的每一组声明配对 ≥ 4.5:1"
+else
+  bad "28-b 调色板：对比度断言失败"; tail -3 "$TMP/p28-contrast.log"
+fi
+"$JS_RUNNER" "$P28_PANEL" --palette >"$TMP/p28-palette.json" 2>/dev/null
+python3 - "$TMP/p28-palette.json" "$TMP/p28-palette-bad.json" <<'PYB'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["palettes"]["dark"]["tones"]["text"] = d["palettes"]["dark"]["bg"]
+json.dump(d, open(sys.argv[2], "w"))
+PYB
+"$JS_RUNNER" "$P28_TESTS/panel-contrast.mjs" --palette-file "$TMP/p28-palette-bad.json" >"$TMP/p28-contrast-flip.log" 2>&1
+P28_CON_RC=$?
+if [ "$P28_CON_RC" -ne 0 ] && grep -q 'dark.text' "$TMP/p28-contrast-flip.log"; then
+  ok "28-b 翻转：把 dark.text 压到背景色后断言非 0 且点名 dark.text"
+else
+  bad "28-b 翻转：坏调色板没被抓住（rc=$P28_CON_RC）"; tail -3 "$TMP/p28-contrast-flip.log"
+fi
+
+# ---- 28-c 四档宽度 × 深浅两套主题的快照逐字节一致（tests/snapshots/ 里钉住）
+TEAM_SNAPSHOTS_JS="$JS_RUNNER" bash "$P28_TESTS/panel-snapshots.sh" >"$TMP/p28-snapshots.log" 2>&1
+if [ $? -eq 0 ] && grep -q 'panel-snapshots 全绿' "$TMP/p28-snapshots.log"; then
+  ok "28-c 快照：4 档宽度 × 2 主题 + 60x8 极小 pane 全部逐字节一致"
+else
+  bad "28-c 快照：快照套件失败"; tail -6 "$TMP/p28-snapshots.log"
+fi
+
+# ---- 28-d TEAM_MONITOR_REFRESH 默认 3s 且出现在 --json；config.md 点明新默认
+# 规格场景的前提是「TEAM_MONITOR_REFRESH 未设」。夹具是用 `team init` 建的，而脚手架模板
+# （templates/config.sh.tmpl，PM 所有）今天还写着 TEAM_MONITOR_REFRESH=5 —— 所以先把那一行删掉，
+# 让前提真的成立（PM 把模板默认改成 3 之后这段依旧正确）。见报告的 PM 待办项。
+sed -i '/^TEAM_MONITOR_REFRESH=/d' "$P27R/.pi/team/config.sh"
+p27 env -u TEAM_MONITOR_REFRESH "${p28cap[@]}" $TEAM monitor --json >"$TMP/p28-refresh-default.json" 2>/dev/null
+p27 env TEAM_MONITOR_REFRESH=7 "${p28cap[@]}" $TEAM monitor --json >"$TMP/p28-refresh-7.json" 2>/dev/null
+if p10_py "$TMP/p28-refresh-default.json" 'p["refresh_s"] == 3' 2>/dev/null \
+   && p10_py "$TMP/p28-refresh-7.json" 'p["refresh_s"] == 7' 2>/dev/null; then
+  ok "28-d refresh_s：未设时 3、设 7 时 7（且是 --json 的只增字段）"
+else
+  bad "28-d refresh_s：--json 里的值不对（$(p10_py "$TMP/p28-refresh-default.json" 'print(p.get("refresh_s"))' 2>/dev/null) / $(p10_py "$TMP/p28-refresh-7.json" 'print(p.get("refresh_s"))' 2>/dev/null)）"
+fi
+assert_match "$SKILL_DIR/references/config.md" '^\| `TEAM_MONITOR_REFRESH` \| `3`' "28-d config.md：TEAM_MONITOR_REFRESH 的默认写成 3"
+
+# ---- 28-e panel.conf 是运行时偏好：机读出口 --print/--json 完全不读它
+p28cap=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps")
+printf 'lang=en\npage=3\nactivity=0\nmouse=0\ndensity=compact\ntheme=light\n' >"$P27R/.pi/team/state/panel.conf"
+p27 env "${p28cap[@]}" $TEAM monitor --json >"$TMP/p28-conf-a.json" 2>/dev/null
+p27 env "${p28cap[@]}" $TEAM monitor --print >"$TMP/p28-conf-a.txt" 2>/dev/null
+printf 'lang=zh\npage=1\nactivity=1\nmouse=1\ndensity=comfortable\ntheme=dark\n' >"$P27R/.pi/team/state/panel.conf"
+p27 env "${p28cap[@]}" $TEAM monitor --json >"$TMP/p28-conf-b.json" 2>/dev/null
+p27 env "${p28cap[@]}" $TEAM monitor --print >"$TMP/p28-conf-b.txt" 2>/dev/null
+rm -f "$P27R/.pi/team/state/panel.conf"
+P28_NORM() { sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$1"; }
+# 逐字段对比并跳过时间戳：失败时说清是哪个字段变了，而不是丢两行 2000 字符的 JSON。
+P28_JSON_DIFF="$(python3 - "$TMP/p28-conf-a.json" "$TMP/p28-conf-b.json" <<'PYJ'
+import json, sys
+
+a = json.load(open(sys.argv[1]))
+b = json.load(open(sys.argv[2]))
+
+def walk(x, y, path=""):
+    if isinstance(x, dict) and isinstance(y, dict):
+        for k in sorted(set(x) | set(y)):
+            yield from walk(x.get(k), y.get(k), f"{path}.{k}")
+    elif isinstance(x, list) and isinstance(y, list):
+        if len(x) != len(y):
+            yield f"{path}: list len {len(x)} != {len(y)}"
+        else:
+            for i, (p, q) in enumerate(zip(x, y)):
+                yield from walk(p, q, f"{path}[{i}]")
+    elif x != y:
+        yield f"{path}: {x!r} != {y!r}"
+
+for line in walk(a, b):
+    if line.endswith(".panel.timestamp" + f": {a['panel']['timestamp']!r} != {b['panel']['timestamp']!r}"):
+        continue
+    print(line)
+PYJ
+)"
+if [ -z "$P28_JSON_DIFF" ]; then
+  ok "28-e panel.conf：两种偏好的 --json 只差时间戳（机读出口不读偏好）"
+else
+  bad "28-e panel.conf：偏好改变了 --json：$(printf '%s' "$P28_JSON_DIFF" | head -2 | tr '\n' ' ')"
+fi
+if diff <(P28_NORM "$TMP/p28-conf-a.txt") <(P28_NORM "$TMP/p28-conf-b.txt") >/dev/null; then
+  ok "28-e panel.conf：两种偏好的 --print 只差时间戳"
+else
+  bad "28-e panel.conf：偏好改变了 --print"; diff <(P28_NORM "$TMP/p28-conf-a.txt") <(P28_NORM "$TMP/p28-conf-b.txt") | head -3
+fi
+if grep -q '▸' "$TMP/p28-conf-a.txt"; then
+  bad "28-e --print 里出现了页签标记（页是 TUI 概念）"
+else
+  ok "28-e --print 没有页签标记（页是 TUI 概念）"
+fi
+if grep -q '"blocks"' "$TMP/p28-conf-a.json"; then
+  bad "28-e --json 里混进了控制台专用块"
+else
+  ok "28-e --json 只有原契约的字段（控制台专用块不进机读出口）"
+fi
+
+# ---- 28-f 每个文档化按键都有点击目标（键位行 + 页签 + 队列行）
+p28_targets() { # <page>
+  "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" --state-dir "$TMP/p28-state" \
+    --team-cli "$P28_TESTS/panel-b3-stub.sh" --width 160 --height 32 --page "$1" 2>/dev/null
+}
+p28_kinds() { # <file>
+  python3 - "$1" <<'PYT'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception as e:  # pytest-style: a broken output is a failed assertion, not a crash
+    print(f"<unreadable: {e}>")
+else:
+    print(",".join(sorted({t["action"]["kind"] for t in data})))
+PYT
+}
+p28_targets 1 >"$TMP/p28-targets-p1.json" 2>/dev/null
+P28_KINDS1="$(p28_kinds "$TMP/p28-targets-p1.json")"
+for _k in compose flush standby settings page-cycle scroll quit page; do
+  case ",$P28_KINDS1," in
+    *",$_k,"*) ok "28-f 点击目标：$_k 有目标" ;;
+    *) bad "28-f 点击目标：$_k 没有目标（$P28_KINDS1）" ;;
+  esac
+done
+p28_targets 3 >"$TMP/p28-targets-p3.json" 2>/dev/null
+P28_KINDS3="$(p28_kinds "$TMP/p28-targets-p3.json")"
+case ",$P28_KINDS3," in
+  *",view-entry,"*) ok "28-f 点击目标：队列行可点开全文（view-entry）" ;;
+  *) bad "28-f 点击目标：队列行没有 view-entry 目标（$P28_KINDS3）" ;;
+esac
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

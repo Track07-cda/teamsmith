@@ -13,6 +13,7 @@
 //     (delivered / queued / held) — never from the human prose the CLI prints alongside them.
 
 import { dispWidth } from './width.js'
+import { fill, type Strings } from './strings/index.js'
 
 /** The console's own draft file, inside the project's state directory (E6 §3.7). */
 export const DRAFT_FILE = 'draft.md'
@@ -168,7 +169,7 @@ export function cursorColumn(lines: string[]): number {
  */
 export function mapReceipt(rc: number, outcome: string, result: string, detail = ''): Receipt {
   const token = `rc=${rc} outcome=${outcome || '-'} result=${result || '-'}`
-  if (rc !== 0) return { state: 'error', token, detail: detail || '发送失败（目标不可投递）' }
+  if (rc !== 0) return { state: 'error', token, detail: detail || 'send failed (target undeliverable)' }
   if (result === 'held' || result === 'terminal') return { state: 'held', token, detail }
   if (outcome === 'delivered' || outcome === 'forced' || outcome === 'unknown-sent' || outcome === 'duplicate') {
     return { state: 'delivered', token, detail }
@@ -183,16 +184,16 @@ export function parseSendResult(stdout: string): { rc: number; outcome: string; 
   return { rc: Number(m[1]), outcome: m[2] === '-' ? '' : m[2], result: m[3] === '-' ? '' : m[3] }
 }
 
-/** The one-line receipt shown under the frame, in the console's own voice. */
-export function receiptLine(receipt: Receipt): string {
+/** The one-line receipt shown under the frame, in the active language's voice. */
+export function receiptLine(receipt: Receipt, s: Strings): string {
   switch (receipt.state) {
     case 'delivered':
-      return `✓ 已送达 · delivered`
+      return s.receiptDelivered
     case 'queued':
-      return `✓ 已入队（PM 的输入框在忙）· queued`
+      return s.receiptQueued
     case 'held':
-      return `! 滞留（副本在 state/outbox/held/）· held`
+      return s.receiptHeld
     default:
-      return `✗ ${receipt.detail || '发送失败'}`
+      return fill(s.receiptError, { detail: receipt.detail || s.sendUnconfirmed })
   }
 }

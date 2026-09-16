@@ -69,57 +69,57 @@ This batch is the D26 precondition: the compose entry must not ship on the block
 
 ### 4. Pages and readers (`panel`: "The console composes three pages and remembers the position")
 
-- [ ] 4.1 Three pages with the design's block inventory, empty-block collapse, Tab/`1`–`3`, and
+- [x] 4.1 Three pages with the design's block inventory, empty-block collapse, Tab/`1`–`3`, and
   `state/panel-page` memory; the compose line opens from every page ("A human can write to the PM from any
   page"). Verify: fixture-pane captures of each page; quit on P3 → relaunch opens P3; `m` on P2 and P3 opens
   the input line.
-- [ ] 4.2 The new read-only cached readers: board rows, changes with phases (`openspec list`, cached), spec
+- [x] 4.2 The new read-only cached readers: board rows, changes with phases (`openspec list`, cached), spec
   counts, recent decisions, the outbox entry list, inbox/threads, the patrol-log tail, health (skill version +
   doctor; the gates cell renders `—`). Verify: each block renders against fixture data, and the queue
   byte-identical scenario still holds.
-- [ ] 4.3 Flush list and read-only full view on the messages page (`panel`: the outbox requirement). Verify:
+- [x] 4.3 Flush list and read-only full view on the messages page (`panel`: the outbox requirement). Verify:
   two queued + one held fixture entries are listed with ages; viewing one shows the sanitized text; every file
   hashes the same afterwards.
 
 ### 5. Settings, layout, themes (`panel`: "Settings are panel preferences…"; "The layout is a pure function…";
    "State is never carried by color alone")
 
-- [ ] 5.1 The settings overlay (`,`) with the five preferences, persisted to `state/panel.conf`, applied
+- [x] 5.1 The settings overlay (`,`) with the five preferences, persisted to `state/panel.conf`, applied
   immediately; corrupt/missing file falls back to defaults. Verify: garbage conf → `team monitor --once --print`
   exits 0 and equals the no-conf output apart from the timestamp; the mouse toggle takes effect on the next
   frame and survives a relaunch.
-- [ ] 5.2 `layout(width, height)` as a pure function; the four tiers and the documented degradation order;
+- [x] 5.2 `layout(width, height)` as a pure function; the four tiers and the documented degradation order;
   resize re-lays out live; `--width`/`--height` keep working. Verify: boundary captures at 160/100/99/60/59
   `[real]`; two `--print` runs byte-identical apart from the timestamp; a 60x8 pane is not overrun.
-- [ ] 5.3 The snapshot suite: four widths × both themes pinned in `tests/`, plus the palette contrast script
+- [x] 5.3 The snapshot suite: four widths × both themes pinned in `tests/`, plus the palette contrast script
   (4.5:1). Verify: the snapshots are asserted in the suite; forcing one pair below 4.5:1 makes the script exit
   non-zero (flip).
 
 ### 6. i18n and mouse (`panel`: "All visible text comes from external zh/en string tables"; "Every key
    affordance is also a mouse target")
 
-- [ ] 6.1 Extract all visible strings into `src/strings/{zh,en}.ts`; the key-set assertion joins
+- [x] 6.1 Extract all visible strings into `src/strings/{zh,en}.ts`; the key-set assertion joins
   `skills/teamsmith/tests/smoke.sh` as a new subsection. Verify: the assertion exits 0 on the shipped tables and
   non-zero naming the key with one `en` key deleted (flip); `bash skills/teamsmith/tests/smoke.sh` is green.
-- [ ] 6.2 Language switch applies on the next frame. Verify: a `zh` fixture pane shows English labels after the
+- [x] 6.2 Language switch applies on the next frame. Verify: a `zh` fixture pane shows English labels after the
   overlay toggle.
-- [ ] 6.3 SGR mouse: enable/disable sequences, a click target per documented key, wheel scrolling, silent when
+- [x] 6.3 SGR mouse: enable/disable sequences, a click target per documented key, wheel scrolling, silent when
   the preference is off. Verify: E6's `pty_mouse.py`/`pty_tmux_mouse.py` moved into `tests/` — a click on the
   `m` hint opens compose; with the preference off the capture holds no `ESC[?1006h` `[real]`.
 
 ### 7. Collapse, keys, registration (`panel`: "The panel process is the patrol's single tick loop"; "The
    `TEAM_MONITOR_*` keys…"; `watchdog`: "One backend, inside the team's tmux session")
 
-- [ ] 7.1 `team monitor --headless` (tick loop, no renderer); `q` respawns the patrol window into it;
+- [x] 7.1 `team monitor --headless` (tick loop, no renderer); `q` respawns the patrol window into it;
   `team pulse up` restores the console; `team pulse status` reports the shape. Verify `[real]`: fixture session
   — after `q`, one window, a headless process, `capacity.log` still gaining; after `pulse up`, the console is
   back in the same window.
-- [ ] 7.2 `TEAM_MONITOR_REFRESH` default 5s→3s; `panel.refresh_s` added to `--json`; `references/config.md`
+- [x] 7.2 `TEAM_MONITOR_REFRESH` default 5s→3s; `panel.refresh_s` added to `--json`; `references/config.md`
   updated. Verify: `team monitor --json` shows `refresh_s` 3 when unset and 7 when set; `config.md` names the
   new default.
-- [ ] 7.3 Register `state/panel.conf`, `state/panel-page` and `state/draft.md` in `references/config.md` / the
+- [x] 7.3 Register `state/panel.conf`, `state/panel-page` and `state/draft.md` in `references/config.md` / the
   state-file docs (E6 §3.7). Verify: the doc names all three with their fallback semantics.
-- [ ] 7.4 Full gate on the batch branch: `openspec validate --all --strict` and
+- [x] 7.4 Full gate on the batch branch: `openspec validate --all --strict` and
   `bash skills/teamsmith/tests/smoke.sh` both green, tails in the report.
 
 ## Deferred to v1.1 — not this change's scope

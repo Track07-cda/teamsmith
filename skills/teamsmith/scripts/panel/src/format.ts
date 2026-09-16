@@ -9,20 +9,6 @@ export const GLYPH: Record<string, string> = {
   unknown: '○',
 }
 
-export const PM_TEXT: Record<string, string> = {
-  running: '在运行',
-  starting: '正在启动',
-  absent: '未在跑',
-  foreign: '别的项目占着',
-  unknown: '非 PM 进程',
-}
-
-export const AGENT_TEXT: Record<string, string> = {
-  running: '在跑',
-  exited: '已退出',
-  absent: '无窗口',
-}
-
 export function fmtMB(mb: number | null | undefined): string {
   if (mb == null || Number.isNaN(mb)) return '?'
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)}G` : `${Math.round(mb)}M`

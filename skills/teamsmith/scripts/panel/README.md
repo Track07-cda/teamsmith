@@ -1,13 +1,13 @@
 # teamsmith pulse panel (`team monitor`)
 
 The panel is the process that owns the pulse window: an [Ink](https://github.com/vadimdemedes/ink) + React
-front end that draws one frame per `TEAM_MONITOR_REFRESH`, runs one patrol tick per `TEAM_PULSE_INTERVAL`, and
-consumes the existing data layer unchanged (`scripts/monitor.mjs --json` for the activity stream, the bash
-readers for the team fields). `team monitor` never reads state files itself.
+front end that draws one frame per data-refresh cadence (3s by default), runs one patrol tick per
+`TEAM_PULSE_INTERVAL`, and consumes the existing data layer unchanged (`scripts/monitor.mjs --json` for the
+activity stream, the bash readers for the team fields). `team monitor` never reads state files itself.
 
 The team fields arrive **per block**: `data.ts` spawns one `team __panel-data --block <name>` child per block,
 asynchronously and with its own timeout, and the renderer only ever reads the in-memory cache. A source that is
-missing, unreadable, too slow or failing renders its own band as `—` and never delays the rest of the frame or a
+missing, unreadable, too slow or failing renders its own block as `—` and never delays the rest of the frame or a
 keystroke (see `openspec/changes/pulse-console`).
 
 ```
@@ -15,12 +15,43 @@ team monitor                    # TUI in a terminal; plain text when stdout is n
 team monitor --once             # one frame through the same renderer selection, plus the due tick
 team monitor --print            # exactly one plain-text frame (no escape bytes, no state writes, no tick)
 team monitor --json             # {"panel": {...}, "activity": [...]} (same guarantees as --print)
+team monitor --headless         # the tick loop with no renderer — the shape `q` collapses the console into
 team monitor --width N --height N
 ```
 
+## The console surface (pulse-console B3)
+
+Three pages, switched by `Tab` or `1`–`3`, remembered in `state/panel-page` and restored on the next start:
+
+| Page | Blocks |
+|---|---|
+| 1 overview | banner (PM/pending/queue/standby), capacity, project progress (board counts, changes, spec counts, decisions), recent deliveries, agent table, session activity, recent actions |
+| 2 work | board rows (`done`/`dropped` collapse to the newest five), active changes with their phase, spec counts, recent decisions |
+| 3 messages & logs | the deferred queue (list + read-only full text), inbox/threads, the patrol log, the capacity trend, health (skill version, `doctor`, last gates `—`) |
+
+A block whose source has no data collapses and yields its space. `,` opens the **settings overlay** with exactly
+five preferences — language (`zh`/`en`), default page, activity column, mouse, density — applied immediately and
+persisted to `state/panel.conf`. A sixth key, `theme` (`dark`/`light`/`auto`), pins the palette and is not an
+overlay item; `state/panel.conf` is read **by the TUI only**, so `--print`/`--json` stay byte-stable under any
+preference. A missing, unreadable or corrupt file falls back to the defaults.
+
+Every visible string comes from `src/strings/{zh,en}.ts`; the two tables' key sets, placeholders and non-empty
+values are asserted in the gate (`tests/panel-strings.mjs`, wired into `tests/smoke.sh` §28), which also refuses a
+CJK literal outside `src/strings/**`.
+
+**Mouse** follows the preference: on enables SGR reporting (`ESC[?1000h` `ESC[?1006h`) for the console's lifetime
+and disables it on exit; off emits no sequence at all. Every documented key — `m`, `f`, `s`, `,`, Tab, `1`–`3`,
+`↑`/`↓`, `q` — is a click target (Ink strips the leading ESC from the SGR sequence; the parser tolerates both
+spellings) and the wheel scrolls the page's list. The fixtures drive real SGR bytes through a pty (`tests/panel-b3-pty-mouse.py`)
+and through a real terminal→tmux→pane chain (`tests/panel-b3-pty-tmux-mouse.py`), because `tmux send-keys` cannot inject `0x1b`.
+
+**Collapse.** `q` rebuilds the patrol window in place as the headless tick loop (`team monitor --headless`): one
+window, one process, the tick keeps logging. `team pulse up` restores the console in the same window and
+`team pulse status` reports which shape the window is in. `Ctrl-C` still exits.
+
 ## Compose and the three actions (pulse-console B2)
 
-`m` opens a bottom input line on the page; Enter sends through the guarded delivery path and the receipt is
+`m` opens a bottom input line **on any page**; Enter sends through the guarded delivery path and the receipt is
 one of three honest states — **delivered**, **queued** (the PM's box is busy) or **held** (the payload is in
 `state/outbox/held/`). Esc keeps the draft in `state/draft.md` and the next `m` brings it back; `C-e` hands the
 draft to `$EDITOR` with rendering suspended for the whole handoff. `f` runs `team outbox flush` and `s`
@@ -35,7 +66,18 @@ The receipt is mapped from the send command's machine tokens, never from its hum
 changes nothing in the CLI's own files.
 
 The console's own files live in the project's state directory (`--state-dir`, passed by `team monitor`):
-`state/draft.md` today (`state/panel.conf` and `state/panel-page` arrive with B3).
+`state/draft.md` (the compose draft), `state/panel.conf` (the preferences) and `state/panel-page` (the last
+page). They are registered in `references/config.md` §3.
+
+## Layout
+
+`layout.ts` is a pure function of (data, width, height, view state): the same inputs produce the same frame byte
+for byte. Four width tiers — ≥160 columns two columns, 100–159 two compact columns, <100 one column, <60 the
+minimal form (table columns dropped, times to the clock, states abbreviated) — with the documented degradation
+order: side-by-side blocks become one column, a block folds into one summary line as the height runs out, then
+blocks collapse. A terminal resize re-lays out the next frame live. The four tiers × both themes are pinned as
+byte-exact snapshots in `tests/snapshots/` (`tests/panel-snapshots.sh`), which also checks that a 60×8 pane is
+never overrun.
 
 ## What is committed, and why
 
@@ -43,10 +85,16 @@ The console's own files live in the project's state directory (`--state-dir`, pa
 |---|---|
 | `panel.js` | **the committed bundle** — the only file the runtime path uses. It runs with no `node_modules` and no network, so installing the skill needs no package manager |
 | `src/*.tsx`, `src/*.ts` | the sources (layout, Ink app, width table, sanitizer, the bash data adapter, the CLI) |
+| `src/strings/{zh,en}.ts` | the language tables (plain ESM + JSDoc, so the gate script can import them with any JS runtime) |
 | `package.json`, `bun.lock` | the pinned build-time dependencies (`bun install --frozen-lockfile` is part of the build) |
 | `build.sh` | the one build command; it writes `panel.js` |
 | `draft-send.sh` | the send bridge: the guarded `team draft send` run in one shell, printing one machine line (rc + outcome tokens) for the receipt |
 | `tsconfig.json` | types only (`bunx tsc --noEmit` is a development check, not a gate) |
+
+Two extra machine exits exist for the fixtures (they are not part of the user-facing contract):
+`--snapshot` prints one themed frame with its SGR bytes (the snapshot suite's input) and `--palette` prints the
+declared palettes with their contrast pairs (`tests/panel-contrast.mjs` recomputes every pair independently and
+refuses anything below 4.5:1).
 
 ## Rebuilding it
 
@@ -64,8 +112,7 @@ The committed artifact at the time of writing:
 
 ```
 file:   skills/teamsmith/scripts/panel/panel.js
-size:   843210 bytes
-sha256: ebed65002612aa02d240269df20a333a9901cbf77df5e12ee98a36eb824beb23
+size and sha256: printed by build.sh (the smoke suite compares a fresh rebuild byte for byte)
 pins:   ink 7.1.1 · react 19.3.0 · runtime floor: node >= 20 | bun >= 1.3
 ```
 
@@ -83,3 +130,6 @@ The bundle's header (first lines of `panel.js`) names the same pins and the buil
   pins the renderer.
 - The panel's own sanitizer (`src/sanitize.ts`) runs on every string before layout; the bash data command also
   strips control bytes before JSON-encoding, because a raw control byte makes the JSON unparseable.
+- The machine exits assemble the original eight blocks plus the overview's four (`board`, `changes`, `specs`,
+  `decisions`); the page-2/3 readers (`outbox_list`, `inbox`, `patrol`, `health`) are console-only, so `--json`
+  keeps its cost and its keys and a `doctor` run never sits on a machine exit's path.
