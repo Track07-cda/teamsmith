@@ -5,6 +5,8 @@ Run `team doctor` first; then look at the extension log with `tail -f $(grep TEA
 ---
 
 ## 1. The PM never receives an agent's "turn ended" notification
+> On a real TUI, delivery is confirmed by the payload leaving the input box **and** appearing as an echo bubble in the conversation area (V10-F1): a cleared-but-unsent draft never counts as delivered, and an unconfirmed entry is never deleted (it moves to `held/` with a durable copy).
+
 
 Check in order of likelihood:
 
