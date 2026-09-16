@@ -1064,7 +1064,7 @@ EOF
   printf 'non-pi log A\nnon-pi log B\n' > "$TMP/agentlog-$ADAPTER_AGENT.log"
   env TEAM_AGENTS="dev verify $ADAPTER_AGENT" TEAM_AGENT_LOG_GLOB="$TMP/agentlog-{agent}.log" \
     $TEAM monitor --once --no-pulse --activity >"$TMP/monitor-nonpi.log" 2>&1 || true
-  assert_has "$TMP/monitor-nonpi.log" "TEAM_AGENT_LOG_GLOB" "monitor 说明了活动流来源"
+  assert_has "$TMP/monitor-nonpi.log" "agentlog-{agent}.log" "monitor 说明了活动流来源（新面板把源写在活动列标题里）"
   assert_has "$TMP/monitor-nonpi.log" "non-pi log B" "活动流显示日志尾部（没有 Pi 会话也行）"
   tmux kill-window -t "$SESSION:$ADAPTER_AGENT" 2>/dev/null || true
   # 清场：这个假 agent 的 worktree/分支/报告不能留成「待复验」——那会污染后面的巡检断言
@@ -2431,19 +2431,21 @@ elif [ "$HAVE_TMUX" = "1" ]; then
 
   # 4b) pulse：**只有一个后端**（同 session 的窗口里跑 monitor）
   $TEAM monitor --once >"$TMP/monitor.log" 2>&1 && ok "monitor --once 退出码 0" || bad "monitor --once 失败"
-  assert_has "$TMP/monitor.log" "teamsmith monitor" "monitor 打印了标题"
-  assert_has "$TMP/monitor.log" "巡检" "monitor 复用了团队状态面板"
-  assert_not "$TMP/monitor.log" "agent 活动" "默认不翻各 agent 的会话（活动流 opt-in）"
-  assert_has "$TMP/monitor.log" "只服务本 session" "说明了 pulse 的服务范围"
+  assert_has "$TMP/monitor.log" "teamsmith pulse" "monitor 打印了标题（pulse 面板）"
+  assert_has "$TMP/monitor.log" "巡检" "monitor 打印了巡检周期"
+  assert_has "$TMP/monitor.log" "活动（仅本 session 在跑的窗口" "活动列默认打开（契约变更）"
+  assert_has "$TMP/monitor.log" "仅本 session 在跑的窗口" "说明了活动列的服务范围"
+  $TEAM monitor --once --no-activity >"$TMP/monitor-noact.log" 2>&1 || bad "monitor --no-activity 失败"
+  assert_not "$TMP/monitor-noact.log" "活动（仅本 session" "--no-activity 关掉活动列"
   $TEAM monitor --once --activity >"$TMP/monitor-act.log" 2>&1 || bad "monitor --activity 失败"
-  assert_has "$TMP/monitor-act.log" "agent 活动" "--activity 显式打开活动流"
+  assert_has "$TMP/monitor-act.log" "活动（仅本 session 在跑的窗口" "--activity 显式打开活动流"
   assert_has "$TMP/monitor-act.log" "仅本 session 在跑的窗口" "活动流只覆盖本 session 的窗口"
   $TEAM pulse up >"$TMP/wd-up.log" 2>&1 && ok "pulse up（tmux 后端）退出码 0" || { bad "pulse up 失败"; cat "$TMP/wd-up.log"; }
   assert_eq "pulse 窗口已建" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -cx pulse || true)" "1"
   $TEAM pulse status >"$TMP/wd-status.log" 2>&1
   assert_has "$TMP/wd-status.log" "tmux 窗口 $SESSION:pulse 在跑" "status 看到窗口在跑"
   $TEAM pulse logs >"$TMP/wd-logs.log" 2>&1 && ok "pulse logs（pane 快照）退出码 0" || bad "pulse logs 失败"
-  assert_has "$TMP/wd-logs.log" "teamsmith monitor" "logs 显示监视器画面"
+  assert_has "$TMP/wd-logs.log" "teamsmith pulse" "logs 显示面板画面"
   $TEAM pulse up >"$TMP/wd-up2.log" 2>&1
   assert_has "$TMP/wd-up2.log" "已在跑" "up 幂等（不重复起窗口）"
   $TEAM pulse down >"$TMP/wd-down.log" 2>&1 && ok "pulse down 退出码 0" || bad "pulse down 失败"
@@ -5704,18 +5706,19 @@ M98B_WDLOG="$M98B/.pi/team/state/watchdog.log"
 ( cd "$M98B" && exec env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
     TEAM_PULSE_INTERVAL=1 bash "$M98COPY/scripts/team" monitor --interval 1 ) >"$TMP/m98-monitor.log" 2>&1 &
 M98MON=$!
-if m98_wait_log "$TMP/m98-monitor.log" "teamsmith monitor" 20; then ok "M9.8-⑥：夹具巡检进程起来了（面板已渲染）"
-else bad "M9.8-⑥：夹具巡检进程没起来"; fi
+# P10 起面板是 Ink 进程（panel.js），tick 是它每次派生的 `team watch --once` 子进程：
+# 所以「磁盘代码变了」这件事由**新起的 tick 进程**自动生效，不需要（也不应该）重启面板循环。
+if m98_wait_log "$TMP/m98-monitor.log" "teamsmith pulse" 20; then ok "M9.8-⑥：夹具面板进程起来了（已渲染）"
+else bad "M9.8-⑥：夹具面板进程没起来"; fi
 if m98_wait_log "$M98B_WDLOG" "无待办" 20; then ok "M9.8-⑥：第一拍 5 份看板 done → 无待办（不叫醒）"
 else bad "M9.8-⑥：第一拍没有写出「无待办」（基线不对：$(tail -1 "$M98B_WDLOG" 2>/dev/null)）"; fi
-assert_not "$M98B_WDLOG" "代码快照过期" "M9.8-⑥控制组：代码没变时巡检进程不重启"
+assert_not "$M98B_WDLOG" "代码快照过期" "M9.8-⑥控制组：代码没变时不重启面板循环"
 printf '\nteam_reports_pending_list() { printf "DRIFT\tDRIFT\t/tmp/drift.md\n"; }\n' >> "$M98COPY/scripts/lib/cmd-status.sh"
 if m98_wait_log "$M98B_WDLOG" "待复验 1" 25; then
-  ok "M9.8-⑥：磁盘代码变了 → 巡检进程用**新代码**重判（日志里出现「待复验 1」）"
-else bad "M9.8-⑥：磁盘代码变了 25s 仍按内存旧快照判定（「待复验 1」没出现）—— 唤醒理由会比 digest 旧"; fi
-assert_has "$M98B_WDLOG" "代码快照过期" "M9.8-⑥：重启的理由写进了巡检日志（不静默换掉自己）"
-assert_match "$M98B_WDLOG" "本进程 v" "M9.8-⑥：重启日志点名了它内存里那份代码（指纹 + 版本）"
-kill -0 "$M98MON" 2>/dev/null && ok "M9.8-⑥：重启后巡检循环还在跑（窗口不被拆掉）" || bad "M9.8-⑥：重启后进程没了"
+  ok "M9.8-⑥：磁盘代码变了 → 下一拍 tick 用**磁盘上的代码**重判（日志里出现「待复验 1」）"
+else bad "M9.8-⑥：磁盘代码变了 25s 仍按旧代码判定（「待复验 1」没出现）—— 唤醒理由会比 digest 旧"; fi
+assert_not "$M98B_WDLOG" "代码快照过期" "M9.8-⑥：判定每次 tick 都是新进程（面板循环不必为自己重启）"
+kill -0 "$M98MON" 2>/dev/null && ok "M9.8-⑥：巡检循环还在跑（窗口不被拆掉）" || bad "M9.8-⑥：巡检进程没了"
 kill "$M98MON" 2>/dev/null || true
 wait "$M98MON" 2>/dev/null || true
 
@@ -5740,6 +5743,720 @@ if [ -n "$M98_PHANTOM" ]; then bad "M9.8 隔离：夹具的痕迹出现在真实
 else ok "M9.8 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
 
 # ---------------------------------------------------------------- 15. 结束
+# ---------------------------------------------------------------- 26. 面板（pulse-tui-panel，P10）
+# 契约来源：openspec/changes/pulse-tui-panel/specs/panel/spec.md（12 需求 / 33 场景）。
+# 分段：26-a bundle / 26-b 观察者不写 state / 26-c 纯文本契约 / 26-d JSON 形状 /
+#      26-e 布局与降级 / 26-f 状态带字段 / 26-g agent 表字段 / 26-h 活动列 / 26-i 显示安全 /
+#      26-j 队列只读 / 26-k 运行时失败 / 26-l 隔离 / 26-n tick（headless）/ 26-m 真 pane（HAVE_TMUX 且非 FAST）。
+section "26 · 面板（pulse-tui-panel：模式 / 布局降级 / 净化 / 队列 / 运行时 / 隔离）"
+
+P10R="$TMP/p10-repo"
+P10SESS="teamsmith-smoke-p10-$$"
+P10_HOME="$TMP/p10-home"
+mkdir -p "$P10R"
+( cd "$P10R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo "# p10" > README.md && git add -A && git commit -qm init )
+p10() { ( cd "$P10R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+            -u TEAM_PULSE_WINDOW -u TEAM_WATCH_WINDOW -u TEAM_STATE_DIR -u TEAM_JS_BIN -u TEAM_REQUIRE_JS "$@" ); }
+p10 $TEAM init --session "$P10SESS" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/p10-init.log" 2>&1 \
+  && ok "26 夹具：沙盒 init 退出码 0" || { bad "26 夹具：init 失败"; tail -3 "$TMP/p10-init.log"; }
+mkdir -p "$P10R/openspec"
+
+# 面板字段夹具：待办 1/2/1/4（未读 1 · 待复验 2 · blocked 1）、40 条容量采样、8 行动作日志
+P10STATE="$P10R/.pi/team/state"
+mkdir -p "$P10STATE" "$P10R/docs/team/reports" "$P10R/docs/team/tasks" "$P10R/docs/team/inbox"
+for i in $(seq 1 40); do
+  printf '2026-01-01T00:00:%02dZ RAM 可用 %sMB ｜ 磁盘 swap 空闲 31306MB，zram 用 50%%/物理 6145MB ｜ 估算可再加 5 个 agent\n' \
+    "$i" "$((4000 + i))" >> "$P10STATE/capacity.log"
+done
+for i in $(seq 1 8); do printf '2026-01-01T00:00:%02dZ 第 %s 行动作\n' "$i" "$i" >> "$P10STATE/watchdog.log"; done
+printf 'P10 未读通知一行\n' > "$P10R/docs/team/inbox/dev.md"
+p10 $TEAM board add P10X "P10 夹具报告" dev - >/dev/null 2>&1 || true
+p10 $TEAM board add P10Y "P10 夹具报告" dev - >/dev/null 2>&1 || true
+p10 $TEAM board add P10B "P10 夹具阻塞行" dev - >/dev/null 2>&1 || true
+printf '# P10X · 夹具\n\nagent: dev\n' > "$P10R/docs/team/reports/P10X-dev.md"
+printf '# P10Y · 夹具\n\nagent: dev\n' > "$P10R/docs/team/reports/P10Y-dev.md"
+p10 $TEAM board set P10B blocked >/dev/null 2>&1 || true
+# dev 的 worktree：任务分支 + 1 个未提交文件 + 3 个提交（领先保护分支）
+( cd "$P10R" && git worktree add -q -b task/P10X-fix .worktrees/dev main ) >/dev/null 2>&1 || true
+P10WT="$P10R/.worktrees/dev"
+if [ -d "$P10WT" ]; then
+  ( cd "$P10WT" && for i in 1 2 3; do echo "c$i" >> "$P10WT/f$i.txt"; git add -A; git commit -qm "P10 夹具提交 $i"; done )
+  echo "dirty" > "$P10WT/uncommitted.txt"
+fi
+
+# agent 会话夹具：Pi 的会话目录（bash 的 token 估算与 monitor.mjs 看到同一份）
+P10_SAFE="$(printf '%s' "$P10WT" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
+P10_SESSDIR="$P10_HOME/.pi/agent/sessions/--$P10_SAFE--"
+mkdir -p "$P10_SESSDIR"
+P10_START="$(date -u -d '-1 hour 5 minutes' +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+{
+  printf '{"type":"session","cwd":"%s","timestamp":"%s"}\n' "$P10WT" "$P10_START"
+  printf '{"type":"message","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"wrote the report"}]}}\n' "$P10_START"
+} > "$P10_SESSDIR/2026-01-01T00-00-00-000Z_$P10SESS-dev.jsonl"
+P10_AGENTLOG="$TMP/p10-agentlog-dev.log"
+printf 'first line\nwrote the report\n' > "$P10_AGENTLOG"
+
+# 假 tmux：pulse 会话里只有 dev 窗口（没有 pm 窗口 → PM absent）；只服务 headless 夹具
+P10_SHIM="$TMP/p10-shim"; mkdir -p "$P10_SHIM"
+cat > "$P10_SHIM/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$P10_TMUX_LOG"
+case "\$*" in
+  *list-windows*) printf '%s\n' "\${P10_WINDOWS:-dev}" ;;
+  *window_name*)  printf '%s\n' "\${P10_WINDOW:-dev}" ;;
+  *has-session*)  exit 0 ;;
+  *pane_current_command*) printf 'pi\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$P10_SHIM/tmux"
+# env 的选项必须在 NAME=VALUE 之前（GNU env 看到第一个赋值就停止解析选项）
+p10clean=(-u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR
+          -u TEAM_JS_BIN -u TEAM_REQUIRE_JS -u TEAM_AGENT_LOG_GLOB -u TEAM_MONITOR_ACTIVITY -u TEAM_MONITOR_UI)
+p10m() { ( cd "$P10R" && env "${p10clean[@]}" "PATH=$P10_SHIM:$PATH" "P10_TMUX_LOG=$TMP/p10-tmux.log" "P10_WINDOWS=dev" "P10_WINDOW=dev" \
+             "HOME=$P10_HOME" "TEAM_PI_AGENT_DIR=$P10_HOME/.pi/agent" "TEAM_AGENT_LOG_GLOB=$P10_AGENTLOG" "$@" ); }
+p10ms() { ( cd "$P10R" && env "${p10clean[@]}" "PATH=$P10_SHIM:$PATH" "P10_TMUX_LOG=$TMP/p10-tmux.log" "P10_WINDOWS=dev" "P10_WINDOW=dev" \
+             "HOME=$P10_HOME" "TEAM_PI_AGENT_DIR=$P10_HOME/.pi/agent" "$@" ); }
+
+p10_py() { # <json 文件> <python 表达式>（d=整个对象，p=d["panel"]）
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+p = d["panel"]
+sys.exit(0 if eval(sys.argv[2]) else 1)
+PY
+}
+p10_check() { # <json 文件> <表达式> <说明>
+  if p10_py "$1" "$2" 2>"$TMP/p10-py.err"; then ok "$3"
+  else bad "$3（python: $(tail -1 "$TMP/p10-py.err" 2>/dev/null | head -c 160)）"; fi
+}
+p10_esc() { tr -cd '\033' < "$1" | wc -c | tr -d ' '; }
+# 帧必须非空：否则后面那些「不该出现」的断言会在空文件上假绿
+p10_frame_ok() { # <文件> <说明>
+  if grep -q 'teamsmith pulse' "$1" 2>/dev/null; then ok "$2"
+  else bad "$2（$1 是空文件，「不该出现」类断言会空跑）"; fi
+}
+
+# 隔离（M7.2）：写之前先证明 team paths 指向沙盒
+if printf '%s' "$(p10 $TEAM paths 2>/dev/null || true)" | grep -qF "\"main_root\": \"$P10R\""; then
+  ok "26-l 隔离：team paths 指向沙盒（$P10R）"
+else
+  bad "26-l 隔离：team paths 不是沙盒"
+fi
+P10_LEAK_SCAN() { # <根…> → 命中行
+  local pats="P10 夹具阻塞行|P10Z|wrote the report|$P10SESS"
+  local r
+  for r in "$@"; do
+    [ -n "$r" ] && [ -d "$r" ] || continue
+    for d in "$r/docs/team/inbox" "$r/.pi/team/state"; do
+      [ -d "$d" ] || continue
+      grep -rlE "$pats" "$d" 2>/dev/null || true
+    done
+  done
+}
+P10_LEAK_BEFORE="$(P10_LEAK_SCAN "$SMOKE_INVOKE_ROOT" "$SMOKE_INVOKE_MAIN" | sort -u)"
+# 负对照：故意造一个「真项目」，里面放夹具串 —— 扫描必须抓到（否则这条隔离断言是空的）
+P10_NEG="$TMP/p10-neg"; mkdir -p "$P10_NEG/docs/team/inbox"
+printf 'P10 夹具阻塞行\n' > "$P10_NEG/docs/team/inbox/leak.md"
+if [ -n "$(P10_LEAK_SCAN "$P10_NEG")" ]; then ok "26-l 隔离守卫自检：故意泄漏会被抓到（负对照）"
+else bad "26-l 隔离守卫自检：故意泄漏没被抓到（这条隔离断言是空的）"; fi
+
+# ---------------------------------------------------------------- 26-a. bundle（单文件 + 无安装）
+P10_COPY="$TMP/p10-copy"
+mkdir -p "$P10_COPY"
+cp -r "$SKILL_DIR/scripts" "$P10_COPY/scripts" 2>/dev/null || true
+rm -rf "$P10_COPY/scripts/panel/node_modules"
+if [ -e "$P10_COPY/scripts/panel/node_modules" ]; then
+  bad "26-a bundle：拷贝里还有 node_modules（夹具没清干净）"
+else
+  ok "26-a bundle：夹具 checkout 里没有 node_modules"
+fi
+P10_NODE="$(command -v node || true)"
+if [ -n "$P10_NODE" ]; then
+  ( cd "$TMP" && env -u NODE_PATH "$P10_NODE" "$P10_COPY/scripts/panel/panel.js" --once --print --root "$P10R" ) \
+    >"$TMP/p10-bundle.log" 2>&1
+  P10_BRC=$?
+  if [ "$P10_BRC" = "0" ] && grep -q 'teamsmith pulse' "$TMP/p10-bundle.log"; then
+    ok "26-a bundle：仓库外 / 空 NODE_PATH / 没有 node_modules 也能跑出第一带"
+  else
+    bad "26-a bundle：拷贝里的 bundle 跑不起来（rc=$P10_BRC）"; tail -3 "$TMP/p10-bundle.log"
+  fi
+else
+  cond_skip "26-a bundle 直跑" "本机没有 node（panel.js 的运行由 26-k 的 TEAM_JS_BIN 覆盖）"
+fi
+P10_PIN_INK="$(sed -n 's/.*"ink": *"\([^"]*\)".*/\1/p' "$SKILL_DIR/scripts/panel/package.json")"
+P10_PIN_REACT="$(sed -n 's/.*"react": *"\([^"]*\)".*/\1/p' "$SKILL_DIR/scripts/panel/package.json")"
+assert_has "$SKILL_DIR/scripts/panel/panel.js" "ink $P10_PIN_INK" "26-a bundle：头部点名 ink 钉住的版本"
+assert_has "$SKILL_DIR/scripts/panel/panel.js" "react $P10_PIN_REACT" "26-a bundle：头部点名 react 钉住的版本"
+assert_has "$SKILL_DIR/scripts/panel/panel.js" "build.sh" "26-a bundle：头部点名构建命令"
+if [ -n "$JS_RUNNER" ]; then
+  if "$JS_RUNNER" "$SKILL_DIR/scripts/panel/panel.js" --version 2>/dev/null | grep -q "$P10_PIN_INK"; then
+    ok "26-a bundle：--version 与 package.json 的 pin 一致"
+  else
+    bad "26-a bundle：--version 没有报出 pin"
+  fi
+fi
+# 可复现构建（同锁文件 + 同源 → 同字节）：在**沙盒副本**里重建，不碰工作树（smoke 不改跟踪文件）；
+# 依赖装不上（无网络/无 bun）就显式跳过 —— 绝不因为「构建失败所以文件没变」而假绿。
+P10_BUN=""
+for c in bun "$HOME/.bun/bin/bun"; do command -v "$c" >/dev/null 2>&1 && { P10_BUN="$c"; break; }; done
+if [ -n "$P10_BUN" ]; then
+  P10_BLD="$TMP/p10-panel-build"; rm -rf "$P10_BLD"; mkdir -p "$P10_BLD"
+  cp -r "$SKILL_DIR/scripts/panel" "$P10_BLD/panel"
+  rm -rf "$P10_BLD/panel/node_modules"
+  { echo "\$ $P10_BUN install --frozen-lockfile"; ( cd "$P10_BLD/panel" && "$P10_BUN" install --frozen-lockfile 2>&1 | tail -3 ); \
+    echo "\$ bash build.sh"; ( cd "$P10_BLD/panel" && BUN="$P10_BUN" bash build.sh 2>&1 ); } >"$TMP/p10-build.log" 2>&1
+  if grep -q 'panel.js written' "$TMP/p10-build.log"; then
+    if cmp -s "$P10_BLD/panel/panel.js" "$SKILL_DIR/scripts/panel/panel.js"; then
+      ok "26-a bundle：沙盒里重建逐字节一致（$(wc -c < "$SKILL_DIR/scripts/panel/panel.js" | tr -d ' ') 字节）"
+    else
+      bad "26-a bundle：重建后与提交的 bundle 不一致（源与产物漂了）"; tail -3 "$TMP/p10-build.log"
+    fi
+  else
+    cond_skip "26-a bundle 重建" "本机 bun 装不上钉住的依赖（无网络/锁文件不符）：$(tail -2 "$TMP/p10-build.log" | tr '\n' ' ' | head -c 100)"
+  fi
+else
+  cond_skip "26-a bundle 重建" "本机没有 bun（重建是 release-time 检查，报告 rebuild.log 里有网络重建日志）"
+fi
+
+# ---------------------------------------------------------------- 26-b. 观察者不写 patrol state
+P10_OBS_STATE="$TMP/p10-observe-state"; mkdir -p "$P10_OBS_STATE"
+printf 'seed\n' > "$P10_OBS_STATE/pm-restarts.log"      # 观察者连已有文件都不许动
+printf 'seed\n' > "$P10_OBS_STATE/standby"
+P10_OBS_BEFORE="$(cd "$P10_OBS_STATE" && find . -type f | sort | while IFS= read -r f; do printf '%s ' "$f"; md5sum "$f" | cut -d' ' -f1; done | md5sum)"
+p10m env TEAM_STATE_DIR="$P10_OBS_STATE" $TEAM monitor --print >"$TMP/p10-observe-print.log" 2>&1 || true
+p10m env TEAM_STATE_DIR="$P10_OBS_STATE" $TEAM monitor --json >"$TMP/p10-observe-json.log" 2>&1 || true
+P10_OBS_AFTER="$(cd "$P10_OBS_STATE" && find . -type f | sort | while IFS= read -r f; do printf '%s ' "$f"; md5sum "$f" | cut -d' ' -f1; done | md5sum)"
+if [ ! -e "$P10_OBS_STATE/capacity.log" ] && [ ! -e "$P10_OBS_STATE/watchdog.tick.log" ]; then
+  ok "26-b 观察者：--print/--json 没有写 capacity.log/watchdog.tick.log"
+else
+  bad "26-b 观察者：--print/--json 写了 patrol state（$(ls "$P10_OBS_STATE" | tr '\n' ' ')）"
+fi
+assert_eq "26-b 观察者：临时 state 目录逐字节不变（含已有文件与新增文件）" "$P10_OBS_AFTER" "$P10_OBS_BEFORE"
+
+# ---------------------------------------------------------------- 26-c. 纯文本契约（--print / 重定向 / UI=text）
+p10m $TEAM monitor --print >"$TMP/p10-print.txt" 2>"$TMP/p10-print.err"
+P10_RC=$?
+if [ "$P10_RC" = "0" ] && [ "$(p10_esc "$TMP/p10-print.txt")" = "0" ]; then
+  ok "26-c 纯文本：--print 退出 0 且 0 个 ESC 字节"
+else
+  bad "26-c 纯文本：--print rc=$P10_RC ESC=$(p10_esc "$TMP/p10-print.txt")"; tail -2 "$TMP/p10-print.err"
+fi
+assert_has "$TMP/p10-print.txt" "· $(basename "$P10R")" "26-c 纯文本：第一行点名项目"
+assert_has "$TMP/p10-print.txt" "巡检 900s" "26-c 纯文本：第一行点名巡检周期"
+p10m $TEAM monitor --once --no-pulse >"$TMP/p10-once-redirect.txt" 2>/dev/null
+if [ "$(p10_esc "$TMP/p10-once-redirect.txt")" = "0" ] \
+   && diff <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-print.txt") \
+           <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-once-redirect.txt") >/dev/null; then
+  ok "26-c 纯文本：重定向的 --once 与 --print 只差时间戳（且 0 ESC）"
+else
+  bad "26-c 纯文本：重定向的 --once 与 --print 不一致（ESC=$(p10_esc "$TMP/p10-once-redirect.txt")）"
+fi
+p10m env TEAM_MONITOR_UI=text $TEAM monitor --once --no-pulse >"$TMP/p10-ui-text.txt" 2>/dev/null
+if [ "$(p10_esc "$TMP/p10-ui-text.txt")" = "0" ] \
+   && diff <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-print.txt") \
+           <(sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "$TMP/p10-ui-text.txt") >/dev/null; then
+  ok "26-c 纯文本：TEAM_MONITOR_UI=text 走同一渲染（与 --print 只差时间戳）"
+else
+  bad "26-c 纯文本：TEAM_MONITOR_UI=text 没有走纯文本路径（ESC=$(p10_esc "$TMP/p10-ui-text.txt")）"
+fi
+# Ink 在 stdout 不是 TTY 时**不写控制序列**（实测）：所以「tui 强制走 TUI 路径」在这条路上只能观察到
+# 「仍然渲染出一帧、退出 0、不报未知参数」。渲染器本身由真 pane 段落（26-m 的 capture + 0 ESC）钉住。
+p10m env TEAM_MONITOR_UI=tui $TEAM monitor --once --no-pulse >"$TMP/p10-ui-tui.txt" 2>"$TMP/p10-ui-tui.err"
+if [ $? -eq 0 ] && grep -q 'teamsmith pulse' "$TMP/p10-ui-tui.txt" && ! grep -q '未知参数' "$TMP/p10-ui-tui.err"; then
+  ok "26-c 纯文本：TEAM_MONITOR_UI=tui 被接受并渲染一帧（重定向下 Ink 不写控制字节，由 26-m 钉渲染器）"
+else
+  bad "26-c 纯文本：TEAM_MONITOR_UI=tui 没有渲染"; head -2 "$TMP/p10-ui-tui.err"
+fi
+
+# ---------------------------------------------------------------- 26-d. --json 形状
+p10m $TEAM monitor --json >"$TMP/p10-json.json" 2>"$TMP/p10-json.err"
+if p10_py "$TMP/p10-json.json" 'isinstance(d, dict) and "panel" in d and "activity" in d' 2>/dev/null; then
+  ok "26-d JSON：一个对象，含 panel 与 activity"
+else
+  bad "26-d JSON：形状不对"; tail -2 "$TMP/p10-json.err"
+fi
+p10_check "$TMP/p10-json.json" 'len(p["agents"]) == 2 and all("name" in a and "state" in a for a in p["agents"])' \
+  "26-d JSON：每个名册 agent 一个对象（name/state）"
+p10_check "$TMP/p10-json.json" 'bool(d["activity"]) and all(k in d["activity"][0] for k in ("source","available","truncated","tail_limit","count","events"))' \
+  "26-d JSON：activity 条目带数据层的 source/available/truncated/tail_limit/count/events"
+P10_MON_JSON="$TMP/p10-mon-json.json"
+"$JS_RUNNER" "$SKILL_DIR/scripts/monitor.mjs" --root "$P10R" --only dev --events 4 --log-glob "$P10_AGENTLOG" --json \
+  >"$P10_MON_JSON" 2>/dev/null
+if python3 - "$TMP/p10-json.json" "$P10_MON_JSON" <<'PY'
+import json, sys
+a = json.load(open(sys.argv[1]))["activity"]
+b = json.load(open(sys.argv[2]))
+sys.exit(0 if a and [sorted(e.keys()) for e in a] == [sorted(e.keys()) for e in b] else 1)
+PY
+then
+  ok "26-d JSON：activity 的键与同一夹具下 monitor.mjs --json 的键一致"
+else
+  bad "26-d JSON：activity 的键与 monitor.mjs --json 不一致"
+fi
+
+# ---------------------------------------------------------------- 26-e. 布局：四带顺序 + 降级
+p10m $TEAM monitor --print --width 120 --height 29 >"$TMP/p10-h29.txt" 2>/dev/null
+p10m $TEAM monitor --print --width 120 --height 16 >"$TMP/p10-h16.txt" 2>/dev/null
+p10m $TEAM monitor --print --width 120 --height 10 >"$TMP/p10-h10.txt" 2>/dev/null
+for _h in 29 16 10; do
+  if grep -q 'teamsmith pulse' "$TMP/p10-h$_h.txt"; then ok "26-e 夹具：height $_h 的帧非空"
+  else bad "26-e 夹具：height $_h 没有输出（后面的断言会空跑）"; fi
+done
+P10_PM_LINE="$(grep -n 'PM ' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
+P10_AGENT_LINE="$(grep -n 'AGENT' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
+P10_RESERVED_LINE="$(grep -n '预留' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
+P10_KEY_LINE="$(grep -n 'q 退出' "$TMP/p10-h29.txt" | head -1 | cut -d: -f1)"
+if [ -n "$P10_PM_LINE" ] && [ -n "$P10_AGENT_LINE" ] && [ "$P10_PM_LINE" -lt "$P10_AGENT_LINE" ] \
+   && [ -n "$P10_RESERVED_LINE" ] && [ -n "$P10_KEY_LINE" ] && [ "$P10_RESERVED_LINE" -lt "$P10_KEY_LINE" ]; then
+  ok "26-e 布局：PM/待办行在 agent 行之前，预留带标签在键位行之前（120x29）"
+else
+  bad "26-e 布局：四带顺序不对（PM=$P10_PM_LINE AGENT=$P10_AGENT_LINE 预留=$P10_RESERVED_LINE 键位=$P10_KEY_LINE）"
+fi
+assert_eq "26-e 布局：键位行是最后一行" "$(grep -n . "$TMP/p10-h29.txt" | tail -1 | cut -d: -f1)" "$P10_KEY_LINE"
+assert_not "$TMP/p10-h16.txt" "预留" "26-e 降级：height 16 没有预留带"
+assert_not "$TMP/p10-h10.txt" "预留" "26-e 降级：height 10 没有预留带"
+assert_match "$TMP/p10-h16.txt" "^ 容量 RAM " "26-e 降级：height 16 容量独占一行"
+assert_not "$TMP/p10-h10.txt" "^ 容量 RAM " "26-e 降级：height 10 容量不再独占一行"
+assert_has "$TMP/p10-h10.txt" "容量 RAM" "26-e 降级：height 10 容量折进 PM 行"
+assert_eq "26-e 降级：h10 的 PM 行同时带 PM 与容量" "$(grep -c 'PM .*容量 RAM' "$TMP/p10-h10.txt")" "1"
+assert_eq "26-e 布局：h29 不超过 29 行" "$(wc -l < "$TMP/p10-h29.txt" | tr -d ' ')" "$(grep -c . "$TMP/p10-h29.txt")"
+if [ "$(wc -l < "$TMP/p10-h29.txt" | tr -d ' ')" -le 29 ]; then ok "26-e 布局：h29 总行数 ≤ 29"
+else bad "26-e 布局：h29 输出超过高度"; fi
+
+# ---------------------------------------------------------------- 26-f. 状态带（band A）
+p10_check "$TMP/p10-json.json" 'p["pm"]["state"] == "absent"' "26-f 状态带：无 PM 窗口 → panel.pm.state=absent"
+p10_check "$TMP/p10-json.json" '(p["pending"]["inbox"], p["pending"]["reports"], p["pending"]["blocked"], p["pending"]["total"]) == (1, 2, 1, 4)' \
+  "26-f 状态带：待办 1/2/1 与总数 4（未读/待复验/blocked）"
+p10_check "$TMP/p10-json.json" 'p["capacity"]["ram_avail_mb"] == 4040 and len(p["capacity"]["spark"]) >= 2' \
+  "26-f 状态带：RAM 采样 = 最后一条、spark ≥ 2 个值"
+p10_check "$TMP/p10-json.json" '"zram_phys" not in p["capacity"]' "26-f 状态带：panel.capacity 里没有 zram 物理 MB"
+if grep -qi zram "$TMP/p10-print.txt"; then bad "26-f 状态带：打印帧里出现了 zram"; else ok "26-f 状态带：打印帧不带 zram"; fi
+assert_has "$TMP/p10-print.txt" "absent" "26-f 状态带：打印帧带 PM 状态词（闭集 token）"
+assert_match "$TMP/p10-print.txt" "延后投递 [0-9]+" "26-f 状态带：打印帧带延后投递计数"
+
+# ---------------------------------------------------------------- 26-g. agent 表（band B）
+# verify：窗口不在但任务还在（停了的 agent 也要点名任务）。放在 26-f 之后：
+# 有 task= 且没在跑会进 pending.stopped，26-f 的 1/2/1/4 是另一个 GIVEN。
+printf 'task=P10Z\n' > "$P10STATE/verify.env"
+p10ms $TEAM monitor --json >"$TMP/p10-agents.json" 2>"$TMP/p10-agents.err"
+p10_check "$TMP/p10-agents.json" '[a for a in p["agents"] if a["name"]=="dev"][0]["branch"].startswith("task/P10X")' \
+  "26-g agent 表：分支列是真实分支名"
+p10_check "$TMP/p10-agents.json" '[a for a in p["agents"] if a["name"]=="dev"][0]["dirty"] == True' "26-g agent 表：dirty=true"
+p10_check "$TMP/p10-agents.json" '[a for a in p["agents"] if a["name"]=="dev"][0]["ahead"] == 3' "26-g agent 表：ahead=3"
+p10_check "$TMP/p10-agents.json" '[a for a in p["agents"] if a["name"]=="dev"][0]["session_tokens"] > 0' \
+  "26-g agent 表：session_tokens 非空（真实会话文件）"
+p10_check "$TMP/p10-agents.json" '[a for a in p["agents"] if a["name"]=="dev"][0].get("elapsed")' \
+  "26-g agent 表：elapsed 保留在 JSON 里"
+P10_ELAPSED="$(python3 -c 'import json,sys; print([a for a in json.load(open(sys.argv[1]))["panel"]["agents"] if a["name"]=="dev"][0].get("elapsed") or "")' "$TMP/p10-agents.json" 2>/dev/null)"
+p10ms $TEAM monitor --print >"$TMP/p10-agents.txt" 2>/dev/null
+if [ -n "$P10_ELAPSED" ] && grep -qF "$P10_ELAPSED" "$TMP/p10-agents.txt"; then
+  bad "26-g agent 表：打印帧不该出现 uptime（$P10_ELAPSED）"
+else
+  ok "26-g agent 表：uptime 只在 JSON（打印帧没有 $P10_ELAPSED）"
+fi
+p10_check "$TMP/p10-agents.json" '[a for a in p["agents"] if a["name"]=="verify"][0]["state"] == "absent" and [a for a in p["agents"] if a["name"]=="verify"][0]["task"] == "P10Z"' \
+  "26-g agent 表：停了的 agent 仍报 absent 且点名任务"
+assert_eq "26-g agent 表：打印帧的 verify 行点名 P10Z" "$(grep -c 'P10Z' "$TMP/p10-agents.txt")" "1"
+
+# ---------------------------------------------------------------- 26-h. 活动列（默认开 / 可关 / 有界）
+p10m $TEAM monitor --print >"$TMP/p10-act.txt" 2>/dev/null
+p10m $TEAM monitor --print --no-activity >"$TMP/p10-act-off.txt" 2>/dev/null
+p10m $TEAM monitor --json --no-activity >"$TMP/p10-act-off.json" 2>/dev/null
+p10_frame_ok "$TMP/p10-act-off.txt" "26-h 夹具：--no-activity 帧非空"
+assert_has "$TMP/p10-act.txt" "wrote the report" "26-h 活动列：默认就有（夹具事件出现在帧里）"
+assert_has "$TMP/p10-act.txt" "活动（仅本 session 在跑的窗口" "26-h 活动列：默认带活动列标题"
+assert_not "$TMP/p10-act-off.txt" "wrote the report" "26-h 活动列：--no-activity 去掉事件"
+assert_not "$TMP/p10-act-off.txt" "活动（仅本 session" "26-h 活动列：--no-activity 去掉标题"
+p10_check "$TMP/p10-act-off.json" 'd["activity"] == []' "26-h 活动列：--no-activity 的 --json activity 为空"
+p10m env TEAM_MONITOR_ACTIVITY=0 $TEAM monitor --print >"$TMP/p10-act-env0.txt" 2>/dev/null
+p10_frame_ok "$TMP/p10-act-env0.txt" "26-h 夹具：TEAM_MONITOR_ACTIVITY=0 帧非空"
+assert_not "$TMP/p10-act-env0.txt" "wrote the report" "26-h 活动列：TEAM_MONITOR_ACTIVITY=0 恢复旧布局"
+p10m env TEAM_MONITOR_ACTIVITY=0 $TEAM monitor --print --activity >"$TMP/p10-act-env0-flag.txt" 2>/dev/null
+assert_has "$TMP/p10-act-env0-flag.txt" "wrote the report" "26-h 活动列：--activity 反向覆盖 key"
+# 一帧只读一次数据（不是忙轮询）：运行时换成会记日志的包装器 → 一帧至多两行（面板 + 一次数据读）
+P10_JSWRAP="$TMP/p10-js-wrap"; mkdir -p "$P10_JSWRAP"
+P10_REAL_NODE="$(command -v node || echo /usr/bin/node)"
+cat > "$P10_JSWRAP/js" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP/p10-js-calls.log"
+exec "$P10_REAL_NODE" "\$@"
+EOF
+chmod +x "$P10_JSWRAP/js"
+rm -f "$TMP/p10-js-calls.log"
+p10m env TEAM_JS_BIN="$P10_JSWRAP/js" $TEAM monitor --once --no-pulse >"$TMP/p10-js-one.txt" 2>/dev/null
+# 两条计数分开：`--version` 探针（启动时一次）不算「一帧的读」，面板与数据读各数各的
+P10_PANEL_CALLS="$(grep -c 'panel/panel.js' "$TMP/p10-js-calls.log" 2>/dev/null || echo 0)"
+P10_DATA_CALLS="$(grep -c 'monitor.mjs' "$TMP/p10-js-calls.log" 2>/dev/null || echo 0)"
+if grep -q 'teamsmith pulse' "$TMP/p10-js-one.txt" && [ "${P10_PANEL_CALLS:-0}" = "1" ] && [ "${P10_DATA_CALLS:-9}" -le 1 ]; then
+  ok "26-h 一帧一次数据读：--once 起 1 次面板进程 + ${P10_DATA_CALLS} 次数据读（不是忙轮询）"
+else
+  bad "26-h 一帧一次数据读：面板 $P10_PANEL_CALLS 次 / 数据读 $P10_DATA_CALLS 次（帧 $(grep -c 'teamsmith pulse' "$TMP/p10-js-one.txt" 2>/dev/null) 行）"
+fi
+# 有界读：12 MiB 日志 → truncated + tail_limit=65536
+P10_BIGLOG="$TMP/p10-big.log"
+head -c 12582912 /dev/zero | tr '\0' 'y' > "$P10_BIGLOG"; printf '\nBIGTAIL\n' >> "$P10_BIGLOG"
+p10m env TEAM_AGENT_LOG_GLOB="$P10_BIGLOG" $TEAM monitor --json >"$TMP/p10-big.json" 2>/dev/null
+p10_check "$TMP/p10-big.json" 'bool(d["activity"]) and d["activity"][0]["truncated"] == True and d["activity"][0]["tail_limit"] == 65536' \
+  "26-h 有界读：12MiB 日志报 truncated=true / tail_limit=65536"
+p10m env TEAM_AGENT_LOG_GLOB="$P10_BIGLOG" $TEAM monitor --print >"$TMP/p10-big.txt" 2>/dev/null
+assert_eq "26-h 最近动作：打印帧里最多 6 行动作" "$(grep -c '行动作' "$TMP/p10-big.txt")" "6"
+assert_has "$TMP/p10-big.txt" "第 8 行动作" "26-h 最近动作：显示的是最后几行"
+assert_not "$TMP/p10-big.txt" "第 2 行动作" "26-h 最近动作：没有把 8 行全铺出来"
+
+# 待命（单独一段：standby on/off 自己会往 watchdog.log 写两行，会污染上面「最近 6 行」的口径）
+p10 $TEAM standby on --reason "waiting for the user" >/dev/null 2>&1
+p10m $TEAM monitor --json >"$TMP/p10-standby.json" 2>/dev/null
+p10m $TEAM monitor --print >"$TMP/p10-standby.txt" 2>/dev/null
+p10_check "$TMP/p10-standby.json" 'p["standby"]["on"] == True and p["standby"]["reason"] == "waiting for the user"' \
+  "26-f 待命：--json 报 on 与原因"
+assert_has "$TMP/p10-standby.txt" "waiting for the user" "26-f 待命：打印帧在标题/PM 行显示原因"
+p10 $TEAM standby off >/dev/null 2>&1
+
+# ---------------------------------------------------------------- 26-i. 显示安全（净化不截断）
+P10_HOSTILE="$TMP/p10-hostile.log"
+printf 'safe \033]52;c;aGVsbG8=\007 MORE \033[2J END\n' > "$P10_HOSTILE"
+p10m env TEAM_AGENT_LOG_GLOB="$P10_HOSTILE" $TEAM monitor --print >"$TMP/p10-hostile.txt" 2>/dev/null
+p10m env TEAM_AGENT_LOG_GLOB="$P10_HOSTILE" $TEAM monitor --json >"$TMP/p10-hostile.json" 2>/dev/null
+assert_eq "26-i 净化：敌意日志的打印帧 0 个 ESC 字节" "$(p10_esc "$TMP/p10-hostile.txt")" "0"
+assert_eq "26-i 净化：敌意日志的 --json 0 个 ESC 字节" "$(p10_esc "$TMP/p10-hostile.json")" "0"
+if grep -q 'safe' "$TMP/p10-hostile.txt" && grep -q 'MORE' "$TMP/p10-hostile.txt" && grep -q 'END' "$TMP/p10-hostile.txt"; then
+  ok "26-i 净化：控制序列被剥掉、可见文本 safe/MORE/END 都保留（没有在控制字符处截断）"
+else
+  bad "26-i 净化：可见文本丢了"
+fi
+# 状态文件里的敌意任务 id（面板**自己**读的字符串，不经过 monitor.mjs）：
+# 裸 ESC 由 bash 的传输层剥掉；C1（U+009B CSI）与双向/零宽字符在 UTF-8 里不是控制**字节**，
+# 会穿过传输层，只有面板自己的净化（sanitizeDeep）能拦住 —— 这条断言因此钉住的是 JS 层。
+printf 'task=evil\033[2Jtask\n' > "$P10STATE/verify.env"
+p10m $TEAM monitor --print >"$TMP/p10-taskid.txt" 2>/dev/null
+p10_frame_ok "$TMP/p10-taskid.txt" "26-i 夹具：敌意任务 id 帧非空"
+assert_eq "26-i 净化：敌意任务 id 的打印帧 0 个 ESC 字节" "$(p10_esc "$TMP/p10-taskid.txt")" "0"
+if grep -q 'eviltask\|evil' "$TMP/p10-taskid.txt"; then ok "26-i 净化：敌意任务 id 的可见字符仍在"
+else bad "26-i 净化：敌意任务 id 的可见字符丢了"; fi
+printf 'task=evil\302\233 2 J bidi\342\200\256mark zwsp\342\200\213end\n' > "$P10STATE/verify.env"
+p10m $TEAM monitor --print >"$TMP/p10-c1.txt" 2>/dev/null
+p10_frame_ok "$TMP/p10-c1.txt" "26-i 夹具：C1 帧非空"
+if grep -qP '[\x{0080}-\x{009F}]' "$TMP/p10-c1.txt"; then
+  bad "26-i 净化：C1 控制字符（U+009B）漏进了打印帧（面板自己的净化没生效）"
+else
+  ok "26-i 净化：C1 控制字符被剥掉（只有面板自己的那一层能拦，传输层拦不住）"
+fi
+if grep -qP '[\x{200B}\x{202A}-\x{202E}\x{2060}\x{2066}-\x{2069}\x{FEFF}]' "$TMP/p10-c1.txt"; then
+  bad "26-i 净化：双向/零宽控制字符漏进了打印帧"
+else
+  ok "26-i 净化：双向/零宽控制字符被剥掉"
+fi
+# 表格列宽会截断任务 id（布局的事），所以「可见文本没丢」看 --json 里的原始字段
+p10m $TEAM monitor --json >"$TMP/p10-c1.json" 2>/dev/null
+if python3 - "$TMP/p10-c1.json" <<'PYC1'
+import json, sys, re
+task = [a for a in json.load(open(sys.argv[1]))["panel"]["agents"] if a["name"] == "verify"][0]["task"]
+clean = re.sub(r"[^0-9A-Za-z]+", " ", task)
+sys.exit(0 if all(w in clean for w in ("evil", "bidi", "mark", "zwsp", "end")) else 1)
+PYC1
+then
+  ok "26-i 净化：C1 两边的可见文本都保留（没有在控制字符处截断）"
+else
+  bad "26-i 净化：C1 夹具的可见文本丢了"
+fi
+printf 'task=P10Z\n' > "$P10STATE/verify.env"
+# 分支名里的敌意序列：真 git 拒绝控制字符的 ref（check-ref-format），所以用只回这一条探针的 git shim
+P10_GITSHIM="$TMP/p10-gitshim"; mkdir -p "$P10_GITSHIM"
+P10_REAL_GIT="$(command -v git)"
+cat > "$P10_GITSHIM/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "-C" ] && [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--abbrev-ref" ]; then
+  printf 'evil\033[2Jbranch\n'; exit 0
+fi
+exec "$P10_REAL_GIT" "\$@"
+EOF
+chmod +x "$P10_GITSHIM/git"
+p10m env PATH="$P10_GITSHIM:$PATH" $TEAM monitor --print >"$TMP/p10-branch.txt" 2>/dev/null
+assert_eq "26-i 净化：敌意分支名的打印帧 0 个 ESC 字节" "$(p10_esc "$TMP/p10-branch.txt")" "0"
+if grep -q 'evilbranch\|evil' "$TMP/p10-branch.txt"; then ok "26-i 净化：敌意分支名的可见字符仍在"
+else bad "26-i 净化：敌意分支名的可见字符丢了"; fi
+
+# ---------------------------------------------------------------- 26-j. 队列字段（只读）
+P10_OBOX="$P10STATE/outbox"
+P10_NOW_MS="$(date +%s%3N)"
+P10_OLD_MS="$((P10_NOW_MS - 3000))"
+mkdir -p "$P10_OBOX/held"
+printf 'kind: notify\ntarget: pm\n---\nbody 001\n' > "$P10_OBOX/$P10_OLD_MS-001-pm.msg"
+for s in 002 003; do printf 'kind: notify\ntarget: pm\n---\nbody %s\n' "$s" > "$P10_OBOX/$P10_NOW_MS-$s-pm.msg"; done
+printf 'kind: notify\ntarget: pm\n---\nheld body\n' > "$P10_OBOX/held/$P10_OLD_MS-001-pm.msg"
+printf 'forced line\n' > "$P10_OBOX/forced.log"
+printf 'holding line\n' > "$P10_OBOX/HOLDING.log"
+p10m $TEAM monitor --json >"$TMP/p10-queue.json" 2>/dev/null
+p10_check "$TMP/p10-queue.json" 'p["outbox"]["queued"] == 3 and p["outbox"]["held"] == 1' "26-j 队列：queued=3 / held=1"
+p10_check "$TMP/p10-queue.json" '1 <= p["outbox"]["oldest_age_s"] <= 5' "26-j 队列：oldest_age_s 与最老条目的 epoch 一致（±2s）"
+P10_QHASH1="$(find "$P10_OBOX" -type f | sort | xargs -r md5sum | md5sum)"
+p10m $TEAM monitor --print >/dev/null 2>&1
+p10m $TEAM monitor --json >/dev/null 2>&1
+p10m $TEAM monitor --once --no-pulse >/dev/null 2>&1
+P10_QHASH2="$(find "$P10_OBOX" -type f | sort | xargs -r md5sum | md5sum)"
+assert_eq "26-j 队列：三种模式跑完条目逐字节不变（只读）" "$P10_QHASH2" "$P10_QHASH1"
+assert_eq "26-j 队列：跑完没有新增文件" "$(find "$P10_OBOX" -type f | wc -l | tr -d ' ')" "6"
+assert_eq "26-j 队列：forced.log 没长" "$(wc -l < "$P10_OBOX/forced.log" | tr -d ' ')" "1"
+assert_eq "26-j 队列：HOLDING.log 没长" "$(wc -l < "$P10_OBOX/HOLDING.log" | tr -d ' ')" "1"
+rm -rf "$P10_OBOX"
+p10m $TEAM monitor --json >"$TMP/p10-noqueue.json" 2>/dev/null
+p10_check "$TMP/p10-noqueue.json" 'p["outbox"]["queued"] == 0' "26-j 队列：没有 outbox/ 时报 0"
+if [ -e "$P10_OBOX" ]; then bad "26-j 队列：面板把 outbox/ 建出来了"; else ok "26-j 队列：面板没有创建 outbox/"; fi
+
+# ---------------------------------------------------------------- 26-k. 运行时失败（响亮、不假绿）
+P10_NOJS="$TMP/p10-nojs-bin"; mkdir -p "$P10_NOJS"
+for _d in ${PATH//:/ }; do [ -d "$_d" ] && ln -sf "$_d"/* "$P10_NOJS/" 2>/dev/null; done
+rm -f "$P10_NOJS/node" "$P10_NOJS/nodejs" "$P10_NOJS/bun" "$P10_NOJS/bunx" "$P10_NOJS/tsx" "$P10_NOJS/npx" "$P10_NOJS/corepack" "$P10_NOJS/deno"
+ln -sf "$FAKE/openspec" "$P10_NOJS/openspec"
+assert_eq "26-k 夹具：影子 PATH 里没有 node" "$(env PATH="$P10_NOJS" bash -c 'command -v node || echo MISSING')" "MISSING"
+p10nojs() { ( cd "$P10R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+               -u TEAM_JS_BIN -u TEAM_REQUIRE_JS "PATH=$P10_NOJS" "TEAM_AGENT_CMD=true {prompt}" "TEAM_AGENT_BIN=true" \
+               "TEAM_OPENSPEC_BIN=$FAKE/openspec" "TEAM_SPEC_DIR=openspec" "TEAM_REQUIRE_MAGIC_CONTEXT=0" \
+               "HOME=$P10_HOME" "TEAM_PI_AGENT_DIR=$P10_HOME/.pi/agent" "$@" ); }
+if p10nojs $TEAM doctor >"$TMP/p10-doctor-nojs.log" 2>&1; then
+  bad "26-k 运行时：没有 node/bun/tsx 时 doctor 应失败"
+else
+  ok "26-k 运行时：没有 node/bun/tsx → doctor 失败"
+fi
+assert_has "$TMP/p10-doctor-nojs.log" "JS 运行时" "26-k 运行时：失败行点名 JS 运行时这一项"
+assert_has "$TMP/p10-doctor-nojs.log" "node" "26-k 运行时：失败行点名 node"
+assert_has "$TMP/p10-doctor-nojs.log" "bun" "26-k 运行时：失败行点名 bun"
+assert_has "$TMP/p10-doctor-nojs.log" "TEAM_JS_BIN" "26-k 运行时：失败行给出 TEAM_JS_BIN 的修法"
+assert_has "$TMP/p10-doctor-nojs.log" "TEAM_REQUIRE_JS=0" "26-k 运行时：失败行给出降级开关"
+if p10nojs env TEAM_REQUIRE_JS=0 $TEAM doctor >"$TMP/p10-doctor-nojs-warn.log" 2>&1; then
+  ok "26-k 运行时：TEAM_REQUIRE_JS=0 → doctor 只警告（exit 0）"
+else
+  bad "26-k 运行时：降级后 doctor 不该失败"; tail -3 "$TMP/p10-doctor-nojs-warn.log"
+fi
+assert_has "$TMP/p10-doctor-nojs-warn.log" "已降级" "26-k 运行时：降级时说明是配置降级"
+p10nojs $TEAM monitor --once >"$TMP/p10-mon-nojs.log" 2>&1
+P10_RC_ONCE=$?
+p10nojs $TEAM monitor --print >"$TMP/p10-mon-nojs-print.log" 2>&1
+P10_RC_PRINT=$?
+if [ "$P10_RC_ONCE" != "0" ] && [ "$P10_RC_PRINT" != "0" ] \
+   && ! grep -q 'teamsmith pulse' "$TMP/p10-mon-nojs.log" && ! grep -q 'teamsmith pulse' "$TMP/p10-mon-nojs-print.log"; then
+  ok "26-k 运行时：没有运行时 → monitor 每个模式都非 0 且不打印面板标题"
+else
+  bad "26-k 运行时：monitor 在无运行时下没响亮失败（rc=$P10_RC_ONCE/$P10_RC_PRINT）"
+fi
+if p10nojs env TEAM_REQUIRE_JS=0 $TEAM monitor --print >"$TMP/p10-mon-nojs-esc.log" 2>&1; then
+  bad "26-k 运行时：TEAM_REQUIRE_JS=0 不该让面板复活"
+else
+  ok "26-k 运行时：TEAM_REQUIRE_JS=0 不影响面板（仍然非 0）"
+fi
+if p10nojs env TEAM_JS_BIN=/nonexistent $TEAM doctor >"$TMP/p10-doctor-badbin.log" 2>&1; then
+  bad "26-k 运行时：TEAM_JS_BIN 不可用时 doctor 应失败"
+else
+  ok "26-k 运行时：TEAM_JS_BIN 指向不存在的东西 → doctor 失败"
+fi
+assert_has "$TMP/p10-doctor-badbin.log" "/nonexistent" "26-k 运行时：失败行点名那个路径"
+P10_V18="$TMP/p10-v18-shim"; mkdir -p "$P10_V18"
+printf '#!/usr/bin/env bash\nif [ "${1:-}" = "--version" ]; then printf "v18.0.0\\n"; fi\n' > "$P10_V18/my-node"
+chmod +x "$P10_V18/my-node"
+if p10nojs env TEAM_JS_BIN="$P10_V18/my-node" $TEAM doctor >"$TMP/p10-doctor-old.log" 2>&1; then
+  bad "26-k 运行时：版本低于底线时 doctor 应失败"
+else
+  ok "26-k 运行时：v18 的 shim → doctor 失败"
+fi
+assert_has "$TMP/p10-doctor-old.log" "18" "26-k 运行时：失败行点名解析到的版本"
+assert_has "$TMP/p10-doctor-old.log" "20" "26-k 运行时：失败行点名最低版本"
+p10m $TEAM paths >"$TMP/p10-paths.log" 2>&1
+assert_match "$TMP/p10-paths.log" '"js_runner": "/' "26-k paths：报出解析到的运行时绝对路径"
+assert_has "$TMP/p10-paths.log" '"require_js": "1"' "26-k paths：报出 require_js 默认 1"
+p10m env TEAM_JS_BIN=/usr/bin/node $TEAM paths >"$TMP/p10-paths-jsbin.log" 2>&1
+assert_has "$TMP/p10-paths-jsbin.log" '"js_runner": "/usr/bin/node"' "26-k paths：TEAM_JS_BIN 优先"
+p10m env TEAM_REQUIRE_JS=0 $TEAM paths >"$TMP/p10-paths-reqjs.log" 2>&1
+assert_has "$TMP/p10-paths-reqjs.log" '"require_js": "0"' "26-k paths：TEAM_REQUIRE_JS=0 反映在 paths 里"
+
+# ---------------------------------------------------------------- 26-l. 文档契约 + 隔离（真项目零污染）
+# R11-S2 的另一半：活动列的新默认值是**写在文档里**的契约变更，不是悄悄改的
+P10_CFG="$SKILL_DIR/references/config.md"
+assert_has "$P10_CFG" "TEAM_MONITOR_ACTIVITY" "26-l 文档：config.md 写了 TEAM_MONITOR_ACTIVITY"
+assert_match "$P10_CFG" '\| `TEAM_MONITOR_ACTIVITY` \| `1` \|' "26-l 文档：config.md 的活动列默认值已改成 1"
+assert_has "$P10_CFG" "TEAM_MONITOR_UI" "26-l 文档：config.md 写了 TEAM_MONITOR_UI"
+assert_has "$P10_CFG" "TEAM_JS_BIN" "26-l 文档：config.md 写了 TEAM_JS_BIN"
+assert_has "$P10_CFG" "TEAM_REQUIRE_JS" "26-l 文档：config.md 写了 TEAM_REQUIRE_JS"
+assert_has "$P10_CFG" "--print" "26-l 文档：config.md 写了 --print/--json/--width/--height 旗标"
+assert_has "$SKILL_DIR/references/troubleshooting.md" "TEAM_MONITOR_UI=text" "26-l 文档：troubleshooting 写了纯文本兜底"
+assert_has "$SKILL_DIR/references/troubleshooting.md" "build.sh" "26-l 文档：troubleshooting 写了维护者重建路径"
+P10_LEAK_AFTER="$(P10_LEAK_SCAN "$SMOKE_INVOKE_ROOT" "$SMOKE_INVOKE_MAIN" | sort -u)"
+if [ "$P10_LEAK_AFTER" = "$P10_LEAK_BEFORE" ]; then
+  ok "26-l 隔离：调用方项目的 inbox/state 里没有出现夹具痕迹"
+else
+  bad "26-l 隔离：夹具痕迹出现在真项目里：$(printf '%s' "$P10_LEAK_AFTER" | head -2 | tr '\n' ' ')"
+fi
+
+# ---------------------------------------------------------------- 26-n. tick 语义（headless）
+# 观察者绝不 tick、--once 按期 tick（今天的语义）：跑在**干净的沙盒**里，避免污染上面那份夹具。
+P10_TICKR="$TMP/p10-tick-repo"
+mkdir -p "$P10_TICKR"
+( cd "$P10_TICKR" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo "# tick" > README.md && git add -A && git commit -qm init )
+( cd "$P10_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "teamsmith-smoke-p10t-$$" --agents dev --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+p10t() { ( cd "$P10_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+            -u TEAM_STATE_DIR -u TEAM_JS_BIN -u TEAM_REQUIRE_JS -u TEAM_MONITOR_ACTIVITY -u TEAM_MONITOR_UI \
+            -u TEAM_AGENT_LOG_GLOB "$@" ); }
+p10t $TEAM monitor --print >"$TMP/p10-tick-print.txt" 2>/dev/null
+if [ ! -e "$P10_TICKR/.pi/team/state/capacity.log" ]; then
+  ok "26-n tick：--print 是观察者，没有写 capacity.log"
+else
+  bad "26-n tick：--print 写了 capacity.log"
+fi
+p10t $TEAM monitor --json >/dev/null 2>&1
+if [ ! -e "$P10_TICKR/.pi/team/state/capacity.log" ]; then
+  ok "26-n tick：--json 是观察者，没有写 capacity.log"
+else
+  bad "26-n tick：--json 写了 capacity.log"
+fi
+p10t $TEAM monitor --once >"$TMP/p10-tick-once.txt" 2>/dev/null
+P10_TICK1="$(wc -l < "$P10_TICKR/.pi/team/state/capacity.log" 2>/dev/null | tr -d ' ' || echo 0)"
+p10t $TEAM monitor --once --no-pulse >"$TMP/p10-tick-once-nopulse.txt" 2>/dev/null
+P10_TICK2="$(wc -l < "$P10_TICKR/.pi/team/state/capacity.log" 2>/dev/null | tr -d ' ' || echo 0)"
+if [ "${P10_TICK1:-0}" = "1" ]; then ok "26-n tick：--once 到期跑一拍（capacity.log 1 行）"
+else bad "26-n tick：--once 没有跑出恰好一拍（$P10_TICK1 行）"; fi
+if [ "${P10_TICK2:-0}" = "${P10_TICK1:-0}" ]; then ok "26-n tick：--no-pulse 的 --once 不 tick（仍是 $P10_TICK2 行）"
+else bad "26-n tick：--no-pulse 仍然 tick（$P10_TICK1 → $P10_TICK2）"; fi
+p10_stable() { # 归一化帧里随时间/内存变化的量（时钟与实时容量），其余逐字节比
+  sed -E -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/g' -e 's/RAM [0-9.]+[MG]/RAM X/' -e 's/swap [0-9.]+[MG]/swap X/' \
+      -e 's/可再加 [0-9?]+ 个/可再加 N 个/' -e 's/[▁▂▃▄▅▆▇█]+/SPARK/' "$1"
+}
+if diff <(p10_stable "$TMP/p10-tick-print.txt") <(p10_stable "$TMP/p10-tick-once.txt") >/dev/null; then
+  ok "26-n tick：--once 的帧与 --print 一致（只差时间戳与实时容量；tick 在渲染之后）"
+else
+  bad "26-n tick：--once 的帧与 --print 不一致"; diff <(p10_stable "$TMP/p10-tick-print.txt") <(p10_stable "$TMP/p10-tick-once.txt") | head -3
+fi
+assert_file "$P10_TICKR/.pi/team/state/watchdog.tick.log" "26-n tick：tick 的输出进了 watchdog.tick.log"
+
+# ---------------------------------------------------------------- 26-m. 真 pane（HAVE_TMUX 且非 FAST）
+# 夹具用**自己的 session**（尺寸一次到位，避免动 smoke 的 session）：面板的 tmux 探针也跟着这些
+# session（项目配置里的 TEAM_SESSION 就是我建的那个），另建一个「别的 session」放 verify 窗口，
+# 用来钉「只监视本 session 的窗口」。收尾一律 kill，不留副作用。
+if [ "$FAST" = "1" ]; then
+  fast_skip "26-m·真 pane" "要真实 tmux 窗口（120x29 / 60x8 / 重绘周期 / tick 节奏 / pulse up 不建窗）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  P10_TRUE_STATE="$TMP/p10-true-state"; mkdir -p "$P10_TRUE_STATE"
+  P10_LEFT_LOG="$TMP/p10-left-{agent}.log"
+  printf 'LEFT-MARKER\n' > "$TMP/p10-left-dev.log"
+  printf 'FOREIGN-MARKER\n' > "$TMP/p10-left-verify.log"
+  P10_W1="p10-tui-$$"
+  P10_W2="p10-tiny-$$"
+  P10_W3="p10-tick-$$"
+  P10_SCOPE="$P10SESS"
+  P10_OTHER="${SESSION}-other-$$"
+  P10_SMOKE_WINDOWS_BEFORE="$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | wc -l | tr -d ' ')"
+  p10_panel_cmd() { # <log-glob|->  → 窗口里跑的面板命令
+    printf "cd '%s' && HOME='%s' TEAM_PI_AGENT_DIR='%s/.pi/agent' TEAM_STATE_DIR='%s' %s bash '%s/scripts/team' monitor --no-pulse --interval %s" \
+      "$P10R" "$P10_HOME" "$P10_HOME" "$P10_TRUE_STATE" \
+      "$([ "$1" = "-" ] && echo '' || printf "TEAM_AGENT_LOG_GLOB='%s'" "$1")" "$SKILL_DIR" "$2"
+  }
+  # ① 会话范围 + 重绘周期：本项目 session 里 dev 窗口在跑；verify 的窗口在**另一个 session**
+  tmux kill-session -t "$P10_SCOPE" 2>/dev/null || true
+  tmux kill-session -t "$P10_OTHER" 2>/dev/null || true
+  tmux new-session -d -s "$P10_SCOPE" -x 120 -y 29 -c "$P10R" -n dev "sleep 300" 2>/dev/null
+  tmux new-session -d -s "$P10_OTHER" -x 120 -y 29 -c "$P10R" -n verify "sleep 300" 2>/dev/null
+  tmux new-window -d -t "$P10_SCOPE" -n "$P10_W1" -c "$P10R" "$(p10_panel_cmd "$P10_LEFT_LOG" 1)" 2>/dev/null \
+    || bad "26-m 真 pane：起面板窗口失败"
+  sleep 4
+  tmux resize-window -t "$P10_SCOPE:$P10_W1" -x 120 -y 29 2>/dev/null || true
+  sleep 3
+  P10_CAP="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null)"
+  case "$P10_CAP" in
+    *teamsmith*巡检*) ok "26-m 真 pane（120x29）：capture 里有标题带（项目/巡检周期）" ;;
+    *) bad "26-m 真 pane：capture 里没有标题带（pane=$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | wc -c) 字节）" ;;
+  esac
+  assert_eq "26-m 真 pane：capture 里 0 个 ESC 字节" "$(printf '%s' "$P10_CAP" | tr -cd '\033' | wc -c | tr -d ' ')" "0"
+  if printf '%s' "$P10_CAP" | grep -qF 'LEFT-MARKER'; then
+    ok "26-m 会话范围：本 session 的 dev 窗口出现在活动列"
+  else
+    bad "26-m 会话范围：本 session 的 dev 活动没出现"
+  fi
+  if printf '%s' "$P10_CAP" | grep -qF 'FOREIGN-MARKER'; then
+    bad "26-m 会话范围：另一个 session 的窗口被显示出来了"
+  else
+    ok "26-m 会话范围：另一个 session 的窗口不出现（只监视本 session）"
+  fi
+  sleep 1.5
+  P10_CAP2="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null)"
+  P10_TS1="$(printf '%s' "$P10_CAP" | head -1 | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}')"
+  P10_TS2="$(printf '%s' "$P10_CAP2" | head -1 | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}')"
+  if [ -n "$P10_TS1" ] && [ -n "$P10_TS2" ] && [ "$P10_TS1" != "$P10_TS2" ]; then
+    ok "26-m 重绘：TEAM_MONITOR_REFRESH=1 下两次 capture 的时间戳不同（$P10_TS1 → $P10_TS2）"
+  else
+    bad "26-m 重绘：1.5s 后时间戳没变（$P10_TS1 / $P10_TS2）"
+  fi
+  tmux kill-window -t "$P10_SCOPE:$P10_W1" 2>/dev/null || true
+  # ② 60x8：不超过窗格
+  tmux kill-session -t "$P10_W2" 2>/dev/null || true
+  tmux new-session -d -s "$P10_W2" -x 60 -y 8 -c "$P10R" -n panel "$(p10_panel_cmd - 2)" 2>/dev/null || true
+  sleep 4
+  P10_TINY="$(tmux capture-pane -p -t "$P10_W2:panel" 2>/dev/null)"
+  P10_TINY_ROWS="$(printf '%s\n' "$P10_TINY" | grep -c .)"
+  P10_TINY_W="$(printf '%s\n' "$P10_TINY" | python3 -c 'import sys,unicodedata
+m=0
+for l in sys.stdin.read().split("\n"):
+    m=max(m, sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l))
+print(m)' 2>/dev/null || echo 999)"
+  if [ "$P10_TINY_ROWS" -ge 1 ] && [ "$P10_TINY_ROWS" -le 8 ] && [ "$P10_TINY_W" -le 60 ]; then
+    ok "26-m 真 pane（60x8）：$P10_TINY_ROWS 行 / 最宽 $P10_TINY_W 列（不超过窗格）"
+  else
+    bad "26-m 真 pane（60x8）：$P10_TINY_ROWS 行 / 最宽 $P10_TINY_W 列（超过窗格或没渲染）"
+  fi
+  tmux kill-session -t "$P10_W2" 2>/dev/null || true
+  # ③ tick 节奏：--no-pulse 不写 capacity；默认按周期写；窗口数只多面板自己
+  P10_TICK_STATE="$TMP/p10-tick-state"; mkdir -p "$P10_TICK_STATE"
+  tmux kill-session -t "$P10_W3" 2>/dev/null || true
+  tmux new-session -d -s "$P10_W3" -x 120 -y 29 -c "$P10R" -n panel \
+    "cd '$P10R' && HOME='$P10_HOME' TEAM_PI_AGENT_DIR='$P10_HOME/.pi/agent' TEAM_STATE_DIR='$P10_TICK_STATE' TEAM_PULSE_INTERVAL=2 bash '$SKILL_DIR/scripts/team' monitor --no-pulse --interval 1" 2>/dev/null || true
+  sleep 4
+  if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 仍然写了 capacity.log"; else ok "26-m tick：--no-pulse 不写 capacity.log（面板还活着：$(tmux capture-pane -p -t "$P10_W3:panel" 2>/dev/null | grep -c .) 行）"; fi
+  tmux kill-session -t "$P10_W3" 2>/dev/null || true
+  rm -rf "$P10_TICK_STATE"; mkdir -p "$P10_TICK_STATE"
+  tmux kill-session -t "$P10_W3" 2>/dev/null || true
+  tmux new-session -d -s "$P10_W3" -x 120 -y 29 -c "$P10R" -n panel \
+    "cd '$P10R' && HOME='$P10_HOME' TEAM_PI_AGENT_DIR='$P10_HOME/.pi/agent' TEAM_STATE_DIR='$P10_TICK_STATE' TEAM_PULSE_INTERVAL=2 bash '$SKILL_DIR/scripts/team' monitor --interval 1" 2>/dev/null || true
+  sleep 6
+  P10_TICK_LINES="$(wc -l < "$P10_TICK_STATE/capacity.log" 2>/dev/null | tr -d ' ' || echo 0)"
+  if [ "${P10_TICK_LINES:-0}" -ge 2 ]; then
+    ok "26-m tick：默认运行按周期留下 capacity 行（$P10_TICK_LINES 行 / 6s）"
+  else
+    bad "26-m tick：默认运行没有按周期 tick（capacity 行=$P10_TICK_LINES）"
+  fi
+  assert_eq "26-m tick：tick 日志被裁剪在 200 行以内" \
+    "$([ "$(wc -l < "$P10_TICK_STATE/watchdog.tick.log" 2>/dev/null | tr -d ' ' || echo 0)" -le 200 ] && echo ok)" "ok"
+  tmux kill-session -t "$P10_W3" 2>/dev/null || true
+  tmux kill-session -t "$P10_SCOPE" 2>/dev/null || true
+  tmux kill-session -t "$P10_OTHER" 2>/dev/null || true
+  assert_eq "26-m 无第二个窗口：smoke session 的窗口数不变" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | wc -l | tr -d ' ')" "$P10_SMOKE_WINDOWS_BEFORE"
+  assert_eq "26-m 无第二个窗口：夹具 session 已收干净" \
+    "$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c "^$P10_SCOPE$\|^$P10_OTHER$\|^$P10_W2$\|^$P10_W3$" || true)" "0"
+  # ④ 没有运行时时 pulse up 拒绝建窗口
+  if env "PATH=$P10_NOJS" "TEAM_AGENT_CMD=true {prompt}" TEAM_AGENT_BIN=true "TEAM_OPENSPEC_BIN=$FAKE/openspec" \
+        TEAM_SPEC_DIR=openspec TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_SESSION="$SESSION" \
+        bash "$SKILL_DIR/scripts/team" --root "$P10R" pulse up >"$TMP/p10-up-nojs.log" 2>&1; then
+    bad "26-m 运行时：没有运行时时 pulse up 应拒绝"
+  else
+    ok "26-m 运行时：没有运行时时 pulse up 拒绝（exit 非 0）"
+  fi
+  assert_eq "26-m 运行时：pulse up 没有留下 pulse 窗口" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx pulse || true)" "0"
+  # 规格场景写的是旧名（别名期）：`team watchdog up` 走同一条拒绝路径
+  if env "PATH=$P10_NOJS" "TEAM_AGENT_CMD=true {prompt}" TEAM_AGENT_BIN=true "TEAM_OPENSPEC_BIN=$FAKE/openspec" \
+        TEAM_SPEC_DIR=openspec TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_SESSION="$SESSION" \
+        bash "$SKILL_DIR/scripts/team" --root "$P10R" watchdog up >"$TMP/p10-up-legacy.log" 2>&1; then
+    bad "26-m 运行时：没有运行时时 team watchdog up（旧名）也应拒绝"
+  else
+    ok "26-m 运行时：旧名 team watchdog up 同样拒绝（别名走同一条路径）"
+  fi
+
+else
+  cond_skip "26-m·真 pane" "本机没有 tmux"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"

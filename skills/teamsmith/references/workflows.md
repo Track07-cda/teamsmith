@@ -298,27 +298,24 @@ bash <skill>/scripts/team pulse up --print                   # show which window
 
 The monitor serves **the current tmux session only**: whether windows are running, what the task is, pending work and
 capacity.
-Each agent's session activity stream is off by default (`TEAM_MONITOR_ACTIVITY=0`) — reading other people's sessions
-is both noisy and expensive (6 agents ≈ ~9MB of JSONL per refresh, measured RSS 7MB→67MB); turn it on with
-`--activity` when you need it, and even then only live windows in this session are listed.
+The activity column is part of the layout by default (`TEAM_MONITOR_ACTIVITY=1`, changed in v1.38.0); turn it off
+with `--no-activity` or `TEAM_MONITOR_ACTIVITY=0` when you want the older, narrower layout. It only ever reads live
+windows in **this** session, and the read is a bounded tail (64 KiB by default), so it stays cheap.
 
 ```
-teamsmith monitor · myproj                       2026-09-11T16:52:03Z  (refresh every 3s, patrol every 900s)
-  patrol      900s (pending work wakes the PM) ｜ backend tmux
-  standby     off
-  PM          ● running (pi)
-  pending     1 unread notification · 2 to verify
-  capacity    RAM available 6850MB ｜ swap free 57779/80424MB ｜ about 10 more agents fit
-  dev         ● pi running ｜ T1.2
-  verify      ○ pi exited ｜ -
-
-agent activity
-🟢 active dev          [task/T1.2-api*]  running 12m04s · idle 8s · events 57
-     16:51:22 🔧 bash
-     16:51:40 💬 implementation done, running the acceptance commands…
-🟡 quiet verify        [agent/verify]  running 3h02m · idle 44m10s · events 128
-     16:07:03 🔧 read
+band A  teamsmith pulse · <project>   <time>   patrol <N>s · standby on/off
+        PM <state> · pending counts · deferred queue · capacity + mini chart
+band B  agent table (agent · state · task · branch · dirty · ahead · session size)
+        | activity column (this session's windows) + the last six patrol actions
+band C  reserved visualization band (a labelled placeholder that reads no data)
+band D  key band: q / arrows / r / --print / --no-activity
 ```
+
+(The panel's own labels are the Chinese words the previous panel used — `team monitor` is unchanged as a surface;
+this document stays English by the same rule as the rest of `references/**`.)
+
+The same frame is available as text (pipes, `--print`) and as one JSON object (`--json`); `--width`/`--height`
+override the geometry so the band order and the degradation order can be checked without a terminal.
 
 The pulse *is* the `pulse` window in the same session: it runs `team monitor` (the status panel) and patrols on
 `TEAM_PULSE_INTERVAL`. It is decoupled from the PM's **value dependencies** (it only looks at on-disk state and tmux

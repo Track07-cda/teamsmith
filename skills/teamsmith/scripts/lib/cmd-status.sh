@@ -592,50 +592,6 @@ team_cmd_inbox() {
 }
 
 # ---------------------------------------------------------------- 状态面板（pulse 窗口跑的就是它）
-team_panel() {
-  local W=74 line
-  line="$(printf '%.0s─' $(seq 1 $W))"
-  printf '%steamsmith pulse · %s%s  %s\n' "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)"
-  printf '%s\n' "$line"
-  printf '  %-9s %ss（待办才叫醒 PM；巡检 = 同 session 的 %s 窗口）\n' "巡检" "$TEAM_PULSE_INTERVAL" "$(team_pulse_window)"
-  if team_in_standby; then
-    printf '  %-9s %son%s（原因：%s → %s standby off）\n' "待命" "$C_YEL" "$C_RESET" "$(team_standby_reason || echo -)" "$TEAM_CLI"
-  else
-    printf '  %-9s off\n' "待命"
-  fi
-  local pm; pm="$(team_pm_state)"
-  case "$pm" in
-    running:*) printf '  %-9s %s●%s 在运行（%s）\n' "PM" "$C_GRN" "$C_RESET" "${pm#running:}" ;;
-    starting:*) printf '  %-9s %s…%s 正在启动（%s，不重复拉起）\n' "PM" "$C_YEL" "$C_RESET" "${pm#starting:}" ;;
-    idle:*)    printf '  %-9s %s○%s 未在跑（空提示符）\n' "PM" "$C_YEL" "$C_RESET" ;;
-    unknown:*) printf '  %-9s %s○%s 窗口里是非 PM 进程（%s）\n' "PM" "$C_YEL" "$C_RESET" "${pm#unknown:}" ;;
-    foreign:*) printf '  %-9s %s○%s 窗口被别的项目占着\n' "PM" "$C_YEL" "$C_RESET" ;;
-    *)         printf '  %-9s %s○%s 窗口缺失\n' "PM" "$C_YEL" "$C_RESET" ;;
-  esac
-  local pend; pend="$(team_pending_text)"
-  if [ -n "$pend" ]; then printf '  %-9s %s\n' "待办" "$pend"
-  else printf '  %-9s %s无 —— 不叫醒 PM%s\n' "待办" "$C_DIM" "$C_RESET"; fi
-  printf '  %-9s %s\n' "容量" "$(team_capacity_line)"
-  # 延后投递：队列非空时补一行（delivery-guard 的可见性；空队列不加任何东西）
-  local obox=""
-  obox="$(team_outbox_status_line "  " 2>/dev/null || true)"
-  [ -n "$obox" ] && printf '%s\n' "$obox"
-  local a state task cli
-  cli="$(team_agent_cli_name)"
-  for a in $(team_agents); do
-    if team_agent_live "$a"; then state="${C_GRN}●${C_RESET} $cli 在跑"
-    elif team_agent_window_exists "$a"; then state="${C_YEL}○${C_RESET} $cli 已退出"
-    else state="${C_DIM}·${C_RESET} 无窗口"; fi
-    task="$(team_state_get "$a" task -)"
-    printf '  %-9s %s ｜ %s\n' "$a" "$state" "$task"
-  done
-  printf '%s\n' "$line"
-  printf '  最近动作\n'
-  if [ -f "$TEAM_STATE_DIR/watchdog.log" ]; then
-    tail -6 "$TEAM_STATE_DIR/watchdog.log" | sed -e 's/^\([0-9-]*\)T\([0-9:]*\)Z /    \2 /'
-  else
-    printf '    %s（还没有动作记录）%s\n' "$C_DIM" "$C_RESET"
-  fi
-  printf '%s\n' "$line"
-  return 0
-}
+# 真正的渲染在 scripts/panel/panel.js（Ink bundle；纯文本模式 = --print）。这里保留函数名，
+# 因为它是面板的文本入口：spawn/诊断不需要知道 bundle 的位置。
+team_panel() { team_panel_text "$@"; }

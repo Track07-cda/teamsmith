@@ -439,86 +439,262 @@ team_cmd_watch() {
 
 
 # ---------------------------------------------------------------- team monitor
-# tmux 窗口里的「状态监视器」：上面是团队状态（PM/待办/容量），下面是每个 agent 的会话活动流。
-# 顺带按 TEAM_PULSE_INTERVAL 跑巡检 tick —— 所以一个窗口同时是显示器 + 巡检（pulse）。
-team_monitor_activity() { # 可选：只渲染「当前 tmux session 里正在跑的窗口」的会话活动
-  local runner; runner="$(team_js_runner)"
-  local js="$TEAM_SKILL_DIR/scripts/monitor.mjs"
-  if [ -z "$runner" ] || [ ! -f "$js" ]; then
-    team_dim "  （本机没有 node/bun/tsx：活动流不可用）"
-    return 0
+# pulse 窗口里跑的就是它：面板是一个提交进仓库的 Ink bundle（scripts/panel/panel.js），
+# 团队字段由 `team __panel-data`（bash 读者 + 队列目录，全程只读）给出，
+# 活动流仍然来自数据层 monitor.mjs（--json 契约一字未动）。
+#
+# 四种输出模式（契约见 openspec 的 panel 能力）：
+#   TUI（默认，TTY）    panel.js 自己持有刷新周期与 tick 循环：一个窗口、一个进程、一个巡检
+#   --once              一帧（按同一套渲染器选择），到期就跑一次 tick —— 今天语义不变
+#   --print             一帧纯文本：没有 ANSI、不 clear、不写 state、绝不 tick
+#   --json              {"panel": {...}, "activity": [...]}：不写 state、绝不 tick
+# 非 TTY（auto）走纯文本路径：管道里不再出现控制字节（管道里给 TUI 清屏=污染调用方的输出）。
+# 没有 JS 运行时时**每一个模式**都响亮失败（一行说清修法）——空面板报成功是假绿。
+
+# ---- 净化 + JSON：面板自己要读的字符串（分支名/任务 id/state 值/队列名）先过一遍净化。
+#      数据层那条净化只覆盖数据层自己的输出；这里是第二条独立通道，也保证传输的 JSON 合法
+#      （原始控制字节会让 JSON.parse 直接失败）。
+team_panel_clean() { # <文本> → 去掉 C0 控制字节（\t 保留），保留可见文本
+  # 注意：**不要**用 tr 删 0x80-0x9F —— 那会把 UTF-8 多字节字符的后续字节也删掉（中文直接变乱码）。
+  # C1 控制符在 UTF-8 里是 0xC2 0x80-0x9F，交给 panel.js 的净化按字符处理。
+  printf '%s' "${1:-}" | LC_ALL=C tr -d '\000-\010\013-\037\177'
+}
+
+team_panel_json_str() { # <文本> → JSON 字符串字面量（含引号）
+  local v; v="$(team_panel_clean "${1:-}")"
+  # JSON 字符串里不能有裸换行/制表符（面板的字段都是单行；这里把多行的折叠成空格）
+  v="$(printf '%s' "$v" | tr '\n\t' '  ')"
+  v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
+  printf '"%s"' "$v"
+}
+
+team_panel_num() { # <值> [默认] → 非负整数（面板字段只接受数字）
+  local v="${1:-}"
+  case "$v" in ''|*[!0-9]*) v="${2:-0}" ;; *) v=$((v)) ;; esac
+  printf '%s' "$v"
+}
+
+# 延后投递：只读计数，**绝不创建目录、绝不排水**（排水属于 sender / tick / outbox flush）。
+# 目录不存在 = 0（P5 未 apply 的项目就是这个形状，不是错误）。
+team_panel_outbox_json() {
+  local dir="$TEAM_STATE_DIR/outbox" queued=0 held=0 forced=0 oldest="" age="null"
+  if [ -d "$dir" ]; then
+    queued="$(find "$dir" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | grep -c . || true)"
+    held="$(find "$dir/held" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | grep -c . || true)"
+    oldest="$(find "$dir" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | LC_ALL=C sort | head -1)"
+    if [ -f "$dir/forced.log" ]; then forced="$(grep -c . "$dir/forced.log" 2>/dev/null || true)"; fi
   fi
-  # 只监视本 session 里活着的人：不在这个 session / 窗口没了的 agent 一律不看（不翻别人的会话）
-  local only="" a w
+  if [ -n "$oldest" ]; then
+    local base ms now_ms
+    base="$(basename "$oldest")"; ms="${base%%-*}"
+    case "$ms" in
+      ''|*[!0-9]*) ;;
+      *) now_ms="$(date +%s%3N 2>/dev/null || printf '%s000' "$(date +%s)")"
+         if [ "$now_ms" -gt "$ms" ]; then age=$(( (now_ms - ms) / 1000 )); else age=0; fi ;;
+    esac
+  fi
+  printf '{"queued": %s, "held": %s, "oldest_age_s": %s, "forced": %s}' \
+    "$(team_panel_num "$queued")" "$(team_panel_num "$held")" "$age" "$(team_panel_num "$forced")"
+}
+
+# 容量：RAM/磁盘 swap/还能再加几个 + capacity.log 尾部的迷你图。zram 物理 MB **不进面板**
+# （它留在 `team pulse status`）；所以这里自己算，不直接用 team_capacity_line 的整行。
+team_panel_capacity_json() {
+  local avail swapfree swaptotal diskfree disktotal zram_pct zram_phys
+  read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
+  read -r diskfree disktotal zram_pct zram_phys <<< "$(team_swap_breakdown)"
+  local f="$TEAM_STATE_DIR/capacity.log" spark="[]" ram="$avail" joined="" v
+  local -a vals=()
+  if [ -f "$f" ]; then
+    while IFS= read -r v; do
+      [ -n "$v" ] && vals+=("$v")
+    done < <(sed -n 's/.*RAM 可用 \([0-9][0-9]*\)MB.*/\1/p' "$f" | tail -40)
+  fi
+  if [ "${#vals[@]}" -gt 0 ]; then
+    ram="${vals[${#vals[@]}-1]}"
+    for v in "${vals[@]}"; do joined="${joined:+$joined, }$v"; done
+    spark="[$joined]"
+  fi
+  [ -n "${ram:-}" ] || ram=0
+  printf '{"ram_avail_mb": %s, "swap_free_mb": %s, "agents": %s, "spark": %s}' \
+    "$(team_panel_num "$ram")" "$(team_panel_num "$diskfree")" \
+    "$(team_panel_num "$(team_agent_capacity)")" "$spark"
+}
+
+# agent 表：状态/任务（state 文件）+ 分支/脏/领先（team_git_cols）+ 会话规模（team_session_*）。
+# elapsed/idle/事件数来自数据层（panel.js 合并，JSON 里保留，表格不显示 uptime）。
+team_panel_agents_json() {
+  local out="[" first=1 a state task wt cols branch dirty ahead upahead
+  local model mtok mwin mbytes mfile size dirty_json ahead_json
+  for a in $(team_agents); do
+    if team_agent_live "$a"; then state="running"
+    elif team_agent_window_exists "$a"; then state="exited"
+    else state="absent"; fi
+    task="$(team_state_get "$a" task '')"
+    wt="$(team_agent_worktree "$a")"
+    cols="$(team_git_cols "$wt")"
+    IFS=$'\t' read -r branch dirty ahead upahead <<< "$cols"
+    IFS=$'\t' read -r model mtok mwin mbytes mfile <<< "$(team_agent_session_cols "$a")"
+    size="$(team_session_size_text "$mtok" "$mwin")"
+    dirty_json="false"
+    [ "$(team_panel_num "$dirty")" -gt 0 ] && dirty_json="true"
+    ahead_json="null"
+    case "${ahead:-}" in ''|*[!0-9]*) ;; *) ahead_json="$ahead" ;; esac
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out{\"name\": $(team_panel_json_str "$a"), \"state\": $(team_panel_json_str "$state"), \
+\"task\": $(team_panel_json_str "$task"), \"branch\": $(team_panel_json_str "$branch"), \
+\"dirty\": $dirty_json, \"ahead\": $ahead_json, \"upstream_ahead\": $(team_panel_json_str "$upahead"), \
+\"model\": $(team_panel_json_str "$model"), \"session_tokens\": $(team_panel_num "$mtok"), \
+\"session_window\": $(team_panel_num "$mwin"), \"session_text\": $(team_panel_json_str "$size")}"
+  done
+  printf '%s]' "$out"
+}
+
+team_panel_recent_json() { # watchdog.log 的最后 6 行（面板右栏的审计尾巴）
+  local f="$TEAM_STATE_DIR/watchdog.log" out="[" first=1 line
+  if [ -f "$f" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      [ "$first" = "1" ] || out="$out, "
+      first=0
+      out="$out$(team_panel_json_str "$line")"
+    done < <(tail -6 "$f")
+  fi
+  printf '%s]' "$out"
+}
+
+team_panel_pm_json() { # PM 状态用**闭集**词表：running|starting|absent|foreign|unknown
+  local st state detail
+  st="$(team_pm_state)"
+  case "$st" in
+    running:*)  state="running"; detail="${st#running:}" ;;
+    starting:*) state="starting"; detail="${st#starting:}" ;;
+    idle:*)     state="absent";  detail="${st#idle:}" ;;
+    unknown:*)  state="unknown"; detail="${st#unknown:}" ;;
+    foreign:*)  state="foreign"; detail="${st#foreign:}" ;;
+    *)          state="absent";  detail="" ;;
+  esac
+  printf '{"state": %s, "detail": %s, "evidence": %s}' \
+    "$(team_panel_json_str "$state")" "$(team_panel_json_str "$detail")" \
+    "$(team_panel_json_str "$(team_pm_evidence "$st")")"
+}
+
+team_panel_standby_json() {
+  if team_in_standby; then
+    printf '{"on": true, "reason": %s}' "$(team_panel_json_str "$(team_standby_reason || echo '-')")"
+  else
+    printf '{"on": false, "reason": ""}'
+  fi
+}
+
+team_panel_json() { # → panel 对象（严格只读：不 mkdir、不 tick、不改任何文件）
+  local counts inbox reports todo wip review blocked stopped total pendtext
+  counts="$(team_pending_counts)"
+  read -r inbox reports todo wip review blocked stopped <<< "$counts"
+  pendtext="$(team_pending_text "$counts")"
+  total=$(( $(team_panel_num "$inbox") + $(team_panel_num "$reports") + $(team_panel_num "$todo") \
+          + $(team_panel_num "$wip") + $(team_panel_num "$review") + $(team_panel_num "$blocked") \
+          + $(team_panel_num "$stopped") ))
+  printf '{ "project": %s, "timestamp": %s, "interval": %s, "standby": %s, "pm": %s, "pending": %s, "outbox": %s, "capacity": %s, "agents": %s, "recent": %s, "activity_source": %s }' \
+    "$(team_panel_json_str "$TEAM_PROJECT")" "$(team_panel_json_str "$(team_timestamp)")" \
+    "$(team_panel_num "$TEAM_PULSE_INTERVAL")" "$(team_panel_standby_json)" "$(team_panel_pm_json)" \
+    "$(printf '{"inbox": %s, "reports": %s, "todo": %s, "wip": %s, "review": %s, "blocked": %s, "stopped": %s, "total": %s, "text": %s}' \
+        "$(team_panel_num "$inbox")" "$(team_panel_num "$reports")" "$(team_panel_num "$todo")" \
+        "$(team_panel_num "$wip")" "$(team_panel_num "$review")" "$(team_panel_num "$blocked")" \
+        "$(team_panel_num "$stopped")" "$total" "$(team_panel_json_str "$pendtext")")" \
+    "$(team_panel_outbox_json)" "$(team_panel_capacity_json)" "$(team_panel_agents_json)" \
+    "$(team_panel_recent_json)" "$(team_panel_json_str "${TEAM_AGENT_LOG_GLOB:-}")"
+}
+
+# 活动流：数据层的 --json 原样透传（只在本 session 有窗口时读；关闭时一个文件都不碰）。
+team_panel_activity_json() { # <1|0> <events>
+  local on="${1:-1}" events="${2:-4}"
+  [ "$on" = "1" ] || { printf '[]'; return 0; }
+  local runner js out only="" a w g=()
+  runner="$(team_js_runner)"
+  js="$TEAM_SKILL_DIR/scripts/monitor.mjs"
+  [ -n "$runner" ] && [ -f "$js" ] || { printf '[]'; return 0; }
   for a in $(team_agents); do
     w="$(team_state_get "$a" window "$a")"
-    if team_tmux_has_window "$TEAM_SESSION" "$w"; then only="${only:+$only,}$a"; fi
+    team_tmux_has_window "$TEAM_SESSION" "$w" && only="${only:+$only,}$a"
   done
   team_pm_window_exists && only="${only:+$only,}pm"
-  if [ -z "$only" ]; then
-    team_dim "  （本 session 里没有在跑的窗口）"
-    return 0
-  fi
-  # 非 Pi agent：可选的日志/会话文件通配（TEAM_AGENT_LOG_GLOB）→ 显示最新匹配文件的尾部
-  local globargs=()
-  [ -n "${TEAM_AGENT_LOG_GLOB:-}" ] && globargs=(--log-glob "$TEAM_AGENT_LOG_GLOB")
-  "$runner" "$js" --root "$TEAM_MAIN_ROOT" --only "$only" --events "${TEAM_MONITOR_EVENTS:-4}" \
-    ${globargs[@]+"${globargs[@]}"} 2>/dev/null || true
+  # 本 session 里没有任何窗口 → 不翻别人的会话（也不给 monitor.mjs 传空 --only，那等于「全都要」）
+  [ -n "$only" ] || { printf '[]'; return 0; }
+  [ -n "${TEAM_AGENT_LOG_GLOB:-}" ] && g=(--log-glob "$TEAM_AGENT_LOG_GLOB")
+  out="$("$runner" "$js" --root "$TEAM_MAIN_ROOT" --only "$only" --events "$events" \
+        ${g[@]+"${g[@]}"} --json 2>/dev/null || true)"
+  case "${out:-}" in
+    \[*) printf '%s' "$out" ;;
+    *)   printf '[]' ;;
+  esac
+}
+
+# 内部命令：给 panel.js 一个 JSON（{panel, activity}）。名字带 __ 前缀 = 不是给人用的命令面。
+team_cmd_panel_data() {
+  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-activity) activity=0; shift ;;
+      --activity) activity=1; shift ;;
+      --events) events="${2:?__panel-data: --events 需要数字}"; shift 2 ;;
+      -*) team_usage_die "__panel-data: 未知参数 $1" ;;
+      *) team_usage_die "__panel-data: 多余参数 $1" ;;
+    esac
+  done
+  team_require_docs
+  printf '{"panel": %s, "activity": %s}\n' "$(team_panel_json)" "$(team_panel_activity_json "$activity" "$events")"
+}
+
+# 旧调用点（team_panel）走这里：一帧纯文本，不 tick、不写 state。
+team_panel_text() {
+  local runner panel
+  team_require_js_runtime "team panel"
+  runner="$(team_js_runner)"
+  panel="$TEAM_SKILL_DIR/scripts/panel/panel.js"
+  [ -f "$panel" ] || team_die "team panel: 面板 bundle 缺失（$panel）——skills/teamsmith 安装不完整"
+  "$runner" "$panel" --root "$TEAM_ROOT" --team-cli "$TEAM_SKILL_DIR/scripts/team" --print "$@"
 }
 
 team_cmd_monitor() {
-  local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_pulse=1 activity="${TEAM_MONITOR_ACTIVITY:-0}"
-  local argv=("$@") fp0=""
+  local once=0 interval="${TEAM_MONITOR_REFRESH:-5}" with_pulse=1
+  local mode="" width="" height="" activity_arg="" events=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --once) once=1; shift ;;
+      --print) mode="--print"; shift ;;
+      --json) mode="--json"; shift ;;
       --no-pulse) with_pulse=0; shift ;;
-      --no-watchdog) with_pulse=0; shift ;;   # 旧旗标（别名期保留到 v2.0.0）：与 --no-pulse 同义，不印弃用行（面板清屏会把它抹掉）
-      --activity) activity=1; shift ;;
-      --no-activity) activity=0; shift ;;
-      --interval) interval="${2:?}"; shift 2 ;;
-      --events) TEAM_MONITOR_EVENTS="${2:?}"; shift 2 ;;
+      --no-watchdog) with_pulse=0; shift ;;   # 旧旗标（别名期保留到 v2.0.0）：与 --no-pulse 同义
+      --activity) activity_arg="--activity"; shift ;;
+      --no-activity) activity_arg="--no-activity"; shift ;;
+      --interval) interval="${2:?monitor: --interval 需要秒数}"; shift 2 ;;
+      --events) events="${2:?monitor: --events 需要数字}"; shift 2 ;;
+      --width) width="${2:?monitor: --width 需要列数}"; shift 2 ;;
+      --height) height="${2:?monitor: --height 需要行数}"; shift 2 ;;
       -*) team_usage_die "monitor: 未知参数 $1" ;;
       *) team_usage_die "monitor: 多余参数 $1" ;;
     esac
   done
   team_require_docs
-  fp0="$(team_watch_code_fp)"
-  local ticklog="$TEAM_STATE_DIR/watchdog.tick.log" last_tick=0 now
-  while :; do
-    # M9.8：面板与巡检判定都必须用磁盘上的代码（漂移就重启本进程）—— 现场就是窗口里跑着前一天的代码
-    team_watch_reexec_if_stale "$fp0" monitor ${argv[@]+"${argv[@]}"}
-    clear
-    printf '%steamsmith monitor · %s%s  %s  %s(每 %ss 刷新%s)%s\n' \
-      "$C_BOLD" "$TEAM_PROJECT" "$C_RESET" "$(team_timestamp)" "$C_DIM" "$interval" \
-      "$([ "$with_pulse" = 1 ] && echo "，每 ${TEAM_PULSE_INTERVAL}s 跑一次巡检" || echo '')" "$C_RESET"
-    team_panel | tail -n +2
-    if [ "$activity" = "1" ]; then
-      printf '\n  %sagent 活动%s%s（仅本 session 在跑的窗口；--no-activity 关掉）%s\n' \
-        "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
-      [ -n "${TEAM_AGENT_LOG_GLOB:-}" ] && \
-        printf '  %s源：TEAM_AGENT_LOG_GLOB=%s（非 Pi agent 显示最新日志尾部）%s\n' "$C_DIM" "$TEAM_AGENT_LOG_GLOB" "$C_RESET"
-      team_monitor_activity
-    fi
-    printf '%s  Ctrl-C 退出本窗口（不影响 PM）｜ %s pulse status / logs / down%s\n' \
-      "$C_DIM" "$TEAM_CLI" "$C_RESET"
-    printf '%s  巡检只服务本 session：窗口/任务/待办/容量；巡检每 %ss，面板每 %ss%s\n' \
-      "$C_DIM" "${TEAM_PULSE_INTERVAL}" "$interval" "$C_RESET"
-    if [ "$with_pulse" = "1" ]; then
-      now="$(date +%s)"
-      if [ $((now - last_tick)) -ge "${TEAM_PULSE_INTERVAL}" ]; then
-        last_tick="$now"
-        mkdir -p "$TEAM_STATE_DIR"
-        team_watch_once >>"$ticklog" 2>&1
-        if [ "$(wc -l < "$ticklog" 2>/dev/null || echo 0)" -gt 200 ]; then
-          tail -n 200 "$ticklog" > "$ticklog.tmp" && mv "$ticklog.tmp" "$ticklog"
-        fi
-      fi
-    fi
-    [ "$once" = "1" ] && break
-    sleep "$interval"
-  done
-  return 0
+  # 运行时是硬要求：四个模式都过这一关（TEAM_REQUIRE_JS=0 只管 doctor 那一行）
+  team_require_js_runtime "team monitor"
+  local runner panel; runner="$(team_js_runner)"
+  panel="$TEAM_SKILL_DIR/scripts/panel/panel.js"
+  [ -f "$panel" ] || team_die "team monitor: 面板 bundle 缺失（$panel）——skills/teamsmith 安装不完整"
+  local -a args=("$panel" --root "$TEAM_ROOT" --team-cli "$TEAM_SKILL_DIR/scripts/team"
+                 --events "${events:-${TEAM_MONITOR_EVENTS:-4}}" --refresh "$interval"
+                 --tick-every "$TEAM_PULSE_INTERVAL" --tick-log "$TEAM_STATE_DIR/watchdog.tick.log")
+  [ -n "$mode" ] && args+=("$mode")
+  [ "$once" = "1" ] && args+=(--once)
+  [ "$with_pulse" = "0" ] && args+=(--no-pulse)
+  [ -n "$activity_arg" ] && args+=("$activity_arg")
+  [ -n "$width" ] && args+=(--width "$width")
+  [ -n "$height" ] && args+=(--height "$height")
+  # exec：窗口里的进程就是面板本身（不是它的 bash 父进程）——kill 窗口/PID 就是 kill 面板，
+  # 不会留下一个孤儿渲染进程；进程数也只多这一个。
+  exec "$runner" ${args[@]+"${args[@]}"}
 }
 
 # ---------------------------------------------------------------- pulse：只有一个后端（tmux 窗口）
@@ -591,6 +767,9 @@ team_pulse_window_state() { # running | idle | absent
 #       ③ 少一层容器。代价：tmux server 死了它也死（但那时 PM 也死了，重建时一起起来）。
 team_pulse_tmux_up() {
   team_require_cmd tmux "巡检需要 tmux（它就跑在同 session 的窗口里）"
+  # 窗口里的进程就是面板：没有 JS 运行时时先拒绝，绝不建一个渲染不出来的窗口
+  # （那样的窗口会被 pulse status 当成「在跑」，是 D19 明确要避免的假绿）
+  team_require_js_runtime "team pulse up"
   team_tmux_ensure_session
   tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
   local w st lw; w="$(team_pulse_window)"; st="$(team_pulse_window_state)"

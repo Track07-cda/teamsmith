@@ -461,3 +461,16 @@ The PM only continues its previous conversation if its CLI is told to; teamsmith
 | custom `TEAM_PM_CMD`, `TEAM_PM_RESUME_ARGS` empty | the restart is a **fresh** session; `team up` says `这次启动**不延续** PM 的历史上下文` and points at `docs/team/**` + `team inbox` | accept it — the durable record *is* the handoff, and the briefing starts with `team digest` — or configure the resume arguments (next row) |
 | custom `TEAM_PM_CMD`, `TEAM_PM_RESUME_ARGS` set but the template has no `{resume_args}` | the arguments are **not** passed; `team up` reports `lost:… 没有 {resume_args}` | reference the placeholder where the CLI expects it, e.g. `TEAM_PM_CMD='codex {resume_args} {prompt}'` (for codex: `TEAM_PM_RESUME_ARGS='resume --last'`) |
 | the CLI has its own session store and you restored that instead | teamsmith's `{session_id}` is *teamsmith's* dispatch id, not the vendor's session id | keep using the vendor's own resume flag as above; `team thread <agent> "…"` and `docs/team/**` stay the portable handoff |
+
+## 16. The panel (`team monitor`) does not start, or looks wrong
+
+The panel is a committed Ink bundle (`scripts/panel/panel.js`) run by a JavaScript runtime. Four things explain
+almost every report:
+
+| Symptom | Cause / fix |
+|---|---|
+| `team monitor` exits non-zero with `缺少 JS 运行时` / `JS 运行时版本过低`, and `team pulse up` refuses to create a window | **No runtime is a hard failure, not a degraded panel** (an empty panel reported as success is the false green this project refuses). Install `node` ≥ 20 or `bun` ≥ 1.3, or point `TEAM_JS_BIN` at an absolute path. `TEAM_REQUIRE_JS=0` only downgrades the `team doctor` row — the panel still needs a runtime in every mode |
+| `team doctor` fails with `JS 运行时` but `node --version` works in your shell | the window/shell `PATH` is not your interactive one (a runtime installed under `~/.bun/bin` is the usual case). Set `TEAM_JS_BIN=/absolute/path/to/node` (or to bun); `team paths` prints the resolved `js_runner` |
+| the activity column appeared and the layout looks more crowded than before | this is the one deliberate default change of the panel rewrite (v1.38.0): `TEAM_MONITOR_ACTIVITY` now defaults to `1`. `team monitor --no-activity` switches it off for one run, `TEAM_MONITOR_ACTIVITY=0` for the project — that restores the pre-v1.38.0 layout exactly |
+| the panel renders nothing useful in a plain terminal, a pipe or a `less` session | `TEAM_MONITOR_UI=text` forces the plain-text frame (no escape sequences, no screen clear); stdout not being a TTY already selects it automatically. `team monitor --print` is the same frame as a one-shot observer, and `team monitor --json` is the machine-readable form |
+| you edited something under `scripts/panel/src/` and the panel did not change | the sources are never on the runtime path — `panel.js` is what runs. A maintainer rebuilds it with `bun install --frozen-lockfile && bash skills/teamsmith/scripts/panel/build.sh` (needs the network and Bun ≥ 1.3), then commits the regenerated bundle. `node skills/teamsmith/scripts/panel/panel.js --version` and the bundle header name the pinned versions and the build command, so a stale artifact is visible without rebuilding |

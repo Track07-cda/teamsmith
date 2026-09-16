@@ -1,0 +1,24 @@
+{
+  "name": "teamsmith-panel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "teamsmith pulse panel: the Ink front end over the monitor.mjs data layer. build.sh writes the committed panel.js bundle; nothing installs these packages at runtime.",
+  "engines": {
+    "node": ">=20",
+    "bun": ">=1.3"
+  },
+  "scripts": {
+    "build": "bash build.sh",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "ink": "7.1.1",
+    "react": "19.3.0",
+    "react-devtools-core": "8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "@types/react": "19.3.0"
+  }
+}

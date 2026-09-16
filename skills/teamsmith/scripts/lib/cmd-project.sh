@@ -47,8 +47,9 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
                  巡检（同 session 的 pulse 窗口跑 monitor + 定时巡检；只有一个后端，无容器依赖）
   watchdog …／watchdog-status／install-watchdog／uninstall-watchdog
                  pulse 的旧名（别名期保留到 v2.0.0；先印一行弃用提示，再转交 pulse）
-  monitor [--once] [--interval N] [--events K] [--no-pulse]  状态监视器（pulse 窗口跑的就是它）：
-                 团队状态 + 每个 agent 的会话活动流；按周期顺带跑巡检
+  monitor [--once] [--print|--json] [--width N] [--height N] [--interval N] [--events K] [--no-pulse]
+                 状态面板（pulse 窗口跑的就是它）：默认 TUI（Ink），管道/--print 出纯文本，--json 出机读对象；
+                 非 TTY 自动走纯文本；按周期顺带跑巡检（--no-pulse = 只看不巡）。需要 node/bun/tsx（D19）
   watch [--once] [--interval N] [--ui]      手动/前台巡检（--ui = monitor）
   standby [on|off|status] [--reason "..."]  PM 主动停工：on 之后 pulse 不再叫醒（人处理完 off）
 
@@ -350,6 +351,27 @@ team_cmd_doctor() {
   else
     warn "缺 $TEAM_SPEC_DIR/（TEAM_REQUIRE_OPENSPEC=0 已降级）：跑 openspec init --tools none"
   fi
+
+  # JS 运行时（必需依赖，D19）：面板是提交进仓库的 Ink bundle（scripts/panel/panel.js），
+  # 跑它要 node/bun/tsx 之一。失败行必须点名解析到的东西（路径或版本），不能把「PATH 里没有」报成「没装」。
+  check "JS 运行时 node/bun"
+  local js_st js_path js_ver js_detail js_fix
+  IFS=$'\t' read -r js_st js_path js_ver js_detail <<< "$(team_js_check)"
+  js_fix="装 node ≥ ${TEAM_JS_MIN_NODE_MAJOR} 或 bun ≥ ${TEAM_JS_MIN_BUN_MINOR}；已装但不在 PATH 就设 TEAM_JS_BIN 指向绝对路径；临时可 TEAM_REQUIRE_JS=0 降级 doctor 这一行（面板仍需运行时）"
+  case "$js_st" in
+    ok) pass "$js_path ($js_ver)" ;;
+    missing)
+      if [ "${TEAM_REQUIRE_JS:-1}" = "1" ]; then fail "解析不到 node/bun/tsx：$js_fix"
+      else warn "解析不到（TEAM_REQUIRE_JS=0 已降级）：$js_fix"; fi ;;
+    bad)
+      if [ "${TEAM_REQUIRE_JS:-1}" = "1" ]; then fail "TEAM_JS_BIN=$js_path $js_detail：修好它，或改指向可执行的 node/bun"
+      else warn "TEAM_JS_BIN=$js_path $js_detail（TEAM_REQUIRE_JS=0 已降级）"; fi ;;
+    old)
+      if [ "${TEAM_REQUIRE_JS:-1}" = "1" ]; then fail "版本过低：$js_path $js_ver（$js_detail）——升级 node 或 bun"
+      else warn "版本过低：$js_path $js_ver（$js_detail；TEAM_REQUIRE_JS=0 已降级）"; fi ;;
+    *)
+      warn "找到了但版本判不出：${js_path:-?} ${js_ver:-}${js_detail:+（$js_detail）}——确认它能跑 --version" ;;
+  esac
 
   check "容量 / swap 底线"; local avail swapfree swaptotal
     read -r avail swapfree swaptotal <<< "$(team_mem_stats)"

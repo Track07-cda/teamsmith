@@ -94,9 +94,27 @@ the effective value of each is `TEAM_PULSE_<NAME>` > `TEAM_WATCH_<NAME>` > the d
 | `TEAM_PULSE_REBUILD_TMUX` | `0` | `0` = leave tmux alone (a missing session/window is only reported); `1` = allow rebuilding the session/PM window (self-recovery after a reboot) |
 | `TEAM_PULSE_MAX_RESTARTS` | `5` | maximum automatic PM starts per hour (guards against a crash loop). Counted from `state/pm-restarts.log` (real restarts) **and** `state/pm-start-attempts.log` (every attempt), so a start loop that never confirms is bounded too |
 | `TEAM_PULSE_WINDOW` | `pulse` | window name for the tmux backend. Alias period: a still-running legacy `watchdog` window is recognized as the backend; `team pulse restart` swaps it for the resolved name |
-| `TEAM_MONITOR_REFRESH` | `5` | monitor refresh interval (seconds) |
-| `TEAM_MONITOR_ACTIVITY` | `0` | `1` = append each agent's session activity stream below the panel (only windows running in this session); off by default |
-| `TEAM_MONITOR_EVENTS` | `4` | how many recent session events are shown per agent |
+| `TEAM_MONITOR_REFRESH` | `5` | the TUI's redraw period (seconds). Each redraw reads the data layer once — it is a redraw period, not a polling loop |
+| `TEAM_MONITOR_ACTIVITY` | `1` | `1` = the activity column is part of the layout (only windows running in this session, read as a bounded tail); `0` = the pre-v1.38.0 layout without it. **The default changed from `0` to `1` in v1.38.0** — this is the one default the panel rewrite moved. `--activity` / `--no-activity` still override the key in both directions |
+| `TEAM_MONITOR_EVENTS` | `4` | how many recent session events the activity column starts with per agent |
+| `TEAM_MONITOR_UI` | `auto` | which renderer to use: `auto` = the TUI when stdout is a terminal and plain text otherwise; `tui` forces the TUI renderer even when stdout is redirected; `text` forces the plain-text frame (no escape sequences, no screen clear) |
+| `TEAM_JS_BIN` | empty | absolute path to the JavaScript runtime the panel bundle runs on; empty = `node` > `bun` > `tsx` on `PATH`. The runtime is resolved in one place and reported by `team paths` (`js_runner`) |
+| `TEAM_REQUIRE_JS` | `1` | `1` = a JS runtime is a hard dependency like magic-context and OpenSpec: `team doctor` fails when none of `node`/`bun`/`tsx` resolves or the version is below the panel bundle's floor (`node` 20 or `bun` 1.3). `0` downgrades that **doctor row only** to a warning — the panel itself still needs a runtime, and `team monitor` fails loudly in every mode without one |
+
+`team monitor` itself has four output modes and two geometry overrides:
+
+```
+team monitor                         # TUI in a terminal; plain text when stdout is not a TTY
+team monitor --once                  # one frame through the same renderer selection, plus the due tick
+team monitor --print                 # exactly one plain-text frame: 0 escape bytes, no state writes, no tick
+team monitor --json                  # one JSON object {"panel": …, "activity": …}: same guarantees as --print
+team monitor --width N --height N    # override the geometry (the layout/degradation contract is checkable headlessly)
+```
+
+`--print` and `--json` are the observers: they never tick and never write into `TEAM_STATE_DIR`. `--once` and the
+long-running TUI keep today's tick semantics (one patrol tick per `TEAM_PULSE_INTERVAL`; `--no-pulse`, alias
+`--no-watchdog`, keeps the panel and stops the ticks). A missing runtime is a loud failure in every mode, never an
+empty panel reported as success.
 
 | `TEAM_PM_MODEL` | empty | the PM's own model; empty = `TEAM_DEFAULT_MODEL` |
 | `TEAM_PM_SESSION_ID` | empty | empty = `pi -c` (continue the previous session in this directory, keeping the PM's history). Explicit session id for a CLI whose session concept you control (`{session_id}` in `TEAM_PM_CMD`); on the built-in Pi path it still becomes `--session-id <id>` |

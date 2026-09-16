@@ -206,11 +206,17 @@ team_load_config() {
   TEAM_PULSE_WINDOW="$(team_pulse_var WINDOW pulse)"           # tmux 后端的窗口名（旧窗口名 watchdog 的迁移见 team_pulse_legacy_window）
   TEAM_REVIEW_TIMEOUT="${TEAM_REVIEW_TIMEOUT:-1800}"       # team review 跑门禁的硬超时（秒）
   TEAM_MONITOR_REFRESH="${TEAM_MONITOR_REFRESH:-5}"        # 监视器刷新间隔（秒）
-  TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 打开活动流时，每个 agent 显示最近几条事件
-  # 活动流（读各 agent 的 Pi 会话 JSONL）默认**关闭**：
-  # 巡检只服务当前 tmux session（窗口/任务/待办/容量）；翻别人的会话既吵又贵（几 MB/次 × 每几秒）。
-  # 需要时显式打开：team monitor --activity 或 TEAM_MONITOR_ACTIVITY=1
-  TEAM_MONITOR_ACTIVITY="${TEAM_MONITOR_ACTIVITY:-0}"
+  TEAM_MONITOR_EVENTS="${TEAM_MONITOR_EVENTS:-4}"          # 活动列里每个 agent 显示最近几条事件
+  # 活动列默认**打开**（v1.38.0 的契约变更，见 openspec panel 能力）：新布局给了它专门一列，
+  # 默认关等于留一列空白。仍然只覆盖本 session 在跑的窗口，仍然是有界尾窗（64KiB）。
+  # 回到旧布局：TEAM_MONITOR_ACTIVITY=0（或 `team monitor --no-activity`）。
+  TEAM_MONITOR_ACTIVITY="${TEAM_MONITOR_ACTIVITY:-1}"
+  TEAM_MONITOR_UI="${TEAM_MONITOR_UI:-auto}"              # auto（TTY 才走 TUI）| tui（强制）| text（纯文本）
+  # JS 运行时（必需依赖，D19）：面板是提交进仓库的 Ink bundle，需要 node/bun/tsx 之一跑它。
+  # TEAM_JS_BIN（绝对路径）优先，其次 PATH 上的 node → bun → tsx（解析只在 team_js_check 一处）。
+  # TEAM_REQUIRE_JS=0 只把 doctor 那一行降级成警告；面板本身仍然要运行时（空面板 = 假绿）。
+  TEAM_JS_BIN="${TEAM_JS_BIN:-}"
+  TEAM_REQUIRE_JS="${TEAM_REQUIRE_JS:-1}"
   # 看板里的 todo/wip 算不算“要叫醒 PM 的活”：默认不算（backlog 长期存在，不该每 15 分钟敲一次）；
   # blocked / 未读通知 / 待复验 / 停了的 agent 仍然算。想连 backlog 一起提醒就设 1。
   TEAM_PULSE_PENDING_BOARD="$(team_pulse_var PENDING_BOARD 0)"
@@ -316,23 +322,101 @@ team_branch_for_agent() { # <agent> <ID> → 该 agent 在这个任务上应该�
 
 # 输出一份「可直接写进派单提示词」的路径清单（agent_adapter = 当前生效的 agent 适配器）
 team_paths_json() {
-  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s", "openspec_bin": "%s", "spec_dir": "%s", "require_magic_context": "%s", "require_openspec": "%s", "pulse_window": "%s", "pulse_interval": "%s" }\n' \
+  printf '{ "project": "%s", "main_root": "%s", "worktree": "%s", "docs": "%s", "worktrees": "%s", "session": "%s", "pm_window": "%s", "agent_adapter": "%s", "agent_bin": "%s", "openspec_bin": "%s", "spec_dir": "%s", "require_magic_context": "%s", "require_openspec": "%s", "pulse_window": "%s", "pulse_interval": "%s", "js_runner": "%s", "require_js": "%s" }\n' \
     "$(team_json_escape "$TEAM_PROJECT")" "$(team_json_escape "$TEAM_MAIN_ROOT")" "$(team_json_escape "$TEAM_ROOT")" \
     "$(team_json_escape "$TEAM_DOCS_ABS")" "$(team_json_escape "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR")" \
     "$(team_json_escape "$TEAM_SESSION")" "$(team_json_escape "$TEAM_PM_WINDOW")" \
     "$(team_json_escape "$(team_agent_adapter_label)")" "$(team_json_escape "$(team_agent_bin_path)")" \
     "$(team_json_escape "$(team_openspec_bin_path)")" "$(team_json_escape "$(team_spec_dir_abs)")" \
     "$(team_json_escape "$TEAM_REQUIRE_MAGIC_CONTEXT")" "$(team_json_escape "$TEAM_REQUIRE_OPENSPEC")" \
-    "$(team_json_escape "$(team_pulse_window)")" "$(team_json_escape "$TEAM_PULSE_INTERVAL")"
+    "$(team_json_escape "$(team_pulse_window)")" "$(team_json_escape "$TEAM_PULSE_INTERVAL")" \
+    "$(team_json_escape "$(team_js_runner)")" "$(team_json_escape "$TEAM_REQUIRE_JS")"
 }
 
-# 能跑普通 .mjs 的运行时（monitor.mjs 是普通 JS，不需要 TS 剥离能力；
-# 之前复用了 team_ts_runner，于是只有“老 node、无 bun/tsx”的机器上活动流会被误判为不可用）
-team_js_runner() {
-  if team_have_cmd node; then printf 'node'
-  elif team_have_cmd bun; then printf 'bun'
-  elif team_have_cmd tsx; then printf 'tsx'
+# ---------------------------------------------------------------- JS 运行时（必需依赖，D19）
+# 面板（`scripts/panel/panel.js` 的 Ink bundle）要 node/bun/tsx 之一；解析规则只有这一处：
+#   TEAM_JS_BIN（绝对路径）＞ PATH 上的 node ＞ bun ＞ tsx
+# doctor / `team paths` / `team monitor` / `team pulse up` 都读 team_js_check，不各自拼兜底。
+# 返回**绝对路径**（不只名字）：窗口/子进程的 PATH 可能比交互 shell 窄（M8.1 的实测教训）。
+TEAM_JS_MIN_NODE_MAJOR=20
+TEAM_JS_MIN_BUN_MINOR="1.3"
+
+team_js_runner() { # → 解析出的运行时绝对路径；解析不到（含 TEAM_JS_BIN 不可用）→ 空
+  local p
+  if [ -n "${TEAM_JS_BIN:-}" ]; then
+    [ -x "$TEAM_JS_BIN" ] && printf '%s\n' "$TEAM_JS_BIN"
+    return 0
   fi
+  for p in node bun tsx; do
+    if p="$(command -v "$p" 2>/dev/null)" && [ -n "$p" ]; then printf '%s\n' "$p"; return 0; fi
+  done
+  return 0
+}
+
+team_js_version() { # <可执行路径> → 版本字符串（v24.19.0 / 1.3.14）；判不出 → 空
+  local v
+  v="$("$1" --version 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+  case "$v" in ''|*[!0-9A-Za-z.+-]*) v="" ;; esac
+  printf '%s\n' "$v"
+}
+
+# → "<status>\t<路径>\t<版本>\t<说明>"；status: ok | missing | bad | old | unknown
+#   ok      = 解析到且满足最低版本
+#   missing = node/bun/tsx 都不在，TEAM_JS_BIN 也没指向什么
+#   bad     = TEAM_JS_BIN 指的东西不存在/不可执行（点名那个路径，不当成「没装」）
+#   old     = 版本低于 bundle 声明的底线（node 20 / bun 1.3）
+#   unknown = 找到了但 --version 读不出/判不出（警告，不冒充失败）
+team_js_check() {
+  local path ver base maj min
+  if [ -n "${TEAM_JS_BIN:-}" ]; then
+    if [ ! -e "$TEAM_JS_BIN" ]; then printf 'bad\t%s\t\t不存在\n' "$TEAM_JS_BIN"; return 0; fi
+    if [ ! -x "$TEAM_JS_BIN" ]; then printf 'bad\t%s\t\t不可执行\n' "$TEAM_JS_BIN"; return 0; fi
+    path="$TEAM_JS_BIN"
+  else
+    path="$(team_js_runner)"
+    [ -n "$path" ] || { printf 'missing\t\t\t\n'; return 0; }
+  fi
+  ver="$(team_js_version "$path")"
+  [ -n "$ver" ] || { printf 'unknown\t%s\t\t--version 读不到\n' "$path"; return 0; }
+  base="$(basename "$path")"
+  case "$base" in
+    *bun*)
+      IFS=. read -r maj min _ <<< "${ver#v}"
+      case "${maj:-}" in ''|*[!0-9]*) printf 'unknown\t%s\t%s\t版本判不出\n' "$path" "$ver"; return 0 ;; esac
+      if [ "$maj" -gt 1 ] || { [ "$maj" -eq 1 ] && [ "${min:-0}" -ge 3 ] 2>/dev/null; }; then
+        printf 'ok\t%s\t%s\t\n' "$path" "$ver"
+      else
+        printf 'old\t%s\t%s\t需要 bun ≥ %s\n' "$path" "$ver" "$TEAM_JS_MIN_BUN_MINOR"
+      fi ;;
+    *)
+      maj="${ver#v}"; maj="${maj%%.*}"
+      case "$maj" in ''|*[!0-9]*) printf 'unknown\t%s\t%s\t版本判不出\n' "$path" "$ver"; return 0 ;; esac
+      if [ "$maj" -ge "$TEAM_JS_MIN_NODE_MAJOR" ]; then printf 'ok\t%s\t%s\t\n' "$path" "$ver"
+      else printf 'old\t%s\t%s\t需要 node ≥ %s\n' "$path" "$ver" "$TEAM_JS_MIN_NODE_MAJOR"; fi ;;
+  esac
+}
+
+# 面板/巡检真的需要运行时：解析不到/不可用就一行说清修法。
+# 注意 TEAM_REQUIRE_JS=0 **不**影响这里（那只降级 doctor 的一行）：空面板报成功才是假绿。
+team_require_js_runtime() { # <用途>
+  local what="${1:-panel}" st path ver detail
+  IFS=$'\t' read -r st path ver detail <<< "$(team_js_check)"
+  case "$st" in
+    ok) return 0 ;;
+    missing) team_die "$what: 缺少 JS 运行时（node/bun/tsx 都解析不到）——装 node ≥ ${TEAM_JS_MIN_NODE_MAJOR} 或 bun ≥ ${TEAM_JS_MIN_BUN_MINOR}，或设 TEAM_JS_BIN 指向绝对路径" ;;
+    bad)     team_die "$what: TEAM_JS_BIN 不可用（$path：$detail）——修好它，或改指向可执行的 node/bun" ;;
+    old)     team_die "$what: JS 运行时版本过低（$path $ver：$detail）——升级 node 或 bun" ;;
+    *)       team_die "$what: JS 运行时无法确认（$path ${ver:+$ver }$detail）——检查它能不能跑 --version" ;;
+  esac
+}
+
+team_js_runner_text() { # → doctor/日志用的一行："<路径> (<版本>)"；没有 → 空
+  local st path ver _detail
+  IFS=$'\t' read -r st path ver _detail <<< "$(team_js_check)"
+  case "$st" in
+    ok) printf '%s (%s)\n' "$path" "$ver" ;;
+    *)  printf '\n' ;;
+  esac
 }
 
 # 能直接 import .ts 的运行时（node 需启用类型剥离，否则用 bun/tsx）

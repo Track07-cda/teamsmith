@@ -84,6 +84,7 @@ case "$CMD" in
   resume)     team_cmd_resume "$@" ;;
   watch)      team_cmd_watch "$@" ;;
   monitor)    team_cmd_monitor "$@" ;;
+  __panel-data) team_cmd_panel_data "$@" ;;   # 内部：panel.js 的数据源（不出现在 help 里）
   pulse)              team_cmd_pulse "$@" ;;
   install-watchdog)   team_cmd_install_watchdog "$@" ;;    # 旧名（别名期到 v2.0.0）：印弃用提示后转 pulse
   uninstall-watchdog) team_cmd_uninstall_watchdog "$@" ;;  # 同上
