@@ -5,9 +5,7 @@
 What teamsmith requires from its environment (long-lived PM memory and an OpenSpec root) and where the truth lives:
 OpenSpec owns specs and the change workflow, teamsmith owns the evidence ledger, and the disk wins over any memory.
 Why: `references/philosophy.md` (handover-ready, no rival spec system) and `references/openspec.md`.
-
 ## Requirements
-
 ### Requirement: magic-context and OpenSpec are required dependencies
 
 The project SHALL treat the PM's cross-session memory (magic-context) and OpenSpec as required: `team doctor` MUST
@@ -53,10 +51,13 @@ cannot be made falsifiable yet MUST be written as prose in `references/` instead
 
 #### Scenario: An invalid spec fails the project gate
 
-- **GIVEN** a spec whose requirement has no scenario
-- **WHEN** the project gate runs (`TEAM_GATES`; `openspec validate --all --strict` alone stays green here)
-- **THEN** `bash skills/teamsmith/tests/spec-lint.sh` exits non-zero and names the offending spec
-- **AND** restoring the scenario makes the lint and the gate exit 0 again
+- **GIVEN** a change whose delta would drop a scenario from an existing requirement (the measured defect class:
+  both arbiters were run against exactly this shape on 2026-09-16)
+- **WHEN** the project gate runs (`TEAM_GATES`), and when the phase-5 trial archive runs on a scratch copy
+- **THEN** `openspec validate --all --strict` refuses the change at gate time, and the trial archive refuses it with
+  "scenario(s) not present in the modified block" — the base specs themselves are only ever written through archive
+  (direct edits are out of process), so no gate can see a base spec that archive did not produce
+- **AND** restoring the scenario in the delta makes both pass
 
 ### Requirement: The disk is the source of truth, memory is a convenience
 
@@ -75,3 +76,4 @@ a restart or a compaction, without reading any memory store.
 - **WHEN** a key decision was made in a task
 - **THEN** its rationale and impact are written in `docs/team/DECISIONS.md` (or the task's review record) and are
   readable without any memory tooling
+
