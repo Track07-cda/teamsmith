@@ -24,6 +24,14 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.38.0 · 2026-09-16
+
+**巡检窗口变成 Ink 面板（pulse-tui-panel）**
+
+TTY 下渲染新的 Ink 前端：PM 状态、待办、延后投递队列、容量火花线同屏。数据层一字未动
+（monitor.mjs --json 逐字节兼容）；`--print`/非 TTY 保持机读；无 Node/Bun 按 TEAM_REQUIRE_JS 降级。
+面板是提交进仓库的单文件 bundle（832KB），build.sh + bun.lock 可复现构建，离线零安装。
+
 ## v1.37.0 · 2026-09-16
 
 **巡检改名：watchdog → pulse（openspec change `rename-watchdog-to-pulse`，P7/P8）**
