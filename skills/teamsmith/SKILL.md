@@ -96,6 +96,7 @@ when they conflict, the creed wins and the process gets fixed.
 ## The PM loop (what you actually do)
 
 > On start (or after being woken): `team digest` → `team inbox --ack` → `team resume --dry-run` → `team pulse status`.
+> If the pulse is not running and you are not on standby, bringing it up (`team pulse up`) is part of your job; on standby, leave it alone.
 > Division of labour: **the pulse is a metronome** ("is there work?" every 15 minutes by default): it wakes you
 > only when there is pending work, stays silent otherwise, and does not require you to keep running. Starting,
 > stopping and resuming agents, verification and merging are all yours.

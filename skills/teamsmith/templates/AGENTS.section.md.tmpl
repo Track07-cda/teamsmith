@@ -95,6 +95,8 @@ The pulse is a **metronome that wakes the PM**, not a daemon that keeps it alive
 - **The PM owns the pulse**: `team pulse up|status|logs|down` -- by default it runs `team monitor` in a
   `pulse` window of the same tmux session (team status on top, per-agent activity below, optional) and patrols
   on an interval. There is exactly one backend (that window) -- no container, no systemd.
+- **Bring it up at session start**: if the pulse is not running and you are not on standby, `team pulse up` is part of
+  the PM's job -- no one else will do it; while `standby on` is set, leave it alone.
 - Every **15 minutes** by default (`TEAM_PULSE_INTERVAL=900`, 300-3600 recommended) it asks "is there work for the
   PM?": unread notifications / reports awaiting verification / board todo·wip (opt-in) / blocked / agents with
   unfinished tasks that stopped running.
