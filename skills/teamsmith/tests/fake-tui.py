@@ -8,7 +8,12 @@
   - 把已经提交的消息画在框上方（这样 pane 指纹会变，投递确认才有意义）；
   - 理解 bracketed paste（`ESC[200~ … ESC[201~`）：真实 Pi 把粘贴当**一个输入内容**，
     没有这个语义，三行草稿会被拆成三条提交（E3 §3.2 实测）；
-  - 把人打进框里的字符与已有草稿**拼接**（旧实现下这就是「草稿被粘走」的现场）。
+  - 把人打进框里的字符与已有草稿**拼接**（旧实现下这就是「草稿被粘走」的现场）；
+  - 输入框是一个带**光标**的编辑器（不是尾部字符串）：M17 的收回键序 `ctrl+a` + `ctrl+k` 要
+    无论光标停在哪一行哪一列都能清空，夹具就得按 Pi 0.85.1 的语义实现这些键
+    （`ctrl+a` 行首 / `ctrl+k` 删到行尾、行尾并下一行 / `ctrl+u` 删到行首 / `ctrl+e` 行尾 /
+    `backspace` 删光标前一个字符、行首并上一行）——否则夹具会把控制字节当普通字符插进框里，
+    测出来的「已收回」是假的。
 
 env：
   FAKE_TUI_DRAFT             输入框初始内容（可含 \n）
@@ -85,6 +90,9 @@ class Tui:
         self.cols = int(os.environ.get("FAKE_TUI_COLS") or 80)
         self.committed = os.environ.get("FAKE_TUI_DRAFT", "")
         self.typed = ""
+        # 光标 = text() 里的字符下标（Python 字符，不是显示列）。默认在末尾；编辑器键会移动它。
+        # M17：收回键序的夹具判据必须能分辨「光标在哪」而不是只认尾部。
+        self.cursor = len(self.committed)
         self.trailing = os.environ.get("FAKE_TUI_CURSOR_TRAILING", "0") == "1"
         self.cursor_top = os.environ.get("FAKE_TUI_CURSOR_TOP", "0") == "1"
         self.draft_on_paste = os.environ.get("FAKE_TUI_DRAFT_ON_PASTE", "")
@@ -106,6 +114,43 @@ class Tui:
     # ------------------------------------------------------------------ 渲染
     def text(self) -> str:
         return self.committed + self.typed
+
+    # ------------------------------------------------------------------ 编辑器模型
+    def _set_text(self, s: str) -> None:
+        """整体替换框内容；committed/typed 的旧切分只用于兼容（显示/提交都走 text()）。
+        不碰光标：调用方在替换后自行把光标放到新位置（不变式 0 <= cursor <= len(text)）。"""
+        k = min(len(self.committed), len(s))
+        self.committed, self.typed = s[:k], s[k:]
+
+    def _insert(self, s: str) -> None:
+        """在光标处插入（打字/粘贴的模拟：真实编辑器就是插在光标前）。"""
+        t = self.text()
+        self._set_text(t[: self.cursor] + s + t[self.cursor :])
+        self.cursor += len(s)
+
+    def _line_start(self) -> int:
+        return self.text().rfind("\n", 0, self.cursor) + 1
+
+    def _line_end(self) -> int:
+        e = self.text().find("\n", self.cursor)
+        return len(self.text()) if e == -1 else e
+
+    def _cursor_visual(self) -> tuple:
+        """光标在**折行后的显示坐标** (行号, 显示列)。守卫是光标锚定的，夹具必须把光标画在真实
+        编辑器会画的位置（长行折行后光标落到下一显示行）。"""
+        s = self.text()
+        before = s[: self.cursor]
+        line_idx = before.count("\n")
+        col = len(before) - (before.rfind("\n") + 1)
+        lines = s.split("\n")
+        row_idx = 0
+        for i, line in enumerate(lines):
+            if i >= line_idx:
+                break
+            row_idx += len(_wrap(line, self.cols))
+        prefix = lines[line_idx][:col] if line_idx < len(lines) else ""
+        vcol = sum(_cell_width(ch) for ch in prefix)
+        return row_idx, vcol
 
     def draw(self) -> None:
         body = self.text().split("\n")
@@ -144,8 +189,8 @@ class Tui:
         elif self.trailing:
             crow, ccol = rows[min(n, 3) - 1], 1
         else:
-            crow = rows[min(n, 3) - 1]
-            ccol = min(len(_clip(body[min(n, 3) - 1], self.cols)), self.cols - 1) + 1
+            vrow, vcol = self._cursor_visual()
+            crow, ccol = rows[min(vrow, 2)], min(vcol, self.cols - 1) + 1
         out.append("\x1b[%d;%dH" % (crow, ccol))
         sys.stdout.write("".join(out))
         sys.stdout.flush()
@@ -155,8 +200,8 @@ class Tui:
         with open(self.log, "a") as fh:
             fh.write("SUBMIT:" + payload.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r") + "\n")
         self.conversation.append(payload)
-        self.committed = ""
-        self.typed = ""
+        self._set_text("")
+        self.cursor = 0
 
     # ------------------------------------------------------------------ 事件循环
     def _accept_paste(self, raw: bytes, final: bool = True) -> None:
@@ -175,13 +220,13 @@ class Tui:
             if self.stall_ms:
                 # V8-N3：真实 TUI 是异步渲染的——折叠占位符不是一帧画完的。先画一半
                 # （`[paste #N +1`），stall_ms 之后才补全成完整占位符。
-                idx = len(self.typed)
-                self.typed += f"[paste #{self.paste_n} +1"
+                idx = self.cursor
+                self._insert(f"[paste #{self.paste_n} +1")
                 self._stall = (time.monotonic() + self.stall_ms / 1000.0, self.paste_n, nlines + 1, idx)
             else:
-                self.typed += f"[paste #{self.paste_n} +{nlines + 1} lines]"
+                self._insert(f"[paste #{self.paste_n} +{nlines + 1} lines]")
         else:
-            self.typed += text
+            self._insert(text)
 
     TERM = b"\x1b[201~"
 
@@ -206,11 +251,20 @@ class Tui:
                     timeout = max(0.0, self._stall[0] - time.monotonic())
                     ready, _, _ = select.select([0], [], [], timeout)
                     if not ready:
-                        # 补全半成品占位符（期间到达的键接在占位符后面，与真实 TUI 一致）
+                        # 补全半成品占位符（期间到达的键接在占位符后面，与真实 TUI 一致）。
+                        # M17：收回路径可能在半成品还没画完时就把它删了（ctrl+a/ctrl+k 清空了框）
+                        # ——那时不再补全，否则「已收回」的框会自己长出文字来。
                         _, n, k, idx = self._stall
                         partial = f"[paste #{n} +1"
-                        assert self.typed[idx : idx + len(partial)] == partial
-                        self.typed = self.typed[:idx] + f"[paste #{n} +{k} lines]" + self.typed[idx + len(partial) :]
+                        t = self.text()
+                        if t[idx : idx + len(partial)] == partial:
+                            completed = f"[paste #{n} +{k} lines]"
+                            delta = len(completed) - len(partial)
+                            new_cursor = self.cursor + delta if self.cursor > idx else self.cursor
+                            self._set_text(t[:idx] + completed + t[idx + len(partial) :])
+                            self.cursor = max(0, min(new_cursor, len(self.text())))
+                        else:
+                            self.cursor = min(self.cursor, len(self.text()))
                         self._stall = None
                         self.draw()
                         continue
@@ -241,8 +295,9 @@ class Tui:
                         pending = pending[6:]
                         paste = True
                         if self.draft_on_paste:
-                            # 「检查 → 粘贴」之间有人开始打字：起草稿，粘贴内容接在它后面
-                            self.committed = self.draft_on_paste + self.committed
+                            # 「检查 → 粘贴」之间有人开始打字：人的字落在光标处（= 我们粘贴的落点
+                            # 之前），随后我们的粘贴内容接在它后面
+                            self._insert(self.draft_on_paste)
                             self.draft_on_paste = ""
                         continue
                     if pending[0:1] == b"\x1b":
@@ -255,25 +310,57 @@ class Tui:
                         if self.text() != "":
                             if self.eat_enter:
                                 # 吞掉 Enter：框清了，没有提交（对话区永远不会有这条）
-                                self.committed = ""
-                                self.typed = ""
+                                self._set_text("")
+                                self.cursor = 0
                             else:
                                 self.submit()
                         self.draw()
                         continue
                     if ch == b"\x7f":
-                        if self.typed:
-                            self.typed = self.typed[:-1]
-                        else:
-                            self.committed = self.committed[:-1]
+                        # backspace：删光标前一个字符；已在行首则把上一行并上来（Pi handleBackspace）
+                        t = self.text()
+                        ls = self._line_start()
+                        if self.cursor > ls:
+                            self._set_text(t[: self.cursor - 1] + t[self.cursor :])
+                            self.cursor -= 1
+                        elif ls > 0:
+                            self._set_text(t[: ls - 1] + t[ls:])
+                            self.cursor = ls - 1
                         self.draw()
                         continue
                     if ch == b"\x15":
-                        self.committed = ""
-                        self.typed = ""
+                        # ctrl+u = deleteToStartOfLine（Pi 0.85.1 默认键位；不是「清空整个框」）
+                        t = self.text()
+                        ls = self._line_start()
+                        if self.cursor > ls:
+                            self._set_text(t[:ls] + t[self.cursor :])
+                            self.cursor = ls
+                        elif ls > 0:
+                            self._set_text(t[: ls - 1] + t[ls:])
+                            self.cursor = ls - 1
                         self.draw()
                         continue
-                    self.typed += self.decoder.decode(ch)
+                    if ch == b"\x01":
+                        # ctrl+a = 光标到行首（M17 收回键序的第一半）
+                        self.cursor = self._line_start()
+                        self.draw()
+                        continue
+                    if ch == b"\x0b":
+                        # ctrl+k = deleteToEndOfLine；已在行尾则把下一行并上来（M17 收回键序的第二半）
+                        t = self.text()
+                        le = self._line_end()
+                        if self.cursor < le:
+                            self._set_text(t[: self.cursor] + t[le:])
+                        elif le < len(t):
+                            self._set_text(t[:le] + t[le + 1 :])
+                        self.draw()
+                        continue
+                    if ch == b"\x05":
+                        # ctrl+e = 光标到行尾
+                        self.cursor = self._line_end()
+                        self.draw()
+                        continue
+                    self._insert(self.decoder.decode(ch))
                     self.draw()
         finally:
             termios.tcsetattr(0, termios.TCSADRAIN, base)

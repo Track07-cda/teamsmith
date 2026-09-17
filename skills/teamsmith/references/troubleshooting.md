@@ -94,10 +94,27 @@ Honest edges (documented, not hidden):
   **single-line draft sitting exactly on that slot is invisible** — the box can read empty and a send may glue
   onto it. Any draft of two lines or more, or a single line on any other row, is caught. This is geometrically
   forced without matching the hint's text, which varies across Pi versions.
-- **A draft-raced entry is terminal.** If a draft appeared between the check and the paste (the pre-`Enter`
-  fingerprint comparison catches it, even when the TUI folded your paste into `[paste #N +K lines]`), the payload
-  already reached the box once — it may have ridden your own submit to the agent. No automatic path, `flush --now`
-  included, ever pastes it again: it stays in `held/` until you drop it or re-send the content yourself.
+- **Giving up the `Enter` never leaves our text in your box (M17).** When the pre-`Enter` re-check cannot
+  confirm that the box holds only our payload, the drain first asks one more question: does the box hold *only*
+  what we typed? Verbatim, a single `[paste #N +K lines]` placeholder whose `+K` matches, the prefix/suffix
+  display window, an empty box, or the whole box being our own half-rendered placeholder frame all count as
+  ours — then the drain clears it with Pi's own editor keys (`ctrl+a` line start + `ctrl+k` delete-to-line-end /
+  join-next-line, repeated; independent of where the cursor sits, and an idempotent no-op on an empty box) and
+  verifies the box ended up empty before holding the entry. The outcome is recorded in the hold reason:
+  `draft-raced-retracted` means nothing of ours is left in the box. If anything else is in the box — your draft,
+  a second folded paste, an unreadable box — **not one key is sent** (leave it, never delete it) and the hold reason is
+  `draft-raced-left`: our payload may sit in the box next to your text, exactly as before, and the log line says
+  `框里已有人的内容，未动`. Both are **terminal**: the payload reached the box once and may have ridden your own
+  `Enter` to the agent, so no automatic path, `flush --now` included, ever pastes it again; the entry stays in
+  `held/` until you drop it or re-send the content yourself. `team status` / `team digest` show the split on their
+  `outbox …` line (`held N：已收回 X · 留在框里 Y`), and `team outbox list` plus the panel's queue page show the
+  per-entry reason.
+- **The retraction keys are Pi's bindings, and the retraction is verified.** The clear uses the editor's own
+  `ctrl+a`/`ctrl+k` semantics (Pi 0.85.1). On a TUI that binds them differently the clear may not take effect;
+  the drain reads the box back and, if anything is still there, reports the hold as `draft-raced-left` (residue
+  in the box) rather than claiming a retraction it cannot see. The window between the “box holds only ours”
+  read and the clear keys is one command wide — same class of residual window as check → type, documented here
+  rather than hidden.
 - **Rule-looking rows inside your own draft are not borders.** A pasted markdown separator or table border is a
   `─` row; the guard pairs the bottom border with the **highest** qualifying row above it (a full-rule row of
   equal width, or the E3-era spinner shape), so a short draft rule row — and also an equal-width or wider one
@@ -120,7 +137,10 @@ Honest edges (documented, not hidden):
   the completed placeholder, occupying a whole line), the guard neither settles nor calls it a race — it waits
   (about a second, bounded) for the render to finish (V8-N3). The test matches a whole line, never a substring,
   and the payload itself is checked verbatim first — so a message whose own text contains `[paste #` delivers
-  normally (V8-N2/V9-B1).
+  normally (V8-N2/V9-B1). If the wait is exhausted while the frame is still half-drawn, the payload is
+  **retracted** (the whole box is our own half-frame, so the clear keys are safe) and the entry is held as
+  `draft-raced-retracted`; if anything else appeared in the box by then, not one key is sent and the hold is
+  `draft-raced-left`.
 - **Two narrow acceptance windows, on purpose.** (a) When the visible box holds only a prefix/suffix of the
   payload, the re-check accepts it (scrolling and truncated display windows look exactly like that; V8-N6). If
   an `Enter` lands in that window while the paste is still arriving — yours or the drain's own — a partial paste
@@ -140,15 +160,17 @@ Honest edges (documented, not hidden):
 - **Check → type is not atomic.** The guard re-checks immediately before typing and again (by fingerprint) before
   pressing Enter, and holds the message when a draft appeared in between; the residual window is one command wide
   (no retry loop).
-- **A stalled render is held but recoverable (V9-B6).** When the TUI draws a folded paste slower than the bounded
-  wait, the drain sends no `Enter` and holds the entry with reason `stall-timeout` — **not** the terminal
-  `draft-raced`: a later drain (watchdog tick or `team outbox flush`) finishes the job by pressing the single
-  missing `Enter` while the box still holds only that payload, and never pastes it again. If the box no longer
-  holds only the payload (you typed, or you already submitted it with your own `Enter`), the entry stays in
-  `held/` for you to verify and drop or re-send — the tool will not risk a second paste.
+- **A stalled render is retracted, not left in the box (M17; this supersedes the V9-B6 recovery).** When the TUI
+  draws a folded paste slower than the bounded wait, the drain sends no `Enter`, clears our half-drawn placeholder
+  back out of the box, and holds the entry with reason `draft-raced-retracted` — terminal, because the payload was
+  in the box once and any later automatic paste could double-send. An entry an **older** teamsmith already held
+  with reason `stall-timeout` (the payload still in the box as a completed `[paste #N +K lines]` placeholder) is
+  still finished by the next drain: it presses the single missing `Enter` while the box holds only that payload
+  and never pastes it again; if the box no longer holds only the payload, the entry stays in `held/` for you to
+  verify and drop or re-send.
 - **Expiry holds, it never types:** after `TEAM_DEFER_TTL` (default 300 s) an undeliverable entry moves to
   `state/outbox/held/` with a line in `state/outbox/HOLDING.log`, and a later drain still delivers it once the box
-  clears (unless its reason is `draft-raced` or `unconfirmed`, which are terminal). The payload is always already durable in the
+  clears (unless its reason is `draft-raced-left`, `draft-raced-retracted` or `unconfirmed`, which are terminal). The payload is always already durable in the
   recipient's inbox (or `state/nudges.log` for a wake) by the time the hold completes, so an expired hold can
   never lose a message — and a delivery the drain confirmed never appears in the inbox at all.
 

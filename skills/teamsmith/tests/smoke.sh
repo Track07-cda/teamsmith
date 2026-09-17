@@ -4319,6 +4319,39 @@ assert_not "$TMP/ob-status-empty.log" "outbox" "12b-g 空队列时 status 一行
 ob_run env OB_BOX="$OB_BOX" $TEAM status >"$TMP/ob-status-empty2.log" 2>&1 || true
 assert_not "$TMP/ob-status-empty2.log" "outbox" "12b-g 空队列（只剩 forced.log）时也不加行"
 
+# M17：held 条目按「框里有没有残留」分档。HOLDING.log 的 reason 是格式契约，digest / status /
+# outbox list / 面板队列块都从它读 —— 这里用两份手工落盘的 held 条目把四个出口全钉住。
+ob_reset
+OB_RES_SEQ=0
+mk_residue_entry() { # <payload> <reason> → 打印条目名
+  local pl="$1" why="$2" name
+  OB_RES_SEQ=$((OB_RES_SEQ + 1))
+  mkdir -p "$REPO/.pi/team/state/outbox/held"
+  name="$(date +%s)000-$(printf '%04d' "$OB_RES_SEQ")-residue.msg"
+  { printf 'kind: say\ntarget: %s:dev\nfrom: pm\ncreated: x\ndedup: -\n---\n' "$SESSION"; printf '%s\n' "$pl"; } \
+    > "$REPO/.pi/team/state/outbox/held/$name"
+  printf '%s name=%s reason=%s held-since=x attempts=1 target=%s:dev\n' \
+    "$(date -u +%FT%TZ)" "$name" "$why" "$SESSION" >> "$REPO/.pi/team/state/outbox/HOLDING.log"
+  printf '%s\n' "$name"
+}
+mk_residue_entry 'residue retracted' draft-raced-retracted >/dev/null
+mk_residue_entry 'residue left' draft-raced-left >/dev/null
+ob_run env OB_BOX="$OB_BOX" $TEAM status >"$TMP/ob-residue-status.log" 2>&1 || true
+ob_run env OB_BOX="$OB_BOX" $TEAM digest >"$TMP/ob-residue-digest.log" 2>&1 || true
+assert_has "$TMP/ob-residue-status.log" "已收回 1 · 留在框里 1" "12b-g M17：status 的 outbox 行带「已收回/留在框里」分档"
+assert_has "$TMP/ob-residue-digest.log" "已收回 1 · 留在框里 1" "12b-g M17：digest 同一行也带分档"
+ob_run env OB_BOX="$OB_BOX" $TEAM outbox list >"$TMP/ob-residue-list.log" 2>&1 || true
+assert_has "$TMP/ob-residue-list.log" "held-reason=draft-raced-retracted" "12b-g M17：outbox list 逐条给出「已收回」状态"
+assert_has "$TMP/ob-residue-list.log" "held-reason=draft-raced-left" "12b-g M17：outbox list 逐条给出「留在框里」状态"
+# 面板的数据路径：队列块（team __panel-data --block outbox_list）把 reason 原样交给面板队列页
+if ob_run env OB_BOX="$OB_BOX" $TEAM --root "$REPO" __panel-data --block outbox_list >"$TMP/ob-residue-panel.json" 2>&1; then
+  assert_has "$TMP/ob-residue-panel.json" "draft-raced-retracted" "12b-g M17：面板队列块带「已收回」的原因"
+  assert_has "$TMP/ob-residue-panel.json" "draft-raced-left" "12b-g M17：面板队列块带「留在框里」的原因"
+else
+  bad "12b-g M17：__panel-data --block outbox_list 跑不起来（面板可见性无法证明）"; cat "$TMP/ob-residue-panel.json"
+fi
+ob_reset   # 手工造的残留条目只服务本节断言，不留给 12b-h 的端到端场景
+
 # ---------------------------------------------------------------- 12b-h. 真 pane 端到端（假 TUI）
 if [ "$FAST" = "1" ]; then
   fast_skip "12b-h·真 pane 端到端（守卫/排水/草稿窗口）" "要真 tmux pane + python3 夹具 TUI（清空输入框、多行粘贴、draft 窗口）"
@@ -4462,14 +4495,19 @@ else
   tmux capture-pane -p -t "$SESSION:draft" > "$TMP/ob-h-draftpane2.log" 2>/dev/null || true
   assert_eq "12b-h ⑦b draft 窗口的 pane 逐字节不变" "$(md5sum < "$TMP/ob-h-draftpane2.log")" "$draft_before"
 
-  # ⑨ 粘贴期间有草稿介入：不按 Enter（消息进 held/），草稿原样留着
-  : > "$OB_SUBMIT"
+  # ⑨（M17 形状②）粘贴期间有草稿介入：框里混了人的字 → **一个键都不碰**（宁留不删），
+  #    消息进 held/（终态）。
+  ob_reset; : > "$OB_SUBMIT"
   ob_tui race '' 'FAKE_TUI_DRAFT_ON_PASTE=HUMAN_DRAFT_'
   ob_live $TEAM draft send "$TMP/ob-three.txt" --target "$SESSION:race" >"$TMP/ob-h-race.log" 2>&1 || true
   assert_eq "12b-h ⑨ 打字期间有草稿介入 → 没有提交" "$(ob_submits)" "0"
-  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "draft-raced" "12b-h ⑨ 条目进 held/（原因 draft-raced）"
-  tmux capture-pane -p -t "$SESSION:race" 2>/dev/null | grep -qF 'HUMAN_DRAFT_alpha line one' \
-    && ok "12b-h ⑨ 人的草稿还在框里（没被粘出去提交）" || bad "12b-h ⑨ 草稿没有留在框里"
+  assert_has "$TMP/ob-h-race.log" "框里已有人的内容，未动" "12b-h ⑨ M17：日志写明「框里已有人的内容，未动」"
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=draft-raced-left" "12b-h ⑨ M17：held 原因 = draft-raced-left（留在框里）"
+  tmux capture-pane -p -t "$SESSION:race" > "$TMP/ob-h-race-box.log" 2>/dev/null || true
+  assert_has "$TMP/ob-h-race-box.log" "HUMAN_DRAFT_alpha line one" "12b-h ⑨ 人的草稿 + 我们的 payload 原样留在框里"
+  assert_has "$TMP/ob-h-race-box.log" "gamma line three" "12b-h ⑨ M17：整段都没被碰（收回键序一个都没发）"
+  ob_live $TEAM digest >"$TMP/ob-h-race-digest.log" 2>&1 || true
+  assert_has "$TMP/ob-h-race-digest.log" "留在框里 1" "12b-h ⑨ M17：digest 的 outbox 行报「留在框里 1」"
   # V7-F3：draft-raced 是终态 —— payload 已经进过人的框一次（可能随人的提交到了 agent），
   # 任何自动路径（含 flush --now）都不许再投；留在 held/ 可见，durable 副本在收件箱。
   ob_live $TEAM outbox flush >"$TMP/ob-h-race-flush.log" 2>&1 || true
@@ -4579,19 +4617,44 @@ else
   assert_eq "12b-h ⑯b V9-B2：正文含完整占位符字样 → 恰好一次提交（不被压住）" "$(ob_submits)" "1"
   assert_has "$TMP/ob-h-b2.log" "已确认送达" "12b-h ⑯b V9-B2：正常送达（占位符字样不触发折叠路径）"
 
-  # ⑰ V9-B6：折叠渲染的停顿超过等待上限（≈1.6s）——不是竞态、**不是终态**：
-  #    held 原因 = stall-timeout；下个排水周期只补 Enter（--resume），绝不重贴。
+  # ⑰（M17 形状①，取代 V9-B6 的「留在框里等下一拍补 Enter」）：折叠占位符的渲染停顿超过
+  #    等待上限（≈1.6s）时，复检始终看不到「框里只有我们」→ **收回**：把打进去的半成品清掉，
+  #    条目以 draft-raced-retracted 终态进 held/（框里无残留 = 用户实测的那个形状被消灭）。
   ob_reset; : > "$OB_SUBMIT"
   ob_tui race3 '' 'FAKE_TUI_MARKER=10 FAKE_TUI_PASTE_STALL_MS=2500'
   ob_live $TEAM draft send "$TMP/ob-big.txt" --target "$SESSION:race3" >"$TMP/ob-h-b6.log" 2>&1 || true
-  assert_eq "12b-h ⑰a V9-B6：停顿超过等待上限 → 第一拍不提交（保守）" "$(ob_submits)" "0"
-  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=stall-timeout" "12b-h ⑰a V9-B6：held 原因 = stall-timeout（不是 draft-raced 终态）"
-  assert_eq "12b-h ⑰a V9-B6：条目在 held/（可恢复）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
-  sleep 2.6
+  assert_eq "12b-h ⑰a M17：停顿超过等待上限 → 第一拍不提交（保守）" "$(ob_submits)" "0"
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=draft-raced-retracted" "12b-h ⑰a M17：held 原因 = draft-raced-retracted（已收回）"
+  assert_eq "12b-h ⑰a M17：条目在 held/（终态，人核实后 drop/重发）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  tmux capture-pane -p -t "$SESSION:race3" > "$TMP/ob-h-b6-box.log" 2>/dev/null || true
+  assert_not "$TMP/ob-h-b6-box.log" "paste #" "12b-h ⑰a M17：收回后半成品不在框里"
+  assert_not "$TMP/ob-h-b6-box.log" "line-01" "12b-h ⑰a M17：收回后 payload 正文不在框里（没有残留）"
+  sleep 2.6   # 让夹具把（已被删掉的）半成品补全计划跑完：不许自己长回来
+  tmux capture-pane -p -t "$SESSION:race3" > "$TMP/ob-h-b6-box2.log" 2>/dev/null || true
+  assert_not "$TMP/ob-h-b6-box2.log" "paste #" "12b-h ⑰a M17：渲染补齐之后框里仍然没有残留"
   ob_live $TEAM outbox flush >"$TMP/ob-h-b6b.log" 2>&1 || true
-  assert_eq "12b-h ⑰b V9-B6：重试只补 Enter（不重贴）→ 恰好一次提交" "$(ob_submits)" "1"
-  assert_has "$TMP/ob-h-b6b.log" "已投递" "12b-h ⑰b V9-B6：重试完成投递（已确认送达）"
-  assert_eq "12b-h ⑰b V9-B6：held/ 清空、不留活动条目" "$(find "$REPO/.pi/team/state/outbox" "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+  assert_eq "12b-h ⑰b M17：之后的任何排水都不重贴（终态）" "$(ob_submits)" "0"
+  assert_has "$TMP/ob-h-b6b.log" "draft-raced-retracted" "12b-h ⑰b M17：排水报告点名终态原因"
+  assert_eq "12b-h ⑰b M17：条目留在 held/（可见、可 drop）" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  ob_live $TEAM digest >"$TMP/ob-h-b6-digest.log" 2>&1 || true
+  assert_has "$TMP/ob-h-b6-digest.log" "已收回 1" "12b-h ⑰c M17：digest 的 outbox 行报「已收回 1」"
+
+  # ⑰d（升级兼容）：老版本留下的 stall-timeout 条目（框里还立着完整的折叠占位符）必须仍能被
+  #     下一拍补上 Enter —— M17 起新条目不再产生这种状态，但已经躺在 held/ 里的不能被丢掉。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui race4 ''
+  ob_legacy_k="$(printf '%s' "$(cat "$TMP/ob-big.txt")" | grep -c '')"
+  tmux send-keys -t "$SESSION:race4" -l "[paste #1 +${ob_legacy_k} lines]"
+  sleep 0.4
+  ob_legacy_name="1758000000000-0001-legacy.msg"
+  mkdir -p "$REPO/.pi/team/state/outbox/held"
+  { printf 'kind: draft\ntarget: %s:race4\nfrom: human\ncreated: x\ndedup: -\n---\n' "$SESSION"; cat "$TMP/ob-big.txt"; } > "$REPO/.pi/team/state/outbox/held/$ob_legacy_name"
+  printf '%s name=%s reason=stall-timeout held-since=x attempts=1 target=%s:race4\n' \
+    "$(date -u +%FT%TZ)" "$ob_legacy_name" "$SESSION" >> "$REPO/.pi/team/state/outbox/HOLDING.log"
+  ob_live $TEAM outbox flush >"$TMP/ob-h-b6d.log" 2>&1 || true
+  assert_eq "12b-h ⑰d 升级兼容：老 stall-timeout 条目恰好补出一次提交" "$(ob_submits)" "1"
+  assert_has "$TMP/ob-h-b6d.log" "已投递" "12b-h ⑰d 升级兼容：重试完成投递（已确认送达）"
+  assert_eq "12b-h ⑰d 升级兼容：held/ 清空、不留活动条目" "$(find "$REPO/.pi/team/state/outbox" "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
 fi
 
 # ---------------------------------------------------------------- 12b-i. 扩展：入队而不是打字（规格 requirement 6 第 2 条）

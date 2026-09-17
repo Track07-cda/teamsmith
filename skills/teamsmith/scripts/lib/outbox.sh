@@ -224,9 +224,9 @@ team_delivery_verdict() { # <target> → NOPANE|SHELL|BUSY|EMPTY|UNKNOWN
 #      占位符（人的粘贴也被折叠；V8-N4）或 K 对不上都不是「只有我们」；
 #   4. 可见区是 payload 的前缀/后缀（滚动/截断的显示窗口；V8-N6 边界记录在案）；
 #   5. 其它一律返回 1（竞态期间有人打字）→ 不按 Enter。
-team_box_holds_only() { # <target> <payload>
-  local got want want_lines k
-  got="$(team_input_box_text "$1" 2>/dev/null)" || return 0
+# 纯文本判据（不读 pane，输入 = team_input_box_text 的结果）：<框文本> <payload> → 0 = 只有我们这段。
+team_box_text_holds_only() { # <got> <payload>
+  local got="$1" want want_lines k
   want="$(printf '%s' "$2" | tr -d '[:space:]')"
   local gotnows; gotnows="$(printf '%s' "$got" | tr -d '[:space:]')"
   [ -n "$want" ] && [ "$gotnows" = "$want" ] && return 0
@@ -240,6 +240,25 @@ team_box_holds_only() { # <target> <payload>
   [ "${want%"$gotnows"}" != "$want" ] && return 0   # 可见区是 payload 的后缀（滚动了）
   [ "${want#"$gotnows"}" != "$want" ] && return 0   # 可见区是 payload 的前缀（截断/横滚窗口）
   return 1
+}
+
+team_box_holds_only() { # <target> <payload>
+  local got
+  got="$(team_input_box_text "$1" 2>/dev/null)" || return 0   # 读不出来：按旧语义当「只有我们」（Enter 路径）
+  team_box_text_holds_only "$got" "$2"
+}
+
+# M17：放弃 Enter 之前决定「收回还是一个键都不碰」。同一份框文本上判：
+#   ① 逐字 / 单占位符 +K 对得上 / 前后缀窗口 / 空框 都是我们的（team_box_text_holds_only）；
+#   ② 整框就是一个我们自己的半成品占位符帧（`[paste #N +M`，V8-N3 形状）——粘贴是我们打进去的，
+#      框里没有第二个东西；
+#   ③ 其它（混了人的字、两个占位符、读不出框）→ 不可收回（宁留不删）。
+# 空框也算「可收回」= 没有残留；清键对空框是幂等空操作（team_tmux_retract 不会为它发键）。
+team_box_retract_safe() { # <target> <payload> → 0 = 框里此刻只有我们打进去的东西
+  local got
+  got="$(team_input_box_text "$1" 2>/dev/null)" || return 1
+  team_box_text_holds_only "$got" "$2" && return 0
+  team_box_mid_render "$got"
 }
 
 # pane 是否请求了 bracketed paste（DECSET 2004）。tmux 的 paste-buffer -p 只在
@@ -284,10 +303,35 @@ team_tmux_type_payload() { # <target> <payload>
   esac
 }
 
+# 收回（M17）：把**只有我们**的那段内容从框里清掉 —— 放弃按 Enter 时不许把字留在人的框里。
+# 清法是 Pi 编辑器自己的键，不是外部猜测：ctrl+a（光标到行首）+ ctrl+k（删到行尾；已在行尾就把
+# 下一行并上来），两个键成对重复 —— 无论光标停在哪一行哪一列都能清空（不是只有光标在末尾才行），
+# 而且编辑器已经空的时候这对键是幂等的空操作（deleteToLineStart/End 在 (0,0) 处都不动）。
+# 调用前提：team_box_retract_safe 刚确认框里只有我们打进去的东西；混了人的字一个键都不发。
+# 空框直接返回 0，不写键；写完轮询确认框真的空了（渲染是异步的）——没确认就返回 1，由调用方
+# 把条目留在 held/ 里并说明「框里仍有内容」。
+team_tmux_retract() { # <target> → 0 = 框里不再有我们的内容；1 = 没收回/无法确认
+  local target="${1:-}" i got keys=()
+  team_tmux_target_required "retract" "$target" || return 1
+  got="$(team_input_box_text "$target" 2>/dev/null || true)"
+  [ -z "$(printf '%s' "$got" | tr -d '[:space:]')" ] && return 0   # 已经空了：没有残留要收
+  for i in $(seq 1 24); do keys+=(C-a C-k); done
+  tmux send-keys -t "$target" ${keys[@]+"${keys[@]}"} 2>/dev/null || return 1
+  for i in 1 2 3 4 5 6; do
+    sleep 0.2
+    got="$(team_input_box_text "$target" 2>/dev/null || true)"
+    [ -z "$(printf '%s' "$got" | tr -d '[:space:]')" ] && return 0
+  done
+  return 1
+}
+
 # 打字 + 守卫复检 + Enter + 指纹确认。返回：
-#   0 已确认送达 ｜ 2 框里有草稿（一个键都没发，交给上层排队）｜ 3 打字途中有草稿介入（不按 Enter）
+#   0 已确认送达 ｜ 2 框里有草稿（一个键都没发，交给上层排队）｜ 3 放弃 Enter，框里混了人的字（一个键都没碰）
+#   7 放弃 Enter，框里只有我们的内容 → 已收回（M17：清掉框里的残留，没按 Enter）
 #   1 粘贴落上了但没确认（写了 Enter 而 pane 没变化 / Enter 没发出去）：payload 已进过框一次，终态
 #   4 打字本身就失败（粘贴没落上）：payload 没碰过框，可以安全重试
+#   5 渲染停顿超过等待上限（旧语义，仍被 process_entry 认作可恢复；M17 起新条目不再走它）
+#   6 resume 重试时框里已不只有 payload：不重贴，留在 held/
 team_tmux_deliver() { # <target> <payload> [--no-verify] [--assume-free] [--resume]
   local target="$1" payload="$2"; shift 2
   local noverify=0 assume_free=0 shape_known=1 resume=0
@@ -377,11 +421,19 @@ team_tmux_deliver() { # <target> <payload> [--no-verify] [--assume-free] [--resu
           "$(team_box_holds_only "$target" "$text" && printf y || printf n)" \
           "$(printf '%s' "$now_txt" | tr '\n' '|')" "$(printf '%s' "$text" | tr '\n' '|')" >> "$TEAM_RESUME_DEBUG"
       fi
-      if [ "$stalled" = "1" ] && team_box_mid_render "$now_txt"; then
-        team_warn "渲染停顿超过等待上限（$target）：payload 已进框一次但没按 Enter，留在 held/（stall-timeout）：下次排水只补 Enter，绝不重贴"
-        return 5
+      # M17：放弃 Enter 之前先「收回」——不许把我们打进去的字留在人的框里。
+      # 收回的前提是**此刻**框里只有我们打进去的东西（逐字/折叠/前后缀窗口，或整框一个我们自己的
+      # 半成品帧）；混进了人的字就一个键都不碰（宁留不删）。收回成功 → rc 7（框已清空）；
+      # 收回失败（键被吞/形状变了）→ rc 3（框里仍有内容，绝不再发键）。
+      if team_box_retract_safe "$target" "$text"; then
+        if team_tmux_retract "$target"; then
+          team_warn "Enter 前复检没能确认框里只有我们的 payload（$target）：已收回打进去的内容，条目转入 outbox/held/（框里已清空）"
+          return 7
+        fi
+        team_warn "Enter 前复检没能确认框里只有我们的 payload（$target）：收回没成功（框里仍有内容）→ 一个键都不再发，消息转入 outbox/held/"
+        return 3
       fi
-      team_warn "打字期间输入框里多了别人的文字（$target）：不发 Enter，消息转入 outbox/held/"
+      team_warn "打字期间输入框里多了别人的文字（$target）：框里已有人的内容，未动；不发 Enter，消息转入 outbox/held/"
       return 3
     fi
   fi
@@ -512,16 +564,45 @@ team_outbox_active_count() { team_outbox_active_entries | grep -c . 2>/dev/null 
 team_outbox_held_count() { find "$(team_outbox_dir)/held" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | grep -c . 2>/dev/null || true; }
 team_outbox_is_held() { case "$1" in */held/*) return 0 ;; *) return 1 ;; esac; }
 
-# 可见性：status/digest 共用的一行（队列为空时返回 1，调用方不打印任何东西）
+# held 条目按「框里的残留」分档（M17）：*retracted* = 我们打进去的已收回（框里无残留）；
+# *left* = 没收（框里还有人的字或收回失败，宁留不删）；其它 = 从未进过框的 hold（TTL/cap/no-target）
+# 或收不回但已投过 Enter 的 unconfirmed。输出 "<retracted> <left> <other>"。
+team_outbox_held_residue_counts() {
+  local e r retracted=0 left=0 other=0
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    team_outbox_is_held "$e" || continue
+    r="$(team_outbox_hold_reason "$e")"
+    case "$r" in
+      *retracted*) retracted=$((retracted + 1)) ;;
+      *left*)      left=$((left + 1)) ;;
+      *)           other=$((other + 1)) ;;
+    esac
+  done < <(team_outbox_entries)
+  printf '%s %s %s\n' "$retracted" "$left" "$other"
+}
+
+# 可见性：status/digest 共用的一行（队列为空时返回 1，调用方不打印任何东西）。
+# M17：held 非空时把「已收回 / 留在框里」的分档带在同一行 —— 人不该为了知道框里有没有残留
+# 去翻 HOLDING.log。
 team_outbox_status_line() { # [前缀]
-  local n held oldest age
+  local n held oldest age detail retracted left other
   n="$(team_outbox_count)"
   case "${n:-0}" in ''|*[!0-9]*) n=0 ;; esac
   [ "$n" -gt 0 ] || return 1
   held="$(team_outbox_held_count)"
+  case "${held:-0}" in ''|*[!0-9]*) held=0 ;; esac
   oldest="$(team_outbox_entries | head -1)"
   age="$(team_entry_age_sec "$oldest")"
-  printf '%soutbox %s 条待投递（held %s）· 最老 %ss · %s outbox list\n' "${1:-}" "$n" "$held" "$age" "$TEAM_CLI"
+  detail="held $held"
+  if [ "$held" -gt 0 ]; then
+    read -r retracted left other <<< "$(team_outbox_held_residue_counts)"
+    if [ "$((retracted + left))" -gt 0 ]; then
+      detail="$detail：已收回 $retracted · 留在框里 $left"
+      [ "${other:-0}" -gt 0 ] && detail="$detail · 其它 $other"
+    fi
+  fi
+  printf '%soutbox %s 条待投递（%s）· 最老 %ss · %s outbox list\n' "${1:-}" "$n" "$detail" "$age" "$TEAM_CLI"
   return 0
 }
 
@@ -700,13 +781,13 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
   [ -n "$target" ] || { team_outbox_hold "$e" "no-target"; TEAM_OUTBOX_RESULT="held"; return 0; }
   team_outbox_claim "$e" || return 0            # 并发的另一个排水已经在投它
 
-  # V7-F3 跨投递去重：draft-raced / unconfirmed 的条目 = payload 已经进过人的框一次（可能随人的提交
-  # 到了 agent——unconfirmed 是 Enter 被吞后框里卡着我们的 payload，人随后自己的 Enter 就把它提交了，
-  # 下一次排水再贴一遍就是同一 payload 到两遍：V8-F4c）。它们是**终态**：留在 held/ 可见，durable
-  # 副本在收件箱；要重发请显式再 say/draft send，要丢弃用 outbox drop。
+  # V7-F3 跳投递去重：draft-raced（以及 M17 的 draft-raced-left / draft-raced-retracted）/ unconfirmed
+  # 的条目 = payload 已经进过人的框一次（可能随人的提交到了 agent——unconfirmed 是 Enter 被吞后框里卡着我们
+  # 的 payload，人随后自己的 Enter 就把它提交了，下一次排水再贴一遍就是同一 payload 到两遍：V8-F4c）。
+  # 它们是**终态**：留在 held/ 可见，durable 副本在收件箱；要重发请显式再 say/draft send，要丢弃用 outbox drop。
   if team_outbox_is_held "$e"; then
     case "$(team_outbox_hold_reason "$e")" in
-      draft-raced|unconfirmed)
+      draft-raced|draft-raced-*|unconfirmed)
         team_outbox_note warn "outbox：$(basename "$e") 是 $(team_outbox_hold_reason "$e") 终态（payload 已进过人的框一次，绝不重复粘贴）→ 留在 held/"
         TEAM_OUTBOX_RESULT="terminal"
         team_outbox_release "$e"
@@ -792,8 +873,15 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
         TEAM_OUTBOX_RESULT="busy"
       fi ;;
     3)
-      team_outbox_hold "$e" "draft-raced" --claimed
-      team_outbox_note warn "outbox：$(basename "$e") 打字期间有草稿介入（没有按 Enter）→ held/"
+      team_outbox_hold "$e" "draft-raced-left" --claimed
+      team_outbox_note warn "outbox：$(basename "$e") 打字期间有草稿介入（没有按 Enter，框里已有人的内容，未动）→ held/"
+      TEAM_OUTBOX_RESULT="held" ;;
+    7)
+      # M17：复检失败但框里只有我们的内容（或只剩我们的半成品帧）——已收回，框里没有残留。
+      # 收回同样是终态：payload 进过框一次，人自己的 Enter 可能在收回前提交过它（或收回的键序与人的
+      # 按键交错），自动重贴有双发风险。
+      team_outbox_hold "$e" "draft-raced-retracted" --claimed
+      team_outbox_note warn "outbox：$(basename "$e") 复检失败后已收回框里的 payload（没有按 Enter，框里无残留）→ held/"
       TEAM_OUTBOX_RESULT="held" ;;
     1)
       # 投递未确认：payload 已经进过框一次（粘贴发生了），人之后的 Enter 可能已把它提交——再自动
