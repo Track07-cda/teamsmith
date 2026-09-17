@@ -31,6 +31,8 @@ literals or simple `$VAR`.
 | `TEAM_AGENTS` | empty (`init` sets `dev verify`) | roster, space separated |
 | `TEAM_AGENT_MODELS` | empty | per-agent model override: `dev=deepseek/deepseek-flash verify=xai/grok-4.6` |
 | `TEAM_DEFAULT_MODEL` | `deepseek/deepseek-flash` | default model (`provider/model`) |
+
+Dispatch model resolution order: `--model` > `TEAM_AGENT_MODELS` (per-agent) > `TEAM_DEFAULT_MODEL`. The roster's recorded `model` is display-only ("what ran last time"); `team roster` and `team ps` tag it with its source label (current config / explicit `--model` / stale record whose config changed since — the CLI prints these labels in Chinese). It never feeds resolution, so editing the config takes effect on the very next dispatch. |
 | `TEAM_MODEL_LIMITS` | `kimi-coding/k3=2` | concurrency limits, `provider/model=N` space separated; `0` = unlimited |
 | `TEAM_EXTRA_PI_ARGS` | empty | extra arguments passed to pi (space separated, values with spaces are unsupported) |
 

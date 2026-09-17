@@ -479,6 +479,21 @@ team_agent_model() {
   printf '%s\n' "$TEAM_DEFAULT_MODEL"
 }
 
+# M14：模型列的来源标注 —— 名册 state 里的 model 只是「上次用了什么」的展示记录，不参与派单解析
+# （解析顺序：--model 显式 ＞ 配置），所以展示必须说清它是哪来的：
+#   配置     = 没有记录（展示的就是配置解析），或记录与当前配置解析一致；
+#   显式     = 上次派单由 --model 指定（dispatch 记 model_src=explicit）；
+#   历史记录 = 旧记录，配置在那之后改了 —— 下次派单会用新配置，不是它。
+team_agent_model_src() { # <agent> → 配置 | 显式 | 历史记录
+  local a="$1" st src
+  st="$(team_state_get "$a" model '')"
+  [ -n "$st" ] || { printf '配置\n'; return 0; }
+  src="$(team_state_get "$a" model_src '')"
+  [ "$src" = "explicit" ] && { printf '显式\n'; return 0; }
+  if [ "$st" = "$(team_agent_model "$a")" ]; then printf '配置\n'; else printf '历史记录\n'; fi
+  return 0
+}
+
 team_require_agent() {
   team_agent_known "$1" || team_die "未知 agent：$1（名册：$(team_agents | tr '\n' ' ')）"
 }
@@ -2701,7 +2716,8 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
   # 旧行为靠 state，而 state 是在启动之后才写的，所以 `--model` 在“第一次派单/换模型”时
   # 会被静默忽略：派单印着 sub2api，实际拉起来的是默认模型（team_agent_launch_cmd 同理）。
   model="$model_arg"
-  [ -n "$model" ] || model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
+  # M14：缺省回读配置（与 dispatch 同一解析来源）；名册 state 不参与（它只是展示记录）。
+  [ -n "$model" ] || model="$(team_agent_model "$agent")"
   provider="${model%%/*}"
   while [ -n "$tpl" ]; do
     case "$tpl" in
@@ -2768,8 +2784,9 @@ team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file> [model
     printf '%s\n' "$expanded"
     return 0
   fi
-  # M4.3：显式传入的模型优先（否则回读 state —— state 是启动后才写的，第一次派单会拿到旧值）
-  [ -n "$model" ] || model="$(team_state_get "$agent" model "$(team_agent_model "$agent")")"
+  # M4.3：显式传入的模型优先；缺省回读配置（M14：不再回读 state —— state 是启动后才写的展示记录，
+  # 第一次派单会拿到旧值；配置才是解析来源）
+  [ -n "$model" ] || model="$(team_agent_model "$agent")"
   pi_bin="$(team_pi_bin_path)"
   piargs="$(team_pi_args "$model")"
   printf '%s %s--session-id %q "$0"' "$(printf '%q' "$pi_bin")" "$piargs" "$sid"

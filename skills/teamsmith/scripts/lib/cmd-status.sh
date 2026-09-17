@@ -265,9 +265,9 @@ team_git_cols() { # <worktree> → "branch dirty ahead-of-protected ahead-of-ups
 
 team_cmd_roster() {
   team_require_docs
-  printf '%-10s %-12s %-26s %4s %8s %7s  %-30s %-16s %s\n' AGENT 状态 分支 脏 领先 未push 模型 会话 任务
-  printf '%-10s %-12s %-26s %4s %8s %7s  %-30s %-16s %s\n' ----- ------ -------------------------- ---- ------ ------- ------------------------------ ---------------- ----
-  local a w wt cols branch dirty ahead upahead task state cli model mtok mwin mbytes mfile size
+  printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' AGENT 状态 分支 脏 领先 未push 模型 会话 任务
+  printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' ----- ------ -------------------------- ---- ------ ------- ---------------------------------- ---------------- ----
+  local a w wt cols branch dirty ahead upahead task state cli model msrc mtok mwin mbytes mfile size
   cli="$(team_agent_cli_name)"
   for a in $(team_agents); do
     wt="$(team_agent_worktree "$a")"
@@ -281,12 +281,15 @@ team_cmd_roster() {
     # M4.3 A：会话大小 vs 模型窗口（只 stat 字节数，不读内容）
     IFS=$'\t' read -r model mtok mwin mbytes mfile <<< "$(team_agent_session_cols "$a")"
     size="$(team_session_size_text "$mtok" "$mwin")"
+    # M14：模型列带来源标注 —— 名册旧记录不再冒充当前配置（历史记录 = 配置在它之后改了）
+    msrc="$(team_agent_model_src "$a")"
     task="$(team_state_get "$a" task -)"
-    printf '%-10s %-12s %-26s %4s %8s %7s  %-30s %-16s %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$upahead" "$model" "$size" "$task"
+    printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$upahead" "$model·$msrc" "$size" "$task"
   done
   printf '\n● %s 在跑 ｜ ○ 窗口在但 %s 已退出（team resume 可续）｜ · 无窗口\n' "$cli" "$cli"
   printf '  脏=未提交 ｜ 领先=相对 %s（已合并=squash 后的内容已在 %s 里）｜ 未push=相对 @{upstream}（- = 没有 upstream，无法判定）\n' "$TEAM_PROTECTED_BRANCH" "$TEAM_PROTECTED_BRANCH"
   printf '  会话=估算 tok/模型窗口（JSONL 字节÷4，粗糙；窗口 ? = 解析不到 → 派单用保守阈值 %s）⚠=已超窗口\n' "${TEAM_SESSION_WARN_TOKENS:-200000}"
+  printf '  模型·来源：配置=当前配置解析（或无记录，取配置）｜显式=上次 --model 指定｜历史记录=名册旧记录，配置已改 → 下次派单用新配置\n'
   [ -n "$TEAM_SESSION" ] && team_dim "session: $TEAM_SESSION（attach: tmux attach -t $TEAM_SESSION）"
   return 0
 }
@@ -328,15 +331,17 @@ team_cmd_ps() {
   done
   team_dim "  WINDOW = 模型上下文窗口（? = 解析不到：TEAM_MODEL_WINDOWS 或 Pi 的模型目录里没有它）"
   # M4.3 A：每个 agent 的会话大小 vs 它当前模型的窗口（只 stat 字节数，不读内容）
+  # M14：模型带 ·来源标注（配置/显式/历史记录；历史记录 = 名册旧记录，下次派单用新配置）
   printf '\nagent 会话（估算 tok / 模型窗口）：\n'
-  local asess any_sess=0 amodel atok awin abytes afile atext a
+  local asess any_sess=0 amodel asrc atok awin abytes afile atext a
   for a in $(team_agents); do
     IFS=$'\t' read -r amodel atok awin abytes afile <<< "$(team_agent_session_cols "$a")"
     case "$atok" in ''|*[!0-9]*) continue ;; esac
     [ "$atok" -gt 0 ] || continue
     any_sess=1
+    asrc="$(team_agent_model_src "$a")"
     atext="$(team_session_size_text "$atok" "$awin")"
-    printf '  %-10s %-30s %10s' "$a" "$amodel" "$atext"
+    printf '  %-10s %-34s %10s' "$a" "$amodel·$asrc" "$atext"
     if [ -n "$awin" ] && [ "$atok" -gt "$awin" ]; then
       printf '  ← 超过窗口：复用会被 dispatch 拒绝（--fresh / --allow-overflow）'
     fi

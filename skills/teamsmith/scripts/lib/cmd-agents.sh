@@ -24,6 +24,7 @@ team_worktree_add() { # <agent> [--create] [--no-install]
       printf '    git -C %s worktree add -b %s %s %s\n' "$TEAM_MAIN_ROOT" "$branch" "$wt" "$TEAM_PROTECTED_BRANCH"
     fi
     team_state_set "$agent" model "$(team_agent_model "$agent")"
+    team_state_set "$agent" model_src config
     team_state_set "$agent" window "$agent"
     team_state_set "$agent" worktree "$wt"
     return 0
@@ -51,6 +52,7 @@ team_worktree_add() { # <agent> [--create] [--no-install]
   fi
 
   team_state_set "$agent" model "$(team_agent_model "$agent")"
+  team_state_set "$agent" model_src config
   team_state_set "$agent" window "$agent"
   team_state_set "$agent" worktree "$wt"
   return 0
@@ -551,7 +553,11 @@ team_cmd_dispatch() {
   team_check_worktree_for_task "$agent" "$id" || return 1
   task_branch="$TEAM_CHECKED_BRANCH"
 
-  model="${model:-$(team_state_get "$agent" model "$(team_agent_model "$agent")")}"
+  # M14：解析顺序 = --model 显式参数 ＞ 配置（TEAM_AGENT_MODELS 的 per-agent ＞ TEAM_DEFAULT_MODEL）。
+  # 名册 state 里的 model 只是「上次用了什么」的展示记录（roster/ps 标注来源用），不再当默认来源 ——
+  # 旧行为（state 优先）让配置改了也不生效：名册里的 deepseek 旧记录压过了新配的 k3-256k。
+  local model_src="config"
+  if [ -z "$model" ]; then model="$(team_agent_model "$agent")"; else model_src="explicit"; fi
   local provider="${model%%/*}"
   local sid="$TEAM_SESSION-$agent"
   [ "$fresh" = "1" ] && sid="$sid-$(date +%s)"
@@ -682,6 +688,7 @@ team_cmd_dispatch() {
   fi
 
   team_state_set "$agent" model "$model"
+  team_state_set "$agent" model_src "$model_src"
   team_state_set "$agent" window "$agent"
   team_state_set "$agent" worktree "$wt"
   team_state_set "$agent" task "$id"
