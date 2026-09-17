@@ -136,11 +136,7 @@ scn_pages() {
   server_up pages
   start_panel
   cap_has "项目进度" p1.txt
-<<<<<<< HEAD
-  cap_has "AGENT" p1.txt
-=======
   cap_has "代理" p1.txt
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
   keys 2
   sleep 1
   cap_has "任务看板" p2.txt
@@ -342,20 +338,12 @@ scn_resize() {
   tmux -L "$sock" resize-window -t "$sess:panel" -x 99 -y 32 2>/dev/null || true
   sleep 0.6
   cap_to narrow
-<<<<<<< HEAD
-  assert_has "$tmp/$current/narrow.txt" "AGENT" "99 列：单列仍渲染 agent 表"
-=======
   assert_has "$tmp/$current/narrow.txt" "代理" "99 列：单列仍渲染 agent 表"
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
   # Reflow to the wide tier: the agent table and the right block share a row.
   tmux -L "$sock" resize-window -t "$sess:panel" -x 160 -y 32 2>/dev/null || true
   sleep 1.2
   cap_to wide
-<<<<<<< HEAD
-  if grep -qE 'AGENT.*活动（仅本 session' "$tmp/$current/wide.txt"; then
-=======
   if grep -qE '代理.*活动（仅本 session' "$tmp/$current/wide.txt"; then
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
     ok "160 列：重排成双列（表头与右栏同一行）"
   else
     bad "160 列：没有重排成双列"; sed -n '1,3p' "$tmp/$current/wide.txt"
@@ -370,33 +358,20 @@ scn_resize() {
       continue
     fi
     if [ "$w" = "160" ] || [ "$w" = "100" ]; then
-<<<<<<< HEAD
-      if grep -qE 'AGENT.*活动（仅本 session' "$tmp/$current/w$w.txt"; then
-=======
       if grep -qE '代理.*活动（仅本 session' "$tmp/$current/w$w.txt"; then
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
         ok "$w 列：双列（表头与右栏同一行）"
       else
         bad "$w 列：应为双列"
       fi
     elif [ "$w" = "99" ] || [ "$w" = "60" ]; then
-<<<<<<< HEAD
-      if grep -qE 'AGENT.*活动（仅本 session' "$tmp/$current/w$w.txt"; then
-=======
       if grep -qE '代理.*活动（仅本 session' "$tmp/$current/w$w.txt"; then
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
         bad "$w 列：不该是双列"
       else
         ok "$w 列：单列"
       fi
     else
-<<<<<<< HEAD
-      if grep -q '●在' "$tmp/$current/w$w.txt" && ! grep -qF '会话' "$tmp/$current/w$w.txt"; then
-        ok "$w 列：最小档（状态缩写、砍掉会话列）"
-=======
       if grep -q '●在' "$tmp/$current/w$w.txt" && grep -qF '41k/272k' "$tmp/$current/w$w.txt"; then
         ok "$w 列：最小档（状态缩写、会话列完整）"
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
       else
         bad "$w 列：最小档没有生效"; sed -n '6,9p' "$tmp/$current/w$w.txt"
       fi

@@ -49,21 +49,10 @@ for width in 160 120 99 59; do
     if [ "$update" = "1" ]; then
       cp "$actual" "$snapdir/$name.txt"
       ok "$name：已重新钉住（$(wc -c < "$snapdir/$name.txt" | tr -d ' ') 字节）"
-<<<<<<< HEAD
-      continue
-=======
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
     fi
     if [ ! -f "$snapdir/$name.txt" ]; then
       bad "$name：没有钉住的快照（先跑 --update）"; continue
     fi
-<<<<<<< HEAD
-    if cmp -s "$actual" "$snapdir/$name.txt"; then
-      ok "$name：与钉住的快照逐字节一致"
-    else
-      bad "$name：与钉住的快照不一致（首个差异如下）"
-      diff <(sed 's/\x1b\[[0-9;]*m//g' "$snapdir/$name.txt") <(sed 's/\x1b\[[0-9;]*m//g' "$actual") | head -4
-=======
     if [ "$update" != "1" ]; then
       if cmp -s "$actual" "$snapdir/$name.txt"; then
         ok "$name：与钉住的快照逐字节一致"
@@ -140,7 +129,6 @@ PY
       ok "$name：会话列完整且表头/数据列起点对齐"
     else
       bad "$name：会话列或列对齐失败（$(tr '\n' ' ' < "$colchk")）"
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
     fi
   done
 done

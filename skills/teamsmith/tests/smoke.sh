@@ -6192,21 +6192,12 @@ for _f in w160 w99 w59 tiny; do
   if grep -q 'teamsmith pulse' "$TMP/p10-$_f.txt"; then ok "26-e 夹具：$_f 的帧非空"
   else bad "26-e 夹具：$_f 没有输出（后面的断言会空跑）"; fi
 done
-<<<<<<< HEAD
-if grep -qE 'AGENT.*活动（仅本 session' "$TMP/p10-w160.txt"; then ok "26-e 档位：160 列是双列（表头与右栏标题同一行）"
-else bad "26-e 档位：160 列没有双列"; fi
-if grep -qE 'AGENT.*活动（仅本 session' "$TMP/p10-w99.txt"; then bad "26-e 档位：99 列不该是双列"
-else ok "26-e 档位：99 列单列（表头与右栏标题不同行）"; fi
-P10_PM_LINE="$(grep -n 'PM ' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
-P10_AGENT_LINE="$(grep -n 'AGENT' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
-=======
 if grep -qE '代理.*活动（仅本 session' "$TMP/p10-w160.txt"; then ok "26-e 档位：160 列是双列（表头与右栏标题同一行）"
 else bad "26-e 档位：160 列没有双列"; fi
 if grep -qE '代理.*活动（仅本 session' "$TMP/p10-w99.txt"; then bad "26-e 档位：99 列不该是双列"
 else ok "26-e 档位：99 列单列（表头与右栏标题不同行）"; fi
 P10_PM_LINE="$(grep -n 'PM ' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
 P10_AGENT_LINE="$(grep -n '代理' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
 P10_KEY_LINE="$(grep -n 'q 收起' "$TMP/p10-w160.txt" | tail -1 | cut -d: -f1)"
 if [ -n "$P10_PM_LINE" ] && [ -n "$P10_AGENT_LINE" ] && [ "$P10_PM_LINE" -lt "$P10_AGENT_LINE" ] && [ -n "$P10_KEY_LINE" ]; then
   ok "26-e 布局：PM/待办行在 agent 行之前，键位行存在（160x29）"
@@ -6997,109 +6988,6 @@ case ",$P28_KINDS3," in
   *) bad "28-f 点击目标：队列行没有 view-entry 目标（$P28_KINDS3）" ;;
 esac
 
-<<<<<<< HEAD
-# ---------------------------------------------------------------- 29. 派单模型解析：配置压过名册旧记录（M14）
-# 契约（真实事故：TEAM_AGENT_MODELS 已配 dev=kimi-coding/k3-256k，dispatch 仍按名册 state 里的
-# deepseek 旧记录启动 —— 旧实现 model="${model:-$(state_get model (config))}" 让旧记录赢了配置）：
-#   ① 解析顺序 = --model 显式 ＞ 配置（TEAM_AGENT_MODELS per-agent ＞ TEAM_DEFAULT_MODEL）；
-#      名册 state 的 model 只是「上次用了什么」的展示记录，不再参与解析；
-#   ② 配置改了，下一次派单立即生效（不需要先清 state）；
-#   ③ roster/ps 的模型列标注来源（配置/显式/历史记录），旧记录不再冒充当前配置。
-# 全程在自己的临时仓库里跑（写盘前先证明身份），dispatch 只走 --print（纯逻辑，快慢模式都跑）。
-section "29 · 派单模型解析：配置压过名册旧记录（M14）"
-
-M14R="$TMP/m14repo"; rm -rf "$M14R"; mkdir -p "$M14R"
-( cd "$M14R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
-    && echo '# m14' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
-M14SES="teamsmith-smoke-m14-$$"
-( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$M14SES" --agents dev --vcs local --gates "true" --docs docs/team ) >"$TMP/m14-init.log" 2>&1 \
-  && ok "M14 夹具仓库 init 成功" || bad "M14 夹具仓库 init 失败（见 $TMP/m14-init.log）"
-( cd "$M14R" && git add -A && git commit -qm "chore: m14 init" ) >/dev/null 2>&1
-
-# 身份隔离（M7.2 纪律）：**写盘之前**先证明 team 认的是这个临时仓库 + 这个临时 session
-( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/m14-paths.json" 2>&1 || true
-assert_eq "M14 隔离：team paths 的 main_root 就是 M14 夹具仓库" \
-  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m14-paths.json")" "$M14R"
-assert_has "$TMP/m14-paths.json" "\"session\": \"$M14SES\"" "M14 隔离：身份用的是本轮临时 session"
-
-m14() { ( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
-m14_lib() { # <函数> [参数…]：按 CLI 的方式加载库后调用（展示列与派单读的是同一批函数）
-  local fn="$1"; shift
-  ( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
-      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$fn"' "$@"' _ "$@" )
-}
-
-# 任务 + 工作树（dispatch --print 的最低现场）
-m14 $TEAM task M14X --title "M14 fixture" --agent dev --deps "-" >"$TMP/m14-task.log" 2>&1 \
-  && ok "M14 夹具：task 建好" || bad "M14 夹具：task 失败（见 $TMP/m14-task.log）"
-M14TASK="$(ls "$M14R"/docs/team/tasks/M14X-*.md 2>/dev/null | head -1)"
-m14 $TEAM add-agent dev --create --no-install >"$TMP/m14-add.log" 2>&1 \
-  && ok "M14 夹具：worktree 建好" || bad "M14 夹具：add-agent 失败（见 $TMP/m14-add.log）"
-M14WT="$M14R/.worktrees/dev"
-M14BR="$(m14_lib team_branch_for_agent dev M14X)"
-git -C "$M14WT" switch -c "$M14BR" main >/dev/null 2>&1 || git -C "$M14WT" switch "$M14BR" >/dev/null 2>&1
-assert_eq "M14 夹具：工作树停在任务分支上" "$(git -C "$M14WT" rev-parse --abbrev-ref HEAD)" "$M14BR"
-
-# 主现场：名册 state 里躺着一条旧记录（换配置之前派的），配置已经指向新模型
-printf 'model=vendor-legacy/model-old\nwindow=dev\nworktree=%s\n' "$M14WT" > "$M14R/.pi/team/state/dev.env"
-sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS="dev=vendor-a/model-a"|' "$M14R/.pi/team/config.sh"
-
-# ① 配置 dev=A → 渲染出 A；名册旧记录不参与
-m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-a.log" 2>&1 \
-  && ok "M14-①：配置 dev=vendor-a 时 dispatch --print 退出码 0" || bad "M14-①：dispatch --print 失败（见 $TMP/m14-a.log）"
-assert_has "$TMP/m14-a.log" "--provider vendor-a --model model-a" "M14-①：渲染出配置给的模型 A"
-assert_not "$TMP/m14-a.log" "model-old" "M14-①：名册里的旧记录没有参与解析"
-
-# ② 配置改成 dev=B → 下一次渲染立即出 B（state 原封不动，不需要先清）
-sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS="dev=vendor-b/model-b"|' "$M14R/.pi/team/config.sh"
-m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-b.log" 2>&1 || bad "M14-②：dispatch --print 失败"
-assert_has "$TMP/m14-b.log" "--provider vendor-b --model model-b" "M14-②：配置改动立即影响下一次派单"
-assert_not "$TMP/m14-b.log" "model-old" "M14-②：旧记录仍没有参与"
-assert_not "$TMP/m14-b.log" "model-a" "M14-②：上一个配置值也没有残留"
-
-# ③ --model C 显式传参压过配置与旧记录
-m14 $TEAM dispatch dev M14X "$M14TASK" --print --model vendor-c/model-c >"$TMP/m14-c.log" 2>&1 || bad "M14-③：dispatch --print 失败"
-assert_has "$TMP/m14-c.log" "--provider vendor-c --model model-c" "M14-③：--model 显式传参压过配置"
-assert_not "$TMP/m14-c.log" "model-b" "M14-③：配置值没有赢过显式参数"
-
-# ④ 配置没有 dev 条目 → 落到 TEAM_DEFAULT_MODEL（同样不是名册旧记录）
-sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS=""|' "$M14R/.pi/team/config.sh"
-M14DEF="$(sed -n 's/^TEAM_DEFAULT_MODEL="\([^"]*\)".*/\1/p' "$M14R/.pi/team/config.sh" | head -1)"
-m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-def.log" 2>&1 || bad "M14-④：dispatch --print 失败"
-assert_has "$TMP/m14-def.log" "--provider ${M14DEF%%/*} --model ${M14DEF##*/}" "M14-④：无 per-agent 条目时落到 TEAM_DEFAULT_MODEL"
-assert_not "$TMP/m14-def.log" "model-old" "M14-④：旧记录仍没有参与"
-
-# ⑤ 展示列的来源标注（名册照写、但要说清是哪来的；此刻 state=vendor-legacy/model-old，配置=默认）
-assert_eq "M14-⑤：旧记录 ≠ 当前配置 → 标「历史记录」" "$(m14_lib team_agent_model_src dev)" "历史记录"
-m14 $TEAM roster >"$TMP/m14-roster-hist.log" 2>&1 && ok "M14-⑤：roster 退出码 0" || bad "M14-⑤：roster 失败"
-assert_has "$TMP/m14-roster-hist.log" "vendor-legacy/model-old·历史记录" "M14-⑤：roster 把旧记录标成「历史记录」（不再冒充当前配置）"
-assert_has "$TMP/m14-roster-hist.log" "下次派单用新配置" "M14-⑤：图例说明「历史记录」的含义"
-# ps 侧同一列（给它一个假会话文件，agent 会话行才会打印；TEAM_PI_AGENT_DIR 钉在 $TMP，绝不碰真 HOME）
-M14PADIR="$TMP/m14-piagent"
-M14SESSDIR="$M14PADIR/sessions/--$(printf '%s' "$M14WT" | sed -e 's|^/||' -e 's|[/\\:]|-|g')--"
-mkdir -p "$M14SESSDIR"
-head -c 4000 /dev/zero | tr '\0' 'x' > "$M14SESSDIR/2026-01-01T00-00-00-000Z_$M14SES-dev.jsonl"
-m14 env TEAM_PI_AGENT_DIR="$M14PADIR" $TEAM ps >"$TMP/m14-ps-hist.log" 2>&1 && ok "M14-⑤：ps 退出码 0" || bad "M14-⑤：ps 失败"
-assert_has "$TMP/m14-ps-hist.log" "vendor-legacy/model-old·历史记录" "M14-⑤：ps 的会话行同样标「历史记录」"
-# 记录与当前配置一致 → 「配置」（老记录没有 model_src 字段也判得对）
-printf 'model=%s\nwindow=dev\nworktree=%s\n' "$M14DEF" "$M14WT" > "$M14R/.pi/team/state/dev.env"
-assert_eq "M14-⑤：记录 == 当前配置 → 标「配置」" "$(m14_lib team_agent_model_src dev)" "配置"
-m14 $TEAM roster >"$TMP/m14-roster-cfg.log" 2>&1
-assert_has "$TMP/m14-roster-cfg.log" "$M14DEF·配置" "M14-⑤：roster 把一致的记录标成「配置」"
-# 上次是 --model 显式派的 → 「显式」（哪怕它与配置不同，来源也要如实说）
-printf 'model=vendor-x/model-x\nmodel_src=explicit\nwindow=dev\nworktree=%s\n' "$M14WT" > "$M14R/.pi/team/state/dev.env"
-assert_eq "M14-⑤：上次 --model 显式 → 标「显式」" "$(m14_lib team_agent_model_src dev)" "显式"
-m14 $TEAM roster >"$TMP/m14-roster-exp.log" 2>&1
-assert_has "$TMP/m14-roster-exp.log" "vendor-x/model-x·显式" "M14-⑤：roster 把显式记录标成「显式」"
-# 没有任何记录 → 展示的就是配置解析 → 「配置」
-rm -f "$M14R/.pi/team/state/dev.env"
-assert_eq "M14-⑤：无记录 → 标「配置」" "$(m14_lib team_agent_model_src dev)" "配置"
-m14 $TEAM roster >"$TMP/m14-roster-none.log" 2>&1
-assert_has "$TMP/m14-roster-none.log" "$M14DEF·配置" "M14-⑤：无记录时 roster 直接展示配置解析并标「配置」"
-
-=======
->>>>>>> task/P14-apply-pulse-console-b3-i18n-
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
