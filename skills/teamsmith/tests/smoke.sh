@@ -6609,6 +6609,47 @@ elif [ "$HAVE_TMUX" = "1" ]; then
       "$P10R" "$P10_HOME" "$P10_HOME" "$P10_TRUE_STATE" \
       "$([ "$1" = "-" ] && echo '' || printf "TEAM_AGENT_LOG_GLOB='%s'" "$1")" "$SKILL_DIR" "$2"
   }
+  # M20（同族复查）：26-m 的「首帧 / 重绘 / 动作回响 / 节拍 / tick 节奏」都是**实现速度**断言，
+  # 不是契约超时 —— 负载下单次固定 sleep 会假红（F-V16-10 的同族形状；26-m 回响实测红过一次：
+  # 标题带停在 `待命 off`）。统一改成**有界轮询**：等的是条件（标题带 / 回显 / 帧 / 心跳），
+  # 不是「1.5s 内必须完成」；超时仍然红，并把最后一帧原样打出来。
+  # 预算 10s 的来历（V16 实测）：一帧典型 1.24–1.6s（安静）/ 4.1s（loadavg 7–8），动作回响还要再
+  # 加一个 `team standby` 子进程 —— 10s ≈ 最坏观测的 2.4 倍。TEAM_SMOKE_PANEL_POLL_SECS 只给翻转
+  # 演练用（把预算调小 → 这些断言必须红，证明轮询不是「永远绿」）。
+  P10_POLL_SECS="${TEAM_SMOKE_PANEL_POLL_SECS:-10}"
+  case "$P10_POLL_SECS" in ''|*[!0-9]*) P10_POLL_SECS=10 ;; esac
+  # 轮询实际等了多久：写在文件里而不是变量里 —— helper 被 `$(…)` 调用（子 shell），
+  # 在里面赋值不会传回父 shell（M20 第一版就在 `set -u` 下把整轮门禁打停在 26-m）。
+  P10_WAIT_MS_FILE="$TMP/p10-wait-ms"
+  p10_wait_ms() { cat "$P10_WAIT_MS_FILE" 2>/dev/null || printf '?' ; }
+  p10_wait_pane() { # <pane> <needle> [秒] → 打印最后一帧；0=出现了；实际等待毫秒落 P10_WAIT_MS_FILE
+    local pane="$1" needle="$2" secs="${3:-$P10_POLL_SECS}" i=0 ticks cap="" t0
+    t0="$(date +%s%3N)"
+    ticks=$((secs * 4))
+    while [ "$i" -lt "$ticks" ]; do
+      cap="$(tmux capture-pane -p -t "$pane" 2>/dev/null)"
+      case "$cap" in *"$needle"*) printf '%s' "$(( $(date +%s%3N) - t0 ))" > "$P10_WAIT_MS_FILE"; printf '%s' "$cap"; return 0 ;; esac
+      sleep 0.25
+      i=$((i + 1))
+    done
+    printf '%s' "$(( $(date +%s%3N) - t0 ))" > "$P10_WAIT_MS_FILE"
+    printf '%s' "$cap"
+    return 1
+  }
+  p10_wait_title() { # <pane> <needle> [秒] → 打印最后一行的标题带；0=出现了；实际等待毫秒落 P10_WAIT_MS_FILE
+    local pane="$1" needle="$2" secs="${3:-$P10_POLL_SECS}" i=0 ticks line="" t0
+    t0="$(date +%s%3N)"
+    ticks=$((secs * 4))
+    while [ "$i" -lt "$ticks" ]; do
+      line="$(tmux capture-pane -p -t "$pane" 2>/dev/null | head -1)"
+      case "$line" in *"$needle"*) printf '%s' "$(( $(date +%s%3N) - t0 ))" > "$P10_WAIT_MS_FILE"; printf '%s' "$line"; return 0 ;; esac
+      sleep 0.25
+      i=$((i + 1))
+    done
+    printf '%s' "$(( $(date +%s%3N) - t0 ))" > "$P10_WAIT_MS_FILE"
+    printf '%s' "$line"
+    return 1
+  }
   # ① 会话范围 + 重绘周期：本项目 session 里 dev 窗口在跑；verify 的窗口在**另一个 session**
   tmux kill-session -t "$P10_SCOPE" 2>/dev/null || true
   tmux kill-session -t "$P10_OTHER" 2>/dev/null || true
@@ -6616,14 +6657,13 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   tmux new-session -d -s "$P10_OTHER" -x 120 -y 29 -c "$P10R" -n verify "sleep 300" 2>/dev/null
   tmux new-window -d -t "$P10_SCOPE" -n "$P10_W1" -c "$P10R" "$(p10_panel_cmd "$P10_LEFT_LOG" 1)" 2>/dev/null \
     || bad "26-m 真 pane：起面板窗口失败"
-  sleep 4
   tmux resize-window -t "$P10_SCOPE:$P10_W1" -x 120 -y 29 2>/dev/null || true
-  sleep 3
-  P10_CAP="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null)"
-  case "$P10_CAP" in
-    *teamsmith*巡检*) ok "26-m 真 pane（120x29）：capture 里有标题带（项目/巡检周期）" ;;
-    *) bad "26-m 真 pane：capture 里没有标题带（pane=$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | wc -c) 字节）" ;;
-  esac
+  # M20：等首帧（有界轮询）——原来 sleep 4 + resize + sleep 3 是固定等待，负载下还没画完就 capture。
+  if P10_CAP="$(p10_wait_pane "$P10_SCOPE:$P10_W1" '巡检' 20)"; then
+    ok "26-m 真 pane（120x29）：首帧渲染出标题带（项目/巡检周期，有界轮询 ≤20s，实际 $(p10_wait_ms)ms）"
+  else
+    bad "26-m 真 pane：20s 内没渲染出标题带（pane=$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | wc -c) 字节）"
+  fi
   assert_eq "26-m 真 pane：capture 里 0 个 ESC 字节" "$(printf '%s' "$P10_CAP" | tr -cd '\033' | wc -c | tr -d ' ')" "0"
   if printf '%s' "$P10_CAP" | grep -qF 'LEFT-MARKER'; then
     ok "26-m 会话范围：本 session 的 dev 窗口出现在活动列"
@@ -6640,47 +6680,65 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     ok "26-m 会话范围：另一个 session 的窗口不出现（只监视本 session）"
   fi
-  sleep 1.5
-  P10_CAP2="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null)"
+  # M20：等**时钟自己走**（有界轮询），不再 sleep 1.5 后单次比较 —— 负载下一拍可能还没画出来。
   P10_TS1="$(printf '%s' "$P10_CAP" | head -1 | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}')"
-  P10_TS2="$(printf '%s' "$P10_CAP2" | head -1 | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}')"
+  P10_TS2="$P10_TS1"
+  P10_CAP2="$P10_CAP"
+  for _p10i in $(seq 1 $((P10_POLL_SECS * 4))); do
+    P10_CAP2="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null)"
+    P10_TS2="$(printf '%s' "$P10_CAP2" | head -1 | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}')"
+    [ -n "$P10_TS1" ] && [ -n "$P10_TS2" ] && [ "$P10_TS1" != "$P10_TS2" ] && break
+    sleep 0.25
+  done
   if [ -n "$P10_TS1" ] && [ -n "$P10_TS2" ] && [ "$P10_TS1" != "$P10_TS2" ]; then
-    ok "26-m 重绘：TEAM_MONITOR_REFRESH=1 下两次 capture 的时间戳不同（$P10_TS1 → $P10_TS2）"
+    ok "26-m 重绘：TEAM_MONITOR_REFRESH=1 下时钟自己走了（$P10_TS1 → $P10_TS2，有界轮询 ≤${P10_POLL_SECS}s）"
   else
-    bad "26-m 重绘：1.5s 后时间戳没变（$P10_TS1 / $P10_TS2）"
+    bad "26-m 重绘：等满 ${P10_POLL_SECS}s 时间戳都没变（$P10_TS1 / $P10_TS2）"
+  fi
+  # 轮询失败路径的自检（不假绿）：一个不可能出现的 needle 必须在 1s 内超时。
+  # 这条不需要任何环境旋钮：把「轮询其实永远返回 0」这种坏样子钉在门禁里。
+  if p10_wait_pane "$P10_SCOPE:$P10_W1" 'M20-NEVER-APPEARS' 1 >/dev/null; then
+    bad "26-m 轮询自检：不可能出现的 needle 竟然出现了（轮询是假的）"
+  else
+    ok "26-m 轮询自检：不可能出现的 needle 在 1s 内超时（失败路径真实，不是永远绿）"
   fi
   # 标题带的时间戳由活时钟给（每秒自走），所以还要两条**数据**证据，把「动作即时回响」与
   # 「节拍重建缓存」分开钉住（V14/F1：动作不能等到 TTL 到期才上屏）：
-  # ① 面板里的动作：按 s → 输入理由 → Enter，1.5s 内标题带必须出现原因（动作后强制失效 + 立即重绘）。
+  # ① 面板里的动作：按 s → 输入理由 → Enter。M20：全程有界轮询（等 compose 打开 → 等回显 →
+  #   等标题带），不再用 0.7/0.3/1.5 秒三段固定 sleep —— 负载下「按键被拖到下一拍」不该判红，
+  #   但「一直不回响」仍然是红（超时把最后一帧打出来）。
   tmux send-keys -t "$P10_SCOPE:$P10_W1" s 2>/dev/null || true
-  sleep 0.7
-  tmux send-keys -l -t "$P10_SCOPE:$P10_W1" "action-proof" 2>/dev/null || true
-  sleep 0.3
-  tmux send-keys -t "$P10_SCOPE:$P10_W1" Enter 2>/dev/null || true
-  sleep 1.5
-  P10_TITLE_ACT="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | head -1)"
-  case "$P10_TITLE_ACT" in
-    *"待命 on（原因：action-proof）"*)
-      ok "26-m 回响：面板里按 s 进待命，原因 1.5s 内落到标题带（动作后强制失效缓存 + 立即重绘）" ;;
-    *)
-      bad "26-m 回响：按 s 后 1.5s 内标题带没出现待命原因（现在的标题行：$P10_TITLE_ACT）" ;;
-  esac
-  # ② 面板外的改动：只能靠节拍（frame 块 TTL 0.5s < 1s 节拍），1.5s 内标题带必须回到 off。
+  if p10_wait_pane "$P10_SCOPE:$P10_W1" 'Enter 进入待命' >/dev/null; then
+    tmux send-keys -l -t "$P10_SCOPE:$P10_W1" "action-proof" 2>/dev/null || true
+    p10_wait_pane "$P10_SCOPE:$P10_W1" 'action-proof' >/dev/null || true   # 等回显：确认字符进了草稿
+    tmux send-keys -t "$P10_SCOPE:$P10_W1" Enter 2>/dev/null || true
+    if P10_TITLE_ACT="$(p10_wait_title "$P10_SCOPE:$P10_W1" '待命 on（原因：action-proof）')"; then
+      ok "26-m 回响：面板里按 s 进待命，原因在有界轮询内落到标题带（动作后强制失效缓存 + 立即重绘；实际 $(p10_wait_ms)ms）"
+    else
+      bad "26-m 回响：等满 ${P10_POLL_SECS}s 标题带也没出现待命原因（现在的标题行：$P10_TITLE_ACT）"
+    fi
+  else
+    P10_TITLE_ACT="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | head -1)"
+    bad "26-m 回响：按 s 后 ${P10_POLL_SECS}s 内面板没打开待命理由输入（现在的标题行：$P10_TITLE_ACT）"
+  fi
+  # ② 面板外的改动：只能靠节拍（frame 块 TTL 0.5s < 1s 节拍）。M20：同样等条件（有界轮询）。
   ( cd "$P10R" && TEAM_STATE_DIR="$P10_TRUE_STATE" bash "$SKILL_DIR/scripts/team" --root "$P10R" standby off ) >/dev/null 2>&1 || true
-  sleep 1.5
-  P10_TITLE_EXT="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | head -1)"
-  case "$P10_TITLE_EXT" in
-    *"待命 off"*)
-      ok "26-m 节拍：面板外的 standby off 1.5s 内落到标题带（每拍重建一次缓存）" ;;
-    *)
-      bad "26-m 节拍：面板外的改动没在 1.5s 内落到标题带（现在的标题行：$P10_TITLE_EXT）" ;;
-  esac
+  if P10_TITLE_EXT="$(p10_wait_title "$P10_SCOPE:$P10_W1" '待命 off')"; then
+    ok "26-m 节拍：面板外的 standby off 在有界轮询内落到标题带（每拍重建一次缓存；实际 $(p10_wait_ms)ms）"
+  else
+    P10_TITLE_EXT="$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | head -1)"
+    bad "26-m 节拍：等满 ${P10_POLL_SECS}s 面板外的改动也没落到标题带（现在的标题行：$P10_TITLE_EXT）"
+  fi
   tmux kill-window -t "$P10_SCOPE:$P10_W1" 2>/dev/null || true
   # ② 60x8：不超过窗格
   tmux kill-session -t "$P10_W2" 2>/dev/null || true
   tmux new-session -d -s "$P10_W2" -x 60 -y 8 -c "$P10R" -n panel "$(p10_panel_cmd - 2)" 2>/dev/null || true
-  sleep 4
-  P10_TINY="$(tmux capture-pane -p -t "$P10_W2:panel" 2>/dev/null)"
+  # M20：等首帧（有界轮询）——原来 sleep 4 后 capture，负载下可能一行都没画完。
+  if P10_TINY="$(p10_wait_pane "$P10_W2:panel" 'teamsmith' 20)"; then
+    ok "26-m 真 pane（60x8）：首帧渲染出来了（有界轮询 ≤20s，实际 $(p10_wait_ms)ms）"
+  else
+    bad "26-m 真 pane（60x8）：20s 内没渲染出首帧（先不测宽度）"
+  fi
   P10_TINY_ROWS="$(printf '%s\n' "$P10_TINY" | grep -c .)"
   P10_TINY_W="$(printf '%s\n' "$P10_TINY" | python3 -c 'import sys,unicodedata
 m=0
@@ -6698,19 +6756,31 @@ print(m)' 2>/dev/null || echo 999)"
   tmux kill-session -t "$P10_W3" 2>/dev/null || true
   tmux new-session -d -s "$P10_W3" -x 120 -y 29 -c "$P10R" -n panel \
     "cd '$P10R' && HOME='$P10_HOME' TEAM_PI_AGENT_DIR='$P10_HOME/.pi/agent' TEAM_STATE_DIR='$P10_TICK_STATE' TEAM_PULSE_INTERVAL=2 bash '$SKILL_DIR/scripts/team' monitor --no-pulse --interval 1" 2>/dev/null || true
-  sleep 4
-  if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 仍然写了 capacity.log"; else ok "26-m tick：--no-pulse 不写 capacity.log（面板还活着：$(tmux capture-pane -p -t "$P10_W3:panel" 2>/dev/null | grep -c .) 行）"; fi
+  # M20：先证明面板出了帧（有界轮询），再断言「没写 capacity.log」——否则「没写」可能只是因为
+  # 面板根本没起来（假绿）。
+  if P10_TICK_LIVE="$(p10_wait_pane "$P10_W3:panel" '巡检' 20)"; then
+    if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 仍然写了 capacity.log"; else ok "26-m tick：--no-pulse 不写 capacity.log（面板还活着：$(printf '%s' "$P10_TICK_LIVE" | grep -c .) 行，有界轮询 $(p10_wait_ms)ms）"; fi
+  else
+    if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 写了 capacity.log，且面板 20s 内没出帧"; else bad "26-m tick：面板 20s 内没出帧 → 「--no-pulse 没写 capacity.log」无法判定（不算绿）"; fi
+  fi
   tmux kill-session -t "$P10_W3" 2>/dev/null || true
   rm -rf "$P10_TICK_STATE"; mkdir -p "$P10_TICK_STATE"
   tmux kill-session -t "$P10_W3" 2>/dev/null || true
   tmux new-session -d -s "$P10_W3" -x 120 -y 29 -c "$P10R" -n panel \
     "cd '$P10R' && HOME='$P10_HOME' TEAM_PI_AGENT_DIR='$P10_HOME/.pi/agent' TEAM_STATE_DIR='$P10_TICK_STATE' TEAM_PULSE_INTERVAL=2 bash '$SKILL_DIR/scripts/team' monitor --interval 1" 2>/dev/null || true
-  sleep 6
-  P10_TICK_LINES="$(wc -l < "$P10_TICK_STATE/capacity.log" 2>/dev/null | tr -d ' ' || echo 0)"
+  # M20：等节拍自己走够 2 行（有界轮询）。这一条是**协议等待**（`TEAM_PULSE_INTERVAL=2` 的节拍跑够
+  # ≥2 次 = 语义上至少要 2×2s），所以协议时间一点没缩短，仍然要看到 ≥2 行 capacity 才算过；
+  # 轮询只是不再把「面板进程启动/首拍」的时间算进固定预算（原来 sleep 6：4s 协议 + 2s 启动余量）。
+  P10_TICK_LINES=0
+  for _p10i in $(seq 1 $((P10_POLL_SECS * 4))); do
+    P10_TICK_LINES="$(wc -l < "$P10_TICK_STATE/capacity.log" 2>/dev/null | tr -d ' ' || echo 0)"
+    [ "${P10_TICK_LINES:-0}" -ge 2 ] && break
+    sleep 0.25
+  done
   if [ "${P10_TICK_LINES:-0}" -ge 2 ]; then
-    ok "26-m tick：默认运行按周期留下 capacity 行（$P10_TICK_LINES 行 / 6s）"
+    ok "26-m tick：默认运行按周期留下 capacity 行（$P10_TICK_LINES 行；协议等待 TEAM_PULSE_INTERVAL=2 的 ≥2 拍，有界轮询 ≤${P10_POLL_SECS}s）"
   else
-    bad "26-m tick：默认运行没有按周期 tick（capacity 行=$P10_TICK_LINES）"
+    bad "26-m tick：等满 ${P10_POLL_SECS}s 也没按周期 tick（capacity 行=$P10_TICK_LINES）"
   fi
   assert_eq "26-m tick：tick 日志被裁剪在 200 行以内" \
     "$([ "$(wc -l < "$P10_TICK_STATE/watchdog.tick.log" 2>/dev/null | tr -d ' ' || echo 0)" -le 200 ] && echo ok)" "ok"
@@ -6884,14 +6954,43 @@ else
   ok "27-c 夹具自检：等价断言真的在比一个数（reports=$P27_CANON_REPORTS）"
 fi
 
-# ---- 27-d 装配红线：一帧（不带 tick）在 2s 内装完
-P27_T0="$(date +%s%3N)"
-p27 $TEAM monitor --print --no-activity >"$TMP/p27-timed.txt" 2>/dev/null
-P27_MS=$(( $(date +%s%3N) - P27_T0 ))
+# ---- 27-d 装配红线：一帧（不带 tick）的**典型**耗时 ≤ 2s
+# M20 / V16 F-V16-10：旧断言是**单次采样**（安静机器 12 次采样 1240/1409/2030ms → 1 次越线；
+# loadavg 7–8 时 1323/1417/4118ms → 3 次越线；典型成本 1.24–1.6s，余量只有 0.4–0.7s）——
+# 正常团队并发就能碰线，一次假红要浪费整轮复验（~350s）。现在取 5 次采样的**中位**：语义从
+# 「单次不快即坏」变成「典型不快才坏」，预算仍是 2000ms（没有放宽）。单次尖峰由中位吸收；
+# 中位越线才红 —— 下面的「判定自检」把这两个方向都钉住。
+# TEAM_SMOKE_FRAME_DELAY_MS=<ms>：只给翻转演练用的注入延迟（每个采样都注入 = 每帧都慢）——
+# 正常门禁不设这个变量；设上之后中位必须越线变红（剧场检查：证明新断言没被改成永远绿）。
+P27_SAMPLES=5
+P27_INJECT_MS="${TEAM_SMOKE_FRAME_DELAY_MS:-0}"
+case "$P27_INJECT_MS" in ''|*[!0-9]*) P27_INJECT_MS=0 ;; esac
+P27_INJECT_S="$(awk -v ms="$P27_INJECT_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
+p27_median() { # <数字…> → 中位（调用方保证样本数为奇数）
+  printf '%s\n' "$@" | sort -n | awk '{a[NR] = $1} END {print a[int((NR + 1) / 2)]}'
+}
+P27_OBS=()
+P27_LOADAVG="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')"   # 判红时一眼能看出是不是并发负载
+for _p27i in $(seq 1 "$P27_SAMPLES"); do
+  P27_T0="$(date +%s%3N)"
+  p27 $TEAM monitor --print --no-activity >"$TMP/p27-timed.txt" 2>/dev/null
+  [ "$P27_INJECT_MS" -gt 0 ] && sleep "$P27_INJECT_S"   # 注入落在测量窗口里
+  P27_OBS+=("$(( $(date +%s%3N) - P27_T0 ))")
+done
+P27_MS="$(p27_median "${P27_OBS[@]}")"
+P27_OBS_TXT="$(printf '%s, ' "${P27_OBS[@]}")"
+P27_OBS_TXT="${P27_OBS_TXT%, }"
 if [ "$P27_MS" -le 2000 ]; then
-  ok "27-d 装配红线：夹具上一帧 ${P27_MS}ms ≤ 2000ms"
+  ok "27-d 装配红线：${P27_SAMPLES} 次采样的中位 ${P27_MS}ms ≤ 2000ms（样本 ${P27_OBS_TXT}ms；采样时 loadavg ${P27_LOADAVG}）"
 else
-  bad "27-d 装配红线：夹具上一帧 ${P27_MS}ms（> 2000ms）"
+  bad "27-d 装配红线：${P27_SAMPLES} 次采样的中位 ${P27_MS}ms（> 2000ms；样本 ${P27_OBS_TXT}ms；采样时 loadavg ${P27_LOADAVG} —— 若 loadavg 高则是共享机器上的并发争用，不是单次尖峰）"
+fi
+# 判定自检（不启动进程，只测判定本身）：① 单次越线不红；② 中位越线必须红。
+# 少了这两条，『中位』这个判定自己坏了（比如排序写错、取错元素）也看不出来。
+if [ "$(p27_median 1240 1417 2030 1400 1500)" -le 2000 ] && [ "$(p27_median 2100 2050 2200 1900 2300)" -gt 2000 ]; then
+  ok "27-d 判定自检：单次越线（2030ms）仍判绿、中位越线（2100ms）判红"
+else
+  bad "27-d 判定自检：中位判定坏了（$(p27_median 1240 1417 2030 1400 1500) / $(p27_median 2100 2050 2200 1900 2300)）"
 fi
 p27 $TEAM monitor --json >"$TMP/p27-json.json" 2>/dev/null
 if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=d["panel"]; assert set(["project","timestamp","interval","standby","pm","pending","outbox","capacity","agents","recent"]).issubset(p)' "$TMP/p27-json.json" 2>/dev/null; then
