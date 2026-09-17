@@ -44,7 +44,11 @@ export const en = {
   deliveriesEmpty: '(no deliveries yet)',
 
   // Agent table
+<<<<<<< HEAD
   agentsHeader: 'AGENT',
+=======
+  agentsHeader: 'agent',
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
   tableState: 'state',
   tableTask: 'task',
   tableBranch: 'branch',
@@ -158,6 +162,11 @@ export const en = {
   // Input line and receipts
   composeHint: 'Enter send · Esc cancel (draft kept) · C-e editor',
   composeReasonHint: 'Enter standby · Esc cancel',
+<<<<<<< HEAD
+=======
+  composeTitle: 'Message',
+  composeStandbyTitle: 'Standby reason',
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
   receiptDelivered: '✓ delivered to the PM · delivered',
   receiptQueued: '… queued (the PM is typing) · queued',
   receiptHeld: '! held (copy under state/outbox/held/) · held',

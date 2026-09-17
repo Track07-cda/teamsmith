@@ -49,16 +49,98 @@ for width in 160 120 99 59; do
     if [ "$update" = "1" ]; then
       cp "$actual" "$snapdir/$name.txt"
       ok "$name：已重新钉住（$(wc -c < "$snapdir/$name.txt" | tr -d ' ') 字节）"
+<<<<<<< HEAD
       continue
+=======
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
     fi
     if [ ! -f "$snapdir/$name.txt" ]; then
       bad "$name：没有钉住的快照（先跑 --update）"; continue
     fi
+<<<<<<< HEAD
     if cmp -s "$actual" "$snapdir/$name.txt"; then
       ok "$name：与钉住的快照逐字节一致"
     else
       bad "$name：与钉住的快照不一致（首个差异如下）"
       diff <(sed 's/\x1b\[[0-9;]*m//g' "$snapdir/$name.txt") <(sed 's/\x1b\[[0-9;]*m//g' "$actual") | head -4
+=======
+    if [ "$update" != "1" ]; then
+      if cmp -s "$actual" "$snapdir/$name.txt"; then
+        ok "$name：与钉住的快照逐字节一致"
+      else
+        bad "$name：与钉住的快照不一致（首个差异如下）"
+        diff <(sed 's/\x1b\[[0-9;]*m//g' "$snapdir/$name.txt") <(sed 's/\x1b\[[0-9;]*m//g' "$actual") | head -4
+      fi
+    fi
+    # 追加 3/4：四档宽度下会话值完整；表头/数据同一份列计划（起点相等、单元格不跨列）。
+    colchk="$tmp/$name.cols"
+    if python3 - "$actual" <<'PY' >"$colchk" 2>&1
+import re, sys
+WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+        (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+        (0xff00, 0xff60), (0xffe0, 0xffe6), (0x1f300, 0x1f64f), (0x1f900, 0x1f9ff)]
+
+def strip(s):
+    return re.sub(r"\x1b\[[0-9;]*m", "", s)
+
+def dwidth(text):
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+            continue
+        total += 2 if any(a <= cp <= b for a, b in WIDE) else 1
+    return total
+
+def offset_of(line, needle):
+    idx = line.find(needle)
+    if idx < 0:
+        return -1
+    return dwidth(line[:idx])
+
+rows = [strip(l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+joined = "\n".join(rows)
+if "41k/272k" not in joined:
+    print("session value 41k/272k missing (truncated?)")
+    sys.exit(1)
+header = next((r for r in rows if "会话" in r and "代理" in r), None)
+data = next((r for r in rows if "41k/272k" in r and "dev" in r), None)
+if not header:
+    print("agents header not found")
+    sys.exit(1)
+if not data:
+    print("agents data row not found")
+    sys.exit(1)
+hs = offset_of(header, "会话")
+ds = offset_of(data, "41k/272k")
+if hs != ds:
+    print(f"session column start header={hs} data={ds}")
+    sys.exit(1)
+if "任务" in header:
+    ht = offset_of(header, "任务")
+    dt = offset_of(data, "P14")
+    if ht != dt:
+        print(f"task column start header={ht} data={dt}")
+        sys.exit(1)
+    nxt = [offset_of(header, n) for n in ("分支", "会话") if n in header]
+    nxt = [x for x in nxt if x > ht]
+    if nxt and dt + dwidth("P14") > min(nxt):
+        print("task cell crosses into the next column")
+        sys.exit(1)
+if "分支" in header:
+    hb = offset_of(header, "分支")
+    # data branch starts after the task cell (or state if no task); the fixture branch is unique.
+    db = offset_of(data, "P14-apply-pulse-console-b3")
+    if db >= 0 and hb != db:
+        print(f"branch column start header={hb} data={db}")
+        sys.exit(1)
+print("ok")
+PY
+    then
+      ok "$name：会话列完整且表头/数据列起点对齐"
+    else
+      bad "$name：会话列或列对齐失败（$(tr '\n' ' ' < "$colchk")）"
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
     fi
   done
 done

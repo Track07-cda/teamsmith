@@ -83,7 +83,7 @@ TEAM_OUTBOX_MAX=200                   # maximum active queue entries (the oldest
 # Renamed watchdog → pulse in v1.36.0: the legacy TEAM_WATCH_* names keep working as fallbacks until v2.0.0
 # (precedence: TEAM_PULSE_<NAME> > TEAM_WATCH_<NAME> > default; `team pulse status` names any legacy variable in effect).
 TEAM_PULSE_WINDOW="pulse"           # tmux window running the monitor
-TEAM_MONITOR_REFRESH=5                # monitor refresh interval (seconds)
+TEAM_MONITOR_REFRESH=3                # monitor refresh interval (seconds); console default (was 5)
 TEAM_PULSE_PENDING_BOARD=0            # 0 = board todo/wip is not a wake-up signal (blocked/unread/awaiting review/stopped agents are)
 TEAM_MONITOR_ACTIVITY=0               # 1 = append per-agent activity streams below the panel (current session only)
 TEAM_MONITOR_EVENTS=4                 # recent events per agent when activity is enabled

@@ -6192,12 +6192,21 @@ for _f in w160 w99 w59 tiny; do
   if grep -q 'teamsmith pulse' "$TMP/p10-$_f.txt"; then ok "26-e 夹具：$_f 的帧非空"
   else bad "26-e 夹具：$_f 没有输出（后面的断言会空跑）"; fi
 done
+<<<<<<< HEAD
 if grep -qE 'AGENT.*活动（仅本 session' "$TMP/p10-w160.txt"; then ok "26-e 档位：160 列是双列（表头与右栏标题同一行）"
 else bad "26-e 档位：160 列没有双列"; fi
 if grep -qE 'AGENT.*活动（仅本 session' "$TMP/p10-w99.txt"; then bad "26-e 档位：99 列不该是双列"
 else ok "26-e 档位：99 列单列（表头与右栏标题不同行）"; fi
 P10_PM_LINE="$(grep -n 'PM ' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
 P10_AGENT_LINE="$(grep -n 'AGENT' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
+=======
+if grep -qE '代理.*活动（仅本 session' "$TMP/p10-w160.txt"; then ok "26-e 档位：160 列是双列（表头与右栏标题同一行）"
+else bad "26-e 档位：160 列没有双列"; fi
+if grep -qE '代理.*活动（仅本 session' "$TMP/p10-w99.txt"; then bad "26-e 档位：99 列不该是双列"
+else ok "26-e 档位：99 列单列（表头与右栏标题不同行）"; fi
+P10_PM_LINE="$(grep -n 'PM ' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
+P10_AGENT_LINE="$(grep -n '代理' "$TMP/p10-w160.txt" | head -1 | cut -d: -f1)"
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
 P10_KEY_LINE="$(grep -n 'q 收起' "$TMP/p10-w160.txt" | tail -1 | cut -d: -f1)"
 if [ -n "$P10_PM_LINE" ] && [ -n "$P10_AGENT_LINE" ] && [ "$P10_PM_LINE" -lt "$P10_AGENT_LINE" ] && [ -n "$P10_KEY_LINE" ]; then
   ok "26-e 布局：PM/待办行在 agent 行之前，键位行存在（160x29）"
@@ -6758,8 +6767,8 @@ p27 $TEAM monitor --print --width 120 --height 29 >"$TMP/p27-degraded.txt" 2>"$T
 P27_DEG_RC=$?
 assert_eq "27-b 块隔离：--print 在坏源下退出 0" "$P27_DEG_RC" "0"
 assert_has "$TMP/p27-degraded.txt" "待办 —" "27-b 块隔离：读不了的 BOARD 让待办块渲染 —"
-assert_has "$TMP/p27-degraded.txt" "容量 —" "27-b 块隔离：没有 capacity.log 让容量块渲染 —"
-assert_has "$TMP/p27-degraded.txt" "AGENT" "27-b 块隔离：其余块照常渲染（agent 表）"
+assert_has "$TMP/p27-degraded.txt" "容量" "27-b 块隔离：没有 capacity.log 让容量块渲染标题"
+assert_has "$TMP/p27-degraded.txt" "代理" "27-b 块隔离：其余块照常渲染（agent 表）"
 assert_has "$TMP/p27-degraded.txt" "PM " "27-b 块隔离：其余块照常渲染（PM 行）"
 assert_not "$TMP/p27-degraded.txt" "延后投递 —" "27-b 块隔离：队列块没有被牵连"
 p27 $TEAM __panel-data --block pending >/dev/null 2>&1
@@ -6988,6 +6997,7 @@ case ",$P28_KINDS3," in
   *) bad "28-f 点击目标：队列行没有 view-entry 目标（$P28_KINDS3）" ;;
 esac
 
+<<<<<<< HEAD
 # ---------------------------------------------------------------- 29. 派单模型解析：配置压过名册旧记录（M14）
 # 契约（真实事故：TEAM_AGENT_MODELS 已配 dev=kimi-coding/k3-256k，dispatch 仍按名册 state 里的
 # deepseek 旧记录启动 —— 旧实现 model="${model:-$(state_get model (config))}" 让旧记录赢了配置）：
@@ -7088,6 +7098,8 @@ assert_eq "M14-⑤：无记录 → 标「配置」" "$(m14_lib team_agent_model_
 m14 $TEAM roster >"$TMP/m14-roster-none.log" 2>&1
 assert_has "$TMP/m14-roster-none.log" "$M14DEF·配置" "M14-⑤：无记录时 roster 直接展示配置解析并标「配置」"
 
+=======
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"

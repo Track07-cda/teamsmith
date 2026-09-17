@@ -106,17 +106,134 @@ function padLine(line: Line, width: number): Line {
   return d > 0 ? [...line, seg(' '.repeat(d), 'text')] : line
 }
 
+/**
+ * Truncate a line and clip its hit spans to the *rendered* coordinates (V15/F4): when the line
+ * is cut, the ellipsis owns the last column and every target reaching into it is invisible — a
+ * click on the `…` must fire nothing. Targets are therefore generated from the line as rendered,
+ * never from the untruncated text.
+ */
+function placedWithHits(line: Line, hits: Hit[] | undefined, width: number): PlacedLine {
+  const rendered = truncLine(line, width)
+  if (!hits?.length) return { line: rendered }
+  const cut = widthOf(line) > width
+  const room = cut ? Math.max(0, width - 1) : width
+  const clipped: Hit[] = []
+  for (const h of hits) {
+    const start = Math.min(h.start, room)
+    const end = Math.min(h.end, room)
+    if (end > start) clipped.push({ ...h, start, end })
+  }
+  return clipped.length ? { line: rendered, hits: clipped } : { line: rendered }
+}
+
+function isFramed(ctx: Ctx): boolean {
+  return ctx.view.tui && ctx.view.density === 'comfortable'
+}
+
+function cardTop(title: string, width: number): Line {
+  if (width <= 1) return ln(seg(BOX_TL, 'dim'))
+  if (width === 2) return ln(seg(BOX_TL + BOX_TR, 'dim'))
+  const inner = width - 2
+  if (!title) return ln(seg(BOX_TL + BOX_H.repeat(inner) + BOX_TR, 'dim'))
+  // ╭─ title ──…──╮  (title in heading, border dim). Inner = ─ + ' ' + title + ' ' + ─…
+  const labelW = dispWidth(title)
+  if (1 + 1 + labelW + 1 > inner) {
+    const room = Math.max(0, inner - 1)
+    return ln(seg(BOX_TL + BOX_H, 'dim'), ...truncLine(ln(seg(title, 'heading')), room), seg(BOX_TR, 'dim'))
+  }
+  const fill = inner - (1 + 1 + labelW + 1) // ─ space title space ─…
+  return ln(
+    seg(BOX_TL + BOX_H + ' ', 'dim'),
+    seg(title, 'heading'),
+    seg(' ' + BOX_H.repeat(Math.max(0, fill)), 'dim'),
+    seg(BOX_TR, 'dim'),
+  )
+}
+
+function cardBottom(width: number): Line {
+  if (width <= 1) return ln(seg(BOX_BL, 'dim'))
+  if (width === 2) return ln(seg(BOX_BL + BOX_BR, 'dim'))
+  return ln(seg(BOX_BL + BOX_H.repeat(width - 2) + BOX_BR, 'dim'))
+}
+
+function cardBody(placed: PlacedLine, width: number): PlacedLine {
+  const inner = Math.max(0, width - 4) // │␠ content ␠│
+  const rendered = truncLine(placed.line, inner)
+  const pad = Math.max(0, inner - widthOf(rendered))
+  const hits: Hit[] = []
+  for (const h of placed.hits ?? []) {
+    const start = Math.min(h.start + 2, 2 + inner)
+    const end = Math.min(h.end + 2, 2 + inner)
+    if (end > start) hits.push({ ...h, start, end })
+  }
+  const line = ln(seg(`${BOX_V} `, 'dim'), ...rendered, pad > 0 ? seg(' '.repeat(pad), 'text') : null, seg(` ${BOX_V}`, 'dim'))
+  return hits.length ? { line, hits } : { line }
+}
+
+function ruleTitle(title: string, width: number): Line {
+  if (width <= 0) return []
+  if (!title) return ln(seg(rule(width, BOX_H), 'dim'))
+  const labelW = dispWidth(title)
+  if (labelW + 4 >= width) return truncLine(ln(seg(BOX_H + BOX_H + ' ', 'dim'), seg(title, 'heading')), width)
+  const left = 2
+  const right = width - left - 1 - labelW // ── title ─…
+  return ln(seg(rule(left, BOX_H) + ' ', 'dim'), seg(title, 'heading'), seg(' ' + rule(Math.max(0, right - 1), BOX_H), 'dim'))
+}
+
+function wrapBlock(block: Block, width: number, chrome: Chrome): PlacedLine[] {
+  const title = block.title
+  if (!title || chrome === 'plain') {
+    if (title && chrome === 'plain' && block.id !== 'agents') {
+      return [{ line: truncLine(ln(seg(` ${title}`, 'heading')), width) }, ...block.lines]
+    }
+    return block.lines
+  }
+  if (chrome === 'rule') {
+    return [{ line: ruleTitle(title, width) }, ...block.lines.map((l) => ({ line: truncLine(l.line, width), hits: l.hits }))]
+  }
+  return [{ line: cardTop(title, width) }, ...block.lines.map((l) => cardBody(l, width)), { line: cardBottom(width) }]
+}
+
+function pickChrome(block: Block, remaining: number, framed: boolean): Chrome | 'summary' | null {
+  const n = block.lines.length
+  if (!framed || !block.title) {
+    if (remaining >= n) return 'plain'
+    if ((block.summary || block.title) && remaining >= 1) return 'summary'
+    return null
+  }
+  if (remaining >= n + 2) return 'card'
+  if (remaining >= n + 1) return 'rule'
+  if (remaining >= 1) return 'summary'
+  return null
+}
+
+function summaryLine(block: Block, width: number): PlacedLine {
+  if (block.summary) return { line: truncLine(block.summary.line, width), hits: block.summary.hits }
+  return { line: truncLine(ln(seg(` ${block.title ?? ''}`, 'heading')), width) }
+}
+
 interface Block {
   id: string
   full?: boolean
   right?: boolean
   priority: number
   lines: PlacedLine[]
+  /** Card / rule / title-line chrome; omitted on chrome rows (title band, tabs, keys). */
+  title?: string
   /** The one-line degradation used when the height budget is tight. */
   summary?: PlacedLine
   /** A separator is inserted before the block under the comfortable density. */
   separator?: 'rule' | 'blank' | 'none'
 }
+
+const BOX_TL = '╭'
+const BOX_TR = '╮'
+const BOX_BL = '╰'
+const BOX_BR = '╯'
+const BOX_H = '─'
+const BOX_V = '│'
+
+type Chrome = 'card' | 'rule' | 'plain'
 
 interface Ctx {
   s: Strings
@@ -141,37 +258,50 @@ export interface LayoutInput extends FrameInput {
 
 // ------------------------------------------------------------------ small renderers
 
-interface TableCols {
-  name: number
-  state: number
-  task: number
-  branch: number
-  session: number
-  showBranch: boolean
-  showSession: boolean
+/** One column of the agents table. Header and data share this plan (display-width aligned). */
+interface AgentCol {
+  id: 'name' | 'state' | 'task' | 'branch' | 'session'
+  header: string
+  width: number
 }
 
-function agentColumns(width: number, minimal: boolean): TableCols {
-  const fixed = { name: 10, state: 8, task: 7, session: 7 }
-  const cols: TableCols = { ...fixed, branch: 0, showBranch: true, showSession: true }
+function stateCellText(a: PanelAgent, s: Strings, minimal: boolean): string {
   if (minimal) {
-    cols.state = 4
-    cols.task = 0
-    cols.showBranch = false
-    cols.showSession = false
-    return cols
+    const stateText = a.state === 'running' ? s.agentRunning : a.state === 'exited' ? s.agentExited : s.agentAbsent
+    return `${GLYPH[a.state] ?? '?'}${[...stateText][0] ?? ''}`
   }
-  let branch = width - (fixed.name + fixed.state + fixed.task + fixed.session + 4)
-  if (branch < 8) {
-    cols.showSession = false
-    branch = width - (fixed.name + fixed.state + fixed.task + 3)
-    if (branch < 8) {
-      cols.showBranch = false
-      branch = 0
-    }
+  return agentStateText(a, s)
+}
+
+/**
+ * Single source for the agents table: header and every data row use this plan.
+ * Session column width is the max display width of the header and every `session_text` — the
+ * value is never truncated. When the table cannot fit, columns drop in order: branch → task
+ * → session last (a time-format column is not part of this table; clocks live on other blocks).
+ */
+function agentColumnPlan(width: number, minimal: boolean, agents: PanelAgent[], s: Strings): AgentCol[] {
+  const nameW = Math.max(10, dispWidth(s.agentsHeader))
+  let stateW = dispWidth(s.tableState)
+  for (const a of agents) stateW = Math.max(stateW, dispWidth(stateCellText(a, s, minimal)))
+  let sessionW = dispWidth(s.tableSession)
+  for (const a of agents) sessionW = Math.max(sessionW, dispWidth(String(a.session_text || s.dash)))
+  const taskW = Math.max(7, dispWidth(s.tableTask))
+  const name: AgentCol = { id: 'name', header: s.agentsHeader, width: nameW }
+  const state: AgentCol = { id: 'state', header: s.tableState, width: stateW }
+  const session: AgentCol = { id: 'session', header: s.tableSession, width: sessionW }
+  const reserved = nameW + stateW + sessionW
+  const rest = width - reserved
+  if (minimal || rest < 7) return [name, state, session]
+  const task: AgentCol = { id: 'task', header: s.tableTask, width: taskW }
+  if (rest >= taskW + 8) {
+    return [name, state, task, { id: 'branch', header: s.tableBranch, width: rest - taskW }, session]
   }
-  cols.branch = Math.max(0, branch)
-  return cols
+  if (rest >= taskW) return [name, state, task, session]
+  return [name, state, session]
+}
+
+function agentLine(plan: AgentCol[], cells: { text: string; tone: Tone }[]): Line {
+  return ln(...plan.map((c, i) => seg(cell(cells[i]?.text ?? '', c.width), cells[i]?.tone ?? 'text')))
 }
 
 function agentStateText(a: PanelAgent, s: Strings): string {
@@ -238,11 +368,10 @@ function capacityBlock(ctx: Ctx): Block {
   const { s, panel, deg } = ctx
   const c = panel.capacity
   if (!c || deg.has('capacity')) {
-    return { id: 'capacity', full: true, priority: 2, lines: [{ line: ln(seg(` ${s.capacityLabel} ${s.dash}`, 'dim')) }] }
+    return { id: 'capacity', title: s.capacityLabel, full: true, priority: 2, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   const spark = sparkline(c.spark, Math.min(18, Math.max(0, ctx.width - 60)))
   const line = ln(
-    seg(` ${s.capacityLabel} `, 'dim'),
     seg(fill(s.capacityRam, { mb: fmtMB(c.ram_avail_mb) })),
     seg(' ｜ ', 'dim'),
     seg(fill(s.capacitySwap, { mb: fmtMB(c.swap_free_mb) })),
@@ -250,13 +379,13 @@ function capacityBlock(ctx: Ctx): Block {
     seg(fill(s.capacityAgents, { n: c.agents })),
     spark ? seg(`  ${spark}`, 'accent') : null,
   )
-  return { id: 'capacity', full: true, priority: 2, lines: [{ line: truncLine(line, ctx.width) }] }
+  return { id: 'capacity', title: s.capacityLabel, full: true, priority: 2, lines: [{ line: truncLine(line, ctx.width) }] }
 }
 
 function progressBlock(ctx: Ctx): Block {
   const { s, panel, deg, blocks } = ctx
   const board = blocks.board
-  const parts: Part[] = [seg(` ${s.progressLabel}  `, 'heading')]
+  const parts: Part[] = []
   if (board && !deg.has('board')) {
     const c = board.counts ?? {}
     const counts = [
@@ -285,6 +414,7 @@ function progressBlock(ctx: Ctx): Block {
   else parts.push(seg(`${s.progressDecisions.replace('{n}', s.dash)}`, 'dim'))
   return {
     id: 'progress',
+    title: s.progressLabel,
     full: true,
     priority: 5,
     lines: [{ line: truncLine(ln(...parts), ctx.width) }],
@@ -298,10 +428,9 @@ function deliveriesBlock(ctx: Ctx): Block | null {
   if (!board || deg.has('board')) return null
   const rows = board.deliveries ?? []
   if (!rows.length) {
-    return { id: 'deliveries', full: true, priority: 6, lines: [{ line: ln(seg(` ${s.deliveriesLabel}  ${s.deliveriesEmpty}`, 'dim')) }] }
+    return { id: 'deliveries', title: s.deliveriesLabel, full: true, priority: 6, lines: [{ line: ln(seg(` ${s.deliveriesEmpty}`, 'dim')) }] }
   }
   const lines: PlacedLine[] = [
-    { line: ln(seg(` ${s.deliveriesLabel}`, 'heading')) },
     ...rows.slice(0, 3).map((d) => ({
       line: truncLine(
         ln(
@@ -314,6 +443,7 @@ function deliveriesBlock(ctx: Ctx): Block | null {
   ]
   return {
     id: 'deliveries',
+    title: s.deliveriesLabel,
     full: true,
     priority: 6,
     lines,
@@ -325,41 +455,48 @@ function deliveriesBlock(ctx: Ctx): Block | null {
 
 function agentsBlock(ctx: Ctx): Block | null {
   const { s, panel, deg, width, minimal } = ctx
+  const agents = !panel.agents || deg.has('agents') ? [] : (panel.agents ?? [])
+  const framed = isFramed(ctx)
+  const tableW = framed && width > 8 ? width - 4 : width
+  const plan = agentColumnPlan(tableW, minimal, agents, s)
   if (!panel.agents || deg.has('agents')) {
-    return { id: 'agents', priority: 10, lines: [{ line: ln(seg(` ${s.agentsHeader} ${s.dash}`, 'dim')) }] }
-  }
-  const agents = panel.agents ?? []
-  const cols = agentColumns(width, minimal)
-  const header: Part[] = [
-    cell(s.agentsHeader, cols.name),
-    cell(s.tableState, cols.state),
-    cols.showBranch ? cell(s.tableBranch, cols.branch) : null,
-    cols.showSession ? cell(s.tableSession, cols.session) : null,
-  ]
-  const lines: PlacedLine[] = [{ line: truncLine(ln(...header.filter((p) => p !== null).map((p) => seg(String(p), 'heading'))), width) }]
-  if (!agents.length) {
-    lines.push({ line: ln(seg(` ${s.agentEmpty}`, 'dim')) })
-  }
-  for (const a of agents) {
-    if (minimal) {
-      // The minimal tier abbreviates the state to glyph + first character (`●在` = running).
-      const stateText = a.state === 'running' ? s.agentRunning : a.state === 'exited' ? s.agentExited : s.agentAbsent
-      const st = `${GLYPH[a.state] ?? '?'}${[...stateText][0] ?? ''}`
-      lines.push({ line: truncLine(ln(seg(cell(String(a.name ?? '?'), cols.name)), seg(cell(st, cols.state), stateTone(a.state))), width) })
-      continue
+    return {
+      id: 'agents',
+      title: s.agentsHeader,
+      priority: 10,
+      lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }],
+      summary: { line: truncLine(ln(seg(` ${s.agentsHeader} ${s.dash}`, 'heading')), width) },
     }
-    const b = shortBranch(String(a.branch ?? ''), cols.branch)
-    const flags = `${a.dirty ? ' *' : ''}${a.ahead ? ` +${a.ahead}` : ''}`
-    const row: Part[] = [
-      cell(String(a.name ?? '?'), cols.name),
-      cell(agentStateText(a, s), cols.state),
-      cols.task ? cell(String(a.task || s.dash), cols.task) : null,
-      cols.showBranch ? cell(`${b}${flags}`, cols.branch) : null,
-      cols.showSession ? cell(String(a.session_text || s.dash), cols.session) : null,
-    ]
-    lines.push({ line: truncLine(ln(...row.filter((p) => p !== null).map((p) => seg(String(p)))), width) })
   }
-  return { id: 'agents', priority: 10, lines, summary: { line: truncLine(ln(seg(` ${s.agentsHeader} (${agents.length})`, 'heading')), width) } }
+  const header = plan.map((c) => ({ text: c.header, tone: 'heading' as Tone }))
+  const lines: PlacedLine[] = [{ line: agentLine(plan, header) }]
+  if (!agents.length) lines.push({ line: ln(seg(` ${s.agentEmpty}`, 'dim')) })
+  for (const a of agents) {
+    const cells = plan.map((c) => {
+      switch (c.id) {
+        case 'name':
+          return { text: String(a.name ?? '?'), tone: 'text' as Tone }
+        case 'state':
+          return { text: stateCellText(a, s, minimal), tone: stateTone(a.state) }
+        case 'task':
+          return { text: String(a.task || s.dash), tone: 'text' as Tone }
+        case 'branch': {
+          const flags = `${a.dirty ? ' *' : ''}${a.ahead ? ` +${a.ahead}` : ''}`
+          return { text: `${shortBranch(String(a.branch ?? ''), Math.max(1, c.width - dispWidth(flags)))}${flags}`, tone: 'text' as Tone }
+        }
+        case 'session':
+          return { text: String(a.session_text || s.dash), tone: 'text' as Tone }
+      }
+    })
+    lines.push({ line: agentLine(plan, cells) })
+  }
+  return {
+    id: 'agents',
+    title: s.agentsHeader,
+    priority: 10,
+    lines,
+    summary: { line: truncLine(ln(seg(` ${s.agentsHeader} (${agents.length})`, 'heading')), width) },
+  }
 }
 
 function stateTone(state: string): Tone {
@@ -369,7 +506,7 @@ function stateTone(state: string): Tone {
 function eventsBlock(ctx: Ctx): Block | null {
   const { s, panel, deg, activity, width, view } = ctx
   if (!ctx.input.activity) return null
-  const lines: PlacedLine[] = [{ line: truncLine(ln(seg(` ${s.activityHeading}`, 'heading')), width) }]
+  const lines: PlacedLine[] = []
   if (deg.has('activity') || !panel.activity_source) {
     lines.push({ line: ln(seg(`  ${s.dash}`, 'dim')) })
   } else {
@@ -380,20 +517,20 @@ function eventsBlock(ctx: Ctx): Block | null {
     if (!evs.length) lines.push({ line: ln(seg(`  ${s.activityEmpty}`, 'dim')) })
     for (const e of evs) lines.push({ line: truncLine(ln(seg(`  ${e}`)), width) })
   }
-  return { id: 'events', right: true, priority: 11, lines, summary: { line: truncLine(ln(seg(` ${s.activityHeading}`, 'heading')), width) } }
+  return { id: 'events', title: s.activityHeading, right: true, priority: 11, lines, summary: { line: truncLine(ln(seg(` ${s.activityHeading}`, 'heading')), width) } }
 }
 
 function recentBlock(ctx: Ctx): Block | null {
   const { s, panel, deg, width } = ctx
   const recent = panel.recent ?? []
   if (deg.has('recent') || !panel.recent) {
-    return { id: 'recent', right: true, priority: 12, lines: [{ line: ln(seg(` ${s.recentHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'recent', title: s.recentHeading, right: true, priority: 12, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
-  const lines: PlacedLine[] = [{ line: ln(seg(` ${s.recentHeading}`, 'heading')) }]
+  const lines: PlacedLine[] = []
   const tail = recent.slice(-6)
   if (!tail.length) lines.push({ line: ln(seg(`  ${s.recentEmpty}`, 'dim')) })
   for (const r of tail) lines.push({ line: truncLine(ln(seg(` ${r}`, 'dim')), width) })
-  return { id: 'recent', right: true, priority: 12, lines, summary: { line: truncLine(ln(seg(` ${s.recentHeading}`, 'heading')), width) } }
+  return { id: 'recent', title: s.recentHeading, right: true, priority: 12, lines, summary: { line: truncLine(ln(seg(` ${s.recentHeading}`, 'heading')), width) } }
 }
 
 export function activityLines(activity: ActivityBlock[]): string[] {
@@ -460,15 +597,14 @@ function boardBlock(ctx: Ctx): Block | null {
   const board = blocks.board
   if (!board) return null
   if (deg.has('board')) {
-    return { id: 'board', priority: 10, lines: [{ line: ln(seg(` ${s.boardHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'board', title: s.boardHeading, priority: 10, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   const rows = board.rows ?? []
   if (!rows.length) {
-    return { id: 'board', priority: 10, lines: [{ line: ln(seg(` ${s.boardHeading}  ${s.boardEmpty}`, 'dim')) }] }
+    return { id: 'board', title: s.boardHeading, priority: 10, lines: [{ line: ln(seg(` ${s.boardEmpty}`, 'dim')) }] }
   }
   const counts = board.counts ?? {}
   const lines: PlacedLine[] = [
-    { line: truncLine(ln(seg(` ${fill(s.boardHeadingCount, { n: board.total ?? rows.length })}`, 'heading')), width) },
     {
       line: truncLine(
         ln(
@@ -508,7 +644,7 @@ function boardBlock(ctx: Ctx): Block | null {
     })
   }
   if (folded > 0) lines.push({ line: truncLine(ln(seg(`  ${fill(s.boardDoneCollapsed, { n: folded })}`, 'dim')), width) })
-  return { id: 'board', priority: 10, lines, summary: lines.slice(0, 1) }
+  return { id: 'board', title: fill(s.boardHeadingCount, { n: board.total ?? rows.length }), priority: 10, lines, summary: { line: truncLine(ln(seg(` ${fill(s.boardHeadingCount, { n: board.total ?? rows.length })}`, 'heading')), width) } }
 }
 
 function changesBlock(ctx: Ctx): Block | null {
@@ -516,12 +652,10 @@ function changesBlock(ctx: Ctx): Block | null {
   const c = blocks.changes
   if (!c) return null
   if (deg.has('changes') || !c.available) {
-    return { id: 'changes', right: true, priority: 11, lines: [{ line: ln(seg(` ${s.changesHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'changes', title: s.changesHeading, right: true, priority: 11, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   if (!c.changes.length) return null // an empty block collapses and yields its space
-  const lines: PlacedLine[] = [
-    { line: truncLine(ln(seg(` ${fill(s.changesHeadingCount, { n: c.count })}`, 'heading')), width) },
-  ]
+  const lines: PlacedLine[] = []
   for (const ch of c.changes as ChangeRow[]) {
     lines.push({
       line: truncLine(
@@ -534,7 +668,7 @@ function changesBlock(ctx: Ctx): Block | null {
       ),
     })
   }
-  return { id: 'changes', right: true, priority: 11, lines, summary: lines.slice(0, 1) }
+  return { id: 'changes', title: fill(s.changesHeadingCount, { n: c.count }), right: true, priority: 11, lines, summary: { line: truncLine(ln(seg(` ${fill(s.changesHeadingCount, { n: c.count })}`, 'heading')), width) } }
 }
 
 function specsBlock(ctx: Ctx): Block | null {
@@ -542,15 +676,15 @@ function specsBlock(ctx: Ctx): Block | null {
   const sp = blocks.specs
   if (!sp) return null
   if (deg.has('specs') || !sp.available) {
-    return { id: 'specs', right: true, priority: 13, lines: [{ line: ln(seg(` ${s.specsHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'specs', title: s.specsHeading, right: true, priority: 13, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   const lines: PlacedLine[] = [
-    { line: truncLine(ln(seg(` ${s.specsHeading}`, 'heading'), seg('  '), seg(fill(s.specsCount, { specs: sp.count, reqs: sp.requirements }), 'dim')), width) },
+    { line: truncLine(ln(seg(fill(s.specsCount, { specs: sp.count, reqs: sp.requirements }), 'dim')), width) },
   ]
   for (const row of (sp.specs ?? []).slice(0, 6)) {
     lines.push({ line: truncLine(ln(seg('  '), seg(cell(row.name, Math.max(8, width - 10)), 'text'), seg(` ${row.requirements}`, 'dim')), width) })
   }
-  return { id: 'specs', right: true, priority: 13, lines, summary: lines.slice(0, 1) }
+  return { id: 'specs', title: s.specsHeading, right: true, priority: 13, lines, summary: { line: truncLine(ln(seg(` ${s.specsHeading}`, 'heading')), width) } }
 }
 
 function decisionsBlock(ctx: Ctx): Block | null {
@@ -558,19 +692,14 @@ function decisionsBlock(ctx: Ctx): Block | null {
   const d = blocks.decisions
   if (!d) return null
   if (deg.has('decisions')) {
-    return { id: 'decisions', right: true, priority: 14, lines: [{ line: ln(seg(` ${s.decisionsHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'decisions', title: s.decisionsHeading, right: true, priority: 14, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   const lines: PlacedLine[] = [
-    {
-      line: truncLine(
-        ln(seg(` ${s.decisionsHeading}`, 'heading'), seg('  '), seg(fill(s.decisionsCountSuffix, { n: d.count }), 'dim')),
-        width,
-      ),
-    },
+    { line: truncLine(ln(seg(fill(s.decisionsCountSuffix, { n: d.count }), 'dim')), width) },
   ]
   if (!d.recent.length) lines.push({ line: ln(seg(`  ${s.decisionsEmpty}`, 'dim')) })
   for (const r of d.recent.slice(0, 3)) lines.push({ line: truncLine(ln(seg(`  ${r}`, 'dim')), width) })
-  return { id: 'decisions', right: true, priority: 14, lines, summary: lines.slice(0, 1) }
+  return { id: 'decisions', title: s.decisionsHeading, right: true, priority: 14, lines, summary: { line: truncLine(ln(seg(` ${s.decisionsHeading}`, 'heading')), width) } }
 }
 
 // ------------------------------------------------------------------ body blocks (page 3)
@@ -580,12 +709,11 @@ function queueBlock(ctx: Ctx): Block | null {
   const q = blocks.outbox_list
   if (!q && !deg.has('outbox_list')) return null
   if (deg.has('outbox_list') || !q) {
-    return { id: 'queue', priority: 10, lines: [{ line: ln(seg(` ${s.queueHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'queue', title: s.queueHeading, priority: 10, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   if (view.viewEntry != null && q.entries[view.viewEntry]) {
     const e = q.entries[view.viewEntry]
     const lines: PlacedLine[] = [
-      { line: truncLine(ln(seg(` ${fill(s.queueFullHeading, { name: e.name })}`, 'heading')), width) },
       { line: truncLine(ln(seg(`  ${fill(s.queueMeta, { kind: e.kind, target: e.target, from: e.from })}`, 'dim')), width) },
       { line: ln(seg('  ')) },
     ]
@@ -593,14 +721,12 @@ function queueBlock(ctx: Ctx): Block | null {
       for (const chunk of wrapText(text, Math.max(4, width - 2))) lines.push({ line: truncLine(ln(seg(`  ${chunk}`)), width) })
     }
     lines.push({ line: ln(seg(''), seg(`  ${s.queueBackHint}`, 'dim')) })
-    return { id: 'queue', priority: 10, lines, summary: lines.slice(0, 1) }
+    return { id: 'queue', title: fill(s.queueFullHeading, { name: e.name }), priority: 10, lines, summary: { line: truncLine(ln(seg(` ${fill(s.queueFullHeading, { name: e.name })}`, 'heading')), width) } }
   }
   if (!q.entries.length) {
-    return { id: 'queue', priority: 10, lines: [{ line: ln(seg(` ${fill(s.queueHeadingCount, { queued: 0, held: 0 })}  ${s.queueEmpty}`, 'dim')) }] }
+    return { id: 'queue', title: s.queueHeading, priority: 10, lines: [{ line: ln(seg(` ${s.queueEmpty}`, 'dim')) }] }
   }
-  const lines: PlacedLine[] = [
-    { line: truncLine(ln(seg(` ${fill(s.queueHeadingCount, { queued: q.queued, held: q.held })}`, 'heading')), width) },
-  ]
+  const lines: PlacedLine[] = []
   q.entries.slice(0, 20).forEach((e: QueueEntry, i: number) => {
     const state = e.state === 'held' ? s.queueStateHeld : s.queueStateQueued
     const row = ln(
@@ -608,12 +734,15 @@ function queueBlock(ctx: Ctx): Block | null {
       seg(fill(s.queueLine, { index: i + 1, state, name: e.name, age: fmtAge(e.age_s) }), e.state === 'held' ? 'warn' : 'text'),
       e.reason && e.reason !== '-' ? seg(`  ${fill(s.queueHeldReason, { reason: e.reason })}`, 'dim') : null,
     )
-    const placed: PlacedLine = { line: truncLine(row, width) }
-    if (view.tui) placed.hits = [{ start: 2, end: Math.min(width, 2 + dispWidth(textOf(row))), action: { kind: 'view-entry', index: i } }]
+    const placed: PlacedLine = placedWithHits(
+      row,
+      view.tui ? [{ start: 2, end: 2 + dispWidth(textOf(row)), action: { kind: 'view-entry', index: i } }] : undefined,
+      width,
+    )
     lines.push(placed)
   })
   if (ctx.view.tui) lines.push({ line: ln(seg(`  ${s.queueViewHint}`, 'dim')) })
-  return { id: 'queue', priority: 10, lines, summary: lines.slice(0, 1) }
+  return { id: 'queue', title: fill(s.queueHeadingCount, { queued: q.queued, held: q.held }), priority: 10, lines, summary: { line: truncLine(ln(seg(` ${fill(s.queueHeadingCount, { queued: q.queued, held: q.held })}`, 'heading')), width) } }
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -635,10 +764,10 @@ function inboxBlock(ctx: Ctx): Block | null {
   const inbox = blocks.inbox
   if (!inbox) return null
   if (deg.has('inbox')) {
-    return { id: 'inbox', right: true, priority: 11, lines: [{ line: ln(seg(` ${s.inboxHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'inbox', title: s.inboxHeading, right: true, priority: 11, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   if (!inbox.agents.length) return null
-  const lines: PlacedLine[] = [{ line: ln(seg(` ${s.inboxHeading}`, 'heading')) }]
+  const lines: PlacedLine[] = []
   for (const a of inbox.agents.slice(0, 8)) {
     lines.push({
       line: truncLine(
@@ -651,7 +780,7 @@ function inboxBlock(ctx: Ctx): Block | null {
       ),
     })
   }
-  return { id: 'inbox', right: true, priority: 11, lines, summary: lines.slice(0, 1) }
+  return { id: 'inbox', title: s.inboxHeading, right: true, priority: 11, lines, summary: { line: truncLine(ln(seg(` ${s.inboxHeading}`, 'heading')), width) } }
 }
 
 function patrolBlock(ctx: Ctx): Block | null {
@@ -659,12 +788,12 @@ function patrolBlock(ctx: Ctx): Block | null {
   const p = blocks.patrol
   if (!p) return null
   if (deg.has('patrol')) {
-    return { id: 'patrol', right: true, priority: 12, lines: [{ line: ln(seg(` ${s.patrolHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'patrol', title: s.patrolHeading, right: true, priority: 12, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   if (!p.lines.length) return null
-  const lines: PlacedLine[] = [{ line: ln(seg(` ${s.patrolHeading}`, 'heading')) }]
+  const lines: PlacedLine[] = []
   for (const l of p.lines.slice(-12).slice(Math.max(0, view.scroll))) lines.push({ line: truncLine(ln(seg(` ${l}`, 'dim')), width) })
-  return { id: 'patrol', right: true, priority: 12, lines, summary: lines.slice(0, 1) }
+  return { id: 'patrol', title: s.patrolHeading, right: true, priority: 12, lines, summary: { line: truncLine(ln(seg(` ${s.patrolHeading}`, 'heading')), width) } }
 }
 
 function trendBlock(ctx: Ctx): Block | null {
@@ -675,10 +804,11 @@ function trendBlock(ctx: Ctx): Block | null {
   if (!spark) return null
   return {
     id: 'trend',
+    title: s.trendHeading,
     right: true,
     priority: 13,
     lines: [
-      { line: ln(seg(` ${s.trendHeading}`, 'heading'), seg('  '), seg(fill(s.trendLine, { mb: fmtMB(c.ram_avail_mb), swap: fmtMB(c.swap_free_mb) }), 'dim')) },
+      { line: ln(seg(fill(s.trendLine, { mb: fmtMB(c.ram_avail_mb), swap: fmtMB(c.swap_free_mb) }), 'dim')) },
       { line: truncLine(ln(seg('  '), seg(spark, 'accent')), width) },
     ],
     summary: { line: truncLine(ln(seg(` ${s.trendHeading}`, 'heading')), width) },
@@ -690,7 +820,7 @@ function healthBlock(ctx: Ctx): Block | null {
   const h = blocks.health
   if (!h) return null
   if (deg.has('health')) {
-    return { id: 'health', right: true, priority: 14, lines: [{ line: ln(seg(` ${s.healthHeading} ${s.dash}`, 'dim')) }] }
+    return { id: 'health', title: s.healthHeading, right: true, priority: 14, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   const doctor =
     h.doctor === 'ok'
@@ -703,15 +833,13 @@ function healthBlock(ctx: Ctx): Block | null {
   const tone: Tone = h.doctor === 'ok' ? 'ok' : h.doctor === 'fail' ? 'err' : 'warn'
   return {
     id: 'health',
+    title: s.healthHeading,
     right: true,
     priority: 14,
     lines: [
       {
         line: truncLine(
-          ln(
-            seg(` ${s.healthHeading} `, 'heading'),
-            seg(fill(s.healthLine, { version: h.version || s.dash, doctor, gates: h.gates || s.dash }), h.doctor === 'ok' ? 'text' : tone),
-          ),
+          ln(seg(fill(s.healthLine, { version: h.version || s.dash, doctor, gates: h.gates || s.dash }), h.doctor === 'ok' ? 'text' : tone)),
           width,
         ),
       },
@@ -723,11 +851,13 @@ function healthBlock(ctx: Ctx): Block | null {
 
 function keyBandBlock(ctx: Ctx): Block {
   const { s, width } = ctx
-  const items: { text: string; action: Action }[] = [
+  const actions: { text: string; action: Action }[] = [
     { text: s.keyCompose, action: { kind: 'compose' } },
     { text: s.keyFlush, action: { kind: 'flush' } },
     { text: s.keyStandby, action: { kind: 'standby' } },
     { text: s.keySettings, action: { kind: 'settings' } },
+  ]
+  const nav: { text: string; action: Action }[] = [
     { text: s.keyPages, action: { kind: 'page-cycle' } },
     { text: s.keyScroll, action: { kind: 'scroll', delta: 1 } },
     { text: s.keyQuit, action: { kind: 'quit' } },
@@ -735,17 +865,39 @@ function keyBandBlock(ctx: Ctx): Block {
   const line: Line = []
   const hits: Hit[] = []
   let x = 1
-  items.forEach((item, i) => {
-    if (i > 0) {
-      line.push(seg(' · ', 'dim'))
-      x += 3
+  const chip = isFramed(ctx)
+  const push = (text: string, action: Action, asChip: boolean, dim: boolean): void => {
+    if (asChip) {
+      const inner = ` ${text} `
+      const start = x
+      line.push(seg('(', 'dim'), seg(inner, 'accent'), seg(')', 'dim'))
+      x += dispWidth(`(${inner})`)
+      if (ctx.view.tui) hits.push({ start, end: x, action })
+    } else {
+      const start = x
+      line.push(seg(text, dim ? 'dim' : 'accent'))
+      x += dispWidth(text)
+      if (ctx.view.tui) hits.push({ start, end: x, action })
     }
-    const start = x
-    line.push(seg(item.text, 'accent'))
-    x += dispWidth(item.text)
-    if (ctx.view.tui) hits.push({ start, end: x, action: item.action })
+  }
+  actions.forEach((item, i) => {
+    if (i > 0) {
+      if (chip) {
+        line.push(seg(' ', 'dim'))
+        x += 1
+      } else {
+        line.push(seg(' · ', 'dim'))
+        x += 3
+      }
+    }
+    push(item.text, item.action, chip, false)
   })
-  return { id: 'keys', full: true, priority: 99, lines: [{ line: truncLine(ln(seg(' '), ...line), width), hits }], separator: 'none' }
+  nav.forEach((item) => {
+    line.push(seg(' · ', 'dim'))
+    x += 3
+    push(item.text, item.action, false, chip)
+  })
+  return { id: 'keys', full: true, priority: 99, lines: [placedWithHits(ln(seg(' '), ...line), hits, width)], separator: 'none' }
 }
 
 function pageTabsBlock(ctx: Ctx): Block | null {
@@ -759,9 +911,14 @@ function pageTabsBlock(ctx: Ctx): Block | null {
     { page: 2, text: s.pageWork },
     { page: 3, text: s.pageMessages },
   ]
+  const boxed = isFramed(ctx)
   for (const tab of tabs) {
     const active = ctx.view.page === tab.page
-    const text = active ? fill(s.pageTabActive, { name: tab.text }) : fill(s.pageTab, { name: tab.text })
+    const text = active
+      ? boxed
+        ? `[${tab.text}]`
+        : fill(s.pageTabActive, { name: tab.text })
+      : fill(s.pageTab, { name: tab.text })
     const start = x
     line.push(seg(text, active ? 'accent' : 'dim'))
     x += dispWidth(text)
@@ -769,7 +926,7 @@ function pageTabsBlock(ctx: Ctx): Block | null {
     line.push(seg(' '))
     x += 1
   }
-  return { id: 'tabs', full: true, priority: 0.5, lines: [{ line: truncLine(ln(seg(' '), ...line), ctx.width), hits }], separator: 'none' }
+  return { id: 'tabs', full: true, priority: 0.5, lines: [placedWithHits(ln(seg(' '), ...line), hits, ctx.width)], separator: 'none' }
 }
 
 function overlayPrefs(ctx: Ctx): { pref: string; label: string; value: string }[] {
@@ -791,20 +948,20 @@ function pageName(page: PageId, s: Strings): string {
 function overlayBlock(ctx: Ctx): Block {
   const { s, width } = ctx
   const prefs = overlayPrefs(ctx)
-  const lines: PlacedLine[] = [{ line: ln(seg(` ${s.settingsTitle}`, 'title')) }, { line: ln(seg('')) }]
+  const lines: PlacedLine[] = []
   prefs.forEach((p, i) => {
     const row = ln(
       seg(`  ${i === ctx.view.overlayIndex ? s.settingsCursor : ' '} `, 'accent'),
       seg(cell(p.label, 12), 'heading'),
       seg(p.value),
     )
-    const placed: PlacedLine = { line: truncLine(row, width) }
-    if (ctx.view.tui) placed.hits = [{ start: 2, end: Math.min(width, 2 + dispWidth(textOf(row))), action: { kind: 'toggle', pref: p.pref as PrefName } }]
-    lines.push(placed)
+    lines.push(
+      placedWithHits(row, ctx.view.tui ? [{ start: 2, end: 2 + dispWidth(textOf(row)), action: { kind: 'toggle', pref: p.pref as PrefName } }] : undefined, width),
+    )
   })
   lines.push({ line: ln(seg('')) })
   lines.push({ line: truncLine(ln(seg(` ${s.settingsHint}`, 'dim')), width) })
-  return { id: 'overlay', full: true, priority: 0, lines, separator: 'none' }
+  return { id: 'overlay', title: s.settingsTitle, full: true, priority: 0, lines, separator: 'none' }
 }
 
 // ------------------------------------------------------------------ assembly
@@ -890,11 +1047,18 @@ export function layout(input: LayoutInput): Frame {
   const leftBlocks = middle.filter((b) => !b.full && !b.right)
   const rightBlocks = middle.filter((b) => !b.full && b.right)
 
+  const framed = isFramed(ctx)
+  const place = (block: Block, remaining: number, colWidth: number): PlacedLine[] => {
+    const kind = pickChrome(block, remaining, framed)
+    if (kind === null) return []
+    if (kind === 'summary') return [summaryLine(block, colWidth)]
+    return wrapBlock(block, colWidth, kind)
+  }
+
   const fullRows: PlacedLine[] = []
   for (const b of fullBlocks) {
-    const sep = separatorFor(b, input.view.density)
-    if (fullRows.length + sep.length + b.lines.length <= budget) add2(fullRows, sep, b.lines)
-    else if (b.summary && fullRows.length + sep.length + 1 <= budget) add2(fullRows, sep, [b.summary])
+    const chunk = place(b, budget - fullRows.length, width)
+    for (const l of chunk) fullRows.push(l)
   }
   add(fullRows)
 
@@ -904,19 +1068,14 @@ export function layout(input: LayoutInput): Frame {
       const leftW = leftWidth
       const rightW = rightWidth
       const columns: [PlacedLine[], PlacedLine[]] = [[], []]
-      const ordered = [...leftBlocks.map((b) => ({ b, slot: 0 })), ...rightBlocks.map((b) => ({ b, slot: 1 }))].sort(
+      const ordered = [...leftBlocks.map((b) => ({ b, slot: 0 as 0 | 1 })), ...rightBlocks.map((b) => ({ b, slot: 1 as 0 | 1 }))].sort(
         (x, y) => x.b.priority - y.b.priority,
       )
       for (const { b, slot } of ordered) {
-        const sep = separatorFor(b, input.view.density).length
+        const colW = slot === 0 ? leftW : rightW
         const used = Math.max(columns[0].length, columns[1].length)
-        if (used + sep + b.lines.length <= bodyBudget) {
-          for (const l of separatorFor(b, input.view.density)) columns[slot].push(l)
-          for (const l of b.lines) columns[slot].push(l)
-        } else if (b.summary && used + sep + 1 <= bodyBudget) {
-          for (const l of separatorFor(b, input.view.density)) columns[slot].push(l)
-          columns[slot].push(b.summary)
-        }
+        const chunk = place(b, bodyBudget - used, colW)
+        for (const l of chunk) columns[slot].push(l)
       }
       const bodyRows = Math.min(bodyBudget, Math.max(columns[0].length, columns[1].length))
       for (let i = 0; i < bodyRows; i++) {
@@ -939,16 +1098,9 @@ export function layout(input: LayoutInput): Frame {
       let used = 0
       const ordered = [...leftBlocks, ...rightBlocks].sort((x, y) => x.priority - y.priority)
       for (const b of ordered) {
-        const sep = separatorFor(b, input.view.density).length
-        if (used + sep + b.lines.length <= bodyBudget) {
-          for (const l of separatorFor(b, input.view.density)) rows.push(l)
-          for (const l of b.lines) rows.push({ line: truncLine(l.line, columnW), hits: l.hits })
-          used += sep + b.lines.length
-        } else if (b.summary && used + sep + 1 <= bodyBudget) {
-          for (const l of separatorFor(b, input.view.density)) rows.push(l)
-          rows.push({ line: truncLine(b.summary.line, columnW), hits: b.summary.hits })
-          used += sep + 1
-        }
+        const chunk = place(b, bodyBudget - used, columnW)
+        for (const l of chunk) rows.push({ line: truncLine(l.line, columnW), hits: l.hits })
+        used += chunk.length
       }
     }
   }
@@ -962,10 +1114,21 @@ export function layout(input: LayoutInput): Frame {
 
   const trimmed = rows.slice(0, height > 0 ? height : rows.length)
   const targets: { row: number; hit: Hit }[] = []
-  trimmed.forEach((l, i) => {
-    for (const h of l.hits ?? []) targets.push({ row: i, hit: h })
+  const renderedRows = trimmed.map((l, i) => {
+    if (l.hits?.length) {
+      // The same clipping as placedWithHits, for rows only this final pass cuts (merged
+      // two-column rows and builder lines that were never truncated): a target that reaches the
+      // rendered ellipsis is invisible and must not fire (V15/F4).
+      const room = widthOf(l.line) > width ? Math.max(0, width - 1) : width
+      for (const h of l.hits) {
+        const start = Math.min(h.start, room)
+        const end = Math.min(h.end, room)
+        if (end > start) targets.push({ row: i, hit: { ...h, start, end } })
+      }
+    }
+    return truncLine(l.line, width)
   })
-  return { rows: trimmed.map((l) => truncLine(l.line, width)), targets }
+  return { rows: renderedRows, targets }
 }
 
 function add2(into: PlacedLine[], a: PlacedLine[], b: PlacedLine[]): void {

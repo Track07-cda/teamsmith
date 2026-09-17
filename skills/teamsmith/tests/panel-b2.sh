@@ -163,31 +163,31 @@ scenario_cjk() {
   keys m
   sleep 0.8
   cap_to after-m
-  assert_match "$tmp/cjk/after-m.txt" '^>$' "2.1 'm' 打开底部输入行"
+  assert_match "$tmp/cjk/after-m.txt" '│ >' "2.1 'm' 打开底部输入行（带框托盘）"
   type_text '中文ab'
   sleep 0.8
   cap_to after-cjk
-  assert_eq "2.1 中文ab 之后 cursor_x=8（> =2 列 + 中文 4 列 + ab 2 列）" "$(cursor_x)" "8"
+  assert_eq "2.1 中文ab 之后 cursor_x=10（托盘 │ + 空格 =2 列，> =2 列 + 中文 4 列 + ab 2 列）" "$(cursor_x)" "10"
   assert_has "$tmp/cjk/after-cjk.txt" "> 中文ab" "2.1 输入行显示 > 中文ab"
   keys BSpace
   sleep 0.5
-  assert_eq "2.1 退格删掉一个半角码点：cursor_x=7" "$(cursor_x)" "7"
+  assert_eq "2.1 退格删掉一个半角码点：cursor_x=9" "$(cursor_x)" "9"
   keys BSpace
   sleep 0.5
   cap_to after-bs
-  assert_eq "2.1 退格删掉整个宽字符（不是半个）：cursor_x=6" "$(cursor_x)" "6"
+  assert_eq "2.1 退格删掉整个宽字符（不是半个）：cursor_x=8" "$(cursor_x)" "8"
   assert_has "$tmp/cjk/after-bs.txt" "> 中文" "2.1 宽字符被整字删除"
   keys BSpace
   sleep 0.5
-  assert_eq "2.1 宽字符退格：中文 → 中，cursor_x=4" "$(cursor_x)" "4"
+  assert_eq "2.1 宽字符退格：中文 → 中，cursor_x=6" "$(cursor_x)" "6"
   # astral plane: one codepoint, two UTF-16 units — a code-unit backspace would leave half
   type_text '🙂'
   sleep 0.6
-  assert_eq "2.1 星平面字符（emoji）按两个显示列计：cursor_x=6" "$(cursor_x)" "6"
+  assert_eq "2.1 星平面字符（emoji）按两个显示列计：cursor_x=8" "$(cursor_x)" "8"
   keys BSpace
   sleep 0.5
   cap_to after-emoji-bs
-  assert_eq "2.1 emoji 退格整个码点删掉：cursor_x=4" "$(cursor_x)" "4"
+  assert_eq "2.1 emoji 退格整个码点删掉：cursor_x=6" "$(cursor_x)" "6"
   assert_has "$tmp/cjk/after-emoji-bs.txt" "> 中" "2.1 emoji 被整字删除（没有半个代理对）"
   assert_eq "2.1 草稿文件同步（state/draft.md）" "$(draft)" "中"
 }

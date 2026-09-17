@@ -13,11 +13,29 @@ import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useInput } from 'ink'
 import { layout, rowKey } from './layout.js'
 import type { LayoutInput } from './layout.js'
+import { clockOf } from './format.js'
 import { stringsFor, type Strings } from './strings/index.js'
 import { backspace, inputLines, intake, receiptLine, type ComposeMode, type Receipt } from './compose.js'
 import type { Settings } from './settings.js'
 import type { Action, FrameInput, PageId, PrefName, Segment, ViewState } from './types.js'
 import type { Palette } from './theme.js'
+import { dispWidth } from './width.js'
+
+const TRAY_TL = '╭'
+const TRAY_TR = '╮'
+const TRAY_H = '─'
+const TRAY_V = '│'
+
+/** Open-bottom compose tray (top edge + left wall). The last text row stays last so the IME cursor stays on the draft. */
+function composeTrayTop(title: string, width: number): string {
+  const w = Math.max(2, Math.floor(width) || 2)
+  const inner = w - 2
+  if (!title) return TRAY_TL + TRAY_H.repeat(inner) + TRAY_TR
+  const titleW = dispWidth(title)
+  if (1 + 1 + titleW + 1 > inner) return TRAY_TL + TRAY_H + title + TRAY_TR
+  const fill = inner - (1 + 1 + titleW + 1)
+  return `${TRAY_TL}${TRAY_H} ${title} ${TRAY_H.repeat(Math.max(0, fill))}${TRAY_TR}`
+}
 
 /** The console's own actions, owned by main.tsx (file I/O, subprocesses, the editor relay). */
 export interface PanelApi {
@@ -33,6 +51,10 @@ export interface PanelApi {
   refreshNow(): void
   /** True while an external program owns the terminal (the render callback must not run). */
   suspended(): boolean
+  /** The shared clock ref (0 = no tick yet): row 0 renders this stamp so repaints never revert it. */
+  clockNowMs(): number
+  /** Register the title band's base row + palette for the out-of-React clock writer (null = off). */
+  registerClockRow(row: Segment[] | null, palette: Palette): void
   /** Persist one preference (`state/panel.conf`). */
   saveSettings(settings: Settings): void
   /** Remember the current page (`state/panel-page`). */
@@ -72,9 +94,9 @@ interface Size {
  * nothing must not repaint (the red line is <1% of one core; an idle console should cost ~0).
  * Exported because main.tsx's `adopt()` guards its Ink `rerender` with the same rule.
  *
- * The panel's `timestamp` is deliberately excluded: the title band's clock is the live `<Clock>`
- * component, so a new assembly time alone is not a visible change (and repainting the whole frame
- * for it is what pushed the console over the red line).
+ * The panel's `timestamp` is deliberately excluded: the title band's clock is driven by the App's
+ * own 1s ticker (it repaints just that row), so a new assembly time alone is not a visible change
+ * (and repainting the whole frame for it is what pushed the console over the red line).
  */
 export function frameSignature(frame: FrameInput): string {
   const { timestamp: _stamp, ...panel } = frame.panel ?? {}
@@ -121,6 +143,21 @@ function stableRows(prev: { key: string; row: Segment[] }[], rows: Segment[][]):
     if (before && before.key === key) return before
     return { key, row }
   })
+}
+
+/**
+ * Patch the title band's clock segment (the segment `titleBlock` marked `clock`) with the shared
+ * ticker's UTC time. Called at render time with the ref's ms — App renders are data-gated, so a
+ * repaint picks up the latest stamp and never reverts the screen. A degraded frame block has no
+ * clock segment and keeps its `—` instead of a clock that would mask the failure.
+ */
+function clockRow(row: Segment[], now: number): Segment[] {
+  if (now <= 0) return row
+  const seg = row.find((s) => s.clock)
+  if (!seg) return row
+  const stamp = clockOf(new Date(now).toISOString())
+  if (seg.text === stamp) return row
+  return row.map((s) => (s.clock ? { ...s, text: stamp } : s))
 }
 
 export function App({
@@ -225,10 +262,17 @@ export function App({
     pasteOpenRef.current = false
   }, [])
 
+  // V15/F3: one draft = at most one message. The re-entry guard is a ref set *synchronously* at
+  // the top of the send, not the `busy` state: a double Enter lands inside the same React batch,
+  // before any state update could gate the second call. A failed send releases the guard so the
+  // human can retry (the draft is kept on error).
+  const sendingRef = useRef(false)
   const submit = useCallback(async () => {
     const text = draftRef.current
     if (mode === 'reason') {
       if (!text.trim()) return
+      if (sendingRef.current) return
+      sendingRef.current = true
       setBusy(true)
       try {
         const r = await api.setStandby(true, text)
@@ -236,11 +280,14 @@ export function App({
         setComposing(false)
         updateDraft('', false)
       } finally {
+        sendingRef.current = false
         setBusy(false)
       }
       return
     }
     if (!text.trim()) return
+    if (sendingRef.current) return
+    sendingRef.current = true
     setBusy(true)
     try {
       const r = await api.send(text)
@@ -252,6 +299,7 @@ export function App({
       }
       setComposing(false)
     } finally {
+      sendingRef.current = false
       setBusy(false)
     }
   }, [api, mode, updateDraft])
@@ -296,17 +344,18 @@ export function App({
     // The editor relay writes `state/draft.md`; in reason mode that would clobber the message
     // draft, and a long reason is not the flow the design asks for — C-e belongs to the letter.
     if (busy || composing === false || mode !== 'message') return
-    setBusy(true)
     // Ink's own input must be deactivated for the handoff: both Ink and `$EDITOR` read the same
     // pty, and whoever reads a keystroke first consumes it (measured: `:wq` never reached vi
-    // while Ink's `useInput` stayed active).
+    // while Ink's `useInput` stayed active). Do NOT flip `busy` here: a state change that alters
+    // the frame forces a repaint, and that repaint races the editor's first output bytes and
+    // erases them (the 2.3 "the editor got the terminal" assertion flipped with machine speed).
+    // `editorOpen` alone gates the input; the frame stays byte-identical, so Ink writes nothing.
     setEditorOpen(true)
     try {
       const next = await api.editDraft(draftRef.current)
       updateDraft(next, mode === 'message')
     } finally {
       setEditorOpen(false)
-      setBusy(false)
     }
   }, [api, busy, composing, mode, updateDraft])
 
@@ -393,7 +442,13 @@ export function App({
       const notice = receipt ? receiptLine(receipt, strings) : status
       if (notice) bottom.push(notice)
     }
-    const input = composing ? inputLines(mode, draft, size.columns) : []
+    const boxed = composing && settings.density === 'comfortable'
+    const inputWidth = boxed ? Math.max(1, size.columns - 2) : size.columns
+    const rawInput = composing ? inputLines(mode, draft, inputWidth) : []
+    const trayTitle = mode === 'message' ? strings.composeTitle : strings.composeStandbyTitle
+    const input = boxed
+      ? [composeTrayTop(trayTitle, size.columns), ...rawInput.map((line) => `${TRAY_V} ${line}`)]
+      : rawInput
     const hint = composing ? [mode === 'message' ? strings.composeHint : strings.composeReasonHint] : []
     const frameRows = size.rows > 0 ? Math.max(3, size.rows - input.length - hint.length - bottom.length) : data.height
     const view: ViewState = {
@@ -409,7 +464,9 @@ export function App({
     }
     // The geometry comes from the live terminal, not from the frame's snapshot of it: a resize must
     // re-lay out the next frame (the spec's "A resize re-lays out live"), and `data.width` is frozen
-    // at process start.
+    // at process start. The live clock is NOT fed through here: it patches row 0 after the memo
+    // (below), so the per-second tick never re-runs the full layout (measured: routing `now`
+    // through layout() pushed an idle console to ~1.1% of one core — over the red line).
     const themed = layout({
       ...data,
       width: Math.max(1, size.columns || data.width),
@@ -420,7 +477,7 @@ export function App({
     } as LayoutInput)
     const pad = size.rows > 0 ? Math.max(0, size.rows - input.length - hint.length - bottom.length - themed.rows.length) : 0
     targetsRef.current = themed.targets
-    return { frame: themed, input, hint, bottom, pad }
+    return { frame: themed, input, hint, bottom, pad, boxed }
   }, [
     data,
     strings,
@@ -619,25 +676,52 @@ export function App({
     { isActive: !editorOpen && Boolean(process.stdin.isTTY) },
   )
 
+  // The title band's clock is the one visible thing that must advance while the data is
+  // byte-identical (V15/F2 — without it an idle console's clock froze at startup, and B2's 2.5
+  // lost its "a refresh completed" evidence on screen). It ticks OUTSIDE React: main.tsx paints
+  // the clock field directly once a second (a full commit per second costs a whole frame's
+  // reconcile + Yoga + rewrite — measured over the <1% red line), and the App registers row 0's
+  // segments + palette for that writer. Row 0 itself renders the shared stamp via `clockRow`, so
+  // Ink's rare repaints agree with the screen. The data cadence keeps its signature-gated
+  // repaint as the only full-frame path.
   const renderRows = stableRows(rowCacheRef.current, lines.frame.rows)
   rowCacheRef.current = renderRows
+
+  const row0 = renderRows.length > 0 ? renderRows[0].row : null
+  useEffect(() => {
+    api.registerClockRow(row0, palette)
+    return () => api.registerClockRow(null, palette)
+  }, [api, row0, palette])
 
   return (
     <Box flexDirection="column" width={size.columns}>
       {renderRows.map(({ row }, i) => (
-        <Row key={`f${i}`} row={row} palette={palette} />
+        <Row key={`f${i}`} row={i === 0 ? clockRow(row, api.clockNowMs()) : row} palette={palette} />
       ))}
       {Array.from({ length: lines.pad }, (_, i) => (
         <Text key={`p${i}`}> </Text>
       ))}
-      {lines.input.map((line, i) => (
-        <Text key={`i${i}`} color={i === lines.input.length - 1 ? palette.tones.accent : palette.tones.text}>
-          {line || ' '}
-        </Text>
-      ))}
+      {/* The hint sits above the input: the input line must be the LAST rendered line while
+          composing, because Ink leaves the terminal cursor at the end of the output and the IME
+          candidate window anchors there (V15/F1 — with the hint below the input the cursor sat on
+          the hint row and B2's CJK cursor acceptance, cursor_x=8, went red). */}
       {lines.hint.map((line, i) => (
         <Text key={`h${i}`} color={palette.tones.dim}>
           {line}
+        </Text>
+      ))}
+      {lines.input.map((line, i) => (
+        <Text
+          key={`i${i}`}
+          color={
+            lines.boxed && i === 0
+              ? palette.tones.dim
+              : i === lines.input.length - 1
+                ? palette.tones.accent
+                : palette.tones.text
+          }
+        >
+          {line || ' '}
         </Text>
       ))}
       {lines.bottom.map((line, i) => (

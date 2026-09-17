@@ -44,7 +44,11 @@ export const zh = {
   deliveriesEmpty: '（还没有交付记录）',
 
   // agent 表
+<<<<<<< HEAD
   agentsHeader: 'AGENT',
+=======
+  agentsHeader: '代理',
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
   tableState: '状态',
   tableTask: '任务',
   tableBranch: '分支',
@@ -158,6 +162,11 @@ export const zh = {
   // 输入行与回执
   composeHint: 'Enter 发送 · Esc 取消（保留草稿）· C-e 编辑器',
   composeReasonHint: 'Enter 进入待命 · Esc 取消',
+<<<<<<< HEAD
+=======
+  composeTitle: '写信',
+  composeStandbyTitle: '待命原因',
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
   receiptDelivered: '✓ 已送达 PM · delivered',
   receiptQueued: '… 已入队（PM 的输入框在忙）· queued',
   receiptHeld: '! 滞留（副本在 state/outbox/held/）· held',

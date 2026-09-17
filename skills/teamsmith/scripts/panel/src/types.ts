@@ -259,10 +259,18 @@ export interface Segment {
   text: string
   tone: Tone
   /**
+<<<<<<< HEAD
    * True for the title band's clock: the **live** component owns that text in the TUI (it ticks
    * every second), while `--print`/`--json`/snapshots render `text` verbatim. It must never be
    * merged into a neighbour, and a frame whose only difference is this segment is "unchanged"
    * (`frameSignature`) — that is what keeps the redraw off the CPU red line.
+=======
+   * True for the title band's clock: the App's own 1s ticker owns that text in the TUI (the `now`
+   * state re-feeds `panel.timestamp` every second), while `--print`/`--json`/snapshots render
+   * `text` verbatim. It must never be merged into a neighbour, and a frame whose only difference
+   * is this segment is "unchanged" (`frameSignature`) — that is what keeps the redraw off the CPU
+   * red line.
+>>>>>>> task/P14-apply-pulse-console-b3-i18n-
    */
   clock?: boolean
 }

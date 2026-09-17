@@ -172,7 +172,7 @@ frame, and the four tiers SHALL be pinned against stored snapshots in both theme
 
 With the mouse preference on, the console SHALL enable SGR mouse reporting for its lifetime and disable it on
 exit, and every documented key — `m`, `f`, `s`, `,`, Tab, `1`–`3`, `↑`/`↓`, `q` — SHALL have a clickable target
-that acts identically; the wheel SHALL scroll the focused block. Coordinates are 1:1: a click on a target
+that acts identically; the wheel SHALL scroll the current page's scrollable region (one offset per page, one line per notch — there is no focused block; V15 F5 ruling). Coordinates are 1:1: a click on a target
 activates that target (E6 §1.1 measured the full path, with tmux's own mouse option in either state). With the
 preference off the console SHALL emit no mouse-reporting sequence and clicks SHALL do nothing.
 
@@ -182,7 +182,7 @@ preference off the console SHALL emit no mouse-reporting sequence and clicks SHA
 - **WHEN** the pty driver injects a left press and release on the `m` hint's coordinates
 - **THEN** the compose line opens
 
-#### Scenario: The wheel scrolls the focused block
+#### Scenario: The wheel scrolls the page's scrollable region
 
 - **GIVEN** the same fixture with more events than the events block can show
 - **WHEN** wheel-down and wheel-up sequences are injected over the block

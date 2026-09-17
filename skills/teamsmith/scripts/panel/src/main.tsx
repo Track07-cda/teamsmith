@@ -22,8 +22,13 @@ import { writeSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { render } from 'ink'
+import chalk from 'chalk'
 import { App, frameSignature } from './App.js'
 import type { PanelApi } from './App.js'
+import { clockOf } from './format.js'
+import { dispWidth } from './width.js'
+import type { Palette } from './theme.js'
+import type { Segment } from './types.js'
 import { BLOCK_NAMES, MACHINE_BLOCKS, createPanelCache, findTeamCli, loadPanelData, panelDirOf, runTick } from './data.js'
 import type { DataOptions, DataResult, PanelCache } from './data.js'
 import { normalizeNewlines, parseSendResult, mapReceipt, DRAFT_FILE } from './compose.js'
@@ -219,7 +224,7 @@ async function main(): Promise<void> {
     const page = pageArg === '1' || pageArg === '2' || pageArg === '3' ? (Number(pageArg) as PageId) : settings.defaultPage
     const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events })
     const frame = frameOrFail(res, rawActivityOn)
-    const view: ViewState = { ...defaultView(lang, page), tui: true, mouseOn: settings.mouse }
+    const view: ViewState = { ...defaultView(lang, page), tui: true, mouseOn: settings.mouse, density: settings.density }
     const themed = layout({
       ...frame,
       strings: stringsFor(lang),
@@ -531,6 +536,35 @@ async function main(): Promise<void> {
     setTimeout(() => process.exit(0), 150)
   }
 
+  // The title band's live clock (V15/F2). A full Ink commit per second to advance one row costs a
+  // whole frame's reconcile + Yoga layout + rewrite — measured on the real tree: 0.72% → 1.37% of
+  // one core, over the <1% red line. So the clock ticks OUTSIDE React: the App registers row 0's
+  // segments + palette, this writer paints just the 8-column clock field in place (save cursor →
+  // absolute position → colored stamp → restore cursor), and the App renders the same stamp from
+  // the shared `clockNow` ref, so Ink's own (rare, signature-gated) repaints never revert it.
+  // Coloring goes through the same `chalk.hex` Ink's colorize uses, byte-identical. While the
+  // editor owns the terminal not one byte is written (the 2.3 handoff fixture measures that).
+  let clockRowState: { row: Segment[]; palette: Palette } | null = null
+  const clockNow = { ms: 0 }
+  const tickClock = (): void => {
+    if (!app || editorActive || !clockRowState) return
+    const ms = Date.now()
+    const stamp = clockOf(new Date(ms).toISOString())
+    if (clockNow.ms > 0 && stamp === clockOf(new Date(clockNow.ms).toISOString())) return
+    clockNow.ms = ms
+    let col = 1
+    let clockSeg: Segment | null = null
+    for (const seg of clockRowState.row) {
+      if (seg.clock) {
+        clockSeg = seg
+        break
+      }
+      col += dispWidth(seg.text)
+    }
+    if (!clockSeg) return // a degraded frame block keeps its `—`; no clock that would mask it
+    writeSync(1, `\x1b7\x1b[1;${col}H${chalk.hex(clockRowState.palette.tones[clockSeg.tone])(stamp)}\x1b8`)
+  }
+
   const api: PanelApi = {
     readDraft,
     writeDraft,
@@ -541,6 +575,10 @@ async function main(): Promise<void> {
     editDraft,
     refreshNow,
     suspended: () => editorActive,
+    clockNowMs: () => clockNow.ms,
+    registerClockRow: (row, palette) => {
+      clockRowState = row ? { row, palette } : null
+    },
     saveSettings: (next: Settings) => {
       mouseEnabled = next.mouse
       writeSettings(confFile, next)
@@ -565,6 +603,10 @@ async function main(): Promise<void> {
     exitOnCtrlC: false,
     patchConsole: false,
   })
+  if (!once) {
+    const clockTimer = setInterval(tickClock, 1000)
+    clockTimer.unref?.()
+  }
 
   // A shrinking pane is the one terminal event Ink's relative cursor arithmetic cannot survive on a normal
   // screen: the frame it wrote before the resize is now scrolled out, so the next frame lands off-screen and
