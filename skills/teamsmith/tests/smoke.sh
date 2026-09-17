@@ -2015,6 +2015,12 @@ assert_has "$REPO/docs/team/inbox/dev.md" "blocked: 缺 dependency X" "收件箱
 $TEAM digest >"$TMP/digest.log" 2>&1 && ok "digest 退出码 0" || bad "digest 失败"
 assert_has "$TMP/digest.log" "待处理通知" "digest 含待处理通知段"
 assert_has "$TMP/digest.log" "blocked: 缺 dependency X" "digest 引用了新通知"
+# M18：P8 改名（watchdog → pulse）的漏网回归。旧名字已经全仓库无定义，digest 里只留下
+# `line 463: team_watchdog_state_text: command not found`，把「｜ watchdog 」后面的状态字段变空 ——
+# 这两条断言必须同时看得见「shell 报错」和「字段没内容」，否则空字段会被当成正常输出放过。
+assert_not "$TMP/digest.log" "command not found" "M18：digest 里没有 command not found（P8 改名漏网）"
+assert_not "$TMP/digest.log" "team_watchdog_state_text" "M18：digest 里没引到已删除的旧函数名"
+assert_match "$TMP/digest.log" '｜ pulse [^[:space:]]' "M18：digest 的 pulse 状态字段非空"
 $TEAM inbox --ack >/dev/null 2>&1
 $TEAM digest >"$TMP/digest2.log" 2>&1
 assert_not "$TMP/digest2.log" "blocked: 缺 dependency X" "ack 后不再重复出现"

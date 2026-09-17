@@ -460,7 +460,7 @@ team_cmd_digest() {
     foreign:*) printf '  PM ○ 窗口被别的项目占着（不覆盖）' ;;
     *)         printf '  PM ○ 窗口缺失 → team up' ;;
   esac
-  printf ' ｜ watchdog %s\n' "$(team_watchdog_state_text)"
+  printf ' ｜ pulse %s\n' "$(team_pulse_state_text)"
   # 延后投递：队列非空才打印（delivery-guard：排队/held 必须看得见；空队列一个字都不加）
   team_outbox_status_line "  " || true
 
