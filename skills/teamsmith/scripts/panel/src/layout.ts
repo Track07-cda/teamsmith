@@ -18,7 +18,7 @@
 // table columns / abbreviates states. Blocks whose source has no data collapse and yield the space.
 
 import { fmtAge, fmtMB, GLYPH, clockOf, shortBranch, sparkline } from './format.js'
-import { fill } from './strings/index.js'
+import { fill, OVERLAY_LABEL_W } from './strings/index.js'
 import type { Strings } from './strings/index.js'
 import type {
   Action,
@@ -249,6 +249,9 @@ interface Ctx {
   blocks: PanelBlocks
   view: ViewState
   activity: ActivityBlock[]
+  /** History rows the board keeps visible before folding (default `BOARD_DONE_KEEP`; a flush
+   * column raises it so the spare height shows real history instead of blank card space). */
+  boardDoneKeep?: number
 }
 
 export interface LayoutInput extends FrameInput {
@@ -592,6 +595,18 @@ function changePhaseText(phase: string, s: Strings): string {
   }
 }
 
+/** History rows the board keeps visible before folding the rest into one counted line. */
+const BOARD_DONE_KEEP = 5
+
+/** How many done/dropped rows the board folds away at the current history limit. */
+function boardFoldedRows(ctx: Ctx): number {
+  if (ctx.deg.has('board')) return 0
+  const rows = ctx.blocks.board?.rows ?? []
+  let history = 0
+  for (const r of rows) if (r.state === 'done' || r.state === 'dropped') history++
+  return Math.max(0, history - Math.max(1, ctx.boardDoneKeep ?? BOARD_DONE_KEEP))
+}
+
 function boardBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg, width } = ctx
   const board = blocks.board
@@ -623,10 +638,12 @@ function boardBlock(ctx: Ctx): Block | null {
       ),
     },
   ]
-  // `done` and `dropped` rows are history: only their newest five render, the rest fold into one
-  // counted line (the design's done-collapse, extended to dropped rows so the live board stays small).
+  // `done` and `dropped` rows are history: only the newest `keep` render, the rest fold into one
+  // counted line (the design's done-collapse, extended to dropped rows so the live board stays
+  // small). `boardDoneKeep` lets the assembly raise that limit when the column has spare height.
   const doneRows = rows.filter((r) => r.state === 'done' || r.state === 'dropped')
-  const keepDone = new Set(doneRows.slice(-5).map((r) => r.id))
+  const keep = Math.max(1, ctx.boardDoneKeep ?? BOARD_DONE_KEEP)
+  const keepDone = new Set(doneRows.slice(-keep).map((r) => r.id))
   const folded = doneRows.filter((r) => !keepDone.has(r.id)).length
   for (const r of rows) {
     if ((r.state === 'done' || r.state === 'dropped') && !keepDone.has(r.id)) continue
@@ -945,15 +962,40 @@ function pageName(page: PageId, s: Strings): string {
   return page === 1 ? s.pageOverview : page === 2 ? s.pageWork : s.pageMessages
 }
 
+/** The overlay's cursor column (`  › ` / `    `) and the separator that keeps the two columns apart. */
+const OVERLAY_CURSOR_W = 4
+const OVERLAY_GAP_W = 2
+/** `│ ` + ` │`: the border and padding the comfortable card chrome adds around a block's rows. */
+const OVERLAY_CHROME_W = 4
+
+/**
+ * The settings overlay's column plan. The key column is `OVERLAY_LABEL_W` — the widest of the five
+ * labels in *either* language — so zh and en put their values in the same column, and the two
+ * columns are separated by a real gap instead of the key cell ending exactly where the value
+ * starts (V16's user report: `default pageoverview` and `activity co…on` came from a hardcoded
+ * 12-cell key cell with no separator). Degradation: below the full plan the key column shrinks
+ * first — a key that does not fit is cut with `…` and still keeps the gap — while the value keeps
+ * at least one column of its own. The plan budgets for the card chrome (the comfortable framed
+ * style draws a border and a one-column padding on each side), so the frame's own truncation never
+ * eats the value column at narrow widths.
+ */
+function overlayCols(ctx: Ctx): { keyW: number; valueW: number } {
+  const avail = Math.max(1, ctx.width - (isFramed(ctx) ? OVERLAY_CHROME_W : 0))
+  const keyW = Math.max(1, Math.min(OVERLAY_LABEL_W, avail - OVERLAY_CURSOR_W - OVERLAY_GAP_W - 1))
+  return { keyW, valueW: Math.max(1, avail - OVERLAY_CURSOR_W - keyW - OVERLAY_GAP_W) }
+}
+
 function overlayBlock(ctx: Ctx): Block {
   const { s, width } = ctx
   const prefs = overlayPrefs(ctx)
+  const { keyW, valueW } = overlayCols(ctx)
   const lines: PlacedLine[] = []
   prefs.forEach((p, i) => {
     const row = ln(
       seg(`  ${i === ctx.view.overlayIndex ? s.settingsCursor : ' '} `, 'accent'),
-      seg(cell(p.label, 12), 'heading'),
-      seg(p.value),
+      seg(cell(p.label, keyW), 'heading'),
+      seg(' '.repeat(OVERLAY_GAP_W)),
+      seg(truncateW(p.value, valueW)),
     )
     lines.push(
       placedWithHits(row, ctx.view.tui ? [{ start: 2, end: 2 + dispWidth(textOf(row)), action: { kind: 'toggle', pref: p.pref as PrefName } }] : undefined, width),
@@ -1067,15 +1109,56 @@ export function layout(input: LayoutInput): Frame {
     if (twoColumn) {
       const leftW = leftWidth
       const rightW = rightWidth
-      const columns: [PlacedLine[], PlacedLine[]] = [[], []]
-      const ordered = [...leftBlocks.map((b) => ({ b, slot: 0 as 0 | 1 })), ...rightBlocks.map((b) => ({ b, slot: 1 as 0 | 1 }))].sort(
-        (x, y) => x.b.priority - y.b.priority,
-      )
-      for (const { b, slot } of ordered) {
-        const colW = slot === 0 ? leftW : rightW
-        const used = Math.max(columns[0].length, columns[1].length)
-        const chunk = place(b, bodyBudget - used, colW)
-        for (const l of chunk) columns[slot].push(l)
+      // One placement pass over the page's body blocks; `cards` is re-derived so pass 2 can carry a
+      // board with more history visible.
+      const placeColumns = (cards: Block[]): [PlacedLine[], PlacedLine[]] => {
+        const columns: [PlacedLine[], PlacedLine[]] = [[], []]
+        const ordered = [
+          ...cards.filter((b) => !b.right).map((b) => ({ b, slot: 0 as 0 | 1 })),
+          ...cards.filter((b) => b.right).map((b) => ({ b, slot: 1 as 0 | 1 })),
+        ].sort((x, y) => x.b.priority - y.b.priority)
+        for (const { b, slot } of ordered) {
+          const colW = slot === 0 ? leftW : rightW
+          const used = Math.max(columns[0].length, columns[1].length)
+          const chunk = place(b, bodyBudget - used, colW)
+          for (const l of chunk) columns[slot].push(l)
+        }
+        return columns
+      }
+      let bodyCards: Block[] = [...leftBlocks, ...rightBlocks]
+      let columns = placeColumns(bodyCards)
+      if (height > 0) {
+        // The board's folded history relaxes into the column's allotment (the flush bottom): the
+        // spare height shows real rows instead of blank card space. Only when the frame is bounded
+        // — the uncapped `--print` path keeps its pre-console shape byte for byte.
+        const board = bodyCards.find((b) => b.id === 'board')
+        const folded = board ? boardFoldedRows(ctx) : 0
+        const boardSlot: 0 | 1 = board?.right ? 1 : 0
+        const target = Math.max(columns[0].length, columns[1].length)
+        const extra = Math.min(folded, Math.max(0, target - columns[boardSlot].length))
+        if (board && extra > 0) {
+          const grown = boardBlock({ ...ctx, width: board.right ? rightW : leftW, boardDoneKeep: Math.max(1, ctx.boardDoneKeep ?? BOARD_DONE_KEEP) + extra })
+          if (grown) {
+            bodyCards = bodyCards.map((b) => (b === board ? grown : b))
+            columns = placeColumns(bodyCards)
+          }
+        }
+        // Flush the two column bottoms: a column shorter than its neighbour grows its *last* card
+        // (blank content area), so the body ends on one row instead of trailing blank page. Only
+        // cards can be grown; a degraded chrome (`rule`/`summary`) keeps its natural height and the
+        // merge below pads it as before.
+        const flush = Math.max(columns[0].length, columns[1].length)
+        for (const slot of [0, 1] as const) {
+          const col = columns[slot]
+          const colW = slot === 0 ? leftW : rightW
+          const slack = flush - col.length
+          const last = col[col.length - 1]
+          if (slack <= 0 || !last) continue
+          if (textOf(last.line) !== textOf(cardBottom(colW))) continue
+          col.pop()
+          for (let i = 0; i < slack; i++) col.push(cardBody({ line: [] }, colW))
+          col.push(last)
+        }
       }
       const bodyRows = Math.min(bodyBudget, Math.max(columns[0].length, columns[1].length))
       for (let i = 0; i < bodyRows; i++) {

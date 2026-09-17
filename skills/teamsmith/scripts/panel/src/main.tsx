@@ -11,7 +11,8 @@
 //   (default)    the TUI in a terminal; stdout not a TTY selects the plain-text path unless
 //                TEAM_MONITOR_UI=tui forces the renderer
 //   --headless   the tick loop only (no renderer) — the shape the console collapses into
-//   --snapshot   one themed frame with SGR bytes (the snapshot suite's deterministic exit)
+//   --snapshot   one themed frame with SGR bytes (the snapshot suite's deterministic exit);
+//                `--overlay` opens the settings overlay in that frame (the overlay's column plan)
 //   --palette    the declared palettes + their contrast pairs as JSON (the gate script's input)
 //
 // Everything on screen comes from `team __panel-data`; the tick is `team watch --once`.
@@ -81,6 +82,7 @@ const once = has('once')
 const wantJson = has('json')
 const wantPrint = has('print')
 const wantSnapshot = has('snapshot')
+const wantOverlay = has('overlay')
 const wantPalette = has('palette')
 const headless = has('headless')
 const widthArg = Number(argOf('width') ?? 0)
@@ -104,7 +106,7 @@ if (has('help')) {
   out(
     'usage: panel.js [--root DIR] [--state-dir DIR] [--print|--json|--once|--headless|--snapshot|--palette]\n' +
       '                [--width N] [--height N] [--activity|--no-activity] [--events N] [--refresh N]\n' +
-      '                [--no-pulse] [--theme dark|light] [--page 1|2|3] [--lang zh|en] [--version]\n',
+      '                [--no-pulse] [--theme dark|light] [--page 1|2|3] [--lang zh|en] [--overlay] [--version]\n',
   )
   process.exit(0)
 }
@@ -224,7 +226,7 @@ async function main(): Promise<void> {
     const page = pageArg === '1' || pageArg === '2' || pageArg === '3' ? (Number(pageArg) as PageId) : settings.defaultPage
     const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events })
     const frame = frameOrFail(res, rawActivityOn)
-    const view: ViewState = { ...defaultView(lang, page), tui: true, mouseOn: settings.mouse, density: settings.density }
+    const view: ViewState = { ...defaultView(lang, page), tui: true, mouseOn: settings.mouse, density: settings.density, overlay: wantOverlay }
     const themed = layout({
       ...frame,
       strings: stringsFor(lang),

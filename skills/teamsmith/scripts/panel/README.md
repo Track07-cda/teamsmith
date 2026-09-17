@@ -92,9 +92,10 @@ never overrun.
 | `tsconfig.json` | types only (`bunx tsc --noEmit` is a development check, not a gate) |
 
 Two extra machine exits exist for the fixtures (they are not part of the user-facing contract):
-`--snapshot` prints one themed frame with its SGR bytes (the snapshot suite's input) and `--palette` prints the
-declared palettes with their contrast pairs (`tests/panel-contrast.mjs` recomputes every pair independently and
-refuses anything below 4.5:1).
+`--snapshot` prints one themed frame with its SGR bytes (the snapshot suite's input) — with `--overlay` it opens
+the settings overlay in that frame, which is how the overlay's column plan is checked at every width — and
+`--palette` prints the declared palettes with their contrast pairs (`tests/panel-contrast.mjs` recomputes every
+pair independently and refuses anything below 4.5:1).
 
 ## Rebuilding it
 

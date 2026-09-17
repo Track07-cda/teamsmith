@@ -141,7 +141,12 @@ dropped, times shortened to the clock time, states abbreviated). The degradation
 stack first, then blocks fold into one-line summaries and collapse, then columns are dropped — SHALL be
 documented, and the console MUST NOT write more rows than the height nor a row wider than the width. A terminal
 resize SHALL re-layout the next frame live. `--width` and `--height` SHALL keep overriding the geometry for one
-frame, and the four tiers SHALL be pinned against stored snapshots in both themes in the test suite.
+frame, and the four tiers SHALL be pinned against stored snapshots in both themes in the test suite. In a bounded
+frame (the TUI's own rows, or `--height`) the two columns SHALL end on the same row: a column shorter than its
+neighbour grows its **last card's** content area — blank card space, not blank page — and the work page's board
+SHALL spend that spare height on its folded done/dropped history before any blank filler row appears. The
+uncapped machine frames (`--print` renders without a height) keep their pre-console shape and MUST NOT gain filler
+rows.
 
 #### Scenario: The tiers render at their boundaries
 
@@ -168,13 +173,28 @@ frame, and the four tiers SHALL be pinned against stored snapshots in both theme
 - **WHEN** the console renders one frame there and the pane is captured
 - **THEN** the capture has at most 8 non-empty rows and no row is wider than 60 columns
 
+#### Scenario: The two columns end on the same row
+
+- **GIVEN** a fixture project whose overview renders a short agent card beside a taller activity card, and whose
+  work page renders a board with folded history beside a taller right column
+- **WHEN** the console renders one bounded frame of each page
+- **THEN** the agent card's bottom border lands on the taller card's bottom row (its content area gained the
+  blank rows) and the board shows the folded done/dropped rows instead of a blank card bottom, while
+  `team monitor --print` stays at its old line count
+
 ### Requirement: Every key affordance is also a mouse target
 
 With the mouse preference on, the console SHALL enable SGR mouse reporting for its lifetime and disable it on
 exit, and every documented key — `m`, `f`, `s`, `,`, Tab, `1`–`3`, `↑`/`↓`, `q` — SHALL have a clickable target
 that acts identically; the wheel SHALL scroll the current page's scrollable region (one offset per page, one line per notch — there is no focused block; V15 F5 ruling). Coordinates are 1:1: a click on a target
 activates that target (E6 §1.1 measured the full path, with tmux's own mouse option in either state). With the
-preference off the console SHALL emit no mouse-reporting sequence and clicks SHALL do nothing.
+preference off the console SHALL emit no mouse-reporting sequence and clicks SHALL do nothing. The settings
+overlay is an in-page overlay, not a modal: it replaces the page's blocks but keeps the title band, the tabs and
+the key band, so the footer chips still visible under it stay clickable and act exactly as they do with the
+overlay closed, while the replaced blocks keep **no** targets — a click at a block's former coordinates does
+nothing (V16 F-V16-4, ruled as the actual behaviour). `r` (rebuild the cached blocks on demand) is the one named
+exception, because it is a keyboard-only key: it has no chip in the key band and MUST NOT appear in the frame's
+target map, so "every affordance is clickable" counts only the affordances the console shows (V16 F-V16-5).
 
 #### Scenario: A click acts like the key
 
@@ -193,6 +213,22 @@ preference off the console SHALL emit no mouse-reporting sequence and clicks SHA
 - **GIVEN** the console running with the mouse preference off
 - **WHEN** a frame is captured and a click is injected on the `m` hint
 - **THEN** the capture contains no SGR mouse-enable sequence and the compose line stays closed
+
+#### Scenario: The overlay keeps the visible footer live and the page behind it dead
+
+- **GIVEN** the console running in a fixture pane with the mouse preference on and the settings overlay opened
+  with `,`
+- **WHEN** a click is injected on the still-visible `m` chip in the key band, and then one at the coordinates a
+  page block occupied before the overlay opened
+- **THEN** the compose line opens — the chip acted like the key, so the overlay does not modalize the footer —
+  while the second click changes nothing: the blocks the overlay replaced keep no targets
+
+#### Scenario: The refresh key is deliberately keyboard-only
+
+- **GIVEN** a rendered frame and its click-target map with the mouse preference on
+- **WHEN** the documented keys are enumerated against the map
+- **THEN** every documented key except `r` has a target and the map carries no entry that refreshes the cached
+  blocks, while pressing `r` still rebuilds them — the key has no clickable affordance by design
 
 ### Requirement: The console is read-only except through three commands
 
