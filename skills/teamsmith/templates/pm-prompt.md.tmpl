@@ -9,6 +9,16 @@ Team tooling: `bash {{SKILL_DIR}}/scripts/team help` (referred to as `team` belo
 4. **Failure is information**: errors must be visible, recoverable and auditable; **a false green is worse than nothing** (a checker must be falsifiable).
 5. **Everything must be handover-ready**: disk beats memory (you will be restarted); decisions need their rationale; an incident must become a mechanism, not a promise to "be careful next time".
 
+## Talking to the user: a code never stands alone
+
+The ledger thinks in codes (`M12`, `P14`, `V15`, `T1.1`); the user does not have the ledger in their head. So in
+**user-facing output** -- reports, reminders, messages, release notes, anything the user reads -- every code that
+names a task carries its short human-readable name in the same place: `M12 (fix the smoke flake)`. The same holds
+for milestones and change ids, and for long lists: a row is read on its own, so a repeated code is named again on
+its line. Commands keep the bare code (`team close M12`) -- there it is a key, not a reference.
+`team digest` / `team status` / `team roster` already render the name next to the code; use the same shape in your
+own messages. Prefer the BOARD's task column as the name (that is the shared short name), not a fresh description.
+
 ## First moves (on every start / whenever the pulse raises you)
 
 ```bash
@@ -69,7 +79,8 @@ their repo. **Workers do not attend meetings** — they write `BLOCKED:` in thei
 5. **Merge / wrap up** (git/forge is yours): `git -C <root> merge --squash <branch>` + commit + push (with a PR,
    merge the PR first and then `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`.
    On failure: `team thread <agent> "<failure evidence>"` + `team say <agent> "<one-line instruction>"`.
-6. **Report**: tell the user the conclusion, where the evidence is, the risks and the next step; record key
+6. **Report**: lead with the code **and** its short name (`M12 (fix the smoke flake)`), then tell the user the
+   conclusion, where the evidence is, the risks and the next step; record key
    decisions in `{{DOCS_DIR}}/DECISIONS.md` (with rationale and impact). With magic-context, also record rules
    that hold across tasks in project memory (`ctx_memory`) and park "do later" items as notes — but **evidence
    always lives in the files on disk**.

@@ -263,6 +263,44 @@ team_git_cols() { # <worktree> → "branch dirty ahead-of-protected ahead-of-ups
   printf '%s\t%s\t%s\t%s\n' "$branch" "$dirty" "$ahead" "$(team_git_upstream_ahead "$wt")"
 }
 
+# ---------------------------------------------------------------- M16：代号必须随身带人话名字
+# 面向用户的输出里，代号（M12 / P14 / V15 / T1.1）单独出现 = 让读者自己去翻台账："P14 要决" 这种话
+# 让人先查文件才知道 P14 是什么。规则（用户反馈 2026-09-17）：**同一处必须带短名字**（`M12（修冒烟抖动）`）——
+# 代号是台账的钥匙（命令里照旧原样用），名字是给人读的，两者不许分家。
+# 名字来源（按可信度）：① BOARD 的「任务」列（PM 维护的正式短名）→ ② 任务书 H1（`# M16 · …`）
+# → ③ 该任务的报告 H1（`# M16-dev2 · …`；叠分支、任务书还没写名字时的兜底）。
+# 查不到名字就返回空，调用方只印代号 —— **绝不编名字，也绝不因为查不到名字就不打印代号**：
+# 代号丢失比名字缺失更糟（账本就靠它对上人）。
+team_task_name() { # <ID> → 一行短名字（没有 → 空）
+  local id="${1:-}" t f title
+  [ -n "$id" ] || return 0
+  t="$(team_task_title "$id" 2>/dev/null || true)"        # ① 看板 → ② 任务书（team_task_title 的实现）
+  if [ -n "$t" ] && [ "$t" != "$id" ]; then printf '%s\n' "$t"; return 0; fi
+  f="$(team_find_report "$id" 2>/dev/null || true)"
+  if [ -n "$f" ] && [ -f "$f" ]; then                     # ③ 报告 H1 的兜底
+    title="$(sed -n '1{/^#[[:space:]]/p}' "$f" 2>/dev/null | sed -e 's/^#[[:space:]]*//')"
+    # `# M16 · title` / `# M16-dev2 · title`：吃掉代号（含 "-<agent>" 后缀）与后随的分隔符
+    title="$(printf '%s' "$title" | sed -E "s@^$(team_regex_escape "$id")([-[:alnum:]_]+)?[[:space:]]*[·:—–-][[:space:]]*@@")"
+    if [ -n "$title" ] && [ "$title" != "$id" ]; then printf '%s\n' "$title"; return 0; fi
+  fi
+  return 0
+}
+
+team_task_label() { # <ID> → "M16（沟通纪律：代号必须随身带人话名字）"；查不到名字 → 原样 <ID>
+  local id="${1:-}" name
+  [ -n "$id" ] || return 0
+  name="$(team_task_name "$id" 2>/dev/null || true)"
+  if [ -n "$name" ]; then printf '%s（%s）\n' "$id" "$name"; else printf '%s\n' "$id"; fi
+  return 0
+}
+
+team_task_name_suffix() { # <ID> → "（短名字）"；查不到 → 空（贴在已显示的名字/代号后面，不重复代号）
+  local name
+  name="$(team_task_name "${1:-}" 2>/dev/null || true)"
+  [ -n "$name" ] && printf '（%s）\n' "$name"
+  return 0
+}
+
 team_cmd_roster() {
   team_require_docs
   printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' AGENT 状态 分支 脏 领先 未push 模型 会话 任务
@@ -283,7 +321,8 @@ team_cmd_roster() {
     size="$(team_session_size_text "$mtok" "$mwin")"
     # M14：模型列带来源标注 —— 名册旧记录不再冒充当前配置（历史记录 = 配置在它之后改了）
     msrc="$(team_agent_model_src "$a")"
-    task="$(team_state_get "$a" task -)"
+    # M16：任务列不再只印代号 —— 名字跟在代号后面（查不到名字时原样只印代号）
+    task="$(team_task_label "$(team_state_get "$a" task -)")"
     printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$upahead" "$model·$msrc" "$size" "$task"
   done
   printf '\n● %s 在跑 ｜ ○ 窗口在但 %s 已退出（team resume 可续）｜ · 无窗口\n' "$cli" "$cli"
@@ -361,7 +400,9 @@ team_cmd_status() {
   team_outbox_status_line "" || true
   printf '\n'
   if [ -n "$id" ]; then
-    printf '任务 %s：\n' "$id"
+    # M16：抬头行也带名字（`任务 M16：沟通纪律…`）—— 保持 `任务 <ID>：` 前缀不变（既有断言/习惯），
+    # 名字直接跟在冒号后面（查不到名字时就是原来的行为）。
+    printf '任务 %s：%s\n' "$id" "$(team_task_name "$id")"
     team_board_row "$id" | sed 's/^/  /' || true
     if team_find_report "$id" >/dev/null 2>&1; then
       printf '  报告 %s（%s 行）\n' "$(team_find_report "$id")" "$(wc -l < "$(team_find_report "$id")" | tr -d ' ')"
@@ -481,7 +522,10 @@ team_cmd_digest() {
       # M9.4：声明了 phase 的任务按 M9.2 的阶段证据给下一步（不是那句通用的 team review）
       act="$(team_report_pending_action "${rid:-${disp%%-*}}")"
     fi
-    printf '  %s%s  %s\n' "$disp" "$where" "$act"
+    # M16：待复验清单的每个代号都要在同一行带名字。名字贴在**整条显示单元的最后**
+    # （`<报告名> [标记]（归属）（名字）`）：前面的报告名/标记/归属是既有回归断言钉住的产物，
+    # 名字加在后面既让同一行有名字，也不动那些历史的守门断言。
+    printf '  %s%s%s  %s\n' "$disp" "$where" "$(team_task_name_suffix "${rid:-${disp%%-*}}")" "$act"
   done < <(team_reports_pending_list "$cands")
   [ "$any" -eq 0 ] && team_dim "  （无）"
   local ign; ign="$(team_reports_ignored || true)"
@@ -492,7 +536,8 @@ team_cmd_digest() {
   sskip="$(team_reports_skipped_by_board "$cands" || true)"
   while IFS=$'\t' read -r sid sname spath; do
     [ -n "$sid" ] || continue
-    sn=$((sn + 1)); sname_list="${sname_list:+$sname_list、}$sname"
+    # M16：跳过行同样要点到名字（这一行是 PM 唯一能看到「它为什么没列」的地方）
+    sn=$((sn + 1)); sname_list="${sname_list:+$sname_list、}${sname}$(team_task_name_suffix "$sid")"
   done <<< "$sskip"
   if [ "$sn" -gt 0 ]; then
     team_dim "  已按看板跳过 ${sn} 份报告（任务已 done/closed）：$sname_list · 证据在 board set 时核对（M9.2），这里不重复质疑"
@@ -510,7 +555,7 @@ team_cmd_digest() {
     # 脏工作区 / 真的未 push 优先：那种情况下这个判定不成立，走下面的旧逻辑。
     if team_wrapup_is_squash_merged "$swt" "$sdirty" "$sahead" "$supahead"; then
       sany=1
-      stask="$(team_state_get "$sa" task '-')"
+      stask="$(team_task_label "$(team_state_get "$sa" task '-')")"
       printf '  %-10s %-52s ｜ %s ｜ %s\n' "$sa" "已合并（squash，内容一致）· 无需 push" "$sbranch" "$stask"
       printf '             %s\n' "（启发式：tip 的 tree 出现在 $TEAM_PROTECTED_BRANCH 最近 ${TEAM_SQUASH_LOOKBACK:-200} 个提交里；不放心就 git diff $TEAM_PROTECTED_BRANCH..$sbranch）"
       continue
@@ -531,7 +576,7 @@ team_cmd_digest() {
     esac
     [ -n "$sfacts" ] || [ -n "$supnote" ] || continue
     sany=1
-    stask="$(team_state_get "$sa" task '-')"
+    stask="$(team_task_label "$(team_state_get "$sa" task '-')")"
     sact="${sfacts:-—}"; [ -n "$supnote" ] && sact="${sact}${sact:+ ｜ }$supnote"
     printf '  %-10s %-52s ｜ %s ｜ %s\n' "$sa" "$sact" "$sbranch" "$stask"
     if [ -n "$sfacts" ]; then
@@ -555,7 +600,7 @@ team_cmd_digest() {
   for a in $(team_agents); do
     if ! team_agent_live "$a"; then
       local task; task="$(team_state_get "$a" task '')"
-      [ -n "$task" ] && { printf '  · %s 未在跑但仍有任务 %s → %s dispatch 续跑，或 close %s\n' "$a" "$task" "$TEAM_CLI" "$task"; suggestion=1; }
+      [ -n "$task" ] && { printf '  · %s 未在跑但仍有任务 %s → %s dispatch 续跑，或 close %s\n' "$a" "$(team_task_label "$task")" "$TEAM_CLI" "$task"; suggestion=1; }
     fi
   done
   [ "$suggestion" -eq 0 ] && team_dim "  （无）"

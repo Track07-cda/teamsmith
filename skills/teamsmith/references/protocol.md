@@ -406,3 +406,21 @@ It costs more, so it fits milestones and closure rounds; everyday tasks run the 
 - Every decision must record its **reason** and its **impact**: a decision log with conclusions only is worth nothing
   six months later.
 - An agent may overturn the PM's provisional judgement with its own evidence — that is by design, not overreach.
+
+## 11. Talking to the user: a code never stands alone
+
+The ledger is keyed by codes (`M12`, `P14`, `V15`, `T1.1`): the BOARD, the roadmap, briefs and review records all
+use them, and after a few days the team reads them fluently. The user has no such index in their head — a report
+that says "P14 needs a decision" sends them to the files to find out what P14 *is*, and the message that should
+have informed them turns into homework.
+
+So: **in user-facing output, a code never stands alone.** Every occurrence that names a task carries its short
+human-readable name in the same place — `M12 (fix the smoke flake)` — and milestones and change ids work the same
+way. A list is read row by row, so a code repeated on another line is named again there ("each row is a reading
+unit"). The one exception is a copy-pasteable command (`team close M12`): there the code is a key, and rewriting
+it would break the tool it calls.
+
+The mechanism backs this up wherever the ledger already knows the name: `team digest` (pending review, the
+board-skipped line, wrap-up, suggestions), `team status` and `team roster` print the name next to the code, resolving
+it from the BOARD's task column first, then the task brief's H1, then the task's report H1. When no name is known the
+code is printed alone — never a made-up name, and never a hidden code: the code is the key to the ledger.

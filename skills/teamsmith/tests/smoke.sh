@@ -6988,6 +6988,216 @@ case ",$P28_KINDS3," in
   *) bad "28-f 点击目标：队列行没有 view-entry 目标（$P28_KINDS3）" ;;
 esac
 
+
+# ---------------------------------------------------------------- 29. 派单模型解析：配置压过名册旧记录（M14）
+# 契约（真实事故：TEAM_AGENT_MODELS 已配 dev=kimi-coding/k3-256k，dispatch 仍按名册 state 里的
+# deepseek 旧记录启动 —— 旧实现 model="${model:-$(state_get model (config))}" 让旧记录赢了配置）：
+#   ① 解析顺序 = --model 显式 ＞ 配置（TEAM_AGENT_MODELS per-agent ＞ TEAM_DEFAULT_MODEL）；
+#      名册 state 的 model 只是「上次用了什么」的展示记录，不再参与解析；
+#   ② 配置改了，下一次派单立即生效（不需要先清 state）；
+#   ③ roster/ps 的模型列标注来源（配置/显式/历史记录），旧记录不再冒充当前配置。
+# 全程在自己的临时仓库里跑（写盘前先证明身份），dispatch 只走 --print（纯逻辑，快慢模式都跑）。
+section "29 · 派单模型解析：配置压过名册旧记录（M14）"
+
+M14R="$TMP/m14repo"; rm -rf "$M14R"; mkdir -p "$M14R"
+( cd "$M14R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# m14' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+M14SES="teamsmith-smoke-m14-$$"
+( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$M14SES" --agents dev --vcs local --gates "true" --docs docs/team ) >"$TMP/m14-init.log" 2>&1 \
+  && ok "M14 夹具仓库 init 成功" || bad "M14 夹具仓库 init 失败（见 $TMP/m14-init.log）"
+( cd "$M14R" && git add -A && git commit -qm "chore: m14 init" ) >/dev/null 2>&1
+
+# 身份隔离（M7.2 纪律）：**写盘之前**先证明 team 认的是这个临时仓库 + 这个临时 session
+( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/m14-paths.json" 2>&1 || true
+assert_eq "M14 隔离：team paths 的 main_root 就是 M14 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m14-paths.json")" "$M14R"
+assert_has "$TMP/m14-paths.json" "\"session\": \"$M14SES\"" "M14 隔离：身份用的是本轮临时 session"
+
+m14() { ( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+m14_lib() { # <函数> [参数…]：按 CLI 的方式加载库后调用（展示列与派单读的是同一批函数）
+  local fn="$1"; shift
+  ( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$fn"' "$@"' _ "$@" )
+}
+
+# 任务 + 工作树（dispatch --print 的最低现场）
+m14 $TEAM task M14X --title "M14 fixture" --agent dev --deps "-" >"$TMP/m14-task.log" 2>&1 \
+  && ok "M14 夹具：task 建好" || bad "M14 夹具：task 失败（见 $TMP/m14-task.log）"
+M14TASK="$(ls "$M14R"/docs/team/tasks/M14X-*.md 2>/dev/null | head -1)"
+m14 $TEAM add-agent dev --create --no-install >"$TMP/m14-add.log" 2>&1 \
+  && ok "M14 夹具：worktree 建好" || bad "M14 夹具：add-agent 失败（见 $TMP/m14-add.log）"
+M14WT="$M14R/.worktrees/dev"
+M14BR="$(m14_lib team_branch_for_agent dev M14X)"
+git -C "$M14WT" switch -c "$M14BR" main >/dev/null 2>&1 || git -C "$M14WT" switch "$M14BR" >/dev/null 2>&1
+assert_eq "M14 夹具：工作树停在任务分支上" "$(git -C "$M14WT" rev-parse --abbrev-ref HEAD)" "$M14BR"
+
+# 主现场：名册 state 里躺着一条旧记录（换配置之前派的），配置已经指向新模型
+printf 'model=vendor-legacy/model-old\nwindow=dev\nworktree=%s\n' "$M14WT" > "$M14R/.pi/team/state/dev.env"
+sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS="dev=vendor-a/model-a"|' "$M14R/.pi/team/config.sh"
+
+# ① 配置 dev=A → 渲染出 A；名册旧记录不参与
+m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-a.log" 2>&1 \
+  && ok "M14-①：配置 dev=vendor-a 时 dispatch --print 退出码 0" || bad "M14-①：dispatch --print 失败（见 $TMP/m14-a.log）"
+assert_has "$TMP/m14-a.log" "--provider vendor-a --model model-a" "M14-①：渲染出配置给的模型 A"
+assert_not "$TMP/m14-a.log" "model-old" "M14-①：名册里的旧记录没有参与解析"
+
+# ② 配置改成 dev=B → 下一次渲染立即出 B（state 原封不动，不需要先清）
+sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS="dev=vendor-b/model-b"|' "$M14R/.pi/team/config.sh"
+m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-b.log" 2>&1 || bad "M14-②：dispatch --print 失败"
+assert_has "$TMP/m14-b.log" "--provider vendor-b --model model-b" "M14-②：配置改动立即影响下一次派单"
+assert_not "$TMP/m14-b.log" "model-old" "M14-②：旧记录仍没有参与"
+assert_not "$TMP/m14-b.log" "model-a" "M14-②：上一个配置值也没有残留"
+
+# ③ --model C 显式传参压过配置与旧记录
+m14 $TEAM dispatch dev M14X "$M14TASK" --print --model vendor-c/model-c >"$TMP/m14-c.log" 2>&1 || bad "M14-③：dispatch --print 失败"
+assert_has "$TMP/m14-c.log" "--provider vendor-c --model model-c" "M14-③：--model 显式传参压过配置"
+assert_not "$TMP/m14-c.log" "model-b" "M14-③：配置值没有赢过显式参数"
+
+# ④ 配置没有 dev 条目 → 落到 TEAM_DEFAULT_MODEL（同样不是名册旧记录）
+sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS=""|' "$M14R/.pi/team/config.sh"
+M14DEF="$(sed -n 's/^TEAM_DEFAULT_MODEL="\([^"]*\)".*/\1/p' "$M14R/.pi/team/config.sh" | head -1)"
+m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-def.log" 2>&1 || bad "M14-④：dispatch --print 失败"
+assert_has "$TMP/m14-def.log" "--provider ${M14DEF%%/*} --model ${M14DEF##*/}" "M14-④：无 per-agent 条目时落到 TEAM_DEFAULT_MODEL"
+assert_not "$TMP/m14-def.log" "model-old" "M14-④：旧记录仍没有参与"
+
+# ⑤ 展示列的来源标注（名册照写、但要说清是哪来的；此刻 state=vendor-legacy/model-old，配置=默认）
+assert_eq "M14-⑤：旧记录 ≠ 当前配置 → 标「历史记录」" "$(m14_lib team_agent_model_src dev)" "历史记录"
+m14 $TEAM roster >"$TMP/m14-roster-hist.log" 2>&1 && ok "M14-⑤：roster 退出码 0" || bad "M14-⑤：roster 失败"
+assert_has "$TMP/m14-roster-hist.log" "vendor-legacy/model-old·历史记录" "M14-⑤：roster 把旧记录标成「历史记录」（不再冒充当前配置）"
+assert_has "$TMP/m14-roster-hist.log" "下次派单用新配置" "M14-⑤：图例说明「历史记录」的含义"
+# ps 侧同一列（给它一个假会话文件，agent 会话行才会打印；TEAM_PI_AGENT_DIR 钉在 $TMP，绝不碰真 HOME）
+M14PADIR="$TMP/m14-piagent"
+M14SESSDIR="$M14PADIR/sessions/--$(printf '%s' "$M14WT" | sed -e 's|^/||' -e 's|[/\\:]|-|g')--"
+mkdir -p "$M14SESSDIR"
+head -c 4000 /dev/zero | tr '\0' 'x' > "$M14SESSDIR/2026-01-01T00-00-00-000Z_$M14SES-dev.jsonl"
+m14 env TEAM_PI_AGENT_DIR="$M14PADIR" $TEAM ps >"$TMP/m14-ps-hist.log" 2>&1 && ok "M14-⑤：ps 退出码 0" || bad "M14-⑤：ps 失败"
+assert_has "$TMP/m14-ps-hist.log" "vendor-legacy/model-old·历史记录" "M14-⑤：ps 的会话行同样标「历史记录」"
+# 记录与当前配置一致 → 「配置」（老记录没有 model_src 字段也判得对）
+printf 'model=%s\nwindow=dev\nworktree=%s\n' "$M14DEF" "$M14WT" > "$M14R/.pi/team/state/dev.env"
+assert_eq "M14-⑤：记录 == 当前配置 → 标「配置」" "$(m14_lib team_agent_model_src dev)" "配置"
+m14 $TEAM roster >"$TMP/m14-roster-cfg.log" 2>&1
+assert_has "$TMP/m14-roster-cfg.log" "$M14DEF·配置" "M14-⑤：roster 把一致的记录标成「配置」"
+# 上次是 --model 显式派的 → 「显式」（哪怕它与配置不同，来源也要如实说）
+printf 'model=vendor-x/model-x\nmodel_src=explicit\nwindow=dev\nworktree=%s\n' "$M14WT" > "$M14R/.pi/team/state/dev.env"
+assert_eq "M14-⑤：上次 --model 显式 → 标「显式」" "$(m14_lib team_agent_model_src dev)" "显式"
+m14 $TEAM roster >"$TMP/m14-roster-exp.log" 2>&1
+assert_has "$TMP/m14-roster-exp.log" "vendor-x/model-x·显式" "M14-⑤：roster 把显式记录标成「显式」"
+# 没有任何记录 → 展示的就是配置解析 → 「配置」
+rm -f "$M14R/.pi/team/state/dev.env"
+assert_eq "M14-⑤：无记录 → 标「配置」" "$(m14_lib team_agent_model_src dev)" "配置"
+m14 $TEAM roster >"$TMP/m14-roster-none.log" 2>&1
+assert_has "$TMP/m14-roster-none.log" "$M14DEF·配置" "M14-⑤：无记录时 roster 直接展示配置解析并标「配置」"
+
+# ---------------------------------------------------------------- 30. 代号必须带名字（M16）
+# 契约（用户反馈 2026-09-17：“PM 喜欢只用代号（M2、T1.2）指代事务，但用户不一定记得这些编号”）：
+#   ① 面向人的输出里代号不许单独出现：**同一行必须带它的短名字**（digest [3] 待复验 / [3] 跳过行 /
+#      [4] 待收尾 / [5] 建议，team status 抬头，roster 任务列）；
+#   ② 长列表里每一行自成阅读单元：代号在同一行重复出现（例如 `… → team review M16A`）不算合格 ——
+#      扫描是「凡含代号的行都必须含名字」，空转扫描（一行都没扫到）单独报红；
+#   ③ 名字来源按可信度：BOARD 任务列 → 任务书 H1 → 报告 H1；查不到名字就只印代号
+#      （绝不编名字、也绝不因为没名字就不印代号 —— 代号丢了比名字缺了更糟）。
+# 全程在自己的临时仓库里跑（写盘前先证明身份），纯逻辑，快慢模式都跑。
+section "30 · 代号必须带名字（M16）"
+
+M16R="$TMP/m16repo"; rm -rf "$M16R"; mkdir -p "$M16R"
+( cd "$M16R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# m16' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+M16SES="teamsmith-smoke-m16-$$"
+( cd "$M16R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$M16SES" --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >"$TMP/m16-init.log" 2>&1 \
+  && ok "M16 夹具仓库 init 成功" || bad "M16 夹具仓库 init 失败（见 $TMP/m16-init.log）"
+
+# 身份隔离（M7.2 纪律）：**写盘之前**先证明 team 认的是这个临时仓库 + 这个临时 session
+( cd "$M16R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/m16-paths.json" 2>&1 || true
+assert_eq "M16 隔离：team paths 的 main_root 就是 M16 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m16-paths.json")" "$M16R"
+assert_has "$TMP/m16-paths.json" "\"session\": \"$M16SES\"" "M16 隔离：身份用的是本轮临时 session"
+
+m16() { ( cd "$M16R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+m16_lib() { # <函数> [参数…]：按 CLI 的方式加载库后调用（digest 与这些展示函数读的是同一批代码）
+  local fn="$1"; shift
+  ( cd "$M16R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$fn"' "$@"' _ "$@" )
+}
+m16_brief() { # <ID> [名字行]：最小任务书；不给名字行 = 任务书自己也没有名字（测报告兜底）
+  mkdir -p "$M16R/docs/team/tasks"
+  if [ -n "${2:-}" ]; then printf '# %s · %s\n' "$1" "$2"; else printf '# %s\n' "$1"; fi > "$M16R/docs/team/tasks/$1-m16.md"
+  printf '\ntask:   %s\nagent:  dev\ndeps:   -\nstatus: todo\n' "$1" >> "$M16R/docs/team/tasks/$1-m16.md"
+}
+m16_report() { # <ID> [标题行]：任务报告（标题与文件名都要让 team_report_is_task 认得）
+  mkdir -p "$M16R/docs/team/reports"
+  if [ -n "${2:-}" ]; then printf '# %s · %s\n' "$1" "$2"; else printf '# %s\n' "$1"; fi > "$M16R/docs/team/reports/$1-dev.md"
+  printf '\nagent: dev  状态: DONE\n\n## 交付物\n- fixture\n' >> "$M16R/docs/team/reports/$1-dev.md"
+}
+# 反向守卫：夹具代号出现过的**每一行**都必须带它的名字；代号一次都没出现也报红（否则扫描是空转的假绿）
+m16_sweep() { # <日志> <代号> <名字> <说明>
+  local log="$1" id="$2" name="$3" what="$4" line n=0 miss=0
+  while IFS= read -r line; do
+    case "$line" in *"$id"*) n=$((n + 1)) ;; *) continue ;; esac
+    case "$line" in *"$name"*) ;; *) miss=$((miss + 1)); printf '      缺名字的行：[%s]\n' "$line" ;; esac
+  done < "$log"
+  if [ "$n" -eq 0 ]; then bad "$what：输出里根本没有 $id（扫描空转 = 假绿）"
+  elif [ "$miss" -eq 0 ]; then ok "$what：$id 出现的 $n 行都带名字「$name」"
+  else bad "$what：$id 有 $miss 行没带名字"; fi
+}
+
+# ① BOARD 任务列（主来源）：报告与任务书都同名
+m16 $TEAM board add M16A "夹具甲：代号必须带名字" dev - >/dev/null 2>&1 || true
+m16_brief M16A "夹具甲：代号必须带名字"
+m16_report M16A "夹具甲：代号必须带名字"
+# ② 任务名只存在于任务书 H1（BOARD 还没这一行）：查名字的兜底之一
+m16 $TEAM board add M16B "夹具乙：收尾行也要带名字" dev - >/dev/null 2>&1 || true
+m16_brief M16B "夹具乙：收尾行也要带名字"
+# ③ 看板没有这一行、任务书也没名字，只有报告 H1 有 → 报告兜底
+#    （不建 BOARD 行：否则 [5] 任务板的看板回显会只印代号，而那行忠实反映看板本身没有名字）
+m16_brief M16C
+m16_report M16C "报告里的短名"
+# ④ 哪里都没有名字：只印代号（负对照：不编名字、不藏代号）
+m16 $TEAM board add M16D "—" dev - >/dev/null 2>&1 || true
+m16_report M16D
+# ⑤ 看板已裁决的报告：跳过行也必须带名字
+m16 $TEAM board add M16E "夹具戊：跳过行也要带名字" dev - >/dev/null 2>&1 || true
+m16_report M16E "夹具戊：跳过行也要带名字"
+m16 env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="smoke M16 fixture" \
+  $TEAM board set M16E done >/dev/null 2>&1 || true
+assert_eq "M16 夹具：M16E 已按看板裁决" "$(m16_lib team_board_status M16E)" "done"
+# ⑥ 待收尾 + [5] 建议：agent 手上有个任务，工作树脏（快慢模式都不需要真窗口）
+M16WT="$M16R/.worktrees/dev"
+git -C "$M16R" worktree add -q -b task/M16B-fixture "$M16WT" main >/dev/null 2>&1 || true
+printf 'dirty\n' >> "$M16WT/README.md"
+m16_lib team_state_set dev task M16B >/dev/null 2>&1 || true
+
+m16 $TEAM digest >"$TMP/m16-digest.log" 2>&1 && ok "M16：digest 退出码 0" || bad "M16：digest 失败（见 $TMP/m16-digest.log）"
+
+# ① 泛扫（本段的核心断言）：四个有名字的夹具代号，凡出现过的行都必须带名字
+m16_sweep "$TMP/m16-digest.log" M16A "夹具甲：代号必须带名字" "M16-① 待复验行"
+m16_sweep "$TMP/m16-digest.log" M16B "夹具乙：收尾行也要带名字" "M16-① 待收尾/建议行"
+m16_sweep "$TMP/m16-digest.log" M16C "报告里的短名" "M16-① 报告 H1 兜底"
+m16_sweep "$TMP/m16-digest.log" M16E "夹具戊：跳过行也要带名字" "M16-① 看板跳过行"
+# 具体形状也钉住（泛扫可能被“名字恰好出现在别处”骗过）
+assert_has "$TMP/m16-digest.log" "M16A-dev（夹具甲：代号必须带名字）" "M16-①：待复验行是「代号（名字）」形状"
+assert_has "$TMP/m16-digest.log" "M16C-dev（报告里的短名）" "M16-①：名字从报告 H1 兜底取得"
+assert_has "$TMP/m16-digest.log" "M16E-dev（夹具戊：跳过行也要带名字）" "M16-①：跳过行也带名字"
+assert_has "$TMP/m16-digest.log" "M16B（夹具乙：收尾行也要带名字）" "M16-①：待收尾/建议行带名字"
+assert_has "$TMP/m16-digest.log" "未在跑但仍有任务 M16B（夹具乙：收尾行也要带名字）" "M16-①：[5] 建议行带名字"
+assert_has "$TMP/m16-digest.log" "已按看板跳过 1 份报告" "M16-①：跳过行仍然说明了为什么没列"
+# 负对照：哪里都没名字 → 代号照旧单独印出来（不编名字）
+assert_match "$TMP/m16-digest.log" 'M16D-dev  →  team review M16D' "M16-②：查不到名字时照旧只印代号（不编名字、不藏代号）"
+assert_eq "M16-②：M16D 所在的行没有凭空造出名字" \
+  "$(grep -F 'M16D-dev' "$TMP/m16-digest.log" | grep -cF '（' || true)" "0"
+
+# ② 同源的另两个出口：status 抬头行 + roster 任务列（digest 之外，用户也会看的输出）
+m16 $TEAM status M16B >"$TMP/m16-status.log" 2>&1 || true
+assert_has "$TMP/m16-status.log" "任务 M16B：夹具乙：收尾行也要带名字" "M16-③：team status 抬头行带名字"
+m16 $TEAM roster >"$TMP/m16-roster.log" 2>&1 || true
+assert_has "$TMP/m16-roster.log" "M16B（夹具乙：收尾行也要带名字）" "M16-③：roster 任务列带名字"
+
+# 隔离（M7.2 纪律）：夹具痕迹不得落进调用方项目（本段只写 /tmp 下的临时仓库）
+M16_REAL_MAIN="$(dirname "$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "$SKILL_DIR" rev-parse --show-toplevel)")"
+M16_PHANTOM="$(grep -rlE "M16[.A-E]|$M16SES" "$M16_REAL_MAIN/docs/team/inbox" "$M16_REAL_MAIN/.pi/team/state" 2>/dev/null || true)"
+if [ -n "$M16_PHANTOM" ]; then bad "M16 隔离：夹具的痕迹出现在真实账本里：$(printf '%s' "$M16_PHANTOM" | tr '\n' ' ')"
+else ok "M16 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
