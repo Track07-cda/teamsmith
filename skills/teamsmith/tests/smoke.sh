@@ -28,6 +28,17 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
       TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION \
       TEAM_PULSE_WINDOW TEAM_PULSE_INTERVAL TEAM_PULSE_NUDGE_GAP TEAM_PULSE_REBUILD_TMUX TEAM_PULSE_MAX_RESTARTS TEAM_PULSE_PENDING_BOARD \
       TEAM_WATCH_WINDOW TEAM_WATCH_INTERVAL TEAM_WATCH_NUDGE_GAP TEAM_WATCH_REBUILD_TMUX TEAM_WATCH_MAX_RESTARTS TEAM_WATCH_PENDING_BOARD 2>/dev/null || true
+# tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
+# tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
+# 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新 exec 自己**，
+# 第二趟时 TMUX 已经被清掉了，再算就会把「调用者在 tmux 里」这件事丢掉（实测：probe 的两套各少跑
+# 12 条依赖它的断言）。
+if [ -z "${SMOKE_CALLER_HAD_TMUX:-}" ]; then
+  SMOKE_CALLER_HAD_TMUX=0; [ -n "${TMUX:-}" ] && SMOKE_CALLER_HAD_TMUX=1
+fi
+export SMOKE_CALLER_HAD_TMUX
+unset TMUX TMUX_PANE 2>/dev/null || true
+SMOKE_CALLER_TMUX_TMPDIR="${TMUX_TMPDIR:-/tmp}"   # 调用者原本的 socket 目录（自检里当「默认 server」用）
 KEEP="${TEAM_SMOKE_KEEP:-0}"
 [ "${1:-}" = "--keep" ] && KEEP=1
 
@@ -46,6 +57,53 @@ FAST=$FAST_REQ
 LIVE_RAN=0     # 真进程段落实际执行了几次（FAST 模式下必须保持 0）
 SKIP_SEGS=""   # FAST 显式跳过的段落标记（末尾自检用）
 SKIP_N=0
+
+# ── 全量门禁互斥（M23）────────────────────────────────────────────────────────────
+# 事故（2026-09-17）：`team review` 的两轮门禁（M21、V16）与另一套 smoke 并发时，两次都在 6i 段
+# 卡到 1800s 硬超时（TERM 被忽略、KILL 才杀掉）；同一棵树在无人并发时 ~200s 就跑完。两套**全量**
+# smoke 会真起 tmux 夹具与真进程，争的是同一台机器（同一个 tmux server、同一批 node/bun/登录 shell）。
+# 这里不去猜是哪一个资源先卡住：**全量**默认串行，第二套在门口排队并打印持有者；FAST 模式不排队
+# （不起真进程，秒级，不参与这场争用）。
+#   TEAM_SMOKE_NO_LOCK=1        不排队（自担并发风险；对照实验用）
+#   TEAM_SMOKE_LOCK_WAIT=<秒>   排队上限，默认 1800（超时大声失败：exit 2，不静默降级）
+#   TEAM_SMOKE_LOCK=<path>      锁文件，默认 ${TMPDIR:-/tmp}/teamsmith-smoke.lock
+SMOKE_LOCK_HELD=0
+if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK_WRAPPED:-0}" != "1" ]; then
+  if command -v flock >/dev/null 2>&1; then
+    SMOKE_LOCK="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
+    SMOKE_LOCK_WAIT="${TEAM_SMOKE_LOCK_WAIT:-1800}"
+    case "$SMOKE_LOCK_WAIT" in ''|*[!0-9]*) SMOKE_LOCK_WAIT=1800 ;; esac
+    mkdir -p "$(dirname "$SMOKE_LOCK")" 2>/dev/null || true
+    if ! : >>"$SMOKE_LOCK" 2>/dev/null; then
+      printf '注意：锁文件 %s 建不了 → 不做排队（同机并发两套时可能互相干扰；见 M23）\n' "$SMOKE_LOCK"
+    else
+      flock -n "$SMOKE_LOCK" true 2>/dev/null
+      if [ "$?" -eq 1 ]; then
+        printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
+          "$(cat "$SMOKE_LOCK.holder" 2>/dev/null || printf '持有者未知')" "$SMOKE_LOCK_WAIT"
+        SMOKE_LOCK_QUEUED=1
+      fi
+      # 用 `flock --close` 把**整个脚本**包起来（重新 exec 自己）：锁挂在 flock 那个父进程上，
+      # 脚本与它的子孙都不持有这个 fd。第一版是 `exec 9>>file` + `flock -n 9`，实测**会漏锁**：
+      # smoke 的夹具会留下后台子进程（这次是夹具仓库里的占位 `sleep 3600`），它继承了 fd 9 ——
+      # 脚本退出后锁还挂着，后续每一套门禁都在门口排队（M23 自测复现，见报告）。
+      # `--close` 让被执行的命令拿不到那个 fd，于是「漏锁」这一类被构造性关掉。
+      export SMOKE_LOCK_WRAPPED=1
+      [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && export SMOKE_LOCK_QUEUED=1
+      exec flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash "$SKILL_DIR/tests/smoke.sh" "$@"
+      printf '排队/加锁失败：flock 起不来（%s）\n' "$SMOKE_LOCK" >&2
+      exit 2
+    fi
+  else
+    printf '注意：本机没有 flock → 全量 smoke 不做排队（同机并发两套时可能互相干扰；见 M23）\n'
+  fi
+fi
+if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
+  SMOKE_LOCK_HELD=1
+  SMOKE_LOCK="${SMOKE_LOCK:-${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}}"
+  [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && printf '轮到本套了（排过队）\n'
+  printf '%s pid=%s cmd=smoke.sh\n' "$(date -Is)" "$$" > "$SMOKE_LOCK.holder" 2>/dev/null || true
+fi
 live_mark() { LIVE_RAN=$((LIVE_RAN + 1)); }
 fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯一的出口（必须打印）
   SKIP_N=$((SKIP_N + 1))
@@ -102,6 +160,44 @@ REPO="$TMP/repo"
 FAKE="$TMP/fake-bin"
 mkdir -p "$REPO" "$FAKE"
 
+# ── tmux 私有 socket（M23）────────────────────────────────────────────────────────
+# 对照组早已存在：V15/V16 的对抗探针包用私有 socket（`-L v16pkg-$$` + PATH shim），两套并发从来不
+# 互相干扰（见 docs/team/reports/V16-verify/pkg/lib.sh）。smoke 以前走**默认 server**，于是两套并发
+# 共用同一个 session 命名空间 —— 实测（docs/team/reports/M23-dev2/pkg/namespace-demo.sh）另一套能把
+# 本套的夹具 session 列出来、一行 `kill-session` 删掉；`tmux wait-for` 的 channel 名也是 server 全局的。
+#
+# 机制选 tmux 自己的开关 `TMUX_TMPDIR`：socket 目录从 `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/` 来，于是本轮
+# 可以拥有**自己的 server**（名字仍叫 `default`）。为什么不用 PATH shim（先做了、实测否决）：窗口
+# harness 是 `bash -lc`，登录 profile（Debian /etc/profile + distrobox_profile.sh）会把 PATH 重建成
+# 系统默认值 —— shim 在里层消失，产品在窗口里的 tmux 调用会回落到默认 server（实测：M6.5/6 的
+# PM 拉起断言整段变红）。`TMUX_TMPDIR` 是环境变量，会随 tmux server 传进每个 pane，里层同样有效。
+#   TEAM_SMOKE_NO_PRIVATE_TMUX=1  关掉（回到调用者的默认 server；对照实验用）
+REAL_TMUX="$(command -v tmux 2>/dev/null || true)"
+SMOKE_PRIVATE_TMUX=0
+if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
+  SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
+  TMUX_TMPDIR="$SMOKE_TMUX_TMPDIR"; export TMUX_TMPDIR
+  SMOKE_TMUX_SOCK="${SMOKE_TMUX_TMPDIR}/tmux-$(id -u)/default"
+  SMOKE_PRIVATE_TMUX=1
+  # 调用者本来就在 tmux 里 → 给本轮一个**私有** server 上的等价身份（anchor session + TMUX/TMUX_PANE）：
+  # ① 「在 tmux 里」是某些断言的判定前提（探测守卫：不认别的项目的 session），不能因为整理环境而静默降级；
+  # ② $TMUX 会被 tmux server 传进每个 pane —— 窗口 harness 的登录 shell 把 PATH 重建掉也照样有效。
+  # 调用者不在 tmux 里（CI / nohup）→ TMUX 保持未设，语义与改动前完全一致。
+  if [ "${SMOKE_CALLER_HAD_TMUX:-0}" = "1" ]; then
+    SMOKE_TMUX_ANCHOR="teamsmith-smoke-anchor-$$"
+    tmux new-session -d -s "$SMOKE_TMUX_ANCHOR" -n anchor "sleep 100000" 2>/dev/null || true
+    _srv_pid="$(tmux display-message -p -t "$SMOKE_TMUX_ANCHOR:anchor" '#{pid}' 2>/dev/null || true)"
+    _sess_id="$(tmux display-message -p -t "$SMOKE_TMUX_ANCHOR:anchor" '#{session_id}' 2>/dev/null || true)"
+    _pane_id="$(tmux display-message -p -t "$SMOKE_TMUX_ANCHOR:anchor" '#{pane_id}' 2>/dev/null || true)"
+    if [ -n "$_srv_pid" ] && [ -n "$_sess_id" ]; then
+      TMUX="$SMOKE_TMUX_SOCK,$_srv_pid,$_sess_id"; export TMUX
+      if [ -n "$_pane_id" ]; then TMUX_PANE="$_pane_id"; export TMUX_PANE; fi
+    else
+      printf '  \033[33mℹ\033[0m %s\n' "锚点 session 没建起来：本轮 \$TMUX 保持未设（探测守卫那条会打印跳过）"
+    fi
+  fi
+fi
+
 # 环境兜底：PATH 里没有 pi 时把下面的假 pi 放进 PATH（见"假 pi"那段），
 # 这样缺 pi 只是少跑真进程相关的断言，而不是级联 14 条红（V1.1 实测）。
 NEED_PI_STUB=0
@@ -109,6 +205,9 @@ command -v pi >/dev/null 2>&1 || NEED_PI_STUB=1
 
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # 私有 socket：连本轮的 server 一起收掉（调用者的默认 server 原样不动）
+  [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && tmux kill-server 2>/dev/null || true
+  [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && rm -f "${SMOKE_LOCK:-/nonexistent}.holder" 2>/dev/null || true
   if [ "$KEEP" = "1" ]; then
     printf '\n保留临时目录：%s（tmux session 已清理）\n' "$TMP"
   else
@@ -117,7 +216,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-command -v tmux >/dev/null 2>&1 && HAVE_TMUX=1 || HAVE_TMUX=0
+[ -n "${REAL_TMUX:-}" ] && HAVE_TMUX=1 || HAVE_TMUX=0
 # 能直接跑 .ts 的运行时：node（需启用类型剥离）/ bun / tsx
 TS_RUNNER=""
 if command -v node >/dev/null 2>&1 && node -e 'process.exit(process.features.typescript?0:1)' >/dev/null 2>&1; then
@@ -154,6 +253,10 @@ if [ "$NEED_PI_STUB" = "1" ]; then
 fi
 
 printf 'teamsmith smoke · skill=%s · tmp=%s\n' "$SKILL_DIR" "$TMP"
+[ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && printf '  \033[2m·\033[0m %s\n' \
+  "tmux 私有 socket：$SMOKE_TMUX_SOCK（夹具与产品调用都走它；调用者的默认 server 不参与）"
+[ "${SMOKE_LOCK_HELD:-0}" = "1" ] && printf '  \033[2m·\033[0m %s\n' \
+  "全量门禁互斥：持有 $SMOKE_LOCK（同机第二套会排队；TEAM_SMOKE_NO_LOCK=1 可跳过）"
 
 # 假 meminfo：让内存/swap 守卫可测（Linux /proc/meminfo 格式）
 mkfile_meminfo() { # <name> <avail_mb> <swap_free_mb> [swap_total_mb]
@@ -217,6 +320,34 @@ if [ -x "$SKILL_DIR/scripts/team" ]; then ok "scripts/team 可执行（systemd E
 else bad "scripts/team 没有 +x：systemd 服务会因 Permission denied 启动失败"; fi
 if [ -x "$SKILL_DIR/tests/smoke.sh" ]; then ok "tests/smoke.sh 可执行"
 else bad "tests/smoke.sh 没有 +x"; fi
+
+# tmux 隔离自检（M23）：本轮必须落在自己的 server 上，且绝不能出现在调用者的默认 server 上。
+# 负对照：TEAM_SMOKE_NO_PRIVATE_TMUX=1 时这条会红（隔离真的没了）。
+if [ "${HAVE_TMUX:-0}" = "1" ]; then
+  if [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ]; then
+    SMOKE_SOCK_PROBE="teamsmith-smoke-socketprobe-$$"
+    tmux new-session -d -s "$SMOKE_SOCK_PROBE" sleep 30 2>/dev/null || true
+    if [ -S "$SMOKE_TMUX_SOCK" ] \
+       && [ "${TMUX_TMPDIR:-}" = "$SMOKE_TMUX_TMPDIR" ] \
+       && tmux has-session -t "$SMOKE_SOCK_PROBE" 2>/dev/null; then
+      ok "tmux 隔离：本轮 server 的 socket 在私有目录（$SMOKE_TMUX_SOCK）"
+    else
+      bad "tmux 隔离：私有 socket 没生效（期望 $SMOKE_TMUX_SOCK，TMUX_TMPDIR=${TMUX_TMPDIR:-未设}）"
+    fi
+    SMOKE_DEFAULT_SOCK="${SMOKE_CALLER_TMUX_TMPDIR}/tmux-$(id -u)/default"
+    if [ -S "$SMOKE_DEFAULT_SOCK" ] \
+       && "$REAL_TMUX" -S "$SMOKE_DEFAULT_SOCK" has-session -t "$SMOKE_SOCK_PROBE" 2>/dev/null; then
+      bad "tmux 隔离：本轮 session 出现在**默认 server** 上（隔离失效）"
+    else
+      ok "tmux 隔离：默认 server（$SMOKE_DEFAULT_SOCK）上没有本轮的 session（没污染调用者的场地）"
+    fi
+    tmux kill-session -t "$SMOKE_SOCK_PROBE" 2>/dev/null || true
+  else
+    printf '  \033[2m·\033[0m %s\n' "（TEAM_SMOKE_NO_PRIVATE_TMUX=1：显式用调用者的默认 server，对照实验用）"
+  fi
+else
+  printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过私有 socket 自检）"
+fi
 
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
@@ -456,7 +587,11 @@ PROBE="$TMP/probe-repo"; mkdir -p "$PROBE"; ( cd "$PROBE" && git init -q -b main
 if [ "${HAVE_TMUX:-0}" = "1" ] && [ -n "${TMUX:-}" ]; then
   assert_has "$TMP/boot-probe.log" "不属于本项目" "探测守卫：不认别的项目的 tmux session"
 else
-  printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过探测守卫断言）"
+  if [ "${HAVE_TMUX:-0}" = "1" ]; then
+    printf '  \033[2m·\033[0m %s\n' "（本机有 tmux，但调用者不在 tmux 会话里：跳过探测守卫断言）"
+  else
+    printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过探测守卫断言）"
+  fi
 fi
 assert_has "$REPO/.gitignore" "docs/team/inbox/" ".gitignore 忽略收件箱"
 assert_has "$REPO/.gitignore" ".pi/team/state/" ".gitignore 忽略运行时状态"
