@@ -129,6 +129,51 @@ page_of() { cat "$(page_file)" 2>/dev/null | tr -d '\n'; }
 conf_of() { cat "$(conf)" 2>/dev/null || true; }
 hash_state() { ( cd "$ROOT" && find .pi/team/state -type f | sort | while IFS= read -r f; do printf '%s ' "$f"; md5sum "$f" | cut -d' ' -f1; done ) | md5sum; }
 
+
+# Which card id sits under the focus cursor (the board page's `›`), or `-` when there is none.
+focused_id() { # <capture file>
+  python3 - "$1" <<'PYF'
+import re, sys
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+ids = []
+for r in rows:
+    if "›" not in r:
+        continue
+    hit = re.search(r"›[^A-Za-z0-9]*([A-Za-z]+[0-9][0-9-]*)", r)
+    if hit:
+        ids.append(hit.group(1))
+print(ids[0] if len(ids) == 1 else (",".join(ids) if ids else "-"))
+PYF
+}
+# The ids visible in the lane whose column contains <col> (1-based display column).
+lane_ids() { # <capture file> <col>
+  python3 - "$1" "$2" <<'PYL'
+import re, sys
+
+WIDE = [(0x1100,0x115f),(0x2e80,0x303e),(0x3041,0x33ff),(0x3400,0x4dbf),(0x4e00,0x9fff),(0xa000,0xa4cf),(0xac00,0xd7a3),(0xf900,0xfaff),(0xfe10,0xfe19),(0xfe30,0xfe6f),(0xff00,0xff60),(0xffe0,0xffe6)]
+
+def cells(text):
+    out = []
+    for ch in text:
+        out.append(ch)
+        if any(a <= ord(ch) <= b for a, b in WIDE):
+            out.append("")
+    return out
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+col = int(sys.argv[2])
+ids = []
+for r in rows:
+    c = cells(r)
+    win = "".join(c[col - 1 : col + 20]) if col - 1 < len(c) else ""
+    hit = re.search(r"([A-Za-z]+[0-9][0-9-]*)", win)
+    if hit:
+        ids.append(hit.group(1))
+print(",".join(ids))
+PYL
+}
+
 # ---------------------------------------------------------------- scenarios
 
 scn_pages() {
@@ -198,6 +243,20 @@ scn_settings() {
   start_panel
   cap_has "progress" relaunch.txt
   assert_match "$(conf)" '^lang=en$' "重启后语言偏好仍在"
+  # defaultPage cycles over the four pages and wraps (P18/B2 left the cycle over three: 4 fell
+  # through to 5 and the next launch reset the page silently — fixed and pinned in B3).
+  keys ,
+  sleep 0.6
+  keys Down
+  sleep 0.3
+  local cyc
+  for cyc in 2 3 4 1; do
+    keys Enter
+    sleep 0.5
+    assert_eq "defaultPage 循环到 $cyc（四页 + 回绕）" "$(sed -n 's/^page=//p' "$(conf)" | tr -d '\n')" "$cyc"
+  done
+  keys Escape
+  sleep 0.4
 }
 
 scn_conf() {
@@ -425,6 +484,272 @@ scn_collapse() {
   assert_has "$tmp/$current/restored.txt" "teamsmith pulse" "恢复后同一窗口里又是控制台"
 }
 
+scn_board() {
+  section "board · 看板页：第四页记忆 / 焦点随重排 / 车道滚动 / 鼠标（4.2/5.3/5.4/6.1/6.2）"
+  server_up board
+  bcap() { cap > "$tmp/$current/$1.txt"; }               # write a capture under the fixture dir
+  bfile() { printf '%s/%s.txt' "$tmp/$current" "$1"; }   # read it back
+  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  rm -f "$(page_file)"
+  start_panel
+  # 4.2: `4` switches, the file remembers it, a relaunch restores it.
+  keys 4
+  sleep 1
+  bcap p4
+  assert_has "$(bfile p4)" "已放弃" "按 4 切到看板页（六车道在场）"
+  assert_eq "按 4 后 panel-page=4" "$(page_of)" "4"
+  start_panel
+  bcap relaunch
+  assert_has "$(bfile relaunch)" "已放弃" "重启后仍在看板页（panel-page 记忆）"
+  assert_eq "重启后 panel-page 仍是 4" "$(page_of)" "4"
+  # 4.2: an out-of-range file falls back to the default page, never an error.
+  printf '9\n' > "$(page_file)"
+  start_panel
+  bcap oob
+  assert_has "$(bfile oob)" "项目进度" "panel-page=9 时回落到默认页（总览）"
+  assert_not "$(bfile oob)" "已放弃" "panel-page=9 时没有渲染看板页"
+  # 5.3: the focus is keyed by entry id — a reorder keeps it, a removal falls back inside the lane.
+  board_a="$tmp/$current/board-a.json"
+  board_b="$tmp/$current/board-b.json"
+  board_c="$tmp/$current/board-c.json"
+  python3 - "$board_a" "$board_b" "$board_c" <<'PYB'
+import json, sys
+
+def row(i, state, title):
+    return {"id": i, "title": title, "agent": "dev", "branch": "-", "deps": "-", "state": state, "phase": "apply"}
+
+a = [row("M9", "todo", "聚焦的卡片"), row("M8", "todo", "第二条"), row("M7", "wip", "进行中的一条")]
+b = [row("M8", "todo", "第二条"), row("M9", "todo", "聚焦的卡片"), row("M7", "wip", "进行中的一条")]
+c = [row("M7", "wip", "进行中的一条"), row("M9", "todo", "聚焦的卡片")]
+for path, rows in ((sys.argv[1], a), (sys.argv[2], b), (sys.argv[3], c)):
+    json.dump({"rows": rows, "counts": {}, "total": len(rows), "deliveries": []}, open(path, "w"))
+PYB
+  printf '4\n' > "$(page_file)"
+  start_panel "B3_STUB_BOARD_FILE='$board_a'"
+  sleep 1
+  bcap focus-a
+  assert_eq "初始焦点在 M9（首条非空车道的第一张）" "$(focused_id "$(bfile focus-a)")" "M9"
+  keys Down
+  sleep 0.6
+  bcap focus-m8
+  assert_eq "↓ 把焦点移到 M8" "$(focused_id "$(bfile focus-m8)")" "M8"
+  cp "$board_b" "$board_a.tmp" && mv "$board_a.tmp" "$board_a"
+  keys r
+  sleep 1
+  bcap focus-reordered
+  assert_eq "重排后焦点仍在 M8（按 id 跟踪，不按行号）" "$(focused_id "$(bfile focus-reordered)")" "M8"
+  cp "$board_c" "$board_a.tmp" && mv "$board_a.tmp" "$board_a"
+  keys r
+  sleep 1
+  bcap focus-vanished
+  assert_eq "M8 离开看板后焦点落到该车道第一条（M9）" "$(focused_id "$(bfile focus-vanished)")" "M9"
+  # 5.4: a 20-card done lane anchors on the newest and counts what it hides; the wheel scrolls it.
+  start_panel "B3_STUB_DONE=20"
+  sleep 1
+  bcap lane-first
+  assert_has "$(bfile lane-first)" "↓" "20 张 done：第一帧在底边报出隐藏数量"
+  assert_has "$(bfile lane-first)" "D20" "20 张 done：第一帧锚定最新（D20 可见）"
+  assert_has "$(bfile lane-first)" "D01" "20 张 done：车道窗口里能看到更旧的卡片"
+  done_col="$(python3 - "$(bfile lane-first)" <<'PYC'
+import re, sys
+
+WIDE = [(0x1100,0x115f),(0x2e80,0x303e),(0x3041,0x33ff),(0x3400,0x4dbf),(0x4e00,0x9fff),(0xa000,0xa4cf),(0xac00,0xd7a3),(0xf900,0xfaff),(0xfe10,0xfe19),(0xfe30,0xfe6f),(0xff00,0xff60),(0xffe0,0xffe6)]
+
+def disp(text):
+    return sum(2 if any(a <= ord(ch) <= b for a, b in WIDE) else 1 for ch in text)
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+head = next((r for r in rows if "完成" in r), "")
+print(disp(head.split("完成")[0]) + 3 if head else 63)
+PYC
+)"
+  # The wheel is injected into its own pty instance (tmux keeps wheel events for itself, measured in
+  # this suite's other wheel scenario), so the evidence is that instance's own byte stream: the rows
+  # Ink rewrites when the lane window moves hold ids that were hidden before.
+  B3_STUB_DONE=20 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" \
+    --team-cli "$stub" --out "$tmp/$current/wheel-lane.bin" --out2 "$tmp/$current/wheel-lane-after.bin" \
+    --expect-enable yes --click-col "${done_col:-63}" --click-row 6 --wheel up --wheel-clicks 3 \
+    --cols 120 --rows 32 >"$tmp/$current/wheel-lane.log" 2>&1
+  assert_eq "直驱 pty：车道内滚轮事件注入成功（6.2）" "$?" "0"
+  if grep -qE 'D0[1-5]' "$tmp/$current/wheel-lane-after.bin" 2>/dev/null; then
+    ok "车道内滚轮上滚：done 窗口移到更旧的卡片（原先隐藏的 D01–D05 进入视图）"
+  else
+    bad "车道内滚轮上滚后没有看到原先隐藏的 done 卡片（车道没有滚动）"
+  fi
+
+  # 6.1: a click on a card focuses it — in the injected instance's own bytes, the focus cursor has
+  # to move onto the clicked card (the start of the frame puts it on the first card of `todo`).
+  B3_STUB_DONE=20 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" \
+    --team-cli "$stub" --out "$tmp/$current/click-card.bin" --expect-enable yes \
+    --click-col 25 --click-row 4 --cols 120 --rows 32 >"$tmp/$current/click-card.log" 2>&1
+  assert_eq "直驱 pty：卡片点击注入成功（6.1）" "$?" "0"
+  click_moved="$(python3 - "$tmp/$current/click-card.bin" <<'PYM'
+import re, sys
+
+raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+clean = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw)
+# The cursor glyph followed by the clicked card's id on the same written row.
+print("ok" if re.search(r"›\s*(?:[·▸◆✓✗—]\s*)?P14", clean) else "no")
+PYM
+)"
+  if [ "$click_moved" = "ok" ]; then
+    ok "点击 wip 车道第一张卡后焦点光标落在 P14 上（点击 = 聚焦）"
+  else
+    bad "点击卡片后焦点没有移到被点的卡（$click_moved）"
+  fi
+}
+
+scn_detail() {
+  section "detail · 详情视图：打开/返回 / tab / 滚动 / 只读 / 首帧（9.1–9.4）"
+  server_up detail
+  dcap() { cap > "$tmp/$current/$1.txt"; }
+  dfile() { printf '%s/%s.txt' "$tmp/$current" "$1"; }
+  local docs_before other_before
+  # Real files under docs/ so the read-only proof has something to hash; the data itself is the stub.
+  mkdir -p "$ROOT/docs/team/tasks" "$ROOT/docs/team/reports" "$ROOT/docs/team/reviews"
+  printf '# fixture board\n' > "$ROOT/docs/team/BOARD.md"
+  printf '# V14 · real brief\n\nhand-written\n' > "$ROOT/docs/team/tasks/V14-a.md"
+  printf '# V14 · real report\n' > "$ROOT/docs/team/reports/V14-dev.md"
+  printf '# V14 · real review\n' > "$ROOT/docs/team/reviews/V14.md"
+  printf '# V14 · real review (done)\n' > "$ROOT/docs/team/reviews/V14-done.md"
+  conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  printf '4\n' > "$(page_file)"
+  # 9.3's baseline: everything under docs/ plus every state file except the console's own three
+  # (draft.md / panel.conf / panel-page — the console is allowed to write exactly those).
+  docs_before="$(cd "$ROOT" && find docs -type f | sort | xargs -r md5sum | md5sum)"
+  other_before="$(cd "$ROOT" && find .pi/team/state -type f ! -name draft.md ! -name panel.conf ! -name panel-page | sort | xargs -r md5sum | md5sum)"
+  start_panel
+  dcap board
+  assert_has "$(dfile board)" "已放弃" "夹具：控制台停在看板页（六车道在场）"
+
+  # 9.1 + 9.4: Enter opens the focused card's detail; the first detail frame is timed from the key,
+  # then the view is waited for (the first frame is the loading state — the block is one child away).
+  local t0 t1 opened=1 i
+  t0="$(date +%s.%N)"
+  keys Enter
+  for i in $(seq 1 40); do
+    if cap | grep -qF '详情'; then opened=0; break; fi
+    sleep 0.03
+  done
+  t1="$(date +%s.%N)"
+  assert_eq "Enter 后 1.2s 内出现详情视图" "$opened" "0"
+  printf '  \033[36m·\033[0m 首帧耗时（Enter→详情标题上屏）：%ss\n' "$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')"
+  for i in $(seq 1 40); do
+    if cap | grep -qF '[brief]'; then break; fi
+    sleep 0.05
+  done
+  dcap open
+  assert_has "$(dfile open)" "详情 V14" "详情视图打开（卡片聚焦的入口）"
+  assert_has "$(dfile open)" "[brief]" "第一个文件 tab 默认打开"
+  assert_has "$(dfile open)" "fixture brief" "详情视图渲染了 brief 的正文"
+  assert_has "$(dfile open)" "verbatim fence body" "围栏代码块正文原样上屏"
+  assert_not "$(dfile open)" "已放弃" "详情视图替换了看板块（替换块不留内容）"
+
+  # 9.2: ←/→ switch files, ↑/↓ scroll the document.
+  keys Right
+  sleep 0.8
+  dcap report
+  assert_has "$(dfile report)" "[report:dev]" "→ 切到第二个文件 tab"
+  assert_has "$(dfile report)" "report line 01" "报告的正文从第一行开始"
+  for i in 1 2 3 4 5 6 7 8; do keys Down; sleep 0.08; done
+  sleep 0.6
+  dcap scrolled
+  assert_has "$(dfile scrolled)" "report line 09" "↓×8 把文档窗口后移（第 9 行进入视图）"
+  assert_not "$(dfile scrolled)" "report line 01" "滚动后第 1 行移出窗口"
+  keys Up
+  sleep 0.5
+  dcap scrolled-back
+  assert_has "$(dfile scrolled-back)" "report line 08" "↑ 往回滚一行（第 8 行回到视图）"
+
+  # 9.1: q and Esc both return to the board page without collapsing the console.
+  keys q
+  sleep 0.8
+  dcap back-q
+  assert_has "$(dfile back-q)" "已放弃" "q 返回看板页"
+  assert_not "$(dfile back-q)" "详情 V14" "q 之后详情视图关闭"
+  local pane_pid args
+  pane_pid="$(tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_pid}' | head -1)"
+  args="$(ps -o args= -p "$pane_pid" 2>/dev/null || true)"
+  if printf '%s' "$args" | grep -q 'panel.js' && ! printf '%s' "$args" | grep -q -- '--headless'; then
+    ok "q 没有收起控制台（窗口进程仍是渲染器：$(printf '%s' "$args" | tr -s ' ' | cut -c1-60)）"
+  else
+    bad "q 之后窗口进程不是渲染器：$args"
+  fi
+  keys Enter
+  sleep 0.8
+  keys Escape
+  sleep 0.8
+  dcap back-esc
+  assert_has "$(dfile back-esc)" "已放弃" "Esc 返回看板页"
+  assert_not "$(dfile back-esc)" "详情 V14" "Esc 之后详情视图关闭"
+
+  # 9.3: read-only — only the console's own three state files may differ after the session.
+  local docs_after other_after
+  docs_after="$(cd "$ROOT" && find docs -type f | sort | xargs -r md5sum | md5sum)"
+  other_after="$(cd "$ROOT" && find .pi/team/state -type f ! -name draft.md ! -name panel.conf ! -name panel-page | sort | xargs -r md5sum | md5sum)"
+  assert_eq "详情会话没有写 docs/ 下任何文件" "$docs_before" "$docs_after"
+  assert_eq "详情会话没有写 state/ 下除控制台自有三文件之外的任何文件" "$other_before" "$other_after"
+
+  # 9.2 [real] mouse: a click on a tab switches files; the wheel scrolls the document (the driver's
+  # own byte stream is the evidence, because tmux keeps wheel events for itself — measured in the
+  # board scenario).
+  python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+    --out "$tmp/$current/detail-open.bin" --out2 "$tmp/$current/detail-click.bin" --expect-enable yes --no-click \
+    --send enter --click2-col 27 --click2-row 4 --cols 120 --rows 32 >"$tmp/$current/detail-click.log" 2>&1
+  assert_eq "直驱 pty：详情视图里点 review tab 注入成功" "$?" "0"
+  detail_clean() { python3 - "$1" <<'PYD'
+import re, sys
+raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+print(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw))
+PYD
+}
+  # A redirect, not a pipe: `grep -q` exits early and a piped python would die with SIGPIPE under
+  # `set -o pipefail`, turning a match into a failure (measured while writing this fixture).
+  detail_clean "$tmp/$current/detail-click.bin" > "$tmp/$current/detail-click.txt"
+  assert_has "$tmp/$current/detail-click.txt" '[review]' "点击 tab 行切到 review（[review] 高亮）"
+  python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+    --out "$tmp/$current/detail-wheel.bin" --out2 "$tmp/$current/detail-wheel-after.bin" --expect-enable yes --no-click \
+    --send enter,right --wheel down --wheel-clicks 6 --click-col 60 --click-row 8 --cols 120 --rows 32 \
+    >"$tmp/$current/detail-wheel.log" 2>&1
+  assert_eq "直驱 pty：详情视图里滚轮注入成功" "$?" "0"
+  detail_clean "$tmp/$current/detail-wheel-after.bin" > "$tmp/$current/detail-wheel.txt"
+  if grep -qE 'report line (09|1[0-9])' "$tmp/$current/detail-wheel.txt"; then
+    ok "滚轮把详情文档窗口后移（更靠后的报告行上屏）"
+  else
+    bad "滚轮没有让详情文档滚动"
+  fi
+
+  # 8.2 [real]: a hostile fixture text embedding ESC [2J cannot inject escape sequences into the
+  # pane — the reader strips the raw control byte and the panel's sanitizer drops the CSI sequence,
+  # so the frame survives and only the fence's visible text shows (the plain capture carries no
+  # 0x1b byte, and the -e capture carries no injected clear).
+  python3 - "$tmp/$current/hostile.json" <<'PYX'
+import json, sys
+
+doc = "```\nBEFORE\u001b[2JAFTER\n```\n"
+json.dump({"id": "X3", "count": 1, "file": "docs/team/tasks/X3-a.md", "text": doc, "truncated": False,
+           "files": [{"tab": "brief", "name": "X3-a.md", "path": "docs/team/tasks/X3-a.md", "size": 40, "truncated": False}]},
+          open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)
+PYX
+  start_panel "B3_STUB_DETAIL_FILE='$tmp/$current/hostile.json'"
+  keys Enter
+  sleep 1.0
+  cap > "$tmp/$current/hostile-plain.txt"
+  tmux -L "$sock" capture-pane -p -e -t "$sess:panel" > "$tmp/$current/hostile-esc.txt" 2>/dev/null
+  assert_has "$tmp/$current/hostile-plain.txt" "BEFORE" "敌意字节：围栏前的可见文本仍在（帧没被清屏）"
+  assert_has "$tmp/$current/hostile-plain.txt" "AFTER" "敌意字节：围栏后的可见文本仍在"
+  if LC_ALL=C grep -q $'\x1b' "$tmp/$current/hostile-plain.txt"; then
+    bad "敌意字节：纯文本捕获里出现了 0x1b"
+  else
+    ok "敌意字节：纯文本捕获里没有 0x1b 字节"
+  fi
+  if grep -qF '[2J' "$tmp/$current/hostile-esc.txt"; then
+    bad "敌意字节：带转义的捕获里出现了注入的 [2J"
+  else
+    ok "敌意字节：带转义的捕获里没有注入的清屏序列"
+  fi
+}
+
 # ---------------------------------------------------------------- run
 want=("$@")
 run_scn() {
@@ -441,6 +766,8 @@ run_scn pages scn_pages
 run_scn settings scn_settings
 run_scn conf scn_conf
 run_scn queue scn_queue
+run_scn board scn_board
+run_scn detail scn_detail
 run_scn mouse scn_mouse
 run_scn wheel scn_wheel
 run_scn resize scn_resize

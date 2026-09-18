@@ -33,6 +33,7 @@ export const en = {
   taskReview: 'review',
   taskBlocked: 'blocked',
   taskDone: 'done',
+  taskDropped: 'dropped',
   progressChanges: 'changes {n}',
   progressSpecs: 'specs {specs} · {reqs} requirements',
   progressDecisions: 'decisions {n}',
@@ -70,6 +71,7 @@ export const en = {
   pageOverview: 'overview',
   pageWork: 'work',
   pageMessages: 'messages & logs',
+  pageBoard: 'board',
   pageTab: ' {name} ',
   pageTabActive: '▸{name}◂',
 
@@ -79,6 +81,15 @@ export const en = {
   boardCounts: '{todo} todo · {wip} wip · {review} review · {blocked} blocked · {done} done',
   boardDoneCollapsed: '… {n} older done/dropped rows folded',
   boardEmpty: '(board is empty)',
+  kanbanEmptyLane: '·',
+  laneHiddenAbove: '↑{n}',
+  laneHiddenBelow: '↓{n}',
+
+  // Detail view (read-only)
+  detailTitle: 'detail {id}',
+  detailNoFiles: '(no associated files for this entry)',
+  detailTruncated: '… truncated (first 128 KiB shown)',
+  detailLoading: '… loading',
 
   // Changes and specs
   changesHeading: 'active changes',
@@ -151,8 +162,14 @@ export const en = {
   keyFlush: 'f flush',
   keyStandby: 's standby',
   keySettings: ', settings',
-  keyPages: 'Tab/1-3 pages',
+  keyPages: 'Tab/1-4 pages',
   keyScroll: '↑/↓ scroll',
+  keyLanes: '←/→ lanes',
+  keyCards: '↑/↓ cards',
+  keyOpen: 'Enter open',
+  keyDetailClose: 'Esc/q back',
+  keyDetailTabs: '←/→ file',
+  keyDetailScroll: '↑/↓ scroll',
   keyQuit: 'q collapse',
 
   // Input line and receipts

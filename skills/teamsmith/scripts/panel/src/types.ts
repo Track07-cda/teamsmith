@@ -10,8 +10,8 @@
 export type PmState = 'running' | 'starting' | 'absent' | 'foreign' | 'unknown'
 export type AgentState = 'running' | 'exited' | 'absent'
 
-/** The three console pages (TUI-only; `--print`/`--json` render the overview). */
-export type PageId = 1 | 2 | 3
+/** The four console pages (TUI-only; `--print`/`--json` render the overview). */
+export type PageId = 1 | 2 | 3 | 4
 export type Density = 'comfortable' | 'compact'
 export type ThemeName = 'dark' | 'light'
 export type ThemeChoice = ThemeName | 'auto'
@@ -128,6 +128,8 @@ export interface BoardRow {
   branch: string
   deps: string
   state: string
+  /** The task brief's `phase:` header (`-` when there is no brief or no header) — console-only. */
+  phase?: string
 }
 
 /** A recent delivery (a report file, newest first) for the overview's delivery block. */
@@ -230,6 +232,33 @@ export interface HealthBlock {
   gates: string
 }
 
+/** One file discovered for an entry's detail view (read-only, P18/B3). */
+export interface DetailFile {
+  /** The tab label: `brief`, `report:<agent>`, `review` or `review:<suffix>`. */
+  tab: string
+  /** The file's basename. */
+  name: string
+  /** The repo-relative path — the only value the reader's `--file` accepts. */
+  path: string
+  /** Bytes on disk. */
+  size: number
+  /** True when the file is over the 128 KiB read cap. */
+  truncated: boolean
+}
+
+/** The on-demand `detail` block: the discovered file list plus the served file's text. */
+export interface DetailBlock {
+  id: string
+  count: number
+  /** The repo-relative path whose text this block carries (`''` when the entry has no files). */
+  file: string
+  /** The served file's text, capped at 128 KiB by the reader. */
+  text: string
+  /** True when the served file was cut at the cap. */
+  truncated: boolean
+  files: DetailFile[]
+}
+
 /** The console-only readers, keyed by their block name; absent = that source failed. */
 export interface PanelBlocks {
   board?: BoardBlock
@@ -240,6 +269,8 @@ export interface PanelBlocks {
   inbox?: InboxBlock
   patrol?: PatrolBlock
   health?: HealthBlock
+  /** Built only while the detail view is open (design §8); never spawned on a parked page. */
+  detail?: DetailBlock
 }
 
 // ------------------------------------------------------------------ layout
@@ -290,16 +321,58 @@ export type Action =
   | { kind: 'toggle'; pref: PrefName }
   | { kind: 'view-entry'; index: number }
   | { kind: 'queue-list' }
+  /** Board page: put the focus on this card (a click on an unfocused card). */
+  | { kind: 'focus'; lane: string; id: string }
+  /** Board page: open the focused card's detail view (a click on the already focused card). */
+  | { kind: 'open-focused'; lane: string }
+  /** Board page: move the focus one lane left/right (the key band's `←`/`→` chip). */
+  | { kind: 'lane-move'; delta: number }
+  /** Board page: move the focus one card up/down inside its lane (the `↑`/`↓` chip). */
+  | { kind: 'card-move'; delta: number }
+  /** Board page: the wheel's lane hit — scroll this lane's window (never the focus). */
+  | { kind: 'lane-scroll'; lane: string; delta: number }
+  /** Detail view: switch to the file tab at `index` (a click on the tab row). */
+  | { kind: 'detail-tab'; index: number }
+  /** Detail view: move the file tab one step (the key band's ←/→ chip). */
+  | { kind: 'detail-tab-move'; delta: number }
+  /** Detail view: scroll the document (the ↑/↓ chip). */
+  | { kind: 'detail-scroll'; delta: number }
+  /** Detail view: leave it (Esc/q) without collapsing the console. */
+  | { kind: 'detail-close' }
 
 export interface PlacedLine {
   line: Line
   hits?: Hit[]
 }
 
+/** A lane's window as the frame rendered it (the App's arrow keys and wheel clamp against this). */
+export interface LaneWindow {
+  lane: string
+  offset: number
+  visible: number
+  count: number
+}
+
+/** The detail view's document window as the frame rendered it (the App's arrows/wheel clamp). */
+export interface DetailWindow {
+  /** The rendered tab index. */
+  index: number
+  /** Document rows at the rendered width. */
+  total: number
+  /** Rows the window shows. */
+  visible: number
+  /** The first visible row (clamped by the layout). */
+  offset: number
+}
+
 /** A rendered frame: the rows plus the click targets resolved to absolute rows. */
 export interface Frame {
   rows: Line[]
   targets: { row: number; hit: Hit }[]
+  /** The board page's lane windows (absent on the other pages). */
+  lanes?: LaneWindow[]
+  /** The detail view's document window (absent while the view is closed). */
+  detail?: DetailWindow
 }
 
 export interface FrameInput {
@@ -332,4 +405,14 @@ export interface ViewState {
   /** The queue entry shown in full on the messages page, or null for the list. */
   viewEntry: number | null
   scroll: number
+  /** The kanban's focused card, keyed by entry id (a vanished id falls back inside the layout). */
+  focus?: { lane: string; id: string } | null
+  /** Per-lane window offsets (the board page's wheel); absent lanes anchor on their newest cards. */
+  laneOffset?: Record<string, number>
+  /** The entry id whose read-only detail view is open (null = the page itself is showing). */
+  detail?: string | null
+  /** The open detail view's file tab (clamped by the layout; 0 = the first file). */
+  detailIndex?: number
+  /** The detail document's first visible row. */
+  detailScroll?: number
 }

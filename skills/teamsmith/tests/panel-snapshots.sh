@@ -324,6 +324,93 @@ done
 # separated from the value) — the shape a narrow pane hits.
 overlay_pair_check 24 degraded
 
+# ---------------------------------------------------------------- the board page (page 4, P18/B2)
+# Four widths × both themes, pinned byte for byte like page 1; then the kanban's own invariants: the
+# six lanes in BOARD.md legend order, an empty lane's dim marker, the phase token on a card, and
+# exactly one focus cursor.
+printf '\n\033[1m== board page (page 4) · 4 widths × 2 themes ==\033[0m\n'
+for width in 160 120 99 59; do
+  for theme in dark light; do
+    name="zh-$theme-$width-p4"
+    actual="$tmp/$name.txt"
+    "$js" "$panel" --snapshot --root "$tmp" --state-dir "$tmp/state" --team-cli "$stub" \
+      --width "$width" --height 32 --theme "$theme" --lang zh --page 4 >"$actual" 2>"$tmp/$name.err"
+    rc=$?
+    if [ "$rc" != "0" ] || [ ! -s "$actual" ]; then
+      bad "$name：--snapshot 失败（rc=$rc）"; tail -2 "$tmp/$name.err"; continue
+    fi
+    if [ "$update" = "1" ]; then
+      cp "$actual" "$snapdir/$name.txt"
+      ok "$name：已重新钉住（$(wc -c < "$snapdir/$name.txt" | tr -d ' ') 字节）"
+      continue
+    fi
+    if [ ! -f "$snapdir/$name.txt" ]; then
+      bad "$name：没有钉住的快照（先跑 --update）"; continue
+    fi
+    if cmp -s "$actual" "$snapdir/$name.txt"; then
+      ok "$name：与钉住的快照逐字节一致"
+    else
+      bad "$name：与钉住的快照不一致（首个差异如下）"
+      diff <(sed 's/\x1b\[[0-9;]*m//g' "$snapdir/$name.txt") <(sed 's/\x1b\[[0-9;]*m//g' "$actual") | head -4
+    fi
+  done
+done
+# The wide frame's invariants (the kanban's own order/marker/phase/focus rules).
+p4="$tmp/zh-dark-160-p4.txt"
+[ -f "$p4" ] && p4_check="$(python3 - "$p4" <<'PY4'
+import re, sys
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+lane_labels = ["待办", "进行", "待复验", "完成", "阻塞", "已放弃"]
+head = next((r for r in rows if "已放弃" in r), "")
+pos = [head.find(l) for l in lane_labels]
+problems = []
+if not head or -1 in pos or pos != sorted(pos):
+    problems.append(f"车道顺序不对：{pos}")
+if len([p for p in pos if p >= 0]) != 6:
+    problems.append(f"六条车道没有全部渲染：{pos}")
+if not any("P14" in r and "apply" in r for r in rows):
+    problems.append("P14 卡片上没有 phase 标记 apply")
+cursors = sum(r.count("›") for r in rows)
+if cursors != 1:
+    problems.append(f"焦点光标应当恰好一个，实际 {cursors}")
+print("ok" if not problems else "；".join(problems))
+PY4
+)"
+if [ "${p4_check:-}" = "ok" ]; then
+  ok "page4 160：六车道顺序 / 空车道标记 / phase 落在卡片上 / 只有一个焦点光标"
+else
+  bad "page4 160：${p4_check:-没有渲染出 page4 帧}"
+fi
+# The narrow tiers: the same lane order, a single column (no lane box side by side).
+for w in 99 59; do
+  f="$tmp/zh-dark-$w-p4.txt"
+  [ -f "$f" ] || { bad "page4 $w：没有渲染出帧"; continue; }
+  p4n="$(python3 - "$f" <<'PY5'
+import re, sys
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+labels = ["待办", "进行", "待复验", "完成", "阻塞", "已放弃"]
+idx = [next((i for i, r in enumerate(rows) if r.strip().startswith(l)), -1) for l in labels]
+problems = []
+if -1 in idx or idx != sorted(idx):
+    problems.append(f"车道标题顺序不对：{idx}")
+# Every lane header renders; a lane whose count is 0 shows the dim empty marker on the next row.
+for i, at in enumerate(idx):
+    if at < 0:
+        continue
+    head = rows[at]
+    if not re.search(r"\s0\s*$", head):
+        continue
+    nxt = next((r for r in rows[at + 1 :] if r.strip()), "")
+    if "·" not in nxt:
+        problems.append(f"{labels[i]} 空车道的下一行不是空标记：{nxt!r}")
+print("ok" if not problems else "；".join(problems))
+PY5
+)"
+  [ "$p4n" = "ok" ] && ok "page4 $w：单列按车道顺序分组、空车道有标记" || bad "page4 $w：$p4n"
+done
+
 # The minimal tier must not overrun a tiny pane (the spec's "A tiny pane is not overrun"): rows are
 # counted on the ANSI frame (one row per newline) and widths on the stripped text.
 tiny="$tmp/tiny.txt"
@@ -354,12 +441,125 @@ for line in open(sys.argv[1], encoding="utf-8"):
 print(bad)
 PY
 )"
+# P18/B1: the bounded-frame red line's smallest case — the key band is the last non-empty row, so a
+# tiny pane never strands the footer mid-frame (the pre-fix frame ended on content and padded below).
+tiny_tail="$(sed 's/\x1b\[[0-9;]*m//g' "$tiny" | awk 'NF' | tail -1)"
 if [ "$rows" -le 8 ] && [ "$overrun" = "0" ]; then
   ok "tiny：60x8 的快照 $rows 行、没有一行超过 60 列"
 else
   bad "tiny：60x8 的帧 $rows 行、$overrun 行超宽"
 fi
+case "$tiny_tail" in
+  *写信*) ok "tiny：60x8 的最后一个非空行是键位带（有界帧钉底）" ;;
+  *) bad "tiny：60x8 的最后非空行不是键位带（$(printf '%s' "$tiny_tail" | cut -c1-40)）" ;;
+esac
 
+# ---------------------------------------------------------------- the detail view (page 4, P18/B3)
+# 9.5: one fixture document, two widths × both themes, pinned byte for byte; then the renderer's
+# structural invariants (the tab row, the heading without its marker, the aligned table, and a
+# narrow tier where the long paragraph wraps instead of overrunning).
+printf '\n\033[1m== detail view (page 4 + --detail) · 2 widths × 2 themes ==\033[0m\n'
+for width in 120 59; do
+  for theme in dark light; do
+    name="zh-$theme-$width-detail"
+    actual="$tmp/$name.txt"
+    "$js" "$panel" --snapshot --root "$tmp" --state-dir "$tmp/state" --team-cli "$stub" \
+      --width "$width" --height 32 --theme "$theme" --lang zh --page 4 --detail V14 >"$actual" 2>"$tmp/$name.err"
+    rc=$?
+    if [ "$rc" != "0" ] || [ ! -s "$actual" ]; then
+      bad "$name：--snapshot 失败（rc=$rc）"; tail -2 "$tmp/$name.err"; continue
+    fi
+    if [ "$update" = "1" ]; then
+      cp "$actual" "$snapdir/$name.txt"
+      ok "$name：已重新钉住（$(wc -c < "$snapdir/$name.txt" | tr -d ' ') 字节）"
+      continue
+    fi
+    if [ ! -f "$snapdir/$name.txt" ]; then
+      bad "$name：没有钉住的快照（先跑 --update）"; continue
+    fi
+    if cmp -s "$actual" "$snapdir/$name.txt"; then
+      ok "$name：与钉住的快照逐字节一致"
+    else
+      bad "$name：与钉住的快照不一致（首个差异如下）"
+      diff <(sed 's/\x1b\[[0-9;]*m//g' "$snapdir/$name.txt") <(sed 's/\x1b\[[0-9;]*m//g' "$actual") | head -4
+    fi
+  done
+done
+# 8.1: the renderer's structural invariants on the wide pin — the subset's elements are *readable*:
+# the tab row names the four discovered files in order with the first active, the ATX heading lost
+# its `#`, the fence body is verbatim, and the pipe table's columns are display-width aligned (every
+# `│` lands on one column for header, separator and body).
+dv="$tmp/zh-dark-120-detail.txt"
+dv_check="$(python3 - "$dv" <<'PYD'
+import re, sys
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+joined = "\n".join(rows)
+problems = []
+tab_row = next((r for r in rows if "brief" in r and "report:dev" in r), "")
+order = [tab_row.find(t) for t in ("[brief]", "report:dev", "review", "review:done")]
+if -1 in order or order != sorted(order):
+    problems.append(f"tab row order/active wrong: {order}")
+if "# V14" in joined or "# P1" in joined:
+    problems.append("an ATX heading kept its # marker")
+if "verbatim fence body" not in joined:
+    problems.append("the fence body is not verbatim")
+if "fixture brief" not in joined:
+    problems.append("the document body is missing")
+# Table columns: the separator row's `┼` columns must equal the header/body `│` columns.
+header = next((r for r in rows if "id" in r and "state" in r and "note" in r), "")
+sep = next((r for r in rows if "┼" in r), "")
+body = next((r for r in rows if "P22" in r), "")
+if not (header and sep and body):
+    problems.append("the pipe table did not render")
+else:
+    def marks(row, chars):
+        return [i for i, ch in enumerate(row) if ch in chars]
+    # The frame's card border `│` sits at the row's first and last column; the table's own
+    # separators are the inner marks.
+    hx, sx, bx = marks(header, "│")[1:-1], marks(sep, "┼"), marks(body, "│")[1:-1]
+    if not (hx == sx == bx) or len(hx) != 2:
+        problems.append(f"table columns misaligned: header {hx}, separator {sx}, body {bx}")
+print("ok" if not problems else "；".join(problems))
+PYD
+)"
+[ "$dv_check" = "ok" ] && ok "detail 120：tab 次序 / 标题去标记 / 围栏原样 / 表格列对齐" \
+  || bad "detail 120：${dv_check:-没有渲染出详情帧}"
+# 59 columns: nothing may overrun the pane (the long paragraph wraps), and the tabs still render.
+nd="$tmp/zh-dark-59-detail.txt"
+nd_over="$(python3 - "$nd" <<'PY'
+import re, sys
+WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+        (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+        (0xff00, 0xff60), (0xffe0, 0xffe6)]
+
+def width(text):
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+            continue
+        total += 2 if any(a <= cp <= b for a, b in WIDE) else 1
+    return total
+
+bad = 0
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", line.rstrip("\n"))
+    if width(line) > 59:
+        bad += 1
+print(bad)
+PY
+)"
+if [ "$nd_over" = "0" ]; then
+  ok "detail 59：没有一行超过 59 列（长段落换行）"
+else
+  bad "detail 59：$nd_over 行超过 59 列"
+fi
+if grep -qF '[brief]' "$nd"; then
+  ok "detail 59：tab 行仍渲染（首个 active）"
+else
+  bad "detail 59：tab 行没有渲染"
+fi
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && { printf '\033[32mpanel-snapshots 全绿\033[0m\n'; exit 0; }
 printf '\033[31mpanel-snapshots 有失败项\033[0m\n'

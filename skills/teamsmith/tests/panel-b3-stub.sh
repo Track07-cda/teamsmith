@@ -6,12 +6,21 @@
 # Every block is fixed data with fixed ages, so the snapshot suite can pin widths × themes byte for
 # byte. `--block nope` exits 2 (the closed set), and `--block health` can be made to fail with
 # B3_STUB_FAIL=health for the degraded-rendering checks.
+#
+# Two deterministic size knobs (used by the bounded-frame flip, which needs an overview whose
+# natural content is ~30 rows): B3_STUB_AGENTS=N widens the agent table, B3_STUB_RECENT=N lengthens
+# the recent-events block (pass the matching `--events N` to the panel). Both default to the
+# original fixture, so the pinned snapshots are untouched.
 set -uo pipefail
 
 block=""
 prev=""
+detail_id=""
+detail_file=""
 for a in "$@"; do
   [ "$prev" = "--block" ] && block="$a"
+  [ "$prev" = "--id" ] && detail_id="$a"
+  [ "$prev" = "--file" ] && detail_file="$a"
   prev="$a"
 done
 
@@ -20,8 +29,32 @@ if [ -n "${B3_STUB_FAIL:-}" ] && [ "$block" = "${B3_STUB_FAIL}" ]; then
   exit 1
 fi
 
+# P18/B3: append every block name this stub is asked for, so a test can prove which children a
+# frame really spawned (the detail reader must be absent while the view is closed).
+if [ -n "${B3_STUB_SPAWN_LOG:-}" ]; then
+  printf '%s\n' "$block" >> "$B3_STUB_SPAWN_LOG" 2>/dev/null || true
+fi
+
 json_str() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
-agents_json() { cat <<'JSON'
+# Multiline-safe variant: the whole text is slurped first, then escaped (backslash, quote, CR,
+# tab, newline — in that order, so an escape added by one step is never re-escaped by the next).
+json_str_ml() {
+  printf '"%s"' "$(printf '%s' "$1" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\r//g' -e 's/\t/\\t/g' -e 's/\n/\\n/g')"
+}
+agents_json() {
+  if [ "${B3_STUB_AGENTS:-2}" != "2" ]; then
+    # N deterministic agent rows (the tall-overview fixture); row 1 is the base fixture's running
+    # dev, the rest are idle fixture agents.
+    local n="${B3_STUB_AGENTS}" i
+    printf '[\n'
+    printf ' {"name": "dev", "state": "running", "task": "P14", "branch": "task/P14-apply-pulse-console-b3", "dirty": true, "ahead": 3, "upstream_ahead": "", "model": "deepseek/deepseek-flash", "session_tokens": 41000, "session_window": 272000, "session_text": "41k/272k"}'
+    for ((i = 2; i <= n; i++)); do
+      printf ',\n {"name": "dev%s", "state": "absent", "task": "", "branch": "-", "dirty": false, "ahead": null, "upstream_ahead": "", "model": "-", "session_tokens": 0, "session_window": 0, "session_text": "-"}' "$i"
+    done
+    printf '\n]\n'
+    return 0
+  fi
+  cat <<'JSON'
 [
  {"name": "dev", "state": "running", "task": "P14", "branch": "task/P14-apply-pulse-console-b3", "dirty": true,
   "ahead": 3, "upstream_ahead": "", "model": "deepseek/deepseek-flash", "session_tokens": 41000,
@@ -33,10 +66,32 @@ agents_json() { cat <<'JSON'
 JSON
 }
 
-board_json() { cat <<'JSON'
+recent_json() { # B3_STUB_RECENT lines, deterministic timestamps; unset = the original fixture
+  if [ -z "${B3_STUB_RECENT:-}" ]; then
+    printf '%s\n' '["10:00:01 夹具动作一", "10:00:02 夹具动作二", "10:00:03 夹具动作三"]'
+    return 0
+  fi
+  local n="${B3_STUB_RECENT}" i out=""
+  for ((i = 1; i <= n; i++)); do
+    # Row 1 is 10:00:01 — the base fixture's first timestamp, so the default output is unchanged.
+    printf -v t '%02d:%02d:%02d' 10 $((i / 60)) $((i % 60))
+    out="$out${out:+, }\"$t 夹具动作$i\""
+  done
+  printf '[%s]\n' "$out"
+}
+
+board_json() {
+  # B3_STUB_BOARD_FILE=<path>: serve that file verbatim — the board-page fixtures rewrite it between
+  # refreshes to prove the focus survives a reorder and falls back when the entry leaves the board.
+  if [ -n "${B3_STUB_BOARD_FILE:-}" ] && [ -r "${B3_STUB_BOARD_FILE}" ]; then
+    cat "${B3_STUB_BOARD_FILE}"
+    return 0
+  fi
+  if [ -z "${B3_STUB_DONE:-}" ]; then
+    cat <<'JSON'
 {"rows": [
- {"id": "P14", "title": "控制台表面：三页/设置/鼠标/i18n/响应式", "agent": "dev", "branch": "task/P14", "deps": "-", "state": "wip"},
- {"id": "V14", "title": "独立复验：控制台表面", "agent": "verify", "branch": "-", "deps": "P14", "state": "todo"},
+ {"id": "P14", "title": "控制台表面：三页/设置/鼠标/i18n/响应式", "agent": "dev", "branch": "task/P14", "deps": "-", "state": "wip", "phase": "apply"},
+ {"id": "V14", "title": "独立复验：控制台表面", "agent": "verify", "branch": "-", "deps": "P14", "state": "todo", "phase": "verify"},
  {"id": "P13", "title": "消息入口与三个动作", "agent": "dev", "branch": "task/P13", "deps": "P12", "state": "done"},
  {"id": "P12", "title": "异步数据层", "agent": "dev", "branch": "task/P12", "deps": "-", "state": "done"},
  {"id": "P11", "title": "提案", "agent": "dev2", "branch": "task/P11", "deps": "-", "state": "done"},
@@ -55,6 +110,20 @@ board_json() { cat <<'JSON'
    {"id": "V13", "agent": "verify", "at": "2026-09-15T09:00:00Z"}
  ]}
 JSON
+    return 0
+  fi
+  # B3_STUB_DONE=N: the same head plus N generated `done` rows (newest first) and a dropped pair —
+  # the fixture the folded-history growth and the kanban's long-lane scroll are checked against.
+  local n="${B3_STUB_DONE}" i
+  printf '{"rows": [\n'
+  printf ' {"id": "P14", "title": "控制台表面", "agent": "dev", "branch": "task/P14", "deps": "-", "state": "wip", "phase": "apply"},\n'
+  printf ' {"id": "V14", "title": "独立复验", "agent": "verify", "branch": "-", "deps": "P14", "state": "todo", "phase": "verify"},\n'
+  for ((i = 1; i <= n; i++)); do
+    printf ' {"id": "D%02d", "title": "历史条目 %02d", "agent": "dev2", "branch": "task/D%02d", "deps": "-", "state": "done"},\n' "$i" "$i" "$i"
+  done
+  printf ' {"id": "X1", "title": "被放弃的条目", "agent": "dev2", "branch": "-", "deps": "-", "state": "dropped"},\n'
+  printf ' {"id": "V21", "title": "阻塞夹具", "agent": "verify", "branch": "-", "deps": "-", "state": "blocked"}\n'
+  printf '],\n "counts": {"todo": 1, "wip": 1, "review": 0, "done": %s, "blocked": 1, "dropped": 1},\n "total": %s,\n "deliveries": [\n   {"id": "P14", "agent": "dev", "at": "2026-09-16T09:30:00Z"}\n ]}\n' "$n" "$((n + 4))"
 }
 
 changes_json() { cat <<'JSON'
@@ -102,6 +171,75 @@ patrol_json() { cat <<'JSON'
 JSON
 }
 
+# ---- the detail reader's stand-in (P18/B3): per-id discovered files, four per entry.
+detail_brief() { # <id>
+  printf '# %s · fixture brief\n\n' "$1"
+  cat <<'MD'
+A paragraph with **bold**, `code` and a [link](https://example.invalid/x).
+
+- first bullet
+- second bullet with enough words to wrap inside a narrow pane
+
+> a quoted line
+
+```sh
+echo "verbatim fence body"
+```
+
+| id | state | note |
+|:---|:------:|-----:|
+| P1 | wip | short |
+| P22 | done | a longer note |
+
+---
+
+closing paragraph
+MD
+}
+
+# The report grows with B3_STUB_DETAIL_LONG (default 40) so the detail window has rows to scroll.
+detail_report() { # <id>
+  local i n="${B3_STUB_DETAIL_LONG:-40}"
+  printf '# %s · fixture report\n\n' "$1"
+  for ((i = 1; i <= n; i++)); do printf 'report line %02d with a few words to read\n' "$i"; done
+}
+
+# detail_json <id> <file>: every entry except the empty `Z9` has the four discovered files
+# (brief/report/review/review:done), so the focused board card always opens something. `--file` must
+# be one of that entry's discovered paths (anything else exits non-zero, exactly like the real
+# reader). B3_STUB_DETAIL_FILE=<json> serves a whole block verbatim (the hostile/truncated fixtures).
+detail_json() {
+  if [ -n "${B3_STUB_DETAIL_FILE:-}" ] && [ -r "${B3_STUB_DETAIL_FILE}" ]; then
+    cat "${B3_STUB_DETAIL_FILE}"
+    return 0
+  fi
+  local id="${1:-}" want="${2:-}"
+  if [ -z "$id" ] || [ "$id" = "Z9" ]; then
+    printf '{"id": %s, "count": 0, "file": "", "text": "", "truncated": false, "files": []}\n' "$(json_str "$id")"
+    return 0
+  fi
+  local p_brief="docs/team/tasks/$id-a.md" p_report="docs/team/reports/$id-dev.md" \
+        p_review="docs/team/reviews/$id.md" p_done="docs/team/reviews/$id-done.md"
+  local files
+  files="$(printf '[{"tab": "brief", "name": "%s-a.md", "path": "%s", "size": 420, "truncated": false}, {"tab": "report:dev", "name": "%s-dev.md", "path": "%s", "size": 1400, "truncated": false}, {"tab": "review", "name": "%s.md", "path": "%s", "size": 90, "truncated": false}, {"tab": "review:done", "name": "%s-done.md", "path": "%s", "size": 120, "truncated": false}]' \
+    "$id" "$p_brief" "$id" "$p_report" "$id" "$p_review" "$id" "$p_done")"
+  local file="$p_brief" text
+  text="$(detail_brief "$id")"
+  case "$want" in
+    ''|"$p_brief") ;;
+    "$p_report") file="$want"; text="$(detail_report "$id")" ;;
+    "$p_review") file="$want"; text="# $id · fixture review
+
+the independent check found nothing" ;;
+    "$p_done") file="$want"; text="# $id · fixture review (done)
+
+closed" ;;
+    *) printf 'panel-b3-stub: --file not in the discovered set: %s\n' "$want" >&2; return 1 ;;
+  esac
+  printf '{"id": %s, "count": 4, "file": %s, "text": %s, "truncated": false, "files": %s}\n' \
+    "$(json_str "$id")" "$(json_str "$file")" "$(json_str_ml "$text")" "$files"
+}
+
 case "$block" in
   frame)
     printf '%s\n' '{"project": "fixture", "timestamp": "2026-09-16T10:00:00Z", "interval": 900, "standby": {"on": false, "reason": ""}, "activity_source": ""}'
@@ -119,9 +257,7 @@ case "$block" in
     printf '%s\n' '{"ram_avail_mb": 4040, "swap_free_mb": 31306, "agents": 5, "spark": [4000, 4010, 4020, 4030, 4040]}'
     ;;
   agents)      agents_json ;;
-  recent)
-    printf '%s\n' '["10:00:01 夹具动作一", "10:00:02 夹具动作二", "10:00:03 夹具动作三"]'
-    ;;
+  recent)      recent_json ;;
   activity)
     printf '%s\n' '[]'
     ;;
@@ -132,6 +268,7 @@ case "$block" in
   outbox_list) outbox_list_json ;;
   inbox)       inbox_json ;;
   patrol)      patrol_json ;;
+  detail)      detail_json "$detail_id" "$detail_file" ;;
   health)
     printf '%s\n' '{"version": "1.38.0", "doc_version": "1.38.0", "doctor": "ok", "gates": "—"}'
     ;;

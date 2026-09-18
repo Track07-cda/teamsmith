@@ -93,7 +93,11 @@ def main():
     y = row
 
     master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", args.rows, args.cols, 0, 0))
+    # The client's terminal is ONE row taller than the pane: tmux draws its status line on the
+    # client's last row, so a pane of N rows maps to client rows 1..N only when the client has N+1
+    # rows. Without the extra row a click on the pane's last row (the key band once the footer is
+    # pinned there, P18/B1) lands on the status line and never reaches the pane.
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", args.rows + 1, args.cols, 0, 0))
     env = dict(os.environ, TERM="xterm-256color")
     client = subprocess.Popen(
         ["tmux", "-L", args.sock, "attach", "-t", target],

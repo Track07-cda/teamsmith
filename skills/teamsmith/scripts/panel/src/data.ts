@@ -43,6 +43,9 @@ export const BLOCK_NAMES = [
   'inbox',
   'patrol',
   'health',
+  // P18/B3: the detail view's on-demand reader. It is in the block set but **never wanted** unless
+  // `opts.detailId` is set, so a parked console spawns no `detail` child (design §8).
+  'detail',
 ] as const
 export type BlockName = (typeof BLOCK_NAMES)[number]
 
@@ -75,8 +78,12 @@ export interface DataOptions {
   activity: boolean
   events: number
   timeoutMs?: number
-  /** Which blocks to assemble; default = every block (the console's set). */
+  /** Which blocks to assemble; default = every block (the console's set, minus `detail`). */
   blocks?: readonly BlockName[]
+  /** The detail view's entry id; while set, `detail` joins the wanted set (null/absent = parked). */
+  detailId?: string | null
+  /** The detail file to serve with `--file` (must be one of the discovered paths). */
+  detailFile?: string | null
 }
 
 export interface DataResult {
@@ -133,6 +140,19 @@ const BLOCK_SPECS: Record<BlockName, BlockSpec> = {
   inbox: { ttlMs: 60000, timeoutMs: 10000 },
   patrol: { ttlMs: 15000, timeoutMs: 10000 },
   health: { ttlMs: 600000, timeoutMs: 30000 },
+  // The detail reader rides the open view: the App forces it on open and on a tab switch, so its TTL
+  // only covers a stale refresh while the view stays open. The `--id`/`--file` arguments come from
+  // the live options; both are cleared when the view closes.
+  detail: {
+    ttlMs: 15000,
+    timeoutMs: 10000,
+    extraArgs: (opts) => {
+      if (!opts.detailId) return []
+      const args = ['--id', String(opts.detailId)]
+      if (opts.detailFile) args.push('--file', String(opts.detailFile))
+      return args
+    },
+  },
 }
 
 
@@ -291,7 +311,17 @@ interface BlockState {
   error?: string
 }
 
-const PANEL_BLOCK_NAMES: readonly BlockName[] = ['board', 'changes', 'specs', 'decisions', 'outbox_list', 'inbox', 'patrol', 'health']
+const PANEL_BLOCK_NAMES: readonly BlockName[] = [
+  'board',
+  'changes',
+  'specs',
+  'decisions',
+  'outbox_list',
+  'inbox',
+  'patrol',
+  'health',
+  'detail',
+]
 
 function isPanelBlock(name: BlockName): boolean {
   return PANEL_BLOCK_NAMES.includes(name)
@@ -305,14 +335,21 @@ export interface PanelCache {
   /** The current frame data. Pure: reads memory, never spawns anything. */
   snapshot(): DataResult
   /** Rebuild the expired blocks (or all of them with `force`), in parallel. */
-  refresh(refreshOpts?: { force?: boolean }): Promise<DataResult>
+  refresh(refreshOpts?: { force?: boolean; only?: readonly BlockName[] }): Promise<DataResult>
   /** Kill anything still in flight (process exit, tests). */
   dispose(): void
 }
 
 export function createPanelCache(opts: DataOptions): PanelCache {
   const cli = opts.teamCli || findTeamCli(panelDirOf(import.meta.url))
-  const wanted = opts.blocks ?? BLOCK_NAMES
+  /**
+   * The wanted set is read live: the detail block joins it only while the view is open, so the
+   * idle cost of a parked console is exactly what it was before the view existed (design §8).
+   */
+  const wantedSet = (): readonly BlockName[] => {
+    if (opts.blocks) return opts.blocks
+    return opts.detailId ? BLOCK_NAMES : BLOCK_NAMES.filter((name) => name !== 'detail')
+  }
   const state: Record<string, BlockState> = {}
   for (const name of BLOCK_NAMES) state[name] = { at: 0 }
   let inFlight: Partial<Record<BlockName, Promise<void>>> = {}
@@ -328,7 +365,7 @@ export function createPanelCache(opts: DataOptions): PanelCache {
     const errors: Partial<Record<BlockName, string>> = {}
     let activity: ActivityBlock[] = []
     for (const name of BLOCK_NAMES) {
-      if (!wanted.includes(name)) continue
+      if (!wantedSet().includes(name)) continue
       const s = state[name]
       const fresh = s.at > 0 && !s.error
       if (!fresh) {
@@ -365,11 +402,14 @@ export function createPanelCache(opts: DataOptions): PanelCache {
     })
   }
 
-  async function refresh(refreshOpts: { force?: boolean } = {}): Promise<DataResult> {
+  async function refresh(refreshOpts: { force?: boolean; only?: readonly BlockName[] } = {}): Promise<DataResult> {
     if (!cli) return snapshot()
+    const only = refreshOpts.only ? new Set(refreshOpts.only) : null
+    const wanted = wantedSet()
     const now = Date.now()
     for (const name of BLOCK_NAMES) {
       if (!wanted.includes(name)) continue
+      if (only && !only.has(name)) continue
       const s = state[name]
       const due = refreshOpts.force || s.at === 0 || now - s.at >= BLOCK_SPECS[name].ttlMs
       if (!due) continue
@@ -379,7 +419,7 @@ export function createPanelCache(opts: DataOptions): PanelCache {
       })
     }
     // Already-running builds count as this refresh's work: the caller wants a settled snapshot.
-    await Promise.all(BLOCK_NAMES.map((name) => inFlight[name]).filter(Boolean))
+    await Promise.all(BLOCK_NAMES.filter((name) => (!only || only.has(name)) && inFlight[name]).map((name) => inFlight[name]))
     return snapshot()
   }
 

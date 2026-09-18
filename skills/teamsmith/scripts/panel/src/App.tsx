@@ -11,13 +11,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useInput } from 'ink'
-import { layout, rowKey } from './layout.js'
+import { layout, resolveFocus, rowKey } from './layout.js'
 import type { LayoutInput } from './layout.js'
 import { clockOf } from './format.js'
 import { stringsFor, type Strings } from './strings/index.js'
 import { backspace, inputLines, intake, receiptLine, type ComposeMode, type Receipt } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, FrameInput, PageId, PrefName, Segment, ViewState } from './types.js'
+import type { Action, DetailWindow, FrameInput, PageId, PrefName, Segment, ViewState } from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -61,6 +61,12 @@ export interface PanelApi {
   savePage(page: PageId): void
   /** Tell the cache whether the activity block is wanted (the overlay's TUI-only override). */
   setActivity(on: boolean): void
+  /**
+   * Tell the cache which entry's detail view is open (null = closed). While an id is set the
+   * `detail` block joins the wanted set; `file` selects the repo-relative path to serve (the first
+   * discovered file when omitted). Both are cached options, so an unchanged call rebuilds nothing.
+   */
+  setDetail(id: string | null, file?: string | null): void
   /** Rebuild the patrol window as the headless tick loop (`team pulse collapse`). */
   collapse(): Promise<{ ok: boolean; line: string }>
 }
@@ -186,6 +192,13 @@ export function App({
   const [overlay, setOverlay] = useState(false)
   const [overlayIndex, setOverlayIndex] = useState(0)
   const [viewEntry, setViewEntry] = useState<number | null>(null)
+  const [focus, setFocus] = useState<{ lane: string; id: string } | null>(null)
+  const [laneOffset, setLaneOffset] = useState<Record<string, number>>({})
+  // The open detail view's entry id (the board page's Enter / a click on the focused card), its
+  // tab and its document scroll. The view is read-only: no key of its own beyond navigation.
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailIndex, setDetailIndex] = useState(0)
+  const [detailScroll, setDetailScroll] = useState(0)
   const { exit } = useApp()
   const scrollRef = useRef(0)
   const dataRef = useRef(frame)
@@ -195,6 +208,18 @@ export function App({
   const pageRef = useRef(page)
   const targetsRef = useRef<{ row: number; hit: { start: number; end: number; action: Action } }[]>([])
   const overlayIndexRef = useRef(0)
+  const focusRef = useRef<{ lane: string; id: string } | null>(null)
+  const laneOffsetRef = useRef<Record<string, number>>({})
+  const lanesRef = useRef<{ lane: string; offset: number; visible: number; count: number }[]>([])
+  const detailRef = useRef<DetailWindow | null>(null)
+  const detailIdRef = useRef<string | null>(null)
+  const detailIndexRef = useRef(0)
+  const detailScrollRef = useRef(0)
+  focusRef.current = focus
+  laneOffsetRef.current = laneOffset
+  detailIdRef.current = detailId
+  detailIndexRef.current = detailIndex
+  detailScrollRef.current = detailScroll
 
   const strings: Strings = stringsFor(settings.lang)
   const stringsRef = useRef(strings)
@@ -220,6 +245,9 @@ export function App({
       pageRef.current = next
       setPage(next)
       setViewEntry(null)
+      setDetailId(null)
+      setDetailIndex(0)
+      setDetailScroll(0)
       api.savePage(next)
     },
     [api],
@@ -368,7 +396,9 @@ export function App({
           next.lang = cur.lang === 'zh' ? 'en' : 'zh'
           break
         case 'defaultPage':
-          next.defaultPage = cur.defaultPage === 3 ? 1 : ((cur.defaultPage + 1) as PageId)
+          // Four pages since P18/B2: the cycle covers 1–4 and wraps (the old three-page test let 4
+          // fall through to 5, which the next launch rejects as out of range — a silent reset).
+          next.defaultPage = cur.defaultPage === 4 ? 1 : ((cur.defaultPage + 1) as PageId)
           goPage(next.defaultPage)
           break
         case 'activity':
@@ -386,6 +416,99 @@ export function App({
     },
     [activityPinned, api, goPage, saveSettings],
   )
+
+  /** The board's rows as the last assembly saw them (the kanban moves over these). */
+  const boardRows = useCallback(() => dataRef.current.blocks?.board?.rows ?? [], [])
+
+  const moveFocus = useCallback(
+    (laneDelta: number, cardDelta: number) => {
+      const rows = boardRows()
+      const current = resolveFocus(rows, focusRef.current)
+      if (!current) return
+      if (laneDelta !== 0) {
+        // ←/→: the neighbouring lane's first card (empty lanes are stepped over). The target lane's
+        // window is pushed to show it, so an offset the wheel left behind cannot hide the focus.
+        const lanes = ['todo', 'wip', 'review', 'done', 'blocked', 'dropped']
+        let i = lanes.indexOf(current.lane)
+        for (let step = 0; step < lanes.length; step++) {
+          i = (i + laneDelta + lanes.length) % lanes.length
+          const card = rows.find((r) => r.state === lanes[i])
+          if (card) {
+            setFocus({ lane: lanes[i], id: card.id })
+            setLaneOffset((prev) => ({ ...prev, [lanes[i]]: 0 }))
+            return
+          }
+        }
+        return
+      }
+      const inLane = rows.filter((r) => r.state === current.lane)
+      const idx = inLane.findIndex((r) => r.id === current.id)
+      const next = inLane[Math.max(0, Math.min(inLane.length - 1, idx + cardDelta))]
+      if (!next || next.id === current.id) return
+      setFocus({ lane: current.lane, id: next.id })
+      // Scrolling the lane's window is the layout's own follow-the-focus rule; the wheel keeps its
+      // own offset, so push that offset along when the focus walks past the window's edge.
+      const win = lanesRef.current.find((w) => w.lane === current.lane)
+      if (win && win.visible > 0) {
+        const target = inLane.findIndex((r) => r.id === next.id)
+        const start = Math.max(
+          0,
+          Math.min(
+            Math.max(0, win.count - win.visible),
+            win.offset +
+              (target < win.offset ? target - win.offset : target >= win.offset + win.visible ? target - win.offset - win.visible + 1 : 0),
+          ),
+        )
+        setLaneOffset((prev) => ({ ...prev, [current.lane]: start }))
+      }
+    },
+    [boardRows],
+  )
+
+  const scrollLane = useCallback((lane: string, delta: number) => {
+    const win = lanesRef.current.find((w) => w.lane === lane)
+    const max = win ? Math.max(0, win.count - win.visible) : Number.MAX_SAFE_INTEGER
+    setLaneOffset((prev) => ({ ...prev, [lane]: Math.max(0, Math.min(max, (prev[lane] ?? (win?.offset ?? 0)) + delta)) }))
+  }, [])
+
+  /** Open an entry's detail view: the first tab, from the top (the board page's Enter / a click). */
+  const openDetail = useCallback((id: string) => {
+    setDetailIndex(0)
+    setDetailScroll(0)
+    setDetailId(id)
+  }, [])
+
+  /** The detail view's file tabs: `←`/`→` clamp at the ends (no wrap — the row shows the order). */
+  const moveDetailTab = useCallback((delta: number) => {
+    const files = dataRef.current.blocks?.detail?.files ?? []
+    if (!files.length) return
+    setDetailIndex((i) => Math.max(0, Math.min(files.length - 1, i + delta)))
+    setDetailScroll(0)
+  }, [])
+
+  /** The detail document's scroll: clamped against the window the last frame reported. */
+  const scrollDetail = useCallback((delta: number) => {
+    const win = detailRef.current
+    const max = win ? Math.max(0, win.total - win.visible) : 0
+    setDetailScroll((v) => Math.max(0, Math.min(max, v + delta)))
+  }, [])
+
+  /**
+   * The detail block's one data contract (design §8): it is requested only while the view is open,
+   * and only for the tab in view. Opening forces the first build; a tab switch forces the newly
+   * requested file (`--file`); closing clears the request, which drops `detail` from the wanted set
+   * so a parked page 4 spawns no reader at all. The call is idempotent — `setDetail` records an
+   * option whose content the cached block already serves without rebuilding it.
+   */
+  const detailBlockData = data.blocks?.detail
+  useEffect(() => {
+    if (!detailId) {
+      api.setDetail(null)
+      return
+    }
+    const files = detailBlockData?.files ?? []
+    api.setDetail(detailId, files[detailIndexRef.current]?.path ?? null)
+  }, [api, detailId, detailIndex, detailBlockData])
 
   const dispatch = useCallback(
     (action: Action) => {
@@ -427,9 +550,39 @@ export function App({
         case 'queue-list':
           setViewEntry(null)
           return
+        case 'focus':
+          setFocus({ lane: action.lane, id: action.id })
+          return
+        case 'open-focused': {
+          const current = resolveFocus(boardRows(), focusRef.current)
+          if (current) openDetail(current.id)
+          return
+        }
+        case 'lane-move':
+          moveFocus(action.delta, 0)
+          return
+        case 'card-move':
+          moveFocus(0, action.delta)
+          return
+        case 'lane-scroll':
+          scrollLane(action.lane, action.delta)
+          return
+        case 'detail-tab':
+          setDetailIndex(action.index)
+          setDetailScroll(0)
+          return
+        case 'detail-tab-move':
+          moveDetailTab(action.delta)
+          return
+        case 'detail-scroll':
+          scrollDetail(action.delta)
+          return
+        case 'detail-close':
+          setDetailId(null)
+          return
       }
     },
-    [collapse, cyclePref, goPage, openCompose, runAction, updateScroll],
+    [boardRows, collapse, cyclePref, goPage, moveDetailTab, moveFocus, openCompose, openDetail, runAction, scrollDetail, scrollLane, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -461,6 +614,11 @@ export function App({
       overlayIndex,
       viewEntry,
       scroll,
+      focus,
+      laneOffset,
+      detail: detailId,
+      detailIndex,
+      detailScroll,
     }
     // The geometry comes from the live terminal, not from the frame's snapshot of it: a resize must
     // re-lay out the next frame (the spec's "A resize re-lays out live"), and `data.width` is frozen
@@ -477,6 +635,8 @@ export function App({
     } as LayoutInput)
     const pad = size.rows > 0 ? Math.max(0, size.rows - input.length - hint.length - bottom.length - themed.rows.length) : 0
     targetsRef.current = themed.targets
+    lanesRef.current = themed.lanes ?? []
+    detailRef.current = themed.detail ?? null
     return { frame: themed, input, hint, bottom, pad, boxed }
   }, [
     data,
@@ -489,6 +649,11 @@ export function App({
     overlayIndex,
     viewEntry,
     scroll,
+    focus,
+    laneOffset,
+    detailId,
+    detailIndex,
+    detailScroll,
     size,
     composing,
     mode,
@@ -561,8 +726,26 @@ export function App({
         const x = Number(mouse[2])
         const y = Number(mouse[3])
         if (button === 64 || button === 65) {
+          const delta = button === 65 ? 1 : -1
+          // With the detail view open the wheel scrolls the document (the one scrollable region).
+          if (pageRef.current === 4 && detailIdRef.current) {
+            scrollDetail(delta)
+            return
+          }
+          // On the board page the wheel scrolls the lane under the cursor (a card hit carries its
+          // lane, the lane's own hover target covers the rest); elsewhere it scrolls the page's list.
+          if (pageRef.current === 4) {
+            const over = targetsRef.current.find((t) => t.row === y - 1 && x - 1 >= t.hit.start && x - 1 < t.hit.end)
+            const lane = over && (over.hit.action.kind === 'lane-scroll' || over.hit.action.kind === 'focus' || over.hit.action.kind === 'open-focused')
+              ? over.hit.action.lane
+              : ''
+            if (lane) {
+              scrollLane(lane, delta)
+              return
+            }
+          }
           // The wheel scrolls the page's list: down reveals later rows, up goes back.
-          updateScroll((v) => v + (button === 65 ? 1 : -1))
+          updateScroll((v) => v + delta)
           return
         }
         if (mouse[4] !== 'M' || (button & 3) !== 0) return
@@ -626,16 +809,33 @@ export function App({
         setViewEntry(null)
         return
       }
+      // The detail view is read-only and full-page: Esc or `q` backs out to the board page and never
+      // collapses the console (the documented `q` exception); `←`/`→` switch files, `↑`/`↓` scroll.
+      if (detailId) {
+        if (key.escape || input === 'q') {
+          setDetailId(null)
+          return
+        }
+        if (key.leftArrow || key.rightArrow) {
+          moveDetailTab(key.leftArrow ? -1 : 1)
+          return
+        }
+        if (key.upArrow || key.downArrow) {
+          scrollDetail(key.upArrow ? -1 : 1)
+          return
+        }
+        // Enter adds no action here (no write operation), and the page keys stay live below.
+      }
       if (input === 'q' || (key.ctrl && input === 'c')) {
         void collapse()
         return
       }
       if (busy) return
       if (key.tab) {
-        goPage(pageRef.current === 3 ? 1 : ((pageRef.current + 1) as PageId))
+        goPage(pageRef.current === 4 ? 1 : ((pageRef.current + 1) as PageId))
         return
       }
-      if (input === '1' || input === '2' || input === '3') {
+      if (input === '1' || input === '2' || input === '3' || input === '4') {
         goPage(Number(input) as PageId)
         return
       }
@@ -663,8 +863,19 @@ export function App({
         api.refreshNow()
         return
       }
+      if (page === 4 && (key.leftArrow || key.rightArrow)) {
+        moveFocus(key.leftArrow ? -1 : 1, 0)
+        return
+      }
       if (key.upArrow || key.downArrow) {
-        updateScroll((v) => (key.upArrow ? v - 1 : v + 1))
+        // The board page walks its cards (the window follows the focus); the other pages scroll.
+        if (page === 4) moveFocus(0, key.upArrow ? -1 : 1)
+        else updateScroll((v) => (key.upArrow ? v - 1 : v + 1))
+        return
+      }
+      if (page === 4 && key.return) {
+        const current = resolveFocus(boardRows(), focusRef.current)
+        if (current) openDetail(current.id)
         return
       }
       if (key.return && viewEntry == null && page === 3) {

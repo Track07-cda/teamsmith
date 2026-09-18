@@ -810,7 +810,11 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
   local cols ic tc ac bc dc sc rows counts todo wip review blocked done dropped total
   cols="$(team_panel_board_awk)"
   { read -r ic; read -r tc; read -r ac; read -r bc; read -r dc; read -r sc; } <<< "$cols"
-  rows="$(awk -F'|' -v ic="$ic" -v tc="$tc" -v ac="$ac" -v bc="$bc" -v dc="$dc" -v sc="$sc" '
+  # M29/P18：每行带上任务书的 `phase:`（看板页的卡片要它）。一次 awk 里先扫任务书建表、再扫 BOARD.md 出行
+  # ——不是每行 fork 一个进程（参考板 73 行）；没有任务书/没有该头 → `-`。
+  local tfiles=() tf
+  for tf in "$TEAM_DOCS_ABS/tasks"/*.md; do [ -f "$tf" ] && tfiles+=("$tf"); done
+  rows="$(awk -F'|' -v ic="$ic" -v tc="$tc" -v ac="$ac" -v bc="$bc" -v dc="$dc" -v sc="$sc" -v bf="$f" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, " ", s); gsub(/\r/, "", s); return s }
     function keep(id, st) {
@@ -819,11 +823,17 @@ team_panel_board_json() { # 看板行 + 四态计数（含 done/dropped）+ 最�
       if (id ~ /^[-–—]+$/ || id == "ID") return 0
       return 1
     }
+    FILENAME != bf {
+      if ($0 ~ /^task:/) { tid = trim(substr($0, 6)); want = 1 }
+      else if (want && $0 ~ /^phase:/) { ph[tid] = trim(substr($0, 7)); want = 0 }
+      next
+    }
     /^\|/ {
       id = trim($(ic)); st = trim($(sc))
       if (!keep(id, st)) next
-      printf "%s{\"id\": \"%s\", \"title\": \"%s\", \"agent\": \"%s\", \"branch\": \"%s\", \"deps\": \"%s\", \"state\": \"%s\"}", (n++ ? ", " : ""), esc(id), esc(trim($(tc))), esc(trim($(ac))), esc(trim($(bc))), esc(trim($(dc))), esc(st)
-    }' "$f")"
+      phase = (id in ph && ph[id] != "") ? ph[id] : "-"
+      printf "%s{\"id\": \"%s\", \"title\": \"%s\", \"agent\": \"%s\", \"branch\": \"%s\", \"deps\": \"%s\", \"state\": \"%s\", \"phase\": \"%s\"}", (n++ ? ", " : ""), esc(id), esc(trim($(tc))), esc(trim($(ac))), esc(trim($(bc))), esc(trim($(dc))), esc(st), esc(phase)
+    }' "${tfiles[@]}" "$f")"
   counts="$(awk -F'|' -v ic="$ic" -v sc="$sc" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     function keep(id, st) {
@@ -1030,9 +1040,102 @@ team_panel_health_json() {
     "$(team_panel_json_str "$version")" "$(team_panel_json_str "$doc")" "$(team_panel_json_str "$doctor")"
 }
 
+# ---- 详情块（P18/B3）：按入口 id **只读发现**关联文件，给详情视图一个数据块。
+#
+# 发现面（design §6 / spec「A focused card opens a read-only markdown detail view」）：
+#   docs/team/tasks/<ID>-*.md       → tab brief（多份时首份 `brief`、其余 `brief:<后缀>`）
+#   docs/team/reports/<ID>-*.md     → tab report:<后缀>（只认文件，包目录不算）
+#   docs/team/reviews/<ID>.md       → tab review
+#   docs/team/reviews/<ID>-*.md     → tab review:<后缀>
+# `<ID>` 后面必须是 `-` 或 `.`（逐字面量比较），所以 `P1` 永远不会匹配到 `P17` 的文件。
+# `--file` 只服务**发现集里的**路径：任何别的路径都非 0 且不打印内容——面板不会变成任意文件读取器。
+# 正文上限 128 KiB（超出截断并带 truncated 标记），UTF-8 边界用 iconv -c 收尾。
+
+# 发现记录：每行 `<相对路径>\t<tab 名>\t<字节数>`，顺序 = 任务书 → 报告 → 复验。
+team_panel_detail_records() { # <id>
+  local LC_ALL=C
+  local id="$1" f name suffix tab size rel first
+  [ -d "$TEAM_DOCS_ABS" ] || return 0
+  first=1
+  for f in "$TEAM_DOCS_ABS/tasks/$id"-*.md; do
+    [ -f "$f" ] || continue
+    name="${f##*/}"; suffix="${name#"$id"-}"; suffix="${suffix%.md}"
+    tab="brief"; [ "$first" = 1 ] || tab="brief:$suffix"; first=0
+    size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+    rel="${f#"$TEAM_MAIN_ROOT"/}"
+    printf '%s\t%s\t%s\n' "$rel" "$tab" "${size:-0}"
+  done
+  for f in "$TEAM_DOCS_ABS/reports/$id"-*.md; do
+    [ -f "$f" ] || continue
+    name="${f##*/}"; suffix="${name#"$id"-}"; suffix="${suffix%.md}"
+    size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+    rel="${f#"$TEAM_MAIN_ROOT"/}"
+    printf '%s\t%s\t%s\n' "$rel" "report:$suffix" "${size:-0}"
+  done
+  f="$TEAM_DOCS_ABS/reviews/$id.md"
+  if [ -f "$f" ]; then
+    size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+    rel="${f#"$TEAM_MAIN_ROOT"/}"
+    printf '%s\t%s\t%s\n' "$rel" "review" "${size:-0}"
+  fi
+  for f in "$TEAM_DOCS_ABS/reviews/$id"-*.md; do
+    [ -f "$f" ] || continue
+    name="${f##*/}"; suffix="${name#"$id"-}"; suffix="${suffix%.md}"
+    size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+    rel="${f#"$TEAM_MAIN_ROOT"/}"
+    printf '%s\t%s\t%s\n' "$rel" "review:$suffix" "${size:-0}"
+  done
+  return 0
+}
+
+# 详情块：文件清单 + 被服务文件的正文（默认第一份；`--file` 指定时必须已在发现集里）。
+team_panel_detail_json() { # <id> [file]
+  local id="${1:-}" want="${2:-}" cap="${TEAM_PANEL_DETAIL_CAP:-131072}"
+  [ -n "$id" ] || { printf 'team: __panel-data --block detail 需要 --id <ID>\n' >&2; return 2; }
+  # id 直接进 glob：只接受字母数字与 . _ -（挡掉通配符与路径穿越；`board` 的 id 就长这样）。
+  case "$id" in
+    *[!A-Za-z0-9._-]*) printf 'team: __panel-data --block detail: 非法的 --id %s\n' "$id" >&2; return 2 ;;
+  esac
+  local -a paths=() tabs=() sizes=()
+  local path tab size
+  while IFS=$'\t' read -r path tab size; do
+    [ -n "$path" ] || continue
+    paths+=("$path"); tabs+=("$tab"); sizes+=("${size:-0}")
+  done < <(team_panel_detail_records "$id")
+  local n="${#paths[@]}" i pick=0
+  if [ -n "$want" ]; then
+    local found=-1
+    for ((i = 0; i < n; i++)); do
+      if [ "${paths[$i]}" = "$want" ]; then found="$i"; break; fi
+    done
+    if [ "$found" -lt 0 ]; then
+      printf 'team: __panel-data --block detail: --file 不在发现集里（%s）\n' "$want" >&2
+      return 1
+    fi
+    pick="$found"
+  fi
+  local out="[" first=1 t
+  for ((i = 0; i < n; i++)); do
+    t=false; [ "${sizes[$i]}" -gt "$cap" ] && t=true
+    [ "$first" = 1 ] || out="$out, "
+    first=0
+    out="$out{\"tab\": $(team_panel_json_str "${tabs[$i]}"), \"name\": $(team_panel_json_str "${paths[$i]##*/}"), \"path\": $(team_panel_json_str "${paths[$i]}"), \"size\": $(team_panel_num "${sizes[$i]}"), \"truncated\": $t}"
+  done
+  out="$out]"
+  local file="" text="" truncated=false
+  if [ "$n" -gt 0 ]; then
+    file="${paths[$pick]}"
+    text="$(head -c "$cap" "$TEAM_MAIN_ROOT/$file" 2>/dev/null | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)"
+    [ "${sizes[$pick]}" -gt "$cap" ] && truncated=true
+  fi
+  printf '{"id": %s, "count": %s, "file": %s, "text": %s, "truncated": %s, "files": %s}\n' \
+    "$(team_panel_json_str "$id")" "$(team_panel_num "$n")" "$(team_panel_json_str "$file")" \
+    "$(team_panel_json_str_ml "$text")" "$truncated" "$out"
+}
+
 # 块分发：一个块一个子进程（panel.js 用 --block 起一片），源坏时打印尽力而为的片段并返回非 0，
 # 由渲染层把那一块画成 `—`，其余块照常渲染。
-team_panel_block() { # <块名> <activity 1|0> <events>
+team_panel_block() { # <块名> <activity 1|0> <events> [id] [file]
   case "$1" in
     frame)    team_panel_frame_json ;;
     pm)       team_panel_pm_json ;;
@@ -1049,6 +1152,7 @@ team_panel_block() { # <块名> <activity 1|0> <events>
     inbox)    team_panel_inbox_json ;;
     patrol)   team_panel_patrol_json ;;
     health)   team_panel_health_json ;;
+    detail)   team_panel_detail_json "${4:-}" "${5:-}" ;;
     activity) team_panel_activity_json "${2:-1}" "${3:-4}" ;;
     *) team_usage_die "__panel-data: 未知块名 $1" ;;
   esac
@@ -1057,20 +1161,22 @@ team_panel_block() { # <块名> <activity 1|0> <events>
 # 内部命令：给 panel.js 一个 JSON（{panel, activity}）或一个块（--block <名>）。
 # 名字带 __ 前缀 = 不是给人用的命令面。
 team_cmd_panel_data() {
-  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block=""
+  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block="" did="" dfile=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-activity) activity=0; shift ;;
       --activity) activity=1; shift ;;
       --events) events="${2:?__panel-data: --events 需要数字}"; shift 2 ;;
       --block) block="${2:?__panel-data: --block 需要块名}"; shift 2 ;;
+      --id) did="${2:?__panel-data: --id 需要入口 id}"; shift 2 ;;
+      --file) dfile="${2:?__panel-data: --file 需要路径}"; shift 2 ;;
       -*) team_usage_die "__panel-data: 未知参数 $1" ;;
       *) team_usage_die "__panel-data: 多余参数 $1" ;;
     esac
   done
   team_require_docs
   if [ -n "$block" ]; then
-    team_panel_block "$block" "$activity" "$events"
+    team_panel_block "$block" "$activity" "$events" "$did" "$dfile"
     return $?
   fi
   printf '{"panel": %s, "activity": %s}\n' "$(team_panel_json)" "$(team_panel_activity_json "$activity" "$events")"

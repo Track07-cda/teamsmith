@@ -42,7 +42,7 @@ function boolOf(value: string): boolean | null {
 
 function pageOf(value: string): PageId | null {
   const v = value.trim()
-  if (v === '1' || v === '2' || v === '3') return Number(v) as PageId
+  if (v === '1' || v === '2' || v === '3' || v === '4') return Number(v) as PageId
   return null
 }
 

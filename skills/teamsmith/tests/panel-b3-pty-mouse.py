@@ -55,6 +55,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--click-col", type=int, default=12)
     ap.add_argument("--click-row", type=int, default=2)
+    ap.add_argument("--click2-col", type=int, default=0, help="a second click after --send")
+    ap.add_argument("--click2-row", type=int, default=0)
     ap.add_argument("--keys", default="")
     ap.add_argument("--expect-draft", default="")
     ap.add_argument("--expect-enable", choices=["yes", "no"], default="yes")
@@ -65,10 +67,30 @@ def main():
     ap.add_argument("--wheel", choices=["down", "up", "none"], default="none")
     ap.add_argument("--wheel-clicks", type=int, default=0)
     ap.add_argument("--out2", default="", help="the bytes written after the wheel injection")
+    ap.add_argument("--send", default="", help="comma-separated key sequence before the dump (enter,esc,q,tab,up,down,left,right, or raw text)")
+    ap.add_argument("--send2", default="", help="second key sequence; its bytes go to --out2 after --send")
     ap.add_argument("--cols", type=int, default=100)
     ap.add_argument("--rows", type=int, default=30)
     ap.add_argument("--wait", type=float, default=25.0)
     args = ap.parse_args()
+
+    named = {
+        "enter": b"\r",
+        "esc": b"\x1b",
+        "tab": b"\t",
+        "up": b"\x1b[A",
+        "down": b"\x1b[B",
+        "right": b"\x1b[C",
+        "left": b"\x1b[D",
+    }
+
+    def send_sequence(sequence, deadline):
+        for token in sequence.split(","):
+            if not token:
+                continue
+            os.write(master, named.get(token, token.encode()))
+            time.sleep(0.35)
+        return drain(master, 1.0, deadline)
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", args.rows, args.cols, 0, 0))
@@ -140,22 +162,40 @@ def main():
         os.write(master, f"\x1b[<0;{args.click_col};{args.click_row}m".encode())
         out += drain(master, 1.0, deadline)
 
+    # Everything after `--send` is the "after" segment: the wheel, the second click and `--send2`.
+    # `--out2` gets exactly that segment, which is how a test sees a state change without scraping
+    # the whole stream (the existing wheel fixtures rely on the same shape).
+    after = b""
+
+    if args.send:
+        after += send_sequence(args.send, deadline)
+
     if args.wheel != "none" and args.wheel_clicks > 0:
         button = 65 if args.wheel == "down" else 64
         for _ in range(args.wheel_clicks):
             os.write(master, f"\x1b[<{button};{args.click_col};{args.click_row}M".encode())
             time.sleep(0.35)
-        after = drain(master, 1.2, deadline)
-        out += after
-        if args.out2:
-            with open(args.out2, "wb") as dump2:
-                dump2.write(after)
+        after += drain(master, 1.2, deadline)
 
     if args.keys:
         for ch in args.keys:
             os.write(master, ch.encode())
             time.sleep(0.12)
         out += drain(master, 1.0, deadline)
+
+    if args.click2_col > 0:
+        os.write(master, f"\x1b[<0;{args.click2_col};{args.click2_row}M".encode())
+        time.sleep(0.3)
+        os.write(master, f"\x1b[<0;{args.click2_col};{args.click2_row}m".encode())
+        after += drain(master, 1.0, deadline)
+
+    if args.send2:
+        after += send_sequence(args.send2, deadline)
+
+    out += after
+    if args.out2:
+        with open(args.out2, "wb") as dump2:
+            dump2.write(after)
 
     with open(args.out, "wb") as dump:
         dump.write(out)

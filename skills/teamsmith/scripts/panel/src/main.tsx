@@ -2,7 +2,8 @@
 //
 //   panel.js [--root DIR] [--print | --json | --once] [--width N] [--height N]
 //            [--activity | --no-activity] [--events N] [--refresh N] [--no-pulse] [--version]
-//            [--headless] [--snapshot] [--palette] [--theme dark|light] [--page 1|2|3] [--lang zh|en]
+//            [--headless] [--snapshot] [--palette] [--theme dark|light] [--page 1|2|3|4] [--lang zh|en]
+//            [--overlay] [--detail ID]
 //
 // Modes (the `panel` contract):
 //   --print      one plain-text frame (the overview), no escape sequence, writes nothing, never ticks
@@ -97,6 +98,8 @@ const rawActivityOn = activityFlag ?? envActivity
 const themeArg = argOf('theme')
 const pageArg = argOf('page')
 const langArg = argOf('lang')
+/** `--detail <ID>`: render the read-only detail view in a snapshot (the overlay's sibling exit). */
+const detailArg = argOf('detail') || ''
 
 if (has('version')) {
   out(`teamsmith panel ${PANEL_VERSION} · ink ${PIN_INK} · react ${PIN_REACT}\nbuilt by: ${BUILD_CMD}\n`)
@@ -106,7 +109,7 @@ if (has('help')) {
   out(
     'usage: panel.js [--root DIR] [--state-dir DIR] [--print|--json|--once|--headless|--snapshot|--palette]\n' +
       '                [--width N] [--height N] [--activity|--no-activity] [--events N] [--refresh N]\n' +
-      '                [--no-pulse] [--theme dark|light] [--page 1|2|3] [--lang zh|en] [--overlay] [--version]\n',
+      '                [--no-pulse] [--theme dark|light] [--page 1|2|3|4] [--lang zh|en] [--overlay] [--detail ID] [--version]\n',
   )
   process.exit(0)
 }
@@ -207,6 +210,8 @@ function defaultView(lang: string, page: PageId): ViewState {
     overlayIndex: 0,
     viewEntry: null,
     scroll: 0,
+    detailIndex: 0,
+    detailScroll: 0,
   }
 }
 
@@ -223,10 +228,17 @@ async function main(): Promise<void> {
     const settings = readSettings(confFile)
     const themeName = themeArg === 'dark' || themeArg === 'light' ? themeArg : resolveTheme(settings.theme)
     const lang = langArg === 'en' || langArg === 'zh' ? langArg : settings.lang
-    const page = pageArg === '1' || pageArg === '2' || pageArg === '3' ? (Number(pageArg) as PageId) : settings.defaultPage
-    const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events })
+    const page = pageArg === '1' || pageArg === '2' || pageArg === '3' || pageArg === '4' ? (Number(pageArg) as PageId) : settings.defaultPage
+    const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events, detailId: detailArg || null })
     const frame = frameOrFail(res, rawActivityOn)
-    const view: ViewState = { ...defaultView(lang, page), tui: true, mouseOn: settings.mouse, density: settings.density, overlay: wantOverlay }
+    const view: ViewState = {
+      ...defaultView(lang, page),
+      tui: true,
+      mouseOn: settings.mouse,
+      density: settings.density,
+      overlay: wantOverlay,
+      detail: detailArg || null,
+    }
     const themed = layout({
       ...frame,
       strings: stringsFor(lang),
@@ -592,6 +604,20 @@ async function main(): Promise<void> {
       if (activityPinned) return
       opts.activity = on
       refreshNow()
+    },
+    setDetail: (id: string | null, file?: string | null) => {
+      const nextId = id ?? null
+      const nextFile = nextId ? file ?? null : null
+      if ((opts.detailId ?? null) === nextId && (opts.detailFile ?? null) === nextFile) return
+      opts.detailId = nextId
+      opts.detailFile = nextFile
+      // The detail block is off the tick path: only the view's own open/tab-switch forces a build.
+      if (!nextId) return
+      // The cached block already serves this file (the open returns the first file without
+      // `--file`): record the option and rebuild nothing, so the effect can stay idempotent.
+      const cached = cache.snapshot().blocks?.detail
+      if (cached?.id === nextId && nextFile && cached.file === nextFile) return
+      void cache.refresh({ force: true, only: ['detail'] }).then(adopt)
     },
     collapse,
   }

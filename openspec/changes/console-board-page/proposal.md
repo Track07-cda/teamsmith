@@ -50,7 +50,7 @@ write operation (the console stays read-only except through the existing three c
 4. **Performance**: the detail block builds only while the view is open (never on the tick path), first frame ≤1s;
    the kanban reuses the existing `board` block; the <1%-of-one-core red line holds; a bounded frame fills the
    pane exactly.
-5. **Spec home**: `panel` — ADDED ×3, MODIFIED ×2, every scenario falsifiable, degradation and CPU included.
+5. **Spec home**: `panel` — ADDED ×4, MODIFIED ×1, REMOVED ×1 (the three-page requirement, a remove-plus-add), every scenario falsifiable, degradation and CPU included.
 
 ## The defect flip (the footer fix)
 

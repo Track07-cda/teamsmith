@@ -230,14 +230,35 @@ held). A missing file means an empty draft — the next compose starts blank. `-
 and no command other than `team monitor`'s TUI writes it.
 
 `state/panel.conf` and `state/panel-page` are the console's runtime preferences (pulse-console B3). The
-overlay (`,`) edits exactly five: `lang` (`zh`/`en`), `page` (the default page, 1–3), `activity` (the activity
+overlay (`,`) edits exactly five: `lang` (`zh`/`en`), `page` (the default page, 1–4), `activity` (the activity
 column for TUI sessions), `mouse` and `density` (`comfortable`/`compact`); a sixth key, `theme`
 (`dark`/`light`/`auto`), pins the palette and is not an overlay item. The file is read **by the TUI only**:
 `--print`/`--json` never look at it, so the machine exits stay byte-stable under any preference. A missing,
 unreadable or corrupt file falls back to the defaults (zh, page 1, activity and mouse on, comfortable,
-auto), and unknown keys are ignored. `panel-page` is one number: the page the human last showed, restored on
-the next start (the `page` preference is the fallback when it is absent). Neither file is the project
+auto), and unknown keys are ignored. `panel-page` is one number in `1`–`4` — the page the human last showed,
+restored on the next start (the `page` preference is the fallback when it is absent, and a value outside
+`1`–`4` falls back to it too, never an error). Neither file is the project
 contract — `.pi/team/config.sh` keeps that role, and nothing moves between the two.
+
+### The console's data blocks (`team __panel-data`)
+
+The console reads every screen from one internal, read-only command: `team __panel-data --block <name>`
+(one child process per block, each with its own timeout; a failed block renders as `—` and never takes the
+others down). The block names are a closed set — `frame`, `pm`, `pending`, `outbox`, `capacity`, `agents`,
+`recent`, `activity`, `board`, `changes`, `specs`, `decisions`, `outbox_list`, `inbox`, `patrol`, `health`
+and `detail` — and `--events <n>` sizes the activity tail. `--print`/`--json` assemble the machine blocks only
+(the console-only readers, including `detail`, are never spawned there).
+
+`--block detail --id <ID> [--file <path>]` is the read-only markdown detail view's reader (P18/B3). It
+discovers, by entry id with the literal boundary `-`/`.` after the id (`P1` never matches `P17`):
+`docs/team/tasks/<ID>-*.md` (tab `brief`), `docs/team/reports/<ID>-*.md` — files only, a report package
+directory does not match — (tab `report:<agent>`) and `docs/team/reviews/<ID>.md` plus
+`docs/team/reviews/<ID>-*.md` (tabs `review` / `review:<suffix>`), and returns that list plus the text of the
+first file. `--file` serves one of those discovered paths only: anything else (a path outside the set, a
+`..` traversal, another entry's file) exits non-zero and prints no content, so the console is never an
+arbitrary file reader. Text is capped at 128 KiB (`TEAM_PANEL_DETAIL_CAP` overrides the cap) with a
+`truncated` marker per file, and the block is requested only while the detail view is open: a parked
+console spawns no `detail` child at all.
 
 ## 4. Environment variables (usable without writing them into the config)
 

@@ -33,6 +33,7 @@ export const zh = {
   taskReview: '待复验',
   taskBlocked: '阻塞',
   taskDone: '完成',
+  taskDropped: '已放弃',
   progressChanges: '变更 {n}',
   progressSpecs: '规格 {specs} 项 · {reqs} 条需求',
   progressDecisions: '决策 {n}',
@@ -70,6 +71,7 @@ export const zh = {
   pageOverview: '总览',
   pageWork: '工作',
   pageMessages: '消息与日志',
+  pageBoard: '看板',
   pageTab: ' {name} ',
   pageTabActive: '▸{name}◂',
 
@@ -79,6 +81,15 @@ export const zh = {
   boardCounts: '{todo} 待办 · {wip} 进行 · {review} 待复验 · {blocked} 阻塞 · {done} 完成',
   boardDoneCollapsed: '… 其余 {n} 条 done/dropped 收起',
   boardEmpty: '（看板为空）',
+  kanbanEmptyLane: '·',
+  laneHiddenAbove: '↑{n}',
+  laneHiddenBelow: '↓{n}',
+
+  // 详情视图（只读）
+  detailTitle: '详情 {id}',
+  detailNoFiles: '（这个入口没有关联文件）',
+  detailTruncated: '… 已截断（只显示前 128 KiB）',
+  detailLoading: '… 读取中',
 
   // 变更与规格
   changesHeading: '活动变更',
@@ -151,8 +162,14 @@ export const zh = {
   keyFlush: 'f 冲刷',
   keyStandby: 's 待命',
   keySettings: ', 设置',
-  keyPages: 'Tab/1-3 翻页',
+  keyPages: 'Tab/1-4 翻页',
   keyScroll: '↑/↓ 滚动',
+  keyLanes: '←/→ 车道',
+  keyCards: '↑/↓ 卡片',
+  keyOpen: 'Enter 打开',
+  keyDetailClose: 'Esc/q 返回',
+  keyDetailTabs: '←/→ 文件',
+  keyDetailScroll: '↑/↓ 滚动',
   keyQuit: 'q 收起',
 
   // 输入行与回执

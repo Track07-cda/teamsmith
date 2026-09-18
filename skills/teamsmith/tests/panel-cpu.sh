@@ -2,6 +2,8 @@
 # CPU red-line fixture (pulse-console B1, tasks.md 1.5).
 #
 #   bash skills/teamsmith/tests/panel-cpu.sh [tree] [seconds]
+#   TEAM_PANEL_CPU_PAGE=4 bash skills/teamsmith/tests/panel-cpu.sh   # park it on the board page
+#   TEAM_PANEL_CPU_DETAIL=1 bash skills/teamsmith/tests/panel-cpu.sh # open the markdown detail view
 #
 # Runs the console in a fixture pane of a **private tmux server** (`-L p12cpu-$$`, the team session is
 # never touched) and reports three numbers over the window:
@@ -32,6 +34,7 @@ cleanup() {
   tmux -L "$sock" kill-server 2>/dev/null || true
   # tmux 在服务器已死时会把 socket 文件留在 /tmp/tmux-<uid>/：夹具自己收干净
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
+  rm -rf "${time_out:-}.state" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -54,7 +57,22 @@ panel="$tree/skills/teamsmith/scripts/panel/panel.js"
 
 hz="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 time_out="$(mktemp "${TMPDIR:-/tmp}/p12cpu.XXXXXX")"
-pane_cmd="cd '$tree' && exec '$time_bin' -o '$time_out' -f 'P12CPU user=%U sys=%S elapsed=%e' -- '$js' '$panel' --root '$tree' --team-cli '$tree/skills/teamsmith/scripts/team' --no-pulse --refresh $refresh"
+# TEAM_PANEL_CPU_PAGE=<1|2|3|4> parks the measured console on that page (the board page's kanban is
+# the heaviest layout, so the red line is checked there too — P18/B2 item 6.4).
+page_flag=""
+case "${TEAM_PANEL_CPU_PAGE:-}" in 1|2|3|4) page_flag=" --page ${TEAM_PANEL_CPU_PAGE}" ;; esac
+# TEAM_PANEL_CPU_DETAIL=1 measures the markdown detail view's own steady state (P18/B3): the knob
+# opens page 4 + the focused card's detail after warm-up. It runs with a private state dir, because
+# sending keys must never write the real project's panel-page/panel.conf files.
+detail_flag=""
+state_flag=""
+if [ "${TEAM_PANEL_CPU_DETAIL:-0}" = "1" ]; then
+  detail_flag=1
+  state_dir="${time_out}.state"
+  mkdir -p "$state_dir"
+  state_flag=" --state-dir $state_dir"
+fi
+pane_cmd="cd '$tree' && exec '$time_bin' -o '$time_out' -f 'P12CPU user=%U sys=%S elapsed=%e' -- '$js' '$panel' --root '$tree' --team-cli '$tree/skills/teamsmith/scripts/team' --no-pulse --refresh $refresh${page_flag}${state_flag}"
 tmux -L "$sock" new-session -d -s "$sess" -x 140 -y 34 -c "$tree" "sleep 600"
 first_frame_ms=""
 spawn_ms="$(date +%s%3N)"
@@ -75,6 +93,15 @@ if [ -z "$first_frame_ms" ]; then
 fi
 printf '== first frame: %s (budget 2000ms) ==\n' "${first_frame_ms:-never}"
 sleep 8  # warm-up: Ink startup, the first assembly, the first TTL cycle
+
+if [ -n "$detail_flag" ]; then
+  tmux -L "$sock" send-keys -t "$sess:console" 4 2>/dev/null || true
+  sleep 1
+  tmux -L "$sock" send-keys -t "$sess:console" Enter 2>/dev/null || true
+  sleep 3
+  printf '== detail view open for the sampling window (page 4 + Enter; %s) ==\n' \
+    "$(tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -c '详情' | tr -d ' ')"
+fi
 
 time_pid="$(tmux -L "$sock" list-panes -t "$sess:console" -F '#{pane_pid}' 2>/dev/null | head -1)"
 pane_pid="$(pgrep -P "${time_pid:-0}" 2>/dev/null | head -1)"

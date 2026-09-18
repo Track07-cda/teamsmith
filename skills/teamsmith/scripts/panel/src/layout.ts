@@ -18,16 +18,21 @@
 // table columns / abbreviates states. Blocks whose source has no data collapse and yield the space.
 
 import { fmtAge, fmtMB, GLYPH, clockOf, shortBranch, sparkline } from './format.js'
+import { markdownMemo } from './markdown.js'
 import { fill, OVERLAY_LABEL_W } from './strings/index.js'
 import type { Strings } from './strings/index.js'
 import type {
   Action,
   ActivityBlock,
+  BoardRow,
   ChangeRow,
   Density,
+  DetailBlock,
+  DetailWindow,
   Frame,
   FrameInput,
   Hit,
+  LaneWindow,
   Line,
   PageId,
   PanelAgent,
@@ -224,6 +229,10 @@ interface Block {
   summary?: PlacedLine
   /** A separator is inserted before the block under the comfortable density. */
   separator?: 'rule' | 'blank' | 'none'
+  /** The board page's lane windows as rendered (the App clamps its arrows and wheel against them). */
+  lanes?: LaneWindow[]
+  /** The detail view's document window as rendered (the App clamps its arrows and wheel). */
+  detail?: DetailWindow
 }
 
 const BOX_TL = '╭'
@@ -252,6 +261,11 @@ interface Ctx {
   /** History rows the board keeps visible before folding (default `BOARD_DONE_KEEP`; a flush
    * column raises it so the spare height shows real history instead of blank card space). */
   boardDoneKeep?: number
+  /** Card rows the board page's lanes may show (the assembly hands over its real budget; the
+   * default keeps a standalone layout honest). */
+  laneRows?: number
+  /** Document rows the detail view may show (the assembly's real budget for the open document). */
+  detailRows?: number
 }
 
 export interface LayoutInput extends FrameInput {
@@ -575,6 +589,8 @@ function boardStateText(state: string, s: Strings): string {
       return s.taskBlocked
     case 'todo':
       return s.taskTodo
+    case 'dropped':
+      return s.taskDropped
     default:
       return state
   }
@@ -662,6 +678,358 @@ function boardBlock(ctx: Ctx): Block | null {
   }
   if (folded > 0) lines.push({ line: truncLine(ln(seg(`  ${fill(s.boardDoneCollapsed, { n: folded })}`, 'dim')), width) })
   return { id: 'board', title: fill(s.boardHeadingCount, { n: board.total ?? rows.length }), priority: 10, lines, summary: { line: truncLine(ln(seg(` ${fill(s.boardHeadingCount, { n: board.total ?? rows.length })}`, 'heading')), width) } }
+}
+
+// ------------------------------------------------------------------ the board page (kanban, P18/B2)
+
+/** The six lanes, in the order BOARD.md's own header legend declares — the file is the contract. */
+const LANES: readonly string[] = ['todo', 'wip', 'review', 'done', 'blocked', 'dropped']
+/** The state glyph a card carries; the state's name lives in the lane header. */
+const LANE_GLYPH: Record<string, string> = { todo: '·', wip: '▸', review: '◆', done: '✓', blocked: '✗', dropped: '—' }
+/** Columns between two lanes side by side. */
+const LANE_GAP = 1
+/** Card rows a lane shows when nobody handed the block a height budget (standalone layout). */
+const LANE_KEEP_DEFAULT = 4
+/** Card slots a lane reserves for its two edge counters (an edge that hides cards shows their count). */
+const LANE_MARKER_SLOTS = 2
+/** Rows a lane column spends outside its card slots: the header border and the bottom border. */
+const LANE_CHROME_ROWS = 2
+/** The cursor in front of the focused card: a glyph, never color alone. */
+const FOCUS_CURSOR = '›'
+/** The grouped form's pseudo-lane key for the single page window (`< 100` columns). */
+const GROUPED_WINDOW = '\u0000page'
+
+/** The history lanes anchor their window on the newest cards. */
+function laneAnchorsNewest(lane: string): boolean {
+  return lane === 'done' || lane === 'dropped'
+}
+
+function laneLabel(lane: string, s: Strings): string {
+  return boardStateText(lane, s)
+}
+
+/** The cards of one lane, in BOARD.md order (the file lists oldest → newest). */
+function laneCards(rows: BoardRow[], lane: string): BoardRow[] {
+  return rows.filter((r) => r.state === lane)
+}
+
+/**
+ * The focused card resolved against the current board. An id that left the board lands on its lane's
+ * first card (and a lane that emptied, on the first card of the first non-empty lane); a null focus
+ * starts there too. Pure and shared with the App, which owns the focus state — the layout only
+ * renders and windows it.
+ */
+export function resolveFocus(
+  rows: BoardRow[],
+  focus?: { lane: string; id: string } | null,
+): { lane: string; id: string } | null {
+  if (focus) {
+    const card = rows.find((r) => r.id === focus.id)
+    if (card) return { lane: card.state, id: card.id }
+    const sameLane = laneCards(rows, focus.lane)[0]
+    if (sameLane) return { lane: focus.lane, id: sameLane.id }
+  }
+  for (const lane of LANES) {
+    const card = laneCards(rows, lane)[0]
+    if (card) return { lane, id: card.id }
+  }
+  return null
+}
+
+/**
+ * One lane's visible window. `size` is the number of card rows the frame can spend, the offset is
+ * clamped to the lane, and the focused card (when it lives in this lane) always stays inside — the
+ * window follows the focus, while the wheel's own offset may scroll away from it.
+ */
+function laneWindow(
+  ctx: Ctx,
+  lane: string,
+  cards: BoardRow[],
+  size: number,
+  focus: { lane: string; id: string } | null,
+  offsetKey = lane,
+): { start: number; end: number; above: number; below: number } {
+  const span = Math.max(1, Math.floor(size))
+  const count = cards.length
+  const maxStart = Math.max(0, count - span)
+  const explicit = ctx.view.laneOffset?.[offsetKey]
+  let start = explicit == null || Number.isNaN(explicit) ? (laneAnchorsNewest(lane) ? maxStart : 0) : explicit
+  start = Math.max(0, Math.min(maxStart, Math.floor(start)))
+  // The window follows the focus only while the lane has no offset of its own: once the wheel (or a
+  // card move) set one, that offset wins — otherwise the wheel could never scroll away from the
+  // focus, which is exactly what the mouse requirement asks it to do.
+  if (explicit == null && focus && focus.lane === lane) {
+    const idx = cards.findIndex((r) => r.id === focus.id)
+    if (idx >= 0) {
+      if (idx < start) start = idx
+      else if (idx >= start + span) start = Math.min(maxStart, idx - span + 1)
+    }
+  }
+  return { start, end: Math.min(count, start + span), above: start, below: Math.max(0, count - (start + span)) }
+}
+
+/** One card's line: cursor, state glyph, id, agent, phase, title — truncated to the lane's width. */
+function cardLine(ctx: Ctx, card: BoardRow, width: number, focused: boolean): Line {
+  const { s, minimal } = ctx
+  const glyph = LANE_GLYPH[card.state] ?? '·'
+  const tone = BOARD_STATE_TONE[card.state] ?? 'text'
+  const phase = card.phase && card.phase !== '-' ? card.phase : s.dash
+  const cursorTone: Tone = focused ? 'selected' : 'dim'
+  const idTone: Tone = focused ? 'selected' : 'accent'
+  const cursor = focused ? `${FOCUS_CURSOR} ` : '  '
+  if (minimal) {
+    // Under 60 columns a card is one line: glyph, id, title (the agent and phase drop).
+    return truncLine(ln(seg(cursor, cursorTone), seg(`${glyph} `, tone), seg(`${cell(card.id, 6)} `, idTone), seg(card.title)), width)
+  }
+  return truncLine(
+    ln(
+      seg(cursor, cursorTone),
+      seg(`${glyph} `, tone),
+      seg(`${card.id} `, idTone),
+      seg(`${card.agent} `, 'dim'),
+      seg(`${phase} `, 'dim'),
+      seg(card.title),
+    ),
+    width,
+  )
+}
+
+/**
+ * The click target of a card: the focused card opens, any other card takes the focus. While the
+ * detail view is open the cards keep **no** targets (the replaced-blocks rule the settings overlay
+ * follows too) — the view renders on top of this page in the detail batch.
+ */
+function cardAction(card: BoardRow, focused: boolean): Action {
+  return focused ? { kind: 'open-focused', lane: card.state } : { kind: 'focus', lane: card.state, id: card.id }
+}
+
+/** The wheel's lane target: any spot inside a lane that is not a card resolves to this lane. */
+function laneHover(lane: string): Action {
+  return { kind: 'lane-scroll', lane, delta: 0 }
+}
+
+/** One lane as a column of cards; `slots` card rows plus the two borders keep the lanes aligned. */
+function laneColumn(
+  ctx: Ctx,
+  lane: string,
+  width: number,
+  slots: number,
+  focus: { lane: string; id: string } | null,
+  windows: LaneWindow[],
+): PlacedLine[] {
+  const { s } = ctx
+  const cards = laneCards(ctx.blocks.board?.rows ?? [], lane)
+  const win = laneWindow(ctx, lane, cards, slots - LANE_MARKER_SLOTS, focus)
+  windows.push({ lane, offset: win.start, visible: win.end - win.start, count: cards.length })
+  // Everything in the lane that is not a card resolves to the lane itself, so the wheel scrolls the
+  // lane under the cursor (the card hits win the lookup where a card is — `.find()` takes the first).
+  const hover: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: width, action: laneHover(lane) }] : undefined
+  const out: PlacedLine[] = [{ line: cardTop(`${laneLabel(lane, s)} ${cards.length}`, width), hits: hover }]
+  if (win.above > 0) out.push(cardBody({ line: ln(seg(` ${fill(s.laneHiddenAbove, { n: win.above })}`, 'dim')) }, width))
+  if (!cards.length) out.push(cardBody({ line: ln(seg(` ${s.kanbanEmptyLane}`, 'dim')) }, width))
+  for (let i = win.start; i < win.end; i++) {
+    const card = cards[i]
+    const focused = focus?.lane === lane && focus?.id === card.id
+    const line = cardLine(ctx, card, Math.max(0, width - 4), focused)
+    const hits: Hit[] | undefined =
+      ctx.view.tui && !ctx.view.detail
+        ? [{ start: 0, end: Math.max(1, Math.min(width - 4, widthOf(line))), action: cardAction(card, focused) }]
+        : undefined
+    out.push(cardBody({ line, hits }, width))
+  }
+  if (win.below > 0) out.push(cardBody({ line: ln(seg(` ${fill(s.laneHiddenBelow, { n: win.below })}`, 'dim')) }, width))
+  while (out.length < slots + 1) out.push(cardBody({ line: [] }, width))
+  out.push({ line: cardBottom(width) })
+  const placed = out.slice(0, slots + 2)
+  if (hover) for (const l of placed) if (!l.hits?.length) l.hits = hover
+  return placed
+}
+
+/** Merge equally-sized lane columns into rows, carrying each column's hits at its own offset. */
+function mergeLaneColumns(cols: PlacedLine[][], widths: number[]): PlacedLine[] {
+  const rows: PlacedLine[] = []
+  const height = cols.reduce((n, col) => Math.max(n, col.length), 0)
+  for (let i = 0; i < height; i++) {
+    const line: Line = []
+    const hits: Hit[] = []
+    let x = 0
+    cols.forEach((col, ci) => {
+      const cellW = widths[ci]
+      if (ci > 0) {
+        line.push(seg(' '.repeat(LANE_GAP)))
+        x += LANE_GAP
+      }
+      const placed = col[i]
+      if (placed) {
+        line.push(...padLine(placed.line, cellW))
+        for (const h of placed.hits ?? []) hits.push({ ...h, start: h.start + x, end: h.end + x })
+      } else {
+        line.push(seg(' '.repeat(cellW)))
+      }
+      x += cellW
+    })
+    rows.push(hits.length ? { line, hits } : { line })
+  }
+  return rows
+}
+
+/** Under 100 columns the page is one column grouped by state, one window for the whole page. */
+function kanbanGrouped(
+  ctx: Ctx,
+  rows: BoardRow[],
+  focus: { lane: string; id: string } | null,
+): { lines: PlacedLine[]; lanes: LaneWindow[] } {
+  const { s } = ctx
+  const width = ctx.width
+  const all: PlacedLine[] = []
+  const focusRow = { i: -1 }
+  for (const lane of LANES) {
+    const cards = laneCards(rows, lane)
+    all.push({ line: truncLine(ln(seg(` ${laneLabel(lane, s)} ${cards.length}`, 'heading')), width) })
+    if (!cards.length) all.push({ line: truncLine(ln(seg(`  ${s.kanbanEmptyLane}`, 'dim')), width) })
+    for (const card of cards) {
+      const focused = focus?.lane === lane && focus?.id === card.id
+      if (focused) focusRow.i = all.length
+      const line = cardLine(ctx, card, Math.max(0, width - 2), focused)
+      const hits: Hit[] | undefined =
+        ctx.view.tui && !ctx.view.detail
+          ? [{ start: 1, end: 1 + Math.max(1, widthOf(line)), action: cardAction(card, focused) }]
+          : undefined
+      all.push({ line: truncLine(ln(seg(' '), ...line.slice(0)), width), hits })
+    }
+  }
+  const span = Math.max(1, (ctx.laneRows ?? LANE_KEEP_DEFAULT) + LANE_MARKER_SLOTS)
+  const maxStart = Math.max(0, all.length - span)
+  let start = ctx.view.laneOffset?.[GROUPED_WINDOW] ?? 0
+  start = Math.max(0, Math.min(maxStart, Math.floor(start) || 0))
+  if (focusRow.i >= 0) {
+    if (focusRow.i < start) start = focusRow.i
+    else if (focusRow.i >= start + span) start = Math.min(maxStart, focusRow.i - span + 1)
+  }
+  const hover: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: width, action: laneHover(GROUPED_WINDOW) }] : undefined
+  const win: PlacedLine[] = []
+  if (start > 0) win.push({ line: truncLine(ln(seg(` ${fill(s.laneHiddenAbove, { n: start })}`, 'dim')), width) })
+  for (let i = start; i < Math.min(all.length, start + span); i++) win.push(all[i])
+  const below = Math.max(0, all.length - (start + span))
+  if (below > 0) win.push({ line: truncLine(ln(seg(` ${fill(s.laneHiddenBelow, { n: below })}`, 'dim')), width) })
+  if (hover) for (const l of win) if (!l.hits?.length) l.hits = hover
+  return {
+    lines: win,
+    lanes: [{ lane: GROUPED_WINDOW, offset: start, visible: Math.min(span, Math.max(0, all.length - start)), count: all.length }],
+  }
+}
+
+/** The board page: six lanes side by side (>= 100 columns) or one grouped column under it. */
+function kanbanBlock(ctx: Ctx): Block | null {
+  const { s, blocks, deg } = ctx
+  const board = blocks.board
+  if (!board) return null
+  const one = (lines: PlacedLine[]): Block => ({
+    id: 'kanban',
+    full: true,
+    priority: 1,
+    separator: 'none',
+    lines,
+    summary: { line: truncLine(ln(seg(` ${s.boardHeadingCount}`.replace('{n}', String(board.total ?? 0)), 'heading')), ctx.width) },
+  })
+  if (deg.has('board')) return one([{ line: truncLine(ln(seg(` ${s.dash}`, 'dim')), ctx.width) }])
+  const rows = board.rows ?? []
+  if (!rows.length) return one([{ line: truncLine(ln(seg(` ${s.boardEmpty}`, 'dim')), ctx.width) }])
+  const focus = resolveFocus(rows, ctx.view.focus)
+  if (!ctx.twoColumn) {
+    const grouped = kanbanGrouped(ctx, rows, focus)
+    return { ...one(grouped.lines), lanes: grouped.lanes }
+  }
+  const laneW = Math.max(8, Math.floor((ctx.width - LANE_GAP * (LANES.length - 1)) / LANES.length))
+  const slots = Math.max(2, Math.floor(ctx.laneRows ?? LANE_KEEP_DEFAULT) + LANE_MARKER_SLOTS)
+  const windows: LaneWindow[] = []
+  const cols = LANES.map((lane) => laneColumn(ctx, lane, laneW, slots, focus, windows))
+  return { ...one(mergeLaneColumns(cols, LANES.map(() => laneW))), lanes: windows }
+}
+
+// ------------------------------------------------------------------ the detail view (markdown, P18/B3)
+
+/** Document rows a standalone detail layout shows (no assembly budget available). */
+const DETAIL_KEEP_DEFAULT = 16
+
+/**
+ * The detail view's content width: inside a card the chrome eats four columns (`│ ` + ` │`), so the
+ * document is wrapped to what the frame will really show at that density.
+ */
+function blockInnerW(ctx: Ctx): number {
+  return Math.max(1, isFramed(ctx) ? ctx.width - 4 : ctx.width)
+}
+
+/** The file tab row of the detail view: the active tab in the accent tone, every tab clickable. */
+function detailTabs(ctx: Ctx, files: DetailBlock['files'], active: number, width: number): PlacedLine {
+  const line: Line = [seg(' ')]
+  const hits: Hit[] = []
+  let x = 1
+  files.forEach((file, i) => {
+    if (i > 0) {
+      line.push(seg('  '))
+      x += 2
+    }
+    const text = i === active ? `[${file.tab}]` : file.tab
+    const start = x
+    line.push(seg(text, i === active ? 'accent' : 'dim'))
+    x += dispWidth(text)
+    if (ctx.view.tui) hits.push({ start, end: x, action: { kind: 'detail-tab', index: i } })
+  })
+  return placedWithHits(line, hits, width)
+}
+
+/**
+ * The detail view: the entry's associated files as tabs plus the open document, read-only. It
+ * replaces the kanban on page 4 exactly the way the settings overlay replaces a page's blocks —
+ * the title band, the page tabs and the key band stay (V16 F-V16-4's replacement rule). The
+ * document rows are windowed against the height the assembly hands over (the bounded-frame rule:
+ * more pane means more document, never more blank).
+ */
+function detailBlock(ctx: Ctx): Block | null {
+  const { s, blocks, deg } = ctx
+  const id = ctx.view.detail ?? ''
+  const width = blockInnerW(ctx)
+  const title = fill(s.detailTitle, { id })
+  const one = (lines: PlacedLine[], detail?: DetailWindow): Block => ({
+    id: 'detail',
+    full: true,
+    priority: 1,
+    separator: 'none',
+    title,
+    lines,
+    detail,
+    summary: { line: truncLine(ln(seg(` ${title}`, 'heading')), ctx.width) },
+  })
+  if (deg.has('detail')) return one([{ line: truncLine(ln(seg(` ${s.dash}`, 'dim')), width) }])
+  const data = blocks.detail
+  if (!data) {
+    // The block has not arrived yet (the open was just requested): say so instead of claiming the
+    // entry has no files.
+    return one([{ line: truncLine(ln(seg(` ${s.detailLoading}`, 'dim')), width) }], { index: 0, total: 0, visible: 0, offset: 0 })
+  }
+  const files = data.files ?? []
+  if (!files.length) return one([{ line: truncLine(ln(seg(` ${s.detailNoFiles}`, 'dim')), width) }])
+  const detail = data as DetailBlock
+  const index = Math.max(0, Math.min(files.length - 1, Math.floor(ctx.view.detailIndex ?? 0) || 0))
+  const active = files[index]
+  const rows: PlacedLine[] = [detailTabs(ctx, files, index, width)]
+  if (active.truncated) rows.push({ line: truncLine(ln(seg(` ${s.detailTruncated}`, 'warn')), width) })
+  if (detail.file !== active.path) {
+    // The tab was switched and its text has not arrived yet: the tabs stay live, the body says why.
+    rows.push({ line: truncLine(ln(seg(` ${s.detailLoading}`, 'dim')), width) })
+    return one(rows, { index, total: 0, visible: 0, offset: 0 })
+  }
+  const doc = markdownMemo(active.path, detail.text, width)
+  const budget = Math.max(1, ctx.detailRows ?? DETAIL_KEEP_DEFAULT)
+  const available = Math.max(1, budget - rows.length)
+  const maxStart = Math.max(0, doc.length - available)
+  const offset = Math.max(0, Math.min(maxStart, Math.floor(ctx.view.detailScroll ?? 0) || 0))
+  for (let i = offset; i < Math.min(doc.length, offset + available); i++) rows.push(doc[i])
+  // The bounded-frame rule's last resort: a document shorter than the pane keeps the blank space
+  // *inside* the card, so the card fills the height and the key band stays the last row.
+  while (rows.length < budget) rows.push({ line: [] })
+  return one(rows, { index, total: doc.length, visible: Math.min(available, Math.max(0, doc.length - offset)), offset })
 }
 
 function changesBlock(ctx: Ctx): Block | null {
@@ -874,11 +1242,32 @@ function keyBandBlock(ctx: Ctx): Block {
     { text: s.keyStandby, action: { kind: 'standby' } },
     { text: s.keySettings, action: { kind: 'settings' } },
   ]
-  const nav: { text: string; action: Action }[] = [
-    { text: s.keyPages, action: { kind: 'page-cycle' } },
-    { text: s.keyScroll, action: { kind: 'scroll', delta: 1 } },
-    { text: s.keyQuit, action: { kind: 'quit' } },
-  ]
+  // The board page's nav chips carry its own keys: the lane/card moves and Enter (every documented
+  // key has a target — `r` stays keyboard-only, V16 F-V16-5). While the detail view is open the same
+  // chips become its keys — it adds no action, and `q` is the documented back-out, not a collapse.
+  const nav: { text: string; action: Action }[] = ctx.view.detail
+    ? [
+        { text: s.keyDetailClose, action: { kind: 'detail-close' } },
+        { text: s.keyDetailTabs, action: { kind: 'detail-tab-move', delta: 1 } },
+        { text: s.keyDetailScroll, action: { kind: 'detail-scroll', delta: 1 } },
+        { text: s.keyPages, action: { kind: 'page-cycle' } },
+      ]
+    : ctx.view.page === 4
+      ? [
+          { text: s.keyLanes, action: { kind: 'lane-move', delta: 1 } },
+          { text: s.keyCards, action: { kind: 'card-move', delta: 1 } },
+          {
+            text: s.keyOpen,
+            action: { kind: 'open-focused', lane: resolveFocus(ctx.blocks.board?.rows ?? [], ctx.view.focus)?.lane ?? 'todo' },
+          },
+          { text: s.keyPages, action: { kind: 'page-cycle' } },
+          { text: s.keyQuit, action: { kind: 'quit' } },
+        ]
+      : [
+          { text: s.keyPages, action: { kind: 'page-cycle' } },
+          { text: s.keyScroll, action: { kind: 'scroll', delta: 1 } },
+          { text: s.keyQuit, action: { kind: 'quit' } },
+        ]
   const line: Line = []
   const hits: Hit[] = []
   let x = 1
@@ -927,6 +1316,7 @@ function pageTabsBlock(ctx: Ctx): Block | null {
     { page: 1, text: s.pageOverview },
     { page: 2, text: s.pageWork },
     { page: 3, text: s.pageMessages },
+    { page: 4, text: s.pageBoard },
   ]
   const boxed = isFramed(ctx)
   for (const tab of tabs) {
@@ -959,7 +1349,7 @@ function overlayPrefs(ctx: Ctx): { pref: string; label: string; value: string }[
 }
 
 function pageName(page: PageId, s: Strings): string {
-  return page === 1 ? s.pageOverview : page === 2 ? s.pageWork : s.pageMessages
+  return page === 1 ? s.pageOverview : page === 2 ? s.pageWork : page === 3 ? s.pageMessages : s.pageBoard
 }
 
 /** The overlay's cursor column (`  › ` / `    `) and the separator that keeps the two columns apart. */
@@ -1027,6 +1417,13 @@ function pageDefinitions(ctx: Ctx): Block[] {
       break
     case 2:
       blocks.push(boardBlock(left()), changesBlock(right()), specsBlock(right()), decisionsBlock(right()))
+      break
+    case 3:
+      blocks.push(queueBlock(left()), inboxBlock(right()), patrolBlock(right()), trendBlock(right()), healthBlock(right()))
+      break
+    case 4:
+      // The detail view replaces the kanban's blocks (the title band, tabs and key band stay).
+      blocks.push(ctx.view.detail ? detailBlock(ctx) : kanbanBlock(ctx))
       break
     default:
       blocks.push(queueBlock(left()), inboxBlock(right()), patrolBlock(right()), trendBlock(right()), healthBlock(right()))
@@ -1098,8 +1495,24 @@ export function layout(input: LayoutInput): Frame {
   }
 
   const fullRows: PlacedLine[] = []
+  let laneWindows: LaneWindow[] | undefined
+  let detailWindow: DetailWindow | undefined
   for (const b of fullBlocks) {
-    const chunk = place(b, budget - fullRows.length, width)
+    // The board page's lanes are told how many rows they may use (the frame is bounded): the lane
+    // windows then grow with the pane instead of showing blank card space (the bounded-frame rule).
+    const block =
+      // A lane column is `THREE` rows taller than its card slots (title + bottom + marker slots), so
+      // the budget handed over is what is left minus that chrome — otherwise the block overflows and
+      // degrades to its one-line summary.
+      height > 0 && b.id === 'kanban'
+        ? (kanbanBlock({ ...ctx, laneRows: Math.max(1, budget - fullRows.length - LANE_MARKER_SLOTS - LANE_CHROME_ROWS) }) ?? b)
+        : // The detail view spends the same budget on document rows: more pane = more of the file.
+          height > 0 && b.id === 'detail'
+          ? (detailBlock({ ...ctx, detailRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
+          : b
+    if (block.id === 'kanban' && block.lanes) laneWindows = block.lanes
+    if (block.id === 'detail' && block.detail) detailWindow = block.detail
+    const chunk = place(block, budget - fullRows.length, width)
     for (const l of chunk) fullRows.push(l)
   }
   add(fullRows)
@@ -1134,7 +1547,9 @@ export function layout(input: LayoutInput): Frame {
         const board = bodyCards.find((b) => b.id === 'board')
         const folded = board ? boardFoldedRows(ctx) : 0
         const boardSlot: 0 | 1 = board?.right ? 1 : 0
-        const target = Math.max(columns[0].length, columns[1].length)
+        // B1: the relax is bounded by the *available* body height, not by the neighbour column's
+        // height — otherwise a taller pane grows nothing and the spare becomes blank card space.
+        const target = Math.max(columns[0].length, Math.max(columns[1].length, bodyBudget))
         const extra = Math.min(folded, Math.max(0, target - columns[boardSlot].length))
         if (board && extra > 0) {
           const grown = boardBlock({ ...ctx, width: board.right ? rightW : leftW, boardDoneKeep: Math.max(1, ctx.boardDoneKeep ?? BOARD_DONE_KEEP) + extra })
@@ -1185,6 +1600,18 @@ export function layout(input: LayoutInput): Frame {
         for (const l of chunk) rows.push({ line: truncLine(l.line, columnW), hits: l.hits })
         used += chunk.length
       }
+      if (height > 0) {
+        // B1: the single-column tiers get the two-column flush bottom too — the spare height grows
+        // the *last card's* blank content area, so a single-column page ends on one row instead of
+        // trailing blank page. Only a card can grow; any remainder is filled by the assembly below.
+        const spare = Math.max(0, height - footer.lines.length - rows.length)
+        const last = rows[rows.length - 1]
+        if (spare > 0 && last && textOf(last.line) === textOf(cardBottom(columnW))) {
+          rows.pop()
+          for (let i = 0; i < spare; i++) rows.push(cardBody({ line: [] }, columnW))
+          rows.push(last)
+        }
+      }
     }
   }
 
@@ -1192,6 +1619,14 @@ export function layout(input: LayoutInput): Frame {
   if (height > 0 && rows.length + footer.lines.length > height) {
     const room = Math.max(0, height - footer.lines.length)
     rows.length = Math.min(rows.length, room)
+  }
+  // B1 (the bounded-frame red line): a bounded frame fills its height. Whatever the content did not
+  // naturally use becomes blank *content* rows directly above the footer, so the key band is the
+  // frame's last row and no blank row follows it. The uncapped `--print` path (height <= 0) never
+  // reaches this branch, so its bytes stay identical.
+  if (height > 0 && rows.length + footer.lines.length < height) {
+    const spare = height - footer.lines.length - rows.length
+    for (let i = 0; i < spare; i++) rows.push({ line: [] })
   }
   add(footer.lines)
 
@@ -1211,7 +1646,12 @@ export function layout(input: LayoutInput): Frame {
     }
     return truncLine(l.line, width)
   })
-  return { rows: renderedRows, targets }
+  return {
+    rows: renderedRows,
+    targets,
+    ...(laneWindows ? { lanes: laneWindows } : {}),
+    ...(detailWindow ? { detail: detailWindow } : {}),
+  }
 }
 
 function add2(into: PlacedLine[], a: PlacedLine[], b: PlacedLine[]): void {

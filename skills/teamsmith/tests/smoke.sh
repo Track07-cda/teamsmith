@@ -7688,12 +7688,17 @@ else
 fi
 P27_BLOCK_BAD=0
 # B3 起 __panel-data 服务的块是这 16 个（B1 的 8 个 + 控制台三页要的 8 个）：每个都必须 rc=0 + 合法 JSON。
+# （第 17 个是详情块 `detail`，它要 `--id`：在 § 28-i 里单独钉，不放进这个无参循环。）
 for _b in frame pm pending outbox capacity agents recent activity \
           board changes specs decisions outbox_list inbox patrol health; do
   p27 $TEAM __panel-data --block "$_b" >"$TMP/p27-block-$_b.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
   python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/p27-block-$_b.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
 done
 assert_eq "27-a 块协议：16 个块名都是 rc=0 + 合法 JSON" "$P27_BLOCK_BAD" "0"
+# P18/B3 的详情块（`--id` 是它唯一的额外参数）：同一个协议，另一个入口
+p27 $TEAM __panel-data --block detail --id P27A >"$TMP/p27-block-detail.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["id"] == "P27A" and len(d["files"]) >= 1' "$TMP/p27-block-detail.json" 2>/dev/null || P27_BLOCK_BAD=$((P27_BLOCK_BAD + 1))
+assert_eq "27-a 块协议：detail 块（--id）也是 rc=0 + 合法 JSON" "$P27_BLOCK_BAD" "0"
 if p27 $TEAM __panel-data --block nope >/dev/null 2>&1; then
   bad "27-a 块协议：未知块名应非 0"
 else
@@ -7973,6 +7978,129 @@ case ",$P28_KINDS3," in
 esac
 
 
+# ---- 28-g 有界帧（P18/B1，用户亲口要的红线）：帧高恰好等于给定高度、页脚在最后一行
+# 回归守门：layout() 以前只按自然内容高度出帧、App 在下面补白，页脚浮在帧中间（PM 截图实测）。
+# 夹具要「自然内容 ~30 行」才测得出：stub 的 B3_STUB_AGENTS / B3_STUB_RECENT 两个确定性旋钮撑到 30 行。
+# 还有一条不变式：未封顶的 --print 不许长高（把有界帧里页脚前的连续空行剔掉后，两者逐行一致）。
+P28G_FX="$TMP/p28g"; rm -rf "$P28G_FX"; mkdir -p "$P28G_FX/state"
+p28g_frame() { # <width> <height>：固定夹具的一帧（--print 无转义、不 tick）
+  ( cd "$P27R" && env B3_STUB_AGENTS=18 B3_STUB_RECENT=14 \
+      "$JS_RUNNER" "$P28_PANEL" --print --root "$P28G_FX" --state-dir "$P28G_FX/state" \
+      --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --events 14 \
+      --width "$1" --height "$2" 2>/dev/null )
+}
+p28g_frame_uncapped() {
+  ( cd "$P27R" && env B3_STUB_AGENTS=18 B3_STUB_RECENT=14 \
+      "$JS_RUNNER" "$P28_PANEL" --print --root "$P28G_FX" --state-dir "$P28G_FX/state" \
+      --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --events 14 \
+      --width 120 2>/dev/null )
+}
+for p28g_spec in "120 40" "99 50" "59 12"; do
+  set -- $p28g_spec
+  p28g_frame "$1" "$2" >"$TMP/p28g-$1x$2.txt"
+  assert_eq "28-g 有界帧 $1x$2：恰好 $2 行（帧不再低于给定高度）" \
+    "$(wc -l < "$TMP/p28g-$1x$2.txt" | tr -d ' ')" "$2"
+  if tail -1 "$TMP/p28g-$1x$2.txt" | grep -q '写信'; then
+    ok "28-g 有界帧 $1x$2：末行是键位带（页脚钉底）"
+  else
+    bad "28-g 有界帧 $1x$2：末行不是键位带（$(tail -1 "$TMP/p28g-$1x$2.txt" | cut -c1-40)）"
+  fi
+done
+p28g_frame_uncapped >"$TMP/p28g-uncapped.txt"
+P28G_UNCAPPED="$(python3 - "$TMP/p28g-120x40.txt" "$TMP/p28g-uncapped.txt" <<'PYG'
+import re, sys
+
+
+def norm(lines):
+    return [re.sub(r"[0-9]{2}:[0-9]{2}:[0-9]{2}", "TIME", l.rstrip("\n")) for l in lines]
+
+
+bounded = norm(open(sys.argv[1], encoding="utf-8").read().splitlines(True))
+uncapped = norm(open(sys.argv[2], encoding="utf-8").read().splitlines(True))
+# Drop the maximal run of empty rows directly above the footer: that run is exactly the filler the
+# bounded frame adds, and it must be the *only* difference to the uncapped frame.
+body = bounded[:-1]
+while body and body[-1].strip() == "":
+    body.pop()
+body.append(bounded[-1])
+print("ok" if body == uncapped else f"bounded-minus-filler({len(body)}) != uncapped({len(uncapped)})")
+PYG
+)"
+assert_eq "28-g 未封顶 --print 不涨：有界帧剔掉填充空行后与它逐行一致" "$P28G_UNCAPPED" "ok"
+assert_has "$TMP/p28g-uncapped.txt" "写信" "28-g 未封顶帧仍以键位带收尾（没有填充行）"
+
+
+# ---- 28-h 看板页（P18/B2）：六车道 / 降级档 / 焦点 / 目标 / panel-page 与 defaultPage
+# 契约：openspec/specs + change console-board-page 的「composes four pages」「board page is a kanban」
+# 「Every key affordance is also a mouse target」。真 pty 部分在 tests/panel-b3.sh board（焦点重排、
+# 滚动、鼠标），这里钉可判定的：帧内容、降级档、目标表、以及 panel.conf 的第四页。
+P28H_FX="$TMP/p28h"; rm -rf "$P28H_FX"; mkdir -p "$P28H_FX/state"
+p28h_frame() { # <width> <height> [额外 args…]
+  local w="$1" h="$2"; shift 2
+  ( cd "$P27R" && "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28H_FX" --state-dir "$P28H_FX/state" \
+      --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width "$w" --height "$h" --page 4 "$@" 2>/dev/null )
+}
+p28h_frame 160 40 >"$TMP/p28h-160.txt"
+assert_eq "28-h 看板页 160x40：帧高恰好 40（有界帧）" "$(wc -l < "$TMP/p28h-160.txt" | tr -d ' ')" "40"
+for lane in 待办 进行 待复验 完成 阻塞 已放弃; do
+  assert_has "$TMP/p28h-160.txt" "$lane" "28-h 六车道之一渲染：$lane"
+done
+assert_has "$TMP/p28h-160.txt" "P14" "28-h 看板页有 P14 卡片"
+assert_has "$TMP/p28h-160.txt" "apply" "28-h 卡片带任务书 phase（P14=apply）"
+P28H_CURSORS="$(grep -o '›' "$TMP/p28h-160.txt" | wc -l | tr -d ' ')"
+assert_eq "28-h 焦点光标恰好一个（首条非空车道的首卡）" "$P28H_CURSORS" "1"
+assert_has "$TMP/p28h-160.txt" "Tab/1-4" "28-h 键位带说明翻页键到 4"
+assert_has "$TMP/p28h-160.txt" "←/→ 车道" "28-h 看板页键位带给出车道键"
+assert_has "$TMP/p28h-160.txt" "Enter 打开" "28-h 看板页键位带给出打开键"
+assert_has "$TMP/p28h-160.txt" "[看板]" "28-h 页签高亮在第四页"
+
+# 降级档：<100 单列分组；<60 卡片一行（没有 agent 列）
+p28h_frame 99 40 >"$TMP/p28h-99.txt"
+p28h_frame 59 40 >"$TMP/p28h-59.txt"
+P28H_59_AGENT="$(grep -c ' verify\| dev ' "$TMP/p28h-59.txt" || true)"
+assert_eq "28-h 59 列：卡片缩成一行，没有 agent 字段" "$P28H_59_AGENT" "0"
+assert_has "$TMP/p28h-59.txt" "独立复验" "28-h 59 列的卡片仍带标题"
+
+# 目标表：卡片可点（focus），焦点卡上是 open；键位 chip 也在表里；`r` 永远不在（V16 F-V16-5）
+p28_targets 4 >"$TMP/p28h-targets-p4.json" 2>/dev/null
+P28H_KINDS="$(p28_kinds "$TMP/p28h-targets-p4.json")"
+case ",$P28H_KINDS," in
+  *",focus,"*) ok "28-h 目标表：卡片有 focus 目标" ;;
+  *) bad "28-h 目标表：没有 focus 目标（$P28H_KINDS）" ;;
+esac
+case ",$P28H_KINDS," in
+  *",open-focused,"*) ok "28-h 目标表：焦点卡有 open 目标" ;;
+  *) bad "28-h 目标表：没有 open-focused 目标（$P28H_KINDS）" ;;
+esac
+case ",$P28H_KINDS," in
+  *",lane-move,"*|*",card-move,"*) ok "28-h 目标表：车道/卡片键有目标" ;;
+  *) bad "28-h 目标表：车道/卡片键没有目标（$P28H_KINDS）" ;;
+esac
+case ",$P28H_KINDS," in
+  *",refresh,"*) bad "28-h 目标表里不该有刷新目标（r 是键盘专用）" ;;
+  *) ok "28-h 目标表里没有刷新目标（r 键盘专用）" ;;
+esac
+# 只有焦点卡带 open：open-focused 目标恰好一个
+# The key band's own `Enter 打开` chip is an open target too — count the ones in the card region
+# (everything above the last row, which is the key band).
+P28H_OPEN="$(python3 - "$TMP/p28h-targets-p4.json" <<'PYO'
+import json, sys
+data = json.load(open(sys.argv[1]))
+last = max((t["row"] for t in data), default=-1)
+print(sum(1 for t in data if t["action"]["kind"] == "open-focused" and t["row"] != last))
+PYO
+)"
+assert_eq "28-h open 目标只存在于焦点卡上（卡片区恰好一个）" "$P28H_OPEN" "1"
+
+# panel.conf 的第四页：机读入口不读它，但 TUI 会用 defaultPage —— 用 --snapshot 走 settings.defaultPage
+mkdir -p "$TMP/p28h/state"
+printf 'lang=zh\npage=4\nactivity=1\nmouse=1\ndensity=comfortable\ntheme=dark\n' >"$TMP/p28h/state/panel.conf"
+( cd "$P27R" && "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28H_FX" --state-dir "$P28H_FX/state" \
+    --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 30 2>/dev/null ) >"$TMP/p28h-conf4.txt"
+assert_has "$TMP/p28h-conf4.txt" "已放弃" "28-h panel.conf page=4：无 --page 时按第四页起（defaultPage 覆盖四页）"
+rm -f "$TMP/p28h/state/panel.conf"
+
+
 # ---------------------------------------------------------------- 29. 派单模型解析：配置压过名册旧记录（M14）
 # 契约（真实事故：TEAM_AGENT_MODELS 已配 dev=kimi-coding/k3-256k，dispatch 仍按名册 state 里的
 # deepseek 旧记录启动 —— 旧实现 model="${model:-$(state_get model (config))}" 让旧记录赢了配置）：
@@ -7981,6 +8109,220 @@ esac
 #   ② 配置改了，下一次派单立即生效（不需要先清 state）；
 #   ③ roster/ps 的模型列标注来源（配置/显式/历史记录），旧记录不再冒充当前配置。
 # 全程在自己的临时仓库里跑（写盘前先证明身份），dispatch 只走 --print（纯逻辑，快慢模式都跑）。
+# ---- 28-i markdown 详情（P18/B3）：读者（发现 / id 边界 / 路径拒绝 / 128KiB 上限）+ 渲染子集 + 目标 + 空载成本
+# 契约：change console-board-page 的「A focused card opens a read-only markdown detail view」与
+#「Every key affordance is also a mouse target」（详情打开时看板卡片不留目标）。真 pty 部分在
+# panel-b3.sh detail（打开/返回、tab、滚动、只读证明、首帧计时），这里钉可判定的读者与渲染。
+P28I_FX="$TMP/p28i"; rm -rf "$P28I_FX"; mkdir -p "$P28I_FX/state"
+P28I_TASKS="$P27R/docs/team/tasks"
+mkdir -p "$P28I_TASKS" "$P27R/docs/team/reports/P1-dev/pkg"
+printf '# P1 · 夹具任务书\n\nphase: apply\n' > "$P28I_TASKS/P1-a.md"
+printf '# P17 · 诱饵\n' > "$P28I_TASKS/P17-b.md"
+printf '# P1 · 交付报告\n' > "$P27R/docs/team/reports/P1-dev.md"
+printf '# P1 · 复验\n' > "$P27R/docs/team/reviews/P1.md"
+printf '# P1 · 复验（完成）\n' > "$P27R/docs/team/reviews/P1-done.md"
+printf '# 包目录里的文件（不是报告）\n' > "$P27R/docs/team/reports/P1-dev/pkg/note.md"
+p27 $TEAM __panel-data --block detail --id P1 >"$TMP/p28i-detail.json" 2>"$TMP/p28i-detail.err"
+P28I_RC=$?
+assert_eq "28-i 读者：--block detail --id P1 退出 0" "$P28I_RC" "0"
+P28I_CHK="$(python3 - "$TMP/p28i-detail.json" <<'PYI'
+import json, sys
+
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception as e:  # a broken output is a failed assertion, not a crash
+    print(f"无法解析：{e}")
+else:
+    tabs = [f["tab"] for f in d["files"]]
+    paths = [f["path"] for f in d["files"]]
+    problems = []
+    if tabs != ["brief", "report:dev", "review", "review:done"]:
+        problems.append(f"tab 次序不对：{tabs}")
+    if any("P17" in p for p in paths):
+        problems.append("P17 诱饵混进来了")
+    if any("/pkg/" in p for p in paths):
+        problems.append("报告包目录被当成了文件")
+    if d.get("file") != "docs/team/tasks/P1-a.md":
+        problems.append(f"默认服务的文件是 {d.get('file')}")
+    print("ok" if not problems else "；".join(problems))
+PYI
+)"
+assert_eq "28-i 读者：恰好四个关联文件、id 边界成立、包目录不算文件" "$P28I_CHK" "ok"
+# 7.2：--file 只服务发现集里的路径，其余一律非 0 且不打印正文
+p27 $TEAM __panel-data --block detail --id P1 --file '../../BOARD.md' >"$TMP/p28i-escape.out" 2>"$TMP/p28i-escape.err"
+P28I_ESC_RC=$?
+p27 $TEAM __panel-data --block detail --id P1 --file docs/team/tasks/P17-b.md >"$TMP/p28i-decoy.out" 2>"$TMP/p28i-decoy.err"
+P28I_DECOY_RC=$?
+assert_eq "28-i 读者：--file ../../BOARD.md 非 0（路径穿越被拒）" "$P28I_ESC_RC" "1"
+assert_eq "28-i 读者：--file 另一个 id 的文件非 0" "$P28I_DECOY_RC" "1"
+if [ ! -s "$TMP/p28i-escape.out" ] && [ ! -s "$TMP/p28i-decoy.out" ]; then
+  ok "28-i 读者：被拒的 --file 一个字节正文都没打印"
+else
+  bad "28-i 读者：被拒的 --file 仍然打印了内容"
+fi
+p27 $TEAM __panel-data --block detail --id P1 --file docs/team/reviews/P1-done.md >"$TMP/p28i-ok.json" 2>/dev/null
+P28I_OK_RC=$?
+P28I_OK_FILE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["file"])' "$TMP/p28i-ok.json" 2>/dev/null)"
+assert_eq "28-i 读者：合法的 --file 退出 0" "$P28I_OK_RC" "0"
+assert_eq "28-i 读者：合法的 --file 服务的就是那个文件" "$P28I_OK_FILE" "docs/team/reviews/P1-done.md"
+# 7.3：200 KiB 的报告被截断、退出 0、一秒内
+python3 - "$P27R/docs/team/reports/P2-dev.md" <<'PYB'
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    for i in range(4200):
+        fh.write(f"line {i:04d} " + "x" * 40 + "\n")
+PYB
+P28I_T0="$(date +%s.%N)"
+p27 $TEAM __panel-data --block detail --id P2 >"$TMP/p28i-big.json" 2>/dev/null
+P28I_BIG_RC=$?
+P28I_T1="$(date +%s.%N)"
+P28I_BIG_CHK="$(python3 - "$TMP/p28i-big.json" <<'PYC'
+import json, sys
+
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+problems = []
+if not d.get("truncated"):
+    problems.append("truncated 不为真")
+if len(d.get("text", "")) != 131072:
+    problems.append(f"正文长度 {len(d.get('text', ''))} != 131072")
+if not d.get("files") or not d["files"][0].get("truncated"):
+    problems.append("文件条目没带 truncated 标记")
+print("ok" if not problems else "；".join(problems))
+PYC
+)"
+assert_eq "28-i 读者：200 KiB 报告退出 0" "$P28I_BIG_RC" "0"
+assert_eq "28-i 读者：200 KiB 报告截断到 128 KiB 并带 truncated 标记" "$P28I_BIG_CHK" "ok"
+P28I_SECS="$(awk -v a="$P28I_T0" -v b="$P28I_T1" 'BEGIN { printf "%.3f", b - a }')"
+if awk -v s="$P28I_SECS" 'BEGIN { exit !(s < 1.0) }'; then
+  ok "28-i 读者：200 KiB 报告在一秒内返回（${P28I_SECS}s）"
+else
+  bad "28-i 读者：200 KiB 报告用了 ${P28I_SECS}s（>1s）"
+fi
+
+# 8.1：渲染子集——标题去标记、围栏原样、表格按显示宽度对齐、子集外的构造原样保留
+python3 - "$TMP/p28i-render.json" <<'PYR'
+import json, sys
+
+border = "\u001b[2J"
+doc = "\n".join([
+    "# X1 · 渲染夹具",
+    "",
+    "段落带 **粗体**、`代码` 和 [链接](https://example.invalid/x)。",
+    "",
+    "- 列表一",
+    "- 列表二",
+    "",
+    "> 引用一行",
+    "",
+    "```sh",
+    'echo "围栏原样"',
+    "```",
+    "",
+    "| id | state | note |",
+    "|:---|:------:|-----:|",
+    "| P1 | wip | 短 |",
+    "| P22 | done | 更长的说明 |",
+    "",
+    "<div>子集外的一行</div>",
+    "",
+    "---",
+    "",
+    "尾段。",
+])
+json.dump({"id": "X1", "count": 1, "file": "docs/team/tasks/X1-a.md", "text": doc, "truncated": False,
+           "files": [{"tab": "brief", "name": "X1-a.md", "path": "docs/team/tasks/X1-a.md", "size": len(doc), "truncated": False}]},
+          open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)
+PYR
+B3_STUB_DETAIL_FILE="$TMP/p28i-render.json" "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 40 --page 4 --detail X1 \
+  >"$TMP/p28i-render.txt" 2>"$TMP/p28i-render.err"
+P28I_RENDER_RC=$?
+assert_eq "28-i 渲染：子集夹具退出 0（没有构造会抛错）" "$P28I_RENDER_RC" "0"
+P28I_RENDER_CHK="$(python3 - "$TMP/p28i-render.txt" <<'PYE'
+import re, sys
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+joined = "\n".join(rows)
+problems = []
+if re.search(r"^\s*#\s", joined, re.M) or "# X1" in joined:
+    problems.append("ATX 标题还带着 # 标记")
+if 'echo "围栏原样"' not in joined:
+    problems.append("围栏正文没有原样渲染")
+if "<div>子集外的一行</div>" not in joined:
+    problems.append("子集外的构造被丢掉了（应原样保留）")
+header = next((r for r in rows if "id" in r and "state" in r and "note" in r), "")
+sep = next((r for r in rows if "┼" in r), "")
+body = next((r for r in rows if "P22" in r), "")
+if not (header and sep and body):
+    problems.append("管道表格没有渲染")
+else:
+    def marks(row, chars):
+        return [i for i, ch in enumerate(row) if ch in chars]
+    hx, sx, bx = marks(header, "│")[1:-1], marks(sep, "┼"), marks(body, "│")[1:-1]
+    if not (hx == sx == bx) or len(hx) != 2:
+        problems.append(f"表格列没有按显示宽度对齐：{hx} / {sx} / {bx}")
+print("ok" if not problems else "；".join(problems))
+PYE
+)"
+assert_eq "28-i 渲染：标题去标记 / 围栏原样 / 表格列对齐 / 子集外原样" "$P28I_RENDER_CHK" "ok"
+# 8.2 半：读者端先去掉裸 ESC（面板的 sanitizeDeep 是第二道）
+python3 - "$P27R/docs/team/tasks/P3-a.md" <<'PYH'
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write("```\nBEFORE\u001b[2JAFTER\n```\n")
+PYH
+p27 $TEAM __panel-data --block detail --id P3 >"$TMP/p28i-hostile.json" 2>/dev/null
+P28I_HOSTILE_RC=$?
+P28I_ESC_BYTES="$(python3 -c 'import sys; print(open(sys.argv[1], "rb").read().count(b"\x1b"))' "$TMP/p28i-hostile.json")"
+P28I_VISIBLE="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("ok" if "BEFORE" in d["text"] and "AFTER" in d["text"] and "[2J" in d["text"] else "no")' "$TMP/p28i-hostile.json" 2>/dev/null)"
+assert_eq "28-i 敌意字节：含 ESC[2J 的夹具读者退出 0" "$P28I_HOSTILE_RC" "0"
+assert_eq "28-i 敌意字节：读者输出里 0 个 0x1b 字节" "$P28I_ESC_BYTES" "0"
+assert_eq "28-i 敌意字节：可见文本（BEFORE/AFTER/[2J）仍在" "$P28I_VISIBLE" "ok"
+# 截断标记上屏：视图带 truncated 标记（渲染层）
+python3 - "$TMP/p28i-trunc.json" <<'PYT'
+import json, sys
+
+json.dump({"id": "X2", "count": 1, "file": "docs/team/reports/X2-dev.md", "text": "# X2\n\n前 128 KiB", "truncated": True,
+           "files": [{"tab": "report:dev", "name": "X2-dev.md", "path": "docs/team/reports/X2-dev.md", "size": 200000, "truncated": True}]},
+          open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)
+PYT
+B3_STUB_DETAIL_FILE="$TMP/p28i-trunc.json" "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 20 --page 4 --detail X2 \
+  >"$TMP/p28i-trunc.txt" 2>/dev/null
+assert_has "$TMP/p28i-trunc.txt" "已截断" "28-i 截断标记：视图渲染了 truncated 标记"
+
+# 9.2 兄弟断言：详情帧的目标表只有 tab / 返回 / 滚动 / 翻页 / 页签与全局 chip，卡片目标为空
+B3_STUB_DETAIL_FILE="$TMP/p28i-render.json" "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 40 --page 4 --detail X1 \
+  >"$TMP/p28i-targets.json" 2>/dev/null
+P28I_TARGETS="$(p28_kinds "$TMP/p28i-targets.json")"
+case ",$P28I_TARGETS," in
+  *",detail-tab,"*) ok "28-i 目标表：tab 有点击目标" ;;
+  *) bad "28-i 目标表：没有 detail-tab 目标（$P28I_TARGETS）" ;;
+esac
+case ",$P28I_TARGETS," in
+  *",detail-close,"*|*",detail-tab-move,"*|*",detail-scroll,"*) ok "28-i 目标表：返回/tab 移动/滚动 chip 有目标" ;;
+  *) bad "28-i 目标表：详情导航 chip 没有目标（$P28I_TARGETS）" ;;
+esac
+case ",$P28I_TARGETS," in
+  *",focus,"*|*",open-focused,"*) bad "28-i 目标表：详情打开时替换掉的看板卡片仍有目标（$P28I_TARGETS）" ;;
+  *) ok "28-i 目标表：替换掉的看板块不留卡片目标（V16 F-V16-4 的规则）" ;;
+esac
+
+# 9.4 空载成本：详情块只在视图打开时进 wanted 集（停在看板页时一个 detail 子进程都不该有）
+P28I_SPAWN="$TMP/p28i-spawn.log"; : > "$P28I_SPAWN"
+B3_STUB_SPAWN_LOG="$P28I_SPAWN" "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 30 --page 4 >/dev/null 2>&1
+P28I_PARKED="$(grep -c '^detail$' "$P28I_SPAWN" || true)"
+assert_eq "28-i 空载：停在看板页时不 spawn detail 块" "$P28I_PARKED" "0"
+: > "$P28I_SPAWN"
+B3_STUB_SPAWN_LOG="$P28I_SPAWN" B3_STUB_DETAIL_FILE="$TMP/p28i-render.json" "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 30 --page 4 --detail X1 >/dev/null 2>&1
+P28I_OPEN_SPAWNS="$(grep -c '^detail$' "$P28I_SPAWN" || true)"
+assert_eq "28-i 空载：打开详情时恰好 spawn 一次 detail 块" "$P28I_OPEN_SPAWNS" "1"
+
 section "29 · 派单模型解析：配置压过名册旧记录（M14）"
 
 M14R="$TMP/m14repo"; rm -rf "$M14R"; mkdir -p "$M14R"
