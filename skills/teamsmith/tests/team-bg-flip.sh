@@ -62,24 +62,33 @@ printf '修复前 revision: %s（%s）\n修复后 skill:  %s\n运行时: %s\n' \
   "$BASE" "$(git -C "$REPO_ROOT" log -1 --format=%s "$BASE")" "$SKILL_DIR" "$RUNNER"
 
 # ── ① 修复前的树：车道不存在 ─────────────────────────────────────────────────
-hdr "红①：修复前的树没有 team-bg.ts（车道不存在）"
+hdr "红①：修复前的树里的 team-bg（M30 修正前 / 或根本没有这个扩展）"
 mkdir -p "$TMP/red/ext"
 git -C "$REPO_ROOT" archive "$BASE" skills/teamsmith/extension 2>/dev/null | tar -x -C "$TMP/red"
 RED_EXT="$TMP/red/skills/teamsmith/extension/team-bg.ts"
 if [ -f "$RED_EXT" ]; then
-  bad "$BASE 已经包含 team-bg.ts（不是修复前的树）——用 TEAM_FLIP_BASE=<修复前的 sha> 指定"
+  # main 已经合了 M27 → 修复前的树里是**旧版 team-bg**（缺 M30 的根解析修正）：夹具应当**跑起来**
+  # 并红在 S11（worktree 会话的产物被写进共享根）——这一条红就是泄漏本身。
+  ok "前提成立：$BASE 里有 M30 之前的 team-bg.ts（旧根解析）"
+  if run_harness "$RED_EXT" red-base; then
+    bad "修复前：夹具竟然全绿（根解析泄漏没有被抓到）"
+  elif grep -qF "TEAM-BG-CASE FAIL S11 a worktree session writes its job log inside the worktree" "$TMP/red-base.log"; then
+    ok "修复前：旧根解析（--git-common-dir）让 S11 红 —— 泄漏被夹具复现"
+  else
+    bad "修复前：红了，但不是 S11（M30 的泄漏形状）：$(grep -m1 'TEAM-BG-CASE FAIL' "$TMP/red-base.log" | sed 's/^TEAM-BG-CASE FAIL //')"
+  fi
 else
-  ok "前提成立：$BASE 的 extension/ 里只有 team-notify.ts"
-fi
-if run_harness "$RED_EXT" red-base; then
-  bad "修复前：夹具竟然全绿（缺失的扩展被当成了通过）"
-else
-  ok "修复前：夹具非 0 退出（$(grep -m1 'TEAM-BG-CASE FAIL' "$TMP/red-base.log" | sed 's/^TEAM-BG-CASE FAIL //')）"
-fi
-if grep -q 'TEAM-BG-CASE PASS' "$TMP/red-base.log"; then
-  bad "修复前：夹具居然跑出了通过用例（import 都失败了不该有）"
-else
-  ok "修复前：一个用例都没有通过（import 阶段就红）"
+  ok "前提成立：$BASE 的 extension/ 里只有 team-notify.ts（M27 之前的树）"
+  if run_harness "$RED_EXT" red-base; then
+    bad "修复前：夹具竟然全绿（缺失的扩展被当成了通过）"
+  else
+    ok "修复前：夹具非 0 退出（$(grep -m1 'TEAM-BG-CASE FAIL' "$TMP/red-base.log" | sed 's/^TEAM-BG-CASE FAIL //')）"
+  fi
+  if grep -q 'TEAM-BG-CASE PASS' "$TMP/red-base.log"; then
+    bad "修复前：夹具居然跑出了通过用例（import 都失败了不该有）"
+  else
+    ok "修复前：一个用例都没有通过（import 阶段就红）"
+  fi
 fi
 
 # ── ② 定点破坏：每一行都必须让对应用例变红 ───────────────────────────────────
@@ -123,6 +132,10 @@ mutate_expect_red ledger-format \
 mutate_expect_red log-cap \
   's/return Number\.isFinite(n) && n >= 256 ? n : DEFAULT_MAX_BYTES/return DEFAULT_MAX_BYTES/' \
   "S6 log stays under the cap"
+# 根解析（M30）：worktree 会话的产物必须落在**自己的 worktree** —— 退回 git-common-dir 就是泄漏本身
+mutate_expect_red worktree-root \
+  "s/'--show-toplevel'/'--git-common-dir'/" \
+  "S11 a worktree session writes its job log inside the worktree"
 
 # ── ③ 绿：当前树的真扩展 ─────────────────────────────────────────────────────
 hdr "绿：当前树的真扩展（同一套夹具）"
@@ -171,7 +184,7 @@ fi
 
 printf '\n'
 if [ "$FAIL" -eq 0 ]; then
-  printf '\033[32mteam-bg-flip：翻转已复现（红① + 红②×5 → 绿）\033[0m\n'
+  printf '\033[32mteam-bg-flip：翻转已复现（红① + 红②×6 → 绿）\033[0m\n'
   exit 0
 fi
 printf '\033[31mteam-bg-flip：没有观察到预期的翻转（%d 条失败）\033[0m\n' "$FAIL"

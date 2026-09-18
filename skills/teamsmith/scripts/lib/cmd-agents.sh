@@ -65,6 +65,8 @@ team_pi_args() { # <model> → 打印已转义的 pi 参数
   piargs+=(-e "$TEAM_SKILL_DIR/extension/team-notify.ts")
   # M27：团队后台车道与 notify 并列注入（worker 的长门禁/长构建用它，收割纪律写在提示词里）
   piargs+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
+  # M30：投递换道 —— 收件箱监视唤醒（worker 也收 `team say`；装了它就不再有任何输入框粘贴）
+  piargs+=(-e "$TEAM_SKILL_DIR/extension/team-inbox-watch.ts")
   [ -d "$TEAM_SKILL_DIR" ] && piargs+=(--skill "$TEAM_SKILL_DIR")
   if [ -n "$TEAM_EXTRA_PI_ARGS" ]; then
     # 允许项目追加参数（空格分隔，不支持带空格的值）
@@ -778,15 +780,19 @@ team_cmd_say() {
   case "$msg" in *$'\n'*) team_die "say 只能发单行：多行请写进文件，然后让 agent 去读" ;; esac
   team_require_recipient "$agent" "$any" say || return 1
   local w; w="$(team_state_get "$agent" window "$agent")"
-  team_tmux_has_window "$TEAM_SESSION" "$w" \
-    || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 0; }
-  # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
-  if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
-    team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"
-    return 0
+  local target="$TEAM_SESSION:$w"
+  # M30 · pi 通道不经过 tmux：有活的收件箱监视器（inbox-watch 扩展）时，窗口/pane 的检查都不必要
+  # —— 「pi 通道零 tmux 调用」是 M30 的验收判据之一（消息写 durable 收件箱 + spool，由扩展唤醒）。
+  if ! team_inbox_watch_route "$target" >/dev/null 2>&1; then
+    team_tmux_has_window "$TEAM_SESSION" "$w" \
+      || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 0; }
+    # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
+    if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
+      team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"
+      return 0
+    fi
   fi
 
-  local target="$TEAM_SESSION:$w"
   # 投递一律走守卫（delivery-guard）：输入框里有草稿 → 不写一个键，消息进 state/outbox/ 排队。
   # --now 是人的显式逃生门（故意重建旧行为，留审计）；--no-verify 保留旧语义。
   local sargs=()
@@ -796,6 +802,10 @@ team_cmd_say() {
   case "$TEAM_SEND_OUTCOME" in
     delivered)
       team_ok "said to $target: $msg（已确认送达）"
+      return 0 ;;
+    watched)
+      # M30 · pi 监视通道：durable 收件箱行已写，spool 指针已落；会话里的扩展读到就唤醒
+      team_ok "said to $target: $msg（pi 监视通道：已写收件箱 $TEAM_DOCS_DIR/inbox/$agent.md + 唤醒指针；输入框零按键）"
       return 0 ;;
     queued)
       # 契约：排队 ≠ 送达 —— 输出里只许有 queued，绝不能写「已确认送达」
@@ -856,14 +866,27 @@ team_cmd_notify() {
     else team_die "notify：摘要不能为空（收到空参数；如果用 \"\$(cat <摘要文件>)\" 取摘要，先确认那个文件写好且非空）"; fi
   fi
   team_require_recipient "$agent" "$any" notify || return 1
-  team_inbox_append "$agent" manual "$msg"
+  team_inbox_append "$agent" manual "$msg" \
+    || team_warn "notify：收件箱行写不进去（$TEAM_DOCS_DIR/inbox/$agent.md）—— 下面的投递会把这条声明当已落地"
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
-  if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ] \
+  # M30 · pi 通道优先：目标有**活的**收件箱监视器时，敲门交给它（注册里的 pid+cwd 就是「PM 会话活着」
+  # 的证据，比 tmux/pane 启发式直接），而且这条链不需要 tmux、不碰输入框。
+  # --inbox-written pm：上面的 durable 行已经写了，通道不能再写一遍（条目头部的契约）。
+  if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_inbox_watch_route "$target" >/dev/null 2>&1; then
+    team_send_guarded "$target" "[manual] agent:$agent · $msg" knock --from "$agent" \
+      --dedup "$(team_notify_dedup_key "$agent" "$msg")" --inbox-written pm
+    case "$TEAM_SEND_OUTCOME" in
+      watched) team_dim "  pi 监视通道：收件箱已写，会话里的监视扩展负责唤醒（输入框零按键）" ;;
+      queued)  team_dim "  pi 监视通道投递没落地（条目入队）：$TEAM_CLI outbox list" ;;
+      duplicate) team_dim "  duplicate：同一份通知在 ${TEAM_NOTIFY_DEDUP_SEC:-20}s 内已经投过（没有重复入队）" ;;
+      offline|unknown-failed) team_warn "敲门没落地（pi 通道写不进去）：消息只落收件箱" ;;
+    esac
+  elif [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ] \
      && team_pm_alive; then
     # 只给「正在跑 pi 的 PM」打字：PM 没在跑时写进 shell 会被当命令执行。
     # 敲门也走投递守卫：输入框里有草稿 → 入队，草稿不动（规格 notify-and-inbox 的 dirty-PM 场景）
     team_send_guarded "$target" "[manual] agent:$agent · $msg" knock --from "$agent" \
-      --dedup "$(team_notify_dedup_key "$agent" "$msg")"
+      --dedup "$(team_notify_dedup_key "$agent" "$msg")" --inbox-written pm
     case "$TEAM_SEND_OUTCOME" in
       queued) team_dim "  PM 输入框里有草稿：敲门入队（$TEAM_CLI outbox list），清空后自动投递" ;;
       duplicate) team_dim "  duplicate：同一份通知在 ${TEAM_NOTIFY_DEDUP_SEC:-20}s 内已经投过（没有重复入队）" ;;

@@ -7,7 +7,7 @@ empty by default, which keeps the Pi behaviour byte-for-byte identical.**
 
 | Key | Meaning | Empty (default) |
 |---|---|---|
-| `TEAM_AGENT_CMD` | launch template for the agent CLI | built-in Pi command: `TEAM_PI_BIN --provider P --model M -e <notify ext> -e <bg ext> --skill <skill dir> --session-id <sid>` |
+| `TEAM_AGENT_CMD` | launch template for the agent CLI | built-in Pi command: `TEAM_PI_BIN --provider P --model M -e <notify ext> -e <bg ext> -e <inbox-watch ext> --skill <skill dir> --session-id <sid>` |
 | `TEAM_AGENT_NOTIFY_CMD` | how a worker tells the PM its turn ended | the Pi notify extension (`extension/team-notify.ts` → `inbox/<agent>.md` + knock on the PM window) |
 | `TEAM_AGENT_LOG_GLOB` | optional log/session files for `team monitor --activity` | Pi session discovery (`~/.pi/agent/sessions/**`) |
 | `TEAM_AGENT_BIN` | binary used for the window-readiness wait and existence checks | first word of `TEAM_AGENT_CMD`, else `TEAM_PI_BIN` |
@@ -42,7 +42,7 @@ The PM is an adapter too. Workers describe their CLI with `TEAM_AGENT_CMD`; the 
 
 | Key | Meaning | Empty (default) |
 |---|---|---|
-| `TEAM_PM_CMD` | launch template for the PM | built-in Pi command: `TEAM_PI_BIN --provider P --model M -e <bg ext> --skill <skill dir> -c @<state>/pm-prompt.md` |
+| `TEAM_PM_CMD` | launch template for the PM | built-in Pi command: `TEAM_PI_BIN --provider P --model M -e <bg ext> -e <inbox-watch ext> --skill <skill dir> -c @<state>/pm-prompt.md` |
 | `TEAM_PM_BIN` | binary used for the start-time existence check and for the liveness **identity** check | first word of `TEAM_PM_CMD`, else `TEAM_PI_BIN` |
 | `TEAM_PM_RESUME_ARGS` | arguments that continue the PM's previous session | on the Pi path the historical `-c` / `--session-id <id>`; on a custom CLI: **nothing — the restart does not continue the history** |
 
@@ -191,12 +191,22 @@ third-party package, no extra window, nothing loaded into the user's own Pi sess
 
 | Tool | What it does |
 |---|---|
-| `team_bg_run` | starts the command as a **detached** `bash -c` job, returns a job id + pid at once; combined stdout/stderr goes to `state/bg/<id>.log` (bounded: past `TEAM_BG_LOG_MAX_BYTES`, default 512 KB, the head is dropped and the tail is kept behind a truncation marker) |
+| `team_bg_run` | starts the command as a **detached** `bash -c` job, returns a job id + pid at once; combined stdout/stderr goes to `state/bg/<id>.log` — in **the session's own root** (see below) — (bounded: past `TEAM_BG_LOG_MAX_BYTES`, default 512 KB, the head is dropped and the tail is kept behind a truncation marker) |
 | `team_bg_wait <id>` | waits for the job (or returns at once with `timeout_ms`), **harvests** it and returns exit code + log tail inline |
 
 Both teamsmith launch paths load it: the built-in Pi worker command and the built-in Pi PM command pass
 `-e <skill>/extension/team-bg.ts`. A custom template gets the same tools with `-e {bg_ext}`. A CLI that has no
 Pi extension API simply does not have these tools — nothing else changes.
+
+**Where those files live (M30): the session's own root.** The job logs and the ledger are session-local
+artifacts, so `state/bg/<id>.log` and `state/bg.log` are resolved against **the session's own worktree**
+(`git rev-parse --show-toplevel` of the session's cwd): a dispatched worker's long-gate logs stay inside
+`<worktree>/.pi/team/state/`, the PM's stay in the main worktree. They never land in the shared ledger
+location — that is where the *interface* state lives (the outbox and the inbox-watch registry/spool, which
+senders and sessions must agree on). The old `--git-common-dir` resolution wrote a worktree session's logs
+into the main worktree's state; the M30 incident is what that costs: gate stdout (it contains every smoke
+fixture's name) then tripped the isolation assertion of the *next* gate in that project. An explicit
+`TEAM_STATE_DIR` still wins over all of this.
 
 The rules (from oh-my-pi issue #689, measured in the E8 probes):
 
@@ -265,6 +275,47 @@ disables it). The dedup key covers the agent, the summary line, and the length p
 last assistant message — not the first 60 characters of it, so two different briefings that only share an opening
 are both delivered. Content changes (branch, uncommitted, unpushed) are part of the summary, so a changed state
 re-sends; only a byte-identical repeat inside the window is dropped.
+
+## 4a. Delivery to a live session: inbox watch (Pi) vs pasting (everything else)
+
+Automated messages (turn-end briefings, `team say`, drafts, pulse wake lines) reach a window in one of two
+ways, and **the channel is chosen by the target, not by the sender**:
+
+| Target | Channel |
+|---|---|
+| a Pi session that loaded `extension/team-inbox-watch.ts` (both built-in launch paths pass it with `-e`; a custom Pi-shaped template can add `-e {skill_dir}/extension/team-inbox-watch.ts`) | **inbox watch**: a durable inbox line plus one pointer line in `state/inbox-watch/<key>.wake`; the session's own extension calls `pi.sendMessage({customType:'team-inbox'}, {triggerTurn:true, deliverAs:'followUp'})`. **The input box is never read and never typed into.** |
+| everything else — a custom adapter, a Pi session without the extension, a dead or foreign registration — and the explicit escape hatch (`--now`) | **paste path**: the delivery guard reads the box, defers while it holds a draft, types, verifies the submission in the conversation above the box, and retracts or leaves residue honestly (`references/troubleshooting.md` §3) |
+
+Readiness is proven by the session itself: the extension writes `state/inbox-watch/<key>.reg`
+(`target=<session>:<window>`, `inbox=<name>`, `pid`, `cwd`, `started`, `heartbeat`), and a sender routes to the
+watch channel only when a registration matches that exact target, its pid is alive and its `cwd` is inside
+this project — a fresh `heartbeat` is only the fallback when `cwd` is absent (bounded by
+`TEAM_INBOX_WATCH_STALE`, default 300 s), because a heartbeat is not an identity. Deleting the registry on
+`session_shutdown` is part of the contract: a stale file would make senders believe somebody is listening.
+Messaging a session that was started without the extension (or whose registration is gone) simply stays on the
+paste path.
+
+What the session receives is a **pointer**: `[teamsmith] inbox wake: N new team message(s)`, one line per
+message (`[kind] from <who> → <inbox>.md :: <truncated preview>`) and where to read the full text. Bursts merge
+into one message, previews are truncated (`TEAM_INBOX_WATCH_PREVIEW`, default 160 chars), and the spool itself
+is bounded (`TEAM_INBOX_WATCH_MAX_BYTES`, default 128 KiB: head dropped, tail kept). A session restart
+re-baselines the spool, so lines written before it started never wake anybody — the pulse's pending check is
+the fallback and its semantics are unchanged.
+
+The durable-inbox contract lives in the outbox entry header (it decides who writes the line):
+
+| Header | Meaning |
+|---|---|
+| `inbox: <name>` | the channel writes the line when it delivers (the paste path writes it only if the entry ends up held) |
+| `inbox: <name>` + `inbox-written: 1` | the sender already wrote it (`--inbox-written`) — the channel must not write a second line |
+| `inbox: -` + `inbox-written: 1` | no inbox line on purpose: the wake itself is the message and the sender's own log is the record (pulse wake lines) |
+
+Knocks (`team notify`, the notify extension) are wakes, not messages: on a watcher-registered PM they take the
+watch channel **without** tmux or PM-liveness heuristics — the registration (`pid` + `cwd`) is the liveness
+evidence — and they never add an inbox line beyond the one their sender already wrote.
+
+The session-side ledger is `state/inbox-watch.log` (`started` / `wake n=… kinds=…` / `stopped` lines); the
+sender side records `watch` as the outcome in `state/outbox/delivered.log`.
 
 ## 5. Logs / activity: `TEAM_AGENT_LOG_GLOB`
 
@@ -390,8 +441,10 @@ continue (opencode's session ids are its own — see the note under codex).
 - **A notifying PM.** The PM's own CLI is configurable (`TEAM_PM_CMD`, §2), but the notification direction is not
   symmetric: teamsmith has no "the PM's CLI finished a turn" event. A non-Pi PM is woken by the pulse's
   pending-work check (or by a human running `team up`) and reads `team inbox`; it never pushes a turn-end event of
-  its own. The built-in Pi PM is nudged by typing into its window when it is alive (`team notify pm`, the pulse
-  nudge) — that path works for a non-Pi PM too, because it only checks that the pane is busy, not which CLI runs.
+  its own. The built-in Pi PM receives notifications through the inbox-watch channel (§4a); a non-Pi PM (or a Pi
+  PM started without the watcher) is still nudged by typing into its window when it is alive (`team notify pm`,
+  the pulse nudge) — that path works for a non-Pi PM too, because it only checks that the pane is busy, not which
+  CLI runs.
 - **Interpolating worker text into a shell line.** A summary is data: it arrives through a file
   (`{summary_file}` / `team notify --from-file`). `{summary}` is rendered as a quoted file read for
   compatibility, but nothing a worker writes is ever re-interpreted by a shell — there is no supported way

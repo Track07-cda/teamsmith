@@ -45,8 +45,48 @@ A Pi session belongs to a **cwd**: `--session-id` can only be reused under the s
 
 ## 3. Notification text used to get glued to what the PM is typing
 
-**This is fixed by the delivery guard.** Every automated sender (`team say`, `team notify`, the watchdog wake line,
-and the notify extension's knock) locates the target pane's input box before typing and reads **every content row
+**There are two delivery channels (M30), and only one of them can touch a box.** A **built-in Pi session**
+(worker or PM) that loaded `extension/team-inbox-watch.ts` receives team messages through the **inbox-watch
+channel**: the sender writes the durable inbox line and appends one pointer line to
+`state/inbox-watch/<key>.wake`; the session's own extension reads it and calls
+`pi.sendMessage({customType:'team-inbox'}, …, {triggerTurn:true, deliverAs:'followUp'})`, which enters the
+conversation like a queued follow-up. The input box is never read and never typed into. Every other target —
+a custom adapter, a Pi session started without the extension, a registration whose pid is dead or whose cwd
+is another project — takes the **delivery guard** below, which is the only code allowed to type into a pane.
+
+The Pi channel exists because five draft-race incidents (2026-09, all on real Pi 0.85.1) showed that the box
+heuristic cannot be made reliable enough: D20 is where the guard came from (an automated message glued onto a
+human's draft); in M17 a payload was judged to have raced a draft while the PM had in fact just finished a long
+gate and its box was empty; in M24 a knock sat in an idle PM's box overnight while the 28 pulse nudges that
+followed were held behind it; and the same class of failure came back after each fix — the fifth incident, with
+a plain 460-code-point payload, is what triggered the channel change (M30). The user's call was to stop patching
+the detector for the Pi path and change the channel instead. The guard stays for every target that has no
+extension API to watch a file.
+
+Readiness is **evidence, not configuration**: the extension writes `state/inbox-watch/<key>.reg`
+(`target=<session>:<window>`, `inbox=<name>`, `pid`, `cwd`, `heartbeat`). A sender routes to the watch channel
+only when a registration matches that exact target, its pid is alive and its `cwd` is inside this project — a
+fresh `heartbeat` is only the fallback when `cwd` is missing (bounded by `TEAM_INBOX_WATCH_STALE`, default
+300 s), because a heartbeat is not an identity. So "this is a Pi session with a watcher" is proven by the
+session itself instead of guessed from `TEAM_AGENT_CMD`.
+
+Honest edges of the Pi channel (visible, never silent):
+
+- **A wake is not "read".** The wake is queued into the session; if the session dies before it reaches the
+  model, nobody is woken — the durable inbox line and its unread count are what the pulse picks up on its next
+  tick, exactly as before. The channel never claims a delivery it cannot see: `team say` reports
+  `pi 监视通道` (`watched`), never `已确认送达`.
+- **A session restart re-baselines the wake spool.** Lines written *before* `session_start` never wake anybody
+  (otherwise every restart would replay history), and a line written during a reload gap is not woken either;
+  both fall back to the pulse.
+- **The wake carries a pointer, not the payload**: kind, sender, inbox file and a truncated preview
+  (`TEAM_INBOX_WATCH_PREVIEW`, default 160 chars). The full text stays in the inbox; a burst merges into one
+  message and at most five lines are listed (`… and N more`).
+- **The follow-up is delivered at a safe point.** `deliverAs:'followUp'` waits until the agent has no pending
+  tool calls, so a wake never interrupts a running tool call; that is pi's own queue, not a new polling loop.
+  The extension's ledger (`state/inbox-watch.log`) records `started` / `wake n=…` / `stopped` lines.
+
+**The delivery guard** (the paste path) locates the target pane's input box before typing and reads **every content row
 of the box** — including rows below the cursor, because a draft typed after a leading newline or recalled with `Up`
 sits below the cursor row. If the box already holds text, the sender writes **no key at all**: the message goes
 into `state/outbox/` as one immutable entry and is delivered when the box is free (`team outbox list` shows what is
@@ -55,6 +95,8 @@ is reported as **`queued`**, never as delivered.
 
 What this means for you:
 
+- On a built-in Pi session the box question does not arise: messages land in the inbox and wake the session.
+  The queue below is what a non-Pi target, a Pi session without the watcher, or the explicit escape hatch uses.
 - Keep typing. Your draft stays in the box; the notice waits outside it.
 - If the queue bothers you: `team outbox drop <n|all>` discards entries, and `team status` / `team digest` print one
   `outbox …` line as long as anything is waiting (nothing when it is empty).
@@ -176,7 +218,8 @@ Honest edges (documented, not hidden):
 
 If a notification really did get glued (e.g. the whitespace-only case), the mitigations from before still apply:
 answer with a short sentence right after reading it, lower the volume with `TEAM_INBOX_MAX_CHARS`, or set
-`TEAM_NOTIFY_TMUX=0` and read `team digest` yourself.
+`TEAM_NOTIFY_TMUX=0` and read `team digest` yourself — or run that session on a built-in Pi launch path, where
+the box is not part of the delivery channel at all.
 
 ## 4. `team dispatch` refuses to dispatch
 

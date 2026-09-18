@@ -1075,11 +1075,13 @@ team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 sk
     "PROTECTED_BRANCH=$TEAM_PROTECTED_BRANCH" "WORKTREES_DIR=$TEAM_WORKTREES_DIR"
 }
 
-team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）；默认 -c 延续本目录上一个会话以保住历史
+team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）与 team-inbox-watch（PM 的投递换道）；默认 -c 延续本目录上一个会话以保住历史
   local model="${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}" args=()
   args=(--provider "${model%%/*}" --model "${model##*/}")
   # M27：PM 的团队后台车道（team_bg_run/team_bg_wait），与 worker 侧同一个扩展
   [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
+  # M30：PM 的收件箱监视唤醒（投递换道：pi 通道不再往输入框粘贴）
+  [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-inbox-watch.ts")
   [ -d "$TEAM_SKILL_DIR" ] && args+=(--skill "$TEAM_SKILL_DIR")
   # 续跑参数（M8.1）：TEAM_PM_SESSION_ID > 显式 TEAM_PM_RESUME_ARGS > 历史的 -c。
   # 默认三个都空 = 与历史逐字节一致；显式配了 resume 参数就换掉默认的 -c（同一套键也服务于自定义 CLI）。

@@ -17,7 +17,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, basename } from 'node:path'
 
 const args = process.argv.slice(2)
 const keep = args.includes('--keep') || process.env.TEAM_BG_KEEP === '1'
@@ -34,6 +34,7 @@ for (const key of Object.keys(process.env)) {
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+const waitFor = async (fn, ms = 3000) => { const t = Date.now(); for (;;) { if (fn()) return true; if (Date.now() - t > ms) return false; await sleep(25) } }
 let failures = 0
 const check = (name, ok, detail = '') => {
   console.log(`TEAM-BG-CASE ${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` :: ${detail}` : ''}`)
@@ -201,6 +202,47 @@ const settledCounts = () => ledger().map(l => Number(/ settled-with-unharvested=
   const body = existsSync(log) ? readFileSync(log, 'utf8') : ''
   check('S6 truncation keeps the tail', body.includes('TAIL-MARKER-S6') && body.includes('[team-bg] truncated'))
   check('S6 harvest reports the truncation and the tail', waited.includes('exit=0') && waited.includes('TAIL-MARKER-S6') && waited.includes('[team-bg] truncated'))
+}
+
+// ── S11：worktree 会话的产物落在**自己的 worktree**（M30 修正：不得用 git-common-dir）──
+// 现场（M30）：worker 在 worktree 里把门禁放后台跑，日志却写进了主工作树的 .pi/team/state/bg/ ——
+// 门禁自己的 stdout 里带着各段夹具的名字，于是下一次 M16 隔离断言把它当成「夹具泄漏进真实账本」。
+// 判据：工具返回的 log 路径 + 真实文件 + 账本行 + 唤醒消息里的路径，全部落在 worktree 侧；
+// 共享根（主工作树）不得收到这个作业的任何痕迹。
+{
+  try { execFileSync('git', ['-C', ROOT, 'add', '-A'], { stdio: 'ignore' }) } catch {}
+  try { execFileSync('git', ['-C', ROOT, 'commit', '-qm', 'fixture'], { stdio: 'ignore' }) } catch {}
+  const WT = join(TMP, 'wt')
+  let wtOk = true
+  try { execFileSync('git', ['-C', ROOT, 'worktree', 'add', '-b', 'wt-branch', WT], { stdio: 'ignore' }) } catch { wtOk = false }
+  const ctxWt = { cwd: WT }
+  check('S11 fixture: linked worktree with its own .pi/team/config.sh',
+    wtOk && existsSync(join(WT, '.pi/team/config.sh')), `wt=${WT}`)
+
+  // ① 立刻能看出日志落在哪：工具返回的路径必须是 worktree 侧
+  const res = await tools.team_bg_run.execute('call-wt', { command: 'echo WT-JOB-DONE', name: 'wt' }, null, null, ctxWt)
+  const log = String(res?.details?.log ?? '')
+  const id = String(res?.details?.id ?? '')
+  check('S11 a worktree session writes its job log inside the worktree', log.startsWith(`${WT}/.pi/team/state/bg/`), `log=${log}`)
+  check('S11 the shared root does not receive that job log', !!log && !existsSync(join(ROOT, '.pi/team/state/bg', basename(log))))
+  check('S11 worktree job can still be harvested inline', (await wait(id)).includes('WT-JOB-DONE'))
+
+  // ② 账本 + 唤醒消息里的路径同样在 worktree 侧（回合在 worktree 里结束）
+  const before = sent.length
+  const un = await tools.team_bg_run.execute('call-wt2', { command: 'sleep 0.3; echo WT-UNHARVESTED', name: 'wt2' }, null, null, ctxWt)
+  const id2 = String(un?.details?.id ?? '')
+  const log2 = String(un?.details?.log ?? '')
+  await emit('agent_settled', {}, ctxWt)
+  const woke = await waitFor(() => sent.length > before, 4000)
+  check('S11 unharvested worktree job still wakes the session', woke, `messages=${sent.length - before}`)
+  const wakeBody = String(sent.at(-1)?.msg?.content ?? '')
+  check('S11 the wake names the worktree-side log', wakeBody.includes(log2) && log2.startsWith(WT),
+    wakeBody.split('\n').filter(l => l.includes('log=')).join(' | '))
+  const ledgerWt = existsSync(join(WT, '.pi/team/state/bg.log')) ? readFileSync(join(WT, '.pi/team/state/bg.log'), 'utf8') : ''
+  const ledgerShared = existsSync(join(ROOT, '.pi/team/state/bg.log')) ? readFileSync(join(ROOT, '.pi/team/state/bg.log'), 'utf8') : ''
+  check('S11 the session ledger line lands in the worktree', ledgerWt.includes(`jobs=${id2}:`), `ledger lines=${ledgerWt.split('\n').filter(Boolean).length}`)
+  check('S11 the shared root ledger has no line for that job', !ledgerShared.includes(id2), `shared lines=${ledgerShared.split('\n').filter(Boolean).length}`)
+  await wait(id2)   // 收尾：收割，别再叫
 }
 
 // ── S7：session 级 job 表（shutdown 清空；detached 作业不被杀） ────────────────

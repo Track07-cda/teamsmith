@@ -3,13 +3,18 @@
 #
 # 为什么要这一层（D20，E3 §1.1(e) 实测复现）：自动化消息用 `send-keys -l` + `Enter` 打字，
 # 若人正在输入框里写草稿，草稿会被粘在消息前面、一起被 Enter 送出去 —— 人写的半句话离开输入框，
-# agent 回答了一条没人写过的消息。本文件是唯一允许对 pane 打字的实现：
+# agent 回答了一条没人写过的消息。本文件是**粘贴路径**的唯一实现（M30 起：pi 通道不走它）：
 #
 #   1. 守卫（guard）：从光标行锚定输入框的上下边框，读光标所在行及其上方的内容行；
 #      有内容 = BUSY → 一个键都不发，消息进 state/outbox/ 排队。
 #   2. 队列（outbox）：一条消息 = 一个不可变文件（tmp+rename），头 + `---` + 原文；FIFO 按文件名。
-#   3. 排水（drain）：只有一个打字路径；先 claim 再打字（两个并发排水只投一次），
+#   3. 排水（drain）：粘贴路径只有一个打字入口；先 claim 再打字（两个并发排水只投一次），
 #      Enter 之后用 pane 指纹确认；确认不了就进 held/，绝不重复粘贴。
+#   4. pi 通道（M30）：目标 pi 会话装了 inbox-watch 扩展（活的 `state/inbox-watch/<key>.reg`）时，
+#      投递 = 写 durable 收件箱 + 往 `state/inbox-watch/<key>.wake` 追加一行指针；会话里的扩展读到
+#      就 `sendMessage(triggerTurn)` 唤醒 —— **一个键都不碰**。五次 draft-race 事故（D20/M17/M24/…）
+#      的结论：框检测判不准「人的草稿 vs 我们刚贴进去的 payload」，所以 pi 通道换道而不是继续修。
+#      粘贴路径（守卫 + 收回）保留给非 pi target 与显式逃生门（`outbox flush --now` / `say --now`）。
 #
 # 已知的诚实边界（写进 references/troubleshooting.md §3，不许静默）：
 #   - 只有空白的草稿会被判成 EMPTY（光标相对检测法的实测盲区）；
@@ -665,6 +670,98 @@ team_outbox_status_line() { # [前缀]
   return 0
 }
 
+# ---------------------------------------------------------------- M30 · pi 通道：收件箱监视唤醒
+# 目标 pi 会话装了 inbox-watch 扩展时，投递**完全不碰输入框**：写 durable 收件箱 + 往 spool 追加一行
+# 指针，由会话里的扩展唤醒（`pi.sendMessage(triggerTurn)`）。
+#
+# 「目标是 pi 且有监视」的判据只有一条：扩展自己写的注册（`state/inbox-watch/<key>.reg`）是**活的**
+# —— pid 活着 + cwd 在本项目内（cwd 读不出来时才退回心跳新鲜度）。为什么不认「adapter=pi」这类配置：
+# 配置只能证明意图，注册能证明「扩展真的加载了、进程真的在跑」（M30 的取舍，写进报告）。
+team_inbox_watch_dir() { printf '%s\n' "$TEAM_STATE_DIR/inbox-watch"; }
+
+team_inbox_watch_field() { # <reg 文件> <字段>
+  LC_ALL=C sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
+}
+
+team_inbox_watch_stale() { # TEAM_INBOX_WATCH_STALE（默认 300s）
+  local n="${TEAM_INBOX_WATCH_STALE:-300}"
+  case "$n" in ''|*[!0-9]*) n=300 ;; esac
+  printf '%s\n' "$n"
+}
+
+# <target> → "key<TAB>inbox"（有活的监视器）；否则返回 1（调用方走粘贴路径）。
+team_inbox_watch_route() {
+  local target="${1:-}" dir f pid cwd hb base age rcwd rroot
+  [ -n "$target" ] || return 1
+  dir="$(team_inbox_watch_dir)"
+  [ -d "$dir" ] || return 1
+  for f in "$dir"/*.reg; do
+    [ -f "$f" ] || continue
+    [ "$(team_inbox_watch_field "$f" target)" = "$target" ] || continue
+    pid="$(team_inbox_watch_field "$f" pid)"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue          # 进程没了 = 陈旧注册（别把消息交给一个不存在的监视器）
+    cwd="$(team_inbox_watch_field "$f" cwd)"
+    if [ -z "$cwd" ]; then
+      # 注册里没写 cwd（写不进去/老版本）：退回心跳新鲜度 —— 陈旧心跳 = 扩展的定时器停了，不能算活
+      hb="$(team_inbox_watch_field "$f" heartbeat)"
+      case "$hb" in ''|*[!0-9]*) continue ;; esac
+      age=$(( $(team_epoch_sec) - hb ))
+      [ "$age" -le "$(team_inbox_watch_stale)" ] || continue
+    else
+      # cwd 是本项目内 = 这个监视器属于本项目（硬条件）；写法差异（软链接）拿真实路径再比一次，
+      # 但**跨项目/项目外一律不认**（心跳不是身份证）。
+      case "$cwd" in
+        "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) ;;
+        *)
+          rcwd="$(readlink -f "$cwd" 2>/dev/null || true)"
+          rroot="$(readlink -f "$TEAM_MAIN_ROOT" 2>/dev/null || true)"
+          case "${rcwd:-/nonexistent}" in
+            "${rroot:-/also-nonexistent}"|"${rroot:-/also-nonexistent}"/*) ;;
+            *) continue ;;
+          esac ;;
+      esac
+    fi
+    base="$(basename "$f" .reg)"
+    printf '%s\t%s\n' "$base" "$(team_inbox_watch_field "$f" inbox)"
+    return 0
+  done
+  return 1
+}
+
+# pi 通道投递：① durable 收件箱（该有而没写就补上）　② spool 一行指针（扩展据此唤醒会话）。
+# 顺序不能反：spool 行存在 ⟹ 收件箱里已经有这条（唤醒不会指向空气）。
+# durable 的判定（条目头部是契约，不靠正文逐字匹配 —— 重复的相同消息不会被误吞）：
+#   inbox + inbox-written=1 → 发送方已经写过了（名字可能是 `-` ：它的记录在自家日志里，如 nudges.log）
+#   inbox（无 written）　　→ 通道现在写（tag = kind），defer 语义在 pi 通道就是「这一刻写」
+#   knock / nudge 无声明　 → `-`：敲门/叫醒本身就是唤醒，发送方的记录在别处（worker 收件箱 / nudges.log）
+#   其它（say/draft/自写条目）→ 写进监视器的收件箱（默认必须可读，绝不让正文只活在指针里）
+# 返回 0 = 已投递；1 = 投不出去（条目留在队列里重试，绝不假装投过）。
+team_inbox_watch_deliver() { # <entry> <kind> <from> <key> <route-inbox> <payload> → 0 已投递 / 1 投不出去
+  local e="$1" kind="$2" from="$3" key="$4" route_inbox="$5" payload="$6"
+  local dir req_ib="" durable="-" preview
+  dir="$(team_inbox_watch_dir)"
+  mkdir -p "$dir" || return 1
+  req_ib="$(team_outbox_header "$e" inbox)"
+  if [ "$(team_outbox_header "$e" inbox-written)" = "1" ]; then
+    durable="${req_ib:--}"
+  elif [ -n "$req_ib" ] && [ "$req_ib" != "-" ]; then
+    team_inbox_append "$req_ib" "$kind" "$payload" || return 1
+    durable="$req_ib"
+  elif [ "$kind" = "knock" ] || [ "$kind" = "nudge" ]; then
+    durable="-"
+  else
+    team_inbox_append "$route_inbox" "$kind" "$payload" || return 1
+    durable="$route_inbox"
+  fi
+  preview="$(printf '%s' "$payload" | LC_ALL=C tr '\n\t' '  ' | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]\{1,\}/ /g')"
+  # 预览有界（700 字节）：spool 行保持小（并发 `>>` 的自追加写尽量落在一次 write 里；扩展侧还会按
+  # TEAM_INBOX_WATCH_PREVIEW 再截一次字符数）。正文全文在收件箱/发送方日志里，不在这里。
+  preview="$(printf '%s' "$preview" | LC_ALL=C cut -c1-700)"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(team_epoch_ms)" "$kind" "${from:--}" "$durable" "$preview" >> "$dir/$key.wake" || return 1
+  return 0
+}
+
 # 陈旧 claim（进程被 kill 留下的空目录）回收
 team_outbox_reap_claims() {
   find "$(team_outbox_dir)" -maxdepth 2 -name '*.claim' -type d -mmin +10 -exec rmdir {} + 2>/dev/null || true
@@ -725,9 +822,11 @@ team_outbox_hold() { # <entry> <reason> [--claimed]
 
 # 入队。返回 0 = 写入（stdout 打印 entry 路径）；3 = 重复（stdout 打印 duplicate）
 # 参数：--kind K --target T [--from F] [--dedup K] [--from-file FILE | --payload TEXT]
-#        [--inbox AGENT]（先落 durable 收件箱行，TTL 之后消息也不会只活在队列里）
+#        [--inbox AGENT]（入队时立即写 durable 收件箱行）
+#        [--inbox-defer AGENT]（只记 destination；投递/进 held 那一刻才写）
+#        [--inbox-written AGENT]（调用方**已经**写了 durable 行：只记 destination，绝不重复写）
 team_outbox_enqueue() {
-  local kind="" target="" from="-" dedup="" file="" payload="" payload_set=0 inbox="" inbox_defer=""
+  local kind="" target="" from="-" dedup="" file="" payload="" payload_set=0 inbox="" inbox_defer="" inbox_written=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --kind) kind="${2:?}"; shift 2 ;;
@@ -738,6 +837,7 @@ team_outbox_enqueue() {
       --payload) payload="${2:-}"; payload_set=1; shift 2 ;;
       --inbox) inbox="${2:?}"; shift 2 ;;
       --inbox-defer) inbox_defer="${2:?}"; shift 2 ;;
+      --inbox-written) inbox_written="${2:?}"; shift 2 ;;
       --durable) shift 2 ;;
       *) shift ;;
     esac
@@ -781,6 +881,10 @@ team_outbox_enqueue() {
     printf 'dedup: %s\n' "${dedup:--}"
     if [ -n "$inbox" ]; then
       printf 'inbox: %s\n' "$inbox"
+      printf 'inbox-written: 1\n'
+    elif [ -n "$inbox_written" ]; then
+      # 调用方已经写了 durable 行（team notify / team-notify 扩展）：只记 destination + 已写标记
+      printf 'inbox: %s\n' "$inbox_written"
       printf 'inbox-written: 1\n'
     elif [ -n "$inbox_defer" ]; then
       printf 'inbox: %s\n' "$inbox_defer"
@@ -832,7 +936,8 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
     esac
   done
   TEAM_OUTBOX_RESULT="skip"
-  local target kind from dedup age ttl payload v rc=0 resume=0
+  TEAM_OUTBOX_CHANNEL=""                # "watch" = pi 收件箱监视通道；空 = 粘贴路径
+  local target kind from dedup age ttl payload v rc=0 resume=0 route
   target="$(team_outbox_header "$e" target)"
   kind="$(team_outbox_header "$e" kind)"
   from="$(team_outbox_header "$e" from)"
@@ -855,6 +960,27 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
   fi
 
   payload="$(team_outbox_payload "$e")"
+
+  # M30 · pi 通道：目标是装了 inbox-watch 扩展的 pi 会话 → 只写收件箱 + spool 指针，**不碰输入框**。
+  # 放在 --now 之前：--now 是人的显式逃生门（故意重建旧行为），pi 通道不吃它。
+  if [ "$now" != "1" ] && route="$(team_inbox_watch_route "$target")"; then
+    local rkey rib
+    rkey="${route%%$'\t'*}"; rib="${route#*$'\t'}"
+    if team_inbox_watch_deliver "$e" "$kind" "$from" "$rkey" "$rib" "$payload"; then
+      rm -f "$e"
+      team_outbox_record_delivered "$e" "$dedup" "watch"
+      team_outbox_note ok "outbox：已投递（pi 监视通道）$(basename "$e") → ${rib}.md（输入框零按键）"
+      team_outbox_release "$e"
+      TEAM_OUTBOX_CHANNEL="watch"
+      TEAM_OUTBOX_RESULT="delivered"
+      return 0
+    fi
+    team_outbox_note warn "outbox：$(basename "$e") pi 通道投递失败（收件箱写不进去）→ 留在队列重试"
+    team_outbox_release "$e"
+    TEAM_OUTBOX_RESULT="queued"
+    return 0
+  fi
+
   age="$(team_entry_age_sec "$e")"; ttl="$(team_defer_ttl)"
 
 
@@ -1014,15 +1140,17 @@ team_outbox_drain() { # [--now] [--quiet] [--max N]
 
 # ---------------------------------------------------------------- 守卫 + 队列的对外入口
 # 所有「往 TUI 输入框打字」的发送方都走这里。设置 TEAM_SEND_OUTCOME：
-#   delivered（已确认送达）｜queued（进队列了）｜forced（--now）｜unknown-sent｜unknown-failed｜offline｜duplicate
-team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbox A] [--now] [--no-verify]
+#   delivered（已确认送达）｜watched（pi 监视通道：已写收件箱 + 唤醒指针，输入框零按键）｜queued（进队列了）
+#   ｜forced（--now）｜unknown-sent｜unknown-failed｜offline｜duplicate
+team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbox A] [--inbox-written A] [--now] [--no-verify]
   local target="$1" payload="$2" kind="$3"; shift 3
-  local from="-" dedup="" inbox="" now=0 noverify=0 queue_offline=0
+  local from="-" dedup="" inbox="" inbox_written="" now=0 noverify=0 queue_offline=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --from) from="${2:-}"; shift 2 ;;
       --dedup) dedup="${2:-}"; shift 2 ;;
       --inbox) inbox="${2:-}"; shift 2 ;;
+      --inbox-written) inbox_written="${2:-}"; shift 2 ;;
       --now) now=1; shift ;;
       --no-verify) noverify=1; shift ;;
       --queue-offline) queue_offline=1; shift ;;
@@ -1055,36 +1183,47 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
   # 入队的参数只构造一次：离线也排队（--queue-offline）和正常路径共用同一份参数
   local enq=(--kind "$kind" --target "$target" --from "$from")
   [ -n "$dedup" ] && enq+=(--dedup "$dedup")
-  [ -n "$inbox" ] && enq+=(--inbox "$inbox")
+  # --inbox-written 是「调用方已经写过 durable 行」的声明：优先于 --inbox（否则会重复写一行）
+  if [ -n "$inbox_written" ]; then enq+=(--inbox-written "$inbox_written")
+  elif [ -n "$inbox" ]; then enq+=(--inbox "$inbox"); fi
   enq+=(--payload "$payload")
 
-  v="$(team_delivery_verdict "$target")"
-  case "$v" in
-    SHELL|NOPANE)
-      if [ "$queue_offline" = "1" ]; then
-        # 目标没在跑，但消息是人的（草稿/敲门）：排队等它回来，同时落 durable 记录
-        entry="$(team_outbox_enqueue "${enq[@]}")" || true
-        if [ -n "$entry" ] && [ -f "$entry" ]; then
-          TEAM_SEND_OUTCOME="queued"
-        else
-          TEAM_SEND_OUTCOME="offline"
+  # M30 · pi 通道：目标装了 inbox-watch 扩展（活的注册）→ 不查输入框、不判 SHELL/NOPANE
+  # （那些问题问的是「能不能打字」；pi 通道根本不打字），直接入队，投递由 process_entry 走收件箱 + spool。
+  local watch_route=""
+  [ "$now" = "1" ] || watch_route="$(team_inbox_watch_route "$target" 2>/dev/null || true)"
+  if [ -n "$watch_route" ]; then
+    v=""                      # pi 通道：不打字，就不需要判 SHELL/NOPANE/BUSY
+  else
+    v="$(team_delivery_verdict "$target")"
+    case "$v" in
+      SHELL|NOPANE)
+        if [ "$queue_offline" = "1" ]; then
+          # 目标没在跑，但消息是人的（草稿/敲门）：排队等它回来，同时落 durable 记录
+          entry="$(team_outbox_enqueue "${enq[@]}")" || true
+          if [ -n "$entry" ] && [ -f "$entry" ]; then
+            TEAM_SEND_OUTCOME="queued"
+          else
+            TEAM_SEND_OUTCOME="offline"
+          fi
+          return 0
         fi
-        return 0
-      fi
-      TEAM_SEND_OUTCOME="offline"
-      return 1 ;;
-    UNKNOWN)
-      # 形状未知：按今天的行为投递（一次警告），队列里不留条目 —— 守卫没有证据，就不假装有
-      team_tmux_deliver "$target" "$payload" --assume-free --no-verify || rc=$?
-      if [ "$rc" = "0" ]; then TEAM_SEND_OUTCOME="unknown-sent"; return 0; fi
-      TEAM_SEND_OUTCOME="unknown-failed"
-      return 1 ;;
-  esac
+        TEAM_SEND_OUTCOME="offline"
+        return 1 ;;
+      UNKNOWN)
+        # 形状未知：按今天的行为投递（一次警告），队列里不留条目 —— 守卫没有证据，就不假装有
+        team_tmux_deliver "$target" "$payload" --assume-free --no-verify || rc=$?
+        if [ "$rc" = "0" ]; then TEAM_SEND_OUTCOME="unknown-sent"; return 0; fi
+        TEAM_SEND_OUTCOME="unknown-failed"
+        return 1 ;;
+    esac
+  fi
 
   # EMPTY 或 BUSY 都先入队，再接一次有界排水：忙 → 留在队列报 queued；空 → 立刻投递报 delivered。
   # V7-F5：入队时已知要排队（BUSY）才立即写收件箱 durable 行；EMPTY 是「试着立刻投」，
   # 用 --inbox-defer —— 已确认送达就不写收件箱（不制造假待办）；真进了 held/ 再落盘。
-  if [ "$v" = "EMPTY" ] && [ -n "$inbox" ]; then
+  # M30：pi 通道走同一条 defer —— durable 收件箱行由投递那一刻写（tag = kind），一次都不重。
+  if { [ "$v" = "EMPTY" ] || [ -n "$watch_route" ]; } && [ -n "$inbox" ] && [ -z "$inbox_written" ]; then
     enq=(--kind "$kind" --target "$target" --from "$from" --inbox-defer "$inbox")
     [ -n "$dedup" ] && enq+=(--dedup "$dedup")
     enq+=(--payload "$payload")
@@ -1101,7 +1240,9 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
     team_outbox_process_entry "$entry"
   fi
   case "$TEAM_OUTBOX_RESULT" in
-    delivered) TEAM_SEND_OUTCOME="delivered" ;;
+    delivered)
+      if [ "$TEAM_OUTBOX_CHANNEL" = "watch" ]; then TEAM_SEND_OUTCOME="watched"
+      else TEAM_SEND_OUTCOME="delivered"; fi ;;
     *)         TEAM_SEND_OUTCOME="queued" ;;
   esac
   return 0

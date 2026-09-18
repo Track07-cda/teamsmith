@@ -30,7 +30,10 @@ team_outbox_usage() {
 用法：
   $TEAM_CLI outbox [list]                 列出待投递条目（活动 + held，FIFO 顺序）
   $TEAM_CLI outbox enqueue --kind K --target SESSION:WINDOW [--from F] [--dedup KEY]
-                          --from-file FILE | --payload TEXT [--inbox AGENT]
+                          --from-file FILE | --payload TEXT
+                          [--inbox AGENT]（立即写 durable 收件箱行）
+                          [--inbox-defer AGENT]（投递/进 held 时才写）
+                          [--inbox-written AGENT]（调用方已经写过 durable 行；`-` = 记录在它自家日志里）
   $TEAM_CLI outbox flush [--now] [--max N]  立刻排水（--now = 跳过守卫直接打字，留审计）
   $TEAM_CLI outbox drop <n|all>           丢弃条目（n 是 list 里的编号）
 EOF

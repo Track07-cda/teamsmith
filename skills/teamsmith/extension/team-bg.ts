@@ -2,7 +2,7 @@
  * teamsmith · team-bg 扩展 — 团队机械的后台任务车道（零第三方依赖，不进用户会话）
  *
  * 解决的问题：一条长门禁/长构建会把整个回合占住。这里给 agent 两个工具：
- *   team_bg_run   起一个**脱离**子进程，立刻返回 job id + pid；输出落 state/bg/<id>.log（有界，留尾段）
+ *   team_bg_run   起一个**脱离**子进程，立刻返回 job id + pid；输出落 <会话自己的根>/state/bg/<id>.log（有界，留尾段）
  *   team_bg_wait  收割：等到作业结束，把退出码 + 日志尾段内联返回；**收割过的作业完成时静默**
  *
  * 唤醒纪律（照 oh-my-pi issue #689 的两条教训，E8 探针实测过）：
@@ -12,8 +12,10 @@
  * 生命周期（Pi 文档的硬约束）：factory 里不起任何后台资源；日志裁剪定时器在第一次真正跑作业时才建、
  * session_shutdown 里清掉。作业是 detached 的：session 重启/退出**不杀**它们，日志与账本留在 state/。
  *
- * 作用域：只认本扩展自己 job 表里的作业（不订阅任何第三方包的事件总线）；只服务 dispatch/PM 启动链
- * 注入 `-e` 的团队会话 —— 用户自己的 pi 会话没有它。
+ * 作用域（M30 修正）：本扩展的产物是**会话本地**的 —— 日志/账本跟着会话自己的工作树走
+ * （见 findRoot 的注释）；收件箱/投递那类**接口**状态不归它管（那是 inbox-watch 的活，它待在主工作树）。
+ * 只认本扩展自己 job 表里的作业（不订阅任何第三方包的事件总线）；只服务 dispatch/PM 启动链注入 `-e`
+ * 的团队会话 —— 用户自己的 pi 会话没有它。
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync, spawn } from 'node:child_process'
@@ -41,26 +43,45 @@ const DEFAULT_WAIT_MS = 15 * 60 * 1000
 const TAIL_BYTES = 8 * 1024
 const TRUNC_MARK = '[team-bg] truncated: output exceeded the log cap, earlier output dropped.'
 
-/** 定位团队根（主工作树）：TEAM_ROOT > git 主工作树 > 向上找 .pi/team/config.sh（与 team-notify 同口径）。 */
+/**
+ * 定位**本会话自己的根**：team-bg 的产物（作业日志、账本、合并窗口）都是会话本地的，
+ * 必须落在会话自己的工作树里 —— worktree 会话 = 它的 worktree，主工作树会话 = 主工作树。
+ *
+ * 为什么不用 `--git-common-dir`（M27 的旧写法，M30 修正）：那个路径指向**主工作树**（linked worktree 的
+ * .git 是主仓库里的一个文件），于是 worker 在 worktree 里跑的长门禁日志会被写进共享账本所在地
+ * `.pi/team/state/bg/`（M30 现场：门禁自己的 stdout 里带着各段夹具的名字，把「把门禁放后台跑」变成了
+ * 下一次 M16 隔离断言的假泄漏）。会话本地的产物写进自己的工作树，也符合「只改自己的目录」。
+ *
+ * 顺序：会话 cwd 的工作树（有 config.sh）> TEAM_ROOT（显式）> 向上查找 > git 主工作树（最后的兜底：
+ * 工作树里没有 config.sh 的旧分支/目录在项目外时，宁可写共享根，也不要让工具直接不可用 ——
+ * `team_bg_run` 的返回里点明了 log 的真实路径）。TEAM_STATE_DIR 仍然压过这一切。
+ */
 function findRoot(cwd: string): string {
+  try {
+    const top = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--show-toplevel'],
+      { encoding: 'utf8', timeout: 5000 }).trim()
+    if (top && existsSync(join(top, '.pi/team/config.sh'))) return resolve(top)
+  } catch {
+    /* 不是 git 仓库 / 没有 git */
+  }
   const envRoot = process.env.TEAM_ROOT
   if (envRoot && existsSync(join(envRoot, '.pi/team/config.sh'))) return resolve(envRoot)
-  // worktree 里 .pi/team/config.sh 是副本，git 主工作树才是账本所在地（不能靠向上查找碰运气）
+  let dir = resolve(cwd)
+  for (;;) {
+    if (existsSync(join(dir, '.pi/team/config.sh'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
   try {
     const out = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
       { encoding: 'utf8', timeout: 5000 })
     const main = dirname(out.trim())
     if (existsSync(join(main, '.pi/team/config.sh'))) return main
   } catch {
-    /* 不是 git 仓库 / 没有 git */
+    /* ignore */
   }
-  let dir = resolve(cwd)
-  for (;;) {
-    if (existsSync(join(dir, '.pi/team/config.sh'))) return dir
-    const parent = dirname(dir)
-    if (parent === dir) return ''
-    dir = parent
-  }
+  return ''
 }
 
 function stateDir(root: string): string {

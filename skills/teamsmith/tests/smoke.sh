@@ -164,6 +164,20 @@ if [ -n "$SMOKE_INVOKE_ROOT" ]; then
   [ -n "$SMOKE_INVOKE_MAIN" ] || SMOKE_INVOKE_MAIN="$SMOKE_INVOKE_ROOT"
 fi
 
+# 「真实账本」的夹具痕迹扫描（M7.2 纪律）——所有隔离断言共用同一口径：
+#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，**跳过 state/bg/**。
+# 为什么要排 bg/（M30 实测）：team_bg_run 把后台作业的 stdout 存进 state/bg/<id>.log，而门禁自己的
+# stdout（含各段夹具的名字）就在里面 —— 不排它，下一次门禁的 M16/M98 隔离断言会把「按提示词把门禁
+# 放后台跑」判成夹具泄漏（假红：同一棵树、同一套断言，只因上一次的作业日志还在）。state/bg 是作业
+# 日志，不是账本；真正的泄漏（夹具往真 inbox/state 写东西）照旧会被抓到（12b-j / M16 的正负对照钉住）。
+real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去重）
+  local pats="$1" root="$2" d
+  { for d in "$root/docs/team/inbox" "$root/.pi/team/state"; do
+      [ -d "$d" ] || continue
+      grep -rlE --exclude-dir=bg "$pats" "$d" 2>/dev/null || true
+    done; } | sort -u
+}
+
 TMP="$(mktemp -d /tmp/teamsmith-smoke.XXXXXX)"
 SESSION="teamsmith-smoke-$$"
 PROTECTED="main"   # 与 TEAM_PROTECTED_BRANCH 默认值一致
@@ -1612,12 +1626,14 @@ PM_SUPPORT="${PM_SUPPORT% }"
 #    否则函数内部一改（比如把默认的 -c 删了）两边会一起动，assert_eq 就白写了。
 #      printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' <root> <spawn> <pi> "$(team_pm_pi_args)" <prompt>
 #      （team_pm_pi_args 每个参数 %q 后带一个空格 → 最后是 `-c` + 一个空格，格式里 @ 前又有一个空格）
-#    M27 起默认参数多了 `-e <skill>/extension/team-bg.ts`（PM 的后台门禁）：参考值同步加这一项，
+#    M27 起默认参数多了 `-e <skill>/extension/team-bg.ts`（PM 的后台门禁）、M30 起再多了
+#    `-e <skill>/extension/team-inbox-watch.ts`（PM 的投递换道）：参考值同步加这两项，
 #    它仍是**字面写死**的，不调实现。
-LEGACY_REF="cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
+LEGACY_REF="cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
 DEFAULT_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
-assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg 扩展）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch）" "$DEFAULT_CMD" "$LEGACY_REF"
 assert_has_echo "$DEFAULT_CMD" "extension/team-bg.ts" "M27：PM 默认命令加载 team-bg（后台门禁）"
+assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "M30：PM 默认命令加载 inbox-watch（投递换道）"
 assert_has_echo "$DEFAULT_CMD" " -c  @$PM_PF" "默认仍是 pi -c + @prompt-file（历史行为）"
 # 显式配了续跑键就在内置 Pi 路径生效（同一套键也服务于自定义 CLI）
 SID_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_SESSION_ID=pm-fixed')"
@@ -4400,12 +4416,13 @@ else
   printf '  (跳过扩展 E 测试：node 未启用类型剥离，且没有 bun/tsx)\n'
 fi
 
-# ---------------------------------------------------------------- 13c. 团队后台车道（M27）
+# ---------------------------------------------------------------- 13c. 团队后台车道（M27 / M30 根解析）
 # 长门禁/长构建不能占住回合：team-bg 扩展把作业放进 **detached** 子进程，回合可以结束再被叫回来。
 # 判据全部来自**真扩展代码 + 真子进程 + 真日志/账本**，只把 pi 宿主换成假宿主（sendMessage 记账）。
 # 为什么不用真模型：那会把判据换成「模型有没有照着做」；真实的「唤醒一个空闲 pi 会话」已由 E8 的
 # RPC 探针实证（docs/team/reports/E8-verify/probes + 报告 §2.2/§2.3）。夹具是纯逻辑+短子进程，快模式也跑。
-section "13c · 团队后台车道（M27）：拉起链注入 / 收割契约 / 账本"
+# M30 追加：产物是**会话本地**的 —— worktree 会话的日志/账本必须落在自己的 worktree（S11 四重证据）。
+section "13c · 团队后台车道（M27/M30）：拉起链注入 / 收割契约 / 账本 / worktree 侧"
 assert_file "$SKILL_DIR/extension/team-bg.ts" "team-bg 扩展在"
 # ① 两条内置 Pi 启动链都挂上：worker 与 notify 并列；PM 只有 bg（它就是收件人，不是通知者）
 assert_has "$TMP/print.log" "team-bg.ts" "worker 启动命令显式加载 team-bg（worktree 不会自动发现扩展）"
@@ -4427,6 +4444,11 @@ if [ -n "$TS_RUNNER" ]; then
   assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S3 two jobs finishing together produce exactly one message" "同拍完成的多条合并成一条（#689 第 2 条）"
   assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S5 settled lines report the unharvested count" "账本有 settled-with-unharvested=<n> 行"
   assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S6 log stays under the cap" "日志有界（截断留尾段）"
+  # M30：worktree 会话的产物必须落在**自己的 worktree**（返回路径 / 真实文件 / 账本 / 唤醒行四重证据）
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S11 a worktree session writes its job log inside the worktree" "M30：worktree 会话的作业日志落在 worktree 侧（不用 git-common-dir）"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S11 the shared root does not receive that job log" "M30：共享根（主工作树）没有收到这份作业日志"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S11 the wake names the worktree-side log" "M30：唤醒消息点名的也是 worktree 侧日志"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S11 the session ledger line lands in the worktree" "M30：会话账本行也在 worktree 侧"
   assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS reverse guard" "反向守卫：真实仓库 state/ 未被触碰"
 else
   printf '  (跳过 team-bg 夹具：node 未启用类型剥离，且没有 bun/tsx)\n'
@@ -4457,14 +4479,10 @@ ob_hash_real() { # 调用方项目（+ 它的主工作树）的 docs/team/inbox 
 # 在真项目活着时必然为假。承重的判据因此是「**夹具的痕迹**有没有出现在真项目里」：夹具的 payload 与 target
 # 都带得出自己的名字（沙盒 session 名 + 夹具专用串），一条都搜不到才算没污染。
 ob_leak_scan() { # → 命中行（空 = 没有污染）
-  local pats="$SESSION|半句草稿 half a sentence|never lands|held body|race claim|OB-EXT-KNOCK|ob-nudge-new-work|alpha line one|interrupted once|deliver as today|flush now|vis1|dropme"
-  { for r in "$SMOKE_INVOKE_ROOT" "$SMOKE_INVOKE_MAIN"; do
-      [ -n "$r" ] || continue
-      for d in "$r/docs/team/inbox" "$r/.pi/team/state"; do
-        [ -d "$d" ] || continue
-        grep -rlE "$pats" "$d" 2>/dev/null || true
-      done
-    done; } | sort -u
+  local pats="$SESSION|半句草稿 half a sentence|never lands|held body|race claim|OB-EXT-KNOCK|ob-nudge-new-work|alpha line one|interrupted once|deliver as today|flush now|vis1|dropme|M30-PI-CHANNEL|M30-PI-KNOCK|M30-PI-DRAFT|M30-PI-FORCED|M30-PI-STALE|M30-PI-FOREIGN"
+  { [ -n "$SMOKE_INVOKE_ROOT" ] && real_ledger_hits "$pats" "$SMOKE_INVOKE_ROOT"
+    [ -n "$SMOKE_INVOKE_MAIN" ] && real_ledger_hits "$pats" "$SMOKE_INVOKE_MAIN"
+    :; } | sort -u
 }
 ob_paths_ok() { # 写之前必须证明 team paths 指向临时根（不是真项目）
   local p; p="$( $TEAM paths 2>/dev/null )"
@@ -5210,6 +5228,141 @@ OBEXT
   assert_eq "12b-i 扩展把敲门入队一条" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
   assert_has "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' | head -1)" "dedup: dev|[auto]|" "12b-i 扩展把自己的去重键带进条目"
 fi
+
+# ---------------------------------------------------------------- 12b-pi. M30 投递换道：pi 通道零粘贴（收件箱监视唤醒）
+# 用户拍板：不再修「人的草稿 vs 我们刚贴进去的 payload」那套框检测（五次 draft-race 事故的结论）。
+# 目标是装了 inbox-watch 扩展的 pi 会话时（证据 = state/inbox-watch/<key>.reg 里 pid 活着 + cwd 在本项目），
+# 投递 = durable 收件箱 + spool 一行指针，由会话里的扩展唤醒 —— 一个键都不碰。
+# 非 pi target 与显式逃生门（--now / flush --now）的老路（守卫 / 收回 / held）原样保留。
+section "12b-pi · M30 投递换道：pi 通道零 tmux 粘贴（收件箱监视唤醒）"
+PIW="$REPO/.pi/team/state/inbox-watch"
+piw_reg() { # <key> <target> <inbox> [pid] [cwd]
+  mkdir -p "$PIW"
+  printf 'version=1\ntarget=%s\ninbox=%s\npid=%s\ncwd=%s\nstarted=x\nheartbeat=%s\n' \
+    "$2" "$3" "${4:-$$}" "${5:-$REPO}" "$(date +%s)" > "$PIW/$1.reg"
+}
+piw_reset() { rm -rf "$PIW"; }
+
+# ① pi 通道 + 脏框：一个键都不发（脏框在这条通道上根本没有被问过）
+ob_reset; piw_reset
+piw_reg pi-dev "$SESSION:dev" dev
+ob_box "$TMP/ob-box-draft"
+: > "$TMP/ob-calls.log"
+if ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM say dev "M30-PI-CHANNEL message" >"$TMP/pi-say.log" 2>&1; then
+  ok "12b-pi say：退出码 0"
+else
+  bad "12b-pi say 失败"; cat "$TMP/pi-say.log"
+fi
+assert_has "$TMP/pi-say.log" "pi 监视通道" "12b-pi 报的是「pi 监视通道」"
+assert_not "$TMP/pi-say.log" "已确认送达" "12b-pi 不冒称「已确认送达」（没打字就没有粘贴确认）"
+assert_eq "12b-pi 脏框下 tmux 一次都没被调用（零粘贴、零 capture）" \
+  "$(wc -l < "$TMP/ob-calls.log" 2>/dev/null | tr -d ' ')" "0"
+assert_has "$REPO/docs/team/inbox/dev.md" "[say] agent:dev · M30-PI-CHANNEL message" \
+  "12b-pi durable 收件箱行（tag=kind；收件人名字来自监视器的注册）"
+assert_has "$PIW/pi-dev.wake" "$(printf 'say\tpm\tdev\tM30-PI-CHANNEL message')" \
+  "12b-pi spool 一行指针（ts/kind/from/durable/预览）"
+assert_eq "12b-pi 条目已投递、队列不残留" \
+  "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_has "$REPO/.pi/team/state/outbox/delivered.log" "$(printf '\twatch')" "12b-pi delivered.log 记的是 watch 通道"
+
+# ② 没有注册 → 老路原样（空框立刻投递，真的打字）
+ob_reset; piw_reset
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 $TEAM say dev "M30-NONPI-PASTE" >"$TMP/pi-nonpi.log" 2>&1 || true
+assert_has "$TMP/pi-nonpi.log" "已确认送达" "12b-pi 无注册（非 pi / 未装扩展）→ 仍是粘贴路径"
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-pi 无注册时真的打字（换道没有误伤老路）"
+
+# ③ 过期的注册（pid 已死）不算活监视器：陈旧注册不能把消息骗进一条没人读的 spool
+ob_reset; piw_reset
+( sleep 0.05 ) & PIW_DEAD_PID=$!; wait "$PIW_DEAD_PID" 2>/dev/null || true
+piw_reg pi-dev "$SESSION:dev" dev "$PIW_DEAD_PID"
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 $TEAM say dev "M30-PI-STALE" >"$TMP/pi-stale.log" 2>&1 || true
+assert_not "$TMP/pi-stale.log" "pi 监视通道" "12b-pi 死掉的 pid 不算活监视器"
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-pi 陈旧注册 → 老路照旧打字"
+assert_not_file "$PIW/pi-dev.wake" "12b-pi 陈旧注册不写 spool"
+
+# ④ 注册里的 cwd 不在本项目 → 不认（跨项目的注册不能接管本项目的投递）
+ob_reset; piw_reset
+piw_reg pi-foreign "$SESSION:dev" dev "$$" "/tmp"
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 $TEAM say dev "M30-PI-FOREIGN" >"$TMP/pi-foreign.log" 2>&1 || true
+assert_not "$TMP/pi-foreign.log" "pi 监视通道" "12b-pi cwd 不在本项目的注册不算（守卫按证据判定）"
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-pi 外来注册 → 老路照旧打字"
+
+# ④b 注册没写 cwd（写不进去/老版本）→ 退回心跳：新鲜心跳认，陈旧心跳不认（扩展的定时器停了就不叫活）
+ob_reset; piw_reset; mkdir -p "$PIW"
+printf 'version=1\ntarget=%s\ninbox=dev\npid=%s\nstarted=x\nheartbeat=%s\n' \
+  "$SESSION:dev" "$$" "$(date +%s)" > "$PIW/pi-nocwd.reg"
+ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM say dev "M30-PI-NOCWD" >"$TMP/pi-nocwd.log" 2>&1 || true
+assert_has "$TMP/pi-nocwd.log" "pi 监视通道" "12b-pi 没有 cwd + 新鲜心跳 → 仍然认（有界回退，不是静默）"
+ob_reset; piw_reset; mkdir -p "$PIW"
+printf 'version=1\ntarget=%s\ninbox=dev\npid=%s\nstarted=x\nheartbeat=%s\n' \
+  "$SESSION:dev" "$$" "$(( $(date +%s) - 4000 ))" > "$PIW/pi-stalehb.reg"
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 $TEAM say dev "M30-PI-STALEHB" >"$TMP/pi-stalehb.log" 2>&1 || true
+assert_not "$TMP/pi-stalehb.log" "pi 监视通道" "12b-pi 没有 cwd + 陈旧心跳 → 不算活监视器"
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-pi 陈旧心跳 → 老路照旧打字"
+
+# ⑤ 真路径 notify：durable 行由发送方写（--inbox-written），通道不许再写第二行；也不需要 tmux/存活启发式
+ob_reset; piw_reset
+piw_reg pi-pm "$SESSION:pm" pm
+printf 'M30-PI-KNOCK summary\n' > "$TMP/pi-knock.txt"
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM notify pm --from-file "$TMP/pi-knock.txt" >"$TMP/pi-knock.log" 2>&1 || true
+assert_has "$TMP/pi-knock.log" "pi 监视通道" "12b-pi notify：走 pi 通道"
+assert_not "$TMP/pi-knock.log" "不在 tmux 会话里" "12b-pi notify：pi 通道不吃「不在 tmux 里」那条门（它不需要 tmux）"
+assert_not "$TMP/pi-knock.log" "PM 不在运行" "12b-pi notify：注册（pid+cwd）本身就是 PM 活着的证据"
+assert_eq "12b-pi notify：tmux 零调用" "$(wc -l < "$TMP/ob-calls.log" 2>/dev/null | tr -d ' ')" "0"
+assert_eq "12b-pi notify：durable 行只写一次（--inbox-written 防重）" \
+  "$(grep -c 'M30-PI-KNOCK summary' "$REPO/docs/team/inbox/pm.md" 2>/dev/null || true)" "1"
+assert_has "$PIW/pi-pm.wake" "$(printf 'knock\tpm\tpm\t')" "12b-pi notify：spool 行记 durable=pm（收件箱里确实有这一条）"
+assert_eq "12b-pi notify：条目已投递、队列清空" \
+  "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# ⑥ 人的草稿（draft）：pi 通道上默认落进目标收件箱（正文绝不只活在指针里）
+ob_reset; piw_reset
+piw_reg pi-dev "$SESSION:dev" dev
+printf 'M30-PI-DRAFT body line\n' > "$TMP/pi-draft.txt"
+ob_run env OB_BOX="$TMP/ob-box-draft" OB_ECHO=1 $TEAM draft send "$TMP/pi-draft.txt" --target "$SESSION:dev" >"$TMP/pi-draft.log" 2>&1 || true
+assert_has "$TMP/pi-draft.log" "pi 监视通道" "12b-pi draft：走 pi 通道（人的草稿也换道）"
+assert_has "$REPO/docs/team/inbox/dev.md" "[draft] agent:dev · M30-PI-DRAFT body line" \
+  "12b-pi draft：durable 收件箱行（默认目标收件箱）"
+assert_not "$TMP/ob-calls.log" "send-keys" "12b-pi draft：一个键都没发"
+
+# ⑦ --now 是显式逃生门：pi target 也照旧打字（并留审计、不写 spool）
+ob_reset; piw_reset
+piw_reg pi-dev "$SESSION:dev" dev
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM say dev "M30-PI-FORCED" --now >"$TMP/pi-now.log" 2>&1 || true
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-pi --now 仍然打字（人的显式逃生门）"
+assert_has "$REPO/.pi/team/state/outbox/forced.log" "kind=say" "12b-pi --now 写 forced.log（跳过守卫有审计）"
+assert_not_file "$PIW/pi-dev.wake" "12b-pi --now 不走 pi 通道（不写 spool）"
+
+# ⑧ 两条内建启动链都挂上了扩展（worker 与 PM）
+assert_has "$TMP/print.log" "-e $SKILL_DIR/extension/team-inbox-watch.ts" "12b-pi worker 启动命令 -e 挂 inbox-watch"
+assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "12b-pi PM 启动命令也挂 inbox-watch"
+
+# ⑨ 真扩展夹具（假 Pi 宿主 + 真 CLI 端到端）：注册 / 监视唤醒 / 合并 / 基线 / 清场 / 账本
+if [ -z "$TS_RUNNER" ]; then
+  printf '  (跳过 12b-pi 扩展夹具：node 未启用类型剥离，且没有 bun/tsx)\n'
+else
+  if $TS_RUNNER "$SKILL_DIR/tests/team-inbox-watch-harness.mjs" "$SKILL_DIR/extension/team-inbox-watch.ts" >"$TMP/piw-harness.log" 2>&1; then
+    ok "12b-pi 扩展夹具全绿（runner=$TS_RUNNER，$(grep -c 'TEAM-IW-CASE PASS' "$TMP/piw-harness.log") 条用例）"
+  else
+    bad "12b-pi 扩展夹具失败（runner=$TS_RUNNER）"; grep 'TEAM-IW-CASE FAIL' "$TMP/piw-harness.log" | sed 's/^/     /'
+  fi
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 long payload is truncated in the wake (no payload dump)" "12b-pi 唤醒只带截断预览（不带 payload 全文）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S7 shutdown removes the registry file" "12b-pi 会话结束删注册（不骗发送方）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the running extension wakes the session (zero model calls)" \
+    "12b-pi 端到端：真 CLI 投递 → 监视扩展唤醒（零模型调用）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS reverse guard" "12b-pi 反向守卫：真实仓库 state/ 未被触碰"
+fi
+
+# 不留注册：后面的段落（teardown / panel / …）不许被这条通道接管
+piw_reset
 
 # ---------------------------------------------------------------- 12b-j. 隔离收尾
 ob_leaks="$(ob_leak_scan)"
@@ -6617,7 +6770,7 @@ assert_eq "M9.8-⑦对照：陈旧的 pid 文件不阻塞（旧行为不变）" 
 # 隔离证据（M7.2 纪律）：夹具的痕迹不得出现在真实账本里。用**内容签名**判定，不做前后 hash 对比 ——
 # 真实 watchdog 每 15 分钟自己就会写 state/**，hash 对比会把它的正常写入误判成夹具泄漏。
 M98_REAL_MAIN="$(dirname "$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "$SKILL_DIR" rev-parse --show-toplevel)")"
-M98_PHANTOM="$(grep -rlE "M98[.A-G]|$M98SES" "$M98_REAL_MAIN/docs/team/inbox" "$M98_REAL_MAIN/.pi/team/state" 2>/dev/null || true)"
+M98_PHANTOM="$(real_ledger_hits "M98[.A-G]|$M98SES" "$M98_REAL_MAIN")"
 if [ -n "$M98_PHANTOM" ]; then bad "M9.8 隔离：夹具的痕迹出现在真实账本里：$(printf '%s' "$M98_PHANTOM" | tr '\n' ' ')"
 else ok "M9.8 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
 
@@ -6728,10 +6881,7 @@ P10_LEAK_SCAN() { # <根…> → 命中行
   local r
   for r in "$@"; do
     [ -n "$r" ] && [ -d "$r" ] || continue
-    for d in "$r/docs/team/inbox" "$r/.pi/team/state"; do
-      [ -d "$d" ] || continue
-      grep -rlE "$pats" "$d" 2>/dev/null || true
-    done
+    real_ledger_hits "$pats" "$r"
   done
 }
 P10_LEAK_BEFORE="$(P10_LEAK_SCAN "$SMOKE_INVOKE_ROOT" "$SMOKE_INVOKE_MAIN" | sort -u)"
@@ -8005,9 +8155,19 @@ assert_has "$TMP/m16-roster.log" "M16B（夹具乙：收尾行也要带名字）
 
 # 隔离（M7.2 纪律）：夹具痕迹不得落进调用方项目（本段只写 /tmp 下的临时仓库）
 M16_REAL_MAIN="$(dirname "$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "$SKILL_DIR" rev-parse --show-toplevel)")"
-M16_PHANTOM="$(grep -rlE "M16[.A-E]|$M16SES" "$M16_REAL_MAIN/docs/team/inbox" "$M16_REAL_MAIN/.pi/team/state" 2>/dev/null || true)"
+M16_PHANTOM="$(real_ledger_hits "M16[.A-E]|$M16SES" "$M16_REAL_MAIN")"
 if [ -n "$M16_PHANTOM" ]; then bad "M16 隔离：夹具的痕迹出现在真实账本里：$(printf '%s' "$M16_PHANTOM" | tr '\n' ' ')"
 else ok "M16 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
+# 双向对照（M30 加固）：同一个扫描器①必须抓到 state/ 里的痕迹（守卫不是永远绿），
+# ②必须忽略 state/bg/ 里的门禁作业日志（否则「把门禁放后台跑」自身会被判成泄漏）。
+M16_NEG="$TMP/m16-negroot"; rm -rf "$M16_NEG"; mkdir -p "$M16_NEG/.pi/team/state/bg" "$M16_NEG/docs/team/inbox"
+printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/bg/gate.log"
+assert_eq "M16 隔离对照：state/bg/ 里的门禁作业日志不算账本痕迹" \
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "0"
+printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/phantom.log"
+assert_eq "M16 隔离对照：真正写进 state/ 的痕迹必须被同一个扫描抓到" \
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "1"
+rm -rf "$M16_NEG"
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
