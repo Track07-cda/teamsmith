@@ -130,9 +130,14 @@ cond_skip() { # <段落标记> [<原因>]：条件不满足时的跳过出口（
 }
 
 PASS=0; FAIL=0
-section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+section() { [ -z "${SMOKE_TMP_CANARY:-}" ] || smoke_tmp_guard "段落 $1 开始时"; SMOKE_LAST_SECTION="$1"; printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
-bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
+bad() {
+  # M33 哨兵：亮红之前先问一句「是不是 $TMP 中途没了」——是的话由哨兵**一条**点名并立刻停跑
+  # （否则一个外部删除会级联出几十条下游假红，尾部还会因为 mkdir -p 把目录建回来而假绿）。
+  if [ -n "${SMOKE_TMP_CANARY:-}" ] && ! tmp_alive; then smoke_tmp_fire "断言失败：$1"; fi
+  printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1))
+}
 assert_file()  { [ -f "$1" ] && ok "$2" || bad "$2（缺 $1）"; }
 assert_dir()   { [ -d "$1" ] && ok "$2" || bad "$2（缺目录 $1）"; }
 assert_not_file() { [ ! -e "$1" ] && ok "$2" || bad "$2（$1 不该存在）"; }
@@ -228,7 +233,128 @@ fi
 NEED_PI_STUB=0
 command -v pi >/dev/null 2>&1 || NEED_PI_STUB=1
 
+# ── $TMP 存活性哨兵（M33）────────────────────────────────────────────────────────────────────
+# 事故（2026-09-18，review bg6 的门禁）：跑到 26-j 时 `/tmp/teamsmith-smoke.EloKhO` **在运行途中消失**，
+# 于是对 $TMP 的重定向报 ENOENT（`p10-noqueue.json: No such file or directory`）、find/wc 读空 → 26-j 一片红
+# （50 条），而某处的 `mkdir -p` 随后又把目录建回来（新 inode）→ 26-k 之后的段落照旧全绿。半红半绿的门禁里，
+# **没有一条红说得清发生了什么**（同 tip 串行复跑不复现）。
+# 内部路径已排除（M33 静态审计）：smoke 里删 $TMP 本体的只有 cleanup()（EXIT trap；主 shell 一路活到结尾、
+# 结果行都打出来了 → 它没跑过）；bash 的 EXIT trap 在 subshell/命令替换里不触发（实测）；产品代码
+# （scripts/**）只 rm -f 文件、不删目录。→ 是**别的进程**干的（同机并发 / 外部清理），谁不知道。
+# 防线（三道，证据都落在 $TMP 之外）：
+#   ① 金丝雀 `$TMP/.smoke-alive`：判据是「这个文件还在」而不是「$TMP 还在」——「删了又被 mkdir -p 建回来」
+#      的形状（bg6）照样抓到（新目录里没有它）。判据只用 bash 内建，轮询不 fork。
+#   ② 后台哨兵（0.2s 轮询）：第一次发现消失就把**现场证据**（时刻、新旧 inode、cwd 还指着它的进程、
+#      ps 快照）写进 $TMP 之外的诊断文件，并在 stdout 上点名一行。
+#   ③ 段落边界与每一条红都过一遍哨兵：红了就**一条点名红 + 立刻停跑**（exit 2，保留现场），不让下游假红
+#      （以及目录被重建后的假绿）把「谁删了什么」淹掉。
+SMOKE_TMP_PATH="$TMP"
+SMOKE_TMP_CANARY="$TMP/.smoke-alive"
+# 诊断与标记放在 $TMP **之外**，且以点开头：删 TMP 的人若用的是 `rm -rf /tmp/teamsmith-smoke*` 这种
+# 前缀 glob，诊断不会被顺手带走（点开头不匹配）。
+SMOKE_TMP_DIAG="${TEAM_SMOKE_DIAG:-${TMPDIR:-/tmp}/.teamsmith-smoke-diag.$$.log}"
+SMOKE_TMP_FLAG="${SMOKE_TMP_DIAG%.log}.named"      # 只由 smoke_tmp_fire 写：保证「一条点名红」只印一次
+SMOKE_TMP_SEEN="${SMOKE_TMP_DIAG%.log}.seen-at"    # 后台哨兵第一次发现的时刻（fire 把它写进点名行）
+SMOKE_TMP_STOP="${SMOKE_TMP_DIAG%.log}.stop"       # 收哨兵的停止位
+SMOKE_TMP_ACK="${SMOKE_TMP_DIAG%.log}.stop-ack"    # 哨兵退出的握手（文件握手，不走作业表）
+SMOKE_TMP_PIDFILE="${SMOKE_TMP_DIAG%.log}.tripwire.pid"
+SMOKE_LAST_SECTION="（还没进段落）"
+SMOKE_OWNER_PID="$$"
+: > "$SMOKE_TMP_CANARY" 2>/dev/null || true
+
+tmp_alive() { # 0=金丝雀还在（= $TMP 没被删/没被换成另一个目录）｜1=不见了
+  [ -n "${SMOKE_TMP_CANARY:-}" ] || return 0    # 哨兵还没装上（极早期）→ 不算失联
+  [ -e "$SMOKE_TMP_CANARY" ]
+}
+smoke_tmp_state() { # 一行现场描述（诊断用）
+  printf 'exists=%s dev:ino=%s' \
+    "$([ -d "$SMOKE_TMP_PATH" ] && echo yes || echo no)" \
+    "$(stat -c '%d:%i' "$SMOKE_TMP_PATH" 2>/dev/null || echo -)"
+}
+smoke_tmp_diag() { # <来源>：把现场证据写进 $TMP 之外的诊断文件（$TMP 没了也带不走）
+  local where="$1" p c
+  [ -n "$SMOKE_TMP_DIAG" ] || return 0
+  {
+    printf '== %s · $TMP 中途消失 · %s ==\n' "$(date -Is)" "$where"
+    printf '期望：%s（判据文件 %s）\n' "$SMOKE_TMP_PATH" "$SMOKE_TMP_CANARY"
+    printf '现在：%s\n' "$(smoke_tmp_state)"
+    printf 'smoke：pid=%s · 最后经过的段落：%s · 哨兵 pid=%s\n' "$$" "$SMOKE_LAST_SECTION" "$(cat "$SMOKE_TMP_PIDFILE" 2>/dev/null || echo -)"
+    printf 'M23 锁：%s（holder=%s）\n' "${SMOKE_LOCK:-（无）}" "$(cat "${SMOKE_LOCK:-/nonexistent}.holder" 2>/dev/null || true)"
+    printf -- '-- cwd 还指着它的进程（正在里面干活的 / 刚删完还没走远的）--\n'
+    for p in /proc/[0-9]*; do
+      c="$(readlink "$p/cwd" 2>/dev/null || true)"
+      case "$c" in
+        "$SMOKE_TMP_PATH"|"$SMOKE_TMP_PATH"/*)
+          printf 'pid=%s cwd=%s cmd=%s\n' "${p#/proc/}" "$c" \
+            "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | head -c 200)" ;;
+      esac
+    done
+    printf -- '-- ps 快照（按启动时间；最后 40 行 = 最近起来的）--\n'
+    ps -eo pid,ppid,user,lstart,etime,args --sort=start_time 2>/dev/null | tail -40
+    printf -- '-- 诊断结束 --\n'
+  } >>"$SMOKE_TMP_DIAG" 2>/dev/null || true
+}
+smoke_tmp_fire() { # <位置>：一条点名红 + 现场证据 + 立刻停跑（exit 2）；只点名一次
+  local where="$1" first=0
+  smoke_tmp_diag "$where"
+  if [ -n "$SMOKE_TMP_FLAG" ] && [ ! -e "$SMOKE_TMP_FLAG" ]; then
+    : > "$SMOKE_TMP_FLAG" 2>/dev/null || true
+    first=1
+  fi
+  KEEP=1    # 现场已经没了：能留的都留下（诊断 + 还没被删光的临时内容）
+  if [ "$first" = "1" ]; then
+    FAIL=$((FAIL + 1))
+    printf '\n  \033[31m✗\033[0m 哨兵：$TMP 在运行途中消失 —— %s%s\n' "$where" \
+      "$([ -s "$SMOKE_TMP_SEEN" ] && printf '（后台哨兵 %s 第一次发现）' "$(cat "$SMOKE_TMP_SEEN" 2>/dev/null)")"
+    printf '       判据 %s 不见了（或 $TMP 已被换成另一个目录）；现在 %s\n' "$SMOKE_TMP_CANARY" "$(smoke_tmp_state)"
+    printf '       这不是断言失败：现场没了，后面的结论都不可信（bg6 形状：删了一阵子又被 mkdir -p 建回来 → 尾部假绿）\n'
+    printf '       证据（在 $TMP 之外，删 TMP 也带不走）：%s\n' "$SMOKE_TMP_DIAG"
+    printf '       停跑（exit 2）：不让下游假红把「谁删了什么」淹掉\n'
+  else
+    printf '  \033[2m（哨兵：已在上面点名过；这里停跑）\033[0m\n'
+  fi
+  exit 2
+}
+smoke_tmp_guard() { # <位置>：段落边界/结果行前的检查；活着时静默
+  tmp_alive || smoke_tmp_fire "$1"
+}
+assert_tmp_alive() { # <说明>：显式哨兵断言（活着时印 ✓，让「这一拍真的检查过」进证据）
+  if tmp_alive; then ok "$1（$SMOKE_TMP_PATH）"; else smoke_tmp_fire "断言「$1」"; fi
+}
+smoke_tmp_tripwire() { # 后台哨兵本体：0.2s 轮询；发现即写证据 + 点名，然后自己退出
+  # 记自己的 pid（$BASHPID：子 shell 里的 $$ 还是主 shell 的 pid），诊断里可以点名它
+  printf '%s\n' "$BASHPID" > "$SMOKE_TMP_PIDFILE" 2>/dev/null || true
+  while [ ! -e "$SMOKE_TMP_STOP" ]; do
+    kill -0 "$SMOKE_OWNER_PID" 2>/dev/null || break      # 主 shell 没了（没走 cleanup）→ 不留孤儿
+    if ! tmp_alive; then
+      smoke_tmp_diag "后台哨兵（0.2s 轮询）第一次发现"
+      date -Is > "$SMOKE_TMP_SEEN" 2>/dev/null || true    # 只记时刻；点名红由主 shell 的 fire 印（一条）
+      printf '\n  \033[31m!\033[0m 哨兵：$TMP 在 %s 消失（后台 0.2s 轮询第一次发现；最后经过的段落：%s；证据 %s）\n' \
+        "$(date -Is)" "$SMOKE_LAST_SECTION" "$SMOKE_TMP_DIAG"
+      break
+    fi
+    sleep 0.2
+  done
+  : > "$SMOKE_TMP_ACK" 2>/dev/null || true
+}
+smoke_tmp_tripwire_stop() { # 收哨兵：置停止位再等它自己退（≤1s；文件握手，不用作业表）
+  : > "$SMOKE_TMP_STOP" 2>/dev/null || true
+  local i
+  for i in $(seq 1 20); do [ -e "$SMOKE_TMP_ACK" ] && break; sleep 0.05; done
+  return 0
+}
+smoke_tmp_sweep() { # 收尾：**干净跑**（没出过事）就把哨兵的兄弟文件收掉，别在 /tmp 里攺一堆
+  # 出过事（诊断文件在）就全部留着：那是现场证据，KEEP=1 也留。
+  [ -f "$SMOKE_TMP_DIAG" ] && return 0
+  rm -f "$SMOKE_TMP_STOP" "$SMOKE_TMP_ACK" "$SMOKE_TMP_PIDFILE" "$SMOKE_TMP_FLAG" "$SMOKE_TMP_SEEN" 2>/dev/null || true
+  return 0
+}
+# 双重 fork：哨兵**不进主 shell 的作业表**。否则门禁里任何裸 `wait` 都会等它等到天荒地老
+# （实测风险：12b-i 的并发排水夹具就是裸 `wait`）——那本是一个真 bug，这一层让它不再能咬人。
+( smoke_tmp_tripwire & )
+
 cleanup() {
+  smoke_tmp_tripwire_stop    # 先收哨兵：下面的 rm -rf "$TMP" 是**合法**删除，不许被当成事故
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # 私有 socket：连本轮的 server 一起收掉（调用者的默认 server 原样不动）
   [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && tmux kill-server 2>/dev/null || true
@@ -238,6 +364,7 @@ cleanup() {
   else
     rm -rf "$TMP"
   fi
+  smoke_tmp_sweep
 }
 trap cleanup EXIT
 
@@ -302,6 +429,12 @@ git config user.name smoke
 echo "# smoke" > README.md
 git add -A && git commit -qm "chore: init"
 assert_dir "$REPO/.git" "git 仓库就绪"
+# M33 哨兵自检：后台哨兵必须**活着但不在作业表里**。它在作业表里的话，门禁里任何裸 `wait`
+# （12b-i 的并发排水夹具就有一处）都会被它卡住 —— 双重 fork 就是为了这一条。
+# 翻转：把启动行改回 `smoke_tmp_tripwire &`（或删掉那句双重 fork）→ 这条红。
+assert_eq "M33 哨兵：后台哨兵活着，但不在作业表里（裸 wait 不会被它卡死）" \
+  "$(jobs -p | wc -l | tr -d ' ')|$(kill -0 "$(cat "$SMOKE_TMP_PIDFILE" 2>/dev/null)" 2>/dev/null && echo alive || echo dead)" \
+  "0|alive"
 
 # ---------------------------------------------------------------- 0b. skill 合法性（pi 自己的解析器）
 section "0b · skill 可被 pi 解析器加载"
@@ -4840,8 +4973,11 @@ assert_eq "12b-e unconfirmed 终态：条目留在 held/（可见、可 drop）"
 ob_reset; OB_BOX="$TMP/ob-box-empty"
 ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "race claim" >/dev/null 2>&1
 ( ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 TEAM_DEFER_TTL=0 $TEAM outbox flush >"$TMP/ob-race-a.log" 2>&1 || true ) &
+OB_RACE_A=$!
 ( ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 TEAM_DEFER_TTL=0 $TEAM outbox flush >"$TMP/ob-race-b.log" 2>&1 || true ) &
-wait
+OB_RACE_B=$!
+# 只等这两个：裸 `wait` 会连未来任何后台作业一起等（M33 的 $TMP 哨兵就是这么被卡死过一次）
+wait "$OB_RACE_A" "$OB_RACE_B"
 assert_eq "12b-e 并发排水：payload 只打了一次" "$(grep -c "send-keys.*race claim" "$TMP/ob-calls.log" || true)" "1"
 assert_eq "12b-e 并发排水：条目只投一次且队列清空（V7-F4：空框回读=已投递，不再是旧指纹判据的 unconfirmed+held）" "$(find "$REPO/.pi/team/state/outbox" "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
 
@@ -7362,6 +7498,8 @@ if grep -q 'evilbranch\|evil' "$TMP/p10-branch.txt"; then ok "26-i 净化：敌�
 else bad "26-i 净化：敌意分支名的可见字符丢了"; fi
 
 # ---------------------------------------------------------------- 26-j. 队列字段（只读）
+# M33 哨兵（本段就是 bg6 出事的地方）：开头/结尾各点名一次「$TMP 还是不是同一个目录」。
+assert_tmp_alive "26-j 哨兵：队列夹具之前临时目录还在"
 P10_OBOX="$P10STATE/outbox"
 P10_NOW_MS="$(date +%s%3N)"
 P10_OLD_MS="$((P10_NOW_MS - 3000))"
@@ -7387,6 +7525,7 @@ rm -rf "$P10_OBOX"
 p10m $TEAM monitor --json >"$TMP/p10-noqueue.json" 2>/dev/null
 p10_check "$TMP/p10-noqueue.json" 'p["outbox"]["queued"] == 0' "26-j 队列：没有 outbox/ 时报 0"
 if [ -e "$P10_OBOX" ]; then bad "26-j 队列：面板把 outbox/ 建出来了"; else ok "26-j 队列：面板没有创建 outbox/"; fi
+assert_tmp_alive "26-j 哨兵：队列夹具跑完临时目录仍在（中途没被删）"
 
 # ---------------------------------------------------------------- 26-k. 运行时失败（响亮、不假绿）
 P10_NOJS="$TMP/p10-nojs-bin"; mkdir -p "$P10_NOJS"
@@ -8738,6 +8877,7 @@ fi
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
+smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
 if [ "$FAST_REQ" = "1" ]; then
   printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \
