@@ -479,10 +479,21 @@ $(printf '%s\n' "$ignored_list" | head -5)
       runner=(timeout --verbose --signal=TERM --kill-after=60 "$gate_timeout")
       used_timeout=1
     fi
+    # M25-①：门禁子进程**不许**继承复验覆盖项（TEAM_REVIEW_*）。它们是 review 自己的旋钮，
+    # 泄漏进去会让门禁里的夹具自己放行（现场：TEAM_REVIEW_ANY_DIR=1 把 smoke 里「拿错 checkout
+    # 必须拒绝」的三条断言放水成绿）。这里逐个剥掉环境里实际存在的 TEAM_REVIEW_*，review 自己在
+    # 父进程里照旧读得到（TEAM_REVIEW_TIMEOUT / GRACE 的行为不变）。
+    local -a gate_env=() rev_var
+    while IFS= read -r rev_var; do
+      [ -n "$rev_var" ] && gate_env+=(-u "$rev_var")
+    done < <(env | sed -n 's/^\(TEAM_REVIEW_[A-Za-z0-9_]*\)=.*$/\1/p')
     team_info "跑门禁：$TEAM_GATES（硬超时 ${gate_timeout}s；可调 TEAM_REVIEW_TIMEOUT）"
     local gate_rc=0 gate_started grace deadline_min
     gate_started="$(date +%s)"
-    ( cd "$revdir" && "${runner[@]}" bash -c "$TEAM_GATES" ) > "$log" 2>&1 || gate_rc=$?
+    # M25-②：门禁的 stdin 必须是 /dev/null，**不能**是调用者的 tty。实测（tests/smoke.sh 6i-b）：
+    # 后台进程组里的子进程一读 tty 就吃 SIGTTIN 被**停住**（STAT=TN，0% CPU，看着像挂死；
+    # 登录 profile 里的 host-spawn 就会碰 tty）。复验常在后台窗口里跑，门禁不能依赖 tty。
+    ( cd "$revdir" && "${runner[@]}" env ${gate_env[@]+"${gate_env[@]}"} bash -c "$TEAM_GATES" ) > "$log" 2>&1 < /dev/null || gate_rc=$?
     gate_elapsed=$(( $(date +%s) - gate_started ))
     grace="${TEAM_REVIEW_TIMEOUT_GRACE:-2}"
     case "$grace" in ''|*[!0-9]*) grace=2 ;; esac

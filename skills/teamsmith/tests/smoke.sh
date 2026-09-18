@@ -30,6 +30,15 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
       TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION \
       TEAM_PULSE_WINDOW TEAM_PULSE_INTERVAL TEAM_PULSE_NUDGE_GAP TEAM_PULSE_REBUILD_TMUX TEAM_PULSE_MAX_RESTARTS TEAM_PULSE_PENDING_BOARD \
       TEAM_WATCH_WINDOW TEAM_WATCH_INTERVAL TEAM_WATCH_NUDGE_GAP TEAM_WATCH_REBUILD_TMUX TEAM_WATCH_MAX_RESTARTS TEAM_WATCH_PENDING_BOARD 2>/dev/null || true
+# ── 复验覆盖项（M25）：TEAM_REVIEW_* 是 review 的旋钮，不是门禁/夹具的输入 ──────────────────
+# 事故背景（V16 复验首次 FAIL）：PM 用 `TEAM_REVIEW_ANY_DIR=1 team review …` 时变量继承进夹具，
+# 于是「拿错 checkout 必须拒绝」的负向用例**自己把自己放行**（假绿反过来变成假红）。
+# 这里逐个清掉环境里实际存在的 TEAM_REVIEW_*（不写死名单）；10c 段会**显式**设置它们来证明
+# 「review 子进程读得到、门禁子进程读不到」。
+while IFS='=' read -r _m25v _; do
+  [ -n "$_m25v" ] && unset "$_m25v" 2>/dev/null || true
+done < <(env | sed -n 's/^\(TEAM_REVIEW_[A-Za-z0-9_]*\)=.*$/\1/p')
+unset _m25v
 # tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
 # tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
 # 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新 exec 自己**，
@@ -1654,8 +1663,10 @@ assert_has_echo "$(seq 1 40 | sed 's/^/line /' | pm_bash 'team_pane_tail_normali
 #     渲染出的命令必须是那个绝对路径 —— 否则窗口里 `exec 裸名字` 会 command not found。
 BARE_DIR="$TMP/m81-bare-bin"; mkdir -p "$BARE_DIR"
 printf '#!/bin/sh\nsleep 300\n' > "$BARE_DIR/pm-bare"; chmod +x "$BARE_DIR/pm-bare"
+# M25：登录 shell 探针一律 </dev/null —— 后台进程组里读 tty 会吃 SIGTTIN 被停住（0% CPU 像挂死），
+# 登录 profile（distrobox 的 host-spawn）就会碰 tty。门禁不该依赖调用者的 tty。
 assert_eq "夹具有效：登录 bash 看不到 $BARE_DIR（否则下面那条是假绿）" \
-  "$(env PATH="$BARE_DIR:$PATH" bash -lc 'command -v pm-bare || echo MISSING')" "MISSING"
+  "$(env PATH="$BARE_DIR:$PATH" bash -lc 'command -v pm-bare || echo MISSING' </dev/null)" "MISSING"
 assert_eq "夹具有效：调用者 PATH 看得到它" \
   "$(env PATH="$BARE_DIR:$PATH" bash -c 'command -v pm-bare || echo MISSING')" "$BARE_DIR/pm-bare"
 BARE_RENDER="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" "PATH=$BARE_DIR:$PATH" \
@@ -2497,6 +2508,107 @@ $TEAM review T1.1 --dir "$REV_WT" >/dev/null 2>&1
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "10b 收尾：恢复干净 checkout 上的 PASS 记录"
 $TEAM digest >"$TMP/digest-10b-end.log" 2>&1 || true
 assert_not "$TMP/digest-10b-end.log" "T1.1-dev" "10b 收尾：记录有效后不再列为待复验"
+
+# ---------------------------------------------------------------- 10c. M25 复验基建（环境不泄漏 + 后台进程组/tty 不打滑）
+section "10c · M25 复验基建：门禁不继承 TEAM_REVIEW_* + 后台进程组里读 tty 的病"
+
+# ① 环境泄漏（现场：TEAM_REVIEW_ANY_DIR=1 把「拿错 checkout 必须拒绝」的用例放行成绿）
+#    判定点是**门禁子进程**看到的环境，所以夹具门禁直接把自己的环境打出来。
+M25_GATE_ENV="$TMP/m25-gate-env.sh"
+cat > "$M25_GATE_ENV" <<'EOS'
+#!/usr/bin/env bash
+printf 'leak_count=%s\n' "$(env | sed -n 's/^\(TEAM_REVIEW_[A-Za-z0-9_]*\)=.*$/\1/p' | wc -l | tr -d ' ')"
+printf 'leak_names=%s\n' "$(env | sed -n 's/^\(TEAM_REVIEW_[A-Za-z0-9_]*\)=.*$/\1/p' | sort | tr '\n' ',')"
+printf 'any_dir=%s allow_dirty=%s timeout=%s\n' \
+  "${TEAM_REVIEW_ANY_DIR:-unset}" "${TEAM_REVIEW_ALLOW_DIRTY:-unset}" "${TEAM_REVIEW_TIMEOUT:-unset}"
+printf 'stdin=%s\n' "$(readlink /proc/$$/fd/0 2>/dev/null || echo '?')"
+exit 0
+EOS
+env TEAM_REVIEW_ANY_DIR=1 TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_IGNORED_X=1 TEAM_REVIEW_TIMEOUT=77 \
+  TEAM_GATES="bash $M25_GATE_ENV" $TEAM review T1.1 --dir "$REV_WT" >"$TMP/m25-leak.log" 2>&1 \
+  && ok "M25-① 夹具门禁跑完（review 命令本身正常）" || { bad "M25-① 夹具门禁没跑起来"; cat "$TMP/m25-leak.log"; }
+M25_GATE_LOG="$REPO/docs/team/reviews/T1.1-verify.log"
+assert_file "$M25_GATE_LOG" "M25-① 门禁输出写进复验日志（夹具能看到门禁视角）"
+assert_has "$M25_GATE_LOG" "leak_count=0" "M25-① 门禁子进程里一个 TEAM_REVIEW_* 都没有（泄漏已堵）"
+assert_has "$M25_GATE_LOG" "any_dir=unset allow_dirty=unset timeout=unset" "M25-① 覆盖项逐个消失（不是只清 ANY_DIR）"
+assert_not "$M25_GATE_LOG" "TEAM_REVIEW_" "M25-① 门禁日志里也不出现任何 TEAM_REVIEW_ 变量名"
+assert_has "$TMP/m25-leak.log" "硬超时 77s" "M25-① 判定力不降：review 自己照旧读 TEAM_REVIEW_TIMEOUT（77s 生效）"
+assert_has "$M25_GATE_LOG" "stdin=/dev/null" "M25-② 门禁的 stdin 是 /dev/null（不接调用者的 tty）"
+
+# ② 后台进程组 + tty = 读 stdin 的子进程被 SIGTTIN **停住**（STAT=TN、0% CPU，看着像挂死）。
+#    实测根因（见报告）：smoke 里的登录 shell 探针、以及登录 profile 里的 host-spawn 都会碰 tty。
+#    这里用「门禁读一行 stdin」把机制钉住：门禁必须在后台进程组里也能跑完。
+if [ "$FAST" = "1" ]; then
+  fast_skip "10c-②·后台进程组里的门禁（M25）" "要真 tmux pane（私有 socket）造出「后台进程组 + tty」"
+elif [ "$HAVE_TMUX" != "1" ]; then
+  printf '  (跳过 10c-②：本机没有 tmux)\n'
+else
+  M25_SOCK="$TMP/m25-tty-sock"; mkdir -p "$M25_SOCK"
+  m25_tm() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M25_SOCK" tmux "$@"; }
+  M25_SESS="teamsmith-m25-$$"
+  m25_tm new-session -d -s "$M25_SESS" -x 100 -y 24 -c "$REPO" 2>/dev/null || true
+  M25_PANE="$(m25_tm list-panes -t "$M25_SESS" -F '#{pane_id}' 2>/dev/null | head -1)"
+  if [ -z "$M25_PANE" ]; then
+    bad "M25-② 建不出私有 socket 的 pane（跳过会掩盖问题，所以按失败算）"
+  else
+    cat > "$TMP/m25-gate-tty.sh" <<'EOS'
+#!/usr/bin/env bash
+printf 'gate_stdin=%s\n' "$(readlink /proc/$$/fd/0 2>/dev/null || echo '?')"
+IFS= read -r line || true          # 后台进程组里读 tty = SIGTTIN 停住；stdin=/dev/null 时立刻 EOF
+printf 'gate_read_done=yes\n'
+EOS
+    # 夹具有效性（不许假绿）：裸 read 在后台进程组 + tty 下**必须**被停住
+    cat > "$TMP/m25-control-read.sh" <<'EOS'
+#!/usr/bin/env bash
+IFS= read -r line || true
+printf 'control_done=yes\n'
+EOS
+    # 另一条 ID（T2.2）→ 独占一份复验记录/日志，不去踩 T1.1 那份
+    ( cd "$REPO" && $TEAM task T2.2 --title "M25 后台进程组" --agent dev ) >/dev/null 2>&1 || true
+    M25_GATE_LOG="$REPO/docs/team/reviews/T2.2-verify.log"
+    # 关键：命令**带 & 敲进交互式 shell** —— 只有交互式 shell 的 & 才给后台作业新建进程组。
+    # （脚本内部的 & 不建进程组，读 tty 不会被停住 —— 那样这里就会假绿。）
+    m25_tm send-keys -t "$M25_PANE" "cd $REPO && bash $TMP/m25-control-read.sh > $TMP/m25-control.out 2>&1 &" \
+      && m25_tm send-keys -t "$M25_PANE" Enter
+    sleep 1.5
+    m25_tm send-keys -t "$M25_PANE" "cd $REPO && env TEAM_REVIEW_ANY_DIR=1 TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 TEAM_GATES='bash $TMP/m25-gate-tty.sh' $TEAM review T2.2 --dir $REV_WT --branch $T1_BRANCH > $TMP/m25-tty-review.log 2>&1 &" \
+      && m25_tm send-keys -t "$M25_PANE" Enter
+    # 夹具有效性：等对照组真的进入「被停住」状态（负载高时启动会慢，所以轮询而不是拍一次）
+    M25_CWAIT=0
+    while [ "$M25_CWAIT" -lt 24 ]; do
+      ps -eo args 2>/dev/null | grep -q "m25-control-read.sh" && break
+      sleep 0.5; M25_CWAIT=$((M25_CWAIT + 1))
+    done
+    assert_file "$TMP/m25-control.out" "M25-② 夹具有效性：对照组脚本起来了"
+    if ps -eo args 2>/dev/null | grep -q "m25-control-read.sh" && ! grep -q "control_done=yes" "$TMP/m25-control.out" 2>/dev/null; then
+      ok "M25-② 夹具有效性：裸 read 在后台进程组 + tty 下确实被停住（这就是「挂死」的形状）"
+    else
+      bad "M25-② 夹具有效性：对照组没有被停住 —— 本环境测不出这个机制，断言会假绿"
+    fi
+    # 等门禁把最后一行写出来（最多 60s；被停住时它永远写不出来）；高负载下给足余量
+    M25_WAIT=0
+    while [ "$M25_WAIT" -lt 120 ]; do
+      grep -q "gate_read_done=yes" "$M25_GATE_LOG" 2>/dev/null && break
+      sleep 0.5; M25_WAIT=$((M25_WAIT + 1))
+    done
+    if [ ! -f "$M25_GATE_LOG" ] || ! grep -q "gate_read_done=yes" "$M25_GATE_LOG" 2>/dev/null; then
+      # 失败时把现场留下（smoke --keep 会保留 $TMP）：review 自己的输出 + pane 尾巴
+      m25_tm capture-pane -p -t "$M25_PANE" > "$TMP/m25-tty-pane.log" 2>/dev/null || true
+      printf '  review 自己说了什么（%s）：\n' "$TMP/m25-tty-review.log"
+      sed 's/^/    | /' "$TMP/m25-tty-review.log" 2>/dev/null | head -8
+      printf '  pane 尾巴：\n'; tail -5 "$TMP/m25-tty-pane.log" 2>/dev/null | sed 's/^/    | /'
+    fi
+    # 对照组是被停住的进程：显式收掉，别留给后面小节（kill 只针对本夹具的脚本名；
+    # 被 SIGTTIN 停住的进程收不到 TERM，得先 -CONT 让它跑起来）
+    pkill -CONT -f "m25-control-read.sh" 2>/dev/null || true
+    pkill -TERM -f "m25-control-read.sh" 2>/dev/null || true
+    assert_has "$M25_GATE_LOG" "gate_read_done=yes" "M25-② 门禁在后台进程组里读到 EOF 并跑完（stdin=/dev/null，没被 SIGTTIN 停住）"
+    assert_has "$M25_GATE_LOG" "gate_stdin=/dev/null" "M25-② 门禁 stdin 确实是 /dev/null"
+    m25_tm kill-server 2>/dev/null || true
+  fi
+fi
+m25_cleanup() { rm -f "$REPO/docs/team/reviews/T2.2.md" "$REPO/docs/team/reviews/T2.2-verify.log"; }
+m25_cleanup
 
 # ---------------------------------------------------------------- 11. merge / close
 section "11 · 收尾（merge 已移除，close 保留）"
