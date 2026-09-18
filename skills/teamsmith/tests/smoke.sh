@@ -4509,6 +4509,53 @@ else
 fi
 ob_reset   # 手工造的残留条目只服务本节断言，不留给 12b-h 的端到端场景
 
+# ---------------------------------------------------------------- 12b-h0. M24 折叠占位符判据（纯函数，快模式照跑）
+section "12b-h0 · M24 输入框判据：真实 pi 的两条折叠路径"
+# 背景：真实 pi 0.85.1 有两种折叠（都实测过，见 tests/pm-box-real.sh 与 docs/team/reports/M24-dev2.md）：
+#   * 行数多 → `[paste #N +K lines]`（M17 已处理）；
+#   * 行数少、**字符**多 → `[paste #N <chars> chars]`（字符 = 码点，不是字节）。
+# 旧代码只认第一种 → 现场事故里我们自己的粘贴被当成「混了别人的字」→ 不按 Enter（rc 3）。
+# 这五条是判据本身（不需要真 tmux / 真 pi），端到端在 12b-h ⑱d/⑲。
+ob_boxonly() { # <框文本> <payload> → yes/no
+  ( cd "$REPO" && bash -c '. "$1/scripts/lib/common.sh"; . "$1/scripts/lib/outbox.sh"; team_load_config >/dev/null 2>&1 || true; team_box_text_holds_only "$2" "$3" && printf yes || printf no' _ "$SKILL_DIR" "$1" "$2" )
+}
+ob_cjk="$(printf '%s' '中文行中文行中文行中文行')"   # 12 个字符 / 36 个字节
+assert_eq "12b-h0 M24：char 折叠（行数少、字符多）被认成我们的" \
+  "$(ob_boxonly '[paste #1 304 chars]' "$(printf 'x%.0s' $(seq 1 304))")" "yes"
+assert_eq "12b-h0 M24：字符数对不上 → 不是我们的（判定力不降）" \
+  "$(ob_boxonly '[paste #1 305 chars]' "$(printf 'x%.0s' $(seq 1 304))")" "no"
+assert_eq "12b-h0 M24：chars 数的是**字符**不是字节（中文 12 字 = 36 字节）" \
+  "$(ob_boxonly '[paste #1 12 chars]' "$ob_cjk")" "yes"
+assert_eq "12b-h0 M24：按字节数报的占位符不是我们的（真实 pi 从不用字节）" \
+  "$(ob_boxonly '[paste #1 36 chars]' "$ob_cjk")" "no"
+assert_eq "12b-h0 M24：行数折叠（老形状）仍然认" \
+  "$(ob_boxonly '[paste #1 +3 lines]' "$(printf 'a\nb\nc')")" "yes"
+
+# ---------------------------------------------------------------- 12b-h1. M24 真实 pi 窗格体检（显式开）
+# tests/pm-box-real.sh 用**真实 pi**起一个窗格，把守卫看到的原始帧与判定打出来（真实现场形状）。
+# 默认不跑：它要用使用者的 pi 配置（`--no-session --session-dir <tmp>`，不写会话文件，但会加载扩展）。
+# 需要真实现场证据时：TEAM_SMOKE_REAL_PI=1 bash tests/smoke.sh
+if [ "${TEAM_SMOKE_REAL_PI:-0}" = "1" ] && [ "$FAST" = "1" ]; then
+  # FAST 的契约是「不跑真进程段落」（14c 自检会核对）——真 pi 是货真价实的真进程，
+  # 所以这里只提示、不跑（要真实现场证据请不带 TEAM_SMOKE_FAST）。
+  printf '  \033[2m·\033[0m %s\n' "（TEAM_SMOKE_REAL_PI=1 在 FAST 下不跑：真 pi 属真进程段落；完整门禁会跑）"
+elif [ "${TEAM_SMOKE_REAL_PI:-0}" = "1" ] && [ "$HAVE_TMUX" = "1" ] && [ -x "$SKILL_DIR/tests/pm-box-real.sh" ]; then
+  live_mark
+  if bash "$SKILL_DIR/tests/pm-box-real.sh" --idle-secs 4 >"$TMP/m24-realbox.log" 2>&1; then
+    if grep -q '^SKIP' "$TMP/m24-realbox.log"; then
+      printf '  \033[2m·\033[0m %s\n' "（真 pi 不存在，跳过体检）"
+    else
+      ok "M24 真实 pi 窗格：体检跑完（空闲/粘贴/收回，见 $TMP/m24-realbox.log）"
+      assert_has "$TMP/m24-realbox.log" "RETRACT=ok" "M24 真实 pi 窗格：收回在真实 pi 上成功"
+      assert_not "$TMP/m24-realbox.log" "RETRACT=failed" "M24 真实 pi 窗格：没有收回失败"
+    fi
+  else
+    bad "M24 真实 pi 窗格体检失败（$TMP/m24-realbox.log）"; tail -12 "$TMP/m24-realbox.log"
+  fi
+else
+  printf '  \033[2m·\033[0m %s\n' "（跳过真实 pi 窗格体检：TEAM_SMOKE_REAL_PI=1 可开；脚本 tests/pm-box-real.sh）"
+fi
+
 # ---------------------------------------------------------------- 12b-h. 真 pane 端到端（假 TUI）
 if [ "$FAST" = "1" ]; then
   fast_skip "12b-h·真 pane 端到端（守卫/排水/草稿窗口）" "要真 tmux pane + python3 夹具 TUI（清空输入框、多行粘贴、draft 窗口）"
@@ -4812,6 +4859,39 @@ else
   assert_eq "12b-h ⑰d 升级兼容：老 stall-timeout 条目恰好补出一次提交" "$(ob_submits)" "1"
   assert_has "$TMP/ob-h-b6d.log" "已投递" "12b-h ⑰d 升级兼容：重试完成投递（已确认送达）"
   assert_eq "12b-h ⑰d 升级兼容：held/ 清空、不留活动条目" "$(find "$REPO/.pi/team/state/outbox" "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  # 端到端：char 折叠形状必须真的投出去（不是扣在 held/）
+  ob_reset; : > "$OB_SUBMIT"
+  perl -e 'print "x" x 60, "\n" for 1..6' > "$TMP/ob-chars.txt"   # 366 字符 > 200 → char 折叠
+  ob_tui dev '' 'FAKE_TUI_CHARS_MARKER=200'
+  ob_live $TEAM draft send "$TMP/ob-chars.txt" --target "$SESSION:dev" >"$TMP/ob-h-c1.log" 2>&1 || true
+  assert_eq "12b-h ⑱d M24：char 折叠形状恰好提交一次（旧代码在这里 rc 3）" "$(ob_submits)" "1"
+  assert_has "$TMP/ob-h-c1.log" "已确认送达" "12b-h ⑱d M24：确认送达（没被判成混了别人的字）"
+  assert_not "$REPO/.pi/team/state/outbox/HOLDING.log" "draft-raced-left" "12b-h ⑱d M24：没有 draft-raced-left 残留分档"
+  assert_eq "12b-h ⑱d M24：held/ 空" "$(find "$REPO/.pi/team/state/outbox/held" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  # ⑲（M24）：收回键序必须真的清掉「展开的多行粘贴」。真实 pi 0.85.1 上 C-a/C-k **不清框**
+  #      （实测 3 行展开的粘贴只掉最后一行）——夹具现在按实测建模（C-a/C-k 是空操作、C-u 逐行删），
+  #      所以旧实现会在这里留下残留、新实现（C-u + 每步回读）必须清干净。
+  ob_reset; : > "$OB_SUBMIT"
+  OB_KEYLOG="$TMP/ob-keys.log"; : > "$OB_KEYLOG"
+  ob_tui race5 '' 'FAKE_TUI_MARKER=10 FAKE_TUI_PASTE_STALL_MS=2500' "FAKE_TUI_KEY_LOG=$OB_KEYLOG"
+  ob_live $TEAM draft send "$TMP/ob-big.txt" --target "$SESSION:race5" >"$TMP/ob-h-c2.log" 2>&1 || true
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=draft-raced-retracted" "12b-h ⑲a M24：收回成功 → draft-raced-retracted（M17 之后第一次真的有「已收回」）"
+  tmux capture-pane -p -t "$SESSION:race5" > "$TMP/ob-h-c2-box.log" 2>/dev/null || true
+  assert_not "$TMP/ob-h-c2-box.log" "paste #" "12b-h ⑲a M24：收回后框里没有占位符残留"
+  assert_not "$TMP/ob-h-c2-box.log" "line-01" "12b-h ⑲a M24：收回后框里没有 payload 正文残留"
+  assert_has "$OB_KEYLOG" "C-u" "12b-h ⑲b M24：收口用的是 C-u（真实 pi 上确实有效的逐行清框键）"
+  assert_not "$OB_KEYLOG" "C-c" "12b-h ⑲b M24：C-u 有效时不补 C-c（空框上按 C-c 会退出 pi）"
+  # ⑲c 升级路径：C-u 清不动（键位变了）时，才在**框非空**的前提下补一记 C-c，且只补一次
+  ob_reset; : > "$OB_SUBMIT"
+  : > "$OB_KEYLOG"
+  ob_tui race6 '' 'FAKE_TUI_MARKER=10 FAKE_TUI_PASTE_STALL_MS=2500 FAKE_TUI_BREAK_CTRL_U=1' "FAKE_TUI_KEY_LOG=$OB_KEYLOG"
+  ob_live $TEAM draft send "$TMP/ob-big.txt" --target "$SESSION:race6" >"$TMP/ob-h-c3.log" 2>&1 || true
+  assert_has "$REPO/.pi/team/state/outbox/HOLDING.log" "reason=draft-raced-retracted" "12b-h ⑲c M24：C-u 不动 → 升级清理后仍算「已收回」"
+  assert_eq "12b-h ⑲c M24：C-c 全程只补一记（不许对空框连发）" "$(grep -c '^C-c$' "$OB_KEYLOG" 2>/dev/null || echo 0)" "1"
+  tmux capture-pane -p -t "$SESSION:race6" > "$TMP/ob-h-c3-box.log" 2>/dev/null || true
+  assert_not "$TMP/ob-h-c3-box.log" "line-01" "12b-h ⑲c M24：升级清理后没有 payload 残留"
 fi
 
 # ---------------------------------------------------------------- 12b-i. 扩展：入队而不是打字（规格 requirement 6 第 2 条）

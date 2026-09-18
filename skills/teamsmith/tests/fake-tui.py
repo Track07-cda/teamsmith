@@ -24,6 +24,13 @@ env：
                              V7-F1 的形状：文字全部在光标行下方）
   FAKE_TUI_MARKER=<n>        超过 n 行的 bracketed paste 折叠成 `[paste #1 +K lines]` 占位符
                              （真实 Pi v0.85.1 实测形状；0 = 不折叠）
+  FAKE_TUI_CHARS_MARKER=<n>  真实 pi 的**另一条**折叠路径（M24 实测）：行数不多但**字符数**超过 n 时，
+                             pi 折叠成 `[paste #N <chars> chars]`（字符 = 码点，不是字节：3×400 个
+                             中文字 = 3602 字节 → 报 `1202 chars`）；0 = 不折叠
+  FAKE_TUI_KEY_LOG=<file>    每个控制键追加一行（`C-u`/`C-a`/`C-k`/`C-c`…）——给「收回到底发了哪些键」
+                             留可审计的证据
+  FAKE_TUI_BREAK_CTRL_U=1    让 ctrl+u 变成空操作（模拟「键位变了/清不动」）→ 用来测收回的升级路径
+                             （只在框非空时补一记 ctrl+c，且全程最多一次）
   FAKE_TUI_PASTE_STALL_MS=<ms> 折叠占位符先画一半（`[paste #N +1`），ms 毫秒后才补全（V8-N3 中间帧）
   FAKE_TUI_STATIC_FOOTER=1   提交后 pane 尾部不变：不在对话区回显已提交消息（真实事故里
                              「页脚一动不动」的 TUI 让尾部 400 字节指纹失效，V7-F4）
@@ -42,6 +49,17 @@ import termios
 import tty
 
 RULE = "\u2500"
+
+
+def _keylog(tui, name: str) -> None:
+    """控制键审计（FAKE_TUI_KEY_LOG）：给「收回到底发了哪些键」留证据。"""
+    if not getattr(tui, "key_log", ""):
+        return
+    try:
+        with open(tui.key_log, "a", encoding="utf-8") as fh:
+            fh.write(name + "\n")
+    except OSError:
+        pass
 
 
 def _cell_width(ch: str) -> int:
@@ -97,6 +115,9 @@ class Tui:
         self.cursor_top = os.environ.get("FAKE_TUI_CURSOR_TOP", "0") == "1"
         self.draft_on_paste = os.environ.get("FAKE_TUI_DRAFT_ON_PASTE", "")
         self.marker = int(os.environ.get("FAKE_TUI_MARKER") or 0)
+        self.chars_marker = int(os.environ.get("FAKE_TUI_CHARS_MARKER") or 0)
+        self.key_log = os.environ.get("FAKE_TUI_KEY_LOG") or ""
+        self.break_ctrl_u = os.environ.get("FAKE_TUI_BREAK_CTRL_U", "0") == "1"
         self.stall_ms = int(os.environ.get("FAKE_TUI_PASTE_STALL_MS") or 0)
         self._stall = None   # (deadline, paste_n, k, idx)：半成品占位符的补全计划
         self.paste_n = 0
@@ -215,7 +236,13 @@ class Tui:
         text = _paste_text(self._paste_buf)
         self._paste_buf = b""
         nlines = text.count("\n")
-        if self.marker and nlines > self.marker:
+        if self.chars_marker and len(text) > self.chars_marker and (not self.marker or nlines <= self.marker):
+            # M24：真实 pi 的另一条折叠路径 —— 行数不多但字符多时按**字符数**折叠
+            # （`[paste #N <chars> chars]`，字符 = 码点）。现场事故的敲门摘要正是这种形状：
+            # 旧代码只认 `+K lines`，于是把我们的粘贴判成「混了别人的字」→ 不按 Enter。
+            self.paste_n += 1
+            self._insert(f"[paste #{self.paste_n} {len(text)} chars]")
+        elif self.marker and nlines > self.marker:
             self.paste_n += 1
             if self.stall_ms:
                 # V8-N3：真实 TUI 是异步渲染的——折叠占位符不是一帧画完的。先画一半
@@ -329,7 +356,11 @@ class Tui:
                         self.draw()
                         continue
                     if ch == b"\x15":
+                        _keylog(self, "C-u")
+                        if self.break_ctrl_u:
+                            continue
                         # ctrl+u = deleteToStartOfLine（Pi 0.85.1 默认键位；不是「清空整个框」）
+                        # —— M24 实测：这是真实 pi 上**确实有效**的逐行清框键（收回用它）。
                         t = self.text()
                         ls = self._line_start()
                         if self.cursor > ls:
@@ -341,24 +372,31 @@ class Tui:
                         self.draw()
                         continue
                     if ch == b"\x01":
-                        # ctrl+a = 光标到行首（M17 收回键序的第一半）
-                        self.cursor = self._line_start()
-                        self.draw()
+                        # M24 实测（真实 pi 0.85.1）：ctrl+a **不是**「光标到行首」——旧模型写错了。
+                        # 产品不再用它；这里故意做成空操作：任何回退到旧键序的改动都会在夹具上现形。
+                        _keylog(self, "C-a")
                         continue
                     if ch == b"\x0b":
-                        # ctrl+k = deleteToEndOfLine；已在行尾则把下一行并上来（M17 收回键序的第二半）
-                        t = self.text()
-                        le = self._line_end()
-                        if self.cursor < le:
-                            self._set_text(t[: self.cursor] + t[le:])
-                        elif le < len(t):
-                            self._set_text(t[:le] + t[le + 1 :])
-                        self.draw()
+                        # M24 实测：真实 pi 的 ctrl+k **不删到行尾**（旧模型写错了）：3 行展开的粘贴上
+                        # 按 24 对 C-a/C-k 只掉最后一行、另两行仍留在框里。同样做成空操作。
+                        _keylog(self, "C-k")
                         continue
                     if ch == b"\x05":
                         # ctrl+e = 光标到行尾
                         self.cursor = self._line_end()
                         self.draw()
+                        continue
+                    if ch == b"\x03":
+                        # ctrl+c（M24 实测真实 pi）：框非空 → 一次性清空整个输入框；
+                        # 框已空 → **退出**（题面写着 clear/exit）。这条危险语义留在夹具里：
+                        # 任何「往空框发 C-c」的实现都会在这里把窗格打死，被断言抓住。
+                        _keylog(self, "C-c")
+                        if self.text():
+                            self._set_text("")
+                            self.cursor = 0
+                            self.draw()
+                        else:
+                            break
                         continue
                     self._insert(self.decoder.decode(ch))
                     self.draw()

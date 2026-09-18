@@ -133,6 +133,22 @@ team_transcript_text() { # <target>
   printf '%s\n' "$cap" | LC_ALL=C awk -v t="${geo%% *}" 'NR<t'
 }
 
+# 字符数（= 码点，与 pi 折叠占位符 `[paste #N <chars> chars]` 同口径）。
+# 实测（M24，真实 pi 0.85.1）：3 行 ×400 个中文字 = 3602 字节 → pi 报 `1202 chars`，
+# 即**字符**不是字节（tests/pm-box-real.sh 的现场帧）。计数强制在 UTF-8 locale 下做：
+# 调用方可能是 LC_ALL=C 的夹具，那时的 `${#var}`/`wc -m` 会按字节算，判定就会全错。
+team_text_chars() { # <文本> → 字符数（不带结尾换行）
+  local loc="" cand
+  for cand in C.UTF-8 en_US.UTF-8 C.utf8; do
+    LC_ALL="$cand" bash -c 'true' 2>/dev/null && { loc="$cand"; break; }
+  done
+  if [ -n "$loc" ]; then
+    printf '%s' "$1" | LC_ALL="$loc" wc -m | tr -d ' '
+  else
+    printf '%s' "$1" | wc -m | tr -d ' '
+  fi
+}
+
 # 提交证据的特征串：payload 首个非空白行，去全部空白后截 48 字节（去空白是为了穿透折行；
 # 截取前 48 字节是因为气泡区可能只回显消息头部）。空白 payload 没有特征串（空串）。
 # 全程 LC_ALL=C：48 字节可能正好切在多字节字符中间——C locale 下 cut/grep 都是纯字节语义，
@@ -144,7 +160,7 @@ team_payload_slice() { # <payload>
 # 对话区里「这条 payload 被提交了」的证据数 = 特征串出现次数 + 匹配 +K 的折叠占位符出现次数
 # （有的 TUI 连气泡区也折叠长粘贴，只显示 `[paste #N +K lines]`；K == payload 行数的那份才算）。
 # 找不到框 → 0（没有证据概念）。
-team_transcript_mentions() { # <target> <slice> <payload 行数>
+team_transcript_mentions() { # <target> <slice> <payload 行数> [payload 字符数]
   local tr n=0
   tr="$(team_transcript_text "$1" 2>/dev/null | LC_ALL=C tr -d '[:space:]')" || { printf '0\n'; return 0; }
   [ -n "$tr" ] || { printf '0\n'; return 0; }
@@ -154,6 +170,10 @@ team_transcript_mentions() { # <target> <slice> <payload 行数>
   if [ "${3:-0}" -ge 2 ] 2>/dev/null; then
     # 对话区已被 tr 去空白：`[paste #1 +14 lines]` → `[paste#1+14lines]`
     n=$(( n + $(printf '%s\n' "$tr" | LC_ALL=C grep -oE '\[paste#[0-9]+\+'"$3"'lines\]' | grep -c . || true) ))
+  fi
+  if [ "${4:-0}" -ge 2 ] 2>/dev/null; then
+    # M24：气泡区也可能用 char 形式折叠长粘贴（提交后同样只留 `[paste #N <chars> chars]`）。
+    n=$(( n + $(printf '%s\n' "$tr" | LC_ALL=C grep -oE '\[paste#[0-9]+'"$4"'chars\]' | grep -c . || true) ))
   fi
   printf '%s\n' "$n"
 }
@@ -193,8 +213,11 @@ team_input_box_state() { # <target> → EMPTY|BUSY|UNKNOWN
 # 字样（不含完整占位符）时，子串匹配会把我们自己的正文误判成「还在渲染」（V9-B1，
 # 真实 Pi 复现：静止判定永远等不到停 → 干净消息被判竞态、终态扣在 held/）。
 team_box_mid_render() { # <文本>
-  printf '%s' "$1" | LC_ALL=C grep -qE '^[[:space:]]*\[paste #[0-9]+ \+[0-9]+[[:space:]]*$' || return 1
-  printf '%s' "$1" | LC_ALL=C grep -qE '\[paste #[0-9]+ \+[0-9]+ lines\]' && return 1
+  # 两种折叠占位符（M24 实测真实 pi 0.85.1）：
+  #   行数少、字符多 → `[paste #N <chars> chars]`；行数多 → `[paste #N +K lines]`。
+  # 半成品是前缀（`[paste #1 +14` / `[paste #2 100`），完整形态一律不算中间帧。
+  printf '%s' "$1" | LC_ALL=C grep -qE '^[[:space:]]*\[paste #[0-9]+ [+0-9]+[[:space:]]*$' || return 1
+  printf '%s' "$1" | LC_ALL=C grep -qE '\[paste #[0-9]+ [+0-9]+ (lines|chars)\]' && return 1
   return 0
 }
 
@@ -226,7 +249,7 @@ team_delivery_verdict() { # <target> → NOPANE|SHELL|BUSY|EMPTY|UNKNOWN
 #   5. 其它一律返回 1（竞态期间有人打字）→ 不按 Enter。
 # 纯文本判据（不读 pane，输入 = team_input_box_text 的结果）：<框文本> <payload> → 0 = 只有我们这段。
 team_box_text_holds_only() { # <got> <payload>
-  local got="$1" want want_lines k
+  local got="$1" want want_lines want_chars k
   want="$(printf '%s' "$2" | tr -d '[:space:]')"
   local gotnows; gotnows="$(printf '%s' "$got" | tr -d '[:space:]')"
   [ -n "$want" ] && [ "$gotnows" = "$want" ] && return 0
@@ -235,6 +258,15 @@ team_box_text_holds_only() { # <got> <payload>
     k="$(printf '%s' "$got" | LC_ALL=C sed -n 's/^[[:space:]]*\[paste #[0-9][0-9]* +\([0-9][0-9]*\) lines\][[:space:]]*$/\1/p')"
     want_lines="$(printf '%s' "$2" | grep -c '')"
     [ -n "$k" ] && [ "$k" = "$want_lines" ] && return 0
+    return 1
+  fi
+  # M24：真实 pi 0.85.1 的第二种折叠：`[paste #N <chars> chars]`（行数少、字符多时用它；
+  # 现场事故的敲门摘要正是这种形状 → 旧代码不认 → 判成「混了别人的字」→ 不按 Enter → rc 3）。
+  # 只认字符数对得上的那一份：人的粘贴字符数不同 → 仍然返回 1，判定力不降。
+  if printf '%s' "$got" | LC_ALL=C grep -qE '^[[:space:]]*\[paste #[0-9]+ [0-9]+ chars\][[:space:]]*$'; then
+    k="$(printf '%s' "$got" | LC_ALL=C sed -n 's/^[[:space:]]*\[paste #[0-9][0-9]* \([0-9][0-9]*\) chars\][[:space:]]*$/\1/p')"
+    want_chars="$(team_text_chars "$2")"
+    [ -n "$k" ] && [ -n "$want_chars" ] && [ "$k" = "$want_chars" ] && return 0
     return 1
   fi
   [ "${want%"$gotnows"}" != "$want" ] && return 0   # 可见区是 payload 的后缀（滚动了）
@@ -303,22 +335,48 @@ team_tmux_type_payload() { # <target> <payload>
   esac
 }
 
-# 收回（M17）：把**只有我们**的那段内容从框里清掉 —— 放弃按 Enter 时不许把字留在人的框里。
-# 清法是 Pi 编辑器自己的键，不是外部猜测：ctrl+a（光标到行首）+ ctrl+k（删到行尾；已在行尾就把
-# 下一行并上来），两个键成对重复 —— 无论光标停在哪一行哪一列都能清空（不是只有光标在末尾才行），
-# 而且编辑器已经空的时候这对键是幂等的空操作（deleteToLineStart/End 在 (0,0) 处都不动）。
-# 调用前提：team_box_retract_safe 刚确认框里只有我们打进去的东西；混了人的字一个键都不发。
-# 空框直接返回 0，不写键；写完轮询确认框真的空了（渲染是异步的）——没确认就返回 1，由调用方
-# 把条目留在 held/ 里并说明「框里仍有内容」。
-team_tmux_retract() { # <target> → 0 = 框里不再有我们的内容；1 = 没收回/无法确认
-  local target="${1:-}" i got keys=()
+# 收回（M17/M24）：把**只有我们**的那段内容从框里清掉 —— 放弃按 Enter 时不许把字留在人的框里。
+#
+# 键序是**实测**出来的，不是猜的（M24：tests/pm-box-real.sh 在真实 pi 0.85.1 上的现场帧）：
+#   * M17 用的 `ctrl+a` + `ctrl+k` 在真实 pi 上**不清框**：3 行展开的粘贴只掉最后一行、另两行留在框里，
+#     所以「已收回」一次都没成功过（现场：draft-raced-left ×3 / draft-raced-retracted ×0）。
+#     假 TUI（tests/fake-tui.py）那套键位模型与真实 pi 不符：真实 pi 的 C-k 不删到行尾、C-a 也不是
+#     「到行首」——夹具的模型已按实测改正。
+#   * `ctrl+u`（deleteToStartOfLine）= 删掉光标所在行的左半段并把上一行并过来 → 逐行清空 ✓；
+#     每按一次回读框，清空即止（空框上不再发键 = 幂等）。
+#   * `ctrl+c`（题面写的 clear/exit）= 一次性清空整个输入框 ✓，但**空框上按它会退出 pi** ✗ ——
+#     只在「刚读到框非空、框里只有我们的 payload、且 ctrl+u 连续三拍没有进展」时补**一记**，
+#     全程最多一次，发完立刻回读。
+#
+# 红线（不动）：「框里混了人的字就一个键都不碰」。每一步之前先判「还是我们的」（完整 payload /
+# 折叠占位符 / payload 的前缀），不是就立即停手并返回 1（字留在框里，条目进 held/ 可见）。
+# 空框直接返回 0，不写键。
+team_tmux_retract() { # <target> <payload> → 0 = 框里不再有我们的内容；1 = 没收干净/无法确认
+  local target="${1:-}" payload="${2:-}" got i last="" stall=0 cleared_c=0 g p
+  local step="${TEAM_RETRACT_STEP:-0.12}" maxp="${TEAM_RETRACT_MAX:-48}"
+  case "$step" in ''|*[!0-9.]*) step=0.12 ;; esac
+  case "$maxp" in ''|*[!0-9]*) maxp=48 ;; esac
   team_tmux_target_required "retract" "$target" || return 1
   got="$(team_input_box_text "$target" 2>/dev/null || true)"
   [ -z "$(printf '%s' "$got" | tr -d '[:space:]')" ] && return 0   # 已经空了：没有残留要收
-  for i in $(seq 1 24); do keys+=(C-a C-k); done
-  tmux send-keys -t "$target" ${keys[@]+"${keys[@]}"} 2>/dev/null || return 1
-  for i in 1 2 3 4 5 6; do
-    sleep 0.2
+  for i in $(seq 1 "$maxp"); do
+    g="$(printf '%s' "$got" | tr -d '[:space:]')"
+    p="$(printf '%s' "$payload" | tr -d '[:space:]')"
+    if ! team_box_text_holds_only "$got" "$payload" && { [ -z "$g" ] || [ -z "${p#"$g"}" ]; }; then
+      team_warn "收回中止：框里出现了不属于这条 payload 的内容（一个键都不再发，字留在框里）" >&2
+      return 1
+    fi
+    if [ "$got" = "$last" ]; then stall=$((stall + 1)); else stall=0; last="$got"; fi
+    if [ "$stall" -ge 3 ] && [ "$cleared_c" = "0" ]; then
+      cleared_c=1
+      tmux send-keys -t "$target" C-c 2>/dev/null || return 1
+      sleep 0.25
+      got="$(team_input_box_text "$target" 2>/dev/null || true)"
+      [ -z "$(printf '%s' "$got" | tr -d '[:space:]')" ] && return 0
+      continue
+    fi
+    tmux send-keys -t "$target" C-u 2>/dev/null || return 1
+    sleep "$step"
     got="$(team_input_box_text "$target" 2>/dev/null || true)"
     [ -z "$(printf '%s' "$got" | tr -d '[:space:]')" ] && return 0
   done
@@ -381,11 +439,12 @@ team_tmux_deliver() { # <target> <payload> [--no-verify] [--assume-free] [--resu
   # V9-B5 基线：打字前对话区里 payload 特征串（与匹配 +K 折叠占位符）的出现次数。
   # 送达的确认不再看「payload 离开输入框」（TUI 吞掉 Enter 也会清空框），而看「对话区里
   # 特征串出现次数变多」（真实 TUI 提交后消息进气泡区；清空只是消失）。
-  local ev_slice ev_k ev_base=0
+  local ev_slice ev_k ev_chars ev_base=0
   ev_slice="$(team_payload_slice "$text")"
   ev_k="$(printf '%s' "$text" | grep -c '')"
+  ev_chars="$(team_text_chars "$text")"
   if [ "$shape_known" = "1" ] && [ "$noverify" != "1" ]; then
-    ev_base="$(team_transcript_mentions "$target" "$ev_slice" "$ev_k")"
+    ev_base="$(team_transcript_mentions "$target" "$ev_slice" "$ev_k" "$ev_chars")"
   fi
   if [ "$resumed" != "1" ]; then
     team_tmux_type_payload "$target" "$text" || return 4
@@ -426,7 +485,7 @@ team_tmux_deliver() { # <target> <payload> [--no-verify] [--assume-free] [--resu
       # 半成品帧）；混进了人的字就一个键都不碰（宁留不删）。收回成功 → rc 7（框已清空）；
       # 收回失败（键被吞/形状变了）→ rc 3（框里仍有内容，绝不再发键）。
       if team_box_retract_safe "$target" "$text"; then
-        if team_tmux_retract "$target"; then
+        if team_tmux_retract "$target" "$text"; then
           team_warn "Enter 前复检没能确认框里只有我们的 payload（$target）：已收回打进去的内容，条目转入 outbox/held/（框里已清空）"
           return 7
         fi
@@ -452,12 +511,12 @@ team_tmux_deliver() { # <target> <payload> [--no-verify] [--assume-free] [--resu
       if [ -n "${TEAM_DELIVER_DEBUG:-}" ]; then
         # 调查用的取证钩子（默认关）：每拍记下框状态与证据计数
         printf 'poll=%s st=%s mentions=%s base=%s slice=[%s] k=%s\n' "$i" "$st" \
-          "$(team_transcript_mentions "$target" "$ev_slice" "$ev_k")" "$ev_base" "$ev_slice" "$ev_k" >> "$TEAM_DELIVER_DEBUG"
+          "$(team_transcript_mentions "$target" "$ev_slice" "$ev_k" "$ev_chars")" "$ev_base" "$ev_slice" "$ev_k" >> "$TEAM_DELIVER_DEBUG"
       fi
       case "$st" in
         EMPTY)
           # 框空了不算数：要看到对话区里多出一份我们的 payload（气泡/折叠气泡）才算送达
-          [ "$(team_transcript_mentions "$target" "$ev_slice" "$ev_k")" -gt "$ev_base" ] && return 0 ;;
+          [ "$(team_transcript_mentions "$target" "$ev_slice" "$ev_k" "$ev_chars")" -gt "$ev_base" ] && return 0 ;;
         BUSY)
           if team_box_holds_only "$target" "$text"; then
             # 框里还只有我们这段（含折叠占位符独占）：Enter 被吞了 → 从第 2 拍起至多补一次（规格）
@@ -482,7 +541,7 @@ team_tmux_deliver() { # <target> <payload> [--no-verify] [--assume-free] [--resu
             else
               # 框里只剩别人的字、我们的 payload 出框了——仍要提交证据才算送达（V9-B5：
               # 人也可能清框后自己打字，那条形状下 payload 从没提交）
-              [ "$(team_transcript_mentions "$target" "$ev_slice" "$ev_k")" -gt "$ev_base" ] && return 0
+              [ "$(team_transcript_mentions "$target" "$ev_slice" "$ev_k" "$ev_chars")" -gt "$ev_base" ] && return 0
             fi
           fi ;;
         UNKNOWN)
