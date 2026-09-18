@@ -154,6 +154,11 @@ checklist. When the gates fail the command returns non-zero — do not ignore it
 **The PM also has to read the diff**: gates only prove "the existing tests did not fail", not "the implementation
 matches the brief".
 
+**A gate that takes tens of minutes must not sit inside a turn.** `team doctor` reports whether this harness has a
+background lane (`harness` / `background jobs` / `background jobs 加载`); the two ways to run a long gate — an
+agent-started background job, or a background tmux window — plus the four delivery rules are in
+[references/troubleshooting.md](troubleshooting.md) §17.
+
 ## F. Merging and wrapping up
 
 **Without a PR (local mode)**:

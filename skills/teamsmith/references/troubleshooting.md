@@ -496,3 +496,42 @@ almost every report:
 | the activity column appeared and the layout looks more crowded than before | this is the one deliberate default change of the panel rewrite (v1.38.0): `TEAM_MONITOR_ACTIVITY` now defaults to `1`. `team monitor --no-activity` switches it off for one run, `TEAM_MONITOR_ACTIVITY=0` for the project — that restores the pre-v1.38.0 layout exactly |
 | the panel renders nothing useful in a plain terminal, a pipe or a `less` session | `TEAM_MONITOR_UI=text` forces the plain-text frame (no escape sequences, no screen clear); stdout not being a TTY already selects it automatically. `team monitor --print` is the same frame as a one-shot observer, and `team monitor --json` is the machine-readable form |
 | you edited something under `scripts/panel/src/` and the panel did not change | the sources are never on the runtime path — `panel.js` is what runs. A maintainer rebuilds it with `bun install --frozen-lockfile && bash skills/teamsmith/scripts/panel/build.sh` (needs the network and Bun ≥ 1.3), then commits the regenerated bundle. `node skills/teamsmith/scripts/panel/panel.js --version` and the bundle header name the pinned versions and the build command, so a stale artifact is visible without rebuilding |
+
+## 17. A long task (a gate, a build) has nobody to tell when it finishes
+
+`TEAM_GATES` on a real project can take tens of minutes. Run it inside the agent's turn and the turn is occupied;
+walk away and nobody knows it finished. There are two lanes — pick per project, both are legitimate:
+
+| | Lane A · a background-job package | Lane B · a background tmux window (zero dependencies) |
+|---|---|---|
+| What runs | the **agent** starts the job with the package's tool (`bg_run`, `process`, …) and ends its turn; the package notifies when the job exits | the PM starts the command in a dedicated tmux window and reads the tail — or the runner writes one inbox line (`team notify pm --from-file <file>`) when it is done |
+| Who gets woken | the package wakes the agent session that started it | the PM looks at the window / reads the inbox |
+| Cost | one third-party package, installed per project (`-l`) | one window, no dependency |
+| Watch out | the four rules below | a stray window is easy to lose: name it, and make it print a one-line verdict at the end (`echo "GATES rc=$? <ID>"`) |
+
+`team doctor` answers which lane is available: `harness` (pi has **no** built-in background bash; omp ships one —
+`bash` background dispatch, `hub` wait/cancel, `/jobs`), `background jobs` (a known package in this project's
+`.pi/settings.json` or in pi's own settings file — read from disk, never by spawning the harness, because the panel's
+health block waits on `doctor`; when absent it prints a copy-pasteable `pi install … -l`) and
+`background jobs 加载` (a bounded `pi --mode rpc` probe that the package's commands are actually registered — because
+being listed in a settings file is not the same as being loaded).
+
+Four rules decide whether lane A works. All of them come from the packages' own issue trackers and docs:
+
+1. **The agent must start the job.** A task started by *you* through the package's UI (`/bg`) notifies in the UI but
+   does **not** wake a model turn; only an agent-side start wakes the agent on completion.
+2. **Merge the notifications.** Several jobs finishing together must arrive as one notice; one notice per job means
+   one extra turn per job.
+3. **Deliver when idle.** The completion notice must land when the agent has no tool call in flight (a
+   `followUp`-style delivery), not in the middle of one.
+4. **Already harvested → say nothing.** If the agent waited for the job, it already has the result; notifying again
+   spends a turn on information it has.
+
+Which package: `@aliou/pi-processes` is the narrow choice (process management only). `pi-background-tasks` is
+broader, and its README states that a normal installation **globally loads its own Claude Code OAuth
+attribution/sanitization provider** for Anthropic sessions — that side effect belongs to the whole pi installation,
+so say it out loud before recommending it.
+
+The same four rules are why the team's own background lane is written in-house (no third-party package on the
+team's critical path) with an explicit harvest ledger under `state/`: the rules have to be enforced by the code that
+owns the jobs, not by convention.

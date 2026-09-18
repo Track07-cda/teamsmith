@@ -30,11 +30,22 @@ only brings the project up.
    every verification (it must run from a clean checkout of a task branch); `TEAM_INSTALL_CMD` runs after a worktree
    is created; `TEAM_VCS` is a label for the wording (`local` = no forge, the PM squash-merges locally);
    `TEAM_PULSE_INTERVAL` is the patrol rhythm (default 15 minutes).
-4. **The project's own documents** — the PM writes these, the tool does not: `docs/team/ROADMAP.md` (the goal,
+4. **Harness and background capability.** Ask which harness the user's own sessions run (`pi`, `omp`, another
+   CLI) and let `team doctor` answer the rest: `harness`, `background jobs` and `background jobs 加载` say whether a
+   background-job package is present, loaded, and whether it is even needed. If the harness is **omp** there is
+   nothing to install — it ships background jobs (`bash` background dispatch, `hub` wait/cancel, `/jobs`). If it is
+   pi and nothing is detected, the project-level recommendation is `pi install npm:@aliou/pi-processes -l` (narrow:
+   process management only); the broader `pi install npm:pi-background-tasks -l` also rewrites the Anthropic
+   attribution path for **that whole pi installation**, so state the side effect before recommending it. Two traps
+   worth repeating to the user: a task started in the UI (`/bg`) notifies but does **not** wake the model — only an
+   agent-side start does — and completion notices must be merged and delivered while the agent is idle. A long task
+   can always fall back to a background tmux window plus `team notify`; both lanes are in
+   `references/troubleshooting.md` §17 of the daily skill.
+5. **The project's own documents** — the PM writes these, the tool does not: `docs/team/ROADMAP.md` (the goal,
    milestones with **executable** exit criteria, and explicit non-goals), `docs/team/OWNERSHIP.md` (which directory
    belongs to which agent; everything unlisted belongs to the PM), and the project-specific red lines in
    `AGENTS.md` (the protocol section itself is injected automatically).
-5. **Then run it.** Show the plan first — it writes nothing:
+6. **Then run it.** Show the plan first — it writes nothing:
 
    ```bash
    bash <teamsmith>/scripts/team bootstrap --print      # the plan: detect / config / docs / worktrees / pulse
@@ -47,7 +58,7 @@ only brings the project up.
    `git worktree add` command for each agent — git stays with the PM (`--create-worktrees` delegates creation).
    The command's own behaviour is in `references/bootstrap.md`; a prompt you can hand to a new project's PM is
    `templates/bootstrap-prompt.md.tmpl`.
-6. **The first task.** `team task T1.1 --title "…" --agent dev` → edit the brief until it is self-contained →
+7. **The first task.** `team task T1.1 --title "…" --agent dev` → edit the brief until it is self-contained →
    `team dispatch dev T1.1 docs/team/tasks/T1.1-*.md`. From here the daily loop takes over.
 
 ## 2. Handoff
