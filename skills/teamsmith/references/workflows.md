@@ -33,17 +33,11 @@ verified one by one, archived only after the last one landed.
 
 ## A. Assembling a team in a new project
 
-```bash
-# 0) prerequisites: a git repository, tmux and pi are present; the repository has at least one commit
-bash <skill>/scripts/team init --session myproj --agents "dev verify" --vcs local
-#   → writes .pi/team/config.sh, creates the docs/team/ skeleton, appends the protocol section to AGENTS.md, updates .gitignore
-
-# 1) PM session: run pi inside tmux (notifications are typed into this window)
-tmux new -s myproj -n pm          # then start: pi
-
-# 2) edit .pi/team/config.sh: gates, install command, models and concurrency limits
-bash <skill>/scripts/team doctor
-```
+New-project setup lives in the **`teamsmith-init`** skill: it carries the ordered question checklist (dependencies,
+session/roster/models, gates, VCS mode, install command, the project's ROADMAP/OWNERSHIP/AGENTS.md red lines), the
+`team bootstrap` command and the handoff back here. Read `skills/teamsmith-init/SKILL.md` before running anything;
+the command's own behaviour is in
+[../../teamsmith-init/references/bootstrap.md](../../teamsmith-init/references/bootstrap.md).
 
 ## B. Dispatching the first task
 

@@ -1,9 +1,9 @@
 ---
 name: teamsmith
-description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, organize multiple agents into a team, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, set up an agent collaboration protocol, review an agent's work independently, bootstrap this skill into a new project, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project.
+description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, review an agent's work independently, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project. To start a new project, use the teamsmith-init skill.
 license: MIT
 metadata:
-  version: "1.39.0"
+  version: "1.40.0"
 ---
 
 # teamsmith · one agent that actually owns the project
@@ -21,19 +21,11 @@ PM(this session, tmux <session>:pm)     worker agents(each in .worktrees/<agent>
    merge / close   ──────────────────▶  BOARD → done
 ```
 
-## New project: one command
+## Starting a new project: use the `teamsmith-init` skill
 
-```bash
-cd <your project>                 # must be a git repo with at least one commit
-bash <skill>/scripts/team bootstrap
-```
-
-`bootstrap` idempotently brings a project to "ready to dispatch": detect the current tmux session/window →
-write `.pi/team/config.sh` + the `docs/team/` skeleton + the `AGENTS.md` protocol section + `.gitignore` →
-**print** the `git worktree add` command for each agent (git stays with the PM; add `--create-worktrees` to have
-it create them) → start the pulse (a `pulse` window in the same session) → print next steps.
-See [references/bootstrap.md](references/bootstrap.md); you can also hand
-`templates/bootstrap-prompt.md.tmpl` to a new project's PM and let it follow along.
+Initialization lives in its own skill: read `skills/teamsmith-init/SKILL.md` — the ordered questions to settle with
+the user, `bash <teamsmith>/scripts/team bootstrap`, and the handoff back here. Everything below is the daily loop,
+which starts once the project is up.
 
 ## Name and compatibility (former name: pi-team)
 
@@ -45,23 +37,6 @@ See [references/bootstrap.md](references/bootstrap.md); you can also hand
 - An `AGENTS.md` section marked `<!-- pi-team:begin -->` is migrated in place to the new marker by the next
   `team init`/`bootstrap`.
 - Hot-reload command in Pi: `/teamsmith-reload` (the old `/pi-team-reload` stays registered as an alias).
-
-## 30-second start
-
-```bash
-SKILL=~/.agents/skills/teamsmith                     # this skill's directory
-TEAM="bash $SKILL/scripts/team"                      # single-entry CLI (`team help` lists everything)
-
-cd <your project>                                    # must already be a git repo with commits
-$TEAM init --session myproj --agents "dev verify"    # config + docs skeleton + AGENTS.md section
-$TEAM doctor                                         # environment self-check
-
-tmux new -s myproj -n pm                             # PM session (notifications are typed into this window)
-$TEAM task T1.1 --title "first task" --agent dev      # generate a task brief
-$EDITOR docs/team/tasks/T1.1-*.md                     # make it self-contained
-$TEAM add-agent dev --create                          # --create builds the worktree (default prints the git command)
-$TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
-```
 
 ## Command table
 
@@ -255,7 +230,7 @@ byte-for-byte unchanged**):
 | `references/memory.md` | What the PM's project memory is for, what belongs in it, what survives compaction/restart/`/reload`, and how to work without it |
 | `references/agent-adapters.md` | To run workers with codex/opencode/any TUI agent: the contract, placeholder tables, worked examples, a verification checklist |
 | `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
-| `references/bootstrap.md` | New-project setup: what the one command does, what the PM does next |
+| `teamsmith-init` skill | New project? `skills/teamsmith-init/SKILL.md` is the entry point: the questions to settle, `team bootstrap`, then the handoff back to this skill |
 | `references/migration.md` | The project was set up with an older version (or with the former name `pi-team`): renames, removed commands, new required dependencies, behaviour changes, the upgrade recipe and rollback |
 | `references/workflows.md` | End-to-end runbook: bootstrap, dispatch, verify, merge, patrol/pulse, scaling, blockers |
 | `references/openspec.md` | The OpenSpec pipeline: five phases, their owners, the gate before each next phase, and the PM's proposal-review checklist |

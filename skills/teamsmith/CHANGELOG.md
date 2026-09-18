@@ -24,6 +24,24 @@
 - nit：dispatch 的分支提示改成 `%q` 引用（可安全复制粘贴）；文档明确「首词必须是裸可执行名」；
   模板展开改为**单趟从左到右**，`{extra_args}` 里的 `{cwd}` 不再被二次展开。
 
+## v1.40.0 · 2026-09-18
+
+**拆分：初始化指引独立成 `teamsmith-init` skill（openspec change `split-teamsmith-init-skill`）**
+
+新项目的路走自己的 skill，日常运转的 skill 变瘦；**CLI 不分叉**，存量项目零改动：
+
+- **新 skill `skills/teamsmith-init/`**：三拍的 `SKILL.md`（有序问答清单 → `team bootstrap` → 交接句「日常运转读
+  teamsmith」）+ 从日常 skill 迁入的 `references/bootstrap.md`、`templates/bootstrap-prompt.md.tmpl`（移动，不复制）。
+  问答清单收编了原来散在五处的「要问用户什么」（bootstrap-prompt 模板 / config.sh.tmpl 注释 / bootstrap.md /
+  SKILL.md / workflows.md §A）。
+- **日常 skill 瘦身**：删 `## New project` 与 `## 30-second start` 两节（原位留一行指路），description 去掉 3 个
+  init 短语（977 → 912 字符）并加一句指向 teamsmith-init；`workflows.md` §A 缩成指路（同一套初始化步骤不再留两份）。
+- **单一 CLI / 单一版本来源 / 指纹范围不变**：`scripts/`、`extension/`、`tests/` 全部留在日常 skill，init skill
+  不含任何代码；两个 `metadata.version` 都跟随 `TEAM_VERSION`（smoke 断言四处相等）；`team_skill_hash` 仍然只含
+  日常 `SKILL.md` + extension —— 改 init 文本不会吵醒在跑的 PM 会话。
+- **发现入口**：安装多一条并排软链（`~/.agents/skills/teamsmith-init`）；`install.sh` 按目录自动装上，两条
+  description 的路由词汇不重叠（各自有断言钉住）；存量项目的 config / AGENTS 协议段 / 启动命令一字未改。
+
 ## v1.39.0 · 2026-09-17
 
 **pulse-console 归档（规格合流 +9/改5/删1）+ 一天四修的运维硬化**

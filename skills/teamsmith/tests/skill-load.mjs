@@ -6,11 +6,13 @@
  *   bun tests/skill-load.mjs [skill-dir]
  */
 import { existsSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const skillDir = resolve(process.argv[2] ?? join(here, '..'))
+// P16 拆分后两个 skill 共用这份加载器：期望的 name 就是目录名（teamsmith / teamsmith-init）。
+const expectedName = basename(skillDir)
 
 const candidates = [
   process.env.PI_DIST,
@@ -40,7 +42,7 @@ const problems = []
 if (result.skills.length !== 1) problems.push(`期望发现 1 个 skill，实际 ${result.skills.length}`)
 const skill = result.skills[0]
 if (skill) {
-  if (skill.name !== 'teamsmith') problems.push(`name 不是 teamsmith：${skill.name}`)
+  if (skill.name !== expectedName) problems.push(`name 不是 ${expectedName}：${skill.name}`)
   if (!skill.description || skill.description.length > 1024) problems.push(`description 长度非法或缺失`)
   if (!/teamsmith|多 Agent|团队/.test(skill.description)) problems.push('description 缺少触发语境关键词')
   if (!skill.baseDir) problems.push('缺少 baseDir（相对路径无法解析）')
@@ -48,7 +50,7 @@ if (skill) {
 if (result.diagnostics.length) problems.push(...result.diagnostics.map(d => `诊断：${JSON.stringify(d)}`))
 
 const prompt = formatSkillsForPrompt(result.skills)
-if (!prompt.includes('<name>teamsmith</name>')) problems.push('注入系统提示的 XML 里没有 teamsmith')
+if (!prompt.includes(`<name>${expectedName}</name>`)) problems.push(`注入系统提示的 XML 里没有 ${expectedName}`)
 if (!prompt.includes('<location>')) problems.push('注入系统提示的 XML 里没有 location')
 
 if (problems.length) {

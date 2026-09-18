@@ -16,6 +16,8 @@
 set -uo pipefail
 
 SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# P16：初始化指引是兄弟 skill（本仓库 skills/teamsmith-init；安装后 ~/.agents/skills/ 里并排的两条软链）。
+SKILL_INIT_DIR="$(cd -P "$SKILL_DIR/.." && pwd)/teamsmith-init"
 TEAM="bash $SKILL_DIR/scripts/team"
 
 # ── 身份隔离（必须最先做）：绝不继承调用者的团队身份 ────────────────────────────
@@ -281,11 +283,15 @@ assert_dir "$REPO/.git" "git 仓库就绪"
 # ---------------------------------------------------------------- 0b. skill 合法性（pi 自己的解析器）
 section "0b · skill 可被 pi 解析器加载"
 if [ -n "$JS_RUNNER" ]; then
-  if $JS_RUNNER "$SKILL_DIR/tests/skill-load.mjs" "$SKILL_DIR" >"$TMP/skill-load.log" 2>&1; then
-    ok "$(head -1 "$TMP/skill-load.log")"
-  else
-    bad "skill-load 失败"; cat "$TMP/skill-load.log"
-  fi
+  # P16：两个 skill 都必须是合法可加载的（解析器期望的 name = 目录名）。
+  for P16_SD in "$SKILL_DIR" "$SKILL_INIT_DIR"; do
+    P16_SL="$TMP/skill-load-$(basename "$P16_SD").log"
+    if $JS_RUNNER "$SKILL_DIR/tests/skill-load.mjs" "$P16_SD" >"$P16_SL" 2>&1; then
+      ok "skill-load $(basename "$P16_SD")：$(head -1 "$P16_SL")"
+    else
+      bad "skill-load 失败（$(basename "$P16_SD")）"; cat "$P16_SL"
+    fi
+  done
 else
   printf '  (跳过：没有可用的 JS 运行时)\n'
 fi
@@ -3344,8 +3350,11 @@ section "11f · 更新与版本自检（mark-loaded / version --check / changelo
 assert_file "$SKILL_DIR/CHANGELOG.md" "skill 带 CHANGELOG"
 CODE_V="$(grep -m1 '^TEAM_VERSION=' "$SKILL_DIR/scripts/lib/common.sh" | cut -d'"' -f2)"
 DOC_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKILL_DIR/SKILL.md" | head -1)"
+# P16：拆分后版本仍是单一来源（common.sh），两个 SKILL.md 都跟随；init skill 没有自己的 CHANGELOG。
+INIT_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKILL_INIT_DIR/SKILL.md" | head -1)"
 LOG_V="$(sed -n 's/^##[[:space:]]*\[*v\?\([0-9.]*\)\]*.*/\1/p' "$SKILL_DIR/CHANGELOG.md" | head -1)"
-assert_eq "版本号三处一致（common/SKILL/CHANGELOG）" "$CODE_V|$DOC_V|$LOG_V" "$CODE_V|$CODE_V|$CODE_V"
+assert_eq "版本号四处一致（common/两个 SKILL/CHANGELOG）" "$CODE_V|$DOC_V|$INIT_V|$LOG_V" "$CODE_V|$CODE_V|$CODE_V|$CODE_V"
+assert_not_file "$SKILL_INIT_DIR/CHANGELOG.md" "init skill 没有 CHANGELOG（变更史只有一份）"
 
 $TEAM mark-loaded >"$TMP/mark.log" 2>&1 && ok "mark-loaded 退出码 0" || bad "mark-loaded 失败"
 assert_has "$TMP/mark.log" "$CODE_V" "mark-loaded 记录了当前版本"
@@ -3799,7 +3808,8 @@ doc_stale_hits() { # <skill 目录>
   done
 }
 
-REAL_HITS="$(doc_stale_hits "$SKILL_DIR")"
+# P16：扫描范围是两个 skill 的读者面（拆分前只有日常 skill）。
+REAL_HITS="$(doc_stale_hits "$SKILL_DIR"; doc_stale_hits "$SKILL_INIT_DIR")"
 if [ -n "$REAL_HITS" ]; then
   bad "真树里有已删命令的用法：$(printf '%s' "$REAL_HITS" | head -1)"
 else
@@ -3810,6 +3820,9 @@ fi
 # 没有这一步，"无残留 ✓" 可能只是检查器太弱（V1.1 实测：旧口径漏掉 8 类写法，真树假绿）。
 SANDBOX="$TMP/docsandbox"; rm -rf "$SANDBOX"; mkdir -p "$SANDBOX"
 cp -r "$SKILL_DIR"/SKILL.md "$SKILL_DIR"/references "$SKILL_DIR"/templates "$SKILL_DIR"/scripts "$SANDBOX/" 2>/dev/null || true
+# P16：init skill 的扫描面单独一个沙箱（目录形状不同：没有 scripts/），用它证明 init 侧扫描非空跑。
+SANDBOX_INIT="$TMP/docsandbox-init"; rm -rf "$SANDBOX_INIT"; mkdir -p "$SANDBOX_INIT"
+cp -r "$SKILL_INIT_DIR"/SKILL.md "$SKILL_INIT_DIR"/references "$SKILL_INIT_DIR"/templates "$SANDBOX_INIT/" 2>/dev/null || true
 printf '# README\n' > "$TMP/README.md"
 inject_and_expect() { # <说明> <相对文件> <追加内容>
   local what="$1" file="$2" text="$3" got
@@ -3845,11 +3858,20 @@ inject_and_expect "英文删除词但没有反引号（不许整行豁免）" "r
 rm -rf "$SANDBOX-x"
 CLEAN_HITS="$(doc_stale_hits "$SANDBOX")"
 [ -z "$CLEAN_HITS" ] && ok "翻转自测：干净副本不误报（正对照）" || bad "干净副本被误报：$(printf '%s' "$CLEAN_HITS" | head -1)"
+# P16：init skill 侧的扫描也必须非空跑 —— 往它的副本里注入一条已删命令的真用法，必须报红。
+P16_SB_INIT="$SANDBOX_INIT-x"; rm -rf "$P16_SB_INIT"; cp -r "$SANDBOX_INIT" "$P16_SB_INIT"
+printf '%s\n' 'Then open the MR with `team gh` pr view 12.' >> "$P16_SB_INIT/references/bootstrap.md"
+P16_INIT_HITS="$(doc_stale_hits "$P16_SB_INIT")"
+[ -n "$P16_INIT_HITS" ] && ok "翻转自测：init skill 副本里的已删命令会被抓到" \
+  || bad "翻转自测：init skill 的扫描漏报（范围扩了但没人证明它工作）"
+[ -z "$(doc_stale_hits "$SANDBOX_INIT")" ] && ok "翻转自测：init skill 干净副本不误报" \
+  || bad "init skill 干净副本被误报：$(doc_stale_hits "$SANDBOX_INIT" | head -1)"
+rm -rf "$P16_SB_INIT"
 
 # 依赖收窄不变量（v1.12.0）：文档/模板里不得再把容器后端或 forge CLI 当依赖
-DEP_HITS="$(grep -rniE 'podman|\-\-container|看门狗容器|Containerfile' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" 2>/dev/null | grep -vE '不再需要|不再有|已移除|v1\.12' || true)"
+DEP_HITS="$(grep -rniE 'podman|\-\-container|看门狗容器|Containerfile' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_INIT_DIR/SKILL.md" "$SKILL_INIT_DIR/references" "$SKILL_INIT_DIR/templates" 2>/dev/null | grep -vE '不再需要|不再有|已移除|v1\.12' || true)"
 if [ -n "$DEP_HITS" ]; then bad "文档还在把容器当依赖：$(printf '%s' "$DEP_HITS" | head -1)"; else ok "文档不再把容器当前提（只有一个后端）"; fi
-FORGE_HITS="$(grep -rniE '缺 (gh|glab)|TEAM_VCS=github 但|gh wrapper' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" 2>/dev/null || true)"
+FORGE_HITS="$(grep -rniE '缺 (gh|glab)|TEAM_VCS=github 但|gh wrapper' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" "$SKILL_INIT_DIR/SKILL.md" "$SKILL_INIT_DIR/references" "$SKILL_INIT_DIR/templates" 2>/dev/null || true)"
 if [ -n "$FORGE_HITS" ]; then bad "还有把 forge CLI 当依赖的表述：$(printf '%s' "$FORGE_HITS" | head -1)"; else ok "forge 完全解耦（不探测/不调用/不读 token）"; fi
 # 派单提示词不得再教已删命令（v1.11 的团队 pr 曾残留在这里）
 $TEAM dispatch dev T1.1 "$REPO/docs/team/tasks/T1.1-smoke.md" --print >"$TMP/prompt-forge.log" 2>&1 || true
@@ -3863,7 +3885,7 @@ fi
 # 豁免：CHANGELOG（历史）、显式兼容说明（同行含 兼容/旧名/迁移/别名/v1.13）
 _OLD="pi""-team"
 OLDNAME_HITS="$(grep -rIn "$_OLD" "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" \
-    "$SKILL_DIR/extension" "$SKILL_DIR/../README.md" 2>/dev/null \
+    "$SKILL_DIR/extension" "$SKILL_DIR/../README.md" "$SKILL_INIT_DIR/SKILL.md" "$SKILL_INIT_DIR/references" "$SKILL_INIT_DIR/templates" 2>/dev/null \
   | grep -vE '兼容|旧名|迁移|别名|v1\.13|begin|end|reload|smoke|compatibility|former name|renamed|alias' || true)"
 if [ -n "$OLDNAME_HITS" ]; then bad "还有旧名 pi-team 的残留：$(printf '%s' "$OLDNAME_HITS" | head -1)"; else ok "名字一致性：除兼容说明外无旧名残留"; fi
 # 兼容软链必须存在（老项目配置里的绝对路径靠它活着）
@@ -4972,7 +4994,10 @@ assert_has "$MDOC" "--fresh" "指南提到长会话换小窗口模型要用 --fr
   || bad "指南只有 $(wc -l < "$MDOC") 行：太短"
 # 读者入口：SKILL.md 阅读表 + bootstrap/config 各一行（不新增子命令）
 assert_has "$SKILL_DIR/SKILL.md" "references/migration.md" "SKILL.md 阅读表指向迁移指南"
-assert_has "$SKILL_DIR/references/bootstrap.md" "migration.md" "bootstrap.md 指向迁移指南"
+assert_has "$SKILL_INIT_DIR/references/bootstrap.md" "teamsmith/references/migration.md" \
+  "init skill 的 bootstrap.md 指向迁移指南（跨 skill 相对路径）"
+assert_has "$SKILL_DIR/references/migration.md" "teamsmith-init/references/bootstrap.md" \
+  "migration.md 指回 init skill 的 bootstrap.md（跨 skill 相对路径）"
 assert_has "$SKILL_DIR/references/config.md" "migration.md" "config.md 指向迁移指南"
 # 英文文档不变量（M4.1 的口径）：这里只覆盖本任务交付/改过的三份 references 文档。
 # 为什么不是整个 references/**：protocol.md 里还有 2 行**引用中文 CLI 输出串**（review 的翻转证据关键词），
@@ -4980,7 +5005,7 @@ assert_has "$SKILL_DIR/references/config.md" "migration.md" "config.md 指向迁
 #   复现：grep -rnP '[\x{4e00}-\x{9fff}]' skills/teamsmith/references
 if printf '中\n' | grep -qP '[\x{4e00}-\x{9fff}]' 2>/dev/null; then
   M71_CJK="$(grep -lP '[\x{4e00}-\x{9fff}]' "$MDOC" "$SKILL_DIR/references/config.md" \
-    "$SKILL_DIR/references/bootstrap.md" 2>/dev/null || true)"
+    "$SKILL_INIT_DIR/references/bootstrap.md" 2>/dev/null || true)"
   [ -z "$M71_CJK" ] && ok "本任务交付的 references 文档全英文（无 CJK）" \
     || bad "references 里有中文：$(printf '%s' "$M71_CJK" | head -2 | tr '\n' ' ')"
 else
@@ -5019,7 +5044,8 @@ else
   doc_cjk_hits() { # <扫描根> [raw]：默认剥代码；raw=1 原样扫（用来证明豁免的正是代码 span）
     local root="$1" mode="${2:-}" files
     [ -d "$root/skills/teamsmith/references" ] || return 0
-    files="$( cd "$root" && find skills/teamsmith/references -type f | sort )"
+    # P16：init skill 的 references 也在口径内（bootstrap.md 搬过去了）。
+    files="$( cd "$root" && find skills/teamsmith/references skills/teamsmith-init/references -type f 2>/dev/null | sort )"
     [ -f "$root/SCOPE.md" ] && files="$files SCOPE.md"
     [ -n "$files" ] || return 0
     ( cd "$root" || return 0
@@ -5064,8 +5090,9 @@ else
   # 翻转自测（关键）：检查器必须**两个方向**都对。往 references 的沙箱副本里注入。
   #   红：正文里的中文必须被报出来（含「同行还有代码 span」的那类，防「有反引号就整行豁免」）；
   #   净：只在行内代码 / 只在围栏块里的中文不得误报（否则 protocol.md 的中文引用只能被删掉）。
-  CJK_SB="$TMP/m73-cjk"; rm -rf "$CJK_SB"; mkdir -p "$CJK_SB/skills/teamsmith"
+  CJK_SB="$TMP/m73-cjk"; rm -rf "$CJK_SB"; mkdir -p "$CJK_SB/skills/teamsmith" "$CJK_SB/skills/teamsmith-init"
   cp -r "$SKILL_DIR/references" "$CJK_SB/skills/teamsmith/references"
+  cp -r "$SKILL_INIT_DIR/references" "$CJK_SB/skills/teamsmith-init/references"
   cp "$SRC_ROOT/SCOPE.md" "$CJK_SB/SCOPE.md" 2>/dev/null || true
   : > "$TMP/m73-cjk-red.log"
   cjk_flip() { # <red|clean> <说明> <相对文件> <追加内容>
@@ -5091,6 +5118,8 @@ else
   cjk_flip "clean" "只有围栏代码块里有中文" "skills/teamsmith/references/protocol.md" \
     $'```\n$ team review 1 --strong\n不满足（不阻塞合并，但里程碑收口前应补齐）\n```'
   cjk_flip "red"   "SCOPE.md 正文里的中文" "SCOPE.md" 'Boundary: 不要越界。'
+  cjk_flip "red"   "init skill 正文里的中文（新家也在口径内）" "skills/teamsmith-init/references/bootstrap.md" \
+    'The record says 不满足 and warns.'
   rm -rf "$CJK_SB-x"
   # 报告形态：必须 `相对路径:行号: 原文`（读者能照着 grep / 定位）
   assert_match "$TMP/m73-cjk-red.log" \
@@ -5192,6 +5221,113 @@ fi
 # 纯逻辑（只读文件），快慢模式都跑。
 # 判据在 os_pipeline_hits 里，违规行格式固定为 `<相对文件>: <REASON>[ <detail>]`；
 #   末尾的翻转夹具按 REASON 断言 —— **不是**「能报红就算过」，而是「删掉哪一条，就点名哪一条」。
+# ---------------------------------------------------------------- 18b. 拆分不变量（P16 / capability init-skill）
+# 两个 skill 共存必须守住的不变量：description 路由干净、init 侧无代码、版本/指纹单一来源、存量项目零改动。
+# 全部纯逻辑（读文件 + 一次 dispatch --print + 一次指纹计算），快慢都跑；每条自带「注入变体必须报红」的
+# 翻转自测 —— 拆分最容易的失败方式是扫描口径悄悄漏掉一个新目录（绿得毫无意义）。
+section "18b · 拆分不变量（P16）：description 路由 / init 无代码 / 指纹范围 / 零改动"
+
+p16_desc_of() { sed -n 's/^description:[[:space:]]*//p' "$1" | head -1; }
+P16_INIT_PHRASES=('organize multiple agents into a team' 'set up an agent collaboration protocol' 'bootstrap this skill into a new project')
+P16_DAY_PHRASES=('dispatch tasks to worker agents' 'run the patrol' "review an agent's work independently")
+p16_desc_pollution() { # <日常 SKILL.md> <init SKILL.md>：命中描述（空 = 干净）
+  local d i out="" ph
+  d="$(p16_desc_of "$1")"; i="$(p16_desc_of "$2")"
+  for ph in "${P16_INIT_PHRASES[@]}"; do case "$d" in *"$ph"*) out="$out daily-[$ph]";; esac; done
+  for ph in "${P16_DAY_PHRASES[@]}"; do case "$i" in *"$ph"*) out="$out init-[$ph]";; esac; done
+  printf '%s' "$out"
+}
+P16_DAILY_DESC="$(p16_desc_of "$SKILL_DIR/SKILL.md")"
+P16_INIT_DESC="$(p16_desc_of "$SKILL_INIT_DIR/SKILL.md")"
+P16_POLL="$(p16_desc_pollution "$SKILL_DIR/SKILL.md" "$SKILL_INIT_DIR/SKILL.md")"
+[ -z "$P16_POLL" ] && ok "两条 description 路由干净（init 短语只在 init 侧，日常短语只在日常侧）" \
+  || bad "description 交叉污染：$P16_POLL"
+case "$P16_DAILY_DESC" in *teamsmith-init*) ok "日常 description 点名 teamsmith-init（新项目指路）";;
+  *) bad "日常 description 没有指路 teamsmith-init";; esac
+[ "${#P16_DAILY_DESC}" -le 1024 ] && [ "${#P16_INIT_DESC}" -le 1024 ] \
+  && ok "两条 description 都在 1024 上限内（日常 ${#P16_DAILY_DESC} / init ${#P16_INIT_DESC} 字符）" \
+  || bad "description 超长（日常 ${#P16_DAILY_DESC} / init ${#P16_INIT_DESC}）"
+# 翻转自测：注入变体必须被抓到；干净副本不得误报（正对照）
+P16_SB_DESC="$TMP/p16-desc"; rm -rf "$P16_SB_DESC"; mkdir -p "$P16_SB_DESC"
+cp "$SKILL_DIR/SKILL.md" "$P16_SB_DESC/daily.md"; cp "$SKILL_INIT_DIR/SKILL.md" "$P16_SB_DESC/init.md"
+[ -z "$(p16_desc_pollution "$P16_SB_DESC/daily.md" "$P16_SB_DESC/init.md")" ] \
+  && ok "翻转自测：干净副本不误报（正对照）" || bad "翻转自测：干净副本被误报"
+sed -i 's/^description:.*/& organize multiple agents into a team./' "$P16_SB_DESC/daily.md"
+[ -n "$(p16_desc_pollution "$P16_SB_DESC/daily.md" "$P16_SB_DESC/init.md")" ] \
+  && ok "翻转自测：把 init 短语塞回日常 description 会被抓到" || bad "翻转自测：init 短语回流竟然漏报"
+sed -i 's/^description:.*/& dispatch tasks to worker agents./' "$P16_SB_DESC/init.md"
+[ -n "$(p16_desc_pollution "$P16_SB_DESC/daily.md" "$P16_SB_DESC/init.md")" ] \
+  && ok "翻转自测：init description 染上日常短语会被抓到" || bad "翻转自测：日常短语入侵 init 竟然漏报"
+rm -rf "$P16_SB_DESC"
+
+# R4：init skill 只带指引（没有代码目录），工具面也从不引用它
+P16_SUBDIRS="$(find "$SKILL_INIT_DIR" -maxdepth 1 -type d | sed 's|.*/||' | grep -E '^(scripts|extension|tests)$' || true)"
+[ -z "$P16_SUBDIRS" ] && ok "init skill 无 scripts/extension/tests（只有 SKILL.md + references/ + templates/）" \
+  || bad "init skill 里出现了代码目录：$(printf '%s' "$P16_SUBDIRS" | tr '\n' ' ')"
+P16_TOOL_HITS="$(grep -rn 'teamsmith-init' "$SKILL_DIR/scripts" "$SKILL_DIR/extension" "$SKILL_DIR/templates" 2>/dev/null || true)"
+[ -z "$P16_TOOL_HITS" ] && ok "工具面（scripts/ extension/ templates/）从不引用 teamsmith-init" \
+  || bad "工具面引用了 init skill：$(printf '%s' "$P16_TOOL_HITS" | head -1)"
+P16_BP_HITS="$(grep -rn 'bootstrap-prompt' "$SKILL_DIR/scripts" 2>/dev/null || true)"
+[ -z "$P16_BP_HITS" ] && ok "scripts/ 不再引用 bootstrap-prompt（模板搬走后没有死路径）" \
+  || bad "scripts/ 还引用 bootstrap-prompt：$(printf '%s' "$P16_BP_HITS" | head -1)"
+P16_SB_TOOL="$TMP/p16-tool"; rm -rf "$P16_SB_TOOL"; mkdir -p "$P16_SB_TOOL/scripts" "$P16_SB_TOOL/templates"
+printf '# probe: teamsmith-init\n' > "$P16_SB_TOOL/scripts/p16-probe.sh"
+printf '# probe: bootstrap-prompt.md.tmpl\n' > "$P16_SB_TOOL/scripts/p16-probe2.sh"
+[ -n "$(grep -rn 'teamsmith-init' "$P16_SB_TOOL/scripts" "$P16_SB_TOOL/extension" "$P16_SB_TOOL/templates" 2>/dev/null || true)" ] \
+  && ok "翻转自测：注入的工具引用会被抓到" || bad "翻转自测：工具面的注入竟然漏报"
+[ -n "$(grep -rn 'bootstrap-prompt' "$P16_SB_TOOL/scripts" 2>/dev/null || true)" ] \
+  && ok "翻转自测：注入的 bootstrap-prompt 引用会被抓到" || bad "翻转自测：bootstrap-prompt 的注入竟然漏报"
+rm -rf "$P16_SB_TOOL"
+
+# R5：指纹范围不变 —— team_skill_hash 只吃日常 SKILL.md + extension；init 文本变化不得改变指纹，
+# 日常文本变化必须改变指纹（后半句是证明这条断言非空跑的正对照）。
+P16_FIX="$TMP/p16-hash"; rm -rf "$P16_FIX"
+mkdir -p "$P16_FIX/skills/teamsmith/extension" "$P16_FIX/skills/teamsmith-init"
+cp "$SKILL_DIR/SKILL.md" "$P16_FIX/skills/teamsmith/"
+cp "$SKILL_DIR/extension/team-notify.ts" "$P16_FIX/skills/teamsmith/extension/"
+cp "$SKILL_INIT_DIR/SKILL.md" "$P16_FIX/skills/teamsmith-init/"
+p16_hash() { TEAM_SKILL_DIR="$P16_FIX/skills/teamsmith" bash -c \
+  '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; . "'"$SKILL_DIR"'/scripts/lib/cmd-update.sh"; team_skill_hash'; }
+P16_H0="$(p16_hash)"
+printf '\n<!-- P16 flip: init skill text changes -->\n' >> "$P16_FIX/skills/teamsmith-init/SKILL.md"
+P16_H1="$(p16_hash)"
+assert_eq "改 init SKILL.md：会话指纹不变（init 文本不吵醒在跑的 PM）" "$P16_H1" "$P16_H0"
+printf '\n<!-- P16 flip: daily skill text changes -->\n' >> "$P16_FIX/skills/teamsmith/SKILL.md"
+P16_H2="$(p16_hash)"
+if [ -n "$P16_H0" ] && [ "$P16_H2" != "$P16_H0" ]; then
+  ok "改日常 SKILL.md：指纹确实变（证明上面那条不是空跑）"
+else
+  bad "指纹口径坏了：改日常 SKILL.md 指纹没变（基线 [$P16_H0] / 现在 [$P16_H2]）"
+fi
+rm -rf "$P16_FIX"
+
+# R6：存量项目零改动 —— 三个启动/协议模板不带 init skill，dispatch --print 渲染出的命令照旧
+# 只挂日常 skill 目录（--skill），不含 teamsmith-init。
+P16_TPL_HITS="$(grep -rn 'teamsmith-init' "$SKILL_DIR/templates/config.sh.tmpl" \
+  "$SKILL_DIR/templates/AGENTS.section.md.tmpl" "$SKILL_DIR/templates/pm-prompt.md.tmpl" 2>/dev/null || true)"
+[ -z "$P16_TPL_HITS" ] && ok "config/协议段/PM 三个模板不含 teamsmith-init（存量项目没有新键）" \
+  || bad "模板里出现 teamsmith-init：$(printf '%s' "$P16_TPL_HITS" | head -1)"
+# 自建夹具（不借 7 节的 $REPO：到这一段它的状态在 FAST 模式下不保证）：init -> task -> worktree ->
+# 规范分支（用实现自己的函数算，测试不猜名字）-> dispatch --print 渲染真实的启动命令。
+P16_R="$TMP/p16-repo"; rm -rf "$P16_R"; mkdir -p "$P16_R"
+( cd "$P16_R" && git init -q -b main && git config user.email p16@x && git config user.name p16 \
+  && printf '# p16 zero-change fixture\n' > README.md && git add -A && git commit -qm init )
+( cd "$P16_R" && $TEAM init --session "teamsmith-p16-$$" --agents dev --vcs local --gates "true" --docs docs/team ) \
+  >"$TMP/p16-init.log" 2>&1 || bad "P16 夹具 init 失败（见 $TMP/p16-init.log）"
+( cd "$P16_R" && $TEAM task T1.1 --title "p16 zero change" --agent dev ) >"$TMP/p16-task.log" 2>&1 || true
+( cd "$P16_R" && $TEAM add-agent dev --create --no-install ) >"$TMP/p16-add.log" 2>&1 || true
+p16_canon_branch() { # <agent> <ID>：用实现自己的函数算规范分支
+  ( cd "$P16_R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent "'"$1"'" "'"$2"'"' )
+}
+P16_BR="$(p16_canon_branch dev T1.1)"
+git -C "$P16_R/.worktrees/dev" switch -c "$P16_BR" main >/dev/null 2>&1 \
+  || git -C "$P16_R/.worktrees/dev" switch "$P16_BR" >/dev/null 2>&1
+( cd "$P16_R" && TEAM_PI_BIN=/bin/true $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md --print ) \
+  >"$TMP/p16-dispatch-print.log" 2>&1 || true
+assert_has "$TMP/p16-dispatch-print.log" "--skill $SKILL_DIR" "渲染的启动命令仍挂日常 skill 目录（--skill）"
+assert_not "$TMP/p16-dispatch-print.log" "teamsmith-init" "渲染的启动命令不含 teamsmith-init"
+
 section "19 · OpenSpec 五阶段流水线：每阶段有所有者与门禁（M9.1）"
 
 OS_PHASES="explore propose apply verify archive"

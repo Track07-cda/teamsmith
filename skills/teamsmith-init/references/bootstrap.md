@@ -4,7 +4,7 @@ The shortest path for a new project (or a PM taking over a repository for the fi
 **The PM owns the setup, including configuring the pulse.**
 
 > Upgrading a project that was set up earlier (including one still carrying the former name `pi-team`), or rolling a
-> bad upgrade back: see [migration.md](migration.md).
+> bad upgrade back: see [migration.md](../../teamsmith/references/migration.md).
 
 ## In one line
 
