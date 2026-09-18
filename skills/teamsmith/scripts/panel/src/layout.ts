@@ -1534,7 +1534,12 @@ export function layout(input: LayoutInput): Frame {
         ].sort((x, y) => x.b.priority - y.b.priority)
         for (const { b, slot } of ordered) {
           const colW = slot === 0 ? leftW : rightW
-          const used = Math.max(columns[0].length, columns[1].length)
+          // The body budget is **per column** (P18.1): the two columns stack side by side, so a tall
+          // left card (the board's B1 growth fills the whole body height) used to consume the right
+          // column's budget as well — its cards got `remaining = 0` and vanished, although the frame
+          // had a full column of empty width. `pickChrome` keeps every column within `bodyBudget`, so
+          // the flush below still ends both columns on the same row.
+          const used = columns[slot].length
           const chunk = place(b, bodyBudget - used, colW)
           for (const l of chunk) columns[slot].push(l)
         }

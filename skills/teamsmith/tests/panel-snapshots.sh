@@ -15,7 +15,7 @@ set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tree="${TEAM_SNAPSHOTS_TREE:-$(cd -P "$here/../../.." && pwd)}"
-panel="$tree/skills/teamsmith/scripts/panel/panel.js"
+panel="${TEAM_SNAPSHOTS_PANEL:-$tree/skills/teamsmith/scripts/panel/panel.js}"
 stub="$here/panel-b3-stub.sh"
 snapdir="$here/snapshots"
 js="${TEAM_SNAPSHOTS_JS:-$(command -v node || command -v bun || true)}"
@@ -167,6 +167,124 @@ for page in 2 3; do
     --width 160 --height 32 --theme dark --lang zh --page "$page" >"$pageframe" 2>/dev/null
   flush_check "$pageframe" "page $page (160)"
 done
+
+# ---------------------------------------------------------------- P18.1: 两栏各记各的预算
+# The user's live report (270x66 pane): the work page showed only the left column's board —
+# changes/specs/decisions were not degraded to `—`, they were gone. The placement pass deducted
+# from one shared budget (`used = max(columns[0].length, columns[1].length)`), and B1 grows the board
+# to the whole body height, so every right-column card saw `remaining = 0` and `pickChrome` dropped
+# it. V18's fixture had a small folded pool and could not starve; this one must (done = 95 → 91
+# folded rows) and is checked at both geometries the user's report names.
+printf '\n\033[1m== P18.1 · 大折叠池的 work 页：board 不许饿死右栏（270x66 / 120x40）==\033[0m\n'
+p181_uncapped="$tmp/p181-uncapped.txt"
+env B3_STUB_DONE=95 "$js" "$panel" --snapshot --root "$tmp" --state-dir "$tmp/state" --team-cli "$stub" \
+  --width 120 --theme dark --lang zh --page 2 >"$p181_uncapped" 2>/dev/null
+for p181_spec in "270 66" "120 40"; do
+  set -- $p181_spec
+  p181_frame="$tmp/p181-$1x$2.txt"
+  env B3_STUB_DONE=95 "$js" "$panel" --snapshot --root "$tmp" --state-dir "$tmp/state" --team-cli "$stub" \
+    --width "$1" --height "$2" --theme dark --lang zh --page 2 >"$p181_frame" 2>"$tmp/p181-$1x$2.err"
+  p181_got="$(python3 - "$p181_frame" "$p181_uncapped" "$1" "$2" <<'PYB'
+import re, sys
+
+def strip(s):
+    return re.sub(r"\x1b\[[0-9;]*m", "", s)
+
+frame = [strip(l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+uncapped = [strip(l.rstrip("\n")) for l in open(sys.argv[2], encoding="utf-8")]
+height = int(sys.argv[4])
+
+def folded(rows):
+    for r in rows:
+        m = re.search(r"其余 (\d+) 条 done/dropped", r)
+        if m:
+            return int(m.group(1))
+    return None
+
+problems = []
+if len(frame) != height:
+    problems.append(f"帧高 {len(frame)} != {height}")
+body = frame[:-1]
+if not body or "写信" not in frame[-1]:
+    problems.append("末行不是键位带")
+if not any("╭─ 任务看板" in r for r in body):
+    problems.append("左栏没有 board 卡片")
+for title in ("活动变更", "规格", "最近决策"):
+    if not any(f"╭─ {title}" in r for r in body):
+        problems.append(f"右栏缺「{title}」卡片")
+last = body[-1] if body else ""
+if not last.startswith("╰") or last.count("╰") != 2:
+    problems.append("最后一列身体行没有同时收下两栏的卡片底（board 没填满/两列不同底）")
+grown, natural = folded(body), folded(uncapped)
+if natural is None:
+    problems.append("未封顶夹具没有折叠行（夹具坏了）")
+elif grown is None:
+    problems.append("board 没有折叠行")
+elif grown >= natural:
+    problems.append(f"board 折叠数 {grown} 没小于自然值 {natural}（余高没花在历史上）")
+print("ok" if not problems else "；".join(problems))
+PYB
+)"
+  if [ "$p181_got" = "ok" ]; then
+    ok "P18.1 $1x$2：右栏三卡都在 + board 仍填满左栏（两列同底）+ 帧高恰好 $2 行"
+  else
+    bad "P18.1 $1x$2：$p181_got"
+  fi
+done
+
+# B1 must not regress while the budget accounting changes: every page fills a bounded frame
+# *exactly* (`height` rows, footer on the last one) and no row outruns the width, on the large-pool
+# fixture (the worst case for the board's growth) at four geometries.
+for p181_wh in "160 32" "120 40" "99 50" "60 8"; do
+  set -- $p181_wh
+  for p181_page in 1 2 3 4; do
+    env B3_STUB_DONE=95 "$js" "$panel" --snapshot --root "$tmp" --state-dir "$tmp/state" --team-cli "$stub" \
+      --width "$1" --height "$2" --page "$p181_page" --theme dark --lang zh \
+      >"$tmp/p181-sweep-$1x$2-p$p181_page.txt" 2>/dev/null
+  done
+done
+p181_sweep="$(python3 - "$tmp" <<'PYC'
+import glob, os, re, sys
+
+WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+        (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+        (0xff00, 0xff60), (0xffe0, 0xffe6)]
+
+def strip(s):
+    return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", s)
+
+def dwidth(text):
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+            continue
+        total += 2 if any(a <= cp <= b for a, b in WIDE) else 1
+    return total
+
+problems = []
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "p181-sweep-*.txt"))):
+    m = re.search(r"p181-sweep-(\d+)x(\d+)-p(\d+)\.txt$", path)
+    width, height, page = int(m.group(1)), int(m.group(2)), m.group(3)
+    rows = [strip(l.rstrip("\n")) for l in open(path, encoding="utf-8")]
+    if not rows or "teamsmith pulse" not in rows[0]:
+        problems.append(f"{width}x{height} p{page}: 帧没渲染出来")
+        continue
+    if len(rows) != height:
+        problems.append(f"{width}x{height} p{page}: {len(rows)} 行 != {height}")
+    elif "写信" not in rows[-1]:
+        problems.append(f"{width}x{height} p{page}: 末行不是键位带")
+    over = [i + 1 for i, r in enumerate(rows) if dwidth(r) > width]
+    if over:
+        problems.append(f"{width}x{height} p{page}: 第 {over[0]} 行超宽")
+print("ok" if not problems else "；".join(problems[:4]))
+PYC
+)"
+if [ "$p181_sweep" = "ok" ]; then
+  ok "P18.1 B1 不回归：四页 × 四档几何（160x32/120x40/99x50/60x8）都恰好 height 行、末行键位带、不超宽"
+else
+  bad "P18.1 B1 不回归：$p181_sweep"
+fi
 
 # The settings overlay's column plan (V16 F-V16-4/5's layout half + the user's report of
 # 2026-09-17): with `lang=en` the key column was a hardcoded 12 cells with no separator, so
