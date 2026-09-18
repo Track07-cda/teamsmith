@@ -155,8 +155,8 @@ checklist. When the gates fail the command returns non-zero — do not ignore it
 matches the brief".
 
 **A gate that takes tens of minutes must not sit inside a turn.** teamsmith's own background lane is the default
-on Pi (§E2); `team doctor` reports whether *further* lanes exist for your own sessions (`harness` /
-`background jobs` / `background jobs 加载`), and the background-tmux-window fallback plus the four delivery
+on Pi (§E2); `team doctor` reports the harness and the plugins this project carries (`harness` /
+`已装插件 packages` — information, never a recommendation); the background-tmux-window fallback plus the four delivery
 rules are in [references/troubleshooting.md](troubleshooting.md) §17.
 
 ### E2. The PM's background gate (the team's own lane, no extra window)

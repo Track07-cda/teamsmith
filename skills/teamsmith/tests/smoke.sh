@@ -4074,175 +4074,116 @@ assert_not "$TMP/dispatch-deps-ok.log" "依赖缺失" "依赖齐备时 dispatch 
 USAGE_HITS="$(grep -rEn 'team review[[:space:]]+[A-Za-z0-9]' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/../README.md" 2>/dev/null | grep -v -- '--dir' | grep -vE '不再|已删|旧签名|v1\.11' || true)"
 if [ -n "$USAGE_HITS" ]; then bad "文档在教「没有 --dir 的 review」：$(printf '%s' "$USAGE_HITS" | head -1)"; else ok "review 用法都带 --dir"; fi
 
-# ---------------------------------------------------------------- 15c. harness 与后台任务能力（M26 / E8 P1）
-# doctor 新增的两行半在三种形态下都要说对话：① pi 且没装包 → 打一条可复制的项目级推荐；
-# ② pi 且装了包 → ✓ + 加载探测（假 pi 用 RPC 回答）；③ 配置的 harness 就是 omp → 什么都不用装。
-# 再加三条边界：omp 只在 PATH 里（本项目仍配 pi）不许把它的能力算在本项目头上、自定义 adapter → 无法探测、
-# RPC 答不上来 → 降级 skip 而不是失败/卡住。全部纯逻辑（假 omp / 假 RPC pi / 影子 PATH），快慢模式都跑。
-section "15c · harness 与后台任务能力：doctor 三形态 + 边界（M26）"
+# ---------------------------------------------------------------- 15c. harness 与插件清单（M26 建、M29 改写）
+# 用户拍板（M29）：doctor 只**告知已装插件**，永不推荐第三方功能包；名册为空是 warn 不是 fail（PM-only 开局合法）。
+# 本段钉三件事：① 全树再无「推第三方功能包安装」的字样（含翻转自测）；② 插件清单按级别列出且**不 spawn harness**
+# （doctor 在巡检面板 health 块的等待路径上，spawn 会在不响应的 TEAM_PI_BIN 上白等满超时 —— M26 实测踩过）；
+# ③ 名册为空 → warn、doctor 仍退 0。全部纯逻辑（假 pi / 假 omp / 影子 PATH），快慢都跑。
+section "15c · harness 与插件清单：只告知、不推荐（M29）"
 
-M26_FX="$TMP/m26"; rm -rf "$M26_FX"; mkdir -p "$M26_FX/pi-bin" "$M26_FX/omp-bin" "$M26_FX/proj/openspec" "$M26_FX/proj/docs/team"
-( cd "$M26_FX/proj" && git init -q -b main && git config user.email m26@x && git config user.name m26 \
+M29_FX="$TMP/m29"; rm -rf "$M29_FX"; mkdir -p "$M29_FX/pi-bin" "$M29_FX/omp-bin" "$M29_FX/proj/openspec" "$M29_FX/proj/docs/team"
+( cd "$M29_FX/proj" && git init -q -b main && git config user.email m29@x && git config user.name m29 \
     && echo x > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
-printf '{"packages":["@cortexkit/pi-magic-context"]}\n' > "$M26_FX/user-settings.json"
-printf '#!/usr/bin/env bash\nprintf "omp 0.0\\n"\n' > "$M26_FX/omp-bin/omp"
-chmod +x "$M26_FX/omp-bin/omp"
-# 假 pi：--version/--help 给像样回答（doctor 的 pi 行），--mode rpc 时对 get_commands 回一行「注册了 ps / ps:logs」。
-# 应答完就退出（不留子进程）；本段所有假 pi 都用 bash 内建 read 等待，不 sleep，避免留下孤儿进程。
-cat > "$M26_FX/pi-bin/pi" <<'M26PI'
+# 用户级设置：一个用户级插件 + 一个与项目级同名的（用来验去重）
+printf '{"packages":["npm:user-tool","npm:shared-tool"]}\n' > "$M29_FX/user-settings.json"
+printf '{"packages":[]}\n' > "$TMP/m29-empty.json"
+printf '#!/usr/bin/env bash\nprintf "omp 0.0\\n"\n' > "$M29_FX/omp-bin/omp"
+chmod +x "$M29_FX/omp-bin/omp"
+# 假 pi：--version/--help 给像样回答；`list` 只留一个标记文件（证明「插件探测不 spawn harness」）
+cat > "$M29_FX/pi-bin/pi" <<'M29PI'
 #!/usr/bin/env bash
 case "${1:-}" in
-  --version|-v) printf 'pi 0.0.0 (m26-fake)\n'; exit 0 ;;
+  --version|-v) printf 'pi 0.0.0 (m29-fake)\n'; exit 0 ;;
   --help|-h)    printf 'usage: pi [--session-id <id>] [-e <ext>] [--skill <dir>]\n'; exit 0 ;;
 esac
 if [ "${1:-}" = "list" ]; then printf 'list\n' >> "$(dirname "$0")/pi-list-calls.log"; exit 0; fi
-if [ "${1:-}" = "--mode" ]; then
-  IFS= read -r _req || true
-  printf '{"type":"response","command":"get_commands","data":{"commands":[{"name":"ps"},{"name":"ps:logs"},{"name":"skill:teamsmith"},{"name":"todos"}]}}\n'
-fi
 exit 0
-M26PI
-chmod +x "$M26_FX/pi-bin/pi"
-# 装了但没注册签名（命令表里只有无关命令）
-cat > "$M26_FX/pi-nosig" <<'M26NOSIG'
-#!/usr/bin/env bash
-case "${1:-}" in
-  --version|-v) printf 'pi 0.0.0 (m26-nosig)\n'; exit 0 ;;
-  --help|-h)    printf 'usage: pi [--session-id <id>]\n'; exit 0 ;;
-esac
-if [ "${1:-}" = "--mode" ]; then
-  IFS= read -r _req || true
-  printf '{"type":"response","command":"get_commands","data":{"commands":[{"name":"todos"},{"name":"curator"}]}}\n'
-fi
-exit 0
-M26NOSIG
-chmod +x "$M26_FX/pi-nosig"
-# RPC 卡住（收到请求不应答、也不退出）：用来验超时保护路径 —— bash 内建 read 阻塞，SIGKILL 后不留子进程
-cat > "$M26_FX/pi-hang" <<'M26HANG'
-#!/usr/bin/env bash
-case "${1:-}" in
-  --version|-v) printf 'pi 0.0.0 (m26-hang)\n'; exit 0 ;;
-  --help|-h)    printf 'usage: pi [--session-id <id>]\n'; exit 0 ;;
-esac
-if [ "${1:-}" = "--mode" ]; then
-  IFS= read -r _req || exit 0
-  IFS= read -r _never || exit 0
-fi
-exit 0
-M26HANG
-chmod +x "$M26_FX/pi-hang"
-# 影子 PATH：把现有 PATH 目录里的可执行文件软链过来，**除了 pi 和 omp**（宿主装了 omp 也能得到确定结果）
-M26_SHADOW="$TMP/m26-shadow"; mkdir -p "$M26_SHADOW"
-for _d in ${PATH//:/ }; do [ -d "$_d" ] && ln -sf "$_d"/* "$M26_SHADOW/" 2>/dev/null; done
-rm -f "$M26_SHADOW/pi" "$M26_SHADOW/omp"
-m26_doctor() { # <PATH 前缀> <TEAM_PI_BIN> [额外 env…]
+M29PI
+chmod +x "$M29_FX/pi-bin/pi"
+# 影子 PATH：把现成 PATH 的条目软链过来，除了 pi 和 omp（宿主装了 omp 也能得到确定结果）
+M29_SHADOW="$TMP/m29-shadow"; mkdir -p "$M29_SHADOW"
+for _d in ${PATH//:/ }; do [ -d "$_d" ] && ln -sf "$_d"/* "$M29_SHADOW/" 2>/dev/null; done
+rm -f "$M29_SHADOW/pi" "$M29_SHADOW/omp"
+m29_doctor() { # <PATH 前缀> <TEAM_PI_BIN> [额外 env…]
   local path="$1" bin="$2"; shift 2
-  ( cd "$M26_FX/proj" && env TEAM_ROOT="$M26_FX/proj" TEAM_MAIN_ROOT="$M26_FX/proj" \
-      TEAM_PI_SETTINGS_FILE="$M26_FX/user-settings.json" TEAM_PI_BIN="$bin" TEAM_AGENTS="dev" \
+  ( cd "$M29_FX/proj" && env TEAM_ROOT="$M29_FX/proj" TEAM_MAIN_ROOT="$M29_FX/proj" \
+      TEAM_PI_SETTINGS_FILE="$M29_FX/user-settings.json" TEAM_PI_BIN="$bin" TEAM_AGENTS="${M29_AGENTS-dev}" \
       TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_REQUIRE_OPENSPEC=0 TEAM_REQUIRE_JS=0 "$@" \
-      PATH="$path:$M26_SHADOW" bash "$SKILL_DIR/scripts/team" doctor ) 2>&1
+      PATH="$path:$M29_SHADOW" bash "$SKILL_DIR/scripts/team" doctor ) 2>&1
 }
-M26_PI="$M26_FX/pi-bin/pi"; M26_OMP="$M26_FX/omp-bin/omp"
-rm -f "$M26_FX/proj/.pi/settings.json"
+M29_PI="$M29_FX/pi-bin/pi"; M29_OMP="$M29_FX/omp-bin/omp"; M29_MARK="$M29_FX/pi-bin/pi-list-calls.log"
 
-# ① pi，没装包 → 可复制的推荐（三个钩子：首选窄包 / 备选 + 副作用 / 用户 /bg 不唤醒模型）
-m26_doctor "$M26_FX/pi-bin" "$M26_PI" >"$TMP/m26-none.log" 2>&1 || true
-assert_has "$TMP/m26-none.log" "harness" "doctor 有 harness 行"
-assert_has "$TMP/m26-none.log" "pi（内置无后台 bash" "pi 形态：harness 行说明内置没有后台 bash"
-assert_has "$TMP/m26-none.log" "pi install npm:@aliou/pi-processes -l" "未装包 → 给出**项目级**首选推荐"
-assert_has "$TMP/m26-none.log" "pi-background-tasks" "推荐里点名备选包"
-assert_has "$TMP/m26-none.log" "Anthropic attribution" "备选包附副作用警告（E8 §3 第二条坑）"
-assert_has "$TMP/m26-none.log" "/bg 不唤醒模型" "文案带上「用户自己敲的 /bg 不唤醒模型」（E8 §3 第一条坑）"
-assert_not_file "$M26_FX/proj/.pi/settings.json" "doctor 不写项目设置（只读探测）"
+# ① 政策不变量：全树不再推第三方功能包安装（唯一允许的是必需依赖 magic-context）+ 翻转自测
+m29_install_hits() { # <文件/目录…> → 推第三方功能包的字样（空 = 干净）
+  grep -rnE 'pi install [a-zA-Z@]|pi-processes|pi-background-tasks|Anthropic attribution' "$@" 2>/dev/null \
+    | grep -v 'pi-magic-context' || true
+}
+M29_HITS="$(m29_install_hits "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" \
+  "$SKILL_DIR/scripts/lib" "$SKILL_INIT_DIR")"
+[ -z "$M29_HITS" ] && ok "全树没有第三方功能包的推荐/安装字样（magic-context 是必需依赖，除外）" \
+  || bad "还在推第三方包：$(printf '%s' "$M29_HITS" | head -1)"
+M29_SB="$TMP/m29-sandbox"; rm -rf "$M29_SB"; mkdir -p "$M29_SB"
+cp -r "$SKILL_DIR/references" "$M29_SB/references"
+printf '\n装它：`pi install npm:some-bg-plugin -l`\n' >> "$M29_SB/references/troubleshooting.md"
+[ -n "$(m29_install_hits "$M29_SB/references")" ] && ok "翻转自测：把安装推荐塞回文档会被抓到" \
+  || bad "翻转自测：塞回去的推荐竟然漏报（策略断言是空跑）"
+rm -rf "$M29_SB"
 
-# ② pi，装了包（项目级）→ ✓ + 加载探测从 RPC 回答里读到签名
-mkdir -p "$M26_FX/proj/.pi"
-printf '{"packages":["npm:@aliou/pi-processes"]}\n' > "$M26_FX/proj/.pi/settings.json"
-m26_doctor "$M26_FX/pi-bin" "$M26_PI" >"$TMP/m26-pkg.log" 2>&1 || true
-assert_has "$TMP/m26-pkg.log" "@aliou/pi-processes（项目级）" "装了就报 ✓（并说明是项目级）"
-assert_has "$TMP/m26-pkg.log" "background jobs 加载" "有加载探测这一行"
-assert_has "$TMP/m26-pkg.log" "已注册：ps ps:logs" "加载探测命中签名（skill: 前缀的命令不算）"
-assert_not "$TMP/m26-pkg.log" "pi install npm:@aliou/pi-processes -l" "装了就不要再推荐安装"
+# ② 插件清单：按级别列出（项目级在前、同名去重）；不 spawn harness；没有任何安装推荐
+mkdir -p "$M29_FX/proj/.pi"
+printf '{"packages":["npm:pi-demo-tool","npm:shared-tool"]}\n' > "$M29_FX/proj/.pi/settings.json"
+rm -f "$M29_MARK"
+m29_doctor "$M29_FX/pi-bin" "$M29_PI" >"$TMP/m29-plugins.log" 2>&1 || true
+assert_has "$TMP/m29-plugins.log" "已装插件 packages" "doctor 有「已装插件」行"
+assert_has "$TMP/m29-plugins.log" "npm:pi-demo-tool（项目级）" "项目级插件：包名 + 级别"
+assert_has "$TMP/m29-plugins.log" "npm:user-tool（用户级）" "用户级插件也列出（读用户设置文件）"
+assert_eq "同名包只出现一次（项目级胜出）" "$(grep -c 'npm:shared-tool' "$TMP/m29-plugins.log" || true)" "1"
+assert_has "$TMP/m29-plugins.log" "npm:shared-tool（项目级）" "去重后保留的是项目级那一份"
+assert_not_file "$M29_MARK" "插件探测不 spawn harness（pi list 一次都没跑）"
+assert_not "$TMP/m29-plugins.log" "pi install" "doctor 输出里没有任何安装推荐"
+assert_not "$TMP/m29-plugins.log" "pi-processes" "不再点名第三方包（一）"
+assert_not "$TMP/m29-plugins.log" "pi-background-tasks" "不再点名第三方包（二）"
+assert_not "$TMP/m29-plugins.log" "attribution" "不再有 attribution 副作用警告"
+assert_not_file "$M29_FX/proj/.pi/settings.json.bak" "（夹具自检：没有留下备份文件）"
+rm -f "$M29_FX/proj/.pi/settings.json"
+# 项目与用户都没有插件 → 一条信息行（不是推荐、也不是失败）
+rm -f "$M29_MARK"
+m29_doctor "$M29_FX/pi-bin" "$M29_PI" TEAM_PI_SETTINGS_FILE="$TMP/m29-empty.json" >"$TMP/m29-noplug.log" 2>&1 || true
+assert_has "$TMP/m29-noplug.log" "未检测到插件（teamsmith 不依赖第三方插件；团队会话的后台任务由自带 team-bg 覆盖）" \
+  "无插件时是一条信息行（含 team-bg 覆盖的说明）"
+assert_not_file "$M29_MARK" "没有插件时也不 spawn harness"
 
-# ②d 关键回归：包探测**不许 spawn harness**。为什么单列一条：面板的 health 块会等一次 doctor，
-#    而 TEAM_PI_BIN 指到一个不响应的东西时（smoke 夹具里的 `pi-sleep` 就是）spawn 会白等满超时 ——
-#    M26 的第一版就是这么把「pulse logs 有画面」拖红的。判定用假 pi 留的标记文件，不靠计时。
-M26_MARK="$M26_FX/pi-bin/pi-list-calls.log"
-rm -f "$M26_MARK"
-m26_doctor "$M26_FX/pi-bin" "$M26_PI" >"$TMP/m26-nospawn.log" 2>&1 || true
-assert_not_file "$M26_MARK" "没装包时包探测不 spawn harness（pi 一次都没跑）"
-mkdir -p "$M26_FX/proj/.pi"
-printf '{"packages":["npm:@aliou/pi-processes"]}\n' > "$M26_FX/proj/.pi/settings.json"
-rm -f "$M26_MARK"
-m26_doctor "$M26_FX/pi-bin" "$M26_PI" >"$TMP/m26-nospawn2.log" 2>&1 || true
-assert_not_file "$M26_MARK" "装了包也不 spawn（项目级/用户级都直接读设置文件）"
-rm -f "$M26_FX/proj/.pi/settings.json"
+# ③ harness 行（M29 保留 M26 的判定次序，文案里不再出现行名指路）
+m29_doctor "$M29_FX/pi-bin" "$M29_PI" TEAM_PI_SETTINGS_FILE="$TMP/m29-empty.json" >"$TMP/m29-h-pi.log" 2>&1 || true
+assert_has "$TMP/m29-h-pi.log" "pi（内置无后台 bash：团队会话的长任务由自带的 team-bg 覆盖）" \
+  "pi 形态：harness 行说明谁覆盖长任务"
+m29_doctor "$M29_FX/omp-bin:$M29_FX/pi-bin" "$M29_OMP" TEAM_PI_SETTINGS_FILE="$TMP/m29-empty.json" >"$TMP/m29-h-omp.log" 2>&1 || true
+assert_has "$TMP/m29-h-omp.log" "omp 自带后台任务（bash 后台派发 / hub wait·cancel / /jobs）" "omp 形态：明说自带后台"
+assert_not "$TMP/m29-h-omp.log" "pi install" "omp 形态没有任何安装推荐"
+m29_doctor "$M29_FX/omp-bin:$M29_FX/pi-bin" "$M29_PI" TEAM_PI_SETTINGS_FILE="$TMP/m29-empty.json" >"$TMP/m29-h-both.log" 2>&1 || true
+assert_has "$TMP/m29-h-both.log" "PATH 里有 omp" "omp 只是装着 → 说明白"
+assert_has "$TMP/m29-h-both.log" "本项目配的是 pi" "并点名本项目实际配的是谁"
+m29_doctor "$M29_FX/pi-bin" "$M29_PI" TEAM_AGENT_CMD='myagent run {prompt}' >"$TMP/m29-h-adapt.log" 2>&1 || true
+assert_has "$TMP/m29-h-adapt.log" "取决于该 harness，无法探测" "自定义 adapter → 如实说无法探测"
 
-# ②b 装了但没注册签名 → 如实报「没看到」并指向 `pi list --approve`（不当失败）
-mkdir -p "$M26_FX/proj/.pi"
-printf '{"packages":["npm:@aliou/pi-processes"]}\n' > "$M26_FX/proj/.pi/settings.json"
-m26_doctor "$M26_FX/pi-bin" "$M26_FX/pi-nosig" >"$TMP/m26-nosig.log" 2>&1 || true
-assert_has "$TMP/m26-nosig.log" "没看到 bg/jobs/ps 命令" "装了但没注册签名 → 如实报「没看到」"
-assert_has "$TMP/m26-nosig.log" "pi list --approve" "并指向核对命令"
-assert_match "$TMP/m26-nosig.log" '^  background jobs 加载 +! ' "该行是警告（不当失败）"
+# ④ 名册为空 → warn（PM-only 开局合法），doctor 仍退 0；拦人的是 dispatch
+M29_RC=0
+m29_doctor "$M29_FX/pi-bin" "$M29_PI" TEAM_PI_SETTINGS_FILE="$TMP/m29-empty.json" TEAM_AGENTS="" \
+  >"$TMP/m29-noroster.log" 2>&1 || M29_RC=$?
+assert_eq "名册为空时 doctor 仍退 0（不再 fail）" "$M29_RC" "0"
+assert_match "$TMP/m29-noroster.log" '^ *名册 TEAM_AGENTS +! 名册为空：可以 PM-only 开局；要派单先 ' \
+  "名册为空是一条 warn，并给出下一步"
+M29_ROSTER_FAIL="$(grep -c '✗.*名册为空' "$TMP/m29-noroster.log" || true)"
+assert_eq "名册为空不再以 ✗ 出现" "$M29_ROSTER_FAIL" "0"
 
-# ②c RPC 卡住 → 超时保护：按 TEAM_BG_PROBE_TIMEOUT 收手、降级 skip、不失败不卡死
-M26_T0=$SECONDS
-m26_doctor "$M26_FX/pi-bin" "$M26_FX/pi-hang" TEAM_BG_PROBE_TIMEOUT=1 >"$TMP/m26-hang.log" 2>&1
-M26_RC=$?
-assert_eq "RPC 卡住时 doctor 仍退 0（跳过不当失败）" "$M26_RC" "0"
-assert_has "$TMP/m26-hang.log" "跳过：pi --mode rpc 没在 1s 内答上来" "超时后明确 skip（并说出用了多少秒）"
-M26_ELAPSED=$((SECONDS - M26_T0))
-[ "$M26_ELAPSED" -le 20 ] && ok "超时保护确实收手（整段 ${M26_ELAPSED}s）" \
-  || bad "降级路径太慢（${M26_ELAPSED}s）"
-
-# ③ 配置的 harness 就是 omp → 不需要装插件，也不再打包行（先清掉项目设置：不推荐必须是 omp 短路的结论，
-# 不能靠「包已经装了」侥幸成立）
-rm -f "$M26_FX/proj/.pi/settings.json"
-m26_doctor "$M26_FX/omp-bin:$M26_FX/pi-bin" "$M26_OMP" >"$TMP/m26-omp.log" 2>&1 || true
-assert_has "$TMP/m26-omp.log" "omp 自带后台任务" "omp 形态：明说自带、不用装"
-assert_not "$TMP/m26-omp.log" "pi install npm:" "omp 形态不推荐安装 pi 包"
-assert_not "$TMP/m26-omp.log" "background jobs 加载" "omp 形态不做加载探测"
-
-# ④ 边界：omp 只在 PATH 里、本项目配的仍是 pi → 不许把 omp 的能力算在本项目头上
-m26_doctor "$M26_FX/omp-bin:$M26_FX/pi-bin" "$M26_PI" >"$TMP/m26-ompboth.log" 2>&1 || true
-assert_has "$TMP/m26-ompboth.log" "PATH 里有 omp" "omp 只是装着 → 说明白"
-assert_has "$TMP/m26-ompboth.log" "本项目配的是 pi" "并点名本项目实际配的是谁"
-assert_has "$TMP/m26-ompboth.log" "pi install npm:@aliou/pi-processes -l" "此时包推荐仍然成立"
-
-# ⑤ 自定义 adapter → 后台能力无法探测，且不推荐 pi 包
-m26_doctor "$M26_FX/pi-bin" "$M26_PI" TEAM_AGENT_CMD='myagent run {prompt}' >"$TMP/m26-adapt.log" 2>&1 || true
-assert_has "$TMP/m26-adapt.log" "取决于该 harness，无法探测" "自定义 adapter → 如实说无法探测"
-assert_not "$TMP/m26-adapt.log" "pi install npm:" "自定义 adapter 下不推荐 pi 包"
-
-# ⑥ 只读不变量：整轮探测不动项目设置（③ 清过这份文件，先放回去 —— 否则比的会是对不存在文件的报错）
-printf '{"packages":["npm:@aliou/pi-processes"]}\n' > "$M26_FX/proj/.pi/settings.json"
-assert_file "$M26_FX/proj/.pi/settings.json" "只读断言的夹具先就位"
-M26_SET_BEFORE="$(md5sum "$M26_FX/proj/.pi/settings.json" | cut -d' ' -f1)"
-m26_doctor "$M26_FX/pi-bin" "$M26_PI" >/dev/null 2>&1 || true
-assert_eq "多轮探测后项目设置一字未动（只读）" \
-  "$(md5sum "$M26_FX/proj/.pi/settings.json" | cut -d' ' -f1)" "$M26_SET_BEFORE"
-
-# ⑧ M26 实测踩到的既有缺陷（修在同一个提交里）：settings 点名了 magic-context 但包目录找不到时，
-# `team_magic_context_version` 在 pipefail（CLI 的 set -euo pipefail）下返回 sed 的退出码 2，
-# `mc_ver="$(…)"` 就把 doctor 从表中间掐断（输出停在那行、rc=2）。契约本来就是「检测不到 → 空」。
-M26_CONTRACT="$( cd "$M26_FX/proj" && env TEAM_PI_SETTINGS_FILE="$M26_FX/user-settings.json" \
-  TEAM_ROOT="$M26_FX/proj" TEAM_MAIN_ROOT="$M26_FX/proj" bash -c \
-  'set -euo pipefail; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1 || true; \
-   v="$(team_magic_context_version)"; printf "%s|%s" "$v" "$?"' 2>/dev/null || true )"
-assert_eq "magic-context 探测在 pipefail 下兑现「检测不到 → 空」（rc=0）" "$M26_CONTRACT" "|0"
-# 端到端那一半：同一份 settings 下 doctor 必须跑完整张表（②c 的 rc=0 就是它的红灯位）
-assert_has "$TMP/m26-hang.log" "陈旧 state" "doctor 表跑到了最后一行（不是中途掐断）"
-assert_has "$TMP/m26-hang.log" "PM 记忆 magic-context" "被掐断的那一行本身也在表里"
-
-# ⑦ 文案落盘：init 清单 + 长任务两种跑法的文档（这两处是交付物，不是可选说明）
-assert_has "$SKILL_INIT_DIR/SKILL.md" "Harness and background capability" "init 问答清单有 harness/后台能力一条"
-assert_has "$SKILL_INIT_DIR/SKILL.md" "/bg" "init 文案带上 /bg 不唤醒模型的坑"
-assert_has "$SKILL_INIT_DIR/SKILL.md" "attribution" "init 文案带上备选包的 attribution 副作用"
-assert_has "$SKILL_DIR/references/troubleshooting.md" "## 17. A long task" "长任务两种跑法写进 troubleshooting §17"
-assert_has "$SKILL_DIR/references/troubleshooting.md" "The agent must start the job" "四条投递规则的第 1 条在文档里"
-assert_has "$SKILL_DIR/references/troubleshooting.md" "Already harvested → say nothing" "第 4 条（已收割不通知）在文档里"
-assert_match "$SKILL_DIR/references/workflows.md" 'troubleshooting\.md\) §17' "workflows §E 指到那一节"
+# ⑤ 交付物 2/3 的措辞落盘（init 清单 + 长任务文档）
+assert_has "$SKILL_INIT_DIR/SKILL.md" "minimal starting roster" "init 名册条目改成最小起点措辞"
+assert_has "$SKILL_INIT_DIR/SKILL.md" "team add-agent" "并说明随时可以用 add-agent 增减"
+assert_has "$SKILL_INIT_DIR/SKILL.md" "information only" "插件条目说明是告知、不是推荐"
+assert_has "$SKILL_INIT_DIR/SKILL.md" "team-bg" "并说明团队会话的后台由自带 team-bg 覆盖"
+assert_has "$SKILL_DIR/references/troubleshooting.md" "## 17. A long task" "长任务两种车道仍在 troubleshooting §17"
+assert_has "$SKILL_DIR/references/troubleshooting.md" "team-bg" "Lane A 已改成团队自带的 team-bg"
+assert_has "$SKILL_DIR/references/workflows.md" "troubleshooting.md) §17" "workflows §E 仍指到那一节"
 
 section "12 · roster / status / ps"
 for c in roster status ps; do

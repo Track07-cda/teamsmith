@@ -2889,93 +2889,32 @@ team_magic_context_version() {
   return 0
 }
 
-# ---------------------------------------------------------------- 后台任务能力（M26 / E8 P1）
-# 为什么 doctor 要问这个：长任务（几十分钟的门禁、长构建）在回合里跑会把回合占住；这一组检查回答
-# 「本项目的 harness 有没有后台车道」，没有就给一条**可复制**的项目级推荐。
-# 分层红线（用户拍板，见 E8 §6）：推荐只给**用户自己的 pi 会话**用；团队机械的后台车道是自研的
-# `extension/team-bg.ts`（M27），doctor 既不推荐它、也不让任何第三方包进团队关键路径。
-# 这套探测**不装、不改、不读凭据**：只读项目/用户的 settings 与 `pi list`，外加一次零模型调用的 RPC 查询。
-team_bg_pkg_names() { printf '%s\n' '@aliou/pi-processes' 'pi-background-tasks'; }
-
-# 用户级设置文件（pi 读的那一份；TEAM_PI_SETTINGS_FILE 可指向别处，与 magic-context 同一口径）。
-team_bg_user_settings() { printf '%s\n' "${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}"; }
-
-# 已装的后台任务包：每行「包名<TAB>级别<TAB>来源」；空 = 没装。
-# 读**两份设置文件**（项目 `.pi/settings.json` + 用户设置）—— 这正是 `pi list --approve` 的两个小节
-# （"User packages" / "Project packages"）的来源，但**不 spawn harness**。为什么不在 doctor 里跑 `pi list`：
-# 面板的 health 块会等一次 doctor（data.ts: ttl 600s / timeout 30s），而 TEAM_PI_BIN 指到一个不响应的东西时
-# （smoke 夹具里的 `pi-sleep` 就是），spawn 会白等整个超时 —— M26 实测：那一下就把面板首帧推到 5s 之后，
-# 连累既有断言「pulse logs 有画面」变红。doctor 的每一毫秒都在别人的等待路径上，所以这里只读盘。
-team_bg_pkg_found() {
-  local proj="$TEAM_MAIN_ROOT/.pi/settings.json" user n
-  user="$(team_bg_user_settings)"
-  for n in $(team_bg_pkg_names); do
-    if [ -f "$proj" ] && grep -qF "$n" "$proj" 2>/dev/null; then
-      printf '%s\t%s\t%s\n' "$n" "项目级" "$proj"
-      continue
-    fi
-    if [ -f "$user" ] && grep -qF "$n" "$user" 2>/dev/null; then
-      printf '%s\t%s\t%s\n' "$n" "用户级" "$user"
-    fi
-  done
-  return 0
+# ---------------------------------------------------------------- 已装插件清单（M26 建、M29 改写：只告知，不推荐）
+# 用户拍板（M29）：doctor/init 只**列出这个项目装了哪些插件**，永不推荐第三方功能包；推荐只限于 teamsmith
+# 必需或自带的东西（magic-context 走它自己的依赖检查行；团队会话的后台任务由随 skill 分发的 team-bg 覆盖）。
+# 这套探测**不装、不改、不读凭据、也不 spawn harness**：只读两份设置文件 —— 这正是 `pi list --approve`
+# 打印的 "Project packages" / "User packages" 两个小节的数据来源。
+# 为什么不 spawn：doctor 在巡检面板 health 块的等待路径上（panel/src/data.ts: ttl 600s / timeout 30s），
+# TEAM_PI_BIN 指到一个不响应的东西时 spawn 会白等满超时 —— M26 实测过一次（面板首帧被推到 5s 之后，
+# 连累既有断言「pulse logs 有画面」变红）。
+team_plugin_settings_files() { # → 每行「设置文件<TAB>级别」；项目级在前（同名包去重时项目级胜出）
+  printf '%s\t%s\n' "$TEAM_MAIN_ROOT/.pi/settings.json" "项目级"
+  printf '%s\t%s\n' "${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}" "用户级"
 }
 
-# 加载探测（E8 §4 的可选加固）：`pi --mode rpc` 发 get_commands（**零模型调用**）→ 注册的命令名。
-# 只在真的探测到包时才调用（doctor 的常见路径不付这份时间）。
-# 边界：硬超时 TEAM_BG_PROBE_TIMEOUT（默认 2s；本机实测 0.85s），RPC 起不来/超时 → 返回空，
-#   调用方降级为 skip（doctor 不许变慢变脆）。默认给 2s 而不是 5s：doctor 在面板 health 块的等待路径上，
-#   而 TEAM_PI_BIN 不响应时这里会白等满超时（brief 的上限是 ≤5s，2s 更安全）。
-team_bg_commands_probe() { # [超时秒] → 注册的命令名（空格分隔；空 = 没答上来）
-  local tmo="${1:-${TEAM_BG_PROBE_TIMEOUT:-2}}" bin line="" names="" dl
-  case "${tmo:-}" in ''|*[!0-9]*) tmo=2 ;; esac
-  bin="$(team_pi_bin_path)"
-  command -v "$bin" >/dev/null 2>&1 || { printf '\n'; return 0; }
-  coproc TEAM_BG_RPC {
-    cd "$TEAM_MAIN_ROOT" 2>/dev/null || exit 0
-    exec "$bin" --mode rpc --no-session --approve 2>/dev/null
-  }
-  # 立刻把 fd 与 pid 抄进局部变量（都带 :- 兼容）：coproc 退出后 bash 会**拿走** TEAM_BG_RPC_PID，
-  # 而 CLI 是 set -euo pipefail —— 直接引用它会在「进程已结束」的常见情形下触发 unbound variable
-  # 并让整条命令非 0 退出（M26 实测踩到：doctor 输出停在中途）。同样地，coproc 根本起不来时
-  # 数组也可能是空的，所以这里全部走默认值，拿不到就当成「没答上来」。
-  local rpc_fd="${TEAM_BG_RPC[0]:-}" rpc_in="${TEAM_BG_RPC[1]:-}" rpc_pid="${TEAM_BG_RPC_PID:-}"
-  if [ -z "$rpc_fd" ] || [ -z "$rpc_in" ]; then
-    printf '\n'
-    return 0
-  fi
-  # 请求必须写进 coproc 的 **stdin**（[1]），不能自己 printf 到 stdout —— 那是我们要读的那条管道。
-  printf '{"id":"bg-probe","type":"get_commands"}\n' >&"$rpc_in" 2>/dev/null || true
-  dl=$((SECONDS + tmo))
-  while [ "$SECONDS" -lt "$dl" ]; do
-    if ! IFS= read -r -t 1 -u "$rpc_fd" line; then
-      [ -n "$rpc_pid" ] && kill -0 "$rpc_pid" 2>/dev/null || break   # 进程没了：不用再等
-      continue
-    fi
-    case "$line" in
-      *'"command":"get_commands"'*)
-        # `|| true`：命令表为空时 grep 会返回 1，pipefail 下会让赋值非 0 → set -e 掐断 CLI（同一个坑）。
-        names="$(printf '%s' "$line" | grep -o '"name":"[^"]*"' | sed 's/^"name":"//; s/"$//' | tr '\n' ' ' || true)"
-        break ;;
-    esac
-  done
-  if [ -n "$rpc_pid" ]; then
-    kill -KILL "$rpc_pid" 2>/dev/null || true
-    wait "$rpc_pid" 2>/dev/null || true
-  fi
-  printf '%s\n' "$names"
-  return 0
-}
-
-# 注册的命令里有没有「后台任务」签名（bg / jobs / ps，含 bg-clear / ps:logs 这类变体）。
-# 只当启发式用：没命中 ≠ 包坏了 → 调用方打 warn 并指向 `pi list --approve`，不当失败。
-team_bg_probe_signature_names() { # <命令名列表> → 命中项（空格分隔）；空 = 没命中
-  local names="$1" n out=""
-  for n in $names; do
-    case "$n" in skill:*) continue ;; esac
-    case "$n" in bg|jobs|ps|bg[-:]*|jobs[-:]*|ps[-:]*) out="$out${out:+ }$n" ;; esac
-  done
-  printf '%s\n' "$out"
+team_plugin_list() { # → 每行「包名<TAB>级别」；空 = 这个项目没装插件
+  local f lvl
+  while IFS=$'\t' read -r f lvl; do
+    [ -f "$f" ] || continue
+    # settings.json 的 packages 数组：先压平成一行，再取方括号里的条目（不引入 jq / python）
+    printf '%s' "$(tr -d '\n' < "$f" 2>/dev/null || true)" \
+      | sed -n 's/.*"packages"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
+      | tr ',' '\n' | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | while IFS= read -r p || [ -n "$p" ]; do   # `|| [ -n "$p" ]`：最后一行没有结尾换行时 read 会返回非 0
+          [ -n "$p" ] || continue
+          printf '%s\t%s\n' "$p" "$lvl"
+        done
+  done < <(team_plugin_settings_files) | awk -F'\t' 'NF && !seen[$1]++'
   return 0
 }
 

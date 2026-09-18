@@ -337,11 +337,9 @@ team_cmd_doctor() {
     else warn "$TEAM_AGENT_NOTIFY_CMD（$nre）"; fi
   fi
 
-  # M26（E8 P1）：harness 有没有后台任务能力。这几行不装任何东西、不花模型调用；
-  # 「长任务怎么跑」的两种车道写在 references/troubleshooting.md（插件车道 / 后台 tmux 窗口兜底）。
+  # M26（E8 P1）建、M29（用户拍板）改写：harness 行保留（omp 会话自带后台，文案不同）；
+  # 插件行只**告知已装什么** —— 永不推荐第三方功能包（推荐只限 teamsmith 必需/自带的东西）。
   # 判定次序：配的 harness 就是 omp ≫ PATH 里有 omp（但本项目配的可能是 pi）≫ pi ≫ 都不在。
-  # 为什么多一层：omp 装在 PATH 里而团队实际跑 pi 的环境很常见（本机就是这样）—— 那时说
-  # 「不需要装插件」会误导；**配的是谁**才算数，命令存在只是「也能用」。
   check "harness"
   local h_bin h_name omp_on_path=0
   h_bin="$(team_pi_bin_path)"
@@ -350,44 +348,38 @@ team_cmd_doctor() {
   if [ -n "${TEAM_AGENT_CMD:-}" ]; then
     warn "自定义 adapter（TEAM_AGENT_CMD）：后台任务能力取决于该 harness，无法探测"
   elif [ "$h_name" = "omp" ] && command -v "$h_bin" >/dev/null 2>&1; then
-    warn "omp 自带后台任务（bash 后台派发 / hub wait·cancel / /jobs）→ 不需要装插件"
+    warn "omp 自带后台任务（bash 后台派发 / hub wait·cancel / /jobs）"
   elif [ "$omp_on_path" = "1" ]; then
-    warn "PATH 里有 omp（自带后台任务：bash 后台派发 / hub wait·cancel / /jobs）→ 用 omp 不需要装插件；本项目配的是 $h_name（内置无后台 bash）→ 看下一行 background jobs"
+    warn "PATH 里有 omp（自带后台任务：bash 后台派发 / hub wait·cancel / /jobs）；本项目配的是 $h_name（内置无后台 bash）"
   elif team_have_cmd pi; then
-    pass "pi（内置无后台 bash：长任务看下一行 background jobs）"
+    pass "pi（内置无后台 bash：团队会话的长任务由自带的 team-bg 覆盖）"
   else
     warn "pi/omp 都不在 PATH：harness 无法判定（先看上面 pi 那一行）"
   fi
 
-  # 后台任务包探测 + 加载探测：只有「有效车道是 pi」才有意义（自定义 adapter / 配的 harness 就是 omp 时
-  # 推荐 pi 包是错的）。分层红线（用户拍板）：推荐只给**用户自己的 pi 会话**用；团队机械的后台车道是自研的
-  # team-bg（M27），这里既不推荐它、也不让第三方包进团队关键路径。
-  if [ -z "${TEAM_AGENT_CMD:-}" ] && [ "$h_name" != "omp" ]; then
-    check "background jobs"
-    local bg_hit bg_name bg_lvl bg_names bg_sig
-    bg_hit="$(team_bg_pkg_found)"
-    if [ -n "$bg_hit" ]; then
-      bg_name="$(printf '%s\n' "$bg_hit" | head -1 | cut -f1)"
-      bg_lvl="$(printf '%s\n' "$bg_hit" | head -1 | cut -f2)"
-      pass "$bg_name（$bg_lvl）"
-      # 加载探测（装了但没注册命令 → 没加载；答不上来 → 降级 skip，不当失败）
-      bg_names="$(team_bg_commands_probe)"
-      bg_sig="$(team_bg_probe_signature_names "$bg_names")"
-      check "background jobs 加载"
-      if [ -z "$bg_names" ]; then
-        warn "跳过：pi --mode rpc 没在 ${TEAM_BG_PROBE_TIMEOUT:-5}s 内答上来（包在设置里，但命令签名未确认）"
-      elif [ -n "$bg_sig" ]; then
-        pass "已注册：$bg_sig"
-      else
-        warn "包在设置里但没看到 bg/jobs/ps 命令 → 跑 pi list --approve 核对（可能没加载，或被别的配置挡了）"
-      fi
-    else
-      warn "未检测到（长任务会占住回合）→ 项目级：pi install npm:@aliou/pi-processes -l（首选窄包）｜备选 npm:pi-background-tasks（会全局接管 Anthropic attribution）｜用户自己敲的 /bg 不唤醒模型，要唤醒必须由 agent 侧启动"
-    fi
+  # 已装插件（M29：信息行，只告知不推荐）。读两份设置文件（项目 + 用户），**不 spawn harness**：
+  # doctor 在巡检面板 health 块的等待路径上（panel/src/data.ts: ttl 600s / timeout 30s），
+  # spawn 在 TEAM_PI_BIN 不响应时会白等满超时 —— M26 实测过一次。
+  check "已装插件 packages"
+  local plug_all plug_shown plug_name plug_lvl plug_n=0
+  plug_all="$(team_plugin_list)"
+  if [ -z "$plug_all" ]; then
+    warn "未检测到插件（teamsmith 不依赖第三方插件；团队会话的后台任务由自带 team-bg 覆盖）"
+  else
+    plug_shown=""
+    while IFS=$'\t' read -r plug_name plug_lvl; do
+      [ -n "$plug_name" ] || continue
+      plug_n=$((plug_n + 1))
+      [ "$plug_n" -le 3 ] && plug_shown="$plug_shown${plug_shown:+、}$plug_name（$plug_lvl）"
+    done <<< "$plug_all"
+    if [ "$plug_n" -gt 3 ]; then pass "$plug_shown 等 $plug_n 个"; else pass "$plug_shown"; fi
   fi
 
   check "门禁 TEAM_GATES"; if [ -n "$TEAM_GATES" ]; then pass "$TEAM_GATES"; else warn "未配置门禁命令：复验无法自动判定，只能靠人读 diff"; fi
-  check "名册 TEAM_AGENTS"; if [ -n "$(team_agents)" ]; then pass "$(team_agents | tr '\n' ' ')"; else fail "名册为空"; fi
+  # M29：名册为空不再是失败（PM-only 开局合法）；真正拦住的是 dispatch（没有 agent 可用）。
+  check "名册 TEAM_AGENTS"
+  if [ -n "$(team_agents)" ]; then pass "$(team_agents | tr '\n' ' ')"
+  else warn "名册为空：可以 PM-only 开局；要派单先 $TEAM_CLI add-agent <name>"; fi
 
   check "worktree 目录"; if [ -d "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR" ]; then
       pass "$(ls -1 "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR" 2>/dev/null | wc -l) 个"

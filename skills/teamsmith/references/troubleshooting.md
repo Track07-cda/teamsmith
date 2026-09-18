@@ -506,29 +506,25 @@ walk away and nobody knows it finished.
 Pi commands load `extension/team-bg.ts`, which gives the session `team_bg_run` / `team_bg_wait`: a detached job
 with a bounded `state/bg/<id>.log`, exactly one merged wake-up per batch of finished jobs, silence for harvested
 jobs, and one `settled-with-unharvested=<n>` line per turn end in `state/bg.log`. Runbook:
-[workflows.md](workflows.md) §E2. The two lanes below are for sessions that are **not** that (a custom adapter
-without `{bg_ext}`), or when you want a background lane in your own user-level Pi sessions.
+[workflows.md](workflows.md) §E2. There are two lanes, and both ship with teamsmith — the skill never asks anyone to install a third-party plugin.
+When the team lane is not available (a custom adapter without `{bg_ext}`), use the tmux-window lane:
 
-When the team lane is not available, there are two more lanes — pick per project, both are legitimate:
-
-| | Lane A · a background-job package | Lane B · a background tmux window (zero dependencies) |
+| | Lane A · the team's own background lane (`team-bg`) | Lane B · a background tmux window |
 |---|---|---|
-| What runs | the **agent** starts the job with the package's tool (`bg_run`, `process`, …) and ends its turn; the package notifies when the job exits | the PM starts the command in a dedicated tmux window and reads the tail — or the runner writes one inbox line (`team notify pm --from-file <file>`) when it is done |
-| Who gets woken | the package wakes the agent session that started it | the PM looks at the window / reads the inbox |
-| Cost | one third-party package, installed per project (`-l`) | one window, no dependency |
-| Watch out | the four rules below | a stray window is easy to lose: name it, and make it print a one-line verdict at the end (`echo "GATES rc=$? <ID>"`) |
+| What runs | the **agent** starts the job, ends its turn, and is woken when the job exits | the PM starts the command in a dedicated tmux window and reads the tail — or the runner writes one inbox line (`team notify pm --from-file <file>`) when it is done |
+| Who gets woken | the bundled extension wakes the agent session that started the job | the PM looks at the window / reads the inbox |
+| Cost | none — the extension ships with the skill | one window, no dependency |
+| Watch out | the four rules below are what the extension enforces | a stray window is easy to lose: name it, and make it print a one-line verdict at the end (`echo "GATES rc=$? <ID>"`) |
 
-`team doctor` answers which lane is available: `harness` (pi has **no** built-in background bash; omp ships one —
-`bash` background dispatch, `hub` wait/cancel, `/jobs`), `background jobs` (a known package in this project's
-`.pi/settings.json` or in pi's own settings file — read from disk, never by spawning the harness, because the panel's
-health block waits on `doctor`; when absent it prints a copy-pasteable `pi install … -l`) and
-`background jobs 加载` (a bounded `pi --mode rpc` probe that the package's commands are actually registered — because
-being listed in a settings file is not the same as being loaded).
+`team doctor` reports which harness this project runs (`harness`) and which plugins the project already carries —
+that second row is labelled `已装插件 packages` and is **information, never a recommendation**. The only package
+teamsmith asks for is magic-context, and `doctor` checks it on its own row.
 
-Four rules decide whether lane A works. All of them come from the packages' own issue trackers and docs:
+Four rules the background lane has to enforce. They come from the failure modes the ecosystem's background-job
+extensions wrote down in their issue trackers:
 
-1. **The agent must start the job.** A task started by *you* through the package's UI (`/bg`) notifies in the UI but
-   does **not** wake a model turn; only an agent-side start wakes the agent on completion.
+1. **The agent must start the job.** A job a human starts directly does not wake a model turn when it finishes; only
+   an agent-side start wakes the agent that is waiting for the result.
 2. **Merge the notifications.** Several jobs finishing together must arrive as one notice; one notice per job means
    one extra turn per job.
 3. **Deliver when idle.** The completion notice must land when the agent has no tool call in flight (a
@@ -536,11 +532,6 @@ Four rules decide whether lane A works. All of them come from the packages' own 
 4. **Already harvested → say nothing.** If the agent waited for the job, it already has the result; notifying again
    spends a turn on information it has.
 
-Which package: `@aliou/pi-processes` is the narrow choice (process management only). `pi-background-tasks` is
-broader, and its README states that a normal installation **globally loads its own Claude Code OAuth
-attribution/sanitization provider** for Anthropic sessions — that side effect belongs to the whole pi installation,
-so say it out loud before recommending it.
-
-The same four rules are why the team's own background lane is written in-house (no third-party package on the
-team's critical path) with an explicit harvest ledger under `state/` (`state/bg.log` + `state/bg/<id>.log`): the
-rules have to be enforced by the code that owns the jobs, not by convention.
+That is why the lane is implemented in-house (no third-party package on the team’s critical path), with an
+explicit harvest ledger under `state/` (`state/bg.log` + `state/bg/<id>.log`): the rules have to be enforced by the
+code that owns the jobs, not by convention.
