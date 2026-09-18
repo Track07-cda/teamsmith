@@ -23,7 +23,7 @@ PM(this session, tmux <session>:pm)     worker agents(each in .worktrees/<agent>
 
 ## Starting a new project: use the `teamsmith-init` skill
 
-Initialization lives in its own skill: read `skills/teamsmith-init/SKILL.md` — the ordered questions to settle with
+Initialization lives in its own skill: load the **`teamsmith-init`** skill and read its SKILL.md — the ordered questions to settle with
 the user, `bash <teamsmith>/scripts/team bootstrap`, and the handoff back here. Everything below is the daily loop,
 which starts once the project is up.
 
