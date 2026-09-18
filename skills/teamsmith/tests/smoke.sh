@@ -3489,11 +3489,60 @@ assert_file "$TMP/meetings/order-api/transcript/0001_$(basename "$REPO")_proposa
 assert_has "$TMP/meetings/order-api/transcript/0001_"*"_proposal.md" "from: $(basename "$REPO")/pm@" "消息带身份戳（项目/PM@session）"
 assert_has "$TMP/mtg-say.log" "默认关" "默认不敲门（只落盘）"
 
-# agent 不能冒充人类下令
-if $TEAM meeting say order-api --intent info --as-user "我以用户名义下令" >"$TMP/mtg-user.log" 2>&1; then
+# agent 不能冒充人类下令。
+# M32：探针本体单独落盘（`$M32T_PROBE`），`</dev/null` 是**探针自己的纪律** —— 断言不许依赖调用者
+#   的 fd 形状。事故（2026-09-18）：PM 在 tmux 窗口里直接跑全量门禁（自然姿势 `> log 2>&1`，stdin
+#   还是 pane pty）→ cmd-meeting.sh 的 `[ ! -t 0 ] && [ ! -t 1 ]` 判据看到 stdin 是 tty，改走
+#   `TEAM_MEETING_ALLOW_USER_ID` 那条分支，拒绝理由里没有「冒充」→ 这里假红。
+#   11e 与紧随其后的 11e2 跑的是**同一份字节**（谁把 `</dev/null` 拿掉，11e2 就红）。
+#   同类自查（本仓库总共两处看 tty fd）：另一处是 common.sh:9 的配色 `[ -t 1 ]`，它只决定 ANSI 码，
+#   而断言一律 grep 重定向后的文件（`team` 子进程的 stdout 是文件 → 配色本来就关），与外部形状无关；
+#   其余探针不看 fd，无需 detach。
+M32T_PROBE="$TMP/m32tty-as-user-probe.sh"
+cat > "$M32T_PROBE" <<EOS
+#!/usr/bin/env bash
+# M32 探针本体：模拟「没有 tty 的 agent 进程」。形状记录写进 \$M32T_SHAPE_LOG（未设时 /dev/null），
+# 11e2 用它证明夹具真的造出了「stdin=tty / stdout=文件」的外框（造不出来就红，不会假绿）。
+printf 'probe_stdin_tty=%s probe_stdout_tty=%s probe_stdin=%s\n' \\
+  "\$([ -t 0 ] && echo yes || echo no)" "\$([ -t 1 ] && echo yes || echo no)" \\
+  "\$(readlink /proc/\$\$/fd/0 2>/dev/null || echo '?')" >> "\${M32T_SHAPE_LOG:-/dev/null}"
+cd "$REPO" || exit 1
+$TEAM meeting say order-api --intent info --as-user "我以用户名义下令" </dev/null
+EOS
+if bash "$M32T_PROBE" >"$TMP/mtg-user.log" 2>&1; then
   bad "--as-user 在 agent 里应被拒绝"
 else ok "--as-user 被拒绝（agent 不得冒充用户）"; fi
 assert_has "$TMP/mtg-user.log" "冒充" "拒绝理由说明了冒充"
+
+# ---------------------------------------------------------------- 11e2. M32：探针与调用者的 fd 形状解耦
+section "11e2 · M32：--as-user 探针自 detach stdin（外部 stdin=pty 也必须绿）"
+# 造出与事故**逐 fd 等价**的外部形状：stdin 是真 pty（script 给的），stdout 是文件。
+# 不引入 tmux（`script -qc` 就够；tmux 窗口的 stdin 也只是 pane pty）—— 所以本段快慢都跑。
+# 跑的是 11e 那个探针文件本体；「形状真的成立」由探针自己记的 probe_stdin_tty/probe_stdout_tty
+# 证明：夹具退化（拿不到 tty）时先红在夹具有效性上，不会让真断言假绿。
+if ! command -v script >/dev/null 2>&1; then
+  cond_skip "11e2·M32 tty 外框回归" "本机没有 script（util-linux），造不出 stdin=tty 的外部形状"
+else
+  M32T_SHAPE="$TMP/m32tty-shape.log"; M32T_TTYLOG="$TMP/m32tty-probe-tty.log"
+  rm -f "$M32T_SHAPE" "$M32T_TTYLOG"
+  # 外框脚本用 **quoted** heredoc + 环境传参：unquoted heredoc 会把内容里的反引号/$( ) 当真命令
+  # 替换执行（M32 实测踩过：注释里写了个反引号包住的命令，冒烟自己把它跑了一遍）。
+  cat > "$TMP/m32tty-outer.sh" <<'EOS'
+#!/usr/bin/env bash
+# 外部形状 = PM 在 tmux 窗口里跑门禁（stdin = pty，stdout = 文件；等价于 bash smoke.sh > log）。
+printf 'outer_stdin_tty=%s\n' "$([ -t 0 ] && echo yes || echo no)" > "${M32T_SHAPE:?}"
+M32T_SHAPE_LOG="${M32T_SHAPE:?}" bash "${M32T_PROBE:?}" >"${M32T_TTYLOG:?}" 2>&1
+printf 'probe_rc=%s\n' "$?" >> "${M32T_SHAPE:?}"
+EOS
+  env M32T_SHAPE="$M32T_SHAPE" M32T_PROBE="$M32T_PROBE" M32T_TTYLOG="$M32T_TTYLOG" \
+    script -qc "bash $TMP/m32tty-outer.sh" /dev/null >/dev/null 2>&1
+  assert_has "$M32T_SHAPE" "outer_stdin_tty=yes" "M32 夹具有效性：外框的 stdin 确实是 tty（script 真给了 pty）"
+  assert_has "$M32T_SHAPE" "probe_stdin_tty=yes" "M32 夹具有效性：探针继承到的 stdin 是 tty（事故形状成立）"
+  assert_has "$M32T_SHAPE" "probe_stdout_tty=no" "M32 夹具有效性：探针的 stdout 是文件（与事故形状一致）"
+  assert_not "$M32T_SHAPE" "probe_rc=0" "M32：tty 外框下探针仍被拒绝（外部 tty 不会把它放行）"
+  assert_has "$M32T_TTYLOG" "冒充" "M32：拒绝理由仍是「冒充」版（探针自己 </dev/null，与外部 fd 解耦）"
+  assert_not "$M32T_TTYLOG" "TEAM_MEETING_ALLOW_USER_ID" "M32：没有滑到「需要 TEAM_MEETING_ALLOW_USER_ID」那条分支"
+fi
 
 # 未登记的跨 session 打字仍然禁止；会议登记后才允许敲门
 if TEAM_ROOT="$REPO" bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_foreign_target_ok "'$SESSION':keep"' >/dev/null 2>&1; then
