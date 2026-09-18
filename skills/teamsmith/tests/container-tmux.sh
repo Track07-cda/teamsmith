@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+# M28 · tmux 接触型测试的容器跑法（五次 server 全灭事故换来的纪律，见 references/troubleshooting.md §18）
+#
+#   bash skills/teamsmith/tests/container-tmux.sh --selftest
+#   bash skills/teamsmith/tests/container-tmux.sh -- bash skills/teamsmith/tests/pm-box-real.sh --idle-secs 4
+#   bash skills/teamsmith/tests/container-tmux.sh --with-pi --cmd 'bash skills/teamsmith/tests/pm-box-real.sh'
+#
+# 选项：
+#   --selftest        容器内 tmux 生死（含裸 kill-server）+ 断言宿主 server 指纹前后逐字节不变
+#   --with-pi         运行时把宿主的 pi 包目录只读挂进去，并生成一个 `pi` 包装器（不挂 $HOME）
+#   --cmd '…'         在里面跑一行 shell（否则 `-- cmd args…` 直接 exec）
+#   --image NAME      覆盖镜像名     ｜ --rebuild 强制重建镜像
+#   --print-runtime   只打印探测到的运行时与镜像名
+#   --keep-shim       跑完不删生成的包装器目录（排查用）
+#   -h|--help         这页
+#
+# 为什么必须进容器：tmux 选 socket 的顺序是 **`-L/-S`（命令行） > `$TMUX`（环境变量） >
+# `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default`** —— 所以在 tmux 会话里跑「会自己开窗/杀 server」的夹具时，
+# 任何一次没有显式隔离的 `tmux` 调用都可能落到**调用者的 server** 上（M28 探针 #4/#5 实测）。
+# 容器把宿主 socket 目录整个挡在挂载之外（再叠一层 uid 差异：容器内是 root，socket 目录是 `tmux-0`，
+# 宿主的在 `tmux-<uid>`）—— 于是「打不到宿主」是构造性的，不靠夹具自觉。
+#
+# 契约（给门禁/夹具用）：
+#   exit 0  容器内命令跑完且退出码为 0
+#   exit 1  容器内命令非 0（或容器本身跑不起来）
+#   exit 77 容器不可用（没有 podman / 拉不下镜像 / 仓库路径不在宿主共享目录）——**不是失败**：
+#           打印 SKIP 理由，门禁据此跳过
+#
+# 环境变量：
+#   TEAM_TMUX_IMAGE        镜像名（默认 teamsmith-tmux-test:alpine；本地无则构建一次并缓存）
+#   TEAM_TMUX_BASE_IMAGE   Dockerfile 的 FROM（默认 docker.io/library/alpine:latest）
+#   TEAM_TMUX_RUNTIME      强制运行时命令（如 "podman" 或 "distrobox-host-exec podman"）
+#   TEAM_TMUX_HOME         容器内的 HOME（默认 /root；刻意不挂宿主 $HOME，pi 拿不到密钥）
+#   TEAM_TMUX_MEMORY       内存上限（默认 1g；0 = 不加限制）
+#   TEAM_TMUX_TIMEOUT      容器内命令的墙钟上限秒（默认 1800）
+set -uo pipefail
+
+SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
+IMAGE="${TEAM_TMUX_IMAGE:-teamsmith-tmux-test:alpine}"
+BASE_IMAGE="${TEAM_TMUX_BASE_IMAGE:-docker.io/library/alpine:latest}"
+MEMORY="${TEAM_TMUX_MEMORY:-1g}"
+CT_TIMEOUT="${TEAM_TMUX_TIMEOUT:-1800}"
+
+SELFTEST=0; WITH_PI=0; REBUILD=0; KEEP_SHIM=0; PRINT_RUNTIME=0; CMD_STRING=""; ARGV=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --selftest) SELFTEST=1; shift ;;
+    --with-pi) WITH_PI=1; shift ;;
+    --rebuild) REBUILD=1; shift ;;
+    --keep-shim) KEEP_SHIM=1; shift ;;
+    --print-runtime) PRINT_RUNTIME=1; shift ;;
+    --image) IMAGE="${2:?--image 需要镜像名}"; shift 2 ;;
+    --image=*) IMAGE="${1#*=}"; shift ;;
+    --cmd) CMD_STRING="${2:?--cmd 需要命令串}"; shift 2 ;;
+    --cmd=*) CMD_STRING="${1#*=}"; shift ;;
+    --) shift; ARGV=("$@"); break ;;
+    -h|--help) sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d'; exit 0 ;;
+    *) printf 'container-tmux: 未知参数 %s（--help 看用法）\n' "$1" >&2; exit 2 ;;
+  esac
+done
+case "$CT_TIMEOUT" in ''|*[!0-9]*) CT_TIMEOUT=1800 ;; esac
+
+say()  { printf '%s\n' "$*"; }
+note() { printf '  \033[2m·\033[0m %s\n' "$*"; }
+skip() { printf 'SKIP: %s\n' "$*"; exit 77; }
+
+# ── 运行时探测（真宿主直跑优先；在 distrobox 里经 host-exec 回宿主）─────────────────────────────
+CT_RT=(); CT_RT_DESC=""
+ct_resolve_runtime() {
+  if [ -n "${TEAM_TMUX_RUNTIME:-}" ]; then
+    # shellcheck disable=SC2206
+    CT_RT=(${TEAM_TMUX_RUNTIME}); CT_RT_DESC="$TEAM_TMUX_RUNTIME（显式指定）"
+    timeout 30 "${CT_RT[@]}" --version >/dev/null 2>&1 && return 0 || return 1
+  fi
+  if command -v podman >/dev/null 2>&1; then
+    CT_RT=(podman); CT_RT_DESC="podman（本机直跑）"
+    timeout 30 podman --version >/dev/null 2>&1 && return 0 || return 1
+  fi
+  if command -v distrobox-host-exec >/dev/null 2>&1; then
+    if timeout 30 distrobox-host-exec podman --version >/dev/null 2>&1; then
+      CT_RT=(distrobox-host-exec podman); CT_RT_DESC="distrobox-host-exec podman（回宿主）"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# 调用者的 tmux socket（TMUX 的第一段就是 socket 路径；没有 TMUX 时退回默认目录）
+caller_socket() {
+  if [ -n "${TMUX:-}" ]; then printf '%s' "${TMUX%%,*}"; else printf '%s' "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/default"; fi
+}
+
+# ── 宿主 tmux 指纹：本轮容器跑完后必须逐字节一致 ──────────────────────────────────────────────
+# 只读（`list-sessions` 不会起 server：拿不到就报 no server running —— 实测见 M28 报告）。
+host_tmux_fingerprint() {
+  local out="" s sock
+  for s in "$(caller_socket)" "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/default" /tmp/tmux-$(id -u)/default; do
+    [ -n "$s" ] || continue
+    case "$out" in *"|$s|"*) continue ;; esac      # 同一个 socket 只算一次
+    out="$out|$s|"
+    if [ -S "$s" ]; then
+      out="$out$(stat -c '%i:%Y:%s' "$s" 2>/dev/null || printf '?')|"
+      out="$out$(env -u TMUX -u TMUX_PANE timeout 5 tmux -S "$s" list-sessions \
+                  -F '#{session_name}:#{session_created}:#{session_windows}:#{session_attached}' 2>/dev/null | sort | tr '\n' ',')|"
+    else
+      out="$out(absent)|"
+    fi
+  done
+  # 活着的 tmux 进程（server 的 argv 里带 tmux；杀/起 server 都会变）
+  out="$out|procs|$(ps -eo pid=,args= 2>/dev/null | grep -E '(^|/)tmux( |$)' | grep -v grep | sort | tr '\n' ';')"
+  printf '%s' "$out" | md5sum | cut -d' ' -f1
+}
+
+# ── 镜像准备（本地无则构建一次；构建脚本与上下文都在 $HOME 下，镜像层里不写任何密钥）─────────────
+CT_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/teamsmith/tmux-container"
+image_exists() { timeout 60 "${CT_RT[@]}" image exists "$IMAGE" >/dev/null 2>&1; }
+
+# 仓库路径在容器里必须看得见（宿主共享目录之外 → 挂载不进去：降级跳过，不是失败）。
+# 同时也能探测「podman 能查镜像但跑不起容器」这类故障。
+ct_probe_mount() { ct_run test -e "$REPO_ROOT/skills/teamsmith/scripts/team" >/dev/null 2>&1; }
+
+ensure_image() {
+  image_exists && return 0
+  if [ "$REBUILD" != "1" ] && [ -n "${TEAM_TMUX_IMAGE:-}" ]; then
+    skip "镜像 $IMAGE 不存在（TEAM_TMUX_IMAGE 指定了名字就不会自动构建）"
+  fi
+  mkdir -p "$CT_CACHE" || skip "建不了镜像构建目录 $CT_CACHE"
+  cat > "$CT_CACHE/Containerfile.tmux" <<EOF
+# M28 生成的 tmux 测试镜像（一次构建、之后走本地缓存）。
+# 只放测试需要的工具：tmux 做 tmux 现场，bash/git 给团队脚本与夹具，nodejs 用来在容器里跑真 pi
+# （pi 是 node ESM bundle，运行时只读挂载进去），python3 给 fake-tui 一类夹具。
+FROM $BASE_IMAGE
+RUN apk add --no-cache tmux bash git nodejs python3
+EOF
+  say "构建 tmux 测试镜像 $IMAGE（一次，之后缓存；base=$BASE_IMAGE）…"
+  if ! timeout 900 "${CT_RT[@]}" build -t "$IMAGE" -f "$CT_CACHE/Containerfile.tmux" "$CT_CACHE" >"$CT_CACHE/build.log" 2>&1; then
+    say "镜像构建失败（尾 10 行，全文 $CT_CACHE/build.log）："
+    tail -10 "$CT_CACHE/build.log" | sed 's/^/     /'
+    skip "容器不可用：镜像 $IMAGE 构建/拉取失败"
+  fi
+  image_exists || skip "容器不可用：镜像 $IMAGE 构建后仍查不到"
+  say "镜像就绪：$IMAGE"
+  return 0
+}
+
+# ── 容器内环境与挂载 ──────────────────────────────────────────────────────────────────────────
+# 关键点：
+#   * TMUX/TMUX_PANE/DBUS_SESSION_BUS_ADDRESS 一律清掉（前两个是路由开关；DBUS 会让 pane 里的进程
+#     去跟宿主 systemd 要 scope，报 "Couldn't move process" 噪声）。
+#   * 每一个宿主挂载都用**同一个绝对路径**（夹具里的 SKILL_DIR/仓库路径不用翻译）。
+#   * 宿主 socket 目录若落在挂载范围内，用 --tmpfs 盖掉（否则共享的 socket 文件仍可连接）。
+CT_MOUNTS=(); CT_SOCKMASK=()
+ct_build_mounts() {
+  # 仓库只读 + 缓存目录（容器内要跑的自检脚本/pi 包装器都在这里；只读挂载，路径与宿主一致）
+  CT_MOUNTS=(-v "$REPO_ROOT:$REPO_ROOT:ro" -v "$CT_CACHE:$CT_CACHE:ro")
+  # --with-pi 时另挂 pi 自己的包目录（只有 npm 包，没有任何密钥）：~/.pi 与 auth.json 一律不进容器。
+  [ -n "${CT_PI_NODE_MODULES:-}" ] && CT_MOUNTS+=(-v "$CT_PI_NODE_MODULES:$CT_PI_NODE_MODULES:ro")
+  local sockdir; sockdir="$(dirname "$(caller_socket)")"
+  case "$sockdir/" in
+    "$REPO_ROOT/"*|"$CT_CACHE/"*) CT_SOCKMASK=(--tmpfs "$sockdir") ;;
+  esac
+}
+
+# --with-pi：生成一个 pi 包装器（镜像里不带路径/密钥；运行时把宿主现有 pi 的包目录只读挂进去）
+# 刻意**不挂 $HOME**：容器里的 pi 拿不到 provider 配置/密钥，也写不到宿主的 ~/.pi。
+# 对投递守卫体检这类夹具来说这正好 —— 它只关心输入框的真实渲染，不需要模型。
+CT_SHIM=""; CT_PI_NODE_MODULES=""
+ct_make_shim() {
+  local bunglobal="${BUN_INSTALL:-$HOME/.bun}/install/global/node_modules"
+  local cli="$bunglobal/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+  if [ ! -f "$cli" ]; then
+    note "找不到 pi bundle（$cli）—— --with-pi 跳过 pi 包装器"
+    return 0
+  fi
+  CT_PI_NODE_MODULES="$bunglobal"
+  CT_SHIM="$CT_CACHE/shim"
+  rm -rf "$CT_SHIM"; mkdir -p "$CT_SHIM/bin"
+  cat > "$CT_SHIM/bin/pi" <<EOF
+#!/bin/sh
+# M28 生成：容器里的 \`pi\` = alpine 的 node 跑宿主只读挂进来的 bundle。
+exec node "$cli" "\$@"
+EOF
+  chmod +x "$CT_SHIM/bin/pi"
+  note "pi 包装器：$CT_SHIM/bin/pi → node $cli（不挂 \$HOME：容器里没有 provider 密钥）"
+}
+
+ct_run() { # <argv...>：在容器里跑（清掉继承的 tmux/dbus 身份）
+  local -a cmd=("$@")
+  [ "${#cmd[@]}" -gt 0 ] || return 2
+  local -a mem=(); [ "$MEMORY" != "0" ] && [ -n "$MEMORY" ] && mem=(--memory "$MEMORY")
+  local -a patharg=()
+  [ -n "$CT_SHIM" ] && patharg=(-e "PATH=$CT_SHIM/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+  timeout "$CT_TIMEOUT" "${CT_RT[@]}" run --rm --workdir "$REPO_ROOT" \
+    "${mem[@]}" "${CT_MOUNTS[@]}" "${CT_SOCKMASK[@]}" \
+    -e "TERM=${TERM:-xterm-256color}" -e "LANG=C.UTF-8" -e "LC_ALL=C.UTF-8" \
+    -e "HOME=${TEAM_TMUX_HOME:-/root}" -e "TEAM_TMUX_CONTAINER=1" -e "M28_HOST_SOCK=$(caller_socket)" \
+    "${patharg[@]}" \
+    "$IMAGE" env -u TMUX -u TMUX_PANE -u DBUS_SESSION_BUS_ADDRESS "${cmd[@]}" < /dev/null
+}
+
+# ── 自检：容器内 tmux 生死 + 宿主 server 指纹不变 ──────────────────────────────────────────────
+ct_selftest() {
+  local before after inner_log rc
+  before="$(host_tmux_fingerprint)"
+  say "宿主 tmux 指纹（前）：$before"
+  note "调用者 socket：$(caller_socket)（容器内必须看不到它）"
+  inner_log="$CT_CACHE/selftest.log"; mkdir -p "$CT_CACHE"
+
+  # 容器内：① 身份变量必须已清 ② 宿主 socket 不可见 ③ 裸 tmux 能开窗、能杀 server（就是 M23 那种形状）
+  # ④ 用的是容器自己的 socket 目录
+  cat > "$CT_CACHE/selftest-inner.sh" <<'INNER'
+set -u
+fail=0
+chk() { # <说明> <期望> <实际>
+  if [ "$2" = "$3" ]; then printf '  ok   %s (%s)\n' "$1" "$3"; else printf '  BAD  %s（期望 %s，实际 %s）\n' "$1" "$2" "$3"; fail=1; fi
+}
+chk "容器内 tmux 可用" "yes" "$(command -v tmux >/dev/null 2>&1 && printf yes || printf no)"
+chk "TMUX 已清空" "" "${TMUX:-}"
+chk "TMUX_PANE 已清空" "" "${TMUX_PANE:-}"
+chk "DBUS_SESSION_BUS_ADDRESS 已清空" "" "${DBUS_SESSION_BUS_ADDRESS:-}"
+chk "宿主 socket 不可见（$M28_HOST_SOCK）" "no" "$([ -e "${M28_HOST_SOCK:-/nonexistent}" ] && printf yes || printf no)"
+chk "容器 socket 目录里没有宿主的 tmux-1000" "no" "$([ -d /tmp/tmux-1000 ] && printf yes || printf no)"
+chk "容器 uid（决定 socket 目录 = tmux-N）" "0" "$(id -u)"
+# 裸 tmux：没有 env -u / -L —— 在宿主里这就是打向调用者 server 的那一发
+if tmux new-session -d -s m28-selftest 'sleep 20' 2>/dev/null; then
+  chk "裸 tmux new-session 在容器里成功" "yes" "yes"
+else
+  chk "裸 tmux new-session 在容器里成功" "yes" "no"
+fi
+sock="$(env -u TMUX -u TMUX_PANE tmux display-message -p '#{socket_path}' 2>/dev/null || true)"
+printf '  info 裸 tmux 用的 socket：%s\n' "${sock:-<无>}"
+case "$sock" in /tmp/tmux-0/*|"$HOME"/*|/tmp/tmux-"$(id -u)"/*) printf '  ok   socket 在容器自己的目录里\n' ;; *) printf '  BAD  socket 不在容器自己的目录（%s）\n' "${sock:-<无>}"; fail=1 ;; esac
+chk "容器里看得见 1 个 session" "1" "$(tmux list-sessions -F x 2>/dev/null | wc -l | tr -d ' ')"
+chk "capture-pane 能读容器内的窗格" "yes" "$(tmux capture-pane -p -t m28-selftest >/dev/null 2>&1 && printf yes || printf no)"
+# 杀 server：容器内不许带任何隔离，正是要证明「裸 kill-server 伤不到宿主」
+if tmux kill-server >/dev/null 2>&1; then printf '  ok   裸 tmux kill-server 成功\n'; else printf '  BAD  裸 tmux kill-server 失败\n'; fail=1; fi
+chk "kill-server 后容器内没有 server" "gone" "$(tmux list-sessions >/dev/null 2>&1 && printf alive || printf gone)"
+exit "$fail"
+INNER
+
+  ct_run bash "$CT_CACHE/selftest-inner.sh" >"$inner_log" 2>&1
+  rc=$?
+  sed 's/^/  /' "$inner_log" | head -40
+  if [ "$rc" -ne 0 ]; then
+    say "✗ --selftest：容器内自检失败（exit=$rc，全文 $inner_log）"
+    return 1
+  fi
+  after="$(host_tmux_fingerprint)"
+  say "宿主 tmux 指纹（后）：$after"
+  if [ "$before" != "$after" ]; then
+    say "✗ --selftest：宿主 tmux 指纹变了（前 $before ≠ 后 $after）—— 隔离没生效，先停下查"
+    return 1
+  fi
+  say "✓ 自检通过：容器内 tmux 生死正常（含裸 kill-server），宿主 server 指纹逐字节不变（$after）"
+  return 0
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────────────────────
+mkdir -p "$CT_CACHE" || skip "建不了缓存目录 $CT_CACHE"
+if ! ct_resolve_runtime; then
+  skip "找不到可用的容器运行时（podman 直接不可用，distrobox-host-exec podman 也不通）——容器不可用时门禁跳过而不是红"
+fi
+if [ "$PRINT_RUNTIME" = "1" ]; then say "runtime: $CT_RT_DESC"; say "image:   $IMAGE"; exit 0; fi
+note "运行时：$CT_RT_DESC"
+[ "$WITH_PI" = "1" ] && ct_make_shim
+ct_build_mounts
+ensure_image || exit $?
+if ! ct_probe_mount; then
+  skip "容器里看不到仓库路径 $REPO_ROOT（不在宿主共享目录里）或容器起不来 —— 降级跳过"
+fi
+
+if [ "$SELFTEST" = "1" ]; then
+  ct_selftest || exit 1
+  [ "$KEEP_SHIM" = "1" ] || rm -rf "$CT_SHIM" 2>/dev/null || true
+  exit 0
+fi
+
+if [ -n "$CMD_STRING" ]; then
+  ct_run bash -c "$CMD_STRING"
+elif [ "${#ARGV[@]}" -gt 0 ]; then
+  ct_run "${ARGV[@]}"
+else
+  printf 'container-tmux: 没有要跑的命令（--cmd "…" 或 -- cmd args…；--selftest 跑自检）\n' >&2
+  exit 2
+fi
+rc=$?
+[ "$KEEP_SHIM" = "1" ] || rm -rf "$CT_SHIM" 2>/dev/null || true
+if [ "$rc" -eq 124 ]; then
+  say "✗ 容器内命令超时（TEAM_TMUX_TIMEOUT=$CT_TIMEOUT）"
+fi
+exit "$rc"

@@ -43,6 +43,12 @@ SESSION="teamsmith-flip-$$"
 SUBMIT_LOG="$SB/submit.log"
 : > "$SUBMIT_LOG"
 
+# M28：本夹具自己的 tmux 流量也必须有隔离证据 —— 顶层 unset TMUX + 私有 TMUX_TMPDIR。
+# 不隔离的话，下面每一发裸 `tmux` 都会按 `$TMUX` 打到调用者的 server（M23 事故形状）；
+# 判定口径见 tests/tmux-lint.pl（口径 A–D），门禁会扫这一条。
+unset TMUX TMUX_PANE 2>/dev/null || true
+TMUX_TMPDIR="$SB/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
+
 # 调用方项目（真仓库）的收件箱/状态指纹：夹具绝不允许碰它们
 REAL_MAIN="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | xargs -r dirname || true)"
 real_fp() { # <根> → 目录指纹（不存在也算一个值）

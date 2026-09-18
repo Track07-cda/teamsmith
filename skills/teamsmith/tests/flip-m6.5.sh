@@ -30,6 +30,11 @@ fi
 
 TMP="$(mktemp -d /tmp/teamsmith-flip-m6.5.XXXXXX)"
 SESS="teamsmith-flip-m65-$$"
+
+# M28：夹具自己的 tmux 调用要有隔离证据（裸 tmux 按 $TMUX 打到调用者 server —— M23 事故形状）。
+# unset TMUX + 私有 TMUX_TMPDIR；工具在私有 server 的窗口里跑，继承同一套环境。口径见 tests/tmux-lint.pl。
+unset TMUX TMUX_PANE 2>/dev/null || true
+TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
 cleanup() { tmux kill-session -t "$SESS" 2>/dev/null || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 

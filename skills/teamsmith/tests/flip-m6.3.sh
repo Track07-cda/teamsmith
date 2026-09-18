@@ -30,6 +30,12 @@ BASE="${TEAM_FLIP_BASE:-}"
 TMP="$(mktemp -d /tmp/teamsmith-flip-m6.3.XXXXXX)"
 SOCK="m63flip-$$"
 mkdir -p "$TMP/red" "$TMP/shim"
+
+# M28：夹具自己的 tmux 调用要有隔离证据（裸 tmux 按 $TMUX 打到调用者 server —— M23 事故形状）。
+# 下面仍旧保留 PATH shim（工具的调用走 -L）；这里补的是**本脚本自己**的顶层白名单：
+# unset TMUX + 私有 TMUX_TMPDIR，shim 洗掉也不会回落默认 socket。口径见 tests/tmux-lint.pl。
+unset TMUX TMUX_PANE 2>/dev/null || true
+TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
 git -C "$REPO_ROOT" archive "$BASE" skills/teamsmith | tar -x -C "$TMP/red" || exit 2
 RED_SKILL="$TMP/red/skills/teamsmith"
 GREEN_SKILL="$SKILL_DIR"

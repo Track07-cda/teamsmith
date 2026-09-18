@@ -3999,9 +3999,31 @@ P16_INIT_HITS="$(doc_stale_hits "$P16_SB_INIT")"
   || bad "init skill 干净副本被误报：$(doc_stale_hits "$SANDBOX_INIT" | head -1)"
 rm -rf "$P16_SB_INIT"
 
-# 依赖收窄不变量（v1.12.0）：文档/模板里不得再把容器后端或 forge CLI 当依赖
-DEP_HITS="$(grep -rniE 'podman|\-\-container|看门狗容器|Containerfile' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_INIT_DIR/SKILL.md" "$SKILL_INIT_DIR/references" "$SKILL_INIT_DIR/templates" 2>/dev/null | grep -vE '不再需要|不再有|已移除|v1\.12' || true)"
+# 依赖收窄不变量（v1.12.0）：文档/模板里不得再把容器后端或 forge CLI 当依赖。
+# M28 细化：这条不变量管的是「**产品**不得以容器为后端」，而 tmux 接触型**测试**在容器里跑是用户
+# 拍板的纪律（tests/container-tmux.sh）。所以把「提到测试 harness」的行从豁免里单独放行，
+# 同时用双向夹具钉住它：讲产品依赖容器要报红，讲测试 harness 不报（否则文档只能绕着 podman 写）。
+dep_scope_hits() { # <skill 目录> <init 目录>
+  grep -rniE 'podman|\-\-container|看门狗容器|Containerfile' "$1/SKILL.md" "$1/references" "$1/templates" \
+      "$2/SKILL.md" "$2/references" "$2/templates" 2>/dev/null \
+    | grep -vE '不再需要|不再有|已移除|v1\.12' \
+    | grep -vE 'container-tmux\.sh' || true
+}
+DEP_HITS="$(dep_scope_hits "$SKILL_DIR" "$SKILL_INIT_DIR")"
 if [ -n "$DEP_HITS" ]; then bad "文档还在把容器当依赖：$(printf '%s' "$DEP_HITS" | head -1)"; else ok "文档不再把容器当前提（只有一个后端）"; fi
+# 双向夹具（M28）：① 讲产品依赖容器 → 必红；② 讲测试 harness 的容器跑法 → 不报。
+if [ -d "$SANDBOX" ]; then
+  DEP_SB="$SANDBOX-dep"; rm -rf "$DEP_SB"; cp -r "$SANDBOX" "$DEP_SB"
+  printf '%s\n' 'The pulse daemon now runs inside a podman container on every host.' >> "$DEP_SB/references/philosophy.md"
+  [ -n "$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")" ] && ok "翻转自测：文档讲「产品跑在容器里」会被抓到" \
+    || bad "翻转自测：产品依赖容器的表述竟然漏报（检查器太弱）"
+  rm -rf "$DEP_SB"; cp -r "$SANDBOX" "$DEP_SB"
+  printf '%s\n' 'The tmux-touching tests run inside a container through tests/container-tmux.sh (podman runtime, optional).' \
+    >> "$DEP_SB/references/troubleshooting.md"
+  [ -z "$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")" ] && ok "翻转自测：文档讲「测试 harness 用容器」不误报（M28 新纪律不被旧不变量拦住）" \
+    || bad "翻转自测：测试 harness 的容器说明被误报：$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR" | head -1)"
+  rm -rf "$DEP_SB"
+fi
 FORGE_HITS="$(grep -rniE '缺 (gh|glab)|TEAM_VCS=github 但|gh wrapper' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" "$SKILL_INIT_DIR/SKILL.md" "$SKILL_INIT_DIR/references" "$SKILL_INIT_DIR/templates" 2>/dev/null || true)"
 if [ -n "$FORGE_HITS" ]; then bad "还有把 forge CLI 当依赖的表述：$(printf '%s' "$FORGE_HITS" | head -1)"; else ok "forge 完全解耦（不探测/不调用/不读 token）"; fi
 # 派单提示词不得再教已删命令（v1.11 的团队 pr 曾残留在这里）
@@ -5412,6 +5434,8 @@ if [ "$FAST_REQ" = "1" ]; then
              "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测" "11j·pulse 迁移夹具" \
              "1c·M11 真沙盒窗口"; do
+    # 注：本表只能列**14c 之前**跳过的段落。31b（容器 tmux 自检）在本节之后，它由
+    # 「FAST 没有执行任何真进程段落」（LIVE_RAN==0）间接盯住，不列在这里。
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
     else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi
   done
@@ -8168,6 +8192,97 @@ printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/phantom.log"
 assert_eq "M16 隔离对照：真正写进 state/ 的痕迹必须被同一个扫描抓到" \
   "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "1"
 rm -rf "$M16_NEG"
+# ---------------------------------------------------------------- 31. tmux 接触面（M28）
+# 五次 tmux server 全灭事故 → 两条护栏在这里钉死：
+#   31a 裸 tmux 调用 lint（纯逻辑，FAST 也跑）：tests/** 与 docs/team/reports/*/pkg/** 里凡会改变
+#       tmux 状态的命令（kill-server/kill-session/…）必须带隔离证据（-L <非 default> / env -u TMUX +
+#       私有 TMUX_TMPDIR / 同目录隔离包装 / 顶层白名单）。判定器是 tests/tmux-lint.pl（真 shell 词法器，
+#       不是按行 grep）；M28 之前的证据包按 sha256 冻结在 tmux-lint-legacy.txt 里（逐条打印、--no-legacy 可全红）。
+#   31b 容器跑法自检（真进程，只跑完整门禁）：容器里裸 tmux 生死正常 + 宿主 server 指纹逐字节不变；
+#       再在容器里跑一遍最危险的「真 pi 输入框体检」。没有 podman / 仓库路径不在宿主共享目录 → 显式 SKIP。
+section "31 · tmux 接触面：隔离 lint + 容器跑法（M28）"
+M28_LINT="$SKILL_DIR/tests/tmux-lint.pl"
+M28_CTR="$SKILL_DIR/tests/container-tmux.sh"
+M28_LOG="$TMP/m28-lint.log"
+
+if ! command -v perl >/dev/null 2>&1; then
+  # 与第 18 节同一条纪律：守门器跑不了就如实报红，不许静默跳过。
+  bad "没有 perl：tmux 隔离 lint 跑不了（装上 perl 才能跑这条门禁）"
+else
+  assert_file "$M28_LINT" "M28：tmux 隔离 lint 存在"
+  if perl "$M28_LINT" >"$M28_LOG" 2>&1; then
+    ok "M28 真树：变更类 tmux 调用全部有隔离证据（另有 $(grep -c '^  LEGACY' "$M28_LOG" 2>/dev/null || printf 0) 个历史豁免文件，逐条打印在 $M28_LOG）"
+  else
+    bad "M28 真树有未隔离的 tmux 变更命令（见 $M28_LOG）"
+    grep '^  RED' "$M28_LOG" 2>/dev/null | head -3 | sed 's/^/       /'
+  fi
+  # 判定器自带双向夹具：该红的红、该净的净（含 bash -c 串、裸调用、-L default、PATH shim 不够、豁免机制三条）
+  if perl "$M28_LINT" --selftest --quiet >>"$M28_LOG" 2>&1; then
+    ok "M28 lint --selftest：双向夹具全部符合预期（检查器这两方向都可信）"
+  else
+    bad "M28 lint --selftest 有夹具不符合预期（见 $M28_LOG）"
+    grep 'BAD' "$M28_LOG" 2>/dev/null | head -3 | sed 's/^/       /'
+  fi
+  # 门禁级翻转三步：干净文件不红 → 塞一条裸调用必须红 → 换成 -L 私有名又变净
+  M28_SB="$TMP/m28-lint-flip"; rm -rf "$M28_SB"; mkdir -p "$M28_SB"
+  printf '#!/usr/bin/env bash\ntrue\n' > "$M28_SB/x.sh"
+  if perl "$M28_LINT" --root "$M28_SB" --quiet >/dev/null 2>&1; then
+    ok "M28 翻转①：干净文件（没有 tmux 调用）不报红"
+  else
+    bad "M28 翻转①：干净文件被误报"
+  fi
+  printf 'tmux kill-server\n' >> "$M28_SB/x.sh"
+  if perl "$M28_LINT" --root "$M28_SB" --quiet >/dev/null 2>&1; then
+    bad "M28 翻转②：塞进去的裸 tmux kill-server 没被抓到（检查器太弱）"
+  else
+    ok "M28 翻转②：塞一条裸 tmux kill-server → 红"
+  fi
+  printf '#!/usr/bin/env bash\ntmux -L m28-flip-private kill-server\n' > "$M28_SB/x.sh"
+  if perl "$M28_LINT" --root "$M28_SB" --quiet >/dev/null 2>&1; then
+    ok "M28 翻转③：同一个 kill-server 带私有 -L → 不报红（不是见 kill-server 就红）"
+  else
+    bad "M28 翻转③：带 -L 私有 socket 的调用被误报"
+  fi
+  rm -rf "$M28_SB"
+fi
+
+# ── 31b. 容器跑法（真进程）──────────────────────────────────────────────────────────────────────
+M28_CTR_SEG="31b·容器 tmux 自检（podman）"
+if [ "$FAST" = "1" ]; then
+  fast_skip "$M28_CTR_SEG" "要拉起 podman 容器做 tmux 生死实验（真进程），快模式不跑"
+elif [ ! -f "$M28_CTR" ]; then
+  cond_skip "$M28_CTR_SEG" "缺 $M28_CTR"
+else
+  live_mark
+  bash "$M28_CTR" --selftest >"$TMP/m28-ctr-selftest.log" 2>&1
+  M28_CTR_RC=$?
+  case "$M28_CTR_RC" in
+    0)  ok "M28 容器自检：容器内裸 tmux 开窗/杀 server 正常，宿主 server 指纹逐字节不变" ;;
+    77) cond_skip "$M28_CTR_SEG" "$(grep -m1 '^SKIP' "$TMP/m28-ctr-selftest.log" 2>/dev/null | sed 's/^SKIP: //')" ;;
+    *)  bad "M28 容器自检失败（rc=$M28_CTR_RC，见 $TMP/m28-ctr-selftest.log）"
+        tail -4 "$TMP/m28-ctr-selftest.log" 2>/dev/null | sed 's/^/       /' ;;
+  esac
+  # 容器里跑一遍最危险的 tmux 接触型夹具（真 pi 输入框体检）：pi 只挂包目录、不挂 $HOME
+  # （容器里拿不到 provider 配置/密钥），走的还是容器自己的 socket。
+  if [ "$M28_CTR_RC" = "0" ] && [ -f "$SKILL_DIR/tests/pm-box-real.sh" ]; then
+    live_mark
+    bash "$M28_CTR" --with-pi --cmd "bash $SKILL_DIR/tests/pm-box-real.sh --idle-secs 3" \
+      >"$TMP/m28-ctr-pmbox.log" 2>&1
+    M28_PB_RC=$?
+    if [ "$M28_PB_RC" = "77" ]; then
+      cond_skip "31b2·容器里跑真 pi 体检" "$(grep -m1 '^SKIP' "$TMP/m28-ctr-pmbox.log" 2>/dev/null | sed 's/^SKIP: //')"
+    elif [ "$M28_PB_RC" -ne 0 ]; then
+      bad "M28 容器里跑真 pi 体检失败（rc=$M28_PB_RC，见 $TMP/m28-ctr-pmbox.log）"
+      tail -4 "$TMP/m28-ctr-pmbox.log" 2>/dev/null | sed 's/^/       /'
+    elif grep -q '^SKIP' "$TMP/m28-ctr-pmbox.log" 2>/dev/null; then
+      cond_skip "31b2·容器里跑真 pi 体检" "夹具说：$(grep -m1 '^SKIP' "$TMP/m28-ctr-pmbox.log" | sed 's/^SKIP//')"
+    else
+      assert_has "$TMP/m28-ctr-pmbox.log" "RETRACT=ok" "M28 容器里跑真 pi 体检：输入框判据 + 收回在真实现场成立"
+      assert_has "$TMP/m28-ctr-pmbox.log" "verdict=EMPTY" "M28 容器里跑真 pi 体检：空闲空框被判 EMPTY（没被误判成忙）"
+    fi
+  fi
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"

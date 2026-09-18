@@ -1,0 +1,27 @@
+# M28 tmux-lint 历史豁免清单（--write-legacy 生成，人工加了一条口径说明）
+#
+# 为什么有这份清单：M28 的 lint 要扫 `docs/team/reports/*/pkg/`（对抗性证据包），但 M28 之前的包
+# 写在「tmux 隔离纪律」成型之前 —— 它们里的裸 tmux 调用不能就地改：那是别人验过的证据，改文件
+# 等于动了账本。所以这些**文件**被显式豁免，豁免是**可审计**的：
+#   * 按 sha256 冻结：文件内容一变（包括把裸调用修掉）→ 豁免自动失效，按普通文件重新判定；
+#   * 条数记在下面，与实际不符 → 门禁红（baseline 过期，必须重新裁决）；
+#   * 每轮门禁都会打印 `LEGACY <路径> ×N`（不静默）；
+#   * `perl skills/teamsmith/tests/tmux-lint.pl --no-legacy` = 让它们全部报红（人工全面审计）。
+# 新增/改动的证据包**不在**豁免范围：写新的 pkg 时，自己的 tmux 调用要带隔离证据（-L <私有名> 或
+# env -u TMUX + 私有 TMUX_TMPDIR，或包一层隔离包装）。
+#
+# 格式：<sha256>  <未隔离条数>  <仓库相对路径>  # 理由
+6655f47fffe9ac23955fba2ec541edb36a23c50d1ceb080b57f740d55713787b  8  docs/team/reports/M23-dev2/pkg/namespace-demo.sh  # M23-dev2 证据包（M28 之前；BEFORE/AFTER 两段里 BEFORE 就是要演示不隔离的形状）
+60162dc4c274b87594148a751cdca014e418463c3acd0cb61026a217bb1f78d9  1  docs/team/reports/M3.3-dev2/pkg/20-control.sh  # M3.3-dev2 证据包（M28 之前）
+d51b83de98a6e433ab36216b730568ab46210fd33765de2230a1e3e4855105e5  1  docs/team/reports/M3.3-dev2/pkg/40-regression.sh  # M3.3-dev2 证据包（M28 之前）
+f330c14df7766435767269d5801468bd5b5becb21776ce11c1216ae94e9fbef4  3  docs/team/reports/M3.3-dev2/pkg/lib.sh  # M3.3-dev2 证据包（M28 之前）
+1789bc5928faaabce960632b313cba58f27ba4c34ba33724a3031cd3f7560da6  1  docs/team/reports/V3.0/pkg/40-doctor-dispatch.sh  # V3.0 证据包（M28 之前）
+bea9627472fba160ce6bfe831f8cc0e688bbce9a0782be005f16fc71f2e18bec  1  docs/team/reports/V3.0/pkg/60-liveness.sh  # V3.0 证据包（M28 之前）
+26dde2cdbcf0fd0b26bba9f61380d9a9963c8766480182e28acaee74d5af2468  2  docs/team/reports/V3.0/pkg/lib.sh  # V3.0 证据包（M28 之前）
+083b41f001bee7e6a061b27c5878829f26cb468da55668917ac76fe4080abb50  1  docs/team/reports/V3.0/pkg/run.sh  # V3.0 证据包（M28 之前）
+bfd5ed3cff3a826f8c240dc755a9833858627f019332a7fa47a88d70c6dc9090  6  docs/team/reports/V4.0/pkg/30-dispatch.sh  # V4.0 证据包（M28 之前；靠 PATH shim，没有调用点证据）
+476d32468178247f5440b9a9349991fb96a2a7061dd0202c5feb7cdbda7c69f0  2  docs/team/reports/V4.0/pkg/40-notify.sh  # V4.0 证据包（M28 之前）
+af9fd1083c0bad1621ce1fb92bd430de1ca9dc9e1e8a0225d4fd31104139308a  2  docs/team/reports/V4.0/pkg/80-watchdog.sh  # V4.0 证据包（M28 之前）
+08a0497eca5b24343fb41da92c48b45fdd0002f697888582c832991681b7321d  3  docs/team/reports/V4.0/pkg/90-boundary.sh  # V4.0 证据包（M28 之前）
+eaad9afcfccfb80d2514ebcc160ff645effc2e2337d58d38f21b16bd65499663  2  docs/team/reports/V4.0/pkg/flip.sh  # V4.0 证据包（M28 之前）
+a342b43bbb4e8db297a3c975ca318167dc4d35c89ce80ec8a9f3df58800e98a8  1  docs/team/reports/V4.0/pkg/run.sh  # V4.0 证据包（M28 之前）
