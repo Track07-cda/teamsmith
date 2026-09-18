@@ -32,16 +32,17 @@ The name change touched three things and only one of them needs a command from y
 
 | Old | New | What to do |
 |---|---|---|
-| `skills/pi-team` (repository path **and** installed skill directory) | `skills/teamsmith` | **nothing**: the repository keeps `skills/pi-team` as a compatibility symlink, so a project or `settings.json` entry that points at the old absolute path keeps working |
+| `skills/pi-team` (repository path **and** installed skill directory) | `skills/teamsmith` | **change the path** (since the release that carries M22): the compatibility symlink was **removed**, so an absolute path or a `settings.json` entry that still says `skills/pi-team` must be updated to `skills/teamsmith` (or to the installed `~/.agents/skills/teamsmith`). The installed copy is unaffected — it is a link to *this repository*, not to the old name. See §2b below |
 | the Pi command `/pi-team-reload` | `/teamsmith-reload` | **nothing**: the old spelling stays registered as an alias |
 | the `AGENTS.md` marker `<!-- pi-team:begin -->` … `<!-- pi-team:end -->` | `<!-- teamsmith:begin -->` … `<!-- teamsmith:end -->` | run `team init` (or `team bootstrap`) once: the marker is rewritten **in place** and idempotently, with no duplicate section. `team doctor` prints a pointer to this file while the old marker is still there |
 | the repository name `pi-team` | `teamsmith` | only if your own notes or scripts hard-code it; the skill's contracts (command, config, `TEAM_*`, `docs/team/**`) were never renamed |
 | prose in your own docs, briefs or scripts | — | by hand: the skill cannot rewrite your files (the former name is also what a "stale session" error message used to say) |
 
-Note on absolute paths: the compatibility symlink follows the **repository**, so it keeps working for the common
-`~/.agents/skills/<name>` link and for a `settings.json` `skills` entry. A *copy* install (`./install.sh --copy`)
-made before the release where `pi-team` was renamed keeps a frozen directory with no symlink inside; re-run
-`./install.sh` there.
+Note on absolute paths: while the alias existed the compatibility symlink followed the **repository**, so the common
+`~/.agents/skills/<name>` link and a `settings.json` `skills` entry kept working. That symlink is now **removed**
+(§2c) — an absolute path written as `skills/pi-team` (the removed alias) must be updated to `skills/teamsmith`. A *copy* install
+(`./install.sh --copy`) made before the release where `pi-team` was renamed keeps a frozen directory with no symlink
+inside; re-run `./install.sh` there.
 
 ## 2b. The rename: `watchdog` → `pulse` (v1.36.0)
 
@@ -61,6 +62,22 @@ The periodic patrol was renamed. During the alias period (until v2.0.0) **nothin
 
 To migrate fully: rename the six `TEAM_WATCH_*` keys in `.pi/team/config.sh` to `TEAM_PULSE_*` (values unchanged),
 then `team pulse restart` to swap the window name.
+
+## 2c. The removed path alias: `skills/pi-team` (M22)
+
+The rename in §2 originally kept `skills/pi-team` as a compatibility symlink. That symlink is **gone** — the alias
+period was ended early by the user's call. What this means for an existing project:
+
+| Where the old path can still be written down | What to do |
+|---|---|
+| your `settings.json` `skills` array, or a config/`TEAM_*` value with an **absolute** path | replace the removed alias `skills/pi-team` with `skills/teamsmith` (a project that uses the CLI through `PATH` or a `~/.agents/skills/teamsmith` link needs nothing) |
+| your own notes, briefs or scripts | by hand — the skill cannot rewrite your files |
+| the installed directory `~/.agents/skills/pi-team` | re-run `./install.sh` (it installs the canonical directories only); `./install.sh --uninstall` also removes a legacy `pi-team` entry left by an older install |
+| an `AGENTS.md` marker `<!-- pi-team:begin -->` | **still automatic**: the next `team init`/`team bootstrap` rewrites the marker in place (§2) |
+| the Pi command `/pi-team-reload` | **still works**: it stays registered as an alias of `/teamsmith-reload` — a *command name*, not a path |
+
+A *copy* install (`./install.sh --copy`) made while the symlink existed simply carries a copy of the old alias;
+delete that one directory (or re-run the installer into the same target).
 
 ## 3. Removed commands (v1.10 → v1.11) and what replaced them
 

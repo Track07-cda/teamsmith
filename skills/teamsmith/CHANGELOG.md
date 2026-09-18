@@ -7,6 +7,16 @@
 
 **未发布（版号由 PM 定；刻意不用 `##` 标题——版本解析取第一个 `##` 行）**
 
+**M22 · 移除 `skills/pi-team` 兼容软链（用户拍板提前结束别名期）**
+
+- `skills/pi-team`（指向 `teamsmith` 的软链）**已删除**。老项目若在 `settings.json` 或配置里硬编码了
+  `skills/pi-team` 绝对路径，把它改成 `skills/teamsmith`；已安装的 `~/.agents/skills/<name>` 链接不受影响。
+- 迁移指引新增 §2c（`references/migration.md`）：旧路径可能还写在哪里、各自怎么改；README 与 SKILL.md 的
+  兼容段同步改写。
+- **保留**：`/pi-team-reload` 命令别名（命令名与路径是两回事）与 `<!-- pi-team:begin -->` 标记的就地改写。
+- 门禁：smoke 的「兼容软链必须在位」断言翻成「旧路径必须不在（M22）」；安装器「跳过 `skills/` 下软链」的守卫
+  仍在（仓库不再有软链样本，改由 smoke 的 M22 夹具守着，否则它就成了死代码）。
+
 **M3.2 · adapter 加固（V3.0 的 F1、F4–F8 + 两条 nit）**
 
 - **F1（blocker）worker 的摘要不再可能是 shell 代码**：新增 notify 占位符 `{summary_file}`（teamsmith 指定路径并

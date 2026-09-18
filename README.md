@@ -24,7 +24,7 @@ Design rationale: [references/philosophy.md](skills/teamsmith/references/philoso
 
 | Skill | Notes |
 |---|---|
-| [`teamsmith`](skills/teamsmith/SKILL.md) | See above. Former name: `pi-team` (`skills/pi-team` is a compatibility symlink) |
+| [`teamsmith`](skills/teamsmith/SKILL.md) | See above. Former name: `pi-team` (the `skills/pi-team` compatibility symlink was removed — old absolute paths must be updated) |
 
 ## Install
 
@@ -55,10 +55,13 @@ $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 
 - The command is still **`team`**; project config is still **`.pi/team/config.sh`**; env vars are still **`TEAM_*`**;
   team docs are still **`docs/team/**`**.
-- `skills/pi-team` is a **compatibility symlink** to `skills/teamsmith`, so existing projects that reference the
-  old absolute path keep working with zero changes.
+- The `skills/pi-team` **compatibility symlink was removed** (the alias period ended early by the user's call).
+  Existing projects that reference the old absolute path must change it to `skills/teamsmith` — see
+  [`skills/teamsmith/references/migration.md` §2](skills/teamsmith/references/migration.md).
 - An `AGENTS.md` section marked `<!-- pi-team:begin -->` is migrated in place to the new marker by the next
   `team init`/`bootstrap` (idempotent).
+- The Pi command `/pi-team-reload` stays registered as an alias of `/teamsmith-reload` (a command name, unrelated
+  to the removed path).
 
 ## License
 

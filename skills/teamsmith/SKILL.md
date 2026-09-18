@@ -33,11 +33,13 @@ which starts once the project is up.
 - Renamed from **`pi-team`** to **`teamsmith`** in v1.13.0 (repo name included).
 - **Contracts unchanged**: the command is still **`team`**; project config is still **`.pi/team/config.sh`**;
   env vars are still **`TEAM_*`**; team docs are still **`docs/team/**`**. Existing projects need no changes.
-- The old path `skills/pi-team` is kept as a **compatibility symlink** to `skills/teamsmith`, so older
-  absolute paths keep working.
+- The old path `skills/pi-team` **no longer exists**: the compatibility symlink was removed (M22, the alias period
+  ended early by the user's call). A project or `settings.json` that hard-codes the old absolute path must change it
+  to `skills/teamsmith` (or to the installed `~/.agents/skills/teamsmith`) — see `references/migration.md` §2.
 - An `AGENTS.md` section marked `<!-- pi-team:begin -->` is migrated in place to the new marker by the next
   `team init`/`bootstrap`.
-- Hot-reload command in Pi: `/teamsmith-reload` (the old `/pi-team-reload` stays registered as an alias).
+- Hot-reload command in Pi: `/teamsmith-reload` (the old `/pi-team-reload` stays registered as an alias — the
+  alias is a **command name**, unrelated to the removed path).
 
 ## Command table
 

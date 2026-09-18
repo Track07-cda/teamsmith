@@ -4001,10 +4001,15 @@ fi
 _OLD="pi""-team"
 OLDNAME_HITS="$(grep -rIn "$_OLD" "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" \
     "$SKILL_DIR/extension" "$SKILL_DIR/../README.md" "$SKILL_INIT_DIR/SKILL.md" "$SKILL_INIT_DIR/references" "$SKILL_INIT_DIR/templates" 2>/dev/null \
-  | grep -vE '兼容|旧名|迁移|别名|v1\.13|begin|end|reload|smoke|compatibility|former name|renamed|alias' || true)"
+  | grep -vE '兼容|旧名|迁移|别名|v1\.13|begin|end|reload|smoke|compatibility|former name|renamed|alias|removed|旧路径|M22|legacy' || true)"
 if [ -n "$OLDNAME_HITS" ]; then bad "还有旧名 pi-team 的残留：$(printf '%s' "$OLDNAME_HITS" | head -1)"; else ok "名字一致性：除兼容说明外无旧名残留"; fi
-# 兼容软链必须存在（老项目配置里的绝对路径靠它活着）
-[ -L "$SKILL_DIR/../pi-team" ] && ok "兼容软链 skills/pi-team → teamsmith 在位" || bad "缺兼容软链 skills/pi-team"
+# M22（用户拍板提前结束别名期）：兼容软链必须**不在**了 —— 老项目改路径的指引在
+# references/migration.md §2；翻转证据：把软链临时建回来，这条必须红。
+if [ -e "$SKILL_DIR/../pi-team" ] || [ -L "$SKILL_DIR/../pi-team" ]; then
+  bad "skills/pi-team 还在（M22 已移除兼容软链：老项目改绝对路径，而不是靠别名）"
+else
+  ok "旧路径 skills/pi-team 已移除（M22）"
+fi
 # 翻转自测：往沙箱副本注入旧名，必须被抓到
 if [ -n "$SANDBOX" ] && [ -d "$SANDBOX" ]; then
   rm -rf "$SANDBOX-oldname"; cp -r "$SANDBOX" "$SANDBOX-oldname"
@@ -5473,8 +5478,6 @@ fi
 # ── ② 安装器：软链别名不得变成第二个 skill 发现入口 ──────────────────────────
 INSTALL_SH="$SRC_ROOT/install.sh"
 assert_file "$INSTALL_SH" "仓库根有 install.sh"
-assert_eq "skills/pi-team 仍是指向 teamsmith 的兼容软链（老项目的绝对路径靠它活着）" \
-  "$(readlink "$SRC_ROOT/skills/pi-team" 2>/dev/null || true)" "teamsmith"
 inst_entries() { # <目标目录>：会被 pi 发现成 skill 的条目（跟随软链），每行是 SKILL.md 里的 name
   local t="$1" d
   for d in "$t"/*; do
@@ -5493,6 +5496,14 @@ real_skill_count() { # 仓库里**真实**（非软链）的 skill 目录数 —
   done
   printf '%s' "$n"
 }
+assert_eq "仓库里真实（非软链）的 skill 目录数 = 2（teamsmith + teamsmith-init）" "$(real_skill_count)" "2"
+# M22：仓库不再自带软链别名（`skills/pi-team` 已 git rm）—— 安装器「跳过软链」的守卫改用
+# 段末的 M22 夹具继续守，这里只钉住「仓库里没有旧入口」这个事实。
+if [ -e "$SRC_ROOT/skills/pi-team" ] || [ -L "$SRC_ROOT/skills/pi-team" ]; then
+  bad "仓库里又出现了 skills/pi-team（M22 已移除：老项目改路径，不靠别名）"
+else
+  ok "仓库里没有 skills/pi-team 这个入口（M22 已移除）"
+fi
 for m73mode in link copy; do
   m73t="$TMP/m73-install-$m73mode"; rm -rf "$m73t"
   m73flag=""; [ "$m73mode" = "copy" ] && m73flag="--copy"
@@ -5520,8 +5531,30 @@ for m73mode in link copy; do
     fi
   fi
 done
-# 为什么目标里只有一个条目：安装器必须**明说**跳过的是兼容软链（不然读者会以为漏装了东西）
-assert_has "$TMP/m73-install-link.log" "跳过 pi-team" "install.sh 说明了为什么跳过兼容软链"
+# M22：仓库自带的兼容软链删掉以后，install.sh 的「跳过 skills/ 下的软链」守卫不再有仓库自带
+# 样本 —— 用一个只含「两个真 skill + 一个软链别名」的夹具源树继续守它（否则这条守卫就变成
+# 没人跑的死代码，而下一次有人往 skills/ 里加软链时不会有人拦）。
+M22_SRC="$TMP/m22-install-src"; M22_DEST="$TMP/m22-install-dest"
+rm -rf "$M22_SRC" "$M22_DEST"; mkdir -p "$M22_SRC/skills"
+cp -r "$SRC_ROOT/skills/teamsmith" "$M22_SRC/skills/teamsmith"
+cp -r "$SRC_ROOT/skills/teamsmith-init" "$M22_SRC/skills/teamsmith-init"
+ln -s teamsmith "$M22_SRC/skills/alias-to-teamsmith"
+cp "$SRC_ROOT/install.sh" "$M22_SRC/install.sh"
+if bash "$M22_SRC/install.sh" --target "$M22_DEST" >"$TMP/m22-install.log" 2>&1; then
+  ok "M22 夹具：源树里有软链别名时 install.sh 退 0"
+else
+  bad "M22 夹具：install.sh 失败"; sed 's/^/     /' "$TMP/m22-install.log"
+fi
+assert_has "$TMP/m22-install.log" "跳过 alias-to-teamsmith" \
+  "install.sh 说明了为什么跳过 skills/ 下的软链（M22 后由这个夹具守着）"
+assert_has "$TMP/m22-install.log" "兼容软链" "install.sh 的跳过理由里点名「兼容软链」"
+if [ -e "$M22_DEST/alias-to-teamsmith" ] || [ -L "$M22_DEST/alias-to-teamsmith" ]; then
+  bad "M22 夹具：软链别名被当成第二个入口装进来了"
+else
+  ok "M22 夹具：目标里没有软链别名入口"
+fi
+assert_eq "M22 夹具：两个真 skill 各装一个入口" "$(ls -1 "$M22_DEST" | wc -l | tr -d ' ')" "2"
+rm -rf "$M22_SRC" "$M22_DEST"
 # 卸载要能顺手清掉旧版本装出来的 pi-team 入口（否则旧副本永远留在磁盘上，发现入口又变两个）。
 # 夹具手工搭（不要拿安装器刚产出的目标当输入 —— 那条路径在**坏实现**下会把软链变成真树里的文件）。
 M73_UNINST="$TMP/m73-install-legacy"; rm -rf "$M73_UNINST"; mkdir -p "$M73_UNINST"

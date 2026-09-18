@@ -34,10 +34,11 @@ for src in "$REPO"/skills/*/; do
   name="$(basename "$src")"
   [ -f "$src/SKILL.md" ] || { echo "跳过 $name（无 SKILL.md）"; continue; }
 
-  # M7.3：skills/pi-team 是指向 teamsmith 的**兼容软链**（老项目配置里的绝对路径靠它活着），
-  #   不是一个独立 skill。安装时跳过软链条目，否则目标目录里会出现两个同名 skill 的发现入口
-  #   （链接模式两条软链指向同一份代码，复制模式会把软链再复制一份）。
+  # M7.3：skills/ 下的条目只有**真实目录**才算一个 skill。任何软链（历史上是 `skills/pi-team`
+  #   兼容软链，M22 已删；将来可能是别的别名）安装时一律跳过，否则目标目录里会出现两个同名 skill
+  #   的发现入口（链接模式两条软链指向同一份代码，复制模式会把软链再复制一份）。
   #   卸载时不跳过：旧版本装出来的 pi-team 入口要能顺手清掉（见下面的 uninstall 分支）。
+  #   M22 之后仓库里没有软链样本了，这条守卫由 smoke 的 M22 夹具（真 skill + 软链别名）继续守。
   if [ "$ACTION" = "install" ] && [ -L "${src%/}" ]; then
     echo "跳过 $name（兼容软链 ${src%/} → $(readlink "${src%/}")；安装规范目录即可，避免同名 skill 出现两个入口）"
     continue
@@ -73,6 +74,17 @@ for src in "$REPO"/skills/*/; do
     bash "$dest/scripts/team" version >/dev/null 2>&1 || echo "提示：$name 的 CLI 自检失败" >&2
   fi
 done
+
+# M22：历史别名 `pi-team` 的卸载清理。它以前靠「仓库里留着 skills/pi-team 软链」被主循环顺带覆盖，
+# 软链删掉以后主循环再也看不到这个名字 —— 旧版本装出来的入口会永远留在磁盘上（发现入口又变两个）。
+# 这里按名字显式清一次，且**只在卸载路径**做：安装永远不重建别名。
+if [ "$ACTION" = "uninstall" ]; then
+  for legacy in pi-team; do
+    if [ -L "$TARGET/$legacy" ] || [ -d "$TARGET/$legacy" ]; then
+      rm -rf "$TARGET/$legacy" && echo "移除 $TARGET/$legacy（历史别名，M22 起不再安装）"
+    fi
+  done
+fi
 
 if [ "$ACTION" = "install" ]; then
   echo
