@@ -3,10 +3,11 @@
 // the TUI and `--print` show the same frame, and it keeps the pane capture free of content the
 // sanitizer has not seen: every segment is built from sanitized fields by construction.
 //
-// B3 adds the console surface: three pages (Tab / `1`–`3`, `state/panel-page`), the settings
+// B3 adds the console surface: four pages (Tab / `1`–`4`, `state/panel-page`), the settings
 // overlay (`,`) writing `state/panel.conf`, SGR mouse (every documented key is a click target and
-// the wheel scrolls), the zh/en string tables and the density preference. The compose entry (B2)
-// works on every page; the receipt and the three actions are unchanged.
+// the wheel scrolls), the zh/en string tables and the density preference. `console-board-page` adds
+// the board page's kanban and the read-only markdown detail view. The compose entry (B2) works on
+// every page; the receipt and the three actions are unchanged.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'

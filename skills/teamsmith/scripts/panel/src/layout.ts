@@ -1,4 +1,6 @@
-// The frame: three pages, a settings overlay, four width tiers — and nothing else.
+// The frame: four pages (the board page is a kanban over the board's states; the focused card's
+// read-only markdown detail view replaces it while open), a settings overlay, four width tiers —
+// and nothing else.
 //
 // This module is pure (no I/O, no timers, no clock): the same width, height, data and view state
 // produce the same `Frame` byte for byte. The Ink renderer, the plain-text `--print` path and the

@@ -19,15 +19,33 @@ team monitor --headless         # the tick loop with no renderer — the shape `
 team monitor --width N --height N
 ```
 
-## The console surface (pulse-console B3)
+## The console surface (pulse-console B3; four pages, board page and detail view from `console-board-page`)
 
-Three pages, switched by `Tab` or `1`–`3`, remembered in `state/panel-page` and restored on the next start:
+Four pages, switched by `Tab` or `1`–`4`, remembered in `state/panel-page` and restored on the next start:
 
 | Page | Blocks |
 |---|---|
 | 1 overview | banner (PM/pending/queue/standby), capacity, project progress (board counts, changes, spec counts, decisions), recent deliveries, agent table, session activity, recent actions |
 | 2 work | board rows (`done`/`dropped` collapse to the newest five), active changes with their phase, spec counts, recent decisions |
 | 3 messages & logs | the deferred queue (list + read-only full text), inbox/threads, the patrol log, the capacity trend, health (skill version, `doctor`, last gates `—`) |
+| 4 board | the board block as a kanban over the board's states, plus the entry's read-only markdown detail view while one is open |
+
+**The board page** renders six lanes in `BOARD.md` legend order — every lane always present, an empty one as a dim
+marker — with one card per row (id, state glyph, agent, `phase`, truncated title). At ≥100 columns the lanes sit
+side by side and share the width; below 100 columns they stack as one state-grouped column, and below 60 a card
+folds to one line (id + title, no agent). `←`/`→` moves the focus between lanes and `↑`/`↓` between cards; a lane
+taller than the pane scrolls (the wheel scrolls the lane under the cursor, other lanes keep their position) and its
+edge shows how many cards are hidden above/below, the `done`/`dropped` windows anchored on the newest cards. The
+focused card carries `›` and is tracked by entry **id**, so a reordering board never moves the focus; the entry
+disappearing lands it on that lane's first card.
+
+**The detail view** is the focused card's read-only markdown: `Enter` (or a click on the already focused card)
+opens the files discovered for that entry id — its task brief, delivery reports and review records — one per tab,
+with `←`/`→` switching tabs and `↑`/`↓`/the wheel scrolling the document. The renderer is a self-contained
+markdown subset (ATX headings, verbatim fences, display-width-aligned pipe tables, lists, blockquotes,
+bold/code/link spans, `---` rules; anything else stays source text), the reader caps every file at 128 KiB and
+marks the cut, and opening it writes nothing. `Esc` or `q` returns to the board page **without collapsing the
+console** — the documented exception to `q` — and the `detail` block is spawned only while the view is open.
 
 A block whose source has no data collapses and yields its space. `,` opens the **settings overlay** with exactly
 five preferences — language (`zh`/`en`), default page, activity column, mouse, density — applied immediately and
@@ -40,9 +58,12 @@ values are asserted in the gate (`tests/panel-strings.mjs`, wired into `tests/sm
 CJK literal outside `src/strings/**`.
 
 **Mouse** follows the preference: on enables SGR reporting (`ESC[?1000h` `ESC[?1006h`) for the console's lifetime
-and disables it on exit; off emits no sequence at all. Every documented key — `m`, `f`, `s`, `,`, Tab, `1`–`3`,
+and disables it on exit; off emits no sequence at all. Every documented key — `m`, `f`, `s`, `,`, Tab, `1`–`4`,
 `↑`/`↓`, `q` — is a click target (Ink strips the leading ESC from the SGR sequence; the parser tolerates both
-spellings) and the wheel scrolls the page's list. The fixtures drive real SGR bytes through a pty (`tests/panel-b3-pty-mouse.py`)
+spellings) and the wheel scrolls the page's list. On the board page the wheel scrolls the lane under the cursor
+while the other lanes and the focus stay put, a click focuses a card and a click on the focused card opens its
+detail view; in the detail view the tabs and both nav chips are targets and the replacement leaves no card target
+behind (a replaced block is dead). The fixtures drive real SGR bytes through a pty (`tests/panel-b3-pty-mouse.py`)
 and through a real terminal→tmux→pane chain (`tests/panel-b3-pty-tmux-mouse.py`), because `tmux send-keys` cannot inject `0x1b`.
 
 **Collapse.** `q` rebuilds the patrol window in place as the headless tick loop (`team monitor --headless`): one
@@ -76,8 +97,8 @@ for byte. Four width tiers — ≥160 columns two columns, 100–159 two compact
 minimal form (table columns dropped, times to the clock, states abbreviated) — with the documented degradation
 order: side-by-side blocks become one column, a block folds into one summary line as the height runs out, then
 blocks collapse. A terminal resize re-lays out the next frame live. The four tiers × both themes are pinned as
-byte-exact snapshots in `tests/snapshots/` (`tests/panel-snapshots.sh`), which also checks that a 60×8 pane is
-never overrun.
+byte-exact snapshots in `tests/snapshots/` (`tests/panel-snapshots.sh`) — the overview page, plus the board page
+and the detail view (the latter at 120 and 59 columns) — which also checks that a 60×8 pane is never overrun.
 
 ## What is committed, and why
 
@@ -91,9 +112,11 @@ never overrun.
 | `draft-send.sh` | the send bridge: the guarded `team draft send` run in one shell, printing one machine line (rc + outcome tokens) for the receipt |
 | `tsconfig.json` | types only (`bunx tsc --noEmit` is a development check, not a gate) |
 
-Two extra machine exits exist for the fixtures (they are not part of the user-facing contract):
+Four extra machine exits exist for the fixtures (they are not part of the user-facing contract):
 `--snapshot` prints one themed frame with its SGR bytes (the snapshot suite's input) — with `--overlay` it opens
-the settings overlay in that frame, which is how the overlay's column plan is checked at every width — and
+the settings overlay in that frame, which is how the overlay's column plan is checked at every width — with
+`--targets` it prints **only** the frame's click-target map (the fixtures' input for the "every key affordance is
+also a mouse target" requirement), `--detail <ID>` renders that entry's detail view in the snapshot, and
 `--palette` prints the declared palettes with their contrast pairs (`tests/panel-contrast.mjs` recomputes every
 pair independently and refuses anything below 4.5:1).
 
