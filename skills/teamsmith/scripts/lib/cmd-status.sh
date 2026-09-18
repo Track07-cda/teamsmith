@@ -438,6 +438,39 @@ team_cmd_status() {
   return 0
 }
 
+# M31（V18 F-V18-4）：复验/交付记录写在**主仓工作区**却没入账 —— `team review` 把记录写进
+# `$TEAM_DOCS_ABS/reviews/`（主仓），而 PM 的 squash 合并只带分支内容：这些文件会原地悬置
+# （M22/M28/M30/P18 的 reviews 全部 untracked）。digest 必须让 PM 在合并流里立刻看见。
+# 只读：一次 `git status --porcelain`（`--untracked-files=all` 让报告包目录里的文件也点名），
+# 不写任何东西。只看**主仓**：agent 工作树里的未提交报告是草稿，[3] 已解释「先等交付」，不重复。
+team_untracked_records() { # → 未跟踪的复验/报告记录（相对主仓路径，一行一个）；没有/读不出 → 返回 1
+  local out
+  out="$(git -C "$TEAM_MAIN_ROOT" status --porcelain --untracked-files=all -- \
+        "$TEAM_DOCS_DIR/reviews" "$TEAM_DOCS_DIR/reports" 2>/dev/null)" || return 1
+  [ -n "$out" ] || return 1
+  # 过滤脚手架文件（.gitkeep/.gitignore）：它们不是记录，只是 docs/team 的目录占位（每个项目 init 时就有）。
+  printf '%s\n' "$out" | sed -n 's/^?? //p' | awk -F/ '$NF !~ /^\./'
+}
+
+# M31 × M16：记录文件名里带着任务代号，警告行必须随身带名字（与 [3]/[4]/[5] 同一口径）。
+# 从路径尽力而为地取候选 id（reviews/<ID>[-suffix].{md,log} / reports/<ID>-<agent>[/…]），
+# 逐段往前试「已知任务」；都不认识时退回第一段 —— 查不到名字时调用方只印路径，不编名字。
+team_record_task_id() { # <相对主仓路径> → 候选任务 id（取不到 → 空）
+  local rel="${1:-}" base comp p
+  [ -n "$rel" ] || return 0
+  case "$rel" in
+    "$TEAM_DOCS_DIR/reviews/"*) base="$(basename "$rel")"; base="${base%.md}"; base="${base%.log}" ;;
+    "$TEAM_DOCS_DIR/reports/"*) comp="${rel#"$TEAM_DOCS_DIR/reports/"}"; comp="${comp%%/*}"; base="${comp%.md}" ;;
+    *) return 0 ;;
+  esac
+  p="$base"
+  while [ -n "$p" ]; do
+    team_task_id_known "$p" && { printf '%s\n' "$p"; return 0; }
+    case "$p" in *-*) p="${p%-*}" ;; *) break ;; esac
+  done
+  printf '%s\n' "${base%%-*}"
+}
+
 team_cmd_digest() {
   team_require_docs
   team_hdr "teamsmith digest · $TEAM_PROJECT · $(team_timestamp)"
@@ -586,6 +619,24 @@ team_cmd_digest() {
       esac
     fi
   done
+  # M31（V18 F-V18-4）：记录只在工作区、没进任何提交 —— squash 合并带不走它们（归档时才发现就晚了）。
+  # M16：路径里带代号 → 每条记录自己一行并随身带名字（不同记录不共行：某条查不到名字时
+  # 不能因为同行别处的括号看起来像“给它编了名字”）。
+  local recs nrecs total r
+  recs="$(team_untracked_records || true)"
+  if [ -n "$recs" ]; then
+    total="$(printf '%s\n' "$recs" | grep -c .)"
+    sany=1
+    printf '  %s记录未入账%s       %s 份 untracked（squash 合并只带分支内容，先提交再合并/归档）：\n' \
+      "$C_YEL" "$C_RESET" "$total"
+    nrecs=0
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      nrecs=$((nrecs + 1))
+      if [ "$nrecs" -gt 8 ]; then printf '    · …（另有 %s 份，%s status 看全量）\n' "$((total - 8))" "$TEAM_CLI"; break; fi
+      printf '    · %s%s\n' "$r" "$(team_task_name_suffix "$(team_record_task_id "$r")")"
+    done <<< "$recs"
+  fi
   [ "$sany" -eq 0 ] && team_dim "  （无：没有脏工作区，也没有相对 upstream 的未 push 提交）"
 
   printf '\n%s\n' "[5] 任务板"

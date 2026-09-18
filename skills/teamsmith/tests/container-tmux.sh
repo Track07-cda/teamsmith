@@ -7,6 +7,10 @@
 #
 # 选项：
 #   --selftest        容器内 tmux 生死（含裸 kill-server）+ 断言宿主 server 指纹前后逐字节不变
+#
+# 镜像里必须带 **procps**（V18 F-V18-2）：panel-b3 / pm-box-real 这类夹具用 `ps -o args= -p <pid>`
+# 判进程身份，BusyBox 的 ps 不支持这些参数 —— 旧缓存镜像会在容器里制造 6 条假红。镜像探针
+# （image_ps_caps）认出缺 procps 的旧缓存就自动重建（显式 TEAM_TMUX_IMAGE 除外，只跳过）。
 #   --with-pi         运行时把宿主的 pi 包目录只读挂进去，并生成一个 `pi` 包装器（不挂 $HOME）
 #   --cmd '…'         在里面跑一行 shell（否则 `-- cmd args…` 直接 exec）
 #   --image NAME      覆盖镜像名     ｜ --rebuild 强制重建镜像
@@ -116,23 +120,39 @@ host_tmux_fingerprint() {
 # ── 镜像准备（本地无则构建一次；构建脚本与上下文都在 $HOME 下，镜像层里不写任何密钥）─────────────
 CT_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/teamsmith/tmux-container"
 image_exists() { timeout 60 "${CT_RT[@]}" image exists "$IMAGE" >/dev/null 2>&1; }
+# 镜像能力探针（V18 F-V18-2）：夹具靠 `ps -o args= -p <pid>` 判进程身份，BusyBox 的 ps 不支持这些
+# 参数。这一发是**只读**的（--rm，不挂任何宿主目录），只回答「镜像里的 ps 够不够用」。
+image_ps_caps() {
+  timeout 60 "${CT_RT[@]}" run --rm --entrypoint sh "$IMAGE" -c 'ps -o args= -p 1 >/dev/null 2>&1' >/dev/null 2>&1
+}
 
 # 仓库路径在容器里必须看得见（宿主共享目录之外 → 挂载不进去：降级跳过，不是失败）。
 # 同时也能探测「podman 能查镜像但跑不起容器」这类故障。
 ct_probe_mount() { ct_run test -e "$REPO_ROOT/skills/teamsmith/scripts/team" >/dev/null 2>&1; }
 
 ensure_image() {
-  image_exists && return 0
-  if [ "$REBUILD" != "1" ] && [ -n "${TEAM_TMUX_IMAGE:-}" ]; then
-    skip "镜像 $IMAGE 不存在（TEAM_TMUX_IMAGE 指定了名字就不会自动构建）"
+  if [ "$REBUILD" != "1" ] && image_exists; then
+    if image_ps_caps; then return 0; fi
+    # 旧缓存镜像（早于 V18 F-V18-2 构建的）缺 procps：默认镜像自动重建；显式指定的镜像不擅自重建。
+    if [ -n "${TEAM_TMUX_IMAGE:-}" ]; then
+      skip "镜像 $IMAGE 的 ps 不支持 -o args= -p（缺 procps）：夹具会假红，换镜像或去掉 TEAM_TMUX_IMAGE 让本脚本构建"
+    fi
+    say "镜像 $IMAGE 是旧缓存（ps 不支持所需参数，缺 procps）→ 自动重建（V18 F-V18-2）"
+  elif [ "$REBUILD" != "1" ] && [ -n "${TEAM_TMUX_IMAGE:-}" ]; then
+    skip "镜像 $IMAGE 不存在（TEAM_TMUX_IMAGE 指定了名字就不会自动构建；--rebuild 可强制构建）"
+  elif [ "$REBUILD" = "1" ] && image_exists; then
+    say "镜像 $IMAGE：--rebuild 强制重建（按当前 Containerfile 重新构建）"
   fi
   mkdir -p "$CT_CACHE" || skip "建不了镜像构建目录 $CT_CACHE"
   cat > "$CT_CACHE/Containerfile.tmux" <<EOF
 # M28 生成的 tmux 测试镜像（一次构建、之后走本地缓存）。
 # 只放测试需要的工具：tmux 做 tmux 现场，bash/git 给团队脚本与夹具，nodejs 用来在容器里跑真 pi
-# （pi 是 node ESM bundle，运行时只读挂载进去），python3 给 fake-tui 一类夹具。
+# （pi 是 node ESM bundle，运行时只读挂载进去），python3 给 fake-tui 一类夹具，
+# procps 给「用 ps -o args= -p 判进程身份」的夹具（BusyBox 的 ps 不支持这些参数）。
+# 构建期就断言 ps 参数可用：构建出来的镜像不允许缺这条能力（F-V18-2）。
 FROM $BASE_IMAGE
-RUN apk add --no-cache tmux bash git nodejs python3
+RUN apk add --no-cache tmux bash git nodejs python3 procps \\
+ && ps -o args= -p 1 >/dev/null
 EOF
   say "构建 tmux 测试镜像 $IMAGE（一次，之后缓存；base=$BASE_IMAGE）…"
   if ! timeout 900 "${CT_RT[@]}" build -t "$IMAGE" -f "$CT_CACHE/Containerfile.tmux" "$CT_CACHE" >"$CT_CACHE/build.log" 2>&1; then
@@ -223,6 +243,10 @@ chk "DBUS_SESSION_BUS_ADDRESS 已清空" "" "${DBUS_SESSION_BUS_ADDRESS:-}"
 chk "宿主 socket 不可见（$M28_HOST_SOCK）" "no" "$([ -e "${M28_HOST_SOCK:-/nonexistent}" ] && printf yes || printf no)"
 chk "容器 socket 目录里没有宿主的 tmux-1000" "no" "$([ -d /tmp/tmux-1000 ] && printf yes || printf no)"
 chk "容器 uid（决定 socket 目录 = tmux-N）" "0" "$(id -u)"
+# V18 F-V18-2：夹具（panel-b3 的 detail/collapse、pm-box-real）用 `ps -o args= -p <pid>` 判进程身份。
+# BusyBox 的 ps 通过 /bin/ps 也在这条路径上 —— 这里同时钉「参数被接受」与「真读得出 pid 1 的 argv」。
+chk "容器内 ps 支持 -o args= -p（procps）" "yes" "$(ps -o args= -p 1 >/dev/null 2>&1 && printf yes || printf no)"
+chk "容器内 ps 读得出 pid 1 的 args（非空）" "yes" "$([ -n "$(ps -o args= -p 1 2>/dev/null)" ] && printf yes || printf no)"
 # 裸 tmux：没有 env -u / -L —— 在宿主里这就是打向调用者 server 的那一发
 if tmux new-session -d -s m28-selftest 'sleep 20' 2>/dev/null; then
   chk "裸 tmux new-session 在容器里成功" "yes" "yes"

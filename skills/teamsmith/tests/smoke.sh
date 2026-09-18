@@ -2238,6 +2238,68 @@ $TEAM notify pm "pm 是合法收件人" >/dev/null 2>&1 && ok "notify pm 仍然�
 rm -f "$REPO/docs/team/inbox/devv.md"
 $TEAM inbox --ack >/dev/null 2>&1
 
+# ----------------------------------------- 7b. digest 警告未入账的复验/报告记录（M31）
+section "7b · digest 警告未入账的复验/报告记录（M31）"
+# 专用夹具仓库（M16/M14 同款纪律）：这里的「干净」是真干净。主夹具仓库在 4b 留下了
+# untracked 的 reviews/T1.1-done.md（后续小节还要用它）——在那里做「干净树不报警」会假红。
+M31R="$TMP/m31repo"; rm -rf "$M31R"; mkdir -p "$M31R"
+( cd "$M31R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# m31' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+M31SES="teamsmith-smoke-m31-$$"
+( cd "$M31R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$M31SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/m31-init.log" 2>&1 \
+  && ok "M31 夹具仓库 init 成功" || bad "M31 夹具仓库 init 失败（见 $TMP/m31-init.log）"
+# 身份隔离（M7.2 纪律）：写盘之前先证明 team 认的是这个临时仓库 + 这个临时 session
+( cd "$M31R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/m31-paths.json" 2>&1 || true
+assert_eq "M31 隔离：team paths 的 main_root 就是 M31 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m31-paths.json")" "$M31R"
+m31() { ( cd "$M31R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+# init 的脚手架（reviews|reports 的 .gitkeep/.gitignore）先入账：“干净树”才成立
+if git -C "$M31R" add -A >/dev/null 2>&1 && git -C "$M31R" commit -qm "chore: init scaffold" >/dev/null 2>&1; then
+  ok "M31 夹具：init 脚手架已入账"
+else
+  bad "M31 夹具：init 脚手架提交失败"
+fi
+m31 $TEAM digest >"$TMP/m31-clean.log" 2>&1 || bad "M31：干净树 digest 失败"
+assert_not "$TMP/m31-clean.log" "记录未入账" "M31：干净树不打警告"
+# 负对照：records/ 之外的 untracked 文件（比如一份任务书）不触发警告
+printf 'not a record\n' > "$M31R/docs/team/M31-not-a-record.md"
+m31 $TEAM digest >"$TMP/m31-decoy.log" 2>&1 || bad "M31：decoy digest 失败"
+assert_not "$TMP/m31-decoy.log" "记录未入账" "M31：records/ 之外的 untracked 文件不触发警告"
+rm -f "$M31R/docs/team/M31-not-a-record.md"
+# 造未跟踪记录：复验记录 + 交付报告 + 报告包里的文件（--untracked-files=all 必须看到包里的文件）
+M31_REV="docs/team/reviews/M31-flip.md"
+M31_REP="docs/team/reports/M31-flip-dev.md"
+M31_PKG="docs/team/reports/M31-flip-dev/pkg/run.sh"
+mkdir -p "$M31R/docs/team/reports/M31-flip-dev/pkg"
+printf '# M31-flip · 复验记录\n' > "$M31R/$M31_REV"
+printf '# M31-flip-dev · 交付报告\n\nagent: dev\n' > "$M31R/$M31_REP"
+printf 'echo fixture\n' > "$M31R/$M31_PKG"
+m31 $TEAM digest >"$TMP/m31-untracked.log" 2>&1 || bad "M31：未跟踪时 digest 失败"
+assert_has "$TMP/m31-untracked.log" "记录未入账" "M31：未跟踪的复验/报告记录触发警告行"
+assert_has "$TMP/m31-untracked.log" "$M31_REV" "M31：警告点名未跟踪的复验记录"
+assert_has "$TMP/m31-untracked.log" "$M31_REP" "M31：警告点名未跟踪的报告"
+assert_has "$TMP/m31-untracked.log" "$M31_PKG" "M31：报告包里的文件也被点名（不是只报一个目录）"
+# M16 口径：警告行里带代号 → 同一行必须带名字（这里用一个看板上有名字的任务做正对照）
+m31 $TEAM board add M31A "夹具：未入账也要带名字" dev - >/dev/null 2>&1 || true
+mkdir -p "$M31R/docs/team/reviews"
+printf '# M31A · 复验记录（夹具）\n' > "$M31R/docs/team/reviews/M31A.md"
+m31 $TEAM digest >"$TMP/m31-named.log" 2>&1 || bad "M31：带名字的 digest 失败"
+assert_has "$TMP/m31-named.log" "reviews/M31A.md（夹具：未入账也要带名字）" "M31：警告行带代号时必须随身带名字（M16 口径）"
+# 翻转：提交后警告消失（入账才算数）
+if git -C "$M31R" add "$M31_REV" "$M31_REP" "$M31_PKG" docs/team/reviews/M31A.md >/dev/null 2>&1 \
+   && git -C "$M31R" commit -qm "docs(team): M31 fixture records" >/dev/null 2>&1; then
+  ok "M31 翻转夹具：记录已提交"
+else
+  bad "M31 翻转夹具：提交失败（后续断言无意义）"
+fi
+m31 $TEAM digest >"$TMP/m31-committed.log" 2>&1 || bad "M31：提交后 digest 失败"
+assert_not "$TMP/m31-committed.log" "记录未入账" "M31：提交后警告消失（翻转）"
+# 反向翻转：记录退回未入账状态 → 警告必须回来（证明它盯的是 git 状态，不是巧合）
+git -C "$M31R" reset -q --mixed HEAD~1 >/dev/null 2>&1
+m31 $TEAM digest >"$TMP/m31-unstaged.log" 2>&1 || bad "M31：反翻转 digest 失败"
+assert_has "$TMP/m31-unstaged.log" "记录未入账" "M31：记录退回未入账状态 → 警告回来（翻转双向）"
+
 # ---------------------------------------------------------------- 8. 从 worktree 里也能用
 section "8 · 从 agent worktree 调用 CLI"
 ( cd "$REPO/.worktrees/dev" && $TEAM roster >"$TMP/roster-wt.log" 2>&1 ) && ok "worktree 内 roster 退出码 0" || bad "worktree 内 roster 失败"
