@@ -500,7 +500,16 @@ almost every report:
 ## 17. A long task (a gate, a build) has nobody to tell when it finishes
 
 `TEAM_GATES` on a real project can take tens of minutes. Run it inside the agent's turn and the turn is occupied;
-walk away and nobody knows it finished. There are two lanes — pick per project, both are legitimate:
+walk away and nobody knows it finished.
+
+**Lane 0 · the team's own lane (default on the built-in Pi paths, nothing to install).** Both the worker and the PM
+Pi commands load `extension/team-bg.ts`, which gives the session `team_bg_run` / `team_bg_wait`: a detached job
+with a bounded `state/bg/<id>.log`, exactly one merged wake-up per batch of finished jobs, silence for harvested
+jobs, and one `settled-with-unharvested=<n>` line per turn end in `state/bg.log`. Runbook:
+[workflows.md](workflows.md) §E2. The two lanes below are for sessions that are **not** that (a custom adapter
+without `{bg_ext}`), or when you want a background lane in your own user-level Pi sessions.
+
+When the team lane is not available, there are two more lanes — pick per project, both are legitimate:
 
 | | Lane A · a background-job package | Lane B · a background tmux window (zero dependencies) |
 |---|---|---|
@@ -533,5 +542,5 @@ attribution/sanitization provider** for Anthropic sessions — that side effect 
 so say it out loud before recommending it.
 
 The same four rules are why the team's own background lane is written in-house (no third-party package on the
-team's critical path) with an explicit harvest ledger under `state/`: the rules have to be enforced by the code that
-owns the jobs, not by convention.
+team's critical path) with an explicit harvest ledger under `state/` (`state/bg.log` + `state/bg/<id>.log`): the
+rules have to be enforced by the code that owns the jobs, not by convention.

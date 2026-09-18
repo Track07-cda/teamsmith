@@ -70,6 +70,10 @@ Guards and limitations:
   of work.
 - For a proactive notification (blocked, someone else's bug) use `team notify <agent> "<one line>"`, which arrives
   earlier than the automatic one.
+- The **other** injected extension is `extension/team-bg.ts` (M27) — not notification, but the team's own
+  background lane: `team_bg_run` starts a detached job (bounded `state/bg/<id>.log`), `team_bg_wait <id>` harvests
+  it, a harvested job stays silent, several finishing jobs arrive as one message, and every turn end appends
+  `settled-with-unharvested=<n>` to `state/bg.log` (runbook: `workflows.md` §E2).
 
 ## 5. Task briefs: written for "a weak model without context"
 

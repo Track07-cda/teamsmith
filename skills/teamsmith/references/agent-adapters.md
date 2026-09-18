@@ -7,7 +7,7 @@ empty by default, which keeps the Pi behaviour byte-for-byte identical.**
 
 | Key | Meaning | Empty (default) |
 |---|---|---|
-| `TEAM_AGENT_CMD` | launch template for the agent CLI | built-in Pi command: `TEAM_PI_BIN --provider P --model M -e <notify ext> --skill <skill dir> --session-id <sid>` |
+| `TEAM_AGENT_CMD` | launch template for the agent CLI | built-in Pi command: `TEAM_PI_BIN --provider P --model M -e <notify ext> -e <bg ext> --skill <skill dir> --session-id <sid>` |
 | `TEAM_AGENT_NOTIFY_CMD` | how a worker tells the PM its turn ended | the Pi notify extension (`extension/team-notify.ts` → `inbox/<agent>.md` + knock on the PM window) |
 | `TEAM_AGENT_LOG_GLOB` | optional log/session files for `team monitor --activity` | Pi session discovery (`~/.pi/agent/sessions/**`) |
 | `TEAM_AGENT_BIN` | binary used for the window-readiness wait and existence checks | first word of `TEAM_AGENT_CMD`, else `TEAM_PI_BIN` |
@@ -31,7 +31,9 @@ teamsmith owns (identical for every adapter):
   Pi-specific hook, so it works for any CLI (see `references/troubleshooting.md`).
 
 The adapter owns: how to start its CLI, how that CLI is told which model/prompt/session to use, and how
-the worker notifies the PM at turn end.
+the worker notifies the PM at turn end. The **team background lane is teamsmith's own** (§3a): the built-in Pi
+paths load it with `-e`, a custom Pi-shaped template opts in with `{bg_ext}`, and a CLI without a Pi extension API
+simply does not have those two tools.
 
 ## 2. The PM side: `TEAM_PM_CMD`
 
@@ -40,7 +42,7 @@ The PM is an adapter too. Workers describe their CLI with `TEAM_AGENT_CMD`; the 
 
 | Key | Meaning | Empty (default) |
 |---|---|---|
-| `TEAM_PM_CMD` | launch template for the PM | built-in Pi command: `TEAM_PI_BIN --provider P --model M --skill <skill dir> -c @<state>/pm-prompt.md` |
+| `TEAM_PM_CMD` | launch template for the PM | built-in Pi command: `TEAM_PI_BIN --provider P --model M -e <bg ext> --skill <skill dir> -c @<state>/pm-prompt.md` |
 | `TEAM_PM_BIN` | binary used for the start-time existence check and for the liveness **identity** check | first word of `TEAM_PM_CMD`, else `TEAM_PI_BIN` |
 | `TEAM_PM_RESUME_ARGS` | arguments that continue the PM's previous session | on the Pi path the historical `-c` / `--session-id <id>`; on a custom CLI: **nothing — the restart does not continue the history** |
 
@@ -55,6 +57,9 @@ malformed one such as `{ cwd }` all fail loudly, and the error names `TEAM_PM_CM
 - `{prompt_file}` — path of `state/pm-prompt.md`, the PM briefing (`team up --print` prints the same text)
 - `{prompt}` — `"$0"`: the briefing as a single argv token handed over by the window harness (keep the quotes)
 - `{skill_dir}` — the teamsmith skill directory
+- `{bg_ext}` — path of the team background-job extension (`extension/team-bg.ts`): the PM's lane for long gates
+  (`team_bg_run` / `team_bg_wait`, see §3a). The built-in Pi command already passes it; a custom Pi-shaped PM
+  template adds `-e {bg_ext}` to get the same tools.
 - `{extra_args}` — `TEAM_PM_EXTRA_PI_ARGS`, the PM's own key, **not** the worker's `TEAM_EXTRA_PI_ARGS`
 - `{resume_args}` — `TEAM_PM_RESUME_ARGS` (PM-only; a **worker** template that uses it still fails as unknown)
 <!-- pm-side:end -->
@@ -89,6 +94,8 @@ Two details of that harness matter when you write a template or debug one:
   are *worker* features: a worker tells the PM when its turn ended. For the PM that direction is inverted — the
   PM is the recipient. A non-Pi PM is started/restarted by `team up` and by the pulse's pending-work check
   (`watch --once`: unread inbox, reports to verify, blocked or stopped agents) and reads `team inbox` itself.
+  The PM **does** get the team background lane (`team-bg.ts`), because that is not notification: it is the PM's
+  own long-gate tool (§3a).
 - **No guaranteed session continuity.** With `TEAM_PM_RESUME_ARGS` empty, a restart begins a *fresh* session,
   and the tool says so in plain words instead of implying a continuation. The handoff is the durable record —
   `docs/team/**` (BOARD, DECISIONS, threads, reports) plus `team inbox` — and the briefing itself tells the new
@@ -137,6 +144,7 @@ One shell command line, run in the worktree. Placeholders (values are `%q`-quote
 | `{prompt}` | `"$0"`: the prompt as passed by the harness — keep the quotes, the value is inserted verbatim |
 | `{skill_dir}` | teamsmith skill directory (for `bash {skill_dir}/scripts/team …`) |
 | `{notify_ext}` | path of the Pi notify extension (only useful for Pi-compatible CLIs) |
+| `{bg_ext}` | path of the team background-job extension (`extension/team-bg.ts`, §3a; only useful for Pi-compatible CLIs) |
 | `{extra_args}` | `TEAM_EXTRA_PI_ARGS`, inserted verbatim |
 
 Rules:
@@ -175,6 +183,39 @@ Rules:
   adapter that exits 0 is reported as finished — normal for script-style CLIs — and one that keeps running as
   still running. The built-in Pi path keeps its old contract (a short-lived `TEAM_PI_BIN` is allowed), so an
   immediately exiting `pi` is still a success with a warning.
+
+### 3a. The team's own background lane (built-in Pi: `{bg_ext}`)
+
+A gate or a build that takes tens of minutes must not sit inside a turn. The team ships its own lane — no
+third-party package, no extra window, nothing loaded into the user's own Pi sessions:
+
+| Tool | What it does |
+|---|---|
+| `team_bg_run` | starts the command as a **detached** `bash -c` job, returns a job id + pid at once; combined stdout/stderr goes to `state/bg/<id>.log` (bounded: past `TEAM_BG_LOG_MAX_BYTES`, default 512 KB, the head is dropped and the tail is kept behind a truncation marker) |
+| `team_bg_wait <id>` | waits for the job (or returns at once with `timeout_ms`), **harvests** it and returns exit code + log tail inline |
+
+Both teamsmith launch paths load it: the built-in Pi worker command and the built-in Pi PM command pass
+`-e <skill>/extension/team-bg.ts`. A custom template gets the same tools with `-e {bg_ext}`. A CLI that has no
+Pi extension API simply does not have these tools — nothing else changes.
+
+The rules (from oh-my-pi issue #689, measured in the E8 probes):
+
+1. **Harvest before the turn ends.** An unharvested job that finishes while the agent is idle wakes it **once**,
+   with one merged `followUp` message for every job that finished in the same window. That costs a turn; a
+   harvested job never wakes anyone (its result was already returned inline).
+2. **Several jobs, one message.** Completion notices are merged, and never delivered while the agent is running
+   tools (they wait for the next settle).
+3. **The ledger is `state/bg.log`.** Every turn end appends one line —
+   `<ISO timestamp> settled-with-unharvested=<n>[ jobs=<id>:<running|exit<code>>,…]`, and every delivery appends
+   `<ISO timestamp> wake count=<n> ids=<id>,…`. So “this turn ended with unharvested jobs” is a fact on disk
+   that the PM (or a verifier) can read after the fact.
+4. **A session restart does not kill jobs.** The job table is session-scoped and cleared on `session_start` /
+   `session_shutdown`; the processes are detached, the logs and the ledger stay in `state/`. After a restart the
+   results are still readable, but the ids are gone and nobody will be woken — treat `state/bg.log` as the record.
+
+What the lane is **not**: it does not watch the user's sessions, it does not subscribe to any package's event
+bus, and it only knows the jobs it started itself. It is injected through the same `-e` channel as the notify
+extension, which is exactly the boundary: user sessions do not get it.
 
 ## 4. Notify: `TEAM_AGENT_NOTIFY_CMD`
 

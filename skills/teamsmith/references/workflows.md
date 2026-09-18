@@ -154,10 +154,44 @@ checklist. When the gates fail the command returns non-zero — do not ignore it
 **The PM also has to read the diff**: gates only prove "the existing tests did not fail", not "the implementation
 matches the brief".
 
-**A gate that takes tens of minutes must not sit inside a turn.** `team doctor` reports whether this harness has a
-background lane (`harness` / `background jobs` / `background jobs 加载`); the two ways to run a long gate — an
-agent-started background job, or a background tmux window — plus the four delivery rules are in
-[references/troubleshooting.md](troubleshooting.md) §17.
+**A gate that takes tens of minutes must not sit inside a turn.** teamsmith's own background lane is the default
+on Pi (§E2); `team doctor` reports whether *further* lanes exist for your own sessions (`harness` /
+`background jobs` / `background jobs 加载`), and the background-tmux-window fallback plus the four delivery
+rules are in [references/troubleshooting.md](troubleshooting.md) §17.
+
+### E2. The PM's background gate (the team's own lane, no extra window)
+
+On the built-in Pi paths (both the PM and the workers) the session already has two tools for this:
+
+```text
+team_bg_run command="bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1" name="review-T1.1"
+   → job review-T1.1 started (pid 12345); log: <root>/.pi/team/state/bg/review-T1.1.log
+   (the tool returns at once — the turn is free again)
+
+<the turn ends here; when the job finishes and you are idle you are woken once, with one merged
+ message naming every job that finished in that window>
+
+team_bg_wait review-T1.1
+   → job review-T1.1 finished exit=0 after 412.3s; log: …  + the tail of the log
+```
+
+The four rules that make it safe (they are the extension's code, not a convention):
+
+1. **Harvest before the turn ends.** An unharvested job wakes you **once** when it finishes; a harvested job stays
+   silent (its result came back inline). Several jobs finishing together arrive as **one** message, and never while
+   you are running tools.
+2. **The ledger is on disk**: every turn end appends
+   `<ISO timestamp> settled-with-unharvested=<n> jobs=<id>:<running|exit<code>>,…` to
+   `<root>/.pi/team/state/bg.log` — a review or a digest can read “this turn ended with unharvested work”
+   afterwards. Deliveries append `wake count=<n> ids=…`.
+3. **The log is bounded**: `state/bg/<id>.log` keeps the tail (head dropped behind a truncation marker) past
+   `TEAM_BG_LOG_MAX_BYTES` (default 512 KB), so a chatty gate cannot fill the disk.
+4. **A restart does not kill a job** (the process is detached), but the job table is per session: after a
+   restart read `state/bg.log` and the log file instead of waiting for a wake-up.
+
+A worker uses the same tools (its prompt says so) — that is how a worker can run a long build without burning its
+turn. A CLI without the Pi extension API does not have them: fall back to a background tmux window
+([troubleshooting.md](troubleshooting.md) §17).
 
 ## F. Merging and wrapping up
 

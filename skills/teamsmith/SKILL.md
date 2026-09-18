@@ -17,6 +17,7 @@ run agents in parallel", follow the PM loop below.
 PM(this session, tmux <session>:pm)     worker agents(each in .worktrees/<agent>)
    task / dispatch ──────────────────▶  pi --session-id <s>-<a>  (interactive, watchable)
    digest / inbox  ◀── auto-notify on turn end ── extension/team-notify.ts → inbox + tmux wake-up
+   long gate: team_bg_run → turn ends → woken once → team_bg_wait   (extension/team-bg.ts, both sides)
    review(independent checkout, run gates) ──▶  reports/<ID>-<a>.md + PR/MR
    merge / close   ──────────────────▶  BOARD → done
 ```
@@ -49,6 +50,7 @@ which starts once the project is up.
 | Dispatch | `team add-agent <a>`, `team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--allow-overflow] [--force] [--print]` (`--force` overrides the "this agent still carries an unfinished task" refusal; the override is printed and logged) |
 | Collaborate | `team say <a> "<one-line message>" [--no-verify]` (verifies delivery; falls back to the inbox when the agent is not running), `team notify <a> "<one line>"` (agent → PM) |
 | Draft / deferred delivery | `team draft [pm]` opens an editor window on `state/draft-pm.md` (nothing automated ever types into it; save+quit enqueues through the guarded path and prints the ack there), `team draft send [<file>] [--now]` (headless form), `team outbox [list]` (what is waiting, with `held` reasons), `team outbox flush [--now]`, `team outbox drop <n\|all>`. Every automated sender refuses to type into an input box that already holds a draft: the message is queued in `state/outbox/` and reported as `queued`, and `--now` is the audited override that types anyway (`state/outbox/forced.log`). See `references/troubleshooting.md` §3 |
+| Long gate (background job) | **tool calls in the session** (not `team` subcommands): `team_bg_run` starts a detached job (id + pid at once, `state/bg/<id>.log`), `team_bg_wait <id>` harvests it (exit code + log tail inline). One merged wake-up per finished batch, silence once harvested, one `settled-with-unharvested=<n>` line per turn end in `state/bg.log`. Injected on both built-in Pi paths; a custom template opts in with `{bg_ext}`. See `references/workflows.md` §E2 |
 | Verify | `team review <ID> --dir <PM-prepared independent checkout> [--no-gates] [--strong] [--allow-unresolved-branch]` → `reviews/<ID>.md` (runs gates + writes evidence; refuses a dirty or `.gitignore`d checkout / an unresolvable `--branch` unless the matching `TEAM_REVIEW_ALLOW_*` override is used and recorded; `--strong` structurally checks flip evidence + a path to an independent package) |
 | Wrap up | `team close <ID> [--keep-window]` (BOARD/state/window only, never git), `team teardown --agent a [--purge]` (explicit cleanup) |
 | Bootstrap | `team bootstrap [--agents "dev verify"] [--print]` (recommended), `team init`, `team doctor` |
@@ -126,7 +128,7 @@ bash <skill>/scripts/team changelog        # change history (--since v1.8.0 for 
 |---|---|
 | `scripts/**` (CLI) | **Nothing to do**: every call reads from disk |
 | `SKILL.md` / `references/**` / `templates/**` | Type **`/reload`** in Pi (or `/teamsmith-reload`, or let the model call the `reload_skills` tool). **Note**: `/reload` refreshes the skill list/descriptions (system prompt) and extensions; **text already read into the conversation history does not change**, so after reloading you must `read <skill>/SKILL.md` again (the extension sends a follow-up prompt that triggers that re-read) |
-| `extension/team-notify.ts` | Same as above (`/reload` clears the extension cache and re-imports) |
+| `extension/team-notify.ts`, `extension/team-bg.ts` | Same as above (`/reload` clears the extension cache and re-imports; `team version --check` fingerprints both) |
 
 Rationale: Pi's `/reload` rediscovers skills and rebuilds the system prompt, clears the extension module cache,
 and re-resolves `--skill`/`-e` paths. When `team version --check` says your session is stale, follow the table
@@ -174,8 +176,11 @@ byte-for-byte unchanged**):
 | `TEAM_AGENT_LOG_GLOB` | which logs `team monitor --activity` reads (`{agent}` = agent name) | Pi session files |
 | `TEAM_AGENT_BIN` | binary for the window-readiness wait and existence checks | first word of `TEAM_AGENT_CMD`, else `TEAM_PI_BIN` |
 
-- Template placeholders: `{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{notify_ext}` `{extra_args}`;
+- Template placeholders: `{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{notify_ext}` `{bg_ext}` `{extra_args}`;
   an unknown `{...}` **fails the dispatch** with the supported list, and `team dispatch … --print` renders the command first.
+- team-bg: the team background lane (`team_bg_run` / `team_bg_wait` for long gates) is **not** an adapter feature —
+  the built-in Pi paths load `extension/team-bg.ts` with `-e`, and a custom Pi-shaped template opts in with
+  `{bg_ext}`; a CLI without a Pi extension API has no background lane (use a tmux window instead).
 - `team doctor` / `team paths` print the resolved adapter (`built-in (Pi)` or `custom: …`); only a *configured*
   adapter whose binary cannot be resolved fails.
 - Contract, worked codex/opencode examples, a verification checklist and the unsupported list:
@@ -251,7 +256,7 @@ byte-for-byte unchanged**):
 > (`TEAM_OPENSPEC_BIN`, `TEAM_SPEC_DIR`) are in [references/config.md](references/config.md).
 > When only the *workers* move to another CLI: with `TEAM_AGENT_CMD` set, workers no longer need `pi`
 > (`team doctor` judges by the configured adapter) — but **the PM side still runs Pi** (`pi -c` restarts,
-> the PM prompt, `extension/team-notify.ts`), and the pulse only wakes the PM. See
+> the PM prompt, `extension/team-bg.ts`), and the pulse only wakes the PM. See
 > [references/agent-adapters.md](references/agent-adapters.md).
 
 - **No forge dependency**: the skill never probes or calls `gh`/`glab`/`tea` and never reads tokens; opening a

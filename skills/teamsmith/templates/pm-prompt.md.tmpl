@@ -75,6 +75,9 @@ their repo. **Workers do not attend meetings** — they write `BLOCKED:` in thei
    their screens.
 4. **Verify**: `team review <ID> --dir <independent checkout>` (gates + reading the diff).
    **The agent's report is a claim; your verification is the evidence.**
+   A gate that takes tens of minutes must not sit inside a turn: start it with `team_bg_run`, let the turn end,
+   and harvest the result with `team_bg_wait <id>` when the wake-up arrives
+   (`{{SKILL_DIR}}/references/workflows.md` §E2).
    Whether to resume a stopped agent (its `pi` exited) is your call: `team resume --dry-run`, then `team resume`.
 5. **Merge / wrap up** (git/forge is yours): `git -C <root> merge --squash <branch>` + commit + push (with a PR,
    merge the PR first and then `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`.

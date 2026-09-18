@@ -1612,9 +1612,12 @@ PM_SUPPORT="${PM_SUPPORT% }"
 #    否则函数内部一改（比如把默认的 -c 删了）两边会一起动，assert_eq 就白写了。
 #      printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' <root> <spawn> <pi> "$(team_pm_pi_args)" <prompt>
 #      （team_pm_pi_args 每个参数 %q 后带一个空格 → 最后是 `-c` + 一个空格，格式里 @ 前又有一个空格）
-LEGACY_REF="cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
+#    M27 起默认参数多了 `-e <skill>/extension/team-bg.ts`（PM 的后台门禁）：参考值同步加这一项，
+#    它仍是**字面写死**的，不调实现。
+LEGACY_REF="cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
 DEFAULT_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
-assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg 扩展）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_has_echo "$DEFAULT_CMD" "extension/team-bg.ts" "M27：PM 默认命令加载 team-bg（后台门禁）"
 assert_has_echo "$DEFAULT_CMD" " -c  @$PM_PF" "默认仍是 pi -c + @prompt-file（历史行为）"
 # 显式配了续跑键就在内置 Pi 路径生效（同一套键也服务于自定义 CLI）
 SID_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_SESSION_ID=pm-fixed')"
@@ -4449,6 +4452,38 @@ EOF
   assert_has "$TMP/ext-e.log" "E4 reload 打断的回合：没有收件箱行" "E4：reload 打断的回合不发简报"
 else
   printf '  (跳过扩展 E 测试：node 未启用类型剥离，且没有 bun/tsx)\n'
+fi
+
+# ---------------------------------------------------------------- 13c. 团队后台车道（M27）
+# 长门禁/长构建不能占住回合：team-bg 扩展把作业放进 **detached** 子进程，回合可以结束再被叫回来。
+# 判据全部来自**真扩展代码 + 真子进程 + 真日志/账本**，只把 pi 宿主换成假宿主（sendMessage 记账）。
+# 为什么不用真模型：那会把判据换成「模型有没有照着做」；真实的「唤醒一个空闲 pi 会话」已由 E8 的
+# RPC 探针实证（docs/team/reports/E8-verify/probes + 报告 §2.2/§2.3）。夹具是纯逻辑+短子进程，快模式也跑。
+section "13c · 团队后台车道（M27）：拉起链注入 / 收割契约 / 账本"
+assert_file "$SKILL_DIR/extension/team-bg.ts" "team-bg 扩展在"
+# ① 两条内置 Pi 启动链都挂上：worker 与 notify 并列；PM 只有 bg（它就是收件人，不是通知者）
+assert_has "$TMP/print.log" "team-bg.ts" "worker 启动命令显式加载 team-bg（worktree 不会自动发现扩展）"
+assert_has_echo "$DEFAULT_CMD" "extension/team-bg.ts" "PM 启动命令也加载 team-bg（PM 的后台门禁）"
+assert_has "$TMP/print.log" "-e $SKILL_DIR/extension/team-bg.ts" "worker 命令里是 -e 挂上 bg 扩展（与 notify 并列）"
+# ② {bg_ext} 是两条模板集里的一等占位符，文档与引擎不漂移
+assert_has_echo "$(adapter_launch_support)" "{bg_ext}" "worker launch 模板支持 {bg_ext}"
+assert_has_echo " $PM_SUPPORT " " {bg_ext} " "PM 模板支持 {bg_ext}"
+assert_eq "文档里没有引擎不认识的占位符（worker 表格）" "$(adapter_doc_unsupported "$ADOC" | tr '\n' ' ')" ""
+# ③ 真扩展跑确定性夹具：未收割→唤醒 / 已收割→静默 / 多条合并 / 账本行 / 日志有界 / 会话级清理
+if [ -n "$TS_RUNNER" ]; then
+  if $TS_RUNNER "$SKILL_DIR/tests/team-bg-harness.mjs" "$SKILL_DIR/extension/team-bg.ts" >"$TMP/bg-harness.log" 2>&1; then
+    ok "扩展夹具全绿（runner=$TS_RUNNER，$(grep -c 'TEAM-BG-CASE PASS' "$TMP/bg-harness.log") 条用例）"
+  else
+    bad "team-bg 夹具失败（runner=$TS_RUNNER）"; grep 'TEAM-BG-CASE FAIL' "$TMP/bg-harness.log" | sed 's/^/     /'
+  fi
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S1 unharvested job wakes the idle agent exactly once" "未收割的作业唤醒空闲会话（且只一次）"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S2 harvested job never wakes the agent" "收割过的作业完成时静默（#689 第 1 条）"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S3 two jobs finishing together produce exactly one message" "同拍完成的多条合并成一条（#689 第 2 条）"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S5 settled lines report the unharvested count" "账本有 settled-with-unharvested=<n> 行"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS S6 log stays under the cap" "日志有界（截断留尾段）"
+  assert_has "$TMP/bg-harness.log" "TEAM-BG-CASE PASS reverse guard" "反向守卫：真实仓库 state/ 未被触碰"
+else
+  printf '  (跳过 team-bg 夹具：node 未启用类型剥离，且没有 bun/tsx)\n'
 fi
 
 # ---------------------------------------------------------------- 12b. 延后投递与草稿入口（delivery-guard）

@@ -1075,9 +1075,11 @@ team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 sk
     "PROTECTED_BRANCH=$TEAM_PROTECTED_BRANCH" "WORKTREES_DIR=$TEAM_WORKTREES_DIR"
 }
 
-team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人）；默认 -c 延续本目录上一个会话以保住历史
+team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）；默认 -c 延续本目录上一个会话以保住历史
   local model="${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}" args=()
   args=(--provider "${model%%/*}" --model "${model##*/}")
+  # M27：PM 的团队后台车道（team_bg_run/team_bg_wait），与 worker 侧同一个扩展
+  [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
   [ -d "$TEAM_SKILL_DIR" ] && args+=(--skill "$TEAM_SKILL_DIR")
   # 续跑参数（M8.1）：TEAM_PM_SESSION_ID > 显式 TEAM_PM_RESUME_ARGS > 历史的 -c。
   # 默认三个都空 = 与历史逐字节一致；显式配了 resume 参数就换掉默认的 -c（同一套键也服务于自定义 CLI）。
@@ -2538,11 +2540,12 @@ team_json_escape() {
 # 占位符清单是**唯一真相**：错误信息、校验、文档与 smoke 自测都从这几个函数取，不各写一份。
 team_agent_placeholders() { # <launch|notify|pm> → 每行一个支持的占位符
   case "${1:-launch}" in
-    launch) printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{notify_ext}' '{extra_args}' ;;
+    launch) printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{notify_ext}' '{bg_ext}' '{extra_args}' ;;
     notify) printf '%s\n' '{summary}' '{summary_file}' '{agent}' '{cwd}' '{session_id}' '{model}' '{provider}' '{skill_dir}' ;;
     # M8.1 PM adapter：与 launch 同一套（PM 没有 notify 扩展 → 没有 {notify_ext}），多一个 PM 专有的
     # {resume_args}（延续上一会话的参数：TEAM_PM_RESUME_ARGS）。worker 模板里写 {resume_args} 照样报未知。
-    pm)     printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{extra_args}' '{resume_args}' ;;
+    # M27：{bg_ext} 两侧都有 —— PM 也要团队后台车道（长门禁），与 worker 用同一个扩展。
+    pm)     printf '%s\n' '{cwd}' '{session_id}' '{model}' '{provider}' '{prompt_file}' '{prompt}' '{skill_dir}' '{bg_ext}' '{extra_args}' '{resume_args}' ;;
     *) team_die "team_agent_placeholders: 未知 kind ${1:-}（launch|notify|pm）" ;;
   esac
 }
@@ -2738,6 +2741,7 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
       '{prompt}')      val='"$0"' ;;
       '{skill_dir}')   val="$(printf '%q' "$TEAM_SKILL_DIR")" ;;
       '{notify_ext}')  val="$(printf '%q' "$TEAM_SKILL_DIR/extension/team-notify.ts")" ;;
+      '{bg_ext}')      val="$(printf '%q' "$TEAM_SKILL_DIR/extension/team-bg.ts")" ;;
       '{extra_args}')
         # PM 的「额外参数」是 PM 自己的键（TEAM_PM_EXTRA_PI_ARGS）；worker 那边是 TEAM_EXTRA_PI_ARGS。
         if [ "$kind" = "pm" ]; then val="${TEAM_PM_EXTRA_PI_ARGS:-}"; else val="${TEAM_EXTRA_PI_ARGS:-}"; fi ;;

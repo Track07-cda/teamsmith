@@ -10,7 +10,11 @@
 
 team_skill_file() { printf '%s/SKILL.md\n' "$TEAM_SKILL_DIR"; }
 team_skill_changelog() { printf '%s/CHANGELOG.md\n' "$TEAM_SKILL_DIR"; }
-team_skill_ext() { printf '%s/extension/team-notify.ts\n' "$TEAM_SKILL_DIR"; }
+# M27：扩展面从一个变成两个（notify + bg）；指纹必须覆盖**两个**，否则改了 team-bg.ts
+# 而 `team version --check` 还说「没变」，PM 不会想起 /reload。team_skill_ext 保留
+# 单数形态（老调用方要的是 notify 扩展那一个路径）。
+team_skill_exts() { printf '%s\n' "$TEAM_SKILL_DIR/extension/team-notify.ts" "$TEAM_SKILL_DIR/extension/team-bg.ts"; }
+team_skill_ext() { printf '%s\n' "$TEAM_SKILL_DIR/extension/team-notify.ts"; }
 
 team_skill_doc_version() { # SKILL.md frontmatter 里的 version
   local f; f="$(team_skill_file)"
@@ -24,10 +28,13 @@ team_skill_changelog_version() { # CHANGELOG 顶部版本
   sed -n 's/^##[[:space:]]*\[*v\?\([0-9][0-9.]*\)\]*.*/\1/p' "$f" | head -1
 }
 
-team_skill_hash() { # SKILL.md + extension 的内容指纹（判断"文本是否变过"）
-  local a b
-  a="$(team_skill_file)"; b="$(team_skill_ext)"
-  { [ -f "$a" ] && cat "$a"; [ -f "$b" ] && cat "$b"; } 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256 2>/dev/null || cat; } | cut -c1-12
+team_skill_hash() { # SKILL.md + extension/**（notify + bg）的内容指纹（判断“文本是否变过”）
+  local a f
+  a="$(team_skill_file)"
+  {
+    [ -f "$a" ] && cat "$a"
+    while IFS= read -r f; do [ -f "$f" ] && cat "$f"; done < <(team_skill_exts)
+  } 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256 2>/dev/null || cat; } | cut -c1-12
 }
 
 team_loaded_env() { printf '%s/pm-loaded.env\n' "$TEAM_STATE_DIR"; }

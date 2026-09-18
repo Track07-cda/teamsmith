@@ -63,6 +63,8 @@ team_pi_args() { # <model> → 打印已转义的 pi 参数
   provider="${model%%/*}"
   piargs=(--provider "$provider" --model "${model##*/}")
   piargs+=(-e "$TEAM_SKILL_DIR/extension/team-notify.ts")
+  # M27：团队后台车道与 notify 并列注入（worker 的长门禁/长构建用它，收割纪律写在提示词里）
+  piargs+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
   [ -d "$TEAM_SKILL_DIR" ] && piargs+=(--skill "$TEAM_SKILL_DIR")
   if [ -n "$TEAM_EXTRA_PI_ARGS" ]; then
     # 允许项目追加参数（空格分隔，不支持带空格的值）
@@ -75,7 +77,7 @@ team_pi_args() { # <model> → 打印已转义的 pi 参数
 # 派单提示词：把 CEP 的「不半途停、小步提交、必写报告、被阻塞就 notify」固化成模板。
 team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session_id>]
   local agent="$1" id="$2" taskfile="$3" wt="$4" model="$5" sid="${6:-$TEAM_SESSION-$1}"
-  local issue="" cli="$TEAM_SKILL_DIR/scripts/team" rel abs_docs rel_report rel_note notify_block=""
+  local issue="" cli="$TEAM_SKILL_DIR/scripts/team" rel abs_docs rel_report rel_note notify_block="" bg_block=""
   case "$taskfile" in
     "$TEAM_MAIN_ROOT"/*) rel="${taskfile#"$TEAM_MAIN_ROOT"/}" ;;
     *) rel="" ;;
@@ -122,6 +124,14 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session
     fi
   fi
 
+  # M27 · 后台车道纪律：只在「这个 harness 真的会拿到 team-bg 扩展」时说 ——
+  # 内置 Pi（TEAM_AGENT_CMD 空）由 teamsmith 挂 -e；自定义模板写了 {bg_ext} 的算作者已经挂上。
+  # 其它 adapter 不提：工具不存在，教了只会让 worker 白找。
+  case "${TEAM_AGENT_CMD:-}" in
+    ''|*'{bg_ext}'*)
+      bg_block="$(printf '\n**Long jobs (a gate, a build)**: start them with `team_bg_run` (it returns a job id immediately and keeps\nworking while you go on), then harvest with `team_bg_wait <id>` (the result comes back inline). **Harvest every job\nbefore your turn ends** -- an unharvested job wakes you once when it finishes, and that costs a turn.\n')" ;;
+  esac
+
   cat <<PROMPT
 You are agent:$agent for the **$TEAM_PROJECT** project, dispatched by the PM through teamsmith. Your worktree is
 \`$wt\`; run every command there. **Do not** touch the main worktree ($TEAM_MAIN_ROOT) and **do not** switch to main or
@@ -166,7 +176,7 @@ Delivery process:
 4. \`git push -u $TEAM_REMOTE HEAD\`.
 5. $pr_step.
 
-Task: **$id**${issue:+ (issue #$issue)}. The brief \`$taskfile\` is the PM's read-only file -- do not modify it.${notify_block}
+Task: **$id**${issue:+ (issue #$issue)}. The brief \`$taskfile\` is the PM's read-only file -- do not modify it.${bg_block}${notify_block}
 If this is a resumed run: start with \`git status\` / \`git log --oneline -5\` to see how far you got, and continue
 from that point instead of starting over.
 PROMPT
