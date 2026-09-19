@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# teamsmith · tmux 运行时闸门（M36）—— 被注入到 agent 会话（PM 与 worker 窗口）PATH 最前的 `tmux` 包装。
+#
+# 为什么存在：默认 tmux server 五次全灭（PM/pulse/worker + 共用同一 server 的其他项目一起陪葬），
+# 而默认 server 死亡不留任何日志，肇事命令查不出来。M28 的 lint（tests/tmux-lint.pl）只能静态管
+# 仓库脚本，管不到 agent 在窗口里的 ad-hoc 命令 —— 这道闸门管的就是它们：
+#
+#   记录  每次调用追加一行到 $TEAM_TMUX_CALLS_LOG（时间/socket/TMUX/TMUX_TMPDIR/参数/pid/ppid/cwd/动作），
+#         上限 2000 行（超了留最新 1000 行）——默认 server 再死也能倒查「谁在什么时候打了什么」。
+#   拒绝  解析到**默认** socket（/tmp/tmux-<uid>/default）且子命令 ∈ kill-server/kill-session/
+#         kill-window/kill-pane（含 tmux 允许的前缀写法）→ 不执行，stderr 打醒目一行，exit 64。
+#   放行  TEAM_ALLOW_DESTRUCTIVE_TMUX=1（记 act=override）或解析到私有 socket（记 act=pass）
+#         → 原样 exec 真 tmux。只读命令（ls/list-*/display-message/capture-pane/send-keys…）从不拦。
+#
+# socket 解析与 tmux 一致：-S/-L（命令行显式） > $TMUX（第一个逗号前） > ${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default。
+# 「默认」只按最终解析出的路径判定：-L default 打在默认 TMPDIR 上照样算默认；TMUX_TMPDIR 指向私有目录就算私有。
+#
+# 两条硬原则（M36 返工实录，违反任意一条都是事故级）：
+#   透传保真  判定在**副本**上解析、执行用**原始** "$@" —— 把 -L/-S 从 argv 里吃掉会让
+#             「判定打私有、执行打默认」分家（被执行的 kill 会落默认 server）。
+#   绝不挂住  无子命令 / 缺值参数（tmux -L）/ -V 等全部透传给真 tmux（它自己报错退出）；
+#             解析循环每条路径要么 shift ≥1 要么 break。
+set -u
+
+# ── 找真 tmux：PATH 里第一个「不是我自己」的 tmux（防递归；TEAM_TMUX_REAL 显式指定优先）────────
+_shim_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+_real=""
+if [ -n "${TEAM_TMUX_REAL:-}" ] && [ -x "${TEAM_TMUX_REAL:-}" ]; then
+  _c="$(readlink -f "$TEAM_TMUX_REAL" 2>/dev/null || printf '%s' "$TEAM_TMUX_REAL")"
+  [ "$_c" != "$_shim_self" ] && _real="$TEAM_TMUX_REAL"
+fi
+if [ -z "$_real" ]; then
+  _oldifs="$IFS"; IFS=':'
+  for _d in $PATH; do
+    IFS="$_oldifs"
+    [ -n "$_d" ] || continue
+    _cand="$_d/tmux"
+    [ -x "$_cand" ] || continue
+    _cc="$(readlink -f "$_cand" 2>/dev/null || printf '%s' "$_cand")"
+    [ "$_cc" = "$_shim_self" ] && continue      # 跳过自己（PATH 里前面的 shim 位置）
+    _real="$_cand"; break
+  done
+  IFS="$_oldifs"
+fi
+if [ -z "$_real" ]; then
+  printf '✗ teamsmith tmux 闸门：PATH 里找不到真 tmux（只找到我自己）——把真 tmux 的目录加进 PATH，或设 TEAM_TMUX_REAL=<绝对路径>\n' >&2
+  exit 127
+fi
+
+# ── 解析全局参数（**只吃副本**：函数位置参数是调用者 "$@" 的拷贝，caller 的 "$@" 不动）────────
+# 缺值参数（$#<2）直接 break：不完整调用透传给真 tmux 自己报错；每条路径要么 shift ≥1 要么 break，绝不挂住。
+_parse_globals() {
+  _sockname="" _sockpath="" _sub=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -L)  [ $# -ge 2 ] || break; _sockname="$2"; shift 2 ;;
+      -L*) _sockname="${1#-L}"; shift ;;
+      -S)  [ $# -ge 2 ] || break; _sockpath="$2"; shift 2 ;;
+      -S*) _sockpath="${1#-S}"; shift ;;
+      -c|-f|-T) [ $# -ge 2 ] || break; shift 2 ;;        # 带值的全局选项
+      --)  shift; [ $# -gt 0 ] && _sub="$1"; break ;;
+      -*)  shift ;;                               # 其它全局开关（-2 -C -l -u -v -V …）
+      *)   _sub="$1"; break ;;                    # 第一个非选项词 = 子命令
+    esac
+  done
+}
+_parse_globals "$@"
+
+# ── 解析 socket（与 tmux 同源）───────────────────────────────────────────────────────────────
+_uid="${UID:-$(id -u 2>/dev/null || echo 0)}"
+_default_sock="/tmp/tmux-$_uid/default"
+if [ -n "$_sockpath" ]; then _sock="$_sockpath"
+elif [ -n "$_sockname" ]; then _sock="${TMUX_TMPDIR:-/tmp}/tmux-$_uid/$_sockname"
+elif [ -n "${TMUX:-}" ]; then _sock="${TMUX%%,*}"
+else _sock="${TMUX_TMPDIR:-/tmp}/tmux-$_uid/default"
+fi
+_sock="${_sock%/}"   # 尾斜杠归一
+
+# ── 破坏性集合：四个 kill-*；tmux 允许前缀写法（kill-s 之类），前缀命中也按破坏性算 ──────────────
+_destructive=0
+case "$_sub" in
+  kill-server|kill-session|kill-window|kill-pane) _destructive=1 ;;
+  kill-*)
+    for _d9 in kill-server kill-session kill-window kill-pane; do
+      case "$_d9" in "$_sub"*) _destructive=1 ;; esac
+    done ;;
+esac
+
+# ── 三态裁决 ─────────────────────────────────────────────────────────────────────────────────
+_act="pass"
+if [ "$_destructive" = "1" ] && [ "$_sock" = "$_default_sock" ]; then
+  if [ "${TEAM_ALLOW_DESTRUCTIVE_TMUX:-0}" = "1" ]; then _act="override"; else _act="refused"; fi
+fi
+
+# ── 记录（尽力而为：写不进去不挡路；FIFO 目标会阻塞写端，直接跳过 —— 日志绝不能挂住调用）────────
+if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
+  _log="${TEAM_TMUX_CALLS_LOG}"
+  _ld="$(dirname "$_log")"
+  [ -d "$_ld" ] || mkdir -p "$_ld" 2>/dev/null || true
+  _argv="$(printf '%s' "$*" | tr '\r\n' '  ')"
+  printf '%s · act=%s · sock=%s · TMUX=%s · TMUX_TMPDIR=%s · argv=%s · pid=%s ppid=%s cwd=%s\n' \
+    "$(date -Is)" "$_act" "$_sock" "${TMUX:--}" "${TMUX_TMPDIR:--}" "$_argv" "$$" "${PPID:-?}" "$PWD" \
+    >> "$_log" 2>/dev/null || true
+  # 截断：超 2000 行留最新 1000 行（同目录临时文件 + mv；失败就算了，日志不是命门）
+  _n="$(wc -l < "$_log" 2>/dev/null | tr -dc '0-9')"
+  if [ -n "$_n" ] && [ "$_n" -gt 2000 ]; then
+    tail -n 1000 "$_log" > "$_log.tmp.$$" 2>/dev/null \
+      && mv "$_log.tmp.$$" "$_log" 2>/dev/null || rm -f "$_log.tmp.$$" 2>/dev/null
+  fi
+fi
+
+# ── 拒绝 / 放行 ──────────────────────────────────────────────────────────────────────────────
+if [ "$_act" = "refused" ]; then
+  printf '✗ teamsmith tmux 闸门：已拒绝 %s —— 它解析到默认 socket（%s），会把共用这台 server 的所有项目/会话一起杀掉\n' \
+    "$_sub" "$_sock" >&2
+  printf '  确要执行（会记 act=override 日志）：TEAM_ALLOW_DESTRUCTIVE_TMUX=1 %s\n' \
+    "tmux ${_argv:-$_sub}" >&2
+  printf '  或换私有 server：env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<私有目录> tmux …（socket 落到私有目录即放行）\n' >&2
+  exit 64
+fi
+# 原始 "$@" 逐字节透传（判定副本、执行原件 —— 见文件头「透传保真」）。
+exec "$_real" "$@"

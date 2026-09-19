@@ -12,6 +12,12 @@
 # 子命令见 `team help`。
 set -euo pipefail
 
+# M36 · tmux 运行时闸门：team CLI 自己的 tmux 调用走「显式放行」通道（它的调用点全是仓库脚本，
+# 受 M28 lint 静态管束）；闸门要拦的是 agent 窗口里的 ad-hoc 命令。放行 ≠ 无痕：窗口 PATH 有
+# shim 时这些调用照样逐条记进 state/tmux-calls.log（act=override），出事照样能倒查。
+# 窗口侧不受影响：这个变量不进 update-environment，agent 窗口里它不会被继承。
+export TEAM_ALLOW_DESTRUCTIVE_TMUX="${TEAM_ALLOW_DESTRUCTIVE_TMUX:-1}"
+
 TEAM_CLI="$(basename "$0")"
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh

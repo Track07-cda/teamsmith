@@ -1327,13 +1327,59 @@ team_pm_launch_diag() { # <原因> [<渲染出的命令>] → 诊断文件路径
 # POSIX 单引号引用（不依赖 bash 的 %q：respawn 的命令字符串会被**窗口的 shell** 解析，可能是 dash）
 team_squote() { local s="${1//\'/\'\\\'\'}"; printf "'%s'" "$s"; }
 
+# ---------------------------------------------------------------- M36 · tmux 运行时闸门（destructive-call gate）
+# 背景：默认 tmux server 五次全灭都查不出肇事命令（默认 server 死亡不留日志）；M28 的 lint 只能静态管
+# 仓库脚本，管不到 agent 窗口里的 ad-hoc 命令。闸门 = 一个名叫 tmux 的包装脚本（scripts/shim/tmux），
+# 由下面这个前缀注入 PM/worker 窗口启动命令（PATH 最前 + 日志路径 + 真 tmux 路径）：
+#   · 每次调用记一行进 state/tmux-calls.log（act=pass/override/refused + 解析出的 socket + 参数 + pid/cwd）；
+#   · 解析到默认 socket（/tmp/tmux-<uid>/default）的 kill-server/kill-session/kill-window/kill-pane →
+#     拒绝执行（exit 64 + 醒目一行）；TEAM_ALLOW_DESTRUCTIVE_TMUX=1 或私有 socket 放行；
+#   · 只读命令从不拦（照样记一行）。
+# 为什么注入点在渲染出的启动命令里（而不是 tmux set-environment）：窗口 harness 是 bash -lc，
+# 登录 profile 会把 PATH 重建成系统默认（M23 实测）——只有在 harness 里显式 export 才活得到里层。
+# shim 不在（比如旧版 skill 目录）→ 前缀为空，启动语义与以前逐字节一致（fail-open；31c 段钉存在性）。
+team_tmux_shim_dir() { printf '%s\n' "$TEAM_SKILL_DIR/scripts/shim"; }
+
+# 真 tmux 的绝对路径：PATH 扫描，跳过 shim 自己（调用者窗口可能已经把 shim 放在 PATH 最前 ——
+# 直接 command -v tmux 会解析成 shim，渲染进窗口就成递归）。找不到 → 空（不导出 TEAM_TMUX_REAL）。
+team_tmux_real_bin() {
+  local self="" d c cd
+  self="$(cd -P "$(team_tmux_shim_dir)" 2>/dev/null && pwd)" || self=""
+  if [ -n "${TEAM_TMUX_REAL:-}" ] && [ -x "${TEAM_TMUX_REAL:-}" ]; then
+    cd="$(cd -P "$(dirname "${TEAM_TMUX_REAL}")" 2>/dev/null && pwd)"
+    if [ -z "$self" ] || [ "$cd" != "$self" ]; then printf '%s\n' "$TEAM_TMUX_REAL"; return 0; fi
+  fi
+  local IFS=':'
+  for d in $PATH; do
+    [ -n "$d" ] || continue
+    c="$d/tmux"
+    [ -x "$c" ] || continue
+    cd="$(cd -P "$d" 2>/dev/null && pwd)"
+    if [ -n "$self" ] && [ "$cd" = "$self" ]; then continue; fi
+    printf '%s\n' "$c"; return 0
+  done
+  return 0
+}
+
+# 窗口启动命令的闸门前缀（三段 export；shim 缺失 → 空串）。
+# TEAM_TMUX_CALLS_LOG 用**渲染时**解析出的 state 路径写死：窗口里谁也不保证还读得到团队配置。
+team_tmux_shim_exports() {
+  local d real; d="$(team_tmux_shim_dir)"
+  [ -x "$d/tmux" ] || { printf ''; return 0; }
+  printf 'export PATH=%s:"$PATH"; export TEAM_TMUX_CALLS_LOG=%s; ' \
+    "$(printf '%q' "$d")" "$(printf '%q' "$TEAM_STATE_DIR/tmux-calls.log")"
+  real="$(team_tmux_real_bin)"
+  [ -n "$real" ] && printf 'export TEAM_TMUX_REAL=%s; ' "$(printf '%q' "$real")"
+  return 0
+}
+
 team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-command
   local pf="$1" spawnfile="$2" pi_bin expanded inner pm_bin exitfile tailfile
-  # 内置 Pi（默认）：与历史逐字节一致 —— cd && 写 spawn pid && exec pi <args> @<prompt 文件>
+  # 内置 Pi（默认）：M36 起带闸门 exports 前缀；其余与历史逐字节一致 —— cd && 写 spawn pid && exec pi <args> @<prompt 文件>
   if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
     pi_bin="$(team_pm_bin_path)"
-    printf 'cd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
-      "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
+    printf '%scd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
+      "$(team_tmux_shim_exports)" "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
     return 0
   fi
   expanded="$(team_agent_expand pm "$TEAM_PM_CMD" pm "${TEAM_PM_SESSION_ID:-}" \
@@ -1360,8 +1406,8 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
   tailfile="$(team_pm_launch_tail_file)"
   # 尾屏抓取带**有界重试**：pty 输出 → tmux 屏幕是异步的（初次 capture 可能还是一片空屏，
   # 而空白也是「有内容」的字节），所以抓到非空白才停（最多 ~1s，然后照抓一份，供诊断说明情况）。
-  inner="$(printf 'cd %s\n( printf "%%s\\n" "$BASHPID" > %s\nexec %s )\nrc=$?\nprintf "%%s %%s\\n" "$(date +%%s)" "$rc" > %s\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %s 2>/dev/null; grep -q "[^[:space:]]" %s && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
-    "$(team_squote "$TEAM_MAIN_ROOT")" "$(team_squote "$spawnfile")" "$expanded" \
+  inner="$(printf '%scd %s\n( printf "%%s\\n" "$BASHPID" > %s\nexec %s )\nrc=$?\nprintf "%%s %%s\\n" "$(date +%%s)" "$rc" > %s\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %s 2>/dev/null; grep -q "[^[:space:]]" %s && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
+    "$(team_tmux_shim_exports)" "$(team_squote "$TEAM_MAIN_ROOT")" "$(team_squote "$spawnfile")" "$expanded" \
     "$(team_squote "$exitfile")" "$(team_squote "$tailfile")" "$(team_squote "$tailfile")")"
   printf 'exec bash -lc %s "$(cat %s)"' "$(team_squote "$inner")" "$(team_squote "$pf")"
 }
@@ -2847,7 +2893,7 @@ team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file> [model
           expanded="$(team_pm_subst_first_word "$expanded" "$(printf '%q' "$agent_bin")")"
         fi ;;
     esac
-    printf '%s\n' "$expanded"
+    printf '%s%s\n' "$(team_tmux_shim_exports)" "$expanded"
     return 0
   fi
   # M4.3：显式传入的模型优先；缺省回读配置（M14：不再回读 state —— state 是启动后才写的展示记录，
@@ -2855,7 +2901,7 @@ team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file> [model
   [ -n "$model" ] || model="$(team_agent_model "$agent")"
   pi_bin="$(team_pi_bin_path)"
   piargs="$(team_pi_args "$model")"
-  printf '%s %s--session-id %q "$0"' "$(printf '%q' "$pi_bin")" "$piargs" "$sid"
+  printf '%s%s %s--session-id %q "$0"' "$(team_tmux_shim_exports)" "$(printf '%q' "$pi_bin")" "$piargs" "$sid"
 }
 
 # 回合结束通知命令（worker 的摘要永远走文件通道：写进 <summary_file>，命令里不含 worker 文本）。
