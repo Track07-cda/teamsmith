@@ -793,6 +793,21 @@ assert_match "$TMP/doctor.log" "magic-context [0-9]" "装了 → 报版本"
 assert_has "$TMP/doctor.log" "OpenSpec CLI" "doctor 检查 OpenSpec CLI"
 assert_has "$TMP/doctor.log" "OpenSpec 规格目录" "doctor 检查 spec 目录"
 
+# M38/M39：0.76.0–0.79.0 的 pi 把 `--help` 写到 stderr —— 探针必须看两个流，否则把够用的版本
+# 假报成「版本过旧」。夹具：一个 --help 只写 stderr 的 pi 桩，doctor 不得出现「版本过旧」。
+FAKE_PI2="$TMP/fake-pi-stderr"; mkdir -p "$FAKE_PI2"
+cat > "$FAKE_PI2/pi" <<'EOS'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --help|-h) printf 'usage: pi [--session-id <id>] [-e <ext>]\n' >&2 ;;
+  --version|-v) printf 'pi 0.76.0\n' ;;
+esac
+exit 0
+EOS
+chmod +x "$FAKE_PI2/pi"
+PATH="$FAKE_PI2:$PATH" $TEAM doctor >"$TMP/doctor-help-stderr.log" 2>&1 || true
+assert_not "$TMP/doctor-help-stderr.log" "版本过旧" "M39：--help 走 stderr 的 pi 不再被误报「版本过旧」（探针看两流）"
+
 # ---------------------------------------------------------------- 4. task / board
 section "4 · task + board"
 $TEAM task T1.1 --title "Smoke task" --agent dev --deps "-" >"$TMP/task.log" 2>&1 || bad "task 失败"
@@ -3728,7 +3743,9 @@ DOC_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKIL
 # P16：拆分后版本仍是单一来源（common.sh），两个 SKILL.md 都跟随；init skill 没有自己的 CHANGELOG。
 INIT_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKILL_INIT_DIR/SKILL.md" | head -1)"
 LOG_V="$(sed -n 's/^##[[:space:]]*\[*v\?\([0-9.]*\)\]*.*/\1/p' "$SKILL_DIR/CHANGELOG.md" | head -1)"
-assert_eq "版本号四处一致（common/两个 SKILL/CHANGELOG）" "$CODE_V|$DOC_V|$INIT_V|$LOG_V" "$CODE_V|$CODE_V|$CODE_V|$CODE_V"
+# M38：根 package.json（pi 清单）也是版本落点之一——发行时的第五处。
+PKG_V="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$(dirname "$SKILL_DIR")/../package.json" 2>/dev/null | head -1)"
+assert_eq "版本号五处一致（common/两个 SKILL/CHANGELOG/package.json）" "$CODE_V|$DOC_V|$INIT_V|$LOG_V|$PKG_V" "$CODE_V|$CODE_V|$CODE_V|$CODE_V|$CODE_V"
 assert_not_file "$SKILL_INIT_DIR/CHANGELOG.md" "init skill 没有 CHANGELOG（变更史只有一份）"
 
 $TEAM mark-loaded >"$TMP/mark.log" 2>&1 && ok "mark-loaded 退出码 0" || bad "mark-loaded 失败"

@@ -316,7 +316,7 @@ team_cmd_doctor() {
       pass "本项目用自定义 agent adapter：不需要 pi"
     elif team_have_cmd pi; then
       local pv; pv="$(pi --version 2>/dev/null | head -1 || true)"
-      if pi --help 2>/dev/null | grep -q -- '--session-id'; then pass "${pv:-present}"; else fail "pi 版本过旧：缺 --session-id"; fi
+      if pi --help 2>&1 | grep -q -- '--session-id'; then pass "${pv:-present}"; else fail "pi 版本过旧：缺 --session-id"; fi
     else fail "缺 pi（PATH 里没有）"; fi
 
   # agent adapter：空 TEAM_AGENT_CMD = 内置 Pi（默认）；配了就用任意 TUI agent 的命令模板。
