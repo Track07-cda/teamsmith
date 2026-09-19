@@ -5,7 +5,7 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
-**未发布（v1.42.0 候选；刻意不用 `##` 标题——版本解析取第一个 `##` 行）**
+## v1.42.0 · 2026-09-19
 
 **M35 · smoke 抖动清查（三条断言改条件轮询）**
 
