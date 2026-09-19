@@ -12,8 +12,28 @@
 #   放行  TEAM_ALLOW_DESTRUCTIVE_TMUX=1（记 act=override）或解析到私有 socket（记 act=pass）
 #         → 原样 exec 真 tmux。只读命令（ls/list-*/display-message/capture-pane/send-keys…）从不拦。
 #
-# socket 解析与 tmux 一致：-S/-L（命令行显式） > $TMUX（第一个逗号前） > ${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default。
+# socket 解析与 tmux（3.7b）一致：-S/-L（命令行显式） > $TMUX（第一个逗号前，且不以逗号开头） >
+# <tmpdir>/tmux-<uid>/default。tmpdir 不是「${TMUX_TMPDIR:-/tmp}」这么一条公式，而是一张**路径表**
+# `TMUX_SOCK = "$TMUX_TMPDIR:/tmp/"`（strings 实证）：逐项 env 展开 + realpath(3)，**realpath 失败的项
+# 直接跳过**，取第一个可用的 —— 所以 TMUX_TMPDIR 指向不存在的目录（父目录缺失/死软链/空值）时，真 tmux
+# 会静默回退 /tmp 的默认 socket（M41：2026-09-19 第 6 次默认 server 死亡就是这条「假隔离」）。
+# 判定用的是**规范化**后的路径（realpath 掉 . / .. / 软链），因为内核就是这么解析的：
+# `-S /tmp/tmux-1000/../tmux-1000/default` 连的是默认 server，`/tmp/../tmp` 当 TMPDIR 也是默认目录。
 # 「默认」只按最终解析出的路径判定：-L default 打在默认 TMPDIR 上照样算默认；TMUX_TMPDIR 指向私有目录就算私有。
+#
+# M41 补上的第二形态（同一张表，另一种读法）：tmpdir 候选必须**存在且是目录**（tmux 要在它下面 mkdir
+# `tmux-<uid>`；realpath 失败或不是目录都到不了私有 socket）。两类后果都要按「假隔离」处理，因为报出来的
+# 命令看着是隔离过的、实际没有：
+#   · 不存在/空值/死软链 → 真 tmux **静默回退** /tmp 的默认 socket —— kill-* 必须拒；
+#   · 存在但不是目录（普通文件）→ 真 tmux 直接报错（不会回退，也到不了默认）——本闸门保守地按「不可用 →
+#     默认」判（重拒不漏拒；判定详情见 M41 报告的实测矩阵）。
+#
+# ⚠ 已知盲区（M41）：本闸门是 **PATH 里的可执行文件**，只有经 PATH 解析到的 `tmux` 才被拦住。
+#   · `/usr/bin/tmux` 这类**绝对路径**直接 exec，绕过本闸门（2026-09-19 第 8 次默认 server 死亡的凶手就是
+#     它：PM 用绝对路径 + TMUX_TMPDIR=<未创建目录> 跑 kill-server）；仓库脚本/fixture 里禁止用绝对路径做
+#     破坏性调用（tests/tmux-lint.pl 的 M41 规则会报红）；
+#   · `command tmux` / `env tmux` **不**绕行（`command` 只跳过函数/别名，PATH 解析照旧，照样命中本闸门）；
+#   · `TEAM_TMUX_REAL=<绝对路径>` 是本闸门自己解析真身用的出口，不受影响。
 #
 # 两条硬原则（M36 返工实录，违反任意一条都是事故级）：
 #   透传保真  判定在**副本**上解析、执行用**原始** "$@" —— 把 -L/-S 从 argv 里吃掉会让
@@ -66,13 +86,63 @@ _parse_globals() {
 }
 _parse_globals "$@"
 
-# ── 解析 socket（与 tmux 同源）───────────────────────────────────────────────────────────────
+# ── 解析 socket（与 tmux 同源，含**回退**；M41）────────────────────────────────────────────────
 _uid="${UID:-$(id -u 2>/dev/null || echo 0)}"
-_default_sock="/tmp/tmux-$_uid/default"
-if [ -n "$_sockpath" ]; then _sock="$_sockpath"
-elif [ -n "$_sockname" ]; then _sock="${TMUX_TMPDIR:-/tmp}/tmux-$_uid/$_sockname"
-elif [ -n "${TMUX:-}" ]; then _sock="${TMUX%%,*}"
-else _sock="${TMUX_TMPDIR:-/tmp}/tmux-$_uid/default"
+
+# realpath(3) 语义的规范化：整条路径必须存在（不存在/死软链 → 空 + 非 0）。
+# 注意 realpath(1) 的默认行为会放行「只缺最后一段」的路径（实测 rc=0），所以必须带 -e；
+# 没有 realpath(1)（或不认 -e）时退回「[ -e ] + readlink -f」——同样要求整条路径存在。
+_real_existing() {
+  local _p="${1:-}" _r
+  [ -n "$_p" ] || return 1
+  if _r="$(realpath -e -- "$_p" 2>/dev/null)" && [ -n "$_r" ]; then printf '%s' "$_r"; return 0; fi
+  if [ -e "$_p" ] && _r="$(readlink -f -- "$_p" 2>/dev/null)" && [ -n "$_r" ]; then printf '%s' "$_r"; return 0; fi
+  return 1
+}
+
+# 目录版：存在且是目录（TMUX_TMPDIR 候选的判据 —— tmux 要在它下面 mkdir `tmux-<uid>`；普通文件会让
+# 真 tmux 直接报错）。不判可写/可执行位：真 tmux 的判据是「mkdir 成功或 EEXIST」，shim 不能为了判定去 mkdir
+# （有副作用）；而不可写的 tmpdir 也到不了默认 socket（mkdir 失败即退出），漏判这一维不会漏放行默认 server。
+_real_dir() {
+  local _r
+  _r="$(_real_existing "${1:-}")" || return 1
+  [ -d "$_r" ] || return 1
+  printf '%s' "$_r"
+}
+
+# 路径形态 socket 的规范化：
+#   · 整条路径已存在（含 socket 文件本身、指向 socket 的软链）→ 全量 realpath —— 内核就是这么解析的，
+#     `-S <软链→默认 socket>` 连的就是默认 server，不能按字面放过；
+#   · 只缺最后一段 → 把能解析的父目录 realpath 掉再拼回基名；
+#   · 父目录也解析不了 → 原样返回（内核同样解析不了 → 打不到默认 socket，按「非默认」判是安全的）。
+_sock_canon() {
+  local _p="${1:-}" _d _b _c _f
+  if _f="$(_real_existing "$_p")"; then printf '%s' "$_f"; return 0; fi
+  case "$_p" in
+    */*)
+      _d="${_p%/*}"; _b="${_p##*/}"; [ -n "$_d" ] || _d="/"
+      if [ -n "$_b" ] && _c="$(_real_existing "$_d")"; then printf '%s/%s' "$_c" "$_b"; return 0; fi ;;
+  esac
+  printf '%s' "$_p"
+}
+
+# tmpdir = 路径表 `$TMUX_TMPDIR:/tmp/` 里第一个 realpath 成功**且是目录**的项（与 tmux 逐项筛选同源）。
+# 被跳过的 TMUX_TMPDIR 要留痕：拒绝时点明这是「假隔离」（真 tmux 会回退默认 socket / 直接报错）。
+# 注意「默认 socket」是**固定靶**（/tmp/tmux-<uid>/default，那台所有项目共用的 server），不是「本调用算出来的
+# 那个 default」—— TMUX_TMPDIR 指向私有目录时，它的 `<私有>/tmux-<uid>/default` 是一台**私有** server，kill 掉
+# 它不算事故（M36 三态的「私有放行」就是这个语义）。
+_default_tmpdir="$(_real_dir /tmp)" || _default_tmpdir=/tmp
+_default_sock="$_default_tmpdir/tmux-$_uid/default"
+_tmpdir="" _tmpdir_fell_back=0
+if [ -n "${TMUX_TMPDIR:-}" ]; then
+  _tmpdir="$(_real_dir "${TMUX_TMPDIR:-}")" || _tmpdir_fell_back=1
+fi
+[ -n "$_tmpdir" ] || _tmpdir="$_default_tmpdir"
+
+if [ -n "$_sockpath" ]; then _sock="$(_sock_canon "$_sockpath")"
+elif [ -n "$_sockname" ]; then _sock="$(_sock_canon "$_tmpdir/tmux-$_uid/$_sockname")"
+elif [ -n "${TMUX:-}" ] && [ "${TMUX:0:1}" != "," ]; then _sock="$(_sock_canon "${TMUX%%,*}")"
+else _sock="$_tmpdir/tmux-$_uid/default"
 fi
 _sock="${_sock%/}"   # 尾斜杠归一
 
@@ -113,6 +183,16 @@ fi
 if [ "$_act" = "refused" ]; then
   printf '✗ teamsmith tmux 闸门：已拒绝 %s —— 它解析到默认 socket（%s），会把共用这台 server 的所有项目/会话一起杀掉\n' \
     "$_sub" "$_sock" >&2
+  if [ "$_tmpdir_fell_back" = "1" ]; then
+    if [ -e "${TMUX_TMPDIR:-}" ]; then
+      printf '  ⚠ 这是**假隔离**：TMUX_TMPDIR=%s 不是目录，真 tmux 不会用它（直接报错），私有隔离没有生效\n' \
+        "${TMUX_TMPDIR:-}" >&2
+    else
+      printf '  ⚠ 这是**假隔离**：TMUX_TMPDIR=%s 指向不存在的目录，真 tmux 会静默回退默认 socket\n' \
+        "${TMUX_TMPDIR:-}" >&2
+    fi
+    printf '  修法：先 mkdir -p 那个目录，再 env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<已建目录> tmux …\n' >&2
+  fi
   printf '  确要执行（会记 act=override 日志）：TEAM_ALLOW_DESTRUCTIVE_TMUX=1 %s\n' \
     "tmux ${_argv:-$_sub}" >&2
   printf '  或换私有 server：env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<私有目录> tmux …（socket 落到私有目录即放行）\n' >&2

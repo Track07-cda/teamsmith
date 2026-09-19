@@ -578,3 +578,40 @@ extensions wrote down in their issue trackers:
 That is why the lane is implemented in-house (no third-party package on the team’s critical path), with an
 explicit harvest ledger under `state/` (`state/bg.log` + `state/bg/<id>.log`): the rules have to be enforced by the
 code that owns the jobs, not by convention.
+
+## 18. tmux isolation: the gate, the "fake isolation" shapes, and the container rule
+
+Every PM/worker window puts `scripts/shim/tmux` first on `PATH` (M36). The shim logs every call to
+`state/tmux-calls.log` (time, resolved socket, `TMUX`/`TMUX_TMPDIR`, argv, pid/ppid/cwd, action) and **refuses**
+`kill-server`/`kill-session`/`kill-window`/`kill-pane` when the call resolves to the **default socket**
+(`/tmp/tmux-<uid>/default` — the server every project on the machine shares). `TEAM_ALLOW_DESTRUCTIVE_TMUX=1`
+overrides it (logged as `act=override`); read-only commands are never refused.
+
+The gate models tmux's **real** resolution, fallbacks included (tmux 3.7: the socket template is the path list
+`$TMUX_TMPDIR:/tmp/`, each item env-expanded and `realpath()`-ed, the first usable item wins — M41 measured the
+whole matrix). So "I set `TMUX_TMPDIR`" is *not* isolation by itself:
+
+| what the command says | what tmux really does | verdict |
+|---|---|---|
+| `TMUX_TMPDIR=<dir that does not exist>` with `kill-server` | silently falls back to `/tmp/tmux-<uid>/default` | **fake isolation** — this kills the shared server; the gate refuses (`exit 64`) and names the reason (6th death, 2026-09-19) |
+| `TMUX_TMPDIR=<a regular file>` (or a dir with no room to `mkdir`) | errors out before creating a server (never falls back) | no private server either; the gate conservatively refuses — `mkdir -p` the directory |
+| `TMUX_TMPDIR=<existing directory>` | `<dir>/tmux-<uid>/default` | real private server; the gate passes it (`act=pass`) |
+
+The safe incantation for destructive tmux work on the host is exactly:
+
+```sh
+env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<a directory you already mkdir -p'ed> tmux …
+```
+
+Two hard rules follow (2026-09-19: the 6th and the 8th default-server deaths):
+
+1. **Destructive fixtures and probes go into the container**:
+   `bash skills/teamsmith/tests/container-tmux.sh -- <cmd>`. The host socket directory is not mounted inside, so an
+   unisolated `kill-server` cannot reach the host by construction. On the host only the "private directory already
+   `mkdir -p`ed" shape above is allowed, and it must go through the shim's `PATH`.
+2. **Never call tmux by absolute path for anything destructive.** The gate is a `PATH` executable: `/usr/bin/tmux
+   kill-server` bypasses both the log and the refusal (the 8th death was exactly that, with an uncreated
+   `TMUX_TMPDIR`). `tests/tmux-lint.pl` reds any literal absolute-path mutating call, even when it carries `-L/-S`
+   evidence. `command tmux` / `env tmux` are **not** bypasses (they still resolve through `PATH`); a variable holding
+   the resolved real binary (`"$REAL_TMUX"`, `${TMUX_BIN}`) is the intended exception and is judged by the normal
+   isolation rules.

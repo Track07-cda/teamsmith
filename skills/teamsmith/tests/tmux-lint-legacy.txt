@@ -25,3 +25,7 @@ af9fd1083c0bad1621ce1fb92bd430de1ca9dc9e1e8a0225d4fd31104139308a  2  docs/team/r
 08a0497eca5b24343fb41da92c48b45fdd0002f697888582c832991681b7321d  3  docs/team/reports/V4.0/pkg/90-boundary.sh  # V4.0 证据包（M28 之前）
 eaad9afcfccfb80d2514ebcc160ff645effc2e2337d58d38f21b16bd65499663  2  docs/team/reports/V4.0/pkg/flip.sh  # V4.0 证据包（M28 之前）
 a342b43bbb4e8db297a3c975ca318167dc4d35c89ce80ec8a9f3df58800e98a8  1  docs/team/reports/V4.0/pkg/run.sh  # V4.0 证据包（M28 之前）
+# M41 追加的绝对路径禁令把下面两个历史证据包里的 kill 判红了 —— 它们写于 M28/M41 的隔离纪律成型之前，
+# 不能改（改了就是动别人验过的账本），按同一 sha256 冻结口径豁免：
+91bcf10dbb0dd15498309801865e54b084f5b1750f6a4a3e9e786aa59a18ea20  1  docs/team/reports/V4.0/pkg/lib.sh  # V4.0 证据包（M28 之前；M41 之前的绝对路径 `/usr/bin/tmux -L $V40_SOCKET kill-server`）
+66c3441789c3671e72ecd5493ad6681b2a1f52fa3a3c3611c511934cdd675e70  1  docs/team/reports/M9.3-dev2/pkg/run.sh  # M9.3-dev2 证据包（M28 之前；M41 之前的绝对路径 `/usr/bin/tmux -L $TMUX_SOCK kill-server`）

@@ -23,6 +23,12 @@
 #        `m24_tmux() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$D" tmux "$@"; }`）；
 #     D. 文件级白名单：文件在**使用之前**顶层 `unset …TMUX…`，并在顶层把 TMUX_TMPDIR 指到私有目录
 #        （smoke.sh 第 42 行式的 unset 就是这一条），且此后没再把 TMUX 导回来。
+#     M41 追加一条**否定式**规则：变更命令**不许写字面绝对路径**（`/usr/bin/tmux kill-server`）——
+#     运行时闸门是 PATH 里的可执行文件（scripts/shim/tmux），绝对路径直接 exec、绕过记录与拒绝
+#     （2026-09-19 第 8 次默认 server 死亡：绝对路径 + 不存在的 TMUX_TMPDIR）。这条**不受 A–D 影响**：
+#     带 `-L 私有` 也红（闸门看不到它）。`"$REAL_TMUX"`/`${TMUX_BIN}` 这类**变量**是「REAL_TMUX 解析类」
+#     例外，照旧走 A–D（变量里就算装的是绝对路径，也不是本规则能静态看出来的）。
+#     注：`command tmux` / `env tmux` **仍然**经 PATH 解析（`command` 只跳过函数/别名），命中闸门，不算绕过。
 #
 #   扫描范围：skills/teamsmith/tests/** 与 docs/team/reports/*/pkg/** 的脚本类文件（日志/patch 不扫）。
 #
@@ -334,6 +340,15 @@ sub is_tmux_word {
     return 0;
 }
 
+# M41：命令位是不是**字面绝对路径**的 tmux（`/usr/bin/tmux` / `"/usr/bin/tmux"`）？
+# 变量形式（`"$REAL_TMUX"` / `${TMUX_BIN}`）不算 —— 那是「REAL_TMUX 解析类」例外，照旧按 A–D 判。
+sub is_literal_abs_path_word {
+    my $t = shift // '';
+    $t =~ s/^(['"])(.*)\1$/$2/s;
+    return 0 unless $t =~ m{^/};
+    return cmd_name($t) eq 'tmux' ? 1 : 0;
+}
+
 # 私有 TMUX_TMPDIR 赋值？（值不是默认 socket 目录）
 sub private_tmpdir_word {
     my $t = shift // '';
@@ -477,14 +492,18 @@ sub analyze_source {
                     if ($MUTATING{$sub}) {
                         my $unset_ok = $wrap_iso ? 1 : ($env_unset || ($state->{unset} ? 1 : 0));
                         my $dir_ok   = $wrap_iso ? 1 : ($private_here || ($state->{private} ? 1 : 0));
+                        my $abs_bypass = is_literal_abs_path_word($cw);
                         my $ok = ($wrap_iso || $plus_L || $plus_S || ($unset_ok && $dir_ok)) ? 1 : 0;
+                        $ok = 0 if $abs_bypass;                       # M41：绝对路径绕过 PATH 闸门，证据再多也红
                         my @missing;
                         push @missing, '-L/-S' unless ($wrap_iso || $plus_L || $plus_S);
                         push @missing, 'unset TMUX' unless $unset_ok;
                         push @missing, '私有 TMUX_TMPDIR' unless $dir_ok;
                         @missing = ("包装 " . cmd_name($cw) . " 自己没隔离（调用点也没带）") if ($wrapper && !$wrap_iso);
+                        unshift @missing, '字面绝对路径（绕过 PATH 里的 tmux 闸门；M41 起禁止）' if $abs_bypass;
                         my $why = $ok ? '' : join(' + ', @missing);
-                        my %ev = (L => $plus_L, S => $plus_S, unset => $unset_ok, dir => $dir_ok, wrapper => $wrap_iso ? 1 : 0);
+                        my %ev = (L => $plus_L, S => $plus_S, unset => $unset_ok, dir => $dir_ok, wrapper => $wrap_iso ? 1 : 0,
+                                  abs => $abs_bypass);
                         my $rec = { file => $file, line => $cmd->{line}, sub => $sub, ok => $ok, why => $why, ev => \%ev,
                                     text => join(' ', map { $_->{t} } @w[$ci .. $#w]) };
                         push @inv, $rec;
@@ -694,6 +713,14 @@ if ($SELFTEST) {
         ['multi_line_cont',        "tmux -L private-name \\\n  kill-server\n", 0],
         ['inside_subst',           "x=\"\$(tmux -L private-name list-sessions)\"; tmux kill-server\n", 1],
         ['shim_not_enough',        "SH=\"\$T/shim\"\nPATH=\"\$SH:\$PATH\"\n\"\$SH/tmux\" kill-server\n", 1],
+        # M41：字面绝对路径 = 绕过 PATH 闸门 —— 变更命令一律红（带隔离证据也红）；变量形式照旧
+        ['abs_path_bare',          "/usr/bin/tmux kill-server\n", 1],
+        ['abs_path_with_private',  "/usr/bin/tmux -L private-name kill-server\n", 1],
+        ['abs_path_readonly',      "/usr/bin/tmux ls\n", 0],
+        ['command_abs_path',       "command /usr/bin/tmux kill-server\n", 1],
+        ['real_tmux_var_iso',      "REAL_TMUX=/usr/bin/tmux\n\"\$REAL_TMUX\" -L private-name kill-server\n", 0],
+        ['real_tmux_var_no_iso',   "REAL_TMUX=/usr/bin/tmux\n\"\$REAL_TMUX\" kill-server\n", 1],
+        ['braced_tmux_var_iso',    "TMUX_BIN=/usr/bin/tmux\n\"\${TMUX_BIN}\" -L private-name kill-server\n", 0],
     );
     my $bad = 0;
     for my $c (@cases) {

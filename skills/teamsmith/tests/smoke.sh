@@ -9097,6 +9097,19 @@ else
   else
     bad "M28 翻转③：带 -L 私有 socket 的调用被误报"
   fi
+  # M41 翻转：字面绝对路径 = 绕过 PATH 闸门 —— 带私有 -L 也要红；变量形式（REAL_TMUX 解析类）照旧
+  printf '#!/usr/bin/env bash\n/usr/bin/tmux -L m28-flip-private kill-server\n' > "$M28_SB/x.sh"
+  if perl "$M28_LINT" --root "$M28_SB" --quiet >/dev/null 2>&1; then
+    bad "M41 翻转④：绝对路径 + 私有 -L 的 kill-server 没被抓到（绕过闸门的形状）"
+  else
+    ok "M41 翻转④：字面绝对路径 kill-server（即使带私有 -L）→ 红（网关看不到它）"
+  fi
+  printf '#!/usr/bin/env bash\n"$REAL_TMUX" -L m28-flip-private kill-server\n' > "$M28_SB/x.sh"
+  if perl "$M28_LINT" --root "$M28_SB" --quiet >/dev/null 2>&1; then
+    ok "M41 翻转⑤：变量形式（\"\$REAL_TMUX\" + 私有 -L）照旧不红（REAL_TMUX 解析类例外）"
+  else
+    bad "M41 翻转⑤：REAL_TMUX 变量形式被误报（例外没生效）"
+  fi
   rm -rf "$M28_SB"
 fi
 
@@ -9203,6 +9216,63 @@ assert_eq "-L default 也算默认（socket 名 default + 默认 TMPDIR）" "$?"
 m36_probe tmux -S "$M36_DEF_SOCK" kill-server >/dev/null 2>&1
 assert_eq "-S <默认路径> 同样拒（socket 证据含 -S）" "$?" "64"
 
+# ①c M41：**假隔离**（TMUX_TMPDIR 指向不可用的目录）—— 真 tmux 3.7b 的 socket 路径表是
+#     `$TMUX_TMPDIR:/tmp/`，逐项 realpath，失败的项直接跳过 → TMUX_TMPDIR 不存在时静默回退默认 socket。
+#     旧 shim 按公式机械算 socket，把这种调用记成 act=pass 的「私有」，于是放行了一个实际打默认 server 的
+#     kill-server（2026-09-19 第 6 次默认 server 灭门）。matrix 证据见 M41 报告的容器实测。
+M36_MISS="$M36_D/miss"; rm -rf "$M36_MISS"; mkdir -p "$M36_MISS"   # 只建父目录：$M36_MISS/sock 故意不存在
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+M36_OUT="$(m36_probe TMUX_TMPDIR="$M36_MISS/sock" tmux kill-server 2>&1)"; M36_RC=$?
+assert_eq "假隔离（TMUX_TMPDIR=<不存在的目录>）的 kill-server 被拒：exit 64" "$M36_RC" "64"
+assert_has_echo "$M36_OUT" "已拒绝 kill-server" "假隔离：拒绝文案仍在"
+assert_has_echo "$M36_OUT" "这是**假隔离**" "假隔离：文案点明这是假隔离（不是普通默认 socket）"
+assert_has_echo "$M36_OUT" "TMUX_TMPDIR=$M36_MISS/sock 指向不存在的目录，真 tmux 会静默回退默认 socket" "假隔离：文案点明回退原因（M41 要求的措辞）"
+assert_not_file "$M36_STUB_CALLS" "假隔离：拒绝路径没执行任何东西（桩没被叫）"
+assert_has "$M36_LOG" "act=refused" "假隔离：日志记 act=refused"
+assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/default" "假隔离：日志记的 sock 是**默认**路径（不是那个不存在的私有目录）"
+# 同形状的只读调用：放行（只读从不拦），但 sock 判定也必须是默认路径 —— 不许记成私有
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+m36_probe TMUX_TMPDIR="$M36_MISS/sock" tmux ls >/dev/null 2>&1; M36_RC=$?
+assert_eq "假隔离的只读调用（ls）放行" "$M36_RC" "0"
+assert_has "$M36_LOG" "act=pass" "假隔离的 ls 记 act=pass"
+assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/default" "假隔离的 ls：日志里的 sock 也是默认路径（不许记成私有）"
+assert_has "$M36_STUB_CALLS" "STUB argv=ls" "假隔离的 ls 递到了下游（桩收到）"
+# 存在的**普通文件**：真 tmux 会直接报错（mkdir 落在文件里），到不了默认 socket；
+# 本闸门保守地按「不可用 → 默认」判（重拒不漏拒，实测矩阵见 M41 报告）
+: > "$M36_D/afile"
+M36_OUT="$(m36_probe TMUX_TMPDIR="$M36_D/afile" tmux kill-server 2>&1)"; M36_RC=$?
+assert_eq "TMUX_TMPDIR=<普通文件> 的 kill-server 也被拒（保守重拒；真 tmux 会直接报错）" "$M36_RC" "64"
+assert_has_echo "$M36_OUT" "不是目录" "文件形态：文案点明「不是目录」（与不存在形态分开说）"
+# 真私有目录（mkdir -p 过的）照旧放行 —— 与下面 ③ 的断言同源，这里先钉住「新检查没有过度拒绝」
+rm -rf "$M36_D/priv2"; mkdir -p "$M36_D/priv2"
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+m36_probe TMUX_TMPDIR="$M36_D/priv2" tmux kill-server >/dev/null 2>&1
+assert_eq "已建私有目录的 kill-server 照常放行（新检查不过度拒绝）" "$?" "0"
+assert_has "$M36_LOG" "sock=$M36_D/priv2/tmux-$M36_UID/default" "已建私有目录仍记私有 sock"
+
+# ①d M41 翻转：把 shim 的存在性/目录检查摘掉（mutant）→ 同一发假隔离探针必须不再被拒、直接落桩。
+#     这证明 ①c 钉的是「目录可用性检查」这条逻辑本身（去掉 shim 整体的翻转已经由 ⑧ 覆盖）。
+M36_MUT="$M36_D/mut"; rm -rf "$M36_MUT"; mkdir -p "$M36_MUT"
+sed 's#_tmpdir="$(_real_dir "${TMUX_TMPDIR:-}")" || _tmpdir_fell_back=1#_tmpdir="${TMUX_TMPDIR:-}"#' \
+  "$M36_SHIM_DIR/tmux" > "$M36_MUT/tmux"
+chmod +x "$M36_MUT/tmux"
+if cmp -s "$M36_SHIM_DIR/tmux" "$M36_MUT/tmux"; then
+  bad "M41 翻转夹具：sed 没打中（mutant 与原件逐字节相同）—— 翻转断言无意义"
+else
+  ok "M41 翻转夹具：mutant 已生成（存在性/目录检查被摘掉，其余逐字节相同）"
+fi
+m36_mut_probe() { env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
+  PATH="$M36_MUT:$M36_STUB:/usr/bin:/bin" TEAM_TMUX_CALLS_LOG="$M36_D/mut.log" "$@"; }
+: > "$M36_D/mut.log"; rm -f "$M36_STUB_CALLS"
+M36_OUT="$(m36_mut_probe TMUX_TMPDIR="$M36_MISS/sock" tmux kill-server 2>&1)"; M36_RC=$?
+assert_eq "翻转：摘掉检查后同一发假隔离 kill-server 不再被拒（rc=0，落桩）" "$M36_RC" "0"
+assert_has "$M36_D/mut.log" "sock=$M36_MISS/sock/tmux-$M36_UID/default" "翻转：mutant 把不存在的目录当成私有 socket（正是事故形状）"
+assert_has "$M36_STUB_CALLS" "STUB argv=kill-server" "翻转：mutant 把 kill-server 真的递到了下游"
+: > "$M36_D/mut.log"; rm -f "$M36_STUB_CALLS"
+m36_mut_probe TMUX_TMPDIR="$M36_D/afile" tmux kill-server >/dev/null 2>&1
+assert_eq "翻转：文件形态同样被 mutant 放过（两个新维度都由同一条检查把关）" "$?" "0"
+assert_has "$M36_STUB_CALLS" "STUB argv=kill-server" "翻转：文件形态的 kill-server 也落到了下游"
+
 # ①b 边界不挂 + 透传保真（M36 返工必修：无子命令 / 缺值参数 / -V 全部透传或明确退出，绝不能挂住；
 #    缺值调用由真 tmux 自己报错——桩替它出庭。每条套 10s 超时当绊线：挂死回归 → rc=124 直接红。
 #    「保真」钉桩收到的完整 argv，不用子串——子串曾把被吃剩的 argv 误判绿：
@@ -9245,6 +9315,8 @@ assert_has "$M36_LOG" "act=override" "override 也记日志（可倒查谁放行
 assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/default" "override 日志记下它打的是默认 socket"
 
 # ③ 放行·私有 socket：TMUX_TMPDIR 私有 / -L 私有 / TMUX 指私有，三种写法都直通（桩层）
+# M41：私有目录必须**先建**（真 tmux 与闸门都按「存在且是目录」认它；不建就会被当成假隔离回退默认）
+mkdir -p "$M36_D/priv"
 : > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
 m36_probe TMUX_TMPDIR="$M36_D/priv" tmux kill-server >/dev/null 2>&1
 assert_eq "TMUX_TMPDIR=<私有> 的 kill-server 放行" "$?" "0"
