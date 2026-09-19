@@ -5,7 +5,41 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
-**未发布（版号由 PM 定；刻意不用 `##` 标题——版本解析取第一个 `##` 行）**
+## v1.41.0 · 2026-09-19
+
+**控制台第四页：看板 + markdown 详情 + 有界帧（openspec change `console-board-page` 归档；P18/P18.1）**
+
+- 新增 kanban 看板页：六状态车道（todo/wip/review/blocked/done/dropped）、空列、焦点与点击导航、底部计数。
+- 只读 markdown 详情：任务书 / 报告 / 复验三族文件，128 KiB 上限 + 路径边界拒绝，`Esc`/`q` 返回。
+- 有界帧：页脚钉在视口最后一行、内容吃满剩余高度（旧三页一并修）；`--snapshot`/`--print` 行为一致。
+- **P18.1（用户实机发现）**：board 折叠展开把两栏**共享**的高度预算吃光 → 右栏（变更/规格/决策）整块消失；
+  改为按列独立记账，历史行仍随可用高度放宽。回归夹具改用**大折叠池**板子（done ≥ 90），覆盖 270×66 与 120×40。
+
+**投递换道：worker 回合结束通知不再碰输入框（M30）**
+
+- PM 会话内起收件箱观察器（`-e team-inbox-watch`）：worker 交付/敲门经**文件收件箱**直达（`fs.watch` +
+  `pi.sendMessage(triggerTurn)`），零按键；pulse 仍是兜底，非 Pi adapter 保留 tmux 投递。
+- 输入框内容检测 + retraction 那一代实现随之下线（M24 的两条真机根因不再有暴露面）。
+
+**team-bg：自带后台长任务车道（M27）**
+
+- 零依赖 pi 扩展（`-e team-bg`，只注入 teamsmith 管理的会话）：命名空间工具 + 自管作业表，日志落 `state/bg/`；
+  不接管用户自装的后台任务插件，也不产生 attribution 副作用。
+
+**初始化与 doctor（M26/M29）**
+
+- `team doctor` / `teamsmith-init` 探测 harness（pi / oh-my-pi / 自定义 adapter）与已装插件，如实报告，
+  **不再主动推荐第三方包**（用户拍板）；只推荐 teamsmith 必需的或自己会用到的。
+- 名册改为「最小起点 + 随时用 `add-agent` 增减」；空名册是 warn（不再 fail）。
+
+**门禁与测试加固**
+
+- M23：全量 smoke 走私有 tmux server（`TMUX_TMPDIR`）+ flock 互斥，并发跑不再互相踩。
+- M28：接触 tmux 的测试进 podman 容器；新增「裸 tmux 调用」lint（未隔离的破坏性调用直接红）。
+- M31：容器镜像补 `procps`；digest 对未入账的复验/报告记录预警（squash 合并只带分支内容的老毛病）。
+- M32：tty 敏感探针自 detach stdin（在 tmux 窗口里直接跑门禁不再假红；stdin=pty 与 stdin=/dev/null 同判）。
+- M33：`$TMP` 存活哨兵——中途消失时 0.2s 内记下时刻/inode/现场进程/ps 快照，证据落在 `$TMP` 之外。
+- M25：`team review` 门禁逐个 `env -u TEAM_REVIEW_*` + stdin 固定 `/dev/null`（后台进程组读 tty 会被 SIGTTIN 停住）。
 
 **M22 · 移除 `skills/pi-team` 兼容软链（用户拍板提前结束别名期）**
 

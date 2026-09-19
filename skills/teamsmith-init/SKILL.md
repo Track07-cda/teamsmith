@@ -3,7 +3,7 @@ name: teamsmith-init
 description: teamsmith-init is the new-project entry point of the teamsmith toolkit — organize multiple agents into a team, set up an agent collaboration protocol, and bootstrap this skill into a new project. It walks the questions to settle with the user first (dependencies, session and roster, per-agent models, gates, VCS mode, install command, and the project's ROADMAP/OWNERSHIP/AGENTS.md red lines), then runs the one command that writes `.pi/team/config.sh` + the `docs/team/` skeleton + the `AGENTS.md` protocol section and starts the pulse, and finally hands day-to-day operation to the `teamsmith` skill. Use when the user wants to bootstrap teamsmith into a new repository, set up a brand-new team, organize multiple agents into a team, or set up an agent collaboration protocol where none exists yet.
 license: MIT
 metadata:
-  version: "1.40.0"
+  version: "1.41.0"
 ---
 
 # teamsmith-init · bring a new project to "ready to dispatch"
