@@ -963,17 +963,29 @@ team_pm_starting() {
   return 0
 }
 
-# 窗口里跑着配置的 PM CLI 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
-team_pm_pane_agent_pid() { # <session:window>
-  local target="${1:-}" pane p
-  [ -n "$target" ] || return 1
-  pane="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
+# pane_pid 本身或它的直接子进程里，第一个满足 <谓词函数> 的 pid（谓词按可执行文件身份判定）。
+# M37：worker 存活（team_pane_agent_pid）与 M6.5 的 PM 存活（team_pm_pane_agent_pid）共用这条扫描 ——
+# 「同源」是字面意义上的同一份代码，不是两句长得像的注释。为什么必须是进程树而不是
+# pane_current_command：真干活的 CLI 常常是 pane shell 的子进程（前台名显示 bash，见 team_proc_is_agent_bin）。
+team_pane_proc_tree_pid() { # <session:window> <谓词函数>
+  local target="${1:-}" pred="${2:-}" pane p
+  [ -n "$target" ] && [ -n "$pred" ] || return 1
+  # list-panes 而不是 display-message：窗口名写错/窗口已消失时 display-message 会**静默回退到当前窗口**
+  # （实测 `-t teamsmith:nope-window` 返回当前窗口的 pane_pid 且 rc=0），探活会拿到别的窗口的进程 ——
+  # 「证明」不能带这种回声。list-panes 找不到窗口就报错、没有输出 → 失败关闭（非 0）。
+  pane="$(tmux list-panes -t "$target" -F '#{pane_active} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }')"
+  [ -n "$pane" ] || pane="$(tmux list-panes -t "$target" -F '#{pane_pid}' 2>/dev/null | head -1)"
   [ -n "$pane" ] || return 1
-  team_proc_is_pm_bin "$pane" && { printf '%s\n' "$pane"; return 0; }
+  "$pred" "$pane" && { printf '%s\n' "$pane"; return 0; }
   for p in $(ps -o pid= --ppid "$pane" 2>/dev/null | tr -d ' '); do
-    team_proc_is_pm_bin "$p" && { printf '%s\n' "$p"; return 0; }
+    "$pred" "$p" && { printf '%s\n' "$p"; return 0; }
   done
   return 1
+}
+
+# 窗口里跑着配置的 PM CLI 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
+team_pm_pane_agent_pid() { # <session:window>
+  team_pane_proc_tree_pid "${1:-}" team_proc_is_pm_bin
 }
 
 # missing | idle:<cmd> | running:<cmd> | foreign:<cmd> | unknown:<cmd>
@@ -1059,6 +1071,54 @@ team_pm_pending_suffix() { # <state>
                fi ;;
     *)          printf '（PM 未在跑：pulse 会拉起）' ;;
   esac
+}
+
+# ---------------------------------------------------------------- worker 存活（M37）：与 PM 判据同源，看进程树
+# 事故（2026-09-19 实测两次假告警）：worker 窗口的 `pane_current_command` 报 `bash`，而真在干活的是它的
+# 子进程 pi（pane_pid=bash └─ pi）。旧判据只看「pane 忙不忙」（team_pane_busy，走 pane_current_command
+# + 进程组），于是把正在干活的 dev / dev2 说成「停了」——pulse 的「停了的 agent」两次误报，
+# roster / ps / digest 也把人看成 idle。pane_current_command 只是**旁证**，不是身份证明。
+#
+# 判据与 M6.5 的 PM 存活是同一套（#1057：是「证明」而不是「猜」）：
+#   pane_pid **本身或它的直接子进程**的命令行里出现配置的 agent 可执行文件
+#   （TEAM_AGENT_BIN > TEAM_AGENT_CMD 首词 > TEAM_PI_BIN，解析见 team_agent_bin_path），
+#   且该进程 cwd 在本项目内（含它的 worktree）。缺任一 → 非 0：报告「没证据」，不猜。
+# 放在 common.sh 是因为 team_pending_counts（digest / pulse 的「停了的 agent」、面板待办）与
+# roster / resume / 面板 agents 块共用它 —— 各写一份就是下一个假告警的温床。
+team_proc_is_agent_bin() { # <pid>
+  local args
+  # 我们自己的派单 harness（M4.3 B / M8.2）命令行里就写着 agent 可执行文件，但它还没 exec 出 agent：
+  # 不算证据（PM 侧的对应物是 team_proc_cmdline_is_bin 里的 pm.pid.spawn 排除）。
+  args="$(ps -o args= -p "${1:-}" 2>/dev/null | head -1)"
+  case "$args" in *dispatch-*.spawn*) return 1 ;; esac
+  team_proc_cmdline_is_bin "${1:-}" "$(team_agent_bin_path 2>/dev/null || true)"
+}
+
+# 窗口里跑着配置的 agent CLI 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
+team_pane_agent_pid() { # <session:window>
+  team_pane_proc_tree_pid "${1:-}" team_proc_is_agent_bin
+}
+
+# 窗口里**证明**跑着配置的 worker agent：进程树命中 + cwd 在本项目内（缺证据 → 非 0）
+team_agent_alive_in_pane() { # <session:window>
+  local target="${1:-}" pid cwd
+  [ -n "$target" ] || return 1
+  pid="$(team_pane_agent_pid "$target" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 1
+  cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
+  [ -n "$cwd" ] || return 1
+  team_cwd_in_project "$cwd"
+}
+
+team_agent_window_exists() { # <agent> → 0/1：只看窗口存在（与存活区分：窗口在但 agent 退了）
+  local w; w="$(team_state_get "$1" window "$1")"
+  team_tmux_has_window "$TEAM_SESSION" "$w"
+}
+
+team_agent_live() { # <agent> → 0/1：窗口存在**且**里面证明确实跑着配置的 agent（M37）
+  local w; w="$(team_state_get "$1" window "$1")"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || return 1
+  team_agent_alive_in_pane "$TEAM_SESSION:$w"
 }
 
 team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 skill 升级）

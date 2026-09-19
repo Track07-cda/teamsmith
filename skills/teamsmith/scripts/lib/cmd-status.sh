@@ -25,16 +25,8 @@ team_inbox_since() { # <agent> → 未 ack 的行
   [ "$start" -gt 0 ] && tail -n +"$((start + 1))" "$f" || cat "$f"
 }
 
-team_agent_live() { # <agent> → 0/1：窗口存在**且**里面有进程在跑（空提示符 = pi 已退出）
-  local w; w="$(team_state_get "$1" window "$1")"
-  team_tmux_has_window "$TEAM_SESSION" "$w" || return 1
-  team_pane_busy "$TEAM_SESSION:$w"
-}
-
-team_agent_window_exists() { # <agent> → 0/1：只看窗口存在
-  local w; w="$(team_state_get "$1" window "$1")"
-  team_tmux_has_window "$TEAM_SESSION" "$w"
-}
+# worker 存活判据（team_agent_live / team_agent_window_exists）在 common.sh —— digest 的「停了的 agent」
+# （team_pending_counts）与 roster / resume / 面板 agents 块必须共用同一份判据（M37）。
 
 # ---------------------------------------------------------------- M4.3 C：报告草稿 vs 已交付
 # `team review` 从任务分支的 checkout 里**摘录**报告，所以工作区里的草稿根本摘不到：

@@ -582,6 +582,13 @@ case "${1:-}" in
       *)                   printf '\n' ;;
     esac ;;
   list-windows) printf '%s\n' ${M11_SHIM_WINDOWS:-pm} ;;
+  # M37：共享的 pane 进程树扫描改用 list-panes（display-message 找不到窗口时会静默回退到当前窗口，
+  # 不能当证据）。shim 必须回答工具真正问的查询，否则「工具下了什么命令」就无从证明。
+  list-panes)
+    case "$*" in
+      *":${M11_SHIM_PANE_WIN:-pm}"*) printf '1 %s\n' "${M11_SHIM_PANE_PID:-1}" ;;
+      *) printf '1 1\n' ;;
+    esac ;;
   has-session)  [ "${M11_SHIM_HAS_SESSION:-1}" = "1" ] || exit 1 ;;
 esac
 exit 0
@@ -2324,6 +2331,111 @@ M82EOF
   esac
 else
   printf '  (跳过 worker adapter 启动证据断言：没有 tmux)\n'
+fi
+
+# ---------------------------------------------------------------- 6k. worker 存活判据（M37）
+# 事故（2026-09-19 实测两次假告警）：worker 窗口的 pane_current_command 报 `bash`，真在干活的是它的子
+# 进程 pi（pane_pid=bash └─ pi）。旧判据 team_pane_busy（pane_current_command + 前台进程组）把正在
+# 干活的 dev / dev2 说成「停了」（pulse 的「停了的 agent」两次误报）。
+# M37 起判据与 M6.5 的 PM 存活同源：pane_pid **本身或它的直接子进程**命令行命中配置的 agent 可执行
+# 文件且 cwd 在本项目内（common.sh · team_agent_alive_in_pane）；pane_current_command 只作旁证。
+# 本段的三种夹具：① 字面形状 bash -c '<agent> …'｜② 事故形状（交互 bash + set +m：旧判据在这里说
+# 停）｜③ 对照（bash 里没有 agent 子进程 → 必须判停，不能靠 pane 忙不忙猜）。
+section "6k · worker 存活：看 pane 进程树，不看 pane_current_command（M37）"
+if [ "$FAST" = "1" ]; then
+  fast_skip "6k·worker 存活判据（M37）" "要真实 tmux 窗口 + pane 进程树现场（bash 是 pane_pid、agent 是子进程）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  M37_AGENT="m37w"                          # 名册里的夹具 agent（默认窗口名 = 它自己）
+  M37_STUB="$FAKE/m37-agent"
+  printf '#!/usr/bin/env bash\nsleep 600\n' > "$M37_STUB"
+  chmod +x "$M37_STUB"
+  mkdir -p "$REPO/.pi/team/state"
+  # 有任务但（判活时）窗口在跑 agent：进「停了的 agent」计数的那个形状
+  printf 'task=T1.1\nwindow=%s\n' "$M37_AGENT" > "$REPO/.pi/team/state/$M37_AGENT.env"
+
+  # 按 CLI 的方式加载夹具仓库的库（agent 可执行文件与名册用环境覆盖；不改 config.sh）。
+  # 片段经 M37_BODY 传入、在加载完库之后 eval —— 避免在函数体里做多层引号拼接（M37 实测踩过：
+  # 拼接错一处就会把整段片段当成一条命令名，断言全空跑）。
+  m37_bash() { # <bash 片段> [参数…]
+    local body="$1"; shift
+    ( cd "$REPO" || return 1
+      # 名册故意只留夹具 agent：待办计数不得受前面段落留下的别的 agent 记录影响（6k 只验自己的夹具）
+      env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+        TEAM_PI_BIN="$M37_STUB" TEAM_AGENTS="$M37_AGENT" M37_BODY="$body" \
+        bash -c '. '"'"$SKILL_DIR"'"'/scripts/lib/common.sh
+                 for _f in '"'"$SKILL_DIR"'"'/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+                 team_load_config >/dev/null 2>&1
+                 eval "$M37_BODY"' _ "$@" )
+  }
+  m37_verdict() { # <session:window> → alive/stopped（直接问 M37 的判据，不经文案）
+    m37_bash 'if team_agent_alive_in_pane "$1"; then printf "alive\n"; else printf "stopped\n"; fi' "$1"
+  }
+  m37_child_of() { # <session:window> → 命中夹具 agent 的直接子进程 pid（没有 → 空）
+    local p; p="$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null | head -1)"
+    [ -n "$p" ] || return 0
+    ps -o pid=,args= --ppid "$p" 2>/dev/null | grep -F -- "$M37_STUB" | awk '{print $1; exit}'
+  }
+  m37_wait_child() { # <session:window> [十分之一秒数]：有界等它起来（M7.5：不赌固定 sleep）
+    local i=0; while [ "$i" -lt "${2:-50}" ]; do [ -n "$(m37_child_of "$1")" ] && return 0; sleep 0.1; i=$((i + 1)); done
+    return 1
+  }
+  m37_shape() { tmux display-message -p -t "$1" 'pane_pid=#{pane_pid} cmd=#{pane_current_command}' 2>/dev/null | tr -d '\n'; }
+  m37_stopped_count() { # → 待办里第 7 个字段（停了的 agent）
+    m37_bash 'team_pending_counts' | awk '{print $7}'
+  }
+
+  # ① 简报里的字面形状：bash -c '<agent> …'（bash 是 pane_pid、agent 是子进程）
+  M37_W_LIT="m37-lit"
+  m37_bash_target="$SESSION:$M37_W_LIT"
+  tmux new-window -t "$SESSION" -n "$M37_W_LIT" -d -c "$REPO" -- \
+    bash -c "\"$M37_STUB\" --m37 & wait; sleep 600" 2>/dev/null || bad "6k 夹具：字面形状窗口没建起来"
+  if m37_wait_child "$m37_bash_target"; then
+    ok "6k ① 夹具现场：$(m37_shape "$m37_bash_target")（agent 子进程 $(m37_child_of "$m37_bash_target")）"
+  else
+    bad "6k ① 夹具：5s 内没看到 agent 子进程（$(m37_shape "$m37_bash_target")）"
+  fi
+  assert_eq "6k ① 字面形状（bash 父 + agent 子）判活" "$(m37_verdict "$m37_bash_target")" "alive"
+
+  # ② 事故形状：交互 bash（argv 只有选项）里 `set +m` 跑 agent —— job control 关掉后子进程不再
+  #    单独占前台进程组，pane_current_command 又只是 bash，旧判据在这里判「停了」。
+  M37_W_AGENT="$M37_AGENT"
+  M37_W_AGENT_T="$SESSION:$M37_W_AGENT"
+  tmux new-window -t "$SESSION" -n "$M37_W_AGENT" -d -c "$REPO" -- bash --noprofile --norc 2>/dev/null \
+    || bad "6k 夹具：事故形状窗口没建起来"
+  tmux send-keys -t "$M37_W_AGENT_T" 'set +m' Enter 2>/dev/null || true
+  tmux send-keys -t "$M37_W_AGENT_T" "\"$M37_STUB\" --m37" Enter 2>/dev/null || true
+  if m37_wait_child "$M37_W_AGENT_T"; then
+    ok "6k ② 夹具现场（事故形状）：$(m37_shape "$M37_W_AGENT_T")（agent 子进程 $(m37_child_of "$M37_W_AGENT_T")）"
+  else
+    bad "6k ② 夹具：5s 内没看到 agent 子进程（$(m37_shape "$M37_W_AGENT_T")）"
+  fi
+  assert_eq "6k ② 事故形状（交互 bash + set +m）判活" "$(m37_verdict "$M37_W_AGENT_T")" "alive"
+  # CLI 表面（digest / pulse 的「停了的 agent」）读的是同一份判据
+  assert_eq "6k ② 待办：有任务但在跑的 agent 不算「停了的 agent」" "$(m37_stopped_count)" "0"
+
+  # ④ 启动中的派单 harness（M4.3 B 的形状）：命令行里有 agent 路径 + dispatch-*.spawn，但还没 exec 出
+  #    agent —— 不算证据（不把「正在启动」说成「在跑」；PM 侧的对应物是 pm.pid.spawn 排除）。
+  M37_W_START="m37-start"
+  M37_W_START_T="$SESSION:$M37_W_START"
+  tmux new-window -t "$SESSION" -n "$M37_W_START" -d -c "$REPO" -- \
+    bash -c "sleep 600 && true  # 派单 harness 形状：$M37_STUB … dispatch-$M37_AGENT.spawn" 2>/dev/null || true
+  assert_eq "6k ④ 启动中的 harness（命令行里有 agent 路径但没有 agent 进程）判停" "$(m37_verdict "$M37_W_START_T")" "stopped"
+  # ⑤ 窗口名写错/窗口消失时必须判停 —— tmux 的 display-message 会静默回退到**当前窗口**，
+  #    用它的输出当证据会把别的窗口的进程当成这个 agent（失败必须关闭，不许回声）。
+  assert_eq "6k ⑤ 不存在的窗口（display-message 回退陷阱）判停" "$(m37_verdict "$SESSION:no-such-window-m37")" "stopped"
+
+  # ③ 对照：同一个窗口换成「bash 里没有 agent 子进程」→ 必须判停（旧判据在这里反而说 alive）
+  tmux kill-window -t "$M37_W_AGENT_T" 2>/dev/null || true
+  tmux new-window -t "$SESSION" -n "$M37_W_AGENT" -d -c "$REPO" -- bash -c 'sleep 600 && true' 2>/dev/null || true
+  assert_eq "6k ③ 对照（bash 里没有 agent 子进程）判停" "$(m37_verdict "$M37_W_AGENT_T")" "stopped"
+  assert_eq "6k ③ 对照：待办把它算成「停了的 agent 1」" "$(m37_stopped_count)" "1"
+
+  # 清场：窗口 + 夹具 agent 的 state 不能留给后面的段落（尤其 12/14c 的零写入与真进程自检）
+  for _w in "$M37_W_LIT" "$M37_W_AGENT" "$M37_W_START"; do tmux kill-window -t "$SESSION:$_w" 2>/dev/null || true; done
+  rm -f "$REPO/.pi/team/state/$M37_AGENT.env"
+else
+  printf '  (跳过 worker 存活断言：没有 tmux)\n'
 fi
 
 # ---------------------------------------------------------------- 7. 通知 / 收件箱 / digest
@@ -5739,7 +5851,7 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
-  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "11·close 后窗口" "11b·巡检/pulse" "11b2·PM 存活证据链" \
+  for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "6k·worker 存活判据（M37）" "11·close 后窗口" "11b·巡检/pulse" "11b2·PM 存活证据链" \
              "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测" "11j·pulse 迁移夹具" \
              "1c·M11 真沙盒窗口"; do
