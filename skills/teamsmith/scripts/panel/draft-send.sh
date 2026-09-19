@@ -49,7 +49,13 @@ if [ "$rc" = "0" ]; then
   done
 fi
 if [ "$rc" = "0" ]; then
+  team_identity_resolve >>"$log" 2>&1 || true
   team_load_config >>"$log" 2>&1 || rc=$?
+fi
+# M40：身份冲突（继承了别的项目的 TEAM_* 身份）→ 拒绝投递 —— 否则草稿会进错项目的队列。
+# 身份本身已经按 cwd（= 面板的 root）解析，告警也写进同一个日志，由调用方原样展示。
+if [ "$rc" = "0" ]; then
+  team_identity_gate draft >>"$log" 2>&1 || rc=$?
 fi
 if [ "$rc" = "0" ]; then
   # The CLI's own command handler (`team draft send`), one layer below the `team` wrapper's arg

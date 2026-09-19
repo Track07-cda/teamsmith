@@ -8,6 +8,17 @@ The `team` CLI:
 2. `.pi/team/config.sh` under `--root <dir>` / `TEAM_ROOT`
 3. Walk up from the current directory looking for `.pi/team/config.sh`
 
+**Identity comes from the directory, not from the environment.** The project root is the git worktree the command
+runs in (`--root <dir>` when given: that directory's worktree), the main worktree is its git common dir, and the
+project name/session come from *that* project's config. Inherited `TEAM_ROOT` / `TEAM_MAIN_ROOT` / `TEAM_PROJECT` /
+`TEAM_SESSION` values are never allowed to win silently: when they name **another project**, commands that change
+shared state or start long-lived processes refuse to run, and read-only forms (`paths`, `--print`, `--dry-run`,
+`status`, …) resolve by the directory and print the mismatch (`TEAM_ALLOW_FOREIGN_IDENTITY=1` runs anyway and
+records that in `state/watchdog.log`). Sibling worktrees of the **same** project (an agent worktree with the PM's
+`TEAM_ROOT` in the environment) are not a mismatch. Windows the CLI starts (PM, pulse, worker, draft) are stamped
+with the *destination* directory's identity, so a long-lived process always belongs to the directory it was started
+in — see [troubleshooting.md](troubleshooting.md) §18.
+
 The notify extension (inside the agent process, **it never sources the config and never runs project code**):
 walks up the same way and only parses the few flat `KEY=VALUE` entries it needs; when it finds none it falls back to
 the git main worktree. `$VAR` / `${VAR}` inside values are expanded from `process.env`.
@@ -264,7 +275,8 @@ console spawns no `detail` child at all.
 
 | Variable | Purpose |
 |---|---|
-| `TEAM_ROOT` | explicitly name the project root |
+| `TEAM_ROOT` | explicitly name the project root (locates the project; the **identity** itself still comes from the runtime directory — an inherited value naming another project is reported and refused, §1) |
+| `TEAM_ALLOW_FOREIGN_IDENTITY` | `1` = run anyway when the inherited identity names another project; the run is recorded in `state/watchdog.log` |
 | `TEAM_CONFIG_FILE` | explicitly name the config file (same as `team --config`) |
 | `TEAM_MIN_AVAIL_MB` | `1024` | **hard line**: the `MemAvailable` floor (the CEP machine sets 4096, the lesson of two OOMs) |
 | `TEAM_MIN_FREE_SWAP_MB` | `1024` | **hard line**: the free **disk swap** floor (**zram excluded**) |

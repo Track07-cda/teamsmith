@@ -1238,7 +1238,16 @@ team_cmd_monitor() {
   [ -n "$height" ] && args+=(--height "$height")
   # exec：窗口里的进程就是面板本身（不是它的 bash 父进程）——kill 窗口/PID 就是 kill 面板，
   # 不会留下一个孤儿渲染进程；进程数也只多这一个。
-  exec "$runner" ${args[@]+"${args[@]}"}
+  # M40：面板进程（及其子进程）只带本命令推导出的身份 —— 继承的 TEAM_* 已在入口被忽略，
+  # 这里再清一遍，保证 __panel-data / watch --once / draft-send 不会从环境里读到别的项目。
+  local -a idenv=() ipairs=() _v
+  for _v in TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION; do
+    idenv+=(-u "$_v")
+    [ -n "${!_v:-}" ] && ipairs+=("$_v=${!_v}")
+  done
+  idenv+=(-u TEAM_SESSION_FROM -u TEAM_CONFIG_FILE)
+  # GNU env 的选项必须在第一个赋值之前（`env -u A A=1 -u B` 会把 -u 当成命令）
+  exec env "${idenv[@]}" ${ipairs[@]+"${ipairs[@]}"} "$runner" ${args[@]+"${args[@]}"}
 }
 
 # ---------------------------------------------------------------- pulse：只有一个后端（tmux 窗口）
@@ -1323,6 +1332,17 @@ team_pulse_shape() { # console | headless | unknown
   esac
 }
 
+# 巡检窗口（console / headless 两种形态）里跑的完整命令（M40）：先清掉继承的 TEAM_* 身份、
+# 写入**按目录推导的**身份，再 cd 到主工作树 —— 「在哪个目录里启动，长驻进程就属于哪个项目」。
+# 事故②（cwd=ai_interview 却渲染 pm-skills 看板）的修复点就在这里；`pulse --print` 打印的也是这条。
+team_pulse_window_cmd() { # [--headless]
+  local mode="${1:-}" cli="$TEAM_SKILL_DIR/scripts/team"
+  printf '%scd %s && exec bash %s monitor' \
+    "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_squote "$TEAM_MAIN_ROOT")" "$(team_squote "$cli")"
+  [ "$mode" = "--headless" ] && printf ' --headless'
+  return 0
+}
+
 # tmux 后端（默认）：巡检就住在同一个 tmux session 的 `pulse` 窗口里。
 # 好处：① 与开发环境同版本（tmux/ps/git/pi 都在原环境）；② 顺手就是个状态监视器（--ui 面板）；
 #       ③ 少一层容器。代价：tmux server 死了它也死（但那时 PM 也死了，重建时一起起来）。
@@ -1338,7 +1358,7 @@ team_pulse_tmux_up() {
     # 无界面形态（q 收起过）→ 同一窗口原地恢复控制台，不开第二个窗口。
     shape="$(team_pulse_shape)"
     if [ "$shape" = "headless" ]; then
-      tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash "$TEAM_SKILL_DIR/scripts/team" monitor
+      tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash -c "$(team_pulse_window_cmd)"
       sleep 1.5
       if [ "$(team_pulse_window_state)" = "running" ] && [ "$(team_pulse_shape)" = "console" ]; then
         team_ok "已把无界面巡检恢复成控制台（$TEAM_SESSION:$w）"
@@ -1356,7 +1376,7 @@ team_pulse_tmux_up() {
     return 0
   fi
   [ "$st" = "idle" ] && { team_warn "窗口 $w 停在空提示符：重开"; tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null || true; }
-  tmux new-window -t "$TEAM_SESSION" -n "$w" -d -- bash "$TEAM_SKILL_DIR/scripts/team" monitor
+  tmux new-window -t "$TEAM_SESSION" -n "$w" -d -- bash -c "$(team_pulse_window_cmd)"
   sleep 1.5
   st="$(team_pulse_window_state)"
   if [ "$st" = "running" ]; then
@@ -1399,7 +1419,7 @@ team_pulse_tmux_collapse() {
     team_dim "巡检窗口已经是无界面形态（$shape）：不需要收起"
     return 0
   fi
-  tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash "$TEAM_SKILL_DIR/scripts/team" monitor --headless
+  tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash -c "$(team_pulse_window_cmd --headless)"
   team_ok "已收起控制台：$TEAM_SESSION:$w 改为无界面巡检（tick 继续，$TEAM_CLI pulse up 恢复）"
 }
 
@@ -1417,7 +1437,8 @@ team_cmd_pulse() {
   team_require_docs
 
   if [ "$print_only" = "1" ]; then
-    printf 'tmux 窗口：%s:%s → bash %s/scripts/team monitor\n' "$TEAM_SESSION" "$(team_pulse_window)" "$TEAM_SKILL_DIR"
+    printf 'tmux 窗口：%s:%s\n' "$TEAM_SESSION" "$(team_pulse_window)"
+    printf '窗口命令：%s\n' "$(team_pulse_window_cmd)"
     local ivnote="（TEAM_PULSE_INTERVAL）"
     case " ${TEAM_PULSE_LEGACY_USED:-} " in *" TEAM_WATCH_INTERVAL "*) ivnote="（来源：TEAM_WATCH_INTERVAL，别名期兜底）" ;; esac
     printf '巡检周期：%ss%s\n' "$TEAM_PULSE_INTERVAL" "$ivnote"

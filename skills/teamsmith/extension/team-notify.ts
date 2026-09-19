@@ -91,24 +91,37 @@ function stripComment(raw: string): string {
 }
 
 /** 定位团队根目录（期望是主工作树）。
- *  注意：agent 的 worktree 里也有 config.sh 的副本，但收件箱必须写主工作树，
- *  所以 git 主工作树优先，向上查找只作为非 git 场景的兜底。 */
+ *  M40：与 team CLI / inbox-watch 同一条原则 —— **cwd 推导优先**，TEAM_ROOT 只在①与推导结果一致、
+ *  或②完全推导不出来且它指向一个真项目时被信任。为什么不许 env 优先（M40 实测）：agent 工作树里也有
+ *  config.sh 的副本，而收件箱/重载标记必须落在主工作树的账本里 —— env 指到工作树时，旧实现会把 cwd
+ *  判成「不在 worktrees 之下」（前缀是 <wt>/.worktrees/），于是**整个回合通知都不发**（收件箱 0 行）。
+ *  推导顺序：git 主工作树（账本所在地）→ 向上找 config.sh；两路都推不出来才退回 TEAM_ROOT。 */
 function findRoot(cwd: string): string {
-  const envRoot = process.env.TEAM_ROOT
-  if (envRoot && existsSync(join(envRoot, '.pi/team/config.sh'))) return resolve(envRoot)
+  const envRoot = process.env.TEAM_ROOT ? resolve(process.env.TEAM_ROOT) : ''
+  let derived = ''
   const common = run('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
   if (common) {
     const main = dirname(common)
-    if (existsSync(join(main, '.pi/team/config.sh'))) return main
+    if (existsSync(join(main, '.pi/team/config.sh'))) derived = main
   }
-  let dir = resolve(cwd)
-  for (;;) {
-    if (existsSync(join(dir, '.pi/team/config.sh'))) return dir
-    const parent = dirname(dir)
-    if (parent === dir) break
-    dir = parent
+  if (!derived) {
+    let dir = resolve(cwd)
+    for (;;) {
+      if (existsSync(join(dir, '.pi/team/config.sh'))) { derived = dir; break }
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
   }
-  return ''
+  if (envRoot && envRoot !== derived) {
+    if (derived) {
+      log(`TEAM_IDENTITY_CONFLICT inherited TEAM_ROOT=${envRoot} ≠ cwd-derived=${derived}: using cwd`, readCfg(derived))
+      return derived
+    }
+    if (existsSync(join(envRoot, '.pi/team/config.sh'))) return envRoot
+    return ''
+  }
+  return derived || envRoot
 }
 
 function readCfg(root: string): Cfg {

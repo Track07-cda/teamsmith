@@ -613,6 +613,8 @@ team_cmd_dispatch() {
 
   if [ "$printonly" = "1" ]; then
     printf '=== agent 命令（adapter: %s）===\n' "$(team_agent_adapter_label)"
+    # M40：身份环境单独一行（真窗口里它在 cd 之前执行；这里不许破 `^cd ` 的行契约）
+    printf '身份环境（启动前先执行）：%s\n' "$(team_identity_env_prefix "$wt")"
     printf 'cd %q && %s\n' "$wt" "$agent_cmd"
     printf '   （命令里的 "$0" = 窗口 harness 以 argv[0] 传入的提示词；模板里写 {prompt} 就是它）\n'
     printf '   prompt file（模板里的 {prompt_file}）：%s\n' "$prompt_file"
@@ -650,8 +652,8 @@ team_cmd_dispatch() {
     # 证据属于「agent 退了」这个事件（M7.5），不依赖窗口回 shell 的快慢。
     # M8.2：退出那一刻再自抓一份尾屏（有界重试到非空白）—— CLI 退出后 shell 启动链可能清屏，
     # 事后再从外面 capture 也许只剩空屏（PM 侧 M8.1 实测过）；失败诊断靠它保留 CLI 自己的报错。
-    inner="$(printf 'cd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s\nprintf "%%s %%s\\n" %s "$?" > %q\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %q 2>/dev/null; grep -q "[^[:space:]]" %q && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
-      "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd" "$(printf '%q' "$nonce")" "$exitfile" "$(printf '%q' "$tailfile")" "$(printf '%q' "$tailfile")")"
+    inner="$(printf '%scd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s\nprintf "%%s %%s\\n" %s "$?" > %q\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %q 2>/dev/null; grep -q "[^[:space:]]" %q && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
+      "$(team_identity_env_prefix "$wt")" "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd" "$(printf '%q' "$nonce")" "$exitfile" "$(printf '%q' "$tailfile")" "$(printf '%q' "$tailfile")")"
     tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
     pid="$(team_wait_launch_proof "$agent" "$nonce" 2>/dev/null || true)"
     # 额外观察（不复报成功就完事）：启动证据拿到后，agent 可能立刻退出（可执行文件/模型/provider 起不来）。

@@ -56,26 +56,45 @@ function maxBytes(): number { return envNum('TEAM_INBOX_WATCH_MAX_BYTES', DEFAUL
 function pollMs(): number { return envNum('TEAM_INBOX_WATCH_POLL_MS', DEFAULT_POLL_MS, 100) }
 function heartbeatMs(): number { return envNum('TEAM_INBOX_WATCH_HEARTBEAT_MS', DEFAULT_HEARTBEAT_MS, 100) }
 
-/** 定位团队根（主工作树）：TEAM_ROOT > git 主工作树 > 向上找 .pi/team/config.sh（与 team-bg / team-notify 同口径）。 */
+/**
+ * 定位团队根（主工作树）：M40 —— **cwd 推导为准**（与 team CLI 同一条原则）。
+ * TEAM_ROOT 只在①与推导结果一致，或②完全推导不出来且它指向一个真项目时被信任；
+ * 不一致时按 cwd 走，并往 state/inbox-watch.log 记一行 —— 绝不静默服务别的项目
+ * （事故②：cwd=ai_interview 的进程却渲染/读写 pm-skills）。
+ * 推导顺序：git 主工作树（账本所在地；worktree 里的 `.pi/team/config.sh` 是副本）→ 向上找 config.sh。
+ */
 function findRoot(cwd: string): string {
-  const envRoot = process.env.TEAM_ROOT
-  if (envRoot && existsSync(join(envRoot, '.pi/team/config.sh'))) return resolve(envRoot)
-  // worktree 里 .pi/team/config.sh 是副本，git 主工作树才是账本所在地（不能靠向上查找碰运气）
+  const envRoot = process.env.TEAM_ROOT ? resolve(process.env.TEAM_ROOT) : ''
+  let derived = ''
   try {
     const out = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
       { encoding: 'utf8', timeout: 5000 })
     const main = dirname(out.trim())
-    if (existsSync(join(main, '.pi/team/config.sh'))) return main
+    if (existsSync(join(main, '.pi/team/config.sh'))) derived = main
   } catch {
     /* 不是 git 仓库 / 没有 git */
   }
-  let dir = resolve(cwd)
-  for (;;) {
-    if (existsSync(join(dir, '.pi/team/config.sh'))) return dir
-    const parent = dirname(dir)
-    if (parent === dir) return ''
-    dir = parent
+  if (!derived) {
+    let dir = resolve(cwd)
+    for (;;) {
+      if (existsSync(join(dir, '.pi/team/config.sh'))) { derived = dir; break }
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
   }
+  if (envRoot && envRoot !== derived) {
+    if (derived) {
+      appendLedger(derived, `TEAM_IDENTITY_CONFLICT inherited TEAM_ROOT=${envRoot} ≠ cwd-derived=${derived}；按 cwd 走`)
+      return derived
+    }
+    if (existsSync(join(envRoot, '.pi/team/config.sh'))) {
+      appendLedger(envRoot, `TEAM_IDENTITY_CONFLICT cwd（${cwd}）推导不出项目，回退到 TEAM_ROOT=${envRoot}`)
+      return envRoot
+    }
+    return ''
+  }
+  return derived || envRoot
 }
 
 function stateDir(root: string): string {

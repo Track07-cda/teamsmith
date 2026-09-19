@@ -43,7 +43,10 @@ team_draft_open() { # [pm]
     return 0
   fi
   team_assert_own_session "draft 窗口" || return 1
-  cmd="$(printf 'bash %q %q %q %q %q %q' "$wrapper" "$cli" "$TEAM_MAIN_ROOT" "$file" "$(team_draft_target)" "$editor")"
+  # M40：草稿窗口也只带本命令推导出的身份（否则窗口里的 `team --root … draft send`
+  # 会看到继承的别的项目身份，投递闸门按「冲突」拒绝——事故②同族的坑）
+  cmd="$(printf '%scd %q && exec bash %q %q %q %q %q %q' \
+    "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$TEAM_MAIN_ROOT" "$wrapper" "$cli" "$TEAM_MAIN_ROOT" "$file" "$(team_draft_target)" "$editor")"
   if team_draft_window_exists; then
     # 复用一个已经退出的草稿窗口（remain-on-exit 让回执留在 pane 里）
     if tmux respawn-pane -k -t "$TEAM_SESSION:draft" "$cmd" 2>/dev/null; then

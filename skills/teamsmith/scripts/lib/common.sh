@@ -56,6 +56,203 @@ team_main_root() {
   printf '%s\n' "$root"
 }
 
+# ---------------------------------------------------------------- M40 · 身份 = 运行时目录
+# 两起同族实测事故（2026-09-19）：shell 继承了别的项目的 TEAM_* 身份，而解析顺序是「env 优先于 cwd」。
+#   ① 在 ai_interview 目录里跑 team up，被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
+#   ② pulse 面板进程 cwd=ai_interview，却渲染了 pm-skills 的看板（没有护栏，静默读错项目）。
+# 用户的规格：身份（项目根/主工作树/项目名/会话名）**默认从 cwd 推导**；继承来的 TEAM_* 身份
+# **绝不许静默赢过 cwd**。规则只在这里实现一处，所有入口共用（team CLI / draft-send / 面板子进程）：
+#   · 会改共享状态/起进程的命令：冲突 → 拒绝（与 team_assert_own_session 同款语义与措辞）；
+#   · 纯观察形式（paths / --print / --dry-run / status …）与「在空目录建项目」（init/bootstrap）：
+#     按 cwd 解析并**大声告警** —— 排障命令必须能告诉你真实身份，拒绝它等于把眼睛蒙上。
+
+# 从目录推导 git 工作树/主工作树（不读任何 TEAM_* 变量）
+team_dir_roots() { # <目录> → "<worktree>\t<main>"（不是 git 仓库 → 两列皆空）
+  local d="${1:-$PWD}" wt common main=""
+  d="$(cd "$d" 2>/dev/null && pwd -P || true)"
+  if [ -n "$d" ]; then
+    wt="$(command git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
+    common="$(command git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [ -n "$common" ]; then main="$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)"; fi
+  fi
+  printf '%s\t%s\n' "${wt:-}" "${main:-}"
+}
+
+# 入口身份解析（一处实现全体共用）：team_identity_resolve [<显式根>]
+# 成功（base 在 git 工作树里）→ 导出 TEAM_IDENTITY_LOCKED=1 / ROOT / MAIN_ROOT / PROJECT；
+# 继承的四个身份变量存档进 TEAM_IDENTITY_INHERIT_*（供冲突判定），**不进**锁定值。
+# 失败（base 不在 git 仓库）→ LOCKED=0，照旧交给 team_load_config 的现有报错路径。
+team_identity_resolve() {
+  local base="${1:-$PWD}" roots wt main
+  TEAM_IDENTITY_INHERIT_ROOT="${TEAM_IDENTITY_INHERIT_ROOT-${TEAM_ROOT:-}}"
+  TEAM_IDENTITY_INHERIT_MAIN_ROOT="${TEAM_IDENTITY_INHERIT_MAIN_ROOT-${TEAM_MAIN_ROOT:-}}"
+  TEAM_IDENTITY_INHERIT_PROJECT="${TEAM_IDENTITY_INHERIT_PROJECT-${TEAM_PROJECT:-}}"
+  TEAM_IDENTITY_INHERIT_SESSION="${TEAM_IDENTITY_INHERIT_SESSION-${TEAM_SESSION:-}}"
+  # 注意：这六个 TEAM_IDENTITY_* 一律**不 export** —— 它们是本进程内部的判定输入，
+  # 泄进子进程会让子进程拿父进程的冲突档案去判自己的身份（M40 实测：panel 的 __panel-data 孩子被误拒）。
+  roots="$(team_dir_roots "$base")"
+  wt="${roots%%$'\t'*}"; main="${roots#*$'\t'}"
+  if [ -z "$wt" ] || [ -z "$main" ]; then
+    TEAM_IDENTITY_LOCKED=0
+    return 1
+  fi
+  TEAM_IDENTITY_LOCKED=1
+  TEAM_IDENTITY_ROOT="$wt"
+  TEAM_IDENTITY_MAIN_ROOT="$main"
+  TEAM_IDENTITY_PROJECT="$(basename "$main")"
+  return 0
+}
+
+# 锁定入口在载入配置前调用：把继承的身份 env 存档后清掉 —— 之后的赋值只可能来自
+# 项目自己的配置（source config.sh）或目录推导结果。幂等。
+team_identity_lock_env() {
+  TEAM_IDENTITY_INHERIT_ROOT="${TEAM_IDENTITY_INHERIT_ROOT-${TEAM_ROOT:-}}"
+  TEAM_IDENTITY_INHERIT_MAIN_ROOT="${TEAM_IDENTITY_INHERIT_MAIN_ROOT-${TEAM_MAIN_ROOT:-}}"
+  TEAM_IDENTITY_INHERIT_PROJECT="${TEAM_IDENTITY_INHERIT_PROJECT-${TEAM_PROJECT:-}}"
+  TEAM_IDENTITY_INHERIT_SESSION="${TEAM_IDENTITY_INHERIT_SESSION-${TEAM_SESSION:-}}"
+  unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION
+  return 0
+}
+
+# 目录的物理路径（比对用；不存在/不可读 → 原样返回，绝不因为一个坏值就崩）
+team_identity_norm_dir() { ( cd "${1:-}" 2>/dev/null && pwd -P ) || printf '%s' "${1:-}"; }
+
+# 冲突对：每行 "<VAR>\t<继承值>\t<最终值>"（无冲突 → 无输出）。最终值 = 载入配置后的身份。
+# 判据是「同一个项目吗」，不是「同一个路径吗」——
+#   · 继承的 TEAM_ROOT 指向**本项目的主工作树**（PM 窗口的常规环境），而 cwd 在某个 agent 工作树里：
+#     同一个项目，不是冲突（worker 窗口就是这个形状；按路径比会把每个 worker 的每条命令都拒掉）。
+#     继承值到底是不是同一家，用「它的主工作树 == 我们的主工作树」判定。
+#   · 不是 git 仓库的继承值 → 主工作树解析为空 → 当外来值（告警/拒绝），因为无法证明它属于本项目。
+team_identity_conflict_pairs() {
+  local var key inh final _inh_wt inh_main
+  for var in TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION; do
+    key="${var#TEAM_}"
+    eval "inh=\${TEAM_IDENTITY_INHERIT_$key:-}"
+    [ -n "$inh" ] || continue
+    final="${!var:-}"
+    case "$var" in
+      TEAM_ROOT)
+        # 父进程给的是主工作树、我们在工作树里（或反之）→ 同一项目
+        IFS=$'\t' read -r _inh_wt inh_main <<< "$(team_dir_roots "$inh")"
+        if [ -n "$inh_main" ] && [ "$(team_identity_norm_dir "$inh_main")" = "$(team_identity_norm_dir "$TEAM_MAIN_ROOT")" ]; then
+          continue
+        fi ;;
+      TEAM_MAIN_ROOT)
+        [ "$(team_identity_norm_dir "$inh")" = "$(team_identity_norm_dir "$TEAM_MAIN_ROOT")" ] && continue ;;
+      *)
+        [ "$inh" = "$final" ] && continue ;;
+    esac
+    printf '%s\t%s\t%s\n' "$var" "$inh" "$final"
+  done
+  return 0
+}
+
+# 冲突告警（观察形式/显式授权时用；身份已经按 cwd 解析，只是把冲突大声打出来）
+# 一律走 stderr：观察形式里有**机读出口**（paths / monitor --json / __panel-data --block …），
+# 往 stdout 掺告警行会把 JSON 弄坏 —— 「看一眼真实身份」不该让下游解析失败（M40 翻转实验实测：
+# 面板的数据子进程就是这么被弄坏的）。
+team_identity_report() {
+  local pairs; pairs="$(team_identity_conflict_pairs)"
+  [ -n "$pairs" ] || return 0
+  team_warn "TEAM_IDENTITY_CONFLICT：身份以目录为准 —— 当前目录属于 '$TEAM_PROJECT'（$TEAM_MAIN_ROOT），继承的环境指向别的项目"
+  local var inh final
+  while IFS=$'\t' read -r var inh final; do
+    [ -n "$var" ] || continue
+    team_dim "  $var=$inh（继承） ≠ $final（按目录推导）：继承值被忽略，本命令按目录执行" >&2
+  done <<< "$pairs"
+  team_dim "  清掉继承变量：env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION …（或 cd 到目标项目）" >&2
+  return 0
+}
+
+# 冲突拒绝（与 team_assert_own_session 同款语义/措辞）：原样报出两个项目，并给出两条出路
+team_identity_refuse() { # <命令名>
+  local cmd="${1:-}" pairs var inh final
+  pairs="$(team_identity_conflict_pairs)"
+  [ -n "$pairs" ] || return 0
+  team_err "身份冲突被拒（${cmd:-命令}）：当前目录属于 '$TEAM_PROJECT'（$TEAM_MAIN_ROOT），而继承的环境指向别的项目"
+  while IFS=$'\t' read -r var inh final; do
+    [ -n "$var" ] || continue
+    team_dim "  $var=$inh（继承） ≠ $final（按目录推导）" >&2
+  done <<< "$pairs"
+  team_dim "  这通常意味着继承了别的项目的 TEAM_*（测试/门禁/嵌套调用）。继承的身份不许静默赢过 cwd。" >&2
+  team_dim "  处理：清掉继承变量（env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION …）或 cd 到目标项目" >&2
+  team_dim "  只看不改：${TEAM_CLI:-team} paths（按目录解析并告警），或给任何命令加 --print/--dry-run 看它会做什么" >&2
+  team_dim "  确认要按这个目录动手（一次性授权，会写进 state/watchdog.log 审计）：TEAM_ALLOW_FOREIGN_IDENTITY=1 ${TEAM_CLI:-team} $cmd …" >&2
+  return 1
+}
+
+# 纯观察/建项目形式：冲突时按目录放行（只告警）——「看可以，动不行」。
+# 判断只看「这条命令会不会改本项目共享状态 / 起进程」，与身份无关；拿不准的一律算「会动」。
+team_identity_observe_only() { # <cmd> [args...] → 0=纯观察/建项目
+  local cmd="${1:-}"; shift 2>/dev/null || true
+  case "$cmd" in
+    paths|help|version|changelog|roster|status|ps|digest|inbox|doctor) return 0 ;;
+    __panel-data) return 0 ;;                                # 面板的数据读器（只读；panel 每个块一个子进程）
+    init|bootstrap) return 0 ;;                                  # 在空目录建项目：按目录走不会误伤别人
+    board)   case "${1:-}" in row|ls|"") return 0 ;; esac ;;
+    outbox)  case "${1:-}" in list|"") return 0 ;; esac ;;
+    pulse)   case "${1:-}" in status|logs) return 0 ;; esac ;;
+    standby) case "${1:-}" in status) return 0 ;; esac ;;
+    meeting) case "${1:-}" in read|inbox|list|"") return 0 ;; esac ;;
+    thread)  [ "$#" -eq 0 ] && return 0 ;;                      # 没给消息 = 读线程
+    monitor) case " $* " in *" --print "*|*" --json "*) return 0 ;; esac ;;
+  esac
+  # 任何带 --print/--dry-run 的形式都是「打印它会做什么」（up/pulse/dispatch/resume 都一样）
+  case " $* " in *" --print "*|*" --dry-run "*) return 0 ;; esac
+  return 1
+}
+
+# 入口闸门：有冲突时——显式授权或观察形式 → 告警放行；其余 → 拒绝。返回 1 = 命令不许继续。
+# 显式授权（TEAM_ALLOW_FOREIGN_IDENTITY=1）不是「静默」：照旧打告警，并往 state/watchdog.log
+# 落一条审计 —— 事后能倒查「谁在什么时候按目录而不是按环境动了手」。
+team_identity_gate() { # <cmd> [args...]
+  local pairs; pairs="$(team_identity_conflict_pairs)"
+  [ -n "$pairs" ] || return 0
+  if [ "${TEAM_ALLOW_FOREIGN_IDENTITY:-0}" = "1" ]; then
+    team_identity_report
+    if [ -n "${TEAM_STATE_DIR:-}" ]; then
+      mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || true
+      printf '%s %s\n' "$(team_timestamp)" \
+        "TEAM_IDENTITY_ALLOW（TEAM_ALLOW_FOREIGN_IDENTITY=1）：按目录 '$TEAM_PROJECT'（$TEAM_MAIN_ROOT）执行 ${1:-}；忽略的继承值：$(printf '%s' "$pairs" | awk -F'\t' '{printf "%s=%s→目录值%s ", $1, $2, $3}')" \
+        >> "$TEAM_STATE_DIR/watchdog.log" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  if team_identity_observe_only "$@"; then
+    team_identity_report
+    return 0
+  fi
+  team_identity_refuse "${1:-}"
+  return 1
+}
+
+# 长驻窗口的启动环境前缀（shell 语句，拼进任何由 shell 解析的启动命令）：先清掉继承的
+# TEAM_* 身份，再写入**目标目录推导出的**身份 —— 在哪个目录里启动，长驻进程就属于哪个项目。
+# 目标目录可选（默认：本命令的身份）：dispatch 传 agent 工作树（窗口 cwd 就是它），
+# PM/pulse/草稿窗口传主工作树（它们都 `cd` 到主工作树再 exec）。这样窗口里的进程带着的身份
+# 与它自己的 cwd 一致 —— 之后它在窗口里跑的任何 team 命令都不会看到「继承值 vs 目录」的假冲突。
+# 只带身份（+配置文件定位）；TEAM_PULSE_* / TEAM_STATE_DIR 这类旋钮照旧按窗口环境继承。
+team_identity_env_prefix() { # [<目标目录>]
+  local dir="${1:-}" v val root="${TEAM_ROOT:-}" roots wt main out
+  if [ -n "$dir" ]; then
+    roots="$(team_dir_roots "$dir")"
+    wt="${roots%%$'\t'*}"; main="${roots#*$'\t'}"
+    # 只在目标确实是本项目的一棵工作树时才改根（防止调用方传一个别的项目的目录）
+    if [ -n "$wt" ] && [ -n "$main" ] && [ "$(team_identity_norm_dir "$main")" = "$(team_identity_norm_dir "${TEAM_MAIN_ROOT:-$main}")" ]; then
+      root="$wt"
+    fi
+  fi
+  out="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM TEAM_CONFIG_FILE"
+  out="$out TEAM_IDENTITY_LOCKED TEAM_IDENTITY_ROOT TEAM_IDENTITY_MAIN_ROOT TEAM_IDENTITY_PROJECT"
+  out="$out TEAM_IDENTITY_INHERIT_ROOT TEAM_IDENTITY_INHERIT_MAIN_ROOT TEAM_IDENTITY_INHERIT_PROJECT TEAM_IDENTITY_INHERIT_SESSION; "
+  for v in TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION; do
+    case "$v" in TEAM_ROOT) val="$root" ;; *) val="${!v:-}" ;; esac
+    [ -n "$val" ] || continue
+    out="$out""export $v=$(team_squote "$val"); "
+  done
+  printf '%s' "$out"
+}
+
 # ---------------------------------------------------------------- 配置
 # 查找顺序：$TEAM_CONFIG_FILE → 从 $TEAM_ROOT（没有就用 $PWD）向上找 .pi/team/config.sh
 team_find_config() {
@@ -63,7 +260,8 @@ team_find_config() {
     [ -f "$TEAM_CONFIG_FILE" ] && { printf '%s\n' "$TEAM_CONFIG_FILE"; return 0; }
     return 1
   fi
-  local d="${TEAM_ROOT:-$PWD}"
+  # 锁定模式：从**目录推导出的根**找配置（继承的 TEAM_ROOT 已经不算身份）
+  local d="${TEAM_IDENTITY_ROOT:-${TEAM_ROOT:-$PWD}}"
   d="$(cd "$d" 2>/dev/null && pwd)" || return 1
   while :; do
     [ -f "$d/.pi/team/config.sh" ] && { printf '%s\n' "$d/.pi/team/config.sh"; return 0; }
@@ -110,14 +308,23 @@ team_pulse_legacy_suffix() { # → “（legacy: TEAM_WATCH_INTERVAL=17 …）�
 team_load_config() {
   TEAM_CWD="${TEAM_CWD:-$PWD}"
   TEAM_SKILL_DIR="${TEAM_SKILL_DIR:-$(team_skill_dir)}"
+
+  # M40：锁定入口已从目录推导出身份 —— 继承的 TEAM_* 身份先存档再清掉；之后它们只可能由
+  # 项目自己的配置或推导结果填值。非锁定调用（测试夹具直接 source common.sh）行为与历史一致。
+  if [ "${TEAM_IDENTITY_LOCKED:-0}" = "1" ]; then team_identity_lock_env; fi
+
   TEAM_CONFIG="$(team_find_config || true)"
 
   if [ -n "$TEAM_CONFIG" ]; then
     # 环境变量优先于配置文件：用户临时覆盖（TEAM_MIN_FREE_SWAP_MB=0 team dispatch …）
     # 必须能赢过文件里的值，否则文档里的“临时绕过”根本不生效。
+    # M40 例外：锁定模式下身份四件套不进这个覆盖表（继承值不许静默赢过 cwd）。
     local _env_pairs=() _k
     for _k in ${!TEAM_@}; do
       case "$_k" in TEAM_CONFIG_FILE|TEAM_ASSUME_YES|TEAM_CLI) continue ;; esac
+      if [ "${TEAM_IDENTITY_LOCKED:-0}" = "1" ]; then
+        case "$_k" in TEAM_ROOT|TEAM_MAIN_ROOT|TEAM_PROJECT|TEAM_SESSION) continue ;; esac
+      fi
       _env_pairs+=("$_k=${!_k}")
     done
     set +u
@@ -131,8 +338,14 @@ team_load_config() {
   fi
 
   team_is_git_repo || team_die "当前目录不在 git 仓库内（teamsmith 需要 git 来做 worktree 隔离）"
-  TEAM_ROOT="${TEAM_ROOT:-$(team_worktree_top)}"
-  TEAM_MAIN_ROOT="${TEAM_MAIN_ROOT:-$(team_main_root)}"
+  if [ "${TEAM_IDENTITY_LOCKED:-0}" = "1" ]; then
+    # 身份=目录推导（配置只能给出项目名/会话名这类**项目自己的**值）
+    TEAM_ROOT="$TEAM_IDENTITY_ROOT"
+    TEAM_MAIN_ROOT="$TEAM_IDENTITY_MAIN_ROOT"
+  else
+    TEAM_ROOT="${TEAM_ROOT:-$(team_worktree_top)}"
+    TEAM_MAIN_ROOT="${TEAM_MAIN_ROOT:-$(team_main_root)}"
+  fi
 
   TEAM_PROJECT="${TEAM_PROJECT:-$(basename "$TEAM_MAIN_ROOT")}"
   _team_session_preset="${TEAM_SESSION:-}"
@@ -1381,8 +1594,9 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
   # 内置 Pi（默认）：M36 起带闸门 exports 前缀；其余与历史逐字节一致 —— cd && 写 spawn pid && exec pi <args> @<prompt 文件>
   if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
     pi_bin="$(team_pm_bin_path)"
-    printf '%scd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
-      "$(team_tmux_shim_exports)" "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
+    # M40：启动前先清洗身份 env（继承的 TEAM_* 一律清掉，只写本命令推导出的身份）
+    printf '%s%scd %q && printf "%%s\\n" $$ > %q && exec %q %s @%q' \
+      "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" "$TEAM_MAIN_ROOT" "$spawnfile" "$pi_bin" "$(team_pm_pi_args)" "$pf"
     return 0
   fi
   expanded="$(team_agent_expand pm "$TEAM_PM_CMD" pm "${TEAM_PM_SESSION_ID:-}" \
@@ -1409,8 +1623,8 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
   tailfile="$(team_pm_launch_tail_file)"
   # 尾屏抓取带**有界重试**：pty 输出 → tmux 屏幕是异步的（初次 capture 可能还是一片空屏，
   # 而空白也是「有内容」的字节），所以抓到非空白才停（最多 ~1s，然后照抓一份，供诊断说明情况）。
-  inner="$(printf '%scd %s\n( printf "%%s\\n" "$BASHPID" > %s\nexec %s )\nrc=$?\nprintf "%%s %%s\\n" "$(date +%%s)" "$rc" > %s\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %s 2>/dev/null; grep -q "[^[:space:]]" %s && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
-    "$(team_tmux_shim_exports)" "$(team_squote "$TEAM_MAIN_ROOT")" "$(team_squote "$spawnfile")" "$expanded" \
+  inner="$(printf '%s%scd %s\n( printf "%%s\\n" "$BASHPID" > %s\nexec %s )\nrc=$?\nprintf "%%s %%s\\n" "$(date +%%s)" "$rc" > %s\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %s 2>/dev/null; grep -q "[^[:space:]]" %s && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
+    "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" "$(team_squote "$TEAM_MAIN_ROOT")" "$(team_squote "$spawnfile")" "$expanded" \
     "$(team_squote "$exitfile")" "$(team_squote "$tailfile")" "$(team_squote "$tailfile")")"
   printf 'exec bash -lc %s "$(cat %s)"' "$(team_squote "$inner")" "$(team_squote "$pf")"
 }

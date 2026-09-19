@@ -20,7 +20,7 @@
 // `--print`/`--json` never read `state/panel.conf` or the page file: the machine exits are frozen.
 
 import React from 'react'
-import { writeSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { writeSync, appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { render } from 'ink'
@@ -31,7 +31,7 @@ import { clockOf } from './format.js'
 import { dispWidth } from './width.js'
 import type { Palette } from './theme.js'
 import type { Segment } from './types.js'
-import { BLOCK_NAMES, MACHINE_BLOCKS, createPanelCache, findTeamCli, loadPanelData, panelDirOf, runTick } from './data.js'
+import { BLOCK_NAMES, MACHINE_BLOCKS, cleanIdentityEnv, createPanelCache, findTeamCli, loadPanelData, panelDirOf, runTick } from './data.js'
 import type { DataOptions, DataResult, PanelCache } from './data.js'
 import { normalizeNewlines, parseSendResult, mapReceipt, DRAFT_FILE } from './compose.js'
 import type { Receipt } from './compose.js'
@@ -122,6 +122,30 @@ const stateDir = argOf('state-dir') || (tickLogArg ? dirname(tickLogArg) : join(
 const draftFile = join(stateDir, DRAFT_FILE)
 const confFile = join(stateDir, PANEL_CONF_FILE)
 const pageFile = join(stateDir, PANEL_PAGE_FILE)
+
+// M40 — the panel's identity is its own root (`--root`, else cwd), never an inherited `TEAM_*`.
+// An inherited value that names another project is not honoured silently: one line before any frame
+// is drawn (stderr = the pulse window, which is this long-running process's log) plus a durable line
+// in the project's own state/panel.log. ASCII only: visible text belongs to the i18n tables and the
+// CJK-literal gate covers the whole source tree.
+const inheritedRoot = process.env.TEAM_ROOT
+if (inheritedRoot) {
+  const envRoot = inheritedRoot.replace(/\/+$/, '')
+  if (envRoot && envRoot !== root.replace(/\/+$/, '')) {
+    const line = `! TEAM_IDENTITY_CONFLICT (panel): rendering --root/cwd='${root}', ignoring inherited TEAM_ROOT='${inheritedRoot}'\n`
+    try {
+      writeSync(2, line)
+    } catch {
+      /* a stderr that cannot be written must not kill the panel */
+    }
+    try {
+      mkdirSync(stateDir, { recursive: true })
+      appendFileSync(join(stateDir, 'panel.log'), `${new Date().toISOString()} ${line}`)
+    } catch {
+      /* a state directory that cannot be written must not kill the panel either */
+    }
+  }
+}
 
 type Mode = 'text' | 'json' | 'tui'
 function pickMode(): Mode {
@@ -376,7 +400,7 @@ async function main(): Promise<void> {
     return new Promise((resolve) => {
       let child: ReturnType<typeof spawn>
       try {
-        child = spawn('bash', argv, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })
+        child = spawn('bash', argv, { cwd: root, env: cleanIdentityEnv(env), stdio: ['ignore', 'pipe', 'pipe'] })
       } catch (e) {
         resolve({ rc: 127, out: '', err: (e as Error).message })
         return
@@ -486,7 +510,7 @@ async function main(): Promise<void> {
       try {
         child = spawn('bash', ['-c', 'exec ${TEAM_PANEL_EDITOR:?} "$1"', '_', draftFile], {
           cwd: root,
-          env: { ...process.env, TEAM_PANEL_EDITOR: editor },
+          env: cleanIdentityEnv({ ...process.env, TEAM_PANEL_EDITOR: editor }),
           stdio: 'inherit',
         })
       } catch {

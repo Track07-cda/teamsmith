@@ -24,6 +24,34 @@ import { fileURLToPath } from 'node:url'
 import { sanitizeDeep } from './sanitize.js'
 import type { ActivityBlock, PanelBlocks, PanelData } from './types.js'
 
+/**
+ * M40 — the panel's identity is its own root (`--root`, else cwd), never an inherited `TEAM_*`.
+ *
+ * The panel is a long-running process that spawns the CLI in many forms; every one of them is given
+ * `--root` explicitly and runs with `cwd = root`, so an inherited identity can only ever *contradict*
+ * the panel's own. It must not reach a child: the CLI derives the child's identity from its directory
+ * and would then see a conflict (two real incidents on 2026-09-19: a pulse started from another
+ * project's shell rendered the wrong board). Children therefore get a copy of the environment with
+ * the identity locators removed.
+ */
+export const IDENTITY_ENV_VARS = [
+  'TEAM_ROOT',
+  'TEAM_MAIN_ROOT',
+  'TEAM_PROJECT',
+  'TEAM_SESSION',
+  'TEAM_SESSION_FROM',
+  'TEAM_CONFIG_FILE',
+] as const
+
+export function cleanIdentityEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env }
+  for (const name of IDENTITY_ENV_VARS) delete out[name]
+  // `TEAM_IDENTITY_*` are the CLI's per-process decision inputs (lock + inherited snapshot); they
+  // must never reach a child, or the child would judge its own identity from the parent's conflicts.
+  for (const name of Object.keys(out)) if (name.startsWith('TEAM_IDENTITY')) delete out[name]
+  return out
+}
+
 /** The blocks the bash data command serves, one child each. */
 export const BLOCK_NAMES = [
   'frame',
@@ -193,7 +221,7 @@ function runBlock(
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn('bash', args, { cwd: opts.root, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] })
+      child = spawn('bash', args, { cwd: opts.root, env: cleanIdentityEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
       children?.add(child)
     } catch (e) {
       resolve({ ok: false, error: (e as Error).message })
@@ -472,7 +500,7 @@ export function runTick(
     try {
       child = spawn('bash', [cli, '--root', root, 'watch', '--once'], {
         cwd: root,
-        env: { ...process.env },
+        env: cleanIdentityEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
       })
     } catch (e) {

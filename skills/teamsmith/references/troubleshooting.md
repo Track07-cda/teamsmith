@@ -615,3 +615,22 @@ Two hard rules follow (2026-09-19: the 6th and the 8th default-server deaths):
    evidence. `command tmux` / `env tmux` are **not** bypasses (they still resolve through `PATH`); a variable holding
    the resolved real binary (`"$REAL_TMUX"`, `${TMUX_BIN}`) is the intended exception and is judged by the normal
    isolation rules.
+
+## 19. A command refuses because of an inherited identity ("the directory owns the identity")
+
+`team` derives the project from the directory it runs in (`--root <dir>` if given, otherwise the cwd): root = the git
+worktree, main worktree = its git common dir, project name/session = that project's config. Inherited `TEAM_*`
+identity variables (`TEAM_ROOT`, `TEAM_MAIN_ROOT`, `TEAM_PROJECT`, `TEAM_SESSION`) never win over that silently.
+
+Two real incidents on 2026-09-19, same shape: a shell carried **this** project's identity while sitting in another
+project's directory. `team up` was refused after resolving the wrong project (the guard held, but the user had to
+clean their environment), and a pulse started that way rendered **this** project's board inside the other project —
+no guard, no warning, silently the wrong project.
+
+What you see today, and what to do:
+
+| Symptom | Cause / fix |
+|---|---|
+| `身份冲突被拒：当前目录属于 'X'，而继承的环境指向别的项目` and a refusal to run | the inherited identity names another project. `env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION team <cmd>` — or `cd` to the project you actually mean. Read-only forms (`team paths`, `--print`, `--dry-run`, `status`, `inbox`, …) always resolve by the directory and print the mismatch instead of refusing; `TEAM_ALLOW_FOREIGN_IDENTITY=1 team <cmd>` runs anyway and records it in `state/watchdog.log` |
+| an agent inside its worktree was refused, or `team notify` stopped working in a worker window | it should not: a **sibling worktree of the same project** (the PM's main-worktree `TEAM_ROOT` with a cwd inside `.worktrees/<agent>`) is not a mismatch — the check compares projects (git common dir), not paths |
+| a panel/pulse renders another project's board, or `team pulse up` puts the window in the wrong session | fixed by the same rule: windows started by the CLI carry the **destination** directory's identity, and the panel strips inherited identity variables from every child it spawns. If you still see a foreign board, read the panel's own one-line warning (stderr of the pulse window, plus `state/panel.log`) — it names the ignored value |

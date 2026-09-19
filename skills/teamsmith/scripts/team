@@ -25,10 +25,11 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------- 全局参数
 ARGS=()
+_TEAM_ROOT_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --root) TEAM_ROOT="${2:?--root 需要目录}"; shift 2 ;;
-    --root=*) TEAM_ROOT="${1#*=}"; shift ;;
+    --root) _TEAM_ROOT_ARG="${2:?--root 需要目录}"; shift 2 ;;
+    --root=*) _TEAM_ROOT_ARG="${1#*=}"; shift ;;
     --config) TEAM_CONFIG_FILE="${2:?--config 需要文件}"; shift 2 ;;
     --config=*) TEAM_CONFIG_FILE="${1#*=}"; shift ;;
     --yes|-y) TEAM_ASSUME_YES=1; shift ;;
@@ -37,6 +38,10 @@ while [ $# -gt 0 ]; do
     *) ARGS+=("$1"); shift ;;
   esac
 done
+# M40（位置很重要）：身份解析要在 `--root` 落地**之前**跑 —— 它要读的是 shell 继承来的
+# TEAM_* 原始值（用来判冲突），之后才把 --root 作为「显式根」交给推导。
+team_identity_resolve "${_TEAM_ROOT_ARG:-}" || true
+[ -n "$_TEAM_ROOT_ARG" ] && TEAM_ROOT="$_TEAM_ROOT_ARG"
 export TEAM_ROOT="${TEAM_ROOT:-}" TEAM_CONFIG_FILE="${TEAM_CONFIG_FILE:-}" TEAM_ASSUME_YES="${TEAM_ASSUME_YES:-0}"
 
 CMD="${ARGS[0]:-help}"
@@ -62,6 +67,10 @@ fi
 
 # 其余命令都需要配置 + git 仓库
 team_load_config
+
+# M40：身份冲突闸门 —— 继承的 TEAM_* 与目录推导不一致时：要动共享状态/起进程的命令**拒绝**，
+# 纯观察形式（paths/--print/--dry-run/status…）与 init/bootstrap 按目录告警放行。
+team_identity_gate "$CMD" "$@" || exit 1
 
 case "$CMD" in
   init)       team_cmd_init "$@" ;;

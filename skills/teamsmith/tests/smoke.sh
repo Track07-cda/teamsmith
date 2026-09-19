@@ -1806,9 +1806,13 @@ PM_SUPPORT="${PM_SUPPORT% }"
 #    真 tmux 路径三段 export）——前缀同样字面写死；前缀以外的历史部分保持逐字节一致。
 M36_REF_PREFIX="export PATH=$(printf '%q' "$SKILL_DIR/scripts/shim"):\"\$PATH\"; export TEAM_TMUX_CALLS_LOG=$(printf '%q' "$REPO/.pi/team/state/tmux-calls.log"); "
 [ -n "$REAL_TMUX" ] && M36_REF_PREFIX="${M36_REF_PREFIX}export TEAM_TMUX_REAL=$(printf '%q' "$REAL_TMUX"); "
-LEGACY_REF="${M36_REF_PREFIX}cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
+# M40 起再带一段**身份环境前缀**（继承的 TEAM_* 身份先清掉，只写本命令现场推导出的身份）：
+# 前缀同样字面写死（值只取夹具已知量），前缀以外的历史部分保持逐字节一致。
+m40sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+M40_REF_PREFIX="unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM TEAM_CONFIG_FILE TEAM_IDENTITY_LOCKED TEAM_IDENTITY_ROOT TEAM_IDENTITY_MAIN_ROOT TEAM_IDENTITY_PROJECT TEAM_IDENTITY_INHERIT_ROOT TEAM_IDENTITY_INHERIT_MAIN_ROOT TEAM_IDENTITY_INHERIT_PROJECT TEAM_IDENTITY_INHERIT_SESSION; export TEAM_ROOT=$(m40sq "$REPO"); export TEAM_MAIN_ROOT=$(m40sq "$REPO"); export TEAM_PROJECT=$(m40sq "$(basename "$REPO")"); export TEAM_SESSION=$(m40sq "$SESSION"); "
+LEGACY_REF="${M40_REF_PREFIX}${M36_REF_PREFIX}cd $(printf '%q' "$REPO") && printf \"%s\\n\" \$\$ > $(printf '%q' "$PM_SPAWN") && exec $(printf '%q' "$FAKE/pi") --provider deepseek --model deepseek-flash -e $(printf '%q' "$SKILL_DIR/extension/team-bg.ts") -e $(printf '%q' "$SKILL_DIR/extension/team-inbox-watch.ts") --skill $(printf '%q' "$SKILL_DIR") -c  @$(printf '%q' "$PM_PF")"
 DEFAULT_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
-assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、M36 起带闸门 exports 前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
+assert_eq "M8.1 默认渲染与历史逐字节一致（TEAM_PM_CMD/BIN/RESUME_ARGS 全空；M27 起含 -e bg、M30 起再含 -e inbox-watch、M36 起带闸门 exports 前缀、M40 起带身份环境前缀）" "$DEFAULT_CMD" "$LEGACY_REF"
 assert_has_echo "$DEFAULT_CMD" "extension/team-bg.ts" "M27：PM 默认命令加载 team-bg（后台门禁）"
 assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "M30：PM 默认命令加载 inbox-watch（投递换道）"
 assert_has_echo "$DEFAULT_CMD" " -c  @$PM_PF" "默认仍是 pi -c + @prompt-file（历史行为）"
@@ -4772,7 +4776,7 @@ section "13 · notify 扩展（去重 + 只在 worktree 触发）"
 # （docs/session-format.md），旧夹具省了它；不带 stopReason 的消息不再算完成回合（见 13b）。
 if [ -n "$TS_RUNNER" ]; then
   cat > "$TMP/ext-test.mjs" <<'EOF'
-import { readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 const [, , ext, root, wt] = process.argv
 delete process.env.TMUX_PANE
@@ -4816,6 +4820,33 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
   await handler({}, ctxN(prefix + ' the retry path.'))     // 字节相同的一条：仍然要抑制
   const n2 = readFileSync(inbox, 'utf8').trim().split('\n').length
   if (n2 !== 3) { console.error(`FAIL: F17 重复的同一条没有被去重（${n2} 行）`); process.exit(21) }
+}
+// M40：继承来的 TEAM_ROOT 指到**工作树**（agent 工作树里有 config.sh 副本）也不许改变账本落点：回合通知
+// 必须照旧写主工作树的收件箱。旧实现 env 优先 → cwd 被判成「不在 worktrees 之下」→ 整个通知静默不发
+// （M40 实测：主工作树收件箱 0 行）。这条既是扩展自己的守卫，也是「dispatch 窗口身份 = 目标目录」的对照。
+{
+  const prevEnv = process.env.TEAM_ROOT
+  // 真实形状：agent 工作树里有 .pi/team/config.sh 的**副本**（没有它，旧实现也不会信任指向工作树的 env）。
+  // 收尾时必须把工作树恢复原样（文件 + 我们自己建的目录）—— 14 段的 teardown --purge 看到
+  // `git status --porcelain` 非空就会保留工作树（也提醒我们：夹具不许在别人的工作树里留痕迹）。
+  const wtTeamDir = join(wt, '.pi/team')
+  const hadTeamDir = existsSync(wtTeamDir)
+  const wtCfg = join(wtTeamDir, 'config.sh')
+  const cfgBefore = existsSync(wtCfg) ? readFileSync(wtCfg, 'utf8') : null
+  mkdirSync(wtTeamDir, { recursive: true })
+  writeFileSync(wtCfg, readFileSync(join(root, '.pi/team/config.sh'), 'utf8'))
+  process.env.TEAM_ROOT = wt
+  rmSync(inbox, { force: true })
+  rmSync(join(wt, 'docs/team/inbox/dev.md'), { force: true })
+  rmSync(join(root, '.pi/team/state/notify-dedup'), { force: true })
+  await handler({}, { cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text: 'M40 worktree-root identity' }] } }] } })
+  const n40 = readFileSync(inbox, 'utf8').trim().split('\n').length
+  if (n40 !== 1) { console.error(`FAIL: M40 TEAM_ROOT=worktree 时通知被静默跳过（主工作树收件箱 ${n40} 行）`); process.exit(30) }
+  if (existsSync(join(wt, 'docs/team/inbox/dev.md'))) { console.error('FAIL: M40 通知写进了工作树的收件箱（账本落错地方）'); process.exit(31) }
+  if (cfgBefore === null) rmSync(wtCfg, { force: true })   // 是我们建的 → 收掉
+  else writeFileSync(wtCfg, cfgBefore)                    // 本来就有的副本（可能是**跟踪**文件）→ 逐字节写回
+  if (!hadTeamDir) rmSync(wtTeamDir, { recursive: true, force: true })   // 连空目录一起收掉（是我们建的）
+  if (prevEnv === undefined) delete process.env.TEAM_ROOT; else process.env.TEAM_ROOT = prevEnv
 }
 const before = readFileSync(inbox, 'utf8')
 await handler({}, { cwd: root, sessionManager: { getEntries: () => [] } })   // 主工作树不该触发
@@ -8120,22 +8151,28 @@ print(m)' 2>/dev/null || echo 999)"
   assert_eq "26-m 无第二个窗口：夹具 session 已收干净" \
     "$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c "^$P10_SCOPE$\|^$P10_OTHER$\|^$P10_W2$\|^$P10_W3$" || true)" "0"
   # ④ 没有运行时时 pulse up 拒绝建窗口
+  # M40 迁移：这里以前传 TEAM_SESSION="$SESSION"（smoke 自己的 session），而 --root 是 $P10R（它的
+  # 配置声明 $P10SESS）——即「env 与目录故意不同」的夹具。M40 起身份以目录为准，那种形状会先被身份
+  # 闸门拒掉（拒也拒了，但就不再是「运行时缺失」那条路了）。改成项目自己的 session，并**点名拒绝
+  # 理由**：拒绝必须来自运行时检查，不能靠别的门「差不多绿」。
   if env "PATH=$P10_NOJS" "TEAM_AGENT_CMD=true {prompt}" TEAM_AGENT_BIN=true "TEAM_OPENSPEC_BIN=$FAKE/openspec" \
-        TEAM_SPEC_DIR=openspec TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_SESSION="$SESSION" \
+        TEAM_SPEC_DIR=openspec TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_SESSION="$P10SESS" \
         bash "$SKILL_DIR/scripts/team" --root "$P10R" pulse up >"$TMP/p10-up-nojs.log" 2>&1; then
     bad "26-m 运行时：没有运行时时 pulse up 应拒绝"
   else
     ok "26-m 运行时：没有运行时时 pulse up 拒绝（exit 非 0）"
+    assert_has "$TMP/p10-up-nojs.log" "缺少 JS 运行时" "26-m 运行时：拒绝理由就是缺少 JS 运行时（不是别的门顺带的）"
   fi
   assert_eq "26-m 运行时：pulse up 没有留下 pulse 窗口" \
     "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx pulse || true)" "0"
   # 规格场景写的是旧名（别名期）：`team watchdog up` 走同一条拒绝路径
   if env "PATH=$P10_NOJS" "TEAM_AGENT_CMD=true {prompt}" TEAM_AGENT_BIN=true "TEAM_OPENSPEC_BIN=$FAKE/openspec" \
-        TEAM_SPEC_DIR=openspec TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_SESSION="$SESSION" \
+        TEAM_SPEC_DIR=openspec TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_SESSION="$P10SESS" \
         bash "$SKILL_DIR/scripts/team" --root "$P10R" watchdog up >"$TMP/p10-up-legacy.log" 2>&1; then
     bad "26-m 运行时：没有运行时时 team watchdog up（旧名）也应拒绝"
   else
     ok "26-m 运行时：旧名 team watchdog up 同样拒绝（别名走同一条路径）"
+    assert_has "$TMP/p10-up-legacy.log" "缺少 JS 运行时" "26-m 运行时：旧名的拒绝理由同样是缺少 JS 运行时"
   fi
 
 else
@@ -9492,6 +9529,235 @@ EOF
   tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn" \
         "$REPO/.pi/team/state/pm.pid.starting" "$REPO/.pi/team/state/pm-launch.exit" "$REPO/.pi/team/state/pm-launch-failed.log"
+fi
+
+# ---------------------------------------------------------------- 32. 身份 = 运行时目录（M40）
+# 两起同族实测事故（2026-09-19，用户拍板的设计方向）：shell 继承了别的项目的身份四件套
+# （TEAM_ROOT / TEAM_MAIN_ROOT / TEAM_PROJECT / TEAM_SESSION），而解析顺序是「env 优先于 cwd」：
+#   ① 在 ai_interview 目录里跑 `team up` 被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
+#   ② 在 ai_interview 目录里起的 pulse，面板渲染出 pm-skills 的看板（没有护栏，静默读错项目）。
+# 规格：身份默认从**运行时目录**推导，继承的 TEAM_* 绝不许静默赢过 cwd。这一段钉住四件事：
+#   a) 冲突时观察形式（paths/--print）按 cwd 解析 + 大声告警；env 与目录一致时不吵；
+#   b) 会改共享状态的命令在冲突时被拒，而且真的没落盘；显式授权后按 cwd 动手并落审计；
+#   c) 「同一项目的兄弟工作树」不是冲突（worker 窗口的形状：env 指主工作树、cwd 在 agent 工作树里）；
+#   d) spawn 清洗：pulse / dispatch 起的长驻窗口里，身份是**目标目录**推导出来的（真窗口，FAST 跳过）。
+section "32 · 身份 = 运行时目录（M40：继承的 TEAM_* 不许静默赢过 cwd）"
+cd "$REPO" || exit 1
+M40_D="$TMP/m40"; mkdir -p "$M40_D"
+M40_A="$M40_D/foreign"                       # 「另一个项目」（身份的来源）：真 git 仓库 + 自己的配置
+mkdir -p "$M40_A/.pi/team" "$M40_A/openspec"
+( cd "$M40_A" && git init -q -b main && git commit -q --allow-empty -m x )
+printf 'TEAM_PROJECT="m40-foreign"\nTEAM_SESSION="m40-foreign-session"\nTEAM_AGENTS="rogue"\n' > "$M40_A/.pi/team/config.sh"
+M40_B="$(basename "$REPO")"                  # 运行时目录所属项目
+# 身份家族整体清干净再注入（不继承调用者的任何身份家族变量：面板/子进程/嵌套调用的前缀全靠这条）
+m40_env() { env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_SESSION_FROM \
+    -u TEAM_CONFIG_FILE -u TEAM_ALLOW_FOREIGN_IDENTITY -u TEAM_IDENTITY_LOCKED -u TEAM_IDENTITY_ROOT \
+    -u TEAM_IDENTITY_MAIN_ROOT -u TEAM_IDENTITY_PROJECT -u TEAM_IDENTITY_INHERIT_ROOT \
+    -u TEAM_IDENTITY_INHERIT_MAIN_ROOT -u TEAM_IDENTITY_INHERIT_PROJECT -u TEAM_IDENTITY_INHERIT_SESSION "$@"; }
+# 外来身份（四件套全指向 A）与一致身份（四件套全指向 $REPO）
+m40_foreign() { m40_env TEAM_ROOT="$M40_A" TEAM_MAIN_ROOT="$M40_A" TEAM_PROJECT=m40-foreign TEAM_SESSION=m40-foreign-session "$@"; }
+m40_own() { m40_env TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_PROJECT="$M40_B" TEAM_SESSION="$SESSION" "$@"; }
+
+# ① 外来身份 + cwd=$REPO：观察形式（paths）按 cwd 解析并打不一致警告（事故②里缺的那道门）
+m40_foreign $TEAM paths >"$M40_D/1-paths.log" 2>&1; M40_RC=$?
+assert_eq "32① 外来身份 + team paths 退出码 0（只看不改：按目录解析）" "$M40_RC" "0"
+assert_has "$M40_D/1-paths.log" "TEAM_IDENTITY_CONFLICT" "32① 冲突被大声告警（TEAM_IDENTITY_CONFLICT）"
+assert_has "$M40_D/1-paths.log" "TEAM_ROOT=$M40_A（继承） ≠ $REPO（按目录推导）" "32① 告警逐条点出被忽略的继承值"
+assert_has "$M40_D/1-paths.log" "env -u TEAM_ROOT" "32① 告警给出「清掉继承变量」的出路"
+# 解析结果本身（JSON 那一行）里不许出现继承项目的任何值
+m40_json() { grep '^{ ' "$1" > "${1%.log}.json" 2>/dev/null || true; }   # 只看 JSON 行（告警行就该印继承值）
+m40_json "$M40_D/1-paths.log"
+assert_has "$M40_D/1-paths.json" "\"project\": \"$M40_B\"" "32① 项目按 cwd 解析（$M40_B）"
+assert_has "$M40_D/1-paths.json" "\"main_root\": \"$REPO\"" "32① 主工作树按 cwd 解析"
+assert_has "$M40_D/1-paths.json" "\"worktree\": \"$REPO\"" "32① 工作树按 cwd 解析"
+assert_has "$M40_D/1-paths.json" "\"session\": \"$SESSION\"" "32① 会话按 cwd 项目的配置（不是继承的 m40-foreign-session）"
+assert_not "$M40_D/1-paths.json" "m40-foreign" "32① 解析结果里没有继承项目的名字"
+assert_not "$M40_D/1-paths.json" "rogue" "32① 名册不读继承项目的（rogue 不出现）"
+assert_not "$M40_D/1-paths.json" "$M40_A" "32① 解析结果里没有继承项目的路径"
+# 机读出口的卫生：告警不许掺进 stdout（面板/脚本就是按行解析 stdout 的 JSON/帧）
+m40_foreign $TEAM __panel-data --block frame --events 1 >"$M40_D/1b-panel-data.json" 2>"$M40_D/1b-panel-data.err"; M40_RC=$?
+assert_eq "32① 机读出口（__panel-data）在冲突时仍退出码 0" "$M40_RC" "0"
+assert_eq "32① 机读出口的 stdout 是纯 JSON（首字节就是 {）" "$(head -c1 "$M40_D/1b-panel-data.json")" "{"
+assert_has "$M40_D/1b-panel-data.err" "TEAM_IDENTITY_CONFLICT" "32① 机读出口的告警走 stderr（不弄坏 stdout）"
+assert_has "$M40_D/1b-panel-data.json" "\"project\": \"$M40_B\"" "32① 机读出口的数据是 cwd 项目的"
+
+# ② env 与目录一致：照常、不吵（测试逃生门：夹具的常规用法「env 设到 fixture + cwd 也在 fixture」）
+m40_own $TEAM paths >"$M40_D/2-paths-ok.log" 2>&1; M40_RC=$?
+assert_eq "32② env 与目录一致：退出码 0" "$M40_RC" "0"
+assert_has "$M40_D/2-paths-ok.log" "\"main_root\": \"$REPO\"" "32② 一致时照常解析"
+assert_not "$M40_D/2-paths-ok.log" "TEAM_IDENTITY_CONFLICT" "32② 一致时不吵（没有冲突告警）"
+
+# ③ 会改共享状态的命令在冲突时被拒；拒绝是真的（看板没被写）
+m40_foreign $TEAM board add M40X "外来身份夹具" dev - >"$M40_D/3-refuse.log" 2>&1; M40_RC=$?
+assert_eq "32③ 外来身份下 board add 被拒（退出码 1）" "$M40_RC" "1"
+assert_has "$M40_D/3-refuse.log" "身份冲突被拒" "32③ 拒绝文案点名身份冲突"
+assert_has "$M40_D/3-refuse.log" "当前目录属于 '$M40_B'" "32③ 拒绝文案说清「当前目录属于谁」"
+assert_has "$M40_D/3-refuse.log" "env -u TEAM_ROOT" "32③ 拒绝文案给出「清掉继承变量」的出路"
+assert_has "$M40_D/3-refuse.log" "只看不改：team paths" "32③ 拒绝文案指向只读的排障形式"
+assert_has "$M40_D/3-refuse.log" "TEAM_ALLOW_FOREIGN_IDENTITY=1" "32③ 拒绝文案给出显式授权的逃生门"
+if [ -n "$($TEAM board row M40X 2>/dev/null)" ]; then
+  bad "32③ 被拒的命令竟然留下了看板行（拒绝只是嘴上说说）"
+else
+  ok "32③ 被拒的命令没有落盘（M40X 不在看板里）"
+fi
+
+# ④ 显式授权：按 cwd 动手 + 照旧告警 + 落审计（不是静默放行）
+m40_foreign TEAM_ALLOW_FOREIGN_IDENTITY=1 $TEAM board add M40X "授权夹具" dev - >"$M40_D/4-allow.log" 2>&1; M40_RC=$?
+assert_eq "32④ 显式授权后按 cwd 动手（退出码 0）" "$M40_RC" "0"
+assert_has "$M40_D/4-allow.log" "TEAM_IDENTITY_CONFLICT" "32④ 授权不是静默：照旧打告警"
+assert_has "$M40_D/4-allow.log" "board add M40X" "32④ 动的是 cwd 项目的看板"
+assert_has "$REPO/.pi/team/state/watchdog.log" "TEAM_IDENTITY_ALLOW" "32④ 授权落审计（state/watchdog.log）"
+assert_has "$REPO/.pi/team/state/watchdog.log" "忽略的继承值" "32④ 审计里带被忽略的继承值（事后可倒查）"
+if [ -n "$($TEAM board row M40X 2>/dev/null)" ]; then
+  ok "32④ 授权后看板行真的写进 $M40_B"
+else
+  bad "32④ 授权后看板行没写进去（授权没生效）"
+fi
+
+# ⑤ 同一项目的兄弟工作树不是冲突：worker 窗口的形状（env 指主工作树、cwd 在 agent 工作树里）。
+#    按路径比会把每个 worker 的每条命令都拒掉，所以判据是「它的主工作树 == 我们的主工作树」。
+M40_WT="$REPO/.worktrees/m40probe"
+git -C "$REPO" worktree add -b m40-probe-wt "$M40_WT" "$PROTECTED" >/dev/null 2>&1
+( cd "$M40_WT" && m40_env TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_PROJECT="$M40_B" TEAM_SESSION="$SESSION" \
+    $TEAM paths ) >"$M40_D/5-worktree.log" 2>&1; M40_RC=$?
+assert_eq "32⑤ 兄弟工作树：team paths 退出码 0" "$M40_RC" "0"
+assert_not "$M40_D/5-worktree.log" "TEAM_IDENTITY_CONFLICT" "32⑤ 「env 指主工作树、cwd 在 agent 工作树」不算冲突"
+assert_has "$M40_D/5-worktree.log" "\"worktree\": \"$M40_WT\"" "32⑤ 工作树按 cwd 解析"
+assert_has "$M40_D/5-worktree.log" "\"main_root\": \"$REPO\"" "32⑤ 主工作树照旧是项目的主工作树"
+assert_has "$M40_D/5-worktree.log" "\"session\": \"$SESSION\"" "32⑤ 会话照旧"
+# 改状态的命令也不该被身份闸门误拒（board set 用未知 id：拒绝原因必须是「未知 id」而不是身份冲突）
+( cd "$M40_WT" && m40_env TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_PROJECT="$M40_B" TEAM_SESSION="$SESSION" \
+    $TEAM board set M40NOPE done ) >"$M40_D/5-mutate.log" 2>&1
+assert_not "$M40_D/5-mutate.log" "身份冲突被拒" "32⑤ 工作树里的改状态命令不被身份闸门误拒（worker 每条命令都走这里）"
+assert_has "$M40_D/5-mutate.log" "BOARD.md 更新失败" "32⑤ 它被拒是因为别的原因（未知 id），不是身份"
+git -C "$REPO" worktree remove --force "$M40_WT" >/dev/null 2>&1 || true
+git -C "$REPO" branch -D m40-probe-wt >/dev/null 2>&1 || true
+
+# ⑥ pulse --print（dry-run 形式）：窗口命令里写死的是 cwd 项目的身份，不是继承的 A
+m40_foreign $TEAM pulse up --print >"$M40_D/6-pulse-print.log" 2>&1; M40_RC=$?
+assert_eq "32⑥ 外来身份 + pulse up --print 退出码 0（dry-run 不改任何东西）" "$M40_RC" "0"
+assert_has "$M40_D/6-pulse-print.log" "TEAM_IDENTITY_CONFLICT" "32⑥ dry-run 同样告警"
+assert_has "$M40_D/6-pulse-print.log" "tmux 窗口：$SESSION:" "32⑥ 窗口落在 cwd 项目的 session（不是 m40-foreign-session）"
+assert_has "$M40_D/6-pulse-print.log" "export TEAM_ROOT='$REPO'" "32⑥ 窗口命令写死 cwd 项目的身份"
+assert_has "$M40_D/6-pulse-print.log" "export TEAM_SESSION='$SESSION'" "32⑥ 窗口命令写死 cwd 项目的会话"
+assert_not "$M40_D/6-pulse-print.log" "export TEAM_ROOT='$M40_A'" "32⑥ 继承的 A 身份没进窗口命令"
+assert_not "$M40_D/6-pulse-print.log" "export TEAM_SESSION='m40-foreign-session'" "32⑥ 继承的会话没进窗口命令"
+
+# ⑦ 面板：不静默渲染别的项目 —— 继承身份与 --root/cwd 不一致时按 cwd 渲染 + 留一行（stderr + state/panel.log）
+if [ -n "$JS_RUNNER" ]; then
+  M40_PD="$M40_D/panelstate"
+  m40_env TEAM_ROOT="$M40_A" "$JS_RUNNER" "$SKILL_DIR/scripts/panel/panel.js" --print \
+    --root "$REPO" --state-dir "$M40_PD" --team-cli "$SKILL_DIR/scripts/team" \
+    >"$M40_D/7-panel.out" 2>"$M40_D/7-panel.err"; M40_RC=$?
+  assert_eq "32⑦ 面板 --print（继承 A）退出码 0" "$M40_RC" "0"
+  assert_has "$M40_D/7-panel.err" "TEAM_IDENTITY_CONFLICT (panel)" "32⑦ 面板对继承身份留一行（stderr）"
+  assert_has "$M40_D/7-panel.out" "teamsmith pulse · $M40_B" "32⑦ 面板渲染的是 --root/cwd 项目（$M40_B），不是继承的 A"
+  assert_not "$M40_D/7-panel.out" "m40-foreign" "32⑦ 渲染结果里没有继承项目"
+  assert_has "$M40_PD/panel.log" "ignoring inherited TEAM_ROOT" "32⑦ 同一行也落进本项目的 state/panel.log"
+  M40_PD2="$M40_D/panelstate-ok"
+  m40_own "$JS_RUNNER" "$SKILL_DIR/scripts/panel/panel.js" --print \
+    --root "$REPO" --state-dir "$M40_PD2" --team-cli "$SKILL_DIR/scripts/team" \
+    >"$M40_D/7-panel-ok.out" 2>"$M40_D/7-panel-ok.err"; M40_RC=$?
+  assert_eq "32⑦ 对照：env 与 root 一致时面板退出码 0" "$M40_RC" "0"
+  assert_eq "32⑦ 对照：一致时不吵（stderr 0 行冲突）" "$(grep -cF 'TEAM_IDENTITY_CONFLICT' "$M40_D/7-panel-ok.err" || true)" "0"
+  assert_not_file "$M40_PD2/panel.log" "32⑦ 对照：没有冲突就不写 panel.log"
+  # 面板派出去的**子进程**也拿不到继承身份：tick 子进程（watch --once，会改状态）必须跑完成，
+  # 而不是被身份闸门拒（data.ts 的 cleanIdentityEnv；去掉它，这条就红）
+  m40_env TEAM_ROOT="$M40_A" "$JS_RUNNER" "$SKILL_DIR/scripts/panel/panel.js" --once \
+    --root "$REPO" --state-dir "$M40_PD" --tick-log "$M40_PD/tick.log" --tick-every 900 \
+    --team-cli "$SKILL_DIR/scripts/team" >"$M40_D/7-panel-once.out" 2>"$M40_D/7-panel-once.err"
+  assert_has "$M40_PD/tick.log" "watch --once 完成" "32⑦ 面板的 tick 子进程拿不到继承身份（tick 跑完了，不是被拒）"
+  assert_not "$M40_PD/tick.log" "身份冲突被拒" "32⑦ tick 没有被身份闸门拒（子进程的 env 是洗过的）"
+else
+  cond_skip "32⑦·面板冲突告警" "没有 JS 运行时（panel.js 跑不了）"
+fi
+
+# ⑧ 真窗口：spawn 清洗 —— pulse / dispatch 起的长驻进程，身份是目标目录推导出来的（真进程）
+if [ "$FAST" = "1" ]; then
+  fast_skip "32⑧·spawn 清洗（真窗口）" "要真实 tmux 窗口（pulse up + dispatch），快模式不跑"
+elif [ "$HAVE_TMUX" != "1" ]; then
+  cond_skip "32⑧·spawn 清洗（真窗口）" "没有 tmux"
+else
+  live_mark
+  # 本段自己先占住 pulse 窗口（上一段可能留着别的东西）：拒绝路径要证明的是「没有新窗口」
+  $TEAM pulse down >/dev/null 2>&1 || true
+  tmux kill-window -t "$SESSION:pulse" 2>/dev/null || true
+  # ── ⑧a 未授权：拒绝发生在起窗口之前（现场不留窗口、更不留别的 session）
+  m40_foreign $TEAM pulse up >"$M40_D/8a-refuse.log" 2>&1; M40_RC=$?
+  assert_eq "32⑧a 外来身份下 pulse up（未授权）被拒" "$M40_RC" "1"
+  assert_has "$M40_D/8a-refuse.log" "身份冲突被拒" "32⑧a 拒绝理由：身份冲突"
+  assert_eq "32⑧a 拒绝后没有 pulse 窗口" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx pulse || true)" "0"
+  if tmux has-session -t m40-foreign-session 2>/dev/null; then
+    bad "32⑧a 继承的 session 被建了出来（窗口落错项目）"
+    tmux kill-session -t m40-foreign-session 2>/dev/null || true
+  else
+    ok "32⑧a 继承项目的 session 没被碰（m40-foreign-session 不存在）"
+  fi
+
+  # ── ⑧b 授权后：真起 pulse，窗口里的面板进程带的是本项目身份（事故②的形状，反过来钉住）
+  m40_foreign TEAM_ALLOW_FOREIGN_IDENTITY=1 $TEAM pulse up >"$M40_D/8b-up.log" 2>&1; M40_RC=$?
+  assert_eq "32⑧b 授权后 pulse up 退出码 0" "$M40_RC" "0"
+  assert_has "$M40_D/8b-up.log" "TEAM_IDENTITY_CONFLICT" "32⑧b 授权后照旧告警（不是静默）"
+  assert_eq "32⑧b 窗口建在本项目 session" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx pulse || true)" "1"
+  # 等 pane 里的进程 exec 成面板（pane_pid 的命令行出现 panel.js），再读它真实的 environ
+  M40_W=0; M40_PID=""; M40_PCMD=""
+  while [ "$M40_W" -lt 60 ]; do
+    M40_PID="$(tmux list-panes -t "$SESSION:pulse" -F '#{pane_pid}' 2>/dev/null | head -1)"
+    M40_PCMD="$(tr '\0' ' ' < "/proc/${M40_PID:-0}/cmdline" 2>/dev/null || true)"
+    case "$M40_PCMD" in *panel.js*) break ;; esac
+    sleep 0.25; M40_W=$((M40_W + 1))
+  done
+  if [ -n "$M40_PID" ] && [ -r "/proc/$M40_PID/environ" ]; then
+    tr '\0' '\n' < "/proc/$M40_PID/environ" > "$M40_D/8b-pane-env.log"
+    assert_has "$M40_D/8b-pane-env.log" "TEAM_ROOT=$REPO" "32⑧b 窗口进程 TEAM_ROOT = cwd 项目（面板进程实测 environ）"
+    assert_has "$M40_D/8b-pane-env.log" "TEAM_MAIN_ROOT=$REPO" "32⑧b 窗口进程 TEAM_MAIN_ROOT = cwd 项目"
+    assert_has "$M40_D/8b-pane-env.log" "TEAM_SESSION=$SESSION" "32⑧b 窗口进程 TEAM_SESSION = cwd 项目的会话"
+    assert_not "$M40_D/8b-pane-env.log" "$M40_A" "32⑧b 继承的 A 身份一个字节都没进窗口进程的 environ"
+  else
+    bad "32⑧b 等不到面板进程（pane_pid=${M40_PID:-?} cmd=[$M40_PCMD]）—— 无法证明窗口进程的身份"
+  fi
+  # 面板渲染的是本项目（标题带带项目名）：事故②「渲染出 pm-skills 看板」的反面
+  M40_LOGS_WAIT=0
+  $TEAM pulse logs >"$M40_D/8b-logs.log" 2>&1 || true
+  while [ "$M40_LOGS_WAIT" -lt 40 ]; do
+    grep -qF "teamsmith pulse · $M40_B" "$M40_D/8b-logs.log" 2>/dev/null && break
+    sleep 0.5; $TEAM pulse logs >"$M40_D/8b-logs.log" 2>&1 || true
+    M40_LOGS_WAIT=$((M40_LOGS_WAIT + 1))
+  done
+  assert_has "$M40_D/8b-logs.log" "teamsmith pulse · $M40_B" "32⑧b 面板画面是 cwd 项目（$M40_B）"
+  assert_not "$M40_D/8b-logs.log" "m40-foreign" "32⑧b 面板画面里没有继承项目"
+  $TEAM pulse down >/dev/null 2>&1 || tmux kill-window -t "$SESSION:pulse" 2>/dev/null || true
+
+  # ── ⑧c dispatch：worker 窗口带的是**它的工作树**身份（不是继承的 A，也不是 PM 的目录关系）
+  GPW_BRANCH="$(canon_branch m40w M40W)"
+  cat > "$FAKE/m40-probe.sh" <<EOF
+#!/usr/bin/env bash
+env | sort > "$M40_D/8c-worker-env.log"
+printf 'done\n' > "$M40_D/8c-worker.done"
+exit 0
+EOF
+  chmod +x "$FAKE/m40-probe.sh"
+  printf '# M40W 夹具 brief\n' > "$REPO/.pi/team/state/M40W-brief.md"
+  git -C "$REPO" worktree add -b "$GPW_BRANCH" "$REPO/.worktrees/m40w" "$PROTECTED" >/dev/null 2>&1
+  rm -f "$M40_D/8c-worker-env.log" "$M40_D/8c-worker.done"
+  m40_foreign TEAM_ALLOW_FOREIGN_IDENTITY=1 TEAM_AGENTS="dev m40w" \
+      TEAM_AGENT_CMD="$FAKE/m40-probe.sh" TEAM_AGENT_BIN="$FAKE/m40-probe.sh" \
+      $TEAM dispatch m40w M40W .pi/team/state/M40W-brief.md >"$M40_D/8c-dispatch.log" 2>&1 \
+    && ok "32⑧c 授权后派单成功" || { bad "32⑧c 派单失败"; tail -3 "$M40_D/8c-dispatch.log"; }
+  M40_W=0
+  while [ "$M40_W" -lt 100 ] && [ ! -f "$M40_D/8c-worker.done" ]; do sleep 0.2; M40_W=$((M40_W + 1)); done
+  if [ -f "$M40_D/8c-worker-env.log" ]; then
+    assert_match "$M40_D/8c-worker-env.log" "^TEAM_ROOT=$REPO/.worktrees/m40w\$" "32⑧c worker 窗口 TEAM_ROOT = 它的工作树（目标目录推导）"
+    assert_match "$M40_D/8c-worker-env.log" "^TEAM_MAIN_ROOT=$REPO\$" "32⑧c worker 窗口 TEAM_MAIN_ROOT = 项目主工作树"
+    assert_not "$M40_D/8c-worker-env.log" "$M40_A" "32⑧c 继承的 A 身份一个字节都没进 worker 窗口"
+  else
+    bad "32⑧c worker 窗口的 env 没落盘（探针没跑起来）"
+  fi
+  tmux kill-window -t "$SESSION:m40w" 2>/dev/null || true
+  git -C "$REPO" worktree remove --force "$REPO/.worktrees/m40w" >/dev/null 2>&1 || true
+  git -C "$REPO" branch -D "$GPW_BRANCH" >/dev/null 2>&1 || true
+  rm -f "$REPO/.pi/team/state/m40w.env" "$REPO/.pi/team/state/M40W-brief.md"
+  assert_eq "32⑧c 收尾：夹具窗口清干净" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx m40w || true)" "0"
 fi
 
 section "15 · 完成"
