@@ -5,6 +5,47 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+**未发布（v1.42.0 候选；刻意不用 `##` 标题——版本解析取第一个 `##` 行）**
+
+**M35 · smoke 抖动清查（三条断言改条件轮询）**
+
+- 「attempts 行 state=idle」「M25-② 对照组起来了」「pulse 面板首帧（wd-logs）」三条假红全部改成**等真实条件**
+  的有界轮询；`ps | grep` 的自匹配（`$0` + `[.]` 构造）与「只看 `$3`」两种错法都钉住。
+- 11b3⑤ 的 PM 窗口夹具改确定性空提示符（`bash --noprofile --norc`）。
+- 验收：注入 profile 抖动 + CPU 加压下 10 连跑 0 红，附逐条翻转证据。
+
+**M36 · tmux 破坏性调用闸门（PATH shim）**
+
+- PM 与 worker 会话的 PATH 最前面注入 `tmux` 包装器：**记录**每次调用的 socket/TMUX 变量/argv/调用者 pid+cwd
+  （`state/tmux-calls.log`，默认 server 死亡后可倒查），**拒绝**打默认 socket 的
+  kill-server/kill-session/kill-window/kill-pane（`exit 64`，`TEAM_ALLOW_DESTRUCTIVE_TMUX=1` 放行）。
+- 边界参数容错：无子命令 / 缺值 `-L`/`-S`/`-c` 不再空转（dev 实测死循环 100 分钟的事故），`-V/--version`
+  透传；FIFO 日志目标跳过记录。冒烟含 11 条不挂绊线 + 9 条 argv 逐字节保真。
+
+**M37 · worker 存活判据与 PM 同源（看 pane 进程树）**
+
+- 判据 = pane_pid 本身或其直接子进程命令行命中配置的 agent 可执行文件且 cwd 在本项目内；
+  `pane_current_command` 只作旁证。修掉两次「停了的 agent」假告警（`bash -lc` 起 pi 时 pane_current_command
+  报 bash）。
+
+**M38 · 公开发布准备（只准备，未发布）**
+
+- 根 `package.json`：pi 清单 `pi.skills: ["./skills"]`（**不含** `pi.extensions`——扩展按会话 `-e` 注入）；
+  README 增 Install / Requirements / Quickstart；`docs/team/PUBLISH.md` 发布清单（谁做·在哪做·怎么验证·怎么回滚）；
+  `.github/workflows/gates.yml`（未经真实 CI 验证）；npm 名 `teamsmith` 未被占用。
+- 版本一致性门禁从四处扩到**五处**（含 `package.json`）；`doctor` 的 pi 版本探针改读 stderr（0.76.0–0.79.0
+  的 `--help` 走 stderr，旧探针会假报「版本过旧」）。
+
+**M39 · 6k④ 夹具竞态 + 判据单次快照（exec 落在两次读之间）**
+
+- 机制：`tmux new-window` 返回瞬间 pane 的 cmdline 还是 tmux server 的 argv；判据在一次判定里读两次命令行，
+  `execve` 落在中间就误判成 alive（实测修前 23/175 ≈ 13% 假红）。
+- 夹具侧：断言前有界等窗口成型（pane_pid + 夹具标记），红时自带现场；实现侧：一次判定只读一次命令行快照。
+
+**M34 · work 页看板卡活跃置顶（用户拍板）**
+
+- 活跃态（todo/wip/review/blocked）保持文件序置顶，随后是 keep 的 done/dropped 历史；看板页（按车道分组）不动。
+
 ## v1.41.0 · 2026-09-19
 
 **控制台第四页：看板 + markdown 详情 + 有界帧（openspec change `console-board-page` 归档；P18/P18.1）**
