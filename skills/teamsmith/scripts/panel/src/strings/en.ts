@@ -166,6 +166,7 @@ export const en = {
   keyScroll: '↑/↓ scroll',
   keyLanes: '←/→ lanes',
   keyCards: '↑/↓ cards',
+  keyRows: '↑/↓ rows',
   keyOpen: 'Enter open',
   keyDetailClose: 'Esc/q back',
   keyDetailTabs: '←/→ file',
@@ -173,8 +174,9 @@ export const en = {
   keyQuit: 'q collapse',
 
   // Input line and receipts
-  composeHint: 'Enter send · Esc cancel (draft kept) · C-e editor',
-  composeReasonHint: 'Enter standby · Esc cancel',
+  composeHint: 'Enter send · C-j newline · Esc cancel (draft kept) · C-o editor',
+  composeHiddenAbove: '↑{n} rows',
+  composeReasonHint: 'Enter standby · C-j newline (as a space) · Esc cancel',
   composeTitle: 'Message',
   composeStandbyTitle: 'Standby reason',
   receiptDelivered: '✓ delivered to the PM · delivered',

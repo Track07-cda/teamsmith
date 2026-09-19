@@ -72,10 +72,12 @@ window, one process, the tick keeps logging. `team pulse up` restores the consol
 
 ## Compose and the three actions (pulse-console B2)
 
-`m` opens a bottom input line **on any page**; Enter sends through the guarded delivery path and the receipt is
-one of three honest states — **delivered**, **queued** (the PM's box is busy) or **held** (the payload is in
-`state/outbox/held/`). Esc keeps the draft in `state/draft.md` and the next `m` brings it back; `C-e` hands the
-draft to `$EDITOR` with rendering suspended for the whole handoff. `f` runs `team outbox flush` and `s`
+`m` opens a bottom input line **on any page**; the draft is edited at an insertion point (arrow keys, Home/End,
+pi's word/line keys, kill ring and undo) and `C-j` inserts a line break while Enter sends through the guarded
+delivery path. The receipt is one of three honest states — **delivered**, **queued** (the PM's box is busy) or
+**held** (the payload is in `state/outbox/held/`). Esc keeps the draft in `state/draft.md` and the next `m`
+brings it back; `C-o` hands the draft to `$EDITOR` with rendering suspended for the whole handoff (`C-e` is the
+line-end key). `f` runs `team outbox flush` and `s`
 toggles standby (switching it on asks for a one-line reason in the same input line). The console itself never
 types into the PM's pane — every delivery is the owning command's, and the input line keeps refreshing the
 rest of the frame while it is open.

@@ -26,7 +26,7 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   task ID --title ... [--agent a] [--deps ...] [--issue N]
                   生成任务书 <docs>/tasks/ID-slug.md 并在 BOARD.md 建行
   board add|set|row|ls    BOARD.md 行管理（add / set ID 状态 / row ID / ls）
-  thread <agent> ["msg"]   追加 / 读取消息线程（append-only）
+  thread <agent> ["msg"]   追加 / 读取往来记录（append-only）
   report ID <agent> [--force]  生成报告骨架
 
   ── 派单与协作 ─────────────────────────────────────────────

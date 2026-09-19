@@ -76,7 +76,7 @@ team_cmd_thread() {
   local f="$TEAM_DOCS_ABS/threads/$agent.md"
   mkdir -p "$(dirname "$f")"
   if [ -z "$body" ]; then
-    [ -f "$f" ] && cat "$f" || team_warn "线程还没有内容：$f"
+    [ -f "$f" ] && cat "$f" || team_warn "往来记录还没有内容：$f"
     return 0
   fi
   { [ -s "$f" ] && printf '\n'; printf '### %s · from: %s · re: %s\n%s\n' "$(team_timestamp)" "$from" "$re" "$body"; } >> "$f"

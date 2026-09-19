@@ -4,6 +4,7 @@
 #   bash skills/teamsmith/tests/panel-cpu.sh [tree] [seconds]
 #   TEAM_PANEL_CPU_PAGE=4 bash skills/teamsmith/tests/panel-cpu.sh   # park it on the board page
 #   TEAM_PANEL_CPU_DETAIL=1 bash skills/teamsmith/tests/panel-cpu.sh # open the markdown detail view
+#   TEAM_PANEL_CPU_COMPOSE=1 bash skills/teamsmith/tests/panel-cpu.sh # hold the compose line open
 #
 # Runs the console in a fixture pane of a **private tmux server** (`-L p12cpu-$$`, the team session is
 # never touched) and reports three numbers over the window:
@@ -64,15 +65,31 @@ case "${TEAM_PANEL_CPU_PAGE:-}" in 1|2|3|4) page_flag=" --page ${TEAM_PANEL_CPU_
 # TEAM_PANEL_CPU_DETAIL=1 measures the markdown detail view's own steady state (P18/B3): the knob
 # opens page 4 + the focused card's detail after warm-up. It runs with a private state dir, because
 # sending keys must never write the real project's panel-page/panel.conf files.
+# TEAM_PANEL_CPU_COMPOSE=1 (P20/B1 1.8) keeps the compose line open with a typed draft for the
+# sampling window: the insertion point, the window and the cursor placement must not cost more than
+# the idle console (same private state dir — the draft must never land in the real project).
 detail_flag=""
+compose_flag=""
 state_flag=""
-if [ "${TEAM_PANEL_CPU_DETAIL:-0}" = "1" ]; then
-  detail_flag=1
+compose_env=""
+if [ "${TEAM_PANEL_CPU_DETAIL:-0}" = "1" ] || [ "${TEAM_PANEL_CPU_COMPOSE:-0}" = "1" ]; then
+  [ "${TEAM_PANEL_CPU_DETAIL:-0}" = "1" ] && detail_flag=1
+  [ "${TEAM_PANEL_CPU_COMPOSE:-0}" = "1" ] && compose_flag=1
   state_dir="${time_out}.state"
   mkdir -p "$state_dir"
   state_flag=" --state-dir $state_dir"
 fi
-pane_cmd="cd '$tree' && exec '$time_bin' -o '$time_out' -f 'P12CPU user=%U sys=%S elapsed=%e' -- '$js' '$panel' --root '$tree' --team-cli '$tree/skills/teamsmith/scripts/team' --no-pulse --refresh $refresh${page_flag}${state_flag}"
+if [ -n "$compose_flag" ]; then
+  # The C-v press must not read the real clipboard: a failing fake pair keeps the probe local and
+  # instant (the red line is about the frame, not about what the clipboard holds).
+  fakebin="${time_out}.fakebin"
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/wl-paste"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/xclip"
+  chmod +x "$fakebin/wl-paste" "$fakebin/xclip"
+  compose_env="PATH=$fakebin:\$PATH "
+fi
+pane_cmd="cd '$tree' && ${compose_env}exec '$time_bin' -o '$time_out' -f 'P12CPU user=%U sys=%S elapsed=%e' -- '$js' '$panel' --root '$tree' --team-cli '$tree/skills/teamsmith/scripts/team' --no-pulse --refresh $refresh${page_flag}${state_flag}"
 tmux -L "$sock" new-session -d -s "$sess" -x 140 -y 34 -c "$tree" "sleep 600"
 first_frame_ms=""
 spawn_ms="$(date +%s%3N)"
@@ -101,6 +118,17 @@ if [ -n "$detail_flag" ]; then
   sleep 3
   printf '== detail view open for the sampling window (page 4 + Enter; %s) ==\n' \
     "$(tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -c '详情' | tr -d ' ')"
+fi
+
+if [ -n "$compose_flag" ]; then
+  tmux -L "$sock" send-keys -t "$sess:console" m 2>/dev/null || true
+  sleep 1
+  tmux -L "$sock" send-keys -l -t "$sess:console" 'a draft used to hold the compose line open for the red-line sample' 2>/dev/null || true
+  sleep 1
+  tmux -L "$sock" send-keys -t "$sess:console" C-v 2>/dev/null || true
+  sleep 1
+  printf '== compose line open for the sampling window (draft typed; %s) ==\n' \
+    "$(tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -c 'Enter 发送' | tr -d ' ')"
 fi
 
 time_pid="$(tmux -L "$sock" list-panes -t "$sess:console" -F '#{pane_pid}' 2>/dev/null | head -1)"

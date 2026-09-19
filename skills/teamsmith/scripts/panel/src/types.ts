@@ -373,6 +373,8 @@ export interface Frame {
   lanes?: LaneWindow[]
   /** The detail view's document window (absent while the view is closed). */
   detail?: DetailWindow
+  /** The work page's board rows in the order they were drawn (the App's `↑`/`↓` walk this). */
+  boardOrder?: string[]
 }
 
 export interface FrameInput {

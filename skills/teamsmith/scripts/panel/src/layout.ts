@@ -235,6 +235,8 @@ interface Block {
   lanes?: LaneWindow[]
   /** The detail view's document window as rendered (the App clamps its arrows and wheel). */
   detail?: DetailWindow
+  /** The work page's board rows in the order it drew them (P20/B5: the App's `↑`/`↓` walk this). */
+  order?: string[]
 }
 
 const BOX_TL = '╭'
@@ -673,22 +675,33 @@ function boardBlock(ctx: Ctx): Block | null {
     ...rows.filter((r) => r.state !== 'done' && r.state !== 'dropped'),
     ...rows.filter((r) => (r.state === 'done' || r.state === 'dropped') && keepDone.has(r.id)),
   ]
+  // The focus the rows are drawn with (P20/B5): the shared entry-id focus when it is among the
+  // drawn rows, otherwise the first drawn row — the requirement's "the focused row is always among
+  // the rows the block renders". An empty or degraded board has no drawn row, hence no focus.
+  const order = rendered.map((r) => r.id)
+  const focusId = order.length ? (ctx.view.focus && order.includes(ctx.view.focus.id) ? ctx.view.focus.id : order[0]) : null
   for (const r of rendered) {
-    lines.push({
-      line: truncLine(
-        ln(
-          seg(`  ${GLYPH[r.state] ?? '·'} `, BOARD_STATE_TONE[r.state] ?? 'text'),
-          seg(cell(r.id, 10), 'accent'),
-          seg(cell(r.agent, 8), 'dim'),
-          seg(cell(boardStateText(r.state, s), 8), BOARD_STATE_TONE[r.state] ?? 'text'),
-          seg(r.title),
-        ),
-        width,
-      ),
-    })
+    const focused = r.id === focusId
+    const row = ln(
+      seg(focused ? `${FOCUS_CURSOR} ` : '  ', focused ? 'selected' : 'dim'),
+      seg(`${GLYPH[r.state] ?? '·'} `, BOARD_STATE_TONE[r.state] ?? 'text'),
+      seg(cell(r.id, 10), focused ? 'selected' : 'accent'),
+      seg(cell(r.agent, 8), 'dim'),
+      seg(cell(boardStateText(r.state, s), 8), BOARD_STATE_TONE[r.state] ?? 'text'),
+      seg(r.title),
+    )
+    const action: Action = focused ? { kind: 'open-focused', lane: r.state } : { kind: 'focus', lane: r.state, id: r.id }
+    lines.push(placedWithHits(row, ctx.view.tui ? [{ start: 0, end: widthOf(row), action }] : undefined, width))
   }
   if (folded > 0) lines.push({ line: truncLine(ln(seg(`  ${fill(s.boardDoneCollapsed, { n: folded })}`, 'dim')), width) })
-  return { id: 'board', title: fill(s.boardHeadingCount, { n: board.total ?? rows.length }), priority: 10, lines, summary: { line: truncLine(ln(seg(` ${fill(s.boardHeadingCount, { n: board.total ?? rows.length })}`, 'heading')), width) } }
+  return {
+    id: 'board',
+    title: fill(s.boardHeadingCount, { n: board.total ?? rows.length }),
+    priority: 10,
+    lines,
+    order,
+    summary: { line: truncLine(ln(seg(` ${fill(s.boardHeadingCount, { n: board.total ?? rows.length })}`, 'heading')), width) },
+  }
 }
 
 // ------------------------------------------------------------------ the board page (kanban, P18/B2)
@@ -1245,7 +1258,7 @@ function healthBlock(ctx: Ctx): Block | null {
 
 // ------------------------------------------------------------------ footer and overlay
 
-function keyBandBlock(ctx: Ctx): Block {
+function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
   const { s, width } = ctx
   const actions: { text: string; action: Action }[] = [
     { text: s.keyCompose, action: { kind: 'compose' } },
@@ -1263,7 +1276,14 @@ function keyBandBlock(ctx: Ctx): Block {
         { text: s.keyDetailScroll, action: { kind: 'detail-scroll', delta: 1 } },
         { text: s.keyPages, action: { kind: 'page-cycle' } },
       ]
-    : ctx.view.page === 4
+    : ctx.view.page === 2 && rowsAvailable
+      ? [
+          { text: s.keyRows, action: { kind: 'card-move', delta: 1 } },
+          { text: s.keyOpen, action: { kind: 'open-focused', lane: 'todo' } },
+          { text: s.keyPages, action: { kind: 'page-cycle' } },
+          { text: s.keyQuit, action: { kind: 'quit' } },
+        ]
+      : ctx.view.page === 4
       ? [
           { text: s.keyLanes, action: { kind: 'lane-move', delta: 1 } },
           { text: s.keyCards, action: { kind: 'card-move', delta: 1 } },
@@ -1427,7 +1447,11 @@ function pageDefinitions(ctx: Ctx): Block[] {
       )
       break
     case 2:
-      blocks.push(boardBlock(left()), changesBlock(right()), specsBlock(right()), decisionsBlock(right()))
+      // The detail view replaces the work page's blocks exactly as it replaces the kanban's.
+      blocks.push(
+        ctx.view.detail ? detailBlock(ctx) : boardBlock(left()),
+        ...(ctx.view.detail ? [] : [changesBlock(right()), specsBlock(right()), decisionsBlock(right())]),
+      )
       break
     case 3:
       blocks.push(queueBlock(left()), inboxBlock(right()), patrolBlock(right()), trendBlock(right()), healthBlock(right()))
@@ -1498,10 +1522,14 @@ export function layout(input: LayoutInput): Frame {
   const rightBlocks = middle.filter((b) => !b.full && b.right)
 
   const framed = isFramed(ctx)
+  let boardOrder: string[] | undefined
   const place = (block: Block, remaining: number, colWidth: number): PlacedLine[] => {
     const kind = pickChrome(block, remaining, framed)
     if (kind === null) return []
     if (kind === 'summary') return [summaryLine(block, colWidth)]
+    // The order is only reported for a block that really draws its rows: a block degraded to its
+    // summary line has no row to focus (P20/B5).
+    if (block.order) boardOrder = block.order
     return wrapBlock(block, colWidth, kind)
   }
 
@@ -1631,20 +1659,26 @@ export function layout(input: LayoutInput): Frame {
     }
   }
 
+  // The work page's row chips are rebuilt after placement: they exist only while the board block
+  // really draws rows, so a degraded work page has no clickable row key that cannot open anything
+  // (P20/B5). Both variants are one line, so the budget above is unaffected.
+  const footerShown =
+    ctx.view.page === 2 && !ctx.view.detail && !ctx.view.overlay && !boardOrder ? keyBandBlock(ctx, false) : footer
+
   // The footer is the last row; when the height cannot even hold it, it is the only row kept.
-  if (height > 0 && rows.length + footer.lines.length > height) {
-    const room = Math.max(0, height - footer.lines.length)
+  if (height > 0 && rows.length + footerShown.lines.length > height) {
+    const room = Math.max(0, height - footerShown.lines.length)
     rows.length = Math.min(rows.length, room)
   }
   // B1 (the bounded-frame red line): a bounded frame fills its height. Whatever the content did not
   // naturally use becomes blank *content* rows directly above the footer, so the key band is the
   // frame's last row and no blank row follows it. The uncapped `--print` path (height <= 0) never
   // reaches this branch, so its bytes stay identical.
-  if (height > 0 && rows.length + footer.lines.length < height) {
-    const spare = height - footer.lines.length - rows.length
+  if (height > 0 && rows.length + footerShown.lines.length < height) {
+    const spare = height - footerShown.lines.length - rows.length
     for (let i = 0; i < spare; i++) rows.push({ line: [] })
   }
-  add(footer.lines)
+  add(footerShown.lines)
 
   const trimmed = rows.slice(0, height > 0 ? height : rows.length)
   const targets: { row: number; hit: Hit }[] = []
@@ -1667,6 +1701,7 @@ export function layout(input: LayoutInput): Frame {
     targets,
     ...(laneWindows ? { lanes: laneWindows } : {}),
     ...(detailWindow ? { detail: detailWindow } : {}),
+    ...(boardOrder ? { boardOrder } : {}),
   }
 }
 

@@ -122,10 +122,10 @@ export const zh = {
   queueFullHeading: '条目全文：{name}',
   queueMeta: 'kind={kind} target={target} from={from}',
 
-  // 收件箱与线程
-  inboxHeading: '收件箱与线程',
-  inboxLine: '收件箱 {inbox} 条 · 线程 {thread} 条 · {age}',
-  inboxEmpty: '（没有收件箱/线程记录）',
+  // 收件箱与往来记录（P20/B6：docs/team/threads/ 的中文名只叫 往来）
+  inboxHeading: '收件箱与往来',
+  inboxLine: '收件箱 {inbox} 条 · 往来 {thread} 条 · {age}',
+  inboxEmpty: '（没有收件箱/往来记录）',
 
   // 巡检日志与容量趋势
   patrolHeading: '巡检日志',
@@ -166,6 +166,7 @@ export const zh = {
   keyScroll: '↑/↓ 滚动',
   keyLanes: '←/→ 车道',
   keyCards: '↑/↓ 卡片',
+  keyRows: '↑/↓ 行',
   keyOpen: 'Enter 打开',
   keyDetailClose: 'Esc/q 返回',
   keyDetailTabs: '←/→ 文件',
@@ -173,8 +174,9 @@ export const zh = {
   keyQuit: 'q 收起',
 
   // 输入行与回执
-  composeHint: 'Enter 发送 · Esc 取消（保留草稿）· C-e 编辑器',
-  composeReasonHint: 'Enter 进入待命 · Esc 取消',
+  composeHint: 'Enter 发送 · C-j 换行 · Esc 取消（保留草稿）· C-o 编辑器',
+  composeHiddenAbove: '↑{n} 行',
+  composeReasonHint: 'Enter 进入待命 · C-j 换行（变空格）· Esc 取消',
   composeTitle: '写信',
   composeStandbyTitle: '待命原因',
   receiptDelivered: '✓ 已送达 PM · delivered',

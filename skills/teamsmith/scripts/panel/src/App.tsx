@@ -11,12 +11,12 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
-import { Box, Text, useApp, useInput } from 'ink'
+import { Box, Text, useApp, useCursor, useInput } from 'ink'
 import { layout, resolveFocus, rowKey } from './layout.js'
 import type { LayoutInput } from './layout.js'
 import { clockOf } from './format.js'
 import { stringsFor, type Strings } from './strings/index.js'
-import { backspace, inputLines, intake, receiptLine, type ComposeMode, type Receipt } from './compose.js'
+import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
 import type { Action, DetailWindow, FrameInput, PageId, PrefName, Segment, ViewState } from './types.js'
 import type { Palette } from './theme.js'
@@ -48,6 +48,11 @@ export interface PanelApi {
   setStandby(on: boolean, reason: string): Promise<{ ok: boolean; line: string }>
   /** Hand the terminal to `$EDITOR`; resolves with the (possibly edited) draft. */
   editDraft(text: string): Promise<string>
+  /**
+   * The `C-v` clipboard probe (P20/B4): `path` = a temporary image file to insert, `text` = the
+   * clipboard's text, `none` = nothing to paste. Never called from the render/refresh path.
+   */
+  pasteClipboard(): Promise<{ kind: 'path' | 'text' | 'none'; value: string }>
   /** Rebuild the cache now (after an action that changed the state the frame reads). */
   refreshNow(): void
   /** True while an external program owns the terminal (the render callback must not run). */
@@ -56,6 +61,11 @@ export interface PanelApi {
   clockNowMs(): number
   /** Register the title band's base row + palette for the out-of-React clock writer (null = off). */
   registerClockRow(row: Segment[] | null, palette: Palette): void
+  /**
+   * Register the compose insertion point (Ink-output coordinates) for the cursor-aware stdout,
+   * which re-asserts it absolutely after every Ink write; null = not composing (cursor hidden).
+   */
+  setComposeCursor(position: { x: number; y: number } | null): void
   /** Persist one preference (`state/panel.conf`). */
   saveSettings(settings: Settings): void
   /** Remember the current page (`state/panel-page`). */
@@ -184,6 +194,10 @@ export function App({
   const [composing, setComposing] = useState(false)
   const [mode, setMode] = useState<ComposeMode>('message')
   const [draft, setDraft] = useState('')
+  // The insertion point, as a codepoint index into the draft (P20/B1). It lives in a ref beside the
+  // state because the input handler edits the draft synchronously (two keys in one React batch must
+  // see each other's result, the same reason `draftRef` exists).
+  const [cursor, setCursor] = useState(0)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -204,6 +218,18 @@ export function App({
   const scrollRef = useRef(0)
   const dataRef = useRef(frame)
   const draftRef = useRef('')
+  const cursorRef = useRef(0)
+  // pi's recoverable deletions (P20/B2): the ring, the bounded undo history and the one-step
+  // yank-pop state. They are refs, not state, because two keys inside one React batch must see
+  // each other's result (the same reason `draftRef` exists).
+  const killRingRef = useRef<KillRing>({ entries: [], lastDirection: null })
+  const undoRef = useRef<UndoSnapshot[]>([])
+  /** How many `alt+y` pops followed the last yank, and how long the text it inserted is. */
+  const yankRef = useRef<{ pops: number; length: number } | null>(null)
+  /** pi's `lastAction`: `alt+y` only pops right after a yank. */
+  const lastActionRef = useRef<'yank' | 'edit' | null>(null)
+  /** One clipboard probe at a time: a second `C-v` while one is in flight is a no-op. */
+  const probingRef = useRef(false)
   const pasteOpenRef = useRef(false)
   const settingsRef = useRef(settings)
   const pageRef = useRef(page)
@@ -212,6 +238,8 @@ export function App({
   const focusRef = useRef<{ lane: string; id: string } | null>(null)
   const laneOffsetRef = useRef<Record<string, number>>({})
   const lanesRef = useRef<{ lane: string; offset: number; visible: number; count: number }[]>([])
+  /** The work page's board rows in the order the last frame drew them (P20/B5). */
+  const boardOrderRef = useRef<string[]>([])
   const detailRef = useRef<DetailWindow | null>(null)
   const detailIdRef = useRef<string | null>(null)
   const detailIndexRef = useRef(0)
@@ -271,6 +299,44 @@ export function App({
     [api],
   )
 
+  /** Move the insertion point (clamped by the model's callers, never past the draft's ends). */
+  const setPoint = useCallback((next: number) => {
+    cursorRef.current = next
+    setCursor(next)
+  }, [])
+
+  /** One draft edit at the insertion point: text, point and `state/draft.md` move together. */
+  const updateCompose = useCallback(
+    (next: { text: string; cursor: number }, persist = true) => {
+      draftRef.current = next.text
+      cursorRef.current = next.cursor
+      setDraft(next.text)
+      setCursor(next.cursor)
+      if (persist) api.writeDraft(next.text)
+    },
+    [api],
+  )
+
+  /**
+   * The width one drawn draft row has: the boxed (comfortable) tray eats two columns, the compact
+   * style draws the raw rows. This must be the same expression `lines` uses to build the rows, so
+   * the cursor's visual-row moves and the drawn wrapping can never disagree.
+   */
+  const composeWidth = useCallback(
+    () => (composing && settings.density === 'comfortable' ? Math.max(1, size.columns - 2) : size.columns),
+    [composing, settings.density, size.columns],
+  )
+
+  /** The window's draft capacity: at most half the pane, and never so many rows that the input
+   * area would push the rendered frame past the pane (an overflow scrolls, which would move the
+   * frame's top row away from the coordinate the cursor is placed in). */
+  const composeMaxRows = useCallback(() => {
+    if (size.rows <= 0) return Number.MAX_SAFE_INTEGER
+    const boxed = composing && settings.density === 'comfortable'
+    const avail = size.rows - 3 - 1 - (boxed ? 1 : 0) - (busy ? 1 : 0)
+    return Math.max(1, Math.min(Math.floor(size.rows / 2), avail))
+  }, [busy, composing, settings.density, size.rows])
+
   const openCompose = useCallback(
     (withMode: ComposeMode = 'message') => {
       setReceipt(null)
@@ -280,6 +346,14 @@ export function App({
       draftRef.current = seed
       pasteOpenRef.current = false
       setDraft(seed)
+      // The insertion point opens at the end of the restored draft (the cursor is not persisted).
+      cursorRef.current = cpLength(seed)
+      setCursor(cpLength(seed))
+      // The undo history and the ring start empty at the draft the compose opened on.
+      killRingRef.current = { entries: [], lastDirection: null }
+      undoRef.current = []
+      yankRef.current = null
+      lastActionRef.current = null
       setComposing(true)
     },
     [api],
@@ -324,6 +398,7 @@ export function App({
       setStatus(null)
       if (r.state !== 'error') {
         updateDraft('', false)
+        setPoint(0)
         api.clearDraft()
       }
       setComposing(false)
@@ -369,9 +444,37 @@ export function App({
     if (!r.ok) setStatus(r.line)
   }, [api])
 
+  /**
+   * `C-v`: paste the clipboard (P20/B4). The probe runs only here — never on the render or refresh
+   * path — and one probe at a time; while it runs the frame keeps rendering and typing keeps landing
+   * in the draft. An image becomes its temporary file path, a non-image the clipboard's text, and a
+   * failed probe changes nothing (no error line, no file).
+   */
+  const pasteClipboard = useCallback(async () => {
+    if (busy || probingRef.current) return
+    probingRef.current = true
+    try {
+      const read = await api.pasteClipboard()
+      if (read.kind === 'none' || read.value === '') return
+      const text = draftRef.current
+      const point = cursorRef.current
+      pushUndo(undoRef.current, text, point)
+      killRingRef.current = resetKillDirection(killRingRef.current)
+      yankRef.current = null
+      lastActionRef.current = 'edit'
+      const flatten = (value: string): string => (mode === 'reason' ? value.replace(/\n/g, ' ') : value)
+      // The insertion point is read *after* the probe settles: a keystroke during the probe lands
+      // before the paste, exactly where the point then is.
+      updateCompose(insertAt(draftRef.current, cursorRef.current, flatten(read.value)), mode === 'message')
+    } finally {
+      probingRef.current = false
+    }
+  }, [api, busy, mode, updateCompose])
+
   const relayEditor = useCallback(async () => {
-    // The editor relay writes `state/draft.md`; in reason mode that would clobber the message
-    // draft, and a long reason is not the flow the design asks for — C-e belongs to the letter.
+    // `C-o` hands the draft to `$EDITOR`. The editor relay writes `state/draft.md`; in reason mode
+    // that would clobber the message draft, and a long reason is not the flow the design asks for —
+    // `C-o` belongs to the letter.
     if (busy || composing === false || mode !== 'message') return
     // Ink's own input must be deactivated for the handoff: both Ink and `$EDITOR` read the same
     // pty, and whoever reads a keystroke first consumes it (measured: `:wq` never reached vi
@@ -383,6 +486,13 @@ export function App({
     try {
       const next = await api.editDraft(draftRef.current)
       updateDraft(next, mode === 'message')
+      setPoint(cpLength(next))
+      // The editor may have replaced the whole draft: an undo that resurrected pre-editor text
+      // would be a lie, so the history (and the ring) restarts here (design §5).
+      undoRef.current = []
+      killRingRef.current = { entries: [], lastDirection: null }
+      yankRef.current = null
+      lastActionRef.current = null
     } finally {
       setEditorOpen(false)
     }
@@ -466,6 +576,33 @@ export function App({
     [boardRows],
   )
 
+  /** The entry id's board state, for the focus state's `lane` field on the work page. */
+  const laneOfId = useCallback(
+    (id: string) => boardRows().find((r) => r.id === id)?.state ?? 'todo',
+    [boardRows],
+  )
+
+  /**
+   * The work page's `↑`/`↓` (P20/B5): walk the ids in the order the block drew them, so the keys
+   * touch exactly what is on screen. The first press with no usable focus lands on the first drawn
+   * row, and a focus whose entry left the board re-anchors there too.
+   */
+  const moveBoardFocus = useCallback(
+    (delta: number) => {
+      const order = boardOrderRef.current
+      if (!order.length) return
+      const id = focusRef.current?.id ?? ''
+      const idx = order.indexOf(id)
+      if (idx < 0) {
+        setFocus({ lane: laneOfId(order[0]), id: order[0] })
+        return
+      }
+      const next = order[Math.max(0, Math.min(order.length - 1, idx + delta))]
+      if (next !== id) setFocus({ lane: laneOfId(next), id: next })
+    },
+    [laneOfId],
+  )
+
   const scrollLane = useCallback((lane: string, delta: number) => {
     const win = lanesRef.current.find((w) => w.lane === lane)
     const max = win ? Math.max(0, win.count - win.visible) : Number.MAX_SAFE_INTEGER
@@ -478,6 +615,14 @@ export function App({
     setDetailScroll(0)
     setDetailId(id)
   }, [])
+
+  /** Enter on the work page: open the focused row (or the first drawn one, when it left the board). */
+  const openWorkFocused = useCallback(() => {
+    const order = boardOrderRef.current
+    if (!order.length) return
+    const id = focusRef.current && order.includes(focusRef.current.id) ? focusRef.current.id : order[0]
+    openDetail(id)
+  }, [openDetail])
 
   /** The detail view's file tabs: `←`/`→` clamp at the ends (no wrap — the row shows the order). */
   const moveDetailTab = useCallback((delta: number) => {
@@ -555,6 +700,12 @@ export function App({
           setFocus({ lane: action.lane, id: action.id })
           return
         case 'open-focused': {
+          // One action kind, two pages: the kanban resolves its lane/card focus, the work page the
+          // drawn row order (P20/B5).
+          if (pageRef.current === 2) {
+            openWorkFocused()
+            return
+          }
           const current = resolveFocus(boardRows(), focusRef.current)
           if (current) openDetail(current.id)
           return
@@ -563,7 +714,8 @@ export function App({
           moveFocus(action.delta, 0)
           return
         case 'card-move':
-          moveFocus(0, action.delta)
+          if (pageRef.current === 2) moveBoardFocus(action.delta)
+          else moveFocus(0, action.delta)
           return
         case 'lane-scroll':
           scrollLane(action.lane, action.delta)
@@ -583,7 +735,7 @@ export function App({
           return
       }
     },
-    [boardRows, collapse, cyclePref, goPage, moveDetailTab, moveFocus, openCompose, openDetail, runAction, scrollDetail, scrollLane, updateScroll],
+    [boardRows, collapse, cyclePref, goPage, moveBoardFocus, moveDetailTab, moveFocus, openCompose, openDetail, openWorkFocused, runAction, scrollDetail, scrollLane, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -598,13 +750,22 @@ export function App({
     }
     const boxed = composing && settings.density === 'comfortable'
     const inputWidth = boxed ? Math.max(1, size.columns - 2) : size.columns
-    const rawInput = composing ? inputLines(mode, draft, inputWidth) : []
+    // One windowed view for the whole compose surface: the drawn rows, the point's drawn position
+    // and the hidden-rows count all come from the same row map (P20/B1).
+    const inputView: ComposeView | null = composing
+      ? cursorView(mode, draft, cursor, inputWidth, composeMaxRows(), strings.composeHiddenAbove)
+      : null
+    const rawInput = inputView?.lines ?? []
     const trayTitle = mode === 'message' ? strings.composeTitle : strings.composeStandbyTitle
     const input = boxed
       ? [composeTrayTop(trayTitle, size.columns), ...rawInput.map((line) => `${TRAY_V} ${line}`)]
       : rawInput
     const hint = composing ? [mode === 'message' ? strings.composeHint : strings.composeReasonHint] : []
-    const frameRows = size.rows > 0 ? Math.max(3, size.rows - input.length - hint.length - bottom.length) : data.height
+    // The in-flight-send row is part of the pane too: counting it keeps the rendered output at the
+    // pane's height, so the frame never scrolls (the absolute cursor position depends on the frame
+    // starting at the pane's first row).
+    const busyRow = busy ? 1 : 0
+    const frameRows = size.rows > 0 ? Math.max(3, size.rows - input.length - hint.length - bottom.length - busyRow) : data.height
     const view: ViewState = {
       page,
       density: settings.density,
@@ -634,11 +795,12 @@ export function App({
       height: frameRows,
       view,
     } as LayoutInput)
-    const pad = size.rows > 0 ? Math.max(0, size.rows - input.length - hint.length - bottom.length - themed.rows.length) : 0
+    const pad = size.rows > 0 ? Math.max(0, size.rows - input.length - hint.length - bottom.length - busyRow - themed.rows.length) : 0
     targetsRef.current = themed.targets
     lanesRef.current = themed.lanes ?? []
+    boardOrderRef.current = themed.boardOrder ?? []
     detailRef.current = themed.detail ?? null
-    return { frame: themed, input, hint, bottom, pad, boxed }
+    return { frame: themed, input, hint, bottom, pad, boxed, inputView }
   }, [
     data,
     strings,
@@ -659,10 +821,30 @@ export function App({
     composing,
     mode,
     draft,
+    cursor,
+    composeMaxRows,
     receipt,
     status,
+    busy,
     effectiveActivity,
   ])
+
+  // The real terminal cursor on the insertion point (P20/B1): the position is relative to the Ink
+  // output origin, which is the frame's first row. `y` counts the rows before the draft's row
+  // (frame, pad, hint, the boxed tray's top edge); `x` adds the tray wall to the drawn column.
+  // `undefined` while not composing or while a send is in flight hides it. Ink's own cursor math
+  // is corrected by main.tsx's cursor-aware stdout, which re-asserts this same position after
+  // every write; `useCursor` keeps Ink's show/hide bookkeeping in charge.
+  const { setCursorPosition } = useCursor()
+  const cursorPos =
+    composing && !busy && lines.inputView
+      ? {
+          x: (lines.boxed ? 2 : 0) + lines.inputView.cursorColumn,
+          y: lines.frame.rows.length + lines.pad + lines.hint.length + (lines.boxed ? 1 : 0) + lines.inputView.cursorLine,
+        }
+      : undefined
+  setCursorPosition(cursorPos)
+  api.setComposeCursor(cursorPos ?? null)
 
   const refreshData = useCallback(
     (nextScroll = scrollRef.current) => {
@@ -728,8 +910,9 @@ export function App({
         const y = Number(mouse[3])
         if (button === 64 || button === 65) {
           const delta = button === 65 ? 1 : -1
-          // With the detail view open the wheel scrolls the document (the one scrollable region).
-          if (pageRef.current === 4 && detailIdRef.current) {
+          // With the detail view open the wheel scrolls the document (the one scrollable region),
+          // on the page the view was opened from (the work page's rows open it too, P20/B5).
+          if ((pageRef.current === 4 || pageRef.current === 2) && detailIdRef.current) {
             scrollDetail(delta)
             return
           }
@@ -778,31 +961,107 @@ export function App({
       }
 
       if (composing) {
-        if (key.ctrl && input === 'e') {
+        const composeText = draftRef.current
+        const point = cursorRef.current
+        const persist = mode === 'message'
+        // The reason is one line: every line break lands as a space, typed, pasted or yanked.
+        const flatten = (value: string): string => (mode === 'reason' ? value.replace(/\n/g, ' ') : value)
+        if (key.ctrl && input === 'o') {
           void relayEditor()
           return
         }
-        if (key.escape) {
-          closeCompose()
+        if (key.ctrl && input === 'v') {
+          void pasteClipboard()
           return
         }
-        if (key.return) {
-          void submit()
-          return
+        // One pure decoder for both encodings (design §4): the App only applies its intent.
+        const intent = composeKey(input, key)
+        switch (intent.kind) {
+          case 'submit':
+            void submit()
+            return
+          case 'cancel':
+            closeCompose()
+            return
+          case 'none':
+            return
+          case 'newline': {
+            if (busy) return
+            pushUndo(undoRef.current, composeText, point)
+            killRingRef.current = resetKillDirection(killRingRef.current)
+            yankRef.current = null
+            lastActionRef.current = 'edit'
+            updateCompose(insertAt(composeText, point, flatten('\n')), persist)
+            return
+          }
+          case 'move':
+            setPoint(moveCursor(composeText, point, intent.motion, { width: composeWidth(), pageRows: composeMaxRows() }))
+            return
+          case 'insert': {
+            if (busy) return
+            // The typed/pasted text path: `intake` normalizes CR/LF and strips control bytes; the
+            // paste markers may arrive with a leading ESC already consumed by Ink, so both
+            // spellings are accepted and an unclosed bracket stays open across reads.
+            const next = intake(input, pasteOpenRef.current)
+            pasteOpenRef.current = next.pasteOpen
+            if (!next.append) return
+            pushUndo(undoRef.current, composeText, point)
+            killRingRef.current = resetKillDirection(killRingRef.current)
+            yankRef.current = null
+            lastActionRef.current = 'edit'
+            updateCompose(insertAt(composeText, point, flatten(next.append)), persist)
+            return
+          }
+          case 'kill': {
+            if (busy) return
+            const span = killSpan(composeText, point, intent.unit)
+            if (!span) return
+            pushUndo(undoRef.current, composeText, point)
+            killRingRef.current = pushKill(killRingRef.current, span.text, span.direction)
+            yankRef.current = null
+            lastActionRef.current = 'edit'
+            const cps = [...composeText]
+            updateCompose({ text: [...cps.slice(0, span.from), ...cps.slice(span.to)].join(''), cursor: span.from }, persist)
+            return
+          }
+          case 'yank': {
+            if (busy) return
+            const text = ringEntry(killRingRef.current, 0)
+            if (!text) return
+            pushUndo(undoRef.current, composeText, point)
+            killRingRef.current = resetKillDirection(killRingRef.current)
+            yankRef.current = { pops: 0, length: cpLength(text) }
+            lastActionRef.current = 'yank'
+            updateCompose(insertAt(composeText, point, flatten(text)), persist)
+            return
+          }
+          case 'yankPop': {
+            if (busy) return
+            const yank = yankRef.current
+            if (!yank || lastActionRef.current !== 'yank') return
+            const text = ringEntry(killRingRef.current, yank.pops + 1)
+            if (!text) return
+            pushUndo(undoRef.current, composeText, point)
+            // Replace what the previous yank inserted: it sits directly before the point.
+            const cps = [...composeText]
+            const from = Math.max(0, point - yank.length)
+            const replaced = [...cps.slice(0, from), ...cps.slice(point)].join('')
+            yankRef.current = { pops: yank.pops + 1, length: cpLength(text) }
+            lastActionRef.current = 'yank'
+            updateCompose(insertAt(replaced, from, flatten(text)), persist)
+            return
+          }
+          case 'undo': {
+            if (busy) return
+            const snap = popUndo(undoRef.current)
+            if (!snap) return
+            killRingRef.current = resetKillDirection(killRingRef.current)
+            yankRef.current = null
+            lastActionRef.current = 'edit'
+            updateCompose({ text: snap.text, cursor: snap.cursor }, persist)
+            return
+          }
         }
-        if (key.backspace || key.delete) {
-          updateDraft(backspace(draftRef.current))
-          return
-        }
-        if (busy) return
-        // The paste markers and their body can arrive with a leading ESC already consumed by Ink;
-        // `intake` accepts both spellings and keeps an unclosed bracket open across reads.
-        const next = intake(input, pasteOpenRef.current)
-        pasteOpenRef.current = next.pasteOpen
-        // The compose draft is persisted (`state/draft.md`); the standby reason is not a message
-        // draft and must never overwrite one.
-        if (next.append) updateDraft(draftRef.current + next.append, mode === 'message')
-        if (next.submit) void submit()
         return
       }
 
@@ -869,14 +1128,29 @@ export function App({
         return
       }
       if (key.upArrow || key.downArrow) {
-        // The board page walks its cards (the window follows the focus); the other pages scroll.
+        // The board page walks its cards and the work page its board rows (the window follows the
+        // focus); the other pages scroll.
         if (page === 4) moveFocus(0, key.upArrow ? -1 : 1)
+        else if (page === 2) moveBoardFocus(key.upArrow ? -1 : 1)
         else updateScroll((v) => (key.upArrow ? v - 1 : v + 1))
         return
       }
       if (page === 4 && key.return) {
         const current = resolveFocus(boardRows(), focusRef.current)
         if (current) openDetail(current.id)
+        return
+      }
+      if (page === 2 && key.return) {
+        // The work page's board rows open the same detail view (P20/B5), on the page it was
+        // opened from.
+        openWorkFocused()
+        return
+      }
+      if (key.pageUp || key.pageDown) {
+        // `↑`/`↓` move the work page's row focus, so the keyboard keeps a page-scroll route (the
+        // documented keyboard-only exception beside `r`).
+        const step = Math.max(1, (size.rows || 10) - 4)
+        updateScroll((v) => v + (key.pageUp ? -step : step))
         return
       }
       if (key.return && viewEntry == null && page === 3) {
@@ -918,7 +1192,7 @@ export function App({
           candidate window anchors there (V15/F1 — with the hint below the input the cursor sat on
           the hint row and B2's CJK cursor acceptance, cursor_x=8, went red). */}
       {lines.hint.map((line, i) => (
-        <Text key={`h${i}`} color={palette.tones.dim}>
+        <Text key={`h${i}`} color={palette.tones.dim} wrap="truncate">
           {line}
         </Text>
       ))}

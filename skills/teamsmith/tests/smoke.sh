@@ -8658,6 +8658,53 @@ printf 'lang=zh\npage=4\nactivity=1\nmouse=1\ndensity=comfortable\ntheme=dark\n'
 assert_has "$TMP/p28h-conf4.txt" "已放弃" "28-h panel.conf page=4：无 --page 时按第四页起（defaultPage 覆盖四页）"
 rm -f "$TMP/p28h/state/panel.conf"
 
+# ---- 28-h2 工作页的看板行（P20/B5）：行可聚焦、行键有目标；降级/空看板没有死项
+# 契约：change panel-ergonomics 的「The work page's board rows are focusable and open the same
+# detail view」与「Every key affordance is also a mouse target」（pageUp/pageDown 是第二条键盘
+# 专用例外）。真 pty 部分在 tests/panel-b3.sh workdetail（焦点行走、详情原地返回、点击、降级）。
+p28_targets 2 >"$TMP/p28hd-targets-p2.json" 2>/dev/null
+P28HD_KINDS="$(p28_kinds "$TMP/p28hd-targets-p2.json")"
+case ",$P28HD_KINDS," in
+  *",focus,"*) ok "28-h2 工作页目标表：看板行可聚焦（focus）" ;;
+  *) bad "28-h2 工作页目标表：没有 focus 目标（$P28HD_KINDS）" ;;
+esac
+case ",$P28HD_KINDS," in
+  *",open-focused,"*) ok "28-h2 工作页目标表：焦点行可打开（open-focused）" ;;
+  *) bad "28-h2 工作页目标表：没有 open-focused 目标（$P28HD_KINDS）" ;;
+esac
+case ",$P28HD_KINDS," in
+  *",card-move,"*) ok "28-h2 工作页目标表：行键有目标（card-move）" ;;
+  *) bad "28-h2 工作页目标表：行键没有目标（$P28HD_KINDS）" ;;
+esac
+case ",$P28HD_KINDS," in
+  *",lane-move,"*) bad "28-h2 工作页目标表不该有车道键（lane-move 属看板页）" ;;
+  *) ok "28-h2 工作页目标表没有车道键（车道逻辑只在看板页）" ;;
+esac
+if grep -aqi 'pageup\|pagedown' "$TMP/p28hd-targets-p2.json"; then
+  bad "28-h2 pageUp/pageDown 混进了目标表"
+else
+  ok "28-h2 pageUp/pageDown 不在目标表里（第二条键盘专用例外）"
+fi
+# 降级（60x10）：块塌陷成一行 → 没有行、没有行键、没有行目标
+"$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" --state-dir "$TMP/p28-state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 60 --height 10 --page 2 \
+  >"$TMP/p28hd-degraded.json" 2>/dev/null
+P28HD_DEG="$(p28_kinds "$TMP/p28hd-degraded.json")"
+case ",$P28HD_DEG," in
+  *",focus,"*|*",open-focused,"*) bad "28-h2 60x10 降级的工作页还有行目标（$P28HD_DEG）" ;;
+  *) ok "28-h2 60x10 降级的工作页没有行目标（$P28HD_DEG）" ;;
+esac
+# 空看板：没有行、没有行目标（无死项）
+printf '{"rows": [], "counts": {}, "total": 0, "deliveries": []}\n' >"$TMP/p28hd-empty.json"
+B3_STUB_BOARD_FILE="$TMP/p28hd-empty.json" "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" \
+  --state-dir "$TMP/p28-state" --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark \
+  --width 120 --height 32 --page 2 >"$TMP/p28hd-empty-targets.json" 2>/dev/null
+P28HD_EMPTY="$(p28_kinds "$TMP/p28hd-empty-targets.json")"
+case ",$P28HD_EMPTY," in
+  *",focus,"*|*",open-focused,"*) bad "28-h2 空看板的工作页还有行目标（$P28HD_EMPTY）" ;;
+  *) ok "28-h2 空看板的工作页没有行目标（$P28HD_EMPTY）" ;;
+esac
+
 
 # ---------------------------------------------------------------- 29. 派单模型解析：配置压过名册旧记录（M14）
 # 契约（真实事故：TEAM_AGENT_MODELS 已配 dev=kimi-coding/k3-256k，dispatch 仍按名册 state 里的

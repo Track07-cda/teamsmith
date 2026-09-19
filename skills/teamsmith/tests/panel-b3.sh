@@ -22,7 +22,7 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT TEAM_
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tree="${TEAM_B3_TREE:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
-panel="$skill/scripts/panel/panel.js"
+panel="${TEAM_B3_PANEL:-$skill/scripts/panel/panel.js}"
 stub="$here/panel-b3-stub.sh"
 pty_direct="$here/panel-b3-pty-mouse.py"
 pty_tmux="$here/panel-b3-pty-tmux-mouse.py"
@@ -130,6 +130,20 @@ conf_of() { cat "$(conf)" 2>/dev/null || true; }
 hash_state() { ( cd "$ROOT" && find .pi/team/state -type f | sort | while IFS= read -r f; do printf '%s ' "$f"; md5sum "$f" | cut -d' ' -f1; done ) | md5sum; }
 
 
+# The action kinds present in a `--snapshot --targets` dump (comma-separated, sorted).
+kinds_of() { # <file>
+  python3 - "$1" <<'PYT'
+import json, sys
+
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception as e:
+    print(f"<unreadable: {e}>")
+else:
+    print(",".join(sorted({t["action"]["kind"] for t in data})))
+PYT
+}
+
 # Which card id sits under the focus cursor (the board page's `›`), or `-` when there is none.
 focused_id() { # <capture file>
   python3 - "$1" <<'PYF'
@@ -196,6 +210,10 @@ scn_pages() {
   keys 3
   sleep 1
   cap_has "延后队列" p3.txt
+  # P20/B6 改名：消息页说「往来」，不再说「线程」（目录/命令/英文 term 不变）。
+  cap_has "收件箱与往来" p3-inbox
+  cap_not "线程" p3-inbox.txt
+  assert_match "$tmp/$current/p3-inbox.txt" '收件箱 [0-9]+ 条 · 往来 [0-9]+ 条' "消息页计数行用「往来」"
   assert_eq "按 3 后 panel-page=3" "$(page_of)" "3"
   keys m
   sleep 0.5
@@ -316,6 +334,122 @@ scn_queue() {
   assert_eq "查看全文/翻页后队列逐字节不变" "$qafter" "$qbefore"
   [ "$before" != "$after" ] && ok "夹具自检：state 的指纹确实变了（面板写了 page/conf 这两处）" \
     || bad "夹具自检：state 指纹没变（断言可能是空的）"
+}
+
+scn_workdetail() {
+  section "workdetail · P20/B5 工作页看板行：焦点 / 详情 / 原地返回 / 空与降级无死项"
+  server_up workdetail
+  wcap() { cap > "$tmp/$current/$1.txt"; }
+  wfile() { printf '%s/%s.txt' "$tmp/$current" "$1"; }
+  conf_set "lang=zh" "page=2" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  printf '2\n' > "$(page_file)"
+  start_panel
+
+  # ① ↓ 聚焦第一绘制行（P14），enter 打开详情，仍在第 2 页
+  keys Down; sleep 0.6
+  wcap focus
+  assert_eq "B5 ↓ 后焦点在第一绘制行 P14" "$(focused_id "$(wfile focus)")" "P14"
+  assert_eq "B5 工作页焦点光标恰好一个" "$(grep -o '›' "$(wfile focus)" | wc -l | tr -d ' ')" "1"
+  keys Enter; sleep 1.4
+  wcap detail
+  assert_has "$(wfile detail)" "详情 P14" "B5 enter 打开第一行的详情"
+  assert_has "$(wfile detail)" "[brief]" "B5 详情第一个文件 tab 默认打开"
+  assert_not "$(wfile detail)" "任务看板" "B5 详情替换了工作页的块"
+  assert_eq "B5 打开详情后仍在第 2 页" "$(page_of)" "2"
+
+  # ② q 原地回工作页
+  keys q; sleep 0.8
+  wcap back-q
+  assert_has "$(wfile back-q)" "任务看板" "B5 q 回到工作页"
+  assert_not "$(wfile back-q)" "详情 P14" "B5 q 关掉了详情"
+  assert_eq "B5 返回后 panel-page 仍是 2" "$(page_of)" "2"
+
+  # ③ ↓ 再走一行：焦点到 V14（走的是绘制顺序）
+  keys Down; sleep 0.5
+  wcap focus-2
+  assert_eq "B5 ↓ 沿绘制顺序到 V14" "$(focused_id "$(wfile focus-2)")" "V14"
+
+  # ④ 看板页：enter 开详情、esc 回看板页（不是工作页）。焦点状态两页共用（按 entry id），
+  # 工作页刚把它走到 V14，所以看板页打开的也是 V14 —— 验证的是「返回原页」，不是 id。
+  keys 4; sleep 1
+  wcap board
+  assert_has "$(wfile board)" "已放弃" "B5 切到看板页"
+  assert_eq "B5 焦点状态两页共用（看板页也在 V14）" "$(focused_id "$(wfile board)")" "V14"
+  keys Enter; sleep 1.4
+  wcap board-detail
+  assert_has "$(wfile board-detail)" "详情 V14" "B5 看板页 enter 打开焦点卡详情"
+  keys Escape; sleep 0.8
+  wcap board-back
+  assert_has "$(wfile board-back)" "已放弃" "B5 esc 回到看板页"
+  assert_eq "B5 看板页返回后 panel-page=4" "$(page_of)" "4"
+  assert_eq "B5 看板页返回后焦点仍是 V14" "$(focused_id "$(wfile board-back)")" "V14"
+
+  # ⑤ 点击：第一下聚焦 V14，第二下打开（直驱 pty，字节证据）
+  local pstate="$tmp/$current/state-click"
+  mkdir -p "$pstate"
+  printf 'lang=zh\npage=2\nactivity=1\nmouse=1\ndensity=comfortable\ntheme=dark\n' > "$pstate/panel.conf"
+  printf '2\n' > "$pstate/panel-page"
+  python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$pstate" --team-cli "$stub" \
+    --out "$tmp/$current/click.bin" --out2 "$tmp/$current/click-after.bin" --expect-enable yes \
+    --click-col 20 --click-row 6 --click2-col 20 --click2-row 6 --cols 120 --rows 32 \
+    >"$tmp/$current/click.log" 2>&1
+  assert_eq "B5 直驱 pty：两次点击注入成功" "$?" "0"
+  python3 - "$tmp/$current/click.bin" > "$tmp/$current/click-clean.txt" <<'PYW'
+import re, sys
+raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+print(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw))
+PYW
+  if grep -qE '›\s*(·\s*)?V14' "$tmp/$current/click-clean.txt"; then
+    ok "B5 第一次点击把焦点移到 V14"
+  else
+    bad "B5 第一次点击没有聚焦 V14"
+  fi
+  if LC_ALL=C grep -aq '详情 V14' "$tmp/$current/click-after.bin"; then
+    ok "B5 第二次点击（同一行）打开 V14 的详情"
+  else
+    bad "B5 第二次点击没有打开详情"
+  fi
+
+  # ⑥ 空看板：没有光标、没有行键、没有 focus/open-focused 目标、enter 不开任何东西
+  python3 - "$tmp/$current/empty.json" <<'PYE'
+import json, sys
+json.dump({"rows": [], "counts": {}, "total": 0, "deliveries": []}, open(sys.argv[1], "w"))
+PYE
+  printf '2\n' > "$(page_file)"
+  start_panel "B3_STUB_BOARD_FILE='$tmp/$current/empty.json'"
+  keys Down; sleep 0.5
+  keys Enter; sleep 0.8
+  wcap empty
+  assert_eq "B5 空看板：没有焦点光标" "$(grep -o '›' "$(wfile empty)" | wc -l | tr -d ' ')" "0"
+  assert_not "$(wfile empty)" "详情" "B5 空看板：enter 不开详情"
+  assert_eq "B5 空看板：panel-page 仍是 2" "$(page_of)" "2"
+  assert_has "$(wfile empty)" "看板为空" "B5 空看板：块显示空态而不是一行空行"
+  B3_STUB_BOARD_FILE="$tmp/$current/empty.json" "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" \
+    --team-cli "$stub" --lang zh --theme dark --width 120 --height 32 --page 2 >"$tmp/$current/empty-targets.json" 2>/dev/null
+  local kinds
+  kinds="$(kinds_of "$tmp/$current/empty-targets.json")"
+  case ",$kinds," in
+    *",focus,"*|*",open-focused,"*) bad "B5 空看板的目标表还有 focus/open-focused（$kinds）" ;;
+    *) ok "B5 空看板的目标表没有 focus/open-focused（$kinds）" ;;
+  esac
+
+  # ⑦ 60x10 降级：没有光标、没有行键、没有死项目标
+  start_panel
+  tmux -L "$sock" resize-window -t "$sess:panel" -x 60 -y 10 2>/dev/null || true
+  sleep 1.4
+  keys Down; sleep 0.5
+  keys Enter; sleep 0.8
+  wcap degraded
+  assert_eq "B5 60x10 降级：没有焦点光标" "$(grep -o '›' "$(wfile degraded)" | wc -l | tr -d ' ')" "0"
+  assert_not "$(wfile degraded)" "详情" "B5 60x10 降级：enter 不开详情"
+  assert_not "$(wfile degraded)" "↑/↓ 行" "B5 60x10 降级：键位带不发行键"
+  "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+    --lang zh --theme dark --width 60 --height 10 --page 2 >"$tmp/$current/degraded-targets.json" 2>/dev/null
+  kinds="$(kinds_of "$tmp/$current/degraded-targets.json")"
+  case ",$kinds," in
+    *",focus,"*|*",open-focused,"*) bad "B5 60x10 降级的目标表还有 focus/open-focused（$kinds）" ;;
+    *) ok "B5 60x10 降级的目标表没有 focus/open-focused（$kinds）" ;;
+  esac
 }
 
 scn_mouse() {
@@ -768,6 +902,7 @@ run_scn conf scn_conf
 run_scn queue scn_queue
 run_scn board scn_board
 run_scn detail scn_detail
+run_scn workdetail scn_workdetail
 run_scn mouse scn_mouse
 run_scn wheel scn_wheel
 run_scn resize scn_resize

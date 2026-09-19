@@ -117,8 +117,9 @@ into the draft. Only `enter` SHALL submit and only `esc` SHALL cancel: no other 
   point at the end of the draft)
 - **WHEN** the Kitty bytes for `ctrl+b` (`\x1b[98;5u`) are sent three times, and then the Kitty bytes for `alt+b`
   (`\x1b[98;3u`) once
-- **THEN** `state/draft.md` is unchanged and `#{cursor_x}` is 12 — three codepoints back (`alpha bet|a`) and then one
-  word back (`alpha |beta`) — exactly as the legacy bytes would have moved it
+- **THEN** `state/draft.md` is unchanged and `#{cursor_x}` is 10 — three codepoints back (`alpha b|eta`) and then one
+  word back (`alpha |beta`; `│ > alpha ` is ten columns) — exactly as the same sequence sent as the legacy bytes
+  (`0x02` ×3 then `ESC b`) moves it
 
 ### Requirement: The compose line has pi's kill ring and undo
 

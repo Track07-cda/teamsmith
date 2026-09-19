@@ -21,6 +21,7 @@
 
 import React from 'react'
 import { writeSync, appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { Writable } from 'node:stream'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { render } from 'ink'
@@ -35,6 +36,7 @@ import { BLOCK_NAMES, MACHINE_BLOCKS, cleanIdentityEnv, createPanelCache, findTe
 import type { DataOptions, DataResult, PanelCache } from './data.js'
 import { normalizeNewlines, parseSendResult, mapReceipt, DRAFT_FILE } from './compose.js'
 import type { Receipt } from './compose.js'
+import { createClipboardRunner, readClipboard, writePasteFile } from './clipboard.js'
 import { buildJson, layout, renderAnsi, renderPlain } from './layout.js'
 import type { LayoutInput } from './layout.js'
 import { fill, stringsFor } from './strings/index.js'
@@ -42,6 +44,10 @@ import { PANEL_CONF_FILE, PANEL_PAGE_FILE, readPage, readSettings, writePage, wr
 import type { Settings } from './settings.js'
 import { contrastPairs, PALETTES, resolveTheme } from './theme.js'
 import type { FrameInput, PageId, ViewState } from './types.js'
+
+/** The Kitty keyboard protocol's pop/push pair, written around the editor handoff (design §6). */
+const KITTY_POP = '\u001b[<u'
+const KITTY_PUSH = '\u001b[>1u'
 
 declare const __PIN_INK__: string | undefined
 declare const __PIN_REACT__: string | undefined
@@ -54,6 +60,34 @@ const BUILD_CMD =
   typeof __BUILD_CMD__ === 'undefined'
     ? 'bun install --frozen-lockfile && bash skills/teamsmith/scripts/panel/build.sh'
     : __BUILD_CMD__
+
+/**
+ * Ink's own cursor bookkeeping assumes a frame that ends with a newline, but the console fills the
+ * pane (the bounded frame pads to the terminal height), so Ink writes a fullscreen frame with no
+ * trailing newline and its `useCursor` lands one row high; its cursor-only path (an arrow key that
+ * moves the point without changing the text) then drifts upward a row per move (measured on the
+ * pinned ink 7.1.1). This stream forwards every Ink write to the real stdout and re-asserts the
+ * insertion point absolutely (CUP is 1-based) in the same write call — the one place that also
+ * sees Ink's throttled frames. `null` means "not composing": the cursor is hidden.
+ */
+function cursorAwareStdout(base: NodeJS.WriteStream, cursorOf: () => { x: number; y: number } | null): NodeJS.WriteStream {
+  const out = new Writable({
+    write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+      const pos = cursorOf()
+      const suffix = pos ? `\u001b[?25h\u001b[${pos.y + 1};${pos.x + 1}H` : '\u001b[?25l'
+      try {
+        base.write(typeof chunk === 'string' ? chunk + suffix : Buffer.concat([chunk, Buffer.from(suffix)]))
+      } catch {
+        /* a closed stdout must not kill the panel */
+      }
+      callback()
+    },
+  }) as unknown as NodeJS.WriteStream
+  ;(out as { isTTY?: boolean }).isTTY = Boolean(base.isTTY)
+  Object.defineProperty(out, 'columns', { get: () => process.stdout.columns })
+  Object.defineProperty(out, 'rows', { get: () => process.stdout.rows })
+  return out
+}
 
 function argOf(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`)
@@ -239,6 +273,9 @@ function defaultView(lang: string, page: PageId): ViewState {
   }
 }
 
+/** The compose insertion point main.tsx's cursor-aware stdout re-asserts after every Ink write. */
+let composeCursor: { x: number; y: number } | null = null
+
 async function main(): Promise<void> {
   if (mode === 'json') {
     const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events, blocks: MACHINE_BLOCKS })
@@ -329,6 +366,7 @@ async function main(): Promise<void> {
   let editorActive = false
   let mouseEnabled = settings.mouse
   const panelDir = panelDirOf(import.meta.url)
+  const clipRunner = createClipboardRunner()
   const bridge = existsSync(join(panelDir, 'draft-send.sh'))
     ? join(panelDir, 'draft-send.sh')
     : join(panelDir, '..', 'draft-send.sh')
@@ -491,11 +529,26 @@ async function main(): Promise<void> {
    * to `state/draft.md` first (the editor edits the real file), the render callback is gated for
    * the whole handoff, and the editor's exit restores raw mode before one fresh frame is drawn.
    */
-  function editDraft(text: string): Promise<string> {
+  async function editDraft(text: string): Promise<string> {
+    editorActive = true
+    writeDraft(text)
+    // The re-render triggered by the relay key commits asynchronously and Ink's throttled write can
+    // trail it by up to one render frame (≤34ms): the editor must not start before the panel's last
+    // frame is on screen, or that trailing write erases the editor's own first lines (measured: an
+    // editor that prints immediately lost `EDITOR-ACTIVE` to the panel's frame). Wait for the
+    // commit, then outlive one throttle window.
+    try {
+      await app?.waitUntilRenderFlush?.()
+    } catch {
+      /* the flush is best effort; the grace below still covers the trailing write */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 60))
     return new Promise((resolve) => {
       const editor = process.env.TEAM_PANEL_EDITOR || process.env.EDITOR || process.env.VISUAL || 'vi'
-      writeDraft(text)
-      editorActive = true
+      // The Kitty keyboard protocol is on (design §6): the editor did not ask for it, so pop it
+      // before the handoff and push it again after — `CSI < u` / `CSI > 1 u`. The pop is a no-op
+      // on a terminal that never answered Ink's query, and the push is the flag Ink itself enables.
+      writeSync(1, KITTY_POP)
       try {
         process.stdin.setRawMode?.(false)
       } catch {
@@ -515,11 +568,13 @@ async function main(): Promise<void> {
         })
       } catch {
         editorActive = false
+        writeSync(1, KITTY_PUSH)
         resolve(text)
         return
       }
       const done = (): void => {
         editorActive = false
+        writeSync(1, KITTY_PUSH)
         try {
           process.stdin.setRawMode?.(true)
         } catch {
@@ -611,6 +666,18 @@ async function main(): Promise<void> {
     flushQueue,
     setStandby,
     editDraft,
+    /**
+     * `C-v`'s probe (design §8): the bounded runner, the wayland-first order and the temp-file write
+     * live in `clipboard.ts`; this only maps the result to the App's three shapes.
+     */
+    pasteClipboard: async () => {
+      const read = await readClipboard(clipRunner)
+      if (!read) return { kind: 'none' as const, value: '' }
+      if (read.kind === 'text') return { kind: 'text' as const, value: read.text }
+      const file = writePasteFile(read.bytes, read.mime)
+      if (!file) return { kind: 'none' as const, value: '' }
+      return { kind: 'path' as const, value: file }
+    },
     refreshNow,
     suspended: () => editorActive,
     clockNowMs: () => clockNow.ms,
@@ -644,6 +711,9 @@ async function main(): Promise<void> {
       void cache.refresh({ force: true, only: ['detail'] }).then(adopt)
     },
     collapse,
+    setComposeCursor: (position) => {
+      composeCursor = position
+    },
   }
 
   /** stdin/stdout are set up by the caller; `resize` is emitted by Node's tty stream. */
@@ -654,6 +724,12 @@ async function main(): Promise<void> {
   app = render(panelElement(), {
     exitOnCtrlC: false,
     patchConsole: false,
+    // Kitty keyboard support is opt-in: `shift+enter` exists only if the terminal reports it
+    // (auto mode never enables the protocol on a terminal that does not answer the query).
+    kittyKeyboard: { mode: 'auto' },
+    // The cursor-aware stdout re-asserts the compose insertion point after every Ink write
+    // (including the throttled ones), which is what makes the placement exact in a full pane.
+    stdout: cursorAwareStdout(process.stdout, () => composeCursor),
   })
   if (!once) {
     const clockTimer = setInterval(tickClock, 1000)
