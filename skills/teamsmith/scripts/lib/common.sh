@@ -890,15 +890,17 @@ team_pm_pid_live() {
 #   bash -c 'cd <root> && printf…> <state>/pm.pid.spawn && exec <agent> …'
 # 那个 shell 的命令行里也有 agent 路径，但它还没 exec，不是 PM。
 # （不排除它的话，启动窗口里会把 shell 报成 running:bash，进而跳过「正在启动」这个状态。）
-team_proc_cmdline_is_bin() { # <pid> <可执行文件路径或名字>
-  local pid="${1:-}" want="${2:-}" base args tok
+team_proc_cmdline_is_bin() { # <pid> <可执行文件路径或名字> [已读到的 args（可选，闭掉两次读的竞态）]
+  local pid="${1:-}" want="${2:-}" preraw="${3:-}" base args tok
   [ -n "$pid" ] && [ -n "$want" ] || return 1
   case "$want" in
     /*) base="$(basename "$want")" ;;
     *)  base="$want" ;;
   esac
   [ -n "$base" ] || return 1
-  args="$(ps -o args= -p "$pid" 2>/dev/null | head -1)"
+  # M39：调用方（team_proc_is_agent_bin）已经读过一次命令行时就把快照传进来 —— 一次判定里读两次会让
+  # `execve` 落在两次读之间时误判（第一次读还没看到排除标记、第二次读已经看到 agent 路径）。
+  args="${preraw:-$(ps -o args= -p "$pid" 2>/dev/null | head -1)}"
   [ -n "$args" ] || return 1
   # M8.1：**我们自己的启动命令不算证据** —— harness 的命令行里就写着 spawn 文件路径
   # （`( printf "%s\n" "$BASHPID" > <state>/pm.pid.spawn`）：出现它就说明这个进程是那个
@@ -1091,7 +1093,8 @@ team_proc_is_agent_bin() { # <pid>
   # 不算证据（PM 侧的对应物是 team_proc_cmdline_is_bin 里的 pm.pid.spawn 排除）。
   args="$(ps -o args= -p "${1:-}" 2>/dev/null | head -1)"
   case "$args" in *dispatch-*.spawn*) return 1 ;; esac
-  team_proc_cmdline_is_bin "${1:-}" "$(team_agent_bin_path 2>/dev/null || true)"
+  # M39：把同一次读到的快照传下去（同一次判定只读一次命令行）。
+  team_proc_cmdline_is_bin "${1:-}" "$(team_agent_bin_path 2>/dev/null || true)" "$args"
 }
 
 # 窗口里跑着配置的 agent CLI 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
