@@ -5921,6 +5921,15 @@ else
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the running extension wakes the session (zero model calls)" \
     "12b-pi 端到端：真 CLI 投递 → 监视扩展唤醒（零模型调用）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS reverse guard" "12b-pi 反向守卫：真实仓库 state/ 未被触碰"
+  # M43：外部截断/重写 spool 的重放保真（harness S11–S13；翻转证据见 tests/flip-m43.sh）
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 external truncate+rewrite does not redeliver" \
+    "12b-pi M43：外部截断+重写不再重放已投递行"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 total is not inflated" \
+    "12b-pi M43：total 只随真实新增增长（不被重放灌水）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S12 ledger records the rescan counts" \
+    "12b-pi M43：shrink 后的 rescan 有界（只投最近 N 条真新）且计数进账本"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S13 after a restart" \
+    "12b-pi M43：去重记忆跨会话重启（<key>.seen 持久化）"
 fi
 
 # 不留注册：后面的段落（teardown / panel / …）不许被这条通道接管

@@ -21,8 +21,17 @@
  *   - 唤醒消息只带**一行指针 + 截断预览**，不带 payload 全文（全文在收件箱；防注入习惯不变）；
  *   - session 启动时以 spool 当前大小为基线：**历史行不叫醒任何人**（backlog 是 pulse 的活），
  *     启动**之后**写入的行才唤醒 —— 关掉这个窗口的原语就是 M30 验收里那条「启动前的行不唤醒」；
- *   - spool 有上限（TEAM_INBOX_WATCH_MAX_BYTES，默认 128KB）：超了截头留尾（尾部信号不丢），
- *     读取端发现 size < offset 就当文件被裁剪/轮转，从 0 重读。
+ *   - spool 有上限（TEAM_INBOX_WATCH_MAX_BYTES，默认 128KB）：超了截头留尾（尾部信号不丢）；
+ *   - **spool 变小（size < offset）= 外部截断/重写**（M43：仓内写路径只有 `>>` 追加，变小一定是
+ *     外部力量）。旧行为是静默 `offset = 0`、下一拍把整个 spool 从 0 重读 —— 2026-09-19 就是这条
+ *     把同一份 42 行叫了两遍、`total` 灌水 84。现在的语义（投递保真三条）：
+ *       1. **shrink 必记账本**（`spool shrink …` 一行），不再是静默重置；
+ *       2. **去重**：整行 `(epoch_ms, kind, from, durable, preview)` 元组进过去重记忆（内存 +
+ *          `<key>.seen` 持久化，跨会话重启有效），已投递的行一律不再投；
+ *       3. **有界重放**：shrink 后的 rescan 对「真新」行只投最近 TEAM_INBOX_WATCH_REPLAY_MAX 条
+ *          （默认 20），更早的跳过并在唤醒文本与账本里说明；全去重压掉时**不唤醒**（没什么好说的），
+ *          账本记 `rescan … deliver=0`。
+ *     `seen`（账本 `total=`）只随**真实投递**增长 —— 重放/去重跳过都不计数。
  *
  * 生命周期（Pi 文档的硬约束）：factory 里不起任何后台资源；watch / 定时器 / 注册文件都在
  * session_start 里建、session_shutdown 里清（并删掉自己的注册文件 —— 不然发送方会一直以为
@@ -43,6 +52,8 @@ const DEFAULT_PREVIEW = 160          // 预览截断（字符）：唤醒消息�
 const DEFAULT_MAX_BYTES = 128 * 1024 // spool 上限
 const DEFAULT_POLL_MS = 5000         // fs.watch 的兜底轮询（错过 inotify 事件时仍能醒来）
 const DEFAULT_HEARTBEAT_MS = 5000    // 注册心跳
+const DEFAULT_REPLAY_MAX = 20        // shrink 后 rescan 的「真新」行投递上限（更早的跳过并说明）
+const DEFAULT_SEEN_MAX = 512         // 去重记忆的容量（最近投递的行键，持久化到 <key>.seen）
 const MERGE_MS = 150                 // 同一拍到的多行合并成一条唤醒
 const MAX_LISTED = 5                 // 一条唤醒消息里最多列几条
 
@@ -55,6 +66,8 @@ function previewLimit(): number { return envNum('TEAM_INBOX_WATCH_PREVIEW', DEFA
 function maxBytes(): number { return envNum('TEAM_INBOX_WATCH_MAX_BYTES', DEFAULT_MAX_BYTES, 1024) }
 function pollMs(): number { return envNum('TEAM_INBOX_WATCH_POLL_MS', DEFAULT_POLL_MS, 100) }
 function heartbeatMs(): number { return envNum('TEAM_INBOX_WATCH_HEARTBEAT_MS', DEFAULT_HEARTBEAT_MS, 100) }
+function replayMax(): number { return envNum('TEAM_INBOX_WATCH_REPLAY_MAX', DEFAULT_REPLAY_MAX, 1) }
+function seenMax(): number { return envNum('TEAM_INBOX_WATCH_SEEN_MAX', DEFAULT_SEEN_MAX, 32) }
 
 /**
  * 定位团队根（主工作树）：M40 —— **cwd 推导为准**（与 team CLI 同一条原则）。
@@ -193,27 +206,32 @@ function appendLedger(root: string, line: string): void {
   }
 }
 
-/** 读完 spool 自 <offset> 起的新行（只消费完整行；size < offset = 被裁剪/轮转 → 从 0 重读）。 */
-function readNewLines(file: string, offset: number): { lines: string[]; offset: number } {
+/** 读完 spool 自 <offset> 起的新行（只消费完整行）。
+ *  size < offset 或文件消失（且此前跟踪过内容）= **外部截断/重写/替换**（仓内写路径只有追加）——
+ *  此时返回 shrank=true 且一行都不读：怎么有界地重扫是 flush() 的决策（M43），这里绝不静默重置。 */
+function readNewLines(file: string, offset: number): { lines: string[]; offset: number; shrank: boolean } {
+  let size = -1
+  try { size = statSync(file).size } catch {
+    return { lines: [], offset: 0, shrank: offset > 0 }   // 文件没了 = 缩到 0
+  }
+  if (size < offset) return { lines: [], offset: 0, shrank: true }
+  if (size === offset) return { lines: [], offset, shrank: false }
   try {
-    const size = statSync(file).size
-    if (size < offset) offset = 0
-    if (size === offset) return { lines: [], offset }
     const fd = openSync(file, 'r')
     try {
       const buf = Buffer.alloc(size - offset)
       readSync(fd, buf, 0, buf.length, offset)
       const text = buf.toString('utf8')
       const end = text.lastIndexOf('\n')
-      if (end < 0) return { lines: [], offset }
+      if (end < 0) return { lines: [], offset, shrank: false }
       const consumed = Buffer.byteLength(text.slice(0, end + 1), 'utf8')
       const lines = text.slice(0, end).split('\n').map(l => l.replace(/\r$/, '')).filter(l => l.trim())
-      return { lines, offset: offset + consumed }
+      return { lines, offset: offset + consumed, shrank: false }
     } finally {
       closeSync(fd)
     }
   } catch {
-    return { lines: [], offset }
+    return { lines: [], offset, shrank: false }
   }
 }
 
@@ -224,7 +242,8 @@ function baselineOffset(file: string): number {
 }
 
 /** spool 超上限 → 截头留尾（尾部信号不丢）。返回裁剪后的新大小（没裁 → -1）：
- *  调用方必须把 offset 对上新大小，否则「size < offset → 从 0 重读」会把刚投过的尾部再叫一次。 */
+ *  调用方必须把 offset 对上新大小，否则下一拍会看到「size < offset」走 shrink/rescan ——
+ *  有去重兑底不会再叫一遍，但白扫一遍 + 账本多两行噪音，没必要。 */
 function trimSpool(file: string): number {
   const cap = maxBytes()
   try {
@@ -257,8 +276,11 @@ export default function (pi: ExtensionAPI) {
   let inbox = ''
   let spool = ''
   let reg = ''
+  let seenPath = ''
   let offset = 0
   let seen = 0
+  let delivered = new Set<string>()   // M43 去重记忆：已投递行的整行元组（键 = 行本身）
+  let deliveredOrder: string[] = []   // 同内容的 FIFO 顺序（容量裁剪用）
   let watcher: any = null
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let beatTimer: ReturnType<typeof setInterval> | null = null
@@ -270,6 +292,36 @@ export default function (pi: ExtensionAPI) {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
     if (beatTimer) { clearInterval(beatTimer); beatTimer = null }
     if (mergeTimer) { clearTimeout(mergeTimer); mergeTimer = null }
+  }
+
+  /** 去重记忆：启动时从 <key>.seen 加载（跨会话重启仍认得「这行投过了」）。 */
+  const loadSeen = (file: string): void => {
+    delivered = new Set()
+    deliveredOrder = []
+    try {
+      const lines = readFileSync(file, 'utf8').split('\n').filter(l => l.trim())
+      for (const l of lines.slice(-seenMax())) { delivered.add(l); deliveredOrder.push(l) }
+    } catch {
+      /* 没有 .seen = 第一次投 */
+    }
+  }
+
+  /** 投递成功后记入去重记忆并持久化（tmp+rename；写挂只影响跨重启去重，不影响本会话）。 */
+  const markDelivered = (lines: string[]): void => {
+    for (const l of lines) if (!delivered.has(l)) { delivered.add(l); deliveredOrder.push(l) }
+    const cap = seenMax()
+    while (deliveredOrder.length > cap) {
+      const old = deliveredOrder.shift()
+      if (old !== undefined) delivered.delete(old)
+    }
+    if (!seenPath) return
+    try {
+      const tmp = `${seenPath}.tmp-${process.pid}`
+      writeFileSync(tmp, `${deliveredOrder.join('\n')}\n`)
+      renameSync(tmp, seenPath)
+    } catch {
+      /* 见上 */
+    }
   }
 
   const writeReg = (note: string): void => {
@@ -294,8 +346,9 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  /** 投递一条唤醒：指针 + 截断预览，绝不带 payload 全文。 */
-  const wake = (lines: string[]): void => {
+  /** 投递一条唤醒：指针 + 截断预览，绝不带 payload 全文。
+   *  meta（rescan 唤醒才有）：文本与账本都说明「这是 shrink 后的有界重扫，跳过了多少」。 */
+  const wake = (lines: string[], meta?: { dup: number; skipped: number }): void => {
     const field = (l: string, i: number): string => (l.split('\t')[i] ?? '').trim()
     const rows = lines.map(l => {
       const kind = field(l, 1) || 'msg'
@@ -311,16 +364,24 @@ export default function (pi: ExtensionAPI) {
     const hasLogOnly = lines.some(l => { const d = field(l, 3); return !d || d === '-' })
     const firstInbox = lines.map(l => field(l, 3)).find(d => !!d && d !== '-') || inbox
     const inboxPath = `${docsDir(root)}/inbox/${firstInbox}.md`
+    const rescanNote = meta
+      ? `(spool rescan after external shrink: delivered the last ${lines.length} unseen line(s); ` +
+        `skipped ${meta.dup} already-delivered + ${meta.skipped} older. Full history stays in the spool file.)\n`
+      : ''
     const text =
       `[teamsmith] inbox wake: ${lines.length} new team message(s).\n` +
       `${shown.join('\n')}${more > 0 ? `\n- … and ${more} more` : ''}\n` +
+      rescanNote +
       (hasInbox && hasLogOnly
         ? `Full text: the ${inboxPath} file named on each line; the others (knock/nudge) are pointers to the sender's own log (\`team inbox\` / \`team digest\` / state/nudges.log).\n`
         : hasLogOnly
           ? `These wakes point at the sender's own log (\`team inbox\` / \`team digest\`); they carry no inbox line.\n`
           : `Full text: read ${inboxPath} — this wake-up carries a one-line pointer, not the payload.\n`)
     seen += lines.length
-    appendLedger(root, `wake n=${lines.length} total=${seen} inbox=${inbox} kinds=${lines.map(l => l.split('\t')[1] || '?').join(',')}`)
+    markDelivered(lines)
+    appendLedger(root,
+      `wake n=${lines.length} total=${seen} inbox=${inbox} kinds=${lines.map(l => l.split('\t')[1] || '?').join(',')}` +
+      (meta ? ` rescan[dup=${meta.dup} skipped=${meta.skipped}]` : ''))
     try {
       pi.sendMessage({ customType: 'team-inbox', content: text, display: true },
         { triggerTurn: true, deliverAs: 'followUp' })
@@ -329,14 +390,46 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  /** 普通路径：追加读到的新行。与去重记忆重叠的行（外部重写带回来的已投递行）跳过并记账本。 */
+  const deliverNormal = (lines: string[]): void => {
+    const fresh = lines.filter(l => !delivered.has(l))   // M43 去重（普通路径）：去掉这行过滤 = 重写重放不受约束
+    const dup = lines.length - fresh.length
+    if (dup > 0) {
+      appendLedger(root, `dedup: skipped ${dup} already-delivered line(s) inbox=${inbox}（外部重写与已投递重叠）`)
+    }
+    if (fresh.length) wake(fresh)
+  }
+
+  /** shrink 后的有界重扫（M43）：从 0 读，但①已投递的一律不重复投 ②真新行只投最近 replayMax 条，
+   *  更早的跳过 —— 三种数量都进账本；全部被去重压掉时不唤醒（没什么好说的），total 不动。 */
+  const rescan = (): void => {
+    const res = readNewLines(spool, 0)
+    offset = res.offset
+    const freshAll = res.lines.filter(l => !delivered.has(l))   // M43 去重（rescan 路径）：去掉这行过滤 = rescan 重放旧行
+    const dup = res.lines.length - freshAll.length
+    const cap = replayMax()
+    const skipped = Math.max(0, freshAll.length - cap)
+    const fresh = skipped > 0 ? freshAll.slice(-cap) : freshAll
+    appendLedger(root,
+      `rescan lines=${res.lines.length} dup=${dup} skipped=${skipped} deliver=${fresh.length} total=${seen} inbox=${inbox}`)
+    if (fresh.length) wake(fresh, { dup, skipped })
+  }
+
   /** 读 spool 的新行并合并成一条唤醒（同一拍收到的多行只叫一次）。 */
   const flush = (): void => {
     if (!spool) return
     const res = readNewLines(spool, offset)
+    if (res.shrank) {
+      // M43：spool 变小/消失了 —— 仓内写路径只有 `>>` 追加，变小一定是外部力量（截断/重写/替换）。
+      // 旧行为在这里静默 offset=0，下一拍把整个 spool 从 0 重读（2026-09-19 的 42 行双投事故）。
+      appendLedger(root, `spool shrink: size fell below offset=${offset} inbox=${inbox} → bounded rescan from 0（外部截断/重写；仓内只有追加写）`)
+      rescan()
+      return
+    }
     offset = res.offset
     const trimmed = trimSpool(spool)
     if (trimmed >= 0) offset = trimmed   // 裁剪后 size 变小：offset 对上新大小，避免把尾部重叫一次
-    if (res.lines.length) wake(res.lines)
+    if (res.lines.length) deliverNormal(res.lines)
   }
 
   const scheduleFlush = (): void => {
@@ -386,6 +479,8 @@ export default function (pi: ExtensionAPI) {
     // 基线：启动之前写入的行不叫醒任何人（backlog 是 pulse 的活）
     offset = baselineOffset(spool)
     seen = 0
+    seenPath = join(dir, `${key}.seen`)
+    loadSeen(seenPath)
     reapDeadRegs(dir, reg)
     writeReg('ready')
     appendLedger(root, `started target=${keyTarget} inbox=${inbox} spool=${spool} baseline=${offset}`)

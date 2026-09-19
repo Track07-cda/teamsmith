@@ -319,6 +319,112 @@ check('S1 registry has a fresh heartbeat', (() => {
   await shutdown()
 }
 
+// ── S11：外部截断+重写（M43 事故形状）：已投递行不得重放，total 不灌水 ─────────────────
+// 2026-09-19 事故（pm-skills 主树 inbox-watch.log:118-120）：外部力量把 spool **原位截断又写回
+// 同样内容**（两次，间隔 6 秒；inode btime 证明不是 rename 替换；仓内写路径只有 `>>` 追加）。
+// 旧实现 `size < offset → offset = 0` 静默重置 → 下一拍从 0 全量重读 → 同一份 42 行被叫两遍、
+// total 被灌水 84。修复后：shrink 必须记账本、已投递行靠去重记忆压掉、total 只随真新增涨。
+const lastTotal = () => {
+  const m = [...ledger().join('\n').matchAll(/ wake n=\d+ total=(\d+) /g)]
+  return m.length ? Number(m.at(-1)[1]) : 0
+}
+let s11Lines = []
+{
+  await sessionStart()
+  const f = spoolFile()
+  // 三条新行先正常投递（合并成一条唤醒），确保重放内容**全部已投递**
+  const b0 = sent.length
+  for (const n of [1, 2, 3]) appendWake('knock', 'dev', 'pm', `m43-replay-line-${n}`)
+  await waitFor(() => sent.length > b0)
+  await sleep(400)
+  // 事故里重写的是**同一批字节**：直接从 spool 尾取真实的三行作为重写内容
+  const content = readFileSync(f, 'utf8')
+  s11Lines = content.trimEnd().split('\n').slice(-3)
+  const before = sent.length
+  const totalBefore = lastTotal()
+  // 事故形状①：原位截断到 0（flush 在 merge window 后看到空文件 → shrink）
+  writeFileSync(f, '')
+  await sleep(500)
+  // 事故形状②：写回同一批已投递行（flush 看到从 0 长回 → 旧实现从 0 全量重读）
+  appendFileSync(f, `${s11Lines.join('\n')}\n`)
+  await sleep(700)
+  check('S11 external truncate+rewrite does not redeliver already-delivered lines',
+    sent.length === before, `messages=${sent.length - before}`)
+  const shrinkLines = ledger().filter(l => /spool shrink/.test(l))
+  const dedupLines = ledger().filter(l => /dedup: skipped/.test(l))
+  check('S11 the ledger records the shrink and the dedup skip (auditable, not a silent reset)',
+    shrinkLines.length >= 1 && dedupLines.length >= 1,
+    `${shrinkLines.at(-1) ?? '(no shrink line)'} || ${dedupLines.at(-1) ?? '(no dedup line)'}`)
+  check('S11 total is not inflated by the rewrite', lastTotal() === totalBefore, `${totalBefore} -> ${lastTotal()}`)
+  // 真新增仍然只叫一次、计数只 +1
+  appendWake('say', 'pm', 'pm', 'genuinely-new-after-rewrite')
+  const ok = await waitFor(() => sent.length > before)
+  check('S11 a genuinely new line after the rewrite still wakes exactly once',
+    ok && sent.length === before + 1 && lastText().includes('genuinely-new-after-rewrite'),
+    `messages=${sent.length - before}`)
+  check('S11 total grows by exactly one for the real new line', lastTotal() === totalBefore + 1,
+    `${totalBefore} -> ${lastTotal()}`)
+}
+
+// ── S12：截短后的重放有界 + 说明跳过（只投最近 N 条「真新」，计数与文本一致）────────────────
+{
+  process.env.TEAM_INBOX_WATCH_REPLAY_MAX = '5'
+  const f = spoolFile()
+  // 垫大 spool（两条正常投递的填克行），保证后面的重写内容**一定比当前 offset 小**（真 shrink）
+  const bPad = sent.length
+  appendWake('say', 'dev', 'pm', `m43-pad-${'P'.repeat(240)}`)
+  appendWake('say', 'dev', 'pm', `m43-pad-${'Q'.repeat(240)}`)
+  await waitFor(() => sent.length > bPad)
+  await sleep(400)
+  const oldContent = readFileSync(f, 'utf8').trimEnd().split('\n')
+  const oneOld = [oldContent.reduce((a, b) => (Buffer.byteLength(a) <= Buffer.byteLength(b) ? a : b))] // 最短的一行（已投递）
+  const fresh = []
+  for (let i = 1; i <= 12; i++) fresh.push(`${Date.now()}\tsay\tdev\tpm\trescan-fresh-${i}`)
+  const rewritten = `${[...oneOld, ...fresh].join('\n')}\n`
+  const curSize = statSync(f).size
+  check('S12 fixture precondition: rewritten content is smaller than the current offset (a real shrink)',
+    Buffer.byteLength(rewritten, 'utf8') < curSize, `${Buffer.byteLength(rewritten, 'utf8')} < ${curSize}`)
+  const before = sent.length
+  const totalBefore = lastTotal()
+  // 单次 writeFileSync（O_TRUNC+写一盘）：merge window 后唯一一拍 flush 直接看到终态 → shrink → rescan
+  writeFileSync(f, rewritten)
+  await sleep(800)
+  check('S12 rescan after a shrink delivers exactly one bounded wake',
+    sent.length === before + 1, `messages=${sent.length - before}`)
+  const body = lastText()
+  check('S12 the bounded wake carries the newest fresh lines, not the skipped older ones',
+    body.includes('rescan-fresh-12') && body.includes('rescan-fresh-8') && !body.includes('rescan-fresh-7'),
+    body.replace(/\n/g, ' | '))
+  check('S12 the wake text says it is a rescan and names the skipped counts',
+    /rescan/.test(body) && /skipped 1 already-delivered \+ 7 older/.test(body), body.split('\n').find(l => /rescan/.test(l)) ?? '(no rescan line)')
+  const rescanLine = ledger().filter(l => / rescan /.test(l)).at(-1) ?? ''
+  check('S12 ledger records the rescan counts (lines/dup/skipped/deliver)',
+    /rescan lines=13 dup=1 skipped=7 deliver=5 /.test(rescanLine), rescanLine.trim())
+  check('S12 total grows only by the delivered bound (5, not 14)',
+    lastTotal() === totalBefore + 5, `${totalBefore} -> ${lastTotal()}`)
+  delete process.env.TEAM_INBOX_WATCH_REPLAY_MAX
+}
+
+// ── S13：去重记忆跨会话重启（<key>.seen 持久化；重启后的重写仍然静默）────────────────────
+{
+  await shutdown()
+  await sessionStart()   // 内存态清零 → 去重记忆只能从 <key>.seen 重新加载
+  const seenFiles = existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(x => x.endsWith('.seen')) : []
+  check('S13 the dedup memory is persisted (<key>.seen exists)', seenFiles.length === 1,
+    `seen=${seenFiles.length}`)
+  const f = spoolFile()
+  const before = sent.length
+  // 重写一批**上一会话投递过**的行（S11 那三行）：若记忆只活在内存里，这里就会重放
+  writeFileSync(f, `${s11Lines.join('\n')}\n`)
+  await sleep(800)
+  check('S13 after a restart, rewriting already-delivered lines stays silent',
+    sent.length === before, `messages=${sent.length - before}`)
+  const rescanLine = ledger().filter(l => / rescan /.test(l)).at(-1) ?? ''
+  check('S13 ledger records the post-restart rescan with deliver=0',
+    /rescan lines=3 dup=3 skipped=0 deliver=0 /.test(rescanLine), rescanLine.trim())
+  await shutdown()
+}
+
 // ── 反向守卫：真实仓库 state/ 未被触碰 ───────────────────────────────────────
 {
   const after = snapshot(REAL_STATE)

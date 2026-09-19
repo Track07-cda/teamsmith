@@ -317,6 +317,35 @@ evidence — and they never add an inbox line beyond the one their sender alread
 The session-side ledger is `state/inbox-watch.log` (`started` / `wake n=… kinds=…` / `stopped` lines); the
 sender side records `watch` as the outcome in `state/outbox/delivered.log`.
 
+### 4a.1 Delivery semantics: offset / rescan / caps (M43)
+
+The watcher tracks the spool with an **in-memory byte offset** into `state/inbox-watch/<key>.wake`. The only
+in-repo writer appends (`>>`), so a healthy offset never exceeds the file size. The offset is **not** the
+delivery contract — these three rules are:
+
+1. **A shrink is always external, and it is always recorded.** If the spool's size falls below the offset (or
+   the file vanishes while being tracked), something outside the repo truncated/rewrote/replaced it (the
+   2026-09-19 incident: an external actor rewrote the PM's spool in place twice within 6 s; the old code
+   silently reset `offset = 0` and re-read the whole file — 42 lines were delivered twice and `total` was
+   inflated by 84). Now the watcher writes a `spool shrink: size fell below offset=… → bounded rescan from 0`
+   ledger line instead of a silent reset.
+2. **No tuple is delivered twice.** Every delivered spool line — the whole `(epoch_ms, kind, from, durable,
+   preview)` tuple — goes into a dedup memory (in memory + persisted to `state/inbox-watch/<key>.seen`,
+   capped at `TEAM_INBOX_WATCH_SEEN_MAX`, default 512, so it survives session restarts). Lines that come back
+   via a rewrite (or overlap after a shrink) are skipped and recorded as `dedup: skipped N …` ledger lines.
+3. **Replays are bounded and explained.** A shrink triggers a *rescan*: the file is re-read from 0, but
+   already-delivered lines are dropped and genuinely-new lines are capped to the **most recent**
+   `TEAM_INBOX_WATCH_REPLAY_MAX` (default 20); anything older is skipped and the wake text says so
+   (`(spool rescan after external shrink: delivered the last K unseen line(s); skipped D already-delivered +
+   M older …)`). If everything was already delivered there is **no wake at all** — the ledger's
+   `rescan lines=… dup=… skipped=… deliver=0` line is the audit trail.
+
+Counter semantics: the ledger's `total=` (and the wake text's `N`) count **real deliveries only** — rescan /
+dedup skips never inflate it, and a rescan wake carries a `rescan[dup=D skipped=M]` annotation. The other
+caps are unchanged: previews truncate at `TEAM_INBOX_WATCH_PREVIEW` (160 chars), a wake lists at most 5 lines,
+and the spool's own ceiling is `TEAM_INBOX_WATCH_MAX_BYTES` (128 KiB, head dropped tail kept, offset snapped
+to the new size so the kept tail is not re-announced).
+
 ## 5. Logs / activity: `TEAM_AGENT_LOG_GLOB`
 
 `team monitor --activity` renders Pi session JSONL by default. With `TEAM_AGENT_LOG_GLOB` set, the
