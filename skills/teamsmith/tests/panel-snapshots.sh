@@ -286,6 +286,99 @@ else
   bad "P18.1 B1 不回归：$p181_sweep"
 fi
 
+# ---------------------------------------------------------------- M34: 活跃态置顶（用户拍板）
+# 用户实机看 work 页后拍板：活跃任务应当排在顶部。夹具的 BOARD.md 文件序故意把 8 条 done 放在前、
+# 2 条活跃（wip + blocked）放在最后 —— 旧实现（行按文件序原样渲染）会把活跃行压到卡片最底，正是
+# 用户看到的样子。窄档（120x14）里折叠还在（keep 5 + 其余 3），宽档（120x40）里余高把折叠放满
+# （P18.1 的那条放宽规则）：两档都要求活跃两行在最顶，keep 的 done 随后、显示序仍是文件序（老→新），
+# 折叠计数与隐藏条数一致。计数行、keep 规则、kanban 页都不归这条断言管。
+printf '\n\033[1m== M34 · work 页看板卡：活跃态置顶 ==\033[0m\n'
+m34_board="$tmp/m34-board.json"
+cat > "$m34_board" <<'JSON'
+{"rows": [
+ {"id": "D01", "title": "历史条目 01", "agent": "dev2", "branch": "task/D01", "deps": "-", "state": "done"},
+ {"id": "D02", "title": "历史条目 02", "agent": "dev2", "branch": "task/D02", "deps": "-", "state": "done"},
+ {"id": "D03", "title": "历史条目 03", "agent": "dev2", "branch": "task/D03", "deps": "-", "state": "done"},
+ {"id": "D04", "title": "历史条目 04", "agent": "dev2", "branch": "task/D04", "deps": "-", "state": "done"},
+ {"id": "D05", "title": "历史条目 05", "agent": "dev2", "branch": "task/D05", "deps": "-", "state": "done"},
+ {"id": "D06", "title": "历史条目 06", "agent": "dev2", "branch": "task/D06", "deps": "-", "state": "done"},
+ {"id": "D07", "title": "历史条目 07", "agent": "dev2", "branch": "task/D07", "deps": "-", "state": "done"},
+ {"id": "D08", "title": "历史条目 08", "agent": "dev2", "branch": "task/D08", "deps": "-", "state": "done"},
+ {"id": "A1", "title": "活跃夹具一", "agent": "dev", "branch": "task/A1", "deps": "-", "state": "wip"},
+ {"id": "A2", "title": "活跃夹具二", "agent": "verify", "branch": "-", "deps": "A1", "state": "blocked"}
+],
+ "counts": {"todo": 0, "wip": 1, "review": 0, "done": 8, "blocked": 1, "dropped": 0},
+ "total": 10,
+ "deliveries": [
+   {"id": "D08", "agent": "dev2", "at": "2026-09-16T09:30:00Z"}
+ ]}
+JSON
+m34_check() { # <width> <height> <label>
+  local width="$1" height="$2" label="$3" frame="$tmp/m34-$1x$2.txt" got
+  env B3_STUB_BOARD_FILE="$m34_board" "$js" "$panel" --snapshot --root "$tmp" --state-dir "$tmp/state" \
+    --team-cli "$stub" --width "$width" --height "$height" --theme dark --lang zh --page 2 \
+    >"$frame" 2>"$tmp/m34-$1x$2.err"
+  if [ ! -s "$frame" ]; then
+    bad "M34 $label：没有渲染出帧"; tail -2 "$tmp/m34-$1x$2.err"; return
+  fi
+  got="$(python3 - "$frame" <<'PYM'
+import re, sys
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+ACTIVE = ["A1", "A2"]                      # 文件序里的两条活跃行（wip + blocked）
+HISTORY = [f"D{i:02d}" for i in range(1, 9)]  # 文件序里的 8 条 done（老→新）
+
+
+def cell_row(cid):  # the first row whose id cell renders this id (the id column is 10 cells wide)
+    pat = re.compile(re.escape(cid) + r"\s")
+    for i, r in enumerate(rows):
+        if pat.search(r):
+            return i
+    return -1
+
+
+problems = []
+if not any("任务看板" in r for r in rows):
+    problems.append("没有 board 卡片")
+at = {c: cell_row(c) for c in ACTIVE}
+short = [c for c, i in at.items() if i < 0]
+if short:
+    problems.append("活跃行没渲染出来：" + "/".join(short))
+ht = {c: cell_row(c) for c in HISTORY}
+visible = [c for c in HISTORY if ht[c] >= 0]      # rendered history rows, in file order
+folded = None
+for r in rows:
+    m = re.search(r"其余\s*(\d+)\s*条", r)
+    if m:
+        folded = int(m.group(1))
+        break
+hidden = len(HISTORY) - len(visible)
+if folded is None and hidden != 0:
+    problems.append(f"折叠行缺失（应有 {hidden} 条隐藏在卡片里）")
+elif folded is not None and folded != hidden:
+    problems.append(f"折叠计数 {folded} != 实际隐藏的历史行 {hidden}")
+if visible != HISTORY[len(HISTORY) - len(visible):]:
+    problems.append("keep 的 done 不是最新的连续后缀（老→新）：" + "/".join(visible))
+if [ht[c] for c in visible] != sorted(ht[c] for c in visible):
+    problems.append("keep 的 done 没有保持文件序（老→新）：" + str([ht[c] for c in visible]))
+if not short and visible and max(at.values()) > min(ht[c] for c in visible):
+    problems.append(
+        f"活跃行不在最顶：A1@{at['A1']} A2@{at['A2']}，而 done 行在 {sorted(ht[c] for c in visible)}"
+    )
+if not short and [at[c] for c in ACTIVE] != sorted(at[c] for c in ACTIVE):
+    problems.append(f"活跃行没有保持文件序（A1@{at['A1']} A2@{at['A2']}）")
+print("ok" if not problems else "；".join(problems))
+PYM
+)"
+  if [ "$got" = "ok" ]; then
+    ok "M34 $label：活跃行在最顶（A1→A2 文件序），keep 的 done 随后且保持文件序"
+  else
+    bad "M34 $label：$got"
+  fi
+}
+m34_check 120 14 "120x14（history 折叠：keep 5 + 其余 3）"
+m34_check 120 40 "120x40（余高把折叠放满：8 条历史全在）"
+
 # The settings overlay's column plan (V16 F-V16-4/5's layout half + the user's report of
 # 2026-09-17): with `lang=en` the key column was a hardcoded 12 cells with no separator, so
 # `default page` (exactly 12) glued its value (`default pageoverview`) and `activity column` was cut

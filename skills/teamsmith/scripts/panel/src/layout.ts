@@ -663,8 +663,17 @@ function boardBlock(ctx: Ctx): Block | null {
   const keep = Math.max(1, ctx.boardDoneKeep ?? BOARD_DONE_KEEP)
   const keepDone = new Set(doneRows.slice(-keep).map((r) => r.id))
   const folded = doneRows.filter((r) => !keepDone.has(r.id)).length
-  for (const r of rows) {
-    if ((r.state === 'done' || r.state === 'dropped') && !keepDone.has(r.id)) continue
+  // M34 (the user's call after a live look at the work page): the card reads active work first.
+  // Every todo/wip/review/blocked row keeps its BOARD.md order above the history, and the kept
+  // done/dropped rows follow in the same file order the kanban page renders its lanes in (the file
+  // lists oldest -> newest, so the newest kept row sits directly under the active rows and the
+  // folded count — the older ones — stays last). Only the row order changes: the counts row, the
+  // keep window and the fold are untouched.
+  const rendered = [
+    ...rows.filter((r) => r.state !== 'done' && r.state !== 'dropped'),
+    ...rows.filter((r) => (r.state === 'done' || r.state === 'dropped') && keepDone.has(r.id)),
+  ]
+  for (const r of rendered) {
     lines.push({
       line: truncLine(
         ln(
