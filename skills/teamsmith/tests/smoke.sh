@@ -2797,23 +2797,39 @@ EOS
     M25_GATE_LOG="$REPO/docs/team/reviews/T2.2-verify.log"
     # 关键：命令**带 & 敲进交互式 shell** —— 只有交互式 shell 的 & 才给后台作业新建进程组。
     # （脚本内部的 & 不建进程组，读 tty 不会被停住 —— 那样这里就会假绿。）
+    # 对照组的进程现场：pid + STAT（没起来 = 空）。**不许**用 `ps -eo args | grep -q "<脚本名>"`：
+    # grep 自己的命令行里就带那个字符串（20/20 次实测自匹配），循环第一次就 break，等于没等。
+    # 用 awk 匹配整行（`$0`）+ 模式里带 `[.]`：awk 自己的 args 里是 `m25-control-read[.]sh`，
+    # 字面量不是 `m25-control-read.sh`，所以不会自匹配（pkg 的 10 节有 20/20 对照）。
+    # 注意不能只看 `$3`（args 的第一词）：`bash <script>` 这个进程的 `$3` 是 `bash`，不是脚本名
+    # （M35 实测：写成 `$3 ~ /m25-control-read[.]sh/` 永远匹配不到 → 30s 超时假红）。
+    m25_ctl_stat() { ps -eo pid=,stat=,args= 2>/dev/null | awk '$0 ~ /m25-control-read[.]sh/ {print $1, $2; exit}'; }
     m25_tm send-keys -t "$M25_PANE" "cd $REPO && bash $TMP/m25-control-read.sh > $TMP/m25-control.out 2>&1 &" \
       && m25_tm send-keys -t "$M25_PANE" Enter
-    sleep 1.5
-    m25_tm send-keys -t "$M25_PANE" "cd $REPO && env TEAM_REVIEW_ANY_DIR=1 TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 TEAM_GATES='bash $TMP/m25-gate-tty.sh' $TEAM review T2.2 --dir $REV_WT --branch $T1_BRANCH > $TMP/m25-tty-review.log 2>&1 &" \
-      && m25_tm send-keys -t "$M25_PANE" Enter
-    # 夹具有效性：等对照组真的进入「被停住」状态（负载高时启动会慢，所以轮询而不是拍一次）
-    M25_CWAIT=0
-    while [ "$M25_CWAIT" -lt 24 ]; do
-      ps -eo args 2>/dev/null | grep -q "m25-control-read.sh" && break
+    # 夹具有效性（不许假绿）：轮询**实际条件** —— 对照组真的出现在 ps 里、且 STAT 是 T（被 SIGTTIN 停住）。
+    # 事故（M34 复验 17:58 的假红）：旧写法是自匹配的 ps|grep（第一次就 break）+ 单次 assert_file，
+    # 负载高时 pane 里的交互 shell 还没 exec 出脚本 → 「m25-control.out 找不到」红，而几秒后文件其实出现了；
+    # 同一处自匹配还让下一行「对照组没有被停住」**假绿**（ps 命中 grep 自己，文件不存在反而满足条件）。
+    M25_CWAIT=0; M25_CSTATE=""; M25_CDIAG="ps 里 30s 都没看到对照组（pane 里的 shell 没起来？）"
+    while [ "$M25_CWAIT" -lt 60 ]; do
+      M25_CSTATE="$(m25_ctl_stat)"
+      if [ -n "$M25_CSTATE" ]; then
+        M25_CDIAG="ps 里最后是 [$M25_CSTATE]"
+        case "$M25_CSTATE" in *" T"*) M25_CDIAG=""; break ;; esac
+      fi
       sleep 0.5; M25_CWAIT=$((M25_CWAIT + 1))
     done
     assert_file "$TMP/m25-control.out" "M25-② 夹具有效性：对照组脚本起来了"
-    if ps -eo args 2>/dev/null | grep -q "m25-control-read.sh" && ! grep -q "control_done=yes" "$TMP/m25-control.out" 2>/dev/null; then
+    if [ -z "$M25_CDIAG" ]; then
       ok "M25-② 夹具有效性：裸 read 在后台进程组 + tty 下确实被停住（这就是「挂死」的形状）"
     else
-      bad "M25-② 夹具有效性：对照组没有被停住 —— 本环境测不出这个机制，断言会假绿"
+      grep -q "control_done=yes" "$TMP/m25-control.out" 2>/dev/null \
+        && M25_CDIAG="对照组把 read 跑完了（control_done=yes）——本环境读 tty 没被停住"
+      bad "M25-② 夹具有效性：对照组没有被停住（$M25_CDIAG）—— 本环境测不出这个机制，断言会假绿"
     fi
+    # 对照组已确认停住，现在才把门禁敲进**同一个** pane（原来靠 sleep 1.5 赌它起没起来）
+    m25_tm send-keys -t "$M25_PANE" "cd $REPO && env TEAM_REVIEW_ANY_DIR=1 TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 TEAM_GATES='bash $TMP/m25-gate-tty.sh' $TEAM review T2.2 --dir $REV_WT --branch $T1_BRANCH > $TMP/m25-tty-review.log 2>&1 &" \
+      && m25_tm send-keys -t "$M25_PANE" Enter
     # 等门禁把最后一行写出来（最多 60s；被停住时它永远写不出来）；高负载下给足余量
     M25_WAIT=0
     while [ "$M25_WAIT" -lt 120 ]; do
@@ -2942,29 +2958,35 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   }
 
   # 制造“PM 窗口在、里面是空提示符”的现场（pi 退出后的样子），并用占位窗口保住 session
-  make_pm_idle() {   # 让 PM 窗口回到空 shell（等 team_pm_state 真的报 idle:*，不是赌一次 sleep）
+  make_pm_idle() {   # 让 PM 窗口回到**确定性**的空 shell（等 team_pm_state 真的报 idle:*，不是赌一次 sleep）
     tmux new-window -t "$SESSION" -n keep -d -c "$REPO" >/dev/null 2>&1 || true
     tmux list-windows -t "$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null \
       | awk -v n="$PMW" '$2==n {print $1}' \
       | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
-    tmux new-window -t "$SESSION" -n "$PMW" -d -c "$REPO" >/dev/null 2>&1 || true
+    # 窗口里跑**不带 rc 的 bash**（M35）——不是任何 profile 跑完后的登录 zsh。
+    # 实测（M35 注入实验）：登录 zsh 的 profile（/etc/zsh/zprofile → distrobox 的 host-spawn）
+    # 在“提示符已出现”之后仍会间歇性起前台子进程；make_pm_idle 的两次采样可以落在空档里，而紧接着的
+    # 那一拍（§11b3 ⑤ 的 watch）撞上子进程，于是 attempts 行如实记成 state=unknown、断言 state=idle
+    # 假红（P18 B2、M34 复验两条实测）。`bash --noprofile --norc` 让“空提示符”变成**构造性**的：
+    # 没有 rc、没有异步子进程、cwd 由 tmux 的 -c 钉在 $REPO。
+    tmux new-window -t "$SESSION" -n "$PMW" -d -c "$REPO" bash --noprofile --norc >/dev/null 2>&1 || true
     # 旧实现轮询 pane_current_command + sleep 0.5；只采样一次 team_pm_state 也不够：
     # 窗口刚建好的一瞬间 pane 还没 exec 出前台命令，team_pm_state 会**假**报 idle（空 cmd），
     # 紧接着启动命令就把它变成 unknown:*（§11b3 ⑤ 的 attempts 行正是这么记错的；注入 1.2s 的
-    # 启动命令后，在负载下这次假 idle 稳定复现）。判据：连续两次采样（间隔 0.5s）都是 idle:*，
-    # 且两次都看到前台命令是真正的 shell。
-    local i=0 st="" cmd="" ok=0
+    # 启动命令后，在负载下这次假 idle 稳定复现）。判据：连续三次采样（间隔 0.5s，覆盖 ≥1s）都是
+    # idle:*，且每次都看到前台命令是真正的 shell。
+    local i=0 st="" cmd="" n=0
     while [ "$i" -lt 40 ]; do
       st="$(pm_state_now 2>/dev/null || true)"
       cmd="$(tmux display-message -p -t "$SESSION:$PMW" '#{pane_current_command}' 2>/dev/null || true)"
       case "$st" in idle:*)
         case "$cmd" in
           zsh|bash|sh|dash|ash|ksh|fish)
-            [ "$ok" = "1" ] && { PM_STATE_LAST="$st"; return 0; }
-            ok=1 ;;
-          *) ok=0 ;;
+            n=$((n + 1))
+            [ "$n" -ge 3 ] && { PM_STATE_LAST="$st"; return 0; } ;;
+          *) n=0 ;;
         esac ;;
-      *) ok=0 ;;
+      *) n=0 ;;
       esac
       sleep 0.5
       i=$((i + 1))
@@ -3100,6 +3122,22 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   $TEAM pulse status >"$TMP/wd-status.log" 2>&1
   assert_has "$TMP/wd-status.log" "tmux 窗口 $SESSION:pulse 在跑" "status 看到窗口在跑"
   $TEAM pulse logs >"$TMP/wd-logs.log" 2>&1 && ok "pulse logs（pane 快照）退出码 0" || bad "pulse logs 失败"
+  # M35：面板首帧是**异步**的 —— node/Ink 起来到画出第一屏之间 pane 是空的（pulse up 自己的 1.5s
+  # 只保证进程在跑：team_pulse_window_state = team_pane_busy）。实测 M34 复验第二轮：这句读到 0 字节的
+  # 快照而同一个 pane 稍后就有画面，断言假红（现场 wd-logs.log 大小 = 0）。判据不变（快照里必须出现
+  # 面板标题），换的是等待方式：有界轮询实际条件，超时把最后一次快照原样打出来。
+  WD_LOGS_WAIT=0
+  while [ "$WD_LOGS_WAIT" -lt 40 ]; do
+    grep -qF "teamsmith pulse" "$TMP/wd-logs.log" 2>/dev/null && break
+    sleep 0.5
+    $TEAM pulse logs >"$TMP/wd-logs.log" 2>&1 || true
+    WD_LOGS_WAIT=$((WD_LOGS_WAIT + 1))
+  done
+  if ! grep -qF "teamsmith pulse" "$TMP/wd-logs.log" 2>/dev/null; then
+    printf '  \033[33mℹ\033[0m pulse 窗口最后快照（%s 字节）：\n' \
+      "$(wc -c < "$TMP/wd-logs.log" 2>/dev/null | tr -d ' ')"
+    sed 's/^/    | /' "$TMP/wd-logs.log" 2>/dev/null | head -5
+  fi
   assert_has "$TMP/wd-logs.log" "teamsmith pulse" "logs 显示面板画面"
   $TEAM pulse up >"$TMP/wd-up2.log" 2>&1
   assert_has "$TMP/wd-up2.log" "已在跑" "up 幂等（不重复起窗口）"
@@ -3464,6 +3502,13 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$REPO/.pi/team/state/watchdog.log" "未计入配额" "日志写明失败的尝试不计数"
   assert_eq "失败的尝试记进了 attempts 日志（决策 + 证据）" \
     "$(cat "$REPO/.pi/team/state/pm-start-attempts.log" 2>/dev/null | wc -l | tr -d ' ')" "1"
+  # ④ M35：断言红时把 attempts 实际记的那行原样打出来 —— 否则只知道「找不到 state=idle」，
+  # 不知道 watch 到底看见了什么（P18 B2 / M34 两次假红的排查都卡在这里）。
+  if ! grep -qF "state=idle" "$REPO/.pi/team/state/pm-start-attempts.log" 2>/dev/null; then
+    printf '  \033[33mℹ\033[0m attempts 实际记的是：[%s]（期望 state=idle；PM 窗口此刻 cmd=[%s]）\n' \
+      "$(tail -n 1 "$REPO/.pi/team/state/pm-start-attempts.log" 2>/dev/null || true)" \
+      "$(tmux display-message -p -t "$SESSION:$PMW" '#{pane_current_command}' 2>/dev/null || true)"
+  fi
   assert_has "$REPO/.pi/team/state/pm-start-attempts.log" "state=idle" "attempts 行带决策证据（state=…）"
   assert_eq "失败路径也撤掉了启动标记" "$([ -f "$(mark_file)" ] && echo present || echo gone)" "gone"
   # 那次尝试其实已经把进程起来了（respawn 在「等证据」之前），只是来不及写下 pm.pid ——
