@@ -35,6 +35,13 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
 # 与 M25 的 TEAM_REVIEW_* 同一族泄漏）；TEAM_TMUX_CALLS_LOG/TEAM_TMUX_REAL 漏进来会把夹具的
 # tmux 调用写进真项目的 forensics 日志 / 把 shim 指到错误真身（M7.2 同族污染）。
 unset TEAM_ALLOW_DESTRUCTIVE_TMUX TEAM_TMUX_CALLS_LOG TEAM_TMUX_REAL 2>/dev/null || true
+# ── M36 闸门在 PATH 里的那一格也属于「调用者身份」────────────────────────────────────────
+# 调用方是 PM/worker 会话（M36 起 PATH 最前是 scripts/shim）时，夹具里 `command -v tmux` 会解析到
+# shim 而不是真 tmux：M8.1 的逐字节参考值与 m36 段的 TEAM_TMUX_REAL 断言都会跟着漂（v1.42.0 发布
+# 门禁实测 2 红：M8.1 默认渲染 + worker 窗口 env 的真 tmux 路径）。与上面的 TEAM_* unset 同理剥掉。
+_m36p=""; _m36ifs="$IFS"; IFS=:
+for _m36d in $PATH; do case "$_m36d" in */scripts/shim) ;; *) _m36p="${_m36p:+$_m36p:}$_m36d" ;; esac; done
+IFS="$_m36ifs"; [ -n "$_m36p" ] && PATH="$_m36p"; export PATH; unset _m36p _m36ifs _m36d
 # ── 复验覆盖项（M25）：TEAM_REVIEW_* 是 review 的旋钮，不是门禁/夹具的输入 ──────────────────
 # 事故背景（V16 复验首次 FAIL）：PM 用 `TEAM_REVIEW_ANY_DIR=1 team review …` 时变量继承进夹具，
 # 于是「拿错 checkout 必须拒绝」的负向用例**自己把自己放行**（假绿反过来变成假红）。
@@ -438,6 +445,8 @@ git config user.name smoke
 echo "# smoke" > README.md
 git add -A && git commit -qm "chore: init"
 assert_dir "$REPO/.git" "git 仓库就绪"
+# M36 调用者 PATH 卫生自检：剥完 shim 后 PATH 里不得再有 */scripts/shim（翻转：删掉顶部那段 PATH 清理 → 红）
+case ":$PATH:" in *:*/scripts/shim:*) bad "M36 调用者 PATH 卫生：剥完 shim 后 PATH 仍含 scripts/shim" ;; *) ok "M36 调用者 PATH 卫生：PATH 里没有 scripts/shim（shim 不再漏进夹具）" ;; esac
 # M33 哨兵自检：后台哨兵必须**活着但不在作业表里**。它在作业表里的话，门禁里任何裸 `wait`
 # （12b-i 的并发排水夹具就有一处）都会被它卡住 —— 双重 fork 就是为了这一条。
 # 翻转：把启动行改回 `smoke_tmp_tripwire &`（或删掉那句双重 fork）→ 这条红。
