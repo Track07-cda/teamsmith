@@ -1,0 +1,35 @@
+{
+  "name": "teamsmith",
+  "version": "1.41.0",
+  "description": "Turn one agent session into a project owner: self-contained task briefs dispatched to worker agents in their own git worktrees, independent verification on a separate checkout, and an auditable ledger (BOARD / reviews / threads / DECISIONS). Runs on Pi today.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Track07-cda/teamsmith.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "teamsmith",
+    "agents",
+    "multi-agent",
+    "orchestration",
+    "tmux",
+    "git-worktree",
+    "project-management"
+  ],
+  "files": [
+    "skills/",
+    "install.sh"
+  ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "test": "TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh",
+    "test:full": "bash skills/teamsmith/tests/smoke.sh",
+    "gates": "openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh"
+  }
+}

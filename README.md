@@ -25,8 +25,40 @@ Design rationale: [references/philosophy.md](skills/teamsmith/references/philoso
 | Skill | Notes |
 |---|---|
 | [`teamsmith`](skills/teamsmith/SKILL.md) | See above. Former name: `pi-team` (the `skills/pi-team` compatibility symlink was removed — old absolute paths must be updated) |
+| [`teamsmith-init`](skills/teamsmith-init/SKILL.md) | The new-project entry point: settles the setup questions with the user, then runs the one command that writes config, the `docs/team/` skeleton and the protocol section |
+
+This repository's own `docs/team/` **is** its ledger: the board, task briefs, reports, reviews and decisions in it are
+the real records of teamsmith being built with teamsmith.
 
 ## Install
+
+### As a Pi package (recommended)
+
+```bash
+pi install git:git@github.com:Track07-cda/teamsmith@v1.40.0      # user level: every project
+pi install -l git:git@github.com:Track07-cda/teamsmith@v1.40.0   # project level: recorded in .pi/settings.json
+```
+
+- **Pin a released tag**: `@v<version>`, the version `team version` prints. Latest tag:
+  `git tag --sort=-v:refname | head -1`.
+- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v1.40.0`) uses your SSH key. The HTTPS
+  shorthand `git:github.com/Track07-cda/teamsmith@v1.40.0` only works for a public repository — while this one is
+  private it asks for credentials and fails.
+- The clone lands in `~/.pi/agent/git/<host>/<path>` (user level) or `.pi/git/<host>/<path>` (project level); the
+  skill directory — the `<skill>` used in every command below — is `<clone>/skills/teamsmith`.
+- `pi list` shows what is installed (add `--approve` for a project you have not trusted in this session yet);
+  uninstall with `pi remove [-l] --approve <source>`.
+
+### From a checkout (developers)
+
+```bash
+git clone git@github.com:Track07-cda/teamsmith.git ~/src/teamsmith
+pi install -l ~/src/teamsmith    # project level; edits in the checkout are live (nothing is copied)
+```
+
+### Without Pi: `install.sh`
+
+For another TUI agent CLI, or to put the skills in `~/.agents/skills` next to other agent skills:
 
 ```bash
 ./install.sh                 # symlink every skill under skills/ into ~/.agents/skills (edit repo → live)
@@ -35,21 +67,55 @@ Design rationale: [references/philosophy.md](skills/teamsmith/references/philoso
 ./install.sh --uninstall     # remove what this repo installed
 ```
 
-Requirements: `bash` ≥ 4, `git` ≥ 2.31, `tmux`, and a supporting agent CLI (Pi today).
-No forge dependency, no container dependency, no jq/python/node.
+### What the package declares — and what it deliberately does not
 
-## Quick start (inside a project repo)
+The manifest (`package.json`) declares **skills only**: `pi.skills: ["./skills"]` loads `teamsmith` and
+`teamsmith-init`. The files under `skills/teamsmith/extension/` (`team-notify.ts`, `team-bg.ts`,
+`team-inbox-watch.ts`) are deliberately **not** in the manifest: teamsmith injects each of them with `-e` when it
+starts a PM or a worker window, so they exist only inside team windows. Installing the package adds no global
+extension, command or hook to your own session.
 
-```bash
-SKILL=~/.agents/skills/teamsmith
-TEAM="bash $SKILL/scripts/team"
+## Requirements
 
-bash $SKILL/scripts/team bootstrap         # config + docs skeleton + agent worktrees + watchdog window
-$TEAM doctor                               # self-check (git/tmux/agent CLI/gates/capacity)
-$TEAM task T1.1 --title "first task" --agent dev
-$EDITOR docs/team/tasks/T1.1-*.md          # make the brief self-contained
-$TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
-```
+| Need | Why |
+|---|---|
+| **Pi ≥ 0.76.0** | The session harness needs `--session-id`, which `team doctor` fails without; it landed in Pi 0.76.0 and is verified working on 0.85.1. Package installs work from 0.74.0 on, but 0.74.0 lacks `--session-id`, so 0.76.0 is the floor |
+| `bash` ≥ 4 | The CLI is bash (no jq/python) |
+| `git` ≥ 2.31 | One worktree per agent; the PM does all branching/merging |
+| `tmux` | One window per agent, the PM window, and the pulse window |
+| `node` ≥ 20 or `bun` ≥ 1.3 | Only for the pulse console/patrol (`scripts/panel`); point `TEAM_JS_BIN` at it when it is not on `PATH` |
+| **magic-context** — `pi install npm:@cortexkit/pi-magic-context` | Recommended: the PM's cross-session memory (`ctx_search` / `ctx_memory` / `ctx_note`). `team doctor` checks it |
+| **OpenSpec CLI** (`openspec`) | The spec layer and `openspec validate --all --strict` inside the gates |
+| `podman` | Optional: only for the tmux-touching tests (`skills/teamsmith/tests/container-tmux.sh`) |
+
+No forge dependency: the PM uses `git`/`gh`/`glab` directly, and cross-project contact is `team meeting`.
+
+## Quickstart (in a project repo)
+
+1. **Bring the project up** — ask your agent to run the `teamsmith-init` skill. It settles the questions with you
+   (session and roster, models, gates, VCS mode, patrol rhythm), shows the plan, then writes it:
+
+   ```bash
+   bash <skill>/scripts/team bootstrap --print    # the plan; writes nothing
+   bash <skill>/scripts/team bootstrap            # .pi/team/config.sh + docs/team/** + agent worktrees + pulse
+   bash <skill>/scripts/team doctor               # self-check: git/tmux/agent CLI/dependencies/gates/capacity
+   openspec init --tools pi                       # required dependency: spec root + the five phase commands
+   ```
+
+   `bootstrap` is idempotent and prints the `git worktree add` command for each agent (git stays with the PM).
+
+2. **Dispatch the first task**:
+
+   ```bash
+   TEAM="bash <skill>/scripts/team"
+
+   $TEAM task T1.1 --title "first task" --agent dev
+   $EDITOR docs/team/tasks/T1.1-*.md               # context / deliverables / boundaries / acceptance commands
+   $TEAM dispatch dev T1.1 docs/team/tasks/T1.1-*.md
+   ```
+
+3. **Verify, don't trust the report**: `$TEAM review T1.1 --dir /tmp/t1.1-check` runs the gates on an independent
+   checkout of the task branch and writes `docs/team/reviews/T1.1.md` — that record, not the report, is the evidence.
 
 ## Compatibility (former name: pi-team)
 
