@@ -2398,6 +2398,56 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   m37_stopped_count() { # → 待办里第 7 个字段（停了的 agent）
     m37_bash 'team_pending_counts' | awk '{print $7}'
   }
+  # M39：建窗后 pane_pid 先是**还没 exec 完的壳**（命令行 = tmux server 的 argv）。判据
+  # team_proc_is_agent_bin 在一次判定里读**两次**命令行（先查 dispatch-*.spawn 排除，再逐词比对 agent
+  # 可执行文件）；exec 正好落在两次读之间时，第一次读到「壳」（排除不生效）、第二次读到已经 exec 完的
+  # bash（agent 路径已可见）→ 判成 alive。实测（docs/team/reports/M39-verify.md 有 R1/R2 现场）：修前
+  # M34 / main 两棵树都是 ~10–15% 每次断言假红（同一份代码，与 M34 的改动无关）。
+  # 所以断言前必须有界等「窗口成型」，条件要具体：目标窗口 pane_pid 可读 **且** 它的命令行里出现本段的
+  # 夹具标记（标记写在命令行的尾巴上，看见它就等于 exec 完了 —— 之后两次读都看到完整命令行，排除稳定
+  # 生效）。命令行用 -ww 读全：这里问的是「exec 完了吗」，不该被 ps 的输出宽度（COLUMNS）截断干扰
+  # （宽度截断会让 dispatch-*.spawn 排除静默失效，见报告的「发现」。）
+  m37_pane_args() { # <session:window> → pane_pid 的完整命令行（窗口/进程不在 → 空）
+    local p; p="$(tmux list-panes -t "$1" -F '#{pane_pid}' 2>/dev/null | head -1)"
+    [ -n "$p" ] || return 0
+    ps -o args= -ww -p "$p" 2>/dev/null | head -1
+  }
+  m37_wait_shape() { # <session:window> <命令行里必须出现的标记> [十分之一秒数] → 0=已成型
+    local i=0 args
+    while [ "$i" -lt "${3:-50}" ]; do
+      args="$(m37_pane_args "$1")"
+      case "$args" in *"$2"*) return 0 ;; esac
+      sleep 0.1; i=$((i + 1))
+    done
+    return 1
+  }
+  # M39：断言变红时**自己带现场** —— pane_pid / pane 命令行 / 判据命中的 pid 与它的命令行 / 那个 pid 的
+  # is_agent_bin 判定 / 判据用的 agent 可执行文件 / 同 server 的窗口。一次红就能定位，不必再打补丁重跑。
+  m37_diag() { # <session:window>
+    local t="$1" pane
+    pane="$(tmux list-panes -t "$t" -F '#{pane_pid}' 2>/dev/null | head -1)"
+    printf '      · 现场 target=%s pane_pid=%s\n' "$t" "${pane:-（窗口/pane 不存在）}"
+    printf '      · 同 server：%s\n' "$(tmux list-panes -a -F '#{session_name}:#{window_name}(active=#{pane_active},pid=#{pane_pid})' 2>/dev/null | tr '\n' ' ')"
+    if [ -n "$pane" ]; then
+      printf '      · pane 命令行：%s\n' "$(ps -o args= -ww -p "$pane" 2>/dev/null | head -1)"
+      printf '      · 直接子进程：%s\n' "$(ps -o pid=,args= -ww --ppid "$pane" 2>/dev/null | tr '\n' ';')"
+    fi
+    m37_bash 'p="$(team_pane_agent_pid "$1" 2>/dev/null || true)"
+              printf "      · agent 可执行文件（判据用的）：%s\n" "$(team_agent_bin_path)"
+              if [ -z "$p" ]; then
+                printf "      · team_pane_agent_pid=（没命中任何 pid）\n"
+              else
+                printf "      · team_pane_agent_pid=%s cwd=%s is_agent_bin=%s args=[%s]\n" "$p" \
+                  "$(team_proc_cwd "$p" 2>/dev/null || echo "?")" \
+                  "$(team_proc_is_agent_bin "$p" && echo yes || echo no)" \
+                  "$(ps -o args= -ww -p "$p" 2>/dev/null | head -1)"
+              fi' "$t"
+  }
+  m37_assert_verdict() { # <断言文案> <session:window> <期望>：断言 + 变红时自带现场
+    local got; got="$(m37_verdict "$2")"
+    assert_eq "$1" "$got" "$3"
+    [ "$got" = "$3" ] || m37_diag "$2"
+  }
 
   # ① 简报里的字面形状：bash -c '<agent> …'（bash 是 pane_pid、agent 是子进程）
   M37_W_LIT="m37-lit"
@@ -2409,7 +2459,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     bad "6k ① 夹具：5s 内没看到 agent 子进程（$(m37_shape "$m37_bash_target")）"
   fi
-  assert_eq "6k ① 字面形状（bash 父 + agent 子）判活" "$(m37_verdict "$m37_bash_target")" "alive"
+  m37_assert_verdict "6k ① 字面形状（bash 父 + agent 子）判活" "$m37_bash_target" "alive"
 
   # ② 事故形状：交互 bash（argv 只有选项）里 `set +m` 跑 agent —— job control 关掉后子进程不再
   #    单独占前台进程组，pane_current_command 又只是 bash，旧判据在这里判「停了」。
@@ -2424,7 +2474,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   else
     bad "6k ② 夹具：5s 内没看到 agent 子进程（$(m37_shape "$M37_W_AGENT_T")）"
   fi
-  assert_eq "6k ② 事故形状（交互 bash + set +m）判活" "$(m37_verdict "$M37_W_AGENT_T")" "alive"
+  m37_assert_verdict "6k ② 事故形状（交互 bash + set +m）判活" "$M37_W_AGENT_T" "alive"
   # CLI 表面（digest / pulse 的「停了的 agent」）读的是同一份判据
   assert_eq "6k ② 待办：有任务但在跑的 agent 不算「停了的 agent」" "$(m37_stopped_count)" "0"
 
@@ -2432,17 +2482,32 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   #    agent —— 不算证据（不把「正在启动」说成「在跑」；PM 侧的对应物是 pm.pid.spawn 排除）。
   M37_W_START="m37-start"
   M37_W_START_T="$SESSION:$M37_W_START"
+  M37_START_MARK="dispatch-$M37_AGENT.spawn"   # 标记写在命令行尾巴上 → 看见它 = 这条命令行已经成型
   tmux new-window -t "$SESSION" -n "$M37_W_START" -d -c "$REPO" -- \
-    bash -c "sleep 600 && true  # 派单 harness 形状：$M37_STUB … dispatch-$M37_AGENT.spawn" 2>/dev/null || true
-  assert_eq "6k ④ 启动中的 harness（命令行里有 agent 路径但没有 agent 进程）判停" "$(m37_verdict "$M37_W_START_T")" "stopped"
+    bash -c "sleep 600 && true  # 派单 harness 形状：$M37_STUB … $M37_START_MARK" 2>/dev/null || true
+  if m37_wait_shape "$M37_W_START_T" "$M37_START_MARK"; then
+    ok "6k ④ 夹具现场：$(m37_shape "$M37_W_START_T")（命令行已成型，含 $M37_START_MARK）"
+  else
+    bad "6k ④ 夹具：5s 内没等到窗口成型（命令行里没出现 $M37_START_MARK；现场 args=[$(m37_pane_args "$M37_W_START_T")]）"
+  fi
+  m37_assert_verdict "6k ④ 启动中的 harness（命令行里有 agent 路径但没有 agent 进程）判停" "$M37_W_START_T" "stopped"
   # ⑤ 窗口名写错/窗口消失时必须判停 —— tmux 的 display-message 会静默回退到**当前窗口**，
   #    用它的输出当证据会把别的窗口的进程当成这个 agent（失败必须关闭，不许回声）。
-  assert_eq "6k ⑤ 不存在的窗口（display-message 回退陷阱）判停" "$(m37_verdict "$SESSION:no-such-window-m37")" "stopped"
+  m37_assert_verdict "6k ⑤ 不存在的窗口（display-message 回退陷阱）判停" "$SESSION:no-such-window-m37" "stopped"
 
   # ③ 对照：同一个窗口换成「bash 里没有 agent 子进程」→ 必须判停（旧判据在这里反而说 alive）
   tmux kill-window -t "$M37_W_AGENT_T" 2>/dev/null || true
-  tmux new-window -t "$SESSION" -n "$M37_W_AGENT" -d -c "$REPO" -- bash -c 'sleep 600 && true' 2>/dev/null || true
-  assert_eq "6k ③ 对照（bash 里没有 agent 子进程）判停" "$(m37_verdict "$M37_W_AGENT_T")" "stopped"
+  # 尾巴上的注释只是本段的成型标记（不影响「bash 里没有 agent 子进程」这个形状）：不等到它出现，
+  # 断言就可能落在「还没 exec 完」的现场上 —— 那种现场同样判停，会把 ③ 变成一次空跑。
+  M37_PLAIN_MARK="6k③对照形状"
+  tmux new-window -t "$SESSION" -n "$M37_W_AGENT" -d -c "$REPO" -- \
+    bash -c "sleep 600 && true  # $M37_PLAIN_MARK" 2>/dev/null || true
+  if m37_wait_shape "$M37_W_AGENT_T" "$M37_PLAIN_MARK"; then
+    ok "6k ③ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（bash 里没有 agent 子进程，命令行已成型）"
+  else
+    bad "6k ③ 夹具：5s 内没等到窗口成型（命令行里没出现 $M37_PLAIN_MARK；现场 args=[$(m37_pane_args "$M37_W_AGENT_T")]）"
+  fi
+  m37_assert_verdict "6k ③ 对照（bash 里没有 agent 子进程）判停" "$M37_W_AGENT_T" "stopped"
   assert_eq "6k ③ 对照：待办把它算成「停了的 agent 1」" "$(m37_stopped_count)" "1"
 
   # 清场：窗口 + 夹具 agent 的 state 不能留给后面的段落（尤其 12/14c 的零写入与真进程自检）
