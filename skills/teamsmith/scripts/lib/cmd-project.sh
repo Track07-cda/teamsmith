@@ -21,6 +21,10 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   digest          给 PM 的待办摘要：收件箱未处理项 + 待复验报告 + 任务状态
   inbox [agent]   打印收件箱（agent 在回合结束时自动追加）
   paths           打印当前解析出的路径/ session（JSON），排障用
+  config list|set|log|set-agent-model
+                  项目契约（.pi/team/config.sh）的读写面：list 列每个键的效果类（apply/restart/refuse）
+                  与默认值；set 是**唯一写入口**（值校验 + sha256 指纹 CAS + 原子写 + 审计）；
+                  log 看审计尾部；set-agent-model 按席位改模型（- 移除覆盖）
 
   ── 文档契约（PM 维护） ─────────────────────────────────────
   task ID --title ... [--agent a] [--deps ...] [--issue N]
@@ -166,6 +170,17 @@ team_cmd_init() {
   pmwin="${pmwin:-pm}"
   model="${model:-deepseek/deepseek-flash}"
   gates="${gates:-$(team_detect_gates)}"
+
+  # 门禁值是契约里的一个键（P21 任务 1.7）：写入前用唯一校验器验一遍。旧行为是把它塞进模板就完事，
+  # 值里带 `#` 时 notify 读取器会截断、带换行时契约直接坏掉，而 init 照样报成功。
+  if [ -n "$gates" ]; then
+    local gates_reason
+    if ! gates_reason="$(team_config_validate_value TEAM_GATES "$gates")"; then
+      team_err "init: --gates 的值不能写进契约（$gates_reason）"
+      team_dim "  契约是单行 KEY='value' 文件：不能含换行或 #；要么换一个能表示的值，要么手改 .pi/team/config.sh"
+      return 1
+    fi
+  fi
 
   team_hdr "teamsmith init → $TEAM_MAIN_ROOT"
 

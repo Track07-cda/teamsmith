@@ -74,6 +74,9 @@ export const BLOCK_NAMES = [
   // P18/B3: the detail view's on-demand reader. It is in the block set but **never wanted** unless
   // `opts.detailId` is set, so a parked console spawns no `detail` child (design §8).
   'detail',
+  // P22/B2: the project-settings view's on-demand reader (`team config list --json`). Same rule:
+  // never wanted unless the view is open.
+  'settings',
 ] as const
 export type BlockName = (typeof BLOCK_NAMES)[number]
 
@@ -110,6 +113,8 @@ export interface DataOptions {
   blocks?: readonly BlockName[]
   /** The detail view's entry id; while set, `detail` joins the wanted set (null/absent = parked). */
   detailId?: string | null
+  /** True while the project-settings view is open; only then does `settings` join the wanted set. */
+  settingsOpen?: boolean
   /** The detail file to serve with `--file` (must be one of the discovered paths). */
   detailFile?: string | null
 }
@@ -181,6 +186,8 @@ const BLOCK_SPECS: Record<BlockName, BlockSpec> = {
       return args
     },
   },
+  // The project-settings reader rides the open view exactly like `detail` (P22/B2).
+  settings: { ttlMs: 15000, timeoutMs: 10000 },
 }
 
 
@@ -349,6 +356,7 @@ const PANEL_BLOCK_NAMES: readonly BlockName[] = [
   'patrol',
   'health',
   'detail',
+  'settings',
 ]
 
 function isPanelBlock(name: BlockName): boolean {
@@ -371,12 +379,16 @@ export interface PanelCache {
 export function createPanelCache(opts: DataOptions): PanelCache {
   const cli = opts.teamCli || findTeamCli(panelDirOf(import.meta.url))
   /**
-   * The wanted set is read live: the detail block joins it only while the view is open, so the
-   * idle cost of a parked console is exactly what it was before the view existed (design §8).
+   * The wanted set is read live: the `detail` and `settings` blocks join it only while their views
+   * are open, so the idle cost of a parked console is exactly what it was before those views
+   * existed (design §8).
    */
   const wantedSet = (): readonly BlockName[] => {
     if (opts.blocks) return opts.blocks
-    return opts.detailId ? BLOCK_NAMES : BLOCK_NAMES.filter((name) => name !== 'detail')
+    const live = new Set<BlockName>()
+    if (opts.detailId) live.add('detail')
+    if (opts.settingsOpen) live.add('settings')
+    return BLOCK_NAMES.filter((name) => (name === 'detail' || name === 'settings' ? live.has(name) : true))
   }
   const state: Record<string, BlockState> = {}
   for (const name of BLOCK_NAMES) state[name] = { at: 0 }

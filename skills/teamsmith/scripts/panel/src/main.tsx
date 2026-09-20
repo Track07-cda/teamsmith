@@ -43,7 +43,7 @@ import { fill, stringsFor } from './strings/index.js'
 import { PANEL_CONF_FILE, PANEL_PAGE_FILE, readPage, readSettings, writePage, writeSettings } from './settings.js'
 import type { Settings } from './settings.js'
 import { contrastPairs, PALETTES, resolveTheme } from './theme.js'
-import type { FrameInput, PageId, ViewState } from './types.js'
+import type { FrameInput, PageId, SettingsBlock, ViewState } from './types.js'
 
 /** The Kitty keyboard protocol's pop/push pair, written around the editor handoff (design §6). */
 const KITTY_POP = '\u001b[<u'
@@ -505,8 +505,55 @@ async function main(): Promise<void> {
     }
   }
 
-  async function setStandby(on: boolean, reason: string): Promise<{ ok: boolean; line: string }> {
-    if (!teamCli) return { ok: false, line: `✗ ${s.noTeamCli}` }
+  /**
+   * One `team config set` invocation (P22/B3): the console never opens the contract itself — it
+   * spawns the owning command and maps its exit code to an honest receipt in the App. `--dry-run`
+   * writes neither the contract nor an audit line (the validation call is a read).
+   */
+  async function setSetting(
+    key: string,
+    value: string,
+    o: { dryRun?: boolean; fingerprint?: string | null; allowDanger?: boolean },
+  ): Promise<{ code: number; line: string }> {
+    if (!teamCli) return { code: 127, line: s.noTeamCli }
+    const args = [teamCli, '--root', root, 'config', 'set', key, value, '--actor', 'panel']
+    if (o.dryRun) args.push('--dry-run')
+    else args.push('--yes')
+    if (o.fingerprint) args.push('--fingerprint', o.fingerprint)
+    if (o.allowDanger) args.push('--allow-danger')
+    const res = await run(args)
+    const line = firstLine(res.err) || firstLine(res.out)
+    // On a settle the view re-reads the list and the audit footer; a validation changes nothing.
+    if (!o.dryRun) refreshNow()
+    return { code: res.rc, line }
+  }
+
+  /** One `team config set-agent-model <seat> <model|->` invocation (P22/B4). */
+  async function setSeatModel(
+    seat: string,
+    model: string,
+    o: { dryRun?: boolean; fingerprint?: string | null },
+  ): Promise<{ code: number; line: string }> {
+    if (!teamCli) return { code: 127, line: s.noTeamCli }
+    const args = [teamCli, '--root', root, 'config', 'set-agent-model', seat, model || '-', '--actor', 'panel']
+    if (o.dryRun) args.push('--dry-run')
+    else args.push('--yes')
+    if (o.fingerprint) args.push('--fingerprint', o.fingerprint)
+    const res = await run(args)
+    const line = firstLine(res.err) || firstLine(res.out)
+    if (!o.dryRun) refreshNow()
+    return { code: res.rc, line }
+  }
+
+  /** Rebuild the settings block now and return it (the editor's fingerprint is pinned from here). */
+  async function refreshSettings(): Promise<SettingsBlock | null> {
+    opts.settingsOpen = true
+    const res = await cache.refresh({ force: true, only: ['settings'] })
+    adopt(res)
+    return (res.blocks?.settings as SettingsBlock | undefined) ?? null
+  }
+
+  async function setStandby(on: boolean, reason: string): Promise<{ ok: boolean; line: string }> {    if (!teamCli) return { ok: false, line: `✗ ${s.noTeamCli}` }
     const args = on
       ? [teamCli, '--root', root, 'standby', 'on', '--reason', reason || '-']
       : [teamCli, '--root', root, 'standby', 'off']
@@ -711,6 +758,16 @@ async function main(): Promise<void> {
       void cache.refresh({ force: true, only: ['detail'] }).then(adopt)
     },
     collapse,
+    setSetting,
+    setSeatModel,
+    refreshSettings,
+    setSettingsOpen: (open: boolean) => {
+      if (Boolean(opts.settingsOpen) === open) return
+      opts.settingsOpen = open
+      // The settings reader is off the tick path: only the view's own open forces a build.
+      if (!open) return
+      void cache.refresh({ force: true, only: ['settings'] }).then(adopt)
+    },
     setComposeCursor: (position) => {
       composeCursor = position
     },

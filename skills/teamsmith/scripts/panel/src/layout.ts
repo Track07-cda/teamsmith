@@ -44,6 +44,10 @@ import type {
   PrefName,
   QueueEntry,
   Segment,
+  SettingsBlock,
+  SettingsKey,
+  SettingsSeat,
+  SettingsWindow,
   Tone,
   ViewState,
 } from './types.js'
@@ -235,6 +239,8 @@ interface Block {
   lanes?: LaneWindow[]
   /** The detail view's document window as rendered (the App clamps its arrows and wheel). */
   detail?: DetailWindow
+  /** The project-settings view's row window as rendered (P22/B2). */
+  settings?: SettingsWindow
   /** The work page's board rows in the order it drew them (P20/B5: the App's `↑`/`↓` walk this). */
   order?: string[]
 }
@@ -270,6 +276,8 @@ interface Ctx {
   laneRows?: number
   /** Document rows the detail view may show (the assembly's real budget for the open document). */
   detailRows?: number
+  /** Focusable rows the project-settings view's window may show (the assembly's real budget). */
+  settingsRows?: number
 }
 
 export interface LayoutInput extends FrameInput {
@@ -1065,6 +1073,222 @@ function detailBlock(ctx: Ctx): Block | null {
   return one(rows, { index, total: doc.length, visible: Math.min(available, Math.max(0, doc.length - offset)), offset })
 }
 
+// ------------------------------------------------------------------ project settings (P22/B2)
+//
+// The view is a listing of the contract: one row per schema key plus one per key the file carries
+// that the schema does not know, grouped by the effect class the **command** reports (apply /
+// restart / refuse — the console owns no second table), then the model seats block. Rows and
+// classes come from the `settings` block's JSON at render time; a key added to the command's schema
+// shows up without rebuilding `panel.js`. The list is windowed against the height the assembly
+// hands over (the bounded-frame rule: more pane means more rows, never more blank).
+
+const SETTINGS_KEY_W = 34
+const SETTINGS_AUDIT_LINES = 3
+
+/** One drawn row of the project-settings view (group headings are not focusable). */
+export type SettingsRow =
+  | { kind: 'group'; label: string; tone: Tone }
+  | { kind: 'key'; key: SettingsKey }
+  | { kind: 'seat-group'; label: string }
+  | { kind: 'seat'; seat: SettingsSeat }
+
+export function settingsClassLabel(s: Strings, cls: string): string {
+  if (cls === 'restart') return s.settingsBadgeRestart
+  if (cls === 'refuse') return s.settingsBadgeRefuse
+  return s.settingsBadgeApply
+}
+
+function settingsClassTone(cls: string): Tone {
+  if (cls === 'restart') return 'warn'
+  if (cls === 'refuse') return 'dim'
+  return 'ok'
+}
+
+/** The CLI's own three source labels (the console invents no fourth state). */
+export function settingsSourceLabel(s: Strings, source: string): string {
+  if (source === 'explicit') return s.seatSourceExplicit
+  if (source === 'record') return s.seatSourceRecord
+  return s.seatSourceConfig
+}
+
+/**
+ * The view's filtersd row list: the schema's keys grouped by class, then the seats. Pure and
+exported: the App walks exactly this list when it moves the focus, so the keys can never disagree
+ * with what is on screen.
+ */
+export function settingsViewRows(block: SettingsBlock | undefined, filter: string, s: Strings): SettingsRow[] {
+  const out: SettingsRow[] = []
+  if (!block || !Array.isArray(block.keys)) return out
+  const needle = String(filter ?? '').trim().toLowerCase()
+  const match = (...parts: string[]): boolean =>
+    needle === '' || parts.some((p) => String(p ?? '').toLowerCase().includes(needle))
+  const groups: { cls: string; label: string }[] = [
+    { cls: 'apply', label: s.settingsGroupApply },
+    { cls: 'restart', label: s.settingsGroupRestart },
+    { cls: 'refuse', label: s.settingsGroupRefuse },
+  ]
+  for (const g of groups) {
+    const keys = block.keys.filter(
+      (k) => k.class === g.cls && match(k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
+    )
+    if (!keys.length) continue
+    out.push({ kind: 'group', label: g.label, tone: settingsClassTone(g.cls) })
+    for (const k of keys) out.push({ kind: 'key', key: k })
+  }
+  const seats = (block.models?.seats ?? []).filter((x) =>
+    match(x.agent, x.model, settingsSourceLabel(s, x.source)),
+  )
+  if (seats.length) {
+    out.push({ kind: 'seat-group', label: s.settingsGroupSeats })
+    for (const x of seats) out.push({ kind: 'seat', seat: x })
+  }
+  return out
+}
+
+/** The badge + value column shared by a key row and a seat row. */
+function settingsRight(ctx: Ctx, text: string, badge: string, tone: Tone, innerW: number): Line {
+  const right = ` ${truncateW(text, Math.max(6, innerW - SETTINGS_KEY_W - 14))} · ${badge}`
+  return ln(seg(right, tone))
+}
+
+function settingsKeyLine(ctx: Ctx, row: SettingsKey, focused: boolean, innerW: number): PlacedLine {
+  const { s } = ctx
+  const known = row.known !== false
+  const valueText =
+    row.set || row.value !== ''
+      ? row.value === ''
+        ? '\"\"'
+        : row.value
+      : fill(s.settingsUnset, { value: row.default || s.dash })
+  const badge = known ? settingsClassLabel(s, row.class) : s.settingsUnknownBadge
+  const tone: Tone = known ? settingsClassTone(row.class) : 'dim'
+  const line = ln(
+    seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
+    seg(cell(row.name, SETTINGS_KEY_W), focused ? 'selected' : known ? 'heading' : 'dim'),
+    ...settingsRight(ctx, valueText, badge, tone, innerW).map((x) => x),
+  )
+  const note = (row.warning || row.route || row.comment || '').trim()
+  if (note) line.push(seg(`  ${truncateW(note, Math.max(8, innerW - dispWidth(textOf(line)) - 2))}`, row.warning ? 'warn' : row.route && !known ? 'warn' : 'dim'))
+  return { line }
+}
+
+function settingsSeatLine(ctx: Ctx, seat: SettingsSeat, focused: boolean, innerW: number): PlacedLine {
+  const { s } = ctx
+  const model = seat.model || s.dash
+  const policy = seat.override ? s.seatOverride : s.seatFallback
+  const line = ln(
+    seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
+    seg(cell(seat.agent, SETTINGS_KEY_W), focused ? 'selected' : 'heading'),
+    ...settingsRight(ctx, `${model} · ${settingsSourceLabel(s, seat.source)} · ${policy}`, '', 'dim', innerW).map((x) => x),
+  )
+  return { line }
+}
+
+/**
+ * The project-settings block: it replaces the page's blocks exactly as the detail view does (the
+ * title band, the page tabs and the key band stay). `ctx.settingsRows` is the line budget the
+ * assembly hands over for the window itself (headings, the audit footer and the hidden-row counts
+ * are extra, and the frame's own budget wins).
+ */
+function settingsBlock(ctx: Ctx): Block | null {
+  const { s, blocks, deg } = ctx
+  const width = blockInnerW(ctx)
+  const one = (lines: PlacedLine[], settings?: SettingsWindow): Block => ({
+    id: 'settings',
+    full: true,
+    priority: 1,
+    separator: 'none',
+    title: s.settingsViewTitle,
+    lines,
+    settings,
+    summary: { line: truncLine(ln(seg(` ${s.settingsViewTitle}`, 'heading')), ctx.width) },
+  })
+  const block = blocks.settings
+  if (deg.has('settings') || !block || !Array.isArray(block.keys) || !block.keys.length) {
+    return one([
+      placedWithHits(
+        truncLine(ln(seg(` ${s.settingsViewTitle}`, 'heading'), seg('  '), seg(s.dash, 'dim')), width),
+        undefined,
+        width,
+      ),
+    ])
+  }
+  const rows = settingsViewRows(block, ctx.view.settingsFilter ?? '', s)
+  let count = 0
+  for (const r of rows) if (r.kind === 'key' || r.kind === 'seat') count += 1
+  const budget = Math.max(3, ctx.settingsRows ?? 12)
+  const visible = Math.max(1, Math.min(Math.max(1, count), budget))
+  const focus = Math.max(0, Math.min(Math.max(0, count - 1), ctx.view.settingsFocus ?? 0))
+  const offset = Math.max(0, Math.min(Math.max(0, count - visible), focus - Math.floor(visible / 2)))
+
+  // The seat picker (P22/B4): the models the command reports as known, then the removal and the
+  // free-text line — the editor opens on whichever is chosen.
+  const picker = ctx.view.seatPicker
+  if (picker) {
+    const options = [...picker.models, '-', '']
+    const sel = Math.max(0, Math.min(options.length - 1, picker.index))
+    const lines: PlacedLine[] = []
+    const put = (line: Line): void => {
+      lines.push({ line: truncLine(line, width) })
+    }
+    put(ln(seg(` ${fill(s.seatPickerTitle, { seat: picker.agent })}`, 'heading')))
+    options.forEach((opt, i) => {
+      const label = opt === '-' ? s.seatPickerRemove : opt === '' ? s.seatPickerFree : opt
+      const row = ln(
+        seg(`${i === sel ? s.settingsCursor : ' '} `, 'accent'),
+        seg(label, i === sel ? 'selected' : opt === '' || opt === '-' ? 'dim' : 'text'),
+      )
+      const action: Action = { kind: 'seat-pick', index: i }
+      const rowW = Math.max(2, Math.min(width, 1 + dispWidth(textOf(row))))
+      lines.push(placedWithHits(row, ctx.view.tui ? [{ start: 1, end: rowW, action }] : undefined, width))
+    })
+    put(ln(seg('')))
+    put(ln(seg(` ${s.seatPickerHint}`, 'dim')))
+    return one(lines, { focus: sel, offset: 0, visible: options.length, count: options.length })
+  }
+
+  const lines: PlacedLine[] = []
+  const hiddenAbove = offset
+  const hiddenBelow = Math.max(0, count - (offset + visible))
+  const put = (line: Line): void => {
+    lines.push({ line: truncLine(line, width) })
+  }
+  if (hiddenAbove > 0) put(ln(seg(`  ${fill(s.laneHiddenAbove, { n: String(hiddenAbove) })}`, 'dim')))
+
+  let idx = -1
+  for (const r of rows) {
+    if (r.kind === 'key' || r.kind === 'seat') {
+      idx += 1
+      if (idx < offset || idx >= offset + visible) continue
+      const focused = idx === focus
+      const placed = r.kind === 'key' ? settingsKeyLine(ctx, r.key, focused, width) : settingsSeatLine(ctx, r.seat, focused, width)
+      // The whole row is a target: a click on an unfocused row moves the focus, a second click on
+      // the focused row opens it (the kanban's rule).
+      const action: Action = focused ? { kind: 'settings-open', index: idx } : { kind: 'settings-focus', index: idx }
+      const rowW = Math.max(2, Math.min(width, 1 + dispWidth(textOf(placed.line))))
+      lines.push(placedWithHits(placed.line, ctx.view.tui ? [{ start: 1, end: rowW, action }] : undefined, width))
+      continue
+    }
+    // A heading draws only when the next focusable row is inside the window.
+    const next = idx + 1
+    if (next < offset || next >= offset + visible) continue
+    if (r.kind === 'group' || r.kind === 'seat-group') {
+      const tone: Tone = r.kind === 'group' ? r.tone : 'accent'
+      put(ln(seg(`  ${r.label}`, tone)))
+    }
+  }
+  if (hiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(hiddenBelow) })}`, 'dim')))
+
+  // The audit footer: at most three lines, newest last (the CLI's own tail).
+  put(ln(seg('')))
+  put(ln(seg(` ${s.settingsAuditHeading}`, 'heading')))
+  const audit = (block.audit ?? []).slice(-SETTINGS_AUDIT_LINES)
+  if (!audit.length) put(ln(seg(`   ${s.dash}`, 'dim')))
+  for (const a of audit) put(ln(seg(`   ${a}`, 'dim')))
+
+  return one(lines, { focus, offset, visible, count })
+}
+
 function changesBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg, width } = ctx
   const c = blocks.changes
@@ -1278,7 +1502,20 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
   // The board page's nav chips carry its own keys: the lane/card moves and Enter (every documented
   // key has a target — `r` stays keyboard-only, V16 F-V16-5). While the detail view is open the same
   // chips become its keys — it adds no action, and `q` is the documented back-out, not a collapse.
-  const nav: { text: string; action: Action }[] = ctx.view.detail
+  const nav: { text: string; action: Action }[] = ctx.view.settings
+    ? ctx.view.seatPicker
+      ? [
+          { text: s.keyRows, action: { kind: 'seat-move', delta: 1 } },
+          { text: s.keySeatPick, action: { kind: 'seat-pick', index: -1 } },
+          { text: s.keyDetailClose, action: { kind: 'settings-close' } },
+        ]
+      : [
+          { text: s.keyRows, action: { kind: 'settings-scroll', delta: 1 } },
+          { text: s.keyOpen, action: { kind: 'settings-open', index: -1 } },
+          { text: s.keyFilter, action: { kind: 'settings-filter' } },
+          { text: s.keyDetailClose, action: { kind: 'settings-close' } },
+        ]
+    : ctx.view.detail
     ? [
         { text: s.keyDetailClose, action: { kind: 'detail-close' } },
         { text: s.keyDetailTabs, action: { kind: 'detail-tab-move', delta: 1 } },
@@ -1385,6 +1622,9 @@ function overlayPrefs(ctx: Ctx): { pref: string; label: string; value: string }[
     { pref: 'activity', label: s.prefActivity, value: input.activity ? s.toggleOn : s.toggleOff },
     { pref: 'mouse', label: s.prefMouse, value: st.mouseOn ? s.toggleOn : s.toggleOff },
     { pref: 'density', label: s.prefDensity, value: st.density === 'compact' ? s.densityCompact : s.densityComfortable },
+    // P22/B2: the overlay's one navigation row — not a preference: it opens the project-settings
+    // view, changes no preference and writes no file (the MODIFIED settings requirement).
+    { pref: '', label: s.prefProjectSettings, value: s.prefNavArrow },
   ]
 }
 
@@ -1428,7 +1668,19 @@ function overlayBlock(ctx: Ctx): Block {
       seg(truncateW(p.value, valueW)),
     )
     lines.push(
-      placedWithHits(row, ctx.view.tui ? [{ start: 2, end: 2 + dispWidth(textOf(row)), action: { kind: 'toggle', pref: p.pref as PrefName } }] : undefined, width),
+      placedWithHits(
+        row,
+        ctx.view.tui
+          ? [
+              {
+                start: 2,
+                end: 2 + dispWidth(textOf(row)),
+                action: p.pref ? { kind: 'toggle', pref: p.pref as PrefName } : { kind: 'settings-open-view' },
+              },
+            ]
+          : undefined,
+        width,
+      ),
     )
   })
   lines.push({ line: ln(seg('')) })
@@ -1442,6 +1694,12 @@ function pageDefinitions(ctx: Ctx): Block[] {
   const left = (): Ctx => (ctx.twoColumn ? { ...ctx, width: ctx.leftWidth } : ctx)
   const right = (): Ctx => (ctx.twoColumn ? { ...ctx, width: ctx.rightWidth } : ctx)
   const blocks: (Block | null)[] = [titleBlock(ctx), pageTabsBlock(ctx)]
+  // P22/B2: the project-settings view replaces the page's blocks; the overlay it was opened from
+  // stays behind it, so `esc` lands back on that overlay row. Title band, tabs and key band stay.
+  if (ctx.view.settings) {
+    const settings = settingsBlock(ctx)
+    return [...blocks.filter((b): b is Block => b !== null), ...(settings ? [settings] : []), keyBandBlock(ctx)]
+  }
   if (ctx.view.overlay) return [...blocks.filter((b): b is Block => b !== null), overlayBlock(ctx), keyBandBlock(ctx)]
   switch (ctx.view.page) {
     case 1:
@@ -1545,6 +1803,7 @@ export function layout(input: LayoutInput): Frame {
   const fullRows: PlacedLine[] = []
   let laneWindows: LaneWindow[] | undefined
   let detailWindow: DetailWindow | undefined
+  let settingsWindow: SettingsWindow | undefined
   for (const b of fullBlocks) {
     // The board page's lanes are told how many rows they may use (the frame is bounded): the lane
     // windows then grow with the pane instead of showing blank card space (the bounded-frame rule).
@@ -1557,9 +1816,12 @@ export function layout(input: LayoutInput): Frame {
         : // The detail view spends the same budget on document rows: more pane = more of the file.
           height > 0 && b.id === 'detail'
           ? (detailBlock({ ...ctx, detailRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
+          : height > 0 && b.id === 'settings'
+          ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0) - 5) }) ?? b)
           : b
     if (block.id === 'kanban' && block.lanes) laneWindows = block.lanes
     if (block.id === 'detail' && block.detail) detailWindow = block.detail
+    if (block.id === 'settings' && block.settings) settingsWindow = block.settings
     const chunk = place(block, budget - fullRows.length, width)
     for (const l of chunk) fullRows.push(l)
   }
@@ -1710,6 +1972,7 @@ export function layout(input: LayoutInput): Frame {
     targets,
     ...(laneWindows ? { lanes: laneWindows } : {}),
     ...(detailWindow ? { detail: detailWindow } : {}),
+    ...(settingsWindow ? { settings: settingsWindow } : {}),
     ...(boardOrder ? { boardOrder } : {}),
   }
 }

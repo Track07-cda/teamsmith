@@ -1042,6 +1042,12 @@ team_panel_health_json() {
     "$(team_panel_json_str "$version")" "$(team_panel_json_str "$doc")" "$(team_panel_json_str "$doctor")"
 }
 
+# ---- 项目设置块（P22/B2）：payload 就是 `team config list --json`，按需构建。
+# 控制台只在「项目设置」视图打开时请求它（detail 块的同一模式），常规帧的节拍里没有这个子进程。
+team_panel_settings_json() {
+  team_cmd_config_list --json
+}
+
 # ---- 详情块（P18/B3）：按入口 id **只读发现**关联文件，给详情视图一个数据块。
 #
 # 发现面（design §6 / spec「A focused card opens a read-only markdown detail view」）：
@@ -1155,6 +1161,7 @@ team_panel_block() { # <块名> <activity 1|0> <events> [id] [file]
     patrol)   team_panel_patrol_json ;;
     health)   team_panel_health_json ;;
     detail)   team_panel_detail_json "${4:-}" "${5:-}" ;;
+    settings) team_panel_settings_json ;;
     activity) team_panel_activity_json "${2:-1}" "${3:-4}" ;;
     *) team_usage_die "__panel-data: 未知块名 $1" ;;
   esac

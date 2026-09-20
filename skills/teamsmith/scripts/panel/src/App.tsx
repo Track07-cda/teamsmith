@@ -12,13 +12,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
-import { layout, resolveFocus, rowKey } from './layout.js'
+import { layout, resolveFocus, rowKey, settingsViewRows } from './layout.js'
 import type { LayoutInput } from './layout.js'
 import { clockOf } from './format.js'
-import { stringsFor, type Strings } from './strings/index.js'
+import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, DetailWindow, FrameInput, PageId, PrefName, Segment, ViewState } from './types.js'
+import type { Action, DetailWindow, FrameInput, PageId, PrefName, Segment, SettingsBlock, ViewState } from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -80,6 +80,29 @@ export interface PanelApi {
   setDetail(id: string | null, file?: string | null): void
   /** Rebuild the patrol window as the headless tick loop (`team pulse collapse`). */
   collapse(): Promise<{ ok: boolean; line: string }>
+  /** Represents one `team config set` result: the exit code (the machine contract) + one line. */
+  setSetting(
+    key: string,
+    value: string,
+    opts: { dryRun?: boolean; fingerprint?: string | null; allowDanger?: boolean },
+  ): Promise<{ code: number; line: string }>
+  /**
+   * Freshly rebuild the settings block and return it (P22/B3). The editor pins its fingerprint from
+   * this read: the cached block may predate a write that just settled, and a stale pin would surface
+   * as a conflict on the very next edit.
+   */
+  refreshSettings(): Promise<SettingsBlock | null>
+  /** One `team config set-agent-model <seat> <model|->` invocation (P22/B4). */
+  setSeatModel(
+    seat: string,
+    model: string,
+    opts: { dryRun?: boolean; fingerprint?: string | null },
+  ): Promise<{ code: number; line: string }>
+  /**
+   * Tell the cache whether the project-settings view is open (P22/B2). While it is, the `settings`
+   * block joins the wanted set; closing it drops the block so a parked console spawns no reader.
+   */
+  setSettingsOpen(open: boolean): void
 }
 
 export interface AppProps {
@@ -214,6 +237,17 @@ export function App({
   const [detailId, setDetailId] = useState<string | null>(null)
   const [detailIndex, setDetailIndex] = useState(0)
   const [detailScroll, setDetailScroll] = useState(0)
+  // P22/B2: the project-settings view (opened from the overlay's navigation row), its window and
+  // its filter. The view is a view, not a page: the four-page composition and `state/panel-page`
+  // keep their meaning, and `esc` lands back on the overlay row it was opened from.
+  const [settingsView, setSettingsView] = useState(false)
+  const [settingsOrigin, setSettingsOrigin] = useState(0)
+  const [settingsFocus, setSettingsFocus] = useState(0)
+  const [settingsFilter, setSettingsFilter] = useState('')
+  /** The pending two-step write confirmation ({danger} = the command answered 7). */
+  const [settingConfirm, setSettingConfirm] = useState<{ key: string; next: string; danger: boolean } | null>(null)
+  /** The seat picker (P22/B4): the seat, its row and the option list with the selection. */
+  const [seatPicker, setSeatPicker] = useState<{ agent: string; row: number; models: string[]; index: number } | null>(null)
   const { exit } = useApp()
   const scrollRef = useRef(0)
   const dataRef = useRef(frame)
@@ -244,11 +278,22 @@ export function App({
   const detailIdRef = useRef<string | null>(null)
   const detailIndexRef = useRef(0)
   const detailScrollRef = useRef(0)
+  const settingsViewRef = useRef(false)
+  const settingsFocusRef = useRef(0)
+  const settingsFilterRef = useRef('')
+  /** The row the open `setting` editor writes (the fingerprint was pinned when it opened). */
+  const settingRowRef = useRef<{ row: number; key: string; value: string; cls: string; fingerprint: string; seat?: string } | null>(null)
+  const seatPickerRef = useRef<{ agent: string; row: number; models: string[]; index: number } | null>(null)
+  seatPickerRef.current = seatPicker
+  const settingConfirmRef = useRef<{ key: string; next: string; danger: boolean } | null>(null)
   focusRef.current = focus
   laneOffsetRef.current = laneOffset
   detailIdRef.current = detailId
   detailIndexRef.current = detailIndex
   detailScrollRef.current = detailScroll
+  settingsViewRef.current = settingsView
+  settingsFocusRef.current = settingsFocus
+  settingsFilterRef.current = settingsFilter
 
   const strings: Strings = stringsFor(settings.lang)
   const stringsRef = useRef(strings)
@@ -338,11 +383,18 @@ export function App({
   }, [busy, composing, settings.density, size.rows])
 
   const openCompose = useCallback(
-    (withMode: ComposeMode = 'message') => {
+    (withMode: ComposeMode = 'message', initial?: string) => {
       setReceipt(null)
       setStatus(null)
       setMode(withMode)
-      const seed = withMode === 'message' ? api.readDraft() : ''
+      const seed =
+        initial !== undefined
+          ? initial
+          : withMode === 'message'
+            ? api.readDraft()
+            : withMode === 'filter'
+              ? settingsFilterRef.current
+              : ''
       draftRef.current = seed
       pasteOpenRef.current = false
       setDraft(seed)
@@ -363,6 +415,10 @@ export function App({
     // Esc keeps the draft: the ref stays as typed and the file already holds it.
     setComposing(false)
     pasteOpenRef.current = false
+    // A cancelled setting edit writes nothing and leaves no audit line (the two-step rule).
+    settingRowRef.current = null
+    settingConfirmRef.current = null
+    setSettingConfirm(null)
   }, [])
 
   // V15/F3: one draft = at most one message. The re-entry guard is a ref set *synchronously* at
@@ -372,6 +428,120 @@ export function App({
   const sendingRef = useRef(false)
   const submit = useCallback(async () => {
     const text = draftRef.current
+    if (mode === 'filter') {
+      // The filter is one of the compose editor's modes (P22/B2): Enter applies it and closes the
+      // line, Esc clears it (handled with the compose cancel below).
+      settingsFilterRef.current = text
+      setSettingsFilter(text)
+      setSettingsFocus(0)
+      closeCompose()
+      return
+    }
+    if (mode === 'setting') {
+      // The write is always the owning command's: the first Enter asks for a `--dry-run`
+      // validation, the second performs the write with the fingerprint pinned when the editor
+      // opened. The console never opens the contract itself.
+      const target = settingRowRef.current
+      if (!target) {
+        closeCompose()
+        return
+      }
+      if (sendingRef.current) return
+      sendingRef.current = true
+      setBusy(true)
+      try {
+        const conf = settingConfirmRef.current
+        const timing =
+          target.cls === 'restart' ? stringsRef.current.settingTimingRestart : stringsRef.current.settingTimingApply
+        const isSeat = Boolean(target.seat)
+        const seatModel = text.trim() === '' ? '-' : text.trim()
+        const call = (dryRun: boolean, allowDanger: boolean): Promise<{ code: number; line: string }> =>
+          isSeat
+            ? api.setSeatModel(target.seat as string, seatModel, { dryRun, fingerprint: target.fingerprint })
+            : api.setSetting(target.key, text, { dryRun, fingerprint: target.fingerprint, allowDanger })
+        if (!conf) {
+          const r = await call(true, false)
+          if (r.code === 0) {
+            settingConfirmRef.current = { key: target.key, next: text, danger: false }
+            setSettingConfirm(settingConfirmRef.current)
+            setReceipt(null)
+            setStatus(
+              isSeat
+                ? fill(stringsRef.current.settingSeatConfirm, {
+                    seat: target.seat as string,
+                    old: target.value || stringsRef.current.dash,
+                    next: seatModel === '-' ? stringsRef.current.dash : seatModel,
+                  })
+                : fill(stringsRef.current.settingConfirm, {
+                    key: target.key,
+                    old: target.value || stringsRef.current.dash,
+                    next: text,
+                    timing,
+                  }),
+            )
+          } else if (r.code === 7) {
+            settingConfirmRef.current = { key: target.key, next: text, danger: true }
+            setSettingConfirm(settingConfirmRef.current)
+            setReceipt(null)
+            setStatus(fill(stringsRef.current.settingDanger, { reason: r.line }))
+          } else if (r.code === 3) {
+            // The file changed under the editor: name it now, and let the second Enter perform the
+            // real write so the command audits the conflict (a --dry-run writes no audit line).
+            settingConfirmRef.current = { key: target.key, next: text, danger: false }
+            setSettingConfirm(settingConfirmRef.current)
+            setReceipt(null)
+            setStatus(stringsRef.current.settingConflict)
+          } else {
+            setReceipt(null)
+            setStatus(
+              fill(r.code === 5 ? stringsRef.current.settingRefused : stringsRef.current.settingInvalid, { line: r.line }),
+            )
+          }
+          return
+        }
+        const r = await call(false, conf.danger)
+        if (r.code === 0) {
+          setReceipt(null)
+          const fallback = dataRef.current.blocks?.settings?.models?.default ?? ''
+          setStatus(
+            isSeat
+              ? seatModel === '-'
+                ? fill(stringsRef.current.settingSeatRemoved, { seat: target.seat as string, value: fallback || stringsRef.current.dash })
+                : fill(stringsRef.current.settingSeatWritten, { seat: target.seat as string, value: seatModel })
+              : fill(stringsRef.current.settingWritten, { key: target.key, value: text, timing }),
+          )
+          settingRowRef.current = null
+          settingConfirmRef.current = null
+          setSettingConfirm(null)
+          closeCompose()
+          api.refreshNow()
+        } else if (r.code === 3) {
+          // The other writer's bytes survived; reload so the view shows their value (the settle).
+          setReceipt(null)
+          setStatus(stringsRef.current.settingConflict)
+          settingConfirmRef.current = null
+          setSettingConfirm(null)
+          api.refreshNow()
+        } else {
+          setReceipt(null)
+          setStatus(
+            fill(
+              r.code === 5
+                ? stringsRef.current.settingRefused
+                : r.code === 4
+                  ? stringsRef.current.settingInvalid
+                  : stringsRef.current.settingWriteError,
+              { line: r.line },
+            ),
+          )
+        }
+      } finally {
+        sendingRef.current = false
+        setBusy(false)
+      }
+      void text
+      return
+    }
     if (mode === 'reason') {
       if (!text.trim()) return
       if (sendingRef.current) return
@@ -406,7 +576,7 @@ export function App({
       sendingRef.current = false
       setBusy(false)
     }
-  }, [api, mode, updateDraft])
+  }, [api, mode, updateDraft, closeCompose, setSettingsFilter])
 
   const runAction = useCallback(
     async (kind: 'flush' | 'standby') => {
@@ -624,6 +794,151 @@ export function App({
     openDetail(id)
   }, [openDetail])
 
+  // ---- project settings (P22/B2): the view's focus walk, its origin and its row opening.
+
+  /** The view's focusable rows as the last assembly saw them (the walk must match the screen). */
+  const settingsRowsNow = useCallback((): ({ kind: 'key'; key: import('./types.js').SettingsKey } | { kind: 'seat'; seat: import('./types.js').SettingsSeat })[] => {
+    const rows = settingsViewRows(dataRef.current.blocks?.settings, settingsFilterRef.current, stringsRef.current)
+    return rows.filter((r): r is { kind: 'key'; key: import('./types.js').SettingsKey } | { kind: 'seat'; seat: import('./types.js').SettingsSeat } => r.kind === 'key' || r.kind === 'seat')
+  }, [])
+
+  const moveSettingsFocus = useCallback(
+    (delta: number) => {
+      const rows = settingsRowsNow()
+      if (!rows.length) return
+      setSettingsFocus((i) => Math.max(0, Math.min(rows.length - 1, i + delta)))
+    },
+    [settingsRowsNow],
+  )
+
+  const openSettingsView = useCallback(
+    (origin: number) => {
+      setSettingsOrigin(origin)
+      setOverlayIndex(origin)
+      overlayIndexRef.current = origin
+      setSettingsView(true)
+      settingsViewRef.current = true
+      setSettingsFocus(0)
+      setSettingsFilter('')
+      settingsFilterRef.current = ''
+      api.setSettingsOpen(true)
+      api.refreshNow()
+    },
+    [api],
+  )
+
+  const closeSettingsView = useCallback(() => {
+    setSettingsView(false)
+    settingsViewRef.current = false
+    setSeatPicker(null)
+    seatPickerRef.current = null
+    api.setSettingsOpen(false)
+    // Back to the overlay row it was opened from (the design's origin rule).
+    setOverlay(true)
+    setOverlayIndex(settingsOrigin)
+    overlayIndexRef.current = settingsOrigin
+  }, [api, settingsOrigin])
+
+  /**
+   * Enter on a view row: a `refuse` row opens no editor and surfaces the owning command's route;
+   * an editable row opens the value editor (the compose line's `setting` mode, B3).
+   */
+  const openSettingsRow = useCallback(
+    async (index: number) => {
+      const rows = settingsRowsNow()
+      const row = index < 0 ? rows[settingsFocusRef.current] : rows[index]
+      if (!row) return
+      if (row.kind === 'seat') {
+        // The picker: the command's known models, then the removal and the free-text line. The
+        // editor opens on the chosen option so the two-step confirmation has a surface.
+        const models = [...(dataRef.current.blocks?.settings?.models?.known ?? [])]
+        setSeatPicker({ agent: row.seat.agent, row: index, models, index: 0 })
+        seatPickerRef.current = { agent: row.seat.agent, row: index, models, index: 0 }
+        setReceipt(null)
+        setStatus(null)
+        return
+      }
+      const key = row.key
+      if (key.class === 'refuse') {
+        setReceipt(null)
+        setStatus(`${key.name} · ${key.route || key.warning || stringsRef.current.settingsRefusedRoute}`)
+        return
+      }
+      // The fingerprint is pinned from a fresh read (the design's "when the editor opens"): the
+      // cached block may still predate a write that just settled.
+      const fresh = await api.refreshSettings().catch(() => null)
+      const freshKey = fresh?.keys?.find((k) => k.name === key.name)
+      settingRowRef.current = {
+        row: index,
+        key: key.name,
+        value: freshKey ? freshKey.value : key.value,
+        cls: key.class,
+        fingerprint: fresh?.fingerprint ?? dataRef.current.blocks?.settings?.fingerprint ?? '',
+      }
+      settingConfirmRef.current = null
+      setSettingConfirm(null)
+      openCompose('setting', (freshKey ?? key).set || (freshKey ?? key).value !== '' ? (freshKey ?? key).value : key.default)
+    },
+    [api, openCompose, settingsRowsNow],
+  )
+
+  /**
+   * One picker choice: a model opens the editor holding it, `-` opens it holding the removal,
+   * the free-text row opens it empty. The editor's two Enter presses are the confirmation.
+   */
+  /** Resolve a picker index (or -1 = the selected one) into the picker + its option. */
+  const pickerIndex = useCallback(
+    (index: number): { picker: { agent: string; row: number; models: string[]; index: number }; option: string } | null => {
+      const p = seatPickerRef.current
+      if (!p) return null
+      const options = [...p.models, '-', '']
+      const i = index < 0 ? p.index : index
+      if (i < 0 || i >= options.length) return null
+      return { picker: p, option: options[i] }
+    },
+    [],
+  )
+
+  const chooseSeatOption = useCallback(
+    (index: number) => {
+      const picker = pickerIndex(index)
+      if (!picker) return
+      const { picker: p, option } = picker
+      const seat = p.agent
+      void (async () => {
+        // The fingerprint is pinned from a fresh read, like the key editor's.
+        const fresh = await api.refreshSettings().catch(() => null)
+        const seatRow = (fresh?.models?.seats ?? dataRef.current.blocks?.settings?.models?.seats ?? []).find(
+          (x) => x.agent === seat,
+        )
+        const initial = option === '' ? '' : option
+        settingRowRef.current = {
+          row: p.row,
+          key: seat,
+          value: seatRow?.model ?? '',
+          cls: 'restart',
+          fingerprint: fresh?.fingerprint ?? dataRef.current.blocks?.settings?.fingerprint ?? '',
+          seat,
+        }
+        settingConfirmRef.current = null
+        setSettingConfirm(null)
+        setSeatPicker(null)
+        seatPickerRef.current = null
+        openCompose('setting', initial)
+      })()
+    },
+    [api, openCompose, pickerIndex],
+  )
+
+  const moveSeatPicker = useCallback((delta: number) => {
+    const p = seatPickerRef.current
+    if (!p) return
+    const count = p.models.length + 2
+    const next = { ...p, index: Math.max(0, Math.min(count - 1, p.index + delta)) }
+    seatPickerRef.current = next
+    setSeatPicker(next)
+  }, [])
+
   /** The detail view's file tabs: `←`/`→` clamp at the ends (no wrap — the row shows the order). */
   const moveDetailTab = useCallback((delta: number) => {
     const files = dataRef.current.blocks?.detail?.files ?? []
@@ -733,9 +1048,34 @@ export function App({
         case 'detail-close':
           setDetailId(null)
           return
+        case 'settings-open-view':
+          openSettingsView(overlayIndexRef.current)
+          return
+        case 'settings-close':
+          closeSettingsView()
+          return
+        case 'settings-focus':
+          setSettingsFocus(action.index)
+          return
+        case 'settings-open':
+          openSettingsRow(action.index)
+          return
+        case 'settings-filter':
+          openCompose('filter')
+          return
+        case 'settings-scroll':
+          moveSettingsFocus(action.delta)
+          return
+        case 'seat-pick':
+          if (action.index < 0) chooseSeatOption(-1)
+          else chooseSeatOption(action.index)
+          return
+        case 'seat-move':
+          moveSeatPicker(action.delta)
+          return
       }
     },
-    [boardRows, collapse, cyclePref, goPage, moveBoardFocus, moveDetailTab, moveFocus, openCompose, openDetail, openWorkFocused, runAction, scrollDetail, scrollLane, updateScroll],
+    [boardRows, chooseSeatOption, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -756,11 +1096,30 @@ export function App({
       ? cursorView(mode, draft, cursor, inputWidth, composeMaxRows(), strings.composeHiddenAbove)
       : null
     const rawInput = inputView?.lines ?? []
-    const trayTitle = mode === 'message' ? strings.composeTitle : strings.composeStandbyTitle
+    const trayTitle =
+      mode === 'message'
+        ? strings.composeTitle
+        : mode === 'reason'
+          ? strings.composeStandbyTitle
+          : mode === 'filter'
+            ? strings.settingFilterTitle
+            : settingRowRef.current?.key ?? strings.settingsViewTitle
     const input = boxed
       ? [composeTrayTop(trayTitle, size.columns), ...rawInput.map((line) => `${TRAY_V} ${line}`)]
       : rawInput
-    const hint = composing ? [mode === 'message' ? strings.composeHint : strings.composeReasonHint] : []
+    const hint = composing
+      ? [
+          // The setting/filter editor's own receipt (the confirmation line, the danger warning, the
+          // command's refusal) rides the hint row *above* the input so the input line stays last
+          // (the IME cursor anchor rule) while the editor stays open with its draft.
+          ...(status && (mode === 'setting' || mode === 'filter') ? [status] : []),
+          mode === 'message'
+            ? strings.composeHint
+            : mode === 'reason'
+              ? strings.composeReasonHint
+              : strings.settingsKeyHint,
+        ]
+      : []
     // The in-flight-send row is part of the pane too: counting it keeps the rendered output at the
     // pane's height, so the frame never scrolls (the absolute cursor position depends on the frame
     // starting at the pane's first row).
@@ -781,6 +1140,10 @@ export function App({
       detail: detailId,
       detailIndex,
       detailScroll,
+      settings: settingsView,
+      settingsFocus,
+      settingsFilter,
+      seatPicker,
     }
     // The geometry comes from the live terminal, not from the frame's snapshot of it: a resize must
     // re-lay out the next frame (the spec's "A resize re-lays out live"), and `data.width` is frozen
@@ -817,6 +1180,10 @@ export function App({
     detailId,
     detailIndex,
     detailScroll,
+    settingsView,
+    settingsFocus,
+    settingsFilter,
+    seatPicker,
     size,
     composing,
     mode,
@@ -940,21 +1307,24 @@ export function App({
         return
       }
 
-      if (overlay) {
+      if (overlay && !settingsViewRef.current) {
         if (key.escape || input === ',') {
           setOverlay(false)
           return
         }
         if (key.upArrow) {
-          setOverlayIndex((i) => (i + PREFS.length - 1) % PREFS.length)
+          setOverlayIndex((i) => (i + PREFS.length) % (PREFS.length + 1))
           return
         }
         if (key.downArrow) {
-          setOverlayIndex((i) => (i + 1) % PREFS.length)
+          setOverlayIndex((i) => (i + 1) % (PREFS.length + 1))
           return
         }
         if (key.return || input === ' ') {
-          cyclePref(PREFS[overlayIndexRef.current] ?? 'lang')
+          // The sixth row is the one navigation row: it opens the project-settings view instead of
+          // toggling a preference (and writes no file).
+          if (overlayIndexRef.current >= PREFS.length) openSettingsView(overlayIndexRef.current)
+          else cyclePref(PREFS[overlayIndexRef.current] ?? 'lang')
           return
         }
         return
@@ -981,6 +1351,12 @@ export function App({
             void submit()
             return
           case 'cancel':
+            // The filter line's esc clears the filter without closing the view (P22/B2).
+            if (mode === 'filter') {
+              settingsFilterRef.current = ''
+              setSettingsFilter('')
+              setSettingsFocus(0)
+            }
             closeCompose()
             return
           case 'none':
@@ -1063,6 +1439,44 @@ export function App({
           }
         }
         return
+      }
+
+      // The project-settings view owns its keys first (it sits above the overlay it was opened
+      // from); anything it does not claim (notably `q`) falls through to the global handling.
+      if (settingsViewRef.current && !composing) {
+        if (seatPickerRef.current) {
+          if (key.escape) {
+            setSeatPicker(null)
+            seatPickerRef.current = null
+            return
+          }
+          if (key.upArrow || key.downArrow) {
+            moveSeatPicker(key.upArrow ? -1 : 1)
+            return
+          }
+          if (key.return) {
+            chooseSeatOption(-1)
+            return
+          }
+          return
+        }
+        if (key.escape) {
+          closeSettingsView()
+          return
+        }
+        if (key.upArrow || key.downArrow) {
+          moveSettingsFocus(key.upArrow ? -1 : 1)
+          return
+        }
+        if (input === '/') {
+          openCompose('filter')
+          return
+        }
+        if (key.return) {
+          openSettingsRow(-1)
+          return
+        }
+        if (input !== 'q' && !(key.ctrl && input === 'c')) return
       }
 
       if (viewEntry != null && key.escape) {

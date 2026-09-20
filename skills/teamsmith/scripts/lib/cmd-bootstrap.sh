@@ -8,14 +8,126 @@
 #
 # 不碰远端：不 push、不建 issue、不改仓库设置。
 
+# ---------------------------------------------------------------- 项目契约的唯一底层写入口
+#
+# 契约 `.pi/team/config.sh` 的字节只从这里改（`team config set` 是它唯一的命令面；bootstrap/init 也走它）。
+# 加固前的实测缺陷（P21 设计 §Context）：改写行的行内注释被吃掉、缺尾换行的文件上追加会粘行、
+# 值原样塞进双引号（`'$(touch PWNED)'` 被 source 时执行）、值里的 `"` 静默变义、结尾反斜杠写出
+# `bash -n` 都过不了的文件而函数仍返回 0。现在的契约：
+#   * 只替换匹配到的那一整行，其余字节逐字保留（注释/空行/顺序）；行内注释按「引号外的第一个 #」
+#     扫描后原样接回（值的引号没闭合 = 当成没有注释，绝不截断）。
+#   * 缺尾换行时先补一个再追加新行，绝不与上一行粘连。
+#   * 值的形态由写入器产生：KEY='value'（form=export 的键写 export KEY='value'），值里的 ' 写成 '\''；
+#     换行、`#` 一律拒绝；notify 扩展那 8 个扁平读取器解析的键出现 ' 也拒绝（那个读取器没有转义）。
+#   * 原子写：同目录临时文件 → bash -n 复核 → 保留权限 → mv；任何失败都留下原字节、不留临时文件。
+# 返回 0 = 已写入；非 0 = 拒绝/写失败（原因在 stderr）。
 team_config_set_in_file() { # <file> <KEY> <value>
-  local f="$1" k="$2" v="$3"
-  if grep -q "^$k=" "$f" 2>/dev/null; then
-    local esc; esc="$(printf '%s' "$v" | sed -e 's/[&\\|]/\\&/g')"
-    sed -i "s|^$k=.*|$k=\"$esc\"|" "$f"
-  else
-    printf '%s="%s"\n' "$k" "$v" >> "$f"
+  local f="$1" k="$2" v="${3-}"
+  [ -n "$f" ] && [ -n "$k" ] || { printf 'config writer: 缺少文件或键名\n' >&2; return 1; }
+  case "$k" in
+    ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) printf 'config writer: 非法键名 %s\n' "$k" >&2; return 1 ;;
+  esac
+  case "$v" in
+    *$'\n'*) printf 'config writer: %s 的值含换行：契约是单行 KEY=value 文件\n' "$k" >&2; return 1 ;;
+    *'#'*)   printf 'config writer: %s 的值含 #：notify 扩展的扁平读取器会从这里截断\n' "$k" >&2; return 1 ;;
+  esac
+  if [ "$(type -t team_config_flat_key 2>/dev/null || true)" = "function" ] && team_config_flat_key "$k" \
+     && case "$v" in *"'") true ;; *) false ;; esac; then
+    printf 'config writer: %s 的值含单引号，而 notify 扩展的读取器没有转义：拒写\n' "$k" >&2
+    return 1
   fi
+
+  # 符号链接：写它指向的目标，绝不把链接换成普通文件
+  local target="$f"
+  if [ -L "$f" ]; then
+    target="$(readlink -f "$f" 2>/dev/null || true)"
+    [ -n "$target" ] || { printf 'config writer: %s 是符号链接但解析不到目标\n' "$f" >&2; return 1; }
+  fi
+  [ -e "$target" ] || : > "$target"
+
+  local form=""
+  if [ "$(type -t team_config_key_form 2>/dev/null || true)" = "function" ]; then
+    [ "$(team_config_key_form "$k" 2>/dev/null || true)" = "export" ] && form="export "
+  fi
+  local quoted; quoted="$(printf '%s' "$v" | sed -e "s/'/'\\\\''/g")"
+
+  local had_nl=0
+  [ -s "$target" ] && [ "$(tail -c 1 "$target" | od -An -c | tr -d ' \n')" = '\n' ] && had_nl=1
+
+  local -a lines=() out=()
+  mapfile -t lines < "$target" 2>/dev/null || true
+  local line found=0 comment newline
+  for line in "${lines[@]:-}"; do
+    [ -n "$line" ] || { out+=(""); continue; }
+    if [ "$found" = "0" ] && [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?$k= ]]; then
+      found=1
+      comment="$(printf '%s' "$line" | team_config_inline_comment_of_line)"
+      newline="${form}${k}='${quoted}'${comment}"
+      out+=("$newline")
+    else
+      out+=("$line")
+    fi
+  done
+  if [ "$found" = "0" ]; then
+    newline="${form}${k}='${quoted}'"
+    out+=("$newline")
+    had_nl=1
+  fi
+
+  local dir tmp; dir="$(dirname "$target")"
+  tmp="$dir/$(basename "$target").tmp.$$"
+  {
+    local i last; last=$((${#out[@]} - 1))
+    for i in "${!out[@]}"; do
+      if [ "$i" -lt "$last" ] || [ "$had_nl" = "1" ]; then printf '%s\n' "${out[$i]}"
+      else printf '%s' "${out[$i]}"; fi
+    done
+  } > "$tmp" || { printf 'config writer: 无法写临时文件 %s\n' "$tmp" >&2; rm -f "$tmp"; return 1; }
+
+  # 权限原样（Linux stat -c / macOS stat -f），失败不致命
+  local mode; mode="$(stat -c %a "$target" 2>/dev/null || stat -f %Lp "$target" 2>/dev/null || true)"
+  [ -n "$mode" ] && chmod "$mode" "$tmp" 2>/dev/null
+
+  if ! bash -n "$tmp" 2>/dev/null; then
+    printf 'config writer: 新内容过不了 bash -n，原文件未动（值：%s）\n' "$k" >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! mv -f "$tmp" "$target" 2>/dev/null; then
+    printf 'config writer: mv 失败，原文件未动（%s）\n' "$target" >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  return 0
+}
+
+# 旧行的行内注释：值里「引号外的第一个 #」到行尾，原样返回（没有 → 空）。
+# 值里的引号没闭合 = 当成没有注释（绝不截断半个值）。
+team_config_inline_comment_of_line() { # <line> → comment（含 #）
+  awk '
+    {
+      line = $0
+      p = index(line, "=")
+      if (p == 0) { exit 0 }
+      s = substr(line, p + 1)
+      n = length(s); q = 0; i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (q == 0) {
+          if (c == "\"") q = 2
+          else if (c == "'\''") q = 1
+          else if (c == "#") { g = i; while (g > 1 && (substr(s, g-1, 1) == " " || substr(s, g-1, 1) == "\t")) g--; print substr(s, g); exit 0 }
+        } else if (q == 1) {
+          if (c == "'\''") q = 0
+        } else if (q == 2) {
+          if (c == "\\") i++
+          else if (c == "\"") q = 0
+        }
+        i++
+      }
+      exit 0
+    }
+  '
 }
 
 # 把「当前窗口」改名成 PM 窗口名（M11）。只在已经证明过这个窗口属于本项目、且目标名没被别的窗口占着时
@@ -133,8 +245,25 @@ team_cmd_bootstrap() {
     team_load_config   # 重新加载（init 刚写了配置）
   fi
   team_require_docs
-  [ -n "$TEAM_GATES" ] || { [ -n "$gates" ] && team_config_set_in_file "$TEAM_CONFIG" TEAM_GATES "$gates" && team_info "  写入 TEAM_GATES=$gates"; }
-  [ -n "$TEAM_INSTALL_CMD" ] || { [ -n "$install_cmd" ] && team_config_set_in_file "$TEAM_CONFIG" TEAM_INSTALL_CMD "$install_cmd" && team_info "  写入 TEAM_INSTALL_CMD=$install_cmd"; }
+  # 写入失败必须响亮失败：契约里没有这个键就意味着后面的派单/门禁用不到它，
+  # 旧写法 `... && team_info ...` 会把「写不进去」静默当成「不需要写」（P21 任务 1.7）。
+  if [ -z "$TEAM_GATES" ] && [ -n "$gates" ]; then
+    if team_config_set_in_file "$TEAM_CONFIG" TEAM_GATES "$gates"; then
+      team_info "  写入 TEAM_GATES=$gates"
+    else
+      team_err "TEAM_GATES 写入失败：$gates"
+      team_dim "  改一个能写进单行契约的值（不能含换行或 #），或手改 $TEAM_CONFIG"
+      return 1
+    fi
+  fi
+  if [ -z "$TEAM_INSTALL_CMD" ] && [ -n "$install_cmd" ]; then
+    if team_config_set_in_file "$TEAM_CONFIG" TEAM_INSTALL_CMD "$install_cmd"; then
+      team_info "  写入 TEAM_INSTALL_CMD=$install_cmd"
+    else
+      team_err "TEAM_INSTALL_CMD 写入失败：$install_cmd"
+      return 1
+    fi
+  fi
 
   # ②b 必需依赖体检（D10）：配置写完后立即查 magic-context 与 OpenSpec；
   # 缺了不阻塞 bootstrap，但每一条都把确切的修复/降级命令打出来。

@@ -10190,6 +10190,21 @@ EOF
   assert_eq "32⑧c 收尾：夹具窗口清干净" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx m40w || true)" "0"
 fi
 
+section "33 · 项目契约的读写面（P22/B1：team config 单一写入口 + schema）"
+# P22/B1：headless 夹具（tests/config-cli.sh）——不依赖 tmux/真进程，FAST 模式照跑。
+if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
+  if bash "$SKILL_DIR/tests/config-cli.sh" >"$TMP/config-cli.log" 2>&1; then
+    ok "33 config-cli.sh 全绿（$(grep -ac '✓' "$TMP/config-cli.log" || true) 条断言）"
+    tail -2 "$TMP/config-cli.log" | sed 's/^/      /'
+  else
+    bad "33 config-cli.sh 有失败"
+    grep -a '✗' "$TMP/config-cli.log" | head -10 | sed 's/^/      /'
+    tail -3 "$TMP/config-cli.log" | sed 's/^/      /'
+  fi
+else
+  bad "33 缺 tests/config-cli.sh"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"

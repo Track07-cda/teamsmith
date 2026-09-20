@@ -22,7 +22,7 @@ export const DRAFT_FILE = 'draft.md'
 export const PROMPT = '> '
 export const CONTINUATION = '  '
 
-export type ComposeMode = 'message' | 'reason'
+export type ComposeMode = 'message' | 'reason' | 'filter' | 'setting'
 
 export interface Receipt {
   state: 'delivered' | 'queued' | 'held' | 'error'

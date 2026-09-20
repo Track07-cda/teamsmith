@@ -258,7 +258,7 @@ The console reads every screen from one internal, read-only command: `team __pan
 others down). The block names are a closed set — `frame`, `pm`, `pending`, `outbox`, `capacity`, `agents`,
 `recent`, `activity`, `board`, `changes`, `specs`, `decisions`, `outbox_list`, `inbox`, `patrol`, `health`
 and `detail` — and `--events <n>` sizes the activity tail. `--print`/`--json` assemble the machine blocks only
-(the console-only readers, including `detail`, are never spawned there).
+(the console-only readers, including `detail` and `settings`, are never spawned there).
 
 `--block detail --id <ID> [--file <path>]` is the read-only markdown detail view's reader (P18/B3). It
 discovers, by entry id with the literal boundary `-`/`.` after the id (`P1` never matches `P17`):
@@ -270,6 +270,11 @@ first file. `--file` serves one of those discovered paths only: anything else (a
 arbitrary file reader. Text is capped at 128 KiB (`TEAM_PANEL_DETAIL_CAP` overrides the cap) with a
 `truncated` marker per file, and the block is requested only while the detail view is open: a parked
 console spawns no `detail` child at all.
+
+`--block settings` is the project-settings view's reader (P22/B2): its payload is exactly `team config list
+--json` (the contract's schema, its effect classes, the per-seat models and the audit tail). Like `detail` it is
+requested only while the view is open — a parked console spawns no `settings` child and `--print`/`--json` never
+see it.
 
 ## 4. Environment variables (usable without writing them into the config)
 
@@ -295,3 +300,92 @@ console spawns no `detail` child at all.
 | `TEAM_BOARD_DONE_FORCE` | `1` = PM override for the `done` gate: write `done` even though neither a usable review record nor a merged branch exists (`close --status done` has the `--force` flag for the same thing) |
 | `TEAM_BOARD_DONE_REASON` | the reason recorded in `<docs>/reviews/<ID>-done.md` when `TEAM_BOARD_DONE_FORCE=1`; required, otherwise the override is refused |
 | `NO_COLOR` | turn colours off |
+
+## 5. `team config` — the contract's read/write surface
+
+`team config` is the only command that writes `.pi/team/config.sh` (`team init` / `team bootstrap` write through
+the same bottom-level function). It exists so a setting can change without hand-editing the file and without a
+second source of truth: the value lives in the contract, the class table lives in the command
+(`scripts/lib/cmd-config.sh`), the console's labels live in its string tables.
+
+### Effect classes (who reads the value, and when)
+
+| class | meaning | examples |
+|---|---|---|
+| `apply` | the next process that reads the contract sees the new value | `TEAM_GATES`, the capacity floors, the review escape hatches, the patrol policy |
+| `restart` | a running process holds the value it started with; the receipt names the target and the command | the pulse (`TEAM_PULSE_INTERVAL`, `TEAM_MONITOR_REFRESH`), a seat's model (`TEAM_AGENT_MODELS`, `TEAM_PM_MODEL` — a running seat keeps its model until its next `dispatch`/`resume`), a live session (`TEAM_INBOX_WATCH_*`) |
+| `refuse` | not the console's to change: the project's identity, the roster, the ledger's layout, the branch/forge definitions, the authority guards, the dependency policy and the machine paths Pi's own state is read from — the console may not widen its own authority and may not move the ledger it is reading | `TEAM_PROJECT`, `TEAM_AGENTS` (route: `team add-agent` / `team teardown`), `TEAM_STATE_DIR`, `TEAM_PROTECTED_BRANCH`, `TEAM_ALLOW_FOREIGN_IDENTITY` … |
+
+A key the schema does not know is listed read-only ("not a known project setting", pointing at this file) and is
+never written.
+
+### The written form
+
+* `KEY='value'` — a sourced value is data: no expansion, no command substitution, no globbing. Values a child
+  process reads from the **environment** are written `export KEY='value'` (`form=export`: `TEAM_MONITOR_ACTIVITY`,
+  `TEAM_AGENT_LOG_TAIL_BYTES`, the `TEAM_INBOX_WATCH_*` family, `TEAM_BG_LOG_MAX_BYTES`); a plain assignment
+  never reaches a running process (the measured `TEAM_MONITOR_ACTIVITY` case).
+* A `'` inside the value is written `'\''`. A line break or a `#` is refused (the notify extension's flat reader
+  cuts at ` #`). On the eight keys that reader parses — `TEAM_SESSION`, `TEAM_PM_WINDOW`, `TEAM_WORKTREES_DIR`,
+  `TEAM_DOCS_DIR`, `TEAM_NOTIFY_TMUX`, `TEAM_NOTIFY_DEDUP_SEC`, `TEAM_INBOX_MAX_CHARS`, `TEAM_NOTIFY_LOG` — a `'`
+  is refused too (that reader has no escape).
+* Every byte the write does not change survives: comments, blank lines, the order of the keys and the changed
+  line's own inline comment. A key the file lacks is appended on a line of its own (a missing final newline is
+  added first). The write is atomic: a temp file in the contract's directory → `bash -n` → a mode-preserving
+  `mv`; any failure leaves the original bytes and removes the temp file.
+
+### The danger list
+
+A **valid** value that disables a shipped guard or makes a shipped loop spin needs the explicit
+`--allow-danger`: the capacity floors at `0` (`TEAM_MIN_FREE_SWAP_MB`, `TEAM_MIN_TOTAL_MB`, `TEAM_MIN_AVAIL_MB`,
+`TEAM_WARN_AVAIL_MB`), `TEAM_PULSE_INTERVAL` below 60, `TEAM_REVIEW_TIMEOUT` below 60,
+`TEAM_PULSE_MAX_RESTARTS=0`, `TEAM_DEFER_TTL=0`, `TEAM_OUTBOX_MAX=0`, `TEAM_SQUASH_LOOKBACK=0`, the
+`TEAM_REVIEW_ALLOW_*` / `TEAM_REVIEW_ANY_DIR` overrides at `1`, `TEAM_BOARD_DONE_FORCE=1`, a non-empty
+`TEAM_MEETING_ALLOW_USER_ID`, and a `TEAM_PULSE_WINDOW` change while a pulse backend still runs under the old
+name. Danger never makes an invalid value legal.
+
+### The commands and their exit codes
+
+<!-- config-examples · tests/config-cli.sh executes exactly these lines -->
+```sh
+team config list --json
+team config set TEAM_PULSE_NUDGE_GAP 1200 --dry-run
+team config set-agent-model dev deepseek/deepseek-flash --dry-run
+team config log 5
+```
+
+`0` written/valid · `3` fingerprint conflict (nothing written) · `4` invalid value · `5` key not editable ·
+`6` write error (file unchanged) · `7` dangerous (a `--dry-run` reports it too). `team config set … --fingerprint
+<sha256>` is a compare-and-swap: any byte change since the read refuses it, and a write without the flag is the
+caller's explicit "use the file as it is now". `team config set-agent-model <seat> <model|->` writes the pair
+list (`TEAM_AGENT_MODELS`, or `TEAM_PM_MODEL` for the `pm` seat) itself — the caller never composes it — and `-`
+removes the seat's override, leaving `TEAM_DEFAULT_MODEL` in force. `--actor <name>` labels the audit line (the
+console passes `panel`); `--dry-run` performs every check and writes neither the contract nor an audit line.
+Every attempt that passes argument parsing appends one line to `<state>/config.log`
+(`<UTC ISO-8601> result=<ok|refused|invalid|conflict|danger-refused|write-error> actor=… key=… old='…' new='…'`,
+plus `expected=`/`actual=` on a conflict); `team config log [N]` and `list --json`'s audit tail read at most the
+file's last 16 KiB and print at most N lines (default 10).
+
+### Keys the class table above does not describe
+
+| Key | Class | Default | Meaning |
+|---|---|---|---|
+| `TEAM_MEETINGS_DIR` | refuse | `~/.pi/team/meetings` | the cross-project meeting store (the ledger's layout) |
+| `TEAM_MEETING_TTL_HOURS` | apply | `72` | meeting TTL (hours) |
+| `TEAM_MEETING_MAX_TURNS` | apply | `20` | turns per side |
+| `TEAM_MEETING_KNOCK` | apply | `0` | 1 = allow knocking on the other PM's window |
+| `TEAM_MEETING_ALLOW_USER_ID` | apply | empty | non-empty = who may knock (widens permission, hence the danger flag) |
+| `TEAM_ALLOW_FOREIGN_SESSION` | refuse | `0` | run anyway on a foreign tmux session (with `--yes`) |
+| `TEAM_GUARD_FOREIGN_TARGET` | refuse | `1` | only type into windows of this session |
+| `TEAM_ALLOW_DESTRUCTIVE_TMUX` | refuse | `0` | allow destructive tmux calls outside a private socket |
+| `TEAM_SMOKE_FAST` | refuse | `0` | skip the real-process smoke sections |
+| `TEAM_PULSE_PENDING_BOARD` | apply | `0` | 1 = board todo/wip count as a wake-up signal |
+| `TEAM_INBOX_WATCH_MAX_BYTES` | restart · export | `131072` | spool cap (bytes) |
+| `TEAM_INBOX_WATCH_PREVIEW` | restart · export | `160` | wake-up message preview length |
+| `TEAM_INBOX_WATCH_REPLAY_MAX` | restart · export | `20` | lines replayed after a shrink |
+| `TEAM_INBOX_WATCH_SEEN_MAX` | restart · export | `512` | dedup memory |
+| `TEAM_INBOX_WATCH_STALE` | restart · export | `300` | heartbeat staleness bound (seconds) |
+| `TEAM_INBOX_WATCH_POLL_MS` | restart · export | `5000` | `fs.watch` fallback poll (ms) |
+| `TEAM_INBOX_WATCH_HEARTBEAT_MS` | restart · export | `5000` | registry heartbeat (ms) |
+| `TEAM_INBOX_WATCH_TARGET` | restart · export | empty | explicit knock target |
+| `TEAM_BG_LOG_MAX_BYTES` | restart · export | `524288` | background job log cap (bytes) |

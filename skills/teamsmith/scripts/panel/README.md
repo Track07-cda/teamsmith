@@ -70,6 +70,31 @@ and through a real terminal→tmux→pane chain (`tests/panel-b3-pty-tmux-mouse.
 window, one process, the tick keeps logging. `team pulse up` restores the console in the same window and
 `team pulse status` reports which shape the window is in. `Ctrl-C` still exits.
 
+## The project-settings view (P22)
+
+The settings overlay (`,`) carries one navigation row — `项目设置` / `Project settings` — which opens the
+project-settings view. It replaces the page's blocks (title band, tabs and key band stay) and lists the project
+contract from `team __panel-data --block settings`, whose payload is exactly `team config list --json`: one row
+per schema key plus one per key the file carries that the schema does not know, grouped by the **effect class the
+command reports** (`apply` / `restart` / `refuse`), with the file's value, the schema's default for an unset key,
+the line's own inline comment and the command's warning/route text. `↑`/`↓` walk the row window (a click focuses a
+row, a second click opens it), `/` opens the compose editor in `filter` mode (matches key or value; `esc` clears),
+and `esc` returns to the overlay row it was opened from (`q` keeps its global collapse meaning). A `refuse` row
+opens no editor — the command's route is shown. An editable row opens the compose line's `setting` mode holding the
+file's value (or the schema default): the first `enter` runs `team config set … --dry-run` and renders the
+confirmation (the class's timing; a danger reply needs one more `enter`), the second `enter` runs
+`team config set … --yes` with the fingerprint pinned when the editor opened; the exit code maps to the receipt
+and every settle re-reads the list and the audit footer. The seats block (one row per roster seat plus `pm`) shows
+the model the CLI displays with its source badge (`配置` / `显式` / `历史记录`) and `enter` opens a picker (the
+command's `known[]`, the removal, a free-text line) writing through `team config set-agent-model …`; the console
+never restarts a seat — a running window keeps its model until its next `dispatch`/`resume`.
+
+The view is console-only: `--print`/`--json` never read it, a parked console spawns no `settings` child (the
+`detail` block's on-demand rule), and the reader rides the open view, never the frame cadence.
+
+The pty fixtures for it are `tests/panel-p21.sh` (scenarios `settings write conflict seats readonly`, driven
+through the real CLI behind an argv-logging wrapper).
+
 ## Compose and the three actions (pulse-console B2)
 
 `m` opens a bottom input line **on any page**; the draft is edited at an insertion point (arrow keys, Home/End,

@@ -5,6 +5,8 @@
 #   TEAM_PANEL_CPU_PAGE=4 bash skills/teamsmith/tests/panel-cpu.sh   # park it on the board page
 #   TEAM_PANEL_CPU_DETAIL=1 bash skills/teamsmith/tests/panel-cpu.sh # open the markdown detail view
 #   TEAM_PANEL_CPU_COMPOSE=1 bash skills/teamsmith/tests/panel-cpu.sh # hold the compose line open
+#   TEAM_PANEL_CPU_VIEW=1 bash skills/teamsmith/tests/panel-cpu.sh   # keep the project-settings view open
+#   TEAM_PANEL_CPU_VIEW=1 TEAM_PANEL_CPU_EDIT=1 bash ...             # …and an editor holding a typed draft
 #
 # Runs the console in a fixture pane of a **private tmux server** (`-L p12cpu-$$`, the team session is
 # never touched) and reports three numbers over the window:
@@ -118,6 +120,31 @@ if [ -n "$detail_flag" ]; then
   sleep 3
   printf '== detail view open for the sampling window (page 4 + Enter; %s) ==\n' \
     "$(tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -c '详情' | tr -d ' ')"
+fi
+
+# P22/B2-B3: the project-settings view's own steady state (and its editor's) — the same red line.
+if [ "${TEAM_PANEL_CPU_VIEW:-0}" = "1" ]; then
+  tmux -L "$sock" send-keys -t "$sess:console" , 2>/dev/null || true
+  sleep 0.8
+  tmux -L "$sock" send-keys -t "$sess:console" Down Down Down Down Down 2>/dev/null || true
+  sleep 0.6
+  tmux -L "$sock" send-keys -t "$sess:console" Enter 2>/dev/null || true
+  sleep 3
+  if [ "${TEAM_PANEL_CPU_EDIT:-0}" = "1" ]; then
+    tmux -L "$sock" send-keys -t "$sess:console" / 2>/dev/null || true
+    sleep 0.5
+    tmux -L "$sock" send-keys -l -t "$sess:console" 'TEAM_PULSE_NUDGE_GAP' 2>/dev/null || true
+    sleep 0.5
+    tmux -L "$sock" send-keys -t "$sess:console" Enter 2>/dev/null || true
+    sleep 0.9
+    tmux -L "$sock" send-keys -t "$sess:console" Enter 2>/dev/null || true
+    sleep 1.2
+    tmux -L "$sock" send-keys -l -t "$sess:console" '1200' 2>/dev/null || true
+    sleep 0.6
+  fi
+  printf '== project-settings view open for the sampling window (%s)%s ==\n' \
+    "$(tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -c '项目设置' | tr -d ' ')" \
+    "$([ "${TEAM_PANEL_CPU_EDIT:-0}" = "1" ] && printf ' + an editor holding a typed draft (nothing written)')"
 fi
 
 if [ -n "$compose_flag" ]; then

@@ -234,6 +234,47 @@ export interface HealthBlock {
   gates: string
 }
 
+/** One contract key as `team config list --json` reports it (P22/B2). */
+export interface SettingsKey {
+  name: string
+  /** apply | restart | refuse — the owning command's closed vocabulary. */
+  class: 'apply' | 'restart' | 'refuse'
+  kind: string
+  /** plain | export — the assignment form the writer produces. */
+  form: string
+  /** The file's value ('' when the file does not carry the key). */
+  value: string
+  default: string
+  /** Whether the file itself carries the key. */
+  set: boolean
+  /** The line's own inline comment, verbatim (may be empty). */
+  comment: string
+  /** A command-side warning (an unknown seat token in TEAM_AGENT_MODELS, …). */
+  warning: string
+  /** The refusal's route for a read-only key (`team add-agent`, hand-edit the file, …). */
+  route?: string
+  /** False for a key in the file the schema does not know (read-only row). */
+  known?: boolean
+}
+
+/** One seat's displayed model and its CLI-computed source (P22/B4). */
+export interface SettingsSeat {
+  agent: string
+  model: string
+  source: 'config' | 'explicit' | 'record'
+  override: boolean
+}
+
+/** The `settings` block: exactly `team config list --json` (P22/B2). */
+export interface SettingsBlock {
+  path: string
+  fingerprint: string
+  mtime: string
+  keys: SettingsKey[]
+  models: { default: string; known: string[]; seats: SettingsSeat[] }
+  audit: string[]
+}
+
 /** One file discovered for an entry's detail view (read-only, P18/B3). */
 export interface DetailFile {
   /** The tab label: `brief`, `report:<agent>`, `review` or `review:<suffix>`. */
@@ -271,6 +312,8 @@ export interface PanelBlocks {
   inbox?: InboxBlock
   patrol?: PatrolBlock
   health?: HealthBlock
+  /** The project-settings view's on-demand reader (P22/B2); absent while the view is closed. */
+  settings?: SettingsBlock
   /** Built only while the detail view is open (design §8); never spawned on a parked page. */
   detail?: DetailBlock
 }
@@ -341,6 +384,22 @@ export type Action =
   | { kind: 'detail-scroll'; delta: number }
   /** Detail view: leave it (Esc/q) without collapsing the console. */
   | { kind: 'detail-close' }
+  /** Project-settings view: close it (Esc) back to the overlay it was opened from. */
+  | { kind: 'settings-close' }
+  /** Project-settings view: focus a row (a click on an unfocused row). */
+  | { kind: 'settings-focus'; index: number }
+  /** Project-settings view: open the focused row (Enter / a click on the focused row). */
+  | { kind: 'settings-open'; index: number }
+  /** Project-settings view: open the filter line (the `/` chip). */
+  | { kind: 'settings-filter' }
+  /** Project-settings view: scroll the row window by the wheel (the focus stays). */
+  | { kind: 'settings-scroll'; delta: number }
+  /** The settings overlay's navigation row: open the project-settings view. */
+  | { kind: 'settings-open-view' }
+  /** The seat picker: choose option `index` (a click on a picker row). */
+  | { kind: 'seat-pick'; index: number }
+  /** The seat picker: move the selection (the ↑/↓ chips). */
+  | { kind: 'seat-move'; delta: number }
 
 export interface PlacedLine {
   line: Line
@@ -367,6 +426,18 @@ export interface DetailWindow {
   offset: number
 }
 
+/** The project-settings view's row window as the frame rendered it (P22/B2). */
+export interface SettingsWindow {
+  /** The focused focusable row (an index into the filtered row list). */
+  focus: number
+  /** The first drawn focusable row. */
+  offset: number
+  /** Focusable rows the window shows. */
+  visible: number
+  /** Focusable rows in the filtered list. */
+  count: number
+}
+
 /** A rendered frame: the rows plus the click targets resolved to absolute rows. */
 export interface Frame {
   rows: Line[]
@@ -375,6 +446,8 @@ export interface Frame {
   lanes?: LaneWindow[]
   /** The detail view's document window (absent while the view is closed). */
   detail?: DetailWindow
+  /** The project-settings view's row window (absent while the view is closed). */
+  settings?: SettingsWindow
   /** The work page's board rows in the order they were drawn (the App's `↑`/`↓` walk this). */
   boardOrder?: string[]
 }
@@ -419,4 +492,16 @@ export interface ViewState {
   detailIndex?: number
   /** The detail document's first visible row. */
   detailScroll?: number
+  /** True while the project-settings view replaces the page's blocks (P22/B2). */
+  settings?: boolean
+  /** The focused row in the filtered project-settings row list. */
+  settingsFocus?: number
+  /** The filter text (`''` = no filter). */
+  settingsFilter?: string
+  /** The open setting editor's draft: the row it edits, the text and the insertion point. */
+  settingsDraft?: { row: number; text: string; cursor: number } | null
+  /** The pending write confirmation (the first Enter of a two-step write). */
+  settingsConfirm?: { row: number; key: string; old: string; next: string; danger: boolean } | null
+  /** The open seat picker: the seat's agent, its option list and the selection. */
+  seatPicker?: { agent: string; row: number; models: string[]; index: number } | null
 }
