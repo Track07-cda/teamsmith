@@ -15,6 +15,7 @@ export const zh = {
   standbyOff: '待命 off',
   standbyDash: '待命 —',
   pmLabel: 'PM',
+  pmDeliveryWarning: '投递降级：{reason} → 通知退回输入框粘贴慢路径（重启进程才加载扩展）',
   pendingLabel: '待办',
   pendingNone: '无',
   outboxLabel: '延后投递',

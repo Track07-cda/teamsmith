@@ -706,11 +706,93 @@ team_outbox_active_entries() { find "$(team_outbox_dir)" -maxdepth 1 -name '*.ms
 team_outbox_count() { team_outbox_entries | grep -c . 2>/dev/null || true; }
 team_outbox_active_count() { team_outbox_active_entries | grep -c . 2>/dev/null || true; }
 team_outbox_held_count() { find "$(team_outbox_dir)/held" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | grep -c . 2>/dev/null || true; }
+
+# M46 · 目标已消失的 held 条目数（只数，不删；人显式 `outbox drop gone` 才清）。
+# 没有 tmux / 判不出来时一律不算「消失」（宁可少报，不制造假清理信号）。
+team_outbox_held_gone_count() {
+  local e c=0
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    team_outbox_is_held "$e" || continue
+    if team_outbox_target_gone "$(team_outbox_header "$e" target)"; then c=$((c + 1)); fi
+  done < <(team_outbox_entries)
+  printf '%s\n' "$c"
+}
 team_outbox_is_held() { case "$1" in */held/*) return 0 ;; *) return 1 ;; esac; }
 
+# M46 · 残留清掉记录（只读：HOLDING.log 里的 `residue-clear entry=<name> …`）
+# 为什么单独一列：draft-raced-left / unconfirmed 是终态（规格：后续 drain 绝不给它发键），
+# 残留只能靠人提交/删掉或重新投递——但「框已经干净了」这件事必须能自动、可审计地记下来，
+# 否则状态行会永远骗人说「留在框里 N」。
+team_outbox_residue_resolved() { # <entry> → 0 = 已有 box-clear 记录
+  local base; base="$(basename "$1")"
+  grep -qs "residue-clear entry=$base " "$(team_outbox_holding_log)" 2>/dev/null
+}
+
+# <entry> → cleared|in-box|unknown（只读；绝不发键）。判据：已有 residue-clear 记录 / 没有目标 /
+# 目标消失 / payload 不在框里 = cleared；payload 还在框里 = in-box；框读不出来 = unknown。
+team_outbox_residue_state() {
+  local e="$1" target payload got gotnows want
+  team_outbox_residue_resolved "$e" && { printf 'cleared\n'; return 0; }
+  target="$(team_outbox_header "$e" target)"
+  [ -n "$target" ] || { printf 'cleared\n'; return 0; }
+  team_outbox_target_gone "$target" && { printf 'cleared\n'; return 0; }
+  payload="$(team_outbox_payload "$e")"
+  [ -n "$(printf '%s' "$payload" | tr -d '[:space:]')" ] || { printf 'cleared\n'; return 0; }
+  got="$(team_input_box_text "$target" 2>/dev/null)" || { printf 'unknown\n'; return 0; }
+  gotnows="$(printf '%s' "$got" | tr -d '[:space:]')"
+  # 空框 = 没有残留（不能拿 box_text_holds_only 判：那里空框算「只有我们」，是 Enter 路径的语义）
+  [ -n "$gotnows" ] || { printf 'cleared\n'; return 0; }
+  want="$(printf '%s' "$payload" | tr -d '[:space:]')"
+  if team_box_text_holds_only "$got" "$payload"; then printf 'in-box\n'; return 0; fi
+  case "$gotnows" in *"$want"*) printf 'in-box\n'; return 0 ;; esac
+  printf 'cleared\n'
+}
+
+# M46 · 残留巡检（**只读，绝不发键**）：对 draft-raced-left / unconfirmed / draft-raced 的 held
+# 条目，读一眼目标输入框：我们的 payload 已不在框里（人提交/删了）或目标已消失 → 记一条
+# residue-clear，状态行不再报「留在框里」。payload 还在框里（含混着人的字）→ 什么都不记
+# （残留是真的，不能自欺）。读不出框 → 没有证据，不判。绝不发键：规格把 draft-raced 定为终态
+# （后续 drain 不给它发任何键）——这里只观察，动框的只有人。
+team_outbox_sweep_residue() {
+  local e r st target why
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    team_outbox_is_held "$e" || continue
+    r="$(team_outbox_hold_reason "$e")"
+    case "$r" in
+      draft-raced|draft-raced-left|unconfirmed) ;;
+      *) continue ;;
+    esac
+    team_outbox_residue_resolved "$e" && continue
+    st="$(team_outbox_residue_state "$e")"
+    [ "$st" = "cleared" ] || continue
+    target="$(team_outbox_header "$e" target)"
+    why="box-clear"
+    if team_outbox_target_gone "$target"; then why="target-gone"; fi
+    printf '%s residue-clear entry=%s target=%s reason=%s why=%s\n' \
+      "$(team_timestamp)" "$(basename "$e")" "${target:--}" "$r" "$why" >> "$(team_outbox_holding_log)"
+  done < <(team_outbox_entries)
+  return 0
+}
+
+# M46 · 目标已消失？<target> → 0 = session/window 都不在了（算不出/没有 tmux 不算消失）
+team_outbox_target_gone() {
+  local target="${1:-}" sess
+  [ -n "$target" ] || return 0
+  team_have_cmd tmux || return 1
+  sess="${target%%:*}"
+  team_tmux_has_session "$sess" || return 0
+  tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1 && return 1
+  return 0
+}
+
 # held 条目按「框里的残留」分档（M17）：*retracted* = 我们打进去的已收回（框里无残留）；
-# *left* = 没收（框里还有人的字或收回失败，宁留不删）；其它 = 从未进过框的 hold（TTL/cap/no-target）
-# 或收不回但已投过 Enter 的 unconfirmed。输出 "<retracted> <left> <other>"。
+# *left* = 没收（框里还有人的字或收回失败，宁留不删）；但 M46 的只读巡检已经记过
+# residue-clear（下一拍排水时读框确认 payload 不在框里了/目标没了）的不再算「留在框里」；
+# 其它 = 从未进过框的 hold（TTL/cap/no-target）或收不回但已投过 Enter 的 unconfirmed。
+# 注意：这里只读记录（不在 status/digest 上再读一次框）——"框里有没有"的活体判定在排水时的
+# team_outbox_sweep_residue；状态行与账本一致（M17 的既有分档因此原样保持）。
 team_outbox_held_residue_counts() {
   local e r retracted=0 left=0 other=0
   while IFS= read -r e; do
@@ -719,7 +801,7 @@ team_outbox_held_residue_counts() {
     r="$(team_outbox_hold_reason "$e")"
     case "$r" in
       *retracted*) retracted=$((retracted + 1)) ;;
-      *left*)      left=$((left + 1)) ;;
+      *left*)      if team_outbox_residue_resolved "$e"; then other=$((other + 1)); else left=$((left + 1)); fi ;;
       *)           other=$((other + 1)) ;;
     esac
   done < <(team_outbox_entries)
@@ -745,6 +827,9 @@ team_outbox_status_line() { # [前缀]
       detail="$detail：已收回 $retracted · 留在框里 $left"
       [ "${other:-0}" -gt 0 ] && detail="$detail · 其它 $other"
     fi
+    # M46：目标已消失的 held 条目不能静默堆着（ai_interview 的旧会话名残渣就是这样）
+    local gone; gone="$(team_outbox_held_gone_count)"
+    [ "${gone:-0}" -gt 0 ] && detail="$detail · $gone 条目标已消失（$TEAM_CLI outbox drop gone）"
   fi
   printf '%soutbox %s 条待投递（%s）· 最老 %ss · %s outbox list\n' "${1:-}" "$n" "$detail" "$age" "$TEAM_CLI"
   return 0
@@ -809,7 +894,99 @@ team_inbox_watch_route() {
   return 1
 }
 
-# pi 通道投递：① durable 收件箱（该有而没写就补上）　② spool 一行指针（扩展据此唤醒会话）。
+# M46 · 降级痕迹：扩展跳过 setup（会话名不符 / …）时写的 `<key>.skip`（与 .reg 同一种 KEY=VALUE）。
+# 为什么需要它：“本项目 PM 没有注册”有两种原因（会话名不符 vs 扩展没加载），只有扩展自己知道前者；
+# 没有这份记录，检查方只能给一句笼统的「未注册」。痕迹也讲身份：pid 活着 + cwd 在本项目内才认
+# （cwd 缺失退回心跳新鲜度，与 route 同口径）。
+team_inbox_watch_skip_files() { # → 每个 .skip 一行（没有 → 无输出）
+  local dir; dir="$(team_inbox_watch_dir)"
+  [ -d "$dir" ] || return 0
+  find "$dir" -maxdepth 1 -name '*.skip' -type f 2>/dev/null | LC_ALL=C sort
+}
+
+team_inbox_watch_skip_live() { # <skip 文件> → 0 = 这条痕迹是活的（写它的进程还活着且属于本项目）
+  local f="$1" pid cwd hb age
+  pid="$(team_inbox_watch_field "$f" pid)"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  cwd="$(team_inbox_watch_field "$f" cwd)"
+  if [ -z "$cwd" ]; then
+    hb="$(team_inbox_watch_field "$f" heartbeat)"
+    case "$hb" in ''|*[!0-9]*) return 1 ;; esac
+    age=$(( $(team_epoch_sec) - hb ))
+    [ "$age" -le "$(team_inbox_watch_stale)" ] || return 1
+    return 0
+  fi
+  team_cwd_in_project "$cwd"
+}
+
+# <skip 文件> → 人话（reason 是闭集；未知 reason 原样给 detail —— 绝不丢信息）
+team_inbox_watch_skip_text() {
+  local f="$1" reason detail expect session
+  reason="$(team_inbox_watch_field "$f" reason)"
+  detail="$(team_inbox_watch_field "$f" detail)"
+  expect="$(team_inbox_watch_field "$f" expect)"
+  session="$(team_inbox_watch_field "$f" session)"
+  case "$reason" in
+    session-mismatch) printf '会话名不符（配置 TEAM_SESSION=%s，实际会话 %s）' "${expect:--}" "${session:--}" ;;
+    no-tmux-target)  printf '进程里没有 tmux target（TMUX_PANE 缺失）' ;;
+    *)                printf '%s' "${detail:-$reason}" ;;
+  esac
+}
+
+# <target> → 该 target 的**活着的** skip 原因；没有 → 返回 1（无证据不开口）。
+# 匹配规则有两条，因为事故的形状就是「会话名不符」：① target 逐字相同；② 同一个**窗口名**的
+# session-mismatch 痕迹（配置说会话是 X，真实会话是 Y —— 检查方按配置算出来的 target 是 X:pm，
+# 而扩展记的是 Y:pm；只认逐字相同就正好错过要修的那个形状）。痕迹的 cwd 必须在本项目内。
+team_inbox_watch_skip_reason() {
+  local target="${1:-}" f ft fw want_win reason
+  [ -n "$target" ] || return 1
+  want_win="${target##*:}"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    ft="$(team_inbox_watch_field "$f" target)"
+    fw="$(team_inbox_watch_field "$f" window)"
+    reason="$(team_inbox_watch_field "$f" reason)"
+    if [ "$ft" != "$target" ]; then
+      [ "$fw" = "$want_win" ] && [ "$reason" = "session-mismatch" ] || continue
+    fi
+    team_inbox_watch_skip_live "$f" || continue
+    team_inbox_watch_skip_text "$f"
+    return 0
+  done < <(team_inbox_watch_skip_files)
+  return 1
+}
+
+# M46 · 降级判定：<target> 没有活的注册时，能证明出原因就打印**短文本**并返回 0，否则返回 1。
+# 两种证据：① 扩展留下的活 .skip（会话名不符 / …）；② 调用方告知 PM 进程已被证实是本项目的
+# 内置 Pi（running:*）而注册缺失 —— 扩展没加载/启动早于扩展安装。内置 Pi 之外（自定义 PM CLI）
+# 不适用这条 lane，绝不劝告。
+team_inbox_watch_degraded_text() { # <target> [<pm-state>]
+  local target="${1:-}" pmstate="${2:-}" reason
+  [ -n "$target" ] || return 1
+  team_inbox_watch_route "$target" >/dev/null 2>&1 && return 1
+  if reason="$(team_inbox_watch_skip_reason "$target")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  [ -z "${TEAM_PM_CMD:-}${TEAM_PM_BIN:-}" ] || return 1
+  [ -n "$pmstate" ] || pmstate="$(team_pm_state)"
+  case "$pmstate" in
+    running:*) printf 'PM 进程在跑但没有注册（扩展未加载 / 进程启动早于扩展安装）'; return 0 ;;
+  esac
+  return 1
+}
+
+# 完整告警行（status / digest / doctor / 面板共用一份措辞）。返回 1 = 没降级，不输出任何东西。
+team_inbox_watch_degraded_line() { # [<target>] [<pm-state>]
+  local target="${1:-$(team_pm_target)}" pmstate="${2:-}" text
+  text="$(team_inbox_watch_degraded_text "$target" "$pmstate")" || return 1
+  printf '本项目 PM 的投递通道降级：%s 没有 inbox-watch 注册（%s）→ 通知退回输入框粘贴慢路径；扩展在进程启动时加载，重启进程才会生效：%s up（或 %s resume）' \
+    "$target" "$text" "${TEAM_CLI:-team}" "${TEAM_CLI:-team}"
+  return 0
+}
+
+
 # 顺序不能反：spool 行存在 ⟹ 收件箱里已经有这条（唤醒不会指向空气）。
 # durable 的判定（条目头部是契约，不靠正文逐字匹配 —— 重复的相同消息不会被误吞）：
 #   inbox + inbox-written=1 → 发送方已经写过了（名字可能是 `-` ：它的记录在自家日志里，如 nudges.log）
@@ -1196,6 +1373,7 @@ team_outbox_drain() { # [--now] [--quiet] [--max N]
     esac
   done
   team_outbox_reap_claims
+  team_outbox_sweep_residue   # M46：先把「残留已清」的事实记下来（只读；不碰任何框）
   TEAM_OUTBOX_QUIET=$quiet
   local e n=0 delivered=0 held=0
   while IFS= read -r e; do

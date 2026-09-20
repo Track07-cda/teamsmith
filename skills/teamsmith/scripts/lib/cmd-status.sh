@@ -390,6 +390,9 @@ team_cmd_status() {
   team_cmd_roster
   # 延后队列非空时补一行（delivery-guard 的可见性；空队列不打印任何东西）
   team_outbox_status_line "" || true
+  # M46：投递通道降级（没有 inbox-watch 注册时绝不静默退回慢路径；没降级就一个字都不加）
+  local dbg; dbg="$(team_inbox_watch_degraded_line 2>/dev/null || true)"
+  [ -n "$dbg" ] && team_warn "$dbg"
   printf '\n'
   if [ -n "$id" ]; then
     # M16：抬头行也带名字（`任务 M16：沟通纪律…`）—— 保持 `任务 <ID>：` 前缀不变（既有断言/习惯），
@@ -488,6 +491,9 @@ team_cmd_digest() {
   printf ' ｜ pulse %s\n' "$(team_pulse_state_text)"
   # 延后投递：队列非空才打印（delivery-guard：排队/held 必须看得见；空队列一个字都不加）
   team_outbox_status_line "  " || true
+  # M46：投递通道降级（PM 的一行视角；`team_pm_state` 已经在手，复用同一次读取）
+  local dbg; dbg="$(team_inbox_watch_degraded_line "$(team_pm_target)" "$pm" 2>/dev/null || true)"
+  [ -n "$dbg" ] && team_warn "  $dbg"
 
   # 待办：这是 pulse 判断“要不要叫醒 PM”的依据
   local pend; pend="$(team_pending_text || true)"

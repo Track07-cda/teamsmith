@@ -317,6 +317,36 @@ evidence — and they never add an inbox line beyond the one their sender alread
 The session-side ledger is `state/inbox-watch.log` (`started` / `wake n=… kinds=…` / `stopped` lines); the
 sender side records `watch` as the outcome in `state/outbox/delivered.log`.
 
+### 4a.2 When the watch channel is absent: the skip record (M46)
+
+An absent registration is only *evidence of absence*; the **reason** is written by the session that could not
+register. On every skip path the extension writes `state/inbox-watch/<key>.skip` (same `KEY=VALUE` shape as
+`.reg`: `target`, `session`, `window`, `expect`, `reason`, `detail`, `pid`, `cwd`, `ts`, `heartbeat`) and the
+`skip setup: …` ledger line stays as it was. `reason` is a small closed vocabulary today —
+`session-mismatch` (the session resolved from tmux, or from `TEAM_INBOX_WATCH_TARGET`, is not the project's
+`TEAM_SESSION`; `expect` carries the configured name) and `no-tmux-target` (no `TMUX_PANE` and no override,
+ledger only). A record is **believed only while it is live**: the writing pid must be alive and `cwd` inside
+this project (cwd absent → `heartbeat` within `TEAM_INBOX_WATCH_STALE`), the same identity rule the registry
+uses. A successful registration deletes the records for its target, so the trace cannot outlive the problem.
+
+Consumers: `team doctor` prints one `投递通道 inbox-watch` line (`pass` when a live registration exists for the
+PM target, a warning naming the reason otherwise), `team status` and `team digest` print the same warning as
+`投递通道降级: …`, and the panel's `panel.pm.delivery_warning` carries the short reason for the status band.
+The match for a `session-mismatch` record also accepts the **same window name** rather than the exact target,
+because the expected target (`TEAM_SESSION` + `TEAM_PM_WINDOW`) is precisely what is wrong in that shape. The
+state directory these records live in is anchored to the project derived from the process's cwd (the git main
+worktree): an inherited `TEAM_STATE_DIR` that points at **another teamsmith project's** state is refused with
+a `TEAM_IDENTITY_CONFLICT inherited TEAM_STATE_DIR=…` ledger line, so a session can never treat another
+project's state as its home.
+
+The paste-path fallback is not a dead end while the channel is missing. Every drain first runs a **read-only**
+residue sweep over terminal holds (`draft-raced*`, `unconfirmed`): if the target's box is gone or no longer
+holds the payload, `outbox/HOLDING.log` gains a `residue-clear entry=… why=box-clear|target-gone` line and the
+status line stops reporting a residue that no longer exists. No keys are ever sent for a terminal entry (the
+specification's "a draft-raced entry is never pasted again" also covers later drains). Held entries whose
+target window no longer exists are marked `target=gone` by `team outbox list`, counted in the status queue
+line, and cleaned only by the explicit `team outbox drop gone` (which names every file it drops).
+
 ### 4a.1 Delivery semantics: offset / rescan / caps (M43)
 
 The watcher tracks the spool with an **in-memory byte offset** into `state/inbox-watch/<key>.wake`. The only

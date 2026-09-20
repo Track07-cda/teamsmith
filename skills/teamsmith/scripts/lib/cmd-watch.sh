@@ -568,7 +568,7 @@ team_panel_recent_json() { # watchdog.log 的最后 6 行（面板右栏的审�
 }
 
 team_panel_pm_json() { # PM 状态用**闭集**词表：running|starting|absent|foreign|unknown
-  local st state detail
+  local st state detail watch
   st="$(team_pm_state)"
   case "$st" in
     running:*)  state="running"; detail="${st#running:}" ;;
@@ -578,9 +578,11 @@ team_panel_pm_json() { # PM 状态用**闭集**词表：running|starting|absent|
     foreign:*)  state="foreign"; detail="${st#foreign:}" ;;
     *)          state="absent";  detail="" ;;
   esac
-  printf '{"state": %s, "detail": %s, "evidence": %s}' \
+  # M46：投递通道降级（没有 inbox-watch 注册时给一行可见提示；pm-state 已在手，复用同一次读取）
+  watch="$(team_inbox_watch_degraded_text "$(team_pm_target)" "$st" 2>/dev/null || true)"
+  printf '{"state": %s, "detail": %s, "evidence": %s, "delivery_warning": %s}' \
     "$(team_panel_json_str "$state")" "$(team_panel_json_str "$detail")" \
-    "$(team_panel_json_str "$(team_pm_evidence "$st")")"
+    "$(team_panel_json_str "$(team_pm_evidence "$st")")" "$(team_panel_json_str "$watch")"
 }
 
 team_panel_standby_json() {

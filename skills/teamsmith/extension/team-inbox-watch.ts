@@ -38,6 +38,12 @@
  * 「有个活着的监视器」而不再走粘贴路径）。任何失败都只写自己的账本（state/inbox-watch.log），
  * 绝不抛进会话。
  *
+ * 降级可见（M46）：跳过 setup 不再只写日志 —— 本项目 state/inbox-watch/<key>.skip 记下「哪个 target、
+ * 为什么跳过」（reason=session-mismatch / …），doctor / status / digest / 面板据此报「本项目 PM 没有
+ * inbox-watch 注册 → 通知走输入框慢路径」；成功注册会删掉同 target 的旧记录。state 目录一律锚定
+ * cwd 推导出的项目根：继承来的 TEAM_STATE_DIR / TEAM_CONFIG_FILE 若指向**另一个 teamsmith 项目**，
+ * 一律拒绝并记账本（绝不把别人家的 state / 会话名当自己的，M40 原则的文件面）。
+ *
  * 作用域：只认本项目（git 主工作树）的 state 目录 —— 注册与 spool 是**发送方与会话之间的接口**
  * （发送方是 CLI，它的 TEAM_STATE_DIR 在主工作树），所以它们必须待在共享根，不能跟着会话的 worktree 走。
  * 会话本地的产物（作业日志/账户）不归这里管（那是 team-bg 的活，它跟会话自己的工作树走）。只服务
@@ -45,7 +51,7 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 
 const DEFAULT_PREVIEW = 160          // 预览截断（字符）：唤醒消息只带一行指针，不带全文
@@ -110,18 +116,79 @@ function findRoot(cwd: string): string {
   return derived || envRoot
 }
 
+/** M46：这个 state 目录属于**另一个 teamsmith 项目**吗（<other>/.pi/team/config.sh 是别的根）？
+ *  是 → 返回那个项目根（调用方拒绝该路径）。不是（本项目内 / 项目外的普通目录）= null。
+ *  为什么只拒「别的项目」而不是「项目外的一切」：TEAM_STATE_DIR 是显式旋钮（夹具把它指到
+ *  /tmp/xxx 搬家队列 —— 规格 scenario「TEAM_STATE_DIR moves the queue」）；但**继承来的**旋钮
+ *  若落在别的项目的 state 上，就是把别人家当自己家（M40 事故②的形状：cwd=ai_interview 的进程
+ *  读写 pm-skills 的 state）——那条绝不许静默通过。 */
+function foreignProjectRoot(dir: string, root: string): string | null {
+  const norm = (p: string): string => { try { return realpathSync(p) } catch { return resolve(p) } }
+  const r = norm(dir)
+  const rr = norm(root)
+  if (r === rr || r.startsWith(rr.endsWith('/') ? rr : `${rr}/`)) return null   // 本项目内（含根本身）
+  let d = r
+  for (;;) {
+    if (existsSync(join(d, '.pi/team/config.sh'))) return norm(d) === rr ? null : d
+    const parent = dirname(d)
+    if (parent === d) return null
+    d = parent
+  }
+}
+
+/** 本项目的 state 目录：锚定 cwd 推导出的根。继承的 TEAM_STATE_DIR 指向别的项目的 state 时
+ *  一律改用 <root>/.pi/team/state（并记账本，见 noteStateDirConflict）；其它显式值照用。 */
 function stateDir(root: string): string {
-  return process.env.TEAM_STATE_DIR || join(root, '.pi/team/state')
+  const envDir = (process.env.TEAM_STATE_DIR || '').trim()
+  if (envDir) {
+    const abs = resolve(envDir)
+    if (!foreignProjectRoot(abs, root)) return abs
+  }
+  return join(root, '.pi/team/state')
+}
+
+/** 被拒绝的继承指针（TEAM_STATE_DIR / TEAM_CONFIG_FILE）要留痕（写进**本项目**的账本；绝不静默）。 */
+function noteIdentityFileConflicts(root: string): void {
+  const stateEnv = (process.env.TEAM_STATE_DIR || '').trim()
+  if (stateEnv) {
+    const abs = resolve(stateEnv)
+    const foreign = foreignProjectRoot(abs, root)
+    if (foreign) {
+      appendLedger(root,
+        `TEAM_IDENTITY_CONFLICT inherited TEAM_STATE_DIR=${abs}（属于别的项目 ${foreign}）≠ cwd-derived=${root}；按 cwd 走`)
+    }
+  }
+  const cfgEnv = (process.env.TEAM_CONFIG_FILE || '').trim()
+  if (cfgEnv) {
+    const abs = resolve(cfgEnv)
+    const foreign = foreignProjectRoot(abs, root)
+    if (foreign && abs !== join(root, '.pi/team/config.sh')) {
+      appendLedger(root,
+        `TEAM_IDENTITY_CONFLICT inherited TEAM_CONFIG_FILE=${abs}（属于别的项目 ${foreign}）≠ cwd-derived=${root}；按 cwd 走`)
+    }
+  }
 }
 
 function watchDir(root: string): string {
   return join(stateDir(root), 'inbox-watch')
 }
 
+/** 项目配置文件的定位（M46）：TEAM_CONFIG_FILE 只在**不指向别的项目**时被信任 ——
+ *  与 state 目录同一条规则（继承的文件指针也不许把别的项目的会话名/文档目录当成本项目的）。 */
+function configFile(root: string): string {
+  const def = join(root, '.pi/team/config.sh')
+  const envFile = (process.env.TEAM_CONFIG_FILE || '').trim()
+  if (envFile) {
+    const abs = resolve(envFile)
+    if (abs === def || !foreignProjectRoot(abs, root)) return abs
+  }
+  return def
+}
+
 /** 从 <root>/.pi/team/config.sh 读 TEAM_DOCS_DIR（只解析需要的扁平 KEY=VALUE，不 source）。 */
 function docsDir(root: string): string {
   try {
-    const file = process.env.TEAM_CONFIG_FILE || join(root, '.pi/team/config.sh')
+    const file = configFile(root)
     const text = readFileSync(file, 'utf8')
     const m = /^\s*TEAM_DOCS_DIR\s*=\s*(.*?)\s*$/m.exec(text)
     if (!m) return 'docs/team'
@@ -135,7 +202,7 @@ function docsDir(root: string): string {
 
 function cfgSession(root: string): string {
   try {
-    const file = process.env.TEAM_CONFIG_FILE || join(root, '.pi/team/config.sh')
+    const file = configFile(root)
     const m = /^\s*TEAM_SESSION\s*=\s*(.*?)\s*$/m.exec(readFileSync(file, 'utf8'))
     if (!m) return 'team'
     const raw = m[1].replace(/\s+#.*$/, '').trim()
@@ -147,7 +214,7 @@ function cfgSession(root: string): string {
 
 function pmWindow(root: string): string {
   try {
-    const file = process.env.TEAM_CONFIG_FILE || join(root, '.pi/team/config.sh')
+    const file = configFile(root)
     const m = /^\s*TEAM_PM_WINDOW\s*=\s*(.*?)\s*$/m.exec(readFileSync(file, 'utf8'))
     if (!m) return 'pm'
     const raw = m[1].replace(/\s+#.*$/, '').trim()
@@ -166,7 +233,9 @@ function targetKey(target: string): string {
   return `${slug}-${h.toString(16).padStart(8, '0')}`
 }
 
-/** 本会话在 tmux 里的 `session:window`（env 覆盖优先：headless 与夹具用它）。 */
+/** 本会话在 tmux 里的 `session:window`（env 覆盖优先：headless 与夹具用它）。
+ *  注意（M46）：覆盖只改「从哪里读 target」，**不改**「哪个会话才是这个项目的」——
+ *  session_start 的会话检查对覆盖值同样生效（外来会话不许接管本项目的投递）。 */
 function resolveTarget(): { target: string; session: string; window: string } | null {
   const override = (process.env.TEAM_INBOX_WATCH_TARGET || '').trim()
   if (override) {
@@ -203,6 +272,76 @@ function appendLedger(root: string, line: string): void {
     appendFileSync(join(stateDir(root), 'inbox-watch.log'), `${new Date().toISOString()} ${line}\n`)
   } catch {
     /* 账本绝不能影响会话 */
+  }
+}
+
+/** M46 · 降级痕迹：跳过/失败不再只活在日志里 —— 在**本项目** state/inbox-watch/ 里写
+ *  `<key>.skip`（与 .reg 同一种 KEY=VALUE 格式，发送侧与 doctor/status/panel 都读它）。
+ *  为什么需要它：「本项目 PM 没有注册」有两种原因（会话名不符 vs 扩展没加载），只有扩展自己
+ *  知道前者；没有这份记录，检查方只能给一句笼统的「未注册」。字段：target/session/window/expect/
+ *  reason/detail/pid/cwd/ts/heartbeat。成功注册时同 target 的旧记录会被删掉（不再骗人）。 */
+function writeSkipRecord(root: string, target: string, info: {
+  session?: string; window?: string; expect?: string; inbox?: string; reason: string; detail: string
+}): void {
+  const dir = watchDir(root)
+  const key = targetKey(target)
+  try { mkdirSync(dir, { recursive: true }) } catch { return }
+  const body = [
+    'version=1',
+    `target=${target}`,
+    `key=${key}`,
+    `session=${info.session ?? '-'}`,
+    `window=${info.window ?? '-'}`,
+    `expect=${info.expect ?? '-'}`,
+    `inbox=${info.inbox ?? '-'}`,
+    `reason=${info.reason}`,
+    `detail=${info.detail}`,
+    `pid=${process.pid}`,
+    `cwd=${root}`,
+    `ts=${new Date().toISOString()}`,
+    `heartbeat=${Math.floor(Date.now() / 1000)}`,
+    '',
+  ].join('\n')
+  try {
+    const tmp = join(dir, `${key}.skip.tmp-${process.pid}`)
+    writeFileSync(tmp, body)
+    renameSync(tmp, join(dir, `${key}.skip`))
+  } catch {
+    /* 痕迹写不进去也不能影响会话；账本那一行仍然有 */
+  }
+}
+
+/** 成功注册 = 这个 window 在本项目不再降级：删掉自己或上一次进程留下的 .skip。
+ *  匹配两条：① target 逐字相同；② 同一个 window 的 session-mismatch 记录 —— 我们刚刚
+ *  用**匹配配置的会话**注册成功，那条「会话名不符」对同一个 window 已经不成立了（与 CLI 侧
+ *  读记录时的 window 匹配规则成对；否则修好会话后旧痕迹会永远刷降级告警）。 */
+function clearSkipRecords(root: string, target: string): void {
+  const dir = watchDir(root)
+  const wantWin = target.includes(':') ? target.slice(target.indexOf(':') + 1) : target
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.skip')) continue
+      const file = join(dir, name)
+      try {
+        const ft = readField(file, 'target')
+        if (ft === target) { rmSync(file, { force: true }); continue }
+        if (readField(file, 'window') === wantWin && readField(file, 'reason') === 'session-mismatch') {
+          rmSync(file, { force: true })
+        }
+      } catch { /* ignore */ }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 读一份 KEY=VALUE 文件里的单个字段（.reg/.skip 共用；没有 → 空串）。 */
+function readField(file: string, name: string): string {
+  try {
+    const m = new RegExp(`^${name}=(.*)$`, 'm').exec(readFileSync(file, 'utf8'))
+    return m ? m[1].trim() : ''
+  } catch {
+    return ''
   }
 }
 
@@ -457,15 +596,23 @@ export default function (pi: ExtensionAPI) {
     stopAll()
     root = findRoot(String(ctx?.cwd ?? process.cwd()))
     if (!root) return
+    noteIdentityFileConflicts(root)
     const found = resolveTarget()
     if (!found) {
       appendLedger(root, 'skip setup: no tmux target (set TEAM_INBOX_WATCH_TARGET to override)')
       return
     }
-    const override = !!(process.env.TEAM_INBOX_WATCH_TARGET || '').trim()
-    if (!override && found.session !== cfgSession(root)) {
-      // 不是本团队的 session：绝不接管（跨项目的窗口不归这里管）
-      appendLedger(root, `skip setup: session ${found.session} != ${cfgSession(root)}`)
+    if (found.session !== cfgSession(root)) {
+      // 不是本团队的 session：绝不接管（跨项目的窗口不归这里管）。M46：跳过也留本项目可见的痕迹。
+      // 注意 TEAM_INBOX_WATCH_TARGET 只是「从哪里读 target」的旋钮（headless/夹具），**不改**
+      // 「哪个会话才是本项目的」——显式覆盖进来的外来会话同样拒绝（隐式与显式两个入口同一扇门）。
+      const expect = cfgSession(root)
+      const detail = `session ${found.session} != ${expect}`
+      appendLedger(root, `skip setup: ${detail}`)
+      writeSkipRecord(root, found.target, {
+        session: found.session, window: found.window, expect, inbox: inboxName(found.window, root),
+        reason: 'session-mismatch', detail,
+      })
       return
     }
     const dir = watchDir(root)
@@ -482,6 +629,7 @@ export default function (pi: ExtensionAPI) {
     seenPath = join(dir, `${key}.seen`)
     loadSeen(seenPath)
     reapDeadRegs(dir, reg)
+    clearSkipRecords(root, keyTarget)   // M46：注册成功 = 这个 target 不再降级，旧痕迹不骗人
     writeReg('ready')
     appendLedger(root, `started target=${keyTarget} inbox=${inbox} spool=${spool} baseline=${offset}`)
     try {

@@ -425,6 +425,97 @@ let s11Lines = []
   await shutdown()
 }
 
+// ── M46：跳过留痕 / 注册清痕 / 继承的 TEAM_STATE_DIR 不许指向别的项目 ──────────────────
+// 事故（2026-09-20）：ai_interview 的 PM 加载的是旧扩展，按继承的 TEAM_* 解到 pm-skills，
+// 用 pm-skills 的会话名算出期望 target 与真实会话不符 → 每 2 秒 skip setup 一次，痕迹全写进
+// **别人的** state，而投递已经静默退回输入框粘贴路径（draft-raced-left + 两条消息滞留）。
+// 这三条钉住修复后的契约：① 跳过的原因留在**本项目**；② 成功注册会把旧痕迹删掉；
+// ③ 继承的 TEAM_STATE_DIR 指向别的项目时一律拒绝（M40 的 state 面）。
+const skipFiles = () => (existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(f => f.endsWith('.skip')) : [])
+const cliPath = join(SKILL_DIR, 'scripts/team')
+{
+  await shutdown()
+  const savedOverride = process.env.TEAM_INBOX_WATCH_TARGET
+  const savedState = process.env.TEAM_STATE_DIR
+
+  // ── S14：会话名不符（配置说 m30s，target 指向 ai-interview）→ 本项目 state 里的 skip 记录
+  // 注意：TEAM_INBOX_WATCH_TARGET 只改「从哪读 target」，不改「哪个会话是本项目的」——所以这条
+  // 显式覆盖同样会被拒（bun 会缓存启动时的 PATH，夹具不能靠 PATH 假 tmux 来造这个形状）。
+  process.env.TEAM_INBOX_WATCH_TARGET = 'ai-interview:pm'
+  await sessionStart()
+  const skips = skipFiles()
+  check('M46-S14 a session-name mismatch leaves exactly one .skip record', skips.length === 1, `skips=${skips.length}`)
+  const skipText = skips.length ? readFileSync(join(WATCH_DIR, skips[0]), 'utf8') : ''
+  for (const [field, want] of [['session', 'ai-interview'], ['window', 'pm'], ['expect', 'm30s'], ['reason', 'session-mismatch'], ['pid', String(process.pid)], ['cwd', ROOT]]) {
+    check(`M46-S14 the skip record carries ${field}=${want}`, new RegExp(`^${field}=${want}$`, 'm').test(skipText), skipText.replace(/\n/g, ' | '))
+  }
+  check('M46-S14 the skip record lives in the cwd-derived project state dir',
+    skips.length === 1 && existsSync(join(WATCH_DIR, skips[0])), `watch=${WATCH_DIR}`)
+  check('M46-S14 a foreign session is not registered', regs().length === 0, `regs=${regs().length}`)
+  check('M46-S14 the ledger still records the skip reason',
+    ledger().some(l => /skip setup: session ai-interview != m30s/.test(l)), ledger().at(-1) || '(no ledger)')
+  // 端到端：真 CLI 读这条痕迹 → status 报降级（不是只有日志里有）
+  {
+    let out = ''
+    try {
+      out = execFileSync('bash', ['-c', 'bash "$1" status 2>&1', 'bash', cliPath], {
+        cwd: ROOT, encoding: 'utf8', timeout: 20000,
+        env: { ...process.env, TEAM_ROOT: ROOT },
+      })
+    } catch (error) { out = `${String(error?.stdout ?? '')}${String(error?.stderr ?? '')}` }
+    check('M46-S14 the real CLI reports the delivery degradation in `team status`',
+      /投递通道降级/.test(out) && /会话名不符/.test(out),
+      out.trim().split('\n').filter(l => /降级/.test(l)).join(' | ') || out.trim().split('\n').at(-1) || '')
+  }
+  await shutdown()
+
+  // ── S15：成功注册会删掉同 target 的旧 .skip（痕迹不许一直骗人）
+  process.env.TEAM_INBOX_WATCH_TARGET = 'm30s:pm'
+  mkdirSync(WATCH_DIR, { recursive: true })
+  writeFileSync(join(WATCH_DIR, 'stale-skip.skip'),
+    `version=1\ntarget=m30s:pm\nkey=stale-skip\nreason=session-mismatch\ndetail=x\npid=${process.pid}\ncwd=${ROOT}\n`)
+  await sessionStart()
+  check('M46-S15 a successful registration clears the stale .skip for its target',
+    !existsSync(join(WATCH_DIR, 'stale-skip.skip')), `skips=${skipFiles().length}`)
+  check('M46-S15 the registration itself exists', regs().length === 1, `regs=${regs().length}`)
+  await shutdown()
+
+  // ── S16：继承的 TEAM_STATE_DIR 指向**另一个项目**的 state → 拒绝，写本项目
+  const OTHER = join(TMP, 'other-project')
+  mkdirSync(join(OTHER, '.pi/team'), { recursive: true })
+  writeFileSync(join(OTHER, '.pi/team/config.sh'), 'TEAM_PROJECT="other-project"\nTEAM_SESSION="m30s"\n')
+  process.env.TEAM_STATE_DIR = join(OTHER, '.pi/team/state')
+  await sessionStart()
+  check('M46-S16 an inherited TEAM_STATE_DIR pointing at another project is refused',
+    regs().length === 1 && !existsSync(join(OTHER, '.pi/team/state/inbox-watch')),
+    `regs=${regs().length} other=${existsSync(join(OTHER, '.pi/team/state/inbox-watch'))}`)
+  check('M46-S16 the refusal is recorded in the cwd-derived ledger',
+    ledger().some(l => /TEAM_IDENTITY_CONFLICT inherited TEAM_STATE_DIR=/.test(l)), ledger().at(-1) || '(no ledger)')
+  await sessionStart()   // 幂等：第二次也不再往别处写
+  check('M46-S16 repeated setup still writes only to the derived project',
+    !existsSync(join(OTHER, '.pi/team/state/inbox-watch')), `other=${existsSync(join(OTHER, '.pi/team/state/inbox-watch'))}`)
+  await shutdown()
+
+  // ── S17：继承的 TEAM_CONFIG_FILE 指向**另一个项目** → 忽略（期望会话名必须来自本项目配置）
+  delete process.env.TEAM_STATE_DIR
+  const savedCfg = process.env.TEAM_CONFIG_FILE
+  writeFileSync(join(OTHER, '.pi/team/config.sh'), 'TEAM_PROJECT="other-project"\nTEAM_SESSION="other-project"\n')
+  process.env.TEAM_CONFIG_FILE = join(OTHER, '.pi/team/config.sh')
+  await sessionStart()   // target m30s:pm = 本项目配置的会话；外来配置说是 other-project
+  check('M46-S17 an inherited TEAM_CONFIG_FILE pointing at another project is ignored',
+    regs().length === 1 && skipFiles().length === 0,
+    `regs=${regs().length} skips=${skipFiles().length}`)
+  check('M46-S17 the refusal is recorded in the cwd-derived ledger',
+    ledger().some(l => /TEAM_IDENTITY_CONFLICT inherited TEAM_CONFIG_FILE=/.test(l)), ledger().at(-1) || '(no ledger)')
+  if (savedCfg === undefined) delete process.env.TEAM_CONFIG_FILE; else process.env.TEAM_CONFIG_FILE = savedCfg
+  await shutdown()
+
+  // 还原环境：后面的用例（与反向守卫）走原来的状态
+  if (savedOverride === undefined) delete process.env.TEAM_INBOX_WATCH_TARGET; else process.env.TEAM_INBOX_WATCH_TARGET = savedOverride
+  if (savedState === undefined) delete process.env.TEAM_STATE_DIR; else process.env.TEAM_STATE_DIR = savedState
+  for (const f of skipFiles()) { try { rmSync(join(WATCH_DIR, f), { force: true }) } catch { /* ignore */ } }
+}
+
 // ── 反向守卫：真实仓库 state/ 未被触碰 ───────────────────────────────────────
 {
   const after = snapshot(REAL_STATE)

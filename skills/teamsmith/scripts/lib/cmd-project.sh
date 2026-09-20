@@ -487,6 +487,19 @@ team_cmd_doctor() {
          fi ;;
     esac
 
+  # M46 · 投递通道：PM 没有 inbox-watch 注册时，通知会退回输入框粘贴慢路径 —— 这条降级必须看得见。
+  # 只在「内置 Pi 的 PM」这条 lane 上判（自定义 PM CLI 不吃这个扩展，绝不劝告）；PM 没在跑且
+  # 没有活痕迹时不刷行（没有可降级的目标）；注册在 → pass 一行，让人知道快路径真的连着。
+  if [ -z "${TEAM_PM_CMD:-}${TEAM_PM_BIN:-}" ]; then
+    local watch_dbg
+    watch_dbg="$(team_inbox_watch_degraded_line "$(team_pm_target)" "$pmstate" 2>/dev/null || true)"
+    if [ -n "$watch_dbg" ]; then
+      check "投递通道 inbox-watch"; warn "$watch_dbg"
+    elif [ "${pmstate#running:}" != "$pmstate" ]; then
+      check "投递通道 inbox-watch"; pass "PM 会话已注册（通知走收件箱唤醒，不碰输入框）"
+    fi
+  fi
+
   check "巡检（pulse）"; local legacy_note; legacy_note="$(team_pulse_legacy_suffix)"
     case "$(team_pulse_state)" in
       off) warn "没在跑 → $TEAM_CLI pulse up（pulse 由 PM 配置）$legacy_note" ;;

@@ -130,11 +130,12 @@ bash <skill>/scripts/team changelog        # change history (--since v1.8.0 for 
 |---|---|
 | `scripts/**` (CLI) | **Nothing to do**: every call reads from disk |
 | `SKILL.md` / `references/**` / `templates/**` | Type **`/reload`** in Pi (or `/teamsmith-reload`, or let the model call the `reload_skills` tool). **Note**: `/reload` refreshes the skill list/descriptions (system prompt) and extensions; **text already read into the conversation history does not change**, so after reloading you must `read <skill>/SKILL.md` again (the extension sends a follow-up prompt that triggers that re-read) |
-| `extension/team-notify.ts`, `extension/team-bg.ts` | Same as above (`/reload` clears the extension cache and re-imports; `team version --check` fingerprints both) |
+| `extension/team-notify.ts`, `extension/team-bg.ts`, `extension/team-inbox-watch.ts` | **Restart the process** — the launch paths pass the extensions with `pi -e`, and `-e` modules are read at process start (`/reload` hot-reloads only extensions from Pi's auto-discovery locations, `~/.pi/agent/extensions/` and `.pi/extensions/`). PM: `team up`; worker: `team resume <agent>`. `team version --check` fingerprints them |
 
-Rationale: Pi's `/reload` rediscovers skills and rebuilds the system prompt, clears the extension module cache,
-and re-resolves `--skill`/`-e` paths. When `team version --check` says your session is stale, follow the table
-above; restarting the whole session is unnecessary (`-c` keeps history, but it is not needed).
+Rationale: Pi's `/reload` rediscovers skills, rebuilds the system prompt and re-imports extensions from its
+auto-discovery locations; extensions passed with `-e` (which is how the team launch paths load them) are a
+startup argument, so adding or changing one needs a process restart. When `team version --check` says your
+session is stale, follow the table above.
 
 ## git and forge: the PM uses the tools; the skill does not wrap them
 

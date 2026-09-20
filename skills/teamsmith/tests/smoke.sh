@@ -6166,9 +6166,139 @@ else
     "12b-pi M43：shrink 后的 rescan 有界（只投最近 N 条真新）且计数进账本"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S13 after a restart" \
     "12b-pi M43：去重记忆跨会话重启（<key>.seen 持久化）"
+  # M46：跳过留痕 / 注册清痕 / 继承的 TEAM_STATE_DIR 不许指向别的项目（harness M46-S14–S16；
+  # 翻转证据见 tests/flip-m46.sh）
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S14 a session-name mismatch leaves exactly one .skip record" \
+    "12b-pi M46：会话名不符时跳过也要在**本项目**留痕（<key>.skip）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S14 the real CLI reports the delivery degradation in \`team status\`" \
+    "12b-pi M46：真 CLI 的 status 能读到这条痕迹并报降级"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S15 a successful registration clears the stale .skip for its target" \
+    "12b-pi M46：注册成功会删掉旧痕迹（不再骗人）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S16 an inherited TEAM_STATE_DIR pointing at another project is refused" \
+    "12b-pi M46：继承的 TEAM_STATE_DIR 指向别的项目 → 拒绝（M40 的 state 面）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S17 an inherited TEAM_CONFIG_FILE pointing at another project is ignored" \
+    "12b-pi M46：继承的 TEAM_CONFIG_FILE 指向别的项目 → 忽略（会话名来自本项目配置）"
 fi
 
 # 不留注册：后面的段落（teardown / panel / …）不许被这条通道接管
+piw_reset
+
+# ---------------------------------------------------------------- 12b-pi2. M46 投递降级可见 + 慢路径自愈
+# 事故（2026-09-20，用户报「ai_interview 又没自动发消息」）：PM 进程加载的是旧扩展 → 按继承的
+# TEAM_* 解到 pm-skills → 会话名不符 → 每 2s 一次 `skip setup` 而痕迹全写进**别人的** state；
+# 投递静默退回输入框粘贴路径 → 一次 draft-raced-left + 两条消息滞留。M46 的三条契约在这里钉住：
+#   ① 跳过要在**本项目**留痕，doctor/status/面板看得见（活注册在 / 死 pid 旧痕时不报）；
+#   ② 没有 watcher 时慢路径仍能投完（串行重试，不永久滞留）；
+#   ③ 残留（payload 已不在框里）与目标已消失的 held 条目要被点名，清理只能由人显式做。
+section "12b-pi2 · M46 投递降级可见（skip 留痕）与慢路径自愈（残留/目标消失）"
+
+# ① 会话名不符的**活**痕迹 → status / doctor / 面板都报降级；活注册在则一个字都不加
+ob_reset; piw_reset; mkdir -p "$PIW"
+printf 'version=1\ntarget=ai-interview:pm\nkey=ai-interview_pm-00000000\nsession=ai-interview\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=session ai-interview != %s\npid=%s\ncwd=%s\nts=2026-09-20T16:11:45.129Z\nheartbeat=%s\n' \
+  "$SESSION" "$SESSION" "$$" "$REPO" "$(date +%s)" > "$PIW/ai-interview_pm-00000000.skip"
+ob_run $TEAM status >"$TMP/m46-status.log" 2>&1 || true
+assert_has "$TMP/m46-status.log" "投递通道降级" "12b-pi2 ① status 报投递通道降级（不再静默退回慢路径）"
+assert_has "$TMP/m46-status.log" "会话名不符" "12b-pi2 ① status 说出原因（会话名不符）"
+assert_has "$TMP/m46-status.log" "$SESSION:pm" "12b-pi2 ① status 点名本项目的 PM target"
+assert_has "$TMP/m46-status.log" "重启进程" "12b-pi2 ① 告警给出出路（扩展在进程启动时加载）"
+ob_run $TEAM doctor >"$TMP/m46-doctor.log" 2>&1 || true
+assert_has "$TMP/m46-doctor.log" "投递通道 inbox-watch" "12b-pi2 ① doctor 有「投递通道 inbox-watch」一条"
+assert_has "$TMP/m46-doctor.log" "会话名不符" "12b-pi2 ① doctor 报同一条降级与原因"
+ob_run $TEAM __panel-data --block pm >"$TMP/m46-pm.json" 2>&1 || true
+assert_has "$TMP/m46-pm.json" '"delivery_warning": "会话名不符' "12b-pi2 ① 面板 pm 块带 delivery_warning（pulse 看得见）"
+# 负对照（翻转的另一半）：活注册在 → 告警消失、面板字段为空
+piw_reset; piw_reg m46-pm "$SESSION:pm" pm
+ob_run $TEAM status >"$TMP/m46-status-ok.log" 2>&1 || true
+assert_not "$TMP/m46-status-ok.log" "投递通道降级" "12b-pi2 ①（负对照）活注册在时不报降级"
+ob_run $TEAM __panel-data --block pm >"$TMP/m46-pm-ok.json" 2>&1 || true
+assert_has "$TMP/m46-pm-ok.json" '"delivery_warning": ""' "12b-pi2 ①（负对照）活注册在时面板提示为空"
+# 负对照：死 pid 的旧痕迹不是证据（不制造假警报）
+piw_reset; mkdir -p "$PIW"
+( sleep 0.05 ) & M46_DEAD=$!; wait "$M46_DEAD" 2>/dev/null || true
+printf 'version=1\ntarget=ai-interview:pm\nkey=ai-interview_pm-00000000\nsession=ai-interview\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=x\npid=%s\ncwd=%s\nheartbeat=%s\n' \
+  "$SESSION" "$M46_DEAD" "$REPO" "$(date +%s)" > "$PIW/ai-interview_pm-00000000.skip"
+ob_run $TEAM status >"$TMP/m46-status-stale.log" 2>&1 || true
+assert_not "$TMP/m46-status-stale.log" "投递通道降级" "12b-pi2 ①（负对照）死 pid 的旧痕迹不报降级"
+piw_reset
+
+# ② 没有 watcher（粘贴慢路径）：脏框先排队，框空后的下一拍投完，队列不残留
+ob_reset; piw_reset
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM say dev "M46-QUEUED-THEN-DELIVERED" >"$TMP/m46-queued.log" 2>&1 || true
+assert_has "$TMP/m46-queued.log" "queued for" "12b-pi2 ② 无 watcher + 脏框 → 报 queued（不粘字）"
+assert_not "$TMP/ob-calls.log" "send-keys" "12b-pi2 ② 排队时一个键都没发"
+assert_eq "12b-pi2 ② 条目留在活动队列（可重试）" \
+  "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 $TEAM outbox flush >"$TMP/m46-flush.log" 2>&1 || true
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-pi2 ② 框空后的下一拍真的投递（串行重试）"
+assert_eq "12b-pi2 ② 投完队列不残留（不永久滞留）" \
+  "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+# ③ 残留巡检（只读）：payload 已不在框里 → 记账本 + 状态行不再说谎；排队的消息同拍投出去
+ob_reset; piw_reset
+M46_S="$REPO/.pi/team/state"; mkdir -p "$M46_S/outbox/held"
+M46_HELD="1700000000000-0001-$SESSION:dev.msg"
+printf 'kind: say\ntarget: %s:dev\nfrom: pm\ncreated: x\ndedup: -\n---\nM46-RESIDUE-GONE\n' "$SESSION" > "$M46_S/outbox/held/$M46_HELD"
+printf '2026-09-20T02:26:59Z name=%s reason=draft-raced-left held-since=2026-09-20T02:26:59Z attempts=1 target=%s:dev\n' \
+  "$M46_HELD" "$SESSION" > "$M46_S/outbox/HOLDING.log"
+ob_run env OB_BOX="$TMP/ob-box-empty" $TEAM outbox enqueue --kind say --target "$SESSION:dev" --payload "M46-QUEUED-AFTER-RESIDUE" >/dev/null 2>&1
+: > "$TMP/ob-calls.log"
+ob_run env OB_BOX="$TMP/ob-box-empty" OB_ECHO=1 $TEAM outbox flush >"$TMP/m46-sweep.log" 2>&1 || true
+assert_has "$M46_S/outbox/HOLDING.log" "residue-clear" "12b-pi2 ③ 残留已不在框里 → 记账本（residue-clear）"
+assert_has "$M46_S/outbox/HOLDING.log" "why=box-clear" "12b-pi2 ③ 账本说明判据（框里已无残留）"
+assert_has "$TMP/ob-calls.log" "send-keys" "12b-pi2 ③ 同一拍把排队的消息投出去（残留不再堵队列）"
+assert_eq "12b-pi2 ③ 投完只剩那条终态 held" \
+  "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+ob_run $TEAM status >"$TMP/m46-status-residue.log" 2>&1 || true
+assert_not "$TMP/m46-status-residue.log" "留在框里" "12b-pi2 ③ 状态行不再报「留在框里」（残留已清）"
+# 负对照：payload 还在框里 → 不记账本、状态行照旧报「留在框里」
+M46_S="$REPO/.pi/team/state"
+M46_HELD2="1700000000001-0002-$SESSION:dev.msg"
+printf 'kind: say\ntarget: %s:dev\nfrom: pm\ncreated: x\ndedup: -\n---\nM46-RESIDUE-STUCK\n' "$SESSION" > "$M46_S/outbox/held/$M46_HELD2"
+printf '2026-09-20T02:27:00Z name=%s reason=draft-raced-left held-since=x attempts=1 target=%s:dev\n' \
+  "$M46_HELD2" "$SESSION" >> "$M46_S/outbox/HOLDING.log"
+printf '%s\n' "$(printf '%.0s─' $(seq 1 80))" "" "M46-RESIDUE-STUCK" "" " k3  Kimi Coding  max" "$(printf '%.0s─' $(seq 1 80))" "footer" > "$TMP/m46-box-stuck"
+ob_run env OB_BOX="$TMP/m46-box-stuck" $TEAM outbox flush >"$TMP/m46-sweep2.log" 2>&1 || true
+assert_eq "12b-pi2 ③（负对照）残留还在框里时不记 residue-clear" \
+  "$(grep -c "residue-clear entry=$M46_HELD2" "$M46_S/outbox/HOLDING.log" || true)" "0"
+ob_run env OB_BOX="$TMP/m46-box-stuck" $TEAM status >"$TMP/m46-status-stuck.log" 2>&1 || true
+assert_has "$TMP/m46-status-stuck.log" "留在框里 1" "12b-pi2 ③（负对照）残留真的在框里时照旧报「留在框里」"
+
+# ④ 目标已消失的 held 条目：被点名、可清理；活目标的条目不许被 gone 误伤
+ob_reset; piw_reset
+M46_S="$REPO/.pi/team/state"; mkdir -p "$M46_S/outbox/held"
+M46_DEADHELD="1700000000002-0003-old-session:pi.msg"
+M46_LIVEHELD="1700000000003-0004-$SESSION:dev.msg"
+printf 'kind: say\ntarget: old-session:pi\nfrom: pm\ncreated: x\ndedup: -\n---\nM46-DEAD-TARGET\n' > "$M46_S/outbox/held/$M46_DEADHELD"
+printf 'kind: say\ntarget: %s:dev\nfrom: pm\ncreated: x\ndedup: -\n---\nM46-LIVE-TARGET\n' "$SESSION" > "$M46_S/outbox/held/$M46_LIVEHELD"
+printf '2026-09-20T02:28:00Z name=%s reason=expired-nopane held-since=x attempts=1 target=old-session:pi\n' "$M46_DEADHELD" > "$M46_S/outbox/HOLDING.log"
+printf '2026-09-20T02:28:01Z name=%s reason=expired-ttl held-since=x attempts=1 target=%s:dev\n' "$M46_LIVEHELD" "$SESSION" >> "$M46_S/outbox/HOLDING.log"
+M46_SHIM="$TMP/m46-shim"; mkdir -p "$M46_SHIM"
+cat > "$M46_SHIM/tmux" <<'M46SHIM'
+#!/usr/bin/env bash
+case "$1" in
+  has-session) [ "${3:-}" = "${M46_LIVE_SESSION:-}" ] && exit 0 || exit 1 ;;
+  display-message) case " $* " in *" ${M46_LIVE_TARGET:-} "*) printf '%%1\n'; exit 0 ;; esac; exit 1 ;;
+  list-windows) printf 'dev\n'; exit 0 ;;
+esac
+exit 1
+M46SHIM
+chmod +x "$M46_SHIM/tmux"
+env PATH="$M46_SHIM:$PATH" M46_LIVE_SESSION="$SESSION" M46_LIVE_TARGET="$SESSION:dev" \
+  $TEAM outbox list >"$TMP/m46-list.log" 2>&1 || true
+assert_has "$TMP/m46-list.log" "target=gone" "12b-pi2 ④ list 把目标已消失的 held 标成 target=gone"
+assert_has "$TMP/m46-list.log" "outbox drop gone" "12b-pi2 ④ list 给出清理出口（drop gone）"
+assert_eq "12b-pi2 ④ 只有死目标那条被标 gone" "$(grep -c 'target=gone' "$TMP/m46-list.log")" "1"
+env PATH="$M46_SHIM:$PATH" M46_LIVE_SESSION="$SESSION" M46_LIVE_TARGET="$SESSION:dev" \
+  $TEAM status >"$TMP/m46-status-gone.log" 2>&1 || true
+assert_has "$TMP/m46-status-gone.log" "目标已消失" "12b-pi2 ④ status 的队列行报出「目标已消失」"
+env PATH="$M46_SHIM:$PATH" M46_LIVE_SESSION="$SESSION" M46_LIVE_TARGET="$SESSION:dev" \
+  $TEAM outbox drop gone >"$TMP/m46-dropgone.log" 2>&1 || true
+assert_has "$TMP/m46-dropgone.log" "$M46_DEADHELD" "12b-pi2 ④ drop gone 点名丢弃的文件（不静默清场）"
+assert_not_file "$M46_S/outbox/held/$M46_DEADHELD" "12b-pi2 ④ 死目标的 held 条目已被清理"
+assert_file "$M46_S/outbox/held/$M46_LIVEHELD" "12b-pi2 ④ 活目标的 held 条目没被 gone 误伤"
+ob_run $TEAM outbox drop all >/dev/null 2>&1 || true
 piw_reset
 
 # ---------------------------------------------------------------- 12b-j. 隔离收尾

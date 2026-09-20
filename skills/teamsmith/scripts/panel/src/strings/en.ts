@@ -15,6 +15,7 @@ export const en = {
   standbyOff: 'standby off',
   standbyDash: 'standby —',
   pmLabel: 'PM',
+  pmDeliveryWarning: 'delivery degraded: {reason} → notifications fall back to the paste path (restart the process to load the extension)',
   pendingLabel: 'pending',
   pendingNone: 'none',
   outboxLabel: 'deferred',

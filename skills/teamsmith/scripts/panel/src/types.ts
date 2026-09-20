@@ -30,6 +30,8 @@ export interface PanelPm {
   detail: string
   /** The evidence string the pulse uses for the same state (may be empty). */
   evidence: string
+  /** M46: why the PM session has no inbox-watch registration ('' = the watch lane is fine). */
+  delivery_warning?: string
 }
 
 export interface PanelPending {

@@ -4,7 +4,7 @@
 #   team outbox [list]            列出待投递条目（活动 + held，FIFO 顺序，编号供 drop 用）
 #   team outbox enqueue …         底层写入口（扩展/脚本用；格式即契约，见 outbox.sh）
 #   team outbox flush [--now]     立刻排一次水（--now = 故意跳过守卫，旧行为 + forced.log）
-#   team outbox drop <n|all>      人显式丢弃条目（不会静默丢：打印丢了什么）
+#   team outbox drop <n|all|gone> 人显式丢弃条目（不会静默丢：打印丢了什么；gone = 目标窗口已不存在的）
 #
 # 队列本身在 $TEAM_STATE_DIR/outbox/（TEAM_STATE_DIR 指到临时目录时，一点都不写进仓库）。
 
@@ -35,12 +35,12 @@ team_outbox_usage() {
                           [--inbox-defer AGENT]（投递/进 held 时才写）
                           [--inbox-written AGENT]（调用方已经写过 durable 行；`-` = 记录在它自家日志里）
   $TEAM_CLI outbox flush [--now] [--max N]  立刻排水（--now = 跳过守卫直接打字，留审计）
-  $TEAM_CLI outbox drop <n|all>           丢弃条目（n 是 list 里的编号）
+  $TEAM_CLI outbox drop <n|all|gone>      丢弃条目（n 是 list 里的编号；gone = 目标窗口已不存在的）
 EOF
 }
 
 team_outbox_list() {
-  local n=0 e state age reason held target kind from dedup
+  local n=0 e state age reason held target kind from dedup gone_n=0 tmark resid
   local total heldn
   total="$(team_outbox_count)"; heldn="$(team_outbox_held_count)"
   if [ "${total:-0}" -eq 0 ]; then
@@ -58,10 +58,23 @@ team_outbox_list() {
     kind="$(team_outbox_header "$e" kind)"
     from="$(team_outbox_header "$e" from)"
     dedup="$(team_outbox_header "$e" dedup)"
+    # M46：held 的目标窗口没了 → 必须看得见（旧会话名的残渣不能静默堆着）；残留是否清掉也标出来
+    tmark=""; resid=""
+    if [ "$state" = "held" ]; then
+      if team_outbox_target_gone "$target"; then tmark=" target=gone（目标窗口已不存在）"; gone_n=$((gone_n + 1)); fi
+      case "$reason" in
+        *left*) resid=" residue=$(team_outbox_residue_state "$e")" ;;
+      esac
+      if [ -z "$resid" ] && team_outbox_residue_resolved "$e"; then resid=" residue=cleared"; fi
+    fi
     printf '  #%-2s [%s] %s\n' "$n" "$state" "$(basename "$e")"
-    printf '       kind=%s target=%s from=%s age=%ss dedup=%s%s\n' \
-      "$kind" "$target" "$from" "$age" "$dedup" "$([ "$state" = "held" ] && printf ' held-reason=%s' "$reason")"
+    printf '       kind=%s target=%s from=%s age=%ss dedup=%s%s%s%s\n' \
+      "$kind" "$target" "$from" "$age" "$dedup" "$([ "$state" = "held" ] && printf ' held-reason=%s' "$reason")" "$tmark" "$resid"
   done < <(team_outbox_entries)
+  if [ "$gone_n" -gt 0 ]; then
+    printf '  %s 条 held 的目标窗口已不存在（旧会话名/窗口删了）→ 清理：%s outbox drop gone（只丢这些）\n' \
+      "$gone_n" "$TEAM_CLI"
+  fi
   printf '  提示：清空输入框后 %s outbox flush；--now 是故意粘字的逃生门（写 outbox/forced.log）\n' "$TEAM_CLI"
   return 0
 }
@@ -102,8 +115,23 @@ team_outbox_cmd_flush() {
 }
 
 team_outbox_cmd_drop() {
-  local what="${1:?usage: outbox drop <n|all>}"
+  local what="${1:?usage: outbox drop <n|all|gone>}"
   local n=0 e target
+  # M46：目标已消失的条目（旧会话名/窗口删了）——逐个点名丢弃，绝不静默清场
+  if [ "$what" = "gone" ] || [ "$what" = "stale" ]; then
+    local c=0 kind
+    while IFS= read -r e; do
+      [ -n "$e" ] || continue
+      team_outbox_is_held "$e" || continue
+      target="$(team_outbox_header "$e" target)"
+      team_outbox_target_gone "$target" || continue
+      kind="$(team_outbox_header "$e" kind)"
+      rm -f "$e"; team_outbox_release "$e"; c=$((c + 1))
+      printf '  已丢弃 %s（kind=%s target=%s：目标窗口已不存在）\n' "$(basename "$e")" "$kind" "$target"
+    done < <(team_outbox_entries)
+    if [ "$c" -eq 0 ]; then team_dim "outbox：没有目标已消失的条目"; else team_ok "outbox：丢弃 $c 条（人显式 drop gone）"; fi
+    return 0
+  fi
   if [ "$what" = "all" ]; then
     local c=0
     while IFS= read -r e; do

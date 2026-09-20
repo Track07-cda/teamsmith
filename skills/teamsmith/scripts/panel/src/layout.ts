@@ -376,11 +376,20 @@ function statusBlock(ctx: Ctx): Block {
     !ob || deg.has('outbox')
       ? `${s.outboxLabel} ${s.dash}`
       : `${s.outboxLabel} ${ob.queued}${ob.held > 0 ? fill(s.outboxHeldSuffix, { n: ob.held }) : ''}`
+  const lines: PlacedLine[] = [
+    { line: truncLine(ln(seg(' '), seg(pmText), seg('    '), seg(pend), seg('    '), seg(queue, 'accent')), ctx.width) },
+  ]
+  // M46: a degraded delivery lane gets its own line (text token, not colour alone): the PM card
+  // itself cannot carry it, and "messages still go through the paste path" is actionable.
+  const delivery = !panel.pm || deg.has('pm') ? '' : (panel.pm.delivery_warning || '')
+  if (delivery) {
+    lines.push({ line: truncLine(ln(seg(' '), seg(fill(s.pmDeliveryWarning, { reason: delivery }), 'warn')), ctx.width) })
+  }
   return {
     id: 'status',
     full: true,
     priority: 1,
-    lines: [{ line: truncLine(ln(seg(' '), seg(pmText), seg('    '), seg(pend), seg('    '), seg(queue, 'accent')), ctx.width) }],
+    lines,
     separator: 'none',
   }
 }

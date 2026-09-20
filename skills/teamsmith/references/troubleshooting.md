@@ -723,3 +723,63 @@ as content. The failure mode is a **bounded queue**, not a glued message: messag
 so it scrolls away as the session talks; `What's New` only appears on the first start after an update).
 Report such a frame (`bash skills/teamsmith/tests/pm-box-real.sh --keep`) so the shape can be added as a
 measured case next to these two.
+
+## 22. Messages are not sent automatically: check the watcher registration first
+
+**Symptom**: `team say`, a web knock or a worker's turn-end notification never reaches the PM (the PM
+"looks alive"), and messages pile up in the PM's box or in `state/outbox/`.
+
+**Why this shape exists**: a Pi session receives automated messages through the inbox-watch extension
+(`extension/team-inbox-watch.ts`; §3 and `references/agent-adapters.md` §4a). At `session_start` the
+extension writes a readiness registration (`state/inbox-watch/<key>.reg`); senders route through the watch
+channel only while that registration is alive. Without it, delivery silently falls back to the paste path —
+which defers while the box holds a draft and can end in a `draft-raced-left` hold. The fallback itself is by
+design; a **silent** fallback is not (M46).
+
+**First three commands**:
+
+| Command | What to look for |
+|---|---|
+| `team doctor` | the `投递通道 inbox-watch` line — `pass` means the PM's registration is alive, a `!` line names the reason and the restart |
+| `team status` / `team digest` | one `投递通道降级: …` line, same reason |
+| `team outbox list` | what is waiting; held entries whose target window no longer exists are marked `target=gone` |
+
+The pulse panel shows the same warning as a line under the status band (the `delivery_warning` field).
+
+**Where the reason is recorded**: when the extension skips setup it writes `state/inbox-watch/<key>.skip`
+(`target`, `session`, `window`, `expect`, `reason`, `detail`, `pid`, `cwd`, `heartbeat`) and a
+`skip setup: …` line in `state/inbox-watch.log`. A record is believed only while the process that wrote it
+is alive and its `cwd` is inside this project (cwd missing → fresh heartbeat); a leftover from a dead
+process is ignored, and a successful registration deletes the records for its target.
+
+**The two reasons you will actually see**:
+
+- `会话名不符`: the project's `TEAM_SESSION` does not match the real tmux session name (the project was
+  copied/renamed, or the PM was started inside a differently named session). The extension refuses to serve
+  a session this project does not own; fix the name (rename the session or correct `TEAM_SESSION`) and the
+  registration appears on the next `team up` / `team resume`.
+- `PM 进程在跑但没有注册（扩展未加载 / 进程启动早于扩展安装）`: the PM's pi process never loaded the
+  extension (started without `-e <skill>/extension/team-inbox-watch.ts`, or with an older skill). Restart
+  the process (`team up` for the PM, `team resume <agent>` for a worker).
+
+This is not `/reload` work. Pi hot-reloads extensions from its auto-discovery locations
+(`~/.pi/agent/extensions/`, `.pi/extensions/`); `pi -e` is a startup argument ("used for quick tests" in
+Pi's own extension docs). The teamsmith launch paths pass all extensions with `-e`, so after an extension is
+added — or after its startup-time behaviour changes — the session must be restarted. `/reload` still
+refreshes the *skill text* (`SKILL.md` / `references/**`); it does not make a missing `-e` extension appear.
+An earlier revision of this skill told the reader to wait for `/reload`, which is what kept an ai_interview
+PM waiting while its messages silently took the paste path.
+
+**The watcher never treats another project's state as home**: its state directory is anchored to the
+project derived from the process's cwd (the git main worktree). An inherited `TEAM_STATE_DIR` that points at
+another teamsmith project's state is refused, and the refusal is recorded in the derived project's ledger
+(`TEAM_IDENTITY_CONFLICT inherited TEAM_STATE_DIR=…`).
+
+**The slow path is not a dead end**: while no watcher is registered, queued entries are retried by the next
+drain (every guarded send, every pulse tick, and `team outbox flush`), so a busy box delays messages instead
+of stranding them. Two cleanup exits exist for the leftovers: a held entry whose payload is no longer in the
+target box is recorded as `residue-clear … why=box-clear|target-gone` in `outbox/HOLDING.log` by the next
+drain (the status line stops claiming a residue that is gone), and held entries whose target window no
+longer exists are dropped by the explicit `team outbox drop gone` (it names every file it drops). Nothing
+ever re-pastes a `draft-raced`/`unconfirmed` entry — that is terminal by spec; if its payload is still
+sitting in a human's box, the human submits or clears it, or drops the entry.
