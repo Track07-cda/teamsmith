@@ -10205,6 +10205,136 @@ else
   bad "33 缺 tests/config-cli.sh"
 fi
 
+# ---------------------------------------------------------------- 34. 读路径：根一次解析 + 单进程扫描（M50）
+# 实测现场（M50 任务书，PM 在 main 上量的）：BOARD.md 只有 141 行，`team digest` 却要 89 秒 ——
+# 每次辅助调用都重新解析仓库根（~5 次 rev-parse），每份报告/复验记录各问一轮 git
+#（digest 一拍 1620 次 git 调用，其中 1523 次 rev-parse、80 次 for-each-ref）。修复：
+#   ① 仓库根一次 rev-parse 同时取 --show-toplevel 与 --git-common-dir，并按目录 memo 在进程内
+#     （team_load_config 在身份已锁定时不再重问 team_is_git_repo）；
+#   ② digest / status / __panel-data 在**单个进程**内完成扫描：看板/工作树/refs/复验抬头/state
+#     一个「扫描纪元」只读一次（team_scan_warm 预热，$(…) 子 shell 经 fork 继承热缓存），
+#     写路径当场 team_scan_invalidate；TEAM_SCAN_CACHE=0 整层关掉、全部落回直读实现 ——
+#     它就是等价性对照开关。
+# 判定语义一行不改，下面用「缓存开/关输出逐字节一致」钉等价性，用 git 调用计数钉性能：
+#   · `team board row <ID>` ≤ 1 次 git（旧实现同一调用 3–5 次 rev-parse）；
+#   · `team digest` ≤ 50 次 git（任务书判据；旧实现实测 1620）；
+#   · 夹具非空转：同一夹具上 cache-off（= 旧的逐文件问法）> 50 次 —— 这扇门确实能抓住旧形状。
+# 全部在自己的临时仓库里跑（先证明身份），快慢模式都跑。
+section "34 · 读路径性能：根一次解析 + 单进程扫描（M50）"
+
+unset TEAM_SCAN_CACHE 2>/dev/null || true   # 调用者若带着对照开关，本节自己显式管
+M50R="$TMP/m50repo"; rm -rf "$M50R"; mkdir -p "$M50R"
+( cd "$M50R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# m50' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+M50SES="teamsmith-smoke-m50-$$"
+( cd "$M50R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$M50SES" --agents "dev bob carol" --vcs local --gates "true" --docs docs/team ) >"$TMP/m50-init.log" 2>&1 \
+  && ok "M50 夹具仓库 init 成功" || bad "M50 夹具仓库 init 失败（见 $TMP/m50-init.log）"
+( cd "$M50R" && git add -A && git commit -qm "chore: m50 init" ) >/dev/null 2>&1
+
+# 身份隔离（M7.2 纪律）：**写盘之前**先证明 team 认的是这个临时仓库 + 这个临时 session
+( cd "$M50R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/m50-paths.json" 2>&1 || true
+assert_eq "M50 隔离：team paths 的 main_root 就是 M50 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m50-paths.json")" "$M50R"
+assert_has "$TMP/m50-paths.json" "\"session\": \"$M50SES\"" "M50 隔离：身份用的是本轮临时 session"
+
+m50() { ( cd "$M50R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+
+# git 调用计数 shim：PATH 最前的 `git` 包装，整行 argv 追加进 M50SHIM_LOG 后透传真 git。
+# 只包 team 的调用（夹具搭建不经过它），日志一次一清，计数 = wc -l。
+M50SHIM="$TMP/m50shim"; mkdir -p "$M50SHIM"
+M50_REAL_GIT="$(command -v git)"
+cat > "$M50SHIM/git" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\${M50SHIM_LOG:-$TMP/m50shim-calls.log}" 2>/dev/null || true
+exec $M50_REAL_GIT "\$@"
+EOF
+chmod +x "$M50SHIM/git"
+m50_counted() { # <cwd> <log> <cmd…>：带 shim 跑一次（git 调用逐行进 log）
+  local cw="$1" log="$2"; shift 2
+  : > "$log"
+  ( cd "$cw" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      PATH="$M50SHIM:$PATH" M50SHIM_LOG="$log" "$@" )
+}
+
+# ── 夹具语料：主工作树 12 个任务（看板行+任务书+已提交报告）+ bob/carol 工作树各 12 份
+#    「只在工作树里」的报告（digest 的逐文件判定全走它们）+ 3 条复验记录（PASS/FAIL/SKIPPED ——
+#    SKIPPED 带 [gates: none] 标记留在待复验清单里，另外两条是「记录有效不列」的对照）。
+m50_seed_task() { # <ID> <agent>：看板行 + 任务书
+  m50 $TEAM board add "$1" "M50 fixture $1" "$2" - >/dev/null 2>&1 || true
+  printf '# %s · smoke M50 fixture\n\ntask:   %s\nagent:  %s\ndeps:   -\nstatus: todo\n' "$1" "$1" "$2" \
+    > "$M50R/docs/team/tasks/$1-m50-smoke.md"
+}
+m50_report() { # <ID> <agent> <目录>
+  printf '# %s · smoke M50 fixture\n\nagent:  %s   状态: DONE\n\n## 交付物\n- fixture\n' "$1" "$2" > "$3/$1-$2.md"
+}
+for i in $(seq 1 12); do m50_seed_task "M50P$i" dev; m50_report "M50P$i" dev "$M50R/docs/team/reports"; done
+printf '# M50P1 复验\n\n判定: **PASS**\nHEAD: `123456789`\n时间: 2026-09-20 · 分支: `task/M50P1-x`\n' > "$M50R/docs/team/reviews/M50P1.md"
+printf '# M50P2 复验\n\n判定: **FAIL**\nHEAD: `123456789`\n时间: 2026-09-20 · 分支: `task/M50P2-x`\n' > "$M50R/docs/team/reviews/M50P2.md"
+printf '# M50P3 复验\n\n判定: **SKIPPED**\n' > "$M50R/docs/team/reviews/M50P3.md"
+( cd "$M50R" && git add -A && git commit -qm "seed: main tasks" ) >/dev/null 2>&1
+git -C "$M50R" worktree add -b task/m50-bob "$M50R/.worktrees/bob" main >/dev/null 2>&1
+git -C "$M50R" worktree add -b task/m50-carol "$M50R/.worktrees/carol" main >/dev/null 2>&1
+for i in $(seq 1 12); do m50_seed_task "M50W$i" bob; done
+for i in $(seq 1 12); do m50_seed_task "M50C$i" carol; done
+mkdir -p "$M50R/.worktrees/bob/docs/team/reports" "$M50R/.worktrees/carol/docs/team/reports"
+for i in $(seq 1 12); do m50_report "M50W$i" bob "$M50R/.worktrees/bob/docs/team/reports"; done
+for i in $(seq 1 12); do m50_report "M50C$i" carol "$M50R/.worktrees/carol/docs/team/reports"; done
+( cd "$M50R/.worktrees/bob" && git add -A && git commit -qm "bob reports" ) >/dev/null 2>&1
+( cd "$M50R/.worktrees/carol" && git add -A && git commit -qm "carol reports" ) >/dev/null 2>&1
+( cd "$M50R" && git add -A && git commit -qm "seed: worktree tasks" ) >/dev/null 2>&1
+assert_eq "M50 夹具有效：36 份报告 + 3 条复验记录就位" \
+  "$(ls "$M50R"/docs/team/reports/*.md "$M50R"/.worktrees/*/docs/team/reports/*.md 2>/dev/null | wc -l | tr -d ' '):$(ls "$M50R"/docs/team/reviews/*.md 2>/dev/null | wc -l | tr -d ' ')" "36:3"
+
+# ── ① 仓库根一次解析：`team board row <ID>` 整个调用 ≤ 1 次 git（旧实现同一条命令 3–5 次 rev-parse）
+m50_counted "$M50R" "$TMP/m50-row.log" $TEAM board row M50P1 >"$TMP/m50-row.out" 2>&1
+M50_N="$(wc -l < "$TMP/m50-row.log" | tr -d ' ')"
+[ "$M50_N" -le 1 ] && ok "M50-① board row 的 git 调用数 ≤ 1（实测 $M50_N）" || { bad "M50-① board row 的 git 调用数 $M50_N > 1"; sed 's/^/      /' "$TMP/m50-row.log"; }
+assert_has "$TMP/m50-row.out" "M50P1" "M50-① board row 真的读到了那一行（不是空输出蒙混）"
+# 从子目录调用也一样（identity 从 cwd 上溯，同一条一次解析路径）
+m50_counted "$M50R/docs/team" "$TMP/m50-row-sub.log" $TEAM board row M50P1 >"$TMP/m50-row-sub.out" 2>&1
+M50_N="$(wc -l < "$TMP/m50-row-sub.log" | tr -d ' ')"
+[ "$M50_N" -le 1 ] && ok "M50-①b 子目录里 board row 的 git 调用数 ≤ 1（实测 $M50_N）" || bad "M50-①b 子目录 board row 的 git 调用数 $M50_N > 1"
+# 对照开关不改变输出（cache-off = 逐字同一行）
+m50 env TEAM_SCAN_CACHE=0 $TEAM board row M50P1 >"$TMP/m50-row-off.out" 2>&1
+assert_eq "M50-①c cache 开/关 board row 输出逐字节一致" "$(cat "$TMP/m50-row-off.out")" "$(cat "$TMP/m50-row.out")"
+
+# ── ② 单进程扫描：`team digest` ≤ 50 次 git（任务书判据；旧实现实测 1620）
+m50_counted "$M50R" "$TMP/m50-dg-on.log" $TEAM digest >"$TMP/m50-dg-on.out" 2>&1 || bad "M50-② digest 本身失败（见输出）"
+M50_ON="$(wc -l < "$TMP/m50-dg-on.log" | tr -d ' ')"
+[ "$M50_ON" -le 50 ] && ok "M50-② digest 的 git 调用数 ≤ 50（实测 $M50_ON）" || { bad "M50-② digest 的 git 调用数 $M50_ON > 50"; sort "$TMP/m50-dg-on.log" | uniq -c | sort -rn | head -5 | sed 's/^/      /'; }
+assert_has "$TMP/m50-dg-on.out" "M50W1-bob" "M50-② digest 真的扫到了工作树里的报告（不是空扫描蒙混）"
+assert_has "$TMP/m50-dg-on.out" "gates: none" "M50-② SKIPPED 记录照旧带标记列出（判定语义没动）"
+# 夹具非空转：同一夹具上 cache-off（每份报告/记录各问一轮 git 的旧形状）必须 > 50 ——
+# 若哪天这条挂了，说明夹具瘦到抓不住旧形状，①②的阈值断言也跟着失去意义。
+m50_counted "$M50R" "$TMP/m50-dg-off.log" env TEAM_SCAN_CACHE=0 $TEAM digest >"$TMP/m50-dg-off.out" 2>&1
+M50_OFF="$(wc -l < "$TMP/m50-dg-off.log" | tr -d ' ')"
+[ "$M50_OFF" -gt 50 ] && ok "M50-②b 夹具非空转：cache-off 同口径 $M50_OFF 次 git > 50（旧形状会被这扇门抓住）" || bad "M50-②b cache-off 只有 $M50_OFF 次 git —— 夹具太瘦，≤50 断言空转"
+# 等价性：cache 开/关的 digest 除「头行时间戳 + 实时容量行」逐字节一致
+m50_dg_norm() { grep -v 'RAM 可用' "$1" | tail -n +2; }
+if diff <(m50_dg_norm "$TMP/m50-dg-on.out") <(m50_dg_norm "$TMP/m50-dg-off.out") >"$TMP/m50-dg.diff" 2>&1; then
+  ok "M50-②c digest cache 开/关输出逐字节一致（滤时间戳与容量行）"
+else
+  bad "M50-②c digest cache 开/关输出不一致"; head -10 "$TMP/m50-dg.diff" | sed 's/^/      /'
+fi
+
+# ── ③ status / __panel-data 同一层缓存：开/关输出一致（滤实时字段）
+m50 $TEAM status >"$TMP/m50-st-on.out" 2>&1
+m50 env TEAM_SCAN_CACHE=0 $TEAM status >"$TMP/m50-st-off.out" 2>&1
+if diff <(grep -v 'RAM 可用' "$TMP/m50-st-on.out") <(grep -v 'RAM 可用' "$TMP/m50-st-off.out") >"$TMP/m50-st.diff" 2>&1; then
+  ok "M50-③ status cache 开/关输出逐字节一致（滤容量行）"
+else
+  bad "M50-③ status cache 开/关输出不一致"; head -10 "$TMP/m50-st.diff" | sed 's/^/      /'
+fi
+m50 $TEAM __panel-data --no-activity >"$TMP/m50-pd-on.out" 2>&1
+m50 env TEAM_SCAN_CACHE=0 $TEAM __panel-data --no-activity >"$TMP/m50-pd-off.out" 2>&1
+m50_pd_norm() { sed -e 's/"timestamp": "[^"]*"/"timestamp":"T"/' -e 's/"capacity": {[^}]*}/"capacity":"C"/' "$1"; }
+if diff <(m50_pd_norm "$TMP/m50-pd-on.out") <(m50_pd_norm "$TMP/m50-pd-off.out") >"$TMP/m50-pd.diff" 2>&1; then
+  ok "M50-③b __panel-data cache 开/关逐字段一致（掩 timestamp 与 capacity 块）"
+else
+  bad "M50-③b __panel-data cache 开/关输出不一致"; head -6 "$TMP/m50-pd.diff" | cut -c1-200 | sed 's/^/      /'
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
