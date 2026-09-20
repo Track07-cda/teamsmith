@@ -6178,6 +6178,34 @@ assert_not_file "$PIW/pi-dev.wake" "12b-pi --now 不走 pi 通道（不写 spool
 assert_has "$TMP/print.log" "-e $SKILL_DIR/extension/team-inbox-watch.ts" "12b-pi worker 启动命令 -e 挂 inbox-watch"
 assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "12b-pi PM 启动命令也挂 inbox-watch"
 
+# ⑩ P28/B6：预览按**字符**边界裁 —— 多字节字符恰好跨 700 字节边界时，spool 行仍是合法 UTF-8
+#    （红：`cut -c1-700` 按字节裁会把一个字符截半 → 读者侧曾因此把 offset 推过文件末尾）
+ob_reset; piw_reset
+piw_reg b6-dev "$SESSION:dev" dev
+B6_PAYLOAD="xy$(printf '红%.0s' $(seq 1 300))"
+# 夹具有效性对照：同样的 payload 用旧的字节裁法确实写出非法 UTF-8（不是空转断言）
+if printf '%s' "$B6_PAYLOAD" | LC_ALL=C cut -c1-700 | LC_ALL=C iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+  bad "12b-pi ⑩ B6：夹具前提不成立（旧的 cut -c1-700 居然也是合法 UTF-8）"
+else
+  ok "12b-pi ⑩ B6：夹具前提成立（旧的字节裁法会把 700 字节边界上的字符截半）"
+fi
+ob_run $TEAM say dev "$B6_PAYLOAD" >"$TMP/b6-say.log" 2>&1 || true
+assert_has "$TMP/b6-say.log" "pi 监视通道" "12b-pi ⑩ B6：走 pi 通道（spool 行就是写入者的产物）"
+if [ -f "$PIW/b6-dev.wake" ]; then
+  if LC_ALL=C iconv -f UTF-8 -t UTF-8 < "$PIW/b6-dev.wake" >/dev/null 2>&1; then
+    ok "12b-pi ⑩ B6：spool 行是合法 UTF-8"
+  else
+    bad "12b-pi ⑩ B6：spool 行不是合法 UTF-8（预览被截半）"; od -An -tx1 "$PIW/b6-dev.wake" | tail -2
+  fi
+  assert_eq "12b-pi ⑩ B6：预览里没有 U+FFFD 替换符" "$(grep -c $'\xef\xbf\xbd' "$PIW/b6-dev.wake" || true)" "0"
+  assert_eq "12b-pi ⑩ B6：预览裁在完整字符上（698 = 2 + 3×232 字节，不是 700 的字节截断）" \
+    "$(LC_ALL=C awk -F'\t' 'NR==1 {print length($5)}' "$PIW/b6-dev.wake")" "698"
+  assert_has "$REPO/docs/team/inbox/dev.md" "$B6_PAYLOAD" "12b-pi ⑩ B6：durable 收件箱仍是全文（只有 spool 预览被裁）"
+else
+  bad "12b-pi ⑩ B6：spool 行没写出来"; cat "$TMP/b6-say.log"
+fi
+piw_reset
+
 # ⑨ 真扩展夹具（假 Pi 宿主 + 真 CLI 端到端）：注册 / 监视唤醒 / 合并 / 基线 / 清场 / 账本
 if [ -z "$TS_RUNNER" ]; then
   printf '  (跳过 12b-pi 扩展夹具：node 未启用类型剥离，且没有 bun/tsx)\n'
@@ -6215,6 +6243,29 @@ else
     "12b-pi M46：继承的 TEAM_STATE_DIR 指向别的项目 → 拒绝（M40 的 state 面）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S17 an inherited TEAM_CONFIG_FILE pointing at another project is ignored" \
     "12b-pi M46：继承的 TEAM_CONFIG_FILE 指向别的项目 → 忽略（会话名来自本项目配置）"
+  # P28：字节真值的 offset / 证据化的缩容与收敛 / 过期门槛 / 账本契约（harness S18–S21；翻转见 tests/flip-p25.sh）
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S18 the baseline is the spool byte size" \
+    "12b-pi P28：字节裁切的 spool 行不再把 offset 推过文件末尾（baseline = 文件字节数）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S18 idle ticks after a byte-clipped line add no spool shrink" \
+    "12b-pi P28：非法 UTF-8 的 spool 不再每拍伪造一次缩容"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19a a one-byte regression with an unchanged head is repaired with one offset clamp" \
+    "12b-pi P28：头部不变的小回退是一次修复（offset clamp），不是重扫"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19a the read that starts inside the clamped line resyncs" \
+    "12b-pi P28：clamp 落在行中时碎片被 resync 跳过（半行绝不投递）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19b a rewrite with a changed head is rescanned exactly once" \
+    "12b-pi P28：头部变了才是真重写（一次有界重扫，下一拍收敛）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19c the same (size, head) is recorded as a repeat and clamped" \
+    "12b-pi P28：同一 (size, head) 不重扫第二次（shrink repeat + clamp）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S20a an hour-old unseen line is rescan-counted, never woken about" \
+    "12b-pi P28：一小时前的未投递行只计数、不唤醒（durable 副本与 spool 字节都还在）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S20c a line whose timestamp is not a number is delivered" \
+    "12b-pi P28：时间戳不可解析的行照投并计数（不静默吞）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21a a dedup-only rescan reads deliver=0 with a non-zero dup" \
+    "12b-pi P28：账本把新流量与恢复分开（去重重扫 deliver=0、total 不动）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21b a stale-only rescan reads deliver=0 with stale=" \
+    "12b-pi P28：只含过期行的重扫 deliver=0 + stale=<n>"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21c the wake line reads n=2 and total grows by exactly two" \
+    "12b-pi P28：真投递的 wake n=2、total +2"
 fi
 
 # 不留注册：后面的段落（teardown / panel / …）不许被这条通道接管

@@ -22,6 +22,9 @@ external truncate, explains the 2026-09-19T16:59 replay M43 was diagnosed from (
   path; they are counted and stay readable in the durable inbox / the sender's log.
 - **ADDED** `notify-and-inbox`: the ledger separates traffic from recovery — `total` counts woken lines only; the
   rescan line carries `lines=/dup=/skipped=/stale=/deliver=`; clamps and repeats get their own lines.
+- **ADDED** `notify-and-inbox` (B6, the PM's decision of 2026-09-20): the **sender's** preview clip cuts on a
+  character boundary and is valid UTF-8 under `LC_ALL=C` too — the writer-side trigger of the incident is fixed
+  in the same change (`scripts/lib/outbox.sh`, the clip only).
 
 ## Capabilities
 

@@ -127,3 +127,24 @@ defect rather than as news.
 - **GIVEN** the ledger's last `total=` is N
 - **WHEN** two fresh lines are appended and merge into one wake
 - **THEN** the wake line reads `n=2` and the last `total=` is N+2
+
+### Requirement: The sender clips the spool preview on a character boundary, under `LC_ALL=C` as well
+
+`team_inbox_watch_deliver` SHALL bound the preview it appends to `state/inbox-watch/<key>.wake` without splitting a
+multi-byte UTF-8 sequence: the clip applies to whole characters, so the line it writes is valid UTF-8 whenever the
+payload is, and the clip MUST NOT introduce a U+FFFD replacement character. This MUST hold under `LC_ALL=C`, where
+`cut -c`, `head -c` and bash's `${var:0:n}` are byte-oriented. Dropping the bytes of an incomplete trailing sequence
+is the required repair; the durable inbox line keeps the full payload and is not affected by the clip.
+
+#### Scenario: A multi-byte character lands exactly on the byte bound
+
+- **GIVEN** a payload whose 700th byte falls inside a multi-byte character
+- **WHEN** the sender writes the spool line for it
+- **THEN** the appended line is valid UTF-8 (`iconv -f UTF-8 -t UTF-8` accepts it), it contains no U+FFFD, and its
+  preview is the longest whole-character prefix no longer than the byte bound
+
+#### Scenario: The durable inbox line still carries the full payload
+
+- **GIVEN** the same payload
+- **WHEN** the sender writes the durable inbox line and then the spool line
+- **THEN** the inbox line contains the full payload and only the spool preview is clipped
