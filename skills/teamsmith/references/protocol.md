@@ -167,6 +167,13 @@ the PM right now".
 - **Pending work** → wake the PM (nudge it if it is running; if not, start it with `pi -c` and the kick-off prompt
   `@state/pm-prompt.md`); **nothing pending** → do not wake it, do not start it — the PM is not required to run
   continuously, and being quiet is a valid state.
+- **Who resumes a stopped agent** (the one question this paragraph exists to settle): **the pulse never
+  does.** A stopped agent with an unfinished task is *reported* as pending work; starting it is the PM's call
+  (`team resume --agent <a>`, or `team resume` for all). The single exception is a human's rescue command:
+  `team up` recovers the PM window and, **only with `--agents`**, also resumes the agents that stopped with an
+  unfinished task (that is why a session restore can bring workers back without the PM asking). The watchdog
+  spec pins the pulse half of this as a scenario ("A stopped agent is not resumed") — if you ever see a resumed
+  worker you did not ask for, look for a `team up --agents` / `team resume` in the log, not in the patrol.
 - **"The PM is running" is a proof, not an inference**: either `state/pm.pid` (recorded by the start path) points at
   a live process whose cwd is inside the project, or the process in the PM window is the configured agent binary and
   its cwd is in the project. A window occupied by anything else is `foreign:<cmd>` (another project's cwd — not
