@@ -45,6 +45,7 @@ team_worktree_add() { # <agent> [--create] [--no-install]
     fi
     team_ok "worktree $wt ← 分支 $branch"
   fi
+  team_scan_invalidate git   # M50：工作树集变了，同进程后续读必须重列
 
   if [ "$noinstall" != "1" ] && [ -n "$TEAM_INSTALL_CMD" ]; then
     team_info "install: $TEAM_INSTALL_CMD（在 $wt）"
@@ -934,6 +935,7 @@ team_cmd_teardown() {
           continue
         fi
         team_git worktree remove --force "$wt" 2>/dev/null && team_ok "remove worktree $wt" || team_warn "worktree 删除失败：$wt"
+        team_scan_invalidate git   # M50
       fi
     fi
   done

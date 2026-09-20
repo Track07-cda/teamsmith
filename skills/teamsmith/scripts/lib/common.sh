@@ -56,6 +56,346 @@ team_main_root() {
   printf '%s\n' "$root"
 }
 
+# ---------------------------------------------------------------- M50 · 读路径扫描缓存（进程内，判定不变）
+# 实测现场（M50 任务书）：`team digest` 一次 1646 次 git 调用 / 85 秒 —— 不是 markdown 慢，是
+# 每次辅助调用都重新解析仓库根（5 次 rev-parse）、每份报告都重新 fork 一次 `git rev-parse`
+# 问「这个工作树在哪个分支」。这一层只把「同一进程里反复问同一个问题」改成「问一次，记住」；
+# 判定逻辑（状态枚举、复验判定、待收尾规则、报告/记录的发现规则）一行不改 —— 每个缓存读者
+# 都保留原实现作 *_direct / 直读落回路径，缓存与直读结果由 smoke 34 节逐字节对照钉住。
+#
+# 纪律：
+#   · 生命周期 = 扫描纪元（_TEAM_SCAN_EPOCH）。一次性命令（digest/status/review/__panel-data/
+#     board …）进程即纪元：首次用到时惰性加载；读重的入口（digest/status/panel-data/巡检拍）
+#     开头 team_scan_warm 预热，之后所有 $(…) 子 shell 通过 fork 继承吃到热缓存
+#     （子 shell 里的惰性加载只服务那一次调用 —— 写不进父进程，但也绝不会读到错值）。
+#   · 长驻进程只有巡检循环：team_watch_once 每拍开头 team_scan_refresh 开新纪元，缓存绝不跨拍。
+#   · 写路径当场失效：team_board_write / team_state_set / team_state_clear / 复验记录落盘 /
+#     worktree 增删 都调 team_scan_invalidate —— 同一进程里「写完再读」永远读到新值。
+#   · TEAM_SCAN_CACHE=0 整层关掉（全部落回直读实现）—— 它是等价性对照开关。
+
+team_scan_cache_on() { # 关联数组可用（bash≥4）且没被显式关掉
+  [ "${TEAM_SCAN_CACHE:-1}" = "0" ] && return 1
+  [ "${BASH_VERSINFO[0]:-0}" -ge 4 ] 2>/dev/null || return 1
+  return 0
+}
+
+_TEAM_SCAN_EPOCH=0
+declare -A _TEAM_DIR_ROOTS_MEMO=()      # 进程级：目录 → "wt\tmain"（目录的 git 归属在进程内不变）
+_TEAM_BOARD_EPOCH=-1; _TEAM_BOARD_EXISTS=0; _TEAM_BOARD_COLS=""; _TEAM_BOARD_IDS_OUT=""; _TEAM_BOARD_COUNTS_OUT=""
+declare -A _TEAM_BOARD_ROW=(); declare -A _TEAM_BOARD_STATUS=()
+_TEAM_WT_EPOCH=-1; _TEAM_WT_KEYS_NL=""
+declare -A _TEAM_WT_BRANCH=(); declare -A _TEAM_WT_SEEN=()
+_TEAM_REF_EPOCH=-1; _TEAM_REFS_TASK=""
+declare -A _TEAM_REF_TIP=()
+_TEAM_REV_EPOCH=-1
+declare -A _TEAM_REV_EXISTS=(); declare -A _TEAM_REV_VERDICT=(); declare -A _TEAM_REV_VERDICT_ANY=(); declare -A _TEAM_REV_HEAD=(); declare -A _TEAM_REV_BRANCH=()
+_TEAM_PROT_EPOCH=-1; _TEAM_PROT_TREES=""
+_TEAM_CANDS_EPOCH=-1; _TEAM_CANDS_OUT=""
+_TEAM_IGNORED_EPOCH=-1; _TEAM_IGNORED_OUT=""
+declare -A _TEAM_STATE_EPOCH=(); declare -A _TEAM_STATE_KV=(); declare -A _TEAM_STATE_KEYS=()
+declare -A _TEAM_WTREP_LOADED=(); declare -A _TEAM_WTREP_TRACKED=(); declare -A _TEAM_WTREP_DIRTY=(); declare -A _TEAM_WTREP_BROKEN=()
+# 逐文件/逐 id 判定 memo（报告扫描的三层问题各只算一次）：
+declare -A _TEAM_REP_TID=()      # 报告路径 → 任务 id（team_report_task_id）
+declare -A _TEAM_TID_KNOWN=()    # id → 1|0（team_task_id_known）
+declare -A _TEAM_REP_ISTASK=()   # 路径|id → 1|0（team_report_is_task）
+declare -A _TEAM_REP_RANK=()     # 路径|id → 0|1|2（team_report_copy_rank）
+declare -A _TEAM_RESOLVE_BRANCH=()  # id → 分支（team_resolve_branch 的默认解析；空串也 memo）
+declare -A _TEAM_REV_NOTE=()      # id → team_review_record_note 行（记录抬头 + refs + state 的纯函数）
+declare -A _TEAM_MEMO_PHASE=()    # id → 任务书 phase（team_task_phase；任务书内容纪元内不变）
+_TEAM_PHASE_EPOCH=-1
+declare -A _TEAM_PHASE_EXACT=()   # id → 1：phase 来自 <ID>.md 精确形（优先级标记）
+declare -A _TEAM_ID_ESC=()       # id → ERE 转义串（team_regex_escape 是纯函数：进程级 memo，无失效问题）
+
+team_scan_refresh() { # 开新纪元（长驻进程每拍开头调用；一次性命令不需要）
+  _TEAM_SCAN_EPOCH=$((_TEAM_SCAN_EPOCH + 1))
+  return 0
+}
+
+team_scan_invalidate() { # <board|state:<agent>|review|cands|git|all>：写路径当场失效对应缓存
+  team_scan_cache_on || return 0
+  case "${1:-all}" in
+    board)   _TEAM_BOARD_EPOCH=-1; _TEAM_CANDS_EPOCH=-1; _TEAM_IGNORED_EPOCH=-1
+             _TEAM_REP_TID=(); _TEAM_TID_KNOWN=(); _TEAM_REP_ISTASK=(); _TEAM_REP_RANK=() ;;
+    state:*)
+      _TEAM_STATE_EPOCH[${1#state:}]=-1
+      # state 的 task=/branch= 键参与报告副本归属与分支解析 → 相关 memo 一起失效
+      _TEAM_CANDS_EPOCH=-1; _TEAM_REP_RANK=(); _TEAM_RESOLVE_BRANCH=(); _TEAM_REV_NOTE=() ;;
+    review)  _TEAM_REV_EPOCH=-1; _TEAM_REV_NOTE=() ;;
+    cands)   _TEAM_CANDS_EPOCH=-1; _TEAM_IGNORED_EPOCH=-1 ;;
+    git)     _TEAM_REF_EPOCH=-1; _TEAM_WT_EPOCH=-1; _TEAM_PROT_EPOCH=-1; _TEAM_RESOLVE_BRANCH=(); _TEAM_REV_NOTE=() ;;
+    *)       _TEAM_BOARD_EPOCH=-1; _TEAM_REV_EPOCH=-1; _TEAM_CANDS_EPOCH=-1; _TEAM_IGNORED_EPOCH=-1
+             _TEAM_REF_EPOCH=-1; _TEAM_WT_EPOCH=-1; _TEAM_PROT_EPOCH=-1
+             _TEAM_STATE_EPOCH=()
+             _TEAM_REP_TID=(); _TEAM_TID_KNOWN=(); _TEAM_REP_ISTASK=(); _TEAM_REP_RANK=()
+             _TEAM_RESOLVE_BRANCH=(); _TEAM_REV_NOTE=(); _TEAM_MEMO_PHASE=(); _TEAM_PHASE_EPOCH=-1; _TEAM_PHASE_EXACT=() ;;
+  esac
+  return 0
+}
+
+# ---- BOARD.md：列布局 + 全部行 + 状态列，一个纪元读一次（原实现是每次调用 fork 一次 awk）
+_team_board_cache_load() { # 纪元内幂等；无 BOARD → _TEAM_BOARD_EXISTS=0（读者按原语义返回）
+  [ "${_TEAM_BOARD_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_BOARD_EPOCH="$_TEAM_SCAN_EPOCH"
+  _TEAM_BOARD_ROW=(); _TEAM_BOARD_STATUS=()
+  _TEAM_BOARD_COLS=""; _TEAM_BOARD_IDS_OUT=""; _TEAM_BOARD_COUNTS_OUT="0 0 0 0"; _TEAM_BOARD_EXISTS=0
+  local f="${TEAM_DOCS_ABS:-}/BOARD.md"
+  { [ -n "${TEAM_DOCS_ABS:-}" ] && [ -f "$f" ]; } || return 0
+  _TEAM_BOARD_EXISTS=1
+  _TEAM_BOARD_COLS="$(team_board_cols_direct)"
+  _TEAM_BOARD_IDS_OUT="$(team_board_ids_direct)"
+  _TEAM_BOARD_COUNTS_OUT="$(team_board_counts_direct)"
+  local idcol stcol k v
+  idcol="$(team_board_col id)"; stcol="$(team_board_col status)"
+  # 行文本里可能含制表符，分隔符用不可能出现在 markdown 里的 \x1f。
+  # 原实现对同一个 id 取「第一个」匹配行（exit）：重复 key 只留第一行。
+  while IFS=$'\x1f' read -r k v; do
+    [ -n "$k" ] || continue
+    [ -n "${_TEAM_BOARD_ROW[$k]+x}" ] || _TEAM_BOARD_ROW[$k]="$v"
+  done < <(awk -v c="$idcol" 'BEGIN{FS="|"}
+    /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v); if (v!="") print v "\x1f" $0 }' "$f")
+  while IFS=$'\x1f' read -r k v; do
+    [ -n "$k" ] || continue
+    [ -n "${_TEAM_BOARD_STATUS[$k]+x}" ] || _TEAM_BOARD_STATUS[$k]="$v"
+  done < <(awk -v c="$idcol" -v sc="$stcol" 'BEGIN{FS="|"}
+    /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v); s=$(sc); gsub(/^[[:space:]]+|[[:space:]]+$/,"",s)
+            if (v!="") print v "\x1f" s }' "$f")
+  return 0
+}
+
+# ---- 工作树 → 分支（`git worktree list --porcelain` 一次全列；原来是每份报告文件一次 rev-parse）
+_team_wt_cache_load() {
+  [ "${_TEAM_WT_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_WT_EPOCH="$_TEAM_SCAN_EPOCH"
+  _TEAM_WT_BRANCH=(); _TEAM_WT_SEEN=(); _TEAM_WT_KEYS_NL=""
+  [ -n "${TEAM_MAIN_ROOT:-}" ] || return 0
+  team_have_cmd git || return 0
+  local line wt="" k n
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*)
+        wt="${line#worktree }"
+        _TEAM_WT_KEYS_NL="${_TEAM_WT_KEYS_NL}${wt}"$'\n' ;;
+      "HEAD "*|bare|"locked "*|locked) ;;
+      detached)
+        [ -n "$wt" ] && { _TEAM_WT_BRANCH[$wt]="HEAD"; _TEAM_WT_SEEN[$wt]=1; } ;;
+      "branch refs/heads/"*)
+        [ -n "$wt" ] && { _TEAM_WT_BRANCH[$wt]="${line#branch refs/heads/}"; _TEAM_WT_SEEN[$wt]=1; } ;;
+      prunable*)
+        # 目录可能已不在：不缓存，调用方落回直读（与旧的 rev-parse 失败路径逐字节一致）
+        [ -n "$wt" ] && _TEAM_WT_SEEN[$wt]=0 ;;
+    esac
+  done < <(git -C "$TEAM_MAIN_ROOT" worktree list --porcelain 2>/dev/null || true)
+  # 路径写法别名：worktree list 打的是 git 的路径写法，调用方拿的是 TEAM_MAIN_ROOT 拼出来的
+  # 写法（可能穿符号链接）。两种写法都注册进表；仍然 miss 的永远可以落回直读，绝不允许给错答案。
+  local extra=""
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    [ "${_TEAM_WT_SEEN[$k]:-}" = "1" ] || continue
+    n="$(team_identity_norm_dir "$k")"
+    if [ "$n" != "$k" ] && [ -z "${_TEAM_WT_SEEN[$n]:-}" ]; then
+      _TEAM_WT_BRANCH[$n]="${_TEAM_WT_BRANCH[$k]}"; _TEAM_WT_SEEN[$n]=1; extra="${extra}${n}"$'\n'
+    fi
+  done <<< "$_TEAM_WT_KEYS_NL"
+  _TEAM_WT_KEYS_NL="${_TEAM_WT_KEYS_NL}${extra}"
+  return 0
+}
+
+team_worktree_branch() { # <worktree> → 分支短名（detached → HEAD；判不出/不存在 → 空）。M50：进程内缓存
+  team__worktree_branch "$1"; printf '%s\n' "$_R"
+}
+
+team__worktree_branch() { # <worktree> → _R = 分支短名（M50 进程内变体）
+  local wt="$1" b
+  if team_scan_cache_on; then
+    _team_wt_cache_load
+    if [ "${_TEAM_WT_SEEN[$wt]:-}" = "1" ]; then _R="${_TEAM_WT_BRANCH[$wt]:-}"; return 0; fi
+    b="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    # 同一纪元内 git 会给同一个答案（含「判不出」的空串）—— 负结果也 memo
+    _TEAM_WT_BRANCH[$wt]="$b"; _TEAM_WT_SEEN[$wt]=1; _TEAM_WT_KEYS_NL="${_TEAM_WT_KEYS_NL}${wt}"$'\n'
+    _R="$b"
+    return 0
+  fi
+  _R="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+}
+
+team_worktree_of() { # <绝对路径> → 它所在的工作树（已知工作树的最长前缀命中；都不含 → 空）
+  local p="$1" k best=""
+  team_scan_cache_on || return 0
+  _team_wt_cache_load
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    [ "${_TEAM_WT_SEEN[$k]:-}" = "1" ] || continue
+    case "$p" in
+      "$k"|"$k/"*) [ "${#k}" -gt "${#best}" ] && best="$k" ;;
+    esac
+  done <<< "$_TEAM_WT_KEYS_NL"
+  printf '%s\n' "$best"
+}
+
+# ---- 本地分支 tip（`for-each-ref` 一次全列；原来是每条待复验记录一次 for-each-ref + verify）
+_team_ref_cache_load() {
+  [ "${_TEAM_REF_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_REF_EPOCH="$_TEAM_SCAN_EPOCH"
+  _TEAM_REF_TIP=(); _TEAM_REFS_TASK=""
+  [ -n "${TEAM_MAIN_ROOT:-}" ] || return 0
+  team_have_cmd git || return 0
+  local ref sha
+  while IFS=' ' read -r ref sha; do
+    [ -n "$ref" ] || continue
+    _TEAM_REF_TIP[$ref]="$sha"
+    # for-each-ref 的输出本来就按 refname 排序：任务分支清单按到达顺序拼接，次序与旧实现一致
+    case "$ref" in "${TEAM_TASK_BRANCH_PREFIX:-task}/"*) _TEAM_REFS_TASK="${_TEAM_REFS_TASK}${ref}"$'\n' ;; esac
+  done < <(git -C "$TEAM_MAIN_ROOT" for-each-ref --format='%(refname:short) %(objectname)' refs/heads/ 2>/dev/null || true)
+  return 0
+}
+
+team_ref_task_branches() { # → 本地任务分支逐行（`for-each-ref refs/heads/<task前缀>/` 的缓存版，同序）
+  if team_scan_cache_on; then
+    _team_ref_cache_load
+    printf '%s' "$_TEAM_REFS_TASK"
+    return 0
+  fi
+  git -C "$TEAM_MAIN_ROOT" for-each-ref --format='%(refname:short)' "refs/heads/$TEAM_TASK_BRANCH_PREFIX/"
+}
+
+team_branch_tip() { team__branch_tip "$1"; printf '%s\n' "$_R"; }   # 打印版（语义与原实现逐字节一致）
+
+team__branch_tip() { # <分支短名/rev> → _R = tip sha（解析不到 → 空）。M50：本地分支走 refs 缓存，其余落回直读
+  local b="$1"
+  _R=""
+  if team_scan_cache_on; then
+    _team_ref_cache_load
+    if [ -n "${_TEAM_REF_TIP[$b]:-}" ]; then _R="${_TEAM_REF_TIP[$b]}"; return 0; fi
+    # 缓存未命中：tag/sha/HEAD/远端 ref 或「不存在」—— 落回同一个 git 问法（答案逐字节一致）
+  fi
+  _R="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || true)"
+}
+
+team_ref_tip() { # <分支短名> → commit sha（不存在 → 空）。`rev-parse --verify --quiet <b>^{commit}` 的缓存版
+  local b="$1"
+  [ -n "$b" ] || return 0
+  if team_scan_cache_on; then
+    _team_ref_cache_load
+    [ -n "${_TEAM_REF_TIP[$b]:-}" ] && printf '%s\n' "${_TEAM_REF_TIP[$b]}"
+    return 0
+  fi
+  git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0
+}
+
+# ---- 复验记录抬头（判定 / 被验 HEAD / 被验分支）：一个纪元三场批量扫描（grep -Z/-H 或 awk 一次过
+#      全部 reviews/*.md），替代每条记录一次的 grep fork。每条正则/字段规则与原函数逐字一致。
+_team_rev_cache_load() {
+  [ "${_TEAM_REV_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_REV_EPOCH="$_TEAM_SCAN_EPOCH"
+  _TEAM_REV_EXISTS=(); _TEAM_REV_VERDICT=(); _TEAM_REV_VERDICT_ANY=(); _TEAM_REV_HEAD=(); _TEAM_REV_BRANCH=()
+  local d="${TEAM_DOCS_ABS:-}/reviews"
+  { [ -n "${TEAM_DOCS_ABS:-}" ] && [ -d "$d" ]; } || return 0
+  compgen -G "$d/*.md" >/dev/null || return 0
+  local f m g
+  # 文件存在性按目录实情记（两个判定读者一个有 missing 语义，不能只靠「有判定行」推断）
+  for g in "$d"/*.md; do
+    [ -f "$g" ] || continue
+    g="${g##*/}"; _TEAM_REV_EXISTS[${g%.md}]=1
+  done
+  # -m1 = 每个文件只取第一个命中（与逐文件 grep -m1 一致）；-Z 让文件名以 NUL 结尾（路径里可以有 : 空格）
+  # 两种判定正则各扫一遍：cmd-review 读者是 [A-Z]+，common 的 team_review_verdict 是 [A-Za-z]+，
+  # 首命中位置可能不同（**Pass** 在前 **FAIL** 在后时两个读者答案不同）—— 缓存必须分别复刻。
+  while IFS= read -r -d '' f && IFS= read -r m; do
+    f="${f##*/}"; f="${f%.md}"
+    m="${m//\*/}"; m="${m#判定: }"
+    _TEAM_REV_VERDICT[$f]="$m"
+  done < <(grep -ZHm1 -oE '判定: \*\*[A-Z]+\*\*' "$d"/*.md 2>/dev/null || true)
+  while IFS= read -r -d '' f && IFS= read -r m; do
+    f="${f##*/}"; f="${f%.md}"
+    m="${m//\*/}"; m="${m#判定: }"
+    _TEAM_REV_VERDICT_ANY[$f]="$m"
+  done < <(grep -ZHm1 -oE '判定: \*\*[A-Za-z]+\*\*' "$d"/*.md 2>/dev/null || true)
+  while IFS= read -r -d '' f && IFS= read -r m; do
+    f="${f##*/}"; f="${f%.md}"
+    m="${m#HEAD: \`}"; m="${m%\`}"
+    _TEAM_REV_HEAD[$f]="$m"
+  done < <(grep -ZHm1 -oE 'HEAD: `[0-9a-f]{7,40}`' "$d"/*.md 2>/dev/null || true)
+  # 原实现：awk 每个文件第一条 /^时间: / 且含「分支: `」的行，取反引号前段
+  while IFS=$'\x1f' read -r f m; do
+    f="${f##*/}"; f="${f%.md}"
+    _TEAM_REV_BRANCH[$f]="$m"
+  done < <(awk -F'分支: `' 'FNR==1{done=0} !done && /^时间: / && NF>1 { split($2,a,"`"); print FILENAME "\x1f" a[1]; done=1 }' "$d"/*.md 2>/dev/null || true)
+  return 0
+}
+
+# ---- 保护分支最近 N 个提交的 tree 集合（squash 合并启发式的被判对象；一个纪元一次 git log）
+_team_prot_trees_load() {
+  [ "${_TEAM_PROT_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_PROT_EPOCH="$_TEAM_SCAN_EPOCH"; _TEAM_PROT_TREES=""
+  [ -n "${TEAM_MAIN_ROOT:-}" ] || return 0
+  _TEAM_PROT_TREES="$(git -C "$TEAM_MAIN_ROOT" log --format=%T --max-count="${TEAM_SQUASH_LOOKBACK:-200}" "$TEAM_PROTECTED_BRANCH" 2>/dev/null || true)"
+  return 0
+}
+
+# ---- 工作树 reports 目录的「已跟踪集合 + 与 HEAD 不同集合」：每个工作树一个纪元两次 git，
+#      替代每份报告三次（rev-parse + ls-files --error-unmatch + diff --quiet）。
+_team_wtrep_load() { # <wt>
+  local wt="$1" p
+  [ "${_TEAM_WTREP_LOADED[$wt]:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_WTREP_LOADED[$wt]="$_TEAM_SCAN_EPOCH"
+  while IFS= read -r p; do
+    [ -n "$p" ] && _TEAM_WTREP_TRACKED["$wt|$p"]=1
+  done < <(git -C "$wt" ls-files -- "${TEAM_DOCS_DIR:-docs/team}/reports" 2>/dev/null || true)
+  if p="$(git -C "$wt" diff --name-only HEAD -- "${TEAM_DOCS_DIR:-docs/team}/reports" 2>/dev/null)"; then
+    local _one
+    while IFS= read -r _one; do
+      [ -n "$_one" ] && _TEAM_WTREP_DIRTY["$wt|$_one"]=1
+    done <<< "$p"
+  else
+    # diff 失败（例如 HEAD 未出生）：原实现对每份文件都判「不算已提交」—— 用哨兵复刻
+    _TEAM_WTREP_BROKEN[$wt]=1
+  fi
+  return 0
+}
+
+# ---- agent state 文件（<state>/<agent>.env）：一个纪元读一次（bash 内建读，无 grep fork）。
+#      与原实现的两个已知差异都按原语义复刻：重复键取第一个（grep|head -1）；值为空时回落默认值。
+_team_state_cache_load() { # <agent>
+  local a="$1"
+  [ "${_TEAM_STATE_EPOCH[$a]:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_STATE_EPOCH[$a]="$_TEAM_SCAN_EPOCH"
+  # 重载（文件被外部改了）：先清掉这个 agent 的旧键，键集以新文件为准
+  local k
+  for k in ${_TEAM_STATE_KEYS[$a]:-}; do unset '_TEAM_STATE_KV['"$a|$k"']'; done
+  _TEAM_STATE_KEYS[$a]=""
+  local f="${TEAM_STATE_DIR:-}/$a.env" line
+  [ -n "${TEAM_STATE_DIR:-}" ] && [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *=*) ;; *) continue ;; esac
+    k="${line%%=*}"
+    [ -n "${_TEAM_STATE_KV[$a|$k]+x}" ] && continue   # 第一个命中赢
+    _TEAM_STATE_KV["$a|$k"]="${line#*=}"
+    _TEAM_STATE_KEYS[$a]="${_TEAM_STATE_KEYS[$a]}$k "
+  done < "$f"
+  return 0
+}
+
+# ---- 预热：读重命令的入口（父 shell）调一次，之后所有 $(…) 子 shell 吃热缓存
+team_scan_warm() {
+  team_scan_cache_on || return 0
+  _team_board_cache_load
+  _team_wt_cache_load
+  _team_ref_cache_load
+  _team_rev_cache_load
+  local a wt
+  for a in $(team_agents); do
+    _team_state_cache_load "$a"
+    wt="$(team_agent_worktree "$a")"
+    [ -d "$wt" ] || continue
+    compgen -G "$wt/${TEAM_DOCS_DIR:-docs/team}/reports/*.md" >/dev/null && _team_wtrep_load "$wt"
+  done
+  compgen -G "${TEAM_DOCS_ABS:-}/reports/*.md" >/dev/null && [ -n "${TEAM_MAIN_ROOT:-}" ] && _team_wtrep_load "$TEAM_MAIN_ROOT"
+  # 候选清单 / 忽略清单进 memo：digest 一拍问三遍的东西只扫一遍
+  if declare -F team_report_primary_candidates >/dev/null; then team_report_primary_candidates >/dev/null; fi
+  if declare -F team_reports_ignored >/dev/null; then team_reports_ignored >/dev/null; fi
+  return 0
+}
+
 # ---------------------------------------------------------------- M40 · 身份 = 运行时目录
 # 两起同族实测事故（2026-09-19）：shell 继承了别的项目的 TEAM_* 身份，而解析顺序是「env 优先于 cwd」。
 #   ① 在 ai_interview 目录里跑 team up，被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
@@ -67,15 +407,37 @@ team_main_root() {
 #     按 cwd 解析并**大声告警** —— 排障命令必须能告诉你真实身份，拒绝它等于把眼睛蒙上。
 
 # 从目录推导 git 工作树/主工作树（不读任何 TEAM_* 变量）
-team_dir_roots() { # <目录> → "<worktree>\t<main>"（不是 git 仓库 → 两列皆空）
-  local d="${1:-$PWD}" wt common main=""
+# M50：① 一次 rev-parse 同时取 --show-toplevel 与 --git-common-dir（原来是两次）；② 结果按目录
+# memo 在本进程里（目录的 git 归属在进程生命周期内不变）。形状异常（bare 仓库等）落回旧的分两次问法。
+team_dir_roots_load() { # <目录>：计算并装进 _TEAM_DIR_ROOTS_MEMO（父进程上下文调用才留得下）
+  local d="${1:-$PWD}" wt="" common="" main="" out l1 l2
   d="$(cd "$d" 2>/dev/null && pwd -P || true)"
   if [ -n "$d" ]; then
-    wt="$(command git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
-    common="$(command git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if out="$(command git -C "$d" rev-parse --path-format=absolute --show-toplevel --git-common-dir 2>/dev/null)"; then
+      l1="${out%%$'\n'*}"
+      case "$out" in *$'\n'*) l2="${out#*$'\n'}" ;; *) l2="" ;; esac
+      case "$l2" in *$'\n'*) l2="" ;; esac   # 多于两行 = 异常形状，落回旧问法
+      if [ -n "$l1" ] && [ -n "$l2" ]; then wt="$l1"; common="$l2"; fi
+    fi
+    if [ -z "$common" ]; then
+      # 旧问法（两次 rev-parse）：bare 仓库等 --show-toplevel 会失败的形状必须和原来一样
+      wt="$(command git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
+      common="$(command git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    fi
     if [ -n "$common" ]; then main="$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)"; fi
   fi
-  printf '%s\t%s\n' "${wt:-}" "${main:-}"
+  if team_scan_cache_on && [ -n "$d" ]; then _TEAM_DIR_ROOTS_MEMO[$d]="$wt"$'\t'"$main"; fi
+  printf '%s\t%s\n' "$wt" "$main"
+}
+
+team_dir_roots() { # <目录> → "<worktree>\t<main>"（不是 git 仓库 → 两列皆空）
+  local d="${1:-$PWD}"
+  d="$(cd "$d" 2>/dev/null && pwd -P || true)"
+  if team_scan_cache_on && [ -n "$d" ] && [ -n "${_TEAM_DIR_ROOTS_MEMO[$d]+x}" ]; then
+    printf '%s\n' "${_TEAM_DIR_ROOTS_MEMO[$d]}"
+    return 0
+  fi
+  team_dir_roots_load "${1:-$PWD}"
 }
 
 # 入口身份解析（一处实现全体共用）：team_identity_resolve [<显式根>]
@@ -90,6 +452,9 @@ team_identity_resolve() {
   TEAM_IDENTITY_INHERIT_SESSION="${TEAM_IDENTITY_INHERIT_SESSION-${TEAM_SESSION:-}}"
   # 注意：这六个 TEAM_IDENTITY_* 一律**不 export** —— 它们是本进程内部的判定输入，
   # 泄进子进程会让子进程拿父进程的冲突档案去判自己的身份（M40 实测：panel 的 __panel-data 孩子被误拒）。
+  # M50：先在父进程上下文把目录身份装进 memo（$(…) 子 shell 里的 memo 写留不下来，
+  # 后面的冲突判定/配置载入会反复问同一个目录）
+  team_scan_cache_on && team_dir_roots_load "$base" >/dev/null
   roots="$(team_dir_roots "$base")"
   wt="${roots%%$'\t'*}"; main="${roots#*$'\t'}"
   if [ -z "$wt" ] || [ -z "$main" ]; then
@@ -133,6 +498,12 @@ team_identity_conflict_pairs() {
     case "$var" in
       TEAM_ROOT)
         # 父进程给的是主工作树、我们在工作树里（或反之）→ 同一项目
+        # M50：先走零 git 的路径相等判（继承值就是本进程的根/主工作树 = 同一项目，PM 窗口的
+        # 常规形状）；路径不相等才问 git（team_dir_roots 有进程级 memo，foreign 值也只花一次）。
+        local _inh_n="$(team_identity_norm_dir "$inh")"
+        if [ "$_inh_n" = "$(team_identity_norm_dir "$TEAM_MAIN_ROOT")" ] || [ "$_inh_n" = "$(team_identity_norm_dir "$TEAM_ROOT")" ]; then
+          continue
+        fi
         IFS=$'\t' read -r _inh_wt inh_main <<< "$(team_dir_roots "$inh")"
         if [ -n "$inh_main" ] && [ "$(team_identity_norm_dir "$inh_main")" = "$(team_identity_norm_dir "$TEAM_MAIN_ROOT")" ]; then
           continue
@@ -337,7 +708,11 @@ team_load_config() {
     done
   fi
 
-  team_is_git_repo || team_die "当前目录不在 git 仓库内（teamsmith 需要 git 来做 worktree 隔离）"
+  # M50：锁定入口已经在 team_identity_resolve 里证明过「cwd 在 git 工作树里」（那一次的
+  # rev-parse 就是这次检查要的答案），同一进程不再重问。非锁定路径（测试夹具直接 source）保持原检查。
+  if [ "${TEAM_IDENTITY_LOCKED:-0}" != "1" ]; then
+    team_is_git_repo || team_die "当前目录不在 git 仓库内（teamsmith 需要 git 来做 worktree 隔离）"
+  fi
   if [ "${TEAM_IDENTITY_LOCKED:-0}" = "1" ]; then
     # 身份=目录推导（配置只能给出项目名/会话名这类**项目自己的**值）
     TEAM_ROOT="$TEAM_IDENTITY_ROOT"
@@ -724,9 +1099,10 @@ team_state_set() { # <agent> <key> <value>
   else
     printf '%s=%s\n' "$2" "$3" >> "$dir/$1.env"
   fi
+  team_scan_invalidate "state:$1"   # M50：写完再读（同进程）必须读到新值
 }
 
-team_state_get() { # <agent> <key> [default]
+team_state_get_direct() { # <agent> <key> [default]（直读实现；TEAM_SCAN_CACHE=0 时全体落回这里）
   local f="$TEAM_STATE_DIR/$1.env" v=""
   if [ -f "$f" ]; then
     v="$(grep -s "^$2=" "$f" | head -1 | cut -d= -f2- || true)"
@@ -738,10 +1114,27 @@ team_state_get() { # <agent> <key> [default]
   return 0
 }
 
+team_state_get() { # <agent> <key> [default]
+  team__state_get "$@"; printf '%s\n' "$_R"
+}
+
+team__state_get() { # <agent> <key> [default] → _R（M50：进程内变体，热循环用；$(…) 里 memo 写留不下来）
+  # M50：纪元内缓存。复刻原语义两条细节：重复键取第一个（加载器保证）；值为空串时回落默认值。
+  local v=""
+  if team_scan_cache_on; then
+    _team_state_cache_load "$1"
+    if [ -n "${_TEAM_STATE_KV[$1|$2]+x}" ]; then v="${_TEAM_STATE_KV[$1|$2]}"; fi
+    if [ -n "$v" ]; then _R="$v"; elif [ $# -ge 3 ]; then _R="$3"; else _R=""; fi
+    return 0
+  fi
+  _R="$(team_state_get_direct "$@")"
+}
+
 team_state_clear() {
   rm -f "$TEAM_STATE_DIR/$1.env"
   # M4.3 B：启动证据文件也属于这个 agent 的运行时状态（teardown/close 时一起清）
   rm -f "$TEAM_STATE_DIR/dispatch-$1.spawn"
+  team_scan_invalidate "state:$1"   # M50
 }
 
 # ---------------------------------------------------------------- tmux
@@ -2078,17 +2471,36 @@ team_capacity_line() {
 team_task_id_known() { # <候选 id> → 0=看起来是个真任务 id
   local id="$1" t
   [ -n "$id" ] || return 1
-  [ -n "$(team_board_row "$id" 2>/dev/null || true)" ] && return 0
-  [ -f "$TEAM_DOCS_ABS/tasks/$id.md" ] && return 0
-  for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do [ -f "$t" ] && return 0; done
-  return 1
+  # M50：纪元内 memo（只看板行/任务书 glob 的纯判定，digest 一拍问它两千多次）
+  if team_scan_cache_on && [ -n "${_TEAM_TID_KNOWN[$id]+x}" ]; then
+    [ "${_TEAM_TID_KNOWN[$id]}" = "1" ]
+    return
+  fi
+  local rc=1
+  if team_board_has "$id"; then rc=0
+  elif [ -f "$TEAM_DOCS_ABS/tasks/$id.md" ]; then rc=0
+  else
+    for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do [ -f "$t" ] && { rc=0; break; }; done
+  fi
+  if team_scan_cache_on; then
+    if [ "$rc" -eq 0 ]; then _TEAM_TID_KNOWN[$id]=1; else _TEAM_TID_KNOWN[$id]=0; fi
+  fi
+  return "$rc"
 }
 
 team_report_task_id() { # <报告文件> → 任务 id
+  team__report_task_id "$1"; printf '%s\n' "$_R"
+}
+
+team__report_task_id() { # <报告文件> → _R = 任务 id（M50 进程内变体）
   # 逐个前缀试（长 → 短）：API-2-dev → API-2-dev / API-2 / API，第一个「已知」的胜出；
   # 都不认识时退回旧的「第一个 '-' 前」启发式（行为不变，非任务报告照样被忽略但可见）。
   local f="$1" base p c
-  base="$(basename "$f" .md)"
+  # M50：纪元内 memo（结果是 basename 与已知 id 集合的纯函数；digest 一拍对同一文件问三遍）
+  if team_scan_cache_on && [ -n "${_TEAM_REP_TID[$f]+x}" ]; then
+    _R="${_TEAM_REP_TID[$f]}"; return 0
+  fi
+  base="${f##*/}"; base="${base%.md}"   # 同 basename "$f" .md（reports glob 不匹配点文件，无空名边界）
   local -a cands=()
   p="$base"
   while :; do
@@ -2096,31 +2508,57 @@ team_report_task_id() { # <报告文件> → 任务 id
     case "$p" in *-*) p="${p%-*}" ;; *) break ;; esac
   done
   for c in "${cands[@]}"; do
-    team_task_id_known "$c" && { printf '%s\n' "$c"; return 0; }
+    if team_task_id_known "$c"; then
+      if team_scan_cache_on; then _TEAM_REP_TID[$f]="$c"; fi
+      _R="$c"; return 0
+    fi
   done
-  printf '%s\n' "${base%%-*}"
+  c="${base%%-*}"
+  if team_scan_cache_on; then _TEAM_REP_TID[$f]="$c"; fi
+  _R="$c"
 }
 
 team_report_is_task() { # <file> <id>
   local f="$1" id="$2"
   [ -n "$id" ] || return 1
-  case "$id" in _*|.*) return 1 ;; esac
-  case "$(basename "$f")" in
-    *-closure*|*-summary*|*-milestone*|*closure-*|*summary-*) return 1 ;;
+  # M50：纪元内 memo（digest 一拍对同一（文件， id) 问三遍；键分隔符 | 不会出现在仓库路径里）
+  if team_scan_cache_on && [ -n "${_TEAM_REP_ISTASK[$f|$id]+x}" ]; then
+    [ "${_TEAM_REP_ISTASK[$f|$id]}" = "1" ]
+    return
+  fi
+  local rc=1
+  case "$id" in _*|.*) ;; *)
+    case "${f##*/}" in
+      *-closure*|*-summary*|*-milestone*|*closure-*|*summary-*) ;;
+      *)
+        # 标题必须是 "# <ID> · …"（ID 打头），否则视为非任务报告。
+        # M50：sed+grep 两个 fork 换成 bash 内建读第一行 + ERE 匹配（team_regex_escape 是纯 bash）。
+        # 语义对齐说明：原 grep 模式里的 $id 未转义（regex 元字符被当通配符）—— id 只可能来自
+        # 「已知任务前缀」（字母数字与 . - _），转义后与旧行为等价，且更严（通配误配的旧歪路被堵死）。
+        local _first="" _esc
+        IFS= read -r _first < "$f" 2>/dev/null || true
+        if [ -n "${_TEAM_ID_ESC[$id]+x}" ]; then _esc="${_TEAM_ID_ESC[$id]}"
+        else _esc="$(team_regex_escape "$id")"; _TEAM_ID_ESC[$id]="$_esc"; fi
+        if [[ "$_first" =~ ^#[[:space:]]+${_esc}([[:space:]]|·|:|$) ]]; then
+          if team_board_row "$id" >/dev/null 2>&1; then rc=0
+          else
+            local t
+            for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do [ -f "$t" ] && { rc=0; break; }; done
+          fi
+        fi ;;
+    esac ;;
   esac
-  # 标题必须是 "# <ID> · …"（ID 打头），否则视为非任务报告
-  sed -n '1{/^#[[:space:]]/p}' "$f" | grep -qE "^#[[:space:]]+$id([[:space:]]|·|:|$)" || return 1
-  if team_board_row "$id" >/dev/null 2>&1; then return 0; fi
-  local t
-  for t in "$TEAM_DOCS_ABS/tasks/$id-"*.md; do [ -f "$t" ] && return 0; done
-  return 1
+  if team_scan_cache_on; then
+    if [ "$rc" -eq 0 ]; then _TEAM_REP_ISTASK[$f|$id]=1; else _TEAM_REP_ISTASK[$f|$id]=0; fi
+  fi
+  return "$rc"
 }
 
 team_reports_pending_list() { # → 每行 "<显示名>\t<路径>"，只列**真任务**报告（主工作树 + 各 agent worktree）
   local glob base id ids=" "
   for glob in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
     [ -f "$glob" ] || continue
-    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"
+    base="${glob##*/}"; base="${base%.md}"; team__report_task_id "$glob"; id="$_R"
     [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
     case "$ids" in *" $id "*) continue ;; esac
     team_report_is_task "$glob" "$id" || continue
@@ -2134,21 +2572,46 @@ team_reports_pending() { # 报告已交但未复验的**任务**数
 }
 
 team_reports_ignored() { # 被上面规则排除掉的报告（供 digest 提示，不静默丢）
-  local f base id glob
+  # M50：纪元内 memo（digest 在 [2]/[3] 各问一次，扫描只跑一遍）
+  if team_scan_cache_on && [ "${_TEAM_IGNORED_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ]; then
+    printf '%s' "$_TEAM_IGNORED_OUT"; return 0
+  fi
+  local f base id glob out=""
   for glob in "$TEAM_DOCS_ABS/reports/"*.md; do
     [ -f "$glob" ] || continue
-    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"
+    base="${glob##*/}"; base="${base%.md}"; team__report_task_id "$glob"; id="$_R"
     [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ] && continue
-    team_report_is_task "$glob" "$id" || printf '%s\n' "$(basename "$glob")"
+    team_report_is_task "$glob" "$id" || out="${out}${glob##*/}"$'\n'   # 原实现打 basename（带 .md）
   done
+  if team_scan_cache_on; then _TEAM_IGNORED_OUT="$out"; _TEAM_IGNORED_EPOCH="$_TEAM_SCAN_EPOCH"; fi
+  printf '%s' "$out"
 }
 
-team_board_counts() { # → "todo wip review blocked"
+team_board_counts_direct() { # → "todo wip review blocked"（直读实现）
   local f="$TEAM_DOCS_ABS/BOARD.md"
   [ -f "$f" ] || { printf '0 0 0 0\n'; return 0; }
   awk -F'|' -v sc="$(team_board_col status)" 'NF>2 { st=$(sc); gsub(/^[ \t]+|[ \t]+$/, "", st);
       if (st=="todo") t++; else if (st=="wip") w++; else if (st=="review") r++; else if (st=="blocked") b++ }
     END { printf "%d %d %d %d\n", t+0, w+0, r+0, b+0 }' "$f"
+}
+
+# M50：带缓存的公共读口（列布局/ids/计数在纪元内只读一次；输出去自重命名前的直读实现）
+team_board_cols() {
+  if team_scan_cache_on; then
+    _team_board_cache_load
+    [ -n "$_TEAM_BOARD_COLS" ] && printf '%s\n' "$_TEAM_BOARD_COLS"
+    return 0
+  fi
+  team_board_cols_direct
+}
+
+team_board_counts() { # → "todo wip review blocked"
+  if team_scan_cache_on; then
+    _team_board_cache_load
+    printf '%s\n' "$_TEAM_BOARD_COUNTS_OUT"
+    return 0
+  fi
+  team_board_counts_direct
 }
 
 team_pending_counts() { # → "inbox reports todo wip review blocked stopped"
@@ -2317,7 +2780,7 @@ team_append() { # <file> <block>
 team_timestamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # BOARD.md 行更新：| ID | 任务 | Agent | 分支 | 依赖 | 状态 |
-team_board_ids() { # → 表里现有的 id（每行一个，给「未知 id」的报错用）
+team_board_ids_direct() { # → 表里现有的 id（每行一个，给「未知 id」的报错用）（直读实现）
   local f="$TEAM_DOCS_ABS/BOARD.md" col
   [ -f "$f" ] || return 0
   col="$(team_board_col id)"
@@ -2328,10 +2791,26 @@ team_board_ids() { # → 表里现有的 id（每行一个，给「未知 id」�
   return 0
 }
 
+team_board_ids() { # → 表里现有的 id（每行一个，给「未知 id」的报错用）
+  if team_scan_cache_on; then
+    _team_board_cache_load
+    [ -n "$_TEAM_BOARD_IDS_OUT" ] && printf '%s\n' "$_TEAM_BOARD_IDS_OUT"
+    return 0
+  fi
+  team_board_ids_direct
+}
+
 # 注意：team_board_row 对「没有这一行」也返回 0（awk 正常结束），所以判存在必须看输出
 # 是否非空 —— F29 的根因就是「写」从不检查行是否存在。
 team_board_has() { # <id> → 0=表里有这一行
-  [ -n "$(team_board_row "$1" 2>/dev/null || true)" ]
+  # M50：缓存开着时零 fork（原实现每次调用 fork 一次拿 team_board_row 的输出）
+  if team_scan_cache_on; then
+    _team_board_cache_load
+    [ "$_TEAM_BOARD_EXISTS" = "1" ] || return 1
+    [ -n "${_TEAM_BOARD_ROW[$1]:-}" ]
+    return
+  fi
+  [ -n "$(team_board_row_direct "$1" 2>/dev/null || true)" ]
 }
 
 # 只写状态列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
@@ -2347,6 +2826,7 @@ team_board_write() { # <id> <status> → 0=真的改了那一行；1=没有这�
     END { exit(found ? 0 : 1) }
   ' "$f" > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
   mv "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }
+  team_scan_invalidate board   # M50：写完再读（同进程）必须读到新行
   return 0
 }
 
@@ -2360,6 +2840,13 @@ team_board_write() { # <id> <status> → 0=真的改了那一行；1=没有这�
 #   「这个分支真的干过活」的形状；报告路径规则与 M4.3-C 同源（草稿不算，git 里只有提交）。
 # 覆盖：PM 显式给理由（TEAM_BOARD_DONE_FORCE=1 + TEAM_BOARD_DONE_REASON="…"），并落盘审计。
 team_review_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN|none|missing
+  # M50：纪元内缓存（missing=文件不在 / none=文件在但没有判定行，与直读逐字节一致）
+  if team_scan_cache_on; then
+    _team_rev_cache_load
+    [ "${_TEAM_REV_EXISTS[$1]:-}" = "1" ] || { printf 'missing\n'; return 0; }
+    printf '%s\n' "${_TEAM_REV_VERDICT_ANY[$1]:-none}"
+    return 0
+  fi
   local f="$TEAM_DOCS_ABS/reviews/$1.md" v=""
   [ -f "$f" ] || { printf 'missing\n'; return 0; }
   v="$(grep -m1 -oE '判定: \*\*[A-Za-z]+\*\*' "$f" 2>/dev/null | tr -d '*' | sed 's/^判定: //' || true)"
@@ -2419,12 +2906,53 @@ team_task_briefs() { # <ID> → 每行一份任务书路径（没有 → 空）
   return 0
 }
 
-team_task_phase() { # <ID> → explore|propose|apply|verify|archive（未声明 / `-` / 不认识 → 空）
-  local p
-  p="$(team_brief_field "$(team_task_brief "$1")" phase)"
-  case "$p" in explore|propose|apply|verify|archive) printf '%s\n' "$p" ;; esac
+# ---- 任务书 phase 批量加载：一次 awk 扫全部 tasks/*.md（原：每个 id 一次 awk fork）。
+# 文件名 → id 的映射与 team_task_brief 逐字对齐：<ID>.md 精确形优先于 <ID>-<slug>.md（glob 序首个）。
+_team_phase_cache_load() {
+  [ "${_TEAM_PHASE_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
+  _TEAM_PHASE_EPOCH="$_TEAM_SCAN_EPOCH"
+  local d="${TEAM_DOCS_ABS:-}/tasks"
+  { [ -n "${TEAM_DOCS_ABS:-}" ] && [ -d "$d" ]; } || return 0
+  compgen -G "$d/*.md" >/dev/null || return 0
+  local id p ex
+  # awk 对每份任务书打一条 <id><phase><精确形0/1>（每文件第一条 phase 行，与 brief_field 的 exit 一致）；
+  # 优先级在 bash 侧落实：精确形覆盖，glob 形只填空缺。
+  while IFS=$'\x1f' read -r id p ex; do
+    [ -n "$id" ] || continue
+    if [ "$ex" = "1" ]; then _TEAM_MEMO_PHASE[$id]="$p"; _TEAM_PHASE_EXACT[$id]=1
+    elif [ -z "${_TEAM_PHASE_EXACT[$id]:-}" ] && [ -z "${_TEAM_MEMO_PHASE[$id]+x}" ]; then
+      _TEAM_MEMO_PHASE[$id]="$p"
+    fi
+  done < <(awk '
+    FNR==1 {
+      f=FILENAME; sub(/.*\//, "", f); sub(/\.md$/, "", f)
+      id=f; sub(/-.*/, "", id)
+      exact=(f == id) ? 1 : 0
+    }
+    /^[[:space:]]*phase:/ {
+      v=$0; sub(/^[[:space:]]*phase:[[:space:]]*/, "", v); sub(/[[:space:]]*#.*$/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      if (v!="explore" && v!="propose" && v!="apply" && v!="verify" && v!="archive") v=""
+      print id "\x1f" v "\x1f" exact
+      nextfile
+    }' "$d"/*.md 2>/dev/null || true)
   return 0
 }
+
+team__task_phase() { # <ID> → _R = phase（未声明 / `-` / 不认识 → 空）。M50 进程内变体
+  if team_scan_cache_on; then
+    _team_phase_cache_load
+    if [ -n "${_TEAM_MEMO_PHASE[$1]+x}" ]; then _R="${_TEAM_MEMO_PHASE[$1]}"; return 0; fi
+    # 任务书不在批量扫描结果里（不存在）→ 空；与原实现 [ -f ] 失败路径一致
+    _R=""
+    return 0
+  fi
+  local p
+  p="$(team_brief_field "$(team_task_brief "$1")" phase)"
+  case "$p" in explore|propose|apply|verify|archive) ;; *) p="" ;; esac
+  _R="$p"
+}
+team_task_phase() { team__task_phase "$1"; [ -n "$_R" ] && printf '%s\n' "$_R"; return 0; }
 
 team_task_change() { # <ID> → 任务书 change: 行的 change id（`-`/空 → 空）
   local c
@@ -2712,6 +3240,7 @@ team_board_add() { # <id> <title> <agent> <branch> <deps>
   else
     printf '%s\n' "$row" >> "$f"
   fi
+  team_scan_invalidate board   # M50：写完再读（同进程）必须读到新行
 }
 
 # ---------------------------------------------------------------- 模板渲染
@@ -2768,7 +3297,7 @@ team_main_dirty_external() {
 # ---------------------------------------------------------------- BOARD 列映射（②）
 # BOARD 的列必须可容忍额外列：按表头名字定位，而不是硬编码列号。
 # 输出 "<id> <task> <agent> <branch> <deps> <status>"（1-based 列号；缺表头时用默认 2 3 4 5 6 7）
-team_board_cols() {
+team_board_cols_direct() { #（直读实现；M50 缓存关掉/冷时走这里）
   local f="$TEAM_DOCS_ABS/BOARD.md"
   if [ -f "$f" ]; then
     awk 'BEGIN{FS="|"}
@@ -2830,7 +3359,7 @@ team_board_layout_warning() {
   return 0
 }
 
-team_board_row() { # <id> → 整行（列位置由表头决定）
+team_board_row_direct() { # <id> → 整行（列位置由表头决定）（直读实现）
   local f="$TEAM_DOCS_ABS/BOARD.md" col
   [ -f "$f" ] || return 1
   col="$(team_board_col id)"
@@ -2838,13 +3367,37 @@ team_board_row() { # <id> → 整行（列位置由表头决定）
     /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v); if (v==id) { print; exit } }' "$f"
 }
 
+team_board_row() { # <id> → 整行（列位置由表头决定）
+  # M50：纪元内缓存。原语义：文件不在 → rc 1；文件在 → rc 0（查无此行也是 rc 0、无输出）。
+  if team_scan_cache_on; then
+    _team_board_cache_load
+    [ "$_TEAM_BOARD_EXISTS" = "1" ] || return 1
+    [ -n "${_TEAM_BOARD_ROW[$1]:-}" ] && printf '%s\n' "${_TEAM_BOARD_ROW[$1]}"
+    return 0
+  fi
+  team_board_row_direct "$1"
+}
+
 # M9.4：某个任务在看板上的状态（BOARD 里没有这一行 → 空）。调用方用它判断「看板已经裁决过了吗」：
 # done/closed 的行不能同时又「等 PM 复验」——清单不得反过来质疑看板的决定。
 team_board_status() { # <id> → todo|wip|review|done|blocked|dropped|closed|…（没有这一行 → 空）
+  team__board_status "$1"; printf '%s\n' "$_R"
+}
+
+team__board_status() { # <id> → _R = 状态列（M50 进程内变体）
+  # M50：纪元内缓存（状态列在加载时已按表头解析好）
+  if team_scan_cache_on; then
+    _team_board_cache_load
+    _R=""
+    if [ "$_TEAM_BOARD_EXISTS" = "1" ] && [ -n "${_TEAM_BOARD_ROW[$1]:-}" ]; then
+      _R="${_TEAM_BOARD_STATUS[$1]:-}"
+    fi
+    return 0
+  fi
   local row
-  row="$(team_board_row "$1" 2>/dev/null || true)"
-  [ -n "$row" ] || return 0
-  team_board_field "$row" status
+  row="$(team_board_row_direct "$1" 2>/dev/null || true)"
+  if [ -n "$row" ]; then _R="$(team_board_field "$row" status)"; else _R=""; fi
+  return 0
 }
 
 # ---------------------------------------------------------------- pi 可执行文件（窗口 PATH 就绪竞态，erp 实测）

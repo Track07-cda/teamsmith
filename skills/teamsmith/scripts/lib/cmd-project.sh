@@ -551,6 +551,25 @@ team_cmd_doctor() {
     check "迁移指引"; warn "$mig：读 $TEAM_SKILL_DIR/references/migration.md（重命名 / 已删命令 / 必需依赖 / 行为变更 / 升级配方 / 回滚）"
   fi
 
+  # M50：读路径耗时 —— 「慢」必须可见（digest 曾经 89s 而没人察觉，直到实测）。当场各量一次
+  # digest 与 __panel-data 的墙钟（读重的两条出口），超预算 warn 不 fail：耗时随语料规模与
+  # 机器负载走，预算只是「该注意了」的线。预算可调：TEAM_M50_PERF_BUDGET_{DIGEST,PANEL}（秒）。
+  check "读路径耗时"; local _t0 _d_s _p_s _bd _bp
+  _bd="${TEAM_M50_PERF_BUDGET_DIGEST:-5}"; _bp="${TEAM_M50_PERF_BUDGET_PANEL:-1.5}"
+  if [ -d "$TEAM_DOCS_ABS" ]; then
+    _t0="$(date +%s%N)"; ( team_cmd_digest ) >/dev/null 2>&1 || true
+    _d_s="$(awk -v a="$_t0" -v b="$(date +%s%N)" 'BEGIN{printf "%.2f", (b-a)/1000000000}')"
+    _t0="$(date +%s%N)"; ( team_cmd_panel_data --no-activity ) >/dev/null 2>&1 || true
+    _p_s="$(awk -v a="$_t0" -v b="$(date +%s%N)" 'BEGIN{printf "%.2f", (b-a)/1000000000}')"
+    if awk -v d="$_d_s" -v bd="$_bd" -v p="$_p_s" -v bp="$_bp" 'BEGIN{exit !((d>bd)||(p>bp))}'; then
+      warn "digest ${_d_s}s（预算 ${_bd}s）· __panel-data ${_p_s}s（预算 ${_bp}s）——超预算：看 M50 的扫描缓存是否被关（TEAM_SCAN_CACHE=0）或语料异常增长"
+    else
+      pass "digest ${_d_s}s · __panel-data ${_p_s}s（预算 ${_bd}s / ${_bp}s，TEAM_M50_PERF_BUDGET_* 可调）"
+    fi
+  else
+    warn "缺 $TEAM_DOCS_DIR/，量不了"
+  fi
+
   printf '\n'
   if [ "$fails" -gt 0 ]; then team_err "doctor: $fails 项失败 / $warns 项警告"; return 1; fi
   if [ "$warns" -gt 0 ]; then team_warn "doctor: 0 项失败 / $warns 项警告（可继续）"; return 0; fi

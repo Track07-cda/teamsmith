@@ -5,28 +5,55 @@
 # checkout 该分支、跑门禁、看 diff，并把结论写成 <docs>/reviews/<ID>.md。
 
 # 解析分支：--branch > 任务在跑的 agent 的当前分支 > 唯一的 task/<ID>-* 分支
-team_resolve_branch() { # <ID> [--branch b]
-  local id="$1" branch="${2:-}" a wt b found=""
-  if [ -n "$branch" ]; then printf '%s\n' "$branch"; return 0; fi
+team__resolve_branch() { # <ID> → _R；rc：0=唯一命中 1=找不到 2=歧义。M50 进程内变体（永不 team_die）
+  # memo **只记成功结果**（解析是 state/工作树/refs 的纯函数）；失败路径不 memo：
+  # 打印版的 team_die 文案是契约，每次都该重新走完整解析。
+  local id="$1" a wt b found=""
+  _R=""
+  if team_scan_cache_on && [ -n "${_TEAM_RESOLVE_BRANCH[$id]+x}" ]; then
+    _R="${_TEAM_RESOLVE_BRANCH[$id]}"; return 0
+  fi
   for a in $(team_agents); do
-    [ "$(team_state_get "$a" task '')" = "$id" ] || continue
+    team__state_get "$a" task ''
+    [ "$_R" = "$id" ] || continue
     # ① state 里记的分支最可靠（task 模式切换任务后仍能定位）
-    b="$(team_state_get "$a" branch '')"
-    case "$b" in ""|HEAD|"$TEAM_PROTECTED_BRANCH") ;; *) printf '%s\n' "$b"; return 0 ;; esac
+    team__state_get "$a" branch ''; b="$_R"
+    case "$b" in ""|HEAD|"$TEAM_PROTECTED_BRANCH") ;; *)
+      _R="$b"; if team_scan_cache_on; then _TEAM_RESOLVE_BRANCH[$id]="$_R"; fi
+      return 0 ;;
+    esac
     wt="$(team_agent_worktree "$a")"
     [ -d "$wt" ] || continue
-    b="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-    case "$b" in ""|HEAD) ;; *) printf '%s\n' "$b"; return 0 ;; esac
+    team__worktree_branch "$wt"; b="$_R"   # M50：进程内缓存（原：rev-parse --abbrev-ref HEAD）
+    case "$b" in ""|HEAD) ;; *)
+      _R="$b"; if team_scan_cache_on; then _TEAM_RESOLVE_BRANCH[$id]="$_R"; fi
+      return 0 ;;
+    esac
   done
+  _R=""
   while IFS= read -r b; do
     case "$b" in
       */"$id"-*|*/"$id") [ -n "$found" ] && { found="AMBIGUOUS"; break; }; found="$b" ;;
     esac
-  done < <(git -C "$TEAM_MAIN_ROOT" for-each-ref --format='%(refname:short)' "refs/heads/$TEAM_TASK_BRANCH_PREFIX/")
+  done < <(team_ref_task_branches)   # M50：refs 一个纪元列一次（原：每个 ID 一次 for-each-ref）
   case "$found" in
-    "") team_die "找不到 $id 的分支：用 --branch 指定" ;;
-    AMBIGUOUS) team_die "$id 有多个候选分支，用 --branch 指定" ;;
-    *) printf '%s\n' "$found" ;;
+    "") return 1 ;;
+    AMBIGUOUS) return 2 ;;
+    *)
+      _R="$found"
+      if team_scan_cache_on; then _TEAM_RESOLVE_BRANCH[$id]="$_R"; fi
+      return 0 ;;
+  esac
+}
+
+team_resolve_branch() { # <ID> [--branch b] —— 对外语义一字不变（含找不到/歧义的 team_die 原文）
+  local id="$1" branch="${2:-}" rc
+  if [ -n "$branch" ]; then printf '%s\n' "$branch"; return 0; fi
+  team__resolve_branch "$id"; rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$_R" ;;
+    1) team_die "找不到 $id 的分支：用 --branch 指定" ;;
+    2) team_die "$id 有多个候选分支，用 --branch 指定" ;;
   esac
 }
 
@@ -75,25 +102,46 @@ team_review_signal_name() { # <signal number> → SIGTERM / SIGKILL / SIG<n>
 }
 
 team_review_record_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN（没有记录 → 空）
+  team__review_record_verdict "$1"; [ -n "$_R" ] && printf '%s\n' "$_R"; return 0
+}
+
+team__review_record_verdict() { # <ID> → _R（M50 进程内变体）
+  # M50：纪元内缓存（判定行一个纪元批量扫一次；输出与逐文件 grep 逐字节一致）
+  if team_scan_cache_on; then
+    _team_rev_cache_load
+    _R="${_TEAM_REV_VERDICT[$1]:-}"
+    return 0
+  fi
   local f v; f="$(team_review_record_path "$1")"
+  _R=""
   [ -f "$f" ] || return 0
   v="$(grep -m1 -oE '判定: \*\*[A-Z]+\*\*' "$f" 2>/dev/null || true)"
   [ -n "$v" ] || return 0
-  printf '%s\n' "$v" | tr -d '*' | sed 's/^判定: //'
+  _R="$(printf '%s\n' "$v" | tr -d '*' | sed 's/^判定: //')"
 }
 
 team_review_record_head() { # <ID> → 记录里被验的 HEAD（9 位）
+  team__review_record_head "$1"; [ -n "$_R" ] && printf '%s\n' "$_R"; return 0
+}
+
+team__review_record_head() { # <ID> → _R（M50 进程内变体）
+  if team_scan_cache_on; then
+    _team_rev_cache_load
+    _R="${_TEAM_REV_HEAD[$1]:-}"
+    return 0
+  fi
   local f h; f="$(team_review_record_path "$1")"
+  _R=""
   [ -f "$f" ] || return 0
   h="$(grep -m1 -oE 'HEAD: `[0-9a-f]{7,40}`' "$f" 2>/dev/null || true)"
   [ -n "$h" ] || return 0
-  printf '%s\n' "$h" | sed -e 's/^HEAD: //' -e 's/`//g'
+  _R="$(printf '%s\n' "$h" | sed -e 's/^HEAD: //' -e 's/`//g')"
 }
 
 team_review_branch_tip() { # <ID> → 任务分支当前 tip（解析不到 → 空。分支已被合并删除时为空，不算“过期”）
   local b; b="$(team_resolve_branch "$1" 2>/dev/null || true)"
   [ -n "$b" ] || return 0
-  git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0
+  team_branch_tip "$b"   # M50：本地分支走 refs 缓存（原：每次调用一次 rev-parse --verify）
 }
 
 # M9.5：verify 任务的被判对象是**记录验过的那个 revision**，不是复验者自己的分支。
@@ -101,12 +149,22 @@ team_review_branch_tip() { # <ID> → 任务分支当前 tip（解析不到 → 
 # 的记录每拍标成过期 —— 真实现场：V2 的 PASS 记录绑着 P2.1 的 398716887，digest 却按 verify 自己的
 # task/V2-… 分支判它 stale。记录抬头里已经写着被验分支，verify 阶段就读它。
 team_review_record_branch() { # <ID> → 记录抬头 `时间: … · 分支: \`x\`` 里的分支（没有这个形状 → 空）
+  team__review_record_branch "$1"; [ -n "$_R" ] && printf '%s\n' "$_R"; return 0
+}
+
+team__review_record_branch() { # <ID> → _R（M50 进程内变体）
+  if team_scan_cache_on; then
+    _team_rev_cache_load
+    _R="${_TEAM_REV_BRANCH[$1]:-}"
+    return 0
+  fi
   local f b; f="$(team_review_record_path "$1")"
+  _R=""
   [ -f "$f" ] || return 0
   # 只认抬头行的形状：正文里引用同一条格式（V1.1/V4.0 的报告里就有）不算
   b="$(awk -F'分支: `' '/^时间: / && NF>1 { split($2, a, "`"); print a[1]; exit }' "$f" 2>/dev/null || true)"
   [ -n "$b" ] || return 0
-  printf '%s\n' "$b"
+  _R="$b"
 }
 
 # staleness 判定用的「被判对象当前 tip」：
@@ -114,33 +172,60 @@ team_review_record_branch() { # <ID> → 记录抬头 `时间: … · 分支: \`
 #   verify             → 记录绑定的被验分支当前 tip。
 # 解析不到（记录没写分支 / 写的是 HEAD / 分支已被合并删除 / 记录绑的是 sha）→ 空 = 无法判定「又动了」。
 # 与既有规则一致：解析不到不算过期，否则合并后的任务会永远待办。
-team_review_subject_tip() { # <ID> → 被判对象的当前 tip（无法判定 → 空）
-  local id="$1" phase b
-  phase="$(team_task_phase "$id")"
-  if [ "$phase" = "verify" ]; then
-    b="$(team_review_record_branch "$id")"
-    [ -n "$b" ] || return 0
-    case "$b" in HEAD|-|—) return 0 ;; esac
-    git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0
+team__review_subject_tip() { # <ID> → _R = 被判对象的当前 tip（无法判定 → 空）。M50 进程内变体
+  local id="$1" b
+  _R=""
+  team__task_phase "$id"
+  if [ "$_R" = "verify" ]; then
+    team__review_record_branch "$id"; b="$_R"
+    [ -n "$b" ] || { _R=""; return 0; }
+    case "$b" in HEAD|-|—) _R=""; return 0 ;; esac
+    team__branch_tip "$b"   # M50：本地分支走 refs 缓存
     return 0
   fi
-  team_review_branch_tip "$id"
+  # 非 verify：解析记录对应任务的活跃分支（解析不到/歧义 = 原实现子 shell 里 die → 空，不算“过期”）
+  local rc
+  team__resolve_branch "$id"; rc=$?
+  if [ "$rc" -ne 0 ]; then _R=""; return 0; fi
+  b="$_R"
+  [ -n "$b" ] || { _R=""; return 0; }
+  team__branch_tip "$b"
 }
+team_review_subject_tip() { team__review_subject_tip "$1"; [ -n "$_R" ] && printf '%s\n' "$_R"; return 0; }
 
 team_review_record_note() { # <ID> → "" / 一行标记：gates: none / stale: verified A, branch now B
+  team__review_record_note "$1"; [ -n "$_R" ] && printf '%s\n' "$_R"; return 0
+}
+
+team__review_record_note() { # <ID> → _R = "" / 一行标记（M50 进程内变体；纪元内 memo）
+  # note 是（记录抬头 + refs + state）在纪元内的纯函数；digest 一拍对同一 ID 问 2–3 次
+  # （pending 全量 / --actionable / skipped_by_board），memo 后只算一次。
+  if team_scan_cache_on && [ -n "${_TEAM_REV_NOTE[$1]+x}" ]; then
+    _R="${_TEAM_REV_NOTE[$1]}"; return 0
+  fi
   local id="$1" verdict rec_head tip
-  verdict="$(team_review_record_verdict "$id")"
-  [ -n "$verdict" ] || return 0
-  case "$verdict" in
-    SKIPPED) printf 'gates: none\n'; return 0 ;;
-    UNKNOWN) printf 'gates: unconfigured\n'; return 0 ;;
-  esac
-  rec_head="$(team_review_record_head "$id")"
-  [ -n "$rec_head" ] || { printf 'verified revision unknown\n'; return 0; }
-  tip="$(team_review_subject_tip "$id")"
-  [ -n "$tip" ] || return 0
-  case "$tip" in "$rec_head"*) return 0 ;; esac
-  printf 'stale: verified %s, branch now %s\n' "$rec_head" "${tip:0:9}"
+  team__review_record_verdict "$id"; verdict="$_R"
+  _R=""
+  if [ -n "$verdict" ]; then
+    case "$verdict" in
+      SKIPPED) _R='gates: none' ;;
+      UNKNOWN) _R='gates: unconfigured' ;;
+      *)
+        team__review_record_head "$id"; rec_head="$_R"
+        _R=""   # 捕获后必须清零：下面任何早退路径的 note 都是空（原实现 return 0 无输出）
+        if [ -z "$rec_head" ]; then _R='verified revision unknown'
+        else
+          team__review_subject_tip "$id"; tip="$_R"; _R=""   # 进程内变体；捕获后清 _R（fresh 时 note 为空）
+          if [ -n "$tip" ]; then
+            case "$tip" in "$rec_head"*) ;; *)
+              printf -v _R 'stale: verified %s, branch now %s' "$rec_head" "${tip:0:9}" ;;
+            esac
+          fi
+        fi ;;
+    esac
+  fi
+  if team_scan_cache_on; then _TEAM_REV_NOTE[$id]="$_R"; fi
+  return 0
 }
 
 # ---------------------------------------------------------------- checkout 内容真相（F8/F9）
@@ -627,6 +712,7 @@ $(printf '%s\n' "$ignored_list" | head -5)
       *)    printf -- '- [ ] 人工评审（门禁未跑/未配置：这不等于通过，digest 会继续把它列为待复验）\n' ;;
     esac
   } > "$report"
+  team_scan_invalidate review   # M50：同进程里「写完再读」必须读到新记录
   team_ok "复验记录：${report#"$TEAM_MAIN_ROOT"/}（$verdict）"
 
   case "$verdict" in FAIL|TIMEOUT) return 1 ;; esac

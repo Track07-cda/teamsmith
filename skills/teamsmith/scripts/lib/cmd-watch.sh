@@ -270,6 +270,9 @@ team_cmd_resume() {
 # 不管 tmux 布局（除非 TEAM_PULSE_REBUILD_TMUX=1），不管 agent（那是 PM 的事）。
 team_watch_once() {
   mkdir -p "$TEAM_STATE_DIR"
+  # M50：巡检是长驻进程 —— 每拍开一个扫描新纪元，缓存绝不跨拍（拍内的重复读吃缓存）
+  team_scan_refresh
+  team_scan_warm
 
   # ① 容量留痕（只观察，不干预）
   local cap; cap="$(team_capacity_line)"
@@ -530,8 +533,10 @@ team_panel_agents_json() {
   local out="[" first=1 a state task wt cols branch dirty ahead upahead
   local model mtok mwin mbytes mfile size dirty_json ahead_json
   for a in $(team_agents); do
-    if team_agent_live "$a"; then state="running"
-    elif team_agent_window_exists "$a"; then state="exited"
+    # M50：窗口存在性每个 agent 只问一次 tmux（原：live 一次 + window_exists 又一次，同一个 tmux 答案问两遍）
+    local w_live; w_live="$(team_state_get "$a" window "$a")"
+    if team_tmux_has_window "$TEAM_SESSION" "$w_live"; then
+      if team_agent_alive_in_pane "$TEAM_SESSION:$w_live"; then state="running"; else state="exited"; fi
     else state="absent"; fi
     task="$(team_state_get "$a" task '')"
     wt="$(team_agent_worktree "$a")"
@@ -599,63 +604,12 @@ team_panel_standby_json() {
 # ≈ 4300 次进程调用，光枚举就 9s；这里是 1 次 awk + 每个工作树 1 次 git）。
 # **过滤一行都不复制**：看板 done/closed、草稿、复验记录仍然交给 cmd-status.sh 的
 # team_reports_pending_list --actionable。等价性由 smoke 的同夹具逐行对照断言钉住。
+# 面板专用的候选枚举：M50 起直接委托 cmd-status.sh 的 team_report_primary_candidates
+# （纪元 memo 后的单进程扫描）。历史：这里曾是另一套手写并行实现（"fast"），名义上「同序同集」；
+# M50 在真实语料上实测两者逐字节一致（100/100 行），两套逻辑没有并存必要——
+# 27-c 的同夹具逐行对照断言仍在，委托后它继续绿。
 team_panel_report_primary_candidates_fast() { # → 每行 "<id>\t<路径>"（同序同集）
-  local -A board_ids=() seen=() wt_ready=() wt_path=() wt_task=() wt_branch=()
-  local board="$TEAM_DOCS_ABS/BOARD.md" f base id cand first who rank pass col
-  if [ -f "$board" ]; then
-    col="$(team_board_col id)"
-    while IFS= read -r id; do
-      [ -n "$id" ] && board_ids[$id]=1
-    done < <(awk -v c="$col" 'BEGIN{FS="|"} /^\|/ { v=$(c); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); if (v != "") print v }' "$board")
-  fi
-  for pass in 0 1 2; do
-    for f in "$TEAM_DOCS_ABS/reports/"*.md "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
-      [ -f "$f" ] || continue
-      case "$f" in
-        "$TEAM_DOCS_ABS/reports/"*) [ "$pass" = "0" ] || continue ;;
-        *) [ "$pass" != "0" ] || continue ;;
-      esac
-      base="${f##*/}"; base="${base%.md}"
-      case "$base" in *-closure*|*-summary*|*-milestone*|*closure-*|*summary-*) continue ;; esac
-      id=""
-      cand="$base"
-      while :; do
-        if [ -n "${board_ids[$cand]:-}" ] || [ -f "$TEAM_DOCS_ABS/tasks/$cand.md" ] \
-           || compgen -G "$TEAM_DOCS_ABS/tasks/$cand-*.md" >/dev/null; then
-          id="$cand"; break
-        fi
-        case "$cand" in *-*) cand="${cand%-*}" ;; *) break ;; esac
-      done
-      [ -n "$id" ] || id="${base%%-*}"
-      # team_report_is_task：id 形状 → 首行标题 → 看板行/任务书（与 cmd-status.sh 同顺序同判据）
-      case "$id" in _*|.*) continue ;; esac
-      [ -n "$id" ] || continue
-      first=""
-      IFS= read -r first < "$f" || true
-      [ -n "$first" ] || continue
-      [[ "$first" =~ ^#[[:space:]]+${id}([[:space:]]|·|:|$) ]] || continue
-      if [ -z "${board_ids[$id]:-}" ] && ! compgen -G "$TEAM_DOCS_ABS/tasks/$id-*.md" >/dev/null; then continue; fi
-      if [ "$pass" != "0" ]; then
-        who="${f#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
-        rank=2
-        case "$base" in "$id-$who") rank=1 ;; esac
-        if [ "$rank" != "1" ]; then
-          if [ -z "${wt_ready[$who]:-}" ]; then
-            wt_ready[$who]=1
-            wt_path[$who]="$(team_agent_worktree "$who")"
-            wt_task[$who]="$(team_state_get "$who" task '')"
-            wt_branch[$who]="$(git -C "${wt_path[$who]}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-          fi
-          [ "${wt_task[$who]:-}" = "$id" ] && rank=1
-          [ "${wt_branch[$who]:-}" = "$TEAM_TASK_BRANCH_PREFIX/$id" ] && rank=1
-        fi
-        [ "$rank" = "$pass" ] || continue
-      fi
-      [ -n "${seen[$id]:-}" ] && continue
-      seen[$id]=1
-      printf '%s\t%s\n' "$id" "$f"
-    done
-  done
+  team_report_primary_candidates
 }
 
 # 待复验计数（面板口径）：快速枚举 + cmd-status.sh 的同一套过滤（--actionable）。
@@ -1184,11 +1138,24 @@ team_cmd_panel_data() {
     esac
   done
   team_require_docs
+  # M50：activity 块（monitor.mjs，node 冷启 ~0.4s）与「预热 + panel 组装」并行——
+  # 进程替换起一个后台产者，末尾再收；输出键序与字节与串行完全一致。
+  local _act_fd _act_out='[]'
   if [ -n "$block" ]; then
+    team_scan_warm   # M50：panel-data 一拍读遍 board/agents/reports/reviews，预热后全部吃热缓存
     team_panel_block "$block" "$activity" "$events" "$did" "$dfile"
     return $?
   fi
-  printf '{"panel": %s, "activity": %s}\n' "$(team_panel_json)" "$(team_panel_activity_json "$activity" "$events")"
+  if [ "$activity" = "1" ]; then
+    exec {_act_fd}< <( team_panel_activity_json "$activity" "$events" )
+  fi
+  team_scan_warm   # M50：panel-data 一拍读遍 board/agents/reports/reviews，预热后全部吃热缓存
+  if [ "$activity" = "1" ]; then
+    _act_out="$(cat <&$_act_fd)"
+    exec {_act_fd}<&-
+    case "${_act_out:-}" in \[*) ;; *) _act_out='[]' ;; esac
+  fi
+  printf '{"panel": %s, "activity": %s}\n' "$(team_panel_json)" "$_act_out"
 }
 
 # 旧调用点（team_panel）走这里：一帧纯文本，不 tick、不写 state。

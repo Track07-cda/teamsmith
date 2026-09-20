@@ -35,6 +35,24 @@ team_inbox_since() { # <agent> → 未 ack 的行
 team_report_committed() { # <报告路径>
   local f="$1" dir
   [ -f "$f" ] || return 1
+  if team_scan_cache_on; then
+    # M50：工作树归属走缓存的工作树清单（原来每份报告一次 rev-parse --show-toplevel），
+    # 跟踪/差异判定走每工作树一次的批量集合（ls-files + diff --name-only HEAD）。
+    # 不在任何已知工作树 / 不在其 reports 目录里 → 落回直读（语义逐字节不变）。
+    local wt rel
+    wt="$(team_worktree_of "$f")"
+    if [ -n "$wt" ]; then
+      case "$f" in "$wt/${TEAM_DOCS_DIR:-docs/team}/reports/"*) ;; *) wt="" ;; esac
+    fi
+    if [ -n "$wt" ]; then
+      _team_wtrep_load "$wt"
+      rel="${f#"$wt"/}"
+      [ "${_TEAM_WTREP_TRACKED[$wt|$rel]:-}" = "1" ] || return 1
+      [ "${_TEAM_WTREP_BROKEN[$wt]:-}" = "1" ] && return 1   # diff 失败：原实现对每份文件都判「不算已提交」
+      [ "${_TEAM_WTREP_DIRTY[$wt|$rel]:-}" = "1" ] && return 1
+      return 0
+    fi
+  fi
   dir="$(git -C "$(dirname "$f")" rev-parse --show-toplevel 2>/dev/null || true)"
   [ -n "$dir" ] || return 1
   git -C "$dir" ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || return 1
@@ -67,6 +85,12 @@ team_branch_squash_merged() { # <worktree> → 0=内容已在保护分支里
   case "$lookback" in ''|*[!0-9]*) lookback=200 ;; esac
   tree="$(git -C "$wt" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
   [ -n "$tree" ] || return 1
+  # M50：保护分支的 tree 清单一个纪元读一次（原来每个工作树一次 git log）
+  if team_scan_cache_on; then
+    _team_prot_trees_load
+    printf '%s\n' "$_TEAM_PROT_TREES" | grep -qx "$tree"
+    return
+  fi
   git -C "$wt" log --format=%T --max-count="$lookback" "$TEAM_PROTECTED_BRANCH" 2>/dev/null | grep -qx "$tree"
 }
 
@@ -114,12 +138,12 @@ team_reports_pending_list() { # [候选清单] [--actionable] → 每行 "<id>\t
   while IFS=$'\t' read -r id path; do
     [ -n "$id" ] || continue
     # M9.4 ③：看板已裁决（done/closed）→ 不列。跳过的那些由 team_reports_skipped_by_board 点名。
-    case "$(team_board_status "$id")" in done|closed) continue ;; esac
+    team__board_status "$id"; case "$_R" in done|closed) continue ;; esac
     # M9.8：草稿不叫醒（标注但不计数）。
     if [ "$only_actionable" = "1" ] && team_report_is_draft "$path"; then continue; fi
-    base="$(basename "$path" .md)"
-    if [ -f "$(team_review_record_path "$id")" ]; then
-      note="$(team_review_record_note "$id")"
+    base="${path##*/}"; base="${base%.md}"
+    if [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ]; then
+      team__review_record_note "$id"; note="$_R"
       [ -n "$note" ] || continue          # 记录有效且新鲜 → 不算待办
       printf '%s\t%s [%s]\t%s\n' "$id" "$base" "$note" "$path"
     else
@@ -134,16 +158,16 @@ team_report_candidates() { # → 每行 "<id>\t<路径>"
   local glob base id rank pass
   for glob in "$TEAM_DOCS_ABS/reports/"*.md; do
     [ -f "$glob" ] || continue
-    base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"   # F6：id 可以带 '-'，按最长已知前缀取
+    base="${glob##*/}"; base="${base%.md}"; team__report_task_id "$glob"; id="$_R"   # F6：id 可以带 '-'，按最长已知前缀取
     team_report_is_task "$glob" "$id" || continue
     printf '%s\t%s\n' "$id" "$glob"
   done
   for pass in 1 2; do
     for glob in "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/"$TEAM_DOCS_DIR"/reports/*.md; do
       [ -f "$glob" ] || continue
-      base="$(basename "$glob" .md)"; id="$(team_report_task_id "$glob")"
+      base="${glob##*/}"; base="${base%.md}"; team__report_task_id "$glob"; id="$_R"
       team_report_is_task "$glob" "$id" || continue
-      rank="$(team_report_copy_rank "$glob" "$id")"
+      team__report_copy_rank "$glob" "$id"; rank="$_R"
       [ "$rank" = "$pass" ] || continue
       printf '%s\t%s\n' "$id" "$glob"
     done
@@ -156,29 +180,51 @@ team_report_candidates() { # → 每行 "<id>\t<路径>"
 #       或派单记录说它现在的任务就是这个（team_state_get），或它 HEAD 就是 task/<ID>
 #   2 = 继承副本：以上都不是 —— 文件是历史/叠分支带过来的（apply 分支建在 propose 分支上，D16）
 team_report_copy_rank() { # <报告路径> <id> → 0|1|2
+  team__report_copy_rank "$@"; printf '%s\n' "$_R"
+}
+
+team__report_copy_rank() { # <报告路径> <id> → _R = 0|1|2（M50 进程内变体）
   local rep="$1" id="$2" who wt branch
   case "$rep" in
     "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*) ;;
-    *) printf '0\n'; return 0 ;;
+    *) _R=0; return 0 ;;
   esac
+  # M50：纪元内 memo（digest 对同一（报告， id) 在两个 pass 与各显示段落里重复问）
+  if team_scan_cache_on && [ -n "${_TEAM_REP_RANK[$rep|$id]+x}" ]; then
+    _R="${_TEAM_REP_RANK[$rep|$id]}"; return 0
+  fi
+  local rank=2 base
   who="${rep#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; who="${who%%/*}"
-  case "$(basename "$rep" .md)" in "$id-$who") printf '1\n'; return 0 ;; esac
-  [ "$(team_state_get "$who" task '')" = "$id" ] && { printf '1\n'; return 0; }
-  wt="$(team_agent_worktree "$who")"
-  branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  case "$branch" in "$TEAM_TASK_BRANCH_PREFIX/$id") printf '1\n'; return 0 ;; esac
-  printf '2\n'
+  base="${rep##*/}"; base="${base%.md}"
+  case "$base" in "$id-$who") rank=1 ;; esac
+  if [ "$rank" != "1" ]; then
+    team__state_get "$who" task ''
+    [ "$_R" = "$id" ] && rank=1
+  fi
+  if [ "$rank" != "1" ]; then
+    wt="$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/$who"   # = team_agent_worktree（一行 printf，热循环里省下 fork）
+    team__worktree_branch "$wt"; branch="$_R"   # M50：进程内缓存（原来是每份报告一次 rev-parse）
+    case "$branch" in "$TEAM_TASK_BRANCH_PREFIX/$id") rank=1 ;; esac
+  fi
+  if team_scan_cache_on; then _TEAM_REP_RANK[$rep|$id]="$rank"; fi
+  _R="$rank"
 }
 
 # 每个任务只留一份副本（优先级见 team_report_candidates）；返回的这份就是 digest / status 说的那份。
 team_report_primary_candidates() { # → 每行 "<id>\t<路径>"
-  local id path ids=" "
+  # M50：纪元内 memo（digest 一拍里 pending 计数、[3] 清单、看板跳过清单共用同一份扫描）
+  if team_scan_cache_on && [ "${_TEAM_CANDS_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ]; then
+    printf '%s' "$_TEAM_CANDS_OUT"; return 0
+  fi
+  local id path ids=" " out=""
   while IFS=$'\t' read -r id path; do
     [ -n "$id" ] || continue
     case "$ids" in *" $id "*) continue ;; esac
     ids="$ids$id "
-    printf '%s\t%s\n' "$id" "$path"
+    out="${out}${id}"$'\t'"${path}"$'\n'
   done < <(team_report_candidates)
+  if team_scan_cache_on; then _TEAM_CANDS_OUT="$out"; _TEAM_CANDS_EPOCH="$_TEAM_SCAN_EPOCH"; fi
+  printf '%s' "$out"
 }
 
 # M9.8：唤醒判定的「待复验」= digest [3] **可行动**列表的行数：同一个函数、同一套过滤
@@ -245,9 +291,18 @@ team_git_upstream_ahead() { # <worktree> → 见上
 team_git_cols() { # <worktree> → "branch dirty ahead-of-protected ahead-of-upstream"
   local wt="$1" branch dirty ahead
   [ -d "$wt" ] || { printf -- '-\t-\t-\t-\n'; return 0; }
-  branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-')"
+  branch="$(team_worktree_branch "$wt")"   # M50：进程内缓存（原：rev-parse --abbrev-ref HEAD）
+  [ -n "$branch" ] || branch="-"
   dirty="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-  if git -C "$wt" rev-parse --verify -q "$TEAM_PROTECTED_BRANCH" >/dev/null 2>&1; then
+  # M50：保护分支存在性走纪元内的 refs 缓存（原：rev-parse --verify）
+  if team_scan_cache_on; then
+    _team_ref_cache_load
+    if [ -n "${_TEAM_REF_TIP[$TEAM_PROTECTED_BRANCH]:-}" ]; then
+      ahead="$(git -C "$wt" rev-list --count "$TEAM_PROTECTED_BRANCH..HEAD" 2>/dev/null || echo '?')"
+    else
+      ahead="?"
+    fi
+  elif git -C "$wt" rev-parse --verify -q "$TEAM_PROTECTED_BRANCH" >/dev/null 2>&1; then
     ahead="$(git -C "$wt" rev-list --count "$TEAM_PROTECTED_BRANCH..HEAD" 2>/dev/null || echo '?')"
   else
     ahead="?"
@@ -386,6 +441,7 @@ team_cmd_ps() {
 
 team_cmd_status() {
   team_require_docs
+  team_scan_warm   # M50
   local id="${1:-}"
   team_cmd_roster
   # 延后队列非空时补一行（delivery-guard 的可见性；空队列不打印任何东西）
@@ -468,6 +524,7 @@ team_record_task_id() { # <相对主仓路径> → 候选任务 id（取不到 �
 
 team_cmd_digest() {
   team_require_docs
+  team_scan_warm   # M50：预热进程内扫描缓存，之后所有判定函数吃热缓存（判定逻辑不变）
   team_hdr "teamsmith digest · $TEAM_PROJECT · $(team_timestamp)"
 
   local live=0 total=0 a
