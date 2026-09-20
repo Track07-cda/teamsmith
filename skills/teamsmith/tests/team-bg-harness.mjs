@@ -211,7 +211,11 @@ const settledCounts = () => ledger().map(l => Number(/ settled-with-unharvested=
 // 共享根（主工作树）不得收到这个作业的任何痕迹。
 {
   try { execFileSync('git', ['-C', ROOT, 'add', '-A'], { stdio: 'ignore' }) } catch {}
-  try { execFileSync('git', ['-C', ROOT, 'commit', '-qm', 'fixture'], { stdio: 'ignore' }) } catch {}
+  // M47: a runner/container has no global git identity — pass one explicitly, or the commit
+  // (and with it the linked worktree below) silently never happens and S11 goes red.
+  try {
+    execFileSync('git', ['-C', ROOT, '-c', 'user.email=harness@teamsmith', '-c', 'user.name=harness', 'commit', '-qm', 'fixture'], { stdio: 'ignore' })
+  } catch {}
   const WT = join(TMP, 'wt')
   let wtOk = true
   try { execFileSync('git', ['-C', ROOT, 'worktree', 'add', '-b', 'wt-branch', WT], { stdio: 'ignore' }) } catch { wtOk = false }

@@ -781,6 +781,14 @@ async function main(): Promise<void> {
   app = render(panelElement(), {
     exitOnCtrlC: false,
     patchConsole: false,
+    // M47: Ink 7 treats ANY CI environment (`is-in-ci`) as non-interactive and then silently
+    // drops every frame — in that mode only <Static> output is written, so a pulse window on a
+    // runner (or in any container that inherits CI) stays blank while the process looks healthy.
+    // A tmux pane is a real terminal regardless of CI, and the panel's own contract is TTY-based
+    // (`--ui auto`: non-TTY → plain text / `--print`), so pin `interactive` to the TTY fact
+    // instead of Ink's CI heuristic. Flip evidence: smoke 26-m's `CI=1` pane case goes red again
+    // when this option is removed.
+    interactive: Boolean(process.stdout.isTTY),
     // Kitty keyboard support is opt-in: `shift+enter` exists only if the terminal reports it
     // (auto mode never enables the protocol on a terminal that does not answer the query).
     kittyKeyboard: { mode: 'auto' },

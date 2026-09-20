@@ -461,8 +461,14 @@ if [ -n "$JS_RUNNER" ]; then
   # P16：两个 skill 都必须是合法可加载的（解析器期望的 name = 目录名）。
   for P16_SD in "$SKILL_DIR" "$SKILL_INIT_DIR"; do
     P16_SL="$TMP/skill-load-$(basename "$P16_SD").log"
-    if $JS_RUNNER "$SKILL_DIR/tests/skill-load.mjs" "$P16_SD" >"$P16_SL" 2>&1; then
+    $JS_RUNNER "$SKILL_DIR/tests/skill-load.mjs" "$P16_SD" >"$P16_SL" 2>&1
+    P16_RC=$?
+    if [ "$P16_RC" = "0" ]; then
       ok "skill-load $(basename "$P16_SD")：$(head -1 "$P16_SL")"
+    elif [ "$P16_RC" = "2" ]; then
+      # 退出码 2 = **本机没有 pi 的解析器**（skill-load.mjs 自己打印 SKIP 行），不是 skill 不合法。
+      # M47：这是环境缺失，必须是可见 skip 而不是假红（runner 上没有 pi；装了 pi 的机器照旧跑）。
+      cond_skip "skill-load $(basename "$P16_SD")" "$(head -1 "$P16_SL")"
     else
       bad "skill-load 失败（$(basename "$P16_SD")）"; cat "$P16_SL"
     fi
@@ -1976,8 +1982,27 @@ BARE_DIR="$TMP/m81-bare-bin"; mkdir -p "$BARE_DIR"
 printf '#!/bin/sh\nsleep 300\n' > "$BARE_DIR/pm-bare"; chmod +x "$BARE_DIR/pm-bare"
 # M25：登录 shell 探针一律 </dev/null —— 后台进程组里读 tty 会吃 SIGTTIN 被停住（0% CPU 像挂死），
 # 登录 profile（distrobox 的 host-spawn）就会碰 tty。门禁不该依赖调用者的 tty。
-assert_eq "夹具有效：登录 bash 看不到 $BARE_DIR（否则下面那条是假绿）" \
-  "$(env PATH="$BARE_DIR:$PATH" bash -lc 'command -v pm-bare || echo MISSING' </dev/null)" "MISSING"
+# M47：探针也不能赌「本机 profile 会重设 PATH」——distrobox 会，runner/普通容器的 /etc/profile 不会，
+# 同一句断言在两台机器上语义不同（CI 实测假红）。夹具改成构造性的：给登录 shell 一个受控 HOME，
+# 里面的 .bash_profile 明确把 PATH 重置成系统默认值。翻转：删掉这里的 HOME 注入 → 探针恢复成「看本机脸色」。
+login_shell_hides() { # <目录> <名字> → 它打印的 command -v 结果（看不到 → MISSING）
+  local dir="$1" name="$2" home
+  home="$(mktemp -d "$TMP/login-home.XXXXXX")"
+  printf 'PATH=/usr/bin:/bin\nexport PATH\n' > "$home/.bash_profile"
+  env HOME="$home" PATH="$dir:$PATH" bash -lc "command -v $name || echo MISSING" </dev/null
+}
+
+# M47：`#{bracket_paste_flag}` 是 tmux **3.7 起**才有的格式（同族的旧 tmux 上产品保守地走「多行落文件
+# + 一行指针」，那不是缺陷，是无从探测）。自建一个微 session 问一句，不赌调用者有没有 server。
+tmux_has_bracket_paste_format() {
+  local s="bpf-$$" v
+  tmux new-session -d -s "$s" -x 80 -y 24 'sleep 5' 2>/dev/null || return 1
+  v="$(tmux display-message -p -t "$s" '#{bracket_paste_flag}' 2>/dev/null)"
+  tmux kill-session -t "$s" 2>/dev/null || true
+  [ -n "$v" ]
+}
+assert_eq "夹具有效：登录 bash 看不到 $BARE_DIR（否则下面那条是假绿；受控 HOME profile，不赌本机 profile）" \
+  "$(login_shell_hides "$BARE_DIR" pm-bare)" "MISSING"
 assert_eq "夹具有效：调用者 PATH 看得到它" \
   "$(env PATH="$BARE_DIR:$PATH" bash -c 'command -v pm-bare || echo MISSING')" "$BARE_DIR/pm-bare"
 BARE_RENDER="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" "PATH=$BARE_DIR:$PATH" \
@@ -2336,7 +2361,7 @@ section "6j · worker adapter：裸名字解析 + agent 没跑起来必须响亮
 M82_BARE_DIR="$TMP/m82-bare-bin"; mkdir -p "$M82_BARE_DIR"
 printf '#!/bin/sh\nsleep 300\n' > "$M82_BARE_DIR/worker-bare"; chmod +x "$M82_BARE_DIR/worker-bare"
 assert_eq "M8.2 夹具有效：登录 bash 看不到 $M82_BARE_DIR（否则下面那条是假绿）" \
-  "$(env PATH="$M82_BARE_DIR:$PATH" bash -lc 'command -v worker-bare || echo MISSING')" "MISSING"
+  "$(login_shell_hides "$M82_BARE_DIR" worker-bare)" "MISSING"   # M47：受控 HOME profile（同 6i ②c）
 assert_eq "M8.2 夹具有效：调用者 PATH 看得到它" \
   "$(env PATH="$M82_BARE_DIR:$PATH" bash -c 'command -v worker-bare || echo MISSING')" "$M82_BARE_DIR/worker-bare"
 env PATH="$M82_BARE_DIR:$PATH" TEAM_AGENT_CMD='worker-bare --pf {prompt_file} --ask {prompt}' \
@@ -5614,6 +5639,11 @@ if [ "$FAST" = "1" ]; then
   fast_skip "12b-h·真 pane 端到端（守卫/排水/草稿窗口）" "要真 tmux pane + python3 夹具 TUI（清空输入框、多行粘贴、draft 窗口）"
 elif [ "$HAVE_TMUX" != "1" ] || ! command -v python3 >/dev/null 2>&1; then
   printf '  (跳过 12b-h：本机没有 tmux 或 python3)\n'
+elif ! tmux_has_bracket_paste_format; then
+  # M47：多行投递的整段判据（一次 bracketed paste = 一次提交 / 竞态留框 / 收回）建立在
+  # 「能问出目标有没有开 DECSET 2004」上，而那个格式 tmux ≥3.7 才有。旧 tmux 上产品走指针文件的
+  # 保守降级，这些断言测不了 —— 可见 skip + 点名版本（容器门禁钉 tmux 3.7b，照跑全套）。
+  cond_skip "12b-h·真 pane 端到端（守卫/排水/草稿窗口）" "$(tmux -V)：没有 #{bracket_paste_flag} 格式（tmux ≥3.7 才有）→ 多行粘贴判据无法测"
 else
   live_mark
   FTUI="$SKILL_DIR/tests/fake-tui.py"
@@ -8255,8 +8285,16 @@ assert_has "$TMP/p10-doctor-old.log" "20" "26-k 运行时：失败行点名最�
 p10m $TEAM paths >"$TMP/p10-paths.log" 2>&1
 assert_match "$TMP/p10-paths.log" '"js_runner": "/' "26-k paths：报出解析到的运行时绝对路径"
 assert_has "$TMP/p10-paths.log" '"require_js": "1"' "26-k paths：报出 require_js 默认 1"
-p10m env TEAM_JS_BIN=/usr/bin/node $TEAM paths >"$TMP/p10-paths-jsbin.log" 2>&1
-assert_has "$TMP/p10-paths-jsbin.log" '"js_runner": "/usr/bin/node"' "26-k paths：TEAM_JS_BIN 优先"
+# M47：不能写死 /usr/bin/node —— runner 的 node 在 hostedtoolcache 里、容器里在 /usr/local/bin，
+# 写死路径会把「TEAM_JS_BIN 优先」测成环境探测。用**本机实际解析到的那份**绝对路径当夹具，
+# 判据不变（报出的就是传进去的那份），在任何装了 node/bun 的机器上都有意义。
+P10_JS_FIXTURE="$(command -v node || command -v bun || true)"
+if [ -n "$P10_JS_FIXTURE" ]; then
+  p10m env TEAM_JS_BIN="$P10_JS_FIXTURE" $TEAM paths >"$TMP/p10-paths-jsbin.log" 2>&1
+  assert_has "$TMP/p10-paths-jsbin.log" "\"js_runner\": \"$P10_JS_FIXTURE\"" "26-k paths：TEAM_JS_BIN 优先（点名传进去的绝对路径）"
+else
+  cond_skip "26-k paths：TEAM_JS_BIN 优先" "本机没有 node/bun（运行时解析整段都由 26-k 的负例覆盖）"
+fi
 p10m env TEAM_REQUIRE_JS=0 $TEAM paths >"$TMP/p10-paths-reqjs.log" 2>&1
 assert_has "$TMP/p10-paths-reqjs.log" '"require_js": "0"' "26-k paths：TEAM_REQUIRE_JS=0 反映在 paths 里"
 
@@ -8338,10 +8376,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   P10_SCOPE="$P10SESS"
   P10_OTHER="${SESSION}-other-$$"
   P10_SMOKE_WINDOWS_BEFORE="$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | wc -l | tr -d ' ')"
-  p10_panel_cmd() { # <log-glob|->  → 窗口里跑的面板命令
-    printf "cd '%s' && HOME='%s' TEAM_PI_AGENT_DIR='%s/.pi/agent' TEAM_STATE_DIR='%s' %s bash '%s/scripts/team' monitor --no-pulse --interval %s" \
-      "$P10R" "$P10_HOME" "$P10_HOME" "$P10_TRUE_STATE" \
-      "$([ "$1" = "-" ] && echo '' || printf "TEAM_AGENT_LOG_GLOB='%s'" "$1")" "$SKILL_DIR" "$2"
+  p10_panel_cmd() { # <log-glob|-> <interval> [extra-env…]  → 窗口里跑的面板命令
+    local p10_glob="" p10_extra="${3:+$3 }"
+    [ "$1" != "-" ] && p10_glob="TEAM_AGENT_LOG_GLOB='$1' "
+    printf "cd '%s' && HOME='%s' TEAM_PI_AGENT_DIR='%s/.pi/agent' TEAM_STATE_DIR='%s' %s%s bash '%s/scripts/team' monitor --no-pulse --interval %s" \
+      "$P10R" "$P10_HOME" "$P10_HOME" "$P10_TRUE_STATE" "$p10_glob" "$p10_extra" "$SKILL_DIR" "$2"
   }
   # M20（同族复查）：26-m 的「首帧 / 重绘 / 动作回响 / 节拍 / tick 节奏」都是**实现速度**断言，
   # 不是契约超时 —— 负载下单次固定 sleep 会假红（F-V16-10 的同族形状；26-m 回响实测红过一次：
@@ -8399,6 +8438,20 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     bad "26-m 真 pane：20s 内没渲染出标题带（pane=$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | wc -c) 字节）"
   fi
   assert_eq "26-m 真 pane：capture 里 0 个 ESC 字节" "$(printf '%s' "$P10_CAP" | tr -cd '\033' | wc -c | tr -d ' ')" "0"
+  # M47 翻转证据：Ink 7 的 `is-in-ci` 启发式把任何 CI 环境当**非交互**，而非交互模式只写 <Static>
+  # —— 面板一帧都不写，pane 只剩标题带上那个绕过 React 的时钟（CI 上 26-m / wd-logs / 32⑧b 全红）。
+  # 夹具在 pane 的 env 里显式放 CI=1（GitHub Actions 的真实形状，TMUX/TTY 都不变），面板必须照常渲染。
+  # 翻转：把 main.tsx 的 `interactive: Boolean(process.stdout.isTTY)` 删掉 → 这条（以及下面三条）红。
+  P10_CI_SESS="p10-ci-$$"
+  tmux kill-session -t "$P10_CI_SESS" 2>/dev/null || true
+  tmux new-session -d -s "$P10_CI_SESS" -x 120 -y 29 -c "$P10R" -n panel \
+    "$(p10_panel_cmd "$P10_LEFT_LOG" 1 "CI=1")" 2>/dev/null || true
+  if P10_CI_CAP="$(p10_wait_pane "$P10_CI_SESS:panel" 'teamsmith pulse' 20)"; then
+    ok "26-m CI=1：TTY 里的面板照常渲染（Ink 的 CI 启发式不会吃掉整帧；有界轮询 $(p10_wait_ms)ms）"
+  else
+    bad "26-m CI=1：20s 内没渲染出面板标题（pane=$(tmux capture-pane -p -t "$P10_CI_SESS:panel" 2>/dev/null | wc -c) 字节）"
+  fi
+  tmux kill-session -t "$P10_CI_SESS" 2>/dev/null || true
   if printf '%s' "$P10_CAP" | grep -qF 'LEFT-MARKER'; then
     ok "26-m 会话范围：本 session 的 dev 窗口出现在活动列"
   else
@@ -8524,7 +8577,7 @@ print(m)' 2>/dev/null || echo 999)"
   assert_eq "26-m 无第二个窗口：smoke session 的窗口数不变" \
     "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | wc -l | tr -d ' ')" "$P10_SMOKE_WINDOWS_BEFORE"
   assert_eq "26-m 无第二个窗口：夹具 session 已收干净" \
-    "$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c "^$P10_SCOPE$\|^$P10_OTHER$\|^$P10_W2$\|^$P10_W3$" || true)" "0"
+    "$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c "^$P10_SCOPE$\|^$P10_OTHER$\|^$P10_W2$\|^$P10_W3$\|^$P10_CI_SESS$" || true)" "0"
   # ④ 没有运行时时 pulse up 拒绝建窗口
   # M40 迁移：这里以前传 TEAM_SESSION="$SESSION"（smoke 自己的 session），而 --root 是 $P10R（它的
   # 配置声明 $P10SESS）——即「env 与目录故意不同」的夹具。M40 起身份以目录为准，那种形状会先被身份
