@@ -127,6 +127,21 @@ if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
   [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && printf '轮到本套了（排过队）\n'
   printf '%s pid=%s cmd=smoke.sh\n' "$(date -Is)" "$$" > "$SMOKE_LOCK.holder" 2>/dev/null || true
 fi
+# ── P26/G1（1.4）：套件自己的子树上，绝不再去争**机器锁** ────────────────────────────────────
+# 背景：M49 的假 TIMEOUT 就是「门禁命令自己会在机器锁上排队」——修在 cmd-review.sh（排队是 review
+# 自己的阶段），但夹具侧也要封住：一个嵌在门禁里的 `team review` 绝不能替**套件**去碰机器锁。
+#   * 全量模式：本套**已经**持有机器锁（SMOKE_LOCK_WRAPPED=1）→ 嵌套 review 走 held 路径，不排队；
+#   * FAST 模式：本套不持锁（秒级、不起真进程），若不管，一个夹具里的 review 就会和别人正在跑的
+#     全量门禁抢机器锁、白等 1800s（甚至与夹具自己的锁自锁）—— 所以这里给子树一个**私有**锁路径
+#     与 wrapped 标记（夹具自己还会再指一层私有锁，见 tests/smoke.sh 的新段落）。
+# 真实门禁路径（不带 TEAM_SMOKE_FAST）不受影响：全量依旧持真锁，没有锁的人依旧排队。
+if [ "$FAST" = "1" ]; then
+  if [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
+    TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/teamsmith-smoke-fast-$$.lock"
+    export TEAM_SMOKE_LOCK
+  fi
+  export SMOKE_LOCK_WRAPPED=1
+fi
 live_mark() { LIVE_RAN=$((LIVE_RAN + 1)); }
 fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯一的出口（必须打印）
   SKIP_N=$((SKIP_N + 1))
@@ -8901,18 +8916,99 @@ fi
 # loadavg 7–8 时 1323/1417/4118ms → 3 次越线；典型成本 1.24–1.6s，余量只有 0.4–0.7s）——
 # 正常团队并发就能碰线，一次假红要浪费整轮复验（~350s）。现在取 5 次采样的**中位**：语义从
 # 「单次不快即坏」变成「典型不快才坏」，预算仍是 2000ms（没有放宽）。单次尖峰由中位吸收；
-# 中位越线才红 —— 下面的「判定自检」把这两个方向都钉住。
+# 中位越线才红 —— 「判定自检」把这两个方向都钉住。
+#
+# P26/G2（panel#Frame assembly is asynchronous… MODIFIED）：2000ms / 1% 是**面板**的判定，不是
+# 机器的判定 —— 所以它们只在**测量前提**成立时判：loadavg_1m ≤ 0.75 × 逻辑核数。实测标定：M49 的
+# 假红发生在 load 26–32 / 32 核（0.81–1.0 × 核）；阈值 0.75 × 核（=24）跳过那个形状。前提不成立时
+# **可见地 SKIP**（打印样本、中位、load 与阈值），计数进 P27_TIMING_SKIP（**不是** SKIP_N：14c 拿
+# SKIP_N 审计 FAST 分段），并在结果块里点名 —— SKIP 既不是通过也不是红。
+# 夹具旋钮（**只在夹具模式生效**）：TEAM_SMOKE_FIXTURE=1 打开后，TEAM_SMOKE_LOADAVG /
+# TEAM_SMOKE_CORES / TEAM_SMOKE_FRAME_DELAY_MS 才被采信；裸设置一律**忽略并打印**（否则“负载前提”
+# 就成了“想跳就跳”的后门 —— PM 审查要点②。真路径的三个断点在 §35）。
+P27_TIMING_SKIP=0; P27_TIMING_SKIP_NAMES=""; P27_TIMING_SKIP_LOAD=""
+p27_fixture_on() { [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; }
+p27_ignore_notice() { # <变量名> <值>（走 stderr：调用方常把本函数的结果放进 $( )）
+  printf '  \033[33m忽略 %s=%s\033[0m：只有夹具模式（TEAM_SMOKE_FIXTURE=1）接受注入；真实路径读真值\n' "$1" "$2" >&2
+}
+p27_load_reading() { # → loadavg_1m（夹具模式才认注入）
+  if [ -n "${TEAM_SMOKE_LOADAVG:-}" ]; then
+    if p27_fixture_on; then printf '%s\n' "$TEAM_SMOKE_LOADAVG"; return 0; fi
+    p27_ignore_notice TEAM_SMOKE_LOADAVG "$TEAM_SMOKE_LOADAVG"
+  fi
+  cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?'
+}
+p27_cores() { # → 逻辑核数（夹具模式才认注入）
+  if [ -n "${TEAM_SMOKE_CORES:-}" ]; then
+    if p27_fixture_on; then printf '%s\n' "$TEAM_SMOKE_CORES"; return 0; fi
+    p27_ignore_notice TEAM_SMOKE_CORES "$TEAM_SMOKE_CORES"
+  fi
+  nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0'
+}
+# 前提本身：打印「load / 核数 / 阈值 / 决定」一行，返回 0=成立（照判）、1=不成立（SKIP）。
+# 读数或核数不可用（空/非数字/0）一律算不成立 —— 测不准就不判红。
+p27_perf_premise() {
+  local load cores thr
+  load="$(p27_load_reading)"; cores="$(p27_cores)"
+  case "$cores" in ''|*[!0-9]*) cores=0 ;; esac
+  thr="$(awk -v c="$cores" 'BEGIN { printf "%.2f", 0.75 * c }')"
+  if [ "$cores" -gt 0 ] && awk -v l="$load" -v t="$thr" 'BEGIN { exit !(l <= t) }'; then
+    printf '  负载前提：loadavg %s ≤ 阈值 %s（0.75 × %s 核）→ 成立（照判）\n' "$load" "$thr" "$cores"
+    return 0
+  fi
+  printf '  负载前提：loadavg %s > 阈值 %s（0.75 × %s 核）→ **不成立**（计时断言 SKIP；阈值本身不动）\n' "$load" "$thr" "$cores"
+  return 1
+}
+TIMING_SKIP() { # <断言名> <原因>
+  P27_TIMING_SKIP=$((P27_TIMING_SKIP + 1))
+  P27_TIMING_SKIP_NAMES="${P27_TIMING_SKIP_NAMES}${1} "
+  P27_TIMING_SKIP_LOAD="$(p27_load_reading)"
+  printf '  \033[33mSKIP（负载前提不成立）\033[0m %s —— %s\n' "$1" "$2"
+}
+# 27-d 的判定本体，两层：
+#   p27_assembly_rc    —— **纯判定**（0 绿 / 1 红 / 2 SKIP）：不打印、不计数。夹具与翻转用它，
+#                         这样「预期会红」的夹具不会污染门禁自己的 ✗ 计数（实测踩过：35b 的预期红
+#                         把套件 ✗ 从 0 抬到 1）。
+#   p27_assembly_judge —— 真路径入口（27-d 调用）：先打印前提一行，再按判定记 ok/bad，或记
+#                         TIMING_SKIP（负载前提不成立时）。
+p27_assembly_rc() { # <中位数ms>
+  local med="$1"
+  p27_perf_premise >/dev/null 2>&1 || return 2
+  [ "$med" -le 2000 ] && return 0 || return 1
+}
+p27_assembly_judge() { # <中位数ms> <样本文本> <采样数> → 0 绿 / 1 红 / 2 SKIP
+  # 前提**只评一次**：本函数自己判 premise，不再经 p27_assembly_rc（那一版会评两次，两次读到的
+  # loadavg 可能不同 ⇒ 同一次运行里出现「前提成立」与「SKIP」两句自相矛盾的话；实测在门禁里抓到）。
+  local med="$1" obs="$2" n="$3"
+  if ! p27_perf_premise; then
+    TIMING_SKIP "27-d 装配红线" "loadavg $(p27_load_reading) > 0.75 × $(p27_cores)；样本 ${obs}ms（中位 ${med}ms）—— 判定留给安静机器"
+    return 2
+  fi
+  if [ "$med" -le 2000 ]; then
+    ok "27-d 装配红线：${n} 次采样的中位 ${med}ms ≤ 2000ms（样本 ${obs}ms；采样时 loadavg $(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')）"
+    return 0
+  fi
+  bad "27-d 装配红线：${n} 次采样的中位 ${med}ms（> 2000ms；样本 ${obs}ms；loadavg $(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?') —— 负载前提成立时这就是面板的问题）"
+  return 1
+}
 # TEAM_SMOKE_FRAME_DELAY_MS=<ms>：只给翻转演练用的注入延迟（每个采样都注入 = 每帧都慢）——
 # 正常门禁不设这个变量；设上之后中位必须越线变红（剧场检查：证明新断言没被改成永远绿）。
 P27_SAMPLES=5
-P27_INJECT_MS="${TEAM_SMOKE_FRAME_DELAY_MS:-0}"
+p27_inject_ms() { # → 注入延迟（ms）；只有夹具模式认 TEAM_SMOKE_FRAME_DELAY_MS
+  local v="${TEAM_SMOKE_FRAME_DELAY_MS:-}"
+  if [ -n "$v" ]; then
+    if p27_fixture_on; then printf '%s\n' "$v"; return 0; fi
+    p27_ignore_notice TEAM_SMOKE_FRAME_DELAY_MS "$v"
+  fi
+  printf '0\n'
+}
+P27_INJECT_MS="$(p27_inject_ms)"
 case "$P27_INJECT_MS" in ''|*[!0-9]*) P27_INJECT_MS=0 ;; esac
 P27_INJECT_S="$(awk -v ms="$P27_INJECT_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
 p27_median() { # <数字…> → 中位（调用方保证样本数为奇数）
   printf '%s\n' "$@" | sort -n | awk '{a[NR] = $1} END {print a[int((NR + 1) / 2)]}'
 }
 P27_OBS=()
-P27_LOADAVG="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')"   # 判红时一眼能看出是不是并发负载
 for _p27i in $(seq 1 "$P27_SAMPLES"); do
   P27_T0="$(date +%s%3N)"
   p27 $TEAM monitor --print --no-activity >"$TMP/p27-timed.txt" 2>/dev/null
@@ -8922,11 +9018,7 @@ done
 P27_MS="$(p27_median "${P27_OBS[@]}")"
 P27_OBS_TXT="$(printf '%s, ' "${P27_OBS[@]}")"
 P27_OBS_TXT="${P27_OBS_TXT%, }"
-if [ "$P27_MS" -le 2000 ]; then
-  ok "27-d 装配红线：${P27_SAMPLES} 次采样的中位 ${P27_MS}ms ≤ 2000ms（样本 ${P27_OBS_TXT}ms；采样时 loadavg ${P27_LOADAVG}）"
-else
-  bad "27-d 装配红线：${P27_SAMPLES} 次采样的中位 ${P27_MS}ms（> 2000ms；样本 ${P27_OBS_TXT}ms；采样时 loadavg ${P27_LOADAVG} —— 若 loadavg 高则是共享机器上的并发争用，不是单次尖峰）"
-fi
+p27_assembly_judge "$P27_MS" "$P27_OBS_TXT" "$P27_SAMPLES" || true
 # 判定自检（不启动进程，只测判定本身）：① 单次越线不红；② 中位越线必须红。
 # 少了这两条，『中位』这个判定自己坏了（比如排序写错、取错元素）也看不出来。
 if [ "$(p27_median 1240 1417 2030 1400 1500)" -le 2000 ] && [ "$(p27_median 2100 2050 2200 1900 2300)" -gt 2000 ]; then
@@ -10885,10 +10977,255 @@ _para_repo="$(awk '/\*\*The change is the assignment unit\*\*/,/while a sibling 
 assert_eq "7.4 repo AGENTS.md 与模板逐字一致（模板是源）" "$_para_repo" "$_para_tmpl"
 assert_has "$SKILL_DIR/templates/PROTOCOL.md.tmpl" "The change is the assignment unit" "7.4 PROTOCOL 模板也带这段"
 
+section "34 · 门禁锁：排队/运行分开记账（P26/G1：verification#The hard timeout covers the gate run, not the queue）"
+# 事故（M49，2026-09-20）：`team review` 的硬超时把**排队**也算进去了 —— 门禁命令自己在机器锁上排了
+# 930s、跑了 870s，就被记成 TIMEOUT，而同一个 HEAD 在机器安静后是 PASS 的。本段钉住修复后的形状：
+#   ① 排队不消耗运行预算（排队 + 运行 > 上限 仍判 PASS）；② 排队超上限 = FAIL 并点名持锁者（不是 TIMEOUT）；
+#   ③ 真跑超限仍是 TIMEOUT 且带 ran=Ns；④ 祖先持锁不再二次排队；⑤ 没有 flock 就打印降级；
+#   ⑥ 三种结局下 `team_review_verdict` 仍解析出正确的 token（记录词汇是闭集，且记账写在粗体 token 之外）。
+# 安全：本段所有的锁都是**私有路径**（$TMP/p34-lock）—— 绝不碰机器锁 ${TMPDIR:-/tmp}/teamsmith-smoke.lock；
+# 持锁助手随方案退出即释放；身份隔离（-u TEAM_*/SMOKE_*）与 §27 的夹具同形。
+P34D="$TMP/p34"; P34R="$P34D/repo"; P34_LOCK="$P34D/lock"; P34_SHIM="$P34D/shim"
+P34_TMUX_LOG="$P34D/tmux-calls.log"; P34_HOLDER=""; : > "$P34_TMUX_LOG"
+rm -rf "$P34D"; mkdir -p "$P34R" "$P34_SHIM"
+( cd "$P34R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo "# p34" > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+p34() { ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+            -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+            -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+            "$@" ); }
+p34 $TEAM init --session "smoke-p34-$$" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$P34D/init.log" 2>&1 \
+  && ok "34 夹具：沙盒 init 退出码 0" || { bad "34 夹具：init 失败"; tail -3 "$P34D/init.log"; }
+mkdir -p "$P34R/docs/team/reports" "$P34R/docs/team/reviews"
+printf '# T1.1 · 夹具报告\n\nagent: dev\n' > "$P34R/docs/team/reports/T1.1-dev.md"
+# 持锁助手：flock -x 持住私有锁，随方案退出即释放；同时写 <lock>.holder（review 读它点名持锁者）。
+p34_hold() { # <秒>
+  : >>"$P34_LOCK"; rm -f "$P34_LOCK.holder"
+  flock -x "$P34_LOCK" sleep "$1" &
+  P34_HOLDER=$!
+  sleep 0.4
+  printf '%s pid=%s cmd=p34-holder\n' "$(date -Is)" "$P34_HOLDER" > "$P34_LOCK.holder"
+}
+p34_release() { [ -n "$P34_HOLDER" ] && { kill "$P34_HOLDER" 2>/dev/null; wait "$P34_HOLDER" 2>/dev/null; }; P34_HOLDER=""; }
+# 身份干净 + 私有锁 + 沙盒脏树覆盖（夹具仓的 docs/team 本来就是 init 出来的未提交内容）
+p34_review() { # <out> <timeout> <lock_wait> <gates> [extra env assignments…]
+  local out="$1" tlim="$2" cap="$3" gates="$4"; shift 4
+  ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED \
+      TEAM_SMOKE_LOCK="$P34_LOCK" TEAM_SMOKE_LOCK_WAIT="$cap" TEAM_GATES="$gates" \
+      TEAM_REVIEW_TIMEOUT="$tlim" TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 "$@" \
+      $TEAM review T1.1 --dir "$P34R" --branch main ) >"$out" 2>&1
+}
+p34_record() { printf '%s' "$P34R/docs/team/reviews/T1.1.md"; }
+p34_verdict() { # 用 CLI 自己的解析器（common.sh 的 team_review_verdict），不是本段自己写正则
+  ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      TEAM_DOCS_ABS="$P34R/docs/team" bash -c "source '$SKILL_DIR/scripts/lib/common.sh' >/dev/null 2>&1; team_review_verdict T1.1" ) 2>/dev/null
+}
+p34_field() { sed -n "s/$1/\\1/p" "$(p34_record)" 2>/dev/null | head -1; }
+
+# ① 长排队不消耗运行预算（M49 的形状：**门禁命令自己也会去排队** —— 真实门禁命令里 smoke.sh 就是
+#    这样，它会认 SMOKE_LOCK_WRAPPED 这个「祖先已持有」的标记；夹具门禁照抄这个契约）
+p34_hold 7
+P34_RC=0; p34_review "$P34D/a.log" 5 60 '[ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ] || flock -w 60 "$TEAM_SMOKE_LOCK" true; sleep 3' || P34_RC=$?
+p34_release
+P34_Q="$(p34_field '.*queued=\([0-9]*\)s.*')"; P34_R="$(p34_field '.*ran=\([0-9]*\)s.*')"
+assert_eq "34① 排队 + 运行 > 上限 仍判 PASS（rc）" "$P34_RC" "0"
+if [ -n "$P34_Q" ] && [ -n "$P34_R" ] && [ "$((P34_Q + P34_R))" -gt 5 ]; then
+  ok "34① 排队不计入硬超时：queued ${P34_Q}s + ran ${P34_R}s > limit 5s，判定仍 PASS"
+else
+  bad "34① 记账不对（queued=${P34_Q:-无} ran=${P34_R:-无}）—— 记录：$(p34_field '闸门计时.*')"
+fi
+[ "${P34_R:-0}" -ge 2 ] && [ "${P34_R:-0}" -le 5 ] && ok "34① ran 是门禁实际运行秒数（${P34_R}s，3s 门禁 + 启动）" \
+  || bad "34① ran 不对（${P34_R:-无}s）"
+# 门禁没有在锁上白等：它自己也知道锁已被祖先持有（否则就是自己和自己排队 → M49 的 TIMEOUT）
+grep -aq 'SMOKE_LOCK_WRAPPED' "$P34D/a.log" && ok "34① review 把 wrapped 标记交给了门禁（子套件不再二次排队）" \
+  || bad "34① 门禁没有收到 wrapped 标记（嵌套时会自锁）"
+assert_has "$(p34_record)" "limit=5s queued=" "34① 记录带机器可读的三个区间"
+assert_eq "34① team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
+
+# ② 排队超上限：FAIL + 点名持锁者 + 「门禁没有运行」（不是 TIMEOUT）
+p34_hold 20
+P34_RC=0; p34_review "$P34D/b.log" 30 2 'sleep 1' || P34_RC=$?
+p34_release
+assert_eq "34② 排队超上限 → 非 0" "$P34_RC" "1"
+assert_has "$(p34_record)" '判定: **FAIL**' "34② 判定是 FAIL"
+assert_has "$(p34_record)" '门禁没有运行' "34② 记录写明门禁没有运行"
+assert_has "$(p34_record)" 'cmd=p34-holder' "34② 记录点名持锁者（夹具的 holder 记录）"
+assert_eq "34② 排队超限不产生 TIMEOUT 判定" "$(grep -c '判定: \*\*TIMEOUT\*\*' "$(p34_record)" || true)" "0"
+assert_eq "34② team_review_verdict 仍解析出 FAIL" "$(p34_verdict)" "FAIL"
+
+# ③ 真跑超限仍是 TIMEOUT（语义不变）+ ran 记账
+P34_RC=0; p34_review "$P34D/c.log" 2 60 'sleep 60' || P34_RC=$?
+assert_eq "34③ 真跑超上限 → 非 0" "$P34_RC" "1"
+assert_has "$(p34_record)" '判定: **TIMEOUT**' "34③ 判定是 TIMEOUT（语义不变）"
+assert_match "$(p34_record)" 'ran=[0-9]+s' "34③ TIMEOUT 记录带 ran=Ns"
+assert_eq "34③ team_review_verdict 仍解析出 TIMEOUT" "$(p34_verdict)" "TIMEOUT"
+
+# ④ 祖先已持锁：不再二次排队（queued=0s，且不等满）
+p34_hold 10
+P34_T0=$(date +%s)
+P34_RC=0; p34_review "$P34D/d.log" 20 60 'sleep 1' SMOKE_LOCK_WRAPPED=1 || P34_RC=$?
+P34_T1=$(date +%s)
+p34_release
+assert_eq "34④ 祖先持锁 → rc=0" "$P34_RC" "0"
+assert_has "$(p34_record)" '已由祖先持有' "34④ 记录写明已由祖先持有（不二次排队）"
+assert_eq "34④ 不排队：锁被占的 10s 内就返回（实测 $((P34_T1 - P34_T0))s）" "$([ $((P34_T1 - P34_T0)) -lt 8 ] && echo yes || echo no)" "yes"
+assert_eq "34④ team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
+
+# ⑤ 没有 flock：打印降级（不是静默）+ 照跑门禁
+P34_NOFL="$P34D/noflock"; rm -rf "$P34_NOFL"; mkdir -p "$P34_NOFL"
+while IFS= read -r p34t; do
+  [ "$p34t" = "flock" ] && continue
+  p34p="$(command -v "$p34t" 2>/dev/null)" || continue
+  [ -n "$p34p" ] && ln -sf "$p34p" "$P34_NOFL/$p34t" 2>/dev/null || true
+done < <(compgen -c 2>/dev/null | sort -u)
+if [ ! -x "$P34_NOFL/bash" ] || [ -e "$P34_NOFL/flock" ]; then
+  bad "34⑤ 无 flock 夹具没搭好（bash=$([ -x "$P34_NOFL/bash" ] && echo yes || echo no) flock=$([ -e "$P34_NOFL/flock" ] && echo yes || echo no)）"
+else
+  P34_RC=0; p34_review "$P34D/e.log" 30 60 'sleep 1' PATH="$P34_NOFL" || P34_RC=$?
+  assert_eq "34⑤ 没有 flock 也照跑（rc=0，不是静默跳过）" "$P34_RC" "0"
+  assert_match "$P34D/e.log" '门禁排队未启用' "34⑤ 打印了「排队未启用」的降级说明"
+  assert_has "$(p34_record)" '排队未启用' "34⑤ 记录里也写明排队未启用"
+fi
+
+# ⑥ 排队阶段不碰 tmux、不改看板（用 shim 证明：真调用会被记下且失败）
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 1\n' "$P34_TMUX_LOG" > "$P34_SHIM/tmux"; chmod +x "$P34_SHIM/tmux"
+P34_BOARD_BEFORE="$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)"
+p34_hold 4
+P34_RC=0; p34_review "$P34D/f.log" 20 60 'sleep 1' PATH="$P34_SHIM:$PATH" || P34_RC=$?
+p34_release
+assert_eq "34⑥ tmux 被 shim 顶掉也照样跑通（rc=0）" "$P34_RC" "0"
+assert_eq "34⑥ 排队阶段一次 tmux 都没调（shim 日志为空）" "$(grep -c . "$P34_TMUX_LOG" 2>/dev/null || printf 0)" "0"
+assert_eq "34⑥ 看板一个字节没动" "$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)" "$P34_BOARD_BEFORE"
+p34_release
+
+section "35 · 性能前提：负载门与夹具旋钮的边界（P26/G2：panel#Frame assembly is asynchronous… MODIFIED）"
+# 红线本身没动：一帧 2000ms、稳态 1% 单核。变的是**什么时候判** —— 只在
+# `loadavg_1m ≤ 0.75 × 逻辑核数` 时判；前提不成立就打印实测值 + load 并 **SKIP**（既不是通过也不是红）。
+# 两个方向都在这里钉住（PM 审查要点②：“负载前提”不能退化成“想跳就跳”）：
+#   （i）夹具模式下三种结局 + 边界（=阈值算成立、阈值 +0.1 算不成立）；
+#   （ii）**真路径下**（不打开夹具开关）注入被忽略且**不改变判定**，且忽略是打印出来的。
+P35_CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
+if [ "${P35_CORES:-0}" -gt 0 ] 2>/dev/null; then
+  P35_THR="$(awk -v c="$P35_CORES" 'BEGIN { printf "%.2f", 0.75 * c }')"
+  P35_EDGE="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", t }')"
+  P35_OVER="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", t + 0.1 }')"
+  P35_QUIET="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", (t > 1.0) ? t - 1.0 : 0 }')"
+  ok "35 夹具自检：核数 ${P35_CORES} → 阈值 ${P35_THR}（0.75 × 核数），边界用例用 ${P35_EDGE} / ${P35_OVER}"
+else
+  bad "35 夹具自检：读不到逻辑核数（nproc / getconf 都没给）—— 阈值用例自己都站不住"
+  P35_THR=0.75; P35_EDGE=0.75; P35_OVER=0.85; P35_QUIET=0
+fi
+# 真测一次注入：夹具模式下注入被采信，且它真的把一次采样抬过 2000ms 红线
+P35_SLOW=0
+export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_FRAME_DELAY_MS=2600
+P35_INJ="$(p27_inject_ms)"
+unset TEAM_SMOKE_FIXTURE TEAM_SMOKE_FRAME_DELAY_MS
+case "$P35_INJ" in
+  ''|*[!0-9]*) bad "35 注入自检：夹具模式下 TEAM_SMOKE_FRAME_DELAY_MS 没被采信（读到 '$P35_INJ'）" ;;
+  *)
+    P35_T0="$(date +%s%3N)"
+    sleep "$(awk -v ms="$P35_INJ" 'BEGIN { printf "%.2f", ms / 1000 }')"   # 与 27-d 的注入同形（采样窗口里多睡一觉）
+    P35_SLOW=$(( $(date +%s%3N) - P35_T0 ))
+    if [ "$P35_SLOW" -gt 2000 ]; then
+      ok "35 注入自检：夹具模式采信注入（${P35_INJ}ms）→ 一次采样实测 ${P35_SLOW}ms（> 2000ms 红线）"
+    else
+      bad "35 注入自检：注入没把测量抬过线（实测 ${P35_SLOW}ms）"
+    fi ;;
+esac
+# —— 三种结局（用真的慢样本值，不是编造的中位数）
+p35_rc() { # <loadavg> <median ms> → 纯判定（不打印、不计数）
+  local load="$1" med="$2" rc=0
+  export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$load" TEAM_SMOKE_CORES="$P35_CORES"
+  p27_assembly_rc "$med" || rc=$?
+  unset TEAM_SMOKE_FIXTURE TEAM_SMOKE_LOADAVG TEAM_SMOKE_CORES
+  P35_LAST_RC=$rc
+}
+p35_rc "$P35_OVER" "$P35_SLOW"
+assert_eq "35a 负载超前提 + 慢帧 → SKIP（不是红、不是绿）" "$P35_LAST_RC" "2"
+p35_rc "$P35_QUIET" "$P35_SLOW"
+assert_eq "35b 负载低于前提 + 同一个慢帧 → **红**（红线没被前提拿走）" "$P35_LAST_RC" "1"
+p35_rc "$P35_QUIET" 1200
+assert_eq "35c 负载低于前提 + 健康帧 → 绿" "$P35_LAST_RC" "0"
+# —— 边界：等于阈值算成立（≤），阈值 +0.1 算不成立
+p35_rc "$P35_EDGE" 1200
+assert_eq "35d 边界：loadavg == 阈值（${P35_EDGE}）算前提成立（≤）" "$P35_LAST_RC" "0"
+p35_rc "$P35_OVER" 1200
+assert_eq "35d 边界：loadavg 阈值 +0.1（${P35_OVER}）算不成立" "$P35_LAST_RC" "2"
+# —— SKIP 的**可见性**（真跑一次判定本体，把输出收进日志）：
+#    这一段在**子 shell** 里跑 —— SKIP 会加到 P27_TIMING_SKIP，而那是「这一轮真跑的门禁跳过了几条
+#    计时断言」的计数（结果块会打印它，复验记录只看 25 行尾）。夹具造的 SKIP 混进去就是假信号
+#    （实测：真实门禁的结果块里出现过 "loadavg 24.10" 这种夹具里的数）。子 shell 自己的计数用一行
+#    标记带出来验证。
+P35_FAIL_BEFORE="$FAIL"
+P35_SKIP_BEFORE="$P27_TIMING_SKIP"
+( export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$P35_OVER" TEAM_SMOKE_CORES="$P35_CORES"
+  p27_assembly_judge "$P35_SLOW" "$P35_SLOW, $P35_SLOW, $P35_SLOW" 5
+  printf 'SUBSHELL_TIMING_SKIP=%s\n' "$P27_TIMING_SKIP"
+) >"$P34D/g-over.log" 2>&1
+P35_SUB_SKIP="$(sed -n 's/^SUBSHELL_TIMING_SKIP=//p' "$P34D/g-over.log" | tail -1)"
+assert_match "$P34D/g-over.log" 'SKIP（负载前提不成立）' "35e 打印了可见 SKIP"
+assert_match "$P34D/g-over.log" "loadavg ${P35_OVER}" "35e SKIP 行带了实测 load"
+assert_match "$P34D/g-over.log" "${P35_SLOW}ms" "35e SKIP 行带了实测中位（${P35_SLOW}ms）"
+assert_eq "35e SKIP 不计成 bad（✗ 计数没动）" "$FAIL" "$P35_FAIL_BEFORE"
+assert_eq "35e 子 shell 里的 SKIP 计数 = 1" "${P35_SUB_SKIP:-0}" "1"
+assert_eq "35e 夹具的 SKIP **没有**泄进本轮门禁的计时跳过计数" "$P27_TIMING_SKIP" "$P35_SKIP_BEFORE"
+assert_eq "35e SKIP_N（FAST 分段审计用）没有被计时 SKIP 污染" "$([ "$P27_TIMING_SKIP" -ne "$SKIP_N" ] || [ "$P27_TIMING_SKIP" -eq 0 ] && echo yes || echo no)" "yes"
+
+# —— 真路径：不打开夹具开关时，两个注入键都被忽略且**不改变判定**（PM 审查要点②）
+P35_REAL_LOAD="$(p27_load_reading)"
+export TEAM_SMOKE_LOADAVG=9999 TEAM_SMOKE_FRAME_DELAY_MS=99999 TEAM_SMOKE_CORES=1
+P35_FAKE_LOAD="$(p27_load_reading)"
+P35_FAKE_INJ="$(p27_inject_ms)"
+if p27_perf_premise >/dev/null 2>&1; then P35_REAL_DEC=hold; else P35_REAL_DEC=skip; fi
+unset TEAM_SMOKE_LOADAVG TEAM_SMOKE_FRAME_DELAY_MS TEAM_SMOKE_CORES
+assert_eq "35f 真路径：注入的 loadavg 被忽略（读到真值 ${P35_REAL_LOAD}）" "$P35_FAKE_LOAD" "$P35_REAL_LOAD"
+assert_eq "35f 真路径：注入的慢帧延迟被忽略（拆成 0）" "$P35_FAKE_INJ" "0"
+if [ "$P35_REAL_DEC" = "hold" ]; then
+  ok "35f 真路径：前提判断只由真读数决定（当前真读数成立）"
+else
+  ok "35f 真路径：前提判断只由真读数决定（当前真读数不成立→SKIP；这是机器真的忙，不是注入）"
+fi
+if p27_fixture_on; then bad "35f 夹具开关自检：本段结束后 TEAM_SMOKE_FIXTURE 不该还开着"; else ok "35f 夹具开关自检：本段没有把 TEAM_SMOKE_FIXTURE 留在环境里"; fi
+
+section "36 · panel-cpu 的负载前提（P26/G3：panel#Frame assembly is asynchronous… MODIFIED）"
+# 四个形状要真起 tmux 私有 server + 真面板（~1 分钟），所以全量模式跑、FAST 显式跳过。
+# 夹具自己会在真机不安静时可见 SKIP/finding —— 不拿机器噪声当面板结论。
+if [ -f "$SKILL_DIR/tests/panel-cpu-premise.sh" ]; then
+  if [ "$FAST" = "1" ]; then
+    fast_skip "36·panel-cpu-premise" "要真 tmux 窗格 + 真面板（~1 分钟）；FAST 不跑真进程"
+  else
+    live_mark
+    P36_OUT="$TMP/p36-premise.log"
+    TEAM_PANEL_CPU_SECS="${TEAM_PANEL_CPU_SECS:-6}" bash "$SKILL_DIR/tests/panel-cpu-premise.sh" >"$P36_OUT" 2>&1
+    P36_RC=$?
+    P36_LINE="$(grep -a '== 结果 ==' "$P36_OUT" | tail -1 | sed 's/\x1b\[[0-9;]*m//g')"
+    if [ "$P36_RC" = "0" ]; then
+      ok "36 panel-cpu-premise 全绿（${P36_LINE:-无结果行}）"
+      grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/^/      /' || true
+    elif [ "$P36_RC" = "4" ]; then
+      ok "36 panel-cpu-premise 因负载前提可见 SKIP（exit 4；$(grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/\x1b\[[0-9;]*m//g')"
+    else
+      bad "36 panel-cpu-premise 有失败项（rc=$P36_RC；${P36_LINE:-无结果行}）"
+      sed 's/\x1b\[[0-9;]*m//g' "$P36_OUT" | grep -aE '✗' | head -6 | sed 's/^/      /'
+    fi
+  fi
+else
+  bad "36 缺 tests/panel-cpu-premise.sh"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
+# P26/G2（2.3）：计时断言因负载前提 SKIP 时，结果块里必须有一行点名 —— 复验记录只留 tail -25，
+# 而门禁（门禁命令在 review 里）正是从这一块看到「为什么这一轮没有性能判定」。SKIP 不改变退出码。
+if [ "${P27_TIMING_SKIP:-0}" -gt 0 ]; then
+  printf '\033[33m计时断言按负载前提跳过 %d 条：%s（loadavg %s）—— SKIP 既不是通过也不是失败，阈值未改\033[0m\n' \
+    "$P27_TIMING_SKIP" "${P27_TIMING_SKIP_NAMES% }" "${P27_TIMING_SKIP_LOAD:-?}"
+fi
 if [ "$FAST_REQ" = "1" ]; then
   printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \
     "$SKIP_N" "${SKIP_SEGS#|}"

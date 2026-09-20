@@ -8,23 +8,73 @@
 #   TEAM_PANEL_CPU_VIEW=1 bash skills/teamsmith/tests/panel-cpu.sh   # keep the project-settings view open
 #   TEAM_PANEL_CPU_VIEW=1 TEAM_PANEL_CPU_EDIT=1 bash ...             # …and an editor holding a typed draft
 #
-# Runs the console in a fixture pane of a **private tmux server** (`-L p12cpu-$$`, the team session is
-# never touched) and reports three numbers over the window:
-#   * the interactive first frame — ms from the window spawn to the first visible title band
-#     (V15/F8: the interactive path had no number at all; budget 2000ms, aligned with the spec's
-#     "an uncached frame assembles within 2 seconds" red line);
-#   * the console pane's own process — the red line ("less than 1% of one core in steady state"),
-#     measured as /proc utime+stime deltas over the sampling window;
-#   * the whole reader tree — the pane process **and every block reader it reaps**, from
-#     `/usr/bin/time`'s user+sys for the command, which is what the reader trim is judged on.
+# P26/G3（panel#Frame assembly is asynchronous… MODIFIED）：2000ms 与 1% 是**面板**的判定，不是机器的
+# 判定 —— 它们只在**测量前提**成立时判：`loadavg_1m ≤ factor × 逻辑核数`（核数取 `nproc`，否则
+# `getconf _NPROCESSORS_ONLN`）。前提不成立就打印实测的三个数（首帧 ms、窗格 CPU%、load）并退出 **4**。
 #
-# Exit: 0 the pane process is under 1% of one core and the first frame made its budget; 2 either
-# red line broke; 3 setup failure.
+# **本文件用 factor = 0.25**（`TEAM_PANEL_CPU_PREMISE_FACTOR` 可覆盖）—— 与 smoke 27-d 的 0.75 不同，
+# 因为两者量的东西不同：27-d 是 5 次采样的**中位**（实测到 0.62 × 核仍 1.2–1.7s，M49 的红在
+# 0.81–1.0 × 核），而这里的交互首帧是**单进程冷启动**量出来的，实测（32 核机器，median-of-3）：
+#   0.22 × 核（load 6.9）首帧中位 1542ms ✓ ｜ 0.40 × 核（load 13.0）2005ms ✗ ｜ 0.71 × 核（load 22.8）3919ms ✗
+# 也就是绿→红的交叉在 0.22–0.40 × 核之间；取 0.25 × 核（本机 load 8）落在交叉之下、实测绿之上。
+# 代价说明：机器忙时这条断言会可见地 SKIP（退出 4），而不是给出一个机器欠的假红。
+# 红线本身**没有动**：前提成立时判法与阈值与以前逐字一致（超 2000ms 或 CPU ≥ 1% → 退出 2）。
+#
+# **中位 of 3**（PM 口径决定，2026-09-20 第二批返工）：首帧与窗格 CPU% 都取三次测量的中位，三个样本
+# 都打印出来 —— 单次采样把机器自己的启动抖动算进了面板的账（实测：安静时 ~1.5s，load 4.5 时单次
+# 2141ms，load 13 时 2279ms；同一台机器同一天里 1.697% 与 0.399% 都出现过）。首帧是三次**独立 spawn**
+# （每次都是「窗口创建 → 第一帧可见」）；CPU% 是把同一个采样窗口**三等分**后的三个子窗均值（不额外
+# 加长采样时间）。阈值不缩放：中位 ≥ 2000ms 或中位 ≥ 1% 仍是红。
+#
+#   Exit: 0 窗格进程 < 1% 单核且首帧在预算内
+#         2 红线破了（首帧 ≥ 2000ms 或窗格进程 ≥ 1%）
+#         3 搭建失败（没有 tmux / node / bundle）
+#         4 **因负载前提不成立而跳过**（既不是通过也不是红；包装器不能把 4 当成 0）
+#
+# 夹具旋钮（**只在 `TEAM_SMOKE_FIXTURE=1` 时生效**，裸设一律忽略并打印）：
+#   TEAM_PANEL_CPU_LOADAVG=<数>      替掉 /proc/loadavg 的读数
+#   TEAM_PANEL_CPU_CORES=<整数>      替掉核数
+#   TEAM_PANEL_CPU_FRAME_DELAY_MS=<ms>  在面板进程启动前睡一觉（造一个真越线的首帧）
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tree="${1:-$(cd -P "$here/../../.." && pwd)}"
 secs="${2:-${TEAM_PANEL_CPU_SECS:-60}}"
+
+# ── 测量前提（P26/G3）───────────────────────────────────────────────────────────────────────
+# 夹具旋钮只有在 TEAM_SMOKE_FIXTURE=1 时被采信 —— 否则“负载前提”会退化成“想跳就跳”的后门
+# （PM 审查要点②：真路径下的 TEAM_PANEL_CPU_* 注入不得改变判定）。
+PREMISE_FACTOR="${TEAM_PANEL_CPU_PREMISE_FACTOR:-0.25}"
+case "$PREMISE_FACTOR" in ''|*[!0-9.]*) PREMISE_FACTOR=0.25 ;; esac
+pc_fixture_on() { [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; }
+pc_notice() { printf '  忽略 %s=%s（只有 TEAM_SMOKE_FIXTURE=1 时夹具旋钮才生效；真实路径读真值）\n' "$1" "$2" >&2; }
+pc_load() {
+  if [ -n "${TEAM_PANEL_CPU_LOADAVG:-}" ]; then
+    if pc_fixture_on; then printf '%s\n' "$TEAM_PANEL_CPU_LOADAVG"; return 0; fi
+    pc_notice TEAM_PANEL_CPU_LOADAVG "$TEAM_PANEL_CPU_LOADAVG"
+  fi
+  cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?'
+}
+pc_cores() {
+  if [ -n "${TEAM_PANEL_CPU_CORES:-}" ]; then
+    if pc_fixture_on; then printf '%s\n' "$TEAM_PANEL_CPU_CORES"; return 0; fi
+    pc_notice TEAM_PANEL_CPU_CORES "$TEAM_PANEL_CPU_CORES"
+  fi
+  nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0'
+}
+# → 0 前提成立（照判）/ 1 不成立（跳过）。同时把前提一行打给人看。
+pc_premise() {
+  local load cores thr
+  load="$(pc_load)"; cores="$(pc_cores)"
+  case "$cores" in ''|*[!0-9]*) cores=0 ;; esac
+  thr="$(awk -v c="$cores" -v f="$PREMISE_FACTOR" 'BEGIN { printf "%.2f", f * c }')"
+  if [ "$cores" -gt 0 ] && awk -v l="$load" -v t="$thr" 'BEGIN { exit !(l <= t) }'; then
+    printf '== load premise: loadavg %s <= %s (%s x %s cores) -> hold (judging)\n' "$load" "$thr" "$PREMISE_FACTOR" "$cores"
+    return 0
+  fi
+  printf '== load premise: loadavg %s > %s (%s x %s cores) -> NOT held (skip)\n' "$load" "$thr" "$PREMISE_FACTOR" "$cores"
+  return 1
+}
 refresh="${TEAM_PANEL_CPU_REFRESH:-3}"
 interval=5
 sock="p12cpu-$$"
@@ -92,25 +142,53 @@ if [ -n "$compose_flag" ]; then
   compose_env="PATH=$fakebin:\$PATH "
 fi
 pane_cmd="cd '$tree' && ${compose_env}exec '$time_bin' -o '$time_out' -f 'P12CPU user=%U sys=%S elapsed=%e' -- '$js' '$panel' --root '$tree' --team-cli '$tree/skills/teamsmith/scripts/team' --no-pulse --refresh $refresh${page_flag}${state_flag}"
-tmux -L "$sock" new-session -d -s "$sess" -x 140 -y 34 -c "$tree" "sleep 600"
-first_frame_ms=""
-spawn_ms="$(date +%s%3N)"
-tmux -L "$sock" new-window -d -t "$sess" -n console -c "$tree" "$pane_cmd"
-# F8: the interactive first frame is measured, not promised — poll the pane for the title band.
-for _ in $(seq 1 20); do
-  sleep 0.1
-  if tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -q 'teamsmith pulse'; then
-    first_frame_ms=$(( $(date +%s%3N) - spawn_ms ))
-    break
+# 夹具注入（P26/G3）：在面板进程启动前睡一觉 → 造一个**真越线**的首帧（只在夹具模式下）
+if [ -n "${TEAM_PANEL_CPU_FRAME_DELAY_MS:-}" ]; then
+  if pc_fixture_on; then
+    case "$TEAM_PANEL_CPU_FRAME_DELAY_MS" in
+      ''|*[!0-9]*) : ;;
+      *) pane_cmd="$(awk -v ms="$TEAM_PANEL_CPU_FRAME_DELAY_MS" 'BEGIN { printf "sleep %.2f\n", ms / 1000 }')"$'\n'"$pane_cmd" ;;
+    esac
+  else
+    pc_notice TEAM_PANEL_CPU_FRAME_DELAY_MS "$TEAM_PANEL_CPU_FRAME_DELAY_MS"
   fi
-done
-if [ -z "$first_frame_ms" ]; then
-  # one last look before the slow warm-up path judges the process instead
-  sleep 1
-  tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -q 'teamsmith pulse' \
-    && first_frame_ms=$(( $(date +%s%3N) - spawn_ms ))
 fi
-printf '== first frame: %s (budget 2000ms) ==\n' "${first_frame_ms:-never}"
+tmux -L "$sock" new-session -d -s "$sess" -x 140 -y 34 -c "$tree" "sleep 600"
+pc_premise || true    # 前提一行先打（不成立也照测，因为退出 4 时要把实测三个数一起打出来）
+# 首帧：三次独立 spawn 各量一次「窗口创建 → 第一帧可见」，取中位（中位 of 3）。
+# `never` = 轮询预算内没出现（> 2000ms 的一种形态），记成 9999 参与中位，但打印时保留 `never`。
+first_frames=()
+ff_never=0
+measure_first_frame() { # → 毫秒数（没出现 → 9999）
+  local ms="" t0
+  tmux -L "$sock" kill-window -t "$sess:console" 2>/dev/null || true
+  sleep 0.4
+  t0="$(date +%s%3N)"
+  tmux -L "$sock" new-window -d -t "$sess" -n console -c "$tree" "$pane_cmd" 2>/dev/null || true
+  # F8: the interactive first frame is measured, not promised — poll the pane for the title band.
+  for _ in $(seq 1 20); do
+    sleep 0.1
+    if tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -q 'teamsmith pulse'; then
+      ms=$(( $(date +%s%3N) - t0 )); break
+    fi
+  done
+  if [ -z "$ms" ]; then
+    sleep 1   # one last look before judging it `never`
+    tmux -L "$sock" capture-pane -p -t "$sess:console" 2>/dev/null | grep -q 'teamsmith pulse' \
+      && ms=$(( $(date +%s%3N) - t0 ))
+  fi
+  if [ -z "$ms" ]; then printf '9999\n'; else printf '%s\n' "$ms"; fi
+}
+for _ffi in 1 2 3; do
+  ff="$(measure_first_frame)"
+  first_frames+=("$ff")
+done
+first_frame_ms="$(printf '%s\n' "${first_frames[@]}" | sort -n | awk '{a[NR] = $1} END {print a[int((NR + 1) / 2)]}')"
+for f in "${first_frames[@]}"; do [ "$f" = "9999" ] && ff_never=$((ff_never + 1)); done
+ff_txt="$(printf '%s ' "${first_frames[@]}" | sed 's/9999/never/g; s/ $//')"
+printf '== first frame: %s -> median %s (budget 2000ms)%s ==\n' \
+  "$ff_txt" "$([ "$first_frame_ms" = "9999" ] && echo never || echo "$first_frame_ms")" \
+  "$([ "$ff_never" -gt 0 ] && printf ' [%s 次 never = 超过轮询预算]' "$ff_never")"
 sleep 8  # warm-up: Ink startup, the first assembly, the first TTL cycle
 
 if [ -n "$detail_flag" ]; then
@@ -171,26 +249,40 @@ cpu_ticks_of() { # <pid>
   awk '{print $14 + $15}' "$f" 2>/dev/null || printf '0'
 }
 
-printf '== console CPU over %ss (pane %s → node %s, refresh %ss, hz %s) ==\n' \
+printf '== console CPU over %ss (pane %s → node %s, refresh %ss, hz %s; three equal sub-windows) ==\n' \
   "$secs" "$time_pid" "$pane_pid" "$refresh" "$hz"
 printf '== measured process: %s\n' "$(ps -o args= -p "$pane_pid" 2>/dev/null | cut -c1-120)"
 printf '%s\n' "   t   ps_lifetime%  pane_delta%  tree_now%"
 t0="$(date +%s%3N)"
 pane_prev="$(cpu_ticks_of "$pane_pid")"
-t_prev="$t0"
 pane_total=0
-while :; do
-  sleep "$interval"
-  now="$(date +%s%3N)"
-  pane_now="$(cpu_ticks_of "$pane_pid")"
-  dt=$((now - t_prev)); [ "$dt" -gt 0 ] || dt=1
-  pane_pct="$(awk -v d="$((pane_now - pane_prev))" -v hz="$hz" -v ms="$dt" 'BEGIN{printf "%.2f", (d/hz)/(ms/1000)*100}')"
-  ps_pct="$(ps -o %cpu= -p "$pane_pid" 2>/dev/null | tr -d ' ' || echo '?')"
-  printf '%4ss   %-12s  %-11s  %s\n' "$(( (now - t0) / 1000 ))" "$ps_pct" "$pane_pct" "$pane_pct"
-  pane_total=$((pane_total + (pane_now - pane_prev)))
-  pane_prev="$pane_now"
-  t_prev="$now"
-  [ $(( (now - t0) / 1000 )) -ge "$secs" ] && break
+# 三等分：每个子窗算自己的均值（同一个采样总时长，不额外加长），中位 of 3 就是判红用的数。
+secs_third=$(( secs / 3 )); [ "$secs_third" -lt 1 ] && secs_third=1
+sub_pcts=()
+for _sub in 1 2 3; do
+  sub_end=$(( $(date +%s%3N) + secs_third * 1000 ))
+  sub_start="$(date +%s%3N)"
+  sub_ticks=0
+  while :; do
+    now="$(date +%s%3N)"
+    remain_ms=$(( sub_end - now ))
+    [ "$remain_ms" -le 0 ] && break
+    nap="$(awk -v r="$remain_ms" -v i="$(( interval * 1000 ))" 'BEGIN { printf "%.1f", (r < i ? r : i) / 1000 }')"
+    sleep "$nap"
+    now="$(date +%s%3N)"
+    pane_now="$(cpu_ticks_of "$pane_pid")"
+    dt=$(( now - sub_start )); [ "$dt" -gt 0 ] || dt=1
+    pane_pct="$(awk -v d="$((pane_now - pane_prev))" -v hz="$hz" -v ms="$dt" 'BEGIN{printf "%.2f", (d/hz)/(ms/1000)*100}')"
+    ps_pct="$(ps -o %cpu= -p "$pane_pid" 2>/dev/null | tr -d ' ' || echo '?')"
+    printf '%4ss   %-12s  %-11s  %s\n' "$(( (now - t0) / 1000 ))" "$ps_pct" "$pane_pct" "$pane_pct"
+    sub_ticks=$(( sub_ticks + (pane_now - pane_prev) ))
+    pane_total=$(( pane_total + (pane_now - pane_prev) ))
+    pane_prev="$pane_now"
+    sub_start="$now"
+  done
+  sub_span=$(( $(date +%s%3N) - (sub_end - secs_third * 1000) ))
+  [ "$sub_span" -gt 0 ] || sub_span=$(( secs_third * 1000 ))
+  sub_pcts+=("$(awk -v d="$sub_ticks" -v hz="$hz" -v ms="$sub_span" 'BEGIN{printf "%.2f", (d/hz)/(ms/1000)*100}')")
 done
 span_ms=$(( $(date +%s%3N) - t0 ))
 
@@ -206,7 +298,8 @@ sleep 1
 summary="$(grep -m1 'P12CPU' "$time_out" 2>/dev/null || true)"
 printf '== /usr/bin/time (%s) ==\n%s\n' "$time_out" "${summary:-（no summary line）}"
 
-pane_avg="$(awk -v d="$pane_total" -v hz="$hz" -v ms="$span_ms" 'BEGIN{printf "%.3f", (d/hz)/(ms/1000)*100}')"
+pane_avg="$(printf '%s\n' "${sub_pcts[@]}" | sort -n | awk '{a[NR] = $1} END {print a[int((NR + 1) / 2)]}')"
+pane_overall="$(awk -v d="$pane_total" -v hz="$hz" -v ms="$span_ms" 'BEGIN{printf "%.3f", (d/hz)/(ms/1000)*100}')"
 tree_avg="?"
 if [ -n "$summary" ]; then
   user="$(sed -n 's/.*user=\([0-9.]*\).*/\1/p' <<< "$summary")"
@@ -216,8 +309,20 @@ if [ -n "$summary" ]; then
     tree_avg="$(awk -v u="$user" -v s="$sys" -v e="$elapsed" 'BEGIN{printf "%.3f", (u+s)/e*100}')"
   fi
 fi
-printf '== summary over %ss: console pane process %s%% of one core · reader tree %s%% of one core ==\n' \
-  "$((span_ms / 1000))" "$pane_avg" "$tree_avg"
+printf '== pane CPU thirds: %s -> median %s%% (overall %s%% over %ss) of one core · reader tree %s%% ==\n' \
+  "$(printf '%s ' "${sub_pcts[@]}" | sed 's/ $//')" "$pane_avg" "$pane_overall" "$((span_ms / 1000))" "$tree_avg"
+
+# ── P26/G3：前提先于判定。不成立就打印实测三数并退出 4（既不是通过也不是红）。
+# 注意：前提一行在**采样前**就打过一次；这里再打一次结果行，让日志尾部自带结论。
+if ! pc_premise >/dev/null 2>&1; then
+  printf '== load premise: loadavg %s > %s x %s cores -> SKIP (exit 4; the red line was not judged)\n' \
+    "$(pc_load)" "$PREMISE_FACTOR" "$(pc_cores)" >&2
+  ff_txt="never appeared"   # 顶层语句：不能用 local（只在函数里合法）
+  [ -n "$first_frame_ms" ] && ff_txt="${first_frame_ms}ms"
+  printf 'panel-cpu: SKIP — first frame %s, pane CPU %s%%, loadavg %s over the premise (%s x %s cores); the 2000ms / 1%% thresholds are unchanged\n' \
+    "$ff_txt" "$pane_avg" "$(pc_load)" "$PREMISE_FACTOR" "$(pc_cores)" >&2
+  exit 4
+fi
 
 if [ -z "$first_frame_ms" ]; then
   printf 'panel-cpu: RED — the first frame never appeared within 2.1s of the window spawn\n' >&2
