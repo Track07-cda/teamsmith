@@ -72,70 +72,150 @@ team_dedup_sec() { # TEAM_NOTIFY_DEDUP_SEC（默认 20s）
 # 输出每行 "OFFSET|TEXT|ROW"（TEXT 已去尾空白）；找不到边框输出 NONE。
 # 陷阱（E3 §1.7）：mawk + UTF-8 下字面量框线正则永远不匹配，必须 LC_ALL=C + 字节形 \xe2\x94\x80；
 # 而且必须先缓存所有行、在 END 里算行号（单遍算 bottom-offset 会得到负数）。
-# 几何定位的唯一实现：stdin=capture 全文，$1=光标行（1-based）→ 输出 "top bottom"（找不到 → 空）。
-_team_box_geometry() { # <cy>
+# M45：先标出 pi 的更新横幅块（_team_box_banner_rows），几何扫描时整块跳过 —— 见下面那段注释。
+_team_box_banner_rows() { # <cy>：标记更新横幅块的行（stdout：行号，空格分隔；无则空）
   LC_ALL=C awk -v cy="$1" '
     { L[NR]=$0 }
     END {
-      # 候选下边框：光标行**以下**、整行全是 ─ 的行（自下而上最近优先）。光标行自己不算：
-      # 光标永远落在内容行上（E3 §1.2），光标行若整行 ─，那是草稿自己画的等宽框线（V9-A10：
-      # 把它当下边框会让上方正文落进提示行槽位被排除 → 脏框判空 → 粘连）。
-      nb=0
-      for (i=cy+1;i<=NR;i++) if (L[i] ~ /^(\xe2\x94\x80)+$/) { nb++; B[nb]=i }
-      if (!nb) exit
-      t=0; b=0
-      for (k=1;k<=nb;k++) {
-        cand=B[k]; w=length(L[cand])   # LC_ALL=C 下 ─ 定宽 3 字节：等字节 = 等宽
-        # 上边框 = 下边框以上**最高的**候选（tier1：等宽整行 ─；tier2：spinner 形态）。
-        # 取最高而不是最近（V9-A4/A5/A8/A10）：草稿自己画的等宽框线/spinner 形状行
-        # 若在框内，「最近优先」会把它当成上边框、把它上方的正文排除在框外 → 脏框判空
-        # → 粘连（D20 损害）。取最高者时这些行落在框**内**成为内容 → BUSY（保守方向）。
-        # 代价：对话区若真有等宽整行 ─，框会被算大 → BUSY——永不粘连。真实 Pi 0.85.1
-        # 内容区按 119 折行（边框 120），等宽内容行不可达（V9 90.C/90.F 实测），该代价
-        # 只在「裁切型」TUI 上存在。
-        hi1=0; hi2=0
-        for (i=cand-1;i>=1;i--) {
-          if (L[i] ~ /^(\xe2\x94\x80)+$/) {
-            # 向下扫、不断覆写 → 循环结束时留下的是行号最小（最高）的候选
-            if (length(L[i])==w) hi1=i   # tier1：等宽整行 ─（不等宽的是草稿自己的短框线，V8-N1/N1c）
-            continue
+      # ── 为什么必须排除（M45 真实现场）──
+      # pi 0.86.0 发布后，pi 的 TUI 在输入框**上方**画「Update Available / Package Updates Available」
+      # 横幅：chat 区的 DynamicBorder 与输入框边框**同形等宽**（都是整行 ─ × pane 宽）。
+      # _team_box_geometry 的「取最高」于是把横幅的上界当成输入框上边框 → 框被算大 → 空框里
+      # 读到了横幅文字 + 框自己的上边框 → 判成 BUSY（RETRACT=failed / verdict=EMPTY 消失）。
+      # 帧与现场：tests/frames/pi-0.85.1-update-banner.txt（真 pi 实拍）。
+      #
+      # ── 识别规则：只看**块界、两行配对头与紧贴闭界的尾行**，块内文字一律不看 ──
+      # release note 是任意 markdown（不能按内容识别），所以块内的正文既不参与判定也不要求形状；
+      # 注意它自己可能画出整行 ─（markdown 的 `---` 在 pane 宽 ≤ 80 时就是等宽横线）——
+      # 所以闭界不能靠「下一个等宽 ─」猜，而是靠「紧贴它上面那行是这条横幅的固定尾行」。
+      # 这样规则既窄（要同时命中：整行 ─ 的开界、紧随的两行配对头、尾行、等宽整行 ─ 的闭界）
+      # 又可测（两个横幅形态都有真帧；草稿里出现这几行的组合概率可忽略）。
+      #   版本横幅：`Update Available` / `New version <ver> is available. Run …` / 尾行 `Changelog: …`
+      #   包横幅：`Package Updates Available` / `Package updates are available. Run …` /
+      #          块内有 `Packages:` / 尾行 `- <包名>`
+      n=0
+      for (i=1;i<=NR;i++) {
+        if (i >= cy) continue                            # 只在光标（框内）**上方**找 chrome
+        if (L[i] !~ /^(\xe2\x94\x80)+$/) continue
+        w=length(L[i])
+        s1=L[i+1]; gsub(/^[ \t]+|[ \t]+$/, "", s1)
+        s2=L[i+2]; gsub(/^[ \t]+|[ \t]+$/, "", s2)
+        kind=""
+        if (s1 == "Update Available" && s2 ~ /^New version [^ \t]+ is available\. Run /) kind="pi"
+        else if (s1 == "Package Updates Available" && s2 ~ /^Package updates are available\. Run /) kind="pkg"
+        if (kind == "") continue
+        for (j=i+1;j<=NR && j-i<=24;j++) {          # 24 行窗口：真帧的两个横幅分别是 6/7 行
+          if (L[j] !~ /^(\xe2\x94\x80)+$/ || length(L[j])!=w) continue
+          p=L[j-1]; gsub(/^[ \t]+|[ \t]+$/, "", p)  # 紧贴闭界的那一行
+          if (kind == "pi") { if (p !~ /^Changelog: /) continue }
+          else {
+            if (p !~ /^- /) continue
+            haspkg=0
+            for (k=i+1;k<j;k++) { s=L[k]; if (s ~ /^[ \t]*Packages:[ \t]*$/) { haspkg=1; break } }
+            if (!haspkg) continue
           }
-          # tier2：spinner 形态（"── ⠇ …" 开头、尾部一段长 ─）。E3 实测工作中 Pi 用
-          # spinner 行顶替上边框；0.85.1 改画在框上方独立一行（V9-D2，见 troubleshooting）。
-          if (L[i] ~ /^\xe2\x94\x80\xe2\x94\x80 / && \
-              L[i] ~ /(\xe2\x94\x80){8}[ \t]*$/) hi2=i
+          for (k=i;k<=j;k++) BAN[k]=1
+          i=j; break
         }
-        if (hi1) { t=hi1; b=cand; break }
-        if (hi2) { t=hi2; b=cand; break }
+      }
+      for (k=1;k<=NR;k++) if (BAN[k]) printf "%d ", k
+    }'
+}
+
+# 几何定位的唯一实现：stdin=capture 全文，$1=光标行（1-based）→ 输出 "top bottom"（找不到 → 空）。
+_team_box_geometry() { # <cy>
+  local cy="${1:-}" raw ban
+  raw="$(cat)"
+  ban="$(_team_box_banner_rows "$cy" <<< "$raw")"
+  printf '%s\n' "$raw" | LC_ALL=C awk -v cy="$cy" -v ban="$ban" '
+    { L[NR]=$0 }
+    END {
+      if (ban != "") { n=split(ban, X, " "); for (z=1;z<=n;z++) BAN[X[z]+0]=1 }
+      # M45：横幅块（ban 里的行号）在几何里**整块跳过** —— 它们是 chat 区的 chrome，不是框的一部分。
+      # 跳过而不是「最近优先」：V9-A4/A5/A8/A10 的保守方向（草稿自己画的等宽框线要留在框内 → BUSY）
+      # 一个字都不改；横幅块被标出来之后，「取最高」自然落到真正的输入框上边框。
+      #
+      # 两遍：第一遍跳过横幅；若跳完**连一个框都找不出来**，说明那一堆标记把真框也吞了
+      # （可构造的对抗形状：草稿自己就是“整行 ─ + 两行头 + 尾行 + 整行 ─”，而框的上边框被当成开界）
+      # → 退回不跳的保守行为（框算大 → BUSY），绝不退成 NONE（NONE = 守卫失效 → 白打字进人的框）。
+      t=0; b=0
+      for (pass=1;pass<=2;pass++) {
+        useban = (pass == 1 && ban != "")
+        # 候选下边框：光标行**以下**、整行全是 ─ 的行（自下而上最近优先）。光标行自己不算：
+        # 光标永远落在内容行上（E3 §1.2），光标行若整行 ─，那是草稿自己画的等宽框线（V9-A10：
+        # 把它当下边框会让上方正文落进提示行槽位被排除 → 脏框判空 → 粘连）。
+        nb=0
+        for (i=cy+1;i<=NR;i++) if (!(useban && BAN[i]) && L[i] ~ /^(\xe2\x94\x80)+$/) { nb++; B[nb]=i }
+        if (!nb) continue
+        for (k=1;k<=nb;k++) {
+          cand=B[k]; w=length(L[cand])   # LC_ALL=C 下 ─ 定宽 3 字节：等字节 = 等宽
+          # 上边框 = 下边框以上**最高的**候选（tier1：等宽整行 ─；tier2：spinner 形态）。
+          # 取最高而不是最近（V9-A4/A5/A8/A10）：草稿自己画的等宽框线/spinner 形状行
+          # 若在框内，「最近优先」会把它当成上边框、把它上方的正文排除在框外 → 脏框判空
+          # → 粘连（D20 损害）。取最高者时这些行落在框**内**成为内容 → BUSY（保守方向）。
+          # 代价：对话区若真有等宽整行 ─，框会被算大 → BUSY——永不粘连。真实 Pi 0.85.1
+          # 内容区按 119 折行（边框 120），等宽内容行不可达（V9 90.C/90.F 实测），该代价
+          # 只在「裁切型」TUI 上存在。
+          hi1=0; hi2=0
+          for (i=cand-1;i>=1;i--) {
+            if (useban && BAN[i]) continue
+            if (L[i] ~ /^(\xe2\x94\x80)+$/) {
+              # 向下扫、不断覆写 → 循环结束时留下的是行号最小（最高）的候选
+              if (length(L[i])==w) hi1=i   # tier1：等宽整行 ─（不等宽的是草稿自己的短框线，V8-N1/N1c）
+              continue
+            }
+            # tier2：spinner 形态（"── ⠇ …" 开头、尾部一段长 ─）。E3 实测工作中 Pi 用
+            # spinner 行顶替上边框；0.85.1 改画在框上方独立一行（V9-D2，见 troubleshooting）。
+            if (L[i] ~ /^\xe2\x94\x80\xe2\x94\x80 / && \
+                L[i] ~ /(\xe2\x94\x80){8}[ \t]*$/) hi2=i
+          }
+          if (hi1) { t=hi1; b=cand; break }
+          if (hi2) { t=hi2; b=cand; break }
+        }
+        if (t && b) break
       }
       if (t && b) printf "%d %d\n", t, b
     }'
 }
 
+# 帧 → 框内容行（纯函数：stdin=capture 全文，$1=光标行 1-based）。
+# 抽出来是为了让夹具能拿**真实帧**跑同一条判据（M45：更新横幅），不必开 tmux ——
+# 端到端（真 pane）与纯帧用同一条实现，不会漂移。
+_team_box_rows_of_frame() { # <cy>
+  local cy="${1:-}" raw geo t b
+  raw="$(cat)"
+  geo="$(printf '%s\n' "$raw" | _team_box_geometry "$cy")"
+  [ -n "$geo" ] || { printf 'NONE\n'; return 0; }
+  t="${geo%% *}"; b="${geo##* }"
+  printf '%s\n' "$raw" | LC_ALL=C awk -v t="$t" -v b="$b" '
+    NR>t && NR<b { s=$0; sub(/[ \t]+$/, "", s); printf "%d|%s|%d\n", b-NR, s, NR }'
+}
+
 team_input_box_rows() { # <target>
-  local target="${1:-}" cy cap geo t b
+  local target="${1:-}" cy cap
   team_tmux_target_required "input-box" "$target" || return 1
   cy="$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null || true)"
   [ -n "$cy" ] || return 1
   cy=$(( cy + 1 ))
   cap="$(tmux capture-pane -p -t "$target" 2>/dev/null)" || return 1
-  geo="$(printf '%s\n' "$cap" | _team_box_geometry "$cy")"
-  [ -n "$geo" ] || { printf 'NONE\n'; return 0; }
-  t="${geo%% *}"; b="${geo##* }"
-  printf '%s\n' "$cap" | LC_ALL=C awk -v t="$t" -v b="$b" '
-    NR>t && NR<b { s=$0; sub(/[ \t]+$/, "", s); printf "%d|%s|%d\n", b-NR, s, NR }'
+  printf '%s\n' "$cap" | _team_box_rows_of_frame "$cy"
 }
 
 # 对话区文本（上边框以上的行）——提交证据的搜索区（V9-B5）。找不到框 → 返回 1。
+# M45：横幅块的行不算对话内容（它们是 pi 画的通知 chrome）——不排除的话，引用了横幅原文的
+# payload 特征串会在基线里就命中一次（把「已经提交了」的证据做成真假象）。
 team_transcript_text() { # <target>
-  local target="$1" cy cap geo
+  local target="$1" cy cap geo ban
   cy="$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null || true)"
   [ -n "$cy" ] || return 1
   cy=$(( cy + 1 ))
   cap="$(tmux capture-pane -p -t "$target" 2>/dev/null)" || return 1
   geo="$(printf '%s\n' "$cap" | _team_box_geometry "$cy")"
   [ -n "$geo" ] || return 1
-  printf '%s\n' "$cap" | LC_ALL=C awk -v t="${geo%% *}" 'NR<t'
+  ban="$(_team_box_banner_rows "$cy" <<< "$cap")"
+  printf '%s\n' "$cap" | LC_ALL=C awk -v t="${geo%% *}" -v ban="$ban" '
+    BEGIN { if (ban != "") { n=split(ban, X, " "); for (z=1;z<=n;z++) BAN[X[z]+0]=1 } }
+    NR<t && !BAN[NR]'
 }
 
 # 字符数（= 码点，与 pi 折叠占位符 `[paste #N <chars> chars]` 同口径）。

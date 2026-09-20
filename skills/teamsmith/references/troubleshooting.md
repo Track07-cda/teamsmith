@@ -656,3 +656,70 @@ real deliveries only. Semantics and ledger formats: `references/agent-adapters.m
 you exactly what was re-read, suppressed, and delivered. No such lines + duplicates = a second watcher is
 registered for the same target (look for two `started target=…` lines without an intervening `stopped`,
 i.e. a zombie session that never logged its shutdown).
+
+## 21. pi announces a new version → the input box reads as BUSY
+
+**Symptom**: a PM/worker Pi pane is idle with an empty box, yet `team say` / `team notify` report **`queued`**
+(the message lands in `state/outbox/` instead of the box), and the real-pi fixture says so:
+
+```
+✗ M28 容器里跑真 pi 体检：输入框判据 + 收回在真实现场成立（找不到 [RETRACT=ok]）
+✗ M28 容器里跑真 pi 体检：空闲空框被判 EMPTY（没被误判成忙）（找不到 [verdict=EMPTY]）
+```
+
+The fixture's frame shows why — three lines of chat chrome sit **above** the box:
+
+```
+────────────────────────────────────────────────────────────   ← banner DynamicBorder
+ Update Available
+ New version 0.86.0 is available. Run pi update
+ Changelog: https://pi.dev/changelog
+────────────────────────────────────────────────────────────   ← banner DynamicBorder
+────────────────────────────────────────────────────────────   ← the real box top border
+ deepseek-flash  Deepseek  max                                  ← hint row (inside the box)
+────────────────────────────────────────────────────────────   ← box bottom border
+```
+
+**Cause** (real, not a fixture flake): pi's update banner is drawn into the chat container with
+`DynamicBorder`, which renders **the same thing as the box borders: one full-width row of `─`, equal in
+width to the pane**. The reader anchors the box by taking the **highest** equal-width `─` row above the
+cursor (deliberately conservative: a draft may draw an equal-width rule *inside* the box, and treating that
+as the top border would exclude the draft → empty → paste into a non-empty box). With a banner present the
+highest row is the banner's opening border, so the box becomes everything down to the bottom border: its
+content is the banner text plus the box's own top border → `BUSY` → queued.
+
+**Since M45** the two measured banners are recognized and excluded from the geometry (and from the transcript
+the delivery confirmation searches): the block is only accepted when the opening `─` row is followed by the
+paired header lines (`Update Available` + `New version … is available. Run pi update`, or
+`Package Updates Available` + `Package updates are available. Run pi update --extensions`), the row directly
+above the closing equal-width `─` row is the matching tail (`Changelog: …` / a `- <package>` item preceded by
+`Packages:`), and the block lies entirely above the cursor. The release note inside the block is arbitrary
+markdown and is never matched by content. If skipping the marked rows leaves **no box at all**, the geometry
+falls back to the unmarked (conservative) behaviour — never to `NONE`, because `NONE` means the guard is off
+and the next paste would land in a human's draft.
+
+**What to do** (none of this is required for the guard to work — since M45 it tolerates the banner):
+
+- Nothing. The banner is cosmetic: the box reader skips the recognized banner blocks, so an idle box keeps
+  reading as `EMPTY` while the notice is on screen. The real-pi fixture proves it on the live thing:
+  `bash tests/pm-box-real.sh` runs pi **with its update checks on** (the user's call: never suppress the
+  notice) and prints `banner=present|absent`, `banner_rows=[…]` (which block rows were recognized) and
+  `M45 idle-read=EMPTY`; it exits non-zero when the idle box is not read as empty. `M45_REQUIRE_BANNER=1`
+  additionally demands that this run really had a banner, so an evidence run cannot silently degrade into a
+  banner-free frame.
+- `pi update` if you simply want the notice gone (it is only shown while a newer release exists).
+- If you *choose* to silence the checks (nothing in the gate does): **`PI_SKIP_VERSION_CHECK=1`** disables the
+  Pi version check (`docs/settings.md`); `--offline` / `PI_OFFLINE=1` additionally disables the extension
+  **package** update check (`Package Updates Available`), which `PI_SKIP_VERSION_CHECK` does not cover.
+  Neither is used by the fixture — the banner shape is part of what is being tested.
+
+**Honest edge (not covered)**: only these two banner shapes are recognized. Other chrome built from the same
+`DynamicBorder` primitive — pi's own post-update **`What's New`** block (a rule, the header, arbitrary
+changelog markdown, a rule), extension "custom message" boxes — still enlarges the box and therefore still
+reads as `BUSY` (queued, never glued). It cannot be resolved by shape alone: a rule pair with text in between
+is indistinguishable from a draft that draws rule lines itself, and the conservative direction is to treat it
+as content. The failure mode is a **bounded queue**, not a glued message: messages wait in `state/outbox/`
+(`team status` / `team digest` show the line) and go out once the block leaves the frame (it is chat history,
+so it scrolls away as the session talks; `What's New` only appears on the first start after an update).
+Report such a frame (`bash skills/teamsmith/tests/pm-box-real.sh --keep`) so the shape can be added as a
+measured case next to these two.

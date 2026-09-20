@@ -11,6 +11,15 @@
 # 注意：tmux 3.7 的 base-index 是 1 —— 夹具一律用 session 级目标（`-t $SESS`），
 # 不要写 `$SESS:0`（那是「窗口 0 不存在」，所有查询都会静默失败 → 守卫会报 UNKNOWN）。
 #
+# M45（更新横幅）：pi 启动时会去 pi.dev 查最新版本，一旦有新版本就在**输入框上方**画
+# 「Update Available / New version … is available. Run pi update」横幅（chat 区的 DynamicBorder
+# 与输入框边框同形等宽）—— **用户指令：不关它**（不用 `PI_OFFLINE`/`PI_SKIP_VERSION_CHECK`），
+# 判据层必须容忍横幅。所以夹具照常起 pi（更新检查开），并把两个东西打出来：
+#   · banner=present|absent   这轮的帧里到底有没有横幅
+#   · M45 idle-read=EMPTY    空闲空框必须读成空（横幅在场时这点就是判据层的考试），非 0 = 夹具红
+# 证据轮次要求「这轮真的有横幅」时用 `M45_REQUIRE_BANNER=1`（没横幅就直接红，不冒充现场证据）：
+#   M45_REQUIRE_BANNER=1 bash tests/pm-box-real.sh --idle-secs 20
+#
 # 隔离纪律（M23 事故 + PM 要求）：只用私有 tmux socket（TMUX_TMPDIR 指向本夹具的临时目录），
 # 并且显式 unset TMUX/TMUX_PANE —— 否则 tmux 客户端会走 $TMUX 指的那个（真实）server。
 # 脚本结尾会断言：本夹具的 session 没有出现在真实默认 server 上。
@@ -79,6 +88,7 @@ fi
   || { printf '夹具 init 失败\n'; tail -3 "$TMP/init.log"; }
 
 # 真 pi：真 HOME（沿用使用者的 provider/配置）+ 临时 session 目录（不碰真实会话文件）
+# M45：**不关** pi 的更新检查（用户指令）—— 横幅该出现就让它出现，判据层负责容忍它
 m24_tmux new-session -d -s "$SESS" -x 120 -y 30 -c "$REPO" \
   "HOME=$HOME $PI_BIN --no-session --session-dir $TMP/pi-sessions" 2>/dev/null || true
 
@@ -91,6 +101,21 @@ if ! box_ready; then
 fi
 printf '· 输入框已画出，空闲 %ss（复现「PM 空闲」形状）…\n' "$IDLE_SECS"
 sleep "$IDLE_SECS"
+
+# M45：这轮 pi 真的有没有画更新横幅（决定下面的帧里能不能看到那个形状）
+#   默认：有没有都行（判据层两条路都得对；门禁不因“今天有没有新版本”变红）
+#   M45_REQUIRE_BANNER=1：要求必须有（证据轮次用；没横幅就红，不冒充现场证据）
+M45_BANNER=absent
+if m24_tmux capture-pane -p -t "$SESS" 2>/dev/null | grep -qE '^[[:space:]]*(Update Available|Package Updates Available)[[:space:]]*$'; then
+  M45_BANNER=present
+fi
+if [ "$M45_BANNER" = "present" ]; then
+  printf '· banner=present（输入框上方有更新横幅：这轮的空框判据就在这个形状上受考）\n'
+elif [ "${M45_REQUIRE_BANNER:-0}" = "1" ]; then
+  printf '· banner=absent（M45_REQUIRE_BANNER=1 但版本检查没拿到新版本/网络不通 —— 这轮不构成横幅现场证据）\n'
+else
+  printf '· banner=absent（今天没有新版本或网络不通；判据层在这里走的是无横幅分支）\n'
+fi
 
 snapshot() { # <标签>：原始帧（光标上下 4 行起）+ 守卫看到的东西
   local label="$1" cap cy from
@@ -107,6 +132,19 @@ EOS
 }
 
 snapshot "空闲空框（真实 pi）"
+
+# M45：空闲帧必须是 EMPTY（pi 的更新横幅若被当成框内容，这里就是 BUSY）。
+# 这一发的判定决定夹具退出码 —— 回归了就当场红，不只靠调用方 grep 日志。
+m24_guard <<'EOS' | sed 's/^/  /' | tee "$TMP/m45-idle.log"
+cy=$(( $(tmux display-message -p -t "$T" '#{cursor_y}' 2>/dev/null || printf '0') + 1 ))
+cap="$(tmux capture-pane -p -t "$T" 2>/dev/null)"
+printf 'M45 banner_rows=[%s]\n' "$(printf '%s\n' "$cap" | _team_box_banner_rows "$cy")"
+if [ "$(team_delivery_verdict "$T")" = EMPTY ] && [ -z "$(team_input_box_text "$T" 2>/dev/null | tr -d '[:space:]')" ]; then
+  printf 'M45 idle-read=EMPTY ok\n'
+else
+  printf 'M45 idle-read=NOT-EMPTY BAD\n'
+fi
+EOS
 
 PAYLOAD="${PAYLOAD:-[auto] agent:dev2 · M24 · branch=task/M24-pm-draft-race · 状态=fixture
 第二行：payload 的第二行
@@ -166,3 +204,13 @@ if [ -S "/tmp/tmux-$(id -u)/default" ] \
   exit 1
 fi
 printf '✓ 隔离自检：夹具 session 不在真实默认 server 上\n'
+# M45：空闲空框读成 BUSY 是「更新横幅被当成框内容」的现场（真实现场：main 上 M28 段两红）
+if ! grep -q 'M45 idle-read=EMPTY' "$TMP/m45-idle.log" 2>/dev/null; then
+  printf '✗ M45：空闲空框没被判成 EMPTY（看上面的 M45 行 —— 横幅文字被读成了框内容？）\n'
+  exit 1
+fi
+# 证据轮次：要求这轮真的有横幅（否则上面的绿不算横幅现场的绿）
+if [ "${M45_REQUIRE_BANNER:-0}" = "1" ] && [ "$M45_BANNER" != "present" ]; then
+  printf '✗ M45：M45_REQUIRE_BANNER=1 但这一轮没有横幅 —— 不能当作「判据层容忍横幅」的现场证据\n'
+  exit 1
+fi

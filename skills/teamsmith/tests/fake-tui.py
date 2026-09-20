@@ -36,6 +36,11 @@ env：
                              「页脚一动不动」的 TUI 让尾部 400 字节指纹失效，V7-F4）
   FAKE_TUI_EAT_ENTER=1       吞掉 Enter：清空输入框但不提交、不回显（V9-B5「清空未提交」事故形状）
   FAKE_TUI_COLS              绘制宽度（默认 80；测试按 pane 宽度显式给，避免依赖 pty 尺寸）
+  FAKE_TUI_BANNER            M45：输入框**上方**画 pi 的更新横幅（默认不画）。取值：
+                             'pi' 版本横幅｜'note' 版本横幅 + 一段 release note（任意 markdown，
+                             含一行半成品占位符字样）｜'packages' 扩展包横幅｜'both' 两个都有
+                             （真实顺序：包在上、版本在下）—— 横幅的 DynamicBorder 与输入框边框
+                             同形等宽，旧判据就是在这里把空框读成 BUSY 的（真帧见 tests/frames/）
 
 退出：stdin 关闭（pane 被杀）即退出。
 """
@@ -173,6 +178,37 @@ class Tui:
         vcol = sum(_cell_width(ch) for ch in prefix)
         return row_idx, vcol
 
+    # ------------------------------------------------------------------ 更新横幅（M45）
+    def banner_lines(self) -> list:
+        """画在输入框上方的 pi 更新横幅（FAKE_TUI_BANNER）。形状取自真实现场帧
+        （tests/frames/pi-0.85.1-update-banner.txt，真 pi 0.85.1）：
+          整行 ─ 的 DynamicBorder → 两行配对头 → [release note：任意 markdown] → 尾行 → 整行 ─
+        两个横幅都用**整行 ─、与输入框边框等宽** —— 这正是把旧判据带偏的地方。"""
+        v = os.environ.get("FAKE_TUI_BANNER", "").strip().lower()
+        if v in ("", "0", "no", "off"):
+            return []
+        rule = RULE * self.cols
+        blocks = []
+        if v in ("packages", "both"):
+            blocks.append([rule, " Package Updates Available",
+                           " Package updates are available. Run pi update --extensions",
+                           " Packages:", " - pi-web-access", rule])
+        if v in ("1", "pi", "note", "both"):
+            b = [rule, " Update Available", " New version 0.86.0 is available. Run pi update"]
+            if v in ("note", "both"):
+                # release note 是任意 markdown：故意放一行「像半成品折叠占位符」的文字，
+                # 证明判据不是靠内容白名单活着（真 note 可能更花）。
+                b += ["", " - fixed a thing", " - [paste #1 +9", ""]
+            b += [" Changelog: https://pi.dev/changelog", rule]
+            blocks.append(b)
+        if not blocks:   # 认不出来的取值：按版本横幅画（宁可画错也不要静默什么都不画）
+            blocks = [[rule, " Update Available", " New version 0.86.0 is available. Run pi update",
+                       " Changelog: https://pi.dev/changelog", rule]]
+        lines = [""]
+        for b in blocks:
+            lines += b + [""]
+        return lines
+
     def draw(self) -> None:
         body = self.text().split("\n")
         # 像真实 TUI 一样折行（不裁字）：超长行的尾巴出现在下一个可见行上
@@ -188,7 +224,13 @@ class Tui:
             for m in self.conversation[-3:]:
                 head.append("> " + m.replace("\n", " \u23ce "))
         head.append("")
+        blines = self.banner_lines()
+        if blines and head and head[-1] == "":
+            head.pop()   # 横幅自带前导空行（真帧：对话区/横幅/框之间各一行空行）
         for line in head:
+            out.append(_clip(line, self.cols) + "\r\n")
+            row += 1
+        for line in blines:
             out.append(_clip(line, self.cols) + "\r\n")
             row += 1
         out.append(RULE * self.cols + "\r\n")

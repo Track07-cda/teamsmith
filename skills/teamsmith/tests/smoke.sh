@@ -158,6 +158,7 @@ assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 �
 assert_not()   { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
 # 断言「字符串 $1 里含子串 $2」（assert_has 是查文件；旧模板那条用的是字符串）
 assert_has_echo() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3（[$1] 里找不到 [$2]）" ;; esac; }
+assert_not_echo() { case "$1" in *"$2"*) bad "$3（不该出现 [$2]）" ;; *) ok "$3" ;; esac; }
 assert_eq()    { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
 # M6.1：state/ 的字节指纹 —— 只读命令不许改运行时状态（F28 的守门断言）
 state_fp() {
@@ -5484,6 +5485,105 @@ assert_eq "12b-h0 M24：按字节数报的占位符不是我们的（真实 pi �
 assert_eq "12b-h0 M24：行数折叠（老形状）仍然认" \
   "$(ob_boxonly '[paste #1 +3 lines]' "$(printf 'a\nb\nc')")" "yes"
 
+# ---------------------------------------------------------------- 12b-h0b. M45 更新横幅判据（纯函数，快模式照跑）
+section "12b-h0b · M45 输入框判据：pi 的更新横幅（整行 ─ 与框边框同形等宽）"
+# 现场（真实现场，不是夹具抖动）：pi 0.86.0 发布后，pi 的 TUI 在输入框**上方**画
+# 「Update Available / Package Updates Available」横幅 —— chat 区的 DynamicBorder 与输入框
+# 边框都是**整行 ─、等宽**。老判据（几何「取最高」）把横幅的上界当成框的上边框 → 框被算大
+# → 空框里读到横幅文字 + 框自己的上边框 → BUSY / RETRACT=failed（main 上 M28 段两次红）。
+# 这一节全是纯函数（不开 tmux、不碰真账本）：真帧 + 合成帧喂 _team_box_rows_of_frame；
+# 端到端（真 pane + 假 TUI 画横幅）在 12b-h（非 FAST）。
+M45_FRAME_DIR="$SKILL_DIR/tests/frames"
+M45_FRAME_REAL="$M45_FRAME_DIR/pi-0.85.1-update-banner.txt"
+M45_CY_REAL=26        # 真帧实拍时的光标行（1-based；框内第一个内容行）
+assert_file "$M45_FRAME_REAL" "M45：真实现场帧（真 pi 0.85.1 实拍）在 tests/frames/"
+
+# 纯帧探针：与生产同一条实现（source 后直接调纯函数），不开 tmux。
+#   M45_NO_STRIP=1 → 把 _team_box_banner_rows 变成空实现（**破坏实现**）：
+#     同一份帧必须回到「框算大 → 读出横幅文字」的老形状 —— 这是本节的翻转闸门。
+M45_PROBE="$TMP/m45-frame-probe.sh"
+cat > "$M45_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <帧文件> <cy> → banner_rows / geometry / box_nows / holds_only（stdout，一行一项）
+set -u
+SKILL_DIR="$1"; FR="$2"; CY="$3"
+cd "${M45_REPO:-$PWD}"
+. "$SKILL_DIR/scripts/lib/common.sh"; . "$SKILL_DIR/scripts/lib/outbox.sh"
+team_load_config >/dev/null 2>&1 || true
+[ "${M45_NO_STRIP:-0}" = "1" ] && _team_box_banner_rows() { :; }   # 破坏实现（翻转用）
+printf 'banner_rows=[%s]\n' "$(_team_box_banner_rows "$CY" < "$FR")"
+printf 'geometry=[%s]\n' "$(_team_box_geometry "$CY" < "$FR")"
+text="$(_team_box_rows_of_frame "$CY" < "$FR" | LC_ALL=C sort -t'|' -k3,3n | LC_ALL=C awk -F'|' '$1+0 != 1 && $2 != "" { printf "%s", $2 } END { printf "\n" }')"
+printf 'box_nows=[%s]\n' "$(printf '%s' "$text" | tr -d '[:space:]')"
+if [ -n "${M45_PAYLOAD:-}" ]; then
+  team_box_text_holds_only "$text" "$M45_PAYLOAD" && printf 'holds_only=yes\n' || printf 'holds_only=no\n'
+fi
+EOS
+chmod +x "$M45_PROBE"
+m45_probe() { # <帧文件> <cy> [payload] → 打印探针输出
+  ( cd "$REPO" && env TEAM_NOOP=1 M45_PAYLOAD="${3:-}" bash "$M45_PROBE" "$SKILL_DIR" "$1" "$2" 2>&1 )
+}
+m45_probe_red() { # 同上，但破坏实现（_team_box_banner_rows 变空）
+  ( cd "$REPO" && env M45_NO_STRIP=1 M45_PAYLOAD="${3:-}" bash "$M45_PROBE" "$SKILL_DIR" "$1" "$2" 2>&1 )
+}
+m45_rule() { printf '─%.0s' $(seq 1 "${1:-40}"); printf '\n'; }
+M45_F="$TMP/m45-frames"; rm -rf "$M45_F"; mkdir -p "$M45_F"
+
+# ── 帧 A：真帧（120 列，版本 + 扩展包两个横幅，空闲空框）──────────────────────────
+M45_A="$(m45_probe "$M45_FRAME_REAL" "$M45_CY_REAL")"
+assert_has_echo "$M45_A" "geometry=[24 29]" "M45 真帧：几何落在真正的输入框上（24 29，不是横幅上界 11）"
+assert_has_echo "$M45_A" "box_nows=[]" "M45 真帧：空闲空框读成空（横幅文字不是框内容）"
+assert_has_echo "$M45_A" "banner_rows=[11 12 13 14 15 16 18 19 20 21 22 ]" "M45 真帧：两个横幅块的行都被认出来（11–16 包横幅 / 18–22 版本横幅）"
+M45_A_RED="$(m45_probe_red "$M45_FRAME_REAL" "$M45_CY_REAL")"
+assert_has_echo "$M45_A_RED" "geometry=[11 29]" "M45 真帧翻转（破坏实现）：几何退回横幅上界（11）—— 证明这个形状确实是老判据的错误来源"
+assert_has_echo "$M45_A_RED" "UpdateAvailable" \
+  "M45 真帧翻转（破坏实现）：空框读出横幅文字（老判据的真实现场）"
+
+# ── 帧 B/C：合成帧（40 列）——「横幅 + 空框」与「横幅 + 真草稿」────────────────────
+# 行号：1 开界 / 2–4 头与尾 / 5 闭界 / 6 空 / 7 框上边框 / 8–9 内容 / 10 提示行 / 11 框下边框 / 12 页脚
+m45_frame() { # <帧文件> <第 8 行内容> [第二内容行]
+  { m45_rule 40; printf ' Update Available\n'; printf ' New version 0.86.0 is available. Run pi update\n'
+    printf ' Changelog: https://pi.dev/changelog\n'; m45_rule 40; printf '\n'; m45_rule 40
+    printf ' %s\n' "$2"; [ $# -ge 3 ] && printf ' %s\n' "$3" || printf '\n'
+    printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } > "$1"
+}
+m45_frame "$M45_F/banner-empty.txt" ""
+M45_B="$(m45_probe "$M45_F/banner-empty.txt" 8)"
+assert_has_echo "$M45_B" "geometry=[7 11]" "M45 合成帧：横幅在上、框在下的形状里几何仍然找对框"
+assert_has_echo "$M45_B" "box_nows=[]" "M45 合成帧：带横幅的空框 → 空"
+assert_has_echo "$M45_B" "banner_rows=[1 2 3 4 5 ]" "M45 合成帧：横幅块被认出（1–5）"
+m45_frame "$M45_F/banner-draft.txt" "半句草稿 half a sentence"
+M45_C="$(m45_probe "$M45_F/banner-draft.txt" 8 "半句草稿 half a sentence")"
+assert_has_echo "$M45_C" "box_nows=[半句草稿halfasentence]" "M45 合成帧：横幅 + 真草稿 → 读出的仍然是**真草稿**（不是横幅）"
+assert_has_echo "$M45_C" "holds_only=yes" "M45 合成帧：带横幅的真草稿仍然是「框里只有它」"
+assert_has_echo "$M45_C" "geometry=[7 11]" "M45 合成帧：有草稿时几何不受横幅影响"
+
+# ── 帧 D/E：对抗形状 —— 草稿自己长得像横幅块（绝不许变成「框读不出来」）────────────
+# D：草稿块（整行 ─ + 两行头 + Changelog + 整行 ─）画在框内、开界不是框边框。
+{ m45_rule 40; m45_rule 40; printf ' Update Available\n'; printf ' New version 1.0.0 is available. Run pi update\n'
+  printf ' Changelog: https://x\n'; m45_rule 40; printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } \
+  > "$M45_F/draft-like-block.txt"
+M45_D="$(m45_probe "$M45_F/draft-like-block.txt" 4)"
+assert_has_echo "$M45_D" "UpdateAvailable" \
+  "M45 对抗帧①：草稿自己像横幅块 → 仍然是框内容（BUSY，不粘连）"
+assert_not_echo "$M45_D" "box_nows=[]" \
+  "M45 对抗帧①：框文本非空（没被「排除横幅」吞干净 → 不会判 EMPTY 去白打字）"
+assert_has_echo "$M45_D" "geometry=[1 8]" "M45 对抗帧①：几何仍然找得出框（没退化成 NONE）"
+# E：最难的一种 —— 被误标的块把框的上边框也包了进去（跳过横幅就一个框都找不出来）。
+{ m45_rule 40; printf ' Update Available\n'; printf ' New version 1.0.0 is available. Run pi update\n'
+  printf ' Changelog: https://x\n'; m45_rule 40; printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } \
+  > "$M45_F/draft-top.txt"
+M45_E="$(m45_probe "$M45_F/draft-top.txt" 3)"
+assert_not_echo "$M45_E" "geometry=[]" "M45 对抗帧②：跳过横幅后一个框都找不出来时退回保守行为（绝不退成 NONE → 守卫失效）"
+assert_has_echo "$M45_E" "box_nows=[UpdateAvailableNewversion1.0.0isavailable.Runpiupdate]" \
+  "M45 对抗帧②：内容仍然读作框内容（BUSY）——被误标的块喂退了保守分支，没有白打字"
+# 对照：没有横幅的普通框 —— 判据一个字都没变
+{ m45_rule 40; printf '\n'; printf ' half sentence\n'; printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } > "$M45_F/no-banner.txt"
+M45_F0="$(m45_probe "$M45_F/no-banner.txt" 2)"
+assert_has_echo "$M45_F0" "geometry=[1 5]" "M45 对照：没有横幅时几何与行为不变"
+assert_has_echo "$M45_F0" "box_nows=[halfsentence]" "M45 对照：普通草稿照旧读得出来"
+assert_has_echo "$M45_F0" "banner_rows=[]" "M45 对照：没有横幅时一行都不标"
+
 # ---------------------------------------------------------------- 12b-h1. M24 真实 pi 窗格体检（显式开）
 # tests/pm-box-real.sh 用**真实 pi**起一个窗格，把守卫看到的原始帧与判定打出来（真实现场形状）。
 # 默认不跑：它要用使用者的 pi 配置（`--no-session --session-dir <tmp>`，不写会话文件，但会加载扩展）。
@@ -5549,6 +5649,10 @@ else
     sleep 0.9
   }
   ob_submits() { grep -c '^SUBMIT:' "$OB_SUBMIT" 2>/dev/null || true; }
+  # 守卫眼里的框内容（去空白）——用来断言「读出来的是真草稿，不是横幅」
+  ob_target_box_nows() { # <target>
+    ( cd "$REPO" && env OB_T="$1" bash -c '. "$1/scripts/lib/common.sh"; . "$1/scripts/lib/outbox.sh"; team_load_config >/dev/null 2>&1 || true; team_input_box_text "$OB_T" 2>/dev/null | tr -d "[:space:]"' _ "$SKILL_DIR" )
+  }
 
   # 前面段落（11b2/11b3）可能留下 PM 状态残迹：先清掉，否则「假 PM 在跑」判不出来
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" \
@@ -5845,6 +5949,28 @@ else
   assert_eq "12b-h ⑲c M24：C-c 全程只补一记（不许对空框连发）" "$(grep -c '^C-c$' "$OB_KEYLOG" 2>/dev/null || echo 0)" "1"
   tmux capture-pane -p -t "$SESSION:race6" > "$TMP/ob-h-c3-box.log" 2>/dev/null || true
   assert_not "$TMP/ob-h-c3-box.log" "line-01" "12b-h ⑲c M24：升级清理后没有 payload 残留"
+
+  # ⑳（M45）pi 的更新横幅画在框上方：整行 ─ 的 DynamicBorder 与框边框**同形等宽**。
+  # 真现场：pi 0.86.0 发布后，空闲框被判 BUSY → 投递守卫把「空闲」读成「有草稿」→ 通知被 held。
+  # 这里用假 TUI 按真实现场帧画横幅（真帧/翻转在 12b-h0b，真 pi 在 tests/pm-box-real.sh）。
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui banner1 '' 'FAKE_TUI_BANNER=both'
+  ob_live env $TEAM draft send "$TMP/ob-three.txt" --target "$SESSION:banner1" >"$TMP/ob-h-banner1.log" 2>&1 || true
+  assert_eq "12b-h ⑳ M45：带横幅的空框照样投递（没把横幅读成框内容 → 没有误判 BUSY）" "$(ob_submits)" "1"
+  assert_has "$OB_SUBMIT" "alpha line one" "12b-h ⑳ M45：投出去的内容是 payload 本身"
+  tmux capture-pane -p -t "$SESSION:banner1" > "$TMP/ob-h-banner1-box.log" 2>/dev/null || true
+  assert_has "$TMP/ob-h-banner1-box.log" "Update Available" "12b-h ⑳ M45：这轮帧里真的有横幅（断言不是空转）"
+  # 横幅 + 真草稿：读出来的必须是**真草稿**（一个键都不发）
+  ob_reset; : > "$OB_SUBMIT"
+  ob_tui dev '半句草稿 half a sentence' 'FAKE_TUI_BANNER=both'
+  ob_live env $TEAM say dev "check the failing test" >"$TMP/ob-h-banner2.log" 2>&1 || true
+  assert_has "$TMP/ob-h-banner2.log" "queued" "12b-h ⑳ M45：横幅 + 真草稿 → 排队（没有粘字）"
+  assert_eq "12b-h ⑳ M45：横幅 + 真草稿 → 零提交" "$(ob_submits)" "0"
+  tmux capture-pane -p -t "$SESSION:dev" > "$TMP/ob-h-banner2-box.log" 2>/dev/null || true
+  assert_has "$TMP/ob-h-banner2-box.log" "Update Available" "12b-h ⑳ M45：这一帧里真有横幅（断言不是空转）"
+  assert_has "$TMP/ob-h-banner2-box.log" "半句草稿 half a sentence" "12b-h ⑳ M45：真草稿还在框里（没被粘走）"
+  assert_eq "12b-h ⑳ M45：守卫读到的框内容就是**真草稿**（横幅没被当成草稿、草稿也没被横幅吞掉）" \
+    "$(ob_target_box_nows "$SESSION:dev")" "半句草稿halfasentence"
 fi
 
 # ---------------------------------------------------------------- 12b-i. 扩展：入队而不是打字（规格 requirement 6 第 2 条）
@@ -9349,6 +9475,14 @@ else
     else
       assert_has "$TMP/m28-ctr-pmbox.log" "RETRACT=ok" "M28 容器里跑真 pi 体检：输入框判据 + 收回在真实现场成立"
       assert_has "$TMP/m28-ctr-pmbox.log" "verdict=EMPTY" "M28 容器里跑真 pi 体检：空闲空框被判 EMPTY（没被误判成忙）"
+      # M45：顺便报这轮的横幅状态。横幅在场时，上面那条 EMPTY 断言就是判据层在**真横幅**上的现场考试；
+      # 不在场（今天没新版本/网络不通）也不报红 —— 横幅形状由 12b-h0b / 12b-h ⑳ 的夹具与翻转包常驻覆盖，
+      # 这里不把门禁绑到「今天的发布节奏」上。
+      if grep -q 'banner=present' "$TMP/m28-ctr-pmbox.log" 2>/dev/null; then
+        ok "M45 容器体检这轮有更新横幅：EMPTY/RETRACT 是在真横幅现场上成立的"
+      else
+        printf '  \033[2m·\033[0m %s\n' "（M45：这轮容器体检没有横幅（今天无新版本/网络不通）；横幅现场另有合成帧与真 pane 夹具常驻覆盖）"
+      fi
     fi
   fi
 fi
