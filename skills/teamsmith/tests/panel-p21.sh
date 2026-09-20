@@ -152,7 +152,9 @@ conf_set() { mkdir -p "$state"; printf '%s\n' "$@" > "$state/panel.conf"; }
 panel_pid() { tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_pid}' 2>/dev/null | head -1; }
 
 # Open the overlay and its project-settings navigation row (the sixth row), then wait for data.
+# <marker> is the badge the wait looks for (zh by default; the en pass passes its own).
 open_view() {
+  local marker="${1:-立即生效}"
   keys ,
   sleep 0.7
   keys Down Down Down Down Down
@@ -160,7 +162,7 @@ open_view() {
   keys Enter
   local i
   for i in $(seq 1 30); do
-    cap | grep -qF '立即生效' && { sleep 0.4; return 0; }
+    cap | grep -qF "$marker" && { sleep 0.4; return 0; }
     sleep 0.4
   done
   cap | tail -5 >&2
@@ -224,13 +226,15 @@ pick_option() {
 # ---------------------------------------------------------------- scenarios
 
 scn_settings() {
-  section "settings · 行集/类徽章/默认值/过滤/窗口/点击/refuse 路由/q 全局含义（B2）"
+  section "settings · 标签/类徽章/默认值/过滤/窗口/点击/CLI 对齐/refuse 路由/q（B2 + M49）"
   server_up settings
   python3 - "$(cfg)" <<'PYFIX'
 import re, sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 s = re.sub(r'^TEAM_PULSE_NUDGE_GAP=.*$', 'TEAM_PULSE_NUDGE_GAP="900"  # 15min', s, count=1, flags=re.M)
+# M49：文件里手加一个 schema 不认识的键（命令报 known=false）—— 它没有标签可用，行回退显示原始键。
+s = s.rstrip('\n') + '\nTEAM_HAND_ADDED="hand"\n'
 open(p, 'w', encoding='utf-8').write(s)
 PYFIX
   start_panel
@@ -238,31 +242,45 @@ PYFIX
   open_view
   assert_eq "导航行打开视图没有写 panel.conf" "$(sha "$state/panel.conf" 2>/dev/null || echo none)" "$conf_before"
   cap_to view
-  # The first frame lists the top of the apply group with its badge (rows come from the command).
-  assert_match "$tmp/$current/view.txt" 'TEAM_MODEL_LIMITS +.*立即生效' "apply 行带 立即生效 徽章"
+  # M49：行的主标识是人话标签（来自字符串表），裸键不作为行的文本出现。
+  assert_match "$tmp/$current/view.txt" '模型并发上限 +.*立即生效' "apply 行显示人话标签 + 立即生效 徽章"
+  assert_match "$tmp/$current/view.txt" '› 冲突默认取分支侧' "聚焦行的主文本是标签，不是裸键"
+  assert_not "$tmp/$current/view.txt" "TEAM_MODEL_LIMITS" "行里不再出现裸键 TEAM_MODEL_LIMITS"
+  assert_not "$tmp/$current/view.txt" "TEAM_GATES" "行里不再出现裸键 TEAM_GATES"
   assert_has "$tmp/$current/view.txt" "立即生效" "apply 组标题"
   cap_has "↑/↓ 行 · Enter 打开 · / 筛选" keyband
-  # One filter per class: the badge, the unset marker and the line's own comment.
+  # One filter per class: the badge, the unset marker and the line's own comment (all unchanged).
   filter_to TEAM_PULSE_INTERVAL
   cap_to restart
-  assert_match "$tmp/$current/restart.txt" 'TEAM_PULSE_INTERVAL +900 · 需重启' "restart 行带 需重启 徽章"
+  assert_match "$tmp/$current/restart.txt" '巡检周期 +900 · 需重启' "restart 行的标签 + 需重启 徽章"
+  assert_has "$tmp/$current/restart.txt" "命令行：team config set TEAM_PULSE_INTERVAL <新值>" "CLI 提示行点名原始键（照敲命令用）"
   filter_to TEAM_PROJECT
   cap_to refuse
-  assert_match "$tmp/$current/refuse.txt" 'TEAM_PROJECT +root · 只读' "refuse 行带 只读 徽章"
+  assert_match "$tmp/$current/refuse.txt" '项目名 +root · 只读' "refuse 行的标签 + 只读 徽章"
+  assert_has "$tmp/$current/refuse.txt" "手改 .pi/team/config.sh 里的 TEAM_PROJECT" "refuse 提示行点名原始键与手改路线"
   filter_to TEAM_PANEL_DETAIL_CAP
   cap_to unset
-  assert_match "$tmp/$current/unset.txt" 'TEAM_PANEL_DETAIL_CAP +未设 · 默认 131072' "未设的键显示 schema 默认值 + unset 标记"
+  assert_match "$tmp/$current/unset.txt" '详情文件读取上限 +未设 · 默认 131072' "未设的键显示 schema 默认值 + unset 标记"
   filter_to TEAM_PULSE_NUDGE_GAP
   cap_to comment
-  assert_match "$tmp/$current/comment.txt" 'TEAM_PULSE_NUDGE_GAP +900 · 立即生效 +# 15min' "行内注释原样渲染"
-  # The filter matches key or value, case-insensitively; esc clears it without closing the view.
+  assert_match "$tmp/$current/comment.txt" '重复提醒间隔 +900 · 立即生效 +# 15min' "行内注释原样渲染"
+  # M49 回退：schema 不认识的键没有标签 → 行的主文本就是原始键（未知键徽章 + 未知键提示）。
+  filter_to TEAM_HAND_ADDED
+  cap_to unknown
+  assert_match "$tmp/$current/unknown.txt" 'TEAM_HAND_ADDED +hand · 未知键' "schema 不认识的键回退显示原始键"
+  assert_has "$tmp/$current/unknown.txt" "未知键：TEAM_HAND_ADDED" "未知键的提示行说清楚为什么没有标签"
+  # The filter matches the label (M49), key or value; esc clears it without closing the view.
+  filter_to 巡检周期
+  cap_to filter-label
+  assert_has "$tmp/$current/filter-label.txt" "巡检周期" "按标签搜到该行"
+  assert_not "$tmp/$current/filter-label.txt" "模型并发上限" "按标签过滤掉不匹配的行"
   filter_to pulse
   cap_to filter
-  assert_has "$tmp/$current/filter.txt" "TEAM_PULSE_INTERVAL" "过滤留下 pulse 行"
-  assert_not "$tmp/$current/filter.txt" "TEAM_MODEL_LIMITS" "过滤掉不匹配的行"
+  assert_has "$tmp/$current/filter.txt" "巡检周期" "按原始键 pulse 仍能找到（行上仍是标签）"
+  assert_not "$tmp/$current/filter.txt" "模型并发上限" "过滤掉不匹配的行"
   filter_clear
   cap_to cleared
-  assert_has "$tmp/$current/cleared.txt" "TEAM_MODEL_LIMITS" "esc 清过滤后全部行回来"
+  assert_has "$tmp/$current/cleared.txt" "模型并发上限" "esc 清过滤后全部行回来"
   assert_has "$tmp/$current/cleared.txt" "项目设置" "esc 没有关掉视图"
   # The focus window moves with the keys and counts what it hides at the top.
   local i
@@ -270,21 +288,24 @@ PYFIX
   sleep 1.2
   cap_to window
   assert_match "$tmp/$current/window.txt" '↑[0-9]+' "窗口顶部显示被隐藏的行数"
-  # A click moves the focus to an unfocused row; the second click opens that row's target.
-  local target_line keyname
-  target_line="$(cap | grep -n '立即生效' | grep -E 'TEAM_[A-Z_]+' | grep -v '›' | head -1 | cut -d: -f1)"
+  # A click moves the focus to an unfocused row; the second click opens that row's editor. M49：行
+  # 按**标签**认，原始键从第一次点击后的 CLI 提示行读（标签用来看，键用来敲）。
+  local target_line label keyname
+  target_line="$(cap | grep -n '· 立即生效' | grep -v '›' | grep -v '命令行：' | head -1 | cut -d: -f1)"
   if [ -n "$target_line" ]; then
-    keyname="$(cap | sed -n "${target_line}p" | grep -oE 'TEAM_[A-Z_]+' | head -1)"
+    label="$(cap | sed -n "${target_line}p" | sed 's/^│//' | sed -E 's/^ +//' | sed -E 's/  +.*//')"
     click_at 20 "$target_line"
     sleep 0.9
     cap_to click
-    assert_has "$tmp/$current/click.txt" "› $keyname" "第一次点击把光标放到那一行"
+    assert_has "$tmp/$current/click.txt" "› $label" "第一次点击把光标放到那一行（按标签认行）"
+    keyname="$(cap | grep -F 'team config set' | grep -oE 'TEAM_[A-Z0-9_]+' | head -1)"
+    assert_has "$tmp/$current/click.txt" "team config set $keyname" "CLI 提示行跟着焦点换到该行的原始键"
     # The window may have scrolled with the focus: click the row the cursor is on now.
-    target_line="$(cap | grep -n '›' | grep -E 'TEAM_[A-Z_]+' | head -1 | cut -d: -f1)"
+    target_line="$(cap | grep -n '› .*· 立即生效' | head -1 | cut -d: -f1)"
     [ -n "$target_line" ] && click_at 20 "$target_line"
     if wait_editor "$keyname"; then
       cap_to click2
-      assert_has "$tmp/$current/click2.txt" "╭─ $keyname" "第二次点击打开该行的编辑器"
+      assert_has "$tmp/$current/click2.txt" "╭─ $keyname" "第二次点击打开该行的编辑器（标题点名原始键）"
     else
       cap_to click2
       bad "第二次点击没有打开该行的编辑器"
@@ -298,7 +319,7 @@ PYFIX
   local before; before="$(sha "$(cfg)")"
   filter_to TEAM_SESSION
   sleep 0.6
-  focus_row 'TEAM_SESSION +.*只读' || bad "没能把焦点移到 refuse 行"
+  focus_row '会话名 +.*只读' || bad "没能把焦点移到 refuse 行"
   keys Enter
   sleep 1.2
   cap_to refuse-route
@@ -348,11 +369,20 @@ EOF2
   filter_to TEAM_ZZZ_TEST
   sleep 0.5
   cap_to scratch-key
-  assert_match "$tmp/$current/scratch-key.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "scratch CLI 新增的键出现在视图里（不重建 panel.js）"
+  assert_match "$tmp/$current/scratch-key.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "scratch CLI 新增的键出现在视图里（不重建 panel.js；无标签→回退裸键）"
   filter_to TEAM_GATES
   sleep 0.5
   cap_to scratch-class
-  assert_match "$tmp/$current/scratch-class.txt" 'TEAM_GATES +.*只读' "scratch CLI 改过的类跟着变（bundle 没有第二张键表）"
+  assert_match "$tmp/$current/scratch-class.txt" '门禁命令 +true · 只读' "scratch CLI 改过的类跟着变（bundle 没有第二张键表）"
+  assert_has "$tmp/$current/scratch-class.txt" "手改 .pi/team/config.sh 里的 TEAM_GATES" "scratch CLI 的拒统路线也点名原始键"
+  # M49：另一种语言的人话标签（同一张表切换，标签不是渲染时的硬编码）。
+  conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
+  start_panel
+  open_view 'Takes effect now'
+  filter_to TEAM_PULSE_INTERVAL
+  cap_to en
+  assert_match "$tmp/$current/en.txt" '› Patrol interval' "en 行的人话标签（行不是裸键）"
+  assert_has "$tmp/$current/en.txt" "CLI: team config set TEAM_PULSE_INTERVAL <value>" "en 的 CLI 提示行同样点名原始键"
 }
 
 scn_write() {
@@ -505,11 +535,13 @@ PY
   assert_has "$tmp/$current/conflict.txt" "指纹不符" "回执点名指纹冲突"
   assert_eq "对方的字节被保住" "$(sha "$(cfg)")" "$other"
   assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_PULSE_NUDGE_GAP' "审计增了一行 conflict"
-  # The view reloaded and shows the other writer's value (1200 was never written).
+  # The view reloaded and shows the other writer's value (1200 was never written). M49：行上是标签，
+  # 原始键在 CLI 提示行里（重读后仍与命令对齐）。
   sleep 1
   cap_to reloaded
-  assert_match "$tmp/$current/reloaded.txt" "TEAM_PULSE_NUDGE_GAP +900" "视图重读后显示对方的 900"
-  assert_not "$tmp/$current/reloaded.txt" "TEAM_PULSE_NUDGE_GAP +1200" "视图没有显示未写入的 1200"
+  assert_match "$tmp/$current/reloaded.txt" "重复提醒间隔 +900" "视图重读后显示对方的 900"
+  assert_not "$tmp/$current/reloaded.txt" "重复提醒间隔 +1200" "视图没有显示未写入的 1200"
+  assert_has "$tmp/$current/reloaded.txt" "team config set TEAM_PULSE_NUDGE_GAP" "视图仍点名原始键（照敲命令用）"
 }
 
 scn_seats() {

@@ -6,20 +6,32 @@ The settings overlay's navigation row SHALL open a **project-settings view** tha
 title band, the page tabs and the key band stay, exactly as with the overlay itself, and the view is closed with
 `esc` back to the overlay it was opened from without collapsing the console. The view SHALL list the project
 contract (`.pi/team/config.sh`, `memory-and-deps`'s single-writer file): one row per key of the owning command's
-schema plus one row per key the file itself carries that the schema does not know, and per row the key name, the
-current value (the file's value, else the schema's default marked as unset), the key's **class** from the schema
-and the key's own trailing inline comment when its line has one. The class vocabulary SHALL be the owning
+schema plus one row per key the file itself carries that the schema does not know, and per row the key's **human
+label** — from the console's zh/en tables, looked up by the key name the command reported — the current value
+(the file's value, else the schema's default marked as unset), the key's **class** from the schema and the key's
+own trailing inline comment when its line has one. The bare key name MUST NOT be the row's main text: every key of
+the command's schema SHALL have a non-empty label in both tables (a fact the string-table gate asserts in both
+directions — a schema key without a label and a label whose schema key is gone both fail it), and the raw key
+SHALL appear only where the view aligns with the command line: the editor's prompt and its confirmation, and the
+view's own line naming what to run for the focused row — `team config set <KEY> <value>` for a key the command can
+set, the file to hand-edit plus the key for a `refuse` key, the seat's own command for a seat. A key the schema
+does not know has no label and none SHALL be invented for it: its row falls back to the raw key name, which is
+what the file and the command carry. The class vocabulary SHALL be the owning
 command's, closed and rendered from the tables: `apply` (the next read of the file uses it), `restart` (a running
 process holds the old value until it is restarted — the badge names the target: the pulse, the PM or a live
 session) and `refuse` (the console must not change it). The row set and the classes MUST come from the owning
-command's machine-readable read at render time; the bundle MUST NOT carry a second key table, so a key added to
-the command's schema appears in the view without rebuilding `panel.js`. `↑`/`↓` SHALL move a row focus (group
+command's machine-readable read at render time; the bundle MUST NOT carry a second **schema** — no key list with
+classes, defaults or a row order — so a key added to the command's schema appears in the view without rebuilding
+`panel.js`, with the class, the default and the row that command gives it (and, having no label yet, its raw name
+as the row's text). `↑`/`↓` SHALL move a row focus (group
 headings are not focusable) and SHALL drag a window that counts the rows it hides at each edge; a click SHALL
 focus a row and a click on the focused row SHALL open its editor, the kanban's rule. `/` SHALL open a filter line
-that narrows the list to the rows whose key or value contains the filter text (case-insensitively) and `esc` SHALL
-clear it without closing the view. A `refuse` row SHALL open no editor and its interaction SHALL surface the
+that narrows the list to the rows whose **label, raw key or value** contains the filter text (case-insensitively) —
+so the user who reads the labels and the user who knows the CLI's keyword both find the row — and `esc` SHALL clear
+it without closing the view. A `refuse` row SHALL open no editor and its interaction SHALL surface the
 owning command's refusal, which names the right route (hand-editing the file, `team add-agent`, …). The view's
-own labels SHALL come from the zh/en tables. The view is a console-only block: `--print` and `--json` MUST NOT
+own labels SHALL come from the zh/en tables, the key labels included: no visible text is written into the bundle.
+The view is a console-only block: `--print` and `--json` MUST NOT
 read or render it, and the machine exits' bytes are unchanged. The view MUST NOT be a fifth page: the four-page
 composition and `state/panel-page` keep their meaning.
 
@@ -29,14 +41,47 @@ composition and `state/panel-page` keep their meaning.
   schema whose `TEAM_DEFER_TTL` the file does not carry
 - **WHEN** the project-settings view renders in a 160-column fixture pane
 - **THEN** the three ruled rows carry the `apply`, `restart` and `refuse` badges, the `TEAM_DEFER_TTL` row shows
-  the schema's default and the unset marker, and every rendered label exists in both tables
+  the schema's default and the unset marker, every rendered label exists in both tables, and each row's main text
+  is that key's label in the active language (no row reads `TEAM_…`)
+
+#### Scenario: The raw key is exactly where the CLI is named
+
+- **GIVEN** the view open with the focus on `TEAM_PULSE_INTERVAL` (an editable `restart` key), then on
+  `TEAM_SESSION` (a `refuse` key) and then on the `dev` seat
+- **WHEN** each row is focused
+- **THEN** the view's own command line reads `team config set TEAM_PULSE_INTERVAL <value>` for the first row, names
+  the file to hand-edit together with `TEAM_SESSION` for the second and `team config set-agent-model dev …` for the
+  seat, and the editor the first row opens is titled with the raw key
+
+#### Scenario: A search by the raw key still finds the row
+
+- **GIVEN** the view open on a contract with more keys than one frame shows
+- **WHEN** `/` is pressed, `TEAM_PULSE_INTERVAL` is typed and applied
+- **THEN** that row is listed with its label as the main text and the raw key named by the command line under it,
+  and every other row is gone
+
+#### Scenario: A key the schema does not know falls back to the raw name
+
+- **GIVEN** a contract whose file carries `TEAM_HAND_ADDED` while the command's schema does not, and the view open
+- **WHEN** the row renders and is focused
+- **THEN** the row's main text is the raw key `TEAM_HAND_ADDED`, its badge is the unknown-key badge, and the
+  command line says the key is not in the command's schema (no `team config set` is offered for it)
+
+#### Scenario: The string tables cover the command's schema, both directions
+
+- **GIVEN** the console tree with the owning command's schema table and the zh/en tables
+- **WHEN** the string-table gate runs
+- **THEN** it exits non-zero naming the key when one schema key has no label in either table, and equally when a
+  label is left behind for a key the schema no longer carries; restoring the label (or the schema row) makes it
+  pass
 
 #### Scenario: The row set and the classes come from the command, not from the bundle
 
 - **GIVEN** a scratch copy of the CLI whose schema carries an extra key `TEAM_ZZZ_TEST` and whose `TEAM_GATES`
   class is `refuse`
 - **WHEN** the view renders against that CLI with the committed `panel.js` unchanged
-- **THEN** the list carries a `TEAM_ZZZ_TEST` row and `TEAM_GATES`'s badge reads `refuse`
+- **THEN** the list carries a `TEAM_ZZZ_TEST` row, whose main text is the raw name (the tables never saw that key),
+  and `TEAM_GATES`'s badge reads `refuse`
 
 #### Scenario: A refuse row opens no editor and the route is named
 
@@ -50,8 +95,9 @@ composition and `state/panel-page` keep their meaning.
 
 - **GIVEN** the view open on a contract with more keys than one frame shows
 - **WHEN** `/` is pressed and `pulse` is typed, and then `esc`
-- **THEN** the first frame lists only rows whose key or value contains `pulse`, and the frame after `esc` lists
-  every row again with the view still open
+- **THEN** the first frame lists only rows whose label, raw key or value contains `pulse` (the raw-key spelling
+  finds the rows the CLI names, while their text stays the label), and the frame after `esc` lists every row again
+  with the view still open
 
 #### Scenario: The focus window and the clicks
 

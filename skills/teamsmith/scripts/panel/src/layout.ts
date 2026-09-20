@@ -21,7 +21,7 @@
 
 import { fmtAge, fmtMB, GLYPH, clockOf, shortBranch, sparkline } from './format.js'
 import { markdownMemo } from './markdown.js'
-import { fill, OVERLAY_LABEL_W } from './strings/index.js'
+import { fill, keyLabel, OVERLAY_LABEL_W } from './strings/index.js'
 import type { Strings } from './strings/index.js'
 import type {
   Action,
@@ -1082,8 +1082,14 @@ function detailBlock(ctx: Ctx): Block | null {
 // shows up without rebuilding `panel.js`. The list is windowed against the height the assembly
 // hands over (the bounded-frame rule: more pane means more rows, never more blank).
 
-const SETTINGS_KEY_W = 34
+// The row's identity column is a **label** (M49), not the key name: the table's labels are human
+// sentences, so the column only has to hold the longest of them (zh is the wide language here;
+// a longer en label is cut by `cell()`, the same rule the key names followed).
+const SETTINGS_LABEL_W = 22
 const SETTINGS_AUDIT_LINES = 3
+// The lines the block draws under its row window: the CLI hint, a blank, the audit heading and the
+// audit tail. `layout()` subtracts this from the height it hands the view as its row budget.
+const SETTINGS_FOOTER_ROWS = 1 + 1 + 1 + SETTINGS_AUDIT_LINES
 
 /** One drawn row of the project-settings view (group headings are not focusable). */
 export type SettingsRow =
@@ -1129,7 +1135,11 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
   ]
   for (const g of groups) {
     const keys = block.keys.filter(
-      (k) => k.class === g.cls && match(k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
+      (k) =>
+        k.class === g.cls &&
+        // The label first (what the row shows), then the raw key and the value — the three inputs a
+        // user may type into `/` (the label's words, `TEAM_…`, or the value on screen).
+        match(keyLabel(s, k.name), k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
     )
     if (!keys.length) continue
     out.push({ kind: 'group', label: g.label, tone: settingsClassTone(g.cls) })
@@ -1147,7 +1157,7 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
 
 /** The badge + value column shared by a key row and a seat row. */
 function settingsRight(ctx: Ctx, text: string, badge: string, tone: Tone, innerW: number): Line {
-  const right = ` ${truncateW(text, Math.max(6, innerW - SETTINGS_KEY_W - 14))} · ${badge}`
+  const right = ` ${truncateW(text, Math.max(6, innerW - SETTINGS_LABEL_W - 14))} · ${badge}`
   return ln(seg(right, tone))
 }
 
@@ -1164,7 +1174,10 @@ function settingsKeyLine(ctx: Ctx, row: SettingsKey, focused: boolean, innerW: n
   const tone: Tone = known ? settingsClassTone(row.class) : 'dim'
   const line = ln(
     seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
-    seg(cell(row.name, SETTINGS_KEY_W), focused ? 'selected' : known ? 'heading' : 'dim'),
+    // The row's main text is the human label; the raw key is not repeated here (it stays in the
+    // editor's title, the confirmation line and the view's CLI hint — the places where the user
+    // types the key into `team config set`). An unknown key has no label → its raw name (M49).
+    seg(cell(keyLabel(s, row.name), SETTINGS_LABEL_W), focused ? 'selected' : known ? 'heading' : 'dim'),
     ...settingsRight(ctx, valueText, badge, tone, innerW).map((x) => x),
   )
   const note = (row.warning || row.route || row.comment || '').trim()
@@ -1178,17 +1191,36 @@ function settingsSeatLine(ctx: Ctx, seat: SettingsSeat, focused: boolean, innerW
   const policy = seat.override ? s.seatOverride : s.seatFallback
   const line = ln(
     seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
-    seg(cell(seat.agent, SETTINGS_KEY_W), focused ? 'selected' : 'heading'),
+    seg(cell(seat.agent, SETTINGS_LABEL_W), focused ? 'selected' : 'heading'),
     ...settingsRight(ctx, `${model} · ${settingsSourceLabel(s, seat.source)} · ${policy}`, '', 'dim', innerW).map((x) => x),
   )
   return { line }
 }
 
 /**
+ * The focused row as the command line names it (M49): the row's label is for reading, the raw key
+ * is what the user types — this line is the CLI-alignment half of the pair. A key the command does
+ * not know (schema unknown) and a read-only key are said out loud rather than offered as a command
+ * that would be refused; a seat gets its own `set-agent-model` route. '' when nothing is focusable.
+ */
+function settingsCliHint(s: Strings, rows: SettingsRow[], focus: number): string {
+  const focusable = rows.filter(
+    (r): r is { kind: 'key'; key: SettingsKey } | { kind: 'seat'; seat: SettingsSeat } => r.kind === 'key' || r.kind === 'seat',
+  )
+  const row = focusable[focus]
+  if (!row) return ''
+  if (row.kind === 'seat') return fill(s.settingsSeatHint, { seat: row.seat.agent })
+  const key = row.key
+  if (key.known === false) return fill(s.settingsUnknownHint, { key: key.name })
+  if (key.class === 'refuse') return fill(s.settingsRefusedHint, { key: key.name })
+  return fill(s.settingsCliHint, { key: key.name })
+}
+
+/**
  * The project-settings block: it replaces the page's blocks exactly as the detail view does (the
  * title band, the page tabs and the key band stay). `ctx.settingsRows` is the line budget the
- * assembly hands over for the window itself (headings, the audit footer and the hidden-row counts
- * are extra, and the frame's own budget wins).
+ * assembly hands over for the window itself (headings, the CLI hint, the audit footer and the
+ * hidden-row counts are extra, and the frame's own budget wins).
  */
 function settingsBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg } = ctx
@@ -1278,6 +1310,9 @@ function settingsBlock(ctx: Ctx): Block | null {
     }
   }
   if (hiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(hiddenBelow) })}`, 'dim')))
+
+  // The CLI-alignment line (M49): the row's label is for reading, the raw key is for typing.
+  put(ln(seg(` ${settingsCliHint(s, rows, focus)}`, 'dim')))
 
   // The audit footer: at most three lines, newest last (the CLI's own tail).
   put(ln(seg('')))
@@ -1817,7 +1852,7 @@ export function layout(input: LayoutInput): Frame {
           height > 0 && b.id === 'detail'
           ? (detailBlock({ ...ctx, detailRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
           : height > 0 && b.id === 'settings'
-          ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0) - 5) }) ?? b)
+          ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0) - SETTINGS_FOOTER_ROWS) }) ?? b)
           : b
     if (block.id === 'kanban' && block.lanes) laneWindows = block.lanes
     if (block.id === 'detail' && block.detail) detailWindow = block.detail

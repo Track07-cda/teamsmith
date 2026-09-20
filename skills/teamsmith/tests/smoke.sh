@@ -8821,6 +8821,41 @@ else
   bad "28-a 翻转：删掉 en 的键没被抓住（rc=$P28_SRC_RC）"; tail -3 "$TMP/p28-strings-flip.log"
 fi
 
+# ---- 28-a2 契约键标签（M49）：`lib/cmd-config.sh` 的 schema 每个键在 zh/en 两张表里都有非空
+# 标签，且没有表里的标签指着一个 schema 已不存在的键（两个方向都查）。翻转有两条：① 从**两张表**
+# 各删一条标签（键集合仍一致 → 只有这条断言能抓住）；② 从 schema 删一行（标签变成陈旧 → 反向断言抓住）。
+P28_LBL="$TMP/p28-labels"; rm -rf "$P28_LBL"
+mkdir -p "$P28_LBL/skills/teamsmith/scripts/panel" "$P28_LBL/skills/teamsmith/scripts/lib"
+cp -r "$SKILL_DIR/scripts/panel/src" "$P28_LBL/skills/teamsmith/scripts/panel/src"
+cp "$SKILL_DIR/scripts/lib/cmd-config.sh" "$P28_LBL/skills/teamsmith/scripts/lib/"
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels.log" 2>&1
+P28_LBL_RC=$?
+if [ "$P28_LBL_RC" -eq 0 ] && grep -q 'contract-key labels' "$TMP/p28-labels.log"; then
+  ok "28-a2 契约键标签：schema 的每个键在 zh/en 两张表里都有标签（$(grep -oE '[0-9]+ schema keys' "$TMP/p28-labels.log" | head -1)）"
+else
+  bad "28-a2 契约键标签：断言失败"; tail -3 "$TMP/p28-labels.log"
+fi
+sed -i '/^  label_TEAM_PULSE_INTERVAL:/d' \
+  "$P28_LBL/skills/teamsmith/scripts/panel/src/strings/zh.ts" \
+  "$P28_LBL/skills/teamsmith/scripts/panel/src/strings/en.ts"
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels-flip.log" 2>&1
+P28_LBL_FLIP_RC=$?
+if [ "$P28_LBL_FLIP_RC" -ne 0 ] && grep -q 'TEAM_PULSE_INTERVAL' "$TMP/p28-labels-flip.log"; then
+  ok "28-a2 翻转①：两张表都删掉 label_TEAM_PULSE_INTERVAL 后断言非 0 且点名该键"
+else
+  bad "28-a2 翻转①：删掉的标签没被抓住（rc=$P28_LBL_FLIP_RC）"; tail -3 "$TMP/p28-labels-flip.log"
+fi
+rm -rf "$P28_LBL/skills/teamsmith/scripts/panel/src"
+cp -r "$SKILL_DIR/scripts/panel/src" "$P28_LBL/skills/teamsmith/scripts/panel/src"
+sed -i '/^TEAM_MEETING_KNOCK|/d' "$P28_LBL/skills/teamsmith/scripts/lib/cmd-config.sh"
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels-stale.log" 2>&1
+P28_LBL_STALE_RC=$?
+if [ "$P28_LBL_STALE_RC" -ne 0 ] && grep -q 'TEAM_MEETING_KNOCK' "$TMP/p28-labels-stale.log"; then
+  ok "28-a2 翻转②：schema 删掉一行后，留下的标签被抓住（点名 TEAM_MEETING_KNOCK）"
+else
+  bad "28-a2 翻转②：陈旧的标签没被抓住（rc=$P28_LBL_STALE_RC）"; tail -3 "$TMP/p28-labels-stale.log"
+fi
+
 # ---- 28-b 调色板对比度 ≥ 4.5:1；翻转 = 把 dark.text 压到与背景同色
 "$JS_RUNNER" "$P28_TESTS/panel-contrast.mjs" "$P28_PANEL" >"$TMP/p28-contrast.log" 2>&1
 if [ $? -eq 0 ] && grep -q 'panel-contrast: ok' "$TMP/p28-contrast.log"; then
