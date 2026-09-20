@@ -529,6 +529,116 @@ else
   printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过私有 socket 自检）"
 fi
 
+# ---------------------------------------------------------------- 0d. 冲突标记守卫（M44）
+# 事故（2026-09-19，PM 自伤）：把 M43 合进 main 时 `git merge --squash` 报了冲突，PM 用
+# `git add -A && git commit` 一把提交 —— 三件套跟着进了被保护分支，是 PM 事后自查
+# （`grep -rln '^<<<<<<<'`）才发现的：当时的门禁**没有任何一条断言**能拦下它。
+# 判据（M44）：`git grep` 只扫**已跟踪**文件（未跟踪的临时文件里有标记不算问题；`.git` 不在索引里，
+# 天然扫不到）；排除 `.worktrees/**`（别的 agent 的工作树不是这棵树的一部分）与二进制（`-I`）。
+# 命中就红，并把 `文件:行号` 逐条打出来。翻转：tests/flip-m44.sh（真事故形状 → 红且点名）。
+section "0d · 冲突标记守卫（受版本控制的文件里不许有冲突标记）"
+# 行首三件套：带标签的（`<<<<<<< HEAD`）与裸的都算；`=` 一行允许任意长度（conflict-marker-size /
+# merge.conflictStyle=diff3 会改长度）。判据只认**行首**：git 写冲突标记永远在第 0 列，所以文档里
+# 缩进或用反引号引用的例子天然不受影响。这与 `git status` 的 UU/AA 是两件事：这里只认文本残留。
+CM_RE='^(<<<<<<<( |$)|={7,}$|>>>>>>>( |$))'
+# 两处都要扫（并集去重）：
+#   ① 工作树（默认行为，路径来自索引）—— 冲突刚发生、还没 add 也没提交的残留就在这里；
+#   ② 索引（--cached）—— 「先 add 了带标记的版本、又把工作树改回干净」时工作树侧看不见，
+#      而下一次提交会把标记写进历史（M44 对抗复验实测到的漏报形状）。冲突进行中索引没有 stage 0，
+#      --cached 什么都不报（也不报错），这时靠 ① 兜住；两条路径的排除与 -I 完全相同。
+cm_hits() { # <仓库根> → 命中的 `文件:行号:内容`（并集去重；无命中 = 空输出）
+  { git -C "$1" -c core.quotepath=false grep -n -I -E "$CM_RE" -- . \
+        ':(exclude).worktrees/**' ':(exclude)**/.worktrees/**'
+    git -C "$1" -c core.quotepath=false grep -n -I --cached -E "$CM_RE" -- . \
+        ':(exclude).worktrees/**' ':(exclude)**/.worktrees/**'
+  } 2>/dev/null | sort -u || true
+}
+CM_ROOT="${TEAM_SMOKE_MARKER_ROOT:-}"
+[ -n "$CM_ROOT" ] || CM_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$CM_ROOT" ] || ! git -C "$CM_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  bad "冲突标记守卫：找不到受检的 git 工作树（$SKILL_DIR 不在仓库里？TEAM_SMOKE_MARKER_ROOT=<root> 可显式指定）"
+else
+  CM_HITS="$(cm_hits "$CM_ROOT")"
+  if [ -n "$CM_HITS" ]; then
+    bad "受版本控制的文件里有冲突标记（合并/解冲突后残留）—— 解掉再重跑门禁：$CM_ROOT"
+    printf '%s\n' "$CM_HITS" | sed 's/^/     /'
+  else
+    ok "受版本控制的文件里没有冲突标记（$CM_ROOT：$(git -C "$CM_ROOT" ls-files | wc -l | tr -d ' ') 个已跟踪文件）"
+  fi
+fi
+# 翻转自测（M44 的「夹具必须可证伪」）：在 $TMP 里起一个临时仓库，把三件套**造出来**再看判据认不认，
+# 同时钉住三条边界（未跟踪不算 / .worktrees 不算 / 二进制不算）。没有这一段，「真树全绿 ✓」就可能
+# 只是判据太弱 —— 14b 的教训：检查器空跑时也是绿的。三件套只以变量形式出现（本文件自己也要干净）。
+CM_SB="$TMP/conflict-marker-sandbox"
+rm -rf "$CM_SB"; mkdir -p "$CM_SB"
+git -C "$CM_SB" init -q -b main
+git -C "$CM_SB" config user.email smoke@teamsmith
+git -C "$CM_SB" config user.name smoke
+printf 'clean\n' > "$CM_SB/tracked.txt"
+git -C "$CM_SB" add -A && git -C "$CM_SB" commit -qm "chore: init"
+CM_LT='<<<<<<<'; CM_EQ='======='; CM_GT='>>>>>>>'
+cm_sb_write() { printf 'clean-before\n%s HEAD\nours\n%s\ntheirs\n%s feature\n' "$CM_LT" "$CM_EQ" "$CM_GT" > "$1"; }
+if [ -z "$(cm_hits "$CM_SB")" ]; then
+  ok "翻转自测：干净副本无命中（正对照）"
+else
+  bad "翻转自测：干净副本被误报：$(cm_hits "$CM_SB" | head -1)"
+fi
+cm_sb_write "$CM_SB/tracked.txt"
+if cm_hits "$CM_SB" | grep -q '^tracked\.txt:2:'; then
+  ok "翻转自测：已跟踪文件里的三件套被抓到并点名 tracked.txt:2（还没提交也算）"
+else
+  bad "翻转自测：判据漏报已跟踪文件里的冲突标记（输出：$(cm_hits "$CM_SB" | head -1)）"
+fi
+git -C "$CM_SB" add -A && git -C "$CM_SB" commit -qm "accident: git add -A && git commit"
+if [ -n "$(cm_hits "$CM_SB")" ]; then
+  ok "翻转自测：标记进提交之后仍然红（事故形状）"
+else
+  bad "翻转自测：标记提交之后判据变绿（漏报）"
+fi
+printf 'clean\n' > "$CM_SB/tracked.txt"
+git -C "$CM_SB" add -A && git -C "$CM_SB" commit -qm "fix: resolve the conflict for real"
+if [ -z "$(cm_hits "$CM_SB")" ]; then
+  ok "翻转自测：清干净后回到绿（同一判据红→绿都成立）"
+else
+  bad "翻转自测：清干净后仍然红：$(cm_hits "$CM_SB" | head -1)"
+fi
+# 索引侧（M44 对抗复验加严的形状）：先 `git add` 带标记的版本，再把工作树改回干净 —— 工作树侧看不见，
+# 但下一次提交会把标记写进历史。判据必须仍然红（没有 --cached 这条路就漏；翻转自测直接钉住它）。
+cm_sb_write "$CM_SB/notes2.txt"
+git -C "$CM_SB" add notes2.txt
+printf 'clean-after-add\n' > "$CM_SB/notes2.txt"
+if cm_hits "$CM_SB" | grep -q '^notes2\.txt:2:'; then
+  ok "翻转自测：索引里有标记（工作树已改回干净）仍然红并点名 notes2.txt:2"
+else
+  bad "翻转自测：暂存侧的标记被漏报（工作树干净就放行 —— 下次提交会把它写进历史）"
+fi
+git -C "$CM_SB" rm -q --cached notes2.txt 2>/dev/null; rm -f "$CM_SB/notes2.txt"   # 收回这一步，后面继续用干净索引
+cm_sb_write "$CM_SB/untracked.txt"     # 边界①：未跟踪文件里有标记不算问题
+if cm_hits "$CM_SB" | grep -q 'untracked\.txt'; then
+  bad "翻转自测：未跟踪文件被误算（判据扫到了索引之外的工作树文件）"
+else
+  ok "翻转自测：未跟踪文件里的标记不算问题（只扫已跟踪）"
+fi
+mkdir -p "$CM_SB/.worktrees/other"      # 边界②：.worktrees/** 排除 —— 用 add -f 强制跟踪证明不是靠 .gitignore 侥幸
+cm_sb_write "$CM_SB/.worktrees/other/wt.txt"
+git -C "$CM_SB" add -f .worktrees/other/wt.txt 2>/dev/null && git -C "$CM_SB" commit -qm "wt" 2>/dev/null
+if git -C "$CM_SB" ls-files --error-unmatch .worktrees/other/wt.txt >/dev/null 2>&1; then
+  if cm_hits "$CM_SB" | grep -q '\.worktrees/'; then
+    bad "翻转自测：.worktrees/** 没被排除（别的 agent 的工作树会被误伤）"
+  else
+    ok "翻转自测：.worktrees/** 里的标记被排除（强制跟踪也不误伤）"
+  fi
+else
+  bad "翻转自测：.worktrees 夹具没建成（add -f 失败）—— 这条边界没被证到"
+fi
+printf 'x\0\n%s HEAD\n' "$CM_LT" > "$CM_SB/bin.dat"   # 边界③：二进制（含 NUL）被 -I 跳过
+git -C "$CM_SB" add -A && git -C "$CM_SB" commit -qm "bin"
+if cm_hits "$CM_SB" | grep -q 'bin\.dat'; then
+  bad "翻转自测：二进制文件被当文本扫（-I 没生效）"
+else
+  ok "翻转自测：二进制文件被 -I 跳过（NUL 字节 + 标记也不误报）"
+fi
+
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
 if $TEAM doctor >"$TMP/doctor-pre.log" 2>&1; then bad "未初始化时 doctor 应失败"; else ok "未初始化时 doctor 正确报错"; fi

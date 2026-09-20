@@ -293,6 +293,10 @@ git -C <root> checkout --theirs -- pnpm-lock.yaml && (cd <root> && pnpm install 
 git -C <root> add -A && git -C <root> commit -m "<ID>: <title>"
 ```
 
+**Conflict markers do not ride along**: `smoke.sh` §0d greps every tracked file for a line starting with
+`<<<<<<<` / `=======` / `>>>>>>>` and fails with `file:line`, so a `git add -A && git commit` on top of an
+unresolved `merge --squash` is caught by the next gate instead of reaching `main` (it did once).
+
 A trap: an add/add conflict is often git's rename detection pairing two different paths (e.g. `reviews/<ID>.md` and
 `reports/<ID>-<agent>.md`). Retry with `git -c merge.renames=false merge --squash <branch>` and it goes away.
 
