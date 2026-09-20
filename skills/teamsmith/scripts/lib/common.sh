@@ -81,7 +81,7 @@ team_scan_cache_on() { # 关联数组可用（bash≥4）且没被显式关掉
 
 _TEAM_SCAN_EPOCH=0
 declare -A _TEAM_DIR_ROOTS_MEMO=()      # 进程级：目录 → "wt\tmain"（目录的 git 归属在进程内不变）
-_TEAM_BOARD_EPOCH=-1; _TEAM_BOARD_EXISTS=0; _TEAM_BOARD_COLS=""; _TEAM_BOARD_IDS_OUT=""; _TEAM_BOARD_COUNTS_OUT=""
+_TEAM_BOARD_EPOCH=-1; _TEAM_BOARD_EXISTS=0; _TEAM_BOARD_BROKEN=0; _TEAM_BOARD_COLS=""; _TEAM_BOARD_IDS_OUT=""; _TEAM_BOARD_COUNTS_OUT=""
 declare -A _TEAM_BOARD_ROW=(); declare -A _TEAM_BOARD_STATUS=()
 _TEAM_WT_EPOCH=-1; _TEAM_WT_KEYS_NL=""
 declare -A _TEAM_WT_BRANCH=(); declare -A _TEAM_WT_SEEN=()
@@ -114,7 +114,7 @@ team_scan_refresh() { # 开新纪元（长驻进程每拍开头调用；一次�
 team_scan_invalidate() { # <board|state:<agent>|review|cands|git|all>：写路径当场失效对应缓存
   team_scan_cache_on || return 0
   case "${1:-all}" in
-    board)   _TEAM_BOARD_EPOCH=-1; _TEAM_CANDS_EPOCH=-1; _TEAM_IGNORED_EPOCH=-1
+    board)   _TEAM_BOARD_EPOCH=-1; _TEAM_BOARD_BROKEN=0; _TEAM_CANDS_EPOCH=-1; _TEAM_IGNORED_EPOCH=-1
              _TEAM_REP_TID=(); _TEAM_TID_KNOWN=(); _TEAM_REP_ISTASK=(); _TEAM_REP_RANK=() ;;
     state:*)
       _TEAM_STATE_EPOCH[${1#state:}]=-1
@@ -137,13 +137,20 @@ _team_board_cache_load() { # 纪元内幂等；无 BOARD → _TEAM_BOARD_EXISTS=
   [ "${_TEAM_BOARD_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
   _TEAM_BOARD_EPOCH="$_TEAM_SCAN_EPOCH"
   _TEAM_BOARD_ROW=(); _TEAM_BOARD_STATUS=()
-  _TEAM_BOARD_COLS=""; _TEAM_BOARD_IDS_OUT=""; _TEAM_BOARD_COUNTS_OUT="0 0 0 0"; _TEAM_BOARD_EXISTS=0
+  _TEAM_BOARD_COLS=""; _TEAM_BOARD_IDS_OUT=""; _TEAM_BOARD_COUNTS_OUT="0 0 0 0"; _TEAM_BOARD_EXISTS=0; _TEAM_BOARD_BROKEN=0
   local f="${TEAM_DOCS_ABS:-}/BOARD.md"
   { [ -n "${TEAM_DOCS_ABS:-}" ] && [ -f "$f" ]; } || return 0
+  if [ ! -r "$f" ]; then
+    # 文件在但读不了（27-b 降级夹具）：缓存不冒充读者 —— 标 broken 返回，本纪元所有看板读者
+    # 落回直读实现，把旧代码在坏源上的行为（含各自的失败位置与 rc）原样上交。
+    #  loader 自己绝不能死：team_scan_warm 在 set -e 的顶层跑，一个优化层没资格弄死进程。
+    _TEAM_BOARD_BROKEN=1
+    return 0
+  fi
   _TEAM_BOARD_EXISTS=1
-  _TEAM_BOARD_COLS="$(team_board_cols_direct)"
-  _TEAM_BOARD_IDS_OUT="$(team_board_ids_direct)"
-  _TEAM_BOARD_COUNTS_OUT="$(team_board_counts_direct)"
+  _TEAM_BOARD_COLS="$(team_board_cols_direct || true)"
+  _TEAM_BOARD_IDS_OUT="$(team_board_ids_direct || true)"
+  _TEAM_BOARD_COUNTS_OUT="$(team_board_counts_direct || true)"
   local idcol stcol k v
   idcol="$(team_board_col id)"; stcol="$(team_board_col status)"
   # 行文本里可能含制表符，分隔符用不可能出现在 markdown 里的 \x1f。
@@ -371,7 +378,7 @@ _team_state_cache_load() { # <agent>
     [ -n "${_TEAM_STATE_KV[$a|$k]+x}" ] && continue   # 第一个命中赢
     _TEAM_STATE_KV["$a|$k"]="${line#*=}"
     _TEAM_STATE_KEYS[$a]="${_TEAM_STATE_KEYS[$a]}$k "
-  done < "$f"
+  done < "$f" 2>/dev/null || true   # 重定向失败（读不了的 state 文件）：与直读的 grep -s 同语义——空
   return 0
 }
 
@@ -390,9 +397,10 @@ team_scan_warm() {
     compgen -G "$wt/${TEAM_DOCS_DIR:-docs/team}/reports/*.md" >/dev/null && _team_wtrep_load "$wt"
   done
   compgen -G "${TEAM_DOCS_ABS:-}/reports/*.md" >/dev/null && [ -n "${TEAM_MAIN_ROOT:-}" ] && _team_wtrep_load "$TEAM_MAIN_ROOT"
-  # 候选清单 / 忽略清单进 memo：digest 一拍问三遍的东西只扫一遍
-  if declare -F team_report_primary_candidates >/dev/null; then team_report_primary_candidates >/dev/null; fi
-  if declare -F team_reports_ignored >/dev/null; then team_reports_ignored >/dev/null; fi
+  # 候选清单 / 忽略清单进 memo：digest 一拍问三遍的东西只扫一遍。
+  # 预热是优化层：绝不许弄死进程（坏源夹具 27-b 实测：loader 一死，set -e 带走整条命令）——|| true
+  if declare -F team_report_primary_candidates >/dev/null; then team_report_primary_candidates >/dev/null || true; fi
+  if declare -F team_reports_ignored >/dev/null; then team_reports_ignored >/dev/null || true; fi
   return 0
 }
 
@@ -2599,8 +2607,10 @@ team_board_counts_direct() { # → "todo wip review blocked"（直读实现）
 team_board_cols() {
   if team_scan_cache_on; then
     _team_board_cache_load
-    [ -n "$_TEAM_BOARD_COLS" ] && printf '%s\n' "$_TEAM_BOARD_COLS"
-    return 0
+    if [ "$_TEAM_BOARD_BROKEN" != "1" ]; then   # 坏源不冒充：落回直读（M50/27-b）
+      [ -n "$_TEAM_BOARD_COLS" ] && printf '%s\n' "$_TEAM_BOARD_COLS"
+      return 0
+    fi
   fi
   team_board_cols_direct
 }
@@ -2608,8 +2618,10 @@ team_board_cols() {
 team_board_counts() { # → "todo wip review blocked"
   if team_scan_cache_on; then
     _team_board_cache_load
-    printf '%s\n' "$_TEAM_BOARD_COUNTS_OUT"
-    return 0
+    if [ "$_TEAM_BOARD_BROKEN" != "1" ]; then   # 坏源落回直读（M50/27-b）
+      printf '%s\n' "$_TEAM_BOARD_COUNTS_OUT"
+      return 0
+    fi
   fi
   team_board_counts_direct
 }
@@ -2794,8 +2806,10 @@ team_board_ids_direct() { # → 表里现有的 id（每行一个，给「未知
 team_board_ids() { # → 表里现有的 id（每行一个，给「未知 id」的报错用）
   if team_scan_cache_on; then
     _team_board_cache_load
-    [ -n "$_TEAM_BOARD_IDS_OUT" ] && printf '%s\n' "$_TEAM_BOARD_IDS_OUT"
-    return 0
+    if [ "$_TEAM_BOARD_BROKEN" != "1" ]; then   # 坏源落回直读（M50/27-b）
+      [ -n "$_TEAM_BOARD_IDS_OUT" ] && printf '%s\n' "$_TEAM_BOARD_IDS_OUT"
+      return 0
+    fi
   fi
   team_board_ids_direct
 }
@@ -2806,9 +2820,11 @@ team_board_has() { # <id> → 0=表里有这一行
   # M50：缓存开着时零 fork（原实现每次调用 fork 一次拿 team_board_row 的输出）
   if team_scan_cache_on; then
     _team_board_cache_load
-    [ "$_TEAM_BOARD_EXISTS" = "1" ] || return 1
-    [ -n "${_TEAM_BOARD_ROW[$1]:-}" ]
-    return
+    if [ "$_TEAM_BOARD_BROKEN" != "1" ]; then   # 坏源落回直读（M50/27-b）
+      [ "$_TEAM_BOARD_EXISTS" = "1" ] || return 1
+      [ -n "${_TEAM_BOARD_ROW[$1]:-}" ]
+      return
+    fi
   fi
   [ -n "$(team_board_row_direct "$1" 2>/dev/null || true)" ]
 }
@@ -3369,11 +3385,14 @@ team_board_row_direct() { # <id> → 整行（列位置由表头决定）（直�
 
 team_board_row() { # <id> → 整行（列位置由表头决定）
   # M50：纪元内缓存。原语义：文件不在 → rc 1；文件在 → rc 0（查无此行也是 rc 0、无输出）。
+  # 文件在但读不了（27-b 降级夹具）：落回直读，把旧实现的成功/失败原样上交。
   if team_scan_cache_on; then
     _team_board_cache_load
-    [ "$_TEAM_BOARD_EXISTS" = "1" ] || return 1
-    [ -n "${_TEAM_BOARD_ROW[$1]:-}" ] && printf '%s\n' "${_TEAM_BOARD_ROW[$1]}"
-    return 0
+    if [ "$_TEAM_BOARD_BROKEN" != "1" ]; then
+      [ "$_TEAM_BOARD_EXISTS" = "1" ] || return 1
+      [ -n "${_TEAM_BOARD_ROW[$1]:-}" ] && printf '%s\n' "${_TEAM_BOARD_ROW[$1]}"
+      return 0
+    fi
   fi
   team_board_row_direct "$1"
 }
@@ -3385,14 +3404,16 @@ team_board_status() { # <id> → todo|wip|review|done|blocked|dropped|closed|…
 }
 
 team__board_status() { # <id> → _R = 状态列（M50 进程内变体）
-  # M50：纪元内缓存（状态列在加载时已按表头解析好）
+  # M50：纪元内缓存（状态列在加载时已按表头解析好）；坏源落回直读（27-b）
   if team_scan_cache_on; then
     _team_board_cache_load
-    _R=""
-    if [ "$_TEAM_BOARD_EXISTS" = "1" ] && [ -n "${_TEAM_BOARD_ROW[$1]:-}" ]; then
-      _R="${_TEAM_BOARD_STATUS[$1]:-}"
+    if [ "$_TEAM_BOARD_BROKEN" != "1" ]; then
+      _R=""
+      if [ "$_TEAM_BOARD_EXISTS" = "1" ] && [ -n "${_TEAM_BOARD_ROW[$1]:-}" ]; then
+        _R="${_TEAM_BOARD_STATUS[$1]:-}"
+      fi
+      return 0
     fi
-    return 0
   fi
   local row
   row="$(team_board_row_direct "$1" 2>/dev/null || true)"

@@ -8157,6 +8157,13 @@ cat > "$P10_GITSHIM/git" <<EOF
 if [ "\${1:-}" = "-C" ] && [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--abbrev-ref" ]; then
   printf 'evil\033[2Jbranch\n'; exit 0
 fi
+# M50：分支读径进了「worktree list --porcelain 一个纪元一次」的进程内缓存（rev-parse 不再是热径）——
+# 探针跟到同一条读径上注：真实输出照跑，只把 branch 行改写成敌意名（worktree 路径映射原样保留，
+# 净化层吃到的字符串与旧探针完全同源；唯一消费者是 common.sh 的 _team_wt_cache_load）。
+if [ "\${1:-}" = "-C" ] && [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "list" ]; then
+  "$P10_REAL_GIT" "\$@" | sed "s|^branch refs/heads/.*|branch refs/heads/evil\$(printf '\033')[2Jbranch|"
+  exit 0
+fi
 exec "$P10_REAL_GIT" "\$@"
 EOF
 chmod +x "$P10_GITSHIM/git"
