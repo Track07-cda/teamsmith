@@ -10290,8 +10290,28 @@ for i in $(seq 1 12); do m50_report "M50C$i" carol "$M50R/.worktrees/carol/docs/
 ( cd "$M50R/.worktrees/bob" && git add -A && git commit -qm "bob reports" ) >/dev/null 2>&1
 ( cd "$M50R/.worktrees/carol" && git add -A && git commit -qm "carol reports" ) >/dev/null 2>&1
 ( cd "$M50R" && git add -A && git commit -qm "seed: worktree tasks" ) >/dev/null 2>&1
-assert_eq "M50 夹具有效：36 份报告 + 3 条复验记录就位" \
-  "$(ls "$M50R"/docs/team/reports/*.md "$M50R"/.worktrees/*/docs/team/reports/*.md 2>/dev/null | wc -l | tr -d ' '):$(ls "$M50R"/docs/team/reviews/*.md 2>/dev/null | wc -l | tr -d ' ')" "36:3"
+# 60 = 主仓 12 + bob 24（自己的 12 + 随分支带过去的主仓副本 12）+ carol 24。文件数含副本；
+# digest 扫的是去重后的**主候选**（每个 id 一份，36）—— 两个数都钉住，夹具有效性才算数。
+assert_eq "M50 夹具有效：60 份报告文件（含工作树副本）+ 3 条复验记录就位" \
+  "$(ls "$M50R"/docs/team/reports/*.md "$M50R"/.worktrees/*/docs/team/reports/*.md 2>/dev/null | wc -l | tr -d ' '):$(ls "$M50R"/docs/team/reviews/*.md 2>/dev/null | wc -l | tr -d ' ')" "60:3"
+cat > "$TMP/m50-cands.sh" <<'EOS'
+set -uo pipefail
+export TEAM_ROOT="$1" TEAM_CONFIG_FILE="" TEAM_ASSUME_YES=0 TEAM_SKILL_DIR_OVERRIDE=""
+D="$2/scripts"
+TEAM_SKILL_DIR="$2"
+# shellcheck disable=SC1090
+. "$D/lib/common.sh"
+for f in "$D"/lib/cmd-*.sh; do
+  # shellcheck disable=SC1090
+  . "$f"
+done
+team_load_config
+printf 'cands=%s\n' "$(team_report_primary_candidates | wc -l | tr -d ' ')"
+EOS
+(cd "$M50R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+  bash "$TMP/m50-cands.sh" "$M50R" "$SKILL_DIR" > "$TMP/m50-cands.out" 2>&1)
+assert_eq "M50 夹具有效：去重后的主候选 36（主仓 12 + bob 12 + carol 12）" \
+  "$(sed -n 's/^cands=//p' "$TMP/m50-cands.out")" "36"
 
 # ── ① 仓库根一次解析：`team board row <ID>` 整个调用 ≤ 1 次 git（旧实现同一条命令 3–5 次 rev-parse）
 m50_counted "$M50R" "$TMP/m50-row.log" $TEAM board row M50P1 >"$TMP/m50-row.out" 2>&1
@@ -10312,6 +10332,11 @@ M50_ON="$(wc -l < "$TMP/m50-dg-on.log" | tr -d ' ')"
 [ "$M50_ON" -le 50 ] && ok "M50-② digest 的 git 调用数 ≤ 50（实测 $M50_ON）" || { bad "M50-② digest 的 git 调用数 $M50_ON > 50"; sort "$TMP/m50-dg-on.log" | uniq -c | sort -rn | head -5 | sed 's/^/      /'; }
 assert_has "$TMP/m50-dg-on.out" "M50W1-bob" "M50-② digest 真的扫到了工作树里的报告（不是空扫描蒙混）"
 assert_has "$TMP/m50-dg-on.out" "gates: none" "M50-② SKIPPED 记录照旧带标记列出（判定语义没动）"
+# [3] 必须列全 34 行（36 - PASS 记录有效 - FAIL 记录有效）。这条钉的是 M50 修过的一颗真雷：
+# wip 里 team__review_subject_tip 裸调 team__resolve_branch 拿 rc —— set -e 下 rc=1 直接杀死
+# 进程替换的**生产者**，[3] 只打出前 3 行（恰好断在第一条带复验记录的报告之后）。
+assert_eq "M50-②c [3] 待复验列全 34 行（生产者不在带记录的报告上死掉）" \
+  "$(sed -n '/^\[3\] 待复验/,/^\[4\]/p' "$TMP/m50-dg-on.out" | grep -c '^  M50')" "34"
 # 夹具非空转：同一夹具上 cache-off（每份报告/记录各问一轮 git 的旧形状）必须 > 50 ——
 # 若哪天这条挂了，说明夹具瘦到抓不住旧形状，①②的阈值断言也跟着失去意义。
 m50_counted "$M50R" "$TMP/m50-dg-off.log" env TEAM_SCAN_CACHE=0 $TEAM digest >"$TMP/m50-dg-off.out" 2>&1

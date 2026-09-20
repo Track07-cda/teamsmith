@@ -47,9 +47,9 @@ team__resolve_branch() { # <ID> → _R；rc：0=唯一命中 1=找不到 2=歧�
 }
 
 team_resolve_branch() { # <ID> [--branch b] —— 对外语义一字不变（含找不到/歧义的 team_die 原文）
-  local id="$1" branch="${2:-}" rc
+  local id="$1" branch="${2:-}" rc=0
   if [ -n "$branch" ]; then printf '%s\n' "$branch"; return 0; fi
-  team__resolve_branch "$id"; rc=$?
+  team__resolve_branch "$id" || rc=$?   # rc 捕获必须 || 设防：裸调用在 set -e 下会直接带走进程（M50/34 实钉）
   case "$rc" in
     0) printf '%s\n' "$_R" ;;
     1) team_die "找不到 $id 的分支：用 --branch 指定" ;;
@@ -184,8 +184,8 @@ team__review_subject_tip() { # <ID> → _R = 被判对象的当前 tip（无法�
     return 0
   fi
   # 非 verify：解析记录对应任务的活跃分支（解析不到/歧义 = 原实现子 shell 里 die → 空，不算“过期”）
-  local rc
-  team__resolve_branch "$id"; rc=$?
+  local rc=0
+  team__resolve_branch "$id" || rc=$?   # 同上：|| 设防，set -e 下裸调用会死在 rc=$? 之前
   if [ "$rc" -ne 0 ]; then _R=""; return 0; fi
   b="$_R"
   [ -n "$b" ] || { _R=""; return 0; }
