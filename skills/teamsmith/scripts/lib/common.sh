@@ -383,7 +383,13 @@ _team_state_cache_load() { # <agent>
 }
 
 # ---- 预热：读重命令的入口（父 shell）调一次，之后所有 $(…) 子 shell 吃热缓存
-team_scan_warm() {
+team_scan_warm() { # [--reports]：两档预热，按命令的真实读取面付账（M50 A/B 实测定案）
+  #   无参（宽度档，~0.2s）：board/worktree/refs/reviews/state 五个 breadth loader。
+  #     给 status/roster 这类「每 agent 读一轮、但不逐份迭代报告」的中等命令 —— 子壳读者经 fork
+  #     继承热缓存，不再每个 $(…) 各装一遍 loader（懒加载在它们身上是负优化：5×worktree-list 重装）。
+  #   --reports（全量档，~0.85s）：再加报告三件套（工作树脏标记 + 候选清单 + 忽略清单）。
+  #     只给真的逐份迭代报告的命令（digest / panel 一拍 / 巡检一拍）—— status 从不碰 candidates，
+  #     为它预扫是把 0.43s+ 扔进水里（实测：全量档 status 1.56s vs 宽度档 ~0.9s vs 基线 0.69s）。
   team_scan_cache_on || return 0
   _team_board_cache_load
   _team_wt_cache_load
@@ -392,10 +398,12 @@ team_scan_warm() {
   local a wt
   for a in $(team_agents); do
     _team_state_cache_load "$a"
+    [ "${1:-}" = "--reports" ] || continue
     wt="$(team_agent_worktree "$a")"
     [ -d "$wt" ] || continue
     compgen -G "$wt/${TEAM_DOCS_DIR:-docs/team}/reports/*.md" >/dev/null && _team_wtrep_load "$wt"
   done
+  [ "${1:-}" = "--reports" ] || return 0
   compgen -G "${TEAM_DOCS_ABS:-}/reports/*.md" >/dev/null && [ -n "${TEAM_MAIN_ROOT:-}" ] && _team_wtrep_load "$TEAM_MAIN_ROOT"
   # 候选清单 / 忽略清单进 memo：digest 一拍问三遍的东西只扫一遍。
   # 预热是优化层：绝不许弄死进程（坏源夹具 27-b 实测：loader 一死，set -e 带走整条命令）——|| true

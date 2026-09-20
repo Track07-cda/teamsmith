@@ -272,7 +272,7 @@ team_watch_once() {
   mkdir -p "$TEAM_STATE_DIR"
   # M50：巡检是长驻进程 —— 每拍开一个扫描新纪元，缓存绝不跨拍（拍内的重复读吃缓存）
   team_scan_refresh
-  team_scan_warm
+  team_scan_warm --reports   # M50：巡检一拍要算待办（逐份迭代报告）→ 全量档
 
   # ① 容量留痕（只观察，不干预）
   local cap; cap="$(team_capacity_line)"
@@ -1142,14 +1142,15 @@ team_cmd_panel_data() {
   # 进程替换起一个后台产者，末尾再收；输出键序与字节与串行完全一致。
   local _act_fd _act_out='[]'
   if [ -n "$block" ]; then
-    team_scan_warm   # M50：panel-data 一拍读遍 board/agents/reports/reviews，预热后全部吃热缓存
+    # M50：pending 块逐份迭代报告 → 全量档；其余块（pm/frame/capacity/agents/…）不碰 candidates → 宽度档
+    case "$block" in pending) team_scan_warm --reports ;; *) team_scan_warm ;; esac
     team_panel_block "$block" "$activity" "$events" "$did" "$dfile"
     return $?
   fi
   if [ "$activity" = "1" ]; then
     exec {_act_fd}< <( team_panel_activity_json "$activity" "$events" )
   fi
-  team_scan_warm   # M50：panel-data 一拍读遍 board/agents/reports/reviews，预热后全部吃热缓存
+  team_scan_warm --reports   # M50：panel 一拍读遍 board/agents/reports/reviews，预热后全部吃热缓存
   if [ "$activity" = "1" ]; then
     _act_out="$(cat <&$_act_fd)"
     exec {_act_fd}<&-

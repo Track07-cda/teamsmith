@@ -441,7 +441,7 @@ team_cmd_ps() {
 
 team_cmd_status() {
   team_require_docs
-  team_scan_warm   # M50
+  team_scan_warm   # M50：宽度档（不扫报告）——roster 的 $(…) 子壳经 fork 继承热缓存，免 5×loader 重装
   local id="${1:-}"
   team_cmd_roster
   # 延后队列非空时补一行（delivery-guard 的可见性；空队列不打印任何东西）
@@ -524,7 +524,7 @@ team_record_task_id() { # <相对主仓路径> → 候选任务 id（取不到 �
 
 team_cmd_digest() {
   team_require_docs
-  team_scan_warm   # M50：预热进程内扫描缓存，之后所有判定函数吃热缓存（判定逻辑不变）
+  team_scan_warm --reports   # M50：全量档 —— [3] 逐份迭代报告，预热后所有判定函数吃热缓存（判定逻辑不变）
   team_hdr "teamsmith digest · $TEAM_PROJECT · $(team_timestamp)"
 
   local live=0 total=0 a
