@@ -44,12 +44,31 @@ team_cmd_board() {
       grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null || team_warn "BOARD.md 还没有行"
       local warn; warn="$(team_board_layout_warning || true)"
       [ -n "$warn" ] && team_dim "  $warn"
+      # M48：同一 ID 多行必须看得见（面板焦点/状态/报告都按 ID 指行；重复只靠肉眼就太晚了）
+      local dups; dups="$(team_board_duplicate_line || true)"
+      [ -n "$dups" ] && team_warn "  $dups（board set / assign 按 ID 寻址，同 ID 的多行一起改；board add 会拒绝新重复）"
       local ign; ign="$(team_reports_ignored || true)"
       [ -n "$ign" ] && team_dim "  （reports/ 里按规则忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')）"
       ;;
     add)
-      local id="${1:?usage: board add <ID> <title> [agent] [deps]}" title="${2:?}" agent="${3:-$(team_agents | head -1)}" deps="${4:--}"
-      team_board_add "$id" "$title" "$agent" "-" "$deps"; team_ok "board add $id" ;;
+      # M48：--allow-dup 是显式逃生门（写进审计）；位置参数仍是 <ID> <title> [agent] [deps]
+      local allow=0 args=() a
+      for a in "$@"; do
+        case "$a" in
+          --allow-dup) allow=1 ;;
+          -) args+=("-") ;;                        # deps 的「无」是裸连字符，不是选项
+          --*) team_usage_die "board add: 未知参数 $a（--allow-dup = 显式允许同 ID 多行）" ;;
+          *) args+=("$a") ;;
+        esac
+      done
+      local id="${args[0]:?usage: board add <ID> <title> [agent] [deps] [--allow-dup]}" title="${args[1]:?}" agent="${args[2]:-$(team_agents | head -1)}" deps="${args[3]:--}"
+      team_board_add "$id" "$title" "$agent" "-" "$deps" "$allow" || return 1
+      if [ "$allow" = "1" ]; then team_ok "board add $id（--allow-dup：同 ID 多行）"; else team_ok "board add $id"; fi ;;
+    assign)
+      # M48：给已有行指派 agent 的正门（只改 agent 列，行数不变）。以前只能再 add 一行 → 重复 ID。
+      [ -n "${1:-}" ] && [ -n "${2:-}" ] || team_usage_die "board: usage: board assign <ID> <agent>"
+      team_board_assign "$1" "$2" || team_die "BOARD.md 没有改动（未知 id）"
+      team_ok "board assign $1 → $2" ;;
     set)
       local id="${1:?usage: board set <ID> <status>}" st="${2:?}"
       case "$st" in todo|wip|review|done|blocked|dropped) ;; *) team_die "状态非法：$st（todo|wip|review|done|blocked|dropped）" ;; esac
@@ -57,7 +76,7 @@ team_cmd_board() {
       team_ok "board $id → $st" ;;
     row)
       team_board_row "${1:?usage: board row <ID>}" ;;
-    *) team_usage_die "board: 未知子命令 $sub（ls|add|set|row）" ;;
+    *) team_usage_die "board: 未知子命令 $sub（ls|add|assign|set|row）" ;;
   esac
 }
 

@@ -160,6 +160,24 @@ for r in rows:
 print(ids[0] if len(ids) == 1 else (",".join(ids) if ids else "-"))
 PYF
 }
+# The whole row that carries the focus cursor: two rows may share an id (M48), so the title — not
+# the id — is what tells the focused one apart. One cursor glyph must mean exactly one row; two
+# cursors is a defect of its own, so the file never contains a row text in that case (a substring
+# assertion must not be able to pass on two lit rows).
+focused_row() { # <capture file>
+  python3 - "$1" <<'PYR'
+import re, sys
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+hits = [r.strip() for r in rows if "›" in r]
+if len(hits) == 1:
+    print(hits[0])
+elif hits:
+    print(f"AMBIGUOUS-CURSOR:{len(hits)}")
+else:
+    print("-")
+PYR
+}
 # The ids visible in the lane whose column contains <col> (1-based display column).
 lane_ids() { # <capture file> <col>
   python3 - "$1" "$2" <<'PYL'
@@ -677,6 +695,73 @@ PYB
   sleep 1
   bcap focus-vanished
   assert_eq "M8 离开看板后焦点落到该车道第一条（M9）" "$(focused_id "$(bfile focus-vanished)")" "M9"
+  # M48: two rows carry one id (the file's history does this). The cursor must walk both — each one
+  # step, no freeze — and the focus glyph must sit on exactly one row. The old id-keyed match lit
+  # both up and `↓` never left the first of them. The fixture gives the two rows distinct agents
+  # (visible in a lane card at 120 columns) and distinct titles (visible on the full-width work page).
+  board_dup="$tmp/$current/board-dup.json"
+  python3 - "$board_dup" <<'PYD'
+import json, sys
+
+def row(i, state, title, agent):
+    return {"id": i, "title": title, "agent": agent, "branch": "-", "deps": "-", "state": state, "phase": "apply"}
+
+rows = [row("M39", "todo", "重复的第一条", "dev1"), row("M39", "todo", "重复的第二条", "dev2"), row("M48", "todo", "第三条", "dev3")]
+json.dump({"rows": rows, "counts": {}, "total": len(rows), "deliveries": []}, open(sys.argv[1], "w"))
+PYD
+  printf '4\n' > "$(page_file)"
+  start_panel "B3_STUB_BOARD_FILE='$board_dup'"
+  sleep 1
+  bcap dup-1
+  assert_eq "M48 重复 ID：初始焦点在第一行 M39" "$(focused_id "$(bfile dup-1)")" "M39"
+  assert_eq "M48 重复 ID：焦点光标恰好一个（不是两行都亮）" "$(grep -o '›' "$(bfile dup-1)" | wc -l | tr -d ' ')" "1"
+  focused_row "$(bfile dup-1)" > "$tmp/$current/dup-1-row.txt"
+  assert_has "$tmp/$current/dup-1-row.txt" "M39 dev1" "M48 重复 ID：高亮落在第一条（按行身份，不是裸 ID）"
+  keys Down; sleep 0.5
+  bcap dup-2
+  assert_eq "M48 重复 ID：↓ 后仍只有一个光标" "$(grep -o '›' "$(bfile dup-2)" | wc -l | tr -d ' ')" "1"
+  focused_row "$(bfile dup-2)" > "$tmp/$current/dup-2-row.txt"
+  assert_has "$tmp/$current/dup-2-row.txt" "M39 dev2" "M48 重复 ID：↓ 走到同 ID 的第二行（不卡死）"
+  # Cross-frame persistence (the brief's requirement): a refresh and a detail round trip must keep the
+  # *second* row of the id, not snap back to the first one.
+  keys r; sleep 1
+  bcap dup-refresh
+  focused_row "$(bfile dup-refresh)" > "$tmp/$current/dup-refresh-row.txt"
+  assert_has "$tmp/$current/dup-refresh-row.txt" "M39 dev2" "M48 重复 ID：刷新（r）后焦点仍在第二条同 ID 行"
+  keys Enter; sleep 1.4
+  bcap dup-detail
+  assert_has "$(bfile dup-detail)" "详情 M39" "M48 重复 ID：Enter 打开的是焦点那一行的详情"
+  keys Escape; sleep 0.8
+  bcap dup-back
+  focused_row "$(bfile dup-back)" > "$tmp/$current/dup-back-row.txt"
+  assert_has "$tmp/$current/dup-back-row.txt" "M39 dev2" "M48 重复 ID：详情返回后焦点仍在第二条同 ID 行"
+  keys Down; sleep 0.5
+  bcap dup-3
+  assert_eq "M48 重复 ID：再 ↓ 走到 M48（同 ID 两行之后继续前进）" "$(focused_id "$(bfile dup-3)")" "M48"
+  keys Up; sleep 0.4; keys Up; sleep 0.4
+  bcap dup-4
+  assert_eq "M48 重复 ID：↑↑ 回到第一行 M39" "$(focused_id "$(bfile dup-4)")" "M39"
+  focused_row "$(bfile dup-4)" > "$tmp/$current/dup-4-row.txt"
+  assert_has "$tmp/$current/dup-4-row.txt" "M39 dev1" "M48 重复 ID：↑ 逐行经过第二条，回到第一条"
+  # The work page walks the same rows through its own drawn order (M48 changed both walks). Its
+  # first `↓` anchors on the first drawn row (P20/B5), so the second press is the first real step.
+  printf '2\n' > "$(page_file)"
+  start_panel "B3_STUB_BOARD_FILE='$board_dup'"
+  sleep 1
+  bcap dup-work-1
+  assert_eq "M48 重复 ID（工作页）：初始焦点在第一绘制行 M39" "$(focused_id "$(bfile dup-work-1)")" "M39"
+  assert_eq "M48 重复 ID（工作页）：焦点光标恰好一个" "$(grep -o '›' "$(bfile dup-work-1)" | wc -l | tr -d ' ')" "1"
+  focused_row "$(bfile dup-work-1)" > "$tmp/$current/dup-work-1-row.txt"
+  assert_has "$tmp/$current/dup-work-1-row.txt" "重复的第一条" "M48 重复 ID（工作页）：高亮落在第一条"
+  keys Down; sleep 0.5; keys Down; sleep 0.5
+  bcap dup-work-2
+  focused_row "$(bfile dup-work-2)" > "$tmp/$current/dup-work-2-row.txt"
+  assert_has "$tmp/$current/dup-work-2-row.txt" "重复的第二条" "M48 重复 ID（工作页）：↓ 走到第二条同 ID 行"
+  keys Down; sleep 0.5
+  bcap dup-work-3
+  assert_eq "M48 重复 ID（工作页）：再 ↓ 走到 M48" "$(focused_id "$(bfile dup-work-3)")" "M48"
+  # The done-lane/wheel checks below need the kanban page back.
+  printf '4\n' > "$(page_file)"
   # 5.4: a 20-card done lane anchors on the newest and counts what it hides; the wheel scrolls it.
   start_panel "B3_STUB_DONE=20"
   sleep 1

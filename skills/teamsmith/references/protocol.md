@@ -256,6 +256,13 @@ Three places CEP hit in practice, all of which now have explicit tolerance rules
   `team board set` only writes the status column and never touches a column you added; new rows are aligned to the
   existing column count (unknown columns stay empty). Parsing used to be positional, and after adding a column it
   would read a `—` as the title.
+- **Duplicate ids**: a board row is identified by `(id, nth)` — the n-th row carrying that id — because a board
+  may share an id between tasks. The console walks the focus positionally, so two rows with one id are two
+  stops and each can be selected alone; `board add` refuses a second row for an existing id unless `--allow-dup`
+  is passed (audited in `state/watchdog.log`), and `board ls` / `digest` / `doctor` report the duplicates
+  (doctor warns, it does not fail). `board set <ID> <status>` and `board assign <ID> <agent>` address a row by
+  **id** and write **every** row carrying it (that has always been the CLI's rule; the row-level identity above
+  is the console's) — which is exactly why a *new* duplicate is refused at the door.
 - **The pending-report heuristic**: a file under `reports/*.md` only counts as awaiting verification when its
   file-name prefix is a task ID **and** its title is `# <ID> · …` **and** that ID is on the BOARD (or has a brief);
   the PM's own milestone/closure reports (`P2-closure.md` and the like) are grouped by `digest` under "ignored

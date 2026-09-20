@@ -2328,26 +2328,61 @@ team_board_ids() { # → 表里现有的 id（每行一个，给「未知 id」�
   return 0
 }
 
+# M48：同一 ID 出现多行（历史遗留：不同任务共用 ID；PM 实测被同 ID 两行卡住了看板光标）。
+# 输出 "<ID> ×<行数>"（按首次出现顺序），没有重复 → 空。面板/状态/报告按 ID 指行，重复只靠肉眼。
+# 只看**任务表**（从带 ID/编号 表头的那一行到表尾）：模板的占位行与下面的风险表共用 2 列，
+# 「—」与表外的 # 不是一个任务 ID。
+team_board_duplicate_ids() { # → "M4.3 ×2" 每行一个
+  local f="$TEAM_DOCS_ABS/BOARD.md" col hdr
+  [ -f "$f" ] || return 0
+  col="$(team_board_col id)"
+  hdr="$(awk -v c="$col" 'BEGIN{FS="|"} /^\|/ { v=$(c); gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID" || v=="编号") { print NR; exit } }' "$f")"
+  [ -n "$hdr" ] || return 0
+  awk -v c="$col" -v start="$hdr" 'BEGIN{FS="|"}
+    NR<start { next }
+    $0 !~ /^\|/ { exit }
+    { v=$(c); gsub(/^[ \t]+|[ \t]+$/,"",v)
+      if (v=="" || v=="ID" || v=="编号" || v=="-" || v=="–" || v=="—") next
+      if (!(v in seen)) order[++k]=v
+      seen[v]++ }
+    END { for (i=1;i<=k;i++) { v=order[i]; if (seen[v]>1) printf "%s ×%d\n", v, seen[v] } }' "$f"
+  return 0
+}
+
+# M48：一行话的重复报告（board ls / digest / doctor 共用同一份判据，避免三处各写一份）。
+team_board_duplicate_line() { # → "BOARD 有重复 ID：M4.3 ×2、M6.3 ×2"；没有 → 空
+  local dups
+  dups="$(team_board_duplicate_ids)"
+  [ -n "$dups" ] || return 0
+  printf 'BOARD 有重复 ID：'
+  printf '%s' "$dups" | awk 'NR>1{printf "、"} {printf "%s", $0} END{printf "\n"}'
+}
+
 # 注意：team_board_row 对「没有这一行」也返回 0（awk 正常结束），所以判存在必须看输出
 # 是否非空 —— F29 的根因就是「写」从不检查行是否存在。
 team_board_has() { # <id> → 0=表里有这一行
   [ -n "$(team_board_row "$1" 2>/dev/null || true)" ]
 }
 
-# 只写状态列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
+# 只写一列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
 # 于是 `board set NOSUCH done` 会打印 ✓ 而文件一个字节都没变（md5 相同）。
-team_board_write() { # <id> <status> → 0=真的改了那一行；1=没有这个 id（不碰文件）
-  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" st="$2" idcol stcol
+# M48：列名参数化，好让 `board assign` 走同一条「只改一格、拒绝时一个字节不落盘」的路。
+team_board_write_col() { # <id> <列名> <值> → 0=真的改了那一行；1=没有这个 id（不碰文件）
+  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" name="$2" val="$3" idcol col
   [ -f "$f" ] || return 1
-  idcol="$(team_board_col id)"; stcol="$(team_board_col status)"
-  awk -v id="$id" -v st="$st" -v ic="$idcol" -v sc="$stcol" 'BEGIN{FS=OFS="|"}
+  idcol="$(team_board_col id)"; col="$(team_board_col "$name")"
+  awk -v id="$id" -v val="$val" -v ic="$idcol" -v c="$col" 'BEGIN{FS=OFS="|"}
     /^\|/ { v=$(ic); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
-             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(sc)); $(sc)=" "st" "; print; found=1; next } }
+             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(c)); $(c)=" "val" "; print; found=1; next } }
     { print }
     END { exit(found ? 0 : 1) }
   ' "$f" > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
   mv "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }
   return 0
+}
+
+team_board_write() { # <id> <status> → 状态列（board set 的写口）
+  team_board_write_col "$1" status "$2"
 }
 
 # ---------------------------------------------------------------- done 的准入证据（F1）
@@ -2992,9 +3027,47 @@ team_board_set() { # <id> <status> → 未知 id / done 无证据：返回 1 且
   return 0
 }
 
-team_board_add() { # <id> <title> <agent> <branch> <deps>
+# M48：给**已有行**指派 agent 的正门 —— 以前只能再 `board add` 一行（重复 ID 就是这么进来的，
+# 而 add 的「已有行就不加」守卫在 task --title 那条路上，指派这条路根本没有入口）。
+# 只改那一行的 agent 列，行数不变；未知 id / 空参数拒绝且一个字节都不写（与 board set 同风格）。
+# 寻址语义与 board set 一致：按 ID 找，同 ID 的多行一起改（本次不改变既有寻址语义）。
+team_board_assign() { # <id> <agent> → 0=改了一行；1=拒绝（不落盘）
+  local id="$1" ag="$2"
+  [ -f "$TEAM_DOCS_ABS/BOARD.md" ] || return 1
+  if [ -z "$id" ] || [ -z "$ag" ]; then
+    team_err "用法：$TEAM_CLI board assign <ID> <agent>"
+    return 1
+  fi
+  if ! team_board_has "$id"; then
+    team_err "BOARD 里没有 $id：没有改动"
+    local ids; ids="$(team_board_ids | tr '\n' ' ')"
+    [ -n "${ids// /}" ] && team_err "  现有 id：${ids% }"
+    return 1
+  fi
+  team_board_write_col "$id" agent "$ag" || return 1
+  return 0
+}
+
+team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
   local f="$TEAM_DOCS_ABS/BOARD.md"
   [ -f "$f" ] || return 1
+  # M48：同 ID 的第二行先拒绝（与 board set 的「未知 id 不写」同风格：拒绝时一个字节都不写）。
+  # 历史遗留的共用 ID 保留，但**新增**重复必须显式说清楚（--allow-dup 并落一条审计）。
+  local allow_dup="${6:-0}" dup_prev=0
+  if team_board_has "$1"; then
+    if [ "$allow_dup" != "1" ]; then
+      local prev pst ptitle
+      prev="$(team_board_row "$1" 2>/dev/null || true)"
+      pst="$(team_board_field "$prev" status)"
+      ptitle="$(team_board_field "$prev" task)"
+      team_err "BOARD 里已经有 $1（状态 ${pst:-?} · 「${ptitle}」）：没有改动"
+      team_err "  同 ID 多行会让面板焦点/状态/报告指错行。改 ID 里程碑编号，或确实要两条时显式允许："
+      team_err "  $TEAM_CLI board add $1 <标题> --allow-dup   （会往 state/watchdog.log 落一条审计）"
+      team_err "  只是要给已有行指派 agent → $TEAM_CLI board assign $1 <agent>（只改那一行，行数不变）"
+      return 1
+    fi
+    dup_prev=1
+  fi
   # 与文件现有列数对齐：额外的列填 -（这样加了自定义列也不会错位）
   local ncols idcol taskcol agentcol branchcol depscol stcol cells=() i
   # 列数取「任务表表头行」的列数（文件里可能还有别的表，取最后一行会数错）
@@ -3020,6 +3093,11 @@ team_board_add() { # <id> <title> <agent> <branch> <deps>
     awk -v at="$last" -v row="$row" 'NR==at { print; print row; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   else
     printf '%s\n' "$row" >> "$f"
+  fi
+  # 显式允许的重复：审计里留一条（谁在什么时候往同一个 ID 加了第二行、当时几行）
+  if [ "$dup_prev" = "1" ]; then
+    local dupline; dupline="$(team_board_duplicate_ids | grep -F "$1 ×" | head -1 || true)"
+    team_wlog "board add $1 --allow-dup：显式新增同 ID 行（${dupline:-同 ID 多行}；标题「$2」）"
   fi
 }
 

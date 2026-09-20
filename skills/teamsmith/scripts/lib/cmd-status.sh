@@ -506,6 +506,9 @@ team_cmd_digest() {
   else
     printf '  待办             无（pulse 不会打扰 PM）\n'
   fi
+  # M48：看板重复 ID 的可见性（面板光标按行身份走，但状态/报告按 ID 指行——重复不能只靠肉眼）
+  local bdup; bdup="$(team_board_duplicate_line || true)"
+  [ -n "$bdup" ] && team_warn "  $bdup（board add 会拒绝新重复；board set / assign 按 ID 寻址）"
 
   printf '\n%s\n' "[2] 待处理通知"
   local any=0 n rlabel

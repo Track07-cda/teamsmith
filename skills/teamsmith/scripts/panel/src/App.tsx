@@ -12,13 +12,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
-import { layout, resolveFocus, rowKey, settingsViewRows } from './layout.js'
+import { layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsViewRows } from './layout.js'
 import type { LayoutInput } from './layout.js'
 import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, DetailWindow, FrameInput, PageId, PrefName, Segment, SettingsBlock, ViewState } from './types.js'
+import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsBlock, ViewState } from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -230,7 +230,7 @@ export function App({
   const [overlay, setOverlay] = useState(false)
   const [overlayIndex, setOverlayIndex] = useState(0)
   const [viewEntry, setViewEntry] = useState<number | null>(null)
-  const [focus, setFocus] = useState<{ lane: string; id: string } | null>(null)
+  const [focus, setFocus] = useState<FocusRef | null>(null)
   const [laneOffset, setLaneOffset] = useState<Record<string, number>>({})
   // The open detail view's entry id (the board page's Enter / a click on the focused card), its
   // tab and its document scroll. The view is read-only: no key of its own beyond navigation.
@@ -269,11 +269,11 @@ export function App({
   const pageRef = useRef(page)
   const targetsRef = useRef<{ row: number; hit: { start: number; end: number; action: Action } }[]>([])
   const overlayIndexRef = useRef(0)
-  const focusRef = useRef<{ lane: string; id: string } | null>(null)
+  const focusRef = useRef<FocusRef | null>(null)
   const laneOffsetRef = useRef<Record<string, number>>({})
   const lanesRef = useRef<{ lane: string; offset: number; visible: number; count: number }[]>([])
   /** The work page's board rows in the order the last frame drew them (P20/B5). */
-  const boardOrderRef = useRef<string[]>([])
+  const boardOrderRef = useRef<FocusRef[]>([])
   const detailRef = useRef<DetailWindow | null>(null)
   const detailIdRef = useRef<string | null>(null)
   const detailIndexRef = useRef(0)
@@ -715,23 +715,28 @@ export function App({
           i = (i + laneDelta + lanes.length) % lanes.length
           const card = rows.find((r) => r.state === lanes[i])
           if (card) {
-            setFocus({ lane: lanes[i], id: card.id })
+            setFocus(focusRefOf(rows, card))
             setLaneOffset((prev) => ({ ...prev, [lanes[i]]: 0 }))
             return
           }
         }
         return
       }
+      // ↑/↓: the next/previous **row** of the current lane. M48: a lookup by id stopped dead on the
+      // first of two rows sharing an id, so the second was unreachable — the walk is positional now
+      // (the resolved row object), and every drawn card is exactly one step.
+      const row = focusRow(rows, current)
+      if (!row) return
       const inLane = rows.filter((r) => r.state === current.lane)
-      const idx = inLane.findIndex((r) => r.id === current.id)
-      const next = inLane[Math.max(0, Math.min(inLane.length - 1, idx + cardDelta))]
-      if (!next || next.id === current.id) return
-      setFocus({ lane: current.lane, id: next.id })
+      const idx = inLane.indexOf(row)
+      const next = idx < 0 ? undefined : inLane[idx + cardDelta]
+      if (!next || next === row) return
+      setFocus(focusRefOf(rows, next))
       // Scrolling the lane's window is the layout's own follow-the-focus rule; the wheel keeps its
       // own offset, so push that offset along when the focus walks past the window's edge.
       const win = lanesRef.current.find((w) => w.lane === current.lane)
       if (win && win.visible > 0) {
-        const target = inLane.findIndex((r) => r.id === next.id)
+        const target = inLane.indexOf(next)
         const start = Math.max(
           0,
           Math.min(
@@ -746,32 +751,28 @@ export function App({
     [boardRows],
   )
 
-  /** The entry id's board state, for the focus state's `lane` field on the work page. */
-  const laneOfId = useCallback(
-    (id: string) => boardRows().find((r) => r.id === id)?.state ?? 'todo',
-    [boardRows],
-  )
-
   /**
-   * The work page's `↑`/`↓` (P20/B5): walk the ids in the order the block drew them, so the keys
+   * The work page's `↑`/`↓` (P20/B5): walk the rows in the order the block drew them, so the keys
    * touch exactly what is on screen. The first press with no usable focus lands on the first drawn
-   * row, and a focus whose entry left the board re-anchors there too.
+   * row, and a focus whose entry left the board re-anchors there too. M48: the drawn order carries
+   * the duplicate ordinal, so two rows sharing an id are two steps — not one, and never a freeze.
    */
-  const moveBoardFocus = useCallback(
-    (delta: number) => {
-      const order = boardOrderRef.current
-      if (!order.length) return
-      const id = focusRef.current?.id ?? ''
-      const idx = order.indexOf(id)
-      if (idx < 0) {
-        setFocus({ lane: laneOfId(order[0]), id: order[0] })
-        return
-      }
-      const next = order[Math.max(0, Math.min(order.length - 1, idx + delta))]
-      if (next !== id) setFocus({ lane: laneOfId(next), id: next })
-    },
-    [laneOfId],
-  )
+  const moveBoardFocus = useCallback((delta: number) => {
+    const order = boardOrderRef.current
+    if (!order.length) return
+    const cur = focusRef.current
+    let idx = -1
+    if (cur) {
+      idx = order.findIndex((r) => r.id === cur.id && (r.nth ?? 0) === (cur.nth ?? 0))
+      if (idx < 0) idx = order.findIndex((r) => r.id === cur.id)
+    }
+    if (idx < 0) {
+      setFocus(order[0])
+      return
+    }
+    const next = Math.max(0, Math.min(order.length - 1, idx + delta))
+    if (next !== idx) setFocus(order[next])
+  }, [])
 
   const scrollLane = useCallback((lane: string, delta: number) => {
     const win = lanesRef.current.find((w) => w.lane === lane)
@@ -790,8 +791,11 @@ export function App({
   const openWorkFocused = useCallback(() => {
     const order = boardOrderRef.current
     if (!order.length) return
-    const id = focusRef.current && order.includes(focusRef.current.id) ? focusRef.current.id : order[0]
-    openDetail(id)
+    const cur = focusRef.current
+    const hit = cur
+      ? order.find((r) => r.id === cur.id && (r.nth ?? 0) === (cur.nth ?? 0)) ?? order.find((r) => r.id === cur.id)
+      : undefined
+    openDetail((hit ?? order[0]).id)
   }, [openDetail])
 
   // ---- project settings (P22/B2): the view's focus walk, its origin and its row opening.
@@ -1012,7 +1016,7 @@ export function App({
           setViewEntry(null)
           return
         case 'focus':
-          setFocus({ lane: action.lane, id: action.id })
+          setFocus({ lane: action.lane, id: action.id, nth: action.nth ?? 0 })
           return
         case 'open-focused': {
           // One action kind, two pages: the kanban resolves its lane/card focus, the work page the

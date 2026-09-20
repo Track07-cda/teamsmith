@@ -1011,6 +1011,89 @@ env TEAM_BOARD_DONE_FORCE=0 $TEAM board set T9.8 done >"$TMP/done-ancestor.log" 
 assert_has "$TMP/done-ancestor.log" "已经是 main 的祖先" "成功输出写明证据是分支落地"
 assert_has "$TMP/done-ancestor.log" "T9.8-dev.md" "成功输出点名分支里那份已提交的报告（M9.6）"
 
+# ---------------------------------------------------------------- 4c. 看板重复 ID（M48）
+section "4c · 看板重复 ID（M48）：add 拒绝 / --allow-dup / 三处可见"
+M48_BOARD="$REPO/docs/team/BOARD.md"
+M48_BAK="$TMP/m48-board.bak"
+cp "$M48_BOARD" "$M48_BAK"
+M48_BEFORE="$(md5sum "$M48_BOARD" | cut -d' ' -f1)"
+# 拒绝路径：T1.1 已在表里 → 再 add 一个同 ID 必须非 0、点名状态与标题、给出两条出路，且一个字节都不写
+if $TEAM board add T1.1 "重复的一条" dev - >"$TMP/m48-dup.log" 2>&1; then bad "M48：重复 ID 的 board add 应当被拒"; else ok "M48：重复 ID 被拒（非 0）"; fi
+assert_has "$TMP/m48-dup.log" "BOARD 里已经有 T1.1" "M48：报错点名已存在的 ID"
+assert_has "$TMP/m48-dup.log" "Smoke task" "M48：报错点名已存在那一行的标题"
+assert_has "$TMP/m48-dup.log" "状态 todo" "M48：报错点名已存在那一行的状态"
+assert_has "$TMP/m48-dup.log" "改 ID" "M48：给出第一条出路（改 ID 里程碑编号）"
+assert_has "$TMP/m48-dup.log" "--allow-dup" "M48：给出第二条出路（显式旗标）"
+assert_has "$TMP/m48-dup.log" "watchdog.log" "M48：说明旗标会留审计"
+assert_has "$TMP/m48-dup.log" "board assign" "M48：拒绝时给出「指派 agent」的正确入口（不许逼人用 add 撞）"
+assert_not "$TMP/m48-dup.log" "✓ board add" "M48：被拒时不打印成功行"
+assert_eq "M48：被拒时 BOARD 逐字节未变" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_BEFORE"
+assert_eq "M48：被拒时没有多出同 ID 行" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "1"
+# 未知旗标照旧拒绝（别借新旗标把参数校验放松了）
+if $TEAM board add T1.2 "未知旗标" dev - --nope >"$TMP/m48-badflag.log" 2>&1; then bad "M48：未知旗标应当被拒"; else ok "M48：未知旗标被拒（非 0）"; fi
+assert_has "$TMP/m48-badflag.log" "未知参数 --nope" "M48：报错点名未知旗标"
+assert_eq "M48：未知旗标时 BOARD 也没变" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_BEFORE"
+# 显式旗标：允许写，并往 state/watchdog.log 落一条审计
+$TEAM board add T1.1 "重复的一条" dev - --allow-dup >"$TMP/m48-allow.log" 2>&1 \
+  && ok "M48：--allow-dup 显式允许写入" || bad "M48：--allow-dup 应当允许写入"
+assert_has "$TMP/m48-allow.log" "--allow-dup" "M48：成功输出点明是显式允许"
+assert_eq "M48：旗标之后 T1.1 真的有两行" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "2"
+assert_has "$REPO/.pi/team/state/watchdog.log" "T1.1" "M48：审计落在 state/watchdog.log"
+assert_has "$REPO/.pi/team/state/watchdog.log" "allow-dup" "M48：审计写明是 --allow-dup"
+# 指派 agent 的正门（PM 追加）：给已有行指派 → 只改 agent 列、行数不变，而不是再写一行
+M48_ROWS_BEFORE="$(grep -c '^| ' "$M48_BOARD")"
+M48_T11_BEFORE="$(grep '^| T1\.1 ' "$M48_BOARD")"
+if $TEAM board assign T1.1 reviewer >"$TMP/m48-assign.log" 2>&1; then ok "M48：board assign 给已有行指派成功"; else bad "M48：board assign 应当成功"; tail -3 "$TMP/m48-assign.log"; fi
+assert_has "$TMP/m48-assign.log" "board assign T1.1 → reviewer" "M48：成功输出点名 ID 与 agent"
+assert_eq "M48：assign 后行数不变（不是又加一行）" "$(grep -c '^| ' "$M48_BOARD")" "$M48_ROWS_BEFORE"
+assert_eq "M48：assign 后 T1.1 仍是两行（没有顺手改历史数据）" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "2"
+M48_T11_AFTER="$(grep '^| T1\.1 ' "$M48_BOARD")"
+assert_eq "M48：assign 后 agent 列 = reviewer" "$(printf '%s\n' "$M48_T11_AFTER" | awk -F'|' '{v=$4; gsub(/^[ \t]+|[ \t]+$/,"",v); print v}' | paste -sd,)" "reviewer,reviewer"
+assert_eq "M48：assign 只改 agent 列（两行其余列逐字节未变）" \
+  "$(printf '%s\n' "$M48_T11_AFTER" | awk -F'|' -v OFS='|' '{gsub(/^[ \t]+|[ \t]+$/,"",$4); $4=" agent "; print}')" \
+  "$(printf '%s\n' "$M48_T11_BEFORE" | awk -F'|' -v OFS='|' '{gsub(/^[ \t]+|[ \t]+$/,"",$4); $4=" agent "; print}')"
+# 与 board set 同语义：两者都按 ID 寻址，同 ID 的多行一起改（新增重复在门口就被拒，历史数据不动）
+$TEAM board set T1.1 blocked >"$TMP/m48-set-dup.log" 2>&1 || bad "M48：同 ID 多行时 board set 应当可用"
+assert_eq "M48：board set 也是 ID 寻址（同 ID 的两行状态一起变）" \
+  "$(grep '^| T1\.1 ' "$M48_BOARD" | awk -F'|' '{v=$7; gsub(/^[ \t]+|[ \t]+$/,"",v); print v}' | paste -sd,)" "blocked,blocked"
+# 未知 id / 参数不全：拒绝且一个字节都不落盘（与 board set 同风格）
+M48_ASSIGN_SNAP="$(md5sum "$M48_BOARD" | cut -d' ' -f1)"
+if $TEAM board assign NOSUCH dev >"$TMP/m48-assign-unknown.log" 2>&1; then bad "M48：未知 id 的 assign 应当被拒"; else ok "M48：未知 id 的 assign 被拒（非 0）"; fi
+assert_has "$TMP/m48-assign-unknown.log" "BOARD 里没有 NOSUCH" "M48：assign 报错点名未知 id"
+assert_eq "M48：未知 id 的 assign 不落盘" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_ASSIGN_SNAP"
+if $TEAM board assign T1.1 >"$TMP/m48-assign-noarg.log" 2>&1; then bad "M48：board assign 缺 agent 应当被拒"; else ok "M48：board assign 缺 agent 被拒（非 0）"; fi
+assert_eq "M48：参数不全时也不落盘" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_ASSIGN_SNAP"
+# 可见性：board ls / digest / doctor 三处都说（面板/状态/报告按 ID 指行，重复不能只靠肉眼）
+$TEAM board ls >"$TMP/m48-ls.log" 2>&1 || true
+assert_has "$TMP/m48-ls.log" "BOARD 有重复 ID：T1.1 ×2" "M48：board ls 报告重复 ID 与行数"
+$TEAM digest >"$TMP/m48-digest.log" 2>&1 || true
+assert_has "$TMP/m48-digest.log" "BOARD 有重复 ID：T1.1 ×2" "M48：digest 报告重复 ID"
+$TEAM doctor >"$TMP/m48-doctor.log" 2>&1 || true
+assert_has "$TMP/m48-doctor.log" "BOARD 重复 ID" "M48：doctor 有「BOARD 重复 ID」这一条"
+assert_has "$TMP/m48-doctor.log" "T1.1 ×2" "M48：doctor 列出重复的 ID 与行数"
+# 负对照：把重复行去掉 → 三处都不再报（判据不是「总是红」）
+awk '!(/^\| T1\.1 / && seen++)' "$M48_BOARD" > "$TMP/m48-clean.md" && mv "$TMP/m48-clean.md" "$M48_BOARD"
+assert_eq "M48：夹具自检——去重后 T1.1 只剩一行" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "1"
+$TEAM board ls >"$TMP/m48-ls2.log" 2>&1 || true
+assert_not "$TMP/m48-ls2.log" "BOARD 有重复 ID" "M48（负对照）：没有重复时 board ls 不刷重复行"
+$TEAM doctor >"$TMP/m48-doctor2.log" 2>&1 || true
+assert_not "$TMP/m48-doctor2.log" "BOARD 重复 ID          !" "M48（负对照）：没有重复时 doctor 这一条是 ✓"
+assert_has "$TMP/m48-doctor2.log" "BOARD 重复 ID" "M48（负对照）：doctor 仍然检查这一条"
+# 模板里的占位行与风险表共用第 2 列，不能被误报成重复（init 出来的空看板必须干净）
+M48_TMPREPO="$TMP/m48-tmpl"
+mkdir -p "$M48_TMPREPO"
+( cd "$M48_TMPREPO" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo '# m48' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+( cd "$M48_TMPREPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
+    $TEAM init --session m48-tmpl --agents "dev" --vcs local --gates "true" --docs docs/team ) >"$TMP/m48-tmpl-init.log" 2>&1 \
+  && ok "M48：空模板库 init 成功" || { bad "M48：空模板库 init 失败"; tail -3 "$TMP/m48-tmpl-init.log"; }
+( cd "$M48_TMPREPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
+    $TEAM board ls ) >"$TMP/m48-tmpl-ls.log" 2>&1 || true
+assert_not "$TMP/m48-tmpl-ls.log" "BOARD 有重复 ID" "M48：空看板的占位行/风险表不算重复"
+# 收尾：把看板恢复成夹具前的那一份（后面的段落读同一份 BOARD.md）
+cp "$M48_BAK" "$M48_BOARD"
+assert_eq "M48：段落结束把 BOARD.md 还原" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_BEFORE"
+
 # ---------------------------------------------------------------- 5. add-agent
 section "5 · add-agent"
 $TEAM add-agent dev --create --no-install >"$TMP/add.log" 2>&1 || bad "add-agent 失败"
