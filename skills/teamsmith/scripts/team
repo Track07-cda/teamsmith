@@ -85,6 +85,7 @@ case "$CMD" in
   paths)      team_paths_json ;;
   task)       team_cmd_task "$@" ;;
   board)      team_cmd_board "$@" ;;
+  change)     team_cmd_change "$@" ;;
   thread)     team_cmd_thread "$@" ;;
   report)     team_cmd_report "$@" ;;
   add-agent)  team_cmd_add_agent "$@" ;;

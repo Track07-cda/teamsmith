@@ -86,6 +86,39 @@ ambiguous requirement on its own**, so a brief has to be self-contained:
 - Acceptance: **copy-pasteable commands**, plus the report requirements.
 - A fixed report format (deliverables/evidence/deviations/next steps), so the PM can read it mechanically.
 
+## 5b. The change is the assignment unit (four dispatch guards)
+
+`1 change : N tasks` — the change (proposal, design, delta, tasks, archive) is the dispatch unit, and a task is one
+batch or one phase inside it; several briefs, agents or apply batches may share a change. The brief's header is the
+foreign key, and `team dispatch` reads it **before it opens a window**:
+
+1. **One change id.** `change:` holds exactly one token (or `-`). A comma list, two whitespace-separated ids or a
+   second `change:` line is refused with the offending line; there is **no override** — a task that implements two
+   changes is a mis-dispatch, not a preference, and the old "silently use the first line" behaviour is what this
+   rule removes.
+2. **A change-less brief declares its anchor.** With `change: -` the brief must either name a `specs:` entry that
+   resolves (`<capability>[#<requirement>]` in `openspec/specs/<capability>/spec.md`) or say out loud
+   `anchor: none (infra) — <reason>`. An unresolvable capability, a missing requirement or a bare `none (infra)` is
+   refused with both accepted forms and the path that was looked for; `--force` proceeds with a warning and one
+   audit line. This is policy B: disagreement with a rule is expressed by anchoring it, not by silence.
+3. **One delta file, one writer.** Two unfinished tasks of the same change must not write the same
+   `openspec/changes/<change>/specs/<capability>/spec.md`. A brief declares what it will write with `deltas:`
+   (comma-separated capabilities, `-` for none); **an absent line is not "none"** — it is read as the whole delta
+   set, so silence can never be used to slip past the guard. The refusal names the sibling, its board status, the
+   shared file and both declarations; `--force` overrides with one audit line. `team change status <id>` prints the
+   declared and the actually-touched files per task, so a declaration that lies is visible.
+4. **The verifier is not an author.** A `verify` dispatch is refused when its agent also authored an `apply` task
+   of the same change (mapped tasks whose board status is `dropped` are excluded and named). `--force` proceeds
+   with a warning that the verification is no longer independent. A mapped task whose brief cannot be read or whose
+   header has no `agent:` is a **missing signal**: the guard says which signal is missing and proceeds — an
+   unknowable author is never reported as a clean one. The same predicate puts `self-verify: <agent>` on the task
+   in `team change status`.
+
+All four run before the stack guard and before any window or board write, so a refusal leaves the task's status
+exactly as it was. The readiness view and the archive gate share one predicate (`team change status <id>` exits 0
+iff at least one task is mapped and every mapped task is finished): an `archive` task cannot be set `done` while a
+sibling of its change is unfinished, and the existing `TEAM_BOARD_DONE_FORCE=1` override still records itself.
+
 ## 6. Model strategy: cheap models do the work, a different family does the adversarial verification
 
 | Use | Selection principle |

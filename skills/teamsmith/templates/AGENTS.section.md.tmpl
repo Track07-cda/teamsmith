@@ -37,6 +37,15 @@ A change runs as **five phases, one brief and one owner each**: an explorer runs
 only after independent verification **and the user's confirmation**. The phase names go in the brief's `phase:`
 line; the full pipeline and its gates are in `{{SKILL_DIR}}/references/openspec.md`.
 
+**The change is the assignment unit** (`1 change : N tasks`, `1 task : 0..1 change`): the brief's header is the
+foreign key — `change:` (exactly one id, or `-`), `specs:`/`anchor:` (a change-less brief must resolve
+`openspec/specs/<capability>/spec.md#<requirement>` or declare `anchor: none (infra) — <reason>`) and `deltas:`
+(the change's delta files this task writes; an absent line means the whole set). `team dispatch` refuses **before it
+opens a window**: more than one `change:` id (no override), an unresolvable anchor, two unfinished tasks of one
+change writing the same delta file, and a `verify` task whose agent authored an `apply` task of that change (the
+last three take `--force` + one audited line). `team change status <id>` shows the tasks/deltas/blockers and exits
+0 only when every mapped task is finished; an `archive` task cannot be set `done` while a sibling is unfinished.
+
 ### Non-negotiable discipline
 
 - **Only change directories you own** (`{{DOCS_DIR}}/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in

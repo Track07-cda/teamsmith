@@ -30,6 +30,9 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   task ID --title ... [--agent a] [--deps ...] [--issue N]
                   生成任务书 <docs>/tasks/ID-slug.md 并在 BOARD.md 建行
   board add|set|row|ls    BOARD.md 行管理（add / set ID 状态 / row ID / ls）
+  change status <id> [--json]
+                  change 的 readiness 视图（只读）：任务/阶段/agent/看板/证据、delta 写者、阻塞项；
+                  ready（至少一个任务且全部结束）→ 退出码 0，否则 1
   thread <agent> ["msg"]   追加 / 读取往来记录（append-only）
   report ID <agent> [--force]  生成报告骨架
 

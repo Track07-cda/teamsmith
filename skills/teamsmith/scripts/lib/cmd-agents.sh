@@ -493,6 +493,138 @@ team_dispatch_stack_guard() { # <agent> <ID> <force> → 0=继续 / 1=拒绝（�
   return 1
 }
 
+# ---------------------------------------------------------------- P23（D31）· change 为中心的派单纪律
+# 四条规则一个前置块（全在开窗之前，也与叠任务守卫同一位置族）：
+#   规则 1 · 一个任务最多一个 change id（没有逃生门：一个任务实现两个 change 是派错单）
+#   规则 B · change-less 的任务必须声明能解析的锚（specs:#需求 或 anchor: none (infra) — 理由）
+#   规则 2 · 同一 change 的两个未结束任务不得写同一个 delta 文件（单写者）
+#   规则 3 · verify 任务的 agent 不能是该 change 的 apply 作者
+# 拒绝时一律点名到文件/任务/看板状态；`--force` 覆盖处打印警告并往 TEAM_DISPATCH_AUDIT_LINES
+# 追加**一行**审计（与叠任务守卫同一形状：真正落盘在派单成功之后，`--print` 不写 state）。
+# 「判不出来」信号（兄弟的 deltas: 坏/缺 agent:）一律吵但不是拒绝 —— 不把未知冒充成干净。
+team_dispatch_change_guard() { # <agent> <ID> <任务书路径> <force> → 0=继续 / 1=拒绝
+  local agent="$1" id="$2" brief="$3" force="${4:-0}"
+  local change out phase rel
+  rel="${brief#"$TEAM_MAIN_ROOT"/}"
+  TEAM_DISPATCH_AUDIT_LINES="${TEAM_DISPATCH_AUDIT_LINES:-}"
+
+  # —— 规则 1：change: 只接受一个 token（或 `-`） ——
+  if ! change="$(team_task_change_value "$brief")"; then
+    team_err "拒绝派单：$id 的任务书 change: 行不合法（一个任务最多属于一个 change）"
+    printf '%s\n' "$change" | sed 's/^/  /' >&2
+    team_err "  接受的形式："
+    team_err "    · change: <一个 change id>     例：change: change-centric-discipline"
+    team_err "    · change: -                    不属于任何 change（但要在 specs:/anchor: 里声明锚）"
+    team_err "  修法：编辑 $rel 的 change: 行 —— 逗号不是多个 id，两行也不行（只留一行）"
+    team_err "  规则 1 没有 --force 逃生门：一个任务实现两个 change 是派错单，不是偏好。"
+    return 1
+  fi
+  phase="$(team_brief_field "$brief" phase)"
+  case "$phase" in explore|propose|apply|verify|archive) ;; *) phase="" ;; esac
+
+  # —— 规则 B：change-less 的锚 ——
+  if [ "$change" = "-" ]; then
+    if out="$(team_task_anchor "$brief")"; then
+      : # 有锚（specs 解析成功 / infra 带理由）
+    elif [ "$force" = "1" ]; then
+      team_warn "显式覆盖（--force）：$id 没有 change:，锚也缺失/不解析 —— 这次照常派单"
+      printf '%s\n' "$out" | sed 's/^/    /' >&2
+      TEAM_DISPATCH_AUDIT_LINES="${TEAM_DISPATCH_AUDIT_LINES}dispatch $agent: --force 覆盖锚缺失（$id 无 change 且 $rel 的 specs:/anchor: 解析不了）"$'\n'
+    else
+      team_err "拒绝派单：$id 没有 change: 行（或值是 \`-\`），必须声明它的锚"
+      printf '%s\n' "$out" | sed 's/^/  /' >&2
+      team_err "  修法：编辑 $rel 的 specs:/anchor: 行"
+      team_err "  覆盖：$TEAM_CLI dispatch $agent $id $brief --force（警告 + 一行审计）"
+      return 1
+    fi
+  fi
+
+  # —— 规则 2：同一 change 的 delta 单写者 ——
+  if [ "$change" != "-" ]; then
+    local mine mine_decl mine_text sib sde sdt sib_text shared sid sphase sst sreason sbrief
+    if ! mine="$(team_task_delta_targets "$brief" "$change")"; then
+      team_err "拒绝派单：$id 的 deltas: 行不合法 —— 它决定 delta 单写者检查，不能静默当空集"
+      printf '%s\n' "$mine" | sed 's/^/  /' >&2
+      return 1
+    fi
+    mine_decl="$(team_task_deltas "$brief")"
+    case "$mine_decl" in
+      '*') mine_text='（没有 deltas: 行 → 读作整个 change 的 delta 集）' ;;
+      '')  mine_text='deltas: -（不写 delta）' ;;
+      *)   mine_text="deltas: $(printf '%s' "$mine_decl" | tr '\n' ',')" ;;
+    esac
+    while IFS=$'\t' read -r sid sphase sst sreason sbrief; do
+      [ -n "$sid" ] || continue
+      [ "$sid" = "$id" ] && continue
+      if ! sde="$(team_task_delta_targets "$sbrief" "$change")"; then
+        team_warn "  delta 单写者检查：兄弟 $sid（看板 $sst）的 deltas: 行不合法 —— 它的目标集判不出来，不冒充干净"
+        continue
+      fi
+      sdt="$(team_task_deltas "$sbrief")"
+      case "$sdt" in
+        '*') sib_text='（没有 deltas: 行 → 读作整个 change 的 delta 集）' ;;
+        '')  sib_text='deltas: -（不写 delta）' ;;
+        *)   sib_text="deltas: $(printf '%s' "$sdt" | tr '\n' ',')" ;;
+      esac
+      shared=""
+      while IFS= read -r sib; do
+        [ -n "$sib" ] || continue
+        if printf '%s\n' "$mine" | grep -qxF -- "$sib"; then shared="${shared:+$shared }$sib"; fi
+      done <<< "$sde"
+      if [ -z "$shared" ]; then
+        team_dim "  change $change 的 delta 单写者检查：兄弟 $sid（看板 $sst，$sib_text）｜本次 $mine_text → 无重叠"
+        continue
+      fi
+      if [ "$force" = "1" ]; then
+        team_warn "显式覆盖（--force）：change $change 的 delta 单写者冲突 —— $sid（看板 $sst）与 $id 都会写 $shared"
+        team_dim "  $sid 的声明：$sib_text ｜ 本次声明：$mine_text" >&2
+        TEAM_DISPATCH_AUDIT_LINES="${TEAM_DISPATCH_AUDIT_LINES}dispatch $agent: --force 覆盖 delta 单写者（$sid 与 $id 共享 $shared）"$'\n'
+        continue
+      fi
+      team_err "拒绝派单：change $change 的同一个 delta 文件被两个未结束的任务声明（单写者规则）"
+      team_err "  兄弟任务：$sid ｜阶段 ${sphase:--} ｜看板 $sst"
+      team_err "  它没结束：$sreason"
+      team_err "  共享文件：$shared"
+      team_err "  它的声明：$sib_text"
+      team_err "  本次声明：$mine_text"
+      team_err "  两条出路："
+      team_err "    · 等它结束（done/closed/交付证据）再派；或把两边的 deltas: 写成互不相交的 capability"
+      team_err "    · 两边确实不会互相覆盖：$TEAM_CLI dispatch $agent $id $brief --force（一行审计）"
+      return 1
+    done < <(team_change_unfinished "$change")
+  fi
+
+  # —— 规则 3：verify 的 agent 不能是该 change 的 apply 作者 ——
+  if [ "$phase" = "verify" ] && [ "$change" != "-" ]; then
+    local authors kind aid aauth authored="" dropped="" missing=""
+    authors="$(team_change_apply_authors "$change")"
+    while IFS=$'\t' read -r kind aauth aid _why; do
+      [ -n "$kind" ] || continue
+      case "$kind" in
+        agent)   [ "$aauth" = "$agent" ] && authored="${authored:+$authored、}$aid" ;;
+        dropped) dropped="${dropped:+$dropped、}$aid" ;;
+        missing) missing="${missing:+$missing、}$aid（${_why:-缺 agent:}）" ;;
+      esac
+    done <<< "$authors"
+    [ -n "$dropped" ] && team_dim "  已排除（看板 dropped）：$dropped"
+    [ -n "$missing" ] && team_warn "  作者信号缺失：$missing —— 判不出它们的作者，不当作干净（照常派单）"
+    if [ -n "$authored" ]; then
+      if [ "$force" = "1" ]; then
+        team_warn "显式覆盖（--force）：verification 不再独立 —— $agent 写过 change $change 的 apply 任务（$authored），又要 verify $id"
+        TEAM_DISPATCH_AUDIT_LINES="${TEAM_DISPATCH_AUDIT_LINES}dispatch $agent: --force 覆盖自验（change $change 的 apply 作者 $authored 来 verify $id）"$'\n'
+      else
+        team_err "拒绝派单：verification 不独立 —— $agent 写过 change $change 的 apply 任务（$authored），不能自己验自己"
+        team_err "  change：$change ｜ agent：$agent ｜ 它写过的任务：$authored"
+        team_err "  两条出路："
+        team_err "    · 换一个没写过这些 apply 任务的 agent 来 verify"
+        team_err "    · 确实要自验：$TEAM_CLI dispatch $agent $id $brief --force（警告 + 一行审计）"
+        return 1
+      fi
+    fi
+  fi
+  return 0
+}
+
 team_cmd_dispatch() {
   team_require_cmd tmux "agent 在 tmux 窗口里跑，PM 需要能旁观与追问"
   local agent="" id="" taskfile="" model="" fresh=0 printonly=0 overflow=0 force=0
@@ -546,6 +678,9 @@ team_cmd_dispatch() {
     team_err "  确定性做法：只留一份 —— 把过期的那份改名/删掉（或给它自己的 ID），再派单。"
     return 1
   fi
+
+  # P23（D31）：change 为中心的派单纪律（规则 1/B/2/3），在所有开窗动作之前
+  team_dispatch_change_guard "$agent" "$id" "$taskfile" "$force" || return 1
 
   # M9.3 ①-⑤：这个 agent 上是不是还压着一个没结束的任务（resume / up --agents 也走这里：
   # 它们派的永远是 agent 自己记着的任务 → 同一任务短路，所以那两扇门的语义不变）
@@ -714,6 +849,13 @@ team_cmd_dispatch() {
   # M9.3：`--force` 接管了另一个没结束的任务 —— 审计里留一条（输出里已经写明，这里落盘）
   if [ -n "${TEAM_DISPATCH_STACK_PREV:-}" ]; then
     team_wlog "dispatch $agent: 显式覆盖叠任务（${TEAM_DISPATCH_STACK_PREV} 让位给 $id）"
+  fi
+  # P23：change 守卫的 --force 覆盖（规则 B/2/3）逐条落盘（每处一行；输出里已经写明）
+  if [ -n "${TEAM_DISPATCH_AUDIT_LINES:-}" ]; then
+    while IFS= read -r _p23line; do
+      [ -n "$_p23line" ] && team_wlog "$_p23line"
+    done <<< "$TEAM_DISPATCH_AUDIT_LINES"
+    TEAM_DISPATCH_AUDIT_LINES=""
   fi
   team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；provider=$provider model=${model##*/} session=$sid）"
   # 观察结论也要说出来（不是只报“成功”）：内建 Pi 路径下，agent 是「已经退出」还是「还在跑」，

@@ -48,7 +48,7 @@ which starts once the project is up.
 | Init / self-check | `team init [--session s] [--agents "a b"] [--vcs local\|remote]`, `team doctor` |
 | Observe | `team roster` (windows/branch/dirty/ahead), `team status [ID]`, `team ps` (capacity + model limits + PM/pulse liveness), `team digest` (PM's pending work) |
 | Inbox | `team inbox [agent] [--ack] [--all]` |
-| Document contracts | `team task <ID> --title ... --agent a`, `team board add\|set\|ls`, `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
+| Document contracts | `team task <ID> --title ... --agent a`, `team board add\|set\|ls`, `team change status <id> [--json]` (readiness view: tasks/evidence, declared vs touched delta files, blockers; exit 0 iff every mapped task is finished), `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
 | Dispatch | `team add-agent <a>`, `team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--allow-overflow] [--force] [--print]` (`--force` overrides the "this agent still carries an unfinished task" refusal; the override is printed and logged) |
 | Collaborate | `team say <a> "<one-line message>" [--no-verify]` (verifies delivery; falls back to the inbox when the agent is not running), `team notify <a> "<one line>"` (agent → PM) |
 | Draft / deferred delivery | `team draft [pm]` opens an editor window on `state/draft-pm.md` (nothing automated ever types into it; save+quit enqueues through the guarded path and prints the ack there), `team draft send [<file>] [--now]` (headless form), `team outbox [list]` (what is waiting, with `held` reasons), `team outbox flush [--now]`, `team outbox drop <n\|all>`. Every automated sender refuses to type into an input box that already holds a draft: the message is queued in `state/outbox/` and reported as `queued`, and `--now` is the audited override that types anyway (`state/outbox/forced.log`). See `references/troubleshooting.md` §3 |
@@ -88,7 +88,11 @@ when they conflict, the creed wins and the process gets fixed.
    acceptance commands / report requirements) — the default worker model is cheap and will not fix vague requests.
 2. **Dispatch**: `team dispatch <a> <ID> <taskfile>`. Check `team ps` (memory / model concurrency) first.
    One long-lived worktree per agent; dispatching again to the same agent resumes its session, use `--fresh` for a
-   new one.
+   new one. The brief's `change:`/`specs:`/`anchor:`/`deltas:` lines are checked **before the window opens**: one
+   change id per task (no override), a change-less brief must declare a resolvable anchor, two unfinished tasks of
+   one change cannot write the same delta file, and a verifier must not be an author of the change — the last three
+   have `--force` + one audit line, the first does not. A refusal names the offending line, the sibling and the fix;
+   `team change status <id>` shows the same facts read-only.
 3. **Wait for notifications**: when a worker's turn ends it appends to `inbox/<agent>.md` and knocks on your
    window. Do not poll agent screens; read `team inbox --ack` and `team digest`.
 4. **Verify (never skip)**: `team review <ID> --dir <checkout>` — run the gates on a clean, independent checkout
@@ -116,8 +120,12 @@ A change runs as **five phases, one brief each, one owner each**: `opsx-explore`
 same explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (a **different** agent) → `opsx-archive` (the
 PM). Two hard rules: **an `apply` brief starts only after the PM's proposal review is ACCEPTED**
 (`docs/team/reviews/<change>-proposal.md`), and **the PM never archives without independent verification and the
-user's confirmation**. `openspec validate --all --strict` is part of `TEAM_GATES`; the phase table, the gates and
-the PM's review checklist are in [references/openspec.md](references/openspec.md).
+user's confirmation**. **One change : N tasks** — the change is the dispatch unit and the brief's header maps the
+task to it (`team dispatch` refuses more than one `change:` id, a change-less brief without an anchor, two
+unfinished tasks writing one delta file, and a verifier who authored the change; `team change status <id>` reports
+readiness and exits 0 only when every mapped task is finished). `openspec validate --all --strict` is part of
+`TEAM_GATES`; the phase table, the gates and the PM's review checklist are in
+[references/openspec.md](references/openspec.md), the four guards in [references/protocol.md](references/protocol.md) §5b.
 
 ## Getting skill updates (three paths)
 
