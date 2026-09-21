@@ -71,6 +71,8 @@ TEAM_PI_AGENT_DIR|refuse|path|dir,opt|plain||-|机器路径：手改 .pi/team/co
 TEAM_PI_SETTINGS_FILE|refuse|path|file,opt|plain|$HOME/.pi/agent/settings.json|-|机器路径：手改 .pi/team/config.sh
 TEAM_MEMINFO_FILE|refuse|path|file,opt|plain||-|机器路径：手改 .pi/team/config.sh
 TEAM_SMOKE_FAST|refuse|bool||plain|0|-|测试旋钮：环境变量或手改 .pi/team/config.sh
+TEAM_INBOX_WATCH_FORCE_FAIL|refuse|text||plain||-|测试旋钮（M53）：强制 watcher 注册失败路径，记录标 forced=1；只在夹具里用
+TEAM_IW_REQUIRE_WATCH|refuse|bool||plain|0|-|测试旋钮（M53）：inbox-watch 门禁严格模式——不可用的前提判红而不是可见 SKIP
 # ---- 名册、模型解析与适配器（apply：下一个读契约的进程就生效）----
 TEAM_MODEL_LIMITS|apply|pattern||plain|kimi-coding/k3=2 openai-codex/*=1|-|
 TEAM_MODEL_WINDOWS|apply|winlist||plain||-|
@@ -142,6 +144,7 @@ TEAM_INBOX_WATCH_PREVIEW|restart|int|16,|export|160|-|
 TEAM_INBOX_WATCH_REPLAY_MAX|restart|int|1,|export|20|-|
 TEAM_INBOX_WATCH_SEEN_MAX|restart|int|32,|export|512|-|
 TEAM_INBOX_WATCH_STALE|restart|seconds|1,|export|300|-|
+TEAM_INBOX_WATCH_STALE_SEC|restart|seconds|1,|export|900|-|
 TEAM_INBOX_WATCH_POLL_MS|restart|int|100,|export|5000|-|
 TEAM_INBOX_WATCH_HEARTBEAT_MS|restart|int|100,|export|5000|-|
 TEAM_INBOX_WATCH_TARGET|restart|text||export||-|

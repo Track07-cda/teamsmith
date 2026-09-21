@@ -386,8 +386,8 @@ file's last 16 KiB and print at most N lines (default 10).
 | `TEAM_INBOX_WATCH_SEEN_MAX` | restart · export | `512` | dedup memory |
 | `TEAM_INBOX_WATCH_STALE` | restart · export | `300` | heartbeat staleness bound (seconds) |
 | `TEAM_INBOX_WATCH_STALE_SEC` | restart · export | `900` | **spool line age** above which a line never wakes (it still lands in the durable inbox) — P28 |
-| `TEAM_INBOX_WATCH_FORCE_FAIL` | fixture-only | empty | force the registration failure path (e.g. `ENOSPC`) and mark the record `forced=1` — never set it outside tests (M53) |
-| `TEAM_IW_REQUIRE_WATCH` | fixture-only | empty | `1` = the inbox-watch gate treats an unavailable watcher premise as a **red** instead of a visible SKIP (strict mode) — M53 |
+| `TEAM_INBOX_WATCH_FORCE_FAIL` | refuse | empty | force the registration failure path (e.g. `ENOSPC`) and mark the record `forced=1` — never set it outside tests (M53) |
+| `TEAM_IW_REQUIRE_WATCH` | refuse | empty | `1` = the inbox-watch gate treats an unavailable watcher premise as a **red** instead of a visible SKIP (strict mode) — M53 |
 | `TEAM_INBOX_WATCH_POLL_MS` | restart · export | `5000` | `fs.watch` fallback poll (ms) |
 | `TEAM_INBOX_WATCH_HEARTBEAT_MS` | restart · export | `5000` | registry heartbeat (ms) |
 | `TEAM_INBOX_WATCH_TARGET` | restart · export | empty | explicit knock target |
