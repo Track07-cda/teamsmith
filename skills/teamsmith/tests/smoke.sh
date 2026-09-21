@@ -6305,30 +6305,33 @@ fi
 piw_reset
 
 # ⑨ 真扩展夹具（假 Pi 宿主 + 真 CLI 端到端）：注册 / 监视唤醒 / 合并 / 基线 / 清场 / 账本
+# M53/B4：夹具现在先量前提（一次真 fs.watch）——前提不可用时**只**把 watcher 用例标成可见 SKIP，
+# 轮询兜底与 CLI 侧的用例照跑照判。所以这一段的具名断言按前提分两支，且分成两类：
+#   * 与 watcher 无关的（S1/S7/M46/S18–S20/reverse guard）：两种前提下都必须成立；
+#   * 只靠 watcher 的（S2/S4/S10–S13/S21）：可用 → 逐条 PASS；不可用 → 逐条 SKIP（可见，不静默少跑）。
 if [ -z "$TS_RUNNER" ]; then
   printf '  (跳过 12b-pi 扩展夹具：node 未启用类型剥离，且没有 bun/tsx)\n'
 else
-  if $TS_RUNNER "$SKILL_DIR/tests/team-inbox-watch-harness.mjs" "$SKILL_DIR/extension/team-inbox-watch.ts" >"$TMP/piw-harness.log" 2>&1; then
-    ok "12b-pi 扩展夹具全绿（runner=$TS_RUNNER，$(grep -c 'TEAM-IW-CASE PASS' "$TMP/piw-harness.log") 条用例）"
+  M53_HARNESS="$SKILL_DIR/tests/team-inbox-watch-harness.mjs"
+  M53_EXT="$SKILL_DIR/extension/team-inbox-watch.ts"
+  $TS_RUNNER "$M53_HARNESS" "$M53_EXT" >"$TMP/piw-harness.log" 2>&1
+  M53_IW_RC=$?
+  M53_IW_PRE="$(grep -m1 '^TEAM-IW-PREREQ' "$TMP/piw-harness.log" 2>/dev/null || true)"
+  M53_IW_OK=0
+  case "$M53_IW_PRE" in *watch=ok*) M53_IW_OK=1 ;; esac
+  if [ "$M53_IW_RC" -eq 0 ]; then
+    if [ "$M53_IW_OK" = "1" ]; then
+      ok "12b-pi 扩展夹具全绿（runner=$TS_RUNNER，$(grep -c 'TEAM-IW-CASE PASS' "$TMP/piw-harness.log") 条用例）"
+    else
+      ok "12b-pi 扩展夹具：watcher 前提不可用（$(grep -m1 '^TEAM-IW-PREREQ' "$TMP/piw-harness.log")）——watcher 用例可见 SKIP，兜底/CLI 用例照跑（rc=0）"
+    fi
   else
-    bad "12b-pi 扩展夹具失败（runner=$TS_RUNNER）"; grep 'TEAM-IW-CASE FAIL' "$TMP/piw-harness.log" | sed 's/^/     /'
+    bad "12b-pi 扩展夹具失败（runner=$TS_RUNNER，rc=$M53_IW_RC）"; grep 'TEAM-IW-CASE FAIL' "$TMP/piw-harness.log" | sed 's/^/     /'
   fi
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-PREREQ" "12b-pi/M53 夹具打印前提行（环境与代码可分辨）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 long payload is truncated in the wake (no payload dump)" "12b-pi 唤醒只带截断预览（不带 payload 全文）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S7 shutdown removes the registry file" "12b-pi 会话结束删注册（不骗发送方）"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the running extension wakes the session (zero model calls)" \
-    "12b-pi 端到端：真 CLI 投递 → 监视扩展唤醒（零模型调用）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS reverse guard" "12b-pi 反向守卫：真实仓库 state/ 未被触碰"
-  # M43：外部截断/重写 spool 的重放保真（harness S11–S13；翻转证据见 tests/flip-m43.sh）
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 external truncate+rewrite does not redeliver" \
-    "12b-pi M43：外部截断+重写不再重放已投递行"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 total is not inflated" \
-    "12b-pi M43：total 只随真实新增增长（不被重放灌水）"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S12 ledger records the rescan counts" \
-    "12b-pi M43：shrink 后的 rescan 有界（只投最近 N 条真新）且计数进账本"
-  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S13 after a restart" \
-    "12b-pi M43：去重记忆跨会话重启（<key>.seen 持久化）"
   # M46：跳过留痕 / 注册清痕 / 继承的 TEAM_STATE_DIR 不许指向别的项目（harness M46-S14–S16；
   # 翻转证据见 tests/flip-m46.sh）
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S14 a session-name mismatch leaves exactly one .skip record" \
@@ -6364,6 +6367,57 @@ else
     "12b-pi P28：只含过期行的重扫 deliver=0 + stale=<n>"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21c the wake line reads n=2 and total grows by exactly two" \
     "12b-pi P28：真投递的 wake n=2、total +2"
+  if [ "$M53_IW_OK" = "1" ]; then
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 long payload is truncated in the wake (no payload dump)" "12b-pi 唤醒只带截断预览（不带 payload 全文）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S7 shutdown removes the registry file" "12b-pi 会话结束删注册（不骗发送方）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the running extension wakes the session (zero model calls)" \
+    "12b-pi 端到端：真 CLI 投递 → 监视扩展唤醒（零模型调用）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS reverse guard" "12b-pi 反向守卫：真实仓库 state/ 未被触碰"
+  # M43：外部截断/重写 spool 的重放保真（harness S11–S13；翻转证据见 tests/flip-m43.sh）
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 external truncate+rewrite does not redeliver" \
+    "12b-pi M43：外部截断+重写不再重放已投递行"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 total is not inflated" \
+    "12b-pi M43：total 只随真实新增增长（不被重放灌水）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S12 ledger records the rescan counts" \
+    "12b-pi M43：shrink 后的 rescan 有界（只投最近 N 条真新）且计数进账本"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S13 after a restart" \
+    "12b-pi M43：去重记忆跨会话重启（<key>.seen 持久化）"
+  else
+    # 前提不可用：watcher 用例必须**逐条可见 SKIP**（带测得的 errno），一个字都不许静默少跑
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S2 " "12b-pi/M53 不可用前提：S2（只靠 watcher）可见 SKIP"
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S4 " "12b-pi/M53 不可用前提：S4 可见 SKIP"
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S10 " "12b-pi/M53 不可用前提：S10（端到端唤醒）可见 SKIP"
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S11 " "12b-pi/M53 不可用前提：S11 可见 SKIP"
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S12 " "12b-pi/M53 不可用前提：S12 可见 SKIP"
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S13 " "12b-pi/M53 不可用前提：S13 可见 SKIP"
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S21 " "12b-pi/M53 不可用前提：S21 可见 SKIP"
+    assert_has "$TMP/piw-harness.log" "TEAM-IW-HARNESS OK (skipped=" "12b-pi/M53 不可用前提：总结行报出可见跳过数（不静默）"
+    assert_eq "12b-pi/M53 不可用前提：没有一条 FAIL（跳过不是失败，但也不是绿）" \
+      "$(grep -c 'TEAM-IW-CASE FAIL' "$TMP/piw-harness.log" || true)" "0"
+  fi
+
+  # M53/B4 · 前提机制每次门禁都自证：强制不可用 + 只看 S2,S22,S23 → S2 SKIP、S22/S23 PASS、rc 0
+  if TEAM_INBOX_WATCH_FORCE_FAIL=ENOSPC TEAM_IW_ONLY=S2,S22,S23 $TS_RUNNER "$M53_HARNESS" "$M53_EXT" >"$TMP/piw-force.log" 2>&1; then
+    ok "12b-pi/M53 强制不可用前提：S2 可见 SKIP、轮询兜底 S22/S23 照跑，退出码 0"
+  else
+    bad "12b-pi/M53 强制不可用前提：夹具非 0 退出"; grep 'TEAM-IW-CASE' "$TMP/piw-force.log" | tail -8 | sed 's/^/     /'
+  fi
+  assert_has "$TMP/piw-force.log" "TEAM-IW-PREREQ watch=errno=ENOSPC" "12b-pi/M53 前提行点名 errno"
+  assert_has "$TMP/piw-force.log" "forced=1" "12b-pi/M53 前提行标明 forced（测试事故不是真事故）"
+  assert_has "$TMP/piw-force.log" "TEAM-IW-CASE SKIP S2 " "12b-pi/M53 不可用前提：只靠 watcher 的 S2 可见 SKIP"
+  assert_has "$TMP/piw-force.log" "TEAM-IW-CASE PASS S22 the failure line names errno" "12b-pi/M53 不可用前提：S22 真跑真判"
+  assert_has "$TMP/piw-force.log" "TEAM-IW-CASE PASS S23 a forced-failure session still wakes" "12b-pi/M53 不可用前提：S23 兜底投递真跑真判"
+  assert_has "$TMP/piw-force.log" "TEAM-IW-HARNESS OK (skipped=" "12b-pi/M53 夹具自报可见跳过数（不是静默少跑）"
+  # M53/B4 · 严格模式拒绝同一个不可用前提：S2 必须 FAIL 且非 0（SKIP 不是无条件绿）
+  if TEAM_INBOX_WATCH_FORCE_FAIL=ENOSPC TEAM_IW_REQUIRE_WATCH=1 TEAM_IW_ONLY=S2 $TS_RUNNER "$M53_HARNESS" "$M53_EXT" >"$TMP/piw-strict.log" 2>&1; then
+    bad "12b-pi/M53 严格模式：同一个不可用前提居然判绿"
+  else
+    ok "12b-pi/M53 严格模式：同一个不可用前提判红（非 0）"
+  fi
+  assert_has "$TMP/piw-strict.log" "TEAM-IW-CASE FAIL S2 " "12b-pi/M53 严格模式点名 S2"
+  assert_has "$TMP/piw-strict.log" "TEAM-IW-HARNESS FAIL" "12b-pi/M53 严格模式的总结行是 FAIL"
 fi
 
 # 不留注册：后面的段落（teardown / panel / …）不许被这条通道接管
@@ -6486,6 +6540,109 @@ assert_not_file "$M46_S/outbox/held/$M46_DEADHELD" "12b-pi2 ④ 死目标的 hel
 assert_file "$M46_S/outbox/held/$M46_LIVEHELD" "12b-pi2 ④ 活目标的 held 条目没被 gone 误伤"
 ob_run $TEAM outbox drop all >/dev/null 2>&1 || true
 piw_reset
+
+# ---------------------------------------------------------------- 12b-pi3. M53 降级通道可见（watch-degraded）
+# 事故（2026-09-21）：宿主 inotify 配额耗尽 → `fs.watch` 直接 ENOSPC，会话只剩轮询兜底，而 `.reg` 还在 →
+# doctor/status 仍报「PM 会话已注册（快路径）」。M53 的可见性契约在这里用**手写夹具**钉住：
+#   ① 活的 `.degraded` 记录 → doctor/status/面板都报降级（errno / watches <used>/<max> / 轮询 / 修法），
+#      不能说「没有 inbox-watch 注册」，更不能说「退回输入框粘贴」；
+#   ② 陈旧记录（pid 已死 / cwd 在外）不是证据；健康通道保持安静（不刷屏）；
+#   ③ `.skip` 那条「没有注册」的措辞逐字不变（M46 反向夹具）；
+#   ④ doctor 的 inotify 余量行：额度 + 可证明的占用 + 一次性注册探针，四种形状。
+section "12b-pi3 · M53 降级通道可见（watch-degraded：doctor/status/面板 + inotify 余量）"
+
+m53_degraded() { # <文件名> <target> <pid> <cwd> <errno> <watches>
+  mkdir -p "$PIW"
+  printf 'version=1\ntarget=%s\nkey=%s\nreason=watch-unavailable\nerrno=%s\nwatches=%s\npoll_ms=5000\nforced=0\nsince=2026-09-21T00:00:00.000Z\npid=%s\ncwd=%s\nheartbeat=%s\n' \
+    "$2" "${1%.degraded}" "$5" "$6" "$3" "$4" "$(date +%s)" > "$PIW/$1"
+}
+
+# ① 活的降级记录：doctor / status / 面板三处都必须报，且都不许走「没有注册 / 粘贴慢路径」的措辞
+ob_reset; piw_reset
+m53_degraded m53-pm.degraded "$SESSION:pm" "$$" "$REPO" ENOSPC 65312/65536
+ob_run $TEAM doctor >"$TMP/m53-doctor.log" 2>&1 || true
+assert_has "$TMP/m53-doctor.log" "投递通道降级" "12b-pi3 ① doctor 报投递通道降级（不再假绿「已注册」）"
+assert_has "$TMP/m53-doctor.log" "errno=ENOSPC" "12b-pi3 ① doctor 点名 errno"
+assert_has "$TMP/m53-doctor.log" "watches 65312/65536" "12b-pi3 ① doctor 给出配额占用"
+assert_has "$TMP/m53-doctor.log" "轮询" "12b-pi3 ① doctor 说明唤醒退化为轮询"
+assert_has "$TMP/m53-doctor.log" "fs.inotify.max_user_watches=524288" "12b-pi3 ① doctor 给修法（抬高额度）"
+assert_has "$TMP/m53-doctor.log" "inotify 额度" "12b-pi3 ① doctor 有 inotify 余量一条"
+assert_not "$TMP/m53-doctor.log" "没有 inbox-watch 注册" "12b-pi3 ① doctor 不说「没有注册」（注册是活的）"
+assert_not "$TMP/m53-doctor.log" "PM 会话已注册" "12b-pi3 ① doctor 不报假绿「已注册」"
+ob_run $TEAM status >"$TMP/m53-status.log" 2>&1 || true
+assert_has "$TMP/m53-status.log" "投递通道降级" "12b-pi3 ① status 报投递通道降级"
+assert_has "$TMP/m53-status.log" "errno=ENOSPC" "12b-pi3 ① status 点名 errno"
+assert_has "$TMP/m53-status.log" "watches 65312/65536" "12b-pi3 ① status 给出配额占用"
+assert_has "$TMP/m53-status.log" "fs.inotify.max_user_watches=524288" "12b-pi3 ① status 给修法"
+assert_not "$TMP/m53-status.log" "退回输入框粘贴" "12b-pi3 ① status 不说退回粘贴路径"
+ob_run $TEAM __panel-data --block pm >"$TMP/m53-pm.json" 2>&1 || true
+assert_has "$TMP/m53-pm.json" '"delivery_warning": "watcher 注册失败' "12b-pi3 ① 面板 pm 块带降级字段（同一份读者措辞）"
+assert_has "$TMP/m53-pm.json" "唤醒退化为轮询" "12b-pi3 ① 面板字段说明「只慢不丢」"
+assert_not "$TMP/m53-pm.json" "退回输入框粘贴" "12b-pi3 ① 面板字段不说退回粘贴路径"
+if [ -n "$JS_RUNNER" ]; then
+  ob_run $TEAM monitor --print >"$TMP/m53-monitor.log" 2>&1 || true
+  assert_has "$TMP/m53-monitor.log" "投递降级：watcher 注册失败（errno=ENOSPC" "12b-pi3 ① 面板帧带降级行（带文字记号，不只是颜色）"
+  assert_not "$TMP/m53-monitor.log" "退回输入框粘贴" "12b-pi3 ① 面板帧不说退回粘贴路径"
+else
+  cond_skip "12b-pi3 ① 面板帧" "本机没有 node/bun：面板渲染不了（26 节会单独说明）"
+fi
+
+# ②（负对照）陈旧记录不是证据：pid 已死 / cwd 在外 → 一个字都不报
+( sleep 0.05 ) & M53_DEAD_PID=$!; wait "$M53_DEAD_PID" 2>/dev/null || true
+piw_reset; m53_degraded m53-pm.degraded "$SESSION:pm" "$M53_DEAD_PID" "$REPO" ENOSPC 65312/65536
+ob_run $TEAM status >"$TMP/m53-status-stale.log" 2>&1 || true
+assert_not "$TMP/m53-status-stale.log" "投递通道降级" "12b-pi3 ②（负对照）死 pid 的降级记录不报"
+piw_reset; m53_degraded m53-pm.degraded "$SESSION:pm" "$$" "/tmp" ENOSPC 65312/65536
+ob_run $TEAM status >"$TMP/m53-status-foreign.log" 2>&1 || true
+assert_not "$TMP/m53-status-foreign.log" "投递通道降级" "12b-pi3 ②（负对照）cwd 在外面的降级记录不报"
+
+# ③ 健康通道保持安静：活注册 + 无记录 → 无降级行、面板字段为空
+piw_reset; piw_reg m53-pm "$SESSION:pm" pm
+ob_run $TEAM status >"$TMP/m53-status-ok.log" 2>&1 || true
+assert_not "$TMP/m53-status-ok.log" "投递通道降级" "12b-pi3 ③（负对照）健康通道不刷降级行"
+ob_run $TEAM __panel-data --block pm >"$TMP/m53-pm-ok.json" 2>&1 || true
+assert_has "$TMP/m53-pm-ok.json" '"delivery_warning": ""' "12b-pi3 ③（负对照）健康通道面板字段为空"
+if [ -n "$JS_RUNNER" ]; then
+  ob_run $TEAM monitor --print >"$TMP/m53-monitor-ok.log" 2>&1 || true
+  assert_not "$TMP/m53-monitor-ok.log" "投递降级" "12b-pi3 ③（负对照）健康通道面板帧没有警告行"
+fi
+piw_reset
+
+# ④ M46 的「没有注册」类措辞逐字不变（反向夹具：降级类不许把这类措辞吃掉）
+piw_reset; mkdir -p "$PIW"
+printf 'version=1\ntarget=ai-interview:pm\nkey=ai-interview_pm-00000000\nsession=ai-interview\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=session ai-interview != %s\npid=%s\ncwd=%s\nts=2026-09-20T16:11:45.129Z\nheartbeat=%s\n' \
+  "$SESSION" "$SESSION" "$$" "$REPO" "$(date +%s)" > "$PIW/ai-interview_pm-00000000.skip"
+ob_run $TEAM status >"$TMP/m53-status-skip.log" 2>&1 || true
+assert_has "$TMP/m53-status-skip.log" "会话名不符" "12b-pi3 ④ .skip 类降级照旧报会话名不符"
+assert_has "$TMP/m53-status-skip.log" "退回输入框粘贴慢路径" "12b-pi3 ④ .skip 类照旧给粘贴慢路径的出路"
+assert_has "$TMP/m53-status-skip.log" "重启进程" "12b-pi3 ④ .skip 类照旧劝重启进程"
+piw_reset
+
+# ⑤ doctor 的 inotify 余量：默认形状 / 阈值 / 探针 errno / 无运行时
+ob_run $TEAM doctor >"$TMP/m53-ino-def.log" 2>&1; M53_RC_DEF=$?
+assert_has "$TMP/m53-ino-def.log" "inotify 额度" "12b-pi3 ⑤ doctor 有 inotify 额度一条"
+assert_has "$TMP/m53-ino-def.log" "max_user_watches" "12b-pi3 ⑤ 默认形状点名 max_user_watches"
+if grep -qE "inotify 额度 +! .*注册探针 ok" "$TMP/m53-ino-def.log"; then
+  bad "12b-pi3 ⑤ 默认形状：探针 ok 时不该是警告行"
+elif grep -qE "inotify 额度 +✓ .*注册探针 ok" "$TMP/m53-ino-def.log"; then
+  ok "12b-pi3 ⑤ 默认形状：探针 ok → ✓ 且点名 max_user_watches"
+else
+  cond_skip "12b-pi3 ⑤ 探针 ok" "本机 fs.watch 此刻注册失败（行内可见结论，不是静默跳过）"
+fi
+ob_run env TEAM_INOTIFY_MIN_FREE=999999999 $TEAM doctor >"$TMP/m53-ino-thr.log" 2>&1; M53_RC_THR=$?
+assert_has "$TMP/m53-ino-thr.log" "fs.inotify.max_user_watches=524288" "12b-pi3 ⑤ 阈值警告给修法"
+assert_has "$TMP/m53-ino-thr.log" "Syncthing" "12b-pi3 ⑤ 修法点名常见占用者 Syncthing"
+assert_has "$TMP/m53-ino-thr.log" "VSCode" "12b-pi3 ⑤ 修法点名常见占用者 VSCode"
+assert_eq "12b-pi3 ⑤ 余量警告不让 doctor 变红（rc 与默认一致）" "$M53_RC_THR" "$M53_RC_DEF"
+M53_JS_STUB="$TMP/m53-js-stub"
+printf '#!/usr/bin/env bash\ncase "$1" in --version) echo v20.0.0; exit 0 ;; esac\necho "errno=ENOSPC"\n' > "$M53_JS_STUB"
+chmod +x "$M53_JS_STUB"
+ob_run env TEAM_JS_BIN="$M53_JS_STUB" $TEAM doctor >"$TMP/m53-ino-stub.log" 2>&1 || true
+assert_has "$TMP/m53-ino-stub.log" "注册探针 errno=ENOSPC" "12b-pi3 ⑤ 探针注册失败本身是可见警告"
+assert_not "$TMP/m53-ino-stub.log" "注册探针 ok" "12b-pi3 ⑤ 探针失败绝不报 ok"
+ob_run env TEAM_JS_BIN="$TMP/m53-no-such-js" TEAM_REQUIRE_JS=0 $TEAM doctor >"$TMP/m53-ino-none.log" 2>&1 || true
+assert_has "$TMP/m53-ino-none.log" "注册探针 unavailable" "12b-pi3 ⑤ 没有运行时 → 探针 unavailable"
+assert_not "$TMP/m53-ino-none.log" "注册探针 ok" "12b-pi3 ⑤ 没有运行时不冒称额度健康"
 
 # ---------------------------------------------------------------- 12b-j. 隔离收尾
 ob_leaks="$(ob_leak_scan)"

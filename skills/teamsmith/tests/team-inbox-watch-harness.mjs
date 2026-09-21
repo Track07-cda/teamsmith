@@ -16,7 +16,7 @@
  * 每个用例打印一行 `TEAM-IW-CASE PASS|FAIL <name> [:: detail]`，任一 FAIL → 退出码 1。
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, watch, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -30,14 +30,101 @@ if (!ext) {
 const EXT = resolve(ext)
 const SKILL_DIR = resolve(EXT, '../..')   // <skill>/extension/<file> → <skill>
 
-// ── 身份隔离：绝不继承调用者的团队身份与 tmux 身份 ──────────────────────────────
+// ── 身份隔离：绝不继承调用者的团队身份与 tmux 身份；但这四个**夹具控制**必须在清掉之前
+//    快照、清完后只还原它们 —— 否则夹具自己的隔离会把「这次要强制失败」丢掉（有意制造的
+//    故障被当成继承环境静默丢弃，这条正是 M53 要求说清楚的形状）。
+const CONTROL_KEYS = ['TEAM_INBOX_WATCH_FORCE_FAIL', 'TEAM_IW_REQUIRE_WATCH', 'TEAM_IW_ONLY', 'TEAM_IW_KEEP']
+const CONTROLS = Object.fromEntries(CONTROL_KEYS.map(k => [k, process.env[k]]))
 for (const key of Object.keys(process.env)) {
   if (/^(TEAM_|SMOKE_)/.test(key) || key === 'TMUX' || key === 'TMUX_PANE') delete process.env[key]
+}
+for (const [k, v] of Object.entries(CONTROLS)) {
+  if (v === undefined) delete process.env[k]
+  else process.env[k] = v
+}
+
+// ── M53 前提：这个用户此刻能不能注册一个 watch（量它，不猜它）。只靠监视器唤醒的用例依赖它；
+//    TEAM_INBOX_WATCH_FORCE_FAIL 显式造出同一个不可用前提（不真去注册），并标 forced=1。
+const FORCE_FAIL = (process.env.TEAM_INBOX_WATCH_FORCE_FAIL || '').trim()
+let premise = { ok: true, errno: '', forced: false }
+if (FORCE_FAIL) {
+  premise = { ok: false, errno: FORCE_FAIL, forced: true }
+} else {
+  try {
+    const probeDir = mkdtempSync(join(tmpdir(), 'teamsmith-iw-prereq-'))
+    const probeWatcher = watch(probeDir, () => {})
+    probeWatcher.close()
+    rmSync(probeDir, { recursive: true, force: true })
+  } catch (error) {
+    premise = { ok: false, errno: String(error?.code ?? 'unknown'), forced: false }
+  }
+}
+
+// 前提行里的「额度观察」：与扩展同一条完整性规则（嵌套 PID 命名空间 / 读不到的 fdinfo → unknown）。
+// 它只是前提行的上下文；判定权在前提本身（一次真注册），不在这个数。
+function quotaObservation() {
+  let max = 'unknown'
+  try {
+    const t = readFileSync('/proc/sys/fs/inotify/max_user_watches', 'utf8').trim()
+    if (/^[0-9]+$/.test(t)) max = t
+  } catch { /* unknown */ }
+  let used = 'unknown'
+  try {
+    const ns = /^NSpid:\s*(.+)$/m.exec(readFileSync('/proc/self/status', 'utf8'))
+    if (ns && ns[1].trim().split(/\s+/).length === 1 && typeof process.getuid === 'function') {
+      const uid = process.getuid()
+      let total = 0
+      let complete = true
+      for (const entry of readdirSync('/proc')) {
+        if (!/^[0-9]+$/.test(entry)) continue
+        let owner
+        try { owner = statSync(`/proc/${entry}`).uid } catch { continue }
+        if (owner !== uid) continue
+        let fds
+        try { fds = readdirSync(`/proc/${entry}/fd`) } catch { complete = false; break }
+        for (const fd of fds) {
+          let link = ''
+          try { link = readlinkSync(`/proc/${entry}/fd/${fd}`) } catch { continue }
+          if (link !== 'anon_inode:inotify') continue
+          let info = ''
+          try { info = readFileSync(`/proc/${entry}/fdinfo/${fd}`, 'utf8') } catch { complete = false; break }
+          total += new Set([...info.matchAll(/^inotify wd:([0-9a-f]+)\s/gm)].map(m => m[1])).size
+        }
+        if (!complete) break
+      }
+      if (complete) used = String(total)
+    }
+  } catch { /* unknown */ }
+  return `${used}/${max}`
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 let failures = 0
+let skipped = 0
+const STRICT = /^(1|y|yes|true|on)$/i.test(String(process.env.TEAM_IW_REQUIRE_WATCH ?? ''))
+const ONLY = new Set(String(process.env.TEAM_IW_ONLY ?? '').split(',').map(x => x.trim()).filter(Boolean))
+const caseId = (name) => (name.match(/^[A-Za-z0-9][\w.-]*/) ?? [''])[0]
+const only = (id) => ONLY.size === 0 || ONLY.has(id)
+// 只靠监视器唤醒的用例（**逐字的名单**，不看启发式）：前提不可用时既不算 PASS 也不算 FAIL。
+// 前缀匹配；S24 的两条「成功注册」断言只依赖真 watcher，单独列出（同用例的强制失败部分照跑）。
+const WATCH_DEPENDENT = [
+  'S2 ', 'S3 ', 'S4 ', 'S5 ', 'S6 ', 'S9 ', 'S10 ', 'S11 ', 'S12 ', 'S13 ', 'S21',
+  'S24 a healthy session writes no degraded record',
+  'S24 a successful registration clears a stale degraded record',
+]
+const isWatchDependent = (name) => WATCH_DEPENDENT.some(p => name.startsWith(p))
 const check = (name, ok, detail = '') => {
+  if (!only(caseId(name))) return   // TEAM_IW_ONLY：不选中的用例不打印、不计数（也不许悄悄算绿）
+  if (!premise.ok && isWatchDependent(name)) {
+    if (STRICT) {
+      console.log(`TEAM-IW-CASE FAIL ${name} :: watch premise unavailable (errno=${premise.errno}${premise.forced ? ', forced=1' : ''}) and TEAM_IW_REQUIRE_WATCH=1`)
+      failures++
+    } else {
+      console.log(`TEAM-IW-CASE SKIP ${name} :: watch unavailable (errno=${premise.errno}${premise.forced ? ', forced=1' : ''})`)
+      skipped++
+    }
+    return
+  }
   console.log(`TEAM-IW-CASE ${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` :: ${detail}` : ''}`)
   if (!ok) failures++
 }
@@ -49,6 +136,10 @@ async function waitFor(fn, ms = 3000, step = 25) {
     await sleep(step)
   }
 }
+
+console.log(premise.ok
+  ? `TEAM-IW-PREREQ watch=ok forced=0 strict=${STRICT ? 1 : 0}`
+  : `TEAM-IW-PREREQ watch=errno=${premise.errno} watches=${quotaObservation()} forced=${premise.forced ? 1 : 0} strict=${STRICT ? 1 : 0}`)
 
 // ── 夹具仓库（有 .pi/team/config.sh 的 git 仓库；findRoot 走 git 主工作树那一支）────────
 const TMP = mkdtempSync(join(tmpdir(), 'teamsmith-iw-'))
@@ -144,6 +235,7 @@ check('nothing is delivered before session_start', sent.length === 0)
 
 // ── S1：session_start 写出注册（发送方据此判定「目标是 pi 且有监视」）────────────
 await sessionStart()
+spoolFile()   // 注册后把 spool 路径记下来：被 TEAM_IW_ONLY 过滤掉的用例（S2…）不再替后面钉路径
 check('S1 session_start creates exactly one .reg', regs().length === 1, `regs=${regs().length}`)
 const regText = regs().length ? readFileSync(join(WATCH_DIR, regs()[0]), 'utf8') : ''
 for (const [field, want] of [['target', 'm30s:pm'], ['inbox', 'pm'], ['cwd', ROOT]]) {
@@ -168,7 +260,7 @@ check('S1 registry has a fresh heartbeat', (() => {
 }
 
 // ── S2：spool 新行 → 唤醒（fs.watch；轮询被关掉，所以红 = 没在监视）──────────────
-{
+if (only('S2')) {
   const before = sent.length
   appendWake('say', 'pm', 'pm', 'please read the failing test')
   const ok = await waitFor(() => sent.length > before + 0)
@@ -183,7 +275,7 @@ check('S1 registry has a fresh heartbeat', (() => {
 }
 
 // ── S3：同一拍的多行合并成一条（不按行刷屏） ─────────────────────────────────
-{
+if (only('S3')) {
   const before = sent.length
   mkdirSync(WATCH_DIR, { recursive: true })
   for (const n of [1, 2, 3]) appendWake('say', 'dev', 'pm', `burst line ${n}`)
@@ -194,7 +286,7 @@ check('S1 registry has a fresh heartbeat', (() => {
 }
 
 // ── S4：预览截断 + 每条约 4 行上限（只带指针，不带 payload 全文） ───────────────
-{
+if (only('S4')) {
   const before = sent.length
   const long = 'X'.repeat(400)
   appendWake('knock', 'dev', 'pm', `${long}TAIL-MARKER`)
@@ -211,7 +303,7 @@ check('S1 registry has a fresh heartbeat', (() => {
 }
 
 // ── S5：启动基线（历史行不叫醒任何人；启动后的行才唤醒） ─────────────────────────
-{
+if (only('S5')) {
   await shutdown()
   const before = sent.length
   appendWake('say', 'pm', 'pm', 'historical line written while nobody watched')
@@ -234,7 +326,7 @@ check('S1 registry has a fresh heartbeat', (() => {
 }
 
 // ── S6：spool 上限（截头留尾）不把尾部重叫一遍 ───────────────────────────────
-{
+if (only('S6')) {
   process.env.TEAM_INBOX_WATCH_MAX_BYTES = '2048'
   const before = sent.length
   const f = spoolFile()
@@ -297,9 +389,9 @@ check('S1 registry has a fresh heartbeat', (() => {
 //   这是 brief 要求的那条实录的**零模型**形态：把假 Pi 宿主换掉，其余全是生产件（真扩展注册、
 //   `team notify pm` 真跑、真 durable 收件箱、真 spool）。真实的「唤醒一个空闲 pi 会话（含模型一轮）」
 //   由 E8 的 RPC 探针实证（docs/team/reports/E8-verify/probes），这里不重复付模型成本。
-{
-  process.env.TEAM_INBOX_WATCH_TARGET = 'm30s:pm'
-  process.env.TEAM_INBOX_WATCH_POLL_MS = '3600000'
+process.env.TEAM_INBOX_WATCH_TARGET = 'm30s:pm'
+process.env.TEAM_INBOX_WATCH_POLL_MS = '3600000'
+if (only('S10')) {
   await sessionStart()
   const before = sent.length
   const summary = join(TMP, 'summary-dev-M30.md')
@@ -348,7 +440,7 @@ const lastTotal = () => {
   return m.length ? Number(m.at(-1)[1]) : 0
 }
 let s11Lines = []
-{
+if (only('S11')) {
   await sessionStart()
   const f = spoolFile()
   // 三条新行先正常投递（合并成一条唤醒），确保重放内容**全部已投递**
@@ -386,7 +478,7 @@ let s11Lines = []
 }
 
 // ── S12：截短后的重放有界 + 说明跳过（只投最近 N 条「真新」，计数与文本一致）────────────────
-{
+if (only('S12')) {
   process.env.TEAM_INBOX_WATCH_REPLAY_MAX = '5'
   const f = spoolFile()
   // 垫大 spool（两条正常投递的填克行），保证后面的重写内容**一定比当前 offset 小**（真 shrink）
@@ -425,7 +517,7 @@ let s11Lines = []
 }
 
 // ── S13：去重记忆跨会话重启（<key>.seen 持久化；重启后的重写仍然静默）────────────────────
-{
+if (only('S13')) {
   await shutdown()
   await sessionStart()   // 内存态清零 → 去重记忆只能从 <key>.seen 重新加载
   const seenFiles = existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(x => x.endsWith('.seen')) : []
@@ -557,11 +649,12 @@ const cliPath = join(SKILL_DIR, 'scripts/team')
   await sessionStart()
   const started = ledger().filter(l => / started target=/.test(l)).at(-1) ?? ''
   check('S18 the baseline is the spool byte size (no U+FFFD skew)', started.includes(`baseline=${size}`), `${started.trim()} (size=${size})`)
-  const regPath = join(WATCH_DIR, regs()[0])
-  const hb0 = statSync(regPath).mtimeMs
+  const regNow = regs()[0]
+  const regPath = regNow ? join(WATCH_DIR, regNow) : ''
+  const hb0 = regPath ? statSync(regPath).mtimeMs : 0
   await sleep(400)
   // 心跳前进 = 定时器真的在跑：空闲断言不是「压根没拍」（POLL_MS 低于 envNum 下限会被拒）
-  const hbMoved = statSync(regPath).mtimeMs > hb0
+  const hbMoved = regPath ? statSync(regPath).mtimeMs > hb0 : false
   check('S18 idle ticks after a byte-clipped line add no spool shrink',
     hbMoved && ledgerMatches(/spool shrink/) === shrinkBefore,
     `timers-alive=${hbMoved} shrink lines ${shrinkBefore} -> ${ledgerMatches(/spool shrink/)}`)
@@ -729,7 +822,11 @@ const cliPath = join(SKILL_DIR, 'scripts/team')
   await sessionStart()
   const f = spoolFile()
   const seenFile = readdirSync(WATCH_DIR).filter(n => n.endsWith('.seen')).map(n => join(WATCH_DIR, n))[0]
-  const seenLines = readFileSync(seenFile, 'utf8').split('\n').filter(l => l.trim())
+  // 没有投递就没有 .seen（前提干涸或失败路径的会话）：按空记忆处理，让断言自己去红 ——
+  // 夹具绝不能在这里崩掉（一崩就再也走不到后面的用例，翻转证据会变成「包没跑完」）。
+  const seenLines = seenFile && existsSync(seenFile)
+    ? readFileSync(seenFile, 'utf8').split('\n').filter(l => l.trim())
+    : []
   // (a) 只含已投递行的重写 → deliver=0 + dup>0、total 不动、无唤醒
   const picked = seenLines.filter(l => /burst line|after-clipped-line/.test(l)).slice(-3)
   const rescanA = ledgerMatches(/ rescan lines=/)
@@ -778,6 +875,87 @@ const cliPath = join(SKILL_DIR, 'scripts/team')
   await shutdown()
 }
 
+// ── S22–S24（M53）：注册失败被记录、轮询兜底被证明、记录随生命周期收敛 ─────────────────
+// 事故（2026-09-21）：宿主 inotify 配额耗尽 → 扩展静默丢掉 errno 与配额，而 `.reg` 还在 →
+// doctor 把「只剩轮询」的通道报成健康。三条契约：① 失败带 errno/额度/轮询间隔，落一条耐久记录；
+// ② 轮询兜底仍投递一次且不改变消息形状；③ 记录只活到「成功注册」或「干净退出」。
+const degradedFiles = () => (existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(f => f.endsWith('.degraded')) : [])
+{
+  await shutdown()
+  await sleep(150)
+  process.env.TEAM_INBOX_WATCH_POLL_MS = '200'
+  process.env.TEAM_INBOX_WATCH_FORCE_FAIL = 'ENOSPC'
+  const beforeNotify = sent.length
+  await sessionStart()
+
+  // S22 —— 失败的两条痕迹都要自解释；`.reg` 必须留着（发送方的路由绝不因降级改道）
+  const failLine = ledger().filter(l => /watch unavailable/.test(l)).at(-1) ?? ''
+  check('S22 the failure line names errno, watches, poll_ms and fallback=polling',
+    /watch unavailable: errno=ENOSPC watches=([0-9]+|unknown)\/([0-9]+|unknown) poll_ms=200 fallback=polling forced=1$/.test(failLine),
+    failLine.trim() || '(no failure line)')
+  check('S22 the failure line marks the fixture-caused fault as forced=1', /\bforced=1$/.test(failLine), failLine.trim())
+  const deg = degradedFiles()
+  check('S22 a degraded record is written (exactly one)', deg.length === 1, `records=${deg.length}`)
+  const degText = deg.length ? readFileSync(join(WATCH_DIR, deg[0]), 'utf8') : ''
+  for (const [field, want] of [
+    ['version', '1'], ['target', 'm30s:pm'], ['reason', 'watch-unavailable'], ['errno', 'ENOSPC'],
+    ['poll_ms', '200'], ['forced', '1'], ['pid', String(process.pid)], ['cwd', ROOT],
+  ]) {
+    check(`S22 the record carries ${field}=${want}`, new RegExp(`^${field}=${want}$`, 'm').test(degText), degText.replace(/\n/g, ' | '))
+  }
+  check('S22 the record carries watches=<used>/<max>',
+    /^watches=([0-9]+|unknown)\/([0-9]+|unknown)$/m.test(degText), degText.replace(/\n/g, ' | '))
+  check('S22 a degraded watcher does not lose the registration (.reg is still there)',
+    regs().length === 1, `regs=${regs().length}`)
+  // 真 CLI 的 route 助手仍从 .reg 解出 target → 走 pi 通道（降级不把发送方推回粘贴慢路径）
+  const m53Summary = join(TMP, 'summary-dev-M53.md')
+  writeFileSync(m53Summary, 'M53-S22: a degraded watcher keeps the spool route')
+  let notifyOut = ''
+  try {
+    notifyOut = execFileSync('bash', [join(SKILL_DIR, 'scripts/team'), 'notify', 'pm', '--from-file', m53Summary], {
+      cwd: ROOT, encoding: 'utf8', timeout: 20000,
+      env: { ...process.env, TEAM_ROOT: ROOT, TEAM_NOTIFY_TMUX: '1' },
+    })
+  } catch (error) { notifyOut = `${String(error?.stdout ?? '')}${String(error?.stderr ?? '')}` }
+  check('S22 the real route helper still resolves the target from .reg (pi channel, never the paste path)',
+    /pi 监视通道/.test(notifyOut), notifyOut.trim().split('\n').at(-1) ?? '')
+  await waitFor(() => sent.length > beforeNotify, 1500)   // 先把通知那一拍投完，S23 才是干净的一行一次
+
+  // S23 —— 兜底是「被证明的保证」：强制失败 + 秒级轮询，一条新 spool 行在一个周期内唤醒一次
+  const beforeWake = sent.length
+  appendWake('say', 'pm', 'pm', `S23-POLL-FALLBACK-${'Z'.repeat(200)}S23-TAIL-MARKER`)
+  const woke = await waitFor(() => sent.length > beforeWake, 600)
+  await sleep(300)
+  check('S23 a forced-failure session still wakes within one poll interval (200 ms)',
+    woke && sent.length === beforeWake + 1, `messages=${sent.length - beforeWake}`)
+  const fallbackWake = sent.at(-1)
+  check('S23 the fallback wake keeps the live-watcher shape (customType/triggerTurn/followUp)',
+    fallbackWake?.msg?.customType === 'team-inbox' && fallbackWake?.opts?.triggerTurn === true
+      && fallbackWake?.opts?.deliverAs === 'followUp',
+    JSON.stringify({ customType: fallbackWake?.msg?.customType, ...(fallbackWake?.opts ?? {}) }))
+  const fallbackBody = lastText()
+  check('S23 the fallback wake points at the inbox and truncates the payload',
+    fallbackBody.includes('docs/team/inbox/pm.md') && fallbackBody.includes('S23-POLL-FALLBACK-')
+      && !fallbackBody.includes('S23-TAIL-MARKER'), fallbackBody.replace(/\n/g, ' | '))
+  check('S23 the ledger records the fallback delivery as one wake',
+    /wake n=1 /.test(ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''), ledger().at(-1) ?? '')
+
+  // S24 —— 生命周期：干净退出删记录；真注册成功也删旧记录
+  await shutdown()
+  check('S24 a clean shutdown removes the degraded record', degradedFiles().length === 0, `records=${degradedFiles().length}`)
+  delete process.env.TEAM_INBOX_WATCH_FORCE_FAIL
+  mkdirSync(WATCH_DIR, { recursive: true })
+  writeFileSync(join(WATCH_DIR, 'stale-m53.degraded'),
+    `version=1\ntarget=m30s:pm\nkey=stale-m53\nreason=watch-unavailable\nerrno=ENOSPC\nwatches=1/2\n` +
+    `poll_ms=5000\nforced=0\nsince=x\npid=${process.pid}\ncwd=${ROOT}\nheartbeat=${Math.floor(Date.now() / 1000)}\n`)
+  await sessionStart()
+  check('S24 a healthy session writes no degraded record', degradedFiles().length === 0, `records=${degradedFiles().length}`)
+  check('S24 a successful registration clears a stale degraded record',
+    !existsSync(join(WATCH_DIR, 'stale-m53.degraded')), `records=${degradedFiles().length}`)
+  await shutdown()
+  process.env.TEAM_INBOX_WATCH_POLL_MS = '3600000'
+}
+
 // ── 反向守卫：真实仓库 state/ 未被触碰 ───────────────────────────────────────
 {
   const after = snapshot(REAL_STATE)
@@ -785,6 +963,8 @@ const cliPath = join(SKILL_DIR, 'scripts/team')
     after === REAL_BEFORE ? '' : 'real state/ changed during the harness')
 }
 
-console.log(failures === 0 ? 'TEAM-IW-HARNESS OK' : `TEAM-IW-HARNESS FAIL (${failures})`)
+console.log(failures === 0
+  ? `TEAM-IW-HARNESS OK (skipped=${skipped})`
+  : `TEAM-IW-HARNESS FAIL (${failures})`)
 console.log(`fixture: ${keep || process.env.TEAM_IW_KEEP === '1' ? TMP : '(removed)'}`)
 process.exit(failures === 0 ? 0 : 1)

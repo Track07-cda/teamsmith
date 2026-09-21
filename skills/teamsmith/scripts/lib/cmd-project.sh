@@ -475,6 +475,13 @@ team_cmd_doctor() {
       warn "找到了但版本判不出：${js_path:-?} ${js_ver:-}${js_detail:+（$js_detail）}——确认它能跑 --version" ;;
   esac
 
+  # M53 · wake 通道的 inotify 余量：额度 + **可证明**的占用 + 一次性注册探针。降级 ≠ 故障 ——
+  # 这是环境事实，只警告（fails 不动）并给修法；探针不是 ok 或已知余量低于底线才开口。
+  check "inotify 额度"
+  local ino_status ino_text
+  IFS=$'\t' read -r ino_status ino_text <<< "$(team_inotify_headroom_line)"
+  if [ "$ino_status" = "ok" ]; then pass "$ino_text"; else warn "$ino_text"; fi
+
   check "容量 / swap 底线"; local avail swapfree swaptotal
     read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
     if [ -n "$avail" ] && [ "${avail:-0}" -gt 0 ] 2>/dev/null; then

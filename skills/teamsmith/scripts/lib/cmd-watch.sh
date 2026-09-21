@@ -583,8 +583,14 @@ team_panel_pm_json() { # PM 状态用**闭集**词表：running|starting|absent|
     foreign:*)  state="foreign"; detail="${st#foreign:}" ;;
     *)          state="absent";  detail="" ;;
   esac
-  # M46：投递通道降级（没有 inbox-watch 注册时给一行可见提示；pm-state 已在手，复用同一次读取）
+  # M46/M53：投递通道降级（没有 inbox-watch 注册，或注册在、watcher 失败）。
+  # 面板模板只加固定前缀「投递降级：」，所以**这一类降级的后果**在这里拼进字段：没有注册 → 退回输入框
+  # 粘贴慢路径；watcher 失败 → 只是唤醒退化为轮询、投递不中断（绝不把后者说成退回粘贴路径）。
+  local watch
   watch="$(team_inbox_watch_degraded_text "$(team_pm_target)" "$st" 2>/dev/null || true)"
+  if [ -n "$watch" ] && ! team_inbox_watch_watcher_degraded_text "$(team_pm_target)" >/dev/null 2>&1; then
+    watch="$watch → 通知退回输入框粘贴慢路径（重启进程才加载扩展）"
+  fi
   printf '{"state": %s, "detail": %s, "evidence": %s, "delivery_warning": %s}' \
     "$(team_panel_json_str "$state")" "$(team_panel_json_str "$detail")" \
     "$(team_panel_json_str "$(team_pm_evidence "$st")")" "$(team_panel_json_str "$watch")"

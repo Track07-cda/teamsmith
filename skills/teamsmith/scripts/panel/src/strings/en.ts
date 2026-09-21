@@ -15,7 +15,8 @@ export const en = {
   standbyOff: 'standby off',
   standbyDash: 'standby —',
   pmLabel: 'PM',
-  pmDeliveryWarning: 'delivery degraded: {reason} → notifications fall back to the paste path (restart the process to load the extension)',
+  // M53: the consequence is part of {reason} (no registration → paste path; degraded watcher → slower, no loss).
+  pmDeliveryWarning: 'delivery degraded: {reason}',
   pendingLabel: 'pending',
   pendingNone: 'none',
   outboxLabel: 'deferred',

@@ -957,6 +957,50 @@ team_inbox_watch_skip_reason() {
   return 1
 }
 
+# M53 · watcher 降级（注册还在、`fs.watch` 注册失败）：与 `.skip` 同一证据规则（pid 活着 + cwd 在
+# 本项目内），但它是**另一类**降级 —— `.reg` 仍在，路由不变（发送方继续写收件箱 spool），只有唤醒
+# 退化为轮询。陈旧记录（pid 已死 / cwd 在外）不是证据，绝不报降级。
+team_inbox_watch_degraded_files() { # → 每个 .degraded 一行（没有 → 无输出）
+  local dir; dir="$(team_inbox_watch_dir)"
+  [ -d "$dir" ] || return 0
+  find "$dir" -maxdepth 1 -name '*.degraded' -type f 2>/dev/null | LC_ALL=C sort
+}
+
+team_inbox_watch_degraded_live() { # <degraded 文件> → 0 = 这条记录活着（写它的进程还活着且属于本项目）
+  local f="$1" pid cwd hb age
+  pid="$(team_inbox_watch_field "$f" pid)"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  cwd="$(team_inbox_watch_field "$f" cwd)"
+  if [ -z "$cwd" ]; then
+    hb="$(team_inbox_watch_field "$f" heartbeat)"
+    case "$hb" in ''|*[!0-9]*) return 1 ;; esac
+    age=$(( $(team_epoch_sec) - hb ))
+    [ "$age" -le "$(team_inbox_watch_stale)" ] || return 1
+    return 0
+  fi
+  team_cwd_in_project "$cwd"
+}
+
+# <target> → 该 target 的**活**降级记录的人话（errno / watches <used>/<max> / 轮询 / 修法）；没有 → 1。
+# 这句话同时是 doctor / status / 面板的同一份措辞（面板只加固定前缀）。
+team_inbox_watch_watcher_degraded_text() {
+  local target="${1:-}" f ft errno watches
+  [ -n "$target" ] || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    ft="$(team_inbox_watch_field "$f" target)"
+    [ "$ft" = "$target" ] || continue
+    team_inbox_watch_degraded_live "$f" || continue
+    errno="$(team_inbox_watch_field "$f" errno)"
+    watches="$(team_inbox_watch_field "$f" watches)"
+    printf 'watcher 注册失败（errno=%s；watches %s）：唤醒退化为轮询，投递不中断；修法：抬高 fs.inotify.max_user_watches=524288（宿主 /etc/sysctl.d/；Syncthing 与 VSCode 是常见占用者）' \
+      "${errno:--}" "${watches:--}"
+    return 0
+  done < <(team_inbox_watch_degraded_files)
+  return 1
+}
+
 # M46 · 降级判定：<target> 没有活的注册时，能证明出原因就打印**短文本**并返回 0，否则返回 1。
 # 两种证据：① 扩展留下的活 .skip（会话名不符 / …）；② 调用方告知 PM 进程已被证实是本项目的
 # 内置 Pi（running:*）而注册缺失 —— 扩展没加载/启动早于扩展安装。内置 Pi 之外（自定义 PM CLI）
@@ -964,6 +1008,11 @@ team_inbox_watch_skip_reason() {
 team_inbox_watch_degraded_text() { # <target> [<pm-state>]
   local target="${1:-}" pmstate="${2:-}" reason
   [ -n "$target" ] || return 1
+  # M53 先判「注册在、watcher 失败」：它比「没有注册」更精确，出路也不同（**不**退回粘贴路径）。
+  if reason="$(team_inbox_watch_watcher_degraded_text "$target")"; then
+    printf '%s' "$reason"
+    return 0
+  fi
   team_inbox_watch_route "$target" >/dev/null 2>&1 && return 1
   if reason="$(team_inbox_watch_skip_reason "$target")"; then
     printf '%s' "$reason"
@@ -978,8 +1027,15 @@ team_inbox_watch_degraded_text() { # <target> [<pm-state>]
 }
 
 # 完整告警行（status / digest / doctor / 面板共用一份措辞）。返回 1 = 没降级，不输出任何东西。
+# M53：两类降级的出路不同 —— 注册在、watcher 失败时**不能说**「没有注册」/「重启进程」（注册就是活的），
+# 只把同一份读者文本包上「投递通道降级」抬头；「没有注册」这条路的措辞逐字不变。
 team_inbox_watch_degraded_line() { # [<target>] [<pm-state>]
   local target="${1:-$(team_pm_target)}" pmstate="${2:-}" text
+  [ -n "$target" ] || return 1
+  if text="$(team_inbox_watch_watcher_degraded_text "$target")"; then
+    printf '本项目 PM 的投递通道降级：%s' "$text"
+    return 0
+  fi
   text="$(team_inbox_watch_degraded_text "$target" "$pmstate")" || return 1
   printf '本项目 PM 的投递通道降级：%s 没有 inbox-watch 注册（%s）→ 通知退回输入框粘贴慢路径；扩展在进程启动时加载，重启进程才会生效：%s up（或 %s resume）' \
     "$target" "$text" "${TEAM_CLI:-team}" "${TEAM_CLI:-team}"

@@ -1023,6 +1023,104 @@ team_js_runner_text() { # → doctor/日志用的一行："<路径> (<版本>)"�
   esac
 }
 
+# ---------------------------------------------------------------- inotify 余量（M53）
+# 唤醒通道的额度是一个**用户级**资源：宿主的 inotify 配额被占满时 `fs.watch` 直接 ENOSPC，
+# 会话只剩轮询兜底（watch-degradation 的降级状态）。doctor 要能提前看见这件事，并且给修法。
+
+# `/proc/sys/fs/inotify/max_user_watches`；读不到/非法 → unknown。
+team_inotify_max_watches() {
+  local v
+  v="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || true)"
+  case "$v" in ''|*[!0-9]*) printf 'unknown\n' ;; *) printf '%s\n' "$v" ;; esac
+}
+
+# 当前用户的 inotify watch 占用：只在**可证明完整**时给数字，否则 unknown。
+# 完整性前提：我们不在嵌套的 PID 命名空间里（/proc/self/status 的 NSpid 只有一个值）—— 容器里
+# /proc 只是局部视图（本机实测容器内只看得见 16 个 watch，而宿主已占 65312），把局部计数当总量
+# 就是假绿。同 UID 进程的 fd/fdinfo 有一个读不到 → 同样 unknown，绝不报部分量。
+team_inotify_used_watches() {
+  local nspid uid pid fd link n total=0
+  nspid="$(LC_ALL=C awk '/^NSpid:/{print NF-1; exit}' /proc/self/status 2>/dev/null || true)"
+  [ "${nspid:-}" = "1" ] || { printf 'unknown\n'; return 0; }
+  uid="$(id -u 2>/dev/null || true)"
+  case "$uid" in ''|*[!0-9]*) printf 'unknown\n'; return 0 ;; esac
+  for pid in /proc/[0-9]*; do
+    [ -d "$pid" ] || continue
+    [ "$(stat -c %u "$pid" 2>/dev/null || true)" = "$uid" ] || continue
+    [ -r "$pid/fd" ] || { printf 'unknown\n'; return 0; }
+    for fd in "$pid"/fd/*; do
+      link="$(readlink "$fd" 2>/dev/null || true)"
+      [ "$link" = "anon_inode:inotify" ] || continue
+      [ -r "$pid/fdinfo/${fd##*/}" ] || { printf 'unknown\n'; return 0; }
+      n="$(LC_ALL=C awk '/^inotify wd:/{print $2}' "$pid/fdinfo/${fd##*/}" 2>/dev/null | LC_ALL=C sort -u | wc -l)"
+      total=$((total + n))
+    done
+  done
+  printf '%s\n' "$total"
+}
+
+# 一次性注册探针：用项目已解析的运行时在私有临时目录上注册一个 watch 再删掉。
+# 判据是「这个用户此刻能不能注册」（不是「计数大不大」——计数在容器里可能是局部视图）。
+# 输出：ok | errno=<E> | unavailable（解析不到运行时 / 探针起不来）。TEAM_INOTIFY_PROBE_TIMEOUT 秒。
+team_inotify_probe() {
+  local runner script out
+  runner="$(team_js_runner 2>/dev/null || true)"
+  [ -n "$runner" ] || { printf 'unavailable\n'; return 0; }
+  script="$(mktemp "${TMPDIR:-/tmp}/teamsmith-inotify-probe.XXXXXX.js" 2>/dev/null || true)"
+  [ -n "$script" ] || { printf 'unavailable\n'; return 0; }
+  cat > "$script" <<'TEAM_INOTIFY_PROBE_JS' || { rm -f "$script"; printf 'unavailable\n'; return 0; }
+const fs = require('fs'), os = require('os'), path = require('path')
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamsmith-inotify-probe-'))
+let verdict = 'ok'
+try {
+  const w = fs.watch(dir, () => {})
+  w.close()
+} catch (error) {
+  verdict = 'errno=' + ((error && error.code) ? error.code : 'unknown')
+} finally {
+  try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
+}
+process.stdout.write(verdict + '\n')
+TEAM_INOTIFY_PROBE_JS
+  if command -v timeout >/dev/null 2>&1; then
+    out="$(timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
+  else
+    out="$("$runner" "$script" 2>/dev/null || true)"
+  fi
+  rm -f "$script"
+  case "$out" in
+    ok) printf 'ok\n' ;;
+    errno=*) printf '%s\n' "$out" ;;
+    *) printf 'errno=unknown\n' ;;
+  esac
+}
+
+# doctor 的 inotify 余量一条：额度 + **可证明**的占用 + 探针结论。制表符分隔 <ok|warn>\t<人话>。
+# 警告条件：探针不是 ok，或已知空闲（读不出来就不算数）低于 TEAM_INOTIFY_MIN_FREE（默认 1024，
+# 非数字回默认）。占用不可知时用 max 当空闲的**上界**：连上界都低于底线 → 按已知证据警告。
+# 这条只是警告：额度是环境事实，不是本项目的缺陷；doctor 的 rc 不能因此变红。
+team_inotify_headroom_line() {
+  local max used probe minfree free status text remedy
+  max="$(team_inotify_max_watches)"
+  used="$(team_inotify_used_watches)"
+  probe="$(team_inotify_probe)"
+  minfree="${TEAM_INOTIFY_MIN_FREE:-1024}"
+  case "$minfree" in ''|*[!0-9]*) minfree=1024 ;; esac
+  free="unknown"
+  if [ "$max" != "unknown" ] && [ "$used" != "unknown" ]; then free=$((max - used)); fi
+  remedy="fs.inotify.max_user_watches=524288（宿主 /etc/sysctl.d/；Syncthing 与 VSCode 是常见占用者）"
+  status=ok
+  [ "$probe" = "ok" ] || status=warn
+  if [ "$free" != "unknown" ]; then
+    [ "$free" -ge "$minfree" ] || status=warn
+  elif [ "$max" != "unknown" ]; then
+    [ "$max" -ge "$minfree" ] || status=warn
+  fi
+  text="inotify 额度 max_user_watches=${max}，已用 ${used}（空闲 ${free}，底线 ${minfree}），注册探针 ${probe}"
+  [ "$status" = "ok" ] || text="${text}；修法：抬高 ${remedy}"
+  printf '%s\t%s\n' "$status" "$text"
+}
+
 # 能直接 import .ts 的运行时（node 需启用类型剥离，否则用 bun/tsx）
 team_ts_runner() {
   if team_have_cmd node && node -e 'process.exit(process.features.typescript?0:1)' >/dev/null 2>&1; then

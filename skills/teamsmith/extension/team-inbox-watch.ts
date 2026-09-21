@@ -44,6 +44,13 @@
  * cwd 推导出的项目根：继承来的 TEAM_STATE_DIR / TEAM_CONFIG_FILE 若指向**另一个 teamsmith 项目**，
  * 一律拒绝并记账本（绝不把别人家的 state / 会话名当自己的，M40 原则的文件面）。
  *
+ * 降级通道（M53）：`fs.watch` 注册失败（典型：宿主 inotify 配额耗尽 ENOSPC）不再是一行无语境的日志 ——
+ * 账本写唯一形状 `watch unavailable: errno=… watches=<used|unknown>/<max> poll_ms=… fallback=polling
+ * [forced=1]`，并落一条耐久记录 `<key>.degraded`（pid + cwd 可判活，成功注册或干净退出删掉）。
+ * `.reg` 在失败时保留：路由（发送方）只认 `.reg`，降级绝不把消息推回输入框粘贴路径；轮询计时器
+ * 无条件安装 —— 兜底是契约，不是失败路径的补丁（夹具 S22/S23 证明它）。`watches` 只报可证明完整的
+ * 同 UID 视图（容器里 /proc 是嵌套 PID 命名空间 → `unknown`，绝不把局部计数当总量）。
+ *
  * 作用域：只认本项目（git 主工作树）的 state 目录 —— 注册与 spool 是**发送方与会话之间的接口**
  * （发送方是 CLI，它的 TEAM_STATE_DIR 在主工作树），所以它们必须待在共享根，不能跟着会话的 worktree 走。
  * 会话本地的产物（作业日志/账户）不归这里管（那是 team-bg 的活，它跟会话自己的工作树走）。只服务
@@ -51,7 +58,7 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 
 const DEFAULT_PREVIEW = 160          // 预览截断（字符）：唤醒消息只带一行指针，不带全文
@@ -338,6 +345,146 @@ function clearSkipRecords(root: string, target: string): void {
   } catch {
     /* ignore */
   }
+}
+
+/** M53 · inotify 额度上限（/proc/sys/fs/inotify/max_user_watches）。读不到 → 'unknown'。 */
+function inotifyMaxWatches(): string {
+  try {
+    const text = readFileSync('/proc/sys/fs/inotify/max_user_watches', 'utf8').trim()
+    return /^[0-9]+$/.test(text) ? text : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/** M53 · 当前用户的 inotify watch 占用 —— 只认「可证明完整」的同 UID 视图，否则 'unknown'。
+ *  完整性有一个硬前提：我们不在嵌套的 PID 命名空间里（/proc/self/status 的 NSpid 只有一个值）。
+ *  容器里 /proc 只看得见自己的 PID 命名空间，计数会小得离谱（本机实测 16/65536，而宿主已 65312），
+ *  把局部计数当总量就是假绿；另：同 UID 进程的 fd/fdinfo 有一个读不到 → unknown，绝不报部分量。 */
+function inotifyUsedWatches(): string {
+  try {
+    const status = readFileSync('/proc/self/status', 'utf8')
+    const ns = /^NSpid:\s*(.+)$/m.exec(status)
+    if (!ns || ns[1].trim().split(/\s+/).length > 1) return 'unknown'
+  } catch {
+    return 'unknown'
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+  if (uid < 0) return 'unknown'
+  let total = 0
+  try {
+    for (const entry of readdirSync('/proc')) {
+      if (!/^[0-9]+$/.test(entry)) continue
+      const pdir = `/proc/${entry}`
+      let owner: number
+      try { owner = statSync(pdir).uid } catch { continue }   // 进程刚退出：不是我们的证据缺口
+      if (owner !== uid) continue
+      let fds: string[]
+      try { fds = readdirSync(`${pdir}/fd`) } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue
+        return 'unknown'   // 同 UID 却读不到 = 视图不完整（不是「占用很小」）
+      }
+      for (const fd of fds) {
+        let link = ''
+        try { link = readlinkSync(`${pdir}/fd/${fd}`) } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue
+          return 'unknown'
+        }
+        if (link !== 'anon_inode:inotify') continue
+        let info = ''
+        try { info = readFileSync(`${pdir}/fdinfo/${fd}`, 'utf8') } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue
+          return 'unknown'
+        }
+        const wds = new Set<string>()   // 一个 inotify 实例里同一个 wd 只算一个 watch
+        for (const line of info.split('\n')) {
+          const m = /^inotify wd:([0-9a-f]+)\s/.exec(line)
+          if (m) wds.add(m[1])
+        }
+        total += wds.size
+      }
+    }
+  } catch {
+    return 'unknown'
+  }
+  return String(total)
+}
+
+/** `<used>/<max>` 形状（用于账本行与降级记录；used 可能是 unknown）。 */
+function watchUsageField(): string { return `${inotifyUsedWatches()}/${inotifyMaxWatches()}` }
+
+/** 失败原因 → errno 文本（优先 error.code；取不到时从 message 里挑一个 E… 记号）。 */
+function watchErrnoOf(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException)?.code
+  if (typeof code === 'string' && /^E[A-Z0-9]+$/.test(code)) return code
+  const m = /\b(E[A-Z][A-Z0-9]+)\b/.exec(String((error as Error)?.message ?? error))
+  return m ? m[1] : 'unknown'
+}
+
+/** 夹具旋钮（config.md 登记为 fixture-only）：<errno> ⇒ 不尝试注册，走同一条失败路径并标 `forced=1`。 */
+function forcedWatchErrno(): string {
+  return (process.env.TEAM_INBOX_WATCH_FORCE_FAIL || '').trim()
+}
+
+/** M53 · 降级记录 `state/inbox-watch/<key>.degraded`（与 .reg/.skip 同一种 KEY=VALUE 家族）。
+ *  为什么不是 .skip：`.skip` 的含义是「没有注册」（发送方会退回粘贴路径），而这里是「注册在、
+ *  watcher 不在」——路由（`team_inbox_watch_route`）只认 .reg，绝不能被这条记录改道。
+ *  读者只认「pid 活着 + cwd 在本项目内」（与 .reg/.skip 同一条证据规则）；成功注册或干净退出删掉它。 */
+function writeDegradedRecord(root: string, target: string, info: {
+  errno: string; watches: string; pollMs: number; forced: boolean
+}): void {
+  // 变量名故意不叫 dir：flip-m46 包用 `}): void {\n  const dir = watchDir(root)` 当 writeSkipRecord 的注射锚点，
+  // 这里重名会让那个锚点变成 2 处（既有翻转包会 exit 2）——不动的包不该被新代码抵掉。
+  const wdir = watchDir(root)
+  const key = targetKey(target)
+  try { mkdirSync(wdir, { recursive: true }) } catch { return }
+  const body = [
+    'version=1',
+    `target=${target}`,
+    `key=${key}`,
+    'reason=watch-unavailable',
+    `errno=${info.errno}`,
+    `watches=${info.watches}`,
+    `poll_ms=${info.pollMs}`,
+    `forced=${info.forced ? 1 : 0}`,
+    `since=${new Date().toISOString()}`,
+    `pid=${process.pid}`,
+    `cwd=${root}`,
+    `heartbeat=${Math.floor(Date.now() / 1000)}`,
+    '',
+  ].join('\n')
+  try {
+    const tmp = join(wdir, `${key}.degraded.tmp-${process.pid}`)
+    writeFileSync(tmp, body)
+    renameSync(tmp, join(wdir, `${key}.degraded`))
+  } catch {
+    /* 痕迹写不进去也不能影响会话；账本那一行仍然有 */
+  }
+}
+
+/** 成功注册（或本次会话结束）后，同 target 的旧降级记录不再成立 → 删掉（不再骗 doctor/status/面板）。 */
+function clearDegradedRecords(root: string, target: string): void {
+  const dir = watchDir(root)
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.degraded')) continue
+      const file = join(dir, name)
+      try { if (readField(file, 'target') === target) rmSync(file, { force: true }) } catch { /* ignore */ }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** M53 · 失败路径的唯一出口：账本一行（唯一形状 `watch unavailable: errno=… watches=… poll_ms=…
+ *  fallback=polling [forced=1]`）+ 一条耐久降级记录。轮询计时器**不在这里** —— 它在 session_start
+ *  里无条件安装（兜底是契约，不是失败路径的补丁；兜底的证明见夹具 S23）。 */
+function recordWatchFailure(root: string, target: string, err: string, forced: boolean): void {
+  const usage = watchUsageField()
+  const ms = pollMs()
+  appendLedger(root,
+    `watch unavailable: errno=${err} watches=${usage} poll_ms=${ms} fallback=polling${forced ? ' forced=1' : ''}`)
+  writeDegradedRecord(root, target, { errno: err, watches: usage, pollMs: ms, forced })
 }
 
 /** 读一份 KEY=VALUE 文件里的单个字段（.reg/.skip 共用；没有 → 空串）。 */
@@ -775,15 +922,23 @@ export default function (pi: ExtensionAPI) {
     loadSeen(seenPath)
     reapDeadRegs(dir, reg)
     clearSkipRecords(root, keyTarget)   // M46：注册成功 = 这个 target 不再降级，旧痕迹不骗人
+    clearDegradedRecords(root, keyTarget)   // M53：上一次失败留下的记录同样不再成立
     writeReg('ready')
     appendLedger(root, `started target=${keyTarget} inbox=${inbox} spool=${spool} baseline=${offset}`)
-    try {
-      watcher = watch(dir, (_type: string, filename: string | null) => {
-        if (filename && basename(String(filename)) !== `${key}.wake`) return
-        scheduleFlush()
-      })
-    } catch {
-      appendLedger(root, 'watch unavailable: falling back to polling only')
+    // M53 · 失败不再静默：errno + 额度观察 + 轮询间隔进账本，并写一条耐久降级记录（读的人看 pid+cwd）。
+    // 夹具旋钮强制失败时同样走这条路径（evidence 里带 forced=1，免得测试事故被当成真事故）。
+    const forced = forcedWatchErrno()
+    if (forced) {
+      recordWatchFailure(root, keyTarget, forced, true)
+    } else {
+      try {
+        watcher = watch(dir, (_type: string, filename: string | null) => {
+          if (filename && basename(String(filename)) !== `${key}.wake`) return
+          scheduleFlush()
+        })
+      } catch (error) {
+        recordWatchFailure(root, keyTarget, watchErrnoOf(error), false)
+      }
     }
     pollTimer = setInterval(() => { try { flush() } catch { /* ignore */ } }, pollMs())
     beatTimer = setInterval(() => { try { writeReg('ready') } catch { /* ignore */ } }, heartbeatMs())
@@ -795,6 +950,8 @@ export default function (pi: ExtensionAPI) {
       try { rmSync(reg, { force: true }) } catch { /* ignore */ }
       appendLedger(root, `stopped target=${keyTarget} inbox=${inbox}`)
     }
+    // M53：干净退出 = 这条降级不再成立（下一次会话会重新注册，或重新记录一次失败）
+    if (keyTarget) clearDegradedRecords(root, keyTarget)
     root = ''; key = ''; inbox = ''; spool = ''; reg = ''; offset = 0
     headBytes = null; lastShrink = null
   })
