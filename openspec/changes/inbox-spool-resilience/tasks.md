@@ -85,7 +85,7 @@ failing fixture.
   (c) append two fresh lines → one wake with `n=2` and `total=` +2. Verify: the harness's S21 PASS lines.
 - [x] 4.3 Regression pass: run `bash skills/teamsmith/tests/flip-m43.sh` and `flip-m46.sh`; S11–S17 and the smoke
   12b-pi/12b-pi2 assertions must be green with no test-text edits. Verify: both tails.
-- [ ] 4.4 `references/agent-adapters.md` (§4a.1) and `references/troubleshooting.md` (§19): document the new
+- [x] 4.4 `references/agent-adapters.md` (§4a.1) and `references/troubleshooting.md` (§19): document the new
   invariants — byte-true offsets, the clamp/fingerprint rule and its named trade-off, the stale horizon and where a
   stale line stays readable, and the ledger fields (including that a repeated `spool shrink` with `deliver=0` is a
   defect signal). Verify: `grep -n` for the new key names and the ledger fields returns both files.
@@ -124,3 +124,9 @@ this host, so a preview cut inside a multi-byte character becomes a spool line t
 - [x] 6.3 smoke 12b-pi ⑩: a fixture-validity control (the old byte clip really does produce invalid UTF-8 for the
   same payload) plus the assertions (the spool line is valid UTF-8, no U+FFFD, the preview is 698 bytes, the
   durable inbox still holds the full payload). Verify: the section's tail (red: restoring `cut -c` makes it fail).
+
+> **PM 勾选说明（2026-09-21）**：**4.4** 由 PM 本轮补齐（`references/**` 属 PM 所有权）：
+> `references/agent-adapters.md` 新增 **§4a.1b**（offset 必须按实际读到字节推进、逐行解码；生产者不得写出半个字符；
+> shrink 需要 `(size, head 指纹)` 证据且恢复必须收敛；只有**新鲜行**唤醒，`TEAM_INBOX_WATCH_STALE_SEC=900`；
+> 账本区分流量与恢复，`deliver=0` 的重复 `spool shrink` 是**缺陷信号**）与
+> `references/troubleshooting.md` §20 的对应段落；`references/config.md` 登记 `TEAM_INBOX_WATCH_STALE_SEC`。

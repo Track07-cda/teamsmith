@@ -376,6 +376,34 @@ caps are unchanged: previews truncate at `TEAM_INBOX_WATCH_PREVIEW` (160 chars),
 and the spool's own ceiling is `TEAM_INBOX_WATCH_MAX_BYTES` (128 KiB, head dropped tail kept, offset snapped
 to the new size so the kept tail is not re-announced).
 
+### 4a.1b What a *correct* offset means (P28) — the rule the 2026-09-19 loop violated
+
+The shrink/replay rules above only hold if the offset is computed honestly. Three invariants, all of them
+enforced in code and covered by the harness:
+
+1. **The offset advances by the bytes actually read** (`readSync`'s return value), and each line is decoded
+   **on its own**. The old code derived the offset as `Buffer.byteLength(decoded.slice(...))` — a
+   decode→re-encode round trip. One invalid byte (written by the producer, see 2) became U+FFFD (3 bytes), so
+   the offset advanced **past** the file size (`19635 > 19634`). That is what made the shrink rule fire on a
+   healthy spool, and because the state never converged it re-fired every few seconds, re-delivering old lines.
+   A read that starts mid-line must not deliver a fragment either.
+2. **The producer cannot write half a character**: previews are cut with `head -c 700` and passed through
+   `iconv -c` so an incomplete multibyte tail is dropped rather than written. (`cut -c1-700` under `LC_ALL=C`
+   is byte-wise and was the original source of the invalid line.)
+3. **A shrink needs evidence, and recovery must converge**: the watcher keeps the pair `(size, head
+   fingerprint)` (FNV-1a over the first bytes). A size below the offset with an **unchanged head** is repaired
+   by backing the offset off by one byte (a lost tail byte, not a rewrite); a **changed head** means an
+   external rewrite → exactly one bounded rescan. The same `(size, head)` pair is never rescanned twice, so a
+   non-converging case cannot turn into a wake loop.
+
+**Only fresh lines wake.** A line older than `TEAM_INBOX_WATCH_STALE_SEC` (default `900`) is classified
+`stale`: it is still written to the durable inbox file, but it does not wake a session
+(`classify stale=<n> unparsable=<n> inbox=…`). A line whose timestamp cannot be parsed is delivered (never
+silently dropped). The ledger separates traffic from recovery: `total=` counts **real deliveries only**, while
+`rescan lines=… dup=… skipped=… deliver=0 stale=… unparsable=…` records recovery. **A repeated
+`spool shrink` line with `deliver=0` is a defect signal, not noise** — it means the offset is not converging
+(see `references/troubleshooting.md` §20).
+
 ## 5. Logs / activity: `TEAM_AGENT_LOG_GLOB`
 
 `team monitor --activity` renders Pi session JSONL by default. With `TEAM_AGENT_LOG_GLOB` set, the

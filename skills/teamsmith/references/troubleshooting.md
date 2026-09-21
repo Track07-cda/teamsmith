@@ -657,6 +657,16 @@ you exactly what was re-read, suppressed, and delivered. No such lines + duplica
 registered for the same target (look for two `started target=…` lines without an intervening `stopped`,
 i.e. a zombie session that never logged its shutdown).
 
+**A repeated shrink with nothing delivered is a defect, not a busy spool.** When the ledger shows
+`spool shrink …` again and again while `rescan … deliver=0`, the offset is not converging — that is the
+2026-09-19 shape (a byte-wise preview cut writing an invalid line, plus a decode→re-encode offset that
+overshot the file size by one byte). The invariants that make it impossible are in
+`references/agent-adapters.md` §4a.1b; if you see the pattern again, treat it as a bug in the watcher's offset
+arithmetic, not as "the spool is being rewritten".
+
+**Lines that are too old do not wake you.** The durable inbox file keeps them; the wake is skipped
+(`classify stale=<n> …`). `TEAM_INBOX_WATCH_STALE_SEC` (default 900) sets that horizon.
+
 ## 21. pi announces a new version → the input box reads as BUSY
 
 **Symptom**: a PM/worker Pi pane is idle with an empty box, yet `team say` / `team notify` report **`queued`**
@@ -785,6 +795,41 @@ ever re-pastes a `draft-raced`/`unconfirmed` entry — that is terminal by spec;
 sitting in a human's box, the human submits or clears it, or drops the entry.
 
 ---
+
+### 22b. The watcher registered *unsuccessfully*: the degraded record and the inotify quota (M53)
+
+Registration can fail for a reason outside the project: the host's per-user inotify watch budget is
+exhausted (on this box Syncthing and `codium` hold most of `fs.inotify.max_user_watches`), so a **new**
+process's `fs.watch` throws `ENOSPC` while already-registered processes keep working. That asymmetry is what
+"some sessions receive, some do not" looks like.
+
+**What the failure now leaves behind** (all of it auditable):
+
+| Trace | Where | Fields |
+|---|---|---|
+| ledger line | `state/inbox-watch.log` | `errno=…`, `watches=<used|unknown>/<max>`, `poll_ms=…`, `fallback=polling`, and `forced=1` when a fixture produced it |
+| durable record | `state/inbox-watch/<key>.degraded` | `reason=watch-unavailable`, `errno`, `watches`, `poll_ms`, `forced`, `since`, `pid`, `cwd`, `heartbeat` |
+
+A record is believed only while the writing process is alive and its `cwd` is inside this project — **a stale
+record is not evidence**, and a successful registration (or a clean exit) deletes it.
+
+**Delivery continues**: the poll timer stays installed on the failure path, so a new spool line still wakes
+the session once per poll interval, with the **same message shape** as the watch path. The fallback is a
+proven guarantee, not an accident — the harness forces the failure and asserts the wake within one interval
+(S22/S23), and removing the poll timer in a throwaway copy turns that assertion red.
+
+**Where to look, and what to do**:
+
+| Command | What you get |
+|---|---|
+| `team doctor` | the degraded-channel warning (only for a *live* record) **and** the `inotify 额度` headroom line: quota, used, and a probe verdict |
+| `team status` / `team digest` | the same sentence, one line |
+| fix | raise the budget — `sudo sysctl -w fs.inotify.max_user_watches=524288` (persist it), or stop the watcher that holds tens of thousands of watches (e.g. Syncthing's "Watch for Changes" on large trees) |
+
+Without a runtime the doctor line says `unavailable` and **never** `ok`. The gate follows the same rule: an
+unavailable watcher premise prints a **visible SKIP** with the measured quota, and
+`TEAM_IW_REQUIRE_WATCH=1` turns that same premise into a red — so CI can be strict while a developer's box
+stays honest.
 
 ## 23. Two BOARD.md rows share one id (or the kanban cursor froze on one of them)
 
