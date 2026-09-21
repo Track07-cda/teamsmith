@@ -30,10 +30,11 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
       TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE TEAM_ALLOW_FOREIGN_SESSION \
       TEAM_PULSE_WINDOW TEAM_PULSE_INTERVAL TEAM_PULSE_NUDGE_GAP TEAM_PULSE_REBUILD_TMUX TEAM_PULSE_MAX_RESTARTS TEAM_PULSE_PENDING_BOARD \
       TEAM_WATCH_WINDOW TEAM_WATCH_INTERVAL TEAM_WATCH_NUDGE_GAP TEAM_WATCH_REBUILD_TMUX TEAM_WATCH_MAX_RESTARTS TEAM_WATCH_PENDING_BOARD 2>/dev/null || true
-# ── M36 闸门旋钮也属于「调用者身份」──────────────────────────────────────────────────────
-# TEAM_ALLOW_DESTRUCTIVE_TMUX 漏进来会让 31c 的拒绝断言假绿（拒绝被放行旋钮自己解开——
-# 与 M25 的 TEAM_REVIEW_* 同一族泄漏）；TEAM_TMUX_CALLS_LOG/TEAM_TMUX_REAL 漏进来会把夹具的
-# tmux 调用写进真项目的 forensics 日志 / 把 shim 指到错误真身（M7.2 同族污染）。
+# ── M36 闸门旋钮也属于「调用者身份」（M67 后另有含义）─────────────────────────────────────
+# TEAM_ALLOW_DESTRUCTIVE_TMUX 自 M67 起**零授权**（网关按目标判定，不读它）——但这里仍然 unset：
+# ① 它是「调用者环境」的一部分，夹具要证明漏进来的值对判定毫无影响（31c ①e 用显式赋值正面钉住）；
+# ② TEAM_TMUX_CALLS_LOG/TEAM_TMUX_REAL 漏进来会把夹具的 tmux 调用写进真项目的 forensics 日志 /
+#    把 shim 指到错误真身（M7.2 同族污染）。
 unset TEAM_ALLOW_DESTRUCTIVE_TMUX TEAM_TMUX_CALLS_LOG TEAM_TMUX_REAL 2>/dev/null || true
 # ── M36 闸门在 PATH 里的那一格也属于「调用者身份」────────────────────────────────────────
 # 调用方是 PM/worker 会话（M36 起 PATH 最前是 scripts/shim）时，夹具里 `command -v tmux` 会解析到
@@ -10009,29 +10010,42 @@ else
   fi
 fi
 
-# ---------------------------------------------------------------- 31c. tmux 运行时闸门（M36）
+# ---------------------------------------------------------------- 31c. tmux 运行时闸门（M36 建，M67 按目标判定）
 # M28 的 lint（31a）管**仓库脚本**的静态隔离；这一段管**运行时**：PM/worker 窗口 PATH 最前的
 # scripts/shim/tmux 包装 —— 每次调用记 state/tmux-calls.log（时间/socket/TMUX/TMUX_TMPDIR/参数/
-# pid/ppid/cwd/动作，上限 2000 行）；解析到默认 socket（/tmp/tmux-<uid>/default）的 kill-server/
-# kill-session/kill-window/kill-pane → 拒绝（exit 64 + 醒目文案）；TEAM_ALLOW_DESTRUCTIVE_TMUX=1
-# 或私有 socket → 原样 exec 真 tmux；只读命令不拦。
+# pid/ppid/cwd/动作，上限 2000 行）。M67 起判定**按目标**（环境变量零授权）：
+#   · 解析到共享默认 socket（/tmp/tmux-<uid>/default）的 kill-server / kill-session -a 一律拒绝（exit 64）；
+#   · kill-session/kill-window/kill-pane 只在有效 -t 的 session 段字面等于**绑定到调用者**的 TEAM_SESSION
+#     时放行（act=allowed-owned）；其余（无 -t / 空目标 / %N / @N / :win / 相对目标 / 别的会话 / 身份缺失
+#     或未绑定 / 假隔离）一律拒绝（act=refused）；
+#   · 私有 socket → act=pass；假隔离（TMUX_TMPDIR 不可用）→ 拒绝（M41 原样保留）；
+#   · 唯一的带内放行 = 调用者 argv 里的 --teamsmith-allow-destructive（全局参数位；剥掉、记 act=explicit-flag）；
+#   · TEAM_ALLOW_DESTRUCTIVE_TMUX 退役：在任何环境里（含 server 全局环境）都不改变判定。
 # 这一段自己的安全纪律（与 #1250 同族，宁可繁琐不可碰默认 server）：
-#   · 「拒绝/override/只读」探针的 PATH 里，shim 之后放的是**桩 tmux**（只记 argv 的假命令）——
+#   · 默认 socket 的探针（放行/拒绝/只读）把 TEAM_TMUX_REAL **钉到 argv 记录桩**（只记 argv 的假命令）——
 #     就算闸门逻辑整个坏掉，被执行的也只是桩，结构上碰不到真默认 server；
 #   · 「真杀」只在 $TMP 内的私有 server 上做（TMUX_TMPDIR=<私有>，M23 同一机制）；
 #   · 段首/段尾各探一次默认 server（只读 ls）：它若死在本段运行期间，本段就是第一现场，如实报红。
-section "31c · tmux 运行时闸门：shim 三态 + 注入 + 翻转（M36）"
+section "31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）"
 
 M36_SHIM_DIR="$SKILL_DIR/scripts/shim"
 M36_D="$TMP/m36"; mkdir -p "$M36_D"
 M36_LOG="$M36_D/tmux-calls.log"
 M36_STUB="$M36_D/stub"; mkdir -p "$M36_STUB"
 M36_STUB_CALLS="$M36_D/stub-calls"
+M36_STUB_ENV="$M36_D/stub-env"
 M36_UID="$(id -u)"
-# 桩 tmux：只记 argv、永远成功（在 PATH 里排在 shim 后面 = shim 眼里的「真 tmux」）
+M36_SESS="teamx"
+M36_OWN="$M36_SESS:dev"
+# 桩 tmux：记 argc/argv（逐字节）+ 记自己的环境（证明 token 不进被执行进程的环境）；list-windows 可
+# 按 M36_STUB_WINDOWS 假装有窗口（CLI 的 teardown 会先查窗口存不存在）。
 cat > "$M36_STUB/tmux" <<EOF
 #!/usr/bin/env bash
-printf 'STUB argv=%s\n' "\$*" >> "$M36_STUB_CALLS"
+printf 'STUB argc=%s argv=%s\n' "\$#" "\$*" >> "$M36_STUB_CALLS"
+env | sort > "$M36_STUB_ENV"
+case "\$*" in
+  *list-windows*) [ -n "\${M36_STUB_WINDOWS:-}" ] && printf '%s\n' "\$M36_STUB_WINDOWS" ;;
+esac
 exit 0
 EOF
 chmod +x "$M36_STUB/tmux"
@@ -10039,120 +10053,243 @@ chmod +x "$M36_STUB/tmux"
 assert_file "$M36_SHIM_DIR/tmux" "闸门 shim 文件在（scripts/shim/tmux）"
 if [ -x "$M36_SHIM_DIR/tmux" ]; then ok "shim 可执行"; else bad "shim 不可执行"; fi
 
-# 闸门探针：sanitized env（无 TMUX/TMUX_PANE/TMUX_TMPDIR/TEAM_ALLOW_*，TMUX_TMPDIR 一 unset
-# 就解析到真默认 socket /tmp/tmux-<uid>/default —— 拒绝路径**不执行任何东西**，安全）
+# 闸门探针（默认 socket 类）：sanitized env（无 TMUX/TMUX_PANE/TMUX_TMPDIR/团队身份）、cwd 可控、
+# 桩同时放在 PATH 里并**显式钉进 TEAM_TMUX_REAL**。拒绝路径**不执行任何东西**（桩收到 = 判定错了）。
 M36_PATH="$M36_SHIM_DIR:$M36_STUB:/usr/bin:/bin"
-m36_probe() { # [VAR=val …] <tmux argv…>：环境干净可控的 shim 调用（桩在 PATH 里兜底）
-  env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
-      PATH="$M36_PATH" TEAM_TMUX_CALLS_LOG="$M36_LOG" "$@"
+m36_probe_in() { # <cwd> [VAR=val …] <tmux argv…>
+  local d="$1"; shift
+  ( cd "$d" || exit 90
+    env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
+        -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SESSION -u TEAM_PROJECT \
+        PATH="$M36_PATH" TEAM_TMUX_REAL="$M36_STUB/tmux" TEAM_TMUX_CALLS_LOG="$M36_LOG" "$@" )
+}
+m36_probe() { m36_probe_in "$REPO" "$@"; }
+# 绑定身份探针：TEAM_ROOT=TEAM_MAIN_ROOT=$REPO（cwd 的祖先），TEAM_SESSION=teamx
+m36_bound() { m36_probe TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_SESSION="$M36_SESS" "$@"; }
+
+# 判定断言器：拒绝 / 放行各一条（每次清日志与桩记录，逐条可定位）
+m36_refuse() { # <标签> <探针命令…>：期望 exit 64 + act=refused + 桩没被叫
+  local label="$1"; shift
+  : > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+  "$@" >/dev/null 2>&1; local rc=$?
+  if [ "$rc" = 64 ] && grep -q 'act=refused' "$M36_LOG" 2>/dev/null && [ ! -e "$M36_STUB_CALLS" ]; then
+    ok "$label：exit 64 + act=refused + 桩没被叫"
+  else
+    bad "$label：rc=$rc act=$(grep -o 'act=[a-z-]*' "$M36_LOG" 2>/dev/null | head -1) 桩=$([ -e "$M36_STUB_CALLS" ] && echo 被执行 || echo 未叫)"
+  fi
+}
+m36_allow() { # <标签> <期望 act> <探针命令…>：期望 exit 0 + 记期望动作 + 桩收到
+  local label="$1" want="$2"; shift 2
+  : > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+  "$@" >/dev/null 2>&1; local rc=$?
+  assert_eq "$label：exit 0" "$rc" "0"
+  assert_has "$M36_LOG" "act=$want" "$label：记 act=$want"
+  assert_file "$M36_STUB_CALLS" "$label：调用落到了下游（桩收到）"
 }
 
 # ── 段首探活：默认 server 现状（只读 ls，不改任何状态）────────────────────────────
-M36_DEF_SOCK="$SMOKE_CALLER_TMUX_TMPDIR/tmux-$M36_UID/default"
+M36_DEF_SOCK="/tmp/tmux-$M36_UID/default"     # 探针固定靶（unset TMUX_TMPDIR 后的共享默认 socket）
 m36_default_alive() { [ -S "$M36_DEF_SOCK" ] && env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR tmux -S "$M36_DEF_SOCK" ls >/dev/null 2>&1; }
 if m36_default_alive; then M36_DEF_WAS=alive; else M36_DEF_WAS=not-alive; fi
 
-# ① 拒绝：四个破坏性子命令解析到默认 socket → exit 64 + 醒目文案 + 日志 act=refused；桩没被碰
+# ── ⓪ 探针钉真身（helper 层证据）：默认 socket 类探针的真身 = 桩；真杀类探针只用私有 socket ────────
+printf '  \033[2m·\033[0m 31c 真身解析：默认 socket 探针 → %s（argv 记录桩，TEAM_TMUX_REAL 钉死）；真杀探针 → %s（只打私有 socket）\n' \
+  "$M36_STUB/tmux" "${REAL_TMUX:-<无 tmux>}"
 : > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
-M36_OUT="$(m36_probe tmux kill-server 2>&1)"; M36_RC=$?
-assert_eq "裸 tmux kill-server（解析到默认 socket）被拒：exit 64" "$M36_RC" "64"
-assert_has_echo "$M36_OUT" "已拒绝 kill-server" "拒绝文案点名子命令与默认 socket"
-assert_has_echo "$M36_OUT" "TEAM_ALLOW_DESTRUCTIVE_TMUX=1" "拒绝文案给出放行方式"
-assert_not_file "$M36_STUB_CALLS" "拒绝路径不执行任何东西（桩没被叫）"
-assert_has "$M36_LOG" "act=refused" "拒绝记日志（act=refused）"
-assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/default" "日志记下解析出的默认 socket"
-assert_has "$M36_LOG" "argv=kill-server" "日志记下参数"
-M36_RCS=""
-for sub in "kill-session -t m36x" "kill-window -t m36x:1" "kill-pane -t %1"; do
-  m36_probe tmux $sub >/dev/null 2>&1; M36_RCS="$M36_RCS $?"
-done
-assert_eq "kill-session/kill-window/kill-pane 同样被拒（exit 64 ×3）" "$M36_RCS" " 64 64 64"
-m36_probe tmux kill-ser >/dev/null 2>&1; assert_eq "tmux 允许的前缀写法（kill-ser → kill-server）也拒" "$?" "64"
-m36_probe TMUX="$M36_DEF_SOCK,12345,0" tmux kill-server >/dev/null 2>&1
-assert_eq "TMUX 指向默认 server 也拒（socket 解析与 tmux 同源）" "$?" "64"
-m36_probe tmux -L default kill-server >/dev/null 2>&1
-assert_eq "-L default 也算默认（socket 名 default + 默认 TMPDIR）" "$?" "64"
-m36_probe tmux -S "$M36_DEF_SOCK" kill-server >/dev/null 2>&1
-assert_eq "-S <默认路径> 同样拒（socket 证据含 -S）" "$?" "64"
+m36_bound tmux -V >/dev/null 2>&1
+assert_has "$M36_STUB_CALLS" "STUB argc=1 argv=-V" "⓪ 默认 socket 探针的真身就是桩（-V 直通到桩，不是真 tmux）"
 
-# ①c M41：**假隔离**（TMUX_TMPDIR 指向不可用的目录）—— 真 tmux 3.7b 的 socket 路径表是
-#     `$TMUX_TMPDIR:/tmp/`，逐项 realpath，失败的项直接跳过 → TMUX_TMPDIR 不存在时静默回退默认 socket。
-#     旧 shim 按公式机械算 socket，把这种调用记成 act=pass 的「私有」，于是放行了一个实际打默认 server 的
-#     kill-server（2026-09-19 第 6 次默认 server 灭门）。matrix 证据见 M41 报告的容器实测。
-M36_MISS="$M36_D/miss"; rm -rf "$M36_MISS"; mkdir -p "$M36_MISS"   # 只建父目录：$M36_MISS/sock 故意不存在
+# ── ①a 自己的命名对象 → allowed-owned（有效 -t；-t x 与 -tx；最后一个 -t 胜出）──────────────
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS" "$M36_STUB_ENV"
+M36_RCS=""
+for args in "kill-window -t $M36_OWN" "kill-pane -t $M36_OWN.0" "kill-session -t $M36_SESS"; do
+  m36_bound tmux $args >/dev/null 2>&1; M36_RCS="$M36_RCS $?"
+done
+assert_eq "①a 自己的命名目标（window/pane/session）放行（exit 0 ×3）" "$M36_RCS" " 0 0 0"
+assert_eq "①a 三次都记 act=allowed-owned" "$(grep -c 'act=allowed-owned' "$M36_LOG" 2>/dev/null | head -1)" "3"
+assert_eq "①a 三次都记共享默认 socket" "$(grep -c "sock=$M36_DEF_SOCK" "$M36_LOG" 2>/dev/null | head -1)" "3"
+assert_has "$M36_STUB_CALLS" "STUB argc=3 argv=kill-window -t $M36_OWN" "①a 桩收到 kill-window（argv 逐字节）"
+assert_has "$M36_STUB_CALLS" "STUB argc=3 argv=kill-pane -t $M36_OWN.0" "①a 桩收到 kill-pane"
+assert_has "$M36_STUB_CALLS" "STUB argc=3 argv=kill-session -t $M36_SESS" "①a 桩收到 kill-session"
+m36_allow "①a -t<值> 连写（-tteamx:dev）" allowed-owned m36_bound tmux kill-window -t"$M36_OWN"
+assert_has "$M36_STUB_CALLS" "STUB argc=2 argv=kill-window -t$M36_OWN" "①a -t 连写形式逐字节透传"
+m36_allow "①a 最后一个 -t 胜出（自己的在最后）" allowed-owned m36_bound tmux kill-window -t otherproj:pm -t "$M36_OWN"
+m36_allow "①a kill-window -a 仍受目标约束（-a 在 window 上不是加宽）" allowed-owned m36_bound tmux kill-window -a -t "$M36_OWN"
+
+# ── ①b 目标矩阵：不可证明 / 不是自己的命名对象 → refused ─────────────────────────────────────
+m36_refuse "①b 别的项目会话 otherproj:pm"          m36_bound tmux kill-window -t otherproj:pm
+m36_refuse "①b 别的会话（裸 session 名）"           m36_bound tmux kill-session -t otherproj
+m36_refuse "①b pane id %1"                        m36_bound tmux kill-window -t %1
+m36_refuse "①b window id @1"                      m36_bound tmux kill-pane -t @1
+m36_refuse "①b 无 session 段的窗口名 dev"          m36_bound tmux kill-window -t dev
+m36_refuse "①b 空 session 段 :dev"                m36_bound tmux kill-window -t :dev
+m36_refuse "①b 空目标 -t ''"                      m36_bound tmux kill-window -t ""
+m36_refuse "①b 完全没有 -t"                       m36_bound tmux kill-session
+m36_refuse "①b 相对目标 ."                        m36_bound tmux kill-window -t .
+m36_refuse "①b 相对目标 +"                        m36_bound tmux kill-window -t +
+m36_refuse "①b 相对目标 -"                        m36_bound tmux kill-window -t -
+m36_refuse "①b 最后一个 -t 胜出（别的在最后）"      m36_bound tmux kill-window -t "$M36_OWN" -t otherproj:pm
+
+# ── ①c server / 加宽 / 前缀歧义 → refused ────────────────────────────────────────────────────
+m36_refuse "①c kill-server（对象是整台 server）"    m36_bound tmux kill-server
+m36_refuse "①c kill-ser（前缀写法）"               m36_bound tmux kill-ser
+m36_refuse "①c kill-s（前缀有歧义）"               m36_bound tmux kill-s
+m36_refuse "①c kill-session -a -t teamx（加宽）"   m36_bound tmux kill-session -a -t "$M36_SESS"
+m36_refuse "①c kill-session -at teamx（组合旗标）"  m36_bound tmux kill-session -at "$M36_SESS"
+m36_refuse "①c kill-session -a（无目标）"          m36_bound tmux kill-session -a
+# 拒绝文案要点名：子命令、解析出的 socket、原因、argv token、私有 socket 路线（R1 的措辞承诺）
 : > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
-M36_OUT="$(m36_probe TMUX_TMPDIR="$M36_MISS/sock" tmux kill-server 2>&1)"; M36_RC=$?
-assert_eq "假隔离（TMUX_TMPDIR=<不存在的目录>）的 kill-server 被拒：exit 64" "$M36_RC" "64"
-assert_has_echo "$M36_OUT" "已拒绝 kill-server" "假隔离：拒绝文案仍在"
-assert_has_echo "$M36_OUT" "这是**假隔离**" "假隔离：文案点明这是假隔离（不是普通默认 socket）"
-assert_has_echo "$M36_OUT" "TMUX_TMPDIR=$M36_MISS/sock 指向不存在的目录，真 tmux 会静默回退默认 socket" "假隔离：文案点明回退原因（M41 要求的措辞）"
-assert_not_file "$M36_STUB_CALLS" "假隔离：拒绝路径没执行任何东西（桩没被叫）"
-assert_has "$M36_LOG" "act=refused" "假隔离：日志记 act=refused"
-assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/default" "假隔离：日志记的 sock 是**默认**路径（不是那个不存在的私有目录）"
-# 同形状的只读调用：放行（只读从不拦），但 sock 判定也必须是默认路径 —— 不许记成私有
+M36_OUT="$(m36_bound tmux kill-window -t otherproj:pm 2>&1)"; M36_RC=$?
+assert_eq "①c 拒绝文案：exit 64" "$M36_RC" "64"
+assert_has_echo "$M36_OUT" "已拒绝 kill-window" "①c 文案点名子命令"
+assert_has_echo "$M36_OUT" "$M36_DEF_SOCK" "①c 文案点名解析出的 socket"
+assert_has_echo "$M36_OUT" "TEAM_SESSION='$M36_SESS'" "①c 文案点名身份不符的原因"
+assert_has_echo "$M36_OUT" "--teamsmith-allow-destructive" "①c 文案给出 argv token 路线"
+assert_has_echo "$M36_OUT" "TMUX_TMPDIR=" "①c 文案给出私有 socket 路线"
+M36_OUT="$(m36_bound tmux kill-server 2>&1)"
+assert_has_echo "$M36_OUT" "整台 server" "①c kill-server 文案点明对象是整台 server"
+M36_OUT="$(m36_bound tmux kill-session -a -t "$M36_SESS" 2>&1)"
+assert_has_echo "$M36_OUT" "波及" "①c 加宽文案点明影响面"
+
+# ── ①d 身份绑定（M40 契约的闸门读法）→ refused；唯一例外是「根是 cwd 的祖先」──────────────
+m36_refuse "①d 未绑定：cwd 在 TEAM_ROOT 之外、环境带着 TEAM_SESSION" \
+  m36_probe_in "$TMP" TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_SESSION="$M36_SESS" tmux kill-window -t "$M36_OWN"
+m36_refuse "①d TEAM_SESSION 缺失"    m36_probe TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" tmux kill-window -t "$M36_OWN"
+m36_refuse "①d TEAM_SESSION 为空"    m36_probe TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_SESSION= tmux kill-window -t "$M36_OWN"
+m36_refuse "①d 两个根都缺"           m36_probe TEAM_SESSION="$M36_SESS" tmux kill-window -t "$M36_OWN"
+m36_refuse "①d TEAM_ROOT 指向别处（不是 cwd 的祖先）" \
+  m36_probe TEAM_ROOT="$M36_D" TEAM_MAIN_ROOT="$M36_D" TEAM_SESSION="$M36_SESS" tmux kill-window -t "$M36_OWN"
+m36_allow "①d TEAM_MAIN_ROOT 是 cwd 的祖先即可绑定（worker 窗口形状）" allowed-owned \
+  m36_probe TEAM_ROOT="$M36_D/nowhere" TEAM_MAIN_ROOT="$REPO" TEAM_SESSION="$M36_SESS" tmux kill-window -t "$M36_OWN"
+: > "$M36_LOG"
+m36_probe_in "$TMP" TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_SESSION="$M36_SESS" tmux kill-window -t "$M36_OWN" >"$M36_D/unbound.out" 2>&1 || true
+assert_has "$M36_D/unbound.out" "没有绑定到调用者" "①d 未绑定文案点明「继承来的身份不算授权」"
+
+# ── ①e 继承环境零授权：TEAM_ALLOW_DESTRUCTIVE_TMUX=1 对判定零影响，且没有任何 act=override ────
+m36_refuse "①e 退役键=1 + kill-server"        m36_bound TEAM_ALLOW_DESTRUCTIVE_TMUX=1 tmux kill-server
+m36_refuse "①e 退役键=1 + 别的会话"           m36_bound TEAM_ALLOW_DESTRUCTIVE_TMUX=1 tmux kill-window -t otherproj:pm
+m36_refuse "①e 退役键=1 + 空目标"             m36_bound TEAM_ALLOW_DESTRUCTIVE_TMUX=1 tmux kill-window -t ""
+assert_not "$M36_LOG" "act=override" "①e 退役键在场时也没有任何 act=override（该词汇退役）"
+if grep -rq 'act=override' "$M36_SHIM_DIR/tmux" 2>/dev/null; then bad "①e shim 源码里仍有 act=override"; else ok "①e shim 源码里没有 act=override"; fi
+if grep -q 'TEAM_ALLOW_DESTRUCTIVE_TMUX' "$M36_SHIM_DIR/tmux" && grep -qE '\$\{TEAM_ALLOW_DESTRUCTIVE_TMUX' "$M36_SHIM_DIR/tmux"; then
+  bad "①e shim 仍在读退役键（\${TEAM_ALLOW_DESTRUCTIVE_TMUX}）"
+else
+  ok "①e shim 不读退役键（只在注释里提到）"
+fi
+
+# ── ② argv token：执行 + 剥掉 + 不进被执行进程的环境；子命令之后是数据；=1 不识别 ─────────────
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS" "$M36_STUB_ENV"
+M36_OUT="$(m36_bound tmux --teamsmith-allow-destructive kill-server 2>&1)"; M36_RC=$?
+assert_eq "② token + kill-server（默认 socket）：执行（exit 0）" "$M36_RC" "0"
+assert_has "$M36_LOG" "act=explicit-flag" "② 记 act=explicit-flag"
+assert_has "$M36_LOG" "sock=$M36_DEF_SOCK" "② 日志记下解析出的默认 socket"
+assert_eq "② 桩收到的 argv = 调用者 argv 剥掉 token" \
+  "$(sed -n 's/^STUB argc=[0-9]* argv=//p' "$M36_STUB_CALLS" 2>/dev/null)" "kill-server"
+assert_not "$M36_STUB_ENV" "teamsmith-allow-destructive" "② token 不进被执行进程的环境"
+assert_not "$M36_STUB_ENV" "TEAM_ALLOW_DESTRUCTIVE_TMUX=" "② 执行进程的环境里没有退役键（本探针没设它）"
+m36_allow "② token + 别的会话的目标（调用者的显式授权对任何 socket 都算）" explicit-flag \
+  m36_bound tmux --teamsmith-allow-destructive kill-window -t otherproj:pm
+assert_has "$M36_STUB_CALLS" "STUB argc=3 argv=kill-window -t otherproj:pm" "② 目标原样到达下游（闸门不改写调用）"
+m36_allow "② 两个 token 都消费" explicit-flag m36_bound tmux --teamsmith-allow-destructive --teamsmith-allow-destructive kill-server
+assert_eq "② 两个 token 都被剥掉" "$(sed -n 's/^STUB argc=[0-9]* argv=//p' "$M36_STUB_CALLS" 2>/dev/null)" "kill-server"
+# =1 形式不识别：透传给真 tmux 报错 = fail closed（仍被拒）
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+m36_bound tmux --teamsmith-allow-destructive=1 kill-server >/dev/null 2>&1; M36_RC=$?
+assert_eq "② token=1 形式不识别（fail closed：仍 exit 64）" "$M36_RC" "64"
+assert_not_file "$M36_STUB_CALLS" "② token=1 没有落桩"
+# 子命令之后的同名词是数据：原样透传，不授权
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+m36_bound tmux send-keys -t "$M36_OWN" --teamsmith-allow-destructive >/dev/null 2>&1; M36_RC=$?
+assert_eq "② 子命令之后的同名词是数据：只读调用照常执行（exit 0）" "$M36_RC" "0"
+assert_has "$M36_LOG" "act=pass" "② 载荷里的同名词不产生 explicit-flag"
+assert_has "$M36_STUB_CALLS" "STUB argc=4 argv=send-keys -t $M36_OWN --teamsmith-allow-destructive" "② 载荷里的 token 原样到达下游"
+m36_refuse "② kill-server 之后的同名词是数据（不授权）" m36_bound tmux kill-server --teamsmith-allow-destructive
+
+# ── ③ 私有 socket 放行 / 假隔离拒绝（M41 原样保留） / 只读不拦 ──────────────────────────────
+mkdir -p "$M36_D/priv"
+m36_allow "③ TMUX_TMPDIR=<私有> 的 kill-server 放行" pass m36_probe TMUX_TMPDIR="$M36_D/priv" tmux kill-server
+assert_has "$M36_LOG" "sock=$M36_D/priv/tmux-$M36_UID/default" "③ 日志记下私有 socket 路径"
+m36_allow "③ -L <非 default> 的 kill-server 放行" pass m36_probe tmux -L m36priv kill-server
+assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/m36priv" "③ -L 的 socket 名解析对了"
+m36_allow "③ TMUX 指私有 socket 的 kill-server 放行" pass m36_probe TMUX="$M36_D/privsock,1,0" tmux kill-server
+# 假隔离（TMUX_TMPDIR 指向不可用的目录）：真 tmux 会静默回退默认 socket → 破坏性调用必须拒
+M36_MISS="$M36_D/miss"; rm -rf "$M36_MISS"; mkdir -p "$M36_MISS"   # 只建父目录：$M36_MISS/sock 故意不存在
+m36_refuse "③ 假隔离（TMUX_TMPDIR=<不存在的目录>）的 kill-server" m36_bound TMUX_TMPDIR="$M36_MISS/sock" tmux kill-server
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+M36_OUT="$(m36_bound TMUX_TMPDIR="$M36_MISS/sock" tmux kill-server 2>&1)"; M36_RC=$?
+assert_eq "③ 假隔离拒绝：exit 64" "$M36_RC" "64"
+assert_has_echo "$M36_OUT" "这是**假隔离**" "③ 文案点明这是假隔离（不是普通默认 socket）"
+assert_has_echo "$M36_OUT" "TMUX_TMPDIR=$M36_MISS/sock 指向不存在的目录，真 tmux 会静默回退默认 socket" "③ 文案点明回退原因（M41 要求的措辞）"
+assert_has "$M36_LOG" "sock=$M36_DEF_SOCK" "③ 日志记的 sock 是**默认**路径（不是那个不存在的私有目录）"
+assert_not_file "$M36_STUB_CALLS" "③ 假隔离拒绝没执行任何东西（桩没被叫）"
+# 假隔离 + 「看着是自己」的目标也拒：命中的同名会话可能是共享 server 上别人的
+m36_refuse "③ 假隔离 + 自己的目标名也拒" m36_bound TMUX_TMPDIR="$M36_MISS/sock" tmux kill-window -t "$M36_OWN"
+# 同形状的只读调用：放行（只读从不拦），但 sock 判定仍必须是默认路径
 : > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
 m36_probe TMUX_TMPDIR="$M36_MISS/sock" tmux ls >/dev/null 2>&1; M36_RC=$?
-assert_eq "假隔离的只读调用（ls）放行" "$M36_RC" "0"
-assert_has "$M36_LOG" "act=pass" "假隔离的 ls 记 act=pass"
-assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/default" "假隔离的 ls：日志里的 sock 也是默认路径（不许记成私有）"
-assert_has "$M36_STUB_CALLS" "STUB argv=ls" "假隔离的 ls 递到了下游（桩收到）"
-# 存在的**普通文件**：真 tmux 会直接报错（mkdir 落在文件里），到不了默认 socket；
-# 本闸门保守地按「不可用 → 默认」判（重拒不漏拒，实测矩阵见 M41 报告）
+assert_eq "③ 假隔离的只读调用（ls）放行" "$M36_RC" "0"
+assert_has "$M36_LOG" "act=pass" "③ 假隔离的 ls 记 act=pass"
+assert_has "$M36_LOG" "sock=$M36_DEF_SOCK" "③ 假隔离的 ls：日志里的 sock 也是默认路径"
+assert_has "$M36_STUB_CALLS" "STUB argc=1 argv=ls" "③ 假隔离的 ls 递到了下游"
+# 存在的**普通文件**：真 tmux 直接报错（不会回退）；闸门保守地按「不可用 → 默认」判
 : > "$M36_D/afile"
-M36_OUT="$(m36_probe TMUX_TMPDIR="$M36_D/afile" tmux kill-server 2>&1)"; M36_RC=$?
-assert_eq "TMUX_TMPDIR=<普通文件> 的 kill-server 也被拒（保守重拒；真 tmux 会直接报错）" "$M36_RC" "64"
-assert_has_echo "$M36_OUT" "不是目录" "文件形态：文案点明「不是目录」（与不存在形态分开说）"
-# 真私有目录（mkdir -p 过的）照旧放行 —— 与下面 ③ 的断言同源，这里先钉住「新检查没有过度拒绝」
+m36_refuse "③ TMUX_TMPDIR=<普通文件> 的 kill-session" m36_bound TMUX_TMPDIR="$M36_D/afile" tmux kill-session -t "$M36_SESS"
+M36_OUT="$(m36_bound TMUX_TMPDIR="$M36_D/afile" tmux kill-server 2>&1)"
+assert_has_echo "$M36_OUT" "不是目录" "③ 文件形态：文案点明「不是目录」（与不存在形态分开说）"
+# 真私有目录（mkdir -p 过的）照旧放行 —— 与 ③ 的断言同源，这里先钉住「新检查没有过度拒绝」
 rm -rf "$M36_D/priv2"; mkdir -p "$M36_D/priv2"
 : > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
 m36_probe TMUX_TMPDIR="$M36_D/priv2" tmux kill-server >/dev/null 2>&1
-assert_eq "已建私有目录的 kill-server 照常放行（新检查不过度拒绝）" "$?" "0"
-assert_has "$M36_LOG" "sock=$M36_D/priv2/tmux-$M36_UID/default" "已建私有目录仍记私有 sock"
+assert_eq "③ 已建私有目录的 kill-server 照常放行（新检查不过度拒绝）" "$?" "0"
+assert_has "$M36_LOG" "sock=$M36_D/priv2/tmux-$M36_UID/default" "③ 已建私有目录仍记私有 sock"
+# 只读命令不拦（即使解析到默认 socket）：ls/list-*/display-message/capture-pane/send-keys 全直通
+: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
+M36_RO_BAD=""
+for c in "ls" "list-sessions" "display-message -p hi" "capture-pane -p -t x" "send-keys -t x y"; do
+  m36_bound tmux $c >/dev/null 2>&1 || M36_RO_BAD="$M36_RO_BAD [$c]"
+done
+assert_eq "③ 只读命令（含 send-keys）一律放行" "${M36_RO_BAD:-无}" "无"
+assert_eq "③ 五个只读调用都落到了下游（桩各记一笔）" "$(wc -l < "$M36_STUB_CALLS" 2>/dev/null | tr -d ' ')" "5"
+if grep -qE 'act=(refused|allowed-owned|explicit-flag)' "$M36_LOG" 2>/dev/null; then
+  bad "③ 只读命令里出现了 refused/allowed-owned/explicit-flag"
+else ok "③ 只读调用全是 act=pass（没有误拦、也不假记授权）"; fi
 
-# ①d M41 翻转：把 shim 的存在性/目录检查摘掉（mutant）→ 同一发假隔离探针必须不再被拒、直接落桩。
-#     这证明 ①c 钉的是「目录可用性检查」这条逻辑本身（去掉 shim 整体的翻转已经由 ⑧ 覆盖）。
-M36_MUT="$M36_D/mut"; rm -rf "$M36_MUT"; mkdir -p "$M36_MUT"
-sed 's#_tmpdir="$(_real_dir "${TMUX_TMPDIR:-}")" || _tmpdir_fell_back=1#_tmpdir="${TMUX_TMPDIR:-}"#' \
-  "$M36_SHIM_DIR/tmux" > "$M36_MUT/tmux"
-chmod +x "$M36_MUT/tmux"
-if cmp -s "$M36_SHIM_DIR/tmux" "$M36_MUT/tmux"; then
-  bad "M41 翻转夹具：sed 没打中（mutant 与原件逐字节相同）—— 翻转断言无意义"
-else
-  ok "M41 翻转夹具：mutant 已生成（存在性/目录检查被摘掉，其余逐字节相同）"
-fi
-m36_mut_probe() { env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
-  PATH="$M36_MUT:$M36_STUB:/usr/bin:/bin" TEAM_TMUX_CALLS_LOG="$M36_D/mut.log" "$@"; }
-: > "$M36_D/mut.log"; rm -f "$M36_STUB_CALLS"
-M36_OUT="$(m36_mut_probe TMUX_TMPDIR="$M36_MISS/sock" tmux kill-server 2>&1)"; M36_RC=$?
-assert_eq "翻转：摘掉检查后同一发假隔离 kill-server 不再被拒（rc=0，落桩）" "$M36_RC" "0"
-assert_has "$M36_D/mut.log" "sock=$M36_MISS/sock/tmux-$M36_UID/default" "翻转：mutant 把不存在的目录当成私有 socket（正是事故形状）"
-assert_has "$M36_STUB_CALLS" "STUB argv=kill-server" "翻转：mutant 把 kill-server 真的递到了下游"
-: > "$M36_D/mut.log"; rm -f "$M36_STUB_CALLS"
-m36_mut_probe TMUX_TMPDIR="$M36_D/afile" tmux kill-server >/dev/null 2>&1
-assert_eq "翻转：文件形态同样被 mutant 放过（两个新维度都由同一条检查把关）" "$?" "0"
-assert_has "$M36_STUB_CALLS" "STUB argv=kill-server" "翻转：文件形态的 kill-server 也落到了下游"
+# ── ④ 日志格式：时间/socket/TMUX/TMUX_TMPDIR/参数/pid/ppid/cwd 一个不少（默认 server 死后靠它倒查）──
+assert_match "$M36_LOG" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:' "④ 日志行首是 ISO 时间"
+assert_match "$M36_LOG" 'pid=[0-9]+ ppid=[0-9]+' "④ 日志带 pid/ppid"
+assert_match "$M36_LOG" 'cwd=/' "④ 日志带 cwd"
+assert_has "$M36_LOG" "TMUX=" "④ 日志带 TMUX 字段"
+assert_has "$M36_LOG" "TMUX_TMPDIR=" "④ 日志带 TMUX_TMPDIR 字段"
 
-# ①b 边界不挂 + 透传保真（M36 返工必修：无子命令 / 缺值参数 / -V 全部透传或明确退出，绝不能挂住；
-#    缺值调用由真 tmux 自己报错——桩替它出庭。每条套 10s 超时当绊线：挂死回归 → rc=124 直接红。
-#    「保真」钉桩收到的完整 argv，不用子串——子串曾把被吃剩的 argv 误判绿：
-#    旧 shim 把 -L/-S 从 $@ 里吃掉，「判定打私有、执行打默认」分家，正是闸门要防的事故形状）
-m36_edge() { # <期望桩 argv> <tmux args…>
-  local want="$1" rc; shift
+# ── ⑤ 截断：超 2000 行留最新 1000 行（日志有界，不会让 state/ 膨胀）────────────────────────────
+seq 1 2100 | sed 's/^/seed /' > "$M36_LOG"
+m36_bound tmux ls >/dev/null 2>&1
+assert_eq "⑤ 日志超 2000 行被截断（留最新 1000）" "$(wc -l < "$M36_LOG" | tr -d ' ')" "1000"
+assert_has_echo "$(tail -1 "$M36_LOG")" 'argv=ls' "⑤ 截断后最新一行还在"
+if grep -q '^seed 1$' "$M36_LOG"; then bad "⑤ 截断留的是最旧的行（方向反了）"; else ok "⑤ 截断丢掉的是最旧的行"; fi
+
+# ── ⑥ 边界不挂 + 透传保真（M36 返工必修：无子命令 / 缺值参数 / -V 全部透传或明确退出，绝不能挂住；
+#     保真钉桩收到的**完整 argv 与参数个数** —— 不含 token 的调用逐字节原样，含空格/连写也不许被吃。
+#     每条套 10s 超时当绊线：挂死回归 → rc=124 直接红）────────────────────────────────────────
+m36_edge() { # <期望 argc> <期望 argv> <tmux args…>
+  local want_c="$1" want="$2" rc; shift 2
   : > "$M36_STUB_CALLS"
   m36_probe timeout 10 tmux "$@" >/dev/null 2>&1; rc=$?
   assert_eq "边界[$*]：10s 内返回（124=挂死回归）" "$([ "$rc" = 124 ] && echo HANG || echo ok)" "ok"
-  assert_eq "边界[$*]：argv 逐字节透传到下游" "$(sed 's/^STUB argv=//' "$M36_STUB_CALLS")" "$want"
+  assert_eq "边界[$*]：argv 逐字节透传到下游" "$(sed -n 's/^STUB argc=[0-9]* argv=//p' "$M36_STUB_CALLS" 2>/dev/null)" "$want"
+  assert_eq "边界[$*]：参数个数" "$(sed -n 's/^STUB argc=\([0-9]*\) argv=.*/\1/p' "$M36_STUB_CALLS" 2>/dev/null)" "$want_c"
 }
-m36_edge "-L" -L
-m36_edge "-S" -S
-m36_edge "-c" -c
-m36_edge "-f" -f
-m36_edge "-T" -T
-m36_edge "-V" -V
-m36_edge "-2 -v ls" -2 -v ls
-m36_edge "-L m36priv kill-server" -L m36priv kill-server
-assert_has "$M36_LOG" 'argv=-L m36priv kill-server' "日志记原始完整 argv（全局旗标不丢）"
-m36_edge "-S $M36_D/privsock ls" -S "$M36_D/privsock" ls
+m36_edge 1 "-L" -L
+m36_edge 1 "-S" -S
+m36_edge 1 "-c" -c
+m36_edge 1 "-f" -f
+m36_edge 1 "-T" -T
+m36_edge 1 "-V" -V
+m36_edge 3 "-2 -v ls" -2 -v ls
+m36_edge 3 "-L m36priv kill-server" -L m36priv kill-server
+assert_has "$M36_LOG" 'argv=-L m36priv kill-server' "⑥ 日志记原始完整 argv（全局旗标不丢）"
+m36_edge 3 "-S $M36_D/privsock ls" -S "$M36_D/privsock" ls
+m36_edge 5 "send-keys -t $M36_OWN hello world two  spaces" send-keys -t "$M36_OWN" "hello world" "two  spaces"
 : > "$M36_STUB_CALLS"
 m36_probe timeout 10 tmux >/dev/null 2>&1; M36_RC=$?
 assert_eq "边界[无参数]：10s 内返回（124=挂死回归）" "$([ "$M36_RC" = 124 ] && echo HANG || echo ok)" "ok"
@@ -10161,85 +10298,78 @@ assert_eq "边界[无参数]：也透传到下游（桩被叫到）" "$([ -s "$M
 mkfifo "$M36_D/f"; : > "$M36_STUB_CALLS"
 timeout 10 env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
   TEAM_TMUX_CALLS_LOG="$M36_D/f" PATH="$M36_PATH" tmux ls >/dev/null 2>&1; M36_RC=$?
-assert_eq "日志目标是 FIFO：不阻塞（10s 内返回）" "$([ "$M36_RC" = 124 ] && echo HANG || echo ok)" "ok"
-assert_eq "FIFO 时调用照常透传" "$(sed 's/^STUB argv=//' "$M36_STUB_CALLS")" "ls"
+assert_eq "⑥ 日志目标是 FIFO：不阻塞（10s 内返回）" "$([ "$M36_RC" = 124 ] && echo HANG || echo ok)" "ok"
+assert_eq "⑥ FIFO 时调用照常透传" "$(sed -n 's/^STUB argc=[0-9]* argv=//p' "$M36_STUB_CALLS")" "ls"
 rm -f "$M36_D/f"
 
-# ② 放行·override：TEAM_ALLOW_DESTRUCTIVE_TMUX=1 → 直通（这里「真 tmux」是桩，证明旋钮确实解开拒绝）
-: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
-M36_OUT="$(m36_probe TEAM_ALLOW_DESTRUCTIVE_TMUX=1 tmux kill-server 2>&1)"; M36_RC=$?
-assert_eq "TEAM_ALLOW_DESTRUCTIVE_TMUX=1 放行（exit 0）" "$M36_RC" "0"
-assert_has "$M36_STUB_CALLS" "STUB argv=kill-server" "override 真的把调用递给了下游（桩收到）"
-assert_has "$M36_LOG" "act=override" "override 也记日志（可倒查谁放行过自己）"
-assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/default" "override 日志记下它打的是默认 socket"
+# ── ⑦ M41 翻转：把 shim 的目录可用性检查摘掉（mutant）→ 同一发假隔离探针必须不再被拒、直接落桩。
+#     这证明 ③ 钉的是「目录可用性检查」这条逻辑本身（去掉 shim 整体的翻转由 ⑩ 覆盖）。
+M36_MUT="$M36_D/mut"; rm -rf "$M36_MUT"; mkdir -p "$M36_MUT"
+sed 's#_tmpdir="$(_real_dir "${TMUX_TMPDIR:-}")" || _tmpdir_fell_back=1#_tmpdir="${TMUX_TMPDIR:-}"#' \
+  "$M36_SHIM_DIR/tmux" > "$M36_MUT/tmux"
+chmod +x "$M36_MUT/tmux"
+if cmp -s "$M36_SHIM_DIR/tmux" "$M36_MUT/tmux"; then
+  bad "⑦ M41 翻转夹具：sed 没打中（mutant 与原件逐字节相同）—— 翻转断言无意义"
+else
+  ok "⑦ M41 翻转夹具：mutant 已生成（存在性/目录检查被摘掉，其余逐字节相同）"
+fi
+m36_mut_probe() { env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
+  -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SESSION \
+  PATH="$M36_MUT:$M36_STUB:/usr/bin:/bin" TEAM_TMUX_REAL="$M36_STUB/tmux" TEAM_TMUX_CALLS_LOG="$M36_D/mut.log" \
+  TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_SESSION="$M36_SESS" "$@"; }
+: > "$M36_D/mut.log"; rm -f "$M36_STUB_CALLS"
+M36_OUT="$(m36_mut_probe TMUX_TMPDIR="$M36_MISS/sock" tmux kill-server 2>&1)"; M36_RC=$?
+assert_eq "⑦ 翻转：摘掉检查后同一发假隔离 kill-server 不再被拒（rc=0，落桩）" "$M36_RC" "0"
+assert_has "$M36_D/mut.log" "sock=$M36_MISS/sock/tmux-$M36_UID/default" "⑦ 翻转：mutant 把不存在的目录当成私有 socket（正是事故形状）"
+assert_has "$M36_STUB_CALLS" "STUB argc=1 argv=kill-server" "⑦ 翻转：mutant 把 kill-server 真的递到了下游"
+: > "$M36_D/mut.log"; rm -f "$M36_STUB_CALLS"
+m36_mut_probe TMUX_TMPDIR="$M36_D/afile" tmux kill-server >/dev/null 2>&1
+assert_eq "⑦ 翻转：文件形态同样被 mutant 放过（两个维度都由同一条检查把关）" "$?" "0"
+assert_has "$M36_STUB_CALLS" "STUB argc=1 argv=kill-server" "⑦ 翻转：文件形态的 kill-server 也落到了下游"
 
-# ③ 放行·私有 socket：TMUX_TMPDIR 私有 / -L 私有 / TMUX 指私有，三种写法都直通（桩层）
-# M41：私有目录必须**先建**（真 tmux 与闸门都按「存在且是目录」认它；不建就会被当成假隔离回退默认）
-mkdir -p "$M36_D/priv"
-: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
-m36_probe TMUX_TMPDIR="$M36_D/priv" tmux kill-server >/dev/null 2>&1
-assert_eq "TMUX_TMPDIR=<私有> 的 kill-server 放行" "$?" "0"
-assert_has "$M36_LOG" "act=pass" "私有 socket 记 act=pass"
-assert_has "$M36_LOG" "sock=$M36_D/priv/tmux-$M36_UID/default" "日志记下私有 socket 路径"
-m36_probe tmux -L m36priv kill-server >/dev/null 2>&1
-assert_eq "-L <非 default> 的 kill-server 放行" "$?" "0"
-assert_has "$M36_LOG" "sock=/tmp/tmux-$M36_UID/m36priv" "-L 的 socket 名解析对了"
-m36_probe TMUX="$M36_D/privsock,1,0" tmux kill-server >/dev/null 2>&1
-assert_eq "TMUX 指私有 socket 的 kill-server 放行" "$?" "0"
-
-# ④ 只读命令不拦（即使解析到默认 socket）：ls/list-*/display-message/capture-pane/send-keys 全直通
-: > "$M36_LOG"; rm -f "$M36_STUB_CALLS"
-M36_RO_BAD=""
-for c in "ls" "list-sessions" "display-message -p hi" "capture-pane -p -t x" "send-keys -t x y"; do
-  m36_probe tmux $c >/dev/null 2>&1 || M36_RO_BAD="$M36_RO_BAD [$c]"
-done
-assert_eq "只读命令（含 send-keys）一律放行" "${M36_RO_BAD:-无}" "无"
-assert_eq "五个只读调用都落到了下游（桩各记一笔）" "$(wc -l < "$M36_STUB_CALLS" 2>/dev/null | tr -d ' ')" "5"
-if grep -q "act=refused" "$M36_LOG" 2>/dev/null; then bad "只读命令里出现了 refused"; else ok "只读调用全是 act=pass（没有误拦）"; fi
-
-# ⑤ 日志格式：时间/socket/TMUX/TMUX_TMPDIR/参数/pid/ppid/cwd 一个不少（默认 server 死后靠它倒查）
-assert_match "$M36_LOG" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:' "日志行首是 ISO 时间"
-assert_match "$M36_LOG" 'pid=[0-9]+ ppid=[0-9]+' "日志带 pid/ppid"
-assert_match "$M36_LOG" 'cwd=/' "日志带 cwd"
-assert_has "$M36_LOG" "TMUX=" "日志带 TMUX 字段"
-assert_has "$M36_LOG" "TMUX_TMPDIR=" "日志带 TMUX_TMPDIR 字段"
-
-# ⑥ 截断：超 2000 行留最新 1000 行（日志有界，不会让 state/ 膨胀）
-seq 1 2100 | sed 's/^/seed /' > "$M36_LOG"
-m36_probe tmux ls >/dev/null 2>&1
-assert_eq "日志超 2000 行被截断（留最新 1000）" "$(wc -l < "$M36_LOG" | tr -d ' ')" "1000"
-assert_has_echo "$(tail -1 "$M36_LOG")" 'argv=ls' "截断后最新一行还在"
-if grep -q '^seed 1$' "$M36_LOG"; then bad "截断留的是最旧的行（方向反了）"; else ok "截断丢掉的是最旧的行"; fi
-
-# ⑦ 注入渲染（纯逻辑）：PM 与 worker、内置与模板四条路径都带闸门前缀
+# ── ⑧ 注入渲染（纯逻辑）：PM 与 worker、内置与模板四条路径都带闸门前缀，且**不写任何破坏性授权** ──
 m36_lib() { # <bash 片段> [VAR=VALUE …]（source 全部 lib；与 canon_branch 同一形状）
   local body="$1"; shift
   ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
       bash -c 'for _a in "$@"; do export "$_a"; done; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$body" _ "$@" )
 }
 M36_INJ_PM="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi")"
-assert_has_echo "$M36_INJ_PM" "export PATH=$M36_SHIM_DIR:" "PM 内置路径：启动命令把 shim 放 PATH 最前"
-assert_has_echo "$M36_INJ_PM" "export TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log" "PM 内置路径：日志指向本项目的 state/"
-assert_has_echo "$M36_INJ_PM" "export TEAM_TMUX_REAL=" "PM 内置路径：把真 tmux 路径写死（窗口登录 PATH 再怪也不递归）"
+assert_has_echo "$M36_INJ_PM" "export PATH=$M36_SHIM_DIR:" "⑧ PM 内置路径：启动命令把 shim 放 PATH 最前"
+assert_has_echo "$M36_INJ_PM" "export TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log" "⑧ PM 内置路径：日志指向本项目的 state/"
+assert_has_echo "$M36_INJ_PM" "export TEAM_TMUX_REAL=" "⑧ PM 内置路径：把真 tmux 路径写死（窗口登录 PATH 再怪也不递归）"
+assert_not_echo "$M36_INJ_PM" "TEAM_ALLOW_DESTRUCTIVE_TMUX" "⑧ PM 启动命令不写任何破坏性授权（M67 R2）"
 M36_INJ_PMT="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" 'TEAM_PM_CMD=mycli run {prompt}' 'TEAM_PM_BIN=mycli')"
-assert_has_echo "$M36_INJ_PMT" "export PATH=$M36_SHIM_DIR:" "PM 模板路径：harness 里带 shim 前缀"
-assert_has_echo "$M36_INJ_PMT" "exec bash -lc" "PM 模板路径：其余启动语义不变"
+assert_has_echo "$M36_INJ_PMT" "export PATH=$M36_SHIM_DIR:" "⑧ PM 模板路径：harness 里带 shim 前缀"
+assert_has_echo "$M36_INJ_PMT" "exec bash -lc" "⑧ PM 模板路径：其余启动语义不变"
+assert_not_echo "$M36_INJ_PMT" "TEAM_ALLOW_DESTRUCTIVE_TMUX" "⑧ PM 模板启动命令不写任何破坏性授权"
 M36_INJ_AG="$(m36_lib 'team_agent_launch_cmd dev s1 /tmp/wt /tmp/pf.md deepseek/deepseek-flash' "TEAM_PI_BIN=$FAKE/pi")"
-assert_has_echo "$M36_INJ_AG" "export PATH=$M36_SHIM_DIR:" "worker 内置路径：启动命令把 shim 放 PATH 最前"
-assert_has_echo "$M36_INJ_AG" "--session-id s1" "worker 内置路径：命令本体还在"
+assert_has_echo "$M36_INJ_AG" "export PATH=$M36_SHIM_DIR:" "⑧ worker 内置路径：启动命令把 shim 放 PATH 最前"
+assert_has_echo "$M36_INJ_AG" "--session-id s1" "⑧ worker 内置路径：命令本体还在"
+assert_not_echo "$M36_INJ_AG" "TEAM_ALLOW_DESTRUCTIVE_TMUX" "⑧ worker 启动命令不写任何破坏性授权（M67 R2）"
 M36_INJ_AGT="$(m36_lib 'team_agent_launch_cmd dev s1 /tmp/wt /tmp/pf.md demo/m' 'TEAM_AGENT_CMD=mycli run {prompt}' 'TEAM_AGENT_BIN=mycli')"
-assert_has_echo "$M36_INJ_AGT" "export PATH=$M36_SHIM_DIR:" "worker 模板路径：模板展开前有 shim 前缀"
-assert_has_echo "$M36_INJ_AGT" "mycli run" "worker 模板路径：模板本体还在"
+assert_has_echo "$M36_INJ_AGT" "export PATH=$M36_SHIM_DIR:" "⑧ worker 模板路径：模板展开前有 shim 前缀"
+assert_has_echo "$M36_INJ_AGT" "mycli run" "⑧ worker 模板路径：模板本体还在"
 
-# ⑧ 翻转控制：同一条探针、PATH 里拿掉 shim → kill-server 直通桩（rc=0）。
-#    这证明 ① 钉的是 shim 本身（不是 tmux 的什么自带行为）；shim 文件被删时 ① 同样会红
-#    （shim 目录里没有 tmux 可执行文件 → 探针直接落到桩，exit 就不是 64 了）。
+# ── ⑨ 翻转控制：同一条探针、PATH 里拿掉 shim → kill-server 直通桩（rc=0）。
+#     这证明 ① 钉的是 shim 本身（不是 tmux 的什么自带行为）；shim 文件被删时 ① 同样会红 ──────────
 rm -f "$M36_STUB_CALLS"
 M36_OUT="$(env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
     PATH="$M36_STUB:/usr/bin:/bin" TEAM_TMUX_CALLS_LOG="$M36_LOG" tmux kill-server 2>&1)"; M36_RC=$?
-assert_eq "翻转控制：PATH 没有 shim 时同一条 kill-server 直通（rc≠64）" "$M36_RC" "0"
-assert_has "$M36_STUB_CALLS" "STUB argv=kill-server" "翻转控制：没有 shim 时调用真的落了地"
-case "$M36_OUT" in *已拒绝*) bad "翻转控制：没有 shim 却出现拒绝文案（断言钉错了对象）";; *) ok "翻转控制：没有 shim 就没有拒绝文案";; esac
+assert_eq "⑨ 翻转控制：PATH 没有 shim 时同一条 kill-server 直通（rc≠64）" "$M36_RC" "0"
+assert_has "$M36_STUB_CALLS" "STUB argc=1 argv=kill-server" "⑨ 翻转控制：没有 shim 时调用真的落了地"
+case "$M36_OUT" in *已拒绝*) bad "⑨ 翻转控制：没有 shim 却出现拒绝文案（断言钉错了对象）";; *) ok "⑨ 翻转控制：没有 shim 就没有拒绝文案";; esac
+
+# ── ⑫ CLI 身份导出（B1.4 的闸门配套）：M40 的身份锁在 CLI 进程里 unset 继承的 TEAM_*；CLI 自己的
+#    tmux 子进程（PATH 最前的 shim）就看不到身份，判定会掉进 no-identity 而拒绝 teardown/close/pulse
+#    的窗口清理。CLI 载入配置后必须把**目录/配置推导出来的**身份导出给子进程；这里用桩收 env 正面钉住
+#    （⑪ 的窗口端到端是它的真实现场）。──────────────────────────────────────────────────────
+: > "$M36_STUB_ENV"
+( cd "$REPO" && env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
+    -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SESSION -u TEAM_PROJECT \
+    PATH="$M36_SHIM_DIR:$M36_STUB:/usr/bin:/bin" TEAM_TMUX_REAL="$M36_STUB/tmux" TEAM_TMUX_CALLS_LOG="$M36_LOG" \
+    bash "$SKILL_DIR/scripts/team" teardown --agent m36ghost ) >/dev/null 2>&1
+assert_match "$M36_STUB_ENV" "^TEAM_SESSION=$SESSION\$" "⑫ CLI 的 tmux 子进程看得到 TEAM_SESSION（身份导出；否则窗口清理退化成 no-identity）"
+assert_match "$M36_STUB_ENV" "^TEAM_ROOT=$REPO\$" "⑫ CLI 的 tmux 子进程看得到 TEAM_ROOT（目录推导值）"
 
 # ── 段尾探活：默认 server 若死在本段运行期间，本段就是第一现场（如实报红）────────────
 case "$M36_DEF_WAS" in
@@ -10248,8 +10378,8 @@ case "$M36_DEF_WAS" in
   *) printf '  (调用者机器上没有活着的默认 server：探活跳过)\n' ;;
 esac
 
-# ⑨ 真私有 server 生死（真进程）：私有 socket 的 kill-server 真的把私有 server 收掉；
-#    TEAM_ALLOW_DESTRUCTIVE_TMUX=1 在私有 server 上也放行（brief 的三态②③落真 tmux）。
+# ── ⑩ 真私有 server 生死（真进程）：私有 socket 的 kill-server 真的把私有 server 收掉；
+#    退役键=1 在私有 socket 上也不改变动作（照样 pass）；token 在私有 socket 上照记 explicit-flag ──
 if [ "$FAST" = "1" ]; then
   fast_skip "31c·真私有 server 生死" "要真的起/杀私有 tmux server（真进程），快模式不跑"
 elif [ "$HAVE_TMUX" != "1" ]; then
@@ -10259,7 +10389,7 @@ else
   M36_PRIV="$M36_D/priv-tmpdir"; mkdir -p "$M36_PRIV"
   M36_LIVE_PATH="$M36_SHIM_DIR:$(dirname "$REAL_TMUX"):/usr/bin:/bin"
   m36_priv() { # [VAR=val …] <tmux argv…>：私有 TMPDIR + shim 在最前（下游是真 tmux）
-    env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" \
+    env -u TMUX -u TMUX_PANE -u TEAM_TMUX_REAL TMUX_TMPDIR="$M36_PRIV" \
         PATH="$M36_LIVE_PATH" TEAM_TMUX_CALLS_LOG="$M36_LOG" "$@"
   }
   : > "$M36_LOG"
@@ -10274,31 +10404,46 @@ else
   else ok "私有 server 真的被收掉了"; fi
   assert_has "$M36_LOG" "act=pass" "私有 server 的 kill 记 act=pass"
   assert_has "$M36_LOG" "sock=$M36_PRIV/tmux-$M36_UID/default" "私有 socket 路径进了日志"
-  # 私有 server 上 override 旋钮也无害（照样放行）
+  # 退役键在私有 socket 上也不改变动作（照样 pass；不许出现 override）
   m36_priv tmux new-session -d -s m36victim2 >/dev/null 2>&1
   m36_priv TEAM_ALLOW_DESTRUCTIVE_TMUX=1 tmux kill-server >/dev/null 2>&1; M36_RC=$?
-  assert_eq "TEAM_ALLOW_DESTRUCTIVE_TMUX=1 + 私有 server：放行（exit 0）" "$M36_RC" "0"
+  assert_eq "退役键=1 + 私有 server：照常放行（exit 0，退役键零影响）" "$M36_RC" "0"
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" "$REAL_TMUX" ls >/dev/null 2>&1; then
     bad "第二个私有 server 没被收掉（还在）"
   else ok "第二个私有 server 也被收掉了"; fi
+  assert_not "$M36_LOG" "act=override" "私有 socket 的 ledger 里没有 act=override"
+  # token 在私有 socket 上照记 explicit-flag（token 是调用者的授权，任何 socket 都执行）
+  m36_priv tmux new-session -d -s m36victim3 >/dev/null 2>&1
+  m36_priv tmux --teamsmith-allow-destructive kill-server >/dev/null 2>&1; M36_RC=$?
+  assert_eq "token + 私有 server：执行（exit 0）" "$M36_RC" "0"
+  assert_has "$M36_LOG" "act=explicit-flag" "token 在私有 socket 上记 act=explicit-flag"
+  if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" "$REAL_TMUX" ls >/dev/null 2>&1; then
+    bad "第三个私有 server 没被收掉（还在）"
+  else ok "第三个私有 server 也被收掉了"; fi
   # 段尾再探一次默认 server（真杀之后）
   case "$M36_DEF_WAS" in
     alive) if m36_default_alive; then ok "真杀私有 server 之后，默认 server 仍活着"; else bad "默认 server 死在真杀私有 server 之后——本段就是第一现场"; fi ;;
   esac
 fi
 
-# ⑩ 窗口注入端到端（真进程）：真派一个 worker / 真起一个 PM，env 里必须看到闸门前缀。
+# ── ⑪ 窗口注入端到端（真进程）：真派一个 worker / 真起一个 PM，env 里必须看到闸门前缀，
+#     **没有任何破坏性授权**（派单 shell 故意带 TEAM_ALLOW_DESTRUCTIVE_TMUX=1）；并且 CLI 自己在
+#     窗口里发出的破坏性调用（teardown 的 kill-window）记 act=allowed-owned（真身钉桩、默认 socket）──
 if [ "$FAST" = "1" ]; then
   fast_skip "31c·窗口注入端到端" "要真实 tmux 窗口（派单 + team up），快模式不跑"
 elif [ "$HAVE_TMUX" != "1" ]; then
   cond_skip "31c·窗口注入端到端" "没有 tmux"
 else
   live_mark
-  # ── worker：gateprobe 夹具（env dump + 一次 shimmed tmux 调用后退出）
+  # ── worker：gateprobe 夹具（env dump + 一次 shimmed tmux 调用 + CLI 自己的破坏性调用后退出）
   cat > "$FAKE/gate-probe.sh" <<EOF
 #!/usr/bin/env bash
 env | sort > "$M36_D/env-worker.log"
 tmux ls >> "$M36_D/env-worker.log" 2>&1 || true
+# M67 R2：CLI 自己的破坏性调用 = 本项目自己的命名对象（\$TEAM_SESSION:gatevictim），在默认 socket
+# 上应记 act=allowed-owned。真身钉桩（默认 socket 探针纪律），TMUX 清掉才会解析到默认 socket。
+M36_STUB_WINDOWS=gatevictim TEAM_TMUX_REAL="$M36_STUB/tmux" \\
+  env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR bash "$SKILL_DIR/scripts/team" teardown --agent gatevictim >> "$M36_D/env-worker.log" 2>&1 || true
 printf 'done\\n' > "$M36_D/env-worker.done"
 exit 0
 EOF
@@ -10307,27 +10452,42 @@ EOF
   # P24（B3）：change-less 的任务书要有锚（本节测的是 tmux 运行时闸门）
   printf '# M36W 夹具 brief\n\nanchor: none (infra) — smoke fixture\n' > "$REPO/.pi/team/state/M36W-brief.md"
   git -C "$REPO" worktree add -b "$GP_BRANCH" "$REPO/.worktrees/gateprobe" "$PROTECTED" >/dev/null 2>&1
+  # CLI 破坏性调用的目标：一个真窗口 + 一条 state 记录（stub 的 list-windows 也让 CLI 看得见它）
+  tmux new-window -t "$SESSION" -n gatevictim -d -- sleep 60
+  printf 'window=gatevictim\n' > "$REPO/.pi/team/state/gatevictim.env"
+  : > "$REPO/.pi/team/state/tmux-calls.log"
   rm -f "$M36_D/env-worker.log" "$M36_D/env-worker.done"
   env TEAM_AGENTS="dev verify gateprobe" TEAM_AGENT_CMD="$FAKE/gate-probe.sh" TEAM_AGENT_BIN="$FAKE/gate-probe.sh" \
+      TEAM_ALLOW_DESTRUCTIVE_TMUX=1 \
       $TEAM dispatch gateprobe M36W .pi/team/state/M36W-brief.md >"$TMP/m36-dispatch.log" 2>&1 \
-    && ok "gateprobe 派单成功" || { bad "gateprobe 派单失败"; tail -5 "$TMP/m36-dispatch.log"; }
+    && ok "gateprobe 派单成功（派单 shell 带着退役键=1）" || { bad "gateprobe 派单失败"; tail -5 "$TMP/m36-dispatch.log"; }
   M36_W=0
   while [ "$M36_W" -lt 100 ] && [ ! -f "$M36_D/env-worker.done" ]; do sleep 0.2; M36_W=$((M36_W + 1)); done
   if [ -f "$M36_D/env-worker.log" ]; then
-    assert_match "$M36_D/env-worker.log" "^PATH=$M36_SHIM_DIR:" "worker 窗口 env：PATH 最前是 shim 目录"
-    assert_match "$M36_D/env-worker.log" "^TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log\$" "worker 窗口 env：日志指向本 fixture 的 state/"
-    assert_match "$M36_D/env-worker.log" "^TEAM_TMUX_REAL=$REAL_TMUX\$" "worker 窗口 env：真 tmux 路径也进了 env"
+    assert_match "$M36_D/env-worker.log" "^PATH=$M36_SHIM_DIR:" "⑪ worker 窗口 env：PATH 最前是 shim 目录"
+    assert_match "$M36_D/env-worker.log" "^TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log\$" "⑪ worker 窗口 env：日志指向本 fixture 的 state/"
+    assert_match "$M36_D/env-worker.log" "^TEAM_TMUX_REAL=$REAL_TMUX\$" "⑪ worker 窗口 env：真 tmux 路径也进了 env"
+    assert_not "$M36_D/env-worker.log" "TEAM_ALLOW_DESTRUCTIVE_TMUX=" "⑪ worker 窗口 env：没有退役键（派单 shell 带着它也没用）"
+    assert_not "$M36_D/env-worker.log" "DESTRUCTIVE" "⑪ worker 窗口 env：没有任何破坏性授权键"
   else bad "worker 窗口的 env 没落盘（gateprobe 没跑起来）"; fi
   # 夹具自己在窗口里打的 tmux ls 应被 shim 记进 fixture 的 state 日志（有界轮询，不赌固定 sleep）
   M36_W=0
   while [ "$M36_W" -lt 25 ]; do grep -q 'argv=ls' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
-  assert_has "$REPO/.pi/team/state/tmux-calls.log" "argv=ls" "worker 窗口里的 ad-hoc tmux 调用被记进 state/tmux-calls.log"
-  assert_has "$REPO/.pi/team/state/tmux-calls.log" "act=" "窗口日志带动作字段"
+  assert_has "$REPO/.pi/team/state/tmux-calls.log" "argv=ls" "⑪ worker 窗口里的 ad-hoc tmux 调用被记进 state/tmux-calls.log"
+  assert_has "$REPO/.pi/team/state/tmux-calls.log" "act=" "⑪ 窗口日志带动作字段"
+  # CLI 自己的破坏性调用：allowed-owned（不是 explicit-flag、更不是 override）
+  M36_W=0
+  while [ "$M36_W" -lt 25 ]; do grep -q 'act=allowed-owned' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
+  assert_has "$REPO/.pi/team/state/tmux-calls.log" "act=allowed-owned" "⑪ CLI 自己的破坏性调用记 act=allowed-owned（M67 R2）"
+  assert_has "$REPO/.pi/team/state/tmux-calls.log" "argv=kill-window -t $SESSION:gatevictim" "⑪ 记下的目标就是 CLI 自己的命名对象"
+  assert_not "$REPO/.pi/team/state/tmux-calls.log" "act=explicit-flag" "⑪ CLI 自己不带 token（never explicit-flag）"
+  assert_not "$REPO/.pi/team/state/tmux-calls.log" "act=override" "⑪ 窗口 ledger 里没有 act=override"
   # 收尾（6g 同款）：窗口、worktree、分支、state env 都清掉
   tmux kill-window -t "$SESSION:gateprobe" 2>/dev/null || true
+  tmux kill-window -t "$SESSION:gatevictim" 2>/dev/null || true
   git -C "$REPO" worktree remove --force "$REPO/.worktrees/gateprobe" >/dev/null 2>&1 || true
   git -C "$REPO" branch -D "$GP_BRANCH" >/dev/null 2>&1 || true
-  rm -f "$REPO/.pi/team/state/gateprobe.env"
+  rm -f "$REPO/.pi/team/state/gateprobe.env" "$REPO/.pi/team/state/gatevictim.env"
 
   # ── PM：team up 真起一个假 PM，env 里必须看到闸门前缀（验 respawn-pane 的 sh -c 路径）
   PMW="$($TEAM paths | sed -n 's/.*"pm_window": "\([^"]*\)".*/\1/p')"; [ -n "$PMW" ] || PMW=pm
@@ -10341,18 +10501,21 @@ EOF
   tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn" "$M36_D/env-pm.log" "$M36_D/env-pm.done"
   env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$FAKE/gate-pm.sh" TEAM_PM_BIN="$FAKE/gate-pm.sh" \
-      $TEAM up >"$TMP/m36-pm-up.log" 2>&1 && ok "gate-pm up 成功" || { bad "gate-pm up 失败"; tail -5 "$TMP/m36-pm-up.log"; }
+      TEAM_ALLOW_DESTRUCTIVE_TMUX=1 \
+      $TEAM up >"$TMP/m36-pm-up.log" 2>&1 && ok "gate-pm up 成功（派单 shell 带着退役键=1）" || { bad "gate-pm up 失败"; tail -5 "$TMP/m36-pm-up.log"; }
   M36_W=0
   while [ "$M36_W" -lt 100 ] && [ ! -f "$M36_D/env-pm.done" ]; do sleep 0.2; M36_W=$((M36_W + 1)); done
   if [ -f "$M36_D/env-pm.log" ]; then
-    assert_match "$M36_D/env-pm.log" "^PATH=$M36_SHIM_DIR:" "PM 窗口 env：PATH 最前是 shim 目录"
-    assert_match "$M36_D/env-pm.log" "^TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log\$" "PM 窗口 env：日志指向本 fixture 的 state/"
+    assert_match "$M36_D/env-pm.log" "^PATH=$M36_SHIM_DIR:" "⑪ PM 窗口 env：PATH 最前是 shim 目录"
+    assert_match "$M36_D/env-pm.log" "^TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log\$" "⑪ PM 窗口 env：日志指向本 fixture 的 state/"
+    assert_not "$M36_D/env-pm.log" "TEAM_ALLOW_DESTRUCTIVE_TMUX=" "⑪ PM 窗口 env：没有退役键"
   else bad "PM 窗口的 env 没落盘（gate-pm 没跑起来）"; fi
   # 收尾：PM 窗口 + pm.pid 系列清掉（与 6i 收尾同口径，后面没有依赖它们的段落了）
   tmux kill-window -t "$SESSION:$PMW" 2>/dev/null || true
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn" \
         "$REPO/.pi/team/state/pm.pid.starting" "$REPO/.pi/team/state/pm-launch.exit" "$REPO/.pi/team/state/pm-launch-failed.log"
 fi
+
 
 # ---------------------------------------------------------------- 32. 身份 = 运行时目录（M40）
 # 两起同族实测事故（2026-09-19，用户拍板的设计方向）：shell 继承了别的项目的身份四件套

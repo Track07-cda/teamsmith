@@ -12,11 +12,10 @@
 # 子命令见 `team help`。
 set -euo pipefail
 
-# M36 · tmux 运行时闸门：team CLI 自己的 tmux 调用走「显式放行」通道（它的调用点全是仓库脚本，
-# 受 M28 lint 静态管束）；闸门要拦的是 agent 窗口里的 ad-hoc 命令。放行 ≠ 无痕：窗口 PATH 有
-# shim 时这些调用照样逐条记进 state/tmux-calls.log（act=override），出事照样能倒查。
-# 窗口侧不受影响：这个变量不进 update-environment，agent 窗口里它不会被继承。
-export TEAM_ALLOW_DESTRUCTIVE_TMUX="${TEAM_ALLOW_DESTRUCTIVE_TMUX:-1}"
+# M67 · 这里**不再**导出 TEAM_ALLOW_DESTRUCTIVE_TMUX（M36 的放行通道）：环境变量不授权任何 tmux
+# 调用 —— 闸门按**目标**判定，CLI 自己的破坏性调用全部打 "$TEAM_SESSION:<命名窗口>"，在窗口里
+# 以 act=allowed-owned 放行、逐条记进 state/tmux-calls.log（M62 的泄漏链就是「CLI 导出 + tmux 把
+# server 环境复制进每个 pane」）。例外只能由人在 argv 上给：`--teamsmith-allow-destructive`。
 
 TEAM_CLI="$(basename "$0")"
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,6 +66,13 @@ fi
 
 # 其余命令都需要配置 + git 仓库
 team_load_config
+
+# M67 · 闸门身份：CLI 自己的 tmux 调用要按「本项目自己的命名对象」放行（act=allowed-owned），而 M40 的
+# 身份锁会把继承的 TEAM_* 存档后 unset —— 子进程（PATH 最前的 shim）就看不到身份了，判定会掉进
+# 「no-identity」而拒绝 CLI 自己的 teardown / close / pulse 窗口清理。这里把**目录/配置推导出来的**身份
+# 导出给子进程：不是授权（值不来自继承；闸门仍要求 TEAM_ROOT/TEAM_MAIN_ROOT 是调用者 cwd 的祖先，
+# 继承值依旧不许赢过 cwd）。窗口启动前缀照旧先 unset 再写目标目录的身份，不受本导出影响。
+export TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION
 
 # M40：身份冲突闸门 —— 继承的 TEAM_* 与目录推导不一致时：要动共享状态/起进程的命令**拒绝**，
 # 纯观察形式（paths/--print/--dry-run/status…）与 init/bootstrap 按目录告警放行。

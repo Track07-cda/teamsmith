@@ -2051,12 +2051,14 @@ team_pm_launch_diag() { # <原因> [<渲染出的命令>] → 诊断文件路径
 team_squote() { local s="${1//\'/\'\\\'\'}"; printf "'%s'" "$s"; }
 
 # ---------------------------------------------------------------- M36 · tmux 运行时闸门（destructive-call gate）
-# 背景：默认 tmux server 五次全灭都查不出肇事命令（默认 server 死亡不留日志）；M28 的 lint 只能静态管
+# 背景：默认 tmux server 多次全灭都查不出肇事命令（默认 server 死亡不留日志）；M28 的 lint 只能静态管
 # 仓库脚本，管不到 agent 窗口里的 ad-hoc 命令。闸门 = 一个名叫 tmux 的包装脚本（scripts/shim/tmux），
 # 由下面这个前缀注入 PM/worker 窗口启动命令（PATH 最前 + 日志路径 + 真 tmux 路径）：
-#   · 每次调用记一行进 state/tmux-calls.log（act=pass/override/refused + 解析出的 socket + 参数 + pid/cwd）；
-#   · 解析到默认 socket（/tmp/tmux-<uid>/default）的 kill-server/kill-session/kill-window/kill-pane →
-#     拒绝执行（exit 64 + 醒目一行）；TEAM_ALLOW_DESTRUCTIVE_TMUX=1 或私有 socket 放行；
+#   · 每次调用记一行进 state/tmux-calls.log（act=pass/allowed-owned/refused/explicit-flag + socket + 参数 + pid/cwd）；
+#   · 判定**按目标**（M67）：解析到默认 socket（/tmp/tmux-<uid>/default）的 kill-server/kill-session/
+#     kill-window/kill-pane → 拒绝执行（exit 64 + 醒目一行），除非有效 -t 命中绑定到调用者的 TEAM_SESSION
+#     的命名对象；私有 socket 放行；TEAM_ALLOW_DESTRUCTIVE_TMUX 已退役、对判定零影响；
+#   · 带内唯一放行 = 人在 argv 里的 `--teamsmith-allow-destructive`（全局参数位；剥掉、记 explicit-flag）。
 #   · 只读命令从不拦（照样记一行）。
 # 为什么注入点在渲染出的启动命令里（而不是 tmux set-environment）：窗口 harness 是 bash -lc，
 # 登录 profile 会把 PATH 重建成系统默认（M23 实测）——只有在 harness 里显式 export 才活得到里层。

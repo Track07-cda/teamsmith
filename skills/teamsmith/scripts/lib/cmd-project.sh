@@ -336,6 +336,20 @@ team_cmd_doctor() {
       else warn "tmux 在，但 session '$TEAM_SESSION' 不存在（dispatch 会创建；PM 需要在 <session>:<pm-window> 里跑）"; fi
     else warn "无 tmux：agent 无法交互旁观，仅支持 -p 非交互（不建议）"; fi
 
+  # M67 · 退役键的 server 残留（只读探测，不建 server）：跑着的 tmux server 全局环境里还带着
+  # TEAM_ALLOW_DESTRUCTIVE_TMUX 时提示一行 —— 它**不再授权任何操作**（闸门按目标判定），残留只是
+  # 旧 server 启动环境的化石；重启该 server 后消失（重启会结束它上面所有会话，时机由人定）。
+  if team_have_cmd tmux; then
+    local retired_residue=""
+    retired_residue="$(tmux show-environment -g TEAM_ALLOW_DESTRUCTIVE_TMUX 2>/dev/null | head -1 || true)"
+    if [ -n "$retired_residue" ]; then
+      check "tmux 闸门退役键"
+      warn "运行的 tmux server 全局环境里还有 $retired_residue（M67 退役）：它不再授权任何操作（判定按目标）；重启该 server 后残留消失"
+    fi
+  else
+    check "tmux 闸门退役键"; printf '%s\n' "SKIP：没有 tmux，无法探测 server 全局环境"
+  fi
+
   check "pi"; if [ -n "${TEAM_AGENT_CMD:-}" ]; then
       pass "本项目用自定义 agent adapter：不需要 pi"
     elif team_have_cmd pi; then

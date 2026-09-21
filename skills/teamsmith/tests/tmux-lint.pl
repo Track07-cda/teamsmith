@@ -29,6 +29,9 @@
 #     带 `-L 私有` 也红（闸门看不到它）。`"$REAL_TMUX"`/`${TMUX_BIN}` 这类**变量**是「REAL_TMUX 解析类」
 #     例外，照旧走 A–D（变量里就算装的是绝对路径，也不是本规则能静态看出来的）。
 #     注：`command tmux` / `env tmux` **仍然**经 PATH 解析（`command` 只跳过函数/别名），命中闸门，不算绕过。
+#     M67 追加一条（闸 gate 的 argv token）：`tmux --teamsmith-allow-destructive kill-server` 里的 token
+#     按**全局选项**跳过 —— 变更调用照旧被识别（token 不能把调用藏起来），但 token **不是**隔离证据
+#     （带 token 没有 -L/-S/私有 TMPDIR 仍然红）；带私有 `-L` 的一条照旧净。
 #
 #   扫描范围：skills/teamsmith/tests/** 与 docs/team/reports/*/pkg/** 的脚本类文件（日志/patch 不扫）。
 #
@@ -430,6 +433,8 @@ sub subcommand_and_route {
         if ($a =~ /^-S(.*)$/s && !defined $minus_S) { $minus_S = $1 ne '' ? $1 : ($words->[$j + 1]{t} // '') }
     }
     my $k = $ci + 1;      # 跳过选项；带值的选项把值一起跳掉（-L name / -S path / -t target …）
+    # M67：闸门的 argv token 是**全局选项**（`tmux --teamsmith-allow-destructive kill-server`）——
+    # 按普通开关跳过，子命令照旧被识别（token 既不能藏调用，也不算隔离证据）。
     while ($k < @$words && $words->[$k]{t} =~ /^-/) {
         if ($VALUE_FLAG{ $words->[$k]{t} }) { $k += 2; next }
         $k++;
@@ -713,6 +718,11 @@ if ($SELFTEST) {
         ['multi_line_cont',        "tmux -L private-name \\\n  kill-server\n", 0],
         ['inside_subst',           "x=\"\$(tmux -L private-name list-sessions)\"; tmux kill-server\n", 1],
         ['shim_not_enough',        "SH=\"\$T/shim\"\nPATH=\"\$SH:\$PATH\"\n\"\$SH/tmux\" kill-server\n", 1],
+        # M67：闸门的 argv token 是全局选项 —— 变更调用照旧被识别（token 不能藏调用），
+        # 但 token 不是隔离证据（裸的仍红）；带私有 -L 的照旧净。
+        ['gate_token_bare',        "tmux --teamsmith-allow-destructive kill-server\n", 1],
+        ['gate_token_private',     "tmux --teamsmith-allow-destructive -L private-name kill-server\n", 0],
+        ['gate_token_after_sub',   "tmux kill-window --teamsmith-allow-destructive\n", 1],
         # M41：字面绝对路径 = 绕过 PATH 闸门 —— 变更命令一律红（带隔离证据也红）；变量形式照旧
         ['abs_path_bare',          "/usr/bin/tmux kill-server\n", 1],
         ['abs_path_with_private',  "/usr/bin/tmux -L private-name kill-server\n", 1],

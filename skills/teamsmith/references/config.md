@@ -377,7 +377,7 @@ file's last 16 KiB and print at most N lines (default 10).
 | `TEAM_MEETING_ALLOW_USER_ID` | apply | empty | non-empty = who may knock (widens permission, hence the danger flag) |
 | `TEAM_ALLOW_FOREIGN_SESSION` | refuse | `0` | run anyway on a foreign tmux session (with `--yes`) |
 | `TEAM_GUARD_FOREIGN_TARGET` | refuse | `1` | only type into windows of this session |
-| `TEAM_ALLOW_DESTRUCTIVE_TMUX` | refuse | `0` | allow destructive tmux calls outside a private socket |
+| `TEAM_ALLOW_DESTRUCTIVE_TMUX` | refuse | `0` | **retired (M67)**: it grants nothing — the gate decides by the object a call targets, and the only in-band escape is the argv token `--teamsmith-allow-destructive`. The key stays as a non-writable tombstone so old configs keep loading; `team doctor` names the residue when a running server still carries it |
 | `TEAM_SMOKE_FAST` | refuse | `0` | skip the real-process smoke sections |
 | `TEAM_PULSE_PENDING_BOARD` | apply | `0` | 1 = board todo/wip count as a wake-up signal |
 | `TEAM_INBOX_WATCH_MAX_BYTES` | restart · export | `131072` | spool cap (bytes) |

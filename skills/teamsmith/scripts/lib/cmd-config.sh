@@ -62,7 +62,7 @@ TEAM_ALLOW_FOREIGN_IDENTITY|refuse|bool||plain|0|-|权限守卫：手改 .pi/tea
 TEAM_ALLOW_FOREIGN_SESSION|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
 TEAM_GUARD_FOREIGN_TARGET|refuse|bool||plain|1|-|权限守卫：手改 .pi/team/config.sh
 TEAM_REPLACE_FOREIGN_PM|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
-TEAM_ALLOW_DESTRUCTIVE_TMUX|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
+TEAM_ALLOW_DESTRUCTIVE_TMUX|refuse|bool||plain|0|-|权限守卫（M67 退役）：不再授权任何操作（判定按目标）；保留为不接受写入的只读墓碑，手改 .pi/team/config.sh
 TEAM_ASSUME_YES|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
 TEAM_REQUIRE_JS|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh
 TEAM_REQUIRE_OPENSPEC|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh

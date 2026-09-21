@@ -18,7 +18,10 @@
 
 - PM 与 worker 会话的 PATH 最前面注入 `tmux` 包装器：**记录**每次调用的 socket/TMUX 变量/argv/调用者 pid+cwd
   （`state/tmux-calls.log`，默认 server 死亡后可倒查），**拒绝**打默认 socket 的
-  kill-server/kill-session/kill-window/kill-pane（`exit 64`，`TEAM_ALLOW_DESTRUCTIVE_TMUX=1` 放行）。
+  kill-server/kill-session/kill-window/kill-pane（`exit 64`）。**M67 起放行改为按目标判定**（只有绑定到
+  调用者的 `TEAM_SESSION` 命名对象放行，记 `act=allowed-owned`）+ **argv token**
+  `--teamsmith-allow-destructive`（记 `act=explicit-flag`）；`TEAM_ALLOW_DESTRUCTIVE_TMUX` 退役、零授权
+  （见 `references/troubleshooting.md` §18）。
 - 边界参数容错：无子命令 / 缺值 `-L`/`-S`/`-c` 不再空转（dev 实测死循环 100 分钟的事故），`-V/--version`
   透传；FIFO 日志目标跳过记录。冒烟含 11 条不挂绊线 + 9 条 argv 逐字节保真。
 

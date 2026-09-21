@@ -581,11 +581,20 @@ code that owns the jobs, not by convention.
 
 ## 18. tmux isolation: the gate, the "fake isolation" shapes, and the container rule
 
-Every PM/worker window puts `scripts/shim/tmux` first on `PATH` (M36). The shim logs every call to
-`state/tmux-calls.log` (time, resolved socket, `TMUX`/`TMUX_TMPDIR`, argv, pid/ppid/cwd, action) and **refuses**
-`kill-server`/`kill-session`/`kill-window`/`kill-pane` when the call resolves to the **default socket**
-(`/tmp/tmux-<uid>/default` — the server every project on the machine shares). `TEAM_ALLOW_DESTRUCTIVE_TMUX=1`
-overrides it (logged as `act=override`); read-only commands are never refused.
+Every PM/worker window puts `scripts/shim/tmux` first on `PATH` (M36; the grant model was rebuilt in M67). The
+shim logs every call to `state/tmux-calls.log` (time, resolved socket, `TMUX`/`TMUX_TMPDIR`, argv, pid/ppid/cwd,
+action) and **decides a destructive call by the object it targets**: on the **default socket**
+(`/tmp/tmux-<uid>/default` — the server every project on the machine shares) `kill-server` and `kill-session -a`
+are always refused (exit 64), and `kill-session`/`kill-window`/`kill-pane` run only when the effective `-t` (last
+one wins; `-t x` and `-tx`) names a session that is literally the caller's own `TEAM_SESSION` **and** that identity
+is bound to the caller (`TEAM_ROOT` or `TEAM_MAIN_ROOT` resolves to the caller's cwd or an ancestor of it).
+Everything unprovable is refused. **No environment variable grants anything**: `TEAM_ALLOW_DESTRUCTIVE_TMUX` is
+retired — the shim does not read it, the CLI no longer exports it, it stays in the settings schema as a
+non-writable tombstone, and `team doctor` names the residue when a running server's global environment still
+carries it. The single in-band escape is the argv token `--teamsmith-allow-destructive`, placed **before** the
+subcommand: it is consumed and stripped before the exec, never exported, and logged `act=explicit-flag` (after the
+subcommand the same word is data, e.g. a `send-keys` payload). The actions are exactly `pass`, `allowed-owned`,
+`refused` and `explicit-flag`. Read-only commands are never refused.
 
 The gate models tmux's **real** resolution, fallbacks included (tmux 3.7: the socket template is the path list
 `$TMUX_TMPDIR:/tmp/`, each item env-expanded and `realpath()`-ed, the first usable item wins — M41 measured the
@@ -608,7 +617,9 @@ Two hard rules follow (2026-09-19: the 6th and the 8th default-server deaths):
 1. **Destructive fixtures and probes go into the container**:
    `bash skills/teamsmith/tests/container-tmux.sh -- <cmd>`. The host socket directory is not mounted inside, so an
    unisolated `kill-server` cannot reach the host by construction. On the host only the "private directory already
-   `mkdir -p`ed" shape above is allowed, and it must go through the shim's `PATH`.
+   `mkdir -p`ed" shape above is allowed, and it must go through the shim's `PATH`; a fixture that probes a
+   **refusal or an allowed-owned verdict** against the default socket pins `TEAM_TMUX_REAL` to an argv-recording
+   stub, so a wrong verdict executes a shell script and never a server (M67).
 2. **Never call tmux by absolute path for anything destructive.** The gate is a `PATH` executable: `/usr/bin/tmux
    kill-server` bypasses both the log and the refusal (the 8th death was exactly that, with an uncreated
    `TMUX_TMPDIR`). `tests/tmux-lint.pl` reds any literal absolute-path mutating call, even when it carries `-L/-S`

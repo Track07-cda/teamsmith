@@ -1,16 +1,36 @@
 #!/usr/bin/env bash
-# teamsmith · tmux 运行时闸门（M36）—— 被注入到 agent 会话（PM 与 worker 窗口）PATH 最前的 `tmux` 包装。
+# teamsmith · tmux 运行时闸门（M36 建；M67 起判定改为「按目标 + argv token」）—— 被注入到 agent
+# 会话（PM 与 worker 窗口）PATH 最前的 `tmux` 包装。
 #
-# 为什么存在：默认 tmux server 五次全灭（PM/pulse/worker + 共用同一 server 的其他项目一起陪葬），
+# 为什么存在：默认 tmux server 多次全灭（PM/pulse/worker + 共用同一 server 的其他项目一起陪葬），
 # 而默认 server 死亡不留任何日志，肇事命令查不出来。M28 的 lint（tests/tmux-lint.pl）只能静态管
 # 仓库脚本，管不到 agent 在窗口里的 ad-hoc 命令 —— 这道闸门管的就是它们：
 #
 #   记录  每次调用追加一行到 $TEAM_TMUX_CALLS_LOG（时间/socket/TMUX/TMUX_TMPDIR/参数/pid/ppid/cwd/动作），
 #         上限 2000 行（超了留最新 1000 行）——默认 server 再死也能倒查「谁在什么时候打了什么」。
-#   拒绝  解析到**默认** socket（/tmp/tmux-<uid>/default）且子命令 ∈ kill-server/kill-session/
-#         kill-window/kill-pane（含 tmux 允许的前缀写法）→ 不执行，stderr 打醒目一行，exit 64。
-#   放行  TEAM_ALLOW_DESTRUCTIVE_TMUX=1（记 act=override）或解析到私有 socket（记 act=pass）
-#         → 原样 exec 真 tmux。只读命令（ls/list-*/display-message/capture-pane/send-keys…）从不拦。
+#   判定  **按目标**（M67）：解析到默认 socket（/tmp/tmux-<uid>/default）的破坏性调用
+#         （kill-server/kill-session/kill-window/kill-pane，含 tmux 允许的前缀写法）只在目标能证明是
+#         调用者自己会话里的命名对象时执行；**环境变量不授权任何东西**（M62 的泄漏链：team 的 export +
+#         tmux 把 server 环境复制进每个新 pane，等于给共享 server 上所有项目的窗口发授权）。
+#   动作  审计词汇只有四个：pass（不拦）/ allowed-owned（放行·自己的命名对象）/
+#         refused（拒绝，exit 64）/ explicit-flag（调用者在 argv 里的显式授权）。
+#
+# M67 判定表（解析到共享默认 socket 的破坏性调用）：
+#   kill-server                 → 拒绝（对象是整台 server，不是任何项目的命名对象）
+#   kill-session -a             → 拒绝（-a 加宽到本 server 上除目标外的所有会话，没有目标能约束影响面）
+#   kill-session/-window/-pane  → 仅当有效 -t 非空、它的 session 段（第一个 `:` 之前）字面等于非空的
+#                                 TEAM_SESSION，且这个身份**绑定**到调用者
+#                                 （TEAM_ROOT / TEAM_MAIN_ROOT 是 cwd 或 cwd 的祖先）→ allowed-owned
+#   其余形状（无 -t / -t "" / %N / @N / :win / 相对目标 / 别的会话 / 身份缺失或未绑定）→ 拒绝；
+#   不可证明的一律拒绝（认得 -t x 与 -tx，组合旗标簇按 tmux 的 args_parse 逐字符走，最后一个 -t 胜出）。
+#   私有 socket 一律 pass（M41 的 socket 表与假隔离判定原样保留）。**假隔离**（声明了 TMUX_TMPDIR 但
+#   它不可用、真 tmux 会静默回退默认 socket）即使 -t 看着是自己的也拒绝：那时候命中的同名会话可能
+#   是共享 server 上别人的。
+#   `--teamsmith-allow-destructive`（**只在子命令之前的全局参数位**识别）是唯一的带内放行：剥掉它再
+#   执行、记 act=explicit-flag，任何 socket 上都执行（这是调用者的显式授权）；子命令之后的同名词是
+#   数据，原样透传；`=1` 形式不识别（透传给真 tmux 报错 = fail closed）。
+#   TEAM_ALLOW_DESTRUCTIVE_TMUX 已退役（M67）：本闸门不读它，它在调用方环境里、甚至在这台 server 的
+#   全局环境里都不改变任何判定；团队 CLI 不再导出它。
 #
 # socket 解析与 tmux（3.7b）一致：-S/-L（命令行显式） > $TMUX（第一个逗号前，且不以逗号开头） >
 # <tmpdir>/tmux-<uid>/default。tmpdir 不是「${TMUX_TMPDIR:-/tmp}」这么一条公式，而是一张**路径表**
@@ -35,11 +55,13 @@
 #   · `command tmux` / `env tmux` **不**绕行（`command` 只跳过函数/别名，PATH 解析照旧，照样命中本闸门）；
 #   · `TEAM_TMUX_REAL=<绝对路径>` 是本闸门自己解析真身用的出口，不受影响。
 #
-# 两条硬原则（M36 返工实录，违反任意一条都是事故级）：
-#   透传保真  判定在**副本**上解析、执行用**原始** "$@" —— 把 -L/-S 从 argv 里吃掉会让
-#             「判定打私有、执行打默认」分家（被执行的 kill 会落默认 server）。
+# 三条硬原则（M36 返工实录，违反任意一条都是事故级）：
+#   透传保真  判定在**副本**上解析、执行用**调用者原始的** argv —— 把 -L/-S 从 argv 里吃掉会让
+#             「判定打私有、执行打默认」分家（被执行的 kill 会落默认 server）。唯一的例外是闸门自己的
+#             token（它不是 tmux 的参数，必须剥掉才递得下去）。
 #   绝不挂住  无子命令 / 缺值参数（tmux -L）/ -V 等全部透传给真 tmux（它自己报错退出）；
 #             解析循环每条路径要么 shift ≥1 要么 break。
+#   环境零授权 判定只看「目标 + 绑定到调用者的身份 + argv token」，不看任何环境变量的值。
 set -u
 
 # ── 找真 tmux：PATH 里第一个「不是我自己」的 tmux（防递归；TEAM_TMUX_REAL 显式指定优先）────────
@@ -67,24 +89,99 @@ if [ -z "$_real" ]; then
   exit 127
 fi
 
+# 原始 argv 的快照（日志与「调用者原始 argv」的逐字节透传都看它；后面 shift 只动函数参数）
+_shim_argv=("$@")
+_shim_argc=$#
+_shim_cwd="$(pwd -P 2>/dev/null || printf '%s' "${PWD:-}")"
+
 # ── 解析全局参数（**只吃副本**：函数位置参数是调用者 "$@" 的拷贝，caller 的 "$@" 不动）────────
 # 缺值参数（$#<2）直接 break：不完整调用透传给真 tmux 自己报错；每条路径要么 shift ≥1 要么 break，绝不挂住。
+# 产出：_sockname/_sockpath（-L/-S）、_sub（子命令）、_glob_end（全局区结束下标 = 子命令所在下标，
+# 没有子命令时 = 词数）、_tokenn（全局区里的 token 次数）、_tail（子命令之后的参数）。
 _parse_globals() {
-  _sockname="" _sockpath="" _sub=""
+  _sockname="" _sockpath="" _sub="" _tokenn=0 _glob_end=0 _tail=()
+  local _n=$# _i=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      -L)  [ $# -ge 2 ] || break; _sockname="$2"; shift 2 ;;
-      -L*) _sockname="${1#-L}"; shift ;;
-      -S)  [ $# -ge 2 ] || break; _sockpath="$2"; shift 2 ;;
-      -S*) _sockpath="${1#-S}"; shift ;;
-      -c|-f|-T) [ $# -ge 2 ] || break; shift 2 ;;        # 带值的全局选项
-      --)  shift; [ $# -gt 0 ] && _sub="$1"; break ;;
-      -*)  shift ;;                               # 其它全局开关（-2 -C -l -u -v -V …）
-      *)   _sub="$1"; break ;;                    # 第一个非选项词 = 子命令
+      -L)
+        [ $# -ge 2 ] || { _i=$((_i + 1)); shift; break; }
+        _sockname="$2"; _i=$((_i + 2)); shift 2 ;;
+      -L*) _sockname="${1#-L}"; _i=$((_i + 1)); shift ;;
+      -S)
+        [ $# -ge 2 ] || { _i=$((_i + 1)); shift; break; }
+        _sockpath="$2"; _i=$((_i + 2)); shift 2 ;;
+      -S*) _sockpath="${1#-S}"; _i=$((_i + 1)); shift ;;
+      -c|-f|-T)
+        [ $# -ge 2 ] || { _i=$((_i + 1)); shift; break; }
+        _i=$((_i + 2)); shift 2 ;;
+      --)
+        # `--` 之后的第一个词是子命令位：token 只认它**之前**的全局参数位
+        _glob_end=$((_i + 1)); _i=$((_i + 1)); shift
+        [ $# -gt 0 ] && { _sub="$1"; _i=$((_i + 1)); shift; }
+        _tail=("$@"); return 0 ;;
+      --teamsmith-allow-destructive) _tokenn=$((_tokenn + 1)); _i=$((_i + 1)); shift ;;
+      -*) _i=$((_i + 1)); shift ;;            # 其它全局开关（-2 -C -l -u -v -V …）
+      *)  _glob_end="$_i"; _sub="$1"; _i=$((_i + 1)); shift; _tail=("$@"); return 0 ;;
+    esac
+  done
+  _glob_end="$_i"
+  _tail=()
+}
+# 空数组在 set -u 下的展开（bash < 4.4 会报 unbound）：有元素才展开
+_parse_globals ${_shim_argv[@]+"${_shim_argv[@]}"}
+
+# ── 破坏性集合 → 具体子命令：四个 kill-*；tmux 允许前缀写法（kill-s 之类），多个候选 = 前缀有歧义 ──
+_destructive=0 _kind=""
+case "$_sub" in
+  kill-*)
+    _hits=""
+    for _cand in kill-server kill-session kill-window kill-pane; do
+      case "$_cand" in "$_sub"*) _hits="${_hits:+$_hits }$_cand" ;; esac
+    done
+    case "$_hits" in
+      '') ;;
+      *' '*) _destructive=1; _kind="ambiguous" ;;
+      *)     _destructive=1; _kind="$_hits" ;;
+    esac ;;
+esac
+
+# ── 子命令之后的参数 → 有效 -t 与加宽旗标 -a（tmux 的 args_parse 语义：最后一个 -t 胜出；
+#    `-t x` 与 `-tx` 都认；组合旗标簇逐字符走，`t` 吃掉本词剩余部分或下一个词）──────────────
+# 认不出的旗标 / 位置参数 = 不可证明（默认 socket 上拒；tmux 本来也会报 usage 错）。
+_t_set=0 _t_val="" _widening=0 _unprovable=0
+_parse_target() {
+  _t_set=0 _t_val="" _widening=0 _unprovable=0
+  local _n=$# _i=0 _ch _tailch _skip
+  local -a _a=("$@")
+  while [ "$_i" -lt "$_n" ]; do
+    case "${_a[$_i]}" in
+      -t)
+        if [ $((_i + 1)) -lt "$_n" ]; then _t_val="${_a[$((_i + 1))]}"; _i=$((_i + 2))
+        else _t_val=""; _i=$((_i + 1)); fi
+        _t_set=1 ;;
+      -t*) _t_val="${_a[$_i]#-t}"; _t_set=1; _i=$((_i + 1)) ;;
+      -)   _unprovable=1; _i=$((_i + 1)) ;;
+      -*)
+        _tailch="${_a[$_i]#-}"; _skip=0
+        while [ -n "$_tailch" ]; do
+          _ch="${_tailch%"${_tailch#?}"}"; _tailch="${_tailch#?}"
+          case "$_ch" in
+            a) _widening=1 ;;                         # kill-session -a（加宽）
+            C) : ;;                                   # kill-session -C（清告警）：仍按目标判定
+            t)
+              if [ -n "$_tailch" ]; then _t_val="$_tailch"
+              elif [ $((_i + 1)) -lt "$_n" ]; then _t_val="${_a[$((_i + 1))]}"; _skip=1
+              else _t_val=""; fi
+              _t_set=1; _tailch="" ;;
+            *) _unprovable=1 ;;
+          esac
+        done
+        _i=$((_i + 1 + _skip)) ;;
+      *) _unprovable=1; _i=$((_i + 1)) ;;              # 这些子命令不收位置参数（tmux 会报 usage）
     esac
   done
 }
-_parse_globals "$@"
+if [ "${#_tail[@]}" -gt 0 ]; then _parse_target "${_tail[@]}"; fi
 
 # ── 解析 socket（与 tmux 同源，含**回退**；M41）────────────────────────────────────────────────
 _uid="${UID:-$(id -u 2>/dev/null || echo 0)}"
@@ -146,20 +243,48 @@ else _sock="$_tmpdir/tmux-$_uid/default"
 fi
 _sock="${_sock%/}"   # 尾斜杠归一
 
-# ── 破坏性集合：四个 kill-*；tmux 允许前缀写法（kill-s 之类），前缀命中也按破坏性算 ──────────────
-_destructive=0
-case "$_sub" in
-  kill-server|kill-session|kill-window|kill-pane) _destructive=1 ;;
-  kill-*)
-    for _d9 in kill-server kill-session kill-window kill-pane; do
-      case "$_d9" in "$_sub"*) _destructive=1 ;; esac
-    done ;;
-esac
+# ── 身份绑定（M40 契约的闸门读法）：TEAM_SESSION 只有在 TEAM_ROOT / TEAM_MAIN_ROOT
+#    解析后是 cwd 或它的祖先时才算「调用者自己的」——继承来的会话名不算授权。──────────────
+_identity_bound() {
+  local _r _rr
+  for _r in "${TEAM_ROOT:-}" "${TEAM_MAIN_ROOT:-}"; do
+    [ -n "$_r" ] || continue
+    _rr="$(readlink -f -- "$_r" 2>/dev/null || true)"
+    [ -n "$_rr" ] || _rr="$_r"
+    case "$_shim_cwd/" in "$_rr"/*) return 0 ;; esac
+  done
+  return 1
+}
 
-# ── 三态裁决 ─────────────────────────────────────────────────────────────────────────────────
-_act="pass"
-if [ "$_destructive" = "1" ] && [ "$_sock" = "$_default_sock" ]; then
-  if [ "${TEAM_ALLOW_DESTRUCTIVE_TMUX:-0}" = "1" ]; then _act="override"; else _act="refused"; fi
+# ── 裁决：token > 只读/私有 socket > 默认 socket 上的目标归属 ─────────────────────────────────
+_act="pass" _cls="" _sess=""
+if [ "$_tokenn" -gt 0 ]; then
+  _act="explicit-flag"
+elif [ "$_destructive" = "1" ] && [ "$_sock" = "$_default_sock" ]; then
+  if [ "$_tmpdir_fell_back" = "1" ]; then
+    _cls="fake-isolation"
+  else
+    case "$_kind" in
+      kill-server) _cls="server" ;;
+      ambiguous)   _cls="ambiguous" ;;
+      *)
+        if [ "$_kind" = "kill-session" ] && [ "$_widening" = "1" ]; then _cls="widening"
+        elif [ "$_t_set" != "1" ] || [ -z "$_t_val" ]; then _cls="no-target"
+        elif [ "$_unprovable" = "1" ]; then _cls="unprovable"
+        else
+          _sess="${_t_val%%:*}"
+          case "$_sess" in
+            ''|'%'*|'@'*|'.'|'+'|'-') _cls="not-literal" ;;
+            *)
+              if [ -z "${TEAM_SESSION:-}" ]; then _cls="no-identity"
+              elif [ "$_sess" != "$TEAM_SESSION" ]; then _cls="not-own"
+              elif ! _identity_bound; then _cls="unbound"
+              fi ;;
+          esac
+        fi ;;
+    esac
+  fi
+  [ -n "$_cls" ] && _act="refused" || _act="allowed-owned"
 fi
 
 # ── 记录（尽力而为：写不进去不挡路；FIFO 目标会阻塞写端，直接跳过 —— 日志绝不能挂住调用）────────
@@ -179,10 +304,24 @@ if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
   fi
 fi
 
-# ── 拒绝 / 放行 ──────────────────────────────────────────────────────────────────────────────
+# ── 拒绝解释 / 放行 ──────────────────────────────────────────────────────────────────────────
 if [ "$_act" = "refused" ]; then
-  printf '✗ teamsmith tmux 闸门：已拒绝 %s —— 它解析到默认 socket（%s），会把共用这台 server 的所有项目/会话一起杀掉\n' \
-    "$_sub" "$_sock" >&2
+  case "$_cls" in
+    server)      _why="kill-server 作用于整台 server —— 共享默认 socket 上不存在属于任何项目的命名对象" ;;
+    widening)    _why="kill-session -a 会波及这台共享 server 上除目标外的**所有**会话，没有哪个命名目标能约束它" ;;
+    no-target)   _why="没有给出非空的 -t 目标（空目标等于当前窗口/会话，无法证明它是本项目的命名对象）" ;;
+    not-literal) _why="-t '$_t_val' 不是字面 session 名（%N / @N / :win / . / + / - 这类目标不受 session 约束）" ;;
+    no-identity) _why="环境里没有 TEAM_SESSION —— 无法证明目标是本项目的会话（继承来的身份不算授权）" ;;
+    not-own)     _why="-t '$_t_val' 的 session 段是 '$_sess'，与本项目身份 TEAM_SESSION='${TEAM_SESSION:-}' 不符" ;;
+    unbound)     _why="TEAM_SESSION='${TEAM_SESSION:-}' 没有绑定到调用者（TEAM_ROOT / TEAM_MAIN_ROOT 都不是 cwd '$_shim_cwd' 或它的祖先）—— 继承来的身份不算授权" ;;
+    unprovable)  _why="-t 之外的参数无法解析（tmux 自己会报 usage 错；闸门按「不可证明」拒绝）" ;;
+    ambiguous)   _why="子命令前缀 '$_sub' 在 tmux 里有歧义" ;;
+    fake-isolation) _why="TMUX_TMPDIR 声明的私有目录不可用，真 tmux 会静默回退默认 socket（假隔离）—— 即使 -t 看着是自己的，命中的同名会话也可能是共享 server 上别人的" ;;
+    *)           _why="目标不是本项目自己的命名对象" ;;
+  esac
+  printf '✗ teamsmith tmux 闸门：已拒绝 %s —— %s\n' "$_sub" "$_why" >&2
+  printf '  解析出的 socket：%s（共享默认 server：本机所有项目共用）\n' "$_sock" >&2
+  printf '  调用参数：%s\n' "${_argv:-$_sub}" >&2
   if [ "$_tmpdir_fell_back" = "1" ]; then
     if [ -e "${TMUX_TMPDIR:-}" ]; then
       printf '  ⚠ 这是**假隔离**：TMUX_TMPDIR=%s 不是目录，真 tmux 不会用它（直接报错），私有隔离没有生效\n' \
@@ -193,10 +332,26 @@ if [ "$_act" = "refused" ]; then
     fi
     printf '  修法：先 mkdir -p 那个目录，再 env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<已建目录> tmux …\n' >&2
   fi
-  printf '  确要执行（会记 act=override 日志）：TEAM_ALLOW_DESTRUCTIVE_TMUX=1 %s\n' \
-    "tmux ${_argv:-$_sub}" >&2
-  printf '  或换私有 server：env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<私有目录> tmux …（socket 落到私有目录即放行）\n' >&2
+  printf '  唯一的带内放行（一次性、记 act=explicit-flag）：把 token 放在**子命令之前**：\n' >&2
+  printf '    tmux --teamsmith-allow-destructive %s\n' "${_argv:-$_sub}" >&2
+  printf '  或换私有 server：env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<已 mkdir -p 的私有目录> tmux …（socket 落到私有目录即放行）\n' >&2
   exit 64
 fi
-# 原始 "$@" 逐字节透传（判定副本、执行原件 —— 见文件头「透传保真」）。
-exec "$_real" "$@"
+
+# 执行调用者原始的 argv（判定副本、执行原件 —— 见文件头「透传保真」）；
+# 唯一的过滤是闸门自己的 token：剥掉它，其余逐字节原样。
+if [ "$_tokenn" -eq 0 ]; then
+  exec "$_real" ${_shim_argv[@]+"${_shim_argv[@]}"}
+fi
+_exec_argv=()
+_i=0
+while [ "$_i" -lt "$_shim_argc" ]; do
+  if [ "$_i" -lt "$_glob_end" ] && [ "${_shim_argv[$_i]}" = "--teamsmith-allow-destructive" ]; then
+    _i=$((_i + 1)); continue
+  fi
+  _exec_argv+=("${_shim_argv[$_i]}"); _i=$((_i + 1))
+done
+if [ "${#_exec_argv[@]}" -gt 0 ]; then
+  exec "$_real" "${_exec_argv[@]}"
+fi
+exec "$_real"

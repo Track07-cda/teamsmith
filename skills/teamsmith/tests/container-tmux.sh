@@ -6,7 +6,8 @@
 #   bash skills/teamsmith/tests/container-tmux.sh --with-pi --cmd 'bash skills/teamsmith/tests/pm-box-real.sh'
 #
 # 选项：
-#   --selftest        容器内 tmux 生死（含裸 kill-server）+ 断言宿主 server 指纹前后逐字节不变
+#   --selftest        容器内 tmux 生死（含裸 kill-server）+ M67 泄漏形状（退役键进 server 全局环境）
+#                     + 断言宿主 server 指纹前后逐字节不变
 #
 # 镜像里必须带 **procps**（V18 F-V18-2）：panel-b3 / pm-box-real 这类夹具用 `ps -o args= -p <pid>`
 # 判进程身份，BusyBox 的 ps 不支持这些参数 —— 旧缓存镜像会在容器里制造 6 条假红。镜像探针
@@ -271,6 +272,55 @@ INNER
     say "✗ --selftest：容器内自检失败（exit=$rc，全文 $inner_log）"
     return 1
   fi
+
+  # M67 泄漏形状（R3 第三个 scenario）：容器里起一台 server，它的环境（会被复制进每个 pane）带着退役键
+  # TEAM_ALLOW_DESTRUCTIVE_TMUX=1；从它的 pane 里经闸门跑 kill-server：无 token → exit 64 + act=refused
+  # 且 server 还在；带 --teamsmith-allow-destructive → 执行、容器内 server 消失、记 act=explicit-flag。
+  # 宿主侧只管指纹前后逐字节一致（容器里的默认 socket 不是宿主的）。
+  cat > "$CT_CACHE/leak-inner.sh" <<'INNER'
+set -u
+fail=0
+chk() { # <说明> <期望> <实际>
+  if [ "$2" = "$3" ]; then printf '  ok   %s (%s)\n' "$1" "$3"; else printf '  BAD  %s（期望 %s，实际 %s）\n' "$1" "$2" "$3"; fail=1; fi
+}
+REPO_ROOT="${1:-}"
+SHIM="$REPO_ROOT/skills/teamsmith/scripts/shim"
+LOG=/tmp/m67-leak-calls.log
+: > "$LOG"
+export TEAM_ALLOW_DESTRUCTIVE_TMUX=1          # 泄漏形状：server 由带着退役键的进程启动
+export PATH="$SHIM:$PATH"
+export TEAM_TMUX_REAL="$(command -v tmux)"
+export TEAM_TMUX_CALLS_LOG="$LOG"
+unset TMUX TMUX_PANE
+chk "闸门 shim 在（容器里挂的仓库路径）" "yes" "$([ -x "$SHIM/tmux" ] && printf yes || printf no)"
+tmux new-session -d -s leaksrc 'sleep 120'
+chk "server 全局环境带着退役键（泄漏形状成立）" "TEAM_ALLOW_DESTRUCTIVE_TMUX=1" \
+    "$(tmux show-environment -g TEAM_ALLOW_DESTRUCTIVE_TMUX 2>&1)"
+# ② 无 token：拒绝（exit 64），server 还活着
+rm -f /tmp/m67-leak-first.txt
+tmux new-window -t leaksrc -n refused -d -- bash -c 'tmux kill-server; echo "first=$?" > /tmp/m67-leak-first.txt'
+i=0; while [ "$i" -lt 100 ] && [ ! -s /tmp/m67-leak-first.txt ]; do sleep 0.1; i=$((i+1)); done
+chk "无 token 的 kill-server 被拒（pane 里拿到 exit 64）" "first=64" "$(cat /tmp/m67-leak-first.txt 2>/dev/null)"
+chk "无 token 的 kill-server 记 act=refused" "1" "$(grep -c 'act=refused' "$LOG" 2>/dev/null)"
+chk "拒绝之后 server 还在（没有真的执行）" "alive" "$(tmux ls >/dev/null 2>&1 && printf alive || printf gone)"
+# ③ 带 token：执行（server 消失），记 explicit-flag（pane 随 server 一起死，rc 由 server 消失+ledger 证明）
+tmux new-window -t leaksrc -n flagged -d -- bash -c 'tmux --teamsmith-allow-destructive kill-server'
+i=0; while [ "$i" -lt 100 ] && tmux ls >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done
+chk "带 token 的 kill-server 执行了（容器内 server 消失）" "gone" "$(tmux ls >/dev/null 2>&1 && printf alive || printf gone)"
+chk "带 token 的调用记 act=explicit-flag" "1" "$(grep -c 'act=explicit-flag' "$LOG" 2>/dev/null)"
+chk "ledger 里没有 act=override（该词汇退役）" "0" "$(grep -c 'act=override' "$LOG" 2>/dev/null)"
+exit "$fail"
+INNER
+  leak_log="$CT_CACHE/leak-inner.log"
+  ct_run bash "$CT_CACHE/leak-inner.sh" "$REPO_ROOT" >"$leak_log" 2>&1
+  rc=$?
+  say "M67 泄漏形状夹具（容器内）："
+  sed 's/^/  /' "$leak_log" | head -30
+  if [ "$rc" -ne 0 ]; then
+    say "✗ --selftest：容器泄漏形状夹具失败（exit=$rc，全文 $leak_log）"
+    return 1
+  fi
+
   after="$(host_tmux_fingerprint)"
   say "宿主 tmux 指纹（后）：$after"
   if [ "$before" != "$after" ]; then
