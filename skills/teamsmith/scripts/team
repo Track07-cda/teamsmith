@@ -114,6 +114,7 @@ case "$CMD" in
   reload)             team_cmd_reload "$@" ;;
   changelog)          team_cmd_changelog "$@" ;;
   smoke|test) team_cmd_smoke "$@" ;;
+  perf) team_cmd_perf "$@" ;;
   # 已移除 / 不认识的子命令：在这里就把"该用什么替代"说清楚，
   # 这样别的项目即使会话里还是旧版 skill，也会在使用点得到指引，不需要人额外通知。
   merge|pr)

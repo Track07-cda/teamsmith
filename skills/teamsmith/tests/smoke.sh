@@ -4754,11 +4754,14 @@ rm -rf "$P16_SB_INIT"
 # M28 细化：这条不变量管的是「**产品**不得以容器为后端」，而 tmux 接触型**测试**在容器里跑是用户
 # 拍板的纪律（tests/container-tmux.sh）。所以把「提到测试 harness」的行从豁免里单独放行，
 # 同时用双向夹具钉住它：讲产品依赖容器要报红，讲测试 harness 不报（否则文档只能绕着 podman 写）。
+# M58 同理：**性能套件**（`tests/` 里那个，前门 `team perf`）的参考环境就是钉死门禁镜像 ——
+# 它是测试 harness，不是产品后端；命中 perf 套件的行同样按 harness 放行（豁免仍然**逐行**，
+# 产品语境里的 podman/--container 照旧报红，双向夹具在下面）。
 dep_scope_hits() { # <skill 目录> <init 目录>
   grep -rniE 'podman|\-\-container|看门狗容器|Containerfile' "$1/SKILL.md" "$1/references" "$1/templates" \
       "$2/SKILL.md" "$2/references" "$2/templates" 2>/dev/null \
     | grep -vE '不再需要|不再有|已移除|v1\.12' \
-    | grep -vE 'container-tmux\.sh' || true
+    | grep -vE 'container-tmux\.sh|team perf|perf[.]sh|TEAM_PERF|性能套件' || true
 }
 DEP_HITS="$(dep_scope_hits "$SKILL_DIR" "$SKILL_INIT_DIR")"
 if [ -n "$DEP_HITS" ]; then bad "文档还在把容器当依赖：$(printf '%s' "$DEP_HITS" | head -1)"; else ok "文档不再把容器当前提（只有一个后端）"; fi
@@ -4773,6 +4776,17 @@ if [ -d "$SANDBOX" ]; then
     >> "$DEP_SB/references/troubleshooting.md"
   [ -z "$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")" ] && ok "翻转自测：文档讲「测试 harness 用容器」不误报（M28 新纪律不被旧不变量拦住）" \
     || bad "翻转自测：测试 harness 的容器说明被误报：$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR" | head -1)"
+  # M58 双向：① 讲**性能套件**在参考镜像里跑 → 放行（它也是测试 harness）；
+  #          ② 同一个词写在**产品**语境（不带 perf 标记）→ 照旧报红（豁免逐行，不整文件放行）。
+  rm -rf "$DEP_SB"; cp -r "$SANDBOX" "$DEP_SB"
+  printf '%s\n' 'Run team perf --container to judge the panel red lines inside the pinned image.' >> "$DEP_SB/references/workflows.md"
+  printf '%s\n' 'The console backend runs in a podman container on every host.' >> "$DEP_SB/references/workflows.md"
+  DEP_SB_HITS="$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")"
+  if printf '%s' "$DEP_SB_HITS" | grep -q 'console backend' && ! printf '%s' "$DEP_SB_HITS" | grep -q 'team perf'; then
+    ok "翻转自测：M58 — 性能套件的参考镜像说明放行、产品语境的 podman 照旧报红（豁免逐行）"
+  else
+    bad "翻转自测：M58 豁免双向夹具不成立（$(printf '%s' "$DEP_SB_HITS" | head -2 | tr '\n' ';')）"
+  fi
   rm -rf "$DEP_SB"
 fi
 FORGE_HITS="$(grep -rniE '缺 (gh|glab)|TEAM_VCS=github 但|gh wrapper' "$SKILL_DIR/SKILL.md" "$SKILL_DIR/references" "$SKILL_DIR/templates" "$SKILL_DIR/scripts" "$SKILL_INIT_DIR/SKILL.md" "$SKILL_INIT_DIR/references" "$SKILL_INIT_DIR/templates" 2>/dev/null || true)"
@@ -8935,7 +8949,7 @@ fi
 # cached and never blocks input」+ tasks.md B1（0.1/1.1–1.6）。
 # 分段：27-a 块协议（一帧多块、坏块只坏自己）/ 27-b 源坏 → 只降级那一块 / 27-c 快速读者与旧读者同值 /
 #      27-d 装配红线 + 渲染路径无同步 spawn。真进程部分（按键失真、60s CPU）是
-#      tests/panel-keyprobe.sh 与 tests/panel-cpu.sh（报告里贴日志），smoke 只钉可判定的。
+#      tests/panel-keyprobe.sh 与性能套件里的面板测量（报告里贴日志），smoke 只钉可判定的。
 section "27 · 面板异步数据层（pulse-console B1：块协议 / 块隔离 / 快速读者等价 / 装配时间）"
 
 P27R="$TMP/p27-repo"
@@ -9075,121 +9089,9 @@ else
   ok "27-c 夹具自检：等价断言真的在比一个数（reports=$P27_CANON_REPORTS）"
 fi
 
-# ---- 27-d 装配红线：一帧（不带 tick）的**典型**耗时 ≤ 2s
-# M20 / V16 F-V16-10：旧断言是**单次采样**（安静机器 12 次采样 1240/1409/2030ms → 1 次越线；
-# loadavg 7–8 时 1323/1417/4118ms → 3 次越线；典型成本 1.24–1.6s，余量只有 0.4–0.7s）——
-# 正常团队并发就能碰线，一次假红要浪费整轮复验（~350s）。现在取 5 次采样的**中位**：语义从
-# 「单次不快即坏」变成「典型不快才坏」，预算仍是 2000ms（没有放宽）。单次尖峰由中位吸收；
-# 中位越线才红 —— 「判定自检」把这两个方向都钉住。
-#
-# P26/G2（panel#Frame assembly is asynchronous… MODIFIED）：2000ms / 1% 是**面板**的判定，不是
-# 机器的判定 —— 所以它们只在**测量前提**成立时判：loadavg_1m ≤ 0.75 × 逻辑核数。实测标定：M49 的
-# 假红发生在 load 26–32 / 32 核（0.81–1.0 × 核）；阈值 0.75 × 核（=24）跳过那个形状。前提不成立时
-# **可见地 SKIP**（打印样本、中位、load 与阈值），计数进 P27_TIMING_SKIP（**不是** SKIP_N：14c 拿
-# SKIP_N 审计 FAST 分段），并在结果块里点名 —— SKIP 既不是通过也不是红。
-# 夹具旋钮（**只在夹具模式生效**）：TEAM_SMOKE_FIXTURE=1 打开后，TEAM_SMOKE_LOADAVG /
-# TEAM_SMOKE_CORES / TEAM_SMOKE_FRAME_DELAY_MS 才被采信；裸设置一律**忽略并打印**（否则“负载前提”
-# 就成了“想跳就跳”的后门 —— PM 审查要点②。真路径的三个断点在 §35）。
-P27_TIMING_SKIP=0; P27_TIMING_SKIP_NAMES=""; P27_TIMING_SKIP_LOAD=""
-p27_fixture_on() { [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; }
-p27_ignore_notice() { # <变量名> <值>（走 stderr：调用方常把本函数的结果放进 $( )）
-  printf '  \033[33m忽略 %s=%s\033[0m：只有夹具模式（TEAM_SMOKE_FIXTURE=1）接受注入；真实路径读真值\n' "$1" "$2" >&2
-}
-p27_load_reading() { # → loadavg_1m（夹具模式才认注入）
-  if [ -n "${TEAM_SMOKE_LOADAVG:-}" ]; then
-    if p27_fixture_on; then printf '%s\n' "$TEAM_SMOKE_LOADAVG"; return 0; fi
-    p27_ignore_notice TEAM_SMOKE_LOADAVG "$TEAM_SMOKE_LOADAVG"
-  fi
-  cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?'
-}
-p27_cores() { # → 逻辑核数（夹具模式才认注入）
-  if [ -n "${TEAM_SMOKE_CORES:-}" ]; then
-    if p27_fixture_on; then printf '%s\n' "$TEAM_SMOKE_CORES"; return 0; fi
-    p27_ignore_notice TEAM_SMOKE_CORES "$TEAM_SMOKE_CORES"
-  fi
-  nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0'
-}
-# 前提本身：打印「load / 核数 / 阈值 / 决定」一行，返回 0=成立（照判）、1=不成立（SKIP）。
-# 读数或核数不可用（空/非数字/0）一律算不成立 —— 测不准就不判红。
-p27_perf_premise() {
-  local load cores thr
-  load="$(p27_load_reading)"; cores="$(p27_cores)"
-  case "$cores" in ''|*[!0-9]*) cores=0 ;; esac
-  thr="$(awk -v c="$cores" 'BEGIN { printf "%.2f", 0.75 * c }')"
-  if [ "$cores" -gt 0 ] && awk -v l="$load" -v t="$thr" 'BEGIN { exit !(l <= t) }'; then
-    printf '  负载前提：loadavg %s ≤ 阈值 %s（0.75 × %s 核）→ 成立（照判）\n' "$load" "$thr" "$cores"
-    return 0
-  fi
-  printf '  负载前提：loadavg %s > 阈值 %s（0.75 × %s 核）→ **不成立**（计时断言 SKIP；阈值本身不动）\n' "$load" "$thr" "$cores"
-  return 1
-}
-TIMING_SKIP() { # <断言名> <原因>
-  P27_TIMING_SKIP=$((P27_TIMING_SKIP + 1))
-  P27_TIMING_SKIP_NAMES="${P27_TIMING_SKIP_NAMES}${1} "
-  P27_TIMING_SKIP_LOAD="$(p27_load_reading)"
-  printf '  \033[33mSKIP（负载前提不成立）\033[0m %s —— %s\n' "$1" "$2"
-}
-# 27-d 的判定本体，两层：
-#   p27_assembly_rc    —— **纯判定**（0 绿 / 1 红 / 2 SKIP）：不打印、不计数。夹具与翻转用它，
-#                         这样「预期会红」的夹具不会污染门禁自己的 ✗ 计数（实测踩过：35b 的预期红
-#                         把套件 ✗ 从 0 抬到 1）。
-#   p27_assembly_judge —— 真路径入口（27-d 调用）：先打印前提一行，再按判定记 ok/bad，或记
-#                         TIMING_SKIP（负载前提不成立时）。
-p27_assembly_rc() { # <中位数ms>
-  local med="$1"
-  p27_perf_premise >/dev/null 2>&1 || return 2
-  [ "$med" -le 2000 ] && return 0 || return 1
-}
-p27_assembly_judge() { # <中位数ms> <样本文本> <采样数> → 0 绿 / 1 红 / 2 SKIP
-  # 前提**只评一次**：本函数自己判 premise，不再经 p27_assembly_rc（那一版会评两次，两次读到的
-  # loadavg 可能不同 ⇒ 同一次运行里出现「前提成立」与「SKIP」两句自相矛盾的话；实测在门禁里抓到）。
-  local med="$1" obs="$2" n="$3"
-  if ! p27_perf_premise; then
-    TIMING_SKIP "27-d 装配红线" "loadavg $(p27_load_reading) > 0.75 × $(p27_cores)；样本 ${obs}ms（中位 ${med}ms）—— 判定留给安静机器"
-    return 2
-  fi
-  if [ "$med" -le 2000 ]; then
-    ok "27-d 装配红线：${n} 次采样的中位 ${med}ms ≤ 2000ms（样本 ${obs}ms；采样时 loadavg $(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')）"
-    return 0
-  fi
-  bad "27-d 装配红线：${n} 次采样的中位 ${med}ms（> 2000ms；样本 ${obs}ms；loadavg $(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?') —— 负载前提成立时这就是面板的问题）"
-  return 1
-}
-# TEAM_SMOKE_FRAME_DELAY_MS=<ms>：只给翻转演练用的注入延迟（每个采样都注入 = 每帧都慢）——
-# 正常门禁不设这个变量；设上之后中位必须越线变红（剧场检查：证明新断言没被改成永远绿）。
-P27_SAMPLES=5
-p27_inject_ms() { # → 注入延迟（ms）；只有夹具模式认 TEAM_SMOKE_FRAME_DELAY_MS
-  local v="${TEAM_SMOKE_FRAME_DELAY_MS:-}"
-  if [ -n "$v" ]; then
-    if p27_fixture_on; then printf '%s\n' "$v"; return 0; fi
-    p27_ignore_notice TEAM_SMOKE_FRAME_DELAY_MS "$v"
-  fi
-  printf '0\n'
-}
-P27_INJECT_MS="$(p27_inject_ms)"
-case "$P27_INJECT_MS" in ''|*[!0-9]*) P27_INJECT_MS=0 ;; esac
-P27_INJECT_S="$(awk -v ms="$P27_INJECT_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
-p27_median() { # <数字…> → 中位（调用方保证样本数为奇数）
-  printf '%s\n' "$@" | sort -n | awk '{a[NR] = $1} END {print a[int((NR + 1) / 2)]}'
-}
-P27_OBS=()
-for _p27i in $(seq 1 "$P27_SAMPLES"); do
-  P27_T0="$(date +%s%3N)"
-  p27 $TEAM monitor --print --no-activity >"$TMP/p27-timed.txt" 2>/dev/null
-  [ "$P27_INJECT_MS" -gt 0 ] && sleep "$P27_INJECT_S"   # 注入落在测量窗口里
-  P27_OBS+=("$(( $(date +%s%3N) - P27_T0 ))")
-done
-P27_MS="$(p27_median "${P27_OBS[@]}")"
-P27_OBS_TXT="$(printf '%s, ' "${P27_OBS[@]}")"
-P27_OBS_TXT="${P27_OBS_TXT%, }"
-p27_assembly_judge "$P27_MS" "$P27_OBS_TXT" "$P27_SAMPLES" || true
-# 判定自检（不启动进程，只测判定本身）：① 单次越线不红；② 中位越线必须红。
-# 少了这两条，『中位』这个判定自己坏了（比如排序写错、取错元素）也看不出来。
-if [ "$(p27_median 1240 1417 2030 1400 1500)" -le 2000 ] && [ "$(p27_median 2100 2050 2200 1900 2300)" -gt 2000 ]; then
-  ok "27-d 判定自检：单次越线（2030ms）仍判绿、中位越线（2100ms）判红"
-else
-  bad "27-d 判定自检：中位判定坏了（$(p27_median 1240 1417 2030 1400 1500) / $(p27_median 2100 2050 2200 1900 2300)）"
-fi
+# ---- 27-d 渲染路径无同步 spawn + JSON 形状
+# 装配时间红线（帧预算 / 前提 / 中位）已**搬进性能套件**（M58 · perf-suite-split）：正确性门禁不判任何
+# 墙钟时长；双向守卫 tests/gate-guard.sh 盯着「门禁里没有判定标记 / 性能套件带着标记」。
 p27 $TEAM monitor --json >"$TMP/p27-json.json" 2>/dev/null
 if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=d["panel"]; assert set(["project","timestamp","interval","standby","pm","pending","outbox","capacity","agents","recent"]).issubset(p)' "$TMP/p27-json.json" 2>/dev/null; then
   ok "27-d JSON 形状：健康夹具下 panel 的块字段一个不少（只增不减）"
@@ -11265,148 +11167,34 @@ assert_eq "34⑥ 排队阶段一次 tmux 都没调（shim 日志为空）" "$(gr
 assert_eq "34⑥ 看板一个字节没动" "$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)" "$P34_BOARD_BEFORE"
 p34_release
 
-section "35 · 性能前提：负载门与夹具旋钮的边界（P26/G2：panel#Frame assembly is asynchronous… MODIFIED）"
-# 红线本身没动：一帧 2000ms、稳态 1% 单核。变的是**什么时候判** —— 只在
-# `loadavg_1m ≤ 0.75 × 逻辑核数` 时判；前提不成立就打印实测值 + load 并 **SKIP**（既不是通过也不是红）。
-# 两个方向都在这里钉住（PM 审查要点②：“负载前提”不能退化成“想跳就跳”）：
-#   （i）夹具模式下三种结局 + 边界（=阈值算成立、阈值 +0.1 算不成立）；
-#   （ii）**真路径下**（不打开夹具开关）注入被忽略且**不改变判定**，且忽略是打印出来的。
-P35_CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
-if [ "${P35_CORES:-0}" -gt 0 ] 2>/dev/null; then
-  P35_THR="$(awk -v c="$P35_CORES" 'BEGIN { printf "%.2f", 0.75 * c }')"
-  P35_EDGE="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", t }')"
-  P35_OVER="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", t + 0.1 }')"
-  P35_QUIET="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", (t > 1.0) ? t - 1.0 : 0 }')"
-  ok "35 夹具自检：核数 ${P35_CORES} → 阈值 ${P35_THR}（0.75 × 核数），边界用例用 ${P35_EDGE} / ${P35_OVER}"
-else
-  bad "35 夹具自检：读不到逻辑核数（nproc / getconf 都没给）—— 阈值用例自己都站不住"
-  P35_THR=0.75; P35_EDGE=0.75; P35_OVER=0.85; P35_QUIET=0
-fi
-# 真测一次注入：夹具模式下注入被采信，且它真的把一次采样抬过 2000ms 红线
-P35_SLOW=0
-export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_FRAME_DELAY_MS=2600
-P35_INJ="$(p27_inject_ms)"
-unset TEAM_SMOKE_FIXTURE TEAM_SMOKE_FRAME_DELAY_MS
-case "$P35_INJ" in
-  ''|*[!0-9]*) bad "35 注入自检：夹具模式下 TEAM_SMOKE_FRAME_DELAY_MS 没被采信（读到 '$P35_INJ'）" ;;
-  *)
-    P35_T0="$(date +%s%3N)"
-    sleep "$(awk -v ms="$P35_INJ" 'BEGIN { printf "%.2f", ms / 1000 }')"   # 与 27-d 的注入同形（采样窗口里多睡一觉）
-    P35_SLOW=$(( $(date +%s%3N) - P35_T0 ))
-    if [ "$P35_SLOW" -gt 2000 ]; then
-      ok "35 注入自检：夹具模式采信注入（${P35_INJ}ms）→ 一次采样实测 ${P35_SLOW}ms（> 2000ms 红线）"
-    else
-      bad "35 注入自检：注入没把测量抬过线（实测 ${P35_SLOW}ms）"
-    fi ;;
-esac
-# —— 三种结局（用真的慢样本值，不是编造的中位数）
-p35_rc() { # <loadavg> <median ms> → 纯判定（不打印、不计数）
-  local load="$1" med="$2" rc=0
-  export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$load" TEAM_SMOKE_CORES="$P35_CORES"
-  p27_assembly_rc "$med" || rc=$?
-  unset TEAM_SMOKE_FIXTURE TEAM_SMOKE_LOADAVG TEAM_SMOKE_CORES
-  P35_LAST_RC=$rc
-}
-p35_rc "$P35_OVER" "$P35_SLOW"
-assert_eq "35a 负载超前提 + 慢帧 → SKIP（不是红、不是绿）" "$P35_LAST_RC" "2"
-p35_rc "$P35_QUIET" "$P35_SLOW"
-assert_eq "35b 负载低于前提 + 同一个慢帧 → **红**（红线没被前提拿走）" "$P35_LAST_RC" "1"
-p35_rc "$P35_QUIET" 1200
-assert_eq "35c 负载低于前提 + 健康帧 → 绿" "$P35_LAST_RC" "0"
-# —— 边界：等于阈值算成立（≤），阈值 +0.1 算不成立
-p35_rc "$P35_EDGE" 1200
-assert_eq "35d 边界：loadavg == 阈值（${P35_EDGE}）算前提成立（≤）" "$P35_LAST_RC" "0"
-p35_rc "$P35_OVER" 1200
-assert_eq "35d 边界：loadavg 阈值 +0.1（${P35_OVER}）算不成立" "$P35_LAST_RC" "2"
-# —— SKIP 的**可见性**（真跑一次判定本体，把输出收进日志）：
-#    这一段在**子 shell** 里跑 —— SKIP 会加到 P27_TIMING_SKIP，而那是「这一轮真跑的门禁跳过了几条
-#    计时断言」的计数（结果块会打印它，复验记录只看 25 行尾）。夹具造的 SKIP 混进去就是假信号
-#    （实测：真实门禁的结果块里出现过 "loadavg 24.10" 这种夹具里的数）。
-#    M51：子 shell 里的计数必须**只数本段自己**那一次跳过 —— 继承来的 P27_TIMING_SKIP（真 27-d 在同一
-#    轮里跳过几次，取决于跑机核数 × 负载）以前也被数进去：同一份代码在 32 核机器上绿（真 27-d 不跳），
-#    在 4 核 CI runner 上红（loadavg 6.39 > 0.75 × 4 → 真 27-d 跳过 → 1 继承 + 1 自己的 = 2，期望 [1]）。
-#    所以进子 shell 先归零：断言与跑机的核数/负载无关（`p35_skip_probe` 也用于下面的反向夹具）。
-P35_FAIL_BEFORE="$FAIL"
-P35_SKIP_BEFORE="$P27_TIMING_SKIP"
-p35_skip_probe() { # <判定次数> → stdout 一行 SUBSHELL_TIMING_SKIP=<只数本段自己的跳过数>
-  local n="$1" i
-  ( export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$P35_OVER" TEAM_SMOKE_CORES="$P35_CORES"
-    P27_TIMING_SKIP=0     # ← 只数本段自己的跳过；继承来的不计（M51 的 CI 假红就是这么来的）
-    for ((i = 0; i < n; i++)); do
-      p27_assembly_judge "$P35_SLOW" "$P35_SLOW, $P35_SLOW, $P35_SLOW" 5
-    done
-    printf 'SUBSHELL_TIMING_SKIP=%s\n' "$P27_TIMING_SKIP"
-  )
-}
-# 断言本体抽成一个比较函数：真断言与反向夹具用**同一个比较**，反向夹具才能证明它不是恒真。
-p35_own_skip_ok() { [ "${1:-}" = "1" ]; }   # <子 shell 里只数自己的计数>
-p35_skip_probe 1 >"$P34D/g-over.log" 2>&1
-P35_SUB_SKIP="$(sed -n 's/^SUBSHELL_TIMING_SKIP=//p' "$P34D/g-over.log" | tail -1)"
-assert_match "$P34D/g-over.log" 'SKIP（负载前提不成立）' "35e 打印了可见 SKIP"
-assert_match "$P34D/g-over.log" "loadavg ${P35_OVER}" "35e SKIP 行带了实测 load"
-assert_match "$P34D/g-over.log" "${P35_SLOW}ms" "35e SKIP 行带了实测中位（${P35_SLOW}ms）"
-assert_eq "35e SKIP 不计成 bad（✗ 计数没动）" "$FAIL" "$P35_FAIL_BEFORE"
-if p35_own_skip_ok "${P35_SUB_SKIP:-0}"; then
-  ok "35e 子 shell 里的 SKIP 计数 = 1（只数本段自己那一次；与跑机核数/负载无关）"
-else
-  bad "35e 子 shell 里的 SKIP 计数 ≠ 1（期望 [1]，实际 [${P35_SUB_SKIP:-0}]）—— 是不是把继承来的跳过也数进去了？"
-fi
-assert_eq "35e 夹具的 SKIP **没有**泄进本轮门禁的计时跳过计数" "$P27_TIMING_SKIP" "$P35_SKIP_BEFORE"
-assert_eq "35e SKIP_N（FAST 分段审计用）没有被计时 SKIP 污染" "$([ "$P27_TIMING_SKIP" -ne "$SKIP_N" ] || [ "$P27_TIMING_SKIP" -eq 0 ] && echo yes || echo no)" "yes"
-# —— 反向夹具（M51）：把子 shell 里的判定跑**两次** → 计数必须是 2，且**同一个比较**必须判红。
-#    少了这条，把断言改成恒真（或数错计数器）也看不出来。两个方向都不依赖跑机核数/负载：
-#    load/cores 是夹具注入的，计数从 0 起。
-p35_skip_probe 2 >"$P34D/g-over2.log" 2>&1
-P35_SUB_SKIP2="$(sed -n 's/^SUBSHELL_TIMING_SKIP=//p' "$P34D/g-over2.log" | tail -1)"
-assert_eq "35e 反向夹具：同一形状跑两次判定 → 子 shell 计数 = 2（计数器本身没坏）" "${P35_SUB_SKIP2:-0}" "2"
-if p35_own_skip_ok "${P35_SUB_SKIP2:-0}"; then
-  bad "35e 反向夹具：真的多跳一次（计数 ${P35_SUB_SKIP2:-无}）时同一个断言仍判绿 —— 断言被改成了恒真"
-else
-  ok "35e 反向夹具：真的多跳一次（计数 ${P35_SUB_SKIP2:-无}）时同一个断言判红（不是恒真）"
-fi
-
-# —— 真路径：不打开夹具开关时，两个注入键都被忽略且**不改变判定**（PM 审查要点②）
-P35_REAL_LOAD="$(p27_load_reading)"
-export TEAM_SMOKE_LOADAVG=9999 TEAM_SMOKE_FRAME_DELAY_MS=99999 TEAM_SMOKE_CORES=1
-P35_FAKE_LOAD="$(p27_load_reading)"
-P35_FAKE_INJ="$(p27_inject_ms)"
-if p27_perf_premise >/dev/null 2>&1; then P35_REAL_DEC=hold; else P35_REAL_DEC=skip; fi
-unset TEAM_SMOKE_LOADAVG TEAM_SMOKE_FRAME_DELAY_MS TEAM_SMOKE_CORES
-assert_eq "35f 真路径：注入的 loadavg 被忽略（读到真值 ${P35_REAL_LOAD}）" "$P35_FAKE_LOAD" "$P35_REAL_LOAD"
-assert_eq "35f 真路径：注入的慢帧延迟被忽略（拆成 0）" "$P35_FAKE_INJ" "0"
-if [ "$P35_REAL_DEC" = "hold" ]; then
-  ok "35f 真路径：前提判断只由真读数决定（当前真读数成立）"
-else
-  ok "35f 真路径：前提判断只由真读数决定（当前真读数不成立→SKIP；这是机器真的忙，不是注入）"
-fi
-if p27_fixture_on; then bad "35f 夹具开关自检：本段结束后 TEAM_SMOKE_FIXTURE 不该还开着"; else ok "35f 夹具开关自检：本段没有把 TEAM_SMOKE_FIXTURE 留在环境里"; fi
-
-section "36 · panel-cpu 的负载前提（P26/G3：panel#Frame assembly is asynchronous… MODIFIED）"
-# 四个形状要真起 tmux 私有 server + 真面板（~1 分钟），所以全量模式跑、FAST 显式跳过。
-# 夹具自己会在真机不安静时可见 SKIP/finding —— 不拿机器噪声当面板结论。
-if [ -f "$SKILL_DIR/tests/panel-cpu-premise.sh" ]; then
-  if [ "$FAST" = "1" ]; then
-    fast_skip "36·panel-cpu-premise" "要真 tmux 窗格 + 真面板（~1 分钟）；FAST 不跑真进程"
+section "35 · 门禁只判正确性：性能判定守卫 + 旋钮完整性（M58 · perf-suite-split）"
+# 用户决定 D33：性能判定与正确性门禁分开（规格：openspec/changes/perf-suite-split）。本段是**纯逻辑**，
+# FAST 与全量都跑，不起 tmux / node / 任何测量：
+#   ① 双向机械守卫（tests/gate-guard.sh）：门禁本体里不得残留任何性能判定标记（帧预算/份额常量、旧判定
+#      函数、注入旋钮、时长比较）或测量夹具的点名；性能套件必须带着那组命名单源标记（「偷懒式搬迁」：
+#      从门禁删了但没落地 → 红）；旋钮完整性助手必须在岗且走 premise-only 模式。
+#   ② 旋钮完整性（tests/panel-knobs.sh，时间无关的 d-realpath）：三个面板旋钮在夹具开关关着时被忽略
+#      并打印，premise 行只反映真读数；不判任何时长。
+# 翻转（apply 报告里真跑过）：把判定塞回本文件 → 守卫红；从性能套件移除标记 → 守卫红；还原 → 绿。
+if [ -f "$SKILL_DIR/tests/gate-guard.sh" ]; then
+  if bash "$SKILL_DIR/tests/gate-guard.sh" >"$TMP/p35-guard.log" 2>&1; then
+    ok "35 守卫：门禁无性能判定标记、无测量夹具点名；旋钮助手与性能套件标记两侧都在"
   else
-    live_mark
-    P36_OUT="$TMP/p36-premise.log"
-    TEAM_PANEL_CPU_SECS="${TEAM_PANEL_CPU_SECS:-6}" bash "$SKILL_DIR/tests/panel-cpu-premise.sh" >"$P36_OUT" 2>&1
-    P36_RC=$?
-    P36_LINE="$(grep -a '== 结果 ==' "$P36_OUT" | tail -1 | sed 's/\x1b\[[0-9;]*m//g')"
-    if [ "$P36_RC" = "0" ]; then
-      ok "36 panel-cpu-premise 全绿（${P36_LINE:-无结果行}）"
-      grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/^/      /' || true
-    elif [ "$P36_RC" = "4" ]; then
-      # exit 4 = 没结论：负载前提不成立，**或**环境缺树 CPU 图要的 GNU time（M51）—— 原因由夹具自己
-      # 那一行 SKIP 说明，门禁不替它猜（以前这里写死「因负载前提」，缺工具时会误报原因）。
-      ok "36 panel-cpu-premise 可见 SKIP（exit 4 = 没结论；$(grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/\x1b\[[0-9;]*m//g')）"
-    else
-      bad "36 panel-cpu-premise 有失败项（rc=$P36_RC；${P36_LINE:-无结果行}）"
-      sed 's/\x1b\[[0-9;]*m//g' "$P36_OUT" | grep -aE '✗' | head -6 | sed 's/^/      /'
-    fi
+    bad "35 守卫：$(sed -n 's/^bad: //p' "$TMP/p35-guard.log" | head -1)"
+    sed -n 's/^bad: /      /p' "$TMP/p35-guard.log" | head -6
   fi
 else
-  bad "36 缺 tests/panel-cpu-premise.sh"
+  bad "35 守卫：缺 tests/gate-guard.sh（门禁的性能判定守卫没了）"
+fi
+if [ -f "$SKILL_DIR/tests/panel-knobs.sh" ]; then
+  if bash "$SKILL_DIR/tests/panel-knobs.sh" >"$TMP/p35-knobs.log" 2>&1; then
+    ok "35 旋钮完整性（时间无关）：$(sed -n 's/^== 结果 == //p' "$TMP/p35-knobs.log" | tail -1)"
+  else
+    bad "35 旋钮完整性：$(sed -n 's/^== 结果 == //p' "$TMP/p35-knobs.log" | tail -1)"
+    grep -a '✗' "$TMP/p35-knobs.log" | head -4 | sed 's/^/      /'
+  fi
+else
+  bad "35 旋钮完整性：缺 tests/panel-knobs.sh（旋钮不得漏进真路径的检查没了）"
 fi
 # ---------------------------------------------------------------- 37. 读路径：根一次解析 + 单进程扫描（M50）
 # 实测现场（M50 任务书，PM 在 main 上量的）：BOARD.md 只有 141 行，`team digest` 却要 89 秒 ——
@@ -11602,12 +11390,6 @@ section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
-# P26/G2（2.3）：计时断言因负载前提 SKIP 时，结果块里必须有一行点名 —— 复验记录只留 tail -25，
-# 而门禁（门禁命令在 review 里）正是从这一块看到「为什么这一轮没有性能判定」。SKIP 不改变退出码。
-if [ "${P27_TIMING_SKIP:-0}" -gt 0 ]; then
-  printf '\033[33m计时断言按负载前提跳过 %d 条：%s（loadavg %s）—— SKIP 既不是通过也不是失败，阈值未改\033[0m\n' \
-    "$P27_TIMING_SKIP" "${P27_TIMING_SKIP_NAMES% }" "${P27_TIMING_SKIP_LOAD:-?}"
-fi
 if [ "$FAST_REQ" = "1" ]; then
   printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \
     "$SKIP_N" "${SKIP_SEGS#|}"

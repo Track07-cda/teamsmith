@@ -77,6 +77,7 @@ board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign I
   teardown [--agent a] [--all] [--purge]  关窗口 / 删 worktree（--purge 才删 worktree）
 
   smoke           在临时仓库里端到端自测这套工具（不碰当前项目）
+  perf            性能判定（交互首帧 / 帧装配 / 稳态窗格 CPU）：默认在参考镜像里跑；--host = 宿主（非参考环境）
   ── 版本与更新（skill 更新怎么拿到） ─────────────────────────
   mark-loaded [--version X]   记录本会话加载的 skill 版本（PM 开局跑一次）
   version [--check]           看磁盘版本 / SKILL.md 版本 / CHANGELOG / 本会话加载版本；--check 给结论
@@ -399,6 +400,10 @@ team_cmd_doctor() {
   fi
 
   check "门禁 TEAM_GATES"; if [ -n "$TEAM_GATES" ]; then pass "$TEAM_GATES"; else warn "未配置门禁命令：复验无法自动判定，只能靠人读 diff"; fi
+  # M58：性能套件在不在 —— 性能判定已从正确性门禁搬到它身上；缺了是「下一步」（更新 skill），不是硬失败。
+  check "perf suite"; if [ -f "$TEAM_SKILL_DIR/tests/perf.sh" ]; then
+      pass "存在（$TEAM_CLI perf --container ｜ $TEAM_CLI perf --host）"
+    else warn "缺 tests/perf.sh：性能判定没地方跑 → 重新安装/更新 skill（pi install 或换到含 M58 的版本）"; fi
   # M29：名册为空不再是失败（PM-only 开局合法）；真正拦住的是 dispatch（没有 agent 可用）。
   check "名册 TEAM_AGENTS"
   if [ -n "$(team_agents)" ]; then pass "$(team_agents | tr '\n' ' ')"

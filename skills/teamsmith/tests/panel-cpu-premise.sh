@@ -107,6 +107,7 @@ machine_quiet=0
 awk -v l="$real_load" -v t="$quiet_gate" 'BEGIN { exit !(l <= t) }' && machine_quiet=1
 run_case c-healthy - TEAM_SMOKE_FIXTURE=1 TEAM_PANEL_CPU_LOADAVG="$below" TEAM_PANEL_CPU_CORES="$cores" -- \
   'load premise: loadavg .* <= '
+C_OUT="$LAST_OUT"   # M58：c-healthy 的原始日志（给 tests/perf.sh 的机读读数用；d-* 会把 LAST_OUT 改掉）
 C_FF="$(sed -n 's/.*-> median \(never\|[0-9]*\) (budget.*/\1/p' "$LAST_OUT" | head -1)"
 C_PANE="$(sed -n 's/.*-> median \([0-9.]*\)% (overall.*/\1/p' "$LAST_OUT" | tail -1)"
 C_RC="${LAST_RC:-?}"
@@ -150,6 +151,13 @@ case "$D_RC" in
     ;;
   *) bad "panel-cpu-premise d-realpath：退出码 $D_RC 既不是 0/4（期望集合）也不是 2（可解释）" ;;
 esac
+
+# M58：给 tests/perf.sh 的机读读数（**附加输出**：不改任何断言/期望/退出码语义）。
+# c-healthy 是「真机 + 注入前提成立」的测量案例 —— 它的首帧/窗格 CPU 中位就是红线判定 ①③ 的读数；
+# 上面的 ok/finding/bad 行是给人读的，这里给套件一份稳定形状。
+printf '== perf-readings ==\n'
+printf 'first_frame_line=%s\n' "$(sed -n 's/^== first frame: //p' "${C_OUT:-}" 2>/dev/null | head -1)"
+printf 'pane_cpu_line=%s\n' "$(sed -n 's/^== pane CPU thirds: //p' "${C_OUT:-}" 2>/dev/null | tail -1)"
 
 printf '\n== 结果 ==  ✓ %d  ✗ %d finding %d\n' "$PASS" "$FAIL" "$FIND"
 if [ "$FAIL" -gt 0 ]; then

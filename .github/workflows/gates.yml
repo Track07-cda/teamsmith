@@ -67,3 +67,28 @@ jobs:
             -v "$PWD:/work:ro" -w /work \
             teamsmith-gates:ci \
             bash -c 'openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null'
+
+  # M58 (perf-suite-split): the performance suite is a **second, independent conclusion**. It runs the
+  # same script in the same pinned image on its own runner (so it never contends with the correctness
+  # job), and the step is tolerated (`continue-on-error: true`): its red stays visible in the log and as
+  # an annotation without failing this workflow — a failing performance run neither blocks a merge nor
+  # changes the correctness conclusion. The numbers to record before a release come from this run (see
+  # docs/team/PUBLISH.md). Nothing here adds a merge-blocking path; the correctness job above is unchanged.
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build the gate image
+        run: docker build -f ci/Containerfile -t teamsmith-gates:ci .
+
+      - name: Performance suite (pinned container, non-blocking)
+        continue-on-error: true
+        run: |
+          docker run --rm --pid=host \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD:/work:ro" -w /work \
+            teamsmith-gates:ci \
+            bash -c 'bash skills/teamsmith/tests/perf.sh --in-container --tree /work'

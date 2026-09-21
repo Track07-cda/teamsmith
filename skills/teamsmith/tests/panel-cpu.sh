@@ -79,6 +79,19 @@ pc_premise() {
   printf '== load premise: loadavg %s > %s (%s x %s cores) -> NOT held (skip)\n' "$load" "$thr" "$PREMISE_FACTOR" "$cores"
   return 1
 }
+# ── 前提自述模式（M58/B1 1.7）：只打印前提行与每个注入旋钮的忽略行，**不测量、不起任何进程**。
+# 这是 d-realpath 承诺的时间无关形态（正确性门禁每轮都跑它，经 tests/panel-knobs.sh）：夹具开关关着时，
+# 注入的 TEAM_PANEL_CPU_* 必须被忽略并打印，前提行必须反映真读数。它不判任何时长，退出 0。
+if [ "${TEAM_PANEL_CPU_PREMISE_ONLY:-0}" = "1" ]; then
+  # pc_premise 自己会把注入的 LOADAVG / CORES 走 pc_load/pc_cores 读一遍（真路径即打印忽略行）。
+  if [ -n "${TEAM_PANEL_CPU_FRAME_DELAY_MS:-}" ]; then
+    if pc_fixture_on; then :; else pc_notice TEAM_PANEL_CPU_FRAME_DELAY_MS "$TEAM_PANEL_CPU_FRAME_DELAY_MS"; fi
+  fi
+  pc_premise || true             # 前提一行（真读数；不成立也照打）
+  printf 'panel-cpu: premise-only 模式（裸读数 + 旋钮忽略声明；没有起进程、没有测量、没有判定）\n'
+  exit 0
+fi
+
 refresh="${TEAM_PANEL_CPU_REFRESH:-3}"
 interval=5
 sock="p12cpu-$$"

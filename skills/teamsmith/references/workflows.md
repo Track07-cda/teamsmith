@@ -193,6 +193,25 @@ A worker uses the same tools (its prompt says so) — that is how a worker can r
 turn. A CLI without the Pi extension API does not have them: fall back to a background tmux window
 ([troubleshooting.md](troubleshooting.md) §17).
 
+### E3. Performance is a separate run (and a release step)
+
+The gate above judges **correctness only** — `openspec validate --all --strict && bash
+skills/teamsmith/tests/smoke.sh </dev/null` (front door `team smoke`). The wall-clock/CPU red lines (interactive
+first frame, frame assembly, steady-state pane CPU) live in a separate suite, are never part of a review, and are
+run **once before a release** in the reference image:
+
+```bash
+bash <skill>/scripts/team perf --container   # reference environment: the pinned ci/Containerfile image (default)
+bash <skill>/scripts/team perf --host        # this machine, explicitly labelled NOT the reference
+```
+
+Exit `0` = all three judgements ran green; `2` = a red with its measured numbers; `4` = no conclusion (a visible
+SKIP: the load premise does not hold, the machine lacks a tool, or the reference engine/image is missing — the
+reason, the measured values and the exact build/run command are printed); `3` = setup failure. The suite takes its
+own lock (`TEAM_PERF_LOCK`, `TEAM_PERF_LOCK_WAIT`) and never queues behind the gate lock. Record the numbers where
+the release checklist says (`docs/team/PUBLISH.md`); a red performance run never delays a merge and never changes a
+review verdict.
+
 ## F. Merging and wrapping up
 
 **Without a PR (local mode)**:

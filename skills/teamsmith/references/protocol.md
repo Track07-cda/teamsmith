@@ -438,15 +438,23 @@ hard timeout: the queue is its own bounded phase, the record accounts it separat
 a queue that exceeds the cap is `FAIL` with the holder named (never `TIMEOUT`), a run that really overruns is still
 `TIMEOUT` with `ran=Ns`, and `SMOKE_LOCK_WRAPPED=1` tells a nested run that an ancestor already holds the lock (so
 it does not queue again and cannot deadlock against its own suite). Without `flock` the degradation is printed.
-The two panel numbers in the gate (an uncached frame ≤ 2000 ms, steady state < 1 % of one core) are verdicts about
-the panel, so they are only judged when the machine is below the **load premise** `loadavg_1m ≤ factor × logical
-cores` — `0.75` for the gate's five-sample median assembly assertion, `0.25` for `panel-cpu.sh`'s cold-start
-first frame and sampled pane CPU (`TEAM_PANEL_CPU_PREMISE_FACTOR`), and both of those single-sample numbers are
-the **median of three** with all three samples printed; above it the assertion prints the measured value(s) and the load and **skips visibly** (its own counter,
-named in the run's summary; `panel-cpu.sh` uses exit 4 for the same reason) rather than reporting a red the machine
-owes. The thresholds themselves are never scaled or relaxed, and the fixture knobs that substitute a load reading
-(`TEAM_SMOKE_LOADAVG`, `TEAM_PANEL_CPU_LOADAVG`, …) only work under `TEAM_SMOKE_FIXTURE=1`. The contracts live in
-the specs (`verification#The hard timeout covers the gate run, not the queue`,
+The gate judges **correctness only**: it contains no wall-clock or CPU-share red line, and a pure-logic guard in the
+gate's own sources (`tests/gate-guard.sh`) fails when a frame-budget/CPU-share marker reappears in it or when the
+performance suite loses its markers. The three panel numbers — the interactive first frame, the uncached frame
+assembly and the steady-state pane CPU — belong to the **performance suite**
+(`bash skills/teamsmith/tests/perf.sh`, front door `team perf`): the thresholds (`2000 ms` / `2000 ms` / `< 1 %` of
+one core), the premise factors (`0.75` for the five-sample assembly median, `0.25` for the cold-start first frame
+and the sampled pane CPU, `TEAM_PANEL_CPU_PREMISE_FACTOR`) and the median-of-three/five rules are unchanged, every
+sample is printed, and above the premise the judgement **skips visibly** (exit `4` for a skip, `2` for a red, `0`
+only when every judgement ran green) rather than reporting a red the machine owes. The suite takes its **own** lock
+(`TEAM_PERF_LOCK`, `TEAM_PERF_LOCK_WAIT`, holder in `<lock>.holder`) and **never** takes `TEAM_SMOKE_LOCK`: it does
+one read-only non-blocking probe of the gate lock and prints the holder when the correctness gate is running, but
+it never queues behind it. The gate's lock accounting (`limit=Ns queued=Ns ran=Ns`), the fixture-knob rule (those
+`TEAM_*` knobs only work under `TEAM_SMOKE_FIXTURE=1`, and in the real path they are ignored and printed) and the
+gate's time-independent half of that check (`tests/panel-knobs.sh`) are unchanged; a red performance run changes no
+review verdict. The contracts live in the specs (`verification#The correctness gate judges correctness only`,
+`verification#The performance suite is separate, self-describing and non-blocking`,
+`verification#The hard timeout covers the gate run, not the queue`,
 `panel#Frame assembly is asynchronous, cached and never blocks input`); this section is the operational rule.
 
 ## 9c. Strong verification (adversarial package + finding flips, for milestones)

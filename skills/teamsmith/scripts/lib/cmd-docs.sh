@@ -130,3 +130,11 @@ team_cmd_smoke() {
   [ -f "$t" ] || team_die "缺 $t"
   bash "$t" "$@"
 }
+
+# M58 · perf-suite-split：性能套件的前门（与 smoke 并列，但**不**属于正确性门禁）。
+# 默认在参考环境（ci/Containerfile 的钉死镜像）里跑；--host = 宿主（明确标注非参考环境）。
+team_cmd_perf() {
+  local t="$TEAM_SKILL_DIR/tests/perf.sh"
+  [ -f "$t" ] || team_die "缺 $t（性能套件）"
+  bash "$t" "$@"
+}
