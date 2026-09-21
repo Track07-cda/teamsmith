@@ -4,8 +4,10 @@
 #   bash skills/teamsmith/tests/perf.sh                    # 默认：参考环境（钉死镜像）——同 --container
 #   bash skills/teamsmith/tests/perf.sh --container        # 参考环境：ci/Containerfile 的钉死镜像
 #   bash skills/teamsmith/tests/perf.sh --in-container     # 镜像内自述（外层容器调用的内部形状）：只认镜像
-#                                                          # ENV 的身份信号 TEAM_PERF_PINNED_CONTAINER=1（M66），
-#                                                          # 缺失/不符 → 可见拒绝 exit 3（绝不把宿主谎报成参考环境）
+#                                                          # 自身的双重身份证明（M66→M69）：ENV 身份信号
+#                                                          # TEAM_PERF_PINNED_CONTAINER=1 + rootfs 标识文件
+#                                                          # /etc/teamsmith-gate-image（内容逐字节等于封闭 token），
+#                                                          # 缺哪个/错哪个点名哪个 → 可见拒绝 exit 3
 #   bash skills/teamsmith/tests/perf.sh --host             # 宿主：明确标注「非参考环境」
 #   bash skills/teamsmith/tests/perf.sh --tree DIR         # 测哪棵树（默认：本文件所在的 checkout）
 #
@@ -19,12 +21,15 @@
 #
 # 退出码：**0** 全部判定都跑了且绿；**2** ≥1 红（红压过跳过）；**4** 没有红但 ≥1 可见 SKIP
 #         （含裁决环境缺引擎/镜像时的降级）——没结论；**3** 搭建失败（缺 tmux / JS 运行时 / 面板 bundle）
-#         或 --in-container 的身份信号缺失/不符（M66：拒绝以参考环境自居）。
+#         或 --in-container 的身份证明缺失/不符（M66→M69：拒绝以参考环境自居）。
 #
 # 环境姿态（design D4）：
 #   · 参考环境 = `ci/Containerfile` 的钉死镜像；`--host` 明确标注「非参考环境」。
-#   · --in-container 只信镜像 ENV 的身份信号 TEAM_PERF_PINNED_CONTAINER=1（M66 · M64 F2）：在镜像外
-#     直跑一律可见拒绝 exit 3，宿主读数绝不记在参考环境名下。
+#   · --in-container 只信镜像自身的双重身份证明（M66 · M64 F2 → M69）：① 镜像 ENV 的身份信号
+#     TEAM_PERF_PINNED_CONTAINER=1（单独不够 —— 导出的变量宿主也能伪造，M64 F2 复验成立）且
+#     ② rootfs 标识文件 /etc/teamsmith-gate-image 内容逐字节等于封闭 token（/run/.containerenv
+#     不能当证据：开发宿主本身就是 distrobox，那文件在宿主也存在）。缺哪个/错哪个点名哪个，
+#     可见拒绝 exit 3，宿主读数绝不记在参考环境名下；老镜像（无标识文件）同样 exit 3 并点名重建。
 #   · 引擎/镜像缺失 → 打印原因 + 精确的 build/run 命令 + 「参考环境不可用，本次为宿主判定，结论不作为
 #     验收依据」，宿主读数照打但**不计成结论**（全部记 SKIP）→ exit 4。绝不静默把宿主数当参考。
 #   · 锁：自己的 TEAM_PERF_LOCK（flock --close -w + holder）；**从不**拿正确性门禁的 TEAM_SMOKE_LOCK，
@@ -53,8 +58,10 @@ usage() {
 用法：bash skills/teamsmith/tests/perf.sh [--host | --container] [--tree DIR]
 
   --container   在参考环境（ci/Containerfile 的钉死镜像）里跑；默认就是它。
-  --in-container （镜像内部用）声明「我在钉死镜像里」：必须带着镜像 ENV 的身份信号
-                 TEAM_PERF_PINNED_CONTAINER=1，缺失/不符 → 可见拒绝 exit 3（M66）。
+  --in-container （镜像内部用）声明「我在钉死镜像里」：必须带着镜像自身的双重身份证明
+                 —— ① 镜像 ENV 的身份信号 TEAM_PERF_PINNED_CONTAINER=1 且 ② rootfs 标识文件
+                 /etc/teamsmith-gate-image（内容逐字节等于封闭 token）；缺哪个/错哪个点名哪个，
+                 可见拒绝 exit 3（M66→M69）。
   --host        在宿主上跑，并标注「非参考环境」。
   --tree DIR    被测 checkout（默认：本文件所在的 checkout）。
   --help        这一屏。
@@ -84,19 +91,45 @@ say()  { printf '%s\n' "$*"; }
 hdr()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 note() { printf '  \033[33mℹ\033[0m %s\n' "$*"; }
 
-# ── 钉死容器的身份信号（M66 · M64 F2：--in-container 不得把宿主谎报成参考环境）────────────────
-# ci/Containerfile 的 `ENV TEAM_PERF_PINNED_CONTAINER=1` 是镜像的**身份信号**（不是调优旋钮）：
-# --in-container 只信它，不信调用者的口头声明；缺失/不符 → 可见拒绝 exit 3。哪天 CI/发版把它叫错
-# 地方，红绿都不会被记在「参考环境」名下。信号必须在拿锁/搭建**之前**验：宿主误叫连锁都不沾。
+# ── 钉死镜像的身份证明（M66 · M64 F2 → M69：--in-container 不得把宿主谎报成参考环境）────────
+# 双重校验，两份证据都必须来自镜像自身，缺哪个/错哪个点名哪个（exit 3）：
+#   ① 环境信号 TEAM_PERF_PINNED_CONTAINER=1 —— ci/Containerfile 的 ENV。单独它**不够**：导出的
+#      变量宿主也能伪造（M64 F2 复验：宿主导出信号后套件把宿主 node 自述成「参考环境」）。
+#   ② 标识文件 PERF_IMAGE_IDENTITY_FILE —— ci/Containerfile 的 RUN 落在镜像 rootfs 里，内容必须
+#      逐字节等于封闭 token PERF_IMAGE_IDENTITY_TOKEN（版本变动时跟着变）。宿主没有它；
+#      /run/.containerenv 不能顶它（开发宿主本身是 distrobox，那文件宿主也有 —— PM 实测）。
+# 信号必须在拿锁/搭建**之前**验：宿主误叫连锁都不沾。
+PERF_IMAGE_IDENTITY_FILE=/etc/teamsmith-gate-image
+PERF_IMAGE_IDENTITY_TOKEN='teamsmith-gate:1'
 perf_pinned_signal_rc() { [ "${TEAM_PERF_PINNED_CONTAINER:-}" = "1" ]; }
+# 标识文件：0 = 存在且内容逐字节等于 token；1 = 缺失/不可读；2 = 内容不符。
+perf_image_identity_rc() { # [file]（参数仅供自检；真路径用上面的硬编码常量）
+  local f="${1:-$PERF_IMAGE_IDENTITY_FILE}"
+  [ -r "$f" ] || return 1
+  printf '%s\n' "$PERF_IMAGE_IDENTITY_TOKEN" | cmp -s - "$f" || return 2
+  return 0
+}
 perf_require_pinned_container() {
-  perf_pinned_signal_rc && return 0
-  local cur="缺失"
-  [ -n "${TEAM_PERF_PINNED_CONTAINER:-}" ] && cur="值是「${TEAM_PERF_PINNED_CONTAINER}」而不是 1"
-  printf 'perf: 拒绝以参考环境自居 —— --in-container 只认钉死镜像的身份信号 TEAM_PERF_PINNED_CONTAINER=1（当前：%s）。\n' "$cur" >&2
+  local fail=0 cur id_rc=0
+  if ! perf_pinned_signal_rc; then
+    cur="缺失"
+    [ -n "${TEAM_PERF_PINNED_CONTAINER:-}" ] && cur="值是「${TEAM_PERF_PINNED_CONTAINER}」而不是 1"
+    printf 'perf: 身份证明 ① 不符 —— 环境身份信号 TEAM_PERF_PINNED_CONTAINER=1（当前：%s）；它只能由镜像 ENV 带着，调用者 -e/导进来的不算数。\n' "$cur" >&2
+    fail=1
+  fi
+  perf_image_identity_rc || id_rc=$?
+  case "$id_rc" in
+    0) ;;
+    1) printf 'perf: 身份证明 ② 缺失 —— 镜像标识文件 %s 不存在/不可读；钉死镜像的 rootfs 里带着它（ci/Containerfile 的 RUN）。老镜像没有它 → 请按下面命令重建镜像。\n' "$PERF_IMAGE_IDENTITY_FILE" >&2
+       fail=1 ;;
+    2) printf 'perf: 身份证明 ② 不符 —— 标识文件 %s 的内容不是期望的封闭 token「%s」（逐字节比较）；这不是本套件认的钉死镜像。\n' "$PERF_IMAGE_IDENTITY_FILE" "$PERF_IMAGE_IDENTITY_TOKEN" >&2
+       fail=1 ;;
+  esac
+  [ "$fail" = "0" ] && return 0
+  printf 'perf: 拒绝以参考环境自居 —— --in-container 要求双重身份证明都在且都来自镜像自身（① 环境信号 + ② 标识文件），上面点名的就是缺的/错的。\n' >&2
   printf '      不在钉死容器里：要么进镜像跑（--container 会自己起容器，缺镜像时打印 build/run 命令；或 CI 形状\n' >&2
   printf '      podman run … bash -c '"'"'… perf.sh --in-container'"'"'），要么改用 --host（非参考环境，结论不作为验收依据）。\n' >&2
-  printf '      宿主读数绝不记在参考环境名下。（exit 3）\n' >&2
+  printf '      重建参考镜像：<engine> build -f ci/Containerfile -t teamsmith-gate:local . ；宿主读数绝不记在参考环境名下。（exit 3）\n' >&2
   exit 3
 }
 
@@ -239,7 +272,7 @@ perf_print_build_run() {
   say "  在参考环境里跑：${eng:-<engine>} run --rm --userns=keep-id --pid=host --cgroups=enabled -e HOME=/tmp \\"
   say "      -v \"$tree:/work:ro\" -w /work teamsmith-gate:local \\"
   say "      bash -c 'bash /work/skills/teamsmith/tests/perf.sh --in-container'"
-  say "  （--in-container 只认镜像里的身份信号 TEAM_PERF_PINNED_CONTAINER=1：镜像外直跑 → 可见拒绝 exit 3；宿主判定用 --host）"
+  say "  （--in-container 只认镜像自身的双重身份证明：ENV 信号 TEAM_PERF_PINNED_CONTAINER=1 + 标识文件 /etc/teamsmith-gate-image；缺哪个/错哪个 → 可见拒绝 exit 3；宿主判定用 --host）"
   say "  （放行引擎/镜像也可显式指定：TEAM_PERF_ENGINE、TEAM_PERF_IMAGE）"
 }
 perf_main_repo() { # → 工作树之外的 git common dir 的父目录（容器里挂上它，worktree 的 .git 才解析得动）
@@ -271,9 +304,10 @@ perf_run_in_container() {
     [ -n "${!k:-}" ] && eng_env+=(-e "$k=${!k}")
   done
   say "参考环境：镜像 $PERF_IMAGE（引擎 ${PERF_ENGINE[*]}）"
-  # 身份信号 TEAM_PERF_PINNED_CONTAINER=1 由镜像自己带着（ci/Containerfile 的 ENV）——故意**不**用
-  # -e 透传：那是镜像的身份证明，调用者传进来的不算数（宿主可以伪造）。旧镜像没这行 ENV → 内层
-  # --in-container 可见拒绝 exit 3，重建镜像即可。
+  # 双重身份证明（ENV 身份信号 TEAM_PERF_PINNED_CONTAINER=1 + rootfs 标识文件
+  # /etc/teamsmith-gate-image）由镜像自己带着（ci/Containerfile 的 ENV 与 RUN）—— 故意**不**用
+  # -e/挂载透传任何一个：那是镜像的身份证明，调用者传进来的不算数（宿主可以伪造，M64 F2）。
+  # 旧镜像没这两行 → 内层 --in-container 可见拒绝 exit 3 并点名，重建镜像即可。
   "${PERF_ENGINE[@]}" run --rm "${opts[@]}" "${eng_env[@]}" "${mounts[@]}" -w /work "$PERF_IMAGE" \
     bash -c 'bash /work/skills/teamsmith/tests/perf.sh --in-container --tree /work'
 }
@@ -467,15 +501,29 @@ perf_self_tests() {
     printf '  \033[31m✗\033[0m 自检 · 中位判定坏了（%s / %s）\n' "$(perf_median 1240 1417 2030 1400 1500)" "$(perf_median 2100 2050 2200 1900 2300)"
     SELFTEST_FAIL=$((SELFTEST_FAIL + 1))
   fi
-  # 身份信号（M66 · M64 F2）：=1 才通过，缺失/其它值一律拒绝 —— --in-container 的谎报守卫用的就是
-  # 这同一个函数；接线（入口先验信号再碰锁）用真 CLI 子进程钉，拒绝必须瞬时（timeout 10：若接线被
-  # 改回「信了口头声明」，子进程会走进锁/套件被杀 → rc≠3 → 红）。
+  # 身份证明（M66 · M64 F2 → M69）：双重校验。① ENV 信号 =1 才通过，缺失/其它值一律拒绝；
+  # ② 标识文件存在且内容逐字节等于封闭 token —— --in-container 的谎报守卫用的就是同一组函数；
+  # 接线（入口先验证明再碰锁）用真 CLI 子进程钉，拒绝必须瞬时（timeout 10：若接线被改回
+  # 「信了口头声明」，子进程会走进锁/套件被杀 → rc≠3 → 红）。
   st_rc=0; ( TEAM_PERF_PINNED_CONTAINER=1; perf_pinned_signal_rc ) || st_rc=$?
   st "身份信号：=1 → 通过" 0 "$st_rc"
   st_rc=0; ( unset TEAM_PERF_PINNED_CONTAINER; perf_pinned_signal_rc ) || st_rc=$?
   st "身份信号：缺失 → 拒绝" 1 "$st_rc"
   st_rc=0; ( TEAM_PERF_PINNED_CONTAINER=0; perf_pinned_signal_rc ) || st_rc=$?
   st "身份信号：=0（被改）→ 拒绝" 1 "$st_rc"
+  # ② 标识文件本体（函数级，夹具文件）：逐字节相等才算数 —— 缺尾换行/多加内容都是「不符」。
+  local idf="$PERF_TMP/identity-token"
+  printf '%s\n' "$PERF_IMAGE_IDENTITY_TOKEN" > "$idf"
+  st_rc=0; perf_image_identity_rc "$idf" || st_rc=$?
+  st "标识文件：内容逐字节等于 token → 通过" 0 "$st_rc"
+  st_rc=0; perf_image_identity_rc "$PERF_TMP/identity-absent" || st_rc=$?
+  st "标识文件：缺失 → 拒绝（缺失）" 1 "$st_rc"
+  printf 'teamsmith-gate:999\n' > "$idf"
+  st_rc=0; perf_image_identity_rc "$idf" || st_rc=$?
+  st "标识文件：token 被改 → 拒绝（不符）" 2 "$st_rc"
+  printf '%s' "$PERF_IMAGE_IDENTITY_TOKEN" > "$idf"
+  st_rc=0; perf_image_identity_rc "$idf" || st_rc=$?
+  st "标识文件：缺尾换行（非逐字节相等）→ 拒绝（不符）" 2 "$st_rc"
   local wir_rc wir_log="$PERF_TMP/m66-wiring.log"
   wir_rc=0
   timeout 10 env -u TEAM_PERF_PINNED_CONTAINER -u TEAM_PERF_LOCK_WRAPPED -u TEAM_PERF_NO_LOCK \
@@ -491,6 +539,23 @@ perf_self_tests() {
   timeout 10 env -u TEAM_PERF_LOCK_WRAPPED -u TEAM_PERF_NO_LOCK TEAM_PERF_PINNED_CONTAINER=0 \
     bash "$self" --in-container >"$wir_log" 2>&1 || wir_rc=$?
   st "入口接线：错信号（=0）→ 真 CLI 可见拒绝 exit 3" 3 "$wir_rc"
+  # M69 接线：ENV 信号齐全但标识文件缺失/不符（= M64 F2 的宿主伪造形状）也必须瞬时拒绝。
+  # 在真镜像里文件本就在 —— 换成钉「镜像里的文件逐字节等于 token」（镜像构建错了在这里红）。
+  if [ ! -e "$PERF_IMAGE_IDENTITY_FILE" ]; then
+    wir_rc=0
+    timeout 10 env -u TEAM_PERF_LOCK_WRAPPED -u TEAM_PERF_NO_LOCK TEAM_PERF_PINNED_CONTAINER=1 \
+      bash "$self" --in-container >"$wir_log" 2>&1 || wir_rc=$?
+    st "入口接线：有 ENV 信号但缺标识文件（宿主伪造形状）→ 真 CLI 可见拒绝 exit 3" 3 "$wir_rc"
+    if [ "$wir_rc" = "3" ] && grep -q 'teamsmith-gate-image' "$wir_log"; then
+      printf '  \033[32m✓\033[0m 自检 · 入口接线：拒绝点名缺镜像标识文件\n'
+    else
+      printf '  \033[31m✗\033[0m 自检 · 入口接线：拒绝没点名标识文件（rc=%s）\n' "$wir_rc"
+      SELFTEST_FAIL=$((SELFTEST_FAIL + 1))
+    fi
+  else
+    st_rc=0; perf_image_identity_rc || st_rc=$?
+    st "入口接线：本机即钉死镜像 —— 标识文件逐字节等于 token" 0 "$st_rc"
+  fi
   # 真路径：夹具开关关着时，三个注入旋钮都被忽略且打印，读数不变。
   if perf_fixture_on; then
     note "自检 · 真路径旋钮忽略：跳过（TEAM_PERF_FIXTURE=1 夹具模式开着，注入按设计生效）"
@@ -587,9 +652,10 @@ rc=0
 if [ "$MODE" = "host" ]; then
   perf_run_suite "host（--host：非参考环境）" no || rc=$?
 elif [ "$IN_CONTAINER" = "1" ]; then
-  # 显式声明 + 身份信号已验（入口在拿锁之前查过 TEAM_PERF_PINNED_CONTAINER=1，缺失/不符早已 exit 3）
-  # ——走到这里才算真的在钉死镜像里。仍**不**用 /.dockerenv、/run/.containerenv 自动判断：distrobox
-  # 也是容器，那样会把开发容器误当参考镜像（实测过：宿主路径与宿主 tmux 混进了「参考环境」的自述里）。
+  # 显式声明 + 双重身份证明已验（入口在拿锁之前查过 ENV 信号与 rootfs 标识文件，缺失/不符早已
+  # exit 3 并点名）——走到这里才算真的在钉死镜像里。仍**不**用 /.dockerenv、/run/.containerenv
+  # 自动判断：distrobox 也是容器（/run/.containerenv 在开发宿主上就存在，PM 实测），那样会把开发
+  # 容器误当参考镜像（实测过：宿主路径与宿主 tmux 混进了「参考环境」的自述里）。
   perf_run_suite "container（参考环境：钉死镜像）" yes || rc=$?
 else
   # 默认（含 --container）：参考环境；引擎/镜像不可用时**可见降级**（A2）——宿主读数照打、

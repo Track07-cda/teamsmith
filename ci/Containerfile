@@ -96,12 +96,20 @@ ENV LANG=en_US.UTF-8 \
     SHELL=/bin/bash \
     HOME=/root
 
-# Identity signal, NOT a tuning knob (M66 / M64 F2): this is the image's proof of identity.
-# `perf.sh --in-container` trusts this flag — and only this flag — as evidence that it really
-# runs inside the pinned reference image; anywhere else (host, distrobox, a foreign image) the
-# missing/mismatched signal makes it refuse visibly with exit 3 instead of recording host
-# numbers under the "reference environment" name. Callers must not pass it in via `-e`: it is
-# the image declaring what it is, not the caller declaring where it runs.
+# Identity proof, NOT a tuning knob (M66 / M64 F2 → M69): the image declares what it is with
+# TWO pieces of evidence, both baked into the image itself, and `perf.sh --in-container`
+# requires both before it calls anything the "reference environment":
+#   1. the env signal TEAM_PERF_PINNED_CONTAINER=1 below — necessary but NOT sufficient: an
+#      exported variable is forgeable from the host (verify's M64 F2 reproduction), so M69
+#      added the marker file;
+#   2. the marker file /etc/teamsmith-gate-image in the image rootfs, whose content must equal
+#      the closed token byte-for-byte. (/run/.containerenv cannot play this role: the dev host
+#      is itself a distrobox and carries that file too.)
+# Missing/mismatch of either is named and refused with exit 3 instead of recording host numbers
+# under the "reference environment" name. Callers must not pass either in via `-e`/mounts: it
+# is the image declaring what it is, not the caller declaring where it runs. Bump the token
+# (here and in perf.sh's PERF_IMAGE_IDENTITY_TOKEN) when the image identity changes.
+RUN printf 'teamsmith-gate:1\n' > /etc/teamsmith-gate-image
 ENV TEAM_PERF_PINNED_CONTAINER=1
 
 WORKDIR /work
