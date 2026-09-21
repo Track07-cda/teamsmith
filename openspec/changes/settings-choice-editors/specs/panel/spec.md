@@ -5,11 +5,31 @@
 An editable row's editor SHALL take its options from the owning command's read — `team config list --json`'s
 `choices` object for the key, the same payload the `settings` block carries — and from nowhere else: the bundle
 MUST NOT carry a per-key option table, and a key or a value added to the command's schema MUST be offered without
-rebuilding `panel.js`. The editor SHALL build its entries in this order: the file's value marked as current (only
-when the file carries the key), the schema's default marked as default (only when non-empty), the distinct
-`choices.values` in their order, and then the kind's own entries. Accepting an entry (keyboard or click) SHALL
-place that value in the write editor this view already uses and SHALL NOT write anything; an editor whose entry
-list would be empty MUST NOT render an empty line — it opens the free-text editor and names the reason.
+rebuilding `panel.js`. The editor SHALL be built from the `settings` block already on screen, and it SHALL build
+its entries in this order: the file's value marked as current (only when the file carries the key), the schema's
+default marked as default (only when non-empty), the distinct `choices.values` in their order, and then the kind's
+own entries. An editor whose entry list would be empty MUST NOT render an empty line — it opens the free-text
+editor and names the reason.
+
+**Accepting an entry** (keyboard or click) SHALL be one interaction, not the start of a second editor. For the
+value entries — `current`, `default`, each `choices.values` entry and `clear` — the console SHALL ask the owning
+command for the validation it already uses (`team config set <KEY> <VALUE> --dry-run`, a read that writes
+nothing) and, when the command accepts it, SHALL perform the write immediately (`team config set <KEY> <VALUE>
+--yes --fingerprint <the fingerprint of the read the editor was built from>`) and SHALL draw the receipt the
+command settles with — no confirmation frame and no free-text step on that path. The danger rule keeps its one
+exception: a value the command reports as dangerous SHALL NOT be written by that first accept, the confirmation
+line SHALL carry the warning, and one more accept SHALL write it with the command's danger allowance. The
+free-text entry is the **only** entry that opens the compose editor, and it SHALL keep that editor's validation
+**and** confirmation unchanged. `keep-unset` SHALL cancel with nothing written, no audit line and no temporary
+file left behind; a value the command refuses SHALL write nothing and its reason SHALL be the receipt.
+
+**Responsiveness is a behavior, not a budget.** Opening the editor, moving in it, accepting an entry and opening
+the free-text entry MUST NOT wait on a new read of the owning command: no `team config list`/`__panel-data`
+invocation may stand between the keystroke and the frame that answers it, and the fingerprint the direct write
+carries SHALL be the one the read that built the editor produced. A contract changed under the editor is the
+command's conflict verdict — the receipt names it and the view reloads — not a reason to re-read before every
+action. After a write settles the console SHALL re-read the `settings` block in the background and adopt it when
+it lands; the receipt frame SHALL come from the write's own settle and MUST NOT be held by that re-read.
 
 Per kind:
 
@@ -41,28 +61,34 @@ effect is to cancel with nothing written, no audit line and no temporary file le
 removal operation and the view MUST NOT pretend otherwise.
 
 The editor SHALL be keyboard- and mouse-complete: `↑`/`↓` move the entry focus, `enter` accepts the focused entry,
-a click on an entry accepts it as `enter` does, the wheel scrolls an entry list longer than the visible budget,
-`esc` closes the editor back to the row list with the row focus where it was, and the free-text entry opens the
-compose editor by keyboard and by click alike.
+a click on an entry moves the cursor to it and a click on the focused entry accepts it as `enter` does, the wheel
+scrolls an entry list longer than the visible budget, `esc` closes the editor back to the row list with the row
+focus where it was, and the free-text entry opens the compose editor by keyboard and by click alike.
 
 #### Scenario: A bool key is chosen from two labelled entries
 
 - **GIVEN** a fixture contract whose `TEAM_NOTIFY_TMUX` the file does not carry (schema default `1`) and, in a
   second run, one carrying `TEAM_NOTIFY_TMUX='0'`
-- **WHEN** the row's editor opens in a 160-column fixture pane in each run
+- **WHEN** the row's editor opens in a 160-column fixture pane in each run, and in the second run the `1` entry is
+  accepted
 - **THEN** the first editor lists exactly the two entries `1`/`0` with the tables' on/off words and the default
-  marker on `1`, and the second marks `0` as current and `1` as default
-- **AND** neither editor renders a free-text entry and no rendered line is an empty box
+  marker on `1`, and the second marks `0` as current and `1` as default, and neither editor renders a free-text
+  entry and no rendered line is an empty box
+- **AND** the accept writes `TEAM_NOTIFY_TMUX='1'` — the wrapper's argv log carries `config set TEAM_NOTIFY_TMUX 1
+  --dry-run` and then the same invocation with `--yes` and the fingerprint the editor's read carried, no
+  confirmation line renders between the two, the contract changed once, the audit grew one line, and the receipt
+  names the class's timing
 
 #### Scenario: An enum offers exactly its constraints
 
 - **GIVEN** the real schema's `TEAM_MONITOR_UI` (`constraints` `auto,tui,text`, default `auto`) in a fixture
-  contract that does not carry it
+  contract that does not carry it, with the contract's sha256 and audit length recorded
 - **WHEN** its editor opens and `tui` is accepted
-- **THEN** the entries are exactly `auto`, `tui`, `text` in that order with the default marker on `auto`, no
-  free-text entry exists, and `tui` lands in the write editor while the contract's sha256 is unchanged
-- **AND** the write goes through `team config set TEAM_MONITOR_UI tui --dry-run` and then `--yes`, and the
-  receipt carries the `restart` class's timing
+- **THEN** the entries are exactly `auto`, `tui`, `text` in that order with the default marker on `auto`, and no
+  free-text entry exists
+- **AND** the accept writes `tui`: the log carries `team config set TEAM_MONITOR_UI tui --dry-run` and then the
+  same with `--yes` and the fingerprint, no confirmation frame exists on the way, the sha256 changed, the audit
+  grew exactly one line, and the receipt carries the `restart` class's timing
 
 #### Scenario: A new enum key and a new enum value need no console change
 
@@ -86,15 +112,19 @@ compose editor by keyboard and by click alike.
 - **AND** the same run's `team config list --json` carries no `sub2api` value in `choices.values` or in
   `models.known`
 
-#### Scenario: A numeric key suggests values and still takes a free number
+#### Scenario: A numeric key suggests values and its free-text entry still validates and confirms
 
 - **GIVEN** `TEAM_PULSE_INTERVAL` (`seconds`, `constraints` `60,`, default `900`, suggestion column
-  `300,900,1800,3600`) in a fixture contract that does not carry it, with the contract's sha256 recorded
-- **WHEN** the row's editor opens, and then `30` is typed in the free-text entry and its first `enter` is pressed
+  `300,900,1800,3600`) in a fixture contract that does not carry it, with the contract's sha256 recorded, and the
+  wrapper's argv log cleared
+- **WHEN** the row's editor opens and its free-text entry is accepted, `30` is typed and the editor's first
+  `enter` is pressed
 - **THEN** the entries carry `300`, `900`, `1800`, `3600` in that order with the default marker on `900`, a
   free-text entry is present, and the editor names the accepted interval `60–` as unbounded
 - **AND** the free-text run receives the owning command's exit 4 naming the minimum, the editor stays open with
-  its draft, and the sha256 is unchanged
+  its draft, nothing was written, and the sha256 is unchanged
+- **AND** a suggestion entry accepted instead takes the direct write of the requirement above — the log carries
+  `--dry-run` then `--yes` with no confirmation frame and no editor for it
 
 #### Scenario: A path key marks existence and offers clear only what the command accepts
 
@@ -103,8 +133,8 @@ compose editor by keyboard and by click alike.
 - **WHEN** each row's editor opens, and then a second missing path is typed into `TEAM_AGENT_BIN`
 - **THEN** `TEAM_AGENT_BIN` offers its current value with a missing mark, a clear entry and a free-text entry,
   while `TEAM_PI_BIN` offers no clear entry, and the typed value carries the missing mark
-- **AND** the confirmation line repeats the mark while still offering the write (the command has no existence
-  check, and the console does not invent a refusal)
+- **AND** the typed value's confirmation line repeats the mark while still offering the write (the command has no
+  existence check, and the console does not invent a refusal)
 
 #### Scenario: A key without a choice set opens free text and names the reason
 
@@ -120,8 +150,9 @@ compose editor by keyboard and by click alike.
 - **WHEN** the row renders and its editor opens on the keep-unset entry, which is then accepted
 - **THEN** the row reads `未设 · 默认 300` and the accept cancels with no compose editor, no write, no audit line,
   no temporary file and an unchanged sha256
-- **AND** opening the editor again and accepting the `300` entry instead opens the write editor holding `300`,
-  and the following two `enter` presses write the key explicitly — the view does not call that an unset
+- **AND** opening the editor again and accepting the `300` entry instead writes `TEAM_DEFER_TTL='300'` on that one
+  accept (validation then write, the fingerprint from the editor's read, no confirmation frame) — the view does
+  not call that an unset and opens no compose editor for it
 
 #### Scenario: The pairlist row routes to the seats block
 
@@ -132,13 +163,41 @@ compose editor by keyboard and by click alike.
 
 #### Scenario: The picker is mouse-complete and writes nothing on cancel
 
-- **GIVEN** the view open on an editable enum row with the mouse preference on and the contract's sha256 and
+- **GIVEN** the view open on an editable enum row with the mouse preference on and the contract's sha256 and audit
+  length recorded
+- **WHEN** a click lands on a non-focused entry, and then `esc` is pressed instead of accepting the focused entry
+- **THEN** the click moves the cursor to that entry without writing anything, `esc` closes the editor back to the
+  row list with the row focus unchanged, the sha256 is unchanged, the audit log did not grow, and the wrapper's
+  argv log carries no `config set`
+- **AND** a second click on the focused entry accepts it as `enter` does and writes it through the same
+  `--dry-run` → `--yes` pair, and a wheel event over an entry list longer than the visible budget scrolls it
+
+#### Scenario: A dangerous value from the options keeps its one confirmation
+
+- **GIVEN** the numeric editor for `TEAM_MIN_FREE_SWAP_MB` with its `0` entry open, the contract's sha256 and the
   audit length recorded
-- **WHEN** a click lands on a non-focused entry, and then `esc` is pressed instead of the write's second `enter`
-- **THEN** the click accepts the entry exactly as `enter` does and the value reaches the write editor, `esc`
-  closes it back to the row list with the row focus unchanged, the sha256 is unchanged, the audit log did not
-  grow, and the wrapper's argv log carries no `config set`
-- **AND** a wheel event over an entry list longer than the visible budget scrolls it
+- **WHEN** the `0` entry is accepted
+- **THEN** the confirmation line carries the danger warning, the sha256 is unchanged, the audit did not grow, the
+  log carries no `config set … --yes`, and nothing was written
+- **AND** when the focused entry is accepted again the value is written with the command's danger allowance and the
+  receipt names the guard that is now off
+
+#### Scenario: A conflict under the editor is refused and nothing is overwritten
+
+- **GIVEN** an editor open on its fingerprint and a second writer replacing the contract's bytes
+- **WHEN** an entry is accepted
+- **THEN** the receipt names the conflict, the contract is byte-identical to the second writer's version, the view
+  reloads and shows that writer's value, and `state/config.log` gained one `result=conflict` line
+
+#### Scenario: The interaction path never waits on a read
+
+- **GIVEN** a fixture project whose CLI is a wrapper logging its argv, and the view open on the contract's rows
+- **WHEN** a row's editor is opened, the focus moves, an entry is accepted and a free-text entry is opened
+- **THEN** the log carries no `config list`/`__panel-data` invocation between each keystroke and the frame that
+  answered it — the editor is built from the `settings` block the view already read
+- **AND** the accept's first child is `config set … --dry-run` and the write that follows it is the second, with
+  the fingerprint the editor's read carried; the settle's re-read of the `settings` block is the only read that
+  follows, it runs in the background, and the receipt frame renders without waiting for it
 
 ## MODIFIED Requirements
 
@@ -148,19 +207,22 @@ An editable row's `enter` SHALL open the row's editor: the **choice editor** (th
 the command's read reports a choice set for the key, and otherwise a one-line value editor that is the compose
 line's editor (the insertion point, pi's key map, the windowed draft — the `panel` requirement that owns it)
 holding the file's value, or the schema's default when the key is not in the file. Whichever editor opened, the
-value it leaves — the entry the human accepted, or the text they typed — SHALL be the draft this requirement's
-confirmation and write then consume, and the editor selection MUST NOT change any step below. `enter` in the
-editor SHALL NOT write: it SHALL ask the owning
-command for a validation (`team config set … --dry-run`, a read that writes nothing) and, when accepted, show a
-confirmation line with the key, the old value, the new value and the class's timing (and, for a `restart` class,
-the exact restart command); a second `enter` SHALL perform the write by invoking `team config set … --yes` as a
-subprocess, and `esc` SHALL cancel with nothing written, no audit line and no temporary file left behind. A value
-the command reports as dangerous SHALL NOT be written on the first `enter`: the confirmation line SHALL carry the
-warning and require one more `enter`. The receipt SHALL be one honest line mapped from the command's exit code —
-written (with the class's timing), refused as read-only, rejected as invalid (naming the accepted domain),
-refused because the file changed under the editor, or a write error that says the file was left unchanged — and
-MUST NOT be parsed from human prose. On a conflict the view SHALL reload the contract and display the other
-writer's value; on any settle the list and the audit tail SHALL be re-read. The console MUST NOT open the
+value it leaves — the entry the human accepted, or the text they typed — SHALL be the write this requirement's
+validation and writer then consume, and the editor selection MUST NOT change any step below. In the **free-text
+editor** `enter` SHALL NOT write: it SHALL ask the owning command for a validation (`team config set … --dry-run`,
+a read that writes nothing) and, when accepted, show a confirmation line with the key, the old value, the new
+value and the class's timing (and, for a `restart` class, the exact restart command); a second `enter` SHALL
+perform the write by invoking `team config set … --yes` as a subprocess, and `esc` SHALL cancel with nothing
+written, no audit line and no temporary file left behind. For a value the human **accepted from the choice
+editor**, the same validation and the same write SHALL happen on that accept — `--dry-run` first, then `--yes`
+with the fingerprint the editor's read carried — and no confirmation frame SHALL be drawn, except for a value the
+command reports as dangerous: that SHALL NOT be written by the first accept however it was chosen, the
+confirmation line SHALL carry the warning and require one more `enter`. The receipt SHALL be one honest line
+mapped from the command's exit code — written (with the class's timing), refused as read-only, rejected as invalid
+(naming the accepted domain), refused because the file changed under the editor, or a write error that says the
+file was left unchanged — and MUST NOT be parsed from human prose. On a conflict the view SHALL reload the
+contract and display the other writer's value; on any settle the list and the audit tail SHALL be re-read in the
+background, and that re-read MUST NOT hold the receipt frame. The console MUST NOT open the
 contract for writing itself: every byte of `.pi/team/config.sh` changes through the owning command (the wrapper's
 argv log is the evidence), and a `restart`-class write SHALL NOT claim it took effect — the running console keeps
 the old value until it is restarted, and the receipt says so. The panel MUST NOT offer an action that restarts
