@@ -127,6 +127,21 @@ if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
   [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && printf '轮到本套了（排过队）\n'
   printf '%s pid=%s cmd=smoke.sh\n' "$(date -Is)" "$$" > "$SMOKE_LOCK.holder" 2>/dev/null || true
 fi
+# ── P26/G1（1.4）：套件自己的子树上，绝不再去争**机器锁** ────────────────────────────────────
+# 背景：M49 的假 TIMEOUT 就是「门禁命令自己会在机器锁上排队」——修在 cmd-review.sh（排队是 review
+# 自己的阶段），但夹具侧也要封住：一个嵌在门禁里的 `team review` 绝不能替**套件**去碰机器锁。
+#   * 全量模式：本套**已经**持有机器锁（SMOKE_LOCK_WRAPPED=1）→ 嵌套 review 走 held 路径，不排队；
+#   * FAST 模式：本套不持锁（秒级、不起真进程），若不管，一个夹具里的 review 就会和别人正在跑的
+#     全量门禁抢机器锁、白等 1800s（甚至与夹具自己的锁自锁）—— 所以这里给子树一个**私有**锁路径
+#     与 wrapped 标记（夹具自己还会再指一层私有锁，见 tests/smoke.sh 的新段落）。
+# 真实门禁路径（不带 TEAM_SMOKE_FAST）不受影响：全量依旧持真锁，没有锁的人依旧排队。
+if [ "$FAST" = "1" ]; then
+  if [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
+    TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/teamsmith-smoke-fast-$$.lock"
+    export TEAM_SMOKE_LOCK
+  fi
+  export SMOKE_LOCK_WRAPPED=1
+fi
 live_mark() { LIVE_RAN=$((LIVE_RAN + 1)); }
 fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯一的出口（必须打印）
   SKIP_N=$((SKIP_N + 1))
@@ -461,8 +476,14 @@ if [ -n "$JS_RUNNER" ]; then
   # P16：两个 skill 都必须是合法可加载的（解析器期望的 name = 目录名）。
   for P16_SD in "$SKILL_DIR" "$SKILL_INIT_DIR"; do
     P16_SL="$TMP/skill-load-$(basename "$P16_SD").log"
-    if $JS_RUNNER "$SKILL_DIR/tests/skill-load.mjs" "$P16_SD" >"$P16_SL" 2>&1; then
+    $JS_RUNNER "$SKILL_DIR/tests/skill-load.mjs" "$P16_SD" >"$P16_SL" 2>&1
+    P16_RC=$?
+    if [ "$P16_RC" = "0" ]; then
       ok "skill-load $(basename "$P16_SD")：$(head -1 "$P16_SL")"
+    elif [ "$P16_RC" = "2" ]; then
+      # 退出码 2 = **本机没有 pi 的解析器**（skill-load.mjs 自己打印 SKIP 行），不是 skill 不合法。
+      # M47：这是环境缺失，必须是可见 skip 而不是假红（runner 上没有 pi；装了 pi 的机器照旧跑）。
+      cond_skip "skill-load $(basename "$P16_SD")" "$(head -1 "$P16_SL")"
     else
       bad "skill-load 失败（$(basename "$P16_SD")）"; cat "$P16_SL"
     fi
@@ -948,6 +969,9 @@ assert_not "$TMP/doctor-help-stderr.log" "版本过旧" "M39：--help 走 stderr
 section "4 · task + board"
 $TEAM task T1.1 --title "Smoke task" --agent dev --deps "-" >"$TMP/task.log" 2>&1 || bad "task 失败"
 TASKFILE="$(ls "$REPO"/docs/team/tasks/T1.1-*.md 2>/dev/null | head -1)"
+# P24（B3）：派单守卫要求「没有 change 的任务书必须声明锚」。模板渲染的 `anchor: -` 是待填空，
+# 夹具在这里补上 infra 锚 —— 否则本节要测的（分支身份/脏树/容量/提示词/adapter）根本走不到守卫之后。
+sed -i 's|^anchor: -.*$|anchor: none (infra) — smoke fixture (test scaffolding, no product requirement)|' "$TASKFILE"
 assert_file "$TASKFILE" "生成任务书"
 assert_has "$TASKFILE" "agent:  dev" "任务书含 agent 字段"
 assert_has "$TASKFILE" "true" "任务书写入门禁命令"
@@ -1001,6 +1025,89 @@ env TEAM_BOARD_DONE_FORCE=0 $TEAM board set T9.8 done >"$TMP/done-ancestor.log" 
   && ok "分支已并入保护分支 → 允许 done" || bad "条件② 没生效（分支真的落地了却被拒）"
 assert_has "$TMP/done-ancestor.log" "已经是 main 的祖先" "成功输出写明证据是分支落地"
 assert_has "$TMP/done-ancestor.log" "T9.8-dev.md" "成功输出点名分支里那份已提交的报告（M9.6）"
+
+# ---------------------------------------------------------------- 4c. 看板重复 ID（M48）
+section "4c · 看板重复 ID（M48）：add 拒绝 / --allow-dup / 三处可见"
+M48_BOARD="$REPO/docs/team/BOARD.md"
+M48_BAK="$TMP/m48-board.bak"
+cp "$M48_BOARD" "$M48_BAK"
+M48_BEFORE="$(md5sum "$M48_BOARD" | cut -d' ' -f1)"
+# 拒绝路径：T1.1 已在表里 → 再 add 一个同 ID 必须非 0、点名状态与标题、给出两条出路，且一个字节都不写
+if $TEAM board add T1.1 "重复的一条" dev - >"$TMP/m48-dup.log" 2>&1; then bad "M48：重复 ID 的 board add 应当被拒"; else ok "M48：重复 ID 被拒（非 0）"; fi
+assert_has "$TMP/m48-dup.log" "BOARD 里已经有 T1.1" "M48：报错点名已存在的 ID"
+assert_has "$TMP/m48-dup.log" "Smoke task" "M48：报错点名已存在那一行的标题"
+assert_has "$TMP/m48-dup.log" "状态 todo" "M48：报错点名已存在那一行的状态"
+assert_has "$TMP/m48-dup.log" "改 ID" "M48：给出第一条出路（改 ID 里程碑编号）"
+assert_has "$TMP/m48-dup.log" "--allow-dup" "M48：给出第二条出路（显式旗标）"
+assert_has "$TMP/m48-dup.log" "watchdog.log" "M48：说明旗标会留审计"
+assert_has "$TMP/m48-dup.log" "board assign" "M48：拒绝时给出「指派 agent」的正确入口（不许逼人用 add 撞）"
+assert_not "$TMP/m48-dup.log" "✓ board add" "M48：被拒时不打印成功行"
+assert_eq "M48：被拒时 BOARD 逐字节未变" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_BEFORE"
+assert_eq "M48：被拒时没有多出同 ID 行" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "1"
+# 未知旗标照旧拒绝（别借新旗标把参数校验放松了）
+if $TEAM board add T1.2 "未知旗标" dev - --nope >"$TMP/m48-badflag.log" 2>&1; then bad "M48：未知旗标应当被拒"; else ok "M48：未知旗标被拒（非 0）"; fi
+assert_has "$TMP/m48-badflag.log" "未知参数 --nope" "M48：报错点名未知旗标"
+assert_eq "M48：未知旗标时 BOARD 也没变" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_BEFORE"
+# 显式旗标：允许写，并往 state/watchdog.log 落一条审计
+$TEAM board add T1.1 "重复的一条" dev - --allow-dup >"$TMP/m48-allow.log" 2>&1 \
+  && ok "M48：--allow-dup 显式允许写入" || bad "M48：--allow-dup 应当允许写入"
+assert_has "$TMP/m48-allow.log" "--allow-dup" "M48：成功输出点明是显式允许"
+assert_eq "M48：旗标之后 T1.1 真的有两行" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "2"
+assert_has "$REPO/.pi/team/state/watchdog.log" "T1.1" "M48：审计落在 state/watchdog.log"
+assert_has "$REPO/.pi/team/state/watchdog.log" "allow-dup" "M48：审计写明是 --allow-dup"
+# 指派 agent 的正门（PM 追加）：给已有行指派 → 只改 agent 列、行数不变，而不是再写一行
+M48_ROWS_BEFORE="$(grep -c '^| ' "$M48_BOARD")"
+M48_T11_BEFORE="$(grep '^| T1\.1 ' "$M48_BOARD")"
+if $TEAM board assign T1.1 reviewer >"$TMP/m48-assign.log" 2>&1; then ok "M48：board assign 给已有行指派成功"; else bad "M48：board assign 应当成功"; tail -3 "$TMP/m48-assign.log"; fi
+assert_has "$TMP/m48-assign.log" "board assign T1.1 → reviewer" "M48：成功输出点名 ID 与 agent"
+assert_eq "M48：assign 后行数不变（不是又加一行）" "$(grep -c '^| ' "$M48_BOARD")" "$M48_ROWS_BEFORE"
+assert_eq "M48：assign 后 T1.1 仍是两行（没有顺手改历史数据）" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "2"
+M48_T11_AFTER="$(grep '^| T1\.1 ' "$M48_BOARD")"
+assert_eq "M48：assign 后 agent 列 = reviewer" "$(printf '%s\n' "$M48_T11_AFTER" | awk -F'|' '{v=$4; gsub(/^[ \t]+|[ \t]+$/,"",v); print v}' | paste -sd,)" "reviewer,reviewer"
+assert_eq "M48：assign 只改 agent 列（两行其余列逐字节未变）" \
+  "$(printf '%s\n' "$M48_T11_AFTER" | awk -F'|' -v OFS='|' '{gsub(/^[ \t]+|[ \t]+$/,"",$4); $4=" agent "; print}')" \
+  "$(printf '%s\n' "$M48_T11_BEFORE" | awk -F'|' -v OFS='|' '{gsub(/^[ \t]+|[ \t]+$/,"",$4); $4=" agent "; print}')"
+# 与 board set 同语义：两者都按 ID 寻址，同 ID 的多行一起改（新增重复在门口就被拒，历史数据不动）
+$TEAM board set T1.1 blocked >"$TMP/m48-set-dup.log" 2>&1 || bad "M48：同 ID 多行时 board set 应当可用"
+assert_eq "M48：board set 也是 ID 寻址（同 ID 的两行状态一起变）" \
+  "$(grep '^| T1\.1 ' "$M48_BOARD" | awk -F'|' '{v=$7; gsub(/^[ \t]+|[ \t]+$/,"",v); print v}' | paste -sd,)" "blocked,blocked"
+# 未知 id / 参数不全：拒绝且一个字节都不落盘（与 board set 同风格）
+M48_ASSIGN_SNAP="$(md5sum "$M48_BOARD" | cut -d' ' -f1)"
+if $TEAM board assign NOSUCH dev >"$TMP/m48-assign-unknown.log" 2>&1; then bad "M48：未知 id 的 assign 应当被拒"; else ok "M48：未知 id 的 assign 被拒（非 0）"; fi
+assert_has "$TMP/m48-assign-unknown.log" "BOARD 里没有 NOSUCH" "M48：assign 报错点名未知 id"
+assert_eq "M48：未知 id 的 assign 不落盘" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_ASSIGN_SNAP"
+if $TEAM board assign T1.1 >"$TMP/m48-assign-noarg.log" 2>&1; then bad "M48：board assign 缺 agent 应当被拒"; else ok "M48：board assign 缺 agent 被拒（非 0）"; fi
+assert_eq "M48：参数不全时也不落盘" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_ASSIGN_SNAP"
+# 可见性：board ls / digest / doctor 三处都说（面板/状态/报告按 ID 指行，重复不能只靠肉眼）
+$TEAM board ls >"$TMP/m48-ls.log" 2>&1 || true
+assert_has "$TMP/m48-ls.log" "BOARD 有重复 ID：T1.1 ×2" "M48：board ls 报告重复 ID 与行数"
+$TEAM digest >"$TMP/m48-digest.log" 2>&1 || true
+assert_has "$TMP/m48-digest.log" "BOARD 有重复 ID：T1.1 ×2" "M48：digest 报告重复 ID"
+$TEAM doctor >"$TMP/m48-doctor.log" 2>&1 || true
+assert_has "$TMP/m48-doctor.log" "BOARD 重复 ID" "M48：doctor 有「BOARD 重复 ID」这一条"
+assert_has "$TMP/m48-doctor.log" "T1.1 ×2" "M48：doctor 列出重复的 ID 与行数"
+# 负对照：把重复行去掉 → 三处都不再报（判据不是「总是红」）
+awk '!(/^\| T1\.1 / && seen++)' "$M48_BOARD" > "$TMP/m48-clean.md" && mv "$TMP/m48-clean.md" "$M48_BOARD"
+assert_eq "M48：夹具自检——去重后 T1.1 只剩一行" "$(grep -c '^| T1\.1 ' "$M48_BOARD")" "1"
+$TEAM board ls >"$TMP/m48-ls2.log" 2>&1 || true
+assert_not "$TMP/m48-ls2.log" "BOARD 有重复 ID" "M48（负对照）：没有重复时 board ls 不刷重复行"
+$TEAM doctor >"$TMP/m48-doctor2.log" 2>&1 || true
+assert_not "$TMP/m48-doctor2.log" "BOARD 重复 ID          !" "M48（负对照）：没有重复时 doctor 这一条是 ✓"
+assert_has "$TMP/m48-doctor2.log" "BOARD 重复 ID" "M48（负对照）：doctor 仍然检查这一条"
+# 模板里的占位行与风险表共用第 2 列，不能被误报成重复（init 出来的空看板必须干净）
+M48_TMPREPO="$TMP/m48-tmpl"
+mkdir -p "$M48_TMPREPO"
+( cd "$M48_TMPREPO" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo '# m48' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+( cd "$M48_TMPREPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
+    $TEAM init --session m48-tmpl --agents "dev" --vcs local --gates "true" --docs docs/team ) >"$TMP/m48-tmpl-init.log" 2>&1 \
+  && ok "M48：空模板库 init 成功" || { bad "M48：空模板库 init 失败"; tail -3 "$TMP/m48-tmpl-init.log"; }
+( cd "$M48_TMPREPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
+    $TEAM board ls ) >"$TMP/m48-tmpl-ls.log" 2>&1 || true
+assert_not "$TMP/m48-tmpl-ls.log" "BOARD 有重复 ID" "M48：空看板的占位行/风险表不算重复"
+# 收尾：把看板恢复成夹具前的那一份（后面的段落读同一份 BOARD.md）
+cp "$M48_BAK" "$M48_BOARD"
+assert_eq "M48：段落结束把 BOARD.md 还原" "$(md5sum "$M48_BOARD" | cut -d' ' -f1)" "$M48_BEFORE"
 
 # ---------------------------------------------------------------- 5. add-agent
 section "5 · add-agent"
@@ -1603,7 +1710,9 @@ EOF
   # 这样 T1.2 的报告仍然按「非任务报告」被忽略 —— 不改变本节之外的 pending 计数。
   mkdir -p "$REPO/.pi/team/state"
   ATASK="$REPO/.pi/team/state/$ADAPTER_ID-nonpi-brief.md"
-  printf '# %s · 非 Pi adapter 冒烟\n\ntask: %s\nagent: %s\n' "$ADAPTER_ID" "$ADAPTER_ID" "$ADAPTER_AGENT" > "$ATASK"
+  # P24（B3）：change-less 的任务书要有锚，否则派单守卫先拒（本节测的是非 Pi 路径）
+  printf '# %s · 非 Pi adapter 冒烟\n\ntask: %s\nagent: %s\nanchor: none (infra) — smoke fixture\n' \
+    "$ADAPTER_ID" "$ADAPTER_ID" "$ADAPTER_AGENT" > "$ATASK"
   # 第二个 worker（agent 模式名册里新增一个），自己的 worktree/分支：不动 dev 的账
   ADAPTER_BRANCH="$(canon_branch "$ADAPTER_AGENT" "$ADAPTER_ID")"
   git -C "$REPO" worktree add -b "$ADAPTER_BRANCH" "$REPO/.worktrees/$ADAPTER_AGENT" "$PROTECTED" >/dev/null 2>&1 || true
@@ -1976,8 +2085,27 @@ BARE_DIR="$TMP/m81-bare-bin"; mkdir -p "$BARE_DIR"
 printf '#!/bin/sh\nsleep 300\n' > "$BARE_DIR/pm-bare"; chmod +x "$BARE_DIR/pm-bare"
 # M25：登录 shell 探针一律 </dev/null —— 后台进程组里读 tty 会吃 SIGTTIN 被停住（0% CPU 像挂死），
 # 登录 profile（distrobox 的 host-spawn）就会碰 tty。门禁不该依赖调用者的 tty。
-assert_eq "夹具有效：登录 bash 看不到 $BARE_DIR（否则下面那条是假绿）" \
-  "$(env PATH="$BARE_DIR:$PATH" bash -lc 'command -v pm-bare || echo MISSING' </dev/null)" "MISSING"
+# M47：探针也不能赌「本机 profile 会重设 PATH」——distrobox 会，runner/普通容器的 /etc/profile 不会，
+# 同一句断言在两台机器上语义不同（CI 实测假红）。夹具改成构造性的：给登录 shell 一个受控 HOME，
+# 里面的 .bash_profile 明确把 PATH 重置成系统默认值。翻转：删掉这里的 HOME 注入 → 探针恢复成「看本机脸色」。
+login_shell_hides() { # <目录> <名字> → 它打印的 command -v 结果（看不到 → MISSING）
+  local dir="$1" name="$2" home
+  home="$(mktemp -d "$TMP/login-home.XXXXXX")"
+  printf 'PATH=/usr/bin:/bin\nexport PATH\n' > "$home/.bash_profile"
+  env HOME="$home" PATH="$dir:$PATH" bash -lc "command -v $name || echo MISSING" </dev/null
+}
+
+# M47：`#{bracket_paste_flag}` 是 tmux **3.7 起**才有的格式（同族的旧 tmux 上产品保守地走「多行落文件
+# + 一行指针」，那不是缺陷，是无从探测）。自建一个微 session 问一句，不赌调用者有没有 server。
+tmux_has_bracket_paste_format() {
+  local s="bpf-$$" v
+  tmux new-session -d -s "$s" -x 80 -y 24 'sleep 5' 2>/dev/null || return 1
+  v="$(tmux display-message -p -t "$s" '#{bracket_paste_flag}' 2>/dev/null)"
+  tmux kill-session -t "$s" 2>/dev/null || true
+  [ -n "$v" ]
+}
+assert_eq "夹具有效：登录 bash 看不到 $BARE_DIR（否则下面那条是假绿；受控 HOME profile，不赌本机 profile）" \
+  "$(login_shell_hides "$BARE_DIR" pm-bare)" "MISSING"
 assert_eq "夹具有效：调用者 PATH 看得到它" \
   "$(env PATH="$BARE_DIR:$PATH" bash -c 'command -v pm-bare || echo MISSING')" "$BARE_DIR/pm-bare"
 BARE_RENDER="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" "PATH=$BARE_DIR:$PATH" \
@@ -2336,7 +2464,7 @@ section "6j · worker adapter：裸名字解析 + agent 没跑起来必须响亮
 M82_BARE_DIR="$TMP/m82-bare-bin"; mkdir -p "$M82_BARE_DIR"
 printf '#!/bin/sh\nsleep 300\n' > "$M82_BARE_DIR/worker-bare"; chmod +x "$M82_BARE_DIR/worker-bare"
 assert_eq "M8.2 夹具有效：登录 bash 看不到 $M82_BARE_DIR（否则下面那条是假绿）" \
-  "$(env PATH="$M82_BARE_DIR:$PATH" bash -lc 'command -v worker-bare || echo MISSING')" "MISSING"
+  "$(login_shell_hides "$M82_BARE_DIR" worker-bare)" "MISSING"   # M47：受控 HOME profile（同 6i ②c）
 assert_eq "M8.2 夹具有效：调用者 PATH 看得到它" \
   "$(env PATH="$M82_BARE_DIR:$PATH" bash -c 'command -v worker-bare || echo MISSING')" "$M82_BARE_DIR/worker-bare"
 env PATH="$M82_BARE_DIR:$PATH" TEAM_AGENT_CMD='worker-bare --pf {prompt_file} --ask {prompt}' \
@@ -2396,7 +2524,9 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 任务书放 state/（像 6g 那样）：T1.3 不进 BOARD，本节不改动「待复验」计数
   mkdir -p "$REPO/.pi/team/state"
   M82_TASK="$REPO/.pi/team/state/$M82_ID-m82-brief.md"
-  printf '# %s · M8.2 adapter 启动证据\n\ntask: %s\nagent: %s\n' "$M82_ID" "$M82_ID" "$M82_AGENT" > "$M82_TASK"
+  # P24（B3）：change-less 的任务书要有锚（本节测的是启动证据，不是锚规则）
+  printf '# %s · M8.2 adapter 启动证据\n\ntask: %s\nagent: %s\nanchor: none (infra) — smoke fixture\n' \
+    "$M82_ID" "$M82_ID" "$M82_AGENT" > "$M82_TASK"
   M82_DIAG="$REPO/.pi/team/state/dispatch-$M82_AGENT-launch-failed.log"
   # (a) 裸名字：CLI 只存在于调用者 PATH（登录 bash 看不到，① 已证）
   cat > "$M82_BARE_DIR/worker-live" <<EOF
@@ -5614,6 +5744,11 @@ if [ "$FAST" = "1" ]; then
   fast_skip "12b-h·真 pane 端到端（守卫/排水/草稿窗口）" "要真 tmux pane + python3 夹具 TUI（清空输入框、多行粘贴、draft 窗口）"
 elif [ "$HAVE_TMUX" != "1" ] || ! command -v python3 >/dev/null 2>&1; then
   printf '  (跳过 12b-h：本机没有 tmux 或 python3)\n'
+elif ! tmux_has_bracket_paste_format; then
+  # M47：多行投递的整段判据（一次 bracketed paste = 一次提交 / 竞态留框 / 收回）建立在
+  # 「能问出目标有没有开 DECSET 2004」上，而那个格式 tmux ≥3.7 才有。旧 tmux 上产品走指针文件的
+  # 保守降级，这些断言测不了 —— 可见 skip + 点名版本（容器门禁钉 tmux 3.7b，照跑全套）。
+  cond_skip "12b-h·真 pane 端到端（守卫/排水/草稿窗口）" "$(tmux -V)：没有 #{bracket_paste_flag} 格式（tmux ≥3.7 才有）→ 多行粘贴判据无法测"
 else
   live_mark
   FTUI="$SKILL_DIR/tests/fake-tui.py"
@@ -6141,6 +6276,34 @@ assert_not_file "$PIW/pi-dev.wake" "12b-pi --now 不走 pi 通道（不写 spool
 assert_has "$TMP/print.log" "-e $SKILL_DIR/extension/team-inbox-watch.ts" "12b-pi worker 启动命令 -e 挂 inbox-watch"
 assert_has_echo "$DEFAULT_CMD" "extension/team-inbox-watch.ts" "12b-pi PM 启动命令也挂 inbox-watch"
 
+# ⑩ P28/B6：预览按**字符**边界裁 —— 多字节字符恰好跨 700 字节边界时，spool 行仍是合法 UTF-8
+#    （红：`cut -c1-700` 按字节裁会把一个字符截半 → 读者侧曾因此把 offset 推过文件末尾）
+ob_reset; piw_reset
+piw_reg b6-dev "$SESSION:dev" dev
+B6_PAYLOAD="xy$(printf '红%.0s' $(seq 1 300))"
+# 夹具有效性对照：同样的 payload 用旧的字节裁法确实写出非法 UTF-8（不是空转断言）
+if printf '%s' "$B6_PAYLOAD" | LC_ALL=C cut -c1-700 | LC_ALL=C iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+  bad "12b-pi ⑩ B6：夹具前提不成立（旧的 cut -c1-700 居然也是合法 UTF-8）"
+else
+  ok "12b-pi ⑩ B6：夹具前提成立（旧的字节裁法会把 700 字节边界上的字符截半）"
+fi
+ob_run $TEAM say dev "$B6_PAYLOAD" >"$TMP/b6-say.log" 2>&1 || true
+assert_has "$TMP/b6-say.log" "pi 监视通道" "12b-pi ⑩ B6：走 pi 通道（spool 行就是写入者的产物）"
+if [ -f "$PIW/b6-dev.wake" ]; then
+  if LC_ALL=C iconv -f UTF-8 -t UTF-8 < "$PIW/b6-dev.wake" >/dev/null 2>&1; then
+    ok "12b-pi ⑩ B6：spool 行是合法 UTF-8"
+  else
+    bad "12b-pi ⑩ B6：spool 行不是合法 UTF-8（预览被截半）"; od -An -tx1 "$PIW/b6-dev.wake" | tail -2
+  fi
+  assert_eq "12b-pi ⑩ B6：预览里没有 U+FFFD 替换符" "$(grep -c $'\xef\xbf\xbd' "$PIW/b6-dev.wake" || true)" "0"
+  assert_eq "12b-pi ⑩ B6：预览裁在完整字符上（698 = 2 + 3×232 字节，不是 700 的字节截断）" \
+    "$(LC_ALL=C awk -F'\t' 'NR==1 {print length($5)}' "$PIW/b6-dev.wake")" "698"
+  assert_has "$REPO/docs/team/inbox/dev.md" "$B6_PAYLOAD" "12b-pi ⑩ B6：durable 收件箱仍是全文（只有 spool 预览被裁）"
+else
+  bad "12b-pi ⑩ B6：spool 行没写出来"; cat "$TMP/b6-say.log"
+fi
+piw_reset
+
 # ⑨ 真扩展夹具（假 Pi 宿主 + 真 CLI 端到端）：注册 / 监视唤醒 / 合并 / 基线 / 清场 / 账本
 if [ -z "$TS_RUNNER" ]; then
   printf '  (跳过 12b-pi 扩展夹具：node 未启用类型剥离，且没有 bun/tsx)\n'
@@ -6178,6 +6341,29 @@ else
     "12b-pi M46：继承的 TEAM_STATE_DIR 指向别的项目 → 拒绝（M40 的 state 面）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S17 an inherited TEAM_CONFIG_FILE pointing at another project is ignored" \
     "12b-pi M46：继承的 TEAM_CONFIG_FILE 指向别的项目 → 忽略（会话名来自本项目配置）"
+  # P28：字节真值的 offset / 证据化的缩容与收敛 / 过期门槛 / 账本契约（harness S18–S21；翻转见 tests/flip-p25.sh）
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S18 the baseline is the spool byte size" \
+    "12b-pi P28：字节裁切的 spool 行不再把 offset 推过文件末尾（baseline = 文件字节数）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S18 idle ticks after a byte-clipped line add no spool shrink" \
+    "12b-pi P28：非法 UTF-8 的 spool 不再每拍伪造一次缩容"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19a a one-byte regression with an unchanged head is repaired with one offset clamp" \
+    "12b-pi P28：头部不变的小回退是一次修复（offset clamp），不是重扫"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19a the read that starts inside the clamped line resyncs" \
+    "12b-pi P28：clamp 落在行中时碎片被 resync 跳过（半行绝不投递）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19b a rewrite with a changed head is rescanned exactly once" \
+    "12b-pi P28：头部变了才是真重写（一次有界重扫，下一拍收敛）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S19c the same (size, head) is recorded as a repeat and clamped" \
+    "12b-pi P28：同一 (size, head) 不重扫第二次（shrink repeat + clamp）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S20a an hour-old unseen line is rescan-counted, never woken about" \
+    "12b-pi P28：一小时前的未投递行只计数、不唤醒（durable 副本与 spool 字节都还在）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S20c a line whose timestamp is not a number is delivered" \
+    "12b-pi P28：时间戳不可解析的行照投并计数（不静默吞）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21a a dedup-only rescan reads deliver=0 with a non-zero dup" \
+    "12b-pi P28：账本把新流量与恢复分开（去重重扫 deliver=0、total 不动）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21b a stale-only rescan reads deliver=0 with stale=" \
+    "12b-pi P28：只含过期行的重扫 deliver=0 + stale=<n>"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21c the wake line reads n=2 and total grows by exactly two" \
+    "12b-pi P28：真投递的 wake n=2、total +2"
 fi
 
 # 不留注册：后面的段落（teardown / panel / …）不许被这条通道接管
@@ -6679,7 +6865,7 @@ fi
 
 # ---------------------------------------------------------------- 19. OpenSpec 五阶段流水线（M9.1）
 # 契约：五阶段必须「可照着做」—— 每个阶段一行（阶段命令 + 所有者 + 门禁），两条硬规则
-#   （独立复验；归档要用户确认），propose→apply 之间的**记录式**提案审查（八条清单），
+#   （独立复验；归档要用户确认），propose→apply 之间的**记录式**提案审查（十条清单），
 #   以及「不重复抄 OpenSpec 手册」（指南只留指针，不得再长出 requirement/scenario 语法样板）。
 # 纯逻辑（只读文件），快慢模式都跑。
 # 判据在 os_pipeline_hits 里，违规行格式固定为 `<相对文件>: <REASON>[ <detail>]`；
@@ -6778,6 +6964,8 @@ P16_R="$TMP/p16-repo"; rm -rf "$P16_R"; mkdir -p "$P16_R"
 ( cd "$P16_R" && $TEAM init --session "teamsmith-p16-$$" --agents dev --vcs local --gates "true" --docs docs/team ) \
   >"$TMP/p16-init.log" 2>&1 || bad "P16 夹具 init 失败（见 $TMP/p16-init.log）"
 ( cd "$P16_R" && $TEAM task T1.1 --title "p16 zero change" --agent dev ) >"$TMP/p16-task.log" 2>&1 || true
+# P24（B3）：change-less 的任务书要有锚（本节测的是 init skill 的零改动）
+( cd "$P16_R" && sed -i 's|^anchor: -.*$|anchor: none (infra) — smoke fixture|' docs/team/tasks/T1.1-*.md ) 2>/dev/null || true
 ( cd "$P16_R" && $TEAM add-agent dev --create --no-install ) >"$TMP/p16-add.log" 2>&1 || true
 p16_canon_branch() { # <agent> <ID>：用实现自己的函数算规范分支
   ( cd "$P16_R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
@@ -6819,9 +7007,9 @@ os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
   grep -q 'reviews/<change>-proposal.md' "$f" || printf 'references/openspec.md: PROPOSAL-RECORD-MISSING\n'
   grep -q 'ACCEPTED' "$f" || printf 'references/openspec.md: PROPOSAL-VERDICT-MISSING\n'
   grep -qi 'no apply brief' "$f" || printf 'references/openspec.md: APPLY-GATE-MISSING\n'
-  # ④ 八条审查清单逐条可照做：数量写死 8，砍掉一条就报红
+  # ④ 十条审查清单逐条可照做：数量写死 10（P24/B7 把清单从八条长到十条），砍掉一条就报红
   n="$(awk '/^### The PM/ {on=1; next} /^## / {on=0} on && /^[0-9]+\./ {c++} END {print c+0}' "$f")"
-  [ "$n" = "8" ] || printf 'references/openspec.md: CHECKLIST-COUNT %s\n' "$n"
+  [ "$n" = "10" ] || printf 'references/openspec.md: CHECKLIST-COUNT %s\n' "$n"
   # ⑤ 指向 OpenSpec 自己的文档（而不是抄一遍），并写明阶段命令从哪来
   grep -q 'openspec instructions' "$f" || printf 'references/openspec.md: DOCS-POINTER-MISSING\n'
   grep -q 'openspec init --tools pi' "$f" || printf 'references/openspec.md: PRECONDITION-MISSING\n'
@@ -6848,7 +7036,7 @@ os_pipeline_hits() { # <skill 目录> → 违规行（空 = 通过）
 
 OS_HITS="$(os_pipeline_hits "$SKILL_DIR")"
 if [ -z "$OS_HITS" ]; then
-  ok "五阶段各有所有者与门禁；两条硬规则、记录式提案审查与八条清单都在（指南 + 模板 + SKILL + runbook）"
+  ok "五阶段各有所有者与门禁；两条硬规则、记录式提案审查与十条清单都在（指南 + 模板 + SKILL + runbook）"
 else
   bad "五阶段契约被破坏："
   printf '%s\n' "$OS_HITS" | head -5 | sed 's/^/     /'
@@ -6894,7 +7082,7 @@ os_flip_red "删掉「没人复验自己的工作」" "RULE-INDEPENDENT-MISSING"
 os_flip_red "抹掉「归档要用户确认」" "RULE-USER-CONFIRM-MISSING" "references/openspec.md" \
   -E 's/user[^|]*confirm[^|]*/ACCOUNTABILITY-REMOVED/g'
 os_flip_red "删掉提案审查记录路径" "PROPOSAL-RECORD-MISSING" "references/openspec.md" '/reviews\/<change>-proposal/d'
-os_flip_red "把八条清单砍成七条" "CHECKLIST-COUNT 7" "references/openspec.md" '/^8\. \*\*Granularity\*\*/d'
+os_flip_red "把十条清单砍掉一条" "CHECKLIST-COUNT 9" "references/openspec.md" '/^8\. \*\*Granularity\*\*/d'
 os_flip_red "删掉阶段命令的启用前提" "PRECONDITION-MISSING" "references/openspec.md" '/openspec init --tools pi/d'
 os_flip_red "指南把 requirement 语法样板抄回来" "ARTIFACT-SYNTAX-COPIED" "references/openspec.md" '$a ### Requirement: Copied syntax'
 os_flip_red "任务书模板不再提 apply 门" "APPLY-GATE-MISSING" "templates/task.md.tmpl" '/ACCEPTED/d'
@@ -7169,7 +7357,8 @@ M93_AGENTS="dev verify m93a m93b m93c"
 m93_run() { env TEAM_AGENTS="$M93_AGENTS" $TEAM "$@"; }   # 三个夹具 agent 只在本节的名册里
 m93_brief() { # <ID> <agent>：最小任务书（头块与 PM 的模板同形）
   mkdir -p "$REPO/docs/team/tasks"
-  printf '# %s · M9.3 smoke fixture\n\ntask:   %s\nagent:  %s\ndeps:   -\nstatus: todo\n' \
+  # P24（B3）：change-less 的任务书要有锚 —— 本节测的是叠任务守卫，得先过锚守卫
+  printf '# %s · M9.3 smoke fixture\n\ntask:   %s\nagent:  %s\nanchor: none (infra) — smoke fixture\ndeps:   -\nstatus: todo\n' \
     "$1" "$1" "$2" > "$REPO/docs/team/tasks/$1-m93-smoke.md"
 }
 m93_add() { # <ID> <agent>：BOARD 行 + 任务书
@@ -7294,8 +7483,8 @@ $TEAM board add M93E "M9.3 fixture M93E" m93c - >/dev/null 2>&1 || true
 M93E_BR="$(m93_wt m93c M93E)"
 assert_eq "M9.3-⑤ 夹具有效：m93c 的工作树停在 M93E 的规范分支上" \
   "$(git -C "$REPO/.worktrees/m93c" rev-parse --abbrev-ref HEAD)" "$M93E_BR"
-printf '# M93E · 旧的那份\n\ntask: M93E\nagent: m93c\n' > "$REPO/docs/team/tasks/M93E-legacy.md"
-printf '# M93E · 新的那份\n\ntask: M93E\nagent: m93c\n' > "$REPO/docs/team/tasks/M93E-reverify.md"
+printf '# M93E · 旧的那份\n\ntask: M93E\nagent: m93c\nanchor: none (infra) — smoke fixture\n' > "$REPO/docs/team/tasks/M93E-legacy.md"
+printf '# M93E · 新的那份\n\ntask: M93E\nagent: m93c\nanchor: none (infra) — smoke fixture\n' > "$REPO/docs/team/tasks/M93E-reverify.md"
 M93E_BRIEF="$REPO/docs/team/tasks/M93E-reverify.md"
 if m93_run dispatch m93c M93E "$M93E_BRIEF" --print >"$TMP/m93-f-ambiguous.log" 2>&1; then
   bad "M9.3-⑤：两份任务书时不该猜哪一份是这次的 scope"
@@ -8262,8 +8451,16 @@ assert_has "$TMP/p10-doctor-old.log" "20" "26-k 运行时：失败行点名最�
 p10m $TEAM paths >"$TMP/p10-paths.log" 2>&1
 assert_match "$TMP/p10-paths.log" '"js_runner": "/' "26-k paths：报出解析到的运行时绝对路径"
 assert_has "$TMP/p10-paths.log" '"require_js": "1"' "26-k paths：报出 require_js 默认 1"
-p10m env TEAM_JS_BIN=/usr/bin/node $TEAM paths >"$TMP/p10-paths-jsbin.log" 2>&1
-assert_has "$TMP/p10-paths-jsbin.log" '"js_runner": "/usr/bin/node"' "26-k paths：TEAM_JS_BIN 优先"
+# M47：不能写死 /usr/bin/node —— runner 的 node 在 hostedtoolcache 里、容器里在 /usr/local/bin，
+# 写死路径会把「TEAM_JS_BIN 优先」测成环境探测。用**本机实际解析到的那份**绝对路径当夹具，
+# 判据不变（报出的就是传进去的那份），在任何装了 node/bun 的机器上都有意义。
+P10_JS_FIXTURE="$(command -v node || command -v bun || true)"
+if [ -n "$P10_JS_FIXTURE" ]; then
+  p10m env TEAM_JS_BIN="$P10_JS_FIXTURE" $TEAM paths >"$TMP/p10-paths-jsbin.log" 2>&1
+  assert_has "$TMP/p10-paths-jsbin.log" "\"js_runner\": \"$P10_JS_FIXTURE\"" "26-k paths：TEAM_JS_BIN 优先（点名传进去的绝对路径）"
+else
+  cond_skip "26-k paths：TEAM_JS_BIN 优先" "本机没有 node/bun（运行时解析整段都由 26-k 的负例覆盖）"
+fi
 p10m env TEAM_REQUIRE_JS=0 $TEAM paths >"$TMP/p10-paths-reqjs.log" 2>&1
 assert_has "$TMP/p10-paths-reqjs.log" '"require_js": "0"' "26-k paths：TEAM_REQUIRE_JS=0 反映在 paths 里"
 
@@ -8345,10 +8542,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   P10_SCOPE="$P10SESS"
   P10_OTHER="${SESSION}-other-$$"
   P10_SMOKE_WINDOWS_BEFORE="$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | wc -l | tr -d ' ')"
-  p10_panel_cmd() { # <log-glob|->  → 窗口里跑的面板命令
-    printf "cd '%s' && HOME='%s' TEAM_PI_AGENT_DIR='%s/.pi/agent' TEAM_STATE_DIR='%s' %s bash '%s/scripts/team' monitor --no-pulse --interval %s" \
-      "$P10R" "$P10_HOME" "$P10_HOME" "$P10_TRUE_STATE" \
-      "$([ "$1" = "-" ] && echo '' || printf "TEAM_AGENT_LOG_GLOB='%s'" "$1")" "$SKILL_DIR" "$2"
+  p10_panel_cmd() { # <log-glob|-> <interval> [extra-env…]  → 窗口里跑的面板命令
+    local p10_glob="" p10_extra="${3:+$3 }"
+    [ "$1" != "-" ] && p10_glob="TEAM_AGENT_LOG_GLOB='$1' "
+    printf "cd '%s' && HOME='%s' TEAM_PI_AGENT_DIR='%s/.pi/agent' TEAM_STATE_DIR='%s' %s%s bash '%s/scripts/team' monitor --no-pulse --interval %s" \
+      "$P10R" "$P10_HOME" "$P10_HOME" "$P10_TRUE_STATE" "$p10_glob" "$p10_extra" "$SKILL_DIR" "$2"
   }
   # M20（同族复查）：26-m 的「首帧 / 重绘 / 动作回响 / 节拍 / tick 节奏」都是**实现速度**断言，
   # 不是契约超时 —— 负载下单次固定 sleep 会假红（F-V16-10 的同族形状；26-m 回响实测红过一次：
@@ -8406,6 +8604,20 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     bad "26-m 真 pane：20s 内没渲染出标题带（pane=$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | wc -c) 字节）"
   fi
   assert_eq "26-m 真 pane：capture 里 0 个 ESC 字节" "$(printf '%s' "$P10_CAP" | tr -cd '\033' | wc -c | tr -d ' ')" "0"
+  # M47 翻转证据：Ink 7 的 `is-in-ci` 启发式把任何 CI 环境当**非交互**，而非交互模式只写 <Static>
+  # —— 面板一帧都不写，pane 只剩标题带上那个绕过 React 的时钟（CI 上 26-m / wd-logs / 32⑧b 全红）。
+  # 夹具在 pane 的 env 里显式放 CI=1（GitHub Actions 的真实形状，TMUX/TTY 都不变），面板必须照常渲染。
+  # 翻转：把 main.tsx 的 `interactive: Boolean(process.stdout.isTTY)` 删掉 → 这条（以及下面三条）红。
+  P10_CI_SESS="p10-ci-$$"
+  tmux kill-session -t "$P10_CI_SESS" 2>/dev/null || true
+  tmux new-session -d -s "$P10_CI_SESS" -x 120 -y 29 -c "$P10R" -n panel \
+    "$(p10_panel_cmd "$P10_LEFT_LOG" 1 "CI=1")" 2>/dev/null || true
+  if P10_CI_CAP="$(p10_wait_pane "$P10_CI_SESS:panel" 'teamsmith pulse' 20)"; then
+    ok "26-m CI=1：TTY 里的面板照常渲染（Ink 的 CI 启发式不会吃掉整帧；有界轮询 $(p10_wait_ms)ms）"
+  else
+    bad "26-m CI=1：20s 内没渲染出面板标题（pane=$(tmux capture-pane -p -t "$P10_CI_SESS:panel" 2>/dev/null | wc -c) 字节）"
+  fi
+  tmux kill-session -t "$P10_CI_SESS" 2>/dev/null || true
   if printf '%s' "$P10_CAP" | grep -qF 'LEFT-MARKER'; then
     ok "26-m 会话范围：本 session 的 dev 窗口出现在活动列"
   else
@@ -8531,7 +8743,7 @@ print(m)' 2>/dev/null || echo 999)"
   assert_eq "26-m 无第二个窗口：smoke session 的窗口数不变" \
     "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | wc -l | tr -d ' ')" "$P10_SMOKE_WINDOWS_BEFORE"
   assert_eq "26-m 无第二个窗口：夹具 session 已收干净" \
-    "$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c "^$P10_SCOPE$\|^$P10_OTHER$\|^$P10_W2$\|^$P10_W3$" || true)" "0"
+    "$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c "^$P10_SCOPE$\|^$P10_OTHER$\|^$P10_W2$\|^$P10_W3$\|^$P10_CI_SESS$" || true)" "0"
   # ④ 没有运行时时 pulse up 拒绝建窗口
   # M40 迁移：这里以前传 TEAM_SESSION="$SESSION"（smoke 自己的 session），而 --root 是 $P10R（它的
   # 配置声明 $P10SESS）——即「env 与目录故意不同」的夹具。M40 起身份以目录为准，那种形状会先被身份
@@ -8711,18 +8923,99 @@ fi
 # loadavg 7–8 时 1323/1417/4118ms → 3 次越线；典型成本 1.24–1.6s，余量只有 0.4–0.7s）——
 # 正常团队并发就能碰线，一次假红要浪费整轮复验（~350s）。现在取 5 次采样的**中位**：语义从
 # 「单次不快即坏」变成「典型不快才坏」，预算仍是 2000ms（没有放宽）。单次尖峰由中位吸收；
-# 中位越线才红 —— 下面的「判定自检」把这两个方向都钉住。
+# 中位越线才红 —— 「判定自检」把这两个方向都钉住。
+#
+# P26/G2（panel#Frame assembly is asynchronous… MODIFIED）：2000ms / 1% 是**面板**的判定，不是
+# 机器的判定 —— 所以它们只在**测量前提**成立时判：loadavg_1m ≤ 0.75 × 逻辑核数。实测标定：M49 的
+# 假红发生在 load 26–32 / 32 核（0.81–1.0 × 核）；阈值 0.75 × 核（=24）跳过那个形状。前提不成立时
+# **可见地 SKIP**（打印样本、中位、load 与阈值），计数进 P27_TIMING_SKIP（**不是** SKIP_N：14c 拿
+# SKIP_N 审计 FAST 分段），并在结果块里点名 —— SKIP 既不是通过也不是红。
+# 夹具旋钮（**只在夹具模式生效**）：TEAM_SMOKE_FIXTURE=1 打开后，TEAM_SMOKE_LOADAVG /
+# TEAM_SMOKE_CORES / TEAM_SMOKE_FRAME_DELAY_MS 才被采信；裸设置一律**忽略并打印**（否则“负载前提”
+# 就成了“想跳就跳”的后门 —— PM 审查要点②。真路径的三个断点在 §35）。
+P27_TIMING_SKIP=0; P27_TIMING_SKIP_NAMES=""; P27_TIMING_SKIP_LOAD=""
+p27_fixture_on() { [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; }
+p27_ignore_notice() { # <变量名> <值>（走 stderr：调用方常把本函数的结果放进 $( )）
+  printf '  \033[33m忽略 %s=%s\033[0m：只有夹具模式（TEAM_SMOKE_FIXTURE=1）接受注入；真实路径读真值\n' "$1" "$2" >&2
+}
+p27_load_reading() { # → loadavg_1m（夹具模式才认注入）
+  if [ -n "${TEAM_SMOKE_LOADAVG:-}" ]; then
+    if p27_fixture_on; then printf '%s\n' "$TEAM_SMOKE_LOADAVG"; return 0; fi
+    p27_ignore_notice TEAM_SMOKE_LOADAVG "$TEAM_SMOKE_LOADAVG"
+  fi
+  cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?'
+}
+p27_cores() { # → 逻辑核数（夹具模式才认注入）
+  if [ -n "${TEAM_SMOKE_CORES:-}" ]; then
+    if p27_fixture_on; then printf '%s\n' "$TEAM_SMOKE_CORES"; return 0; fi
+    p27_ignore_notice TEAM_SMOKE_CORES "$TEAM_SMOKE_CORES"
+  fi
+  nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0'
+}
+# 前提本身：打印「load / 核数 / 阈值 / 决定」一行，返回 0=成立（照判）、1=不成立（SKIP）。
+# 读数或核数不可用（空/非数字/0）一律算不成立 —— 测不准就不判红。
+p27_perf_premise() {
+  local load cores thr
+  load="$(p27_load_reading)"; cores="$(p27_cores)"
+  case "$cores" in ''|*[!0-9]*) cores=0 ;; esac
+  thr="$(awk -v c="$cores" 'BEGIN { printf "%.2f", 0.75 * c }')"
+  if [ "$cores" -gt 0 ] && awk -v l="$load" -v t="$thr" 'BEGIN { exit !(l <= t) }'; then
+    printf '  负载前提：loadavg %s ≤ 阈值 %s（0.75 × %s 核）→ 成立（照判）\n' "$load" "$thr" "$cores"
+    return 0
+  fi
+  printf '  负载前提：loadavg %s > 阈值 %s（0.75 × %s 核）→ **不成立**（计时断言 SKIP；阈值本身不动）\n' "$load" "$thr" "$cores"
+  return 1
+}
+TIMING_SKIP() { # <断言名> <原因>
+  P27_TIMING_SKIP=$((P27_TIMING_SKIP + 1))
+  P27_TIMING_SKIP_NAMES="${P27_TIMING_SKIP_NAMES}${1} "
+  P27_TIMING_SKIP_LOAD="$(p27_load_reading)"
+  printf '  \033[33mSKIP（负载前提不成立）\033[0m %s —— %s\n' "$1" "$2"
+}
+# 27-d 的判定本体，两层：
+#   p27_assembly_rc    —— **纯判定**（0 绿 / 1 红 / 2 SKIP）：不打印、不计数。夹具与翻转用它，
+#                         这样「预期会红」的夹具不会污染门禁自己的 ✗ 计数（实测踩过：35b 的预期红
+#                         把套件 ✗ 从 0 抬到 1）。
+#   p27_assembly_judge —— 真路径入口（27-d 调用）：先打印前提一行，再按判定记 ok/bad，或记
+#                         TIMING_SKIP（负载前提不成立时）。
+p27_assembly_rc() { # <中位数ms>
+  local med="$1"
+  p27_perf_premise >/dev/null 2>&1 || return 2
+  [ "$med" -le 2000 ] && return 0 || return 1
+}
+p27_assembly_judge() { # <中位数ms> <样本文本> <采样数> → 0 绿 / 1 红 / 2 SKIP
+  # 前提**只评一次**：本函数自己判 premise，不再经 p27_assembly_rc（那一版会评两次，两次读到的
+  # loadavg 可能不同 ⇒ 同一次运行里出现「前提成立」与「SKIP」两句自相矛盾的话；实测在门禁里抓到）。
+  local med="$1" obs="$2" n="$3"
+  if ! p27_perf_premise; then
+    TIMING_SKIP "27-d 装配红线" "loadavg $(p27_load_reading) > 0.75 × $(p27_cores)；样本 ${obs}ms（中位 ${med}ms）—— 判定留给安静机器"
+    return 2
+  fi
+  if [ "$med" -le 2000 ]; then
+    ok "27-d 装配红线：${n} 次采样的中位 ${med}ms ≤ 2000ms（样本 ${obs}ms；采样时 loadavg $(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')）"
+    return 0
+  fi
+  bad "27-d 装配红线：${n} 次采样的中位 ${med}ms（> 2000ms；样本 ${obs}ms；loadavg $(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?') —— 负载前提成立时这就是面板的问题）"
+  return 1
+}
 # TEAM_SMOKE_FRAME_DELAY_MS=<ms>：只给翻转演练用的注入延迟（每个采样都注入 = 每帧都慢）——
 # 正常门禁不设这个变量；设上之后中位必须越线变红（剧场检查：证明新断言没被改成永远绿）。
 P27_SAMPLES=5
-P27_INJECT_MS="${TEAM_SMOKE_FRAME_DELAY_MS:-0}"
+p27_inject_ms() { # → 注入延迟（ms）；只有夹具模式认 TEAM_SMOKE_FRAME_DELAY_MS
+  local v="${TEAM_SMOKE_FRAME_DELAY_MS:-}"
+  if [ -n "$v" ]; then
+    if p27_fixture_on; then printf '%s\n' "$v"; return 0; fi
+    p27_ignore_notice TEAM_SMOKE_FRAME_DELAY_MS "$v"
+  fi
+  printf '0\n'
+}
+P27_INJECT_MS="$(p27_inject_ms)"
 case "$P27_INJECT_MS" in ''|*[!0-9]*) P27_INJECT_MS=0 ;; esac
 P27_INJECT_S="$(awk -v ms="$P27_INJECT_MS" 'BEGIN { printf "%.3f", ms / 1000 }')"
 p27_median() { # <数字…> → 中位（调用方保证样本数为奇数）
   printf '%s\n' "$@" | sort -n | awk '{a[NR] = $1} END {print a[int((NR + 1) / 2)]}'
 }
 P27_OBS=()
-P27_LOADAVG="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')"   # 判红时一眼能看出是不是并发负载
 for _p27i in $(seq 1 "$P27_SAMPLES"); do
   P27_T0="$(date +%s%3N)"
   p27 $TEAM monitor --print --no-activity >"$TMP/p27-timed.txt" 2>/dev/null
@@ -8732,11 +9025,7 @@ done
 P27_MS="$(p27_median "${P27_OBS[@]}")"
 P27_OBS_TXT="$(printf '%s, ' "${P27_OBS[@]}")"
 P27_OBS_TXT="${P27_OBS_TXT%, }"
-if [ "$P27_MS" -le 2000 ]; then
-  ok "27-d 装配红线：${P27_SAMPLES} 次采样的中位 ${P27_MS}ms ≤ 2000ms（样本 ${P27_OBS_TXT}ms；采样时 loadavg ${P27_LOADAVG}）"
-else
-  bad "27-d 装配红线：${P27_SAMPLES} 次采样的中位 ${P27_MS}ms（> 2000ms；样本 ${P27_OBS_TXT}ms；采样时 loadavg ${P27_LOADAVG} —— 若 loadavg 高则是共享机器上的并发争用，不是单次尖峰）"
-fi
+p27_assembly_judge "$P27_MS" "$P27_OBS_TXT" "$P27_SAMPLES" || true
 # 判定自检（不启动进程，只测判定本身）：① 单次越线不红；② 中位越线必须红。
 # 少了这两条，『中位』这个判定自己坏了（比如排序写错、取错元素）也看不出来。
 if [ "$(p27_median 1240 1417 2030 1400 1500)" -le 2000 ] && [ "$(p27_median 2100 2050 2200 1900 2300)" -gt 2000 ]; then
@@ -8773,6 +9062,41 @@ if [ "$P28_SRC_RC" -ne 0 ] && grep -q 'keyCompose' "$TMP/p28-strings-flip.log"; 
   ok "28-a 翻转：删掉 en.keyCompose 后断言非 0 且点名 keyCompose"
 else
   bad "28-a 翻转：删掉 en 的键没被抓住（rc=$P28_SRC_RC）"; tail -3 "$TMP/p28-strings-flip.log"
+fi
+
+# ---- 28-a2 契约键标签（M49）：`lib/cmd-config.sh` 的 schema 每个键在 zh/en 两张表里都有非空
+# 标签，且没有表里的标签指着一个 schema 已不存在的键（两个方向都查）。翻转有两条：① 从**两张表**
+# 各删一条标签（键集合仍一致 → 只有这条断言能抓住）；② 从 schema 删一行（标签变成陈旧 → 反向断言抓住）。
+P28_LBL="$TMP/p28-labels"; rm -rf "$P28_LBL"
+mkdir -p "$P28_LBL/skills/teamsmith/scripts/panel" "$P28_LBL/skills/teamsmith/scripts/lib"
+cp -r "$SKILL_DIR/scripts/panel/src" "$P28_LBL/skills/teamsmith/scripts/panel/src"
+cp "$SKILL_DIR/scripts/lib/cmd-config.sh" "$P28_LBL/skills/teamsmith/scripts/lib/"
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels.log" 2>&1
+P28_LBL_RC=$?
+if [ "$P28_LBL_RC" -eq 0 ] && grep -q 'contract-key labels' "$TMP/p28-labels.log"; then
+  ok "28-a2 契约键标签：schema 的每个键在 zh/en 两张表里都有标签（$(grep -oE '[0-9]+ schema keys' "$TMP/p28-labels.log" | head -1)）"
+else
+  bad "28-a2 契约键标签：断言失败"; tail -3 "$TMP/p28-labels.log"
+fi
+sed -i '/^  label_TEAM_PULSE_INTERVAL:/d' \
+  "$P28_LBL/skills/teamsmith/scripts/panel/src/strings/zh.ts" \
+  "$P28_LBL/skills/teamsmith/scripts/panel/src/strings/en.ts"
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels-flip.log" 2>&1
+P28_LBL_FLIP_RC=$?
+if [ "$P28_LBL_FLIP_RC" -ne 0 ] && grep -q 'TEAM_PULSE_INTERVAL' "$TMP/p28-labels-flip.log"; then
+  ok "28-a2 翻转①：两张表都删掉 label_TEAM_PULSE_INTERVAL 后断言非 0 且点名该键"
+else
+  bad "28-a2 翻转①：删掉的标签没被抓住（rc=$P28_LBL_FLIP_RC）"; tail -3 "$TMP/p28-labels-flip.log"
+fi
+rm -rf "$P28_LBL/skills/teamsmith/scripts/panel/src"
+cp -r "$SKILL_DIR/scripts/panel/src" "$P28_LBL/skills/teamsmith/scripts/panel/src"
+sed -i '/^TEAM_MEETING_KNOCK|/d' "$P28_LBL/skills/teamsmith/scripts/lib/cmd-config.sh"
+"$JS_RUNNER" "$P28_TESTS/panel-strings.mjs" "$P28_LBL" >"$TMP/p28-labels-stale.log" 2>&1
+P28_LBL_STALE_RC=$?
+if [ "$P28_LBL_STALE_RC" -ne 0 ] && grep -q 'TEAM_MEETING_KNOCK' "$TMP/p28-labels-stale.log"; then
+  ok "28-a2 翻转②：schema 删掉一行后，留下的标签被抓住（点名 TEAM_MEETING_KNOCK）"
+else
+  bad "28-a2 翻转②：陈旧的标签没被抓住（rc=$P28_LBL_STALE_RC）"; tail -3 "$TMP/p28-labels-stale.log"
 fi
 
 # ---- 28-b 调色板对比度 ≥ 4.5:1；翻转 = 把 dark.text 压到与背景同色
@@ -9329,6 +9653,8 @@ m14_lib() { # <函数> [参数…]：按 CLI 的方式加载库后调用（展�
 m14 $TEAM task M14X --title "M14 fixture" --agent dev --deps "-" >"$TMP/m14-task.log" 2>&1 \
   && ok "M14 夹具：task 建好" || bad "M14 夹具：task 失败（见 $TMP/m14-task.log）"
 M14TASK="$(ls "$M14R"/docs/team/tasks/M14X-*.md 2>/dev/null | head -1)"
+# P24（B3）：change-less 的任务书要有锚（本节测的是模型的解析优先级）
+[ -n "$M14TASK" ] && sed -i 's|^anchor: -.*$|anchor: none (infra) — smoke fixture|' "$M14TASK"
 m14 $TEAM add-agent dev --create --no-install >"$TMP/m14-add.log" 2>&1 \
   && ok "M14 夹具：worktree 建好" || bad "M14 夹具：add-agent 失败（见 $TMP/m14-add.log）"
 M14WT="$M14R/.worktrees/dev"
@@ -9919,7 +10245,8 @@ exit 0
 EOF
   chmod +x "$FAKE/gate-probe.sh"
   GP_BRANCH="$(canon_branch gateprobe M36W)"
-  printf '# M36W 夹具 brief\n' > "$REPO/.pi/team/state/M36W-brief.md"
+  # P24（B3）：change-less 的任务书要有锚（本节测的是 tmux 运行时闸门）
+  printf '# M36W 夹具 brief\n\nanchor: none (infra) — smoke fixture\n' > "$REPO/.pi/team/state/M36W-brief.md"
   git -C "$REPO" worktree add -b "$GP_BRANCH" "$REPO/.worktrees/gateprobe" "$PROTECTED" >/dev/null 2>&1
   rm -f "$M36_D/env-worker.log" "$M36_D/env-worker.done"
   env TEAM_AGENTS="dev verify gateprobe" TEAM_AGENT_CMD="$FAKE/gate-probe.sh" TEAM_AGENT_BIN="$FAKE/gate-probe.sh" \
@@ -10174,7 +10501,8 @@ printf 'done\n' > "$M40_D/8c-worker.done"
 exit 0
 EOF
   chmod +x "$FAKE/m40-probe.sh"
-  printf '# M40W 夹具 brief\n' > "$REPO/.pi/team/state/M40W-brief.md"
+  # P24（B3）：change-less 的任务书要有锚（本节测的是身份推导）
+  printf '# M40W 夹具 brief\n\nanchor: none (infra) — smoke fixture\n' > "$REPO/.pi/team/state/M40W-brief.md"
   git -C "$REPO" worktree add -b "$GPW_BRANCH" "$REPO/.worktrees/m40w" "$PROTECTED" >/dev/null 2>&1
   rm -f "$M40_D/8c-worker-env.log" "$M40_D/8c-worker.done"
   m40_foreign TEAM_ALLOW_FOREIGN_IDENTITY=1 TEAM_AGENTS="dev m40w" \
@@ -10212,7 +10540,718 @@ else
   bad "33 缺 tests/config-cli.sh"
 fi
 
-# ---------------------------------------------------------------- 34. 读路径：根一次解析 + 单进程扫描（M50）
+# ═════════════════════════════════════════════════════════════════════════════
+# 12e–12j · change 为中心的纪律（P24 apply：B1 / B3 / B4 / B5 / B6）
+#
+# 夹具是**自己的 scratch 项目**（$TMP/p24/<名字>）：team init + 任务书 + 一个只记账的 tmux shim。
+# 不碰 $REPO、不起真进程（[real] 子段除外，那里 live_mark 并真起 tmux 场地）。
+# 判据编号对应 openspec/changes/change-centric-discipline/tasks.md；B2（digest/面板归组）本任务不做。
+# ═════════════════════════════════════════════════════════════════════════════
+P24_ROOT="$TMP/p24"
+P24_SHIM="$P24_ROOT/shim"
+P24_SHIM_LOG="$P24_ROOT/shim-calls.log"
+mkdir -p "$P24_SHIM"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$P24_SHIM_LOG" > "$P24_SHIM/tmux"
+chmod +x "$P24_SHIM/tmux"
+
+p24_project() { # <名字> [<agents>] → 打印项目路径（git + team init + openspec/specs + change alpha 目录）
+  local name="$1" agents="${2:-dev verify dev2}" p
+  p="$P24_ROOT/$name"
+  rm -rf "$p"; mkdir -p "$p"
+  ( cd "$p" && git init -q -b main && git config user.email p24@smoke && git config user.name p24 \
+      && git commit -q --allow-empty -m "chore: init" ) >/dev/null 2>&1
+  ( cd "$p" && $TEAM init --session "p24-$name" --agents "$agents" --vcs local --gates "true" --docs docs/team ) >"$p/.init.log" 2>&1
+  printf 'TEAM_PI_BIN="/bin/true"\n' >> "$p/.pi/team/config.sh"
+  mkdir -p "$p/openspec/specs/panel" "$p/openspec/specs/dispatch"
+  printf '### Requirement: The board page is a kanban over the board\x27s states\n' > "$p/openspec/specs/panel/spec.md"
+  printf '### Requirement: A brief is self-contained and names its evidence\n' > "$p/openspec/specs/dispatch/spec.md"
+  p24_change "$p" alpha
+  printf '%s\n' "$p"
+}
+p24_change() { # <项目> <change id> → 建一个带 panel delta 的 change 目录
+  local p="$1" c="$2"
+  mkdir -p "$p/openspec/changes/$c/specs/panel"
+  printf '## MODIFIED Requirements\n\n### Requirement: %s delta fixture\n' "$c" > "$p/openspec/changes/$c/specs/panel/spec.md"
+}
+p24_brief() { # <项目> <ID> <agent> <phase> <change> <deltas|@absent> [<anchor>] [<specs>]
+  local p="$1" id="$2" agent="$3" phase="$4" change="$5" deltas="$6" anchor="${7:-}" specs="${8:--}"
+  mkdir -p "$p/docs/team/tasks"
+  {
+    printf '# %s · fixture\n\n```\n' "$id"
+    printf 'task:   %s\nagent:  %s\nissue:  -\n' "$id" "$agent"
+    printf 'change: %s\nspecs:  %s\nphase:  %s\ndeps:   -\nstatus: todo\nbudget: -\n' "$change" "$specs" "$phase"
+    [ -n "$anchor" ] && printf 'anchor: %s\n' "$anchor"
+    [ "$deltas" = "@absent" ] || printf 'deltas: %s\n' "$deltas"
+    printf '```\n\nbody\n'
+  } > "$p/docs/team/tasks/$id-fixture.md"
+  return 0
+}
+p24_add() { # <项目> <ID> [<agent>]
+  local p="$1" id="$2" agent="${3:-dev}"
+  ( cd "$p" && $TEAM board add "$id" "$id fixture" "$agent" - - ) >/dev/null 2>&1
+  return 0
+}
+p24_team() { # <项目> <args...> → team CLI（stdout+stderr 合并）
+  local p="$1"; shift
+  ( cd "$p" && $TEAM "$@" ) 2>&1
+}
+p24_dispatch() { # <项目> <agent> <ID> <brief> [args...] → 记录式 shim 下的 dispatch（stdout+stderr）
+  local p="$1" agent="$2" id="$3" brief="$4"; shift 4
+  : > "$P24_SHIM_LOG"
+  ( cd "$p" && env PATH="$P24_SHIM:$PATH" TEAM_DISPATCH_VERIFY_SEC=1 TEAM_DISPATCH_ALIVE_SEC=0 \
+      $TEAM dispatch "$agent" "$id" "$brief" "$@" ) 2>&1
+}
+p24_shim_windows() { grep -cE 'new-window|new-session|respawn-pane' "$P24_SHIM_LOG" 2>/dev/null || true; }
+p24_branch() { # <项目> <agent> <ID> → 规范任务分支（canon_branch 绑死在 $REPO，这里自己算）
+  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent "'"$2"'" "'"$3"'"' )
+}
+p24_wt() { # <项目> <agent> <ID> → 把该 agent 的 worktree 停在 <ID> 的规范分支上（可重复调用）
+  local p="$1" a="$2" id="$3" br
+  git -C "$p" worktree remove --force "$p/.worktrees/$a" >/dev/null 2>&1 || true
+  git -C "$p" worktree prune >/dev/null 2>&1 || true
+  br="$(p24_branch "$p" "$a" "$id")"
+  [ -n "$br" ] || return 1
+  git -C "$p" branch -D "$br" >/dev/null 2>&1 || true
+  git -C "$p" worktree add -b "$br" "$p/.worktrees/$a" main >/dev/null 2>&1 || return 1
+  rm -f "$p/.pi/team/state/$a.env"
+  return 0
+}
+p24_pass() { # <项目> <id> → review 记录 PASS
+  local p="$1" id="$2"
+  mkdir -p "$p/docs/team/reviews"
+  printf -- '- 2026-09-20T00:00:00Z · `team review %s` · 判定: **PASS**\n' "$id" > "$p/docs/team/reviews/$id.md"
+}
+p24_board_row() { p24_team "$1" board row "$2" 2>/dev/null | tail -1; }
+p24_unchanged() { # <项目> <ID> <原行> <说明>
+  assert_eq "$4：看的板行没被改动" "$(p24_board_row "$1" "$2")" "$3"
+}
+p24_json_ok() { # <文本> → 0=是合法 JSON（没有解析器时退化成形状检查）
+  local t="$1"
+  if command -v python3 >/dev/null 2>&1; then printf '%s' "$t" | python3 -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; return $?; fi
+  if [ -n "$JS_RUNNER" ]; then printf '%s' "$t" | "$JS_RUNNER" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>JSON.parse(s))' >/dev/null 2>&1; return $?; fi
+  case "$t" in '{"id":'*'}') return 0 ;; esac
+  return 1
+}
+p24_read() { # <项目> <函数名> <brief> → 在项目上下文里直接驱动读取器（stdout+stderr 原样）
+  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; "$@"' _ "$2" "$3" ) 2>&1
+}
+
+# ---------------------------------------------------------------- 12e · change 视图（B1）
+section "12e · change 视图（P24/B1：严格头部读取 + 就绪判据）"
+if bash "$SKILL_DIR/tests/task-header-model.sh" >"$TMP/p24-header.log" 2>&1; then
+  ok "头部严格读取夹具全绿（$(grep -ac '✓' "$TMP/p24-header.log" 2>/dev/null || echo 0) 条断言）"
+else
+  bad "头部严格读取夹具有失败"
+  grep -a '✗' "$TMP/p24-header.log" | head -5 | sed 's/^/      /'
+fi
+
+P24E_R="$(p24_project 12e-ready)"
+p24_brief "$P24E_R" M1 dev apply alpha -
+p24_brief "$P24E_R" V1 verify verify alpha -
+p24_add "$P24E_R" M1 dev; p24_add "$P24E_R" V1 verify
+p24_pass "$P24E_R" M1; p24_pass "$P24E_R" V1
+p24_team "$P24E_R" board set M1 done >/dev/null 2>&1
+p24_team "$P24E_R" board set V1 done >/dev/null 2>&1
+E_READY="$(p24_team "$P24E_R" change status alpha)"; E_READY_RC=$?
+assert_eq "12e 全结束 → 退出 0" "$E_READY_RC" "0"
+assert_has_echo "$E_READY" "change alpha · ready" "12e 就绪行说明 ready"
+assert_has_echo "$E_READY" "docs/team/M1.md: PASS" "12e 任务行带复验判定"
+assert_has_echo "$E_READY" "docs/team/V1.md: PASS" "12e verify 任务的证据也在一行里"
+assert_has_echo "$E_READY" "delta files (openspec/changes/alpha/specs/)" "12e 列出 delta 文件段"
+
+P24E_N="$(p24_project 12e-notready)"
+p24_brief "$P24E_N" M1 dev apply alpha -
+p24_brief "$P24E_N" M2 dev2 apply alpha -
+p24_brief "$P24E_N" V1 dev verify alpha -
+p24_add "$P24E_N" M1 dev; p24_add "$P24E_N" M2 dev2; p24_add "$P24E_N" V1 dev
+p24_pass "$P24E_N" M1
+p24_team "$P24E_N" board set M1 done >/dev/null 2>&1
+p24_team "$P24E_N" board set M2 wip >/dev/null 2>&1
+E_NR="$(p24_team "$P24E_N" change status alpha)"; E_NR_RC=$?
+assert_eq "12e 有未结束兄弟 → 退出 1" "$E_NR_RC" "1"
+assert_has_echo "$E_NR" "change alpha · not ready" "12e 就绪行说明 not ready"
+assert_has_echo "$E_NR" "M2 · apply · wip ·" "12e blocker 点名 M2/阶段/看板状态"
+assert_has_echo "$E_NR" "review" "12e 缺失证据说明去哪找（复验记录）"
+assert_has_echo "$E_NR" "self-verify: dev（作者任务 M1）" "12e verify 的 agent 是 apply 作者 → self-verify 标记"
+assert_not_echo "$E_NR" "self-verify: dev2" "12e 没写过 apply 的 agent 不带标记"
+# 只读证据：命令不动工作区、不动看板
+E_BEFORE="$(cd "$P24E_N" && git status --porcelain; md5sum docs/team/BOARD.md | cut -d' ' -f1)"
+p24_team "$P24E_N" change status alpha >/dev/null 2>&1 || true
+E_AFTER="$(cd "$P24E_N" && git status --porcelain; md5sum docs/team/BOARD.md | cut -d' ' -f1)"
+assert_eq "12e change status 只读（工作区 + BOARD 字节不变）" "$E_AFTER" "$E_BEFORE"
+# --json 与人类视图同源
+E_JSON="$(p24_team "$P24E_N" change status alpha --json)"; E_JSON_RC=$?
+assert_eq "12e --json 未就绪退出 1" "$E_JSON_RC" "1"
+if p24_json_ok "$E_JSON"; then ok "12e --json 是合法 JSON"; else bad "12e --json 解析失败（$E_JSON）"; fi
+assert_has_echo "$E_JSON" '"id":"alpha"' "12e --json 带 id"
+assert_has_echo "$E_JSON" '"ready":false' "12e --json 带 ready=false"
+assert_has_echo "$E_JSON" '"tasks":[{"id":"M1"' "12e --json 每个映射任务一条"
+assert_has_echo "$E_JSON" '"deltas":[{"file":"panel/spec.md"' "12e --json 带 delta 文件视图"
+assert_has_echo "$E_JSON" '"blockers":[' "12e --json 带 blockers"
+assert_has_echo "$E_JSON" 'M2 · apply · wip ·' "12e --json 的 blocker 就是未结束的那个任务"
+E_UNK="$(p24_team "$P24E_N" change status no-such-change)"; E_UNK_RC=$?
+assert_eq "12e 未知 id → 非 0" "$([ "$E_UNK_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$E_UNK" "没有任务指向它" "12e 未知 id 说清「没有任务」"
+assert_has_echo "$E_UNK" "openspec/changes/no-such-change/ 目录" "12e 未知 id 说清「没有 change 目录」"
+
+# ---------------------------------------------------------------- 12f · （B2 不做）
+# 12f（digest 归组 + 面板 token）按任务书**明确留到 M48/M49/M50 之后**，这里不建段。
+
+# ---------------------------------------------------------------- 12g · 派单锚点（B3）
+section "12g · 派单锚点（P24/B3：一个 change id + change-less 的锚）"
+P24G="$(p24_project 12g)"
+# 拒绝夹具（不需要 worktree：守卫在开窗之前）
+p24_brief "$P24G" G1 dev apply "alpha, beta" -
+p24_brief "$P24G" G2 dev apply "alpha beta" -
+{
+  printf '# G3 · fixture\n\n```\ntask:   G3\nagent:  dev\nchange: alpha\nchange: beta\nphase:  apply\ndeltas: -\n```\n'
+} > "$P24G/docs/team/tasks/G3-fixture.md"
+p24_brief "$P24G" N1 dev apply - - "" -
+p24_brief "$P24G" N2 dev apply - - "none (infra) —"
+p24_brief "$P24G" N3 dev apply - - "" "no-such-capability#x"
+p24_brief "$P24G" N4 dev apply - - "" "panel#Not A Requirement"
+for _id in G1 G2 G3 N1 N2 N3 N4; do p24_add "$P24G" "$_id" dev; done
+G1_ROW="$(p24_board_row "$P24G" G1)"
+for _case in "G1:change: 的值是 \`alpha, beta\`" "G2:change: 的值是 \`alpha beta\`" "G3:change: 有 2 行"; do
+  _id="${_case%%:*}"; _frag="${_case#*:}"
+  _out="$(p24_dispatch "$P24G" dev "$_id" "docs/team/tasks/$_id-fixture.md" --print)"; _rc=$?
+  assert_eq "12g $_id 多 change → 拒绝（--print 也一样）" "$([ "$_rc" -ne 0 ] && echo yes || echo no)" "yes"
+  assert_has_echo "$_out" "拒绝派单：$_id" "12g $_id 的拒绝来自规则 1（不是后面的失败）"
+  assert_has_echo "$_out" "$_frag" "12g $_id 拒绝点名出错的那一行"
+  assert_has_echo "$_out" "接受的形式" "12g $_id 拒绝列出接受的形式"
+  assert_not_echo "$_out" "=== 提示词" "12g $_id --print 不打印提示词"
+  assert_eq "12g $_id 拒绝发生在开窗之前" "$(p24_shim_windows)" "0"
+done
+p24_unchanged "$P24G" G1 "$G1_ROW" "12g 派单被拒"
+for _case in "N1:specs: 是空的" "N2:少了理由" "N3:openspec/specs/no-such-capability/spec.md" "N4:### Requirement: Not A Requirement"; do
+  _id="${_case%%:*}"; _frag="${_case#*:}"
+  N_ROW="$(p24_board_row "$P24G" "$_id")"
+  _out="$(p24_dispatch "$P24G" dev "$_id" "docs/team/tasks/$_id-fixture.md")"; _rc=$?
+  assert_eq "12g $_id 锚缺失/不解析 → 拒绝" "$([ "$_rc" -ne 0 ] && echo yes || echo no)" "yes"
+  assert_has_echo "$_out" "拒绝派单：$_id" "12g $_id 的拒绝来自锚守卫（不是后面的失败）"
+  assert_has_echo "$_out" "$_frag" "12g $_id 拒绝说明具体缺什么"
+  assert_has_echo "$_out" "specs: <capability>#<requirement>" "12g $_id 列出两种接受形式（specs 式）"
+  assert_has_echo "$_out" "anchor: none (infra) — <非空理由>" "12g $_id 列出两种接受形式（infra 式）"
+  assert_eq "12g $_id 拒绝发生在开窗之前" "$(p24_shim_windows)" "0"
+  p24_unchanged "$P24G" "$_id" "$N_ROW" "12g $_id 被拒"
+done
+# 允许形态：一个 id；specs 解析；infra 带理由（都要 worktree 才能走到 --print 输出）
+p24_brief "$P24G" A1 dev apply alpha -
+p24_add "$P24G" A1 dev
+p24_brief "$P24G" A2 verify apply - - "" "panel#The board page is a kanban over the board's states"
+p24_add "$P24G" A2 verify
+p24_brief "$P24G" A3 dev2 apply - - "none (infra) — CI runner environment and test portability"
+p24_add "$P24G" A3 dev2
+for _case in "A1:dev" "A2:verify" "A3:dev2"; do
+  _id="${_case%%:*}"; _agent="${_case#*:}"
+  p24_wt "$P24G" "$_agent" "$_id" || bad "12g $_id worktree 建不出来"
+  _out="$(p24_dispatch "$P24G" "$_agent" "$_id" "docs/team/tasks/$_id-fixture.md" --print)"; _rc=$?
+  assert_eq "12g $_id 合法锚 → 放行" "$_rc" "0"
+  assert_has_echo "$_out" "=== 提示词" "12g $_id 打印了提示词（不是被拒）"
+  assert_not_echo "$_out" "拒绝派单" "12g $_id 没有拒绝文案"
+  assert_not_echo "$_out" "锚缺失" "12g $_id 没有锚警告"
+done
+# --force：锚缺失照派（真实落盘在成功后；headless 这里证明守卫放行且请求了窗口）
+p24_wt "$P24G" dev N1
+G_FORCE="$(p24_dispatch "$P24G" dev N1 docs/team/tasks/N1-fixture.md --force)"
+assert_has_echo "$G_FORCE" "显式覆盖（--force）：N1 没有 change:" "12g --force 打印锚缺失覆盖警告"
+assert_eq "12g --force 确实越过了守卫（走到了建窗口）" "$([ "$(p24_shim_windows)" -ge 1 ] && echo yes || echo no)" "yes"
+assert_eq "12g 规则 1 没有 --force 逃生门" "$(p24_dispatch "$P24G" dev G1 docs/team/tasks/G1-fixture.md --print --force | grep -c '拒绝派单' || true)" "1"
+# 3.6 [real]：没有 shim 的真实拒绝 —— 连 session 都不该被建出来
+if [ "$FAST" = "1" ]; then
+  fast_skip "12g·真实拒绝路径" "要真实 tmux 场地（无 shim）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  _out="$( ( cd "$P24G" && $TEAM dispatch dev G1 docs/team/tasks/G1-fixture.md ) 2>&1 )"; _rc=$?
+  assert_eq "12g [real] 拒绝退出非 0" "$([ "$_rc" -ne 0 ] && echo yes || echo no)" "yes"
+  if tmux has-session -t p24-12g 2>/dev/null; then bad "12g [real] 拒绝却建出了 session p24-12g"; else ok "12g [real] 拒绝没建 session（一扇窗都没有）"; fi
+  _out="$( ( cd "$P24G" && $TEAM dispatch dev G1 docs/team/tasks/G1-fixture.md --print ) 2>&1 )"
+  assert_not_echo "$_out" "=== 提示词" "12g [real] --print 拒绝时不打印提示词"
+else
+  printf '  (跳过 12g 真实拒绝路径：没有 tmux)\n'
+fi
+
+# ---------------------------------------------------------------- 12h · delta 单写者（B4）
+section "12h · delta 单写者（P24/B4）"
+P24H="$(p24_project 12h)"
+p24_change "$P24H" delta
+p24_change "$P24H" beta
+p24_change "$P24H" gamma
+p24_brief "$P24H" M1 dev apply alpha panel        # 未结束的兄弟（board wip）
+p24_brief "$P24H" M2 dev2 apply alpha panel       # 与 M1 共享 panel → 拒绝
+p24_brief "$P24H" M3 dev apply alpha -            # 不写 delta → 放行
+p24_brief "$P24H" N1 verify apply delta @absent   # deltas: 行缺失 → 读作全量
+p24_brief "$P24H" N2 dev2 apply delta panel       # 与 N1 冲突 → 拒绝
+p24_brief "$P24H" B1 verify apply beta panel      # 另一个 change（alpha 的兄弟不该拦它）
+p24_brief "$P24H" G1 dev apply gamma panel        # 已结束的兄弟 → 不拦
+p24_brief "$P24H" G2 dev2 apply gamma panel
+for _id in M1 M2 M3 N1 N2 B1 G1 G2; do p24_add "$P24H" "$_id" dev; done
+p24_team "$P24H" board set M1 wip >/dev/null 2>&1
+p24_team "$P24H" board set N1 wip >/dev/null 2>&1
+p24_pass "$P24H" G1
+p24_team "$P24H" board set G1 done >/dev/null 2>&1
+M1_ROW="$(p24_board_row "$P24H" M1)"
+p24_wt "$P24H" dev2 M2
+H_OUT="$(p24_dispatch "$P24H" dev2 M2 docs/team/tasks/M2-fixture.md)"; H_RC=$?
+assert_eq "12h 同声明兄弟 → 拒绝" "$([ "$H_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$H_OUT" "拒绝派单：change alpha" "12h 拒绝来自 delta 单写者守卫"
+assert_has_echo "$H_OUT" "兄弟任务：M1" "12h 拒绝点名兄弟任务"
+assert_has_echo "$H_OUT" "看板 wip" "12h 拒绝带兄弟的看板状态"
+assert_has_echo "$H_OUT" "共享文件：openspec/changes/alpha/specs/panel/spec.md" "12h 拒绝点名共享文件"
+assert_has_echo "$H_OUT" "它的声明：deltas: panel" "12h 拒绝带兄弟的声明"
+assert_has_echo "$H_OUT" "本次声明：deltas: panel" "12h 拒绝带本次声明"
+assert_eq "12h 拒绝发生在开窗之前" "$(p24_shim_windows)" "0"
+p24_unchanged "$P24H" M1 "$M1_ROW" "12h 派单被拒"
+p24_wt "$P24H" dev M3
+H_OK="$(p24_dispatch "$P24H" dev M3 docs/team/tasks/M3-fixture.md --print)"; H_OK_RC=$?
+assert_eq "12h 不写 delta 的任务放行" "$H_OK_RC" "0"
+assert_has_echo "$H_OK" "delta 单写者检查" "12h 放行时说明做了单写者检查"
+assert_has_echo "$H_OK" "本次 deltas: -（不写 delta）" "12h 放行时说明本次声明是空集"
+p24_wt "$P24H" dev2 N2
+H_N="$(p24_dispatch "$P24H" dev2 N2 docs/team/tasks/N2-fixture.md)"; H_N_RC=$?
+assert_eq "12h 兄弟缺 deltas 行 + 新声明 → 拒绝" "$([ "$H_N_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$H_N" "没有 deltas: 行 → 读作整个 change 的 delta 集" "12h 说明缺行被读作全量"
+p24_wt "$P24H" verify B1
+H_B="$(p24_dispatch "$P24H" verify B1 docs/team/tasks/B1-fixture.md --print)"; H_B_RC=$?
+assert_eq "12h alpha 的未结束兄弟不会拦别的 change" "$H_B_RC" "0"
+p24_wt "$P24H" dev2 G2
+H_G="$(p24_dispatch "$P24H" dev2 G2 docs/team/tasks/G2-fixture.md --print)"; H_G_RC=$?
+assert_eq "12h 已结束的兄弟不拦" "$H_G_RC" "0"
+p24_pass "$P24H" M1
+p24_team "$P24H" board set M1 done >/dev/null 2>&1
+p24_wt "$P24H" dev2 M2
+H_DONE="$(p24_dispatch "$P24H" dev2 M2 docs/team/tasks/M2-fixture.md --print)"; H_DONE_RC=$?
+assert_eq "12h 兄弟 done（且有证据）→ 不拦" "$H_DONE_RC" "0"
+p24_team "$P24H" board set M1 wip >/dev/null 2>&1
+p24_brief "$P24H" M4 dev apply alpha panel        # 无证据的 alpha 兄弟（--force 用例）
+p24_add "$P24H" M4 dev
+H_F="$(p24_dispatch "$P24H" dev2 M2 docs/team/tasks/M2-fixture.md --force)"
+assert_has_echo "$H_F" "显式覆盖（--force）：change alpha 的 delta 单写者冲突" "12h --force 打印冲突覆盖警告"
+assert_has_echo "$H_F" "M4（看板 todo）与 M2 都会写 openspec/changes/alpha/specs/panel/spec.md" "12h --force 警告点名两个任务与文件"
+assert_eq "12h --force 越过守卫（走到建窗口）" "$([ "$(p24_shim_windows)" -ge 1 ] && echo yes || echo no)" "yes"
+assert_eq "12h --force 只写一行审计" "$(p24_dispatch "$P24H" dev2 M2 docs/team/tasks/M2-fixture.md --force | grep -c '显式覆盖（--force）' || true)" "1"
+# 4.5 [real]：--force 的审计真的落进 state/watchdog.log，monitor 的事件列看得到
+if [ "$FAST" = "1" ]; then
+  fast_skip "12h·--force 审计落盘" "要真实 tmux 场地（真派单成功才写审计）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 5\n' "$TMP/p24-pi-args.log" > "$FAKE/pi-p24"
+  chmod +x "$FAKE/pi-p24"
+  printf 'TEAM_PI_BIN="%s"\n' "$FAKE/pi-p24" >> "$P24H/.pi/team/config.sh"
+  p24_wt "$P24H" dev2 M2
+  : > "$P24H/.pi/team/state/watchdog.log"
+  H_REAL="$( ( cd "$P24H" && $TEAM dispatch dev2 M2 docs/team/tasks/M2-fixture.md --force ) 2>&1 )"; H_REAL_RC=$?
+  assert_eq "12h [real] --force 派单成功" "$H_REAL_RC" "0"
+  assert_eq "12h [real] 审计恰好一行" "$(grep -c 'delta 单写者' "$P24H/.pi/team/state/watchdog.log" 2>/dev/null || true)" "1"
+  assert_has "$P24H/.pi/team/state/watchdog.log" "M4 与 M2 共享" "12h [real] 审计行点名两个任务与文件"
+  H_MON="$( ( cd "$P24H" && $TEAM monitor --once --no-pulse --print --events 8 --width 200 ) 2>&1 )" || true
+  assert_has_echo "$H_MON" "delta 单写者" "12h [real] monitor 的事件列看得到这条审计"
+  tmux kill-window -t p24-12h:dev2 2>/dev/null || true
+else
+  printf '  (跳过 12h --force 审计落盘：没有 tmux)\n'
+fi
+
+# ---------------------------------------------------------------- 12i · 按 change 判独立性（B5）
+section "12i · 按 change 判独立性（P24/B5）"
+P24I="$(p24_project 12i)"
+p24_brief "$P24I" M1 dev apply alpha -
+p24_brief "$P24I" V1 dev verify alpha -
+p24_brief "$P24I" V2 verify verify alpha -
+p24_brief "$P24I" M2 dev2 apply alpha -
+{ printf '# M3 · fixture\n\n```\ntask:   M3\nagent:  -\nchange: alpha\nspecs:  -\nphase:  apply\ndeltas: -\n```\n'; } > "$P24I/docs/team/tasks/M3-fixture.md"
+for _id in M1 V1 V2 M2 M3; do p24_add "$P24I" "$_id" dev; done
+p24_team "$P24I" board set M1 wip >/dev/null 2>&1
+p24_team "$P24I" board set M3 wip >/dev/null 2>&1
+p24_wt "$P24I" dev V1
+I_OUT="$(p24_dispatch "$P24I" dev V1 docs/team/tasks/V1-fixture.md)"; I_RC=$?
+assert_eq "12i 作者自验 → 拒绝" "$([ "$I_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$I_OUT" "拒绝派单：verification 不独立" "12i 拒绝来自作者守卫"
+assert_has_echo "$I_OUT" "verification 不独立" "12i 拒绝说明按 change 判独立性"
+assert_has_echo "$I_OUT" "change：alpha ｜ agent：dev" "12i 拒绝点名 change 与 agent"
+assert_has_echo "$I_OUT" "不能自己验自己" "12i 拒绝说明「不能自己验自己」"
+assert_has_echo "$I_OUT" "M1" "12i 拒绝点名写过的 apply 任务"
+assert_eq "12i 拒绝发生在开窗之前" "$(p24_shim_windows)" "0"
+assert_eq "12i 视图同意守卫：self-verify 标记" "$(p24_team "$P24I" change status alpha | grep -c 'self-verify: dev' || true)" "1"
+p24_wt "$P24I" verify V2
+I_OK="$(p24_dispatch "$P24I" verify V2 docs/team/tasks/V2-fixture.md --print)"; I_OK_RC=$?
+assert_eq "12i 换一个 agent → 放行" "$I_OK_RC" "0"
+p24_team "$P24I" board set M1 dropped >/dev/null 2>&1
+I_DROP="$(p24_dispatch "$P24I" dev V1 docs/team/tasks/V1-fixture.md --print)"; I_DROP_RC=$?
+assert_eq "12i 作者任务 dropped → 放行" "$I_DROP_RC" "0"
+assert_has_echo "$I_DROP" "已排除（看板 dropped）：M1" "12i dropped 的任务被点名排除"
+p24_team "$P24I" change status alpha | grep -c 'self-verify: dev' >/dev/null 2>&1 && bad "12i dropped 后视图还标 self-verify" || ok "12i dropped 后视图不再标 self-verify"
+I_MISS="$(p24_dispatch "$P24I" dev V1 docs/team/tasks/V1-fixture.md --print)"; I_MISS_RC=$?
+assert_eq "12i 作者信号缺失（无 agent:）→ 放行" "$I_MISS_RC" "0"
+assert_has_echo "$I_MISS" "作者信号缺失" "12i 缺信号很吵（不冒充干净）"
+p24_team "$P24I" board set M1 wip >/dev/null 2>&1
+p24_wt "$P24I" dev V1
+I_FORCE="$(p24_dispatch "$P24I" dev V1 docs/team/tasks/V1-fixture.md --force)"
+assert_has_echo "$I_FORCE" "显式覆盖（--force）：verification 不再独立" "12i --force 打印自验覆盖警告"
+assert_has_echo "$I_FORCE" "verification 不再独立" "12i --force 仍说清损失（verification 不再独立）"
+assert_eq "12i --force 越过守卫" "$([ "$(p24_shim_windows)" -ge 1 ] && echo yes || echo no)" "yes"
+
+# ---------------------------------------------------------------- 12j · 归档前提（B6）
+section "12j · 归档前提（P24/B6）"
+P24J="$(p24_project 12j)"
+mkdir -p "$P24J/openspec/changes/archive/2026-09-20-alpha"
+p24_brief "$P24J" A1 pm archive alpha -
+p24_brief "$P24J" M1 dev apply alpha -
+p24_brief "$P24J" C1 pm archive - -
+p24_add "$P24J" A1 pm; p24_add "$P24J" M1 dev; p24_add "$P24J" C1 pm
+p24_team "$P24J" board set M1 wip >/dev/null 2>&1
+A1_ROW="$(p24_board_row "$P24J" A1)"
+J_OUT="$(p24_team "$P24J" board set A1 done)"; J_RC=$?
+assert_eq "12j 未结束兄弟 → done 被拒" "$([ "$J_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$J_OUT" "M1" "12j 拒绝点名未结束的兄弟"
+assert_has_echo "$J_OUT" "看板状态 wip" "12j 拒绝带兄弟的看板状态"
+assert_has_echo "$J_OUT" "还没就绪" "12j 拒绝说明归档前提是整个 change"
+p24_unchanged "$P24J" A1 "$A1_ROW" "12j 归档任务 done 被拒"
+# 同一份判据：视图与闸门点名同一个 blocker
+J_VIEW="$(p24_team "$P24J" change status alpha)"; J_VIEW_RC=$?
+assert_eq "12j 视图未就绪（退出 1）" "$J_VIEW_RC" "1"
+assert_has_echo "$J_VIEW" "M1 · apply · wip ·" "12j 视图与闸门点同一个 blocker"
+# 兄弟拿到证据 → 归档闸门放行 → 视图跟着 ready
+p24_pass "$P24J" M1
+p24_team "$P24J" board set M1 done >/dev/null 2>&1
+J_OK="$(p24_team "$P24J" board set A1 done)"; J_OK_RC=$?
+assert_eq "12j 兄弟结束后归档任务可以 done" "$J_OK_RC" "0"
+assert_file "$P24J/docs/team/reviews/A1-done.md" "12j done 证据落盘"
+assert_has "$P24J/docs/team/reviews/A1-done.md" "归档目录" "12j 证据行就是归档目录那条"
+p24_team "$P24J" change status alpha >/dev/null 2>&1 && J_READY_RC=0 || J_READY_RC=$?
+assert_eq "12j 归档任务 done 后视图翻 ready" "$J_READY_RC" "0"
+# 显式覆盖仍然工作（FORCED + 理由 + 审计）：先抽掉 M1 的证据，让它真的「未结束」
+p24_team "$P24J" board set M1 wip >/dev/null 2>&1
+rm -f "$P24J/docs/team/reviews/M1.md"
+p24_team "$P24J" board set A1 todo >/dev/null 2>&1
+J_FORCED="$(cd "$P24J" && env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON="sibling accepted by the user" $TEAM board set A1 done 2>&1)"; J_FORCED_RC=$?
+assert_eq "12j 覆盖 → 成功" "$J_FORCED_RC" "0"
+assert_has_echo "$J_FORCED" "FORCED" "12j 覆盖记录 FORCED"
+J_DONE_REC="$(head -c 4000 "$P24J/docs/team/reviews/A1-done.md" 2>/dev/null || true)"
+assert_has_echo "$J_DONE_REC" "理由：sibling accepted by the user" "12j 覆盖理由落进审计"
+# change-less 的归档任务：旧行为逐字不变（还是那句「没有 change: 行」）
+C1_OUT="$(p24_team "$P24J" board set C1 done)"; C1_RC=$?
+assert_eq "12j change: - 的归档任务行为不变" "$([ "$C1_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$C1_OUT" "任务书没有 change: 行" "12j change: - 走旧的拒绝文案"
+assert_not_echo "$C1_OUT" "还没就绪" "12j change: - 不会被新判据接管"
+
+# ---------------------------------------------------------------- 12k · 模板与文档（B7）
+section "12k · 模板与文档（P24/B7）"
+P24K="$(p24_project 12k)"
+p24_team "$P24K" task T9.9 --title "probe" --agent dev >/dev/null 2>&1
+TK="$P24K/docs/team/tasks/T9.9-probe.md"
+assert_file "$TK" "12k 模板渲染出任务书"
+for _k in change specs anchor phase deltas; do
+  assert_match "$TK" "^$_k:" "12k 模板含 $_k: 行"
+done
+# 严格读取器接受渲染出的 `-` 占位值；锚行是待填空（change-less 时规则 B 会要求它）
+K_CHG="$(p24_read "$P24K" team_task_change_value "$TK")"; K_CHG_RC=$?
+assert_eq "12k change: - 读成「无 change」" "$([ "$K_CHG_RC" -eq 0 ] && printf '%s' "$K_CHG" || printf 'rc=%s' "$K_CHG_RC")" "-"
+K_DEL="$(p24_read "$P24K" team_task_deltas "$TK")"; K_DEL_RC=$?
+assert_eq "12k deltas: - 可读（rc 0）" "$K_DEL_RC" "0"
+assert_eq "12k deltas: - 读成空集" "$K_DEL" ""
+K_ANC="$(p24_read "$P24K" team_task_anchor "$TK")"; K_ANC_RC=$?
+assert_eq "12k anchor: - 是待填空（规则 B 会拒绝）" "$([ "$K_ANC_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$K_ANC" "specs: <capability>#<requirement>" "12k 拒绝时给出两种接受形式"
+sed -i 's|^anchor: -.*$|anchor: none (infra) — CI runner environment and test portability|' "$TK"
+K_ANC2="$(p24_read "$P24K" team_task_anchor "$TK")"; K_ANC2_RC=$?
+assert_eq "12k 填了 infra 锚 → 接受" "$K_ANC2_RC" "0"
+assert_has_echo "$K_ANC2" "CI runner environment and test portability" "12k infra 理由原样读出"
+sed -i 's|^change: -.*$|change: alpha|' "$TK"
+assert_eq "12k 填了 change → 读出 id" "$(p24_read "$P24K" team_task_change_value "$TK")" "alpha"
+# 7.2 文档：清单加点 9/10、归档行带 readiness 命令、原八点不动
+OPENSPEC_MD="$SKILL_DIR/references/openspec.md"
+assert_has "$OPENSPEC_MD" "One change per task" "7.2 checklist gains point 9"
+assert_has "$OPENSPEC_MD" "The anchor exists" "7.2 checklist gains point 10"
+assert_has "$OPENSPEC_MD" "team change status" "7.2 archive row carries the readiness command"
+assert_has "$OPENSPEC_MD" "1. **Matches the approved exploration**" "7.2 existing point 1 unchanged"
+assert_has "$OPENSPEC_MD" "8. **Granularity**" "7.2 existing point 8 unchanged"
+assert_eq "7.2 checklist now has exactly ten points" "$(grep -cE '^[0-9]+\. \*\*' "$OPENSPEC_MD" || true)" "10"
+assert_has "$OPENSPEC_MD" "1 change : N tasks" "7.2 §2 states the model"
+# 7.3 help / SKILL / protocol：四条拒绝类
+assert_has_echo "$($TEAM help 2>&1)" "change status" "7.3 team help lists change status"
+assert_has "$SKILL_DIR/SKILL.md" "team change status <id> [--json]" "7.3 SKILL command table carries it"
+for _frag in "One change id" "declares its anchor" "One delta file, one writer" "The verifier is not an author"; do
+  assert_has "$SKILL_DIR/references/protocol.md" "$_frag" "7.3 protocol names the refusal class: $_frag"
+done
+assert_has "$SKILL_DIR/references/protocol.md" "self-verify: <agent>" "7.3 protocol names the self-verify mark"
+# 7.4 渲染出的 AGENTS/PROTOCOL 含新段；仓库 AGENTS.md 与模板逐字一致（模板是源）
+assert_has "$P24K/AGENTS.md" "The change is the assignment unit" "7.4 rendered AGENTS carries the paragraph"
+assert_has "$P24K/docs/team/PROTOCOL.md" "The change is the assignment unit" "7.4 rendered PROTOCOL carries it"
+_para_tmpl="$(awk '/\*\*The change is the assignment unit\*\*/,/while a sibling is unfinished\./' "$SKILL_DIR/templates/AGENTS.section.md.tmpl")"
+_para_repo="$(awk '/\*\*The change is the assignment unit\*\*/,/while a sibling is unfinished\./' "$SKILL_DIR/../../AGENTS.md")"
+assert_eq "7.4 repo AGENTS.md 与模板逐字一致（模板是源）" "$_para_repo" "$_para_tmpl"
+assert_has "$SKILL_DIR/templates/PROTOCOL.md.tmpl" "The change is the assignment unit" "7.4 PROTOCOL 模板也带这段"
+
+section "34 · 门禁锁：排队/运行分开记账（P26/G1：verification#The hard timeout covers the gate run, not the queue）"
+# 事故（M49，2026-09-20）：`team review` 的硬超时把**排队**也算进去了 —— 门禁命令自己在机器锁上排了
+# 930s、跑了 870s，就被记成 TIMEOUT，而同一个 HEAD 在机器安静后是 PASS 的。本段钉住修复后的形状：
+#   ① 排队不消耗运行预算（排队 + 运行 > 上限 仍判 PASS）；② 排队超上限 = FAIL 并点名持锁者（不是 TIMEOUT）；
+#   ③ 真跑超限仍是 TIMEOUT 且带 ran=Ns；④ 祖先持锁不再二次排队；⑤ 没有 flock 就打印降级；
+#   ⑥ 三种结局下 `team_review_verdict` 仍解析出正确的 token（记录词汇是闭集，且记账写在粗体 token 之外）。
+# 安全：本段所有的锁都是**私有路径**（$TMP/p34-lock）—— 绝不碰机器锁 ${TMPDIR:-/tmp}/teamsmith-smoke.lock；
+# 持锁助手随方案退出即释放；身份隔离（-u TEAM_*/SMOKE_*）与 §27 的夹具同形。
+P34D="$TMP/p34"; P34R="$P34D/repo"; P34_LOCK="$P34D/lock"; P34_SHIM="$P34D/shim"
+P34_TMUX_LOG="$P34D/tmux-calls.log"; P34_HOLDER=""; : > "$P34_TMUX_LOG"
+rm -rf "$P34D"; mkdir -p "$P34R" "$P34_SHIM"
+( cd "$P34R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo "# p34" > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+p34() { ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+            -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+            -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+            "$@" ); }
+p34 $TEAM init --session "smoke-p34-$$" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$P34D/init.log" 2>&1 \
+  && ok "34 夹具：沙盒 init 退出码 0" || { bad "34 夹具：init 失败"; tail -3 "$P34D/init.log"; }
+mkdir -p "$P34R/docs/team/reports" "$P34R/docs/team/reviews"
+printf '# T1.1 · 夹具报告\n\nagent: dev\n' > "$P34R/docs/team/reports/T1.1-dev.md"
+# 持锁助手：flock -x 持住私有锁，随方案退出即释放；同时写 <lock>.holder（review 读它点名持锁者）。
+p34_hold() { # <秒>
+  : >>"$P34_LOCK"; rm -f "$P34_LOCK.holder"
+  flock -x "$P34_LOCK" sleep "$1" &
+  P34_HOLDER=$!
+  sleep 0.4
+  printf '%s pid=%s cmd=p34-holder\n' "$(date -Is)" "$P34_HOLDER" > "$P34_LOCK.holder"
+}
+p34_release() { [ -n "$P34_HOLDER" ] && { kill "$P34_HOLDER" 2>/dev/null; wait "$P34_HOLDER" 2>/dev/null; }; P34_HOLDER=""; }
+# 身份干净 + 私有锁 + 沙盒脏树覆盖（夹具仓的 docs/team 本来就是 init 出来的未提交内容）
+p34_review() { # <out> <timeout> <lock_wait> <gates> [extra env assignments…]
+  local out="$1" tlim="$2" cap="$3" gates="$4"; shift 4
+  ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED \
+      TEAM_SMOKE_LOCK="$P34_LOCK" TEAM_SMOKE_LOCK_WAIT="$cap" TEAM_GATES="$gates" \
+      TEAM_REVIEW_TIMEOUT="$tlim" TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 "$@" \
+      $TEAM review T1.1 --dir "$P34R" --branch main ) >"$out" 2>&1
+}
+p34_record() { printf '%s' "$P34R/docs/team/reviews/T1.1.md"; }
+p34_verdict() { # 用 CLI 自己的解析器（common.sh 的 team_review_verdict），不是本段自己写正则
+  ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      TEAM_DOCS_ABS="$P34R/docs/team" bash -c "source '$SKILL_DIR/scripts/lib/common.sh' >/dev/null 2>&1; team_review_verdict T1.1" ) 2>/dev/null
+}
+p34_field() { sed -n "s/$1/\\1/p" "$(p34_record)" 2>/dev/null | head -1; }
+
+# ① 长排队不消耗运行预算（M49 的形状：**门禁命令自己也会去排队** —— 真实门禁命令里 smoke.sh 就是
+#    这样，它会认 SMOKE_LOCK_WRAPPED 这个「祖先已持有」的标记；夹具门禁照抄这个契约）
+p34_hold 7
+P34_RC=0; p34_review "$P34D/a.log" 5 60 '[ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ] || flock -w 60 "$TEAM_SMOKE_LOCK" true; sleep 3' || P34_RC=$?
+p34_release
+P34_Q="$(p34_field '.*queued=\([0-9]*\)s.*')"; P34_R="$(p34_field '.*ran=\([0-9]*\)s.*')"
+assert_eq "34① 排队 + 运行 > 上限 仍判 PASS（rc）" "$P34_RC" "0"
+if [ -n "$P34_Q" ] && [ -n "$P34_R" ] && [ "$((P34_Q + P34_R))" -gt 5 ]; then
+  ok "34① 排队不计入硬超时：queued ${P34_Q}s + ran ${P34_R}s > limit 5s，判定仍 PASS"
+else
+  bad "34① 记账不对（queued=${P34_Q:-无} ran=${P34_R:-无}）—— 记录：$(p34_field '闸门计时.*')"
+fi
+[ "${P34_R:-0}" -ge 2 ] && [ "${P34_R:-0}" -le 5 ] && ok "34① ran 是门禁实际运行秒数（${P34_R}s，3s 门禁 + 启动）" \
+  || bad "34① ran 不对（${P34_R:-无}s）"
+# 门禁没有在锁上白等：它自己也知道锁已被祖先持有（否则就是自己和自己排队 → M49 的 TIMEOUT）
+grep -aq 'SMOKE_LOCK_WRAPPED' "$P34D/a.log" && ok "34① review 把 wrapped 标记交给了门禁（子套件不再二次排队）" \
+  || bad "34① 门禁没有收到 wrapped 标记（嵌套时会自锁）"
+assert_has "$(p34_record)" "limit=5s queued=" "34① 记录带机器可读的三个区间"
+assert_eq "34① team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
+
+# ② 排队超上限：FAIL + 点名持锁者 + 「门禁没有运行」（不是 TIMEOUT）
+p34_hold 20
+P34_RC=0; p34_review "$P34D/b.log" 30 2 'sleep 1' || P34_RC=$?
+p34_release
+assert_eq "34② 排队超上限 → 非 0" "$P34_RC" "1"
+assert_has "$(p34_record)" '判定: **FAIL**' "34② 判定是 FAIL"
+assert_has "$(p34_record)" '门禁没有运行' "34② 记录写明门禁没有运行"
+assert_has "$(p34_record)" 'cmd=p34-holder' "34② 记录点名持锁者（夹具的 holder 记录）"
+assert_eq "34② 排队超限不产生 TIMEOUT 判定" "$(grep -c '判定: \*\*TIMEOUT\*\*' "$(p34_record)" || true)" "0"
+assert_eq "34② team_review_verdict 仍解析出 FAIL" "$(p34_verdict)" "FAIL"
+
+# ③ 真跑超限仍是 TIMEOUT（语义不变）+ ran 记账
+P34_RC=0; p34_review "$P34D/c.log" 2 60 'sleep 60' || P34_RC=$?
+assert_eq "34③ 真跑超上限 → 非 0" "$P34_RC" "1"
+assert_has "$(p34_record)" '判定: **TIMEOUT**' "34③ 判定是 TIMEOUT（语义不变）"
+assert_match "$(p34_record)" 'ran=[0-9]+s' "34③ TIMEOUT 记录带 ran=Ns"
+assert_eq "34③ team_review_verdict 仍解析出 TIMEOUT" "$(p34_verdict)" "TIMEOUT"
+
+# ④ 祖先已持锁：不再二次排队（queued=0s，且不等满）
+p34_hold 10
+P34_T0=$(date +%s)
+P34_RC=0; p34_review "$P34D/d.log" 20 60 'sleep 1' SMOKE_LOCK_WRAPPED=1 || P34_RC=$?
+P34_T1=$(date +%s)
+p34_release
+assert_eq "34④ 祖先持锁 → rc=0" "$P34_RC" "0"
+assert_has "$(p34_record)" '已由祖先持有' "34④ 记录写明已由祖先持有（不二次排队）"
+assert_eq "34④ 不排队：锁被占的 10s 内就返回（实测 $((P34_T1 - P34_T0))s）" "$([ $((P34_T1 - P34_T0)) -lt 8 ] && echo yes || echo no)" "yes"
+assert_eq "34④ team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
+
+# ⑤ 没有 flock：打印降级（不是静默）+ 照跑门禁
+P34_NOFL="$P34D/noflock"; rm -rf "$P34_NOFL"; mkdir -p "$P34_NOFL"
+while IFS= read -r p34t; do
+  [ "$p34t" = "flock" ] && continue
+  p34p="$(command -v "$p34t" 2>/dev/null)" || continue
+  [ -n "$p34p" ] && ln -sf "$p34p" "$P34_NOFL/$p34t" 2>/dev/null || true
+done < <(compgen -c 2>/dev/null | sort -u)
+if [ ! -x "$P34_NOFL/bash" ] || [ -e "$P34_NOFL/flock" ]; then
+  bad "34⑤ 无 flock 夹具没搭好（bash=$([ -x "$P34_NOFL/bash" ] && echo yes || echo no) flock=$([ -e "$P34_NOFL/flock" ] && echo yes || echo no)）"
+else
+  P34_RC=0; p34_review "$P34D/e.log" 30 60 'sleep 1' PATH="$P34_NOFL" || P34_RC=$?
+  assert_eq "34⑤ 没有 flock 也照跑（rc=0，不是静默跳过）" "$P34_RC" "0"
+  assert_match "$P34D/e.log" '门禁排队未启用' "34⑤ 打印了「排队未启用」的降级说明"
+  assert_has "$(p34_record)" '排队未启用' "34⑤ 记录里也写明排队未启用"
+fi
+
+# ⑥ 排队阶段不碰 tmux、不改看板（用 shim 证明：真调用会被记下且失败）
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 1\n' "$P34_TMUX_LOG" > "$P34_SHIM/tmux"; chmod +x "$P34_SHIM/tmux"
+P34_BOARD_BEFORE="$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)"
+p34_hold 4
+P34_RC=0; p34_review "$P34D/f.log" 20 60 'sleep 1' PATH="$P34_SHIM:$PATH" || P34_RC=$?
+p34_release
+assert_eq "34⑥ tmux 被 shim 顶掉也照样跑通（rc=0）" "$P34_RC" "0"
+assert_eq "34⑥ 排队阶段一次 tmux 都没调（shim 日志为空）" "$(grep -c . "$P34_TMUX_LOG" 2>/dev/null || printf 0)" "0"
+assert_eq "34⑥ 看板一个字节没动" "$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)" "$P34_BOARD_BEFORE"
+p34_release
+
+section "35 · 性能前提：负载门与夹具旋钮的边界（P26/G2：panel#Frame assembly is asynchronous… MODIFIED）"
+# 红线本身没动：一帧 2000ms、稳态 1% 单核。变的是**什么时候判** —— 只在
+# `loadavg_1m ≤ 0.75 × 逻辑核数` 时判；前提不成立就打印实测值 + load 并 **SKIP**（既不是通过也不是红）。
+# 两个方向都在这里钉住（PM 审查要点②：“负载前提”不能退化成“想跳就跳”）：
+#   （i）夹具模式下三种结局 + 边界（=阈值算成立、阈值 +0.1 算不成立）；
+#   （ii）**真路径下**（不打开夹具开关）注入被忽略且**不改变判定**，且忽略是打印出来的。
+P35_CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
+if [ "${P35_CORES:-0}" -gt 0 ] 2>/dev/null; then
+  P35_THR="$(awk -v c="$P35_CORES" 'BEGIN { printf "%.2f", 0.75 * c }')"
+  P35_EDGE="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", t }')"
+  P35_OVER="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", t + 0.1 }')"
+  P35_QUIET="$(awk -v t="$P35_THR" 'BEGIN { printf "%.2f", (t > 1.0) ? t - 1.0 : 0 }')"
+  ok "35 夹具自检：核数 ${P35_CORES} → 阈值 ${P35_THR}（0.75 × 核数），边界用例用 ${P35_EDGE} / ${P35_OVER}"
+else
+  bad "35 夹具自检：读不到逻辑核数（nproc / getconf 都没给）—— 阈值用例自己都站不住"
+  P35_THR=0.75; P35_EDGE=0.75; P35_OVER=0.85; P35_QUIET=0
+fi
+# 真测一次注入：夹具模式下注入被采信，且它真的把一次采样抬过 2000ms 红线
+P35_SLOW=0
+export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_FRAME_DELAY_MS=2600
+P35_INJ="$(p27_inject_ms)"
+unset TEAM_SMOKE_FIXTURE TEAM_SMOKE_FRAME_DELAY_MS
+case "$P35_INJ" in
+  ''|*[!0-9]*) bad "35 注入自检：夹具模式下 TEAM_SMOKE_FRAME_DELAY_MS 没被采信（读到 '$P35_INJ'）" ;;
+  *)
+    P35_T0="$(date +%s%3N)"
+    sleep "$(awk -v ms="$P35_INJ" 'BEGIN { printf "%.2f", ms / 1000 }')"   # 与 27-d 的注入同形（采样窗口里多睡一觉）
+    P35_SLOW=$(( $(date +%s%3N) - P35_T0 ))
+    if [ "$P35_SLOW" -gt 2000 ]; then
+      ok "35 注入自检：夹具模式采信注入（${P35_INJ}ms）→ 一次采样实测 ${P35_SLOW}ms（> 2000ms 红线）"
+    else
+      bad "35 注入自检：注入没把测量抬过线（实测 ${P35_SLOW}ms）"
+    fi ;;
+esac
+# —— 三种结局（用真的慢样本值，不是编造的中位数）
+p35_rc() { # <loadavg> <median ms> → 纯判定（不打印、不计数）
+  local load="$1" med="$2" rc=0
+  export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$load" TEAM_SMOKE_CORES="$P35_CORES"
+  p27_assembly_rc "$med" || rc=$?
+  unset TEAM_SMOKE_FIXTURE TEAM_SMOKE_LOADAVG TEAM_SMOKE_CORES
+  P35_LAST_RC=$rc
+}
+p35_rc "$P35_OVER" "$P35_SLOW"
+assert_eq "35a 负载超前提 + 慢帧 → SKIP（不是红、不是绿）" "$P35_LAST_RC" "2"
+p35_rc "$P35_QUIET" "$P35_SLOW"
+assert_eq "35b 负载低于前提 + 同一个慢帧 → **红**（红线没被前提拿走）" "$P35_LAST_RC" "1"
+p35_rc "$P35_QUIET" 1200
+assert_eq "35c 负载低于前提 + 健康帧 → 绿" "$P35_LAST_RC" "0"
+# —— 边界：等于阈值算成立（≤），阈值 +0.1 算不成立
+p35_rc "$P35_EDGE" 1200
+assert_eq "35d 边界：loadavg == 阈值（${P35_EDGE}）算前提成立（≤）" "$P35_LAST_RC" "0"
+p35_rc "$P35_OVER" 1200
+assert_eq "35d 边界：loadavg 阈值 +0.1（${P35_OVER}）算不成立" "$P35_LAST_RC" "2"
+# —— SKIP 的**可见性**（真跑一次判定本体，把输出收进日志）：
+#    这一段在**子 shell** 里跑 —— SKIP 会加到 P27_TIMING_SKIP，而那是「这一轮真跑的门禁跳过了几条
+#    计时断言」的计数（结果块会打印它，复验记录只看 25 行尾）。夹具造的 SKIP 混进去就是假信号
+#    （实测：真实门禁的结果块里出现过 "loadavg 24.10" 这种夹具里的数）。
+#    M51：子 shell 里的计数必须**只数本段自己**那一次跳过 —— 继承来的 P27_TIMING_SKIP（真 27-d 在同一
+#    轮里跳过几次，取决于跑机核数 × 负载）以前也被数进去：同一份代码在 32 核机器上绿（真 27-d 不跳），
+#    在 4 核 CI runner 上红（loadavg 6.39 > 0.75 × 4 → 真 27-d 跳过 → 1 继承 + 1 自己的 = 2，期望 [1]）。
+#    所以进子 shell 先归零：断言与跑机的核数/负载无关（`p35_skip_probe` 也用于下面的反向夹具）。
+P35_FAIL_BEFORE="$FAIL"
+P35_SKIP_BEFORE="$P27_TIMING_SKIP"
+p35_skip_probe() { # <判定次数> → stdout 一行 SUBSHELL_TIMING_SKIP=<只数本段自己的跳过数>
+  local n="$1" i
+  ( export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$P35_OVER" TEAM_SMOKE_CORES="$P35_CORES"
+    P27_TIMING_SKIP=0     # ← 只数本段自己的跳过；继承来的不计（M51 的 CI 假红就是这么来的）
+    for ((i = 0; i < n; i++)); do
+      p27_assembly_judge "$P35_SLOW" "$P35_SLOW, $P35_SLOW, $P35_SLOW" 5
+    done
+    printf 'SUBSHELL_TIMING_SKIP=%s\n' "$P27_TIMING_SKIP"
+  )
+}
+# 断言本体抽成一个比较函数：真断言与反向夹具用**同一个比较**，反向夹具才能证明它不是恒真。
+p35_own_skip_ok() { [ "${1:-}" = "1" ]; }   # <子 shell 里只数自己的计数>
+p35_skip_probe 1 >"$P34D/g-over.log" 2>&1
+P35_SUB_SKIP="$(sed -n 's/^SUBSHELL_TIMING_SKIP=//p' "$P34D/g-over.log" | tail -1)"
+assert_match "$P34D/g-over.log" 'SKIP（负载前提不成立）' "35e 打印了可见 SKIP"
+assert_match "$P34D/g-over.log" "loadavg ${P35_OVER}" "35e SKIP 行带了实测 load"
+assert_match "$P34D/g-over.log" "${P35_SLOW}ms" "35e SKIP 行带了实测中位（${P35_SLOW}ms）"
+assert_eq "35e SKIP 不计成 bad（✗ 计数没动）" "$FAIL" "$P35_FAIL_BEFORE"
+if p35_own_skip_ok "${P35_SUB_SKIP:-0}"; then
+  ok "35e 子 shell 里的 SKIP 计数 = 1（只数本段自己那一次；与跑机核数/负载无关）"
+else
+  bad "35e 子 shell 里的 SKIP 计数 ≠ 1（期望 [1]，实际 [${P35_SUB_SKIP:-0}]）—— 是不是把继承来的跳过也数进去了？"
+fi
+assert_eq "35e 夹具的 SKIP **没有**泄进本轮门禁的计时跳过计数" "$P27_TIMING_SKIP" "$P35_SKIP_BEFORE"
+assert_eq "35e SKIP_N（FAST 分段审计用）没有被计时 SKIP 污染" "$([ "$P27_TIMING_SKIP" -ne "$SKIP_N" ] || [ "$P27_TIMING_SKIP" -eq 0 ] && echo yes || echo no)" "yes"
+# —— 反向夹具（M51）：把子 shell 里的判定跑**两次** → 计数必须是 2，且**同一个比较**必须判红。
+#    少了这条，把断言改成恒真（或数错计数器）也看不出来。两个方向都不依赖跑机核数/负载：
+#    load/cores 是夹具注入的，计数从 0 起。
+p35_skip_probe 2 >"$P34D/g-over2.log" 2>&1
+P35_SUB_SKIP2="$(sed -n 's/^SUBSHELL_TIMING_SKIP=//p' "$P34D/g-over2.log" | tail -1)"
+assert_eq "35e 反向夹具：同一形状跑两次判定 → 子 shell 计数 = 2（计数器本身没坏）" "${P35_SUB_SKIP2:-0}" "2"
+if p35_own_skip_ok "${P35_SUB_SKIP2:-0}"; then
+  bad "35e 反向夹具：真的多跳一次（计数 ${P35_SUB_SKIP2:-无}）时同一个断言仍判绿 —— 断言被改成了恒真"
+else
+  ok "35e 反向夹具：真的多跳一次（计数 ${P35_SUB_SKIP2:-无}）时同一个断言判红（不是恒真）"
+fi
+
+# —— 真路径：不打开夹具开关时，两个注入键都被忽略且**不改变判定**（PM 审查要点②）
+P35_REAL_LOAD="$(p27_load_reading)"
+export TEAM_SMOKE_LOADAVG=9999 TEAM_SMOKE_FRAME_DELAY_MS=99999 TEAM_SMOKE_CORES=1
+P35_FAKE_LOAD="$(p27_load_reading)"
+P35_FAKE_INJ="$(p27_inject_ms)"
+if p27_perf_premise >/dev/null 2>&1; then P35_REAL_DEC=hold; else P35_REAL_DEC=skip; fi
+unset TEAM_SMOKE_LOADAVG TEAM_SMOKE_FRAME_DELAY_MS TEAM_SMOKE_CORES
+assert_eq "35f 真路径：注入的 loadavg 被忽略（读到真值 ${P35_REAL_LOAD}）" "$P35_FAKE_LOAD" "$P35_REAL_LOAD"
+assert_eq "35f 真路径：注入的慢帧延迟被忽略（拆成 0）" "$P35_FAKE_INJ" "0"
+if [ "$P35_REAL_DEC" = "hold" ]; then
+  ok "35f 真路径：前提判断只由真读数决定（当前真读数成立）"
+else
+  ok "35f 真路径：前提判断只由真读数决定（当前真读数不成立→SKIP；这是机器真的忙，不是注入）"
+fi
+if p27_fixture_on; then bad "35f 夹具开关自检：本段结束后 TEAM_SMOKE_FIXTURE 不该还开着"; else ok "35f 夹具开关自检：本段没有把 TEAM_SMOKE_FIXTURE 留在环境里"; fi
+
+section "36 · panel-cpu 的负载前提（P26/G3：panel#Frame assembly is asynchronous… MODIFIED）"
+# 四个形状要真起 tmux 私有 server + 真面板（~1 分钟），所以全量模式跑、FAST 显式跳过。
+# 夹具自己会在真机不安静时可见 SKIP/finding —— 不拿机器噪声当面板结论。
+if [ -f "$SKILL_DIR/tests/panel-cpu-premise.sh" ]; then
+  if [ "$FAST" = "1" ]; then
+    fast_skip "36·panel-cpu-premise" "要真 tmux 窗格 + 真面板（~1 分钟）；FAST 不跑真进程"
+  else
+    live_mark
+    P36_OUT="$TMP/p36-premise.log"
+    TEAM_PANEL_CPU_SECS="${TEAM_PANEL_CPU_SECS:-6}" bash "$SKILL_DIR/tests/panel-cpu-premise.sh" >"$P36_OUT" 2>&1
+    P36_RC=$?
+    P36_LINE="$(grep -a '== 结果 ==' "$P36_OUT" | tail -1 | sed 's/\x1b\[[0-9;]*m//g')"
+    if [ "$P36_RC" = "0" ]; then
+      ok "36 panel-cpu-premise 全绿（${P36_LINE:-无结果行}）"
+      grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/^/      /' || true
+    elif [ "$P36_RC" = "4" ]; then
+      # exit 4 = 没结论：负载前提不成立，**或**环境缺树 CPU 图要的 GNU time（M51）—— 原因由夹具自己
+      # 那一行 SKIP 说明，门禁不替它猜（以前这里写死「因负载前提」，缺工具时会误报原因）。
+      ok "36 panel-cpu-premise 可见 SKIP（exit 4 = 没结论；$(grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/\x1b\[[0-9;]*m//g')）"
+    else
+      bad "36 panel-cpu-premise 有失败项（rc=$P36_RC；${P36_LINE:-无结果行}）"
+      sed 's/\x1b\[[0-9;]*m//g' "$P36_OUT" | grep -aE '✗' | head -6 | sed 's/^/      /'
+    fi
+  fi
+else
+  bad "36 缺 tests/panel-cpu-premise.sh"
+fi
+# ---------------------------------------------------------------- 37. 读路径：根一次解析 + 单进程扫描（M50）
 # 实测现场（M50 任务书，PM 在 main 上量的）：BOARD.md 只有 141 行，`team digest` 却要 89 秒 ——
 # 每次辅助调用都重新解析仓库根（~5 次 rev-parse），每份报告/复验记录各问一轮 git
 #（digest 一拍 1620 次 git 调用，其中 1523 次 rev-parse、80 次 for-each-ref）。修复：
@@ -10227,7 +11266,7 @@ fi
 #   · `team digest` ≤ 50 次 git（任务书判据；旧实现实测 1620）；
 #   · 夹具非空转：同一夹具上 cache-off（= 旧的逐文件问法）> 50 次 —— 这扇门确实能抓住旧形状。
 # 全部在自己的临时仓库里跑（先证明身份），快慢模式都跑。
-section "34 · 读路径性能：根一次解析 + 单进程扫描（M50）"
+section "37 · 读路径性能：根一次解析 + 单进程扫描（M50）"
 
 unset TEAM_SCAN_CACHE 2>/dev/null || true   # 调用者若带着对照开关，本节自己显式管
 M50R="$TMP/m50repo"; rm -rf "$M50R"; mkdir -p "$M50R"
@@ -10371,6 +11410,12 @@ section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
+# P26/G2（2.3）：计时断言因负载前提 SKIP 时，结果块里必须有一行点名 —— 复验记录只留 tail -25，
+# 而门禁（门禁命令在 review 里）正是从这一块看到「为什么这一轮没有性能判定」。SKIP 不改变退出码。
+if [ "${P27_TIMING_SKIP:-0}" -gt 0 ]; then
+  printf '\033[33m计时断言按负载前提跳过 %d 条：%s（loadavg %s）—— SKIP 既不是通过也不是失败，阈值未改\033[0m\n' \
+    "$P27_TIMING_SKIP" "${P27_TIMING_SKIP_NAMES% }" "${P27_TIMING_SKIP_LOAD:-?}"
+fi
 if [ "$FAST_REQ" = "1" ]; then
   printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \
     "$SKIP_N" "${SKIP_SEGS#|}"

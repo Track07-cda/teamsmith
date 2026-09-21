@@ -367,7 +367,7 @@ export type Action =
   | { kind: 'view-entry'; index: number }
   | { kind: 'queue-list' }
   /** Board page: put the focus on this card (a click on an unfocused card). */
-  | { kind: 'focus'; lane: string; id: string }
+  | { kind: 'focus'; lane: string; id: string; nth?: number }
   /** Board page: open the focused card's detail view (a click on the already focused card). */
   | { kind: 'open-focused'; lane: string }
   /** Board page: move the focus one lane left/right (the key band's `←`/`→` chip). */
@@ -404,6 +404,18 @@ export type Action =
 export interface PlacedLine {
   line: Line
   hits?: Hit[]
+}
+
+/**
+ * The board focus's identity (M48): the entry id **plus which row of that id** — an id may name
+ * several BOARD.md rows (the file's history has shared ids), and a bare id makes the cursor freeze
+ * on the first of them. `nth` is the 0-based duplicate ordinal in BOARD.md order; absent = 0, so a
+ * focus written by an older build (or a hand-made fixture) still resolves.
+ */
+export interface FocusRef {
+  lane: string
+  id: string
+  nth?: number
 }
 
 /** A lane's window as the frame rendered it (the App's arrow keys and wheel clamp against this). */
@@ -449,7 +461,7 @@ export interface Frame {
   /** The project-settings view's row window (absent while the view is closed). */
   settings?: SettingsWindow
   /** The work page's board rows in the order they were drawn (the App's `↑`/`↓` walk this). */
-  boardOrder?: string[]
+  boardOrder?: FocusRef[]
 }
 
 export interface FrameInput {
@@ -482,8 +494,8 @@ export interface ViewState {
   /** The queue entry shown in full on the messages page, or null for the list. */
   viewEntry: number | null
   scroll: number
-  /** The kanban's focused card, keyed by entry id (a vanished id falls back inside the layout). */
-  focus?: { lane: string; id: string } | null
+  /** The kanban's focused card, keyed by entry id + duplicate ordinal (a vanished id falls back). */
+  focus?: FocusRef | null
   /** Per-lane window offsets (the board page's wheel); absent lanes anchor on their newest cards. */
   laneOffset?: Record<string, number>
   /** The entry id whose read-only detail view is open (null = the page itself is showing). */

@@ -37,6 +37,15 @@ A change runs as **five phases, one brief and one owner each**: an explorer runs
 only after independent verification **and the user's confirmation**. The phase names go in the brief's `phase:`
 line; the full pipeline and its gates are in `{{SKILL_DIR}}/references/openspec.md`.
 
+**The change is the assignment unit** (`1 change : N tasks`, `1 task : 0..1 change`): the brief's header is the
+foreign key — `change:` (exactly one id, or `-`), `specs:`/`anchor:` (a change-less brief must resolve
+`openspec/specs/<capability>/spec.md#<requirement>` or declare `anchor: none (infra) — <reason>`) and `deltas:`
+(the change's delta files this task writes; an absent line means the whole set). `team dispatch` refuses **before it
+opens a window**: more than one `change:` id (no override), an unresolvable anchor, two unfinished tasks of one
+change writing the same delta file, and a `verify` task whose agent authored an `apply` task of that change (the
+last three take `--force` + one audited line). `team change status <id>` shows the tasks/deltas/blockers and exits
+0 only when every mapped task is finished; an `archive` task cannot be set `done` while a sibling is unfinished.
+
 ### Non-negotiable discipline
 
 - **Only change directories you own** (`{{DOCS_DIR}}/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
@@ -69,6 +78,13 @@ fail → team say <agent> "..." with the concrete failure evidence
 - Blocked, or found someone else's bug: `bash {{SKILL_DIR}}/scripts/team notify <agent> "<one line>"`, and write a
   PARTIAL report.
 - Gates: `{{GATES}}` (a brief may require stricter commands; the brief wins).
+- One gate at a time: the full suite is the machine's shared resource — `TEAM_SMOKE_FAST=1` inside a batch, the
+  full suite before delivery and review. `team review` queues on the gate lock (`TEAM_SMOKE_LOCK`,
+  `TEAM_SMOKE_LOCK_WAIT`, the holder in `<lock>.holder`) before its hard timeout starts, so the record shows
+  `queued` and `ran` separately; a queue past the cap is a loud `FAIL` naming the holder, not a `TIMEOUT`. On a
+  busy machine the panel timing lines (2000 ms frame, 1 % CPU — medians of three printed samples) print the
+  measured values and the load and **skip visibly** instead of reporting a red the machine owes; the premise is
+  `loadavg ≤ factor × cores` with `factor` 0.75 in the gate and 0.25 for the cold-start fixture.
 - Messages are not deliverables: the real evidence lives in `{{DOCS_DIR}}/reports/`, `{{DOCS_DIR}}/reviews/` and commits.
 
 ### Bootstrap (first step in a new project)

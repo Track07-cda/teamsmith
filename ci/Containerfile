@@ -1,0 +1,101 @@
+# teamsmith gate image — the pinned environment the CI gate runs in (M47).
+#
+# Why a container: the suite grew on a workstations/distrobox machine and (correctly) asserts real
+# behaviour of real tools (tmux bracketed paste, psmisc/perl/python, a JS runtime, pi's own skill
+# parser). A rolling `ubuntu-latest` runner drifts under us, and every drift arrives as a red gate
+# nobody can act on: the first CI run of the suite was ✓2300 ✗48, all environment. This image
+# freezes the toolchain; `docker build` + `docker run` IS the CI environment.
+#
+# Pins are kept in step with the machines where the suite is green (and with the committed
+# artifacts the suite checks):
+#   debian:trixie   base (stable); bash 5, perl, python3, git, flock, ps, time (GNU time = /usr/bin/time)
+#   tmux 3.7b       built from source: `#{bracket_paste_flag}` only exists in tmux >= 3.7, and the
+#                   delivery guard's bracketed-paste probe needs it (see M47 report; trixie ships
+#                   3.5a). Same version as the developer machines.
+#   node 24.19.0    the JS runtime the panel converges on (engines: >= 20)
+#   bun 1.3.14      the version that reproduces the committed scripts/panel/panel.js byte-for-byte
+#                   (smoke 26-a rebuilds it and compares)
+#   pi 0.86.0       tests/skill-load.mjs imports pi's own skill parser (dist/core/skills.js)
+#   openspec 1.8.0  `openspec validate --all --strict` (the first half of the gate)
+#
+# The suite still runs with CI set by the caller: nothing here special-cases a CI environment.
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- system packages + locale --------------------------------------------------------------
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends \
+      ca-certificates curl unzip xz-utils git locales \
+      perl python3 procps util-linux time \
+      build-essential libevent-dev libncurses-dev pkg-config bison \
+ && printf 'en_US.UTF-8 UTF-8\n' > /etc/locale.gen \
+ && locale-gen \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- self-checks the suite relies on (asserted, not assumed) --------------------------------
+# `time` is GNU time (Debian's `time` package), not bash's `time` keyword: `tests/panel-cpu.sh`
+# wraps the console with `/usr/bin/time -o FILE -f FORMAT -- …` to read the tree CPU figure.
+# M51: CI was red because this image lacked it — the fixture exited 3 (setup failure) instead of
+# judging, and smoke §36 reported the two premise cases as failures. A missing tool in the gate
+# image is an image bug; fail the build here rather than in a red gate nobody can act on.
+RUN [ -x /usr/bin/time ] \
+ && /usr/bin/time -f 'gnu-time:%U/%S/%e' -- true 2>&1 | grep -q '^gnu-time:'
+
+# --- tmux 3.7b (source): the bracketed-paste capability format needs >= 3.7 -----------------
+ARG TMUX_VERSION=3.7b
+RUN curl -fsSL "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" -o /tmp/tmux.tar.gz \
+ && tar -xzf /tmp/tmux.tar.gz -C /tmp \
+ && cd "/tmp/tmux-${TMUX_VERSION}" \
+ && ./configure --prefix=/usr/local --quiet \
+ && make -j"$(nproc)" >/tmp/tmux-build.log 2>&1 \
+ && make install >>/tmp/tmux-build.log 2>&1 \
+ && cd / && rm -rf /tmp/tmux.tar.gz "/tmp/tmux-${TMUX_VERSION}" \
+ && apt-get purge -y -qq build-essential pkg-config bison >/dev/null \
+ && apt-get autoremove -y -qq >/dev/null \
+ && [ "$(tmux -V)" = "tmux ${TMUX_VERSION}" ]
+
+# --- node + bun (pinned tarballs) ----------------------------------------------------------
+ARG NODE_VERSION=24.19.0
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" -o /tmp/node.tar.xz \
+ && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+ && rm /tmp/node.tar.xz \
+ && [ "$(node -v)" = "v${NODE_VERSION}" ] && [ "$(npm -v)" != "" ]
+
+ARG BUN_VERSION=1.3.14
+RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" -o /tmp/bun.zip \
+ && unzip -q /tmp/bun.zip -d /tmp/bun \
+ && install -m 0755 /tmp/bun/bun-linux-x64/bun /usr/local/bin/bun \
+ && rm -rf /tmp/bun /tmp/bun.zip \
+ && [ "$(bun --version)" = "${BUN_VERSION}" ]
+
+# --- pi + openspec (pinned npm packages) ---------------------------------------------------
+ARG PI_VERSION=0.86.0
+ARG OPENSPEC_VERSION=1.8.0
+RUN npm install -g --no-fund --no-audit \
+      "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+      "@fission-ai/openspec@${OPENSPEC_VERSION}" \
+ && npm cache clean --force >/dev/null 2>&1 \
+ && command -v pi >/dev/null && command -v openspec >/dev/null
+
+# The suite's skill-load fixture imports pi's parser; a global install is not resolvable from the
+# mounted checkout's module graph, so point PI_DIST at the pinned copy explicitly.
+ENV PI_DIST=/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js
+RUN [ -f "$PI_DIST" ]
+
+# No usage telemetry from the gate (the CLI prints a note otherwise and would phone home).
+ENV OPENSPEC_TELEMETRY=0
+
+# tmux starts the pane's default shell: with SHELL unset it falls back to Debian's /bin/sh (dash),
+# whose background jobs keep the foreground process group — smoke 10c-②'s validity fixture ("a bare
+# read in a background process group is stopped by SIGTTIN") then cannot reproduce and correctly
+# goes red. A normal login has SHELL=bash; give the container one. (Kept outside the continuation
+# on purpose: buildah tolerates in-continuation comments, Docker's parser is the one that matters.)
+ENV LANG=en_US.UTF-8 \
+    TZ=UTC \
+    SHELL=/bin/bash \
+    HOME=/root
+WORKDIR /work
+
+# The gate, verbatim — the same two commands the PM runs on task branches.
+CMD ["bash", "-c", "openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null"]

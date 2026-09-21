@@ -48,6 +48,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# 子串判定：用 case（不起管道）——`printf ... | grep -q` 在 `set -o pipefail` 下会被 grep 的提前退出
+# 变成 SIGPIPE（141）而假红；日志越大越容易命中（P28 把 harness 日志从 ~14KB 撑到 ~17KB 时实测）。
+has() { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+
 fail() { printf '\033[31m✗\033[0m %s\n' "$*"; }
 pass() { printf '\033[32m✓\033[0m %s\n' "$*"; }
 
@@ -165,9 +169,8 @@ RC=0
 run_harness() { "$TS_RUNNER" "$HARNESS" "$1" 2>&1; }
 RED_LOG="$(run_harness "$RED_EXT")"; RED_RC=$?
 if [ "$RED_RC" -ne 0 ] \
-  && printf '%s\n' "$RED_LOG" | grep -q 'TEAM-IW-CASE FAIL M46-S14' \
-  && printf '%s\n' "$RED_LOG" | grep -q 'TEAM-IW-CASE FAIL M46-S15' \
-  && printf '%s\n' "$RED_LOG" | grep -q 'TEAM-IW-CASE FAIL M46-S16'; then
+  && has 'TEAM-IW-CASE FAIL M46-S14' "$RED_LOG" \
+  && has 'TEAM-IW-CASE FAIL M46-S15' "$RED_LOG" && has 'TEAM-IW-CASE FAIL M46-S16' "$RED_LOG"; then
   pass "红树（$BASE）复现成功：M46-S14/S15/S16 全红（修复前：跳过无痕、继承的 state 无锚定）"
 else
   fail "红树没有复现（rc=$RED_RC；预期 M46-S14/S15/S16 全 FAIL）"
@@ -178,7 +181,7 @@ fi
 # ---- ② 本树：harness 必须全绿 ----
 GREEN_LOG="$(run_harness "$GREEN_EXT")"; GREEN_RC=$?
 GREEN_N="$(printf '%s\n' "$GREEN_LOG" | grep -c 'TEAM-IW-CASE PASS')"
-if [ "$GREEN_RC" -eq 0 ] && printf '%s\n' "$GREEN_LOG" | grep -q 'TEAM-IW-HARNESS OK'; then
+if [ "$GREEN_RC" -eq 0 ] && has 'TEAM-IW-HARNESS OK' "$GREEN_LOG"; then
   pass "本树：harness 全绿（$GREEN_N 条用例，含 M46-S14/S15/S16）"
 else
   fail "本树不是全绿（rc=$GREEN_RC）"
@@ -188,7 +191,7 @@ fi
 
 # ---- ③ 变异扩展：writeSkipRecord 空操作 → S14 必须红 ----
 MUT_LOG="$(run_harness "$MUT_EXT_DIR/extension/team-inbox-watch.ts")"; MUT_RC=$?
-if [ "$MUT_RC" -ne 0 ] && printf '%s\n' "$MUT_LOG" | grep -q 'TEAM-IW-CASE FAIL M46-S14'; then
+if [ "$MUT_RC" -ne 0 ] && has 'TEAM-IW-CASE FAIL M46-S14' "$MUT_LOG"; then
   pass "变异扩展（writeSkipRecord 空操作）：M46-S14 红 —— 守卫测试咬在留痕实现上"
 else
   fail "变异扩展没有红（rc=$MUT_RC；预期 M46-S14 FAIL）"
@@ -199,8 +202,7 @@ fi
 # ---- ④ 变异 bash：三处单点破坏 → 同夹具上的三条断言各自变红 ----
 GREEN_STATUS="$(flip_cli "$GREEN" status)"
 MUT_STATUS="$(flip_cli "$TMP/mut-warn" status)"
-if printf '%s' "$GREEN_STATUS" | grep -q '投递通道降级' \
-  && ! printf '%s' "$MUT_STATUS" | grep -q '投递通道降级'; then
+if has '投递通道降级' "$GREEN_STATUS" && ! has '投递通道降级' "$MUT_STATUS"; then
   pass "bash 变异①（告警行恒假）：绿树 status 报降级 / 变异树不报 —— 这条断言真的钉在告警实现上"
 else
   fail "bash 变异① 翻转不成立（绿树：$(printf '%s' "$GREEN_STATUS" | grep -c '投递通道降级') 条降级；变异树：$(printf '%s' "$MUT_STATUS" | grep -c '投递通道降级') 条）"
@@ -208,8 +210,7 @@ else
 fi
 GREEN_LIST="$(flip_cli "$GREEN" outbox list)"
 MUT_LIST="$(flip_cli "$TMP/mut-gone" outbox list)"
-if printf '%s' "$GREEN_LIST" | grep -q 'target=gone' \
-  && ! printf '%s' "$MUT_LIST" | grep -q 'target=gone'; then
+if has 'target=gone' "$GREEN_LIST" && ! has 'target=gone' "$MUT_LIST"; then
   pass "bash 变异②（target_gone 恒假）：绿树 list 标 target=gone / 变异树不标 —— 断言钉在死目标判定上"
 else
   fail "bash 变异② 翻转不成立（绿树：$(printf '%s' "$GREEN_LIST" | grep -c 'target=gone')；变异树：$(printf '%s' "$MUT_LIST" | grep -c 'target=gone')）"

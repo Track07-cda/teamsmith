@@ -4,9 +4,11 @@
 task:   {{ID}}
 agent:  {{AGENT}}
 issue:  {{ISSUE}}
-change: -            # OpenSpec change id this brief implements (`openspec list`, e.g. add-agent-timeout); "-" if no requirement changes
-specs:  -            # requirements/scenarios it must satisfy, e.g. `dispatch: a brief is self-contained`; "-" if none
+change: -            # OpenSpec change id this brief implements — exactly one token (`openspec list`, e.g. change-centric-discipline); "-" if no requirement changes. Dispatch refuses a comma list, two tokens or a second `change:` line (no override)
+specs:  -            # `<capability>[#<requirement>]` entries, `;`-separated (e.g. `dispatch#A brief names at most one change id`); "-" if none. A change-less brief must resolve here (`openspec/specs/<capability>/spec.md`) or declare `anchor:`
+anchor: -            # change-less briefs only: `none (infra) — <reason>` (environment/CI/toolchain, pure internal refactor, docs and fixtures); otherwise leave "-"
 phase:  -            # OpenSpec pipeline phase this brief runs: explore|propose|apply|verify|archive ("-" for work outside the pipeline); one phase = one brief = one owner
+deltas: -            # the change's delta capabilities this task writes, comma-separated (`panel`), or "-" for none; an absent line means "every delta file of the change" (single-writer guard)
 deps:   {{DEPS}}
 status: todo
 budget: <one work block; if it runs long, deliver a PARTIAL report rather than silently hanging>

@@ -987,6 +987,23 @@ team_inbox_watch_degraded_line() { # [<target>] [<pm-state>]
 }
 
 
+# P28/B6 · 预览有界（默认 700 字节）且**不切开多字节字符**。
+# 为什么不能直接用 `cut -c1-700`：本机（GNU coreutils 9.10）上 `cut -c` 在 C 与 C.UTF-8 下都按
+# **字节**裁，切在多字节字符中间时写出的 spool 行就不是合法 UTF-8（读者侧曾因此把 offset 推过文件
+# 末尾，触发 2026-09-20 事故）。做法与面板 cmd-watch.sh 的收尾同一惯用法：按字节取前缀，再用
+# `iconv -c` 丢弃不完整的尾部字节 —— 丢字节、绝不引入 U+FFFD；输出是合法 UTF-8 且不长于上限。
+# 判据只用「输出」不看退出码：GNU iconv 即使丢掉了尾部半截序列也会以 1 退出（并已经在 stdout 上
+# 给出合法前缀），所以 rc≠0 不能当成“iconv 不可用”。
+team_inbox_watch_clip() { # <text> [<max-bytes=700>] → stdout
+  local text="${1:-}" max="${2:-700}" cut clipped
+  [ -n "$text" ] || return 0
+  cut="$(printf '%s' "$text" | LC_ALL=C head -c "$max")"
+  clipped="$(printf '%s' "$cut" | LC_ALL=C iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)"
+  if [ -n "$clipped" ] || [ -z "$cut" ]; then printf '%s' "$clipped"; return 0; fi
+  # iconv 不可用：退回「最后一个 ASCII 字节之前」——宁可短，也绝不写出非法 UTF-8
+  printf '%s' "$cut" | LC_ALL=C sed 's/[^ -~]*$//'
+}
+
 # 顺序不能反：spool 行存在 ⟹ 收件箱里已经有这条（唤醒不会指向空气）。
 # durable 的判定（条目头部是契约，不靠正文逐字匹配 —— 重复的相同消息不会被误吞）：
 #   inbox + inbox-written=1 → 发送方已经写过了（名字可能是 `-` ：它的记录在自家日志里，如 nudges.log）
@@ -1014,7 +1031,8 @@ team_inbox_watch_deliver() { # <entry> <kind> <from> <key> <route-inbox> <payloa
   preview="$(printf '%s' "$payload" | LC_ALL=C tr '\n\t' '  ' | LC_ALL=C sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]\{1,\}/ /g')"
   # 预览有界（700 字节）：spool 行保持小（并发 `>>` 的自追加写尽量落在一次 write 里；扩展侧还会按
   # TEAM_INBOX_WATCH_PREVIEW 再截一次字符数）。正文全文在收件箱/发送方日志里，不在这里。
-  preview="$(printf '%s' "$preview" | LC_ALL=C cut -c1-700)"
+  # P28/B6：按**字符**边界裁（`cut -c` 在任何 locale 下都按字节，会把多字节字符截半）。
+  preview="$(team_inbox_watch_clip "$preview" 700)"
   printf '%s\t%s\t%s\t%s\t%s\n' "$(team_epoch_ms)" "$kind" "${from:--}" "$durable" "$preview" >> "$dir/$key.wake" || return 1
   return 0
 }

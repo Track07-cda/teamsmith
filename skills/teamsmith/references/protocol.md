@@ -86,6 +86,39 @@ ambiguous requirement on its own**, so a brief has to be self-contained:
 - Acceptance: **copy-pasteable commands**, plus the report requirements.
 - A fixed report format (deliverables/evidence/deviations/next steps), so the PM can read it mechanically.
 
+## 5b. The change is the assignment unit (four dispatch guards)
+
+`1 change : N tasks` — the change (proposal, design, delta, tasks, archive) is the dispatch unit, and a task is one
+batch or one phase inside it; several briefs, agents or apply batches may share a change. The brief's header is the
+foreign key, and `team dispatch` reads it **before it opens a window**:
+
+1. **One change id.** `change:` holds exactly one token (or `-`). A comma list, two whitespace-separated ids or a
+   second `change:` line is refused with the offending line; there is **no override** — a task that implements two
+   changes is a mis-dispatch, not a preference, and the old "silently use the first line" behaviour is what this
+   rule removes.
+2. **A change-less brief declares its anchor.** With `change: -` the brief must either name a `specs:` entry that
+   resolves (`<capability>[#<requirement>]` in `openspec/specs/<capability>/spec.md`) or say out loud
+   `anchor: none (infra) — <reason>`. An unresolvable capability, a missing requirement or a bare `none (infra)` is
+   refused with both accepted forms and the path that was looked for; `--force` proceeds with a warning and one
+   audit line. This is policy B: disagreement with a rule is expressed by anchoring it, not by silence.
+3. **One delta file, one writer.** Two unfinished tasks of the same change must not write the same
+   `openspec/changes/<change>/specs/<capability>/spec.md`. A brief declares what it will write with `deltas:`
+   (comma-separated capabilities, `-` for none); **an absent line is not "none"** — it is read as the whole delta
+   set, so silence can never be used to slip past the guard. The refusal names the sibling, its board status, the
+   shared file and both declarations; `--force` overrides with one audit line. `team change status <id>` prints the
+   declared and the actually-touched files per task, so a declaration that lies is visible.
+4. **The verifier is not an author.** A `verify` dispatch is refused when its agent also authored an `apply` task
+   of the same change (mapped tasks whose board status is `dropped` are excluded and named). `--force` proceeds
+   with a warning that the verification is no longer independent. A mapped task whose brief cannot be read or whose
+   header has no `agent:` is a **missing signal**: the guard says which signal is missing and proceeds — an
+   unknowable author is never reported as a clean one. The same predicate puts `self-verify: <agent>` on the task
+   in `team change status`.
+
+All four run before the stack guard and before any window or board write, so a refusal leaves the task's status
+exactly as it was. The readiness view and the archive gate share one predicate (`team change status <id>` exits 0
+iff at least one task is mapped and every mapped task is finished): an `archive` task cannot be set `done` while a
+sibling of its change is unfinished, and the existing `TEAM_BOARD_DONE_FORCE=1` override still records itself.
+
 ## 6. Model strategy: cheap models do the work, a different family does the adversarial verification
 
 | Use | Selection principle |
@@ -134,6 +167,13 @@ the PM right now".
 - **Pending work** → wake the PM (nudge it if it is running; if not, start it with `pi -c` and the kick-off prompt
   `@state/pm-prompt.md`); **nothing pending** → do not wake it, do not start it — the PM is not required to run
   continuously, and being quiet is a valid state.
+- **Who resumes a stopped agent** (the one question this paragraph exists to settle): **the pulse never
+  does.** A stopped agent with an unfinished task is *reported* as pending work; starting it is the PM's call
+  (`team resume --agent <a>`, or `team resume` for all). The single exception is a human's rescue command:
+  `team up` recovers the PM window and, **only with `--agents`**, also resumes the agents that stopped with an
+  unfinished task (that is why a session restore can bring workers back without the PM asking). The watchdog
+  spec pins the pulse half of this as a scenario ("A stopped agent is not resumed") — if you ever see a resumed
+  worker you did not ask for, look for a `team up --agents` / `team resume` in the log, not in the patrol.
 - **"The PM is running" is a proof, not an inference**: either `state/pm.pid` (recorded by the start path) points at
   a live process whose cwd is inside the project, or the process in the PM window is the configured agent binary and
   its cwd is in the project. A window occupied by anything else is `foreign:<cmd>` (another project's cwd — not
@@ -223,6 +263,13 @@ Three places CEP hit in practice, all of which now have explicit tolerance rules
   `team board set` only writes the status column and never touches a column you added; new rows are aligned to the
   existing column count (unknown columns stay empty). Parsing used to be positional, and after adding a column it
   would read a `—` as the title.
+- **Duplicate ids**: a board row is identified by `(id, nth)` — the n-th row carrying that id — because a board
+  may share an id between tasks. The console walks the focus positionally, so two rows with one id are two
+  stops and each can be selected alone; `board add` refuses a second row for an existing id unless `--allow-dup`
+  is passed (audited in `state/watchdog.log`), and `board ls` / `digest` / `doctor` report the duplicates
+  (doctor warns, it does not fail). `board set <ID> <status>` and `board assign <ID> <agent>` address a row by
+  **id** and write **every** row carrying it (that has always been the CLI's rule; the row-level identity above
+  is the console's) — which is exactly why a *new* duplicate is refused at the door.
 - **The pending-report heuristic**: a file under `reports/*.md` only counts as awaiting verification when its
   file-name prefix is a task ID **and** its title is `# <ID> · …` **and** that ID is on the BOARD (or has a brief);
   the PM's own milestone/closure reports (`P2-closure.md` and the like) are grouped by `digest` under "ignored
@@ -379,6 +426,28 @@ A trap: an add/add conflict is often git's rename detection pairing two differen
   should carry their own `timeout` too (e.g. `timeout 900 pnpm test:unit`).
 - Acceptance commands in a brief should carry their own timeout as well; destructive experiment scripts must restore
   the scene with `trap 'git checkout -- …' EXIT`.
+
+### 9b-2. The gate is the machine's one shared resource (queue, and the measurement premise)
+
+The full gate — `openspec validate … && bash skills/teamsmith/tests/smoke.sh` — spends the machine's tmux servers,
+node/bun processes and login shells, so it is serialised on **one gate lock**
+(`${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}`, holder recorded in `<lock>.holder`, wait capped by
+`TEAM_SMOKE_LOCK_WAIT`, default 1800 s). Use `TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections,
+~10 s) and the **full** suite for delivery and review. `team review` takes that same lock **before** starting its
+hard timeout: the queue is its own bounded phase, the record accounts it separately (`limit=Ns queued=Ns ran=Ns`),
+a queue that exceeds the cap is `FAIL` with the holder named (never `TIMEOUT`), a run that really overruns is still
+`TIMEOUT` with `ran=Ns`, and `SMOKE_LOCK_WRAPPED=1` tells a nested run that an ancestor already holds the lock (so
+it does not queue again and cannot deadlock against its own suite). Without `flock` the degradation is printed.
+The two panel numbers in the gate (an uncached frame ≤ 2000 ms, steady state < 1 % of one core) are verdicts about
+the panel, so they are only judged when the machine is below the **load premise** `loadavg_1m ≤ factor × logical
+cores` — `0.75` for the gate's five-sample median assembly assertion, `0.25` for `panel-cpu.sh`'s cold-start
+first frame and sampled pane CPU (`TEAM_PANEL_CPU_PREMISE_FACTOR`), and both of those single-sample numbers are
+the **median of three** with all three samples printed; above it the assertion prints the measured value(s) and the load and **skips visibly** (its own counter,
+named in the run's summary; `panel-cpu.sh` uses exit 4 for the same reason) rather than reporting a red the machine
+owes. The thresholds themselves are never scaled or relaxed, and the fixture knobs that substitute a load reading
+(`TEAM_SMOKE_LOADAVG`, `TEAM_PANEL_CPU_LOADAVG`, …) only work under `TEAM_SMOKE_FIXTURE=1`. The contracts live in
+the specs (`verification#The hard timeout covers the gate run, not the queue`,
+`panel#Frame assembly is asynchronous, cached and never blocks input`); this section is the operational rule.
 
 ## 9c. Strong verification (adversarial package + finding flips, for milestones)
 

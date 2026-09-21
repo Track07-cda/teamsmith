@@ -29,7 +29,10 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   ── 文档契约（PM 维护） ─────────────────────────────────────
   task ID --title ... [--agent a] [--deps ...] [--issue N]
                   生成任务书 <docs>/tasks/ID-slug.md 并在 BOARD.md 建行
-  board add|set|row|ls    BOARD.md 行管理（add / set ID 状态 / row ID / ls）
+board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign ID agent / set ID 状态 / row ID / ls）
+  change status <id> [--json]
+                  change 的 readiness 视图（只读）：任务/阶段/agent/看板/证据、delta 写者、阻塞项；
+                  ready（至少一个任务且全部结束）→ 退出码 0，否则 1
   thread <agent> ["msg"]   追加 / 读取往来记录（append-only）
   report ID <agent> [--force]  生成报告骨架
 
@@ -319,6 +322,11 @@ team_cmd_doctor() {
 
   check "config"; if [ -n "$TEAM_CONFIG" ]; then pass "$TEAM_CONFIG"; else warn "未找到 .pi/team/config.sh（先跑 $TEAM_CLI init）"; fi
   check "docs 骨架"; if [ -d "$TEAM_DOCS_ABS" ]; then pass "$TEAM_DOCS_DIR"; else fail "缺 $TEAM_DOCS_DIR/（先跑 $TEAM_CLI init）"; fi
+  # M48：同一 ID 多行（历史遗留的共用 ID）—— 面板焦点/状态/报告都按 ID 指行，重复必须看得见。
+  # 警告不是失败：旧看板本来就可能是这个形状，doctor 只要求它能被看见（处置见 troubleshooting）。
+  check "BOARD 重复 ID"; local bdups; bdups="$(team_board_duplicate_ids || true)"
+  if [ -z "$bdups" ]; then pass "无"
+  else warn "$(printf '%s' "$bdups" | awk 'NR>1{printf "、"} {printf "%s", $0}') （同 ID 多行：焦点按行身份走，但状态/报告按 ID 指行；$TEAM_CLI board ls）"; fi
   check "bash"; if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then pass "${BASH_VERSION%%(*}"; else fail "需要 bash >= 4"; fi
   check "git"; if team_have_cmd git; then pass "$(git --version | awk '{print $3}')"; else fail "缺 git"; fi
 

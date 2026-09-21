@@ -783,3 +783,46 @@ drain (the status line stops claiming a residue that is gone), and held entries 
 longer exists are dropped by the explicit `team outbox drop gone` (it names every file it drops). Nothing
 ever re-pastes a `draft-raced`/`unconfirmed` entry — that is terminal by spec; if its payload is still
 sitting in a human's box, the human submits or clears it, or drops the entry.
+
+---
+
+## 23. Two BOARD.md rows share one id (or the kanban cursor froze on one of them)
+
+**What you see**: the console's board page (and the work page's board block) highlights two rows at once and
+`↑`/`↓` stops on the first of them; `board ls`, `digest` and `doctor` print
+`BOARD 有重复 ID：M4.3 ×2、M6.3 ×2、V1.1 ×2`; `team board add <ID> …` refuses with
+`BOARD 里已经有 <ID>（状态 todo · 「…」）：没有改动`.
+
+**Why it happens**: the places that matter address a BOARD.md row by its **id** — the pending-report
+heuristic, `reviews/<ID>.md`, `team board set <ID> <status>` — and historical boards really do share ids
+(different tasks under one milestone id: this project's own board carries `M4.3`, `M6.3` and `V1.1` twice).
+The console used to key its focus by the bare id too, so two such rows lit up together and the walk never
+left the first one (M48; the brief that built the board row could also be created and then `board add`ed a
+second time).
+
+**What the tool does now** (nothing to do to keep working):
+
+- the console's focus is a `{lane, id, nth}` **row** reference: `↑`/`↓` walks every drawn row — two rows
+  with one id are two stops — only the focused row carries the `›` cursor, and a row that left the board
+  falls back to the first row with that id, then its lane's first card, then the first lane;
+- `team board add <ID> …` refuses a second row for an existing id, names that row's status and title, and
+  leaves the file byte-identical (the same "a refusal writes nothing" rule as `board set` with an unknown id);
+  its refusal names the right entry for the common intent — `team board assign <ID> <agent>` gives a row an agent
+  **in place** (no second row, no other column touched; the old way to "assign" was to add a row, which is how
+  these duplicates appeared);
+- `--allow-dup` is the explicit escape hatch: the row is written and `state/watchdog.log` gets an audit line;
+- `board ls`, `team digest` and `team doctor` report the duplicates they find (doctor warns, it does not fail).
+
+**How to handle a duplicate**:
+
+- **one task, two rows** → fix the id (rename the row, or fold the duplicate into one): `board add` refuses the
+  next attempt, and both `board set <ID> <status>` and `board assign <ID> <agent>` address by id — they write
+  **every** row carrying that id, so a status or an agent you set lands on both rows;
+- **a row needs an agent** → `team board assign <ID> <agent>` (not another `board add`; that one is refused);
+- **two tasks that genuinely share a milestone id** → leave the data alone (that is what this project does) and
+  pass `--allow-dup` for new rows; remember that `reviews/<ID>.md` and the pending-report heuristic are keyed by
+  the id too, so both rows share one review namespace, and the detail view opens the same document for both.
+
+The fixtures that pin this are `tests/panel-b3.sh board` (two rows with one id: one cursor, both reachable,
+both walks) and `tests/smoke.sh` §4c (refusal, `--allow-dup`, the three visible reports); `tests/flip-m48.sh`
+proves both go red when the row identity / the check is removed.

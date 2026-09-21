@@ -55,6 +55,13 @@ An exploration whose conclusion is "not worth doing", and a verification that fa
   propose may be the same agent (it holds the context) — but neither may apply its own proposal.
 - A phase is not a formality: its hand-out is the **artifact on disk**, and the PM checks the artifact, not the
   agent's account of it. Reports and reviews stay the evidence; nothing here replaces `reports/` + `reviews/`.
+- **1 change : N tasks, 1 task : 0..1 change.** The change is the dispatch unit (proposal, design, delta,
+  tasks, archive); a task is one batch or one phase inside it, and several agents or several apply batches may
+  share a change. The brief's header is the foreign key: `change:` (exactly one id, or `-`), `specs:`/`anchor:`
+  (a change-less brief must resolve `openspec/specs/<capability>/spec.md#<requirement>` or declare
+  `anchor: none (infra) — <reason>`) and `deltas:` (the change's delta files this task writes; absent = the whole
+  set). `team dispatch` enforces the mapping before it opens a window; `team change status <id>` shows it. The
+  grammar and the template live in `templates/task.md.tmpl`, the rules in the skill's `references/protocol.md` §5b.
 
 ## 3. How it maps onto teamsmith
 
@@ -100,7 +107,7 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 - A **NEEDS-CHANGES** verdict names the checklist item, the evidence that is missing, and the owner of the fix.
 - The review looks at the **planning artifacts**, not at code — proposals are planning only.
 
-### The PM's proposal review checklist (eight points, followed literally)
+### The PM's proposal review checklist (ten points, followed literally)
 
 1. **Matches the approved exploration** — no silent widening or narrowing of scope; call out scope creep *and*
    scope cuts.
@@ -116,6 +123,18 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
    supersession must be a MODIFIED/REMOVED delta, not a parallel statement in a new requirement.
 8. **Granularity** — can one apply brief finish it? If not, the split and its order are named (several briefs
    under the same change, applied and verified one by one).
+9. **One change per task** — every brief the change's plan will dispatch declares exactly one `change:` id (or `-`
+   with an anchor). Judgement: `grep -n '^change:' docs/team/tasks/*.md` and, once the briefs exist,
+   `team change status <id>` must list them under this change and no other. A brief with two ids, a second
+   `change:` line or a typo is a NEEDS-CHANGES item naming the brief and the line (dispatch refuses it anyway —
+   there is no override for this rule).
+10. **The anchor exists** — each dispatched brief either points at this change, or names a `specs:` requirement
+    that resolves in `openspec/specs/<capability>/spec.md`, or declares `anchor: none (infra) — <reason>` with a
+    reason from the allowed classes (environment/CI/toolchain, pure internal refactor, docs and fixtures).
+    Judgement: `grep -n '^anchor:\|^specs:' <brief>` and, for the infra form, is the reason honest — a rule that
+    must hold across tasks (silent failure, destructive action, authority, identity, gate, performance contract)
+    is **not** infrastructure, whatever the brief says; the correct verdict is NEEDS-CHANGES with the capability
+    named.
 
 ## 5. What the PM does at each gate
 
@@ -125,7 +144,7 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 | propose | `openspec/changes/<id>/` end to end | `openspec validate --all --strict` green and all eight checklist points pass | `docs/team/reviews/<change>-proposal.md` = ACCEPTED (or NEEDS-CHANGES + per-item findings) |
 | apply | the brief, the change, the branch, the report | the branch carries exactly the change's scenarios; the acceptance commands really ran; nothing outside the boundaries was touched | the verify brief (a different agent) |
 | verify | the change, the landed code, the verification record, the diff | every scenario was exercised with red/green evidence, on a clean independent checkout | `docs/team/reviews/<ID>.md`; then `team board set <ID> done` after re-running the gate on the merged tree |
-| archive | the verified change + the user's confirmation | every task of the change is done and landed; **trial archive first**: `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y <id>)` — OpenSpec catches some delta defects (a MODIFIED naming a requirement the base lacks, an ADDED collision, …) *only here*; the trial surfaces them while fixing is cheap, and a failure hands the change back to apply with the archiver's message | then `openspec archive -y <id>` for real, and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
+| archive | the verified change + the user's confirmation | `team change status <id>` exits 0 (every task of the change is finished) and the user confirmed; **trial archive first**: `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y <id>)` — OpenSpec catches some delta defects (a MODIFIED naming a requirement the base lacks, an ADDED collision, …) *only here*; the trial surfaces them while fixing is cheap, and a failure hands the change back to apply with the archiver's message | then `openspec archive -y <id>` for real, and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
 
 `team board set <ID> done` reads those same phases from the brief: `explore` is done on the PM's recorded
 acceptance (a `DECISIONS.md` entry whose heading names the task, or `reviews/<ID>.md`), `propose` only on an `ACCEPTED`

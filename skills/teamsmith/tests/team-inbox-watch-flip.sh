@@ -104,9 +104,9 @@ mutate_expect_red() { # <tag> <sed 表达式> <必须出现的 FAIL 用例名>
   fi
 }
 
-# 合并成一条：同一拍的多行逐条唤醒（刷屏）
+# 合并成一条：同一拍的多行逐条唤醒（刷屏）—— P28 起合并点在 deliverNormal（去重/过期分类之后）那一行
 mutate_expect_red merge-one-wake \
-  's/if (res\.lines\.length) wake(res\.lines)/for (const _l of res.lines) wake([_l])/' \
+  's/if (res\.lines\.length) deliverNormal(res\.lines)/for (const _l of res.lines) deliverNormal([_l])/' \
   "S3 a burst of three lines produces exactly one wake"
 # 唤醒投递方式：followUp+triggerTurn → nextTurn（排队不唤醒）
 mutate_expect_red wake-mode \
@@ -128,10 +128,11 @@ mutate_expect_red preview-cap \
 mutate_expect_red shutdown-cleanup \
   's/rmSync(reg, { force: true })/void reg/' \
   "S7 shutdown removes the registry file"
-# 裁剪之后的 offset 对账：不对账 → 「size < offset → 从 0 重读」把刚投过的尾部再叫一次
+# 裁剪之后的 offset 对账：不对账 → 「size < offset」让下一拍走恢复路径（M43 的 shrink/rescan；
+# P28 起 clamp/repeat 也在那里）——S6 的「裁剪后账本不许出现恢复行」就钉在这一条上
 mutate_expect_red trim-offset \
-  's/if (trimmed >= 0) offset = trimmed/void trimmed/' \
-  "S6 exactly one new wake after the trim (tail line is not replayed)"
+  's/^      offset = trimmed.*$/      void trimmed/' \
+  "S6 the trim is reconciled locally (no spool shrink / rescan / clamp afterwards)"
 
 # ── ③ 绿：当前树的真扩展 ─────────────────────────────────────────────────────
 hdr "绿：当前树的真扩展（同一套夹具）"

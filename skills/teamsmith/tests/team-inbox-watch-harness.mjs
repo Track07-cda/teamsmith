@@ -111,7 +111,16 @@ const appendWake = (kind, from, inbox, payload) => {
   if (!f) throw new Error('no spool file: the extension never registered')
   appendFileSync(f, `${Date.now()}\t${kind}\t${from}\t${inbox}\t${payload}\n`)
 }
+// P28/B1：原样追加字节（生产者的 `LC_ALL=C cut -c1-700` 会写出非法 UTF-8 的预览）——
+// 夹具里用 Buffer 直写，保证测的是「spool 里有非法字节」这个形状，而不是 String 的往返。
+const appendWakeRaw = (buf) => {
+  mkdirSync(WATCH_DIR, { recursive: true })
+  const f = spoolFile()
+  if (!f) throw new Error('no spool file: the extension never registered')
+  appendFileSync(f, buf)
+}
 const ledger = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').trim().split('\n') : [])
+const ledgerMatches = (re) => ledger().filter(l => re.test(l)).length
 const lastText = (i = -1) => String(sent.at(i)?.msg?.content ?? '')
 
 if (!existsSync(EXT)) {
@@ -229,6 +238,9 @@ check('S1 registry has a fresh heartbeat', (() => {
   process.env.TEAM_INBOX_WATCH_MAX_BYTES = '2048'
   const before = sent.length
   const f = spoolFile()
+  // P28：裁剪是读者自己的记账动作 —— offset 对上新大小之后，账本不该出现任何恢复行。
+  // 快照必须在裁剪**之前**取（M30 翻转包的 trim-offset 定点破坏就钉在这一条上）。
+  const recovery0 = ledgerMatches(/spool shrink/) + ledgerMatches(/ rescan lines=/) + ledgerMatches(/offset clamp/)
   // 一条超长行 + 紧跟一条正常行：裁剪后尾部应当留下后者（而不是被整段丢掉）
   appendFileSync(f, `huge\tknock\tdev\tpm\t${'Y'.repeat(4096)}\n`)
   appendFileSync(f, 'kept\tknock\tdev\tpm\tkeep-me-after-trim\n')
@@ -240,6 +252,9 @@ check('S1 registry has a fresh heartbeat', (() => {
     size <= 2048 && readFileSync(f, 'utf8').includes('keep-me-after-trim'), `bytes=${size}`)
   appendWake('say', 'pm', 'pm', 'after trim')
   await sleep(700)
+  check('S6 the trim is reconciled locally (no spool shrink / rescan / clamp afterwards)',
+    ledgerMatches(/spool shrink/) + ledgerMatches(/ rescan lines=/) + ledgerMatches(/offset clamp/) === recovery0,
+    `${ledger().slice(-3).join(' | ')}`)
   check('S6 exactly one new wake after the trim (tail line is not replayed)', sent.length === before + 2,
     `messages=${sent.length - before}`)
   check('S6 the post-trim wake is the new line', lastText().includes('after trim'), lastText().replace(/\n/g, ' | '))
@@ -325,7 +340,11 @@ check('S1 registry has a fresh heartbeat', (() => {
 // 旧实现 `size < offset → offset = 0` 静默重置 → 下一拍从 0 全量重读 → 同一份 42 行被叫两遍、
 // total 被灌水 84。修复后：shrink 必须记账本、已投递行靠去重记忆压掉、total 只随真新增涨。
 const lastTotal = () => {
-  const m = [...ledger().join('\n').matchAll(/ wake n=\d+ total=(\d+) /g)]
+  // 只看**本会话**（最后一个 started 之后）的 wake 行：`seen` 在 session_start 归零，
+  // 拿上一个会话的 total 跟本会话比会得出假结论。
+  const lines = ledger()
+  const started = lines.map((l, i) => (/ started target=/.test(l) ? i : -1)).filter(i => i >= 0).at(-1) ?? -1
+  const m = [...lines.slice(started + 1).join('\n').matchAll(/ wake n=\d+ total=(\d+) /g)]
   return m.length ? Number(m.at(-1)[1]) : 0
 }
 let s11Lines = []
@@ -514,6 +533,249 @@ const cliPath = join(SKILL_DIR, 'scripts/team')
   if (savedOverride === undefined) delete process.env.TEAM_INBOX_WATCH_TARGET; else process.env.TEAM_INBOX_WATCH_TARGET = savedOverride
   if (savedState === undefined) delete process.env.TEAM_STATE_DIR; else process.env.TEAM_STATE_DIR = savedState
   for (const f of skipFiles()) { try { rmSync(join(WATCH_DIR, f), { force: true }) } catch { /* ignore */ } }
+}
+
+// ── S18：字节裁切的 spool 行不再把 offset 推过文件末尾（P28/R1 · D2）────────────────────────
+// 事故（2026-09-20 06:42）：outbox.sh 的 `LC_ALL=C cut -c1-700` 把预览裁在多字节字符中间 →
+// spool 行不是合法 UTF-8；旧 readNewLines 用 `Buffer.byteLength(解码结果)` 算 advance
+// （每个 U+FFFD 量成 3 字节）→ `baseline=19635` 落在 19634 字节的文件上 → 每拍都像外部缩容。
+{
+  await shutdown()
+  process.env.TEAM_INBOX_WATCH_POLL_MS = '100'   // 三拍空闲：这一段要看账本有没有动
+  mkdirSync(WATCH_DIR, { recursive: true })
+  const f = spoolFile()
+  const clipped = Buffer.from(`xy${'红'.repeat(300)}`, 'utf8').subarray(0, 700)   // 700 字节落在“红”中间
+  appendWakeRaw(Buffer.concat([
+    Buffer.from(`${Date.now()}\tknock\tpm\tpm\t`, 'utf8'), clipped, Buffer.from('\n'),
+  ]))
+  const size = statSync(f).size
+  let valid = true
+  try { execFileSync('iconv', ['-f', 'UTF-8', '-t', 'UTF-8'], { input: clipped, stdio: ['pipe', 'ignore', 'ignore'] }) } catch { valid = false }
+  check('S18 precondition: the clipped preview is not valid UTF-8 (the incident trigger)', !valid && clipped.length === 700, `bytes=${clipped.length}`)
+  const shrinkBefore = ledgerMatches(/spool shrink/)
+  const before = sent.length
+  await sessionStart()
+  const started = ledger().filter(l => / started target=/.test(l)).at(-1) ?? ''
+  check('S18 the baseline is the spool byte size (no U+FFFD skew)', started.includes(`baseline=${size}`), `${started.trim()} (size=${size})`)
+  const regPath = join(WATCH_DIR, regs()[0])
+  const hb0 = statSync(regPath).mtimeMs
+  await sleep(400)
+  // 心跳前进 = 定时器真的在跑：空闲断言不是「压根没拍」（POLL_MS 低于 envNum 下限会被拒）
+  const hbMoved = statSync(regPath).mtimeMs > hb0
+  check('S18 idle ticks after a byte-clipped line add no spool shrink',
+    hbMoved && ledgerMatches(/spool shrink/) === shrinkBefore,
+    `timers-alive=${hbMoved} shrink lines ${shrinkBefore} -> ${ledgerMatches(/spool shrink/)}`)
+  check('S18 the byte-clipped line stays in the baseline (no wake for it)', sent.length === before, `messages=${sent.length - before}`)
+  appendWake('say', 'pm', 'pm', 'after-clipped-line')
+  const woke = await waitFor(() => sent.length > before)
+  check('S18 the next line after a byte-clipped line wakes exactly once', woke && sent.length === before + 1,
+    `messages=${sent.length - before}`)
+  check('S18 the wake preview is the appended line, byte-complete (no leading fragment)', lastText().includes('after-clipped-line'),
+    lastText().replace(/\n/g, ' | '))
+  check('S18 total grows by exactly one (the clipped baseline line never counts)', lastTotal() === 1, `total=${lastTotal()}`)
+  await shutdown()
+}
+
+// ── S19：回退要有证据，恢复要收敛（P28/R2 · D3+D4）────────────────────────────────────
+// 判据：同一头部的小回退 = 我们自己的 offset 算错了（修复，不重扫、不唤醒）；头部变了 = 真重写
+// （一次有界重扫，下一拍收敛）；同一 (size, head) 不重扫第二次。
+{
+  process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
+  await sessionStart()
+  const f = spoolFile()
+
+  // (a) 末字节被删、头部不变 → 一次 offset clamp；clamp 落在行中，下一次读取的碎片被 resync 吸收
+  const sizeFull = statSync(f).size
+  const clampA = ledgerMatches(/offset clamp/)
+  const shrinkA = ledgerMatches(/spool shrink/)
+  const rescanA = ledgerMatches(/ rescan lines=/)
+  const wakesA = sent.length
+  writeFileSync(f, readFileSync(f).subarray(0, sizeFull - 1))
+  const clamped = await waitFor(() => ledgerMatches(/offset clamp/) > clampA, 2000)
+  check('S19a a one-byte regression with an unchanged head is repaired with one offset clamp',
+    clamped && ledgerMatches(/offset clamp/) === clampA + 1 && ledgerMatches(/spool shrink/) === shrinkA,
+    ledger().filter(l => /offset clamp|spool shrink/.test(l)).at(-1) ?? '(no clamp line)')
+  check('S19a the clamp is recorded with head=same (auditable repair)',
+    /offset clamp from=\d+ to=\d+ head=same/.test(ledger().filter(l => /offset clamp/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => /offset clamp/.test(l)).at(-1) ?? '')
+  check('S19a the clamp neither rescans nor wakes',
+    ledgerMatches(/ rescan lines=/) === rescanA && sent.length === wakesA,
+    `rescans=${ledgerMatches(/ rescan lines=/)} messages=${sent.length - wakesA}`)
+  const resyncA = ledgerMatches(/offset resync/)
+  appendWake('say', 'pm', 'pm', 'fragment-joined-to-the-clamped-line')
+  const resynced = await waitFor(() => ledgerMatches(/offset resync/) > resyncA, 2000)
+  check('S19a the read that starts inside the clamped line resyncs instead of delivering a fragment',
+    resynced && ledgerMatches(/offset resync/) === resyncA + 1 && sent.length === wakesA,
+    ledger().filter(l => /offset resync/.test(l)).at(-1) ?? '(no resync line)')
+  check('S19a the resync records the skipped byte count (one line per action)',
+    /offset resync skipped=\d+ /.test(ledger().filter(l => /offset resync/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => /offset resync/.test(l)).at(-1) ?? '')
+  appendWake('say', 'pm', 'pm', 'clean-line-after-resync')
+  const wokeA = await waitFor(() => sent.length > wakesA, 3000)
+  check('S19a a line appended after the resync wakes exactly once',
+    wokeA && sent.length === wakesA + 1 && lastText().includes('clean-line-after-resync'),
+    `messages=${sent.length - wakesA}`)
+  check('S19a the fragment itself never appears in a wake', !lastText().includes('fragment-joined-to-the-clamped-line'),
+    lastText().replace(/\n/g, ' | '))
+
+  // (b) 头部变了、文件变短 → 一次 spool shrink + 一次 rescan，下一拍什么都不加
+  const sizeB = statSync(f).size
+  const shrinkB = ledgerMatches(/spool shrink/)
+  const rescanB = ledgerMatches(/ rescan lines=/)
+  const wakesB = sent.length
+  const ts = Date.now()
+  const rewritten = Buffer.from([1, 2, 3].map(i => `${ts}\tsay\tdev\tpm\trewrite-fresh-${i}`).join('\n') + '\n')
+  const headNow = readFileSync(f).subarray(0, 16)
+  check('S19b precondition: the rewrite is shorter than the offset and its head differs',
+    rewritten.length < sizeB && !headNow.equals(rewritten.subarray(0, 16)), `${rewritten.length} < ${sizeB}`)
+  writeFileSync(f, rewritten)
+  const rescanned = await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanB, 2000)
+  check('S19b a rewrite with a changed head is rescanned exactly once',
+    rescanned && ledgerMatches(/spool shrink/) === shrinkB + 1 && ledgerMatches(/ rescan lines=/) === rescanB + 1,
+    ledger().filter(l => /rescan lines=/.test(l)).at(-1) ?? '(no rescan line)')
+  check('S19b the rescan delivers the rewritten content',
+    sent.length === wakesB + 1 && lastText().includes('rewrite-fresh-3'), `messages=${sent.length - wakesB}`)
+  await sleep(400)
+  check('S19b the next tick adds nothing (converged)',
+    ledgerMatches(/spool shrink/) === shrinkB + 1 && ledgerMatches(/ rescan lines=/) === rescanB + 1 && sent.length === wakesB + 1,
+    `shrink=${ledgerMatches(/spool shrink/)} rescan=${ledgerMatches(/ rescan lines=/)} messages=${sent.length - wakesB}`)
+
+  // (c) 同一 (size, head) 不再重扫第二次：先制造事件（clamp 到行中），再用一次 resync 推进
+  //     offset（不投递任何行 → 事件记忆保留），然后把文件截回同一 (size, head)——回归 201 字节 > clamp 上限，
+  //     没有 repeat 守卫就会重扫第二次。
+  const sizeC = statSync(f).size
+  const clampC = ledgerMatches(/offset clamp/)
+  const shrinkC = ledgerMatches(/spool shrink/)
+  const rescanC = ledgerMatches(/ rescan lines=/)
+  const repeatsC = ledgerMatches(/shrink repeat/)
+  const wakesC = sent.length
+  writeFileSync(f, readFileSync(f).subarray(0, sizeC - 1))
+  const clampedC = await waitFor(() => ledgerMatches(/offset clamp/) > clampC, 2000)
+  check('S19c (setup) the clamp into the middle of a line is recorded once',
+    clampedC && ledgerMatches(/offset clamp/) === clampC + 1 && sent.length === wakesC,
+    ledger().filter(l => /offset clamp/.test(l)).at(-1) ?? '(no clamp line)')
+  const resyncC = ledgerMatches(/offset resync/)
+  appendWakeRaw(Buffer.from(`${'F'.repeat(200)}\n`))   // 200 字节碎片 + 换行：整段被跳过，不投递
+  const resyncedC = await waitFor(() => ledgerMatches(/offset resync/) > resyncC, 2000)
+  check('S19c (setup) the restored fragment is skipped as a resync (no line is delivered)',
+    resyncedC && ledgerMatches(/offset resync/) === resyncC + 1 && sent.length === wakesC,
+    ledger().filter(l => /offset resync/.test(l)).at(-1) ?? '(no resync line)')
+  writeFileSync(f, readFileSync(f).subarray(0, sizeC - 1))   // 截回同一 (size, head)：回归 201 > 64
+  const repeated = await waitFor(() => ledgerMatches(/shrink repeat/) > repeatsC, 2000)
+  check('S19c the same (size, head) is recorded as a repeat and clamped, not rescanned twice',
+    repeated && ledgerMatches(/shrink repeat/) === repeatsC + 1 && ledgerMatches(/ rescan lines=/) === rescanC
+      && ledgerMatches(/spool shrink/) === shrinkC && sent.length === wakesC,
+    ledger().filter(l => /shrink repeat/.test(l)).at(-1) ?? '(no repeat line)')
+  check('S19c the repeat line names the state and the action',
+    /shrink repeat size=\d+ head=fnv[0-9a-f]+ action=clamp/.test(ledger().filter(l => /shrink repeat/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => /shrink repeat/.test(l)).at(-1) ?? '')
+  await shutdown()
+}
+
+// ── S20：只有新鲜行唤醒；过期行只计数、不投递、不丢字节（P28/R3 · D5）────────────────────
+// 判据是行自带的 `team_epoch_ms`（第一个字段）：不看 mtime，也不看 .seen 的顺序。
+{
+  process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
+  await sessionStart()
+  const f = spoolFile()
+  // (a) 一小时前的未投递行（不在 .seen）+ 它的 durable 收件箱行 → 重扫里 stale=1、deliver=0、不唤醒
+  const inboxFile = join(ROOT, 'docs/team/inbox/pm.md')
+  mkdirSync(join(ROOT, 'docs/team/inbox'), { recursive: true })
+  appendFileSync(inboxFile, '\n- [knock] S20 stale line body\n')
+  const staleLine = `${Date.now() - 3600_000}\tknock\tpm\tpm\tS20-stale-line`
+  const rescanA = ledgerMatches(/ rescan lines=/)
+  const totalA = lastTotal()
+  const wakesA = sent.length
+  writeFileSync(f, `${staleLine}\n`)
+  const rescanned = await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanA, 2000)
+  check('S20a an hour-old unseen line is rescan-counted, never woken about',
+    rescanned && /rescan lines=1 dup=0 skipped=0 deliver=0 stale=1 /.test(ledger().filter(l => /rescan lines=/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => /rescan lines=/.test(l)).at(-1) ?? '(no rescan line)')
+  check('S20a a stale-only recovery moves neither the wake count nor total',
+    sent.length === wakesA && lastTotal() === totalA,
+    `messages=${sent.length - wakesA} total=${totalA}->${lastTotal()}`)
+  check('S20a the durable inbox copy is still there and the spool keeps the bytes',
+    readFileSync(inboxFile, 'utf8').includes('S20 stale line body') && readFileSync(f, 'utf8').includes('S20-stale-line'),
+    `spool=${statSync(f).size}B`)
+  // (b) 紧跟一条新行 → 只叫这一条一次，total +1
+  appendWake('say', 'pm', 'pm', 'S20-fresh-after-stale')
+  const wokeB = await waitFor(() => sent.length > wakesA, 3000)
+  check('S20b a fresh line after a stale one still wakes exactly once',
+    wokeB && sent.length === wakesA + 1 && lastText().includes('S20-fresh-after-stale') && !lastText().includes('S20-stale-line'),
+    `messages=${sent.length - wakesA}`)
+  check('S20b total grows by exactly one', lastTotal() === totalA + 1, `${totalA} -> ${lastTotal()}`)
+  // (c) 时间戳读不出来的行照样投（不静默吞），并计数 unparsable=1
+  const wakesC = sent.length
+  appendWakeRaw(Buffer.from('zzz\tsay\tpm\tpm\tS20-unparsable-line\n'))
+  const wokeC = await waitFor(() => sent.length > wakesC, 3000)
+  check('S20c a line whose timestamp is not a number is delivered (never swallowed)',
+    wokeC && sent.length === wakesC + 1 && lastText().includes('S20-unparsable-line'), `messages=${sent.length - wakesC}`)
+  check('S20c the ledger counts it as unparsable=1', ledgerMatches(/unparsable=1/) >= 1,
+    ledger().filter(l => /unparsable=1/.test(l)).at(-1) ?? '(no classify line)')
+  // (d) 普通路径（不是重扫）上的过期行同样不唤醒、但要计数
+  const wakesD = sent.length
+  appendWakeRaw(Buffer.from(`${Date.now() - 7200_000}\tsay\tpm\tpm\tS20-stale-normal-path\n`))
+  await sleep(500)
+  check('S20d a stale line on the ordinary path stays silent but is counted',
+    sent.length === wakesD && ledgerMatches(/classify stale=1/) >= 1,
+    ledger().filter(l => /classify /.test(l)).at(-1) ?? '(no classify line)')
+  await shutdown()
+}
+
+// ── S21：账本把新流量与恢复分开（P28/R4 · D6）──────────────────────────────────────────
+// 操作员要能一眼看出「这次唤醒是新消息还是恢复」：`total=` 只随真投递增长，rescan 有自己的分解。
+{
+  process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
+  await sessionStart()
+  const f = spoolFile()
+  const seenFile = readdirSync(WATCH_DIR).filter(n => n.endsWith('.seen')).map(n => join(WATCH_DIR, n))[0]
+  const seenLines = readFileSync(seenFile, 'utf8').split('\n').filter(l => l.trim())
+  // (a) 只含已投递行的重写 → deliver=0 + dup>0、total 不动、无唤醒
+  const picked = seenLines.filter(l => /burst line|after-clipped-line/.test(l)).slice(-3)
+  const rescanA = ledgerMatches(/ rescan lines=/)
+  const shrinkA = ledgerMatches(/spool shrink/)
+  const totalA = lastTotal()
+  const wakesA = sent.length
+  const sizeA = statSync(f).size
+  const rewriteA = Buffer.from(`${picked.join('\n')}\n`)
+  check('S21a precondition: a rewrite built from delivered lines, smaller, with a different head',
+    picked.length >= 2 && rewriteA.length < sizeA && !readFileSync(f).subarray(0, 16).equals(rewriteA.subarray(0, 16)),
+    `picked=${picked.length} ${rewriteA.length} < ${sizeA}`)
+  writeFileSync(f, rewriteA)
+  const rescannedA = await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanA, 2000)
+  check('S21a a dedup-only rescan reads deliver=0 with a non-zero dup and moves nothing',
+    rescannedA && new RegExp(`rescan lines=${picked.length} dup=${picked.length} skipped=0 deliver=0 `).test(ledger().filter(l => /rescan lines=/.test(l)).at(-1) ?? '')
+      && sent.length === wakesA && lastTotal() === totalA,
+    ledger().filter(l => /rescan lines=/.test(l)).at(-1) ?? '(no rescan line)')
+  // (b) 只含过期行的重写 → deliver=0 stale=<n>、total 不动、无唤醒
+  const rescanB = ledgerMatches(/ rescan lines=/)
+  const totalB = lastTotal()
+  const wakesB = sent.length
+  const staleA = `${Date.now() - 3600_000}\tknock\tpm\tpm\tS21-stale-a`
+  const staleB = `${Date.now() - 7200_000}\tknock\tpm\tpm\tS21-stale-b`
+  const rewriteB = Buffer.from(`${staleA}\n${staleB}\n`)
+  check('S21b precondition: a stale-only rewrite, smaller, with a different head',
+    rewriteB.length < statSync(f).size && !readFileSync(f).subarray(0, 16).equals(rewriteB.subarray(0, 16)),
+    `${rewriteB.length} < ${statSync(f).size}`)
+  writeFileSync(f, rewriteB)
+  const rescannedB = await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanB, 2000)
+  check('S21b a stale-only rescan reads deliver=0 with stale=<n> and moves nothing',
+    rescannedB && /rescan lines=2 dup=0 skipped=0 deliver=0 stale=2 /.test(ledger().filter(l => /rescan lines=/.test(l)).at(-1) ?? '')
+      && sent.length === wakesB && lastTotal() === totalB,
+    ledger().filter(l => /rescan lines=/.test(l)).at(-1) ?? '(no rescan line)')
+  // (c) 两条新鲜行合并成一条唤醒 → wake n=2、total +2
+  const totalC = lastTotal()
+  const wakesC = sent.length
+  appendWake('say', 'pm', 'pm', 'S21-fresh-a')
+  appendWake('say', 'pm', 'pm', 'S21-fresh-b')
+  const wokeC = await waitFor(() => sent.length > wakesC, 3000)
+  check('S21c a real delivery is one wake naming both lines',
+    wokeC && sent.length === wakesC + 1 && lastText().includes('S21-fresh-a') && lastText().includes('S21-fresh-b'),
+    `messages=${sent.length - wakesC}`)
+  check('S21c the wake line reads n=2 and total grows by exactly two',
+    ledgerMatches(/wake n=2 /) >= 1 && lastTotal() === totalC + 2,
+    `total=${totalC}->${lastTotal()} ${ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''}`)
+  await shutdown()
 }
 
 // ── 反向守卫：真实仓库 state/ 未被触碰 ───────────────────────────────────────

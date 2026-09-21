@@ -50,6 +50,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# 子串判定：用 case（不起管道）——`printf ... | grep -q` 在 `set -o pipefail` 下会被 grep 的提前退出
+# 变成 SIGPIPE（141）而假红；日志越大越容易命中（P28 把 harness 日志从 ~14KB 撑到 ~17KB 时实测）。
+has() { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+
 fail() { printf '\033[31m✗\033[0m %s\n' "$*"; }
 pass() { printf '\033[32m✓\033[0m %s\n' "$*"; }
 
@@ -84,10 +88,8 @@ RC=0
 
 # ---- ① 红树：必须复现（S11/S12/S13 红） ----
 RED_LOG="$(run_harness red "$RED_EXT")"; RED_RC=$?
-if [ "$RED_RC" -ne 0 ] \
-  && printf '%s\n' "$RED_LOG" | grep -q 'TEAM-IW-CASE FAIL S11' \
-  && printf '%s\n' "$RED_LOG" | grep -q 'TEAM-IW-CASE FAIL S12' \
-  && printf '%s\n' "$RED_LOG" | grep -q 'TEAM-IW-CASE FAIL S13'; then
+if [ "$RED_RC" -ne 0 ] && has 'TEAM-IW-CASE FAIL S11' "$RED_LOG" \
+  && has 'TEAM-IW-CASE FAIL S12' "$RED_LOG" && has 'TEAM-IW-CASE FAIL S13' "$RED_LOG"; then
   pass "红树（$BASE）复现成功：S11/S12/S13 全红（修复前：外部截断+重写 = 整份重放 + total 灌水）"
 else
   fail "红树没有复现（rc=$RED_RC；预期 S11/S12/S13 全 FAIL）"
@@ -100,7 +102,7 @@ printf '%s\n' "$RED_LOG" | grep -E 'FAIL S11 (external|total)' | sed 's/^/  red:
 # ---- ② 绿树：必须全绿 ----
 GREEN_LOG="$(run_harness green "$GREEN_EXT")"; GREEN_RC=$?
 GREEN_N="$(printf '%s\n' "$GREEN_LOG" | grep -c 'TEAM-IW-CASE PASS')"
-if [ "$GREEN_RC" -eq 0 ] && printf '%s\n' "$GREEN_LOG" | grep -q 'TEAM-IW-HARNESS OK'; then
+if [ "$GREEN_RC" -eq 0 ] && has 'TEAM-IW-HARNESS OK' "$GREEN_LOG"; then
   pass "绿树（本 worktree）：harness 全绿（$GREEN_N 条用例，含 S11/S12/S13）"
 else
   fail "绿树不是全绿（rc=$GREEN_RC）——修复把别的用例弄红了？"
@@ -110,9 +112,8 @@ fi
 
 # ---- ③ 变异树：去重被破坏 → S11/S13 必须红（守卫测试真的咬在实现上） ----
 MUT_LOG="$(run_harness mut "$TMP/mut-skill/extension/team-inbox-watch.ts")"; MUT_RC=$?
-if [ "$MUT_RC" -ne 0 ] \
-  && printf '%s\n' "$MUT_LOG" | grep -q 'TEAM-IW-CASE FAIL S11' \
-  && printf '%s\n' "$MUT_LOG" | grep -q 'TEAM-IW-CASE FAIL S13'; then
+if [ "$MUT_RC" -ne 0 ] && has 'TEAM-IW-CASE FAIL S11' "$MUT_LOG" \
+  && has 'TEAM-IW-CASE FAIL S13' "$MUT_LOG"; then
   pass "变异树（去重过滤改恒真）：S11/S13 红 —— 翻转成立（测试咬在去重实现上）"
 else
   fail "变异树没有红（rc=$MUT_RC；预期 S11/S13 FAIL）——S11/S13 可能没真的钉在去重上"

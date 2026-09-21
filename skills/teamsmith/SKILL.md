@@ -48,7 +48,7 @@ which starts once the project is up.
 | Init / self-check | `team init [--session s] [--agents "a b"] [--vcs local\|remote]`, `team doctor` |
 | Observe | `team roster` (windows/branch/dirty/ahead), `team status [ID]`, `team ps` (capacity + model limits + PM/pulse liveness), `team digest` (PM's pending work) |
 | Inbox | `team inbox [agent] [--ack] [--all]` |
-| Document contracts | `team task <ID> --title ... --agent a`, `team board add\|set\|ls`, `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
+| Document contracts | `team task <ID> --title ... --agent a`, `team board add\|assign\|set\|ls`, `team change status <id> [--json]` (readiness view: tasks/evidence, declared vs touched delta files, blockers; exit 0 iff every mapped task is finished), `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
 | Dispatch | `team add-agent <a>`, `team dispatch <a> <ID> <taskfile> [--model m] [--fresh] [--allow-overflow] [--force] [--print]` (`--force` overrides the "this agent still carries an unfinished task" refusal; the override is printed and logged) |
 | Collaborate | `team say <a> "<one-line message>" [--no-verify]` (verifies delivery; falls back to the inbox when the agent is not running), `team notify <a> "<one line>"` (agent → PM) |
 | Draft / deferred delivery | `team draft [pm]` opens an editor window on `state/draft-pm.md` (nothing automated ever types into it; save+quit enqueues through the guarded path and prints the ack there), `team draft send [<file>] [--now]` (headless form), `team outbox [list]` (what is waiting, with `held` reasons), `team outbox flush [--now]`, `team outbox drop <n\|all>`. Every automated sender refuses to type into an input box that already holds a draft: the message is queued in `state/outbox/` and reported as `queued`, and `--now` is the audited override that types anyway (`state/outbox/forced.log`). See `references/troubleshooting.md` §3 |
@@ -62,7 +62,7 @@ which starts once the project is up.
 | PM/agent lifecycle | `team up [--agents]` (recover the PM), `team resume` (PM's tool: continue stopped agents), `team standby on\|off` (PM deliberately stands down) |
 | Cross-project meetings | `team meeting open/say/read/list/inbox/propose/agree/close` (PM-to-PM peer exchange: interface work, advice, problem reports; **not a command channel** — consensus needs both sides) |
 | Updates | `team mark-loaded` (record the version at session start), `team version --check` (should I reload?), `team changelog [--since X]`, `team reload` |
-| Diagnostics | `team paths` (resolved paths/session), `team smoke` (end-to-end self-test; `TEAM_SMOKE_FAST=1 team smoke` = **fast mode**, pure-logic sections only, ~10s, skipped process sections print `SKIP (FAST mode)`), `team version` |
+| Diagnostics | `team paths` (resolved paths/session), `team smoke` (end-to-end self-test; `TEAM_SMOKE_FAST=1 team smoke` = **fast mode**, pure-logic sections only, ~10s, skipped process sections print `SKIP (FAST mode)`; the **full** run is for delivery/review and queues on the gate lock — `TEAM_SMOKE_LOCK` / `TEAM_SMOKE_LOCK_WAIT`, holder in `<lock>.holder`, and `team review` takes the same lock before its timeout so the record's `queued`/`ran` are separate; on a busier machine than `factor × cores` loadavg (`0.75` in the gate, `0.25` for the cold-start fixture) the panel timing lines — medians of three printed samples — skip visibly with the measured values instead of failing), `team version` |
 
 ## Read the creed first, then the process
 
@@ -88,7 +88,11 @@ when they conflict, the creed wins and the process gets fixed.
    acceptance commands / report requirements) — the default worker model is cheap and will not fix vague requests.
 2. **Dispatch**: `team dispatch <a> <ID> <taskfile>`. Check `team ps` (memory / model concurrency) first.
    One long-lived worktree per agent; dispatching again to the same agent resumes its session, use `--fresh` for a
-   new one.
+   new one. The brief's `change:`/`specs:`/`anchor:`/`deltas:` lines are checked **before the window opens**: one
+   change id per task (no override), a change-less brief must declare a resolvable anchor, two unfinished tasks of
+   one change cannot write the same delta file, and a verifier must not be an author of the change — the last three
+   have `--force` + one audit line, the first does not. A refusal names the offending line, the sibling and the fix;
+   `team change status <id>` shows the same facts read-only.
 3. **Wait for notifications**: when a worker's turn ends it appends to `inbox/<agent>.md` and knocks on your
    window. Do not poll agent screens; read `team inbox --ack` and `team digest`.
 4. **Verify (never skip)**: `team review <ID> --dir <checkout>` — run the gates on a clean, independent checkout
@@ -116,8 +120,12 @@ A change runs as **five phases, one brief each, one owner each**: `opsx-explore`
 same explorer, planning only) → `opsx-apply` (a dev) → `opsx-verify` (a **different** agent) → `opsx-archive` (the
 PM). Two hard rules: **an `apply` brief starts only after the PM's proposal review is ACCEPTED**
 (`docs/team/reviews/<change>-proposal.md`), and **the PM never archives without independent verification and the
-user's confirmation**. `openspec validate --all --strict` is part of `TEAM_GATES`; the phase table, the gates and
-the PM's review checklist are in [references/openspec.md](references/openspec.md).
+user's confirmation**. **One change : N tasks** — the change is the dispatch unit and the brief's header maps the
+task to it (`team dispatch` refuses more than one `change:` id, a change-less brief without an anchor, two
+unfinished tasks writing one delta file, and a verifier who authored the change; `team change status <id>` reports
+readiness and exits 0 only when every mapped task is finished). `openspec validate --all --strict` is part of
+`TEAM_GATES`; the phase table, the gates and the PM's review checklist are in
+[references/openspec.md](references/openspec.md), the four guards in [references/protocol.md](references/protocol.md) §5b.
 
 ## Getting skill updates (three paths)
 
@@ -246,7 +254,7 @@ byte-for-byte unchanged**):
 | `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |
 | `templates/` | Copy when you need to hand-write a brief/report/board |
 | `scripts/team`, `scripts/lib/*.sh` | When changing behaviour (use `team <cmd> --print` to see what it generates) |
-| `tests/smoke.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, the non-Pi agent end-to-end segment, window/close behaviour, the pulse waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release |
+| `tests/smoke.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, the non-Pi agent end-to-end segment, window/close behaviour, the pulse waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release. The full run is the machine's **one** shared gate resource: it queues on `TEAM_SMOKE_LOCK` up to `TEAM_SMOKE_LOCK_WAIT`, and `team review` takes the same lock *before* its hard timeout (so the record's `queued`/`ran` are separate and a long queue is a loud `FAIL`, never a `TIMEOUT`) |
 
 ## Requirements
 
@@ -269,4 +277,7 @@ byte-for-byte unchanged**):
 - What to remember, what belongs on disk instead, and what happens when the memory dependency is missing:
   [references/memory.md](references/memory.md).
 - Optional helpers: `timeout` (hard timeout for gates; degrades with a warning), `lsof` (needed only where
-  `/proc` is unavailable).
+  `/proc` is unavailable), `/usr/bin/time` (GNU time, not bash's `time` keyword: `tests/panel-cpu.sh` wraps the
+  console with it to read the tree CPU figure — the gate image pins it, and where it is missing that fixture
+  prints why and reports a visible SKIP (its own exit status) instead of judging, as does the `panel-cpu-premise`
+  segment that drives it).

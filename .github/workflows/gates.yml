@@ -4,9 +4,24 @@ name: gates
 #
 #   openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh
 #
-# Manual + `main` only (no pull_request trigger): this repository may be private, and Actions minutes are
-# billed — the PM's independent `team review <ID> --dir …` run stays the gate that decides a merge. Enable more
-# triggers (see docs/team/PUBLISH.md §7) when the repository goes public.
+# They run inside the pinned gate image (ci/Containerfile) rather than on the runner directly.
+# Why (M47): the suite asserts real behaviour of real tools (tmux bracketed paste, a login shell
+# whose profile may drop the caller's PATH, a JS runtime, pi's own skill parser, the committed
+# panel bundle's byte-for-byte rebuild). A rolling `ubuntu-latest` drifts under it — the first
+# runner-only run of this workflow was ✓2300 ✗48, and every one of the 48 was environment
+# (no pi, a different login profile, tmux 3.4 without `#{bracket_paste_flag}`, bun 1.4 vs the
+# 1.3.14 that built the committed bundle, node not at /usr/bin/node, and Ink's `is-in-ci`
+# treating the TTY pane as non-interactive). The image pins all of that; `docker build` +
+# `docker run` is the whole CI environment.
+#
+# The container deliberately does NOT get `CI`/`GITHUB_*` injected: the gate must not depend on
+# the caller's environment. The one environment-sensitive path we know of (Ink 7 rendering
+# nothing when `CI` is set) is pinned by an explicit `CI=1` pane fixture in smoke 26-m, so it is
+# covered on every machine, not only on runners.
+#
+# Manual + `main` only (no pull_request trigger): this repository may be private, and Actions
+# minutes are billed — the PM's independent `team review <ID> --dir …` run stays the gate that
+# decides a merge. Enable more triggers (see docs/team/PUBLISH.md §7) when the repository goes public.
 on:
   push:
     branches: [main]
@@ -22,27 +37,33 @@ concurrency:
 jobs:
   gates:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The suite takes ~10 minutes in the container; the image build adds a few. Same order of
+    # magnitude as the previous runner-only job (12–13 min).
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # tmux: the smoke suite drives real windows/panes; perl: the English-prose invariant (smoke §18) fails
-      # loudly when perl is missing instead of skipping, so it has to be installed.
-      - name: System dependencies
+      # Self-contained: no registry credentials, no floating image tag. ci/Containerfile pins
+      # tmux 3.7b, node 24.19.0, bun 1.3.14, pi 0.86.0 and openspec 1.8.0 (see its header).
+      - name: Build the gate image
+        run: docker build -f ci/Containerfile -t teamsmith-gates:ci .
+
+      # Read-only workspace mount: the suite only ever writes to its own temp repos and the
+      # container's /tmp — a write into the checkout is a bug we want to see, not to allow.
+      # `--user` matches the runner (one fixture chmod-000s a file, which root would defeat) and
+      # HOME goes to the writable /tmp (the image's /root is not writable for that uid).
+      # --pid=host (no --init, which needs a private PID namespace): smoke 10c-② proves that a
+      # bare `read` in a background process group of a controlling terminal is stopped by SIGTTIN
+      # — the mechanism that made a gate hang for 28 minutes (M25). Under a private PID namespace
+      # the kernel answers that read with EIO instead, the fixture cannot reproduce the shape and
+      # would have to skip the mechanism (measured in M47: podman private pid ns -> errno=5,
+      # --pid=host -> SIGTTIN stop, same image/kernel). Sharing the runner's PID namespace keeps
+      # the container faithful to a native run in that one POSIX corner; nothing else changes.
+      - name: Gates (pinned container)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends tmux perl
-
-      # A JS runtime is a doctor-level requirement (node ≥ 20 or bun ≥ 1.3): the pulse console and patrol are
-      # a committed Ink bundle. The runner already has node; bun is installed so both supported runtimes exist.
-      - name: bun
-        uses: oven-sh/setup-bun@v2
-
-      # Unpinned on purpose: the specs must stay valid for the current OpenSpec CLI. Pin it here if you would
-      # rather have a red build from an upstream release than silent obsolescence.
-      - name: OpenSpec CLI
-        run: npm install -g @fission-ai/openspec
-
-      - name: Gates
-        run: openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh
+          docker run --rm --pid=host \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD:/work:ro" -w /work \
+            teamsmith-gates:ci \
+            bash -c 'openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null'

@@ -573,7 +573,7 @@ team_identity_refuse() { # <命令名>
 team_identity_observe_only() { # <cmd> [args...] → 0=纯观察/建项目
   local cmd="${1:-}"; shift 2>/dev/null || true
   case "$cmd" in
-    paths|help|version|changelog|roster|status|ps|digest|inbox|doctor) return 0 ;;
+    paths|help|version|changelog|roster|status|ps|digest|inbox|doctor|change) return 0 ;;
     __panel-data) return 0 ;;                                # 面板的数据读器（只读；panel 每个块一个子进程）
     init|bootstrap) return 0 ;;                                  # 在空目录建项目：按目录走不会误伤别人
     board)   case "${1:-}" in row|ls|"") return 0 ;; esac ;;
@@ -2822,6 +2822,36 @@ team_board_ids() { # → 表里现有的 id（每行一个，给「未知 id」�
   team_board_ids_direct
 }
 
+# M48：同一 ID 出现多行（历史遗留：不同任务共用 ID；PM 实测被同 ID 两行卡住了看板光标）。
+# 输出 "<ID> ×<行数>"（按首次出现顺序），没有重复 → 空。面板/状态/报告按 ID 指行，重复只靠肉眼。
+# 只看**任务表**（从带 ID/编号 表头的那一行到表尾）：模板的占位行与下面的风险表共用 2 列，
+# 「—」与表外的 # 不是一个任务 ID。
+team_board_duplicate_ids() { # → "M4.3 ×2" 每行一个
+  local f="$TEAM_DOCS_ABS/BOARD.md" col hdr
+  [ -f "$f" ] || return 0
+  col="$(team_board_col id)"
+  hdr="$(awk -v c="$col" 'BEGIN{FS="|"} /^\|/ { v=$(c); gsub(/^[ \t]+|[ \t]+$/,"",v); if (v=="ID" || v=="编号") { print NR; exit } }' "$f")"
+  [ -n "$hdr" ] || return 0
+  awk -v c="$col" -v start="$hdr" 'BEGIN{FS="|"}
+    NR<start { next }
+    $0 !~ /^\|/ { exit }
+    { v=$(c); gsub(/^[ \t]+|[ \t]+$/,"",v)
+      if (v=="" || v=="ID" || v=="编号" || v=="-" || v=="–" || v=="—") next
+      if (!(v in seen)) order[++k]=v
+      seen[v]++ }
+    END { for (i=1;i<=k;i++) { v=order[i]; if (seen[v]>1) printf "%s ×%d\n", v, seen[v] } }' "$f"
+  return 0
+}
+
+# M48：一行话的重复报告（board ls / digest / doctor 共用同一份判据，避免三处各写一份）。
+team_board_duplicate_line() { # → "BOARD 有重复 ID：M4.3 ×2、M6.3 ×2"；没有 → 空
+  local dups
+  dups="$(team_board_duplicate_ids)"
+  [ -n "$dups" ] || return 0
+  printf 'BOARD 有重复 ID：'
+  printf '%s' "$dups" | awk 'NR>1{printf "、"} {printf "%s", $0} END{printf "\n"}'
+}
+
 # 注意：team_board_row 对「没有这一行」也返回 0（awk 正常结束），所以判存在必须看输出
 # 是否非空 —— F29 的根因就是「写」从不检查行是否存在。
 team_board_has() { # <id> → 0=表里有这一行
@@ -2837,21 +2867,26 @@ team_board_has() { # <id> → 0=表里有这一行
   [ -n "$(team_board_row_direct "$1" 2>/dev/null || true)" ]
 }
 
-# 只写状态列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
+# 只写一列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
 # 于是 `board set NOSUCH done` 会打印 ✓ 而文件一个字节都没变（md5 相同）。
-team_board_write() { # <id> <status> → 0=真的改了那一行；1=没有这个 id（不碰文件）
-  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" st="$2" idcol stcol
+# M48：列名参数化，好让 `board assign` 走同一条「只改一格、拒绝时一个字节不落盘」的路。
+team_board_write_col() { # <id> <列名> <值> → 0=真的改了那一行；1=没有这个 id（不碰文件）
+  local f="$TEAM_DOCS_ABS/BOARD.md" id="$1" name="$2" val="$3" idcol col
   [ -f "$f" ] || return 1
-  idcol="$(team_board_col id)"; stcol="$(team_board_col status)"
-  awk -v id="$id" -v st="$st" -v ic="$idcol" -v sc="$stcol" 'BEGIN{FS=OFS="|"}
+  idcol="$(team_board_col id)"; col="$(team_board_col "$name")"
+  awk -v id="$id" -v val="$val" -v ic="$idcol" -v c="$col" 'BEGIN{FS=OFS="|"}
     /^\|/ { v=$(ic); gsub(/^[[:space:]]+|[[:space:]]+$/,"",v)
-             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(sc)); $(sc)=" "st" "; print; found=1; next } }
+             if (v==id) { gsub(/^[[:space:]]+|[[:space:]]+$/,"",$(c)); $(c)=" "val" "; print; found=1; next } }
     { print }
     END { exit(found ? 0 : 1) }
   ' "$f" > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
   mv "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }
   team_scan_invalidate board   # M50：写完再读（同进程）必须读到新行
   return 0
+}
+
+team_board_write() { # <id> <status> → 状态列（board set 的写口）
+  team_board_write_col "$1" status "$2"
 }
 
 # ---------------------------------------------------------------- done 的准入证据（F1）
@@ -2986,6 +3021,152 @@ team_task_change() { # <ID> → 任务书 change: 行的 change id（`-`/空 →
   return 0
 }
 
+# ---------------------------------------------------------------- P23/B1 · 头部字段的严格读取层
+# 背景（change-centric-discipline design §1）：`change:` 过去按「第一个匹配行」原样返回 ——
+# `change: alpha, beta` 会带着逗号流进 state/<agent>.env 与复验记录名，两行 `change:` 里第二行
+# 永远读不到。这里补一层严格读取：raw 层给**全部**匹配行，严格层只接受语法允许的形状，坏值
+# **非 0 退出并把出错的那一行带出来**（守卫把「错在哪」原样打给 PM，而不是替它猜）。
+# 注释语义：只有 ` #`（前面有空白的 `#`）才是注释 —— `specs: panel#需求名` 里的 `#` 是分隔符。
+team_brief_field_raw() { # <任务书> <字段名> → 每行一个匹配行的值（去掉 ` # 注释` 与首尾空白）
+  local f="$1" key="$2"
+  [ -f "$f" ] || return 0
+  awk -v key="$key" '$0 ~ ("^[[:space:]]*" key ":") {
+      sub("^[[:space:]]*" key ":[[:space:]]*", "");
+      sub(/[[:space:]]+#.*$/, "");
+      gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "$f" 2>/dev/null || true
+  return 0
+}
+
+# 正常形态的 change id：首字符字母数字，其余允许字母数字与 . _ -
+team_task_token_ok() { # <值> <前缀（报错用）> → 0=形状合法
+  case "$1" in
+    [A-Za-z0-9]*) case "$1" in *[!A-Za-z0-9._-]*) return 1 ;; *) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# → 0 = stdout 一行值：一个 change id，或 `-`（行缺失与 `-` 同义）；1 = stdout 一行拒绝原因
+team_task_change_value() { # <任务书>
+  local f="$1" vals n val
+  vals="$(team_brief_field_raw "$f" change)"
+  n="$(printf '%s\n' "$vals" | grep -c . || true)"
+  [ "${n:-0}" -eq 0 ] && { printf -- '-\n'; return 0; }
+  if [ "$n" -gt 1 ]; then
+    printf 'change: 有 %s 行（%s）—— 一个任务最多属于一个 change，只留一行\n' \
+      "$n" "$(printf '%s\n' "$vals" | awk 'NR>1{printf "、"} {printf "%s", $0}')"
+    return 1
+  fi
+  val="$vals"
+  [ "$val" = "-" ] && { printf -- '-\n'; return 0; }
+  if team_task_token_ok "$val"; then printf '%s\n' "$val"; return 0; fi
+  printf 'change: 的值是 `%s` —— 只接受一个 change id（[A-Za-z0-9][A-Za-z0-9._-]*）或 `-`\n' "$val"
+  return 1
+}
+
+# → 0 = stdout 声明：每行一个 capability token；空输出 = `-`（本任务不写任何 delta）；
+#       `*` = 行缺失（unknown —— 按「整个 change 的 delta 集」处理）；1 = 一行拒绝原因
+team_task_deltas() { # <任务书>
+  local f="$1" vals n val rest tok
+  vals="$(team_brief_field_raw "$f" deltas)"
+  n="$(printf '%s\n' "$vals" | grep -c . || true)"
+  [ "${n:-0}" -eq 0 ] && { printf '*\n'; return 0; }
+  if [ "$n" -gt 1 ]; then
+    printf 'deltas: 有 %s 行（%s）—— 只留一行，逗号分隔 capability\n' \
+      "$n" "$(printf '%s\n' "$vals" | awk 'NR>1{printf "、"} {printf "%s", $0}')"
+    return 1
+  fi
+  val="$vals"
+  [ "$val" = "-" ] && return 0
+  # 末尾逗号 = 空项（列表说「有一个 capability」，但那个名字是空的）—— 不静默当空集
+  case "$val" in *,) printf 'deltas: 的值是 `%s` —— 逗号列表末尾有空项\n' "$val"; return 1 ;; esac
+  rest="$val"
+  while [ -n "$rest" ]; do
+    if [ "${rest#*,}" = "$rest" ]; then tok="$rest"; rest=""; else tok="${rest%%,*}"; rest="${rest#*,}"; fi
+    tok="$(team_trim "$tok")"
+    if team_task_token_ok "$tok"; then printf '%s\n' "$tok"; continue; fi
+    printf 'deltas: 的值是 `%s` —— `%s` 不是 capability token（[A-Za-z0-9][A-Za-z0-9._-]*）\n' \
+      "$val" "${tok:-（空项）}"
+    return 1
+  done
+  return 0
+}
+
+# `anchor: none (infra) — <理由>` 的形状识别（理由可以为空，调用方据此报「理由必填」）。
+# → 0 = stdout 理由；1 = 不是 none (infra) 形状；2 = 是 infra 形状但缺 `—` 分隔符
+team_anchor_infra_reason() { # <anchor 值>
+  local v="$1" rest sep
+  case "$v" in none*) ;; *) return 1 ;; esac
+  rest="$(printf '%s' "$v" | sed -E 's/^none[[:space:]]*\([[:space:]]*infra[[:space:]]*\)[[:space:]]*//')"
+  [ "$rest" != "$v" ] || return 1
+  sep="$rest"
+  rest="$(printf '%s' "$sep" | sed -E 's/^(—|–|--|-)[[:space:]]*//')"
+  [ "$rest" != "$sep" ] || return 2
+  printf '%s\n' "$rest"
+  return 0
+}
+
+# change-less 任务书的锚（design §3「policy B」）：`specs:` 必须解析到
+# `<spec dir>/specs/<capability>/spec.md`（带 `#<需求名>` 时该文件里要有 `### Requirement: <需求名>`），
+# 或者 `anchor: none (infra) — <非空理由>`。
+# → 0 = stdout 一行 "<specs|infra>\t<值>"；1 = stdout 多行拒绝明细（含两种接受形式与查找路径）
+team_task_anchor() { # <任务书>
+  local f="$1" specs anchor out rc reason spec_root entry cap req rel path rest n
+  specs="$(team_brief_field_raw "$f" specs | tr '\n' ';')"; specs="${specs%;}"
+  anchor="$(team_brief_field_raw "$f" anchor | tr '\n' ';')"; anchor="${anchor%;}"
+  spec_root="$(team_spec_dir_abs)"
+  local forms="接受两种形式：\n    · specs: <capability>#<requirement>      在 $TEAM_SPEC_DIR/specs/<capability>/spec.md 里解析\n    · anchor: none (infra) — <非空理由>      环境/CI/工具链、纯内部重构、文档与夹具"
+  if [ -n "$anchor" ]; then
+    if reason="$(team_anchor_infra_reason "$anchor")"; then
+      if [ -n "$(team_trim "$reason")" ]; then printf 'infra\t%s\n' "$reason"; return 0; fi
+      printf 'anchor: `%s` 少了理由 —— `none (infra)` 后面要用 `—` 跟上非空理由\n' "$anchor"
+    else
+      rc=$?
+      case "$rc" in
+        2) printf 'anchor: `%s` 少了 `—` 分隔符 —— 写成 `none (infra) — <理由>`\n' "$anchor" ;;
+        *) printf 'anchor: `%s` 不是可识别的锚 —— 只接受 `none (infra) — <理由>`\n' "$anchor" ;;
+      esac
+    fi
+    printf '%b\n' "$forms"
+    return 1
+  fi
+  case "$(team_trim "$specs")" in ""|-|";"|"-") specs="" ;; esac
+  if [ -z "$specs" ]; then
+    printf '任务书没有 change: 行（或值是 `-`），也没声明锚：specs: 是空的，anchor: 也没有\n'
+    printf '%b\n' "$forms"
+    return 1
+  fi
+  rest="$specs"; n=0
+  while [ -n "$rest" ]; do
+    if [ "${rest#*;}" = "$rest" ]; then entry="$rest"; rest=""; else entry="${rest%%;*}"; rest="${rest#*;}"; fi
+    entry="$(team_trim "$entry")"
+    [ -n "$entry" ] || continue
+    n=$((n + 1))
+    case "$entry" in "-") continue ;; esac
+    cap="${entry%%#*}"; req=""
+    case "$entry" in *"#"*) req="${entry#*#}" ;; esac
+    if ! team_task_token_ok "$cap"; then
+      printf 'specs: 的条目 `%s` 不是 <capability>[#<requirement>]（capability 只允许 [A-Za-z0-9][A-Za-z0-9._-]*）\n' "$entry"
+      printf '%b\n' "$forms"
+      return 1
+    fi
+    rel="$TEAM_SPEC_DIR/specs/$cap/spec.md"
+    path="$spec_root/specs/$cap/spec.md"
+    if [ ! -f "$path" ]; then
+      printf 'specs: 的锚 `%s` 解析不到：找不到 %s\n' "$entry" "$rel"
+      printf '%b\n' "$forms"
+      return 1
+    fi
+    if [ -n "$req" ] && ! grep -qxF -- "### Requirement: $req" "$path"; then
+      printf 'specs: 的锚 `%s` 解析不到：%s 里没有 `### Requirement: %s`\n' "$entry" "$rel" "$req"
+      printf '%b\n' "$forms"
+      return 1
+    fi
+  done
+  [ "$n" -gt 0 ] || { printf 'specs: 是空的，anchor: 也没有\n'; printf '%b\n' "$forms"; return 1; }
+  printf 'specs\t%s\n' "$specs"
+  return 0
+}
+
 # 提案审查记录的判定（抬头 `verdict: **ACCEPTED**` 或 `判定: **ACCEPTED**`）
 # → ACCEPTED|NEEDS-CHANGES|none|missing
 team_proposal_verdict() { # <change>
@@ -3020,7 +3201,7 @@ team_committed_report() {
 
 # 阶段专属交付证据：stdout = 一行「找到了什么」（成立）或「差什么、去哪找」（不成立）；0=成立。
 team_done_phase_evidence() { # <ID> <phase> <change>
-  local id="$1" phase="$2" change="$3" f rel v d spec_root
+  local id="$1" phase="$2" change="$3" f rel v d spec_root ready_why
   rel="$TEAM_DOCS_DIR/reviews/$id.md"
   case "$phase" in
     explore)
@@ -3064,6 +3245,17 @@ team_done_phase_evidence() { # <ID> <phase> <change>
       spec_root="$(team_spec_dir_abs)"
       for d in "$spec_root/changes/archive/$change" "$spec_root/changes/archive/"*"-$change"; do
         if [ -d "$d" ]; then
+          # P23/B6：归档目录只是必要条件，不再是充分条件 —— 整个 change 必须就绪。判据与
+          # `team change status` 的 blockers 逐字同源（team_change_readiness）；归档任务自己
+          # 不算「兄弟」（否则它永远等不到自己结束）。标记只对本次 readiness 调用生效：
+          # 嵌套的 team_task_open_reason → team_done_phase_evidence 不再重复问就绪，避免自递归。
+          if [ -z "${TEAM_CHANGE_READY_GATE:-}" ]; then
+            if ! ready_why="$(TEAM_CHANGE_READY_GATE=1 team_change_readiness "$change" "$id")"; then
+              printf 'change %s 还没就绪（归档前提：至少一个任务，且除归档任务自己外全部结束）：\n%s\n' \
+                "$change" "$ready_why"
+              return 1
+            fi
+          fi
           printf '归档目录 %s\n' "${d#"$TEAM_MAIN_ROOT"/}"
           return 0
         fi
@@ -3172,6 +3364,158 @@ team_task_open_reason() { # <ID> → 0=已结束 / 1=还没结束（stdout 都�
   return 1
 }
 
+# ---------------------------------------------------------------- P23/B1 · change 读取模型
+# 任务书是 task↔change 映射的**唯一**账本（design §2「不做第二个 spec 系统」）：
+# 一次 awk 扫过 docs/team/tasks/*.md 拿到全部映射行，没有 per-file 子进程、没有 state/changes.json。
+team_change_tasks() { # <change id> → 每行 "<ID>\t<phase>\t<agent>\t<brief 绝对路径>"（严格 change: 相等；按文件名序）
+  local want="$1" dir="$TEAM_DOCS_ABS/tasks"
+  [ -n "$want" ] || return 0
+  [ -d "$dir" ] || return 0
+  awk -v want="$want" '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    function val(line) { v = substr(line, index(line, ":") + 1); sub(/[[:space:]]+#.*$/, "", v); return trim(v) }
+    function flush() {
+      if (row_id != "" && nchg == 1 && chg == want)
+        printf "%s\t%s\t%s\t%s\n", row_id, (phase == "" ? "-" : phase), (agent == "" ? "-" : agent), file
+    }
+    FNR == 1 {
+      flush()
+      file = FILENAME; row_id = ""; phase = ""; agent = ""; chg = ""; nchg = 0
+      base = FILENAME; sub(/^.*\//, "", base); sub(/\.md$/, "", base); base = base "-"; sub(/-.*$/, "", base)
+      row_id = base; has_task = 0
+    }
+    match($0, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_-]*:/) {
+      key = $0; sub(/:.*/, "", key); gsub(/^[[:space:]]+/, "", key)
+      v = val($0)
+      if (key == "task")               { if (!has_task && v != "") { has_task = 1; row_id = v } }
+      else if (key == "phase")         { if (phase == "") phase = v }
+      else if (key == "agent")         { if (agent == "") agent = v }
+      else if (key == "change")        { nchg++; chg = v }
+    }
+    END { flush() }' "$dir"/*.md 2>/dev/null || true
+}
+
+# 未结束的任务（判据 = team_task_open_reason，与 done 闸门/叠任务守卫同源，不另立一套）
+team_change_unfinished() { # <change id> → 每行 "<ID>\t<phase>\t<看板状态>\t<没结束的原因>\t<brief 绝对路径>"
+  local id="$1" tid tphase tagent brief reason st
+  while IFS=$'\t' read -r tid tphase tagent brief; do
+    [ -n "$tid" ] || continue
+    if reason="$(team_task_open_reason "$tid")"; then continue; fi
+    st="$(team_board_status "$tid")"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$tid" "$tphase" "${st:--}" "$reason" "$brief"
+  done < <(team_change_tasks "$id")
+  return 0
+}
+
+# 阻塞项（人类可读、两处共用同一份措辞：team change status 的 blockers 与归档闸门的拒绝）
+# → 每行一个阻塞任务；0 = 没有阻塞任务（注意：没有任务时也不叫 ready）
+team_change_blockers() { # <change id> [<排除的任务 id>]
+  local id="$1" skip="${2:-}" n=0 tid tphase st reason _brief
+  while IFS=$'\t' read -r tid tphase st reason _brief; do
+    [ -n "$tid" ] || continue
+    [ -n "$skip" ] && [ "$tid" = "$skip" ] && continue
+    n=$((n + 1))
+    printf '%s · %s · %s · %s\n' "$tid" "$tphase" "$st" "$reason"
+  done < <(team_change_unfinished "$id")
+  [ "$n" -eq 0 ]
+}
+
+# 就绪判据只有这一处（design §6）：至少一个任务指向它，且除 <排除的任务> 外全部结束。
+# stdout = 「为什么没就绪」（ready 时为空）；0 = ready / 1 = 没就绪。
+team_change_readiness() { # <change id> [<排除的任务 id>（归档任务自己）]
+  local id="$1" skip="${2:-}" rows n=0
+  rows="$(team_change_tasks "$id")"
+  [ -n "$rows" ] && n="$(printf '%s\n' "$rows" | grep -c . || true)"
+  if [ "${n:-0}" -eq 0 ]; then
+    printf '没有任务指向 change %s（就绪 = 至少一个任务，且除归档任务自己外全部结束）\n' "$id"
+    return 1
+  fi
+  team_change_blockers "$id" "$skip"
+}
+
+team_change_ready() { # <change id> → 0 = ready / 1 = 没就绪（stdout 吞掉明细）
+  team_change_readiness "$1" >/dev/null
+}
+
+# 一个 change 的 delta 文件（repo 相对路径；`specs/*/spec.md`）。不调 git，纯 glob。
+team_change_delta_files() { # <change id> → 每行一个 "<spec dir>/changes/<id>/specs/<cap>/spec.md"
+  local id="$1" d f
+  d="$(team_spec_dir_abs)/changes/$id/specs"
+  for f in "$d"/*/spec.md; do
+    [ -f "$f" ] || continue
+    printf '%s\n' "${f#"$TEAM_MAIN_ROOT"/}"
+  done
+  return 0
+}
+
+# 任务书声明的 delta 目标，展开成**文件**（design §4）：`-` → 空；缺行（team_task_deltas 给 `*`）→
+# 该 change 现有的每一个 delta 文件；列表 → `specs/<cap>/spec.md`。
+# → 0 = 每行一个文件；1 = stdout 一行拒绝原因（deltas: 行坏掉时不静默当作空集）
+team_task_delta_targets() { # <任务书> <change id>
+  local brief="$1" change="$2" toks tok
+  toks="$(team_task_deltas "$brief")" || { printf '%s\n' "$toks"; return 1; }
+  case "$toks" in
+    '*') team_change_delta_files "$change"; return 0 ;;
+    '')  return 0 ;;
+  esac
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    printf '%s/changes/%s/specs/%s/spec.md\n' "$TEAM_SPEC_DIR" "$change" "$tok"
+  done <<< "$toks"
+  return 0
+}
+
+# 一个 change 的 apply（或未声明 phase 的）任务作者集合 —— 规则 3 的唯一判据（视图与守卫共用）。
+# 输出三类行（0 恒定；列序固定 kind → agent → task id）：
+#   agent\t<agent>\t<task id>      该作者写过一个 apply 任务
+#   dropped\t-\t<task id>           apply 任务已 dropped（显式排除，并在消息里点名）
+#   missing\t-\t<task id>\t<为什么>  读不到任务书 / 头里没有 agent:（信号缺失要吵，但不冒充干净）
+team_change_apply_authors() { # <change id>
+  local id="$1" tid tphase tagent brief a
+  while IFS=$'\t' read -r tid tphase tagent brief; do
+    [ -n "$tid" ] || continue
+    case "$tphase" in apply|-) ;; *) continue ;; esac
+    if [ ! -f "$brief" ]; then printf 'missing\t-\t%s\t任务书读不到（%s）\n' "$tid" "$brief"; continue; fi
+    case "$(team_board_status "$tid")" in dropped) printf 'dropped\t-\t%s\n' "$tid"; continue ;; esac
+    a="$tagent"
+    [ "$a" = "-" ] && a="$(team_brief_field_raw "$brief" agent | head -1)"
+    if [ -z "$a" ] || [ "$a" = "-" ]; then printf 'missing\t-\t%s\t头里没有 agent: 行\n' "$tid"; continue; fi
+    printf 'agent\t%s\t%s\n' "$a" "$tid"
+  done < <(team_change_tasks "$id")
+  return 0
+}
+
+# 「自验」标记（design §5）：verify 任务的 agent 同时是同一 change 的某个 apply 任务的 agent。
+# 视图（team change status）与派单守卫共用这一个谓词，两处不各写一份。
+team_self_verify_mark() { # <verify 任务的 agent> <team_change_apply_authors 的输出> → 标记行（没有 → 空）
+  local agent="$1" lines="$2" kind a tid out=""
+  while IFS=$'\t' read -r kind a tid _why; do
+    [ "$kind" = agent ] || continue
+    [ "$a" = "$agent" ] || continue
+    out="${out:+$out、}$tid"
+  done <<< "$lines"
+  [ -n "$out" ] && printf 'self-verify: %s（作者任务 %s）\n' "$agent" "$out"
+  return 0
+}
+
+# 任务的**一行**交付证据（team change status 的 evidence 列；与 done 闸门同源）
+team_task_evidence_line() { # <ID>
+  local id="$1" v phase change pev st
+  v="$(team_review_verdict "$id")"
+  case "$v" in
+    PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN) printf '%s/%s.md: %s\n' "$TEAM_DOCS_DIR" "$id" "$v"; return 0 ;;
+  esac
+  phase="$(team_task_phase "$id")"
+  change="$(team_task_change "$id")"
+  if [ -n "$phase" ]; then
+    if pev="$(team_done_phase_evidence "$id" "$phase" "$change" 2>/dev/null)"; then
+      printf '%s\n' "$pev"; return 0
+    fi
+  fi
+  st="$(team_board_status "$id")"
+  printf '—（看板 %s）\n' "${st:-没有这一行}"
+}
+
 # done 的闸门：证据 / 显式覆盖。成功时 stdout 第一行是「判定行」（OK/FORCED），后面是证据明细；
 # 失败时 stdout 空、明细与继续办法都打到 stderr（调用方照原样返回 1 即可）。
 team_done_gate() { # <ID> <命令标签>
@@ -3235,9 +3579,47 @@ team_board_set() { # <id> <status> → 未知 id / done 无证据：返回 1 且
   return 0
 }
 
-team_board_add() { # <id> <title> <agent> <branch> <deps>
+# M48：给**已有行**指派 agent 的正门 —— 以前只能再 `board add` 一行（重复 ID 就是这么进来的，
+# 而 add 的「已有行就不加」守卫在 task --title 那条路上，指派这条路根本没有入口）。
+# 只改那一行的 agent 列，行数不变；未知 id / 空参数拒绝且一个字节都不写（与 board set 同风格）。
+# 寻址语义与 board set 一致：按 ID 找，同 ID 的多行一起改（本次不改变既有寻址语义）。
+team_board_assign() { # <id> <agent> → 0=改了一行；1=拒绝（不落盘）
+  local id="$1" ag="$2"
+  [ -f "$TEAM_DOCS_ABS/BOARD.md" ] || return 1
+  if [ -z "$id" ] || [ -z "$ag" ]; then
+    team_err "用法：$TEAM_CLI board assign <ID> <agent>"
+    return 1
+  fi
+  if ! team_board_has "$id"; then
+    team_err "BOARD 里没有 $id：没有改动"
+    local ids; ids="$(team_board_ids | tr '\n' ' ')"
+    [ -n "${ids// /}" ] && team_err "  现有 id：${ids% }"
+    return 1
+  fi
+  team_board_write_col "$id" agent "$ag" || return 1
+  return 0
+}
+
+team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
   local f="$TEAM_DOCS_ABS/BOARD.md"
   [ -f "$f" ] || return 1
+  # M48：同 ID 的第二行先拒绝（与 board set 的「未知 id 不写」同风格：拒绝时一个字节都不写）。
+  # 历史遗留的共用 ID 保留，但**新增**重复必须显式说清楚（--allow-dup 并落一条审计）。
+  local allow_dup="${6:-0}" dup_prev=0
+  if team_board_has "$1"; then
+    if [ "$allow_dup" != "1" ]; then
+      local prev pst ptitle
+      prev="$(team_board_row "$1" 2>/dev/null || true)"
+      pst="$(team_board_field "$prev" status)"
+      ptitle="$(team_board_field "$prev" task)"
+      team_err "BOARD 里已经有 $1（状态 ${pst:-?} · 「${ptitle}」）：没有改动"
+      team_err "  同 ID 多行会让面板焦点/状态/报告指错行。改 ID 里程碑编号，或确实要两条时显式允许："
+      team_err "  $TEAM_CLI board add $1 <标题> --allow-dup   （会往 state/watchdog.log 落一条审计）"
+      team_err "  只是要给已有行指派 agent → $TEAM_CLI board assign $1 <agent>（只改那一行，行数不变）"
+      return 1
+    fi
+    dup_prev=1
+  fi
   # 与文件现有列数对齐：额外的列填 -（这样加了自定义列也不会错位）
   local ncols idcol taskcol agentcol branchcol depscol stcol cells=() i
   # 列数取「任务表表头行」的列数（文件里可能还有别的表，取最后一行会数错）
@@ -3265,6 +3647,11 @@ team_board_add() { # <id> <title> <agent> <branch> <deps>
     printf '%s\n' "$row" >> "$f"
   fi
   team_scan_invalidate board   # M50：写完再读（同进程）必须读到新行
+  # 显式允许的重复：审计里留一条（谁在什么时候往同一个 ID 加了第二行、当时几行）
+  if [ "$dup_prev" = "1" ]; then
+    local dupline; dupline="$(team_board_duplicate_ids | grep -F "$1 ×" | head -1 || true)"
+    team_wlog "board add $1 --allow-dup：显式新增同 ID 行（${dupline:-同 ID 多行}；标题「$2」）"
+  fi
 }
 
 # ---------------------------------------------------------------- 模板渲染

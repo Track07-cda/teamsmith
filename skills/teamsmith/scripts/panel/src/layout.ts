@@ -21,7 +21,7 @@
 
 import { fmtAge, fmtMB, GLYPH, clockOf, shortBranch, sparkline } from './format.js'
 import { markdownMemo } from './markdown.js'
-import { fill, OVERLAY_LABEL_W } from './strings/index.js'
+import { fill, keyLabel, OVERLAY_LABEL_W } from './strings/index.js'
 import type { Strings } from './strings/index.js'
 import type {
   Action,
@@ -31,6 +31,7 @@ import type {
   Density,
   DetailBlock,
   DetailWindow,
+  FocusRef,
   Frame,
   FrameInput,
   Hit,
@@ -242,7 +243,7 @@ interface Block {
   /** The project-settings view's row window as rendered (P22/B2). */
   settings?: SettingsWindow
   /** The work page's board rows in the order it drew them (P20/B5: the App's `↑`/`↓` walk this). */
-  order?: string[]
+  order?: FocusRef[]
 }
 
 const BOX_TL = '╭'
@@ -692,13 +693,17 @@ function boardBlock(ctx: Ctx): Block | null {
     ...rows.filter((r) => r.state !== 'done' && r.state !== 'dropped'),
     ...rows.filter((r) => (r.state === 'done' || r.state === 'dropped') && keepDone.has(r.id)),
   ]
-  // The focus the rows are drawn with (P20/B5): the shared entry-id focus when it is among the
-  // drawn rows, otherwise the first drawn row — the requirement's "the focused row is always among
+  // The focus the rows are drawn with (P20/B5): the shared row focus when it is among the drawn
+  // rows, otherwise the first drawn row — the requirement's "the focused row is always among
   // the rows the block renders". An empty or degraded board has no drawn row, hence no focus.
-  const order = rendered.map((r) => r.id)
-  const focusId = order.length ? (ctx.view.focus && order.includes(ctx.view.focus.id) ? ctx.view.focus.id : order[0]) : null
+  // M48: the focus names a **row**, not a bare id — two rows may share one id, and matching by id
+  // highlights both at once and freezes the `↑`/`↓` walk on the first of them.
+  const ordinals = dupOrdinals(rows)
+  const named = focusRow(rows, ctx.view.focus)
+  const focusedRow = named && rendered.includes(named) ? named : (rendered[0] ?? null)
+  const order = rendered.map((r) => refFor(r, ordinals))
   for (const r of rendered) {
-    const focused = r.id === focusId
+    const focused = r === focusedRow
     const row = ln(
       seg(focused ? `${FOCUS_CURSOR} ` : '  ', focused ? 'selected' : 'dim'),
       seg(`${GLYPH[r.state] ?? '·'} `, BOARD_STATE_TONE[r.state] ?? 'text'),
@@ -707,7 +712,7 @@ function boardBlock(ctx: Ctx): Block | null {
       seg(cell(boardStateText(r.state, s), 8), BOARD_STATE_TONE[r.state] ?? 'text'),
       seg(r.title),
     )
-    const action: Action = focused ? { kind: 'open-focused', lane: r.state } : { kind: 'focus', lane: r.state, id: r.id }
+    const action: Action = focused ? { kind: 'open-focused', lane: r.state } : { kind: 'focus', lane: r.state, id: r.id, nth: ordinals.get(r) ?? 0 }
     lines.push(placedWithHits(row, ctx.view.tui ? [{ start: 0, end: widthOf(row), action }] : undefined, width))
   }
   if (folded > 0) lines.push({ line: truncLine(ln(seg(`  ${fill(s.boardDoneCollapsed, { n: folded })}`, 'dim')), width) })
@@ -755,6 +760,49 @@ function laneCards(rows: BoardRow[], lane: string): BoardRow[] {
 }
 
 /**
+ * Every row's duplicate ordinal: which occurrence of its id it is (0-based, in BOARD.md order).
+ * One pass over the rows, so no view pays a full scan per card for the M48 row identity.
+ */
+function dupOrdinals(rows: BoardRow[]): Map<BoardRow, number> {
+  const seen = new Map<string, number>()
+  const out = new Map<BoardRow, number>()
+  for (const r of rows) {
+    const nth = seen.get(r.id) ?? 0
+    out.set(r, nth)
+    seen.set(r.id, nth + 1)
+  }
+  return out
+}
+
+/** The focus reference naming one row, given the board's duplicate ordinals. */
+function refFor(row: BoardRow, ordinals: Map<BoardRow, number>): FocusRef {
+  return { lane: row.state, id: row.id, nth: ordinals.get(row) ?? 0 }
+}
+
+/**
+ * The exact row a focus names (M48): the `nth` occurrence of its id in BOARD.md order. A focus
+ * without `nth` names the first occurrence, so an older focus or a hand-made fixture still
+ * resolves; an id whose duplicates shrank falls through to null and the caller applies the
+ * existing fallback.
+ */
+export function focusRow(rows: BoardRow[], focus?: { id: string; nth?: number } | null): BoardRow | null {
+  if (!focus) return null
+  const want = Math.max(0, focus.nth ?? 0)
+  let nth = 0
+  for (const r of rows) {
+    if (r.id !== focus.id) continue
+    if (nth === want) return r
+    nth++
+  }
+  return null
+}
+
+/** The focus reference for one row (the App sets the focus from a click or a `←`/`→` step). */
+export function focusRefOf(rows: BoardRow[], row: BoardRow): FocusRef {
+  return refFor(row, dupOrdinals(rows))
+}
+
+/**
  * The focused card resolved against the current board. An id that left the board lands on its lane's
  * first card (and a lane that emptied, on the first card of the first non-empty lane); a null focus
  * starts there too. Pure and shared with the App, which owns the focus state — the layout only
@@ -762,17 +810,30 @@ function laneCards(rows: BoardRow[], lane: string): BoardRow[] {
  */
 export function resolveFocus(
   rows: BoardRow[],
-  focus?: { lane: string; id: string } | null,
-): { lane: string; id: string } | null {
+  focus?: FocusRef | null,
+): FocusRef | null {
+  return resolveFocusWith(rows, dupOrdinals(rows), focus)
+}
+
+/** `resolveFocus` with the board's ordinals already built (the frame path builds them once per frame). */
+function resolveFocusWith(
+  rows: BoardRow[],
+  ordinals: Map<BoardRow, number>,
+  focus?: FocusRef | null,
+): FocusRef | null {
   if (focus) {
-    const card = rows.find((r) => r.id === focus.id)
-    if (card) return { lane: card.state, id: card.id }
+    const named = focusRow(rows, focus)
+    if (named) return refFor(named, ordinals)
+    // The named duplicate left the board: the id's first row keeps the focus (a reordered board
+    // must not lose the entry).
+    const first = rows.find((r) => r.id === focus.id)
+    if (first) return refFor(first, ordinals)
     const sameLane = laneCards(rows, focus.lane)[0]
-    if (sameLane) return { lane: focus.lane, id: sameLane.id }
+    if (sameLane) return refFor(sameLane, ordinals)
   }
   for (const lane of LANES) {
     const card = laneCards(rows, lane)[0]
-    if (card) return { lane, id: card.id }
+    if (card) return refFor(card, ordinals)
   }
   return null
 }
@@ -787,7 +848,7 @@ function laneWindow(
   lane: string,
   cards: BoardRow[],
   size: number,
-  focus: { lane: string; id: string } | null,
+  target: BoardRow | null,
   offsetKey = lane,
 ): { start: number; end: number; above: number; below: number } {
   const span = Math.max(1, Math.floor(size))
@@ -799,8 +860,8 @@ function laneWindow(
   // The window follows the focus only while the lane has no offset of its own: once the wheel (or a
   // card move) set one, that offset wins — otherwise the wheel could never scroll away from the
   // focus, which is exactly what the mouse requirement asks it to do.
-  if (explicit == null && focus && focus.lane === lane) {
-    const idx = cards.findIndex((r) => r.id === focus.id)
+  if (explicit == null && target && target.state === lane) {
+    const idx = cards.indexOf(target)
     if (idx >= 0) {
       if (idx < start) start = idx
       else if (idx >= start + span) start = Math.min(maxStart, idx - span + 1)
@@ -840,8 +901,8 @@ function cardLine(ctx: Ctx, card: BoardRow, width: number, focused: boolean): Li
  * detail view is open the cards keep **no** targets (the replaced-blocks rule the settings overlay
  * follows too) — the view renders on top of this page in the detail batch.
  */
-function cardAction(card: BoardRow, focused: boolean): Action {
-  return focused ? { kind: 'open-focused', lane: card.state } : { kind: 'focus', lane: card.state, id: card.id }
+function cardAction(card: BoardRow, focused: boolean, nth: number): Action {
+  return focused ? { kind: 'open-focused', lane: card.state } : { kind: 'focus', lane: card.state, id: card.id, nth }
 }
 
 /** The wheel's lane target: any spot inside a lane that is not a card resolves to this lane. */
@@ -855,12 +916,13 @@ function laneColumn(
   lane: string,
   width: number,
   slots: number,
-  focus: { lane: string; id: string } | null,
+  target: BoardRow | null,
+  ordinals: Map<BoardRow, number>,
   windows: LaneWindow[],
 ): PlacedLine[] {
   const { s } = ctx
   const cards = laneCards(ctx.blocks.board?.rows ?? [], lane)
-  const win = laneWindow(ctx, lane, cards, slots - LANE_MARKER_SLOTS, focus)
+  const win = laneWindow(ctx, lane, cards, slots - LANE_MARKER_SLOTS, target)
   windows.push({ lane, offset: win.start, visible: win.end - win.start, count: cards.length })
   // Everything in the lane that is not a card resolves to the lane itself, so the wheel scrolls the
   // lane under the cursor (the card hits win the lookup where a card is — `.find()` takes the first).
@@ -870,11 +932,11 @@ function laneColumn(
   if (!cards.length) out.push(cardBody({ line: ln(seg(` ${s.kanbanEmptyLane}`, 'dim')) }, width))
   for (let i = win.start; i < win.end; i++) {
     const card = cards[i]
-    const focused = focus?.lane === lane && focus?.id === card.id
+    const focused = card === target
     const line = cardLine(ctx, card, Math.max(0, width - 4), focused)
     const hits: Hit[] | undefined =
       ctx.view.tui && !ctx.view.detail
-        ? [{ start: 0, end: Math.max(1, Math.min(width - 4, widthOf(line))), action: cardAction(card, focused) }]
+        ? [{ start: 0, end: Math.max(1, Math.min(width - 4, widthOf(line))), action: cardAction(card, focused, ordinals.get(card) ?? 0) }]
         : undefined
     out.push(cardBody({ line, hits }, width))
   }
@@ -918,23 +980,24 @@ function mergeLaneColumns(cols: PlacedLine[][], widths: number[]): PlacedLine[] 
 function kanbanGrouped(
   ctx: Ctx,
   rows: BoardRow[],
-  focus: { lane: string; id: string } | null,
+  target: BoardRow | null,
+  ordinals: Map<BoardRow, number>,
 ): { lines: PlacedLine[]; lanes: LaneWindow[] } {
   const { s } = ctx
   const width = ctx.width
   const all: PlacedLine[] = []
-  const focusRow = { i: -1 }
+  const focusLine = { i: -1 }
   for (const lane of LANES) {
     const cards = laneCards(rows, lane)
     all.push({ line: truncLine(ln(seg(` ${laneLabel(lane, s)} ${cards.length}`, 'heading')), width) })
     if (!cards.length) all.push({ line: truncLine(ln(seg(`  ${s.kanbanEmptyLane}`, 'dim')), width) })
     for (const card of cards) {
-      const focused = focus?.lane === lane && focus?.id === card.id
-      if (focused) focusRow.i = all.length
+      const focused = card === target
+      if (focused) focusLine.i = all.length
       const line = cardLine(ctx, card, Math.max(0, width - 2), focused)
       const hits: Hit[] | undefined =
         ctx.view.tui && !ctx.view.detail
-          ? [{ start: 1, end: 1 + Math.max(1, widthOf(line)), action: cardAction(card, focused) }]
+          ? [{ start: 1, end: 1 + Math.max(1, widthOf(line)), action: cardAction(card, focused, ordinals.get(card) ?? 0) }]
           : undefined
       all.push({ line: truncLine(ln(seg(' '), ...line.slice(0)), width), hits })
     }
@@ -943,9 +1006,9 @@ function kanbanGrouped(
   const maxStart = Math.max(0, all.length - span)
   let start = ctx.view.laneOffset?.[GROUPED_WINDOW] ?? 0
   start = Math.max(0, Math.min(maxStart, Math.floor(start) || 0))
-  if (focusRow.i >= 0) {
-    if (focusRow.i < start) start = focusRow.i
-    else if (focusRow.i >= start + span) start = Math.min(maxStart, focusRow.i - span + 1)
+  if (focusLine.i >= 0) {
+    if (focusLine.i < start) start = focusLine.i
+    else if (focusLine.i >= start + span) start = Math.min(maxStart, focusLine.i - span + 1)
   }
   const hover: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: width, action: laneHover(GROUPED_WINDOW) }] : undefined
   const win: PlacedLine[] = []
@@ -976,15 +1039,20 @@ function kanbanBlock(ctx: Ctx): Block | null {
   if (deg.has('board')) return one([{ line: truncLine(ln(seg(` ${s.dash}`, 'dim')), ctx.width) }])
   const rows = board.rows ?? []
   if (!rows.length) return one([{ line: truncLine(ln(seg(` ${s.boardEmpty}`, 'dim')), ctx.width) }])
-  const focus = resolveFocus(rows, ctx.view.focus)
+  const ordinals = dupOrdinals(rows)
+  const focus = resolveFocusWith(rows, ordinals, ctx.view.focus)
+  // M48: one row object is the focus; every `card === target` below is O(1) and two rows sharing an
+  // id never both light up. The duplicate ordinals are built once per frame and shared by the
+  // focus/actions (no per-lane or per-card rescan of the board).
+  const target = focusRow(rows, focus)
   if (!ctx.twoColumn) {
-    const grouped = kanbanGrouped(ctx, rows, focus)
+    const grouped = kanbanGrouped(ctx, rows, target, ordinals)
     return { ...one(grouped.lines), lanes: grouped.lanes }
   }
   const laneW = Math.max(8, Math.floor((ctx.width - LANE_GAP * (LANES.length - 1)) / LANES.length))
   const slots = Math.max(2, Math.floor(ctx.laneRows ?? LANE_KEEP_DEFAULT) + LANE_MARKER_SLOTS)
   const windows: LaneWindow[] = []
-  const cols = LANES.map((lane) => laneColumn(ctx, lane, laneW, slots, focus, windows))
+  const cols = LANES.map((lane) => laneColumn(ctx, lane, laneW, slots, target, ordinals, windows))
   return { ...one(mergeLaneColumns(cols, LANES.map(() => laneW))), lanes: windows }
 }
 
@@ -1082,8 +1150,14 @@ function detailBlock(ctx: Ctx): Block | null {
 // shows up without rebuilding `panel.js`. The list is windowed against the height the assembly
 // hands over (the bounded-frame rule: more pane means more rows, never more blank).
 
-const SETTINGS_KEY_W = 34
+// The row's identity column is a **label** (M49), not the key name: the table's labels are human
+// sentences, so the column only has to hold the longest of them (zh is the wide language here;
+// a longer en label is cut by `cell()`, the same rule the key names followed).
+const SETTINGS_LABEL_W = 22
 const SETTINGS_AUDIT_LINES = 3
+// The lines the block draws under its row window: the CLI hint, a blank, the audit heading and the
+// audit tail. `layout()` subtracts this from the height it hands the view as its row budget.
+const SETTINGS_FOOTER_ROWS = 1 + 1 + 1 + SETTINGS_AUDIT_LINES
 
 /** One drawn row of the project-settings view (group headings are not focusable). */
 export type SettingsRow =
@@ -1129,7 +1203,11 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
   ]
   for (const g of groups) {
     const keys = block.keys.filter(
-      (k) => k.class === g.cls && match(k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
+      (k) =>
+        k.class === g.cls &&
+        // The label first (what the row shows), then the raw key and the value — the three inputs a
+        // user may type into `/` (the label's words, `TEAM_…`, or the value on screen).
+        match(keyLabel(s, k.name), k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
     )
     if (!keys.length) continue
     out.push({ kind: 'group', label: g.label, tone: settingsClassTone(g.cls) })
@@ -1147,7 +1225,7 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
 
 /** The badge + value column shared by a key row and a seat row. */
 function settingsRight(ctx: Ctx, text: string, badge: string, tone: Tone, innerW: number): Line {
-  const right = ` ${truncateW(text, Math.max(6, innerW - SETTINGS_KEY_W - 14))} · ${badge}`
+  const right = ` ${truncateW(text, Math.max(6, innerW - SETTINGS_LABEL_W - 14))} · ${badge}`
   return ln(seg(right, tone))
 }
 
@@ -1164,7 +1242,10 @@ function settingsKeyLine(ctx: Ctx, row: SettingsKey, focused: boolean, innerW: n
   const tone: Tone = known ? settingsClassTone(row.class) : 'dim'
   const line = ln(
     seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
-    seg(cell(row.name, SETTINGS_KEY_W), focused ? 'selected' : known ? 'heading' : 'dim'),
+    // The row's main text is the human label; the raw key is not repeated here (it stays in the
+    // editor's title, the confirmation line and the view's CLI hint — the places where the user
+    // types the key into `team config set`). An unknown key has no label → its raw name (M49).
+    seg(cell(keyLabel(s, row.name), SETTINGS_LABEL_W), focused ? 'selected' : known ? 'heading' : 'dim'),
     ...settingsRight(ctx, valueText, badge, tone, innerW).map((x) => x),
   )
   const note = (row.warning || row.route || row.comment || '').trim()
@@ -1178,17 +1259,36 @@ function settingsSeatLine(ctx: Ctx, seat: SettingsSeat, focused: boolean, innerW
   const policy = seat.override ? s.seatOverride : s.seatFallback
   const line = ln(
     seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
-    seg(cell(seat.agent, SETTINGS_KEY_W), focused ? 'selected' : 'heading'),
+    seg(cell(seat.agent, SETTINGS_LABEL_W), focused ? 'selected' : 'heading'),
     ...settingsRight(ctx, `${model} · ${settingsSourceLabel(s, seat.source)} · ${policy}`, '', 'dim', innerW).map((x) => x),
   )
   return { line }
 }
 
 /**
+ * The focused row as the command line names it (M49): the row's label is for reading, the raw key
+ * is what the user types — this line is the CLI-alignment half of the pair. A key the command does
+ * not know (schema unknown) and a read-only key are said out loud rather than offered as a command
+ * that would be refused; a seat gets its own `set-agent-model` route. '' when nothing is focusable.
+ */
+function settingsCliHint(s: Strings, rows: SettingsRow[], focus: number): string {
+  const focusable = rows.filter(
+    (r): r is { kind: 'key'; key: SettingsKey } | { kind: 'seat'; seat: SettingsSeat } => r.kind === 'key' || r.kind === 'seat',
+  )
+  const row = focusable[focus]
+  if (!row) return ''
+  if (row.kind === 'seat') return fill(s.settingsSeatHint, { seat: row.seat.agent })
+  const key = row.key
+  if (key.known === false) return fill(s.settingsUnknownHint, { key: key.name })
+  if (key.class === 'refuse') return fill(s.settingsRefusedHint, { key: key.name })
+  return fill(s.settingsCliHint, { key: key.name })
+}
+
+/**
  * The project-settings block: it replaces the page's blocks exactly as the detail view does (the
  * title band, the page tabs and the key band stay). `ctx.settingsRows` is the line budget the
- * assembly hands over for the window itself (headings, the audit footer and the hidden-row counts
- * are extra, and the frame's own budget wins).
+ * assembly hands over for the window itself (headings, the CLI hint, the audit footer and the
+ * hidden-row counts are extra, and the frame's own budget wins).
  */
 function settingsBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg } = ctx
@@ -1278,6 +1378,9 @@ function settingsBlock(ctx: Ctx): Block | null {
     }
   }
   if (hiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(hiddenBelow) })}`, 'dim')))
+
+  // The CLI-alignment line (M49): the row's label is for reading, the raw key is for typing.
+  put(ln(seg(` ${settingsCliHint(s, rows, focus)}`, 'dim')))
 
   // The audit footer: at most three lines, newest last (the CLI's own tail).
   put(ln(seg('')))
@@ -1789,7 +1892,7 @@ export function layout(input: LayoutInput): Frame {
   const rightBlocks = middle.filter((b) => !b.full && b.right)
 
   const framed = isFramed(ctx)
-  let boardOrder: string[] | undefined
+  let boardOrder: FocusRef[] | undefined
   const place = (block: Block, remaining: number, colWidth: number): PlacedLine[] => {
     const kind = pickChrome(block, remaining, framed)
     if (kind === null) return []
@@ -1817,7 +1920,7 @@ export function layout(input: LayoutInput): Frame {
           height > 0 && b.id === 'detail'
           ? (detailBlock({ ...ctx, detailRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
           : height > 0 && b.id === 'settings'
-          ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0) - 5) }) ?? b)
+          ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0) - SETTINGS_FOOTER_ROWS) }) ?? b)
           : b
     if (block.id === 'kanban' && block.lanes) laneWindows = block.lanes
     if (block.id === 'detail' && block.detail) detailWindow = block.detail

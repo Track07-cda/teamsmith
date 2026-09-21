@@ -563,6 +563,9 @@ team_cmd_digest() {
   else
     printf '  待办             无（pulse 不会打扰 PM）\n'
   fi
+  # M48：看板重复 ID 的可见性（面板光标按行身份走，但状态/报告按 ID 指行——重复不能只靠肉眼）
+  local bdup; bdup="$(team_board_duplicate_line || true)"
+  [ -n "$bdup" ] && team_warn "  $bdup（board add 会拒绝新重复；board set / assign 按 ID 寻址）"
 
   printf '\n%s\n' "[2] 待处理通知"
   local any=0 n rlabel
@@ -745,6 +748,157 @@ team_cmd_inbox() {
   done
   [ "$ack" = "1" ] && team_ok "已标记为已读（--ack）"
   return 0
+}
+
+# ---------------------------------------------------------------- P23/B1 · change 视图（只读）
+# design §7：把「一个 change 的任务 / delta 写者 / 阻塞」摆在一屏里。只读：不写文件、不写看板。
+# 分支 diff 只在**能解析到分支**的任务上各跑一次 `git diff --name-only`（一个 change 一次命令，
+# 不进巡检热路径）；其余全部来自一次 awk 扫描与既有的 done 闸门判据。
+team_json_str() { printf '"%s"' "$(team_json_escape "${1:-}")"; }
+
+team_json_array() { # stdin：每行一个字符串（空行跳过） → ["a","b"]
+  local first=1 line
+  printf '['
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$first" = 1 ] || printf ','
+    first=0
+    team_json_str "$line"
+  done
+  printf ']'
+}
+
+team_cmd_change() {
+  local sub="${1:-status}"
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+    status) ;;
+    -*) team_usage_die "change: 未知参数 $sub" ;;
+    *) team_usage_die "change: 未知子命令 $sub（change status <id> [--json]）" ;;
+  esac
+  local id="" json=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --json) json=1 ;;
+      -*) team_usage_die "change status: 未知参数 $arg" ;;
+      *) if [ -z "$id" ]; then id="$arg"; else team_usage_die "change status: 多余参数 $arg"; fi ;;
+    esac
+  done
+  [ -n "$id" ] || team_usage_die "change status <id> [--json]"
+  team_require_docs
+
+  local spec_root cdir have_dir=0 rows
+  spec_root="$(team_spec_dir_abs)"
+  cdir="$spec_root/changes/$id"
+  [ -d "$cdir" ] && have_dir=1
+  rows="$(team_change_tasks "$id")"
+  if [ -z "$rows" ] && [ "$have_dir" = "0" ]; then
+    if [ "$json" = "1" ]; then
+      printf '{"id":%s,"ready":false,"tasks":[],"deltas":[],"blockers":[%s]}\n' \
+        "$(team_json_str "$id")" "$(team_json_str "没有任务指向它，也没有 $TEAM_SPEC_DIR/changes/$id/ 目录")"
+    fi
+    team_err "change $id：没有任务指向它（$TEAM_DOCS_DIR/tasks/*.md 里没有 change: $id），也没有 $TEAM_SPEC_DIR/changes/$id/ 目录"
+    return 1
+  fi
+
+  local authors; authors="$(team_change_apply_authors "$id")"
+  local -a T_ID=() T_PHASE=() T_AGENT=() T_BOARD=() T_EV=() T_SELF=() T_DECL=() T_RAW=() T_TOUCH=()
+  local tid tphase tagent brief st ev self decl raw rawd touched branch tip
+  while IFS=$'\t' read -r tid tphase tagent brief; do
+    [ -n "$tid" ] || continue
+    st="$(team_board_status "$tid")"; [ -n "$st" ] || st='-'
+    ev="$(team_task_evidence_line "$tid")"
+    self=""
+    [ "$tphase" = "verify" ] && self="$(team_self_verify_mark "$tagent" "$authors")"
+    decl="$(team_task_delta_targets "$brief" "$id" 2>/dev/null || true)"
+    raw="$(team_brief_field_raw "$brief" deltas | tr '\n' ';')"
+    case "$raw" in
+      "")  rawd='（没有 deltas: 行 → 全量）' ;;
+      -)   rawd='-' ;;
+      *)   rawd="$raw" ;;
+    esac
+    touched=""; branch=""; tip=""
+    # 注意：team_resolve_branch 解析不到时会 team_die（exit 1）—— `exit` 会直接终结它所在的那层
+    # 子 shell，`|| true` 根本没有机会跑（set -e 下会连带杀掉调用者）。多包一层 `( … )` 把
+    # 那个 exit 关在里层子 shell 里，本命令才能继续按「解析不到 → —」渲染。
+    branch="$( ( team_resolve_branch "$tid" "" 2>/dev/null ) || true )"
+    if [ -n "$branch" ]; then
+      tip="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"
+      if [ -n "$tip" ]; then
+        touched="$(git -C "$TEAM_MAIN_ROOT" diff --name-only "$TEAM_PROTECTED_BRANCH..$branch" \
+          -- "$TEAM_SPEC_DIR/changes/$id/specs" 2>/dev/null || true)"
+      fi
+    fi
+    T_ID+=("$tid"); T_PHASE+=("$tphase"); T_AGENT+=("$tagent"); T_BOARD+=("$st")
+    T_EV+=("$ev"); T_SELF+=("$self"); T_DECL+=("$decl"); T_RAW+=("$rawd"); T_TOUCH+=("$touched")
+  done <<< "$rows"
+
+  local blockers rc=0 ready=0
+  blockers="$(team_change_readiness "$id")" || rc=$?
+  [ "$rc" -eq 0 ] && ready=1
+
+  if [ "$json" = "1" ]; then
+    local i j x tj="" dj="" bj="" tch arg fbase
+    local -a darr tarr barr
+    for i in "${!T_ID[@]}"; do
+      tch="$(printf '%s\n' "${T_TOUCH[$i]}" | team_json_array)"
+      tj="${tj}${tj:+,}{\"id\":$(team_json_str "${T_ID[$i]}"),\"phase\":$(team_json_str "${T_PHASE[$i]}"),\"agent\":$(team_json_str "${T_AGENT[$i]}"),\"board\":$(team_json_str "${T_BOARD[$i]}"),\"evidence\":$(team_json_str "${T_EV[$i]}"),\"self_verify\":$(team_json_str "${T_SELF[$i]}"),\"touched\":$tch}"
+    done
+    while IFS= read -r arg; do
+      [ -n "$arg" ] || continue
+      darr=(); tarr=(); fbase="${arg#"$TEAM_SPEC_DIR/changes/$id/specs/"}"
+      for j in "${!T_ID[@]}"; do
+        if printf '%s\n' "${T_DECL[$j]}" | grep -qxF -- "$arg"; then darr+=("${T_ID[$j]}"); fi
+        if printf '%s\n' "${T_TOUCH[$j]}" | grep -qxF -- "$arg"; then tarr+=("${T_ID[$j]}"); fi
+      done
+      dj="${dj}${dj:+,}{\"file\":$(team_json_str "$fbase")"
+      dj="$dj,\"declared_by\":$(printf '%s\n' "${darr[@]:-}" | team_json_array)"
+      dj="$dj,\"touched_by\":$(printf '%s\n' "${tarr[@]:-}" | team_json_array)}"
+    done <<< "$(team_change_delta_files "$id")"
+    while IFS= read -r arg; do [ -n "$arg" ] && barr+=("$arg"); done <<< "$blockers"
+    printf '{"id":%s,"ready":%s,"tasks":[%s],"deltas":[%s],"blockers":%s}\n' \
+      "$(team_json_str "$id")" "$([ "$ready" = 1 ] && echo true || echo false)" "$tj" "$dj" "$(printf '%s\n' "${barr[@]:-}" | team_json_array)"
+    [ "$ready" = 1 ] && return 0 || return 1
+  fi
+
+  printf 'change %s · %s\n' "$id" "$([ "$ready" = 1 ] && printf 'ready' || printf 'not ready')"
+  printf '  tasks\n'
+  if [ "${#T_ID[@]}" -eq 0 ]; then
+    team_dim '    （没有任务指向它）'
+  else
+    local i pad
+    for i in "${!T_ID[@]}"; do
+      pad="${T_SELF[$i]:+  ${T_SELF[$i]}}"
+      printf '    %-7s %-8s %-9s %-7s %s%s\n' "${T_ID[$i]}" "${T_PHASE[$i]}" "${T_AGENT[$i]}" "${T_BOARD[$i]}" "${T_EV[$i]}" "$pad"
+    done
+  fi
+  printf '  delta files (%s/changes/%s/specs/)\n' "$TEAM_SPEC_DIR" "$id"
+  local files; files="$(team_change_delta_files "$id")"
+  if [ -z "$files" ]; then
+    team_dim '    （没有 specs/*/spec.md）'
+  else
+    local f dby tby i2
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      dby=""; tby=""
+      for i2 in "${!T_ID[@]}"; do
+        if printf '%s\n' "${T_DECL[$i2]}" | grep -qxF -- "$f"; then
+          dby="${dby:+$dby、}${T_ID[$i2]}"
+          [ "${T_RAW[$i2]}" = '（没有 deltas: 行 → 全量）' ] && dby="$dby（读作全量）"
+        fi
+        if printf '%s\n' "${T_TOUCH[$i2]}" | grep -qxF -- "$f"; then tby="${tby:+$tby、}${T_ID[$i2]}"; fi
+      done
+      printf '    %s  declared by %s · touched by %s\n' \
+        "${f#"$TEAM_SPEC_DIR/changes/$id/specs/"}" "${dby:-—}" "${tby:-—}"
+    done <<< "$files"
+  fi
+  printf '  blockers\n'
+  if [ -z "$blockers" ]; then
+    team_dim '    （无：全部任务已结束）'
+  else
+    printf '%s\n' "$blockers" | sed 's/^/    /'
+  fi
+  [ "$ready" = 1 ] && return 0 || return 1
 }
 
 # ---------------------------------------------------------------- 状态面板（pulse 窗口跑的就是它）
