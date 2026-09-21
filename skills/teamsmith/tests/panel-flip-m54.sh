@@ -75,7 +75,10 @@ PYEDIT
   else
     bad "$name：断掉之后 $scn 居然还是绿的（翻转失效）"
   fi
-  if grep -E '✗' "$tmp/$name-red.log" | grep -q -- "$red_re"; then
+  # M59: `{ … || true; } | grep -q` — grep -q exits on the first match and grep(1) then dies on
+  # SIGPIPE; under `set -o pipefail` the pipeline would report 141 and a REAL match would read as
+  # a miss (exposed by the bigger red logs M59's failure scenes produce).
+  if { grep -E '✗' "$tmp/$name-red.log" || true; } | grep -q -- "$red_re"; then
     ok "$name：红侧的失败点就是预期的那条（$red_re）"
   else
     bad "$name：红侧没有点到预期的那条（$red_re）"
@@ -91,7 +94,7 @@ PYEDIT
     bad "$name：恢复后 bundle 与提交的不一致"
   fi
   printf '      红侧尾部：\n'
-  grep -E '✗' "$tmp/$name-red.log" | head -3 | sed 's/^/      /'
+  { grep -E '✗' "$tmp/$name-red.log" || true; } | head -3 | sed 's/^/      /'
 }
 
 printf '\033[1m== panel-flip-m54 · 控制台三处断点（F-B choices 读取 / F-C 机器目录 / A2 硬编码键表） ==\033[0m\n'

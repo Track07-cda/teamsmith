@@ -11548,6 +11548,23 @@ if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
 else
   bad "38-b 缺 tests/panel-p21.sh"
 fi
+# 38-c lib 自检：tests/lib/pty-wait.sh --self-test —— 用假 pane 注入 M55 第一次复验的中间帧
+# （标题先到、条目隔一拍才到），证明「只看标题」的旧逻辑会放行（假红入口）而「条目标记 +
+# 稳定帧」的新逻辑不放行；清理守卫在「选择器早已关闭」的现场一个键都不发；故意超时的等待
+# 自带现场（哪条等待/等了多久/缺什么/pane 末行/再 capture/孤立还是级联）。不依赖 tmux 或真
+# bundle，FAST 照跑；--break=<stage> 是夹具自检专用的翻转开关（复验报告里给红面）。
+if [ -f "$SKILL_DIR/tests/lib/pty-wait.sh" ]; then
+  if bash "$SKILL_DIR/tests/lib/pty-wait.sh" --self-test >"$TMP/pty-wait-selftest.log" 2>&1; then
+    ok "38-c pty-wait 自检全绿（$(grep -a '== 结果 ==' "$TMP/pty-wait-selftest.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；中间帧注入 + 清理守卫 + 失败现场）"
+    tail -2 "$TMP/pty-wait-selftest.log" | sed 's/^/      /'
+  else
+    bad "38-c pty-wait 自检有失败"
+    grep -a '✗' "$TMP/pty-wait-selftest.log" | head -10 | sed 's/^/      /'
+    tail -3 "$TMP/pty-wait-selftest.log" | sed 's/^/      /'
+  fi
+else
+  bad "38-c 缺 tests/lib/pty-wait.sh"
+fi
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # panel-p21.sh — pty/tmux fixtures for the project-settings view (P22 / B2-B4).
+# M59: every wait releases on a settled frame, every cleanup key is state-checked, and every
+# failure carries its own scene — the mechanics live in tests/lib/pty-wait.sh (sourced below).
 #
 #   bash skills/teamsmith/tests/panel-p21.sh                  # every scenario
 #   bash skills/teamsmith/tests/panel-p21.sh settings seats    # selected scenarios
@@ -15,6 +17,9 @@ set -uo pipefail
 # （自己声明的旋钮先存下来：下面的清理会把 TEAM_* 全清掉）
 _tree_arg="${TEAM_P21_TREE:-}"
 _keep_arg="${TEAM_P21_KEEP:-0}"
+# M59: TEAM_P21_TRACE=1 prints every wait/cleanup decision to stderr (fixture diagnostics, saved
+# before the TEAM_* wipe below so the knob is honored when passed from outside).
+_trace_arg="${TEAM_P21_TRACE:-}"
 _js_arg="${TEAM_P21_JS:-}"
 _js_panel="${TEAM_P21_PANEL:-}"
 while IFS='=' read -r _v _; do
@@ -48,8 +53,9 @@ cleanup() {
 trap cleanup EXIT
 
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
-ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
-bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
+ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); pty_fail_reset; }
+# M59: a failure carries its own scene (pane tail + isolated-vs-cascade); pty_bad prints it.
+bad() { pty_bad "$1"; FAIL=$((FAIL + 1)); }
 assert_eq() { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
 assert_has() { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里找不到 [$2]）"; }
 assert_not() { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
@@ -59,6 +65,15 @@ if ! command -v tmux >/dev/null 2>&1; then printf 'panel-p21: tmux is required\n
 if [ -z "$js" ]; then printf 'panel-p21: no node/bun runtime\n' >&2; exit 3; fi
 [ -f "$panel" ] || { printf 'panel-p21: no bundle at %s\n' "$panel" >&2; exit 3; }
 
+# M59: the settled-frame waits, the state-checked cleanup keys and the failure scenes live in the
+# shared helper (its --self-test injects the incident's mid-frame; smoke §38-c runs it).
+# shellcheck source=lib/pty-wait.sh
+. "$here/lib/pty-wait.sh"
+# Fixture-wide knobs. PTY_WAIT_ITERS is a failure-detector horizon, never spent on a green run (a
+# green wait returns on the first settled frame, usually rounds 1-3); per-wait overrides use local.
+PTY_TRACE="${_trace_arg:-0}"
+PTY_SCENE_DIR=""
+
 SECTIONS=("$@")
 [ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(settings choices choices-schema write conflict seats readonly)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
@@ -66,6 +81,7 @@ want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; don
 # ---------------------------------------------------------------- fixture plumbing
 server_up() { # <name> [agents] → fresh project + private tmux session + argv-logging wrapper
   current="$1"
+  PTY_SCENE_DIR="$tmp/$1"   # M59: a timed-out wait saves its two captures here for post-mortem
   local agents="${2:-dev verify}"
   ROOT="$tmp/$1/root"
   mkdir -p "$ROOT"
@@ -87,6 +103,10 @@ EOF
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   tmux -L "$sock" new-session -d -s "$sess" -x 160 -y 40 -n bootstrap -c "$ROOT" 'sleep 900'
   tmux -L "$sock" set -g window-size manual 2>/dev/null || true
+  # A pane that dies keeps its last frame (capturable), and tmux writes its own "Pane is dead
+  # (status N)" line into it: a fixture failure names a dead panel instead of comparing empty
+  # captures. #{pane_dead_status} still answers for the one-line note below.
+  tmux -L "$sock" set -g remain-on-exit on 2>/dev/null || true
 }
 
 start_panel() {
@@ -102,39 +122,45 @@ start_panel() {
 }
 
 wait_panel() {
-  local i
-  for i in $(seq 1 60); do
-    if tmux -L "$sock" capture-pane -p -t "$sess:panel" 2>/dev/null | grep -qF 'teamsmith pulse'; then
-      sleep 0.5
-      return 0
-    fi
-    sleep 0.25
-  done
+  # The panel's first frame must be settled too (the first paint also arrives line by line).
+  local PTY_WAIT_ITERS=80 PTY_WAIT_PAUSE=0.25 PTY_SETTLE_PAUSE=0.3
+  if pty_wait_frame - "面板首帧（$current）" 'teamsmith pulse'; then
+    sleep 0.5
+    return 0
+  fi
   printf 'panel-p21: the console pane never rendered (%s)\n' "$current" >&2
-  tmux -L "$sock" capture-pane -p -t "$sess:panel" 2>/dev/null | tail -5 >&2
   return 1
 }
 
 cap() { tmux -L "$sock" capture-pane -p -t "$sess:panel" -S -400 2>/dev/null; }
 cap_now() { tmux -L "$sock" capture-pane -p -t "$sess:panel" 2>/dev/null; }
-# Wait (up to ~8s) for the setting editor's tray to appear (the fingerprint is read fresh, so the
-# editor opens a beat after Enter/click).
-wait_editor() { # <tray title>
-  local i
-  for i in $(seq 1 24); do
-    cap | grep -qF "╭─ $1" && { sleep 0.4; return 0; }
-    sleep 0.3
-  done
-  return 1
+# The lib's sinks (M59): waits settle on the pty_cap stream; cleanup keys go through pty_keys.
+pty_cap() { cap; }
+pty_keys() { keys "$@"; }
+pty_pane_state() { tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_dead}:#{pane_dead_status}' 2>/dev/null | head -1; }
+
+# Wait for the setting editor's tray. The optional body marker is what the caller is about to
+# assert next: the tray title alone can be on screen while the body has not been painted (Ink
+# paints line by line), so the frame must be settled — needles present + two consecutive captures
+# identical (title clock masked) — before the wait releases (M59).
+wait_editor() { # <tray title> [body marker]
+  pty_wait_frame - "editor $1" "╭─ $1" "${2:-}"
 }
 
-# Wait (up to ~8s) for the current frame to carry <text>; writes settle asynchronously.
+# Wait for the current frame to carry <text>; writes settle asynchronously. The latest capture is
+# written to the assertion's file every round, so a failure shows exactly what was on screen.
 wait_cap() { # <name> <text>
+  local PTY_WAIT_ITERS=30 PTY_WAIT_PAUSE=0.4
+  pty_wait_frame "$tmp/$current/$1.txt" "回执 $1" "$2"
+}
+
+# Poll the wrapper's argv log (a file, not the pane — no frames involved) until it carries <text>.
+wait_argv() { # <name> <text>
   local i
-  for i in $(seq 1 20); do
-    cap > "$tmp/$current/$1.txt"
+  for i in $(seq 1 30); do
+    tail -n 50 "$(argv_log)" > "$tmp/$current/$1.txt" 2>/dev/null || true
     grep -qF -- "$2" "$tmp/$current/$1.txt" && return 0
-    sleep 0.4
+    sleep 0.3
   done
   return 1
 }
@@ -163,13 +189,12 @@ open_view() {
   keys Down Down Down Down Down
   sleep 0.5
   keys Enter
-  local i
-  for i in $(seq 1 30); do
-    cap | grep -qF "$marker" && { sleep 0.4; return 0; }
+  local PTY_WAIT_ITERS=40 PTY_WAIT_PAUSE=0.4
+  if pty_wait_frame - "设置视图（marker=$marker）" "$marker"; then
     sleep 0.4
-  done
-  cap | tail -5 >&2
-  bad "项目设置视图没有在 12s 内出现数据"
+    return 0
+  fi
+  bad "项目设置视图没有在预算内出现数据（marker=$marker）"
   return 1
 }
 
@@ -185,62 +210,96 @@ filter_to() {
   type_text "$1"
   sleep 0.4
   keys Enter
-  sleep 0.9
+  # M59: conditional — the applied filter closes the compose tray. Wait for that settled absence
+  # (both language titles) instead of a fixed sleep; the filtered rows repaint in the same commit.
+  local PTY_WAIT_ITERS=8
+  pty_wait_frame - "筛选已应用：$1" '!╭─ 筛选设置' '!╭─ Filter settings' || true
   _p21_filter="$1"
 }
 # Clear an applied filter: open the line and esc it (the spec's clear rule).
 filter_clear() {
   keys /
   sleep 0.4
-  keys Escape
-  sleep 0.9
+  # M59: the cancel esc is state-checked (zh or en filter tray must be on a settled frame).
+  pty_key_when "清除筛选" '╭─ 筛选设置' Escape || pty_key_when "clear filter" '╭─ Filter settings' Escape || true
+  local PTY_WAIT_ITERS=8
+  pty_wait_frame - "筛选已清除" '!╭─ 筛选设置' '!╭─ Filter settings' || true
   _p21_filter=""
 }
 
 # Focus the row whose capture line matches <regex> and contains the cursor glyph.
+# The row set can be asynchronously REPLACED by a contract-change re-read (M55's lesson) or dropped
+# entirely while a block rebuild fails and re-tries on its TTL (the panel renders an empty list
+# until the next good read — observed as a 40s blank after a seat write under load). M59: only
+# press Down when the row is NOT on screen; when it is but the frame is still repainting, re-check
+# instead of walking past it; Downs on an empty list are harmless no-ops, so the walk resumes
+# cleanly when the rows come back.
 focus_row() { # <grep -E pattern>
-  local i
-  for i in $(seq 1 40); do
-    if cap | grep -E -- "$1" | grep -q '›'; then
-      sleep 0.3
-      return 0
+  local i c matched
+  for i in $(seq 1 80); do
+    c="$(cap)"
+    matched="$({ printf '%s\n' "$c" | grep -E -- "$1" || true; })"
+    if [ -n "$matched" ] && printf '%s\n' "$matched" | grep -q '›'; then
+      if pty_frame_settled "$c"; then
+        sleep 0.3
+        return 0
+      fi
+      sleep 0.25   # the row is on screen but the frame is still moving — re-check, don't walk
+    else
+      keys Down
+      sleep 0.25
     fi
-    keys Down
-    sleep 0.25
   done
   return 1
 }
 
-# Wait (up to ~8s) for the choice picker (M55): its title carries the raw key after a ` · `.
-wait_picker() { # <KEY>
-  local i
-  for i in $(seq 1 24); do
-    cap | grep -qF " · $1" && { sleep 0.4; return 0; }
-    sleep 0.3
-  done
-  return 1
+# Wait for the choice picker (M55): its title carries the raw key after a ` · `, and the optional
+# entry marker is what the caller asserts next. Both must be in one settled frame (M59): the title
+# alone is not proof the picker is usable — Ink paints a frame line by line, so a capture can catch
+# the title before the entry lines land (the PM's review run saw exactly that and cascaded).
+wait_picker() { # <KEY> [entry marker]
+  pty_wait_frame - "picker $1" " · $1" "${2:-}"
+}
+# The regression pin uses a short budget: a missing marker must fail fast, not burn the full one.
+wait_picker_quick() {
+  local PTY_WAIT_ITERS=6 PTY_WAIT_PAUSE=0.25 PTY_SETTLE_PAUSE=0.2
+  wait_picker "$@"
 }
 
-# Wait (up to ~8s) until the setting editor's tray is gone (the editor opens a beat after Enter:
-# the row's data is re-read on open, M55). The settings view's own frame also draws `╭─ 项目设置`,
-# so the probe matches the tray title the setting editor uses (the raw key), not any box corner.
+# Cleanup escs are state-checked (M59): the widget's marker must be on a settled frame, and the
+# esc is confirmed afterwards. A widget that is not there gets NO key — so one missed wait can no
+# longer turn the next esc into "leave the settings view" (the §38-b cascade's first casualty).
+# Returns 0 when the widget is gone afterwards (closed by this esc, or already gone — no key sent),
+# 1 when an esc went out but the widget is still on screen.
+leave_picker() { # <KEY>
+  pty_cleanup_esc "picker $1" " · $1"
+}
+
+# Same rule for the write editor's cleanup sites (the tray title is the marker).
+leave_editor() { # <tray title>
+  pty_cleanup_esc "editor $1" "╭─ $1"
+}
+
+# Wait until the setting editor's tray is gone. The settings view's own frame also draws
+# `╭─ 项目设置`, so the probe matches the tray title the setting editor uses (the raw key), not any
+# box corner; the absence must be on a settled frame too (M59).
 wait_no_editor() {
-  local i
-  for i in $(seq 1 24); do
-    cap | grep -qF '╭─ TEAM_' || return 0
-    sleep 0.3
-  done
-  return 1
+  pty_wait_frame - "editor closed" '!╭─ TEAM_'
 }
 
-# Walk the picker's cursor to the option whose line contains <text> (grep -F) and press Enter.
+# Walk the picker's cursor to the option whose line contains <text> (grep -F) and press Enter —
+# releasing only once the option line with the cursor is on a settled frame (M59).
 pick_option() {
-  local i
+  local i c
   for i in $(seq 1 12); do
-    if cap | grep -F -- "$1" | grep -q '›'; then
-      keys Enter
-      sleep 1.3
-      return 0
+    c="$(cap)"
+    # M59: `{ … || true; } | grep -q` — same SIGPIPE-under-pipefail guard as focus_row.
+    if { printf '%s\n' "$c" | grep -F -- "$1" || true; } | grep -q '›'; then
+      if pty_frame_settled "$c"; then
+        keys Enter
+        sleep 1.3
+        return 0
+      fi
     fi
     keys Down
     sleep 0.3
@@ -310,8 +369,7 @@ PYFIX
   # The focus window moves with the keys and counts what it hides at the top.
   local i
   for i in $(seq 1 40); do keys Down; sleep 0.02; done
-  sleep 1.2
-  cap_to window
+  if wait_cap window "↑"; then ok "窗口顶部出现被隐藏的行数计数行"; else bad "窗口滚动后没有出现 ↑N 计数行"; fi
   assert_match "$tmp/$current/window.txt" '↑[0-9]+' "窗口顶部显示被隐藏的行数"
   # A click moves the focus to an unfocused row; the second click opens that row's editor. M49：行
   # 按**标签**认，原始键从第一次点击后的 CLI 提示行读（标签用来看，键用来敲）。
@@ -320,27 +378,38 @@ PYFIX
   if [ -n "$target_line" ]; then
     label="$(cap | sed -n "${target_line}p" | sed 's/^│//' | sed -E 's/^ +//' | sed -E 's/  +.*//')"
     click_at 20 "$target_line"
-    sleep 0.9
-    cap_to click
-    assert_has "$tmp/$current/click.txt" "› $label" "第一次点击把光标放到那一行（按标签认行）"
+    if wait_cap click "› $label"; then ok "第一次点击把光标放到那一行（按标签认行）"; else bad "第一次点击后光标没有落到那一行"; fi
     keyname="$(cap | grep -F 'team config set' | grep -oE 'TEAM_[A-Z0-9_]+' | head -1)"
     assert_has "$tmp/$current/click.txt" "team config set $keyname" "CLI 提示行跟着焦点换到该行的原始键"
     # The window may have scrolled with the focus: click the row the cursor is on now.
     target_line="$(cap | grep -n '› .*· 立即生效' | head -1 | cut -d: -f1)"
     [ -n "$target_line" ] && click_at 20 "$target_line"
     # M55：有选择集的键打开选择器（标题 `选择 … 的值 · KEY`），没有的仍是 compose 托盘。
-    if wait_editor "$keyname" || wait_picker "$keyname"; then
-      cap_to click2
-      if grep -qF "╭─ $keyname" "$tmp/$current/click2.txt"; then
-        assert_has "$tmp/$current/click2.txt" "╭─ $keyname" "第二次点击打开该行的编辑器（compose 托盘，标题点名原始键）"
-      else
-        assert_has "$tmp/$current/click2.txt" " · $keyname" "第二次点击打开该行的编辑器（选择器，标题点名原始键）"
+    # M59: wait for THIS row's widget (tray or picker title) on a settled frame — the view can sit
+    # settled *before* the editor paints (the row's data is re-read on open), so a settle-only
+    # probe misjudges; the pre-M59 serial `wait_editor || wait_picker` burned two full budgets.
+    local opened="" _probe_i c_probe
+    for _probe_i in $(seq 1 24); do
+      c_probe="$(cap)"
+      if { printf '%s\n' "$c_probe" | grep -qF "╭─ $keyname" || printf '%s\n' "$c_probe" | grep -qF " · $keyname"; } \
+         && pty_frame_settled "$c_probe"; then
+        opened="$c_probe"; break
       fi
+      sleep 0.3
+    done
+    [ -n "$opened" ] || opened="$c_probe"
+    printf '%s\n' "$opened" > "$tmp/$current/click2.txt"
+    if grep -qF "╭─ $keyname" "$tmp/$current/click2.txt"; then
+      assert_has "$tmp/$current/click2.txt" "╭─ $keyname" "第二次点击打开该行的编辑器（compose 托盘，标题点名原始键）"
+    elif grep -qF " · $keyname" "$tmp/$current/click2.txt"; then
+      assert_has "$tmp/$current/click2.txt" " · $keyname" "第二次点击打开该行的编辑器（选择器，标题点名原始键）"
     else
-      cap_to click2
       bad "第二次点击没有打开该行的编辑器"
     fi
-    if cap | grep -qF "╭─ $keyname" || cap | grep -qF " · $keyname"; then keys Escape; sleep 0.9; fi
+    # M59: state-checked cleanup — whichever widget is on a settled frame gets the esc (at most one
+    # sends; a widget that is not there gets no key, so the view can never be the esc's casualty).
+    leave_editor "$keyname"
+    leave_picker "$keyname"
   else
     cap | tail -5 >&2
     bad "窗口里没有找到可点击的 apply 行"
@@ -348,14 +417,17 @@ PYFIX
   # A refuse row opens no editor: the route is surfaced and the contract is untouched.
   local before; before="$(sha "$(cfg)")"
   filter_to TEAM_SESSION
-  sleep 0.6
-  focus_row '会话名 +.*只读' || bad "没能把焦点移到 refuse 行"
-  keys Enter
-  sleep 1.2
-  cap_to refuse-route
-  assert_has "$tmp/$current/refuse-route.txt" "手改" "refuse 行的回执点名路线"
+  sleep 0.3
+  if focus_row '会话名 +.*只读'; then
+    keys Enter
+  else
+    bad "没能把焦点移到 refuse 行"
+  fi
+  if wait_cap refuse-route "手改"; then ok "refuse 行的回执点名路线"; else bad "refuse 行的回执没出现"; fi
   assert_eq "refuse 行没有写契约" "$(sha "$(cfg)")" "$before"
-  keys Escape
+  # M59: the navigation esc is state-checked too — it fires only while the settings view is on a
+  # settled frame, so a drifted scene gets a named red instead of a blind key.
+  pty_key_when "esc 回浮层" '╭─ 项目设置' Escape || bad "esc 前设置视图已经不在屏幕上"
   sleep 1
   # The origin is remembered (esc back to the overlay's navigation row).
   cap_to overlay-back
@@ -366,12 +438,11 @@ PYFIX
   cap_now | sed '$d' > "$tmp/$current/overlay-now.txt"
   assert_not "$tmp/$current/overlay-now.txt" "TEAM_" "当前这一帧的浮层没有契约的 TEAM_* 键"
   keys Enter
-  sleep 3
+  pty_wait_frame - "q 用例的设置视图" '╭─ 项目设置' || bad "q 用例的设置视图没有打开"
   # `q` keeps its global meaning: the collapse path runs (the argv log is the observable).
   local q0; q0="$(wc -l < "$(argv_log)" 2>/dev/null || echo 0)"
   keys q
-  sleep 1.5
-  assert_match "$(argv_log)" 'pulse collapse' "q 仍然触发全局的收起动作"
+  if wait_argv q-collapse 'pulse collapse'; then ok "q 仍然触发全局的收起动作"; else bad "q 的收起动作没有进 argv 日志"; fi
   # The bundle carries no second key table (P22/B2): a scratch CLI whose schema gains TEAM_ZZZ_TEST
   # and whose TEAM_GATES class is refuse shows both through the same committed panel.js.
   local scratch="$tmp/$current/scratch"
@@ -456,7 +527,7 @@ JSON
   cap_to bool-row
   assert_match "$tmp/$current/bool-row.txt" '走 tmux 投递 +未设 · 默认 1' "未设的 bool 行显示 未设 · 默认 1"
   keys Enter
-  wait_picker TEAM_NOTIFY_TMUX || bad "bool 的选择器没有打开"
+  wait_picker TEAM_NOTIFY_TMUX '› 保持未设' || bad "bool 的选择器没有打开"
   cap_to bool
   assert_match "$tmp/$current/bool.txt" '› 保持未设' "未设键的首个条目是保持未设（并且是焦点）"
   assert_has "$tmp/$current/bool.txt" "开（1） · 默认" "1 是默认条目，带表里的 on 词"
@@ -468,21 +539,20 @@ JSON
   cap_to bool-editor
   assert_has "$tmp/$current/bool-editor.txt" "╭─ TEAM_NOTIFY_TMUX" "选项落到同一个写编辑器里"
   assert_eq "选中条目本身不写契约" "$(sha "$(cfg)")" "$bool_sha"
-  keys Enter; sleep 1.5
-  cap_to bool-confirm
-  assert_has "$tmp/$current/bool-confirm.txt" "→ 0" "确认行拿着选项的值"
+  keys Enter
+  if wait_cap bool-confirm "→ 0"; then ok "确认行拿着选项的值"; else bad "bool 的确认行没出现"; fi
   keys Enter
   if wait_cap bool-written "已写入 TEAM_NOTIFY_TMUX = 0"; then ok "bool 选项写入的回执"; else bad "bool 写入的回执没出现"; fi
   assert_match "$(cfg)" "^TEAM_NOTIFY_TMUX=.0.\$" "契约里落了规范值 0"
   filter_to TEAM_NOTIFY_TMUX
   sleep 0.5
   keys Enter
-  wait_picker TEAM_NOTIFY_TMUX || bad "bool 选择器第二次没有打开"
+  wait_picker TEAM_NOTIFY_TMUX '关（0） · 当前' || bad "bool 选择器第二次没有打开"
   cap_to bool-set
   assert_has "$tmp/$current/bool-set.txt" "关（0） · 当前" "已设的 bool 把文件里的值标成当前"
   assert_has "$tmp/$current/bool-set.txt" "开（1） · 默认" "默认标记移到 1 上"
   assert_not "$tmp/$current/bool-set.txt" "保持未设" "已设的键没有保持未设条目"
-  keys Escape; sleep 0.8
+  leave_picker TEAM_NOTIFY_TMUX
   # 非规范拼写（手改出来的 true）：当前条目原样显示，不许被贴成「关（0）」（命令写入时才 canonical 化）。
   python3 - "$(cfg)" <<'PY2'
 import re, sys
@@ -494,18 +564,18 @@ PY2
   filter_to TEAM_NOTIFY_TMUX
   sleep 0.5
   keys Enter
-  wait_picker TEAM_NOTIFY_TMUX || bad "非规范 bool 的选择器没有打开"
+  wait_picker TEAM_NOTIFY_TMUX 'true · 当前' || bad "非规范 bool 的选择器没有打开"
   cap_to bool-spelling
   assert_has "$tmp/$current/bool-spelling.txt" "true · 当前" "非规范拼写的手改值原样显示成当前条目"
   assert_not "$tmp/$current/bool-spelling.txt" "关（0） · 当前" "非规范拼写不许被贴成规范值的标签"
   assert_has "$tmp/$current/bool-spelling.txt" "开（1） · 默认" "规范默认值仍在"
-  keys Escape; sleep 0.8
+  leave_picker TEAM_NOTIFY_TMUX
 
   # ── (2) enum：只给 constraints 里的取值，原序，没有自由输入；选条目 → 确认 → 写入 ──
   filter_to TEAM_MONITOR_UI
   sleep 0.5
   keys Enter
-  wait_picker TEAM_MONITOR_UI || bad "enum 的选择器没有打开"
+  wait_picker TEAM_MONITOR_UI 'auto · 默认' || bad "enum 的选择器没有打开"
   cap_to enum
   assert_match "$tmp/$current/enum.txt" '› 保持未设' "未设的 enum 也以保持未设开头"
   assert_has "$tmp/$current/enum.txt" "auto · 默认" "默认标记在 auto 上"
@@ -517,9 +587,8 @@ PY2
   pick_option 'tui' || bad "enum 选择器里没有 tui"
   wait_editor TEAM_MONITOR_UI || bad "enum 选中后没有打开写编辑器"
   assert_eq "enum 选中条目不写契约" "$(sha "$(cfg)")" "$enum_sha"
-  keys Enter; sleep 1.5
-  cap_to enum-confirm
-  assert_has "$tmp/$current/enum-confirm.txt" "需要重启才生效" "restart 类的确认行说明重启时机"
+  keys Enter
+  if wait_cap enum-confirm "需要重启才生效"; then ok "restart 类的确认行说明重启时机"; else bad "enum 的确认行没出现"; fi
   keys Enter
   if wait_cap enum-written "已写入 TEAM_MONITOR_UI = tui"; then ok "enum 的写入回执"; else bad "enum 写入的回执没出现"; fi
   assert_eq "选条目走的还是两次 Enter 的写路径（审计只长一行）" "$(audit_lines)" "$((enum_audit + 1))"
@@ -534,11 +603,14 @@ PY2
   local defer_sha defer_audit
   defer_sha="$(sha "$(cfg)")"; defer_audit="$(audit_lines)"
   keys Enter
-  wait_picker TEAM_DEFER_TTL || bad "未设键的选择器没有打开"
+  wait_picker TEAM_DEFER_TTL '› 保持未设' || bad "未设键的选择器没有打开"
   cap_to defer
   assert_match "$tmp/$current/defer.txt" '› 保持未设' "未设键的编辑器开在保持未设上"
-  keys Enter; sleep 1.2
-  cap_to defer-cancel
+  keys Enter
+  # M59: conditional — 保持未设 accepts = the picker closes with no editor; wait for BOTH the tray
+  # and the picker title to be absent on a settled frame, instead of a fixed sleep.
+  pty_wait_frame "$tmp/$current/defer-cancel.txt" "保持未设接受（无编辑器无选择器）" '!╭─ TEAM_DEFER_TTL' '! · TEAM_DEFER_TTL' \
+    || bad "保持未设没有干净地回到行列表"
   assert_not "$tmp/$current/defer-cancel.txt" "╭─ TEAM_DEFER_TTL" "保持未设不打开写编辑器"
   assert_not "$tmp/$current/defer-cancel.txt" " · TEAM_DEFER_TTL" "保持未设关掉了选择器（回到行列表）"
   assert_eq "保持未设后契约不变" "$(sha "$(cfg)")" "$defer_sha"
@@ -548,12 +620,13 @@ PY2
   filter_to TEAM_DEFER_TTL
   sleep 0.5
   keys Enter
-  wait_picker TEAM_DEFER_TTL || bad "未设键的选择器第二次没有打开"
+  wait_picker TEAM_DEFER_TTL '› 保持未设' || bad "未设键的选择器第二次没有打开"
   pick_option '300' || bad "未设键的选择器里没有 300 项"
   wait_editor TEAM_DEFER_TTL || bad "未设键选默认项后没有打开写编辑器"
   cap_to defer-editor
   assert_has "$tmp/$current/defer-editor.txt" "TEAM_DEFER_TTL" "选择默认值进入写编辑器"
-  keys Enter; sleep 1.5
+  keys Enter
+  if wait_cap defer-confirm "→ 300"; then ok "默认值先给确认行"; else bad "默认值的确认行没出现"; fi
   keys Enter
   if wait_cap defer-written "已写入 TEAM_DEFER_TTL = 300"; then
     ok "默认值作为普通写入（回执说已写入）"
@@ -567,7 +640,7 @@ PY2
   filter_to TEAM_PULSE_INTERVAL
   sleep 0.5
   keys Enter
-  wait_picker TEAM_PULSE_INTERVAL || bad "数值键的选择器没有打开"
+  wait_picker TEAM_PULSE_INTERVAL '› 保持未设' || bad "数值键的选择器没有打开"
   cap_to numeric
   assert_has "$tmp/$current/numeric.txt" "接受区间 60–∞" "数值键显示命令给的接受区间（上界空 = 无界）"
   assert_match "$tmp/$current/numeric.txt" '› 保持未设' "未设的数值键也以保持未设开头"
@@ -583,22 +656,22 @@ PY2
   if wait_cap numeric-invalid "最小 60"; then ok "越界的数值被命令拒绝并点名最小 60"; else bad "越界数值的拒绝没出现"; fi
   assert_eq "被拒后契约不变" "$(sha "$(cfg)")" "$num_sha"
   cap_has "TEAM_PULSE_INTERVAL" numeric-draft
-  keys Escape; sleep 0.8
+  leave_editor TEAM_PULSE_INTERVAL
 
   # ── (5) path：存在性标记 / 只有命令接受空值时才给清空项 / 确认行重复标记 ──
   filter_to TEAM_AGENT_BIN
   sleep 0.5
   keys Enter
-  wait_picker TEAM_AGENT_BIN || bad "path 选择器没有打开"
+  wait_picker TEAM_AGENT_BIN 'nonexistent/m55-agent' || bad "path 选择器没有打开"
   cap_to path
   assert_match "$tmp/$current/path.txt" '/nonexistent/m55-agent · 当前 · 不存在' "path 当前值带着缺失标记"
   assert_has "$tmp/$current/path.txt" "清空（写入空值）" "exec,opt 的 path 给出清空项"
   assert_has "$tmp/$current/path.txt" "自由输入" "path 给出自由输入项"
-  keys Escape; sleep 0.8
+  leave_picker TEAM_AGENT_BIN
   filter_to TEAM_PI_BIN
   sleep 0.5
   keys Enter
-  wait_picker TEAM_PI_BIN || bad "必填 path 的选择器没有打开"
+  wait_picker TEAM_PI_BIN '· 当前' || bad "必填 path 的选择器没有打开"
   cap_to path-required
   assert_not "$tmp/$current/path-required.txt" "清空" "必填 path 不给清空项（命令不接受空值）"
   pick_option '自由输入' || bad "必填 path 没有自由输入项"
@@ -607,18 +680,18 @@ PY2
   type_text "/nonexistent/m55-pi"; sleep 0.4
   keys Enter
   if wait_cap path-confirm "不存在"; then ok "确认行重复存在性标记（命令不拒写，视图也不谎称拒绝）"; else bad "确认行的存在性标记没出现"; fi
-  keys Escape; sleep 0.8
+  leave_editor TEAM_PI_BIN
   wait_no_editor || bad "path 编辑器没有关干净"
 
   # ── (6) 没有选项集的 kind：打开自由输入并写明原因，不渲染条目列表 ──
   filter_to TEAM_GATES
   sleep 0.5
   keys Enter
-  wait_editor TEAM_GATES || bad "cmd 键没有打开自由输入"
+  wait_editor TEAM_GATES "没有选项集" || bad "cmd 键没有打开自由输入"
   cap_to no-choice
   assert_has "$tmp/$current/no-choice.txt" "╭─ TEAM_GATES" "cmd 键直接打开自由输入"
   assert_has "$tmp/$current/no-choice.txt" "没有选项集" "编辑器上方写明原因（kind 没有选项集，写入仍由命令校验）"
-  keys Escape; sleep 0.8
+  leave_editor TEAM_GATES
   wait_no_editor || bad "cmd 编辑器没有关干净"
 
   # ── (7) pairlist：Enter 把焦点移到席位块，绝不在这里组合（行数据是重新读的，所以等路由落地） ──
@@ -637,7 +710,7 @@ PY2
   filter_to TEAM_MONITOR_UI
   sleep 0.5
   keys Enter
-  wait_picker TEAM_MONITOR_UI || bad "点击用例的选择器没有打开"
+  wait_picker TEAM_MONITOR_UI 'tui · 当前' || bad "点击用例的选择器没有打开"
   local click_sha click_audit argv0 target_line
   click_sha="$(sha "$(cfg)")"; click_audit="$(audit_lines)"
   argv0="$(wc -l < "$(argv_log)" 2>/dev/null || echo 0)"
@@ -647,7 +720,8 @@ PY2
   wait_editor TEAM_MONITOR_UI || bad "点击后没有打开写编辑器"
   cap_to click-accept
   assert_has "$tmp/$current/click-accept.txt" "╭─ TEAM_MONITOR_UI" "点击条目与 Enter 一样接受它"
-  keys Escape; sleep 0.9
+  leave_editor TEAM_MONITOR_UI || bad "点击用例的 esc 发了但编辑器还在"
+  wait_no_editor || bad "点击用例的编辑器没有关干净"
   assert_eq "点击后 esc 不写契约" "$(sha "$(cfg)")" "$click_sha"
   assert_eq "点击后 esc 不增审计" "$(audit_lines)" "$click_audit"
   tail -n +$((argv0 + 1)) "$(argv_log)" > "$tmp/$current/click-argv.txt" 2>/dev/null || true
@@ -657,18 +731,34 @@ PY2
   filter_to TEAM_MONITOR_UI
   sleep 0.5
   keys Enter
-  wait_picker TEAM_MONITOR_UI || bad "esc 用例的选择器没有打开"
-  keys Escape; sleep 0.9
+  wait_picker TEAM_MONITOR_UI 'tui · 当前' || bad "esc 用例的选择器没有打开"
+  # M59: the test-action esc is also state-checked — if the picker is not on a settled frame the
+  # key is not sent and the miss is named, instead of the esc closing whatever is underneath.
+  pty_key_when "esc 用例" " · TEAM_MONITOR_UI" Escape || bad "esc 用例：选择器不在稳定帧上，esc 没有发"
+  sleep 0.9
   cap_to picker-esc
   assert_not "$tmp/$current/picker-esc.txt" " · TEAM_MONITOR_UI" "esc 关掉选择器"
   assert_has "$tmp/$current/picker-esc.txt" "team config set TEAM_MONITOR_UI" "回到行列表且焦点仍在原来那一行"
+  # M59 判据②（真实场景）：此刻选择器已被上面那条 esc 关掉 —— 清理点的 esc 必须先确认状态。
+  # 旧写法的裸 esc 在这里会把设置视图整个关掉，之后每段都在错的视图里跑（§38-b 的级联入口）。
+  PTY_TRACE=1 pty_cleanup_esc "回归钉：已关闭的选择器" " · TEAM_MONITOR_UI" > "$tmp/$current/cleanup-trace.txt" 2>&1
+  assert_has "$tmp/$current/cleanup-trace.txt" "action=none" "已关闭的选择器：清理守卫一个键都不发"
+  assert_has "$tmp/$current/cleanup-trace.txt" "reason=not-settled" "  守卫的理由是「标记不在稳定帧上」，不是预算"
+  cap_to cleanup-after
+  assert_has "$tmp/$current/cleanup-after.txt" "╭─ 项目设置" "设置视图还开着（没有裸 esc 打到它身上）"
+  # M59 判据①的 trace 面：一次正常等待的放行点在 trace 里可见（命中 + 稳定确认，轮数自适应）。
+  keys Enter
+  PTY_TRACE=1 wait_picker TEAM_MONITOR_UI 'tui · 当前' > "$tmp/$current/wait-trace.txt" 2>&1 \
+    || bad "trace 探针的选择器没有打开"
+  assert_match "$tmp/$current/wait-trace.txt" 'wait picker TEAM_MONITOR_UI rounds=[0-9]+ settled=1' "正常等待放行在稳定帧上（trace 可见轮数）"
+  leave_picker TEAM_MONITOR_UI || bad "trace 探针的选择器没有关掉"
 
   # ── (9) 滚轮：条目列表比可视预算长时滚得动（焦点走过的就是列表滚过的） ──
   wait_no_editor || bad "滚轮用例开始前还有编辑器开着"
   filter_to TEAM_DEFAULT_MODEL
   sleep 0.5
   keys Enter
-  wait_picker TEAM_DEFAULT_MODEL || bad "长列表选择器没有打开"
+  wait_picker TEAM_DEFAULT_MODEL '↓' || bad "长列表选择器没有打开"
   cap_to wheel-before
   local before_hidden
   before_hidden="$(grep -oE '↓[0-9]+' "$tmp/$current/wheel-before.txt" | head -1 | tr -d '↓' || true)"
@@ -680,10 +770,14 @@ PY2
     tmux -L "$sock" send-keys -t "$sess:panel" -l "$(printf '\033[<65;20;20M')" 2>/dev/null || true
     sleep 0.1
   done
-  sleep 0.8
-  cap_to wheel-after
-  local after_hidden
-  after_hidden="$(grep -oE '↓[0-9]+' "$tmp/$current/wheel-after.txt" | head -1 | tr -d '↓' || true)"
+  # M59: conditional — wait for the wheel's repaint to settle AND the hidden count to drop.
+  local after_hidden=""
+  for w in $(seq 1 20); do
+    cap_to wheel-after
+    after_hidden="$(grep -oE '↓[0-9]+' "$tmp/$current/wheel-after.txt" | head -1 | tr -d '↓' || true)"
+    { [ -n "$after_hidden" ] && [ "$after_hidden" -lt "$before_hidden" ]; } && break
+    sleep 0.2
+  done
   if [ -n "$before_hidden" ] && [ "${after_hidden:-0}" -lt "$before_hidden" ]; then
     ok "滚轮把可见窗口往下推了（↓$before_hidden → ↓${after_hidden:-0}）"
   else
@@ -698,7 +792,16 @@ PY2
   assert_not "$tmp/$current/wheel-after.txt" "openrouter" "选择器不列机器目录里的 openrouter"
   ( cd "$ROOT" && HOME="$home" bash "$skill/scripts/team" config list --json ) > "$tmp/$current/read-json.json" 2>&1
   assert_not "$tmp/$current/read-json.json" "sub2api" "同一 scratch HOME 下的读也不含目录 provider"
-  keys Escape; sleep 0.8
+  # 硬化自检（M55 第一次复验 FAIL 的回归钉 + M59 判据①/③）：选择器开着时，只要要求的条目
+  # 不在帧里，wait_picker 必须判负 —— 标题命中不算数；判负自带超时现场（pane 末行 + 缺失项 +
+  # 孤立/级联）。短预算：判负要快，不是熬。
+  if wait_picker_quick TEAM_DEFAULT_MODEL '这条目不存在-硬线自检'; then
+    bad "wait_picker 只凭标题就放行了（条目标记/稳定帧没起作用）"
+  else
+    ok "wait_picker 要的条目不在稳定帧里时判负（标题命中不算，现场见上面的黄点场景）"
+  fi
+  # 清理守卫把 esc 只打在真开着的选择器上（这里选择器确实开着 → 恰好一个 esc）。
+  leave_picker TEAM_DEFAULT_MODEL || bad "回归钉之后的选择器没有关掉"
 }
 
 scn_choices_schema() {
@@ -735,13 +838,13 @@ EOF2
   assert_has "$tmp/$current/zzz-row.txt" "TEAM_ZZZ_MODE" "scratch CLI 新增的 enum 键出现在视图里（无标签→回退裸键）"
   assert_has "$tmp/$current/zzz-row.txt" "未设 · 默认 red" "新键的默认值来自 schema"
   keys Enter
-  wait_picker TEAM_ZZZ_MODE || bad "新增 enum 键的选择器没有打开（要重建 bundle = 反硬编码判据失败）"
+  wait_picker TEAM_ZZZ_MODE 'red · 默认' || bad "新增 enum 键的选择器没有打开（要重建 bundle = 反硬编码判据失败）"
   cap_to zzz-picker
   assert_match "$tmp/$current/zzz-picker.txt" '› 保持未设' "未设的新键也以保持未设开头"
   assert_has "$tmp/$current/zzz-picker.txt" "red · 默认" "constraints 里的 red 是默认条目"
   assert_has "$tmp/$current/zzz-picker.txt" "blue" "constraints 里的 blue 也在（原序，零代码改动）"
   assert_not "$tmp/$current/zzz-picker.txt" "自由输入" "enum 是封闭域：没有自由输入项"
-  keys Escape; sleep 0.8
+  leave_picker TEAM_ZZZ_MODE
   # 去掉 constraints：同一个 bundle 必须可见地退回自由输入并写明原因（不是静默空白框）。
   python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
 import sys
@@ -759,11 +862,11 @@ PY
   cap_to zzz-row2
   assert_has "$tmp/$current/zzz-row2.txt" "TEAM_ZZZ_MODE" "第二次起的面板仍用 scratch CLI（新键还在）"
   keys Enter
-  wait_editor TEAM_ZZZ_MODE || bad "去掉 constraints 后没有打开自由输入"
+  wait_editor TEAM_ZZZ_MODE "没有选项集" || bad "去掉 constraints 后没有打开自由输入"
   cap_to zzz-noconstraints
   assert_has "$tmp/$current/zzz-noconstraints.txt" "╭─ TEAM_ZZZ_MODE" "enum 没有选项集时打开自由输入"
   assert_has "$tmp/$current/zzz-noconstraints.txt" "没有选项集" "降级是可见的并写明原因（kind 没有选项集）"
-  keys Escape; sleep 0.8
+  leave_editor TEAM_ZZZ_MODE
   wait_no_editor || bad "降级用例的编辑器没有关干净"
   P21_CLI=""
 }
@@ -786,7 +889,7 @@ PY
   sleep 0.5
   keys Enter
   # M55：数值键现在先开选择器（建议值 + 自由输入），写路径本身没变 —— 走进自由输入那一项。
-  wait_picker TEAM_PULSE_NUDGE_GAP || bad "写用例的选择器没有打开"
+  wait_picker TEAM_PULSE_NUDGE_GAP '· 当前' || bad "写用例的选择器没有打开"
   pick_option '自由输入' || bad "写用例的选择器里没有自由输入项"
   wait_editor TEAM_PULSE_NUDGE_GAP || bad "写用例的编辑器没有打开"
   cap_has "TEAM_PULSE_NUDGE_GAP" editor
@@ -795,9 +898,7 @@ PY
   type_text "1200"
   sleep 0.4
   keys Enter
-  sleep 2
-  cap_to confirm
-  assert_has "$tmp/$current/confirm.txt" "→ 1200" "第一次 Enter 只给确认行（没写）"
+  if wait_cap confirm "→ 1200"; then ok "第一次 Enter 只给确认行（没写）"; else bad "确认行没有出现（见 confirm.txt）"; fi
   assert_has "$tmp/$current/confirm.txt" "下一个读取它的进程生效" "确认行说明 apply 的时机"
   assert_eq "确认阶段契约未变" "$(sha "$(cfg)")" "$(sha "$tmp/$current/before.cfg")"
   keys Enter
@@ -818,13 +919,13 @@ PY
   filter_to TEAM_PULSE_NUDGE_GAP
   sleep 0.5
   keys Enter
-  wait_picker TEAM_PULSE_NUDGE_GAP || bad "取消用例的选择器没有打开"
+  wait_picker TEAM_PULSE_NUDGE_GAP '· 当前' || bad "取消用例的选择器没有打开"
   pick_option '自由输入' || bad "取消用例的选择器里没有自由输入项"
   wait_editor TEAM_PULSE_NUDGE_GAP || bad "取消用例的编辑器没有打开"
   type_text "x"
   sleep 0.4
-  keys Escape
-  sleep 0.9
+  leave_editor TEAM_PULSE_NUDGE_GAP || bad "取消用例的 esc 发了但编辑器还在"
+  wait_no_editor || bad "取消用例的编辑器没有关干净"
   assert_eq "取消后契约不变" "$(sha "$(cfg)")" "$b0"
   assert_eq "取消后审计不增长" "$(audit_lines)" "$a0"
   assert_eq "取消后没有临时文件" "$(ls "$ROOT/.pi/team/"config.sh.tmp.* 2>/dev/null | wc -l)" "0"
@@ -832,7 +933,7 @@ PY
   filter_to TEAM_PULSE_INTERVAL
   sleep 0.5
   keys Enter
-  wait_picker TEAM_PULSE_INTERVAL || bad "非法值用例的选择器没有打开"
+  wait_picker TEAM_PULSE_INTERVAL '· 当前' || bad "非法值用例的选择器没有打开"
   pick_option '自由输入' || bad "非法值用例的选择器里没有自由输入项"
   wait_editor TEAM_PULSE_INTERVAL || bad "非法值用例的编辑器没有打开"
   keys BSpace BSpace BSpace BSpace
@@ -841,19 +942,17 @@ PY
   sleep 0.4
   local b1; b1="$(sha "$(cfg)")"
   keys Enter
-  sleep 2
-  cap_to invalid
+  if wait_cap invalid "最小 60"; then ok "越界数值的拒绝点名最小 60"; else bad "越界数值的拒绝没出现"; fi
   assert_has "$tmp/$current/invalid.txt" "不合法" "非法值的回执说明被拒"
-  assert_match "$tmp/$current/invalid.txt" '最小 60' "回执点名接受域（最小 60）"
   assert_eq "非法值契约不变" "$(sha "$(cfg)")" "$b1"
   cap_has "TEAM_PULSE_INTERVAL" draft-kept
-  keys Escape
-  sleep 0.9
+  leave_editor TEAM_PULSE_INTERVAL || bad "非法值用例的 esc 发了但编辑器还在"
+  wait_no_editor || bad "非法值用例的编辑器没有关干净"
   # Danger: TEAM_MIN_FREE_SWAP_MB=0 needs one more Enter.
   filter_to TEAM_MIN_FREE_SWAP_MB
   sleep 0.5
   keys Enter
-  wait_picker TEAM_MIN_FREE_SWAP_MB || bad "danger 用例的选择器没有打开"
+  wait_picker TEAM_MIN_FREE_SWAP_MB '· 当前' || bad "danger 用例的选择器没有打开"
   pick_option '自由输入' || bad "danger 用例的选择器里没有自由输入项"
   wait_editor TEAM_MIN_FREE_SWAP_MB || bad "danger 用例的编辑器没有打开"
   keys BSpace BSpace BSpace BSpace
@@ -862,9 +961,7 @@ PY
   sleep 0.4
   local b2; b2="$(sha "$(cfg)")"
   keys Enter
-  sleep 2
-  cap_to danger
-  assert_has "$tmp/$current/danger.txt" "危险：" "危险值先要一个额外确认"
+  if wait_cap danger "危险："; then ok "危险值先要一个额外确认"; else bad "危险值的确认提示没出现"; fi
   assert_eq "危险确认前契约不变" "$(sha "$(cfg)")" "$b2"
   keys Enter
   if wait_cap danger-written "已写入 TEAM_MIN_FREE_SWAP_MB = 0"; then
@@ -878,7 +975,7 @@ PY
   filter_to TEAM_MONITOR_REFRESH
   sleep 0.5
   keys Enter
-  wait_picker TEAM_MONITOR_REFRESH || bad "restart 用例的选择器没有打开"
+  wait_picker TEAM_MONITOR_REFRESH '· 当前' || bad "restart 用例的选择器没有打开"
   pick_option '自由输入' || bad "restart 用例的选择器里没有自由输入项"
   wait_editor TEAM_MONITOR_REFRESH || bad "restart 用例的编辑器没有打开"
   keys BSpace
@@ -886,7 +983,7 @@ PY
   type_text "7"
   sleep 0.4
   keys Enter
-  sleep 1.5
+  if wait_cap restart-confirm "→ 7"; then ok "restart 值先给确认行"; else bad "restart 的确认行没出现"; fi
   keys Enter
   if wait_cap restart "已写入 TEAM_MONITOR_REFRESH = 7"; then
     ok "restart 值已写入"
@@ -913,7 +1010,7 @@ PY
   filter_to TEAM_PULSE_NUDGE_GAP
   sleep 0.5
   keys Enter
-  wait_picker TEAM_PULSE_NUDGE_GAP || bad "冲突用例的选择器没有打开"
+  wait_picker TEAM_PULSE_NUDGE_GAP '· 当前' || bad "冲突用例的选择器没有打开"
   pick_option '自由输入' || bad "冲突用例的选择器里没有自由输入项"
   wait_editor TEAM_PULSE_NUDGE_GAP || bad "冲突用例的编辑器没有打开"
   keys BSpace BSpace BSpace
@@ -926,16 +1023,15 @@ PY
   keys Enter
   sleep 2
   keys Enter
-  sleep 2.5
-  cap_to conflict
-  assert_has "$tmp/$current/conflict.txt" "指纹不符" "回执点名指纹冲突"
+  # M59: conditional — the conflict receipt must land on a settled frame (was: fixed 2.5s).
+  if wait_cap conflict "指纹不符"; then ok "回执点名指纹冲突"; else bad "冲突的回执没出现"; fi
   assert_eq "对方的字节被保住" "$(sha "$(cfg)")" "$other"
   assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_PULSE_NUDGE_GAP' "审计增了一行 conflict"
   # The view reloaded and shows the other writer's value (1200 was never written). M49：行上是标签，
-  # 原始键在 CLI 提示行里（重读后仍与命令对齐）。
-  sleep 1
-  cap_to reloaded
-  assert_match "$tmp/$current/reloaded.txt" "重复提醒间隔 +900" "视图重读后显示对方的 900"
+  # 原始键在 CLI 提示行里（重读后仍与命令对齐）。M59: wait_cap 的字面针用「值 · 立即生效」，
+  # 行标签与值之间的留白宽度交给后面的 assert_match（ERE）去验。
+  if wait_cap reloaded "900 · 立即生效"; then ok "视图重读后显示对方的 900"; else bad "视图重读后没有显示对方的 900"; fi
+  assert_match "$tmp/$current/reloaded.txt" '重复提醒间隔 +900' "视图重读后显示对方的 900（标签 + 值）"
   assert_not "$tmp/$current/reloaded.txt" "重复提醒间隔 +1200" "视图没有显示未写入的 1200"
   assert_has "$tmp/$current/reloaded.txt" "team config set TEAM_PULSE_NUDGE_GAP" "视图仍点名原始键（照敲命令用）"
 }
@@ -971,10 +1067,16 @@ PY
   ( cd "$ROOT" && bash "$skill/scripts/team" roster ) > "$tmp/$current/roster.txt" 2>/dev/null
   assert_match "$tmp/$current/roster.txt" 'xai/grok-4\.6·历史记录' "team roster 的标签与 models 块同口径"
   # Focus the dev seat row (its line carries the record's model) and open the picker.
-  focus_row 'dev +xai/grok-4.6' || bad "没能把焦点移到 dev 席位行"
-  keys Enter
-  sleep 1.2
-  cap_to picker
+  # M59: Enter only follows a successful walk (focus_row tolerates the row set being replaced).
+  sleep 0.3
+  if focus_row 'dev +xai/grok-4.6'; then
+    keys Enter
+  else
+    bad "没能把焦点移到 dev 席位行"
+  fi
+  # M59: conditional — wait for the seat picker on a settled frame (title + a known entry).
+  pty_wait_frame "$tmp/$current/picker.txt" "seat picker dev" "选择 dev 的模型" "kimi-coding/k3-256k" \
+    || bad "seat picker 没有打开（标题或已知模型不在稳定帧上）"
   assert_match "$tmp/$current/picker.txt" '选择 dev 的模型' "picker 打开并点名席位"
   assert_has "$tmp/$current/picker.txt" "kimi-coding/k3-256k" "picker 列出命令报告的已知模型"
   assert_has "$tmp/$current/picker.txt" "-（移除覆盖，回退默认）" "picker 有移除项"
@@ -985,9 +1087,7 @@ PY
   sleep 0.3
   local line_before; line_before="$(grep '^TEAM_AGENT_MODELS=' "$(cfg)")"
   keys Enter
-  sleep 2
-  cap_to seat-confirm
-  assert_has "$tmp/$current/seat-confirm.txt" "确认席位 dev" "确认行点名席位"
+  if wait_cap seat-confirm "确认席位 dev"; then ok "确认行点名席位"; else bad "确认行没有出现"; fi
   assert_has "$tmp/$current/seat-confirm.txt" "下次 dispatch/resume 生效" "确认行说明下次 spawn 生效"
   keys Enter
   if wait_cap seat-written "✓ 已写入席位 dev = "; then
@@ -1003,10 +1103,15 @@ PY
   assert_eq "席位记录 state/dev.env 未被碰" "$(cat "$state/dev.env")" "model=xai/grok-4.6"
   # Removal: the picker's `-` row falls back to TEAM_DEFAULT_MODEL.
   filter_to dev
-  sleep 0.5
-  focus_row 'dev +xai/grok-4.6' || bad "移除前没能把焦点移到 dev 席位行"
-  keys Enter
-  sleep 1.3
+  # M55/M59：刚写过的席位让视图异步重读合同（行集会被整批替换、甚至整段空缺等块重建）。
+  # focus_row 自己容忍这个窗口；Enter 只跟在成功的走位后（盲发 Enter 实测打到 dev2 行）。
+  sleep 0.3
+  if focus_row 'dev +xai/grok-4.6'; then
+    keys Enter
+  else
+    bad "移除前没能把焦点移到 dev 席位行"
+  fi
+  pty_wait_frame - "seat picker dev（移除用例）" "选择 dev 的模型" || bad "移除用例的 seat picker 没有打开"
   pick_option '-（移除覆盖' || bad "picker 里没有移除项"
   wait_editor dev || bad "移除用例的 seat 编辑器没有打开"
   keys Enter
@@ -1024,20 +1129,20 @@ PY
   # 一个正在被替换的行集上做过（实测：拿旧帧算出 40 步，新帧一到就冲过 dev 行）。
   wait_cap removed-fresh 'xai/grok-4.6 · 历史记录 · 回退默认' || bad "移除后视图没有重读合同"
   filter_to dev
-  sleep 0.5
-  focus_row 'dev +xai/grok-4.6' || bad "拒绝用例没能把焦点移到 dev 席位行"
-  keys Enter
-  sleep 1.3
+  sleep 0.3
+  if focus_row 'dev +xai/grok-4.6'; then
+    keys Enter
+  else
+    bad "拒绝用例没能把焦点移到 dev 席位行"
+  fi
+  pty_wait_frame - "seat picker dev（拒绝用例）" "选择 dev 的模型" || bad "拒绝用例的 seat picker 没有打开"
   pick_option '自由输入' || bad "picker 里没有自由输入项"
   wait_editor dev || bad "自由输入用例的 seat 编辑器没有打开"
   type_text "deepseek-flash"
   sleep 0.3
   keys Enter
-  sleep 2
-  cap_to shapeless
-  assert_has "$tmp/$current/shapeless.txt" "provider/model" "没有 provider 的模型被命令拒绝"
-  keys Escape
-  sleep 0.7
+  if wait_cap shapeless "provider/model"; then ok "没有 provider 的模型被命令拒绝"; else bad "拒绝回执没有出现"; fi
+  leave_editor dev || bad "拒绝用例的 esc 发了但 seat 编辑器还在"
   assert_eq "被拒后契约 sha 不变" "$(sha "$(cfg)")" "$sha_b"
   # The running seat's window keeps its model; the next dispatch would use the new one.
   local sha_b; sha_b="$(sha "$(cfg)")"
@@ -1094,14 +1199,15 @@ scn_readonly() {
   filter_to TEAM_GATES
   sleep 0.5
   keys Enter
-  sleep 1.2
+  wait_editor TEAM_GATES "没有选项集" || bad "readonly 用例的编辑器没有打开"
   type_text "changed"
   sleep 0.3
-  keys Escape
-  sleep 0.9
-  keys Escape
+  # The three unwind escs are the test action, but each is still state-checked (M59): a drifted
+  # scene gets a named red instead of a blind key closing whatever happens to be on screen.
+  leave_editor TEAM_GATES || bad "readonly：编辑器 esc 后还在"
+  pty_key_when "readonly 退回浮层" '╭─ 项目设置' Escape || bad "readonly：esc 前设置视图不在屏幕上"
   sleep 0.6
-  keys Escape
+  pty_key_when "readonly 关闭浮层" '› 项目设置' Escape || bad "readonly：第二次 esc 前浮层不在屏幕上"
   sleep 0.6
   assert_eq "契约没被控制台碰过" "$(sha "$(cfg)")" "$h_cfg"
   assert_eq "审计没长" "$(audit_lines)" "$a0"
