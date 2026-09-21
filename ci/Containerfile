@@ -8,7 +8,7 @@
 #
 # Pins are kept in step with the machines where the suite is green (and with the committed
 # artifacts the suite checks):
-#   debian:trixie   base (stable); bash 5, perl, python3, git, flock, ps
+#   debian:trixie   base (stable); bash 5, perl, python3, git, flock, ps, time (GNU time = /usr/bin/time)
 #   tmux 3.7b       built from source: `#{bracket_paste_flag}` only exists in tmux >= 3.7, and the
 #                   delivery guard's bracketed-paste probe needs it (see M47 report; trixie ships
 #                   3.5a). Same version as the developer machines.
@@ -27,11 +27,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
       ca-certificates curl unzip xz-utils git locales \
-      perl python3 procps util-linux \
+      perl python3 procps util-linux time \
       build-essential libevent-dev libncurses-dev pkg-config bison \
  && printf 'en_US.UTF-8 UTF-8\n' > /etc/locale.gen \
  && locale-gen \
  && rm -rf /var/lib/apt/lists/*
+
+# --- self-checks the suite relies on (asserted, not assumed) --------------------------------
+# `time` is GNU time (Debian's `time` package), not bash's `time` keyword: `tests/panel-cpu.sh`
+# wraps the console with `/usr/bin/time -o FILE -f FORMAT -- …` to read the tree CPU figure.
+# M51: CI was red because this image lacked it — the fixture exited 3 (setup failure) instead of
+# judging, and smoke §36 reported the two premise cases as failures. A missing tool in the gate
+# image is an image bug; fail the build here rather than in a red gate nobody can act on.
+RUN [ -x /usr/bin/time ] \
+ && /usr/bin/time -f 'gnu-time:%U/%S/%e' -- true 2>&1 | grep -q '^gnu-time:'
 
 # --- tmux 3.7b (source): the bracketed-paste capability format needs >= 3.7 -----------------
 ARG TMUX_VERSION=3.7b

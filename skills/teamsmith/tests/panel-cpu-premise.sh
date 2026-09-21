@@ -13,6 +13,9 @@
 #   d) 真路径（不开 TEAM_SMOKE_FIXTURE）：两个夹具旋钮被忽略且打印，判定不受影响（不是 4）
 #
 # 真机负载本身就超前提时，本脚本**可见地跳过**（exit 4）——那是机器忙，不是夹具坏了。
+# 环境缺少树 CPU 图要的 GNU time（`/usr/bin/time`）时也一样**可见跳过**（exit 4）：`panel-cpu.sh`
+# 自己会因此跳过，下面的四个期望（4 / 2 / 0 / 2）就都无从判起 —— 把环境缺口算成面板红是假红
+# （M51 的 CI 红就是这个形状）。
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +24,14 @@ cpu="$here/panel-cpu.sh"
 window="${TEAM_PANEL_CPU_SECS:-6}"   # 太短的窗口会把启动尾巴算进 CPU 均值（实测 3s → 1.6%，6s → 0.4%）
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/p26premise.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
+# 缺 GNU time → 可见跳过（与 panel-cpu.sh 的 exit 4 同一个语义：没结论，不是通过也不是红）。
+# 解析口径与 panel-cpu.sh 逐字一致（`/usr/bin/time`，否则 PATH 上的 `time`）。
+p26_time_ok=0
+for _p26c in /usr/bin/time "$(command -v time || true)"; do [ -x "$_p26c" ] && { p26_time_ok=1; break; }; done
+if [ "$p26_time_ok" != "1" ]; then
+  printf 'panel-cpu-premise: SKIP（树 CPU 图需要 GNU time = /usr/bin/time，本环境没装 → panel-cpu.sh 会可见跳过，四个用例无从判定）\n'
+  exit 4
+fi
 PASS=0; FAIL=0; FIND=0
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }

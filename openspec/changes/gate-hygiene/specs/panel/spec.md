@@ -19,7 +19,10 @@ sampled pane CPU (`tests/panel-cpu.sh`; overridable with `TEAM_PANEL_CPU_PREMISE
 hold, every assertion that judges one of these numbers MUST instead report a **visible SKIP** that prints the
 measured value(s) and the observed load; a SKIP is neither a pass nor a red, its outcome MUST be distinguishable
 from both (its own exit status, or a counted entry in the run's summary), and the red-line thresholds MUST NOT be
-scaled, relaxed or made configurable.
+scaled, relaxed or made configurable. The same visible SKIP with the missing tool named MUST replace the judgment
+when the environment lacks a tool a measurement needs — the tree CPU figure `tests/panel-cpu.sh` prints alongside
+its samples needs GNU time (`/usr/bin/time`) — and the fixture that drives it MUST follow it into that SKIP
+instead of reporting it as a setup failure.
 
 Both factors are calibrated from measurement, not chosen. The assembly **median** of five samples stays green at
 0.22 ×, 0.40 × and 0.71 × cores (measured medians 1238 / 1573 / 1713 ms), and the false red that motivated this
@@ -82,3 +85,12 @@ three samples printed, and only that median is compared against the unchanged 20
 - **WHEN** the CPU red-line assertion runs
 - **THEN** the first run reports a visible SKIP with the measured percentage and the load, and the second run
   judges the percentage against the unchanged below-1% threshold
+
+#### Scenario: A machine without the measuring tool skips visibly instead of judging red
+
+- **GIVEN** a machine without GNU time (`/usr/bin/time`), which `tests/panel-cpu.sh` needs for the tree CPU
+  figure, and the `panel-cpu-premise` fixture driving it
+- **WHEN** the fixture runs there
+- **THEN** it prints the missing tool as the reason and reports `SKIP` (its own exit status, no conclusion), the
+  driving fixture follows it into the same visible SKIP, and neither reports a red against the panel nor a silent
+  pass

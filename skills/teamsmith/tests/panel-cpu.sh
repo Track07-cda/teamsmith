@@ -26,10 +26,14 @@
 # （每次都是「窗口创建 → 第一帧可见」）；CPU% 是把同一个采样窗口**三等分**后的三个子窗均值（不额外
 # 加长采样时间）。阈值不缩放：中位 ≥ 2000ms 或中位 ≥ 1% 仍是红。
 #
+# 环境姿态（M51）：树 CPU 图用 `/usr/bin/time -o/-f` 读，缺这个工具时**可见跳过**（exit 4，打印原因）——
+# 它是附带读数，不是判定依据（判定只看首帧与窗格 CPU）；把它当搭建失败（exit 3）会在缺工具的环境里
+# 造出假红（CI 的 M51 红就是这个形状）。门禁镜像里有它（ci/Containerfile 的构建期断言）。
+#
 #   Exit: 0 窗格进程 < 1% 单核且首帧在预算内
 #         2 红线破了（首帧 ≥ 2000ms 或窗格进程 ≥ 1%）
 #         3 搭建失败（没有 tmux / node / bundle）
-#         4 **因负载前提不成立而跳过**（既不是通过也不是红；包装器不能把 4 当成 0）
+#         4 **跳过**（既不是通过也不是红；包装器不能把 4 当成 0）：负载前提不成立，或环境缺 GNU time
 #
 # 夹具旋钮（**只在 `TEAM_SMOKE_FIXTURE=1` 时生效**，裸设一律忽略并打印）：
 #   TEAM_PANEL_CPU_LOADAVG=<数>      替掉 /proc/loadavg 的读数
@@ -103,7 +107,10 @@ time_bin=""
 for cand in /usr/bin/time "$(command -v time || true)"; do
   [ -x "$cand" ] && { time_bin="$cand"; break; }
 done
-[ -n "$time_bin" ] || { printf 'panel-cpu: /usr/bin/time is required for the tree figure\n' >&2; exit 3; }
+if [ -z "$time_bin" ]; then
+  printf 'panel-cpu: SKIP — the tree CPU figure needs GNU time (/usr/bin/time) and it is not installed here; the 2000ms / 1%% red line was not judged (exit 4; the gate image pins the tool)\n' >&2
+  exit 4
+fi
 
 panel="$tree/skills/teamsmith/scripts/panel/panel.js"
 [ -f "$panel" ] || { printf 'panel-cpu: no bundle at %s\n' "$panel" >&2; exit 3; }

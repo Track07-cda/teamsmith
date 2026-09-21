@@ -277,4 +277,7 @@ byte-for-byte unchanged**):
 - What to remember, what belongs on disk instead, and what happens when the memory dependency is missing:
   [references/memory.md](references/memory.md).
 - Optional helpers: `timeout` (hard timeout for gates; degrades with a warning), `lsof` (needed only where
-  `/proc` is unavailable).
+  `/proc` is unavailable), `/usr/bin/time` (GNU time, not bash's `time` keyword: `tests/panel-cpu.sh` wraps the
+  console with it to read the tree CPU figure — the gate image pins it, and where it is missing that fixture
+  prints why and reports a visible SKIP (its own exit status) instead of judging, as does the `panel-cpu-premise`
+  segment that drives it).

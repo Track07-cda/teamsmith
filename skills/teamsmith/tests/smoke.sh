@@ -11157,22 +11157,49 @@ assert_eq "35d 边界：loadavg 阈值 +0.1（${P35_OVER}）算不成立" "$P35_
 # —— SKIP 的**可见性**（真跑一次判定本体，把输出收进日志）：
 #    这一段在**子 shell** 里跑 —— SKIP 会加到 P27_TIMING_SKIP，而那是「这一轮真跑的门禁跳过了几条
 #    计时断言」的计数（结果块会打印它，复验记录只看 25 行尾）。夹具造的 SKIP 混进去就是假信号
-#    （实测：真实门禁的结果块里出现过 "loadavg 24.10" 这种夹具里的数）。子 shell 自己的计数用一行
-#    标记带出来验证。
+#    （实测：真实门禁的结果块里出现过 "loadavg 24.10" 这种夹具里的数）。
+#    M51：子 shell 里的计数必须**只数本段自己**那一次跳过 —— 继承来的 P27_TIMING_SKIP（真 27-d 在同一
+#    轮里跳过几次，取决于跑机核数 × 负载）以前也被数进去：同一份代码在 32 核机器上绿（真 27-d 不跳），
+#    在 4 核 CI runner 上红（loadavg 6.39 > 0.75 × 4 → 真 27-d 跳过 → 1 继承 + 1 自己的 = 2，期望 [1]）。
+#    所以进子 shell 先归零：断言与跑机的核数/负载无关（`p35_skip_probe` 也用于下面的反向夹具）。
 P35_FAIL_BEFORE="$FAIL"
 P35_SKIP_BEFORE="$P27_TIMING_SKIP"
-( export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$P35_OVER" TEAM_SMOKE_CORES="$P35_CORES"
-  p27_assembly_judge "$P35_SLOW" "$P35_SLOW, $P35_SLOW, $P35_SLOW" 5
-  printf 'SUBSHELL_TIMING_SKIP=%s\n' "$P27_TIMING_SKIP"
-) >"$P34D/g-over.log" 2>&1
+p35_skip_probe() { # <判定次数> → stdout 一行 SUBSHELL_TIMING_SKIP=<只数本段自己的跳过数>
+  local n="$1" i
+  ( export TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOADAVG="$P35_OVER" TEAM_SMOKE_CORES="$P35_CORES"
+    P27_TIMING_SKIP=0     # ← 只数本段自己的跳过；继承来的不计（M51 的 CI 假红就是这么来的）
+    for ((i = 0; i < n; i++)); do
+      p27_assembly_judge "$P35_SLOW" "$P35_SLOW, $P35_SLOW, $P35_SLOW" 5
+    done
+    printf 'SUBSHELL_TIMING_SKIP=%s\n' "$P27_TIMING_SKIP"
+  )
+}
+# 断言本体抽成一个比较函数：真断言与反向夹具用**同一个比较**，反向夹具才能证明它不是恒真。
+p35_own_skip_ok() { [ "${1:-}" = "1" ]; }   # <子 shell 里只数自己的计数>
+p35_skip_probe 1 >"$P34D/g-over.log" 2>&1
 P35_SUB_SKIP="$(sed -n 's/^SUBSHELL_TIMING_SKIP=//p' "$P34D/g-over.log" | tail -1)"
 assert_match "$P34D/g-over.log" 'SKIP（负载前提不成立）' "35e 打印了可见 SKIP"
 assert_match "$P34D/g-over.log" "loadavg ${P35_OVER}" "35e SKIP 行带了实测 load"
 assert_match "$P34D/g-over.log" "${P35_SLOW}ms" "35e SKIP 行带了实测中位（${P35_SLOW}ms）"
 assert_eq "35e SKIP 不计成 bad（✗ 计数没动）" "$FAIL" "$P35_FAIL_BEFORE"
-assert_eq "35e 子 shell 里的 SKIP 计数 = 1" "${P35_SUB_SKIP:-0}" "1"
+if p35_own_skip_ok "${P35_SUB_SKIP:-0}"; then
+  ok "35e 子 shell 里的 SKIP 计数 = 1（只数本段自己那一次；与跑机核数/负载无关）"
+else
+  bad "35e 子 shell 里的 SKIP 计数 ≠ 1（期望 [1]，实际 [${P35_SUB_SKIP:-0}]）—— 是不是把继承来的跳过也数进去了？"
+fi
 assert_eq "35e 夹具的 SKIP **没有**泄进本轮门禁的计时跳过计数" "$P27_TIMING_SKIP" "$P35_SKIP_BEFORE"
 assert_eq "35e SKIP_N（FAST 分段审计用）没有被计时 SKIP 污染" "$([ "$P27_TIMING_SKIP" -ne "$SKIP_N" ] || [ "$P27_TIMING_SKIP" -eq 0 ] && echo yes || echo no)" "yes"
+# —— 反向夹具（M51）：把子 shell 里的判定跑**两次** → 计数必须是 2，且**同一个比较**必须判红。
+#    少了这条，把断言改成恒真（或数错计数器）也看不出来。两个方向都不依赖跑机核数/负载：
+#    load/cores 是夹具注入的，计数从 0 起。
+p35_skip_probe 2 >"$P34D/g-over2.log" 2>&1
+P35_SUB_SKIP2="$(sed -n 's/^SUBSHELL_TIMING_SKIP=//p' "$P34D/g-over2.log" | tail -1)"
+assert_eq "35e 反向夹具：同一形状跑两次判定 → 子 shell 计数 = 2（计数器本身没坏）" "${P35_SUB_SKIP2:-0}" "2"
+if p35_own_skip_ok "${P35_SUB_SKIP2:-0}"; then
+  bad "35e 反向夹具：真的多跳一次（计数 ${P35_SUB_SKIP2:-无}）时同一个断言仍判绿 —— 断言被改成了恒真"
+else
+  ok "35e 反向夹具：真的多跳一次（计数 ${P35_SUB_SKIP2:-无}）时同一个断言判红（不是恒真）"
+fi
 
 # —— 真路径：不打开夹具开关时，两个注入键都被忽略且**不改变判定**（PM 审查要点②）
 P35_REAL_LOAD="$(p27_load_reading)"
@@ -11206,7 +11233,9 @@ if [ -f "$SKILL_DIR/tests/panel-cpu-premise.sh" ]; then
       ok "36 panel-cpu-premise 全绿（${P36_LINE:-无结果行}）"
       grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/^/      /' || true
     elif [ "$P36_RC" = "4" ]; then
-      ok "36 panel-cpu-premise 因负载前提可见 SKIP（exit 4；$(grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/\x1b\[[0-9;]*m//g')"
+      # exit 4 = 没结论：负载前提不成立，**或**环境缺树 CPU 图要的 GNU time（M51）—— 原因由夹具自己
+      # 那一行 SKIP 说明，门禁不替它猜（以前这里写死「因负载前提」，缺工具时会误报原因）。
+      ok "36 panel-cpu-premise 可见 SKIP（exit 4 = 没结论；$(grep -a 'SKIP' "$P36_OUT" | head -1 | sed 's/\x1b\[[0-9;]*m//g')）"
     else
       bad "36 panel-cpu-premise 有失败项（rc=$P36_RC；${P36_LINE:-无结果行}）"
       sed 's/\x1b\[[0-9;]*m//g' "$P36_OUT" | grep -aE '✗' | head -6 | sed 's/^/      /'
