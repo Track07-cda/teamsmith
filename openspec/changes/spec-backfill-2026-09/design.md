@@ -29,8 +29,11 @@ Constraints that shape the artifacts:
 
 **Goals:**
 
-- Give each of the six rules one falsifiable home in `openspec/specs/`, anchored to named evidence.
-- Keep the set small: 10 requirements, 32 new scenarios (within the brief's 6–10 / 25–40).
+- Give each of the six audited rules one falsifiable home, anchored to named evidence: rules 2–5 here (D1
+  below), rule 6 in the archived `watch-degradation`, and rule 1 in `tmux-gate-grant-redesign` (moved out by
+  M70/M71).
+- Keep the set small: 7 requirements and 20 new scenarios — down from 10/32 by the 3 requirements and 12 scenarios
+  the M70/M71 boundary removal took out; the brief's 6–10 requirement bound still holds.
 - Keep item 6 out of this change: `watch-degradation` already owns it.
 - Correct the one base statement that is now wrong (panel focus by bare entry id) via MODIFIED.
 
@@ -38,30 +41,33 @@ Constraints that shape the artifacts:
 
 - No code, test, extension or reference change; no behavior change of any kind.
 - No new capability (hard requirement 4) and no `## REMOVED` requirement.
-- No restatement of the watch-degradation requirements (the brief's item 6 note).
+- No restatement of the watch-degradation requirements (the brief's item 6 note) or of the tmux runtime gate
+  (`tmux-gate-grant-redesign`, M70/M71).
 - Not deciding M48's open product question (`board set`/`board assign` by row instead of by id); the delta states
   today's id-addressing contract.
 
 ## Decisions
 
-### D1 — Homes: three existing capabilities plus two
+### D1 — Homes: four delta files, no new capability
 
 | Rule (brief) | Delta file | Requirements |
 |---|---|---|
-| 1 tmux isolation gate | `boundary` | 2 added (gate, log+injection) + 1 added (container) |
 | 2 conflict-marker guard | `verification` | 1 added |
 | 3 update-banner tolerance | `delivery-guard` | 1 added |
 | 4 duplicate ids | `board-and-status` (2 added) + `panel` (2 modified) | see D3 |
 | 5 read budget | `board-and-status` | 1 added |
 | 6 watch degradation | **none** | covered by `watch-degradation` — see D2 |
 
-Boundary is where the tmux target/refusal rules already live (`boundary#Empty or relative tmux targets are
-refused`); the gate is the same authority question one layer down, and the container rule constrains how the
-fixtures exercise it. Verification already owns the gate contract (a review runs `$TEAM_GATES`); a marker check
-that turns the gate red belongs there. The read budget is about `board row`/`digest`/`status` and their cache, so
-`board-and-status` is its home. **Alternative considered and rejected:** a new `read-path` capability for item 5 —
-it would create a capability for a single requirement, contradict hard requirement 4, and split one contract
-(the ledger read) across two specs while `perf-suite-split` is already touching the gate side of it.
+Rule 1 (the tmux isolation gate) is not written here: its home is `tmux-gate-grant-redesign`, whose boundary
+delta carries three requirements and fourteen scenarios in the post-M67 target-decided model (the refusal itself,
+the log + no-grant contract, and the fixture discipline that also covers the container rule) — the same "do not
+write a second copy" treatment as item 6, per the M70 ruling (revision M71). This change's former rows 1a/1b/1c
+are removed from the evidence map; their evidence stays valid for that change. Verification already owns the gate
+contract (a review runs `$TEAM_GATES`); a marker check that turns the gate red belongs there. The read budget is
+about `board row`/`digest`/`status` and their cache, so `board-and-status` is its home. **Alternative considered
+and rejected:** a new `read-path` capability for item 5 — it would create a capability for a single requirement,
+contradict hard requirement 4, and split one contract (the ledger read) across two specs while `perf-suite-split`
+is already touching the gate side of it.
 
 ### D2 — Item 6 is already covered: no `notify-and-inbox` delta (brief's `deltas:` line differs)
 
@@ -81,7 +87,7 @@ covered, do not write it again". It is covered, in the pending change:
 
 Writing ADDED requirements for any of these would collide with `watch-degradation` at archive time (two changes
 adding the same requirement); writing a pointer requirement would promise nothing new. So **this change writes
-five delta files, not six**, and the report records the finding with the check above as its evidence.
+four delta files, not six**, and the report records the finding with the check above as its evidence.
 
 Main has since archived that change (`829dc19`, `docs(openspec): archive watch-degradation and
 inbox-spool-resilience`), so on main the same four requirements are land specs: `openspec/specs/notify-and-inbox`
@@ -105,10 +111,9 @@ panel behavior, not a ledger one.
 
 ### D4 — Requirements pin only what is already a closed token
 
-The scenarios use the values the tool already defines and the gate already asserts: exit 64 and
-`TEAM_ALLOW_DESTRUCTIVE_TMUX=1`; `act=refused|override|pass`; log bound 2000/1000; `EMPTY` / `HOLDS_ONLY=yes` /
+The scenarios use the values the tool already defines and the suite already asserts: `EMPTY` / `HOLDS_ONLY=yes` /
 `RETRACT=ok` / `banner=present|absent`; `BOARD 重复 ID` and `×N`; `--allow-dup`; `board assign`;
-`TEAM_SCAN_CACHE=0`; ≤1 and ≤50 git calls. No message is quoted verbatim beyond the tokens the gate greps, so the
+`TEAM_SCAN_CACHE=0`; ≤1 and ≤50 git calls. No message is quoted verbatim beyond the tokens the suite greps, so the
 spec does not freeze implementation prose.
 
 ### D5 — The read budget is a call count, not a wall-clock threshold
@@ -127,9 +132,6 @@ requirement untouched and keeps the "must not disable pi's update check" promise
 
 | # | Requirement | Evidence (file:line, protected branch) | Independent review method |
 |---|---|---|---|
-| 1a | `boundary#Destructive tmux calls that resolve to the shared default socket are refused` | `skills/teamsmith/scripts/shim/tmux` L10–12, L15–27, L129–162, L180–199; `skills/teamsmith/tests/smoke.sh` §31c L10156–10175 (refusals), L10179–10211 (fake isolation vs real private dir), L10269–10274 (override), L10284–10296 (read-only), L10345–10385 (real private server, default server alive) | `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §31c green. Mutation: apply §31c ①d (strip `_real_dir` from the shim copy) → the fake-isolation probe is no longer refused; restore → green |
-| 1b | `boundary#Every gate decision is logged and the gate is injected into the windows` | `shim/tmux` L165–176 (one line:bounded log); `smoke.sh` L10302–10310 (fields, truncation), L10317–10329 (injection render), L10386–10464 (real window env); `tests/tmux-lint.pl` L26–30, L343, L497, L503; `smoke.sh` L10038–10056 (M41 lint flip: literal absolute path red, variable clean) | FAST smoke → §31/§31c green; `perl skills/teamsmith/tests/tmux-lint.pl` on a fixture with `/usr/bin/tmux -L x kill-server` → red; with `"$REAL_TMUX" -L x kill-server` → clean |
-| 1c | `boundary#Destructive tmux fixtures run inside the container` | `tests/container-tmux.sh` L1–40 (contract incl. exit 77), L177, L218, L239–243 (host socket invisible, fingerprint unchanged); `smoke.sh` §31b L10058–10090 | `bash skills/teamsmith/tests/container-tmux.sh --selftest` → exit 0, host fingerprint byte-identical; without podman/host bridge → exit 77 with the reason |
 | 2 | `verification#The gate refuses tracked files that still hold conflict markers` | `smoke.sh` §0d L561–664 (guard + positive/negative fixtures + index-side case + exclusions) | FAST smoke → §0d green; `bash skills/teamsmith/tests/flip-m44.sh` → all nine expected probes hold (incident red, resolved green, three mutations red) |
 | 3 | `delivery-guard#The input-box verdict tolerates pi's update banner` | `tests/frames/pi-0.85.1-update-banner.txt`; `scripts/lib/outbox.sh` L75–76, L126–151, L184–215, L273; `smoke.sh` §12b-h0b L5619–5715 (real frame, synthetic frames, two adversarial frames, control), §12b-h ⑳ L6088–6110 (real pane: empty box delivers once, drafted box queues with zero submits); `tests/pm-box-real.sh` L16–19, L89–105 (banner reported, update check on), L190–196 (`HOLDS_ONLY`/`RETRACT`) | FAST smoke → §12b-h0b green; non-FAST `TEAM_SMOKE_REAL_PI=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §12b-h ⑳ and the real-pi fixture; `M45_REQUIRE_BANNER=1 bash skills/teamsmith/tests/pm-box-real.sh --idle-secs 20` for a frame that really holds the banner; `bash skills/teamsmith/tests/flip-m45.sh` for red→green→mutation |
 | 4a | `board-and-status#A duplicate board id is refused by default and visible wherever the board is read` | `smoke.sh` §4c L1030–1110 (refusal/no-write, `--allow-dup` + audit, ls/digest/doctor visibility, negative controls, placeholder exclusion); `scripts/lib/common.sh` L2927–2960, L3701–3760; `scripts/lib/cmd-docs.sh` L47–66; `scripts/lib/cmd-project.sh` L325–331 | FAST smoke → §4c green; `bash skills/teamsmith/tests/flip-m48.sh add` → the copy without the check turns §4c red, the real tree green |
@@ -151,10 +153,9 @@ Requirement-to-tasks coverage and scenario-to-fixture mapping live in `tasks.md`
   requirement; the trial archive catches any mismatch, and a task item re-reads the base text at the branch tip.
 - **Over-specification** → a scenario could freeze an implementation detail (a message string, a file layout).
   Mitigation: D4 — only closed tokens and exit codes are pinned; prose is allowed to change.
-- **Environment-dependent evidence** (banner; container runtime) → a green could come from an empty run.
-  Mitigation: the requirement makes the fixture report `present|absent` and fail when asked to require a banner
-  that is absent; the container section is a visible SKIP, never a silent pass.
-- **Scope creep into the archive** → the five deltas merge into five existing specs. Mitigation: ADDED only, no
+- **Environment-dependent evidence** (banner) → a green could come from an empty run. Mitigation: the requirement
+  makes the fixture report `present|absent` and fail when asked to require a banner that is absent.
+- **Scope creep into the archive** → the four deltas merge into four existing specs. Mitigation: ADDED only, no
   REMOVED; archive only after independent verification and the user's confirmation.
 
 ## Migration Plan
@@ -169,7 +170,8 @@ Requirement-to-tasks coverage and scenario-to-fixture mapping live in `tasks.md`
    user's confirmation. No collision with the other changes: `watch-degradation` is already archived (its ADDED
    requirements are land specs, none of which M61 adds), and M61's ADDED set shares no requirement with
    `perf-suite-split` (which touches `verification`'s gate split and `panel`'s frame requirement, not the ones
-   here).
+  here). Rule 1 now has exactly one pending statement — `tmux-gate-grant-redesign`'s — because this change no
+  longer carries a boundary delta (M70/M71).
 
 ## Open Questions
 

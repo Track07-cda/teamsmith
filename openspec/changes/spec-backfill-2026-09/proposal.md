@@ -3,17 +3,14 @@
 ## Why
 
 The user approved **spec policy B** (2026-09-20): a cross-task rule — silent failure, destructive action,
-authority, identity, gate, performance contract — must have a requirement with a scenario. Six such rules
-hardened last week and live only in tests and `references/`: the spec library has no home for them, so the tests
-became the only source of truth. This change backfills contracts for behavior that has **already landed**; it
-changes no code.
+authority, identity, gate, performance contract — must have a requirement with a scenario. Five such rules
+hardened last week and live only in tests and `references/` (the sixth, the tmux runtime gate, is owned by
+`tmux-gate-grant-redesign` — the same "already covered" treatment as item 6 below): the spec library has no home
+for them, so the tests became the only source of truth. This change backfills contracts for behavior that has
+**already landed**; it changes no code.
 
 ## What Changes
 
-- **ADDED — `boundary`**: the tmux runtime gate — fallback-faithful socket resolution, destructive `kill-*` calls
-  refused on the shared default socket (exit 64, nothing executed), private sockets and read-only calls pass,
-  `TEAM_ALLOW_DESTRUCTIVE_TMUX=1` is the audited override, every call is logged (bounded) and the gate is injected
-  into PM/worker windows; destructive tmux fixtures run in the container.
 - **ADDED — `verification`**: the gate fails on conflict markers left in **tracked** files (working tree and
   index), naming `file:line`; untracked, `.worktrees/**` and binary files are out of scope.
 - **ADDED — `delivery-guard`**: the input-box verdict tolerates pi's update banner — idle stays `EMPTY`, a real
@@ -26,6 +23,11 @@ off.
 - **MODIFIED — `panel`** (two requirements): both pages track focus by **row identity** (id plus occurrence), not
   the bare entry id — the base sentence describes the pre-M48 behavior in which duplicate rows both highlighted
   and the cursor froze.
+- **`boundary` is covered — owned by `tmux-gate-grant-redesign`** (the same treatment as item 6 below): the tmux
+  runtime gate — fallback-faithful socket resolution, the destructive `kill-*` refusals, the bounded call log and
+  the window injection contract, and the container discipline for destructive fixtures — is written by that
+  change's boundary delta (three requirements / fourteen scenarios, the post-M67 target-decided model); this
+  change writes no boundary requirement.
 - **Item 6 is covered**: watch degradation is owned by `watch-degradation` — its deltas on this branch's base,
   and after main's archive commit `829dc19` the `notify-and-inbox`/`watchdog` specs — so this change adds nothing
   and the archives cannot collide.
@@ -35,7 +37,6 @@ off.
 
 ### Modified Capabilities
 
-- `boundary`: the tmux runtime gate and the container discipline for destructive fixtures.
 - `verification`: the conflict-marker guard.
 - `delivery-guard`: update-banner tolerance.
 - `board-and-status`: duplicate-id semantics and the read budget.
@@ -59,10 +60,11 @@ git status --porcelain
 ## Boundaries
 
 Never edit `skills/teamsmith/{scripts,tests,extension,references}/**`; a behavior that
-disagrees with a delta is a `BLOCKED:` report, not a fix. Do not restate watch-degradation. A
-requirement may not promise more than the cited evidence already asserts.
+disagrees with a delta is a `BLOCKED:` report, not a fix. Do not restate watch-degradation, and do not restate the
+tmux runtime gate (`boundary` is owned by `tmux-gate-grant-redesign`). A requirement may not promise more than
+the cited evidence already asserts.
 
 ## Evidence the report must contain
 
-The three acceptance tails; the per-rule "requirement → evidence file:line → review method" table; and the
-item-6 coverage check.
+The three acceptance tails; the per-rule "requirement → evidence file:line → review method" table for the seven
+remaining rows; and the coverage checks for `boundary` (owned by `tmux-gate-grant-redesign`) and item 6.
