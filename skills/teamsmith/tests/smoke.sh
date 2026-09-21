@@ -11563,6 +11563,41 @@ else
   bad "M50-③b __panel-data cache 开/关输出不一致"; head -6 "$TMP/m50-pd.diff" | cut -c1-200 | sed 's/^/      /'
 fi
 
+section "38 · 设置选项（M55：choices 读 / 一致性走查 / 选择器夹具）"
+# 38-a headless：tests/panel-choices.sh —— choices 逐 kind（R1）/ 模型词表是本项目数据（R2）/
+# **读给出的值 = 校验器接受的值** 的走查闸门 + F-A/F-D 翻转。不依赖 tmux，FAST 模式照跑（~2.5 分钟，
+# 其中走查是 86 次 `team config set … --dry-run`：它就是这条闸门的全部价值，不能省）。
+if [ -f "$SKILL_DIR/tests/panel-choices.sh" ]; then
+  if bash "$SKILL_DIR/tests/panel-choices.sh" >"$TMP/panel-choices.log" 2>&1; then
+    ok "38-a panel-choices.sh 全绿（$(grep -a '== 结果 ==' "$TMP/panel-choices.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；含一致性走查与 F-A/F-D 翻转）"
+    tail -2 "$TMP/panel-choices.log" | sed 's/^/      /'
+  else
+    bad "38-a panel-choices.sh 有失败"
+    grep -a '✗' "$TMP/panel-choices.log" | head -10 | sed 's/^/      /'
+    tail -3 "$TMP/panel-choices.log" | sed 's/^/      /'
+  fi
+else
+  bad "38-a 缺 tests/panel-choices.sh"
+fi
+# 38-b pty 夹具：panel-p21.sh choices（真 bundle + 私有 tmux server + argv 记录的 wrapper）——FAST 显式跳过。
+if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
+  if [ "$FAST" = "1" ]; then
+    fast_skip "38-b·panel-p21-choices" "panel-p21.sh choices 要真 tmux 场地 + 真 bundle（慢段 ~2.5 分钟）"
+  else
+    live_mark
+    if bash "$SKILL_DIR/tests/panel-p21.sh" choices >"$TMP/panel-p21-choices.log" 2>&1; then
+      ok "38-b panel-p21.sh choices 全绿（$(grep -a '== 结果 ==' "$TMP/panel-p21-choices.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')）"
+      tail -1 "$TMP/panel-p21-choices.log" | sed 's/^/      /'
+    else
+      bad "38-b panel-p21.sh choices 有失败"
+      grep -a '✗' "$TMP/panel-p21-choices.log" | head -8 | sed 's/^/      /'
+      tail -2 "$TMP/panel-p21-choices.log" | sed 's/^/      /'
+    fi
+  fi
+else
+  bad "38-b 缺 tests/panel-p21.sh"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"

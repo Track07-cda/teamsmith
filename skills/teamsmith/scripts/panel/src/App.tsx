@@ -18,7 +18,7 @@ import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsBlock, ViewState } from './types.js'
+import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsBlock, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, ViewState } from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -26,6 +26,24 @@ const TRAY_TL = '╭'
 const TRAY_TR = '╮'
 const TRAY_H = '─'
 const TRAY_V = '│'
+
+/**
+ * The kinds whose editor is the choice picker (M55). `enum` joins only when the command reports
+ * values (an enum with no constraints has no choice set: R3's visible fallback names the reason),
+ * and a key the command reports without a `choices` object falls back to the compose editor — the
+ * bundle works against an older command instead of inventing options.
+ */
+const CHOICE_KINDS = new Set(['bool', 'enum', 'int', 'seconds', 'mb', 'bytes', 'pct', 'path', 'model', 'pairlist', 'winlist', 'pattern'])
+const NUMERIC_KINDS = new Set(['int', 'seconds', 'mb', 'bytes', 'pct'])
+
+function hasChoiceEditor(key: SettingsKey): boolean {
+  const ch = key.choices
+  if (!ch || typeof ch !== 'object' || !Array.isArray(ch.values)) return false
+  const kind = String(key.kind ?? '')
+  if (!CHOICE_KINDS.has(kind)) return false
+  if (kind === 'enum') return ch.values.length > 0
+  return true
+}
 
 /** Open-bottom compose tray (top edge + left wall). The last text row stays last so the IME cursor stays on the draft. */
 function composeTrayTop(title: string, width: number): string {
@@ -98,6 +116,12 @@ export interface PanelApi {
     model: string,
     opts: { dryRun?: boolean; fingerprint?: string | null },
   ): Promise<{ code: number; line: string }>
+  /**
+   * The path kind's existence mark (M55): the value against the rule the command's own `note`
+   * carries (`file`/`dir`/`exec`/`any`). A pure read — the command has no existence check, so the
+   * mark is an advisory the confirmation repeats, never a refusal.
+   */
+  pathMark(value: string, rule: string): 'exists' | 'missing' | 'not-exec'
   /**
    * Tell the cache whether the project-settings view is open (P22/B2). While it is, the `settings`
    * block joins the wanted set; closing it drops the block so a parked console spawns no reader.
@@ -248,6 +272,8 @@ export function App({
   const [settingConfirm, setSettingConfirm] = useState<{ key: string; next: string; danger: boolean } | null>(null)
   /** The seat picker (P22/B4): the seat, its row and the option list with the selection. */
   const [seatPicker, setSeatPicker] = useState<{ agent: string; row: number; models: string[]; index: number } | null>(null)
+  /** The choice picker (M55): the key's schema-derived entries and the selection. */
+  const [choicePicker, setChoicePicker] = useState<SettingsChoicePicker | null>(null)
   const { exit } = useApp()
   const scrollRef = useRef(0)
   const dataRef = useRef(frame)
@@ -282,9 +308,11 @@ export function App({
   const settingsFocusRef = useRef(0)
   const settingsFilterRef = useRef('')
   /** The row the open `setting` editor writes (the fingerprint was pinned when it opened). */
-  const settingRowRef = useRef<{ row: number; key: string; value: string; cls: string; fingerprint: string; seat?: string } | null>(null)
+  const settingRowRef = useRef<{ row: number; key: string; value: string; cls: string; fingerprint: string; seat?: string; kind?: string; choices?: SettingsKey['choices'] } | null>(null)
   const seatPickerRef = useRef<{ agent: string; row: number; models: string[]; index: number } | null>(null)
   seatPickerRef.current = seatPicker
+  const choicePickerRef = useRef<SettingsChoicePicker | null>(null)
+  choicePickerRef.current = choicePicker
   const settingConfirmRef = useRef<{ key: string; next: string; danger: boolean } | null>(null)
   focusRef.current = focus
   laneOffsetRef.current = laneOffset
@@ -421,6 +449,26 @@ export function App({
     setSettingConfirm(null)
   }, [])
 
+  /**
+   * The path kind's existence mark for the value about to be written (M55): an advisory the
+   * confirmation repeats. The command has no existence check, so the console never turns this into
+   * a refusal — it does not invent a rule the writer would not make.
+   */
+  const pathMarkNote = useCallback(
+    (target: { kind?: string; choices?: SettingsKey['choices'] }, value: string): string => {
+      if (String(target.kind ?? '') !== 'path') return ''
+      const mark = api.pathMark(value, String(target.choices?.note ?? ''))
+      const word =
+        mark === 'exists'
+          ? stringsRef.current.settingsPathExists
+          : mark === 'not-exec'
+            ? stringsRef.current.settingsPathNotExec
+            : stringsRef.current.settingsPathMissing
+      return ` · ${word}`
+    },
+    [api],
+  )
+
   // V15/F3: one draft = at most one message. The re-entry guard is a ref set *synchronously* at
   // the top of the send, not the `busy` state: a double Enter lands inside the same React batch,
   // before any state update could gate the second call. A failed send releases the guard so the
@@ -477,7 +525,7 @@ export function App({
                     old: target.value || stringsRef.current.dash,
                     next: text,
                     timing,
-                  }),
+                  }) + pathMarkNote(target, text),
             )
           } else if (r.code === 7) {
             settingConfirmRef.current = { key: target.key, next: text, danger: true }
@@ -576,7 +624,7 @@ export function App({
       sendingRef.current = false
       setBusy(false)
     }
-  }, [api, mode, updateDraft, closeCompose, setSettingsFilter])
+  }, [api, mode, updateDraft, closeCompose, setSettingsFilter, pathMarkNote])
 
   const runAction = useCallback(
     async (kind: 'flush' | 'standby') => {
@@ -815,6 +863,134 @@ export function App({
     [settingsRowsNow],
   )
 
+  // ---- the choice picker (M55): one entry list per key, built from the command's own read.
+
+  /**
+   * The entries R3 fixes the order of: a keep-unset lead for a key the file does not carry, the
+   * current value (only when the file carries the key), the schema default (only when non-empty),
+   * the command's `choices.values` in their order (deduped), then the kind's own actions. Closed
+   * kinds (`bool`, `enum`) get no free-text entry; the open kinds end with one; `path` offers a
+   * clear entry exactly when the command accepts the empty value. No option table lives here —
+   * pulling a value out of the schema would be the second source the requirement forbids.
+   */
+  const buildChoiceEntries = useCallback(
+    (key: SettingsKey): SettingsChoiceEntry[] => {
+      const ch = key.choices
+      if (!ch) return []
+      const kind = String(key.kind ?? '')
+      const rule = String(ch.note ?? '')
+      const values = (Array.isArray(ch.values) ? ch.values : []).map((v) => String(v))
+      const out: SettingsChoiceEntry[] = []
+      const seen = new Set<string>()
+      const pushValue = (value: string, entryKind: SettingsChoiceEntry['kind']): void => {
+        if (value === '' || seen.has(value)) return
+        seen.add(value)
+        out.push(kind === 'path' ? { value, kind: entryKind, mark: api.pathMark(value, rule) } : { value, kind: entryKind })
+      }
+      const base = key.set ? key.value : ''
+      if (!key.set) out.push({ value: '', kind: 'keep-unset' })
+      pushValue(key.value, 'current')
+      pushValue(key.default, 'default')
+      for (const v of values) pushValue(v, 'value')
+      if (kind === 'bool' || kind === 'enum' || kind === 'pairlist') return out
+      if (kind === 'path') {
+        if (ch.empty) out.push({ value: '', kind: 'clear' })
+        out.push({ value: '', kind: 'free', seed: base })
+        return out
+      }
+      if (kind === 'winlist' || kind === 'pattern') {
+        // The token vocabulary: choosing a model seeds the compose editor with `<model>=` at the
+        // insertion point (the current value's end); the number to the right stays free text.
+        const seeded = out.map((e) => (e.kind === 'value' ? { ...e, seed: `${base}${base !== '' && !/\s$/.test(base) ? ' ' : ''}${e.value}=` } : e))
+        return [...seeded, { value: '', kind: 'free', seed: base }]
+      }
+      out.push({ value: '', kind: 'free', seed: base })
+      return out
+    },
+    [api],
+  )
+
+  /**
+   * The pairlist row's editor is the seats block (the requirement that owns per-seat editing):
+   * `enter` moves the focus there, no compose editor and no option list opens. A filter that hides
+   * the seats is dropped, because otherwise "focus the seats block" would name a row that is not
+   * on screen.
+   */
+  const routePairlist = useCallback(() => {
+    const rows = settingsRowsNow()
+    let seat = rows.findIndex((r) => r.kind === 'seat')
+    if (seat < 0) {
+      settingsFilterRef.current = ''
+      setSettingsFilter('')
+      // The focus index counts focusable rows, not the group headings `settingsViewRows` also
+      // returns — counting those would land the cursor on the wrong row (or past the end).
+      const all = settingsViewRows(dataRef.current.blocks?.settings, '', stringsRef.current).filter(
+        (r) => r.kind === 'key' || r.kind === 'seat',
+      )
+      seat = all.findIndex((r) => r.kind === 'seat')
+    }
+    setChoicePicker(null)
+    choicePickerRef.current = null
+    if (seat >= 0) setSettingsFocus(seat)
+    setReceipt(null)
+    setStatus(stringsRef.current.settingsChoicePairlist)
+  }, [settingsRowsNow])
+
+  /** One picker choice: it lands in the write editor (the two-step flow is untouched). */
+  const chooseChoiceOption = useCallback(
+    (index: number) => {
+      const picker = choicePickerRef.current
+      if (!picker) return
+      const i = index < 0 ? picker.index : index
+      const entry = picker.entries[i]
+      if (!entry) return
+      // keep-unset cancels: no compose editor, no write, no audit line, no temporary file. The
+      // writer has no removal operation, so the view never claims it deleted the line.
+      if (entry.kind === 'keep-unset') {
+        setChoicePicker(null)
+        choicePickerRef.current = null
+        return
+      }
+      const seed = entry.seed !== undefined ? entry.seed : entry.value
+      void (async () => {
+        // The fingerprint is pinned from a fresh read, like the key editor's.
+        const fresh = await api.refreshSettings().catch(() => null)
+        const freshKey = fresh?.keys?.find((k) => k.name === picker.key)
+        const rows = settingsRowsNow()
+        const rowNow = rows[picker.row]
+        const keyNow = rowNow && rowNow.kind === 'key' ? rowNow.key : null
+        settingRowRef.current = {
+          row: picker.row,
+          key: picker.key,
+          value: freshKey ? freshKey.value : keyNow?.value ?? '',
+          cls: freshKey?.class ?? keyNow?.class ?? 'apply',
+          fingerprint: fresh?.fingerprint ?? dataRef.current.blocks?.settings?.fingerprint ?? '',
+          kind: picker.kind,
+          choices: freshKey?.choices ?? keyNow?.choices,
+        }
+        settingConfirmRef.current = null
+        setSettingConfirm(null)
+        setChoicePicker(null)
+        choicePickerRef.current = null
+        openCompose('setting', seed)
+      })()
+    },
+    [api, openCompose, settingsRowsNow],
+  )
+
+  const moveChoicePicker = useCallback((delta: number) => {
+    const picker = choicePickerRef.current
+    if (!picker) return
+    const next = { ...picker, index: Math.max(0, Math.min(picker.entries.length - 1, picker.index + delta)) }
+    choicePickerRef.current = next
+    setChoicePicker(next)
+  }, [])
+
+  const closeChoicePicker = useCallback(() => {
+    setChoicePicker(null)
+    choicePickerRef.current = null
+  }, [])
+
   const openSettingsView = useCallback(
     (origin: number) => {
       setSettingsOrigin(origin)
@@ -836,6 +1012,8 @@ export function App({
     settingsViewRef.current = false
     setSeatPicker(null)
     seatPickerRef.current = null
+    setChoicePicker(null)
+    choicePickerRef.current = null
     api.setSettingsOpen(false)
     // Back to the overlay row it was opened from (the design's origin rule).
     setOverlay(true)
@@ -868,22 +1046,55 @@ export function App({
         setStatus(`${key.name} · ${key.route || key.warning || stringsRef.current.settingsRefusedRoute}`)
         return
       }
-      // The fingerprint is pinned from a fresh read (the design's "when the editor opens"): the
-      // cached block may still predate a write that just settled.
+      // M55: the editor opens on the command's own read. The cached block may predate a write that
+      // just settled, and the fingerprint is pinned from the same read (the design's rule for
+      // "when the editor opens", M55 extended it to the choice picker: a stale row would offer a
+      // value the command already replaced).
       const fresh = await api.refreshSettings().catch(() => null)
       const freshKey = fresh?.keys?.find((k) => k.name === key.name)
+      const live = freshKey ?? key
+      if (hasChoiceEditor(live)) {
+        if (String(live.kind ?? '') === 'pairlist') {
+          routePairlist()
+          return
+        }
+        const entries = buildChoiceEntries(live)
+        if (entries.length) {
+          const kind = String(live.kind ?? '')
+          const picker: SettingsChoicePicker = {
+            row: index,
+            key: live.name,
+            kind,
+            entries,
+            index: 0,
+            interval: NUMERIC_KINDS.has(kind) ? { min: String(live.choices?.min ?? ''), max: String(live.choices?.max ?? '') } : null,
+          }
+          setChoicePicker(picker)
+          choicePickerRef.current = picker
+          setReceipt(null)
+          setStatus(null)
+          return
+        }
+      }
       settingRowRef.current = {
         row: index,
-        key: key.name,
-        value: freshKey ? freshKey.value : key.value,
-        cls: key.class,
+        key: live.name,
+        value: live.value,
+        cls: live.class,
         fingerprint: fresh?.fingerprint ?? dataRef.current.blocks?.settings?.fingerprint ?? '',
+        kind: String(live.kind ?? ''),
+        choices: live.choices,
       }
       settingConfirmRef.current = null
       setSettingConfirm(null)
-      openCompose('setting', (freshKey ?? key).set || (freshKey ?? key).value !== '' ? (freshKey ?? key).value : key.default)
+      openCompose('setting', live.set || live.value !== '' ? live.value : live.default)
+      if (live.choices && !hasChoiceEditor(live)) {
+        // The visible fallback (R3): the kind defines no choice set and the command still validates
+        // the write. The line rides the editor's own hint row, so it stays on screen while typing.
+        setStatus(fill(stringsRef.current.settingsChoiceNoChoice, { kind: String(live.kind ?? '') }))
+      }
     },
-    [api, openCompose, settingsRowsNow],
+    [api, buildChoiceEntries, openCompose, routePairlist, settingsRowsNow],
   )
 
   /**
@@ -1070,6 +1281,15 @@ export function App({
         case 'settings-scroll':
           moveSettingsFocus(action.delta)
           return
+        case 'choice-pick':
+          chooseChoiceOption(action.index)
+          return
+        case 'choice-move':
+          moveChoicePicker(action.delta)
+          return
+        case 'choice-close':
+          closeChoicePicker()
+          return
         case 'seat-pick':
           if (action.index < 0) chooseSeatOption(-1)
           else chooseSeatOption(action.index)
@@ -1079,7 +1299,7 @@ export function App({
           return
       }
     },
-    [boardRows, chooseSeatOption, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, updateScroll],
+    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -1148,6 +1368,7 @@ export function App({
       settingsFocus,
       settingsFilter,
       seatPicker,
+      choicePicker,
     }
     // The geometry comes from the live terminal, not from the frame's snapshot of it: a resize must
     // re-lay out the next frame (the spec's "A resize re-lays out live"), and `data.width` is frozen
@@ -1188,6 +1409,7 @@ export function App({
     settingsFocus,
     settingsFilter,
     seatPicker,
+    choicePicker,
     size,
     composing,
     mode,
@@ -1283,6 +1505,12 @@ export function App({
           const delta = button === 65 ? 1 : -1
           // With the detail view open the wheel scrolls the document (the one scrollable region),
           // on the page the view was opened from (the work page's rows open it too, P20/B5).
+          if (choicePickerRef.current) {
+            // The choice picker's entries may outrun the budget: the wheel walks the list like
+            // ↑/↓ (the window follows the selection, as the seat picker's does).
+            moveChoicePicker(delta)
+            return
+          }
           if ((pageRef.current === 4 || pageRef.current === 2) && detailIdRef.current) {
             scrollDetail(delta)
             return
@@ -1448,6 +1676,23 @@ export function App({
       // The project-settings view owns its keys first (it sits above the overlay it was opened
       // from); anything it does not claim (notably `q`) falls through to the global handling.
       if (settingsViewRef.current && !composing) {
+        if (choicePickerRef.current) {
+          // The choice picker owns the same keys the seat picker does: esc closes it back to the
+          // row list with the row focus untouched, and it writes nothing on the way out.
+          if (key.escape) {
+            closeChoicePicker()
+            return
+          }
+          if (key.upArrow || key.downArrow) {
+            moveChoicePicker(key.upArrow ? -1 : 1)
+            return
+          }
+          if (key.return) {
+            chooseChoiceOption(-1)
+            return
+          }
+          return
+        }
         if (seatPickerRef.current) {
           if (key.escape) {
             setSeatPicker(null)

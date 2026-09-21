@@ -46,6 +46,7 @@ import type {
   QueueEntry,
   Segment,
   SettingsBlock,
+  SettingsChoiceEntry,
   SettingsKey,
   SettingsSeat,
   SettingsWindow,
@@ -1155,9 +1156,14 @@ function detailBlock(ctx: Ctx): Block | null {
 // a longer en label is cut by `cell()`, the same rule the key names followed).
 const SETTINGS_LABEL_W = 22
 const SETTINGS_AUDIT_LINES = 3
-// The lines the block draws under its row window: the CLI hint, a blank, the audit heading and the
-// audit tail. `layout()` subtracts this from the height it hands the view as its row budget.
-const SETTINGS_FOOTER_ROWS = 1 + 1 + 1 + SETTINGS_AUDIT_LINES
+// The lines the block draws under its row window: the two hidden-row counts (`↑n`/`↓n`), the CLI
+// hint, a blank, the audit heading and the audit tail. `layout()` subtracts this from the height it
+// hands the view as its row budget. Reserving **both** count lines is what keeps the block inside
+// the frame once the list is longer than the window: with only the tail reserved, a full window
+// plus a full audit tail overflowed and the whole view degraded to its one-line summary (measured
+// in M55's pairlist route: the seats block the route had just focused disappeared from the frame).
+const SETTINGS_COUNT_ROWS = 2
+const SETTINGS_FOOTER_ROWS = SETTINGS_COUNT_ROWS + 1 + 1 + 1 + SETTINGS_AUDIT_LINES
 
 /** One drawn row of the project-settings view (group headings are not focusable). */
 export type SettingsRow =
@@ -1281,6 +1287,9 @@ function settingsCliHint(s: Strings, rows: SettingsRow[], focus: number): string
   const key = row.key
   if (key.known === false) return fill(s.settingsUnknownHint, { key: key.name })
   if (key.class === 'refuse') return fill(s.settingsRefusedHint, { key: key.name })
+  // The pairlist row is not composed here: its editor is the seats block, and the command line the
+  // requirement names is the per-seat one (M55).
+  if (String(key.kind ?? '') === 'pairlist') return s.settingsPairlistHint
   return fill(s.settingsCliHint, { key: key.name })
 }
 
@@ -1320,6 +1329,73 @@ function settingsBlock(ctx: Ctx): Block | null {
   const visible = Math.max(1, Math.min(Math.max(1, count), budget))
   const focus = Math.max(0, Math.min(Math.max(0, count - 1), ctx.view.settingsFocus ?? 0))
   const offset = Math.max(0, Math.min(Math.max(0, count - visible), focus - Math.floor(visible / 2)))
+
+  // The choice picker (M55): the command's own vocabulary, rendered in the view's own line budget
+  // exactly like the seat picker below (same window/offset rules, one click action per entry, no
+  // overlay, no width tier — the row list the snapshots pin is untouched). The entries are built
+  // by the App from the key's `choices` object; this function only labels and windows them.
+  const choice = ctx.view.choicePicker
+  if (choice) {
+    const entries = choice.entries
+    const sel = Math.max(0, Math.min(Math.max(0, entries.length - 1), choice.index))
+    // title + interval + the two hidden-count lines + blank + hint: the entries get the rest.
+    const entryBudget = Math.max(1, budget - 6)
+    const entryVisible = Math.max(1, Math.min(entries.length, entryBudget))
+    const entryOffset = Math.max(0, Math.min(Math.max(0, entries.length - entryVisible), sel - Math.floor(entryVisible / 2)))
+    const lines: PlacedLine[] = []
+    const put = (line: Line): void => {
+      lines.push({ line: truncLine(line, width) })
+    }
+    const entryLabel = (e: SettingsChoiceEntry): string => {
+      const base =
+        e.kind === 'keep-unset'
+          ? s.settingsChoiceKeepUnset
+          : e.kind === 'clear'
+            ? s.settingsChoiceClear
+            : e.kind === 'free'
+              ? s.settingsChoiceFree
+              : choice.kind === 'bool' && (e.value === '1' || e.value === '0')
+                ? e.value === '1'
+                  ? s.settingsBoolOn
+                  : s.settingsBoolOff
+                : e.value
+      const marks: string[] = []
+      if (e.kind === 'current') marks.push(s.settingsChoiceCurrent)
+      if (e.kind === 'default') marks.push(s.settingsChoiceDefault)
+      if (e.mark) {
+        marks.push(e.mark === 'exists' ? s.settingsPathExists : e.mark === 'not-exec' ? s.settingsPathNotExec : s.settingsPathMissing)
+      }
+      return marks.length ? `${base} · ${marks.join(' · ')}` : base
+    }
+    put(ln(seg(` ${fill(s.settingsChoiceTitle, { label: keyLabel(s, choice.key), key: choice.key })}`, 'heading')))
+    if (choice.interval) {
+      put(
+        ln(
+          seg(
+            ` ${fill(s.settingsChoiceInterval, { min: choice.interval.min || '0', max: choice.interval.max || '∞' })}`,
+            'dim',
+          ),
+        ),
+      )
+    }
+    if (entryOffset > 0) put(ln(seg(`  ${fill(s.laneHiddenAbove, { n: String(entryOffset) })}`, 'dim')))
+    entries.forEach((e, i) => {
+      if (i < entryOffset || i >= entryOffset + entryVisible) return
+      const label = entryLabel(e)
+      const line = ln(
+        seg(`${i === sel ? s.settingsCursor : ' '} `, 'accent'),
+        seg(label, i === sel ? 'selected' : e.kind === 'value' || e.kind === 'current' || e.kind === 'default' ? 'text' : 'dim'),
+      )
+      const action: Action = { kind: 'choice-pick', index: i }
+      const rowW = Math.max(2, Math.min(width, 1 + dispWidth(textOf(line))))
+      lines.push(placedWithHits(line, ctx.view.tui ? [{ start: 1, end: rowW, action }] : undefined, width))
+    })
+    const entryHiddenBelow = Math.max(0, entries.length - (entryOffset + entryVisible))
+    if (entryHiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(entryHiddenBelow) })}`, 'dim')))
+    put(ln(seg('')))
+    put(ln(seg(` ${s.settingsChoiceHint}`, 'dim')))
+    return one(lines, { focus: sel, offset: entryOffset, visible: entryVisible, count: entries.length })
+  }
 
   // The seat picker (P22/B4): the models the command reports as known, then the removal and the
   // free-text line — the editor opens on whichever is chosen.
@@ -1606,7 +1682,13 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
   // key has a target — `r` stays keyboard-only, V16 F-V16-5). While the detail view is open the same
   // chips become its keys — it adds no action, and `q` is the documented back-out, not a collapse.
   const nav: { text: string; action: Action }[] = ctx.view.settings
-    ? ctx.view.seatPicker
+    ? ctx.view.choicePicker
+      ? [
+          { text: s.keyRows, action: { kind: 'choice-move', delta: 1 } },
+          { text: s.keyOpen, action: { kind: 'choice-pick', index: -1 } },
+          { text: s.keyDetailClose, action: { kind: 'choice-close' } },
+        ]
+      : ctx.view.seatPicker
       ? [
           { text: s.keyRows, action: { kind: 'seat-move', delta: 1 } },
           { text: s.keySeatPick, action: { kind: 'seat-pick', index: -1 } },

@@ -20,9 +20,10 @@
 // `--print`/`--json` never read `state/panel.conf` or the page file: the machine exits are frozen.
 
 import React from 'react'
-import { writeSync, appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { writeSync, appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { Writable } from 'node:stream'
 import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { render } from 'ink'
 import chalk from 'chalk'
@@ -760,6 +761,26 @@ async function main(): Promise<void> {
     collapse,
     setSetting,
     setSeatModel,
+    /**
+     * The path kind's existence mark (M55): resolved against the project root (`~` honoured), the
+     * rule from the command's own note. `not-exec` is only reachable for `exec` — a directory is
+     * never a `file`/`exec` target, and a missing path is `missing` whatever the rule says.
+     */
+    pathMark: (value: string, rule: string) => {
+      const raw = String(value ?? '').trim()
+      if (raw === '') return 'missing' as const
+      const abs = raw.startsWith('~/') ? join(homedir(), raw.slice(2)) : raw.startsWith('/') ? raw : join(root, raw)
+      try {
+        const st = statSync(abs)
+        if (rule === 'dir') return st.isDirectory() ? ('exists' as const) : ('missing' as const)
+        if (rule === 'any') return 'exists' as const
+        if (!st.isFile()) return 'missing' as const
+        if (rule === 'exec' && (st.mode & 0o111) === 0) return 'not-exec' as const
+        return 'exists' as const
+      } catch {
+        return 'missing' as const
+      }
+    },
     refreshSettings,
     setSettingsOpen: (open: boolean) => {
       if (Boolean(opts.settingsOpen) === open) return

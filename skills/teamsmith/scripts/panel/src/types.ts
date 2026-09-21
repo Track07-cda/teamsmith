@@ -253,8 +253,58 @@ export interface SettingsKey {
   warning: string
   /** The refusal's route for a read-only key (`team add-agent`, hand-edit the file, …). */
   route?: string
+  /**
+   * The key's schema-derived choice set (M55), verbatim from `team config list --json`. The
+   * console reads its options from here and from nowhere else: a key or a value added to the
+   * command's schema appears without rebuilding the bundle. Absent against an older command.
+   */
+  choices?: SettingsChoices
   /** False for a key in the file the schema does not know (read-only row). */
   known?: boolean
+}
+
+/** One key's choice set as the owning command reports it (M55). */
+export interface SettingsChoices {
+  /** schema | known | none — where the vocabulary came from. */
+  source: string
+  /** The ordered vocabulary; `[]` when the kind has none. */
+  values: string[]
+  /** The numeric kinds' accepted lower bound as a string ('' = unbounded). */
+  min: string
+  /** The numeric kinds' accepted upper bound as a string ('' = unbounded). */
+  max: string
+  /** True when the writer accepts the empty value for this key (decides a clear entry). */
+  empty: boolean
+  /** The command's own note; a `path` kind carries its existence rule (file|dir|exec|any). */
+  note: string
+}
+
+/** One drawn entry of the choice picker (M55). */
+export interface SettingsChoiceEntry {
+  /** The value the entry carries ('' for keep-unset/clear/free). */
+  value: string
+  /** What the entry is: a special action or a value from the command's own vocabulary. */
+  kind: 'keep-unset' | 'current' | 'default' | 'value' | 'clear' | 'free'
+  /** What the compose editor opens with when this entry is accepted (defaults to `value`). */
+  seed?: string
+  /** The path kind's existence mark (the command's note carries the rule). */
+  mark?: 'exists' | 'missing' | 'not-exec'
+}
+
+/** The open choice picker: the row it edits, the kind and the command's entries. */
+export interface SettingsChoicePicker {
+  /** The row index in the filtered settings row list (the focus returns here on `esc`). */
+  row: number
+  /** The raw key of the row being edited. */
+  key: string
+  /** The schema kind the entries were built for (drives the labels and the reason line). */
+  kind: string
+  /** The entries in the order the requirement fixes: keep-unset? current? default? values… then kind actions. */
+  entries: SettingsChoiceEntry[]
+  /** The selected entry. */
+  index: number
+  /** The accepted interval the numeric kinds display (null when the kind names none). */
+  interval: { min: string; max: string } | null
 }
 
 /** One seat's displayed model and its CLI-computed source (P22/B4). */
@@ -394,6 +444,12 @@ export type Action =
   | { kind: 'settings-filter' }
   /** Project-settings view: scroll the row window by the wheel (the focus stays). */
   | { kind: 'settings-scroll'; delta: number }
+  /** The choice picker (M55): accept the focused entry (index -1) or the one clicked. */
+  | { kind: 'choice-pick'; index: number }
+  /** The choice picker: move the selection (↑/↓ and the wheel — the window follows the selection). */
+  | { kind: 'choice-move'; delta: number }
+  /** The choice picker: close it back to the row list (the row focus is preserved). */
+  | { kind: 'choice-close' }
   /** The settings overlay's navigation row: open the project-settings view. */
   | { kind: 'settings-open-view' }
   /** The seat picker: choose option `index` (a click on a picker row). */
@@ -516,4 +572,6 @@ export interface ViewState {
   settingsConfirm?: { row: number; key: string; old: string; next: string; danger: boolean } | null
   /** The open seat picker: the seat's agent, its option list and the selection. */
   seatPicker?: { agent: string; row: number; models: string[]; index: number } | null
+  /** The open choice picker (M55): the row, its schema-derived entries and the selection. */
+  choicePicker?: SettingsChoicePicker | null
 }

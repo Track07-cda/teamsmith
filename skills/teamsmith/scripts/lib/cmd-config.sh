@@ -19,13 +19,16 @@
 # 没有契约 = 项目还没 init → 报错点名 `team init`，绝不悄悄造一个。
 
 # ---------------------------------------------------------------- schema（唯一真相）
-# 行格式：KEY|class|kind|spec|form|default|danger|route
+# 行格式：KEY|class|kind|spec|form|default|danger|route|suggest
 #   kind：bool / int / seconds / mb / pct / enum / text / list / path / cmd / tpl / model /
 #         pairlist / pattern / winlist / bytes
 #   spec：int/seconds/mb/pct/bytes 是「min,max」（空 = 无边）；enum 是逗号分隔的值域；
 #         path 是 file|dir|exec|any 加「,opt」（空值有意义）；tpl 是 launch|notify|pm
 #   danger：'-' 或一行理由（命中即需要 --allow-danger）
 #   route：refuse 类的用法指引（面板把它原样展示）
+#   suggest：**可选的第 9 列**，数值类键的建议值（逗号分隔的整值；仍是 schema 数据，不是选项表）；
+#         没有建议的行保持 8 列（读者两形状都认）。读侧（team_config_choices）与写入校验的一致性
+#         由 tests/panel-choices.sh 的走查夹具钉住：读给出的每个值都必须被 team config set 接受。
 team_config_schema() {
   cat <<'EOF'
 # ---- 身份与账本布局（refuse：控制台不得改身份、不得搬走它正在读的账本）----
@@ -71,7 +74,7 @@ TEAM_SMOKE_FAST|refuse|bool||plain|0|-|测试旋钮：环境变量或手改 .pi/
 # ---- 名册、模型解析与适配器（apply：下一个读契约的进程就生效）----
 TEAM_MODEL_LIMITS|apply|pattern||plain|kimi-coding/k3=2 openai-codex/*=1|-|
 TEAM_MODEL_WINDOWS|apply|winlist||plain||-|
-TEAM_SESSION_WARN_TOKENS|apply|int|0,|plain|200000|-|
+TEAM_SESSION_WARN_TOKENS|apply|int|0,|plain|200000|-||100000,200000,400000
 TEAM_EXTRA_PI_ARGS|apply|cmd||plain||-|
 TEAM_AGENT_CMD|apply|tpl|launch|plain||-|
 TEAM_AGENT_NOTIFY_CMD|apply|tpl|notify|plain||-|
@@ -91,7 +94,7 @@ TEAM_TASK_BRANCH_RESET|apply|bool||plain|1|-|
 TEAM_DISPATCH_VERIFY_SEC|apply|seconds|0,|plain|8|-|
 TEAM_DISPATCH_ALIVE_SEC|apply|seconds|0,|plain|1|-|
 TEAM_SQUASH_LOOKBACK|apply|int|0,|plain|200|0 = 「已 squash 合并」的回看数为零|
-TEAM_REVIEW_TIMEOUT|apply|seconds|0,|plain|1800|低于 60 秒 = 门禁会被超时掐死|
+TEAM_REVIEW_TIMEOUT|apply|seconds|0,|plain|1800|低于 60 秒 = 门禁会被超时掐死||600,1800,3600
 TEAM_REVIEW_TIMEOUT_GRACE|apply|seconds|0,|plain|2|-|
 TEAM_REVIEW_ALLOW_DIRTY|apply|bool||plain|0|1 = 复验放行脏工作树|
 TEAM_REVIEW_ALLOW_IGNORED|apply|bool||plain|0|1 = 复验放行被忽略产物|
@@ -100,29 +103,29 @@ TEAM_REVIEW_ANY_DIR|apply|bool||plain|0|1 = 跳过 checkout HEAD == 分支 tip �
 TEAM_BOARD_DONE_FORCE|apply|bool||plain|0|1 = 绕过 done 的证据闸门|
 TEAM_BOARD_DONE_REASON|apply|text||plain||-|
 # ---- 容量与投递通知（apply）----
-TEAM_MIN_FREE_SWAP_MB|apply|mb|0,|plain|1024|0 = 磁盘 swap 底线关闭|
-TEAM_MIN_TOTAL_MB|apply|mb|0,|plain|512|0 = RAM+swap 绝对底线关闭|
-TEAM_MIN_AVAIL_MB|apply|mb|0,|plain|1024|0 = MemAvailable 底线关闭|
-TEAM_WARN_AVAIL_MB|apply|mb|0,|plain|2048|0 = 内存只警告的水位关闭|
-TEAM_ZRAM_WARN_PCT|apply|pct|0,100|plain|85|-|
-TEAM_AGENT_MEM_MB|apply|mb|1,|plain|6144|-|
+TEAM_MIN_FREE_SWAP_MB|apply|mb|0,|plain|1024|0 = 磁盘 swap 底线关闭||512,1024,2048
+TEAM_MIN_TOTAL_MB|apply|mb|0,|plain|512|0 = RAM+swap 绝对底线关闭||256,512,1024
+TEAM_MIN_AVAIL_MB|apply|mb|0,|plain|1024|0 = MemAvailable 底线关闭||512,1024,2048
+TEAM_WARN_AVAIL_MB|apply|mb|0,|plain|2048|0 = 内存只警告的水位关闭||1024,2048,4096
+TEAM_ZRAM_WARN_PCT|apply|pct|0,100|plain|85|-||70,80,85,90
+TEAM_AGENT_MEM_MB|apply|mb|1,|plain|6144|-||2048,4096,6144
 TEAM_NOTIFY_TMUX|apply|bool||plain|1|-|
 TEAM_NOTIFY_DEDUP_SEC|apply|seconds|0,|plain|20|-|
-TEAM_INBOX_MAX_CHARS|apply|int|1,|plain|150|-|
+TEAM_INBOX_MAX_CHARS|apply|int|1,|plain|150|-||100,150,300
 TEAM_NOTIFY_LOG|apply|path|file,opt|plain|/tmp/teamsmith-notify.log|-|
-TEAM_DEFER_TTL|apply|seconds|0,|plain|300|0 = 投递队列入队即过期|
-TEAM_OUTBOX_MAX|apply|int|0,|plain|200|0 = 队列不设上限（无界）|
-TEAM_PANEL_DETAIL_CAP|apply|bytes|1024,|plain|131072|-|
+TEAM_DEFER_TTL|apply|seconds|0,|plain|300|0 = 投递队列入队即过期||60,300,900
+TEAM_OUTBOX_MAX|apply|int|0,|plain|200|0 = 队列不设上限（无界）||50,200,1000
+TEAM_PANEL_DETAIL_CAP|apply|bytes|1024,|plain|131072|-||65536,131072,262144
 # ---- 巡检与面板（restart：运行中的 pulse/面板拿着启动时的值）----
-TEAM_PULSE_INTERVAL|restart|seconds|60,|plain|900|低于 60 秒 = 巡检转成忙等|
-TEAM_MONITOR_REFRESH|restart|seconds|1,|plain|3|-|
-TEAM_MONITOR_EVENTS|restart|int|1,|plain|4|-|
+TEAM_PULSE_INTERVAL|restart|seconds|60,|plain|900|低于 60 秒 = 巡检转成忙等||300,900,1800,3600
+TEAM_MONITOR_REFRESH|restart|seconds|1,|plain|3|-||2,3,5
+TEAM_MONITOR_EVENTS|restart|int|1,|plain|4|-||2,4,8
 TEAM_MONITOR_UI|restart|enum|auto,tui,text|plain|auto|-|
 TEAM_MONITOR_ACTIVITY|restart|bool||export|1|-|
 TEAM_AGENT_LOG_TAIL_BYTES|restart|bytes|0,1048576|export||-|
 TEAM_PULSE_WINDOW|restart|text||plain|pulse|改的是运行中后端的窗口名：team pulse down（旧名）→ 改 → team pulse up
 # ---- 巡检策略（apply：一拍一个 team watch --once 子进程）----
-TEAM_PULSE_NUDGE_GAP|apply|seconds|0,|plain|900|-|
+TEAM_PULSE_NUDGE_GAP|apply|seconds|0,|plain|900|-||300,900,1800
 TEAM_PULSE_PENDING_BOARD|apply|bool||plain|0|-|
 TEAM_PULSE_REBUILD_TMUX|apply|bool||plain|0|-|
 TEAM_PULSE_MAX_RESTARTS|apply|int|0,|plain|5|0 = PM 崩溃后不再自动拉起|
@@ -144,8 +147,8 @@ TEAM_INBOX_WATCH_HEARTBEAT_MS|restart|int|100,|export|5000|-|
 TEAM_INBOX_WATCH_TARGET|restart|text||export||-|
 TEAM_BG_LOG_MAX_BYTES|restart|bytes|1024,|export|524288|-|
 # ---- 跨项目会议（apply）----
-TEAM_MEETING_TTL_HOURS|apply|int|1,|plain|72|-|
-TEAM_MEETING_MAX_TURNS|apply|int|1,|plain|20|-|
+TEAM_MEETING_TTL_HOURS|apply|int|1,|plain|72|-||24,72,168
+TEAM_MEETING_MAX_TURNS|apply|int|1,|plain|20|-||5,20,50
 TEAM_MEETING_KNOCK|apply|bool||plain|0|-|
 TEAM_MEETING_ALLOW_USER_ID|apply|text||plain||非空 = 放开谁能敲门（扩大权限）
 EOF
@@ -166,7 +169,7 @@ team_config_contract_path() {
   printf '%s\n' "$p"
 }
 
-team_config_field() { # <row> <n:1..8> → 字段
+team_config_field() { # <row> <n:1..9> → 字段（第 9 列 suggest 可选，缺省为空）
   local row="$1" n="$2"
   local -a f=()
   IFS='|' read -r -a f <<< "$row"
@@ -180,6 +183,47 @@ team_config_row() { # <KEY> → schema 行（找不到返回 1）
     [ "${row%%|*}" = "$want" ] && { printf '%s\n' "$row"; return 0; }
   done < <(team_config_schema)
   return 1
+}
+
+team_config_choices() { # <row> [known models: 每行一个] → 该键的选项集 JSON {source,values,min,max,empty,note}
+  # 唯一来源是 schema 行（加 models 块的 known）：bool 的两个规范值、enum 的 constraints、数值类的
+  # suggest 列、模型类的 known。面板读这个对象画选择器，因此它绝不能是第二张选项表。
+  # empty = 写入者是否接受空值（与 team_config_validate_value 的 '' 判定同口径；走查夹具比对两者）。
+  # note = 该键域的解释（今天只有 path 类用它携带存在性检查的类型 file|dir|exec|any），无话可说时为空。
+  local row="${1-}" known="${2-}"
+  local key kind spec suggest src="none" min="" max="" empty="false" note="" val_list=""
+  key="$(team_config_field "$row" 1)"; kind="$(team_config_field "$row" 3)"
+  spec="$(team_config_field "$row" 4)"; suggest="$(team_config_field "$row" 9)"
+  case "$kind" in
+    bool)
+      src="schema"; val_list=$'1\n0' ;;
+    enum)
+      src="schema"; val_list="$(printf '%s' "$spec" | tr ',' '\n')" ;;
+    int|seconds|mb|bytes|pct)
+      src="schema"
+      IFS=, read -r min max _ <<< "$spec"
+      val_list="$(printf '%s' "$suggest" | tr ',' '\n')" ;;
+    model|pairlist|winlist|pattern)
+      src="known"; val_list="$known" ;;
+    path)
+      local typ="${spec%%,*}"; note="${typ:-any}" ;;
+  esac
+  case "$kind" in
+    bool|int|seconds|mb|bytes|pct) empty="false" ;;
+    enum) case ",$spec," in *",,"*) empty="true" ;; esac ;;
+    path) case "$spec" in *,opt) empty="true" ;; esac ;;
+    model) [ "$spec" = "opt" ] && empty="true" ;;
+    pairlist|pattern|winlist|tpl|list|cmd|text) empty="true" ;;
+  esac
+  local values_json="" v first=1
+  while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    [ "$first" = "1" ] || values_json="$values_json,"
+    first=0; values_json="$values_json\"$(team_config_json_escape "$v")\""
+  done <<< "$val_list"
+  printf '{"source":"%s","values":[%s],"min":"%s","max":"%s","empty":%s,"note":"%s"}\n' \
+    "$src" "$values_json" "$(team_config_json_escape "$min")" "$(team_config_json_escape "$max")" \
+    "$empty" "$(team_config_json_escape "$note")"
 }
 
 team_config_key_form() { # <KEY> → plain|export（未知键 = plain）
@@ -501,6 +545,47 @@ team_config_list_json() {
 
   local out="" first=1 row key class kind spec form def danger route
   local known="" value comment set comment_json warning
+  # models 块的 known 先算：它也是模型类键的 choices 词表（choices 必须随键记录一起输出，所以
+  # 不能等键循环结束）。token 与顺序和原来逐字一致；每个席位的**显示**模型也在表里（R2）。
+  local default_model known_models="" known_list="" seen=" " firstk=1
+  default_model="$(team_config_file_value "$path" TEAM_DEFAULT_MODEL 2>/dev/null || true)"
+  [ -n "$default_model" ] || default_model="$(team_config_field "$(team_config_row TEAM_DEFAULT_MODEL)" 6)"
+  local tok
+  for tok in $default_model ${TEAM_AGENT_MODELS:-}; do
+    case "$tok" in
+      *=*) tok="${tok#*=}" ;;
+    esac
+    [ -n "$tok" ] || continue
+    case "$seen" in *" $tok "*) continue ;; esac
+    seen="$seen$tok "
+    known_models="$known_models$tok"$'\n'
+    [ "$firstk" = "1" ] || known_list="$known_list,"
+    firstk=0; known_list="$known_list\"$(team_config_json_escape "$tok")\""
+  done
+  local a state_model
+  for a in $(team_agents); do
+    state_model="$(team_state_get "$a" model '' 2>/dev/null || true)"
+    [ -n "$state_model" ] || continue
+    case "$seen" in *" $state_model "*) continue ;; esac
+    seen="$seen$state_model "
+    known_models="$known_models$state_model"$'\n'
+    [ "$firstk" = "1" ] || known_list="$known_list,"
+    firstk=0; known_list="$known_list\"$(team_config_json_escape "$state_model")\""
+  done
+  # R2：每个席位的显示模型都在词汇表里。名册席位由上面的解析/记录两支覆盖；pm 席位没有 state
+  # 记录（team_pm_start 不写），它的显示模型走 seats 块同一支 team_config_seat_state
+  # （TEAM_PM_MODEL > TEAM_DEFAULT_MODEL）—— 视图的选项与 seats 块不会各说各话。
+  local seat_model _src _override
+  for a in $(team_agents) pm; do
+    IFS=$'\t' read -r seat_model _src _override <<< "$(team_config_seat_state "$a")"
+    [ -n "$seat_model" ] || continue
+    case "$seen" in *" $seat_model "*) continue ;; esac
+    seen="$seen$seat_model "
+    known_models="$known_models$seat_model"$'\n'
+    [ "$firstk" = "1" ] || known_list="$known_list,"
+    firstk=0; known_list="$known_list\"$(team_config_json_escape "$seat_model")\""
+  done
+
   while IFS= read -r row; do
     case "$row" in \#*|'') continue ;; esac
     key="$(team_config_field "$row" 1)"; class="$(team_config_field "$row" 2)"
@@ -519,7 +604,7 @@ team_config_list_json() {
     fi
     [ "$first" = "1" ] || out="$out,"
     first=0
-    out="$out{\"name\":\"$(team_config_json_escape "$key")\",\"class\":\"$class\",\"kind\":\"$kind\",\"form\":\"$form\",\"value\":\"$(team_config_json_escape "$value")\",\"default\":\"$(team_config_json_escape "$def")\",\"set\":$set,\"comment\":\"$(team_config_json_escape "$comment")\",\"warning\":\"$(team_config_json_escape "$warning")\",\"route\":\"$(team_config_json_escape "$(team_config_field "$row" 8)")\",\"known\":true}"
+    out="$out{\"name\":\"$(team_config_json_escape "$key")\",\"class\":\"$class\",\"kind\":\"$kind\",\"form\":\"$form\",\"value\":\"$(team_config_json_escape "$value")\",\"default\":\"$(team_config_json_escape "$def")\",\"set\":$set,\"comment\":\"$(team_config_json_escape "$comment")\",\"warning\":\"$(team_config_json_escape "$warning")\",\"route\":\"$(team_config_json_escape "$(team_config_field "$row" 8)")\",\"choices\":$(team_config_choices "$row" "$known_models"),\"known\":true}"
   done < <(team_config_schema)
 
   # 文件里 schema 不认识的键：照实列出（面板只读展示「不是已知项目设置」）
@@ -530,33 +615,8 @@ team_config_list_json() {
     team_config_row "$k" >/dev/null 2>&1 && continue
     v="$(team_config_file_value "$path" "$k" 2>/dev/null || true)"
     c="$(team_config_file_comment "$path" "$k" 2>/dev/null || true)"
-    out="$out,{\"name\":\"$(team_config_json_escape "$k")\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$(team_config_json_escape "$v")\",\"default\":\"\",\"set\":true,\"comment\":\"$(team_config_json_escape "$c")\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"known\":false}"
+    out="$out,{\"name\":\"$(team_config_json_escape "$k")\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$(team_config_json_escape "$v")\",\"default\":\"\",\"set\":true,\"comment\":\"$(team_config_json_escape "$c")\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"choices\":$(team_config_choices ''),\"known\":false}"
   done < "$path"
-
-  # models 块：{default, known[], seats[{agent, model, source, override}]}
-  local default_model known_list="" seen=" " firstk=1
-  default_model="$(team_config_file_value "$path" TEAM_DEFAULT_MODEL 2>/dev/null || true)"
-  [ -n "$default_model" ] || default_model="$(team_config_field "$(team_config_row TEAM_DEFAULT_MODEL)" 6)"
-  local tok
-  for tok in $default_model ${TEAM_AGENT_MODELS:-}; do
-    case "$tok" in
-      *=*) tok="${tok#*=}" ;;
-    esac
-    [ -n "$tok" ] || continue
-    case "$seen" in *" $tok "*) continue ;; esac
-    seen="$seen$tok "
-    [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0; known_list="$known_list\"$(team_config_json_escape "$tok")\""
-  done
-  local a state_model
-  for a in $(team_agents); do
-    state_model="$(team_state_get "$a" model '' 2>/dev/null || true)"
-    [ -n "$state_model" ] || continue
-    case "$seen" in *" $state_model "*) continue ;; esac
-    seen="$seen$state_model "
-    [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0; known_list="$known_list\"$(team_config_json_escape "$state_model")\""
-  done
 
   local seats="" firsts=1
   for a in $(team_agents) pm; do
