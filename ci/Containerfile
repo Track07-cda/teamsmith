@@ -95,6 +95,15 @@ ENV LANG=en_US.UTF-8 \
     TZ=UTC \
     SHELL=/bin/bash \
     HOME=/root
+
+# Identity signal, NOT a tuning knob (M66 / M64 F2): this is the image's proof of identity.
+# `perf.sh --in-container` trusts this flag — and only this flag — as evidence that it really
+# runs inside the pinned reference image; anywhere else (host, distrobox, a foreign image) the
+# missing/mismatched signal makes it refuse visibly with exit 3 instead of recording host
+# numbers under the "reference environment" name. Callers must not pass it in via `-e`: it is
+# the image declaring what it is, not the caller declaring where it runs.
+ENV TEAM_PERF_PINNED_CONTAINER=1
+
 WORKDIR /work
 
 # The gate, verbatim — the same two commands the PM runs on task branches.
