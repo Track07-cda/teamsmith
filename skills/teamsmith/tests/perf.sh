@@ -51,6 +51,8 @@ PERF_CPU_PREMISE_FACTOR=0.25
 PERF_SAMPLES=5
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 self="$here/perf.sh"
 ORIG_ARGS=("$@")
 tree=""
@@ -341,8 +343,8 @@ perf_run_in_container() {
 }
 
 # ── 搭建与测量 ─────────────────────────────────────────────────────────────────────────────
-PERF_TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-perf.XXXXXX")" || { printf 'perf: 建不了临时目录\n' >&2; exit 3; }
-perf_cleanup() { rm -rf "$PERF_TMP" 2>/dev/null || true; }
+PERF_TMP="$(tmp_root_create perf)" || { printf 'perf: 建不了临时根\n' >&2; exit 3; }
+perf_cleanup() { tmp_root_reap_all; }
 trap perf_cleanup EXIT
 
 PERF_FIX=""

@@ -24,6 +24,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m12-26c: 找不到 git 仓库\n' >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { printf 'flip-m12-26c: 需要 python3（截取探针）\n' >&2; exit 2; }
@@ -38,8 +40,9 @@ case "${1:-}" in
   *) printf 'flip-m12-26c: 未知参数 %s\n' "$1" >&2; exit 2 ;;
 esac
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m12-26c.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m12-26c)" || exit 3
+trap 'tmp_root_reap_all' EXIT
 
 CUR_SMOKE="$SKILL_DIR/tests/smoke.sh"
 [ -f "$CUR_SMOKE" ] || { printf 'flip-m12-26c: 找不到 %s\n' "$CUR_SMOKE" >&2; exit 2; }

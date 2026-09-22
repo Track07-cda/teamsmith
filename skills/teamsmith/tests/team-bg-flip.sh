@@ -21,6 +21,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 SKILL_EXT="$SKILL_DIR/extension/team-bg.ts"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'team-bg-flip: 找不到 git 仓库（需要它取修复前的树）\n' >&2; exit 2; }
@@ -47,8 +49,9 @@ fi
 
 KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
-TMP="$(mktemp -d /tmp/teamsmith-flip-m27.XXXXXX)"
-cleanup() { [ "$KEEP" = "1" ] || rm -rf "$TMP"; }
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m27)" || exit 3
+cleanup() { [ "$KEEP" = "1" ] || tmp_root_reap_all; }
 trap cleanup EXIT
 
 FAIL=0

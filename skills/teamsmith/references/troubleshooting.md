@@ -929,3 +929,38 @@ Seeing exit 3 with one of these named → rebuild the image
 (`<engine> build -f ci/Containerfile -t teamsmith-gate:local .`, the command `perf.sh` itself prints) or
 re-run `perf.sh --host` instead (non-reference: the verdict is not acceptance evidence). Host numbers are
 never recorded under the reference name.
+
+## 25. The gate goes red for a reason that is not the code: the temp root is full
+
+The fixtures' temp root is a **shared** filesystem — `${TMPDIR:-/tmp}`, a 15 GB tmpfs on this host, used by every
+agent's gate run. On 2026-09-22 09:50 it was 100 % full (0 bytes free **and** the inode table full), and
+`tests/panel-p21.sh choices` produced an ENOSPC red whose verdict was about the code while the cause was the
+filesystem. Measure before believing a red whose failure text mentions "No space left on device",
+`mktemp: failed to create directory`, or a fixture dying while writing its own scene.
+
+```sh
+bash skills/teamsmith/tests/tmp-hygiene.sh --status   # roots + size/files/age/owner + occupancy + headroom
+bash skills/teamsmith/tests/tmp-hygiene.sh --sweep    # reclaim stale, unoccupied roots (--dry-run first)
+```
+
+`--status` lists only the owned family (directories named `teamsmith-*`/`review-*`, plus the family's files and the
+gate's dot-prefixed diagnostics marked as *not a root*) and the temp root's free/total bytes and inodes; `--sweep`
+proves a candidate is unoccupied (`/proc` scan of cwd/fd/exe, `lsof` as fallback) before deleting anything, skips
+occupied roots whatever their age (`--age N`, default 30 minutes via `TEAM_TMP_SWEEP_AGE`), never `rm -rf`s a
+registered git worktree, refuses (exit 3, nothing deleted) a `review-<ID>` whose verification record is missing or
+uncommitted, and prints the whole inventory before the first deletion. `team doctor` carries the same headroom as
+one line (free/total bytes and inodes; warning only, threshold `TEAM_TMP_MIN_FREE_MB` /
+`TEAM_TMP_MIN_FREE_INODES`), so a filling tmpfs is visible *before* it turns into a red.
+
+**Why the roots exist at all**: every fixture creates its temp root through the single owner helper
+`tests/lib/tmp-root.sh` (`${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX`), which writes an owner marker inside and a run
+ledger outside, reclaims on normal exit **and** `INT`/`TERM`, and keeps only when asked (`TEAM_TMP_KEEP=1`, which
+prints the path). Pointing a fixture elsewhere is `TMPDIR=/var/tmp bash tests/config-cli.sh`; a fixture template
+that hardcodes `/tmp` is a gate finding (`tests/tmp-hygiene.sh --lint` runs inside the gate), and the gate itself
+asserts that no root its run created survives it.
+
+**What to do when a gate dies mid-run** (`SIGKILL` cannot be caught, so a root survives): run the sweep above; the
+marker inside each root names the creating pid, its start time and the kind, and any process still holding the root
+(cwd/fd/exe) is printed and skipped — do not delete a root another agent is using. The root of the leak was 607
+`config-cli.*` roots (3.2 GB) that kept being created and never reclaimed; the fix is the ownership rule above,
+not a periodic cleanup daemon.

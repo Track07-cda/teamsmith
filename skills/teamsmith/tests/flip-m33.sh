@@ -31,6 +31,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 PRE_SKILL=""
 RUN_PRE=1
 BREAK_SENTINEL=0
@@ -63,7 +65,8 @@ case "$MAIN_EXPECT" in sentinel|unnamed) ;; *) printf 'flip-m33: --expect 只认
 [ -f "$SKILL_DIR/tests/smoke.sh" ] || { printf 'flip-m33: 找不到 %s/tests/smoke.sh\n' "$SKILL_DIR" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { printf 'flip-m33: 需要 python3（smoke 的 26 段夹具）\n' >&2; exit 2; }
 
-SB="$(mktemp -d /tmp/teamsmith-flip-m33.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+SB="$(tmp_root_create flip-m33)" || exit 3
 MOVED_AWAY=""       # 被 `mv` 移走的场景目录（收尾时清掉；--keep 时留下给人看）
 SCENE_DIR=""        # 本轮（一侧的）场景目录：哨兵停跑时会把它留下，非 --keep 时由本夹具收掉
 DIAG_FILE=""        # 诊断文件（在 $TMP 之外）
@@ -81,7 +84,7 @@ cleanup_sb() {
   # 内容已经进本夹具的日志（上面的「诊断文件里的证据标题」就是摘录），PM 复跑时看得到。
   [ -n "$DIAG_FILE" ] && rm -f "$DIAG_FILE" "${DIAG_FILE%.log}.named" "${DIAG_FILE%.log}.seen-at" \
       "${DIAG_FILE%.log}.stop" "${DIAG_FILE%.log}.stop-ack" "${DIAG_FILE%.log}.tripwire.pid"
-  [ -n "$SB" ] && rm -rf "$SB"
+  [ -n "$SB" ] && tmp_root_reap_all
   return 0
 }
 trap cleanup_sb EXIT

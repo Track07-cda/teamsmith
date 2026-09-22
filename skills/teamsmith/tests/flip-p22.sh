@@ -10,16 +10,19 @@
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${TEAM_P21_TREE:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 src="$skill/scripts/panel/src"
 bundle="$skill/scripts/panel/panel.js"
 bun_bin="${BUN:-$(command -v bun || true)}"
 [ -n "$bun_bin" ] || bun_bin="$HOME/.bun/bin/bun"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/flip-p22.XXXXXX")"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create flip-p22)" || exit 3
 PASS=0
 FAIL=0
-cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; rm -rf "$tmp"; }
+cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; tmp_root_reap_all; }
 trap cleanup EXIT
 
 ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }

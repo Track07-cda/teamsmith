@@ -70,6 +70,8 @@ done < <(env)
 unset _v 2>/dev/null || true
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${_tree_arg:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 panel="${_js_panel:-$skill/scripts/panel/panel.js}"
@@ -77,8 +79,9 @@ js="${_js_arg:-$(command -v node || true)}"
 [ -n "$js" ] || js="$(command -v bun || true)"
 sock="p21-$$"
 sess="p21-$$"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/panel-p21.XXXXXX")"
 keep="${_keep_arg:-0}"
+[ "$keep" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create panel-p21)" || exit 3
 PASS=0
 FAIL=0
 SKIP=0
@@ -91,7 +94,7 @@ cleanup() {
   tmux -L "$sock" kill-server 2>/dev/null || true
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   if [ "$keep" = "1" ]; then printf '\n保留夹具目录：%s\n' "$tmp"
-  else rm -rf "$tmp"; fi
+  else tmp_root_reap_all; fi
 }
 trap cleanup EXIT
 

@@ -16,12 +16,16 @@ set -uo pipefail
 # ── 身份隔离（必须最先做）：绝不继承调用者的团队身份 ──────────────────────────────
 # （自己声明的树参数先存下来：下面的清理会把 TEAM_* 全清掉）
 _tree_arg="${TEAM_CONFIG_TREE:-}"
+_keep_arg="${TEAM_CONFIG_KEEP:-0}"
+_tmpkeep="${TEAM_TMP_KEEP:-}"
 while IFS='=' read -r _v _; do
   case "$_v" in TEAM_*) unset "$_v" 2>/dev/null || true ;; esac
 done < <(env)
 unset _v 2>/dev/null || true
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${_tree_arg:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 team="$skill/scripts/team"
@@ -29,8 +33,10 @@ config_md="$skill/references/config.md"
 template="$skill/templates/config.sh.tmpl"
 cmd_config="$skill/scripts/lib/cmd-config.sh"
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/config-cli.XXXXXX")"
-keep="${TEAM_CONFIG_KEEP:-0}"
+[ -n "$_tmpkeep" ] && export TEAM_TMP_KEEP="$_tmpkeep"
+keep="$_keep_arg"
+[ "$keep" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create config-cli)" || exit 3
 PASS=0
 FAIL=0
 SKIP=0
@@ -38,7 +44,7 @@ SKIP=0
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   if [ "$keep" = "1" ]; then printf '\n保留夹具目录：%s\n' "$tmp"
-  else rm -rf "$tmp"; fi
+  else tmp_root_reap_all; fi
 }
 trap cleanup EXIT
 

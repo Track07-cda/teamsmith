@@ -22,6 +22,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m43: 找不到 git 仓库（需要 git archive 取修复前的树）\n' >&2; exit 2; }
 
@@ -43,10 +45,11 @@ fi
 [ -n "$BASE" ] || BASE="$(git -C "$REPO_ROOT" rev-parse --verify -q HEAD^ 2>/dev/null || true)"
 [ -n "$BASE" ] || { printf 'flip-m43: 解析不到修复前的 revision，用 TEAM_FLIP_BASE=<sha> 指定\n' >&2; exit 2; }
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m43.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m43)" || exit 3
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0        # 管道/命令替换的子 shell 不要重复清场
-  rm -rf "$TMP"
+  tmp_root_reap_all
 }
 trap cleanup EXIT
 

@@ -515,6 +515,9 @@ team_cmd_doctor() {
   IFS=$'\t' read -r ino_status ino_text <<< "$(team_inotify_headroom_line)"
   if [ "$ino_status" = "ok" ]; then pass "$ino_text"; else warn "$ino_text"; fi
 
+  # P53 · 临时根余量（与 inotify 同型的宿主资源行；只警告、不动 fails）—— 实现在 cmd-status.sh
+  team_tmp_doctor_row
+
   check "容量 / swap 底线"; local avail swapfree swaptotal
     read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
     if [ -n "$avail" ] && [ "${avail:-0}" -gt 0 ] 2>/dev/null; then

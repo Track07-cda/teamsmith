@@ -404,8 +404,10 @@ pty_selftest() {
   [ -n "$break_stage" ] && [ "$break_stage" != "${1}" ] || break_stage=""
   [ -n "$break_stage" ] && PTY_SELFTEST_BREAK="$break_stage"
   local st_dir
-  st_dir="$(mktemp -d "${TMPDIR:-/tmp}/pty-wait-selftest.XXXXXX")"
-  trap 'rm -rf "$st_dir"' EXIT
+  # P53：临时根的唯一创建者（自检结束后由助手回收）
+  . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tmp-root.sh"
+  st_dir="$(tmp_root_create pty-wait-selftest)" || return 3
+  trap 'tmp_root_reap_all' EXIT
   local _PASS=0 _FAIL=0 _SKIP=0
   _st_ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; _PASS=$((_PASS + 1)); pty_fail_reset; }
   _st_bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; _FAIL=$((_FAIL + 1)); }

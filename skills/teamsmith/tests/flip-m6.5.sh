@@ -16,6 +16,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m6.5: 找不到 git 仓库（本脚本需要 git archive 取修复前的树）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m6.5: 需要 tmux（本复现是 tmux 现场的）\n' >&2; exit 2; }
@@ -28,14 +30,15 @@ fi
 [ -n "$BASE" ] || BASE="$(git -C "$REPO_ROOT" rev-parse --verify -q HEAD^ 2>/dev/null || true)"
 [ -n "$BASE" ] || { printf 'flip-m6.5: 解析不到修复前的 revision，用 TEAM_FLIP_BASE=<sha> 指定\n' >&2; exit 2; }
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m6.5.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m6.5)" || exit 3
 SESS="teamsmith-flip-m65-$$"
 
 # M28：夹具自己的 tmux 调用要有隔离证据（裸 tmux 按 $TMUX 打到调用者 server —— M23 事故形状）。
 # unset TMUX + 私有 TMUX_TMPDIR；工具在私有 server 的窗口里跑，继承同一套环境。口径见 tests/tmux-lint.pl。
 unset TMUX TMUX_PANE 2>/dev/null || true
 TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
-cleanup() { tmux kill-session -t "$SESS" 2>/dev/null || true; rm -rf "$TMP"; }
+cleanup() { tmux kill-session -t "$SESS" 2>/dev/null || true; tmp_root_reap_all; }
 trap cleanup EXIT
 
 # ---- 夹具：临时仓库 + teamsmith init + 记录 argv 的假 agent --------------------

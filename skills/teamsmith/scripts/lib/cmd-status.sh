@@ -927,3 +927,59 @@ team_cmd_change() {
 # 真正的渲染在 scripts/panel/panel.js（Ink bundle；纯文本模式 = --print）。这里保留函数名，
 # 因为它是面板的文本入口：spawn/诊断不需要知道 bundle 的位置。
 team_panel() { team_panel_text "$@"; }
+
+# ---------------------------------------------------------------- P53 / watchdog：临时根余量（doctor 一行）
+# 临时根 `${TMPDIR:-/tmp}` 是共享 tmpfs：它满了会报出与代码无关的假红（2026-09-22 的 ENOSPC 现场，
+# 见 openspec/changes/archive 前的 test-tmp-hygiene/design.md）。与 inotify 余量行同型：全局资源、
+# 只读、只警告、给操作者的修法，**绝不删除任何东西**、也不读临时根里面的任何文件（面板 health 路径
+# 上，只允许两次 df）。
+# 制表符分隔 <ok|warn>\t<人话>。默认底线 TEAM_TMP_MIN_FREE_MB=1024 / TEAM_TMP_MIN_FREE_INODES=100000
+# （非数字回退默认，同 TEAM_INOTIFY_MIN_FREE 的口径）；路径或数字读不到 → warn，绝不报 ok。
+team_tmp_human_kb() { # <KB> → 人话
+  local kb="${1:-0}"
+  case "$kb" in ''|*[!0-9]*) kb=0 ;; esac
+  if [ "$kb" -ge 1048576 ]; then awk -v k="$kb" 'BEGIN{printf "%.1f GB", k/1048576}'
+  elif [ "$kb" -ge 1024 ]; then awk -v k="$kb" 'BEGIN{printf "%.1f MB", k/1024}'
+  else printf '%s KB' "$kb"; fi
+}
+
+team_tmp_headroom_line() {
+  local base="${TMPDIR:-/tmp}"
+  local min_mb="${TEAM_TMP_MIN_FREE_MB:-1024}" min_ino="${TEAM_TMP_MIN_FREE_INODES:-100000}"
+  case "$min_mb" in ''|*[!0-9]*) min_mb=1024 ;; esac
+  case "$min_ino" in ''|*[!0-9]*) min_ino=100000 ;; esac
+  local hy_dir="${TEAM_SKILL_DIR:-skills/teamsmith}"
+  local remedy="bash $hy_dir/tests/tmp-hygiene.sh --status 看清单，再 --sweep 回收"
+  local total avail itotal ifree dk di
+  dk="$(df -P -k "$base" 2>/dev/null)"
+  di="$(df -P -i "$base" 2>/dev/null)"
+  total="$(printf '%s\n' "$dk" | awk 'NR==2{print $2}')"
+  avail="$(printf '%s\n' "$dk" | awk 'NR==2{print $4}')"
+  itotal="$(printf '%s\n' "$di" | awk 'NR==2{print $2}')"
+  ifree="$(printf '%s\n' "$di" | awk 'NR==2{print $4}')"
+  if [ -z "${avail:-}" ] || [ -z "${ifree:-}" ]; then
+    printf 'warn\t%s 的余量读不出来（df 失败或路径不可访问）—— 修法：%s\n' "$base" "$remedy"
+    return 0
+  fi
+  local avail_mb=$((avail / 1024)) crossed=""
+  [ "$avail_mb" -lt "$min_mb" ] && crossed="字节低于底线 ${min_mb}MB"
+  if [ "$ifree" -lt "$min_ino" ]; then
+    crossed="${crossed:+$crossed、}inode 低于底线 ${min_ino}"
+  fi
+  if [ -n "$crossed" ]; then
+    printf 'warn\t%s：可用 %s / 总 %s · inode 可用 %s / 总 %s —— %s；修法：%s\n' \
+      "$base" "$(team_tmp_human_kb "$avail")" "$(team_tmp_human_kb "$total")" "$ifree" "$itotal" "$crossed" "$remedy"
+    return 0
+  fi
+  printf 'ok\t%s：可用 %s / 总 %s · inode 可用 %s / 总 %s\n' \
+    "$base" "$(team_tmp_human_kb "$avail")" "$(team_tmp_human_kb "$total")" "$ifree" "$itotal"
+  return 0
+}
+
+# doctor 的这一行：调用方是 team_cmd_doctor，借它的 check/pass/warn（同一 shell 里可见）。
+team_tmp_doctor_row() {
+  local st text
+  IFS=$'\t' read -r st text <<<"$(team_tmp_headroom_line)"
+  check "临时根余量"
+  if [ "$st" = "ok" ]; then pass "$text"; else warn "$text"; fi
+}

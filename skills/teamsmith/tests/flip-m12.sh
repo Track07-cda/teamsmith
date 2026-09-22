@@ -25,6 +25,8 @@ INJ="${TEAM_FLIP_INJ:-2}"          # 注入的延迟秒数（> 有界轮询的�
 WAIT_SECS="${TEAM_FLIP_WAIT:-150}"  # 单次探针的护栏（截断跑实测 ~47s，注入 +~8s；护栏只是防挂死）
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m12: 找不到 git 仓库（本脚本要用 git show 取旧测试）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m12: 需要 tmux（复现是 tmux 现场的）\n' >&2; exit 2; }
@@ -40,8 +42,9 @@ case "${1:-}" in
   *) printf 'flip-m12: 未知参数 %s\n' "$1" >&2; exit 2 ;;
 esac
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m12.XXXXXX)"
-cleanup() { rm -rf "$TMP"; }
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m12)" || exit 3
+cleanup() { tmp_root_reap_all; }
 trap cleanup EXIT
 
 CUR_SMOKE="$SKILL_DIR/tests/smoke.sh"

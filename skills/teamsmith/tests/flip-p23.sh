@@ -22,6 +22,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 SMOKE="$SKILL_DIR/tests/smoke.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 
@@ -36,8 +38,9 @@ esac
 [ -s "$SMOKE" ] || { printf 'flip-p23: 缺 %s\n' "$SMOKE" >&2; exit 3; }
 [ -n "$REPO_ROOT" ] || { printf 'flip-p23: %s 不在 git 工作树里\n' "$SKILL_DIR" >&2; exit 3; }
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-flip-p23.XXXXXX")" || exit 3
-cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; [ "$KEEP" = "1" ] || rm -rf "$TMP"; return 0; }
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-p23)" || exit 3
+cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; [ "$KEEP" = "1" ] || tmp_root_reap_all; return 0; }
 trap cleanup EXIT
 
 TREE="$TMP/tree"

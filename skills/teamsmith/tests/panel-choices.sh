@@ -29,20 +29,23 @@ unset _v 2>/dev/null || true
 unset TMUX TMUX_PANE 2>/dev/null || true
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${_tree_arg:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 team="$skill/scripts/team"
 cmd_config="$skill/scripts/lib/cmd-config.sh"
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/pc.XXXXXX")"
 keep="${_keep_arg:-0}"
+[ "$keep" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create panel-choice)" || exit 3
 PASS=0
 FAIL=0
 
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   if [ "$keep" = "1" ]; then printf '\n保留夹具目录：%s\n' "$tmp"
-  else rm -rf "$tmp"; fi
+  else tmp_root_reap_all; fi
 }
 trap cleanup EXIT
 

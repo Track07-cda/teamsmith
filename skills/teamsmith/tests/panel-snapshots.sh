@@ -14,17 +14,19 @@
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${TEAM_SNAPSHOTS_TREE:-$(cd -P "$here/../../.." && pwd)}"
 panel="${TEAM_SNAPSHOTS_PANEL:-$tree/skills/teamsmith/scripts/panel/panel.js}"
 stub="$here/panel-b3-stub.sh"
 snapdir="$here/snapshots"
 js="${TEAM_SNAPSHOTS_JS:-$(command -v node || command -v bun || true)}"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/panel-snapshots.XXXXXX")"
+tmp="$(tmp_root_create panel-snapshots)" || exit 3
 update=0
 [ "${1:-}" = "--update" ] && update=1
 PASS=0
 FAIL=0
-cleanup() { rm -rf "$tmp"; }
+cleanup() { tmp_root_reap_all; }
 trap cleanup EXIT
 
 ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }

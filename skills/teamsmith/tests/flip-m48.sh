@@ -21,6 +21,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 TREE="$(cd -P "$SKILL_DIR/../.." && pwd)"
 SMOKE="$SKILL_DIR/tests/smoke.sh"
 PANEL_DIR="$SKILL_DIR/scripts/panel"
@@ -47,8 +49,9 @@ command -v python3 >/dev/null 2>&1 || die2 "需要 python3（打补丁）"
 [ -s "$SMOKE" ] || die2 "找不到 $SMOKE"
 [ -s "$PIN" ] || die2 "找不到 bundle（$PIN）"
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-flip-m48.XXXXXX")"
-cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; [ "$KEEP" = "1" ] || rm -rf "$TMP"; return 0; }
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m48)" || exit 3
+cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; [ "$KEEP" = "1" ] || tmp_root_reap_all; return 0; }
 trap cleanup EXIT
 RC=0
 

@@ -30,6 +30,8 @@
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 self="${BASH_SOURCE[0]}"
 
 le_usage() {
@@ -71,6 +73,7 @@ le_cleanup() { # one trap for both duties: CONT everything stopped, reclaim ever
   fi
   for p in ${LE_SPAWNED[@]+"${LE_SPAWNED[@]}"}; do kill -TERM "$p" 2>/dev/null || true; done
   LE_SPAWNED=()
+  tmp_root_reap_all
 }
 trap le_cleanup EXIT INT TERM
 
@@ -119,7 +122,7 @@ le_cmd_storm() { # <workers> <seconds> [tree]
   case "$workers" in ''|*[!0-9]*) printf 'load-experiment: refusing non-numeric workers [%s]\n' "$workers" >&2; return 2 ;; esac
   case "$secs" in ''|*[!0-9]*) printf 'load-experiment: refusing non-numeric seconds [%s]\n' "$secs" >&2; return 2 ;; esac
   start="$(date +%s)"
-  tmpd="$(mktemp -d "${TMPDIR:-/tmp}/load-experiment.storm.XXXXXX")" || return 3
+  tmpd="$(tmp_root_create load-experiment-storm)" || return 3
   le_storm_worker() {
     local n=0
     while [ $(( $(date +%s) - start )) -lt "$secs" ]; do
@@ -160,9 +163,12 @@ le_cmd_burn() { # <n> <seconds>
 
 # ── the private-fixture convention ───────────────────────────────────────────────────────────────
 le_cmd_private_root() { # <label> → a fresh private temp root on stdout
-  local label="${1:-exp}"
+  local label="${1:-exp}" r
   case "$label" in ''|*[!A-Za-z0-9._-]*) printf 'load-experiment: invalid label [%s]\n' "$label" >&2; return 2 ;; esac
-  mktemp -d "${TMPDIR:-/tmp}/load-experiment-$label.XXXXXX" || return 3
+  # P53：路径经助手创建，但生命周期归**调用方**（这个 CLI 只发路径）—— detach 才不会被本进程的 trap 收掉
+  r="$(tmp_root_create "load-experiment-$label")" || return 3
+  tmp_root_detach "$r" || true
+  printf '%s\n' "$r"
 }
 le_cmd_socket_name() { # <label> → a private tmux socket name (never the default server)
   local label="${1:-exp}"

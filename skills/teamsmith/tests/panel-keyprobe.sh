@@ -12,12 +12,14 @@
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${1:-$(cd -P "$here/../../.." && pwd)}"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/p12-keyprobe.XXXXXX")"
+tmp="$(tmp_root_create panel-keyprobe)" || exit 3
 log="$tmp/keyprobe.log"
 out="$tmp/probe.out"
 rc=3
-cleanup() { rm -rf "$tmp"; }
+cleanup() { tmp_root_reap_all; }
 trap cleanup EXIT
 
 bun_bin="${BUN:-}"

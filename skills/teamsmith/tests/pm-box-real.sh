@@ -29,6 +29,8 @@
 set -uo pipefail
 
 SKILL_DIR="${M24_SKILL_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"   # 可指向另一份 skill 副本（flip 证据用）
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SKILL_DIR/tests/lib/tmp-root.sh"
 TEAM="bash $SKILL_DIR/scripts/team"
 PI_BIN="${M24_PI_BIN:-$HOME/.bun/bin/pi}"
 [ -x "$PI_BIN" ] || PI_BIN="$(command -v pi 2>/dev/null || true)"
@@ -46,7 +48,8 @@ while [ $# -gt 0 ]; do
 done
 case "$IDLE_SECS" in ''|*[!0-9]*) IDLE_SECS=8 ;; esac
 
-TMP="$(mktemp -d /tmp/teamsmith-pmbox.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create pm-box)" || exit 3
 SESS="teamsmith-pmbox-$$"
 SOCKDIR="$TMP/tmux"
 REPO="$TMP/proj"
@@ -56,7 +59,7 @@ cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   m24_tmux kill-session -t "$SESS" 2>/dev/null || true
   m24_tmux kill-server 2>/dev/null || true
-  if [ "$KEEP" = "1" ]; then printf '保留临时目录：%s\n' "$TMP"; else rm -rf "$TMP"; fi
+  if [ "$KEEP" = "1" ]; then printf '保留临时目录：%s\n' "$TMP"; else tmp_root_reap_all; fi
 }
 trap cleanup EXIT
 

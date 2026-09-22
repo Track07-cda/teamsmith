@@ -20,6 +20,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m37: 找不到 git 仓库（本脚本需要 git archive 取修复前的树）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m37: 需要 tmux（本复现是 tmux 现场的）\n' >&2; exit 2; }
@@ -31,7 +33,8 @@ fi
 [ -n "$BASE" ] || BASE="$(git -C "$REPO_ROOT" rev-parse --verify -q HEAD^ 2>/dev/null || true)"
 [ -n "$BASE" ] || { printf 'flip-m37: 解析不到修复前的 revision，用 TEAM_FLIP_BASE=<sha> 指定\n' >&2; exit 2; }
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m37.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m37)" || exit 3
 SESS="teamsmith-flip-m37-$$"
 
 # M28/#1250：夹具自己的 tmux 调用要有隔离证据（裸 tmux 按 $TMUX 打到调用者 server —— 事故形状）。
@@ -40,7 +43,7 @@ TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0        # 管道/命令替换的子 shell 不要重复清场
   tmux kill-session -t "$SESS" 2>/dev/null || true
-  rm -rf "$TMP"
+  tmp_root_reap_all
 }
 trap cleanup EXIT
 

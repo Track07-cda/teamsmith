@@ -25,6 +25,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m45: 找不到 git 仓库（需要 git archive 取修复前的树）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m45: 需要 tmux（真 pane 那条路径）\n' >&2; exit 2; }
@@ -36,12 +38,13 @@ if [ -z "$BASE" ]; then
 fi
 [ -n "$BASE" ] || { printf 'flip-m45: 解析不到修复前的 revision，用 TEAM_FLIP_BASE=<sha> 指定\n' >&2; exit 2; }
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m45.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m45)" || exit 3
 SOCK="flip-m45-$$"
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   tmux -L "$SOCK" kill-server 2>/dev/null || true
-  rm -rf "$TMP"
+  tmp_root_reap_all
 }
 trap cleanup EXIT
 

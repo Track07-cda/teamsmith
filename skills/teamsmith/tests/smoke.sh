@@ -52,6 +52,13 @@ while IFS='=' read -r _m25v _; do
   [ -n "$_m25v" ] && unset "$_m25v" 2>/dev/null || true
 done < <(env | sed -n 's/^\(TEAM_REVIEW_[A-Za-z0-9_]*\)=.*$/\1/p')
 unset _m25v
+# ── P53 临时根纪律（change: test-tmp-hygiene）：本轮 = 一个 run ─────────────────────────
+# 自己定 run id（用非 TEAM_ 名：嵌套夹具按身份纪律清 TEAM_* 时清不掉它，台账里才看得见本轮
+# **所有**夹具创建的根）；继承的 TEAM_TMP_RUN_ID/TEAM_TMP_LEDGER 属于别人的 run，先清掉。
+unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
+[ -n "${SMOKE_TMP_RUN_ID:-}" ] || export SMOKE_TMP_RUN_ID="smoke-$$-$(date +%s)"
+# shellcheck source=tests/lib/tmp-root.sh
+. "$SKILL_DIR/tests/lib/tmp-root.sh"
 # tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
 # tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
 # 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新 exec 自己**，
@@ -212,7 +219,29 @@ real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去�
     done; } | sort -u
 }
 
-TMP="$(mktemp -d /tmp/teamsmith-smoke.XXXXXX)"
+# P53 · 本轮临时根用量：起手一行、结束一行（结束行在 EXIT 里兜底，失败/早退也打）
+smoke_human_kb() {
+  local kb="${1:-0}"
+  case "$kb" in ''|*[!0-9]*) kb=0 ;; esac
+  if [ "$kb" -ge 1048576 ]; then awk -v k="$kb" 'BEGIN{printf "%.1f GB", k/1048576}'
+  elif [ "$kb" -ge 1024 ]; then awk -v k="$kb" 'BEGIN{printf "%.1f MB", k/1024}'
+  else printf '%s KB' "$kb"; fi
+}
+SMOKE_TMP_USAGE_ENDED=0
+smoke_tmp_usage() { # start|end
+  local kb files
+  kb="$(du -sk "$TMP" 2>/dev/null | awk '{print $1}')"
+  files="$(find "$TMP" 2>/dev/null | wc -l | tr -d ' ')"
+  printf '  \033[2m·\033[0m 临时根%s：%s（%s · %s 文件）\n' \
+    "$([ "${1:-start}" = "end" ] && printf '（结束）' || true)" "$TMP" "$(smoke_human_kb "${kb:-0}")" "${files:-0}"
+  [ "${1:-start}" = "end" ] && SMOKE_TMP_USAGE_ENDED=1
+  return 0
+}
+
+# KEEP 映射到助手的保留旋钮（TEAM_SMOKE_KEEP / --keep 语义不变）
+[ "$KEEP" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create smoke)" || { printf 'smoke: 建不出临时根（TMPDIR=%s）\n' "${TMPDIR:-/tmp}" >&2; exit 3; }
+smoke_tmp_usage start
 SESSION="teamsmith-smoke-$$"
 PROTECTED="main"   # 与 TEAM_PROTECTED_BRANCH 默认值一致
 REPO="$TMP/repo"
@@ -387,19 +416,22 @@ smoke_tmp_sweep() { # 收尾：**干净跑**（没出过事）就把哨兵的兄
 ( smoke_tmp_tripwire & )
 
 cleanup() {
-  smoke_tmp_tripwire_stop    # 先收哨兵：下面的 rm -rf "$TMP" 是**合法**删除，不许被当成事故
+  smoke_tmp_tripwire_stop    # 先收哨兵：下面的临时根回收是**合法**删除，不许被当成事故
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # 私有 socket：连本轮的 server 一起收掉（调用者的默认 server 原样不动）
   [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && tmux kill-server 2>/dev/null || true
   [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && rm -f "${SMOKE_LOCK:-/nonexistent}.holder" 2>/dev/null || true
-  if [ "$KEEP" = "1" ]; then
-    printf '\n保留临时目录：%s（tmux session 已清理）\n' "$TMP"
-  else
-    rm -rf "$TMP"
+  # P53：结束用量行（早退也打）→ 助手回收（KEEP 时打印保留路径）→ 诊断文件收尾
+  if [ -n "${TMP:-}" ]; then
+    [ "${SMOKE_TMP_USAGE_ENDED:-0}" = "1" ] || smoke_tmp_usage end
+    tmp_root_reap_all
   fi
   smoke_tmp_sweep
 }
 trap cleanup EXIT
+# P53：INT 要装陷阱（非交互 shell 默认不因 SIGINT 而死）；TERM **不装** —— 未捕获的致命 TERM 会立即
+# 杀掉 shell 并跑 EXIT trap（cleanup 先收哨兵再回收根），装陷阱反而被「等前台命令结束」推迟。
+trap 'smoke_tmp_tripwire_stop; exit 130' INT
 
 [ -n "${REAL_TMUX:-}" ] && HAVE_TMUX=1 || HAVE_TMUX=0
 # 能直接跑 .ts 的运行时：node（需启用类型剥离）/ bun / tsx
@@ -12092,6 +12124,52 @@ if [ -f "$SKILL_DIR/tests/install-shape.sh" ]; then
   fi
 else
   bad "39 缺 tests/install-shape.sh"
+fi
+
+section "40 · 临时根纪律（P53：TMPDIR / owned 家族 / 泄漏断言 / lint）"
+# ① lint：临时根必须是 ${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX（助手是唯一创建者）。
+#    `TEAM_TMP_HYGIENE_FLIP=lint` 是门禁自己的红侧：把迁移后的 config-cli 夹具改回写死 /tmp
+#    的旧模板 → 这一段必须变红、并点名 file:line（证明门禁真的挡得住回归）。
+P53_FLIP="${TEAM_TMP_HYGIENE_FLIP:-}"
+P53_LINT_DIR="$SKILL_DIR/tests"
+mkdir -p "$TMP/lint-flip"
+# 诱饵模板拼在变量里：否则 lint 会把自己这个 sed 的字面量当成一条 finding
+P53_BAD_TMPL='/tmp/config-cli.XXXXXX'
+sed "s|tmp=\"\$(tmp_root_create config-cli)\"|tmp=\"\$(mktemp -d $P53_BAD_TMPL)\"|" \
+  "$SKILL_DIR/tests/config-cli.sh" >"$TMP/lint-flip/config-cli.sh"
+[ "$P53_FLIP" = "lint" ] && P53_LINT_DIR="$TMP/lint-flip"
+bash "$SKILL_DIR/tests/tmp-hygiene.sh" --lint --dir "$P53_LINT_DIR" >"$TMP/tmp-lint.log" 2>&1
+P53_LINT_RC=$?
+if [ "$P53_LINT_RC" = "0" ]; then
+  ok "40 lint 干净：$(grep -a '检查了' "$TMP/tmp-lint.log" | tail -1)"
+else
+  bad "40 lint 有 finding（rc=$P53_LINT_RC）：$(grep -aE ':[0-9]+:' "$TMP/tmp-lint.log" | head -3 | tr '\n' ' ')"
+fi
+if [ "$P53_FLIP" != "lint" ]; then
+  # 敏感性（不空转）：同一份「写死 /tmp」副本必须被抓到
+  bash "$SKILL_DIR/tests/tmp-hygiene.sh" --lint --dir "$TMP/lint-flip" >"$TMP/tmp-lint-flip.log" 2>&1
+  P53_FLIP_RC=$?
+  if [ "$P53_FLIP_RC" = "1" ] && grep -qE 'config-cli\.sh:[0-9]+:' "$TMP/tmp-lint-flip.log"; then
+    ok "40 lint 敏感性：写死 /tmp 的副本被点名 $(grep -oE 'config-cli\.sh:[0-9]+' "$TMP/tmp-lint-flip.log" | head -1)"
+  else
+    bad "40 lint 敏感性失败：写死 /tmp 的副本没被抓到（rc=$P53_FLIP_RC）"
+  fi
+fi
+
+# ② 结束用量行 + 泄漏断言：台账里本轮创建的根必须都没了（本进程自己的根除外 —— 它由 EXIT
+#    trap 的 cleanup 在断言之后回收，p53 的「一个都不留」正是冲着嵌套夹具泄漏去的）。
+smoke_tmp_usage end
+if [ "${TEAM_TMP_KEEP:-0}" = "1" ]; then
+  ok "40 临时根：本轮声明保留（TEAM_TMP_KEEP=1），不判泄漏"
+else
+  P53_SURV=0
+  while IFS=$'\t' read -r _p53p _p53pid _p53kind _p53kb _p53files; do
+    [ -n "$_p53p" ] || continue
+    [ "$_p53pid" = "$$" ] && continue          # 门禁自己的根：cleanup 负责
+    P53_SURV=$((P53_SURV + 1))
+    bad "40 临时根泄漏：$_p53p（$(smoke_human_kb "${_p53kb:-0}") · ${_p53files:-0} 文件 · kind=${_p53kind:-?} · pid=$_p53pid）"
+  done < <(tmp_root_ledger_survivors)
+  [ "$P53_SURV" -eq 0 ] && ok "40 泄漏断言：本轮创建的临时根一个都没留下（台账 $(basename "$(tmp_root_ledger)")）"
 fi
 
 section "15 · 完成"

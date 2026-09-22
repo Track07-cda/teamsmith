@@ -17,6 +17,8 @@ set -uo pipefail
 # ── 身份隔离（必须最先做）：绝不继承调用者的团队身份 ──────────────────────────────
 # （自己声明的树参数先存下来：下面的清理会把 TEAM_* 全清掉）
 _tree_arg="${TEAM_INSTALL_TREE:-}"
+_keep_arg="${TEAM_INSTALL_KEEP:-0}"
+_tmpkeep="${TEAM_TMP_KEEP:-}"
 while IFS='=' read -r _v _; do
   case "$_v" in TEAM_*) unset "$_v" 2>/dev/null || true ;; esac
 done < <(env)
@@ -24,14 +26,18 @@ unset _v 2>/dev/null || true
 unset TMUX TMUX_PANE 2>/dev/null || true
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${_tree_arg:-$(cd -P "$here/../../.." && pwd)}"
 team_cli="$tree/skills/teamsmith/scripts/team"
 wrapper="$tree/bin/team.mjs"
 
 [ -f "$team_cli" ] || { printf 'install-shape: 没有 CLI：%s\n' "$team_cli" >&2; exit 3; }
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/install-shape.XXXXXX")"
-keep="${TEAM_INSTALL_KEEP:-0}"
+[ -n "$_tmpkeep" ] && export TEAM_TMP_KEEP="$_tmpkeep"
+keep="$_keep_arg"
+[ "$keep" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create install-shape)" || exit 3
 PASS=0
 FAIL=0
 SKIP=0
@@ -39,7 +45,7 @@ SKIP=0
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   if [ "$keep" = "1" ]; then printf '\n保留夹具目录：%s\n' "$tmp"
-  else rm -rf "$tmp"; fi
+  else tmp_root_reap_all; fi
 }
 trap cleanup EXIT
 

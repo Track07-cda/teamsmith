@@ -20,6 +20,8 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT TEAM_
       TEAM_WATCH_INTERVAL 2>/dev/null || true
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${TEAM_B3_TREE:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 panel="${TEAM_B3_PANEL:-$skill/scripts/panel/panel.js}"
@@ -31,8 +33,9 @@ js="${TEAM_B3_JS:-$(command -v node || true)}"
 [ -n "$js" ] || js="$(command -v bun || true)"
 sock="p14b3-$$"
 sess="p14b3-$$"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/panel-b3.XXXXXX")"
 keep="${TEAM_B3_KEEP:-0}"
+[ "$keep" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create panel-b3)" || exit 3
 PASS=0
 FAIL=0
 ROOT=""
@@ -45,7 +48,7 @@ cleanup() {
   if [ "$keep" = "1" ]; then
     printf '\n保留夹具目录：%s\n' "$tmp"
   else
-    rm -rf "$tmp"
+    tmp_root_reap_all
   fi
 }
 trap cleanup EXIT

@@ -14,9 +14,12 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 
-TMP="$(mktemp -d /tmp/teamsmith-guard.XXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create guard-matrix)" || exit 3
+trap 'tmp_root_reap_all' EXIT
 SHIM="$TMP/bin"
 mkdir -p "$SHIM"
 : > "$TMP/capture"

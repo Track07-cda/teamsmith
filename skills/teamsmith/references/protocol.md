@@ -457,6 +457,17 @@ review verdict. The contracts live in the specs (`verification#The correctness g
 `verification#The hard timeout covers the gate run, not the queue`,
 `panel#Frame assembly is asynchronous, cached and never blocks input`); this section is the operational rule.
 
+The gate also reports **its own temp-root usage**: one line at the start and one with the result summary (also on
+failure) name the run's root, its size and its file count, and the run asserts that every root it created is gone
+unless it declared one kept. Fixtures get their root from `${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX` through the
+single owner helper `tests/lib/tmp-root.sh` (owner marker inside, run ledger outside, reclaim on `EXIT`/`INT`/`TERM`,
+`TEAM_TMP_KEEP=1` to keep); residual roots are reclaimed by an **operator** action,
+`bash skills/teamsmith/tests/tmp-hygiene.sh --status` then `--sweep` (it proves a root is unoccupied before
+deleting, and refuses with nothing deleted when it cannot). The gate never sweeps: a fixture another agent started
+by hand is not in the gate lock, so pattern-deleting in the shared temp filesystem is the D37 family. `team doctor`
+prints the temp root's headroom (free/total bytes and inodes, warning only) so a full tmpfs is visible before it
+turns into a red a fixture cannot explain.
+
 ## 9c. Strong verification (adversarial package + finding flips, for milestones)
 
 `team review <ID> --strong` checks two extra things and writes the conclusion into the verification record. The check is

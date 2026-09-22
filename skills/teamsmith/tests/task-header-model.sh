@@ -10,6 +10,8 @@
 set -uo pipefail
 
 SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SKILL_DIR/tests/lib/tmp-root.sh"
 TEAM="bash $SKILL_DIR/scripts/team"
 
 # 身份隔离（与 smoke.sh 同一套）：绝不继承调用者的团队身份
@@ -24,8 +26,8 @@ FAIL=0
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/task-header-model.XXXXXX")" || exit 3
-cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; rm -rf "$TMP"; return 0; }
+TMP="$(tmp_root_create task-header-model)" || exit 3
+cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; tmp_root_reap_all; return 0; }
 trap cleanup EXIT
 
 P="$TMP/proj"

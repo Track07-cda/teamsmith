@@ -19,11 +19,13 @@
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$here/lib/tmp-root.sh"
 tree="${TEAM_PANEL_CPU_TREE:-$(cd -P "$here/../../.." && pwd)}"
 cpu="$here/panel-cpu.sh"
 window="${TEAM_PANEL_CPU_SECS:-6}"   # 太短的窗口会把启动尾巴算进 CPU 均值（实测 3s → 1.6%，6s → 0.4%）
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/p26premise.XXXXXX")"
-trap 'rm -rf "$tmp"' EXIT
+tmp="$(tmp_root_create panel-cpu-premise)" || exit 3
+trap 'tmp_root_reap_all' EXIT
 # 缺 GNU time → 可见跳过（与 panel-cpu.sh 的 exit 4 同一个语义：没结论，不是通过也不是红）。
 # 解析口径与 panel-cpu.sh 逐字一致（`/usr/bin/time`，否则 PATH 上的 `time`）。
 p26_time_ok=0

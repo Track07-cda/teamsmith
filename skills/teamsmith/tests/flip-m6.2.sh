@@ -14,6 +14,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf '不在 git 仓库里：%s\n' "$SKILL_DIR" >&2; exit 2; }
 
@@ -29,10 +31,11 @@ if [ -z "$BASE" ] || ! git -C "$REPO_ROOT" rev-parse --verify --quiet "${BASE}^{
   exit 2
 fi
 
-WORK="$(mktemp -d /tmp/m62flip.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+WORK="$(tmp_root_create flip-m6.2)" || exit 3
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
-  rm -rf "$WORK"
+  tmp_root_reap_all
 }
 trap cleanup EXIT
 RED_ROOT="$WORK/red"

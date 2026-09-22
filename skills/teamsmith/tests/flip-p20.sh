@@ -20,6 +20,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 TREE="$(cd -P "$SKILL_DIR/../.." && pwd)"
 PANEL_DIR="$SKILL_DIR/scripts/panel"
 PIN="$PANEL_DIR/panel.js"
@@ -43,8 +45,9 @@ bun="${P20_FLIP_BUN:-}"
 INK_PIN="$(sed -n 's/.*"ink": *"\([^"]*\)".*/\1/p' "$PANEL_DIR/package.json")"
 REACT_PIN="$(sed -n 's/.*"react": *"\([^"]*\)".*/\1/p' "$PANEL_DIR/package.json")"
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-flip-p20.XXXXXX")"
-cleanup() { [ "${BASHPID:-$$}" = "$$" ] && [ "${KEEP:-0}" = "0" ] && rm -rf "$tmp"; }
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create flip-p20)" || exit 3
+cleanup() { [ "${BASHPID:-$$}" = "$$" ] && [ "${KEEP:-0}" = "0" ] && tmp_root_reap_all; }
 trap cleanup EXIT
 
 flip_apply() { # <label> <src dir>：每个 batch 的破坏点（走 Python 的字符串，避开 shell 引号地狱）

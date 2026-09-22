@@ -19,6 +19,8 @@ set -uo pipefail
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURE_TUI="$SELF_DIR/fake-tui.py"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -37,7 +39,8 @@ command -v python3 >/dev/null 2>&1 || { printf 'flip-glue: 需要 python3（夹�
 DRAFT='半截草稿 half a sentence'
 NOTICE='[watchdog] 待办：验 V9.9'
 
-SB="$(mktemp -d /tmp/teamsmith-flip.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+SB="$(tmp_root_create flip-glue)" || exit 3
 REPO="$SB/repo"
 SESSION="teamsmith-flip-$$"
 SUBMIT_LOG="$SB/submit.log"
@@ -68,7 +71,7 @@ REAL_BEFORE="$(real_fp "$REAL_MAIN")"
 cleanup() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   if [ "$KEEP" = "1" ]; then printf '保留临时目录：%s\n' "$SB"
-  else rm -rf "$SB"; fi
+  else tmp_root_reap_all; fi
 }
 trap cleanup EXIT
 

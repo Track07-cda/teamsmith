@@ -27,6 +27,8 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m7.2: 找不到 git 仓库（本脚本需要 git archive 取修复前的树）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m7.2: 需要 tmux（本复现是 tmux 现场的）\n' >&2; exit 2; }
@@ -42,7 +44,8 @@ fi
 [ -n "$BASE" ] || BASE="$(git -C "$REPO_ROOT" rev-parse --verify -q HEAD^ 2>/dev/null || true)"
 [ -n "$BASE" ] || { printf 'flip-m7.2: 解析不到修复前的 revision，用 TEAM_FLIP_BASE=<sha> 指定\n' >&2; exit 2; }
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m7.2.XXXXXX)"
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m7.2)" || exit 3
 SESS_RED="teamsmith-flip-m72-red-$$"
 SESS_GREEN="teamsmith-flip-m72-green-$$"
 
@@ -54,7 +57,7 @@ cleanup() {
   tmux kill-session -t "$SESS_RED" 2>/dev/null || true
   tmux kill-session -t "$SESS_GREEN" 2>/dev/null || true
   if [ "${TEAM_FLIP_KEEP:-0}" = "1" ]; then printf '\n保留现场：%s\n' "$TMP"
-  else rm -rf "$TMP"; fi
+  else tmp_root_reap_all; fi
 }
 trap cleanup EXIT
 

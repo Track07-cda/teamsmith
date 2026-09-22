@@ -15,6 +15,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 TREE="$(cd -P "$SKILL_DIR/../.." && pwd)"
 PIN="$SKILL_DIR/scripts/panel/panel.js"
 LAYOUT="skills/teamsmith/scripts/panel/src/layout.ts"
@@ -40,8 +42,9 @@ if [ -z "$PRE_REV" ]; then
   PRE_REV="$last^"
 fi
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-flip-m34.XXXXXX")"
-cleanup() { [ "${BASHPID:-$$}" = "$$" ] && [ "$KEEP" = "0" ] && rm -rf "$tmp"; }
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+tmp="$(tmp_root_create flip-m34)" || exit 3
+cleanup() { [ "${BASHPID:-$$}" = "$$" ] && [ "$KEEP" = "0" ] && tmp_root_reap_all; }
 trap cleanup EXIT
 
 pre_bundle="$tmp/pre-panel.js"

@@ -302,6 +302,13 @@ see it.
 | `TEAM_REVIEW_ANY_DIR` | `0` | `1` = skip the “checkout HEAD == branch tip” guard when deliberately reviewing a historical revision (pair it with `--branch <sha>`) |
 | `TEAM_MIN_FREE_SWAP_MB` | temporarily override the disk swap floor |
 | `TEAM_MEMINFO_FILE` | point at another meminfo file (for containers/tests without `/proc/meminfo`) |
+| `TMPDIR` | the temp root every fixture's root resolves to (`${TMPDIR:-/tmp}`); `TMPDIR=D bash tests/config-cli.sh` is the shape of the temp-root flip, and no fixture template may hardcode `/tmp` |
+
+Environment-only temp-root knobs are deliberately **not** part of the config surface (no schema row, not writable into
+`.pi/team/config.sh`): they live in `references/protocol.md` §9b-2 and `references/troubleshooting.md` §25 —
+TEAM_TMP_KEEP (1 = keep the fixture's temp root and print its path), TEAM_TMP_SWEEP_AGE (minutes, default 30),
+TEAM_TMP_MIN_FREE_MB (default 1024) and TEAM_TMP_MIN_FREE_INODES (default 100000) for the `team doctor`
+headroom line.
 | `TEAM_MODEL_LIMITS` | temporarily loosen/tighten concurrency (`""` means unlimited) |
 | `TEAM_ASSUME_YES` | `1` = skip `--yes` (only recommended inside automation scripts) |
 | `TEAM_BOARD_DONE_FORCE` | `1` = PM override for the `done` gate: write `done` even though neither a usable review record nor a merged branch exists (`close --status done` has the `--force` flag for the same thing) |

@@ -26,6 +26,8 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
+# P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
+. "$SELF_DIR/lib/tmp-root.sh"
 SMOKE="$SKILL_DIR/tests/smoke.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 
@@ -42,8 +44,9 @@ command -v git >/dev/null 2>&1 || die2 "需要 git"
 [ -s "$SMOKE" ] || die2 "找不到 $SMOKE"
 [ -n "$REPO_ROOT" ] || die2 "$SKILL_DIR 不在 git 工作树里（⑤ 需要一个真树）"
 
-TMP="$(mktemp -d /tmp/teamsmith-flip-m44.XXXXXX)"
-cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; [ "$KEEP" = "1" ] || rm -rf "$TMP"; return 0; }
+[ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
+TMP="$(tmp_root_create flip-m44)" || exit 3
+cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; [ "$KEEP" = "1" ] || tmp_root_reap_all; return 0; }
 trap cleanup EXIT
 
 pass() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
