@@ -1891,8 +1891,15 @@ team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 sk
 # TEAM_PM_RESUME_ARGS 这一次都不生效（显式的人造意图 > 持久配置键）。
 team_pm_fresh_launch() { [ "${TEAM_PM_FRESH_LAUNCH:-0}" = "1" ]; }
 
+# P58/F1：PM 席位模型的**唯一解析** —— 启动（team_pm_pi_args、team_pm_launch_cmd 的自定义 CLI 分支）与
+# 读出口（`team config list --json` 的 pm 行，见 cmd-config.sh 的 team_config_seat_state）都调它，
+# 「席位行的模型」因此不可能与实际会用的模型分叉。空 TEAM_DEFAULT_MODEL 在 team_load_config 里已回退成
+# schema 默认（那里的 `${TEAM_DEFAULT_MODEL:-…}`），所以这里的空值语义与启动逐字一致；没经过 load 的
+# 夹具（只 source common.sh）读到的就是环境原值 —— 与它自己调 team_pm_pi_args 得到的口径相同。
+team_pm_model_resolve() { printf '%s\n' "${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}"; }
+
 team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）与 team-inbox-watch（PM 的投递换道）；默认 -c 延续本目录上一个会话以保住历史
-  local model="${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}" args=()
+  local model="$(team_pm_model_resolve)" args=()
   args=(--provider "${model%%/*}" --model "${model##*/}")
   # M27：PM 的团队后台车道（team_bg_run/team_bg_wait），与 worker 侧同一个扩展
   [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
@@ -2144,7 +2151,7 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
     return 0
   fi
   expanded="$(team_agent_expand pm "$TEAM_PM_CMD" pm "${TEAM_PM_SESSION_ID:-}" \
-    "$TEAM_MAIN_ROOT" "$pf" "" "" "${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}")"
+    "$TEAM_MAIN_ROOT" "$pf" "" "" "$(team_pm_model_resolve)")"
   # 裸名字 → 解析出的绝对路径（M8.1 退回点 1；见 team_pm_subst_first_word 的注释）。
   # 只在「要执行的二进制 == 身份检查看的二进制」时替换：TEAM_PM_BIN 为空时它俩本来就是一个；
   # 显式把 TEAM_PM_BIN 指向**另一个**名字（例如 TEAM_PM_BIN=bash 配一个脚本型 CLI）时，

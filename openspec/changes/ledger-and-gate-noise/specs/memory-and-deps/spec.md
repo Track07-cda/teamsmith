@@ -9,7 +9,8 @@ displays for that seat, `source` is one of `config` / `explicit` / `record` with
 differing from the seat's configuration resolution → `record`), and `override` says whether the seat carries a
 token in `TEAM_AGENT_MODELS` (for `pm`: whether `TEAM_PM_MODEL` is set). `known[]` SHALL be the union of the configured
 and the recorded models — every seat's displayed model, the `pm` seat's resolution (`TEAM_PM_MODEL` when set, else
-`TEAM_DEFAULT_MODEL`) included — deduplicated in
+`TEAM_DEFAULT_MODEL` resolved exactly as the PM's launch resolves it, an empty one falling back to the schema
+default) included — deduplicated in
 first-seen order; the same set is the vocabulary `choices.values` reports for a `model`-kind key. `team config set-agent-model <seat> <model|->` SHALL write the pair list (or
 `TEAM_PM_MODEL` for the `pm` seat) itself — the CLI parses and re-serializes the tokens; the caller never composes
 them — through the same writer, fingerprint CAS, audit and `--dry-run`/`--yes` rules as `team config set`, with two
@@ -101,11 +102,19 @@ display, what the seat's row reports, and what the dispatch renderer uses. A sou
 - **WHEN** `team dispatch dev --print` runs
 - **THEN** the rendered launch command carries `vendor-a/model-a` — the empty token does not render an empty model
 
-#### Scenario: An empty model is still a value
+#### Scenario: An empty default still resolves to the fallback
 
 - **GIVEN** a contract whose `TEAM_DEFAULT_MODEL` is empty and whose `TEAM_AGENT_MODELS` carries `dev=`
 - **WHEN** `team config list --json` runs
-- **THEN** the `dev` row exists with `"model":""` and `"override":true`, and the document parses as JSON
+- **THEN** the `dev` row exists with `"model"` equal to the CLI's resolved default (the schema default for
+  `TEAM_DEFAULT_MODEL`) and `"override":true`, and the document parses as JSON
+
+#### Scenario: The PM row resolves exactly like the PM's launch
+
+- **GIVEN** a contract whose `TEAM_DEFAULT_MODEL` and `TEAM_PM_MODEL` are both empty
+- **WHEN** `team config list --json` and the PM launch renderer (`team up --print`) run
+- **THEN** the `pm` row's `model` is the model the rendered command passes as its `--provider`/`--model` pair —
+  the resolved default, never `""` — and its `override` is false
 
 ## ADDED Requirements
 

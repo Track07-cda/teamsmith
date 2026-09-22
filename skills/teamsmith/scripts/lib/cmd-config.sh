@@ -550,8 +550,10 @@ team_config_seat_state() { # <seat> → model<TAB>source<TAB>override
   if [ "$seat" = "pm" ]; then
     local pmv; pmv="$(team_config_file_value "$(team_config_contract_path 2>/dev/null || true)" TEAM_PM_MODEL 2>/dev/null || true)"
     [ -n "$pmv" ] && override="true"
-    model="$(team_config_file_value "$(team_config_contract_path 2>/dev/null || true)" TEAM_DEFAULT_MODEL 2>/dev/null || true)"
-    [ -n "$pmv" ] && model="$pmv"
+    # P58/F1：模型与 PM 的启动解析**同源**（team_pm_model_resolve == team_pm_pi_args 用的那一行）：
+    # 空 TEAM_DEFAULT_MODEL 时启动回退到 schema 默认，席位行也必须回退 —— 否则它会在空默认角落说 ""，
+    # 与「实际会用的模型」分叉（P54 的 F1）。
+    model="$(team_pm_model_resolve)"
     src="$(team_agent_model_src pm 2>/dev/null || printf '配置')"
     printf '%s\t%s\t%s\n' "${model:-}" "$src" "$override"
     return 0

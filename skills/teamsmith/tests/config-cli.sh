@@ -648,12 +648,19 @@ PY
   else
     skip "monitor --json：没有 JS 运行时（面板要求 node/bun）——可见 SKIP，不是红"
   fi
-  # 空模型必须是字符串 ""（R5）：pm 行取契约文件的空默认值，dev 行仍要在（seats 覆盖每个席位）
+  # ── P58/F1：空默认角落的席位行必须与「实际会用的模型」同源（空 → 回退，不再是 ""）─────────────
+  # 启动解析不抄期望值：从真实渲染取（`team up --print` 的完整命令里的 --provider/--model）。
+  # 读出口的行与启动解析再次分叉时，这条断言必须红。序列化的 "" 形状由 F-J1 的无值字段翻转守着。
   json_e="$( cd "$pj" && bash "$team" config list --json 2>/dev/null )"
-  json_check "$json_e" "空默认值：pm 行的空模型序列化成 \"\"（不是无值字段）" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]=="" and [s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["override"] is False'
-  json_check "$json_e" "空默认值：dev 行仍在（seats 覆盖每个名册席位）且 override 是布尔 true" \
-    'all(s["agent"] in ["dev","pm","verify"] for s in d["models"]["seats"]) and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
+  up_print="$( cd "$pj" && bash "$team" up --print 2>/dev/null || true )"
+  pm_model="$(printf '%s' "$json_e" | python3 -c 'import json,sys; print([s for s in json.load(sys.stdin)["models"]["seats"] if s["agent"]=="pm"][0]["model"])' 2>/dev/null)"
+  launch_pair="$(printf '%s' "$up_print" | grep -oE -- '--provider [^ ]+ --model [^ ]+' | tail -1 || true)"
+  assert_eq "空默认值：pm 行的模型 = PM 启动解析（up --print 的 --provider/--model），不是 \"\"" \
+    "--provider ${pm_model%%/*} --model ${pm_model##*/}" "$launch_pair"
+  json_check "$json_e" "空默认值：pm 行回退成非空模型（不是 \"\"），override 仍是布尔 false" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]!="" and [s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["override"] is False'
+  json_check "$json_e" "空默认值：dev 行仍在（seats 覆盖每个名册席位）、模型非空且 override 是布尔 true" \
+    'all(s["agent"] in ["dev","pm","verify"] for s in d["models"]["seats"]) and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]!="" and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
 
   # ── F-J1：scratch 树里把席位行序列化器改回无值字段形状 → 解析走查必须红并点名位置 ────────────
   # 嵌套防护：红/绿两侧都是 `TEAM_CONFIG_TREE=<scratch>` 的**再入**运行 —— 再入时不再递归翻转
