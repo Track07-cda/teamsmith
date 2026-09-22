@@ -48,6 +48,10 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF_FILE="$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
+# P53（change: test-tmp-hygiene）：夹具临时根的唯一创建者 —— 指纹检查的两个私有根也走它
+# （${TMPDIR:-/tmp} + owned 家族 teamsmith-<kind>.XXXXXX + owner 标记 + 台账回收），不再裸 mktemp。
+# shellcheck source=tests/lib/tmp-root.sh
+. "$SELF_DIR/lib/tmp-root.sh"
 IMAGE="${TEAM_TMUX_IMAGE:-teamsmith-tmux-test:alpine}"
 BASE_IMAGE="${TEAM_TMUX_BASE_IMAGE:-docker.io/library/alpine:latest}"
 MEMORY="${TEAM_TMUX_MEMORY:-1g}"
@@ -144,11 +148,13 @@ fp_cleanup() { # 只碰 FP_DIR/FP_DIR2 里的私有 socket；目录丢了/空了
   local dps="${FP_DIR:-} ${FP_DIR2:-}" dp
   for dp in $dps; do
     [ -n "$dp" ] || continue
+    # 先杀 server 再删根：tmp-root.sh 的 INT/EXIT 回收也走这里（顺序反过来会剩一个没有 socket 的孤儿 server）
     if [ -S "$dp/tmux-$(id -u)/default" ]; then
       env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$dp" tmux kill-server >/dev/null 2>&1 || true
     fi
     rm -rf "$dp"
   done
+  tmp_root_reap_all   # P53：收台账/保留（目录已删，这里保证账目与 trap 语义一致）
 }
 ct_fingerprint_check() {
   local rc=0 fp1 fp2 fp3 fpa fpb sp sp2 i r1 r2 d1 d2 sock sock2 fp_bin
@@ -156,9 +162,11 @@ ct_fingerprint_check() {
     say "SKIP: --fingerprint-check 需要 tmux（宿主上没有）"
     return 77
   fi
-  FP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fpcheck.XXXXXX")" || { say "✗ --fingerprint-check：建不了私有目录"; return 1; }
+  FP_DIR="$(tmp_root_create fpcheck)" || { say "✗ --fingerprint-check：建不了私有目录"; return 1; }
   sock="$FP_DIR/tmux-$(id -u)/default"
   trap 'fp_cleanup' EXIT
+  # INT 先走 fp_cleanup（杀私有 server 再删根）—— tmp-root.sh 的 INT 陷阱会先删根，导致 kill-server 找不到 socket
+  trap 'fp_cleanup; exit 130' INT
   # 私有 default socket 的包装（隔离证据：env -u TMUX + 私有 TMUX_TMPDIR）；真身走 PATH 里的 tmux
   fp_tmux() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$FP_DIR" tmux "$@"; }
   fp_read() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$FP_DIR" TMUX="$sock,1,0" bash "$SELF_FILE" --fingerprint; }
@@ -212,7 +220,7 @@ ct_fingerprint_check() {
   fi
   fp_tmux kill-server >/dev/null 2>&1 || true
   # (d) 一个从未起过 server 的私有 TMUX_TMPDIR：读两次同值、exit 0、不冒出 socket 文件（只读，不起 server）
-  FP_DIR2="$(mktemp -d "${TMPDIR:-/tmp}/fpcheck2.XXXXXX")" || { say "✗ (d) 建不了第二个私有目录"; rc=1; }
+  FP_DIR2="$(tmp_root_create fpcheck2)" || { say "✗ (d) 建不了第二个私有目录"; rc=1; }
   if [ -n "${FP_DIR2:-}" ]; then
     sock2="$FP_DIR2/tmux-$(id -u)/default"
     d1="$(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$FP_DIR2" TMUX="$sock2,1,0" bash "$SELF_FILE" --fingerprint)"; r1=$?
