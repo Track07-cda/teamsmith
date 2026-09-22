@@ -123,44 +123,49 @@ a scratch `HOME` (never the developer's), and the `sub2api` string in it is a sy
 > items below are dev-owned paths. **5 = one apply brief, 6 = a different agent's verify brief**; B4's archive
 > prep reruns on the rework's tip.
 
-- [ ] 5.1 `scripts/panel/src/App.tsx`: accepting a value entry (`current`/`default`/`choices.values`/`clear`) runs
+- [x] 5.1 `scripts/panel/src/App.tsx`: accepting a value entry (`current`/`default`/`choices.values`/`clear`) runs
   validation and write on that one accept — `setSetting(key, value, {dryRun:true, fingerprint})` then the same with
   `dryRun:false` and `allowDanger` only after the danger confirmation; no compose editor and no confirmation on the
   direct path; exit 7 keeps the existing danger confirmation frame; the free-text entry is the only
   `openCompose('setting', …)` caller; `keep-unset`, `pairlist` route and `esc` unchanged. Verify: 5.4's
   `choices-direct` scenario plus the existing `write`/`conflict` scenarios.
-- [ ] 5.2 `scripts/panel/src/App.tsx` + `main.tsx`: the read leaves the interaction path — the picker and the
+- [x] 5.2 `scripts/panel/src/App.tsx` + `main.tsx`: the read leaves the interaction path — the picker and the
   free-text editor are built from the `settings` block already on screen (`openSettingsRow`/`chooseChoiceOption`
   stop forcing `refreshSettings()`), the fingerprint is that block's, and a settle refreshes only `['settings']` in
   the background without holding the receipt frame. Verify: 5.4's argv-log scenario (no read child inside the
   window) and the direct-path CAS scenario.
-- [ ] 5.3 `scripts/lib/cmd-config.sh`: the read stops fanning out — one pass over the contract for values, inline
+- [x] 5.3 `scripts/lib/cmd-config.sh`: the read stops fanning out — one pass over the contract for values, inline
   comments and schema-unknown keys instead of the per-key `grep|head`+`awk` and the per-line `sed`, with byte-
   identical output. The evidence prototype is `docs/team/reports/M65-dev2/measure/read-prototype.sh` (semantic
   match on 111 records; ~186 ms vs ~3300 ms). Verify: the prototype's equality diff against
   `team config list --json` and `tests/panel-choices.sh read known walk` green; the wall-clock guard belongs to 5.5.
-- [ ] 5.4 `tests/panel-p21.sh` (dev): a `choices-direct` scenario — accept an enum entry → the argv log carries
+- [x] 5.4 `tests/panel-p21.sh` (dev): a `choices-direct` scenario — accept an enum entry → the argv log carries
   `config set … --dry-run` then `config set … --yes --fingerprint …` as the only children, no confirmation line
   ever renders, the sha256 changed once, the audit grew one line and the receipt names the class's timing; the
   free-text entry still shows editor → confirmation → write; `esc` writes nothing; a first click focuses and a
   second click accepts; and the read-gap assertion: no `config list`/`__panel-data` child between the open/accept/
   free-text keystrokes and the frames they produce.
-- [ ] 5.5 `tests/perf.sh` (dev): one visible, D33-shaped guard for the read — the fixture's `team config list
+- [x] 5.5 `tests/perf.sh` (dev): one visible, D33-shaped guard for the read — the fixture's `team config list
   --json` cost measured in the reference environment (SKIP + exit 4 when it is unavailable), never a smoke
   assertion and never a correctness red.
-- [ ] 5.6 Flips (required in the apply report): **W-A** re-adding `refreshSettings()` to `openSettingsRow` turns
+- [x] 5.6 Flips (required in the apply report): **W-A** re-adding `refreshSettings()` to `openSettingsRow` turns
   5.4's read-gap assertion red; **W-B** restoring the pre-rework accept (editor instead of direct write) turns its
   argv assertion red; **W-C** re-introducing a per-key subprocess in the read fails the prototype's equality (or the
   5.5 guard); every one restored green.
-- [ ] 5.7 Rebuild `scripts/panel/panel.js` with the pinned bun, second rebuild byte-identical; `panel-strings.mjs`,
+- [x] 5.7 Rebuild `scripts/panel/panel.js` with the pinned bun, second rebuild byte-identical; `panel-strings.mjs`,
   the snapshot suite and smoke's bundle assertions stay green.
 
 ## 6. V — independent verification of the rework (a different agent)
 
-- [ ] 6.1 Rerun, out of tree and on the rework's tip: every flip of 5.6 (red and green), the `choices-direct` pty
+- [x] 6.1 Rerun, out of tree and on the rework's tip: every flip of 5.6 (red and green), the `choices-direct` pty
   scenario, the prototype's equality diff, `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` and the
   **full** smoke; the record goes to `docs/team/reviews/<ID>.md` with a verdict and any findings (a PASS carrying
   findings is rework, not archive).
-- [ ] 6.2 The PM reruns the measurement's one command (`docs/team/reports/M65-dev2/measure/run.sh`) plus the
+- [x] 6.2 The PM reruns the measurement's one command (`docs/team/reports/M65-dev2/measure/run.sh`) plus the
   protected-branch gates on the merged tip before the archive; **M60's record covers the pre-rework interaction and
   does not cover this batch** — the rework needs its own verify record (D31: a different agent from 5's author).
+
+> **PM 勾选说明（2026-09-22，重做后补）**：重做的 apply = **M68（dev2，已合并）**；
+> 重做的独立验证 = **M74（dev 席位，`28560b4`）** —— PASS（reviews/M74.md）：
+> 直写 argv（enum 探针）、交互路径零读取、危险值例外（从 choices.values 里挑）、「其他」路径、
+> 读一遍逐字节等价（自写独立解析器，3574→220ms）、旧语义 CLI 层全保。
