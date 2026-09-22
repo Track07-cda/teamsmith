@@ -5,7 +5,8 @@
  *   <node|bun> team-bg-harness.mjs <skill>/extension/team-bg.ts [--keep]
  *
  * 为什么用「假 Pi 宿主」而不是真模型：本夹具要证的是**扩展自己的契约**——job 表、收割/未收割、
- * 合并成一条、账本行格式、日志有界。这些都被接口（registerTool / agent_settled / sendMessage）完全
+ * 合并成一条、账本行格式、日志有界、结果文本点名命令（P33：单行化 + 100 码点缩略）。这些都被接口
+ * （registerTool / agent_settled / sendMessage）完全
  * 决定，用真模型只会把判据换成「模型有没有照着做」。真实的「唤醒一个空闲 pi 会话」由 E8 的 RPC 探针
  * 实证过（docs/team/reports/E8-verify/probes/），本夹具不重复付那份成本（模型调用 + 波动）。
  *
@@ -202,6 +203,61 @@ const settledCounts = () => ledger().map(l => Number(/ settled-with-unharvested=
   const body = existsSync(log) ? readFileSync(log, 'utf8') : ''
   check('S6 truncation keeps the tail', body.includes('TAIL-MARKER-S6') && body.includes('[team-bg] truncated'))
   check('S6 harvest reports the truncation and the tail', waited.includes('exit=0') && waited.includes('TAIL-MARKER-S6') && waited.includes('[team-bg] truncated'))
+}
+
+// ── S12：结果里点名命令（P33：单行化 + 100 码点缩略；details.cmd 原样） ────────
+// 用户反馈（P33）：结果里只有 job id/pid/log，看不出「我到底跑的是什么命令」。契约（P33 任务书）：
+// ① 文本里有 `cmd: <命令>`；② **单行化**（换行/连串空白 → 一格），多行命令也要一眼能读；
+// ③ 超过 100 个**码点**缩略加 `…`，按码点切（不许把 CJK/代理对劈成半个 —— P28 的字节切会造非法
+//    UTF-8）；④ `details.cmd` 原样、不缩略；⑤ 收割回执（running / finished 两种形状）同样点名。
+{
+  const cmdLine = (text) => text.split('\n').find(l => l.startsWith('  cmd:')) ?? '(no cmd line)'
+  const utf8RoundTrip = (s) => new TextDecoder().decode(new TextEncoder().encode(s))
+
+  // ① 短命令：文本点名 + details 原样（且作业照常跑）
+  const shortCmd = 'echo P33-SHORT'
+  const r1 = await tools.team_bg_run.execute('call-p33-short', { command: shortCmd, name: 'p33-short' }, null, null, ctx)
+  const t1 = String(r1?.content?.[0]?.text ?? '')
+  check('S12 short command is named in the result text', t1.includes(`cmd: ${shortCmd}`), cmdLine(t1))
+  check('S12 details.cmd is the short command verbatim', r1?.details?.cmd === shortCmd, JSON.stringify(r1?.details?.cmd ?? null))
+  check('S12 the named short command still runs', (await wait(String(r1?.details?.id ?? ''))).includes('P33-SHORT'))
+
+  // ② 长命令（>100 码点、含 CJK 与代理对）：前 100 码点 + …，末字完整，尾部被丢弃，details 原样
+  const longCmd = `${'命令'.repeat(45)}🚀${'令'.repeat(20)} DROP-ME-TAIL` // 124 码点（125 UTF-16 单元）
+  const expected100 = `${'命令'.repeat(45)}🚀${'令'.repeat(9)}` // 恰好 100 码点
+  const r2 = await tools.team_bg_run.execute('call-p33-long', { command: longCmd, name: 'p33-long' }, null, null, ctx)
+  const t2 = String(r2?.content?.[0]?.text ?? '')
+  const shown = cmdLine(t2).slice('  cmd: '.length)
+  check('S12 long command is truncated at the 100th code point + ellipsis',
+    shown === `${expected100}…`,
+    `codepoints=${Array.from(shown).length} tail=${JSON.stringify(Array.from(shown).slice(-3).join(''))}`)
+  check('S12 truncation drops the tail and never splits a code point (valid UTF-8)',
+    !shown.includes('DROP-ME-TAIL') && Array.from(shown).length === 101 && utf8RoundTrip(t2) === t2,
+    `tail-leak=${shown.includes('DROP-ME-TAIL')} roundtrip=${utf8RoundTrip(t2) === t2}`)
+  check('S12 details.cmd stays verbatim (untruncated) for the long command',
+    r2?.details?.cmd === longCmd, `codepoints=${Array.from(String(r2?.details?.cmd ?? '')).length}`)
+  await wait(String(r2?.details?.id ?? ''))
+
+  // ③ 带换行的命令：文本里是单行（无换行），details 仍原样，作业仍按原文跑
+  const multiCmd = 'echo P33-MULTI-A\necho P33-MULTI-B\t   \n    echo P33-MULTI-C'
+  const r3 = await tools.team_bg_run.execute('call-p33-multi', { command: multiCmd, name: 'p33-multi' }, null, null, ctx)
+  const t3 = String(r3?.content?.[0]?.text ?? '')
+  check('S12 multiline command is single-lined in the result text',
+    multiCmd.includes('\n') && cmdLine(t3) === '  cmd: echo P33-MULTI-A echo P33-MULTI-B echo P33-MULTI-C',
+    JSON.stringify(cmdLine(t3)))
+  check('S12 details.cmd keeps the multiline command verbatim', r3?.details?.cmd === multiCmd)
+  check('S12 the multiline job still runs as written (all three echoes)', (await wait(String(r3?.details?.id ?? ''))).includes('P33-MULTI-C'))
+
+  // ④ 收割回执的两种形状（finished / still running）也同样点名命令
+  const r4 = await tools.team_bg_run.execute('call-p33-receipt', { command: 'echo P33-RECEIPT', name: 'p33-receipt' }, null, null, ctx)
+  const finished = await wait(String(r4?.details?.id ?? ''))
+  check('S12 the harvest receipt (finished) names the command too',
+    finished.includes(`  cmd: echo P33-RECEIPT`), cmdLine(finished))
+  const r5 = await tools.team_bg_run.execute('call-p33-running', { command: 'sleep 2; echo P33-RUNNING-DONE', name: 'p33-running' }, null, null, ctx)
+  const running = await wait(String(r5?.details?.id ?? ''), 0) // timeout_ms=0 → 立刻回 running 形状
+  check('S12 the harvest receipt (still running) names the command too',
+    running.includes('still running') && running.includes('  cmd: sleep 2; echo P33-RUNNING-DONE'), cmdLine(running))
+  await wait(String(r5?.details?.id ?? '')) // 收尾：收割，别再叫
 }
 
 // ── S11：worktree 会话的产物落在**自己的 worktree**（M30 修正：不得用 git-common-dir）──

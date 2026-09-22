@@ -42,6 +42,8 @@ const MERGE_WINDOW_MS = 250 // 同一拍完成的作业合并成一条通知
 const DEFAULT_WAIT_MS = 15 * 60 * 1000
 const TAIL_BYTES = 8 * 1024
 const TRUNC_MARK = '[team-bg] truncated: output exceeded the log cap, earlier output dropped.'
+const CMD_DISPLAY_MAX = 100 // 结果文本里命令的码点上限（超出 → 前 100 码点 + …）
+const CMD_ELLIPSIS = '…'
 
 /**
  * 定位**本会话自己的根**：team-bg 的产物（作业日志、账本、合并窗口）都是会话本地的，
@@ -136,6 +138,20 @@ function trimLog(file: string): void {
 function slug(raw: string): string {
   const s = raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32)
   return s || 'job'
+}
+
+/**
+ * 结果文本里的命令行：**单行化**（换行/连串空白 → 一个空格）后**缩略**。
+ *
+ * 用户反馈（P33）：结果只有 job id/pid/log，看不出「我到底跑的是什么命令」。所以两个工具都点名命令；
+ * 多行命令单行化后一眼能读，超过 100 个**码点**截断加 `…`。切法必须是**码点**（`Array.from`）：
+ * 按字节切会造出非法 UTF-8（P28 的教训），按 UTF-16 单元切会把代理对（emoji/CJK 扩展区）劈成半个字符。
+ * 完整命令始终原样留在 `details.cmd` 里，回收割方/夹具使用。
+ */
+function displayCmd(raw: string): string {
+  const one = raw.replace(/\s+/g, ' ').trim()
+  const cps = Array.from(one)
+  return cps.length <= CMD_DISPLAY_MAX ? one : `${cps.slice(0, CMD_DISPLAY_MAX).join('')}${CMD_ELLIPSIS}`
 }
 
 export default function (pi: ExtensionAPI) {
@@ -260,8 +276,8 @@ export default function (pi: ExtensionAPI) {
         trimTimer = setInterval(() => { for (const j of jobs.values()) if (!j.done) trimLog(j.log) }, TRIM_EVERY_MS)
       }
       return {
-        content: [{ type: 'text', text: `job ${id} started (pid ${job.pid}); log: ${log}\nHarvest it with team_bg_wait ${id}.` }],
-        details: { id, pid: job.pid, log, cwd },
+        content: [{ type: 'text', text: `job ${id} started (pid ${job.pid}); log: ${log}\n  cmd: ${displayCmd(command)}\nHarvest it with team_bg_wait ${id}.` }],
+        details: { id, pid: job.pid, log, cwd, cmd: command },
       }
     },
   } as any)
@@ -302,8 +318,8 @@ export default function (pi: ExtensionAPI) {
       }
       if (running) {
         return {
-          content: [{ type: 'text', text: `job ${job.id} is still running (pid ${job.pid}); log: ${job.log}` }],
-          details: { id: job.id, running: true, log: job.log },
+          content: [{ type: 'text', text: `job ${job.id} is still running (pid ${job.pid}); log: ${job.log}\n  cmd: ${displayCmd(job.command)}` }],
+          details: { id: job.id, running: true, log: job.log, cmd: job.command },
         }
       }
       job.harvested = true
@@ -313,9 +329,9 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [{
           type: 'text',
-          text: `job ${job.id} finished exit=${job.exitCode} after ${secs}s; log: ${job.log}\n--- tail ---\n${body}`,
+          text: `job ${job.id} finished exit=${job.exitCode} after ${secs}s; log: ${job.log}\n  cmd: ${displayCmd(job.command)}\n--- tail ---\n${body}`,
         }],
-        details: { id: job.id, exitCode: job.exitCode, log: job.log, truncated },
+        details: { id: job.id, exitCode: job.exitCode, log: job.log, truncated, cmd: job.command },
       }
     },
   } as any)

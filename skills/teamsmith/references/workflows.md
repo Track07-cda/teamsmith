@@ -166,13 +166,15 @@ On the built-in Pi paths (both the PM and the workers) the session already has t
 ```text
 team_bg_run command="bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1" name="review-T1.1"
    → job review-T1.1 started (pid 12345); log: <root>/.pi/team/state/bg/review-T1.1.log
+     cmd: bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1   (single-lined; shortened with … past 100 code points)
    (the tool returns at once — the turn is free again)
 
 <the turn ends here; when the job finishes and you are idle you are woken once, with one merged
  message naming every job that finished in that window>
 
 team_bg_wait review-T1.1
-   → job review-T1.1 finished exit=0 after 412.3s; log: …  + the tail of the log
+   → job review-T1.1 finished exit=0 after 412.3s; log: …
+     cmd: bash <skill>/scripts/team review T1.1 --dir /tmp/review-T1.1   + the tail of the log
 ```
 
 The four rules that make it safe (they are the extension's code, not a convention):

@@ -194,6 +194,10 @@ third-party package, no extra window, nothing loaded into the user's own Pi sess
 | `team_bg_run` | starts the command as a **detached** `bash -c` job, returns a job id + pid at once; combined stdout/stderr goes to `state/bg/<id>.log` — in **the session's own root** (see below) — (bounded: past `TEAM_BG_LOG_MAX_BYTES`, default 512 KB, the head is dropped and the tail is kept behind a truncation marker) |
 | `team_bg_wait <id>` | waits for the job (or returns at once with `timeout_ms`), **harvests** it and returns exit code + log tail inline |
 
+Both results name the **command** next to the job id (`  cmd: …`, single-lined and truncated past 100 code
+points with `…`, cut on **code-point** boundaries so CJK characters and surrogate pairs never split), so a
+session running several jobs can tell which is which; `details.cmd` carries the command verbatim (P33).
+
 Both teamsmith launch paths load it: the built-in Pi worker command and the built-in Pi PM command pass
 `-e <skill>/extension/team-bg.ts`. A custom template gets the same tools with `-e {bg_ext}`. A CLI that has no
 Pi extension API simply does not have these tools — nothing else changes.
