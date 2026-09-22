@@ -30,7 +30,7 @@
 #   spec：int/seconds/mb/pct/bytes 是「min,max」（空 = 无边）；enum 是逗号分隔的值域；
 #         path 是 file|dir|exec|any 加「,opt」（空值有意义）；tpl 是 launch|notify|pm
 #   danger：'-' 或一行理由（命中即需要 --allow-danger）
-#   route：refuse 类的用法指引（面板把它原样展示）
+#   route：自由文本说明列 —— refuse 类的用法指引，以及 apply 类（frozen 接缝）的备注（面板把它原样展示）
 #   suggest：**可选的第 9 列**，数值类键的建议值（逗号分隔的整值；仍是 schema 数据，不是选项表）；
 #         没有建议的行保持 8 列（读者两形状都认）。读侧（team_config_choices）与写入校验的一致性
 #         由 tests/panel-choices.sh 的走查夹具钉住：读给出的每个值都必须被 team config set 接受。
@@ -83,11 +83,11 @@ TEAM_MODEL_LIMITS|apply|pattern||plain|kimi-coding/k3=2 openai-codex/*=1|-|||ros
 TEAM_MODEL_WINDOWS|apply|winlist||plain||-|||roster
 TEAM_SESSION_WARN_TOKENS|apply|int|0,|plain|200000|-||100000,200000,400000|roster
 TEAM_EXTRA_PI_ARGS|apply|cmd||plain||-|||roster
-TEAM_AGENT_CMD|apply|tpl|launch|plain||-|||roster
-TEAM_AGENT_NOTIFY_CMD|apply|tpl|notify|plain||-|||roster
-TEAM_AGENT_LOG_GLOB|apply|text||plain||-|||roster
+TEAM_AGENT_CMD|apply|tpl|launch|plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
+TEAM_AGENT_NOTIFY_CMD|apply|tpl|notify|plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
+TEAM_AGENT_LOG_GLOB|apply|text||plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
 TEAM_PI_BIN|apply|path|exec|plain|pi|-|||roster
-TEAM_AGENT_BIN|apply|path|exec,opt|plain||-|||roster
+TEAM_AGENT_BIN|apply|path|exec,opt|plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
 TEAM_OPENSPEC_BIN|apply|path|exec|plain|openspec|-|||roster
 TEAM_JS_BIN|apply|path|exec,opt|plain||-|||roster
 # ---- 按席位模型（restart：运行中的席位保住旧模型，下一次 dispatch/resume 才换）----

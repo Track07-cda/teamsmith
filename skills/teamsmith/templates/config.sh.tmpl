@@ -22,7 +22,8 @@ TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/*=1"
 # Extra arguments appended to the agent CLI on dispatch (space separated)
 TEAM_EXTRA_PI_ARGS=""
 
-# ---- agent adapter (workers may be any TUI agent; leave all four empty for the built-in Pi behaviour) ----
+# ---- agent adapter (internal seam (frozen): reserved for a possible future non-Pi adapter, no compatibility
+#      promise; not asked in the init questionnaire. Leave all four empty for the built-in Pi behaviour) ----
 # launch template; placeholders: {cwd} {session_id} {model} {provider} {prompt_file} {prompt}
 #                             {skill_dir} {notify_ext} {extra_args}
 # (any unknown/malformed placeholder, a blank template or a newline aborts the dispatch; the first word must be
@@ -32,15 +33,12 @@ TEAM_AGENT_CMD=""
 # The summary is data: the worker writes it into {summary_file} and runs a fixed command, so nothing it types is ever
 # interpolated into a shell line. {summary} is kept for old templates (rendered as a quoted read of that file).
 TEAM_AGENT_NOTIFY_CMD=""
-# log source for `team monitor --activity` ({agent} = agent name), e.g. '~/.local/share/opencode/log/*.log'
+# log source for `team monitor --activity` ({agent} = agent name); empty = Pi session files
 TEAM_AGENT_LOG_GLOB=""
 # adapter binary (window readiness wait / existence checks); empty = first word of TEAM_AGENT_CMD
 TEAM_AGENT_BIN=""
-# example (opencode):
-#   TEAM_AGENT_CMD='opencode run --model {provider}/{model} --dir {cwd} "$(cat {prompt_file})"'
-#   TEAM_AGENT_BIN="$HOME/.opencode/bin/opencode"
-#   TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
-#   TEAM_AGENT_MODELS="dev=google/gemini-3-flash-preview"
+# Worked examples and the placeholder tables live in references/agent-adapters.md, under the same frozen wording;
+# this template offers no ready-to-use example of another CLI.
 
 # ---- workflow ----
 TEAM_GATES="{{GATES}}"                # gate command; verification runs it on an independent checkout

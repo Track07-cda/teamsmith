@@ -1,6 +1,6 @@
 ---
 name: teamsmith
-description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi today and is designed to adapt to any TUI agent. Use when the user wants an agent to own a project end to end, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, review an agent's work independently, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project. To start a new project, use the teamsmith-init skill.
+description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi; the launch/notify seam is an internal seam (frozen) reserved for a possible future non-Pi adapter, with no compatibility promise. Use when the user wants an agent to own a project end to end, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, review an agent's work independently, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project. To start a new project, use the teamsmith-init skill.
 license: MIT
 metadata:
   version: "1.42.0"
@@ -183,10 +183,12 @@ Forge-agnostic: GitHub via `gh`, GitLab via `glab`/`curl`, Gitea via `tea`, or t
 the skill assumes nothing. Tokens stay in the project's token files (`TEAM_TOKEN_FILE` /
 `TEAM_GITLAB_TOKEN_FILE`) and are injected only when the PM calls a tool: never echoed, never logged.
 
-## Agent adapters (any TUI agent can be a worker)
+## Agent adapters (Pi; the seam is internal and frozen)
 
-Pi is the default worker; to use another CLI set four keys in `.pi/team/config.sh` (**all empty = Pi behaviour
-byte-for-byte unchanged**):
+Pi is the promised worker. The four keys below are an **internal seam (frozen)**: reserved for a possible future
+non-Pi adapter, no compatibility promise, not a public extension point (the new-project questionnaire never asks
+about them). They stay writable so the seam can be maintained and diagnosed; to use another CLI set them in
+`.pi/team/config.sh` (**all empty = Pi behaviour byte-for-byte unchanged**):
 
 | Key | Purpose | When empty |
 |---|---|---|
@@ -202,7 +204,7 @@ byte-for-byte unchanged**):
   `{bg_ext}`; a CLI without a Pi extension API has no background lane (use a tmux window instead).
 - `team doctor` / `team paths` print the resolved adapter (`built-in (Pi)` or `custom: …`); only a *configured*
   adapter whose binary cannot be resolved fails.
-- Contract, worked codex/opencode examples, a verification checklist and the unsupported list:
+- Contract, the frozen seam's placeholder tables, worked codex/opencode examples (seam documentation, not a support promise), a verification checklist and the intentionally unsupported list:
   see [references/agent-adapters.md](references/agent-adapters.md).
 
 ## Cross-project boundary (you may talk; you may not command)
@@ -252,7 +254,7 @@ byte-for-byte unchanged**):
 | `references/protocol.md` | Why each rule exists (independent verification, wake-up loop, capacity floor, safety model) |
 | `references/config.md` | Config keys, on-disk layout, env overrides (env beats config) |
 | `references/memory.md` | What the PM's project memory is for, what belongs in it, what survives compaction/restart/`/reload`, and how to work without it |
-| `references/agent-adapters.md` | To run workers with codex/opencode/any TUI agent: the contract, placeholder tables, worked examples, a verification checklist |
+| `references/agent-adapters.md` | The internal seam (frozen) for launch and notify: the contract, placeholder tables, worked codex/opencode examples, a verification checklist |
 | `references/meeting.md` | Cross-project meetings: boundaries, shared area, commands, knocking, guards |
 | `teamsmith-init` skill | New project? `skills/teamsmith-init/SKILL.md` is the entry point: the questions to settle, `team bootstrap`, then the handoff back to this skill |
 | `references/migration.md` | The project was set up with an older version (or with the former name `pi-team`): renames, removed commands, new required dependencies, behaviour changes, the upgrade recipe and rollback |

@@ -2,7 +2,7 @@
 
 **Give one agent real ownership of a project**: it plans, dispatches, verifies independently, merges and keeps the ledger.
 
-Runs on Pi today; designed to adapt to any TUI agent (adapter layer: ROADMAP M3.0).
+Runs on Pi; the launch/notify seam is an **internal seam (frozen)** — reserved for a possible future non-Pi adapter, with no compatibility promise (ROADMAP M3.0).
 
 In one line: teamsmith turns a single agent session into a **project owner with a crew that can be inspected** —
 not "more agents chatting with each other".
@@ -58,7 +58,8 @@ pi install -l ~/src/teamsmith    # project level; edits in the checkout are live
 
 ### Without Pi: `install.sh`
 
-For another TUI agent CLI, or to put the skills in `~/.agents/skills` next to other agent skills:
+On a non-Pi host, `install.sh` puts the skill **files** where a skill directory can be read —
+`~/.agents/skills` by default, next to other agent skills:
 
 ```bash
 ./install.sh                 # symlink every skill under skills/ into ~/.agents/skills (edit repo → live)

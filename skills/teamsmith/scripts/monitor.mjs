@@ -4,7 +4,7 @@
  * 灵感来自 <peer-project> 的 scripts/pm-watch.py，但这里做成项目无关：
  *   - agent 列表来自 <root>/.worktrees/<agent>/（外加 PM 自己的会话）
  *   - **Pi（默认）**：会话文件按 Pi 的目录规则推出（--<cwd 去前导 / 并把 / 换成 -->--）
- *   - **其它 TUI agent**：配了 --log-glob / TEAM_AGENT_LOG_GLOB 时，显示最新匹配文件的尾部
+ *   - **内部接缝（frozen，为将来非 Pi 适配预留、不承诺兼容）**：配了 --log-glob / TEAM_AGENT_LOG_GLOB 时，显示最新匹配文件的尾部
  *     （支持 `~`、绝对/相对路径、`*` `?` `**`，以及 `{agent}` = agent 名）
  *   - 两者都没有时只显示「无会话」，不影响上面的团队状态面板
  *   - 每段显示：状态 emoji + 名字 + 分支(+脏标记) + 已运行/空闲/事件数 + 最近几条事件
@@ -610,7 +610,7 @@ if (asJson) {
   }
   if (!logGlob && clean.length && clean.every(b => b.source === 'none')) {
     console.log(
-      '  （没有 Pi 会话文件；换用其它 TUI agent 时可设 TEAM_AGENT_LOG_GLOB，让活动流显示日志尾部）',
+      '  （没有 Pi 会话文件；内部接缝（frozen）可用 TEAM_AGENT_LOG_GLOB 让活动流显示日志尾部）',
     )
   }
 }

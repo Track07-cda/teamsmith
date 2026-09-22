@@ -26,20 +26,17 @@ only brings the project up.
    `TEAM_MODEL_LIMITS` when a provider quota is tight. **Start the roster minimal — one `dev` plus one `verify` is
    plenty**; `team add-agent <name>` adds more at any time, so the roster grows and shrinks with the work actually
    on the board rather than with a guess made today. (A PM-only start is legal too — `team doctor` only warns;
-   dispatch is what refuses when there is no agent to dispatch to.) Running workers with something other than Pi?
-   Then also fill the four adapter keys (`TEAM_AGENT_CMD` / `TEAM_AGENT_BIN` / `TEAM_AGENT_NOTIFY_CMD` /
-   `TEAM_AGENT_LOG_GLOB`); the contract is `references/agent-adapters.md` in the daily skill.
+   dispatch is what refuses when there is no agent to dispatch to.)
 3. **Gates, install command, VCS mode, patrol rhythm.** `TEAM_GATES` is the command that decides pass/fail during
    every verification (it must run from a clean checkout of a task branch); `TEAM_INSTALL_CMD` runs after a worktree
    is created; `TEAM_VCS` is a label for the wording (`local` = no forge, the PM squash-merges locally);
    `TEAM_PULSE_INTERVAL` is the patrol rhythm (default 15 minutes).
-4. **Harness and installed plugins.** Ask which harness the user's own sessions run (`pi`, `omp`, another CLI) — it
-   decides how long tasks are run — and then let `team doctor` report that harness together with the plugins this
+4. **Pi version and installed plugins.** Check Pi against the floor `README.md` states (Pi ≥ 0.76.0 — the
+   `--session-id` criterion `team doctor`'s `pi` row fails on), then let `team doctor` report the plugins this
    project already has (`已装插件 packages`: the names, and whether each is project- or user-level). That row is
    information only: **teamsmith never asks the user to install a third-party plugin** — the team's own background
    lane ships with the skill (`team-bg`), and the only package worth recommending is a teamsmith requirement such as
-   magic-context, which `doctor` already checks. If the harness is **omp**, it already has background jobs (`bash`
-   background dispatch, `hub` wait/cancel, `/jobs`) and needs nothing. A long task can also always fall back to a
+   magic-context, which `doctor` already checks. A long task can also always fall back to a
    background tmux window plus `team notify`; both lanes are in `references/troubleshooting.md` §17 of the daily skill.
 5. **The project's own documents** — the PM writes these, the tool does not: `docs/team/ROADMAP.md` (the goal,
    milestones with **executable** exit criteria, and explicit non-goals), `docs/team/OWNERSHIP.md` (which directory

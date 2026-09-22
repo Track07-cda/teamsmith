@@ -1,6 +1,13 @@
-# Agent adapters · run workers (and the PM) with any TUI agent
+# Agent adapters · the launch and notify seam (internal, frozen)
 
-teamsmith's default CLI is **Pi**, but the workflow never depends on Pi: the PM owns *windows,
+teamsmith promises exactly one harness: **Pi**, at the version floor `README.md` states and `team doctor`
+enforces. The launch and notify seam documented here is an **internal seam (frozen)**: the built-in Pi paths are
+rendered by the same engine, the seam is reserved for a possible future non-Pi adapter, and teamsmith makes
+**no compatibility promise** about it — it is not a public extension point, and the new-project questionnaire
+never asks about it. It stays writable and diagnosable so a maintainer can work on it; the worked non-Pi
+examples below are **seam documentation, not a support offer**.
+
+Mechanically, the workflow does not depend on Pi: the PM owns *windows,
 worktrees, task briefs, reports, gates and the inbox contract*, and "how do I start this agent CLI"
 is pluggable — on the **worker side** (four keys) and on the **PM side** (three keys, §2). **All of them
 empty by default, which keeps the Pi behaviour byte-for-byte identical.**
@@ -37,8 +44,8 @@ simply does not have those two tools.
 
 ## 2. The PM side: `TEAM_PM_CMD`
 
-The PM is an adapter too. Workers describe their CLI with `TEAM_AGENT_CMD`; the PM describes its own with
-`TEAM_PM_CMD`, and an empty value means "the built-in Pi command", unchanged.
+The PM side is the same internal seam (frozen). Workers describe their CLI with `TEAM_AGENT_CMD`; the PM
+describes its own with `TEAM_PM_CMD`, and an empty value means "the built-in Pi command", unchanged.
 
 | Key | Meaning | Empty (default) |
 |---|---|---|
@@ -542,7 +549,8 @@ continue (opencode's session ids are its own — see the note under codex).
   to make a summary part of a command's text.
 - **Multiplexing per-agent streams out of one shared log.** `{agent}` is a filename placeholder, not a
   stream splitter; point the glob at per-agent files (or accept one shared tail).
-- **Replacing the PM's own CLI by *guessing* it.** The PM side is adaptable (§2), but teamsmith will not infer a
+- **Replacing the PM's own CLI by *guessing* it.** The PM side is part of the same internal seam (frozen) (§2), but
+teamsmith will not infer a
   launch command for you: without `TEAM_PM_CMD` it uses the built-in Pi command, and a custom CLI needs an explicit
   template (otherwise the same `pi` command is attempted and fails inside `pi`).
 - **CLIs that cannot accept a prompt non-interactively** (prompt only via a human TUI). Use

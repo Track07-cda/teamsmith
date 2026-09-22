@@ -68,7 +68,8 @@ Readiness is **evidence, not configuration**: the extension writes `state/inbox-
 only when a registration matches that exact target, its pid is alive and its `cwd` is inside this project — a
 fresh `heartbeat` is only the fallback when `cwd` is missing (bounded by `TEAM_INBOX_WATCH_STALE`, default
 300 s), because a heartbeat is not an identity. So "this is a Pi session with a watcher" is proven by the
-session itself instead of guessed from `TEAM_AGENT_CMD`.
+session itself instead of guessed from `TEAM_AGENT_CMD` (an internal seam (frozen): reserved for a possible future
+non-Pi adapter, no compatibility promise).
 
 Honest edges of the Pi channel (visible, never silent):
 
@@ -290,6 +291,9 @@ the agent to commit it, and the normal "awaiting review" line plus the review co
 
 ### 4d. A worker adapter's CLI never started (`exit=…`)
 
+The worker adapter below is the internal seam (frozen) — reserved for a possible future non-Pi adapter, with no
+compatibility promise — so this section is a maintenance diagnostic, not a support offer.
+
 A dispatch proves two different things, and it now reports them separately: the **harness** started (the per-attempt
 spawn proof) and the **agent** started (the exit event `state/dispatch-<agent>.exit`). With `TEAM_AGENT_CMD` set, an
 immediate **non-zero** exit is a failed dispatch — it prints `派单失败：harness 起来了，但 agent 立刻退出了（exit=<code>）`,
@@ -503,7 +507,9 @@ warns one line without blocking the worker.
 ## 14. The PM does not come up with my CLI
 
 `team up` — and the pulse's restart path — starts the PM with `TEAM_PM_CMD`, or with the built-in Pi command
-when that key is empty. A custom PM CLI that refuses to start almost always fails in one of these places:
+when that key is empty. That key is part of the same internal seam (frozen) — reserved for a possible future
+non-Pi adapter, no compatibility promise — so the rows below are maintenance diagnostics, not a support offer.
+A custom PM CLI that refuses to start almost always fails in one of these places:
 
 | Symptom | Cause / fix |
 |---|---|

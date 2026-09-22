@@ -65,7 +65,13 @@ Dispatch model resolution order: `--model` > `TEAM_AGENT_MODELS` (per-agent) > `
 | `TEAM_DISPATCH_ALIVE_SEC` | `1` | after the launch proof, how long to observe whether the agent is still in the window (built-in Pi only; `0` = skip the observation). A subsequent exit is reported as a warning, never as a failed dispatch |
 | `TEAM_SQUASH_LOOKBACK` | `200` | how many commits on the protected branch are scanned when deciding "this branch was already squash-merged" (one tree comparison per agent row; a heuristic, see workflows.md) |
 
-### agent adapter (workers may be any TUI agent; leave all four empty for the built-in Pi behaviour)
+### agent adapter (the internal seam (frozen); leave all four empty for the built-in Pi behaviour)
+
+The four keys are an **internal seam (frozen)**: the built-in Pi paths are rendered by the same engine, the seam
+is reserved for a possible future non-Pi adapter, and teamsmith makes **no compatibility promise** about it — it is
+not a public extension point, and the new-project questionnaire never asks about it. The keys stay writable and
+validated so the seam can be maintained; the contract, the placeholder semantics and the worked codex/opencode
+examples (seam documentation, not a support offer) are in [agent-adapters.md](agent-adapters.md).
 
 | Key | Default | Purpose |
 |---|---|---|
@@ -75,8 +81,8 @@ Dispatch model resolution order: `--model` > `TEAM_AGENT_MODELS` (per-agent) > `
 | `TEAM_AGENT_LOG_TAIL_BYTES` | empty (=64KiB) | how many bytes of the log tail to read at most (a positive integer, hard cap 1MiB; above the cap it is clamped, a bad value falls back to the default and warns on stderr). **Note**: `team monitor` only forwards `TEAM_AGENT_LOG_GLOB` explicitly to monitor.mjs, so to use this key you must write `export TEAM_AGENT_LOG_TAIL_BYTES=…` in `.pi/team/config.sh` (or export it in the shell / pass `--log-tail-bytes` to monitor.mjs) — a plain assignment never reaches the child process |
 | `TEAM_AGENT_BIN` | empty | executable used for the window PATH readiness wait / existence checks / `doctor`; empty = the first word of `TEAM_AGENT_CMD`, otherwise `TEAM_PI_BIN` |
 
-> The contract (what teamsmith owns vs. what the adapter owns), the placeholder semantics, the worked codex and
-> opencode examples, a verification checklist and the intentionally unsupported list:
+> The internal seam (frozen) in full — the contract (what teamsmith owns vs. what the adapter owns), the placeholder
+> semantics, the worked codex and opencode examples, a verification checklist and the intentionally unsupported list:
 > see [agent-adapters.md](agent-adapters.md).
 
 ### forge

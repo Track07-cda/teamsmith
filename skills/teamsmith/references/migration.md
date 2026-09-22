@@ -134,7 +134,7 @@ one-line reaction.
 | the patrol is a `pulse` window in **the project's own** tmux session, and `TEAM_SESSION` must match that session name | v1.12.0 (single backend); renamed `watchdog` → `pulse` in v1.36.0 (§2b) | `team pulse status`; after renaming a session, update `TEAM_SESSION` in `.pi/team/config.sh`. Real example: on 2026-09-14 this project's session was renamed while the config kept the old name, so `dispatch` and the patrol reported a missing session and the PM as not running until the config was fixed |
 | long-lived sessions are checked against the model's context window; `--fresh` starts a new one | v1.22.0 | before switching an agent to a model with a smaller window, dispatch with `--fresh` (or accept the refusal); `team ps` / `roster` show used/window |
 | reports that are not committed yet no longer point at a review, and a squash-merged branch reports "already merged (squash, same content) — no push needed" | v1.22.0 | read the wording before acting: both lines exist to stop a PM from reviewing or pushing something that is already done |
-| the PM's own CLI is configurable (`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`) | M8.1 | nothing to do — all three keys are empty by default and the built-in Pi command is byte-for-byte unchanged; set them only to run the PM under another TUI agent (`references/agent-adapters.md` §2) |
+| the PM's own CLI is configurable (`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`) | M8.1 | nothing to do — all three keys are empty by default and the built-in Pi command is byte-for-byte unchanged. They belong to the internal seam (frozen): reserved for a possible future non-Pi adapter, no compatibility promise — the PM side runs Pi (`references/agent-adapters.md` §2) |
 | the console brings three state files and one changed default: `TEAM_MONITOR_REFRESH` drops `5` → `3` | v1.38.0 (pulse-console B3) | the TUI keeps its own preferences in `state/panel.conf` (`lang`, `page`, `activity`, `mouse`, `density` and an optional `theme`), remembers the last page in `state/panel-page`, and holds the PM's compose draft in `state/draft.md`. All three are runtime state: deleting them is safe and `--print`/`--json` never read them. Set `TEAM_MONITOR_REFRESH=5` to keep the old cadence (`references/config.md` lists the key) |
 
 ## 6. Upgrade recipe
@@ -211,8 +211,9 @@ team mark-loaded                               # re-record what this session sho
 
 ## 8. What is deliberately not supported
 
-- **The PM side is Pi.** Only *workers* can be another TUI agent, via the four `TEAM_AGENT_*` keys; the PM prompt,
-  `pi -c` restarts and the notify extension stay Pi. Contract, worked examples and the unsupported list:
+- **The PM side is Pi.** The four `TEAM_AGENT_*` keys are an internal seam (frozen) — reserved for a possible
+  future non-Pi adapter, with no compatibility promise; the PM prompt, `pi -c` restarts and the notify extension
+  stay Pi. Contract, worked examples and the unsupported list:
   [agent-adapters.md](agent-adapters.md).
 - **The old Podman/container and systemd patrol backends** (removed in v1.12.0). There is exactly one backend
   now: the `pulse` window in the project's own tmux session. If the tmux server dies, the PM is gone too, and
