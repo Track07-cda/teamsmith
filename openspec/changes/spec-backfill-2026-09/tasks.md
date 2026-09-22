@@ -6,12 +6,12 @@ delta against the named evidence (or corrects the delta). No item may change `sc
 
 ## 1. Preconditions
 
-- [ ] 1.1 Confirm the two MODIFIED panel requirements still match the base text at the branch tip:
+- [x] 1.1 Confirm the two MODIFIED panel requirements still match the base text at the branch tip:
   `grep -n '^### Requirement: The board page is a kanban' openspec/specs/panel/spec.md` and
   `grep -n '^### Requirement: The work page' openspec/specs/panel/spec.md`; diff the base bodies against the
   delta bodies — the only differences must be the focus/row-identity sentences and the added scenarios
   (`panel`)
-- [ ] 1.2 Confirm the item-6 coverage revision: on this branch's base,
+- [x] 1.2 Confirm the item-6 coverage revision: on this branch's base,
   `grep -n '^### Requirement' openspec/changes/watch-degradation/specs/notify-and-inbox/spec.md openspec/changes/watch-degradation/specs/watchdog/spec.md`; on main after its archive commit,
   `git show main:openspec/specs/notify-and-inbox/spec.md | grep -n '^### Requirement'` — either state must list
   the four degradation requirements, and `test ! -e openspec/changes/spec-backfill-2026-09/specs/notify-and-inbox`
@@ -31,63 +31,69 @@ delta against the named evidence (or corrects the delta). No item may change `sc
 
 ## 3. verification — the conflict-marker guard
 
-- [ ] 3.1 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §0d green: clean tree green,
+- [x] 3.1 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §0d green: clean tree green,
   tracked-worktree marker block red with `file:line`, index-only marker red, untracked/`.worktrees`/binary
   exclusions green (`verification`)
-- [ ] 3.2 `bash skills/teamsmith/tests/flip-m44.sh` → exit 0 with all nine probes: the incident fixture red, the
+- [x] 3.2 `bash skills/teamsmith/tests/flip-m44.sh` → exit 0 with all nine probes: the incident fixture red, the
   resolved fixture green, and the three mutations (never-match pattern, `--untracked`, no `--cached`) each red on
   the expected fixture (`verification`)
 
 ## 4. delivery-guard — the update banner
 
-- [ ] 4.1 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §12b-h0b green: the real captured
+- [x] 4.1 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §12b-h0b green: the real captured
   frame (banner present) reads an empty box, the synthetic banner+draft frame reads the draft with
   `HOLDS_ONLY=yes`, both adversarial frames stay busy, and the no-banner control is unchanged (`delivery-guard`)
-- [ ] 4.2 (real process) `M45_REQUIRE_BANNER=1 bash skills/teamsmith/tests/pm-box-real.sh --idle-secs 20` → the
+- [x] 4.2 (real process) `M45_REQUIRE_BANNER=1 bash skills/teamsmith/tests/pm-box-real.sh --idle-secs 20` → the
   fixture prints `banner=present` on a frame pi really drew and `verdict=EMPTY` / `RETRACT=ok`; if no banner
   appears it fails instead of claiming the evidence — the check runs with the update check on (`delivery-guard`)
-- [ ] 4.3 (real process) `TEAM_SMOKE_REAL_PI=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §12b-h ⑳ green:
+- [x] 4.3 (real process) `TEAM_SMOKE_REAL_PI=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §12b-h ⑳ green:
   a banner over an empty box receives exactly one submit, a banner over a draft queues with zero submits, and the
   assertions confirm the banner really was in the inspected frame (`delivery-guard`)
-- [ ] 4.4 `bash skills/teamsmith/tests/flip-m45.sh` → red (pre-fix tree reads the banner as content) → green
+- [x] 4.4 `bash skills/teamsmith/tests/flip-m45.sh` → red (pre-fix tree reads the banner as content) → green
   (this tree) → mutation red, with the tree's own real-pane sends in each leg (`delivery-guard`)
 
 ## 5. board-and-status
 
-- [ ] 5.1 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §4c green: the duplicate refusal
+- [x] 5.1 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §4c green: the duplicate refusal
   with status/title/two ways out and a byte-identical board, `--allow-dup` plus its audit line, the three readers
   naming `T1.1 ×2`, the negative controls, `board assign` changing only the agent column, unknown-id and
   missing-argument writes refused, and `board set` addressing both rows (`board-and-status`)
-- [ ] 5.2 `bash skills/teamsmith/tests/flip-m48.sh add` and `bash skills/teamsmith/tests/flip-m48.sh assign` →
+- [x] 5.2 `bash skills/teamsmith/tests/flip-m48.sh add` and `bash skills/teamsmith/tests/flip-m48.sh assign` →
   each prints the mutant red on §4c and the real tree green (`board-and-status`)
-- [ ] 5.3 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §37 green: `board row` ≤ 1 git
+- [x] 5.3 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` → §37 green: `board row` ≤ 1 git
   call from the root and from a subdirectory, `digest` ≤ 50 with a worktree-only report really listed, the
   cache-off run > 50 (non-vacuous fixture), and the cache on/off outputs identical for `digest`, `status` and
   `__panel-data` after filtering live fields (`board-and-status`)
-- [ ] 5.4 Mutation check for 5.3 (no code edit; run once, restore): make `team_scan_cache_on` return 1 in a
+- [x] 5.4 Mutation check for 5.3 (no code edit; run once, restore): make `team_scan_cache_on` return 1 in a
   temporary copy of the skill tree and re-run §37's counting probe — the cached run must exceed the budget and
   §37 must go red, proving the budget assertion is live (`board-and-status`)
 
 ## 6. panel — row-identity focus
 
-- [ ] 6.1 (real process: builds and drives the committed bundle) `bash skills/teamsmith/tests/panel-b3.sh board workdetail`
+- [x] 6.1 (real process: builds and drives the committed bundle) `bash skills/teamsmith/tests/panel-b3.sh board workdetail`
   → green, including the duplicate-id walk on both pages: one cursor at a time, the second same-id row reachable,
   the cursor not frozen, the focus kept across `r`, `enter`/`esc` and the work page's walk (`panel`)
-- [ ] 6.2 (real process) `bash skills/teamsmith/tests/flip-m48.sh focus` → the bare-id mutant bundle turns the
+- [x] 6.2 (real process) `bash skills/teamsmith/tests/flip-m48.sh focus` → the bare-id mutant bundle turns the
   duplicate assertions red (10) and the committed bundle stays green (`panel`)
 
 ## 7. Acceptance, report, hand-off
 
-- [ ] 7.1 Run the change's acceptance on the branch tip:
+- [x] 7.1 Run the change's acceptance on the branch tip:
   `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null`
   → both exit 0, and `git status --porcelain` shows only the change's own files (`verification`,
   `delivery-guard`, `board-and-status`, `panel`)
-- [ ] 7.2 Trial-archive the change on a copy (no repository change):
+- [x] 7.2 Trial-archive the change on a copy (no repository change):
   `rm -rf /tmp/trial-M61 && cp -r openspec /tmp/trial-M61 && (cd /tmp/trial-M61 && PATH="$HOME/.bun/bin:$PATH" openspec archive -y spec-backfill-2026-09)` → exit 0, the four capabilities' specs in the copy carry the
   new requirements, and the two MODIFIED panel requirements replaced their base blocks with every base scenario
   retained
-- [ ] 7.3 Write `docs/team/reports/M61-dev-bob.md` with the real command tails, the per-requirement
+- [x] 7.3 Write `docs/team/reports/M61-dev-bob.md` with the real command tails, the per-requirement
   evidence map, the item-6 coverage check and the `git status --porcelain` tail; commit every step with the task
   id and the `Agent: dev-bob` trailer (`verification`, `delivery-guard`, `board-and-status`, `panel`)
-- [ ] 7.4 Hand the branch to the PM for a `verify` brief owned by a different agent; do not archive and do not
+- [x] 7.4 Hand the branch to the PM for a `verify` brief owned by a different agent; do not archive and do not
   merge (`verification`, `delivery-guard`, `board-and-status`, `panel`)
+
+> **PM 勾选说明（2026-09-22）**：propose = **M61（dev-bob）**；apply = **M62（dev-bob，`d46`…已合并）**；
+> verify = **M70（dev2，`b80efea`）** —— 10 条里 8 条 ✅；boundary 三行被判定为"回填文本与 M67 后现实漂移"
+> （BLOCKED，非产品缺陷），PM 裁定整体移除、归 `tmux-gate-grant-redesign`（与 item 6 同一处理），
+> 修订由 **M71（dev-bob，已合并）** 执行，PM 直接复核（boundary 目录删除、其余 7 行逐字节未动、validate 18/18）。
+> 现存 7 行全部携带 M70 的 ✅ 证据。
