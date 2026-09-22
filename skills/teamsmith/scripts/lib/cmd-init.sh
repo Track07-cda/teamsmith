@@ -174,6 +174,10 @@ team_init_install_skills() { # [--copy|--link] [--no-skills] [--force] → 0 全
   [ "$rc" -eq 0 ] || return 1
   # 绝对软链不能提交（换机器就断），副本是可再生的 —— 装目录进 teamsmith 的忽略块（幂等）。
   team_gitignore_add ".pi/skills/"
+  # P59：这一步在这个项目里留下了会让 pi 问「是否信任此项目」的资源（`skills` 在 Pi 的项目信任清单里）——
+  # 一行说清楚后果与三条出路。只在**装完/已就位**时打：`--no-skills` 在函数开头就返回，冲突/失败在上面
+  # return 1，两条路都不打；这一步的退出码一个字不改。
+  team_dim "  提示：.pi/skills/ 是 pi 的项目资源，本项目第一次跑 pi 会问「是否信任此项目」——回答：pi --approve（只信这一次）｜pi 里 /trust（记住决定）｜$TEAM_CLI init --no-skills（跳过安装）"
   return 0
 }
 

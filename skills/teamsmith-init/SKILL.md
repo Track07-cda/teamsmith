@@ -20,7 +20,11 @@ team init                    # in this project: config + docs skeleton + the ski
 
 `team init` installs both skills into the project's **`.pi/skills/`** (Pi's project-level search path), so this
 project's own sessions find `teamsmith`/`teamsmith-init` without a machine-global install; the default is a symlink
-to the package (updates are live), `--copy` copies instead, `--no-skills` skips the step. Two alternatives when npm
+to the package (updates are live), `--copy` copies instead, `--no-skills` skips the step. Because `.pi/skills/` is
+one of the project resources Pi asks about, the **first interactive `pi` run in this project shows a project-trust
+prompt** — the install step prints a line saying so and naming the three answers: `pi --approve` (trust the
+project-local files for that one run), `/trust` inside Pi (save the decision), and `team init --no-skills` (skip the
+install altogether). Two alternatives when npm
 is not your route: the Pi package (`pi install …` at a released tag — no global CLI needed) and `./install.sh` from
 a checkout, which writes into `~/.agents/skills`. Everything that follows the setup (dispatch, the pulse, review,
 merge) belongs to the daily skill; this one only brings the project up.

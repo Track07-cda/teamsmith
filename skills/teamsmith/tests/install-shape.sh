@@ -223,7 +223,41 @@ chk_bootstrap_installs() { # <tree> <已初始化但删掉 .pi/skills 的仓库>
   if [ "$(readlink -f "$p/.pi/skills/teamsmith")" != "$t/skills/teamsmith" ]; then printf '软链目标不对\n'; return 1; fi
   h2="$(file_hash "$p/.pi/team/config.sh")"
   if [ "$h1" != "$h2" ]; then printf 'config.sh 被改了\n'; return 1; fi
-  printf '已存在配置也装了 skill，config.sh 未动\n'
+  if ! printf '%s\n' "$out" | grep -qF -- 'pi --approve'; then
+    printf 'bootstrap 升级路径没打信任提示行\n'; return 1
+  fi
+  printf '已存在配置也装了 skill，config.sh 未动，信任提示行也在\n'
+  return 0
+}
+
+# P59：安装步的信任提示行 —— 同一行必须点名触发资源（.pi/skills/）与三条出路
+# （pi --approve / /trust / team init --no-skills），而且只能出现一次。
+chk_trust_hint() { # <init 捕获输出>
+  local line n
+  line="$(printf '%s\n' "$1" | grep -F -- 'pi --approve' | head -1)"
+  if [ -z "$line" ]; then
+    printf '输出里没有信任提示行（要一行点名 .pi/skills/ + pi --approve + /trust + team init --no-skills）\n'
+    return 1
+  fi
+  case "$line" in *'.pi/skills/'*'pi --approve'*'/trust'*'team init --no-skills'*) ;; *)
+    printf '提示行缺要点：[%s]\n' "$line"; return 1 ;; esac
+  n="$(printf '%s' "$1" | grep -cF -- 'pi --approve' || true)"
+  if [ "$n" != "1" ]; then printf '提示行不是恰好一行（%s 行）\n' "$n"; return 1; fi
+  printf '信任提示行打了一次：[%s]\n' "$(printf '%s' "$line" | LC_ALL=C sed 's/^[[:space:]]*//' | cut -c1-56)"
+  return 0
+}
+chk_trust_hint_case() { # <tree> <repo>：init 一次并检查提示行
+  local out rc
+  out="$(init_proj "$1" "$2")"; rc=$?
+  [ "$rc" -eq 0 ] || { printf 'init rc=%s\n' "$rc"; return 1; }
+  chk_trust_hint "$out"
+}
+chk_no_skills_silent() { # <tree> <repo>：--no-skills 下不许出现这一行
+  local out rc
+  out="$(init_proj "$1" "$2" --no-skills)"; rc=$?
+  [ "$rc" -eq 0 ] || { printf -- '--no-skills init rc=%s\n' "$rc"; return 1; }
+  if printf '%s\n' "$out" | grep -qF -- 'pi --approve'; then printf -- '--no-skills 下打了信任提示行\n'; return 1; fi
+  printf -- '--no-skills 安静（没打信任提示行）\n'
   return 0
 }
 
@@ -360,6 +394,8 @@ if want install; then
   assert_eq "输出逐 skill 一条 link 行" "$(printf '%s' "$out" | grep -cE '^  link  .*/\.pi/skills/(teamsmith|teamsmith-init) → ' || true)" "2"
   assert_link_to "$p/.pi/skills/teamsmith" "$tree/skills/teamsmith" ".pi/skills/teamsmith 是指向运行树的软链"
   assert_link_to "$p/.pi/skills/teamsmith-init" "$tree/skills/teamsmith-init" ".pi/skills/teamsmith-init 是指向兄弟目录的软链"
+  # P59：装完打一行信任提示（.pi/skills/ 是 Pi 的信任资源 → 第一次跑 pi 会问；三条出路）
+  check_holds "P59 装完一行信任提示（触发资源 + 三条出路）" chk_trust_hint "$out"
   case "$out" in *"link  $p/.pi/skills/teamsmith → $tree/skills/teamsmith"*) ok "link 行是逐 skill 一行（含目标与源）" ;;
     *) bad "link 行形状不对：$(printf '%s' "$out" | grep link | tr '\n' ' ')" ;; esac
   assert_eq ".gitignore 有 .pi/skills/ 且只一条" "$(grep -cxF '.pi/skills/' "$p/.gitignore" || true)" "1"
@@ -369,6 +405,7 @@ if want install; then
   case "$out2" in *"skip  $p/.pi/skills/teamsmith（"*) ok "第二次 init 报 skip" ;; *) bad "第二次 init 没有 skip 行" ;; esac
   assert_eq "第二次 init 后目标不变" "$(readlink -f "$p/.pi/skills/teamsmith")" "$t1"
   assert_eq "第二次 init 后兄弟目标不变" "$(readlink -f "$p/.pi/skills/teamsmith-init")" "$t2"
+  check_holds "P59 重跑（skip）仍然打那一行" chk_trust_hint "$out2"
   assert_eq ".pi/skills/ 里仍然只有两条" "$(ls -1A "$p/.pi/skills" | wc -l)" "2"
   out3="$(init_proj "$tree" "$p" --copy)"; rc3=$?
   assert_eq "--copy 对着已有软链退出 0（skip，不是覆盖）" "$rc3" "0"
@@ -379,6 +416,7 @@ if want install; then
   out="$(init_proj "$tree" "$p" --no-skills)"; rc=$?
   assert_eq "--no-skills 退出码 0" "$rc" "0"
   case "$out" in *'--no-skills'*) ok "--no-skills 明说跳过了这一步" ;; *) bad "--no-skills 没有说明" ;; esac
+  check_holds "P59 --no-skills 不打信任提示行" chk_no_skills_silent "$tree" "$p"
   assert_not_file "$p/.pi/skills" "--no-skills 没建 .pi/skills/"
   assert_eq ".gitignore 没被塞进 .pi/skills/" "$(grep -cxF '.pi/skills/' "$p/.gitignore" || true)" "0"
 
@@ -594,6 +632,37 @@ PYPACKF
     check_holds "⑤b 对照：真实树打包清单齐全" chk_pack_walk "$tree"
     check_breaks "⑤b 翻转：bin 目标文件不在（package 不完整）" chk_pack_walk "$ft"
   fi
+  # ⑦ P59：安装步的信任提示行 —— 去掉它 → 判据红；让它在 --no-skills 下出现 → 判据红
+  ft="$tmp/f-trustline"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-init.sh" <<'PYTRUST'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+i = s.find('  team_dim "  提示：.pi/skills/')
+if i < 0:
+    print("没找到信任提示行"); sys.exit(1)
+j = s.find("\n", i)
+open(p, "w", encoding="utf-8").write(s[:i] + s[j+1:])
+PYTRUST
+  pg="$tmp/f-trust-green"; git_new "$pg"
+  pf="$tmp/f-trust-red"; git_new "$pf"
+  check_holds "⑦a 对照：真实树装完打信任提示行" chk_trust_hint_case "$tree" "$pg"
+  check_breaks "⑦a 翻转：去掉安装步的信任提示行" chk_trust_hint_case "$ft" "$pf"
+  ft2="$tmp/f-trust-noskills"; scratch_tree "$ft2"
+  python3 - "$ft2/skills/teamsmith/scripts/lib/cmd-init.sh" <<'PYTRUST2'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = "    printf '  skip  %s（--no-skills：只做配置/文档，没装项目本地 skill）\\n' \"$target\"\n    return 0"
+if old not in s:
+    print("没找到 --no-skills 分支"); sys.exit(1)
+new = old.replace('    return 0', '    team_dim "  提示：.pi/skills/ pi --approve /trust team init --no-skills"\n    return 0')
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYTRUST2
+  pg2="$tmp/f-trust-noskills-green"; git_new "$pg2"
+  pf2="$tmp/f-trust-noskills-red"; git_new "$pf2"
+  check_holds "⑦b 对照：真实树 --no-skills 安静" chk_no_skills_silent "$tree" "$pg2"
+  check_breaks "⑦b 翻转：提示行也打进 --no-skills 分支" chk_no_skills_silent "$ft2" "$pf2"
   # ⑥ 真实树没被夹具动过：git status 指纹前后一致
   porcelain_after="$(cd "$tree" && git status --porcelain | sha256sum)"
   assert_eq "⑥ 夹具没碰真实树（git status 指纹不变）" "$porcelain_after" "$porcelain_before"

@@ -5989,6 +5989,48 @@ assert_has_echo "$M45_F0" "geometry=[1 5]" "M45 对照：没有横幅时几何�
 assert_has_echo "$M45_F0" "box_nows=[halfsentence]" "M45 对照：普通草稿照旧读得出来"
 assert_has_echo "$M45_F0" "banner_rows=[]" "M45 对照：没有横幅时一行都不标"
 
+# ---------------------------------------------------------------- 12b-h0c. P59 覆盖层判据（纯帧，快模式照跑）
+section "12b-h0c · P59 输入框判据：覆盖层（Pi 的项目信任弹窗）≠ 非空输入框"
+# 现场（P54 的 F2 / M28 §31b2 红）：项目由 team init 装了 .pi/skills/ 之后，第一次交互运行的 pi 会画
+# 「信任此项目吗」弹窗 —— 一个整屏覆盖层，弹窗里**一个字都没有**。老判据的两条误判路径都写进 requirement：
+# 光标在弹窗下边界上 → 找不到框（UNKNOWN）；光标落进弹窗 → 把弹窗自己那两条整行 ─ 配成「框」、
+# 把问题与选项读成框内容（BUSY）。两条都打成 `idle-read=NOT-EMPTY`，夹具然后对着弹窗跑投递。
+# 这一节是**纯帧**（不开 tmux、不跑 pi，FAST 照跑）：真帧 + 合成帧钉住判定与红/绿两侧。
+M59_FB="$SKILL_DIR/tests/pm-box-real.sh"
+M59_FRAME="$SKILL_DIR/tests/frames/pi-0.87.0-project-trust-prompt.txt"
+M59_CY=16        # 真帧实拍时的光标行（1-based）：弹窗自己的下边界那条整行 ─
+assert_file "$M59_FRAME" "P59：真实信任弹窗帧（真 pi 0.87.0 实拍）在 tests/frames/"
+assert_eq "P59 对照：真帧里就有两条整行 ─（老等待「第一条整行 ─」会在这帧上放行 → 更严的就绪门是必需的）" \
+  "$(grep -cE '^(─)+$' "$M59_FRAME" || true)" "2"
+# 同一份共享判据（pm-box-real.sh --frame）：覆盖层谓词开 → overlay；关（M24_OVERLAY_DETECT=0）→ 老判定
+M59_OUT="$(bash "$M59_FB" --frame "$M59_FRAME" --cursor "$M59_CY" 2>&1)"; M59_RC=$?
+assert_eq "P59 绿侧：真帧被判成覆盖层（rc=0）" "$M59_RC" "0"
+assert_has_echo "$M59_OUT" "overlay=trust-prompt" "P59 绿侧：真帧点名 overlay=trust-prompt"
+assert_not_echo "$M59_OUT" "idle-read=NOT-EMPTY" "P59 绿侧：覆盖层**不许**被报成非空输入框"
+M59_OUT_RED="$(M24_OVERLAY_DETECT=0 bash "$M59_FB" --frame "$M59_FRAME" --cursor "$M59_CY" 2>&1)"; M59_RC_RED=$?
+assert_eq "P59 红侧：关掉覆盖层判据 → 同一份帧退回非空（rc≠0）" "$M59_RC_RED" "1"
+assert_has_echo "$M59_OUT_RED" "idle-read=NOT-EMPTY" "P59 红侧：谓词关掉后同一帧被判成草稿（可证伪，不是空转）"
+assert_not_echo "$M59_OUT_RED" "overlay=trust-prompt" "P59 红侧：谓词关掉后不再点名覆盖层"
+
+# 合成帧：像弹窗一样的 chrome（两条整行 ─ 夹着问题/选项/提示）但没有真输入框 → 就绪门绝不放行
+M59_F="$TMP/p59-frames"; rm -rf "$M59_F"; mkdir -p "$M59_F"
+m59_rule() { printf '─%.0s' $(seq 1 "${1:-40}"); printf '\n'; }
+{ m59_rule 60; printf '\n'; printf '  Pick a widget\n'; printf '  /tmp/x\n'; printf '\n'; printf '  Something something\n'; printf '\n'; printf '  → Alpha\n'; printf '    Beta\n'; printf '\n'; printf '  up/down move  enter pick\n'; printf '\n'; m59_rule 60; printf ' footer\n'; } > "$M59_F/chrome-no-box.txt"
+M59_OUT_NB="$(bash "$M59_FB" --frame "$M59_F/chrome-no-box.txt" --cursor 8 2>&1)"; M59_RC_NB=$?
+assert_eq "P59：像弹窗的 chrome（两条整行 ─、没有真输入框）不许让就绪门放行（rc≠0）" "$M59_RC_NB" "1"
+assert_has_echo "$M59_OUT_NB" "idle-read=NOT-EMPTY" "P59：合成帧没有可定位的空框 → 判定非空（就绪永远不放行）"
+assert_not_echo "$M59_OUT_NB" "idle-read=EMPTY" "P59：合成帧绝不许被判成空框"
+# 对照：真的空输入框要能放行（否则绿侧可能只是「永远红」）
+{ m59_rule 60; printf '\n'; printf ' fake-pi 1.0\n'; m59_rule 60; printf ' footer\n'; } > "$M59_F/empty-box.txt"
+M59_OUT_E="$(bash "$M59_FB" --frame "$M59_F/empty-box.txt" --cursor 2 2>&1)"; M59_RC_E=$?
+assert_eq "P59 对照：真输入框且为空 → rc=0（就绪门确实会放行）" "$M59_RC_E" "0"
+assert_has_echo "$M59_OUT_E" "idle-read=EMPTY" "P59 对照：空框判成 EMPTY"
+# 对照：框里有草稿 → 非空（覆盖层规则没有把判定力削掉）
+{ m59_rule 60; printf '\n'; printf ' half sentence\n'; printf ' fake-pi 1.0\n'; m59_rule 60; printf ' footer\n'; } > "$M59_F/draft-box.txt"
+M59_OUT_D="$(bash "$M59_FB" --frame "$M59_F/draft-box.txt" --cursor 2 2>&1)"; M59_RC_D=$?
+assert_eq "P59 对照：框里有草稿 → 非空（判定力不降）" "$M59_RC_D" "1"
+assert_has_echo "$M59_OUT_D" "idle-read=NOT-EMPTY" "P59 对照：草稿照旧被判成非空"
+
 # ---------------------------------------------------------------- 12b-h1. M24 真实 pi 窗格体检（显式开）
 # tests/pm-box-real.sh 用**真实 pi**起一个窗格，把守卫看到的原始帧与判定打出来（真实现场形状）。
 # 默认不跑：它要用使用者的 pi 配置（`--no-session --session-dir <tmp>`，不写会话文件，但会加载扩展）。
