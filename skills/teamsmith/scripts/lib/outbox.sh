@@ -123,7 +123,8 @@ _team_box_banner_rows() { # <cy>：标记更新横幅块的行（stdout：行号
     }'
 }
 
-# 下边框候选的**尝试顺序** = 本变更唯一的决策点（P80, design D3「一处实现」）。
+# 下边框候选的**尝试顺序** = 候选**顺序**的唯一决策点（P80, design D3「一处实现」；准入条件
+# （P86，`_team_box_top_border_max_row`）是另一项决策，同一种影子模式）。
 # stdin：合格候选，每行 `<下边框候选行> <上边框行>`（按候选行号升序）；stdout：按尝试顺序排列的
 # 同一批行；**第一行就是胜者**。默认 **最低优先**：下边框 = 光标下方**最低的**合格整行规则行 ——
 # 上边框 HIGHEST（V9-A4/A5/A8/A10）的镜像。草稿自己画的等宽框线/spinner 行因此落在框**内**成为
@@ -135,10 +136,25 @@ _team_box_bottom_candidate_order() {
   LC_ALL=C awk '{ a[NR]=$0 } END { for (i=NR;i>=1;i--) print a[i] }'
 }
 
+# 下边框候选的**准入条件**（P86, design D1/D3）：候选配到的上边框必须**严格位于这一行之上** ——
+# 定位出的框因此**总是包含光标行**。返回光标行的上一行（上边框允许的最大行号）。
+# 为什么必须有（P84 的 F1，安全回归）：只把下边框从「最近」改成「最低」之后，配对可以**整个落在
+# 光标下方**（混宽度帧里下方另有一对自成配对的规则行 → 新框 [5 7] 与光标框 [1 3] 不相交）→
+# 框读空 → 就绪门放行 → payload 打进人的草稿。准入条件把这种候选**跳过**（继续在更近的候选里找；
+# 全都不满足 → 既有的 unknown-shape 路径）。它不是新造行为：`_team_box_geometry` 只把它当 awk 的
+# 数值上界用，配对规则（tier1 等宽 / tier2 spinner）、横幅排除、两遍回退全部照旧。
+# 红侧同样不靠产品开关：测试进程把它影子成一个极大的行号（= 不设准入条件）即可逐字复现 P80
+# （本 change 的 apply 版本）在 F1 帧上的 `idle-read=EMPTY`（M24_SHADOW_CHROME / P80 顺序影子同一模式）。
+_team_box_top_border_max_row() { # <cy> → 上边框允许的最大行号（= 光标行上一行）
+  local cy="${1:-}"
+  printf '%s\n' "$(( cy - 1 ))"
+}
+
 # 几何定位的唯一实现：stdin=capture 全文，$1=光标行（1-based）→ 输出 "top bottom"（找不到 → 空）。
 _team_box_geometry() { # <cy>
-  local cy="${1:-}" raw ban pass useban res ordered pick
+  local cy="${1:-}" raw ban pass useban res ordered pick maxrow
   raw="$(cat)"
+  maxrow="$(_team_box_top_border_max_row "$cy")"
   ban="$(_team_box_banner_rows "$cy" <<< "$raw")"
   # 两遍：第一遍跳过横幅；若跳完**连一个框都找不出来**，说明那一堆标记把真框也吞了
   # （可构造的对抗形状：草稿自己就是“整行 ─ + 两行头 + 尾行 + 整行 ─”，而框的上边框被当成开界）
@@ -146,8 +162,8 @@ _team_box_geometry() { # <cy>
   for pass in 1 2; do
     if [ "$pass" -eq 1 ] && [ -n "$ban" ]; then useban=1; else useban=0; fi
     # 每个合格候选的「下边框候选 → 上边框」对，按候选行号升序（**顺序不在这里定**：
-    # 胜者由 _team_box_bottom_candidate_order 决定 —— 它是本变更唯一的决策点）。
-    res="$(printf '%s\n' "$raw" | LC_ALL=C awk -v cy="$cy" -v ban="$ban" -v useban="$useban" '
+    # 胜者由 _team_box_bottom_candidate_order 决定 —— 顺序由它独家决定，准入由 P86 的上界定）。
+    res="$(printf '%s\n' "$raw" | LC_ALL=C awk -v cy="$cy" -v ban="$ban" -v useban="$useban" -v maxrow="$maxrow" '
       { L[NR]=$0 }
       END {
         if (ban != "") { n=split(ban, X, " "); for (z=1;z<=n;z++) BAN[X[z]+0]=1 }
@@ -169,6 +185,8 @@ _team_box_geometry() { # <cy>
           # 代价：对话区若真有等宽整行 ─，框会被算大 → BUSY——永不粘连。真实 Pi 0.85.1
           # 内容区按 119 折行（边框 120），等宽内容行不可达（V9 90.C/90.F 实测），该代价
           # 只在「裁切型」TUI 上存在。
+          # 配对结果还要过**准入条件**（P86）：配到的上边框必须严格在光标行之上（<= maxrow），
+          # 否则这个候选跳过 —— 「取最高」在混宽度帧上可以整对落在光标下方，那种框不含光标。
           hi1=0; hi2=0
           for (i=cand-1;i>=1;i--) {
             if (useban && BAN[i]) continue
@@ -182,8 +200,8 @@ _team_box_geometry() { # <cy>
             if (L[i] ~ /^\xe2\x94\x80\xe2\x94\x80 / && \
                 L[i] ~ /(\xe2\x94\x80){8}[ \t]*$/) hi2=i
           }
-          if (hi1) print cand, hi1
-          else if (hi2) print cand, hi2
+          top = (hi1 ? hi1 : hi2)                  # 配对规则不变：tier1 等宽优先，否则 tier2 spinner
+          if (top && top <= maxrow) print cand, top # 准入：框必须包含光标行（P86）
         }
       }')"
     [ -n "$res" ] || continue

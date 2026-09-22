@@ -52,11 +52,18 @@ Measured candidate table (production code vs each variant; `logs/pkg-10.log`, `l
   row, so anything the draft itself draws between them becomes box content. "Qualifying" keeps the existing
   pairing constraint (tier1 equal width, tier2 spinner), the banner-block exclusion, the strictly-below-cursor
   search (V9-A10) and the retry-with-banner-admitted fallback.
-- **Monotone direction.** Versus A the located box can only grow: the bottom border can only move down, and the
-  top-border search for a lower candidate sees a superset of rows (its "highest" answer can only stay or move up).
-  Content rows can only be added, so a verdict can only move **`EMPTY` → busy**, never the reverse; `holds_only`
-  can only move from *only-ours* to *extra-text* (the safe direction). The gate must pin this: the guard matrix's
-  state lines must be identical in both directions (`logs/pkg-40.log`).
+- **The admission condition (P86).** A candidate counts only when the top border it pairs with sits **strictly
+  above the cursor row**: the located box therefore always contains the cursor row (the box grows from the cursor).
+  This is a correction, not a refinement — P84's verification measured that the "monotone" claim written here
+  earlier was **false as written**: on a mixed-width frame (`tests/frames/p86-f1-mixed-width-disjoint-box.txt`: a
+  100-column box whose cursor row holds ` HUMAN DRAFT LINE`, then a second, self-paired 120-column pair of rule rows
+  below) the lowest candidate's pairing lies entirely below the cursor, so the located box `[5 7]` is disjoint from
+  the cursor's `[1 3]`, reads empty, and the readiness gate releases — a rule row below the box is not content when
+  the box never covered it. A candidate that fails the admission is skipped and the search continues with the
+  nearer candidates; when none passes in a pass, the existing unknown-shape path applies (no new behaviour).
+  Because of that, the change does **not** assert a monotonicity theorem: the gate machine-checks the frame corpus
+  (every stored frame, against the admission shadowed off: no `BUSY`→`EMPTY`; every located box satisfies
+  `top < cursor < bottom`) and names the residual its own boundary leaves (§8).
 - **C** is rejected by its own falsifier: the region between a draft's rule and the real bottom border can be blank
   (a draft that is a rule row plus a trailing blank line), and C then keeps the truncated box and reads `EMPTY`
   again (`p78-draft-rule-blank-region.txt`, measured in `pkg-10.log` §10h). A content predicate cannot be the
@@ -86,21 +93,28 @@ base requirement's scenarios — 8 today, 13 after P67's archive — are untouch
 is that the pairing rule is described in the base requirement and the bottom-candidate rule in the new one, so the
 new requirement cross-references it instead of restating it.
 
-## 5. Decision D3 — one decision point, and the red side is a shadow
+## 5. Decision D3 — two decision points, each with one implementation; the red side is a shadow
 
-The candidate **order** must be decided in exactly one place, shared by the production extraction
+The candidate **order** must be decided in exactly one place, and so must the admission bound, both shared by the
+production extraction
 (`_team_box_text_of_frame`/`team_input_box_text`), the fixture-side judgement (`box-judge.sh`) and the gate's frame
 probes — the same "one implementation" promise the border-adjacent row already carries (P67). Concretely: the
-geometry function asks a separate overridable function for the candidate order instead of hard-coding the loop
-direction, so a test process that shadows it to nearest-first reproduces the legacy behaviour exactly. That shadow
-is this change's red side (the pattern of `M45_NO_STRIP=1` and `M24_SHADOW_CHROME=1`); **no environment switch
-belongs in production** — a switch would ship two behaviours where the spec pins one. `flip-m45.sh`'s cross-tree
-probe stays the one documented exception (it must parse a pre-fix tree).
+geometry function asks a separate overridable function for the candidate order (`_team_box_bottom_candidate_order`)
+and one for the admission bound (`_team_box_top_border_max_row`) instead of hard-coding the loop direction or the
+cursor bound, so a test process that shadows one of them reproduces the previous behaviour exactly: the order shadowed to
+nearest-first reproduces the legacy rule, the admission shadowed to a huge row reproduces the pre-fix rule (lowest
+candidate, no admission — the rule P84 measured `EMPTY` on the `p86-f1-*` frames). Those shadows are this change's
+red sides (the pattern of `M45_NO_STRIP=1` and `M24_SHADOW_CHROME=1`); **no environment switch belongs in production**
+— a switch would ship two behaviours where the spec pins one. `flip-m45.sh`'s cross-tree probe stays the one
+documented exception (it must parse a pre-fix tree).
 
 ## 6. Decision D4 — the mirror cost is documented, and the ambiguity is proved
 
-The new direction has a cost: a full-rule row **below** the located box enlarges the box over it and the rows
-between, so the pane reads busy and delivery waits (`p78-conversation-rule-below-box.txt`: `[1 4]`, busy). It must
+The new direction has a cost: a full-rule row **below** the located box that still pairs with a top border above
+the cursor enlarges the box over it and the rows between, so the pane reads busy and delivery waits
+(`p78-conversation-rule-below-box.txt`: `[1 4]`, busy) — a row whose pairing lies below the cursor is not a
+candidate at all under the admission condition, so it cannot enlarge anything (and cannot move the box off the
+cursor). It must
 be in `references/troubleshooting.md` §3 beside the top border's documented cost, and it is the same shape of
 cost: today a rule row drawn in the **conversation above** the box already enlarges the box under the HIGHEST rule
 (measured: `logs/pkg-20.log` §20c, busy). Two measurements bound the cost:
@@ -121,7 +135,10 @@ So the requirement states the cost and its direction; it does not pretend to eli
 
 Eight synthetic frames (2 × P74's §20h shapes + the wider rule + the spinner row + cursor-mid-draft + the
 conversation rule below the box + the `holds_only` frame + the rule+blank-line falsifier) are stored under
-`skills/teamsmith/tests/frames/p78-*.txt` with `README.md` rows naming the shape, the cursor row and that they are
+`skills/teamsmith/tests/frames/p78-*.txt`
+and three more are stored under `skills/teamsmith/tests/frames/p86-f1-*.txt` (P84's F1 frame and its two variants —
+the mixed-width box, the spinner-shaped lower top border, the narrower lower pair; byte-identical to the frames P84's
+verification built, sha256-pinned in the gate) with `README.md` rows naming the shape, the cursor row and that they are
 **synthetic models of a clipping TUI** (the real captures are the four `pi-0.*` files plus the trust-prompt frame,
 which stay byte-identical). The construction is the one P74's verifier used (`p78_rule`/`p78_spin` in
 `docs/team/reports/P78-verify/pkg/lib.sh`), so the apply's stored frames can be `cmp`-checked against the frames
@@ -137,6 +154,7 @@ README.
 | A future layout draws a full-rule row below the box → that pane queues instead of delivering (the mirror cost) | documented in `troubleshooting.md` §3; measured unreachable in both layouts today; the opposite direction glues, which is strictly worse |
 | The frame corpus is synthetic ("a clipping-type TUI") | the five real captures stay the regression anchor (verdicts and geometry pinned by the delta's last scenario) and are never edited |
 | A later change re-introduces nearest-first for "performance" or "simplicity" | the gate's shadowed run fails the moment the two directions stop diverging (`pkg-50` pattern is pinned in the gate) |
+| The admission's own boundary: when every candidate below a draft's rule row is inadmissible, the nearest admitted candidate can still be that draft's rule row, so the box truncates the draft (the pre-P80 shape, mixed-width frames only) | measured (P86): the shape `rule(A) / blank(cursor) / rule(A) / blank / rule(B) / text / rule(B) / footer` reads `EMPTY` with the admission in place where the pre-fix rule read busy; the admission only promises "the located box contains the cursor", the stored corpus does not contain the shape — named here rather than implied away, and handed to the PM |
 | Someone reads the change as fixing the top border too | explicit non-goal (§2) and the untouched top-rule prose in the base requirement |
 | The new requirement drifts from the base requirement's pairing rule | the new requirement cross-references it by name and the gate pins the values both ends produce |
 
@@ -146,6 +164,9 @@ README.
    `✓57 ✗0 · findings=1`; it is the propose-phase evidence, not the apply's proof.
 2. The new FAST gate section over the stored frames, in both candidate orders, with the red frames flipping to
    `EMPTY` under the shadow.
+2b. The P86 FAST section over the three `p86-f1-*` frames (admission off: the pre-fix `[5 7]`/`EMPTY`; admission on:
+   the cursor-containing `[1 3]`/busy) and over the whole stored corpus (16 frames): every located box contains the
+   cursor row and no verdict moves from busy to `EMPTY` in either comparison (admission off, order shadowed).
 3. `bash skills/teamsmith/tests/guard-matrix.sh` — green (31/0) and the same state lines as the unmodified tree
    (the monotonicity check).
 4. `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` and the full gate:

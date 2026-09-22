@@ -117,10 +117,17 @@ Honest edges (documented, not hidden):
   to the pane width, or a table border) and spinner-shaped draft rows are **fixed** (the top border is the
   highest qualifying row, so such a row is content and the box reads busy; V9-A4/A5/A8), a cursor resting on the
   draft's own equal-width rule row is **fixed** (the bottom border is searched strictly below the cursor row;
-  V9-A10), and **still open** are the whitespace-only draft and the two shape-based members named in the
-  status-row bullet below: a draft whose only row is a verbatim clone of the status-row shape with the cursor
-  parked on another row (reads as chrome → empty), and an unrecognised future status-row spelling (reads busy,
-  never empty).
+  V9-A10), and a lower candidate whose paired top border lies entirely below the cursor is **fixed** (P86: such a
+  candidate is skipped and the search continues with the nearer candidates, so the located box always contains the
+  cursor row); **still open** are the whitespace-only draft, the two shape-based members named in the
+  status-row bullet below (a draft whose only row is a verbatim clone of the status-row shape with the cursor
+  parked on another row — reads as chrome → empty; and an unrecognised future status-row spelling — reads busy,
+  never empty), and the P86 residual: on a clipping TUI whose frame holds, below the box, a second pair of
+  full-rule rows of a **different** width (so that pair cannot pair with anything above the cursor), the nearest
+  admitted candidate can still be a rule row the draft itself drew, and that frame reads empty. The measured shape
+  is `rule(A) / blank (cursor) / rule(A) / blank / rule(B) / text / rule(B) / footer` with A≠B (P86 report); it is
+  the same mixed-width clipping class as the P74/P84 shapes and the fix's stated promise is only "the located box
+  contains the cursor row", not "no frame reads empty".
 - **Confirmation means the payload left the box AND the conversation shows a new copy of it (V9-B5).** After the
   `Enter` the drain reads the box back AND counts the payload's signature in the conversation area above the box
   (first non-blank line, whitespace-stripped, compared byte-wise, or a `[paste #N +K lines]` bubble whose `+K`
@@ -171,7 +178,10 @@ Honest edges (documented, not hidden):
   rather than hidden.
 - **Rule-looking rows inside your own draft are not borders.** A pasted markdown separator or table border is a
   `─` row; the guard takes the **highest** qualifying row above the cursor as the top border and the **lowest**
-  qualifying row below it as the bottom border (a full-rule row of equal width, or the E3-era spinner shape where a
+  qualifying row below it as the bottom border, and it admits that bottom border only when the top border it pairs
+  with sits **strictly above the cursor row** (so the located box always contains the cursor row; a candidate whose
+  pairing lies entirely below the cursor is skipped and the search continues with the nearer candidates — P86). The
+  bottom border is a full-rule row of equal width, or the E3-era spinner shape where a
   spinner-shaped top border is admissible; the bottom search is strictly below the cursor, V9-A10), so a short draft
   rule row — and also an equal-width or wider one (V9-A4/A5/A8/A10) — counts as box content and the box reads
   busy. Three documented costs: on a TUI that **clips** long lines to the pane width, an over-long draft line can
@@ -179,7 +189,8 @@ Honest edges (documented, not hidden):
   0.85.1 wraps one column short of the border width, so the shape is unreachable there); the `── ␣…`-plus-long-trailing-rule
   shape is accepted as a top-border candidate on purpose (it was measured on the E3 Pi), so a draft line with that
   exact shape reads as box content and the box reads busy — never as a border; and a full-rule row **below** the
-  located box (a rule the conversation draws, or any chrome rule row under the box) enlarges the box over that row
+  located box that still pairs with a top border above the cursor (a rule the conversation draws, or any chrome rule
+  row under the box — `p78-conversation-rule-below-box.txt`) enlarges the box over that row
   and the rows between it and the box's own bottom border, so the box reads busy and delivery waits — the mirror of
   the top border's cost, on the same conservative side. That last cost is **not reachable in either measured
   layout**: on every stored real capture (Pi 0.85.1 and 0.87.0, `tests/frames/`) the pane's lowest full-rule row is

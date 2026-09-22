@@ -4,28 +4,39 @@
 
 When the guard locates the input box from the cursor row, the bottom border SHALL be the **LOWEST** row below the
 cursor that qualifies as a bottom border: a full-rule row (the whole row is the rule character, no other text) that
-pairs with a top-border candidate above it under the pairing rule of *An automated send never types into a non-empty
-input box* — an equal-width full-rule row, or a spinner-shaped row where a spinner-shaped top border is admissible.
-The guard MUST NOT take the NEAREST qualifying row: a rule row the human's own draft draws below the cursor (an
-equal-width rule row, a longer one a clipping TUI cuts at the pane edge, a pasted markdown separator or a table
-border) SHALL stay inside the located box and be read as content, so the box reads busy instead of empty — this is
-the mirror of that requirement's HIGHEST rule for the top border, and the same defect class
+pairs with a top-border candidate **strictly above the cursor row** under the pairing rule of *An automated send
+never types into a non-empty input box* — an equal-width full-rule row, or a spinner-shaped row where a spinner-shaped
+top border is admissible. The admission is what makes the located box contain the cursor row (the box grows from the
+cursor), so a lower candidate whose pairing lies entirely below the cursor MUST NOT decide the geometry: a
+mixed-width frame can hold a second, self-paired pair of rule rows under the cursor, and pairing with it would locate
+a box that does not contain the cursor at all. A candidate that fails the admission MUST be skipped and the search
+MUST continue with the nearer candidates (the order is lowest-first, so the next candidate is the one closer to the
+cursor (the order is lowest-first, so the next candidate is the one closer to the cursor). The guard MUST NOT take
+the NEAREST qualifying row: a rule row the human's own draft draws below the cursor (an equal-width rule row, a
+longer one a clipping TUI cuts at the pane edge, a pasted markdown separator or
+a table border) SHALL stay inside the located box and be read as content, so the box reads busy instead of empty —
+this is the mirror of that requirement's HIGHEST rule for the top border, and the same defect class
 (V9-A4/A5/A8/A10 on the top end). The rows excluded by the update-banner rule MUST NOT be candidates, and when
 skipping that block finds no box the existing retry-with-the-block-admitted fallback MUST stay in place. A cursor
 row that is itself a full-rule row MUST NOT be a candidate: the bottom border is searched strictly below the cursor
 row (V9-A10). When no row pairs, the existing unknown-shape path applies unchanged (deliver as today with one
 warning; never a permanent hold).
 
-The direction is deliberate and monotone: relative to the nearest-candidate rule the located box can only grow
-(the bottom border can only move down, and a lower candidate's top-border search can only reach the same or a
-higher row), so a frame that read `EMPTY` under the old rule can only read busy under this one — **no frame's
-verdict may move from BUSY to `EMPTY`**. The decision MUST have exactly one implementation, shared by the
-production extraction and the fixture-side frame judgement, so a fixture cannot keep the old candidate order after
-the production guard changes; the red side of this requirement is a test process that shadows that one decision to
-the legacy nearest-first order (`M24_SHADOW_CHROME`/`M45_NO_STRIP`'s pattern), and the gate MUST exercise it.
+The admission condition is a statement about what the located box IS — always a box that contains the cursor row —
+and not a licence to claim that any frame's verdict is monotone. What the gate MUST pin instead: for every frame
+stored under `skills/teamsmith/tests/frames/`, the verdict read with the admission in place is compared with the
+verdict read with the admission shadowed off (the pre-fix rule: lowest candidate, no admission), and the gate MUST
+fail if any frame's verdict moves from busy to `EMPTY`; the reverse moves MUST be exactly the frames the admission
+fixes, and every located box MUST be shown to satisfy `top < cursor row < bottom` (the frame with no box at all is
+the trust prompt, whose overlay verdict takes precedence). Both decisions — the candidate order and this admission —
+MUST have exactly one implementation each, shared by the production extraction and the fixture-side frame judgement,
+so a fixture cannot keep the old behaviour after the production guard changes; the red side of each is a test
+process that shadows that one decision (the order back to nearest-first, the admission off;
+`M24_SHADOW_CHROME`/`M45_NO_STRIP`'s pattern), and the gate MUST exercise both.
 
 The cost SHALL be documented in `references/troubleshooting.md` §3: a full-rule row that lies BELOW the located
-box (a rule row drawn in the conversation, or any chrome rule row under the box) enlarges the box over that row and
+box and still pairs with a top border above the cursor (a rule row drawn in the conversation, or any chrome rule
+row under the box — `p78-conversation-rule-below-box.txt` is that shape) enlarges the box over that row and
 the rows between it and the box's own bottom border, so the box reads busy and delivery waits — the conservative
 direction, never a glue. That cost is not reachable in either measured layout: on every stored real capture (Pi
 0.85.1 and Pi 0.87.0, `skills/teamsmith/tests/frames/`) the pane's lowest full-rule row is the box's own bottom
@@ -108,6 +119,34 @@ one that cannot glue.
 - **THEN** the verdicts are `idle-read=NOT-EMPTY`, `idle-read=NOT-EMPTY`, `idle-read=EMPTY`,
   `idle-read=EMPTY` and `overlay=trust-prompt` respectively — identical to the nearest-candidate rule, with the
   locations `[25 27]`, `[25 27]`, `[25 27]`, `[24 29]` and no box (the overlay takes precedence)
+
+#### Scenario: A candidate whose pairing lies below the cursor cannot decide the box
+
+- **GIVEN** the frames `skills/teamsmith/tests/frames/p86-f1-mixed-width-disjoint-box.txt` (cursor row 2; the
+  located box's own 100-column rule rows at 1 and 3 hold ` HUMAN DRAFT LINE` on the cursor row, and a second,
+  self-paired 120-column pair of rule rows sits at rows 5 and 7 below it),
+  `p86-f1-spinner-top-disjoint-box.txt` (the same shape with a spinner-shaped top border at row 5) and
+  `p86-f1-narrower-width-disjoint-box.txt` (a 120-column box and an 80-column pair below)
+- **WHEN** the guard reads each frame — the production extraction, `pm-box-real.sh --frame … --cursor 2` and the
+  gate's frame probe
+- **THEN** the admission refuses the lower candidate (its paired top border sits at row 5, below the cursor), the
+  search falls back to the nearest admitted candidate, `geometry=[1 3]` — the located box contains the cursor row
+  — the cursor row's draft is box content and the verdict is `idle-read=NOT-EMPTY` (rc 1); it is never `EMPTY`
+- **AND** in a probe process that shadows the admission decision off (the pre-fix rule) the same bytes read
+  `geometry=[5 7]`, `box_text=[]` and `idle-read=EMPTY` (rc 0) — the readiness gate releases and a payload is
+  typed into the draft: the red side the gate must show
+
+#### Scenario: Every stored frame's located box contains the cursor and no verdict moves from busy to EMPTY
+
+- **GIVEN** every frame stored under `skills/teamsmith/tests/frames/` (the five real captures, the eight `p78-*`
+  synthetic frames and the three `p86-f1-*` frames) with the cursor row each is measured at
+- **WHEN** the gate's frame probe reads each of them through the production extraction with the admission in place
+  and with the admission shadowed off (the pre-fix rule), and again with the candidate order shadowed to
+  nearest-first
+- **THEN** every located box satisfies `top < cursor row < bottom` (the only frame without a box is
+  `pi-0.87.0-project-trust-prompt.txt`, whose overlay verdict takes precedence), no frame's verdict moves from
+  `idle-read=NOT-EMPTY` to `idle-read=EMPTY` in either comparison, and the only frames moving the other way
+  (`EMPTY` → busy) are the three `p86-f1-*` frames
 
 #### Scenario: The candidate order has one implementation
 

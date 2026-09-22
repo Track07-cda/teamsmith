@@ -13509,6 +13509,147 @@ p76 $TEAM review "$P76_ID" --pre-merge >"$TMP/p76-nolocate.log" 2>&1; P76_RC7=$?
 assert_eq "P76 ⑤：定位不到工作树 → 非零（fail closed，不假装检查过）" "$P76_RC7" "2"
 assert_has "$TMP/p76-nolocate.log" "定位不到这个任务分支的工作树" "P76 ⑤：拒绝时点名「无法检查」"
 
+# ---------------------------------------------------------------- 46. P86 下边框候选的准入条件（纯帧，快模式照跑）
+section "46 · P86 下边框判据：定位出的框必须包含光标行（P84 的 F1 安全回归）"
+# 现场（P84 的 F1 —— 本 change 的 apply 引入的安全回归）：规格只钉了「顶边框 = 下边框之上**最高**的合格行」，
+# 旧顺序下（下边框紧贴光标下方）这**隐含**了「框含光标」；改成「最低候选」后，配对可以**整个落在光标
+# 下方** —— 混宽度帧里下方另有一对自成配对的规则行（5/7 行，宽度与光标框不同）→ 新框 [5 7] 与光标框
+# [1 3] **不相交** → 框读空 → 就绪门放行 → payload 打进人的草稿（生产路径同样 EMPTY）。
+# P86 的**准入条件**：候选配到的顶边框必须**严格位于光标行之上**（⇒ 定位出的框总是包含光标行）；
+# 不满足 → 跳过这个候选、继续在**更近**的候选里找；全都不满足 → 既有的 unknown-shape 路径。配对规则
+# （tier1 等宽 / tier2 spinner）、横幅排除、两遍回退、顶边框取最高，全部照旧。本段是**纯帧**（不开 tmux、
+# 不跑 pi，FAST 照跑）。
+#
+# 红侧不靠产品开关，两条影子各自只覆盖**一个**决策函数（M24_SHADOW_CHROME / §12b-h0d 同一模式）：
+#   shadow=2（_team_box_top_border_max_row → 极大行号） = **准入条件关掉** = P80（本 change 的 apply）
+#   shadow=1（_team_box_bottom_candidate_order → cat） = P80 之前的「最近优先」
+# 交付时的红侧实测（当前 HEAD 8e32a04e，修前）：三份 p86-f1-* 帧都是 geometry=[5 7]、box_nows=[]、
+# idle-read=EMPTY rc=0；下面断言影子 2 必须**逐字**复现它（同一份帧、同一个判据）。
+P86_FD="$SKILL_DIR/tests/frames"
+P86_PROBE="$TMP/p86-frame-probe.sh"
+cat > "$P86_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <帧文件> <光标行> [shadow: 0=修后,1=最近优先,2=准入关掉（P86 前）] → geometry / box_nows / verdict
+set -u
+SKILL_DIR="$1"; FR="$2"; CY="$3"; SHADOW="${4:-0}"
+unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT TEAM_SESSION \
+      TEAM_SESSION_FROM TEAM_PM_WINDOW TEAM_AGENTS TEAM_DOCS_DIR TEAM_WORKTREES_DIR 2>/dev/null || true
+. "$SKILL_DIR/scripts/lib/common.sh"; . "$SKILL_DIR/scripts/lib/outbox.sh"
+. "$SKILL_DIR/tests/lib/box-judge.sh"
+case "$SHADOW" in
+  1) _team_box_bottom_candidate_order() { cat; } ;;
+  2) _team_box_top_border_max_row() { printf '999999\n'; } ;;
+esac
+printf 'geometry=[%s]\n' "$(_team_box_geometry "$CY" < "$FR")"
+text="$(_team_box_text_of_frame "$CY" < "$FR" 2>/dev/null || true)"
+printf 'box_nows=[%s]\n' "$(printf '%s' "$text" | tr -d '[:space:]')"
+if v="$(team_box_frame_verdict "$CY" < "$FR" 2>/dev/null)"; then printf 'verdict=%s rc=0\n' "$v"
+else printf 'verdict=%s rc=1\n' "$v"; fi
+EOS
+chmod +x "$P86_PROBE"
+p86_probe() { # <帧> <光标行> [shadow]
+  ( cd "$REPO" && bash "$P86_PROBE" "$SKILL_DIR" "$1" "$2" "${3:-0}" 2>&1 )
+}
+p86_geo() { printf '%s\n' "$1" | sed -n 's/^geometry=\[\(.*\)\]$/\1/p'; }
+
+P86_F1="$P86_FD/p86-f1-mixed-width-disjoint-box.txt"
+P86_F2="$P86_FD/p86-f1-spinner-top-disjoint-box.txt"
+P86_F3="$P86_FD/p86-f1-narrower-width-disjoint-box.txt"
+for _p86f in "$P86_F1" "$P86_F2" "$P86_F3"; do
+  assert_file "$_p86f" "P86：F1 帧 $(basename "$_p86f") 在 tests/frames/（裁切型 TUI 模型，README 明说合成）"
+done
+# 帧与 P84 复验时自造的那三份逐字节相同（sha256 也写进 README）：改宽/重排立刻红
+declare -A P86_SHA=(
+  ["$(basename "$P86_F1")"]="4a59efae747e9b81414eff7f2664d421c8bc418bd57a2afbc2e037c8d7d81ca2"
+  ["$(basename "$P86_F2")"]="67c8a6ab321693df1ddfa867af0c7e09e0e329099858c1e6dbccaa59b2546c7e"
+  ["$(basename "$P86_F3")"]="a3d9232e6abc422984c67799af6f2b8791921848d7a65c9de8864845ad54c70e"
+)
+for _p86f in "$P86_F1" "$P86_F2" "$P86_F3"; do
+  assert_eq "P86：$(basename "$_p86f") 与 P84 自造的 F1 帧逐字节相同（sha256）" \
+    "$(sha256sum "$_p86f" | cut -d' ' -f1)" "${P86_SHA[$(basename "$_p86f")]}"
+done
+
+# ── 绿/红/旧顺序三侧：三份 F1 帧（红侧 = 准入关掉，即 P86 前的 P80 行为）─────────────────
+for _p86f in "$P86_F1" "$P86_F2" "$P86_F3"; do
+  _p86n="$(basename "$_p86f")"
+  P86_G="$(p86_probe "$_p86f" 2)"
+  assert_has_echo "$P86_G" "geometry=[1 3]" \
+    "P86 绿侧 $_p86n：下方的自成一体候选被准入条件拒绝 → 回落最近的合格候选 [1 3]（不是 [5 7]）"
+  assert_has_echo "$P86_G" "box_nows=[HUMANDRAFTLINE]" "P86 绿侧 $_p86n：光标行的草稿留在框内（框含光标）"
+  assert_has_echo "$P86_G" "verdict=idle-read=NOT-EMPTY rc=1" "P86 绿侧 $_p86n：判忙 —— 就绪门不再放行（P84 的 F1 修掉）"
+  P86_R="$(p86_probe "$_p86f" 2 2)"
+  assert_eq "P86 红侧 $_p86n（准入关掉 = P80）：退回光标下方的空框 [5 7]" "$(p86_geo "$P86_R")" "5 7"
+  assert_has_echo "$P86_R" "box_nows=[]" "P86 红侧 $_p86n：框读空（脏框判空 → 生产路径会放行）"
+  assert_has_echo "$P86_R" "verdict=idle-read=EMPTY rc=0" \
+    "P86 红侧 $_p86n：idle-read=EMPTY rc=0（可证伪：这条判据真的咬在准入条件上）"
+  P86_L="$(p86_probe "$_p86f" 2 1)"
+  assert_has_echo "$P86_L" "geometry=[1 3]" "P86 旧顺序 $_p86n（最近优先影子）：同一帧也是 [1 3]"
+  assert_has_echo "$P86_L" "verdict=idle-read=NOT-EMPTY rc=1" \
+    "P86 旧顺序 $_p86n：判忙 —— 两种顺序都不放行，中间那版 P80 才是 EMPTY"
+done
+# 同源：夹具侧（pm-box-real.sh --frame，与生产提取共用判据）在 F1 帧上也判忙
+P86_M="$(bash "$SKILL_DIR/tests/pm-box-real.sh" --frame "$P86_F1" --cursor 2 2>&1)"; P86_MRC=$?
+assert_eq "P86 同源：pm-box-real.sh --frame 在 F1 帧上也判忙（rc=1）" "$P86_MRC" "1"
+assert_has_echo "$P86_M" "HUMAN DRAFT LINE" "P86 同源：共享判据读出了光标行的草稿（不是空框）"
+assert_not_echo "$P86_M" "idle-read=EMPTY" "P86 同源：共享判据绝不放行"
+# 一处实现：准入决策只有一处（影子只覆盖那一个函数）
+assert_eq "P86 一处实现：准入决策在 outbox.sh 里定义恰一处" \
+  "$(grep -c '^_team_box_top_border_max_row() {' "$SKILL_DIR/scripts/lib/outbox.sh")" "1"
+assert_eq "P86 一处实现：几何里向它要上界恰一处" \
+  "$(grep -c 'maxrow="\$(_team_box_top_border_max_row' "$SKILL_DIR/scripts/lib/outbox.sh")" "1"
+
+# ── 全部已存帧（发现式：frames/*.txt = 5 真帧 + 8 份 p78 + 3 份 p86 = 16）────────────
+# ① 框含光标：定位出的框必须包含光标行（geometry=[t b] ⇒ t < cy < b）；没有框的帧只能是最上面那份
+#    信任弹窗（覆盖层先行，几何为空是**既有路径**）。
+# ② 单调性（可机读）：对每一帧对比「准入关掉（P86 前）」与修后 —— 不许 ANY 帧 BUSY→EMPTY；反向的
+#    EMPTY→BUSY 必须**恰好**是三份 F1 帧（修复的效果，不多不少）。
+# ③ 相对「最近优先」的旧顺序同样不许 BUSY→EMPTY（§12b-h0d 的 13 份在此扩到 16 份，同一口径）。
+# 帧是**发现**出来的：新增帧没在上面的光标表里声明光标行 → 本段直接红（不静默漏测）。
+p86_cursor() { # <帧路径> → 光标行（未知 → 空）
+  case "$(basename "$1")" in
+    pi-0.87.0-project-trust-prompt.txt) printf '16\n' ;;
+    pi-0.8*) printf '26\n' ;;
+    p78-cursor-mid-draft.txt) printf '3\n' ;;
+    p78-*.txt|p86-f1-*.txt) printf '2\n' ;;
+    *) printf '\n' ;;
+  esac
+}
+P86_N=0; P86_UNCOVERED=""; P86_REGRESS=""; P86_NOCURSOR=""; P86_FLIPPED=""; P86_NOBOX=""; P86_LEGACY=""
+for _p86r in "$P86_FD"/*.txt; do
+  _p86n="$(basename "$_p86r")"; _p86cy="$(p86_cursor "$_p86r")"
+  if [ -z "$_p86cy" ]; then P86_UNCOVERED="$P86_UNCOVERED $_p86n"; continue; fi
+  P86_N=$((P86_N + 1))
+  P86_NEW="$(p86_probe "$_p86r" "$_p86cy")"
+  P86_OLD="$(p86_probe "$_p86r" "$_p86cy" 2)"
+  P86_LEG="$(p86_probe "$_p86r" "$_p86cy" 1)"
+  _p86g="$(p86_geo "$P86_NEW")"
+  if [ -z "$_p86g" ]; then
+    P86_NOBOX="$P86_NOBOX $_p86n"        # 没有框：只能是最上面那份覆盖层帧（下面单独断言）
+  else
+    _p86t=""; _p86b=""; _p86extra=""
+    read -r _p86t _p86b _p86extra <<< "$_p86g"
+    if [ -z "$_p86extra" ] && [ -n "$_p86t" ] && [ -n "$_p86b" ] \
+       && [ "$_p86t" -lt "$_p86cy" ] 2>/dev/null && [ "$_p86cy" -lt "$_p86b" ] 2>/dev/null; then :
+    else P86_NOCURSOR="$P86_NOCURSOR $_p86n([$_p86g] cy=$_p86cy)"; fi
+  fi
+  case "$P86_OLD" in *"verdict=idle-read=NOT-EMPTY"*) case "$P86_NEW" in
+    *"verdict=idle-read=EMPTY"*) P86_REGRESS="$P86_REGRESS $_p86n" ;; esac ;; esac
+  case "$P86_OLD" in *"verdict=idle-read=EMPTY"*) case "$P86_NEW" in
+    *"verdict=idle-read=NOT-EMPTY"*) P86_FLIPPED="$P86_FLIPPED $_p86n" ;; esac ;; esac
+  case "$P86_LEG" in *"verdict=idle-read=NOT-EMPTY"*) case "$P86_NEW" in
+    *"verdict=idle-read=EMPTY"*) P86_LEGACY="$P86_LEGACY $_p86n" ;; esac ;; esac
+done
+assert_eq "P86 语料口径：全部已存帧都声明了光标行（发现式；新增帧不改表 → 这一段直接红）" "${P86_UNCOVERED:-none}" "none"
+assert_eq "P86 语料口径：已存帧 16 份（5 真帧 + 8 份 p78 + 3 份 p86）" "$P86_N" "16"
+assert_eq "P86 ① 定位出的框总是包含光标行（top < cy < bottom，全部帧）" "${P86_NOCURSOR:-none}" "none"
+assert_eq "P86 ① 没有框的帧只能是覆盖层那份（unknown-shape 是既有路径，不是新行为）" \
+  "$P86_NOBOX" " pi-0.87.0-project-trust-prompt.txt"
+assert_eq "P86 ② 全部帧：准入前判忙的帧在修后没有一个翻成 EMPTY（没有 BUSY→EMPTY）" "${P86_REGRESS:-none}" "none"
+assert_eq "P86 ② 全部帧：修后翻成忙的恰好是三份 F1 帧（修复的效果，不多不少）" \
+  "$(printf '%s\n' $P86_FLIPPED | sort | tr '\n' ' ')" \
+  "$(printf '%s\n' p86-f1-mixed-width-disjoint-box.txt p86-f1-narrower-width-disjoint-box.txt p86-f1-spinner-top-disjoint-box.txt | sort | tr '\n' ' ')"
+assert_eq "P86 ③ 全部帧：相对最近的旧顺序也没有 BUSY→EMPTY" "${P86_LEGACY:-none}" "none"
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
