@@ -42,6 +42,8 @@
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P53/P68：临时根的唯一创建者（固定中性测量目标就建在它下面）
+. "$here/lib/tmp-root.sh"
 tree="${1:-$(cd -P "$here/../../.." && pwd)}"
 secs="${2:-${TEAM_PANEL_CPU_SECS:-60}}"
 
@@ -105,6 +107,7 @@ cleanup() {
   # tmux 在服务器已死时会把 socket 文件留在 /tmp/tmux-<uid>/：夹具自己收干净
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   rm -rf "${time_out:-}.state" 2>/dev/null || true
+  tmp_root_reap_all   # P68：中性测量目标（owned 家族）也收掉
 }
 trap cleanup EXIT
 
@@ -127,6 +130,28 @@ fi
 
 panel="$tree/skills/teamsmith/scripts/panel/panel.js"
 [ -f "$panel" ] || { printf 'panel-cpu: no bundle at %s\n' "$panel" >&2; exit 3; }
+
+# ── P68/fixture-waits-for-landed-reads：测量目标固定 ────────────────────────────────────────────
+# 面板首帧取决于项目的数据量，不取决于面板代码。旧形状把 `--root` 指到**调用者的工作树**，于是同一个
+# bundle 在积累态的仓库里 3683 ms、在全新项目里 391 ms（P52 F4）——数字描述那个 checkout，不是面板；
+# 从两个工作树跑同一个命令会得到两个结论。现在夹具自己建一个中性参考项目（tmp-root 的 owned 家族 +
+# 真 `team init`，与其它夹具同形），`--root` 只指它；bundle 与 CLI 仍来自**被测代码树**，两个名字都
+# 印出来（requirement：A measuring fixture measures a fixed tree, not the caller's worktree）。
+neut_root="$(tmp_root_create panel-cpu-target)" \
+  || { printf 'panel-cpu: 建不出中性测量目标（tmp_root_create）\n' >&2; exit 3; }
+# `team init` 不能继承调用者的团队身份（同其它夹具的首步隔离；这里只对 init 这一个子进程降掉）。
+pc_init_clean=(env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+  -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_PM_WINDOW -u TEAM_AGENTS -u TEAM_DOCS_DIR -u TEAM_WORKTREES_DIR \
+  -u TEAM_GATES -u TEAM_VCS -u TEAM_CONFIG_FILE -u TEAM_ALLOW_FOREIGN_SESSION -u TEAM_PULSE_WINDOW \
+  -u TEAM_WATCH_WINDOW -u TEAM_STATE_DIR -u TEAM_JS_BIN)
+( cd "$neut_root" && git init -q -b main && git config user.email panel-cpu@teamsmith && git config user.name panel-cpu ) \
+  >/dev/null 2>&1
+( cd "$neut_root" && "${pc_init_clean[@]}" bash "$tree/skills/teamsmith/scripts/team" init \
+    --session "$sess" --agents "dev verify" --vcs local --gates "true" --docs docs/team ) \
+  >"$neut_root/init.log" 2>&1 \
+  || { printf 'panel-cpu: 中性测量目标的 team init 失败（见 %s/init.log）\n' "$neut_root" >&2; tail -3 "$neut_root/init.log" >&2; exit 3; }
+printf '== measured project root: %s (neutral fixture project — not the caller worktree) ==\n' "$neut_root"
+printf '== console bundle under test: %s (tree under test %s) ==\n' "$panel" "$tree"
 
 hz="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 time_out="$(mktemp "${TMPDIR:-/tmp}/p12cpu.XXXXXX")"
@@ -161,7 +186,7 @@ if [ -n "$compose_flag" ]; then
   chmod +x "$fakebin/wl-paste" "$fakebin/xclip"
   compose_env="PATH=$fakebin:\$PATH "
 fi
-pane_cmd="cd '$tree' && ${compose_env}exec '$time_bin' -o '$time_out' -f 'P12CPU user=%U sys=%S elapsed=%e' -- '$js' '$panel' --root '$tree' --team-cli '$tree/skills/teamsmith/scripts/team' --no-pulse --refresh $refresh${page_flag}${state_flag}"
+pane_cmd="cd '$neut_root' && ${compose_env}exec '$time_bin' -o '$time_out' -f 'P12CPU user=%U sys=%S elapsed=%e' -- '$js' '$panel' --root '$neut_root' --team-cli '$tree/skills/teamsmith/scripts/team' --no-pulse --refresh $refresh${page_flag}${state_flag}"
 # 夹具注入（P26/G3）：在面板进程启动前睡一觉 → 造一个**真越线**的首帧（只在夹具模式下）
 if [ -n "${TEAM_PANEL_CPU_FRAME_DELAY_MS:-}" ]; then
   if pc_fixture_on; then
@@ -173,7 +198,7 @@ if [ -n "${TEAM_PANEL_CPU_FRAME_DELAY_MS:-}" ]; then
     pc_notice TEAM_PANEL_CPU_FRAME_DELAY_MS "$TEAM_PANEL_CPU_FRAME_DELAY_MS"
   fi
 fi
-tmux -L "$sock" new-session -d -s "$sess" -x 140 -y 34 -c "$tree" "sleep 600"
+tmux -L "$sock" new-session -d -s "$sess" -x 140 -y 34 -c "$neut_root" "sleep 600"
 pc_premise || true    # 前提一行先打（不成立也照测，因为退出 4 时要把实测三个数一起打出来）
 # 首帧：三次独立 spawn 各量一次「窗口创建 → 第一帧可见」，取中位（中位 of 3）。
 # `never` = 轮询预算内没出现（> 2000ms 的一种形态），记成 9999 参与中位，但打印时保留 `never`。
@@ -184,7 +209,7 @@ measure_first_frame() { # → 毫秒数（没出现 → 9999）
   tmux -L "$sock" kill-window -t "$sess:console" 2>/dev/null || true
   sleep 0.4
   t0="$(date +%s%3N)"
-  tmux -L "$sock" new-window -d -t "$sess" -n console -c "$tree" "$pane_cmd" 2>/dev/null || true
+  tmux -L "$sock" new-window -d -t "$sess" -n console -c "$neut_root" "$pane_cmd" 2>/dev/null || true
   # F8: the interactive first frame is measured, not promised — poll the pane for the title band.
   for _ in $(seq 1 20); do
     sleep 0.1
@@ -334,27 +359,29 @@ printf '== pane CPU thirds: %s -> median %s%% (overall %s%% over %ss) of one cor
 
 # ── P26/G3：前提先于判定。不成立就打印实测三数并退出 4（既不是通过也不是红）。
 # 注意：前提一行在**采样前**就打过一次；这里再打一次结果行，让日志尾部自带结论。
+# P68：每条结论都带上量测目标与被测 bundle 两个名字（读者不必翻源码就知道数字描述什么）。
+pc_target="measured root $neut_root · bundle $panel"
 if ! pc_premise >/dev/null 2>&1; then
   printf '== load premise: loadavg %s > %s x %s cores -> SKIP (exit 4; the red line was not judged)\n' \
     "$(pc_load)" "$PREMISE_FACTOR" "$(pc_cores)" >&2
   ff_txt="never appeared"   # 顶层语句：不能用 local（只在函数里合法）
   [ -n "$first_frame_ms" ] && ff_txt="${first_frame_ms}ms"
-  printf 'panel-cpu: SKIP — first frame %s, pane CPU %s%%, loadavg %s over the premise (%s x %s cores); the 2000ms / 1%% thresholds are unchanged\n' \
-    "$ff_txt" "$pane_avg" "$(pc_load)" "$PREMISE_FACTOR" "$(pc_cores)" >&2
+  printf 'panel-cpu: SKIP — first frame %s, pane CPU %s%%, loadavg %s over the premise (%s x %s cores); the 2000ms / 1%% thresholds are unchanged (%s)\n' \
+    "$ff_txt" "$pane_avg" "$(pc_load)" "$PREMISE_FACTOR" "$(pc_cores)" "$pc_target" >&2
   exit 4
 fi
 
 if [ -z "$first_frame_ms" ]; then
-  printf 'panel-cpu: RED — the first frame never appeared within 2.1s of the window spawn\n' >&2
+  printf 'panel-cpu: RED — the first frame never appeared within 2.1s of the window spawn (%s)\n' "$pc_target" >&2
   rc=2
 elif [ "$first_frame_ms" -ge 2000 ]; then
-  printf 'panel-cpu: RED — the interactive first frame took %sms (budget 2000ms, the 2s assembly line)\n' "$first_frame_ms" >&2
+  printf 'panel-cpu: RED — the interactive first frame took %sms (budget 2000ms, the 2s assembly line) (%s)\n' "$first_frame_ms" "$pc_target" >&2
   rc=2
 elif awk -v v="$pane_avg" 'BEGIN{exit !(v < 1)}'; then
-  printf 'panel-cpu: OK — the pane process is under 1%% of one core and the first frame is in budget\n'
+  printf 'panel-cpu: OK — the pane process is under 1%% of one core and the first frame is in budget (%s)\n' "$pc_target"
   rc=0
 else
-  printf 'panel-cpu: RED — the pane process is %s%% of one core (red line: <1%%)\n' "$pane_avg" >&2
+  printf 'panel-cpu: RED — the pane process is %s%% of one core (red line: <1%%) (%s)\n' "$pane_avg" "$pc_target" >&2
   rc=2
 fi
 exit "$rc"

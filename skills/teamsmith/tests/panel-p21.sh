@@ -29,6 +29,13 @@
 # `tests/load-experiment.sh {storm,burn,probe}` (the safe harness: owned load, owned targets) +
 # design.md §3/§4;  the raw calibration table is in docs/team/reports/P48-dev3.md.
 #
+# P68 / fixture-waits-for-landed-reads — 数据态等待（requirement「A fixture observes a data-derived state
+# before it asserts it」）：视图行、席位行、组标题这类**断言对象本身**从异步的 settings 读来，断言前必须
+# 先等那一行出现在稳定帧上（`wait_row`，pty-wait.sh 的引擎）。骨架帧不算证据；固定 `sleep` + 单次采样也
+# 不算。上界与实测延迟带（P52 §C 的注入表）：settings 读延迟 0s 绿 / 2s → 1 红 / 3s → 7 红 / 6s → 9 红，
+# 自然读 <1s；`wait_row` 用 30 轮基础视界（轮询 0.4s + 稳定确认 0.25s ≈ 20s，静态场景不延长），6s 慢端
+# 约有 3× 余量。上界是失败探测器，不是性能阈值（D33）：慢但落在界内的读必须绿。
+#
 # Fixture knobs (honoured **only** under `TEAM_SMOKE_FIXTURE=1`; otherwise printed as ignored and
 # the real reading is used — the panel-cpu.sh precedent):
 #   TEAM_P21_PREMISE_PROBE_MS=<ms>       inject the probe reading; over its ceiling the fixture also
@@ -321,6 +328,15 @@ wait_editor() { # <tray title> [body marker]
 wait_cap() { # <name> <text>
   local PTY_WAIT_ITERS=30 PTY_WAIT_PAUSE=0.4
   pty_wait_frame "$tmp/$current/$1.txt" "回执 $1" "$2"
+}
+# P68/fixture-waits-for-landed-reads：数据态等待。断言一行**从异步 settings 读来的数据**之前，先等
+# 那一行自己（值也在）出现在稳定帧上；骨架帧、固定 sleep + 单次采样都不算证据。上界 30 轮基础视界
+# （≈20s，静态场景不延长）与它的实测延迟带见文件头；耗尽时 pty-wait.sh 打一行归因（等待名 + 缺的
+# 标记 + 轮数），由 bad() 按机器读数分派红/SKIP。捕获仍写到 $tmp/$current/<name>.txt 供断言复用。
+wait_row() { # <name> <label> <needle...>
+  local _name="$1" _label="$2"; shift 2
+  local PTY_WAIT_ITERS=30 PTY_WAIT_PAUSE=0.4
+  pty_wait_frame "$tmp/$current/$_name.txt" "数据态：$_label" "$@"
 }
 
 # Poll the wrapper's argv log (a file, not the pane — no frames involved) until it carries <text>.
@@ -670,9 +686,9 @@ PYFIX
   # M59: the navigation esc is state-checked too — it fires only while the settings view is on a
   # settled frame, so a drifted scene gets a named red instead of a blind key.
   pty_key_when "esc 回浮层" '╭─ 项目设置' Escape || bad "esc 前设置视图已经不在屏幕上"
-  sleep 1
-  # The origin is remembered (esc back to the overlay's navigation row).
-  cap_to overlay-back
+  # The origin is remembered (esc back to the overlay's navigation row). P68：等那一行本身在稳定帧上。
+  wait_row overlay-back "esc 回到浮层且仍选中「项目设置」" '› 项目设置' \
+    || bad "esc 之后浮层没有回到「项目设置」这一行"
   assert_has "$tmp/$current/overlay-back.txt" "项目设置" "esc 回到设置浮层"
   assert_match "$tmp/$current/overlay-back.txt" '› 项目设置' "回到浮层时仍选中那一行"
   # The current frame minus its last line (the status/receipt row, which may quote the key the user
@@ -710,12 +726,13 @@ EOF2
   # The view opens on the overview: reach the overlay again (the panel was restarted).
   open_view
   filter_to TEAM_ZZZ_TEST
-  sleep 0.5
-  cap_to scratch-key
+  # P68：等那一行（值也在）出现在稳定帧上，不用固定 sleep 采样。
+  wait_row scratch-key "scratch 视图里的 TEAM_ZZZ_TEST 行" 'TEAM_ZZZ_TEST' '未设 · 默认 zzz-default' \
+    || bad "scratch CLI 新增的键行没有在预算内出现"
   assert_match "$tmp/$current/scratch-key.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "scratch CLI 新增的键出现在视图里（不重建 panel.js；无标签→回退裸键）"
   filter_to TEAM_GATES
-  sleep 0.5
-  cap_to scratch-class
+  wait_row scratch-class "scratch 视图里的 TEAM_GATES 行（类改成只读）" '门禁命令' 'true · 只读' \
+    || bad "scratch CLI 改过的类行没有在预算内出现"
   assert_match "$tmp/$current/scratch-class.txt" '门禁命令 +true · 只读' "scratch CLI 改过的类跟着变（bundle 没有第二张键表）"
   assert_has "$tmp/$current/scratch-class.txt" "手改 .pi/team/config.sh 里的 TEAM_GATES" "scratch CLI 的拒统路线也点名原始键"
   # M49：另一种语言的人话标签（同一张表切换，标签不是渲染时的硬编码）。
@@ -811,8 +828,9 @@ JSON
 
   # ── (1) bool：两个带标签的条目；一次 accept = 校验 + 直写（无确认帧、无编辑器） ──
   filter_to TEAM_NOTIFY_TMUX
-  sleep 0.5
-  cap_to bool-row
+  # P68：断言那一行本身之前先等数据态（未设 bool 行 + 它的默认值）落定。
+  wait_row bool-row "未设 bool 行显示「未设 · 默认 1」" '走 tmux 投递' '未设 · 默认 1' \
+    || bad "未设的 bool 行没有在预算内显示默认值"
   assert_match "$tmp/$current/bool-row.txt" '走 tmux 投递 +未设 · 默认 1' "未设的 bool 行显示 未设 · 默认 1"
   gap0="$(argv_count)"
   keys Enter
@@ -854,7 +872,10 @@ JSON
     bad "accept 之后还有别的子进程：$(printf '%s' "$accept_tail" | head -3 | tr '\n' ';')"
   fi
   filter_to TEAM_NOTIFY_TMUX
-  sleep 0.5
+  # P68：等那一行真的显示刚写下的规范值（accept 后的 settle 重读落定），再按 Enter ——
+  # 选择器是一次成形的快照（D43），不等读就会从旧块开（CI 那三条红就是这个形状）。
+  wait_row bool-set-row "写入后的 bool 行显示新值 0" '走 tmux 投递' '0 · 立即生效' \
+    || bad "写入后的设置行没有在预算内显示新值"
   keys Enter
   wait_picker TEAM_NOTIFY_TMUX '关（0） · 当前' || bad "bool 选择器第二次没有打开"
   cap_to bool-set
@@ -873,7 +894,11 @@ PY2
   # 手改之后要用视图自己的读取把它读进来（M65/D11：进入视图是视图自己的读取；交互路径没有读取）
   reopen_view
   filter_to TEAM_NOTIFY_TMUX
-  sleep 0.5
+  # P68（本变更的主目标）：等那一行**本身**显示手改后的值（视图打开时那次强制读落定）再按 Enter。
+  # 等待名把被等的状态写清楚；耗尽时引擎打一行 `等待超时：数据态：…（缺 [走 tmux 投递 true · 立即生效]）`，
+  # bad() 再按机器读数分派红/SKIP。骨架标记（分组标题）与固定 sleep 都不再是证据。
+  wait_row bool-spelling-row "设置行显示手改后的值 true" '走 tmux 投递' 'true · 立即生效' \
+    || bad "手改后的设置行没有在预算内显示新值"
   keys Enter
   wait_picker TEAM_NOTIFY_TMUX 'true · 当前' || bad "非规范 bool 的选择器没有打开"
   cap_to bool-spelling
@@ -907,8 +932,8 @@ PY2
 
   # ── (3) 未设键：编辑器开在「保持未设」上，接受 = 取消（不写、不留审计、不留临时文件）；再接受 300 = 直写 ──
   filter_to TEAM_DEFER_TTL
-  sleep 0.5
-  cap_to defer-row
+  wait_row defer-row "未设 seconds 行显示「未设 · 默认 300」" '排队过期时间' '未设 · 默认 300' \
+    || bad "未设键的行没有在预算内显示默认值"
   assert_match "$tmp/$current/defer-row.txt" '排队过期时间 +未设 · 默认 300' "未设键的行显示 未设 · 默认 300"
   local defer_sha defer_audit
   defer_sha="$(sha "$(cfg)")"; defer_audit="$(audit_lines)"
@@ -1047,8 +1072,9 @@ PY2
   target_line="$(cap | grep -n 'text' | grep -v '›' | head -1 | cut -d: -f1)"
   [ -n "$target_line" ] || bad "选择器里找不到可点击的 text 条目"
   [ -n "$target_line" ] && click_at 4 "$target_line"
-  sleep 0.8
-  cap_to click-move
+  # P68：等点击的光标移动在稳定帧上（原来是固定 sleep + 单次采样）。
+  wait_row click-move "第一次点击把光标移到该条目" '› text' \
+    || bad "第一次点击后光标没有落到该条目"
   assert_match "$tmp/$current/click-move.txt" '› text' "第一次点击把光标移到该条目（D7 的规矩）"
   assert_eq "第一次点击不写契约" "$(sha "$(cfg)")" "$click_sha"
   assert_eq "第一次点击不增审计" "$(audit_lines)" "$click_audit"
@@ -1066,8 +1092,9 @@ PY2
   # M59: the test-action esc is also state-checked — if the picker is not on a settled frame the
   # key is not sent and the miss is named, instead of the esc closing whatever is underneath.
   pty_key_when "esc 用例" " · TEAM_MONITOR_UI" Escape || bad "esc 用例：选择器不在稳定帧上，esc 没有发"
-  sleep 0.9
-  cap_to picker-esc
+  # P68：等 esc 的效果（选择器关掉、回到行列表）在稳定帧上，不用固定 sleep 采样。
+  wait_row picker-esc "esc 后选择器关掉、回到行列表那一行" '! · TEAM_MONITOR_UI' 'team config set TEAM_MONITOR_UI' \
+    || bad "esc 之后选择器没有关掉（或行列表没有回来）"
   assert_not "$tmp/$current/picker-esc.txt" " · TEAM_MONITOR_UI" "esc 关掉选择器"
   assert_has "$tmp/$current/picker-esc.txt" "team config set TEAM_MONITOR_UI" "回到行列表且焦点仍在原来那一行"
   assert_eq "esc 后契约不变" "$(sha "$(cfg)")" "$esc_sha"
@@ -1188,8 +1215,8 @@ EOF2
   start_panel
   open_view
   filter_to TEAM_ZZZ_MODE
-  sleep 0.5
-  cap_to zzz-row
+  wait_row zzz-row "scratch 新增 enum 键的行（裸键 + red 默认）" 'TEAM_ZZZ_MODE' '未设 · 默认 red' \
+    || bad "scratch CLI 新增的 enum 键行没有在预算内出现"
   assert_has "$tmp/$current/zzz-row.txt" "TEAM_ZZZ_MODE" "scratch CLI 新增的 enum 键出现在视图里（无标签→回退裸键）"
   assert_has "$tmp/$current/zzz-row.txt" "未设 · 默认 red" "新键的默认值来自 schema"
   keys Enter
@@ -1213,8 +1240,8 @@ PY
   start_panel
   open_view
   filter_to TEAM_ZZZ_MODE
-  sleep 0.5
-  cap_to zzz-row2
+  wait_row zzz-row2 "第二次起的面板仍显示 scratch 新增键" 'TEAM_ZZZ_MODE' \
+    || bad "第二次起的面板没有用 scratch CLI（新键不在预算内出现）"
   assert_has "$tmp/$current/zzz-row2.txt" "TEAM_ZZZ_MODE" "第二次起的面板仍用 scratch CLI（新键还在）"
   keys Enter
   wait_editor TEAM_ZZZ_MODE "没有选项集" || bad "去掉 constraints 后没有打开自由输入"
@@ -1408,16 +1435,16 @@ PY
   start_panel
   open_view
   filter_to verify
-  sleep 0.5
-  cap_to seats-verify
+  wait_row seats-verify "席位 verify 行显示配置来源" 'verify' 'deepseek/deepseek-flash · 配置' \
+    || bad "席位 verify 的行没有在预算内出现"
   assert_match "$tmp/$current/seats-verify.txt" 'verify +deepseek/deepseek-flash · 配置' "配置解析 → 配置"
   filter_to dev2
-  sleep 0.5
-  cap_to seats-dev2
+  wait_row seats-dev2 "席位 dev2 行显示显式来源" 'dev2' 'kimi-coding/k3-256k · 显式' \
+    || bad "席位 dev2 的行没有在预算内出现"
   assert_match "$tmp/$current/seats-dev2.txt" 'dev2 +kimi-coding/k3-256k · 显式' "显式记录 → 显式"
   filter_to dev
-  sleep 0.5
-  cap_to seats
+  wait_row seats "席位 dev 行显示历史记录来源" 'dev' 'xai/grok-4.6 · 历史记录' \
+    || bad "席位 dev 的行没有在预算内出现"
   assert_match "$tmp/$current/seats.txt" 'dev +xai/grok-4.6 · 历史记录' "记录与配置不一致 → 历史记录 + 记录的模型"
   ( cd "$ROOT" && bash "$skill/scripts/team" roster ) > "$tmp/$current/roster.txt" 2>/dev/null
   assert_match "$tmp/$current/roster.txt" 'xai/grok-4\.6·历史记录' "team roster 的标签与 models 块同口径"
@@ -1693,6 +1720,24 @@ cap_line_of() { # <file> <substring>
   printf '%s\n' "${n:-0}"
 }
 
+# P68/fixture-waits-for-landed-reads：等含 <needle> 的那一行行号**超过** <阈值>（滚轮把光标推下去）。
+# 这是交互重绘的等待（不是异步读），但守同一套纪律：计数轮 + 上界 + 耗尽时一行归因（等待名/轮数/最后读数）。
+# 上界 15 轮 ×（轮询 0.25s + 稳定确认 0.25s）≈ 7s；原来是一个固定 sleep + 单次采样。
+wait_line_gt() { # <name> <label> <needle> <threshold>
+  local _name="$1" _label="$2" _needle="$3" _thr="$4" _i=1 _c _line
+  while [ "$_i" -le 15 ]; do
+    _c="$(cap)"
+    printf '%s\n' "$_c" > "$tmp/$current/$_name.txt"
+    _line="$(cap_line_of "$tmp/$current/$_name.txt" "$_needle")"
+    if [ "${_line:-0}" -gt "$_thr" ] && pty_frame_settled "$_c"; then return 0; fi
+    sleep 0.25
+    _i=$((_i + 1))
+  done
+  printf '  \033[33m·\033[0m 等待超时：%s（%s 轮/%s；等 [%s] 的行号 > %s，最后读到 %s）\n' \
+    "$_label" "$((_i - 1))" 15 "$_needle" "$_thr" "${_line:-?}" >&2
+  return 1
+}
+
 # The same capture with SGR runs (`capture-pane -e`): tmux restores each cell's truecolor
 # sequence, which is what the tone assertion reads (without rebuilding the bundle by hand).
 cap_e_to() { tmux -L "$sock" capture-pane -p -e -t "$sess:panel" > "$tmp/$current/${1:-cap-e}.txt" 2>/dev/null; }
@@ -1788,8 +1833,9 @@ scn_groups() {
   # 带注释的行是两行，窗口按**画出的行数**装（P30/D5 的账），所以这里一步一步走，不假设一屏能装两组。
   local k
   for k in $(seq 1 12); do keys Down; sleep 0.05; done
-  sleep 0.4
-  cap_to group-order
+  # P68：等那一行（下一组标题）在稳定帧上出现，不用固定 sleep + 单次采样。
+  wait_row group-order "第 13 行进窗时的下一组标题" '分支与 forge' \
+    || bad "第 13 行进窗后没有出现下一组标题"
   assert_has "$tmp/$current/group-order.txt" "分支与 forge" "第 13 行进窗时出现下一组标题（读取顺序 identity → branch）"
   for k in $(seq 1 12); do keys Up; sleep 0.05; done
   sleep 0.4
@@ -1806,24 +1852,27 @@ scn_groups() {
   fi
   # ③ 类徽章是词 + tone（D4）：三类各过滤一行；词在，tone = 调色板里该类的 tone，值必须是 text tone。
   filter_to TEAM_MODEL_LIMITS
-  sleep 0.4
-  cap_to tone-apply; cap_e_to tone-apply-e
+  wait_row tone-apply "apply 徽章行" '模型并发上限' '立即生效' \
+    || bad "apply 行没有在预算内出现"
+  cap_e_to tone-apply-e
   assert_match "$tmp/$current/tone-apply.txt" '模型并发上限 +.*立即生效' "apply 行的徽章词仍在（颜色不是唯一通道）"
   assert_badge_tone "$tmp/$current/tone-apply-e.txt" '模型并发上限' '立即生效' 'text' "apply 徽章 = 普通文本 tone"
   filter_to TEAM_PULSE_INTERVAL
-  sleep 0.4
-  cap_to tone-restart; cap_e_to tone-restart-e
+  wait_row tone-restart "restart 徽章行" '巡检周期' '需重启' \
+    || bad "restart 行没有在预算内出现"
+  cap_e_to tone-restart-e
   assert_match "$tmp/$current/tone-restart.txt" '巡检周期 +.*需重启' "restart 行的徽章词仍在"
   assert_badge_tone "$tmp/$current/tone-restart-e.txt" '巡检周期' '需重启' 'warn' "restart 徽章 = warn tone"
   filter_to TEAM_PROJECT
-  sleep 0.4
-  cap_to tone-refuse; cap_e_to tone-refuse-e
+  wait_row tone-refuse "refuse 徽章行" '项目名' 'root · 只读' \
+    || bad "refuse 行没有在预算内出现"
+  cap_e_to tone-refuse-e
   assert_match "$tmp/$current/tone-refuse.txt" '项目名 +root · 只读' "refuse 行的徽章词仍在"
   assert_badge_tone "$tmp/$current/tone-refuse-e.txt" '项目名' '只读' 'dim' "refuse 徽章 = dim tone"
   # ④ 可见降级：schema 不认识的键落在「未分组」，且「未分组」在席位块之前（走到列表末尾看）。
   filter_to TEAM_HAND_ADDED
-  sleep 0.4
-  cap_to hand-added
+  wait_row hand-added "未分组里的手加未知键行" 'TEAM_HAND_ADDED' 'hand · 未知键' \
+    || bad "未知键的行没有在预算内出现"
   assert_match "$tmp/$current/hand-added.txt" 'TEAM_HAND_ADDED +hand · 未知键' "未知键的行仍在（没有消失）"
   assert_has "$tmp/$current/hand-added.txt" "未知键：TEAM_HAND_ADDED" "未知键仍按原始键点名"
   [ "$(cap_line_heading "$tmp/$current/hand-added.txt" '未分组')" -gt 0 ] \
@@ -1870,13 +1919,13 @@ EOF2
   start_panel
   open_view
   filter_to TEAM_ZZZ_TEST
-  sleep 0.5
-  cap_to zzz-group
+  wait_row zzz-group "scratch 新增键落在 workflow 域标题下" '工作流与门禁' 'TEAM_ZZZ_TEST' \
+    || bad "新键的域标题/行没有在预算内出现"
   assert_has "$tmp/$current/zzz-group.txt" "工作流与门禁" "schema 新增键落在它声明的 workflow 域下（bundle 未重建）"
   assert_match "$tmp/$current/zzz-group.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "新键的行完整（值/默认来自 schema）"
   filter_to TEAM_GATES
-  sleep 0.5
-  cap_to gates-moved
+  wait_row gates-moved "TEAM_GATES 跟到 meeting 域标题下" '跨项目会议' '门禁命令' \
+    || bad "TEAM_GATES 的新域标题/行没有在预算内出现"
   assert_has "$tmp/$current/gates-moved.txt" "跨项目会议" "TEAM_GATES 的 token 改成 meeting 后跟到新标题下（bundle 里没有键→域表）"
   assert_match "$tmp/$current/gates-moved.txt" '门禁命令 +true · 立即生效' "同一行仍按 schema 渲染（标签/值/徽章）"
   assert_eq "三次运行之间 bundle 逐字节不变" "$(sha "$panel")" "$bundle_sha"
@@ -1894,8 +1943,8 @@ PY
   start_panel
   open_view
   filter_to TEAM_GATES
-  sleep 0.5
-  cap_to gates-fallback
+  wait_row gates-fallback "畸形 schema 行落在「未分组」里" '未分组' '门禁命令' \
+    || bad "降级组的行没有在预算内出现"
   unset P21_CLI
   assert_has "$tmp/$current/gates-fallback.txt" "未分组" "第 10 列缺失的 schema 行落在可见的降级组里（不消失）"
   assert_match "$tmp/$current/gates-fallback.txt" '门禁命令 +true · 立即生效' "降级组里的行仍完整（标签/值/徽章）"
@@ -1931,8 +1980,9 @@ PY
   start_panel
   # ① 页面自己的滚轮还活着（对照 + 不回归钉）：先滚 3 格，P-01 出屏、P-04 进屏。
   wheel_at down 100 8 3
-  sleep 0.7
-  cap_to page-scrolled
+  # P68：等页面滚动的结果（P-04 进屏、P-01 出屏）在稳定帧上，不用固定 sleep 采样。
+  wait_row page-scrolled "页面滚轮 3 格后的巡检窗口" 'P-04' '!P-01' \
+    || bad "页面滚轮 3 格后的窗口没有落定（P-04 未进屏或 P-01 未出屏）"
   assert_not "$tmp/$current/page-scrolled.txt" "P-01" "页面滚轮 3 格：P-01 已出屏（页面确实滚得动）"
   assert_has "$tmp/$current/page-scrolled.txt" "P-04" "页面滚轮 3 格：P-04 进屏"
   # ② 视图里的滚轮：一格一行、焦点不动、顶部计数行跟随（先下滚 3 格，再上滚回顶部）。
@@ -1966,14 +2016,17 @@ PY
     sleep 0.25
   done
   keys Down
-  sleep 0.5
-  cap_to wheel-push
+  # P68：等窗口被推到聚焦行（↑1 + 光标在会话名）在稳定帧上，不用固定 sleep 采样。
+  wait_row wheel-push "↓ 之后窗口被推到聚焦行（↑1 + › 会话名）" '↑1' '› 会话名' \
+    || bad "↓ 之后窗口没有被推到聚焦行上"
   assert_match "$tmp/$current/wheel-push.txt" '↑1' "↓ 之后窗口被推到聚焦行上（顶部计数行 = ↑1）"
   assert_match "$tmp/$current/wheel-push.txt" '› 会话名' "光标落在下一条（会话名）"
   assert_has "$tmp/$current/wheel-push.txt" "只读：手改 .pi/team/config.sh 里的 TEAM_SESSION" "命令行与光标同一行（焦点在会话名上）"
   keys Up
-  sleep 0.5
-  cap_to wheel-push-back
+  # `↑` 计数行消失（字面 needle：`!↑1` = 刚才那条 ↑1 不再在屏幕上；pty-wait 是 grep -F，不吃正则，
+  # 所以不能用原断言的 `↑[0-9]+`；下面的 assert_no_match 仍守住正则面）。
+  wait_row wheel-push-back "↑ 之后窗口回到顶部（↑1 计数行消失）" '› 项目名' '!↑1' \
+    || bad "↑ 之后窗口没有回到顶部"
   assert_match "$tmp/$current/wheel-push-back.txt" '› 项目名' "↑ 之后光标回到第一条"
   assert_no_match "$tmp/$current/wheel-push-back.txt" '↑[0-9]+' "窗口跟着回到顶部（计数行消失）"
   keys Enter
@@ -1991,8 +2044,9 @@ PY
   local sel_before sel_after
   sel_before="$(cap_line_of "$tmp/$current/picker-wheel-before.txt" '›')"
   wheel_at down 20 12 2
-  sleep 0.6
-  cap_to picker-wheel-after
+  # P68：等选中行真的被滚轮推下去（计数轮 + 上界 + 归因），不用固定 sleep 采样。
+  wait_line_gt picker-wheel-after "选择器滚轮把选中行推下去" '›' "${sel_before:-0}" \
+    || bad "选择器里的滚轮没有走条目（选中行停在 $sel_before）"
   sel_after="$(cap_line_of "$tmp/$current/picker-wheel-after.txt" '›')"
   if [ "$sel_before" -gt 0 ] && [ "$sel_after" -gt "$sel_before" ]; then
     ok "选择器开着时滚轮走条目（选中行 $sel_before → $sel_after）"
@@ -2000,8 +2054,9 @@ PY
     bad "选择器里的滚轮没有走条目（选中行 $sel_before → $sel_after）"
   fi
   pty_key_when "选选择器的 esc" ' · TEAM_PULSE_INTERVAL' Escape || bad "选择器不在稳定帧上，esc 没有发"
-  sleep 0.8
-  cap_to picker-closed
+  # P68：等 esc 的效果（选择器关掉、仍在设置视图里）在稳定帧上。
+  wait_row picker-closed "一次 esc 关掉选择器且仍在设置视图里" '! · TEAM_PULSE_INTERVAL' '╭─ 项目设置' \
+    || bad "一次 esc 没有关掉选择器（或不在设置视图里了）"
   assert_not "$tmp/$current/picker-closed.txt" " · TEAM_PULSE_INTERVAL" "一次 esc 就把选择器关掉（不穿透）"
   assert_has "$tmp/$current/picker-closed.txt" "╭─ 项目设置" "关闭后仍在设置视图里"
   # ⑤ 席位 picker 的滚轮同样走条目（这一支原来会穿透到页面）。
@@ -2021,8 +2076,8 @@ PY
   cap_to seat-wheel-before
   sel_before="$(cap_line_of "$tmp/$current/seat-wheel-before.txt" '›')"
   wheel_at down 20 12 2
-  sleep 0.6
-  cap_to seat-wheel-after
+  wait_line_gt seat-wheel-after "席位 picker 滚轮把选中行推下去" '›' "${sel_before:-0}" \
+    || bad "席位 picker 里的滚轮没有走条目（选中行停在 $sel_before）"
   sel_after="$(cap_line_of "$tmp/$current/seat-wheel-after.txt" '›')"
   if [ "$sel_before" -gt 0 ] && [ "$sel_after" -gt "$sel_before" ]; then
     ok "席位 picker 里的滚轮走条目（$sel_before → $sel_after）"
@@ -2030,15 +2085,19 @@ PY
     bad "席位 picker 里的滚轮没有走条目（$sel_before → $sel_after）"
   fi
   pty_key_when "席位 picker 的 esc" '选择 dev 的模型' Escape || bad "席位 picker 不在稳定帧上，esc 没有发"
-  sleep 0.8
-  cap_to seat-closed
+  # P68：等席位 picker 关掉（仍在设置视图里）在稳定帧上。
+  wait_row seat-closed "一次 esc 关掉席位 picker" '!选择 dev 的模型' '╭─ 项目设置' \
+    || bad "一次 esc 没有关掉席位 picker"
   assert_not "$tmp/$current/seat-closed.txt" "选择 dev 的模型" "一次 esc 关掉席位 picker"
   # ⑥ 回到页面：视图把滚轮吃掉了 —— 页面还是进视图前的那一屏（P-01 出屏、P-04 可见）。
   pty_key_when "关设置视图" '╭─ 项目设置' Escape || bad "关闭视图前它不在稳定帧上"
-  sleep 1
+  # P68：等浮层自己回到稳定帧上再发第二个 esc（原来是两个固定 sleep 给按键让路）。
+  pty_wait_frame - "关设置视图后的浮层" '› 项目设置' '!╭─ 项目设置' \
+    || bad "关掉设置视图后浮层没有回到「项目设置」那行"
   pty_key_when "关浮层" '项目设置' Escape || bad "浮层不在稳定帧上"
-  sleep 1
-  cap_to page-back
+  # P68：等回到页面的那一屏（仍是进视图前那一屏）在稳定帧上。
+  wait_row page-back "回到页面：仍是进视图前那一屏（P-04 可见、P-01 出屏）" '!P-01' 'P-04' \
+    || bad "回到页面后那一屏变了"
   assert_not "$tmp/$current/page-back.txt" "P-01" "视图里的滚轮没有穿透页面（P-01 仍在屏外）"
   assert_has "$tmp/$current/page-back.txt" "P-04" "页面窗口还是进视图前的那一屏（P-04 仍可见）"
 }

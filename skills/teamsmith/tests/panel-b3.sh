@@ -10,18 +10,39 @@
 # Every scenario runs in a private tmux server (`-L p14b3-$$`) and a fresh fixture project; the
 # data path is the deterministic `panel-b3-stub.sh`, so assertions never depend on this repo.
 # Exit: 0 every selected scenario green, 1 at least one assertion failed, 3 setup failure.
+#
+# Fixture knob (only under TEAM_SMOKE_FIXTURE=1; otherwise printed as ignored):
+#   TEAM_B3_SLOW_JS=<可执行的 JS runner>  控制台首帧真的晚到（P68 的 recipe B）：它是通过产品自己的
+#   `TEAM_JS_BIN` 缝生效的（`team pulse up` → `team monitor` → `team_js_runner` → exec runner）。
+#   collapse 场景是首帧晚到的作用域，所以不用 TEAM_B3_PANEL：那条路只影响夹具自己 start_panel 起的
+#   面板，而 collapse 跑的是产品自己的 `team pulse up`（读 skill 树里的 bundle）。runner 应该在
+#   `--version` 上直通（`team_require_js_runtime` 的探测不该被拖慢），只在真正启动面板的调用上延迟。
 set -uo pipefail
 
 # ── identity isolation (must be first): never inherit the caller's team identity ────────────────
+_slow_js_arg="${TEAM_B3_SLOW_JS:-}"
+_smoke_fixture_arg="${TEAM_SMOKE_FIXTURE:-0}"
 unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT TEAM_SESSION TEAM_SESSION_FROM \
       TEAM_PM_WINDOW TEAM_AGENTS TEAM_DOCS_DIR TEAM_WORKTREES_DIR TEAM_GATES TEAM_VCS TEAM_CONFIG_FILE \
       TEAM_ALLOW_FOREIGN_SESSION TEAM_PULSE_WINDOW TEAM_WATCH_WINDOW TEAM_STATE_DIR TEAM_JS_BIN \
       TEAM_MONITOR_REFRESH TEAM_MONITOR_UI TEAM_MONITOR_ACTIVITY TEAM_AGENT_LOG_GLOB TEAM_PULSE_INTERVAL \
       TEAM_WATCH_INTERVAL 2>/dev/null || true
+# P68 注入缝（仅夹具模式 + 可执行）：把产品自己的 TEAM_JS_BIN 指向慢启动的 runner。
+if [ -n "$_slow_js_arg" ]; then
+  if [ "$_smoke_fixture_arg" = "1" ] && [ -x "$_slow_js_arg" ]; then
+    export TEAM_JS_BIN="$_slow_js_arg"
+  else
+    printf 'panel-b3: 忽略 TEAM_B3_SLOW_JS=%s（只有 TEAM_SMOKE_FIXTURE=1 且指向可执行文件时才生效）\n' \
+      "$_slow_js_arg" >&2
+  fi
+fi
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$here/lib/tmp-root.sh"
+# P68/fixture-waits-for-landed-reads：控制台自己的状态（首帧标题、日志、capacity.log 行数）也要等数据态，
+# 不再是固定 sleep + 单次采样。复用 P48 的等待引擎（settled frame / 轮数 / 上界 / 归因），不另造一套。
+. "$here/lib/pty-wait.sh"
 tree="${TEAM_B3_TREE:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 panel="${TEAM_B3_PANEL:-$skill/scripts/panel/panel.js}"
@@ -61,6 +82,104 @@ assert_has() { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里�
 assert_not() { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
 assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里没有匹配 [$2]）"; }
 cond_skip() { printf '  \033[33mSKIP（条件不满足）\033[0m %s\n' "$1${2:+ —— $2}"; }
+
+# ---------------------------------------------------------------- P68 数据态等待
+# fixture-waits-for-landed-reads：控制台自己的状态（首帧标题、工具写的日志、capacity.log 的行数）在断言
+# 之前先观察到，不再用固定 sleep + 单次采样。每一条都守 pty-wait.sh 的纪律：计数轮 + 上界 + 耗尽时一行
+# 归因（等待名 / 轮数 / 最后读数）。上界是失败探测器，不是性能阈值（D33）：慢但落在界内的写入必须绿。
+# 实测带（P52 F2）：收紧前的 5s/6s 固定窗口在负载主机上 6 次红 4 次；安静机上首帧 <1s、
+# pulse up 的日志在窗口起来后 <1s 内写完、capacity.log 的周期配置成 2s —— 下面的上界都是这个带的 4-7 倍。
+b3_cap_pane="panel"   # 稳定帧等待捕哪个窗口；collapse 场景在自己的作用域里把它指到 pulse
+pty_cap() { tmux -L "$sock" capture-pane -p -t "$sess:${b3_cap_pane:-panel}" -S -400 2>/dev/null; }
+pty_keys() { keys "$@"; }
+pty_pane_state() { tmux -L "$sock" list-panes -t "$sess:${b3_cap_pane:-panel}" -F '#{pane_dead}:#{pane_dead_status}' 2>/dev/null | head -1; }
+
+# 等控制台自己的标题（`teamsmith pulse`）在稳定帧上。上界 75 轮基础视界（轮询 0.4s + 稳定确认 0.25s；
+# 实测每轮 ~0.43s → 约 32s，静态场景不延长）。带宽与推导：安静机上首帧 <1s；旧形状的固定窗口是 5s，
+# P52 F2 在负载主机上 6 次红 4 次（首帧落在 5s 之后）；确定性的注入（JS runner 晚 8s）实测标题在第
+# 43-44 轮（~19s）落地（runner 在路径上付了两次：monitor 的 spawn + activity 读的 monitor.mjs），75 轮
+# ≈ 1.7× 实测慢端。rc：0 绿 / 1 红（M59 现场）/ 3 可见 SKIP（场景仍在绘制，机器维度）。
+# 夹具旋钮：B3_CONSOLE_ITERS 覆盖上界（只在测带宽时用；默认 75）。
+wait_console() { # <outfile> <label>
+  B3_FRAME_ITERS="${B3_CONSOLE_ITERS:-75}" wait_frame "$1" "$2" 'teamsmith pulse'
+}
+
+# 把 pty-wait 的 rc 翻成夹具的断言：0 → ✓；3 → 可见 SKIP（机器，不算通过也不算失败，D33）；其它 → ✗。
+b3_wait_verdict() { # <rc> <ok text> <bad text>
+  case "$1" in
+    0) ok "$2" ;;
+    3) cond_skip "$2" "机器读数超前提（等待耗尽但场景仍在绘制，D33 的可见 SKIP）" ;;
+    *) bad "$3" ;;
+  esac
+}
+
+# 等面板帧满足 needle... 后把捕获写到 <outfile>（needle 以 `!` 开头表示必须缺席）。
+wait_frame() { # <outfile> <label> <needle...>
+  local _out="$1" _label="$2"; shift 2
+  local PTY_WAIT_ITERS="${B3_FRAME_ITERS:-30}" PTY_WAIT_PAUSE=0.4 PTY_SETTLE_PAUSE=0.25
+  pty_wait_frame "$_out" "$_label" "$@"
+}
+
+# P68：固定 sleep + 单次 cap_has/cap_not 的替代（稳定帧上等到 needle 再断言；耗尽按 D33 分派）。
+wait_cap_has() { # <file name> <needle> <message>
+  local f="$tmp/$current/$1" needle="$2" msg="$3"
+  if wait_frame "$f" "$msg" "$needle"; then
+    assert_has "$f" "$needle" "$msg"
+  else
+    b3_wait_verdict $? "$msg" "$msg（稳定帧里没等到 [$needle]）"
+  fi
+}
+wait_cap_not() { # <file name> <needle> <message>
+  local f="$tmp/$current/$1" needle="$2" msg="$3"
+  if wait_frame "$f" "$msg" "!$needle"; then
+    assert_not "$f" "$needle" "$msg"
+  else
+    b3_wait_verdict $? "$msg" "$msg（稳定帧里 [$needle] 一直没消失）"
+  fi
+}
+
+# 等一个由工具自己写的文件里出现 <needle>（例如 `pulse up` 的日志点名窗口）：20 轮 × 0.5s = 10s。
+wait_file_has() { # <file> <needle> <label>
+  local file="$1" needle="$2" label="$3" i=1
+  while [ "$i" -le "${B3_FILE_ITERS:-20}" ]; do
+    grep -qF -- "$needle" "$file" 2>/dev/null && return 0
+    sleep 0.5
+    i=$((i + 1))
+  done
+  printf '  \033[33m·\033[0m 等待超时：%s（%s 轮/%s；%s 里缺 [%s]，最后两行：%s）\n' \
+    "$label" "$((i - 1))" "${B3_FILE_ITERS:-20}" "$file" "$needle" \
+    "$(tail -2 "$file" 2>/dev/null | tr '\n' ';')" >&2
+  return 1
+}
+
+# 等窗格里的进程参数命中 <needle>（q 收起后窗口里应换成 --headless 巡检循环）：30 轮 × 0.5s = 15s。
+wait_pane_args() { # <pane> <needle> <label>
+  local pane="$1" needle="$2" label="$3" i=1 pid args
+  while [ "$i" -le "${B3_ARGS_ITERS:-30}" ]; do
+    pid="$(tmux -L "$sock" list-panes -t "$sess:$pane" -F '#{pane_pid}' 2>/dev/null | head -1)"
+    args="$(ps -o args= -p "${pid:-0}" 2>/dev/null || true)"
+    if [ -n "$args" ] && printf '%s' "$args" | grep -qF -- "$needle"; then return 0; fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  printf '  \033[33m·\033[0m 等待超时：%s（%s 轮/%s；窗格进程参数里缺 [%s]，最后读到 [%s]）\n' \
+    "$label" "$((i - 1))" "${B3_ARGS_ITERS:-30}" "$needle" "${args:-（无）}" >&2
+  return 1
+}
+
+# 等 capacity.log 的行数真的长过 <floor>（巡检还在跑的正证据）：30 轮 × 0.5s = 15s；成功时打印行数。
+wait_capacity_growth() { # <file> <floor> <label>
+  local file="$1" floor="$2" label="$3" i=1 c=0
+  while [ "$i" -le "${B3_CAP_ITERS:-30}" ]; do
+    c="$(grep -c . "$file" 2>/dev/null || echo 0)"
+    if [ "${c:-0}" -gt "$floor" ]; then printf '%s\n' "$c"; return 0; fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  printf '  \033[33m·\033[0m 等待超时：%s（%s 轮/%s；%s 的行数停在 %s，没长过 %s）\n' \
+    "$label" "$((i - 1))" "${B3_CAP_ITERS:-30}" "$file" "${c:-?}" "$floor" >&2
+  return 1
+}
 
 if ! command -v tmux >/dev/null 2>&1; then
   printf 'panel-b3: tmux is required (the fixtures drive real panes)\n' >&2
@@ -218,27 +337,27 @@ scn_pages() {
   cap_has "项目进度" p1.txt
   cap_has "代理" p1.txt
   keys 2
-  sleep 1
-  cap_has "任务看板" p2.txt
-  cap_has "活动变更" p2.txt
+  wait_cap_has p2.txt "任务看板" "捕获里有 [任务看板]"
+  wait_cap_has p2.txt "活动变更" "捕获里有 [活动变更]"
   assert_eq "按 2 后 panel-page=2" "$(page_of)" "2"
   # The compose line opens from every page (B2's requirement, kept by the console).
   keys m
-  sleep 0.5
-  cap_has "Enter 发送" p2-compose.txt
+  wait_cap_has p2-compose.txt "Enter 发送" "捕获里有 [Enter 发送]"
   keys Escape
   sleep 0.3
   keys 3
-  sleep 1
-  cap_has "延后队列" p3.txt
+  wait_cap_has p3.txt "延后队列" "捕获里有 [延后队列]"
   # P20/B6 改名：消息页说「往来」，不再说「线程」（目录/命令/英文 term 不变）。
-  cap_has "收件箱与往来" p3-inbox
-  cap_not "线程" p3-inbox.txt
-  assert_match "$tmp/$current/p3-inbox.txt" '收件箱 [0-9]+ 条 · 往来 [0-9]+ 条' "消息页计数行用「往来」"
+  wait_cap_has p3-inbox "收件箱与往来" "捕获里有 [收件箱与往来]"
+  if wait_frame "$tmp/$current/p3-inbox.txt" "消息页计数行（往来，无线程）" '收件箱' '往来' '!线程'; then
+    assert_not "$tmp/$current/p3-inbox.txt" "线程" "捕获里没有 [线程]"
+    assert_match "$tmp/$current/p3-inbox.txt" '收件箱 [0-9]+ 条 · 往来 [0-9]+ 条' "消息页计数行用「往来」"
+  else
+    b3_wait_verdict $? "捕获里没有 [线程]" "消息页计数行没有在预算内落定"
+  fi
   assert_eq "按 3 后 panel-page=3" "$(page_of)" "3"
   keys m
-  sleep 0.5
-  cap_has "Enter 发送" p3-compose.txt
+  wait_cap_has p3-compose.txt "Enter 发送" "捕获里有 [Enter 发送]"
   keys Escape
   sleep 0.3
   # Relaunch: the page is restored (no key sent).
@@ -246,8 +365,7 @@ scn_pages() {
   cap_has "延后队列" p3-relaunch.txt
   assert_eq "重启后打开上次的页（panel-page=3）" "$(page_of)" "3"
   keys 1
-  sleep 1
-  cap_has "项目进度" p1-again.txt
+  wait_cap_has p1-again.txt "项目进度" "捕获里有 [项目进度]"
   assert_eq "按 1 回总览" "$(page_of)" "1"
 }
 
@@ -257,27 +375,25 @@ scn_settings() {
   conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   start_panel
   keys ,
-  sleep 0.8
-  cap_has "设置" overlay.txt
+  wait_cap_has overlay.txt "设置" "捕获里有 [设置]"
   # The selected row is language: Enter switches zh -> en and it applies on the next frame.
   keys Enter
-  sleep 0.8
-  cap_has "language" lang-en.txt
+  wait_cap_has lang-en.txt "language" "捕获里有 [language]"
+  wait_file_has "$(conf)" "lang=en" "语言切换写进 panel.conf" || bad "语言偏好没有在预算内落盘"
   assert_has "$(conf)" "lang=en" "切换语言写进 panel.conf"
   # Down three rows to the mouse preference and toggle it off.
   keys Down Down Down
   sleep 0.3
   keys Enter
-  sleep 0.8
+  wait_file_has "$(conf)" "mouse=0" "鼠标开关写进 panel.conf" || bad "鼠标偏好没有在预算内落盘"
   assert_has "$(conf)" "mouse=0" "鼠标开关写进 panel.conf"
   keys Down
   sleep 0.2
   keys Enter
-  sleep 0.6
+  wait_file_has "$(conf)" "density=compact" "密度开关写进 panel.conf" || bad "密度偏好没有在预算内落盘"
   assert_has "$(conf)" "density=compact" "密度开关写进 panel.conf"
   keys ,
-  sleep 0.5
-  cap_not "设置" overlay-closed.txt
+  wait_cap_not overlay-closed.txt "设置" "捕获里没有 [设置]"
   # Relaunch keeps the preferences (English + the overlay values).
   start_panel
   cap_has "progress" relaunch.txt
@@ -291,7 +407,7 @@ scn_settings() {
   local cyc
   for cyc in 2 3 4 1; do
     keys Enter
-    sleep 0.5
+    wait_file_has "$(conf)" "page=$cyc" "defaultPage 循环到 $cyc" || bad "defaultPage 没有在预算内循环到 $cyc"
     assert_eq "defaultPage 循环到 $cyc（四页 + 回绕）" "$(sed -n 's/^page=//p' "$(conf)" | tr -d '\n')" "$cyc"
   done
   keys Escape
@@ -332,19 +448,16 @@ scn_queue() {
   before="$(hash_state)"
   start_panel
   keys 3
-  sleep 1
-  cap_has "延后队列 2" queue-list.txt
-  cap_has "1758000001000-002-pm.msg" queue-list.txt
-  cap_has "滞留" queue-list.txt
-  cap_has "扣住原因：draft-raced" queue-list.txt
+  wait_cap_has queue-list.txt "延后队列 2" "捕获里有 [延后队列 2]"
+  wait_cap_has queue-list.txt "1758000001000-002-pm.msg" "捕获里有 [1758000001000-002-pm.msg]"
+  wait_cap_has queue-list.txt "滞留" "捕获里有 [滞留]"
+  wait_cap_has queue-list.txt "扣住原因：draft-raced" "捕获里有 [扣住原因：draft-raced]"
   keys Enter
-  sleep 0.8
-  cap_has "条目全文" queue-view.txt
+  wait_cap_has queue-view.txt "条目全文" "捕获里有 [条目全文]"
   cap_has "第一行" queue-view.txt
   cap_has "第二行" queue-view.txt
   keys Escape
-  sleep 0.4
-  cap_has "延后队列 2" queue-back.txt
+  wait_cap_has queue-back.txt "延后队列 2" "捕获里有 [延后队列 2]"
   after="$(hash_state)"
   # The page/conf files are the console's own; the queue must be byte-identical.
   local qbefore qafter
@@ -520,8 +633,7 @@ scn_mouse() {
   python3 "$pty_tmux" --sock "$sock" --session "$sess" --pane "$sess:panel" --hint "m 写信" \
     --out "$tmp/$current/chain.bin" --rows 32 --cols 120 >"$tmp/$current/chain.log" 2>&1
   assert_eq "tmux 全链路：点在 m 提示上" "$?" "0"
-  sleep 0.6
-  cap_has "Enter 发送" chain-compose.txt
+  wait_cap_has chain-compose.txt "Enter 发送" "捕获里有 [Enter 发送]"
 }
 
 scn_wheel() {
@@ -596,20 +708,31 @@ scn_resize() {
 scn_collapse() {
   section "collapse · q 收起后巡检仍在跑（7.1）"
   server_up collapse
+  # P68：本场景的稳定帧等待捕 pulse 窗口（控制台在这里，不在 panel 窗口）。
+  local b3_cap_pane="pulse"
   # The patrol interval is 2s so the tick's capacity line grows inside the fixture window. It must
   # live in the project config, not the launcher's shell: `respawn-window` starts the headless loop
   # from the tmux server's environment, not from the collapsing pane's.
   printf 'TEAM_PULSE_INTERVAL=2\n' >> "$ROOT/.pi/team/config.sh"
   tmux -L "$sock" new-window -d -t "$sess" -n cmd -c "$ROOT" \
     "bash '$skill/scripts/team' pulse up > '$tmp/$current/up.log' 2>&1; sleep 1"
-  sleep 5
+  # P68：等日志自己点名窗口（原来是 sleep 5 + 单次采样）。
+  wait_file_has "$tmp/$current/up.log" "巡检已在" "pulse up 的日志点名窗口" \
+    || bad "pulse up 的日志没有在预算内点名窗口"
   assert_has "$tmp/$current/up.log" "巡检已在" "pulse up 起了窗口"
+  # P68：等控制台自己的标题在稳定帧上（原来是 sleep 5 + 单次 capture-pane）。
+  if wait_console "$tmp/$current/console.txt" "pulse 窗口里的控制台首帧"; then
+    assert_has "$tmp/$current/console.txt" "teamsmith pulse" "pulse 窗口里是控制台"
+  else
+    b3_wait_verdict $? "pulse 窗口里是控制台" "pulse 窗口里没有在预算内出现控制台"
+  fi
+  # 计数放在控制台起来之后：`cmd` 辅助窗口的命令末尾有 `sleep 1`，它自己退掉后剩下的才是后端窗口。
   local wins_before; wins_before="$(tmux -L "$sock" list-windows -t "$sess" | wc -l | tr -d ' ')"
-  tmux -L "$sock" capture-pane -p -t "$sess:pulse" > "$tmp/$current/console.txt" 2>/dev/null
-  assert_has "$tmp/$current/console.txt" "teamsmith pulse" "pulse 窗口里是控制台"
   # q collapses: same window, a headless tick loop, capacity.log keeps gaining lines.
   tmux -L "$sock" send-keys -t "$sess:pulse" q
-  sleep 3
+  # P68：等窗口里的进程真的换成 --headless 巡检循环（原来是 sleep 3 后单次看 ps）。
+  wait_pane_args "pulse" "--headless" "q 收起后的无界面巡检" \
+    || bad "q 收起后窗口里的进程不是 --headless"
   local wins_after; wins_after="$(tmux -L "$sock" list-windows -t "$sess" | wc -l | tr -d ' ')"
   assert_eq "收前后窗口数不变（一个后端、一个窗口）" "$wins_after" "$wins_before"
   local pane_pid args
@@ -622,21 +745,26 @@ scn_collapse() {
   fi
   local c1 c2
   c1="$(grep -c . "$state/capacity.log" 2>/dev/null || echo 0)"
-  sleep 5
-  c2="$(grep -c . "$state/capacity.log" 2>/dev/null || echo 0)"
-  if [ "${c2:-0}" -gt "${c1:-0}" ]; then
+  if c2="$(wait_capacity_growth "$state/capacity.log" "${c1:-0}" "收起后巡检仍在跑（capacity.log 行数增长）")"; then
     ok "收起后巡检仍在跑（capacity.log $c1 → $c2 行）"
   else
-    bad "收起后巡检停了（capacity.log $c1 → $c2 行）"
+    bad "收起后巡检停了（capacity.log $c1 → ${c2:-?} 行）"
   fi
   tmux -L "$sock" new-window -d -t "$sess" -n cmd2 -c "$ROOT" \
     "bash '$skill/scripts/team' pulse status > '$tmp/$current/status-headless.log' 2>&1; sleep 0.3; \
      bash '$skill/scripts/team' pulse up > '$tmp/$current/up2.log' 2>&1"
-  sleep 6
+  # P68：两份由命令自己写的日志分别等（原来是 sleep 6 + 两次单次采样）。
+  wait_file_has "$tmp/$current/status-headless.log" "无界面 tick" "pulse status 报无界面形态" \
+    || bad "pulse status 没有在预算内报无界面形态"
   assert_has "$tmp/$current/status-headless.log" "无界面 tick" "pulse status 报无界面形态"
+  wait_file_has "$tmp/$current/up2.log" "恢复成控制台" "pulse up 原地恢复控制台" \
+    || bad "pulse up 没有在预算内恢复控制台"
   assert_has "$tmp/$current/up2.log" "恢复成控制台" "pulse up 原地恢复控制台"
-  tmux -L "$sock" capture-pane -p -t "$sess:pulse" > "$tmp/$current/restored.txt" 2>/dev/null
-  assert_has "$tmp/$current/restored.txt" "teamsmith pulse" "恢复后同一窗口里又是控制台"
+  if wait_console "$tmp/$current/restored.txt" "恢复后的控制台首帧"; then
+    assert_has "$tmp/$current/restored.txt" "teamsmith pulse" "恢复后同一窗口里又是控制台"
+  else
+    b3_wait_verdict $? "恢复后同一窗口里又是控制台" "恢复后同一窗口里没有在预算内出现控制台"
+  fi
 }
 
 scn_board() {

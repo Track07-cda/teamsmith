@@ -11,10 +11,10 @@ line, an empty frame) MUST NOT be accepted as evidence that the data landed. An 
 by a single sample (`sleep N` and one `capture-pane`/capture) MUST NOT be the evidence a data-derived assertion
 rests on.
 
-The wait SHALL be bounded and SHALL follow the gate's counted-wait discipline
-(`verification#Every wait in the gate is bounded and attributes at its cap`), and the state being waited for is
-part of what that discipline's attribution must name: the line says **which data-derived state** was expected,
-not only that a wait expired. When the wait runs out the fixture MUST NOT make the assertion and MUST NOT report
+The wait SHALL be bounded and SHALL follow the counted-wait discipline of the gate's pty fixtures
+(`skills/teamsmith/tests/lib/pty-wait.sh` is the model): it polls in counted rounds, carries a cap, and names
+**which data-derived state** was expected in its attribution — not only that a wait expired — alongside the wait
+itself and the rounds it used. When the wait runs out the fixture MUST NOT make the assertion and MUST NOT report
 that scenario green. Whether the exhaustion is a **failure** or a **visible SKIP** is decided by
 `verification#The correctness gate judges correctness only`: a scene that stays static while the machine's
 readings are under their premise is a regression and stays red, and a machine over the premise takes the visible
