@@ -11292,8 +11292,183 @@ assert_eq "12e 未知 id → 非 0" "$([ "$E_UNK_RC" -ne 0 ] && echo yes || echo
 assert_has_echo "$E_UNK" "没有任务指向它" "12e 未知 id 说清「没有任务」"
 assert_has_echo "$E_UNK" "openspec/changes/no-such-change/ 目录" "12e 未知 id 说清「没有 change 目录」"
 
-# ---------------------------------------------------------------- 12f · （B2 不做）
-# 12f（digest 归组 + 面板 token）按任务书**明确留到 M48/M49/M50 之后**，这里不建段。
+# ---------------------------------------------------------------- 12f · change 归组（P45/B2）
+# P45/B2：digest 的 [6] 段 + 面板的 token 行。夹具仍是 p24_project 的 scratch 项目（不碰 $REPO、
+# 不起真进程）。面板布局一节用**真读者**的输出（team __panel-data --block changes）渲染页 2 的帧：
+# reader 与 layout 的键名一旦漂移，这一节就红；其余块的确定性来自 tests/panel-b3-stub.sh。
+section "12f · change 归组（P45/B2：digest 的 [6] 段 + 面板 token）"
+
+P45F="$(p24_project 12f)"
+p24_change "$P45F" nodir
+p24_change "$P45F" notask
+p24_change "$P45F" gamma
+rm -rf "$P45F/openspec/changes/nodir"
+p24_brief "$P45F" M1 dev apply alpha -
+p24_brief "$P45F" M2 dev2 apply alpha -
+p24_brief "$P45F" N1 dev apply nodir -
+p24_brief "$P45F" X1 dev apply - -            # change: - → 不归任何 change
+for _i in 01 02 03 04 05 06 07 08 09 10; do p24_brief "$P45F" "G$_i" dev apply gamma -; done
+for _id in M1 M2 N1 X1 G01 G02 G03 G04 G05 G06 G07 G08 G09 G10; do p24_add "$P45F" "$_id" dev; done
+p24_pass "$P45F" M1
+p24_team "$P45F" board set M1 done >/dev/null 2>&1
+p24_team "$P45F" board set M2 wip >/dev/null 2>&1
+p24_team "$P45F" board set N1 wip >/dev/null 2>&1
+
+F_DG="$(p24_team "$P45F" digest)"
+F6="$(printf '%s\n' "$F_DG" | sed -n '/^\[6\] change 归组/,$p')"
+assert_has_echo "$F6" "change alpha · not ready → M1 done · M2 wip" "12f [6]：alpha 的 token 与 not-ready 标记"
+assert_has_echo "$F6" "change nodir · not ready（change 目录不存在）→ N1 wip" "12f [6]：任务指向不存在的目录 → 标记点名"
+assert_has_echo "$F6" "change notask · （没有任务指向它）" "12f [6]：目录没有任务指向 → 标记"
+assert_not_echo "$F6" "X1" "12f [6]：change: - 的任务不归任何 change"
+assert_has_echo "$F6" "G08 todo · +2" "12f [6]：token 上限 8 + 「+N」尾巴"
+assert_not_echo "$F6" "G09 todo" "12f [6]：第 9 个任务不打印（token 有界）"
+# [1]–[5] 的段头逐字节不变（钉住的字面量），新段是 [6]
+F_HDRS="$(printf '%s\n' "$F_DG" | grep -E '^\[[0-9]+\]')"
+F_HDRS_EXPECTED="$(cat <<'EOH'
+[1] 容量与存活
+[2] 待处理通知
+[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标；看板已 done/closed 的不列）
+[4] 待收尾（脏工作区 / 相对 upstream 未 push 的提交；领先按 main 另计；squash 已合并单独标注）
+[5] 任务板
+[5] 建议
+[6] change 归组
+EOH
+)"
+assert_eq "12f [1]–[5] 段头逐字节不变、新段是 [6]" "$F_HDRS" "$F_HDRS_EXPECTED"
+# token 与 `team change status alpha` 同一个账本（同一批 ID + 看板状态）
+F_CS="$(p24_team "$P45F" change status alpha)"
+F_TOK_DG="$(printf '%s\n' "$F6" | sed -n 's/^  change alpha · not ready → //p')"
+F_TOK_CS="$(printf '%s\n' "$F_CS" | awk '/^  tasks$/{t=1;next} /^  delta files/{t=0} t && /^    / {printf "%s%s %s", (n++ ? " · " : ""), $1, $4}')"
+assert_eq "12f [6] 的 token 与 team change status alpha 一致" "$F_TOK_DG" "$F_TOK_CS"
+# 段本身有界：8 行 + 「+N」尾巴（单独一个夹具，避免挤掉上面的断言）
+P45M="$(p24_project 12f-many)"
+for _i in 1 2 3 4 5 6 7 8 9; do p24_change "$P45M" "many$_i"; done
+M6="$(p24_team "$P45M" digest | sed -n '/^\[6\] change 归组/,$p')"
+assert_has_echo "$M6" "… +2（另有 2 个未归档 change）" "12f [6]：change 列表有界（8 行 + 「+N」尾巴）"
+# 无事时一条 dim 空行（连 change 目录也没有）
+P45E="$(p24_project 12f-none)"
+rm -rf "$P45E/openspec/changes/alpha"
+E6="$(p24_team "$P45E" digest | sed -n '/^\[6\] change 归组/,$p' | sed 's/\x1b\[[0-9;]*m//g' | sed -n '2p')"
+assert_eq "12f [6]：无事时一条 dim 空行" "$E6" "  （无）"
+
+# ---- 面板：__panel-data 的 tokens（--print/--json 是机器出口，见下）
+P45_PJ="$TMP/p45f-changes.json"
+p24_team "$P45F" __panel-data --block changes >"$P45_PJ" 2>&1
+if p24_json_ok "$(cat "$P45_PJ")"; then ok "12f 面板：__panel-data --block changes 是合法 JSON"; else bad "12f 面板：changes 块解析失败（$(head -c 200 "$P45_PJ")）"; fi
+p45_check() { # <python 表达式> <说明>（d = 整个 changes 块，by = 按 id 索引）
+  if python3 - "$P45_PJ" "$1" <<'P45Y' >/dev/null 2>&1
+import json, sys
+d = json.load(open(sys.argv[1]))
+by = {c["id"]: c for c in d["changes"]}
+sys.exit(0 if eval(sys.argv[2]) else 1)
+P45Y
+  then ok "$2"; else bad "$2"; fi
+}
+p45_check 'by["alpha"]["tasks"] == [{"id": "M1", "phase": "apply", "board": "done", "verdict": "PASS"}, {"id": "M2", "phase": "apply", "board": "wip", "verdict": "missing"}]' \
+  "12f 面板：alpha 的每个 token 带 id/phase/board/verdict（M1 PASS）"
+p45_check 'len(by["gamma"]["tasks"]) == 8 and by["gamma"]["tasks_more"] == 2' \
+  "12f 面板：token 数组有界（8 个 + tasks_more=2）"
+# 面板的 change 行来自目录列表 / `openspec list`；「任务指向不存在的目录」这种异常没有可挂靠的行，
+# 它在 digest 的 [6] 段里点名（design §7 的两个标记属于 digest 段；面板只负责已有 change 的归组）。
+
+# ---- 机器出口：--print/--json 与 change 数据面无关（console-only 块）
+p45_mem=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps")
+p45_mon() { ( cd "$P45F" && env "${p45_mem[@]}" $TEAM "$@" ) 2>&1; }
+p45_norm() { sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/g' "$1"; }
+if [ -z "$JS_RUNNER" ]; then
+  cond_skip "12f·机器出口" "没有 node/bun：面板渲染不了"
+else
+  p45_mon monitor --print >"$TMP/p45f-print1.txt"
+  p45_mon monitor --json >"$TMP/p45f-json1.json"
+  assert_has "$TMP/p45f-print1.txt" "teamsmith pulse" "12f 机器出口：--print 渲染出了帧（后面的「不该出现」断言不是空跑）"
+  assert_not "$TMP/p45f-print1.txt" "M1 done" "12f 机器出口：--print 不带 change 的 token（console-only）"
+  assert_not "$TMP/p45f-json1.json" '"tasks":' "12f 机器出口：--json 的 panel 里没有 tasks 字段（console-only）"
+  # 只在 change 的**任务映射**上制造变化：给 alpha 加一条任务书（不建看板行、不建目录）——
+  # 面板的 token 会多一个，而机器出口读的那些面（看板计数、变更数、报告面）一个都不动。
+  p24_brief "$P45F" L1 dev apply alpha -
+  p24_team "$P45F" __panel-data --block changes >"$TMP/p45f-changes2.json" 2>&1
+  assert_has "$TMP/p45f-changes2.json" '"id": "L1"' "12f 机器出口：变化真的落在面板块里（字节不变的对照成立）"
+  p45_mon monitor --print >"$TMP/p45f-print2.txt"
+  p45_mon monitor --json >"$TMP/p45f-json2.json"
+  if diff <(p45_norm "$TMP/p45f-print1.txt") <(p45_norm "$TMP/p45f-print2.txt") >"$TMP/p45f-print.diff" 2>&1; then
+    ok "12f 机器出口：change 数据面变化前后 --print 逐字节一致（滤时间戳）"
+  else
+    bad "12f 机器出口：--print 被 change 数据面影响了"; head -4 "$TMP/p45f-print.diff" | sed 's/^/      /'
+  fi
+  if diff <(p45_norm "$TMP/p45f-json1.json") <(p45_norm "$TMP/p45f-json2.json") >"$TMP/p45f-json.diff" 2>&1; then
+    ok "12f 机器出口：change 数据面变化前后 --json 逐字节一致（滤时间戳）"
+  else
+    bad "12f 机器出口：--json 被 change 数据面影响了"; head -4 "$TMP/p45f-json.diff" | sed 's/^/      /'
+  fi
+fi
+
+# ---- 面板布局：token 行「宽度不够 → 整行丢弃（不重排）」
+P45_STUB="$TMP/p45-panel-stub"
+cat >"$P45_STUB" <<'EOS'
+#!/usr/bin/env bash
+blk=""; prev=""
+for a in "$@"; do [ "$prev" = "--block" ] && blk="$a"; prev="$a"; done
+if [ "${blk:-}" = "changes" ]; then printf '%s\n' "$P45_CHANGES_JSON"; exit 0; fi
+exec bash "$P45_B3_STUB" "$@"
+EOS
+chmod +x "$P45_STUB"
+if [ -z "$JS_RUNNER" ]; then
+  cond_skip "12f·面板布局" "没有 node/bun：面板渲染不了"
+else
+  P45_PANEL="$SKILL_DIR/scripts/panel/panel.js"
+  # gamma 的 8 个 token（约 95 列）在 160 列档的右栏（70）里放不下；alpha 的 2 个 token 放得下。
+  python3 - "$TMP/p45f-changes.json" "$TMP/p45f-changes-nogamma.json" <<'P45J'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for c in d["changes"]:
+    if c["id"] == "gamma":
+        c["tasks"] = []
+        c["tasks_more"] = 0
+json.dump(d, open(sys.argv[2], "w"))
+P45J
+  p45_frame() { # <changes json> <width> <out>
+    env P45_CHANGES_JSON="$(cat "$1")" P45_B3_STUB="$SKILL_DIR/tests/panel-b3-stub.sh" \
+      "$JS_RUNNER" "$P45_PANEL" --snapshot --root "$TMP" --state-dir "$TMP/p45-panel-state" \
+      --team-cli "$P45_STUB" --width "$2" --height 32 --theme dark --lang zh --page 2 >"$3" 2>"$3.err"
+  }
+  mkdir -p "$TMP/p45-panel-state"
+  p45_frame "$P45_PJ" 160 "$TMP/p45f-frame-160.txt"
+  p45_frame "$TMP/p45f-changes-nogamma.json" 160 "$TMP/p45f-frame-160-nogamma.txt"
+  p45_frame "$P45_PJ" 270 "$TMP/p45f-frame-270.txt"
+  p45_strip() { sed 's/\x1b\[[0-9;]*m//g' "$1"; }
+  if [ -s "$TMP/p45f-frame-160.txt" ]; then ok "12f 布局：160 列帧渲染出来了"; else bad "12f 布局：160 列帧是空的（$(tail -2 "$TMP/p45f-frame-160.txt.err")"; fi
+  assert_has_echo "$(p45_strip "$TMP/p45f-frame-160.txt")" "M1 done · M2 wip" "12f 布局：放得下的 token 行照常渲染"
+  assert_not_echo "$(p45_strip "$TMP/p45f-frame-160.txt")" "G01 todo" "12f 布局：放不下的 token 行整行丢弃（不截断、不折行）"
+  if cmp -s "$TMP/p45f-frame-160.txt" "$TMP/p45f-frame-160-nogamma.txt"; then
+    ok "12f 布局：丢弃那一行后与「本来就没有这些 token」逐字节一致（不重排布局）"
+  else
+    bad "12f 布局：丢弃 token 行改变了别的行（重排了）"; diff <(p45_strip "$TMP/p45f-frame-160.txt") <(p45_strip "$TMP/p45f-frame-160-nogamma.txt") | head -4 | sed 's/^/      /'
+  fi
+  assert_has_echo "$(p45_strip "$TMP/p45f-frame-270.txt")" "G01 todo · G02 todo" "12f 布局：宽度够（270 列）时 token 行渲染出来"
+  # 行宽按**显示列**算（CJK 是 2 列；字节数会把中文行算成两倍）
+  P45_WIDE_MAX="$(p45_strip "$TMP/p45f-frame-270.txt" | python3 -c '
+import sys, unicodedata
+def w(s): return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+print(max((w(l.rstrip("\n")) for l in sys.stdin), default=0))
+')"
+  [ "$P45_WIDE_MAX" -le 270 ] && ok "12f 布局：270 列的帧没有行溢出（最长 $P45_WIDE_MAX 列）" || bad "12f 布局：270 列帧有行溢出（最长 $P45_WIDE_MAX 列）"
+fi
+
+# ---- 读成本：digest 的 git 调用数仍在 M50 预算（≤ 50）内
+P45_GITSHIM="$TMP/p45-gitshim"; P45_GCALLS="$TMP/p45-git-calls.log"
+mkdir -p "$P45_GITSHIM"; : >"$P45_GCALLS"
+P45_REAL_GIT="$(command -v git)"
+cat >"$P45_GITSHIM/git" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$P45_GCALLS" 2>/dev/null || true
+exec "$P45_REAL_GIT" "\$@"
+EOF
+chmod +x "$P45_GITSHIM/git"
+( cd "$P45F" && env PATH="$P45_GITSHIM:$PATH" $TEAM digest ) >"$TMP/p45f-digest-counted.out" 2>&1 || true
+P45_GN="$(wc -l < "$P45_GCALLS" | tr -d ' ')"
+if [ "$P45_GN" -le 50 ]; then ok "12f 读成本：digest 的 git 调用数 ≤ 50（实测 $P45_GN）"; else bad "12f 读成本：digest 的 git 调用数 $P45_GN > 50"; sort "$P45_GCALLS" | uniq -c | sort -rn | head -5 | sed 's/^/      /'; fi
+assert_has "$TMP/p45f-digest-counted.out" "change alpha · not ready" "12f 读成本：计数那一跑真的渲染了 [6] 段（不是空转）"
+
 
 # ---------------------------------------------------------------- 12g · 派单锚点（B3）
 section "12g · 派单锚点（P24/B3：一个 change id + change-less 的锚）"

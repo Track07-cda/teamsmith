@@ -544,6 +544,93 @@ team_record_task_id() { # <记录路径> → 候选任务 id（取不到 → 空
   printf '%s\n' "${base%%-*}"
 }
 
+# ---------------------------------------------------------------- P45/B2 · change 归组（digest 的 [6] 段）
+# 判据与 `team change status` 同源：任务映射走 team_change_tasks（严格 `change:` 读取的唯一实现），就绪
+# 走 team_change_readiness（design §6 的唯一谓词）—— 两个界面不会各写一份。token 上限是**一个**常量
+# （面板 reader 用同一默认值），所以行宽有界；超出的 change 只留一条 `+N` 尾巴（与 digest 其它有界列表同风格）。
+TEAM_CHANGE_TASK_CAP="${TEAM_CHANGE_TASK_CAP:-8}"
+team_change_token_text() { # <change id> → "<ID> <看板状态> · … · +N"（没有映射任务 → 空输出）
+  local id="$1" tid _tphase _agent _brief st n=0 more=0 text=""
+  while IFS=$'\t' read -r tid _tphase _agent _brief; do
+    [ -n "$tid" ] || continue
+    n=$((n + 1))
+    if [ "$n" -gt "$TEAM_CHANGE_TASK_CAP" ]; then more=$((more + 1)); continue; fi
+    st="$(team_board_status "$tid")"; [ -n "$st" ] || st="-"
+    text="${text:+$text · }$tid $st"
+  done < <(team_change_tasks "$id")
+  [ "$more" -gt 0 ] && text="${text:+$text · }+$more"
+  [ -n "$text" ] && printf '%s\n' "$text"
+  return 0
+}
+
+# [6] 段的全部行（不含缩进/颜色；调用方决定空段怎么 dim）。判定权全在既有函数手里：
+#   · 「有没有任务」/ token 由 team_change_tasks（严格 change: 的唯一实现）决定；
+#   · 就绪标记由 team_change_readiness（design §6 的唯一谓词）决定——只对**要显示的正常行**算（有界）。
+# 排序：两种标记行在先（「任务指向不存在的目录」→「目录没有任务指向」），正常行在后（名字序）；
+# 因此真正需要人看的异常不会被 8 行的上限挤到 +N 里。
+# 归档的 change 不算「目录不存在」（归档是正常终点，openspec list / team change status 也只认活动目录）。
+team_change_group_lines() { # [<最多几行>] → 每行一条
+  local cap="${1:-$TEAM_CHANGE_TASK_CAP}" spec_dir dir id line mark
+  local -a ids=() have=()
+  local -A toks=()   # change id → token 文本（只算一次）
+  spec_dir="$(team_spec_dir_abs)"; dir="$spec_dir/changes"
+  local d
+  if [ -d "$dir" ]; then
+    for d in "$dir"/*/; do
+      [ -d "$d" ] || continue
+      id="${d%/}"; id="${id##*/}"
+      [ "$id" = "archive" ] && continue
+      ids+=("$id"); have+=("1")
+    done
+  fi
+  if [ -d "$TEAM_DOCS_ABS/tasks" ]; then
+    local cand seen="|"
+    for id in ${ids[@]+"${ids[@]}"}; do seen="$seen$id|"; done
+    while IFS= read -r cand; do
+      [ -n "$cand" ] || continue
+      case "$cand" in -|*[!A-Za-z0-9._-]*) continue ;; esac
+      case "$seen" in *"|$cand|"*) continue ;; esac
+      seen="$seen$cand|"
+      ids+=("$cand"); have+=("0")
+    done < <(awk 'match($0, /^[[:space:]]*change:[[:space:]]+[^[:space:]]/) {
+        v = $0; sub(/^[[:space:]]*change:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); if (v != "" && v != "-") print v
+      }' "$TEAM_DOCS_ABS/tasks"/*.md 2>/dev/null | LC_ALL=C sort -u)
+  fi
+  local i
+  for i in "${!ids[@]}"; do toks["${ids[$i]}"]="$(team_change_token_text "${ids[$i]}")"; done
+  # ① 分类：标记行（缺失目录 → 无任务）在前，正常行（有目录 + 有任务）在后
+  local -a marks=() normal=()
+  for i in "${!ids[@]}"; do
+    id="${ids[$i]}"
+    if [ -z "${toks[$id]}" ] && [ "${have[$i]}" = "1" ]; then
+      marks+=("change $id · （没有任务指向它）")
+    elif [ -n "${toks[$id]}" ] && [ "${have[$i]}" = "0" ]; then
+      if [ -d "$spec_dir/changes/archive/$id" ] || compgen -G "$spec_dir/changes/archive/*-$id" >/dev/null 2>&1; then continue; fi
+      mark="ready"; team_change_ready "$id" || mark="not ready"
+      marks+=("change $id · $mark（change 目录不存在）→ ${toks[$id]}")
+    elif [ -n "${toks[$id]}" ]; then
+      normal+=("$id")
+    fi
+  done
+  # ② 标记行在前（异常不会被上限挤到 +N 里），正常行按名字序；整体 8 行上限 + 「+N」尾巴
+  local shown=0 hidden=0
+  for line in ${marks[@]+"${marks[@]}"}; do
+    shown=$((shown + 1)); [ "$shown" -gt "$cap" ] && { hidden=$((hidden + 1)); continue; }
+    printf '%s\n' "$line"
+  done
+  local -a sorted=()
+  while IFS= read -r id; do if [ -n "$id" ]; then sorted+=("$id"); fi; done < <(printf '%s\n' ${normal[@]+"${normal[@]}"} | LC_ALL=C sort)
+  for id in ${sorted[@]+"${sorted[@]}"}; do
+    mark="ready"; team_change_ready "$id" || mark="not ready"
+    line="change $id · $mark → ${toks[$id]}"
+    shown=$((shown + 1)); [ "$shown" -gt "$cap" ] && { hidden=$((hidden + 1)); continue; }
+    printf '%s\n' "$line"
+  done
+  [ "$hidden" -gt 0 ] && printf '… +%s（另有 %s 个未归档 change）\n' "$hidden" "$hidden"
+  return 0
+}
+
 team_cmd_digest() {
   team_require_docs
   team_scan_warm --reports   # M50：全量档 —— [3] 逐份迭代报告，预热后所有判定函数吃热缓存（判定逻辑不变）
@@ -735,6 +822,15 @@ team_cmd_digest() {
     fi
   done
   [ "$suggestion" -eq 0 ] && team_dim "  （无）"
+
+  printf '\n%s\n' "[6] change 归组"
+  local cgl
+  cgl="$(team_change_group_lines)"
+  if [ -z "$cgl" ]; then
+    team_dim "  （无）"
+  else
+    printf '%s\n' "$cgl" | sed 's/^/  /'
+  fi
   printf '\n'
 }
 

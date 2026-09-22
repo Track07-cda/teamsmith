@@ -1612,6 +1612,25 @@ function settingsBlock(ctx: Ctx): Block | null {
   return one(lines, { focus, offset, visible, count })
 }
 
+/**
+ * P45/B2: the token line under a change row (`M1 done · M2 wip · V1 PASS · +N`).
+ *
+ * It is rendered only when the whole line fits the block's width: a token line that would have to be
+ * cut is dropped **whole** rather than truncated (`truncLine`) or wrapped — the block must not reflow
+ * (a wrapped cell moves every row below it, and a board page that shifts when a task's status
+ * changes is worse than a missing summary), and a half-shown token list is worse than none. The
+ * reader's `+N` overflow count is part of the text, so the bound stays visible; the tone is the
+ * same `dim` as the digest's own change section.
+ */
+function changeTasksLine(ch: ChangeRow, width: number): PlacedLine | null {
+  const tasks = ch.tasks ?? []
+  if (!tasks.length) return null
+  const parts = tasks.map((t) => `${t.id} ${t.board}`)
+  if ((ch.tasks_more ?? 0) > 0) parts.push(`+${ch.tasks_more}`)
+  const line = ln(seg(`  ${parts.join(' · ')}`, 'dim'))
+  return widthOf(line) <= width ? { line } : null
+}
+
 function changesBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg, width } = ctx
   const c = blocks.changes
@@ -1632,6 +1651,8 @@ function changesBlock(ctx: Ctx): Block | null {
         width,
       ),
     })
+    const toks = changeTasksLine(ch, width)
+    if (toks) lines.push(toks)
   }
   return { id: 'changes', title: fill(s.changesHeadingCount, { n: c.count }), right: true, priority: 11, lines, summary: { line: truncLine(ln(seg(` ${fill(s.changesHeadingCount, { n: c.count })}`, 'heading')), width) } }
 }

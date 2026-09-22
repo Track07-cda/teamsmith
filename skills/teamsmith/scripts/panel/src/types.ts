@@ -150,6 +150,16 @@ export interface BoardBlock {
   deliveries: Delivery[]
 }
 
+/** One task token of a change (P45/B2): the mapping's `<ID> <board-status>` plus its verdict. */
+export interface ChangeTaskToken {
+  id: string
+  phase: string
+  /** The BOARD row's status, or `-` when the id has no row. */
+  board: string
+  /** The review record's verdict (PASS/FAIL/…/none/missing), straight from team_review_verdict. */
+  verdict: string
+}
+
 export interface ChangeRow {
   id: string
   done: number
@@ -158,6 +168,10 @@ export interface ChangeRow {
   age: string
   /** explore | propose | apply | verify — derived from the artifacts on disk. */
   phase: string
+  /** The change's mapped tasks (P45/B2). Absent on a reader that predates the field. */
+  tasks?: ChangeTaskToken[]
+  /** Mapped tasks beyond the token bound (`+N`); 0 when none. */
+  tasks_more?: number
 }
 
 export interface ChangesBlock {

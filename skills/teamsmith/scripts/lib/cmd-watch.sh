@@ -880,6 +880,26 @@ team_panel_change_age() { # <change 目录> → 人类可读年龄（无 mtime �
   esac
 }
 
+# P45/B2：一个 change 的任务 token（面板 changes 块用）——与 digest 的 [6] 段同源：
+# team_change_tasks 是严格 change: 映射的唯一实现，board/verdict 直接读（不 spawn `team` 子进程）。
+# 上限固定（TEAM_CHANGE_TASK_CAP，digest 段用同一默认值）：超出只留计数 tasks_more，
+# 布局按它画 +N —— token 数组因此有界，一行不会随任务数无界增长。
+team_panel_change_tasks_json() { # <change id> → "tasks": [...], "tasks_more": N（调用方补逗号）
+  local id="$1" tid tphase _agent _brief board verdict cap="${TEAM_CHANGE_TASK_CAP:-8}"
+  local out="[" first=1 n=0 more=0
+  while IFS=$'\t' read -r tid tphase _agent _brief; do
+    [ -n "$tid" ] || continue
+    n=$((n + 1))
+    if [ "$n" -gt "$cap" ]; then more=$((more + 1)); continue; fi
+    board="$(team_board_status "$tid")"; [ -n "$board" ] || board="-"
+    verdict="$(team_review_verdict "$tid")"
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out{\"id\": $(team_panel_json_str "$tid"), \"phase\": $(team_panel_json_str "$tphase"), \"board\": $(team_panel_json_str "$board"), \"verdict\": $(team_panel_json_str "$verdict")}"
+  done < <(team_change_tasks "$id")
+  printf '"tasks": %s], "tasks_more": %s' "$out" "$more"
+}
+
 # 活动变更 + 阶段：优先 `openspec list`（约 1s，TTL 30s），CLI 不可用/失败 → 目录扫描。
 team_panel_changes_json() {
   local spec_dir dir bin listed="" src="dir" out="[" first=1 id done total age phase n_changes=0
@@ -896,7 +916,7 @@ team_panel_changes_json() {
       phase="$(team_panel_change_phase "$dir/$id")"; age="$(team_panel_change_age "$dir/$id")"
       [ "$first" = "1" ] || out="$out, "
       first=0
-      out="$out{\"id\": $(team_panel_json_str "$id"), \"done\": $(team_panel_num "$done"), \"total\": $(team_panel_num "$total"), \"age\": $(team_panel_json_str "$age"), \"phase\": $(team_panel_json_str "$phase")}"
+      out="$out{\"id\": $(team_panel_json_str "$id"), \"done\": $(team_panel_num "$done"), \"total\": $(team_panel_num "$total"), \"age\": $(team_panel_json_str "$age"), \"phase\": $(team_panel_json_str "$phase"), $(team_panel_change_tasks_json "$id")}"
     done <<< "$listed"
   else
     [ -d "$dir" ] || { printf '{"available": false, "source": "none", "changes": [], "count": 0}'; return 0; }
@@ -911,7 +931,7 @@ team_panel_changes_json() {
       phase="$(team_panel_change_phase "$d")"; age="$(team_panel_change_age "$d")"
       [ "$first" = "1" ] || out="$out, "
       first=0
-      out="$out{\"id\": $(team_panel_json_str "$id"), \"done\": $(team_panel_num "$done"), \"total\": $(team_panel_num "$total"), \"age\": $(team_panel_json_str "$age"), \"phase\": $(team_panel_json_str "$phase")}"
+      out="$out{\"id\": $(team_panel_json_str "$id"), \"done\": $(team_panel_num "$done"), \"total\": $(team_panel_num "$total"), \"age\": $(team_panel_json_str "$age"), \"phase\": $(team_panel_json_str "$phase"), $(team_panel_change_tasks_json "$id")}"
     done
   fi
   out="$out]"
