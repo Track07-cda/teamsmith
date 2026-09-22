@@ -24,7 +24,7 @@ Path grants an apply brief must state (OWNERSHIP — `scripts/**` and `reference
 
 ## 1. B1 — the verdict is the target, the escape is an argv token (R1, R2)
 
-- [ ] 1.1 `scripts/shim/tmux`: replace the environment-keyed three-state verdict (L159–163) with the object-based
+- [x] 1.1 `scripts/shim/tmux`: replace the environment-keyed three-state verdict (L159–163) with the object-based
   one. Parse the effective `-t` (last wins, `-t x` and `-tx`, on a copy) for `kill-session`/`kill-window`/
   `kill-pane`; refuse `kill-server` and `kill-session -a` on the shared default socket unconditionally; accept only
   a non-empty literal session component equal to `TEAM_SESSION` with the M40 binding (`TEAM_ROOT`/`TEAM_MAIN_ROOT`
@@ -34,20 +34,20 @@ Path grants an apply brief must state (OWNERSHIP — `scripts/**` and `reference
   `otherproj:pm`, `%1`, `@1`, `:dev`, `dev`, `""`, no `-t` → 64; `kill-server`, `kill-ser`, `kill-session -a` →
   64; unbound/empty `TEAM_SESSION` → 64; private socket → 0/`pass`; fake isolation → 64 with the default socket
   recorded. Paste the matrix.
-- [ ] 1.2 `scripts/shim/tmux`: recognize `--teamsmith-allow-destructive` in the global-option position, remove
+- [x] 1.2 `scripts/shim/tmux`: recognize `--teamsmith-allow-destructive` in the global-option position, remove
   every occurrence on its copy, log `act=explicit-flag` and exec the filtered argv; tokens after the subcommand are
   data. Verify: a stub-pinned probe shows exit 0, `act=explicit-flag`, the stub's argv without the token, the
   token in no environment, and a `send-keys` payload containing the token reaching the stub unchanged.
-- [ ] 1.3 `scripts/team`: delete line 19 (the export) and its comment; nothing else in the CLI changes argv.
+- [x] 1.3 `scripts/team`: delete line 19 (the export) and its comment; nothing else in the CLI changes argv.
   Verify: `grep -rn 'TEAM_ALLOW_DESTRUCTIVE_TMUX' skills/teamsmith/scripts/` → no read and no export (the schema
   tombstone text of 1.5 is the only remaining mention);
   `grep -rn 'act=override' skills/teamsmith/` → nothing.
-- [ ] 1.4 CLI call-site audit (no change expected): re-read the sites named in design D5
+- [x] 1.4 CLI call-site audit (no change expected): re-read the sites named in design D5
   (`cmd-agents.sh:779/812/1069`, `cmd-review.sh:883`, `cmd-watch.sh:1361/1376/1380`, `common.sh:1325–1332`) and
   confirm each target is `$TEAM_SESSION:<named object>`; run `team teardown --agent <a>` and `team review`'s cleanup
   in a gated private session and show the ledger lines are `act=allowed-owned` (never `explicit-flag`). If a site
   turns out not to target its own session, stop and write `BLOCKED:`.
-- [ ] 1.5 Retire the key visibly (R2): `cmd-config.sh:65` keeps the row with the retirement description;
+- [x] 1.5 Retire the key visibly (R2): `cmd-config.sh:65` keeps the row with the retirement description;
   `cmd-project.sh` (doctor) adds the read-only `tmux show-environment -g TEAM_ALLOW_DESTRUCTIVE_TMUX` residue line
   with the restart remedy, skipped when tmux is absent; `references/config.md:380`,
   `references/troubleshooting.md:582–600` and `CHANGELOG.md:21` are rewritten to the new model with "override"
@@ -57,28 +57,28 @@ Path grants an apply brief must state (OWNERSHIP — `scripts/**` and `reference
 
 ## 2. B2 — fixtures, lint and flips (R1, R3)
 
-- [ ] 2.1 `tests/smoke.sh` §31c (L10012–10366) rewritten to R1's probes: the own/foreign/unprovable/server/
+- [x] 2.1 `tests/smoke.sh` §31c (L10012–10366) rewritten to R1's probes: the own/foreign/unprovable/server/
   widening/binding/inherited-environment/token/private/fake-isolation/read-only matrix, with the stub pinned for
   every default-socket probe and the default-server liveness bracket kept. Keep the section's sanitized-probe
   helper; the probes that execute a real kill stay private-socket-only. Verify: the section runs green under
   `TEAM_SMOKE_FAST=1` and (once) full smoke, with a helper-level proof that the section's `TEAM_TMUX_REAL` is the
   stub on the default-socket probes (print the resolved value per probe class).
-- [ ] 2.2 `tests/smoke.sh`: extend the window probe (currently L10298–10330) to assert the worker window
+- [x] 2.2 `tests/smoke.sh`: extend the window probe (currently L10298–10330) to assert the worker window
   environment carries `TEAM_TMUX_CALLS_LOG`/`TEAM_TMUX_REAL` and neither `TEAM_ALLOW_DESTRUCTIVE_TMUX` nor any
   other grant, with `TEAM_ALLOW_DESTRUCTIVE_TMUX=1` inherited by the dispatching shell; add one assertion that the
   CLI's own destructive calls in that window are logged `act=allowed-owned`. Verify: the probe's log and env file
   tails (it is a real-window item — mark it as such, never the only evidence for R2).
-- [ ] 2.3 `tests/tmux-lint.pl`: accept the token as a global option while scanning so a flagged mutating call is
+- [x] 2.3 `tests/tmux-lint.pl`: accept the token as a global option while scanning so a flagged mutating call is
   still classified; keep A–D and the absolute-path rule unchanged; new selftest fixtures for
   `tmux --teamsmith-allow-destructive kill-server` (red), the same with `-L <private>` (clean), and the existing
   `/usr/bin/tmux -L <private> kill-server` (red). Verify: `perl skills/teamsmith/tests/tmux-lint.pl --selftest` and
   a repo scan, both with tails.
-- [ ] 2.4 `tests/container-tmux.sh`: the leak-shape fixture of R3's third scenario — inside the container, a server
+- [x] 2.4 `tests/container-tmux.sh`: the leak-shape fixture of R3's third scenario — inside the container, a server
   started with `TEAM_ALLOW_DESTRUCTIVE_TMUX=1` in its environment; from its pane `tmux kill-server` → exit 64 /
   `act=refused`, then `tmux --teamsmith-allow-destructive kill-server` → exit 0 / `act=explicit-flag` and the
   container's server gone; host fingerprint byte-identical; no runtime → exit 77 with the SKIP reason. Verify: the
   fixture's tail and `--selftest` still exit 0.
-- [ ] 2.5 The four flips from the design's evidence map (each in a `/tmp` copy, restore → green): (a) restore the
+- [x] 2.5 The four flips from the design's evidence map (each in a `/tmp` copy, restore → green): (a) restore the
   `TEAM_ALLOW_DESTRUCTIVE_TMUX` read → the inherited-environment probes go red; (b) accept every target → the
   foreign-target probes execute the stub; (c) drop the M40 binding → the unbound-identity probe allows;
   (d) keep the token in argv → the stub sees it. Verify: every red/green pair in the apply report, with the exact
@@ -86,17 +86,23 @@ Path grants an apply brief must state (OWNERSHIP — `scripts/**` and `reference
 
 ## 3. B3 — the ledger and the archive (PM)
 
-- [ ] 3.1 **Transfer the pending gate rows** (design D1, a spec-backfill action): remove the two gate requirements
+- [x] 3.1 **Transfer the pending gate rows** (design D1, a spec-backfill action): remove the two gate requirements
   from `openspec/changes/spec-backfill-2026-09/specs/boundary/spec.md` (L5–66, L68–104), keep its container
   requirement (L106) and its other four delta files, and record the transfer in its design/evidence map with a
   pointer to this change. Verify: the file's requirement list holds exactly one requirement; its evidence map's
   gate rows point at this change; `openspec validate --all --strict` stays green.
-- [ ] 3.2 Trial archive both changes on a scratch copy in dependency order and paste the output:
+- [x] 3.2 Trial archive both changes on a scratch copy in dependency order and paste the output:
   `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y spec-backfill-2026-09 && openspec archive -y
   tmux-gate-grant-redesign)`. A MODIFIED/ADDED collision or a missing base requirement surfaces here.
-- [ ] 3.3 Archive for real only after the independent verify record exists, the protected-branch gate is green, and
+- [x] 3.3 Archive for real only after the independent verify record exists, the protected-branch gate is green, and
   the user confirms; then `team change status tmux-gate-grant-redesign` must exit 0.
 
 > **Ordering**: 1.x → 2.1–2.4 → 2.5 → independent verify → 3.1 → 3.2 → archive (3.3).
 > **Not in this change**: the container requirement (stays in `spec-backfill-2026-09`), the guarded subcommand set,
 > the socket table, the launch prefix's semantics, and any change to the CLI's targets (D5).
+
+> **PM 勾选说明（2026-09-22）**：propose=**M63（dev-bob）**；apply=**M67（dev-bob，已合并）**；
+> verify=**M75（dev3，`2f6e266`）** —— PASS（reviews/M75.md）：295 条对抗性探针 0 红，含
+> 判定矩阵 89 / socket 表 51（M41 与假隔离形态保留）/ 环境零授权 43（**泄漏形状用真私有 server 复现，判定不变**）/
+> argv token 47（全局位、剥除、不进环境、载荷透传、fail closed）/ CLI 自用 32（ownership）/ doctor+墓碑 /
+> 夹具普查；变异两条（去身份绑定、去全局位限制）各自点名红。PM 重跑第 30 段 43/0。
