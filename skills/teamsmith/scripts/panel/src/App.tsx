@@ -18,7 +18,7 @@ import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, ViewState } from './types.js'
+import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, SettingsWindow, ViewState } from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -268,6 +268,12 @@ export function App({
   const [settingsOrigin, setSettingsOrigin] = useState(0)
   const [settingsFocus, setSettingsFocus] = useState(0)
   const [settingsFilter, setSettingsFilter] = useState('')
+  /**
+   * The settings view's own row-window offset (P30/D5), `null` = unset and the window keeps the
+   * focus-follow rule. The wheel sets it; the focus keys push it exactly enough to keep the
+   * focused row inside (the board page's `laneOffset` rule).
+   */
+  const [settingsOffset, setSettingsOffset] = useState<number | null>(null)
   /** The pending two-step write confirmation ({danger} = the command answered 7). */
   const [settingConfirm, setSettingConfirm] = useState<{ key: string; next: string; danger: boolean } | null>(null)
   /** The seat picker (P22/B4): the seat, its row and the option list with the selection. */
@@ -307,6 +313,9 @@ export function App({
   const settingsViewRef = useRef(false)
   const settingsFocusRef = useRef(0)
   const settingsFilterRef = useRef('')
+  const settingsOffsetRef = useRef<number | null>(null)
+  /** The row window the last frame drew (the wheel and the focus keys clamp against it). */
+  const settingsWindowRef = useRef<SettingsWindow | null>(null)
   /** The row the open `setting` editor writes (the fingerprint was pinned when it opened). */
   const settingRowRef = useRef<{ row: number; key: string; value: string; cls: string; fingerprint: string; seat?: string; kind?: string; choices?: SettingsKey['choices'] } | null>(null)
   const seatPickerRef = useRef<{ agent: string; row: number; models: string[]; index: number } | null>(null)
@@ -328,6 +337,7 @@ export function App({
   settingsViewRef.current = settingsView
   settingsFocusRef.current = settingsFocus
   settingsFilterRef.current = settingsFilter
+  settingsOffsetRef.current = settingsOffset
 
   const strings: Strings = stringsFor(settings.lang)
   const stringsRef = useRef(strings)
@@ -488,6 +498,10 @@ export function App({
       settingsFilterRef.current = text
       setSettingsFilter(text)
       setSettingsFocus(0)
+      settingsFocusRef.current = 0
+      // D5: a new filter resets the window with the focus (the row set may be a fraction of the old).
+      setSettingsOffset(null)
+      settingsOffsetRef.current = null
       closeCompose()
       return
     }
@@ -864,7 +878,47 @@ export function App({
     (delta: number) => {
       const rows = settingsRowsNow()
       if (!rows.length) return
-      setSettingsFocus((i) => Math.max(0, Math.min(rows.length - 1, i + delta)))
+      const next = Math.max(0, Math.min(rows.length - 1, settingsFocusRef.current + delta))
+      settingsFocusRef.current = next
+      setSettingsFocus(next)
+      // P30/D5: with a wheel offset in force the window is pushed just enough to keep the focused
+      // row inside it (the board page's `moveFocus` rule) — so the row `enter` would open can never
+      // be one a wheel scrolled out of the window. With no offset set the window still follows the
+      // focus (the layout's own default).
+      const win = settingsWindowRef.current
+      const current = settingsOffsetRef.current
+      if (win && current !== null && win.visible > 0) {
+        const start = Math.max(
+          0,
+          Math.min(
+            Math.max(0, win.count - win.visible),
+            current +
+              (next < current ? next - current : next >= current + win.visible ? next - current - win.visible + 1 : 0),
+          ),
+        )
+        setSettingsOffset(start)
+      }
+    },
+    [settingsRowsNow],
+  )
+
+  /**
+   * The wheel over the project-settings view (P30/D5): one row per notch through the view's own
+   * offset, the focus untouched. The event is **consumed** — the page the view was opened from
+   * never moves (today every other wheel fell through to `updateScroll` and scrolled a hidden
+   * page while the view, being focus-derived, did not move at all).
+   */
+  const scrollSettings = useCallback(
+    (delta: number) => {
+      const rows = settingsRowsNow()
+      if (!rows.length) return
+      const win = settingsWindowRef.current
+      const visible = Math.max(1, win?.visible ?? rows.length)
+      const max = Math.max(0, rows.length - visible)
+      const current = settingsOffsetRef.current ?? win?.offset ?? 0
+      const next = Math.max(0, Math.min(max, current + delta))
+      settingsOffsetRef.current = next
+      setSettingsOffset(next)
     },
     [settingsRowsNow],
   )
@@ -1120,8 +1174,12 @@ export function App({
       setSettingsView(true)
       settingsViewRef.current = true
       setSettingsFocus(0)
+      settingsFocusRef.current = 0
       setSettingsFilter('')
       settingsFilterRef.current = ''
+      // D5: the view opens at the top (no wheel offset in force).
+      setSettingsOffset(null)
+      settingsOffsetRef.current = null
       api.setSettingsOpen(true)
       api.refreshNow()
     },
@@ -1131,6 +1189,10 @@ export function App({
   const closeSettingsView = useCallback(() => {
     setSettingsView(false)
     settingsViewRef.current = false
+    // D5: the wheel's offset does not survive the view (reopening starts at the top).
+    setSettingsOffset(null)
+    settingsOffsetRef.current = null
+    settingsWindowRef.current = null
     setSeatPicker(null)
     seatPickerRef.current = null
     setChoicePicker(null)
@@ -1418,7 +1480,7 @@ export function App({
           return
       }
     },
-    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, updateScroll],
+    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -1486,6 +1548,7 @@ export function App({
       settings: settingsView,
       settingsFocus,
       settingsFilter,
+      settingsOffset,
       seatPicker,
       choicePicker,
     }
@@ -1507,6 +1570,7 @@ export function App({
     lanesRef.current = themed.lanes ?? []
     boardOrderRef.current = themed.boardOrder ?? []
     detailRef.current = themed.detail ?? null
+    settingsWindowRef.current = themed.settings ?? null
     return { frame: themed, input, hint, bottom, pad, boxed, inputView }
   }, [
     data,
@@ -1527,6 +1591,7 @@ export function App({
     settingsView,
     settingsFocus,
     settingsFilter,
+    settingsOffset,
     seatPicker,
     choicePicker,
     size,
@@ -1630,6 +1695,18 @@ export function App({
             moveChoicePicker(delta)
             return
           }
+          if (seatPickerRef.current) {
+            // P30/D5: the seat picker's wheel used to fall through to the page. It walks its
+            // entries now, exactly like the choice picker, and the page still does not move.
+            moveSeatPicker(delta)
+            return
+          }
+          if (settingsViewRef.current) {
+            // P30/D5: while the project-settings view is open the wheel is its region — the row
+            // window moves one row per notch, the focus stays, and the page behind it is untouched.
+            scrollSettings(delta)
+            return
+          }
           if ((pageRef.current === 4 || pageRef.current === 2) && detailIdRef.current) {
             scrollDetail(delta)
             return
@@ -1707,6 +1784,10 @@ export function App({
               settingsFilterRef.current = ''
               setSettingsFilter('')
               setSettingsFocus(0)
+              settingsFocusRef.current = 0
+              // D5: clearing a filter resets the window with the focus.
+              setSettingsOffset(null)
+              settingsOffsetRef.current = null
             }
             closeCompose()
             return

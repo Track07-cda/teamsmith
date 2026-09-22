@@ -272,7 +272,8 @@ arbitrary file reader. Text is capped at 128 KiB (`TEAM_PANEL_DETAIL_CAP` overri
 console spawns no `detail` child at all.
 
 `--block settings` is the project-settings view's reader (P22/B2): its payload is exactly `team config list
---json` (the contract's schema, its effect classes, the per-seat models and the audit tail). Like `detail` it is
+--json` (the contract's schema, its effect classes, each key's functional `group`, the per-seat models and the
+audit tail). Like `detail` it is
 requested only while the view is open — a parked console spawns no `settings` child and `--print`/`--json` never
 see it.
 
@@ -318,6 +319,42 @@ second source of truth: the value lives in the contract, the class table lives i
 
 A key the schema does not know is listed read-only ("not a known project setting", pointing at this file) and is
 never written.
+
+### The schema's tenth column (`group`) — the functional domain
+
+Every schema row carries a **tenth** `|`-separated field, the key's functional domain: a closed ASCII token
+matching `^[a-z][a-z0-9-]*$`. It is the row's own data (like `class`, `kind`, `default` and `suggest`) — **not**
+parsed from the `# ---- … ----` section comments, which stay documentation: a comment must never be able to move
+a row between headings. The fields are positional, so the ninth column (`suggest`) is written empty for a row
+that has no suggestions when the group follows; a row whose tenth field is missing or malformed is a schema
+defect, and `tests/config-cli.sh`'s `groups` section names the key and fails — the read never invents a default
+group or hides the row (the console shows such a row under its visible ungrouped fallback heading,
+`settingsGroupUngrouped` in the string tables).
+
+The vocabulary is exactly these twelve tokens; the visible heading is the table entry `group_<token>` in
+**both** languages (the zh and en tables are the only place a heading's words live):
+
+| token | domain | example keys |
+|---|---|---|
+| `identity` | identity and ledger layout | `TEAM_PROJECT`, `TEAM_DOCS_DIR` |
+| `branch` | branch semantics and forge | `TEAM_BRANCH_MODE`, `TEAM_GITLAB_HOST` |
+| `policy` | permission and dependency policy | `TEAM_ALLOW_FOREIGN_IDENTITY`, `TEAM_REQUIRE_JS` |
+| `roster` | roster, model resolution and adapters | `TEAM_AGENT_CMD`, `TEAM_AGENT_BIN`, `TEAM_MODEL_LIMITS` |
+| `seat-model` | per-seat models | `TEAM_DEFAULT_MODEL`, `TEAM_AGENT_MODELS`, `TEAM_PM_MODEL` |
+| `workflow` | workflow and gates | `TEAM_GATES`, `TEAM_REVIEW_TIMEOUT` |
+| `delivery` | capacity and delivery notices | `TEAM_MIN_AVAIL_MB`, `TEAM_DEFER_TTL` |
+| `panel` | pulse and console | `TEAM_PULSE_INTERVAL`, `TEAM_MONITOR_REFRESH` |
+| `patrol` | patrol policy | `TEAM_PULSE_NUDGE_GAP`, `TEAM_PULSE_MAX_RESTARTS` |
+| `pm-lifecycle` | PM lifecycle | `TEAM_PM_CMD`, `TEAM_PM_RESUME_ARGS` |
+| `session` | live sessions | the `TEAM_INBOX_WATCH_*` family |
+| `meeting` | cross-project meetings | `TEAM_MEETING_TTL_HOURS`, `TEAM_MEETING_KNOCK` |
+
+The token is the **only** declaration of the vocabulary: `team config list --json` reports each key record's
+`group` verbatim (empty string for a key the file carries and the schema does not know), the console looks its
+heading up by the token (`group_<token>`, falling back to the raw token when the table has none), and
+`tests/panel-strings.mjs` asserts the two sets equal **in both directions** — a token no row uses has no label
+(stale label) and a row's token without a label is a missing label. A key added to the schema therefore lands
+under its domain with the committed console bundle, and no group list exists anywhere else.
 
 ### The written form
 

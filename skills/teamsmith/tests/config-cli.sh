@@ -6,7 +6,7 @@
 #   TEAM_CONFIG_KEEP=1 bash ...                              # keep the fixture directory
 #   TEAM_CONFIG_TREE=<tree> bash ...                         # run against another checkout (used by flip)
 #
-# Sections: list writer inject cas validate audit models seats completeness docs callers flip
+# Sections: list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip
 # Exit: 0 every selected section green, 1 at least one assertion failed, 3 setup failure.
 #
 # Nothing here touches the caller's project: every fixture is a fresh git repo under $TMPDIR, the
@@ -100,7 +100,7 @@ need_python() { command -v python3 >/dev/null 2>&1; }
 need_python || { printf 'config-cli: 需要 python3（JSON 断言）\n' >&2; exit 3; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list writer inject cas validate audit models seats completeness docs callers flip)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- list
@@ -125,6 +125,110 @@ if want list; then
   out="$(run_in "$none" config list --json)"; rc=$?
   [ "$rc" -ne 0 ] && ok "无契约时 exit != 0（rc=$rc）" || bad "无契约时居然 exit 0"
   case "$out" in *"team init"*) ok "无契约的报错点名 team init" ;; *) bad "无契约的报错没点名 team init（$out）" ;; esac
+fi
+
+# ---------------------------------------------------------------- groups
+# P30/R1：`team config list --json` 的每条记录带 `group` = schema 行的**第 10 列逐字**（视图按它分组，
+# 词表封闭由 panel-strings.mjs 的标签双向相等保证）。这里的走查是**独立解析器**（python 自己拆 schema 表），
+# 不是把实现抄一遍：畸形/缺失的 token 由它点名判红（红侧两态在 groups-flip 段）。
+if want groups; then
+  section "groups · 每条记录的 group = schema 行第 10 列逐字（未知键为空串）/ human 表与机器出口不动"
+  # 夹具项目名避开 group 这个词：monitor 的标题行会带上项目名，否则 grep 会撞上自己。
+  p="$(new_proj gwalk)" || exit 3
+  printf 'TEAM_HAND_GROUPED="hand"\n' >> "$p/.pi/team/config.sh"
+  run_in "$p" config list --json > "$tmp/groups.json" 2>&1
+  run_in "$p" config list > "$tmp/groups-human.txt" 2>&1
+  python3 - "$cmd_config" "$tmp/groups.json" > "$tmp/groups-walk.log" 2>&1 <<'PY'
+import json, re, sys
+
+schema_file, json_file = sys.argv[1], sys.argv[2]
+src = open(schema_file, encoding='utf-8').read()
+m = re.search(r"team_config_schema\(\) \{\n  cat <<'EOF'\n(.*?)\nEOF\n\}", src, re.S)
+if not m:
+    print("PROBLEM\t读不出 schema 表")
+    sys.exit(0)
+rows = {}
+order = []
+for line in m.group(1).splitlines():
+    if not line or line.startswith('#'):
+        continue
+    f = line.split('|')
+    rows[f[0]] = f
+    order.append(f[0])
+SHAPE = re.compile(r'^[a-z][a-z0-9-]*$')
+d = json.load(open(json_file, encoding='utf-8'))
+keys = d["keys"]
+known = [k for k in keys if k["known"]]
+unknown = [k for k in keys if not k["known"]]
+problems = []
+seen = [k["name"] for k in known]
+if seen != order:
+    problems.append("schema 键集合/顺序与记录不一致（schema %d 条，读 %d 条）" % (len(order), len(seen)))
+for k in known:
+    row = rows.get(k["name"])
+    if row is None:
+        problems.append("%s：读里有这条记录，schema 没有" % k["name"])
+        continue
+    tok = row[9] if len(row) > 9 else ''
+    if not tok:
+        problems.append("%s：schema 行的第 10 列（group）缺失" % k["name"])
+    elif not SHAPE.fullmatch(tok):
+        problems.append("%s：token %r 形状不对（要 ^[a-z][a-z0-9-]*$）" % (k["name"], tok))
+    if k.get("group") != tok:
+        problems.append("%s：记录 group %r ≠ schema 行第 10 列 %r" % (k["name"], k.get("group"), tok))
+for k in unknown:
+    if k.get("group") != "":
+        problems.append("%s：schema 不认识的键 group 应为空串，实际 %r" % (k["name"], k.get("group")))
+print("COUNTS\t%d\t%d\t%d" % (len(known), len(unknown), len(order)))
+for prob in problems[:10]:
+    print("PROBLEM\t" + prob)
+PY
+  if grep -q '^PROBLEM' "$tmp/groups-walk.log"; then
+    bad "groups 走查：记录与 schema 第 10 列不一致"
+    grep '^PROBLEM' "$tmp/groups-walk.log" | head -5 | sed 's/^/      /'
+  else
+    ok "groups 走查：$(grep '^COUNTS' "$tmp/groups-walk.log" | tail -1 | awk -F'\t' '{printf "%d 条已知键 + %d 条未知键，逐条与 schema 第 10 列相等", $2, $3}')"
+  fi
+  # 场景里点名的四个样本键 + 一个文件里手加的未知键
+  python3 - "$tmp/groups.json" > "$tmp/groups-samples.log" 2>&1 <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+by = {k["name"]: k for k in d["keys"]}
+want = {"TEAM_PROJECT": "identity", "TEAM_PULSE_INTERVAL": "panel", "TEAM_DEFAULT_MODEL": "seat-model", "TEAM_GATES": "workflow"}
+bad = []
+for name, tok in want.items():
+    got = by.get(name, {}).get("group")
+    if got != tok:
+        bad.append("%s: group %r != %r" % (name, got, tok))
+hand = by.get("TEAM_HAND_GROUPED")
+if hand is None:
+    bad.append("TEAM_HAND_GROUPED 没有记录")
+elif hand.get("group") != "":
+    bad.append("TEAM_HAND_GROUPED: 未知键 group %r != ''" % hand.get("group"))
+print("OK" if not bad else "\n".join("PROBLEM\t" + b for b in bad))
+PY
+  if grep -q '^PROBLEM' "$tmp/groups-samples.log"; then
+    bad "样本键的 group 不对"
+    grep '^PROBLEM' "$tmp/groups-samples.log" | sed 's/^/      /'
+  else
+    ok "样本键：TEAM_PROJECT=identity / TEAM_PULSE_INTERVAL=panel / TEAM_DEFAULT_MODEL=seat-model / TEAM_GATES=workflow；手加的未知键 = \"\""
+  fi
+  # human 表与「其它机器出口」不动：表头照旧、表里没有 group 列，monitor 的两个出口一个字都不多。
+  grep -qE '^KEY[[:space:]]+CLASS[[:space:]]+KIND[[:space:]]+VALUE[[:space:]]*$' "$tmp/groups-human.txt" \
+    && ok "human 表头仍是 KEY CLASS KIND VALUE（没有 group 列）" \
+    || bad "human 表头变了（$(grep -m1 '^KEY' "$tmp/groups-human.txt" || echo 缺表头)）"
+  if grep -qE '^TEAM_PROJECT[[:space:]].*identity' "$tmp/groups-human.txt"; then
+    bad "human 表里出现了 group token（TEAM_PROJECT 行）"
+  else
+    ok "human 表行里没有 group token"
+  fi
+  run_in "$p" monitor --print > "$tmp/groups-monitor.txt" 2>&1 || true
+  run_in "$p" monitor --json > "$tmp/groups-monitor.json" 2>&1 || true
+  if grep -qi 'group' "$tmp/groups-monitor.txt" || grep -qi 'group' "$tmp/groups-monitor.json"; then
+    bad "team monitor 的出口带上了 group"
+  else
+    ok "team monitor --print/--json 都不带 group（字段只在 config list --json）"
+  fi
 fi
 
 # ---------------------------------------------------------------- writer
@@ -561,6 +665,79 @@ PY
   { grep -aE '✗|== 结果' "$tmp/flip-red.log" || true; } | tail -12 | sed 's/^/    /'
   printf '    --- 绿侧尾部 ---\n'
   { grep -aE '✓|== 结果' "$tmp/flip-green.log" || true; } | tail -4 | sed 's/^/    /'
+fi
+
+# ---------------------------------------------------------------- groups-flip
+# P30/R1 的红侧两态（F-G1/F-G2）：scratch 树 + TEAM_CONFIG_TREE + 内层只跑 groups 段（不递归）。
+# 绿侧先跑一次：证明红不是因为 scratch 树缺文件（翻转无效）。
+if want groups-flip; then
+  section "groups-flip · 删掉 TEAM_GATES 的第 10 列 / token 改成 NoPe! → groups 段红并点名；还原 → 绿"
+  gtree="$tmp/groups-tree"
+  mkdir -p "$gtree/skills/teamsmith"
+  cp -a "$skill/scripts" "$gtree/skills/teamsmith/scripts"
+  cp -a "$skill/templates" "$skill/references" "$gtree/skills/teamsmith/"
+  gcc="$gtree/skills/teamsmith/scripts/lib/cmd-config.sh"
+  set +e
+  TEAM_CONFIG_TREE="$gtree" bash "$here/config-cli.sh" groups > "$tmp/groups-flip-green.log" 2>&1
+  g_rc_green=$?
+  [ "$g_rc_green" -eq 0 ] && ok "scratch 树原状：groups 段绿（rc=0，红侧不是因为缺文件）" \
+    || { bad "scratch 树原状 groups 段就红了（rc=$g_rc_green，翻转无效）"; grep -a '✗' "$tmp/groups-flip-green.log" | head -3 | sed 's/^/      /'; }
+  # F-G1：TEAM_GATES 行去掉第 10 列
+  python3 - "$gcc" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+for i, line in enumerate(lines):
+    if line.startswith('TEAM_GATES|'):
+        f = line.split('|')
+        assert len(f) == 10, 'TEAM_GATES row has %d fields' % len(f)
+        lines[i] = '|'.join(f[:9])
+        break
+else:
+    raise SystemExit('TEAM_GATES row not found')
+open(p, 'w', encoding='utf-8').write('\n'.join(lines))
+PY
+  TEAM_CONFIG_TREE="$gtree" bash "$here/config-cli.sh" groups > "$tmp/groups-f1.log" 2>&1
+  g_rc_f1=$?
+  if [ "$g_rc_f1" -ne 0 ] && grep -q 'TEAM_GATES' "$tmp/groups-f1.log" && grep -q '第 10 列' "$tmp/groups-f1.log"; then
+    ok "F-G1：TEAM_GATES 丢掉第 10 列 → groups 段红（rc=$g_rc_f1）并点名该键"
+  else
+    bad "F-G1：丢列没被抓住（rc=$g_rc_f1）"; grep -a '✗\|PROBLEM' "$tmp/groups-f1.log" | head -3 | sed 's/^/      /'
+  fi
+  printf '    --- F-G1 红侧尾部 ---\n'
+  { grep -aE '✗|PROBLEM|== 结果' "$tmp/groups-f1.log" || true; } | tail -6 | sed 's/^/    /'
+  cp -a "$cmd_config" "$gcc"
+  # F-G2：TEAM_PULSE_INTERVAL 的 token 改成非法的 NoPe!
+  python3 - "$gcc" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+for i, line in enumerate(lines):
+    if line.startswith('TEAM_PULSE_INTERVAL|'):
+        f = line.split('|')
+        assert len(f) == 10, 'TEAM_PULSE_INTERVAL row has %d fields' % len(f)
+        f[9] = 'NoPe!'
+        lines[i] = '|'.join(f)
+        break
+else:
+    raise SystemExit('TEAM_PULSE_INTERVAL row not found')
+open(p, 'w', encoding='utf-8').write('\n'.join(lines))
+PY
+  TEAM_CONFIG_TREE="$gtree" bash "$here/config-cli.sh" groups > "$tmp/groups-f2.log" 2>&1
+  g_rc_f2=$?
+  if [ "$g_rc_f2" -ne 0 ] && grep -q 'TEAM_PULSE_INTERVAL' "$tmp/groups-f2.log" && grep -q 'NoPe!' "$tmp/groups-f2.log"; then
+    ok "F-G2：token 改成 NoPe! → groups 段红（rc=$g_rc_f2）并点名该键与 token"
+  else
+    bad "F-G2：畸形 token 没被抓住（rc=$g_rc_f2）"; grep -a '✗\|PROBLEM' "$tmp/groups-f2.log" | head -3 | sed 's/^/      /'
+  fi
+  printf '    --- F-G2 红侧尾部 ---\n'
+  { grep -aE '✗|PROBLEM|== 结果' "$tmp/groups-f2.log" || true; } | tail -6 | sed 's/^/    /'
+  cp -a "$cmd_config" "$gcc"
+  TEAM_CONFIG_TREE="$gtree" bash "$here/config-cli.sh" groups > "$tmp/groups-f3.log" 2>&1
+  g_rc_f3=$?
+  [ "$g_rc_f3" -eq 0 ] && ok "还原两行 → groups 段重新绿（rc=0）" \
+    || { bad "还原后没有变绿（rc=$g_rc_f3）"; grep -a '✗' "$tmp/groups-f3.log" | head -3 | sed 's/^/      /'; }
+  set -e
 fi
 
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d  SKIP %d\n' "$PASS" "$FAIL" "$SKIP"

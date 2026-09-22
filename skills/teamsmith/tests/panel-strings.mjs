@@ -12,6 +12,9 @@
 //      (`skills/teamsmith/scripts/lib/cmd-config.sh`) has a non-empty `label_<KEY>` in **both**
 //      tables, no label names a key the schema does not carry (no stale half), the label is not
 //      the key spelled differently, and it fits the row's label column.
+//   5. the contract-group labels (P30): the same schema rows' tenth column (`group`) is a closed
+//      ASCII token, and every token one of them uses has a non-empty `group_<token>` in **both**
+//      tables while no `group_` label names a token no row uses (both directions).
 //
 // The tables are plain ESM, so they are copied to a temp dir as `.mjs` and imported with the plain
 // JS runtime this script runs on; no TypeScript loader (or bundler) is involved.
@@ -142,6 +145,43 @@ try {
       }
     }
     if (schemaKeys.length) console.log(`ok: contract-key labels — ${schemaKeys.length} schema keys covered in zh and en`)
+
+    // P30/D2: the functional-group bijection. The schema row's tenth column is the only place a
+    // group token is declared; the visible heading is `group_<token>` in the tables. Both
+    // directions are failures: a row token with no label (the tables lag the schema) and a label
+    // no row uses (a stale group). The token's shape is asserted here too, so a malformed tenth
+    // field is red in the fast gate as well as in config-cli.sh's groups walk.
+    const GROUP_PREFIX = 'group_'
+    const GROUP_SHAPE = /^[a-z][a-z0-9-]*$/
+    const rows = [...(schemaBody ? schemaBody[0].matchAll(/^(TEAM_[A-Z0-9_]+)\|(.+)$/gm) : [])].map((m) => ({
+      key: m[1],
+      // Everything after the key: class|kind|spec|form|default|danger|route|suggest|group — the
+      // tenth column is this array's ninth element (index 8).
+      fields: m[2].split('|'),
+    }))
+    const tokens = new Set()
+    for (const row of rows) {
+      const token = String(row.fields[8] ?? '')
+      if (!token) {
+        fail(`${row.key}: schema row declares no group (its tenth field is missing) — the tables' group labels cannot line up`)
+        continue
+      }
+      if (!GROUP_SHAPE.test(token)) fail(`${row.key}: group token ${JSON.stringify(token)} does not match ^[a-z][a-z0-9-]*$`)
+      tokens.add(token)
+    }
+    for (const [name, table] of [
+      ['zh', zh],
+      ['en', en],
+    ]) {
+      for (const token of [...tokens].sort()) {
+        const value = table[GROUP_PREFIX + token]
+        if (typeof value !== 'string' || value.length === 0) fail(`${name}: no ${GROUP_PREFIX}${token} label for the group the schema rows carry`)
+      }
+      for (const key of Object.keys(table).filter((k) => k.startsWith(GROUP_PREFIX))) {
+        if (!tokens.has(key.slice(GROUP_PREFIX.length))) fail(`${name}.${key} names no group any schema row uses (stale label)`)
+      }
+    }
+    if (rows.length) console.log(`ok: contract-group labels — ${tokens.size} schema group tokens covered in zh and en`)
   }
 } finally {
   rmSync(tmp, { recursive: true, force: true })

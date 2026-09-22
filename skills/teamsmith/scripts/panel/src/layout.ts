@@ -1178,10 +1178,26 @@ export function settingsClassLabel(s: Strings, cls: string): string {
   return s.settingsBadgeApply
 }
 
+/**
+ * The effect class's tone (P30/D4): the *badge*'s tone, never the whole row's. `restart` is the one
+ * class that warns, `refuse` recedes, and `apply` stays the plain text tone — 48 of 111 rows would
+ * shout in green while the user's question is "does this need a restart?". Colour is never the only
+ * channel: the badge's word always carries the class (the panel's standing rule).
+ */
 function settingsClassTone(cls: string): Tone {
   if (cls === 'restart') return 'warn'
   if (cls === 'refuse') return 'dim'
-  return 'ok'
+  return 'text'
+}
+
+/**
+ * A functional group's heading label: `group_<token>` from the tables, falling back to the raw
+ * token when the table has none (a schema freshly edited against the committed bundle) — the same
+ * visible fallback `keyLabel` uses for an unknown key. Nothing here maps a key to a group.
+ */
+function groupLabel(s: Strings, token: string): string {
+  const label = s[`group_${token}`]
+  return typeof label === 'string' && label.length > 0 ? label : token
 }
 
 /** The CLI's own three source labels (the console invents no fourth state). */
@@ -1192,9 +1208,15 @@ export function settingsSourceLabel(s: Strings, source: string): string {
 }
 
 /**
- * The view's filtersd row list: the schema's keys grouped by class, then the seats. Pure and
-exported: the App walks exactly this list when it moves the focus, so the keys can never disagree
- * with what is on screen.
+ * The view's filtered row list: the contract's keys grouped by the **record's** `group` (P30/D1-D3),
+ * in the read's own order, then the seats. Pure and exported: the App walks exactly this list when
+ * it moves the focus, so the keys can never disagree with what is on screen.
+ *
+ * The bundle owns no key→group table and no group list: the walk opens a heading whenever the
+ * token changes, so a key (or a whole group) added to the command's schema appears under its
+ * reported heading with the committed bundle. Rows whose token is empty — a schema row that
+ * declares none, or a key the file carries and the schema does not know — are never dropped: they
+ * collect into one visible trailing fallback heading, before the seats block.
  */
 export function settingsViewRows(block: SettingsBlock | undefined, filter: string, s: Strings): SettingsRow[] {
   const out: SettingsRow[] = []
@@ -1202,22 +1224,28 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
   const needle = String(filter ?? '').trim().toLowerCase()
   const match = (...parts: string[]): boolean =>
     needle === '' || parts.some((p) => String(p ?? '').toLowerCase().includes(needle))
-  const groups: { cls: string; label: string }[] = [
-    { cls: 'apply', label: s.settingsGroupApply },
-    { cls: 'restart', label: s.settingsGroupRestart },
-    { cls: 'refuse', label: s.settingsGroupRefuse },
-  ]
-  for (const g of groups) {
-    const keys = block.keys.filter(
-      (k) =>
-        k.class === g.cls &&
-        // The label first (what the row shows), then the raw key and the value — the three inputs a
-        // user may type into `/` (the label's words, `TEAM_…`, or the value on screen).
-        match(keyLabel(s, k.name), k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
-    )
-    if (!keys.length) continue
-    out.push({ kind: 'group', label: g.label, tone: settingsClassTone(g.cls) })
-    for (const k of keys) out.push({ kind: 'key', key: k })
+  // The label first (what the row shows), then the raw key and the value — the three inputs a
+  // user may type into `/` (the label's words, `TEAM_…`, or the value on screen).
+  const shown = block.keys.filter((k) =>
+    match(keyLabel(s, k.name), k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
+  )
+  const ungrouped: SettingsKey[] = []
+  let openToken: string | null = null
+  for (const k of shown) {
+    const token = String(k.group ?? '')
+    if (!token) {
+      ungrouped.push(k)
+      continue
+    }
+    if (token !== openToken) {
+      out.push({ kind: 'group', label: groupLabel(s, token), tone: 'heading' })
+      openToken = token
+    }
+    out.push({ kind: 'key', key: k })
+  }
+  if (ungrouped.length) {
+    out.push({ kind: 'group', label: s.settingsGroupUngrouped, tone: 'heading' })
+    for (const k of ungrouped) out.push({ kind: 'key', key: k })
   }
   const seats = (block.models?.seats ?? []).filter((x) =>
     match(x.agent, x.model, settingsSourceLabel(s, x.source)),
@@ -1229,10 +1257,14 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
   return out
 }
 
-/** The badge + value column shared by a key row and a seat row. */
+/**
+ * The badge + value column shared by a key row and a seat row. The class tone covers the **badge
+ * only** (P30/D4): the value beside it stays in the plain text tone, because a class meaning is
+ * not a property of the value. A row with no badge (the seats) keeps its single-tone right column.
+ */
 function settingsRight(ctx: Ctx, text: string, badge: string, tone: Tone, innerW: number): Line {
-  const right = ` ${truncateW(text, Math.max(6, innerW - SETTINGS_LABEL_W - 14))} · ${badge}`
-  return ln(seg(right, tone))
+  const shown = truncateW(text, Math.max(6, innerW - SETTINGS_LABEL_W - 14))
+  return badge === '' ? ln(seg(` ${shown}`, tone)) : ln(seg(` ${shown} · `, 'text'), seg(badge, tone))
 }
 
 function settingsKeyLine(ctx: Ctx, row: SettingsKey, focused: boolean, innerW: number): PlacedLine {
@@ -1326,9 +1358,71 @@ function settingsBlock(ctx: Ctx): Block | null {
   let count = 0
   for (const r of rows) if (r.kind === 'key' || r.kind === 'seat') count += 1
   const budget = Math.max(3, ctx.settingsRows ?? 12)
-  const visible = Math.max(1, Math.min(Math.max(1, count), budget))
   const focus = Math.max(0, Math.min(Math.max(0, count - 1), ctx.view.settingsFocus ?? 0))
-  const offset = Math.max(0, Math.min(Math.max(0, count - visible), focus - Math.floor(visible / 2)))
+  const explicitOffset = ctx.view.settingsOffset
+  const desired = Math.max(1, Math.min(Math.max(1, count), budget))
+  const maxOffset = Math.max(0, count - desired)
+  // P30/D5 (measured while testing the wheel at the list's tail): the window is bounded by the
+  // **lines** it draws, not by the row count. A row with a note draws two lines and a group heading
+  // draws one, so a note-heavy, heading-rich window used to overflow the space the assembly handed
+  // over — and the frame then collapsed the whole block to its one-line rule/summary, leaving the
+  // wheel nothing to scroll (the grouping change made it easy to hit: the first groups are
+  // route-heavy). The fit measures the rows it can really draw, so the window always fits and both
+  // hidden-row counts stay honest.
+  //
+  // The unit is one *focusable* row (what `offset`/`visible`/the counts mean); each unit's price is
+  // its own line plus the group heading directly above it, which draws exactly when that row is
+  // inside the window (`settingsKeyLine`'s note line is the only other cost).
+  const units: { lines: number; heading: number }[] = []
+  const rowLines = (r: SettingsRow): number => {
+    if (r.kind !== 'key') return 1 // a seat row is one line
+    const k = r.key
+    return (k.warning || k.route || k.comment || '').trim() ? 2 : 1 // `settingsKeyLine`'s note line
+  }
+  let pendingHeading = 0
+  for (const r of rows) {
+    if (r.kind === 'group' || r.kind === 'seat-group') {
+      pendingHeading = 1
+      continue
+    }
+    units.push({ lines: rowLines(r), heading: pendingHeading })
+    pendingHeading = 0
+  }
+  const spend = (start: number, n: number): number => {
+    let cost = 0
+    for (let i = start; i < Math.min(start + n, units.length); i += 1) cost += units[i].lines + units[i].heading
+    return cost
+  }
+  /** The rows a window starting at `start` can really draw inside `budget` lines (`<= desired` rows). */
+  const fitForward = (start: number): number => {
+    let visible = 0
+    while (visible < desired && start + visible < units.length && spend(start, visible + 1) <= budget) visible += 1
+    return visible
+  }
+  /** The first row of the largest window that ends at the focused row (the focus never hides). */
+  const fitBack = (row: number): number => {
+    let start = row
+    while (start > 0 && row - start + 1 < desired && spend(start - 1, row - start + 2) <= budget) start -= 1
+    return start
+  }
+  let offset: number
+  let visible: number
+  if (explicitOffset === undefined || explicitOffset === null) {
+    // The focus-follow default: centre the focused row, then keep it inside the fitted window.
+    offset = Math.max(0, Math.min(maxOffset, focus - Math.floor(desired / 2)))
+    visible = fitForward(offset)
+    if (focus >= offset + visible) {
+      offset = fitBack(focus)
+      visible = fitForward(offset)
+    }
+  } else {
+    // The wheel's own offset (P30/D5): it wins — clamped to the row set, so a filter or a re-read
+    // that shrinks the list clamps rather than losing the view. The focus is deliberately left
+    // where it is; the focus keys push this offset back onto the focused row.
+    offset = Math.max(0, Math.min(Math.max(0, count - 1), explicitOffset))
+    visible = fitForward(offset)
+  }
+  if (visible === 0 && count > 0) visible = 1
 
   // The choice picker (M55): the command's own vocabulary, rendered in the view's own line budget
   // exactly like the seat picker below (same window/offset rules, one click action per entry, no

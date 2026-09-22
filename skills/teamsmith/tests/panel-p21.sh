@@ -5,6 +5,7 @@
 #
 #   bash skills/teamsmith/tests/panel-p21.sh                  # every scenario
 #   bash skills/teamsmith/tests/panel-p21.sh settings seats    # selected scenarios
+#   bash skills/teamsmith/tests/panel-p21.sh settings groups wheel   # P30: grouping + the view's wheel
 #   TEAM_P21_KEEP=1 bash ...                                  # keep the fixture directory
 #
 # Every scenario runs in a private tmux server and a fresh git project initialised with the real
@@ -75,7 +76,7 @@ PTY_TRACE="${_trace_arg:-0}"
 PTY_SCENE_DIR=""
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(settings choices choices-schema write conflict seats readonly)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(settings groups wheel choices choices-schema write conflict seats readonly)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- fixture plumbing
@@ -188,9 +189,12 @@ conf_set() { mkdir -p "$state"; printf '%s\n' "$@" > "$state/panel.conf"; }
 panel_pid() { tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_pid}' 2>/dev/null | head -1; }
 
 # Open the overlay and its project-settings navigation row (the sixth row), then wait for data.
-# <marker> is the badge the wait looks for (zh by default; the en pass passes its own).
+# <marker> is the string the wait looks for: P30/D2 made the view open on the read-only skeleton,
+# so the default is the first functional group heading (identity) — a class word is no longer a
+# heading and, at the top of the list, would only appear on some badge (zh by default; the en pass
+# passes its own marker).
 open_view() {
-  local marker="${1:-立即生效}"
+  local marker="${1:-身份与账本布局}"
   keys ,
   sleep 0.7
   keys Down Down Down Down Down
@@ -293,6 +297,29 @@ leave_picker() { # <KEY>
   pty_cleanup_esc "picker $1" " · $1"
 }
 
+# P30/D2: the grouping is a functional domain, the effect class lives in the row's badge. A line
+# that carries nothing but a class word can only come from a class-group heading — this is the pin
+# that the view did not go back to grouping by class (both languages' six words).
+assert_no_class_heading() { # <capture file> [label]
+  local f="$1" label="${2:-视图没有类分组标题（分组是功能域）}"
+  if sed 's/[│|]//g' "$f" | grep -qE '^ *(立即生效|需要重启|只读|Takes effect now|Needs a restart|Read-only) *$'; then
+    bad "$label（捕获里出现了只有类词的行）"
+  else
+    ok "$label"
+  fi
+}
+
+# Inject one SGR wheel notch into the pane (the same path as `click_at`: tmux writes the bytes to
+# the pane's pty, where Ink parses them). 65 = wheel down, 64 = wheel up.
+wheel_at() { # <down|up> <col> <row> [n]
+  local btn=65 i
+  [ "$1" = "up" ] && btn=64
+  for i in $(seq 1 "${4:-1}"); do
+    tmux -L "$sock" send-keys -t "$sess:panel" -l "$(printf '\033[<%s;%s;%sM' "$btn" "$2" "$3")" 2>/dev/null || true
+    sleep 0.15
+  done
+}
+
 # Same rule for the write editor's cleanup sites (the tray title is the marker).
 leave_editor() { # <tray title>
   pty_cleanup_esc "editor $1" "╭─ $1"
@@ -344,12 +371,26 @@ PYFIX
   open_view
   assert_eq "导航行打开视图没有写 panel.conf" "$(sha "$state/panel.conf" 2>/dev/null || echo none)" "$conf_before"
   cap_to view
-  # M49：行的主标识是人话标签（来自字符串表），裸键不作为行的文本出现。
-  assert_match "$tmp/$current/view.txt" '模型并发上限 +.*立即生效' "apply 行显示人话标签 + 立即生效 徽章"
-  assert_match "$tmp/$current/view.txt" '› 冲突默认取分支侧' "聚焦行的主文本是标签，不是裸键"
-  assert_not "$tmp/$current/view.txt" "TEAM_MODEL_LIMITS" "行里不再出现裸键 TEAM_MODEL_LIMITS"
+  # P30/D2：分组 = schema 第 10 列的功能域。视图开屏在只读骨架（identity），标题就是功能域名；
+  # 旧的三条类分组标题（立即生效 / 需要重启 / 只读）不再是标题（徽章词仍在，见类徽章段）。
+  assert_has "$tmp/$current/view.txt" "身份与账本布局" "功能域分组标题（identity，开屏即见）"
+  assert_no_class_heading "$tmp/$current/view.txt"
+  # 行文本是人话标签（不是裸键），开屏聚焦行是 identity 的第一条 schema 键。
+  assert_match "$tmp/$current/view.txt" '› 项目名 +.*只读' "开屏聚焦行是 identity 第一条（标签 + 只读 徽章）"
   assert_not "$tmp/$current/view.txt" "TEAM_GATES" "行里不再出现裸键 TEAM_GATES"
-  assert_has "$tmp/$current/view.txt" "立即生效" "apply 组标题"
+  # 组内保持 schema 顺序（项目名 在 会话名 之前）。
+  local n_first n_second
+  n_first="$(grep -n '项目名' "$tmp/$current/view.txt" | head -1 | cut -d: -f1)"
+  n_second="$(grep -n '会话名' "$tmp/$current/view.txt" | head -1 | cut -d: -f1)"
+  if [ -n "$n_first" ] && [ -n "$n_second" ] && [ "$n_first" -lt "$n_second" ]; then
+    ok "同一组内保持 schema 顺序（项目名 在第 $n_first 行，会话名 在第 $n_second 行）"
+  else
+    bad "组内顺序不对（项目名=$n_first 会话名=$n_second）"
+  fi
+  # 类徽章是词（P30/D4）：过滤到一条 apply 行看它的徽章。
+  filter_to 模型并发上限
+  cap_to badge-apply
+  assert_match "$tmp/$current/badge-apply.txt" '模型并发上限 +.*立即生效' "apply 行：人话标签 + 立即生效 徽章（词仍在）"
   cap_has "↑/↓ 行 · Enter 打开 · / 筛选" keyband
   # One filter per class: the badge, the unset marker and the line's own comment (all unchanged).
   filter_to TEAM_PULSE_INTERVAL
@@ -382,7 +423,8 @@ PYFIX
   assert_not "$tmp/$current/filter.txt" "模型并发上限" "过滤掉不匹配的行"
   filter_clear
   cap_to cleared
-  assert_has "$tmp/$current/cleared.txt" "模型并发上限" "esc 清过滤后全部行回来"
+  assert_has "$tmp/$current/cleared.txt" "项目名" "esc 清过滤后全部行回来（回到未过滤列表的顶部）"
+  assert_has "$tmp/$current/cleared.txt" "身份与账本布局" "清过滤后第一组标题也回来"
   assert_has "$tmp/$current/cleared.txt" "项目设置" "esc 没有关掉视图"
   # The focus window moves with the keys and counts what it hides at the top.
   local i
@@ -391,6 +433,10 @@ PYFIX
   assert_match "$tmp/$current/window.txt" '↑[0-9]+' "窗口顶部显示被隐藏的行数"
   # A click moves the focus to an unfocused row; the second click opens that row's editor. M49：行
   # 按**标签**认，原始键从第一次点击后的 CLI 提示行读（标签用来看，键用来敲）。
+  # P30：视图开屏在只读骨架上，先过滤出**多条** apply 行（「上限」命中模型并发上限 / 席位内存上限 /
+  # 详情文件读取上限…）——点击用例需要一条未聚焦的 apply 行。
+  filter_to 上限
+  cap_to click-set
   local target_line label keyname
   target_line="$(cap | grep -n '· 立即生效' | grep -v '›' | grep -v '命令行：' | head -1 | cut -d: -f1)"
   if [ -n "$target_line" ]; then
@@ -473,7 +519,7 @@ p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 s = s.replace('TEAM_GATES|apply|cmd||plain||-|', 'TEAM_GATES|refuse|cmd||plain||-|改门禁请手改（scratch 夹具）')
 s = s.replace('TEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|',
-              'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|\nTEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|')
+              'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\nTEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|')
 open(p, 'w', encoding='utf-8').write(s)
 PYFIX
   cat > "$tmp/$current-scratch-wrapper.sh" <<EOF2
@@ -497,7 +543,7 @@ EOF2
   # M49：另一种语言的人话标签（同一张表切换，标签不是渲染时的硬编码）。
   conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   start_panel
-  open_view 'Takes effect now'
+  open_view 'Identity & ledger layout'
   filter_to TEAM_PULSE_INTERVAL
   cap_to en
   assert_match "$tmp/$current/en.txt" '› Patrol interval' "en 行的人话标签（行不是裸键）"
@@ -907,7 +953,7 @@ import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 old = "TEAM_MEETING_ALLOW_USER_ID|"
-new = "TEAM_ZZZ_MODE|apply|enum|red,blue|plain|red|scratch 夹具：验证 schema 新增 enum 键零改动出现\nTEAM_MEETING_ALLOW_USER_ID|"
+new = "TEAM_ZZZ_MODE|apply|enum|red,blue|plain|red|scratch 夹具：验证 schema 新增 enum 键零改动出现|||workflow\nTEAM_MEETING_ALLOW_USER_ID|"
 assert old in s, "找不到 schema 尾部锚"
 open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
 PY
@@ -1310,6 +1356,373 @@ scn_readonly() {
   assert_not "$(argv_log)" "config set" "wrapper 里没有 config set（这一轮没有写动作）"
 }
 
+# ---------------------------------------------------------------- P30（settings-view-groups）
+
+# 一行在捕获里的行号（去掉盒边框与空白后**恰好等于** <text>）；找不到打印 0。
+cap_line_exact() { # <file> <exact text>
+  python3 - "$1" "$2" <<'PY'
+import sys
+lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().split('\n')
+target = sys.argv[2]
+for i, line in enumerate(lines):
+    if line.strip('\u2502 ').strip() == target:
+        print(i + 1)
+        break
+else:
+    print(0)
+PY
+}
+
+# 含 <text> 的第一行行号（0 = 找不到）。
+cap_line_of() { # <file> <substring>
+  local n
+  n="$(grep -nF -- "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1)"
+  printf '%s\n' "${n:-0}"
+}
+
+# The same capture with SGR runs (`capture-pane -e`): tmux restores each cell's truecolor
+# sequence, which is what the tone assertion reads (without rebuilding the bundle by hand).
+cap_e_to() { tmux -L "$sock" capture-pane -p -e -t "$sess:panel" > "$tmp/$current/${1:-cap-e}.txt" 2>/dev/null; }
+
+assert_no_match() { # <file> <ere> <message>
+  grep -qE -- "$2" "$1" 2>/dev/null && bad "$3（不该匹配 [$2]）" || ok "$3"
+}
+
+# P30/D4 tone: the badge's colour must be the class's tone **and** the value beside it must stay in
+# the palette's text tone. Colours come from the bundle's own `--palette` (nothing hardcoded; the
+# active theme is identified by which palette's text tone the value's colour is).
+assert_badge_tone() { # <capture-e file> <row label> <badge word> <tone key> <message>
+  local msg="$5" out rc
+  out="$(python3 - "$1" "$2" "$3" "$4" "$tmp/$current/palette.json" <<'PY'
+import json, re, sys
+cap_file, label, badge, tone_key, palette_file = sys.argv[1:6]
+SGR = re.compile(r'\x1b\[[0-9;]*m')
+
+def runs(line):
+    out, last, pos = [], '', 0
+    for m in SGR.finditer(line):
+        if line[pos:m.start()]:
+            out.append((last, line[pos:m.start()]))
+        last = m.group(0)
+        pos = m.end()
+    if line[pos:]:
+        out.append((last, line[pos:]))
+    return out
+
+def color(sgr):
+    m = re.search(r'38;2;(\d+);(\d+);(\d+)', sgr)
+    return '#%02x%02x%02x' % tuple(int(x) for x in m.groups()) if m else 'default'
+
+line = next((l for l in open(cap_file, encoding='utf-8', errors='replace') if label in l and badge in l), '')
+if not line:
+    print('找不到同时含 %r 与 %r 的行' % (label, badge)); sys.exit(1)
+rs = runs(line)
+li = next((i for i, (_, t) in enumerate(rs) if label in t), None)
+bi = next((i for i, (_, t) in enumerate(rs) if badge in t), None)
+if li is None or bi is None or bi <= li:
+    print('run 结构不对（label=%s badge=%s）' % (li, bi)); sys.exit(1)
+vi = next((i for i in range(li + 1, bi) if rs[i][1].strip()), bi)
+value_color, badge_color = color(rs[vi][0]), color(rs[bi][0])
+palettes = json.load(open(palette_file, encoding='utf-8'))['palettes']
+active = next((p for p in palettes.values() if p['tones']['text'].lower() == value_color), None)
+if active is None:
+    print('值的颜色 %s 不在任何调色板的 text tone 里' % value_color); sys.exit(1)
+want = active['tones'][tone_key].lower()
+if badge_color != want:
+    print('badge 颜色 %s ≠ %s tone %s（调色板 %s）' % (badge_color, tone_key, want, active['name'])); sys.exit(1)
+print('%s badge=%s value=%s（text）palette=%s' % (badge, badge_color, value_color, active['name']))
+PY
+)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then ok "$msg（$out）"; else bad "$msg：$out"; fi
+}
+
+# 把焦点走到列表末尾（窗口跟着焦点走），让尾部的「未分组」与席位块同一屏 —— 这两样都在
+# 「分组之后」，是场景要看的相对顺序。
+walk_to_tail() { # <capture name>
+  local i attempt name="${1:-tail}" hit=0
+  for attempt in $(seq 1 6); do
+    for i in $(seq 1 140); do keys Down; sleep 0.01; done
+    for i in $(seq 1 12); do
+      cap_to "$name"
+      if grep -q '席位' "$tmp/$current/$name.txt" && grep -q '›' "$tmp/$current/$name.txt"; then hit=1; break; fi
+      sleep 0.4   # 块被 TTL 重读换成摘要行（已知现象）→ 等它回来，必要时再走一轮
+    done
+    [ "$hit" = 1 ] && break
+  done
+  return 0
+}
+
+scn_groups() {
+  section "groups · 记录带 group、视图按功能域分组（P30/D1-D3）：功能域标题/读取顺序/schema 序/未分组降级/无键→域表/徽章词+tone"
+  server_up groups
+  # 契约里手加一个 schema 不认识的键：它必须落在可见的「未分组」组里（和缺 token 的 schema 行同一条降级路径）。
+  printf 'TEAM_HAND_ADDED="hand"\n' >> "$(cfg)"
+  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
+  start_panel
+  local bundle_sha; bundle_sha="$(sha "$panel")"
+  "$js" "$panel" --palette > "$tmp/$current/palette.json" 2>/dev/null
+  open_view
+  cap_to view
+  # ① 标题 = 功能域、按读取顺序；类词只活在行徽章里（没有「只有类词」的行）。
+  assert_has "$tmp/$current/view.txt" "身份与账本布局" "第一组标题是 identity 的功能域名"
+  # 读取顺序：identity 的 12 条走完，下一组标题就是 branch（窗口跟着焦点，标题只在它的行进窗时画）。
+  # 带注释的行是两行，窗口按**画出的行数**装（P30/D5 的账），所以这里一步一步走，不假设一屏能装两组。
+  local k
+  for k in $(seq 1 12); do keys Down; sleep 0.05; done
+  sleep 0.4
+  cap_to group-order
+  assert_has "$tmp/$current/group-order.txt" "分支与 forge" "第 13 行进窗时出现下一组标题（读取顺序 identity → branch）"
+  for k in $(seq 1 12); do keys Up; sleep 0.05; done
+  sleep 0.4
+  assert_no_class_heading "$tmp/$current/view.txt"
+  # ② 组内保持 schema 顺序（identity：项目名 → 会话名 → PM 窗口）。
+  local n_proj n_sess n_pm
+  n_proj="$(cap_line_of "$tmp/$current/view.txt" '项目名')"
+  n_sess="$(cap_line_of "$tmp/$current/view.txt" '会话名')"
+  n_pm="$(cap_line_of "$tmp/$current/view.txt" 'PM 窗口')"
+  if [ "$n_proj" -gt 0 ] && [ "$n_proj" -lt "$n_sess" ] && [ "$n_sess" -lt "$n_pm" ]; then
+    ok "组内是 schema 顺序（项目名=$n_proj < 会话名=$n_sess < PM 窗口=$n_pm）"
+  else
+    bad "组内顺序不对（项目名=$n_proj 会话名=$n_sess PM 窗口=$n_pm）"
+  fi
+  # ③ 类徽章是词 + tone（D4）：三类各过滤一行；词在，tone = 调色板里该类的 tone，值必须是 text tone。
+  filter_to TEAM_MODEL_LIMITS
+  sleep 0.4
+  cap_to tone-apply; cap_e_to tone-apply-e
+  assert_match "$tmp/$current/tone-apply.txt" '模型并发上限 +.*立即生效' "apply 行的徽章词仍在（颜色不是唯一通道）"
+  assert_badge_tone "$tmp/$current/tone-apply-e.txt" '模型并发上限' '立即生效' 'text' "apply 徽章 = 普通文本 tone"
+  filter_to TEAM_PULSE_INTERVAL
+  sleep 0.4
+  cap_to tone-restart; cap_e_to tone-restart-e
+  assert_match "$tmp/$current/tone-restart.txt" '巡检周期 +.*需重启' "restart 行的徽章词仍在"
+  assert_badge_tone "$tmp/$current/tone-restart-e.txt" '巡检周期' '需重启' 'warn' "restart 徽章 = warn tone"
+  filter_to TEAM_PROJECT
+  sleep 0.4
+  cap_to tone-refuse; cap_e_to tone-refuse-e
+  assert_match "$tmp/$current/tone-refuse.txt" '项目名 +root · 只读' "refuse 行的徽章词仍在"
+  assert_badge_tone "$tmp/$current/tone-refuse-e.txt" '项目名' '只读' 'dim' "refuse 徽章 = dim tone"
+  # ④ 可见降级：schema 不认识的键落在「未分组」，且「未分组」在席位块之前（走到列表末尾看）。
+  filter_to TEAM_HAND_ADDED
+  sleep 0.4
+  cap_to hand-added
+  assert_match "$tmp/$current/hand-added.txt" 'TEAM_HAND_ADDED +hand · 未知键' "未知键的行仍在（没有消失）"
+  assert_has "$tmp/$current/hand-added.txt" "未知键：TEAM_HAND_ADDED" "未知键仍按原始键点名"
+  [ "$(cap_line_exact "$tmp/$current/hand-added.txt" '未分组')" -gt 0 ] \
+    && ok "未知键落在可见的「未分组」标题下" || bad "未知键没有落在「未分组」标题下"
+  filter_clear
+  sleep 0.4
+  walk_to_tail tail
+  local n_ungrouped n_seats
+  n_ungrouped="$(cap_line_exact "$tmp/$current/tail.txt" '未分组')"
+  n_seats="$(cap_line_exact "$tmp/$current/tail.txt" '席位')"
+  if [ "$n_ungrouped" -gt 0 ] && [ "$n_seats" -gt 0 ] && [ "$n_ungrouped" -lt "$n_seats" ]; then
+    ok "「未分组」在席位块之前（未分组=$n_ungrouped < 席位=$n_seats）"
+  else
+    bad "尾部顺序不对（未分组=$n_ungrouped 席位=$n_seats）"
+  fi
+  # ⑤ 无键→域表：scratch CLI 让 TEAM_ZZZ_TEST 带 workflow、把 TEAM_GATES 移到 meeting；
+  #    提交的那份 bundle 必须跟着两个标题走（bundle 里没有第二张键表/组表）。
+  local scratch="$tmp/$current/scratch"
+  mkdir -p "$scratch/skills/teamsmith"
+  cp -a "$skill/scripts" "$scratch/skills/teamsmith/scripts"
+  cp -a "$skill/templates" "$skill/references" "$scratch/skills/teamsmith/"
+  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+gates = 'TEAM_GATES|apply|cmd||plain||-|||workflow'
+assert gates in s, '找不到 TEAM_GATES 的 10 列 schema 行'
+s = s.replace(gates, gates.replace('|workflow', '|meeting'), 1)
+anchor = 'TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'
+assert anchor in s, '找不到 TEAM_INSTALL_CMD 的 schema 行'
+s = s.replace(anchor, 'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\n' + anchor, 1)
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  cat > "$tmp/$current-scratch-wrapper.sh" <<EOF2
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$tmp/$current-scratch-argv.log"
+exec bash "$scratch/skills/teamsmith/scripts/team" "\$@"
+EOF2
+  chmod +x "$tmp/$current-scratch-wrapper.sh"
+  # `VAR=x func` 的赋值只活到函数返回 —— 本段要起两次面板（同 scn_choices_schema 的教训）。
+  P21_CLI="$tmp/$current-scratch-wrapper.sh"
+  start_panel
+  open_view
+  filter_to TEAM_ZZZ_TEST
+  sleep 0.5
+  cap_to zzz-group
+  assert_has "$tmp/$current/zzz-group.txt" "工作流与门禁" "schema 新增键落在它声明的 workflow 域下（bundle 未重建）"
+  assert_match "$tmp/$current/zzz-group.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "新键的行完整（值/默认来自 schema）"
+  filter_to TEAM_GATES
+  sleep 0.5
+  cap_to gates-moved
+  assert_has "$tmp/$current/gates-moved.txt" "跨项目会议" "TEAM_GATES 的 token 改成 meeting 后跟到新标题下（bundle 里没有键→域表）"
+  assert_match "$tmp/$current/gates-moved.txt" '门禁命令 +true · 立即生效' "同一行仍按 schema 渲染（标签/值/徽章）"
+  assert_eq "三次运行之间 bundle 逐字节不变" "$(sha "$panel")" "$bundle_sha"
+  # ⑥ 第 10 列缺失 = 畸形行：走查那边判红（config-cli.sh 的 groups 段），视图这边可见降级到「未分组」，
+  #    行本身（标签/值/徽章/命令行）一个字不少。
+  python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+row = 'TEAM_GATES|apply|cmd||plain||-|||meeting'
+assert row in s, '找不到移动后的 TEAM_GATES 行'
+s = s.replace(row, 'TEAM_GATES|apply|cmd||plain||-|', 1)
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  start_panel
+  open_view
+  filter_to TEAM_GATES
+  sleep 0.5
+  cap_to gates-fallback
+  unset P21_CLI
+  assert_has "$tmp/$current/gates-fallback.txt" "未分组" "第 10 列缺失的 schema 行落在可见的降级组里（不消失）"
+  assert_match "$tmp/$current/gates-fallback.txt" '门禁命令 +true · 立即生效' "降级组里的行仍完整（标签/值/徽章）"
+  assert_has "$tmp/$current/gates-fallback.txt" "命令行：team config set TEAM_GATES <新值>" "降级组里的行仍给出命令行"
+  # 同一个 scratch 树里，「未分组」现在同时装着手加的未知键与畸形行：走到末尾，两者同屏且在席位之前。
+  filter_clear
+  sleep 0.4
+  walk_to_tail tail-scratch
+  assert_has "$tmp/$current/tail-scratch.txt" "TEAM_HAND_ADDED" "降级组里未知键与畸形行同屏（未知键可见）"
+  assert_has "$tmp/$current/tail-scratch.txt" "门禁命令" "降级组里畸形行同屏（schema 行可见）"
+  local n_u n_s
+  n_u="$(cap_line_exact "$tmp/$current/tail-scratch.txt" '未分组')"
+  n_s="$(cap_line_exact "$tmp/$current/tail-scratch.txt" '席位')"
+  if [ "$n_u" -gt 0 ] && [ "$n_s" -gt 0 ] && [ "$n_u" -lt "$n_s" ]; then
+    ok "scratch 尾部：「未分组」仍在席位块之前（$n_u < $n_s）"
+  else
+    bad "scratch 尾部顺序不对（未分组=$n_u 席位=$n_s）"
+  fi
+}
+
+scn_wheel_settings() {
+  section "wheel · 设置视图自己的窗口（P30/D5）：一格一行/焦点不动/计数行跟随/不穿透页面/焦点推窗/两个 picker"
+  server_up settings-wheel
+  # 页面（page 3 的巡检块）要真的滚得动，「页面没被穿透」才有可观察的对照：写满 12 行巡检日志。
+  mkdir -p "$state"
+  python3 - "$state/watchdog.log" <<'PY'
+import sys
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
+    for i in range(1, 13):
+        f.write('P-%02d patrol tick marker\n' % i)
+PY
+  conf_set "lang=zh" "page=3" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
+  start_panel
+  # ① 页面自己的滚轮还活着（对照 + 不回归钉）：先滚 3 格，P-01 出屏、P-04 进屏。
+  wheel_at down 100 8 3
+  sleep 0.7
+  cap_to page-scrolled
+  assert_not "$tmp/$current/page-scrolled.txt" "P-01" "页面滚轮 3 格：P-01 已出屏（页面确实滚得动）"
+  assert_has "$tmp/$current/page-scrolled.txt" "P-04" "页面滚轮 3 格：P-04 进屏"
+  # ② 视图里的滚轮：一格一行、焦点不动、顶部计数行跟随（先下滚 3 格，再上滚回顶部）。
+  open_view
+  cap_to wheel-before
+  assert_match "$tmp/$current/wheel-before.txt" '› 项目名 +.*只读' "视图开屏焦点在第一行（identity 第一条）"
+  wheel_at down 20 10 3
+  local i
+  for i in $(seq 1 20); do
+    cap_to wheel-down
+    grep -qE '↑3' "$tmp/$current/wheel-down.txt" && break
+    sleep 0.25
+  done
+  assert_match "$tmp/$current/wheel-down.txt" '↑3' "下滚 3 格：顶部计数行读出 ↑3（窗口正好移 3 行）"
+  assert_not "$tmp/$current/wheel-down.txt" "项目名" "下滚 3 格：原本第一行（项目名）已出窗"
+  assert_has "$tmp/$current/wheel-down.txt" "名册" "下滚 3 格：后面的行进窗（窗口第一行 = 第 4 条）"
+  assert_has "$tmp/$current/wheel-down.txt" "只读：手改 .pi/team/config.sh 里的 TEAM_PROJECT" "下滚 3 格：焦点没动（命令行仍点名 TEAM_PROJECT）"
+  wheel_at up 20 10 3
+  for i in $(seq 1 20); do
+    cap_to wheel-up
+    grep -qE '↑[0-9]+' "$tmp/$current/wheel-up.txt" || break
+    sleep 0.25
+  done
+  assert_match "$tmp/$current/wheel-up.txt" '› 项目名' "上滚 3 格：窗口回到顶部，第一行回来"
+  assert_no_match "$tmp/$current/wheel-up.txt" '↑[0-9]+' "上滚 3 格：顶部计数行消失"
+  # ③ 焦点键把窗口推到聚焦行（滚开之后 enter 打开的就是命令行点名的那一行）。
+  wheel_at down 20 10 3
+  for i in $(seq 1 20); do
+    cap_to wheel-push-pre
+    grep -qE '↑3' "$tmp/$current/wheel-push-pre.txt" && break
+    sleep 0.25
+  done
+  keys Down
+  sleep 0.5
+  cap_to wheel-push
+  assert_match "$tmp/$current/wheel-push.txt" '↑1' "↓ 之后窗口被推到聚焦行上（顶部计数行 = ↑1）"
+  assert_match "$tmp/$current/wheel-push.txt" '› 会话名' "光标落在下一条（会话名）"
+  assert_has "$tmp/$current/wheel-push.txt" "只读：手改 .pi/team/config.sh 里的 TEAM_SESSION" "命令行与光标同一行（焦点在会话名上）"
+  keys Up
+  sleep 0.5
+  cap_to wheel-push-back
+  assert_match "$tmp/$current/wheel-push-back.txt" '› 项目名' "↑ 之后光标回到第一条"
+  assert_no_match "$tmp/$current/wheel-push-back.txt" '↑[0-9]+' "窗口跟着回到顶部（计数行消失）"
+  keys Enter
+  if wait_cap wheel-enter "只读：手改 .pi/team/config.sh 里的 TEAM_PROJECT"; then
+    ok "enter 打开的行 = 命令行点名的行（TEAM_PROJECT 的只读路线）"
+  else
+    bad "enter 之后没有出现聚焦行的路线回执"
+  fi
+  # ④ 选择器开着时滚轮走条目、页面不动；esc 之后选择器是关着的（一次 esc 就够）。
+  filter_to TEAM_PULSE_INTERVAL
+  sleep 0.5
+  keys Enter
+  wait_picker TEAM_PULSE_INTERVAL '300' || bad "选择器没有打开（滚轮用例前提）"
+  cap_to picker-wheel-before
+  local sel_before sel_after
+  sel_before="$(cap_line_of "$tmp/$current/picker-wheel-before.txt" '›')"
+  wheel_at down 20 12 2
+  sleep 0.6
+  cap_to picker-wheel-after
+  sel_after="$(cap_line_of "$tmp/$current/picker-wheel-after.txt" '›')"
+  if [ "$sel_before" -gt 0 ] && [ "$sel_after" -gt "$sel_before" ]; then
+    ok "选择器开着时滚轮走条目（选中行 $sel_before → $sel_after）"
+  else
+    bad "选择器里的滚轮没有走条目（选中行 $sel_before → $sel_after）"
+  fi
+  pty_key_when "选选择器的 esc" ' · TEAM_PULSE_INTERVAL' Escape || bad "选择器不在稳定帧上，esc 没有发"
+  sleep 0.8
+  cap_to picker-closed
+  assert_not "$tmp/$current/picker-closed.txt" " · TEAM_PULSE_INTERVAL" "一次 esc 就把选择器关掉（不穿透）"
+  assert_has "$tmp/$current/picker-closed.txt" "╭─ 项目设置" "关闭后仍在设置视图里"
+  # ⑤ 席位 picker 的滚轮同样走条目（这一支原来会穿透到页面）。
+  filter_to dev
+  sleep 0.5
+  if focus_row 'dev +deepseek'; then
+    keys Enter
+  else
+    bad "没能把焦点移到 dev 席位行"
+  fi
+  # 席位 picker 的标题是「选择 <seat> 的模型」（没有 ` · KEY` 后缀），所以用 pty_wait_frame 等它。
+  if pty_wait_frame "$tmp/$current/seat-picker.txt" "seat picker dev" "选择 dev 的模型" "回退默认"; then
+    ok "席位 picker 打开（标题 + 已知模型）"
+  else
+    bad "席位 picker 没有打开"
+  fi
+  cap_to seat-wheel-before
+  sel_before="$(cap_line_of "$tmp/$current/seat-wheel-before.txt" '›')"
+  wheel_at down 20 12 2
+  sleep 0.6
+  cap_to seat-wheel-after
+  sel_after="$(cap_line_of "$tmp/$current/seat-wheel-after.txt" '›')"
+  if [ "$sel_before" -gt 0 ] && [ "$sel_after" -gt "$sel_before" ]; then
+    ok "席位 picker 里的滚轮走条目（$sel_before → $sel_after）"
+  else
+    bad "席位 picker 里的滚轮没有走条目（$sel_before → $sel_after）"
+  fi
+  pty_key_when "席位 picker 的 esc" '选择 dev 的模型' Escape || bad "席位 picker 不在稳定帧上，esc 没有发"
+  sleep 0.8
+  cap_to seat-closed
+  assert_not "$tmp/$current/seat-closed.txt" "选择 dev 的模型" "一次 esc 关掉席位 picker"
+  # ⑥ 回到页面：视图把滚轮吃掉了 —— 页面还是进视图前的那一屏（P-01 出屏、P-04 可见）。
+  pty_key_when "关设置视图" '╭─ 项目设置' Escape || bad "关闭视图前它不在稳定帧上"
+  sleep 1
+  pty_key_when "关浮层" '项目设置' Escape || bad "浮层不在稳定帧上"
+  sleep 1
+  cap_to page-back
+  assert_not "$tmp/$current/page-back.txt" "P-01" "视图里的滚轮没有穿透页面（P-01 仍在屏外）"
+  assert_has "$tmp/$current/page-back.txt" "P-04" "页面窗口还是进视图前的那一屏（P-04 仍可见）"
+}
+
 # ---------------------------------------------------------------- run
 
 printf '\033[1m== panel-p21 · 项目设置视图（P22） ==\033[0m\n'
@@ -1317,6 +1730,8 @@ for s in "${SECTIONS[@]}"; do
   mkdir -p "$tmp/$s"
   case "$s" in
     settings) scn_settings ;;
+    groups) scn_groups ;;
+    wheel) scn_wheel_settings ;;
     choices) scn_choices ;;
     choices-schema) scn_choices_schema ;;
     write) scn_write ;;

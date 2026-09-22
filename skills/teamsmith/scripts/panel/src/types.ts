@@ -259,6 +259,13 @@ export interface SettingsKey {
    * command's schema appears without rebuilding the bundle. Absent against an older command.
    */
   choices?: SettingsChoices
+  /**
+   * The key's functional domain (P30): the schema row's tenth column, verbatim from `team config
+   * list --json` ('' for a key the schema does not know, and for a schema row that declares none).
+   * The view's headings are looked up by this token (`group_<token>`); the bundle keeps no
+   * key→group table. Absent against an older command.
+   */
+  group?: string
   /** False for a key in the file the schema does not know (read-only row). */
   known?: boolean
 }
@@ -566,6 +573,11 @@ export interface ViewState {
   settingsFocus?: number
   /** The filter text (`''` = no filter). */
   settingsFilter?: string
+  /**
+   * The view's own row-window offset (P30/D5): `undefined`/`null` = unset (the window follows the
+   * focus); a number pins the window's first visible focusable row (the wheel's own offset).
+   */
+  settingsOffset?: number | null
   /** The open setting editor's draft: the row it edits, the text and the insertion point. */
   settingsDraft?: { row: number; text: string; cursor: number } | null
   /** The pending write confirmation (the first Enter of a two-step write). */

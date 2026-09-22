@@ -19,7 +19,12 @@
 # 没有契约 = 项目还没 init → 报错点名 `team init`，绝不悄悄造一个。
 
 # ---------------------------------------------------------------- schema（唯一真相）
-# 行格式：KEY|class|kind|spec|form|default|danger|route|suggest
+# 行格式：KEY|class|kind|spec|form|default|danger|route|suggest|group
+#   group：**第 10 列**，功能域 token（封闭词表，^[a-z][a-z0-9-]*$，每行必填）。它是 schema 数据，
+#         不是从 `# ----` 分节注释解析出来的（注释是散文，不是语法）：`team config list --json`
+#         把 token 逐字放进记录，视图分组的标签从 zh/en 表的 group_<token> 查。词表封闭由
+#         「schema 行用的 token ⇄ 标签」双向相等这条门禁保证（tests/panel-strings.mjs）。
+#         无 token 的行是畸形行：config-cli.sh 的 groups 走查点名该键判红（视图侧同时可见降级到「未分组」）。
 #   kind：bool / int / seconds / mb / pct / enum / text / list / path / cmd / tpl / model /
 #         pairlist / pattern / winlist / bytes
 #   spec：int/seconds/mb/pct/bytes 是「min,max」（空 = 无边）；enum 是逗号分隔的值域；
@@ -32,128 +37,128 @@
 team_config_schema() {
   cat <<'EOF'
 # ---- 身份与账本布局（refuse：控制台不得改身份、不得搬走它正在读的账本）----
-TEAM_PROJECT|refuse|text||plain||-|身份：手改 .pi/team/config.sh（或重新 team init）
-TEAM_SESSION|refuse|text||plain||-|身份：手改 .pi/team/config.sh（或重新 team init）
-TEAM_PM_WINDOW|refuse|text||plain|pm|-|身份：手改 .pi/team/config.sh（或重新 team init）
-TEAM_AGENTS|refuse|list||plain||-|名册：team add-agent / team teardown
-TEAM_DOCS_DIR|refuse|path|dir,opt|plain|docs/team|-|账本布局：手改 .pi/team/config.sh
-TEAM_WORKTREES_DIR|refuse|text||plain|.worktrees|-|账本布局：手改 .pi/team/config.sh
-TEAM_STATE_DIR|refuse|path|dir,opt|plain|.pi/team/state|-|账本布局：手改 .pi/team/config.sh
-TEAM_MEETINGS_DIR|refuse|path|dir,opt|plain|~/.pi/team/meetings|-|账本布局：手改 .pi/team/config.sh
-TEAM_SPEC_DIR|refuse|path|dir,opt|plain|openspec|-|账本布局：手改 .pi/team/config.sh
-TEAM_ROOT|refuse|path|dir,opt|plain||-|环境定位：用 --root 或手改 .pi/team/config.sh
-TEAM_MAIN_ROOT|refuse|path|dir,opt|plain||-|环境定位：用 --root 或手改 .pi/team/config.sh
-TEAM_CONFIG_FILE|refuse|path|file,opt|plain||-|环境定位：用 --config 或手改 .pi/team/config.sh
+TEAM_PROJECT|refuse|text||plain||-|身份：手改 .pi/team/config.sh（或重新 team init）||identity
+TEAM_SESSION|refuse|text||plain||-|身份：手改 .pi/team/config.sh（或重新 team init）||identity
+TEAM_PM_WINDOW|refuse|text||plain|pm|-|身份：手改 .pi/team/config.sh（或重新 team init）||identity
+TEAM_AGENTS|refuse|list||plain||-|名册：team add-agent / team teardown||identity
+TEAM_DOCS_DIR|refuse|path|dir,opt|plain|docs/team|-|账本布局：手改 .pi/team/config.sh||identity
+TEAM_WORKTREES_DIR|refuse|text||plain|.worktrees|-|账本布局：手改 .pi/team/config.sh||identity
+TEAM_STATE_DIR|refuse|path|dir,opt|plain|.pi/team/state|-|账本布局：手改 .pi/team/config.sh||identity
+TEAM_MEETINGS_DIR|refuse|path|dir,opt|plain|~/.pi/team/meetings|-|账本布局：手改 .pi/team/config.sh||identity
+TEAM_SPEC_DIR|refuse|path|dir,opt|plain|openspec|-|账本布局：手改 .pi/team/config.sh||identity
+TEAM_ROOT|refuse|path|dir,opt|plain||-|环境定位：用 --root 或手改 .pi/team/config.sh||identity
+TEAM_MAIN_ROOT|refuse|path|dir,opt|plain||-|环境定位：用 --root 或手改 .pi/team/config.sh||identity
+TEAM_CONFIG_FILE|refuse|path|file,opt|plain||-|环境定位：用 --config 或手改 .pi/team/config.sh||identity
 # ---- 分支与 forge（refuse：它们定义「已落地」与凭据位置）----
-TEAM_BRANCH_MODE|refuse|enum|task,agent|plain|task|-|分支语义（定义「已落地」）：手改 .pi/team/config.sh
-TEAM_TASK_BRANCH_PREFIX|refuse|text||plain|task|-|分支语义：手改 .pi/team/config.sh
-TEAM_AGENT_BRANCH_PREFIX|refuse|text||plain|agent|-|分支语义：手改 .pi/team/config.sh
-TEAM_PROTECTED_BRANCH|refuse|text||plain|main|-|分支语义：手改 .pi/team/config.sh
-TEAM_REMOTE|refuse|text||plain|origin|-|分支语义：手改 .pi/team/config.sh
-TEAM_VCS|refuse|enum|local,github,gitlab,other|plain|local|-|分支语义/forge：手改 .pi/team/config.sh
-TEAM_TOKEN_FILE|refuse|path|file,opt|plain|.gh-pat|-|凭据位置：手改 .pi/team/config.sh
-TEAM_GITLAB_HOST|refuse|text||plain||-|凭据位置：手改 .pi/team/config.sh
-TEAM_GITLAB_PROJECT|refuse|text||plain||-|凭据位置：手改 .pi/team/config.sh
-TEAM_GITLAB_TOKEN_FILE|refuse|path|file,opt|plain||-|凭据位置：手改 .pi/team/config.sh
-TEAM_MERGE_PREFER_THEIRS|apply|text||plain||-|
+TEAM_BRANCH_MODE|refuse|enum|task,agent|plain|task|-|分支语义（定义「已落地」）：手改 .pi/team/config.sh||branch
+TEAM_TASK_BRANCH_PREFIX|refuse|text||plain|task|-|分支语义：手改 .pi/team/config.sh||branch
+TEAM_AGENT_BRANCH_PREFIX|refuse|text||plain|agent|-|分支语义：手改 .pi/team/config.sh||branch
+TEAM_PROTECTED_BRANCH|refuse|text||plain|main|-|分支语义：手改 .pi/team/config.sh||branch
+TEAM_REMOTE|refuse|text||plain|origin|-|分支语义：手改 .pi/team/config.sh||branch
+TEAM_VCS|refuse|enum|local,github,gitlab,other|plain|local|-|分支语义/forge：手改 .pi/team/config.sh||branch
+TEAM_TOKEN_FILE|refuse|path|file,opt|plain|.gh-pat|-|凭据位置：手改 .pi/team/config.sh||branch
+TEAM_GITLAB_HOST|refuse|text||plain||-|凭据位置：手改 .pi/team/config.sh||branch
+TEAM_GITLAB_PROJECT|refuse|text||plain||-|凭据位置：手改 .pi/team/config.sh||branch
+TEAM_GITLAB_TOKEN_FILE|refuse|path|file,opt|plain||-|凭据位置：手改 .pi/team/config.sh||branch
+TEAM_MERGE_PREFER_THEIRS|apply|text||plain||-|||branch
 # ---- 权限与依赖策略（refuse：控制台不得给自己扩权）----
-TEAM_CONFIRM_WRITES|refuse|bool||plain|1|-|权限守卫：控制台不给自己扩权；手改 .pi/team/config.sh
-TEAM_ALLOW_FOREIGN_IDENTITY|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
-TEAM_ALLOW_FOREIGN_SESSION|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
-TEAM_GUARD_FOREIGN_TARGET|refuse|bool||plain|1|-|权限守卫：手改 .pi/team/config.sh
-TEAM_REPLACE_FOREIGN_PM|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
-TEAM_ALLOW_DESTRUCTIVE_TMUX|refuse|bool||plain|0|-|权限守卫（M67 退役）：不再授权任何操作（判定按目标）；保留为不接受写入的只读墓碑，手改 .pi/team/config.sh
-TEAM_ASSUME_YES|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh
-TEAM_REQUIRE_JS|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh
-TEAM_REQUIRE_OPENSPEC|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh
-TEAM_REQUIRE_MAGIC_CONTEXT|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh
-TEAM_PI_AGENT_DIR|refuse|path|dir,opt|plain||-|机器路径：手改 .pi/team/config.sh
-TEAM_PI_SETTINGS_FILE|refuse|path|file,opt|plain|$HOME/.pi/agent/settings.json|-|机器路径：手改 .pi/team/config.sh
-TEAM_MEMINFO_FILE|refuse|path|file,opt|plain||-|机器路径：手改 .pi/team/config.sh
-TEAM_SMOKE_FAST|refuse|bool||plain|0|-|测试旋钮：环境变量或手改 .pi/team/config.sh
-TEAM_INBOX_WATCH_FORCE_FAIL|refuse|text||plain||-|测试旋钮（M53）：强制 watcher 注册失败路径，记录标 forced=1；只在夹具里用
-TEAM_IW_REQUIRE_WATCH|refuse|bool||plain|0|-|测试旋钮（M53）：inbox-watch 门禁严格模式——不可用的前提判红而不是可见 SKIP
+TEAM_CONFIRM_WRITES|refuse|bool||plain|1|-|权限守卫：控制台不给自己扩权；手改 .pi/team/config.sh||policy
+TEAM_ALLOW_FOREIGN_IDENTITY|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
+TEAM_ALLOW_FOREIGN_SESSION|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
+TEAM_GUARD_FOREIGN_TARGET|refuse|bool||plain|1|-|权限守卫：手改 .pi/team/config.sh||policy
+TEAM_REPLACE_FOREIGN_PM|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
+TEAM_ALLOW_DESTRUCTIVE_TMUX|refuse|bool||plain|0|-|权限守卫（M67 退役）：不再授权任何操作（判定按目标）；保留为不接受写入的只读墓碑，手改 .pi/team/config.sh||policy
+TEAM_ASSUME_YES|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
+TEAM_REQUIRE_JS|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh||policy
+TEAM_REQUIRE_OPENSPEC|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh||policy
+TEAM_REQUIRE_MAGIC_CONTEXT|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh||policy
+TEAM_PI_AGENT_DIR|refuse|path|dir,opt|plain||-|机器路径：手改 .pi/team/config.sh||policy
+TEAM_PI_SETTINGS_FILE|refuse|path|file,opt|plain|$HOME/.pi/agent/settings.json|-|机器路径：手改 .pi/team/config.sh||policy
+TEAM_MEMINFO_FILE|refuse|path|file,opt|plain||-|机器路径：手改 .pi/team/config.sh||policy
+TEAM_SMOKE_FAST|refuse|bool||plain|0|-|测试旋钮：环境变量或手改 .pi/team/config.sh||policy
+TEAM_INBOX_WATCH_FORCE_FAIL|refuse|text||plain||-|测试旋钮（M53）：强制 watcher 注册失败路径，记录标 forced=1；只在夹具里用||policy
+TEAM_IW_REQUIRE_WATCH|refuse|bool||plain|0|-|测试旋钮（M53）：inbox-watch 门禁严格模式——不可用的前提判红而不是可见 SKIP||policy
 # ---- 名册、模型解析与适配器（apply：下一个读契约的进程就生效）----
-TEAM_MODEL_LIMITS|apply|pattern||plain|kimi-coding/k3=2 openai-codex/*=1|-|
-TEAM_MODEL_WINDOWS|apply|winlist||plain||-|
-TEAM_SESSION_WARN_TOKENS|apply|int|0,|plain|200000|-||100000,200000,400000
-TEAM_EXTRA_PI_ARGS|apply|cmd||plain||-|
-TEAM_AGENT_CMD|apply|tpl|launch|plain||-|
-TEAM_AGENT_NOTIFY_CMD|apply|tpl|notify|plain||-|
-TEAM_AGENT_LOG_GLOB|apply|text||plain||-|
-TEAM_PI_BIN|apply|path|exec|plain|pi|-|
-TEAM_AGENT_BIN|apply|path|exec,opt|plain||-|
-TEAM_OPENSPEC_BIN|apply|path|exec|plain|openspec|-|
-TEAM_JS_BIN|apply|path|exec,opt|plain||-|
+TEAM_MODEL_LIMITS|apply|pattern||plain|kimi-coding/k3=2 openai-codex/*=1|-|||roster
+TEAM_MODEL_WINDOWS|apply|winlist||plain||-|||roster
+TEAM_SESSION_WARN_TOKENS|apply|int|0,|plain|200000|-||100000,200000,400000|roster
+TEAM_EXTRA_PI_ARGS|apply|cmd||plain||-|||roster
+TEAM_AGENT_CMD|apply|tpl|launch|plain||-|||roster
+TEAM_AGENT_NOTIFY_CMD|apply|tpl|notify|plain||-|||roster
+TEAM_AGENT_LOG_GLOB|apply|text||plain||-|||roster
+TEAM_PI_BIN|apply|path|exec|plain|pi|-|||roster
+TEAM_AGENT_BIN|apply|path|exec,opt|plain||-|||roster
+TEAM_OPENSPEC_BIN|apply|path|exec|plain|openspec|-|||roster
+TEAM_JS_BIN|apply|path|exec,opt|plain||-|||roster
 # ---- 按席位模型（restart：运行中的席位保住旧模型，下一次 dispatch/resume 才换）----
-TEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|模型：下一个 spawn 生效（dispatch/resume/team up）
-TEAM_AGENT_MODELS|restart|pairlist||plain||-|按席位模型：team config set-agent-model <seat> <model>
-TEAM_PM_MODEL|restart|model|opt|plain||-|PM 席位模型：team up 重建 PM 后生效
+TEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|模型：下一个 spawn 生效（dispatch/resume/team up）||seat-model
+TEAM_AGENT_MODELS|restart|pairlist||plain||-|按席位模型：team config set-agent-model <seat> <model>||seat-model
+TEAM_PM_MODEL|restart|model|opt|plain||-|PM 席位模型：team up 重建 PM 后生效||seat-model
 # ---- 工作流与门禁（apply）----
-TEAM_GATES|apply|cmd||plain||-|
-TEAM_INSTALL_CMD|apply|cmd||plain||-|
-TEAM_TASK_BRANCH_RESET|apply|bool||plain|1|-|
-TEAM_DISPATCH_VERIFY_SEC|apply|seconds|0,|plain|8|-|
-TEAM_DISPATCH_ALIVE_SEC|apply|seconds|0,|plain|1|-|
-TEAM_SQUASH_LOOKBACK|apply|int|0,|plain|200|0 = 「已 squash 合并」的回看数为零|
-TEAM_REVIEW_TIMEOUT|apply|seconds|0,|plain|1800|低于 60 秒 = 门禁会被超时掐死||600,1800,3600
-TEAM_REVIEW_TIMEOUT_GRACE|apply|seconds|0,|plain|2|-|
-TEAM_REVIEW_ALLOW_DIRTY|apply|bool||plain|0|1 = 复验放行脏工作树|
-TEAM_REVIEW_ALLOW_IGNORED|apply|bool||plain|0|1 = 复验放行被忽略产物|
-TEAM_REVIEW_ALLOW_UNRESOLVED_BRANCH|apply|bool||plain|0|1 = 给解析不到的分支盖章|
-TEAM_REVIEW_ANY_DIR|apply|bool||plain|0|1 = 跳过 checkout HEAD == 分支 tip 守卫|
-TEAM_BOARD_DONE_FORCE|apply|bool||plain|0|1 = 绕过 done 的证据闸门|
-TEAM_BOARD_DONE_REASON|apply|text||plain||-|
+TEAM_GATES|apply|cmd||plain||-|||workflow
+TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow
+TEAM_TASK_BRANCH_RESET|apply|bool||plain|1|-|||workflow
+TEAM_DISPATCH_VERIFY_SEC|apply|seconds|0,|plain|8|-|||workflow
+TEAM_DISPATCH_ALIVE_SEC|apply|seconds|0,|plain|1|-|||workflow
+TEAM_SQUASH_LOOKBACK|apply|int|0,|plain|200|0 = 「已 squash 合并」的回看数为零|||workflow
+TEAM_REVIEW_TIMEOUT|apply|seconds|0,|plain|1800|低于 60 秒 = 门禁会被超时掐死||600,1800,3600|workflow
+TEAM_REVIEW_TIMEOUT_GRACE|apply|seconds|0,|plain|2|-|||workflow
+TEAM_REVIEW_ALLOW_DIRTY|apply|bool||plain|0|1 = 复验放行脏工作树|||workflow
+TEAM_REVIEW_ALLOW_IGNORED|apply|bool||plain|0|1 = 复验放行被忽略产物|||workflow
+TEAM_REVIEW_ALLOW_UNRESOLVED_BRANCH|apply|bool||plain|0|1 = 给解析不到的分支盖章|||workflow
+TEAM_REVIEW_ANY_DIR|apply|bool||plain|0|1 = 跳过 checkout HEAD == 分支 tip 守卫|||workflow
+TEAM_BOARD_DONE_FORCE|apply|bool||plain|0|1 = 绕过 done 的证据闸门|||workflow
+TEAM_BOARD_DONE_REASON|apply|text||plain||-|||workflow
 # ---- 容量与投递通知（apply）----
-TEAM_MIN_FREE_SWAP_MB|apply|mb|0,|plain|1024|0 = 磁盘 swap 底线关闭||512,1024,2048
-TEAM_MIN_TOTAL_MB|apply|mb|0,|plain|512|0 = RAM+swap 绝对底线关闭||256,512,1024
-TEAM_MIN_AVAIL_MB|apply|mb|0,|plain|1024|0 = MemAvailable 底线关闭||512,1024,2048
-TEAM_WARN_AVAIL_MB|apply|mb|0,|plain|2048|0 = 内存只警告的水位关闭||1024,2048,4096
-TEAM_ZRAM_WARN_PCT|apply|pct|0,100|plain|85|-||70,80,85,90
-TEAM_AGENT_MEM_MB|apply|mb|1,|plain|6144|-||2048,4096,6144
-TEAM_NOTIFY_TMUX|apply|bool||plain|1|-|
-TEAM_NOTIFY_DEDUP_SEC|apply|seconds|0,|plain|20|-|
-TEAM_INBOX_MAX_CHARS|apply|int|1,|plain|150|-||100,150,300
-TEAM_NOTIFY_LOG|apply|path|file,opt|plain|/tmp/teamsmith-notify.log|-|
-TEAM_DEFER_TTL|apply|seconds|0,|plain|300|0 = 投递队列入队即过期||60,300,900
-TEAM_OUTBOX_MAX|apply|int|0,|plain|200|0 = 队列不设上限（无界）||50,200,1000
-TEAM_PANEL_DETAIL_CAP|apply|bytes|1024,|plain|131072|-||65536,131072,262144
+TEAM_MIN_FREE_SWAP_MB|apply|mb|0,|plain|1024|0 = 磁盘 swap 底线关闭||512,1024,2048|delivery
+TEAM_MIN_TOTAL_MB|apply|mb|0,|plain|512|0 = RAM+swap 绝对底线关闭||256,512,1024|delivery
+TEAM_MIN_AVAIL_MB|apply|mb|0,|plain|1024|0 = MemAvailable 底线关闭||512,1024,2048|delivery
+TEAM_WARN_AVAIL_MB|apply|mb|0,|plain|2048|0 = 内存只警告的水位关闭||1024,2048,4096|delivery
+TEAM_ZRAM_WARN_PCT|apply|pct|0,100|plain|85|-||70,80,85,90|delivery
+TEAM_AGENT_MEM_MB|apply|mb|1,|plain|6144|-||2048,4096,6144|delivery
+TEAM_NOTIFY_TMUX|apply|bool||plain|1|-|||delivery
+TEAM_NOTIFY_DEDUP_SEC|apply|seconds|0,|plain|20|-|||delivery
+TEAM_INBOX_MAX_CHARS|apply|int|1,|plain|150|-||100,150,300|delivery
+TEAM_NOTIFY_LOG|apply|path|file,opt|plain|/tmp/teamsmith-notify.log|-|||delivery
+TEAM_DEFER_TTL|apply|seconds|0,|plain|300|0 = 投递队列入队即过期||60,300,900|delivery
+TEAM_OUTBOX_MAX|apply|int|0,|plain|200|0 = 队列不设上限（无界）||50,200,1000|delivery
+TEAM_PANEL_DETAIL_CAP|apply|bytes|1024,|plain|131072|-||65536,131072,262144|delivery
 # ---- 巡检与面板（restart：运行中的 pulse/面板拿着启动时的值）----
-TEAM_PULSE_INTERVAL|restart|seconds|60,|plain|900|低于 60 秒 = 巡检转成忙等||300,900,1800,3600
-TEAM_MONITOR_REFRESH|restart|seconds|1,|plain|3|-||2,3,5
-TEAM_MONITOR_EVENTS|restart|int|1,|plain|4|-||2,4,8
-TEAM_MONITOR_UI|restart|enum|auto,tui,text|plain|auto|-|
-TEAM_MONITOR_ACTIVITY|restart|bool||export|1|-|
-TEAM_AGENT_LOG_TAIL_BYTES|restart|bytes|0,1048576|export||-|
-TEAM_PULSE_WINDOW|restart|text||plain|pulse|改的是运行中后端的窗口名：team pulse down（旧名）→ 改 → team pulse up
+TEAM_PULSE_INTERVAL|restart|seconds|60,|plain|900|低于 60 秒 = 巡检转成忙等||300,900,1800,3600|panel
+TEAM_MONITOR_REFRESH|restart|seconds|1,|plain|3|-||2,3,5|panel
+TEAM_MONITOR_EVENTS|restart|int|1,|plain|4|-||2,4,8|panel
+TEAM_MONITOR_UI|restart|enum|auto,tui,text|plain|auto|-|||panel
+TEAM_MONITOR_ACTIVITY|restart|bool||export|1|-|||panel
+TEAM_AGENT_LOG_TAIL_BYTES|restart|bytes|0,1048576|export||-|||panel
+TEAM_PULSE_WINDOW|restart|text||plain|pulse|改的是运行中后端的窗口名：team pulse down（旧名）→ 改 → team pulse up|||panel
 # ---- 巡检策略（apply：一拍一个 team watch --once 子进程）----
-TEAM_PULSE_NUDGE_GAP|apply|seconds|0,|plain|900|-||300,900,1800
-TEAM_PULSE_PENDING_BOARD|apply|bool||plain|0|-|
-TEAM_PULSE_REBUILD_TMUX|apply|bool||plain|0|-|
-TEAM_PULSE_MAX_RESTARTS|apply|int|0,|plain|5|0 = PM 崩溃后不再自动拉起|
+TEAM_PULSE_NUDGE_GAP|apply|seconds|0,|plain|900|-||300,900,1800|patrol
+TEAM_PULSE_PENDING_BOARD|apply|bool||plain|0|-|||patrol
+TEAM_PULSE_REBUILD_TMUX|apply|bool||plain|0|-|||patrol
+TEAM_PULSE_MAX_RESTARTS|apply|int|0,|plain|5|0 = PM 崩溃后不再自动拉起|||patrol
 # ---- PM 生命周期（restart：运行中的 PM 拿着旧参数，team up 用新的）----
-TEAM_PM_SESSION_ID|restart|text||plain||-|
-TEAM_PM_CMD|restart|tpl|pm|plain||-|
-TEAM_PM_BIN|restart|path|exec,opt|plain||-|
-TEAM_PM_EXTRA_PI_ARGS|restart|cmd||plain||-|
-TEAM_PM_RESUME_ARGS|restart|cmd||plain||-|
-TEAM_PM_START_WAIT|apply|seconds|0,|plain|6|-|
+TEAM_PM_SESSION_ID|restart|text||plain||-|||pm-lifecycle
+TEAM_PM_CMD|restart|tpl|pm|plain||-|||pm-lifecycle
+TEAM_PM_BIN|restart|path|exec,opt|plain||-|||pm-lifecycle
+TEAM_PM_EXTRA_PI_ARGS|restart|cmd||plain||-|||pm-lifecycle
+TEAM_PM_RESUME_ARGS|restart|cmd||plain||-|||pm-lifecycle
+TEAM_PM_START_WAIT|apply|seconds|0,|plain|6|-|||pm-lifecycle
 # ---- 活着的会话（restart：扩展在运行中的进程里读环境）----
-TEAM_INBOX_WATCH_MAX_BYTES|restart|bytes|1024,|export|131072|-|
-TEAM_INBOX_WATCH_PREVIEW|restart|int|16,|export|160|-|
-TEAM_INBOX_WATCH_REPLAY_MAX|restart|int|1,|export|20|-|
-TEAM_INBOX_WATCH_SEEN_MAX|restart|int|32,|export|512|-|
-TEAM_INBOX_WATCH_STALE|restart|seconds|1,|export|300|-|
-TEAM_INBOX_WATCH_STALE_SEC|restart|seconds|1,|export|900|-|
-TEAM_INBOX_WATCH_POLL_MS|restart|int|100,|export|5000|-|
-TEAM_INBOX_WATCH_HEARTBEAT_MS|restart|int|100,|export|5000|-|
-TEAM_INBOX_WATCH_TARGET|restart|text||export||-|
-TEAM_BG_LOG_MAX_BYTES|restart|bytes|1024,|export|524288|-|
+TEAM_INBOX_WATCH_MAX_BYTES|restart|bytes|1024,|export|131072|-|||session
+TEAM_INBOX_WATCH_PREVIEW|restart|int|16,|export|160|-|||session
+TEAM_INBOX_WATCH_REPLAY_MAX|restart|int|1,|export|20|-|||session
+TEAM_INBOX_WATCH_SEEN_MAX|restart|int|32,|export|512|-|||session
+TEAM_INBOX_WATCH_STALE|restart|seconds|1,|export|300|-|||session
+TEAM_INBOX_WATCH_STALE_SEC|restart|seconds|1,|export|900|-|||session
+TEAM_INBOX_WATCH_POLL_MS|restart|int|100,|export|5000|-|||session
+TEAM_INBOX_WATCH_HEARTBEAT_MS|restart|int|100,|export|5000|-|||session
+TEAM_INBOX_WATCH_TARGET|restart|text||export||-|||session
+TEAM_BG_LOG_MAX_BYTES|restart|bytes|1024,|export|524288|-|||session
 # ---- 跨项目会议（apply）----
-TEAM_MEETING_TTL_HOURS|apply|int|1,|plain|72|-||24,72,168
-TEAM_MEETING_MAX_TURNS|apply|int|1,|plain|20|-||5,20,50
-TEAM_MEETING_KNOCK|apply|bool||plain|0|-|
-TEAM_MEETING_ALLOW_USER_ID|apply|text||plain||非空 = 放开谁能敲门（扩大权限）
+TEAM_MEETING_TTL_HOURS|apply|int|1,|plain|72|-||24,72,168|meeting
+TEAM_MEETING_MAX_TURNS|apply|int|1,|plain|20|-||5,20,50|meeting
+TEAM_MEETING_KNOCK|apply|bool||plain|0|-|||meeting
+TEAM_MEETING_ALLOW_USER_ID|apply|text||plain||非空 = 放开谁能敲门（扩大权限）|||meeting
 EOF
 }
 
@@ -172,7 +177,7 @@ team_config_contract_path() {
   printf '%s\n' "$p"
 }
 
-team_config_field() { # <row> <n:1..9> → 字段（第 9 列 suggest 可选，缺省为空）
+team_config_field() { # <row> <n:1..10> → 字段（第 9 列 suggest / 第 10 列 group 无默认；畸形行返回空串）
   local row="$1" n="$2"
   local -a f=()
   IFS='|' read -r -a f <<< "$row"
@@ -606,6 +611,8 @@ team_config_scan() { # <file> → 填 CFG_SCAN_*（一次 awk；值/注释取首
   }' "$f")
 }
 
+# P30/R1：每条记录带 `group`——schema 行的第 10 列逐字（畸形行也照实输出空串，绝不造默认组）；
+# 文件里 schema 不认识的键 group 为空串。字段是加法的：既有字段名/类型/顺序与 human 表、其它机器出口都不动。
 team_config_list_json() {
   local path; path="$(team_config_contract_path)" || return 1
   local fingerprint mtime
@@ -680,6 +687,7 @@ team_config_list_json() {
       [ -n "$unknown" ] && warning="未知席位（名册没有，静默不生效）：${unknown% }"
     fi
     team_config_choices_set "$row" "$known_models"
+    team_config_json_escape_set "${f[9]:-}"; local e_group="$CFG_ESC"
     team_config_json_escape_set "$key"; local e_key="$CFG_ESC"
     team_config_json_escape_set "$value"; local e_value="$CFG_ESC"
     team_config_json_escape_set "$def"; local e_def="$CFG_ESC"
@@ -688,7 +696,7 @@ team_config_list_json() {
     team_config_json_escape_set "${f[7]:-}"; local e_route="$CFG_ESC"
     [ "$first" = "1" ] || out="$out,"
     first=0
-    out="$out{\"name\":\"$e_key\",\"class\":\"$class\",\"kind\":\"$kind\",\"form\":\"$form\",\"value\":\"$e_value\",\"default\":\"$e_def\",\"set\":$set,\"comment\":\"$e_comment\",\"warning\":\"$e_warning\",\"route\":\"$e_route\",\"choices\":$CFG_CHOICES_JSON,\"known\":true}"
+    out="$out{\"name\":\"$e_key\",\"class\":\"$class\",\"kind\":\"$kind\",\"form\":\"$form\",\"value\":\"$e_value\",\"default\":\"$e_def\",\"set\":$set,\"comment\":\"$e_comment\",\"warning\":\"$e_warning\",\"route\":\"$e_route\",\"choices\":$CFG_CHOICES_JSON,\"group\":\"$e_group\",\"known\":true}"
   done < <(team_config_schema)
 
   # 文件里 schema 不认识的键：照实列出（面板只读展示「不是已知项目设置」），文件顺序、重复行各一条
@@ -702,7 +710,7 @@ team_config_list_json() {
     team_config_json_escape_set "$v"; local u_val="$CFG_ESC"
     team_config_json_escape_set "$c"; local u_com="$CFG_ESC"
     team_config_choices_set ""
-    out="$out,{\"name\":\"$u_key\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$u_val\",\"default\":\"\",\"set\":true,\"comment\":\"$u_com\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"choices\":$CFG_CHOICES_JSON,\"known\":false}"
+    out="$out,{\"name\":\"$u_key\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$u_val\",\"default\":\"\",\"set\":true,\"comment\":\"$u_com\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"choices\":$CFG_CHOICES_JSON,\"group\":\"\",\"known\":false}"
   done <<< "$CFG_SCAN_ORDER"
 
   local seats="" firsts=1
