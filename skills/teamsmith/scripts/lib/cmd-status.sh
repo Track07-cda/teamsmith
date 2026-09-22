@@ -1246,14 +1246,16 @@ if [ -z "${TEAM_P55_STATUS_WRAP:-}" ]; then
   }
 fi
 
-# digest 的死 pane 席位段：任何遗体窗口都点名（静默 = 假阴性的藏身处）；登记任务未结束的标「!」
+# digest 的死 pane 席位段（P79 起段号 [7]）：任何遗体窗口都点名（静默 = 假阴性的藏身处）；登记任务未结束的标「!」
 #（异常，D7），已收尾的（close --keep-window 清过任务记录）标「·」（刻意保留，不算异常、不计 stopped）。
+# 段号：P55 原本用 [6]，与 P45/B2 后合并的 [6] change 归组 撞号（P69 的 F1）——按 P69 裁定
+# 「保留 B2 的 [6]、P55 顺延」，这里是 [7]；断言在 tests/smoke.sh §41（P79：段号逐行唯一）。
 team_digest_dead_pane_section() {
   local a cond task ev any=0
   for a in $(team_agents); do
     cond="$(team_seat_condition "$a")"
     case "$cond" in dead*) ;; *) continue ;; esac
-    if [ "$any" = "0" ]; then printf '\n%s\n' "[6] 死 pane 席位（窗口是遗体：现场可读；死 pane 不是投递目标，消息已换道收件箱）"; fi
+    if [ "$any" = "0" ]; then printf '\n%s\n' "[7] 死 pane 席位（窗口是遗体：现场可读；死 pane 不是投递目标，消息已换道收件箱）"; fi
     any=1
     task="$(team_state_get "$a" task '')"
     ev="${cond#dead}"; ev="${ev# }"

@@ -12597,6 +12597,16 @@ P55PY
   assert_has "$TMP/p55-digest.log" "死 pane 席位" "P55 ④：digest 点名死 pane 席位"
   assert_has "$TMP/p55-digest.log" "! $P55_A pane 已死（signal=9）" "P55 ④：digest 行带退出证据（任务未结束 = 异常）"
   assert_has "$TMP/p55-digest.log" "$P55_ID" "P55 ④：digest 行带登记任务"
+  # P79（P69 的 F1）：段号卫生 —— change 归组保留 [6]（12f 的 F_HDRS_EXPECTED 钉着它），
+  # 死 pane 段顺延 [7]；全表段号逐行唯一，唯一豁免是历史 [5]×2（[5] 任务板 / [5] 建议：40bbad6a
+  # 把任务板从 [4] 改到 [5] 时留下的既有重复，按 P79 裁定不顺手改无关段 —— 见 P79 报告）。
+  assert_has "$TMP/p55-digest.log" \
+    "[7] 死 pane 席位（窗口是遗体：现场可读；死 pane 不是投递目标，消息已换道收件箱）" \
+    "P79：死 pane 段是 [7]，且只有段号变（正文逐字节同 P55）"
+  P79_NUMS="$(grep -oE '^\[[0-9]+\]' "$TMP/p55-digest.log" | tr -d '[]' | paste -sd' ' -)"
+  P79_DUPS="$(printf '%s\n' "$P79_NUMS" | tr ' ' '\n' | sort -n | uniq -d | paste -sd' ' -)"
+  assert_eq "P79：digest 段号逐行唯一（唯一豁免：历史 [5]×2）" "$P79_DUPS" "5"
+  assert_eq "P79：段号按序 [1]–[7]、[5] 历史重复成对" "$P79_NUMS" "1 2 3 4 5 5 6 7"
   env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
     bash "$SKILL_DIR/scripts/team" doctor >"$TMP/p55-doctor.log" 2>&1 || true
   assert_has "$TMP/p55-doctor.log" "死 pane 席位 $P55_A" "P55 ④：doctor 一条告警点名死席位"
