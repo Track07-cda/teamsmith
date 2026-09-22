@@ -6,7 +6,7 @@
 #   TEAM_CONFIG_KEEP=1 bash ...                              # keep the fixture directory
 #   TEAM_CONFIG_TREE=<tree> bash ...                         # run against another checkout (used by flip)
 #
-# Sections: list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip
+# Sections: list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip json
 # Exit: 0 every selected section green, 1 at least one assertion failed, 3 setup failure.
 #
 # Nothing here touches the caller's project: every fixture is a fresh git repo under $TMPDIR, the
@@ -100,7 +100,7 @@ need_python() { command -v python3 >/dev/null 2>&1; }
 need_python || { printf 'config-cli: 需要 python3（JSON 断言）\n' >&2; exit 3; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip json)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- list
@@ -464,6 +464,68 @@ PY
   assert_eq "手改出未知席位后 list --json 仍 exit 0" "$rc" "0"
   json_check "$json" "TEAM_AGENT_MODELS 的记录带点名 dev4 的 warning" '"dev4" in [k for k in d["keys"] if k["name"]=="TEAM_AGENT_MODELS"][0]["warning"]'
   json_check "$json" "models.seats 里没有 dev4 行" 'all(s["agent"]!="dev4" for s in d["models"]["seats"])'
+
+  # ── P47/R4：空值 token（dev=）是一个「存在的覆盖」，解析与「没这个 token」同一支 ──────────────
+  # 旧形状：team_agent_model 把空 token 原样返回 → 席位行前导空字段被 `IFS=$'\t' read` 吃掉 →
+  # model 变成来源标签「配置」、override 变成无值字段（`"override":}`），整份 JSON 失解。
+  pe="$(new_proj models-empty)" || exit 3
+  cfge="$pe/.pi/team/config.sh"
+  python3 - "$cfge" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev="')
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  sha_e="$(sha_of "$cfge")"
+  json="$(run_in "$pe" config list --json)"; rc=$?
+  assert_eq "空值 token：config list --json 退出 0" "$rc" "0"
+  if printf '%s' "$json" | python3 -m json.tool >/dev/null 2>&1; then
+    ok "空值 token：文档能被 python3 -m json.tool 解析（旧形状在这里 Expecting value）"
+  else
+    bad "空值 token：文档解析失败（$(printf '%s' "$json" | python3 -m json.tool 2>&1 | head -1)）"
+  fi
+  json_check "$json" "dev 行存在：model=默认解析、source=config、override 是布尔 true" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]==d["models"]["default"] and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["source"]=="config" and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
+  json_check "$json" "known[] 不带来源标签，且带着默认解析" \
+    '"配置" not in d["models"]["known"] and d["models"]["default"] in d["models"]["known"]'
+  assert_eq "空值 token：契约 sha 不变（只读路径不写盘）" "$(sha_of "$cfge")" "$sha_e"
+  defm="$(printf '%s' "$json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["models"]["default"])')"
+  # team roster 与读同源（空 token 不是空模型>）
+  roster="$(run_in "$pe" roster)"
+  case "$roster" in
+    *"$defm·配置"*) ok "空值 token：team roster 打出默认模型 + 配置标签（$defm）" ;;
+    *) bad "空值 token：roster 没有打出默认模型（$(printf '%s' "$roster" | grep -m1 '^dev ' || true)）" ;;
+  esac
+  # team ps 的会话行同一个解析（给它一个假会话文件才会打印该行；TEAM_PI_AGENT_DIR 钉在夹具里）
+  wte="$pe/.worktrees/dev"
+  run_in "$pe" task M47E --title "P47 空 token 夹具" --agent dev --deps - >/dev/null 2>&1 || true
+  brief_e="$(ls "$pe"/docs/team/tasks/M47E-*.md 2>/dev/null | head -1)"
+  if [ -n "$brief_e" ]; then sed -i 's|^anchor: -.*$|anchor: none (infra) — P47 fixture|' "$brief_e"; fi
+  run_in "$pe" add-agent dev --create --no-install >/dev/null 2>&1 || true
+  if [ -d "$wte" ] && [ -n "$brief_e" ]; then
+    bre="$( cd "$pe" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+        bash -c '. "'"$skill"'/scripts/lib/common.sh"; for _f in "'"$skill"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent dev M47E' )"
+    git -C "$wte" switch -c "$bre" main >/dev/null 2>&1 || git -C "$wte" switch "$bre" >/dev/null 2>&1
+    wtsafe="$(printf '%s' "$wte" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
+    mkdir -p "$pe/.pi-agent/sessions/--$wtsafe--"
+    python3 -c 'import sys; open(sys.argv[1],"w").write("x"*4000)' "$pe/.pi-agent/sessions/--$wtsafe--/2026_cfg-models-empty-dev.jsonl"
+    printf '\nTEAM_PI_AGENT_DIR="%s/.pi-agent"\nTEAM_PI_BIN="/bin/true"\n' "$pe" >> "$cfge"
+    psout="$(run_in "$pe" ps)"
+    case "$psout" in
+      *"$defm·配置"*) ok "空值 token：team ps 的会话行同一解析（$defm·配置）" ;;
+      *) bad "空值 token：ps 没有打出同一解析（$(printf '%s' "$psout" | grep -m1 '^  dev' || true)）" ;;
+    esac
+    # dispatch --print：同一个解析进渲染器（空 token 不能渲染成空模型）
+    dout="$(run_in "$pe" dispatch dev M47E "$brief_e" --print)"; rc=$?
+    assert_eq "空值 token：dispatch --print 退出 0" "$rc" "0"
+    case "$dout" in
+      *"--provider ${defm%%/*} --model ${defm##*/}"*) ok "空值 token：dispatch 渲染出默认模型（$defm）" ;;
+      *) bad "空值 token：dispatch 没渲染默认模型（$dout）" ;;
+    esac
+  else
+    bad "空值 token：逃辑夹具没搭起来（worktree=$([ -d "$wte" ] && printf 有 || printf 无) brief=$([ -n "$brief_e" ] && printf 有 || printf 无)）"
+  fi
 fi
 
 # ---------------------------------------------------------------- seats
@@ -490,6 +552,25 @@ PY
   run_in "$p" config set-agent-model dev - --yes >/dev/null; rc=$?
   assert_eq "移除覆盖退出 0" "$rc" "0"
   assert_eq "dev 的 token 离开、其余字节不变" "$(grep -c "^TEAM_AGENT_MODELS='verify=xai/grok-4.6'\$" "$cfg" || true)" "1"
+
+  # ── P47/R4：空值 token（dev=）在写路径里就是一个普通 token（空值不等于无 token）──────────────
+  pe="$(new_proj seats-empty)" || exit 3
+  cfge="$pe/.pi/team/config.sh"
+  python3 - "$cfge" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev= verify=xai/grok-4.6"')
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  run_in "$pe" config set-agent-model dev kimi-coding/k3-256k --yes >/dev/null; rc=$?
+  assert_eq "空值 token：set-agent-model dev 退出 0" "$rc" "0"
+  assert_eq "空值 token：dev= 换成新模型、verify 的 token 原样" \
+    "$(grep -c "^TEAM_AGENT_MODELS='dev=kimi-coding/k3-256k verify=xai/grok-4.6'\$" "$cfge" || true)" "1"
+  run_in "$pe" config set-agent-model dev - --yes >/dev/null; rc=$?
+  assert_eq "空值 token：移除覆盖退出 0" "$rc" "0"
+  assert_eq "空值 token：dev 的 token 离开、verify 原样" \
+    "$(grep -c "^TEAM_AGENT_MODELS='verify=xai/grok-4.6'\$" "$cfge" || true)" "1"
   json="$(run_in "$p" config list --json)"
   json_check "$json" "移除后 dev 回到 TEAM_DEFAULT_MODEL、override=false" '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is False and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]==d["models"]["default"]'
 
@@ -517,6 +598,109 @@ PY
   assert_eq "set-agent-model dry-run → 0" "$rc" "0"
   assert_eq "dry-run 后契约不变" "$(sha_of "$cfg")" "$sha_b"
   assert_eq "dry-run 后审计不变" "$(wc -l < "$(audit_of "$p")" 2>/dev/null || echo 0)" "$lines_b"
+fi
+
+# ---------------------------------------------------------------- json（P47/R5）
+# 每个「机器出口」都必须**恰好一份可解析 JSON**：契约带空值（`dev=`、空的契约默认值）时也不许出现
+# 无值字段（`"name":`）或 null。这里跑四个出口：config list --json / change status --json / paths /
+# monitor --json（没有 JS 运行时是**可见 SKIP**）。红侧（F-J1）在 scratch 树里把席位序列化器改回
+# 无值字段形状（`"override":,`）—— 解析走查必须非 0 并点名命令与解析器报的位置。
+if want json; then
+  section "json · 机器出口在空值契约上逐个过 python3 -m json.tool（含无值字段红侧 F-J1）"
+  pj="$(new_proj jexit)" || exit 3
+  cfgj="$pj/.pi/team/config.sh"
+  python3 - "$cfgj" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev="')
+s = re.sub(r'^TEAM_DEFAULT_MODEL=.*$', 'TEAM_DEFAULT_MODEL=""', s, count=1, flags=re.M)
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  # 一份「就绪」的 change（否则 change status 非 0）：与 §12e 同形状 —— 任务书 + 看板行 + PASS 记录 + done
+  mkdir -p "$pj/openspec/changes/j1/specs/panel" "$pj/docs/team/tasks" "$pj/docs/team/reviews"
+  printf '## ADDED Requirements\n\n### Requirement: j1 fixture\n' > "$pj/openspec/changes/j1/specs/panel/spec.md"
+  printf '# J1 · fixture\n\n```\ntask:   J1\nagent:  dev\nissue:  -\nchange: j1\nspecs:  -\nphase:  apply\ndeps:   -\nstatus: todo\nbudget: -\n```\n\nbody\n' > "$pj/docs/team/tasks/J1-j1-fixture.md"
+  run_in "$pj" board add J1 "j1 fixture" dev - - >/dev/null 2>&1
+  printf -- '- 2026-09-20T00:00:00Z · `team review J1` · 判定: **PASS**\n' > "$pj/docs/team/reviews/J1.md"
+  run_in "$pj" board set J1 done >/dev/null 2>&1
+
+  json_exit() { # <标签> <命令…>：跑一个机器出口，退出码必须 0，输出必须被 json.tool 解析
+    local label="$1"; shift
+    local out rc
+    out="$( cd "$pj" && "$@" 2>"$tmp/json-exit.err" )"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      bad "$label：退出码 $rc（期望 0；stderr: $(head -1 "$tmp/json-exit.err" 2>/dev/null)）"
+      return 1
+    fi
+    if printf '%s' "$out" | python3 -m json.tool >/dev/null 2>"$tmp/json-tool.err"; then
+      ok "$label：退出 0 且 python3 -m json.tool 解析通过"
+    else
+      bad "$label：解析失败 —— $(head -1 "$tmp/json-tool.err" 2>/dev/null)"
+      return 1
+    fi
+  }
+  json_exit "config list --json（空值覆盖 + 空默认）" bash "$team" config list --json
+  json_exit "change status j1 --json" bash "$team" change status j1 --json
+  json_exit "paths" bash "$team" paths
+  if command -v node >/dev/null 2>&1 || command -v bun >/dev/null 2>&1; then
+    json_exit "monitor --json" bash "$team" monitor --json
+  else
+    skip "monitor --json：没有 JS 运行时（面板要求 node/bun）——可见 SKIP，不是红"
+  fi
+  # 空模型必须是字符串 ""（R5）：pm 行取契约文件的空默认值，dev 行仍要在（seats 覆盖每个席位）
+  json_e="$( cd "$pj" && bash "$team" config list --json 2>/dev/null )"
+  json_check "$json_e" "空默认值：pm 行的空模型序列化成 \"\"（不是无值字段）" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]=="" and [s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["override"] is False'
+  json_check "$json_e" "空默认值：dev 行仍在（seats 覆盖每个名册席位）且 override 是布尔 true" \
+    'all(s["agent"] in ["dev","pm","verify"] for s in d["models"]["seats"]) and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
+
+  # ── F-J1：scratch 树里把席位行序列化器改回无值字段形状 → 解析走查必须红并点名位置 ────────────
+  # 嵌套防护：红/绿两侧都是 `TEAM_CONFIG_TREE=<scratch>` 的**再入**运行 —— 再入时不再递归翻转
+  # （否则子进程又建自己的 scratch 树，无限自调用）。再入那层只跑本段的断言，正是翻转要测的对象。
+  if [ -n "$_tree_arg" ]; then
+    skip "F-J1 翻转：本次已是 scratch 树再入运行（TEAM_CONFIG_TREE 已设），不重复嵌套"
+  else
+  jtree="$tmp/json-tree"; mkdir -p "$jtree/skills/teamsmith"
+  cp -a "$skill/scripts" "$skill/templates" "$skill/references" "$jtree/skills/teamsmith/"
+  set +e
+  TEAM_CONFIG_TREE="$jtree" bash "$here/config-cli.sh" json >"$tmp/json-flip-green.log" 2>&1
+  j_green=$?
+  [ "$j_green" -eq 0 ] && ok "F-J1 绿侧：scratch 树原状 json 段绿（rc=0，红不是因为缺文件）" \
+    || { bad "F-J1 绿侧就红了（rc=$j_green，翻转无效）"; grep -a '✗' "$tmp/json-flip-green.log" | head -3 | sed 's/^/      /'; }
+  python3 - "$jtree/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+# 打中的是 shell 双引号里的字节：\"override\":$override}
+old = r'\"override\":$override}'
+assert old in s, 'serializer shape not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, r'\"override\":}', 1))
+PY
+  if grep -qF '\"override\":$override}' "$jtree/skills/teamsmith/scripts/lib/cmd-config.sh"; then
+    bad "F-J1 mutant 没打中（席位行序列化器原样）"
+  else
+    ok "F-J1 mutant 已生成：席位行的 override 序列化成无值字段（valueless field，解析器会在它身上报位置）"
+  fi
+  TEAM_CONFIG_TREE="$jtree" bash "$here/config-cli.sh" json >"$tmp/json-flip-red.log" 2>&1
+  j_red=$?
+  set +e   # 恢复脚本的全局模式（顶部是 set -uo pipefail，无 errexit）：后面的段不欠 errexit 的账
+  if [ "$j_red" -ne 0 ] && grep -q 'config list --json' "$tmp/json-flip-red.log" && grep -q 'Expecting value' "$tmp/json-flip-red.log"; then
+    ok "F-J1 红侧：无值字段让 json 段非 0（rc=$j_red）并点名命令 + 解析器报的位置"
+  else
+    bad "F-J1 红侧：无值字段没被抓住（rc=$j_red）"; grep -a '✗' "$tmp/json-flip-red.log" | head -3 | sed 's/^/      /'
+  fi
+  printf '    --- F-J1 红侧尾部 ---\n'
+  { grep -aE '✗|解析失败|== 结果' "$tmp/json-flip-red.log" || true; } | tail -6 | sed 's/^/    /'
+  # 还原序列化器 → 同一棵 scratch 树重新绿（翻转双向：红侧不是 scratch 树坏了，绿侧也不能是侥幸）
+  cp -a "$cmd_config" "$jtree/skills/teamsmith/scripts/lib/cmd-config.sh"
+  TEAM_CONFIG_TREE="$jtree" bash "$here/config-cli.sh" json >"$tmp/json-flip-restored.log" 2>&1
+  j_rest=$?
+  [ "$j_rest" -eq 0 ] && ok "F-J1 还原：序列化器恢复原状 → json 段重新绿（rc=0）" \
+    || { bad "F-J1 还原后没有变绿（rc=$j_rest）"; grep -a '✗' "$tmp/json-flip-restored.log" | head -3 | sed 's/^/      /'; }
+  printf '    --- F-J1 绿侧（还原后）尾部 ---\n'
+  { grep -aE '✓|== 结果' "$tmp/json-flip-restored.log" || true; } | tail -3 | sed 's/^/    /'
+  fi
 fi
 
 # ---------------------------------------------------------------- completeness

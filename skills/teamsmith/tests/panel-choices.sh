@@ -500,7 +500,8 @@ if want flip-drop-pm; then
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
-old = "    IFS=$'\\t' read -r seat_model _src _override <<< \"$(team_config_seat_state \"$a\")\""
+# P47/R4：席位行改成字段安全拆读（team_config_seat_split）——翻转仍锚在「known 走查里的 pm 席位」这一行
+old = '    team_config_seat_split "$(team_config_seat_state "$a")" seat_model _src _override'
 assert old in s, "找不到 pm 席位解析那一行"
 s = s.replace(old, "    [ \"$a\" = \"pm\" ] && continue\n" + old, 1)
 open(p, "w", encoding="utf-8").write(s)

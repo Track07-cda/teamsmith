@@ -2906,6 +2906,83 @@ git -C "$M31R" reset -q --mixed HEAD~1 >/dev/null 2>&1
 m31 $TEAM digest >"$TMP/m31-unstaged.log" 2>&1 || bad "M31：反翻转 digest 失败"
 assert_has "$TMP/m31-unstaged.log" "记录未入账" "M31：记录退回未入账状态 → 警告回来（翻转双向）"
 
+# ── P47/R2：工作树里的记录也要点名（P36 的形状）─────────────────────────────────────────────────
+# agent 的报告与报告包写在自己的工作树里，PM 的 squash 合并只带分支内容 —— 它们与主检出的记录同样
+# 悬置。[4] 逐工作树跑同一条 `git status --porcelain --untracked-files=all -- <docs>/reviews
+# <docs>/reports`：命中按「<agent>: <工作树内相对路径>」逐文件点名（包内文件也是），**两条记录路径
+# 之外**的脏文件/构建目录静默，退出码不变（提醒，不拦路）。
+git -C "$M31R" add "$M31_REV" "$M31_REP" "$M31_PKG" docs/team/reviews/M31A.md >/dev/null 2>&1 \
+  && git -C "$M31R" commit -qm "docs(team): M31 fixture records (worktree baseline)" >/dev/null 2>&1
+mkdir -p "$M31R/.worktrees"
+M31WT="$M31R/.worktrees/dev"
+git -C "$M31R" worktree add -q -b task/m31-wt "$M31WT" main >/dev/null 2>&1
+if [ -e "$M31WT/.git" ]; then ok "M31-WT 夹具：工作树就位（.worktrees/dev）"; else bad "M31-WT 夹具：工作树起不来（后续断言无意义）"; fi
+M31_WREV="docs/team/reviews/T9.md"
+M31_WREP="docs/team/reports/T9-dev.md"
+M31_WPKG="docs/team/reports/T9-dev/run.sh"
+mkdir -p "$M31WT/docs/team/reviews" "$M31WT/docs/team/reports/T9-dev" "$M31WT/build"
+printf 'not a record\n' > "$M31WT/junk.txt"                      # 记录路径之外 → 静默
+printf 'scratch\n' > "$M31WT/build/scratch.tmp"                   # 构建 scratch 目录 → 静默
+# 先钉「只有非记录脏文件时一条都不报」：这正是两个记录路径的过滤在把关。
+m31 $TEAM digest >"$TMP/m31-wt-decoy.log" 2>&1 || bad "M31-WT：只有 decoy 时 digest 失败"
+assert_not "$TMP/m31-wt-decoy.log" "记录未入账" "M31-WT：工作树里的非记录脏文件不触发警告（无记录时不打）"
+assert_not "$TMP/m31-wt-decoy.log" "junk.txt" "M31-WT：junk.txt 一条都不点名"
+assert_not "$TMP/m31-wt-decoy.log" "scratch.tmp" "M31-WT：构建 scratch 目录一条都不点名"
+printf '# T9 · 复验记录（工作树夹具）\n' > "$M31WT/$M31_WREV"
+printf '# T9-dev · 交付报告（工作树夹具）\n\nagent: dev\n' > "$M31WT/$M31_WREP"
+printf 'echo fixture\n' > "$M31WT/$M31_WPKG"
+m31 $TEAM digest >"$TMP/m31-wt.log" 2>&1; M31W_RC=$?
+assert_eq "M31-WT：digest 退出码 0（未入账提醒不拦路）" "$M31W_RC" "0"
+assert_has "$TMP/m31-wt.log" "记录未入账" "M31-WT：工作树记录触发警告行"
+assert_has "$TMP/m31-wt.log" "dev: $M31_WREV" "M31-WT：工作树里的复验记录被点名（<agent>: <路径>）"
+assert_has "$TMP/m31-wt.log" "dev: $M31_WREP" "M31-WT：工作树里的报告被点名"
+assert_has "$TMP/m31-wt.log" "dev: $M31_WPKG" "M31-WT：报告包内的文件也逐文件点名（不是只报目录）"
+assert_not "$TMP/m31-wt.log" "junk.txt" "M31-WT：有记录时 junk.txt 仍然静默"
+assert_eq "M31-WT：未入账清单恰好三份（主检出记录已入账）" \
+  "$(grep -c '^    · dev: ' "$TMP/m31-wt.log")" "3"
+# 查不到名字的记录：只印裸路径，不编名字（M16 口径；`ZZZ` 不在 BOARD/任务书里，首行故意不是 H1 标题
+# → 连报告 H1 兜底也给不出名字）。
+printf '（没有 H1 标题的记录：名字查不到）\n' > "$M31WT/docs/team/reports/ZZZ-dev.md"
+m31 $TEAM digest >"$TMP/m31-wt-unknown.log" 2>&1 || bad "M31-WT：未知名记录时 digest 失败"
+assert_eq "M31-WT：查不到名字的记录退回裸路径（不带编出来的名字括号）" \
+  "$(grep -c '^    · dev: docs/team/reports/ZZZ-dev.md$' "$TMP/m31-wt-unknown.log")" "1"
+rm -f "$M31WT/docs/team/reports/ZZZ-dev.md"
+# 数据面翻转：把工作树记录提交进它的分支 → 警告消失（盯的是那份工作树的字节状态）
+( cd "$M31WT" && git add -A && git commit -qm "docs(team): M31-WT fixture records" ) >/dev/null 2>&1
+m31 $TEAM digest >"$TMP/m31-wt-committed.log" 2>&1 || bad "M31-WT：提交后 digest 失败"
+assert_not "$TMP/m31-wt-committed.log" "记录未入账" "M31-WT 翻转：记录进了工作树分支 → 警告消失"
+( cd "$M31WT" && git reset -q --mixed HEAD~1 ) >/dev/null 2>&1
+m31 $TEAM digest >"$TMP/m31-wt-back.log" 2>&1 || bad "M31-WT：反翻转 digest 失败"
+assert_has "$TMP/m31-wt-back.log" "dev: $M31_WREV" "M31-WT 反翻转：记录退回未入账 → 警告回来（双向）"
+# 实现面翻转（scratch 树）：把工作树腿摘掉 → 同一份夹具上 `dev: ` 行一条不剩，而主检出记录照旧点名。
+# 这条钉住本段的红线就是「工作树腿」这块代码（不是空断言），也证明 mutant 不是整体坏掉。
+if command -v python3 >/dev/null 2>&1; then
+  M31_MUT="$TMP/m31-mut-skill"; rm -rf "$M31_MUT"; mkdir -p "$M31_MUT"
+  cp -a "$SKILL_DIR/scripts" "$SKILL_DIR/templates" "$SKILL_DIR/references" "$SKILL_DIR/SKILL.md" "$M31_MUT/" >/dev/null 2>&1
+  python3 - "$SKILL_DIR/scripts/lib/cmd-status.sh" "$M31_MUT/scripts/lib/cmd-status.sh" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding='utf-8').read()
+old = 'for dir in "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/; do'
+assert s.count(old) == 1, 'worktree loop not found exactly once'
+open(dst, 'w', encoding='utf-8').write(s.replace(old, 'for dir in ; do', 1))
+PY
+  if [ -f "$M31_MUT/scripts/lib/cmd-status.sh" ] && ! cmp -s "$SKILL_DIR/scripts/lib/cmd-status.sh" "$M31_MUT/scripts/lib/cmd-status.sh"; then
+    ok "M31-WT 突变夹具：worktree 循环已摘除（mutant 生成，与原件不同）"
+  else
+    bad "M31-WT 突变夹具：注入没打中（mutant 与原件相同或不存在）"
+  fi
+  printf '# T9main · 主检出记录（突变对照）\n' > "$M31R/docs/team/reviews/T9main.md"
+  ( cd "$M31R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      bash "$M31_MUT/scripts/team" digest ) >"$TMP/m31-wt-mut.log" 2>&1
+  assert_has "$TMP/m31-wt-mut.log" "docs/team/reviews/T9main.md" "M31-WT 突变：主检出记录照旧点名（mutant 只摘了工作树腿）"
+  assert_eq "M31-WT 突变：工作树腿摘掉后 `dev: ` 行一条不剩（本段的红线就在这条腿上）" \
+    "$(grep -c '^    · dev: ' "$TMP/m31-wt-mut.log")" "0"
+  rm -f "$M31R/docs/team/reviews/T9main.md"
+else
+  bad "M31-WT 突变夹具：没有 python3（无法生成 mutant）"
+fi
+
 # ---------------------------------------------------------------- 8. 从 worktree 里也能用
 section "8 · 从 agent worktree 调用 CLI"
 ( cd "$REPO/.worktrees/dev" && $TEAM roster >"$TMP/roster-wt.log" 2>&1 ) && ok "worktree 内 roster 退出码 0" || bad "worktree 内 roster 失败"
@@ -10581,6 +10658,74 @@ else
   esac
 fi
 
+# ── ⑩b 指纹前提（M34/D34）：静态钉形状（FAST 也跑）+ 四腿夹具 --fingerprint-check（慢段）──────
+# 自检的宿主前提必须只由「真实主机变化才会动的」事实构成：旧版 whole-ps 快照会被客户端风暴与
+# 别的项目的私有 server 推动（D34 的假红）。静态钉子不依赖 tmux：直接读函数体（无 ps 快照 +
+# 逐 socket 取事实），并用「插回 ps 快照 → 钉子必红」双向钉住它不是个空断言。
+m31c_fp_shape() { # <container-tmux.sh> → 0 形状对；否则打印原因并返回 1
+  local f="$1" body
+  body="$(sed -n '/^host_tmux_fingerprint()/,/^}/p' "$f")"
+  [ -n "$body" ] || { printf '找不到 host_tmux_fingerprint()\n'; return 1; }
+  if printf '%s\n' "$body" | grep -qE '(^|[^[:alnum:]_/-])ps([[:space:]]|$)'; then
+    printf '函数体里仍有 ps 调用（whole-ps 快照 = 客户端风暴的假红入口）\n'; return 1
+  fi
+  printf '%s\n' "$body" | grep -q 'stat -c' || { printf '函数体没有读 socket 的磁盘身份（stat -c）\n'; return 1; }
+  printf '%s\n' "$body" | grep -q 'display-message' || { printf '函数体没有 per-socket 的 server pid 查询（display-message）\n'; return 1; }
+  printf '%s\n' "$body" | grep -q -- '-S "\$s"' || { printf '查询没有逐 socket 限定（缺 -S "$s"）\n'; return 1; }
+  printf '%s\n' "$body" | grep -q 'caller_socket' || { printf '函数体没有范围里的调用者 socket\n'; return 1; }
+  return 0
+}
+if m31c_fp_shape "$M28_CTR"; then
+  ok "M28 指纹形状：无 ps 快照、逐 socket 取 stat + 会话表 + server pid"
+else
+  bad "M28 指纹形状不对：$(m31c_fp_shape "$M28_CTR" | head -1)"
+fi
+# 翻转：把旧版的 whole-ps 快照插回函数体 → 同一个钉子必须红（证明它盯的是那块代码，不是空断言）
+M28_FPFLIP="$TMP/m28-fp-shape-flip.sh"
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$M28_CTR" "$M28_FPFLIP" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src, encoding='utf-8').read()
+i = s.index('host_tmux_fingerprint() {')
+j = s.index('\n}\n', i)
+# 旧版形状：整个进程表的快照（就是 D34 假红的入口）
+inject = '\n  out="$out|procs|$(ps -eo pid=,args= 2>/dev/null | grep -E \'(^|/)tmux( |$)\' | sort)"'
+open(dst, 'w', encoding='utf-8').write(s[:j] + inject + s[j:])
+PY
+  if [ -f "$M28_FPFLIP" ] && cmp -s "$M28_FPFLIP" "$M28_CTR"; then
+    bad "M28 指纹翻转夹具：mutant 与原件逐字节相同（注入没打中）"
+  elif m31c_fp_shape "$M28_FPFLIP" >/dev/null 2>&1; then
+    bad "M28 指纹翻转：插回 whole-ps 快照后形状钉子还是绿的（钉子失效）"
+  else
+    ok "M28 指纹翻转：插回 whole-ps 快照 → 形状钉子红（$([ -f "$M28_FPFLIP" ] && printf 已注入 || printf 注入失败)）"
+  fi
+else
+  bad "M28 指纹翻转夹具：没有 python3（无法生成 mutant）"
+fi
+
+# 四腿夹具（真进程：私有 default server 上的风暴/杀 server/真会话变化/无 server 只读）
+if [ "$FAST" = "1" ]; then
+  fast_skip "31c·指纹翻转（--fingerprint-check）" "要真起/杀私有 tmux server（四腿夹具），快模式不跑"
+elif [ ! -f "$M28_CTR" ]; then
+  cond_skip "31c·指纹翻转（--fingerprint-check）" "缺 $M28_CTR"
+elif [ "$HAVE_TMUX" != "1" ]; then
+  cond_skip "31c·指纹翻转（--fingerprint-check）" "没有 tmux"
+else
+  live_mark
+  bash "$M28_CTR" --fingerprint-check >"$TMP/m28-fpcheck.log" 2>&1
+  M28_FP_RC=$?
+  if [ "$M28_FP_RC" = "0" ]; then
+    ok "M28 指纹四腿：客户端风暴不移动 / 杀 server 与真会话变化移动 / 无 server 只读"
+    grep -E '^  (ok|BAD)' "$TMP/m28-fpcheck.log" 2>/dev/null | sed 's/^/       /'
+  elif [ "$M28_FP_RC" = "77" ]; then
+    cond_skip "31c·指纹翻转（--fingerprint-check）" "$(grep -m1 '^SKIP' "$TMP/m28-fpcheck.log" 2>/dev/null | sed 's/^SKIP: //')"
+  else
+    bad "M28 指纹四腿失败（rc=$M28_FP_RC，见 $TMP/m28-fpcheck.log）"
+    tail -5 "$TMP/m28-fpcheck.log" 2>/dev/null | sed 's/^/       /'
+  fi
+fi
+
 # ── ⑪ 窗口注入端到端（真进程）：真派一个 worker / 真起一个 PM，env 里必须看到闸门前缀，
 #     **没有任何破坏性授权**（派单 shell 故意带 TEAM_ALLOW_DESTRUCTIVE_TMUX=1）；并且 CLI 自己在
 #     窗口里发出的破坏性调用（teardown 的 kill-window）记 act=allowed-owned（真身钉桩、默认 socket）──
@@ -11615,6 +11760,14 @@ EOS
 assert_eq "M50 夹具有效：去重后的主候选 36（主仓 12 + bob 12 + carol 12）" \
   "$(sed -n 's/^cands=//p' "$TMP/m50-cands.out")" "36"
 
+# P47/R3：工作树里的**未入账**记录 —— 计数夹具（spec 的 GIVEN 写明「one untracked record inside one of
+# the worktrees」）现在就要它：per-worktree 的 `git status` 也进这份预算，[4] 必须点名它。首行故意不写成
+# `# <ID> · …`（那不是任务报告），所以它只进 [4] 的字节扫描，不改变 [3] 的 34 行与上面的 36 个候选。
+M50W_REC="docs/team/reports/M50WT-bob.md"
+printf '# smoke M50 fixture（工作树未入账记录，不是任务报告）\n' > "$M50R/.worktrees/bob/$M50W_REC"
+assert_eq "M50 夹具新增：bob 工作树里的一份未入账记录就位（只进 [4] 扫描）" \
+  "$(git -C "$M50R/.worktrees/bob" status --porcelain --untracked-files=all -- docs/team/reports | grep -c '^?? docs/team/reports/M50WT-bob.md$')" "1"
+
 # ── ① 仓库根一次解析：`team board row <ID>` 整个调用 ≤ 1 次 git（旧实现同一条命令 3–5 次 rev-parse）
 m50_counted "$M50R" "$TMP/m50-row.log" $TEAM board row M50P1 >"$TMP/m50-row.out" 2>&1
 M50_N="$(wc -l < "$TMP/m50-row.log" | tr -d ' ')"
@@ -11633,6 +11786,7 @@ m50_counted "$M50R" "$TMP/m50-dg-on.log" $TEAM digest >"$TMP/m50-dg-on.out" 2>&1
 M50_ON="$(wc -l < "$TMP/m50-dg-on.log" | tr -d ' ')"
 [ "$M50_ON" -le 50 ] && ok "M50-② digest 的 git 调用数 ≤ 50（实测 $M50_ON）" || { bad "M50-② digest 的 git 调用数 $M50_ON > 50"; sort "$TMP/m50-dg-on.log" | uniq -c | sort -rn | head -5 | sed 's/^/      /'; }
 assert_has "$TMP/m50-dg-on.out" "M50W1-bob" "M50-② digest 真的扫到了工作树里的报告（不是空扫描蒙混）"
+assert_has "$TMP/m50-dg-on.out" "bob: $M50W_REC" "M50-②b 工作树里未入账的记录被点名（bob: <路径>；P47/R3 的扫描进同一预算）"
 assert_has "$TMP/m50-dg-on.out" "gates: none" "M50-② SKIPPED 记录照旧带标记列出（判定语义没动）"
 # [3] 必须列全 34 行（36 - PASS 记录有效 - FAIL 记录有效）。这条钉的是 M50 修过的一颗真雷：
 # wip 里 team__review_subject_tip 裸调 team__resolve_branch 拿 rc —— set -e 下 rc=1 直接杀死

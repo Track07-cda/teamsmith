@@ -8,6 +8,10 @@
 # 选项：
 #   --selftest        容器内 tmux 生死（含裸 kill-server）+ M67 泄漏形状（退役键进 server 全局环境）
 #                     + 断言宿主 server 指纹前后逐字节不变
+#   --fingerprint     只打印当前 TMUX/TMUX_TMPDIR 下的宿主 tmux 指纹（不起容器、只读、不起 server）
+#   --fingerprint-check
+#                     指纹前提的双面夹具：客户端风暴不移动它、杀掉范围内 server 会移动它
+#                     （四腿：a 风暴 / b 杀 server / c 真会话变化 / d 无 server 只读）
 #
 # 镜像里必须带 **procps**（V18 F-V18-2）：panel-b3 / pm-box-real 这类夹具用 `ps -o args= -p <pid>`
 # 判进程身份，BusyBox 的 ps 不支持这些参数 —— 旧缓存镜像会在容器里制造 6 条假红。镜像探针
@@ -41,6 +45,7 @@
 set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF_FILE="$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
 IMAGE="${TEAM_TMUX_IMAGE:-teamsmith-tmux-test:alpine}"
@@ -49,9 +54,12 @@ MEMORY="${TEAM_TMUX_MEMORY:-1g}"
 CT_TIMEOUT="${TEAM_TMUX_TIMEOUT:-1800}"
 
 SELFTEST=0; WITH_PI=0; REBUILD=0; KEEP_SHIM=0; PRINT_RUNTIME=0; CMD_STRING=""; ARGV=()
+FINGERPRINT=0; FINGERPRINT_CHECK=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --selftest) SELFTEST=1; shift ;;
+    --fingerprint) FINGERPRINT=1; shift ;;
+    --fingerprint-check) FINGERPRINT_CHECK=1; shift ;;
     --with-pi) WITH_PI=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
     --keep-shim) KEEP_SHIM=1; shift ;;
@@ -98,9 +106,15 @@ caller_socket() {
 }
 
 # ── 宿主 tmux 指纹：本轮容器跑完后必须逐字节一致 ──────────────────────────────────────────────
-# 只读（`list-sessions` 不会起 server：拿不到就报 no server running —— 实测见 M28 报告）。
+# 只由**范围内 socket 的宿主状态**构成 —— 每个 socket 一份：磁盘身份（inode/mtime/size）+ 该 socket 上
+# server 的会话表 +（有 server 应答时）它的 pid。三条纪律（D34 假红与 #1250 的教训）：
+#   · 客户端 / 闸门 shim / team 命令 / **命令行里只是提到 tmux 的进程**一律不得移动它 —— 旧版的
+#     whole-ps 快照正是被这些推着走了（D34 实测）；
+#   · 别的项目的私有 fixture server、范围外的 session 进不来（快照能被它们推动，per-socket 查询不能）；
+#   · 读取只读、不起 server：`list-sessions` 拿不到就报 no server running；`display-message -p '#{pid}'`
+#     在没有 server 的 socket 上只报错退出（只创建 socket 目录，不建 socket 文件 —— design §1.1 实测）。
 host_tmux_fingerprint() {
-  local out="" s sock
+  local out="" s pid
   for s in "$(caller_socket)" "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/default" /tmp/tmux-$(id -u)/default; do
     [ -n "$s" ] || continue
     case "$out" in *"|$s|"*) continue ;; esac      # 同一个 socket 只算一次
@@ -109,13 +123,114 @@ host_tmux_fingerprint() {
       out="$out$(stat -c '%i:%Y:%s' "$s" 2>/dev/null || printf '?')|"
       out="$out$(env -u TMUX -u TMUX_PANE timeout 5 tmux -S "$s" list-sessions \
                   -F '#{session_name}:#{session_created}:#{session_windows}:#{session_attached}' 2>/dev/null | sort | tr '\n' ',')|"
+      pid="$(env -u TMUX -u TMUX_PANE timeout 5 tmux -S "$s" display-message -p '#{pid}' 2>/dev/null || true)"
+      out="$out${pid:-none}|"
     else
       out="$out(absent)|"
     fi
   done
-  # 活着的 tmux 进程（server 的 argv 里带 tmux；杀/起 server 都会变）
-  out="$out|procs|$(ps -eo pid=,args= 2>/dev/null | grep -E '(^|/)tmux( |$)' | grep -v grep | sort | tr '\n' ';')"
   printf '%s' "$out" | md5sum | cut -d' ' -f1
+}
+
+# ── --fingerprint-check：指纹前提的双面夹具（四条腿，全在私有 default server 上）────────────────
+#   (a) 客户端风暴 + 一个**命令行里带 tmux 二进制**的活 shell：前后逐字节一致（旧版 whole-ps 快照在这腿红）
+#   (b) 杀掉范围内 server：值必须变（并因此非零退出）
+#   (c) 真会话变化：值也变 —— 前提就是宿主 tmux 状态，真变化不是噪声
+#   (d) 没有 server：两次读到同一个值、exit 0、不留下 socket 文件（只读，不起 server）
+# 只碰私有 TMUX_TMPDIR 里的 default socket；结束时（含异常路径）清掉那台私有 server。
+FP_DIR=""
+FP_DIR2=""
+fp_cleanup() { # 只碰 FP_DIR/FP_DIR2 里的私有 socket；目录丢了/空了就什么都不做（绝不回退默认 socket）
+  local dps="${FP_DIR:-} ${FP_DIR2:-}" dp
+  for dp in $dps; do
+    [ -n "$dp" ] || continue
+    if [ -S "$dp/tmux-$(id -u)/default" ]; then
+      env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$dp" tmux kill-server >/dev/null 2>&1 || true
+    fi
+    rm -rf "$dp"
+  done
+}
+ct_fingerprint_check() {
+  local rc=0 fp1 fp2 fp3 fpa fpb sp sp2 i r1 r2 d1 d2 sock sock2 fp_bin
+  if ! command -v tmux >/dev/null 2>&1; then
+    say "SKIP: --fingerprint-check 需要 tmux（宿主上没有）"
+    return 77
+  fi
+  FP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fpcheck.XXXXXX")" || { say "✗ --fingerprint-check：建不了私有目录"; return 1; }
+  sock="$FP_DIR/tmux-$(id -u)/default"
+  trap 'fp_cleanup' EXIT
+  # 私有 default socket 的包装（隔离证据：env -u TMUX + 私有 TMUX_TMPDIR）；真身走 PATH 里的 tmux
+  fp_tmux() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$FP_DIR" tmux "$@"; }
+  fp_read() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$FP_DIR" TMUX="$sock,1,0" bash "$SELF_FILE" --fingerprint; }
+  say "── --fingerprint-check（私有 default socket：$sock）"
+  if ! fp_tmux new-session -d -s fpcheck 'sleep 300' >/dev/null 2>&1; then
+    say "✗ (a) 私有 server 起不起来"; trap - EXIT; fp_cleanup; return 1
+  fi
+  fp1="$(fp_read)"; r1=$?
+  if [ "$r1" -ne 0 ] || [ -z "$fp1" ]; then
+    say "✗ (a) 第一次读指纹失败（rc=$r1）"; trap - EXIT; fp_cleanup; return 1
+  fi
+  note "(a) server 活着：$fp1"
+  # 风暴：读调用 + 一个**活着的** tmux 客户端（wait-for 挂着不走）+ 一个命令行里只是提到 tmux 的 shell；
+  # 旧版 whole-ps 快照会被这两条 ps 行推动，新版必须逐字节不变
+  fp_bin="$(command -v tmux)"
+  fp_tmux wait-for fpcheck-chan >/dev/null 2>&1 &
+  sp=$!
+  bash -c "exec -a $fp_bin sleep 60" >/dev/null 2>&1 &
+  sp2=$!
+  for i in 1 2 3 4 5 6; do
+    fp_tmux list-sessions >/dev/null 2>&1
+    fp_tmux display-message -p '#{pid}' >/dev/null 2>&1
+  done
+  fp2="$(fp_read)"
+  kill "$sp2" 2>/dev/null || true
+  fp_tmux wait-for -S fpcheck-chan >/dev/null 2>&1 || true
+  wait "$sp" 2>/dev/null || true; wait "$sp2" 2>/dev/null || true
+  if [ "$fp1" = "$fp2" ]; then
+    say "  ok  (a) 客户端风暴 + 客户端/命令行提到 tmux 的 shell：前后逐字节一致（$fp2）"
+  else
+    say "  BAD (a) 客户端风暴移动了指纹：前 $fp1 ≠ 后 $fp2（旧版 whole-ps 快照的假红形状）"
+    rc=1
+  fi
+  # (b) 杀掉范围内 server → 值变（旧版与新版的共同底线）
+  fp_tmux kill-server >/dev/null 2>&1 || true
+  fp3="$(fp_read)"
+  if [ "$fp2" = "$fp3" ]; then
+    say "  BAD (b) 杀掉范围内 server 后指纹没变：$fp2"; rc=1
+  else
+    say "  ok  (b) 杀掉范围内 server → 指纹变了：$fp2 ≠ $fp3"
+  fi
+  # (c) 真会话变化 → 值也变
+  fp_tmux new-session -d -s fpcheck2 'sleep 300' >/dev/null 2>&1
+  fpa="$(fp_read)"
+  fp_tmux new-session -d -s fpcheck3 'sleep 300' >/dev/null 2>&1
+  fpb="$(fp_read)"
+  if [ -n "$fpa" ] && [ "$fpa" != "$fpb" ]; then
+    say "  ok  (c) 真会话变化 → 指纹变了（$fpa ≠ $fpb）"
+  else
+    say "  BAD (c) 新增会话没有移动指纹（$fpa = $fpb）"; rc=1
+  fi
+  fp_tmux kill-server >/dev/null 2>&1 || true
+  # (d) 一个从未起过 server 的私有 TMUX_TMPDIR：读两次同值、exit 0、不冒出 socket 文件（只读，不起 server）
+  FP_DIR2="$(mktemp -d "${TMPDIR:-/tmp}/fpcheck2.XXXXXX")" || { say "✗ (d) 建不了第二个私有目录"; rc=1; }
+  if [ -n "${FP_DIR2:-}" ]; then
+    sock2="$FP_DIR2/tmux-$(id -u)/default"
+    d1="$(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$FP_DIR2" TMUX="$sock2,1,0" bash "$SELF_FILE" --fingerprint)"; r1=$?
+    d2="$(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$FP_DIR2" TMUX="$sock2,1,0" bash "$SELF_FILE" --fingerprint)"; r2=$?
+    if [ "$r1" = 0 ] && [ "$r2" = 0 ] && [ "$d1" = "$d2" ] && [ ! -e "$sock2" ]; then
+      say "  ok  (d) 没有 server：两次同值、exit 0、没冒出 socket（$d1）"
+    else
+      say "  BAD (d) 无 server 形状不对：rc=$r1/$r2 值 '$d1'/'$d2' socket=$([ -e "$sock2" ] && printf 在 || printf 无)"; rc=1
+    fi
+  fi
+  trap - EXIT
+  fp_cleanup
+  if [ "$rc" -eq 0 ]; then
+    say "✓ --fingerprint-check 通过：风暴不移动、真变化（杀 server / 新会话）移动、无 server 只读"
+  else
+    say "✗ --fingerprint-check 失败"
+  fi
+  return "$rc"
 }
 
 # ── 镜像准备（本地无则构建一次；构建脚本与上下文都在 $HOME 下，镜像层里不写任何密钥）─────────────
@@ -333,6 +448,9 @@ INNER
 
 # ── main ─────────────────────────────────────────────────────────────────────────────────────
 mkdir -p "$CT_CACHE" || skip "建不了缓存目录 $CT_CACHE"
+# --fingerprint / --fingerprint-check 是纯宿主的只读模式：不需要容器运行时，先于运行时探测处理
+if [ "$FINGERPRINT" = "1" ]; then host_tmux_fingerprint; exit 0; fi
+if [ "$FINGERPRINT_CHECK" = "1" ]; then ct_fingerprint_check; exit $?; fi
 if ! ct_resolve_runtime; then
   skip "找不到可用的容器运行时（podman 直接不可用，distrobox-host-exec podman 也不通）——容器不可用时门禁跳过而不是红"
 fi

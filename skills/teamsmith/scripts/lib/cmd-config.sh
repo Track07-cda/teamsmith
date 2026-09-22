@@ -533,6 +533,17 @@ team_config_pairlist_unknown_seats() { # <value> → 每行一个未知席位
   done
 }
 
+# 席位行的字段安全拆读：`IFS=$'\t' read` 会把**前导空字段**当分隔空白吃掉 —— 空模型（`dev=` 且回退
+# 也为空，或 pm 席位无模型）时 read 会把 source 标签读成 model、把 override 读成 source，最后吐出一个
+# 无值字段（`"override":}`）让整个文档失解。这里按字节切，空字段原样保留。
+team_config_seat_split() { # <model<TAB>source<TAB>override> <var_model> <var_src> <var_override>
+  local line="$1" rest
+  case "$line" in *$'\t'*) rest="${line#*$'\t'}" ;; *) rest="" ;; esac
+  printf -v "$4" '%s' "${rest#*$'\t'}"
+  printf -v "$3" '%s' "${rest%%$'\t'*}"
+  printf -v "$2" '%s' "${line%%$'\t'*}"
+}
+
 # 席位显示口径与 team ps 同源：有记录用记录，没记录用配置解析；来源 = team_agent_model_src。
 team_config_seat_state() { # <seat> → model<TAB>source<TAB>override
   local seat="$1" model src override="false"
@@ -658,7 +669,7 @@ team_config_list_json() {
   # （TEAM_PM_MODEL > TEAM_DEFAULT_MODEL）—— 视图的选项与 seats 块不会各说各话。
   local seat_model _src _override
   for a in $(team_agents) pm; do
-    IFS=$'\t' read -r seat_model _src _override <<< "$(team_config_seat_state "$a")"
+    team_config_seat_split "$(team_config_seat_state "$a")" seat_model _src _override
     [ -n "$seat_model" ] || continue
     case "$seen" in *" $seat_model "*) continue ;; esac
     seen="$seen$seat_model "
@@ -715,10 +726,9 @@ team_config_list_json() {
 
   local seats="" firsts=1
   for a in $(team_agents) pm; do
-    IFS=$'\t' read -r model src override <<< "$(team_config_seat_state "$a")"
-    case "$model" in
-      '') continue ;;
-    esac
+    team_config_seat_split "$(team_config_seat_state "$a")" model src override
+    case "$override" in true) ;; *) override="false" ;; esac   # override 永远是 JSON 布尔值（P47/R5）
+    # 空模型也要出这一行（seats 覆盖每个名册席位 + pm）：空模型序列化成 ""，不是无值字段也不是丢行。
     team_config_json_escape_set "$a"; local s_agent="$CFG_ESC"
     team_config_json_escape_set "$model"; local s_model="$CFG_ESC"
     [ "$firsts" = "1" ] || seats="$seats,"

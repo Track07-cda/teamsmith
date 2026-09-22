@@ -489,26 +489,48 @@ team_cmd_status() {
   return 0
 }
 
-# M31（V18 F-V18-4）：复验/交付记录写在**主仓工作区**却没入账 —— `team review` 把记录写进
-# `$TEAM_DOCS_ABS/reviews/`（主仓），而 PM 的 squash 合并只带分支内容：这些文件会原地悬置
-# （M22/M28/M30/P18 的 reviews 全部 untracked）。digest 必须让 PM 在合并流里立刻看见。
-# 只读：一次 `git status --porcelain`（`--untracked-files=all` 让报告包目录里的文件也点名），
-# 不写任何东西。只看**主仓**：agent 工作树里的未提交报告是草稿，[3] 已解释「先等交付」，不重复。
-team_untracked_records() { # → 未跟踪的复验/报告记录（相对主仓路径，一行一个）；没有/读不出 → 返回 1
-  local out
-  out="$(git -C "$TEAM_MAIN_ROOT" status --porcelain --untracked-files=all -- \
-        "$TEAM_DOCS_DIR/reviews" "$TEAM_DOCS_DIR/reports" 2>/dev/null)" || return 1
-  [ -n "$out" ] || return 1
-  # 过滤脚手架文件（.gitkeep/.gitignore）：它们不是记录，只是 docs/team 的目录占位（每个项目 init 时就有）。
-  printf '%s\n' "$out" | sed -n 's/^?? //p' | awk -F/ '$NF !~ /^\./'
+# M31（V18 F-V18-4）+ P47/R2：复验/交付记录写在**任何一个工作区**却没入账 —— `team review` 把记录写进
+# `$TEAM_DOCS_ABS/reviews/`（主检出的 docs 目录），agent 的报告与包文件写在工作树里，而 PM 的 squash
+# 合并只带分支内容：这些文件会原地悬置（M22/M28/M30/P18/P36 的 reviews 与报告包都 untracked）。digest
+# 必须让 PM 在合并流里立刻看见，所以**主检出与每个工作树都扫**。
+# 只读：每个源一次 `git status --porcelain --untracked-files=all`（`--untracked-files=all` 让报告包
+# 目录里的文件也点名），不写任何东西；只看配置的 `<docs>/reviews` 与 `<docs>/reports` 两条路径
+# （其它脏文件、构建临时目录一律静默）。
+# 输出：主检出一行一个 <相对主检出的记录路径>；工作树一行一个 `<agent>: <工作树内相对路径>`
+# （工作树目录名即 agent；包内文件用它自己的路径）。工作树里 `git status` 失败（陈旧目录已不是工作树）
+# → 静默跳过。一份记录也没有（或读不出）→ 返回 1（调用方按「无」处理）。
+team_untracked_records() {
+  local found=0 dir out rel i
+  local -a dirs=() names=()
+  dirs=("$TEAM_MAIN_ROOT"); names=("")
+  for dir in "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/; do
+    [ -d "$dir" ] || continue
+    [ -e "${dir%/}/.git" ] || continue      # 不是工作树（陈旧目录）→ 不必花一次 git status
+    dir="${dir%/}"
+    dirs+=("$dir"); names+=("$(basename "$dir")")
+  done
+  for i in "${!dirs[@]}"; do
+    out="$(git -C "${dirs[$i]}" status --porcelain --untracked-files=all -- \
+          "$TEAM_DOCS_DIR/reviews" "$TEAM_DOCS_DIR/reports" 2>/dev/null)" || continue
+    [ -n "$out" ] || continue
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      if [ -n "${names[$i]}" ]; then printf '%s: %s\n' "${names[$i]}" "$rel"
+      else printf '%s\n' "$rel"; fi
+      found=1
+    done < <(printf '%s\n' "$out" | sed -n 's/^?? //p' | awk -F/ '$NF !~ /^\./')
+  done
+  [ "$found" -eq 1 ] || return 1
+  return 0
 }
 
 # M31 × M16：记录文件名里带着任务代号，警告行必须随身带名字（与 [3]/[4]/[5] 同一口径）。
 # 从路径尽力而为地取候选 id（reviews/<ID>[-suffix].{md,log} / reports/<ID>-<agent>[/…]），
 # 逐段往前试「已知任务」；都不认识时退回第一段 —— 查不到名字时调用方只印路径，不编名字。
-team_record_task_id() { # <相对主仓路径> → 候选任务 id（取不到 → 空）
+team_record_task_id() { # <记录路径> → 候选任务 id（取不到 → 空）；工作树记录带 `<agent>: ` 前缀，先剥掉
   local rel="${1:-}" base comp p
   [ -n "$rel" ] || return 0
+  case "$rel" in *": "*) rel="${rel#*: }" ;; esac
   case "$rel" in
     "$TEAM_DOCS_DIR/reviews/"*) base="$(basename "$rel")"; base="${base%.md}"; base="${base%.log}" ;;
     "$TEAM_DOCS_DIR/reports/"*) comp="${rel#"$TEAM_DOCS_DIR/reports/"}"; comp="${comp%%/*}"; base="${comp%.md}" ;;

@@ -1172,10 +1172,13 @@ team_agent_known() {
 }
 
 team_agent_model() {
-  local want="$1" pair
+  local want="$1" pair val
   for pair in $(printf '%s' "$TEAM_AGENT_MODELS" | tr '\n\t' '  '); do
     case "$pair" in
-      "$want"=*) printf '%s\n' "${pair#*=}"; return 0 ;;
+      "$want"=*)
+        val="${pair#*=}"
+        [ -n "$val" ] || continue      # 空值的 token（dev=）与「没这个 token」同一个解析（P47/R4）
+        printf '%s\n' "$val"; return 0 ;;
     esac
   done
   printf '%s\n' "$TEAM_DEFAULT_MODEL"
