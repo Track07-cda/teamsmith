@@ -170,14 +170,25 @@ Honest edges (documented, not hidden):
   read and the clear keys is one command wide — same class of residual window as check → type, documented here
   rather than hidden.
 - **Rule-looking rows inside your own draft are not borders.** A pasted markdown separator or table border is a
-  `─` row; the guard pairs the bottom border with the **highest** qualifying row above it (a full-rule row of
-  equal width, or the E3-era spinner shape), so a short draft rule row — and also an equal-width or wider one
-  (V9-A4/A5/A8/A10) — counts as box content and the box reads busy. Two documented costs: on a TUI that **clips**
-  long lines to the pane width, an over-long draft line can read as an equal-width rule row and enlarge the located
-  box (the verdict errs to busy, never to gluing; real Pi 0.85.1 wraps one column short of the border width, so
-  the shape is unreachable there); and the `── ␣…`-plus-long-trailing-rule shape is accepted as a top-border
-  candidate on purpose (it was measured on the E3 Pi), so a draft line with that exact shape reads as box content
-  and the box reads busy — never as a border. The working row of Pi 0.85.1 is a different shape altogether
+  `─` row; the guard takes the **highest** qualifying row above the cursor as the top border and the **lowest**
+  qualifying row below it as the bottom border (a full-rule row of equal width, or the E3-era spinner shape where a
+  spinner-shaped top border is admissible; the bottom search is strictly below the cursor, V9-A10), so a short draft
+  rule row — and also an equal-width or wider one (V9-A4/A5/A8/A10) — counts as box content and the box reads
+  busy. Three documented costs: on a TUI that **clips** long lines to the pane width, an over-long draft line can
+  read as an equal-width rule row and enlarge the located box (the verdict errs to busy, never to gluing; real Pi
+  0.85.1 wraps one column short of the border width, so the shape is unreachable there); the `── ␣…`-plus-long-trailing-rule
+  shape is accepted as a top-border candidate on purpose (it was measured on the E3 Pi), so a draft line with that
+  exact shape reads as box content and the box reads busy — never as a border; and a full-rule row **below** the
+  located box (a rule the conversation draws, or any chrome rule row under the box) enlarges the box over that row
+  and the rows between it and the box's own bottom border, so the box reads busy and delivery waits — the mirror of
+  the top border's cost, on the same conservative side. That last cost is **not reachable in either measured
+  layout**: on every stored real capture (Pi 0.85.1 and 0.87.0, `tests/frames/`) the pane's lowest full-rule row is
+  the box's own bottom border and no full-rule row sits below it (the rows below it are the box's own footer/status
+  rows; the trust-prompt frame is an overlay with no box at all, and the overlay path takes precedence). It is also
+  not separable in principle: a frame whose draft is exactly one rule row and a frame whose conversation draws a
+  rule row immediately below an empty box are the **same bytes** (sha256 `e463c80c…f5053a6`), so one rule must
+  serve both readings, and the conservative one (a rule row below the cursor is content → busy) is the one that
+  cannot glue. The working row of Pi 0.85.1 is a different shape altogether
   (` ⠋ Blanching… · 0s`, braille glyph plus text, drawn on its own row **above** the box, top border still a full
   rule): it is not a border candidate, tier1 keeps locating the box, and if a future TUI ever moved that row into
   the border position the pairing would find no box and the pane would be typed as today with one warning

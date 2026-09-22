@@ -68,7 +68,8 @@ team_dedup_sec() { # TEAM_NOTIFY_DEDUP_SEC（默认 20s）
 
 # ---------------------------------------------------------------- 守卫：输入框几何
 # 光标锚定（E3 §1.2/§1.5）：Pi 的输入框不在 pane 底部，光标永远落在内容行上，所以
-# 从光标行向下找第一条完整横线（下边框），再向上找第一条以框线开头的行（上边框 / 工作中的 spinner 行）。
+# 从光标行向下找**最低的**合格完整横线（下边框；P80：不是最近的那条 —— 草稿自己画的
+# 等宽框线要留在框内），再向上找**最高的**候选行（上边框 / 工作中的 spinner 行）。
 # 输出每行 "OFFSET|TEXT|ROW"（TEXT 已去尾空白）；找不到边框输出 NONE。
 # 陷阱（E3 §1.7）：mawk + UTF-8 下字面量框线正则永远不匹配，必须 LC_ALL=C + 字节形 \xe2\x94\x80；
 # 而且必须先缓存所有行、在 END 里算行号（单遍算 bottom-offset 会得到负数）。
@@ -122,31 +123,43 @@ _team_box_banner_rows() { # <cy>：标记更新横幅块的行（stdout：行号
     }'
 }
 
+# 下边框候选的**尝试顺序** = 本变更唯一的决策点（P80, design D3「一处实现」）。
+# stdin：合格候选，每行 `<下边框候选行> <上边框行>`（按候选行号升序）；stdout：按尝试顺序排列的
+# 同一批行；**第一行就是胜者**。默认 **最低优先**：下边框 = 光标下方**最低的**合格整行规则行 ——
+# 上边框 HIGHEST（V9-A4/A5/A8/A10）的镜像。草稿自己画的等宽框线/spinner 行因此落在框**内**成为
+# 内容 → BUSY；「最近优先」（旧行为）正好相反：草稿的框线被当成下边框，它下方（常常还有）的草稿
+# 落在框外 → 脏框判空 → 粘连。红侧不靠产品开关：测试进程把这个函数影子成 `cat`（保持升序 =
+# 旧的最近优先）即可**逐字**复现旧判定（与 M24_SHADOW_CHROME / M45_NO_STRIP 同一模式；
+# 生产里没有开关 —— 有开关就等于发布两种行为，而规格钉的是这一种）。
+_team_box_bottom_candidate_order() {
+  LC_ALL=C awk '{ a[NR]=$0 } END { for (i=NR;i>=1;i--) print a[i] }'
+}
+
 # 几何定位的唯一实现：stdin=capture 全文，$1=光标行（1-based）→ 输出 "top bottom"（找不到 → 空）。
 _team_box_geometry() { # <cy>
-  local cy="${1:-}" raw ban
+  local cy="${1:-}" raw ban pass useban res ordered pick
   raw="$(cat)"
   ban="$(_team_box_banner_rows "$cy" <<< "$raw")"
-  printf '%s\n' "$raw" | LC_ALL=C awk -v cy="$cy" -v ban="$ban" '
-    { L[NR]=$0 }
-    END {
-      if (ban != "") { n=split(ban, X, " "); for (z=1;z<=n;z++) BAN[X[z]+0]=1 }
-      # M45：横幅块（ban 里的行号）在几何里**整块跳过** —— 它们是 chat 区的 chrome，不是框的一部分。
-      # 跳过而不是「最近优先」：V9-A4/A5/A8/A10 的保守方向（草稿自己画的等宽框线要留在框内 → BUSY）
-      # 一个字都不改；横幅块被标出来之后，「取最高」自然落到真正的输入框上边框。
-      #
-      # 两遍：第一遍跳过横幅；若跳完**连一个框都找不出来**，说明那一堆标记把真框也吞了
-      # （可构造的对抗形状：草稿自己就是“整行 ─ + 两行头 + 尾行 + 整行 ─”，而框的上边框被当成开界）
-      # → 退回不跳的保守行为（框算大 → BUSY），绝不退成 NONE（NONE = 守卫失效 → 白打字进人的框）。
-      t=0; b=0
-      for (pass=1;pass<=2;pass++) {
-        useban = (pass == 1 && ban != "")
-        # 候选下边框：光标行**以下**、整行全是 ─ 的行（自下而上最近优先）。光标行自己不算：
-        # 光标永远落在内容行上（E3 §1.2），光标行若整行 ─，那是草稿自己画的等宽框线（V9-A10：
-        # 把它当下边框会让上方正文落进提示行槽位被排除 → 脏框判空 → 粘连）。
+  # 两遍：第一遍跳过横幅；若跳完**连一个框都找不出来**，说明那一堆标记把真框也吞了
+  # （可构造的对抗形状：草稿自己就是“整行 ─ + 两行头 + 尾行 + 整行 ─”，而框的上边框被当成开界）
+  # → 退回不跳的保守行为（框算大 → BUSY），绝不退成 NONE（NONE = 守卫失效 → 白打字进人的框）。
+  for pass in 1 2; do
+    if [ "$pass" -eq 1 ] && [ -n "$ban" ]; then useban=1; else useban=0; fi
+    # 每个合格候选的「下边框候选 → 上边框」对，按候选行号升序（**顺序不在这里定**：
+    # 胜者由 _team_box_bottom_candidate_order 决定 —— 它是本变更唯一的决策点）。
+    res="$(printf '%s\n' "$raw" | LC_ALL=C awk -v cy="$cy" -v ban="$ban" -v useban="$useban" '
+      { L[NR]=$0 }
+      END {
+        if (ban != "") { n=split(ban, X, " "); for (z=1;z<=n;z++) BAN[X[z]+0]=1 }
+        # M45：横幅块（ban 里的行号）在几何里**整块跳过** —— 它们是 chat 区的 chrome，不是框的一部分。
+        # 跳过而不是「最近优先」：V9-A4/A5/A8/A10 的保守方向（草稿自己画的等宽框线要留在框内 → BUSY）
+        # 一个字都不改；横幅块被标出来之后，「取最高」自然落到真正的输入框上边框。
+        #
+        # 候选下边框：光标行**以下**、整行全是 ─ 的行。光标行自己不算：光标永远落在内容行上
+        # （E3 §1.2），光标行若整行 ─，那是草稿自己画的等宽框线（V9-A10：把它当下边框会让上方正文
+        # 落进提示行槽位被排除 → 脏框判空 → 粘连）。
         nb=0
         for (i=cy+1;i<=NR;i++) if (!(useban && BAN[i]) && L[i] ~ /^(\xe2\x94\x80)+$/) { nb++; B[nb]=i }
-        if (!nb) continue
         for (k=1;k<=nb;k++) {
           cand=B[k]; w=length(L[cand])   # LC_ALL=C 下 ─ 定宽 3 字节：等字节 = 等宽
           # 上边框 = 下边框以上**最高的**候选（tier1：等宽整行 ─；tier2：spinner 形态）。
@@ -169,13 +182,18 @@ _team_box_geometry() { # <cy>
             if (L[i] ~ /^\xe2\x94\x80\xe2\x94\x80 / && \
                 L[i] ~ /(\xe2\x94\x80){8}[ \t]*$/) hi2=i
           }
-          if (hi1) { t=hi1; b=cand; break }
-          if (hi2) { t=hi2; b=cand; break }
+          if (hi1) print cand, hi1
+          else if (hi2) print cand, hi2
         }
-        if (t && b) break
-      }
-      if (t && b) printf "%d %d\n", t, b
-    }'
+      }')"
+    [ -n "$res" ] || continue
+    ordered="$(_team_box_bottom_candidate_order <<< "$res")"
+    pick="${ordered%%$'\n'*}"
+    [ -n "$pick" ] || continue
+    printf '%s %s\n' "${pick##* }" "${pick%% *}"
+    return 0
+  done
+  return 0
 }
 
 # 帧 → 框内容行（纯函数：stdin=capture 全文，$1=光标行 1-based）。

@@ -5986,14 +5986,191 @@ assert_has_echo "$M45_D" "geometry=[1 8]" "M45 对抗帧①：几何仍然找得
   > "$M45_F/draft-top.txt"
 M45_E="$(m45_probe "$M45_F/draft-top.txt" 3)"
 assert_not_echo "$M45_E" "geometry=[]" "M45 对抗帧②：跳过横幅后一个框都找不出来时退回保守行为（绝不退成 NONE → 守卫失效）"
-assert_has_echo "$M45_E" "box_nows=[UpdateAvailableNewversion1.0.0isavailable.RunpiupdateChangelog:https://x]" \
-  "M45 对抗帧②：内容仍然读作框内容（BUSY）——被误标的块喂退了保守分支，没有白打字；P67 起边框邻行\n     （` Changelog: https://x`，非状态行形状）也是内容，所以期望串按帧的真实内容加长了这一段"
+assert_has_echo "$M45_E" "box_nows=[UpdateAvailableNewversion1.0.0isavailable.RunpiupdateChangelog:https://x────────────────────────────────────────]" \
+  "M45 对抗帧②：内容仍然读作框内容（BUSY）——被误标的块喂退了保守分支，没有白打字；P67 起边框邻行\n     （` Changelog: https://x`，非状态行形状）也是内容，所以期望串按帧的真实内容加长了这一段；P80：下边框改取最低合格候选后几何 [1 5]→[1 7]，框自带的上边框那一行（40 个 ─）现在也落在框内算内容，期望串据此再加这一段（更强，不是放宽）"
 # 对照：没有横幅的普通框 —— 判据一个字都没变
 { m45_rule 40; printf '\n'; printf ' half sentence\n'; printf ' fake-pi  Fake Pi  max\n'; m45_rule 40; printf ' footer\n'; } > "$M45_F/no-banner.txt"
 M45_F0="$(m45_probe "$M45_F/no-banner.txt" 2)"
 assert_has_echo "$M45_F0" "geometry=[1 5]" "M45 对照：没有横幅时几何与行为不变"
 assert_has_echo "$M45_F0" "box_nows=[halfsentence]" "M45 对照：普通草稿照旧读得出来"
 assert_has_echo "$M45_F0" "banner_rows=[]" "M45 对照：没有横幅时一行都不标"
+
+# ---------------------------------------------------------------- 12b-h0d. P80 下边框候选（纯帧，快模式照跑）
+section "12b-h0d · P80 下边框判据：最低的合格规则行（草稿自己的框线留在框内）"
+# 现场（P74 的 F1；V9-A4/A5/A8/A10 缺陷类的另一端）：判据只钉了**上**边框取「最高的」候选
+# （V9-A4/A5/A8/A10），下边框一直是「最近优先」—— 草稿自己在光标下方画一条等宽框线（粘贴的
+# Markdown 分隔线/表格边框，裁切型 TUI 可达）就成了下边框：框被定位得**太小**，框线以下的草稿
+# 落在框外 → 脏框判空 → 就绪门放行、payload 打进人的草稿（D20 损害；与 P67 是同一类缺陷的两头）。
+# P80：下边框 = 光标下方**最低的**合格整行规则行（上边框 HIGHEST 的镜像）。方向单调：相对
+# 「最近优先」框只会变大，判定只可能从 EMPTY 移向 BUSY，绝不反向（本段逐帧断言两个方向）。
+# 这一节是**纯帧**（不开 tmux、不跑 pi，FAST 照跑）：八份合成帧（tests/frames/p78-*.txt，
+# README 里明说是「裁切型 TUI」的合成模型，不是真 pi 实拍）+ 五份已存真帧；每帧先按生产判据打
+# geometry / box_nows / verdict，再把候选顺序影子成升序（= 旧的最近优先）跑第二遍（**红侧**，
+# 可证伪）：红侧每一次翻转都证明这条判据真的咬在实现上，每一次不变都钉住控制帧。
+P80_FD="$SKILL_DIR/tests/frames"
+P80_PROBE="$TMP/p80-frame-probe.sh"
+cat > "$P80_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <帧文件> <光标行> [shadow] [payload] → geometry / box_nows / verdict=… rc=… [holds_only=…]
+# shadow=1：把下边框候选的**顺序**影子成升序（= 旧的「最近优先」）—— 红侧，不是产品开关。
+set -u
+SKILL_DIR="$1"; FR="$2"; CY="$3"; SHADOW="${4:-0}"; PAYLOAD="${5:-}"
+. "$SKILL_DIR/scripts/lib/common.sh"; . "$SKILL_DIR/scripts/lib/outbox.sh"
+. "$SKILL_DIR/tests/lib/box-judge.sh"
+[ "$SHADOW" = "1" ] && _team_box_bottom_candidate_order() { cat; }
+printf 'geometry=[%s]\n' "$(_team_box_geometry "$CY" < "$FR")"
+text="$(_team_box_text_of_frame "$CY" < "$FR" 2>/dev/null || true)"
+printf 'box_nows=[%s]\n' "$(printf '%s' "$text" | tr -d '[:space:]')"
+if v="$(team_box_frame_verdict "$CY" < "$FR" 2>/dev/null)"; then printf 'verdict=%s rc=0\n' "$v"
+else printf 'verdict=%s rc=1\n' "$v"; fi
+if [ -n "$PAYLOAD" ]; then
+  if team_box_text_holds_only "$text" "$PAYLOAD"; then printf 'holds_only=only-ours\n'; else printf 'holds_only=extra-text\n'; fi
+fi
+EOS
+chmod +x "$P80_PROBE"
+p80_probe() { # <帧> <光标行> [shadow] [payload]
+  ( cd "$REPO" && bash "$P80_PROBE" "$SKILL_DIR" "$1" "$2" "${3:-0}" "${4:-}" 2>&1 )
+}
+P80_FM() { bash "$SKILL_DIR/tests/pm-box-real.sh" --frame "$1" --cursor "$2" 2>&1; }
+P80_R40="$(printf '─%.0s' $(seq 1 40))"
+P80_F1="$P80_FD/p78-draft-rule-below-cursor.txt"
+P80_F2="$P80_FD/p78-draft-rule-only.txt"
+P80_F3="$P80_FD/p78-wider-rule-below-cursor.txt"
+P80_F4="$P80_FD/p78-spinner-row-below-cursor.txt"
+P80_F5="$P80_FD/p78-cursor-mid-draft.txt"
+P80_F6="$P80_FD/p78-conversation-rule-below-box.txt"
+P80_F7="$P80_FD/p78-draft-rule-below-cursor-line.txt"
+P80_F8="$P80_FD/p78-draft-rule-blank-region.txt"
+for _p80f in "$P80_F1" "$P80_F2" "$P80_F3" "$P80_F4" "$P80_F5" "$P80_F6" "$P80_F7" "$P80_F8"; do
+  assert_file "$_p80f" "P80：合成帧 $(basename "$_p80f") 在 tests/frames/（裁切型 TUI 模型，README 明说合成）"
+done
+
+# ── 绿侧：草稿自己在光标下方画的框线是内容（框扩到最低候选）────────────────────
+P80_G1="$(p80_probe "$P80_F1" 2)"
+assert_has_echo "$P80_G1" "geometry=[1 5]" "P80 绿侧①：草稿框线下方还有草稿 → 框取最低候选 [1 5]（不是最近的 [1 3]）"
+assert_has_echo "$P80_G1" "box_nows=[$P80_R40" "P80 绿侧①：草稿自己的框线行落在框**内**算内容"
+assert_has_echo "$P80_G1" "drafttextbelowmyownrule]" "P80 绿侧①：框线下面的草稿文字也在框内"
+assert_has_echo "$P80_G1" "verdict=idle-read=NOT-EMPTY rc=1" "P80 绿侧①：判忙 —— P74 的红形状不再放行"
+P80_G2="$(p80_probe "$P80_F2" 2)"
+assert_has_echo "$P80_G2" "geometry=[1 4]" "P80 绿侧①b：草稿只有一条框线 → [1 4]"
+assert_has_echo "$P80_G2" "verdict=idle-read=NOT-EMPTY rc=1" "P80 绿侧①b：判忙（保守读法，绝不放行）"
+P80_G7="$(p80_probe "$P80_F7" 2 0 'half a sentence')"
+assert_has_echo "$P80_G7" "moredraft]" "P80 绿侧⑦：框线以下的 ` more draft` 也在框里（holds_only 看得见整个框）"
+assert_has_echo "$P80_G7" "holds_only=extra-text" "P80 绿侧⑦：payload 只等于框线上半段 → extra-text（P80 前是 only-ours）"
+P80_G8="$(p80_probe "$P80_F8" 2)"
+assert_has_echo "$P80_G8" "geometry=[1 5]" "P80 绿侧⑧：框线与真下边框之间只有空行时仍然扩框（备选规则在这里会读回 EMPTY）"
+assert_has_echo "$P80_G8" "verdict=idle-read=NOT-EMPTY rc=1" "P80 绿侧⑧：空区域不影响规则 → NOT-EMPTY"
+
+# ── 控制帧：两个方向逐字相同（更宽的 rule / spinner 行 / 光标在草稿中间）────────
+P80_G3="$(p80_probe "$P80_F3" 2)"; P80_R3="$(p80_probe "$P80_F3" 2 1)"
+assert_eq "P80 对照②：更宽的草稿 rule（不配对）两个方向逐字相同" "$P80_R3" "$P80_G3"
+assert_has_echo "$P80_G3" "geometry=[1 5]" "P80 对照②：宽行不能当边框 → 几何不变 [1 5]"
+assert_has_echo "$P80_G3" "verdict=idle-read=NOT-EMPTY rc=1" "P80 对照②：判定不变（本来就读作内容）"
+P80_G4="$(p80_probe "$P80_F4" 2)"; P80_R4="$(p80_probe "$P80_F4" 2 1)"
+assert_eq "P80 对照③：spinner 形状行两个方向逐字相同" "$P80_R4" "$P80_G4"
+assert_has_echo "$P80_G4" "geometry=[1 5]" "P80 对照③：下边框候选只认整行 ─ → spinner 行留在框内"
+assert_has_echo "$P80_G4" "Blanching" "P80 对照③：spinner 行是框内容（不是边框）"
+P80_G5="$(p80_probe "$P80_F5" 3)"; P80_R5="$(p80_probe "$P80_F5" 3 1)"
+assert_eq "P80 对照⑤：光标在三行草稿中间两个方向逐字相同" "$P80_R5" "$P80_G5"
+assert_has_echo "$P80_G5" "box_nows=[draftline1draftline2draftline3]" "P80 对照⑤：三行草稿全部读出"
+
+# ── 代价形状（记录在案，不是回归）：框下方的整行 rule 把框撑大 → 判忙 ──────────
+P80_G6="$(p80_probe "$P80_F6" 2)"
+assert_has_echo "$P80_G6" "geometry=[1 4]" "P80 代价⑥：空框正下方紧贴一条 rule → 框扩到 [1 4]（troubleshooting §3 写明）"
+assert_has_echo "$P80_G6" "verdict=idle-read=NOT-EMPTY rc=1" "P80 代价⑥：保守方向（判忙、投递等待），绝不粘连"
+
+# ── 红侧（可证伪）：把唯一的顺序决策影子成升序（= 旧的「最近优先」）──────────────
+# 影子只覆盖那一个函数：候选集合、配对规则、横幅排除、两遍回退全部照旧。
+P80_R1="$(p80_probe "$P80_F1" 2 1)"
+assert_has_echo "$P80_R1" "geometry=[1 3]" "P80 红侧①：影子后同帧退回最近的 [1 3]"
+assert_has_echo "$P80_R1" "box_nows=[]" "P80 红侧①：框被定位得太小 → 框文本读空（P74 的 F1 原样复现）"
+assert_has_echo "$P80_R1" "verdict=idle-read=EMPTY rc=0" "P80 红侧①：判定退回 EMPTY —— 就绪门会在 Draft 上放行"
+P80_R2="$(p80_probe "$P80_F2" 2 1)"
+assert_has_echo "$P80_R2" "geometry=[1 3]" "P80 红侧①b：影子后 [1 3]"
+assert_has_echo "$P80_R2" "verdict=idle-read=EMPTY rc=0" "P80 红侧①b：判定退回 EMPTY"
+P80_R6="$(p80_probe "$P80_F6" 2 1)"
+assert_has_echo "$P80_R6" "geometry=[1 3]" "P80 红侧⑥：代价形状在旧顺序下退回 [1 3]"
+assert_has_echo "$P80_R6" "verdict=idle-read=EMPTY rc=0" "P80 红侧⑥：代价与缺陷是同一枚硬币的两面（旧顺序把框读空）"
+P80_R7="$(p80_probe "$P80_F7" 2 1 'half a sentence')"
+assert_has_echo "$P80_R7" "box_nows=[halfasentence]" "P80 红侧⑦：影子后框被截断（只看得到框线上半段）"
+assert_has_echo "$P80_R7" "holds_only=only-ours" "P80 红侧⑦：截断的框正好等于 payload → 误判「只有我们」（P80 前的事故形状）"
+P80_R8="$(p80_probe "$P80_F8" 2 1)"
+assert_has_echo "$P80_R8" "geometry=[1 3]" "P80 红侧⑧：被证伪的备选规则形状在旧顺序下也是 [1 3]"
+assert_has_echo "$P80_R8" "verdict=idle-read=EMPTY rc=0" "P80 红侧⑧：退回 EMPTY（说明「区域非空才扩框」不能替代本规则）"
+
+# ── 真帧：P80 前后逐字不变（两个方向都比），且两份布局的最低整行 rule 是框自己的下边框 ──
+P80_REAL="$P80_FD/pi-0.87.0-one-line-draft.txt:$P80_FD/pi-0.87.0-draft-half-sentence.txt:$P80_FD/pi-0.87.0-empty-box.txt:$P80_FD/pi-0.85.1-update-banner.txt:$P80_FD/pi-0.87.0-project-trust-prompt.txt"
+IFS=':' read -r -a P80_REAL_ARR <<< "$P80_REAL"
+for _p80r in "${P80_REAL_ARR[@]}"; do
+  _p80cy=26; case "$(basename "$_p80r")" in pi-0.87.0-project-trust-prompt.txt) _p80cy=16 ;; esac
+  P80_RG="$(p80_probe "$_p80r" "$_p80cy")"; P80_RR="$(p80_probe "$_p80r" "$_p80cy" 1)"
+  assert_eq "P80 真帧 $(basename "$_p80r")：两个方向逐字相同（判定不回退）" "$P80_RR" "$P80_RG"
+done
+P80_REAL_ONE="$(p80_probe "$P80_FD/pi-0.87.0-one-line-draft.txt" 26)"
+assert_has_echo "$P80_REAL_ONE" "geometry=[25 27]" "P80 真帧①：0.87.0 单行草稿几何不变（[25 27]）"
+assert_has_echo "$P80_REAL_ONE" "verdict=idle-read=NOT-EMPTY rc=1" "P80 真帧①：0.87.0 单行草稿判定不变（NOT-EMPTY）"
+P80_REAL_EMPTY="$(p80_probe "$P80_FD/pi-0.87.0-empty-box.txt" 26)"
+assert_has_echo "$P80_REAL_EMPTY" "geometry=[25 27]" "P80 真帧②：0.87.0 空框几何不变（[25 27]）"
+assert_has_echo "$P80_REAL_EMPTY" "verdict=idle-read=EMPTY rc=0" "P80 真帧②：0.87.0 空框仍 EMPTY"
+P80_REAL_BANNER="$(p80_probe "$P80_FD/pi-0.85.1-update-banner.txt" 26)"
+assert_has_echo "$P80_REAL_BANNER" "geometry=[24 29]" "P80 真帧③：0.85.1 横幅帧几何不变（[24 29]）"
+assert_has_echo "$P80_REAL_BANNER" "verdict=idle-read=EMPTY rc=0" "P80 真帧③：0.85.1 横幅帧仍 EMPTY"
+P80_REAL_TRUST="$(p80_probe "$P80_FD/pi-0.87.0-project-trust-prompt.txt" 16)"
+assert_has_echo "$P80_REAL_TRUST" "verdict=overlay=trust-prompt rc=0" "P80 真帧④：信任弹窗仍是覆盖层（overlay 优先权未变）"
+# 结构：两份真实布局里，pane 最低的整行 rule 就是框自己的下边框 —— 镜像代价在已测布局上不可达
+P80_STRUCT="$(for _p80r in "${P80_REAL_ARR[@]}"; do
+  LC_ALL=C awk -v name="$(basename "$_p80r")" '{ L[NR]=$0 } END {
+    last=0; for (i=1;i<=NR;i++) if (L[i] ~ /^(\xe2\x94\x80)+$/) last=i
+    below=0; for (i=last+1;i<=NR;i++) if (L[i] ~ /^(\xe2\x94\x80)+$/) below++
+    printf "%s below=%d\n", name, below }' < "$_p80r"
+done)"
+assert_not_echo "$P80_STRUCT" "below=1" "P80 结构：五份真帧里，最低整行 rule 之下都没有第二条整行 rule（代价不可达）"
+
+# 单调性（requirement 的方向承诺）：相对旧的最近优先，框只会变大，所以**任何**帧都不许从
+# BUSY（NOT-EMPTY）翻成 EMPTY。这里对全部 13 份已存帧逐帧对比红/绿两侧的判定。
+P80_MONO_BAD=""; P80_MONO_N=0
+for _p80r in "${P80_REAL_ARR[@]}" "$P80_F1" "$P80_F2" "$P80_F3" "$P80_F4" "$P80_F5" "$P80_F6" "$P80_F7" "$P80_F8"; do
+  _p80cy=2
+  case "$(basename "$_p80r")" in
+    pi-0.87.0-project-trust-prompt.txt) _p80cy=16 ;;
+    pi-0.8*) _p80cy=26 ;;
+    p78-cursor-mid-draft.txt) _p80cy=3 ;;
+  esac
+  P80_MONO_N=$((P80_MONO_N + 1))
+  P80_MG="$(p80_probe "$_p80r" "$_p80cy")"; P80_MR="$(p80_probe "$_p80r" "$_p80cy" 1)"
+  case "$P80_MR/$P80_MG" in
+    *"verdict=idle-read=NOT-EMPTY"*"verdict=idle-read=EMPTY"*) P80_MONO_BAD="$P80_MONO_BAD $(basename "$_p80r")" ;;
+  esac
+done
+assert_eq "P80 单调性：全部 13 份已存帧都逐个对比了红/绿两侧" "$P80_MONO_N" "13"
+assert_eq "P80 单调性：红侧判忙的帧在绿侧没有一个翻成 EMPTY（框只变大）" "${P80_MONO_BAD:-none}" "none"
+
+# ── 一处实现：生产提取、夹具判定、门禁探针共用同一份判据 ─────────────────────────
+# 注：模式里的 `[(][)]`/`[(]` 是为了不让本行自己匹配到自己（字符类进了 grep 模式就变回 `()`/`(`）。
+P80_REDEF="$(grep -rln '_team_box_geometry[(][)]\|for [(]k=' "$SKILL_DIR/tests" 2>/dev/null | sed "s|^$SKILL_DIR/||" | tr '\n' ' ')"
+assert_eq "P80 一处实现：tests/** 里没有第二份几何/候选循环实现（影子只覆盖那一个顺序函数）" "${P80_REDEF:-none}" "none"
+assert_eq "P80 一处实现：候选顺序决策在 outbox.sh 里定义恰一处" \
+  "$(grep -c '^_team_box_bottom_candidate_order() {' "$SKILL_DIR/scripts/lib/outbox.sh")" "1"
+assert_eq "P80 一处实现：几何里向它要顺序的调用恰一处" \
+  "$(grep -c 'ordered="\$(_team_box_bottom_candidate_order' "$SKILL_DIR/scripts/lib/outbox.sh")" "1"
+# 同源：纯探针（生产提取）与 pm-box-real.sh --frame（共享判据）在**每一份**已存帧上逐字一致
+for _p80r in "${P80_REAL_ARR[@]}" "$P80_F1" "$P80_F2" "$P80_F3" "$P80_F4" "$P80_F5" "$P80_F6" "$P80_F7" "$P80_F8"; do
+  _p80cy=2
+  case "$(basename "$_p80r")" in
+    pi-0.87.0-project-trust-prompt.txt) _p80cy=16 ;;
+    pi-0.8*) _p80cy=26 ;;
+    p78-cursor-mid-draft.txt) _p80cy=3 ;;
+  esac
+  P80_P="$(p80_probe "$_p80r" "$_p80cy")"
+  P80_M="$(P80_FM "$_p80r" "$_p80cy")"; P80_M_RC=$?
+  P80_BP="$(printf '%s\n' "$P80_P" | sed -n 's/^box_nows=\[\(.*\)\]$/\1/p')"
+  P80_BM="$(printf '%s\n' "$P80_M" | sed -n 's/^box_text=\[\(.*\)\]$/\1/p' | tr -d '[:space:]|')"
+  P80_VP="$(printf '%s\n' "$P80_P" | sed -n 's/^verdict=\(.*\) rc=[0-9]*$/\1/p')"
+  P80_VM="$(printf '%s\n' "$P80_M" | sed -n '2p')"
+  P80_RP="${P80_P##*rc=}"
+  assert_eq "P80 同源 $(basename "$_p80r")：框文本在两条路径上逐字一致" "$P80_BP" "$P80_BM"
+  assert_eq "P80 同源 $(basename "$_p80r")：判定与 rc 在两条路径上一致" "$P80_VP/$P80_RP" "$P80_VM/$P80_M_RC"
+done
 
 # ---------------------------------------------------------------- 12b-h0c. P59 覆盖层判据（纯帧，快模式照跑）
 section "12b-h0c · P59 输入框判据：覆盖层（Pi 的项目信任弹窗）≠ 非空输入框"
@@ -13092,6 +13269,132 @@ assert_eq "P75 ⑥：第二层仍按既有语义取最后 3 行" \
 assert_eq "P75 ⑥：第二层赢过第三层（来源里有 pane-dead 文件就不看尾屏）" \
   "$(grep -c 'pane-dead.txt（dispatch 替换遗体前抓的现场）' "$TMP/p75-second-layer.log")" "1"
 rm -f "$P75_DEAD" "$P75_TAIL" "$P75_ST/$P75_A.env"
+
+# ---------------------------------------------------------------- 44. P80 下边框框线（真 pane，非 FAST）
+section "44 · P80 输入框判据：草稿自己的下边框框线（真 pane 就绪门 + 生产路径只排队）"
+# B3 的端到端面：把一个**静止**的假 pi（帧回放，画着 P78 的攻击帧 —— 草稿在光标下方画了自己
+# 的等宽框线）放进真 tmux pane，走 pm-box-real.sh 的**就绪门**与生产投递路径：
+#   · 判据正确时就绪门永远不放行（帧不会自己变空）：rc≠0、点名 idle-read=NOT-EMPTY、打印最后一帧；
+#   · 假 pi 把 pane 收到的每个字节抄进 keylog —— 一个键都不该被敲（tmux 不直接暴露 pane 输入，
+#     keylog 是那条断言的字节级证人）；
+#   · 生产路径（team say / team draft send）只排队（queued），文字不出现在 pane 上、草稿原样。
+# 这**不是**需求的主证据（主证据是 12b-h0d 的逐帧断言，两个方向都在那里）；它的价值是在真
+# pane 上同形复现「旧判据放行 → 新判据拒绝」这条链 —— 修复前的树在这里是红的（就绪门放行、
+# 帧里出现 deliver_text_lines=、keylog 非空），报告里的 flip 证据用 git archive 的老树复跑同一段。
+if [ "$FAST" = "1" ]; then
+  fast_skip "44·P80-真pane" "要真 tmux pane + 帧回放假 pi（真进程段落）"
+elif [ "$HAVE_TMUX" != "1" ] || ! command -v python3 >/dev/null 2>&1; then
+  cond_skip "44·P80-真pane" "本机没有 tmux 或 python3"
+else
+  live_mark
+  P80_DIR="$TMP/p80-live"; rm -rf "$P80_DIR"; mkdir -p "$P80_DIR"
+  P80_ATTACK_FRAME="$SKILL_DIR/tests/frames/p78-draft-rule-below-cursor.txt"
+  P80_ATTACK_CY=2
+  cat > "$P80_DIR/frame-replay-pi.py" <<'EOS'
+#!/usr/bin/env python3
+"""P80 帧回放假 pi：把一份帧原样画到 pane 上，再把 pane 收到的每个字节抄进 keylog。
+
+环境（夹具的 tmux server 继承）：V80_FRAME / V80_CURSOR / V80_KEYLOG
+"""
+import os, select, sys, time, tty
+
+frame = os.environ["V80_FRAME"]
+cursor = int(os.environ["V80_CURSOR"])
+keylog = os.environ["V80_KEYLOG"]
+
+
+def draw():
+    with open(frame, encoding="utf-8") as f:
+        rows = f.read().split("\n")
+    out = sys.stdout
+    out.write("\x1b[2J")
+    for i, line in enumerate(rows[:30], start=1):
+        out.write("\x1b[%d;1H%s" % (i, line))
+    out.write("\x1b[%d;1H" % cursor)
+    out.flush()
+
+
+tty.setraw(0)  # 先 raw：pane 收到的字节立刻可见（不被行规程缓存）
+draw()
+while True:
+    r, _, _ = select.select([0], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        data = os.read(0, 4096)
+    except OSError:
+        data = b""
+    if not data:
+        break
+    with open(keylog, "a", encoding="utf-8") as f:
+        f.write("%d %s\n" % (int(time.time() * 1000), data.hex()))
+EOS
+  chmod +x "$P80_DIR/frame-replay-pi.py"
+
+  # (i) 就绪门：自己的私有 fixture（真 tmux pane 120×30），画的就是那份攻击帧
+  P80_KEYS_REFUSE="$P80_DIR/keys-refuse.log"; rm -f "$P80_KEYS_REFUSE"
+  M24_PI_BIN="$P80_DIR/frame-replay-pi.py" M24_READY_TRIES=4 \
+    V80_FRAME="$P80_ATTACK_FRAME" V80_CURSOR="$P80_ATTACK_CY" V80_KEYLOG="$P80_KEYS_REFUSE" \
+    bash "$SKILL_DIR/tests/pm-box-real.sh" --idle-secs 0 >"$P80_DIR/refuse.log" 2>&1
+  P80_REFUSE_RC=$?
+  [ "$P80_REFUSE_RC" -ne 0 ] && ok "P80 就绪门：面对「草稿自带下边框框线」的 pane 拒绝放行（rc=$P80_REFUSE_RC≠0）" \
+    || bad "P80 就绪门：攻击帧的 pane 上竟放行了（rc=0 —— 旧判据的 P74-F1 现场）"
+  assert_has "$P80_DIR/refuse.log" "idle-read=NOT-EMPTY" "P80 就绪门：拒绝时最后判定点名 idle-read=NOT-EMPTY"
+  assert_has "$P80_DIR/refuse.log" "--- 最后一帧（原样，留给报告）---" "P80 就绪门：拒绝时打印最后一帧"
+  assert_has "$P80_DIR/refuse.log" "draft text below my own rule" "P80 就绪门：最后一帧就是那份攻击草稿（不是别的失败）"
+  assert_not "$P80_DIR/refuse.log" "deliver_text_lines=" "P80 就绪门：拒绝后一步投递都没跑"
+  assert_eq "P80 就绪门：keylog 零行（一个键都没敲进人的草稿）" \
+    "$( [ -f "$P80_KEYS_REFUSE" ] && wc -l < "$P80_KEYS_REFUSE" || printf 0 )" "0"
+
+  # (ii) 生产路径：复用 12b 的夹具项目/会话（dev 在名册里），把 dev 窗口换成帧回放假 pi
+  P80_KEYS_SAY="$P80_DIR/keys-say.log"; rm -f "$P80_KEYS_SAY"
+  rm -rf "$REPO/.pi/team/state/outbox"
+  tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
+  P80_LIVE_CMD="$(printf 'V80_FRAME=%q V80_CURSOR=%s V80_KEYLOG=%q python3 %q' \
+    "$P80_ATTACK_FRAME" "$P80_ATTACK_CY" "$P80_KEYS_SAY" "$P80_DIR/frame-replay-pi.py")"
+  tmux new-window -d -t "$SESSION" -n dev -c "$REPO" "$P80_LIVE_CMD" 2>/dev/null || true
+  tmux resize-window -t "$SESSION:dev" -x 120 -y 30 2>/dev/null || true
+  sleep 1
+  assert_eq "P80 生产路径：dev 窗口画的正是攻击帧" \
+    "$(tmux capture-pane -p -t "$SESSION:dev" 2>/dev/null | grep -c 'draft text below my own rule' || true)" "1"
+  p80_guard() { # 从 stdin 读片段；在夹具项目里跑生产守卫，$T = dev 窗口
+    ( cd "$REPO" && bash -c '
+        set -u
+        . "'"$SKILL_DIR"'/scripts/lib/common.sh"
+        . "'"$SKILL_DIR"'/scripts/lib/outbox.sh"
+        . "'"$SKILL_DIR"'/tests/lib/box-judge.sh"
+        T="'"$SESSION"':dev"
+        source /dev/stdin
+      ' )
+  }
+  P80_READS="$(p80_guard <<'EOS'
+printf 'input_box_state=%s\n' "$(team_input_box_state "$T")"
+printf 'delivery_verdict=%s\n' "$(team_delivery_verdict "$T")"
+printf 'box_nows=[%s]\n' "$(team_input_box_text "$T" 2>/dev/null | tr -d '[:space:]')"
+EOS
+)"
+  assert_has_echo "$P80_READS" "input_box_state=BUSY" "P80 生产路径：team_input_box_state 报 BUSY（不是 EMPTY）"
+  assert_has_echo "$P80_READS" "delivery_verdict=BUSY" "P80 生产路径：team_delivery_verdict 不是 EMPTY"
+  assert_has_echo "$P80_READS" "drafttextbelowmyownrule]" "P80 生产路径：生产提取读到的就是框线行 + 框线下面的草稿"
+  ( cd "$REPO" && $TEAM say dev "P80-DRAFT-ATTACK-SAY" ) >"$P80_DIR/say.log" 2>&1 || true
+  assert_has "$P80_DIR/say.log" "queued" "P80 生产路径：攻击草稿在场 → team say 报 queued（不是已送达）"
+  assert_eq "P80 生产路径：say 之后队列里恰好一条" \
+    "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_eq "P80 生产路径：say 一个键都没敲（keylog 仍 0 行）" \
+    "$( [ -f "$P80_KEYS_SAY" ] && wc -l < "$P80_KEYS_SAY" || printf 0 )" "0"
+  assert_eq "P80 生产路径：say 的文字没有出现在 pane 上" \
+    "$(tmux capture-pane -p -t "$SESSION:dev" 2>/dev/null | grep -c 'P80-DRAFT-ATTACK-SAY' || true)" "0"
+  assert_eq "P80 生产路径：攻击草稿仍在 pane 上（原样）" \
+    "$(tmux capture-pane -p -t "$SESSION:dev" 2>/dev/null | grep -c 'draft text below my own rule' || true)" "1"
+  printf 'P80 draft-send payload\n' > "$P80_DIR/payload.txt"
+  ( cd "$REPO" && $TEAM draft send "$P80_DIR/payload.txt" --target "$SESSION:dev" ) >"$P80_DIR/draft.log" 2>&1 || true
+  assert_has "$P80_DIR/draft.log" "queued" "P80 生产路径：draft send 也只入队（queued）"
+  assert_eq "P80 生产路径：draft send 之后队列里两条（say 的 + draft 的）" \
+    "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "2"
+  assert_eq "P80 生产路径：draft send 一个键都没敲（keylog 仍 0 行）" \
+    "$( [ -f "$P80_KEYS_SAY" ] && wc -l < "$P80_KEYS_SAY" || printf 0 )" "0"
+  tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
+fi
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

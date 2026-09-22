@@ -4,6 +4,10 @@
 （`_team_box_rows_of_frame` / `_team_box_geometry`）当输入 —— 这样「真实现场 → 判据」这条链
 不必开 tmux 就能在门禁里复跑，端到端（真 pane）与纯帧也共用同一份实现。
 
+两类文件分得很清：前五份是**真 pi 实拍**（来源逐字写在下表）；`p78-*.txt` 八份是 **P80 的合成帧** ——
+「裁切型 TUI」的模型，**不是** pi 输出、没有真 pi 出处（构造与
+`docs/team/reports/P78-verify/pkg/lib.sh` 的 `p78_build_frames` 逐字节相同，`cmp` 可验）。
+
 帧文件不能带注释（多一行就多一行 pane），来源与光标行写在下面这张表里。
 
 | 文件 | 来源 | 光标行（1-based） | 现场 |
@@ -13,6 +17,14 @@
 | `pi-0.87.0-draft-half-sentence.txt` | 真 pi **0.87.0**，同一批 P61 场景的另一份单行草稿实拍；来源 `docs/team/reports/P61-dev3/logs/10c-real-draft-box.log`（逐字节 `cmp` 相同） | `26` | 与上一份同形状，草稿文字 `DRAFT-p61-half-sentence`；同一次场景的空框对照是 `pi-0.87.0-empty-box.txt` |
 | `pi-0.87.0-empty-box.txt` | 真 pi **0.87.0**，同一批 P61 场景的**空闲空框**对照；来源 `docs/team/reports/P61-dev3/logs/10c-real-empty-box.log`（逐字节 `cmp` 相同） | `26`（框内唯一内容行是空的） | 第 25/27 行整行 ─ 之间只有一行空白 —— 判据必须是 `EMPTY`（与 0.85.1 的状态行排除互为对照） |
 | `pi-0.85.1-update-banner.txt` | 真 pi 0.85.1（`--no-session --session-dir <tmp>`，私有 tmux socket，pane 120×30）空闲 25s 后实拍；**1–9 行是 pi 的启动输出（`[Skills]`/`[Extensions]` 等与本判据无关）已置空，行号与实拍一致** | `26`（框内第一个内容行） | 两个更新横幅（`Package Updates Available` + `Update Available`）画在输入框上方；pane 第 11/16/18/22 行是横幅的 DynamicBorder，24/29 行是输入框的上下边框 —— 全部同形等宽（360 字节 = 120 个 `─`） |
+| `p78-draft-rule-below-cursor.txt` | **合成帧**（P80：裁切型 TUI 模型，非 pi 实拍） | `2`（框内空行，光标停在它上面） | 草稿在光标下方画了自己的等宽 rule：rule / 空行(光标) / rule / ` draft text below my own rule` / rule / footer。P80 前几何 `[1 3]`、框读空 → 就绪门放行（P74 的 F1）；P80 后 `[1 5]`，框线行与草稿文字都留在框内 → `idle-read=NOT-EMPTY` |
+| `p78-draft-rule-only.txt` | **合成帧**（P80，非 pi 实拍） | `2` | 光标下方的草稿**只有一条 rule**（rule / 空行(光标) / rule / rule / footer）。这一份与「空框正下方紧贴一条对话区 rule」是**同一串字节**（sha256 `e463c80c…f5053a6`，见文末）—— P80 取保守读法 `[1 4]` → `NOT-EMPTY` |
+| `p78-wider-rule-below-cursor.txt` | **合成帧**（P80，非 pi 实拍） | `2` | 草稿的 rule 比框宽（140 > 120 字节列；裁切型 TUI 里长分隔线被裁到 pane 宽）：宽行**不能**与上边框配对 → 留在框内 `[1 5]`，判定与 P80 前一致（`NOT-EMPTY`） |
+| `p78-spinner-row-below-cursor.txt` | **合成帧**（P80，非 pi 实拍） | `2` | 光标下方是 spinner 形状行（`── ⠋ Blanching… 0s ─…`）—— 下边框候选**只认整行 ─**，spinner 行是内容：`[1 5]`，判定不变 |
+| `p78-cursor-mid-draft.txt` | **合成帧**（P80，非 pi 实拍） | `3`（三行草稿的第二行） | 光标在三行草稿中间、下边框在三行之下：三行草稿全部留在框内 `[1 5]`，判定不变 |
+| `p78-draft-rule-below-cursor-line.txt` | **合成帧**（P80，非 pi 实拍） | `2`（` half a sentence`） | 光标下方有草稿自己的 rule、rule 下面还有 ` more draft`：P80 后框里读出 rule 行 + ` more draft`，所以 payload `half a sentence` 是 `extra-text`（P80 前截断的框正好等于它 → `only-ours`） |
+| `p78-conversation-rule-below-box.txt` | **合成帧**（P80，非 pi 实拍） | `2`（空框内） | 空框的下边框**紧贴**着又一条整行 rule（模拟对话区的 rule）：P80 把框扩到最低候选 → 框变大、判 `NOT-EMPTY`（**这是记录在案的代价**，`references/troubleshooting.md` §3） |
+| `p78-draft-rule-blank-region.txt` | **合成帧**（P80，非 pi 实拍） | `2` | 草稿 rule 与真下边框之间只有空行 —— 用来证伪「中间有非空行才扩框」的备选规则（那个规则在这里仍读 `EMPTY`）；P80 的规则不受区域内容影响：`[1 5]`、`NOT-EMPTY` |
 
 复现命令（P59，与 design §1 逐字一致；重跑必须得到**同一份字节**）：
 
@@ -58,4 +70,34 @@ bash skills/teamsmith/tests/pm-box-real.sh --frame skills/teamsmith/tests/frames
 M24_SHADOW_CHROME=1 bash skills/teamsmith/tests/pm-box-real.sh \
   --frame skills/teamsmith/tests/frames/pi-0.87.0-one-line-draft.txt --cursor 26
 #   → box_text=[]、idle-read=EMPTY（rc 0）—— 谓词影子成「一律 chrome」= 老的槽位排除，红侧可见
+```
+
+## P80：下边框取「最低的合格候选」（`p78-*.txt` 合成帧）
+
+P80 之前下边框取光标下方**最近**的整行 ─；草稿自己在光标下方画一条等宽框线（粘贴的 Markdown
+分隔线/表格边框，裁切型 TUI 可达）就成了下边框，框被定位得**太小**，框线以下的草稿落在框外 →
+脏框判空 → 就绪门放行、payload 打进人的草稿（P74 的 F1；V9-A4/A5/A8/A10 缺陷类的另一端）。
+P80 起下边框 = 光标下方**最低的**合格整行 rule（上边框 HIGHEST 的镜像）；上表八份合成帧就是
+它的形状表。
+
+- **合成，不是实拍**：这八份是「裁切型 TUI」的模型，构造与
+  `docs/team/reports/P78-verify/pkg/lib.sh` 的 `p78_build_frames` 逐字节相同（`cmp` 可验）；
+  它们没有真 pi 出处，门禁按合成帧对待，真实现场仍由前五份真帧守着。
+- **判据只有一份实现**：候选顺序由 `_team_box_bottom_candidate_order` 决定；影子成升序（= 旧的
+  「最近优先」）就是红侧：`p78-draft-rule-below-cursor.txt` 的 `[1 5]` 退回 `[1 3]`、判定退回
+  `EMPTY`。FAST 段 `12b-h0d` 两个方向都跑，并逐帧断言。
+- **不分离的歧义**：`p78-draft-rule-only.txt`（「草稿只有一条 rule」）与「空框正下方一条 rule」
+  是同一串字节（sha256 `e463c80c…f5053a6`）；一条规则必须同时服务两种读法，P80 取保守的那个
+  （内容 → BUSY）。代价写在 `references/troubleshooting.md` §3。
+- **已存真帧不动**：五份真帧在 P80 前后判定与几何逐一相同（`[25 27]`/`[25 27]`/`[25 27]`/
+  `[24 29]`/无框 overlay），两份布局的最低整行 rule 都是框自己的下边框 —— 镜像代价在已测布局上
+  不可达。
+
+复现（纯帧；gate 的帧探针另外打印 `geometry`）：
+
+```sh
+bash skills/teamsmith/tests/pm-box-real.sh --frame skills/teamsmith/tests/frames/p78-draft-rule-below-cursor.txt --cursor 2
+#   → box_text 带草稿的 rule 行与 ` draft text below my own rule`、idle-read=NOT-EMPTY（rc 1）
+bash skills/teamsmith/tests/pm-box-real.sh --frame skills/teamsmith/tests/frames/p78-conversation-rule-below-box.txt --cursor 2
+#   → idle-read=NOT-EMPTY（rc 1）—— 记录在案的镜像代价：框下方的整行 rule 把框撑大、判忙
 ```
