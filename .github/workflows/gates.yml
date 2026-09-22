@@ -76,13 +76,17 @@ jobs:
       - name: Collect the failure scene
         if: always()
         run: |
-          mkdir -p .ci-artifacts
-          # 只拷现场家族，不拷整个 /tmp：整份拷贝会把 HOME 缓存里的**自指软链**带出来，
-          # 上传时 stat 直接 ELOOP（2026-09-22 12:24 实测：Upload 步骤失败、产物为零）。
-          # 注意：模式串用**单引号**（上一次写成 `\*` 被 shell 原样传进去，docker cp 一个都没匹配上，现场仍为空）。
-          echo "=== 容器 /tmp 顶层（诊断）==="; docker exec teamsmith-gates-run ls -la /tmp 2>/dev/null | head -20 || true
-          for pat in 'teamsmith-smoke.*' 'panel-p21.*' 'config-cli.*' 'pty-wait-selftest.*'; do
-            docker cp "teamsmith-gates-run:/tmp/$pat" .ci-artifacts/ 2>/dev/null || true
+          # 2026-09-22 实测（本地 podman 同 docker 语义）：`docker cp 'c:/tmp/x.*'` **不做通配**，
+          # 报 "could not be found on container"；只能整份拷进**暂存**目录，再从暂存里只挑现场家族。
+          # 整份拷贝会把 HOME 缓存里的自指软链带出来（上传时 ELOOP），所以暂存目录不进产物：
+          # 进 `.ci-artifacts` 的只有夹具现场，且用 `cp -a`（不 dereference，软链本身照样拷）。
+          rm -rf /tmp/scene-staging; mkdir -p /tmp/scene-staging .ci-artifacts
+          docker cp teamsmith-gates-run:/tmp/. /tmp/scene-staging/ 2>/dev/null || true
+          for fam in teamsmith-smoke. panel-p21. config-cli. pty-wait-selftest.; do
+            for d in /tmp/scene-staging/$fam*; do
+              [ -e "$d" ] || continue
+              cp -a "$d" .ci-artifacts/ 2>/dev/null || true
+            done
           done
           docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
           echo "=== .ci-artifacts ==="; ls -la .ci-artifacts | head -20
