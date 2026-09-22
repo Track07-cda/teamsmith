@@ -79,7 +79,9 @@ jobs:
           mkdir -p .ci-artifacts
           # 只拷现场家族，不拷整个 /tmp：整份拷贝会把 HOME 缓存里的**自指软链**带出来，
           # 上传时 stat 直接 ELOOP（2026-09-22 12:24 实测：Upload 步骤失败、产物为零）。
-          for pat in teamsmith-smoke.\* panel-p21.\* config-cli.\* pty-wait-selftest.\*; do
+          # 注意：模式串用**单引号**（上一次写成 `\*` 被 shell 原样传进去，docker cp 一个都没匹配上，现场仍为空）。
+          echo "=== 容器 /tmp 顶层（诊断）==="; docker exec teamsmith-gates-run ls -la /tmp 2>/dev/null | head -20 || true
+          for pat in 'teamsmith-smoke.*' 'panel-p21.*' 'config-cli.*' 'pty-wait-selftest.*'; do
             docker cp "teamsmith-gates-run:/tmp/$pat" .ci-artifacts/ 2>/dev/null || true
           done
           docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
