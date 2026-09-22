@@ -44,7 +44,7 @@ import { fill, stringsFor } from './strings/index.js'
 import { PANEL_CONF_FILE, PANEL_PAGE_FILE, readPage, readSettings, writePage, writeSettings } from './settings.js'
 import type { Settings } from './settings.js'
 import { contrastPairs, PALETTES, resolveTheme } from './theme.js'
-import type { FrameInput, PageId, SettingsBlock, ViewState } from './types.js'
+import type { FrameInput, PageId, ViewState } from './types.js'
 
 /** The Kitty keyboard protocol's pop/push pair, written around the editor handoff (design §6). */
 const KITTY_POP = '\u001b[<u'
@@ -524,8 +524,9 @@ async function main(): Promise<void> {
     if (o.allowDanger) args.push('--allow-danger')
     const res = await run(args)
     const line = firstLine(res.err) || firstLine(res.out)
-    // On a settle the view re-reads the list and the audit footer; a validation changes nothing.
-    if (!o.dryRun) refreshNow()
+    // On a settle the view re-reads the settings block (the list and the audit footer) in the
+    // background; a validation changes nothing.
+    if (!o.dryRun) refreshSettingsSoon()
     return { code: res.rc, line }
   }
 
@@ -542,16 +543,17 @@ async function main(): Promise<void> {
     if (o.fingerprint) args.push('--fingerprint', o.fingerprint)
     const res = await run(args)
     const line = firstLine(res.err) || firstLine(res.out)
-    if (!o.dryRun) refreshNow()
+    if (!o.dryRun) refreshSettingsSoon()
     return { code: res.rc, line }
   }
 
-  /** Rebuild the settings block now and return it (the editor's fingerprint is pinned from here). */
-  async function refreshSettings(): Promise<SettingsBlock | null> {
-    opts.settingsOpen = true
-    const res = await cache.refresh({ force: true, only: ['settings'] })
-    adopt(res)
-    return (res.blocks?.settings as SettingsBlock | undefined) ?? null
+  /**
+   * The background half of a settle (M65/D11): rebuild only the settings block and adopt it when
+   * it lands. Nothing on the interaction path awaits this — the receipt was drawn from the
+   * command's own result, and this read only refreshes what the next interaction sees.
+   */
+  function refreshSettingsSoon(): void {
+    void cache.refresh({ force: true, only: ['settings'] }).then(adopt)
   }
 
   async function setStandby(on: boolean, reason: string): Promise<{ ok: boolean; line: string }> {    if (!teamCli) return { ok: false, line: `✗ ${s.noTeamCli}` }
@@ -781,7 +783,7 @@ async function main(): Promise<void> {
         return 'missing' as const
       }
     },
-    refreshSettings,
+    refreshSettingsSoon,
     setSettingsOpen: (open: boolean) => {
       if (Boolean(opts.settingsOpen) === open) return
       opts.settingsOpen = open

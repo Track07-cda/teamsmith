@@ -11,7 +11,7 @@
 #   TEAM_CHOICES_TREE=<tree> bash ...                             # run against another checkout (flip)
 #   TEAM_CHOICES_KEEP=1 bash ...                                  # keep the fixture directory
 #
-# Sections: read known walk catalogue flip-drop-pm flip-suggest
+# Sections: read known walk read-equality catalogue flip-drop-pm flip-suggest
 # Exit: 0 every selected section green / 1 at least one assertion failed / 3 setup failure.
 #
 # Nothing here touches the caller's project: every fixture is a fresh git repo under $TMPDIR, the
@@ -99,7 +99,7 @@ print("ok" if ok else "no")
 command -v python3 >/dev/null 2>&1 || { printf 'panel-choices: 需要 python3（JSON 断言）\n' >&2; exit 3; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(read known walk catalogue flip-drop-pm flip-suggest)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(read known walk read-equality catalogue flip-drop-pm flip-suggest)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- read
@@ -321,6 +321,151 @@ PY
 if want walk; then
   section "walk · 读给出的值 = 校验器接受的值（R1 的诚实闸门：不静默过滤，接受域不一致就红）"
   walk_section "$tree" real
+fi
+
+# ---------------------------------------------------------------- read-equality
+# M65/Q3（M2 的修法）：读路径的重写（一次 awk 扫描 + 纯 bash 查表 + 写变量的 *_set 孪生）必须逐字节
+# 忠实于契约。判据不是"再写一遍实现"，而是一份**独立**的 python 解析器：直接读 fixture 契约的原始
+# 字节，按 references/config.md 的规则（同名取第一行、引号内的 # 不是注释、双引号里的 \ 转义、值去
+# 首尾空白与一层引号、注释含 # 前的空白）算出每条记录的（值、行内注释、set、known）与记录顺序
+# （schema 顺序 + 文件顺序的未知键，重复行各一条），再与 `team config list --json` 逐条比对。
+# 红侧（翻转）：把扫描器的引号规则改坏（引号里的 # 也当注释）→ 值的字节不同 → 本节红（报告里给原始输出）。
+if want read-equality; then
+  section "read-equality · 读出的字节 = 独立解析器（顺序/值/注释/set/未知键/重复行）"
+  p="$(new_proj read-equality)" || exit 3
+  cfg="$p/.pi/team/config.sh"
+  python3 - "$cfg" <<'PY'
+import sys
+p = sys.argv[1]
+lines = [
+    '',
+    '# ---- read-equality fixture：读路径必须逐字节复现的形态 ----',
+    'TEAM_HAND_ONE="hand # not a comment"',
+    "export TEAM_HAND_TWO='exported single'",
+    'TEAM_HAND_THREE=plain # trailing comment',
+    'TEAM_HAND_EMPTY=',
+    'TEAM_HAND_HASH="a # b"   # real comment here',
+    'TEAM_HAND_EQ="a=b"',
+    '\tTEAM_HAND_TAB="tabbed"   # leading tab + comment',
+    'TEAM_HAND_ONE="second wins never"',
+    'TEAM_ZARR_COMMENT="x"  # 中文注释 # 带井号',
+    "TEAM_HAND_QUOTE='a\"b'",
+    'TEAM_HAND_BACKSLASH="a\\\\b"   # escaped backslash then comment',
+    'TEAM_HAND_SPACE="  padded  "',
+]
+open(p, 'a', encoding='utf-8').write('\n'.join(lines) + '\n')
+PY
+  run_in "$p" config list --json > "$tmp/read-equality.json"
+  python3 - "$cmd_config" "$cfg" "$tmp/read-equality.json" > "$tmp/read-equality.log" 2>&1 <<'PY'
+import json, re, sys
+
+schema_file, cfg, js = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(schema_file, encoding="utf-8").read()
+m = re.search(r"team_config_schema\(\) \{\n  cat <<'EOF'\n(.*?)\nEOF\n\}", src, re.S)
+if not m:
+    print("PROBLEM\t读不出 schema 表")
+    sys.exit(0)
+rows = []
+for line in m.group(1).splitlines():
+    if not line or line.startswith('#'):
+        continue
+    rows.append(line.split('|'))
+schema = {f[0]: f for f in rows}
+
+WS = ' \t\r\v\f\n'
+
+def parse(line):
+    """契约一行的（key, value, comment）；与 bash 侧的规则独立实现。"""
+    mm = re.match(r'^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$', line)
+    if not mm:
+        return None
+    key, s = mm.group(1), mm.group(2)
+    i, n, q, comment = 0, len(mm.group(2)), 0, ''
+    while i < n:
+        ch = s[i]
+        if q == 0:
+            if ch == '"':
+                q = 2
+            elif ch == "'":
+                q = 1
+            elif ch == '#':
+                g = i
+                while g > 0 and s[g - 1] in ' \t':
+                    g -= 1
+                comment = s[g:]
+                s = s[:g]
+                break
+        elif q == 1:
+            if ch == "'":
+                q = 0
+        else:
+            if ch == '\\':
+                i += 1
+            elif ch == '"':
+                q = 0
+        i += 1
+    s = s.strip(WS)
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        s = s[1:-1]
+    return key, s, comment
+
+first, order = {}, []
+for line in open(cfg, encoding="utf-8").read().split('\n'):
+    got = parse(line)
+    if not got:
+        continue
+    key, value, comment = got
+    order.append(key)
+    if key not in first:
+        first[key] = (value, comment)
+
+expected = []
+for f in rows:
+    key = f[0]
+    if key in first:
+        expected.append((key, first[key][0], first[key][1], True, True))
+    else:
+        expected.append((key, '', '', False, True))
+for key in order:
+    if key in schema:
+        continue
+    expected.append((key, first[key][0], first[key][1], True, False))
+
+d = json.load(open(js, encoding="utf-8"))
+got = [(k["name"], k["value"], k["comment"], bool(k["set"]), bool(k["known"])) for k in d["keys"]]
+
+problems = []
+if len(got) != len(expected):
+    problems.append("记录数 %d ≠ 期望 %d（多/少一条 = 顺序或重复行没复现）" % (len(got), len(expected)))
+for i, (g, e) in enumerate(zip(got, expected)):
+    if g != e:
+        problems.append("第 %d 条不同：读 %r ≠ 期望 %r" % (i, g, e))
+    if len(problems) >= 8:
+        break
+for prob in problems:
+    print("PROBLEM\t" + prob)
+print("COUNTS\t%d\t%d" % (len(got), len(expected)))
+PY
+  eq_bad="$(grep -c '^PROBLEM' "$tmp/read-equality.log" 2>/dev/null || true)"
+  [ -n "$eq_bad" ] || eq_bad=0
+  read -r _ eq_got eq_exp <<< "$(grep '^COUNTS' "$tmp/read-equality.log" 2>/dev/null | tail -1)" || true
+  if [ "$eq_bad" -eq 0 ] && [ -n "$eq_got" ]; then
+    ok "read-equality：$eq_got 条记录的顺序/值/注释/set/known 与独立解析器逐条一致（期望 $eq_exp 条）"
+  else
+    bad "read-equality：$eq_bad 条记录与独立解析器不一致（见 read-equality.log）"
+    grep '^PROBLEM' "$tmp/read-equality.log" 2>/dev/null | head -5 | sed 's/^/      /'
+  fi
+  # 三处最容易被"顺手优化"改坏的形状，逐条点名（不靠总长度撞上）：
+  json_check "$(cat "$tmp/read-equality.json")" "引号里的 # 不是注释：值原样、注释为空" \
+    '[k for k in d["keys"] if k["name"]=="TEAM_HAND_ONE"][0]["value"]=="hand # not a comment" and [k for k in d["keys"] if k["name"]=="TEAM_HAND_ONE"][0]["comment"]==""'
+  json_check "$(cat "$tmp/read-equality.json")" "行内注释原样保留（# 前的空白也算）" \
+    '[k for k in d["keys"] if k["name"]=="TEAM_HAND_THREE"][0]["comment"]==" # trailing comment" and [k for k in d["keys"] if k["name"]=="TEAM_ZARR_COMMENT"][0]["comment"]=="  # 中文注释 # 带井号"'
+  json_check "$(cat "$tmp/read-equality.json")" "空值仍是 set=true、value=''（不是 unset）" \
+    '[k for k in d["keys"] if k["name"]=="TEAM_HAND_EMPTY"][0]["set"] is True and [k for k in d["keys"] if k["name"]=="TEAM_HAND_EMPTY"][0]["value"]==""'
+  json_check "$(cat "$tmp/read-equality.json")" "未知键重复行各出一条记录（文件顺序，值取第一行）" \
+    '[k["value"] for k in d["keys"] if k["name"]=="TEAM_HAND_ONE"]==["hand # not a comment","hand # not a comment"]'
+  json_check "$(cat "$tmp/read-equality.json")" "双引号里的反斜杠转义照旧（值里的 \\ 不被吃掉）" \
+    '[k for k in d["keys"] if k["name"]=="TEAM_HAND_BACKSLASH"][0]["value"]=="a\\\\b"'
 fi
 
 # ---------------------------------------------------------------- catalogue

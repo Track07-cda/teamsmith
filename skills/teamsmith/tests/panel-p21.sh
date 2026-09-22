@@ -117,7 +117,7 @@ start_panel() {
   tmux -L "$sock" kill-window -t "$sess:panel" 2>/dev/null || true
   tmux -L "$sock" new-window -d -t "$sess" -n panel -c "$ROOT" \
     "${home_prefix}TEAM_JS_BIN=$(printf '%q' "$js") exec '$js' '$panel' --root '$ROOT' --state-dir '$state' \
-      --team-cli '$cli' --no-pulse --interval 3 ${*:-}"
+      --team-cli '$cli' --no-pulse --refresh ${P21_REFRESH:-3} ${*:-}"
   wait_panel
 }
 
@@ -172,6 +172,13 @@ keys() { tmux -L "$sock" send-keys -t "$sess:panel" "$@" 2>/dev/null; }
 type_text() { tmux -L "$sock" send-keys -t "$sess:panel" -l "$1" 2>/dev/null; }
 click_at() { tmux -L "$sock" send-keys -t "$sess:panel" -l "$(printf '\033[<0;%s;%sM' "$1" "$2")" 2>/dev/null; }
 argv_log() { printf '%s/%s-argv.log' "$tmp" "$current"; }
+# M65（直写 / 交互路径无读取）：wrapper 的 argv 日志按行切片 —— 一次交互 spawn 了哪些子进程。
+argv_count() { wc -l < "$(argv_log)" 2>/dev/null || echo 0; }
+argv_since() { # <start-lines> <file>：第 start 行之后的全部（start=0 就是从头）
+  tail -n +$(( $1 + 1 )) "$(argv_log)" > "$2" 2>/dev/null || : > "$2"
+}
+# 读路径的两个子进程形态：`config list` / `__panel-data`（M65/D11 的判据）。
+argv_reads() { grep -cE 'config list|__panel-data' "$1" 2>/dev/null || true; }
 cfg() { printf '%s/.pi/team/config.sh' "$ROOT"; }
 audit_log() { printf '%s/config.log' "$state"; }
 audit_lines() { [ -f "$(audit_log)" ] && wc -l < "$(audit_log)" || echo 0; }
@@ -196,6 +203,17 @@ open_view() {
   fi
   bad "项目设置视图没有在预算内出现数据（marker=$marker）"
   return 1
+}
+
+# Close the settings view and the overlay, then open the view again: entering the view is the view's
+# own read (M65/D11 allows it — the interaction path is what must not read). A fixture that edits the
+# contract by hand needs this to see its own bytes on screen.
+reopen_view() {
+  keys Escape
+  sleep 0.5
+  keys Escape
+  sleep 0.5
+  open_view
 }
 
 # Filter the view to <text> (the `/` line, then Enter applies). The editor opens holding the
@@ -487,7 +505,7 @@ EOF2
 }
 
 scn_choices() {
-  section "choices · 选择器（M55：schema 给的选项 / 未设首条目 / 数值+path / 无选项原因 / pairlist 路由 / 鼠标·滚轮·取消）"
+  section "choices · 选择器（M55 的选项 + M65 的直写：一次 accept = 校验+写入 / 交互路径零读取 / 危险值一次确认 / 只有自由输入进编辑器）"
   local agents="dev verify" i
   for i in $(seq 2 28); do agents="$agents dev$i"; done
   server_up choices "$agents"
@@ -501,6 +519,8 @@ s = re.sub(r'^TEAM_DEFER_TTL=.*\n?', '', s, flags=re.M)
 s = re.sub(r'^TEAM_PULSE_INTERVAL=.*\n?', '', s, flags=re.M)
 # path exec,opt 指向一个不存在的文件：存在性标记要看得见。
 s = re.sub(r'^TEAM_AGENT_BIN=.*$', 'TEAM_AGENT_BIN="/nonexistent/m55-agent"', s, count=1, flags=re.M)
+# 危险值当「当前」选项：M65 的危险例外必须对来自选项的值同样生效（第一次 accept 只警告、不写）。
+s = re.sub(r'^TEAM_MIN_FREE_SWAP_MB=.*$', 'TEAM_MIN_FREE_SWAP_MB="0"', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY
   # 席位模型：28 个记录 → known 变长，滚轮用例的条目列表会超出可视预算（不需要改 pane 几何）。
@@ -515,35 +535,58 @@ PY
 { "sub2api": { "models": { "gpt-5.6-luna": { "name": "gpt-5.6-luna", "baseUrl": "http://<internal>/v1" } } },
   "openrouter": { "models": { "anthropic/claude-x": { "name": "claude-x" } } } }
 JSON
-  P21_HOME="$home" start_panel
+  # M65/D11：读取窗口的判据是「按键与帧之间没有读取」。后台节拍（activity 块 3s TTL）会无关地
+  # spawn `__panel-data` —— 本段的面板跑在 P21_REFRESH=3600 下（`--refresh` 才是 panel 自己的刷新
+  # 区间；`--interval` 是 `team monitor` 的旗标，panel 忽略它），窗口里出现的任何子进程都是这次
+  # 交互因果产生的。
+  P21_REFRESH=3600 P21_HOME="$home" start_panel
   open_view
-  local sha_before audit_before
-  sha_before="$(sha "$(cfg)")"
-  audit_before="$(audit_lines)"
+  local gap0 acc0
 
-  # ── (1) bool：两个带标签的条目，未设时首个条目是「保持未设」，没有自由输入项 ──
+  # ── (1) bool：两个带标签的条目；一次 accept = 校验 + 直写（无确认帧、无编辑器） ──
   filter_to TEAM_NOTIFY_TMUX
   sleep 0.5
   cap_to bool-row
   assert_match "$tmp/$current/bool-row.txt" '走 tmux 投递 +未设 · 默认 1' "未设的 bool 行显示 未设 · 默认 1"
+  gap0="$(argv_count)"
   keys Enter
   wait_picker TEAM_NOTIFY_TMUX '› 保持未设' || bad "bool 的选择器没有打开"
+  argv_since "$gap0" "$tmp/$current/gap-open.log"
+  local gap_reads gap_total
+  gap_reads="$(argv_reads "$tmp/$current/gap-open.log")"; [ -n "$gap_reads" ] || gap_reads=0
+  gap_total="$(wc -l < "$tmp/$current/gap-open.log")"
+  if [ "$gap_reads" = "0" ] && [ "$gap_total" = "0" ]; then
+    ok "打开选择器：按键→帧之间零读取、零子进程（编辑器只用屏幕上的 settings 块）"
+  else
+    bad "打开选择器：按键→帧之间零读取、零子进程（读=$gap_reads 总=$gap_total）：$(head -3 "$tmp/$current/gap-open.log" 2>/dev/null | tr '\n' ';')"
+  fi
   cap_to bool
   assert_match "$tmp/$current/bool.txt" '› 保持未设' "未设键的首个条目是保持未设（并且是焦点）"
   assert_has "$tmp/$current/bool.txt" "开（1） · 默认" "1 是默认条目，带表里的 on 词"
   assert_has "$tmp/$current/bool.txt" "关（0）" "0 是另一个条目，带表里的 off 词"
-  assert_not "$tmp/$current/bool.txt" "自由输入" "bool 是封闭域：没有自由输入项"
-  local bool_sha; bool_sha="$(sha "$(cfg)")"
+  assert_not "$tmp/$current/bool.txt" "…（自由输入）" "bool 是封闭域：没有自由输入项"
+  local bool_sha bool_audit
+  bool_sha="$(sha "$(cfg)")"; bool_audit="$(audit_lines)"
+  acc0="$(argv_count)"
   pick_option '关（0）' || bad "bool 选择器里没有 关（0）"
-  wait_editor TEAM_NOTIFY_TMUX || bad "bool 选中后没有打开写编辑器"
-  cap_to bool-editor
-  assert_has "$tmp/$current/bool-editor.txt" "╭─ TEAM_NOTIFY_TMUX" "选项落到同一个写编辑器里"
-  assert_eq "选中条目本身不写契约" "$(sha "$(cfg)")" "$bool_sha"
-  keys Enter
-  if wait_cap bool-confirm "→ 0"; then ok "确认行拿着选项的值"; else bad "bool 的确认行没出现"; fi
-  keys Enter
-  if wait_cap bool-written "已写入 TEAM_NOTIFY_TMUX = 0"; then ok "bool 选项写入的回执"; else bad "bool 写入的回执没出现"; fi
+  if wait_cap bool-written "已写入 TEAM_NOTIFY_TMUX = 0"; then ok "bool 选项在一次 accept 上写入（直写）"; else bad "bool 的直写回执没出现"; fi
+  cap_to bool-written
+  assert_not "$tmp/$current/bool-written.txt" "确认：" "直写没有确认帧"
+  assert_not "$tmp/$current/bool-written.txt" "╭─ TEAM_NOTIFY_TMUX" "直写没有打开编辑器"
+  assert_not "$tmp/$current/bool-written.txt" " · TEAM_NOTIFY_TMUX" "直写之后选择器已关闭"
   assert_match "$(cfg)" "^TEAM_NOTIFY_TMUX=.0.\$" "契约里落了规范值 0"
+  assert_eq "直写让审计长一行" "$(audit_lines)" "$((bool_audit + 1))"
+  argv_since "$acc0" "$tmp/$current/bool-argv.log"
+  assert_eq "accept 的第 1 个子进程是 --dry-run（校验）" "$(sed -n '1p' "$tmp/$current/bool-argv.log" | grep -c -- '--dry-run')" "1"
+  assert_eq "accept 的第 2 个子进程是 --yes 写入" "$(sed -n '2p' "$tmp/$current/bool-argv.log" | grep -c -- '--yes')" "1"
+  assert_eq "accept 之前没有读子进程（第 1 行不是 config list/__panel-data）" "$(sed -n '1p' "$tmp/$current/bool-argv.log" | grep -cE 'config list|__panel-data' || true)" "0"
+  local accept_tail
+  accept_tail="$(tail -n +3 "$tmp/$current/bool-argv.log" 2>/dev/null | grep -v -- '__panel-data --block settings' || true)"
+  if [ -z "$accept_tail" ]; then
+    ok "accept 之后只剩 settings 块的 settle 重读（没有别的块、没有第二次写）"
+  else
+    bad "accept 之后还有别的子进程：$(printf '%s' "$accept_tail" | head -3 | tr '\n' ';')"
+  fi
   filter_to TEAM_NOTIFY_TMUX
   sleep 0.5
   keys Enter
@@ -561,6 +604,8 @@ s = open(p, encoding='utf-8').read()
 s = re.sub(r'^TEAM_NOTIFY_TMUX=.*$', 'TEAM_NOTIFY_TMUX=true', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY2
+  # 手改之后要用视图自己的读取把它读进来（M65/D11：进入视图是视图自己的读取；交互路径没有读取）
+  reopen_view
   filter_to TEAM_NOTIFY_TMUX
   sleep 0.5
   keys Enter
@@ -571,7 +616,7 @@ PY2
   assert_has "$tmp/$current/bool-spelling.txt" "开（1） · 默认" "规范默认值仍在"
   leave_picker TEAM_NOTIFY_TMUX
 
-  # ── (2) enum：只给 constraints 里的取值，原序，没有自由输入；选条目 → 确认 → 写入 ──
+  # ── (2) enum：只给 constraints 里的取值，原序；接受即写（直写，restart 回执说明时机） ──
   filter_to TEAM_MONITOR_UI
   sleep 0.5
   keys Enter
@@ -581,21 +626,20 @@ PY2
   assert_has "$tmp/$current/enum.txt" "auto · 默认" "默认标记在 auto 上"
   assert_has "$tmp/$current/enum.txt" "tui" "enum 给出 constraints 里的 tui"
   assert_has "$tmp/$current/enum.txt" "text" "enum 给出 constraints 里的 text"
-  assert_not "$tmp/$current/enum.txt" "自由输入" "enum 是封闭域：没有自由输入项"
+  assert_not "$tmp/$current/enum.txt" "…（自由输入）" "enum 是封闭域：没有自由输入项"
   local enum_sha enum_audit
   enum_sha="$(sha "$(cfg)")"; enum_audit="$(audit_lines)"
   pick_option 'tui' || bad "enum 选择器里没有 tui"
-  wait_editor TEAM_MONITOR_UI || bad "enum 选中后没有打开写编辑器"
-  assert_eq "enum 选中条目不写契约" "$(sha "$(cfg)")" "$enum_sha"
-  keys Enter
-  if wait_cap enum-confirm "需要重启才生效"; then ok "restart 类的确认行说明重启时机"; else bad "enum 的确认行没出现"; fi
-  keys Enter
-  if wait_cap enum-written "已写入 TEAM_MONITOR_UI = tui"; then ok "enum 的写入回执"; else bad "enum 写入的回执没出现"; fi
-  assert_eq "选条目走的还是两次 Enter 的写路径（审计只长一行）" "$(audit_lines)" "$((enum_audit + 1))"
+  if wait_cap enum-written "已写入 TEAM_MONITOR_UI = tui"; then ok "enum 选项在一次 accept 上写入（直写）"; else bad "enum 的直写回执没出现"; fi
+  cap_to enum-written
+  assert_has "$tmp/$current/enum-written.txt" "需要重启才生效" "restart 类的回执说明重启时机"
+  assert_not "$tmp/$current/enum-written.txt" "确认：" "enum 直写没有确认帧"
+  assert_not "$tmp/$current/enum-written.txt" "╭─ TEAM_MONITOR_UI" "enum 直写没有编辑器"
+  assert_eq "enum 一次 accept 只审计一行" "$(audit_lines)" "$((enum_audit + 1))"
   assert_match "$(argv_log)" 'config set TEAM_MONITOR_UI tui --actor panel --dry-run --fingerprint [0-9a-f]{64}' "wrapper 记录了 --dry-run"
   assert_match "$(argv_log)" 'config set TEAM_MONITOR_UI tui --actor panel --yes --fingerprint [0-9a-f]{64}' "wrapper 记录了 --yes + 指纹"
 
-  # ── (3) 未设键：编辑器开在「保持未设」上，接受 = 取消（不写、不留审计、不留临时文件） ──
+  # ── (3) 未设键：编辑器开在「保持未设」上，接受 = 取消（不写、不留审计、不留临时文件）；再接受 300 = 直写 ──
   filter_to TEAM_DEFER_TTL
   sleep 0.5
   cap_to defer-row
@@ -616,27 +660,24 @@ PY2
   assert_eq "保持未设后契约不变" "$(sha "$(cfg)")" "$defer_sha"
   assert_eq "保持未设后审计不增长" "$(audit_lines)" "$defer_audit"
   assert_eq "保持未设后没有临时文件" "$(ls "$ROOT/.pi/team/"config.sh.tmp.* 2>/dev/null | wc -l)" "0"
-  # 再开一次：接受「300」这一项 → 写编辑器拿着 300 → 两次 Enter 显式写入（视图不说这是 unset）
+  # 再开一次：接受「300」这一项 → 一次 accept 直写（M65/D10；视图不说这是 unset）
   filter_to TEAM_DEFER_TTL
   sleep 0.5
   keys Enter
   wait_picker TEAM_DEFER_TTL '› 保持未设' || bad "未设键的选择器第二次没有打开"
   pick_option '300' || bad "未设键的选择器里没有 300 项"
-  wait_editor TEAM_DEFER_TTL || bad "未设键选默认项后没有打开写编辑器"
-  cap_to defer-editor
-  assert_has "$tmp/$current/defer-editor.txt" "TEAM_DEFER_TTL" "选择默认值进入写编辑器"
-  keys Enter
-  if wait_cap defer-confirm "→ 300"; then ok "默认值先给确认行"; else bad "默认值的确认行没出现"; fi
-  keys Enter
   if wait_cap defer-written "已写入 TEAM_DEFER_TTL = 300"; then
-    ok "默认值作为普通写入（回执说已写入）"
+    ok "未设键选默认值 = 一次 accept 直写（视图没有把这次写入说成 unset）"
   else
-    bad "默认值的写入回执没出现"
+    bad "未设键选默认值的直写回执没出现"
   fi
-  assert_has "$tmp/$current/defer-written.txt" "已写入" "视图没有把这次写入说成 unset"
+  cap_to defer-written
+  assert_not "$tmp/$current/defer-written.txt" "确认：" "未设键直写没有确认帧"
+  assert_not "$tmp/$current/defer-written.txt" "╭─ TEAM_DEFER_TTL" "未设键直写没有编辑器"
   assert_match "$(cfg)" "^TEAM_DEFER_TTL=.300.\$" "契约里显式写上 300"
+  assert_eq "未设键直写审计长一行" "$(audit_lines)" "$((defer_audit + 1))"
 
-  # ── (4) 数值键：建议值 + 区间 + 自由输入；非法值被命令拒绝且保留草稿 ──
+  # ── (4) 数值键：区间 + 建议值 + 自由输入（唯一进编辑器的路径）；非法值被拒且保留草稿；建议值直写 ──
   filter_to TEAM_PULSE_INTERVAL
   sleep 0.5
   keys Enter
@@ -646,8 +687,9 @@ PY2
   assert_match "$tmp/$current/numeric.txt" '› 保持未设' "未设的数值键也以保持未设开头"
   assert_has "$tmp/$current/numeric.txt" "900 · 默认" "建议值里的默认值带默认标记"
   assert_has "$tmp/$current/numeric.txt" "1800" "建议值原样给出"
-  assert_has "$tmp/$current/numeric.txt" "自由输入" "数值键有自由输入项"
-  local num_sha; num_sha="$(sha "$(cfg)")"
+  assert_has "$tmp/$current/numeric.txt" "…（自由输入）" "数值键有自由输入项"
+  local num_sha num_audit
+  num_sha="$(sha "$(cfg)")"; num_audit="$(audit_lines)"
   pick_option '自由输入' || bad "数值选择器里没有自由输入项"
   wait_editor TEAM_PULSE_INTERVAL || bad "数值自由输入没有打开写编辑器"
   keys C-u; sleep 0.3
@@ -657,8 +699,19 @@ PY2
   assert_eq "被拒后契约不变" "$(sha "$(cfg)")" "$num_sha"
   cap_has "TEAM_PULSE_INTERVAL" numeric-draft
   leave_editor TEAM_PULSE_INTERVAL
+  # 4b）建议值也是值条目：一次 accept 直写，不进编辑器（M65/D10）
+  filter_to TEAM_PULSE_INTERVAL
+  sleep 0.5
+  keys Enter
+  wait_picker TEAM_PULSE_INTERVAL '› 保持未设' || bad "数值键的选择器第二次没有打开"
+  pick_option '1800' || bad "数值选择器里没有 1800"
+  if wait_cap num-written "已写入 TEAM_PULSE_INTERVAL = 1800"; then ok "建议值条目一次 accept 直写"; else bad "建议值条目的直写回执没出现"; fi
+  cap_to num-written
+  assert_not "$tmp/$current/num-written.txt" "确认：" "建议值直写没有确认帧"
+  assert_not "$tmp/$current/num-written.txt" "╭─ TEAM_PULSE_INTERVAL" "建议值直写没有编辑器"
+  assert_eq "建议值直写审计长一行" "$(audit_lines)" "$((num_audit + 1))"
 
-  # ── (5) path：存在性标记 / 只有命令接受空值时才给清空项 / 确认行重复标记 ──
+  # ── (5) path：存在性标记 / 只有命令接受空值时才给清空项 / 清空也是直写 / 自由输入的确认行重复标记 ──
   filter_to TEAM_AGENT_BIN
   sleep 0.5
   keys Enter
@@ -666,8 +719,15 @@ PY2
   cap_to path
   assert_match "$tmp/$current/path.txt" '/nonexistent/m55-agent · 当前 · 不存在' "path 当前值带着缺失标记"
   assert_has "$tmp/$current/path.txt" "清空（写入空值）" "exec,opt 的 path 给出清空项"
-  assert_has "$tmp/$current/path.txt" "自由输入" "path 给出自由输入项"
-  leave_picker TEAM_AGENT_BIN
+  assert_has "$tmp/$current/path.txt" "…（自由输入）" "path 给出自由输入项"
+  local path_audit
+  path_audit="$(audit_lines)"
+  pick_option '清空（写入空值）' || bad "path 选择器里没有清空项"
+  if wait_cap path-cleared "已写入 TEAM_AGENT_BIN"; then ok "清空项也是一次 accept 直写"; else bad "清空项的直写回执没出现"; fi
+  cap_to path-cleared
+  assert_not "$tmp/$current/path-cleared.txt" "确认：" "清空直写没有确认帧"
+  assert_not "$(cfg)" "/nonexistent/m55-agent" "清空把文件里的当前值写掉"
+  assert_eq "清空直写审计长一行" "$(audit_lines)" "$((path_audit + 1))"
   filter_to TEAM_PI_BIN
   sleep 0.5
   keys Enter
@@ -686,15 +746,20 @@ PY2
   # ── (6) 没有选项集的 kind：打开自由输入并写明原因，不渲染条目列表 ──
   filter_to TEAM_GATES
   sleep 0.5
+  gap0="$(argv_count)"
   keys Enter
   wait_editor TEAM_GATES "没有选项集" || bad "cmd 键没有打开自由输入"
+  argv_since "$gap0" "$tmp/$current/gap-editor.log"
+  local ed_reads
+  ed_reads="$(argv_reads "$tmp/$current/gap-editor.log")"; [ -n "$ed_reads" ] || ed_reads=0
+  assert_eq "打开自由输入：按键→帧之间零读取（现场：$(head -2 "$tmp/$current/gap-editor.log" 2>/dev/null | tr '\n' ';')）" "$ed_reads" "0"
   cap_to no-choice
   assert_has "$tmp/$current/no-choice.txt" "╭─ TEAM_GATES" "cmd 键直接打开自由输入"
   assert_has "$tmp/$current/no-choice.txt" "没有选项集" "编辑器上方写明原因（kind 没有选项集，写入仍由命令校验）"
   leave_editor TEAM_GATES
   wait_no_editor || bad "cmd 编辑器没有关干净"
 
-  # ── (7) pairlist：Enter 把焦点移到席位块，绝不在这里组合（行数据是重新读的，所以等路由落地） ──
+  # ── (7) pairlist：Enter 把焦点移到席位块，绝不在这里组合（不读、不开编辑器） ──
   filter_to TEAM_AGENT_MODELS
   sleep 0.5
   keys Enter
@@ -705,33 +770,33 @@ PY2
   assert_match "$tmp/$current/pairlist.txt" '› dev +' "焦点移到席位块的第一行"
   assert_has "$tmp/$current/pairlist.txt" "team config set-agent-model" "命令行点名 set-agent-model（唯一写者）"
 
-  # ── (8) 鼠标：点击非焦点条目 = 接受；确认前 esc 什么都不写 ──
+  # ── (8) 鼠标：第一次点击只移光标（不写）；第二次点击 = 接受并直写；esc 什么都不写 ──
   wait_no_editor || bad "点击用例开始前还有编辑器开着"
   filter_to TEAM_MONITOR_UI
   sleep 0.5
   keys Enter
   wait_picker TEAM_MONITOR_UI 'tui · 当前' || bad "点击用例的选择器没有打开"
-  local click_sha click_audit argv0 target_line
+  local click_sha click_audit target_line
   click_sha="$(sha "$(cfg)")"; click_audit="$(audit_lines)"
-  argv0="$(wc -l < "$(argv_log)" 2>/dev/null || echo 0)"
   target_line="$(cap | grep -n 'text' | grep -v '›' | head -1 | cut -d: -f1)"
   [ -n "$target_line" ] || bad "选择器里找不到可点击的 text 条目"
   [ -n "$target_line" ] && click_at 4 "$target_line"
-  wait_editor TEAM_MONITOR_UI || bad "点击后没有打开写编辑器"
-  cap_to click-accept
-  assert_has "$tmp/$current/click-accept.txt" "╭─ TEAM_MONITOR_UI" "点击条目与 Enter 一样接受它"
-  leave_editor TEAM_MONITOR_UI || bad "点击用例的 esc 发了但编辑器还在"
-  wait_no_editor || bad "点击用例的编辑器没有关干净"
-  assert_eq "点击后 esc 不写契约" "$(sha "$(cfg)")" "$click_sha"
-  assert_eq "点击后 esc 不增审计" "$(audit_lines)" "$click_audit"
-  tail -n +$((argv0 + 1)) "$(argv_log)" > "$tmp/$current/click-argv.txt" 2>/dev/null || true
-  assert_not "$tmp/$current/click-argv.txt" "config set" "点击后 esc 的 wrapper 里没有 config set"
-  assert_not "$tmp/$current/click-argv.txt" "set-agent-model" "点击后 esc 的 wrapper 里没有席位写"
-  # esc 关掉选择器 → 回到行列表，焦点仍在原来那一行
+  sleep 0.8
+  cap_to click-move
+  assert_match "$tmp/$current/click-move.txt" '› text' "第一次点击把光标移到该条目（D7 的规矩）"
+  assert_eq "第一次点击不写契约" "$(sha "$(cfg)")" "$click_sha"
+  assert_eq "第一次点击不增审计" "$(audit_lines)" "$click_audit"
+  click_at 4 "$target_line"
+  if wait_cap click-written "已写入 TEAM_MONITOR_UI = text"; then ok "第二次点击与 Enter 一样接受并直写"; else bad "第二次点击的直写回执没出现"; fi
+  assert_eq "第二次点击审计长一行" "$(audit_lines)" "$((click_audit + 1))"
+  assert_match "$(argv_log)" 'config set TEAM_MONITOR_UI text --actor panel --yes --fingerprint [0-9a-f]{64}' "第二次点击走了直写（--yes + 指纹）"
+  # esc：打开选择器 → esc → 什么都不写
   filter_to TEAM_MONITOR_UI
   sleep 0.5
+  local esc_audit esc0 esc_sha
+  esc_audit="$(audit_lines)"; esc0="$(argv_count)"; esc_sha="$(sha "$(cfg)")"
   keys Enter
-  wait_picker TEAM_MONITOR_UI 'tui · 当前' || bad "esc 用例的选择器没有打开"
+  wait_picker TEAM_MONITOR_UI 'text · 当前' || bad "esc 用例的选择器没有打开"
   # M59: the test-action esc is also state-checked — if the picker is not on a settled frame the
   # key is not sent and the miss is named, instead of the esc closing whatever is underneath.
   pty_key_when "esc 用例" " · TEAM_MONITOR_UI" Escape || bad "esc 用例：选择器不在稳定帧上，esc 没有发"
@@ -739,6 +804,11 @@ PY2
   cap_to picker-esc
   assert_not "$tmp/$current/picker-esc.txt" " · TEAM_MONITOR_UI" "esc 关掉选择器"
   assert_has "$tmp/$current/picker-esc.txt" "team config set TEAM_MONITOR_UI" "回到行列表且焦点仍在原来那一行"
+  assert_eq "esc 后契约不变" "$(sha "$(cfg)")" "$esc_sha"
+  assert_eq "esc 后审计不增长" "$(audit_lines)" "$esc_audit"
+  argv_since "$esc0" "$tmp/$current/esc-argv.log"
+  assert_not "$tmp/$current/esc-argv.log" "config set" "esc 的窗口里没有 config set"
+  assert_not "$tmp/$current/esc-argv.log" "set-agent-model" "esc 的窗口里没有席位写"
   # M59 判据②（真实场景）：此刻选择器已被上面那条 esc 关掉 —— 清理点的 esc 必须先确认状态。
   # 旧写法的裸 esc 在这里会把设置视图整个关掉，之后每段都在错的视图里跑（§38-b 的级联入口）。
   PTY_TRACE=1 pty_cleanup_esc "回归钉：已关闭的选择器" " · TEAM_MONITOR_UI" > "$tmp/$current/cleanup-trace.txt" 2>&1
@@ -748,7 +818,7 @@ PY2
   assert_has "$tmp/$current/cleanup-after.txt" "╭─ 项目设置" "设置视图还开着（没有裸 esc 打到它身上）"
   # M59 判据①的 trace 面：一次正常等待的放行点在 trace 里可见（命中 + 稳定确认，轮数自适应）。
   keys Enter
-  PTY_TRACE=1 wait_picker TEAM_MONITOR_UI 'tui · 当前' > "$tmp/$current/wait-trace.txt" 2>&1 \
+  PTY_TRACE=1 wait_picker TEAM_MONITOR_UI 'text · 当前' > "$tmp/$current/wait-trace.txt" 2>&1 \
     || bad "trace 探针的选择器没有打开"
   assert_match "$tmp/$current/wait-trace.txt" 'wait picker TEAM_MONITOR_UI rounds=[0-9]+ settled=1' "正常等待放行在稳定帧上（trace 可见轮数）"
   leave_picker TEAM_MONITOR_UI || bad "trace 探针的选择器没有关掉"
@@ -764,7 +834,7 @@ PY2
   before_hidden="$(grep -oE '↓[0-9]+' "$tmp/$current/wheel-before.txt" | head -1 | tr -d '↓' || true)"
   [ -n "$before_hidden" ] && ok "长列表在可视预算之外还有 $before_hidden 个条目（计数行）" \
     || bad "长列表没有被窗口截断（滚轮用例前提不成立）"
-  assert_not "$tmp/$current/wheel-before.txt" "自由输入" "滚动前看不到列表末尾的自由输入项"
+  assert_not "$tmp/$current/wheel-before.txt" "…（自由输入）" "滚动前看不到列表末尾的自由输入项"
   local w
   for w in $(seq 1 32); do
     tmux -L "$sock" send-keys -t "$sess:panel" -l "$(printf '\033[<65;20;20M')" 2>/dev/null || true
@@ -783,18 +853,15 @@ PY2
   else
     bad "滚轮没有推动可见窗口（↓$before_hidden → ↓${after_hidden:-0}）"
   fi
-  assert_has "$tmp/$current/wheel-after.txt" "自由输入" "滚轮一直滚到列表末尾（自由输入项可见）"
+  assert_has "$tmp/$current/wheel-after.txt" "…（自由输入）" "滚轮一直滚到列表末尾（自由输入项可见）"
   assert_match "$tmp/$current/wheel-after.txt" "↑[0-9]+" "滚过之后列表上方也有被隐藏的条目"
   # R2 的入口断言：scratch HOME 的目录（sub2api / openrouter）不在选择器里，也不在读里。
-  # 开着的窗口和滚到底的窗口都查（目录 provider 若真被当成选项，它会从列表任一端露出来）。
   assert_not "$tmp/$current/wheel-before.txt" "sub2api" "选择器开屏不列机器目录里的 sub2api（词表只有项目数据）"
   assert_not "$tmp/$current/wheel-after.txt" "sub2api" "滚到底也不列机器目录里的 sub2api"
   assert_not "$tmp/$current/wheel-after.txt" "openrouter" "选择器不列机器目录里的 openrouter"
   ( cd "$ROOT" && HOME="$home" bash "$skill/scripts/team" config list --json ) > "$tmp/$current/read-json.json" 2>&1
   assert_not "$tmp/$current/read-json.json" "sub2api" "同一 scratch HOME 下的读也不含目录 provider"
-  # 硬化自检（M55 第一次复验 FAIL 的回归钉 + M59 判据①/③）：选择器开着时，只要要求的条目
-  # 不在帧里，wait_picker 必须判负 —— 标题命中不算数；判负自带超时现场（pane 末行 + 缺失项 +
-  # 孤立/级联）。短预算：判负要快，不是熬。
+  # 硬化自检（M55 第一次复验 FAIL 的回归钉 + M59 判据①/③）……
   if wait_picker_quick TEAM_DEFAULT_MODEL '这条目不存在-硬线自检'; then
     bad "wait_picker 只凭标题就放行了（条目标记/稳定帧没起作用）"
   else
@@ -802,6 +869,28 @@ PY2
   fi
   # 清理守卫把 esc 只打在真开着的选择器上（这里选择器确实开着 → 恰好一个 esc）。
   leave_picker TEAM_DEFAULT_MODEL || bad "回归钉之后的选择器没有关掉"
+
+  # ── (10) 危险值来自选项：第一次 accept 只给警告（不写、不审计），第二次才带 danger allowance 写入 ──
+  filter_to TEAM_MIN_FREE_SWAP_MB
+  sleep 0.5
+  keys Enter
+  wait_picker TEAM_MIN_FREE_SWAP_MB '0 · 当前' || bad "danger 用例的选择器没有打开"
+  cap_to danger
+  assert_has "$tmp/$current/danger.txt" "0 · 当前" "文件里的 0 在选项里就是「当前」（选项也可以是危险值）"
+  local d_sha d_audit d0
+  d_sha="$(sha "$(cfg)")"; d_audit="$(audit_lines)"; d0="$(argv_count)"
+  pick_option '0 · 当前' || bad "danger 用例里没有 0 条目"
+  if wait_cap danger-warn "危险："; then ok "选项里的危险值先要一次确认（第一次 accept 不写）"; else bad "危险值的警告没出现"; fi
+  assert_eq "警告后契约不变" "$(sha "$(cfg)")" "$d_sha"
+  assert_eq "警告后审计不增长" "$(audit_lines)" "$d_audit"
+  cap_to danger-warn
+  assert_has "$tmp/$current/danger-warn.txt" " · TEAM_MIN_FREE_SWAP_MB" "警告之后选择器还开着（第二次 accept 在同一处）"
+  argv_since "$d0" "$tmp/$current/danger-argv.log"
+  assert_not "$tmp/$current/danger-argv.log" "--yes" "警告这一次没有 --yes（什么都没写）"
+  keys Enter
+  if wait_cap danger-written "已写入 TEAM_MIN_FREE_SWAP_MB = 0"; then ok "第二次 accept 带 danger allowance 写入"; else bad "危险值的第二次 accept 没有落盘"; fi
+  assert_match "$(argv_log)" 'config set TEAM_MIN_FREE_SWAP_MB 0 --actor panel --yes --fingerprint [0-9a-f]{64} --allow-danger' "写入带 --allow-danger（命令的 danger 例外）"
+  assert_eq "危险值第二次 accept 审计长一行" "$(audit_lines)" "$((d_audit + 1))"
 }
 
 scn_choices_schema() {

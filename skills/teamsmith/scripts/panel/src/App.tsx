@@ -18,7 +18,7 @@ import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsBlock, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, ViewState } from './types.js'
+import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, ViewState } from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -105,11 +105,11 @@ export interface PanelApi {
     opts: { dryRun?: boolean; fingerprint?: string | null; allowDanger?: boolean },
   ): Promise<{ code: number; line: string }>
   /**
-   * Freshly rebuild the settings block and return it (P22/B3). The editor pins its fingerprint from
-   * this read: the cached block may predate a write that just settled, and a stale pin would surface
-   * as a conflict on the very next edit.
+   * Re-read the settings block in the background after a write settled (M65/D11). The receipt is
+   * drawn from the command's own settle and never waits for this read; it only refreshes what the
+   * next interaction sees. Never awaited on the interaction path.
    */
-  refreshSettings(): Promise<SettingsBlock | null>
+  refreshSettingsSoon(): void
   /** One `team config set-agent-model <seat> <model|->` invocation (P22/B4). */
   setSeatModel(
     seat: string,
@@ -314,6 +314,12 @@ export function App({
   const choicePickerRef = useRef<SettingsChoicePicker | null>(null)
   choicePickerRef.current = choicePicker
   const settingConfirmRef = useRef<{ key: string; next: string; danger: boolean } | null>(null)
+  /**
+   * The value the picker's first accept found dangerous (the command's exit 7): one more accept of
+   * that same value writes it with the command's danger allowance, and any other selection clears
+   * it so a new value is validated first (M65/D10).
+   */
+  const choiceDangerRef = useRef<{ key: string; value: string } | null>(null)
   focusRef.current = focus
   laneOffsetRef.current = laneOffset
   detailIdRef.current = detailId
@@ -562,14 +568,14 @@ export function App({
           settingConfirmRef.current = null
           setSettingConfirm(null)
           closeCompose()
-          api.refreshNow()
+          api.refreshSettingsSoon()
         } else if (r.code === 3) {
           // The other writer's bytes survived; reload so the view shows their value (the settle).
           setReceipt(null)
           setStatus(stringsRef.current.settingConflict)
           settingConfirmRef.current = null
           setSettingConfirm(null)
-          api.refreshNow()
+          api.refreshSettingsSoon()
         } else {
           setReceipt(null)
           setStatus(
@@ -911,6 +917,117 @@ export function App({
   )
 
   /**
+   * The write target a picker accept acts on (M65/D11): built from the `settings` block the view
+   * already read, never from a fresh `config list`/`__panel-data`. The fingerprint is that block's,
+   * so a contract changed under the picker is the owning command's conflict verdict — CAS is the
+   * freshness check, not a re-read between every keystroke and its frame.
+   */
+  const choiceTarget = useCallback(
+    (picker: SettingsChoicePicker): NonNullable<typeof settingRowRef.current> => {
+      const rows = settingsRowsNow()
+      // By key name, not by index: the picker's row index is a focus index and the row list can be
+      // replaced by a settle re-read while the picker is open.
+      const rowNow = rows.find((r) => r.kind === 'key' && r.key.name === picker.key) ?? rows[picker.row]
+      const keyNow = rowNow && rowNow.kind === 'key' ? rowNow.key : null
+      return {
+        row: picker.row,
+        key: picker.key,
+        value: keyNow?.value ?? '',
+        cls: keyNow?.class ?? 'apply',
+        fingerprint: dataRef.current.blocks?.settings?.fingerprint ?? '',
+        kind: picker.kind,
+        choices: keyNow?.choices,
+      }
+    },
+    [settingsRowsNow],
+  )
+
+  /**
+   * The direct write (M65/D10): accepting a value entry asks the owning command for the validation
+   * it already uses (`--dry-run`) and, when it accepts, performs the write on the very same accept
+   * (`--yes --fingerprint` of the read the editor was built from) — no confirmation frame and no
+   * compose editor on this path. A value the command reports dangerous (exit 7) is not written by
+   * that first accept: the warning rides the status line and one more accept of the same value
+   * writes it with the command's allowance. The receipt is the existing exit-code mapping; a
+   * conflict names the other writer, writes nothing and refreshes the block in the background.
+   */
+  const writeChoiceValue = useCallback(
+    async (target: NonNullable<typeof settingRowRef.current>, value: string): Promise<void> => {
+      if (sendingRef.current) return
+      sendingRef.current = true
+      setBusy(true)
+      const timing =
+        target.cls === 'restart' ? stringsRef.current.settingTimingRestart : stringsRef.current.settingTimingApply
+      try {
+        const danger = choiceDangerRef.current
+        const dangerAccept = Boolean(danger && danger.key === target.key && danger.value === value)
+        if (!dangerAccept) {
+          const dry = await api.setSetting(target.key, value, { dryRun: true, fingerprint: target.fingerprint })
+          if (dry.code === 7) {
+            choiceDangerRef.current = { key: target.key, value }
+            setReceipt(null)
+            setStatus(fill(stringsRef.current.settingDanger, { reason: dry.line }))
+            return
+          }
+          // 3 = the file changed under the picker: the real write below is what the command audits.
+          if (dry.code !== 0 && dry.code !== 3) {
+            choiceDangerRef.current = null
+            setReceipt(null)
+            setStatus(
+              fill(
+                dry.code === 5
+                  ? stringsRef.current.settingRefused
+                  : dry.code === 4
+                    ? stringsRef.current.settingInvalid
+                    : stringsRef.current.settingWriteError,
+                { line: dry.line },
+              ),
+            )
+            return
+          }
+        }
+        const r = await api.setSetting(target.key, value, {
+          dryRun: false,
+          fingerprint: target.fingerprint,
+          allowDanger: dangerAccept,
+        })
+        choiceDangerRef.current = null
+        if (r.code === 0) {
+          setReceipt(null)
+          setStatus(fill(stringsRef.current.settingWritten, { key: target.key, value, timing }))
+          settingRowRef.current = null
+          setChoicePicker(null)
+          choicePickerRef.current = null
+          api.refreshSettingsSoon()
+        } else if (r.code === 3) {
+          // The other writer's bytes survived; reload so the view shows their value (the settle).
+          setReceipt(null)
+          setStatus(stringsRef.current.settingConflict)
+          setChoicePicker(null)
+          choicePickerRef.current = null
+          api.refreshSettingsSoon()
+        } else {
+          setReceipt(null)
+          setStatus(
+            fill(
+              r.code === 5
+                ? stringsRef.current.settingRefused
+                : r.code === 4
+                  ? stringsRef.current.settingInvalid
+                  : stringsRef.current.settingWriteError,
+              { line: r.line },
+            ),
+          )
+        }
+      } finally {
+        sendingRef.current = false
+        setBusy(false)
+      }
+    },
+    [api],
+  )
+
+  /**
    * The pairlist row's editor is the seats block (the requirement that owns per-seat editing):
    * `enter` moves the focus there, no compose editor and no option list opens. A filter that hides
    * the seats is dropped, because otherwise "focus the seats block" would name a row that is not
@@ -936,57 +1053,61 @@ export function App({
     setStatus(stringsRef.current.settingsChoicePairlist)
   }, [settingsRowsNow])
 
-  /** One picker choice: it lands in the write editor (the two-step flow is untouched). */
+  /**
+   * One picker choice (M65/D10): a value entry validates and writes on this accept; a seeded entry
+   * (`winlist`/`pattern`'s `<model>=`) and the free-text entry open the compose editor, which keeps
+   * its validation and confirmation; keep-unset cancels. A click on an entry that does not carry
+   * the cursor only moves it — a click on the cursor's entry accepts it like `enter` does.
+   */
   const chooseChoiceOption = useCallback(
     (index: number) => {
       const picker = choicePickerRef.current
       if (!picker) return
-      const i = index < 0 ? picker.index : index
-      const entry = picker.entries[i]
+      if (index >= 0 && index !== picker.index) {
+        const next = { ...picker, index: Math.max(0, Math.min(picker.entries.length - 1, index)) }
+        choiceDangerRef.current = null
+        choicePickerRef.current = next
+        setChoicePicker(next)
+        return
+      }
+      const entry = picker.entries[index < 0 ? picker.index : index]
       if (!entry) return
       // keep-unset cancels: no compose editor, no write, no audit line, no temporary file. The
       // writer has no removal operation, so the view never claims it deleted the line.
       if (entry.kind === 'keep-unset') {
+        choiceDangerRef.current = null
         setChoicePicker(null)
         choicePickerRef.current = null
         return
       }
-      const seed = entry.seed !== undefined ? entry.seed : entry.value
-      void (async () => {
-        // The fingerprint is pinned from a fresh read, like the key editor's.
-        const fresh = await api.refreshSettings().catch(() => null)
-        const freshKey = fresh?.keys?.find((k) => k.name === picker.key)
-        const rows = settingsRowsNow()
-        const rowNow = rows[picker.row]
-        const keyNow = rowNow && rowNow.kind === 'key' ? rowNow.key : null
-        settingRowRef.current = {
-          row: picker.row,
-          key: picker.key,
-          value: freshKey ? freshKey.value : keyNow?.value ?? '',
-          cls: freshKey?.class ?? keyNow?.class ?? 'apply',
-          fingerprint: fresh?.fingerprint ?? dataRef.current.blocks?.settings?.fingerprint ?? '',
-          kind: picker.kind,
-          choices: freshKey?.choices ?? keyNow?.choices,
-        }
+      const target = choiceTarget(picker)
+      settingRowRef.current = target
+      if (entry.kind === 'free' || entry.seed !== undefined) {
+        // The only typed path: the editor's validation and confirmation are unchanged (D10).
         settingConfirmRef.current = null
         setSettingConfirm(null)
+        choiceDangerRef.current = null
         setChoicePicker(null)
         choicePickerRef.current = null
-        openCompose('setting', seed)
-      })()
+        openCompose('setting', entry.seed !== undefined ? entry.seed : entry.value)
+        return
+      }
+      void writeChoiceValue(target, entry.value)
     },
-    [api, openCompose, settingsRowsNow],
+    [choiceTarget, openCompose, writeChoiceValue],
   )
 
   const moveChoicePicker = useCallback((delta: number) => {
     const picker = choicePickerRef.current
     if (!picker) return
+    choiceDangerRef.current = null
     const next = { ...picker, index: Math.max(0, Math.min(picker.entries.length - 1, picker.index + delta)) }
     choicePickerRef.current = next
     setChoicePicker(next)
   }, [])
 
   const closeChoicePicker = useCallback(() => {
+    choiceDangerRef.current = null
     setChoicePicker(null)
     choicePickerRef.current = null
   }, [])
@@ -1026,16 +1147,19 @@ export function App({
    * an editable row opens the value editor (the compose line's `setting` mode, B3).
    */
   const openSettingsRow = useCallback(
-    async (index: number) => {
+    (index: number) => {
       const rows = settingsRowsNow()
-      const row = index < 0 ? rows[settingsFocusRef.current] : rows[index]
+      // `-1` = the focused row: resolve it once here, so the picker/editor carries a real index
+      // (the focus walk passes -1 from the Enter handler).
+      const at = index < 0 ? settingsFocusRef.current : index
+      const row = rows[at]
       if (!row) return
       if (row.kind === 'seat') {
         // The picker: the command's known models, then the removal and the free-text line. The
         // editor opens on the chosen option so the two-step confirmation has a surface.
         const models = [...(dataRef.current.blocks?.settings?.models?.known ?? [])]
-        setSeatPicker({ agent: row.seat.agent, row: index, models, index: 0 })
-        seatPickerRef.current = { agent: row.seat.agent, row: index, models, index: 0 }
+        setSeatPicker({ agent: row.seat.agent, row: at, models, index: 0 })
+        seatPickerRef.current = { agent: row.seat.agent, row: at, models, index: 0 }
         setReceipt(null)
         setStatus(null)
         return
@@ -1046,29 +1170,27 @@ export function App({
         setStatus(`${key.name} · ${key.route || key.warning || stringsRef.current.settingsRefusedRoute}`)
         return
       }
-      // M55: the editor opens on the command's own read. The cached block may predate a write that
-      // just settled, and the fingerprint is pinned from the same read (the design's rule for
-      // "when the editor opens", M55 extended it to the choice picker: a stale row would offer a
-      // value the command already replaced).
-      const fresh = await api.refreshSettings().catch(() => null)
-      const freshKey = fresh?.keys?.find((k) => k.name === key.name)
-      const live = freshKey ?? key
-      if (hasChoiceEditor(live)) {
-        if (String(live.kind ?? '') === 'pairlist') {
+      // M65/D11: the editor opens on the `settings` block already on screen — no `config list` or
+      // `__panel-data` stands between the keystroke and the frame that answers it. The fingerprint
+      // is that block's, so a contract changed underneath is the owning command's conflict verdict
+      // (CAS), not a reason to re-read before every action.
+      if (hasChoiceEditor(key)) {
+        if (String(key.kind ?? '') === 'pairlist') {
           routePairlist()
           return
         }
-        const entries = buildChoiceEntries(live)
+        const entries = buildChoiceEntries(key)
         if (entries.length) {
-          const kind = String(live.kind ?? '')
+          const kind = String(key.kind ?? '')
           const picker: SettingsChoicePicker = {
-            row: index,
-            key: live.name,
+            row: at,
+            key: key.name,
             kind,
             entries,
             index: 0,
-            interval: NUMERIC_KINDS.has(kind) ? { min: String(live.choices?.min ?? ''), max: String(live.choices?.max ?? '') } : null,
+            interval: NUMERIC_KINDS.has(kind) ? { min: String(key.choices?.min ?? ''), max: String(key.choices?.max ?? '') } : null,
           }
+          choiceDangerRef.current = null
           setChoicePicker(picker)
           choicePickerRef.current = picker
           setReceipt(null)
@@ -1078,23 +1200,23 @@ export function App({
       }
       settingRowRef.current = {
         row: index,
-        key: live.name,
-        value: live.value,
-        cls: live.class,
-        fingerprint: fresh?.fingerprint ?? dataRef.current.blocks?.settings?.fingerprint ?? '',
-        kind: String(live.kind ?? ''),
-        choices: live.choices,
+        key: key.name,
+        value: key.value,
+        cls: key.class,
+        fingerprint: dataRef.current.blocks?.settings?.fingerprint ?? '',
+        kind: String(key.kind ?? ''),
+        choices: key.choices,
       }
       settingConfirmRef.current = null
       setSettingConfirm(null)
-      openCompose('setting', live.set || live.value !== '' ? live.value : live.default)
-      if (live.choices && !hasChoiceEditor(live)) {
+      openCompose('setting', key.set || key.value !== '' ? key.value : key.default)
+      if (key.choices && !hasChoiceEditor(key)) {
         // The visible fallback (R3): the kind defines no choice set and the command still validates
         // the write. The line rides the editor's own hint row, so it stays on screen while typing.
-        setStatus(fill(stringsRef.current.settingsChoiceNoChoice, { kind: String(live.kind ?? '') }))
+        setStatus(fill(stringsRef.current.settingsChoiceNoChoice, { kind: String(key.kind ?? '') }))
       }
     },
-    [api, buildChoiceEntries, openCompose, routePairlist, settingsRowsNow],
+    [buildChoiceEntries, openCompose, routePairlist, settingsRowsNow],
   )
 
   /**
@@ -1120,29 +1242,26 @@ export function App({
       if (!picker) return
       const { picker: p, option } = picker
       const seat = p.agent
-      void (async () => {
-        // The fingerprint is pinned from a fresh read, like the key editor's.
-        const fresh = await api.refreshSettings().catch(() => null)
-        const seatRow = (fresh?.models?.seats ?? dataRef.current.blocks?.settings?.models?.seats ?? []).find(
-          (x) => x.agent === seat,
-        )
-        const initial = option === '' ? '' : option
-        settingRowRef.current = {
-          row: p.row,
-          key: seat,
-          value: seatRow?.model ?? '',
-          cls: 'restart',
-          fingerprint: fresh?.fingerprint ?? dataRef.current.blocks?.settings?.fingerprint ?? '',
-          seat,
-        }
-        settingConfirmRef.current = null
-        setSettingConfirm(null)
-        setSeatPicker(null)
-        seatPickerRef.current = null
-        openCompose('setting', initial)
-      })()
+      // M65/D11: the editor opens from the block already on screen (no read on the interaction
+      // path); its fingerprint is that block's, so CAS catches a contract changed underneath.
+      const block = dataRef.current.blocks?.settings
+      const seatRow = (block?.models?.seats ?? []).find((x) => x.agent === seat)
+      const initial = option === '' ? '' : option
+      settingRowRef.current = {
+        row: p.row,
+        key: seat,
+        value: seatRow?.model ?? '',
+        cls: 'restart',
+        fingerprint: block?.fingerprint ?? '',
+        seat,
+      }
+      settingConfirmRef.current = null
+      setSettingConfirm(null)
+      setSeatPicker(null)
+      seatPickerRef.current = null
+      openCompose('setting', initial)
     },
-    [api, openCompose, pickerIndex],
+    [openCompose, pickerIndex],
   )
 
   const moveSeatPicker = useCallback((delta: number) => {

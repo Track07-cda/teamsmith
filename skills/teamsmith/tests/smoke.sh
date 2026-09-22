@@ -11566,6 +11566,27 @@ else
   bad "38-c 缺 tests/lib/pty-wait.sh"
 fi
 
+# 38-d 静默回归钉（M65/D11，FAST 照跑）：交互路径不许再出现「打开前先读一次」的 awaited API，
+# 且唯一带读取窗口判据的行为夹具还在。38-b（真 pty）只在完整门禁跑；这两条便宜钉保证有人把
+# 「开行前先读一次」加回来、或把读取窗口断言删掉时 FAST 也会红。行为面的红侧在
+# panel-flip-m54.sh 的 W-A（断掉无读取 → choices 变红）。
+if [ -f "$SKILL_DIR/scripts/panel/src/App.tsx" ]; then
+  if grep -qE '(^|[^A-Za-z])refreshSettings\(' "$SKILL_DIR/scripts/panel/src/App.tsx"; then
+    bad "38-d 交互路径又出现 awaited 读取（App.tsx 调了 refreshSettings）"
+  else
+    ok "38-d 交互路径没有 awaited 读取（App.tsx 只在 settle 后用 refreshSettingsSoon）"
+  fi
+  assert_has "$SKILL_DIR/scripts/panel/src/App.tsx" "refreshSettingsSoon()" "38-d settle 之后只有后台重读 settings（refreshSettingsSoon）"
+else
+  bad "38-d 缺 scripts/panel/src/App.tsx"
+fi
+if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
+  assert_has "$SKILL_DIR/tests/panel-p21.sh" "按键→帧之间零读取" "38-d choices 段还带着读取窗口判据（行为面在 38-b / W-A）"
+  assert_has "$SKILL_DIR/tests/panel-p21.sh" "argv_reads" "38-d 读取窗口判据用 config list/__panel-data 的 argv 面"
+else
+  bad "38-d 缺 tests/panel-p21.sh"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"

@@ -193,7 +193,7 @@ export const en = {
   settingsRefusedHint: 'read-only: edit {key} in .pi/team/config.sh by hand',
   settingsUnknownHint: 'unknown key: {key} is in the file but not in the command schema',
   settingsChoiceTitle: 'Choose a value for {label} · {key}',
-  settingsChoiceHint: '↑/↓ choose · Enter edit that value · Esc back (two more Enters inside the editor do the write)',
+  settingsChoiceHint: '↑/↓ choose · Enter writes that value now (danger needs one more) · only free text opens the editor · Esc back',
   settingsChoiceCurrent: 'current',
   settingsChoiceDefault: 'default',
   settingsChoiceKeepUnset: 'keep unset (cancel writes nothing and leaves no audit line)',

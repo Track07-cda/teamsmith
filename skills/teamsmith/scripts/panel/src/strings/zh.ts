@@ -193,7 +193,7 @@ export const zh = {
   settingsRefusedHint: '只读：手改 .pi/team/config.sh 里的 {key}',
   settingsUnknownHint: '未知键：{key} 在文件里，命令的 schema 不认识',
   settingsChoiceTitle: '选择 {label} 的值 · {key}',
-  settingsChoiceHint: '↑/↓ 选择 · Enter 编辑该值 · Esc 返回（在编辑器里再按两次 Enter 才写入）',
+  settingsChoiceHint: '↑/↓ 选择 · Enter 直接写入该值（危险值再按一次确认）· 「自由输入」才进编辑器 · Esc 返回',
   settingsChoiceCurrent: '当前',
   settingsChoiceDefault: '默认',
   settingsChoiceKeepUnset: '保持未设（取消 = 不写、不留审计）',

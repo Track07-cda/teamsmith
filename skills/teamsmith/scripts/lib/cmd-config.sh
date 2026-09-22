@@ -188,24 +188,25 @@ team_config_row() { # <KEY> → schema 行（找不到返回 1）
   return 1
 }
 
-team_config_choices() { # <row> [known models: 每行一个] → 该键的选项集 JSON {source,values,min,max,empty,note}
+team_config_choices_set() { # <row> [known models: 每行一个] → CFG_CHOICES_JSON（读路径无子 shell）
   # 唯一来源是 schema 行（加 models 块的 known）：bool 的两个规范值、enum 的 constraints、数值类的
   # suggest 列、模型类的 known。面板读这个对象画选择器，因此它绝不能是第二张选项表。
   # empty = 写入者是否接受空值（与 team_config_validate_value 的 '' 判定同口径；走查夹具比对两者）。
   # note = 该键域的解释（今天只有 path 类用它携带存在性检查的类型 file|dir|exec|any），无话可说时为空。
   local row="${1-}" known="${2-}"
-  local key kind spec suggest src="none" min="" max="" empty="false" note="" val_list=""
-  key="$(team_config_field "$row" 1)"; kind="$(team_config_field "$row" 3)"
-  spec="$(team_config_field "$row" 4)"; suggest="$(team_config_field "$row" 9)"
+  local -a f=()
+  IFS='|' read -r -a f <<< "$row"
+  local kind="${f[2]:-}" spec="${f[3]:-}" suggest="${f[8]:-}"
+  local src="none" min="" max="" empty="false" note="" val_list=""
   case "$kind" in
     bool)
       src="schema"; val_list=$'1\n0' ;;
     enum)
-      src="schema"; val_list="$(printf '%s' "$spec" | tr ',' '\n')" ;;
+      src="schema"; val_list="${spec//,/$'\n'}" ;;
     int|seconds|mb|bytes|pct)
       src="schema"
       IFS=, read -r min max _ <<< "$spec"
-      val_list="$(printf '%s' "$suggest" | tr ',' '\n')" ;;
+      val_list="${suggest//,/$'\n'}" ;;
     model|pairlist|winlist|pattern)
       src="known"; val_list="$known" ;;
     path)
@@ -222,13 +223,20 @@ team_config_choices() { # <row> [known models: 每行一个] → 该键的选项
   while IFS= read -r v; do
     [ -n "$v" ] || continue
     [ "$first" = "1" ] || values_json="$values_json,"
-    first=0; values_json="$values_json\"$(team_config_json_escape "$v")\""
+    first=0
+    team_config_json_escape_set "$v"
+    values_json="$values_json\"$CFG_ESC\""
   done <<< "$val_list"
-  printf '{"source":"%s","values":[%s],"min":"%s","max":"%s","empty":%s,"note":"%s"}\n' \
-    "$src" "$values_json" "$(team_config_json_escape "$min")" "$(team_config_json_escape "$max")" \
-    "$empty" "$(team_config_json_escape "$note")"
+  team_config_json_escape_set "$min"; local min_json="$CFG_ESC"
+  team_config_json_escape_set "$max"; local max_json="$CFG_ESC"
+  team_config_json_escape_set "$note"; local note_json="$CFG_ESC"
+  CFG_CHOICES_JSON="{\"source\":\"$src\",\"values\":[$values_json],\"min\":\"$min_json\",\"max\":\"$max_json\",\"empty\":$empty,\"note\":\"$note_json\"}"
 }
 
+team_config_choices() { # <row> [known models] → 打印对象（兼容包装；读热路径用 _set，省一次 fork）
+  team_config_choices_set "${1-}" "${2-}"
+  printf '%s\n' "$CFG_CHOICES_JSON"
+}
 team_config_key_form() { # <KEY> → plain|export（未知键 = plain）
   local row; row="$(team_config_row "$1" 2>/dev/null || true)"
   [ -n "$row" ] || { printf 'plain\n'; return 0; }
@@ -287,13 +295,20 @@ team_config_mtime() { # <file> → UTC ISO-8601
 }
 
 team_config_json_escape() { # JSON 字符串转义（含控制字符）
+  team_config_json_escape_set "${1-}"
+  printf '%s' "$CFG_ESC"
+}
+
+# 读路径的无子 shell 版本（M65/Q3）：`team config list --json` 每个键、每个字段一次 `$(...)`
+# 就是一次 fork —— 108 键的契约里命令替换是扫描之外的主要残余成本。结果落在 CFG_ESC。
+team_config_json_escape_set() { # <text> → CFG_ESC
   local v="${1-}"
   v="${v//\\/\\\\}"
   v="${v//\"/\\\"}"
   v="${v//$'\t'/\\t}"
   v="${v//$'\r'/\\r}"
   v="${v//$'\n'/\\n}"
-  printf '%s' "$v"
+  CFG_ESC="$v"
 }
 
 # ---------------------------------------------------------------- 值的校验（唯一校验器）
@@ -540,14 +555,68 @@ team_config_seat_source_token() { # <中文标签> → config|explicit|record
 }
 
 # ---------------------------------------------------------------- list
+# ---------------------------------------------------------------- 读路径：契约的一次性扫描（M65/D11 · M2）
+# `team config list --json` 的成本原来全在 fan-out：每个已知键两次 `grep|head`+`awk`（值 + 注释），
+# 未知键的扫描再**每文件行** spawn 一个 `sed`。108 键的契约实测 ~600 个子进程、~3.5 s，而面板每次"
+# 进视图/开行/选项"都同步调它。这里一次 awk 过契约，得到「赋值行的出现顺序」+「每个键第一次出现的
+# 值/行内注释」；下面的两个循环只在 bash 里查表。语义逐字对齐 team_config_file_line/_value/_comment：
+# 同名取第一行、引号内的 # 不是注释（双引号里的反斜杠转义也照旧）、值去首尾空白与一层引号、
+# 注释含 # 前的空白并原样保留。
+CFG_SCAN_ORDER=""
+declare -gA CFG_SCAN_VALUE=()
+declare -gA CFG_SCAN_COMMENT=()
+team_config_scan() { # <file> → 填 CFG_SCAN_*（一次 awk；值/注释取首次出现，顺序含重复行）
+  local f="$1" k v c
+  CFG_SCAN_ORDER=""
+  CFG_SCAN_VALUE=()
+  CFG_SCAN_COMMENT=()
+  while IFS=$'\x1f' read -r k v c; do
+    [ -n "$k" ] || continue
+    CFG_SCAN_ORDER="$CFG_SCAN_ORDER$k"$'\n'
+    if [ -z "${CFG_SCAN_VALUE[$k]+x}" ]; then
+      CFG_SCAN_VALUE["$k"]="$v"
+      CFG_SCAN_COMMENT["$k"]="$c"
+    fi
+  done < <(awk '
+  /^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=/ {
+    line = $0
+    p = index(line, "=")
+    head = substr(line, 1, p - 1)
+    gsub(/^[[:space:]]*/, "", head)
+    sub(/^export[[:space:]]+/, "", head)
+    gsub(/[[:space:]]+$/, "", head)
+    s = substr(line, p + 1)
+    n = length(s); q = 0; i = 1; comment = ""
+    while (i <= n) {
+      ch = substr(s, i, 1)
+      if (q == 0) {
+        if (ch == "\"") q = 2
+        else if (ch == sprintf("%c", 39)) q = 1
+        else if (ch == "#") {
+          g = i; while (g > 1 && (substr(s, g-1, 1) == " " || substr(s, g-1, 1) == "\t")) g--
+          comment = substr(s, g); s = substr(s, 1, g - 1); break
+        }
+      } else if (q == 1) { if (ch == sprintf("%c", 39)) q = 0 }
+      else if (q == 2) { if (ch == "\\") i++; else if (ch == "\"") q = 0 }
+      i++
+    }
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+    if (s ~ /^".*"$/ || s ~ /^\047.*\047$/) s = substr(s, 2, length(s) - 2)
+    printf "%s%c%s%c%s\n", head, 31, s, 31, comment
+  }' "$f")
+}
+
 team_config_list_json() {
   local path; path="$(team_config_contract_path)" || return 1
   local fingerprint mtime
   fingerprint="$(team_config_fingerprint "$path")"
   mtime="$(team_config_mtime "$path")"
 
-  local out="" first=1 row key class kind spec form def danger route
-  local known="" value comment set comment_json warning
+  # M65/D11（M2 的修法）：一次扫描 + 纯 bash 查表与拼 JSON。命令替换 `$(...)` 也是一次 fork，
+  # 所以读路径用 *_set 写变量的孪生函数（json escape / choices），键行只用一次 `read -a` 拆。
+  local out="" first=1 row key class kind form def
+  local value comment set warning
+  team_config_scan "$path"
   # models 块的 known 先算：它也是模型类键的 choices 词表（choices 必须随键记录一起输出，所以
   # 不能等键循环结束）。token 与顺序和原来逐字一致；每个席位的**显示**模型也在表里（R2）。
   local default_model known_models="" known_list="" seen=" " firstk=1
@@ -563,7 +632,8 @@ team_config_list_json() {
     seen="$seen$tok "
     known_models="$known_models$tok"$'\n'
     [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0; known_list="$known_list\"$(team_config_json_escape "$tok")\""
+    firstk=0
+    team_config_json_escape_set "$tok"; known_list="$known_list\"$CFG_ESC\""
   done
   local a state_model
   for a in $(team_agents); do
@@ -573,7 +643,8 @@ team_config_list_json() {
     seen="$seen$state_model "
     known_models="$known_models$state_model"$'\n'
     [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0; known_list="$known_list\"$(team_config_json_escape "$state_model")\""
+    firstk=0
+    team_config_json_escape_set "$state_model"; known_list="$known_list\"$CFG_ESC\""
   done
   # R2：每个席位的显示模型都在词汇表里。名册席位由上面的解析/记录两支覆盖；pm 席位没有 state
   # 记录（team_pm_start 不写），它的显示模型走 seats 块同一支 team_config_seat_state
@@ -586,40 +657,53 @@ team_config_list_json() {
     seen="$seen$seat_model "
     known_models="$known_models$seat_model"$'\n'
     [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0; known_list="$known_list\"$(team_config_json_escape "$seat_model")\""
+    firstk=0
+    team_config_json_escape_set "$seat_model"; known_list="$known_list\"$CFG_ESC\""
   done
 
+  local schema_keys="|"
+  local -a f=()
   while IFS= read -r row; do
     case "$row" in \#*|'') continue ;; esac
-    key="$(team_config_field "$row" 1)"; class="$(team_config_field "$row" 2)"
-    kind="$(team_config_field "$row" 3)"; form="$(team_config_field "$row" 5)"
-    def="$(team_config_field "$row" 6)"
+    f=()
+    IFS='|' read -r -a f <<< "$row"
+    key="${f[0]:-}"; class="${f[1]:-}"; kind="${f[2]:-}"; form="${f[4]:-}"; def="${f[5]:-}"
+    schema_keys="$schema_keys$key|"
     value=""; set="false"; comment=""; warning=""
-    if value="$(team_config_file_value "$path" "$key")"; then
+    if [ -n "${CFG_SCAN_VALUE[$key]+x}" ]; then
+      value="${CFG_SCAN_VALUE[$key]}"
+      comment="${CFG_SCAN_COMMENT[$key]}"
       set="true"
-      comment="$(team_config_file_comment "$path" "$key")"
-    else
-      value=""
     fi
     if [ "$key" = "TEAM_AGENT_MODELS" ] && [ -n "$value" ]; then
       local unknown; unknown="$(team_config_pairlist_unknown_seats "$value" | tr '\n' ' ')"
       [ -n "$unknown" ] && warning="未知席位（名册没有，静默不生效）：${unknown% }"
     fi
+    team_config_choices_set "$row" "$known_models"
+    team_config_json_escape_set "$key"; local e_key="$CFG_ESC"
+    team_config_json_escape_set "$value"; local e_value="$CFG_ESC"
+    team_config_json_escape_set "$def"; local e_def="$CFG_ESC"
+    team_config_json_escape_set "$comment"; local e_comment="$CFG_ESC"
+    team_config_json_escape_set "$warning"; local e_warning="$CFG_ESC"
+    team_config_json_escape_set "${f[7]:-}"; local e_route="$CFG_ESC"
     [ "$first" = "1" ] || out="$out,"
     first=0
-    out="$out{\"name\":\"$(team_config_json_escape "$key")\",\"class\":\"$class\",\"kind\":\"$kind\",\"form\":\"$form\",\"value\":\"$(team_config_json_escape "$value")\",\"default\":\"$(team_config_json_escape "$def")\",\"set\":$set,\"comment\":\"$(team_config_json_escape "$comment")\",\"warning\":\"$(team_config_json_escape "$warning")\",\"route\":\"$(team_config_json_escape "$(team_config_field "$row" 8)")\",\"choices\":$(team_config_choices "$row" "$known_models"),\"known\":true}"
+    out="$out{\"name\":\"$e_key\",\"class\":\"$class\",\"kind\":\"$kind\",\"form\":\"$form\",\"value\":\"$e_value\",\"default\":\"$e_def\",\"set\":$set,\"comment\":\"$e_comment\",\"warning\":\"$e_warning\",\"route\":\"$e_route\",\"choices\":$CFG_CHOICES_JSON,\"known\":true}"
   done < <(team_config_schema)
 
-  # 文件里 schema 不认识的键：照实列出（面板只读展示「不是已知项目设置」）
-  local line k v c
-  while IFS= read -r line; do
-    k="$(printf '%s' "$line" | sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p')"
+  # 文件里 schema 不认识的键：照实列出（面板只读展示「不是已知项目设置」），文件顺序、重复行各一条
+  local k v c
+  while IFS= read -r k; do
     [ -n "$k" ] || continue
-    team_config_row "$k" >/dev/null 2>&1 && continue
-    v="$(team_config_file_value "$path" "$k" 2>/dev/null || true)"
-    c="$(team_config_file_comment "$path" "$k" 2>/dev/null || true)"
-    out="$out,{\"name\":\"$(team_config_json_escape "$k")\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$(team_config_json_escape "$v")\",\"default\":\"\",\"set\":true,\"comment\":\"$(team_config_json_escape "$c")\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"choices\":$(team_config_choices ''),\"known\":false}"
-  done < "$path"
+    case "$schema_keys" in *"|$k|"*) continue ;; esac
+    v="${CFG_SCAN_VALUE[$k]-}"
+    c="${CFG_SCAN_COMMENT[$k]-}"
+    team_config_json_escape_set "$k"; local u_key="$CFG_ESC"
+    team_config_json_escape_set "$v"; local u_val="$CFG_ESC"
+    team_config_json_escape_set "$c"; local u_com="$CFG_ESC"
+    team_config_choices_set ""
+    out="$out,{\"name\":\"$u_key\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$u_val\",\"default\":\"\",\"set\":true,\"comment\":\"$u_com\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"choices\":$CFG_CHOICES_JSON,\"known\":false}"
+  done <<< "$CFG_SCAN_ORDER"
 
   local seats="" firsts=1
   for a in $(team_agents) pm; do
@@ -627,21 +711,26 @@ team_config_list_json() {
     case "$model" in
       '') continue ;;
     esac
+    team_config_json_escape_set "$a"; local s_agent="$CFG_ESC"
+    team_config_json_escape_set "$model"; local s_model="$CFG_ESC"
     [ "$firsts" = "1" ] || seats="$seats,"
     firsts=0
-    seats="$seats{\"agent\":\"$(team_config_json_escape "$a")\",\"model\":\"$(team_config_json_escape "$model")\",\"source\":\"$(team_config_seat_source_token "$src")\",\"override\":$override}"
+    seats="$seats{\"agent\":\"$s_agent\",\"model\":\"$s_model\",\"source\":\"$(team_config_seat_source_token "$src")\",\"override\":$override}"
   done
 
   local audit="" firsta=1 l
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     [ "$firsta" = "1" ] || audit="$audit,"
-    firsta=0; audit="$audit\"$(team_config_json_escape "$l")\""
+    firsta=0
+    team_config_json_escape_set "$l"; audit="$audit\"$CFG_ESC\""
   done < <(team_config_audit_tail 10)
 
+  team_config_json_escape_set "$path"; local e_path="$CFG_ESC"
+  team_config_json_escape_set "$default_model"; local e_default="$CFG_ESC"
   printf '{"path":"%s","fingerprint":"%s","mtime":"%s","keys":[%s],"models":{"default":"%s","known":[%s],"seats":[%s]},"audit":[%s]}\n' \
-    "$(team_config_json_escape "$path")" "$fingerprint" "$mtime" "$out" \
-    "$(team_config_json_escape "$default_model")" "$known_list" "$seats" "$audit"
+    "$e_path" "$fingerprint" "$mtime" "$out" \
+    "$e_default" "$known_list" "$seats" "$audit"
 }
 
 team_cmd_config_list() {

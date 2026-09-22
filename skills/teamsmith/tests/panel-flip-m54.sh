@@ -13,6 +13,11 @@
 #           picker never opens → the choices scenario red.
 # F-C     — the machine's Pi model catalogue becomes an option (the retired `sub2api` provider) →
 #           the picker's model list carries a provider the project never configured → red.
+# W-A     — the rejected M65 shape: opening the picker awaits a fresh settings read again (the
+#           pre-rework open path, main.tsx's awaited API comes back for the flip) → the read-gap
+#           assertion reds by name; restored, the same bundle is green and byte-identical.
+# W-B     — the rejected M65 accept: every entry opens the compose editor again instead of writing
+#           on the accept → the direct-write regression reds; restored, green.
 # A2-enum — a hardcoded key table names the enums it knows (`TEAM_ZZZ_MODE`, added only to a scratch
 #           CLI's schema, is not among them) → the zero-rebuild scenario red; restored, the very
 #           same committed bundle offers the new key's `constraints` and degrades visibly when they
@@ -54,20 +59,27 @@ run_scn() { # <scenario> <logfile>
 
 sha_before="$(sha256sum "$bundle" | cut -d' ' -f1)"
 
-# flip <name> <file> <python edit script> <scenario> <red assertion fragment>
+# flip <name> <file(s): space-separated> <python edit script> <scenario> <red assertion fragment>
+# A multi-file flip snapshots and restores every file it names; the edit script still reads its first
+# file from sys.argv[1] and can reach the others from there (or from the extra argv entries).
 flip() {
-  local name="$1" file="$2" edit="$3" scn="$4" red_re="$5"
-  cp "$file" "$tmp/$(basename "$file").orig"
-  if ! FLIP_EDIT="$edit" python3 - "$file" <<'PYEDIT'
+  local name="$1" files="$2" edit="$3" scn="$4" red_re="$5" f
+  for f in $files; do cp "$f" "$tmp/$(basename "$f").orig"; done
+  if ! FLIP_EDIT="$edit" python3 - $files <<'PYEDIT'
 import os, sys
 exec(compile(os.environ["FLIP_EDIT"], "<flip>", "exec"))
 PYEDIT
   then
     bad "$name: 源码断点没打上（edit 脚本失败）"
-    cp "$tmp/$(basename "$file").orig" "$file"
+    for f in $files; do cp "$tmp/$(basename "$f").orig" "$f"; done
     return
   fi
-  if ! build; then bad "$name: 改过的源码构建失败"; cp "$tmp/$(basename "$file").orig" "$file"; build >/dev/null 2>&1; return; fi
+  if ! build; then
+    bad "$name: 改过的源码构建失败"
+    for f in $files; do cp "$tmp/$(basename "$f").orig" "$f"; done
+    build >/dev/null 2>&1
+    return
+  fi
   run_scn "$scn" "$tmp/$name-red.log"
   local rc_red=$?
   if [ "$rc_red" -ne 0 ] && grep -q '✗' "$tmp/$name-red.log"; then
@@ -83,7 +95,7 @@ PYEDIT
   else
     bad "$name：红侧没有点到预期的那条（$red_re）"
   fi
-  cp "$tmp/$(basename "$file").orig" "$file"
+  for f in $files; do cp "$tmp/$(basename "$f").orig" "$f"; done
   if ! build; then bad "$name: 恢复后构建失败"; return; fi
   run_scn "$scn" "$tmp/$name-green.log"
   local rc_green=$?
@@ -142,6 +154,50 @@ assert old in s, "找不到 values 行"
 s = s.replace(old, new, 1)
 open(p, "w", encoding="utf-8").write(s)
 ' choices-schema '新增 enum 键的选择器没有打开'
+fi
+
+# W-A · the rejected M65 open path: the picker waits on a fresh read again (needs the awaited
+# API back in main.tsx — the flip restores both files).
+if want W-A; then
+  flip "W-A 打开选择器前强制重读" "$src/App.tsx $src/main.tsx" '
+import os, sys
+app = sys.argv[1]
+main = os.path.join(os.path.dirname(app), "main.tsx")
+s = open(app, encoding="utf-8").read()
+old_sig = "  const openSettingsRow = useCallback(\n    (index: number) => {"
+new_sig = "  const openSettingsRow = useCallback(\n    async (index: number) => {"
+assert old_sig in s, "找不到 openSettingsRow 的签名"
+s = s.replace(old_sig, new_sig, 1)
+old = "      // M65/D11: the editor opens on the `settings` block already on screen"
+new = "      await (api as unknown as { refreshSettings: () => Promise<unknown> }).refreshSettings() // FLIP(W-A)\n" + old
+assert old in s, "找不到 openSettingsRow 的 M65/D11 注释"
+s = s.replace(old, new, 1)
+open(app, "w", encoding="utf-8").write(s)
+m = open(main, encoding="utf-8").read()
+oldm = "  function refreshSettingsSoon(): void {"
+newm = "  function refreshSettings(): Promise<unknown> {\n    return cache.refresh({ force: true, only: [\u0027settings\u0027] }).then(adopt)\n  }\n\n" + oldm
+assert oldm in m, "找不到 refreshSettingsSoon"
+m = m.replace(oldm, newm, 1)
+old_api = "    refreshSettingsSoon,"
+new_api = "    refreshSettings,\n    refreshSettingsSoon,"
+assert old_api in m, "找不到 api 对象里的 refreshSettingsSoon"
+m = m.replace(old_api, new_api, 1)
+open(main, "w", encoding="utf-8").write(m)
+' choices '按键→帧之间零读取'
+fi
+
+# W-B · the rejected M65 accept: every entry opens the compose editor again (no write on the accept).
+if want W-B; then
+  flip "W-B 条目改回开编辑器（不直写）" "$src/App.tsx" '
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+old = "      const target = choiceTarget(picker)\n      settingRowRef.current = target\n      if (entry.kind === \u0027free\u0027 || entry.seed !== undefined) {"
+new = "      const target = choiceTarget(picker)\n      settingRowRef.current = target\n      if (true) { // FLIP(W-B): the rejected pre-rework accept\n"
+assert old in s, "找不到 accept 分支"
+s = s.replace(old, new, 1)
+open(p, "w", encoding="utf-8").write(s)
+' choices 'bool 的直写回执没出现'
 fi
 
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
