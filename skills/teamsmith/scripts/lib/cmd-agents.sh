@@ -433,6 +433,102 @@ team_dispatch_launch_diag() { # <agent> <ID> <渲染出的命令> <解析到的�
   printf '%s\n' "$f"
 }
 
+# ---------------------------------------------------------------- P55 · 死 pane：座位状况，不是活座位
+# 判据与证据字段全部来自 tmux 的 pane census（pane_dead / pane_dead_status / pane_dead_signal /
+# pane_dead_time），实测记录见 openspec/changes/agent-pane-survivability/design.md D3/D6 与
+# docs/team/reports/P49/。两条纪律：
+#   ① 读 pane census 一律用 list-panes：目标不存在 = 报错 = 空输出 = 失败关闭；display-message
+#     对坏目标会静默回退到当前窗口（M6.3 6k⑤ 的教训），绝不用它当证据。
+#   ② 死 pane 永不以「活座位」身份出现（running 仍要 M6.5/M37 的 pane 进程树证明），也永不是
+#     投递目标（send-keys 对遗体返回 0 但文字落进虚空 —— 探针 P5）。
+
+# 字段间用 | 分隔：pane_dead_status/pane_dead_signal 互斥为空，空白分隔会让 read 串列（空字段被吃掉）
+team_pane_dead_fields() { # <session:window> → "dead|status|signal|time"；目标不在/读不到 → 非 0、无输出
+  local t="${1:-}" out
+  [ -n "$t" ] || return 1
+  out="$(tmux list-panes -t "$t" -F '#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}|#{pane_dead_time}' 2>/dev/null | head -1)"
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+team_pane_evidence_text() { # <status> <signal> → "signal=9" / "status=3" / 空（证据未知时绝不编）
+  if [ -n "${2:-}" ]; then printf 'signal=%s\n' "$2"
+  elif [ -n "${1:-}" ]; then printf 'status=%s\n' "$1"
+  fi
+}
+
+team_pane_dead_time_text() { # <epoch> → 人读时间；取不到 → 空
+  local t="${1:-}"
+  case "$t" in ''|*[!0-9]*) return 0 ;; esac
+  date -d "@$t" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || true
+}
+
+team_agent_scene_lines() { # → 现场行数（TEAM_AGENT_SCENE_LINES，默认 40；非数字回落 40）
+  local n="${TEAM_AGENT_SCENE_LINES:-40}"
+  case "$n" in ''|*[!0-9]*) n=40 ;; esac
+  printf '%s\n' "$n"
+}
+
+team_agent_pane_dead_file() { printf '%s\n' "$TEAM_STATE_DIR/dispatch-$1-pane-dead.txt"; }
+
+team_agent_pane_dead() { # <agent> → 0=该席位的窗口在、且 pane 已死（遗体）；窗口不在/活着 → 1
+  local a="${1:-}" w f
+  [ -n "$a" ] || return 1
+  w="$(team_state_get "$a" window "$a")"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || return 1
+  f="$(team_pane_dead_fields "$TEAM_SESSION:$w" 2>/dev/null || true)"
+  if [ "${f%%|*}" = "1" ]; then return 0; fi
+  return 1
+}
+
+team_agent_pane_evidence() { # <agent> → 死 pane 的退出证据（"signal=9"）；不是死 pane/证据未知 → 非 0、无输出
+  local a="${1:-}" w f dead status signal dtime ev
+  [ -n "$a" ] || return 1
+  w="$(team_state_get "$a" window "$a")"
+  f="$(team_pane_dead_fields "$TEAM_SESSION:$w" 2>/dev/null || true)"
+  [ -n "$f" ] || return 1
+  IFS='|' read -r dead status signal dtime <<< "$f"
+  [ "$dead" = "1" ] || return 1
+  ev="$(team_pane_evidence_text "$status" "$signal")"
+  [ -n "$ev" ] || return 1
+  printf '%s\n' "$ev"
+}
+
+# 死 pane 的画面抓取（唯一实现：复用留证与 status 的现场块共用）：capture-pane -S -
+# （可见屏幕可能丢最后一行，scrollback 才是全量 —— 探针 P10），逐行去尾空白、丢掉 tmux 自己画在
+# 屏幕上的「Pane is dead (…)」通知行（它是元数据，退出证据与时刻由 census 单列），再去掉末尾空行，
+# 最后截到 TEAM_AGENT_SCENE_LINES 行 —— 于是「最后 N 行」落在 agent 的真实内容上。
+team_agent_corpse_scene() { # <session:window> → 最后 N 行画面（抓不到 → 空）
+  local t="${1:-}"
+  [ -n "$t" ] || return 1
+  tmux capture-pane -p -S - -t "$t" 2>/dev/null \
+    | sed -e 's/[[:space:]]*$//' -e '/^Pane is dead (/d' \
+    | awk '{ if (NF) last=NR; line[NR]=$0 } END { for (i=1; i<=last; i++) print line[i] }' \
+    | tail -n "$(team_agent_scene_lines)"
+}
+
+# 复用留证（design D5）：替换遗体窗口之前，先把「座位/窗口/时刻/退出证据/最后画面」落盘。
+# 文件格式：头部五行 + "--- scene ---" + 画面行（status <ID> 的现场块按这个结构回读）。
+team_agent_capture_corpse() { # <agent> → 打印落盘路径；不是死 pane/写不出 → 非 0
+  local a="${1:-}" w f dead status signal dtime out
+  w="$(team_state_get "$a" window "$a")"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || return 1
+  f="$(team_pane_dead_fields "$TEAM_SESSION:$w" 2>/dev/null || true)"
+  IFS='|' read -r dead status signal dtime <<< "${f:- }"
+  [ "$dead" = "1" ] || return 1
+  out="$(team_agent_pane_dead_file "$a")"
+  {
+    printf 'seat: %s\n' "$a"
+    printf 'window: %s:%s\n' "$TEAM_SESSION" "$w"
+    printf 'captured: %s\n' "$(date -Is)"
+    printf 'exit: %s\n' "$(team_pane_evidence_text "$status" "$signal")"
+    printf 'dead_time: %s\n' "$(team_pane_dead_time_text "$dtime")"
+    printf '%s\n' '--- scene ---'
+    team_agent_corpse_scene "$TEAM_SESSION:$w"
+  } > "$out" 2>/dev/null || return 1
+  printf '%s\n' "$out"
+}
+
 # ---------------------------------------------------------------- 派单不许叠任务（M9.3 / DECISIONS D16）
 # 现场（PM 自己的事故）：M9.2 还在 dev 手上，PM 又把 P2 派给同一个 agent —— 新派单接管了它的窗口与 state，
 # M9.2 只好临时换人交接。工具当时**知道**那个 agent 的任务与分支（state/<agent>.env、BOARD、工作树），
@@ -774,7 +870,15 @@ team_cmd_dispatch() {
   while [ "$attempt" -lt 2 ] && [ -z "$pid" ]; do
     attempt=$((attempt + 1))
     if team_agent_window_exists "$agent"; then
-      if [ "$attempt" = "1" ]; then team_warn "窗口 $TEAM_SESSION:$agent 已存在 → 替换（旧回合会被打断）"
+      if [ "$attempt" = "1" ]; then
+        # P55（遗体复用留证）：窗口还在但 pane 已死 = 上一轮死在里面 —— 先把现场落盘再替换
+        # （那次事故「死因不明」的直接原因就是现场没了；探针 P6：kill-window 才真的带走遗体）。
+        if team_agent_pane_dead "$agent"; then
+          local corpse_f; corpse_f="$(team_agent_capture_corpse "$agent" 2>/dev/null || true)"
+          team_warn "窗口 $TEAM_SESSION:$agent 已存在：上一个 pane 已死（$(team_agent_pane_evidence "$agent" 2>/dev/null || echo '证据缺失')）→ 替换${corpse_f:+（现场已存 $corpse_f）}"
+        else
+          team_warn "窗口 $TEAM_SESSION:$agent 已存在 → 替换（旧回合会被打断）"
+        fi
       else team_dim "  （重试：窗口还在 → 先杀掉）"; fi
       team_tmux_kill_window "$TEAM_SESSION:$agent" >/dev/null 2>&1 || true
       sleep 0.5
@@ -790,7 +894,21 @@ team_cmd_dispatch() {
     # 事后再从外面 capture 也许只剩空屏（PM 侧 M8.1 实测过）；失败诊断靠它保留 CLI 自己的报错。
     inner="$(printf '%scd %q\nfor _i in 1 2 3 4 5 6 7 8 9 10; do [ -x %q ] && break; sleep 0.3; done\nprintf "%%s %%s\\n" %s %s > %q\nprintf "\\033[2mteamsmith agent:%s → %s\\033[0m\\n"\n%s\nprintf "%%s %%s\\n" %s "$?" > %q\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %q 2>/dev/null; grep -q "[^[:space:]]" %q && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
       "$(team_identity_env_prefix "$wt")" "$wt" "$agent_bin" "$(printf '%q' "$nonce")" '$$' "$marker" "$agent" "$id" "$agent_cmd" "$(printf '%q' "$nonce")" "$exitfile" "$(printf '%q' "$tailfile")" "$(printf '%q' "$tailfile")")"
-    tmux new-window -t "$TEAM_SESSION" -n "$agent" -d -- bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
+    # P55（remain-on-exit 的时机是红线）：占位命令先持窗 → 设选项并读回 → 才把 pane 交给 harness。
+    # 顺序不能反：harness 先跑时它若秒退，窗口在设选项之前就没了（探针 P1/P3 = 2026-09-22 事故形状）。
+    # respawn-pane 用 argv 形式（不经 shell 解析）：harness 原样保留「bash -lc $inner $prompt-as-$0」。
+    tmux new-window -t "$TEAM_SESSION" -n "$agent" -d 'sleep 30' >/dev/null 2>&1 || true
+    if team_agent_window_exists "$agent"; then
+      tmux set-window-option -t "$TEAM_SESSION:$agent" remain-on-exit on >/dev/null 2>&1 || true
+      local roe; roe="$(tmux show-options -w -v -t "$TEAM_SESSION:$agent" remain-on-exit 2>/dev/null || true)"
+      if [ "$roe" = "on" ]; then
+        tmux respawn-pane -k -t "$TEAM_SESSION:$agent" bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
+      else
+        # 读回失败 = 这一轮的启动作废：窗口留给下一轮的重用分支杀（没有下一轮则由失败路径杀），
+        # 绝不 return —— 否则「重试一次 + 失败诊断」的既有契约会被这条新守卫短路。
+        team_err "窗口 $TEAM_SESSION:$agent 的 remain-on-exit 没设上（读回是 ${roe:-空}）：不留遗体的窗口不派单，本轮作废"
+      fi
+    fi
     pid="$(team_wait_launch_proof "$agent" "$nonce" 2>/dev/null || true)"
     # 额外观察（不复报成功就完事）：启动证据拿到后，agent 可能立刻退出（可执行文件/模型/provider 起不来）。
     # M8.2：**adapter 路径也看这条事件** —— 裸名字解析失败（exit 127）时 harness 确实跑了，
@@ -931,6 +1049,15 @@ team_cmd_say() {
   if ! team_inbox_watch_route "$target" >/dev/null 2>&1; then
     team_tmux_has_window "$TEAM_SESSION" "$w" \
       || { team_say_offline "$agent" "$msg" "窗口 $TEAM_SESSION:$w 不在"; return 0; }
+    # P55（投递换道）：死 pane 不是投递目标 —— send-keys 返回 0 但文字落进虚空（探针 P5），
+    # 「提示框非空确认送达」永远等不到（画面不再变）。消息走收件箱，输出点名座位已死与退出证据。
+    if team_agent_pane_dead "$agent"; then
+      local ev; ev="$(team_agent_pane_evidence "$agent" 2>/dev/null || echo '证据未知')"
+      team_inbox_append "$agent" pm "（PM 消息，座位已死：$ev）$msg"
+      team_warn "say: $agent 的 pane 已死（$ev）—— 没有按任何键；消息已落 $TEAM_DOCS_DIR/inbox/$agent.md"
+      team_dim "  现场：$TEAM_CLI status <ID>（或 tmux capture-pane -p -S - -t $target）；恢复：$TEAM_CLI resume --agent $agent（会先抓现场再替换遗体）"
+      return 0
+    fi
     # 安全：空提示符时把消息 send-keys 进去会被 shell 当命令执行
     if team_is_shell_cmd "$(team_pane_cmd "$TEAM_SESSION:$w")" && ! team_pane_busy "$TEAM_SESSION:$w"; then
       team_say_offline "$agent" "$msg" "$(team_agent_cli_name) 已退出（空提示符）"

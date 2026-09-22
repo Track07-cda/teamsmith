@@ -17,7 +17,9 @@ scrollback stays bounded by the host's `history-limit` (a session-wide option th
 raises nor narrows), and the copy the tool captures or prints is bounded by `TEAM_AGENT_SCENE_LINES`
 (default 40; a non-numeric value falls back to the default). A live seat SHALL be unaffected by the
 option: the launch proof, the exit-event file and the recorded-task semantics stay exactly as
-`dispatch` defines them.
+`dispatch` defines them. Reading a retained pane — the four seat conditions, where the scene comes
+from, what `status=`/`signal=` mean, and why the PM window deliberately has no retention — is
+documented in `skills/teamsmith/references/troubleshooting.md` §11b.
 
 #### Scenario: A killed pane leaves a readable corpse instead of an empty window list
 

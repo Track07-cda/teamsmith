@@ -481,6 +481,33 @@ paths listed: clean up the briefs instead of letting glob order choose the scope
 - **`ExecStart`/script permissions**: this skill is always invoked as `bash <path>` and does not depend on the
   executable bit (but `scripts/team` is still +x, and `team smoke` checks it).
 
+## 11b. A seat window is a corpse (the pane died, the window stayed)
+
+Since P55, `dispatch`/`resume` windows keep their pane after the process in it exits — including a SIGKILL — so the
+seat's last screen and tmux's exit evidence survive the death. Reading such a seat:
+
+- **The four seat conditions** (`team roster`, `team status <ID>`, and the machine agents block):
+  `running` (an agent is proven alive in the pane — the M6.5/M37 proof rule, unchanged), `exited` (window and pane
+  alive, no agent — `team resume --agent` continues it), `dead` (the pane is dead, the window is its corpse; roster
+  shows `▲ 已死 signal=9`-style with the evidence inline), `absent` (no window). A dead pane is **never** reported as
+  running, and `team say` to it does not press a single key — the message lands in `docs/team/inbox/<agent>.md` and
+  the output says the seat is dead.
+- **Where the scene comes from** (`team status <ID>` prints it labelled with its source and time): the retained corpse
+  pane read with its scrollback (`capture-pane -p -S -` — the visible screen alone can lose the last line), then
+  `state/dispatch-<agent>-pane-dead.txt` (captured when a later dispatch replaced the corpse), then
+  `state/dispatch-<agent>-tail.txt` (captured by the harness when the agent exited). Bounded by
+  `TEAM_AGENT_SCENE_LINES` (default 40).
+- **`signal=9` vs `status=<n>`**: tmux's evidence tells you *how* the pane died — `signal=<n>` means the process was
+  killed by that signal (9 = SIGKILL, typically the OOM killer or an operator), `status=<n>` means it exited with that
+  code on its own. One of the two is always empty; whichever tmux knows is the one shown.
+- **A kept window is not an anomaly**: after `team close <ID> --keep-window` the seat's recorded task is cleared, so
+  digest/doctor/pending stop naming it as an abnormal exit while roster still shows its honest condition.
+  `team teardown --agent <agent>` removes the corpse like any other window.
+- **Why the PM window has no retention**: the PM/pulse windows deliberately do **not** get `remain-on-exit` — if the
+  PM pane dies, its window disappears and the pulse's liveness check restarts it fresh, instead of leaving a corpse
+  that the auto-restart would mistake for a live PM. Retention is for seats a human has to read; supervision is for
+  seats the machine has to restart.
+
 ## 12. General Pi traps
 
 - **A test conclusion must come from a real run of this round**: put the command and the tail of its output into the

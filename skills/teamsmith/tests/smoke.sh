@@ -12214,6 +12214,312 @@ else
   [ "$P53_SURV" -eq 0 ] && ok "40 泄漏断言：本轮创建的临时根一个都没留下（台账 $(basename "$(tmp_root_ledger)")）"
 fi
 
+
+# ---------------------------------------------------------------- 41. agent pane 留存与死 pane 席位（P55）
+# OpenSpec change agent-pane-survivability 的验收夹具（真 tmux 段，FULL only）：
+#   创建期：占位持窗 → remain-on-exit 设选项并读回 → respawn（harness 秒退也拿得到选项）；
+#   死 pane：遗体留存 + 退出证据 + 画面可读；say 一个键不按、消息落收件箱、画面逐字节不变；
+#   复用：dispatch/--fresh/resume 都先抓现场（state/dispatch-<agent>-pane-dead.txt）再替换；
+#   四态：roster/status/digest/doctor/机器面（agents 块 pane/pane_exit；state 词表不变）；
+#   噪音判据：close --keep-window 的遗体不算异常、不计 stopped；teardown 后恢复「无窗口」。
+section "41 · pane 留存：死 pane 是座位状况，不是活座位（P55 / agent-pane-survivability）"
+
+if [ "$FAST" = "1" ]; then
+  fast_skip "41·p55-pane-留存" "真实 tmux + 真实派单夹具（占位/respawn/kill -9/遗体画面）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  P55_A="p55w"; P55_ID="T9.55"
+  P55_WT="$REPO/.worktrees/$P55_A"
+  P55_BRIEF="$REPO/.pi/team/state/$P55_ID-brief.md"
+  printf '# %s · pane survivability probe\n\ntask: %s\nagent: %s\nchange: -\nanchor: none (infra) — P55 留存夹具\n' \
+    "$P55_ID" "$P55_ID" "$P55_A" > "$P55_BRIEF"
+  P55_BR="$(canon_branch "$P55_A" "$P55_ID")"
+  git worktree add -b "$P55_BR" "$P55_WT" "$PROTECTED" >/dev/null 2>&1 || bad "§40 夹具：worktree 建不起来"
+  cat > "$FAKE/p55-agent" <<'P55AG'
+#!/usr/bin/env bash
+echo P55-MARK-1; echo P55-MARK-2; echo P55-MARK-3; echo P55-MARK-4; echo P55-MARK-5
+sleep 300
+P55AG
+  chmod +x "$FAKE/p55-agent"
+  cat > "$FAKE/p55-agent-fast" <<'P55AG2'
+#!/usr/bin/env bash
+echo P55-FAST-DONE
+sleep 2
+exit 0
+P55AG2
+  chmod +x "$FAKE/p55-agent-fast"
+  # 读面环境：四态夹具席位（p55live 在跑 / p55exit 已退出 / p55w 遗体 / p55none 无窗口）
+  P55_RENV() { env TEAM_AGENTS="p55live p55exit p55w p55none" TEAM_AGENT_BIN="$FAKE/p55-agent" "$@"; }
+  P55_KILL_PANE() { # <窗口名>：SIGKILL 该窗口 pane 的进程组（带 pgid 安全检查），并等 pane_dead=1
+    local _w="$1" _pid _pgid _my i=0
+    _pid="$(tmux list-panes -t "$SESSION:$_w" -F '#{pane_pid}' 2>/dev/null | head -1)"
+    _pgid="$(ps -o pgid= -p "$_pid" 2>/dev/null | tr -d ' ')"
+    _my="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+    if [ -n "$_pgid" ] && [ "$_pgid" != "$_my" ] && [ "$_pgid" != "1" ]; then
+      kill -9 -- -"$_pgid" 2>/dev/null || true
+    else
+      bad "§40 夹具：kill 前的 pgid 安全检查失败（$_w pid=$_pid pgid=$_pgid my=$_my）"
+      return 1
+    fi
+    while [ "$i" -lt 25 ]; do
+      [ "$(tmux list-panes -t "$SESSION:$_w" -F '#{pane_dead}' 2>/dev/null | head -1)" = "1" ] && return 0
+      sleep 0.2; i=$((i + 1))
+    done
+    return 1
+  }
+
+  # ── ① 创建期：选项先于 harness，读回为证（1.1/1.2）─────────────────────────
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+       TEAM_DISPATCH_ALIVE_SEC=0 \
+       bash "$SKILL_DIR/scripts/team" dispatch "$P55_A" "$P55_ID" "$P55_BRIEF" >"$TMP/p55-dispatch-1.log" 2>&1
+  then ok "P55 ①：派单成功"; else bad "P55 ①：派单失败"; fi
+  assert_has "$TMP/p55-dispatch-1.log" "含启动校验" "P55 ①：启动证据（spawn 证明）照常"
+  assert_eq "P55 ①：agent 窗口的 remain-on-exit 读回是 on（设了且读回）" \
+    "$(tmux show-options -w -v -t "$SESSION:$P55_A" remain-on-exit 2>/dev/null)" "on"
+  assert_eq "P55 ①：PM 窗口没有窗口级 remain-on-exit（D2：PM/pulse 窗口绝不设）" \
+    "$(tmux show-options -w -v -t "$SESSION:pm" remain-on-exit 2>/dev/null)" ""
+  P55_W=0
+  while [ "$P55_W" -lt 30 ]; do
+    tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null | grep -q 'P55-MARK-5' && break
+    sleep 0.3; P55_W=$((P55_W + 1))
+  done
+  tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null > "$TMP/p55-pane-alive.txt" || true
+  assert_has "$TMP/p55-pane-alive.txt" "P55-MARK-5" "P55 ①：agent 画面正常（marker 画上）"
+  assert_eq "P55 ①：席位恰好一个窗口" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$P55_A")" "1"
+
+  # ── ② SIGKILL 整个 pane 进程组 → 遗体（1.1 corpse / 3.1 dead）──────────────
+  if P55_KILL_PANE "$P55_A"; then ok "P55 ②：SIGKILL 了 pane 进程组"; else bad "P55 ②：kill/等待遗体失败"; fi
+  assert_eq "P55 ②：kill 之后窗口还在（pane_dead=1，遗体留存）" \
+    "$(tmux list-panes -t "$SESSION:$P55_A" -F '#{pane_dead}' 2>/dev/null | head -1)" "1"
+  assert_eq "P55 ②：退出证据 signal=9（不是退出码，是死因）" \
+    "$(tmux list-panes -t "$SESSION:$P55_A" -F '#{pane_dead_signal}' 2>/dev/null | head -1)" "9"
+  assert_eq "P55 ②：窗口没跟 pane 一起消失" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$P55_A")" "1"
+  tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null > "$TMP/p55-corpse.txt" || true
+  assert_has "$TMP/p55-corpse.txt" "P55-MARK-5" \
+    "P55 ②：遗体画面可读（-S - 含 scrollback；探针 P10：可见屏幕会丢最后一行）"
+
+  # ── ③ say：死 pane 不是投递目标（2.2）──────────────────────────────────────
+  P55_BEFORE="$(tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null | cksum)"
+  if env TEAM_AGENTS="dev verify $P55_A" bash "$SKILL_DIR/scripts/team" say "$P55_A" "P55 dead-pane probe" \
+       >"$TMP/p55-say.log" 2>&1
+  then ok "P55 ③：say 对死 pane 返回 0（换道收件箱）"; else bad "P55 ③：say 不应硬失败（应落收件箱）"; fi
+  assert_has "$TMP/p55-say.log" "pane 已死（signal=9）" "P55 ③：输出点名座位已死 + 退出证据"
+  assert_not "$TMP/p55-say.log" "已确认送达" "P55 ③：绝不报送达"
+  assert_not "$TMP/p55-say.log" "said to" "P55 ③：绝不报送达（said to）"
+  assert_has "$REPO/docs/team/inbox/$P55_A.md" "P55 dead-pane probe" "P55 ③：消息已写 durable 收件箱"
+  assert_eq "P55 ③：遗体画面逐字节不变（一个键都没按 —— 探针 P5）" \
+    "$(tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null | cksum)" "$P55_BEFORE"
+
+  # ── ④ 四态夹具 + 读面（3.1/3.2/3.3/3.4/3.5 + pending stopped）────────────────
+  tmux new-window -d -c "$REPO" -n p55live -t "$SESSION" "$FAKE/p55-agent" 2>/dev/null || true
+  tmux new-window -d -c "$REPO" -n p55exit -t "$SESSION" 2>/dev/null || true
+  printf 'window=p55live\ntask=T9.56\n' > "$REPO/.pi/team/state/p55live.env"
+  printf 'window=p55exit\n' > "$REPO/.pi/team/state/p55exit.env"
+  printf 'window=p55none\n' > "$REPO/.pi/team/state/p55none.env"
+  P55_W=0
+  while [ "$P55_W" -lt 20 ]; do
+    P55_RENV bash "$SKILL_DIR/scripts/team" roster 2>/dev/null | grep -q '在跑' && break
+    sleep 0.3; P55_W=$((P55_W + 1))
+  done
+  P55_RENV bash "$SKILL_DIR/scripts/team" roster >"$TMP/p55-roster.log" 2>&1
+  assert_match "$TMP/p55-roster.log" "^p55live +● .*在跑" "P55 ④：roster 四态 ① running（证明成立）"
+  assert_match "$TMP/p55-roster.log" "^p55exit +○ .*已退出" "P55 ④：roster 四态 ② exited（窗口/pane 活着，没有 agent）"
+  assert_match "$TMP/p55-roster.log" "^p55w +▲ 已死 signal=9" "P55 ④：roster 四态 ③ dead（行内带退出证据）"
+  assert_match "$TMP/p55-roster.log" "^p55none +· 无窗口" "P55 ④：roster 四态 ④ absent"
+  assert_has "$TMP/p55-roster.log" "▲ pane 已死" "P55 ④：图例说全四态（含死 pane 的含义与现场入口）"
+  # 机器面：state 词表不变（running/exited/absent 三态），死 pane 落在 pane/pane_exit 键上
+  P55_RENV bash "$SKILL_DIR/scripts/team" __panel-data --block agents >"$TMP/p55-agents.json" 2>/dev/null
+  if python3 - "$TMP/p55-agents.json" >"$TMP/p55-agents-check.txt" 2>&1 <<'P55PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+agents = {a["name"]: a for a in (data["agents"] if isinstance(data, dict) else data)}
+def fail(m): print("机器面断言失败：" + m); sys.exit(1)
+w = agents.get("p55w") or fail("缺 p55w")
+w.get("state") != "running" or fail("尸体以 running 出现（绝不允许）")
+w.get("state") == "exited" or fail("遗体 state 不是 exited（词表不变）：%r" % w.get("state"))
+w.get("pane") == "dead" or fail("p55w pane≠dead：%r" % w.get("pane"))
+w.get("pane_exit") == "signal=9" or fail("p55w pane_exit≠signal=9：%r" % w.get("pane_exit"))
+l = agents.get("p55live") or fail("缺 p55live")
+(l.get("state") == "running" and l.get("pane") == "live") or fail("p55live 不是 running+live：%r" % l)
+e = agents.get("p55exit") or fail("缺 p55exit")
+(e.get("state") == "exited" and e.get("pane") == "live") or fail("p55exit 不是 exited+live：%r" % e)
+n = agents.get("p55none") or fail("缺 p55none")
+n.get("state") == "absent" or fail("p55none 不是 absent")
+"pane" in n and fail("p55none 带了 pane 键（无窗口不该有）")
+P55PY
+  then ok "P55 ④：机器面 agents 块（state 词表不变 + pane/pane_exit；尸体绝不 running）"
+  else bad "P55 ④：机器面断言失败"; sed 's/^/    /' "$TMP/p55-agents-check.txt"; fi
+  # status <ID>：席位状况 + 退出证据 + 现场块（恰好 N 行）；活席位无记录 → 无现场块
+  env TEAM_AGENTS="p55live p55exit p55w p55none" TEAM_AGENT_BIN="$FAKE/p55-agent" TEAM_AGENT_SCENE_LINES=2 \
+    bash "$SKILL_DIR/scripts/team" status "$P55_ID" >"$TMP/p55-status.log" 2>&1
+  assert_has "$TMP/p55-status.log" "座位 $P55_A" "P55 ④：status 点名该任务登记的席位"
+  assert_has "$TMP/p55-status.log" "pane 已死" "P55 ④：status 印席位状况（dead）"
+  assert_has "$TMP/p55-status.log" "signal=9" "P55 ④：status 带退出证据"
+  assert_has "$TMP/p55-status.log" "来源：" "P55 ④：现场块标注来源"
+  assert_has "$TMP/p55-status.log" "记录时间：" "P55 ④：现场块标注记录时间"
+  assert_has "$TMP/p55-status.log" "P55-MARK" "P55 ④：现场块含 marker 行"
+  assert_eq "P55 ④：TEAM_AGENT_SCENE_LINES=2 → 恰好两行现场" \
+    "$(grep -c '^    | ' "$TMP/p55-status.log")" "2"
+  env TEAM_AGENTS="p55live p55exit p55w p55none" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" status T9.56 >"$TMP/p55-status-live.log" 2>&1
+  assert_has "$TMP/p55-status-live.log" "座位 p55live" "P55 ④：活席位任务的 status 也印席位状况"
+  assert_not "$TMP/p55-status-live.log" "现场（来源" "P55 ④：活席位且无任何死亡/退出记录 → 不印现场块"
+  # digest / doctor
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" digest >"$TMP/p55-digest.log" 2>&1
+  assert_has "$TMP/p55-digest.log" "死 pane 席位" "P55 ④：digest 点名死 pane 席位"
+  assert_has "$TMP/p55-digest.log" "! $P55_A pane 已死（signal=9）" "P55 ④：digest 行带退出证据（任务未结束 = 异常）"
+  assert_has "$TMP/p55-digest.log" "$P55_ID" "P55 ④：digest 行带登记任务"
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" doctor >"$TMP/p55-doctor.log" 2>&1 || true
+  assert_has "$TMP/p55-doctor.log" "死 pane 席位 $P55_A" "P55 ④：doctor 一条告警点名死席位"
+  assert_has "$TMP/p55-doctor.log" "signal=9" "P55 ④：doctor 告警带退出证据"
+  assert_has "$TMP/p55-doctor.log" "status $P55_ID" "P55 ④：doctor 告警给现场入口（team status <ID>）"
+  env TEAM_AGENTS="p55live" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" doctor >"$TMP/p55-doctor-alive.log" 2>&1 || true
+  assert_not "$TMP/p55-doctor-alive.log" "死 pane 席位" "P55 ④：全都活着时 doctor 不吭声（否则静默=假阴性藏身处）"
+  # pending 计数：登记任务未结束 + 死 pane → stopped 算它
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" __panel-data --block pending >"$TMP/p55-pending.json" 2>/dev/null
+  P55_STOPPED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["stopped"])' "$TMP/p55-pending.json" 2>/dev/null || echo '?')"
+  assert_eq "P55 ④：pending 的 stopped 计入「任务未结束 + 死 pane」的席位" "$P55_STOPPED" "1"
+  # 只读纪律（3.5）：这些面不许写 state（内容与时间戳都不许动）
+  P55_FP0="$(state_fp)"
+  P55_RENV bash "$SKILL_DIR/scripts/team" roster >/dev/null 2>&1
+  P55_RENV bash "$SKILL_DIR/scripts/team" __panel-data --block agents >/dev/null 2>&1
+  env TEAM_AGENTS="$P55_A" bash "$SKILL_DIR/scripts/team" status "$P55_ID" >/dev/null 2>&1
+  env TEAM_AGENTS="$P55_A" bash "$SKILL_DIR/scripts/team" digest >/dev/null 2>&1
+  env TEAM_AGENTS="$P55_A" bash "$SKILL_DIR/scripts/team" doctor >/dev/null 2>&1 || true
+  P55_FP1="$(state_fp)"
+  assert_eq "P55 ④：roster/status/digest/doctor/机器面读取后 state 指纹逐字节不变" "$P55_FP1" "$P55_FP0"
+
+  # ── ⑤ 复用 ×3：dispatch / --fresh / resume 都先抓现场再替换（2.1/2.3）─────────
+  P55_REUSE_CHECK() { # <轮名> <日志>：三轮复用共用的断言
+    local rn="$1" lg="$2" f="$REPO/.pi/team/state/dispatch-$P55_A-pane-dead.txt"
+    assert_has "$lg" "上一个 pane 已死（signal=9）" "P55 ⑤$rn：复用消息点名「上一个 pane 已死」+ 证据"
+    assert_not "$lg" "旧回合会被打断" "P55 ⑤$rn：死 pane 的复用不再用「打断」措辞"
+    assert_has "$lg" "含启动校验" "P55 ⑤$rn：新一轮的启动证明照常（spawn nonce）"
+    assert_eq "P55 ⑤$rn：替换后恰好一个窗口" \
+      "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$P55_A")" "1"
+    assert_eq "P55 ⑤$rn：新窗口仍带 remain-on-exit on" \
+      "$(tmux show-options -w -v -t "$SESSION:$P55_A" remain-on-exit 2>/dev/null)" "on"
+    assert_has "$f" "seat: $P55_A" "P55 ⑤$rn：现场文件记了座位"
+    assert_has "$f" "exit: signal=9" "P55 ⑤$rn：现场文件记了退出证据"
+    assert_match "$f" "^dead_time: .+" "P55 ⑤$rn：现场文件记了死亡时刻"
+    assert_has "$f" "P55-MARK-5" "P55 ⑤$rn：现场文件的画面含 marker"
+    assert_eq "P55 ⑤$rn：TEAM_AGENT_SCENE_LINES=3 → 现场恰好三行" \
+      "$(sed -n '/^--- scene ---/,$p' "$f" | tail -n +2 | wc -l | tr -d ' ')" "3"
+    if [ -s "$REPO/.pi/team/state/dispatch-$P55_A.exit" ]; then
+      bad "P55 ⑤$rn：上一轮的 .exit 残留被当成了这一轮的退出（stale 证据）"
+    else
+      ok "P55 ⑤$rn：上一轮的 .exit 不冒充这一轮的退出（本轮 agent 在跑、无 .exit）"
+    fi
+  }
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+       TEAM_DISPATCH_ALIVE_SEC=0 TEAM_AGENT_SCENE_LINES=3 \
+       bash "$SKILL_DIR/scripts/team" dispatch "$P55_A" "$P55_ID" "$P55_BRIEF" >"$TMP/p55-reuse-1.log" 2>&1
+  then ok "P55 ⑤A：复用 dispatch 成功"; else bad "P55 ⑤A：复用 dispatch 失败"; fi
+  P55_REUSE_CHECK "A·dispatch" "$TMP/p55-reuse-1.log"
+  P55_KILL_PANE "$P55_A" || bad "P55 ⑤B 前置：第二轮 kill 没等到遗体"
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+       TEAM_DISPATCH_ALIVE_SEC=0 TEAM_AGENT_SCENE_LINES=3 \
+       bash "$SKILL_DIR/scripts/team" dispatch "$P55_A" "$P55_ID" "$P55_BRIEF" --fresh >"$TMP/p55-reuse-2.log" 2>&1
+  then ok "P55 ⑤B：--fresh 复用成功"; else bad "P55 ⑤B：--fresh 复用失败"; fi
+  P55_REUSE_CHECK "B·--fresh" "$TMP/p55-reuse-2.log"
+  P55_KILL_PANE "$P55_A" || bad "P55 ⑤C 前置：第三轮 kill 没等到遗体"
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+       TEAM_DISPATCH_ALIVE_SEC=0 TEAM_AGENT_SCENE_LINES=3 \
+       bash "$SKILL_DIR/scripts/team" resume --agent "$P55_A" >"$TMP/p55-reuse-3.log" 2>&1
+  then ok "P55 ⑤C：resume 复用成功"; else bad "P55 ⑤C：resume 复用失败"; fi
+  P55_REUSE_CHECK "C·resume" "$TMP/p55-reuse-3.log"
+
+  # ── ⑥ 正常退出照旧是「已退出」（1.3）：agent 退 0 → pane 活着 → 状态/复用原义 ──
+  P55_Z="p55z"; P55_ZID="T9.57"; P55_ZWT="$REPO/.worktrees/$P55_Z"
+  P55_ZBRIEF="$REPO/.pi/team/state/$P55_ZID-brief.md"
+  printf '# %s · pane survivability fast-exit\n\ntask: %s\nagent: %s\nchange: -\nanchor: none (infra) — P55 留存夹具\n' \
+    "$P55_ZID" "$P55_ZID" "$P55_Z" > "$P55_ZBRIEF"
+  git worktree add -b "$(canon_branch "$P55_Z" "$P55_ZID")" "$P55_ZWT" "$PROTECTED" >/dev/null 2>&1 \
+    || bad "§40 夹具：p55z worktree 建不起来"
+  if env TEAM_AGENTS="dev verify $P55_Z" TEAM_AGENT_CMD="$FAKE/p55-agent-fast {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent-fast" \
+       TEAM_DISPATCH_ALIVE_SEC=0 \
+       bash "$SKILL_DIR/scripts/team" dispatch "$P55_Z" "$P55_ZID" "$P55_ZBRIEF" >"$TMP/p55z-dispatch.log" 2>&1
+  then ok "P55 ⑥：短命 agent 派单成功"; else bad "P55 ⑥：短命 agent 派单失败"; fi
+  P55_W=0
+  while [ "$P55_W" -lt 20 ]; do
+    [ -s "$REPO/.pi/team/state/dispatch-$P55_Z.exit" ] && break
+    sleep 0.5; P55_W=$((P55_W + 1))
+  done
+  assert_eq "P55 ⑥：正常退出后 pane 活着（pane_dead=0 —— harness exec 回 shell）" \
+    "$(tmux list-panes -t "$SESSION:$P55_Z" -F '#{pane_dead}' 2>/dev/null | head -1)" "0"
+  env TEAM_AGENTS="$P55_Z" TEAM_AGENT_BIN="$FAKE/p55-agent-fast" \
+    bash "$SKILL_DIR/scripts/team" roster >"$TMP/p55z-roster.log" 2>&1
+  assert_has "$TMP/p55z-roster.log" "已退出" "P55 ⑥：正常退出的席位 = 「已退出」（语义原样）"
+  grep -E "^$P55_Z " "$TMP/p55z-roster.log" > "$TMP/p55z-row.txt"
+  assert_not "$TMP/p55z-row.txt" "▲" "P55 ⑥：正常退出绝不显示成死 pane（限定席位行；图例恒有 ▲）"
+  if env TEAM_AGENTS="dev verify $P55_Z" TEAM_AGENT_CMD="$FAKE/p55-agent-fast {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent-fast" \
+       TEAM_DISPATCH_ALIVE_SEC=0 \
+       bash "$SKILL_DIR/scripts/team" resume --agent "$P55_Z" >"$TMP/p55z-resume.log" 2>&1
+  then ok "P55 ⑥：exited 席位 resume 照常"; else bad "P55 ⑥：exited 席位 resume 失败"; fi
+  assert_eq "P55 ⑥：resume 后恰好一个窗口" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$P55_Z")" "1"
+
+  # ── ⑦ 噪音判据（3.6）：close --keep-window 的遗体不算异常、不计 stopped ──────
+  P55_KILL_PANE "$P55_A" || bad "P55 ⑦ 前置：kill 没等到遗体"
+  printf '| %s | pane survivability probe | %s | - | - | wip |\n' "$P55_ID" "$P55_A" >> "$REPO/docs/team/BOARD.md"
+  if env TEAM_AGENTS="dev verify $P55_A" bash "$SKILL_DIR/scripts/team" close "$P55_ID" --status blocked --keep-window \
+       >"$TMP/p55-close.log" 2>&1
+  then ok "P55 ⑦：close --keep-window 成功（任务收尾、窗口留下）"; else bad "P55 ⑦：close --keep-window 失败"; fi
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" digest >"$TMP/p55-digest-closed.log" 2>&1
+  assert_has "$TMP/p55-digest-closed.log" "· $P55_A pane 已死（signal=9）· 无登记任务" \
+    "P55 ⑦：digest 仍点名遗体席位，但标明无登记任务（刻意保留）"
+  assert_not "$TMP/p55-digest-closed.log" "! $P55_A" "P55 ⑦：已收尾的遗体不作为异常上报警叹号"
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" doctor >"$TMP/p55-doctor-closed.log" 2>&1 || true
+  assert_not "$TMP/p55-doctor-closed.log" "死 pane 席位" "P55 ⑦：doctor 对已收尾的遗体不吭声"
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" __panel-data --block pending >"$TMP/p55-pending-closed.json" 2>/dev/null
+  P55_STOPPED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["stopped"])' "$TMP/p55-pending-closed.json" 2>/dev/null || echo '?')"
+  assert_eq "P55 ⑦：pending 的 stopped 不计已收尾的遗体" "$P55_STOPPED" "0"
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" roster >"$TMP/p55-roster-closed.log" 2>&1
+  assert_has "$TMP/p55-roster-closed.log" "▲ 已死 signal=9" "P55 ⑦：roster 仍如实显示遗体（诚实 ≠ 异常）"
+
+  # ── ⑧ teardown：遗体可拆（探针 P6），拆完恢复「无窗口」───────────────────────
+  if env TEAM_AGENTS="dev verify $P55_A" bash "$SKILL_DIR/scripts/team" teardown --agent "$P55_A" \
+       >"$TMP/p55-teardown.log" 2>&1
+  then ok "P55 ⑧：teardown 拆掉遗体窗口"; else bad "P55 ⑧：teardown 失败"; fi
+  P55_W=0
+  while [ "$P55_W" -lt 25 ]; do
+    tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$P55_A" || break
+    sleep 0.2; P55_W=$((P55_W + 1))
+  done
+  assert_eq "P55 ⑧：teardown 后窗口真的没了" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$P55_A")" "0"
+  env TEAM_AGENTS="$P55_A" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+    bash "$SKILL_DIR/scripts/team" roster >"$TMP/p55-roster-torn.log" 2>&1
+  assert_has "$TMP/p55-roster-torn.log" "无窗口" "P55 ⑧：拆完后席位恢复「无窗口」"
+  grep -E "^$P55_A " "$TMP/p55-roster-torn.log" > "$TMP/p55-row-torn.txt"
+  assert_not "$TMP/p55-row-torn.txt" "▲" "P55 ⑧：拆完后席位行不再显示死 pane（限定席位行；图例恒有 ▲）"
+
+  # ── 清场：夹具席位与窗口一个不留给后面的段落 ────────────────────────────────
+  tmux kill-window -t "$SESSION:p55live" 2>/dev/null || true
+  tmux kill-window -t "$SESSION:p55exit" 2>/dev/null || true
+  tmux kill-window -t "$SESSION:$P55_Z" 2>/dev/null || true
+  rm -f "$REPO/.pi/team/state/p55live.env" "$REPO/.pi/team/state/p55exit.env" "$REPO/.pi/team/state/p55none.env" \
+        "$REPO/.pi/team/state/$P55_A.env" "$REPO/.pi/team/state/$P55_Z.env" \
+        "$REPO/.pi/team/state/$P55_ID-brief.md" "$REPO/.pi/team/state/$P55_ZID-brief.md" \
+        "$REPO/.pi/team/state/dispatch-$P55_A"* "$REPO/.pi/team/state/dispatch-$P55_Z"* 2>/dev/null || true
+  git worktree remove --force "$P55_WT" 2>/dev/null || true
+  git worktree remove --force "$P55_ZWT" 2>/dev/null || true
+  git branch -D "$P55_BR" >/dev/null 2>&1 || true
+  sed -i "/^| $P55_ID |/d" "$REPO/docs/team/BOARD.md" 2>/dev/null || true
+else
+  cond_skip "41·p55-pane-留存" "无 tmux"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"

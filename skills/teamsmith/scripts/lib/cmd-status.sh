@@ -983,3 +983,207 @@ team_tmp_doctor_row() {
   check "临时根余量"
   if [ "$st" = "ok" ]; then pass "$text"; else warn "$text"; fi
 }
+
+# ================================================================ P55 · 席位四态（死 pane 是座位状况）
+# 本段只加在文件末尾（P53 在同文件并行，约定谁都不动中段）：唯一读取器 team_seat_condition 给出
+# running / exited / dead / absent 四态；roster 整函数覆盖（行与图例的形状变了），
+# status / digest / doctor 用「改名保存 + 同名包装」在原输出之后追加各自的死 pane 行，
+# 原实现（本文件中段、cmd-project.sh）一个字节不动。重复 source 幂等（哨兵跳过二次包装）。
+# 判据与证据：openspec/changes/agent-pane-survivability/design.md 的 D3/D7。纪律：
+#   · 这些面全是只读 —— 不写 .pi/team/state/ 里任何文件（内容与时间戳都不许动）；
+#   · 死 pane 绝不以「活座位」身份出现（running 仍要 M6.5/M37 的 pane 进程树证明，铁证优先）；
+#   · 遗体窗口的存在本身不是异常：登记任务未结束才算（D7），close --keep-window 留下的不吭声。
+
+team_p55_wrap() { # <原名> <保存名>：把 <原名> 的当前定义复制成 <保存名>（之后同名重定义 = 包装原实现）
+  declare -f "$1" >/dev/null 2>&1 || return 0
+  eval "$2() $(declare -f "$1" | tail -n +2)"
+}
+
+# 唯一席位读取器：一行 `running` | `exited` | `dead <证据>` | `absent`。顺序即语义：
+# 窗口不在 → absent；pane 已死（pane_dead=1，tmux census 铁证）→ dead（带退出证据）；
+# 都不是再按 M6.5/M37 的证明规则判 running；剩下才是 exited（窗口与 pane 活着、里面没有 agent）。
+team_seat_condition() { # <agent> → 见上
+  local a="${1:-}" w f dead status signal dtime
+  [ -n "$a" ] || { printf 'absent\n'; return 0; }
+  w="$(team_state_get "$a" window "$a")"
+  team_tmux_has_window "$TEAM_SESSION" "$w" || { printf 'absent\n'; return 0; }
+  f="$(team_pane_dead_fields "$TEAM_SESSION:$w" 2>/dev/null || true)"
+  dead="${f%%|*}"
+  if [ "$dead" = "1" ]; then
+    IFS='|' read -r dead status signal dtime <<< "$f"
+    printf 'dead %s\n' "$(team_pane_evidence_text "${status:-}" "${signal:-}")"
+    return 0
+  fi
+  if team_agent_alive_in_pane "$TEAM_SESSION:$w"; then printf 'running\n'; return 0; fi
+  printf 'exited\n'
+}
+
+team_seat_condition_text() { # <condition行> → 人读文本
+  local c="${1:-}" ev
+  case "$c" in
+    running) printf '在跑（M6.5/M37 证明成立）\n' ;;
+    exited)  printf '已退出（窗口与 pane 活着，里面没有 agent → team resume 可续）\n' ;;
+    dead*)
+      ev="${c#dead}"; ev="${ev# }"
+      printf 'pane 已死（%s；窗口是遗体：最后画面与退出证据还在，投递已换道收件箱）\n' "${ev:-证据未知}" ;;
+    absent)  printf '无窗口\n' ;;
+    *)       printf '%s\n' "$c" ;;
+  esac
+}
+
+# roster 覆盖（P55）：四态分行、遗体行带退出证据、图例说全四态。列结构与其余列不变。
+team_cmd_roster() {
+  team_require_docs
+  printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' AGENT 状态 分支 脏 领先 未push 模型 会话 任务
+  printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' ----- ------ -------------------------- ---- ------ ------- ---------------------------------- ---------------- ----
+  local a w wt cols branch dirty ahead upahead task state cli model msrc mtok mwin mbytes mfile size cond
+  cli="$(team_agent_cli_name)"
+  for a in $(team_agents); do
+    wt="$(team_agent_worktree "$a")"
+    cond="$(team_seat_condition "$a")"
+    case "$cond" in
+      running) state="● $cli 在跑" ;;
+      exited)  state="○ $cli 已退出" ;;
+      dead*)   state="▲ 已死${cond#dead}" ;;   # cond="dead signal=9" → "▲ 已死 signal=9"（证据在行内）
+      *)       state="· 无窗口" ;;
+    esac
+    cols="$(team_git_cols "$wt")"
+    IFS=$'\t' read -r branch dirty ahead upahead <<< "$cols"
+    # M4.3 D：内容已在保护分支里的分支不再计「领先 N」（squash 合并的形状）
+    if [ "${ahead:-0}" -gt 0 ] 2>/dev/null && team_branch_squash_merged "$wt"; then ahead="已合并"; fi
+    # M4.3 A：会话大小 vs 模型窗口（只 stat 字节数，不读内容）
+    IFS=$'\t' read -r model mtok mwin mbytes mfile <<< "$(team_agent_session_cols "$a")"
+    size="$(team_session_size_text "$mtok" "$mwin")"
+    # M14：模型列带来源标注 —— 名册旧记录不再冒充当前配置（历史记录 = 配置在它之后改了）
+    msrc="$(team_agent_model_src "$a")"
+    # M16：任务列不再只印代号 —— 名字跟在代号后面（查不到名字时原样只印代号）
+    task="$(team_task_label "$(team_state_get "$a" task -)")"
+    printf '%-10s %-12s %-26s %4s %8s %7s  %-34s %-16s %s\n' "$a" "$state" "$branch" "$dirty" "$ahead" "$upahead" "$model·$msrc" "$size" "$task"
+  done
+  printf '\n● %s 在跑 ｜ ○ 窗口在但 %s 已退出（team resume 可续）｜ ▲ pane 已死（窗口是遗体：画面与退出证据还在；team status <ID> 看现场，复用会先抓现场再替换）｜ · 无窗口\n' "$cli" "$cli"
+  printf '  脏=未提交 ｜ 领先=相对 %s（已合并=squash 后的内容已在 %s 里）｜ 未push=相对 @{upstream}（- = 没有 upstream，无法判定）\n' "$TEAM_PROTECTED_BRANCH" "$TEAM_PROTECTED_BRANCH"
+  printf '  会话=估算 tok/模型窗口（JSONL 字节÷4，粗糙；窗口 ? = 解析不到 → 派单用保守阈值 %s）⚠=已超窗口\n' "${TEAM_SESSION_WARN_TOKENS:-200000}"
+  printf '  模型·来源：配置=当前配置解析（或无记录，取配置）｜显式=上次 --model 指定｜历史记录=名册旧记录，配置已改 → 下次派单用新配置\n'
+  [ -n "$TEAM_SESSION" ] && team_dim "session: $TEAM_SESSION（attach: tmux attach -t $TEAM_SESSION）"
+  return 0
+}
+
+# status <ID> 的席位段：该任务登记席位的状况 + 退出证据 + 最近现场。三个来源按序：
+# 活的死 pane（带 scrollback 现读）→ state/dispatch-<agent>-pane-dead.txt（复用留证）
+# → state/dispatch-<agent>-tail.txt（harness 在 agent 退出时自抓）。都没有就只印状况、不印现场块。
+team_seat_scene_print() { # <agent>
+  local a="${1:-}" w n scene src mtime f dead status signal dtime
+  n="$(team_agent_scene_lines)"
+  w="$(team_state_get "$a" window "$a")"
+  if team_agent_pane_dead "$a"; then
+    src="活遗体 pane（tmux capture-pane -p -S -，含 scrollback）"
+    f="$(team_pane_dead_fields "$TEAM_SESSION:$w" 2>/dev/null || true)"
+    IFS='|' read -r dead status signal dtime <<< "${f:- }"
+    mtime="$(team_pane_dead_time_text "${dtime:-}")"
+    scene="$(team_agent_corpse_scene "$TEAM_SESSION:$w")"
+  elif [ -f "$(team_agent_pane_dead_file "$a")" ]; then
+    f="$(team_agent_pane_dead_file "$a")"
+    src="$f（dispatch 替换遗体前抓的现场）"
+    mtime="$(sed -n 's/^dead_time: //p' "$f" | head -1)"
+    [ -n "$mtime" ] || mtime="$(sed -n 's/^captured: //p' "$f" | head -1)"
+    scene="$(sed -n '/^--- scene ---/,$p' "$f" | tail -n +2 | tail -n "$n")"
+  elif [ -f "$TEAM_STATE_DIR/dispatch-$a-tail.txt" ]; then
+    f="$TEAM_STATE_DIR/dispatch-$a-tail.txt"
+    src="$f（agent 退出时 harness 自抓的尾屏）"
+    mtime="$(date -d "@$(stat -c %Y "$f" 2>/dev/null || echo 0)" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || echo '?')"
+    scene="$(tail -n "$n" "$f" 2>/dev/null)"
+  else
+    return 0
+  fi
+  if [ -z "$scene" ]; then
+    printf '  现场：（来源在但没有画面内容）来源=%s\n' "$src"
+    return 0
+  fi
+  printf '  现场（来源：%s · 记录时间：%s · 最后 %s 行）：\n' "$src" "${mtime:-?}" "$n"
+  printf '%s\n' "$scene" | sed 's/^/    | /'
+}
+
+team_status_seat_section() { # <ID>：找到登记了这个任务的席位才印；没有席位记录就一行不加
+  local id="${1:-}" a cond
+  [ -n "$id" ] || return 0
+  for a in $(team_agents); do
+    [ "$(team_state_get "$a" task '')" = "$id" ] || continue
+    cond="$(team_seat_condition "$a")"
+    printf '  座位 %s：%s\n' "$a" "$(team_seat_condition_text "$cond")"
+    team_seat_scene_print "$a"
+    return 0
+  done
+  return 0
+}
+
+if [ -z "${TEAM_P55_STATUS_WRAP:-}" ]; then
+  TEAM_P55_STATUS_WRAP=1
+  team_p55_wrap team_cmd_status team_cmd_status__p55_core
+  team_cmd_status() {
+    local rc=0
+    team_cmd_status__p55_core "$@" || rc=$?
+    if [ "$rc" = "0" ]; then
+      case "${1:-}" in ''|-*) ;; *) team_status_seat_section "$1" ;; esac
+    fi
+    return "$rc"
+  }
+fi
+
+# digest 的死 pane 席位段：任何遗体窗口都点名（静默 = 假阴性的藏身处）；登记任务未结束的标「!」
+#（异常，D7），已收尾的（close --keep-window 清过任务记录）标「·」（刻意保留，不算异常、不计 stopped）。
+team_digest_dead_pane_section() {
+  local a cond task ev any=0
+  for a in $(team_agents); do
+    cond="$(team_seat_condition "$a")"
+    case "$cond" in dead*) ;; *) continue ;; esac
+    if [ "$any" = "0" ]; then printf '\n%s\n' "[6] 死 pane 席位（窗口是遗体：现场可读；死 pane 不是投递目标，消息已换道收件箱）"; fi
+    any=1
+    task="$(team_state_get "$a" task '')"
+    ev="${cond#dead}"; ev="${ev# }"
+    if [ -n "$task" ]; then
+      printf '  ! %s pane 已死（%s）· 登记任务 %s 未结束 → 现场：%s status %s ｜ 恢复：%s resume --agent %s\n' \
+        "$a" "${ev:-证据未知}" "$(team_task_label "$task")" "$TEAM_CLI" "$task" "$TEAM_CLI" "$a"
+    else
+      printf '  · %s pane 已死（%s）· 无登记任务（刻意保留的窗口；不算异常）\n' "$a" "${ev:-证据未知}"
+    fi
+  done
+  return 0
+}
+
+if [ -z "${TEAM_P55_DIGEST_WRAP:-}" ]; then
+  TEAM_P55_DIGEST_WRAP=1
+  team_p55_wrap team_cmd_digest team_cmd_digest__p55_core
+  team_cmd_digest() {
+    local rc=0
+    team_cmd_digest__p55_core "$@" || rc=$?
+    team_digest_dead_pane_section
+    return "$rc"
+  }
+fi
+
+# doctor 的死 pane 告警：每个「登记任务未结束 + pane 已死」的席位一条，带退出证据与现场入口
+# （team status <ID>）；没有就一行不印；退出码由原实现决定，这条检查不碰它。
+team_doctor_dead_pane_warn() {
+  local a cond task ev
+  for a in $(team_agents); do
+    cond="$(team_seat_condition "$a")"
+    case "$cond" in dead*) ;; *) continue ;; esac
+    task="$(team_state_get "$a" task '')"
+    [ -n "$task" ] || continue
+    ev="${cond#dead}"; ev="${ev# }"
+    printf '  %-24s %s!%s %s\n' "死 pane 席位 $a" "$C_YEL" "$C_RESET" \
+      "pane 已死（${ev:-证据未知}），登记任务 $(team_task_label "$task") 未结束 → 现场：$TEAM_CLI status $task"
+  done
+  return 0
+}
+
+if [ -z "${TEAM_P55_DOCTOR_WRAP:-}" ]; then
+  TEAM_P55_DOCTOR_WRAP=1
+  team_p55_wrap team_cmd_doctor team_cmd_doctor__p55_core
+  team_cmd_doctor() {
+    local rc=0
+    team_cmd_doctor__p55_core "$@" || rc=$?
+    team_doctor_dead_pane_warn
+    return "$rc"
+  }
+fi

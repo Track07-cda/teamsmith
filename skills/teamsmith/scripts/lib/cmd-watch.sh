@@ -562,10 +562,19 @@ team_panel_agents_json() {
   local model mtok mwin mbytes mfile size dirty_json ahead_json
   for a in $(team_agents); do
     # M50：窗口存在性每个 agent 只问一次 tmux（原：live 一次 + window_exists 又一次，同一个 tmux 答案问两遍）
-    local w_live; w_live="$(team_state_get "$a" window "$a")"
-    if team_tmux_has_window "$TEAM_SESSION" "$w_live"; then
-      if team_agent_alive_in_pane "$TEAM_SESSION:$w_live"; then state="running"; else state="exited"; fi
-    else state="absent"; fi
+    # P55：座位状况统一走唯一读取器（team_seat_condition）。机器面 state 词表不变（三态）——
+    # 死 pane 落在新增的 pane/pane_exit 键上；running 的证据规则不变（M6.5/M37），遗体绝不出现成 running。
+    local w_live cond_seat pane_json="" pane_exit=""
+    w_live="$(team_state_get "$a" window "$a")"
+    cond_seat="$(team_seat_condition "$a")"
+    case "$cond_seat" in
+      running) state="running"; pane_json=", \"pane\": \"live\"" ;;
+      dead*)   state="exited";  pane_json=", \"pane\": \"dead\""
+               pane_exit="${cond_seat#dead}"; pane_exit="${pane_exit# }" ;;
+      exited)  state="exited";  pane_json=", \"pane\": \"live\"" ;;
+      *)       state="absent" ;;
+    esac
+    [ -n "$pane_exit" ] && pane_json="$pane_json, \"pane_exit\": $(team_panel_json_str "$pane_exit")"
     task="$(team_state_get "$a" task '')"
     wt="$(team_agent_worktree "$a")"
     cols="$(team_git_cols "$wt")"
@@ -582,7 +591,7 @@ team_panel_agents_json() {
 \"task\": $(team_panel_json_str "$task"), \"branch\": $(team_panel_json_str "$branch"), \
 \"dirty\": $dirty_json, \"ahead\": $ahead_json, \"upstream_ahead\": $(team_panel_json_str "$upahead"), \
 \"model\": $(team_panel_json_str "$model"), \"session_tokens\": $(team_panel_num "$mtok"), \
-\"session_window\": $(team_panel_num "$mwin"), \"session_text\": $(team_panel_json_str "$size")}"
+\"session_window\": $(team_panel_num "$mwin"), \"session_text\": $(team_panel_json_str "$size")$pane_json}"
   done
   printf '%s]' "$out"
 }
