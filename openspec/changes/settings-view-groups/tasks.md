@@ -115,6 +115,10 @@ scenario already builds; the bundle may only be rebuilt with the pinned bun and 
 
 ## 4. V — independent verification (a different agent)
 
-- [ ] 4.1 Rerun, out of tree and on the apply's tip: every flip of 2.8 (red and green), the `groups` and `wheel`
+- [x] 4.1 Rerun, out of tree and on the apply's tip: every flip of 2.8 (red and green), the `groups` and `wheel`
   pty scenarios, `openspec validate --all --strict` and the **full** smoke; the record goes to
   `docs/team/reviews/<ID>.md` with a verdict and any findings (a PASS carrying findings is rework, not archive).
+
+> **PM 勾选说明（2026-09-22）**：propose=**P29**；apply=**P30 + P32（修订：标题分节线 / 用满高度 / F1 接线）**；
+> verify=**P31（P30 那轮，dev2）+ P42（覆盖 P32 修订，dev）** —— P42 记 `reviews/P42.md`：**PASS，0 finding**
+> （它自写 pty 驱动与解析器、与被测断言零共享；三条变异各自精确落在对应面；PM 复跑官方三场景 `✓102 ✗0`）。
