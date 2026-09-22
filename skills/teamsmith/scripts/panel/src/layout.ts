@@ -183,14 +183,14 @@ function cardBody(placed: PlacedLine, width: number): PlacedLine {
   return hits.length ? { line, hits } : { line }
 }
 
-function ruleTitle(title: string, width: number): Line {
+function ruleTitle(title: string, width: number, tone: Tone = 'heading'): Line {
   if (width <= 0) return []
   if (!title) return ln(seg(rule(width, BOX_H), 'dim'))
   const labelW = dispWidth(title)
-  if (labelW + 4 >= width) return truncLine(ln(seg(BOX_H + BOX_H + ' ', 'dim'), seg(title, 'heading')), width)
+  if (labelW + 4 >= width) return truncLine(ln(seg(BOX_H + BOX_H + ' ', 'dim'), seg(title, tone)), width)
   const left = 2
   const right = width - left - 1 - labelW // ── title ─…
-  return ln(seg(rule(left, BOX_H) + ' ', 'dim'), seg(title, 'heading'), seg(' ' + rule(Math.max(0, right - 1), BOX_H), 'dim'))
+  return ln(seg(rule(left, BOX_H) + ' ', 'dim'), seg(title, tone), seg(' ' + rule(Math.max(0, right - 1), BOX_H), 'dim'))
 }
 
 function wrapBlock(block: Block, width: number, chrome: Chrome): PlacedLine[] {
@@ -278,7 +278,9 @@ interface Ctx {
   laneRows?: number
   /** Document rows the detail view may show (the assembly's real budget for the open document). */
   detailRows?: number
-  /** Focusable rows the project-settings view's window may show (the assembly's real budget). */
+  /** Card rows / document lines the project-settings view may draw below its card frame (the
+   * assembly's real budget: the view spends it on the row window, its tail and blank fill, so the
+   * card fills the pane — P32). */
   settingsRows?: number
 }
 
@@ -1145,25 +1147,40 @@ function detailBlock(ctx: Ctx): Block | null {
 // ------------------------------------------------------------------ project settings (P22/B2)
 //
 // The view is a listing of the contract: one row per schema key plus one per key the file carries
-// that the schema does not know, grouped by the effect class the **command** reports (apply /
-// restart / refuse — the console owns no second table), then the model seats block. Rows and
-// classes come from the `settings` block's JSON at render time; a key added to the command's schema
-// shows up without rebuilding `panel.js`. The list is windowed against the height the assembly
-// hands over (the bounded-frame rule: more pane means more rows, never more blank).
+// that the schema does not know, grouped by the functional domain the **command** reports on the
+// row's `group` (P30 — the console owns no second table), then the model seats block. Rows, groups
+// and classes come from the `settings` block's JSON at render time; a key added to the command's
+// schema shows up without rebuilding `panel.js`. The list is windowed against the height the
+// assembly hands over (the bounded-frame rule: more pane means more rows, never more blank).
 
 // The row's identity column is a **label** (M49), not the key name: the table's labels are human
 // sentences, so the column only has to hold the longest of them (zh is the wide language here;
 // a longer en label is cut by `cell()`, the same rule the key names followed).
 const SETTINGS_LABEL_W = 22
 const SETTINGS_AUDIT_LINES = 3
-// The lines the block draws under its row window: the two hidden-row counts (`↑n`/`↓n`), the CLI
-// hint, a blank, the audit heading and the audit tail. `layout()` subtracts this from the height it
-// hands the view as its row budget. Reserving **both** count lines is what keeps the block inside
-// the frame once the list is longer than the window: with only the tail reserved, a full window
-// plus a full audit tail overflowed and the whole view degraded to its one-line summary (measured
-// in M55's pairlist route: the seats block the route had just focused disappeared from the frame).
+// The tail the block draws under its row window: the CLI hint, a blank, the audit heading and up to
+// `SETTINGS_AUDIT_LINES` audit lines (the heading always has one line under it — a dash when the
+// command's log is empty), plus `SETTINGS_COUNT_ROWS`, the pessimistic reservation for the two
+// hidden-row counts (`↑n`/`↓n`). Reserving **both** counts is what keeps the block inside the frame
+// once the list is longer than the window: with only the tail reserved, a full window plus a full
+// audit tail overflowed and the whole view degraded to its one-line summary (measured in M55's
+// pairlist route: the seats block the route had just focused disappeared from the frame).
+//
+// P32 (the user's second report, 2026-09-22): the reservation is a *ceiling*, not a fixed cost. The
+// window spends what the tail does not need (a count line is only drawn when the window really
+// hides rows at that edge), and the block pads its card to the lines it was handed — so the pane's
+// height shows contract rows instead of the page's blank space.
 const SETTINGS_COUNT_ROWS = 2
-const SETTINGS_FOOTER_ROWS = SETTINGS_COUNT_ROWS + 1 + 1 + 1 + SETTINGS_AUDIT_LINES
+
+/**
+ * The sum M55 calibrated: the two count lines, the CLI hint, a blank, the audit heading and the audit
+ * tail. The row list treats it as a ceiling and hands back what it does not draw (P32); the two pickers
+ * keep it as the bound of their own *paged* list (title + interval + the two hidden-count lines + blank
+ * + hint, then the entries) — a long vocabulary shows a `↑n`/`↓n` window that scrolls instead of
+ * flooding the pane, which is what the archived `choices` fixture calibrates its twenty-eight model
+ * records against. Their cards still fill (the pad below), so the key band stays the frame's last row.
+ */
+const SETTINGS_TAIL_ROWS = SETTINGS_COUNT_ROWS + 1 + 1 + 1 + SETTINGS_AUDIT_LINES
 
 /** One drawn row of the project-settings view (group headings are not focusable). */
 export type SettingsRow =
@@ -1327,9 +1344,10 @@ function settingsCliHint(s: Strings, rows: SettingsRow[], focus: number): string
 
 /**
  * The project-settings block: it replaces the page's blocks exactly as the detail view does (the
- * title band, the page tabs and the key band stay). `ctx.settingsRows` is the line budget the
- * assembly hands over for the window itself (headings, the CLI hint, the audit footer and the
- * hidden-row counts are extra, and the frame's own budget wins).
+ * title band, the page tabs and the key band stay). `ctx.settingsRows` is the lines the block may draw
+ * below its own card frame — the assembly hands over what the page's other blocks leave (P32), and the
+ * block spends it on the row window, its tail and the blank fill, so the card fills the pane (the
+ * frame's own budget still wins: an over-long block degrades by the usual chrome rules).
  */
 function settingsBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg } = ctx
@@ -1357,52 +1375,60 @@ function settingsBlock(ctx: Ctx): Block | null {
   const rows = settingsViewRows(block, ctx.view.settingsFilter ?? '', s)
   let count = 0
   for (const r of rows) if (r.kind === 'key' || r.kind === 'seat') count += 1
-  const budget = Math.max(3, ctx.settingsRows ?? 12)
+  // P32: the block's budget is the **lines** it may draw below the card frame — the assembly hands
+  // over everything the page's other blocks leave (`budget - fullRows - the frame's two rows`), and
+  // the tail is spent out of that same budget, so what the tail does not need goes to real rows
+  // instead of the page's blank space.
+  const room = Math.max(3, ctx.settingsRows ?? 12)
   const focus = Math.max(0, Math.min(Math.max(0, count - 1), ctx.view.settingsFocus ?? 0))
   const explicitOffset = ctx.view.settingsOffset
-  const desired = Math.max(1, Math.min(Math.max(1, count), budget))
+  // The tail under the window: the CLI hint, a blank, the audit heading and its tail (the heading
+  // always has one line under it — a dash when the command's log is empty).
+  const audit = (block.audit ?? []).slice(-SETTINGS_AUDIT_LINES)
+  const tailLines = 1 + 1 + 1 + Math.max(1, audit.length)
+  // The row cap: each row costs at least its own line, and the tail is already spoken for.
+  const desired = Math.max(1, Math.min(Math.max(1, count), Math.max(1, room - tailLines)))
   const maxOffset = Math.max(0, count - desired)
+  // The first fit reserves both count lines (the M55 rule above); the growth below hands the one
+  // the window does not draw back to it.
+  const windowRoom = Math.max(1, room - tailLines - SETTINGS_COUNT_ROWS)
   // P30/D5 (measured while testing the wheel at the list's tail): the window is bounded by the
-  // **lines** it draws, not by the row count. A row with a note draws two lines and a group heading
-  // draws one, so a note-heavy, heading-rich window used to overflow the space the assembly handed
-  // over — and the frame then collapsed the whole block to its one-line rule/summary, leaving the
-  // wheel nothing to scroll (the grouping change made it easy to hit: the first groups are
-  // route-heavy). The fit measures the rows it can really draw, so the window always fits and both
-  // hidden-row counts stay honest.
+  // **lines** it draws, not by the row count. A group heading draws a line of its own, so a
+  // heading-rich window used to overflow the space the assembly handed over — and the frame then
+  // collapsed the whole block to its one-line rule/summary, leaving the wheel nothing to scroll.
+  // The fit measures the rows it can really draw, so the window always fits and both hidden-row
+  // counts stay honest.
   //
-  // The unit is one *focusable* row (what `offset`/`visible`/the counts mean); each unit's price is
-  // its own line plus the group heading directly above it, which draws exactly when that row is
-  // inside the window (`settingsKeyLine`'s note line is the only other cost).
-  const units: { lines: number; heading: number }[] = []
-  const rowLines = (r: SettingsRow): number => {
-    if (r.kind !== 'key') return 1 // a seat row is one line
-    const k = r.key
-    return (k.warning || k.route || k.comment || '').trim() ? 2 : 1 // `settingsKeyLine`'s note line
-  }
+  // P32 (measured 2026-09-22 on a 111-key contract at 120×45): D5's price list charged a key row
+  // with a note **two** lines, but `settingsKeyLine` appends the note to the row's own line — 15 of
+  // the window's 17 drawn lines were billed double, which is exactly where 15 of the pane's 16
+  // blank rows came from. The unit is one *focusable* row; its price is its own line plus the group
+  // heading directly above it, which draws exactly when that row is inside the window.
+  const units: { heading: number }[] = []
   let pendingHeading = 0
   for (const r of rows) {
     if (r.kind === 'group' || r.kind === 'seat-group') {
       pendingHeading = 1
       continue
     }
-    units.push({ lines: rowLines(r), heading: pendingHeading })
+    units.push({ heading: pendingHeading })
     pendingHeading = 0
   }
   const spend = (start: number, n: number): number => {
     let cost = 0
-    for (let i = start; i < Math.min(start + n, units.length); i += 1) cost += units[i].lines + units[i].heading
+    for (let i = start; i < Math.min(start + n, units.length); i += 1) cost += 1 + units[i].heading
     return cost
   }
-  /** The rows a window starting at `start` can really draw inside `budget` lines (`<= desired` rows). */
+  /** The rows a window starting at `start` can really draw inside the reserved window lines. */
   const fitForward = (start: number): number => {
     let visible = 0
-    while (visible < desired && start + visible < units.length && spend(start, visible + 1) <= budget) visible += 1
+    while (visible < desired && start + visible < units.length && spend(start, visible + 1) <= windowRoom) visible += 1
     return visible
   }
   /** The first row of the largest window that ends at the focused row (the focus never hides). */
   const fitBack = (row: number): number => {
     let start = row
-    while (start > 0 && row - start + 1 < desired && spend(start - 1, row - start + 2) <= budget) start -= 1
+    while (start > 0 && row - start + 1 < desired && spend(start - 1, row - start + 2) <= windowRoom) start -= 1
     return start
   }
   let offset: number
@@ -1424,16 +1450,28 @@ function settingsBlock(ctx: Ctx): Block | null {
   }
   if (visible === 0 && count > 0) visible = 1
 
+  // P32: the spare the first fit kept for the count lines goes back to the window as far as it
+  // really helps. A count line is drawn only when the window hides rows at that edge — a window at
+  // the top hides nothing above it — so a window that ends on the last row gets the line the `↓n`
+  // reservation held, and the card fills with contract rows. Growth is **downward only**: growing
+  // upward would move the window's first row against the offset the wheel set, and the tests (and
+  // the user) read `↑n` as the wheel's own position.
+  const drawn = (start: number, n: number): number =>
+    spend(start, n) + (start > 0 ? 1 : 0) + (count > start + n ? 1 : 0)
+  while (offset + visible < count && visible < desired && drawn(offset, visible + 1) + tailLines <= room) visible += 1
+
   // The choice picker (M55): the command's own vocabulary, rendered in the view's own line budget
   // exactly like the seat picker below (same window/offset rules, one click action per entry, no
   // overlay, no width tier — the row list the snapshots pin is untouched). The entries are built
-  // by the App from the key's `choices` object; this function only labels and windows them.
+  // by the App from the key's `choices` object; this function only labels and windows them. The entry
+  // window is the M55 bound (`SETTINGS_TAIL_ROWS`), not the row list's P32 budget: a long vocabulary
+  // is *paged* here by design, while the card below still fills the pane.
   const choice = ctx.view.choicePicker
   if (choice) {
     const entries = choice.entries
     const sel = Math.max(0, Math.min(Math.max(0, entries.length - 1), choice.index))
     // title + interval + the two hidden-count lines + blank + hint: the entries get the rest.
-    const entryBudget = Math.max(1, budget - 6)
+    const entryBudget = Math.max(1, room - SETTINGS_TAIL_ROWS - 6)
     const entryVisible = Math.max(1, Math.min(entries.length, entryBudget))
     const entryOffset = Math.max(0, Math.min(Math.max(0, entries.length - entryVisible), sel - Math.floor(entryVisible / 2)))
     const lines: PlacedLine[] = []
@@ -1488,6 +1526,9 @@ function settingsBlock(ctx: Ctx): Block | null {
     if (entryHiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(entryHiddenBelow) })}`, 'dim')))
     put(ln(seg('')))
     put(ln(seg(` ${s.settingsChoiceHint}`, 'dim')))
+    // P32: a picker covers the row list, so what its own entries do not use stays inside the card
+    // (the fill rule below); a short picker must not leave the pane half blank either.
+    while (lines.length < room) put(ln(seg('')))
     return one(lines, { focus: sel, offset: entryOffset, visible: entryVisible, count: entries.length })
   }
 
@@ -1514,6 +1555,7 @@ function settingsBlock(ctx: Ctx): Block | null {
     })
     put(ln(seg('')))
     put(ln(seg(` ${s.seatPickerHint}`, 'dim')))
+    while (lines.length < room) put(ln(seg('')))
     return one(lines, { focus: sel, offset: 0, visible: options.length, count: options.length })
   }
 
@@ -1543,8 +1585,11 @@ function settingsBlock(ctx: Ctx): Block | null {
     const next = idx + 1
     if (next < offset || next >= offset + visible) continue
     if (r.kind === 'group' || r.kind === 'seat-group') {
-      const tone: Tone = r.kind === 'group' ? r.tone : 'accent'
-      put(ln(seg(`  ${r.label}`, tone)))
+      // P32 (the user's first report): a heading indented like a row reads as one more row. It is a
+      // **section rule** instead — `── 身份与账本布局 ────…`, the shape the non-framed blocks already
+      // use — so a heading and a key row cannot be confused in a monochrome capture either, and
+      // consecutive groups are separated by their own headings without spending a second line.
+      put(ruleTitle(r.label, width, r.kind === 'group' ? r.tone : 'accent'))
     }
   }
   if (hiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(hiddenBelow) })}`, 'dim')))
@@ -1555,9 +1600,14 @@ function settingsBlock(ctx: Ctx): Block | null {
   // The audit footer: at most three lines, newest last (the CLI's own tail).
   put(ln(seg('')))
   put(ln(seg(` ${s.settingsAuditHeading}`, 'heading')))
-  const audit = (block.audit ?? []).slice(-SETTINGS_AUDIT_LINES)
   if (!audit.length) put(ln(seg(`   ${s.dash}`, 'dim')))
   for (const a of audit) put(ln(seg(`   ${a}`, 'dim')))
+
+  // P32 (the bounded-frame rule's last resort, the detail view's own): the space the rows did not
+  // use stays **inside** the card, so the card fills the pane it was handed and the key band stays
+  // the frame's last row. With a full list that is nothing; with a filter, the tail of the list or
+  // a short pane it is what the user read as "the view does not use the window's height".
+  while (lines.length < room) put(ln(seg('')))
 
   return one(lines, { focus, offset, visible, count })
 }
@@ -2096,7 +2146,7 @@ export function layout(input: LayoutInput): Frame {
           height > 0 && b.id === 'detail'
           ? (detailBlock({ ...ctx, detailRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
           : height > 0 && b.id === 'settings'
-          ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0) - SETTINGS_FOOTER_ROWS) }) ?? b)
+          ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
           : b
     if (block.id === 'kanban' && block.lanes) laneWindows = block.lanes
     if (block.id === 'detail' && block.detail) detailWindow = block.detail

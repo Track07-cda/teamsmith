@@ -11726,7 +11726,8 @@ else
   bad "38-d 缺 tests/panel-p21.sh"
 fi
 
-# 38-e P30 钉子（FAST 照跑）：pty 行为面（settings / groups / wheel 三个场景）在完整门禁里跑，
+# 38-e P30 钉子（FAST 照跑）：pty 行为面（settings / groups / wheel 三个场景）在完整门禁里跑（38-f 就是
+# 那个调用点），
 # FAST 用三条便宜的**结构钉 + 红侧**保证有人把行为改回去时门禁也会红：
 #   ① 字符串表的「schema 行第 10 列 token ⇄ group_<token> 标签」双向相等（删标签 / 加陈旧标签都红）；
 #   ② 视图的分组只从**记录**读（layout.ts 没有类分组表、没有键→域表，标题按 token 查表）；
@@ -11804,6 +11805,29 @@ if p38e_wheel_pin "$P38E_SRC"; then
   bad "38-e 翻转：去掉滚轮消费 pin 还绿（钉失效）"
 else
   ok "38-e 翻转：删掉 scrollSettings(delta) → pin 红（滚轮会落回页面滚动）"
+fi
+
+# 38-f P32 的修订面（FAST 下可见 SKIP）：panel-p21.sh 的 groups / settings / wheel 三个场景 ——
+# 设置视图的 45/33/30/25 四档行高记账（卡片填满、rows+↑+↓ 对账、45 比 30 多 ≥8 行）、分组标题是
+# 分节线且自己承担组间分隔、视图自己的滚轮窗口（一格一行/焦点不动/计数行/不穿透）。38-b 只跑
+# choices；这三个场景此前没有任何调用点（P31 的 finding F1：design D7 与 38-e 的注释都宣称它们在
+# 完整门禁里跑）。FAST 的跳过是**可见**的（fast_skip），提醒里带原因与耗时；完整门禁里这是硬断言。
+if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
+  if [ "$FAST" = "1" ]; then
+    fast_skip "38-f·panel-p21-settings-groups-wheel" "panel-p21.sh groups/settings/wheel 要真 tmux 场地 + 真 bundle（慢段 ~2 分钟）"
+  else
+    live_mark
+    if bash "$SKILL_DIR/tests/panel-p21.sh" groups settings wheel >"$TMP/panel-p21-view.log" 2>&1; then
+      ok "38-f panel-p21.sh groups/settings/wheel 全绿（$(grep -a '== 结果 ==' "$TMP/panel-p21-view.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')）"
+      tail -1 "$TMP/panel-p21-view.log" | sed 's/^/      /'
+    else
+      bad "38-f panel-p21.sh groups/settings/wheel 有失败"
+      grep -a '✗' "$TMP/panel-p21-view.log" | head -8 | sed 's/^/      /'
+      tail -2 "$TMP/panel-p21-view.log" | sed 's/^/      /'
+    fi
+  fi
+else
+  bad "38-f 缺 tests/panel-p21.sh"
 fi
 
 section "15 · 完成"

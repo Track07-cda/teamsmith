@@ -368,6 +368,7 @@ open(p, 'w', encoding='utf-8').write(s)
 PYFIX
   start_panel
   local conf_before; conf_before="$(sha "$state/panel.conf" 2>/dev/null || echo none)"
+  local fstats
   open_view
   assert_eq "导航行打开视图没有写 panel.conf" "$(sha "$state/panel.conf" 2>/dev/null || echo none)" "$conf_before"
   cap_to view
@@ -401,6 +402,15 @@ PYFIX
   cap_to refuse
   assert_match "$tmp/$current/refuse.txt" '项目名 +root · 只读' "refuse 行的标签 + 只读 徽章"
   assert_has "$tmp/$current/refuse.txt" "手改 .pi/team/config.sh 里的 TEAM_PROJECT" "refuse 提示行点名原始键与手改路线"
+  # P32：短列表（一条过滤结果）也把卡片填满 —— 空白留在卡片**里面**，卡片下边框仍紧贴键栏。
+  cap_visible_to filter-fill
+  fstats="$(settings_window_stats "$tmp/$current/filter-fill.txt")"
+  IFS=' ' read -r _fr _fu _fd fgap <<<"$fstats"
+  if [ "${_fr:-0}" -ge 1 ] && [ "${fgap:-9}" -le 1 ]; then
+    ok "过滤到一条时卡片仍填满窗口（行=$_fr 空白=$fgap）"
+  else
+    bad "过滤到一条时卡片没有填满窗口（$fstats）"
+  fi
   filter_to TEAM_PANEL_DETAIL_CAP
   cap_to unset
   assert_match "$tmp/$current/unset.txt" '详情文件读取上限 +未设 · 默认 131072' "未设的键显示 schema 默认值 + unset 标记"
@@ -548,6 +558,48 @@ EOF2
   cap_to en
   assert_match "$tmp/$current/en.txt" '› Patrol interval' "en 行的人话标签（行不是裸键）"
   assert_has "$tmp/$current/en.txt" "CLI: team config set TEAM_PULSE_INTERVAL <value>" "en 的 CLI 提示行同样点名原始键"
+
+  # ── P32：视图用满窗口高度（用户实测 45 行里 16 行空白）+ 行数记账诚实 ──
+  # 同一条契约、同一个面板，只改 pane 行高：① 内容结尾（卡片下边框）到键栏的空白 ≤1 行；
+  # ② 画出的行数随行高长（45 vs 30 的差 ≥8）；③ rows + ↑N + ↓N 恰好等于命令报的键+席位总数
+  # （窗口的计数行必须与窗口实际画出的行数一致 —— P30/D5 的成本模型曾经按「带注释的行占两行」
+  # 记账，虚报了 15 行，那 15 行就是用户看到的空白）。
+  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
+  unset P21_CLI
+  start_panel
+  open_view
+  local want_count
+  want_count="$( (cd "$ROOT" && bash "$skill/scripts/team" config list --json) \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["keys"]) + len(d.get("models",{}).get("seats",[])))' )"
+  [ "${want_count:-0}" -gt 0 ] || bad "读数拿不到键数（前提不成立）"
+  local h s rows up down gap prev_rows=""
+  for h in 45 33 30 25; do
+    if resize_panel 120 "$h"; then
+      if wait_settings_frame "$h" "height$h"; then
+        s="$(settings_window_stats "$tmp/$current/height$h.txt")"
+        IFS=' ' read -r rows up down gap <<<"$s"
+        # ① 内容结束到键栏的空白 ≤1 行（P32 前：45 行里 16 行）
+        if [ "$gap" -le 1 ]; then ok "${h} 行：内容结尾到键栏只剩 $gap 行空白（≤1）"; else bad "${h} 行：内容结尾到键栏还有 $gap 行空白"; fi
+        # ③ 记账诚实：窗口画出的行 + 两条计数 = 命令报的总行数
+        assert_eq "${h} 行：rows($rows) + ↑($up) + ↓($down) = 命令报的键+席位（$want_count）" \
+          "$((rows + up + down))" "$want_count"
+        case "$h" in
+          45) prev_rows="$rows" ;;
+          30) if [ -n "$prev_rows" ] && [ "$((prev_rows - rows))" -ge 8 ]; then
+                ok "窗口随行高长：45 行 $prev_rows → 30 行 $rows（差 $((prev_rows - rows)) ≥ 8）"
+              else
+                bad "窗口没有随行高长：45 行 $prev_rows → 30 行 $rows"
+              fi ;;
+        esac
+      else
+        cap_visible_to "height$h-fail"
+        bad "缩到 120×${h} 之后没有画出完整的设置视图帧（$(settings_window_stats "$tmp/$current/height$h-fail.txt")）"
+      fi
+    else
+      bad "pane 缩到 120×${h} 没有生效"
+    fi
+  done
+  resize_panel 160 40 || true
 }
 
 scn_choices() {
@@ -1358,18 +1410,111 @@ scn_readonly() {
 
 # ---------------------------------------------------------------- P30（settings-view-groups）
 
-# 一行在捕获里的行号（去掉盒边框与空白后**恰好等于** <text>）；找不到打印 0。
-cap_line_exact() { # <file> <exact text>
+# P32：分组标题是**分节线**（`│ ── 身份与账本布局 ─────… │`），不再是缩进的文本行 —— 所以
+# 「这一行恰好等于标题词」不再是标题的判据。这里找的是带分节线的标题行；返回行号（0 = 找不到）。
+cap_line_heading() { # <file> <label>
   python3 - "$1" "$2" <<'PY'
 import sys
 lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().split('\n')
-target = sys.argv[2]
+label = sys.argv[2]
 for i, line in enumerate(lines):
-    if line.strip('\u2502 ').strip() == target:
+    if line.startswith('\u2502') and label in line and '\u2500' in line:
         print(i + 1)
         break
 else:
     print(0)
+PY
+}
+
+# P32：标题可辨认 + 组间可见分隔（两条断言合一）。标题行必须是分节线，且它的上一行是上一组的
+# 最后一条、下一行是本组的第一条 —— 标题自己承担分隔，不另花一行。
+assert_heading_rule() { # <file> <label> <上一组最后一条> <本组第一条> <message>
+  local msg="$5" out rc
+  out="$(python3 - "$1" "$2" "$3" "$4" <<'PY'
+import sys
+cap, label, before, after = sys.argv[1:5]
+lines = open(cap, encoding='utf-8', errors='replace').read().split('\n')
+hit = [i for i, l in enumerate(lines) if l.startswith('\u2502') and label in l and '\u2500' in l]
+if not hit:
+    print('%r 不是分节线标题（没有带 ─ 的标题行）' % label); sys.exit(1)
+i = hit[0]
+prev = lines[i - 1] if i > 0 else ''
+nxt = lines[i + 1] if i + 1 < len(lines) else ''
+if before not in prev:
+    print('标题上一行不是上一组的最后一条（%r 不在 %r）' % (before, prev.strip('\u2502 ').rstrip())); sys.exit(1)
+if after not in nxt:
+    print('标题下一行不是本组的第一条（%r 不在 %r）' % (after, nxt.strip('\u2502 ').rstrip())); sys.exit(1)
+print('%s 是分节线标题，夹在 %s 与 %s 之间' % (label, before, after))
+PY
+)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then ok "$msg（$out）"; else bad "$msg：$out"; fi
+}
+
+# P32：把设置视图的**可见**面板缩到 <cols>×<rows>（会话是 window-size manual，所以窗口随我们），
+# 并等到 tmux 报出这个 pane 高度 —— 之后 capture-pane（不带 -S）的每一行就是屏幕上的每一行。
+resize_panel() { # <cols> <rows>
+  tmux -L "$sock" resize-window -t "$sess:panel" -x "$1" -y "$2" 2>/dev/null || true
+  local i h
+  for i in $(seq 1 25); do
+    h="$(tmux -L "$sock" display-message -p -t "$sess:panel" '#{pane_height}' 2>/dev/null)"
+    [ "$h" = "$2" ] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+cap_visible_to() { tmux -L "$sock" capture-pane -p -t "$sess:panel" > "$tmp/$current/${1:-visible}.txt" 2>/dev/null; }
+
+# P32：等新行高下的**完整**一帧。只等「settle」不够：缩完 tmux 立刻按新尺寸裁剪旧帧，而 Ink 还没重画，
+# 两张连续捕获可能一致却是旧内容。所以判据是结构：可见帧行数等于新 pane 高度、且能认出卡片的
+# 上/下边框与键栏（settings_window_stats 的两个非 -1），并把那帧写进 <cap name>.txt。
+wait_settings_frame() { # <rows> <cap name> → 0 = 帧按新行高画完整
+  local rows="$1" name="${2:-height}" i a b st lines r u d g
+  for i in $(seq 1 30); do
+    a="$(cap_now | sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g')"
+    sleep 0.25
+    b="$(cap_now)"
+    [ "$(printf '%s\n' "$b" | sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g')" = "$a" ] || continue
+    lines="$(printf '%s\n' "$b" | wc -l)"
+    printf '%s\n' "$b" > "$tmp/$current/$name.txt"
+    st="$(settings_window_stats "$tmp/$current/$name.txt")"
+    IFS=' ' read -r r u d g <<<"$st"
+    [ "$lines" = "$rows" ] || continue
+    [ "${r:-0}" -ge 0 ] && [ "${g:-0}" -ge 0 ] && return 0
+  done
+  return 1
+}
+
+# P32：一帧里视图的**行数记账**：窗口里画出的行数、上下两条隐藏计数、以及内容结尾（卡片下边框）到
+# 键栏之间的空白行数。打印 "<rows> <hidden_up> <hidden_down> <gap>"（认不出来打印 "-1 -1 -1 -1"）。
+settings_window_stats() { # <capture file>
+  python3 - "$1" <<'PY'
+import re, sys
+lines = open(sys.argv[1], encoding='utf-8', errors='replace').read().split('\n')
+top = next((i for i, l in enumerate(lines) if l.lstrip().startswith('\u256d\u2500 项目设置') or l.lstrip().startswith('\u256d\u2500 Project settings')), -1)
+bot = next((i for i, l in enumerate(lines) if i > top and l.lstrip().startswith('\u2570')), -1)
+foot = next((i for i, l in enumerate(lines) if i > bot and ('\u5199\u4fe1' in l or 'compose' in l)), -1)
+if top < 0 or bot < 0 or foot < 0:
+    print('-1 -1 -1 -1'); sys.exit(0)
+interior = lines[top + 1:bot]
+audit = next((i for i, l in enumerate(interior) if '\u5ba1\u8ba1\uff08\u6700\u8fd1\uff09' in l or 'Audit' in l), -1)
+if audit < 3:
+    print('-1 -1 -1 -1'); sys.exit(0)
+# 尾部固定占位：CLI 提示行、空行、审计标题（audit-2 起），所以行只可能在 audit-2 之前。
+tail_start = audit - 2
+rows = up = down = 0
+for i, l in enumerate(interior):
+    b = l.strip('\u2502 ').rstrip()
+    m = re.fullmatch(r'([\u2191\u2193])(\d+)', b)
+    if m:
+        if m.group(1) == '\u2191': up = int(m.group(2))
+        else: down = int(m.group(2))
+        continue
+    if i >= tail_start or not b or '\u2500' in b:
+        continue
+    rows += 1
+print('%d %d %d %d' % (rows, up, down, foot - bot - 1))
 PY
 }
 
@@ -1466,6 +1611,11 @@ scn_groups() {
   cap_to view
   # ① 标题 = 功能域、按读取顺序；类词只活在行徽章里（没有「只有类词」的行）。
   assert_has "$tmp/$current/view.txt" "身份与账本布局" "第一组标题是 identity 的功能域名"
+  # P32（用户的第一条反馈）：标题与选项行必须在渲染上可区分。标题是分节线（── 标题 ────），
+  # 键行不带分节线；标题行同时把两组隔开（上一行=上一组最后一条，下一行=本组第一条）。
+  assert_match "$tmp/$current/view.txt" '^│ ── 身份与账本布局 ─+' "分组标题是分节线（不是缩进的普通行）"
+  assert_no_match "$tmp/$current/view.txt" '^│ [› ] 项目名.*─' "键行不带分节线（标题/行在渲染上可区分）"
+  assert_heading_rule "$tmp/$current/view.txt" "分支与 forge" "契约文件" "分支命名模式" "组间可见分隔：标题是分节线且夹在两组之间"
   # 读取顺序：identity 的 12 条走完，下一组标题就是 branch（窗口跟着焦点，标题只在它的行进窗时画）。
   # 带注释的行是两行，窗口按**画出的行数**装（P30/D5 的账），所以这里一步一步走，不假设一屏能装两组。
   local k
@@ -1508,19 +1658,21 @@ scn_groups() {
   cap_to hand-added
   assert_match "$tmp/$current/hand-added.txt" 'TEAM_HAND_ADDED +hand · 未知键' "未知键的行仍在（没有消失）"
   assert_has "$tmp/$current/hand-added.txt" "未知键：TEAM_HAND_ADDED" "未知键仍按原始键点名"
-  [ "$(cap_line_exact "$tmp/$current/hand-added.txt" '未分组')" -gt 0 ] \
+  [ "$(cap_line_heading "$tmp/$current/hand-added.txt" '未分组')" -gt 0 ] \
     && ok "未知键落在可见的「未分组」标题下" || bad "未知键没有落在「未分组」标题下"
+  assert_match "$tmp/$current/hand-added.txt" '^│ ── 未分组 ─+' "降级组标题也是同一种分节线（标题体系一致）"
   filter_clear
   sleep 0.4
   walk_to_tail tail
   local n_ungrouped n_seats
-  n_ungrouped="$(cap_line_exact "$tmp/$current/tail.txt" '未分组')"
-  n_seats="$(cap_line_exact "$tmp/$current/tail.txt" '席位')"
+  n_ungrouped="$(cap_line_heading "$tmp/$current/tail.txt" '未分组')"
+  n_seats="$(cap_line_heading "$tmp/$current/tail.txt" '席位')"
   if [ "$n_ungrouped" -gt 0 ] && [ "$n_seats" -gt 0 ] && [ "$n_ungrouped" -lt "$n_seats" ]; then
     ok "「未分组」在席位块之前（未分组=$n_ungrouped < 席位=$n_seats）"
   else
     bad "尾部顺序不对（未分组=$n_ungrouped 席位=$n_seats）"
   fi
+  assert_match "$tmp/$current/tail.txt" '^│ ── 席位 ─+' "席位块标题也是同一种分节线（标题体系一致）"
   # ⑤ 无键→域表：scratch CLI 让 TEAM_ZZZ_TEST 带 workflow、把 TEAM_GATES 移到 meeting；
   #    提交的那份 bundle 必须跟着两个标题走（bundle 里没有第二张键表/组表）。
   local scratch="$tmp/$current/scratch"
@@ -1587,8 +1739,8 @@ PY
   assert_has "$tmp/$current/tail-scratch.txt" "TEAM_HAND_ADDED" "降级组里未知键与畸形行同屏（未知键可见）"
   assert_has "$tmp/$current/tail-scratch.txt" "门禁命令" "降级组里畸形行同屏（schema 行可见）"
   local n_u n_s
-  n_u="$(cap_line_exact "$tmp/$current/tail-scratch.txt" '未分组')"
-  n_s="$(cap_line_exact "$tmp/$current/tail-scratch.txt" '席位')"
+  n_u="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '未分组')"
+  n_s="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '席位')"
   if [ "$n_u" -gt 0 ] && [ "$n_s" -gt 0 ] && [ "$n_u" -lt "$n_s" ]; then
     ok "scratch 尾部：「未分组」仍在席位块之前（$n_u < $n_s）"
   else

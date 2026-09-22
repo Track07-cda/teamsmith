@@ -68,6 +68,47 @@ is distinct from every group heading.
   per-seat-model group's heading, and the keys of that group appear under their own functional heading with the
   group's own order
 
+#### Scenario: A heading is a section rule and it separates its own group
+
+- **GIVEN** the view open on a contract whose read reports more than one group, in a pane tall enough to show
+  two of them
+- **WHEN** the rows render
+- **THEN** every heading (the functional groups, the fallback group and the seats block alike) is drawn as a
+  section rule — the label between the two `─` runs of a full-width rule line — while key rows and seat rows
+  carry no section rule, so a heading is distinguishable from a row by shape and not only by tone
+- **AND** a heading sits directly between the previous group's last row and its own group's first row: the
+  heading itself is the visible separation between groups and no extra line is spent on one
+
+### Requirement: The settings view fills the pane it is given and its row window grows with it
+
+The project-settings view SHALL spend the height the frame hands it: the last row it draws SHALL be at most one
+blank row above the key band at every pane height the frame can draw a card for, and the number of rows the
+window draws SHALL grow with the pane. A row's price in the window's fit SHALL be what the row really draws —
+one line per row, plus the line of a group heading when that heading's first row is inside the window — so a key
+row's note never costs a second line. The two hidden-row count lines SHALL be a ceiling rather than a fixed
+cost: a count line is spent only when the window really hides rows at that edge, and the line the counts do not
+use SHALL go to the window instead of the page's blank space. The rows the window draws plus its `↑n` and `↓n`
+counts SHALL equal the number of focusable rows the view holds. The space the rows do not use SHALL stay inside
+the card (the detail view's own fill rule), so the key band remains the frame's last row. This SHALL hold in
+every view state the block can render — the row list, the choice picker and the seat picker. It sharpens, and
+MUST NOT weaken, the frame-level promise that a bounded frame fills the pane: there the spare height is spent
+*inside the content area*, and this view's share of it is rows.
+
+#### Scenario: The card fills the pane and the window grows with it
+
+- **GIVEN** a fixture contract with more rows than any measured pane and the view open at the top of the list
+- **WHEN** the pane is 45, 33, 30 and 25 rows tall
+- **THEN** at every height the card's last drawn row is at most one blank row above the key band, the rows drawn
+  plus `↑n` plus `↓n` equal the view's focusable row count (the command's keys plus its seats), and the 45-row
+  pane draws at least eight more rows than the 30-row pane
+
+#### Scenario: A short list keeps its blank space inside the card
+
+- **GIVEN** the view open with a filter that matches a single key
+- **WHEN** the frame renders in a tall pane
+- **THEN** the card still ends at most one blank row above the key band, the blank space is inside the card, and
+  the row, its heading, the command line and the audit footer are all still drawn
+
 ## MODIFIED Requirements
 
 ### Requirement: Every key affordance is also a mouse target

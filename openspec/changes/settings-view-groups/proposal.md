@@ -79,3 +79,32 @@ Both acceptance tails; the delta→requirement map for `panel` and `memory-and-d
 scenario→fixture maps; every flip's red/green tail (walk, no-hardcode move, label bijection, wheel before/after,
 tone); the measured group census (12 tokens, 111 rows, per-token counts); and one line stating the writer's
 validation, CAS, audit and danger list were not touched.
+
+## Revision · 2026-09-22 (P32): heading shape and the pane's height
+
+After P30 landed, the user used the view again and reported two things (PM reproduced both in a 120×45 pty):
+
+> ①「分组标题要和选项行有区分（或各组之间加分隔）——现在标题 `身份与账本布局` 与行 `项目名 …` 视觉上几乎一样」
+> ②「视图没有用满窗口高度——45 行的面板里，内容到第 27 行就结束了，28–43 共 16 行空白」
+
+Both are added to this change's `panel` delta (no base scenario removed):
+
+- **ADDED scenario (existing grouping requirement)** — a heading is drawn as a **section rule**
+  (`── 身份与账本布局 ────…`, the shape the non-framed blocks already use) while key and seat rows carry no
+  section rule, and the heading sits directly between the previous group's last row and its own first row: the
+  heading is the visible separation and no extra line is spent on one.
+- **ADDED requirement** — the view fills the pane it is given: the card's last row is at most one blank row above
+  the key band, the row window grows with the pane, a row's price in the window's fit is the line it really draws
+  (one per row, one per heading inside the window), the two hidden-row count lines are a ceiling handed back to
+  the window when that edge hides nothing, `rows drawn + ↑n + ↓n` equals the view's focusable row count, and the
+  space the rows do not use stays inside the card — in the row list and in both pickers.
+
+Measured cause of the blank rows (the report carries the arithmetic): D5's fit billed a key row **two** lines
+whenever it carried a note, although `settingsKeyLine` appends the note to the row's own line — 15 of the 17 lines
+the 45-row window drew were billed double — plus one tail line the block reserved but never spent (16 total).
+
+Impact of the revision: `scripts/panel/src/layout.ts` (heading rule; the price list; the tail ceiling; the card
+fill; the assembly's hand-over), the rebuilt `panel.js`, and `tests/panel-p21.sh` (`groups` heading/separator
+assertions; `settings` resizes the pane to 45/33/30/25 and asserts the gap, the row accounting and the growth;
+`cap_line_exact` on headings becomes `cap_line_heading`). The delta's D1–D5 rulings, the writer, the choice
+editors, the machine exits, `panel.conf` and the page/lane/detail wheel are untouched.

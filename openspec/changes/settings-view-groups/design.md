@@ -236,8 +236,14 @@ footer.
 | `tests/panel-b3.sh` (existing, unchanged) | the page wheel, the lane-under-cursor wheel and the detail document wheel stay as they are | — (regression pin) |
 | FAST smoke pins (§38-d pattern) | cheap structural pins that survive the FAST skip of the pty scenarios: the view's grouping comes from the record (no class-bucket table in `layout.ts`) and the mouse branch consumes the wheel in the view | removing the pin's subject → red |
 
-The slow pty scenarios run in the full gate (the brief's acceptance runs FAST); the FAST section keeps the two
-gates above plus the structural pins, and every skip stays visible.
+The slow pty scenarios run in the full gate: smoke **§38-b** runs `panel-p21.sh choices` and **§38-f** runs
+`panel-p21.sh groups settings wheel` (the two whole-server batches), while the FAST section keeps the two FAST
+gates above plus the structural pins and prints a visible `SKIP（FAST 模式）` line for both pty batches (a
+reason each, never a silent or permanent skip). Measured on 2026-09-22, the same machine, back to back: the full
+gate took **811 s** without §38-f and **960 s** with it (§38-f's own batch measures 128 s standalone, the rest is
+the machine's noise under concurrent work) — the added batch costs **≈2.5 minutes**, under the brief's
+three-minute threshold, so the batch stays. Both numbers are wall-clock runs of the full gate on this machine,
+measured 2026-09-22 (`/tmp` timing logs in the P32 report's F1 section).
 
 ### D8. Cross-change check and follow-ups
 
@@ -254,3 +260,107 @@ console rule. Recorded so the decision is revisited with evidence rather than gu
 **F2 (follow-up, not in scope): a snapshot for the settings view.** The view is pinned by the pty fixture only;
 the pages 4/detail snapshots do not cover it, and this change does not add one (the row set is data-driven and a
 snapshot would churn on every schema edit).
+
+## 9. Revision · P32 (2026-09-22): the headings must read as headings, and the view must use the pane
+
+**Why this section exists.** The user used the view again after P30 landed and reported two things (quoted from
+the P32 brief, PM measured in a 120×45 pty): ①「分组标题要和选项行有区分（或各组之间加分隔）——现在标题
+`身份与账本布局` 与行 `项目名 …` 视觉上几乎一样」；②「视图没有用满窗口高度——45 行的面板里，内容到第 27 行
+就结束了，28–43 共 16 行空白」. Both are additions to this change's `panel` delta, not a new change: the grouping
+requirement gains a heading-shape scenario and a new requirement covers the pane. No base scenario was removed,
+and D1–D5's rulings (functional grouping, row-level badge + tone, the view's own wheel offset, the archived
+direct-write baseline) are untouched.
+
+### 9.1 Measured: where the 16 rows went (before this revision)
+
+Recon on a 120-column pty and on the repo's own contract read (111 schema keys + 6 seats = **117** focusable
+rows), rendering the same fixture at five heights through the layout alone (the fixture is reproduced by the
+report's harness; the numbers below are the "before" column of its table):
+
+| pane | focusable rows drawn | card interior (lines) | blank rows between the card's bottom border and the key band |
+|---|---|---|---|
+| 45 | 15 | 24 | 16 |
+| 40 | 12 | 20 | 15 |
+| 33 | 9 | 17 | 11 |
+| 30 | 8 | 16 | 9 |
+| 25 | 5 | 13 | 7 |
+
+The arithmetic at 45 rows (the user's pane), item by item:
+
+1. `layout()` gives the block `budget = 45 − 2` (title band + page tabs) `− 1` (key band) `= 42` lines; the card's
+   own frame costs the `framed ? 2 : 0` the assembly pre-subtracts, so the block may draw **40** lines.
+2. `SETTINGS_FOOTER_ROWS` (`layout.ts:1166` in the pre-revision file) reserved
+   `SETTINGS_COUNT_ROWS(2) + CLI hint(1) + blank(1) + audit heading(1) + SETTINGS_AUDIT_LINES(3) = 8`, so the
+   window was offered `40 − 8 = 32` **model** lines.
+3. `fitForward` priced each unit with D5's `rowLines()`: a key row whose `warning || route || comment` is
+   non-empty cost **2** lines ("`settingsKeyLine`'s note line"). But `settingsKeyLine` **appends** the note's
+   segment to the row's own line — every row draws exactly one line. The fit therefore drew `1 heading + 12
+   identity rows + 1 heading + 3 branch rows = 17` real lines while being billed `1 + 24 + 1 + 6 = 32`:
+   **15 phantom lines**.
+4. The tail really drew `↓102(1) + hint(1) + blank(1) + audit heading(1) + 3 audit(3) = 7` of the 8 reserved
+   lines — nothing was hidden above the window, so the `↑` reservation was never spent: **1 unused line**.
+5. `15 + 1 = 16` blank rows, exactly what the user counted; the card ended on row 28 and the key band on row 45.
+
+At 33 rows the same decomposition is `9 phantom + 1 model line the fit could not spend (the next unit priced at 2)
++ 1 unused count line = 11`; at 25 rows, `5 + 1 + 1 = 7`. The D5 comment's premise ("a row with a note draws two
+lines") was simply wrong; the heading cost it added — the half that was real — stays.
+
+### 9.2 D9 — a heading is a section rule, and it separates its group
+
+- The heading line is `ruleTitle(label, width, tone)` — `── 身份与账本布局 ──────…`, the same shape the
+  non-framed blocks already use for their titles — instead of `  label` in the heading tone. A key row can never
+  carry `─` runs, so the distinction survives a monochrome capture (`NO_COLOR`, a log file, a pty dump) and is not
+  a second colour channel doing the work alone.
+- The group labels keep their tones (`heading` for the functional and fallback groups, `accent` for the seats
+  block), so the seats heading still reads as a different kind of block.
+- **No extra line for a separator**: the heading sits directly between the previous group's last row and its own
+  group's first row, which is what makes it the visible separation. Rejected: a blank or a rule line *between*
+  groups — it costs one line per group in a view whose whole complaint was wasted height, and it would have to be
+  priced into the window fit.
+- The walk's semantics are unchanged: a heading is still not a focus target and the focus index still counts key
+  and seat rows only.
+
+### 9.3 D10 — the view spends the height the frame hands it
+
+- **The price list is what the rows really draw**: one line per row, plus one line for a group heading whose first
+  row is inside the window. `rowLines()` disappears; `units` carries only `heading`.
+- **The counts are a ceiling, not a cost**: the first fit still reserves both count lines (M55's overflow rule,
+  kept), and the window then grows downward while the lines the counts do not use are free. Growth is **downward
+  only** — the offset names the window's first row, so growing upward would move the view against the wheel's own
+  position (and the tests read `↑n` as that position).
+- **The assembly hands the interior budget over** (`budget − fullRows − frame`), not `… − SETTINGS_FOOTER_ROWS`;
+  the block computes its own tail (`1 hint + 1 blank + 1 audit heading + ≤3 audit lines`) and spends the rest.
+- **The leftover stays inside the card**: the block pads to the height it was handed — the detail view's own last
+  resort (`detailBlock`, "a document shorter than the pane keeps the blank space inside the card"). The row list,
+  the choice picker and the seat picker all fill, so the key band remains the frame's last row in every state.
+- **The accounting stays honest**: `rows drawn + ↑n + ↓n = count` is asserted in the pty fixture against the
+  command's own `config list --json` key+seat count, at four pane heights.
+- Untouched: the wheel's one-row-per-notch semantics and its consumption (D5), the focus-follow default, the
+  offset clamps, the badge words and tones (D4), the grouping and the fallback group (D1–D3), the archived
+  direct-write/zero-read baseline.
+- **Relation to B1** (`panel#A bounded frame fills the pane`): B1 pins the *frame* (the key band is the last row,
+  the spare height is spent inside the content area, in a documented order). It does not name the settings view,
+  and it did not catch this report: the frame was filled — with blank page. The new requirement says what this
+  view's share of the spare height is (rows, priced honestly) and therefore sharpens B1 rather than duplicating
+  it; the delta adds it as a requirement of its own instead of restating B1's text and its five scenarios.
+
+### 9.4 Before → after (same fixture, same width, layout-only)
+
+| pane | rows before → after | blank rows before → after | 45-row window grows by |
+|---|---|---|---|
+| 45 | 15 → **30** | 16 → **0** | — |
+| 33 | 9 → **19** | 11 → **0** | — |
+| 30 | 8 → **16** | 9 → **0** | 30 − 16 = **14 rows ≥ 8** |
+| 25 | 5 → **12** | 7 → **0** | — |
+| 40 | 12 → **25** | 15 → **0** | — |
+
+The second table's fixture is the same one the "before" table used (`/tmp` harness against the repo's own
+`team config list --json`), and the pty fixture re-measures the same properties through the real bundle
+(`panel-p21.sh settings`), plus the heading/separator assertions in its `groups` section.
+
+### 9.5 Fixtures added for this revision
+
+| Gate | What it pins | Red side (the flip) |
+|---|---|---|
+| `panel-p21.sh groups` | a heading is a section rule while key rows carry none; the `分支与 forge` heading sits between `契约文件` and `分支命名模式`; the fallback and seats headings use the same shape | removing the rule (heading drawn as an indented row) → the rule assertion red |
+| `panel-p21.sh settings` | at 120×45/33/30/25 the card ends ≤1 blank row above the key band; `rows + ↑n + ↓n` equals the command's key+seat count; 45 rows draw ≥8 more rows than 30; a one-row filter still fills the card | reverting the fit to D5's price list (or the fixed tail reservation) → the gap/accounting/growth assertions red |
