@@ -62,19 +62,24 @@ jobs:
       # the container faithful to a native run in that one POSIX corner; nothing else changes.
       - name: Gates (pinned container)
         run: |
-          # 失败现场要留得下来（D39）：`--rm` 会把容器里的 /tmp 一起带走，而 smoke 的现场目录是
-          # /tmp/teamsmith-smoke.XXXXXX（写死 /tmp，不看 TMPDIR——已记在 P50 的清理项里）。
-          # 所以这里把宿主的 .ci-artifacts 直接挂到容器的 /tmp：夹具现场、pane 回显、夹具日志
-          # 全部落在宿主上，失败时由下一步上传。2026-09-22 那条 `choices` 红只剩三行结论、
-          # 没有 scene dump，就是因为现场随容器一起没了。
-          # 另一层：套件默认**失败也删现场**（那行"（--keep 保留现场）"是提示，不是事实），
-          # 所以这里显式 `--keep`——第一次加上挂载的 run 依旧什么都没上传，正是这个原因。
+          # 失败现场必须能离开容器（D39）：两次尝试（挂载宿主目录到 /tmp）在 runner 上都没能带出文件——
+          # 所以改成"容器不自动删（没有 --rm）→ 下一步用 docker cp 把 /tmp 整份拷出来 → 再删容器"。
+          # `smoke.sh --keep` 让套件把现场留下（默认失败也删，那行提示不是事实）。
           mkdir -p .ci-artifacts
-          docker run --rm --pid=host \
+          docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
+          docker run --name teamsmith-gates-run --pid=host \
             --user "$(id -u):$(id -g)" -e HOME=/tmp \
-            -v "$PWD:/work:ro" -v "$PWD/.ci-artifacts:/tmp" -w /work \
+            -v "$PWD:/work:ro" -w /work \
             teamsmith-gates:ci \
             bash -c 'openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh --keep </dev/null'
+
+      - name: Collect the failure scene
+        if: always()
+        run: |
+          mkdir -p .ci-artifacts
+          docker cp teamsmith-gates-run:/tmp/. .ci-artifacts/ 2>/dev/null || true
+          docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
+          echo "=== .ci-artifacts（前 20 项）==="; ls -la .ci-artifacts | head -20
 
       - name: Upload the failure scene
         if: failure()
@@ -82,6 +87,7 @@ jobs:
         with:
           name: gate-failure-scene
           path: .ci-artifacts
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: ignore
 
