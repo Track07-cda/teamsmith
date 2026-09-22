@@ -9,9 +9,10 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
 
   ── 第一次使用 ─────────────────────────────────────────────
   bootstrap [--agents "dev verify"] [--print]   **推荐**：一条命令把项目初始化到可派单状态
-                   （探测当前 tmux session/窗口 → 写配置 + 文档骨架 + AGENTS 段落 → 建 agent worktree
-                    → 起巡检窗口 → 打印下一步清单）；幂等，可反复跑
-  init            只做配置/文档骨架（bootstrap 的其中一步）
+                   （探测当前 tmux session/窗口 → 写配置 + 文档骨架 + AGENTS 段落 → 把 skill 装进项目
+                    .pi/skills/ → 建 agent worktree → 起巡检窗口 → 打印下一步清单）；幂等，可反复跑
+  init            只做配置/文档骨架 + 把 skill 装进项目 .pi/skills/（bootstrap 的其中一步）
+                   --copy 复制一份（默认软链，跟随包更新）；--no-skills 跳过装 skill；--force 覆盖冲突条目
   doctor          环境自检（git/tmux/pi/门禁/forge/容量/容器）
 
   ── 观察 ───────────────────────────────────────────────────
@@ -155,7 +156,7 @@ team_detect_vcs() {
 }
 
 team_cmd_init() {
-  local session="" agents="" vcs="" gates="" docs="" pmwin="" model="" force=0
+  local session="" agents="" vcs="" gates="" docs="" pmwin="" model="" force=0 install_mode=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --session) session="${2:?}"; shift 2 ;;
@@ -165,6 +166,8 @@ team_cmd_init() {
       --docs) docs="${2:?}"; shift 2 ;;
       --pm-window) pmwin="${2:?}"; shift 2 ;;
       --model) model="${2:?}"; shift 2 ;;
+      --copy) install_mode="--copy"; shift ;;
+      --no-skills) install_mode="--no-skills"; shift ;;
       --force) force=1; shift ;;
       *) team_usage_die "init: 未知参数 $1" ;;
     esac
@@ -248,6 +251,13 @@ team_cmd_init() {
   # token 文件必须默认忽略（PAT 泄漏是最容易犯的事）
   team_gitignore_add ".pi/team/state/" "$docs/inbox/" "$docs/reviews/*.log" "${TEAM_WORKTREES_DIR:-.worktrees}/" \
     "${TEAM_TOKEN_FILE:-.gh-pat}" "${TEAM_GITLAB_TOKEN_FILE:-.gitlab-pat}"
+
+  # 5) 项目本地 skill（<main worktree>/.pi/skills/）：Pi 的项目级搜索路径。bootstrap 复用同一函数
+  #    （见 cmd-init.sh）—— 一个实现，两个调用点；--copy/--no-skills 由 init 自己解析。
+  local install_args=()
+  [ -n "$install_mode" ] && install_args+=("$install_mode")
+  [ "$force" = "1" ] && install_args+=("--force")
+  team_init_install_skills ${install_args[@]+"${install_args[@]}"} || return 1
 
   printf '\n'
   team_hdr "下一步"
@@ -575,6 +585,18 @@ team_cmd_doctor() {
       grep -qxF "$e" "$TEAM_MAIN_ROOT/.gitignore" 2>/dev/null || missing=$((missing + 1))
     done
     if [ "$missing" -eq 0 ]; then pass "临时目录已忽略"; else warn "$missing 条未忽略（收件箱/worktree 会被误提交）"; fi
+
+  # R5（P40）：项目本地 skill 安装（team init 装到 <main>/.pi/skills/）—— 没装**不刷行**（Pi 包安装、
+  # ~/.agents/skills 软链、settings 的 skills 条目都不该被唠叨）；漂移（别源软链 / 旧副本 / 读不到
+  # SKILL.md）warn 并给一行修法，**永不 fail**（与「陈旧会话版本」同一条 warn-don't-fail 线）。
+  local skill_row; skill_row="$(team_project_skill_install_row)"
+  if [ -n "$skill_row" ]; then
+    check "项目 skill 安装"
+    case "$skill_row" in
+      pass\ *) pass "${skill_row#pass }" ;;
+      warn\ *) warn "${skill_row#warn }" ;;
+    esac
+  fi
 
   check "陈旧 state"; local stale=0 a w
     for a in $(team_agents); do

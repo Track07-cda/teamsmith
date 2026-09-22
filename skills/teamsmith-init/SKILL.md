@@ -8,18 +8,29 @@ metadata:
 
 # teamsmith-init · bring a new project to "ready to dispatch"
 
-You are the first session in a repository that has no team yet. Three beats: settle the questions below with the
-user, run one command, then hand day-to-day operation to the **`teamsmith`** skill.
+You are the first session in a repository that has no team yet. **Install first**, then settle the questions below
+with the user, run one command, then hand day-to-day operation to the **`teamsmith`** skill.
 
-The single CLI is `team` and it lives in the daily skill — `bash <teamsmith>/scripts/team help` must work before you
-start. Everything that follows the setup (dispatch, the pulse, review, merge) belongs to the daily skill; this one
-only brings the project up.
+## 0. Install the CLI and the project's skills
+
+```bash
+npm install -g teamsmith     # the `team` CLI (one npm bin entry; it checks bash >= 4 and prints the fix)
+team init                    # in this project: config + docs skeleton + the skills into .pi/skills/
+```
+
+`team init` installs both skills into the project's **`.pi/skills/`** (Pi's project-level search path), so this
+project's own sessions find `teamsmith`/`teamsmith-init` without a machine-global install; the default is a symlink
+to the package (updates are live), `--copy` copies instead, `--no-skills` skips the step. Two alternatives when npm
+is not your route: the Pi package (`pi install …` at a released tag — no global CLI needed) and `./install.sh` from
+a checkout, which writes into `~/.agents/skills`. Everything that follows the setup (dispatch, the pulse, review,
+merge) belongs to the daily skill; this one only brings the project up.
 
 ## 1. Settle these with the user, in this order
 
 1. **Preconditions.** A git repository with at least one commit, `tmux` in the room, and `team doctor` green
-   (magic-context, OpenSpec, a JS runtime for the console, bash ≥ 4). Fix what doctor reports *before* writing
-   config — a missing required dependency is a hard failure later, not a warning now.
+   (magic-context, OpenSpec, a JS runtime for the console, the shell — bash ≥ 4, which the npm entry checks).
+   Fix what doctor reports *before* writing config — a missing required dependency is a hard failure later, not a
+   warning now.
 2. **Identity and a minimal starting roster.** The tmux session name (`TEAM_SESSION` must match the session the PM
    lives in — the pulse and every notification are delivered inside it), the PM window name, the roster
    (`TEAM_AGENTS`), each agent's model (`TEAM_AGENT_MODELS`, or `TEAM_DEFAULT_MODEL` for all of them) and
@@ -45,14 +56,16 @@ only brings the project up.
 6. **Then run it.** Show the plan first — it writes nothing:
 
    ```bash
-   bash <teamsmith>/scripts/team bootstrap --print      # the plan: detect / config / docs / worktrees / pulse
+   bash <teamsmith>/scripts/team bootstrap --print      # the plan: detect / config / docs / skills / worktrees / pulse
    bash <teamsmith>/scripts/team bootstrap [--agents "dev verify"]
    bash <teamsmith>/scripts/team doctor                  # re-check after bootstrap
    openspec init --tools pi                              # required dependency: spec root + the five phase commands
    ```
 
-   `bootstrap` is idempotent (a rerun fills in what is missing and leaves the rest alone) and it **prints** the
-   `git worktree add` command for each agent — git stays with the PM (`--create-worktrees` delegates creation).
+   `bootstrap` is idempotent (a rerun fills in what is missing and leaves the rest alone, including the project's
+   `.pi/skills/` install — that is the upgrade route for a project set up before this skill version) and it
+   **prints** the `git worktree add` command for each agent — git stays with the PM (`--create-worktrees`
+   delegates creation).
    The command's own behaviour is in `references/bootstrap.md`; a prompt you can hand to a new project's PM is
    `templates/bootstrap-prompt.md.tmpl`.
 7. **The first task.** `team task T1.1 --title "…" --agent dev` → edit the brief until it is self-contained →

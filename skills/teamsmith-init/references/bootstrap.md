@@ -26,7 +26,8 @@ Or hand the contents of `templates/bootstrap-prompt.md.tmpl` (placeholders subst
 | Required dependencies | checks magic-context (Pi package `@cortexkit/pi-magic-context`) and OpenSpec (CLI resolvable + the spec dir); a missing one prints its exact fix/downgrade command, and does not block the setup | ✔ |
 | Docs skeleton | `docs/team/{ROADMAP,BOARD,OWNERSHIP,DECISIONS,PROTOCOL}.md`, `tasks/`, `reports/`, `reviews/`, `threads/`, `inbox/` | skipped when present |
 | Team protocol | injects the `<!-- teamsmith:begin --> … end -->` section into `AGENTS.md` (**refreshes** it instead of appending twice) | ✔ |
-| `.gitignore` | `.pi/team/state/`, `docs/team/inbox/`, `docs/team/reviews/*.log`, `.worktrees/` | ✔ |
+| `.gitignore` | `.pi/team/state/`, `docs/team/inbox/`, `docs/team/reviews/*.log`, `.worktrees/`, `.pi/skills/` | ✔ |
+| Project skills | installs the running skills (`teamsmith`, and `teamsmith-init` when present) into the project's `.pi/skills/` — link by default, `--copy` for an ephemeral source; one line per skill; a conflict is announced with its routes and never replaced silently | a rerun `skip`s what is already right; this runs even when the config already exists (the upgrade path) |
 | Agent worktrees | one long-lived `.worktrees/<agent>` per roster member (branch `agent/<agent>`), installing dependencies when `TEAM_INSTALL_CMD` is set | skipped when present |
 | Pulse | `team pulse up`: a `pulse` window in the same session runs the monitor (patrolling every 15 minutes by default) | skipped when already running |
 | Checklist | prints "what next" (ROADMAP/OWNERSHIP → first task → dispatch → digest) | — |

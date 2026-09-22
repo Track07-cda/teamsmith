@@ -858,6 +858,14 @@ assert_has "$REPO/docs/team/PROTOCOL.md" "references/openspec.md" "PROTOCOL.md �
 assert_file "$REPO/docs/team/threads/README.md" "写入 threads/README"
 assert_has "$REPO/AGENTS.md" "<!-- teamsmith:begin -->" "AGENTS.md 注入协议段"
 assert_has "$REPO/.gitignore" ".worktrees/" ".gitignore 忽略 worktree"
+# P40：init 的安装步 —— 两条软链装进项目 .pi/skills/，.gitignore 跟着忽略它
+# （本仓已跟踪的 .pi/skills/openspec-* 不受影响：忽略行不会 untrack 已跟踪文件）
+assert_eq "P40 init 装了项目 skill：.pi/skills/teamsmith → 运行树" \
+  "$(readlink -f "$REPO/.pi/skills/teamsmith" 2>/dev/null || echo missing)" "$SKILL_DIR"
+assert_eq "P40 init 装了兄弟条目 teamsmith-init" \
+  "$(readlink -f "$REPO/.pi/skills/teamsmith-init" 2>/dev/null || echo missing)" "$SKILL_INIT_DIR"
+assert_has "$REPO/.gitignore" ".pi/skills/" "P40 .gitignore 忽略项目 skill 安装目录"
+assert_eq "P40 .pi/skills/ 里恰好两条" "$(ls -1A "$REPO/.pi/skills" | wc -l)" "2"
 
 # 隔离自检（关键）：team 必须把自己当成临时仓库 + 本测试 session
 ISOLATE="$($TEAM paths 2>/dev/null || true)"
@@ -920,8 +928,12 @@ if grep -rqF '{{' "$REPO/docs/team" "$REPO/.pi/team/config.sh" "$REPO/AGENTS.md"
   bad "模板有未渲染的占位符 {{...}}"; grep -rnF '{{' "$REPO/docs/team" "$REPO/AGENTS.md" | head -3
 else ok "模板全部渲染（无 {{ 残留）"; fi
 # 幂等：再 init 一次不应重复追加协议段
-$TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team >/dev/null 2>&1
+$TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/init-again.log" 2>&1
 assert_eq "AGENTS.md 协议段幂等（只出现一次）" "$(grep -cF '<!-- teamsmith:begin -->' "$REPO/AGENTS.md")" "1"
+# P40：第二次 init 不重装、不覆盖 —— 两个 skill 都报 skip（逐 skill 一行）
+assert_eq "P40 第二次 init 对两个 skill 都报 skip" \
+  "$(grep -cE '^  skip  .*/\.pi/skills/(teamsmith|teamsmith-init)（' "$TMP/init-again.log" || true)" "2"
+assert_eq "P40 第二次 init 后 .pi/skills/ 仍然只有两条" "$(ls -1A "$REPO/.pi/skills" | wc -l)" "2"
 
 # 必需依赖（D10）的确定性夹具：magic-context 用假 settings + 假包，OpenSpec 用假 CLI + 假 spec 目录。
 # 都在 $TMP 下、用绝对路径 —— 本机装没装都不影响断言。
@@ -7224,8 +7236,12 @@ rm -rf "$P16_SB_DESC"
 P16_SUBDIRS="$(find "$SKILL_INIT_DIR" -maxdepth 1 -type d | sed 's|.*/||' | grep -E '^(scripts|extension|tests)$' || true)"
 [ -z "$P16_SUBDIRS" ] && ok "init skill 无 scripts/extension/tests（只有 SKILL.md + references/ + templates/）" \
   || bad "init skill 里出现了代码目录：$(printf '%s' "$P16_SUBDIRS" | tr '\n' ' ')"
-P16_TOOL_HITS="$(grep -rn 'teamsmith-init' "$SKILL_DIR/scripts" "$SKILL_DIR/extension" "$SKILL_DIR/templates" 2>/dev/null || true)"
-[ -z "$P16_TOOL_HITS" ] && ok "工具面（scripts/ extension/ templates/）从不引用 teamsmith-init" \
+# P16 的原文：工具面从不引用 init skill（模板搬走后不再有死路径）。P40 给这条诺言开了一个**规格授权的例外**：
+# 安装步（scripts/lib/cmd-init.sh）要按名把兄弟 skill 装进项目的 .pi/skills/，所以只有它允许出现
+# `teamsmith-init`；其余 scripts/ extension/ templates/ 一律照旧。自查探针（p16-probe.sh）不在此列。
+P16_TOOL_HITS="$(grep -rn 'teamsmith-init' "$SKILL_DIR/scripts" "$SKILL_DIR/extension" "$SKILL_DIR/templates" 2>/dev/null \
+  | grep -v "/scripts/lib/cmd-init.sh:" || true)"
+[ -z "$P16_TOOL_HITS" ] && ok "工具面只在 P40 安装步（cmd-init.sh）引用 teamsmith-init，其余不再引用" \
   || bad "工具面引用了 init skill：$(printf '%s' "$P16_TOOL_HITS" | head -1)"
 P16_BP_HITS="$(grep -rn 'bootstrap-prompt' "$SKILL_DIR/scripts" 2>/dev/null || true)"
 [ -z "$P16_BP_HITS" ] && ok "scripts/ 不再引用 bootstrap-prompt（模板搬走后没有死路径）" \
@@ -11828,6 +11844,22 @@ if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
   fi
 else
   bad "38-f 缺 tests/panel-p21.sh"
+fi
+
+section "39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）"
+# headless 夹具（tests/install-shape.sh）——不依赖 tmux/真进程，FAST 照跑：它自己起临时仓库、
+# 自己剥 TEAM_*/TMUX 身份，含五组翻转红侧（每组的绿侧用同一份判据在真实树上跑）。
+if [ -f "$SKILL_DIR/tests/install-shape.sh" ]; then
+  if bash "$SKILL_DIR/tests/install-shape.sh" >"$TMP/install-shape.log" 2>&1; then
+    ok "39 install-shape.sh 全绿（$(grep -ac '✓' "$TMP/install-shape.log" || true) 条断言，含翻转绿/红两侧）"
+    tail -1 "$TMP/install-shape.log" | sed 's/^/      /'
+  else
+    bad "39 install-shape.sh 有失败"
+    grep -a '✗' "$TMP/install-shape.log" | head -10 | sed 's/^/      /'
+    tail -2 "$TMP/install-shape.log" | sed 's/^/      /'
+  fi
+else
+  bad "39 缺 tests/install-shape.sh"
 fi
 
 section "15 · 完成"

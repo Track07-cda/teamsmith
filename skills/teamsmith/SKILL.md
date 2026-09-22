@@ -24,9 +24,12 @@ PM(this session, tmux <session>:pm)     worker agents(each in .worktrees/<agent>
 
 ## Starting a new project: use the `teamsmith-init` skill
 
-Initialization lives in its own skill: load the **`teamsmith-init`** skill and read its SKILL.md — the ordered questions to settle with
-the user, `bash <teamsmith>/scripts/team bootstrap`, and the handoff back here. Everything below is the daily loop,
-which starts once the project is up.
+Initialization lives in its own skill: load the **`teamsmith-init`** skill and read its SKILL.md — install the CLI
+(`npm install -g teamsmith`) and run `team init`, which writes the config, the `docs/team/` skeleton and both skills
+into the project's **`.pi/skills/`** — then the ordered questions to settle with the user,
+`bash <teamsmith>/scripts/team bootstrap`, and the handoff back here. A machine-global install (`pi install …`,
+`~/.agents/skills` via `install.sh`, or a settings `skills` entry) is the alternative route to the same skill;
+everything below is the daily loop, which starts once the project is up.
 
 ## Name and compatibility (former name: pi-team)
 
@@ -45,7 +48,7 @@ which starts once the project is up.
 
 | Goal | Command |
 |---|---|
-| Init / self-check | `team init [--session s] [--agents "a b"] [--vcs local\|remote]`, `team doctor` |
+| Init / self-check | `team init [--session s] [--agents "a b"] [--vcs local\|remote] [--copy\|--no-skills]` (installs both skills into the project's `.pi/skills/`; `--copy` for an ephemeral source, `--no-skills` to skip), `team doctor` (reports that install, warns on drift) |
 | Observe | `team roster` (windows/branch/dirty/ahead), `team status [ID]`, `team ps` (capacity + model limits + PM/pulse liveness), `team digest` (PM's pending work) |
 | Inbox | `team inbox [agent] [--ack] [--all]` |
 | Document contracts | `team task <ID> --title ... --agent a`, `team board add\|assign\|set\|ls`, `team change status <id> [--json]` (readiness view: tasks/evidence, declared vs touched delta files, blockers; exit 0 iff every mapped task is finished), `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |

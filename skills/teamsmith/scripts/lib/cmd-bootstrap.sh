@@ -230,6 +230,7 @@ team_cmd_bootstrap() {
     printf '\n（--print：只看计划，什么都没改）\n'
     printf '计划步骤：\n'
     printf '  1. %s init --session %s --pm-window %s --agents "%s" --vcs %s\n' "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs"
+    printf '  1b. 把 skill 装进项目 %s（%s init 的同一实现；已存在则 skip —— 老项目的升级路径）\n' '.pi/skills/' "$TEAM_CLI"
     printf '  2. 把门禁/安装命令写进 .pi/team/config.sh（%s / %s）\n' "${gates:-无}" "${install_cmd:-无}"
     printf '  3. 为每个 agent 建 worktree：%s\n' "$(printf 'add-agent %s; ' $agents)"
     printf '  4. %s pulse up（巡检窗口：同 session 的 %s 窗口跑 monitor + 定时巡检）\n' "$TEAM_CLI" "$(team_pulse_window)"
@@ -240,6 +241,9 @@ team_cmd_bootstrap() {
   # ② init（幂等：已有配置不动，只补文档骨架/AGENTS 段落/.gitignore）
   if [ "$had_config" = "1" ]; then
     team_dim "  配置已存在：$TEAM_CONFIG（保留你的设置）"
+    # 升级路径（P40）：config 在时 init 被整段跳过 —— 项目本地 skill 仍要装，走同一个实现
+    # （cmd-init.sh 的 team_init_install_skills）；冲突会响亮失败，不静默替换。
+    team_init_install_skills || return 1
   else
     team_cmd_init --session "$session" --pm-window "$pmwin" --agents "$agents" --vcs "$vcs" ${gates:+--gates "$gates"}
     team_load_config   # 重新加载（init 刚写了配置）

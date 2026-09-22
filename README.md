@@ -32,7 +32,22 @@ the real records of teamsmith being built with teamsmith.
 
 ## Install
 
-### As a Pi package (recommended)
+### Global CLI + project install (recommended)
+
+```bash
+npm install -g teamsmith     # the `team` CLI: one npm bin entry, checks bash >= 4 and prints the fix if it is missing
+cd your-project
+team init                    # config + docs skeleton + both skills into the project's .pi/skills/
+```
+
+`team init` installs `teamsmith` and `teamsmith-init` into the project's **`.pi/skills/`** — Pi's project-level
+skill search path — so any session in that project sees the toolkit (the `openspec init` model: per project, and
+version-lockable). The default is a symlink to the package, so package updates are live; `--copy` copies the files
+instead (for an ephemeral source such as an `npx` cache, excluding `.git/` and `node_modules/`), and `--no-skills`
+skips the step. Re-running is idempotent, `team bootstrap` runs the same step, and a conflict is announced rather
+than replaced (`--force` replaces only an entry recognised as this skill).
+
+### As a Pi package (no global CLI)
 
 ```bash
 pi install git:git@github.com:Track07-cda/teamsmith@v1.42.0      # user level: every project
@@ -70,8 +85,9 @@ On a non-Pi host, `install.sh` puts the skill **files** where a skill directory 
 
 ### What the package declares — and what it deliberately does not
 
-The manifest (`package.json`) declares **skills only**: `pi.skills: ["./skills"]` loads `teamsmith` and
-`teamsmith-init`. The files under `skills/teamsmith/extension/` (`team-notify.ts`, `team-bg.ts`,
+The manifest (`package.json`) declares the two skills (`pi.skills: ["./skills"]` loads `teamsmith` and
+`teamsmith-init`) and exactly one npm `bin` entry — `team` → `bin/team.mjs`, a transparent wrapper that runs the
+bash CLI with your argv, stdio and exit status. The files under `skills/teamsmith/extension/` (`team-notify.ts`, `team-bg.ts`,
 `team-inbox-watch.ts`) are deliberately **not** in the manifest: teamsmith injects each of them with `-e` when it
 starts a PM or a worker window, so they exist only inside team windows. Installing the package adds no global
 extension, command or hook to your own session.
@@ -81,7 +97,7 @@ extension, command or hook to your own session.
 | Need | Why |
 |---|---|
 | **Pi ≥ 0.76.0** | The session harness needs `--session-id`, which `team doctor` fails without; it landed in Pi 0.76.0 and is verified working on 0.85.1. Package installs work from 0.74.0 on, but 0.74.0 lacks `--session-id`, so 0.76.0 is the floor |
-| `bash` ≥ 4 | The CLI is bash (no jq/python) |
+| `bash` ≥ 4 | The CLI is bash (no jq/python); the npm `team` entry point checks this before running and prints the fix when it is missing |
 | `git` ≥ 2.31 | One worktree per agent; the PM does all branching/merging |
 | `tmux` | One window per agent, the PM window, and the pulse window |
 | `node` ≥ 20 or `bun` ≥ 1.3 | Only for the pulse console/patrol (`scripts/panel`); point `TEAM_JS_BIN` at it when it is not on `PATH` |

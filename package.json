@@ -3,6 +3,9 @@
   "version": "1.42.0",
   "description": "Turn one agent session into a project owner: self-contained task briefs dispatched to worker agents in their own git worktrees, independent verification on a separate checkout, and an auditable ledger (BOARD / reviews / threads / DECISIONS). Runs on Pi today.",
   "license": "MIT",
+  "bin": {
+    "team": "./bin/team.mjs"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Track07-cda/teamsmith.git"
@@ -20,6 +23,7 @@
   ],
   "files": [
     "skills/",
+    "bin/",
     "install.sh"
   ],
   "pi": {
