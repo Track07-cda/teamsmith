@@ -4237,6 +4237,24 @@ LOG_V="$(sed -n 's/^##[[:space:]]*\[*v\?\([0-9.]*\)\]*.*/\1/p' "$SKILL_DIR/CHANG
 # M38：根 package.json（pi 清单）也是版本落点之一——发行时的第五处。
 PKG_V="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$(dirname "$SKILL_DIR")/../package.json" 2>/dev/null | head -1)"
 assert_eq "版本号五处一致（common/两个 SKILL/CHANGELOG/package.json）" "$CODE_V|$DOC_V|$INIT_V|$LOG_V|$PKG_V" "$CODE_V|$CODE_V|$CODE_V|$CODE_V|$CODE_V"
+# P35：README 安装示例的 pin 是第六个版本落点 —— 机制防过期，不是"发版时记得改"的承诺。
+# README 里任何形式的 teamsmith@v<X.Y.Z>（git:/ssh://HTTPS 简写都在内）都必须等于 package.json 的 version；
+# 不等 → 红并点名两处（README 行号 + package.json）。一处都找不到也算红（检查不许空转）。
+README_MD="$(dirname "$SKILL_DIR")/../README.md"
+README_PINS="$(grep -n -o 'teamsmith@v[0-9][0-9.]*' "$README_MD" 2>/dev/null || true)"
+README_PIN_BAD=""
+while IFS= read -r _p35; do
+  [ -n "$_p35" ] || continue
+  [ "${_p35##*@v}" = "$PKG_V" ] || README_PIN_BAD="$README_PIN_BAD README.md:${_p35%%:*}=@v${_p35##*@v}"
+done <<< "$README_PINS"
+if [ -z "$README_PINS" ]; then
+  bad "README 安装 pin：$README_MD 里找不到 teamsmith@v<X.Y.Z> 示例（检查本身不许空转）"
+elif [ -n "$README_PIN_BAD" ]; then
+  bad "README 安装 pin 与 package.json（version=$PKG_V）不一致：$README_PIN_BAD —— 同步 README.md 这些行（发版清单见 docs/team/PUBLISH.md §2）"
+else
+  ok "README 安装 pin 与 package.json 一致（$(printf '%s\n' "$README_PINS" | grep -c .) 处 @v$PKG_V）"
+fi
+unset _p35 README_MD README_PINS README_PIN_BAD
 assert_not_file "$SKILL_INIT_DIR/CHANGELOG.md" "init skill 没有 CHANGELOG（变更史只有一份）"
 
 $TEAM mark-loaded >"$TMP/mark.log" 2>&1 && ok "mark-loaded 退出码 0" || bad "mark-loaded 失败"

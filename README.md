@@ -35,14 +35,14 @@ the real records of teamsmith being built with teamsmith.
 ### As a Pi package (recommended)
 
 ```bash
-pi install git:git@github.com:Track07-cda/teamsmith@v1.40.0      # user level: every project
-pi install -l git:git@github.com:Track07-cda/teamsmith@v1.40.0   # project level: recorded in .pi/settings.json
+pi install git:git@github.com:Track07-cda/teamsmith@v1.42.0      # user level: every project
+pi install -l git:git@github.com:Track07-cda/teamsmith@v1.42.0   # project level: recorded in .pi/settings.json
 ```
 
 - **Pin a released tag**: `@v<version>`, the version `team version` prints. Latest tag:
   `git tag --sort=-v:refname | head -1`.
-- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v1.40.0`) uses your SSH key. The HTTPS
-  shorthand `git:github.com/Track07-cda/teamsmith@v1.40.0` only works for a public repository — while this one is
+- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v1.42.0`) uses your SSH key. The HTTPS
+  shorthand `git:github.com/Track07-cda/teamsmith@v1.42.0` only works for a public repository — while this one is
   private it asks for credentials and fails.
 - The clone lands in `~/.pi/agent/git/<host>/<path>` (user level) or `.pi/git/<host>/<path>` (project level); the
   skill directory — the `<skill>` used in every command below — is `<clone>/skills/teamsmith`.
