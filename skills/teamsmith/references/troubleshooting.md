@@ -738,16 +738,35 @@ outside the repo truncated/rewrote/replaced the file (an editor save, a sync too
 in-repo writer appends (`>>`), so a smaller file is always external. Before M43 the watcher answered a shrink
 with a silent `offset = 0` and re-read the whole file: one external rewrite = one full replay.
 
-**Since M43** this is bounded and auditable, and repeats are impossible: the shrink itself gets a ledger
-line, a rescan from 0 drops anything already delivered (dedup memory persisted in `<key>.seen`, surviving
+**Since M43/P81** this is bounded and auditable, and repeats are impossible: the shrink itself gets a ledger
+line, a rescan from 0 drops anything the **delivery journal** (`state/inbox-watch/<key>.deliver`) already
+covers (that journal, not `<key>.seen`, is the durable memory — recorded *before* every send and surviving
 restarts), genuinely-new lines are capped to the last `TEAM_INBOX_WATCH_REPLAY_MAX` (default 20) with the
-skip counts stated in the wake text, and an all-duplicates rescan sends **no wake** at all. `total=` counts
-real deliveries only. Semantics and ledger formats: `references/agent-adapters.md` §4a.1.
+skip counts stated in the wake text, and an all-replay rescan sends **no wake** at all. `total=` counts
+real deliveries only. Semantics, journal format and the full counter list:
+`references/agent-adapters.md` §4a.1 / §4a.1c.
 
-**If you still see duplicates**: check the ledger for `spool shrink` / `rescan` / `dedup` lines — they tell
-you exactly what was re-read, suppressed, and delivered. No such lines + duplicates = a second watcher is
-registered for the same target (look for two `started target=…` lines without an intervening `stopped`,
-i.e. a zombie session that never logged its shutdown).
+**If you still see duplicates**: check the ledger for `spool shrink` / `rescan` / `replay suppressed` lines —
+they tell you exactly what was re-read, suppressed, and delivered. No such lines + duplicates = a second
+watcher is registered for the same target (look for two `started target=…` lines without an intervening
+`stopped`, i.e. a zombie session that never logged its shutdown) — or the duplicate came from the session
+side (a queued `followUp` copy presented late). **The wake text tells them apart**: each wake prints its own
+`#<seq>` and every row carries the source line's absolute time and its identity. Two rows with identical
+payload text but different ids/source times are two distinct lines (the pulse's re-nudge shape); an
+identity seen twice in the wake texts is a replay you can name and prove from the journal file.
+
+**“Was it actually delivered?” is now a file question (P81).** Read
+`state/inbox-watch/<key>.deliver` next to the wake's `seq=`: `sent seq=<n>` means the session API accepted
+that wake, `failed seq=<n>` means the message never entered the session (it is retried once per tick, until
+the freshness horizon), and `intent seq=<n>` with neither means the outcome is unknown — the line is **never**
+re-sent (ledger `inflight assumed n=`), so if you see no `sent`, treat the wake as unconfirmed and re-read
+the durable inbox line instead of waiting for a second doorbell. The other journal counters an operator may
+meet: `deliver blocked` (the journal could not be written → nothing was sent, by design), `torn tail` (a
+crash in the middle of a record → unknown outcome, never re-sent), `recovery n=` (a previous session read the
+line and died before sending → exactly one recovery wake), `unprovable n=` (the identity is older than the
+journal's compaction floor → never woken again), `replay suppressed n= reason=<normal|rescan>`,
+`retry stale=<n>`, `baseline swallowed n=` and `journal compacted … floor=`. Anchor docs and the exact record
+shapes: `references/agent-adapters.md` §4a.1c.
 
 **A repeated shrink with nothing delivered is a defect, not a busy spool.** When the ledger shows
 `spool shrink …` again and again while `rescan … deliver=0`, the offset is not converging — that is the
@@ -756,8 +775,9 @@ overshot the file size by one byte). The invariants that make it impossible are 
 `references/agent-adapters.md` §4a.1b; if you see the pattern again, treat it as a bug in the watcher's offset
 arithmetic, not as "the spool is being rewritten".
 
-**Lines that are too old do not wake you.** The durable inbox file keeps them; the wake is skipped
-(`classify stale=<n> …`). `TEAM_INBOX_WATCH_STALE_SEC` (default 900) sets that horizon.
+**Lines that are too old do not wake you — on any path.** The durable inbox file keeps them; the wake is
+skipped (`classify stale=<n> …`, and a *recovered* line that has since gone stale is counted `stale=1`, not
+`recovery=`). `TEAM_INBOX_WATCH_STALE_SEC` (default 900) sets that horizon.
 
 ## 21. pi announces a new version → the input box reads as BUSY
 

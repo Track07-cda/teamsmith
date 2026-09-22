@@ -358,11 +358,11 @@ specification's "a draft-raced entry is never pasted again" also covers later dr
 target window no longer exists are marked `target=gone` by `team outbox list`, counted in the status queue
 line, and cleaned only by the explicit `team outbox drop gone` (which names every file it drops).
 
-### 4a.1 Delivery semantics: offset / rescan / caps (M43)
+### 4a.1 Delivery semantics: the journal / offset / rescan / caps (M43, P81)
 
 The watcher tracks the spool with an **in-memory byte offset** into `state/inbox-watch/<key>.wake`. The only
-in-repo writer appends (`>>`), so a healthy offset never exceeds the file size. The offset is **not** the
-delivery contract — these three rules are:
+in-repo writer appends (`>>`), so a healthy offset never exceeds the file size. The offset is an audit
+position, not the delivery contract — the **delivery journal** is (§4a.1c). These rules hold:
 
 1. **A shrink is always external, and it is always recorded.** If the spool's size falls below the offset (or
    the file vanishes while being tracked), something outside the repo truncated/rewrote/replaced it (the
@@ -370,22 +370,78 @@ delivery contract — these three rules are:
    silently reset `offset = 0` and re-read the whole file — 42 lines were delivered twice and `total` was
    inflated by 84). Now the watcher writes a `spool shrink: size fell below offset=… → bounded rescan from 0`
    ledger line instead of a silent reset.
-2. **No tuple is delivered twice.** Every delivered spool line — the whole `(epoch_ms, kind, from, durable,
-   preview)` tuple — goes into a dedup memory (in memory + persisted to `state/inbox-watch/<key>.seen`,
-   capped at `TEAM_INBOX_WATCH_SEEN_MAX`, default 512, so it survives session restarts). Lines that come back
-   via a rewrite (or overlap after a shrink) are skipped and recorded as `dedup: skipped N …` ledger lines.
+2. **No delivery is ever enqueued twice.** Before a wake is sent, the watcher appends the line's identity and
+   wake material as a `read` record and then an `intent` record to `state/inbox-watch/<key>.deliver`; after
+   the session API returns it appends `sent` (or `failed`). Lines that come back via a rewrite (or overlap
+   after a shrink) are skipped and recorded as `replay suppressed n=<n> reason=<normal|rescan>` ledger lines.
 3. **Replays are bounded and explained.** A shrink triggers a *rescan*: the file is re-read from 0, but
-   already-delivered lines are dropped and genuinely-new lines are capped to the **most recent**
+   lines with a journal record are dropped and genuinely-new lines are capped to the **most recent**
    `TEAM_INBOX_WATCH_REPLAY_MAX` (default 20); anything older is skipped and the wake text says so
    (`(spool rescan after external shrink: delivered the last K unseen line(s); skipped D already-delivered +
    M older …)`). If everything was already delivered there is **no wake at all** — the ledger's
    `rescan lines=… dup=… skipped=… deliver=0` line is the audit trail.
 
 Counter semantics: the ledger's `total=` (and the wake text's `N`) count **real deliveries only** — rescan /
-dedup skips never inflate it, and a rescan wake carries a `rescan[dup=D skipped=M]` annotation. The other
+replay skips never inflate it, and a rescan wake carries a `rescan[dup=D skipped=M]` annotation. The other
 caps are unchanged: previews truncate at `TEAM_INBOX_WATCH_PREVIEW` (160 chars), a wake lists at most 5 lines,
 and the spool's own ceiling is `TEAM_INBOX_WATCH_MAX_BYTES` (128 KiB, head dropped tail kept, offset snapped
 to the new size so the kept tail is not re-announced).
+
+Every `wake` ledger line names the wake's `seq=` and the identities it carries; the recovery and suppression
+paths each have their own counter: `replay suppressed n= reason=<normal|rescan>`, `inflight assumed n=`,
+`recovery n=` (on the recovery wake), `unprovable n=`, `deliver blocked`, `torn tail`,
+`baseline swallowed n=`, `retry stale=<n>`. Counters never move `total=`.
+
+### 4a.1c The delivery journal: at-most-once, fail-closed, three restart states (P81)
+
+The wake is a doorbell; the durable inbox line is the message. `state/inbox-watch/<key>.deliver` is an
+append-only journal and is the **only** durable authority for what may still be woken about — process memory
+is never trusted across a restart. One record per line, ISO-stamped, values escaped so the fields are
+space-separated and reversible:
+
+```
+start baseline=<n> size=<n> head=<stamp>
+read  seq=<n> off=<n> size=<n> head=<stamp> id=<identity> src=<ms> kind=<k> from=<f> durable=<d> preview=<p>
+intent seq=<n>
+sent   seq=<n>                       (a .seen import writes sent with a negative seq and imported=1)
+failed seq=<n> reason=<why>
+floor  id=<oldest retained identity> ts=<floor source time> evicted=<n> kept=<n>
+```
+
+- **The order is the contract**: `read` → `intent` → send → `sent`/`failed`. A wake is sent only after its
+  `intent` is on disk. If the journal cannot be written the watcher sends **nothing** (not even the one wake
+  it was about to send), records `deliver blocked`, and leaves the lines unseen so a later tick can pick
+  them up: losing a doorbell is allowed, losing the journal is not.
+- **A line's identity** is the sender's `id=` field (the sixth spool field, the outbox entry name that also
+  appears in `state/outbox/delivered.log`) when present, and `sha1:<hex>` of the whole line otherwise. The
+  wake text prints exactly this string, so a recipient can resolve an identity against the journal and the
+  sender's own log; two byte-identical payloads are distinguishable by identity and source time.
+- **After a restart the state is judged from the journal**, in exactly three states: `read` without `intent`
+  (the send never started) → the line is woken about **once** by the recovery pass and the ledger records
+  `recovery`; `intent` without `sent`/`failed` → the outcome is unknown, the line is **never** woken again and
+  the ledger records `inflight assumed n=` once; `sent` → never again. `failed` means the message never
+  entered the session: the line may be retried **at most once per tick** and never after
+  `TEAM_INBOX_WATCH_STALE_SEC` (`retry stale=<n>`).
+- **A torn or unparsable trailing record is an unknown outcome, never a licence to re-send**: it reads as the
+  `inflight` state (ledger `torn tail`), so a crash while appending the `intent` cannot turn into a duplicate.
+- **Fail-safe past the eviction floor**: past `TEAM_INBOX_WATCH_JOURNAL_MAX` (default 1024) records the
+  journal is compacted to just under the bound, keeping whole `read…intent…sent` groups and writing a `floor`
+  record (its `ts` is the oldest retained source timestamp). An identity the journal no longer covers and
+  whose source time is older than that floor can no longer be proven undelivered → it is counted `unprovable`
+  and **never** woken (fail-safe, not fail-open).
+- **One-way `.seen` migration**: on the first start of a target the previous code's `<key>.seen` is imported
+  once, additively, as already-delivered identities; from then on deleting, emptying or corrupting
+  `<key>.seen` changes no delivery decision (the journal is the memory).
+- **Freshness applies to every path**, including recovery and retry: a line older than
+  `TEAM_INBOX_WATCH_STALE_SEC` is counted (`stale=`) and never woken, on the startup baseline, the ordinary
+  read, the rescan and the journal's recovery. Its readable copy is the durable inbox line.
+- **Startup accounting**: `started … baseline=<spool size>` still names the current spool end (the baseline
+  doctrine is unchanged), and `baseline swallowed n=<n>` counts the complete lines present at startup that no
+  journal record covers, so the doctrine's cost is visible instead of silent.
+- **Knobs** (environment-only; no `team config` schema row): `TEAM_INBOX_WATCH_JOURNAL_MAX` (default `1024`) is
+  the journal record bound, and `TEAM_INBOX_WATCH_ABORT_AFTER=read|intent` is a **fixture-only** switch
+  (`TEAM_SMOKE_FIXTURE=1`) that makes the watcher SIGKILL itself at that write-ahead step for the
+  crash-restart fixtures — without the fixture flag it is inert and the ledger records it as ignored.
 
 ### 4a.1b What a *correct* offset means (P28) — the rule the 2026-09-19 loop violated
 
@@ -407,13 +463,15 @@ enforced in code and covered by the harness:
    external rewrite → exactly one bounded rescan. The same `(size, head)` pair is never rescanned twice, so a
    non-converging case cannot turn into a wake loop.
 
-**Only fresh lines wake.** A line older than `TEAM_INBOX_WATCH_STALE_SEC` (default `900`) is classified
-`stale`: it is still written to the durable inbox file, but it does not wake a session
-(`classify stale=<n> unparsable=<n> inbox=…`). A line whose timestamp cannot be parsed is delivered (never
-silently dropped). The ledger separates traffic from recovery: `total=` counts **real deliveries only**, while
-`rescan lines=… dup=… skipped=… deliver=0 stale=… unparsable=…` records recovery. **A repeated
-`spool shrink` line with `deliver=0` is a defect signal, not noise** — it means the offset is not converging
-(see `references/troubleshooting.md` §20).
+**Only fresh lines wake — on every path.** A line older than `TEAM_INBOX_WATCH_STALE_SEC` (default `900`) is
+classified `stale`: it is still written to the durable inbox file, but it does not wake a session
+(`classify stale=<n> unparsable=<n> inbox=…`; a recovered line that has gone stale is counted `stale=1` and
+not `recovery=`, per `references/troubleshooting.md` §20). A line whose timestamp cannot be parsed is
+delivered (never silently dropped). The ledger separates traffic from recovery: `total=` counts **real
+deliveries only**, while `rescan lines=… dup=… skipped=… deliver=0 stale=… unparsable=…` records recovery and
+the journal counters (`replay suppressed` / `inflight assumed` / `recovery` / `unprovable` / `deliver blocked`
+/ `torn tail` / `baseline swallowed`) name the rest. **A repeated `spool shrink` line with `deliver=0` is a
+defect signal, not noise** — it means the offset is not converging (see `references/troubleshooting.md` §20).
 
 ## 5. Logs / activity: `TEAM_AGENT_LOG_GLOB`
 

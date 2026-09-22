@@ -26,8 +26,9 @@
  *     外部力量）。旧行为是静默 `offset = 0`、下一拍把整个 spool 从 0 重读 —— 2026-09-19 就是这条
  *     把同一份 42 行叫了两遍、`total` 灌水 84。现在的语义（投递保真三条）：
  *       1. **shrink 必记账本**（`spool shrink …` 一行），不再是静默重置；
- *       2. **去重**：整行 `(epoch_ms, kind, from, durable, preview)` 元组进过去重记忆（内存 +
- *          `<key>.seen` 持久化，跨会话重启有效），已投递的行一律不再投；
+ *       2. **去重**：整行元组进过去重记忆 —— P81 起这份记忆是 `state/inbox-watch/<key>.deliver`
+ *          **投递日志**（append-only，`read` → `intent` → `sent`/`failed`），进程内存绝不是权威；
+ *          `<key>.seen` 只被一次性导入（此后删掉/清空它不改变任何投递决定），已投递的行一律不再投；
  *       3. **有界重放**：shrink 后的 rescan 对「真新」行只投最近 TEAM_INBOX_WATCH_REPLAY_MAX 条
  *          （默认 20），更早的跳过并在唤醒文本与账本里说明；全去重压掉时**不唤醒**（没什么好说的），
  *          账本记 `rescan … deliver=0`。
@@ -51,6 +52,18 @@
  * 无条件安装 —— 兜底是契约，不是失败路径的补丁（夹具 S22/S23 证明它）。`watches` 只报可证明完整的
  * 同 UID 视图（容器里 /proc 是嵌套 PID 命名空间 → `unknown`，绝不把局部计数当总量）。
  *
+ * P81 · 投递日志（`<key>.deliver`，唯一 durable 去重权威；事故：一条 nudge 被叫醒两次，而文件无法回答
+ * 「到底投过没有」）：
+ *   - 顺序是契约：`read`（点名行身份 + 唤醒材料 + 偏移/大小/头指纹）→ `intent`（一批）→ **发送** →
+ *     `sent`/`failed`；`intent` 没写成**绝不许发** —— 写不进去就 `deliver blocked`，行保持未读等下一拍；
+ *   - 重启后按日志判三态（绝不靠内存）：`read` 无 `intent` → **恰好一次**恢复（`recovery`）；
+ *     `intent` 无 `sent`/`failed`（含半截尾记录）→ `inflight assumed`，**永不重投**；`sent` → 永不；
+ *     `failed` → 每拍至多重试一次、且不得越过新鲜度地平线；
+ *   - 日志有界（`TEAM_INBOX_WATCH_JOURNAL_MAX`，默认 1024）：越界压缩并写 `floor=`；比地板更早的身份
+ *     日志已不能证明「没投过」→ `unprovable`，永不唤醒（fail-safe，不是 fail-open）；
+ *   - 唤醒文本点名源行：`#<seq>` + 绝对发送时间 + 每行的源时间与身份（发送方写进 spool 第 6 字段的
+ *     `id=<outbox 条目名>`，老行用整行 sha1 摘要）—— 收件方只凭 durable 文件就能分辨「两条」与「一条两次」。
+ *
  * 作用域：只认本项目（git 主工作树）的 state 目录 —— 注册与 spool 是**发送方与会话之间的接口**
  * （发送方是 CLI，它的 TEAM_STATE_DIR 在主工作树），所以它们必须待在共享根，不能跟着会话的 worktree 走。
  * 会话本地的产物（作业日志/账户）不归这里管（那是 team-bg 的活，它跟会话自己的工作树走）。只服务
@@ -58,6 +71,7 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 
@@ -66,7 +80,8 @@ const DEFAULT_MAX_BYTES = 128 * 1024 // spool 上限
 const DEFAULT_POLL_MS = 5000         // fs.watch 的兜底轮询（错过 inotify 事件时仍能醒来）
 const DEFAULT_HEARTBEAT_MS = 5000    // 注册心跳
 const DEFAULT_REPLAY_MAX = 20        // shrink 后 rescan 的「真新」行投递上限（更早的跳过并说明）
-const DEFAULT_SEEN_MAX = 512         // 去重记忆的容量（最近投递的行键，持久化到 <key>.seen）
+const DEFAULT_SEEN_MAX = 512         // 老 <key>.seen 的一次性导入上限（P81 起日志是唯一记忆）
+const DEFAULT_JOURNAL_MAX = 1024     // P81：投递日志的记录上限（越过 → 压缩 + `floor=`）
 const HEAD_BYTES = 256               // 头部指纹前缀（P28/B2：回退时比较「开头有没有被改写」）
 const DEFAULT_CLAMP_BYTES = 64       // 头部不变、回退 ≤ 此字节数 = 我们自己的 offset 错了（修复，不是重写）
 const DEFAULT_STALE_SEC = 900        // 行年龄超过此秒数 = 过期：只计数、不唤醒（P28/B3/R3）
@@ -84,6 +99,7 @@ function pollMs(): number { return envNum('TEAM_INBOX_WATCH_POLL_MS', DEFAULT_PO
 function heartbeatMs(): number { return envNum('TEAM_INBOX_WATCH_HEARTBEAT_MS', DEFAULT_HEARTBEAT_MS, 100) }
 function replayMax(): number { return envNum('TEAM_INBOX_WATCH_REPLAY_MAX', DEFAULT_REPLAY_MAX, 1) }
 function seenMax(): number { return envNum('TEAM_INBOX_WATCH_SEEN_MAX', DEFAULT_SEEN_MAX, 32) }
+function journalMax(): number { return envNum('TEAM_INBOX_WATCH_JOURNAL_MAX', DEFAULT_JOURNAL_MAX, 16) }
 function clampBytes(): number { return Math.min(1024 * 1024, envNum('TEAM_INBOX_WATCH_CLAMP_BYTES', DEFAULT_CLAMP_BYTES, 1)) }
 function staleSec(): number { return envNum('TEAM_INBOX_WATCH_STALE_SEC', DEFAULT_STALE_SEC, 1) }
 
@@ -535,11 +551,10 @@ type Freshness = 'fresh' | 'stale' | 'unparsable'
 
 /** 行年龄（B3/R3）：spool 行的第一个字段是发送者落盘时的 `team_epoch_ms`（毫秒）。
  *  判据只用行自带的这个字段 —— 不看文件 mtime（外部重写会动它，且它回答不了「这一行什么时候写的」），
- *  也不看 `.seen` 的顺序（那只回答「投过没有」）。读不出来的时间戳算 fresh-for-delivery 并单独计数。 */
-function freshness(line: string): Freshness {
-  const first = (line.split('\t')[0] ?? '').trim()
-  if (!/^\d+$/.test(first)) return 'unparsable'   // 不可解析 ≠ 过期：投递 + 计数，绝不静默吞
-  return Date.now() - Number(first) > staleSec() * 1000 ? 'stale' : 'fresh'
+ *  也不看日志的顺序（那只回答「投过没有」）。读不出来的时间戳算 fresh-for-delivery 并单独计数。 */
+function freshnessOf(src: number): Freshness {
+  if (!Number.isFinite(src) || src <= 0) return 'unparsable'   // 不可解析 ≠ 过期：投递 + 计数，绝不静默吞
+  return Date.now() - src > staleSec() * 1000 ? 'stale' : 'fresh'
 }
 
 type ReadResult = {
@@ -632,6 +647,163 @@ function trimSpool(file: string): number {
   }
 }
 
+/* ── P81 · 投递日志（`state/inbox-watch/<key>.deliver`，唯一 durable 去重权威） ─────────────────
+ * 形状：一行一条记录，ISO 时间戳开头，其余字段 `key=value` 空格分隔；值里的空白一律转义
+ * （jesc/junesc）——身份可能是整行的摘要，绝不许把分隔符带进值里。记录种类：
+ *   start baseline=<n> size=<n> head=<stamp>
+ *   read  seq=<n> off=<n> size=<n> head=<stamp> id=<身份> src=<ms> kind=<k> from=<f> durable=<d> preview=<p>
+ *   intent seq=<n>
+ *   sent   seq=<n>          （导入老 .seen 时也写 sent seq=<负> id=<身份> imported=1）
+ *   failed seq=<n> reason=<why>
+ *   floor  id=<保留的最老身份> ts=<地板源时间> evicted=<n> kept=<n>
+ * 判定是逐记录的：`read` 点名的身份进入「读数」态，`intent`/`sent`/`failed` 按文件顺序落到同一批的
+ * 身份上 —— 最后一条说了算（`sent` → 已投递；`intent` → 结果未知；`failed` → 可重试一次；`read` → 可恢复一次）。 */
+
+/** 日志值编码：空白 → 反斜杠转义（解析逐字可逆）。 */
+function jesc(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t').replace(/ /g, '\\s')
+}
+
+function junesc(s: string): string {
+  let out = ''
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c !== '\\') { out += c; continue }
+    const n = s[++i]
+    out += n === 'n' ? '\n' : n === 'r' ? '\r' : n === 't' ? '\t' : n === 's' ? ' ' : n === '\\' ? '\\' : (n ?? '')
+  }
+  return out
+}
+
+/** 行的身份：发送方写在第 6 字段的 `id=`（outbox 条目名，与 state/outbox/delivered.log 对得上）优先；
+ *  没有该字段的旧行/外来行 = 整行的 SHA-1 摘要（有界的**身份**，不是 payload 全文）。日志与唤醒文本
+ *  印同一个串 —— 收件方据此自证「这是哪一条」，两条逐字相同的 payload 靠源时间 + 身份区分。 */
+function lineIdentity(line: string): string {
+  const id = (line.split('\t')[5] ?? '').trim()
+  if (id) return id
+  return `sha1:${createHash('sha1').update(line, 'utf8').digest('hex')}`
+}
+
+type SpoolLine = {
+  raw: string
+  identity: string
+  src: number          // 行首的 team_epoch_ms；0 = 不可解析（照投 + 计数，绝不静默吞）
+  kind: string
+  from: string
+  durable: string
+  preview: string
+}
+
+function parseSpoolLine(raw: string): SpoolLine {
+  const f = raw.split('\t')
+  const first = (f[0] ?? '').trim()
+  return {
+    raw,
+    identity: lineIdentity(raw),
+    src: /^\d+$/.test(first) ? Number(first) : 0,
+    kind: (f[1] ?? '').trim() || 'msg',
+    from: (f[2] ?? '').trim() || '-',
+    durable: (f[3] ?? '').trim() || '-',
+    preview: f[4] ?? '',
+  }
+}
+
+type JournalEntryState = 'read' | 'intent' | 'sent' | 'failed'
+type JournalEntry = { state: JournalEntryState; material: SpoolLine | null; failure: string }
+type Journal = {
+  entries: Map<string, JournalEntry>
+  batch: Map<number, string[]>
+  maxSeq: number
+  floorTs: number | null
+  floorId: string
+  torn: boolean
+  records: number
+}
+
+function parseJournalLine(line: string): { kind: string; fields: Map<string, string> } | null {
+  const m = /^(\S+) (start|read|intent|sent|failed|floor)(?: (.*))?$/.exec(line)
+  if (!m) return null
+  const fields = new Map<string, string>()
+  for (const tok of (m[3] ?? '').split(' ')) {
+    if (!tok) continue
+    const eq = tok.indexOf('=')
+    if (eq <= 0) return null
+    fields.set(tok.slice(0, eq), junesc(tok.slice(eq + 1)))
+  }
+  return { kind: m[2], fields }
+}
+
+function journalMaterial(rec: { fields: Map<string, string> }, identity: string): SpoolLine {
+  const src = Number(rec.fields.get('src') ?? '')
+  return {
+    raw: '', identity,
+    src: Number.isFinite(src) && src > 0 ? src : 0,
+    kind: rec.fields.get('kind') ?? 'msg',
+    from: rec.fields.get('from') ?? '-',
+    durable: rec.fields.get('durable') ?? '-',
+    preview: rec.fields.get('preview') ?? '',
+  }
+}
+
+/** 读投递日志（唯一的 durable 去重权威）。尾部没有收尾换行 / 解析不出来的记录 = **撕裂**
+ *  （崩溃正落在写日志中间）：保守地当成「结果未知」—— 有 read 没 intent 的行绝不因此被当成
+ *  「还没发过」而重投（宁可漏一次敲门，也不许无据重投）。 */
+function loadJournal(file: string): Journal {
+  const j: Journal = { entries: new Map(), batch: new Map(), maxSeq: 0, floorTs: null, floorId: '', torn: false, records: 0 }
+  let text = ''
+  try { text = readFileSync(file, 'utf8') } catch { return j }
+  if (!text) return j
+  const lines = text.split('\n')
+  if (text.endsWith('\n')) lines.pop()
+  else { j.torn = true; lines.pop() }   // 没有收尾换行的尾记录 = 半截
+  for (const line of lines) {
+    if (!line.trim()) continue
+    j.records++
+    const rec = parseJournalLine(line)
+    if (!rec) { j.torn = true; continue }
+    const seq = Number(rec.fields.get('seq') ?? '')
+    if (rec.kind === 'start') continue
+    if (rec.kind === 'floor') {
+      const ts = Number(rec.fields.get('ts') ?? '')
+      if (Number.isFinite(ts) && ts > 0) j.floorTs = ts
+      j.floorId = rec.fields.get('id') ?? j.floorId
+      continue
+    }
+    if (Number.isFinite(seq)) j.maxSeq = Math.max(j.maxSeq, seq)
+    if (rec.kind === 'read') {
+      const identity = rec.fields.get('id') ?? ''
+      if (!identity) continue
+      j.entries.set(identity, { state: 'read', material: journalMaterial(rec, identity), failure: '' })
+      if (Number.isFinite(seq)) {
+        const ids = j.batch.get(seq) ?? []
+        ids.push(identity)
+        j.batch.set(seq, ids)
+      }
+      continue
+    }
+    // sent 带显式 id（老 .seen 的导入）：直接就是「已投递」，不依赖任何批次
+    const explicit = rec.fields.get('id') ?? ''
+    if (explicit && (rec.kind === 'sent' || rec.kind === 'failed')) {
+      j.entries.set(explicit, {
+        state: rec.kind === 'sent' ? 'sent' : 'failed',
+        material: j.entries.get(explicit)?.material ?? null,
+        failure: rec.fields.get('reason') ?? '',
+      })
+      continue
+    }
+    // intent / sent / failed 是批级的：落到这一批 read 记录点名的每个身份上
+    for (const identity of (Number.isFinite(seq) ? (j.batch.get(seq) ?? []) : [])) {
+      const entry = j.entries.get(identity)
+      if (!entry) continue
+      if (rec.kind === 'intent') { if (entry.state === 'read') entry.state = 'intent'; continue }
+      if (rec.kind === 'sent') { entry.state = 'sent'; entry.failure = ''; continue }
+      entry.state = 'failed'
+      entry.failure = rec.fields.get('reason') ?? ''
+    }
+  }
+  return j
+}
+
 export default function (pi: ExtensionAPI) {
   let root = ''
   let key = ''
@@ -641,11 +813,20 @@ export default function (pi: ExtensionAPI) {
   let spool = ''
   let reg = ''
   let seenPath = ''
+  let journalPath = ''
   let offset = 0
   let seen = 0
-  let delivered = new Set<string>()   // M43 去重记忆：已投递行的整行元组（键 = 行本身）
-  let deliveredOrder: string[] = []   // 同内容的 FIFO 顺序（容量裁剪用）
+  let delivered = new Set<string>()      // P81：已投递的身份（来自日志 sent/intent 导入/本次会话成功发送）
+  let journalEntries = new Map<string, JournalEntry>()   // 启动时从日志载入的身份态（只读快照）
+  let retryQueue = new Map<string, SpoolLine>()          // failed：会话 API 拒过、每拍至多重试一次
+  let recoveryQueue = new Map<string, SpoolLine>()       // read 无 intent：恰好允许一次恢复
+  let floorTs: number | null = null                      // 日志淘汰下限（更早的身份 → unprovable）
+  let floorId = ''
+  let journalRecords = 0
+  let seqCounter = 1                                     // 唤醒序号（跨重启单调；来自日志 max seq）
+  let abortAt = ''                                       // 夹具注入点（只在 TEAM_SMOKE_FIXTURE=1 下生效）
   let watcher: any = null
+  let fileWatcher: any = null                            // spool 的**文件级** watcher（Bun 的目录 watcher 会丢逐文件事件）
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let beatTimer: ReturnType<typeof setInterval> | null = null
   let mergeTimer: ReturnType<typeof setTimeout> | null = null
@@ -653,6 +834,8 @@ export default function (pi: ExtensionAPI) {
   const stopAll = (): void => {
     try { watcher?.close?.() } catch { /* ignore */ }
     watcher = null
+    try { fileWatcher?.close?.() } catch { /* ignore */ }
+    fileWatcher = null
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
     if (beatTimer) { clearInterval(beatTimer); beatTimer = null }
     if (mergeTimer) { clearTimeout(mergeTimer); mergeTimer = null }
@@ -695,37 +878,104 @@ export default function (pi: ExtensionAPI) {
     }
     appendLedger(root, `spool shrink: size fell below offset=${offset} inbox=${inbox} → bounded rescan from 0（外部截断/重写；仓内只有追加写）`)
     lastShrink = { size, head: stamp }
-    rescan()
+    if (rescan() === 'blocked') lastShrink = null   // 日志写不进去：不收敛到 clamp，下一拍重试同一份重写
   }
 
-  /** 去重记忆：启动时从 <key>.seen 加载（跨会话重启仍认得「这行投过了」）。 */
-  const loadSeen = (file: string): void => {
-    delivered = new Set()
-    deliveredOrder = []
+  /** 追加一条日志记录。失败 = false：调用方**绝不因此发送任何东西**（fail-closed），
+   *  账本记 `deliver blocked`，行保持未读等下一拍（丢一次敲门允许，丢日志不允许）。 */
+  const journalAppend = (record: string): boolean => {
     try {
-      const lines = readFileSync(file, 'utf8').split('\n').filter(l => l.trim())
-      for (const l of lines.slice(-seenMax())) { delivered.add(l); deliveredOrder.push(l) }
+      mkdirSync(dirname(journalPath), { recursive: true })
+      appendFileSync(journalPath, `${new Date().toISOString()} ${record}\n`)
+      journalRecords++
+      return true
     } catch {
-      /* 没有 .seen = 第一次投 */
+      return false
     }
   }
 
-  /** 投递成功后记入去重记忆并持久化（tmp+rename；写挂只影响跨重启去重，不影响本会话）。 */
-  const markDelivered = (lines: string[]): void => {
-    for (const l of lines) if (!delivered.has(l)) { delivered.add(l); deliveredOrder.push(l) }
-    const cap = seenMax()
-    while (deliveredOrder.length > cap) {
-      const old = deliveredOrder.shift()
-      if (old !== undefined) delivered.delete(old)
+  /** P81 · 一次性导入老代码的 `<key>.seen`（仅当投递日志还不存在时）。导入的身份作为
+   *  「已投递」追加进日志（synthetic seq + 显式 id）；此后不再读它 —— 删掉/清空 `.seen` 不改变
+   *  任何投递决定（日志是唯一记忆）。 */
+  const importSeen = (): number => {
+    let lines: string[] = []
+    try { lines = readFileSync(seenPath, 'utf8').split('\n').filter(l => l.trim()) } catch { return 0 }
+    let n = 0
+    for (const raw of lines.slice(-seenMax())) {
+      if (!journalAppend(`sent seq=-${n + 1} id=${jesc(lineIdentity(raw))} imported=1`)) break
+      n++
     }
-    if (!seenPath) return
+    return n
+  }
+
+  /** P81 · 压缩：日志越过上限 → 只留最近的记录（**绝不从一组 read/intent/sent 中间切起**，
+   *  不然已投递的身份会连同它的 read 一起丢掉），写一条 `floor` 记淘汰下限；地板 = 保留下来的
+   *  read 里最小的源时间戳 —— 比它更早的身份日志已不能证明「没投过」（`unprovable`，永不唤醒）。
+   *  tmp + rename：崩溃只留下旧文件，绝不留半截。 */
+  const compactJournal = (): boolean => {
+    let lines: string[] = []
     try {
-      const tmp = `${seenPath}.tmp-${process.pid}`
-      writeFileSync(tmp, `${deliveredOrder.join('\n')}\n`)
-      renameSync(tmp, seenPath)
-    } catch {
-      /* 见上 */
+      const text = readFileSync(journalPath, 'utf8')
+      if (!text.endsWith('\n')) return false      // 撕裂尾先不碰（下一次完整追加后再压）
+      lines = text.split('\n').filter(l => l.trim())
+    } catch { return false }
+    const max = journalMax()
+    if (lines.length <= max) return false
+    // 组的边界：一批 read…intent…sent/failed 不能从中间切开（不然已投递的身份会连同它的 read 一起丢掉）。
+    // 从尾往前按**整组**累计，直到再加一组就超过上限 —— floor 行也算一条记录，所以留一个位置。
+    const starts: number[] = []
+    for (let i = 0; i < lines.length; i++) {
+      const kind = parseJournalLine(lines[i])?.kind
+      if (i === 0 || kind === 'read' || kind === 'start' || kind === 'floor') starts.push(i)
     }
+    let cut = lines.length
+    for (let i = starts.length - 1; i >= 0; i--) {
+      if (lines.length - starts[i] + 1 > max) break   // +1 = 将要写下的 floor 行
+      cut = starts[i]
+    }
+    const dropped = lines.slice(0, cut)
+    const kept = lines.slice(cut)
+    let evicted = 0
+    for (const line of dropped) if (parseJournalLine(line)?.kind === 'read') evicted++
+    let floor: number | null = null
+    let floorIdentity = ''
+    for (const line of kept) {
+      const rec = parseJournalLine(line)
+      if (rec?.kind !== 'read') continue
+      const src = Number(rec.fields.get('src') ?? '')
+      if (Number.isFinite(src) && src > 0 && (floor === null || src < floor)) { floor = src; floorIdentity = rec.fields.get('id') ?? '' }
+    }
+    if (floor === null) { floor = floorTs ?? Date.now(); floorIdentity = floorId }
+    const floorLine = `${new Date().toISOString()} floor id=${jesc(floorIdentity || '-')} ts=${floor} evicted=${evicted} kept=${kept.length}`
+    try {
+      const tmp = `${journalPath}.tmp-${process.pid}`
+      writeFileSync(tmp, `${[floorLine, ...kept].join('\n')}\n`)
+      renameSync(tmp, journalPath)
+    } catch { return false }
+    floorTs = floor
+    floorId = floorIdentity
+    journalRecords = kept.length + 1
+    appendLedger(root,
+      `journal compacted records=${lines.length} kept=${kept.length} floor=${floorIdentity || '-'} floor_ts=${floor} evicted=${evicted} inbox=${inbox}`)
+    return true
+  }
+
+  const maybeCompact = (): void => {
+    if (journalRecords <= journalMax()) return
+    if (!compactJournal()) return
+    // 地板与记录数重新对齐（内存里的 delivered/retry/recovery 保留 —— 被淘汰的身份在本次会话里
+    // 仍然有证据，绝不因为压缩反而放行）
+    const reloaded = loadJournal(journalPath)
+    floorTs = reloaded.floorTs ?? floorTs
+    floorId = reloaded.floorId || floorId
+    journalRecords = reloaded.records
+  }
+
+  /** 夹具注入点（只在 `TEAM_SMOKE_FIXTURE=1` 下生效，否则启动时记一行 ignored）：
+   *  `TEAM_INBOX_WATCH_ABORT_AFTER=read|intent` 让**当前进程**在写前记录的那一步真死（SIGKILL）——
+   *  崩溃必须发生在另一个进程里，日志才有机会证明自己是权威。 */
+  const fixtureAbort = (): void => {
+    try { process.kill(process.pid, 'SIGKILL') } catch { /* ignore */ }
   }
 
   const writeReg = (note: string): void => {
@@ -750,92 +1000,219 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  /** 投递一条唤醒：指针 + 截断预览，绝不带 payload 全文。
-   *  meta（rescan 唤醒才有）：文本与账本都说明「这是 shrink 后的有界重扫，跳过了多少」。 */
-  const wake = (lines: string[], meta?: { dup: number; skipped: number }): void => {
-    const field = (l: string, i: number): string => (l.split('\t')[i] ?? '').trim()
+  type WakeMeta = {
+    dup?: number
+    skipped?: number
+    recovery?: boolean
+    retry?: boolean
+    off?: number
+    size?: number
+    head?: string
+  }
+
+  /** P81 · 唤醒文本：`#<seq>` + 绝对发送时间 + 每行的源时间/身份 + 投递日志路径。
+   *  指针 + 截断预览，绝不带 payload 全文；身份是有界的（发送方的 id 或整行 sha1 摘要）。 */
+  const wakeText = (seq: number, lines: SpoolLine[], meta: WakeMeta): string => {
+    const sendTs = new Date().toISOString()
     const rows = lines.map(l => {
-      const kind = field(l, 1) || 'msg'
-      const from = field(l, 2) && field(l, 2) !== '-' ? ` from ${field(l, 2)}` : ''
-      const durable = field(l, 3)
-      const where = durable && durable !== '-' ? ` → ${durable}.md` : ''
-      const preview = oneLine(l.split('\t').slice(4).join(' ') || '(empty)', previewLimit())
-      return `- [${kind}]${from}${where} :: ${preview}`
+      const from = l.from && l.from !== '-' ? ` from ${l.from}` : ''
+      const where = l.durable && l.durable !== '-' ? ` → ${l.durable}.md` : ''
+      const src = l.src > 0 ? new Date(l.src).toISOString() : '(no timestamp)'
+      const preview = oneLine(l.preview || '(empty)', previewLimit())
+      return `- [${l.kind}]${from}${where} :: ${preview}  (src ${src} · id ${l.identity})`
     })
     const shown = rows.slice(0, MAX_LISTED)
     const more = rows.length - shown.length
-    const hasInbox = lines.some(l => { const d = field(l, 3); return !!d && d !== '-' })
-    const hasLogOnly = lines.some(l => { const d = field(l, 3); return !d || d === '-' })
-    const firstInbox = lines.map(l => field(l, 3)).find(d => !!d && d !== '-') || inbox
+    const hasInbox = lines.some(l => !!l.durable && l.durable !== '-')
+    const hasLogOnly = lines.some(l => !l.durable || l.durable === '-')
+    const firstInbox = lines.map(l => l.durable).find(d => !!d && d !== '-') || inbox
     const inboxPath = `${docsDir(root)}/inbox/${firstInbox}.md`
-    const rescanNote = meta
+    const rescanNote = meta.dup !== undefined
       ? `(spool rescan after external shrink: delivered the last ${lines.length} unseen line(s); ` +
-        `skipped ${meta.dup} already-delivered + ${meta.skipped} older. Full history stays in the spool file.)\n`
+        `skipped ${meta.dup} already-delivered + ${meta.skipped ?? 0} older. Full history stays in the spool file.)\n`
       : ''
-    const text =
-      `[teamsmith] inbox wake: ${lines.length} new team message(s).\n` +
+    const recoveryNote = meta.recovery
+      ? `(recovered from the delivery journal: a previous session read these lines and stopped before sending them.)\n`
+      : ''
+    const retryNote = meta.retry ? `(retry of a wake whose delivery failed earlier; at most one retry per tick.)\n` : ''
+    return (
+      `[teamsmith] inbox wake #${seq} · ${sendTs}\n` +
       `${shown.join('\n')}${more > 0 ? `\n- … and ${more} more` : ''}\n` +
-      rescanNote +
+      rescanNote + recoveryNote + retryNote +
+      `Delivery journal: ${journalPath} — the ids above are recorded there (cross-check the sender's state/outbox/delivered.log).\n` +
       (hasInbox && hasLogOnly
         ? `Full text: the ${inboxPath} file named on each line; the others (knock/nudge) are pointers to the sender's own log (\`team inbox\` / \`team digest\` / state/nudges.log).\n`
         : hasLogOnly
           ? `These wakes point at the sender's own log (\`team inbox\` / \`team digest\`); they carry no inbox line.\n`
           : `Full text: read ${inboxPath} — this wake-up carries a one-line pointer, not the payload.\n`)
-    seen += lines.length
-    markDelivered(lines)
-    appendLedger(root,
-      `wake n=${lines.length} total=${seen} inbox=${inbox} kinds=${lines.map(l => l.split('\t')[1] || '?').join(',')}` +
-      (meta ? ` rescan[dup=${meta.dup} skipped=${meta.skipped}]` : ''))
+    )
+  }
+
+  const shortError = (error: unknown): string => oneLine(String((error as Error)?.message ?? error ?? 'unknown'), 160)
+
+  /** P81 · 唯一的发送出口：写前记录（read → intent）→ 发送 → sent/failed。
+   *  `intent` 没写成**绝不发送**（fail-closed）；API 拒了记 `failed`，下一拍重试。 */
+  const sendWake = (lines: SpoolLine[], meta: WakeMeta = {}): 'ok' | 'failed' | 'blocked' => {
+    if (!lines.length) return 'ok'
+    const seq = seqCounter++
+    const off = meta.off ?? offset
+    const size = meta.size ?? fileSize(spool)
+    const head = meta.head ?? headStamp(readHead(spool, size))
+    const readRecord = (l: SpoolLine): string =>
+      `read seq=${seq} off=${off} size=${size} head=${head} id=${jesc(l.identity)} src=${l.src || ''} ` +
+      `kind=${jesc(l.kind)} from=${jesc(l.from)} durable=${jesc(l.durable)} preview=${jesc(oneLine(l.preview || '(empty)', previewLimit()))}`
+    const blocked = (): 'blocked' => {
+      appendLedger(root, `deliver blocked seq=${seq} inbox=${inbox}（投递日志写不进去 → 按失败关闭：一条都不发，行保持未读）`)
+      return 'blocked'
+    }
+    for (const l of lines) if (!journalAppend(readRecord(l))) return blocked()
+    maybeCompact()
+    if (abortAt === 'read') fixtureAbort()
+    if (!journalAppend(`intent seq=${seq}`)) return blocked()
+    maybeCompact()
+    if (abortAt === 'intent') fixtureAbort()
     try {
-      pi.sendMessage({ customType: 'team-inbox', content: text, display: true },
+      pi.sendMessage({ customType: 'team-inbox', content: wakeText(seq, lines, meta), display: true },
         { triggerTurn: true, deliverAs: 'followUp' })
-    } catch {
-      /* 会话正在退出等场合：账本已经记了，不抛 */
+    } catch (error) {
+      journalAppend(`failed seq=${seq} reason=${jesc(shortError(error))}`)
+      appendLedger(root,
+        `wake failed seq=${seq} reason=${oneLine(shortError(error), 120)} inbox=${inbox}（会话 API 拒绝：这一行没投出，下一拍重试至多一次）`)
+      for (const l of lines) retryQueue.set(l.identity, l)
+      return 'failed'
     }
+    if (!journalAppend(`sent seq=${seq}`)) {
+      appendLedger(root, `sent record blocked seq=${seq} inbox=${inbox}（会话已接受但日志没记上 sent → 下一次启动按 inflight 处理，绝不重投）`)
+    }
+    maybeCompact()
+    seen += lines.length
+    for (const l of lines) {
+      delivered.add(l.identity)
+      retryQueue.delete(l.identity)
+      recoveryQueue.delete(l.identity)
+    }
+    appendLedger(root,
+      `wake n=${lines.length} total=${seen} inbox=${inbox} kinds=${lines.map(l => l.kind).join(',')} seq=${seq} ids=${lines.map(l => l.identity).join('|')}` +
+      (meta.recovery ? ` recovery n=${lines.length}` : '') +
+      (meta.retry ? ' retry=1' : '') +
+      (meta.dup !== undefined ? ` rescan[dup=${meta.dup} skipped=${meta.skipped ?? 0}]` : ''))
+    return 'ok'
   }
 
-  /** 普通路径：追加读到的新行。与去重记忆重叠的行（外部重写带回来的已投递行）跳过并记账本；
-   *  过期行只计数不唤醒（B3/R3），它们可读的副本是发送方在 spool 行之前写的 durable 收件箱行。 */
-  const deliverNormal = (lines: string[]): void => {
-    const unseen = lines.filter(l => !delivered.has(l))   // M43 去重（普通路径）：去掉这行过滤 = 重写重放不受约束
-    const dup = lines.length - unseen.length
-    if (dup > 0) {
-      appendLedger(root, `dedup: skipped ${dup} already-delivered line(s) inbox=${inbox}（外部重写与已投递重叠）`)
+  type Classification = { fresh: SpoolLine[]; replay: number; stale: number; unparsable: number; unprovable: number }
+
+  /** 逐行判定（普通读/重扫共用一个口径）：日志里有记录 → 绝不重投；日志没有但早于淘汰下限 → unprovable；
+   *  过期 → 只计数；时间戳不可解析 → 照投并计数；其余才是真的新行。 */
+  const classify = (lines: SpoolLine[]): Classification => {
+    const out: Classification = { fresh: [], replay: 0, stale: 0, unparsable: 0, unprovable: 0 }
+    for (const l of lines) {
+      if (delivered.has(l.identity) || retryQueue.has(l.identity) || recoveryQueue.has(l.identity) || journalEntries.has(l.identity)) {
+        out.replay++
+        continue
+      }
+      if (l.src > 0 && floorTs !== null && l.src < floorTs) { out.unprovable++; continue }
+      const f = freshnessOf(l.src)
+      if (f === 'stale') { out.stale++; continue }
+      if (f === 'unparsable') out.unparsable++
+      out.fresh.push(l)
     }
-    const kinds = unseen.map(l => freshness(l))
-    const stale = kinds.filter(k => k === 'stale').length
-    const unparsable = kinds.filter(k => k === 'unparsable').length
-    const deliver = unseen.filter((_l, i) => kinds[i] !== 'stale')
-    if (stale > 0 || unparsable > 0) {
-      appendLedger(root, `classify stale=${stale} unparsable=${unparsable} inbox=${inbox}（过期行不唤醒；时间戳不可解析的行照投）`)
-    }
-    if (deliver.length) wake(deliver)
+    return out
   }
 
-  /** shrink 后的有界重扫（M43）：从 0 读，但①已投递的一律不重复投 ②真新行只投最近 replayMax 条，
+  /** 普通路径：追加读到的新行。与日志重叠的行跳过并记账本；过期行只计数不唤醒（B3/R3），
+   *  它们可读的副本是发送方在 spool 行之前写的 durable 收件箱行。 */
+  const deliverNormal = (lines: string[], meta: { off: number; size: number; head: string }): 'ok' | 'blocked' => {
+    const cls = classify(lines.map(parseSpoolLine))
+    if (cls.replay > 0) {
+      appendLedger(root, `replay suppressed n=${cls.replay} reason=normal inbox=${inbox}（外部重写带回了日志里已有记录的行）`)
+    }
+    if (cls.unprovable > 0) {
+      appendLedger(root, `unprovable n=${cls.unprovable} inbox=${inbox}（身份早于日志淘汰下限：日志已不能证明它没投过 → 永不唤醒）`)
+    }
+    if (cls.stale > 0 || cls.unparsable > 0) {
+      appendLedger(root, `classify stale=${cls.stale} unparsable=${cls.unparsable} inbox=${inbox}（过期行不唤醒；时间戳不可解析的行照投）`)
+    }
+    if (!cls.fresh.length) return 'ok'
+    return sendWake(cls.fresh, { off: meta.off, size: meta.size, head: meta.head })
+  }
+
+  /** shrink 后的有界重扫（M43）：从 0 读，但①日志里已有一律不重复投 ②真新行只投最近 replayMax 条，
    *  更早的跳过 ③过期行只计数不投（B3/R3）—— 三种数量都进账本；全部被压掉时不唤醒（没什么好说的），
    *  total 不动。`lines=/dup=/skipped=/deliver=` 保持原样在前（M43 的断言逐字不改），新计数接在后面。 */
-  const rescan = (): void => {
+  const rescan = (): 'ok' | 'blocked' => {
     const res = readNewLines(spool, 0)
     offset = res.offset
     headBytes = readHead(spool, res.size)   // 重扫后 offset 重新建立：头部证据跟着刷新
-    const unseen = res.lines.filter(l => !delivered.has(l))   // M43 去重（rescan 路径）：去掉这行过滤 = rescan 重放旧行
-    const dup = res.lines.length - unseen.length
-    const kinds = unseen.map(l => freshness(l))
-    const stale = kinds.filter(k => k === 'stale').length
-    const unparsable = kinds.filter(k => k === 'unparsable').length
-    const freshAll = unseen.filter((_l, i) => kinds[i] !== 'stale')
+    const cls = classify(res.lines.map(parseSpoolLine))
     const cap = replayMax()
-    const skipped = Math.max(0, freshAll.length - cap)
-    const fresh = skipped > 0 ? freshAll.slice(-cap) : freshAll
+    const skipped = Math.max(0, cls.fresh.length - cap)
+    const fresh = skipped > 0 ? cls.fresh.slice(-cap) : cls.fresh
     appendLedger(root,
-      `rescan lines=${res.lines.length} dup=${dup} skipped=${skipped} deliver=${fresh.length} stale=${stale} unparsable=${unparsable} total=${seen} inbox=${inbox}`)
-    if (fresh.length) wake(fresh, { dup, skipped })
+      `rescan lines=${res.lines.length} dup=${cls.replay} skipped=${skipped} deliver=${fresh.length} stale=${cls.stale} unparsable=${cls.unparsable} total=${seen} inbox=${inbox}`)
+    if (cls.replay > 0) appendLedger(root, `replay suppressed n=${cls.replay} reason=rescan inbox=${inbox}`)
+    if (cls.unprovable > 0) {
+      appendLedger(root, `unprovable n=${cls.unprovable} inbox=${inbox}（身份早于日志淘汰下限：日志已不能证明它没投过 → 永不唤醒）`)
+    }
+    if (!fresh.length) return 'ok'
+    return sendWake(fresh, { dup: cls.replay, skipped, off: res.offset, size: res.size, head: headStamp(readHead(spool, res.size)) })
   }
 
-  /** 读 spool 的新行并合并成一条唤醒（同一拍收到的多行只叫一次）。 */
+  /** `failed` 的重试：每拍至多一次、不得越过新鲜度地平线（过期即丢弃并计数，绝不唤醒）。 */
+  const runRetryTick = (): void => {
+    if (!retryQueue.size) return
+    let stale = 0
+    const fresh: SpoolLine[] = []
+    for (const [identity, material] of [...retryQueue]) {
+      if (delivered.has(identity)) { retryQueue.delete(identity); continue }
+      if (freshnessOf(material.src) === 'stale') { stale++; retryQueue.delete(identity); continue }
+      fresh.push(material)
+    }
+    if (stale > 0) appendLedger(root, `retry stale=${stale} fresh=${fresh.length} inbox=${inbox}（重试不越过新鲜度地平线）`)
+    if (fresh.length) sendWake(fresh, { retry: true })
+  }
+
+  /** `read` 无 `intent`（上一次的发送根本没开始）：恰好一次恢复。新鲜度优先 ——
+   *  已过期的只计数（`stale=`，不是 `recovery=`），绝不唤醒。 */
+  const runRecoveryTick = (): void => {
+    if (!recoveryQueue.size) return
+    let stale = 0
+    let unparsable = 0
+    const fresh: SpoolLine[] = []
+    for (const [identity, material] of [...recoveryQueue]) {
+      if (delivered.has(identity)) { recoveryQueue.delete(identity); continue }
+      const f = freshnessOf(material.src)
+      if (f === 'stale') { stale++; recoveryQueue.delete(identity); delivered.add(identity); continue }
+      if (f === 'unparsable') unparsable++
+      fresh.push(material)
+    }
+    appendLedger(root,
+      `recovery candidates=${stale + fresh.length} fresh=${fresh.length} stale=${stale} unparsable=${unparsable} inbox=${inbox}`)
+    if (!fresh.length) return
+    const state = sendWake(fresh, { recovery: true })
+    if (state !== 'blocked') for (const l of fresh) recoveryQueue.delete(l.identity)
+  }
+
+  /** 启动基线的代价核算（P81/D4）：启动那一刻 spool 里已经完整、但没有任何日志记录的行，
+   *  仍然按 doctrine 被基线吞掉（不唤醒）—— 但不再静默：只计数，不改 `started … baseline=` 契约。 */
+  const baselineSwallowed = (): void => {
+    let n = 0
+    try {
+      const res = readNewLines(spool, 0)
+      for (const raw of res.lines) {
+        const identity = lineIdentity(raw)
+        if (delivered.has(identity) || journalEntries.has(identity)) continue
+        n++
+      }
+    } catch { /* 读不到就当 0：核算绝不把会话搞崩 */ }
+    appendLedger(root, `baseline swallowed n=${n} inbox=${inbox}（启动时完整行里没有任何日志记录的行；基线仍是 spool 末尾）`)
+  }
+
+  /** 读 spool 的新行并合并成一条唤醒（同一拍收到的多行只叫一次）。
+   *  日志写不进去时 `deliverNormal` 返回 blocked：offset 不动，行保持未读（下一拍重读）。 */
   const flush = (): void => {
     if (!spool) return
+    try { runRetryTick() } catch { /* ignore */ }
+    try { runRecoveryTick() } catch { /* ignore */ }
     const res = readNewLines(spool, offset)
     if (res.shrank) {
       // M43：spool 变小/消失了 —— 仓内写路径只有 `>>` 追加，变小一定是外部力量（截断/重写/替换）。
@@ -843,6 +1220,10 @@ export default function (pi: ExtensionAPI) {
       // P28/B2：先看证据（头部 + 回退幅度 + 上次的事件），小回退是修复，其余才是有界重扫。
       handleShrink()
       return
+    }
+    if (res.lines.length > 0) {
+      const state = deliverNormal(res.lines, { off: res.offset, size: res.size, head: headStamp(readHead(spool, res.size)) })
+      if (state === 'blocked') return   // fail-closed：行保持未读，offset 不动
     }
     const advanced = res.offset > offset
     offset = res.offset
@@ -858,12 +1239,25 @@ export default function (pi: ExtensionAPI) {
       headBytes = readHead(spool, trimmed)
       lastShrink = null
     }
-    if (res.lines.length) deliverNormal(res.lines)
   }
 
   const scheduleFlush = (): void => {
     if (mergeTimer) return
-    mergeTimer = setTimeout(() => { mergeTimer = null; try { flush() } catch { /* ignore */ } }, MERGE_MS)
+    mergeTimer = setTimeout(() => {
+      mergeTimer = null
+      try { flush() } catch { /* ignore */ } finally { armFileWatcher() }
+    }, MERGE_MS)
+  }
+
+  /** Bun 实测（harness S2/S3）：目录 watcher 在 spool 被**创建**之后会静默丢掉它的逐文件事件
+   *  （之后对 spool 的追加一个都不报），而同一个进程里对 spool 的文件级 watch 照常工作。
+   *  spool 只被 `>>` 追加（inode 不变），所以文件级 watcher 一旦 arm 上就长期有效；
+   *  目录 watcher 继续负责「文件还不存在」那一刻的创建事件，轮询是兜底。 */
+  const armFileWatcher = (): void => {
+    try { fileWatcher?.close?.() } catch { /* ignore */ }
+    fileWatcher = null
+    if (!spool || !existsSync(spool)) return
+    try { fileWatcher = watch(spool, () => { scheduleFlush() }) } catch { /* 目录 watcher 与轮询兜底仍在 */ }
   }
 
   /** 本地管家的清场：注册文件里 pid 已死的条目删掉（不让陈旧注册把发送方骗走）。 */
@@ -912,19 +1306,76 @@ export default function (pi: ExtensionAPI) {
     inbox = inboxName(found.window, root)
     spool = join(dir, `${key}.wake`)
     reg = join(dir, `${key}.reg`)
+    journalPath = join(dir, `${key}.deliver`)
+    seenPath = join(dir, `${key}.seen`)
     startedAt = new Date().toISOString()
-    // 基线：启动之前写入的行不叫醒任何人（backlog 是 pulse 的活）
+    // 基线：启动之前写入的行不叫醒任何人（backlog 是 pulse 的活）—— P81 不改变这条 doctrine，
+    // 只把它的代价数出来（baseline swallowed）
     offset = baselineOffset(spool)
     headBytes = readHead(spool, fileSize(spool))
     lastShrink = null
     seen = 0
-    seenPath = join(dir, `${key}.seen`)
-    loadSeen(seenPath)
+    delivered = new Set()
+    journalEntries = new Map()
+    retryQueue = new Map()
+    recoveryQueue = new Map()
+    floorTs = null
+    floorId = ''
+    journalRecords = 0
+    seqCounter = 1
+    // P81：投递日志是唯一 durable 去重权威。首次启动把老代码的 `.seen` 一次性导入 ——
+    // 此后删掉/清空它不再影响任何投递决定。
+    if (!existsSync(journalPath)) {
+      const imported = importSeen()
+      if (imported > 0) appendLedger(root, `seen import n=${imported} inbox=${inbox}（一次性：此后投递日志是唯一去重记忆）`)
+    }
+    const loaded = loadJournal(journalPath)
+    journalEntries = loaded.entries
+    floorTs = loaded.floorTs
+    floorId = loaded.floorId
+    journalRecords = loaded.records
+    seqCounter = Math.max(1, loaded.maxSeq + 1)
+    // 重启后的三态判定（只从日志，绝不从内存）：sent → 永不；intent 无结论 → inflight assumed（含撕裂尾）；
+    // read 无 intent → 恰好一次 recovery；failed → 每拍至多重试一次
+    let assumed = 0
+    for (const [identity, entry] of loaded.entries) {
+      if (entry.state === 'sent' || entry.state === 'intent') {
+        delivered.add(identity)
+        if (entry.state === 'intent') assumed++
+      } else if (entry.state === 'read') {
+        if (entry.material) recoveryQueue.set(identity, entry.material)
+      } else if (entry.state === 'failed') {
+        if (entry.material) retryQueue.set(identity, entry.material)
+      }
+    }
+    if (loaded.torn) {
+      appendLedger(root, `torn tail inbox=${inbox}（日志尾部有半截记录：结果未知，绝不重投）`)
+      for (const identity of [...recoveryQueue.keys()]) {
+        recoveryQueue.delete(identity)
+        delivered.add(identity)
+        assumed++
+      }
+    }
+    if (assumed > 0) appendLedger(root, `inflight assumed n=${assumed} inbox=${inbox}（intent 无 sent/failed：结果未知，永不重投）`)
+    // 夹具注入点：裸设（没有 TEAM_SMOKE_FIXTURE=1）无效，并留一行「被忽略」的痕迹
+    const abortEnv = (process.env.TEAM_INBOX_WATCH_ABORT_AFTER || '').trim()
+    abortAt = ''
+    if (abortEnv) {
+      if (process.env.TEAM_SMOKE_FIXTURE === '1' && (abortEnv === 'read' || abortEnv === 'intent')) abortAt = abortEnv
+      else appendLedger(root, `fixture knob ignored: TEAM_INBOX_WATCH_ABORT_AFTER=${abortEnv}（需要 TEAM_SMOKE_FIXTURE=1）`)
+    }
     reapDeadRegs(dir, reg)
     clearSkipRecords(root, keyTarget)   // M46：注册成功 = 这个 target 不再降级，旧痕迹不骗人
     clearDegradedRecords(root, keyTarget)   // M53：上一次失败留下的记录同样不再成立
     writeReg('ready')
     appendLedger(root, `started target=${keyTarget} inbox=${inbox} spool=${spool} baseline=${offset}`)
+    // P81 · 启动记录（审计：这一任读者从哪里起步）+ 越界就压缩（写下 floor）
+    if (!journalAppend(`start baseline=${offset} size=${fileSize(spool)} head=${headStamp(headBytes)}`)) {
+      appendLedger(root, `deliver blocked inbox=${inbox}（启动时投递日志写不进去 → 本次会话一条都不发）`)
+    }
+    maybeCompact()
+    baselineSwallowed()
+    runRecoveryTick()
     // M53 · 失败不再静默：errno + 额度观察 + 轮询间隔进账本，并写一条耐久降级记录（读的人看 pid+cwd）。
     // 夹具旋钮强制失败时同样走这条路径（evidence 里带 forced=1，免得测试事故被当成真事故）。
     const forced = forcedWatchErrno()
@@ -940,6 +1391,7 @@ export default function (pi: ExtensionAPI) {
         recordWatchFailure(root, keyTarget, watchErrnoOf(error), false)
       }
     }
+    armFileWatcher()   // spool 可能早已存在（上一任会话留下的）：文件级 watcher 现在就 arm 上
     pollTimer = setInterval(() => { try { flush() } catch { /* ignore */ } }, pollMs())
     beatTimer = setInterval(() => { try { writeReg('ready') } catch { /* ignore */ } }, heartbeatMs())
   })
@@ -954,5 +1406,7 @@ export default function (pi: ExtensionAPI) {
     if (keyTarget) clearDegradedRecords(root, keyTarget)
     root = ''; key = ''; inbox = ''; spool = ''; reg = ''; offset = 0
     headBytes = null; lastShrink = null
+    journalPath = ''; journalEntries = new Map(); retryQueue = new Map(); recoveryQueue = new Map()
+    delivered = new Set(); floorTs = null; floorId = ''; journalRecords = 0; abortAt = ''
   })
 }

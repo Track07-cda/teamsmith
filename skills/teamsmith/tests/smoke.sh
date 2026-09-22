@@ -6867,6 +6867,54 @@ else
     "12b-pi P28：只含过期行的重扫 deliver=0 + stale=<n>"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21c the wake line reads n=2 and total grows by exactly two" \
     "12b-pi P28：真投递的 wake n=2、total +2"
+  # P81（wake-delivery-idempotence）：写前日志 / 至多一次 / fail-closed / 源行点名（harness S25*/S26；
+  # 翻转证据见 tests/flip-p71.sh）。这一组用轮询（不依赖 watcher 前提），两种前提下都必须逐条 PASS。
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25j the journal is start → read → intent → sent" \
+    "12b-pi P81：投递日志按 start → read → intent → sent 的顺序落盘（一行一条记录）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25j a stale line writes no journal record" \
+    "12b-pi P81：过期行不写日志记录、不唤醒、只计数"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25g startup accounting names the swallowed lines" \
+    "12b-pi P81：启动核算（baseline swallowed n=）且基线契约不变"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25r a recovered line past the horizon is counted stale" \
+    "12b-pi P81：已过期的恢复只计数（stale=1）不唤醒（不是 recovery=）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25z the abort knob without TEAM_SMOKE_FIXTURE=1 is printed as ignored" \
+    "12b-pi P81：崩溃注入旋钮是夹具专属，裸设无效且留痕"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25a the child is a real separate process killed at the injection point" \
+    "12b-pi P81：崩溃用例真的在另一个进程里 SIGKILL（不是内存里重启）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25a exactly one recovery wake is sent for the crashed line" \
+    "12b-pi P81：read 后被杀 → 重启恰好一次 recovery（不是两次）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25b the restart sends no wake at all" \
+    "12b-pi P81：intent 后被杀 → 重启零重投（结果未知）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25b the ledger records exactly one inflight assumed n=1" \
+    "12b-pi P81：inflight assumed 恰好记一次（且不重投）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25c a raising message API is recorded as wake failed once per attempt" \
+    "12b-pi P81：会话 API 拒绝 → 每次尝试一条 wake failed，下一拍重试"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25c nothing is sent while the journal is unwritable" \
+    "12b-pi P81：日志写不进去 → 一条都不发（fail-closed）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25c the line is delivered exactly once when the journal becomes writable again" \
+    "12b-pi P81：日志恢复可写后恰好投一次"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25c a failed wake is not retried past the freshness horizon" \
+    "12b-pi P81：failed 的重试不越过新鲜度地平线"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25d the two rows differ by source time and identity" \
+    "12b-pi P81：逐字相同的两条 payload 靠身份与源时间区分"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25e the first start imports <key>.seen once and records it" \
+    "12b-pi P81：老 .seen 只被一次性导入（之后日志是唯一记忆）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25e a torn tail is treated as inflight assumed" \
+    "12b-pi P81：撕裂尾=结果未知，绝不重投"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25e compaction keeps the journal under the bound" \
+    "12b-pi P81：日志越界即压到界内并写 floor="
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25e an identity below the eviction floor is unprovable, never woken" \
+    "12b-pi P81：淘汰下限以下的身份 unprovable，永不唤醒"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25f the recorded truncation reads deliver=0 (the incident shape)" \
+    "12b-pi P81：事故重放（原始字节）第一拍 rescan deliver=0"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25f a one-shot truncate+rewrite is rescanned, classified and silent" \
+    "12b-pi P81：事故重放零唤醒（dup=11 + stale=1，逐条分类）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S26 every listed line names its own absolute source time and identity" \
+    "12b-pi P81：唤醒文本点名每条源行的绝对时间与身份"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S26 the wake names the delivery journal the identities were recorded in" \
+    "12b-pi P81：唤醒文本给出投递日志路径（收件方可自证）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the printed identity resolves to exactly one delivered.log record" \
+    "12b-pi P81：唤醒文本的 id 能在 delivered.log 里一一定位（端到端）"
   if [ "$M53_IW_OK" = "1" ]; then
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
@@ -6883,7 +6931,7 @@ else
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S12 ledger records the rescan counts" \
     "12b-pi M43：shrink 后的 rescan 有界（只投最近 N 条真新）且计数进账本"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S13 after a restart" \
-    "12b-pi M43：去重记忆跨会话重启（<key>.seen 持久化）"
+    "12b-pi M43：去重记忆跨会话重启（<key>.deliver 投递日志持久化）"
   else
     # 前提不可用：watcher 用例必须**逐条可见 SKIP**（带测得的 errno），一个字都不许静默少跑
     assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE SKIP S2 " "12b-pi/M53 不可用前提：S2（只靠 watcher）可见 SKIP"

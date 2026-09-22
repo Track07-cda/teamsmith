@@ -15,7 +15,8 @@
  *
  * 每个用例打印一行 `TEAM-IW-CASE PASS|FAIL <name> [:: detail]`，任一 FAIL → 退出码 1。
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, watch, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -33,7 +34,9 @@ const SKILL_DIR = resolve(EXT, '../..')   // <skill>/extension/<file> → <skill
 // ── 身份隔离：绝不继承调用者的团队身份与 tmux 身份；但这四个**夹具控制**必须在清掉之前
 //    快照、清完后只还原它们 —— 否则夹具自己的隔离会把「这次要强制失败」丢掉（有意制造的
 //    故障被当成继承环境静默丢弃，这条正是 M53 要求说清楚的形状）。
-const CONTROL_KEYS = ['TEAM_INBOX_WATCH_FORCE_FAIL', 'TEAM_IW_REQUIRE_WATCH', 'TEAM_IW_ONLY', 'TEAM_IW_KEEP']
+const CONTROL_KEYS = ['TEAM_INBOX_WATCH_FORCE_FAIL', 'TEAM_IW_REQUIRE_WATCH', 'TEAM_IW_ONLY', 'TEAM_IW_KEEP',
+  'TEAM_INBOX_WATCH_ABORT_AFTER', 'TEAM_SMOKE_FIXTURE',
+  'TEAM_IW_CHILD_REPO', 'TEAM_IW_CHILD_TARGET', 'TEAM_IW_CHILD_KIND', 'TEAM_IW_CHILD_FROM', 'TEAM_IW_CHILD_INBOX', 'TEAM_IW_CHILD_PAYLOAD']
 const CONTROLS = Object.fromEntries(CONTROL_KEYS.map(k => [k, process.env[k]]))
 for (const key of Object.keys(process.env)) {
   if (/^(TEAM_|SMOKE_)/.test(key) || key === 'TMUX' || key === 'TMUX_PANE') delete process.env[key]
@@ -41,6 +44,30 @@ for (const key of Object.keys(process.env)) {
 for (const [k, v] of Object.entries(CONTROLS)) {
   if (v === undefined) delete process.env[k]
   else process.env[k] = v
+}
+
+// ── P81 · 崩溃子进程（夹具只在 TEAM_SMOKE_FIXTURE=1 下生效）：父进程用 `--child` 启动同一个文件，
+//    子进程跑一任真会话、追加一行 spool，然后由扩展的注入点（TEAM_INBOX_WATCH_ABORT_AFTER=read|intent）
+//    在写前日志的那一步 SIGKILL 自己 —— 重启后的判定必须由日志（而不是内存）做出来。
+if (args.includes('--child')) {
+  const repo = process.env.TEAM_IW_CHILD_REPO || ''
+  if (!repo) { console.error('harness --child: TEAM_IW_CHILD_REPO missing'); process.exit(2) }
+  process.env.TEAM_ROOT = repo
+  process.env.TEAM_INBOX_WATCH_TARGET = process.env.TEAM_IW_CHILD_TARGET || 'm30s:pm'
+  process.env.TEAM_INBOX_WATCH_POLL_MS = '50'
+  process.env.TEAM_INBOX_WATCH_HEARTBEAT_MS = '200'
+  const cdir = join(repo, '.pi/team/state/inbox-watch')
+  const handlersC = {}
+  const factoryC = (await import(EXT)).default
+  factoryC({ on: (n, fn) => { (handlersC[n] ||= []).push(fn) }, registerTool() {}, registerCommand() {}, sendMessage: () => {} })
+  for (const fn of handlersC.session_start ?? []) await fn({ reason: 'startup' }, { cwd: repo })
+  const regC = readdirSync(cdir).find(f => f.endsWith('.reg'))
+  if (!regC) { console.error('harness --child: no .reg after session_start'); process.exit(2) }
+  appendFileSync(join(cdir, regC.replace(/\.reg$/, '.wake')),
+    `${Date.now()}\t${process.env.TEAM_IW_CHILD_KIND || 'say'}\t${process.env.TEAM_IW_CHILD_FROM || 'pm'}\t${process.env.TEAM_IW_CHILD_INBOX || 'pm'}\t${process.env.TEAM_IW_CHILD_PAYLOAD || 'child line'}\n`)
+  await new Promise(r => setTimeout(r, 4000))
+  console.error('harness --child: the abort knob never fired')
+  process.exit(3)   // 走到这里 = 注入点没生效（父进程必须为此红）
 }
 
 // ── M53 前提：这个用户此刻能不能注册一个 watch（量它，不猜它）。只靠监视器唤醒的用例依赖它；
@@ -172,35 +199,43 @@ const REAL_BEFORE = snapshot(REAL_STATE)
 
 // ── 假 Pi 宿主 ────────────────────────────────────────────────────────────────
 const sent = []
+let hostFail = 0   // S25c：下一批 sendMessage 抛错（会话 API 拒绝的夹具形状）
 const handlers = {}
 const api = {
   on: (name, fn) => { (handlers[name] ||= []).push(fn) },
   registerTool: () => {},
   registerCommand: () => {},
-  sendMessage: (msg, opts) => { sent.push({ msg, opts, at: Date.now() }) },
+  sendMessage: (msg, opts) => {
+    if (hostFail > 0) { hostFail--; throw new Error('S25c fake host refused the message') }
+    sent.push({ msg, opts, at: Date.now() })
+  },
 }
 const emit = async (name, ...rest) => { for (const fn of handlers[name] ?? []) await fn(...rest) }
 const ctx = { cwd: ROOT }
-const sessionStart = () => emit('session_start', { reason: 'startup' }, ctx)
+const captureKey = () => { const r = regs()[0]; if (r) KEY = r.replace(/\.reg$/, ''); return KEY }
+const sessionStart = async () => { await emit('session_start', { reason: 'startup' }, ctx); captureKey() }
 const shutdown = () => emit('session_shutdown', { reason: 'quit' }, ctx)
 
 const regs = () => (existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(f => f.endsWith('.reg')) : [])
 const wakes = () => (existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(f => f.endsWith('.wake')) : [])
 // spool 与注册同名（只差后缀）：先看真的 .wake，再从未删的 .reg 推导，最后用记住的路径 ——
-// shutdown 之后还要能往同一个 spool 写「历史行」（S5）。
+// shutdown 之后还要能往同一个 spool 写「历史行」（S5）。P81 组在 resetState 后会先按住 KEY 再建文件。
 let lastSpool = ''
+let KEY = ''
 const spoolFile = () => {
   const w = wakes()[0]
   if (w) return (lastSpool = join(WATCH_DIR, w))
   const r = regs()[0]
   if (r) return (lastSpool = join(WATCH_DIR, r.replace(/\.reg$/, '.wake')))
+  if (KEY) return (lastSpool = join(WATCH_DIR, `${KEY}.wake`))
   return lastSpool
 }
-const appendWake = (kind, from, inbox, payload) => {
+const appendWake = (kind, from, inbox, payload) => appendWakeAt(Date.now(), kind, from, inbox, payload)
+const appendWakeAt = (ts, kind, from, inbox, payload) => {
   mkdirSync(WATCH_DIR, { recursive: true })
   const f = spoolFile()
   if (!f) throw new Error('no spool file: the extension never registered')
-  appendFileSync(f, `${Date.now()}\t${kind}\t${from}\t${inbox}\t${payload}\n`)
+  appendFileSync(f, `${ts}\t${kind}\t${from}\t${inbox}\t${payload}\n`)
 }
 // P28/B1：原样追加字节（生产者的 `LC_ALL=C cut -c1-700` 会写出非法 UTF-8 的预览）——
 // 夹具里用 Buffer 直写，保证测的是「spool 里有非法字节」这个形状，而不是 String 的往返。
@@ -213,6 +248,55 @@ const appendWakeRaw = (buf) => {
 const ledger = () => (existsSync(LEDGER) ? readFileSync(LEDGER, 'utf8').trim().split('\n') : [])
 const ledgerMatches = (re) => ledger().filter(l => re.test(l)).length
 const lastText = (i = -1) => String(sent.at(i)?.msg?.content ?? '')
+
+// ── P81 · 投递日志的**独立**解析（不复用实现里的解析器：夹具自己按规格解一遍）────────────────
+const jesc = (s) => String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t').replace(/ /g, '\\s')
+const junesc = (s) => String(s).replace(/\\(.)/g, (_m, c) => (c === 'n' ? '\n' : c === 'r' ? '\r' : c === 't' ? '\t' : c === 's' ? ' ' : c))
+const jrec = (line) => {
+  const m = /^(\S+) (start|read|intent|sent|failed|floor)(?: (.*))?$/.exec(line)
+  if (!m) return null
+  const fields = {}
+  for (const tok of (m[3] ?? '').split(' ')) {
+    if (!tok) continue
+    const i = tok.indexOf('=')
+    if (i <= 0) return null
+    fields[tok.slice(0, i)] = junesc(tok.slice(i + 1))
+  }
+  return { ts: m[1], kind: m[2], fields }
+}
+const journalPathOf = () => { const f = spoolFile(); return f ? f.replace(/\.wake$/, '.deliver') : '' }
+const journalLines = () => { const f = journalPathOf(); return f && existsSync(f) && statSync(f).isFile() ? readFileSync(f, 'utf8').split('\n').filter(l => l.trim()) : [] }
+const journalOf = (kind) => journalLines().map(jrec).filter(r => r && r.kind === kind)
+const spoolLines = () => { const f = spoolFile(); return f && existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(l => l.trim()) : [] }
+/** 与实现同口径的行身份：发送方的 `id=` 字段优先，否则整行 sha1（夹具自己算，不读实现） */
+const identityOf = (line) => {
+  const id = (String(line).split('\t')[5] ?? '').trim()
+  if (id) return id
+  return `sha1:${createHash('sha1').update(String(line), 'utf8').digest('hex')}`
+}
+/** 清空夹具状态（只动临时仓库）：新用例（P81 组）拿一个干净日志，避免前面用例的账本/日志串味 */
+const resetStateSync = () => {
+  rmSync(WATCH_DIR, { recursive: true, force: true })
+  rmSync(LEDGER, { force: true })
+  lastSpool = ''
+}
+const resetState = async () => {
+  await shutdown()
+  resetStateSync()
+}
+/** 子进程崩溃运行器：父进程在**另一个进程**里跑一任会话，在注入点真死（SIGKILL） */
+const runChild = (abortAfter, payload) => {
+  const env = {
+    ...process.env,
+    TEAM_SMOKE_FIXTURE: '1',
+    TEAM_IW_CHILD_REPO: ROOT,
+    TEAM_IW_CHILD_TARGET: 'm30s:pm',
+    TEAM_IW_CHILD_PAYLOAD: payload,
+    TEAM_INBOX_WATCH_ABORT_AFTER: abortAfter,
+  }
+  return spawnSync(process.execPath, [...process.execArgv, resolve(process.argv[1]), EXT, '--child'],
+    { cwd: ROOT, env, encoding: 'utf8', timeout: 20000 })
+}
 
 if (!existsSync(EXT)) {
   check('import', false, `extension missing: ${EXT}`)
@@ -382,6 +466,12 @@ if (only('S6')) {
   check('S9 ledger records startup with target+inbox', lines.some(l => / started target=m30s:pm inbox=pm /.test(l)))
   check('S9 ledger records each wake with the merged count', lines.some(l => / wake n=3 /.test(l)) && lines.some(l => / wake n=1 /.test(l)),
     lines.filter(l => l.includes('wake')).slice(0, 3).join(' | '))
+  // P81：wake 行点名 seq 与身份；启动基线的代价单独计数（doctrine 不变，只是不再静默）
+  check('S9 wake lines name their seq and the identities they carry',
+    lines.some(l => / wake n=\d+ total=\d+ inbox=\S+ kinds=\S+ seq=\d+ ids=\S+/.test(l)),
+    lines.filter(l => / wake n=/.test(l)).at(-1) ?? '(no wake line)')
+  check('S9 startup accounting is in the ledger (baseline swallowed n=)',
+    lines.some(l => /baseline swallowed n=\d+ /.test(l)), lines.filter(l => /baseline swallowed/.test(l)).at(-1) ?? '(none)')
   check('S9 ledger records shutdown', lines.some(l => / stopped target=m30s:pm /.test(l)))
 }
 
@@ -423,6 +513,15 @@ if (only('S10')) {
   const activeEntries = existsSync(join(STATE, 'outbox'))
     ? readdirSync(join(STATE, 'outbox')).filter(f => f.endsWith('.msg')).length : 0
   check('S10 the outbox is empty after the watch delivery', activeEntries === 0, `entries=${activeEntries}`)
+  // P81/2.4：spool 行带发送方自己的记录 id，唤醒文本印的就是它，且能在 delivered.log 里一一定位
+  const spoolTail = (readFileSync(spoolFile(), 'utf8').trimEnd().split('\n').at(-1) ?? '').split('\t')
+  const entryId = (spoolTail[5] ?? '').trim()
+  check('S10 the spool line carries the sender record id (6th field)', !!entryId, `fields=${spoolTail.length} id=${entryId || '(none)'}`)
+  const deliveredLog = join(STATE, 'outbox/delivered.log')
+  const idHits = existsSync(deliveredLog)
+    ? readFileSync(deliveredLog, 'utf8').split('\n').filter(l => l.split('\t')[2] === entryId).length : 0
+  check('S10 the printed identity resolves to exactly one delivered.log record',
+    !!entryId && idHits === 1 && lastText().includes(entryId), `hits=${idHits} id=${entryId}`)
   await shutdown()
 }
 
@@ -462,10 +561,10 @@ if (only('S11')) {
   check('S11 external truncate+rewrite does not redeliver already-delivered lines',
     sent.length === before, `messages=${sent.length - before}`)
   const shrinkLines = ledger().filter(l => /spool shrink/.test(l))
-  const dedupLines = ledger().filter(l => /dedup: skipped/.test(l))
-  check('S11 the ledger records the shrink and the dedup skip (auditable, not a silent reset)',
+  const dedupLines = ledger().filter(l => /replay suppressed/.test(l))
+  check('S11 the ledger records the shrink and the replay suppression (auditable, not a silent reset)',
     shrinkLines.length >= 1 && dedupLines.length >= 1,
-    `${shrinkLines.at(-1) ?? '(no shrink line)'} || ${dedupLines.at(-1) ?? '(no dedup line)'}`)
+    `${shrinkLines.at(-1) ?? '(no shrink line)'} || ${dedupLines.at(-1) ?? '(no replay line)'}`)
   check('S11 total is not inflated by the rewrite', lastTotal() === totalBefore, `${totalBefore} -> ${lastTotal()}`)
   // 真新增仍然只叫一次、计数只 +1
   appendWake('say', 'pm', 'pm', 'genuinely-new-after-rewrite')
@@ -516,13 +615,13 @@ if (only('S12')) {
   delete process.env.TEAM_INBOX_WATCH_REPLAY_MAX
 }
 
-// ── S13：去重记忆跨会话重启（<key>.seen 持久化；重启后的重写仍然静默）────────────────────
+// ── S13：去重记忆跨会话重启（<key>.deliver 投递日志是唯一 durable 权威；P81 起 .seen 只是被一次性导入）
 if (only('S13')) {
   await shutdown()
-  await sessionStart()   // 内存态清零 → 去重记忆只能从 <key>.seen 重新加载
-  const seenFiles = existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(x => x.endsWith('.seen')) : []
-  check('S13 the dedup memory is persisted (<key>.seen exists)', seenFiles.length === 1,
-    `seen=${seenFiles.length}`)
+  await sessionStart()   // 内存态清零 → 去重记忆只能从 <key>.deliver 重新加载
+  const deliverFiles = existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filter(x => x.endsWith('.deliver')) : []
+  check('S13 the dedup memory is persisted (<key>.deliver is the journal)', deliverFiles.length === 1,
+    `deliver=${deliverFiles.length}`)
   const f = spoolFile()
   const before = sent.length
   // 重写一批**上一会话投递过**的行（S11 那三行）：若记忆只活在内存里，这里就会重放
@@ -821,14 +920,13 @@ const cliPath = join(SKILL_DIR, 'scripts/team')
   process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
   await sessionStart()
   const f = spoolFile()
-  const seenFile = readdirSync(WATCH_DIR).filter(n => n.endsWith('.seen')).map(n => join(WATCH_DIR, n))[0]
-  // 没有投递就没有 .seen（前提干涸或失败路径的会话）：按空记忆处理，让断言自己去红 ——
-  // 夹具绝不能在这里崩掉（一崩就再也走不到后面的用例，翻转证据会变成「包没跑完」）。
-  const seenLines = seenFile && existsSync(seenFile)
-    ? readFileSync(seenFile, 'utf8').split('\n').filter(l => l.trim())
-    : []
-  // (a) 只含已投递行的重写 → deliver=0 + dup>0、total 不动、无唤醒
-  const picked = seenLines.filter(l => /burst line|after-clipped-line/.test(l)).slice(-3)
+  // (a) 先投递三条真新行（从 spool 尾取回它们的真实字节），再把这批**已投递**行重写回 spool
+  //     → deliver=0 + dup>0、total 不动、无唤醒
+  const bPick = sent.length
+  for (const n of [1, 2, 3]) appendWake('knock', 'dev', 'pm', `S21a-delivered-${n}`)
+  await waitFor(() => sent.length > bPick)
+  await sleep(300)
+  const picked = readFileSync(f, 'utf8').trimEnd().split('\n').slice(-3)
   const rescanA = ledgerMatches(/ rescan lines=/)
   const shrinkA = ledgerMatches(/spool shrink/)
   const totalA = lastTotal()
@@ -954,6 +1052,497 @@ const degradedFiles = () => (existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filt
     !existsSync(join(WATCH_DIR, 'stale-m53.degraded')), `records=${degradedFiles().length}`)
   await shutdown()
   process.env.TEAM_INBOX_WATCH_POLL_MS = '3600000'
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// P81 · wake-delivery-idempotence：投递日志 / 至多一次 / fail-closed / 源行点名
+// 事故：一条 nudge 让 PM 在一个多小时里被「同一条」叫醒三次，而 durable 文件回答不了
+// 「到底投过没有」。契约：唤醒是 at-most-once（门铃），durable 收件箱行是 exactly-once（消息）。
+// 每个断言都指向**文件**（日志 / 账本），不读实现内部状态；本节用 100ms 轮询，不依赖 fs.watch。
+// ═══════════════════════════════════════════════════════════════════════════════
+process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
+
+// ── S25j：日志形状与写前顺序（start → read → intent → sent）；过期行不写记录（1.1）────
+if (only('S25j')) {
+  await resetState()
+  await sessionStart()
+  const f = spoolFile()
+  appendWake('say', 'pm', 'pm', 'S25j-fresh-line')
+  const woke = await waitFor(() => journalOf('sent').length > 0)
+  const recs = journalLines().map(jrec).filter(Boolean)
+  check('S25j the journal is start → read → intent → sent, one record per line',
+    woke && recs.map(r => r.kind).join(',') === 'start,read,intent,sent', recs.map(r => r.kind).join(','))
+  const read = recs.find(r => r.kind === 'read')
+  const rawLine = spoolLines().find(l => l.includes('S25j-fresh-line')) ?? ''
+  const size = statSync(f).size
+  check('S25j the read record carries the line identity and the wake material',
+    read && read.fields.id === identityOf(rawLine) && read.fields.kind === 'say' && read.fields.from === 'pm'
+      && read.fields.durable === 'pm' && read.fields.preview === 'S25j-fresh-line' && Number(read.fields.src) > 0,
+    read ? JSON.stringify(read.fields) : '(no read record)')
+  check('S25j the read record carries the offset/size/head fingerprint',
+    read && read.fields.off === String(size) && read.fields.size === String(size) && /^(fnv[0-9a-f]+|empty|absent)$/.test(read.fields.head),
+    read ? `off=${read.fields.off} size=${read.fields.size} head=${read.fields.head}` : '(no read record)')
+  check('S25j the batch is closed by intent then sent with the same seq',
+    recs.some(r => r.kind === 'intent' && r.fields.seq === read?.fields.seq)
+      && recs.some(r => r.kind === 'sent' && r.fields.seq === read?.fields.seq),
+    recs.map(r => `${r.kind}${r.fields.seq ? `=${r.fields.seq}` : ''}`).join(' '))
+  check('S25j every record is ISO-stamped', recs.every(r => /^\d{4}-\d{2}-\d{2}T/.test(r.ts)), recs[0]?.ts ?? '')
+  check('S25j the wake ledger line names seq and the identities',
+    / wake n=1 total=1 inbox=pm kinds=say seq=1 ids=\S+$/.test(ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => / wake n=/.test(l)).at(-1) ?? '(no wake line)')
+  // 过期行：不写日志记录、不唤醒、只计数
+  const before = sent.length
+  const recordsBefore = journalLines().length
+  const totalBefore = lastTotal()
+  appendWakeRaw(Buffer.from(`${Date.now() - 3600_000}\tsay\tpm\tpm\tS25j-stale-line\n`))
+  // 等分类行真的出现再断言「没写记录、没唤醒」：不然慢机器上可能是「还没读到」的假绿
+  const classified = await waitFor(() => ledgerMatches(/classify stale=1 unparsable=0/) >= 1, 3000)
+  check('S25j a stale line writes no journal record and wakes nobody',
+    classified && sent.length === before && journalLines().length === recordsBefore,
+    `messages=${sent.length - before} records=${journalLines().length - recordsBefore}`)
+  check('S25j the stale line is counted apart from total',
+    ledgerMatches(/classify stale=1 unparsable=0/) >= 1 && lastTotal() === totalBefore,
+    ledger().filter(l => /classify /.test(l)).at(-1) ?? '(no classify line)')
+  await shutdown()
+}
+
+// ── S25g：启动核算 —— 没人看过的行只计数，基线契约不变（4.2）──────────────────────────
+if (only('S25g')) {
+  await resetState()
+  appendWake('say', 'pm', 'pm', 'S25g-nobody-watched')
+  const before = sent.length
+  await sessionStart()
+  const started = ledger().filter(l => / started target=/.test(l)).at(-1) ?? ''
+  check('S25g startup accounting names the swallowed lines and keeps the baseline contract',
+    /baseline swallowed n=1 /.test(ledger().filter(l => /baseline swallowed/.test(l)).at(-1) ?? '')
+      && started.includes(`baseline=${statSync(spoolFile()).size}`),
+    `${ledger().filter(l => /baseline swallowed/.test(l)).at(-1) ?? '(none)'} || ${started.trim()}`)
+  await sleep(500)
+  check('S25g a line written while nobody watched wakes nobody', sent.length === before, `messages=${sent.length - before}`)
+  appendWake('say', 'pm', 'pm', 'S25g-after-start')
+  const woke = await waitFor(() => sent.length > before)
+  check('S25g a line after startup still wakes exactly once',
+    woke && sent.length === before + 1 && lastText().includes('S25g-after-start'), `messages=${sent.length - before}`)
+  await shutdown()
+}
+
+// ── S25r：恢复路径也受新鲜度约束 —— 已过期的恢复只计数、不唤醒（3.2 的 stale 半边）──
+if (only('S25r')) {
+  await resetState()
+  mkdirSync(WATCH_DIR, { recursive: true })
+  const oldTs = Date.now() - 3600_000
+  const line = `${oldTs}\tsay\tpm\tpm\tS25r-recovered-but-stale`
+  writeFileSync(spoolFile(), `${line}\n`)
+  const lineBytes = Buffer.byteLength(line, 'utf8') + 1
+  writeFileSync(journalPathOf(),
+    `${new Date().toISOString()} start baseline=0 size=0 head=absent\n` +
+    `${new Date().toISOString()} read seq=1 off=${lineBytes} size=${lineBytes} head=empty id=${jesc(identityOf(line))} src=${oldTs} kind=say from=pm durable=pm preview=S25r-recovered-but-stale\n`)
+  const before = sent.length
+  await sessionStart()
+  check('S25r a recovered line past the horizon is counted stale, not woken',
+    sent.length === before && ledgerMatches(/recovery candidates=1 fresh=0 stale=1 unparsable=0/) === 1
+      && ledgerMatches(/recovery n=/) === 0,
+    `${ledger().filter(l => /recovery /.test(l)).at(-1) ?? '(none)'} || messages=${sent.length - before}`)
+  await sleep(400)
+  check('S25r the stale recovery stays silent and total does not move',
+    sent.length === before && lastTotal() === 0, `messages=${sent.length - before} total=${lastTotal()}`)
+  await shutdown()
+}
+
+// ── S25z：注入旋钮是夹具专属；裸设无效、不杀会话、不留痕（3.1）────────────────────────
+if (only('S25z')) {
+  await resetState()
+  process.env.TEAM_INBOX_WATCH_ABORT_AFTER = 'read'
+  await sessionStart()
+  check('S25z the abort knob without TEAM_SMOKE_FIXTURE=1 is printed as ignored',
+    ledger().some(l => /fixture knob ignored: TEAM_INBOX_WATCH_ABORT_AFTER=read/.test(l)),
+    ledger().filter(l => /fixture knob/.test(l)).at(-1) ?? '(no ignored line)')
+  const before = sent.length
+  appendWake('say', 'pm', 'pm', 'S25z-live-process')
+  const woke = await waitFor(() => sent.length > before)
+  check('S25z an ignored knob does not kill the session (the line is still delivered)',
+    woke && sent.length === before + 1, `messages=${sent.length - before}`)
+  const recs = journalOf('sent')
+  check('S25z the delivery went through the journal as usual', recs.length === 1, `sent records=${recs.length}`)
+  delete process.env.TEAM_INBOX_WATCH_ABORT_AFTER
+  await shutdown()
+}
+
+// ── S25a：read 之后被杀 → 重启后**恰好一次**恢复（不是两次）（3.2）──────────────────
+if (only('S25a')) {
+  await resetState()
+  const payload = `S25a-read-then-die-${Date.now()}`
+  const r = runChild('read', payload)
+  check('S25a the child is a real separate process killed at the injection point',
+    r.status === null && r.signal === 'SIGKILL',
+    `status=${r.status} signal=${r.signal} stderr=${String(r.stderr ?? '').trim().split('\n').at(-1) ?? ''}`)
+  const recs = journalLines().map(jrec).filter(Boolean)
+  check('S25a the child left a read record and no intent/sent',
+    recs.some(x => x.kind === 'read') && !recs.some(x => x.kind === 'intent' || x.kind === 'sent'),
+    recs.map(x => x.kind).join(','))
+  check('S25a the durable spool line survived the crash', spoolLines().some(l => l.includes(payload)), `lines=${spoolLines().length}`)
+  const before = sent.length
+  await sessionStart()
+  const woke = await waitFor(() => sent.length > before, 3000)
+  check('S25a exactly one recovery wake is sent for the crashed line',
+    woke && sent.length === before + 1, `messages=${sent.length - before}`)
+  const wakeLine = ledger().filter(l => / wake n=/.test(l)).at(-1) ?? ''
+  check('S25a the ledger records it as recovery with its seq',
+    / wake n=1 total=1 inbox=pm kinds=say seq=\d+ ids=\S+ recovery n=1$/.test(wakeLine), wakeLine.trim())
+  check('S25a the recovery is recorded in the journal as sent (at most once from now on)',
+    journalOf('sent').length === 1, `sent records=${journalOf('sent').length}`)
+  // 同一批字节再重写一次 —— **跨一次重启**（重启本身也不得再恢复）：证明至多一次是由日志
+  // （不是内存）保证的
+  await shutdown()
+  const beforeR = sent.length
+  await sessionStart()
+  await sleep(400)
+  check('S25a a restart after the recovery wakes nobody again (sent is terminal)',
+    sent.length === beforeR, `messages=${sent.length - beforeR}`)
+  const bytes = readFileSync(spoolFile())
+  const rescan0 = ledgerMatches(/ rescan lines=/)
+  const replay0 = ledgerMatches(/replay suppressed/)
+  writeFileSync(spoolFile(), '')
+  await waitFor(() => ledgerMatches(/ rescan lines=/) > rescan0, 3000)
+  appendFileSync(spoolFile(), bytes)
+  await waitFor(() => ledgerMatches(/replay suppressed/) > replay0, 3000)
+  check('S25a a later rewrite of the same bytes produces no second wake',
+    sent.length === beforeR && ledgerMatches(/replay suppressed/) > replay0,
+    `messages=${sent.length - beforeR} replay=${ledgerMatches(/replay suppressed/)}`)
+  await shutdown()
+}
+
+// ── S25b：intent 之后被杀 → 重启后零重投 + inflight assumed（3.3）────────────────────
+if (only('S25b')) {
+  await resetState()
+  const inboxFile = join(ROOT, 'docs/team/inbox/pm.md')
+  mkdirSync(join(ROOT, 'docs/team/inbox'), { recursive: true })
+  appendFileSync(inboxFile, '\n- [say] S25b durable inbox line\n')
+  const payload = `S25b-intent-then-die-${Date.now()}`
+  const r = runChild('intent', payload)
+  check('S25b the child is a real separate process killed at the intent injection point',
+    r.status === null && r.signal === 'SIGKILL',
+    `status=${r.status} signal=${r.signal} stderr=${String(r.stderr ?? '').trim().split('\n').at(-1) ?? ''}`)
+  const recs = journalLines().map(jrec).filter(Boolean)
+  check('S25b the child left a complete read+intent and no sent/failed',
+    recs.filter(x => x.kind === 'read').length === 1 && recs.some(x => x.kind === 'intent')
+      && !recs.some(x => x.kind === 'sent' || x.kind === 'failed'),
+    recs.map(x => x.kind).join(','))
+  // 证明权威是日志而不是 .seen：重启前删掉任何 .seen
+  for (const n of readdirSync(WATCH_DIR).filter(x => x.endsWith('.seen'))) rmSync(join(WATCH_DIR, n), { force: true })
+  const before = sent.length
+  await sessionStart()
+  await sleep(500)
+  check('S25b the restart sends no wake at all', sent.length === before, `messages=${sent.length - before}`)
+  check('S25b the ledger records exactly one inflight assumed n=1',
+    ledger().filter(l => /inflight assumed n=1 /.test(l)).length === 1,
+    ledger().filter(l => /inflight assumed/.test(l)).join(' | ') || '(none)')
+  check('S25b the durable inbox line is still readable', readFileSync(inboxFile, 'utf8').includes('S25b durable inbox line'))
+  check('S25b total did not move', lastTotal() === 0, `total=${lastTotal()}`)
+  // 之后的重读同样沉默，total 也不动（先真的截断、让读者看见 shrink，再把字节写回）
+  const bytes = readFileSync(spoolFile())
+  const rescan0 = ledgerMatches(/ rescan lines=/)
+  const replay0 = ledgerMatches(/replay suppressed/)
+  writeFileSync(spoolFile(), '')
+  await waitFor(() => ledgerMatches(/ rescan lines=/) > rescan0, 3000)
+  appendFileSync(spoolFile(), bytes)
+  await waitFor(() => ledgerMatches(/replay suppressed/) > replay0, 3000)
+  check('S25b a later re-read of those bytes adds no wake and no total',
+    sent.length === before && lastTotal() === 0 && ledgerMatches(/replay suppressed/) > replay0,
+    `messages=${sent.length - before} total=${lastTotal()} replay=${ledgerMatches(/replay suppressed/)}`)
+  await shutdown()
+}
+
+// ── S25c：API 拒绝可重试（每拍至多一次）；日志写不进去 = 一条都不发（1.2/1.3/1.4）──────
+if (only('S25c')) {
+  // (a) 抛出两次 → 下一拍重试 → 只产生一次唤醒
+  await resetState()
+  await sessionStart()
+  hostFail = 2
+  const before = sent.length
+  appendWake('say', 'pm', 'pm', 'S25c-host-raises')
+  const failed = await waitFor(() => ledgerMatches(/wake failed/) >= 2, 4000)
+  check('S25c a raising message API is recorded as wake failed once per attempt',
+    failed && ledgerMatches(/wake failed/) === 2, `failed=${ledgerMatches(/wake failed/)}`)
+  check('S25c a failed send moves neither the wake count nor total',
+    sent.length === before && lastTotal() === 0, `messages=${sent.length - before} total=${lastTotal()}`)
+  check('S25c the failed batch left no sent record', journalOf('sent').length === 0, `sent=${journalOf('sent').length}`)
+  const retried = await waitFor(() => sent.length > before, 4000)
+  check('S25c the retry is the only wake that line ever produces',
+    retried && sent.length === before + 1 && lastText().includes('S25c-host-raises'), `messages=${sent.length - before}`)
+  check('S25c the retry closed the batch with sent', journalOf('sent').length === 1, `sent=${journalOf('sent').length}`)
+  check('S25c total grew by exactly one after the retry', lastTotal() === 1, `total=${lastTotal()}`)
+  await shutdown()
+
+  // (b) 日志不可写（把 <key>.deliver 做成目录 → EISDIR）→ 零投递 + deliver blocked；恢复后恰好一次
+  await resetState()
+  await sessionStart()
+  const df = journalPathOf()
+  await shutdown()
+  rmSync(df, { force: true })
+  mkdirSync(df, { recursive: true })
+  await sessionStart()
+  check('S25c a session whose journal cannot be written records deliver blocked',
+    ledgerMatches(/deliver blocked/) >= 1, ledger().filter(l => /deliver blocked/.test(l)).at(-1) ?? '(none)')
+  const beforeB = sent.length
+  appendWake('say', 'pm', 'pm', 'S25c-blocked-line')
+  await sleep(600)
+  check('S25c nothing is sent while the journal is unwritable',
+    sent.length === beforeB && lastTotal() === 0, `messages=${sent.length - beforeB} total=${lastTotal()}`)
+  rmSync(df, { recursive: true, force: true })
+  const delivered = await waitFor(() => sent.length > beforeB, 4000)
+  check('S25c the line is delivered exactly once when the journal becomes writable again',
+    delivered && sent.length === beforeB + 1 && lastTotal() === 1, `messages=${sent.length - beforeB} total=${lastTotal()}`)
+  check('S25c the line was never delivered while blocked (one wake, one sent record)',
+    journalOf('sent').length === 1, `sent=${journalOf('sent').length}`)
+  await shutdown()
+
+  // (c) 过期即止：失败的行越过新鲜度地平线后不再重试、不唤醒、只计数
+  //     （初始年龄 9s、地平线 10s —— 慢机器上第一拍也不会误判成过期；失败后把地平线降到 1s）
+  await resetState()
+  await sessionStart()
+  process.env.TEAM_INBOX_WATCH_STALE_SEC = '10'
+  hostFail = 1
+  appendWakeRaw(Buffer.from(`${Date.now() - 9000}\tsay\tpm\tpm\tS25c-stale-retry\n`))
+  const sawFail = await waitFor(() => ledgerMatches(/wake failed/) >= 1, 3000)
+  process.env.TEAM_INBOX_WATCH_STALE_SEC = '1'   // 让下一拍时这一行已过期
+  const beforeC = sent.length
+  await waitFor(() => ledgerMatches(/retry stale=1/) >= 1, 3000)
+  check('S25c a failed wake is not retried past the freshness horizon',
+    sawFail && sent.length === beforeC && lastTotal() === 0, `messages=${sent.length - beforeC} total=${lastTotal()}`)
+  check('S25c the skipped retry is counted as stale',
+    ledgerMatches(/retry stale=1/) >= 1, ledger().filter(l => /retry /.test(l)).at(-1) ?? '(no retry line)')
+  delete process.env.TEAM_INBOX_WATCH_STALE_SEC
+  await shutdown()
+}
+
+// ── S25d：逐字相同的两条 payload 靠身份与源时间区分；重写不再唤醒（2.3）──────────────
+if (only('S25d')) {
+  await resetState()
+  await sessionStart()
+  const f = spoolFile()
+  const before = sent.length
+  const t1 = Date.now() - 2000
+  const t2 = t1 + 1
+  const text = '[pulse] 待办：未读通知 7 · 待复验 4'
+  appendWakeAt(t1, 'nudge', 'pulse', '-', text)
+  appendWakeAt(t2, 'nudge', 'pulse', '-', text)
+  const woke = await waitFor(() => sent.length > before, 3000)
+  const body = lastText()
+  const rows = body.split('\n').filter(l => l.startsWith('- [nudge]'))
+  check('S25d two byte-identical payloads are one wake listing two rows', woke && rows.length === 2, `messages=${sent.length - before} rows=${rows.length}`)
+  check('S25d the two rows differ by source time and identity',
+    rows.length === 2 && rows[0] !== rows[1] && new Set(rows).size === 2,
+    rows.join(' | '))
+  check('S25d the wake names each line\'s absolute source time and its identity',
+    body.includes(new Date(t1).toISOString()) && body.includes(new Date(t2).toISOString())
+      && body.includes(identityOf(`${t1}\tnudge\tpulse\t-\t${text}`)) && body.includes(identityOf(`${t2}\tnudge\tpulse\t-\t${text}`)),
+    rows.join(' | '))
+  check('S25d total counts both lines (two real deliveries)', lastTotal() === 2, `total=${lastTotal()}`)
+  // 重写其中一条 → 零唤醒 + replay suppressed reason=rescan
+  const first = readFileSync(f, 'utf8').split('\n').find(l => l.startsWith(String(t1))) ?? ''
+  const beforeR = sent.length
+  const rescanA = ledgerMatches(/ rescan lines=/)
+  writeFileSync(f, `${first}\n`)
+  await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanA, 3000)
+  check('S25d a rewrite of one of them produces no wake', sent.length === beforeR, `messages=${sent.length - beforeR}`)
+  check('S25d the rewrite is named replay suppressed reason=rescan',
+    ledgerMatches(/replay suppressed n=1 reason=rescan/) >= 1,
+    ledger().filter(l => /replay suppressed/.test(l)).at(-1) ?? '(none)')
+  check('S25d the rescan reads deliver=0',
+    /rescan lines=1 dup=1 skipped=0 deliver=0 /.test(ledger().filter(l => / rescan lines=/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => / rescan lines=/.test(l)).at(-1) ?? '(none)')
+  check('S25d total is unchanged by the rewrite', lastTotal() === 2, `total=${lastTotal()}`)
+  await shutdown()
+}
+
+// ── S25e：.seen 一次性导入 / 撕裂尾 / 压缩边界与 floor（3.3/3.4/4.1/4.3）────────────
+if (only('S25e')) {
+  // (a) 升级：老 .seen 只被导入一次，之后删掉它不改变任何决定
+  await resetState()
+  const key = KEY
+  const oldLine = `${Date.now() - 7200_000}\tsay\tpm\tpm\tS25e-seen-line`
+  mkdirSync(WATCH_DIR, { recursive: true })
+  writeFileSync(join(WATCH_DIR, `${key}.seen`), `${oldLine}\n`)
+  await sessionStart()
+  check('S25e the first start imports <key>.seen once and records it',
+    ledgerMatches(/seen import n=1 /) === 1
+      && journalLines().some(l => / sent .*imported=1/.test(l) && l.includes(identityOf(oldLine))),
+    ledger().filter(l => /seen import/.test(l)).at(-1) ?? '(no import line)')
+  const beforeA = sent.length
+  appendWakeRaw(Buffer.from(`${oldLine}\n`))
+  await sleep(600)
+  check('S25e an imported (already-delivered) line wakes nobody',
+    sent.length === beforeA && lastTotal() === 0 && ledgerMatches(/replay suppressed/) >= 1,
+    `messages=${sent.length - beforeA} total=${lastTotal()}`)
+  // 删掉 .seen：同一份字节再重写一次，仍然沉默（日志是唯一记忆；先截断让读者看见 shrink）
+  rmSync(join(WATCH_DIR, `${key}.seen`), { force: true })
+  const bytes = readFileSync(spoolFile())
+  const rescanB = ledgerMatches(/ rescan lines=/)
+  const replayB = ledgerMatches(/replay suppressed/)
+  writeFileSync(spoolFile(), '')
+  await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanB, 3000)
+  appendFileSync(spoolFile(), bytes)
+  await waitFor(() => ledgerMatches(/replay suppressed/) > replayB, 3000)
+  check('S25e deleting .seen changes no delivery decision',
+    sent.length === beforeA && lastTotal() === 0, `messages=${sent.length - beforeA} total=${lastTotal()}`)
+  await shutdown()
+
+  // (b) 撕裂尾：read 完整、intent 被截断 → 结果未知，永不重投
+  await resetState()
+  mkdirSync(WATCH_DIR, { recursive: true })
+  const tornLine = `${Date.now()}\tsay\tpm\tpm\tS25e-torn-line`
+  writeFileSync(spoolFile(), `${tornLine}\n`)
+  const tornId = identityOf(tornLine)
+  writeFileSync(journalPathOf(),
+    `${new Date().toISOString()} start baseline=0 size=0 head=absent\n` +
+    `${new Date().toISOString()} read seq=1 off=1 size=1 head=empty id=${jesc(tornId)} src=${tornLine.split('\t')[0]} kind=say from=pm durable=pm preview=S25e-torn-line\n` +
+    `${new Date().toISOString()} intent seq=`)
+  await sessionStart()
+  check('S25e a torn trailing record is named in the ledger',
+    ledgerMatches(/torn tail/) >= 1, ledger().filter(l => /torn tail/.test(l)).at(-1) ?? '(none)')
+  check('S25e a torn tail is treated as inflight assumed',
+    ledgerMatches(/inflight assumed n=1 /) === 1, ledger().filter(l => /inflight assumed/.test(l)).join(' | ') || '(none)')
+  const beforeB = sent.length
+  await sleep(500)
+  check('S25e a line whose outcome is unknown is never woken', sent.length === beforeB, `messages=${sent.length - beforeB}`)
+  const rescanC = ledgerMatches(/ rescan lines=/)
+  writeFileSync(spoolFile(), '')
+  await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanC, 3000)
+  appendFileSync(spoolFile(), `${tornLine}\n`)
+  await waitFor(() => ledgerMatches(/replay suppressed/) >= 1, 3000)
+  check('S25e a later rewrite of a torn-read line stays silent',
+    sent.length === beforeB && lastTotal() === 0, `messages=${sent.length - beforeB} total=${lastTotal()}`)
+  await shutdown()
+
+  // (c) 压缩：越界即压到界内、写 floor=；保留的身份仍被压制，被淘汰的身份 unprovable
+  await resetState()
+  process.env.TEAM_INBOX_WATCH_JOURNAL_MAX = '24'
+  await sessionStart()
+  for (let i = 0; i < 12; i++) {
+    appendWakeAt(Date.now() - (12 - i) * 60_000, 'say', 'pm', 'pm', `S25e-compact-${i}`)
+    await waitFor(() => journalOf('sent').length > i, 4000)
+  }
+  check('S25e compaction keeps the journal under the bound', journalLines().length <= 24, `records=${journalLines().length}`)
+  check('S25e compaction records its eviction floor',
+    ledgerMatches(/journal compacted /) >= 1 && / floor=\S+ floor_ts=\d+ /.test(ledger().filter(l => /journal compacted/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => /journal compacted/.test(l)).at(-1) ?? '(none)')
+  const all = spoolLines()
+  const oldest = all[0] ?? ''
+  const newest = all[all.length - 1] ?? ''
+  const keptIds = journalOf('read').map(r => r.fields.id)
+  check('S25e the retained identities are still in the journal and the evicted one is not',
+    keptIds.includes(identityOf(newest)) && !keptIds.includes(identityOf(oldest)),
+    `kept=${keptIds.length} oldestEvicted=${!keptIds.includes(identityOf(oldest))}`)
+  await shutdown()
+  // 重启后（内存清零）重写两条：保留的 → replay suppressed；被淘汰的 → unprovable，永不唤醒
+  await sessionStart()
+  const beforeC = sent.length
+  const totalC = lastTotal()
+  const rescan0 = ledgerMatches(/ rescan lines=/)
+  writeFileSync(spoolFile(), `${oldest}\n${newest}\n`)
+  await waitFor(() => ledgerMatches(/ rescan lines=/) > rescan0, 3000)
+  await waitFor(() => ledgerMatches(/unprovable n=1 /) >= 1, 3000)
+  check('S25e a retained identity is suppressed on a rewrite',
+    ledgerMatches(/replay suppressed n=1 reason=rescan/) >= 1,
+    ledger().filter(l => /replay suppressed/.test(l)).at(-1) ?? '(none)')
+  check('S25e an identity below the eviction floor is unprovable, never woken',
+    ledgerMatches(/unprovable n=1 /) >= 1, ledger().filter(l => /unprovable/.test(l)).at(-1) ?? '(none)')
+  check('S25e compaction cannot resurrect a delivery',
+    sent.length === beforeC && lastTotal() === totalC,
+    `messages=${sent.length - beforeC} total=${totalC}->${lastTotal()}`)
+  check('S25e the rescan reads deliver=0 with dup=1 and the unprovable counted separately',
+    /rescan lines=2 dup=1 skipped=0 deliver=0 /.test(ledger().filter(l => / rescan lines=/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => / rescan lines=/.test(l)).at(-1) ?? '(none)')
+  delete process.env.TEAM_INBOX_WATCH_JOURNAL_MAX
+  await shutdown()
+}
+
+// ── S25f：事故重放（原始字节 + 从 .seen/交付事实播种的日志）→ 零唤醒、deliver=0（5.1）──
+if (only('S25f')) {
+  await resetState()
+  const fx = join(SKILL_DIR, 'tests/fixtures/p71-incident')
+  const dev2 = readFileSync(join(fx, 'dev2.wake'))
+  const seenLines = readFileSync(join(fx, 'dev2.seen'), 'utf8').split('\n').filter(l => l.trim())
+  const pmNudges = readFileSync(join(fx, 'pm-nudges.wake'))
+  mkdirSync(WATCH_DIR, { recursive: true })
+  writeFileSync(spoolFile(), Buffer.concat([dev2, pmNudges]))
+  // 从事故的 sent 事实播种：dev2 的 8 条 .seen + PM 的三条 nudge；最老的 dev2 行（投过但没记进 .seen）不播种
+  const seeded = [...seenLines.map(identityOf), ...pmNudges.toString('utf8').split('\n').filter(l => l.trim()).map(identityOf)]
+  const seedRecs = [`${new Date().toISOString()} start baseline=0 size=0 head=absent`]
+  seeded.forEach((id, i) => seedRecs.push(`${new Date().toISOString()} sent seq=-${i + 1} id=${jesc(id)} imported=1`))
+  writeFileSync(journalPathOf(), `${seedRecs.join('\n')}\n`)
+  const before = sent.length
+  await sessionStart()          // 基线吞掉整份 spool（没有人活着看过它）
+  await sleep(500)
+  check('S25f the incident spool produces zero wakes at startup', sent.length === before, `messages=${sent.length - before}`)
+  // ① 记录下来的那一拍（事故 17:46:49）：原位截断 → 读者看到 shrink，rescan 读 0 行（`deliver=0`）
+  const bytes = readFileSync(spoolFile())
+  writeFileSync(spoolFile(), '')
+  await waitFor(() => ledgerMatches(/ rescan lines=/) >= 1, 3000)
+  check('S25f the recorded truncation reads deliver=0 (the incident shape)',
+    sent.length === before && /rescan lines=0 dup=0 skipped=0 deliver=0 /.test(ledger().filter(l => / rescan lines=/.test(l)).at(-1) ?? ''),
+    ledger().filter(l => / rescan lines=/.test(l)).at(-1) ?? '(none)')
+  // ② 同一批字节写回（普通路径）：已投递的身份一律 replay suppressed，没记进 .seen 的那一行过期只计数
+  appendFileSync(spoolFile(), bytes)
+  await waitFor(() => ledgerMatches(/replay suppressed n=11 reason=normal/) >= 1, 3000)
+  check('S25f every seeded identity is replay-suppressed, none is woken',
+    sent.length === before && ledgerMatches(/replay suppressed n=11 reason=normal/) >= 1,
+    ledger().filter(l => /replay suppressed/.test(l)).at(-1) ?? '(none)')
+  check('S25f the one delivered-but-unrecorded line is counted stale and never woken',
+    ledgerMatches(/classify stale=1 unparsable=0/) >= 1, ledger().filter(l => /classify /.test(l)).at(-1) ?? '(none)')
+  // ③ 截断与写回落在同一拍：有界重扫也要逐条分类、零唤醒（reason=rescan）
+  const classifyBefore = ledgerMatches(/classify stale=/)
+  appendFileSync(spoolFile(), `${Date.now() - 3600_000}\tknock\tpm\t-\tS25f-padding-${'P'.repeat(200)}\n`)
+  await waitFor(() => ledgerMatches(/classify stale=/) > classifyBefore, 3000)
+  const rescanBefore = ledgerMatches(/ rescan lines=/)
+  writeFileSync(spoolFile(), bytes)
+  await waitFor(() => ledgerMatches(/ rescan lines=/) > rescanBefore, 3000)
+  await waitFor(() => ledgerMatches(/replay suppressed n=11 reason=rescan/) >= 1, 3000)
+  const rescanLine = ledger().filter(l => / rescan lines=/.test(l)).at(-1) ?? ''
+  check('S25f a one-shot truncate+rewrite is rescanned, classified and silent',
+    ledgerMatches(/ rescan lines=/) > rescanBefore && sent.length === before
+      && /rescan lines=12 dup=11 skipped=0 deliver=0 stale=1 /.test(rescanLine)
+      && ledgerMatches(/replay suppressed n=11 reason=rescan/) >= 1,
+    `${rescanLine.trim()} || messages=${sent.length - before}`)
+  check('S25f total is untouched by the incident replay', lastTotal() === 0, `total=${lastTotal()}`)
+  await shutdown()
+}
+
+// ── S26：唤醒文本契约（源行点名 / 单调序号 / 日志路径 / 形状不变）（2.2）──────────────
+if (only('S26')) {
+  await resetState()
+  await sessionStart()
+  const f = spoolFile()
+  const t1 = Date.now()
+  const b0 = sent.length
+  appendWakeAt(t1, 'say', 'pm', 'pm', 'S26-first')
+  await waitFor(() => sent.length >= b0 + 1)
+  const seq1 = Number(/#(\d+)/.exec(lastText())?.[1] ?? 0)
+  const t2 = t1 + 1
+  appendWakeAt(t2, 'say', 'pm', 'pm', 'S26-second')
+  await waitFor(() => sent.length >= b0 + 2)
+  const body = lastText()
+  const seq2 = Number(/#(\d+)/.exec(body)?.[1] ?? 0)
+  check('S26 the wake carries a monotonic sequence and an absolute send time',
+    seq2 === seq1 + 1 && /#\d+ · \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/.test(body), `seqs=${seq1}->${seq2}`)
+  const line2 = `${t2}\tsay\tpm\tpm\tS26-second`
+  check('S26 every listed line names its own absolute source time and identity',
+    body.includes(new Date(t2).toISOString()) && body.includes(identityOf(line2)),
+    body.split('\n').filter(l => l.startsWith('- ')).join(' | '))
+  check('S26 the wake names the delivery journal the identities were recorded in',
+    body.includes(journalPathOf()) && existsSync(journalPathOf()),
+    (body.split('\n').find(l => l.includes('Delivery journal')) ?? '(none)').slice(0, 200))
+  check('S26 the wake shape is unchanged (customType/triggerTurn/followUp)',
+    sent.at(-1)?.msg?.customType === 'team-inbox' && sent.at(-1)?.opts?.triggerTurn === true
+      && sent.at(-1)?.opts?.deliverAs === 'followUp',
+    JSON.stringify({ customType: sent.at(-1)?.msg?.customType, ...(sent.at(-1)?.opts ?? {}) }))
+  check('S26 no payload dump: the wake stays a bounded one-line pointer per line',
+    body.split('\n').filter(l => l.startsWith('- ')).every(l => l.length <= 220), `len=${body.length}`)
+  check('S26 every wake line in the ledger names seq and ids',
+    ledger().filter(l => / wake n=/.test(l)).every(l => / seq=\d+ ids=\S+/.test(l)),
+    ledger().filter(l => / wake n=/.test(l)).join(' | '))
+  await shutdown()
 }
 
 // ── 反向守卫：真实仓库 state/ 未被触碰 ───────────────────────────────────────

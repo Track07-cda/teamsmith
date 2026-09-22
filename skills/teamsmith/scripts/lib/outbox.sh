@@ -1170,7 +1170,9 @@ team_inbox_watch_deliver() { # <entry> <kind> <from> <key> <route-inbox> <payloa
   # TEAM_INBOX_WATCH_PREVIEW 再截一次字符数）。正文全文在收件箱/发送方日志里，不在这里。
   # P28/B6：按**字符**边界裁（`cut -c` 在任何 locale 下都按字节，会把多字节字符截半）。
   preview="$(team_inbox_watch_clip "$preview" 700)"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$(team_epoch_ms)" "$kind" "${from:--}" "$durable" "$preview" >> "$dir/$key.wake" || return 1
+  # P81：第 6 字段 = 发送方自己的 durable 记录名（outbox 条目名，与 state/outbox/delivered.log 的 name
+  # 列同一个串）—— 接收方的唤醒文本与投递日志用它点名「这是哪一条」；老读者按 5 字段照读。
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(team_epoch_ms)" "$kind" "${from:--}" "$durable" "$preview" "$(basename "$e")" >> "$dir/$key.wake" || return 1
   return 0
 }
 
