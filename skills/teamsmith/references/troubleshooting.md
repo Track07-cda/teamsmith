@@ -882,3 +882,40 @@ second time).
 The fixtures that pin this are `tests/panel-b3.sh board` (two rows with one id: one cursor, both reachable,
 both walks) and `tests/smoke.sh` §4c (refusal, `--allow-dup`, the three visible reports); `tests/flip-m48.sh`
 proves both go red when the row identity / the check is removed.
+
+## 24. The performance suite refuses to call itself the "reference environment" — the trust boundary (M66 → M69 → M73)
+
+`bash skills/teamsmith/tests/perf.sh --in-container` records its verdicts under the name "reference
+environment" only when the pinned image itself proves that is where it runs. Three pieces of evidence, all
+baked into the `ci/Containerfile` image and required by `perf.sh`, each named when missing or wrong (exit 3,
+before the lock or any measurement — a host mistake never even touches the lock):
+
+1. the env signal `TEAM_PERF_PINNED_CONTAINER=1` (the image's `ENV`) — necessary but never sufficient: an
+   exported variable is forgeable from the host (M64 F2, verified: the host exported the signal and the
+   suite described the host's node as the "reference environment");
+2. the marker file `/etc/teamsmith-gate-image`, byte-for-byte equal to the closed token (the image's `RUN`
+   drops it in the rootfs; `/run/.containerenv` cannot play this role — the dev host is itself a distrobox
+   and carries that file too);
+3. the marker file must **not be a mount point** (`perf.sh` parses `/proc/self/mounts`): the token is
+   public — it sits in `ci/Containerfile`, and `perf.sh` can only trust content that arrived with the image,
+   so anyone can `-v`-mount a byte-identical file and matching content proves the file, not the rootfs
+   (M64 F2 round three: foreign image + mounted token + ENV=1 ran the whole suite green under the reference
+   name). In the real image the marker lives on the overlayfs root and has no mounts-table entry; the
+   suite's own wrapper mounts only `/work` (and the main repo for worktree `.git` resolution), never the
+   marker.
+
+**In scope (visibly refused)** — every *accidental* shape: a bare host run (M66), host-exported variables
+(M69), a stale image without the marker (M69, told to rebuild), tampered marker content (M69), and a mounted
+marker (M73).
+
+**Out of scope (cannot and need not be defended)** — a caller who *controls the container runtime and
+deliberately* bakes the public token into a self-built image (or forges the mounts table to hide one). An
+in-container self-check has a hard ceiling: this is "self-describing, trustworthy against accidents", not a
+proof against someone who owns the runtime. Every verdict still carries the full environment
+self-description (mode, cores, quota, load, JS/tmux versions, revision), so a suspicious conclusion can
+always be re-checked against the source it came from.
+
+Seeing exit 3 with one of these named → rebuild the image
+(`<engine> build -f ci/Containerfile -t teamsmith-gate:local .`, the command `perf.sh` itself prints) or
+re-run `perf.sh --host` instead (non-reference: the verdict is not acceptance evidence). Host numbers are
+never recorded under the reference name.
