@@ -1822,6 +1822,30 @@ team_pane_agent_pid() { # <session:window>
   team_pane_proc_tree_pid "${1:-}" team_proc_is_agent_bin
 }
 
+# P36（C）：`team up` 启动前的**只读**探测 —— 同一个 cwd 里是否已经有活着的 PM CLI 进程。
+# 为什么需要：PM 默认 `-c`（按 cwd 找本目录上一个会话，见 team_pm_pi_args），而 init 恰恰是在项目根
+# 跑的那场对话 —— 它若还没退出，`up` 用 -c 会让两个进程继同一个会话文件（双写，历史可能互相覆盖）。
+# 判据与 M6.5 的存活判定**无关**（不碰 team_pm_state / team_pm_alive）：/proc/<pid>/cwd 的解析结果
+# 等于 <dir>，且 argv 命中 PM 的可执行文件（team_proc_cmdline_is_bin 已排除我们自己的启动 harness）。
+team_pm_other_sessions_in_dir() { # <dir> → 该目录里活着的 PM CLI 进程 pid（每行一个）
+  local dir="${1:-}" want bin base p args cwd
+  [ -n "$dir" ] || return 0
+  want="$(cd "$dir" 2>/dev/null && pwd -P)" || want="$dir"
+  bin="$(team_pm_bin_path 2>/dev/null || true)"
+  [ -n "$bin" ] || return 0
+  base="$(basename "$bin")"
+  # 一次 ps 先把绝大多数进程筛掉，只对命令行里出现该 basename 的 pid 读 /proc（否则每个 pid 都要 fork）。
+  # args 快照从这一次读传给 team_proc_cmdline_is_bin（M39：一次判定只读一次命令行，闭竞态）。
+  ps -ww -eo pid=,args= 2>/dev/null | while read -r p args; do
+    [ -n "$p" ] || continue
+    case " $args " in *"$base"*) ;; *) continue ;; esac
+    team_proc_cmdline_is_bin "$p" "$bin" "$args" || continue
+    cwd="$(team_proc_cwd "$p" 2>/dev/null || true)"
+    [ -n "$cwd" ] && [ "$cwd" = "$want" ] && printf '%s\n' "$p"
+  done
+  return 0
+}
+
 # 窗口里**证明**跑着配置的 worker agent：进程树命中 + cwd 在本项目内（缺证据 → 非 0）
 team_agent_alive_in_pane() { # <session:window>
   local target="${1:-}" pid cwd
@@ -1858,6 +1882,12 @@ team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 sk
     "PROTECTED_BRANCH=$TEAM_PROTECTED_BRANCH" "WORKTREES_DIR=$TEAM_WORKTREES_DIR"
 }
 
+# P36（A）：`team up --fresh-pm` 的「这一次启动新开会话」。口径与 dispatch/resume 的 `--fresh` 同族：
+# **只影响这一次启动**，不写进配置（旗标由 cmd-watch.sh 的 team_cmd_up 导出成 TEAM_PM_FRESH_LAUNCH=1）。
+# 优先级裁断（也写进 `team help` 的 up 行）：本次启动里 --fresh-pm **最优先** —— TEAM_PM_SESSION_ID /
+# TEAM_PM_RESUME_ARGS 这一次都不生效（显式的人造意图 > 持久配置键）。
+team_pm_fresh_launch() { [ "${TEAM_PM_FRESH_LAUNCH:-0}" = "1" ]; }
+
 team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）与 team-inbox-watch（PM 的投递换道）；默认 -c 延续本目录上一个会话以保住历史
   local model="${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}" args=()
   args=(--provider "${model%%/*}" --model "${model##*/}")
@@ -1868,7 +1898,9 @@ team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但�
   [ -d "$TEAM_SKILL_DIR" ] && args+=(--skill "$TEAM_SKILL_DIR")
   # 续跑参数（M8.1）：TEAM_PM_SESSION_ID > 显式 TEAM_PM_RESUME_ARGS > 历史的 -c。
   # 默认三个都空 = 与历史逐字节一致；显式配了 resume 参数就换掉默认的 -c（同一套键也服务于自定义 CLI）。
-  if [ -n "${TEAM_PM_SESSION_ID:-}" ]; then args+=(--session-id "$TEAM_PM_SESSION_ID")
+  # P36（A）：--fresh-pm 本次启动新开会话 → 上面三条都不走（旧会话文件原样留在历史里）。
+  if team_pm_fresh_launch; then :
+  elif [ -n "${TEAM_PM_SESSION_ID:-}" ]; then args+=(--session-id "$TEAM_PM_SESSION_ID")
   elif [ -n "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then args+=($TEAM_PM_RESUME_ARGS)
   else args+=(-c); fi
   [ -n "${TEAM_PM_EXTRA_PI_ARGS:-}" ] && args+=($TEAM_PM_EXTRA_PI_ARGS)
@@ -2141,6 +2173,16 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
 # 这次启动会不会延续 PM 的历史？（up / watchdog 的成功文案共用；也是「没延续」时的行动指引）
 # → continued:<怎么延续的> | lost:<为什么没延续>
 team_pm_continuity() {
+  # P36（A）：--fresh-pm = 这一次显式新开会话（旧会话文件原样留在历史里）。裁断在这里落地 ——
+  # 启动成功文案与 `team up --print` 都拿这一行当可断言的证据。
+  if team_pm_fresh_launch; then
+    if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
+      printf 'fresh:--fresh-pm（本次启动新开会话，不带 -c；旧历史留在原会话文件里）\n'
+    else
+      printf 'fresh:--fresh-pm（本次启动不续跑：%s 的 {resume_args} 渲染为空）\n' "$(team_pm_cli_name)"
+    fi
+    return 0
+  fi
   if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
     if [ -n "${TEAM_PM_SESSION_ID:-}" ]; then printf 'continued:--session-id %s\n' "$TEAM_PM_SESSION_ID"; return 0; fi
     if [ -n "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then
@@ -2159,6 +2201,8 @@ team_pm_continuity() {
 team_pm_continuity_note() { # 打在启动成功之后：延续 or 明确说「不延续 + 该靠什么接手」
   local c; c="$(team_pm_continuity)"
   case "$c" in
+    fresh:*)     team_dim "  新会话：${c#fresh:}"    # P36（A）：--fresh-pm 的这一次启动不延续历史
+                 team_dim "  接着干：正式记录在 $TEAM_DOCS_DIR/**（BOARD/DECISIONS/threads/reports）与 $TEAM_CLI inbox；开局先跑 $TEAM_CLI digest" ;;
     continued:*) team_dim "  续跑：${c#continued:}" ;;
     lost:*)      team_warn "  这次启动**不延续** PM 的历史上下文：${c#lost:}"
                  team_dim "  接着干：正式记录在 $TEAM_DOCS_DIR/**（BOARD/DECISIONS/threads/reports）与 $TEAM_CLI inbox；开局先跑 $TEAM_CLI digest" ;;
@@ -4139,7 +4183,10 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
       '{extra_args}')
         # PM 的「额外参数」是 PM 自己的键（TEAM_PM_EXTRA_PI_ARGS）；worker 那边是 TEAM_EXTRA_PI_ARGS。
         if [ "$kind" = "pm" ]; then val="${TEAM_PM_EXTRA_PI_ARGS:-}"; else val="${TEAM_EXTRA_PI_ARGS:-}"; fi ;;
-      '{resume_args}') val="${TEAM_PM_RESUME_ARGS:-}" ;;   # 仅 PM 模板支持（见 team_agent_placeholders）
+      '{resume_args}')  # 仅 PM 模板支持（见 team_agent_placeholders）
+        # P36（A）：PM 的 --fresh-pm 也覆盖模板路径 —— 这一次启动 {resume_args} 渲染为空（不续跑）。
+        # {session_id} 是身份、不是续跑开关：续跑参数按 references/agent-adapters.md 走 {resume_args}。
+        if [ "$kind" = "pm" ] && team_pm_fresh_launch; then val=""; else val="${TEAM_PM_RESUME_ARGS:-}"; fi ;;
       '{summary_file}') val="$(printf '%q' "$sfile")" ;;
       '{summary}')
         prev=""; next=""

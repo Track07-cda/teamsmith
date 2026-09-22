@@ -111,21 +111,45 @@ team_watch_snapshot_line() { # <窗口进程启动 epoch|空> → 一行说明�
   fi
 }
 
+# P36（C）：启动前的只读探测 —— 同一个 cwd 里还活着的 PM CLI 会话（`-c` 会按目录续上一个会话，
+# 两个进程续同一个会话文件 = 双写）。**只提示、不阻断**；也不碰 M6.5 的 PM 判活/替换语义。
+team_pm_same_dir_warn() {
+  local pids n
+  pids="$(team_pm_other_sessions_in_dir "$TEAM_MAIN_ROOT")"
+  [ -n "$pids" ] || return 0
+  n="$(printf '%s\n' "$pids" | wc -l | tr -d ' ')"
+  team_warn "检测到同目录（$TEAM_MAIN_ROOT）还有 $n 个活着的 $(team_pm_cli_name) 会话：pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ $//')"
+  team_warn "  默认的 -c 按目录续上一个会话：两个进程同时写同一个会话文件，可能互相覆盖"
+  team_dim "  建议：先退出它；或者在干净的新会话里跑 $TEAM_CLI up --fresh-pm（本次新开一场对话）"
+}
+
 # ---------------------------------------------------------------- team up
 # 人来跑的工具：把 PM 恢复起来。
 # agent 归 PM 管，所以默认不动 agent；要顺手把停了的 agent 也续起来就加 --agents。
 team_cmd_up() {
-  local with_agents=0 show_prompt=0 pm_fail=0
+  local with_agents=0 show_prompt=0 pm_fail=0 pm_fresh=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) with_agents=1; shift ;;
+      --fresh-pm) pm_fresh=1; shift ;;
       --print) show_prompt=1; shift ;;
       -*) team_usage_die "up: 未知参数 $1" ;;
       *) team_usage_die "up: 多余参数 $1" ;;
     esac
   done
+  # P36（A）：--fresh-pm 只影响**这一次启动**（与 dispatch/resume 的 --fresh 同族：不写进配置）。
+  # 导出给同一次启动里的 team_pm_pi_args / team_pm_launch_cmd / team_pm_continuity。
+  [ "$pm_fresh" = "1" ] && export TEAM_PM_FRESH_LAUNCH=1
 
-  if [ "$show_prompt" = "1" ]; then team_pm_prompt; return 0; fi
+  if [ "$show_prompt" = "1" ]; then
+    team_pm_prompt
+    # P36（A）：--print 是「看清这一次启动」的地方 —— 会话判定（fresh:/continued:/lost:）与渲染出的
+    # 完整命令都要看得见、能断言（有没有 -c 一眼可见）。不写任何状态、不动 tmux。
+    printf '\n—— 本次启动 ——\n会话判定：%s\n完整命令：%s\n' \
+      "$(team_pm_continuity)" \
+      "$(team_pm_launch_cmd "$(team_pm_prompt_file)" "$(team_pm_spawn_file)")"
+    return 0
+  fi
 
   team_require_docs
   team_require_cmd tmux "team up 需要 tmux（PM 跑在 tmux 窗口里）"
@@ -146,12 +170,14 @@ team_cmd_up() {
   # 2) PM 进程
   local pm_state; pm_state="$(team_pm_state)"
   case "$pm_state" in
-    running:*) team_ok "PM 在运行（${pm_state#running:}）" ;;
+    running:*) team_ok "PM 在运行（${pm_state#running:}）"
+               [ "$pm_fresh" = "1" ] && team_dim "  --fresh-pm 只影响“这一次启动”：PM 已在运行，没有发生启动（要新开会话：先退出它，再跑 $TEAM_CLI up --fresh-pm）" ;;
     starting:*)
                # M7.2：启动在飞行中（另一支巡检/另一条 up 已经拉过它）——再 respawn 一次会杀掉正在起来的 PM
                team_warn "PM 正在启动（${pm_state#starting:}；证据：$(team_pm_evidence "$pm_state")）：不重复拉起"
                team_dim "  等它起来；若卡住：启动标记会过期（TEAM_PM_START_WAIT=${TEAM_PM_START_WAIT:-6}s + 5s），过期后再跑 $TEAM_CLI up；证据看 $TEAM_CLI pulse status" ;;
     idle:*)    team_warn "PM 没在跑（空提示符）：启动 $(team_pm_cli_name)"
+               team_pm_same_dir_warn
                if team_pm_start; then
                  team_ok "PM 已启动（cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
                else
@@ -163,6 +189,7 @@ team_cmd_up() {
                # 不是 PM 就不能压制恢复（M6.5 就是「空窗被当成 PM，up 什么也不干还说成功」）
                local _ucwd; _ucwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')"
                team_warn "PM 窗口里有非 PM 进程（${pm_state#unknown:}，cwd=$_ucwd）：不算存活"
+               team_pm_same_dir_warn
                if team_pm_start; then
                  team_ok "PM 已启动（替换了非 PM 进程；cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
                else
@@ -173,6 +200,7 @@ team_cmd_up() {
                local _cwd; _cwd="$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')"
                if [ "${TEAM_REPLACE_FOREIGN_PM:-0}" = "1" ]; then
                  team_warn "PM 窗口被外来进程占用（cwd=$_cwd）：按 TEAM_REPLACE_FOREIGN_PM=1 覆盖"
+                 team_pm_same_dir_warn
                  if team_pm_start; then
                    team_ok "PM 已启动（覆盖了外来进程；proof=$(team_pm_proof || echo '?')）"
                  else

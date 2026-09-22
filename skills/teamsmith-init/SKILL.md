@@ -64,3 +64,20 @@ Day-to-day operation lives in the **`teamsmith`** skill: the PM loop, dispatch, 
 the pulse, updates and the troubleshooting guide are all there — read `skills/teamsmith/SKILL.md` and follow it.
 The three commands that answer "what now?": `team digest` (pending work), `team pulse status` (patrol and PM
 liveness), `team doctor` (environment).
+
+The handover itself is three steps, and the middle one is the one people skip:
+
+1. **Bootstrap.** `bash <teamsmith>/scripts/team bootstrap [--agents "dev verify"]` — it prints the plan first
+   with `--print`, and a rerun is idempotent.
+2. **Leave the room — or prove you are the PM.** `team up` starts the PM in this project's tmux session, and the
+   PM is a *different* conversation from this one. Exit this session once bootstrap is done (keep it only if this
+   session already lives in the PM window).
+3. **Start the PM.** `bash <teamsmith>/scripts/team up [--fresh-pm]`. By default `up` continues **the last
+   conversation in this directory** (`pi -c`) — which is *this init conversation*, so the PM wakes up with the
+   init history. Add `--fresh-pm` to start the PM on a clean conversation instead (the old session file stays in
+   history as the kickoff record); it wins over `TEAM_PM_SESSION_ID` / `TEAM_PM_RESUME_ARGS` for that one launch
+   and is not written into the config. `team up --print` shows the decision and the exact command.
+
+   If step 3 prints `检测到同目录 … 还有 … 活着的 … 会话`, a session started in this directory is still running:
+   exit it first, or rerun with `--fresh-pm` — continuing one session from two processes at once would have both
+   write the same session file.

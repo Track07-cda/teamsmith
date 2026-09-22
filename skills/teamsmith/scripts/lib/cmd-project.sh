@@ -65,7 +65,11 @@ board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign I
   meeting say <slug> --intent <info|question|report|proposal|request> "…" [--knock]
   meeting read <slug> [--since N] [--peek] ｜ meeting inbox ｜ meeting list [--all]
   meeting propose <slug> "…" ｜ meeting agree <slug> <A1> [--note "…"] ｜ meeting close <slug>
-  up [--agents] [--print]      恢复 PM：建 tmux 场地 + 把 PM 拉起来（pi -c 保留历史）
+  up [--agents] [--print] [--fresh-pm]
+                 恢复 PM：建 tmux 场地 + 把 PM 拉起来（默认 pi -c 续上本目录上一个会话）
+                 --fresh-pm = 本次启动新开一场对话（不 -c；旧会话文件原样留在历史里，作为开工记录）；
+                 它最优先：这一次启动里 TEAM_PM_SESSION_ID / TEAM_PM_RESUME_ARGS 都不生效，且只影响
+                 这一次启动、不写进配置（守护/巡检按配置拉起 PM 时照旧续跑；--print 会打出判定与命令）
   resume [--agent a] [--all] [--dry-run]   PM 的工具：把停了但没交活的 agent 续跑
 
   ── 复验 / 合并 / 收尾 ─────────────────────────────────────

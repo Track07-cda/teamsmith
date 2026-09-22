@@ -4002,6 +4002,127 @@ else
   printf '  (跳过启动中的 PM 断言：没有 tmux)\n'
 fi
 
+# ---------------------------------------------------------------- 11b4. PM 交接：--fresh-pm + 同 cwd 活会话提示（P36）
+# A：`team up --fresh-pm` = 这一次启动新开会话（不 -c；`--print` 里会话判定与完整命令都可见、可断言）；
+# C：启动前只读探测同 cwd 还有活着的 PM CLI 会话 → 只提示（不阻断；不碰 M6.5 的判活/替换语义）。
+section "11b4 · PM 交接：--fresh-pm 与同 cwd 活会话提示（P36）"
+# ① --print（纯逻辑：不建场地、不写状态）—— 快慢模式都跑
+$TEAM up --print >"$TMP/p36-print-cont.log" 2>&1 && ok "P36 ①：up --print 退出码 0" || { bad "P36 ①：up --print 失败"; cat "$TMP/p36-print-cont.log"; }
+assert_has "$TMP/p36-print-cont.log" "会话判定：continued:pi -c" "P36 ①：默认明说这一次续用 -c"
+grep '^完整命令：' "$TMP/p36-print-cont.log" > "$TMP/p36-cmd-cont.log" 2>/dev/null || true
+assert_has "$TMP/p36-cmd-cont.log" " -c " "P36 ①：默认渲染出的命令带 -c"
+$TEAM up --print --fresh-pm >"$TMP/p36-print-fresh.log" 2>&1 && ok "P36 ①：up --print --fresh-pm 退出码 0" || bad "P36 ①：up --print --fresh-pm 失败"
+assert_has "$TMP/p36-print-fresh.log" "会话判定：fresh:--fresh-pm" "P36 ①：--fresh-pm 的判定是 fresh:"
+assert_not "$TMP/p36-print-fresh.log" "会话判定：continued" "P36 ①：fresh 时不再说续跑"
+grep '^完整命令：' "$TMP/p36-print-fresh.log" > "$TMP/p36-cmd-fresh.log" 2>/dev/null || true
+assert_not "$TMP/p36-cmd-fresh.log" " -c " "P36 ①：fresh 渲染出的命令不带 -c"
+assert_has "$TMP/p36-cmd-fresh.log" "pm-prompt.md" "P36 ①：fresh 仍带 @提示词文件（只是不续会话）"
+# 优先级裁断（写进 `team help` 的 up 行）：--fresh-pm 这一次最优先，两个续跑配置键都不生效
+env TEAM_PM_SESSION_ID=pm-fixed TEAM_PM_RESUME_ARGS=--continue $TEAM up --print --fresh-pm >"$TMP/p36-print-prio.log" 2>&1 \
+  || bad "P36 ①：带续跑配置键的 up --print --fresh-pm 失败"
+grep '^完整命令：' "$TMP/p36-print-prio.log" > "$TMP/p36-cmd-prio.log" 2>/dev/null || true
+assert_not "$TMP/p36-cmd-prio.log" "--session-id" "P36 ①：--fresh-pm 压过 TEAM_PM_SESSION_ID"
+assert_not "$TMP/p36-print-prio.log" "--continue" "P36 ①：--fresh-pm 压过 TEAM_PM_RESUME_ARGS"
+# 模板路径同一条口径（{resume_args} 这一次渲染为空）——用与 §6i 同形的渲染探针，目标固定在夹具仓库
+p36_render() { # [VAR=…]… → 渲染 PM 启动命令
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c 'for _a in "$@"; do export "$_a"; done; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_pm_launch_cmd "$TEAM_STATE_DIR/pm-prompt.md" "$TEAM_STATE_DIR/pm.pid.spawn"' _ "$@" )
+}
+P36_TPL_CMD='mycli run {resume_args} {prompt}'
+P36_TPL_CONT="$(p36_render "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$P36_TPL_CMD" 'TEAM_PM_BIN=bash' 'TEAM_PM_RESUME_ARGS=--continue')"
+assert_has_echo "$P36_TPL_CONT" "--continue" "P36 ①：模板路径默认把 {resume_args} 渲染出来"
+P36_TPL_FRESH="$(p36_render "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$P36_TPL_CMD" 'TEAM_PM_BIN=bash' 'TEAM_PM_RESUME_ARGS=--continue' 'TEAM_PM_FRESH_LAUNCH=1')"
+assert_not_echo "$P36_TPL_FRESH" "--continue" "P36 ①：--fresh-pm 下模板路径的 {resume_args} 渲染为空"
+
+if [ "$FAST" = "1" ]; then
+  fast_skip "11b4·PM 交接（P36）" "要真实 tmux 窗口 + 假 pi 进程（--fresh-pm 真跑 / 同 cwd 活会话探测）"
+elif [ "$HAVE_TMUX" = "1" ]; then
+  live_mark
+  # 本段专用夹具（不碰 §11b 的 pm-args.log/pi-sleep）：参数逐行落盘 + 睡着的假 PM；
+  # 另一个同名不同目录的脚本只用来当「同 cwd 的另一个会话」（不写日志）。
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >> "%s"\nsleep 600\n' "$TMP/p36-pm-args.log" > "$FAKE/pi-p36"
+  chmod +x "$FAKE/pi-p36"
+  mkdir -p "$TMP/p36-peer-bin"
+  printf '#!/usr/bin/env bash\nsleep 600\n' > "$TMP/p36-peer-bin/pi-p36"
+  chmod +x "$TMP/p36-peer-bin/pi-p36"
+  : > "$TMP/p36-pm-args.log"
+  sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-p36\"|" "$REPO/.pi/team/config.sh"
+  P36_ROOT="$(cd "$REPO" && pwd -P)"
+  p36_lines() { wc -l < "$TMP/p36-pm-args.log" 2>/dev/null | tr -d ' ' || echo 0; }
+  p36_wait_args() { # <基线行数> [秒]
+    local base="$1" secs="${2:-10}" i=0 ticks; ticks=$(( secs * 10 ))
+    while [ "$i" -lt "$ticks" ]; do [ "$(p36_lines)" -gt "$base" ] && return 0; sleep 0.1; i=$((i + 1)); done
+    return 1
+  }
+  p36_same_cwd_pids() { # 同 cwd 的 PM CLI pid（直接调只读探测助手；与产品同源）
+    ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR bash -c \
+        '. "$1/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_pm_other_sessions_in_dir "$TEAM_MAIN_ROOT"' _ "$SKILL_DIR" )
+  }
+  p36_quiet() { # [秒]：等到同 cwd 没有 PM CLI 进程（⑤ 反向前提）
+    local secs="${1:-10}" i=0 ticks; ticks=$(( secs * 5 ))
+    while [ "$i" -lt "$ticks" ]; do [ -z "$(p36_same_cwd_pids)" ] && return 0; sleep 0.2; i=$((i + 1)); done
+    return 1
+  }
+  p36_kill_fixture() { # 只杀本段夹具（argv 里的 basename 是 pi-p36），不碰别的 pi
+    ps -eo pid=,args= 2>/dev/null | awk '/pi-p36([ \t]|$)/ {print $1}' \
+      | while read -r _p; do kill "$_p" 2>/dev/null || true; done
+  }
+  p36_log_has_flag() { grep -qxF -- "$2" "$1" 2>/dev/null; }   # 参数日志按「恰好一行」判
+
+  # ② 真跑：--fresh-pm 这一轮的命令行没有 -c
+  make_pm_idle
+  P36_BASE="$(p36_lines)"
+  $TEAM up --fresh-pm >"$TMP/p36-up-fresh.log" 2>&1 && ok "P36 ②：team up --fresh-pm 退出码 0" || { bad "P36 ②：team up --fresh-pm 失败"; cat "$TMP/p36-up-fresh.log"; }
+  assert_has "$TMP/p36-up-fresh.log" "PM 已启动" "P36 ②：--fresh-pm 真的把 PM 拉起来了"
+  assert_has "$TMP/p36-up-fresh.log" "新会话：--fresh-pm" "P36 ②：成功文案说这是新开会话"
+  if p36_wait_args "$P36_BASE" 10; then ok "P36 ②：假 PM 把这一轮的参数落盘了"; else bad "P36 ②：假 PM 没把参数落盘（基线 $P36_BASE → $(p36_lines)）"; fi
+  tail -n +"$((P36_BASE + 1))" "$TMP/p36-pm-args.log" > "$TMP/p36-args-fresh.log" 2>/dev/null || true
+  if p36_log_has_flag "$TMP/p36-args-fresh.log" "-c"; then bad "P36 ②：--fresh-pm 的命令行里出现了 -c"; else ok "P36 ②：--fresh-pm 的命令行没有 -c"; fi
+  assert_has "$TMP/p36-args-fresh.log" "pm-prompt.md" "P36 ②：提示词照旧走 @文件"
+  case "$(pm_state_now)" in
+    running:*) ok "P36 ②：--fresh-pm 起出的 PM 判定为 running（$(pm_state_now)）" ;;
+    *)         bad "P36 ②：--fresh-pm 起出的 PM 不是 running（$(pm_state_now)）" ;;
+  esac
+  # ③ 对照组：不带旗标的那一轮仍然 -c（证明 ② 的「没有 -c」来自旗标，不是启动路径本来就变了）
+  make_pm_idle
+  P36_BASE="$(p36_lines)"
+  $TEAM up >"$TMP/p36-up-cont.log" 2>&1 && ok "P36 ③：team up（默认）退出码 0" || bad "P36 ③：team up（默认）失败"
+  assert_has "$TMP/p36-up-cont.log" "续跑：pi -c" "P36 ③：默认成功文案说续用 -c"
+  if p36_wait_args "$P36_BASE" 10; then ok "P36 ③：假 PM 把这一轮的参数落盘了"; else bad "P36 ③：假 PM 没把参数落盘"; fi
+  tail -n +"$((P36_BASE + 1))" "$TMP/p36-pm-args.log" > "$TMP/p36-args-cont.log" 2>/dev/null || true
+  if p36_log_has_flag "$TMP/p36-args-cont.log" "-c"; then ok "P36 ③：默认那一轮真的带 -c（②的对照）"; else bad "P36 ③：默认那一轮没有 -c（对照失败）"; fi
+  # ④ C：同 cwd 还有一个活着的 PM CLI 会话 → 提示（点名 pid + 给出 --fresh-pm 出路），但不阻断
+  make_pm_idle
+  ( cd "$REPO" && exec "$TMP/p36-peer-bin/pi-p36" --p36-peer ) >/dev/null 2>&1 &
+  P36_PEER=$!
+  P36_RDY=0
+  for _i in $(seq 1 50); do
+    if [ "$(readlink -f "/proc/$P36_PEER/cwd" 2>/dev/null || true)" = "$P36_ROOT" ]; then P36_RDY=1; break; fi
+    sleep 0.1
+  done
+  assert_eq "P36 ④：夹具进程的 cwd 真的在项目根（探测的前提）" "$P36_RDY" "1"
+  $TEAM up >"$TMP/p36-up-peer.log" 2>&1 && ok "P36 ④：有同 cwd 活会话时 up 退出码 0（提示不阻断）" || bad "P36 ④：有同 cwd 活会话时 up 失败"
+  assert_has "$TMP/p36-up-peer.log" "检测到同目录" "P36 ④：同 cwd 有活 PM CLI 会话 → 打提示"
+  assert_has "$TMP/p36-up-peer.log" "pid $P36_PEER" "P36 ④：提示点名了那个 pid"
+  assert_has "$TMP/p36-up-peer.log" "--fresh-pm" "P36 ④：提示给出出路（--fresh-pm）"
+  assert_has "$TMP/p36-up-peer.log" "PM 已启动" "P36 ④：提示不阻断（PM 照常启动）"
+  kill "$P36_PEER" 2>/dev/null || true
+  wait "$P36_PEER" 2>/dev/null || true
+  # ⑤ 反向：没有同 cwd 活会话 → 不打提示（先把现场真的清干净，再断言）
+  make_pm_idle
+  p36_kill_fixture
+  if p36_quiet 10; then ok "P36 ⑤ 前提：同 cwd 已经没有 PM CLI 进程"; else bad "P36 ⑤ 前提：同 cwd 仍有 PM CLI 进程（$(p36_same_cwd_pids | tr '\n' ' ')）"; fi
+  $TEAM up >"$TMP/p36-up-nopeer.log" 2>&1 && ok "P36 ⑤：反向用例 up 退出码 0" || bad "P36 ⑤：反向用例 up 失败"
+  assert_not "$TMP/p36-up-nopeer.log" "检测到同目录" "P36 ⑤：没有同 cwd 活会话时不打提示"
+  assert_has "$TMP/p36-up-nopeer.log" "PM 已启动" "P36 ⑤：反向用例里 PM 照常启动"
+  # 收尾：把现场还原成本段之前的样子（PM 空窗 + TEAM_PI_BIN=pi-sleep；§11c 自己还会再钉一次）
+  make_pm_idle
+  p36_kill_fixture
+  sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
+else
+  printf '  (跳过 PM 交接的真窗口断言：没有 tmux)\n'
+fi
+
 # ---------------------------------------------------------------- 11c. 恢复：resume / pulse 续跑
 section "11c · agent 续跑是 PM 的事（pulse 不碰）"
 if [ "$FAST" = "1" ]; then
@@ -6722,7 +6843,7 @@ if [ "$FAST_REQ" = "1" ]; then
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
   for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "6k·worker 存活判据（M37）" "11·close 后窗口" "11b·巡检/pulse" "11b2·PM 存活证据链" \
-             "11b3·启动中的 PM（M7.2）" "11c·agent 续跑" \
+             "11b3·启动中的 PM（M7.2）" "11b4·PM 交接（P36）" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测" "11j·pulse 迁移夹具" \
              "1c·M11 真沙盒窗口"; do
     # 注：本表只能列**14c 之前**跳过的段落。31b（容器 tmux 自检）在本节之后，它由
