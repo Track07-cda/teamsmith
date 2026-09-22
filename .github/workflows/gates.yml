@@ -76,16 +76,18 @@ jobs:
       - name: Collect the failure scene
         if: always()
         run: |
-          # 2026-09-22 实测（本地 podman 同 docker 语义）：`docker cp 'c:/tmp/x.*'` **不做通配**，
-          # 报 "could not be found on container"；只能整份拷进**暂存**目录，再从暂存里只挑现场家族。
-          # 整份拷贝会把 HOME 缓存里的自指软链带出来（上传时 ELOOP），所以暂存目录不进产物：
-          # 进 `.ci-artifacts` 的只有夹具现场，且用 `cp -a`（不 dereference，软链本身照样拷）。
+          # 现场必须离开容器，而上传器**不能**容忍软链环：
+          #   ① `docker cp 'c:/tmp/x.*'` 不做通配（实测 "could not be found on container"）→ 整份拷到暂存；
+          #   ② 暂存里只挑现场家族（否则 HOME 缓存的自指软链会 ELOOP）；
+          #   ③ 现场**自身**也可能含软链环（实测 teamsmith-smoke.5ZKyQI **里面**就有），
+          #      所以每个家族先 `tar` 成单个文件再进产物——tar 只记录软链、不跟随，上传器就只看到普通文件。
           rm -rf /tmp/scene-staging; mkdir -p /tmp/scene-staging .ci-artifacts
           docker cp teamsmith-gates-run:/tmp/. /tmp/scene-staging/ 2>/dev/null || true
           for fam in teamsmith-smoke. panel-p21. config-cli. pty-wait-selftest.; do
             for d in /tmp/scene-staging/$fam*; do
               [ -e "$d" ] || continue
-              cp -a "$d" .ci-artifacts/ 2>/dev/null || true
+              b="$(basename "$d")"
+              tar -czf ".ci-artifacts/$b.tgz" -C /tmp/scene-staging "$b" 2>/dev/null || true
             done
           done
           docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
