@@ -646,6 +646,15 @@ subcommand: it is consumed and stripped before the exec, never exported, and log
 subcommand the same word is data, e.g. a `send-keys` payload). The actions are exactly `pass`, `allowed-owned`,
 `refused` and `explicit-flag`. Read-only commands are never refused.
 
+That log is a **traffic record**, not project ledger state: its content is the caller's own argv and resolved
+socket, so the gate's fixture-trace scan (`real_ledger_hits` in `tests/smoke.sh`) excludes exactly that path — a
+fixture's session name recorded there is the log doing its job, while every other file under `state/` (and every
+name-sharing sibling, e.g. `state/tmux-calls.log.1`) stays in scope. The log is bounded: past 2000 call lines the
+oldest are dropped and the newest 1000 stay, and when that happens the surviving file's **first line** is a
+rotation marker `<ISO time> · rotation · dropped=<N>` — the cumulative number of call lines no longer in the
+file — so a call missing from the log can be told apart from one that never happened. The marker is not a call
+line (it carries no `act=`).
+
 The gate models tmux's **real** resolution, fallbacks included (tmux 3.7: the socket template is the path list
 `$TMUX_TMPDIR:/tmp/`, each item env-expanded and `realpath()`-ed, the first usable item wins — M41 measured the
 whole matrix). So "I set `TMUX_TMPDIR`" is *not* isolation by itself:

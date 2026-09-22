@@ -7,7 +7,8 @@
 # 仓库脚本，管不到 agent 在窗口里的 ad-hoc 命令 —— 这道闸门管的就是它们：
 #
 #   记录  每次调用追加一行到 $TEAM_TMUX_CALLS_LOG（时间/socket/TMUX/TMUX_TMPDIR/参数/pid/ppid/cwd/动作），
-#         上限 2000 行（超了留最新 1000 行）——默认 server 再死也能倒查「谁在什么时候打了什么」。
+#         上限 2000 条调用行（超了留最新 1000 条；首行一条累计 `dropped=<N>` 轮转标记自述被裁掉多少
+#         —— 读不到某次调用时能分清「没发生」与「被轮转掉」）——默认 server 再死也能倒查「谁在什么时候打了什么」。
 #   判定  **按目标**（M67）：解析到默认 socket（/tmp/tmux-<uid>/default）的破坏性调用
 #         （kill-server/kill-session/kill-window/kill-pane，含 tmux 允许的前缀写法）只在目标能证明是
 #         调用者自己会话里的命名对象时执行；**环境变量不授权任何东西**（M62 的泄漏链：team 的 export +
@@ -296,11 +297,32 @@ if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
   printf '%s · act=%s · sock=%s · TMUX=%s · TMUX_TMPDIR=%s · argv=%s · pid=%s ppid=%s cwd=%s\n' \
     "$(date -Is)" "$_act" "$_sock" "${TMUX:--}" "${TMUX_TMPDIR:--}" "$_argv" "$$" "${PPID:-?}" "$PWD" \
     >> "$_log" 2>/dev/null || true
-  # 截断：超 2000 行留最新 1000 行（同目录临时文件 + mv；失败就算了，日志不是命门）
+  # 截断：超 2000 条**调用行**留最新 1000 条（同目录临时文件 + mv；失败就算了，日志不是命门）。
+  # P77：被裁掉的历史必须**自述**——轮转后首行是 `<ISO 时间> · rotation · dropped=<N>`，
+  # N = 累计被裁掉的调用行数（前一个 marker 的 N + 本次裁掉的）；marker 不是调用行（不带 act=，
+  # 四值动作词汇表保持封闭），没越界就一条 marker 都不写。
   _n="$(wc -l < "$_log" 2>/dev/null | tr -dc '0-9')"
   if [ -n "$_n" ] && [ "$_n" -gt 2000 ]; then
-    tail -n 1000 "$_log" > "$_log.tmp.$$" 2>/dev/null \
-      && mv "$_log.tmp.$$" "$_log" 2>/dev/null || rm -f "$_log.tmp.$$" 2>/dev/null
+    _prev=0
+    _first="$(head -n 1 "$_log" 2>/dev/null || true)"
+    # marker 形状是**严格**的：时间戳之后紧接 ` · rotation · dropped=<N>`。不能用带 * 的 glob
+    # 一把抓（`T*' · rotation · dropped='*` 会把 argv 里带这句话的**调用行**也吃掉），
+    # 所以先按第一个 ` · ` 切出时间戳，再要求剩余部分**以** ` · rotation · dropped=` 开头。
+    _t="${_first%% · *}"
+    _rest="${_first#"$_t"}"
+    case "$_rest" in
+      ' · rotation · dropped='*)
+        _d="${_rest#' · rotation · dropped='}"
+        case "$_d" in
+          ''|*[!0-9]*) : ;;                  # marker 读不出 → 只算本次轮转
+          *) _prev="$_d"; _n=$((_n - 1)) ;;   # marker 不是调用行
+        esac ;;
+    esac
+    if [ "$_n" -gt 2000 ]; then
+      { printf '%s · rotation · dropped=%s\n' "$(date -Is)" "$((_prev + _n - 1000))"
+        tail -n 1000 "$_log"; } > "$_log.tmp.$$" 2>/dev/null \
+        && mv "$_log.tmp.$$" "$_log" 2>/dev/null || rm -f "$_log.tmp.$$" 2>/dev/null
+    fi
   fi
 fi
 
