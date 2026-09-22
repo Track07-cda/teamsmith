@@ -263,20 +263,65 @@ team_transcript_mentions() { # <target> <slice> <payload 行数> [payload 字符
   printf '%s\n' "$n"
 }
 
-# **整个输入框**的内容行拼起来（去空白），不再只看光标行及以上（V7-F1：人的草稿以空行
-# 开头、光标被 Up 移到空行上时，文字全在光标行**下方** —— 光标相对判定会漏掉它，真实 Pi
-# 上不需要竞态就能复现 D20）。唯一被排除的是 OFFSET==1（紧贴下边框）那一行：
-#  - 空框里包自带的提示行（" k3  Kimi Coding  max"）就画在那里 —— 它是框的 chrome，不是
-#    文字区；E3/V7 的全部实测形状里草稿从不占这一行，按位置排除比按内容匹配更保守
-#   （内容匹配会把「长得像提示行的草稿」漏掉，位置排除只会漏「提示行被顶掉且单行草稿恰好
-#    落在那一行」—— 真实 Pi 的提示行不动，该形状不可达；残余写进 troubleshooting §3）。
+# 框内**内容**行的唯一提取（P67）：光标锚定 + 边框邻行按内容读。
+#
+# 历史（为什么不能再按槽位排除）：0.85.1 的框把自带状态行（" k3  Kimi Coding  max"）画在
+# **紧贴下边框那一行**（OFFSET==1），所以老规则无条件排除 OFFSET==1 —— 在 0.85.1 上正确。
+# Pi 0.87.0 把状态行搬到了下边框**下面**，边框邻行正是**单行草稿**所在：老规则让它在
+# team_input_box_text / 夹具判定里当场消失（框读成空 → 就绪门放行、投递路径会盖掉草稿；
+# P61 的 15b/15d 现场）。
+#
+# 新规则（design §3，逐行、顺序敏感）——注意光标优先权在 _team_box_row_is_chrome 里实现：
+#   ① 空文本 → 不是内容；
+#   ② 边框邻行（OFFSET==1）交给 _team_box_row_is_chrome：光标落在该行 → 内容（不论文本长
+#      什么样：Pi 的光标从不落在框自带状态行上，人的草稿可能长得像任何东西），形状命中 →
+#      chrome（排除）；
+#   ③ 其余行 → 内容（找不到框 → rc 1）。
+# 「光标行是内容」由谓词给出（而不是调用方自己先判）正是为了让影子成 `return 0` 的测试进程
+# 完整复现老行为（老的槽位排除连光标行一起排除）——2.4 的红侧就是这么可证伪的。
+# 排除集合严格变小：任何今天看得见的草稿都不会变得看不见（只会发现更多草稿），所以这不削弱
+# 「框里有草稿 → 一个键都不发」的红线（M24/M30）。残余写进 references/troubleshooting.md §3。
+#
+# 唯一实现（design §4）：team_input_box_text（真 pane）、box-judge.sh 的
+# team_box_frame_verdict（纯帧，夹具/门禁）与门禁自己的帧探针都走这里；再写第二份排除逻辑
+# 就是规格违规。红侧不靠产品开关：测试进程把 _team_box_row_is_chrome 影子成 `return 0`
+# （= 老的「边框邻行一律排除」）即可复现旧判定。
+_team_box_row_is_chrome() { # <cy> <row> <text> → 0 = 框自带 chrome（排除）；非 0 = 内容
+  local cy="${1:-}" row="${2:-}" text="${3:-}"
+  [ -n "$cy" ] && [ "$row" = "$cy" ] && return 1     # 光标行永远是内容
+  # 实测形状（两个真样本：0.85.1 帧第 28 行 ` deepseek-flash  Deepseek  max`；guard-matrix
+  # 的 ` k3  Kimi Coding  max`）：一个前导空格 / 无空格的模型 token / 两个空格 / provider
+  # 显示名 / 两个空格 / Pi 的 thinking level。故意窄：不认识的拼写读成内容（→ 忙 → 消息
+  # 排队而不是被粘掉，保守方向）。
+  LC_ALL=C grep -qE '^ [^ ]+  [^ ].*  (off|minimal|low|medium|high|xhigh|max)$' <<< "$text"
+}
+
+_team_box_text_of_frame() { # <cy>；stdin = capture 全文 → 框内容行拼起来（去空白）
+  local cy="${1:-}" raw line off row text out="" rows
+  raw="$(cat)"
+  rows="$(printf '%s\n' "$raw" | _team_box_rows_of_frame "$cy")"
+  case "$rows" in ""|NONE) return 1 ;; esac
+  # _team_box_rows_of_frame 已按屏幕行号自上而下输出，不再排序（老实现那句 sort 键在
+  # 行文本含 `|` 时会错位）。
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    off="${line%%|*}"; row="${line##*|}"; text="${line#*|}"; text="${text%|*}"
+    [ -n "$text" ] || continue                        # ① 空行不是内容
+    # ②③ 边框邻行由谓词定（光标行 → 内容；实测形状 → chrome）；其余行一律内容
+    if [ "$off" = "1" ] && _team_box_row_is_chrome "$cy" "$row" "$text"; then continue; fi
+    out+="$text"
+  done <<< "$rows"
+  printf '%s\n' "$out"
+}
+
 team_input_box_text() { # <target>
-  local rows
-  rows="$(team_input_box_rows "$1" 2>/dev/null || true)"
-  [ -n "$rows" ] && [ "$rows" != "NONE" ] || return 1
-  printf '%s\n' "$rows" | LC_ALL=C sort -t'|' -k3,3n | LC_ALL=C awk -F'|' '
-    $1+0 != 1 && $2 != "" { printf "%s", $2 }
-    END { printf "\n" }'
+  local target="${1:-}" cy cap
+  team_tmux_target_required "input-box" "$target" || return 1
+  cy="$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null || true)"
+  [ -n "$cy" ] || return 1
+  cy=$(( cy + 1 ))
+  cap="$(tmux capture-pane -p -t "$target" 2>/dev/null)" || return 1
+  printf '%s\n' "$cap" | _team_box_text_of_frame "$cy"
 }
 
 # 只有空白（或什么都没画出来）时的判定：

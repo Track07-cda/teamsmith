@@ -5918,7 +5918,7 @@ team_load_config >/dev/null 2>&1 || true
 [ "${M45_NO_STRIP:-0}" = "1" ] && _team_box_banner_rows() { :; }   # 破坏实现（翻转用）
 printf 'banner_rows=[%s]\n' "$(_team_box_banner_rows "$CY" < "$FR")"
 printf 'geometry=[%s]\n' "$(_team_box_geometry "$CY" < "$FR")"
-text="$(_team_box_rows_of_frame "$CY" < "$FR" | LC_ALL=C sort -t'|' -k3,3n | LC_ALL=C awk -F'|' '$1+0 != 1 && $2 != "" { printf "%s", $2 } END { printf "\n" }')"
+text="$(_team_box_text_of_frame "$CY" < "$FR")"   # P67：与生产提取同一实现（不再自带排除）
 printf 'box_nows=[%s]\n' "$(printf '%s' "$text" | tr -d '[:space:]')"
 if [ -n "${M45_PAYLOAD:-}" ]; then
   team_box_text_holds_only "$text" "$M45_PAYLOAD" && printf 'holds_only=yes\n' || printf 'holds_only=no\n'
@@ -5946,11 +5946,13 @@ assert_has_echo "$M45_A_RED" "UpdateAvailable" \
 
 # ── 帧 B/C：合成帧（40 列）——「横幅 + 空框」与「横幅 + 真草稿」────────────────────
 # 行号：1 开界 / 2–4 头与尾 / 5 闭界 / 6 空 / 7 框上边框 / 8–9 内容 / 10 提示行 / 11 框下边框 / 12 页脚
+# P67：提示行拼写改成**实测形状**（` fake-pi  Fake Pi  max`）——旧的 ` fake-pi 1.0` 不匹配
+# 状态行形状，在新判据下就是内容（空框夹具会变红，理由不对）。所有合成帧同一处改动。
 m45_frame() { # <帧文件> <第 8 行内容> [第二内容行]
   { m45_rule 40; printf ' Update Available\n'; printf ' New version 0.86.0 is available. Run pi update\n'
     printf ' Changelog: https://pi.dev/changelog\n'; m45_rule 40; printf '\n'; m45_rule 40
     printf ' %s\n' "$2"; [ $# -ge 3 ] && printf ' %s\n' "$3" || printf '\n'
-    printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } > "$1"
+    printf ' fake-pi  Fake Pi  max\n'; m45_rule 40; printf ' footer\n'; } > "$1"
 }
 m45_frame "$M45_F/banner-empty.txt" ""
 M45_B="$(m45_probe "$M45_F/banner-empty.txt" 8)"
@@ -5966,7 +5968,7 @@ assert_has_echo "$M45_C" "geometry=[7 11]" "M45 合成帧：有草稿时几何�
 # ── 帧 D/E：对抗形状 —— 草稿自己长得像横幅块（绝不许变成「框读不出来」）────────────
 # D：草稿块（整行 ─ + 两行头 + Changelog + 整行 ─）画在框内、开界不是框边框。
 { m45_rule 40; m45_rule 40; printf ' Update Available\n'; printf ' New version 1.0.0 is available. Run pi update\n'
-  printf ' Changelog: https://x\n'; m45_rule 40; printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } \
+  printf ' Changelog: https://x\n'; m45_rule 40; printf ' fake-pi  Fake Pi  max\n'; m45_rule 40; printf ' footer\n'; } \
   > "$M45_F/draft-like-block.txt"
 M45_D="$(m45_probe "$M45_F/draft-like-block.txt" 4)"
 assert_has_echo "$M45_D" "UpdateAvailable" \
@@ -5976,14 +5978,14 @@ assert_not_echo "$M45_D" "box_nows=[]" \
 assert_has_echo "$M45_D" "geometry=[1 8]" "M45 对抗帧①：几何仍然找得出框（没退化成 NONE）"
 # E：最难的一种 —— 被误标的块把框的上边框也包了进去（跳过横幅就一个框都找不出来）。
 { m45_rule 40; printf ' Update Available\n'; printf ' New version 1.0.0 is available. Run pi update\n'
-  printf ' Changelog: https://x\n'; m45_rule 40; printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } \
+  printf ' Changelog: https://x\n'; m45_rule 40; printf ' fake-pi  Fake Pi  max\n'; m45_rule 40; printf ' footer\n'; } \
   > "$M45_F/draft-top.txt"
 M45_E="$(m45_probe "$M45_F/draft-top.txt" 3)"
 assert_not_echo "$M45_E" "geometry=[]" "M45 对抗帧②：跳过横幅后一个框都找不出来时退回保守行为（绝不退成 NONE → 守卫失效）"
-assert_has_echo "$M45_E" "box_nows=[UpdateAvailableNewversion1.0.0isavailable.Runpiupdate]" \
-  "M45 对抗帧②：内容仍然读作框内容（BUSY）——被误标的块喂退了保守分支，没有白打字"
+assert_has_echo "$M45_E" "box_nows=[UpdateAvailableNewversion1.0.0isavailable.RunpiupdateChangelog:https://x]" \
+  "M45 对抗帧②：内容仍然读作框内容（BUSY）——被误标的块喂退了保守分支，没有白打字；P67 起边框邻行\n     （` Changelog: https://x`，非状态行形状）也是内容，所以期望串按帧的真实内容加长了这一段"
 # 对照：没有横幅的普通框 —— 判据一个字都没变
-{ m45_rule 40; printf '\n'; printf ' half sentence\n'; printf ' fake-pi 1.0\n'; m45_rule 40; printf ' footer\n'; } > "$M45_F/no-banner.txt"
+{ m45_rule 40; printf '\n'; printf ' half sentence\n'; printf ' fake-pi  Fake Pi  max\n'; m45_rule 40; printf ' footer\n'; } > "$M45_F/no-banner.txt"
 M45_F0="$(m45_probe "$M45_F/no-banner.txt" 2)"
 assert_has_echo "$M45_F0" "geometry=[1 5]" "M45 对照：没有横幅时几何与行为不变"
 assert_has_echo "$M45_F0" "box_nows=[halfsentence]" "M45 对照：普通草稿照旧读得出来"
@@ -6021,12 +6023,12 @@ assert_eq "P59：像弹窗的 chrome（两条整行 ─、没有真输入框）�
 assert_has_echo "$M59_OUT_NB" "idle-read=NOT-EMPTY" "P59：合成帧没有可定位的空框 → 判定非空（就绪永远不放行）"
 assert_not_echo "$M59_OUT_NB" "idle-read=EMPTY" "P59：合成帧绝不许被判成空框"
 # 对照：真的空输入框要能放行（否则绿侧可能只是「永远红」）
-{ m59_rule 60; printf '\n'; printf ' fake-pi 1.0\n'; m59_rule 60; printf ' footer\n'; } > "$M59_F/empty-box.txt"
+{ m59_rule 60; printf '\n'; printf ' fake-pi  Fake Pi  max\n'; m59_rule 60; printf ' footer\n'; } > "$M59_F/empty-box.txt"
 M59_OUT_E="$(bash "$M59_FB" --frame "$M59_F/empty-box.txt" --cursor 2 2>&1)"; M59_RC_E=$?
 assert_eq "P59 对照：真输入框且为空 → rc=0（就绪门确实会放行）" "$M59_RC_E" "0"
 assert_has_echo "$M59_OUT_E" "idle-read=EMPTY" "P59 对照：空框判成 EMPTY"
 # 对照：框里有草稿 → 非空（覆盖层规则没有把判定力削掉）
-{ m59_rule 60; printf '\n'; printf ' half sentence\n'; printf ' fake-pi 1.0\n'; m59_rule 60; printf ' footer\n'; } > "$M59_F/draft-box.txt"
+{ m59_rule 60; printf '\n'; printf ' half sentence\n'; printf ' fake-pi  Fake Pi  max\n'; m59_rule 60; printf ' footer\n'; } > "$M59_F/draft-box.txt"
 M59_OUT_D="$(bash "$M59_FB" --frame "$M59_F/draft-box.txt" --cursor 2 2>&1)"; M59_RC_D=$?
 assert_eq "P59 对照：框里有草稿 → 非空（判定力不降）" "$M59_RC_D" "1"
 assert_has_echo "$M59_OUT_D" "idle-read=NOT-EMPTY" "P59 对照：草稿照旧被判成非空"
@@ -12693,6 +12695,246 @@ P55PY
   sed -i "/^| $P55_ID |/d" "$REPO/docs/team/BOARD.md" 2>/dev/null || true
 else
   cond_skip "41·p55-pane-留存" "无 tmux"
+fi
+
+# ---------------------------------------------------------------- 42. P67 单行草稿判定（0.87.0 的边框邻行）
+section "42 · P67 输入框判据：0.87.0 的边框邻行按内容读（光标锚定 + 状态行形状才排除）"
+# 现场（P61 的 F1；提案 = one-line-draft-judgement，design §1–§4）：0.85.1 把框自带状态行画在
+# **紧贴下边框那一行**（OFFSET==1），老实现无条件排除它是对的；0.87.0 把状态行移到下边框**下面**，
+# 边框邻行成了**单行草稿**所在 —— 老实现把框读成空，就绪门会放行并把 payload 打进人的草稿。
+# 新规则：边框邻行是内容，**除非**「光标不在其上」且「文本匹配实测状态行形状」两条同时成立。
+# 提取只有一份实现 `_team_box_text_of_frame`（`team_input_box_text`、`box-judge.sh` 的帧判定与本节
+# 探针都走它）。红侧不靠产品开关：把 `_team_box_row_is_chrome` 影子成 `return 0`（= 老槽位排除）
+# 复现旧判定。本节两个方向都跑：绿 = 真草稿读得出、红 = 影子后翻回 EMPTY。
+P67_FRAMES="$SKILL_DIR/tests/frames"
+P67_ONE="$P67_FRAMES/pi-0.87.0-one-line-draft.txt"
+P67_HALF="$P67_FRAMES/pi-0.87.0-draft-half-sentence.txt"
+P67_EMPTY="$P67_FRAMES/pi-0.87.0-empty-box.txt"
+P67_0851="$P67_FRAMES/pi-0.85.1-update-banner.txt"
+P67_TRUST="$P67_FRAMES/pi-0.87.0-project-trust-prompt.txt"
+assert_file "$P67_ONE" "P67：0.87.0 单行草稿真帧（P61 15b 逐字节拷贝）在 tests/frames/"
+assert_file "$P67_HALF" "P67：0.87.0 单行草稿真帧（P61 10c）在 tests/frames/"
+assert_file "$P67_EMPTY" "P67：0.87.0 空闲空框真帧（P61 10c 对照）在 tests/frames/"
+
+# 纯帧探针：生产提取 + 帧级判定（不开 tmux）；shadow=1 时谓词影子成老槽位排除
+P67_PROBE="$TMP/p67-frame-probe.sh"
+cat > "$P67_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <帧文件> <光标行> [shadow] → box_text=[...] / box_nows=[...] / verdict=...
+set -u
+SKILL_DIR="$1"; FR="$2"; CY="$3"; SHADOW="${4:-0}"
+. "$SKILL_DIR/scripts/lib/common.sh"; . "$SKILL_DIR/scripts/lib/outbox.sh"
+. "$SKILL_DIR/tests/lib/box-judge.sh"   # P67：帧级判定（team_box_frame_verdict）在共享库里
+[ "$SHADOW" = "1" ] && _team_box_row_is_chrome() { return 0; }   # 红侧：老的槽位排除
+text="$(_team_box_text_of_frame "$CY" < "$FR" 2>/dev/null || true)"
+printf 'box_text=[%s]\n' "$text"
+printf 'box_nows=[%s]\n' "$(printf '%s' "$text" | tr -d '[:space:]')"
+if v="$(team_box_frame_verdict "$CY" < "$FR" 2>/dev/null)"; then printf 'verdict=%s rc=0\n' "$v"
+else printf 'verdict=%s rc=1\n' "$v"; fi
+EOS
+chmod +x "$P67_PROBE"
+p67_probe() { ( bash "$P67_PROBE" "$SKILL_DIR" "$1" "$2" "${3:-0}" 2>&1 ); }
+p67_frame_mode() { # <帧> <cy> [shadow] → pm-box-real.sh --frame 的输出（同一份共享判据）
+  if [ "${3:-0}" = "1" ]; then
+    M24_SHADOW_CHROME=1 bash "$SKILL_DIR/tests/pm-box-real.sh" --frame "$1" --cursor "$2" 2>&1
+  else
+    bash "$SKILL_DIR/tests/pm-box-real.sh" --frame "$1" --cursor "$2" 2>&1
+  fi
+}
+p67_field() { printf '%s\n' "$2" | sed -n "s/^$1=\[\(.*\)\]$/\1/p"; }
+
+# ── 绿侧：0.87.0 单行草稿 = 内容；0.87.0 空框与 0.85.1 状态行帧 = 空 ──────────────────────
+P67_ONE_OUT="$(p67_probe "$P67_ONE" 26)"
+assert_has_echo "$P67_ONE_OUT" "box_text=[HUMAN-ONE-LINE-DRAFT]" "P67 绿侧：15b 真帧的框文本就是那行草稿"
+assert_has_echo "$P67_ONE_OUT" "verdict=idle-read=NOT-EMPTY rc=1" "P67 绿侧：15b 真帧判 NOT-EMPTY（不再是 EMPTY）"
+P67_HALF_OUT="$(p67_probe "$P67_HALF" 26)"
+assert_has_echo "$P67_HALF_OUT" "box_text=[DRAFT-p61-half-sentence]" "P67 绿侧：10c 单行草稿真帧读得出草稿"
+assert_has_echo "$P67_HALF_OUT" "idle-read=NOT-EMPTY" "P67 绿侧：10c 单行草稿真帧判 NOT-EMPTY"
+P67_EMPTY_OUT="$(p67_probe "$P67_EMPTY" 26)"
+assert_has_echo "$P67_EMPTY_OUT" "box_text=[]" "P67 对照：0.87.0 空闲空框的框文本为空"
+assert_has_echo "$P67_EMPTY_OUT" "verdict=idle-read=EMPTY rc=0" "P67 对照：0.87.0 空闲空框仍判 EMPTY"
+P67_0851_OUT="$(p67_probe "$P67_0851" 26)"
+assert_has_echo "$P67_0851_OUT" "box_text=[]" "P67 回退闸：0.85.1 真帧的状态行仍被排除（框文本空）"
+assert_has_echo "$P67_0851_OUT" "verdict=idle-read=EMPTY rc=0" "P67 回退闸：0.85.1 真帧仍判 EMPTY（没有回退到「任何文本都忙」）"
+
+# ── 红侧（可证伪）：谓词影子成「一律 chrome」→ 草稿帧翻回 EMPTY，0.85.1 保持 EMPTY ────────
+P67_ONE_RED="$(p67_probe "$P67_ONE" 26 1)"
+assert_has_echo "$P67_ONE_RED" "box_text=[]" "P67 红侧：影子后 15b 真帧的框文本又空了（= 老槽位排除）"
+assert_has_echo "$P67_ONE_RED" "verdict=idle-read=EMPTY rc=0" "P67 红侧：影子后 15b 真帧翻回 EMPTY（判据确实被这条谓词守着）"
+P67_HALF_RED="$(p67_probe "$P67_HALF" 26 1)"
+assert_has_echo "$P67_HALF_RED" "verdict=idle-read=EMPTY rc=0" "P67 红侧：10c 单行草稿帧同样翻回 EMPTY"
+P67_0851_RED="$(p67_probe "$P67_0851" 26 1)"
+assert_has_echo "$P67_0851_RED" "verdict=idle-read=EMPTY rc=0" "P67 红侧：0.85.1 帧在两个方向都 EMPTY（它本来就靠形状排除，影子不改变它）"
+
+# ── 同源：生产提取 vs pm-box-real.sh --frame（绿/红两个方向）text 与 verdict 逐字一致 ──────
+P67_MODE_ONE="$(p67_frame_mode "$P67_ONE" 26)"; P67_MODE_ONE_RC=$?
+assert_eq "P67 同源①：帧模式对 15b 真帧 rc=1（NOT-EMPTY）" "$P67_MODE_ONE_RC" "1"
+assert_eq "P67 同源①：两条路径的框文本逐字一致（15b）" \
+  "$(p67_field box_text "$P67_MODE_ONE")" "$(p67_field box_text "$P67_ONE_OUT")"
+assert_has_echo "$P67_MODE_ONE" "idle-read=NOT-EMPTY" "P67 同源①：帧模式的判定与生产提取同向（15b）"
+P67_MODE_EMPTY="$(p67_frame_mode "$P67_EMPTY" 26)"; P67_MODE_EMPTY_RC=$?
+assert_eq "P67 同源②：帧模式对 0.87.0 空框 rc=0" "$P67_MODE_EMPTY_RC" "0"
+assert_eq "P67 同源②：两条路径的框文本逐字一致（空框）" \
+  "$(p67_field box_text "$P67_MODE_EMPTY")" "$(p67_field box_text "$P67_EMPTY_OUT")"
+P67_MODE_0851="$(p67_frame_mode "$P67_0851" 26)"; P67_MODE_0851_RC=$?
+assert_eq "P67 同源③：帧模式对 0.85.1 真帧 rc=0" "$P67_MODE_0851_RC" "0"
+assert_eq "P67 同源③：两条路径的框文本逐字一致（0.85.1）" \
+  "$(p67_field box_text "$P67_MODE_0851")" "$(p67_field box_text "$P67_0851_OUT")"
+P67_MODE_ONE_RED="$(p67_frame_mode "$P67_ONE" 26 1)"
+assert_has_echo "$P67_MODE_ONE_RED" "idle-read=EMPTY" "P67 同源④（红侧）：pm-box-real.sh --frame 走同一条影子路径，草稿帧也翻回 EMPTY"
+assert_eq "P67 同源④（红侧）：影子方向两条路径的框文本一致（都空）" \
+  "$(p67_field box_text "$P67_MODE_ONE_RED")" "$(p67_field box_text "$P67_ONE_RED")"
+# 覆盖层优先权不许被这条判据动到（design §5：只删排除、不加排除）
+P67_MODE_TRUST="$(p67_frame_mode "$P67_TRUST" 16)"; P67_MODE_TRUST_RC=$?
+assert_eq "P67 覆盖层：信任弹窗帧照旧判定覆盖层（rc=0）" "$P67_MODE_TRUST_RC" "0"
+assert_has_echo "$P67_MODE_TRUST" "overlay=trust-prompt" "P67 覆盖层：overlay 的优先权没变"
+
+# ── 2.5 的三种形状按帧钉住（**合成帧在这里明说是合成的**；P61 的 15c 只记了判定，没存多行帧）──
+P67_SYN="$TMP/p67-frames"; rm -rf "$P67_SYN"; mkdir -p "$P67_SYN"
+p67_rule() { printf '─%.0s' $(seq 1 "${1:-60}"); printf '\n'; }
+# a1（真帧）：把光标移到 0.85.1 的状态行上 → 形状不能覆盖光标，该行读作内容
+P67_0851_CUR="$(p67_probe "$P67_0851" 28)"
+assert_has_echo "$P67_0851_CUR" "box_nows=[deepseek-flashDeepseekmax]" "P67 场景 a1：0.85.1 真帧光标落在状态行上 → 该行是内容"
+assert_has_echo "$P67_0851_CUR" "verdict=idle-read=NOT-EMPTY rc=1" "P67 场景 a1：光标踩在状态行形状行上 → 判忙"
+# a2（合成帧）：边框邻行 = ` k3  Kimi Coding  max`（状态行形状）且光标就在其上 → 内容
+{ p67_rule 60; printf '\n'; printf ' k3  Kimi Coding  max\n'; p67_rule 60; printf ' footer\n'; } > "$P67_SYN/status-row-cursor.txt"
+P67_A2="$(p67_probe "$P67_SYN/status-row-cursor.txt" 3)"
+assert_has_echo "$P67_A2" "box_nows=[k3KimiCodingmax]" "P67 场景 a2（合成帧）：光标踩在状态行形状行上 → 该行是内容"
+assert_has_echo "$P67_A2" "verdict=idle-read=NOT-EMPTY rc=1" "P67 场景 a2（合成帧）：同上 → 判忙"
+# b（合成帧）：0.87.0 的 V7-F1 形状 —— 光标在空白行、唯一文字行在边框邻行（形状不认识它）
+{ p67_rule 60; printf '\n'; printf ' foo\n'; p67_rule 60; printf ' footer\n'; } > "$P67_SYN/v7f1-below-cursor.txt"
+P67_B="$(p67_probe "$P67_SYN/v7f1-below-cursor.txt" 2)"
+assert_has_echo "$P67_B" "box_nows=[foo]" "P67 场景 b（合成帧）：V7-F1 形状（光标上方空白、文字在边框邻行）→ 文字是内容"
+assert_has_echo "$P67_B" "verdict=idle-read=NOT-EMPTY rc=1" "P67 场景 b（合成帧）：判忙，草稿不会被盖掉"
+# c（合成帧）：0.87.0 三行草稿（光标在最后一行 = 边框邻行）→ 两个方向都忙
+{ p67_rule 60; printf ' MULTI-LINE one\n'; printf ' MULTI-LINE two\n'; printf ' MULTI-LINE three\n'; p67_rule 60; printf ' footer\n'; } > "$P67_SYN/multi-line-draft.txt"
+P67_C="$(p67_probe "$P67_SYN/multi-line-draft.txt" 4)"
+P67_C_RED="$(p67_probe "$P67_SYN/multi-line-draft.txt" 4 1)"
+assert_has_echo "$P67_C" "box_nows=[MULTI-LINEoneMULTI-LINEtwoMULTI-LINEthree]" "P67 场景 c（合成帧）：三行草稿全部读出"
+assert_has_echo "$P67_C" "verdict=idle-read=NOT-EMPTY rc=1" "P67 场景 c（合成帧）：判忙"
+assert_has_echo "$P67_C_RED" "verdict=idle-read=NOT-EMPTY rc=1" "P67 场景 c（红侧影子）：多行草稿在老的槽位排除下照样忙（判定力不只来自边框邻行）"
+
+# ── 真 pane 后果（非 FAST）：就绪门拒绝 + 生产路径只排队 ─────────────────────────────
+# 3.1：pm-box-real.sh 的就绪门面对「框里是 0.87.0 单行草稿」的 pane 必须拒绝放行（P61 的 15d 是修前
+# 的红侧：rc=0、把 payload 打进了草稿）。B1.3：同一形状上 say / draft send 一个键都不敲、只入队。
+if [ "$FAST" = "1" ]; then
+  fast_skip "42·P67-真pane" "要真 tmux pane + 帧回放假 pi（真进程段落）"
+elif [ "$HAVE_TMUX" != "1" ] || ! command -v python3 >/dev/null 2>&1; then
+  cond_skip "42·P67-真pane" "本机没有 tmux 或 python3"
+else
+  live_mark
+  P67_DIR="$TMP/p67-live"; rm -rf "$P67_DIR"; mkdir -p "$P67_DIR"
+  # 帧回放假 pi（P61 pkg/fake-pi.py 的单帧简化版）：画一帧后守到被杀；pane 收到的字节抄进 keylog。
+  # 帧是**静止的**（不会自己变空），所以判据正确时就绪门永远不放行、一个键都不该被敲 ——
+  # keylog 是那条断言的字节级证人（tmux 不直接暴露 pane 输入）。
+  cat > "$P67_DIR/frame-replay-pi.py" <<'EOS'
+#!/usr/bin/env python3
+"""P67 帧回放假 pi：把一份真帧原样画到 pane 上，再把 pane 收到的每个字节抄进 keylog。
+
+环境（夹具的 tmux server 继承）：V67_FRAME / V67_CURSOR / V67_KEYLOG
+"""
+import os, select, sys, time, tty
+
+frame = os.environ["V67_FRAME"]
+cursor = int(os.environ["V67_CURSOR"])
+keylog = os.environ["V67_KEYLOG"]
+
+
+def draw():
+    with open(frame, encoding="utf-8") as f:
+        rows = f.read().split("\n")
+    out = sys.stdout
+    out.write("\x1b[2J")
+    for i, line in enumerate(rows[:30], start=1):
+        out.write("\x1b[%d;1H%s" % (i, line))
+    out.write("\x1b[%d;1H" % cursor)
+    out.flush()
+
+
+tty.setraw(0)  # 先 raw：pane 收到的字节立刻可见（不被行规程缓存）
+draw()
+while True:
+    r, _, _ = select.select([0], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        data = os.read(0, 4096)
+    except OSError:
+        data = b""
+    if not data:
+        break
+    with open(keylog, "a", encoding="utf-8") as f:
+        f.write("%d %s\n" % (int(time.time() * 1000), data.hex()))
+EOS
+  chmod +x "$P67_DIR/frame-replay-pi.py"
+
+  # (i) 就绪门：自己的私有 fixture（真 tmux pane，120×30），画的就是那份真帧
+  P67_KEYS_REFUSE="$P67_DIR/keys-refuse.log"; rm -f "$P67_KEYS_REFUSE"
+  M24_PI_BIN="$P67_DIR/frame-replay-pi.py" M24_READY_TRIES=4 \
+    V67_FRAME="$P67_ONE" V67_CURSOR=26 V67_KEYLOG="$P67_KEYS_REFUSE" \
+    bash "$SKILL_DIR/tests/pm-box-real.sh" --idle-secs 0 >"$P67_DIR/refuse.log" 2>&1
+  P67_REFUSE_RC=$?
+  [ "$P67_REFUSE_RC" -ne 0 ] && ok "P67 就绪门：面对 0.87.0 单行草稿的 pane 拒绝放行（rc=$P67_REFUSE_RC≠0）" \
+    || bad "P67 就绪门：单行草稿的 pane 上竟放行了（rc=0；P61 的 15d 就是这个红）"
+  assert_has "$P67_DIR/refuse.log" "idle-read=NOT-EMPTY" "P67 就绪门：拒绝时最后判定点名 idle-read=NOT-EMPTY"
+  assert_has "$P67_DIR/refuse.log" "--- 最后一帧（原样，留给报告）---" "P67 就绪门：拒绝时打印最后一帧"
+  assert_has "$P67_DIR/refuse.log" "HUMAN-ONE-LINE-DRAFT" "P67 就绪门：最后一帧就是那行草稿（不是别的失败）"
+  assert_not "$P67_DIR/refuse.log" "deliver_text_lines=" "P67 就绪门：拒绝后一步投递都没跑"
+  assert_eq "P67 就绪门：keylog 零行（一个键都没敲进人的草稿）" \
+    "$( [ -f "$P67_KEYS_REFUSE" ] && wc -l < "$P67_KEYS_REFUSE" || printf 0 )" "0"
+
+  # (ii) 生产路径：复用 12b 的夹具项目/会话（dev 在名册里），把 dev 窗口换成帧回放假 pi
+  P67_KEYS_SAY="$P67_DIR/keys-say.log"; rm -f "$P67_KEYS_SAY"
+  rm -rf "$REPO/.pi/team/state/outbox"
+  tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
+  P67_LIVE_CMD="$(printf 'V67_FRAME=%q V67_CURSOR=26 V67_KEYLOG=%q python3 %q' \
+    "$P67_ONE" "$P67_KEYS_SAY" "$P67_DIR/frame-replay-pi.py")"
+  tmux new-window -d -t "$SESSION" -n dev -c "$REPO" "$P67_LIVE_CMD" 2>/dev/null || true
+  tmux resize-window -t "$SESSION:dev" -x 120 -y 30 2>/dev/null || true
+  sleep 1
+  assert_eq "P67 生产路径：dev 窗口画的正是 0.87.0 单行草稿帧" \
+    "$(tmux capture-pane -p -t "$SESSION:dev" 2>/dev/null | grep -c 'HUMAN-ONE-LINE-DRAFT' || true)" "1"
+  p67_guard() { # 从 stdin 读片段；在夹具项目里跑生产守卫，$T = dev 窗口
+    ( cd "$REPO" && bash -c '
+        set -u
+        . "'"$SKILL_DIR"'/scripts/lib/common.sh"
+        . "'"$SKILL_DIR"'/scripts/lib/outbox.sh"
+        . "'"$SKILL_DIR"'/tests/lib/box-judge.sh"
+        T="'"$SESSION"':dev"
+        source /dev/stdin
+      ' )
+  }
+  P67_READS="$(p67_guard <<'EOS'
+printf 'input_box_state=%s\n' "$(team_input_box_state "$T")"
+printf 'delivery_verdict=%s\n' "$(team_delivery_verdict "$T")"
+printf 'box_text=[%s]\n' "$(team_input_box_text "$T" 2>/dev/null | tr '\n' '|')"
+printf 'holds_own=%s\n' "$(team_box_holds_only "$T" 'HUMAN-ONE-LINE-DRAFT' && printf yes || printf no)"
+printf 'holds_foreign=%s\n' "$(team_box_holds_only "$T" 'check the failing test' && printf yes || printf no)"
+EOS
+)"
+  assert_has_echo "$P67_READS" "input_box_state=BUSY" "P67 生产路径：team_input_box_state 报 BUSY"
+  assert_has_echo "$P67_READS" "delivery_verdict=BUSY" "P67 生产路径：team_delivery_verdict 不是 EMPTY"
+  assert_has_echo "$P67_READS" "box_text=[HUMAN-ONE-LINE-DRAFT|" "P67 生产路径：生产提取读到的就是那行草稿"
+  assert_has_echo "$P67_READS" "holds_own=yes" "P67 生产路径：框里只有我们自己的那行 → holds_only=yes"
+  assert_has_echo "$P67_READS" "holds_foreign=no" "P67 生产路径：外来 payload → holds_only=no"
+  ( cd "$REPO" && $TEAM say dev "check the failing test" ) >"$P67_DIR/say.log" 2>&1 || true
+  assert_has "$P67_DIR/say.log" "queued" "P67 生产路径：单行草稿在场 → team say 报 queued（不是已送达）"
+  assert_eq "P67 生产路径：say 之后队列里恰好一条" \
+    "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_eq "P67 生产路径：say 一个键都没敲（keylog 仍 0 行）" \
+    "$( [ -f "$P67_KEYS_SAY" ] && wc -l < "$P67_KEYS_SAY" || printf 0 )" "0"
+  assert_eq "P67 生产路径：say 的文字没有出现在 pane 上" \
+    "$(tmux capture-pane -p -t "$SESSION:dev" 2>/dev/null | grep -c 'check the failing test' || true)" "0"
+  assert_eq "P67 生产路径：草稿行仍在 pane 上（原样）" \
+    "$(tmux capture-pane -p -t "$SESSION:dev" 2>/dev/null | grep -c 'HUMAN-ONE-LINE-DRAFT' || true)" "1"
+  printf 'P67 draft-send payload\n' > "$P67_DIR/payload.txt"
+  ( cd "$REPO" && $TEAM draft send "$P67_DIR/payload.txt" --target "$SESSION:dev" ) >"$P67_DIR/draft.log" 2>&1 || true
+  assert_has "$P67_DIR/draft.log" "queued" "P67 生产路径：draft send 也只入队（queued）"
+  assert_eq "P67 生产路径：draft send 之后队列里两条（say 的 + draft 的）" \
+    "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "2"
+  assert_eq "P67 生产路径：draft send 一个键都没敲（keylog 仍 0 行）" \
+    "$( [ -f "$P67_KEYS_SAY" ] && wc -l < "$P67_KEYS_SAY" || printf 0 )" "0"
+  tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
 fi
 
 section "15 · 完成"

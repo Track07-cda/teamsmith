@@ -53,6 +53,9 @@ PI_BIN="${M24_PI_BIN:-$HOME/.bun/bin/pi}"
 . "$SKILL_DIR/tests/lib/box-judge.sh"
 
 IDLE_SECS=8; KEEP="${TEAM_M24_KEEP:-0}"; PAYLOAD=""; TIMELINE=0; RETRACT_MODE="${M24_RETRACT_MODE:-burst}"
+# P67：就绪门的拍数上限（每拍 0.5s）。默认 120 = 60s；定格帧夹具（永远放行不了）把它调小，
+# 让「拒绝」这一段不必等满 60s —— 只改测试时长，不改就绪判据。
+READY_TRIES="${M24_READY_TRIES:-120}"
 FRAME=""; CURSOR=""; EXPECT_OVERLAY=0; TRUST_MODE="${M24_TRUST:-approve}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,15 +71,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$IDLE_SECS" in ''|*[!0-9]*) IDLE_SECS=8 ;; esac
+case "$READY_TRIES" in ''|*[!0-9]*) READY_TRIES=120 ;; esac
 case "$TRUST_MODE" in approve|prompt) ;; *) TRUST_MODE=approve ;; esac
 
 # P59 纯帧模式：帧进、判定出（不开 tmux、不跑 pi；FAST 门禁与红/绿翻转都走这条路）。
 if [ -n "$FRAME" ]; then
   [ -f "$FRAME" ] || { printf '✗ 帧文件不存在：%s\n' "$FRAME" >&2; exit 2; }
   case "$CURSOR" in ''|*[!0-9]*) printf '✗ --frame 需要 --cursor <光标行 1-based>\n' >&2; exit 2 ;; esac
+  # P67 红侧（可证伪，**不是产品开关**）：把边框邻行谓词影子成「一律 chrome」＝ 老的槽位排除，
+  # 于是 0.87.0 的单行草稿帧必须退回 idle-read=EMPTY。只作用于这条纯帧路径（真 pane 的守卫
+  # 跑在 m24_guard 子进程里，不继承影子）。
+  [ "${M24_SHADOW_CHROME:-0}" = "1" ] && _team_box_row_is_chrome() { return 0; } || true
   printf 'frame=%s cursor=%s mode=frame\n' "$FRAME" "$CURSOR"
-  team_box_frame_verdict "$CURSOR" < "$FRAME"
-  exit $?
+  M24_FRAME_OUT="$(team_box_frame_verdict "$CURSOR" < "$FRAME")"; M24_FRAME_RC=$?
+  printf '%s\n' "$M24_FRAME_OUT"
+  # P67：把提取出来的框文本也打出来 —— 生产提取（_team_box_text_of_frame）与帧级判定必须
+  # 同源同结果，纯帧探针靠这一行做逐字对比。覆盖层帧没有「框」可言（rc 1 → 空）。
+  M24_FRAME_TEXT="$(_team_box_text_of_frame "$CURSOR" < "$FRAME" 2>/dev/null | tr '\n' '|')"
+  printf 'box_text=[%s]\n' "${M24_FRAME_TEXT%|}"
+  exit "$M24_FRAME_RC"
 fi
 
 [ "${KEEP:-0}" = "1" ] && export TEAM_TMP_KEEP=1
@@ -152,7 +165,7 @@ m24_cap() { m24_tmux capture-pane -p -t "$SESS" 2>/dev/null; }
 m24_cy()  { m24_tmux display-message -p -t "$SESS" '#{cursor_y}' 2>/dev/null; }
 READY=0; LAST_STATE=""; LAST_CAP=""; FAIL_RC=0
 prev_cap=""; prev_state=""; i=0
-while [ "$i" -lt 120 ]; do
+while [ "$i" -lt "$READY_TRIES" ]; do
   cap="$(m24_cap)"; cy="$(m24_cy)"
   if [ -z "$cy" ]; then
     state="no-pane"
@@ -177,7 +190,8 @@ elif [ "$LAST_STATE" = "overlay=trust-prompt" ] && [ "$EXPECT_OVERLAY" = "1" ]; 
   printf '✓ 覆盖层已点名（--expect-overlay）：Pi 的项目信任弹窗 —— 一个键都没敲进它，投递步骤一步没跑（都排在就绪门之后）\n'
   RUN_STEPS=0
 else
-  printf '✗ 夹具：就绪门 60s 内没有放行（最后判定=%s）—— 没有定位到空的输入框\n' "${LAST_STATE:-unknown}"
+  printf '✗ 夹具：就绪门 %s 拍（约 %ss）内没有放行（最后判定=%s）—— 没有定位到空的输入框\n' \
+    "$READY_TRIES" "$((READY_TRIES / 2))" "${LAST_STATE:-unknown}"
   if [ "$LAST_STATE" = "overlay=trust-prompt" ]; then
     printf 'overlay=trust-prompt\n'
     printf '✗ 覆盖层挡住了输入框：一个键都不敲，投递步骤一步不跑（要接受它请显式 --expect-overlay）\n'

@@ -117,8 +117,10 @@ Honest edges (documented, not hidden):
   to the pane width, or a table border) and spinner-shaped draft rows are **fixed** (the top border is the
   highest qualifying row, so such a row is content and the box reads busy; V9-A4/A5/A8), a cursor resting on the
   draft's own equal-width rule row is **fixed** (the bottom border is searched strictly below the cursor row;
-  V9-A10), and **still open** are the whitespace-only draft and a single-line draft sitting exactly on the hint
-  slot (V9-C3, see that bullet).
+  V9-A10), and **still open** are the whitespace-only draft and the two shape-based members named in the
+  status-row bullet below: a draft whose only row is a verbatim clone of the status-row shape with the cursor
+  parked on another row (reads as chrome → empty), and an unrecognised future status-row spelling (reads busy,
+  never empty).
 - **Confirmation means the payload left the box AND the conversation shows a new copy of it (V9-B5).** After the
   `Enter` the drain reads the box back AND counts the payload's signature in the conversation area above the box
   (first non-blank line, whitespace-stripped, compared byte-wise, or a `[paste #N +K lines]` bubble whose `+K`
@@ -130,13 +132,22 @@ Honest edges (documented, not hidden):
   never pasted a second time, `flush --now` included. A TUI that never echoes submissions (static footer)
   degrades honestly the same way: the `Enter` did land once, the tool just cannot prove it — the held entry and
   its durable inbox copy are there for you to verify and `team outbox drop`.
-- **The hint row is excluded by slot, and that slot is a known miss.** The row immediately above the bottom
-  border is assumed to be the package's chrome (the ` k3  Kimi Coding  max` hint) and is never read as content.
-  Two honest consequences (V9-C1/C3): (a) if the hint row is bumped OFF that slot (e.g. a blank row appears
-  beneath it), the box reads **busy** — a conservative false-busy that holds the message, never a glue; (b) a
-  **single-line draft sitting exactly on that slot is invisible** — the box can read empty and a send may glue
-  onto it. Any draft of two lines or more, or a single line on any other row, is caught. This is geometrically
-  forced without matching the hint's text, which varies across Pi versions.
+- **The row above the bottom border is read as content unless it is provably the box's own status row.** Pi
+  0.85.1 drew its model/provider/thinking status row (the ` k3  Kimi Coding  max` shape) **inside** the box, on
+  exactly that row; Pi 0.87.0 moved it to a line **below** the box, so a **single-line draft** now lives there.
+  The row is excluded only when **both** tests pass: the cursor is not resting on it AND its text matches the
+  measured status-row shape (one leading space, a model token without spaces, two spaces, the provider display
+  name, two spaces, a thinking level from Pi's set — the two measured samples are
+  ` deepseek-flash  Deepseek  max` and ` k3  Kimi Coding  max`). Everything else is content and the box reads
+  **busy**: a row the cursor rests on is content whatever its text (Pi's cursor never rests on the box's own
+  status row, and a human's text can be shaped like anything), and so is a border-adjacent row whose spelling is
+  not recognised — an unknown future status-row spelling reads busy (a conservative hold), never empty (V9-C1).
+  Two members of this class stay open and are named here rather than implied away: the **whitespace-only draft**
+  (the capture trims trailing blanks — see the bullet above) and a draft whose **only** row is a verbatim
+  status-row clone with the cursor parked on another row (by shape it is indistinguishable from the box's own
+  chrome). The 0.87.0 layout (status row below the box) is supported, and the 0.85.1 sample stays excluded by
+  shape — the old exclusion by slot is gone, so every draft that used to be invisible is either now visible or
+  requires that exact clone.
 - **Giving up the `Enter` never leaves our text in your box (M17).** When the pre-`Enter` re-check cannot
   confirm that the box holds only our payload, the drain first asks one more question: does the box hold *only*
   what we typed? Verbatim, a single `[paste #N +K lines]` placeholder whose `+K` matches, the prefix/suffix

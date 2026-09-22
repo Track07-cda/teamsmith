@@ -240,7 +240,7 @@ class Tui:
             rows.append(row)
             out.append(_clip(c, self.cols) + "\r\n")
             row += 1
-        out.append(" fake-pi 1.0 ".ljust(self.cols) + "\r\n")
+        out.append(" fake-pi  Fake Pi  max ".ljust(self.cols) + "\r\n")
         out.append(RULE * self.cols + "\r\n")
         out.append("footer".ljust(self.cols) + "\r\n")
         n = len(body)

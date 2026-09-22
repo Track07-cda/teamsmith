@@ -51,17 +51,15 @@ team_box_overlay_kind() { # stdin = capture-pane 全文 → stdout: trust-prompt
 }
 
 team_box_frame_verdict() { # <光标行 1-based>；stdin = capture 全文 → 一行判定 + rc（见文件头）
-  local cy="${1:-}" raw kind rows text
+  local cy="${1:-}" raw kind text
   raw="$(cat)"
   kind="$(printf '%s\n' "$raw" | team_box_overlay_kind)"
   if [ -n "$kind" ]; then printf 'overlay=%s\n' "$kind"; return 0; fi
-  rows="$(printf '%s\n' "$raw" | _team_box_rows_of_frame "$cy" 2>/dev/null || true)"
-  if [ -z "$rows" ] || [ "$rows" = "NONE" ]; then printf 'idle-read=NOT-EMPTY\n'; return 1; fi
-  # 与 `team_input_box_text` 同一个提取（框内容行去空白拼接；OFFSET==1 的提示行槽位排除）——
-  # 生产函数要一个 pane 目标，这里是纯帧版本。
-  text="$(printf '%s\n' "$rows" | LC_ALL=C sort -t'|' -k3,3n | LC_ALL=C awk -F'|' '
-    $1+0 != 1 && $2 != "" { printf "%s", $2 }
-    END { printf "\n" }')"
+  # 与 `team_input_box_text` 同一个提取（P67：光标锚定 + 边框邻行按内容读）——
+  # 本函数不再自带任何排除逻辑；找不到框（rc 1）按「读不出来 = 不敢当空框」处理。
+  if ! text="$(printf '%s\n' "$raw" | _team_box_text_of_frame "$cy" 2>/dev/null)"; then
+    printf 'idle-read=NOT-EMPTY\n'; return 1
+  fi
   if [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ]; then printf 'idle-read=NOT-EMPTY\n'; return 1; fi
   printf 'idle-read=EMPTY\n'
   return 0

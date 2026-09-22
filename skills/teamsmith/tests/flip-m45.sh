@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# M45 · 独立翻转包：pi 的更新横幅把**空闲输入框**读成 BUSY —— 红（修前）→ 绿（本树）→ 变异红
-#
+# M45 · 独立翻转包：pi 的更新横幅把**空闲输入框**读成 BUSY —— 红（修前）→ 绿（本树）→ 变异红#
 #   bash skills/teamsmith/tests/flip-m45.sh
 #   TEAM_FLIP_BASE=<sha> bash skills/teamsmith/tests/flip-m45.sh
 #
@@ -84,9 +83,10 @@ FRAME_CY=26                                                     # 实拍时的�
 cat > "$TMP/frame-probe.sh" <<'EOS'
 #!/usr/bin/env bash
 # <skill-dir> <帧文件> <cy> → geometry / 框文本
-# 只依赖被测树里的一个东西：_team_box_geometry（M45 改的就是它）。行提取由本探针自己做
-# （等价于 team_input_box_rows + team_input_box_text：去掉提示行、去空白），这样修前/修后
-# 两棵树的输出能逐字对得上。
+# 只依赖被测树里的一个东西：_team_box_geometry（M45 改的就是它）。行提取**故意**由本探针自己做
+# （一律跳过边框邻行 = P67 之前的老槽位排除，再跳过空行、去空白），这样修前/修后两棵树的输出
+# 能逐字对得上 —— 这是 P67「框内容提取只有一份实现」的**唯一文档化例外**：本探针是翻转夹具，
+# 不是判定证据（判定的绿侧在 smoke 12b-h0b 与 P67 段，都走生产实现）。
 set -u
 SKILL_DIR="$1"; FR="$2"; CY="$3"
 . "$SKILL_DIR/scripts/lib/common.sh"; . "$SKILL_DIR/scripts/lib/outbox.sh" 2>/dev/null || exit 3
@@ -105,7 +105,7 @@ ADVERSARIAL="$TMP/adversarial.txt"
 { printf '─%.0s' $(seq 1 40); printf '\n'; printf '─%.0s' $(seq 1 40); printf '\n'
   printf ' Update Available\n'; printf ' New version 1.0.0 is available. Run pi update\n'
   printf ' Changelog: https://x\n'; printf '─%.0s' $(seq 1 40); printf '\n'
-  printf ' fake-pi 1.0\n'; printf '─%.0s' $(seq 1 40); printf '\n'; printf ' footer\n'; } > "$ADVERSARIAL"
+  printf ' fake-pi  Fake Pi  max\n'; printf '─%.0s' $(seq 1 40); printf '\n'; printf ' footer\n'; } > "$ADVERSARIAL"
 
 # ---- 身份隔离 ---------------------------------------------------------------
 unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT TEAM_SESSION \

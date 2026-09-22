@@ -1,0 +1,30 @@
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+
+[Context]
+  ~/.pi/agent/AGENTS.md, AGENTS.md
+
+[Skills]
+  archify, kimi-webbridge, teamsmith, teamsmith-init
+
+[Extensions]
+  @cortexkit/pi-magic-context:dist, exit-alias.ts, peak-pricing, pi-tps-meter:tps-meter.ts, pi-web-access:dist
+
+[Skill conflicts]
+  "teamsmith" collision:
+    ✓ auto (project) /tmp/p61pkg.7ixN8D/scene-proj/.pi/skills/teamsmith/SKILL.md
+    ✗ ~/.agents/skills/teamsmith/SKILL.md (skipped)
+  "teamsmith-init" collision:
+    ✓ auto (project) /tmp/p61pkg.7ixN8D/scene-proj/.pi/skills/teamsmith-init/SKILL.md
+    ✗ ~/.agents/skills/teamsmith-init/SKILL.md (skipped)
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+DRAFT-p61-half-sentence
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/p61pkg.7ixN8D/scene-proj (main)
+0.0%/1.0M                                                                                (deepseek) deepseek-flash • max
+mc: 0 (0%) · idle off-peak ×0.5
