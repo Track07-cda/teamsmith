@@ -62,11 +62,26 @@ jobs:
       # the container faithful to a native run in that one POSIX corner; nothing else changes.
       - name: Gates (pinned container)
         run: |
+          # 失败现场要留得下来（D39）：`--rm` 会把容器里的 /tmp 一起带走，而 smoke 的现场目录是
+          # /tmp/teamsmith-smoke.XXXXXX（写死 /tmp，不看 TMPDIR——已记在 P50 的清理项里）。
+          # 所以这里把宿主的 .ci-artifacts 直接挂到容器的 /tmp：夹具现场、pane 回显、夹具日志
+          # 全部落在宿主上，失败时由下一步上传。2026-09-22 那条 `choices` 红只剩三行结论、
+          # 没有 scene dump，就是因为现场随容器一起没了。
+          mkdir -p .ci-artifacts
           docker run --rm --pid=host \
             --user "$(id -u):$(id -g)" -e HOME=/tmp \
-            -v "$PWD:/work:ro" -w /work \
+            -v "$PWD:/work:ro" -v "$PWD/.ci-artifacts:/tmp" -w /work \
             teamsmith-gates:ci \
             bash -c 'openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null'
+
+      - name: Upload the failure scene
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-failure-scene
+          path: .ci-artifacts
+          retention-days: 7
+          if-no-files-found: ignore
 
   # M58 (perf-suite-split): the performance suite is a **second, independent conclusion**. It runs the
   # same script in the same pinned image on its own runner (so it never contends with the correctness
