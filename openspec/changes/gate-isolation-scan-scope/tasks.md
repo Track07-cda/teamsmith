@@ -86,3 +86,29 @@ the smoke's own `TEAM_TMUX_CALLS_LOG` override (`tests/smoke.sh:253`) stays.
 - [ ] 4.1 Re-run, out of tree and on the apply's tip: the six scope legs, both rotation fixtures, the negative
   controls, `openspec validate --all --strict` and the full smoke; the record goes to `docs/team/reviews/<ID>.md`
   with a verdict and any findings (a PASS carrying findings is rework, not archive).
+
+## 5. Rework — P83's F1/F2 (apply: P87)
+
+> Added by **P87** (dev3). Items 1–4 are the delivered P77 work and the original verification plan; they stay as
+> history. `reviews/P83.md` returned the change for rework on two findings, and this section records the fix.
+> The independent re-verification (4.1) is still open and must be run by an agent **other than** the apply's
+> author and P83's verifier.
+
+- [x] 5.1 `tests/smoke.sh` — `real_ledger_hits()`: the `bg` exclusion is the exact path
+  `<root>/.pi/team/state/bg/`, not the basename glob `--exclude-dir=bg`; `docs/team/inbox/bg/leak.md` and
+  `.pi/team/state/nested/bg/leak.md` are named while `state/bg/gate.log` stays silent. §12b-j gains both decoy
+  legs; M16's double control gains the inbox/bg leg. Verify (flip): pre-change snapshot names 4 of 6 ledger legs
+  (both `bg` decoys missing) → green names 6/6, and the basename-widening mutant silences exactly the two decoys.
+- [x] 5.2 `scripts/shim/tmux` + `tests/smoke.sh` §31c ⑤: a rotation marker — readable or not — is not a call line:
+  it does not count toward the 2000-line bound and the next rotation replaces it; an unreadable `dropped=<N>`
+  restarts the cumulative count at zero (the readable part only) instead of writing 1102 and rotating at exactly
+  2000 call lines. Readable means a plain decimal that parses back unchanged: a leading-zero literal is decimal
+  (so `008` no longer aborts the rotation through octal arithmetic) and an oversized literal is treated as
+  unreadable instead of being written back as a silently wrapped number. The `boundary` delta states all of it with
+  scenarios. Verify (flip): pre snapshot writes `dropped=1102`, rotates 2001 lines to 1001, skips rotation on
+  `dropped=008`, and writes the wrapped `7766279631452243013` for an oversized literal → green writes `1101` / keeps
+  2001 lines / reads 8 / writes `1094`.
+- [x] 5.3 `references/troubleshooting.md` §18 states both exact-path exclusions and the marker/restart contract.
+- [ ] 5.4 Independent re-verification on the rework tip: the red/green legs of `docs/team/reports/P87-dev3/pkg/`
+  (scan scope incl. the basename mutant, rotation cumulative/unreadable/boundary), `openspec validate --all
+  --strict` and the full smoke; verdict to `docs/team/reviews/<ID>.md`.

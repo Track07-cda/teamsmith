@@ -671,11 +671,16 @@ subcommand the same word is data, e.g. a `send-keys` payload). The actions are e
 That log is a **traffic record**, not project ledger state: its content is the caller's own argv and resolved
 socket, so the gate's fixture-trace scan (`real_ledger_hits` in `tests/smoke.sh`) excludes exactly that path — a
 fixture's session name recorded there is the log doing its job, while every other file under `state/` (and every
-name-sharing sibling, e.g. `state/tmux-calls.log.1`) stays in scope. The log is bounded: past 2000 call lines the
-oldest are dropped and the newest 1000 stay, and when that happens the surviving file's **first line** is a
-rotation marker `<ISO time> · rotation · dropped=<N>` — the cumulative number of call lines no longer in the
-file — so a call missing from the log can be told apart from one that never happened. The marker is not a call
-line (it carries no `act=`).
+name-sharing sibling, e.g. `state/tmux-calls.log.1`) stays in scope. The scan's second exclusion is the gate's
+background-job logs, and it is exact too: only **`.pi/team/state/bg/**`** is out — a `bg/` directory anywhere else
+(`docs/team/inbox/bg/`, `state/nested/bg/`) is ledger state and is named. The log is bounded: past 2000
+call lines the oldest are dropped and the newest 1000 stay, and when that happens the surviving file's **first
+line** is a rotation marker `<ISO time> · rotation · dropped=<N>` — the cumulative number of call lines no longer
+in the file, counted from the last marker whose `N` was readable — so a call missing from the log can be told
+apart from one that never happened. The marker is not a call line (it carries no `act=`), it does not count toward
+the 2000-line bound and it never survives the next rotation; when a marker's `N` cannot be read (empty,
+non-numeric, or too large to parse back without overflow) the count restarts at zero — the gate never writes a
+number it did not read back.
 
 The gate models tmux's **real** resolution, fallbacks included (tmux 3.7: the socket template is the path list
 `$TMUX_TMPDIR:/tmp/`, each item env-expanded and `realpath()`-ed, the first usable item wins — M41 measured the

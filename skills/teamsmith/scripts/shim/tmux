@@ -7,8 +7,10 @@
 # 仓库脚本，管不到 agent 在窗口里的 ad-hoc 命令 —— 这道闸门管的就是它们：
 #
 #   记录  每次调用追加一行到 $TEAM_TMUX_CALLS_LOG（时间/socket/TMUX/TMUX_TMPDIR/参数/pid/ppid/cwd/动作），
-#         上限 2000 条调用行（超了留最新 1000 条；首行一条累计 `dropped=<N>` 轮转标记自述被裁掉多少
-#         —— 读不到某次调用时能分清「没发生」与「被轮转掉」）——默认 server 再死也能倒查「谁在什么时候打了什么」。
+#         上限 2000 条**调用行**（超了留最新 1000 条；首行一条累计 `dropped=<N>` 轮转标记自述被裁掉多少
+#         —— 读不到某次调用时能分清「没发生」与「被轮转掉」）。标记不是调用行（不计入上限、也不保留）；
+#         标记的 N 读不出（空/非数字/超出整数范围会被回绕）时累计从 0 起点重算，绝不把读错的数写回去
+#         （P87）——默认 server 再死也能倒查「谁在什么时候打了什么」。
 #   判定  **按目标**（M67）：解析到默认 socket（/tmp/tmux-<uid>/default）的破坏性调用
 #         （kill-server/kill-session/kill-window/kill-pane，含 tmux 允许的前缀写法）只在目标能证明是
 #         调用者自己会话里的命名对象时执行；**环境变量不授权任何东西**（M62 的泄漏链：team 的 export +
@@ -301,6 +303,9 @@ if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
   # P77：被裁掉的历史必须**自述**——轮转后首行是 `<ISO 时间> · rotation · dropped=<N>`，
   # N = 累计被裁掉的调用行数（前一个 marker 的 N + 本次裁掉的）；marker 不是调用行（不带 act=，
   # 四值动作词汇表保持封闭），没越界就一条 marker 都不写。
+  # P87（P83-F2）：marker **无论可读与否**都不是调用行——不计入调用行数、也不保留（新的 marker 顶替它），
+  # 所以「恰 2000 条调用行」不会因为顶上的 marker 而被误判越界。读不出 N（空/非数字/超出整数范围）时
+  # 不编造数字：累计计数从 0 起点按**可读部分**重算（契约见 boundary#The gate's actions are logged…）。
   _n="$(wc -l < "$_log" 2>/dev/null | tr -dc '0-9')"
   if [ -n "$_n" ] && [ "$_n" -gt 2000 ]; then
     _prev=0
@@ -312,10 +317,16 @@ if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
     _rest="${_first#"$_t"}"
     case "$_rest" in
       ' · rotation · dropped='*)
+        _n=$((_n - 1))                     # marker 不是调用行（不计入、也不保留）
         _d="${_rest#' · rotation · dropped='}"
         case "$_d" in
-          ''|*[!0-9]*) : ;;                  # marker 读不出 → 只算本次轮转
-          *) _prev="$_d"; _n=$((_n - 1)) ;;   # marker 不是调用行
+          ''|*[!0-9]*) _prev=0 ;;          # 读不出 N（空/含非数字）→ 累计从 0 重启（只算可读部分）
+          *)
+            _p="$((10#$_d))"                # 十进制解析（10# 防前导 0 被当八进制）
+            # 往返校验：超出 bash 整数范围的字面量会被**静默回绕**，读出的数不再是原数——那种 marker
+            # 按「读不出」处理（重启为 0），绝不把回绕后的假数写回日志。
+            _z="${_d%%[!0]*}"; _canon="${_d#"$_z"}"
+            if [ "$_canon" = "$_p" ]; then _prev="$_p"; else _prev=0; fi ;;
         esac ;;
     esac
     if [ "$_n" -gt 2000 ]; then

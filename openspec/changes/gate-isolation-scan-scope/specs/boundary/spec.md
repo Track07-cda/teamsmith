@@ -13,8 +13,13 @@ The log SHALL stay bounded: past 2000 call lines the oldest go and the newest 10
 written MUST NOT block the call, and a log that never crossed the bound carries no rotation marker. When the bound
 is enforced, the surviving file MUST say so: its first line is a **rotation marker** carrying the rotation's
 ISO-8601 timestamp, the word `rotation` and `dropped=<N>`, where `N` is the cumulative number of call lines no
-longer in the file. The marker is not a call line — it carries no `act=` action, so the action vocabulary above
-stays closed to the four call values — and the newest 1000 call lines always survive, in order.
+longer in the file, counted from the last marker whose `N` was readable — zero when the file carries no readable
+marker, and a value is readable only when it is a plain decimal count the gate parses back unchanged (an empty,
+non-numeric or oversized literal is not). The marker is not a call line — it carries no `act=` action, so the
+action vocabulary above stays closed to the four call values — it does not count toward the 2000-line bound, and it
+does not survive the next rotation (the new marker replaces it); the newest 1000 call lines always survive, in
+order. A marker whose `N` cannot be read MUST NOT make the gate invent a number: the count restarts at zero and
+the next marker states the call lines dropped since that restart.
 
 The launch command of the PM window and of every worker window SHALL put the gate's directory first on `PATH`, pin
 `TEAM_TMUX_CALLS_LOG` to the project's state file and `TEAM_TMUX_REAL` to the resolved real tmux, and MUST NOT write
@@ -42,6 +47,30 @@ server-restart remedy.
   line carries an action outside the four values, and a log that never crossed the bound carries no marker at all
   — on the pre-change shim the same two rotations leave no trace that history was dropped (that red side is in
   the delivery report)
+
+#### Scenario: An unreadable marker restarts the count
+
+- **GIVEN** a gate log whose first line is a rotation marker carrying `dropped=abc` followed by 2100 call lines
+- **WHEN** one more gated call runs
+- **THEN** the file's first line is a new marker with `dropped=1101` — this rotation's removals, counted from zero
+  because the old count was unreadable — the unreadable marker is gone, and exactly 1000 call lines follow with the
+  newest call last
+
+#### Scenario: An oversized count is not readable
+
+- **GIVEN** a gate log whose first line is a rotation marker carrying a `dropped=` literal too large for the gate's
+  arithmetic followed by 2093 call lines
+- **WHEN** one more gated call runs
+- **THEN** the file's first line is a new marker with `dropped=1094` — this rotation's removals, counted from zero
+  because the oversized count cannot be parsed back — never a wrapped number, the oversized marker is gone, and
+  exactly 1000 call lines follow
+
+#### Scenario: The marker does not count toward the bound
+
+- **GIVEN** a gate log whose first line is a rotation marker followed by 1999 call lines
+- **WHEN** one more gated call runs
+- **THEN** no new rotation happens — the file is a marker plus exactly 2000 call lines, and that marker is
+  unchanged — because the marker is not a call line and the bound counts call lines only
 
 #### Scenario: A freshly launched window carries the gate and no grant
 

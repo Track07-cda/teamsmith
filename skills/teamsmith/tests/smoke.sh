@@ -206,21 +206,27 @@ if [ -n "$SMOKE_INVOKE_ROOT" ]; then
 fi
 
 # 「真实账本」的夹具痕迹扫描（M7.2 纪律）——所有隔离断言共用同一口径：
-#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，**跳过 state/bg/**。
-# 为什么要排 bg/（M30 实测）：team_bg_run 把后台作业的 stdout 存进 state/bg/<id>.log，而门禁自己的
-# stdout（含各段夹具的名字）就在里面 —— 不排它，下一次门禁的 M16/M98 隔离断言会把「按提示词把门禁
-# 放后台跑」判成夹具泄漏（假红：同一棵树、同一套断言，只因上一次的作业日志还在）。state/bg 是作业
-# 日志，不是账本；真正的泄漏（夹具往真 inbox/state 写东西）照旧会被抓到（12b-j / M16 的正负对照钉住）。
-# P77 起再排除**一个确切路径**：.pi/team/state/tmux-calls.log —— 闸门代调用者写的**调用记录**
-# （内容是调用者自己的 argv/socket；契约见 boundary#The gate's actions are logged…）。夹具名字出现在
-# 那里正是这份日志的本职，把它算成「夹具写进了项目的账本状态」是把证据倒置。排除**只按确切路径**：
-# 同名兄弟（tmux-calls.log.1）与子目录里的同名文件仍是真泄漏，必须被点名（12b-j 逐条钉住）。
+#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，恰排**两条流量记录**（都按确切路径）。
+# 排除之一：.pi/team/state/bg/**（M30 实测）——team_bg_run 把后台作业的 stdout 存进 state/bg/<id>.log，
+# 门禁自己的 stdout（含各段夹具的名字）就在里面 —— 不排它，下一次门禁的 M16/M98 隔离断言会把「按提示词
+# 把门禁放后台跑」判成夹具泄漏（假红：同一棵树、同一套断言，只因上一次的作业日志还在）。
+# state/bg 是作业日志，不是账本。
+# 排除之二：.pi/team/state/tmux-calls.log（P77）——闸门代调用者写的**调用记录**（内容是调用者自己的
+# argv/socket；契约见 boundary#The gate's actions are logged…）。夹具名字出现在那里正是这份日志的本职，
+# 把它算成「夹具写进了项目的账本状态」是把证据倒置。
+# P87（P83-F1）：**两条排除都是确切路径**，不是目录名/文件名的 glob。老实现用 `--exclude-dir=bg`，会把
+# `docs/team/inbox/bg/` 与 `.pi/team/state/nested/bg/` 也静默掉 —— 那两处是真账本，必须被点名。
+# 同名兄弟（tmux-calls.log.1）、子目录里的同名文件、任何别处的 bg/ 目录都仍是真泄漏（12b-j / M16 钉住）。
 real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去重）
   local pats="$1" root="${2%/}" d
   { for d in "$root/docs/team/inbox" "$root/.pi/team/state"; do
       [ -d "$d" ] || continue
-      grep -rlE --exclude-dir=bg "$pats" "$d" 2>/dev/null || true
-    done; } | grep -vxF -- "$root/.pi/team/state/tmux-calls.log" | sort -u || true
+      grep -rlE "$pats" "$d" 2>/dev/null || true
+    done; } \
+    | awk -v audit="$root/.pi/team/state/tmux-calls.log" \
+          -v jobs="$root/.pi/team/state/bg/" \
+          '$0 != audit && index($0, jobs) != 1' \
+    | sort -u || true
 }
 
 # P53 · 本轮临时根用量：起手一行、结束一行（结束行在 EXIT 里兜底，失败/早退也打）
@@ -7199,9 +7205,11 @@ assert_eq "12b-j 隔离：调用方项目的 inbox/state 里没有夹具痕迹" 
 # 负对照（tasks 7.2）：泄漏扫描本身必须**能红**——否则它是个永远报绿的假守卫。
 # 把夹具痕迹（沙盒 session 名）栽进一个假「真项目」目录，同一个扫描函数必须把它揪出来。
 # P77：作用域恰有两条**流量记录**排除——审计日志 tmux-calls.log（闸门代写的调用行，内容是调用者
-# 自己的 argv）与 state/bg/**（后台作业 stdout）；同名兄弟（.log.1）与子目录同名文件仍是真泄漏。
+# 自己的 argv）与 state/bg/**（后台作业 stdout）；同名兄弟（.log.1）、子目录同名文件与别处的 bg/ 目录
+# 仍是真泄漏。P87（F1）：两条排除都按**确切路径**（bg 不是 `--exclude-dir=bg` 的目录名 glob）。
 OB_NEG="$TMP/ob-negroot"; rm -rf "$OB_NEG"
-mkdir -p "$OB_NEG/.pi/team/state/bg" "$OB_NEG/.pi/team/state/nested" "$OB_NEG/docs/team/inbox"
+mkdir -p "$OB_NEG/.pi/team/state/bg" "$OB_NEG/.pi/team/state/nested" "$OB_NEG/.pi/team/state/nested/bg" \
+         "$OB_NEG/docs/team/inbox/bg"
 ob_neg_scan() { SMOKE_INVOKE_ROOT="$OB_NEG" SMOKE_INVOKE_MAIN="" ob_leak_scan; }
 ob_neg_has() { ob_neg_scan | grep -qxF "$OB_NEG/$1"; }
 # ① 两条流量记录腿：审计日志（夹具的 session 名 + argv 原样在行里）与 state/bg —— 都必须静默
@@ -7210,20 +7218,31 @@ printf '%s · act=pass · sock=/tmp/tmux-1000/private · TMUX=- · TMUX_TMPDIR=-
 printf 'job stdout: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/bg/gate.log"
 assert_eq "12b-j 负对照：审计日志是调用记录，不算账本痕迹（M7.2 红侧的成因）" "$(ob_neg_scan | wc -l | tr -d ' ')" "0"
 assert_eq "12b-j 负对照：state/bg/ 的作业日志也不算账本痕迹（M30 口径）" "$(ob_neg_scan | wc -l | tr -d ' ')" "0"
-# ② 四条真泄漏腿（逐条栽、逐条点名；后两条钉住「确切路径，不是 basename」）
+# ② 六条真泄漏腿（逐条栽、逐条点名；后四条钉住「确切路径，不是 basename / 目录名」）
 printf 'planted: %s\n' "$SESSION" > "$OB_NEG/docs/team/inbox/leak.md"
 assert_eq "12b-j 负对照：inbox 里的痕迹必须被点名" "$(ob_neg_has docs/team/inbox/leak.md && echo yes || echo no)" "yes"
 assert_eq "12b-j 负对照：inbox 腿之外没有多余命中" "$(ob_neg_scan | wc -l | tr -d ' ')" "1"
 printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/phantom.log"
 assert_eq "12b-j 负对照：其它 state 文件里的痕迹必须被点名" "$(ob_neg_has .pi/team/state/phantom.log && echo yes || echo no)" "yes"
 assert_eq "12b-j 负对照：两条真泄漏腿恰两条命中" "$(ob_neg_scan | wc -l | tr -d ' ')" "2"
+# P87（P83-F1）：bg 的排除是**确切路径**，不是目录名 —— inbox 下的 bg/ 仍是账本
+printf 'planted: %s\n' "$SESSION" > "$OB_NEG/docs/team/inbox/bg/leak.md"
+assert_eq "12b-j 负对照：inbox/bg/ 里的痕迹必须被点名（bg 排除是确切路径，不是目录名）" \
+  "$(ob_neg_has docs/team/inbox/bg/leak.md && echo yes || echo no)" "yes"
+assert_eq "12b-j 负对照：inbox/bg/ 腿之后恰三条命中" "$(ob_neg_scan | wc -l | tr -d ' ')" "3"
+printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/nested/bg/leak.md"
+assert_eq "12b-j 负对照：state 下嵌套的 bg/ 里的痕迹也必须被点名" \
+  "$(ob_neg_has .pi/team/state/nested/bg/leak.md && echo yes || echo no)" "yes"
+assert_eq "12b-j 负对照：state/bg/ 自家的作业日志仍静默（bg 的排除是确切路径）" \
+  "$(ob_neg_has .pi/team/state/bg/gate.log && echo yes || echo no)" "no"
+assert_eq "12b-j 负对照：四条真泄漏腿恰四条命中" "$(ob_neg_scan | wc -l | tr -d ' ')" "4"
 printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/tmux-calls.log.1"
 assert_eq "12b-j 负对照：同名兄弟 tmux-calls.log.1 必须被点名（排除是确切路径，不是 basename）" \
   "$(ob_neg_has .pi/team/state/tmux-calls.log.1 && echo yes || echo no)" "yes"
 printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/nested/tmux-calls.log"
 assert_eq "12b-j 负对照：子目录里的同名文件必须被点名" \
   "$(ob_neg_has .pi/team/state/nested/tmux-calls.log && echo yes || echo no)" "yes"
-assert_eq "12b-j 负对照：四条真泄漏腿逐条点名（审计日志与 bg 仍不在清单里）" "$(ob_neg_scan | wc -l | tr -d ' ')" "4"
+assert_eq "12b-j 负对照：六条真泄漏腿逐条点名（审计日志与 state/bg/ 仍不在清单里）" "$(ob_neg_scan | wc -l | tr -d ' ')" "6"
 rm -rf "$OB_NEG"
 
 if [ "$(ob_hash_real)" = "$REAL_FP_BEFORE" ]; then
@@ -10449,7 +10468,7 @@ if [ -n "$M16_PHANTOM" ]; then bad "M16 隔离：夹具的痕迹出现在真实�
 else ok "M16 隔离：真实账本的 inbox/state 里没有夹具的痕迹"; fi
 # 双向对照（M30 加固）：同一个扫描器①必须抓到 state/ 里的痕迹（守卫不是永远绿），
 # ②必须忽略 state/bg/ 里的门禁作业日志（否则「把门禁放后台跑」自身会被判成泄漏）。
-M16_NEG="$TMP/m16-negroot"; rm -rf "$M16_NEG"; mkdir -p "$M16_NEG/.pi/team/state/bg" "$M16_NEG/docs/team/inbox"
+M16_NEG="$TMP/m16-negroot"; rm -rf "$M16_NEG"; mkdir -p "$M16_NEG/.pi/team/state/bg" "$M16_NEG/docs/team/inbox/bg"
 printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/bg/gate.log"
 assert_eq "M16 隔离对照：state/bg/ 里的门禁作业日志不算账本痕迹" \
   "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "0"
@@ -10460,6 +10479,12 @@ assert_eq "M16 隔离对照：审计日志 tmux-calls.log 是调用记录，不�
 printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/phantom.log"
 assert_eq "M16 隔离对照：真正写进 state/ 的痕迹必须被同一个扫描抓到" \
   "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "1"
+# P87（P83-F1）：bg 的排除是确切路径，不是目录名 —— 别处的 bg/ 目录仍是账本，必须被同一个扫描抓到
+printf 'M16A phantom\n' > "$M16_NEG/docs/team/inbox/bg/leak.md"
+assert_eq "M16 隔离对照：inbox/bg/ 里的痕迹必须被抓到（bg 排除是确切路径，不是目录名）" \
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | grep -c 'inbox/bg/leak.md')" "1"
+assert_eq "M16 隔离对照：两条真痕迹腿恰两条命中（state/bg/ 与审计日志仍不在清单里）" \
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "2"
 rm -rf "$M16_NEG"
 # ---------------------------------------------------------------- 31. tmux 接触面（M28）
 # 五次 tmux server 全灭事故 → 两条护栏在这里钉死：
@@ -10848,6 +10873,35 @@ head -n 1 "$M36_LOG" > "$TMP/m36-rot-first2.log"
 assert_match "$TMP/m36-rot-first2.log" ' · rotation · dropped=2201$' "⑤ 第二次轮转：dropped 累计（1101+1100=2201）"
 assert_has_echo "$(sed -n '2p' "$M36_LOG")" 'more 101' "⑤ 第二次轮转：最老的保留行是 more 101"
 assert_has_echo "$(tail -1 "$M36_LOG")" 'argv=ls' "⑤ 第二次轮转：最新一行还在（在末尾）"
+# P87（P83-F2）：首行 marker 的 N **读不出**时，累计口径是「从 0 起点按可读部分重算」——marker 不是调用行
+# （不计入上限、也不保留）。红侧（改动前）会把旧的读不出 marker 当成调用行，写出 dropped=1102 并把
+# 「恰 2000 条调用行」误判为越界。
+{ printf '%s · rotation · dropped=abc\n' "2026-09-22T22:00:00+00:00"
+  seq 1 2100 | sed 's/^/badseed /'; } > "$M36_LOG"
+m36_bound tmux ls >/dev/null 2>&1
+assert_eq "⑤ 读不出 N 的 marker：1 标记 + 1000 行" "$(wc -l < "$M36_LOG" | tr -d ' ')" "1001"
+head -n 1 "$M36_LOG" > "$TMP/m36-rot-bad.log"
+assert_match "$TMP/m36-rot-bad.log" ' · rotation · dropped=1101$' "⑤ 读不出 N 的 marker：累计从 0 重启（2101 条调用行裁 1101，不编造数）"
+assert_not "$M36_LOG" "dropped=abc" "⑤ 读不出的旧 marker 被顶替（它不是调用行）"
+assert_eq "⑤ 读不出 N 的 marker：标记之后恰 1000 行" "$(tail -n +2 "$M36_LOG" | wc -l | tr -d ' ')" "1000"
+assert_has_echo "$(sed -n '2p' "$M36_LOG")" 'badseed 1102' "⑤ 读不出 N 的 marker：留下的最老一行是 badseed 1102"
+assert_has_echo "$(tail -1 "$M36_LOG")" 'argv=ls' "⑤ 读不出 N 的 marker：最新一行还在末尾"
+# 边界：读不出 N 的 marker + 恰 2000 条调用行 → marker 不计入调用行数，不轮转（红侧会误轮转）
+{ printf '%s · rotation · dropped=abc\n' "2026-09-22T22:00:00+00:00"
+  seq 1 1999 | sed 's/^/edge /'; } > "$M36_LOG"
+m36_bound tmux ls >/dev/null 2>&1
+assert_eq "⑤ 恰 2000 条调用行：不轮转（marker 不计入调用行数）" "$(wc -l < "$M36_LOG" | tr -d ' ')" "2001"
+assert_has "$M36_LOG" "dropped=abc" "⑤ 未越界：读不出的旧 marker 原样留着（不重写）"
+assert_eq "⑤ 未越界：不写新 marker" "$(grep -c ' · rotation · dropped=' "$M36_LOG" | tr -d ' ')" "1"
+# 超大字面量：bash 算术会**静默回绕**，写回一个不是原数的假值 → 按「读不出」处理（从 0 重算）
+{ printf '%s · rotation · dropped=99999999999999999999\n' "2026-09-22T22:00:00+00:00"
+  seq 1 2093 | sed 's/^/big /'; } > "$M36_LOG"
+m36_bound tmux ls >/dev/null 2>&1
+assert_eq "⑤ 超大 N：1 标记 + 1000 行" "$(wc -l < "$M36_LOG" | tr -d ' ')" "1001"
+head -n 1 "$M36_LOG" > "$TMP/m36-rot-big.log"
+assert_match "$TMP/m36-rot-big.log" ' · rotation · dropped=1094$' "⑤ 超大 N：从 0 重算（2094 条调用行裁 1094，不是回绕假数）"
+assert_not "$M36_LOG" "99999999999999999999" "⑤ 超大的旧 marker 被顶替（不保留）"
+assert_has_echo "$(sed -n '2p' "$M36_LOG")" 'big 1095' "⑤ 超大 N：留下的最老一行是 big 1095"
 
 # ── ⑥ 边界不挂 + 透传保真（M36 返工必修：无子命令 / 缺值参数 / -V 全部透传或明确退出，绝不能挂住；
 #     保真钉桩收到的**完整 argv 与参数个数** —— 不含 token 的调用逐字节原样，含空格/连写也不许被吃。

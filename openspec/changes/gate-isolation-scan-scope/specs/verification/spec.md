@@ -17,8 +17,8 @@ project:
   `boundary#The gate's actions are logged, and no window carries a destructive-call grant`.
 
 Both exclusions MUST be by exact path. Every other file under the two roots MUST stay in scope, including a file
-in a subdirectory and a file that merely shares the audit log's name, and a trace planted in any of them MUST be
-reported.
+in a subdirectory, a file that merely shares the audit log's name, and a directory that merely shares the excluded
+job-log directory's name, and a trace planted in any of them MUST be reported.
 
 The scan MUST stay falsifiable: a fixture trace planted in the ledger — `docs/team/inbox/**` or any file under
 `.pi/team/state/**` other than the two excluded paths — MUST be found and reported by the same scan. The positive
@@ -54,3 +54,11 @@ never come from a scan that stopped scanning.
 - **WHEN** the scan runs
 - **THEN** the file is not reported (the job logs record what a caller asked a background job to print), while the
   positive control planted beside it is still reported
+
+#### Scenario: The background-job exclusion is exact too
+
+- **GIVEN** the same trace planted in `docs/team/inbox/bg/leak.md`, in `.pi/team/state/nested/bg/leak.md` and in
+  `.pi/team/state/bg/gate.log`
+- **WHEN** the scan runs
+- **THEN** the first two are reported by path — a directory named `bg` anywhere but the exact excluded path is
+  ledger state — and only `.pi/team/state/bg/gate.log` is not reported
