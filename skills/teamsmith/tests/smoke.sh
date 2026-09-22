@@ -12937,6 +12937,104 @@ EOS
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
 fi
 
+# ---------------------------------------------------------------- 43. P75 尾部现场的读取器（P65 的 F1）
+# 现场：`team status <ID>` 的第三层来源 state/dispatch-<agent>-tail.txt 是 tmux capture 的原样落盘，
+# 末尾是 pane 下半屏的成片空行；读取器按字面取「最后 N 行」，TEAM_AGENT_SCENE_LINES=3 时就只剩空行 ——
+# 一个有内容的文件被报成「来源在但没有画面内容」。本节钉住读取器侧的三条：尾空行裁剪（声明说清）、
+# 只有空行时明说「没有可读内容」、非空行不足 N 时给现有的全部；并钉住第一/第二层语义没被带改。
+# 红侧不靠产品开关：把 team_status_tail_scene 影子成旧的字面 tail（原样取最后 N 行），同一份夹具翻红。
+section "43 · P75 status 尾部现场：尾空行裁剪（P65 的 F1）"
+P75_A="p75w"; P75_ID="T9.75"; P75_ST="$REPO/.pi/team/state"
+P75_TAIL="$P75_ST/dispatch-$P75_A-tail.txt"
+P75_DEAD="$P75_ST/dispatch-$P75_A-pane-dead.txt"
+mkdir -p "$P75_ST"
+# 该席位没有窗口（也不会有）：第三层来源是唯一能命中的一层
+printf 'window=%s\ntask=%s\n' "$P75_A" "$P75_ID" > "$P75_ST/$P75_A.env"
+P75_STATUS() { # <行数> <输出文件>
+  env TEAM_AGENTS="$P75_A" TEAM_AGENT_SCENE_LINES="$1" \
+    bash "$SKILL_DIR/scripts/team" status "$P75_ID" >"$2" 2>&1
+}
+P75_STATUS_DEFAULT() { # <输出文件>：不设 TEAM_AGENT_SCENE_LINES（默认 40）
+  env TEAM_AGENTS="$P75_A" bash "$SKILL_DIR/scripts/team" status "$P75_ID" >"$1" 2>&1
+}
+p75_scene() { grep '^    | ' "$1" 2>/dev/null | sed 's/^    | //'; }
+p75_blanks() { printf '\n%.0s' $(seq 1 "${1:-5}"); }
+
+# ── ① 绿侧：4 行内容 + 5 行尾空行，SCENE_LINES=3 → 3 行内容（P65 F1 的直接反例）────────
+{ printf 'P75-MARK-1\nP75-MARK-2\nP75-MARK-3\nP75-MARK-4\n'; p75_blanks 5; } > "$P75_TAIL"
+P75_STATUS 3 "$TMP/p75-tail-3.log"
+assert_has "$TMP/p75-tail-3.log" "最后 3 行（去尾空行）" "P75 ①：声明说清这一层读的是「最后 3 行（去尾空行）」"
+assert_eq "P75 ①：尾空行裁掉后取最后 3 行 = MARK-2/3/4（逐字节）" \
+  "$(p75_scene "$TMP/p75-tail-3.log")" "$(printf 'P75-MARK-2\nP75-MARK-3\nP75-MARK-4')"
+assert_not "$TMP/p75-tail-3.log" "P75-MARK-1" "P75 ①：只印最后 N 行，更早的行不出现"
+assert_not "$TMP/p75-tail-3.log" "来源在但没有画面内容" "P75 ①：不再报「来源在但没有画面内容」（P65 的 F1）"
+assert_eq "P75 ①：画面行数恰好 N=3" "$(grep -c '^    | ' "$TMP/p75-tail-3.log")" "3"
+
+# ── ② 边界②：非空行不足 N → 给现有的全部 ─────────────────────────────────────────────
+{ printf 'P75-ONLY-1\nP75-ONLY-2\n'; p75_blanks 3; } > "$P75_TAIL"
+P75_STATUS 3 "$TMP/p75-tail-short.log"
+assert_eq "P75 ②：非空行不足 N（2 < 3）→ 给现有的全部" \
+  "$(p75_scene "$TMP/p75-tail-short.log")" "$(printf 'P75-ONLY-1\nP75-ONLY-2')"
+
+# ── ③ 边界①：只有空行 → 明确说「来源里没有可读内容」（不是静默空块）───────────────────
+p75_blanks 5 > "$P75_TAIL"
+P75_STATUS 3 "$TMP/p75-tail-blank.log"
+assert_has "$TMP/p75-tail-blank.log" "来源里没有可读内容" \
+  "P75 ③：只有空行 → 明说「来源里没有可读内容」"
+assert_eq "P75 ③：只有空行 → 一行画面都没有（也不是静默空块）" \
+  "$(p75_scene "$TMP/p75-tail-blank.log" | wc -l | tr -d ' ')" "0"
+assert_not "$TMP/p75-tail-blank.log" "来源在但没有画面内容" "P75 ③：这一句留给「有内容但取窗为空」，空文件不落进来"
+
+# ── ④ 默认 40 行（不设旋钮）：4 行内容一字不少（回归）────────────────────────────────
+{ printf 'P75-MARK-1\nP75-MARK-2\nP75-MARK-3\nP75-MARK-4\n'; p75_blanks 5; } > "$P75_TAIL"
+P75_STATUS_DEFAULT "$TMP/p75-tail-default.log"
+assert_has "$TMP/p75-tail-default.log" "最后 40 行（去尾空行）" "P75 ④：默认 40 行的声明照旧带来源措辞"
+assert_eq "P75 ④：默认口径下 4 行内容全在（尾空行不吃内容）" \
+  "$(p75_scene "$TMP/p75-tail-default.log")" "$(printf 'P75-MARK-1\nP75-MARK-2\nP75-MARK-3\nP75-MARK-4')"
+
+# ── ⑤ 红侧（可证伪）：影子回旧的字面 tail → 同一份夹具翻回「来源在但没有画面内容」───────
+P75_PROBE="$TMP/p75-tail-probe.sh"
+cat > "$P75_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <state 目录> [shadow] → team_seat_scene_print 的现场块（shadow=1 = 旧的字面 tail -n N）
+set -u
+SKILL_DIR="$1"; ST="$2"; SHADOW="${3:-0}"
+. "$SKILL_DIR/scripts/lib/common.sh"
+for _f in "$SKILL_DIR"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+team_load_config >/dev/null 2>&1 || true
+TEAM_STATE_DIR="$ST"
+[ "$SHADOW" = "1" ] && team_status_tail_scene() { tail -n "$2" "$1" 2>/dev/null; }
+team_seat_scene_print "${P75_PROBE_AGENT:-p75w}"
+EOS
+chmod +x "$P75_PROBE"
+P75_RED_ST="$TMP/p75-red-state"; mkdir -p "$P75_RED_ST"
+{ printf 'P75-MARK-1\nP75-MARK-2\nP75-MARK-3\nP75-MARK-4\n'; p75_blanks 5; } > "$P75_RED_ST/dispatch-$P75_A-tail.txt"
+env TEAM_AGENTS="$P75_A" TEAM_AGENT_SCENE_LINES=3 bash "$P75_PROBE" "$SKILL_DIR" "$P75_RED_ST" 1 \
+  >"$TMP/p75-red.log" 2>&1
+assert_has "$TMP/p75-red.log" "来源在但没有画面内容" \
+  "P75 ⑤ 红侧：影子回旧读取器 → 同一份夹具又报「来源在但没有画面内容」（翻转成立）"
+assert_eq "P75 ⑤ 红侧：旧读取器一行画面都给不出" \
+  "$(p75_scene "$TMP/p75-red.log" | wc -l | tr -d ' ')" "0"
+env TEAM_AGENTS="$P75_A" TEAM_AGENT_SCENE_LINES=3 bash "$P75_PROBE" "$SKILL_DIR" "$P75_RED_ST" 0 \
+  >"$TMP/p75-green-probe.log" 2>&1
+assert_eq "P75 ⑤ 同源：探针（影子关）与生产 status 的现场行逐字节一致" \
+  "$(p75_scene "$TMP/p75-green-probe.log")" "$(p75_scene "$TMP/p75-tail-3.log")"
+
+# ── ⑥ 边界③：第二层（dispatch-<agent>-pane-dead.txt）的语义没被带改 ─────────────────
+{
+  printf 'seat: %s\nwindow: %s\ncaptured: 2026-01-01T00:00:00Z\nexit: signal=9\ndead_time: 2026-01-01 00:00:00 UTC\n' "$P75_A" "$P75_A"
+  printf -- '--- scene ---\n'
+  printf 'P75-CORPSE-1\nP75-CORPSE-2\nP75-CORPSE-3\nP75-CORPSE-4\n'
+} > "$P75_DEAD"
+P75_STATUS 3 "$TMP/p75-second-layer.log"
+assert_has "$TMP/p75-second-layer.log" "最后 3 行）：" \
+  "P75 ⑥：第二层的声明原样（没有「去尾空行」后缀 —— 那不是它的读取规则）"
+assert_eq "P75 ⑥：第二层仍按既有语义取最后 3 行" \
+  "$(p75_scene "$TMP/p75-second-layer.log")" "$(printf 'P75-CORPSE-2\nP75-CORPSE-3\nP75-CORPSE-4')"
+assert_eq "P75 ⑥：第二层赢过第三层（来源里有 pane-dead 文件就不看尾屏）" \
+  "$(grep -c 'pane-dead.txt（dispatch 替换遗体前抓的现场）' "$TMP/p75-second-layer.log")" "1"
+rm -f "$P75_DEAD" "$P75_TAIL" "$P75_ST/$P75_A.env"
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"

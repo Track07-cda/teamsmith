@@ -506,7 +506,9 @@ seat's last screen and tmux's exit evidence survive the death. Reading such a se
 - **Where the scene comes from** (`team status <ID>` prints it labelled with its source and time): the retained corpse
   pane read with its scrollback (`capture-pane -p -S -` — the visible screen alone can lose the last line), then
   `state/dispatch-<agent>-pane-dead.txt` (captured when a later dispatch replaced the corpse), then
-  `state/dispatch-<agent>-tail.txt` (captured by the harness when the agent exited). Bounded by
+  `state/dispatch-<agent>-tail.txt` (captured by the harness when the agent exited; read as the last
+  `TEAM_AGENT_SCENE_LINES` lines **after trailing blank lines are trimmed** — a capture ends with the pane's empty
+  lower half — and a file with no non-blank line says `来源里没有可读内容` instead of printing an empty block). Bounded by
   `TEAM_AGENT_SCENE_LINES` (default 40).
 - **`signal=9` vs `status=<n>`**: tmux's evidence tells you *how* the pane died — `signal=<n>` means the process was
   killed by that signal (9 = SIGKILL, typically the OOM killer or an operator), `status=<n>` means it exited with that

@@ -1164,11 +1164,23 @@ team_cmd_roster() {
   return 0
 }
 
+# P75：第三个来源的**读取器侧尾空行裁剪**。P65 的 F1：tmux capture 的末尾是 pane 下半屏的成片
+# 空行，按字面取「最后 N 行」只剩空行 —— TEAM_AGENT_SCENE_LINES=3 时一个有内容的文件被读成
+# 「没有画面内容」。这里裁掉末尾空行（中间的保留）、再取最后 N 行；行数不足 N 就给现有的全部；
+# 文件里没有非空行 → 空输出（调用方给明确措辞）。第一/第二层来源的语义不碰。
+team_status_tail_scene() { # <文件> <N> → 最后 N 行（去尾空行）
+  local f="${1:-}" n="${2:-40}"
+  [ -f "$f" ] || return 0
+  case "$n" in ''|*[!0-9]*) n=40 ;; esac
+  awk '{ if (NF) last = NR; line[NR] = $0 } END { for (i = 1; i <= last; i++) print line[i] }' "$f" \
+    | tail -n "$n"
+}
+
 # status <ID> 的席位段：该任务登记席位的状况 + 退出证据 + 最近现场。三个来源按序：
 # 活的死 pane（带 scrollback 现读）→ state/dispatch-<agent>-pane-dead.txt（复用留证）
 # → state/dispatch-<agent>-tail.txt（harness 在 agent 退出时自抓）。都没有就只印状况、不印现场块。
 team_seat_scene_print() { # <agent>
-  local a="${1:-}" w n scene src mtime f dead status signal dtime
+  local a="${1:-}" w n scene src mtime f dead status signal dtime line_note="" empty_note=""
   n="$(team_agent_scene_lines)"
   w="$(team_state_get "$a" window "$a")"
   if team_agent_pane_dead "$a"; then
@@ -1187,15 +1199,24 @@ team_seat_scene_print() { # <agent>
     f="$TEAM_STATE_DIR/dispatch-$a-tail.txt"
     src="$f（agent 退出时 harness 自抓的尾屏）"
     mtime="$(date -d "@$(stat -c %Y "$f" 2>/dev/null || echo 0)" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || echo '?')"
-    scene="$(tail -n "$n" "$f" 2>/dev/null)"
+    # 声明要说清这一层和别层的差别：它读的是「最后 N 行（去尾空行）」，不是字面末 N 行
+    line_note="（去尾空行）"
+    scene="$(team_status_tail_scene "$f" "$n")"
+    # 空的两个形状分开说：文件里有非空行但取窗为空（旧读取器的症状；N=0 或读时被改写也走这里）
+    # vs 文件本身没有非空行（后者绝不静默印空块，明说没有可读内容）。
+    if grep -q '[^[:space:]]' "$f" 2>/dev/null; then
+      empty_note="来源在但没有画面内容"
+    else
+      empty_note="来源里没有可读内容——没有非空行"
+    fi
   else
     return 0
   fi
   if [ -z "$scene" ]; then
-    printf '  现场：（来源在但没有画面内容）来源=%s\n' "$src"
+    printf '  现场：（%s）来源=%s\n' "${empty_note:-来源在但没有画面内容}" "$src"
     return 0
   fi
-  printf '  现场（来源：%s · 记录时间：%s · 最后 %s 行）：\n' "$src" "${mtime:-?}" "$n"
+  printf '  现场（来源：%s · 记录时间：%s · 最后 %s 行%s）：\n' "$src" "${mtime:-?}" "$n" "$line_note"
   printf '%s\n' "$scene" | sed 's/^/    | /'
 }
 
