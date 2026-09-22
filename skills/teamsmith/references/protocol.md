@@ -284,6 +284,23 @@ CEP has been there: on a failed conflict path the BOARD had already been marked 
 `main` (the PR was still open) — a status contradicting the facts is more dangerous than the failure itself. The
 current order and the closing move:
 
+**Before the merge, land the worktree's records.** `git merge --squash` carries the branch's *committed* content
+only, but a worker often leaves its report, evidence package or `<docs>/` edit **uncommitted** in its worktree
+(`??`/` M`) — the merge succeeds, the record stays behind, and reusing the worktree destroys it (2026-09-22:
+P36/P40/P42/P65/P67). The digest already warns about unlanded records (M31/P47), but the merge flow never runs the
+digest, so the check lives on the merge step itself:
+
+```bash
+team review <ID> --pre-merge
+```
+
+It resolves the task branch (state → refs), finds the worktree checked out on it, and prints every `<docs>/**`
+path there that is not committed — each line as `<agent>: <path>` with a copy-paste `git -C <worktree> add -A -- …`
++ `git commit` recipe carrying the `Agent: <agent>` trailer. It exits **non-zero while any exist** (usable as the
+merge gate), prints nothing when clean, and **never commits for you** — who committed a record must stay true.
+Ignored files (`state/`, build output) and dirty paths outside `<docs>/` are not part of the check; if no worktree
+can be located it refuses (rc 2) rather than reporting clean — "not checked" must not look like "nothing wrong".
+
 1. verify the branch exists (a mistyped `--branch` is not misreported as a "conflict");
 2. `merge --squash` → `commit` → **`push` (when `--push`/`--pr`)** all succeed;
 3. only then `board set <ID> done`.

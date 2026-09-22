@@ -13396,6 +13396,119 @@ EOS
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
 fi
 
+# ---------------------------------------------------------------- 45. P76 合并前的「未入账记录」检查（D45）
+# 事实（D45，2026-09-22）：`git merge --squash` 只带**已提交**内容。worker 常把报告/证据包留在工作树里
+# 没提交（`??`），或改了 <docs>/ 记录没提交（` M`）—— 合并不带它们，工作树一被复用/复位就永久丢了
+#（当天同一个形状 5 次：P36/P40/P42/P65/P67）。既有 digest 警告（M31/P47）没问题，但**合并流程根本
+# 不跑 digest**：`git merge --squash` 是一条纯 git 命令。本节钉住合并步自己的检查：
+#   `team review <ID> --pre-merge`：有未入账 → 非零 + 逐条 `<agent>: <path>` + 修法；干净 → 零输出；
+#   只查任务分支的工作树、只看 <docs>/ 下的记录；只打印、**不替 agent 提交**；定位不到 → fail closed。
+# 反向（可证伪）：影子掉扫描函数 = 「检查被删除」的形状 → 同一份夹具必须静悄悄放过。
+section "45 · P76 合并前的未入账记录检查（D45）"
+
+P76R="$TMP/p76repo"; rm -rf "$P76R"; mkdir -p "$P76R"
+( cd "$P76R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# p76' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+P76SES="teamsmith-smoke-p76-$$"
+( cd "$P76R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$P76SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p76-init.log" 2>&1 \
+  && ok "P76 夹具仓库 init 成功" || bad "P76 夹具仓库 init 失败（见 $TMP/p76-init.log）"
+( cd "$P76R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p76-paths.json" 2>&1 || true
+assert_eq "P76 隔离：team paths 的 main_root 就是 P76 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/p76-paths.json")" "$P76R"
+p76() { ( cd "$P76R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+if git -C "$P76R" add -A >/dev/null 2>&1 && git -C "$P76R" commit -qm "chore: init scaffold" >/dev/null 2>&1; then
+  ok "P76 夹具：init 脚手架已入账"
+else
+  bad "P76 夹具：init 脚手架提交失败"
+fi
+P76_ID="P76"; P76_BR="task/P76-smoke"; P76_WT="$P76R/.worktrees/dev"
+git -C "$P76R" worktree add -q -b "$P76_BR" "$P76_WT" main >/dev/null 2>&1
+if [ -e "$P76_WT/.git" ]; then ok "P76 夹具：任务工作树就位（.worktrees/dev @ $P76_BR）"; else bad "P76 夹具：工作树起不来（后续断言无意义）"; fi
+mkdir -p "$P76R/.pi/team/state"
+printf 'window=dev\ntask=%s\nbranch=%s\n' "$P76_ID" "$P76_BR" > "$P76R/.pi/team/state/dev.env"
+P76_REC="$P76R/docs/team/reviews/$P76_ID.md"
+
+# ── ① 未入账：未跟踪（含包内文件）+ 已改未提交 → 非零 + 逐条点名 + 修法 ──────────────────────
+mkdir -p "$P76_WT/docs/team/reports/P76-dev/pkg"
+printf '# P76-dev · 交付报告\n\nagent: dev\n' > "$P76_WT/docs/team/reports/P76-dev.md"
+printf 'echo evidence\n' > "$P76_WT/docs/team/reports/P76-dev/pkg/run.sh"
+printf 'a record edit that was never committed\n' >> "$P76_WT/docs/team/DECISIONS.md"
+P76_HEAD0="$(git -C "$P76_WT" rev-parse HEAD)"
+p76 $TEAM review "$P76_ID" --pre-merge >"$TMP/p76-unlanded.log" 2>&1; P76_RC=$?
+assert_eq "P76 ①：有未入账记录 → 非零退出（能当合并门）" "$P76_RC" "1"
+assert_has "$TMP/p76-unlanded.log" "3 份记录未入账" "P76 ①：点名未入账份数"
+assert_has "$TMP/p76-unlanded.log" "dev: docs/team/reports/P76-dev.md  [?? 未跟踪（新文件，从未提交）]" \
+  "P76 ①：未跟踪的报告点名（<agent>: <path> + 状态）"
+assert_has "$TMP/p76-unlanded.log" "dev: docs/team/DECISIONS.md  [ M 已改未提交（工作区改动）]" \
+  "P76 ①：已改未提交的记录同样点名（M31 的旧检查只看 ??）"
+assert_has "$TMP/p76-unlanded.log" "dev: docs/team/reports/P76-dev/pkg/run.sh" \
+  "P76 ①：报告包里的文件逐条点名（--untracked-files=all）"
+assert_has "$TMP/p76-unlanded.log" "git -C $P76_WT add -A -- docs/team/DECISIONS.md docs/team/reports/P76-dev.md docs/team/reports/P76-dev/pkg/run.sh" \
+  "P76 ①：修法是一条可粘贴的 git add（列出全部路径）"
+assert_has "$TMP/p76-unlanded.log" "Agent: dev" "P76 ①：修法里的提交带 Agent: trailer（谁提交的要说真话）"
+assert_has "$TMP/p76-unlanded.log" "review $P76_ID --pre-merge" "P76 ①：给出提交后重跑的下一步"
+assert_not_file "$P76_REC" "P76 ①：--pre-merge 不写复验记录（它不是一次复验）"
+assert_eq "P76 ①：不替 agent 提交（HEAD 不动）" "$(git -C "$P76_WT" rev-parse HEAD)" "$P76_HEAD0"
+assert_eq "P76 ①：文件仍在未入账状态（命令只打印）" \
+  "$(git -C "$P76_WT" status --porcelain -- docs/team/reports/P76-dev.md)" "?? docs/team/reports/P76-dev.md"
+
+# ── ② 入账后 → 退出码 0 且零输出（安静）────────────────────────────────────────────────────
+git -C "$P76_WT" add -A >/dev/null 2>&1
+git -C "$P76_WT" -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "docs(team): P76 fixture records" >/dev/null 2>&1
+p76 $TEAM review "$P76_ID" --pre-merge >"$TMP/p76-clean.log" 2>&1; P76_RC2=$?
+assert_eq "P76 ②：记录入账后 → 退出码 0" "$P76_RC2" "0"
+assert_eq "P76 ②：干净时安静（零输出）" "$(wc -c < "$TMP/p76-clean.log" | tr -d ' ')" "0"
+
+# ── ③ 负对照：state/、构建产物、ignored 的记录都不算（只有它们时零输出）────────────────────
+printf 'scratch\n' > "$P76_WT/scratch.txt"
+mkdir -p "$P76_WT/build"; printf 'object\n' > "$P76_WT/build/x.o"
+mkdir -p "$P76_WT/.pi/team/state"; printf 'runtime\n' > "$P76_WT/.pi/team/state/junk"
+mkdir -p "$P76_WT/docs/team/inbox"; printf 'ignored inbox\n' > "$P76_WT/docs/team/inbox/dev.md"
+printf 'ignored log\n' > "$P76_WT/docs/team/reviews/local.log"
+p76 $TEAM review "$P76_ID" --pre-merge >"$TMP/p76-decoy.log" 2>&1; P76_RC3=$?
+assert_eq "P76 ③：只有无关脏文件（state/、build/、ignored）→ 退出码 0" "$P76_RC3" "0"
+assert_eq "P76 ③：无关脏文件不产生输出" "$(wc -c < "$TMP/p76-decoy.log" | tr -d ' ')" "0"
+git -C "$P76_WT" clean -qfd >/dev/null 2>&1 || true
+rm -f "$P76_WT/docs/team/reviews/local.log"
+
+# ── ④ 反向（可证伪）：影子掉扫描 = 「检查被删除」的形状 → 同一份夹具静悄悄放过 ──────────────
+P76_PROBE="$TMP/p76-probe.sh"
+cat > "$P76_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <repo> <shadow>：shadow=1 = 影子掉「未入账」扫描（检查被删除的形状）
+set -u
+SKILL_DIR="$1"; REPO="$2"; SHADOW="${3:-0}"
+cd "$REPO"
+unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SKILL_DIR
+. "$SKILL_DIR/scripts/lib/common.sh"
+for _f in "$SKILL_DIR"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+team_load_config >/dev/null 2>&1 || true
+[ "$SHADOW" = "1" ] && team_review_unlanded_records() { :; }
+team_cmd_review P76 --pre-merge
+EOS
+chmod +x "$P76_PROBE"
+printf '# P76-dev · 交付报告（翻转夹具）\n\nagent: dev\n' > "$P76_WT/docs/team/reports/P76-dev.md"
+bash "$P76_PROBE" "$SKILL_DIR" "$P76R" 0 >"$TMP/p76-probe-green.log" 2>&1; P76_RC4=$?
+assert_eq "P76 ④：探针（同源）照旧非零退出" "$P76_RC4" "1"
+assert_has "$TMP/p76-probe-green.log" "dev: docs/team/reports/P76-dev.md" "P76 ④：探针照旧点名路径"
+bash "$P76_PROBE" "$SKILL_DIR" "$P76R" 1 >"$TMP/p76-probe-shadow.log" 2>&1; P76_RC5=$?
+assert_eq "P76 ④ 反向：检查被影子掉 → 退出码 0（同一份夹具被静悄悄放过）" "$P76_RC5" "0"
+assert_eq "P76 ④ 反向：检查被影子掉 → 零输出（假绿的形状）" "$(wc -c < "$TMP/p76-probe-shadow.log" | tr -d ' ')" "0"
+git -C "$P76_WT" add -A >/dev/null 2>&1
+git -C "$P76_WT" -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "docs(team): P76 flip fixture record" >/dev/null 2>&1
+
+# ── ⑤ 含混用法拒绝 + 定位不到 fail closed（不把「没检查」报成「没问题」）──────────────────
+p76 $TEAM review "$P76_ID" --pre-merge --dir "$TMP/p76-nope" >"$TMP/p76-mixed.log" 2>&1; P76_RC6=$?
+assert_eq "P76 ⑤：--pre-merge 与 --dir 同用被拒（它不跑复验）" "$P76_RC6" "2"
+assert_has "$TMP/p76-mixed.log" "不与 --dir 同用" "P76 ⑤：拒绝时说明原因"
+rm -f "$P76R/.pi/team/state/dev.env"
+git -C "$P76R" worktree remove --force "$P76_WT" >/dev/null 2>&1
+git -C "$P76R" branch -D "$P76_BR" >/dev/null 2>&1
+p76 $TEAM review "$P76_ID" --pre-merge >"$TMP/p76-nolocate.log" 2>&1; P76_RC7=$?
+assert_eq "P76 ⑤：定位不到工作树 → 非零（fail closed，不假装检查过）" "$P76_RC7" "2"
+assert_has "$TMP/p76-nolocate.log" "定位不到这个任务分支的工作树" "P76 ⑤：拒绝时点名「无法检查」"
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"

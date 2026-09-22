@@ -245,6 +245,88 @@ team_review_artifacts() { # <checkout> → 不在提交里的产物："ignored\t
   team_review_ignored_paths "$d" | sed 's/^/ignored\t/'
 }
 
+# ---------------------------------------------------------------- P76 · 合并前的「未入账记录」检查（D45）
+# 事实（D45，2026-09-22）：`git merge --squash` 只带**已提交**内容。agent 常把报告/证据包留在工作树里
+# 没提交（`??`），或改了 <docs>/ 下的记录没提交（` M`）—— 合并不带它们，工作树一被复用/复位就永久
+# 丢了。同一个形状当天丢了 5 次（P36/P40/P42/P65/P67）。既有防线（M31/P47 的 digest 警告）没有坏，
+# 但**合并流程根本不跑 digest**：`git merge --squash` 是一条纯 git 命令，它不看 docs/team/。
+# 所以合并步要有一条一条命令的自检：`team review <ID> --pre-merge`（非零退出 = 能当合并门）。
+# 范围刻意窄：只查**这个任务分支的工作树**（未入账文件只存在于工作树里），只查 <docs>/ 下的记录
+# （state/、构建产物等脏文件不拦路；ignored 本来就不在提交里，也不算）；**只打印，不替 agent 提交** ——
+# 谁提交的必须是真的，PM 手工提交也要带 `Agent:` trailer（D45）。
+team_review_unlanded_records() { # <worktree> → 每行 `<XY>\t<相对路径>`（XY = git status --porcelain 状态码）
+  local wt="$1"
+  git -C "$wt" status --porcelain --untracked-files=all -- "$TEAM_DOCS_DIR" 2>/dev/null \
+    | sed -n 's/^\(..\) \(.*\)$/\1\t\2/p' || true
+}
+
+team_review_unlanded_label() { # <XY> → 一行说明（认识的码写清形状，别的落到兜底，不编语义）
+  case "$1" in
+    '??') printf '未跟踪（新文件，从未提交）' ;;
+    ' M') printf '已改未提交（工作区改动）' ;;
+    'M ') printf '已暂存未提交' ;;
+    'MM') printf '暂存后又有改动' ;;
+    'A ') printf '新文件已暂存未提交' ;;
+    'AM') printf '新文件已暂存，之后又有改动' ;;
+    'D ') printf '删除已暂存未提交' ;;
+    ' D') printf '工作区删除未提交' ;;
+    *)    printf '未提交改动' ;;
+  esac
+}
+
+# P76：未入账文件只存在于工作树里，所以先定位**这个任务分支**的工作树（state 里记的分支 → refs 里的
+# task/<ID>-*；再扫 .worktrees/ 里停在那个分支上的工作树）。定位不到 → 报错不猜：合并门 fail closed，
+# 不能让「没检查」看起来像「没问题」。
+team_review_premerge_worktree() { # <ID> → 打印 `<agent>\t<worktree>\t<branch>`；定位不到 → 1
+  local id="$1" b="" wt wb rc=0
+  team__resolve_branch "$id" || rc=$?
+  [ "$rc" = "0" ] || return 1
+  b="$_R"; _R=""
+  [ -n "$b" ] || return 1
+  case "$b" in HEAD|-|—) return 1 ;; esac
+  for wt in "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/*/; do
+    [ -d "$wt" ] || continue
+    wt="${wt%/}"
+    [ -e "$wt/.git" ] || continue          # 陈旧目录不是工作树 → 不必花一次 git 调用
+    team__worktree_branch "$wt"; wb="$_R"; _R=""
+    [ "$wb" = "$b" ] || continue
+    printf '%s\t%s\t%s\n' "$(basename "$wt")" "$wt" "$b"
+    return 0
+  done
+  return 1
+}
+
+team_cmd_review_premerge() { # <ID>：合并前的未入账记录检查（只读；0=干净且零输出 / 1=有未入账 / 2=无法检查）
+  local id="$1" target a wt b records n=0 code path
+  local -a rels=()
+  if ! target="$(team_review_premerge_worktree "$id")"; then
+    team_err "review $id --pre-merge：定位不到这个任务分支的工作树，无法检查未入账记录（不猜）"
+    team_err "  解析：state 里没有 task=$id 的分支记录，refs 里也没有唯一的 task/$id-* 分支；或没有工作树停在它上面"
+    team_err "  → 看任务/席位/分支：$TEAM_CLI status $id"
+    team_err "  → 工作树若已删除，未入账文件也随它消失了（没有内容会被这次合并漏掉）"
+    return 2
+  fi
+  IFS=$'\t' read -r a wt b <<< "$target"
+  records="$(team_review_unlanded_records "$wt")"
+  [ -n "$records" ] || return 0     # 干净 → 安静（合并门：退出码 0，零输出）
+  n="$(printf '%s\n' "$records" | grep -c .)"
+  team_err "review $id --pre-merge：$n 份记录未入账（squash 合并只带已提交内容，它们会被留下）"
+  printf '  工作树：%s（%s @ %s）\n' "$a" "$wt" "$b"
+  printf '  未入账（只看 %s/ 下；ignored 与其它脏文件不算）：\n' "$TEAM_DOCS_DIR"
+  while IFS=$'\t' read -r code path; do
+    [ -n "$path" ] || continue
+    rels+=("$path")
+    printf '    %s: %s  [%s %s]\n' "$a" "$path" "$code" "$(team_review_unlanded_label "$code")"
+  done <<< "$records"
+  printf '  修法（PM 手工提交；skill 不替 agent 提交，提交带 `Agent:` trailer）：\n'
+  printf '    git -C %s add -A --' "$wt"
+  printf ' %q' "${rels[@]}"
+  printf '\n'
+  printf '    git -C %s commit -m "docs(team): %s 未入账记录" -m "Agent: %s"\n' "$wt" "$id" "$a"
+  printf '  → 提交后重跑：%s review %s --pre-merge\n' "$TEAM_CLI" "$id"
+  return 1
+}
+
 # ---------------------------------------------------------------- 强复验证据的结构化判定（F13/F14）
 # 旧实现是纯关键词 grep：报告只要“提到”翻转 / 独立验证包就被判成“满足”，而 M4.1 之后的
 # 英文写法（independent verification package / red before → green after）反倒判“缺”。
@@ -429,7 +511,7 @@ team_strong_scan() { # <checkout> <ID> → 打印复验记录用的「强复验�
 
 team_cmd_review() {
   team_require_docs
-  local id="" branch="" no_gates=0 strong=0 revdir="" allow_unresolved=0
+  local id="" branch="" no_gates=0 strong=0 revdir="" allow_unresolved=0 pre_merge=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
@@ -437,11 +519,25 @@ team_cmd_review() {
       --strong) strong=1; shift ;;          # 强复验：结构化判定对抗性验证包 + finding 翻转证据（team_strong_scan）
       --allow-unresolved-branch) allow_unresolved=1; shift ;;   # 显式覆盖：给解析不到的分支/提交盖章（会写进记录）
       --dir) revdir="${2:?}"; shift 2 ;;    # PM 准备好的独立 checkout（skill 不碰 git）
+      --pre-merge) pre_merge=1; shift ;;    # P76/D45：合并前查任务工作树里未入账的 <docs>/ 记录（不跑门禁、不写记录）
       -*) team_usage_die "review: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
-  [ -n "$id" ] || team_usage_die "review <ID> --dir <独立checkout> [--no-gates] [--strong] [--allow-unresolved-branch]"
+  [ -n "$id" ] || team_usage_die "review <ID> --dir <独立checkout> [--no-gates] [--strong] [--allow-unresolved-branch]
+  或：review <ID> --pre-merge   # 合并前查这个任务工作树里未入账的 <docs>/ 记录（D45/P76；不跑门禁、不写记录）"
+  # P76/D45：--pre-merge 是合并门前置检查（只读；干净时零输出、退出码 0）。它不是一次复验：不跑门禁、
+  # 不写记录、不动工作树，所以与复验专用的旋钮互斥 —— 含混用法直接拒绝，不猜。
+  if [ "$pre_merge" = "1" ]; then
+    [ -z "$revdir" ] || team_usage_die "review $id --pre-merge 不与 --dir 同用（它只查任务工作树，不是一次复验）"
+    [ "$no_gates" = "0" ] || team_usage_die "review $id --pre-merge 不与 --no-gates 同用（它不跑门禁）"
+    [ "$strong" = "0" ] || team_usage_die "review $id --pre-merge 不与 --strong 同用（它不跑门禁）"
+    [ "$allow_unresolved" = "0" ] || team_usage_die "review $id --pre-merge 不与 --allow-unresolved-branch 同用"
+    [ -z "$branch" ] || team_usage_die "review $id --pre-merge 不与 --branch 同用（任务分支由 state/refs 自动定位）"
+    local pm_rc=0
+    team_cmd_review_premerge "$id" || pm_rc=$?
+    return "$pm_rc"
+  fi
   [ -n "$revdir" ] || team_die "review 需要 --dir <路径>：请 PM 自己准备独立 checkout（skill 不执行 git）
   例： git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id <branch>
         $TEAM_CLI review $id --dir /tmp/review-$id"

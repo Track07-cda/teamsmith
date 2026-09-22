@@ -108,8 +108,13 @@ when they conflict, the creed wins and the process gets fixed.
 4. **Verify (never skip)**: `team review <ID> --dir <checkout>` — run the gates on a clean, independent checkout
    and write `reviews/<ID>.md`. **A report is a claim; your verification is the evidence.** Re-read the diff
    yourself against the brief.
-5. **Pass** → run git/forge yourself: squash-merge (with a PR: `gh pr merge --squash --delete-branch <PR>` first,
-   then `git fetch && git merge --ff-only`) → `team board set <ID> done` → `team close <ID>`.
+5. **Land the records, then merge** → `team review <ID> --pre-merge` lists every `docs/team/**` file the
+   task's worktree has **not committed** and exits non-zero while any exist: `git merge --squash` carries only
+   committed content, so an untracked report would silently stay behind and die with the reused worktree (D45 —
+   the same shape happened five times in one day). Commit them yourself with the `Agent: <agent>` trailer (the
+   tool never commits for you). Then run git/forge yourself: squash-merge (with a PR:
+   `gh pr merge --squash --delete-branch <PR>` first, then `git fetch && git merge --ff-only`) →
+   `team board set <ID> done` → `team close <ID>`.
    **Fail** → `team thread <a> "<failure evidence + expectation>"` + `team say <a> "<one-line instruction>"` (if the target's input box holds a draft the instruction is queued instead of typed — `team outbox list` shows it, and it is delivered once the box clears).
 6. **Wrap up / report**: update `BOARD.md`, record key decisions in `DECISIONS.md` (with rationale and impact),
    and report to the user as "delivered + where the evidence is + next step". Users want conclusions and risk,
@@ -171,6 +176,10 @@ git -C <root>/.worktrees/<agent> status --short
 # 3) Verification (the PM prepares the checkout; the skill only runs gates and writes evidence)
 git -C <root> worktree add --detach /tmp/review-<ID> <branch>
 team review <ID> --dir /tmp/review-<ID> --strong
+
+# 3b) Pre-merge: the branch's worktree may hold records that were never committed (`merge --squash` carries
+#     only committed content — an untracked report stays behind and dies with the reused worktree; D45)
+team review <ID> --pre-merge       # non-zero + per-file fix command while <docs>/** is uncommitted; silent when clean
 
 # 4) Merge (with a PR: merge the PR first, then fast-forward locally; without: squash locally)
 gh pr merge --squash --delete-branch <PR>          # or glab mr merge, or a curl/HTTP call
