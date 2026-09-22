@@ -11685,20 +11685,43 @@ if [ -f "$SKILL_DIR/tests/panel-choices.sh" ]; then
 else
   bad "38-a 缺 tests/panel-choices.sh"
 fi
+# 38-b/38-f 的判定表（P48）：夹具的退出码就是机器前提的出口。
+#   0 → 全绿（照旧）｜ 1 → 断言失败（照旧）｜ 3 → 搭建失败（照旧）
+#   4 → 夹具可见 SKIP（机器超前提）：打印夹具自己的 SKIP 行（含原因与读数）与结果行，门禁退出码不变
+#        —— 跳过的场景**绝不能**被印成全绿。
+p38_verdict() { # <tag> <log> <rc> <what>
+  local tag="$1" log="$2" rc="$3" what="$4" summary line
+  summary="$(grep -a '== 结果 ==' "$log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')"
+  case "$rc" in
+    0)
+      ok "$tag $what 全绿（$summary）"
+      tail -1 "$log" | sed 's/^/      /' ;;
+    4)
+      line="$(grep -a 'SKIP' "$log" | head -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^ *//')"
+      cond_skip "$tag $what" "${line:-夹具报告了跳过（rc=4）但日志里没有 SKIP 行}"
+      tail -1 "$log" | sed 's/^/      /' ;;
+    1)
+      bad "$tag $what 有失败"
+      grep -a '✗' "$log" | head -8 | sed 's/^/      /'
+      tail -2 "$log" | sed 's/^/      /' ;;
+    3)
+      bad "$tag $what 搭建失败（exit 3）"
+      tail -3 "$log" | sed 's/^/      /' ;;
+    *)
+      bad "$tag $what 意外退出码 $rc"
+      tail -3 "$log" | sed 's/^/      /' ;;
+  esac
+}
 # 38-b pty 夹具：panel-p21.sh choices（真 bundle + 私有 tmux server + argv 记录的 wrapper）——FAST 显式跳过。
+# P48：退出码 4 = 机器超前提的可见 SKIP（夹具自己的 SKIP 行带原因与读数），门禁不因此变红。
 if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
   if [ "$FAST" = "1" ]; then
     fast_skip "38-b·panel-p21-choices" "panel-p21.sh choices 要真 tmux 场地 + 真 bundle（慢段 ~2.5 分钟）"
   else
     live_mark
-    if bash "$SKILL_DIR/tests/panel-p21.sh" choices >"$TMP/panel-p21-choices.log" 2>&1; then
-      ok "38-b panel-p21.sh choices 全绿（$(grep -a '== 结果 ==' "$TMP/panel-p21-choices.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')）"
-      tail -1 "$TMP/panel-p21-choices.log" | sed 's/^/      /'
-    else
-      bad "38-b panel-p21.sh choices 有失败"
-      grep -a '✗' "$TMP/panel-p21-choices.log" | head -8 | sed 's/^/      /'
-      tail -2 "$TMP/panel-p21-choices.log" | sed 's/^/      /'
-    fi
+    bash "$SKILL_DIR/tests/panel-p21.sh" choices >"$TMP/panel-p21-choices.log" 2>&1
+    p38rc=$?
+    p38_verdict "38-b" "$TMP/panel-p21-choices.log" "$p38rc" "panel-p21.sh choices"
   fi
 else
   bad "38-b 缺 tests/panel-p21.sh"
@@ -11833,19 +11856,74 @@ if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
     fast_skip "38-f·panel-p21-settings-groups-wheel" "panel-p21.sh groups/settings/wheel 要真 tmux 场地 + 真 bundle（慢段 ~2 分钟）"
   else
     live_mark
-    if bash "$SKILL_DIR/tests/panel-p21.sh" groups settings wheel >"$TMP/panel-p21-view.log" 2>&1; then
-      ok "38-f panel-p21.sh groups/settings/wheel 全绿（$(grep -a '== 结果 ==' "$TMP/panel-p21-view.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')）"
-      tail -1 "$TMP/panel-p21-view.log" | sed 's/^/      /'
-    else
-      bad "38-f panel-p21.sh groups/settings/wheel 有失败"
-      grep -a '✗' "$TMP/panel-p21-view.log" | head -8 | sed 's/^/      /'
-      tail -2 "$TMP/panel-p21-view.log" | sed 's/^/      /'
-    fi
+    bash "$SKILL_DIR/tests/panel-p21.sh" groups settings wheel >"$TMP/panel-p21-view.log" 2>&1
+    p38rc=$?
+    p38_verdict "38-f" "$TMP/panel-p21-view.log" "$p38rc" "panel-p21.sh groups/settings/wheel"
   fi
 else
   bad "38-f 缺 tests/panel-p21.sh"
 fi
 
+# 38-g P48 的两条便宜钉（纯逻辑/自有子进程，**FAST 照跑**）：
+#   ① 负载实验的安全规矩（verification#A load experiment signals only the processes it started）：
+#      tests/load-experiment.sh --guard-test —— 自有目标可冻结可释放、TERM/INT 中途被杀不留 T、
+#      非自有/模式形状/空/自身目标在发信号前即被拒（exit 2，目标状态不变）、私有临时根与 socket 名
+#      互不相同。它只 spawn 自己的 sleep，不碰任何别人的进程。
+#   ② 前提旋钮不得漏进真路径（panel#The project-settings pty fixture judges under a machine premise）：
+#      panel-p21.sh 的 premise-only 模式（TEAM_P21_PREMISE_ONLY=1）—— 夹具开关关着时注入的读数
+#      必须被忽略并打印，前提行必须带真 loadavg/真核数、不得出现注入值，且它不建 tmux、不判时长。
+#      前置红面：把夹具里的忽略分支删掉 → ②变红；把 freeze 的归属检查删掉 → ①变红（报告里有）。
+if [ -f "$SKILL_DIR/tests/load-experiment.sh" ]; then
+  if bash "$SKILL_DIR/tests/load-experiment.sh" --guard-test >"$TMP/p48-load-guard.log" 2>&1; then
+    ok "38-g① load-experiment.sh --guard-test 全绿（$(grep -a '== 结果 ==' "$TMP/p48-load-guard.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；只对自己 spawn 的进程发信号）"
+  else
+    bad "38-g① load-experiment.sh --guard-test 有失败"
+    grep -a '✗' "$TMP/p48-load-guard.log" | head -6 | sed 's/^/      /'
+  fi
+else
+  bad "38-g① 缺 tests/load-experiment.sh"
+fi
+if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
+  P48_REAL_CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
+  P48_REAL_LOAD="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?')"
+  ( cd "$SKILL_DIR/.." && env -u TEAM_SMOKE_FIXTURE \
+      TEAM_P21_PREMISE_PROBE_MS=999 TEAM_P21_PREMISE_LOAD_FACTOR=0.01 TEAM_P21_PREMISE_ONLY=1 \
+      timeout 30 bash "$SKILL_DIR/tests/panel-p21.sh" choices ) >"$TMP/p48-premise-only.log" 2>&1
+  p38po=$?
+  if [ "$p38po" = "0" ]; then
+    ok "38-g② premise-only 模式退出 0（不建 tmux、不判时长）"
+  else
+    bad "38-g② premise-only 模式退出 $p38po（期望 0）"
+    tail -3 "$TMP/p48-premise-only.log" | sed 's/^/      /'
+  fi
+  for kv in 'TEAM_P21_PREMISE_PROBE_MS=999' 'TEAM_P21_PREMISE_LOAD_FACTOR=0.01'; do
+    if grep -qF "忽略 $kv" "$TMP/p48-premise-only.log"; then
+      ok "38-g② 注入的旋钮被忽略并打印：$kv"
+    else
+      bad "38-g② 没有看到「忽略 $kv」行"
+    fi
+  done
+  if [ "$P48_REAL_CORES" -gt 0 ] && grep -qF "逻辑核 ${P48_REAL_CORES}" "$TMP/p48-premise-only.log" \
+     && grep -qF "loadavg_1m ${P48_REAL_LOAD}" "$TMP/p48-premise-only.log"; then
+    ok "38-g② 前提行是真读数（loadavg_1m ${P48_REAL_LOAD} · 逻辑核 ${P48_REAL_CORES}）"
+  else
+    bad "38-g② 前提行不是真读数（期望 loadavg_1m ${P48_REAL_LOAD}、逻辑核 ${P48_REAL_CORES}）"
+    grep -a '前提' "$TMP/p48-premise-only.log" | head -2 | sed 's/^/      /'
+  fi
+  if grep -qF '代码无关探针 999ms' "$TMP/p48-premise-only.log"; then
+    bad "38-g② 前提行里出现了注入的探针读数（旋钮漏进了真路径！）"
+  else
+    ok "38-g② 前提行里没有注入值"
+  fi
+  if grep -qE 'SKIP|✗' "$TMP/p48-premise-only.log"; then
+    bad "38-g② premise-only 模式出现了 SKIP/失败行（它不该判任何东西）"
+    grep -aE 'SKIP|✗' "$TMP/p48-premise-only.log" | head -3 | sed 's/^/      /'
+  else
+    ok "38-g② premise-only 模式没有判任何东西（无 SKIP、无 ✗）"
+  fi
+else
+  bad "38-g② 缺 tests/panel-p21.sh"
+fi
 section "39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）"
 # headless 夹具（tests/install-shape.sh）——不依赖 tmux/真进程，FAST 照跑：它自己起临时仓库、
 # 自己剥 TEAM_*/TMUX 身份，含五组翻转红侧（每组的绿侧用同一份判据在真实树上跑）。

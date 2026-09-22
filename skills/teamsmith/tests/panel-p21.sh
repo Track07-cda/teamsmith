@@ -11,7 +11,37 @@
 # Every scenario runs in a private tmux server and a fresh git project initialised with the real
 # `team init`; the panel runs the **real** CLI through a logging wrapper (`argv.log`), so "the
 # console writes only through the owning command" is checked against real argv, not a stub.
-# Exit: 0 every selected scenario green, 1 at least one assertion failed, 3 setup failure.
+# Exit: 0 every selected scenario green, 1 at least one assertion failed, 3 setup failure,
+#       4 a scenario was visibly SKIPPED (see the premise below): no failure, no conclusion.
+#
+# P48 / D33 — `panel#The project-settings pty fixture judges under a machine premise` (the gate
+# rule is `verification#The correctness gate judges correctness only`): the wait horizons stay
+# failure detectors, never judgments. Every scenario prints a **premise line** before its first
+# assertion (real `loadavg_1m`/`loadavg_5m`, the logical core count and a **code-independent probe**
+# — `python3 -c pass` + `bash -c true` + `git rev-parse`, in ms), and when a wait runs out of its
+# (progress-extended) horizon the engine attributes the verdict from the machine's own readings:
+# still painting / probe over its ceiling / load over the coarse guard -> one visible SKIP line and
+# the scenario stops there (fixture exit 4, the gate stays 0); a static scene with the readings
+# under their ceilings -> the ordinary red with its M59 scene (a regression is a code verdict).
+# Constants and their measured bands: probe ceiling 120 ms (measured 12-34 ms across loadavg
+# 8.4-42.4 on 32 cores), coarse load guard 2.0 x cores (the highest measured green load is 1.33 x
+# cores) — both sit **outside** the band where this fixture judges. Re-derivation recipe:
+# `tests/load-experiment.sh {storm,burn,probe}` (the safe harness: owned load, owned targets) +
+# design.md §3/§4;  the raw calibration table is in docs/team/reports/P48-dev3.md.
+#
+# Fixture knobs (honoured **only** under `TEAM_SMOKE_FIXTURE=1`; otherwise printed as ignored and
+# the real reading is used — the panel-cpu.sh precedent):
+#   TEAM_P21_PREMISE_PROBE_MS=<ms>       inject the probe reading; over its ceiling the fixture also
+#                                        injects the "the state never arrives" stall, so the
+#                                        exhaustion path is reachable on a quiet host
+#   TEAM_P21_PREMISE_LOADAVG=<n>         inject loadavg_1m
+#   TEAM_P21_PREMISE_LOAD_FACTOR=<f>     inject the coarse entry guard's factor
+#   TEAM_P21_PREMISE_PROBE_CEIL_MS=<ms>  inject the probe ceiling
+#   TEAM_P21_STALL_ROUNDS=<n>            inject the progress window (PTY_STALL_ROUNDS)
+#   TEAM_P21_STALL=1                     inject a needle that never appears (the exhaustion shape
+#                                        on a healthy machine: it must stay a red, not a skip)
+#   TEAM_P21_PREMISE_ONLY=1              print the premise line + the ignore notices, build no tmux
+#                                        and judge nothing, exit 0 (the gate's knob-integrity check)
 set -uo pipefail
 
 # ── 身份隔离（必须最先做）：绝不继承调用者的团队身份 ──────────────────────────────
@@ -23,6 +53,17 @@ _keep_arg="${TEAM_P21_KEEP:-0}"
 _trace_arg="${TEAM_P21_TRACE:-}"
 _js_arg="${TEAM_P21_JS:-}"
 _js_panel="${TEAM_P21_PANEL:-}"
+# P48: the premise knobs (and the fixture switch itself) are saved before the identity wipe, which
+# would otherwise unset every TEAM_* — including TEAM_SMOKE_FIXTURE, the only switch that makes an
+# injected reading count.
+_smoke_fixture_arg="${TEAM_SMOKE_FIXTURE:-0}"
+_premise_probe_arg="${TEAM_P21_PREMISE_PROBE_MS:-}"
+_premise_load_arg="${TEAM_P21_PREMISE_LOADAVG:-}"
+_premise_factor_arg="${TEAM_P21_PREMISE_LOAD_FACTOR:-}"
+_premise_ceil_arg="${TEAM_P21_PREMISE_PROBE_CEIL_MS:-}"
+_premise_stall_arg="${TEAM_P21_STALL_ROUNDS:-}"
+_stall_arg="${TEAM_P21_STALL:-}"
+_premise_only_arg="${TEAM_P21_PREMISE_ONLY:-0}"
 while IFS='=' read -r _v _; do
   case "$_v" in TEAM_*) unset "$_v" 2>/dev/null || true ;; esac
 done < <(env)
@@ -40,6 +81,7 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/panel-p21.XXXXXX")"
 keep="${_keep_arg:-0}"
 PASS=0
 FAIL=0
+SKIP=0
 ROOT=""
 state=""
 current=""
@@ -54,13 +96,123 @@ cleanup() {
 trap cleanup EXIT
 
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
-ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); pty_fail_reset; }
+# P48: 每个场景在自己的子 shell 里跑，计数落在文件上（断言数不随场景结束丢失）。
+_p21_count="$tmp/count"
+mkdir -p "$_p21_count"
+p21_count_of() { local f="$1"; if [ -f "$f" ]; then wc -l < "$f" | tr -d ' '; else printf '0'; fi; }
+ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; printf 'ok\n' >> "$_p21_count/ok"; pty_fail_reset; }
 # M59: a failure carries its own scene (pane tail + isolated-vs-cascade); pty_bad prints it.
-bad() { pty_bad "$1"; FAIL=$((FAIL + 1)); }
+bad() { pty_bad "$1"; printf 'bad\n' >> "$_p21_count/bad"; }
 assert_eq() { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
 assert_has() { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里找不到 [$2]）"; }
 assert_not() { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
 assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里没有匹配 [$2]）"; }
+
+# ── 前提（P48 / D33，panel#The project-settings pty fixture judges under a machine premise）────
+# 视界是失败探测器：等待耗尽那一刻由 tests/lib/pty-wait.sh 调 pty_premise_over（下面）按机器读数
+# 归因 —— 超前提 → 一行可见 SKIP 并把当前场景停在原地（整体退出 4）；静态场景 + 前提之内 → 红。
+# 前提本身在**入口不判定**（只有粗闸门跳过整体超载的机器），所以前提行只是把真读数打出来。
+P21_PREMISE_PROBE_CEIL_MS_DEFAULT=120
+P21_PREMISE_LOAD_FACTOR_DEFAULT=2.0
+P21_PREMISE_REASON=""
+P21_NOTICED=""
+p21_fixture_on() { [ "${_smoke_fixture_arg:-0}" = "1" ]; }
+p21_notice() { # 每个旋钮只打一次忽略行（同一个值会被几个读数点重复请求）
+  case " ${P21_NOTICED:-} " in *" $1 "*) return 0 ;; esac
+  P21_NOTICED="${P21_NOTICED:-} $1"
+  printf '  忽略 %s=%s（只有 TEAM_SMOKE_FIXTURE=1 时夹具旋钮才生效；真实路径读真值）\n' "$1" "$2" >&2
+}
+p21_cores() { nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0'; }
+p21_load5() { cut -d' ' -f2 /proc/loadavg 2>/dev/null || printf '?'; }
+p21_load1() {
+  if [ -n "${_premise_load_arg:-}" ]; then
+    if p21_fixture_on; then printf '%s\n' "$_premise_load_arg"; return 0; fi
+    p21_notice TEAM_P21_PREMISE_LOADAVG "$_premise_load_arg"
+  fi
+  cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?'
+}
+# 代码无关探针（P44 的 probe.sh 口径）：只起进程，永远不碰面板；5 轮均值，毫秒。
+p21_probe_ms() {
+  local n=5 i t0
+  t0="$(date +%s%3N)"
+  for i in $(seq 1 "$n"); do
+    python3 -c 'pass' >/dev/null 2>&1
+    bash -c 'true' >/dev/null 2>&1
+    git -C "$tree" rev-parse --quiet HEAD >/dev/null 2>&1
+  done
+  printf '%s\n' $(( ($(date +%s%3N) - t0) / n ))
+}
+p21_probe_reading() {
+  if [ -n "${_premise_probe_arg:-}" ]; then
+    if p21_fixture_on; then printf '%s\n' "$_premise_probe_arg"; return 0; fi
+    p21_notice TEAM_P21_PREMISE_PROBE_MS "$_premise_probe_arg"
+  fi
+  p21_probe_ms
+}
+p21_factor() {
+  if [ -n "${_premise_factor_arg:-}" ]; then
+    if p21_fixture_on; then printf '%s\n' "$_premise_factor_arg"; return 0; fi
+    p21_notice TEAM_P21_PREMISE_LOAD_FACTOR "$_premise_factor_arg"
+  fi
+  printf '%s\n' "$P21_PREMISE_LOAD_FACTOR_DEFAULT"
+}
+p21_probe_ceil() {
+  if [ -n "${_premise_ceil_arg:-}" ]; then
+    if p21_fixture_on; then printf '%s\n' "$_premise_ceil_arg"; return 0; fi
+    p21_notice TEAM_P21_PREMISE_PROBE_CEIL_MS "$_premise_ceil_arg"
+  fi
+  printf '%s\n' "$P21_PREMISE_PROBE_CEIL_MS_DEFAULT"
+}
+p21_load_threshold() { awk -v c="$(p21_cores)" -v f="$(p21_factor)" 'BEGIN { printf "%.2f", f * c }'; }
+p21_premise_line() { # <场景名>：真读数 + 两个顶（只打，不判）
+  local label="${1:-?}" load1 load5 cores probe factor ceil
+  load1="$(p21_load1)"; load5="$(p21_load5)"; cores="$(p21_cores)"
+  probe="$(p21_probe_reading)"; factor="$(p21_factor)"; ceil="$(p21_probe_ceil)"
+  printf '== 前提 %s：loadavg_1m %s / loadavg_5m %s · 逻辑核 %s · 代码无关探针 %sms（顶 %sms）· 粗闸门 %s = %s×%s 核 ==\n' \
+    "$label" "$load1" "$load5" "$cores" "$probe" "$ceil" \
+    "$(p21_load_threshold)" "$factor" "$cores"
+}
+# 入口粗闸门：0 = 前提之内（照跑）/ 1 = 负载超顶（在第一个等待之前 SKIP 整个场景）。
+# 它故意取在实测绿带**之外**（最高实测绿 1.33×核），只是别在严重过载的宿主上白烧几分钟，
+# 不是「绿/红交叉点」（P44 的结论：负载平均没有实测交叉点）。
+p21_entry_guard() {
+  local load1 cores thr
+  load1="$(p21_load1)"; cores="$(p21_cores)"; thr="$(p21_load_threshold)"
+  case "$cores" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$cores" -gt 0 ] || return 0
+  if awk -v l="$load1" -v t="$thr" 'BEGIN { exit !(l <= t) }'; then return 0; fi
+  return 1
+}
+p21_entry_skip_line() {
+  printf '  \033[33mSKIP\033[0m 入口粗闸门：loadavg_1m %s > %s（%s×%s 核）—— 场景 %s 在第一个等待之前就停下（无失败、无结论，exit 4）\n' \
+    "$(p21_load1)" "$(p21_load_threshold)" "$(p21_factor)" "$(p21_cores)" "${1:-?}"
+}
+# 引擎在耗尽那一刻调的两个钩子（tests/lib/pty-wait.sh）：超前提 → 引擎打 SKIP 行并调 pty_on_skip。
+pty_on_skip() { exit 4; }
+pty_premise_over() { # 0 = 机器超前提（归因给机器）/ 1 = 前提之内（代码判决）
+  local load1 cores probe ceil thr factor
+  load1="$(p21_load1)"; cores="$(p21_cores)"; probe="$(p21_probe_reading)"
+  ceil="$(p21_probe_ceil)"; factor="$(p21_factor)"; thr="$(p21_load_threshold)"
+  P21_PREMISE_REASON="loadavg_1m ${load1} vs 粗闸门 ${thr}（${factor}×${cores} 核）；探针 ${probe}ms vs 顶 ${ceil}ms"
+  case "$probe" in ''|*[!0-9]*) probe=0 ;; esac
+  case "$ceil" in ''|*[!0-9]*) ceil=120 ;; esac
+  [ "$probe" -le "$ceil" ] || return 0
+  case "$cores" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$cores" -gt 0 ] || return 1
+  awk -v l="$load1" -v t="$thr" 'BEGIN { exit !(l > t) }' && return 0
+  return 1
+}
+pty_premise_reason() { printf '%s' "${P21_PREMISE_REASON:-（没有读数）}"; }
+
+# ── 前提自述模式（M58/panel-knobs 的先例 + P48）：只打前提行与每个注入旋钮的忽略行，不建 tmux、
+# 不起面板、不判任何时长 —— 门禁每轮用它证明「旋钮不得漏进真路径」（时间无关）。
+if [ "${_premise_only_arg:-0}" = "1" ]; then
+  _only_sections=("$@")
+  [ "${#_only_sections[@]}" -gt 0 ] || _only_sections=(premise-only)
+  for _only_s in "${_only_sections[@]}"; do p21_premise_line "$_only_s"; done
+  printf 'panel-p21: premise-only 模式（裸读数 + 旋钮忽略声明；除代码无关探针外没有起进程、没有建 tmux、没有判定；exit 0）\n'
+  exit 0
+fi
 
 if ! command -v tmux >/dev/null 2>&1; then printf 'panel-p21: tmux is required\n' >&2; exit 3; fi
 if [ -z "$js" ]; then printf 'panel-p21: no node/bun runtime\n' >&2; exit 3; fi
@@ -74,6 +226,19 @@ if [ -z "$js" ]; then printf 'panel-p21: no node/bun runtime\n' >&2; exit 3; fi
 # green wait returns on the first settled frame, usually rounds 1-3); per-wait overrides use local.
 PTY_TRACE="${_trace_arg:-0}"
 PTY_SCENE_DIR=""
+# P48: 延长窗口与上限由夹具钉住（默认 8 / 3）；夹具旋钮只在 TEAM_SMOKE_FIXTURE=1 下覆盖。
+# 注入读数超顶时同时注入「状态永不到来」的针：那是夹具在模拟「这台机器交不出这一帧」，
+# 让耗尽路径在安静机上可达（真路径下没有针，也没有注入）。
+PTY_STALL_ROUNDS=8
+PTY_EXT_FACTOR=3
+if p21_fixture_on; then
+  case "${_premise_stall_arg:-}" in ''|*[!0-9]*) ;; *) PTY_STALL_ROUNDS="$_premise_stall_arg" ;; esac
+  case "${_premise_probe_arg:-}" in
+    ''|*[!0-9]*) ;;
+    *) [ "$_premise_probe_arg" -gt "$(p21_probe_ceil)" ] && PTY_INJECT_NEEDLE='◊P48-注入：状态永不到来◊' ;;
+  esac
+  [ "${_stall_arg:-0}" = "1" ] && PTY_INJECT_NEEDLE='◊P48-注入：状态永不到来◊'
+fi
 
 SECTIONS=("$@")
 [ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(settings groups wheel choices choices-schema write conflict seats readonly)
@@ -1880,20 +2045,40 @@ PY
 printf '\033[1m== panel-p21 · 项目设置视图（P22） ==\033[0m\n'
 for s in "${SECTIONS[@]}"; do
   mkdir -p "$tmp/$s"
-  case "$s" in
-    settings) scn_settings ;;
-    groups) scn_groups ;;
-    wheel) scn_wheel_settings ;;
-    choices) scn_choices ;;
-    choices-schema) scn_choices_schema ;;
-    write) scn_write ;;
-    conflict) scn_conflict ;;
-    seats) scn_seats ;;
-    readonly) scn_readonly ;;
-    *) printf 'panel-p21: 未知场景 %s\n' "$s" >&2; exit 3 ;;
+  # P48：每个场景在自己的子 shell 里跑。等待耗尽且归因于机器时 pty_on_skip 直接 exit 4，只结束
+  # 这个场景（后面的场景照跑）；父 shell 的 EXIT 清扫有自己的 BASHPID 守卫，不会被重复触发。
+  (
+    trap - EXIT INT TERM
+    p21_premise_line "$s"          # 前提行：每个场景第一个断言之前（真读数；只打不判）
+    if ! p21_entry_guard; then      # 粗闸门：超顶就在第一个等待之前停下这个场景
+      p21_entry_skip_line "$s"
+      exit 4
+    fi
+    case "$s" in
+      settings) scn_settings ;;
+      groups) scn_groups ;;
+      wheel) scn_wheel_settings ;;
+      choices) scn_choices ;;
+      choices-schema) scn_choices_schema ;;
+      write) scn_write ;;
+      conflict) scn_conflict ;;
+      seats) scn_seats ;;
+      readonly) scn_readonly ;;
+      *) printf 'panel-p21: 未知场景 %s\n' "$s" >&2; exit 3 ;;
+    esac
+  )
+  rc=$?
+  case "$rc" in
+    0) ;;
+    3) exit 3 ;;                                          # 搭建失败（server_up/未知场景）照旧
+    4) SKIP=$((SKIP + 1)) ;;                              # 可见 SKIP：无失败、无结论
+    *) ;;                                                 # 1 = 断言失败，最后按 FAIL 退出
   esac
 done
 
-printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
-[ "$FAIL" -eq 0 ] && exit 0
-exit 1
+PASS="$(p21_count_of "$_p21_count/ok")"
+FAIL="$(p21_count_of "$_p21_count/bad")"
+printf '\n\033[1m== 结果 ==\033[0m  ✓ %s  ✗ %s  SKIP %s\n' "$PASS" "$FAIL" "$SKIP"
+[ "$FAIL" -gt 0 ] && exit 1
+[ "$SKIP" -gt 0 ] && exit 4
+exit 0
