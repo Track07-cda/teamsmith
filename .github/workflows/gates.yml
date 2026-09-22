@@ -77,9 +77,13 @@ jobs:
         if: always()
         run: |
           mkdir -p .ci-artifacts
-          docker cp teamsmith-gates-run:/tmp/. .ci-artifacts/ 2>/dev/null || true
+          # 只拷现场家族，不拷整个 /tmp：整份拷贝会把 HOME 缓存里的**自指软链**带出来，
+          # 上传时 stat 直接 ELOOP（2026-09-22 12:24 实测：Upload 步骤失败、产物为零）。
+          for pat in teamsmith-smoke.\* panel-p21.\* config-cli.\* pty-wait-selftest.\*; do
+            docker cp "teamsmith-gates-run:/tmp/$pat" .ci-artifacts/ 2>/dev/null || true
+          done
           docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
-          echo "=== .ci-artifacts（前 20 项）==="; ls -la .ci-artifacts | head -20
+          echo "=== .ci-artifacts ==="; ls -la .ci-artifacts | head -20
 
       - name: Upload the failure scene
         if: failure()
