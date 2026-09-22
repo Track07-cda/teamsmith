@@ -67,12 +67,14 @@ jobs:
           # 所以这里把宿主的 .ci-artifacts 直接挂到容器的 /tmp：夹具现场、pane 回显、夹具日志
           # 全部落在宿主上，失败时由下一步上传。2026-09-22 那条 `choices` 红只剩三行结论、
           # 没有 scene dump，就是因为现场随容器一起没了。
+          # 另一层：套件默认**失败也删现场**（那行"（--keep 保留现场）"是提示，不是事实），
+          # 所以这里显式 `--keep`——第一次加上挂载的 run 依旧什么都没上传，正是这个原因。
           mkdir -p .ci-artifacts
           docker run --rm --pid=host \
             --user "$(id -u):$(id -g)" -e HOME=/tmp \
             -v "$PWD:/work:ro" -v "$PWD/.ci-artifacts:/tmp" -w /work \
             teamsmith-gates:ci \
-            bash -c 'openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null'
+            bash -c 'openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh --keep </dev/null'
 
       - name: Upload the failure scene
         if: failure()
