@@ -246,7 +246,7 @@ fixed command; nothing the worker types is ever interpolated into a shell line.
 Placeholders: `{summary_file}`, `{summary}`, `{agent}`, `{cwd}`, `{session_id}`, `{model}`, `{provider}`, `{skill_dir}`.
 
 - `{summary_file}` — the path teamsmith reserves for the summary (`<state>/summary-<agent>-<ID>.md`, `%q`-quoted).
-  Use it with a CLI that reads a file: `… notify pm --from-file {summary_file}`.
+  Use it with a CLI that reads a file: `… notify pm --from {agent} --from-file {summary_file}`.
 - `{summary}` — **kept for compatibility, but never interpolated as text**: for a worker's command it expands to
   a quoted read of the same summary file (`"$(cat '…')"`, and inside `'{summary}'` the single-quote-safe form), so
   existing templates keep working without turning a worker's summary into shell code. Tooling that calls the
@@ -258,10 +258,11 @@ Placeholders: `{summary_file}`, `{summary}`, `{agent}`, `{cwd}`, `{session_id}`,
 The two supported ways to receive the summary:
 
 ```sh
-# recommended: the CLI reads the file itself (no file read in the shell at all)
-TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
+# recommended: the CLI reads the file itself (no file read in the shell at all), and the sender is stated
+# explicitly so a runtime directory that names no seat can never be mis-attributed
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from {agent} --from-file {summary_file}'
 # also fine: teamsmith renders a quoted file read, the command shape stays yours
-TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from {agent} --from-file {summary_file}'
 ```
 
 The rendered prompt section contains only teamsmith-owned paths plus that command, and instructs the worker:
@@ -272,6 +273,15 @@ arguments and no quotes**.
  trailing blanks stripped) so the inbox keeps one entry per line, and preserves every other byte — quotes,
 `$`, backticks and `{agent}`-looking text arrive verbatim. A missing or empty summary file is a real failure
 (non-zero exit, nothing appended), so a hop-through-empty-file is never silently reported as “notified”.
+
+**The sender is not the recipient.** `team notify` attributes the message to the sender it resolves from the
+caller's runtime context: an explicit `--from <name>` claim wins (recorded verbatim; a disagreement with the
+runtime directory is named on stderr), otherwise the runtime directory — the project's main worktree resolves to
+`pm`, and a worktree under the main worktree's worktrees directory resolves to its own directory name, also when
+the command runs in one of its subdirectories. An inherited `TEAM_AGENT` never overrides the runtime directory.
+If neither names a sender the call **refuses** (non-zero, no inbox line, no knock) and names `--from`; a worker's
+notification is never recorded as `pm`. The same name appears on the durable inbox line, in the knock text and in
+the queued entry's `from:` field.
 
 Dispatch **warns but never blocks** when `TEAM_AGENT_NOTIFY_CMD` looks unusable (unknown placeholder, newline,
 whitespace-only, unexecutable first word) — that is the M3.0 contract. When that happens the prompt section is
@@ -538,7 +548,7 @@ The flag wins over the environment variable; the cap wins over both.
 # .pi/team/config.sh
 TEAM_AGENT_CMD='codex exec -C {cwd} -m {model} -s workspace-write "$(cat {prompt_file})"'
 TEAM_AGENT_BIN="$HOME/.bun/bin/codex"
-TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from {agent} --from-file {summary_file}'
 TEAM_AGENT_LOG_GLOB='~/.codex/sessions/**/*.jsonl'
 TEAM_AGENT_MODELS="dev=openai/gpt-5.6-terra"   # {model} → gpt-5.6-terra (the model name codex itself knows)
 ```
@@ -564,7 +574,7 @@ Notes:
 ```sh
 TEAM_AGENT_CMD='opencode run --model {provider}/{model} --dir {cwd} "$(cat {prompt_file})"'
 TEAM_AGENT_BIN="$HOME/.opencode/bin/opencode"
-TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}'
+TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from {agent} --from-file {summary_file}'
 TEAM_AGENT_LOG_GLOB='~/.local/share/opencode/log/*.log'
 TEAM_AGENT_MODELS="dev=google/gemini-3-flash-preview"
 ```

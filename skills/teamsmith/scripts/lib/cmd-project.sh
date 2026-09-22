@@ -43,7 +43,7 @@ board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign I
                   在 tmux 窗口起一个交互式 pi（默认复用会话，可断点续跑）
   say <a> "<一句话>" [--now]      往 agent 窗口发消息；目标输入框里有草稿就**延后投递**（state/outbox/
                    + 返回 queued）；--now = 故意跳过守卫粘字（记入 outbox/forced.log）
-  notify <a> "<一句话>"        agent → PM 一句话（写收件箱 + 唤醒 PM 窗口；草稿窗口忙则入队）
+  notify <a> "<一句话>" [--from <发送者>]   agent → PM 一句话（发送者按运行时目录解析；写收件箱 + 唤醒 PM 窗口）
   draft [pm]                  人的草稿入口：开/复用 draft 窗口跑 $EDITOR，保存退出后自动入队（不抢焦点）
   draft send [<文件>] [--now] 无头形式：把草稿文件整段投递（守卫路径）
   outbox [list]               延后队列：待投递条目（活动 + held，编号供 drop）

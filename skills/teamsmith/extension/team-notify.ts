@@ -20,7 +20,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 type Cfg = {
@@ -32,6 +32,7 @@ type Cfg = {
   dedupSec: number
   maxChars: number
   log: string
+  roster: string[]
 }
 
 const DEFAULTS: Cfg = {
@@ -43,6 +44,7 @@ const DEFAULTS: Cfg = {
   dedupSec: 20,
   maxChars: 150,
   log: '/tmp/teamsmith-notify.log',
+  roster: [],
 }
 
 /** 本扩展所在 skill 的目录（<skill>/extension/team-notify.ts） */
@@ -151,7 +153,18 @@ function readCfg(root: string): Cfg {
   const max = Number(pick('TEAM_INBOX_MAX_CHARS') ?? NaN)
   if (Number.isFinite(max) && max > 0) cfg.maxChars = max
   cfg.log = pick('TEAM_NOTIFY_LOG') ?? cfg.log
+  cfg.roster = (pick('TEAM_AGENTS') ?? '').split(/[\s,]+/).filter(Boolean)
   return cfg
+}
+
+/** 发送者解析（与 CLI 的 team_sender_from_dir 同规则，见 openspec/changes/notify-sender-identity/design.md §2）：
+ *  cwd 在 <root>/<worktrees>/ 之下（上面那个守卫已经证明）→ 路径的一级目录名就是席位；名册里真有这个名字时
+ *  取名册里的拼写，不匹配时目录名自己就是发送者（review-<ID> 这类非席位目录也算名字）。推不出来 → 空串。 */
+function senderFromDir(cwd: string, wtPrefix: string, roster: string[]): string {
+  const rel = `${cwd}`.slice(wtPrefix.length)
+  const first = rel.split('/')[0] ?? ''
+  if (!first) return ''
+  return roster.find(name => name === first) ?? first
 }
 
 function tail(line: string, max: number): string {
@@ -268,8 +281,15 @@ export default function (pi: ExtensionAPI) {
       return
     }
 
-    // agent 名：tmux 窗口名优先；无 tmux（headless/脚本）时用 worktree 目录名（约定 .worktrees/<agent>）
-    const agent = window || basename(resolve(cwd))
+    // P82（notify-sender-identity）：发送者 = **运行时目录**（M40 身份），不是窗口名。
+    // cwd 在这个守卫里已经证明位于 <root>/<worktrees>/ 之下 → 取那段路径的一级目录名（名册里的席位优先）；
+    // 窗口名是可改的 UI 状态、headless 时不存在，只用来发现并记录分歧（设计 §2 的裁决）。
+    const agent = senderFromDir(resolve(cwd), wtPrefix, cfg.roster)
+    if (!agent) {
+      log(`skip settle (worktrees prefix matches but names no sender): cwd=${cwd}`, cfg)
+      return
+    }
+    if (window && window !== agent) log(`window ${window} ignored: the runtime directory names ${agent}`, cfg)
     const branch = run('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'])
     const task = /^(?:task|agent)\/([^/]+)/.exec(branch)?.[1] ?? ''
     const id = task.split('-')[0] || 'unknown'

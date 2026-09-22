@@ -1100,10 +1100,12 @@ team_cmd_say() {
   esac
 }
 
-team_inbox_append() { # <agent> <tag> <msg>
+team_inbox_append() { # <agent> <tag> <msg> [<sender>]
   local dir; dir="$(team_inbox_dir)"
   mkdir -p "$dir"
-  printf -- '- %s [%s] agent:%s · %s\n' "$(team_timestamp)" "$2" "$1" "$3" >> "$dir/$1.md"
+  # P82：第 4 参可选 = **发送者**（notify 传解析出来的发送者，收件人只当文件名）；
+  # say/draft/pulse 不传，沿用「owner 标签」（它们另有 --from/标签语义，本次不动）。
+  printf -- '- %s [%s] agent:%s · %s\n' "$(team_timestamp)" "$2" "${4:-$1}" "$3" >> "$dir/$1.md"
 }
 
 # notify 的去重键：内容 + 长度（同一份通知在 TEAM_NOTIFY_DEDUP_SEC 内只入队/投递一次）。
@@ -1116,36 +1118,58 @@ team_notify_dedup_key() { # <agent> <msg>
 }
 
 team_cmd_notify() {
-  local from_file="" msg any=0
-  while [ "${1:-}" = "--any" ]; do any=1; shift; done
-  local agent="${1:?usage: notify <agent> <单行消息> | notify <agent> --from-file <摘要文件>}"; shift
-  while [ "${1:-}" = "--any" ]; do any=1; shift; done
-  if [ "${1:-}" = "--from-file" ]; then
-    from_file="${2:?notify --from-file 需要摘要文件路径}"; shift 2
+  local from_file="" msg="" agent="" any=0 claim="" claim_set=0 have_msg=0
+  # P82：--from <名字> 是**发送者**的显式声明（收件人永远只是收件人）。参数顺序自由，
+  # 其余位置参数拼成摘要（保持「notify <收件人> <单行消息>」的老形状）。
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --any) any=1; shift ;;
+      --from) [ $# -ge 2 ] || team_usage_die "notify --from 需要发送者名字"; claim="$2"; claim_set=1; shift 2 ;;
+      --from=*) claim="${1#*=}"; claim_set=1; shift ;;
+      --from-file) [ $# -ge 2 ] || team_usage_die "notify --from-file 需要摘要文件路径"; from_file="$2"; shift 2 ;;
+      --from-file=*) from_file="${1#*=}"; shift ;;
+      -*) team_usage_die "notify: 未知参数 $1" ;;
+      *) if [ -z "$agent" ]; then agent="$1"; else msg="${msg:+$msg }$1"; have_msg=1; fi; shift ;;
+    esac
+  done
+  [ -n "$agent" ] || team_usage_die "notify <agent> <单行消息> | notify <agent> --from-file <摘要文件> [--from <发送者>]"
+  # 名字是一个词（席位名/目录名）：空白/换行会把 `agent:<名字> ·` 这行弄成两行（账本行的形状要守得住）
+  if [ "$claim_set" = "1" ]; then
+    case "$claim" in
+      "") team_usage_die "notify --from 的发送者名字不能为空" ;;
+      *[[:space:]]*) team_usage_die "notify --from 的发送者名字里有空白（'$claim'）：名字是一个词，摘要请走 --from-file" ;;
+    esac
   fi
-  while [ "${1:-}" = "--any" ]; do any=1; shift; done
+  # 摘要只有一个来源：位置文本与 --from-file 同时给 = 含糊输入，拒绝（不静默挑一个）
+  if [ -n "$from_file" ] && [ "$have_msg" = "1" ]; then
+    team_usage_die "notify：位置摘要与 --from-file 不能同时给（摘要只有一个来源，请二选一）"
+  fi
+  # 发送者先解析（fail closed）：未解析就在这里停住 —— 收件箱行、knock、outbox 条目一个都不写。
+  local sender; sender="$(team_sender_resolve "$claim")" || return 1
+  [ -n "$sender" ] || return 1
   # 摘要始终是**数据**：--from-file 从文件读（worker 的文本不经过 shell）；两种路径都归一化成单行，
   # 但除换行/回车/尾部空白外**逐字节保留**（引号、$、反引号、{} 都原样进收件箱）。
   if [ -n "$from_file" ]; then
     [ -f "$from_file" ] || team_die "notify --from-file：文件不存在（$from_file）——worker 要先把摘要写进去"
     msg="$(team_one_line "$(cat "$from_file")")"
   else
-    [ $# -gt 0 ] || team_usage_die "notify <agent> <单行消息> | notify <agent> --from-file <摘要文件>"
-    msg="$(team_one_line "$*")"
+    [ "$have_msg" = "1" ] || team_usage_die "notify <agent> <单行消息> | notify <agent> --from-file <摘要文件> [--from <发送者>]"
+    msg="$(team_one_line "$msg")"
   fi
   if [ -z "$(team_trim "$msg")" ]; then
     if [ -n "$from_file" ]; then team_die "notify --from-file：摘要文件是空的（$from_file）"
     else team_die "notify：摘要不能为空（收到空参数；如果用 \"\$(cat <摘要文件>)\" 取摘要，先确认那个文件写好且非空）"; fi
   fi
   team_require_recipient "$agent" "$any" notify || return 1
-  team_inbox_append "$agent" manual "$msg" \
+  # P82：发送者进 durable 收件箱行（第 4 参），收件人仍是文件名
+  team_inbox_append "$agent" manual "$msg" "$sender" \
     || team_warn "notify：收件箱行写不进去（$TEAM_DOCS_DIR/inbox/$agent.md）—— 下面的投递会把这条声明当已落地"
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
   # M30 · pi 通道优先：目标有**活的**收件箱监视器时，敲门交给它（注册里的 pid+cwd 就是「PM 会话活着」
   # 的证据，比 tmux/pane 启发式直接），而且这条链不需要 tmux、不碰输入框。
   # --inbox-written pm：上面的 durable 行已经写了，通道不能再写一遍（条目头部的契约）。
   if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_inbox_watch_route "$target" >/dev/null 2>&1; then
-    team_send_guarded "$target" "[manual] agent:$agent · $msg" knock --from "$agent" \
+    team_send_guarded "$target" "[manual] agent:$sender · $msg" knock --from "$sender" \
       --dedup "$(team_notify_dedup_key "$agent" "$msg")" --inbox-written pm
     case "$TEAM_SEND_OUTCOME" in
       watched) team_dim "  pi 监视通道：收件箱已写，会话里的监视扩展负责唤醒（输入框零按键）" ;;
@@ -1157,7 +1181,7 @@ team_cmd_notify() {
      && team_pm_alive; then
     # 只给「正在跑 pi 的 PM」打字：PM 没在跑时写进 shell 会被当命令执行。
     # 敲门也走投递守卫：输入框里有草稿 → 入队，草稿不动（规格 notify-and-inbox 的 dirty-PM 场景）
-    team_send_guarded "$target" "[manual] agent:$agent · $msg" knock --from "$agent" \
+    team_send_guarded "$target" "[manual] agent:$sender · $msg" knock --from "$sender" \
       --dedup "$(team_notify_dedup_key "$agent" "$msg")" --inbox-written pm
     case "$TEAM_SEND_OUTCOME" in
       queued) team_dim "  PM 输入框里有草稿：敲门入队（$TEAM_CLI outbox list），清空后自动投递" ;;

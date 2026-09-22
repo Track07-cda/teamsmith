@@ -640,6 +640,67 @@ team_identity_env_prefix() { # [<目标目录>]
   printf '%s' "$out"
 }
 
+# ---------------------------------------------------------------- P82 · 发送者 = 运行时目录
+# 事故（P72 的提案实测）：`team notify pm --from-file <worker 摘要>` 在 worker 工作树里跑，durable 收件箱行、
+# knock 文本、outbox 条目的 from: 三处都写 `agent:pm` —— 收件人冒充发送者（PM 的收件箱里 55 行
+# `[manual] agent:pm` 的作者对不上 docs/team/reports/**）。假绿比没有更糟（references/philosophy.md），
+# 所以：解析不出来**拒绝**，绝不静默退回 `pm`。规则只在这两个函数里实现一处：
+#   --from <名字>（显式声明，原样记录）＞ 运行时目录（M40 身份；主工作树 → pm，
+#   <main>/<worktrees>/<name> → <name>，在它的子目录里跑也算）＞ 未解析（调用方负责拒绝）。
+# 收件人**永远只是收件人**（收件箱文件名 + 敲门目标）。
+
+# 运行时目录 → 座位名；推不出来 → 空（stdout）。
+team_sender_from_dir() { # → stdout: <座位名> | 空
+  local main="${TEAM_MAIN_ROOT:-}" root="${TEAM_ROOT:-}" wt="${TEAM_WORKTREES_DIR:-.worktrees}"
+  local nroot nmain nprefix rest n a
+  [ -n "$main" ] && [ -n "$root" ] || return 0
+  # 物理路径比较：软链/尾斜杠/相对路径都不许把「同一个工作树」判成两个
+  nroot="$(team_identity_norm_dir "$root")"
+  nmain="$(team_identity_norm_dir "$main")"
+  [ -n "$nroot" ] || return 0
+  # 主工作树 = PM 自己（M40：身份就是运行时目录，不是继承来的 TEAM_*）
+  [ "$nroot" = "$nmain" ] && { printf 'pm\n'; return 0; }
+  case "$wt" in /*) nprefix="$(team_identity_norm_dir "$wt")" ;; *) nprefix="$(team_identity_norm_dir "$nmain/$wt")" ;; esac
+  case "$nroot" in
+    "$nprefix"/*) rest="${nroot#"$nprefix"/}" ;;
+    *) return 0 ;;                 # 本项目的其它工作树（worktree add 到别处）→ 未解析
+  esac
+  n="${rest%%/*}"                  # worktrees 目录下的一级目录名（review-<ID> 这类非席位目录也算名字）
+  [ -n "$n" ] || return 0
+  # 名册优先：名字与席位一致时用名册里的拼写（大小写/别名以名册为准；不等则照目录名记）
+  for a in $(team_agents); do
+    [ "$n" = "$a" ] && { printf '%s\n' "$a"; return 0; }
+  done
+  printf '%s\n' "$n"
+}
+
+# 一次解析出**发送者**（收件人不是发送者）。显式 --from ＞ 运行时目录 ＞ 拒绝。
+# 拒绝 = 返回 1（调用方必须在此之后**什么都不写**：不收件箱行、不入队 knock），错误里点名 --from。
+team_sender_resolve() { # [<显式 --from>] → stdout:<发送者>；1 = 未解析（已打错误）
+  local claim="${1:-}" dir=""
+  dir="$(team_sender_from_dir)"
+  if [ -n "$claim" ]; then
+    if [ -n "$dir" ] && [ "$claim" != "$dir" ]; then
+      team_warn "notify：--from $claim 与运行时目录解析出的座位 '$dir' 不一致 —— 按显式声明记 $claim（目录：$TEAM_ROOT）"
+    elif [ -z "$dir" ]; then
+      team_dim "notify：运行时目录（${TEAM_ROOT:-$PWD}）给不出座位名 —— 按显式声明记 --from $claim" >&2
+    fi
+    printf '%s\n' "$claim"
+    return 0
+  fi
+  if [ -z "$dir" ]; then
+    team_err "notify：发送者无法解析 —— 运行时目录（${TEAM_ROOT:-$PWD}）不在本项目的工作树里（主工作树，或 $TEAM_MAIN_ROOT/${TEAM_WORKTREES_DIR:-.worktrees}/<名字>）"
+    team_dim "  发送者按运行时目录解析，绝不用收件人冒充；这里没有任何东西被写入。" >&2
+    team_dim "  从别处调用请显式声明发送者：$TEAM_CLI notify <收件人> --from <你的名字> --from-file <摘要文件>" >&2
+    return 1
+  fi
+  # 继承来的 TEAM_AGENT（dispatch/install 都不设它）绝不许压过运行时目录 —— 分歧点名，目录赢
+  if [ -n "${TEAM_AGENT:-}" ] && [ "$TEAM_AGENT" != "$dir" ]; then
+    team_warn "notify：忽略继承的 TEAM_AGENT=$TEAM_AGENT —— 发送者按运行时目录记 '$dir'（$TEAM_ROOT）"
+  fi
+  printf '%s\n' "$dir"
+}
+
 # ---------------------------------------------------------------- 配置
 # 查找顺序：$TEAM_CONFIG_FILE → 从 $TEAM_ROOT（没有就用 $PWD）向上找 .pi/team/config.sh
 team_find_config() {

@@ -13698,6 +13698,222 @@ assert_eq "P86 ② 全部帧：修后翻成忙的恰好是三份 F1 帧（修复
   "$(printf '%s\n' p86-f1-mixed-width-disjoint-box.txt p86-f1-narrower-width-disjoint-box.txt p86-f1-spinner-top-disjoint-box.txt | sort | tr '\n' ' ')"
 assert_eq "P86 ③ 全部帧：相对最近的旧顺序也没有 BUSY→EMPTY" "${P86_LEGACY:-none}" "none"
 
+# ---------------------------------------------------------------- 47. P82 · notify 发送者 = 运行时目录
+# change: notify-sender-identity（delta = specs/notify-and-inbox 的 ADDED「A manual notification is
+# attributed to its sender, not its recipient」）。事故（P72 提案实测）：worker 在 .worktrees/<name> 里跑
+# `team notify pm --from-file <摘要>`，**收件箱行 / knock 文本 / 条目的 from: 三处都写 `agent:pm`** ——
+# 收件人冒充发送者，PM 的 durable 收件箱对不上 docs/team/reports/**（假绿比没有更糟：philosophy.md）。
+# 本段钉住四条：显式 --from ＞ 运行时目录（主工作树 → pm；.worktrees/<name> → 目录名，含子目录）
+# ＞ 未解析 = 拒绝（非 0 + 零收件箱行 + 零 knock，输出点名 --from）；TEAM_AGENT 不许压过目录；
+# 收件人仍然只是收件人（文件名 + 敲门目标）。两条路同源（[auto] 由扩展负责）在 3.x 的对手段落里。
+section "47 · P82 notify 发送者 = 运行时目录（notify-sender-identity）"
+
+P82R="$TMP/p82repo"; rm -rf "$P82R"; mkdir -p "$P82R"
+( cd "$P82R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# p82' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+P82_SES="teamsmith-smoke-p82-$$"
+( cd "$P82R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$P82_SES" --agents "dev dev2" --vcs local --gates true --docs docs/team ) >"$TMP/p82-init.log" 2>&1 \
+  && ok "P82 夹具仓库 init 成功" || bad "P82 夹具仓库 init 失败（见 $TMP/p82-init.log）"
+( cd "$P82R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p82-paths.json" 2>&1 || true
+assert_eq "P82 隔离：team paths 的 main_root 就是 P82 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/p82-paths.json")" "$P82R"
+# 夹具配置：扩展那一半不敲门（[auto] 只验收件箱归属），并把它的日志引到夹具自己能读的位置；
+# CLI 的两处由 env 显式控制（env 压过文件）
+cat >> "$P82R/.pi/team/config.sh" <<EOS
+
+# P82 夹具
+TEAM_NOTIFY_TMUX=0
+TEAM_NOTIFY_LOG="$TMP/p82-ext.log"
+EOS
+if git -C "$P82R" add -A >/dev/null 2>&1 && git -C "$P82R" commit -qm "chore: init scaffold" >/dev/null 2>&1; then
+  ok "P82 夹具：init 脚手架已入账"
+else
+  bad "P82 夹具：init 脚手架提交失败"
+fi
+P82_WT="$P82R/.worktrees/dev2"
+git -C "$P82R" worktree add -q -b task/P82-smoke "$P82_WT" main >/dev/null 2>&1
+if [ -e "$P82_WT/.git" ]; then ok "P82 夹具：席位 dev2 的工作树就位（.worktrees/dev2）"; else bad "P82 夹具：dev2 工作树起不来（后续断言无意义）"; fi
+P82_OUT="$TMP/p82-elsewhere"
+git -C "$P82R" worktree add -q -b task/P82-elsewhere "$P82_OUT" main >/dev/null 2>&1
+if [ -e "$P82_OUT/.git" ]; then ok "P82 夹具：项目外的第二棵工作树就位（$P82_OUT）"; else bad "P82 夹具：项目外的第二棵工作树起不来"; fi
+
+printf 'P82-SUMMARY-1\n' > "$TMP/p82-sum.txt"
+P82_INBOX="$P82R/docs/team/inbox/pm.md"
+p82_ck() { cksum "${1:-$P82_INBOX}" 2>/dev/null | awk '{print $1":"$2}'; }
+# 夹具命令：清掉继承身份（M40 纪律）+ 关掉敲门 —— 这一组只看**解析出的发送者**与 durable 行
+p82() { ( cd "$1" ; shift; env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT -u TEAM_SKILL_DIR \
+            TEAM_NOTIFY_TMUX=0 $TEAM "$@" ); }
+p82_last() { tail -1 "${1:-$P82_INBOX}" 2>/dev/null | sed 's/.*\[manual\] //'; }
+
+# ── 1.2 运行时目录：worker 工作树（根 / 子目录）→ 席位名；主工作树 → pm ──────────────────────
+p82 "$P82_WT" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-worker.log" 2>&1 \
+  && ok "P82 1.2 worker 工作树里 notify 退出码 0" || bad "P82 1.2 worker 工作树里 notify 失败"
+assert_eq "P82 1.2 发送者 = 工作树目录名（不是收件人 pm）" "$(p82_last)" "agent:dev2 · P82-SUMMARY-1"
+assert_eq "P82 1.2 这一刻没有任何一行被记成 pm" "$(grep -c 'agent:pm' "$P82_INBOX")" "0"
+p82 "$P82_WT/docs" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-sub.log" 2>&1 \
+  && ok "P82 1.2 工作树的子目录里 notify 退出码 0" || bad "P82 1.2 工作树的子目录里 notify 失败"
+assert_eq "P82 1.2 在 <worktree>/docs 里跑也解析成 dev2（不是 docs）" "$(p82_last)" "agent:dev2 · P82-SUMMARY-1"
+p82 "$P82R" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-main.log" 2>&1 \
+  && ok "P82 1.2 主工作树里 notify 退出码 0" || bad "P82 1.2 主工作树里 notify 失败"
+assert_eq "P82 1.2 主工作树 → pm（PM 自己的通知仍记 pm）" "$(p82_last)" "agent:pm · P82-SUMMARY-1"
+
+# ── 1.3 继承的 TEAM_AGENT 不许压过运行时目录（分歧点名，目录赢）─────────────────────────────
+( cd "$P82_WT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_SKILL_DIR \
+    TEAM_AGENT=pm TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from-file "$TMP/p82-sum.txt" ) >"$TMP/p82-agentenv.log" 2>&1 \
+  && ok "P82 1.3 带 TEAM_AGENT=pm 的 worker 环境 notify 退出码 0" || bad "P82 1.3 带 TEAM_AGENT=pm 的 worker 环境 notify 失败"
+assert_eq "P82 1.3 发送者仍是运行时目录的 dev2（继承值不许赢）" "$(p82_last)" "agent:dev2 · P82-SUMMARY-1"
+assert_has "$TMP/p82-agentenv.log" "TEAM_AGENT=pm" "P82 1.3 stderr 点名被忽略的 TEAM_AGENT 值"
+
+# ── 1.1 显式 --from：原样记录；与运行时目录分歧时点名 ────────────────────────────────────────
+p82 "$P82_WT" notify pm --from dev3 --from-file "$TMP/p82-sum.txt" >"$TMP/p82-claim.log" 2>&1 \
+  && ok "P82 1.1 worker 里的显式 --from 退出码 0" || bad "P82 1.1 worker 里的显式 --from 失败"
+assert_eq "P82 1.1 显式 --from 原样记录（压过运行时目录）" "$(p82_last)" "agent:dev3 · P82-SUMMARY-1"
+assert_has "$TMP/p82-claim.log" "不一致" "P82 1.1 --from 与运行时目录的分歧在 stderr 点名"
+p82 "$P82R" notify pm --from dev3 --from-file "$TMP/p82-sum.txt" >"$TMP/p82-claim-main.log" 2>&1 \
+  && ok "P82 1.1 主工作树里的 --from dev3 退出码 0" || bad "P82 1.1 主工作树里的 --from dev3 失败"
+assert_eq "P82 1.1 主工作树里 --from 也原样记录" "$(p82_last)" "agent:dev3 · P82-SUMMARY-1"
+assert_has "$TMP/p82-claim-main.log" "'pm'" "P82 1.1 分歧点名运行时目录的座位（pm）"
+
+# ── 1.4 未解析 = 拒绝：非 0 + 零收件箱行 + 零 knock + 输出点名 --from ─────────────────────────
+P82_BEFORE="$(p82_ck)"
+if p82 "$P82_OUT" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-refuse.log" 2>&1; then
+  bad "P82 1.4 项目外的工作树里 notify 应当拒绝（当前退出码 0）"
+else
+  ok "P82 1.4 项目外的工作树（不在 .worktrees/ 下）→ 非 0 退出"
+fi
+assert_eq "P82 1.4 拒绝时零写入：收件箱逐字节不变" "$(p82_ck)" "$P82_BEFORE"
+assert_eq "P82 1.4 拒绝时零 knock：队列里没有条目" \
+  "$(find "$P82R/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_has "$TMP/p82-refuse.log" "发送者无法解析" "P82 1.4 拒绝时说明原因"
+assert_has "$TMP/p82-refuse.log" "--from" "P82 1.4 拒绝输出点名 --from（唯一的出路）"
+assert_not "$TMP/p82-refuse.log" "agent:pm" "P82 1.4 绝不静默退回 pm（输出里没有 agent:pm 的假声明）"
+
+# ── 1.5（前半）--from 是项目外目录的出路 ─────────────────────────────────────────────────────
+p82 "$P82_OUT" notify pm --from dev3 --from-file "$TMP/p82-sum.txt" >"$TMP/p82-out-claim.log" 2>&1 \
+  && ok "P82 1.5 项目外的工作树里显式 --from 是出路（退出码 0）" || bad "P82 1.5 项目外的工作树里显式 --from 失败"
+assert_eq "P82 1.5 显式声明原样记录" "$(p82_last)" "agent:dev3 · P82-SUMMARY-1"
+
+# ── 1.6 收件人仍然只是收件人：文件名 + 敲门目标；发送者照旧是 worker ──────────────────────────
+p82 "$P82_WT" notify dev --from-file "$TMP/p82-sum.txt" >"$TMP/p82-dev.log" 2>&1 \
+  && ok "P82 1.6 worker → dev 的 notify 退出码 0" || bad "P82 1.6 worker → dev 的 notify 失败"
+assert_eq "P82 1.6 收件人 = 文件名：行落在 inbox/dev.md" "$(p82_last "$P82R/docs/team/inbox/dev.md")" "agent:dev2 · P82-SUMMARY-1"
+assert_has "$P82R/docs/team/inbox/dev.md" "agent:dev2" "P82 1.6 dev 的收件箱里发送者仍是 worker（不是 pm）"
+
+# ── 含糊输入：位置摘要与 --from-file 同时给 → 拒绝（摘要只有一个来源，不静默挑一个）─────────
+P82_BEFORE2="$(p82_ck)"
+if p82 "$P82_WT" notify pm "positional summary" --from-file "$TMP/p82-sum.txt" >"$TMP/p82-mixed.log" 2>&1; then
+  bad "P82：位置摘要与 --from-file 同时给应当被拒（当前退出码 0）"
+else
+  ok "P82：位置摘要与 --from-file 同时给 → 非 0（含糊输入不静默挑一个）"
+fi
+assert_eq "P82：含糊输入拒绝时零写入" "$(p82_ck)" "$P82_BEFORE2"
+assert_has "$TMP/p82-mixed.log" "摘要只有一个来源" "P82：拒绝时说清原因"
+
+# ── 1.5（后半）三处同名：收件箱行 / knock 文本 / 条目的 from:（假 tmux + 脏 PM 输入框）─────────
+P82_SHIM="$TMP/p82-shim"; mkdir -p "$P82_SHIM"
+P82_BOX="$TMP/p82-box-draft"
+printf '%s\n' "$(printf '%.0s─' $(seq 1 80))" "" "半句草稿 half a sentence" "" " k3  Kimi Coding  max" "$(printf '%.0s─' $(seq 1 80))" "footer" > "$P82_BOX"
+cp "$(command -v sleep)" "$TMP/p82-pm-bin" 2>/dev/null || cp /bin/sleep "$TMP/p82-pm-bin"
+( cd "$P82R" && exec "$TMP/p82-pm-bin" 300 ) & P82_PM_PID=$!
+printf '%s\n' "$P82_PM_PID" > "$TMP/p82-pm.pid"
+mkdir -p "$P82R/.pi/team/state"; printf '%s\n' "$P82_PM_PID" > "$P82R/.pi/team/state/pm.pid"
+cat > "$P82_SHIM/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP/p82-tmux.log"
+case "\$*" in
+  *cursor_y*) printf '2\n'; exit 0 ;;
+  *capture-pane*) cat "$P82_BOX"; exit 0 ;;
+  *pane_current_command*) printf 'p82-pm-bin\n'; exit 0 ;;
+  *pane_id*) printf '%%1\n'; exit 0 ;;
+  *pane_pid*) cat "$TMP/p82-pm.pid"; exit 0 ;;
+  *bracket_paste_flag*) printf '1\n'; exit 0 ;;
+  *window_name*) printf 'pm\n'; exit 0 ;;
+  *session_name*) printf '%s\n' "$P82_SES"; exit 0 ;;
+  *list-windows*) printf 'pm\n'; exit 0 ;;
+  *has-session*) exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$P82_SHIM/tmux"
+rm -rf "$P82R/.pi/team/state/outbox"
+( cd "$P82_WT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT -u TEAM_SKILL_DIR \
+    PATH="$P82_SHIM:$PATH" TMUX="$P82_SES,0,0" TEAM_NOTIFY_TMUX=1 TEAM_PM_BIN="$TMP/p82-pm-bin" \
+    $TEAM notify pm --from-file "$TMP/p82-sum.txt" ) >"$TMP/p82-knock.log" 2>&1 \
+  && ok "P82 1.5 脏 PM 框里的 notify 退出码 0" || bad "P82 1.5 脏 PM 框里的 notify 失败"
+assert_has "$TMP/p82-knock.log" "敲门入队" "P82 1.5 脏框 → knock 入队（不是打字）"
+assert_not "$TMP/p82-tmux.log" "send-keys" "P82 1.5 脏框：一个键都没发"
+P82_ENTRY="$(find "$P82R/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | head -1)"
+assert_file "$P82_ENTRY" "P82 1.5 队列里有这条 knock 条目"
+assert_eq "P82 1.5 队列里恰好一条" "$(find "$P82R/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
+assert_has "$P82_ENTRY" "from: dev2" "P82 1.5 条目的 from: 是发送者（不是收件人 pm）"
+assert_has "$P82_ENTRY" "[manual] agent:dev2 · P82-SUMMARY-1" "P82 1.5 knock 文本与 from: / 收件箱行同名"
+kill "$P82_PM_PID" 2>/dev/null || true
+
+# ── 3.1/3.2 两条路同名：[manual]（CLI）与 [auto]（扩展 settle）同一个运行时上下文 ────────────
+# 判据是**提取两行的 `agent:<名字>` token 比较**（不是子串计数）：一行还写 `agent:pm` 就必须红。
+# 3.2 把窗口名故意报成 `dev`（cwd 仍是 .worktrees/dev2）：窗口是可改的 UI 状态，两条路都得说 dev2。
+if [ -z "$TS_RUNNER" ]; then
+  cond_skip "P82 3.1/3.2 两条路同名（需要 node 类型剥离或 bun 跑 TS 扩展）"
+else
+  P82_WIN_FILE="$TMP/p82-ext-window"
+  P82_EXT_LOG="$TMP/p82-ext.log"
+  P82_EXT_SHIM="$TMP/p82-ext-shim"; mkdir -p "$P82_EXT_SHIM"
+  # 假 tmux：窗口/会话名从**文件**读（bun 的 execFileSync 不把运行期 process.env 改动传给子进程）
+  cat > "$P82_EXT_SHIM/tmux" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *window_name*)  cat "$P82_WIN_FILE" 2>/dev/null || printf 'dev\n' ;;
+  *session_name*) printf '%s\n' "$P82_SES" ;;
+  *pane_current_command*) printf 'pi\n' ;;
+esac
+exit 0
+EOF
+  chmod +x "$P82_EXT_SHIM/tmux"
+  cat > "$TMP/p82-ext.mjs" <<'EOS'
+import { existsSync, readFileSync } from 'node:fs'
+const [, , ext, root, wt] = process.argv
+const mod = await import(ext)
+const handlers = {}
+mod.default({ on: (n, f) => { (handlers[n] ||= []).push(f) }, registerCommand: () => {}, registerTool: () => {}, sendMessage: () => {} })
+process.env.TMUX_PANE = 'p82-ext-pane'          // 有 pane 才会去问窗口名（3.2 的对抗性就在这里）
+const last = { role: 'assistant', stopReason: 'stop', content: [{ text: String(process.env.P82_EXT_TEXT ?? '') }] }
+for (const fn of handlers.agent_settled ?? []) await fn({}, { cwd: wt, sessionManager: { getEntries: () => [{ message: last }] } })
+EOS
+  p82_token() { tail -1 "$1" 2>/dev/null | sed -n 's/.*\(agent:[^ ]*\) ·.*/\1/p'; }
+  p82_pair_reset() { # 一个运行时上下文一个回合：清掉上一回合的收件箱/去重/日志
+    rm -f "$P82R/docs/team/inbox/pm.md" "$P82R/docs/team/inbox/dev2.md" "$P82R/docs/team/inbox/dev.md"
+    rm -f "$P82R/.pi/team/state/notify-dedup"
+    : > "$P82_EXT_LOG"
+  }
+  # 3.1 窗口名与席位一致（dev2）
+  printf 'dev2\n' > "$P82_WIN_FILE"
+  p82_pair_reset
+  printf 'P82-PAIR-A\n' > "$TMP/p82-sum.txt"
+  p82 "$P82_WT" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-pair-cli-a.log" 2>&1 || true
+  P82_TOKEN_CLI="$(p82_token "$P82_INBOX")"
+  P82_EXT_TEXT='P82-PAIR-A' PATH="$P82_EXT_SHIM:$PATH" "$TS_RUNNER" "$TMP/p82-ext.mjs" \
+    "$SKILL_DIR/extension/team-notify.ts" "$P82R" "$P82_WT" >"$TMP/p82-ext-a.log" 2>&1 || true
+  P82_TOKEN_EXT="$(p82_token "$P82R/docs/team/inbox/dev2.md")"
+  assert_eq "P82 3.1 [manual] 这一路的发送者（CLI，窗口 dev2）" "$P82_TOKEN_CLI" "agent:dev2"
+  assert_eq "P82 3.1 [auto] 这一路的发送者（扩展，窗口 dev2）" "$P82_TOKEN_EXT" "agent:dev2"
+  assert_eq "P82 3.1 两条路的 agent:<名字> token 相同（一个运行时上下文）" "$P82_TOKEN_CLI" "$P82_TOKEN_EXT"
+  # 3.2 对抗性窗口：扩展被告知窗口叫 dev，而 cwd 是 .worktrees/dev2
+  printf 'dev\n' > "$P82_WIN_FILE"
+  p82_pair_reset
+  printf 'P82-PAIR-B\n' > "$TMP/p82-sum.txt"
+  p82 "$P82_WT" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-pair-cli-b.log" 2>&1 || true
+  P82_TOKEN_CLI_B="$(p82_token "$P82_INBOX")"
+  P82_EXT_TEXT='P82-PAIR-B' PATH="$P82_EXT_SHIM:$PATH" "$TS_RUNNER" "$TMP/p82-ext.mjs" \
+    "$SKILL_DIR/extension/team-notify.ts" "$P82R" "$P82_WT" >"$TMP/p82-ext-b.log" 2>&1 || true
+  P82_TOKEN_EXT_B="$(p82_token "$P82R/docs/team/inbox/dev2.md")"
+  assert_eq "P82 3.2 窗口撒谎（报 dev）时 [manual] 这一路仍是 dev2" "$P82_TOKEN_CLI_B" "agent:dev2"
+  assert_eq "P82 3.2 窗口撒谎（报 dev）时 [auto] 这一路仍是 dev2（窗口前：dev2）" "$P82_TOKEN_EXT_B" "agent:dev2"
+  assert_eq "P82 3.2 两条路在对抗性窗口下仍然同名" "$P82_TOKEN_CLI_B" "$P82_TOKEN_EXT_B"
+  assert_not_file "$P82R/docs/team/inbox/dev.md" "P82 3.2 窗口名没有变成发送者（不存在 inbox/dev.md）"
+  assert_has "$P82_EXT_LOG" "window dev ignored: the runtime directory names dev2" "P82 3.2 扩展日志点名被忽略的窗口"
+fi
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"

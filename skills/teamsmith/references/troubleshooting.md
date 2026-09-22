@@ -626,7 +626,7 @@ When the team lane is not available (a custom adapter without `{bg_ext}`), use t
 
 | | Lane A · the team's own background lane (`team-bg`) | Lane B · a background tmux window |
 |---|---|---|
-| What runs | the **agent** starts the job, ends its turn, and is woken when the job exits | the PM starts the command in a dedicated tmux window and reads the tail — or the runner writes one inbox line (`team notify pm --from-file <file>`) when it is done |
+| What runs | the **agent** starts the job, ends its turn, and is woken when the job exits | the PM starts the command in a dedicated tmux window and reads the tail — or the runner writes one inbox line (`team notify pm --from <agent> --from-file <file>`) when it is done |
 | Who gets woken | the bundled extension wakes the agent session that started the job | the PM looks at the window / reads the inbox |
 | Cost | none — the extension ships with the skill | one window, no dependency |
 | Watch out | the four rules below are what the extension enforces | a stray window is easy to lose: name it, and make it print a one-line verdict at the end (`echo "GATES rc=$? <ID>"`) |
