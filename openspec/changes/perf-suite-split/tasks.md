@@ -145,3 +145,9 @@ visible SKIP, never a silent host run presented as the reference.
 > PM 独立三向翻转：把判定塞回门禁 → 红并点名 `file:line`；把 `perf.sh` 的标记改名 → 红；摘掉 `panel-knobs.sh` → 红；还原 → 绿。
 > 复验发现的 F1（`gate-guard.sh` 缺标记时同时打印 `bad` 与 `ok`）已由 dev2 返工修复，修复后 PM 复跑同一翻转确认只剩 `bad`。
 > **verify 阶段仍须由另一 agent 完成**（apply = dev2）。
+
+> **PM 勾选说明（2026-09-22）**：apply = **M58（dev2，squash `7135095`）**；
+> verify = **M64（verify 席位，`00387fe`）** —— PASS：F1（PUBLISH 发版前性能记录，PM 补 `1576653`）、
+> F3（验证侧 harness 误包整个门禁，标准姿势重跑 `✓2703 ✗0` 关闭）、
+> F2（`--in-container` 自述可信，三轮修复 M66/M69/M73 + 信任边界 §24）全部关闭。
+> 期间由 verify 发现、PM 派单落地的 apply 返工：**M66**（环境信号）、**M69**（镜像标识文件）、**M73**（标识不得是挂载点）。
