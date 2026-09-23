@@ -33,11 +33,21 @@ draft (a pasted markdown separator or table border; V8-N1 replayed the original 
 hole) is never mistaken for the box edge. The check MUST examine every content row of the located box — not only
 rows at or above the cursor, because a draft typed after a leading newline or recalled with `Up` sits BELOW the
 cursor row (V7-F1 reproduced the original D20 incident through that hole) — and MUST NOT assume a particular
-empty-box shape (a package-provided hint row and a spinner during work are both normal; the hint row is excluded
-by slot, not by matching its text). That slot exclusion is itself a known miss: the row immediately above the
-bottom border is never read as content, so a single-line draft sitting exactly on it is invisible and a send may
-glue onto it (V9-C3), while a hint row bumped off the slot reads the box busy — a conservative false-busy, never
-a glue (V9-C1); both MUST be named in `references/troubleshooting.md` §3. The guard MUST be re-checked immediately before the `Enter` by comparing the
+empty-box shape (a package-provided hint row and a spinner during work are both normal). The row immediately
+above the bottom border SHALL be read as CONTENT unless it is provably the box's own status row, and it is proved
+only by BOTH of: (a) the cursor is not resting on that row, and (b) its text matches the package's status-row
+shape — one leading space, a model token without spaces, two spaces, the provider display name, two spaces, and a
+thinking level from Pi's set (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); the two measured real
+shapes are ` deepseek-flash  Deepseek  max` and ` k3  Kimi Coding  max`. A row the cursor rests on is content
+whatever its text: Pi's cursor never rests on the box's own status row, and a human's text can be shaped like
+anything. The old exclusion by slot MUST NOT come back: Pi 0.87.0 moved the box's own status row to a line BELOW
+the bottom border, so the border-adjacent row is where a single-line draft lives, and reading that row by position
+alone judged the box empty while it held a draft (measured: the readiness gate typed its payload onto the draft
+and the delivery path would have pasted over it; V9-C3). A border-adjacent row that fails the shape test is
+content and reads the box busy — the conservative direction, never a glue (V9-C1). The one remaining member of
+this class — a draft whose only row is a verbatim status-row clone AND whose cursor rests on another row — MUST be
+named in `references/troubleshooting.md` §3 together with an unrecognised future status-row spelling (which reads
+busy, never empty). The guard MUST be re-checked immediately before the `Enter` by comparing the
 box's content fingerprint with what the check saw — verbatim, trimmed, or as a suffix/prefix of the visible
 content are the acceptable verbatim shapes, and the only acceptable folded shape is the whole box being exactly
 ONE `[paste #N +K lines]` placeholder whose `+K` equals the payload's line count (two folded pastes — ours and
@@ -61,13 +71,14 @@ A box whose only content is whitespace is one known miss of the box-content dete
 free (the capture trims trailing blanks), and that limitation MUST be enumerated together with the other
 same-class holes in `references/troubleshooting.md` §3 — the ones fixed by the highest-candidate rule
 (equal-width draft rules, spinner-shaped draft rows, a cursor resting on the draft's own rule row: V9-A4/A5/A8/A10)
-and the ones deliberately still open (the whitespace-only draft; a single-line draft exactly on the hint slot,
-V9-C3) — so the document never implies the detector has no other hole. It MUST NOT be silently wrong.
+and the ones deliberately still open (the whitespace-only draft; a draft whose only row is a verbatim clone of
+the status-row shape with the cursor resting on another row, V9-C3) — so the document never implies the detector
+has no other hole. It MUST NOT be silently wrong.
 The remaining documented edges (all named in `references/troubleshooting.md` §3): notification-shaped text inside
 the conversation transcript can look like box content when the box borders are mis-paired — measured: a
 spinner-shaped row standing in as the top border reads that text as box content and the verdict is busy (a
-conservative hold, V9-C2), and when the hint row is bumped off its slot the same conservative busy follows
-(V9-C1); only a transcript with no rule-looking row at all pairs no box and fails safe to UNKNOWN — the
+conservative hold, V9-C2), and a status row whose spelling the shape test does not recognise reads as box content
+with the same conservative busy following (V9-C1); only a transcript with no rule-looking row at all pairs no box and fails safe to UNKNOWN — the
 prefix/suffix acceptance
 window accepts a frame where only a prefix of the payload rendered (V8-N6); when that frame goes on to the
 `Enter`, the submission is not credited as confirmed (B5 evidence), so the entry stays in `held/` with the full
@@ -135,6 +146,48 @@ is NEVER reported as confirmed; its output names the unknown shape (V9-C3).
 - **GIVEN** a fixture pane that reports an empty box at the check and a non-empty box at the pre-`Enter` re-check
 - **WHEN** a send runs
 - **THEN** no `Enter` is sent, the fixture's draft is unchanged, and the message is one entry in `state/outbox/`
+
+#### Scenario: A one-line draft on the border-adjacent row keeps the box busy
+
+- **GIVEN** the stored real frame `skills/teamsmith/tests/frames/pi-0.87.0-one-line-draft.txt` (Pi 0.87.0, 120×30
+  pane, cursor row 26; provenance in that directory's README) whose located box is `top border / HUMAN-ONE-LINE-DRAFT / bottom border`
+- **WHEN** the guard reads that frame (production extraction and the frame-level judgement, cursor row 26)
+- **THEN** the read text is the draft, the verdict is `BUSY` / `idle-read=NOT-EMPTY`, and for a payload other than
+  the draft `HOLDS_ONLY=no` — the row is content, not the box's status row
+
+#### Scenario: The 0.85.1 status row stays box chrome
+
+- **GIVEN** the stored real frame `skills/teamsmith/tests/frames/pi-0.85.1-update-banner.txt` (Pi 0.85.1, cursor
+  row 26) whose located box carries ` deepseek-flash  Deepseek  max` on the border-adjacent row
+- **WHEN** the guard reads that frame
+- **THEN** the read text is empty and the verdict is `EMPTY` — the measured status-row shape is excluded only
+  because the cursor is not on it and its text matches that shape
+
+#### Scenario: A cursor on the border-adjacent row is content whatever the text
+
+- **GIVEN** a frame whose border-adjacent row reads ` k3  Kimi Coding  max` (the status-row shape) and whose cursor
+  rests on exactly that row
+- **WHEN** the guard reads the frame
+- **THEN** the row is content and the verdict is `BUSY` — a row the human's cursor is on is never the box's own
+  status row
+
+#### Scenario: A single text row below the cursor row is content
+
+- **GIVEN** a Pi 0.87.0-shaped frame `top border / blank (cursor) / one text row / bottom border` — a draft typed
+  after a leading newline with the cursor moved up (the V7-F1 shape in the 0.87.0 layout)
+- **WHEN** the guard reads the frame
+- **THEN** the text row is content and the verdict is `BUSY` (the shape test does not recognise it), so the draft
+  is never pasted over
+
+#### Scenario: The production extraction and the fixture judgement are one implementation
+
+- **GIVEN** the stored frames `pi-0.87.0-one-line-draft.txt` and `pi-0.85.1-update-banner.txt`
+- **WHEN** the extraction that `team_input_box_text` performs on a frame and
+  `bash skills/teamsmith/tests/pm-box-real.sh --frame <file> --cursor 26` run on each
+- **THEN** the texts agree (`HUMAN-ONE-LINE-DRAFT` and empty) and the verdicts agree (`idle-read=NOT-EMPTY` and
+  `idle-read=EMPTY`)
+- **AND** with the status-row predicate shadowed to the legacy "always chrome" behaviour in the probe process, the
+  draft frame flips back to `EMPTY` in both paths — proving they share the predicate instead of re-implementing it
 
 ### Requirement: Queue entries are immutable files under the team state directory
 
