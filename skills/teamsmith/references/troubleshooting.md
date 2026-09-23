@@ -1060,3 +1060,20 @@ marker inside each root names the creating pid, its start time and the kind, and
 (cwd/fd/exe) is printed and skipped — do not delete a root another agent is using. The root of the leak was 607
 `config-cli.*` roots (3.2 GB) that kept being created and never reclaimed; the fix is the ownership rule above,
 not a periodic cleanup daemon.
+
+## 20 · `team review <ID> --post-merge` 报「两边都动过」时先看内容
+
+`squash 合并 + PM 手工解冲突`之后，**被解过冲突的那几个文件必然与分支不同**，于是
+`--post-merge` 会报非零并建议"重新合并"。**这不是"代码没合并"**：
+
+```console
+$ bash skills/teamsmith/scripts/team review P82 --post-merge
+✗ 两边都动过、版本对不上（main 那一版不来自这条分支，分支这一版 m…）
+      docs/team/threads/dev-bob.md          # 我按时间合并了两侧条目
+      skills/teamsmith/tests/smoke.sh       # 我把 P82 的段号从 46 顺延到 47
+```
+
+处置：**按内容复核**（`grep` 关键符号/段号），确认"分支里的代码都在 main 上"即可；
+**只有**当 main 上确实缺少分支带来的**代码**时，才按它说的重新合并并重跑门禁（D49/P91）。
+（P95 会把比较基准从"main 的 tip"换成"该任务的 squash 提交"，那时这条提示会不再误报。）
+
