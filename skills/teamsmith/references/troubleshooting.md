@@ -1061,19 +1061,26 @@ marker inside each root names the creating pid, its start time and the kind, and
 `config-cli.*` roots (3.2 GB) that kept being created and never reclaimed; the fix is the ownership rule above,
 not a periodic cleanup daemon.
 
-## 20 · `team review <ID> --post-merge` 报「两边都动过」时先看内容
+## 26. `team review <ID> --post-merge` says both sides touched — read the content first
 
-`squash 合并 + PM 手工解冲突`之后，**被解过冲突的那几个文件必然与分支不同**，于是
-`--post-merge` 会报非零并建议"重新合并"。**这不是"代码没合并"**：
+**Symptom**: after a squash merge the post-merge check exits non-zero and names paths, for example
 
 ```console
-$ bash skills/teamsmith/scripts/team review P82 --post-merge
-✗ 两边都动过、版本对不上（main 那一版不来自这条分支，分支这一版 m…）
-      docs/team/threads/dev-bob.md          # 我按时间合并了两侧条目
-      skills/teamsmith/tests/smoke.sh       # 我把 P82 的段号从 46 顺延到 47
+$ bash skills/teamsmith/scripts/team review <ID> --post-merge
+review P82 --post-merge: branch task/P82-sender-apply (tip a4fb5a3f) vs main (tip 43a731c6)
+x both sides touched, versions do not match ...
+      docs/team/threads/dev-bob.md
+      skills/teamsmith/tests/smoke.sh
+  fix: re-merge the branch (squash or a new PR) + re-run the gates, then board set P82 done
 ```
 
-处置：**按内容复核**（`grep` 关键符号/段号），确认"分支里的代码都在 main 上"即可；
-**只有**当 main 上确实缺少分支带来的**代码**时，才按它说的重新合并并重跑门禁（D49/P91）。
-（P95 会把比较基准从"main 的 tip"换成"该任务的 squash 提交"，那时这条提示会不再误报。）
+**Why this is expected**: when the PM resolved a conflict during the squash merge, those files legitimately
+differ from the branch. `docs/team/threads/dev-bob.md` had entries merged in time order and `smoke.sh` had the
+branch's section renumbered.
+
+**What to do**: verify by content (`grep` the symbol or the section number on main) and only re-merge when the
+branch's *code* is genuinely missing from main. When nothing is missing, take the branch's records with
+`git checkout <branch> -- <path>` and move on (D49). The comparison basis is the branch against main's tip,
+so the refinement in P95 (compare against the task's own squash commit) will make this report stop firing on
+conflict resolutions.
 
