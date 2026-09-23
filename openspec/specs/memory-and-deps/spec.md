@@ -297,7 +297,8 @@ displays for that seat, `source` is one of `config` / `explicit` / `record` with
 differing from the seat's configuration resolution → `record`), and `override` says whether the seat carries a
 token in `TEAM_AGENT_MODELS` (for `pm`: whether `TEAM_PM_MODEL` is set). `known[]` SHALL be the union of the configured
 and the recorded models — every seat's displayed model, the `pm` seat's resolution (`TEAM_PM_MODEL` when set, else
-`TEAM_DEFAULT_MODEL`) included — deduplicated in
+`TEAM_DEFAULT_MODEL` resolved exactly as the PM's launch resolves it, an empty one falling back to the schema
+default) included — deduplicated in
 first-seen order; the same set is the vocabulary `choices.values` reports for a `model`-kind key. `team config set-agent-model <seat> <model|->` SHALL write the pair list (or
 `TEAM_PM_MODEL` for the `pm` seat) itself — the CLI parses and re-serializes the tokens; the caller never composes
 them — through the same writer, fingerprint CAS, audit and `--dry-run`/`--yes` rules as `team config set`, with two
@@ -306,6 +307,14 @@ have the `provider/model` shape (otherwise exit 4). `-` SHALL remove the seat's 
 (`TEAM_DEFAULT_MODEL`) in force. The whole-value validator of `TEAM_AGENT_MODELS` SHALL apply the same seat rule:
 a token naming a seat the roster does not carry is exit 4, and one already in the file SHALL be reported by
 `team config list --json` as a warning naming the token, never silently ignored.
+
+Every seat row SHALL be serialized with a value in every field: `override` is always a JSON boolean (`true` when
+the seat carries a token, `false` when it does not), and an empty model is the JSON string `""`, never a field with
+no value and never `null`. A token whose value is empty (`dev=`) is a **present** override whose model resolution
+falls back exactly like an absent token: the seat's displayed model is the fallback (`TEAM_DEFAULT_MODEL`, or the
+recorded model when the source rules say `record`), and that one resolution is what `team ps`/`team roster`
+display, what the seat's row reports, and what the dispatch renderer uses. A source label (`配置` / `显式` /
+`历史记录`) MUST NOT appear as a `model` or in `known[]`.
 
 #### Scenario: Setting one seat's model touches only that token
 
@@ -365,6 +374,35 @@ a token naming a seat the roster does not carry is exit 4, and one already in th
   `override` true, and `TEAM_PM_MODEL`'s `choices.values` contains it
 - **AND** with `TEAM_PM_MODEL` removed the `pm` row falls back to the default while the roster seat's recorded
   model stays in `known`, each model appearing once
+
+#### Scenario: An empty token is a present override with the fallback model
+
+- **GIVEN** a contract whose sha256 is recorded, whose `TEAM_AGENT_MODELS` carries `dev=` and whose
+  `TEAM_DEFAULT_MODEL` is `vendor-a/model-a`
+- **WHEN** `team config list --json` and `team ps` run
+- **THEN** `models.seats`' `dev` row reports `model` `vendor-a/model-a`, `source` `config` and `override` true;
+  `team ps`'s line for that seat carries the same model with the `配置` label; `models.known` carries
+  `vendor-a/model-a` and no source label; and the contract's sha256 is unchanged
+
+#### Scenario: The empty token resolves the same way in the dispatch renderer
+
+- **GIVEN** the same contract
+- **WHEN** `team dispatch dev --print` runs
+- **THEN** the rendered launch command carries `vendor-a/model-a` — the empty token does not render an empty model
+
+#### Scenario: An empty default still resolves to the fallback
+
+- **GIVEN** a contract whose `TEAM_DEFAULT_MODEL` is empty and whose `TEAM_AGENT_MODELS` carries `dev=`
+- **WHEN** `team config list --json` runs
+- **THEN** the `dev` row exists with `"model"` equal to the CLI's resolved default (the schema default for
+  `TEAM_DEFAULT_MODEL`) and `"override":true`, and the document parses as JSON
+
+#### Scenario: The PM row resolves exactly like the PM's launch
+
+- **GIVEN** a contract whose `TEAM_DEFAULT_MODEL` and `TEAM_PM_MODEL` are both empty
+- **WHEN** `team config list --json` and the PM launch renderer (`team up --print`) run
+- **THEN** the `pm` row's `model` is the model the rendered command passes as its `--provider`/`--model` pair —
+  the resolved default, never `""` — and its `override` is false
 
 ### Requirement: The machine read reports each key's choice set, and the schema is its only source
 
@@ -519,4 +557,30 @@ file carries and the schema does not know, the empty string.
 - **THEN** the human table keeps its `KEY CLASS KIND VALUE` header and gains no group column, the `--json`
   record keeps every existing field name and type next to the new `group`, and neither machine exit carries a
   group field
+
+### Requirement: Every machine read is a JSON document, and an empty value is a value
+
+Every command whose contract is a JSON document — `team config list --json`, `team change status <id> --json`,
+`team paths`, and the console's one-frame `team monitor --json` / `team __panel-data` exits — SHALL emit exactly
+one parseable JSON document for every contract shape the correctness gate exercises, including a seat whose
+override carries an empty value. A field MUST NOT be serialized with no value (`"name":`); a string field with
+nothing to report SHALL be the JSON string `""`; a boolean field SHALL be `true` or `false`; and `null` SHALL NOT
+stand for "empty". The correctness gate SHALL run those exits against a fixture carrying the empty-override shape
+and parse each output with the JSON parser its config fixtures already require (`python3 -m json.tool`), and a
+document that does not parse MUST fail the gate naming the command and the parser's reported position.
+
+#### Scenario: The empty-override shape parses on every machine exit
+
+- **GIVEN** a fixture contract with `TEAM_AGENT_MODELS="dev="`
+- **WHEN** `team config list --json`, `team change status <id> --json`, `team paths` and, with a JS runtime
+  present, `team monitor --json` run
+- **THEN** each exits 0 and `python3 -m json.tool` parses its output; with no JS runtime the console exit is a
+  visible SKIP and not a red
+
+#### Scenario: A valueless field is a gate failure
+
+- **GIVEN** a scratch tree whose `team config list --json` emits a valueless field for a seat (`"override":,`)
+- **WHEN** the gate's parse walk runs against that tree
+- **THEN** it exits non-zero naming the command and the parser's error position, and restoring the tree's own
+  serializer makes it green — the gate, not a silent tolerance, keeps the exits valid
 
