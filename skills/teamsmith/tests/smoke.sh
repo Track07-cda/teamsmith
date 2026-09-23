@@ -14274,6 +14274,92 @@ assert_eq "P91 ⑧：分支解析不到 → 非零（fail closed，不假装核�
 assert_has "$TMP/p91-noref.log" "解析不到" "P91 ⑧：拒绝时点名「无法核对」"
 assert_not "$TMP/p91-noref.log" "没有合并后新增" "P91 ⑧：不把「没检查」报成「没问题」"
 
+# ---------------------------------------------------------------- 49. P94 现场行数为 0（P88 的 F1）
+# TEAM_AGENT_SCENE_LINES=0 的语义：**按配置不打印现场块**（一句显式措辞），命令必须正常返回。
+# 旧实现把 0 直接交给 `tail -n 0`：tail 立刻退出、什么都不读 → awk 写端吃 SIGPIPE → CLI 的
+# `set -o pipefail` 把 rc=141 带出来，status 整体中止、席位段的现场块压根不出现（P88 的 F1，
+# 与 P28 的 `printf | grep -q` 同族）。本节钉住：0 = rc=0 + 显式措辞 + 一行画面都不印（三个来源
+# 都不读）；1/3/40 与既有断言逐字不变；第二层来源在场时守卫同样先于来源选择。红侧不靠产品开关：
+# 把零守卫与读取器换回 P94 之前的形状（mutant 副本，append 覆盖）→ 同一份夹具翻回 rc=141。
+section "49 · P94 现场行数为 0：按配置不打印画面（P88 的 F1）"
+P94_A="p94w"; P94_ID="T9.94"; P94_ST="$REPO/.pi/team/state"
+P94_TAIL="$P94_ST/dispatch-$P94_A-tail.txt"; P94_DEAD="$P94_ST/dispatch-$P94_A-pane-dead.txt"
+mkdir -p "$P94_ST"
+printf 'window=%s\ntask=%s\n' "$P94_A" "$P94_ID" > "$P94_ST/$P94_A.env"
+p94_status() { # <行数|"-"> <输出文件> → 返回 CLI 的 rc（"-" = 不设旋钮，走默认 40）
+  local n="$1" out="$2" rc=0
+  if [ "$n" = "-" ]; then
+    ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+        -u TEAM_AGENT -u TEAM_DOCS_DIR TEAM_AGENTS="$P94_A" \
+        bash "$SKILL_DIR/scripts/team" status "$P94_ID" ) >"$out" 2>&1 || rc=$?
+  else
+    ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+        -u TEAM_AGENT -u TEAM_DOCS_DIR TEAM_AGENTS="$P94_A" TEAM_AGENT_SCENE_LINES="$n" \
+        bash "$SKILL_DIR/scripts/team" status "$P94_ID" ) >"$out" 2>&1 || rc=$?
+  fi
+  return "$rc"
+}
+p94_scene() { grep '^    | ' "$1" 2>/dev/null | sed 's/^    | //'; }
+# 560 KB 的尾屏文件（P88 实测的量级）：旧读取器在 `tail -n 0` 处必吃 SIGPIPE（awk 的输出远超管道缓冲）
+{ awk 'BEGIN{for(i=1;i<=8000;i++) printf "P94-PAD-%05d %s\n", i, "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}'
+  printf 'P94-TAIL-MARK-LAST\n'; } > "$P94_TAIL"
+
+# ── ① 绿侧（本单的红转绿就在这条）：0 = rc=0 + 显式措辞 + 不打印画面 ────────────────────
+p94_status 0 "$TMP/p94-zero.log"; P94_RC=$?
+assert_eq "P94 ①：TEAM_AGENT_SCENE_LINES=0 → rc=0（旧实现 rc=141 SIGPIPE 中止，P88 的 F1）" "$P94_RC" "0"
+assert_has "$TMP/p94-zero.log" "现场：（按 TEAM_AGENT_SCENE_LINES=0：不打印画面）" "P94 ①：显式措辞点名配置"
+assert_eq "P94 ①：一行画面都不打印" "$(p94_scene "$TMP/p94-zero.log" | wc -l | tr -d ' ')" "0"
+assert_not "$TMP/p94-zero.log" "P94-TAIL-MARK-LAST" "P94 ①：来源里的内容一个字都不出现"
+assert_not "$TMP/p94-zero.log" "来源在但没有画面内容" "P94 ①：不是「取最后 0 行」的空块措辞"
+assert_not "$TMP/p94-zero.log" "dispatch-$P94_A-tail.txt（agent 退出时 harness 自抓的尾屏）" "P94 ①：连来源行都没印（读取器压根没被走到）"
+
+# ── ② 边界：1/3/40 与既有语义逐字不变（守卫只认 0）────────────────────────────────────
+p94_status 1 "$TMP/p94-n1.log"; P94_RC=$?
+assert_eq "P94 ②：n=1 仍正常返回" "$P94_RC" "0"
+assert_eq "P94 ②：n=1 = 最后 1 行（逐字节）" "$(p94_scene "$TMP/p94-n1.log")" "$(tail -n 1 "$P94_TAIL")"
+assert_has "$TMP/p94-n1.log" "最后 1 行（去尾空行）" "P94 ②：n=1 的声明照旧（P75 的措辞不带改）"
+p94_status 3 "$TMP/p94-n3.log"; P94_RC=$?
+assert_eq "P94 ②：n=3 仍正常返回" "$P94_RC" "0"
+assert_eq "P94 ②：n=3 = 最后 3 行（逐字节）" "$(p94_scene "$TMP/p94-n3.log")" "$(tail -n 3 "$P94_TAIL")"
+p94_status - "$TMP/p94-default.log"; P94_RC=$?
+assert_eq "P94 ②：默认（不设旋钮）仍正常返回" "$P94_RC" "0"
+assert_eq "P94 ②：默认 40 行 = 最后 40 行（逐字节）" "$(p94_scene "$TMP/p94-default.log")" "$(tail -n 40 "$P94_TAIL")"
+assert_has "$TMP/p94-default.log" "最后 40 行（去尾空行）" "P94 ②：默认声明与 P75 §43④ 逐字一致"
+
+# ── ③ 红侧（可证伪）：零守卫 + 读取器换回 P94 之前的形状 → 同一发命令翻回 rc=141 ──────────
+P94_MUT="$TMP/p94-mut-skill"; rm -rf "$P94_MUT"; mkdir -p "$P94_MUT/scripts"
+cp -a "$SKILL_DIR/scripts/team" "$SKILL_DIR/scripts/lib" "$P94_MUT/scripts/" >/dev/null 2>&1
+cp -a "$SKILL_DIR/templates" "$SKILL_DIR/references" "$SKILL_DIR/SKILL.md" "$P94_MUT/" >/dev/null 2>&1
+cat >> "$P94_MUT/scripts/lib/cmd-status.sh" <<'EOS'
+# P94 突变（append 覆盖，原件逐字节未改）：P94 之前的形状 —— 读取器把 N 直接交给管道末尾的
+# `tail -n N`（没有 N=0 护栏），且没有零守卫（0 照旧走来源选择，第三层立刻吃 SIGPIPE）。
+team_status_tail_scene() { awk '{ if (NF) last = NR; line[NR] = $0 } END { for (i = 1; i <= last; i++) print line[i] }' "$1" | tail -n "$2"; }
+team_seat_scene_zero_note() { return 1; }
+EOS
+P94_MUT_ADD="$(diff "$SKILL_DIR/scripts/lib/cmd-status.sh" "$P94_MUT/scripts/lib/cmd-status.sh" 2>/dev/null | grep -c '^> ' || true)"
+assert_eq "P94 ③ 突变夹具：只多出 4 行覆盖（append；原件部分逐字节相同）" "$P94_MUT_ADD" "4"
+( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+    -u TEAM_AGENT -u TEAM_DOCS_DIR TEAM_AGENTS="$P94_A" TEAM_AGENT_SCENE_LINES=0 \
+    bash "$P94_MUT/scripts/team" status "$P94_ID" ) >"$TMP/p94-mut.log" 2>&1
+P94_MUT_RC=$?
+assert_eq "P94 ③ 翻转：旧形状下同一发命令回到 rc=141（tail -n 0 → SIGPIPE 中止）" "$P94_MUT_RC" "141"
+assert_not "$TMP/p94-mut.log" "按 TEAM_AGENT_SCENE_LINES=0：不打印画面" "P94 ③ 翻转：显式措辞消失（status 在席位段中止）"
+assert_eq "P94 ③ 翻转：mutant 的现场块一行都没有" "$(p94_scene "$TMP/p94-mut.log" | wc -l | tr -d ' ')" "0"
+
+# ── ④ 零守卫在**选来源之前**：第二层（dispatch-<agent>-pane-dead.txt）在场也一个都不读 ──────
+rm -f "$P94_TAIL"
+{
+  printf 'seat: %s\nwindow: %s\ncaptured: 2026-01-01T00:00:00Z\nexit: signal=9\ndead_time: 2026-01-01 00:00:00 UTC\n' "$P94_A" "$P94_A"
+  printf -- '--- scene ---\n'
+  printf 'P94-CORPSE-1\nP94-CORPSE-2\n'
+} > "$P94_DEAD"
+p94_status 0 "$TMP/p94-zero-2nd.log"; P94_RC=$?
+assert_eq "P94 ④：第二层在场时 n=0 也 rc=0" "$P94_RC" "0"
+assert_has "$TMP/p94-zero-2nd.log" "按 TEAM_AGENT_SCENE_LINES=0：不打印画面" "P94 ④：同一句措辞（守卫在来源选择之前）"
+assert_not "$TMP/p94-zero-2nd.log" "P94-CORPSE-1" "P94 ④：第二层的内容一个字都不出现"
+assert_not "$TMP/p94-zero-2nd.log" "pane-dead.txt（dispatch 替换遗体前抓的现场）" "P94 ④：第二层的来源行也没印"
+rm -f "$P94_DEAD" "$P94_ST/$P94_A.env"
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 

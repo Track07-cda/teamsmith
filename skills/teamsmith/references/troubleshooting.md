@@ -531,7 +531,9 @@ seat's last screen and tmux's exit evidence survive the death. Reading such a se
   `state/dispatch-<agent>-tail.txt` (captured by the harness when the agent exited; read as the last
   `TEAM_AGENT_SCENE_LINES` lines **after trailing blank lines are trimmed** — a capture ends with the pane's empty
   lower half — and a file with no non-blank line says `来源里没有可读内容` instead of printing an empty block). Bounded by
-  `TEAM_AGENT_SCENE_LINES` (default 40).
+  `TEAM_AGENT_SCENE_LINES` (default 40); `0` means no scene block by configuration (the section says so in one line —
+  `按 TEAM_AGENT_SCENE_LINES=0：不打印画面` — and reads none of the three sources, instead of letting `tail -n 0`'s
+  immediate exit give the writer SIGPIPE and abort `team status` at rc=141, P88's F1).
 - **`signal=9` vs `status=<n>`**: tmux's evidence tells you *how* the pane died — `signal=<n>` means the process was
   killed by that signal (9 = SIGKILL, typically the OOM killer or an operator), `status=<n>` means it exited with that
   code on its own. One of the two is always empty; whichever tmux knows is the one shown.
