@@ -643,7 +643,11 @@ Enter, and on the work page the board rows (a click focuses a row, a click on th
 SHALL have a clickable target that acts identically; the wheel SHALL scroll the current page's scrollable region
 (one offset per page, one line per notch on pages 1–3 — V15 F5 ruling; on the work page `↑`/`↓` move the board-row
 focus and the wheel keeps scrolling the page; on the board page each lane carries its own offset and the wheel
-SHALL scroll the lane under the cursor). A click on a kanban card SHALL focus it, and a click on the already
+SHALL scroll the lane under the cursor). While the project-settings view is open the wheel is its region and MUST
+NOT reach the page the view was opened from: it scrolls the view's row window — one row per notch, the row focus
+unchanged, the view's hidden-row counts at both edges following the window — and with either of the view's
+pickers open it walks that picker's entries instead; the `↑`/`↓` keys and the view's `↑/↓ 行` target SHALL keep
+moving the focus and SHALL push the window so the focused row is inside it. A click on a kanban card SHALL focus it, and a click on the already
 focused card SHALL open its detail view. Coordinates are 1:1: a click on a target activates that target (E6 §1.1 measured the full path, with
 tmux's own mouse option in either state). With the preference off the console SHALL emit no mouse-reporting
 sequence and clicks SHALL do nothing. The settings overlay is an in-page overlay, not a modal: it replaces the
@@ -703,6 +707,31 @@ focus, they carry no chip (the band is width-bounded), and they MUST NOT appear 
 - **WHEN** the documented keys are enumerated against the map
 - **THEN** every documented key except `r` has a target and the map carries no entry that refreshes the cached
   blocks, while pressing `r` still rebuilds them — the key has no clickable affordance by design
+
+#### Scenario: The wheel scrolls the settings view's window
+
+- **GIVEN** the project-settings view open at the top on a fixture contract with more rows than the pane shows
+- **WHEN** three wheel-down notches are injected over the view
+- **THEN** the visible window moves down three rows (the row that was first is gone and a later one entered), the
+  row focus does not move (the view's command line still names the same key), and the top count line reads `↑3`
+- **AND** three wheel-up notches bring the window back to the top and the count line disappears
+
+#### Scenario: The wheel over the view does not move the page behind it
+
+- **GIVEN** a page scrolled away from its top, the project-settings view opened over it, and the page's window
+  recorded
+- **WHEN** wheel events are injected over the view and `esc` returns to the page
+- **THEN** the page renders the same window it had before the view opened — the view consumed the wheel
+- **AND** with the choice editor `enter`ed open, or with the seat picker open, the wheel walks that picker's
+  entries (the selection moves, the page still does not) and `esc` afterwards keeps that picker closed
+- **AND** with the mouse preference off the same wheel emits no report and neither the view nor the page moves
+
+#### Scenario: The focus keys keep the focused row inside the window
+
+- **GIVEN** the view wheel-scrolled so the focused row is outside the visible window
+- **WHEN** `↓` or `↑` moves the focus, and `enter` opens the focused row
+- **THEN** the window has been pushed so the focused row is visible, and the row the editor was opened for is the
+  row the view's command line names
 
 ### Requirement: All visible text comes from external zh/en string tables
 
@@ -1833,4 +1862,113 @@ focus where it was, and the free-text entry opens the compose editor by keyboard
 - **AND** the accept's first child is `config set … --dry-run` and the write that follows it is the second, with
   the fingerprint the editor's read carried; the settle's re-read of the `settings` block is the only read that
   follows, it runs in the background, and the receipt frame renders without waiting for it
+
+### Requirement: The settings view groups the contract by the functional group the command reports, and carries the effect class on the row
+
+The project-settings view's row list SHALL group the contract's keys by the `group` the owning command reports
+for each key, and the read's order SHALL be the view's order: a heading opens when the token changes, the
+schema's order is kept inside a group, and the headings themselves appear in the order the read reports their
+first rows. A heading MUST NOT be a focus target and MUST NOT be a click target. The heading's text SHALL come
+from the zh/en tables, looked up by the token (`group_<token>`), so no group word is written into the bundle; a
+token with no label SHALL render as the raw token — the same visible fallback the key labels use for a key the
+schema does not know — and the string-table gate SHALL assert the tokens the schema's rows carry and the group
+labels in both tables match in **both** directions (a token without a label and a label no row uses both fail
+it). The bundle MUST NOT carry a key→group table or a group list of its own: a group or a key added to the
+command's schema SHALL appear under the reported heading with the committed `panel.js`, and a row the read
+reports under a different token SHALL move.
+
+The **effect class** SHALL be carried on the row, not by the grouping: every key row SHALL render its class as a
+text badge (`apply`, `restart`, `refuse`, plus the unknown-key badge) with that class's tone, and the tone SHALL
+never be the only channel — the panel's "state is never carried by color alone" rule applies here as everywhere.
+No group heading SHALL name an effect class or carry a class's tone.
+
+A key whose `group` is empty — a schema row that declares none, or a key the file carries and the schema does
+not know — SHALL render under one visible trailing fallback heading, labelled from the tables, after the grouped
+keys and before the seats block: it MUST NOT be dropped, merged into a group the command did not report, or
+rendered without its own badge and command line. The seats block SHALL keep its own trailing heading, whose label
+is distinct from every group heading.
+
+#### Scenario: The headings are functional domains, not effect classes
+
+- **GIVEN** a fixture contract and the view open in a 160-column fixture pane
+- **WHEN** the rows render
+- **THEN** the headings are the schema's functional labels in the read's order (身份与账本布局 before 工作流与门禁
+  before 跨项目会议), no heading reads `立即生效`, `需要重启` or `只读`, the keys of one group render together in
+  the schema's order, and a walk down the list stops only on key and seat rows — never on a heading
+
+#### Scenario: A key added to the schema lands in its group, with the committed bundle
+
+- **GIVEN** a scratch copy of the CLI whose schema carries `TEAM_ZZZ_TEST` with the group `workflow` and, in a
+  second run, whose `TEAM_GATES` row carries `meeting`
+- **WHEN** the committed `panel.js` renders the view against each
+- **THEN** the new row appears under 工作流与门禁 in the first run and `TEAM_GATES` appears under 跨项目会议 in the
+  second, each in the schema's own order inside its group, while `panel.js` is byte-identical between the runs
+
+#### Scenario: A row without a group renders under the fallback heading
+
+- **GIVEN** a scratch copy of the CLI whose `TEAM_GATES` row declares no group and a contract carrying a key the
+  schema does not know
+- **WHEN** the view renders
+- **THEN** both rows appear under the visible fallback heading after the grouped keys and before the seats block,
+  the schema key keeps its label, badge and command line, and the schema-unknown key is still read-only, named by
+  its raw key and marked as unknown
+
+#### Scenario: The class is a word on the row and its tone is redundant
+
+- **GIVEN** the view open on a contract holding an `apply` key, a `restart` key and a `refuse` key
+- **WHEN** the three rows render
+- **THEN** each carries its own badge word, the `restart` badge is drawn in the theme's `warn` tone, the `refuse`
+  badge in the theme's `dim` tone and the `apply` badge in the plain text tone, while the values beside them stay
+  in the plain text tone
+- **AND** a capture with the SGR sequences stripped still shows all three classes as words — colour is never the
+  only channel
+
+#### Scenario: The seats block keeps its own heading and no label collides with it
+
+- **GIVEN** a fixture project with a roster and the view open
+- **WHEN** the rows render
+- **THEN** the seat rows appear under the tables' own seats heading, that heading's text differs from the
+  per-seat-model group's heading, and the keys of that group appear under their own functional heading with the
+  group's own order
+
+#### Scenario: A heading is a section rule and it separates its own group
+
+- **GIVEN** the view open on a contract whose read reports more than one group, in a pane tall enough to show
+  two of them
+- **WHEN** the rows render
+- **THEN** every heading (the functional groups, the fallback group and the seats block alike) is drawn as a
+  section rule — the label between the two `─` runs of a full-width rule line — while key rows and seat rows
+  carry no section rule, so a heading is distinguishable from a row by shape and not only by tone
+- **AND** a heading sits directly between the previous group's last row and its own group's first row: the
+  heading itself is the visible separation between groups and no extra line is spent on one
+
+### Requirement: The settings view fills the pane it is given and its row window grows with it
+
+The project-settings view SHALL spend the height the frame hands it: the last row it draws SHALL be at most one
+blank row above the key band at every pane height the frame can draw a card for, and the number of rows the
+window draws SHALL grow with the pane. A row's price in the window's fit SHALL be what the row really draws —
+one line per row, plus the line of a group heading when that heading's first row is inside the window — so a key
+row's note never costs a second line. The two hidden-row count lines SHALL be a ceiling rather than a fixed
+cost: a count line is spent only when the window really hides rows at that edge, and the line the counts do not
+use SHALL go to the window instead of the page's blank space. The rows the window draws plus its `↑n` and `↓n`
+counts SHALL equal the number of focusable rows the view holds. The space the rows do not use SHALL stay inside
+the card (the detail view's own fill rule), so the key band remains the frame's last row. This SHALL hold in
+every view state the block can render — the row list, the choice picker and the seat picker. It sharpens, and
+MUST NOT weaken, the frame-level promise that a bounded frame fills the pane: there the spare height is spent
+*inside the content area*, and this view's share of it is rows.
+
+#### Scenario: The card fills the pane and the window grows with it
+
+- **GIVEN** a fixture contract with more rows than any measured pane and the view open at the top of the list
+- **WHEN** the pane is 45, 33, 30 and 25 rows tall
+- **THEN** at every height the card's last drawn row is at most one blank row above the key band, the rows drawn
+  plus `↑n` plus `↓n` equal the view's focusable row count (the command's keys plus its seats), and the 45-row
+  pane draws at least eight more rows than the 30-row pane
+
+#### Scenario: A short list keeps its blank space inside the card
+
+- **GIVEN** the view open with a filter that matches a single key
+- **WHEN** the frame renders in a tall pane
+- **THEN** the card still ends at most one blank row above the key band, the blank space is inside the card, and
+  the row, its heading, the command line and the audit footer are all still drawn
 
