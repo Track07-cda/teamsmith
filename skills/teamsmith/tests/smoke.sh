@@ -61,9 +61,9 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 . "$SKILL_DIR/tests/lib/tmp-root.sh"
 # tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
 # tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
-# 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新 exec 自己**，
-# 第二趟时 TMUX 已经被清掉了，再算就会把「调用者在 tmux 里」这件事丢掉（实测：probe 的两套各少跑
-# 12 条依赖它的断言）。
+# 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新跑一遍自己**
+# （flock 的子进程，P66 起不是 exec），第二趟时 TMUX 已经被清掉了，再算就会把「调用者在 tmux 里」
+# 这件事丢掉（实测：probe 的两套各少跑 12 条依赖它的断言）。
 if [ -z "${SMOKE_CALLER_HAD_TMUX:-}" ]; then
   SMOKE_CALLER_HAD_TMUX=0; [ -n "${TMUX:-}" ] && SMOKE_CALLER_HAD_TMUX=1
 fi
@@ -96,7 +96,8 @@ SKIP_N=0
 # 这里不去猜是哪一个资源先卡住：**全量**默认串行，第二套在门口排队并打印持有者；FAST 模式不排队
 # （不起真进程，秒级，不参与这场争用）。
 #   TEAM_SMOKE_NO_LOCK=1        不排队（自担并发风险；对照实验用）
-#   TEAM_SMOKE_LOCK_WAIT=<秒>   排队上限，默认 1800（超时大声失败：exit 2，不静默降级）
+#   TEAM_SMOKE_LOCK_WAIT=<秒>   排队上限，默认 1800（超时大声失败：点名持有者 + exit 2，不静默降级 ——
+#                               原来的 `exec flock -w` 形态做不到这一点，见下面 P66 那段）
 #   TEAM_SMOKE_LOCK=<path>      锁文件，默认 ${TMPDIR:-/tmp}/teamsmith-smoke.lock
 SMOKE_LOCK_HELD=0
 if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK_WRAPPED:-0}" != "1" ]; then
@@ -108,22 +109,51 @@ if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK
     if ! : >>"$SMOKE_LOCK" 2>/dev/null; then
       printf '注意：锁文件 %s 建不了 → 不做排队（同机并发两套时可能互相干扰；见 M23）\n' "$SMOKE_LOCK"
     else
-      flock -n "$SMOKE_LOCK" true 2>/dev/null
-      if [ "$?" -eq 1 ]; then
+      SMOKE_LOCK_PROBE=0
+      flock -n "$SMOKE_LOCK" true 2>/dev/null || SMOKE_LOCK_PROBE=$?
+      if [ "$SMOKE_LOCK_PROBE" -eq 1 ]; then
         printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
           "$(cat "$SMOKE_LOCK.holder" 2>/dev/null || printf '持有者未知')" "$SMOKE_LOCK_WAIT"
         SMOKE_LOCK_QUEUED=1
+      elif [ "$SMOKE_LOCK_PROBE" -gt 1 ]; then
+        printf '注意：flock 探锁失败（rc=%s）→ 仍按排队路径走（拿不到锁时会报排队超限）\n' "$SMOKE_LOCK_PROBE"
       fi
-      # 用 `flock --close` 把**整个脚本**包起来（重新 exec 自己）：锁挂在 flock 那个父进程上，
+      # 用 `flock --close` 把**整个脚本**包起来（重新跑一遍自己）：锁挂在 flock 那个父进程上，
       # 脚本与它的子孙都不持有这个 fd。第一版是 `exec 9>>file` + `flock -n 9`，实测**会漏锁**：
       # smoke 的夹具会留下后台子进程（这次是夹具仓库里的占位 `sleep 3600`），它继承了 fd 9 ——
       # 脚本退出后锁还挂着，后续每一套门禁都在门口排队（M23 自测复现，见报告）。
       # `--close` 让被执行的命令拿不到那个 fd，于是「漏锁」这一类被构造性关掉。
+      #
+      # P66（2026-09-22 PM 归档前实测）：这里**不再用 `exec`**。`flock -w` 超时只返回 1，而 `exec`
+      # 之后的那行永远执行不到 → 排队超上限时**静默 exit 1**（既没有点名持有者的一行，也没有约定
+      # 的 exit 2），看日志的人只会以为门禁自己红了；更糟的是 smoke 自己失败**也是** 1，只看返回码
+      # 会把「门禁真红」误报成「排队超限」。所以：
+      #   * marker 文件是「真的拿到锁、本套真的跑起来了」的唯一证据（与 cmd-review.sh 的 queue_marker 同形）；
+      #   * 没 marker + rc=1 → 排队超限：一行点名 `<lock>.holder` 里的持有者 + 等了多少秒 → exit 2；
+      #   * 有 marker         → 本套跑过了：子进程的退出码原样透传（含它自己的 1）。
+      SMOKE_LOCK_MARKER="$(mktemp "${TMPDIR:-/tmp}/teamsmith-smoke-queue.XXXXXX" 2>/dev/null \
+        || printf '%s' "$SMOKE_LOCK.queued.$$")"
       export SMOKE_LOCK_WRAPPED=1
       [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && export SMOKE_LOCK_QUEUED=1
-      exec flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash "$SKILL_DIR/tests/smoke.sh" "$@"
-      printf '排队/加锁失败：flock 起不来（%s）\n' "$SMOKE_LOCK" >&2
-      exit 2
+      SMOKE_LOCK_T0="$(date +%s)"
+      SMOKE_LOCK_RC=0
+      flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash -c \
+        'marker="$1"; shift; date +%s > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
+        bash "$SKILL_DIR/tests/smoke.sh" "$@" || SMOKE_LOCK_RC=$?
+      if [ ! -s "$SMOKE_LOCK_MARKER" ]; then
+        rm -f "$SMOKE_LOCK_MARKER" 2>/dev/null || true
+        if [ "$SMOKE_LOCK_RC" -eq 1 ]; then
+          printf '排队超限：等满 %ss 仍拿不到门禁锁 %s（持锁者：%s）→ 本套**没有运行**（这不是对代码的判定；等持锁者结束，或抬高 TEAM_SMOKE_LOCK_WAIT 后重跑；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
+            "$(( $(date +%s) - SMOKE_LOCK_T0 ))" "$SMOKE_LOCK" \
+            "$(cat "$SMOKE_LOCK.holder" 2>/dev/null || printf '持有者未知')" >&2
+        else
+          printf '排队/加锁失败：flock 没能把本套跑起来（%s，rc=%s；既不是排队超限，也没有脚本自己的退出码）\n' \
+            "$SMOKE_LOCK" "$SMOKE_LOCK_RC" >&2
+        fi
+        exit 2
+      fi
+      rm -f "$SMOKE_LOCK_MARKER" 2>/dev/null || true
+      exit "$SMOKE_LOCK_RC"
     fi
   else
     printf '注意：本机没有 flock → 全量 smoke 不做排队（同机并发两套时可能互相干扰；见 M23）\n'
@@ -134,6 +164,20 @@ if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
   SMOKE_LOCK="${SMOKE_LOCK:-${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}}"
   [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && printf '轮到本套了（排过队）\n'
   printf '%s pid=%s cmd=smoke.sh\n' "$(date -Is)" "$$" > "$SMOKE_LOCK.holder" 2>/dev/null || true
+  # P66 自检出口：排队守卫的自检需要一个**真的排到队、然后按给定退出码结束**的子进程 —— 否则它
+  # 只能跑完整套门禁（递归，而且每次门禁多跑几分钟）。只在已经是队列子进程（wrapped）且显式给了
+  # 非负整数时生效，而且**大声打印**：正常运行（环境里没有这个变量）的语义一个字不变。
+  case "${SMOKE_LOCK_SELFTEST_CHILD:-}" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; then
+        printf '自检出口：本进程作为队列子进程到此为止（SMOKE_LOCK_SELFTEST_CHILD=%s）\n' "$SMOKE_LOCK_SELFTEST_CHILD"
+        exit "$SMOKE_LOCK_SELFTEST_CHILD"
+      fi
+      printf '注意：SMOKE_LOCK_SELFTEST_CHILD=%s 只给 §34b 的排队守卫自检用；非夹具路径忽略它（照常跑完整套件）\n' \
+        "$SMOKE_LOCK_SELFTEST_CHILD"
+      ;;
+  esac
 fi
 # ── P26/G1（1.4）：套件自己的子树上，绝不再去争**机器锁** ────────────────────────────────────
 # 背景：M49 的假 TIMEOUT 就是「门禁命令自己会在机器锁上排队」——修在 cmd-review.sh（排队是 review
@@ -12207,6 +12251,98 @@ assert_eq "34⑥ tmux 被 shim 顶掉也照样跑通（rc=0）" "$P34_RC" "0"
 assert_eq "34⑥ 排队阶段一次 tmux 都没调（shim 日志为空）" "$(grep -c . "$P34_TMUX_LOG" 2>/dev/null || printf 0)" "0"
 assert_eq "34⑥ 看板一个字节没动" "$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)" "$P34_BOARD_BEFORE"
 p34_release
+
+section "34b · 门禁锁排队守卫：超上限要大声失败并点名持有者（P66）"
+# 事故（2026-09-22 PM 归档前门禁实测）：排队路径原来是 `exec flock --close -w … bash smoke.sh` ——
+# `flock -w` 超时只返回 1，而 `exec` 之后那行永远执行不到 → **静默 exit 1、一句点名的话都没有**，
+# 与「排队超上限大声失败（exit 2）」的承诺正相反（看日志的人只会以为门禁自己红了）。
+# 本段钉住修复后的形状（四条 + 一条 premise；只碰私有锁与私有临时目录，绝不碰机器锁）：
+#   ① 红侧（锁被持有 + WAIT=1）→ 一行点名 `<lock>.holder` 里的持有者 + 等了多少秒 + **exit 2**
+#      （不是 1、不静默），而且子套件一次都没跑（holder 还是持锁者的、输出里没有段落头）；
+#   ② 绿侧（空闲锁）→ 真的轮到本套：子进程跑起来、holder 换成自己、退出码原样透传；
+#   ③ 有竞争但排到了 → 既有行为照旧（排队行 + 「轮到本套了（排过队）」）；
+#   ④ 反例：子进程自己 exit 1（真红的门禁）绝不能被报成排队超限 —— 这就是 marker 存在的理由；
+#   ⑤ premise：旧形状（`exec flock -w`）超限 = rc 1 + 零输出（所以只看返回码不可能区分两者）。
+# 内层 smoke 是**真入口**（同一条排队守卫），但用 SMOKE_LOCK_SELFTEST_CHILD 在拿到锁后立刻退出：
+# 本段绝不递归跑整套门禁。身份清洗与 §34 同形。
+P66D="$TMP/p66"; P66_LOCK="$P66D/lock"; P66_RSH=""
+rm -rf "$P66D"; mkdir -p "$P66D"
+# 持锁助手：`--close` 让**只有** flock 持有 fd —— kill 掉它就立刻释放（§34 那版不带 --close，
+# 被 kill 的 flock 的子进程还捏着 fd，锁要到 sleep 自己走完才放，夹具会白等）。
+p66_hold() { # <秒>
+  : >>"$P66_LOCK"
+  flock --close -x "$P66_LOCK" sleep "$1" & P66_RSH=$!
+  sleep 0.4
+  printf '%s pid=%s cmd=p66-holder\n' "$(date -Is)" "$P66_RSH" > "$P66_LOCK.holder"
+}
+p66_release() { [ -n "$P66_RSH" ] && { kill "$P66_RSH" 2>/dev/null; wait "$P66_RSH" 2>/dev/null; }; P66_RSH=""; }
+p66_run() { # <out> <wait> <child-rc>：真入口 + 私有锁 / 私有 TMPDIR（marker 也不落 /tmp）
+  local out="$1" w="$2" crc="$3"
+  ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD \
+      TEAM_SMOKE_LOCK="$P66_LOCK" TEAM_SMOKE_LOCK_WAIT="$w" TMPDIR="$P66D" \
+      TEAM_SMOKE_FIXTURE=1 SMOKE_LOCK_SELFTEST_CHILD="$crc" \
+      bash "$SKILL_DIR/tests/smoke.sh" ) >"$out" 2>&1
+}
+
+# ① 红侧：锁被持有 + WAIT=1 → 点名持锁者 + exit 2 + 子套件没跑
+p66_hold 20
+P66_RC=0; p66_run "$P66D/red.log" 1 0 || P66_RC=$?
+P66_HOLDER_FP="$(md5sum "$P66_LOCK.holder" 2>/dev/null | cut -d' ' -f1)"
+p66_release
+assert_eq "34b① 排队超上限 → exit 2（约定的那个：不是 1，也不是静默）" "$P66_RC" "2"
+assert_match "$P66D/red.log" '排队超限：等满 [0-9]+s' "34b① 一行说明是排队超限，并报出等了多久"
+assert_match "$P66D/red.log" "排队超限.*cmd=p66-holder" "34b① 那一行点名 <lock>.holder 里的持有者"
+assert_has "$P66D/red.log" "没有运行" "34b① 那一行说明本套没有运行（不是对代码的判定）"
+assert_has "$P66D/red.log" "另一套全量 smoke 正在跑" "34b①（既有行为）排队前也打印持有者"
+assert_not "$P66D/red.log" "== 0 · 临时仓库 ==" "34b① 子套件一次都没跑（输出里没有段落头）"
+assert_not "$P66D/red.log" "轮到本套了" "34b① 也没有「轮到本套了（排过队）」"
+assert_eq "34b① holder 还写着持锁者（子进程没跑，没被改写）" \
+  "$(md5sum "$P66_LOCK.holder" 2>/dev/null | cut -d' ' -f1)" "$P66_HOLDER_FP"
+
+# ② 绿侧：空闲锁 → 照常轮到本套（子进程真的跑起来，退出码原样透传）
+rm -f "$P66_LOCK.holder"
+P66_RC=0; p66_run "$P66D/green.log" 5 0 || P66_RC=$?
+assert_eq "34b② 无竞争 → 子进程的退出码原样透传（0）" "$P66_RC" "0"
+assert_has "$P66D/green.log" "自检出口" "34b② 子进程真的作为队列子进程跑起来了"
+assert_has "$P66_LOCK.holder" "cmd=smoke.sh" "34b② 它把 holder 写成了自己（真的拿到了锁）"
+assert_not "$P66D/green.log" "排队超限" "34b② 无竞争时没有排队失败的噪音"
+assert_not "$P66D/green.log" "另一套全量 smoke 正在跑" "34b② 空闲锁不进排队路径"
+
+# ③ 有竞争但排到了：既有行为照旧（排队行 + 「轮到本套了（排过队）」）
+rm -f "$P66_LOCK.holder"
+p66_hold 2
+P66_RC=0; p66_run "$P66D/queued.log" 20 0 || P66_RC=$?
+p66_release
+assert_eq "34b③ 排到了 → 子进程的退出码（0）" "$P66_RC" "0"
+assert_has "$P66D/queued.log" "另一套全量 smoke 正在跑" "34b③ 排队时打印持有者"
+assert_has "$P66D/queued.log" "轮到本套了（排过队）" "34b③ 轮到时照旧打印「轮到本套了（排过队）」"
+assert_not "$P66D/queued.log" "排队超限" "34b③ 排到了就不是超限"
+assert_has "$P66_LOCK.holder" "cmd=smoke.sh" "34b③ 拿到锁后 holder 换成自己"
+
+# ④ 反例：子进程自己 exit 1（真红的门禁）→ 原样透传，不许报成排队超限
+rm -f "$P66_LOCK.holder"
+P66_RC=0; p66_run "$P66D/redgate.log" 10 1 || P66_RC=$?
+assert_eq "34b④ 子进程自己的 exit 1 → 原样透传（不被当成排队超限）" "$P66_RC" "1"
+assert_not "$P66D/redgate.log" "排队超限" "34b④ 真红不误报为排队超限"
+assert_not "$P66D/redgate.log" "排队/加锁失败" "34b④ 也不是加锁失败"
+assert_has "$P66D/redgate.log" "自检出口" "34b④ 子进程确实跑到了（marker 有内容）"
+
+# ⑤ premise：旧形状超限 = rc 1 + 零输出（修复前现场的真实形状）
+p66_hold 5
+( exec flock --close -w 1 "$P66_LOCK" bash -c 'printf legacy-ran' ) >"$P66D/legacy.log" 2>&1; P66_LEGACY_RC=$?
+p66_release
+assert_eq "34b⑤ premise：旧形状超限 → rc 1（只看返回码无法区分排队与真红）" "$P66_LEGACY_RC" "1"
+assert_eq "34b⑤ premise：旧形状超限时一个字都不打印（现场就是这样静默的）" \
+  "$(wc -c < "$P66D/legacy.log" | tr -d ' ')" "0"
+
+# ⑥ 队列 marker 不许在这台机器上留下残留
+assert_eq "34b⑥ 队列 marker 没有残留" \
+  "$(find "$P66D" -maxdepth 1 -name 'teamsmith-smoke-queue.*' 2>/dev/null | wc -l | tr -d ' ')" "0"
+rm -f "$P66_LOCK.holder" 2>/dev/null || true
 
 section "35 · 门禁只判正确性：性能判定守卫 + 旋钮完整性（M58 · perf-suite-split）"
 # 用户决定 D33：性能判定与正确性门禁分开（规格：openspec/changes/perf-suite-split）。本段是**纯逻辑**，
