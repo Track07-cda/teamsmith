@@ -13968,8 +13968,179 @@ EOS
   assert_has "$P82_EXT_LOG" "window dev ignored: the runtime directory names dev2" "P82 3.2 扩展日志点名被忽略的窗口"
 fi
 
+section "48 · P91 合并后的「分支又动了」核对（D49 的另一半）"
+# 事实（D49，2026-09-22）：P82 被 squash 合并（16 个提交）之后，作者又在分支上提交了两条**只动记录**
+# 的提交 → main 的记录停在旧版。P76 的 --pre-merge 看不到（它查合并**前**工作树里未入账的文件）。
+# 本节钉住合并后的那半：`team review <ID> --post-merge` 把 `main..task/<分支>` 分成三条线——
+#   <docs>/ 有差异 → 「记录有更新：取它」+ 可粘贴的 `git checkout <分支> -- <路径>`（非删除）；退出 0；
+#   skills/ 有差异 → 更响「代码有未合并的改动 —— 不能只取记录，必须重新合并并重跑门禁」（非零退出）；
+#   两条都有 → 记录照列、代码定退出码。
+# 判定的关键不是差异，而是**谁的差异**：main 上别的任务合进来后，`main..<分支>` 会把别人的工作当成
+# 「分支删掉了它们」—— 照字面报出来就是假红（还会劝 PM「取别人的记录」，取回来等于删掉别人的记录）。
+# 所以逐路径做三路比较（base = merge-base）：分支没动过 = main 一侧；main 没动过 = 分支新增；两边都
+# 动过时比 blob 历史（main 的版本在分支历史里 = 分支新增；分支的版本在 main 历史里 = 它只是落后；两边
+# 都不在 = 版本对不上，报出来看一眼）。④ 专门钉反假红，⑥ 钉「版本对不上」不静默丢。
+P91R="$TMP/p91repo"; rm -rf "$P91R"; mkdir -p "$P91R/skills"
+( cd "$P91R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && echo '# p91' > README.md && echo 'v1' > skills/x.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
+P91_SES="teamsmith-smoke-p91-$$"
+( cd "$P91R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$P91_SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p91-init.log" 2>&1 \
+  && ok "P91 夹具仓库 init 成功" || bad "P91 夹具仓库 init 失败（见 $TMP/p91-init.log）"
+( cd "$P91R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p91-paths.json" 2>&1 || true
+assert_eq "P91 隔离：team paths 的 main_root 就是 P91 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/p91-paths.json")" "$P91R"
+p91() { ( cd "$P91R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+if git -C "$P91R" add -A >/dev/null 2>&1 && git -C "$P91R" commit -qm "chore: init scaffold" >/dev/null 2>&1; then
+  ok "P91 夹具：init 脚手架已入账"
+else
+  bad "P91 夹具：init 脚手架提交失败"
+fi
+p91_commit() { # <worktree> <message>
+  git -C "$1" add -A >/dev/null 2>&1
+  git -C "$1" -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "$2" >/dev/null 2>&1
+}
+p91_squash() { # <branch> <message>：主工作树里做一次 squash 合并（夹具模拟 PM 的合并步）
+  ( cd "$P91R" && git merge -q --squash "$1" && git -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "$2" ) >/dev/null 2>&1
+}
+P91_BR="task/P91-smoke"; P91_WT="$P91R/.worktrees/dev"
+git -C "$P91R" worktree add -q -b "$P91_BR" "$P91_WT" main >/dev/null 2>&1
+mkdir -p "$P91R/.pi/team/state"
+printf 'window=dev\ntask=P91\nbranch=%s\n' "$P91_BR" > "$P91R/.pi/team/state/dev.env"
+[ -e "$P91_WT/.git" ] && ok "P91 夹具：任务工作树就位（.worktrees/dev @ $P91_BR）" || bad "P91 夹具：工作树起不来（后续断言无意义）"
+
+# ── ① 合并后只动了记录 → 「记录有更新：取它」+ 可粘贴修法；退出 0 ────────────────────────────
+echo 'v2' > "$P91_WT/skills/x.sh"
+echo 'record-v1' > "$P91_WT/docs/team/DECISIONS.md"
+p91_commit "$P91_WT" "P91: pre-merge work (code + record)"
+p91_squash "$P91_BR" "P91: apply fixture"
+# 刚合并完（分支没再动）：两边的树相同 → 「没有合并后新增」，且不报代码红
+p91 $TEAM review P91 --post-merge >"$TMP/p91-pristine.log" 2>&1; P91_RC0=$?
+assert_eq "P91 ①：刚合并完（分支没再动）→ 退出码 0" "$P91_RC0" "0"
+assert_has "$TMP/p91-pristine.log" "两边的树相同" "P91 ①：说清两边一致（没有合并后新增）"
+printf 'record-v2-late\n' >> "$P91_WT/docs/team/DECISIONS.md"
+mkdir -p "$P91_WT/docs/team/reports"; printf '# P91 late report\n' > "$P91_WT/docs/team/reports/P91-dev.md"
+p91_commit "$P91_WT" "docs(P91): late record"
+P91_HEAD0="$(git -C "$P91R" rev-parse HEAD)"
+p91 $TEAM review P91 --post-merge >"$TMP/p91-records.log" 2>&1; P91_RC1=$?
+assert_eq "P91 ①：合并后只动了记录 → 退出码 0（能当收尾核对）" "$P91_RC1" "0"
+assert_has "$TMP/p91-records.log" "记录有更新" "P91 ①：说清是记录有更新"
+assert_has "$TMP/p91-records.log" "docs/team/reports/P91-dev.md" "P91 ①：点名晚到的报告（新文件）"
+assert_has "$TMP/p91-records.log" "docs/team/DECISIONS.md" "P91 ①：点名晚到的记录改动（已跟踪文件）"
+assert_has "$TMP/p91-records.log" "git -C $P91R checkout $P91_BR -- docs/team/DECISIONS.md docs/team/reports/P91-dev.md" \
+  "P91 ①：修法是一条可粘贴的 git checkout（列出全部路径）"
+assert_has "$TMP/p91-records.log" "review P91 --post-merge" "P91 ①：给出取完后再看一次的下一步"
+assert_not "$TMP/p91-records.log" "代码有未合并的改动" "P91 ①：不误报代码（合进去的 skills/x.sh 不算新增）"
+assert_eq "P91 ①：只读核对不替 PM 取记录（main 的 HEAD 不动）" "$(git -C "$P91R" rev-parse HEAD)" "$P91_HEAD0"
+
+# ── ② 合并后又动了代码 → 更响 + 非零（记录照列）──────────────────────────────────────────────
+echo 'v3-late' > "$P91_WT/skills/x.sh"
+p91_commit "$P91_WT" "feat(P91): late code"
+p91 $TEAM review P91 --post-merge >"$TMP/p91-code.log" 2>&1; P91_RC2=$?
+assert_eq "P91 ②：合并后动了代码 → 非零退出（不能只取记录）" "$P91_RC2" "1"
+assert_has "$TMP/p91-code.log" "代码有未合并的改动 —— 不能只取记录，必须重新合并并重跑门禁" \
+  "P91 ②：更响地点名代码必须重新合并"
+assert_has "$TMP/p91-code.log" "skills/x.sh" "P91 ②：点名未合并的代码路径"
+assert_has "$TMP/p91-code.log" "重新合并这条分支（squash 或新 PR）+ 重跑门禁" "P91 ②：给出口径（重新合并 + 重跑门禁）"
+assert_has "$TMP/p91-code.log" "记录也有更新" "P91 ②：代码红时记录仍然被点名（不丢信息）"
+
+# ── ③ 反向（可证伪）：影子掉「合并后新增」判定 = 「检查被删除」的形状 → ②的夹具被静悄悄放过 ──────
+P91_PROBE="$TMP/p91-probe.sh"
+cat > "$P91_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <repo> <shadow>：shadow=1 = 影子掉合并后新增判定（检查被删除的形状）
+set -u
+SKILL_DIR="$1"; REPO="$2"; SHADOW="${3:-0}"
+cd "$REPO"
+unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SKILL_DIR
+. "$SKILL_DIR/scripts/lib/common.sh"
+for _f in "$SKILL_DIR"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+team_load_config >/dev/null 2>&1 || true
+[ "$SHADOW" = "1" ] && team_review_postmerge_paths() { :; }
+team_cmd_review P91 --post-merge
+EOS
+chmod +x "$P91_PROBE"
+bash "$P91_PROBE" "$SKILL_DIR" "$P91R" 0 >"$TMP/p91-probe-green.log" 2>&1; P91_RC3=$?
+assert_eq "P91 ③：探针（同源）照旧非零退出" "$P91_RC3" "1"
+assert_has "$TMP/p91-probe-green.log" "代码有未合并的改动" "P91 ③：探针照旧报代码红"
+assert_has "$TMP/p91-probe-green.log" "skills/x.sh" "P91 ③：探针照旧点名未合并的代码路径"
+bash "$P91_PROBE" "$SKILL_DIR" "$P91R" 1 >"$TMP/p91-probe-shadow.log" 2>&1; P91_RC4=$?
+assert_eq "P91 ③ 反向：检查被影子掉 → 退出码 0（②的夹具被静悄悄放过）" "$P91_RC4" "0"
+assert_not "$TMP/p91-probe-shadow.log" "代码有未合并的改动" "P91 ③ 反向：假绿的形状（更响的那句不见了）"
+
+# ── ④ main 上又合了别人的工作（陈旧分支）→ 只点名真正晚到的那条记录，别人的一个都不许进来 ────────
+P92_BR="task/P92-forker"; P92_WT="$P91R/.worktrees/dev2"
+git -C "$P91R" worktree add -q -b "$P92_BR" "$P92_WT" main >/dev/null 2>&1
+echo 'p92-pre' > "$P92_WT/skills/y.sh"
+p91_commit "$P92_WT" "P92: pre-merge work"
+p91_squash "$P92_BR" "P92: apply fixture"
+# 「别人的任务」：main 上再落一份工作（新文件 + 别人的记录 + 与分支同路径 x.sh 的改动）
+echo 'other-task' > "$P91R/skills/other.sh"
+echo 'v3-other' > "$P91R/skills/x.sh"
+printf 'other report\n' > "$P91R/docs/team/reports/OTHER.md"
+p91_commit "$P91R" "P99: another task lands on main"
+mkdir -p "$P92_WT/docs/team/reports"; printf '# P92 late\n' > "$P92_WT/docs/team/reports/P92-dev.md"
+p91_commit "$P92_WT" "docs(P92): late record"
+printf 'window=dev\ntask=P92\nbranch=%s\n' "$P92_BR" > "$P91R/.pi/team/state/dev.env"
+p91 $TEAM review P92 --post-merge >"$TMP/p91-stale.log" 2>&1; P91_RC5=$?
+assert_eq "P91 ④ 陈旧分支：只有记录晚到 → 退出码 0" "$P91_RC5" "0"
+assert_has "$TMP/p91-stale.log" "docs/team/reports/P92-dev.md" "P91 ④：点名真正晚到的那条记录"
+assert_not "$TMP/p91-stale.log" "skills/other.sh" \
+  "P91 ④ 反假红：别人的新代码文件不能被当成「分支删掉了它」"
+assert_not "$TMP/p91-stale.log" "docs/team/reports/OTHER.md" \
+  "P91 ④ 反假红：别人的记录不能被劝「取它」（取回来会把别人的记录删掉）"
+assert_not "$TMP/p91-stale.log" "skills/x.sh" \
+  "P91 ④ 反假红：分支没动过的、main 一侧的改动不算它的新增"
+assert_not "$TMP/p91-stale.log" "代码有未合并的改动" "P91 ④ 反假红：不该报代码红"
+
+# ── ⑤ 把记录取到 main 后再核对 → 「没有合并后新增」（收敛，不再劝取）────────────────────────────
+git -C "$P91R" checkout "$P92_BR" -- docs/team/reports/P92-dev.md >/dev/null 2>&1
+p91_commit "$P91R" "docs(team): take P92 late record"
+p91 $TEAM review P92 --post-merge >"$TMP/p91-clean.log" 2>&1; P91_RC6=$?
+assert_eq "P91 ⑤：取走记录后再核对 → 退出码 0" "$P91_RC6" "0"
+assert_has "$TMP/p91-clean.log" "没有合并后新增" "P91 ⑤：明确说没有合并后新增（收敛）"
+
+# ── ⑥ 两边都动过、版本对不上（晚到的改动撞上别人的改动）→ 非零 + 点名，不静默丢 ────────────────
+# x.sh：base=v1、分支=v2（已合并）、main=v3-other（别人的 P99）、分支晚到=v4-late；
+# main 的 v3-other 不在分支历史里，分支的 v4-late 也不在 main 历史里 → 只能报出来让人看一眼。
+echo 'v4-late' > "$P92_WT/skills/x.sh"
+p91_commit "$P92_WT" "feat(P92): late code on a path another task moved"
+p91 $TEAM review P92 --post-merge >"$TMP/p91-unclear.log" 2>&1; P91_RC7=$?
+assert_eq "P91 ⑥：版本对不上 → 非零退出（不静默丢）" "$P91_RC7" "1"
+assert_has "$TMP/p91-unclear.log" "版本对不上" "P91 ⑥：点名「版本对不上」"
+assert_has "$TMP/p91-unclear.log" "skills/x.sh" "P91 ⑥：点名那条对不上的路径"
+assert_has "$TMP/p91-unclear.log" "重新合并这条分支（squash 或新 PR）+ 重跑门禁" "P91 ⑥：给出口径（重新合并 + 重跑门禁）"
+assert_not "$TMP/p91-unclear.log" "checkout $P92_BR -- skills/x.sh" "P91 ⑥：不劝「直接取这一版」（会覆盖别人的改动）"
+
+# ── ⑦ 含混用法拒绝（它不是复验，也不是合并前检查）────────────────────────────────────────────
+printf 'window=dev\ntask=P91\nbranch=%s\n' "$P91_BR" > "$P91R/.pi/team/state/dev.env"
+p91 $TEAM review P91 --post-merge --dir "$TMP/p91-nope" >"$TMP/p91-mixed.log" 2>&1; P91_RC8=$?
+assert_eq "P91 ⑦：--post-merge 与 --dir 同用被拒（它不跑复验）" "$P91_RC8" "2"
+assert_has "$TMP/p91-mixed.log" "不与 --dir 同用" "P91 ⑦：拒绝时说明原因"
+p91 $TEAM review P91 --pre-merge --post-merge >"$TMP/p91-both.log" 2>&1; P91_RC9=$?
+assert_eq "P91 ⑦：--pre-merge 与 --post-merge 不同用（一个合并前、一个合并后）" "$P91_RC9" "2"
+assert_has "$TMP/p91-both.log" "不同用" "P91 ⑦：拒绝时说明原因（合并前/后）"
+# 其余复验旋钮同样不适用（含混用法一律拒绝，不猜）
+for P91_FLAG in --no-gates --strong --allow-unresolved-branch; do
+  p91 $TEAM review P91 --post-merge "$P91_FLAG" >"$TMP/p91-mixed$P91_FLAG.log" 2>&1; P91_RCF=$?
+  assert_eq "P91 ⑦：--post-merge 与 $P91_FLAG 同用被拒" "$P91_RCF" "2"
+  assert_has "$TMP/p91-mixed$P91_FLAG.log" "不与 $P91_FLAG 同用" "P91 ⑦：$P91_FLAG 的拒绝点名原因"
+done
+p91 $TEAM review P91 --post-merge --branch main >"$TMP/p91-mixed-branch.log" 2>&1; P91_RCB=$?
+assert_eq "P91 ⑦：--post-merge 与 --branch 同用被拒（分支自动定位）" "$P91_RCB" "2"
+assert_has "$TMP/p91-mixed-branch.log" "不与 --branch 同用" "P91 ⑦：--branch 的拒绝点名原因"
+
+# ── ⑧ 定位不到分支 → fail closed（不把「没检查」报成「没问题」）──────────────────────────────
+git -C "$P91R" worktree remove --force "$P91_WT" >/dev/null 2>&1
+git -C "$P91R" branch -D "$P91_BR" >/dev/null 2>&1
+p91 $TEAM review P91 --post-merge >"$TMP/p91-noref.log" 2>&1; P91_RC10=$?
+assert_eq "P91 ⑧：分支解析不到 → 非零（fail closed，不假装核对过）" "$P91_RC10" "2"
+assert_has "$TMP/p91-noref.log" "解析不到" "P91 ⑧：拒绝时点名「无法核对」"
+assert_not "$TMP/p91-noref.log" "没有合并后新增" "P91 ⑧：不把「没检查」报成「没问题」"
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
+
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
 if [ "$FAST_REQ" = "1" ]; then

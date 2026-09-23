@@ -327,6 +327,215 @@ team_cmd_review_premerge() { # <ID>：合并前的未入账记录检查（只读
   return 1
 }
 
+# ---------------------------------------------------------------- P91 · 合并后的「分支又动了」核对（D49 的另一半）
+# 事实（D49，2026-09-22）：P82 被 squash 合并（16 个提交）之后，作者又在分支上提交了两条**只动记录**
+# 的提交 → main 的记录停在旧版。P76 的 --pre-merge 看不到这个形状（它查的是合并**前**工作树里未入账
+# 的文件）。合并后要能一条命令核对 `main..task/<分支>`，并把 <docs>/ 与 skills/ 两条线分开说：
+#   <docs>/ 下有差异 → 记录有更新：取它（`git checkout <分支> -- <路径>`）；
+#   skills/ 下有差异 → 更响：**代码有未合并的改动 —— 不能只取记录，必须重新合并并重跑门禁**（非零退出）。
+#
+# 判定必须经得起「分支已经落后」的现场：main 上别的任务合进来之后，`main..<分支>` 会把**别人的**工作
+# 当成「分支删掉了它们」—— 照字面报出来就是假红（P82 的分支现在落后 main 几十个提交：直接列会给出
+# 上百个与它无关的路径，还会给出「取别人的记录」这种会把它们删掉的修法）。所以逐路径做三路比较
+# （base = merge-base(main, 分支)）：
+#   ① 分支相对分叉点没动过这个路径（分支版 == base 版）→ 差异在 main 一侧（别的工作）→ 不是它的新增；
+#   ② main 没动过这个路径（main 版 == base 版）→ 分支有 main 没有的内容 → **合并后新增**；
+#   ③ 两边都动过 → main 的版本是不是分支历史里用过的版本（git log --raw 的旧/新 blob）？
+#        是 → 分支在 main 那一版之后又动了它 → **合并后新增**；
+#        否 → 再看反向：分支这一版 main 曾经有过吗？是 → main 的后继改动，它只是落后（别人的工作）；
+#        都判不出来 → 拿 git 自己的三路合并（main ← 分支，base 为祖先）当裁判：结果 == main → main
+#        已含分支的改动；== 分支 → 分支更新；冲突/第三个结果 → **版本对不上**（冲突解决 / 从未合并 /
+#        晚到的改动撞上了别人的改动），报出来让人看一眼，不静默丢。
+# 这样 D49 的形状照旧点名，别的任务的工作不会混进来。只读：不跑门禁、不写记录、不动工作树。
+team_review_postmerge_had_blob() { # <ref> <path> <blob> → 0=<ref> 的历史里用过这个 blob
+  # 一次 git log --raw 把这条路径在 <ref> 上的每次改动列出来（:100644 100644 <old> <new> <status>），
+  # 旧/新两个 blob 都算「用过」—— 合并进 main 的那一版正是分支历史里的其中之一。
+  local ref="$1" path="$2" blob="$3" line meta f_old f_new
+  while IFS= read -r line; do
+    case "$line" in :*) ;; *) continue ;; esac
+    meta="${line%%$'\t'*}"       # :100644 100644 <old> <new> M
+    meta="${meta#* }"             # 100644 <old> <new> M
+    meta="${meta#* }"             # <old> <new> M
+    f_old="${meta%% *}"
+    meta="${meta#* }"
+    f_new="${meta%% *}"
+    [ "$f_old" = "$blob" ] || [ "$f_new" = "$blob" ] || continue
+    return 0
+  done < <(git -C "$TEAM_MAIN_ROOT" log --no-abbrev --raw --no-renames --format= "$ref" -- "$path" 2>/dev/null || true)
+  return 1
+}
+
+team_review_postmerge_merge3() { # <base> <branch> <path> → stdout 三路合并结果（把分支合并进 main，base 为祖先）；rc=0 干净 / 1 冲突
+  # 两边都动过、blob 历史又都判不出来时，用 git 自己的合并引擎当裁判（不用自己的行集合启发式：
+  # 结果 == main = main 已含分支的改动；== 分支 = 分支更新；冲突/第三个结果 = 不确定。
+  local base="$1" branch="$2" path="$3" root="$TEAM_MAIN_ROOT" d rc=0
+  d="$(mktemp -d "${TMPDIR:-/tmp}/p91-merge3.XXXXXX")" || return 1
+  git -C "$root" show "$TEAM_PROTECTED_BRANCH:$path" > "$d/main" 2>/dev/null || : > "$d/main"
+  git -C "$root" show "$base:$path" > "$d/base" 2>/dev/null || : > "$d/base"
+  git -C "$root" show "$branch:$path" > "$d/branch" 2>/dev/null || : > "$d/branch"
+  cp "$d/main" "$d/out"
+  git merge-file -q "$d/out" "$d/base" "$d/branch" 2>/dev/null || rc=$?
+  cat "$d/out"
+  rm -rf "$d"
+  return "$rc"
+}
+
+team_review_postmerge_paths() { # <branch> → 每行 `<kind>\t<status>\t<path>`；kind=late|behind|other|unclear，status=git 的 A/M/D（main→分支方向）
+  # late = 合并后新增（main 没有分支的新内容）；behind = 分支落后（差异在 main 一侧）；
+  # other = 两边都动过，但 main 那一版不来自这条分支、而分支那一版 main 曾经有过（别人的后续改动，它只是落后）；
+  # unclear = 两边都动过、两边的版本又都不在对方的历史里，且三路合并也说不清
+  #           （冲突解决 / 从未合并 / 晚到的改动撞上了别人的改动）—— 报出来让人看一眼，不静默丢。
+  local branch="$1" root="$TEAM_MAIN_ROOT" base line meta path st msha bsha bbase merged mrc
+  base="$(git -C "$root" merge-base "$TEAM_PROTECTED_BRANCH" "$branch" 2>/dev/null || true)"
+  [ -n "$base" ] || return 1
+  local -a diff_paths=()
+  local -A base_blob=()
+  local raw
+  raw="$(git -C "$root" diff --raw --no-renames --no-abbrev "$TEAM_PROTECTED_BRANCH".."$branch" 2>/dev/null || true)"
+  [ -n "$raw" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in :*) ;; *) continue ;; esac
+    diff_paths+=("${line#*$'\t'}")
+  done <<< "$raw"
+  # base 那一版：一次 ls-tree 拿全（没有这条路径 = 分叉点处不存在 → 空）
+  while IFS=$'\t' read -r meta path; do
+    [ -n "$path" ] || continue
+    base_blob["$path"]="${meta##* }"
+  done < <(git -C "$root" ls-tree --full-tree "$base" -- "${diff_paths[@]}" 2>/dev/null || true)
+  while IFS= read -r line; do
+    case "$line" in :*) ;; *) continue ;; esac
+    meta="${line%%$'\t'*}"; path="${line#*$'\t'}"
+    meta="${meta#* }"; meta="${meta#* }"     # <old> <new> <status>
+    msha="${meta%% *}"; meta="${meta#* }"
+    bsha="${meta%% *}"
+    [ "$msha" = "0000000000000000000000000000000000000000" ] && msha="-"
+    [ "$bsha" = "0000000000000000000000000000000000000000" ] && bsha="-"
+    bbase="${base_blob[$path]:--}"
+    st="${meta#* }"                        # <status>（main→分支方向：A=分支新增 / D=分支删除 / M=两边都有）
+    if [ "$bbase" = "$bsha" ]; then         # ① 分支没动过它 → 差异在 main 一侧
+      printf 'behind\t%s\t%s\n' "$st" "$path"; continue
+    fi
+    if [ "$bbase" = "$msha" ] \
+       || { [ "$msha" != "-" ] && team_review_postmerge_had_blob "$branch" "$path" "$msha"; }; then
+      printf 'late\t%s\t%s\n' "$st" "$path"
+    elif [ "$bsha" != "-" ] && team_review_postmerge_had_blob "$TEAM_PROTECTED_BRANCH" "$path" "$bsha"; then
+      printf 'other\t%s\t%s\n' "$st" "$path"     # main 曾经有过分支这一版 → 它只是落后（别人的后续改动）
+    else
+      # 最后一道裁判：git 自己的三路合并（|| mrc=$? 设防：merge-file 冲突时 rc≠0，裸赋值在 set -e 下会带走整个扫描）
+      mrc=0
+      merged="$(team_review_postmerge_merge3 "$base" "$branch" "$path")" || mrc=$?
+      if [ "$mrc" = "0" ] && [ "$merged" = "$(git -C "$root" show "$TEAM_PROTECTED_BRANCH:$path" 2>/dev/null)" ]; then
+        printf 'other\t%s\t%s\n' "$st" "$path"   # main 已包含分支的改动（只是后来又改了）
+      elif [ "$mrc" = "0" ] && [ "$merged" = "$(git -C "$root" show "$branch:$path" 2>/dev/null)" ]; then
+        printf 'late\t%s\t%s\n' "$st" "$path"    # main 的改动全在分支里 → 分支更新
+      else
+        printf 'unclear\t%s\t%s\n' "$st" "$path" # 冲突/第三个结果 → 看一眼，不静默丢
+      fi
+    fi
+  done <<< "$raw"
+  return 0
+}
+
+team_cmd_review_postmerge() { # <ID>：合并后的「分支又动了」核对（只读；0=没有代码未合并 / 1=有合并后新增 / 2=无法核对）
+  local id="$1" rc=0 branch="" root="$TEAM_MAIN_ROOT" mtip="" btip=""
+  team__resolve_branch "$id" || rc=$?
+  if [ "$rc" != "0" ]; then
+    team_err "review $id --post-merge：定位不到唯一的任务分支，无法核对（不猜）"
+    [ "$rc" = "2" ] && team_err "  这个 ID 有多个候选分支；--post-merge 不接受 --branch —— 先让任务/席位把分支落清楚"
+    team_err "  → 看任务/席位/分支：$TEAM_CLI status $id"
+    team_err "  → 分支已删除时它也不可能再带来「合并后新增」；但这次没有核对过，不报绿"
+    return 2
+  fi
+  branch="$_R"; _R=""
+  if git -C "$root" merge-base --is-ancestor "$branch" "$TEAM_PROTECTED_BRANCH" 2>/dev/null; then
+    printf 'review %s --post-merge：分支 %s（tip %s）已经是 %s 的祖先（真合并 / fast-forward）—— 没有合并后新增\n' \
+      "$id" "$branch" "$(git -C "$root" rev-parse --short "$branch" 2>/dev/null || printf '?')" "$TEAM_PROTECTED_BRANCH"
+    return 0
+  fi
+  if ! git -C "$root" rev-parse --verify --quiet "$branch^{commit}" >/dev/null 2>&1; then
+    team_err "review $id --post-merge：分支 $branch 在主仓库里解析不到（已删除/改名？）—— 无法核对"
+    team_err "  分支不存在时它的提交只可能已经在 $TEAM_PROTECTED_BRANCH 里；但这次没有核对过，不报绿"
+    return 2
+  fi
+  mtip="$(git -C "$root" rev-parse --short "$TEAM_PROTECTED_BRANCH" 2>/dev/null || printf '?')"
+  btip="$(git -C "$root" rev-parse --short "$branch" 2>/dev/null || printf '?')"
+  printf 'review %s --post-merge：分支 %s（tip %s）vs %s（tip %s）\n' \
+    "$id" "$branch" "$btip" "$TEAM_PROTECTED_BRANCH" "$mtip"
+
+  local -a late_records=() late_code=() late_other=() late_unclear=()
+  local -A gone=()
+  local kind st path nbehind=0 nother=0
+  while IFS=$'\t' read -r kind st path; do
+    [ -n "$path" ] || continue
+    case "$kind" in
+      late)
+        case "$path" in
+          "$TEAM_DOCS_DIR"/*) late_records+=("$path") ;;
+          skills/*)           late_code+=("$path") ;;
+          *)                  late_other+=("$path") ;;
+        esac
+        # 分支这一版不存在（删除了这个路径）→ 取记录要用 git rm，不是 checkout
+        [ "$st" = "D" ] && gone["$path"]=1 ;;
+      behind)  nbehind=$((nbehind + 1)) ;;
+      other)   nother=$((nother + 1)) ;;
+      unclear) late_unclear+=("$path") ;;
+    esac
+  done < <(team_review_postmerge_paths "$branch")   # 定位不到 merge-base 时上面已经挡掉（rc 2）
+
+  local nlate=$(( ${#late_records[@]} + ${#late_code[@]} + ${#late_other[@]} + ${#late_unclear[@]} ))
+  if [ "$nlate" = "0" ]; then
+    if [ "$((nbehind + nother))" = "0" ]; then
+      printf '  已核对：两边的树相同 —— 没有合并后新增（刚合并完、分支没再动）\n'
+    else
+      printf '  已核对：没有合并后新增 —— 与 %s 的差异共 %d 个路径，全部来自 main 一侧（别的工作/后续提交），不是这条分支合并后又提交的内容\n' \
+        "$TEAM_PROTECTED_BRANCH" "$((nbehind + nother))"
+    fi
+    return 0
+  fi
+  local p
+  if [ "${#late_unclear[@]}" -gt 0 ]; then
+    team_err "review $id --post-merge：✗ 两边都动过、版本对不上（main 那一版不来自这条分支，分支这一版 main 也没有过）—— 自己看一眼，别直接取："
+    for p in "${late_unclear[@]}"; do printf '      %s\n' "$p"; done
+  fi
+  if [ "${#late_code[@]}" -gt 0 ]; then
+    team_err "review $id --post-merge：✗ 代码有未合并的改动 —— 不能只取记录，必须重新合并并重跑门禁："
+    for p in "${late_code[@]}"; do printf '      %s\n' "$p"; done
+  fi
+  if [ "${#late_other[@]}" -gt 0 ]; then
+    team_err "review $id --post-merge：✗ $TEAM_DOCS_DIR/ 与 skills/ 之外也有合并后新增（既不是记录也不是技能代码）—— 按代码对待：重新合并并重跑门禁："
+    for p in "${late_other[@]}"; do printf '      %s\n' "$p"; done
+  fi
+  if [ "${#late_code[@]}" -gt 0 ] || [ "${#late_other[@]}" -gt 0 ] || [ "${#late_unclear[@]}" -gt 0 ]; then
+    if [ "${#late_records[@]}" -gt 0 ]; then
+      printf '  记录也有更新（%d 个路径；重新合并会把它们一起带走）：\n' "${#late_records[@]}"
+      for p in "${late_records[@]}"; do printf '      %s%s\n' "$p" "$([ -n "${gone[$p]:-}" ] && printf '  [删除]' || true)"; done
+    fi
+    printf '  修法：重新合并这条分支（squash 或新 PR）+ 重跑门禁，再 board set %s done\n' "$id"
+    return 1
+  fi
+
+  # 只有记录：取它即可（不涉及代码，不需要重跑门禁）
+  printf '  记录有更新（合并后分支上又提交了 %s/ 下的记录）—— 取它：\n' "$TEAM_DOCS_DIR"
+  local -a keep=() drop=()
+  for p in "${late_records[@]}"; do
+    if [ -n "${gone[$p]:-}" ]; then drop+=("$p"); else keep+=("$p"); fi
+    printf '      %s%s\n' "$p" "$([ -n "${gone[$p]:-}" ] && printf '  [删除]' || true)"
+  done
+  printf '  修法（可粘贴；记录不涉及代码，不需要重跑门禁）：\n'
+  if [ "${#keep[@]}" -gt 0 ]; then
+    printf '    git -C %s checkout %s --' "$root" "$branch"
+    printf ' %q' "${keep[@]}"
+    printf '\n'
+  fi
+  if [ "${#drop[@]}" -gt 0 ]; then
+    printf '    git -C %s rm -f --' "$root"
+    printf ' %q' "${drop[@]}"
+    printf '\n'
+  fi
+  printf '  → 取完再看一次：%s review %s --post-merge\n' "$TEAM_CLI" "$id"
+  return 0
+}
+
 # ---------------------------------------------------------------- 强复验证据的结构化判定（F13/F14）
 # 旧实现是纯关键词 grep：报告只要“提到”翻转 / 独立验证包就被判成“满足”，而 M4.1 之后的
 # 英文写法（independent verification package / red before → green after）反倒判“缺”。
@@ -511,7 +720,7 @@ team_strong_scan() { # <checkout> <ID> → 打印复验记录用的「强复验�
 
 team_cmd_review() {
   team_require_docs
-  local id="" branch="" no_gates=0 strong=0 revdir="" allow_unresolved=0 pre_merge=0
+  local id="" branch="" no_gates=0 strong=0 revdir="" allow_unresolved=0 pre_merge=0 post_merge=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --branch) branch="${2:?}"; shift 2 ;;
@@ -520,12 +729,15 @@ team_cmd_review() {
       --allow-unresolved-branch) allow_unresolved=1; shift ;;   # 显式覆盖：给解析不到的分支/提交盖章（会写进记录）
       --dir) revdir="${2:?}"; shift 2 ;;    # PM 准备好的独立 checkout（skill 不碰 git）
       --pre-merge) pre_merge=1; shift ;;    # P76/D45：合并前查任务工作树里未入账的 <docs>/ 记录（不跑门禁、不写记录）
+      --post-merge) post_merge=1; shift ;;  # P91/D49：合并后查这条分支相对保护分支又动了什么（不跑门禁、不写记录）
       -*) team_usage_die "review: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
   [ -n "$id" ] || team_usage_die "review <ID> --dir <独立checkout> [--no-gates] [--strong] [--allow-unresolved-branch]
-  或：review <ID> --pre-merge   # 合并前查这个任务工作树里未入账的 <docs>/ 记录（D45/P76；不跑门禁、不写记录）"
+  或：review <ID> --pre-merge   # 合并前查这个任务工作树里未入账的 <docs>/ 记录（D45/P76；不跑门禁、不写记录）
+  或：review <ID> --post-merge  # 合并后查这条分支相对 <保护分支> 又新增了什么（D49/P91；记录→取它，代码→非零）"
+  [ "$pre_merge" = "0" ] || [ "$post_merge" = "0" ] || team_usage_die "review $id --pre-merge 与 --post-merge 不同用（一个是合并前、一个是合并后）"
   # P76/D45：--pre-merge 是合并门前置检查（只读；干净时零输出、退出码 0）。它不是一次复验：不跑门禁、
   # 不写记录、不动工作树，所以与复验专用的旋钮互斥 —— 含混用法直接拒绝，不猜。
   if [ "$pre_merge" = "1" ]; then
@@ -537,6 +749,17 @@ team_cmd_review() {
     local pm_rc=0
     team_cmd_review_premerge "$id" || pm_rc=$?
     return "$pm_rc"
+  fi
+  # P91/D49：--post-merge 是合并后的核对（只读；不跑门禁、不写记录、不动工作树）—— 同样的互斥，含混用法直接拒绝。
+  if [ "$post_merge" = "1" ]; then
+    [ -z "$revdir" ] || team_usage_die "review $id --post-merge 不与 --dir 同用（它只比对分支与保护分支，不是一次复验）"
+    [ "$no_gates" = "0" ] || team_usage_die "review $id --post-merge 不与 --no-gates 同用（它不跑门禁）"
+    [ "$strong" = "0" ] || team_usage_die "review $id --post-merge 不与 --strong 同用（它不跑门禁）"
+    [ "$allow_unresolved" = "0" ] || team_usage_die "review $id --post-merge 不与 --allow-unresolved-branch 同用"
+    [ -z "$branch" ] || team_usage_die "review $id --post-merge 不与 --branch 同用（任务分支由 state/refs 自动定位）"
+    local po_rc=0
+    team_cmd_review_postmerge "$id" || po_rc=$?
+    return "$po_rc"
   fi
   [ -n "$revdir" ] || team_die "review 需要 --dir <路径>：请 PM 自己准备独立 checkout（skill 不执行 git）
   例： git -C $TEAM_MAIN_ROOT worktree add --detach /tmp/review-$id <branch>

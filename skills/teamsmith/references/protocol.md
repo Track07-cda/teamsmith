@@ -301,6 +301,25 @@ merge gate), prints nothing when clean, and **never commits for you** — who co
 Ignored files (`state/`, build output) and dirty paths outside `<docs>/` are not part of the check; if no worktree
 can be located it refuses (rc 2) rather than reporting clean — "not checked" must not look like "nothing wrong".
 
+**After the merge, check whether the branch moved again.** A squash merge freezes the branch as it was *at that
+moment*: commits the author lands afterwards are not in the protected branch (2026-09-22: P82 added two record-only
+commits after the merge and `main` kept the older records). Any late delivery gets one command, before taking
+anything:
+
+```bash
+team review <ID> --post-merge
+```
+
+It compares `main..task/<branch>` **per path** and reports only what the branch added *after* the merge: a path the
+branch never changed since the fork, a path whose `main` version came later from elsewhere, and a path whose branch
+version `main` already had at some point all belong to other work, not to this task. Without that filter a stale
+branch would list every later task's files — and even advise "taking" records that would delete them. `<docs>/**`
+paths → *records updated: take them* plus a copy-paste `git -C <root> checkout <branch> -- <paths>` (a record the
+branch deleted comes as `git rm -f`), exit 0. Paths under `skills/**` (or anything else outside `<docs>/**`) → exit
+non-zero with "code has unmerged changes — do not just take the records, re-merge and re-run the gates". Versions
+that fit neither side (conflict resolution, a never-merged branch, a late change colliding with someone else's) are
+named too rather than dropped. No branch → rc 2: "not checked" never looks like "nothing wrong".
+
 1. verify the branch exists (a mistyped `--branch` is not misreported as a "conflict");
 2. `merge --squash` → `commit` → **`push` (when `--push`/`--pr`)** all succeed;
 3. only then `board set <ID> done`.

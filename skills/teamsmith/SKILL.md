@@ -115,6 +115,10 @@ when they conflict, the creed wins and the process gets fixed.
    tool never commits for you). Then run git/forge yourself: squash-merge (with a PR:
    `gh pr merge --squash --delete-branch <PR>` first, then `git fetch && git merge --ff-only`) →
    `team board set <ID> done` → `team close <ID>`.
+   **If a late delivery arrives after the merge** (the author lands commits on the branch afterwards), run
+   `team review <ID> --post-merge` before taking anything: records-only → take them with the printed
+   `git checkout <branch> -- …`; code (anything outside `docs/team/**`) → it exits non-zero: re-merge and
+   re-run the gates — the records alone are not enough.
    **Fail** → `team thread <a> "<failure evidence + expectation>"` + `team say <a> "<one-line instruction>"` (if the target's input box holds a draft the instruction is queued instead of typed — `team outbox list` shows it, and it is delivered once the box clears).
 6. **Wrap up / report**: update `BOARD.md`, record key decisions in `DECISIONS.md` (with rationale and impact),
    and report to the user as "delivered + where the evidence is + next step". Users want conclusions and risk,
@@ -180,6 +184,10 @@ team review <ID> --dir /tmp/review-<ID> --strong
 # 3b) Pre-merge: the branch's worktree may hold records that were never committed (`merge --squash` carries
 #     only committed content — an untracked report stays behind and dies with the reused worktree; D45)
 team review <ID> --pre-merge       # non-zero + per-file fix command while <docs>/** is uncommitted; silent when clean
+
+# 3c) Post-merge: the author may keep committing after the merge (`merge --squash` froze the branch at that
+#     moment — P82's two record-only commits never reached main; D49)
+team review <ID> --post-merge      # records → take them (checkout fix); code → non-zero: re-merge + re-run gates
 
 # 4) Merge (with a PR: merge the PR first, then fast-forward locally; without: squash locally)
 gh pr merge --squash --delete-branch <PR>          # or glab mr merge, or a curl/HTTP call
