@@ -5,7 +5,7 @@
 #   bash skills/teamsmith/tests/flip-p72.sh --keep     # 保留临时目录（排查）
 #
 # 每个变异打在 /tmp 下的**技能树副本**上（真实工作树一个字节都不动），然后跑**聚焦探针**：
-# smoke 前导（身份清洗 / 夹具 / 判据）+ 46 段（P82 的夹具）+ 结果行。三对「断掉 → 变红 → 还原 → 变绿」：
+# smoke 前导（身份清洗 / 夹具 / 判据）+ 47 段（P82 的夹具）+ 结果行。三对「断掉 → 变红 → 还原 → 变绿」：
 #   a 发送者退回**收件人**（旧实现：收件箱行 / knock 文本 / 条目 from: 三处都用 recipient）
 #     → 1.2 / 1.5 / 1.6 的「发送者 = dev2」类断言变红
 #   b 未解析的运行时目录**静默退回 pm**（缺陷本身） → 1.4 的拒绝/零写入断言变红
@@ -32,7 +32,7 @@ case "${1:-}" in
 esac
 
 [ -s "$SMOKE" ] || { printf 'flip-p72: 缺 %s\n' "$SMOKE" >&2; exit 3; }
-grep -q '^section "46 ' "$SMOKE" || { printf 'flip-p72: smoke.sh 里没有 46 段（P82 夹具）\n' >&2; exit 3; }
+grep -q '^section "47 ' "$SMOKE" || { printf 'flip-p72: smoke.sh 里没有 47 段（P82 夹具）\n' >&2; exit 3; }
 
 # 3.x 与变异 d 要跑扩展（与 smoke.sh 同口径的 TS 运行时探测）
 TS_RUNNER=""
@@ -62,18 +62,18 @@ restore_skill() { rm -rf "$MUT_SKILL"; cp -a "$SKILL_DIR" "$MUT_SKILL"; }
 show_red() { sed 's/\x1b\[[0-9;]*m//g' "$1" | grep '✗' | head -5 | sed 's/^/      /'; }
 
 # ── 聚焦探针：smoke 前导 + 46 段 + 结果行（SKILL_DIR 换成变异树）─────────────────────────────
-PROBE="$TMP/probe-46.sh"
+PROBE="$TMP/probe-47.sh"
 {
   awk '/^# -+ 0\. 仓库/{exit} {print}' "$SMOKE"
-  awk '/^section "46 /{f=1} f{ if ($0 ~ /^section "/ && $0 !~ /^section "46 /) exit; print }' "$SMOKE"
+  awk '/^section "47 /{f=1} f{ if ($0 ~ /^section "/ && $0 !~ /^section "47 /) exit; print }' "$SMOKE"
   cat <<'EOS'
 printf '\n== 结果 ==  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
-printf 'PROBE-46-END\n'
+printf 'PROBE-47-END\n'
 [ "$FAIL" -eq 0 ] && exit 0
 exit 1
 EOS
 } | sed "s|^SKILL_DIR=.*|SKILL_DIR=\"$MUT_SKILL\"|" > "$PROBE"
-grep -q 'PROBE-46-END' "$PROBE" || { printf 'flip-p72: 探针形状不对（46 段没抽出来？）\n' >&2; exit 3; }
+grep -q 'PROBE-47-END' "$PROBE" || { printf 'flip-p72: 探针形状不对（46 段没抽出来？）\n' >&2; exit 3; }
 bash -n "$PROBE" || { printf 'flip-p72: 探针语法错\n' >&2; exit 3; }
 
 run_probe() { # <日志>
