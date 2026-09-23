@@ -11,7 +11,7 @@ cursor), so a lower candidate whose pairing lies entirely below the cursor MUST 
 mixed-width frame can hold a second, self-paired pair of rule rows under the cursor, and pairing with it would locate
 a box that does not contain the cursor at all. A candidate that fails the admission MUST be skipped and the search
 MUST continue with the nearer candidates (the order is lowest-first, so the next candidate is the one closer to the
-cursor (the order is lowest-first, so the next candidate is the one closer to the cursor). The guard MUST NOT take
+cursor). The guard MUST NOT take
 the NEAREST qualifying row: a rule row the human's own draft draws below the cursor (an equal-width rule row, a
 longer one a clipping TUI cuts at the pane edge, a pasted markdown separator or
 a table border) SHALL stay inside the located box and be read as content, so the box reads busy instead of empty —
