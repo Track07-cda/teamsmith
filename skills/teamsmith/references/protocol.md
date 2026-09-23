@@ -469,7 +469,15 @@ The full gate — `openspec validate … && bash skills/teamsmith/tests/smoke.sh
 node/bun processes and login shells, so it is serialised on **one gate lock**
 (`${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}`, holder recorded in `<lock>.holder`, wait capped by
 `TEAM_SMOKE_LOCK_WAIT`, default 1800 s). Use `TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections,
-~10 s) and the **full** suite for delivery and review. `team review` takes that same lock **before** starting its
+~10 s) and the **full** suite for delivery and review.
+
+**How often the full suite runs (2026-09-23, user directive).** The full suite takes 13-20 minutes and the
+machine runs one at a time, so it is a *milestone* gate, not a per-change habit: a task runs it **once at
+delivery** (not per batch), a review runs it **once**, and the PM runs it on the protected branch **only at
+archive/release milestones** - per merge it reads the delivered run plus CI. A change whose diff touches no
+product path (for example records under `docs/**` only) needs **no** suite run: say so in the report and let
+the guarded FAST set (or nothing) stand as the evidence. When in doubt prefer FAST plus the affected
+sections and name what you did not run; **never** claim a full run you did not do. `team review` takes that same lock **before** starting its
 hard timeout: the queue is its own bounded phase, the record accounts it separately (`limit=Ns queued=Ns ran=Ns`),
 a queue that exceeds the cap is `FAIL` with the holder named (never `TIMEOUT`), a run that really overruns is still
 `TIMEOUT` with `ran=Ns`, and `SMOKE_LOCK_WRAPPED=1` tells a nested run that an ancestor already holds the lock (so
