@@ -311,6 +311,10 @@ team_watch_once() {
   fi
   printf '%s %s\n' "$(date +%s)" "$(team_timestamp)" > "$TEAM_STATE_DIR/watchdog.last"
 
+  # ①a 席位死因（agent-death-reason）：停跑席位分类 → 未记录的异常死亡先落 deaths.log 再入队 knock。
+  #     放在 outbox drain **之前**：PM 窗口空闲时同拍就能投出去；放待命判断之前，standby 在步内自己顺延。
+  team_watch_deaths_step
+
   # ①b 延后投递：一拍排一次水（delivery-guard 的第二个调用者）。
   #     放在待办/待命判断之前：队列里的消息是人或别的路径明确要投的，不属于「待办」，
   #     也不该因为 PM standby 而烂在队列里。没有 daemon：不新建窗口、不留后台进程。
@@ -564,7 +568,7 @@ team_panel_agents_json() {
     # M50：窗口存在性每个 agent 只问一次 tmux（原：live 一次 + window_exists 又一次，同一个 tmux 答案问两遍）
     # P55：座位状况统一走唯一读取器（team_seat_condition）。机器面 state 词表不变（三态）——
     # 死 pane 落在新增的 pane/pane_exit 键上；running 的证据规则不变（M6.5/M37），遗体绝不出现成 running。
-    local w_live cond_seat pane_json="" pane_exit=""
+    local w_live cond_seat pane_json="" pane_exit="" cause_json="" c_fields c_cat c_src c_time c_raw
     w_live="$(team_state_get "$a" window "$a")"
     cond_seat="$(team_seat_condition "$a")"
     case "$cond_seat" in
@@ -575,6 +579,22 @@ team_panel_agents_json() {
       *)       state="absent" ;;
     esac
     [ -n "$pane_exit" ] && pane_json="$pane_json, \"pane_exit\": $(team_panel_json_str "$pane_exit")"
+    # agent-death-reason：异常死亡的席位带 cause/cause_source/cause_line/cause_time；没有可读来源
+    # 的 unknown 不带键（cause_source 的闭集是 pane|session|recorded，没有 "none"）。state/pane/pane_exit 不动。
+    if [ "$state" != "running" ]; then
+      c_fields="$(team_seat_death_fields "$a")"
+      if [ -n "$c_fields" ]; then
+        IFS=$'\t' read -r c_cat c_src c_time c_raw <<< "$c_fields"
+        case "$c_src" in
+          pane|session|recorded)
+            cause_json=", \"cause\": $(team_panel_json_str "$c_cat"), \"cause_source\": $(team_panel_json_str "$c_src")"
+            [ -n "$c_raw" ] && cause_json="$cause_json, \"cause_line\": $(team_panel_json_str "$c_raw")"
+            if [ -n "$c_time" ] && [ "$c_time" != "-" ]; then
+              cause_json="$cause_json, \"cause_time\": $(team_panel_json_str "$c_time")"
+            fi ;;
+        esac
+      fi
+    fi
     task="$(team_state_get "$a" task '')"
     wt="$(team_agent_worktree "$a")"
     cols="$(team_git_cols "$wt")"
@@ -591,7 +611,7 @@ team_panel_agents_json() {
 \"task\": $(team_panel_json_str "$task"), \"branch\": $(team_panel_json_str "$branch"), \
 \"dirty\": $dirty_json, \"ahead\": $ahead_json, \"upstream_ahead\": $(team_panel_json_str "$upahead"), \
 \"model\": $(team_panel_json_str "$model"), \"session_tokens\": $(team_panel_num "$mtok"), \
-\"session_window\": $(team_panel_num "$mwin"), \"session_text\": $(team_panel_json_str "$size")$pane_json}"
+\"session_window\": $(team_panel_num "$mwin"), \"session_text\": $(team_panel_json_str "$size")$pane_json$cause_json}"
   done
   printf '%s]' "$out"
 }

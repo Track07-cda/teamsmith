@@ -9037,7 +9037,7 @@ assert_not "$TMP/m98-d-digest.log" "team review M98G" "M9.8-④：草稿不给 r
 m98 $TEAM board set M98F blocked >/dev/null 2>&1 || true
 assert_eq "M9.8-⑤：blocked 看板行进唤醒理由" "$(m98_wake)" "未读通知 1 · 待复验 1 · blocked 1 · 需 PM 处理"
 m98_lib team_state_set dev task M98F >/dev/null 2>&1 || true
-assert_eq "M9.8-⑤：有任务但窗口不在的 agent 也进唤醒理由" "$(m98_wake)" "未读通知 1 · 待复验 1 · blocked 1 · 需 PM 处理 · 停了的 agent 1"
+assert_eq "M9.8-⑤：有任务但窗口不在的 agent 也进唤醒理由" "$(m98_wake)" "未读通知 1 · 待复验 1 · blocked 1 · 需 PM 处理 · 停了的 agent 1（dev=unknown）"
 m98 $TEAM digest >"$TMP/m98-e-digest.log" 2>&1 || true
 assert_has "$TMP/m98-e-digest.log" "blocked=1" "M9.8-⑤：digest [5] 的看板计数与唤醒理由同源（blocked）"
 assert_has "$TMP/m98-e-digest.log" "M98F" "M9.8-⑤：digest [5] 里能看到那行 blocked"
@@ -15580,6 +15580,51 @@ if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
   fi
 else
   bad "51 缺 tests/config-cli.sh"
+fi
+
+# ═════════════════════════════════════════════════════════════════════
+# 52 · 席位死因（P113 · agent-death-reason / R1–R6）
+#
+# 夹具本体是 tests/death-cause.sh：①纯逻辑矩阵（闭集五分类、两条反例、403 无额度词 → auth、
+# 有界尾、当前启动守卫/重启不继承、身份去重、记录回退、表面、巡检 knock、只读指纹）；②四个
+# 红侧（分类器影子 / 重启继承 / 去重去掉 / 干净退出判据退回旧写法）；③真 tmux 遗体那一半
+# （没有 tmux 时可见 SKIP）。
+# FAST 档跑 ①②（纯逻辑，不起进程）；③只在完整门禁且本机有 tmux 时跑。
+section "52 · 席位死因：闭集分类 + 当前一次死亡 + 恰好一次通报（P113）"
+if [ -f "$SKILL_DIR/tests/death-cause.sh" ]; then
+  P113_PURE_RC=0
+  bash "$SKILL_DIR/tests/death-cause.sh" --pure >"$TMP/p113-death-pure.log" 2>&1 || P113_PURE_RC=$?
+  if [ "$P113_PURE_RC" -eq 0 ]; then
+    ok "52 纯逻辑矩阵全绿（$(grep -ac '✓' "$TMP/p113-death-pure.log" || true) 条断言）"
+  else
+    bad "52 纯逻辑矩阵有失败（rc=$P113_PURE_RC）"
+    grep -a '✗' "$TMP/p113-death-pure.log" | head -10 | sed 's/^/      /'
+  fi
+  P113_FLIP_RC=0
+  bash "$SKILL_DIR/tests/death-cause.sh" --flip >"$TMP/p113-death-flip.log" 2>&1 || P113_FLIP_RC=$?
+  if [ "$P113_FLIP_RC" -eq 0 ]; then
+    ok "52 四个红侧都成立（分类器影子 / 重启继承 / 去重去掉 / 干净退出判据退回旧写法）"
+  else
+    bad "52 红侧不成立（rc=$P113_FLIP_RC）"
+    grep -a '✗' "$TMP/p113-death-flip.log" | head -10 | sed 's/^/      /'
+  fi
+  if [ "$FAST" = "1" ]; then
+    fast_skip "52·p113-live" "真 tmux 遗体夹具（完整门禁跑）"
+  elif [ "$HAVE_TMUX" = "1" ]; then
+    live_mark
+    P113_LIVE_RC=0
+    bash "$SKILL_DIR/tests/death-cause.sh" --live >"$TMP/p113-death-live.log" 2>&1 || P113_LIVE_RC=$?
+    if [ "$P113_LIVE_RC" -eq 0 ]; then
+      ok "52 真遗体那一半全绿（$(grep -ac '✓' "$TMP/p113-death-live.log" || true) 条断言）"
+    else
+      bad "52 真遗体那一半有失败（rc=$P113_LIVE_RC）"
+      grep -a '✗' "$TMP/p113-death-live.log" | head -10 | sed 's/^/      /'
+    fi
+  else
+    cond_skip "52·p113-live" "没有 tmux：真遗体那一半跳过（纯逻辑与红侧已跑）"
+  fi
+else
+  bad "52 缺 tests/death-cause.sh（P113 的席位死因夹具）"
 fi
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：

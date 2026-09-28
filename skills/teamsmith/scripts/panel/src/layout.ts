@@ -340,7 +340,10 @@ function agentLine(plan: AgentCol[], cells: { text: string; tone: Tone }[]): Lin
 function agentStateText(a: PanelAgent, s: Strings): string {
   const glyph = GLYPH[a.state] ?? '?'
   const text = a.state === 'running' ? s.agentRunning : a.state === 'exited' ? s.agentExited : s.agentAbsent
-  return `${glyph} ${text}`
+  // agent-death-reason: the full state cell carries the classified cause (`▲ 已死 signal=9 · quota`);
+  // the minimal layout drops it together with the state text (stateCellText's minimal branch).
+  const cause = a.cause ? ` · ${a.cause}` : ''
+  return `${glyph} ${text}${cause}`
 }
 
 function pmStateText(pm: PanelData['pm'], s: Strings): string {

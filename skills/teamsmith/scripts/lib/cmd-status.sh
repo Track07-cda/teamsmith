@@ -1292,6 +1292,8 @@ team_status_seat_section() { # <ID>：找到登记了这个任务的席位才印
     cond="$(team_seat_condition "$a")"
     printf '  座位 %s：%s\n' "$a" "$(team_seat_condition_text "$cond")"
     team_seat_scene_print "$a"
+    # agent-death-reason：异常死亡时加一行死因（分类 + 来源 + 原始证据行）；干净退出/在跑/已收尾不印
+    team_seat_death_text "$a"
     return 0
   done
   return 0

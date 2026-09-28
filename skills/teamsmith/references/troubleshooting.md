@@ -542,6 +542,14 @@ seat's last screen and tmux's exit evidence survive the death. Reading such a se
 - **A kept window is not an anomaly**: after `team close <ID> --keep-window` the seat's recorded task is cleared, so
   digest/doctor/pending stop naming it as an abnormal exit while roster still shows its honest condition.
   `team teardown --agent <agent>` removes the corpse like any other window.
+- **Why the seat died** (`team status <ID>`, `team digest` [1] and the panel agents block also carry this): the same
+  scene reader's bounded tail plus the newest pi session JSONL for the seat's worktree is classified into a closed
+  set — `quota`, `balance`, `rate_limit`, `window`, `auth`, `normal`, `unknown` — with the source (`pane`/`session`/
+  `recorded`) and the raw evidence line. A category needs both an error frame and the category's wording (prose does
+  not classify); missing evidence is `unknown` (reported, never invented); a clean exit is `normal` (silent); the
+  cause belongs to the **current** launch only (a restart never inherits the old one); and the patrol records the
+  death in `state/deaths.log` and knocks exactly once per abnormal death (standby defers instead of losing it).
+  `TEAM_DEATH_SCAN_LINES` (default 40) bounds the pane-side tail.
 - **Why the PM window has no retention**: the PM/pulse windows deliberately do **not** get `remain-on-exit` — if the
   PM pane dies, its window disappears and the pulse's liveness check restarts it fresh, instead of leaving a corpse
   that the auto-restart would mistake for a live PM. Retention is for seats a human has to read; supervision is for

@@ -2878,7 +2878,15 @@ team_pending_text() { # <counts> → 人类可读摘要（空字符串 = 无待�
   [ "$wip" -gt 0 ] && parts+=("wip ${wip}")
   [ "$review" -gt 0 ] && parts+=("review ${review}")
   [ "$blocked" -gt 0 ] && parts+=("blocked ${blocked}" "需 PM 处理")
-  [ "$stopped" -gt 0 ] && parts+=("停了的 agent ${stopped}")
+  if [ "$stopped" -gt 0 ]; then
+    # agent-death-reason：停跑的席位带分类（dev=quota, dev2=unknown）。读取器缺席（只 source 过
+    # common.sh 的旧夹具）或读不到任何死因 → 退回裸计数（死因永远不许把巡逻弄挂）。
+    local deaths=""
+    if command -v team_stopped_deaths_text >/dev/null 2>&1; then
+      deaths="$(team_stopped_deaths_text 2>/dev/null || true)"
+    fi
+    parts+=("停了的 agent ${stopped}${deaths}")
+  fi
   [ "${#parts[@]}" -eq 0 ] && return 0
   local out="" p
   for p in "${parts[@]}"; do out="${out}${out:+ · }$p"; done

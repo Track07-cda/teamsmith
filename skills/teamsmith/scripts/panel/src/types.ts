@@ -76,6 +76,14 @@ export interface PanelAgent {
   session_tokens: number
   session_window: number
   session_text: string
+  /** agent-death-reason: classified cause of an abnormal death (absent on a healthy seat). */
+  cause?: string
+  /** Where the cause was read from; absent when there is no readable source. */
+  cause_source?: 'pane' | 'session' | 'recorded'
+  /** The raw evidence line beside the cause (sanitized, single line). */
+  cause_line?: string
+  /** The record time of the evidence, when known. */
+  cause_time?: string
   /** Filled from the data layer's block for this agent (JSON only, not a table column). */
   elapsed?: string
   idle?: string
