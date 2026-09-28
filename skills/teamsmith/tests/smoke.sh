@@ -59,6 +59,9 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 [ -n "${SMOKE_TMP_RUN_ID:-}" ] || export SMOKE_TMP_RUN_ID="smoke-$$-$(date +%s)"
 # shellcheck source=tests/lib/tmp-root.sh
 . "$SKILL_DIR/tests/lib/tmp-root.sh"
+# P70（change: gate-section-accounting）：每段自述 + 硬预算 + 现场。
+# shellcheck source=tests/lib/section-guard.sh
+. "$SKILL_DIR/tests/lib/section-guard.sh"
 # tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
 # tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
 # 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新跑一遍自己**
@@ -196,6 +199,7 @@ if [ "$FAST" = "1" ]; then
 fi
 live_mark() { LIVE_RAN=$((LIVE_RAN + 1)); }
 fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯一的出口（必须打印）
+  section_guard_check
   SKIP_N=$((SKIP_N + 1))
   SKIP_SEGS="${SKIP_SEGS}|$1"
   printf '  \033[33mSKIP（FAST 模式）\033[0m %s —— %s\n' "$1" "$2"
@@ -203,18 +207,24 @@ fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯
 skipped() { case "|$SKIP_SEGS|" in *"|$1|"*) return 0 ;; *) return 1 ;; esac; }   # 首尾补 | ，最后一段也能匹配
 
 cond_skip() { # <段落标记> [<原因>]：条件不满足时的跳过出口（V7-F6：skip 是约定不是 FAIL，必须打印）
+  section_guard_check
   SKIP_N=$((SKIP_N + 1))
   SKIP_SEGS="${SKIP_SEGS}|$1"
   printf '  \033[33mSKIP（条件不满足）\033[0m %s\n' "$1${2:+ —— $2}"
 }
 
 PASS=0; FAIL=0
-section() { [ -z "${SMOKE_TMP_CANARY:-}" ] || smoke_tmp_guard "段落 $1 开始时"; SMOKE_LAST_SECTION="$1"; printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
-ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
+section() {
+  [ -z "${SMOKE_TMP_CANARY:-}" ] || smoke_tmp_guard "段落 $1 开始时"
+  SMOKE_LAST_SECTION="$1"
+  section_guard_begin "$1"
+}
+ok()  { section_guard_check; printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() {
   # M33 哨兵：亮红之前先问一句「是不是 $TMP 中途没了」——是的话由哨兵**一条**点名并立刻停跑
   # （否则一个外部删除会级联出几十条下游假红，尾部还会因为 mkdir -p 把目录建回来而假绿）。
   if [ -n "${SMOKE_TMP_CANARY:-}" ] && ! tmp_alive; then smoke_tmp_fire "断言失败：$1"; fi
+  section_guard_check
   printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1))
 }
 assert_file()  { [ -f "$1" ] && ok "$2" || bad "$2（缺 $1）"; }
@@ -301,6 +311,8 @@ PROTECTED="main"   # 与 TEAM_PROTECTED_BRANCH 默认值一致
 REPO="$TMP/repo"
 FAKE="$TMP/fake-bin"
 mkdir -p "$REPO" "$FAKE"
+# P70：阈值表在 skill 树里（只读）；计时记录 sections.tsv / 开跑行 sections.log 在 $TMP。
+section_guard_init "$TMP" --budgets "$SKILL_DIR/tests/section-budgets.tsv"
 
 # M36：本轮自己的 shim 调用日志落在 $TMP（调用者窗口若已装闸门，smoke 的夹具 tmux 调用会被它记录 ——
 # 记到这里而不是真项目的 state/tmux-calls.log，真账本零污染）。31c 自己按需逐条覆盖这个变量。
@@ -471,6 +483,8 @@ smoke_tmp_sweep() { # 收尾：**干净跑**（没出过事）就把哨兵的兄
 
 cleanup() {
   smoke_tmp_tripwire_stop    # 先收哨兵：下面的临时根回收是**合法**删除，不许被当成事故
+  section_guard_stop_watchdog  # P70：收看门狗（trip 现场在 $TMP 之外，回收带不走）
+  section_guard_sweep
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # 私有 socket：连本轮的 server 一起收掉（调用者的默认 server 原样不动）
   [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && tmux kill-server 2>/dev/null || true
@@ -540,6 +554,10 @@ mkfile_meminfo lowram   600 8000
 mkfile_meminfo doomed   100  100
 
 # ---------------------------------------------------------------- 0. 仓库
+# P70：从第 0 段起每段自述 + 硬预算（看门狗双重 fork，不在作业表里；trip 现场在 $TMP 之外）。
+SG_LOCK_NOTE="${SMOKE_LOCK:-}"
+SG_FAST="$FAST"
+section_guard_arm
 section "0 · 临时仓库"
 cd "$REPO" || exit 1
 git init -q -b main
@@ -747,6 +765,194 @@ if cm_hits "$CM_SB" | grep -q 'bin\.dat'; then
 else
   ok "翻转自测：二进制文件被 -I 跳过（NUL 字节 + 标记也不误报）"
 fi
+
+# ---------------------------------------------------------------- 0e. P70 段落自述（change: gate-section-accounting）
+# 每段自述/硬预算/现场的守门断言（纯逻辑 + 模块自检，不碰 tmux、不碰真项目）。
+section "0e · 段落自述：看门狗 / 预算表 / 循环清单（P70）"
+# ① 看门狗在岗、但不在作业表里（M33 哨兵同形：12b-i 的裸 wait 不能被它卡住）
+P70_WD_PID="$(awk -F'\t' 'NR==1{print $1}' "$SG_WATCHDOG_PIDFILE" 2>/dev/null || true)"
+assert_eq "P70 看门狗：活着但不在作业表里（双重 fork）" \
+  "$(jobs -p | wc -l | tr -d ' ')|$(_sg_pid_alive "$P70_WD_PID" && printf alive || printf dead)" "0|alive"
+assert_eq "P70 看门狗：心跳指向当前段落（#${SG_SEC_NO}）" \
+  "$(awk -F'|' '{print $1}' "$SG_HEARTBEAT" 2>/dev/null)" "$SG_SEC_NO"
+# ② 模块自检：五形状（挂住的子进程 / 忽略 TERM 的子进程 / 纯内建自旋 / 自旋且关掉 TERM / 干净）
+if TMPDIR="$TMP" bash "$SKILL_DIR/tests/lib/section-guard.sh" --self-test >"$TMP/p70-sg-self.log" 2>&1; then
+  ok "P70 模块自检五形状全绿（$(grep -ac '✓' "$TMP/p70-sg-self.log" || true) 条断言）"
+else
+  bad "P70 模块自检有失败"; grep -a '✗' "$TMP/p70-sg-self.log" | head -8 | sed 's/^/      /'
+fi
+
+# ③b 破环翻转：把安全点的 marker 检查砸掉（scratch 副本）→ 挂住的段不再被停，自检必红
+P70_BRK="$TMP/p70-break"; rm -rf "$P70_BRK"; mkdir -p "$P70_BRK"
+cp "$SKILL_DIR/tests/lib/section-guard.sh" "$P70_BRK/section-guard.sh"
+sed -i '/^_sg_check_trip() {/,/^}/ s/    _sg_exit_trip/    : # break-it（安全点不再停跑）/' "$P70_BRK/section-guard.sh"
+if grep -q 'break-it' "$P70_BRK/section-guard.sh"; then
+  TMPDIR="$TMP" bash "$P70_BRK/section-guard.sh" --self-test >"$TMP/p70-sg-break.log" 2>&1; P70_RC=$?
+  if [ "$P70_RC" -ne 0 ]; then
+    ok "P70 破环翻转：砸掉安全点的 marker 检查 → 模块自检红（$(grep -ac '✗' "$TMP/p70-sg-break.log" || true) 条）"
+  else
+    bad "P70 破环翻转：marker 检查没了自检还绿（守卫没被证到）"
+  fi
+else
+  bad "P70 破环翻转：sed 没改到 _sg_check_trip（夹具失效）"
+fi
+
+# ③ 预算表 + 循环清单：干净树绿 + 三个翻转红（全在 scratch 副本里动，真实树不碰）
+P70_CK="$TMP/p70-check"; rm -rf "$P70_CK"; mkdir -p "$P70_CK/lib"
+cp "$SKILL_DIR/tests/section-guard.sh" "$SKILL_DIR/tests/smoke.sh" \
+   "$SKILL_DIR/tests/section-budgets.tsv" "$SKILL_DIR/tests/loop-inventory.tsv" "$P70_CK/"
+cp "$SKILL_DIR"/tests/lib/*.sh "$SKILL_DIR"/tests/lib/loop-scan.awk "$P70_CK/lib/"
+bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p70-budget-green.log" 2>&1; P70_RC=$?
+assert_eq "P70 预算检查：干净树绿（$(sed -n 's/^ok: 预算表覆盖 \(.*\) 个 section.*/\1/p' "$TMP/p70-budget-green.log") 个 section）" "$P70_RC" "0"
+bash "$P70_CK/section-guard.sh" --loop-check >"$TMP/p70-loop-green.log" 2>&1; P70_RC=$?
+assert_eq "P70 循环清单：干净树绿（$(sed -n 's/^ok: 扫描 \(.*\)$/\1/p' "$TMP/p70-loop-green.log")）" "$P70_RC" "0"
+# 翻转①：把一条预算降到「实测带×系数」以下 → 必须点名该段并红
+P70_LOW_ID="$(awk -F'\t' '!/^#/ && $4 ~ /^[0-9.]+$/ && ($4+0) >= 20 { print $1; exit }' "$P70_CK/section-budgets.tsv")"
+if [ -n "$P70_LOW_ID" ]; then
+  awk -F'\t' -v id="$P70_LOW_ID" 'BEGIN{FS="\t"; OFS="\t"} /^#/ { print; next } $1 == id { $3 = 1 } { print }' \
+    "$P70_CK/section-budgets.tsv" > "$P70_CK/b.new" && mv "$P70_CK/b.new" "$P70_CK/section-budgets.tsv"
+  bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p70-budget-low.log" 2>&1; P70_RC=$?
+  assert_eq "P70 翻转（预算）：降到带以下 → 红" "$P70_RC" "1"
+  assert_has "$TMP/p70-budget-low.log" "$P70_LOW_ID" "P70 翻转（预算）：点名被降的段落"
+  cp "$SKILL_DIR/tests/section-budgets.tsv" "$P70_CK/section-budgets.tsv"
+  bash "$P70_CK/section-guard.sh" --budget-check >/dev/null 2>&1; P70_RC=$?
+  assert_eq "P70 翻转（预算）还原：绿" "$P70_RC" "0"
+else
+  bad "P70 翻转（预算）：找不到有实测带的段落（表坏了？）"
+fi
+# 翻转②：删掉一条 section 行（未登记的段落不得默默无界）→ 必须点名并红
+P70_MISS_ID="$(awk -F'\t' '!/^#/ && NF { print $1; exit }' "$P70_CK/section-budgets.tsv")"
+awk -F'\t' -v id="$P70_MISS_ID" 'BEGIN{FS="\t"} /^#/ { print; next } $1 == id { next } { print }' \
+  "$P70_CK/section-budgets.tsv" > "$P70_CK/b.new" && mv "$P70_CK/b.new" "$P70_CK/section-budgets.tsv"
+bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p70-budget-miss.log" 2>&1; P70_RC=$?
+assert_eq "P70 翻转（缺行）：删掉段落行 → 红" "$P70_RC" "1"
+assert_has "$TMP/p70-budget-miss.log" "$P70_MISS_ID" "P70 翻转（缺行）：点名缺行的段落"
+cp "$SKILL_DIR/tests/section-budgets.tsv" "$P70_CK/section-budgets.tsv"
+# 翻转③：加一个未登记的 while+sleep → 循环清单必须点名 file:line
+printf '#!/usr/bin/env bash\nx=0\nwhile :; do sleep 1; x=$((x+1)); done\n' > "$P70_CK/evil-fixture.sh"
+bash "$P70_CK/section-guard.sh" --loop-check >"$TMP/p70-loop-evil.log" 2>&1; P70_RC=$?
+assert_eq "P70 翻转（循环）：新 while+sleep → 红" "$P70_RC" "1"
+assert_has "$TMP/p70-loop-evil.log" "evil-fixture.sh:3" "P70 翻转（循环）：点名 file:line"
+rm -f "$P70_CK/evil-fixture.sh"
+bash "$P70_CK/section-guard.sh" --loop-check >/dev/null 2>&1; P70_RC=$?
+assert_eq "P70 翻转（循环）还原：绿" "$P70_RC" "0"
+
+# ④ gate-guard 的第四向：时长比较只许在段落守卫里（D33 的边界；翻了必须红）
+#   夹具自己要把两个“标记字面量”（测量套件的点名、时长比较）写进 scratch smoke.sh —— 拼开写，
+#   否则守卫会先抓到夹具自己（自指假红，M58 之后的老坑）。
+P70_PF="per"; P70_PF="${P70_PF}f.sh"
+P70_GG="$TMP/p70-gg"; rm -rf "$P70_GG"; mkdir -p "$P70_GG/lib"
+cp "$SKILL_DIR/tests/gate-guard.sh" "$SKILL_DIR/tests/smoke.sh" "$SKILL_DIR/tests/panel-knobs.sh" \
+   "$SKILL_DIR/tests/$P70_PF" "$P70_GG/"
+cp "$SKILL_DIR/tests/lib/section-guard.sh" "$P70_GG/lib/"
+bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-green.log" 2>&1; P70_RC=$?
+assert_eq "P70 gate-guard 第四向：干净副本绿" "$P70_RC" "0"
+printf '\nif [ "$elapsed" -'"g"'t 5 ]; then :; fi\n' >> "$P70_GG/smoke.sh"
+bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-flip.log" 2>&1; P70_RC=$?
+assert_eq "P70 gate-guard 第四向翻转：smoke.sh 塞回时长比较 → 红" "$P70_RC" "1"
+assert_has "$TMP/p70-gg-flip.log" "时长阈值比较" "P70 gate-guard 第四向翻转：点名原因"
+cp "$SKILL_DIR/tests/smoke.sh" "$P70_GG/smoke.sh"
+bash "$P70_GG/gate-guard.sh" >/dev/null 2>&1; P70_RC=$?
+assert_eq "P70 gate-guard 第四向还原：绿" "$P70_RC" "0"
+
+# ⑤ 夹具旋钮只在 TEAM_SMOKE_FIXTURE=1 下生效；否则打印忽略行（环境不能悄悄拆掉边界）
+mkdir -p "$TMP/p70-knob-off" "$TMP/p70-knob-on"
+p70_knob_probe() { # <输出文件> <run tmp> <env 前置...>：用模块自己的 init 读旋钮（不跑套件）
+  local out="$1" dir="$2"; shift 2
+  env "$@" bash -c '
+    . "$1/tests/lib/section-guard.sh"
+    section_guard_init "$2" --budgets "$1/tests/section-budgets.tsv"
+    printf "override=[%s]\n" "$SG_BUDGET_OVERRIDE"
+    section_guard_budget_for "0c · 静态检查（函数结尾的 set -e 陷阱）"
+    printf "stuck-budget=%s source=%s\n" "$SG_BUDGET" "$SG_BUDGET_SOURCE"
+    section_guard_budget_for "1 · doctor（未初始化应失败）"
+    printf "other-budget=%s source=%s\n" "$SG_BUDGET" "$SG_BUDGET_SOURCE"
+  ' _ "$SKILL_DIR" "$dir" >"$out" 2>&1
+}
+p70_knob_probe "$TMP/p70-knob-off.log" "$TMP/p70-knob-off" -u TEAM_SMOKE_FIXTURE TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=3
+assert_has "$TMP/p70-knob-off.log" "忽略它" "P70 旋钮（夹具关）：打印忽略行"
+assert_has "$TMP/p70-knob-off.log" "override=[]" "P70 旋钮（夹具关）：不生效"
+assert_has "$TMP/p70-knob-off.log" "source=table" "P70 旋钮（夹具关）：预算来自表"
+p70_knob_probe "$TMP/p70-knob-on.log" "$TMP/p70-knob-on" TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=3
+assert_has "$TMP/p70-knob-on.log" "stuck-budget=3 source=fixture" "P70 旋钮（夹具开）：被点名的段用注入预算"
+assert_has "$TMP/p70-knob-on.log" "other-budget=$(awk -F'\t' '$1=="1 · doctor（未初始化应失败）"{print $3}' "$SKILL_DIR/tests/section-budgets.tsv") source=table" \
+  "P70 旋钮（夹具开）：别的段照旧用表"
+
+# ---------------------------------------------------------------- 0f. P70 超时段落：点名 + 停跑 + 现场
+# 嵌套 smoke 用 FAST + 自己的 TMPDIR（不排队、不碰真项目）；stuck knob 在 0c 段注入一个忽略 TERM 的
+# 子进程，预算覆盖成 3s —— 看门狗必须点名 #3、写现场、套件 exit 2（安全点路径）。
+section "0f · 超时段落：点名 + 停跑 + 现场（P70）"
+if [ "${P70_NESTED:-0}" = "1" ]; then
+  printf '  (嵌套运行：跳过 P70 自述夹具，避免递归)\n'
+else
+  P70_STUCK_ROOT="$TMP/p70-stuck"; rm -rf "$P70_STUCK_ROOT"; mkdir -p "$P70_STUCK_ROOT"
+  ( cd "$SKILL_DIR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      -u TEAM_DOCS_DIR -u TEAM_TMP_KEEP -u TEAM_SMOKE_KEEP -u SMOKE_LOCK_WRAPPED -u TEAM_SMOKE_LOCK \
+      P70_NESTED=1 TMPDIR="$P70_STUCK_ROOT" TEAM_SMOKE_FAST=1 TEAM_SMOKE_FIXTURE=1 \
+      TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=3 TEAM_SMOKE_PROGRESS_INTERVAL=1 \
+      TEAM_SMOKE_GUARD_POLL=0.2 bash "$SKILL_DIR/tests/smoke.sh" </dev/null ) >"$TMP/p70-stuck.log" 2>&1
+  P70_STUCK_RC=$?
+  assert_eq "P70 超时：嵌套套件 exit 2（安全点路径）" "$P70_STUCK_RC" "2"
+  assert_eq "P70 超时：输出里恰好一条点名超时的行" \
+    "$(grep -ac '段落 #3（0c · 静态检查（函数结尾的 set -e 陷阱））超时' "$TMP/p70-stuck.log" || true)" "1"
+  assert_has "$TMP/p70-stuck.log" "预算 3s" "P70 超时：点名行带预算"
+  if tail -25 "$TMP/p70-stuck.log" | grep -q '段落 #3'; then
+    ok "P70 超时：点名行在 tail -25 里（复验记录能看到）"
+  else
+    bad "P70 超时：点名行不在 tail -25 里"
+  fi
+  assert_not "$TMP/p70-stuck.log" "== 结果 ==" "P70 超时：没有结果行"
+  assert_not "$TMP/p70-stuck.log" "== #4 " "P70 超时：后面没有别的段落开跑"
+  if grep -qE 'SKIP.*(0c|#3)' "$TMP/p70-stuck.log"; then
+    bad "P70 超时：超时被报成 SKIP"
+  else
+    ok "P70 超时：超时不是 SKIP（不是把机器判绿）"
+  fi
+  if grep -aq '已运行' "$TMP/p70-stuck.log"; then
+    ok "P70 超时：超时前有进度自述（$(grep -ac '已运行' "$TMP/p70-stuck.log" || true) 行）"
+  else
+    bad "P70 超时：没有进度自述"
+  fi
+  P70_STUCK_SCENE="$(ls -d "$P70_STUCK_ROOT"/.teamsmith-smoke-scene.* 2>/dev/null | head -1 || true)"
+  if [ -n "$P70_STUCK_SCENE" ] && [ -s "$P70_STUCK_SCENE/summary.txt" ]; then
+    ok "P70 超时：现场存在（${P70_STUCK_SCENE#$TMP/}）"
+    case "$P70_STUCK_SCENE" in
+      "$P70_STUCK_ROOT"/.teamsmith-smoke-scene.*) ok "P70 现场：TMPDIR 相对 + 点开头" ;;
+      *) bad "P70 现场：路径不在 TMPDIR 下或不是点开头（$P70_STUCK_SCENE）" ;;
+    esac
+    case "$P70_STUCK_SCENE" in
+      "$P70_STUCK_ROOT"/teamsmith-smoke.*/*) bad "P70 现场：落在 run 自己的临时根里" ;;
+      *) ok "P70 现场：在 run 自己的临时根之外（清理带不走）" ;;
+    esac
+    assert_has "$P70_STUCK_SCENE/summary.txt" "id: 0c · 静态检查" "P70 现场：点名段落 id"
+    assert_has "$P70_STUCK_SCENE/summary.txt" "budget: 3s" "P70 现场：点名预算"
+    assert_match "$P70_STUCK_SCENE/summary.txt" "last progress: [0-9]+s" "P70 现场：带最后一次进度读数"
+    assert_has "$P70_STUCK_SCENE/summary.txt" "sleep 0.2" "P70 现场：子孙树里有挂住的子进程"
+    assert_has "$P70_STUCK_SCENE/summary.txt" "escalation" "P70 现场：记录了 KILL 升级（子进程忽略 TERM）"
+    assert_has "$P70_STUCK_SCENE/logs/tails.txt" "fixture-stuck" "P70 现场：带本段的夹具日志尾巴"
+    assert_eq "P70 现场：部分计时记录有前两段的行" \
+      "$(awk 'NR>1' "$P70_STUCK_SCENE/sections.tsv.partial" 2>/dev/null | wc -l | tr -d ' ')" "2"
+  else
+    bad "P70 超时：没有现场目录"
+  fi
+  assert_eq "P70 超时：嵌套 run 的临时根已回收（只剩现场）" \
+    "$(ls -d "$P70_STUCK_ROOT"/teamsmith-smoke.* 2>/dev/null | wc -l | tr -d ' ')" "0"
+fi
+
+# ---------------------------------------------------------------- 0g. P70 等待有界：到顶归因 + ticks
+section "0g · 等待有界：到顶归因 + ticks（P70）"
+p70_wait_reader() { printf 'reader-%s' "${1:-?}"; }
+IFS='|' read -r _ _ _ _ P70_TICKS0 _ < "$SG_HEARTBEAT"
+section_guard_wait "p70-never" 3 0.1 "一个永远不来的状态" p70_wait_reader false >"$TMP/p70-wait.log" 2>&1
+P70_WAIT_RC=$?
+IFS='|' read -r _ _ _ _ P70_TICKS1 _ < "$SG_HEARTBEAT"
+assert_eq "P70 等待到顶：返回非 0（不是悄悄通过）" "$P70_WAIT_RC" "1"
+assert_has "$TMP/p70-wait.log" "3/3" "P70 等待到顶：归因行带 3/3"
+assert_has "$TMP/p70-wait.log" "等待到顶" "P70 等待到顶：归因行点名等待"
+assert_has "$TMP/p70-wait.log" "最后一次读数：reader-3" "P70 等待到顶：归因行带最后一次读数"
+assert_eq "P70 等待到顶：每轮都刷新了进度 ticks（心跳）" "$((P70_TICKS1 - P70_TICKS0))" "3"
+P70_WAIT_HEAD="$(head -1 "$TMP/p70-wait.log")"
+assert_has_echo "$P70_WAIT_HEAD" "等待到顶" "P70 等待到顶：第一行就是归因（不被别的输出淹没）"
 
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
@@ -14646,11 +14852,40 @@ if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
 else
   bad "51 缺 tests/config-cli.sh"
 fi
+# ---------------------------------------------------------------- 14d. P70 本套自述对账
+# 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行、sections.tsv 一行。
+section "14d · P70 本套自述对账（段落账目 + 无误判）"
+P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
+P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+ · 预算 [0-9]+s' "$SG_LOG" 2>/dev/null || true)"
+P70_S_CLOSES="$(grep -cE '^#[0-9]+ .* 用时 [0-9]+s · ticks [0-9]+$' "$SG_LOG" 2>/dev/null || true)"
+P70_S_ROWS="$(awk 'NR>1' "$SG_TIMING" | wc -l | tr -d ' ')"
+assert_eq "P70 对账：开跑行都带 #N + ISO 时间 + 预算" "$P70_S_SHAPED" "$P70_S_STARTS"
+assert_eq "P70 对账：当前段已开跑、上一段已收（starts = closes + 1）" "$P70_S_STARTS" "$((P70_S_CLOSES + 1))"
+assert_eq "P70 对账：sections.tsv 每段一行（rows = closes）" "$P70_S_ROWS" "$P70_S_CLOSES"
+assert_eq "P70 对账：#N 从 1 起严格递增无缺口" \
+  "$(awk 'BEGIN { want = 1 } match($0, /^== #([0-9]+) /) { n = substr($0, RSTART + 4, RLENGTH - 5) + 0; if (n != want) { print "gap@" n; exit } want++ } END { print want - 1 }' "$SG_LOG")" \
+  "$P70_S_STARTS"
+assert_not_file "$SG_MARKER" "P70 对账：本套没有触发过超时"
+[ -d "$SG_SCENE" ] && bad "P70 对账：干净跑留下了现场" || ok "P70 对账：没有现场目录（干净跑不该建）"
+# 进度自述只在超过间隔的段出现（段内跑完却打进度行 = 自述成了判决 → 红）
+P70_PROG_BAD=0
+while IFS= read -r P70_N; do
+  [ -n "$P70_N" ] || continue
+  P70_E="$(awk -F'\t' -v n="$P70_N" 'NR>1 && $1 == n { print $4; exit }' "$SG_TIMING")"
+  [ -n "$P70_E" ] || continue
+  case "$P70_E" in *[!0-9]*) continue ;; esac
+  if [ "$P70_E" -lt "$SG_PROGRESS_INTERVAL" ]; then
+    bad "P70 对账：段落 #$P70_N 用时 ${P70_E}s < 间隔 ${SG_PROGRESS_INTERVAL}s，却有进度行"
+    P70_PROG_BAD=1
+  fi
+done < <(grep -oE '^… 段落 #[0-9]+' "$SG_LOG" 2>/dev/null | grep -oE '[0-9]+$' | sort -u)
+[ "$P70_PROG_BAD" = "0" ] && ok "P70 对账：没有「段内完成却打进度行」的段"
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
+section_guard_finish   # P70：收最后一段 + 关看门狗（结果行之前；干净跑不留哨兵文件）
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
 if [ "$FAST_REQ" = "1" ]; then
   printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \

@@ -79,8 +79,33 @@ else
   bad "缺 $perf"
 fi
 
+# ④ 计时记录不是判决（P70 / D33 的边界）：门禁里唯一可以把「测到的时长」和阈值比的模块是
+#    lib/section-guard.sh（每段硬预算 = 存活检测）。标记是**比较形态**（$elapsed / $SECONDS… 与
+#    -gt/-ge/-lt/-le 相邻），不是变量名本身 —— 别的模块打印时长、把时长当数据搬运都不算判定。
+DUR_MOD="$here/lib/section-guard.sh"
+DUR_CMP_RE='(\$elapsed|\$\{elapsed\}|\$duration|\$took|\$SECONDS)[^|;]*-(gt|ge|lt|le)([^0-9A-Za-z_]|$)'
+DUR_HITS=""
+for f in "$smoke" "$here"/lib/*.sh; do
+  [ -f "$f" ] || continue
+  [ "$f" = "$DUR_MOD" ] && continue
+  h="$(grep -nE -- "$DUR_CMP_RE" "$f" 2>/dev/null | head -3 || true)"
+  [ -n "$h" ] && DUR_HITS="$DUR_HITS$f: $h; "
+done
+if [ -z "$DUR_HITS" ]; then
+  ok "门禁的时长只被记录、不被判定（lib/section-guard.sh 之外没有时长阈值比较）"
+else
+  bad "门禁里出现了时长阈值比较（计时记录成了判决）：$DUR_HITS"
+fi
+if [ -f "$DUR_MOD" ]; then
+  grep -qE -- '-(ge|gt)[[:space:]]+"\$budget"' "$DUR_MOD" \
+    && ok "lib/section-guard.sh 是唯一做时长比较的模块（trip 比较在位）" \
+    || bad "lib/section-guard.sh 丢了 trip 比较（-ge \"\$budget\"）—— 单源边界没了"
+else
+  bad "缺 $DUR_MOD（每段硬预算的看门狗模块）"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
-  printf '\ngate-guard: 三向都过（门禁无判定、旋钮助手在岗、性能套件带标记）\n'
+  printf '\ngate-guard: 四向都过（门禁无判定、旋钮助手在岗、性能套件带标记、时长比较只在段落守卫）\n'
   exit 0
 fi
 printf '\ngate-guard: %d 条不成立\n' "$FAILED"

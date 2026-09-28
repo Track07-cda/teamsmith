@@ -12,6 +12,22 @@ suite. The one shared gate lock and its accounting (`TEAM_SMOKE_LOCK`, `TEAM_SMO
 `queued`/`ran`/`limit` record) are unchanged, and the gate keeps the time-independent knob-integrity check of
 `panel#Frame assembly is asynchronous, cached and never blocks input`.
 
+A fixture that waits for a real process to reach a state SHALL treat its wait horizon as a **failure detector,
+never as a judgment**: when the horizon runs out, the verdict MUST be attributed from evidence collected at that
+moment — whether the scene is still changing, and the machine's own readings (`loadavg_1m`/`loadavg_5m`, the
+logical core count, and a code-independent probe that measures how long this machine needs to start processes).
+A machine over the premise MUST produce a **visible SKIP** for that wait and the rest of its scenario: the line
+names the wait, its elapsed time and the readings, the run's summary counts it as a skip, it is never reported as
+a pass and never as a failure, and the gate still exits 0 — a fixture that cannot be judged SHALL say so instead
+of turning the machine into a red. A machine under the premise whose scene is static MUST still fail: a
+regression is a code verdict and the premise MUST NOT become an escape. While the scene is still changing the
+fixture SHALL be allowed to extend its polling beyond the base horizon (a bounded factor) so a merely slow
+machine is still judged rather than skipped. The readings MUST be real on the real path — an injection knob is
+honored only under the fixture switch, and the injected values are printed as ignored — and the numbers that
+decide SHALL be calibrated from measurement with their measured bands stated next to the fixture. Nothing here
+adds a wall-clock or CPU-share red line: the horizons themselves are unchanged, and no assertion may fail
+because a correct operation was slow.
+
 A section's per-section hard budget (`verification#Every gate section accounts for itself, and a stuck section is
 named`) is a **liveness detector, not a performance judgment**, and the promise above holds inside it: the budget
 is derived from a recorded measured band with a stated factor and floor, it MUST NOT be tightened below that band,
@@ -44,6 +60,42 @@ reappearing outside the guard module, beside the frame-budget/CPU-share markers,
 - **WHEN** the gate runs the panel fixture's premise-only mode
 - **THEN** the gate asserts the ignore notices for every injected knob and that the premise line carries the real
   load and core count, and it judges no duration
+
+#### Scenario: A machine over the premise skips visibly, and the gate is not red
+
+- **GIVEN** the pty fixture's premise readings injected over their ceiling under the fixture switch
+  (`TEAM_SMOKE_FIXTURE=1 TEAM_P21_PREMISE_PROBE_MS=999`), i.e. the machine reads as unable to deliver a frame in
+  the fixture's budget
+- **WHEN** `bash skills/teamsmith/tests/panel-p21.sh choices` runs and `TEAM_SMOKE_FAST=1 bash
+  skills/teamsmith/tests/smoke.sh </dev/null` runs the section that drives it (§38-b)
+- **THEN** the fixture exits `4`, prints a `SKIP` line naming the wait that hit its horizon, its elapsed time,
+  the probe value and the load, counts the skip in its summary, and reports no failure — and the gate's section
+  prints the same reason and still exits 0, so no review verdict turns red for it
+
+#### Scenario: The premise is not an escape from a real regression
+
+- **GIVEN** a scratch tree whose panel sources lost the wheel consumption the `wheel` scenario and the gate's
+  §38-e structural pin assert (a real regression), the bundle rebuilt there, and the machine readings under
+  their premise
+- **WHEN** `bash skills/teamsmith/tests/panel-p21.sh wheel` runs against that tree
+- **THEN** the wheel assertions fail (not skip), the fixture exits `1`, and the failure names the assertion — the
+  same run against the unmodified tree is green, which is the flip
+
+#### Scenario: A skipped fixture is never reported as a passing one
+
+- **GIVEN** the over-premise injection of the first scenario
+- **WHEN** the gate's section for the pty fixture runs
+- **THEN** its line reads `SKIP` with the reason and the readings, the all-green line for that section does not
+  appear, the run's skip count is non-zero, and the gate's output tail that `team review` records carries the
+  same line
+
+#### Scenario: The premise's readings stay real on the real path
+
+- **GIVEN** `TEAM_P21_PREMISE_PROBE_MS=999` (and the other premise knobs) set with the fixture switch **off**
+- **WHEN** the pty fixture runs
+- **THEN** its premise line carries the real load, core count and probe value, the injected values are printed as
+  ignored, and the verdict comes from the real readings — the same promise the knob-integrity scenario makes for
+  the panel's measurement knobs
 
 #### Scenario: A section that is slowed on purpose still stays green under its bound
 

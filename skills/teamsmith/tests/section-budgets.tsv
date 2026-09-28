@@ -1,0 +1,137 @@
+# gate section budgets — change: gate-section-accounting（P70 apply 交付物）
+# 推导：budget_s = max(ceil(band_s × factor), floor)，factor=4，floor=60
+# band_s = max(host_s, container_s, ci_s)：``最差观测值``，不是空闲值 —— 负载放大见 P56 §1.1
+# host_s / container_s：本 apply 在参考机与固定镜像里的实测（每段一个坏值就取它）；历史值保留在 max 里。
+# 列：id<TAB>band_s<TAB>budget_s<TAB>host_s<TAB>host_load<TAB>container_s<TAB>container_load<TAB>ci_s<TAB>provenance
+# 纪律：预算只判「这段没有终止」（liveness detector），不判性能；不许收到实测带以下；
+#       段内在预算内跑完，机器再慢也必须绿（见 verification#The correctness gate judges correctness only）。
+# 未列出的新段落运行时用有界默认（tests/lib/section-guard.sh 的 SG_DEFAULT_BUDGET），开跑行会注明。
+# 实测来源（P70 apply · 2026-09-28）：
+#   full1（host 全量）= `bash skills/teamsmith/tests/smoke.sh </dev/null`，tip 69d6041a，08:30:12–08:52:48Z，loadavg1 10.5/32 核，✓3531 ✗0
+#   ctr1（固定镜像）= localhost/teamsmith-gate:local a55ccdacb577（tmux 3.7b / node 24.19.0 / bun 1.3.14 / openspec 1.8.0），
+#        `podman run --pid=host --cgroups=enabled --user 1000:1000 -e HOME=/tmp -v <tree>:/work:ro -w /work <img>
+#         bash -c 'bash skills/teamsmith/tests/smoke.sh --keep </dev/null'`，08:46:47–09:09:33Z，loadavg1 12.9/32 核，✓3514 ✗2；
+#        两条红都不是预算/section 问题：0d 是「worktree 挂载（.git 是文件、gitdir 在挂载外）」形状，0f 是现场尾巴收集顺序（1261d377 已修，容器翻转见报告）。
+#   历史带保留：P56fast（loadavg1 10.6）/ P56full（负载未记录）/ FAST2（2026-09-23，loadavg1 14.0）。逐段原始值见 measure/*-section-times.tsv。
+#   ci_s 列留空（-）：本轮 local 模式不 push，首次 CI 运行后回填。
+# F1 追测（merge main 后 · 2026-09-28；§50/§51 的实测基，tip a021b339 / 3f424e18）：
+#   full1m（host 全量 #1，补行前）= `bash skills/teamsmith/tests/smoke.sh </dev/null`，10:43:48–11:05:41Z，loadavg1 5.9→9.8/32 核；
+#     §50=2s / §51=118s；✓3594 ✗2 —— 两条都是 §0e 如实报「预算表缺 §50/§51 的行」（机制在工作，见报告 F1）。
+#   ctr1m（固定镜像 a55ccdacb577，--keep 形态）= 11:06:00–11:29:05Z，loadavg1 9.4→8.1/32 核；§50=2s / §51=123s；
+#     ✓3577 ✗4（0d 挂载形状；两条 §0e 缺行；§51 的 --keep 收尾产物：routes.sh 的嵌套根检查在 TEAM_TMP_KEEP=1 下必留根）。
+#   ctr2m（同一镜像，无 --keep 干净形态）= 11:31:41–11:54:58Z，loadavg1 7.1→6.5/32 核；§50=2s / §51=127s；
+#     ✓3580 ✗1（只剩 0d 挂载形状）→ §51 的 container 列取这一轮。
+#   最终验收（补行后）：FAST ✓2931 ✗0（11:55:31–12:07:37Z，load 7.3→4.9）；全量 ✓3596 ✗0（12:07:37–12:32:17Z，load 4.9→4.8；
+#     §51 用时 121s → host 列取 121s；band 仍由 container 的 127s 决定）。
+0 · 临时仓库	0.02	60	0.02	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+0b · skill 可被 pi 解析器加载	0.19	60	0.19	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+0c · 静态检查（函数结尾的 set -e 陷阱）	0.04	60	0.04	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+0d · 冲突标记守卫（受版本控制的文件里不许有冲突标记）	0.21	60	0.21	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+0e · 段落自述：看门狗 / 预算表 / 循环清单（P70）	44.00	176	43.00	10.6/?/14.0/10.5	44.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+0f · 超时段落：点名 + 停跑 + 现场（P70）	5.00	60	5.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+0g · 等待有界：到顶归因 + ticks（P70）	1.00	60	0.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+1 · doctor（未初始化应失败）	4.00	60	4.00	10.6/?/14.0/10.5	4.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+1b · bootstrap（一条命令初始化）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+1c · bootstrap 的 PM 窗口名：约定不是现场（M11）	16.00	64	9.00	10.6/?/14.0/10.5	16.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+2 · init	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+3 · doctor（初始化后）	10.00	60	8.00	10.6/?/14.0/10.5	10.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+4 · task + board	0.17	60	0.17	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+4b · 状态诚实：未知 id 不假装写入 + done 要证据（M6.1 F29/F1）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+4c · 看板重复 ID（M48）：add 拒绝 / --allow-dup / 三处可见	10.00	60	9.00	10.6/?/14.0/10.5	10.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+5 · add-agent	0.11	60	0.11	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+3b · git 归 PM（skill 不执行、也不过度包装 git）	3.00	60	3.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6 · dispatch	3.00	60	2.05	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6b · 容量守卫矩阵（zram / 磁盘 swap 分账）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6c · 模型并发限额（含通配）	0.07	60	0.07	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6d · CEP 实测反馈（board 额外列 / merge 冲突列表 / 待复验启发式 / 翻转证据）	3.00	60	1.08	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6e · erp 实测反馈（render & / GitLab 头 / pi PATH / 非任务报告）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6f · agent adapter（任意 TUI agent）：渲染 / 占位符 / 文档契约 / 降级	19.00	76	19.00	10.6/?/14.0/10.5	18.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6g · 非 Pi agent 端到端（假 agent，完全没有 Pi）	3.00	60	2.13	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6h · 派单：会话规模 vs 模型窗口（M4.3 A）+ 启动证据（M4.3 B）	18.00	72	18.00	10.6/?/14.0/10.5	17.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6i · PM adapter（任意 TUI agent 当 PM）：默认不变 / 模板 / 存活 / 真窗口	19.45	78	19.45	10.6/?/14.0/10.5	17.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6j · worker adapter：裸名字解析 + agent 没跑起来必须响亮失败（M8.2）	5.00	60	5.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6k · worker 存活：看 pane 进程树，不看 pane_current_command（M37）	2.00	60	1.27	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+7 · notify / inbox / digest	8.00	60	4.00	10.6/?/14.0/10.5	8.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+7b · digest 警告未入账的复验/报告记录（M31）	5.00	60	5.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+8 · 从 agent worktree 调用 CLI	1.00	60	0.23	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+9 · agent 提交 + 报告	0.02	60	0.02	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+10 · review（独立 worktree + 门禁）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+10b · 复验证据完整性（记录必须描述真的验过什么）	12.00	60	10.00	10.6/?/14.0/10.5	12.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+10c · M25 复验基建：门禁不继承 TEAM_REVIEW_* + 后台进程组里读 tty 的病	2.00	60	2.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11 · 收尾（merge 已移除，close 保留）	3.00	60	3.00	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11b · 定时巡检：有待办才叫醒 PM（默认 15 分钟）	32.00	128	29.11	10.6/?/14.0/10.5	32.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11b2 · PM 存活必须被证明（M6.5：空窗 ≠ PM 在运行）	8.92	60	8.92	10.6/?/14.0/10.5	7.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11b3 · 启动中的 PM：一拍只拉起一次（M7.2）	18.00	72	18.00	10.6/?/14.0/10.5	18.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11b4 · PM 交接：--fresh-pm 与同 cwd 活会话提示（P36）	16.00	64	14.63	10.6/?/14.0/10.5	16.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11c · agent 续跑是 PM 的事（pulse 不碰）	29.00	116	29.00	10.6/?/14.0/10.5	27.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11d · 边界守卫（跨项目/跨 session 通信必须经用户）	0.09	60	0.09	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11e · 跨项目会议（meeting mode）	1.00	60	1.00	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11e2 · M32：--as-user 探针自 detach stdin（外部 stdin=pty 也必须绿）	2.00	60	1.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11f · 更新与版本自检（mark-loaded / version --check / changelog）	6.00	60	6.00	10.6/?/14.0/10.5	6.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11g · CEP 反馈（forge-first / say 投递校验 / knock 诊断）	2.00	60	2.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11h · 信号与承诺的诚实（V4.0 F4/F6/F19/F21/F23）	5.00	60	5.00	10.6/?/14.0/10.5	4.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11i · 信号诚实：报告草稿不指 review、squash 合并不喊 push（M4.3 C/D）	4.00	60	4.00	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+11j · pulse 改名与别名期兼容（D22）	14.00	60	13.00	10.6/?/14.0/10.5	14.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+14b · 文档一致性：已删命令不得回潮（词边界 + 扫描范围 + 翻转自测）	8.00	60	3.00	10.6/?/14.0/10.5	8.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+15b · 必需依赖：doctor 三态 + paths + dispatch 预检	26.00	104	26.00	10.6/?/14.0/10.5	22.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+15c · harness 与插件清单：只告知、不推荐（M29）	30.00	120	30.00	10.6/?/14.0/10.5	27.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12 · roster / status / ps	5.00	60	4.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+13 · notify 扩展（去重 + 只在 worktree 触发）	1.00	60	1.00	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+13b · 通知只代表「回合结束」（M4.3 E：内部生命周期不得被广播成交付）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+13c · 团队后台车道（M27/M30）：拉起链注入 / 收割契约 / 账本 / worktree 侧	8.08	60	8.08	10.6/?/14.0/10.5	8.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b · 延后投递与草稿入口（delivery-guard：守卫 / 队列 / 排水 / 草稿）	25.00	100	24.00	10.6/?/14.0/10.5	25.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b-h0 · M24 输入框判据：真实 pi 的两条折叠路径	0.21	60	0.21	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b-h0b · M45 输入框判据：pi 的更新横幅（整行 ─ 与框边框同形等宽）	62.36	250	62.36	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b-h0d · P80 下边框判据：最低的合格规则行（草稿自己的框线留在框内）	6.00	60	6.00	10.6/?/14.0/10.5	6.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b-h0c · P59 输入框判据：覆盖层（Pi 的项目信任弹窗）≠ 非空输入框	70.00	280	70.00	10.6/?/14.0/10.5	64.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b-pi · M30 投递换道：pi 通道零 tmux 粘贴（收件箱监视唤醒）	77.00	308	77.00	10.6/?/14.0/10.5	77.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b-pi2 · M46 投递降级可见（skip 留痕）与慢路径自愈（残留/目标消失）	11.00	60	11.00	10.6/?/14.0/10.5	10.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12b-pi3 · M53 降级通道可见（watch-degraded：doctor/status/面板 + inotify 余量）	28.00	112	28.00	10.6/?/14.0/10.5	24.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+14 · teardown	0.06	60	0.06	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+14c · 快模式自检（跳过必须是显式的、且没有偷偷跑真进程）	0.02	60	0.02	10.6/?/14.0/10.5	-	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+17 · 迁移指南与 doctor 指引（M7.1）	29.00	116	29.00	10.6/?/14.0/10.5	24.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+18 · 英文正文不变量与安装器唯一入口（M7.3）	2.00	60	1.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+18b · 拆分不变量（P16）：description 路由 / init 无代码 / 指纹范围 / 零改动	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+19 · OpenSpec 五阶段流水线：每阶段有所有者与门禁（M9.1）	1.00	60	1.00	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+20 · done 证据的阶段感知（M9.2）	5.00	60	4.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+21 · 待复验清单不得越过看板决定（M9.4）	10.00	60	8.00	10.6/?/14.0/10.5	10.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+22 · 派单不许叠任务（M9.3 / D16）	4.00	60	4.00	10.6/?/14.0/10.5	4.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+23 · verify 任务的待复验判据 = 记录绑定的 revision（M9.5）	5.00	60	4.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+24 · done 证据：② 要求分支里已提交的报告（M9.6）	2.00	60	2.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+25 · 唤醒计数 = digest 的可行动列表（M9.8）	12.00	60	11.00	10.6/?/14.0/10.5	12.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+26 · 面板（pulse-tui-panel：模式 / 布局降级 / 净化 / 队列 / 运行时 / 隔离）	82.00	328	82.00	10.6/?/14.0/10.5	82.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+27 · 面板异步数据层（pulse-console B1：块协议 / 块隔离 / 快速读者等价 / 装配时间）	11.00	60	10.00	10.6/?/14.0/10.5	11.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+28 · 控制台表面（pulse-console B3：i18n 键集合 / 调色板对比度 / 四档快照 / refresh_s / panel.conf 边界）	20.00	80	20.00	10.6/?/14.0/10.5	17.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+29 · 派单模型解析：配置压过名册旧记录（M14）	2.26	60	2.26	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+30 · 代号必须带名字（M16）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+31 · tmux 接触面：隔离 lint + 容器跑法（M28）	15.00	60	15.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）	5.00	60	5.00	10.6/?/14.0/10.5	4.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+32 · 身份 = 运行时目录（M40：继承的 TEAM_* 不许静默赢过 cwd）	9.00	60	9.00	10.6/?/14.0/10.5	8.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+33 · 项目契约的读写面（P22/B1：team config 单一写入口 + schema）	41.00	164	38.00	10.6/?/14.0/10.5	41.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12e · change 视图（P24/B1：严格头部读取 + 就绪判据）	4.00	60	3.00	10.6/?/14.0/10.5	4.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12f · change 归组（P45/B2：digest 的 [6] 段 + 面板 token）	10.00	60	9.00	10.6/?/14.0/10.5	10.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12g · 派单锚点（P24/B3：一个 change id + change-less 的锚）	6.00	60	6.00	10.6/?/14.0/10.5	6.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12h · delta 单写者（P24/B4）	11.00	60	11.00	10.6/?/14.0/10.5	11.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12i · 按 change 判独立性（P24/B5）	8.00	60	7.00	10.6/?/14.0/10.5	8.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12j · 归档前提（P24/B6）	3.00	60	3.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+12k · 模板与文档（P24/B7）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+34 · 门禁锁：排队/运行分开记账（P26/G1：verification#The hard timeout covers the gate run, not the queue）	48.00	192	48.00	10.6/?/14.0/10.5	47.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+34b · 门禁锁排队守卫：超上限要大声失败并点名持有者（P66）	5.00	60	5.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+35 · 门禁只判正确性：性能判定守卫 + 旋钮完整性（M58 · perf-suite-split）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+37 · 读路径性能：根一次解析 + 单进程扫描（M50）	17.00	68	17.00	10.6/?/14.0/10.5	17.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+38 · 设置选项（M55：choices 读 / 一致性走查 / 选择器夹具）	312.00	1248	312.00	10.6/?/14.0/10.5	309.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）	39.00	156	39.00	10.6/?/14.0/10.5	35.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+40 · 临时根纪律（P53：TMPDIR / owned 家族 / 泄漏断言 / lint）	2.00	60	1.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+41 · pane 留存：死 pane 是座位状况，不是活座位（P55 / agent-pane-survivability）	47.00	188	46.00	10.6/?/14.0/10.5	47.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+42 · P67 输入框判据：0.87.0 的边框邻行按内容读（光标锚定 + 状态行形状才排除）	6.00	60	6.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+43 · P75 status 尾部现场：尾空行裁剪（P65 的 F1）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+44 · P80 输入框判据：草稿自己的下边框框线（真 pane 就绪门 + 生产路径只排队）	4.00	60	4.00	10.6/?/14.0/10.5	4.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+45 · P76 合并前的未入账记录检查（D45）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+46 · P86 下边框判据：定位出的框必须包含光标行（P84 的 F1 安全回归）	4.00	60	4.00	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+47 · P82 notify 发送者 = 运行时目录（notify-sender-identity）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+48 · P91 合并后的「分支又动了」核对（D49 的另一半）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+49 · P94 现场行数为 0：按配置不打印画面（P88 的 F1）	2.00	60	2.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+50 · P95 合并基准 = 该任务的 squash 提交（解冲突不再假红）	2	60	2	5.9/9.8	2	9.4/8.1	-	P70 F1 实测（merge main 后）：host=[full1m] container=[ctr1m] 取最差 · ×4 · floor 60
+51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）	127	508	121	5.9/9.8	127	9.4/8.1	-	P70 F1 实测（merge main 后）：host=[full1m 118,最终 121] container=[ctr1m 123,ctr2m 127] 取最差 · ×4 · floor 60
+14d · P70 本套自述对账（段落账目 + 无误判）	0.00	60	0.00	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+15 · 完成	0.00	60	0.00	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
