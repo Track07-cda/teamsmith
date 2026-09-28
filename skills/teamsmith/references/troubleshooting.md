@@ -1069,20 +1069,52 @@ not a periodic cleanup daemon.
 
 ```console
 $ bash skills/teamsmith/scripts/team review <ID> --post-merge
-review P82 --post-merge: branch task/P82-sender-apply (tip a4fb5a3f) vs main (tip 43a731c6)
-x both sides touched, versions do not match ...
+review P82 --post-merge：分支 task/P82-sender-apply（tip a4fb5a3f）vs main（tip 43a731c6）
+✗ 两边都动过、版本对不上（main 那一版不来自这条分支，分支这一版 main 也没有过）—— 自己看一眼，别直接取：
       docs/team/threads/dev-bob.md
       skills/teamsmith/tests/smoke.sh
-  fix: re-merge the branch (squash or a new PR) + re-run the gates, then board set P82 done
+  修法：重新合并这条分支（squash 或新 PR）+ 重跑门禁，再 board set P82 done
 ```
 
 **Why this is expected**: when the PM resolved a conflict during the squash merge, those files legitimately
 differ from the branch. `docs/team/threads/dev-bob.md` had entries merged in time order and `smoke.sh` had the
 branch's section renumbered.
 
-**What to do**: verify by content (`grep` the symbol or the section number on main) and only re-merge when the
-branch's *code* is genuinely missing from main. When nothing is missing, take the branch's records with
-`git checkout <branch> -- <path>` and move on (D49). The comparison basis is the branch against main's tip,
-so the refinement in P95 (compare against the task's own squash commit) will make this report stop firing on
-conflict resolutions.
+**Since P95 the comparison basis is the task's own squash commit, not the protected branch's tip.** The check
+first locates that commit on the protected branch — the convention is the subject starting with `<ID>:` / `<ID> `
+(the squash commit's usual shape) or, failing that, a commit carrying an `Agent:` trailer whose subject names the
+task — and then diffs the branch against *it*. Later tasks merged into the protected branch and the PM's own
+conflict resolution therefore stop counting as "the branch moved on". The same P82 run now reads:
+
+```console
+review P82 --post-merge：分支 task/P82-sender-apply（tip a4fb5a3f）vs main 的合并提交 0af22bcc0c（P82: apply notify-sender-identity — …）
+  基准 = 这个任务的 squash 提交（main 的 tip 是 1ab75e28）：后来者合进 main 的内容不再计入
+  解冲突形状（4 个路径）：合并提交那一版与分支这一版互不来自对方 —— 这不是「代码没合并」：
+      docs/team/threads/dev-bob.md
+      …
+  做什么：按内容核对（`git diff 0af22bcc0c..task/P82-sender-apply -- <路径>` / grep 关键符号）确认分支的改动确实进了合并提交；
+          记录若确实晚到，按内容取（整份 `git checkout task/P82-sender-apply -- <路径>` 会覆盖 main 上解冲突那一版）
+```
+and exits 0. What the command says now:
+
+| Output | Exit | Meaning / what to do |
+|---|---|---|
+| late records list + a `git checkout … && git commit` recipe | 0 | the branch committed paths under `<docs>/` that the squash commit never saw → run the printed command as-is: it now also commits, and the commit is limited to the paths it names (unrelated staged work stays put), so the very next run already goes quiet. Before P96/F1 the recipe stopped at `checkout`/`git rm`, and running it left the record in the index only — the same take-it advice then came back on every run (P96's F1) |
+| `代码有未合并的改动 —— 不能只取记录，必须重新合并并重跑门禁` | ≠ 0 | the branch carries *code* the squash commit does not → re-merge (squash or a new PR) and re-run the gates (D49) |
+| `解冲突形状` + a list of paths | 0 | both sides changed the path and neither version comes from the other's history — the normal shape when the PM resolved a conflict during the squash. It is **not** "the code was not merged", but neither side is a superset of the other: verify by content (`git diff <squash>..<branch> -- <path>`, `grep` the symbol) before taking anything. A whole-file `git checkout <branch> -- <path>` overwrites the merged version — in the P82 case the protected branch's `docs/team/threads/<agent>.md` carries PM entries the branch never had |
+| `未找到这个任务的合并提交` | old behaviour | the branch was never squash-merged (no commit matches either convention) → the tool falls back to comparing against the protected branch's tip, says so on the spot, and a never-merged branch then reports its code as not merged — the honest answer |
+
+**What to do**: read the verdict first. `解冲突形状` is a content question (`grep` the symbol, read
+`git diff <squash>..<branch> -- <path>`), not a re-merge instruction; take a record only when the branch's
+version is genuinely newer, and never blanket-`checkout` a path whose merged version carries content the branch
+lacks. When the tool does report `代码有未合并的改动`, re-merge the branch and re-run the gates (D49). The
+`--pre-merge` counterpart (P76/D45) covers the other half of the same trap: records that were never committed
+at all. The take-the-records recipe is printed as one `&&` chain that ends in a commit — run it verbatim; if you
+retype it, keep the commit, or the record stays in the index and the check keeps asking for it (P96/F1).
+
+**When a task landed on the protected branch in several commits** (a propose commit, a partial merge and a
+final one, say), the check first narrows by the `Agent:` trailer and then takes the **newest** candidate as the
+basis — in a linear history that commit contains the earlier ones, so it can only make the comparison stricter,
+never laxer — and it prints `注：这个任务在 <branch> 上有 N 个候选合并提交 … 取最新的那个` naming the commit
+it used in the header line.
 

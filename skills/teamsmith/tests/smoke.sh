@@ -14360,6 +14360,254 @@ assert_not "$TMP/p94-zero-2nd.log" "P94-CORPSE-1" "P94 ④：第二层的内容�
 assert_not "$TMP/p94-zero-2nd.log" "pane-dead.txt（dispatch 替换遗体前抓的现场）" "P94 ④：第二层的来源行也没印"
 rm -f "$P94_DEAD" "$P94_ST/$P94_A.env"
 
+# ---------------------------------------------------------------- 50. P95 合并基准 = 该任务的 squash 提交（P91 的精度细化）
+# 现场（P91 的复验 + P82 真仓库实测）：`squash 合并 + PM 手工解冲突`之后，被解过冲突的文件必然「两边都动过」——
+# 旧口径（vs main 的 tip）把它们报成「版本对不上 → 重新合并」，可那是解冲突，不是「代码没合并」。
+# P95：基准换成**该任务的 squash 提交**（在 main 的提交信息里按既有约定定位：subject 以 `<ID>[: ]` 开头，
+# 或带 `Agent:` trailer 且 subject 点名这个任务），后来者合进 main 的内容与解冲突那一版都不再计入；
+# 分支有而合并提交没有的代码仍然非零；找不到（分支从未合并）→ 明说并回落旧口径；多个候选 → 取最新那个并说清。
+# 红侧不靠产品开关：把「合并提交定位」影子掉（`team_review_postmerge_squash() { return 1; }`）= 旧口径，
+# 同一份解冲突夹具必须翻回非零 —— 这就是 P95 修掉的那个假红（①组里的探针）。
+section "50 · P95 合并基准 = 该任务的 squash 提交（解冲突不再假红）"
+P95R="$TMP/p95repo"; rm -rf "$P95R"; mkdir -p "$P95R/skills"
+( cd "$P95R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && printf 'base-code\n' > skills/a.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
+P95_SES="teamsmith-smoke-p95-$$"
+( cd "$P95R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "$P95_SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p95-init.log" 2>&1 \
+  && ok "P95 夹具：init 成功" || bad "P95 夹具：init 失败（见 $TMP/p95-init.log）"
+( cd "$P95R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p95-paths.json" 2>&1 || true
+assert_eq "P95 隔离：team paths 的 main_root 就是 P95 夹具仓库" \
+  "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/p95-paths.json")" "$P95R"
+p95() { ( cd "$P95R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+p95_commit() { # <repo|worktree> <message>
+  git -C "$1" add -A >/dev/null 2>&1
+  git -C "$1" -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "$2" >/dev/null 2>&1
+}
+p95_state() { printf 'window=dev\ntask=%s\nbranch=%s\n' "$1" "$2" > "$P95R/.pi/team/state/dev.env"; }
+if git -C "$P95R" add -A >/dev/null 2>&1 && git -C "$P95R" commit -qm "chore: init scaffold" >/dev/null 2>&1; then
+  ok "P95 夹具：init 脚手架已入账"
+else
+  bad "P95 夹具：init 脚手架提交失败"
+fi
+P95_BR="task/P95-confl"; P95_WT="$P95R/.worktrees/dev"
+git -C "$P95R" worktree add -q -b "$P95_BR" "$P95_WT" main >/dev/null 2>&1
+mkdir -p "$P95R/.pi/team/state"
+p95_state P95 "$P95_BR"
+[ -e "$P95_WT/.git" ] && ok "P95 夹具：任务工作树就位（.worktrees/dev @ $P95_BR）" || bad "P95 夹具：工作树起不来（后续断言无意义）"
+
+# ── ① 解冲突形状（分支与 main 都动了同一行 / 都新建了同一个记录文件；PM 的 squash 用「两边都留」解掉）──
+printf 'branch-code\n' > "$P95_WT/skills/a.sh"
+mkdir -p "$P95_WT/docs/team"
+printf 'dev-entry\n' > "$P95_WT/docs/team/NOTES.md"
+p95_commit "$P95_WT" "P95: pre-merge work"
+printf 'main-code\n' > "$P95R/skills/a.sh"
+printf 'pm-entry\n' > "$P95R/docs/team/NOTES.md"
+p95_commit "$P95R" "P99: another task lands on main"
+( cd "$P95R" && git merge -q --squash "$P95_BR" >/dev/null 2>&1 || true
+  printf 'main-code\nbranch-code\n' > skills/a.sh
+  printf 'pm-entry\ndev-entry\n' > docs/team/NOTES.md
+  git add -A >/dev/null 2>&1
+  git -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "P95: apply fixture" ) >/dev/null 2>&1
+P95_SQUASH="$(git -C "$P95R" rev-parse --short HEAD)"
+mkdir -p "$P95_WT/docs/team/reports"; printf '# P95 late report\n' > "$P95_WT/docs/team/reports/P95-dev.md"
+p95_commit "$P95_WT" "docs(P95): late record"
+p95 $TEAM review P95 --post-merge >"$TMP/p95-confl.log" 2>&1; P95_RC0=$?
+assert_eq "P95 ①：解冲突形状 + 晚到的记录 → 退出码 0（修前是假红）" "$P95_RC0" "0"
+assert_has "$TMP/p95-confl.log" "基准 = 这个任务的 squash 提交" "P95 ①：抬头写明基准是那个合并提交"
+assert_has "$TMP/p95-confl.log" "$P95_SQUASH" "P95 ①：抬头点名那个 squash 提交（短 sha）"
+assert_not "$TMP/p95-confl.log" "未找到这个任务的合并提交" "P95 ①：定位到了合并提交（没走回落）"
+assert_has "$TMP/p95-confl.log" "解冲突形状" "P95 ①：解冲突形状被单独点出来（不是「代码没合并」）"
+assert_has "$TMP/p95-confl.log" "skills/a.sh" "P95 ①：点名被解过冲突的代码路径"
+assert_has "$TMP/p95-confl.log" "docs/team/NOTES.md" "P95 ①：点名被解过冲突的记录路径"
+assert_has "$TMP/p95-confl.log" "记录有更新" "P95 ①：晚到的记录照旧说清「取它」"
+assert_has "$TMP/p95-confl.log" "docs/team/reports/P95-dev.md" "P95 ①：点名晚到的报告（新文件）"
+assert_not "$TMP/p95-confl.log" "代码有未合并的改动" "P95 ① 反假红：解冲突的代码路径不报「代码没合并」"
+assert_not "$TMP/p95-confl.log" "重新合并这条分支" "P95 ① 反假红：不劝重合并"
+
+# ── ①红侧（可证伪）：同一个夹具、把基准定位影子掉（= 旧口径 vs main 的 tip）→ 假红重现 ─────────
+P95_PROBE="$TMP/p95-probe.sh"
+cat > "$P95_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <repo> <shadow>：shadow=1 = 影子掉 P95 的「合并提交」定位（退回旧口径 = vs 保护分支的 tip）
+set -u
+SKILL_DIR="$1"; REPO="$2"; SHADOW="${3:-0}"
+cd "$REPO"
+unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SKILL_DIR
+. "$SKILL_DIR/scripts/lib/common.sh"
+for _f in "$SKILL_DIR"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+team_load_config >/dev/null 2>&1 || true
+[ "$SHADOW" = "1" ] && team_review_postmerge_squash() { return 1; }
+team_cmd_review P95 --post-merge
+EOS
+chmod +x "$P95_PROBE"
+bash "$P95_PROBE" "$SKILL_DIR" "$P95R" 0 >"$TMP/p95-probe-green.log" 2>&1; P95_RC1=$?
+assert_eq "P95 ① 探针（同源、不影子）：同一夹具照旧 0" "$P95_RC1" "0"
+bash "$P95_PROBE" "$SKILL_DIR" "$P95R" 1 >"$TMP/p95-probe-old.log" 2>&1; P95_RC2=$?
+assert_eq "P95 ① 翻转红侧：影子掉基准定位（= 旧口径）→ 同一夹具非零（P91 的假红重现）" "$P95_RC2" "1"
+assert_has "$TMP/p95-probe-old.log" "版本对不上" "P95 ① 红侧：旧口径确实报「版本对不上」"
+assert_has "$TMP/p95-probe-old.log" "重新合并这条分支" "P95 ① 红侧：旧口径确实劝「重新合并」"
+assert_not "$TMP/p95-probe-old.log" "解冲突形状" "P95 ① 红侧：旧口径没有「解冲突形状」这个出口"
+
+# ── ①b 收敛：把晚到的记录取到 main 后，不再劝第二次（解冲突形状仍在：那是 main 上不可取的合并版）──
+git -C "$P95R" checkout "$P95_BR" -- docs/team/reports/P95-dev.md >/dev/null 2>&1
+p95_commit "$P95R" "docs(team): take P95 late record"
+p95 $TEAM review P95 --post-merge >"$TMP/p95-converged.log" 2>&1; P95_RC3=$?
+assert_eq "P95 ①b：取走晚到的记录后再核对 → 0" "$P95_RC3" "0"
+assert_not "$TMP/p95-converged.log" "记录有更新" "P95 ①b：取过的记录不再劝第二次"
+assert_has "$TMP/p95-converged.log" "解冲突形状" "P95 ①b：解冲突形状仍在（合并版在 main 上，取不走）"
+
+# ── ② 合并后又提交了代码（合并提交里没有的新文件）→ 仍非零（判定方向不变）──────────────────────
+printf 'late\n' > "$P95_WT/skills/late.sh"
+p95_commit "$P95_WT" "feat(P95): late code"
+p95 $TEAM review P95 --post-merge >"$TMP/p95-latecode.log" 2>&1; P95_RC4=$?
+assert_eq "P95 ②：合并后又动了代码 → 非零（这个方向一字不变）" "$P95_RC4" "1"
+assert_has "$TMP/p95-latecode.log" "代码有未合并的改动" "P95 ②：点名「代码没合并」"
+assert_has "$TMP/p95-latecode.log" "skills/late.sh" "P95 ②：点名那条晚到的代码路径"
+assert_has "$TMP/p95-latecode.log" "重新合并这条分支" "P95 ②：给出口径（重新合并 + 重跑门禁）"
+
+# ── ③ 未合并的分支 → 明说「未找到合并提交」+ 回落旧口径（代码差异仍非零）────────────────────
+# ── ③ 未合并的分支（这个仓库里没有任何 `<ID>[: ]` / `Agent:` 约定的提交）→ 明说「未找到合并提交」+ 回落 ─
+P95R3="$TMP/p95repo-unmerged"; rm -rf "$P95R3"; mkdir -p "$P95R3/skills"
+( cd "$P95R3" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && printf 'base\n' > skills/a.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
+( cd "$P95R3" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "teamsmith-smoke-p95c-$$" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p95c-init.log" 2>&1 \
+  && ok "P95 夹具 C：init 成功" || bad "P95 夹具 C：init 失败（见 $TMP/p95c-init.log）"
+( cd "$P95R3" && git add -A >/dev/null 2>&1 \
+    && git -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "chore: init scaffold" ) >/dev/null 2>&1
+P95C_BR="task/P95-unmerged"; P95C_WT="$P95R3/.worktrees/dev"
+git -C "$P95R3" worktree add -q -b "$P95C_BR" "$P95C_WT" main >/dev/null 2>&1
+mkdir -p "$P95R3/.pi/team/state"
+printf 'window=dev\ntask=P95\nbranch=%s\n' "$P95C_BR" > "$P95R3/.pi/team/state/dev.env"
+printf 'never-merged\n' > "$P95C_WT/skills/unmerged.sh"
+p95_commit "$P95C_WT" "wip: this branch was never merged (no squash convention)"
+( cd "$P95R3" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+    bash "$SKILL_DIR/scripts/team" review P95 --post-merge ) >"$TMP/p95-unmerged.log" 2>&1; P95_RC5=$?
+assert_eq "P95 ③：未合并的分支 → 回落旧口径，代码差异非零" "$P95_RC5" "1"
+assert_has "$TMP/p95-unmerged.log" "未找到这个任务的合并提交" "P95 ③：明说找不到合并提交"
+assert_has "$TMP/p95-unmerged.log" "回落" "P95 ③：明说回落与保护分支的 tip 比较"
+assert_has "$TMP/p95-unmerged.log" "代码有未合并的改动" "P95 ③：回落后照旧报代码差异"
+assert_has "$TMP/p95-unmerged.log" "skills/unmerged.sh" "P95 ③：点名那个未合并的代码路径"
+
+# ── ④ 约定②：subject 不以 `<ID>[: ]` 开头、但带 `Agent:` trailer 且点名任务 → 也能定位基准 ─────
+P95R2="$TMP/p95repo-agent"; rm -rf "$P95R2"; mkdir -p "$P95R2/skills"
+( cd "$P95R2" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && printf 'base\n' > skills/a.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
+( cd "$P95R2" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    $TEAM init --session "teamsmith-smoke-p95b-$$" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p95b-init.log" 2>&1 \
+  && ok "P95 夹具 B：init 成功" || bad "P95 夹具 B：init 失败（见 $TMP/p95b-init.log）"
+p95b() { ( cd "$P95R2" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
+( cd "$P95R2" && git add -A >/dev/null 2>&1 \
+    && git -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "chore: init scaffold" ) >/dev/null 2>&1
+P95B_BR="task/P95-agent"; P95B_WT="$P95R2/.worktrees/dev"
+git -C "$P95R2" worktree add -q -b "$P95B_BR" "$P95B_WT" main >/dev/null 2>&1
+mkdir -p "$P95R2/.pi/team/state"
+printf 'window=dev\ntask=P95\nbranch=%s\n' "$P95B_BR" > "$P95R2/.pi/team/state/dev.env"
+printf 'v2\n' > "$P95B_WT/skills/a.sh"
+p95_commit "$P95B_WT" "P95: pre-merge work"
+( cd "$P95R2" && git merge -q --squash "$P95B_BR" >/dev/null 2>&1 || true
+  git add -A >/dev/null 2>&1
+  git -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "apply the P95 agent-path fixture" -m "Agent: dev-bob" ) >/dev/null 2>&1
+mkdir -p "$P95B_WT/docs/team/reports"; printf '# P95B late\n' > "$P95B_WT/docs/team/reports/P95-dev.md"
+p95_commit "$P95B_WT" "docs(P95): late record"
+p95b $TEAM review P95 --post-merge >"$TMP/p95-agent-convention.log" 2>&1; P95_RC6=$?
+assert_eq "P95 ④：subject 不按 <ID>[: ] 开头、带 Agent: trailer → 也能定位基准并退出 0" "$P95_RC6" "0"
+assert_not "$TMP/p95-agent-convention.log" "未找到这个任务的合并提交" "P95 ④：Agent trailer 约定被认（没走回落）"
+assert_has "$TMP/p95-agent-convention.log" "基准 = 这个任务的 squash 提交" "P95 ④：抬头写明基准"
+assert_has "$TMP/p95-agent-convention.log" "记录有更新" "P95 ④：晚到的记录照旧「取它」"
+
+# ── ⑤ 多个候选（两个 `<ID>[: ]` 提交）→ 取最新的那个当基准并说清（不静默）────────────────────
+printf 'again\n' > "$P95R2/docs/team/AGAIN.md"
+p95_commit "$P95R2" "P95: apply fixture again"
+printf 'once-more\n' > "$P95R2/docs/team/ONCE-MORE.md"
+p95_commit "$P95R2" "P95: apply fixture once more"
+P95_AMBIG_NEW="$(git -C "$P95R2" rev-parse --short HEAD)"
+p95b $TEAM review P95 --post-merge >"$TMP/p95-ambiguous.log" 2>&1
+assert_has "$TMP/p95-ambiguous.log" "个候选合并提交" "P95 ⑤：多个候选被点名"
+assert_has "$TMP/p95-ambiguous.log" "取最新的那个" "P95 ⑤：说清取的是最新的那个（不静默）"
+assert_has "$TMP/p95-ambiguous.log" "$P95_AMBIG_NEW" "P95 ⑤：抬头点名最新那个候选（线性历史里它包含其余候选的内容）"
+assert_not "$TMP/p95-ambiguous.log" "未找到这个任务的合并提交" "P95 ⑤：多候选不当作「未合并」"
+
+# ── ⑥ 修法自带收敛（P96 的 F1，并入 P95）：把打印的那一行**原样**执行，重跑就已经是 0 ────────────────
+# 「取记录」只 checkout 不提交的话，记录没进保护分支的树 → 下一次 --post-merge 报同一个非零（P96/F1）。
+# 这里不手打等价命令：从输出里摘出**打印的那一行**，原样 bash -c 执行，再重跑。
+# 红侧不靠产品开关：把「修法打印器」影子成旧形状（只 checkout、不提交）→ 同一串步骤立刻不收敛（断言里的
+# 「旧形状取完再核对 → 仍非零」就是 P96/F1 那个病）。
+# ② 在分支上留下的「晚到的代码」先退掉：⑥ 要的是「只有记录晚到」的形状（逐路径判定看的是树，不是历史）
+git -C "$P95_WT" rm -q -f -- skills/late.sh >/dev/null 2>&1
+p95_commit "$P95_WT" "revert(P95): retire the late code (⑥ needs the records-only shape)"
+mkdir -p "$P95_WT/docs/team/reports"; printf '# P95 late report 2\n' > "$P95_WT/docs/team/reports/P95-dev-extra.md"
+p95_commit "$P95_WT" "docs(P95): a second late record"
+p95 $TEAM review P95 --post-merge >"$TMP/p95-take-cmd.log" 2>&1; P95_RC_T1=$?
+assert_eq "P95 ⑥：又有晚到的记录 → 0 并打印修法" "$P95_RC_T1" "0"
+P95_FIX="$(sed -n 's/^    \(git -C .*\)$/\1/p' "$TMP/p95-take-cmd.log")"
+assert_eq "P95 ⑥：修法恰好一行（可原样粘贴）" "$(printf '%s\n' "$P95_FIX" | grep -c .)" "1"
+assert_has_echo "$P95_FIX" "checkout" "P95 ⑥：修法里有 checkout"
+assert_has_echo "$P95_FIX" "&& git -C" "P95 ⑥：修法是一条 && 链（不是分开的两条命令）"
+assert_has_echo "$P95_FIX" "commit -m" "P95 ⑥：修法自带提交（不是只 checkout —— 收敛靠这一半）"
+# 诱饵：main 的工作区里先暂存一处**与记录无关**的改动 —— 打印的命令只该提交它点名的路径
+printf 'decoy\n' >> "$P95R/skills/a.sh"
+git -C "$P95R" add -- skills/a.sh >/dev/null 2>&1
+( cd "$P95R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+    bash -c "$P95_FIX" ) >"$TMP/p95-take-run.log" 2>&1; P95_TAKE_RC=$?
+assert_eq "P95 ⑥：原样执行打印的修法 → 成功" "$P95_TAKE_RC" "0"
+assert_eq "P95 ⑥：取完之后 main 的树里就是分支那一版" \
+  "$(git -C "$P95R" show HEAD:docs/team/reports/P95-dev-extra.md 2>/dev/null)" "# P95 late report 2"
+assert_eq "P95 ⑥：这次提交只含它点名的路径" \
+  "$(git -C "$P95R" diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null)" "docs/team/reports/P95-dev-extra.md"
+assert_has_echo "$(git -C "$P95R" status --porcelain -- skills/a.sh)" "M  skills/a.sh" \
+  "P95 ⑥：诱饵没被顺手提交（仍在暂存区）"
+p95 $TEAM review P95 --post-merge >"$TMP/p95-take-converged.log" 2>&1; P95_RC_T2=$?
+assert_eq "P95 ⑥：原样执行后立刻重跑 → 0（收敛）" "$P95_RC_T2" "0"
+assert_not "$TMP/p95-take-converged.log" "记录有更新" "P95 ⑥：重跑不再劝取记录"
+assert_has "$TMP/p95-take-converged.log" "解冲突形状" "P95 ⑥：解冲突形状仍在（与取记录无关）"
+assert_has "$TMP/p95-take-converged.log" "$P95_SQUASH" "P95 ⑥：取记录的提交没混进 squash 候选（基准照旧）"
+
+# ── ⑥红侧（可证伪）：把修法打印器影子成旧形状（只 checkout）→ 同一串步骤不再收敛 ─────────────────
+printf '# P95 late report 3\n' > "$P95_WT/docs/team/reports/P95-dev-extra2.md"
+p95_commit "$P95_WT" "docs(P95): a third late record"
+P95_TAKE_PROBE="$TMP/p95-take-probe.sh"
+cat > "$P95_TAKE_PROBE" <<'EOS'
+#!/usr/bin/env bash
+# <skill-dir> <repo>：把「取记录」的修法打印器影子成 P96/F1 之前的形状（只 checkout，不提交）
+set -u
+SKILL_DIR="$1"; REPO="$2"
+cd "$REPO"
+unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION TEAM_SKILL_DIR
+. "$SKILL_DIR/scripts/lib/common.sh"
+for _f in "$SKILL_DIR"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+team_load_config >/dev/null 2>&1 || true
+team_review_postmerge_take_cmd() {
+  local root="$1" branch="$2" id="$3"; shift 3
+  local -a keep=(); local a
+  for a in "$@"; do case "$a" in keep:*) keep+=("${a#keep:}") ;; esac; done
+  printf '    git -C %s checkout %s --' "$root" "$branch"
+  printf ' %q' "${keep[@]}"
+  printf '\n'
+  : "$id"
+}
+team_cmd_review P95 --post-merge
+EOS
+chmod +x "$P95_TAKE_PROBE"
+bash "$P95_TAKE_PROBE" "$SKILL_DIR" "$P95R" >"$TMP/p95-take-old.log" 2>&1
+P95_FIX_OLD="$(sed -n 's/^    \(git -C .*\)$/\1/p' "$TMP/p95-take-old.log")"
+assert_has_echo "$P95_FIX_OLD" "checkout" "P95 ⑥ 红侧：影子出来的确实是修法（有 checkout）"
+assert_not_echo "$P95_FIX_OLD" "commit -m" "P95 ⑥ 红侧：旧形状没有 commit（这就是 P96/F1）"
+( cd "$P95R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+    bash -c "$P95_FIX_OLD" ) >"$TMP/p95-take-old-run.log" 2>&1; P95_OLD_RC=$?
+assert_eq "P95 ⑥ 红侧：旧形状原样执行也「成功」（git 层面没错，错在没提交）" "$P95_OLD_RC" "0"
+p95 $TEAM review P95 --post-merge >"$TMP/p95-take-old-recheck.log" 2>&1; P95_RC_T3=$?
+# 这个形状（只有记录晚到）的退出码本来就是 0 —— 病在**每次重跑都还在劝取同一条记录**（原地打转），
+# 所以红侧的判据是那句劝告还在，不是退出码（P96 的 F1 原文：照字面执行会原地打转；提交后就收敛）。
+assert_has "$TMP/p95-take-old-recheck.log" "记录有更新" "P95 ⑥ 红侧：旧形状取完再跑 → 还在劝取同一条记录（不收敛）"
+assert_has "$TMP/p95-take-old-recheck.log" "docs/team/reports/P95-dev-extra2.md" "P95 ⑥ 红侧：劝的还是那个没进树的文件"
+assert_eq "P95 ⑥ 红侧：main 的 tip 没动（取完也没入账）" \
+  "$(git -C "$P95R" log -1 --format=%s)" "docs(team): take P95's late records from task/P95-confl"
+assert_eq "P95 ⑥ 红侧：记录下来在暂存区里（checkout 只动了索引/工作区）" \
+  "$(git -C "$P95R" status --porcelain -- docs/team/reports/P95-dev-extra2.md)" \
+  "A  docs/team/reports/P95-dev-extra2.md"
+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 

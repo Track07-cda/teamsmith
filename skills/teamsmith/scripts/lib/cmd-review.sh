@@ -380,18 +380,85 @@ team_review_postmerge_merge3() { # <base> <branch> <path> → stdout 三路合�
   return "$rc"
 }
 
-team_review_postmerge_paths() { # <branch> → 每行 `<kind>\t<status>\t<path>`；kind=late|behind|other|unclear，status=git 的 A/M/D（main→分支方向）
-  # late = 合并后新增（main 没有分支的新内容）；behind = 分支落后（差异在 main 一侧）；
-  # other = 两边都动过，但 main 那一版不来自这条分支、而分支那一版 main 曾经有过（别人的后续改动，它只是落后）；
-  # unclear = 两边都动过、两边的版本又都不在对方的历史里，且三路合并也说不清
-  #           （冲突解决 / 从未合并 / 晚到的改动撞上了别人的改动）—— 报出来让人看一眼，不静默丢。
-  local branch="$1" root="$TEAM_MAIN_ROOT" base line meta path st msha bsha bbase merged mrc
-  base="$(git -C "$root" merge-base "$TEAM_PROTECTED_BRANCH" "$branch" 2>/dev/null || true)"
+# ---------------------------------------------------------------- P95 · 比较基准 = 该任务的 squash 提交
+# 现场（P91 的复验 + P82 真仓库实测）：`squash 合并 + PM 手工解冲突`之后，被解过冲突的文件必然「两边都动过」
+# → 旧口径（vs 保护分支的 tip）报「版本对不上 → 重新合并」——那是**解冲突**，不是「代码没合并」。
+# P95 把基准换成**该任务的 squash 提交**：后来者（别人的合并）不再进来，解冲突那一版也不再被当成
+# 「分支的新增」。判定方向不变：分支有而合并提交没有的代码 → 非零；找不到合并提交（分支从未合并）→
+# 明说并回落旧口径。定位约定（本仓库既有写法）：subject 以 `<ID>[: ]` 开头（squash 提交就是这么写的），
+# 或带 `Agent:` trailer 且在 subject 里点名这个任务（词边界）。多个候选（同一任务落过多次：propose/
+# apply/补丁）先按 `Agent:` trailer 收窄，仍多个就取**最新**那个（线性历史里它包含其余候选的内容）
+# 并把这件事写在输出里 —— 不静默，也不把基准选成更旧/更窄的那个。
+team_review_postmerge_squash() { # <ID> → 打印 `<sha>\t<subject>\t<note>`（note 可空）；1=没找到
+  local id="$1" root="$TEAM_MAIN_ROOT" line sha subj id_re
+  local -a cand=() subj_of=()
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    sha="${line%%$'\t'*}"; subj="${line#*$'\t'}"
+    case "$subj" in
+      "$id:"*|"$id "*) cand+=("$sha"); subj_of+=("$subj") ;;
+    esac
+  done < <(git -C "$root" log --format='%H%x09%s' "$TEAM_PROTECTED_BRANCH" 2>/dev/null || true)
+  if [ "${#cand[@]}" = "0" ]; then
+    # 约定②：带 `Agent:` trailer 且 subject 里点名这个任务（git log 一次列全；subject 在 bash 里按词边界过）
+    id_re="$(printf '%s' "$id" | sed 's/[][\.*^$+?(){}|\\]/\\&/g')"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      sha="${line%%$'\t'*}"; subj="${line#*$'\t'}"
+      grep -qE "(^|[^[:alnum:]])${id_re}([^[:alnum:]]|$)" <<< "$subj" || continue
+      cand+=("$sha"); subj_of+=("$subj")
+    done < <(git -C "$root" log -E --format='%H%x09%s' --grep='^Agent: ' "$TEAM_PROTECTED_BRANCH" 2>/dev/null || true)
+  fi
+  if [ "${#cand[@]}" -gt "1" ]; then
+    # 多个候选：先按 `Agent:` trailer 收窄（PM 建 squash 提交时带 trailer；记录类提交不带）
+    local -a keep=() keep_subj=() i
+    for i in "${!cand[@]}"; do
+      grep -qE '^Agent: ' <<< "$(git -C "$root" log -1 --format='%B' "${cand[$i]}" 2>/dev/null || true)" || continue
+      keep+=("${cand[$i]}"); keep_subj+=("${subj_of[$i]}")
+    done
+    [ "${#keep[@]}" = "1" ] && { cand=("${keep[0]}"); subj_of=("${keep_subj[0]}"); }
+  fi
+  local note=""
+  if [ "${#cand[@]}" -gt "1" ]; then
+    note="这个任务在 $TEAM_PROTECTED_BRANCH 上有 ${#cand[@]} 个候选合并提交（<ID>[: ] 前缀 / Agent: trailer）—— 取最新的那个（线性历史里它包含其余候选的内容）"
+  fi
+  if [ "${#cand[@]}" -ge "1" ]; then
+    printf '%s\t%s\t%s\n' "${cand[0]}" "${subj_of[0]}" "$note"
+    return 0
+  fi
+  return 1
+}
+
+team_review_postmerge_versions_collide() { # <branch> <path> → 0 = 保护分支的 tip 与分支这一版互不来自对方（两边都动过、版本对不上）
+  # 只给「分支有而合并提交没有」的路径用：合并提交那一版可能是解冲突的结果，保护分支的 tip 又可能被
+  # 后来者动过 —— 这时重新合并/取记录都要按内容解，不能机械覆盖。
+  local branch="$1" path="$2" root="$TEAM_MAIN_ROOT" pbsha bsha
+  bsha="$(git -C "$root" rev-parse --verify --quiet "$branch:$path" 2>/dev/null || true)"
+  pbsha="$(git -C "$root" rev-parse --verify --quiet "$TEAM_PROTECTED_BRANCH:$path" 2>/dev/null || true)"
+  [ -n "$bsha" ] && [ -n "$pbsha" ] || return 1
+  [ "$pbsha" = "$bsha" ] && return 1
+  team_review_postmerge_had_blob "$TEAM_PROTECTED_BRANCH" "$path" "$bsha" && return 1
+  team_review_postmerge_had_blob "$branch" "$path" "$pbsha" && return 1
+  return 0
+}
+
+team_review_postmerge_paths() { # <branch> [<basis-ref>] → 每行 `<kind>\t<status>\t<path>`；status=git 的 A/M/D（基准→分支方向）
+  # 缺省 basis = 保护分支的 tip（P91 的旧口径；P95 找不到合并提交时的回落）；给了 = 该任务的 squash 提交
+  # （P95 的基准：后来者合进保护分支的内容不再进来，PM 解冲突那一版也不再被当成「分支的新增」）。
+  # kind：late = 分支有而基准没有（合并后新增）；behind = 分支没动过这条路径（差异在基准一侧）；
+  #   other = 基准在分支那一版之后又动过它（分支只是落后）；unclear = 旧口径下三路合并也说不清的；
+  #   converged = 分支这一版已经在保护分支上（取过/覆盖过）；resolved = 两边都动过、版本互不来自对方
+  #   （解冲突的形状：不报「代码没合并」，报出来让人按内容核对）。
+  local branch="$1" basis="${2:-$TEAM_PROTECTED_BRANCH}" root="$TEAM_MAIN_ROOT" base line meta path st msha bsha bbase merged mrc
+  local with_basis=0
+  if [ -n "$2" ]; then with_basis=1; fi
+  base="$(git -C "$root" merge-base "$basis" "$branch" 2>/dev/null || true)"
   [ -n "$base" ] || return 1
   local -a diff_paths=()
   local -A base_blob=()
+  local -A prot_blob=()
   local raw
-  raw="$(git -C "$root" diff --raw --no-renames --no-abbrev "$TEAM_PROTECTED_BRANCH".."$branch" 2>/dev/null || true)"
+  raw="$(git -C "$root" diff --raw --no-renames --no-abbrev "$basis".."$branch" 2>/dev/null || true)"
   [ -n "$raw" ] || return 0
   while IFS= read -r line; do
     case "$line" in :*) ;; *) continue ;; esac
@@ -402,6 +469,13 @@ team_review_postmerge_paths() { # <branch> → 每行 `<kind>\t<status>\t<path>`
     [ -n "$path" ] || continue
     base_blob["$path"]="${meta##* }"
   done < <(git -C "$root" ls-tree --full-tree "$base" -- "${diff_paths[@]}" 2>/dev/null || true)
+  # 保护分支 tip 那一版：判「取过没有」（P95 的收敛；同样一次 ls-tree 拿全）
+  if [ "$with_basis" = "1" ]; then
+    while IFS=$'\t' read -r meta path; do
+      [ -n "$path" ] || continue
+      prot_blob["$path"]="${meta##* }"
+    done < <(git -C "$root" ls-tree --full-tree "$TEAM_PROTECTED_BRANCH" -- "${diff_paths[@]}" 2>/dev/null || true)
+  fi
   while IFS= read -r line; do
     case "$line" in :*) ;; *) continue ;; esac
     meta="${line%%$'\t'*}"; path="${line#*$'\t'}"
@@ -411,15 +485,34 @@ team_review_postmerge_paths() { # <branch> → 每行 `<kind>\t<status>\t<path>`
     [ "$msha" = "0000000000000000000000000000000000000000" ] && msha="-"
     [ "$bsha" = "0000000000000000000000000000000000000000" ] && bsha="-"
     bbase="${base_blob[$path]:--}"
-    st="${meta#* }"                        # <status>（main→分支方向：A=分支新增 / D=分支删除 / M=两边都有）
-    if [ "$bbase" = "$bsha" ]; then         # ① 分支没动过它 → 差异在 main 一侧
+    st="${meta#* }"                        # <status>（基准→分支方向：A=分支新增 / D=分支删除 / M=两边都有）
+    if [ "$bbase" = "$bsha" ]; then         # ① 分支没动过它 → 差异在基准一侧
       printf 'behind\t%s\t%s\n' "$st" "$path"; continue
     fi
+    if [ "$with_basis" = "1" ]; then        # ---- P95 口径：基准 = 该任务的 squash 提交 ----
+      # ① 分支这一版已经在保护分支上（同版，或历史里用过）→ 取过/覆盖过，不是「还没合并」
+      if [ "$bsha" != "-" ] \
+         && { [ "${prot_blob[$path]:--}" = "$bsha" ] || team_review_postmerge_had_blob "$TEAM_PROTECTED_BRANCH" "$path" "$bsha"; }; then
+        printf 'converged\t%s\t%s\n' "$st" "$path"; continue
+      fi
+      # ② 基准没动过这条路径（或分支在基准记下的那一版之后又动了它）→ 分支有而合并提交没有
+      if [ "$bbase" = "$msha" ] \
+         || { [ "$msha" != "-" ] && team_review_postmerge_had_blob "$branch" "$path" "$msha"; }; then
+        printf 'late\t%s\t%s\n' "$st" "$path"; continue
+      fi
+      # ③ 基准在分支那一版之后又动过它 → 分支只是落后（解冲突 / 别人的工作；不报「没合并」）
+      if [ "$bsha" != "-" ] && team_review_postmerge_had_blob "$basis" "$path" "$bsha"; then
+        printf 'other\t%s\t%s\n' "$st" "$path"; continue
+      fi
+      # ④ 两边都动过、版本互不来自对方 = 解冲突的形状 → 报出来但不按「代码没合并」处理
+      printf 'resolved\t%s\t%s\n' "$st" "$path"; continue
+    fi
+    # ---- 回落口径（找不到合并提交）：P91 的形状判定一字不动 ----
     if [ "$bbase" = "$msha" ] \
        || { [ "$msha" != "-" ] && team_review_postmerge_had_blob "$branch" "$path" "$msha"; }; then
       printf 'late\t%s\t%s\n' "$st" "$path"
     elif [ "$bsha" != "-" ] && team_review_postmerge_had_blob "$TEAM_PROTECTED_BRANCH" "$path" "$bsha"; then
-      printf 'other\t%s\t%s\n' "$st" "$path"     # main 曾经有过分支这一版 → 它只是落后（别人的后续改动）
+      printf 'other\t%s\t%s\n' "$st" "$path"     # 保护分支曾经有过分支这一版 → 它只是落后（别人的后续改动）
     else
       # 最后一道裁判：git 自己的三路合并（|| mrc=$? 设防：merge-file 冲突时 rc≠0，裸赋值在 set -e 下会带走整个扫描）
       mrc=0
@@ -434,6 +527,35 @@ team_review_postmerge_paths() { # <branch> → 每行 `<kind>\t<status>\t<path>`
     fi
   done <<< "$raw"
   return 0
+}
+
+team_review_postmerge_take_cmd() { # <root> <branch> <id> <keep|drop>:<路径>… → 打印一条自带提交的「取记录」命令
+  # P96/F1（并入 P95）：修法必须**自带收敛** —— 只 checkout 不提交的话，下一次 --post-merge 还会报同一个
+  # 非零（记录没进保护分支的树里）。所以打印的是一行 `checkout … && rm … && commit -- <路径>`：
+  #   · commit 用 pathspec 形式（只提交这些路径的工作树状态），PM 手上别的暂存改动不会被顺手带走；
+  #   · 删除的路径（分支上删掉、main 上还在）走 `git rm -f`，同样进那次 commit；
+  #   · 提交信息不带 `<ID>[: ]` 前缀也不带 `Agent:` trailer —— 别让这条「取记录」的提交混进
+  #     「该任务的 squash 提交」的候选集里（基准必须仍是合并那一次）。
+  local root="$1" branch="$2" id="$3"; shift 3
+  local -a keep=() drop=() spec=() a
+  for a in "$@"; do
+    case "$a" in
+      keep:*) keep+=("${a#keep:}"); spec+=("${a#keep:}") ;;
+      drop:*) drop+=("${a#drop:}"); spec+=("${a#drop:}") ;;
+    esac
+  done
+  printf '    git -C %s' "$root"
+  if [ "${#keep[@]}" -gt 0 ]; then
+    printf ' checkout %s --' "$branch"
+    printf ' %q' "${keep[@]}"
+  fi
+  if [ "${#drop[@]}" -gt 0 ]; then
+    printf ' && git -C %s rm -f --' "$root"
+    printf ' %q' "${drop[@]}"
+  fi
+  printf ' && git -C %s commit -m "docs(team): take %s'\''s late records from %s" --' "$root" "$id" "$branch"
+  printf ' %q' "${spec[@]}"
+  printf '\n'
 }
 
 team_cmd_review_postmerge() { # <ID>：合并后的「分支又动了」核对（只读；0=没有代码未合并 / 1=有合并后新增 / 2=无法核对）
@@ -459,12 +581,28 @@ team_cmd_review_postmerge() { # <ID>：合并后的「分支又动了」核对�
   fi
   mtip="$(git -C "$root" rev-parse --short "$TEAM_PROTECTED_BRANCH" 2>/dev/null || printf '?')"
   btip="$(git -C "$root" rev-parse --short "$branch" 2>/dev/null || printf '?')"
-  printf 'review %s --post-merge：分支 %s（tip %s）vs %s（tip %s）\n' \
-    "$id" "$branch" "$btip" "$TEAM_PROTECTED_BRANCH" "$mtip"
+  # P95：基准 = 该任务的 squash 提交（在保护分支的提交信息里按约定定位）。找不到（分支从未合并）或
+  # 有多个候选（不猜）→ 回落 P91 的旧口径（与保护分支的 tip 比），并把这件事明说。
+  local sq_rc=0 sq_line="" sq_sha="" sq_subj="" sq_note="" basis=""
+  sq_line="$(team_review_postmerge_squash "$id")" || sq_rc=$?
+  if [ "$sq_rc" = "0" ]; then
+    IFS=$'\t' read -r sq_sha sq_subj sq_note <<< "$sq_line" || true
+    basis="$sq_sha"
+    printf 'review %s --post-merge：分支 %s（tip %s）vs %s 的合并提交 %s（%s）\n' \
+      "$id" "$branch" "$btip" "$TEAM_PROTECTED_BRANCH" "$(printf '%.10s' "$sq_sha")" "$sq_subj"
+    printf '  基准 = 这个任务的 squash 提交（%s 的 tip 是 %s）：后来者合进 %s 的内容不再计入\n' \
+      "$TEAM_PROTECTED_BRANCH" "$mtip" "$TEAM_PROTECTED_BRANCH"
+    [ -n "$sq_note" ] && printf '  注：%s\n' "$sq_note"
+  else
+    printf 'review %s --post-merge：分支 %s（tip %s）vs %s（tip %s）\n' \
+      "$id" "$branch" "$btip" "$TEAM_PROTECTED_BRANCH" "$mtip"
+    printf '  基准：未找到这个任务的合并提交（约定：subject 以「%s:」/「%s 」开头，或带 `Agent:` trailer）—— 回落与 %s 的 tip 比较\n' \
+      "$id" "$id" "$TEAM_PROTECTED_BRANCH"
+  fi
 
-  local -a late_records=() late_code=() late_other=() late_unclear=()
+  local -a late_records=() late_code=() late_other=() late_unclear=() resolved_paths=() collide=()
   local -A gone=()
-  local kind st path nbehind=0 nother=0
+  local kind st path nbehind=0 nother=0 nconverged=0
   while IFS=$'\t' read -r kind st path; do
     [ -n "$path" ] || continue
     case "$kind" in
@@ -476,23 +614,49 @@ team_cmd_review_postmerge() { # <ID>：合并后的「分支又动了」核对�
         esac
         # 分支这一版不存在（删除了这个路径）→ 取记录要用 git rm，不是 checkout
         [ "$st" = "D" ] && gone["$path"]=1 ;;
-      behind)  nbehind=$((nbehind + 1)) ;;
-      other)   nother=$((nother + 1)) ;;
-      unclear) late_unclear+=("$path") ;;
+      behind)    nbehind=$((nbehind + 1)) ;;
+      other)     nother=$((nother + 1)) ;;
+      converged) nconverged=$((nconverged + 1)) ;;
+      unclear)   late_unclear+=("$path") ;;
+      resolved)  resolved_paths+=("$path"); [ "$st" = "D" ] && gone["$path"]=1 ;;
     esac
-  done < <(team_review_postmerge_paths "$branch")   # 定位不到 merge-base 时上面已经挡掉（rc 2）
+  done < <(team_review_postmerge_paths "$branch" "$basis")   # 定位不到 merge-base 时上面已经挡掉（rc 2）
 
-  local nlate=$(( ${#late_records[@]} + ${#late_code[@]} + ${#late_other[@]} + ${#late_unclear[@]} ))
-  if [ "$nlate" = "0" ]; then
-    if [ "$((nbehind + nother))" = "0" ]; then
+  # P95：基准是合并提交时，「分支有而合并提交没有」的路径若在保护分支的 tip 上又跟别人撞了版本，
+  # 重新合并 / 取记录都要按内容解 —— 单独点出来（旧口径里这就是那句「版本对不上」）。
+  local p
+  if [ -n "$basis" ] && [ "$(( ${#late_code[@]} + ${#late_other[@]} + ${#late_records[@]} ))" -gt 0 ]; then
+    for p in "${late_code[@]:-}" "${late_other[@]:-}" "${late_records[@]:-}"; do
+      [ -n "$p" ] || continue
+      team_review_postmerge_versions_collide "$branch" "$p" && collide+=("$p")
+    done
+  fi
+
+  local nred=$(( ${#late_code[@]} + ${#late_other[@]} + ${#late_unclear[@]} ))
+  local nlate=$(( nred + ${#late_records[@]} ))
+  if [ "$nlate" = "0" ] && [ "${#resolved_paths[@]}" = "0" ]; then
+    if [ "$((nbehind + nother + nconverged))" = "0" ]; then
       printf '  已核对：两边的树相同 —— 没有合并后新增（刚合并完、分支没再动）\n'
     else
-      printf '  已核对：没有合并后新增 —— 与 %s 的差异共 %d 个路径，全部来自 main 一侧（别的工作/后续提交），不是这条分支合并后又提交的内容\n' \
-        "$TEAM_PROTECTED_BRANCH" "$((nbehind + nother))"
+      printf '  已核对：没有合并后新增 —— 共 %d 个路径的差异来自基准一侧、或已经在 %s 上（取过 / 覆盖过），不是这条分支合并后又提交的内容\n' \
+        "$((nbehind + nother + nconverged))" "$TEAM_PROTECTED_BRANCH"
     fi
     return 0
   fi
-  local p
+  # P95 解冲突形状：报出来，但不按「代码没合并」处理（P82 的现场；先响再准要靠基准）
+  if [ "${#resolved_paths[@]}" -gt 0 ]; then
+    printf '  解冲突形状（%d 个路径）：合并提交那一版与分支这一版互不来自对方 —— 这不是「代码没合并」：\n' "${#resolved_paths[@]}"
+    for p in "${resolved_paths[@]:-}"; do
+      [ -n "$p" ] || continue
+      printf '      %s%s\n' "$p" "$([ -n "${gone[$p]:-}" ] && printf '  [删除]' || true)"
+    done
+    printf '  做什么：按内容核对（`git diff %s..%s -- <路径>` / grep 关键符号）确认分支的改动确实进了合并提交；\n' \
+      "$(printf '%.10s' "$basis")" "$branch"
+    printf '          记录若确实晚到，按内容取（整份 `git checkout %s -- <路径>` 会覆盖 main 上解冲突那一版）\n' "$branch"
+  fi
+  if [ "$nlate" = "0" ]; then
+    return 0
+  fi
   if [ "${#late_unclear[@]}" -gt 0 ]; then
     team_err "review $id --post-merge：✗ 两边都动过、版本对不上（main 那一版不来自这条分支，分支这一版 main 也没有过）—— 自己看一眼，别直接取："
     for p in "${late_unclear[@]}"; do printf '      %s\n' "$p"; done
@@ -505,6 +669,10 @@ team_cmd_review_postmerge() { # <ID>：合并后的「分支又动了」核对�
     team_err "review $id --post-merge：✗ $TEAM_DOCS_DIR/ 与 skills/ 之外也有合并后新增（既不是记录也不是技能代码）—— 按代码对待：重新合并并重跑门禁："
     for p in "${late_other[@]}"; do printf '      %s\n' "$p"; done
   fi
+  if [ "${#collide[@]}" -gt 0 ]; then
+    printf '  另：这些路径在 %s 的 tip 上两边都动过、版本对不上（tip 那一版不来自这条分支，分支这一版 tip 也没有过）—— 按内容解，别机械覆盖：\n' "$TEAM_PROTECTED_BRANCH"
+    for p in "${collide[@]}"; do printf '      %s\n' "$p"; done
+  fi
   if [ "${#late_code[@]}" -gt 0 ] || [ "${#late_other[@]}" -gt 0 ] || [ "${#late_unclear[@]}" -gt 0 ]; then
     if [ "${#late_records[@]}" -gt 0 ]; then
       printf '  记录也有更新（%d 个路径；重新合并会把它们一起带走）：\n' "${#late_records[@]}"
@@ -516,23 +684,14 @@ team_cmd_review_postmerge() { # <ID>：合并后的「分支又动了」核对�
 
   # 只有记录：取它即可（不涉及代码，不需要重跑门禁）
   printf '  记录有更新（合并后分支上又提交了 %s/ 下的记录）—— 取它：\n' "$TEAM_DOCS_DIR"
-  local -a keep=() drop=()
+  local -a keep=() drop=() take=()
   for p in "${late_records[@]}"; do
-    if [ -n "${gone[$p]:-}" ]; then drop+=("$p"); else keep+=("$p"); fi
+    if [ -n "${gone[$p]:-}" ]; then drop+=("$p"); take+=("drop:$p"); else keep+=("$p"); take+=("keep:$p"); fi
     printf '      %s%s\n' "$p" "$([ -n "${gone[$p]:-}" ] && printf '  [删除]' || true)"
   done
-  printf '  修法（可粘贴；记录不涉及代码，不需要重跑门禁）：\n'
-  if [ "${#keep[@]}" -gt 0 ]; then
-    printf '    git -C %s checkout %s --' "$root" "$branch"
-    printf ' %q' "${keep[@]}"
-    printf '\n'
-  fi
-  if [ "${#drop[@]}" -gt 0 ]; then
-    printf '    git -C %s rm -f --' "$root"
-    printf ' %q' "${drop[@]}"
-    printf '\n'
-  fi
-  printf '  → 取完再看一次：%s review %s --post-merge\n' "$TEAM_CLI" "$id"
+  printf '  修法（可粘贴；记录不涉及代码、不需要重跑门禁 —— 这条命令自带提交，原样执行后重跑一次就已经是 0）：\n'
+  team_review_postmerge_take_cmd "$root" "$branch" "$id" "${take[@]}"
+  printf '  → 取完再看一次（应当立刻收敛）：%s review %s --post-merge\n' "$TEAM_CLI" "$id"
   return 0
 }
 
