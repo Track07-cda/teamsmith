@@ -7,9 +7,12 @@
 #   section-select.sh --list                    列出映射表（key<TAB>id<TAB>patterns<TAB>needs<TAB>basis）
 #   section-select.sh --root <dir>              分析另一棵树（夹具用；默认本脚本所在的仓库）
 #   section-select.sh --table <file> --check    换一张表跑自检（夹具旋钮：造表腐烂的现场）
+#   section-select.sh --out <file>              把 decision=RUN 的过滤副本写进 <file>（写前 bash -n 校验）
+#   section-select.sh --verify-copies           对每个段键生成副本并 bash -n（结构腐烂的守门扫描）
 #
-# 纯逻辑：不调 git、不起 tmux/pi/门禁进程；只读映射表与 smoke.sh。
-# 退出码：0 = 有决定 / 自检全绿；1 = --check 有不成立项；2 = 用法错误、表畸形、未知 key、路径出界。
+# 纯逻辑：不调 git、不起 tmux/pi/门禁进程；只读映射表与 smoke.sh（--verify-copies 只写临时副本）。
+# 退出码：0 = 有决定 / 自检全绿；1 = --check 有不成立项 / --verify-copies 有副本不能解析；
+#         2 = 用法错误、表畸形、未知 key、路径出界。
 #
 # 决定语义（保守方向永远是「多跑」）：
 #   NONE = 给的路径全在豁免类（docs/*，团队账本）且没有行声明它 → 没有段需要跑
@@ -22,10 +25,11 @@ SEL_DIR="$here"
 
 ROOT=""
 MODE=""
+COPY_OUT=""
 PATHS=()
 SEL_KEYS=()
 die() { printf 'section-select: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,19p' "$0"; }
+usage() { sed -n '2,21p' "$0"; }
 
 # ── 参数 ────────────────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
@@ -47,11 +51,20 @@ while [ $# -gt 0 ]; do
     --root=*)  ROOT="${1#*=}"; shift ;;
     --table)   shift; [ $# -gt 0 ] || die "--table 需要文件"; TABLE="$1"; shift ;;
     --table=*) TABLE="${1#*=}"; shift ;;
+    --out)     shift; [ $# -gt 0 ] || die "--out 需要文件"; COPY_OUT="$1"; shift ;;
+    --out=*)   COPY_OUT="${1#*=}"; shift ;;
+    --verify-copies) [ -z "$MODE" ] || die "--verify-copies 不与其它模式同用"; MODE="verify-copies"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数 $1（用法见 --help）" ;;
   esac
 done
 [ -n "$MODE" ] || { usage >&2; exit 2; }
+if [ -n "$COPY_OUT" ]; then
+  case "$MODE" in
+    paths|select) ;;
+    *) die "--out 只与 --paths/--select 同用（当前是 --$MODE）" ;;
+  esac
+fi
 
 if [ -z "$ROOT" ]; then
   ROOT="${TEAM_SECTION_SELECT_ROOT:-$(cd -P "$SEL_DIR/../../.." && pwd)}"
@@ -151,8 +164,77 @@ normalize_path() {
   return 0
 }
 
+# ── 段结构：分区与耦合组 ────────────────────────────────────────────────────────────────
+# 段与段之间不总是能一刀切：构造（if/case/函数/heredoc…）可以跨段头（现场：smoke.sh 的 14c 坐在
+# 14 段里的 FAST 守卫内）。这里不自己写 bash 解析器，而是让 bash 自己当裁判：一段源码文本能
+# `bash -n` 通过 ⇔ 它自足（开与闭都在段内）。规则：
+#   * 候选区域 = [段头, 下一个段头)；前导 = [1, 第一个段头)；收尾 = [`# __SMOKE_TAIL__`, EOF)；
+#   * 前导 / 收尾不自足 → 无论怎么切都不安全：直接 die（早、响亮、可诊断）；
+#   * 区域不自足 → 向右合并到能解析为止；合并出的**组**是不可拆的最小运行单元；
+#   * 组是原子：选择任一成员 = 整组进运行集（run 清单如实列出全部成员），不选 = 整组不跑。
+# 生成副本后再 `bash -n` 一次（emit_copy）：「副本必须永远可解析」的最后一闸。
+G_N=0; G_START=(); G_END=(); G_KEYS=()
+KEY_GIDX=()      # 段序号（源序）→ 组号
+TAIL_LINE=""; LAST_LINE=""; groups_ready=0
+
+key_idxs() { # <key> → 段序号（源序）；找不到 → 1
+  local k="$1" i
+  for ((i = 0; i < S_N; i++)); do [ "${S_KEY[i]}" = "$k" ] && { printf '%s' "$i"; return 0; }; done
+  return 1
+}
+key_group() { # <key> → 组号；找不到 → 1
+  local i
+  i="$(key_idxs "$1")" || return 1
+  printf '%s' "${KEY_GIDX[i]}"
+}
+span_parses() { # <起行> <止行（含）>；空区间 = 通过（bash -n 是结构裁判）
+  local a="$1" b="$2"
+  [ "$a" -le "$b" ] || return 0
+  sed -n "${a},${b}p" "$SUITE" | bash -n 2>/dev/null
+}
+sec_region_end() { # <段序号> → 该段候选区域的止行（含）
+  local i="$1" t="$TAIL_LINE"
+  if [ "$i" -lt "$((S_N - 1))" ]; then printf '%s' "$((S_LINE[i + 1] - 1))"
+  elif [ "$t" -gt 0 ]; then printf '%s' "$((t - 1))"
+  else printf '%s' "$LAST_LINE"; fi
+}
+build_groups() { # 幂等；前导/收尾或任何切点无法自足 = die（无法安全切段）
+  [ "$groups_ready" = 1 ] && return 0
+  TAIL_LINE="$(grep -n '^# __SMOKE_TAIL__' "$SUITE" 2>/dev/null | head -1 | cut -d: -f1)"
+  TAIL_LINE="${TAIL_LINE:-0}"
+  LAST_LINE="$(wc -l < "$SUITE" | tr -d '[:space:]')"
+  G_N=0; G_START=(); G_END=(); G_KEYS=(); KEY_GIDX=()
+  if ! span_parses 1 "$((S_LINE[0] - 1))"; then
+    die "前导段（源码 1..$((S_LINE[0] - 1))）按 bash -n 不自足：无法安全切段"
+  fi
+  if [ "$TAIL_LINE" -gt 0 ] && ! span_parses "$TAIL_LINE" "$LAST_LINE"; then
+    die "收尾段（源码 $TAIL_LINE..$LAST_LINE）按 bash -n 不自足：无法安全切段"
+  fi
+  local i=0 j a b g k
+  while [ "$i" -lt "$S_N" ]; do
+    a="${S_LINE[i]}"; j="$i"; b="$(sec_region_end "$j")"
+    while ! span_parses "$a" "$b"; do
+      if [ "$j" -lt "$((S_N - 1))" ]; then
+        j=$((j + 1)); b="$(sec_region_end "$j")"
+      else
+        die "段 ${S_KEY[i]}（源码行 $a）起的候选区域按 bash -n 不自足且已到末尾：无法切割"
+      fi
+    done
+    g="$G_N"; G_N=$((G_N + 1))
+    G_START+=("$a"); G_END+=("$b"); G_KEYS+=("")
+    for ((k = i; k <= j; k++)); do
+      G_KEYS[g]="${G_KEYS[g]}${G_KEYS[g]:+ }${S_KEY[k]}"
+      KEY_GIDX[k]="$g"
+    done
+    i=$((j + 1))
+  done
+  groups_ready=1
+  return 0
+}
+
 # ── 选段内核 ────────────────────────────────────────────────────────────────────────────
 RUN_KEY=(); RUN_WHY=(); RUN_N=0
+reset_run() { RUN_KEY=(); RUN_WHY=(); RUN_N=0; }
 add_key() { # <key> <why>
   local k="$1" why="$2" i
   for ((i = 0; i < RUN_N; i++)); do
@@ -190,6 +272,24 @@ add_needs_closure() { # 反复扫 needs 直到不再新增（needs 只指向更�
   done
   die "needs 闭包不收敛（表里有环？）"
 }
+# 运行集闭包 = needs 闭包 + 耦合组展开，反复到不动点（needs 只指向更早段、组是有限划分 → 收敛）
+add_coupled() {
+  local grew=1 i g m before
+  build_groups
+  while [ "$grew" = 1 ]; do
+    grew=0
+    before=$RUN_N; add_needs_closure; [ "$RUN_N" -ne "$before" ] && grew=1
+    for ((i = 0; i < RUN_N; i++)); do
+      g="$(key_group "${RUN_KEY[i]}" || true)"
+      [ -n "$g" ] || continue
+      for m in ${G_KEYS[g]}; do
+        [ "$m" = "${RUN_KEY[i]}" ] && continue
+        before=$RUN_N; add_key "$m" "coupled:${RUN_KEY[i]}"; [ "$RUN_N" -ne "$before" ] && grew=1
+      done
+    done
+  done
+  return 0
+}
 sort_run_by_source() { # 按源码行号把 RUN_KEY/RUN_WHY 插入排序（选择排序，O(n²)，n 很小）
   local i j min lmin li key why
   for ((i = 0; i < RUN_N - 1; i++)); do
@@ -207,11 +307,91 @@ sort_run_by_source() { # 按源码行号把 RUN_KEY/RUN_WHY 插入排序（选�
 }
 print_run() {
   local i
+  [ -z "$COPY_OUT" ] || emit_copy "$COPY_OUT" || exit 2
   printf 'decision=RUN\n'
   printf 'sections=%s\n' "$S_N"
   printf 'keys=%s\n' "$RUN_N"
   for ((i = 0; i < RUN_N; i++)); do printf 'reason=%s ← %s\n' "${RUN_KEY[i]}" "${RUN_WHY[i]}"; done
   for ((i = 0; i < RUN_N; i++)); do printf '%s\t%s\n' "${RUN_KEY[i]}" "${RUN_WHY[i]}"; done
+}
+
+# 把当前 RUN_* 集过滤成一份可解析的副本写进 <文件>：前导 + 命中的**整组** + 收尾，段正文逐字节原样。
+# 返回 0 = 写好了且 bash -n 通过；1 = 副本不能解析（已点名段与源码行，调用方负责在跑段之前拒绝）。
+emit_copy() { # <out>
+  local out="$1" i g a b spec="" off=0 ranges="" err ln who srcline r ostart oend sstart ks
+  local -a KEEP=() RARR=()
+  build_groups
+  for ((i = 0; i < G_N; i++)); do KEEP[i]=0; done
+  for ((i = 0; i < RUN_N; i++)); do
+    g="$(key_group "${RUN_KEY[i]}" || true)"
+    [ -n "$g" ] || continue
+    KEEP[g]=1
+  done
+  b=$((S_LINE[0] - 1))
+  if [ "$b" -ge 1 ]; then
+    spec="1,${b}p"; ranges="$(printf '%s|%s|%s|%s' "$((off + 1))" "$((off + b))" 1 前导)"; off=$((off + b))
+  fi
+  for ((g = 0; g < G_N; g++)); do
+    [ "${KEEP[g]}" = 1 ] || continue
+    a="${G_START[g]}"; b="${G_END[g]}"
+    spec="${spec:+$spec;}${a},${b}p"
+    ranges="${ranges:+$ranges;}$(printf '%s|%s|%s|%s' "$((off + 1))" "$((off + b - a + 1))" "$a" "${G_KEYS[g]}")"
+    off=$((off + b - a + 1))
+  done
+  if [ "$TAIL_LINE" -gt 0 ]; then
+    spec="${spec:+$spec;}${TAIL_LINE},\$p"
+    ranges="${ranges:+$ranges;}$((off + 1))|-|${TAIL_LINE}|收尾"
+  fi
+  if [ -n "$spec" ]; then
+    sed -n "$spec" "$SUITE" > "$out" || { printf 'section-select: 写副本失败：%s\n' "$out" >&2; return 1; }
+  else
+    : > "$out"
+  fi
+  if ! err="$(bash -n "$out" 2>&1)"; then
+    ln="$(printf '%s\n' "$err" | head -1 | sed -n 's/^[^:]*: *line \([0-9][0-9]*\):.*/\1/p')"
+    # 未闭合构造的起点（bash 消息里的 `... on line N`）比 EOF 的主报错行更能归因：优先用它
+    local ln2
+    ln2="$(printf '%s\n' "$err" | head -1 | sed -n 's/.*on line \([0-9][0-9]*\).*/\1/p')"
+    [ -n "$ln2" ] && ln="$ln2"
+    who=""; srcline=""
+    if [ -n "$ln" ]; then
+      IFS=';' read -r -a RARR <<<"$ranges"
+      for r in "${RARR[@]}"; do
+        IFS='|' read -r ostart oend sstart ks <<<"$r"
+        [ "$oend" = "-" ] && oend="$ln"
+        if [ "$ln" -ge "$ostart" ] && [ "$ln" -le "$oend" ]; then
+          who="$ks"; srcline=$((sstart + ln - ostart)); break
+        fi
+      done
+    fi
+    printf 'section-select: 段副本不能解析（%s%s副本行 %s）：%s\n' \
+      "${who:+段 $who · }" "${srcline:+源码行 $srcline · }" "${ln:-?}" "$(printf '%s' "$err" | head -1)" >&2
+    printf 'section-select: 这次保留的键：%s\n' "$(printf '%s ' "${RUN_KEY[@]}")" >&2
+    return 1
+  fi
+  return 0
+}
+
+# ── --verify-copies ─────────────────────────────────────────────────────────────────────
+# 对**每个段键**：按 `--select <key>` 的口径算运行集 → 生成副本 → bash -n。结构腐烂（跨段构造没被
+# 识别、段被切出孤立 fi…）会在这里成片红；emit_copy 的运行期守卫只保证单次调用在跑段之前早拒。
+do_verify_copies() {
+  build_groups
+  local d out k n=0 bad=0 i
+  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-select-copies.XXXXXX")" || die "建不了临时目录（TMPDIR=${TMPDIR:-/tmp}）"
+  trap 'rm -rf "${d:-}"' EXIT
+  printf '== 段副本 bash -n 全键扫描 ==\n'
+  for ((i = 0; i < T_N; i++)); do
+    k="${T_KEY[i]}"; n=$((n + 1))
+    reset_run
+    select_run_set "$k"
+    out="$d/copy-$k.sh"
+    if emit_copy "$out"; then printf 'ok: %s\n' "$k"; else bad=$((bad + 1)); printf 'bad: %s —— 副本不能解析（见上一行）\n' "$k"; fi
+    rm -f "$out"
+  done
+  printf '== 段副本 bash -n 扫描 == ok %d bad %d\n' "$((n - bad))" "$bad"
+  [ "$bad" -eq 0 ] || return 1
+  return 0
 }
 
 # ── --paths ─────────────────────────────────────────────────────────────────────────────
@@ -253,26 +433,26 @@ do_paths() {
     return 0
   fi
   add_prologue
-  add_needs_closure
+  add_coupled
   sort_run_by_source
   print_run
   return 0
 }
 
 # ── --select ────────────────────────────────────────────────────────────────────────────
-do_select() {
+select_run_set() { # <key>…（显式选择）→ 填 RUN_*（不打印、不写副本）
   local k
-  [ "${#SEL_KEYS[@]}" -gt 0 ] || die "--select 需要至少一个 key"
-  for k in "${SEL_KEYS[@]}"; do
+  [ "$#" -gt 0 ] || die "--select 需要至少一个 key"
+  for k in "$@"; do
     [ -n "$k" ] || die "--select 里有空的 key"
     sec_line "$k" >/dev/null || die "未知 key：$k（用 --list 看全部 key）"
     add_key "$k" "selected"
   done
   add_prologue
-  add_needs_closure
+  add_coupled
   sort_run_by_source
-  print_run
 }
+do_select() { select_run_set "${SEL_KEYS[@]}"; print_run; }
 
 # ── --list ──────────────────────────────────────────────────────────────────────────────
 do_list() {
@@ -440,8 +620,9 @@ do_check() {
 
 # ── main ────────────────────────────────────────────────────────────────────────────────
 case "$MODE" in
-  paths)  load_table; load_suite; do_paths ;;
-  select) load_table; load_suite; do_select ;;
-  list)   load_table; do_list ;;
-  check)  load_table; load_suite; do_check ;;
+  paths)          load_table; load_suite; do_paths ;;
+  select)         load_table; load_suite; do_select ;;
+  list)           load_table; do_list ;;
+  check)          load_table; load_suite; do_check ;;
+  verify-copies)  load_table; load_suite; do_verify_copies ;;
 esac

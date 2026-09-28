@@ -499,7 +499,8 @@ the guarded FAST set (or nothing) stand as the evidence. When in doubt prefer FA
 sections and name what you did not run; **never** claim a full run you did not do. Which sections a changed path affects is
 mechanical: `bash skills/teamsmith/tests/section-select.sh --paths <path…>` answers `RUN`, `NONE` (records under `docs/**`) or `FULL`
 (a path no row claims — run the suite), `bash skills/teamsmith/tests/smoke.sh --paths <path…>` runs that answer, and a selected run
-lists the sections it did not run instead of claiming the full suite. `team review` takes that same lock **before** starting its
+lists the sections it did not run instead of claiming the full suite. **A selected run's green covers only the sections it
+ran, not the suite: a report citing one names the sections it did not run.** `team review` takes that same lock **before** starting its
 hard timeout: the queue is its own bounded phase, the record accounts it separately (`limit=Ns queued=Ns ran=Ns`),
 a queue that exceeds the cap is `FAIL` with the holder named (never `TIMEOUT`), a run that really overruns is still
 `TIMEOUT` with `ran=Ns`, and `SMOKE_LOCK_WRAPPED=1` tells a nested run that an ancestor already holds the lock (so

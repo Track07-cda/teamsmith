@@ -159,9 +159,13 @@ if [ "$SMOKE_SEL_IS_CHILD" = "1" ]; then
 elif [ -n "$SELECT_MODE_REQ" ]; then
   SELECT_BIN="$SKILL_DIR/tests/section-select.sh"
   [ -f "$SELECT_BIN" ] || { printf 'smoke: 选段需要 %s（缺它就不能用 --paths/--select）\n' "$SELECT_BIN" >&2; exit 2; }
-  if ! SELECT_OUT="$(bash "$SELECT_BIN" --"$SELECT_MODE_REQ" "${SELECT_ARGS[@]}" </dev/null 2>&1)"; then
+  # 过滤副本由选择器一次生成（唯一剪贴实现）：它写进 --out 前先 bash -n 校验，不能解析就在
+  # **跑任何段之前**拒绝并点名（段 key + 源码行）——smoke 不再自己剪文本（P117/V1）。
+  SELECT_COPY="${TMPDIR:-/tmp}/teamsmith-select.$$.sh"
+  rm -f "$SELECT_COPY"
+  if ! SELECT_OUT="$(bash "$SELECT_BIN" --"$SELECT_MODE_REQ" "${SELECT_ARGS[@]}" --out "$SELECT_COPY" </dev/null 2>&1)"; then
     printf '%s\n' "$SELECT_OUT" >&2
-    printf 'smoke: 选段被拒 —— 什么都没跑\n' >&2
+    printf 'smoke: 选段被拒（副本不能解析 / 表或源码结构问题）—— 什么都没跑\n' >&2
     exit 2
   fi
   SELECT_DECISION="$(printf '%s\n' "$SELECT_OUT" | sed -n 's/^decision=//p' | head -1)"
@@ -189,21 +193,9 @@ elif [ -n "$SELECT_MODE_REQ" ]; then
   unset _k
   smoke_select_header
   if [ "$SELECT_DECISION" = "RUN" ]; then
-    # 过滤副本：整段保留/整段丢弃，段正文原样；收尾从 `# __SMOKE_TAIL__` 起原样到底
-    SELECT_COPY="${TMPDIR:-/tmp}/teamsmith-select.$$.sh"
-    if ! awk -v keys="$SELECT_RUN_KEYS" '
-      BEGIN { n = split(keys, A, " "); for (i = 1; i <= n; i++) keep[A[i]] = 1; cur = 1 }
-      /^# __SMOKE_TAIL__/ { tail = 1 }
-      /^[[:space:]]*section[[:space:]]+"/ {
-        k = $0
-        sub(/^[[:space:]]*section[[:space:]]+"/, "", k)
-        sub(/"[[:space:]]*$/, "", k)
-        sub(/ · .*/, "", k)
-        cur = (k in keep) ? 1 : 0
-      }
-      { if (tail || cur) print }
-    ' "$SKILL_DIR/tests/smoke.sh" > "$SELECT_COPY"; then
-      printf 'smoke: 生成选段副本失败（%s）\n' "$SELECT_COPY" >&2; exit 2
+    # 副本已经在上面由选择器生成并 bash -n 校验过（段正文逐字节原样；前导与收尾原样保留）
+    if [ ! -s "$SELECT_COPY" ]; then
+      printf 'smoke: 选段副本没有生成（%s）—— 什么都没跑\n' "$SELECT_COPY" >&2; exit 2
     fi
     SMOKE_SEL_CHILD=1 SMOKE_SEL_SKILL_DIR="$SKILL_DIR" SMOKE_SEL_DECISION=RUN SMOKE_SEL_COPY="$SELECT_COPY" \
       bash "$SELECT_COPY"
@@ -13308,6 +13300,75 @@ perl -0pi -e 's/(section "1 · doctor（未初始化应失败）"\n)/$1bad "P115
 grep -q 'P115 夹具：1 段里的真红' "$P98_RED1/tests/smoke.sh" || bad "36⑥ 红侧 §1 注入没打上（段形状变了？）"
 P98_NEST_ENV="$P98_RED_ENV" p98_nest "$P98_RED1" "$TMP/p115-red1.log" --select 1; P98_R1_RC=$?
 p98_state_has "$TMP/p115-red1.log" "$P98_R1_RC" "red" "P115 夹具：1 段里的真红" "36⑥ 真红侧（--select 1，泄漏配置）"
+
+# ── ⑦ 副本必须永远可解析（P117/V1）+ needs 闭包自足（P117/V2） ────────────────────────────
+# V1（P112 §5.1）：剪贴器把任何缩进的段头都当边界；14c 的段头坐在 14 段的 FAST 守卫里，
+# 于是「保留 14、丢弃 14c」的副本会剪掉那个 fi —— 跑完全部选中段之后才在 EOF 上 exit 2，
+# 没有结果行。判据：① 全键副本 bash -n 扫描必须 ok 全部 / bad 0；② 把裁判砸掉（还原
+# 「按段头一刀切」）→ 同一个扫描必须红，且坏副本必须在**跑任何段之前**被拒（rc=2、点名、零段头）。
+# V2（P112 §5.2）：夹具前提段补进 needs 后，夹具依赖键（3b/6）的选集必须全绿；删掉一条
+# needs → 该键的选集必须红。全键逐键审计是 tests/section-needs-audit.sh（验收时整跑；
+# 默认门禁里钉的是采样 + 两个红侧，是时间预算与覆盖面的折中）。
+P117_N="$(awk -F'\t' '!/^#/ && NF { n++ } END { print n + 0 }' "$SKILL_DIR/tests/section-paths.tsv")"
+P117_SWEEP_RC=0
+bash "$SEL36" --verify-copies >"$TMP/p117-sweep.log" 2>&1 || P117_SWEEP_RC=$?
+if [ "$P117_SWEEP_RC" -eq 0 ] && grep -qF "== 段副本 bash -n 扫描 == ok ${P117_N} bad 0" "$TMP/p117-sweep.log"; then
+  ok "36⑦ 全键副本 bash -n 扫描：ok ${P117_N} / bad 0"
+else
+  bad "36⑦ 全键副本 bash -n 扫描有红（rc=$P117_SWEEP_RC）：$(grep -E '^(bad|== 段副本)' "$TMP/p117-sweep.log" | head -5 | tr '\n' ' ')"
+fi
+P117_SHADOW="$(p98_variant p117shadow)"
+rm -f "$P117_SHADOW/tests/section-select.sh"
+cp "$SKILL_DIR/tests/section-select.sh" "$P117_SHADOW/tests/section-select.sh"
+perl -0pi -e 's/(span_parses\(\) \{ # [^\n]*\n)/$1  return 0  # P117 红侧：还原旧剪贴器\n/' "$P117_SHADOW/tests/section-select.sh"
+if grep -q 'P117 红侧：还原旧剪贴器' "$P117_SHADOW/tests/section-select.sh"; then
+  P117_SHADOW_RC=0
+  bash "$P117_SHADOW/tests/section-select.sh" --verify-copies >"$TMP/p117-shadow.log" 2>&1 || P117_SHADOW_RC=$?
+  if [ "$P117_SHADOW_RC" -ne 0 ] \
+     && grep -qF 'bad: 14 ' "$TMP/p117-shadow.log" && grep -qF 'bad: 14c ' "$TMP/p117-shadow.log"; then
+    ok "36⑦ 红侧（旧剪贴器=按段头一刀切）：全键扫描红了并点名 14/14c"
+  else
+    bad "36⑦ 红侧（旧剪贴器）：扫描没红到点（rc=$P117_SHADOW_RC）：$(grep -E '^(bad|== 段副本)' "$TMP/p117-shadow.log" | head -5 | tr '\n' ' ')"
+  fi
+  P98_NEST_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT" p98_nest "$P117_SHADOW" "$TMP/p117-early.log" --select 14
+  P117_EARLY_RC=$?
+  if [ "$P117_EARLY_RC" -eq 2 ] \
+     && grep -qF '副本不能解析' "$TMP/p117-early.log" \
+     && grep -qF '什么都没跑' "$TMP/p117-early.log" \
+     && ! sed 's/\x1b\[[0-9;]*m//g' "$TMP/p117-early.log" | grep -q '^== #'; then
+    ok "36⑦ 坏副本在跑任何段之前被拒（rc=2、点名、零段头）"
+  else
+    bad "36⑦ 坏副本没有早拒（rc=$P117_EARLY_RC）：$(tail -3 "$TMP/p117-early.log" | tr '\n' ' ')"
+  fi
+else
+  bad "36⑦ 红侧夹具没打上（选择器的 span_parses 形状变了？）"
+fi
+p117_own_line() { sed 's/\x1b\[[0-9;]*m//g' "$1" | awk -v k="$2" '$1 ~ /^#[0-9]+$/ && $2 == k && /用时/ { print; exit }'; }
+for P117_K in 3b 6; do
+  P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p117-green-$P117_K.log" --select "$P117_K"
+  P117_GRC=$?; P117_LINE="$(p117_own_line "$TMP/p117-green-$P117_K.log" "$P117_K")"
+  if [ "$P117_GRC" -eq 0 ] && [ -n "$P117_LINE" ] && printf '%s' "$P117_LINE" | grep -q '✗0 '; then
+    ok "36⑦ 夹具依赖键 --select $P117_K 的选集全绿（$P117_LINE）"
+  else
+    bad "36⑦ 夹具依赖键 --select $P117_K 的选集有红（rc=$P117_GRC；own=[$P117_LINE]）"
+  fi
+done
+unset P117_K
+p117_red_side() { # <名字> <key> <awk 变异> <说明>
+  local name="$1" key="$2" mut="$3" desc="$4" V rc line
+  V="$(p98_variant "$name")" || { bad "36⑦ 红侧 $name：建不出变体树"; return 0; }
+  awk -F'\t' -v OFS='\t' "$mut" "$SKILL_DIR/tests/section-paths.tsv" > "$V/tests/section-paths.tsv" \
+    || { bad "36⑦ 红侧 $name：表变异失败"; return 0; }
+  P98_NEST_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT" p98_nest "$V" "$TMP/p117-red-$name.log" --select "$key"
+  rc=$?; line="$(p117_own_line "$TMP/p117-red-$name.log" "$key")"
+  if [ "$rc" -ne 0 ] && [ -n "$line" ] && ! printf '%s' "$line" | grep -q '✗0 '; then
+    ok "36⑦ 红侧：$desc → --select $key 在该键上红了（rc=$rc；$line）"
+  else
+    bad "36⑦ 红侧：$desc 没让 --select $key 红（rc=$rc；own=[$line]）"
+  fi
+}
+p117_red_side p117red3b 3b '$1 == "3b" { $4 = "4" } 1' '3b 去掉 needs:5'
+p117_red_side p117red6 6 '$1 == "6" { $4 = "4,5" } 1' '6 去掉 needs:3b'
 
 # ---------------------------------------------------------------- 37. 读路径：根一次解析 + 单进程扫描（M50）
 # 实测现场（M50 任务书，PM 在 main 上量的）：BOARD.md 只有 141 行，`team digest` 却要 89 秒 ——
