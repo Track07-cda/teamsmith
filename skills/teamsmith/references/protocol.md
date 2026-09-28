@@ -438,6 +438,19 @@ A trap: an add/add conflict is often git's rename detection pairing two differen
 - Forge-agnostic: GitHub/GitLab are not assumed; a token is read from the project's configured token file and injected
   only for the duration of a command, never echoed.
 
+## 8i. The roster is a contract value with one authorized entry
+
+The roster (`TEAM_AGENTS`) is part of the project contract, and like every other key it has exactly one writer:
+the contract's hardened writer, reached through `team add-agent <a> --register` (grow) or `team teardown --agent
+<a> --register` (shrink). Both do a read-modify-write with the roster's value rule (each seat name matches
+`[A-Za-z0-9][A-Za-z0-9._-]*`, appears once, is never `pm`), the sha256 fingerprint CAS and exactly one
+`result=ok actor=cli` line in `<state>/config.log`; the flag is not optional, and a bare `team add-agent <a>` for
+a seat the roster does not carry exits 5 while naming both routes that work (hand-edit `.pi/team/config.sh`, or
+add `--register`). `TEAM_AGENTS` stays class `refuse`: the console may not write it — a human at the panel could
+otherwise widen the project's authority — and the schema note it renders names the register entries. The same
+value rule is what `team config list --json` reports as the key's `warning` when a hand-edited file already
+carries an illegal token, so the read side and the write side can never disagree about what a seat name is.
+
 ## 9. Capacity: the floor is that neither RAM nor disk swap bottoms out (zram does not count)
 
 - There is only one condition for refusing a dispatch: free swap below `TEAM_MIN_FREE_SWAP_MB` (1024MB by default) or

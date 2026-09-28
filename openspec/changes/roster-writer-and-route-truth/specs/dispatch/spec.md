@@ -10,7 +10,9 @@ not change"), and `TEAM_AGENTS` SHALL keep class `refuse`. `team add-agent <agen
 carry and without `--register` SHALL exit 5, name the two routes that really work (hand-editing
 `.pi/team/config.sh`, or re-running with `--register`), and MUST NOT open a window, create a worktree, write state
 or touch the contract. `--register` for a seat the roster already carries SHALL be a visible no-op (exit 0, no
-write, no audit line). `team teardown --register` SHALL require `--agent` (`--all --register` is a usage error,
+write, no audit line) — and, because the value rule is not waived by the no-op path, a roster whose current value
+violates that rule (a hand-edited duplicate or an illegal token) SHALL instead exit 4 naming the offending token
+before any worktree or state is touched. `team teardown --register` SHALL require `--agent` (`--all --register` is a usage error,
 exit 2) and SHALL refuse a seat the roster does not carry (exit 5 naming the roster, nothing written). Both
 entries SHALL accept `--fingerprint <sha256>` with `team config set`'s semantics, and their own read-modify-write
 SHALL pass the fingerprint of the bytes they read. `--model <m>` SHALL be validated before any write and SHALL set
@@ -25,7 +27,8 @@ did not when the second write does not land. `team help`'s `add-agent` line SHAL
 
 - **GIVEN** a fixture project whose roster line is `TEAM_AGENTS="dev verify"` among comments and other keys
 - **WHEN** `team add-agent api --register --no-install` runs
-- **THEN** it exits 0, `diff` shows exactly one changed line reading `TEAM_AGENTS="dev verify api"`, `bash -n`
+- **THEN** it exits 0, `diff` shows exactly one changed line reading `TEAM_AGENTS='dev verify api'` (the
+  writer's canonical single-quoted form), `bash -n`
   exits 0, and `<state>/config.log` gained exactly one `result=ok actor=cli` line naming `TEAM_AGENTS`
 - **AND** the printed worktree step is the one `add-agent api --no-install` prints for a seat already in the roster
 
@@ -51,7 +54,7 @@ did not when the second write does not land. `team help`'s `add-agent` line SHAL
 
 - **GIVEN** the same contract with `api` in the roster and `api`'s window and state present
 - **WHEN** `team teardown --agent api --register` runs
-- **THEN** the roster line reads `TEAM_AGENTS="dev verify"` with every other byte unchanged, one `result=ok`
+- **THEN** the roster line reads `TEAM_AGENTS='dev verify'` with every other byte unchanged, one `result=ok`
   `actor=cli` line names `TEAM_AGENTS`, and the window/state cleanup of a plain `teardown --agent api` happened too
 - **AND** `team teardown --agent api` (no flag) leaves the roster byte-identical (today's behaviour is the default),
   `team teardown --all --register` exits 2 without touching anything, and `team teardown --agent nosuch --register`

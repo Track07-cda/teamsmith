@@ -255,10 +255,10 @@ openspec archive -y <change>        # merges the deltas into openspec/specs/ and
 ## G. Scaling up / down
 
 ```bash
-bash <skill>/scripts/team add-agent api            # new agent (new worktree + branch)
+bash <skill>/scripts/team add-agent api --register    # new agent: roster (audited) + the worktree/branch step
 bash <skill>/scripts/team ps                       # check remaining capacity and model concurrency before dispatching
 bash <skill>/scripts/team dispatch api T2.1 <taskfile>
-bash <skill>/scripts/team teardown --agent api     # close the window (keep the worktree)
+bash <skill>/scripts/team teardown --agent api --register   # remove from the roster (audited) + close the window (keep the worktree)
 bash <skill>/scripts/team teardown --all --purge --force   # delete the worktrees too (careful)
 ```
 

@@ -5301,7 +5301,8 @@ assert_eq "名册为空不再以 ✗ 出现" "$M29_ROSTER_FAIL" "0"
 
 # ⑤ 交付物 2/3 的措辞落盘（init 清单 + 长任务文档）
 assert_has "$SKILL_INIT_DIR/SKILL.md" "minimal starting roster" "init 名册条目改成最小起点措辞"
-assert_has "$SKILL_INIT_DIR/SKILL.md" "team add-agent" "并说明随时可以用 add-agent 增减"
+assert_has "$SKILL_INIT_DIR/SKILL.md" "team add-agent <name> --register" "init 名册条目点名 --register（flagless 增长是假的，P99）"
+assert_has "$SKILL_INIT_DIR/SKILL.md" "teardown --agent <name> --register" "并给出对称的移除入口"
 assert_has "$SKILL_INIT_DIR/SKILL.md" "information only" "插件条目说明是告知、不是推荐"
 assert_has "$SKILL_INIT_DIR/SKILL.md" "team-bg" "并说明团队会话的后台由自带 team-bg 覆盖"
 assert_has "$SKILL_DIR/references/troubleshooting.md" "## 17. A long task" "长任务两种车道仍在 troubleshooting §17"
@@ -14607,6 +14608,44 @@ assert_eq "P95 ⑥ 红侧：main 的 tip 没动（取完也没入账）" \
 assert_eq "P95 ⑥ 红侧：记录下来在暂存区里（checkout 只动了索引/工作区）" \
   "$(git -C "$P95R" status --porcelain -- docs/team/reports/P95-dev-extra2.md)" \
   "A  docs/team/reports/P95-dev-extra2.md"
+
+# ═════════════════════════════════════════════════════════════════════
+# 51 · 用法诚实性（P99 · roster-writer-and-route-truth / R1–R3）
+#
+# 两件：
+#   ① `tests/routes.sh`——Walk A（team help 的每条用法行 ↔ 解析器）、非空洞控制臂（打印旗标的
+#      每条路径必须拒未知参数）、Walk B（schema 注释点名的命令 ↔ 承诺探针）与翻转（把树改坏必须
+#      红并点名）。FAST 由 TEAM_SMOKE_FAST 透传：它只跳翻转（一行可见 SKIP），前三段照跑。
+#   ② 名册夹具的便宜一半（`config-cli.sh list validate roster`）：七个形状的退出码/字节不变性/
+#      审计/一条值规则。两件都自带私有临时根，不碰 $REPO。
+section "51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）"
+if [ -f "$SKILL_DIR/tests/routes.sh" ]; then
+  P99_ROUTES_RC=0
+  ( cd "$TMP" && bash "$SKILL_DIR/tests/routes.sh" ) >"$TMP/routes.log" 2>&1 || P99_ROUTES_RC=$?
+  if [ "$P99_ROUTES_RC" -eq 0 ]; then
+    ok "51 routes.sh 全绿（$(grep -ac '✓' "$TMP/routes.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/routes.log" || true) 条可见跳过）"
+    { grep -aE '== (walk|control|promises|flips) ==' "$TMP/routes.log" || true; } | sed 's/^/      /'
+  else
+    bad "51 routes.sh 有失败（rc=$P99_ROUTES_RC）——用法行/注释承诺与真实解析器不一致"
+    grep -a '✗' "$TMP/routes.log" | head -10 | sed 's/^/      /'
+  fi
+  # 翻转段的红侧尾巴（完整门禁才有；FAST 里是 SKIP）——留给现场
+  { grep -aE '翻转[①②③④⑤⑥⑦]' "$TMP/routes.log" || true; } | head -8 | sed 's/^/      /'
+else
+  bad "51 缺 tests/routes.sh（P99 的用法诚实性走查）"
+fi
+if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
+  P99_ROSTER_RC=0
+  bash "$SKILL_DIR/tests/config-cli.sh" list validate roster >"$TMP/p99-roster.log" 2>&1 || P99_ROSTER_RC=$?
+  if [ "$P99_ROSTER_RC" -eq 0 ]; then
+    ok "51 名册/契约夹具（list+validate+roster）全绿（$(grep -ac '✓' "$TMP/p99-roster.log" || true) 条断言）"
+  else
+    bad "51 名册/契约夹具有失败（rc=$P99_ROSTER_RC）"
+    grep -a '✗' "$TMP/p99-roster.log" | head -8 | sed 's/^/      /'
+  fi
+else
+  bad "51 缺 tests/config-cli.sh"
+fi
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

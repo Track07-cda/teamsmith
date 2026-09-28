@@ -120,7 +120,14 @@ team_cmd_reload() { # 让 PM 自助刷新 skill（写一个请求标记 + 告诉
   esac
 }
 
-team_cmd_version_brief() { printf 'teamsmith %s\n' "$TEAM_VERSION"; }
+team_cmd_version_brief() { # [--check 由分发器接走]；未知旗标/多余参数必须拒绝（P99/R3 的控制臂）
+  case "${1:-}" in
+    ''|--) ;;
+    -*) team_usage_die "version: 未知参数 $1" ;;
+    *) team_usage_die "version: 多余参数 $1（用法 version [--check]）" ;;
+  esac
+  printf 'teamsmith %s\n' "$TEAM_VERSION"
+}
 
 team_cmd_version_check() {
   team_require_docs

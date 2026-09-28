@@ -106,7 +106,7 @@ need_python() { command -v python3 >/dev/null 2>&1; }
 need_python || { printf 'config-cli: 需要 python3（JSON 断言）\n' >&2; exit 3; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip json)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit roster models seats completeness docs callers flip groups-flip json)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- list
@@ -416,6 +416,195 @@ import json,sys
 d=json.load(sys.stdin)
 sys.exit(0 if d["audit"] and d["audit"][-1].strip()==sys.argv[1].strip() else 1)
 ' "$newest" < "$tmp/audit-list.json"; then ok "list --json 的审计尾巴以最新那行结尾"; else bad "list --json 的审计尾巴不是最新行"; fi
+fi
+
+# ---------------------------------------------------------------- roster（P99/R1+R2）
+# 名册的两个授权入口（add-agent / teardown 的 --register）的七个形状：退出码、报错点名、字节不变性、
+# 审计行、指纹 CAS、值规则一条（读侧 warning 与写侧拒绝同源）。全部 headless（FAST 模式照跑）。
+if want roster; then
+  section "roster · 唯一授权写入器 / 值规则一条 / 七个形状 / 审计与退出码（P99）"
+  p="$(new_proj roster)" || exit 3
+  cfg="$p/.pi/team/config.sh"; log="$(audit_of "$p")"; mkdir -p "$(dirname "$log")"; : > "$log"
+  sha0="$(sha_of "$cfg")"
+
+  # ① 没有 --register 的未知席位：exit 5 + 两条真出路 + 什么都不碰
+  out="$(run_in "$p" add-agent api)"; rc=$?
+  assert_eq "① 无旗标未知席位 → 5（refuse）" "$rc" "5"
+  case "$out" in *"--register"*) ok "① 报错点名 --register" ;; *) bad "① 没点名 --register（$out）" ;; esac
+  case "$out" in *config.sh*) ok "① 报错点名手改 .pi/team/config.sh" ;; *) bad "① 没点名手改路线（$out）" ;; esac
+  case "$out" in *"什么都没做"*) ok "① 明说零副作用" ;; *) bad "① 没说清零副作用（$out）" ;; esac
+  assert_eq "① 契约逐字节不变" "$(sha_of "$cfg")" "$sha0"
+  [ -e "$p/.worktrees/api" ] && bad "① 居然建了工作树" || ok "① 没有工作树"
+  [ -e "$p/.pi/team/state/api.env" ] && bad "① 居然写了 state" || ok "① 没有 state 文件"
+  assert_eq "① 没有审计行（没走到写入器）" "$(grep -c 'result=' "$log" 2>/dev/null || true)" "0"
+
+  # ② team config set 到不了名册：class refuse、exit 5、点名 --register；读侧同 class
+  out="$(run_in "$p" config set TEAM_AGENTS 'dev verify api' --yes)"; rc=$?
+  assert_eq "② config set TEAM_AGENTS → 5" "$rc" "5"
+  case "$out" in *"--register"*) ok "② 拒绝的报错点名 --register（不是一个做不到的命令）" ;; *) bad "② 报错没点名 --register（$out）" ;; esac
+  json="$(run_in "$p" config list --json)"
+  json_check "$json" "② 读侧 TEAM_AGENTS 的 class=refuse" '[k for k in d["keys"] if k["name"]=="TEAM_AGENTS"][0]["class"]=="refuse"'
+  assert_eq "② 契约逐字节不变" "$(sha_of "$cfg")" "$sha0"
+
+  # ③ 注册：恰好一行改动（其余字节不动）+ bash -n + 恰好一行 ok 审计（点名新旧值）
+  cp -a "$cfg" "$tmp/roster-before.sh"
+  out="$(run_in "$p" add-agent api --register --no-install)"; rc=$?
+  assert_eq "③ add-agent api --register → 0" "$rc" "0"
+  do_diff="$(diff "$tmp/roster-before.sh" "$cfg" || true)"
+  assert_eq "③ diff 恰好一行改动（2 行 < >）" "$(printf '%s\n' "$do_diff" | grep -c '^[<>]' || true)" "2"
+  assert_eq "③ 新值逐字 = dev verify api" "$(grep -c "^TEAM_AGENTS='dev verify api'$" "$cfg" || true)" "1"
+  bash -n "$cfg" 2>/dev/null && ok "③ 写后 bash -n 通过" || bad "③ 写后 bash -n 失败"
+  assert_eq "③ 审计恰好一行 ok actor=cli key=TEAM_AGENTS" "$(grep -c 'result=ok actor=cli key=TEAM_AGENTS' "$log" || true)" "1"
+  ok_line="$(grep 'result=ok actor=cli key=TEAM_AGENTS' "$log" | head -1)"
+  case "$ok_line" in *"old='dev verify'"*) ok "③ 审计点名旧值" ;; *) bad "③ 审计没点名旧值（$ok_line）" ;; esac
+  case "$ok_line" in *"new='dev verify api'"*) ok "③ 审计点名新值" ;; *) bad "③ 审计没点名新值（$ok_line）" ;; esac
+  json="$(run_in "$p" config list --json)"
+  json_check "$json" "③ 合法名册的读侧 warning 为空" 'not ([k for k in d["keys"] if k["name"]=="TEAM_AGENTS"][0].get("warning") or "")'
+  # spec：注册后打印的工作树步骤 = 已在名册席位的同一步骤（--register 不是另一条建树路）
+  out2="$(run_in "$p" add-agent api --no-install)"
+  w1="$(printf '%s\n' "$out" | grep -F 'worktree add' || true)"
+  w2="$(printf '%s\n' "$out2" | grep -F 'worktree add' || true)"
+  [ -n "$w1" ] && [ "$w1" = "$w2" ] && ok "③ 注册后的工作树步骤 = 已在名册席位的同一步骤" \
+    || bad "③ 工作树步骤不一致（register=[$w1] flagless=[$w2]）"
+  sha_r="$(sha_of "$cfg")"; n_r="$(grep -c 'result=' "$log" || true)"
+
+  # help 的两行（R2 的打印面）：--register 必须出现在 add-agent/teardown 的用法行上
+  help_out="$(run_in "$p" help)"
+  case "$help_out" in
+    *'add-agent <a> [--register] [--model m] [--create] [--no-install] [--print]'*)
+      ok "③ help 的 add-agent 行打印 --register/--model/--create/--no-install/--print" ;;
+    *) bad "③ help 的 add-agent 行没打印齐旗标" ;;
+  esac
+  case "$help_out" in
+    *'teardown [--agent a] [--all] [--purge] [--force] [--register]'*)
+      ok "③ help 的 teardown 行打印 --register" ;;
+    *) bad "③ help 的 teardown 行没打印 --register" ;;
+  esac
+
+  # ④ 已在名册 + --register：可见 no-op（0、不写、不审计）
+  out="$(run_in "$p" add-agent api --register --no-install)"; rc=$?
+  assert_eq "④ 已在名册 + --register → 0" "$rc" "0"
+  case "$out" in *"已在名册"*) ok "④ 可见 no-op 说明" ;; *) bad "④ 没有 no-op 说明（$out）" ;; esac
+  assert_eq "④ 契约逐字节不变" "$(sha_of "$cfg")" "$sha_r"
+  assert_eq "④ 审计行数不变" "$(grep -c 'result=' "$log" || true)" "$n_r"
+
+  # ⑤ 指纹 CAS：陈旧 --fingerprint → 3 + 恰好一行 conflict + 不写；当前指纹 → 0
+  fp_bad="$(printf '0%.0s' $(seq 1 64))"
+  out="$(run_in "$p" add-agent next --register --fingerprint "$fp_bad" --no-install)"; rc=$?
+  assert_eq "⑤ 陈旧 --fingerprint → 3（conflict）" "$rc" "3"
+  assert_eq "⑤ 恰好一行 conflict" "$(grep -c 'result=conflict' "$log" || true)" "1"
+  case "$out" in *"指纹不符"*) ok "⑤ 报错点名指纹不符" ;; *) bad "⑤ 报错没说指纹（$out）" ;; esac
+  assert_eq "⑤ 冲突时契约逐字节不变" "$(sha_of "$cfg")" "$sha_r"
+  fp_cur="$(run_in "$p" config list --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["fingerprint"])')"
+  out="$(run_in "$p" add-agent next --register --fingerprint "$fp_cur" --no-install)"; rc=$?
+  assert_eq "⑤ 当前 --fingerprint → 0" "$rc" "0"
+  assert_eq "⑤ 新席位写进名册" "$(grep -c "^TEAM_AGENTS='dev verify api next'$" "$cfg" || true)" "1"
+
+  # ⑥ 值规则（写侧）：api/1 与 pm 都是 4 + 点名 + 不写
+  sha_n="$(sha_of "$cfg")"
+  out="$(run_in "$p" add-agent 'api/1' --register --no-install)"; rc=$?
+  assert_eq "⑥ api/1 → 4（invalid）" "$rc" "4"
+  case "$out" in *"api/1"*) ok "⑥ 点名违规 token api/1" ;; *) bad "⑥ 没点名 token（$out）" ;; esac
+  case "$out" in *'[A-Za-z0-9]'*) ok "⑥ 点名接受形状" ;; *) bad "⑥ 没给接受形状（$out）" ;; esac
+  out="$(run_in "$p" add-agent pm --register --no-install)"; rc=$?
+  assert_eq "⑥ pm → 4" "$rc" "4"
+  case "$out" in *"pm 是 PM 席位"*) ok "⑥ pm 的理由清楚" ;; *) bad "⑥ pm 的理由没写清（$out）" ;; esac
+  assert_eq "⑥ 非法尝试后契约逐字节不变" "$(sha_of "$cfg")" "$sha_n"
+
+  # ⑦ 手改出来的脏名册：读侧 warning 与写侧拒绝是同一份规则；no-op 也不豁免（spec 的第三条）
+  p2="$(new_proj roster-hand)" || exit 3
+  cfg2="$p2/.pi/team/config.sh"
+  sed -i 's/^TEAM_AGENTS=.*/TEAM_AGENTS="dev api\/1"/' "$cfg2"
+  json="$(run_in "$p2" config list --json)"
+  json_check "$json" "⑦ 读侧 warning 点名 api/1" 'any(x["name"]=="TEAM_AGENTS" and "api/1" in (x.get("warning") or "") for x in d["keys"])'
+  out="$(run_in "$p2" add-agent 'api/1' --register --no-install)"; rc=$?
+  assert_eq "⑦ 同一 token 的注册也被拒 → 4" "$rc" "4"
+  case "$out" in *"api/1"*) ok "⑦ 写侧点名同一个 token（读写一份规则）" ;; *) bad "⑦ 写侧没点名该 token（$out）" ;; esac
+  # 无旗标的脏席位（api/1 已在名册里、但名字非法）：不能带着非法名走到 worktree/state
+  out="$(run_in "$p2" add-agent 'api/1')"; rc=$?
+  assert_eq "⑦ 无旗标的脏席位 → 4（不再带着非法名走到 state 写盘）" "$rc" "4"
+  case "$out" in *"api/1"*) ok "⑦ 无旗标也点名 token" ;; *) bad "⑦ 无旗标没点名 token（$out）" ;; esac
+  sed -i 's/^TEAM_AGENTS=.*/TEAM_AGENTS="dev api api"/' "$cfg2"
+  out="$(run_in "$p2" add-agent api --register --no-install)"; rc=$?
+  assert_eq "⑦ 重复 token 上再加同名席位 → 4（no-op 不豁免）" "$rc" "4"
+  case "$out" in *"重复出现"*) ok "⑦ 点名重复 token" ;; *) bad "⑦ 没点名重复（$out）" ;; esac
+
+  # ⑧ teardown 的四个形状：删/未知/--all --register/缺 --agent；无旗标时名册逐字节不变
+  out="$(run_in "$p" teardown --agent next --register)"; rc=$?
+  assert_eq "⑧ teardown --agent next --register → 0" "$rc" "0"
+  assert_eq "⑧ 席位从名册移除" "$(grep -c "^TEAM_AGENTS='dev verify api'$" "$cfg" || true)" "1"
+  assert_eq "⑧ 移除也审计一行 ok" "$(grep -c 'result=ok actor=cli key=TEAM_AGENTS' "$log" || true)" "3"
+  sha_t="$(sha_of "$cfg")"
+  out="$(run_in "$p" teardown --agent api)"; rc=$?
+  assert_eq "⑧ 无 --register 的 teardown → 0（今天的行为）" "$rc" "0"
+  assert_eq "⑧ 无旗标时名册逐字节不变" "$(sha_of "$cfg")" "$sha_t"
+  out="$(run_in "$p" teardown --agent ghost --register)"; rc=$?
+  assert_eq "⑧ 名册外的席位 → 5" "$rc" "5"
+  case "$out" in *"名册是"*"dev verify api"*) ok "⑧ 报错点名名册" ;; *) bad "⑧ 报错没点名名册（$out）" ;; esac
+  assert_eq "⑧ 拒绝时契约逐字节不变" "$(sha_of "$cfg")" "$sha_t"
+  run_in "$p" teardown --all --register >/dev/null 2>&1; rc=$?
+  assert_eq "⑧ --all --register → 2（用法错）" "$rc" "2"
+  run_in "$p" teardown --register >/dev/null 2>&1; rc=$?
+  assert_eq "⑧ --register 缺 --agent → 2（用法错）" "$rc" "2"
+
+  # ⑨ --model：席位模型写进同一份契约；`-` 移除；模型形状坏时不留下任何写入
+  out="$(run_in "$p" add-agent dev --model vendor/m9 --no-install)"; rc=$?
+  assert_eq "⑨ add-agent dev --model vendor/m9 → 0" "$rc" "0"
+  assert_eq "⑨ 模型写进 TEAM_AGENT_MODELS" "$(grep -c "^TEAM_AGENT_MODELS='dev=vendor/m9'$" "$cfg" || true)" "1"
+  out="$(run_in "$p" add-agent dev --model - --no-install)"; rc=$?
+  assert_eq "⑨ --model - 移除覆盖 → 0" "$rc" "0"
+  assert_eq "⑨ 覆盖被清空" "$(grep -c "^TEAM_AGENT_MODELS=''$" "$cfg" || true)" "1"
+  sha_m="$(sha_of "$cfg")"
+  out="$(run_in "$p" add-agent zeta --register --model badshape --no-install)"; rc=$?
+  assert_eq "⑨ 坏模型形状 → 4（先判形状）" "$rc" "4"
+  case "$out" in *"provider/model"*) ok "⑨ 报错点名形状" ;; *) bad "⑨ 报错没点名形状（$out）" ;; esac
+  assert_eq "⑨ 形状错时契约逐字节不变（席位没被半建）" "$(sha_of "$cfg")" "$sha_m"
+  assert_eq "⑨ 形状错时名册没有 zeta" "$(grep -c 'zeta' "$cfg" || true)" "0"
+  # 写序：名册先、模型后（同一次 --register --model 的审计顺序）
+  out="$(run_in "$p" add-agent omicron --register --model vendor/m5 --no-install)"; rc=$?
+  assert_eq "⑨ add-agent omicron --register --model vendor/m5 → 0" "$rc" "0"
+  tail2="$(tail -2 "$log")"
+  case "$tail2" in
+    *"key=TEAM_AGENTS"*"key=TEAM_AGENT_MODELS"*) ok "⑨ 审计顺序：名册行在前、席位模型行在后" ;;
+    *) bad "⑨ 审计顺序不对（$(printf '%s' "$tail2" | tr '\n' ' ')）" ;;
+  esac
+
+  # ⑩ list kind 的规则在 schema 里就位（1.1）：scratch 树加一条 list 行 → 违规值被 4 拒
+  ltree="$tmp/list-tree"; mkdir -p "$ltree/skills/teamsmith"
+  cp -a "$skill/scripts" "$ltree/skills/teamsmith/scripts"
+  cp -a "$skill/templates" "$skill/references" "$ltree/skills/teamsmith/"
+  python3 - "$ltree/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+out = []
+for ln in lines:
+    out.append(ln)
+    if ln.startswith('TEAM_AGENTS|'):
+        out.append('TEAM_ZZZ_LIST|apply|list||plain||-|||identity')
+open(p, 'w', encoding='utf-8').write('\n'.join(out))
+PY
+  lteam="$ltree/skills/teamsmith/scripts/team"
+  run_lt() { ( cd "$p" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TMUX -u TMUX_PANE \
+      bash "$lteam" "$@" 2>&1 ); }
+  assert_eq "⑩ scratch 树确实多了一条 list 行" "$(grep -c '^TEAM_ZZZ_LIST|apply|list' "$ltree/skills/teamsmith/scripts/lib/cmd-config.sh" || true)" "1"
+  sha_l="$(sha_of "$cfg")"
+  run_lt config set TEAM_ZZZ_LIST 'api/1' --yes >/dev/null 2>&1; rc=$?
+  assert_eq "⑩ kind=list 的键拒绝 a/b → 4" "$rc" "4"
+  assert_eq "⑩ 违规时契约逐字节不变" "$(sha_of "$cfg")" "$sha_l"
+  run_lt config set TEAM_ZZZ_LIST 'api_1 ok.2' --yes >/dev/null 2>&1; rc=$?
+  assert_eq "⑩ kind=list 的键接受合法形状 → 0" "$rc" "0"
+  assert_eq "⑩ 合法值确实写入" "$(grep -c "^TEAM_ZZZ_LIST='api_1 ok.2'$" "$cfg" || true)" "1"
+
+  # ⑪ set-agent-model 对未入册的席位：拒绝 + 一条真能走的路线（brief 第三条：不留死胡同）
+  out="$(run_in "$p" config set-agent-model nosuchseat vendor/m9 --yes)"; rc=$?
+  assert_eq "⑪ 未入册席位的 set-agent-model → 5" "$rc" "5"
+  case "$out" in
+    *"add-agent nosuchseat --register"*) ok "⑪ 拒绝给出一条真能走的路线（--register）" ;;
+    *) bad "⑪ 拒绝没有给路线（$out）" ;;
+  esac
+  run_in "$p" config set-agent-model pm vendor/pm9 --yes >/dev/null 2>&1; rc=$?
+  assert_eq "⑪ pm 席位照旧可直接设模型 → 0" "$rc" "0"
 fi
 
 # ---------------------------------------------------------------- models

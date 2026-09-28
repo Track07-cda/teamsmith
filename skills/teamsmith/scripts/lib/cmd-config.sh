@@ -37,10 +37,10 @@
 team_config_schema() {
   cat <<'EOF'
 # ---- 身份与账本布局（refuse：控制台不得改身份、不得搬走它正在读的账本）----
-TEAM_PROJECT|refuse|text||plain||-|身份：手改 .pi/team/config.sh（或重新 team init）||identity
-TEAM_SESSION|refuse|text||plain||-|身份：手改 .pi/team/config.sh（或重新 team init）||identity
-TEAM_PM_WINDOW|refuse|text||plain|pm|-|身份：手改 .pi/team/config.sh（或重新 team init）||identity
-TEAM_AGENTS|refuse|list||plain||-|名册：team add-agent / team teardown||identity
+TEAM_PROJECT|refuse|text||plain||-|身份：手改 .pi/team/config.sh（team init 不改它）；team init --force 会重渲染整份契约||identity
+TEAM_SESSION|refuse|text||plain||-|身份：手改 .pi/team/config.sh（team init 不改它）；team init --force 会重渲染整份契约||identity
+TEAM_PM_WINDOW|refuse|text||plain|pm|-|身份：手改 .pi/team/config.sh（team init 不改它）；team init --force 会重渲染整份契约||identity
+TEAM_AGENTS|refuse|list||plain||-|名册：team add-agent <a> --register / team teardown --agent <a> --register（都走审计写入器）||identity
 TEAM_DOCS_DIR|refuse|path|dir,opt|plain|docs/team|-|账本布局：手改 .pi/team/config.sh||identity
 TEAM_WORKTREES_DIR|refuse|text||plain|.worktrees|-|账本布局：手改 .pi/team/config.sh||identity
 TEAM_STATE_DIR|refuse|path|dir,opt|plain|.pi/team/state|-|账本布局：手改 .pi/team/config.sh||identity
@@ -424,7 +424,12 @@ team_config_validate_value() {
       fi
       return 0 ;;
     list)
-      return 0 ;;
+      # 名册（唯一 list 类键）的席位名规则：token 会成为 .worktrees/ 目录名、tmux 窗口名、state 文件名
+      # 与分支名 —— 形状不是装饰。读（team config list --json 的 warning）与写共用这一个判定，
+      # 不许长第二份（P99/R1）。合法时返回 0；不合法时把原因打进 stdout（调用方转 exit 4）。
+      local lwhy
+      if lwhy="$(team_config_list_violation "$val")"; then return 0; fi
+      printf '%s\n' "$lwhy"; return 1 ;;
     cmd|text)
       return 0 ;;
     *)
@@ -444,6 +449,34 @@ team_config_canonical_value() { # <KEY> <value> → 规范值
     esac
   fi
   printf '%s\n' "$val"
+}
+
+# 模型值形状（provider/model，恰好一个 /）—— set-agent-model 与 add-agent --model 共用这一份判定。
+team_config_model_shape_ok() { # <model> → 0 合法 / 1 不合法
+  case "${1-}" in
+    */*) case "$1" in /*|*/|*/*/*) return 1 ;; esac; return 0 ;;
+  esac
+  return 1
+}
+
+# 名册值规则（唯一一份）：空格分隔的席位名，每个匹配 [A-Za-z0-9][A-Za-z0-9._-]*、只出现一次、
+# 且不是 pm（PM 席位不是名册成员）。合法 → 返回 0；不合法 → 打印原因（点名 token 与接受形状）返回 1。
+team_config_list_violation() { # <value> → 0 合法；1 时 stdout 是原因
+  local val="${1-}" tok shape='[A-Za-z0-9][A-Za-z0-9._-]*' seen=" "
+  for tok in $val; do
+    if [ "$tok" = "pm" ]; then
+      printf '席位名 pm 非法：pm 是 PM 席位，不是名册成员（接受 %s）\n' "$shape"; return 1
+    fi
+    case "$tok" in
+      [!A-Za-z0-9]*) printf '席位名 %s 非法：接受 %s（首字符必须是字母或数字）\n' "$tok" "$shape"; return 1 ;;
+    esac
+    case "${tok#?}" in
+      *[!A-Za-z0-9._-]*) printf '席位名 %s 非法：接受 %s\n' "$tok" "$shape"; return 1 ;;
+    esac
+    case "$seen" in *" $tok "*) printf '席位名 %s 重复出现：名册里每个席位只能出现一次\n' "$tok"; return 1 ;; esac
+    seen="$seen$tok "
+  done
+  return 0
 }
 
 # danger：合法的值也会关掉已发布的守卫（设计 §5）。命中 → stdout 一行理由，返回 1。
@@ -699,6 +732,12 @@ team_config_list_json() {
       local unknown; unknown="$(team_config_pairlist_unknown_seats "$value" | tr '\n' ' ')"
       [ -n "$unknown" ] && warning="未知席位（名册没有，静默不生效）：${unknown% }"
     fi
+    # P99/R1：名册的读侧 warning 与写侧的值规则是同一份判定（team_config_list_violation）——
+    # 手改出一个非法 token 时，读给出警告、写入器拒绝的是同一条规则。
+    if [ "$key" = "TEAM_AGENTS" ] && [ -n "$value" ]; then
+      local rwhy
+      if ! rwhy="$(team_config_list_violation "$value")"; then warning="$rwhy"; fi
+    fi
     team_config_choices_set "$row" "$known_models"
     team_config_json_escape_set "${f[9]:-}"; local e_group="$CFG_ESC"
     team_config_json_escape_set "$key"; local e_key="$CFG_ESC"
@@ -866,6 +905,87 @@ team_config_write_checked() { # <KEY> <value> <actor> <dry> <fp> <allow_danger>
   return 0
 }
 
+# 名册的授权写入器（P99/R1）：它是 TEAM_AGENTS 唯一的读-改-写入口，team config set 到不了这里
+# （类检查在前）。退出码与 team config set 同族：0（写成；含「已在名册」的可见 no-op，不写不审计）/
+# 3 指纹冲突 / 4 值不合法 / 5 remove 的席位不在名册 / 6 写失败。
+# 席位名合法性只对**结果值**判：移掉一个手改进来的非法 token 是合法的（结果干净），
+# 加进去才非法 —— 一条规则，读写同一份（team_config_list_violation）。
+team_config_write_roster() { # <add|remove> <seat> [<fingerprint>] [<dry>] → 详见上面的退出码
+  local op="$1" seat="$2" fp="${3:-}" dry="${4:-0}"
+  local path; path="$(team_config_contract_path)" || return 1
+  local old; old="$(team_config_file_value "$path" TEAM_AGENTS 2>/dev/null || true)"
+  local old_fp; old_fp="$(team_config_fingerprint "$path")"
+
+  local present=0
+  case " $old " in *" $seat "*) present=1 ;; esac
+  local new="" tok
+  case "$op" in
+    add)
+      if [ "$present" = "1" ]; then
+        # 「已在名册」不豁免值规则（P99 spec 的第三条）：手改出来的重复/非法 token 不能因为
+        # 一次 no-op 就继续冒充健康状态 —— `dev api api` 上再加 api 也是 exit 4 并点名重复 token。
+        # 合法值才是真 no-op（重复跑 --register 补齐半成品仍按 D2 的幂等承诺返回 0）。
+        local pwhy
+        if ! pwhy="$(team_config_list_violation "$old")"; then
+          team_err "TEAM_AGENTS=$old 不合法：$pwhy"
+          [ "$dry" = "1" ] || team_config_audit_write invalid cli TEAM_AGENTS "$old" "$old" || true
+          return "$TEAM_CONFIG_EXIT_INVALID"
+        fi
+        team_dim "席位 $seat 已在名册里（--register 不重复写）"
+        return 0
+      fi
+      new="${old:+$old }$seat" ;;
+    remove)
+      if [ "$present" != "1" ]; then
+        team_err "席位 $seat 不在名册里：名册是（$(team_config_roster_text)）"
+        [ "$dry" = "1" ] || team_config_audit_write refused cli TEAM_AGENTS "$old" "$seat" || true
+        return "$TEAM_CONFIG_EXIT_REFUSE"
+      fi
+      for tok in $old; do [ "$tok" = "$seat" ] || new="${new:+$new }$tok"; done ;;
+    *)
+      team_err "内部错误：未知的名册操作 $op"
+      return 1 ;;
+  esac
+
+  local why
+  if ! why="$(team_config_list_violation "$new")"; then
+    team_err "TEAM_AGENTS=$new 不合法：$why"
+    [ "$dry" = "1" ] || team_config_audit_write invalid cli TEAM_AGENTS "$old" "$new" || true
+    return "$TEAM_CONFIG_EXIT_INVALID"
+  fi
+
+  # CAS：调用方的 --fingerprint 与它读到的字节比；写前再核一次读到的指纹（读-改-写的窗口）。
+  if [ -n "$fp" ] && [ "$fp" != "$old_fp" ]; then
+    team_err "TEAM_AGENTS：指纹不符（expected=$fp actual=$old_fp）—— 什么都没写"
+    [ "$dry" = "1" ] || team_config_audit_write conflict cli TEAM_AGENTS "$old" "$new" "$fp" "$old_fp" || true
+    return "$TEAM_CONFIG_EXIT_CONFLICT"
+  fi
+  local now_fp; now_fp="$(team_config_fingerprint "$path")"
+  if [ "$now_fp" != "$old_fp" ]; then
+    team_err "TEAM_AGENTS：文件在读取之后变过（指纹不符）—— 什么都没写"
+    team_dim "  expected=$old_fp actual=$now_fp；重读 $TEAM_CLI config list 后再试" >&2
+    [ "$dry" = "1" ] || team_config_audit_write conflict cli TEAM_AGENTS "$old" "$new" "$old_fp" "$now_fp" || true
+    return "$TEAM_CONFIG_EXIT_CONFLICT"
+  fi
+
+  if [ "$dry" = "1" ]; then
+    printf 'ok: TEAM_AGENTS=%s（dry-run，未写契约、未写审计）\n' "$new"
+    return 0
+  fi
+
+  if ! team_config_set_in_file "$path" TEAM_AGENTS "$new" 2>/tmp/.team-config-roster.$$; then
+    local werr; werr="$(cat /tmp/.team-config-roster.$$ 2>/dev/null || true)"; rm -f /tmp/.team-config-roster.$$
+    team_err "TEAM_AGENTS 写入失败（原文件未动）：$werr"
+    team_config_audit_write write-error cli TEAM_AGENTS "$old" "$new" || true
+    return "$TEAM_CONFIG_EXIT_WRITE"
+  fi
+  rm -f /tmp/.team-config-roster.$$
+  # 同进程后续步骤（worktree add / state / roster 文本）读的就是这个变量：写盘成功后同步刷新。
+  TEAM_AGENTS="$new"
+  team_config_audit_write ok cli TEAM_AGENTS "$old" "$new" || true
+  return 0
+}
+
 team_cmd_config_set() {
   local key="" val="" have_val=0 dry=0 fp="" actor="${TEAM_ACTOR:-cli}" allow_danger=0
   while [ $# -gt 0 ]; do
@@ -924,20 +1044,14 @@ team_cmd_config_set_agent_model() {
   [ "$seat" = "pm" ] && audit_key="TEAM_PM_MODEL"
   if ! team_config_seat_known "$seat"; then
     team_err "未知席位 $seat：名册是（$(team_config_roster_text)）加 pm"
-    team_dim "  名册的键是 TEAM_AGENTS（只读）：team add-agent / team teardown" >&2
+    team_dim "  名册的键是 TEAM_AGENTS（只读）：$TEAM_CLI add-agent $seat --register（或 team teardown --agent $seat --register）" >&2
     [ "$dry" = "1" ] || team_config_audit_write refused "$actor" "$audit_key" "$seat" "$model" || true
     return "$TEAM_CONFIG_EXIT_REFUSE"
   fi
-  if [ "$model" != "-" ]; then
-    case "$model" in
-      */*) case "$model" in /*|*/|*/*/*)
-             team_err "模型必须是 provider/model 形状（恰好一个 /）：$model"
-             [ "$dry" = "1" ] || team_config_audit_write invalid "$actor" "$audit_key" "$seat" "$model" || true
-             return "$TEAM_CONFIG_EXIT_INVALID" ;; esac ;;
-      *) team_err "模型必须形如 provider/model（$model 里没有 /）"
-         [ "$dry" = "1" ] || team_config_audit_write invalid "$actor" "$audit_key" "$seat" "$model" || true
-         return "$TEAM_CONFIG_EXIT_INVALID" ;;
-    esac
+  if [ "$model" != "-" ] && ! team_config_model_shape_ok "$model"; then
+    team_err "模型必须是 provider/model 形状（恰好一个 /）：$model"
+    [ "$dry" = "1" ] || team_config_audit_write invalid "$actor" "$audit_key" "$seat" "$model" || true
+    return "$TEAM_CONFIG_EXIT_INVALID"
   fi
   local remove=0; [ "$model" = "-" ] && remove=1
 

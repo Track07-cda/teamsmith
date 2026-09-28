@@ -39,9 +39,9 @@ merge) belongs to the daily skill; this one only brings the project up.
    lives in — the pulse and every notification are delivered inside it), the PM window name, the roster
    (`TEAM_AGENTS`), each agent's model (`TEAM_AGENT_MODELS`, or `TEAM_DEFAULT_MODEL` for all of them) and
    `TEAM_MODEL_LIMITS` when a provider quota is tight. **Start the roster minimal — one `dev` plus one `verify` is
-   plenty**; `team add-agent <name>` adds more at any time, so the roster grows and shrinks with the work actually
-   on the board rather than with a guess made today. (A PM-only start is legal too — `team doctor` only warns;
-   dispatch is what refuses when there is no agent to dispatch to.)
+   plenty**; `team add-agent <name> --register` grows the roster and `team teardown --agent <name> --register`
+   shrinks it (both audited; a bare `team add-agent <name>` refuses a seat not in the roster), so the roster
+   follows the board, not a guess. (A PM-only start is legal too — `team doctor` only warns; dispatch refuses.)
 3. **Gates, install command, VCS mode, patrol rhythm.** `TEAM_GATES` is the command that decides pass/fail during
    every verification (it must run from a clean checkout of a task branch); `TEAM_INSTALL_CMD` runs after a worktree
    is created; `TEAM_VCS` is a label for the wording (`local` = no forge, the PM squash-merges locally);

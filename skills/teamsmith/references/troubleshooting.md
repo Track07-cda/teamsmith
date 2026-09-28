@@ -263,8 +263,8 @@ the box is not part of the delivery channel at all.
 | available memory X MB < 2048 | a warning only (RAM is tight) | you may continue; lower concurrency if it feels sluggish. To silence it completely: `TEAM_WARN_AVAIL_MB=0` |
 | available memory + free swap only X MB | the hard `TEAM_MIN_TOTAL_MB` floor | the machine really is out of resources: stop an agent first |
 | model X concurrency limit N | `TEAM_MODEL_LIMITS` | wait, or temporarily `TEAM_MODEL_LIMITS="" team dispatch ...` |
-| unknown agent | not in the roster | edit `TEAM_AGENTS` |
-| worktree does not exist | `add-agent` was never run | dispatch creates it automatically, but an explicit `team add-agent <a>` is preferable |
+| unknown agent | not in the roster | grow the roster through its one audited entry: `team add-agent <a> --register` (or hand-edit `TEAM_AGENTS` in `.pi/team/config.sh`) |
+| worktree does not exist | `add-agent` was never run | dispatch creates it automatically, but an explicit `team add-agent <a> --register` is preferable (for a seat already in the roster the flag is a visible no-op) |
 | window exists → replacing | the previous turn is still running | dispatch only after checking: replacing interrupts it (ask for progress with `team say` first) |
 | the session does not fit the model window | the resume guard: session size (JSONL bytes ÷ 4) exceeds the selected model's window, or the conservative `TEAM_SESSION_WARN_TOKENS` when the window cannot be resolved | `--fresh` for a new session, or `--allow-overflow` if you really mean to reuse it (it warns loudly) |
 | the agent still carries another unfinished task | the stacking guard: `state/<agent>.env` records task X, X has no non-`FAIL` review record, its branch tip is not in the protected branch and the board is not `done`/`closed`/`dropped`, while the worktree sits on a task branch | finish X first (`team resume --agent <a>`, then verify/merge) — or take the window over on purpose with `--force`; see 4e below |

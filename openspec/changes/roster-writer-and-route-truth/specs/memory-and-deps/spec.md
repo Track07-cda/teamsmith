@@ -66,7 +66,8 @@ byte-identical.
 
 - **GIVEN** a fixture project whose roster line is `TEAM_AGENTS="dev verify"` among comments and other keys
 - **WHEN** `team add-agent api --register` runs
-- **THEN** `diff` shows exactly one changed line, reading `TEAM_AGENTS="dev verify api"`, every other byte is
+- **THEN** `diff` shows exactly one changed line, reading `TEAM_AGENTS='dev verify api'` (the writer's canonical
+  single-quoted form — the contract's quoting is the writer's, not the caller's), every other byte is
   unchanged, `bash -n` exits 0, and `<state>/config.log` gained exactly one `result=ok actor=cli` line naming
   `TEAM_AGENTS` with the old and the new value
 - **AND** `team config set TEAM_AGENTS 'dev verify api more' --yes` still exits 5, its message names `--register`,

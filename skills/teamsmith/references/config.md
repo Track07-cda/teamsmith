@@ -39,7 +39,7 @@ literals or simple `$VAR`.
 | `TEAM_PROJECT` | the main worktree's directory name | display name |
 | `TEAM_SESSION` | `$TEAM_PROJECT` | tmux session (shared by the PM and every agent) |
 | `TEAM_PM_WINDOW` | `pm` | the window the PM session lives in; notifications are typed there |
-| `TEAM_AGENTS` | empty (`init` sets `dev verify`) | roster, space separated |
+| `TEAM_AGENTS` | empty (`init` sets `dev verify`) | roster, space separated; grows only through `team add-agent <a> --register` and shrinks only through `team teardown --agent <a> --register` (both audited; a bare `team add-agent <a>` refuses a seat the roster does not carry and names both routes) |
 | `TEAM_AGENT_MODELS` | empty | per-agent model override: `dev=deepseek/deepseek-flash verify=xai/grok-4.6` |
 | `TEAM_DEFAULT_MODEL` | `deepseek/deepseek-flash` | default model (`provider/model`) |
 
@@ -317,7 +317,7 @@ headroom line.
 
 ## 5. `team config` — the contract's read/write surface
 
-`team config` is the only command that writes `.pi/team/config.sh` (`team init` / `team bootstrap` write through
+`team config` and the roster's two authorized entries (`team add-agent … --register`, `team teardown … --register`) are the only commands that write `.pi/team/config.sh` (`team init` / `team bootstrap` write through
 the same bottom-level function). It exists so a setting can change without hand-editing the file and without a
 second source of truth: the value lives in the contract, the class table lives in the command
 (`scripts/lib/cmd-config.sh`), the console's labels live in its string tables.
@@ -328,7 +328,7 @@ second source of truth: the value lives in the contract, the class table lives i
 |---|---|---|
 | `apply` | the next process that reads the contract sees the new value | `TEAM_GATES`, the capacity floors, the review escape hatches, the patrol policy |
 | `restart` | a running process holds the value it started with; the receipt names the target and the command | the pulse (`TEAM_PULSE_INTERVAL`, `TEAM_MONITOR_REFRESH`), a seat's model (`TEAM_AGENT_MODELS`, `TEAM_PM_MODEL` — a running seat keeps its model until its next `dispatch`/`resume`), a live session (`TEAM_INBOX_WATCH_*`) |
-| `refuse` | not the console's to change: the project's identity, the roster, the ledger's layout, the branch/forge definitions, the authority guards, the dependency policy and the machine paths Pi's own state is read from — the console may not widen its own authority and may not move the ledger it is reading | `TEAM_PROJECT`, `TEAM_AGENTS` (route: `team add-agent` / `team teardown`), `TEAM_STATE_DIR`, `TEAM_PROTECTED_BRANCH`, `TEAM_ALLOW_FOREIGN_IDENTITY` … |
+| `refuse` | not the console's to change: the project's identity, the roster, the ledger's layout, the branch/forge definitions, the authority guards, the dependency policy and the machine paths Pi's own state is read from — the console may not widen its own authority and may not move the ledger it is reading | `TEAM_PROJECT`, `TEAM_AGENTS` (route: `team add-agent <a> --register` / `team teardown --agent <a> --register`), `TEAM_STATE_DIR`, `TEAM_PROTECTED_BRANCH`, `TEAM_ALLOW_FOREIGN_IDENTITY` … |
 
 A key the schema does not know is listed read-only ("not a known project setting", pointing at this file) and is
 never written.
@@ -411,7 +411,19 @@ caller's explicit "use the file as it is now". `team config set-agent-model <sea
 list (`TEAM_AGENT_MODELS`, or `TEAM_PM_MODEL` for the `pm` seat) itself — the caller never composes it — and `-`
 removes the seat's override, leaving `TEAM_DEFAULT_MODEL` in force. `--actor <name>` labels the audit line (the
 console passes `panel`); `--dry-run` performs every check and writes neither the contract nor an audit line.
-Every attempt that passes argument parsing appends one line to `<state>/config.log`
+
+**The roster's two authorized entries.** `TEAM_AGENTS` keeps class `refuse` — `team config set TEAM_AGENTS …`
+still exits 5 and points at these entries instead. `team add-agent <a> --register` and `team teardown --agent <a>
+--register` are the one read-modify-write of the roster: the value rule (each token
+`[A-Za-z0-9][A-Za-z0-9._-]*`, unique, never `pm`), the same sha256 fingerprint CAS and exactly one
+`result=ok actor=cli` audit line per written value. Both accept `--fingerprint <sha256>` with `team config set`'s
+semantics (documented here, not printed in `team help`); a stale fingerprint exits 3 with one `result=conflict`
+line and nothing written. `--register` on a seat already in the roster is a visible no-op (exit 0, no write, no
+audit line); `team teardown --agent <a>` without the flag leaves the roster byte-identical (today's default).
+`team add-agent <a>` for a seat outside the roster, or `team add-agent <a> --model m` without `--register`,
+exits 5 naming both routes (hand-edit `.pi/team/config.sh`, or add `--register`) and touches nothing else;
+`--register --model <provider/model>|-` writes the roster first and then the seat's model through the same
+pairlist serializer as `set-agent-model` (`-` removes the override). Every attempt that passes argument parsing appends one line to `<state>/config.log`
 (`<UTC ISO-8601> result=<ok|refused|invalid|conflict|danger-refused|write-error> actor=… key=… old='…' new='…'`,
 plus `expected=`/`actual=` on a conflict); `team config log [N]` and `list --json`'s audit tail read at most the
 file's last 16 KiB and print at most N lines (default 10).

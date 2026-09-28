@@ -115,7 +115,7 @@ case "$CMD" in
   watchdog-status)    team_cmd_watchdog_status "$@" ;;     # 同上
   standby)            team_cmd_standby "$@" ;;
   meeting)            team_cmd_meeting "$@" ;;
-  version)            if [ "${1:-}" = "--check" ] || [ "${1:-}" = "check" ]; then team_cmd_version_check; else team_cmd_version_brief; fi ;;
+  version)            if [ "${1:-}" = "--check" ] || [ "${1:-}" = "check" ]; then team_cmd_version_check "$@"; else team_cmd_version_brief "$@"; fi ;;
   mark-loaded)        team_cmd_mark_loaded "$@" ;;
   reload)             team_cmd_reload "$@" ;;
   changelog)          team_cmd_changelog "$@" ;;

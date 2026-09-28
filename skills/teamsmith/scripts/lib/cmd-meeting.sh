@@ -504,7 +504,13 @@ team_meeting_agreement_status() { # <file>
 
 team_meeting_list() {
   local all=0 slug
-  [ "${1:-}" = "--all" ] && all=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1; shift ;;
+      -*) team_usage_die "meeting list: 未知参数 $1" ;;
+      *) team_usage_die "meeting list: 多余参数 $1" ;;
+    esac
+  done
   local root; root="$(team_meetings_dir)"
   [ -d "$root" ] || { team_dim "还没有任何会议（$TEAM_CLI meeting open …）"; return 0; }
   printf '%-24s %-10s %-8s %s\n' SLUG 状态 待读 TOPIC

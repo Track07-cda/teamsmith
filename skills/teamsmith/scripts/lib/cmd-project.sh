@@ -30,7 +30,7 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   ── 文档契约（PM 维护） ─────────────────────────────────────
   task ID --title ... [--agent a] [--deps ...] [--issue N]
                   生成任务书 <docs>/tasks/ID-slug.md 并在 BOARD.md 建行
-board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign ID agent / set ID 状态 / row ID / ls）
+  board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign ID agent / set ID 状态 / row ID / ls）
   change status <id> [--json]
                   change 的 readiness 视图（只读）：任务/阶段/agent/看板/证据、delta 写者、阻塞项；
                   ready（至少一个任务且全部结束）→ 退出码 0，否则 1
@@ -38,7 +38,8 @@ board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign I
   report ID <agent> [--force]  生成报告骨架
 
   ── 派单与协作 ─────────────────────────────────────────────
-  add-agent <a> [--model m]    建长期 worktree（分支 agent/<a>）
+  add-agent <a> [--register] [--model m] [--create] [--no-install] [--print]  建长期 worktree（分支 agent/<a>）；
+                 名册：--register 走审计写入器（不带旗标的未知席位会被拒，并给出两条真路线）
   dispatch <a> <ID> <task-file> [--model m] [--fresh] [--allow-overflow] [--print]
                   在 tmux 窗口起一个交互式 pi（默认复用会话，可断点续跑）
   say <a> "<一句话>" [--now]      往 agent 窗口发消息；目标输入框里有草稿就**延后投递**（state/outbox/
@@ -79,7 +80,8 @@ board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign I
                   <docs>/reviews/ID.md（PM 复验证据，不接受 agent 自述）
                   脏树 / 被忽略产物 / --branch 解析不到 → 默认拒绝（覆盖开关 TEAM_REVIEW_ALLOW_*）
   close ID                              收尾：更新 BOARD、关窗口、保留 worktree（git 由 PM 做）
-  teardown [--agent a] [--all] [--purge]  关窗口 / 删 worktree（--purge 才删 worktree）
+  teardown [--agent a] [--all] [--purge] [--force] [--register]  关窗口 / 删 worktree（--purge 才删 worktree）；
+                 --register = 先从名册移除该席位（同样走审计写入器）
 
   smoke           在临时仓库里端到端自测这套工具（不碰当前项目）
   perf            性能判定（交互首帧 / 帧装配 / 稳态窗格 CPU）：默认在参考镜像里跑；--host = 宿主（非参考环境）
@@ -180,7 +182,22 @@ team_cmd_init() {
   docs="${docs:-docs/team}"
   pmwin="${pmwin:-pm}"
   model="${model:-deepseek/deepseek-flash}"
-  gates="${gates:-$(team_detect_gates)}"
+  # --force = 重渲染整份契约：此时不把**旧契约读回来的** TEAM_GATES 当模板值 —— 它是旧值，
+  # 不是这次要渲染的模板值（P99 身份 note 承诺的代价：其它键回到模板值）。真正从环境继承
+  # （export 过）的值仍算显式覆盖，照旧优先。
+  if [ "$force" = "1" ] && [ -z "$gates" ]; then
+    local _gates_exported=0 _gates_keep="$TEAM_GATES"
+    case "$(declare -p TEAM_GATES 2>/dev/null || true)" in "declare -x"*) _gates_exported=1 ;; esac
+    if [ "$_gates_exported" = "1" ]; then
+      gates="$TEAM_GATES"
+    else
+      TEAM_GATES=""
+      gates="$(team_detect_gates)"
+      TEAM_GATES="$_gates_keep"
+    fi
+  else
+    gates="${gates:-$(team_detect_gates)}"
+  fi
 
   # 门禁值是契约里的一个键（P21 任务 1.7）：写入前用唯一校验器验一遍。旧行为是把它塞进模板就完事，
   # 值里带 `#` 时 notify 读取器会截断、带换行时契约直接坏掉，而 init 照样报成功。

@@ -187,8 +187,14 @@ PROMPT
 
 team_cmd_add_agent() {
   local agent="" extra=()
+  local register=0 has_model=0 model="" fp=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --register) register=1; shift ;;
+      --model) model="${2:?--model 需要 <provider/model> 或 -}"; has_model=1; shift 2 ;;
+      --model=*) model="${1#*=}"; has_model=1; shift ;;
+      --fingerprint) fp="${2:?--fingerprint 需要 sha256}"; shift 2 ;;
+      --fingerprint=*) fp="${1#*=}"; shift ;;
       --no-install) extra+=(--no-install); shift ;;
       --create) extra+=(--create); shift ;;          # 明确要求代建 worktree（默认只打印 git 命令）
       --print-only|--print) extra+=(--print-only); shift ;;
@@ -197,7 +203,46 @@ team_cmd_add_agent() {
          agent="$1"; shift ;;
     esac
   done
-  [ -n "$agent" ] || team_usage_die "add-agent <agent> [--create] [--no-install]"
+  [ -n "$agent" ] || team_usage_die "add-agent <agent> [--register] [--model <provider/model>|-] [--fingerprint <sha256>] [--create] [--no-install] [--print]"
+
+  # ① 模型形状先判：可预测的错误写不进任何东西（P99/D2 的写序）
+  if [ "$has_model" = "1" ] && [ "$model" != "-" ] && ! team_config_model_shape_ok "$model"; then
+    team_err "add-agent --model：模型必须是 provider/model 形状（恰好一个 /）：$model"
+    return "$TEAM_CONFIG_EXIT_INVALID"
+  fi
+
+  # ② 名册：--register 走契约的审计写入器（唯一授权入口）；没有旗标的未知席位 → exit 5 +
+  # 两条真能用的路线，且不碰窗口/worktree/state/契约（P99/R2）。
+  if [ "$register" = "1" ]; then
+    local rrc=0
+    team_config_write_roster add "$agent" "$fp" 0 || rrc=$?
+    [ "$rrc" -eq 0 ] || return "$rrc"
+  elif ! team_agent_known "$agent"; then
+    team_err "未知 agent：$agent（名册：$(team_config_roster_text)）"
+    team_dim "  名册只由显式入口改，两条真能用的路线：" >&2
+    team_dim "    · $TEAM_CLI add-agent $agent --register（走契约的审计写入器）" >&2
+    team_dim "    · 或手改 $TEAM_MAIN_ROOT/.pi/team/config.sh 里的 TEAM_AGENTS" >&2
+    team_dim "  本次什么都没做：没有开窗、没有工作树、没有 state、契约未动" >&2
+    return "$TEAM_CONFIG_EXIT_REFUSE"
+  fi
+
+  # ③ 席位名自己也要过同一份值规则：手改出来的非法 token 哪怕仍在名册里（team_agent_known 认它），
+  # 也不是一个能开工的席位 —— 它会被带到 .worktrees/ 目录名、state 文件名与分支名上（实测
+  # `state/api/1.env: No such file or directory` 的裸 bash 报错、rc=1）。退出码与写入侧同族：4。
+  local seat_why
+  if ! seat_why="$(team_config_list_violation "$agent")"; then
+    team_err "add-agent：$seat_why"
+    return "$TEAM_CONFIG_EXIT_INVALID"
+  fi
+
+  # ③ 席位模型（--model）：同一个写入器 + 同一个 pairlist 序列化器（D4）
+  if [ "$has_model" = "1" ]; then
+    local mrc=0
+    team_cmd_config_set_agent_model "$agent" "$model" || mrc=$?
+    [ "$mrc" -eq 0 ] || return "$mrc"
+  fi
+
+  # ④ 既有工作树步骤
   if [ "${#extra[@]}" -gt 0 ]; then team_worktree_add "$agent" "${extra[@]}"; else team_worktree_add "$agent"; fi
 }
 
@@ -1198,20 +1243,33 @@ team_cmd_notify() {
 }
 
 team_cmd_teardown() {
-  local agent="" all=0 purge=0 force=0
+  local agent="" all=0 purge=0 force=0 register=0 fp=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --agent) agent="${2:?}"; shift 2 ;;
       --all) all=1; shift ;;
       --purge) purge=1; shift ;;
       --force) force=1; shift ;;
+      --register) register=1; shift ;;
+      --fingerprint) fp="${2:?--fingerprint 需要 sha256}"; shift 2 ;;
+      --fingerprint=*) fp="${1#*=}"; shift ;;
       *) team_usage_die "teardown: 未知参数 $1" ;;
     esac
   done
+  if [ "$register" = "1" ] && [ "$all" = "1" ]; then
+    team_usage_die "teardown: --all 不能和 --register 一起用（一次只从名册移除一个席位）"
+  fi
   local targets=()
   if [ "$all" = "1" ]; then mapfile -t targets < <(team_agents); else
     [ -n "$agent" ] || team_usage_die "teardown --agent <a> | --all [--purge] [--force]"
     targets=("$agent")
+  fi
+  # P99/R2：--register 先缩名册（审计写入器），再走今天的窗口/state/worktree 清理；
+  # 名册里没有这个席位就 exit 5、什么都不动。不带旗标时名册逐字节不变（今天的行为是默认）。
+  if [ "$register" = "1" ]; then
+    local rrc=0
+    team_config_write_roster remove "$agent" "$fp" 0 || rrc=$?
+    [ "$rrc" -eq 0 ] || return "$rrc"
   fi
   local a w wt
   for a in "${targets[@]}"; do
