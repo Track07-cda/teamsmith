@@ -260,6 +260,19 @@ _sg_start_line() {
   printf '== #%s %s == %s · 预算 %ss%s' "$SG_SEC_NO" "$SG_SEC_ID" "$SG_SEC_START" "$SG_BUDGET" "$src"
 }
 
+# _sg_band_over <elapsed> <band> → 0 当且仅当 band 是数字且 elapsed 超过它（**记录**，不是判定）。
+# band 是小数也必须比 —— 表的 110/112 行是 `0.02 … 44.00`（P108 F2：旧的 `case ''|*[!0-9]*`
+# 整数守卫把带小数点的带全落进空分支，规范承诺的「超过实测带打一行警告」对它们永不可达）。
+# 空 / `-` = 表里没有实测带 → 不比较；非数字（表坏了）由 `section-guard.sh --budget-check` 点名。
+_sg_band_over() {
+  local elapsed="$1" band="${2:-}"
+  case "$band" in
+    ''|-) return 1 ;;          # 没有实测带（表里写「-」）→ 不比较
+    *[!0-9.]*) return 1 ;;     # 非数字（表坏了，由 --budget-check 点名）→ 不比较
+  esac
+  awk -v a="$elapsed" -v b="$band" 'BEGIN { exit !(a + 0 > b + 0) }'
+}
+
 _sg_close_current() {
   [ "$SG_ARMED" = "1" ] || return 0
   local elapsed now
@@ -268,13 +281,10 @@ _sg_close_current() {
   printf '  #%s 用时 %ss · ticks %s\n' "$SG_SEC_NO" "$elapsed" "$SG_TICKS"
   printf '#%s %s 用时 %ss · ticks %s\n' "$SG_SEC_NO" "$SG_SEC_ID" "$elapsed" "$SG_TICKS" >> "$SG_LOG" 2>/dev/null || true
   printf '%s\t%s\t%s\t%s\t%s\n' "$SG_SEC_NO" "$SG_SEC_ID" "$SG_SEC_START" "$elapsed" "$SG_TICKS" >> "$SG_TIMING" 2>/dev/null || true
-  case "${SG_BAND:-}" in
-    ''|*[!0-9]*) ;;
-    *) if [ "$elapsed" -gt "$SG_BAND" ]; then
-         printf '  \033[33m⚠\033[0m #%s 用时 %ss，超过实测带 %ss（这是记录，不是判定）\n' \
-           "$SG_SEC_NO" "$elapsed" "$SG_BAND"
-       fi ;;
-  esac
+  if _sg_band_over "$elapsed" "${SG_BAND:-}"; then
+    printf '  \033[33m⚠\033[0m #%s 用时 %ss，超过实测带 %ss（这是记录，不是判定）\n' \
+      "$SG_SEC_NO" "$elapsed" "$SG_BAND"
+  fi
   SG_ARMED=0
   SG_SEC_ID=""
   printf 'disarm\n' > "$SG_HEARTBEAT" 2>/dev/null || true
@@ -462,8 +472,10 @@ _sg_stop_children() { # <no>：只停这个套件进程树里的子孙（不含�
     p="$(_sg_descendants "$SG_OWNER_PID" "$BASHPID" | tac)"
     if [ -n "$p" ]; then
       printf '%s\n' "$p" | xargs -r kill -KILL 2>/dev/null || true
-      printf 'escalation: 段落 #%s 的子孙忽略 TERM → 已对它们发 KILL\n' "$no" >> "$SG_SCENE/summary.txt" 2>/dev/null || true
-      printf '  \033[31m✗\033[0m 看门狗：段落 #%s 的子孙忽略 TERM → 已发 KILL（现场 %s）\n' "$no" "$SG_SCENE"
+      # 只声明确实知道的：grace 用尽 + 已发 KILL。谁真的扛过了 TERM 是**现场判定**的事
+      # （P108 F1：套件退出路径持续产出短命子进程时，「子孙忽略 TERM」是与现场矛盾的归因）。
+      printf 'escalation: 段落 #%s 的 grace 用尽（仍有子孙存活）→ 已对它们发 KILL（归因以现场为准）\n' "$no" >> "$SG_SCENE/summary.txt" 2>/dev/null || true
+      printf '  \033[31m✗\033[0m 看门狗：段落 #%s 的 grace 用尽（仍有子孙存活）→ 已发 KILL（归因以现场为准；现场 %s）\n' "$no" "$SG_SCENE"
     fi
   fi
   return 0
@@ -554,7 +566,7 @@ section_guard_wait() {
   return 1
 }
 
-# ---------------------------------------------------------------- 自检（模块自己的五形状）
+# ---------------------------------------------------------------- 自检（形状 + 现场顺序 + 红侧翻转）
 _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
   local name="$1" shape="$2" want="$3" want_scene="$4"
   local dir="$ST_ROOT/$name"; mkdir -p "$dir/run-tmp"
@@ -572,6 +584,7 @@ _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
       spin)       while :; do :; done ;;
       deadspin)   trap '' TERM; while :; do :; done ;;
       clean)      SG_BAND=0; SG_ARMED_EPOCH="$(( $(date +%s) - 5 ))" ;;
+      decimal)    SG_BAND=0.19; SG_ARMED_EPOCH="$(( $(date +%s) - 5 ))" ;;
     esac
     section_guard_check
     section_guard_finish
@@ -607,8 +620,16 @@ _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
   fi
   grep -qF 'BARE_WAIT_RETURNED' "$dir/out.log" && st_ok "$name：裸 wait 没被看门狗卡住" || st_bad "$name：裸 wait 没返回"
   if [ "$shape" = "clean" ]; then
-    grep -qF '超过实测带' "$dir/out.log" && st_ok "$name：超过实测带时打一行警告（记录，不是判定）" \
+    grep -qF '超过实测带' "$dir/out.log" && st_ok "$name：整数 band 超过时打一行警告（记录，不是判定）" \
                                           || st_bad "$name：超过实测带没有警告行"
+  fi
+  if [ "$shape" = "decimal" ]; then
+    grep -qF '超过实测带 0.19s' "$dir/out.log" \
+      && st_ok "$name：小数 band（0.19）超过时也打警告（P108 F2）" \
+      || st_bad "$name：小数 band 超过时没有警告行（规范承诺对 110/112 行不可达）"
+    grep -qF '这是记录，不是判定' "$dir/out.log" \
+      && st_ok "$name：小数 band 的警告仍是记录、不是判定（D33）" \
+      || st_bad "$name：小数 band 的警告丢了「记录，不是判定」"
   fi
   local i pidfile
   for i in $(seq 1 25); do
@@ -620,12 +641,133 @@ _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
   return 0
 }
 
+# F1 夹具（P110）：`--desc-grace 2` + 一个**响应 TERM**的子进程。套件的退出路径会持续产出短命
+# 子进程（P108 的现场形状），所以 grace 用尽时仍有子孙存活 —— 但没有任何证据能说它们「忽略了
+# TERM」。归因行只许说「grace 用尽 → 已发 KILL」；旧措辞「子孙忽略 TERM」是与现场矛盾的断言。
+_sg_selftest_f1() {
+  local dir="$ST_ROOT/f1-escalation"
+  local scene="$dir/scene"
+  mkdir -p "$scene"
+  local out="$dir/stop.log"
+  # 假套件（= `_sg_stop_children` 看到的 $SG_OWNER_PID 树）：每个后台 `sleep 1` 都是响应 TERM 的
+  # 普通子进程，新的不断出生 —— grace 用尽时总有子孙在，但没有一个 pid 能证明自己忽略了 TERM。
+  # 收尾只动我们自己 spawn 的 pid（D37：TERM 陷阱让假套件带走自己的 jobs；绝不按名字杀）。
+  bash -c '
+    trap "kill \$(jobs -p) 2>/dev/null; exit 0" TERM
+    for i in $(seq 1 400); do sleep 1 & sleep 0.05; done
+    wait
+  ' 2>"$dir/suite.err" &
+  local suite=$!
+  # 等第一个孩子出生：否则 `_sg_stop_children` 的第一轮可能看到空树直接退出（夹具抖动）。
+  local i=0
+  while [ "$i" -lt 40 ]; do
+    [ -n "$(_sg_descendants "$suite" "$BASHPID")" ] && break
+    sleep 0.05; i=$((i + 1))
+  done
+  SG_OWNER_PID="$suite"
+  SG_SCENE="$scene"
+  SG_DESC_GRACE=2
+  _sg_stop_children 99 >"$out" 2>&1 || true
+  # 现场仍然要留（KILL 照发、现场照写；改的只是归因）
+  grep -qF 'escalation:' "$scene/summary.txt" 2>/dev/null \
+    && st_ok "F1 夹具：grace 用尽时现场记录了 KILL 升级" \
+    || st_bad "F1 夹具：现场没有记录 escalation（KILL 现场不许被删）"
+  grep -qF '已发 KILL' "$out" \
+    && st_ok "F1 夹具：stdout 有一行 KILL 升级（只改归因，不删行）" \
+    || st_bad "F1 夹具：stdout 的 KILL 升级行不见了"
+  # 归因诚实：两个现场都不得出现旧措辞的因果断言（是否忽略 TERM 未验证）
+  if grep -qF '忽略 TERM' "$out" "$scene/summary.txt" 2>/dev/null; then
+    st_bad "F1 夹具：归因仍声称「子孙忽略 TERM」（现场里没有这个证据）"
+  else
+    st_ok "F1 夹具：归因只说「grace 用尽」，没有「忽略 TERM」的断言"
+  fi
+  grep -qF 'grace 用尽' "$out" \
+    && st_ok "F1 夹具：归因行点名真正的原因（grace 用尽）" \
+    || st_bad "F1 夹具：归因行没有说明是 grace 用尽"
+  # 收尾：只对我们 spawn 的假套件发信号；它的 TERM 陷阱带走自己的 jobs
+  kill -TERM "$suite" 2>/dev/null || true
+  local j
+  for j in $(seq 1 25); do
+    kill -0 "$suite" 2>/dev/null || break
+    sleep 0.05
+  done
+  kill -KILL "$suite" 2>/dev/null || true
+  wait "$suite" 2>/dev/null || true
+  return 0
+}
+
+# 红侧翻转：把实现变异回旧形状（f2 = 整数守卫；f1 = 「子孙忽略 TERM」措辞）。
+# 这是「破坏实现 → 守卫测试必须红」的前半：变异后的副本由 _sg_selftest_flips 跑。
+_sg_selftest_mutate() { # <src> <dst> <f2|f1> → 0 = 变异落地
+  local src="$1" dst="$2" kind="$3"
+  case "$kind" in
+    f2) awk '
+      /^_sg_band_over\(\) \{/ { inband = 1 }
+      inband && /^  case "\$band" in/ {
+        print "  case \"$band\" in   # P110_F2 红侧：旧整数守卫（小数落空分支）"
+        print "    \047\047|*[!0-9]*) return 1 ;;"
+        print "  esac"
+        skipping = 1; inband = 0; next
+      }
+      skipping { if ($0 == "  esac") skipping = 0; next }
+      { print }
+    ' "$src" > "$dst" ;;
+    f1) sed 's/的 grace 用尽（仍有子孙存活）→ 已/的子孙忽略 TERM → 已/g' "$src" > "$dst" ;;
+    *) return 1 ;;
+  esac
+  # 变异必须真的改变文件（拿标记 grep 会被变异代码自身的存在骗过），且副本仍然可解析。
+  [ -s "$dst" ] || { rm -f "$dst"; return 1; }
+  cmp -s "$src" "$dst" && { rm -f "$dst"; return 1; }
+  bash -n "$dst" 2>/dev/null || { rm -f "$dst"; return 1; }
+  return 0
+}
+
+# 两个红侧翻转（只在完整自检里跑；`--self-test <形状>` 只跑形状，避免递归）：
+#   F2：小数值 band 的警告 —— 变异回整数守卫 → decimal 夹具必须红；
+#   F1：grace 用尽的归因 —— 变异回「子孙忽略 TERM」→ f1 夹具必须红。
+# 变异副本跑在自己的私有 TMPDIR 下，跑完连根删掉（失败也不留现场）。
+_sg_selftest_flips() {
+  local dir="$ST_ROOT/flips" self mut rc out
+  self="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  mkdir -p "$dir/f2-tmp" "$dir/f1-tmp"
+  # --- F2 ---
+  mut="$dir/f2-legacy-guard.sh"; out="$dir/f2-mutated.log"
+  if _sg_selftest_mutate "$self" "$mut" f2; then
+    TMPDIR="$dir/f2-tmp" bash "$mut" --self-test decimal >"$out" 2>&1; rc=$?
+    [ "$rc" -ne 0 ] && st_ok "F2 红侧：还原成整数守卫 → decimal 夹具红（rc=$rc）" \
+                    || st_bad "F2 红侧：还原成整数守卫后 decimal 夹具仍绿（守卫没被证到）"
+    grep -qF '超过实测带' "$out" && st_bad "F2 红侧：整数守卫下居然打了「超过实测带」行" \
+                                  || st_ok "F2 红侧：整数守卫下没有「超过实测带」警告行（规范承诺回到不可达）"
+    grep -qF '小数 band 超过时没有警告行' "$out" \
+      && st_ok "F2 红侧：红的是那条夹具断言本身（不是别的原因）" \
+      || st_bad "F2 红侧：红的原因不是「小数 band 没有警告行」"
+  else
+    st_bad "F2 红侧：变异没落到 _sg_band_over（夹具失效）"
+  fi
+  # --- F1 ---
+  mut="$dir/f1-legacy-wording.sh"; out="$dir/f1-mutated.log"
+  if _sg_selftest_mutate "$self" "$mut" f1; then
+    TMPDIR="$dir/f1-tmp" bash "$mut" --self-test f1 >"$out" 2>&1; rc=$?
+    [ "$rc" -ne 0 ] && st_ok "F1 红侧：还原成「子孙忽略 TERM」措辞 → f1 夹具红（rc=$rc）" \
+                    || st_bad "F1 红侧：还原措辞后 f1 夹具仍绿（归因守卫没被证到）"
+    grep -qF '归因仍声称' "$out" \
+      && st_ok "F1 红侧：红的是那条夹具断言本身（不是别的原因）" \
+      || st_bad "F1 红侧：红的原因不是「归因仍声称忽略 TERM」"
+  else
+    st_bad "F1 红侧：变异没落到归因措辞（夹具失效）"
+  fi
+  rm -rf -- "$dir" 2>/dev/null || true
+  return 0
+}
+
 _sg_selftest() {
-  local arg
+  local arg shape shapes want_all=1
+  local only=()
   for arg in "$@"; do
     case "$arg" in
-      --help|-h) printf '用法：bash %s --self-test\n' "${BASH_SOURCE[0]}"; return 0 ;;
-      *) printf 'section-guard: 自检不认识的参数 %s\n' "$arg" >&2; return 2 ;;
+      --help|-h) printf '用法：bash %s --self-test [形状…]\n        形状：clean stuck stubborn spin deadspin decimal f1（不带形状 = 全部 + 红侧翻转）\n' "${BASH_SOURCE[0]}"; return 0 ;;
+      -*) printf 'section-guard: 自检不认识的参数 %s\n' "$arg" >&2; return 2 ;;
+      *) only+=("$arg"); want_all=0 ;;
     esac
   done
   local PASS=0 FAIL=0
@@ -636,14 +778,26 @@ _sg_selftest() {
     printf 'section-guard 自检：建不出临时根\n' >&2; return 3; }
   local pgid_before pgid_after
   pgid_before="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
-  printf '\n\033[1m== section-guard.sh 自检（五形状 + 现场顺序 + 进程组）==\033[0m\n'
+  printf '\n\033[1m== section-guard.sh 自检（形状 + 现场顺序 + 进程组 + 红侧翻转）==\033[0m\n'
   SG_FIXTURE=1
   TEAM_SMOKE_FIXTURE=1
-  _sg_selftest_case clean     clean     0  0
-  _sg_selftest_case stuck     stuck     2  1
-  _sg_selftest_case stubborn  stubborn  2  1
-  _sg_selftest_case spin      spin      2  1
-  _sg_selftest_case deadspin  deadspin  '!0' 1
+  if [ "$want_all" = "1" ]; then
+    shapes="clean stuck stubborn spin deadspin decimal"
+  else
+    shapes="${only[*]}"
+  fi
+  for shape in $shapes; do
+    case "$shape" in
+      clean)    _sg_selftest_case clean     clean     0  0 ;;
+      stuck)    _sg_selftest_case stuck     stuck     2  1 ;;
+      stubborn) _sg_selftest_case stubborn  stubborn  2  1 ;;
+      spin)     _sg_selftest_case spin      spin      2  1 ;;
+      deadspin) _sg_selftest_case deadspin  deadspin  '!0' 1 ;;
+      decimal)  _sg_selftest_case decimal   decimal   0  0 ;;
+      f1)       _sg_selftest_f1 ;;
+      *)        st_bad "自检：不认识的形状「$shape」（可用：clean stuck stubborn spin deadspin decimal f1）"; break ;;
+    esac
+  done
   # 现场尾巴的收集顺序 = mtime 降序，不是 find 的目录顺序（容器实测：目录顺序把挂住的夹具日志
   # 挤出了 12 个名额）。夹具反向：先建 live 文件，再建 15 个「目录顺序更靠前但 mtime 更旧」的。
   local cd="$ST_ROOT/recent"; mkdir -p "$cd"
@@ -662,6 +816,10 @@ _sg_selftest() {
   pgid_after="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
   [ "$pgid_before" = "$pgid_after" ] && st_ok "调用者的进程组没变（没有进程组信号）" \
                                      || st_bad "调用者的进程组变了（$pgid_before → $pgid_after）"
+  if [ "$want_all" = "1" ]; then
+    _sg_selftest_f1
+    _sg_selftest_flips
+  fi
   printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
   if [ "$FAIL" -eq 0 ]; then
     rm -rf -- "$ST_ROOT" 2>/dev/null || true

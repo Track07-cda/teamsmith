@@ -69,6 +69,7 @@ lib/section-guard.sh	438	cap="$i" -lt $(( SG_SUITE_GRACE * 5 ))	while [ "$i" -lt
 lib/section-guard.sh	444	cap="$i" -lt 25	while [ "$i" -lt 25 ]; do
 lib/section-guard.sh	454	bound=子孙清空或 SG_DESC_GRACE 次尝试后转 KILL	while :; do
 lib/section-guard.sh	532	cap="$round" -lt "$cap"	while [ "$round" -lt "$cap" ]; do
+lib/section-guard.sh	663	cap="$i" -lt 40	while [ "$i" -lt 40 ]; do
 lib/tmp-root.sh	204	cap="$i" -lt $((grace * 5))	while [ "$i" -lt $((grace * 5)) ]; do
 lib/tmp-root.sh	441	cap="$_i" -lt 50	while [ "$_i" -lt 50 ]; do
 lib/tmp-root.sh	452	cap="$_i" -lt 100	while [ "$_i" -lt 100 ] && kill -0 "$term_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
