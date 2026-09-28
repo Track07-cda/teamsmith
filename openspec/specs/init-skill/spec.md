@@ -22,6 +22,12 @@ exactly two files moved from the daily skill — `references/bootstrap.md` and
 `templates/bootstrap-prompt.md.tmpl` — moved, not copied, and MUST NOT contain `scripts/`, `extension/` or
 `tests/` directories, nor claim ownership of the pulse, dispatch, review or merge.
 
+The checklist's roster bullet SHALL name the route that really changes the roster: `team add-agent <name>
+--register` to grow it and `team teardown --agent <name> --register` to shrink it, each write audited. It MUST NOT
+promise that a bare `team add-agent <name>` changes the roster — that command refuses a seat the roster does not
+carry — and its claim SHALL stay true for the tree that ships it (the command it names is the one the route walk
+of `dispatch` proves works in a fixture).
+
 #### Scenario: The init skill exists, parses and stays small
 
 - **WHEN** `test -f skills/teamsmith-init/SKILL.md`, `wc -l < skills/teamsmith-init/SKILL.md` and
@@ -59,6 +65,16 @@ exactly two files moved from the daily skill — `references/bootstrap.md` and
 - **AND** README §Install names the npm route above the two alternative routes, `team help`'s `init` line names
   `.pi/skills`, `--copy` and `--no-skills`, and the daily skill's command table row for `init` names the project
   skill install
+
+#### Scenario: The roster sentence names the register route
+
+- **WHEN** the roster bullet of `skills/teamsmith-init/SKILL.md` is read and searched for `team add-agent` and
+  `--register`
+- **THEN** the bullet names `team add-agent <name> --register` (and `team teardown --agent <name> --register`),
+  says the write is audited, and no sentence in the file promises that a bare `team add-agent <name>` changes the
+  roster
+- **AND** the pre-change sentence is the red side of this check: it read "`team add-agent <name>` adds more at any
+  time", which the measured tool refused with `未知 agent` when the seat was not in the roster
 
 ### Requirement: The daily skill no longer carries initialization guidance
 
