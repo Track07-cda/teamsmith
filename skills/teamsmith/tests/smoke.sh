@@ -9098,6 +9098,86 @@ assert_eq "M9.8-⑦：锁认自己（exec 重启后 PID 不变 → 不能拒绝�
 assert_eq "M9.8-⑦对照：别人（活着的进程）持锁仍然拒绝" "$(m98_lock_rc $$)" "1"
 assert_eq "M9.8-⑦对照：陈旧的 pid 文件不阻塞（旧行为不变）" "$(m98_lock_rc 99999999)" "0"
 
+# ---- ⑧ P109（--actionable 的第二条「PM 动不了」判据）：看板 todo|wip 且**归属席位在跑**的报告
+#      = 作者还在写（2026-09-28 现场：同一形状每 TEAM_PULSE_NUDGE_GAP 把 PM 叫醒一次，而 PM 无事可做）。
+#      计入口径（--actionable）不数它；digest [3] 的全量清单照旧列（显示口径不动）。席位停跑 /
+#      判不出归属 → 照旧计数（那才是真待办：PM 要 team resume）。这里没有真 tmux（FAST 也要跑）：
+#      存活用夹具显式名单替换 team_agent_live —— 真判据由 §6k（M37）独立钉住；本节钉的是新过滤的接线。
+P109_LIVE=""; P109_MUT=""
+p109_lib() { # <函数> [参数…]：同 m98_lib 的加载；存活 = P109_LIVE 名单；P109_MUT 非空 = 源变体库
+  local fn="$1"; shift
+  ( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      P109_LIVE="$P109_LIVE" P109_MUT="$P109_MUT" \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"
+        for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do
+          if [ -n "${P109_MUT:-}" ] && [ "${_f##*/}" = "cmd-status.sh" ]; then . "$P109_MUT"; continue; fi
+          . "$_f" 2>/dev/null || true
+        done
+        team_load_config >/dev/null 2>&1
+        team_agent_live() { case " ${P109_LIVE:-} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+        '"$fn"' "$@"' _ "$@" )
+}
+p109_act() { p109_lib team_reports_pending_list --actionable; }   # 唤醒计数/可行动清单的那一份
+p109_all() { p109_lib team_reports_pending_list; }                # digest [3] 的全量那一份
+p109_n()   { awk -F'\t' -v id="$1" '$1==id{n++} END{print n+0}' <<< "${2:-}"; }
+
+# 夹具：M98G1 = 现场形状（dev 工作树正本（已提交）+ 看板 wip + state task=dev）；
+#       M98G2 = 对照（同为 wip，但归属是名册外的 dev2 —— 有别的席位活着不算，得是**归属**席位）。
+m98_add M98G1
+mv "$M98/docs/team/reports/M98G1-dev.md" "$M98/.worktrees/dev/docs/team/reports/M98G1-dev.md"
+git -C "$M98/.worktrees/dev" add -- docs/team/reports/M98G1-dev.md >/dev/null 2>&1 \
+  && git -C "$M98/.worktrees/dev" commit -qm "docs(M98G1): P109 fixture report" >/dev/null 2>&1
+m98 $TEAM board set M98G1 wip >/dev/null 2>&1 || true
+m98 $TEAM board add M98G2 "P109 fixture（非归属席位）" dev2 - >/dev/null 2>&1 || true
+m98_brief M98G2
+printf '# M98G2 · smoke P109 fixture\n\nagent: dev2   状态: DONE\n' > "$M98/docs/team/reports/M98G2-dev2.md"
+m98 $TEAM board set M98G2 wip >/dev/null 2>&1 || true
+m98_lib team_state_set dev task M98G1 >/dev/null 2>&1 || true
+
+# 绿：归属席位（dev）在跑 → M98G1 不进可行动清单；非归属的 M98G2 照旧计入（对照）
+P109_LIVE="dev"
+P109_ACT_LIVE="$(p109_act)"
+assert_eq "P109 ⑧：wip + 归属席位在跑 → 不计数（可行动清单里没有它）" "$(p109_n M98G1 "$P109_ACT_LIVE")" "0"
+assert_eq "P109 ⑧对照：活着的席位不是它的归属 → 该报告照旧计数" "$(p109_n M98G2 "$P109_ACT_LIVE")" "1"
+P109_N_LIVE="$(printf '%s\n' "$P109_ACT_LIVE" | grep -c .)"
+assert_eq "P109 ⑧：可行动计数与清单行数同源" "$(p109_lib team_reports_pending)" "$P109_N_LIVE"
+
+# 反例（必须保留）：同一份报告、席位停跑 → 回到可行动清单/计数（真待办：PM 要 team resume）
+P109_LIVE=""
+P109_ACT_STOP="$(p109_act)"
+assert_eq "P109 ⑧：席位停跑 → 同一份报告回到可行动清单（不静默）" "$(p109_n M98G1 "$P109_ACT_STOP")" "1"
+P109_N_STOP="$(printf '%s\n' "$P109_ACT_STOP" | grep -c .)"
+assert_eq "P109 ⑧：绿档比停跑档少这一条（Δ=1）" "$((P109_N_STOP - P109_N_LIVE))" "1"
+P109_REAL="$(m98_count)"   # 真 team_agent_live：夹具里 dev 没有真窗口 → 应停在「停跑」这一侧
+assert_eq "P109 ⑧：真判据（无窗口）与夹具停跑档同值（新判据没有改变「席位没跑」的行为）" "$P109_REAL" "$P109_N_STOP"
+printf '  \033[2m·\033[0m P109 原始计数（--actionable）：可行动行数 归属在跑=%s ｜ 停跑=%s（真 CLI 同值）\n' "$P109_N_LIVE" "$P109_N_STOP"
+
+# 显示口径不动：digest [3] 的全量清单照旧列出在飞报告；草稿/done 行为不变
+P109_LIVE="dev"
+P109_ALL="$(p109_all)"
+assert_eq "P109 ⑧：digest 全量清单照旧列出在飞报告（显示口径不动）" "$(p109_n M98G1 "$P109_ALL")" "1"
+assert_eq "P109 ⑧：草稿（M98G）全量清单照旧列出" "$(p109_n M98G "$P109_ALL")" "1"
+assert_eq "P109 ⑧：草稿（M98G）可行动清单照旧不数（行为不变）" "$(p109_n M98G "$P109_ACT_LIVE")" "0"
+assert_eq "P109 ⑧：看板 done 的报告不在全量清单里（行为不变）" "$(p109_n M98A "$P109_ALL")" "0"
+m98 $TEAM digest >"$TMP/p109-digest.log" 2>&1 || true
+assert_has "$TMP/p109-digest.log" "M98G1-dev" "P109 ⑧：digest [3] 仍然列出这份在飞报告（只是不叫醒）"
+assert_has "$TMP/p109-digest.log" "team review M98G1" "P109 ⑧：digest [3] 仍然给出 review 待办（显示口径不变）"
+
+# 红侧：把**交付的** cmd-status.sh 复制一份、在末尾追加「新判据影子掉」的定义 —— 同一套加载、同一个夹具：
+# wip+在跑 的那份报告必须重新进入计数（证明上面的绿断言咬的正是这条新判据，不是别的东西在挡）。
+P109_MUT_FILE="$TMP/p109-cmd-status-shadow.sh"
+{ cat "$SKILL_DIR/scripts/lib/cmd-status.sh"
+  printf '\n# P109 red-side：把新判据影子掉（永远说「归属席位没在跑」）\nteam_report_seat_live() { return 1; }\n'
+} > "$P109_MUT_FILE"
+P109_LIVE="dev"; P109_MUT="$P109_MUT_FILE"
+P109_MUT_ACT="$(p109_act)"
+P109_MUT_TOTAL="$(p109_lib team_reports_pending)"
+assert_eq "P109 ⑧红侧：影子掉新判据 → wip+在跑 又计数（绿断言咬的就是这条）" "$(p109_n M98G1 "$P109_MUT_ACT")" "1"
+assert_eq "P109 ⑧红侧：可行动计数回到停跑档（影子后新判据不再生效）" "$P109_MUT_TOTAL" "$P109_N_STOP"
+printf '  \033[2m·\033[0m P109 红侧原始计数：影子后 M98G1 回到清单=%s ｜ 可行动行数=%s（= 停跑档）\n' \
+  "$(p109_n M98G1 "$P109_MUT_ACT")" "$P109_MUT_TOTAL"
+P109_MUT=""
+
 # 隔离证据（M7.2 纪律）：夹具的痕迹不得出现在真实账本里。用**内容签名**判定，不做前后 hash 对比 ——
 # 真实 watchdog 每 15 分钟自己就会写 state/**，hash 对比会把它的正常写入误判成夹具泄漏。
 M98_REAL_MAIN="$(dirname "$(git -C "$SKILL_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git -C "$SKILL_DIR" rev-parse --show-toplevel)")"

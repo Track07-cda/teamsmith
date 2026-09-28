@@ -322,6 +322,8 @@ branch — so the signal would arrive before it is actionable. The tool therefor
 (spelling out that review is not the next step)" instead of pointing at `team review <ID>`; nothing is dropped. Ask
 the agent to commit it, and the normal "awaiting review" line plus the review command come back.
 
+The same restraint applies to a **committed** report whose task is still `todo`/`wip` on the board while the seat that owns it is running: it is not counted as an actionable "awaiting review" item (the author may still commit to the branch), although `digest [3]` still lists it — the count comes back as soon as the seat stops or the board moves on.
+
 ### 4d. A worker adapter's CLI never started (`exit=…`)
 
 The worker adapter below is the internal seam (frozen) — reserved for a possible future non-Pi adapter, with no

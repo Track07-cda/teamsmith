@@ -74,6 +74,47 @@ team_report_is_draft() { # <报告路径> → 0=草稿
   return 0
 }
 
+# P109：`--actionable` 的第二条「PM 现在动不了」判据（M9.8 草稿之外的 in-flight 形状）：任务还没交付/
+# 收尾（看板 todo|wip），而它的**归属席位**进程在跑 —— 作者可能还在往分支上补提交，此刻喊复验是噪声
+# （现场 2026-09-28：每 TEAM_PULSE_NUDGE_GAP 叫醒一次，PM 无事可做）。作者交付时 notify 会另外叫醒 PM
+# （与草稿同一个理由：signal 早于可操作）。digest [3] 的全量清单照旧列它，只是不计入唤醒（显示口径不动）。
+#
+# 归属席位按账本解析（第一个定得出来的）：① state 里 task=<id> 的席位（dispatch 记录 —— 与
+# team_pending_counts 判「停了的 agent」同一份映射，同一个席位不会一边算在跑一边算停了）；② 看板行的
+# agent 列（任务的指派）；③ 报告所在 agent 工作树的主人（仅当这份报告是该工作树的**归属副本** rank 1
+# —— 与 digest 打「（在 X 分支上）」同一个判据）。定不出席位 = 证明不了 in-flight → 不算这条
+# （照旧计数：判不出来就静默是假阴性，比噪声坏；wip + 席位停跑也照旧计数，那才是真待办 → resume）。
+team__report_seat_owner() { # <id> <报告路径> → _R = 归属席位名（定不出 → 空）
+  local row who="" a
+  for a in $(team_agents); do
+    team__state_get "$a" task ''
+    [ "$_R" = "$1" ] && { who="$a"; break; }
+  done
+  if [ -z "$who" ]; then
+    row="$(team_board_row "$1" 2>/dev/null || true)"
+    if [ -n "$row" ]; then
+      who="$(team_board_field "$row" agent)"
+      case "$who" in ''|'-') who="" ;; esac
+    fi
+  fi
+  if [ -z "$who" ]; then
+    case "$2" in
+      "$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/"*)
+        a="${2#"$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR"/}"; a="${a%%/*}"
+        team__report_copy_rank "$2" "$1"
+        [ "$_R" = "1" ] && who="$a" ;;
+    esac
+  fi
+  _R="$who"
+}
+
+team_report_seat_live() { # <id> <报告路径> → 0 = 归属席位在跑（in-flight：不叫醒的形状之一）
+  local who
+  team__report_seat_owner "$1" "$2"; who="$_R"
+  [ -n "$who" ] || return 1
+  team_agent_live "$who"
+}
+
 # ---------------------------------------------------------------- M4.3 D：squash 合并后的分支
 # PM 在 local 模式 squash 合并后，agent 分支仍持有原提交：`领先 N` 与「收尾：提交并 push」会永远留着噪音。
 # 判据是**启发式**且很便宜：分支 tip 的 tree 出现在保护分支最近 TEAM_SQUASH_LOOKBACK 个提交的 tree 里
@@ -126,7 +167,7 @@ team_wrapup_is_squash_merged() { # <worktree> <dirty> <ahead> <upstream-ahead>
 team_reports_pending_list() { # [候选清单] [--actionable] → 每行 "<id>\t<显示名[ 标记]>\t<路径>"
   # --actionable = 只要**现在能动的**（草稿要等交付，PM 动不了）：digest [3] 用全量（草稿照旧列出来并
   # 标注），唤醒计数用 --actionable。两边是**同一个函数**、同一套过滤，唯一差别是这一个开关。
-  local cands="" only_actionable=0 arg id path base note
+  local cands="" only_actionable=0 arg id path base note bst
   for arg in "$@"; do
     case "$arg" in
       --actionable) only_actionable=1 ;;
@@ -138,9 +179,15 @@ team_reports_pending_list() { # [候选清单] [--actionable] → 每行 "<id>\t
   while IFS=$'\t' read -r id path; do
     [ -n "$id" ] || continue
     # M9.4 ③：看板已裁决（done/closed）→ 不列。跳过的那些由 team_reports_skipped_by_board 点名。
-    team__board_status "$id"; case "$_R" in done|closed) continue ;; esac
-    # M9.8：草稿不叫醒（标注但不计数）。
-    if [ "$only_actionable" = "1" ] && team_report_is_draft "$path"; then continue; fi
+    team__board_status "$id"; bst="$_R"; case "$bst" in done|closed) continue ;; esac
+    if [ "$only_actionable" = "1" ]; then
+      # M9.8：草稿不叫醒（标注但不计数）。
+      if team_report_is_draft "$path"; then continue; fi
+      # P109：看板还 todo/wip 且归属席位在跑 → 报告还在作者手里（PM 动不了），不计数。
+      case "$bst" in
+        todo|wip) if team_report_seat_live "$id" "$path"; then continue; fi ;;
+      esac
+    fi
     base="${path##*/}"; base="${base%.md}"
     if [ -f "$TEAM_DOCS_ABS/reviews/$id.md" ]; then
       team__review_record_note "$id"; note="$_R"
