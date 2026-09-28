@@ -12875,12 +12875,67 @@ SEL36="$SKILL_DIR/tests/section-select.sh"
 P98_NEST_TMP="$TMP/p98-nest-tmp"; rm -rf "$P98_NEST_TMP"; mkdir -p "$P98_NEST_TMP"
 # 嵌套跑门禁：私有 TMPDIR / 清掉继承身份 / FAST / 不排队（不起真进程，本段全程纯逻辑）
 p98_nest() { # <树> <日志> <参数…>；额外 env 由调用方放在 P98_NEST_ENV 里
-  local tree="$1" log="$2" extra="${P98_NEST_ENV:-}"; shift 2
+  # P115：P98_NEST_TMPDIR 可覆盖嵌套 run 的 TMPDIR（两向夹具把 socket 路径压深/保持浅用）
+  local tree="$1" log="$2" extra="${P98_NEST_ENV:-}" nest_tmp="${P98_NEST_TMPDIR:-$P98_NEST_TMP}"; shift 2
   env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT_MODEL \
       -u SMOKE_TMP_RUN_ID -u SMOKE_TMP_LEDGER -u TEAM_SMOKE_KEEP -u TEAM_TMP_KEEP \
       -u SMOKE_SEL_CHILD -u SMOKE_SEL_SKILL_DIR -u SMOKE_SEL_DECISION -u SMOKE_SEL_COPY \
-      TMPDIR="$P98_NEST_TMP" TEAM_SMOKE_FAST=1 TEAM_SMOKE_NO_LOCK=1 $extra \
+      TMPDIR="$nest_tmp" TEAM_SMOKE_FAST=1 TEAM_SMOKE_NO_LOCK=1 $extra \
       bash "$tree/tests/smoke.sh" "$@" >"$log" 2>&1
+}
+# P115 · 嵌套跑的判定看**状态**，不看墙钟：rc 非零时不问「它该跑完了吗」，而是读子进程留下的日志
+# ——红的是哪一行、能不能归因到**环境前置**。现场（P111 的 FAST ✓2996 ✗5，5 条全在 §36）：调用者
+# 的 TMPDIR 深 → 嵌套 run 自己的私有 tmux socket 路径 116–119 字节 > AF_UNIX 上限 107（bind 实测
+# 107 OK / 108 ENAMETOOLONG）→ tmux server 绑不上 socket → 0c 的隔离自检报「私有 socket 没生效」
+# → 嵌套 rc=1，五条「嵌套跑退出 0」全假红（选段器一点问题都没有）。判定分三类：
+#   green  rc=0；
+#   env    rc≠0 但日志里**全部**红行都是可归因的环境前置（私有 socket 绑不上），或一条红行都没有的
+#          锁排队（exit 2，点名 holder）→ 可见 SKIP + 归因（不判产品红）；
+#   red    其它任何形状（有非环境红行；或 rc≠0 却没有任何可归因的红行）→ 照旧红（真红保留）。
+p98_nest_state() { # <日志> <rc> → 打印 "<green|env|red>\t<归因或证据（一行）>"
+  local log="$1" rc="$2" plain reds nr env_reds ne first
+  plain="$(sed 's/\x1b\[[0-9;]*m//g' "$log" 2>/dev/null || true)"
+  if [ "$rc" = "0" ]; then printf 'green\t退出码 0\n'; return 0; fi
+  reds="$(printf '%s\n' "$plain" | grep '^  ✗ ' || true)"
+  if [ -n "$reds" ]; then
+    nr="$(printf '%s\n' "$reds" | grep -c . || true)"
+    env_reds="$(printf '%s\n' "$reds" | grep -E '私有 socket 没生效' || true)"
+    ne=0; [ -n "$env_reds" ] && ne="$(printf '%s\n' "$env_reds" | grep -c . || true)"
+    if [ "$ne" -gt 0 ] && [ "$ne" -eq "$nr" ]; then
+      first="$(printf '%s\n' "$env_reds" | head -1 | sed 's/^  ✗ //' | cut -c1-220)"
+      printf 'env\t%s\n' "$first"; return 0
+    fi
+    first="$(printf '%s\n' "$reds" | grep -v -E '私有 socket 没生效' | head -1 | sed 's/^  ✗ //' | cut -c1-200)"
+    printf 'red\t%s\n' "$first"; return 0
+  fi
+  # 一条 ✗ 都没有：锁排队（exit 2）点名 holder 的是**环境**；其它形状没有可归因的红 → 照旧红。
+  if printf '%s\n' "$plain" | grep -q '^排队超限：'; then
+    first="$(printf '%s\n' "$plain" | grep -m1 '^排队超限：' | cut -c1-220)"
+    printf 'env\t%s\n' "$first"; return 0
+  fi
+  printf 'red\trc=%s 但日志里一条 ✗ 行都没有（没有环境前置可以解释它）\n' "$rc"; return 0
+}
+p98_nest_sock_len() { # <日志> → 嵌套 run 私有 socket 路径的字节数（取日志里那行；缺则空）
+  local p
+  p="$(sed 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null \
+       | sed -n 's/^  · tmux 私有 socket：\(.*\)（夹具与产品调用都走它.*$/\1/p' | head -1)"
+  [ -n "$p" ] && printf '%s' "$p" | wc -c | tr -d ' ' || true
+}
+p98_nest_verdict() { # <期望 0 的断言标题> <rc> <嵌套日志> → ok / 可见 SKIP + 归因 / bad
+  local title="$1" rc="$2" log="$3" out st ev sl
+  out="$(p98_nest_state "$log" "$rc")"
+  st="${out%%$'\t'*}"; ev="${out#*$'\t'}"
+  case "$st" in
+    green) ok "$title" ;;
+    env)
+      sl="$(p98_nest_sock_len "$log" || true)"
+      if [ -n "$sl" ] && [ "$sl" -gt 107 ] 2>/dev/null; then
+        ev="$ev ｜ 私有 socket 路径 ${sl} 字节 > AF_UNIX 上限 107"
+      fi
+      cond_skip "$title" "嵌套 run 的前置环境起不来（rc=$rc）：$ev" ;;
+    *) bad "$title（期望 [0]，实际 [$rc]；嵌套 run 里的红不是环境前置：$ev）" ;;
+  esac
+  return 0
 }
 # <日志> → P98_CLOSE_N / P98_SUM_P / P98_SUM_F / P98_SUM_S / P98_RES_P / P98_RES_F
 p98_ledger() {
@@ -13024,7 +13079,7 @@ assert_not "$TMP/p98-unknown-suite.log" "0 · 临时仓库" "36② 被拒时一�
 P98_SEL_N="$(bash "$SEL36" --select 0b 2>/dev/null | awk -F'\t' 'NF==2{n++} END{print n+0}')"
 P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p98-nest-run.log" --select 0b
 P98_NEST_RC=$?
-assert_eq "36③ 选段嵌套跑退出 0" "$P98_NEST_RC" "0"
+p98_nest_verdict "36③ 选段嵌套跑退出 0" "$P98_NEST_RC" "$TMP/p98-nest-run.log"
 assert_has "$TMP/p98-nest-run.log" "decision=RUN" "36③ 运行头点名 decision=RUN"
 assert_has "$TMP/p98-nest-run.log" "== 选段结果 ==" "36③ 结果行用 == 选段结果 =="
 assert_not "$TMP/p98-nest-run.log" "smoke 全绿" "36③ 选段运行不喊 smoke 全绿"
@@ -13068,7 +13123,7 @@ perl -0pi -e 's/(section "0c · 静态检查（函数结尾的 set -e 陷阱）"
 grep -q '^sleep 1$' "$P98_SLOW/tests/smoke.sh" || bad "36③ 慢段变体没打上（注入点形状变了）"
 P98_NEST_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT" p98_nest "$P98_SLOW" "$TMP/p98-slow.log" --select 0c
 P98_SLOW_RC=$?
-assert_eq "36③ 故意变慢的段照旧绿（退出码 0）" "$P98_SLOW_RC" "0"
+p98_nest_verdict "36③ 故意变慢的段照旧绿（退出码 0）" "$P98_SLOW_RC" "$TMP/p98-slow.log"
 P98_SLOW_SEC="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-slow.log" | awk '/^#[0-9]+ 0c / { for (i = 1; i < NF; i++) if ($i == "用时" && $(i+1) ~ /^[0-9]+s$/) { s = $(i+1); sub(/s$/, "", s); print s; exit } }')"
 if awk -v s="$P98_SLOW_SEC" 'BEGIN { exit (s + 0 >= 0.9) ? 0 : 1 }'; then
   ok "36③ 慢段的收口行报出真实秒数（${P98_SLOW_SEC}s ≥ 0.9s）"
@@ -13114,7 +13169,7 @@ P98_LK_RC=0
 P98_LK_ENV="P98_LK_NEG=$P98_LK_NEG"
 [ -n "$P98_MARKER_ROOT" ] && P98_LK_ENV="$P98_LK_ENV TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT"
 P98_NEST_ENV="$P98_LK_ENV" p98_nest "$P98_LK" "$TMP/p98-leak.log" --select 1 || P98_LK_RC=$?
-assert_eq "36④ 选段子进程里的嵌套 smoke 照自己的参数走（负例仍被拒）" "$P98_LK_RC" "0"
+p98_nest_verdict "36④ 选段子进程里的嵌套 smoke 照自己的参数走（负例仍被拒）" "$P98_LK_RC" "$TMP/p98-leak.log"
 assert_has "$TMP/p98-leak.log" "P98 夹具：嵌套的 --select no-such-section 仍被拒（rc=2，标记没泄漏）" "36④ 嵌套负例在选段子进程里仍被拒"
 assert_not "$TMP/p98-leak.log" "嵌套的 --select no-such-section 没被拒" "36④ 没有「标记泄漏 → 静默跑全套」的现场"
 P98_FT="$(p98_variant fail)"
@@ -13124,7 +13179,7 @@ P98_FT_ENV=""
 [ -n "$P98_MARKER_ROOT" ] && P98_FT_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT"
 P98_RC_A=0
 P98_NEST_ENV="$P98_FT_ENV" p98_nest "$P98_FT" "$TMP/p98-failA.log" --select 0,0b || P98_RC_A=$?
-assert_eq "36④ 注入的必红段没被选中 → 选段仍退出 0" "$P98_RC_A" "0"
+p98_nest_verdict "36④ 注入的必红段没被选中 → 选段仍退出 0" "$P98_RC_A" "$TMP/p98-failA.log"
 assert_not "$TMP/p98-failA.log" "P98 夹具：注入的必红断言" "36④ 没被选中的段确实没跑"
 P98_RC_B=0
 P98_NEST_ENV="$P98_FT_ENV" p98_nest "$P98_FT" "$TMP/p98-failB.log" --select 1 || P98_RC_B=$?
@@ -13177,18 +13232,82 @@ p98_locksel() { # <日志> <wait 秒>
 }
 : >>"$P98_LS/lock"
 P98_LS_RC=0; p98_locksel "$TMP/p98-locksel-green.log" 10 || P98_LS_RC=$?
-assert_eq "36⑤ 锁空闲：--select 0b 的排队路径仍然跑过滤副本（退出 0）" "$P98_LS_RC" "0"
+p98_nest_verdict "36⑤ 锁空闲：--select 0b 的排队路径仍然跑过滤副本（退出 0）" "$P98_LS_RC" "$TMP/p98-locksel-green.log"
 assert_has "$TMP/p98-locksel-green.log" "全量门禁互斥：持有" "36⑤ 过滤副本作为持锁子进程跑了（标记以 env 前缀带回）"
 assert_not "$TMP/p98-locksel-green.log" "26 · 面板" "36⑤ 没被丢成整套（没选的段没跑）"
 assert_has "$TMP/p98-locksel-green.log" "== 选段结果 ==" "36⑤ 选段结果 token 在"
 flock --close -x "$P98_LS/lock" sleep 20 & P98_LS_HOLD=$!
-sleep 0.4
+# P115/D33/P62：等锁**真的被拿住**再看状态（flock -n 探锁失败 = 被持有），不拿 0.4s 墙钟赌它起来了。
+P98_LS_HELD=0
+for _i in $(seq 1 50); do
+  if ! flock -n "$P98_LS/lock" true 2>/dev/null; then P98_LS_HELD=1; break; fi
+  kill -0 "$P98_LS_HOLD" 2>/dev/null || break
+  sleep 0.1
+done
+unset _i
+[ "$P98_LS_HELD" = "1" ] || bad "36⑤ 夹具：持锁者 5s 内没拿住锁（后面的排队断言不成立）"
 printf '%s pid=%s cmd=p98-locksel-holder\n' "$(date -Is)" "$P98_LS_HOLD" > "$P98_LS/lock.holder"
 P98_LS_RC2=0; p98_locksel "$TMP/p98-locksel-red.log" 1 || P98_LS_RC2=$?
 kill "$P98_LS_HOLD" 2>/dev/null; wait "$P98_LS_HOLD" 2>/dev/null || true
 assert_eq "36⑤ 锁被持有 + WAIT=1 → exit 2（不是 1、不静默）" "$P98_LS_RC2" "2"
 assert_match "$TMP/p98-locksel-red.log" "排队超限.*cmd=p98-locksel-holder" "36⑤ 排队超限点名 <lock>.holder 里的持有者"
 assert_not "$TMP/p98-locksel-red.log" "0b · skill 可被 pi 解析器加载" "36⑤ 排队超限时一段都没跑"
+
+# ── ⑥ 嵌套跑判定的两向夹具（P115）：环境前置 → 可见 SKIP + 归因；真红 → 照旧红 ───────────────
+# 判定逻辑在 p98_nest_state/p98_nest_verdict（见段首）。这里把两向都钉成可复跑的夹具：环境侧真的
+# 把嵌套 socket 路径压过 107 字节；真红侧给三条受保护断言的配置各喂一个真的失败断言。断言出口在
+# 子 shell 里取输出，夹具自己的红不记进门禁计数。
+p98_state_has() { # <日志> <rc> <期望判类> <期望归因字样（- = 不查）> <断言前缀>
+  local log="$1" rc="$2" want="$3" evwant="$4" pre="$5" out st ev
+  out="$(p98_nest_state "$log" "$rc")"
+  st="${out%%$'\t'*}"; ev="${out#*$'\t'}"
+  assert_eq "$pre 判类" "$st" "$want"
+  [ "$evwant" = "-" ] || assert_has_echo "$ev" "$evwant" "$pre 归因点名 [$evwant]"
+}
+# 环境侧（不假红）：嵌套 TMPDIR 足够深 → 嵌套 socket 路径必定超 AF_UNIX 上限 107 字节 → 判 env。
+P98_DEEP_TMP="$TMP/p115-deep/aaaaaaaa/bbbbbbbb/cccccccc/dddddddd"
+mkdir -p "$P98_DEEP_TMP"
+P98_NEST_TMPDIR="$P98_DEEP_TMP" P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p115-env.log" --select 0b
+P98_ENV_RC=$?
+p98_state_has "$TMP/p115-env.log" "$P98_ENV_RC" "env" "私有 socket 没生效" "36⑥ 环境侧（深 TMPDIR）"
+P98_ENV_SL="$(p98_nest_sock_len "$TMP/p115-env.log" || true)"
+if [ -n "$P98_ENV_SL" ] && [ "$P98_ENV_SL" -gt 107 ] 2>/dev/null; then
+  ok "36⑥ 环境侧夹具有效：嵌套私有 socket 路径 ${P98_ENV_SL} 字节 > AF_UNIX 上限 107"
+else
+  bad "36⑥ 环境侧夹具没造出超限 socket 路径（读到 [${P98_ENV_SL:-空}] 字节）"
+fi
+P98_VOUT="$( ( p98_nest_verdict "36⑥ 环境侧判定出口" "$P98_ENV_RC" "$TMP/p115-env.log" ) 2>&1 || true )"
+assert_has_echo "$P98_VOUT" "SKIP（条件不满足）" "36⑥ 环境侧经断言出口是可见 SKIP（不判红）"
+assert_not_echo "$P98_VOUT" "✗" "36⑥ 环境侧经断言出口没有红标"
+# 锁排队（exit 2、没有 ✗ 行）也必须归 env：合成日志直接钉判定，并把 holder 名字带出来。
+printf '排队超限：等满 1s 仍拿不到门禁锁 /x/teamsmith-smoke.lock（持锁者：pid=999 cmd=p115-holder）→ 本套没有运行\n' > "$TMP/p115-queue.log"
+p98_state_has "$TMP/p115-queue.log" "2" "env" "cmd=p115-holder" "36⑥ 锁排队（exit 2）"
+# 混合形状（环境红 + 真红同时出现）→ 真红优先：判 red 并点名真红（环境归因不许吞真红）。
+printf '  ✗ tmux 隔离：私有 socket 没生效（期望 /x/tmux/tmux-1000/default，TMUX_TMPDIR=/x/tmux）\n  ✗ P115 夹具：真红（混合形状）\n' > "$TMP/p115-mixed.log"
+p98_state_has "$TMP/p115-mixed.log" "1" "red" "P115 夹具：真红（混合形状）" "36⑥ 混合（环境红+真红）"
+# 不可归因（rc 非零、一条 ✗ 都没有、也不是锁排队）→ 照旧红，不得被当成环境跳过。
+printf 'smoke: 未知错误\n' > "$TMP/p115-opaque.log"
+p98_state_has "$TMP/p115-opaque.log" "1" "red" "没有环境前置" "36⑥ 不可归因（无红行）"
+# 真红侧（照旧红）：三条受保护断言的配置各注入一个真的失败断言 → 判类必须 red、出口必须发红标。
+P98_RED_ENV=""
+[ -n "$P98_MARKER_ROOT" ] && P98_RED_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT"
+P98_RED0B="$(p98_variant p115-red0b)"
+perl -0pi -e 's/(section "0b · skill 可被 pi 解析器加载"\n)/$1bad "P115 夹具：0b 里的真红（红侧）"\n/' "$P98_RED0B/tests/smoke.sh"
+grep -q 'P115 夹具：0b 里的真红' "$P98_RED0B/tests/smoke.sh" || bad "36⑥ 红侧 §0b 注入没打上（段形状变了？）"
+P98_NEST_ENV="$P98_RED_ENV" p98_nest "$P98_RED0B" "$TMP/p115-red0b.log" --select 0b; P98_RB_RC=$?
+p98_state_has "$TMP/p115-red0b.log" "$P98_RB_RC" "red" "P115 夹具：0b 里的真红" "36⑥ 真红侧（--select 0b）"
+P98_VOUT="$( ( p98_nest_verdict "36⑥ 真红侧判定出口" "$P98_RB_RC" "$TMP/p115-red0b.log" ) 2>&1 || true )"
+assert_has_echo "$P98_VOUT" "✗" "36⑥ 真红侧经断言出口照旧红（环境跳过没有吞掉真红）"
+P98_RED0C="$(p98_variant p115-red0c)"
+perl -0pi -e 's/(section "0c · 静态检查（函数结尾的 set -e 陷阱）"\n)/$1bad "P115 夹具：0c 里的真红（红侧）"\n/' "$P98_RED0C/tests/smoke.sh"
+grep -q 'P115 夹具：0c 里的真红' "$P98_RED0C/tests/smoke.sh" || bad "36⑥ 红侧 §0c 注入没打上（段形状变了？）"
+P98_NEST_ENV="$P98_RED_ENV" p98_nest "$P98_RED0C" "$TMP/p115-red0c.log" --select 0c; P98_RC_RC=$?
+p98_state_has "$TMP/p115-red0c.log" "$P98_RC_RC" "red" "P115 夹具：0c 里的真红" "36⑥ 真红侧（--select 0c，慢段配置）"
+P98_RED1="$(p98_variant p115-red1)"
+perl -0pi -e 's/(section "1 · doctor（未初始化应失败）"\n)/$1bad "P115 夹具：1 段里的真红（红侧）"\n/' "$P98_RED1/tests/smoke.sh"
+grep -q 'P115 夹具：1 段里的真红' "$P98_RED1/tests/smoke.sh" || bad "36⑥ 红侧 §1 注入没打上（段形状变了？）"
+P98_NEST_ENV="$P98_RED_ENV" p98_nest "$P98_RED1" "$TMP/p115-red1.log" --select 1; P98_R1_RC=$?
+p98_state_has "$TMP/p115-red1.log" "$P98_R1_RC" "red" "P115 夹具：1 段里的真红" "36⑥ 真红侧（--select 1，泄漏配置）"
 
 # ---------------------------------------------------------------- 37. 读路径：根一次解析 + 单进程扫描（M50）
 # 实测现场（M50 任务书，PM 在 main 上量的）：BOARD.md 只有 141 行，`team digest` 却要 89 秒 ——
