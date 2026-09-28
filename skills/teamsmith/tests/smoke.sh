@@ -16,6 +16,22 @@
 set -uo pipefail
 
 SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# P98 · 选段：过滤副本落在临时目录（不在本树），子进程按 BASH_SOURCE 推不出本树 —— 只有「本脚本自己
+# spawn 的选段子进程」（SMOKE_SEL_CHILD=1 且指向一棵含 tests/smoke.sh 的树）才认外部指定的树。
+# 捕获后**立刻 unset**：这四个变量是给**这一个进程**的标记，绝不能被它的子孙继承 —— 段内夹具（36 段
+# 的嵌套 smoke / `--select no-such-section` 负例）若继承标记，会把自己当成选段子进程并**静默跑全套**
+# （P98 实测过：过滤副本 → 36 段 → 负例 → 全套 → 36 段 → … 指数发散）。子进程自己的锁重入用命令行
+# 前缀显式带回去，不回写环境。
+# 注意：上面那行 `^SKILL_DIR=` 的形状是 flip-m12 / flip-m12-26c / flip-m44 用 sed 依赖的，别改成块。
+SMOKE_SEL_IS_CHILD=0; SMOKE_SEL_CHILD_DIR=""; SMOKE_SEL_CHILD_DECISION=""; SMOKE_SEL_COPY_PATH=""
+if [ "${SMOKE_SEL_CHILD:-0}" = "1" ] && [ -n "${SMOKE_SEL_SKILL_DIR:-}" ] \
+   && [ -f "${SMOKE_SEL_SKILL_DIR}/tests/smoke.sh" ]; then
+  SKILL_DIR="$SMOKE_SEL_SKILL_DIR"
+  SMOKE_SEL_IS_CHILD=1; SMOKE_SEL_CHILD_DIR="$SKILL_DIR"
+  SMOKE_SEL_CHILD_DECISION="${SMOKE_SEL_DECISION:-RUN}"
+  SMOKE_SEL_COPY_PATH="${SMOKE_SEL_COPY:-}"
+  unset SMOKE_SEL_CHILD SMOKE_SEL_SKILL_DIR SMOKE_SEL_DECISION SMOKE_SEL_COPY 2>/dev/null || true
+fi
 # P16：初始化指引是兄弟 skill（本仓库 skills/teamsmith-init；安装后 ~/.agents/skills/ 里并排的两条软链）。
 SKILL_INIT_DIR="$(cd -P "$SKILL_DIR/.." && pwd)/teamsmith-init"
 TEAM="bash $SKILL_DIR/scripts/team"
@@ -74,7 +90,28 @@ export SMOKE_CALLER_HAD_TMUX
 unset TMUX TMUX_PANE 2>/dev/null || true
 SMOKE_CALLER_TMUX_TMPDIR="${TMUX_TMPDIR:-/tmp}"   # 调用者原本的 socket 目录（自检里当「默认 server」用）
 KEEP="${TEAM_SMOKE_KEEP:-0}"
-[ "${1:-}" = "--keep" ] && KEEP=1
+# P98：参数 = --keep / --paths <路径>… / --select <key>[,<key>…]；不认识的参数**拒绝**（不静默忽略：
+# 「以为传了选段、其实跑了全套或什么都没跑」是同一种危险）。选择决定在拿机器锁之前算（见下）。
+SELECT_MODE_REQ=""
+SELECT_ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --paths)
+      [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "paths" ] \
+        || { printf 'smoke: --paths 与 --%s 不同用\n' "$SELECT_MODE_REQ" >&2; exit 2; }
+      SELECT_MODE_REQ="paths"; shift
+      while [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; do SELECT_ARGS+=("$1"); shift; done
+      [ "${#SELECT_ARGS[@]}" -gt 0 ] || { printf 'smoke: --paths 需要至少一条路径\n' >&2; exit 2; } ;;
+    --select)
+      [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "select" ] \
+        || { printf 'smoke: --select 与 --%s 不同用\n' "$SELECT_MODE_REQ" >&2; exit 2; }
+      SELECT_MODE_REQ="select"; shift
+      [ $# -gt 0 ] || { printf 'smoke: --select 需要 key\n' >&2; exit 2; }
+      SELECT_ARGS+=("$1"); shift ;;
+    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--paths <路径>… | --select <key>[,<key>…]]）\n' "$1" >&2; exit 2 ;;
+  esac
+done
 
 # 快模式开关（TEAM_SMOKE_FAST=1）：只跑纯逻辑段落，跳过需要真进程的段落（tmux/真实 pi）。
 #   FAST_REQ = 用户是不是要了快模式（原始诉求）：快模式自检与结果行用它——就算有人把内部开关
@@ -91,6 +128,148 @@ FAST=$FAST_REQ
 LIVE_RAN=0     # 真进程段落实际执行了几次（FAST 模式下必须保持 0）
 SKIP_SEGS=""   # FAST 显式跳过的段落标记（末尾自检用）
 SKIP_N=0
+
+# ── P98 · 选段（change: gate-runtime-budget · verification#A changed-path list selects…）──
+# 决定在**拿机器锁之前**算：NONE 不排队、不建临时根、一段都不跑；FULL 打印兜底原因后照旧跑全套；
+# RUN 把「前导 + 选中段 + needs 闭包」过滤成一份副本（整段保留/整段丢弃，段正文逐字节原样），在子进程里
+# 跑（子进程照旧遵守 M23 排队、自己建临时根），父进程收尾时打印「这次没跑的段」。三种模式的结果行都
+# 不叫 `== 结果 ==`（D7）：选段运行不许被误当全套门禁。
+SELECT_MODE=0; SELECT_DECISION=""; SELECT_TOTAL=""; SELECT_RUN_KEYS=""; SELECT_UNSELECTED=""
+smoke_words() { local n=0 w; for w in $1; do n=$((n + 1)); done; printf '%s' "$n"; }
+smoke_select_header() {
+  printf '\n\033[1m== 选段 ==\033[0m decision=%s · 运行 %s/%s 段 · 未跑 %s 段\n' \
+    "$SELECT_DECISION" "$(smoke_words "$SELECT_RUN_KEYS")" "${SELECT_TOTAL:-?}" "$(smoke_words "$SELECT_UNSELECTED")"
+  if [ -n "$SELECT_UNSELECTED" ]; then
+    printf '  这次不跑的键：%s\n' "$SELECT_UNSELECTED"
+  else
+    printf '  这次不跑的键：（无 —— 全套都在跑）\n'
+  fi
+  [ "$SELECT_DECISION" = "RUN" ] && printf '  选段不是全套门禁：交付 / 复验 / 归档仍跑整套（references/protocol.md §9b-2）\n'
+  return 0
+}
+smoke_select_tail() {
+  printf '\n\033[1m== 选段：这次没跑的段 ==\033[0m %s 个键\n' "$(smoke_words "$SELECT_UNSELECTED")"
+  [ -n "$SELECT_UNSELECTED" ] && printf '%s\n' "$SELECT_UNSELECTED"
+  printf '  选段运行不是全套门禁（交付 / 复验 / 归档仍跑整套）；引用它的报告必须点名没跑的段\n'
+  return 0
+}
+if [ "$SMOKE_SEL_IS_CHILD" = "1" ]; then
+  # 选段子进程：过滤已由父进程做过（段正文没动），这里只声明「这是选段运行」
+  SELECT_MODE=1; SELECT_DECISION="${SMOKE_SEL_CHILD_DECISION:-RUN}"
+elif [ -n "$SELECT_MODE_REQ" ]; then
+  SELECT_BIN="$SKILL_DIR/tests/section-select.sh"
+  [ -f "$SELECT_BIN" ] || { printf 'smoke: 选段需要 %s（缺它就不能用 --paths/--select）\n' "$SELECT_BIN" >&2; exit 2; }
+  if ! SELECT_OUT="$(bash "$SELECT_BIN" --"$SELECT_MODE_REQ" "${SELECT_ARGS[@]}" </dev/null 2>&1)"; then
+    printf '%s\n' "$SELECT_OUT" >&2
+    printf 'smoke: 选段被拒 —— 什么都没跑\n' >&2
+    exit 2
+  fi
+  SELECT_DECISION="$(printf '%s\n' "$SELECT_OUT" | sed -n 's/^decision=//p' | head -1)"
+  SELECT_TOTAL="$(printf '%s\n' "$SELECT_OUT" | sed -n 's/^sections=//p' | head -1)"
+  SELECT_RUN_KEYS="$(printf '%s\n' "$SELECT_OUT" | awk -F'\t' 'NF==2{printf "%s ", $1}')"
+  SELECT_RUN_KEYS="${SELECT_RUN_KEYS% }"
+  case "$SELECT_DECISION" in
+    FULL|NONE|RUN) ;;
+    *) printf 'smoke: 选段输出没有 decision=FULL|NONE|RUN：\n%s\n' "$SELECT_OUT" >&2; exit 2 ;;
+  esac
+  if [ "$SELECT_DECISION" = "NONE" ]; then
+    printf '\n\033[1m== 选段 ==\033[0m decision=NONE —— 没有段落需要运行（no section needs to run）\n'
+    printf '%s\n' "$SELECT_OUT" | sed -n 's/^reason=/  /p'
+    printf '  选段运行：一段都没跑、没有结果行、不是门禁证据（交付 / 复验 / 归档仍跑整套）\n'
+    exit 0
+  fi
+  SELECT_ALL_KEYS="$(bash "$SELECT_BIN" --list | awk -F'\t' '{printf "%s ", $1}')"
+  # FULL 兜底：接下来跑的是**全套**，所以「运行」的就是全部段（否则运行头会把整套说成「一段都不跑」
+  # —— 与套件现有几段无关；段数从表里数，不由这里硬编码）
+  [ "$SELECT_DECISION" = "FULL" ] && SELECT_RUN_KEYS="$SELECT_ALL_KEYS"
+  SELECT_UNSELECTED=""
+  for _k in $SELECT_ALL_KEYS; do
+    case " $SELECT_RUN_KEYS " in *" $_k "*) ;; *) SELECT_UNSELECTED="${SELECT_UNSELECTED}${SELECT_UNSELECTED:+ }$_k" ;; esac
+  done
+  unset _k
+  smoke_select_header
+  if [ "$SELECT_DECISION" = "RUN" ]; then
+    # 过滤副本：整段保留/整段丢弃，段正文原样；收尾从 `# __SMOKE_TAIL__` 起原样到底
+    SELECT_COPY="${TMPDIR:-/tmp}/teamsmith-select.$$.sh"
+    if ! awk -v keys="$SELECT_RUN_KEYS" '
+      BEGIN { n = split(keys, A, " "); for (i = 1; i <= n; i++) keep[A[i]] = 1; cur = 1 }
+      /^# __SMOKE_TAIL__/ { tail = 1 }
+      /^[[:space:]]*section[[:space:]]+"/ {
+        k = $0
+        sub(/^[[:space:]]*section[[:space:]]+"/, "", k)
+        sub(/"[[:space:]]*$/, "", k)
+        sub(/ · .*/, "", k)
+        cur = (k in keep) ? 1 : 0
+      }
+      { if (tail || cur) print }
+    ' "$SKILL_DIR/tests/smoke.sh" > "$SELECT_COPY"; then
+      printf 'smoke: 生成选段副本失败（%s）\n' "$SELECT_COPY" >&2; exit 2
+    fi
+    SMOKE_SEL_CHILD=1 SMOKE_SEL_SKILL_DIR="$SKILL_DIR" SMOKE_SEL_DECISION=RUN SMOKE_SEL_COPY="$SELECT_COPY" \
+      bash "$SELECT_COPY"
+    SELECT_RC=$?
+    rm -f "$SELECT_COPY"
+    smoke_select_tail
+    exit "$SELECT_RC"
+  fi
+  # FULL：本进程照旧跑全套，只把收尾换成选段口径（结果行换 token、不喊 smoke 全绿）
+  printf '%s\n' "$SELECT_OUT" | sed -n 's/^reason=/  /p'
+  SELECT_MODE=1
+fi
+
+# ── P98 · 分段账本（change: gate-runtime-budget；只记录，不判定）─────────────────────────
+# 每段收口**一行**（与 P70 的段自述合并成同一条）：
+#   `#N id · 用时 Ns · ✓P ✗F SKIPk · ticks T`
+#   * 用时/ticks 来自 P70 的看门狗记账（**唯一时钟**：收口行与 sections.tsv 同源，账本不再各量一次）；
+#   * ✓/✗/SKIP 是这段的增量（账本侧在关段前经 SG_CLOSE_COUNTS 注入，行由 guard 打）；
+#   * 行**不**缩进、**不**携带门禁红标 `  \033[31m✗\033[0m`（flip-m33 数的是那个字节序列），
+#     也不把时长与任何阈值比较 —— 账本是报告不是判定：不改退出码、不抑制后续段落、不判慢段红。
+SMOKE_SEC_N=0; SMOKE_SEC_OPEN_KEY=""; SMOKE_SEC_OPEN_ID=""
+SMOKE_SEC_P0=0; SMOKE_SEC_F0=0; SMOKE_SEC_S0=0
+SMOKE_SEC_SUM_P=0; SMOKE_SEC_SUM_F=0; SMOKE_SEC_SUM_S=0; SMOKE_SEC_CLOSES=0
+SMOKE_SEC_ROWS=""
+# 门禁红标的字节序列（flip-m33 / 本文件 36 段用它辨认「真的红行」；账本行不许带它）
+SMOKE_RED_MARK="$(printf '  \033[31m✗\033[0m')"
+smoke_section_close() { # 收口已开始的段落（没收口就不做事）：P70 的用时/ticks × P98 的增量，一条行
+  [ -n "$SMOKE_SEC_OPEN_KEY" ] || return 0
+  local p f s sec tk
+  p=$((PASS - SMOKE_SEC_P0)); f=$((FAIL - SMOKE_SEC_F0)); s=$((SKIP_N - SMOKE_SEC_S0))
+  SG_CLOSE_COUNTS="✓$p ✗$f SKIP$s"
+  section_guard_close                      # 唯一收口行：stdout + sections.log + sections.tsv（同源）
+  sec="$SG_ELAPSED"; tk="$SG_TICKS"        # guard 留下的本段用时/ticks（账本读回，不再自己计时）
+  SMOKE_SEC_ROWS="${SMOKE_SEC_ROWS}${SMOKE_SEC_N}|${SMOKE_SEC_OPEN_ID}|${sec}|${p}|${f}|${s}|${tk}"$'\n'
+  SMOKE_SEC_SUM_P=$((SMOKE_SEC_SUM_P + p)); SMOKE_SEC_SUM_F=$((SMOKE_SEC_SUM_F + f)); SMOKE_SEC_SUM_S=$((SMOKE_SEC_SUM_S + s))
+  SMOKE_SEC_CLOSES=$((SMOKE_SEC_CLOSES + 1))
+  SMOKE_SEC_OPEN_KEY=""
+  return 0
+}
+smoke_slowest_summary() { # 最慢 N 段（默认 5；SMOKE_SLOWEST_N 只在夹具开关下生效）
+  # 汇总行**缩进两格**：与收口行（`^#N `）字节上可区分——否则夹具按 `^#N ` 数收口行会把汇总行
+  # 重复计数（P98 实测：4 段跑出 8 条、增量之和翻倍）。行内字段与收口行同形（含用时/ticks）。
+  local n=5 v="${SMOKE_SLOWEST_N:-}"
+  if [ -n "$v" ]; then
+    if [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; then n="$v"
+    else printf '\033[33m注意\033[0m：忽略 SMOKE_SLOWEST_N=%s（夹具旋钮只在 TEAM_SMOKE_FIXTURE=1 时生效）\n' "$v"; fi
+  fi
+  case "$n" in ''|*[!0-9]*) n=5 ;; esac
+  [ "$n" -ge 1 ] || return 0
+  printf '\n\033[1m== 最慢 %s 段 ==\033[0m\n' "$n"
+  printf '%s\n' "$SMOKE_SEC_ROWS" | sed '/^$/d' | sort -t'|' -k3,3gr | head -n "$n" | \
+  while IFS='|' read -r idx id sec p f s tk; do
+    printf '  \033[2m#%s\033[0m %s · 用时 %ss · ✓%s ✗%s SKIP%s · ticks %s\n' "$idx" "$id" "$sec" "$p" "$f" "$s" "$tk"
+  done
+  return 0
+}
+smoke_ledger_selfcheck() { # 段落增量之和 vs 结果行总数：不一致只打印一行（不改退出码）
+  local same=1
+  [ "$SMOKE_SEC_SUM_P" -eq "$PASS" ] || same=0
+  [ "$SMOKE_SEC_SUM_F" -eq "$FAIL" ] || same=0
+  # 冒号要留在颜色序列**里面**：assert_has 搜的是连续字节 `账本自查：`（P98 实测）。
+  printf '\033[2m账本自查：\033[0m %s 段收口 · 增量 ✓%d ✗%d SKIP%d ｜ 结果行 ✓%d ✗%d —— %s\n' \
+    "$SMOKE_SEC_CLOSES" "$SMOKE_SEC_SUM_P" "$SMOKE_SEC_SUM_F" "$SMOKE_SEC_SUM_S" "$PASS" "$FAIL" \
+    "$([ "$same" = "1" ] && printf '一致' || printf '不一致（账本有 bug；账本是报告不是判定，退出码不受影响）')"
+  return 0
+}
 
 # ── 全量门禁互斥（M23）────────────────────────────────────────────────────────────
 # 事故（2026-09-17）：`team review` 的两轮门禁（M21、V16）与另一套 smoke 并发时，两次都在 6i 段
@@ -140,9 +319,22 @@ if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK
       [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && export SMOKE_LOCK_QUEUED=1
       SMOKE_LOCK_T0="$(date +%s)"
       SMOKE_LOCK_RC=0
-      flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash -c \
-        'marker="$1"; shift; date +%s > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
-        bash "$SKILL_DIR/tests/smoke.sh" "$@" || SMOKE_LOCK_RC=$?
+      # P98：选段子进程跑的是过滤副本（$SMOKE_SEL_COPY_PATH）——排队后要跑的还是**同一份**脚本，
+      # 否则排队一圈回来就变成“标记说选段、内容却是全套”。标记用命令行前缀带回去（不回写环境，
+      # 否则又会被它的子孙继承）；没标记时（正常的全量门禁）与 P66 的解法一模一样。
+      if [ "$SMOKE_SEL_IS_CHILD" = "1" ] && [ -n "$SMOKE_SEL_COPY_PATH" ]; then
+        # 用 `env` 把标记作为**命令行前缀**带进去：`exec` 自己不认 `VAR=value` 前缀（实测 rc=127，
+        # `exec: SMOKE_SEL_CHILD=1: not found`）——这正是 §36 覆盖不到的组合（嵌套跑带 NO_LOCK）。
+        flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash -c \
+          'marker="$1"; shift; date +%s > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
+          env SMOKE_SEL_CHILD=1 SMOKE_SEL_SKILL_DIR="$SMOKE_SEL_CHILD_DIR" \
+          SMOKE_SEL_DECISION="$SMOKE_SEL_CHILD_DECISION" SMOKE_SEL_COPY="$SMOKE_SEL_COPY_PATH" \
+          bash "$SMOKE_SEL_COPY_PATH" "$@" || SMOKE_LOCK_RC=$?
+      else
+        flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash -c \
+          'marker="$1"; shift; date +%s > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
+          bash "$SKILL_DIR/tests/smoke.sh" "$@" || SMOKE_LOCK_RC=$?
+      fi
       if [ ! -s "$SMOKE_LOCK_MARKER" ]; then
         rm -f "$SMOKE_LOCK_MARKER" 2>/dev/null || true
         if [ "$SMOKE_LOCK_RC" -eq 1 ]; then
@@ -216,8 +408,12 @@ cond_skip() { # <段落标记> [<原因>]：条件不满足时的跳过出口（
 PASS=0; FAIL=0
 section() {
   [ -z "${SMOKE_TMP_CANARY:-}" ] || smoke_tmp_guard "段落 $1 开始时"
+  smoke_section_close            # P98 账本 × P70 看门狗：上一段在这里收口（一条统一收口行）
+  SMOKE_SEC_N=$((SMOKE_SEC_N + 1))
+  SMOKE_SEC_OPEN_KEY="${1%% · *}"; SMOKE_SEC_OPEN_ID="$1"
+  SMOKE_SEC_P0=$PASS; SMOKE_SEC_F0=$FAIL; SMOKE_SEC_S0=$SKIP_N
   SMOKE_LAST_SECTION="$1"
-  section_guard_begin "$1"
+  section_guard_begin "$1"       # P70：开这一段（打印唯一的开跑行：== #N id == ISO · 预算 Ns）
 }
 ok()  { section_guard_check; printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() {
@@ -7528,6 +7724,11 @@ if [ "$FAST_REQ" = "1" ]; then
   fi
   assert_not_file "$TMP/pm-args.log" "FAST 没有拉起假 PM（巡检段被跳过）"
   assert_not_file "$REPO/.pi/team/state/capacity.log" "FAST 没有真巡检写容量日志（watch --once 段被跳过）"
+  if [ "$SELECT_MODE" = "1" ]; then
+    # 这张表是**全套**门禁的自检：它要求「没跑的段都打印过 SKIP」。选段运行里没被选中的段既没跑也
+    # 没跳过（未跑清单在收尾里），这条断言对它不成立 —— 显式跳过并说明，不红（P98/2.4）。
+    printf '  \033[2m（选段运行：跳过「预期段落都被跳过」这条全套自检；未跑清单见收尾）\033[0m\n'
+  else
   for seg in "6·dispatch 真拉起" "6g·非 Pi agent 端到端" "6h·派单启动证据（真窗口）" "6i·非 Pi PM 端到端" "6j·worker adapter 启动证据（真窗口）" "6k·worker 存活判据（M37）" "11·close 后窗口" "11b·巡检/pulse" "11b2·PM 存活证据链" \
              "11b3·启动中的 PM（M7.2）" "11b4·PM 交接（P36）" "11c·agent 续跑" \
              "11d·边界守卫（真打字）" "11g②·say 离线投递" "11g③·敲门探测" "11j·pulse 迁移夹具" \
@@ -7537,6 +7738,7 @@ if [ "$FAST_REQ" = "1" ]; then
     if skipped "$seg"; then ok "已显式跳过并打印 SKIP：$seg"
     else bad "段落 [$seg] 在 FAST 模式下既没跳过也没标记——快慢分层漏了"; fi
   done
+  fi
 fi
 
 # ---------------------------------------------------------------- 17. 迁移指南（M7.1）
@@ -12505,7 +12707,7 @@ assert_match "$P66D/red.log" '排队超限：等满 [0-9]+s' "34b① 一行说�
 assert_match "$P66D/red.log" "排队超限.*cmd=p66-holder" "34b① 那一行点名 <lock>.holder 里的持有者"
 assert_has "$P66D/red.log" "没有运行" "34b① 那一行说明本套没有运行（不是对代码的判定）"
 assert_has "$P66D/red.log" "另一套全量 smoke 正在跑" "34b①（既有行为）排队前也打印持有者"
-assert_not "$P66D/red.log" "== 0 · 临时仓库 ==" "34b① 子套件一次都没跑（输出里没有段落头）"
+assert_not "$P66D/red.log" "0 · 临时仓库" "34b① 子套件一次都没跑（输出里没有段落头）"
 assert_not "$P66D/red.log" "轮到本套了" "34b① 也没有「轮到本套了（排过队）」"
 assert_eq "34b① holder 还写着持锁者（子进程没跑，没被改写）" \
   "$(md5sum "$P66_LOCK.holder" 2>/dev/null | cut -d' ' -f1)" "$P66_HOLDER_FP"
@@ -12580,6 +12782,334 @@ if [ -f "$SKILL_DIR/tests/panel-knobs.sh" ]; then
 else
   bad "35 旋钮完整性：缺 tests/panel-knobs.sh（旋钮不得漏进真路径的检查没了）"
 fi
+# ---------------------------------------------------------------- 36. 选段与分段账本自检（P98 · gate-runtime-budget）
+# 纯逻辑（不起 tmux / 不跑真进程），FAST 与全量都跑。钉四件事：
+#   ① `section-select.sh --check` 绿；四种腐烂（缺行 / 模式变窄 / 未知 needs / 声明豁免类）都红且点名；
+#   ② 三个决定形状（NONE / RUN / FULL）与两种硬错误（未知 key / 路径出界）逐条对照验收表；
+#   ③ 账本：嵌套跑一次小选段，核对「跑了的段数 == 选择器给的 key 数 + 每段一条收口行 + 增量之和 == 结果行
+#      总数 + 最慢段汇总」；用一棵注入 sleep 的变体树证明「慢段照旧绿、秒数真实」；
+#   ④ 选段运行自述 + 「选段只对跑了的段负责」：注入一条必红断言到未选中的段不影响退出码，选中它非 0。
+# 全套自检（14c 的跳过清单）在选段模式下会显式跳过，见那里的说明。
+section "36 · 选段与分段账本自检（P98 · gate-runtime-budget）"
+SEL36="$SKILL_DIR/tests/section-select.sh"
+P98_NEST_TMP="$TMP/p98-nest-tmp"; rm -rf "$P98_NEST_TMP"; mkdir -p "$P98_NEST_TMP"
+# 嵌套跑门禁：私有 TMPDIR / 清掉继承身份 / FAST / 不排队（不起真进程，本段全程纯逻辑）
+p98_nest() { # <树> <日志> <参数…>；额外 env 由调用方放在 P98_NEST_ENV 里
+  local tree="$1" log="$2" extra="${P98_NEST_ENV:-}"; shift 2
+  env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT_MODEL \
+      -u SMOKE_TMP_RUN_ID -u SMOKE_TMP_LEDGER -u TEAM_SMOKE_KEEP -u TEAM_TMP_KEEP \
+      -u SMOKE_SEL_CHILD -u SMOKE_SEL_SKILL_DIR -u SMOKE_SEL_DECISION -u SMOKE_SEL_COPY \
+      TMPDIR="$P98_NEST_TMP" TEAM_SMOKE_FAST=1 TEAM_SMOKE_NO_LOCK=1 $extra \
+      bash "$tree/tests/smoke.sh" "$@" >"$log" 2>&1
+}
+# <日志> → P98_CLOSE_N / P98_SUM_P / P98_SUM_F / P98_SUM_S / P98_RES_P / P98_RES_F
+p98_ledger() {
+  local out
+  out="$(sed 's/\x1b\[[0-9;]*m//g' "$1" | awk '
+    /^#[0-9]+ / && /· 用时 [0-9]+s · ✓[0-9]+ ✗[0-9]+ SKIP[0-9]+ · ticks [0-9]+$/ {
+      p = ""; f = ""; k = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^✓[0-9]+$/) p = $i
+        else if ($i ~ /^✗[0-9]+$/) f = $i
+        else if ($i ~ /^SKIP[0-9]+$/) k = $i
+      }
+      gsub(/[^0-9]/, "", p); gsub(/[^0-9]/, "", f); gsub(/[^0-9]/, "", k)
+      n++; sp += p; sf += f; sk += k; next
+    }
+    /== .*结果 ==/ { rp = ""; rf = ""; for (i = 1; i <= NF; i++) { if ($i == "✓") rp = $(i + 1); if ($i == "✗") rf = $(i + 1) }
+      gsub(/[^0-9]/, "", rp); gsub(/[^0-9]/, "", rf); resp = rp + 0; resf = rf + 0 }
+    END { printf "%d %d %d %d %d %d", n+0, sp+0, sf+0, sk+0, resp+0, resf+0 }
+  ')"
+  read -r P98_CLOSE_N P98_SUM_P P98_SUM_F P98_SUM_S P98_RES_P P98_RES_F <<<"$out"
+  return 0
+}
+# 映射表副本（--check 的四个方向都在副本上翻，改完即弃；分析对象仍是真树）
+p98_table() { # <名字> [<awk-脚本>] → 打印副本路径
+  local d="$TMP/p98-table-$1"
+  rm -rf "$d"; mkdir -p "$d"
+  if [ $# -ge 2 ]; then
+    awk -F'\t' -v OFS='\t' "$2" "$SKILL_DIR/tests/section-paths.tsv" > "$d/table.tsv"
+  else
+    cp "$SKILL_DIR/tests/section-paths.tsv" "$d/table.tsv"
+  fi
+  printf '%s' "$d/table.tsv"
+}
+# 变体树：产品面软链到真树，tests/ 是真副本（只有小文件），可改 smoke.sh 造现场
+p98_variant() { # <名字> → 打印变体 skill 树路径（仓库根按真树软链；tests/ 是真副本，可改 smoke.sh / 换表造现场）
+  local base="$TMP/p98-tree-$1" d="$TMP/p98-tree-$1/skills/teamsmith" r x b
+  r="$(cd -P "$(dirname "$(dirname "$SKILL_DIR")")" && pwd)"
+  rm -rf "$base"; mkdir -p "$d/tests" "$base/skills"
+  for x in "$r"/*; do
+    b="$(basename "$x")"; [ "$b" = "skills" ] && continue
+    ln -s "$x" "$base/$b"
+  done
+  for x in "$r"/.[!.]*; do
+    b="$(basename "$x")"; [ "$b" = ".git" ] && continue
+    ln -s "$x" "$base/$b"
+  done
+  for x in "$r"/skills/*; do
+    b="$(basename "$x")"; [ "$b" = "teamsmith" ] && continue
+    ln -s "$x" "$base/skills/$b"
+  done
+  for x in "$SKILL_DIR"/*; do
+    b="$(basename "$x")"; [ "$b" = "tests" ] && continue
+    ln -s "$x" "$d/$b"
+  done
+  for x in "$SKILL_DIR"/tests/*; do
+    b="$(basename "$x")"
+    ln -s "$x" "$d/tests/$b"
+  done
+  rm -f "$d/tests/smoke.sh" "$d/tests/section-paths.tsv"
+  cp "$SKILL_DIR/tests/smoke.sh" "$d/tests/smoke.sh"
+  cp "$SKILL_DIR/tests/section-paths.tsv" "$d/tests/section-paths.tsv"
+  printf '%s' "$d"
+}
+
+# ── ① --check：真树绿 + 四个方向各自红且点名 ───────────────────────────────────────────
+if bash "$SEL36" --check >"$TMP/p98-check.log" 2>&1; then
+  ok "36① --check 绿：$(sed -n 's/^== 选段自检 ==  //p' "$TMP/p98-check.log" | tail -1)"
+else
+  bad "36① --check 红：$(grep -m1 '^bad:' "$TMP/p98-check.log" 2>/dev/null | cut -c1-160)"
+fi
+P98_T0="$(p98_table clean)"
+if bash "$SEL36" --check --table "$P98_T0" >/dev/null 2>&1; then ok "36① 副本表（未改）也绿（负面夹具的基准）"; else bad "36① 副本表未改就红（夹具本身有问题）"; fi
+p98_flip() { # <名字> <期望命中的字样> <awk-脚本>
+  local t log
+  t="$(p98_table "$1" "$3")"
+  log="$TMP/p98-check-$1.log"
+  if bash "$SEL36" --check --table "$t" >"$log" 2>&1; then
+    bad "36① 腐烂 [$1] 没有被 --check 抓住（期望红）"
+  elif grep -qF -- "$2" "$log"; then
+    ok "36① 腐烂 [$1] 变红且点名（$2）"
+  else
+    bad "36① 腐烂 [$1] 红了但没点名 [$2]：$(grep -m1 '^bad:' "$log" | cut -c1-160)"
+  fi
+}
+p98_flip row-missing '源码里有段没有行：17' '$1!="17"'
+p98_flip pattern-narrow 'token skills/teamsmith/tests/section-select.sh' 'BEGIN{OFS="\t"} $1=="36"{$3="-"} {print}'
+p98_flip needs-unknown 'needs 指向未知段：no-such-seg' 'BEGIN{OFS="\t"} $1=="17"{$4="no-such-seg"} {print}'
+p98_flip exempt-claimed '声明了豁免类路径' 'BEGIN{OFS="\t"} $1=="17"{$3=$3" docs/team/*"} {print}'
+p98_flip literal-missing '字面模式在工作树里不存在：skills/teamsmith/tests/p98-no-such-literal.md' \
+  'BEGIN{OFS="\t"} $1=="0"{$3=$3" skills/teamsmith/tests/p98-no-such-literal.md"} {print}'
+# 段正文里塞一个没声明的路径 token（scratch 变体树）→ 红且点名 token 与源码行
+P98_TK="$(p98_variant token)"
+P98_TK_ROOT="$(cd -P "$P98_TK/../.." && pwd)"
+if bash "$SEL36" --check --root "$P98_TK_ROOT" >"$TMP/p98-check-token-clean.log" 2>&1; then
+  ok "36① 变体树注入前是绿的（token 夹具的负面对照）"
+else
+  bad "36① 变体树注入前就红了（夹具本身有问题）：$(grep -m1 '^bad:' "$TMP/p98-check-token-clean.log" | cut -c1-160)"
+fi
+perl -0pi -e 's/(section "1 · doctor（未初始化应失败）"\n)/$1: P98 夹具 token skills\/teamsmith\/tests\/section-select.sh\n/' \
+  "$P98_TK/tests/smoke.sh"
+grep -qF 'P98 夹具 token skills/teamsmith/tests/section-select.sh' "$P98_TK/tests/smoke.sh" \
+  || bad "36① 未声明 token 注入没打上（1 段的形状变了？）"
+if bash "$SEL36" --check --root "$P98_TK_ROOT" >"$TMP/p98-check-token.log" 2>&1; then
+  bad "36① 段正文塞了未声明 token：[--check] 没抓住（期望红）"
+elif grep -qF 'token skills/teamsmith/tests/section-select.sh' "$TMP/p98-check-token.log" \
+     && grep -q '源码行 [0-9]' "$TMP/p98-check-token.log"; then
+  P98_TKLINE="$(sed -n 's/.*源码行 \([0-9]*\)）.*/\1/p' "$TMP/p98-check-token.log" | head -1)"
+  ok "36① 未声明 token → 红且点名 token（skills/teamsmith/tests/section-select.sh）与源码行（$P98_TKLINE）"
+else
+  bad "36① 未声明 token 红了但没点名 token 与行号：$(grep -m1 '^bad:' "$TMP/p98-check-token.log" | cut -c1-160)"
+fi
+
+# ── ② 决定形状与硬错误（纯逻辑，直接问选择器） ────────────────────────────────────────
+P98_DOCS="$(bash "$SEL36" --paths docs/team/BOARD.md docs/team/reports/P97-dev3.md 2>&1)"
+assert_has_echo "$P98_DOCS" "decision=NONE" "36② docs 路径 → NONE"
+assert_has_echo "$P98_DOCS" "没有段落需要运行" "36② NONE 明说没有段需要跑"
+P98_RUN="$(bash "$SEL36" --paths skills/teamsmith/scripts/lib/outbox.sh 2>&1)"
+assert_has_echo "$P98_RUN" "decision=RUN" "36② 产品路径 → RUN"
+P98_RUN_KEYS="$(printf '%s\n' "$P98_RUN" | awk -F'\t' 'NF==2{printf "%s ", $1}')"
+P98_MISS=""
+for _k in 12b 12b-h0 12b-h0b 12b-h0c 12b-h0d 12b-pi 12b-pi2 12b-pi3 26 27 42 44 46 47; do
+  case " $P98_RUN_KEYS " in *" $_k "*) ;; *) P98_MISS="$P98_MISS $_k" ;; esac
+done
+unset _k
+if [ -z "$P98_MISS" ]; then ok "36② outbox 路径选出的 key 覆盖 14 个投递段（含前导与 needs 闭包）"; else bad "36② outbox 选段漏了：$P98_MISS"; fi
+P98_FULL="$(bash "$SEL36" --paths ci/some-new-thing 2>&1)"
+assert_has_echo "$P98_FULL" "decision=FULL" "36② 没有任何行声明的路径 → FULL 兜底"
+assert_has_echo "$P98_FULL" "ci/some-new-thing" "36② FULL 点名那条未被声明的路径"
+P98_RC=0; bash "$SEL36" --select no-such-section >"$TMP/p98-unknown.log" 2>&1 || P98_RC=$?
+assert_eq "36② 未知 key → 非零" "$P98_RC" "2"
+assert_has "$TMP/p98-unknown.log" "no-such-section" "36② 未知 key 被点名"
+P98_RC=0; bash "$SEL36" --paths /etc/passwd >"$TMP/p98-outside.log" 2>&1 || P98_RC=$?
+assert_eq "36② 仓库外路径 → 非零" "$P98_RC" "2"
+assert_has "$TMP/p98-outside.log" "路径出界" "36② 路径出界给理由"
+P98_RC=0; bash "$SKILL_DIR/tests/smoke.sh" --select no-such-section >"$TMP/p98-unknown-suite.log" 2>&1 || P98_RC=$?
+assert_eq "36② 门禁 --select 未知 key → 非零（且什么都没跑）" "$P98_RC" "2"
+assert_not "$TMP/p98-unknown-suite.log" "0 · 临时仓库" "36② 被拒时一个段头都没打"
+
+# ── ③ 账本：嵌套跑一次 --paths 选段（前导 + 0b），核对收口行/增量之和/最慢段 ─────────────
+# 嵌套用 --select 0b（不用 --paths：那条路径若被 36 行声明，嵌套跑会再选中 36 段 → 自递归）
+P98_SEL_N="$(bash "$SEL36" --select 0b 2>/dev/null | awk -F'\t' 'NF==2{n++} END{print n+0}')"
+P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p98-nest-run.log" --select 0b
+P98_NEST_RC=$?
+assert_eq "36③ 选段嵌套跑退出 0" "$P98_NEST_RC" "0"
+assert_has "$TMP/p98-nest-run.log" "decision=RUN" "36③ 运行头点名 decision=RUN"
+assert_has "$TMP/p98-nest-run.log" "== 选段结果 ==" "36③ 结果行用 == 选段结果 =="
+assert_not "$TMP/p98-nest-run.log" "smoke 全绿" "36③ 选段运行不喊 smoke 全绿"
+assert_not "$TMP/p98-nest-run.log" "== 结果 ==" "36③ 选段运行没有 == 结果 =="
+assert_not "$TMP/p98-nest-run.log" "26 · 面板" "36③ 没选的段没有跑（26 段头不在）"
+assert_eq "36③ 跑了的段数 == 选择器给的 key 数" "$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep -cE '^#[0-9]+ ')" "$P98_SEL_N"
+p98_ledger "$TMP/p98-nest-run.log"
+assert_eq "36③ 段落增量之和 == 结果行总数（✓）" "$P98_SUM_P" "$P98_RES_P"
+assert_eq "36③ 段落增量之和 == 结果行总数（✗）" "$P98_SUM_F" "$P98_RES_F"
+assert_has "$TMP/p98-nest-run.log" "== 最慢 5 段 ==" "36③ 最慢 5 段汇总在结果行之前"
+assert_eq "36③ 最慢段汇总行数 == min(5, 跑了的段数)" \
+  "$(sed -n '/== 最慢 5 段 ==/,$p' "$TMP/p98-nest-run.log" | sed 's/\x1b\[[0-9;]*m//g' | grep -cE '^  #[0-9]+ ')" \
+  "$(awk -v n="$P98_SEL_N" 'BEGIN{print (n>5)?5:n}')"
+assert_has "$TMP/p98-nest-run.log" "账本自查：" "36③ 账本自查行在（报告不是判定）"
+if tail -25 "$TMP/p98-nest-run.log" | grep -qF '这次没跑的段'; then ok "36③ 未跑清单在尾部 25 行里（team review 记的就是尾部）"; else bad "36③ 未跑清单不在尾部 25 行里"; fi
+if sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep -E '^#[0-9]+ ' | grep -qF "$SMOKE_RED_MARK"; then
+  bad "36③ 收口行带了门禁红标（会污染 flip-m33 的红标计数）"
+else
+  ok "36③ 收口行不带门禁红标（flip-m33 数的就是那串）"
+fi
+# 最后一段的收口行必须在结果行之前，且账本自查行自我声明「一致」
+P98_LAST_CLOSE_L="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep -nE '^#[0-9]+ ' | tail -1 | cut -d: -f1)"
+P98_RESULT_L="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep -n '== 选段结果 ==' | tail -1 | cut -d: -f1)"
+if [ -n "$P98_LAST_CLOSE_L" ] && [ -n "$P98_RESULT_L" ] && [ "$P98_LAST_CLOSE_L" -lt "$P98_RESULT_L" ]; then
+  ok "36③ 最后一段的收口行在结果行之前（行 $P98_LAST_CLOSE_L < $P98_RESULT_L）"
+else
+  bad "36③ 最后一段的收口行不在结果行之前（收口 [$P98_LAST_CLOSE_L] / 结果 [$P98_RESULT_L]）"
+fi
+if sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep '账本自查' | grep -q '—— 一致'; then
+  ok "36③ 账本自查行说「一致」"
+else
+  bad "36③ 账本自查行没说一致：$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep '账本自查' | head -1)"
+fi
+# 变体树不在 git 仓库里（p98_variant 故意不软链 .git），0d 的冲突标记守卫要显式喂真仓库根。
+# 不能只信 SMOKE_INVOKE_ROOT：flip-m33 从 /tmp 沙盒里跑门禁（cwd 不是仓库）时它是空的，那时必须
+# 从 $SKILL_DIR 自己算——否则变体前导段的 0d 必红（flip-m33 实测：3 条红全来自这里）。
+P98_MARKER_ROOT="${SMOKE_INVOKE_ROOT:-$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
+# 只是慢的段必须保持绿：变体树给 0c 段注入 1 秒 sleep（断言一条不改），秒数要反映出来
+P98_SLOW="$(p98_variant slow)"
+perl -0pi -e 's/(section "0c · 静态检查（函数结尾的 set -e 陷阱）"\n)/$1sleep 1\n/' "$P98_SLOW/tests/smoke.sh"
+grep -q '^sleep 1$' "$P98_SLOW/tests/smoke.sh" || bad "36③ 慢段变体没打上（注入点形状变了）"
+P98_NEST_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT" p98_nest "$P98_SLOW" "$TMP/p98-slow.log" --select 0c
+P98_SLOW_RC=$?
+assert_eq "36③ 故意变慢的段照旧绿（退出码 0）" "$P98_SLOW_RC" "0"
+P98_SLOW_SEC="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-slow.log" | awk '/^#[0-9]+ 0c / { for (i = 1; i < NF; i++) if ($i == "用时" && $(i+1) ~ /^[0-9]+s$/) { s = $(i+1); sub(/s$/, "", s); print s; exit } }')"
+if awk -v s="$P98_SLOW_SEC" 'BEGIN { exit (s + 0 >= 0.9) ? 0 : 1 }'; then
+  ok "36③ 慢段的收口行报出真实秒数（${P98_SLOW_SEC}s ≥ 0.9s）"
+else
+  bad "36③ 慢段的收口行没反映睡眠（读到 [${P98_SLOW_SEC}]）"
+fi
+# 夹具旋钮：SMOKE_SLOWEST_N 只在 TEAM_SMOKE_FIXTURE=1 下生效，裸设必须打印忽略
+P98_NEST_ENV="SMOKE_SLOWEST_N=2" p98_nest "$SKILL_DIR" "$TMP/p98-knob-off.log" --select 0b
+assert_has "$TMP/p98-knob-off.log" "忽略 SMOKE_SLOWEST_N=2" "36③ 裸设 SMOKE_SLOWEST_N 被忽略并打印"
+assert_has "$TMP/p98-knob-off.log" "== 最慢 5 段 ==" "36③ 忽略了旋钮就还是默认 N=5"
+P98_NEST_ENV="TEAM_SMOKE_FIXTURE=1 SMOKE_SLOWEST_N=2" p98_nest "$SKILL_DIR" "$TMP/p98-knob-on.log" --select 0b
+assert_has "$TMP/p98-knob-on.log" "== 最慢 2 段 ==" "36③ 夹具开关打开时 N 被采信（2）"
+
+# ── ④ 选段只对「跑了的段」负责 + NONE 什么都不跑 ────────────────────────────────────────
+P98_NONE_RC=0
+P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p98-none.log" --paths docs/team/BOARD.md || P98_NONE_RC=$?
+assert_eq "36④ --paths docs-only 退出 0" "$P98_NONE_RC" "0"
+assert_has "$TMP/p98-none.log" "没有段落需要运行" "36④ NONE 明说没有段需要跑"
+assert_not "$TMP/p98-none.log" "== 结果 ==" "36④ NONE 没有结果行"
+assert_not "$TMP/p98-none.log" "smoke 全绿" "36④ NONE 不喊全绿"
+assert_not "$TMP/p98-none.log" "0 · 临时仓库" "36④ NONE 一个段都没起"
+# 选段标记只属于**一个进程**：选段子进程里再起的嵌套 smoke 必须照自己的参数走，不许继承标记静默跑整套
+# （P98 实测过指数发散：过滤副本 → 36 段 → 负例 → 全套 → 36 段 → …）。现场 = 变体树的 1 段正文里
+# 注入一行，调夹具脚本再起一个 --select no-such-section；标记若泄漏，那次调用会跑整套（timeout 兜住）。
+P98_LK="$(p98_variant leak)"
+P98_LK_NEG="$TMP/p98-leak-neg.sh"
+cat > "$P98_LK_NEG" <<'EOS'
+if timeout 120 bash "$SKILL_DIR/tests/smoke.sh" --select no-such-section >"$TMP/p98-leak-neg.log" 2>&1; then
+  printf '  ✗ P98 夹具：嵌套的 --select no-such-section 没被拒（选段标记泄漏给子孙）\n'
+else
+  rc=$?
+  if [ "$rc" = "2" ]; then
+    printf '  ✓ P98 夹具：嵌套的 --select no-such-section 仍被拒（rc=2，标记没泄漏）\n'
+  else
+    printf '  ✗ P98 夹具：嵌套的负例 rc=%s（期望 2）\n' "$rc"
+  fi
+fi
+EOS
+perl -0pi -e 's/(section "1 · doctor（未初始化应失败）"\n)/$1TMP="\$TMP" SKILL_DIR="\$SKILL_DIR" bash "\$P98_LK_NEG"\n/' "$P98_LK/tests/smoke.sh"
+grep -qxF 'TMP="$TMP" SKILL_DIR="$SKILL_DIR" bash "$P98_LK_NEG"' "$P98_LK/tests/smoke.sh" \
+  || bad "36④ 泄漏夹具注入没打上（1 段的形状变了？）"
+P98_LK_RC=0
+P98_LK_ENV="P98_LK_NEG=$P98_LK_NEG"
+[ -n "$P98_MARKER_ROOT" ] && P98_LK_ENV="$P98_LK_ENV TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT"
+P98_NEST_ENV="$P98_LK_ENV" p98_nest "$P98_LK" "$TMP/p98-leak.log" --select 1 || P98_LK_RC=$?
+assert_eq "36④ 选段子进程里的嵌套 smoke 照自己的参数走（负例仍被拒）" "$P98_LK_RC" "0"
+assert_has "$TMP/p98-leak.log" "P98 夹具：嵌套的 --select no-such-section 仍被拒（rc=2，标记没泄漏）" "36④ 嵌套负例在选段子进程里仍被拒"
+assert_not "$TMP/p98-leak.log" "嵌套的 --select no-such-section 没被拒" "36④ 没有「标记泄漏 → 静默跑全套」的现场"
+P98_FT="$(p98_variant fail)"
+perl -0pi -e 's/(section "1 · doctor（未初始化应失败）"\n)/$1bad "P98 夹具：注入的必红断言（选段只对跑了的段负责）"\n/' "$P98_FT/tests/smoke.sh"
+grep -q 'P98 夹具：注入的必红断言' "$P98_FT/tests/smoke.sh" || bad "36④ 必红注入没打上（1 段的形状变了？）"
+P98_FT_ENV=""
+[ -n "$P98_MARKER_ROOT" ] && P98_FT_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT"
+P98_RC_A=0
+P98_NEST_ENV="$P98_FT_ENV" p98_nest "$P98_FT" "$TMP/p98-failA.log" --select 0,0b || P98_RC_A=$?
+assert_eq "36④ 注入的必红段没被选中 → 选段仍退出 0" "$P98_RC_A" "0"
+assert_not "$TMP/p98-failA.log" "P98 夹具：注入的必红断言" "36④ 没被选中的段确实没跑"
+P98_RC_B=0
+P98_NEST_ENV="$P98_FT_ENV" p98_nest "$P98_FT" "$TMP/p98-failB.log" --select 1 || P98_RC_B=$?
+if [ "$P98_RC_B" -ne 0 ]; then ok "36④ 选中必红段 → 非零退出（$P98_RC_B）"; else bad "36④ 选中必红段却退出了 0（选段把失败吞了）"; fi
+assert_has "$TMP/p98-failB.log" "P98 夹具：注入的必红断言" "36④ 选中的必红段真的跑了并红了"
+assert_has "$TMP/p98-failB.log" "== 选段结果 ==" "36④ 红的选段仍用选段结果 token"
+
+# FULL 兜底：真树里嵌套跑一遍 = 整套递归，所以这里钉的是**运行头/收尾的记账**：变体树的 smoke.sh
+# 只留段声明（选择器仍数得到全部段）、去掉全部段正文（没有段会真的动文件），收尾保留真收尾
+# （同一组函数、同一组 token），于是 `--paths <未声明路径>` 的 FULL 分支可以几秒内完整走一遍。
+# 不真跑全套也是安全性：变体树的文档面是**软链**，14b/18 那类「注入→还原」的夹具会穿过软链写回真树。
+P98_FB="$(p98_variant fullfb)"
+awk '
+  /^# __SMOKE_TAIL__/ { tail = 1 }
+  tail { print; next }
+  /^[[:space:]]*section[[:space:]]+"/ { print; seen = 1; next }
+  seen { next }
+  { print }
+' "$P98_FB/tests/smoke.sh" > "$P98_FB/tests/smoke.sh.stub"
+mv "$P98_FB/tests/smoke.sh.stub" "$P98_FB/tests/smoke.sh"
+P98_FB_RC=0
+P98_NEST_ENV="" p98_nest "$P98_FB" "$TMP/p98-fullfb.log" --paths ci/some-new-thing || P98_FB_RC=$?
+assert_eq "36④ FULL 兜底（空壳变体）退出 0" "$P98_FB_RC" "0"
+assert_has "$TMP/p98-fullfb.log" "decision=FULL" "36④ FULL 兜底运行头点名 decision=FULL"
+P98_FB_N="$(awk -F'\t' '!/^#/ && NF { n++ } END { print n + 0 }' "$SKILL_DIR/tests/section-paths.tsv")"
+assert_has "$TMP/p98-fullfb.log" "运行 ${P98_FB_N}/${P98_FB_N} 段" \
+  "36④ FULL 兜底：运行头说全套都在跑（不是「0/${P98_FB_N} · 没跑 ${P98_FB_N}」）"
+assert_has "$TMP/p98-fullfb.log" "未跑 0 段" "36④ FULL 兜底：运行的段数与未跑数自洽"
+assert_has "$TMP/p98-fullfb.log" "这次不跑的键：（无 —— 全套都在跑）" "36④ FULL 兜底：未跑清单为空"
+assert_has "$TMP/p98-fullfb.log" "ci/some-new-thing ← 没有任何行声明它（也不在豁免类）" "36④ FULL 兜底点名那条没声明的路径"
+assert_has "$TMP/p98-fullfb.log" "== 选段结果 ==" "36④ FULL 兜底用选段结果 token"
+assert_not "$TMP/p98-fullfb.log" "smoke 全绿" "36④ FULL 兜底不喊 smoke 全绿"
+assert_not "$TMP/p98-fullfb.log" "== 结果 ==" "36④ FULL 兜底没有 == 结果 =="
+
+# ── ⑤ 锁 × 选段（P98 × P66 的组合：合并 main 时这里真的碎过一次）───────────────────────────
+# 全量模式下选段子进程要排队：`flock` 拿到锁后必须把**过滤副本**重新跑起来，四个选段标记只能以
+# 命令行前缀（env）带回去 —— export 会被它的子孙继承，`exec VAR=value …` 又不成立（实测 rc=127、
+# `exec: SMOKE_SEL_CHILD=1: not found`）。§36 其他嵌套跑都带 NO_LOCK，覆盖不到这条组合，所以这里
+# 两个方向都钉：绿侧（锁空闲）真的跑过滤副本；红侧（锁被持有 + WAIT=1）排队超限点名 holder + exit 2。
+# 私有锁 / 私有 TMPDIR，不碰机器锁。
+P98_LS="$TMP/p98-locksel"; rm -rf "$P98_LS"; mkdir -p "$P98_LS/tmp"
+p98_locksel() { # <日志> <wait 秒>
+  ( cd "$P98_LS" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      -u TEAM_AGENT_MODEL -u TEAM_SKILL_DIR -u TEAM_DOCS_DIR -u TEAM_AGENT \
+      -u SMOKE_TMP_RUN_ID -u SMOKE_TMP_LEDGER -u TEAM_SMOKE_KEEP -u TEAM_TMP_KEEP \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_FAST \
+      -u SMOKE_SEL_CHILD -u SMOKE_SEL_SKILL_DIR -u SMOKE_SEL_DECISION -u SMOKE_SEL_COPY \
+      TEAM_SMOKE_LOCK="$P98_LS/lock" TEAM_SMOKE_LOCK_WAIT="$2" TMPDIR="$P98_LS/tmp" \
+      bash "$SKILL_DIR/tests/smoke.sh" --select 0b ) >"$1" 2>&1
+}
+: >>"$P98_LS/lock"
+P98_LS_RC=0; p98_locksel "$TMP/p98-locksel-green.log" 10 || P98_LS_RC=$?
+assert_eq "36⑤ 锁空闲：--select 0b 的排队路径仍然跑过滤副本（退出 0）" "$P98_LS_RC" "0"
+assert_has "$TMP/p98-locksel-green.log" "全量门禁互斥：持有" "36⑤ 过滤副本作为持锁子进程跑了（标记以 env 前缀带回）"
+assert_not "$TMP/p98-locksel-green.log" "26 · 面板" "36⑤ 没被丢成整套（没选的段没跑）"
+assert_has "$TMP/p98-locksel-green.log" "== 选段结果 ==" "36⑤ 选段结果 token 在"
+flock --close -x "$P98_LS/lock" sleep 20 & P98_LS_HOLD=$!
+sleep 0.4
+printf '%s pid=%s cmd=p98-locksel-holder\n' "$(date -Is)" "$P98_LS_HOLD" > "$P98_LS/lock.holder"
+P98_LS_RC2=0; p98_locksel "$TMP/p98-locksel-red.log" 1 || P98_LS_RC2=$?
+kill "$P98_LS_HOLD" 2>/dev/null; wait "$P98_LS_HOLD" 2>/dev/null || true
+assert_eq "36⑤ 锁被持有 + WAIT=1 → exit 2（不是 1、不静默）" "$P98_LS_RC2" "2"
+assert_match "$TMP/p98-locksel-red.log" "排队超限.*cmd=p98-locksel-holder" "36⑤ 排队超限点名 <lock>.holder 里的持有者"
+assert_not "$TMP/p98-locksel-red.log" "0b · skill 可被 pi 解析器加载" "36⑤ 排队超限时一段都没跑"
+
 # ---------------------------------------------------------------- 37. 读路径：根一次解析 + 单进程扫描（M50）
 # 实测现场（M50 任务书，PM 在 main 上量的）：BOARD.md 只有 141 行，`team digest` 却要 89 秒 ——
 # 每次辅助调用都重新解析仓库根（~5 次 rev-parse），每份报告/复验记录各问一轮 git
@@ -14853,11 +15383,12 @@ else
   bad "51 缺 tests/config-cli.sh"
 fi
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
-# 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行、sections.tsv 一行。
+# 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：
+# 用时 + ✓/✗/SKIP 增量 + ticks）、sections.tsv 一行。
 section "14d · P70 本套自述对账（段落账目 + 无误判）"
 P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
 P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+ · 预算 [0-9]+s' "$SG_LOG" 2>/dev/null || true)"
-P70_S_CLOSES="$(grep -cE '^#[0-9]+ .* 用时 [0-9]+s · ticks [0-9]+$' "$SG_LOG" 2>/dev/null || true)"
+P70_S_CLOSES="$(grep -cE '^#[0-9]+ .* 用时 [0-9]+s · ✓[0-9]+ ✗[0-9]+ SKIP[0-9]+ · ticks [0-9]+$' "$SG_LOG" 2>/dev/null || true)"
 P70_S_ROWS="$(awk 'NR>1' "$SG_TIMING" | wc -l | tr -d ' ')"
 assert_eq "P70 对账：开跑行都带 #N + ISO 时间 + 预算" "$P70_S_SHAPED" "$P70_S_STARTS"
 assert_eq "P70 对账：当前段已开跑、上一段已收（starts = closes + 1）" "$P70_S_STARTS" "$((P70_S_CLOSES + 1))"
@@ -14884,13 +15415,28 @@ done < <(grep -oE '^… 段落 #[0-9]+' "$SG_LOG" 2>/dev/null | grep -oE '[0-9]+
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'
 
+# __SMOKE_TAIL__（P98 选段：本行起是收尾；--select 的过滤副本从这里原样保留到底，别再插段）
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
-section_guard_finish   # P70：收最后一段 + 关看门狗（结果行之前；干净跑不留哨兵文件）
-printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
+smoke_section_close          # 最后一段也必须有收口行（统一行），且在结果行之前
+section_guard_finish         # P70：关看门狗（最后一段已收口；干净跑不留哨兵文件）
+smoke_slowest_summary        # 最慢 N 段（纯记录：不判定、不改退出码）
+smoke_ledger_selfcheck       # 段落增量之和 vs 结果行总数（不一致只打印一行）
+if [ "$SELECT_MODE" = "1" ]; then
+  printf '\n\033[1m== 选段结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
+else
+  printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
+fi
 if [ "$FAST_REQ" = "1" ]; then
   printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \
     "$SKIP_N" "${SKIP_SEGS#|}"
 fi
-[ "$FAIL" -eq 0 ] && { printf '\033[32msmoke 全绿\033[0m\n'; exit 0; }
+# 选段运行：未跑清单就在最后几行里（team review 记录的就是尾部）；不是 RUN 子进程才在这里打（RUN 由
+# 父进程在子进程结束后打，保证它落在最后）
+if [ "$SELECT_MODE" = "1" ] && [ "$SMOKE_SEL_IS_CHILD" != "1" ]; then smoke_select_tail; fi
+if [ "$FAIL" -eq 0 ]; then
+  # 选段运行绝不打印 smoke 全绿：它只说明「跑了的段是绿的」，不是全套门禁（D7）
+  [ "$SELECT_MODE" = "1" ] && exit 0
+  printf '\033[32msmoke 全绿\033[0m\n'; exit 0
+fi
 printf '\033[31msmoke 有失败项（--keep 保留现场）\033[0m\n'
 exit 1

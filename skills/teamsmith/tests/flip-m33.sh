@@ -150,7 +150,10 @@ reaper() { # <log> <smoke-pid>；失败时把原因写进 <log> 并返回 1
   done
   [ -n "$d" ] || { printf 'reaper: 没等到本轮新场景目录\n' >>"$log"; return 1; }
   SCENE_DIR="$d"
-  for i in $(seq 1 6000); do                     # ≤300s 等 26-i 的产物（= 马上进 26-j）
+  # 12000×0.05=600s 等 26-i 的产物（= 马上进 26-j）。原上限 300s 在 P97 时代就已不够：那两轮 FAST
+  # 实测的 26 累计时刻是 r1=331s / r2=325s（P98 复量 342s）——收割机必然等不到锤点、夹具假红，
+  # 与被测树无关。上限抬到 600s（FAST 全套当前约 650s），断言一条不改。
+  for i in $(seq 1 12000); do
     [ -e "$d/p10-branch.txt" ] && break
     [ -d "$d" ] || break
     kill -0 "$pid" 2>/dev/null || break

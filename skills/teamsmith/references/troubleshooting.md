@@ -617,7 +617,9 @@ almost every report:
 ## 17. A long task (a gate, a build) has nobody to tell when it finishes
 
 `TEAM_GATES` on a real project can take tens of minutes. Run it inside the agent's turn and the turn is occupied;
-walk away and nobody knows it finished.
+walk away and nobody knows it finished. A run **selected** for a known diff is much cheaper: `bash
+skills/teamsmith/tests/smoke.sh --paths <path…>` runs the sections that path affects and lists the ones it did not run
+(see [protocol.md](protocol.md) §9b-2) — the *full* suite is still the delivery/review gate.
 
 **Lane 0 · the team's own lane (default on the built-in Pi paths, nothing to install).** Both the worker and the PM
 Pi commands load `extension/team-bg.ts`, which gives the session `team_bg_run` / `team_bg_wait`: a detached job

@@ -3,7 +3,9 @@
 #
 # 被 `tests/smoke.sh` source（也支持 `bash tests/lib/section-guard.sh --self-test` 自检）。
 # 契约见 `openspec/changes/gate-section-accounting/specs/verification/spec.md`：
-#   * 每段开跑前打印 `== #<N> <id> == <ISO-8601> · 预算 <B>s`；结束时打印 `#<N>` + 用时；
+#   * 每段开跑前打印 `== #<N> <id> == <ISO-8601> · 预算 <B>s`；结束时打印**唯一**的收口行
+#     `#<N> <id> · 用时 <S>s · <✓/✗/SKIP 增量> · ticks <T>`（stdout 与 sections.log 逐字节一致；
+#     增量由 P98 账本经 SG_CLOSE_COUNTS 注入，没有账本时是 `-`）；
 #     每段一行进 `<run tmp>/sections.tsv`（`no id start elapsed_s ticks`）。
 #   * 每段有一个来自 `tests/section-budgets.tsv` 的硬预算（表里没有 → 有界默认值，并在开跑行里说明）；
 #     第一段超预算 → **停跑**：看门狗打印一行点名该段（`#<N>` + id + 预算 + 实际用时）、写现场、
@@ -55,6 +57,7 @@ SG_STUCK_SECTION=""
 SG_BUDGET_OVERRIDE=""
 SG_FAST="${TEAM_SMOKE_FAST:-0}"
 SG_LOCK_NOTE=""
+SG_CLOSE_COUNTS=""   # P98 账本：本段收口行里的 ✓/✗/SKIP 增量（关段前注入；空 → 行里打 `-`）
 
 _sg_now() { date +%s; }
 
@@ -275,11 +278,17 @@ _sg_band_over() {
 
 _sg_close_current() {
   [ "$SG_ARMED" = "1" ] || return 0
-  local elapsed now
+  local elapsed now counts
   now="$(_sg_now)"; elapsed=$(( now - SG_ARMED_EPOCH ))
   [ "$elapsed" -lt 0 ] && elapsed=0
-  printf '  #%s 用时 %ss · ticks %s\n' "$SG_SEC_NO" "$elapsed" "$SG_TICKS"
-  printf '#%s %s 用时 %ss · ticks %s\n' "$SG_SEC_NO" "$SG_SEC_ID" "$elapsed" "$SG_TICKS" >> "$SG_LOG" 2>/dev/null || true
+  SG_ELAPSED="$elapsed"   # P98 账本读回：收口行与 sections.tsv 用同一个数，不再各量一次
+  counts="${SG_CLOSE_COUNTS:--}"; SG_CLOSE_COUNTS=""
+  # 唯一收口行（gate-section-accounting × gate-runtime-budget 的合并形态）：P70 的用时/ticks 与
+  # P98 账本的增量同形同一行。stdout 与 sections.log 逐字节一致；行不带门禁红标、不缩进。
+  printf '\033[2m#%s\033[0m %s · 用时 %ss · %s · ticks %s\n' \
+    "$SG_SEC_NO" "$SG_SEC_ID" "$elapsed" "$counts" "$SG_TICKS"
+  printf '#%s %s · 用时 %ss · %s · ticks %s\n' \
+    "$SG_SEC_NO" "$SG_SEC_ID" "$elapsed" "$counts" "$SG_TICKS" >> "$SG_LOG" 2>/dev/null || true
   printf '%s\t%s\t%s\t%s\t%s\n' "$SG_SEC_NO" "$SG_SEC_ID" "$SG_SEC_START" "$elapsed" "$SG_TICKS" >> "$SG_TIMING" 2>/dev/null || true
   if _sg_band_over "$elapsed" "${SG_BAND:-}"; then
     printf '  \033[33m⚠\033[0m #%s 用时 %ss，超过实测带 %ss（这是记录，不是判定）\n' \
@@ -288,6 +297,12 @@ _sg_close_current() {
   SG_ARMED=0
   SG_SEC_ID=""
   printf 'disarm\n' > "$SG_HEARTBEAT" 2>/dev/null || true
+  return 0
+}
+
+section_guard_close() { # 公共收口入口（P98 账本用）：调用方先给 SG_CLOSE_COUNTS 注入本段增量
+  _sg_close_current
+  SG_CLOSE_COUNTS=""   # 就算没武装（无收口行）也清掉：不让一次注入粘到下一段
   return 0
 }
 

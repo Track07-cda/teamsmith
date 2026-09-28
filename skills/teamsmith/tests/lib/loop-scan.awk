@@ -87,8 +87,12 @@ END {
     for (j = i; j <= FNR; j++) {
       if (skip[j]) continue
       lj = scr[j]
-      d += countw(lj, "(^|[^A-Za-z0-9_])(while|until|for|select|if|case)([^A-Za-z0-9_]|$)")
-      d -= countw(lj, "(^|[^A-Za-z0-9_])(done|fi|esac)([^A-Za-z0-9_]|$)")
+      # 关键字计数与**命令位**同口径：前面的字符不许是字母/数字/下划线/连字符 —— 否则
+      # 参数名里的词会被当成块关键字（P98 F2 实测：`--select` 里的 select 被算成一个
+      # select 块开者，外层 while 因此“永不关”，ext 吞掉上千行、还误吞一个 sleep 变成
+      # 假阳性的 while+sleep）。while 的探测行本就是命令位约束，计数这里补齐。
+      d += countw(lj, "(^|[^A-Za-z0-9_-])(while|until|for|select|if|case)([^A-Za-z0-9_-]|$)")
+      d -= countw(lj, "(^|[^A-Za-z0-9_-])(done|fi|esac)([^A-Za-z0-9_-]|$)")
       if (lj ~ /(^|[^A-Za-z0-9_])do([^A-Za-z0-9_]|$)/) has_do = 1
       if (lj ~ /(^|[^A-Za-z0-9_])sleep([^A-Za-z0-9_]|$)/) has_sleep = 1
       if (d <= 0) { closed = 1; break }
@@ -100,8 +104,8 @@ END {
       ext = ext (ext == "" ? "" : "\036") raw[j]
       if (!skip[j]) {
         lj = scr[j]
-        d2 += countw(lj, "(^|[^A-Za-z0-9_])(while|until|for|select|if|case)([^A-Za-z0-9_]|$)")
-        d2 -= countw(lj, "(^|[^A-Za-z0-9_])(done|fi|esac)([^A-Za-z0-9_]|$)")
+        d2 += countw(lj, "(^|[^A-Za-z0-9_-])(while|until|for|select|if|case)([^A-Za-z0-9_-]|$)")
+        d2 -= countw(lj, "(^|[^A-Za-z0-9_-])(done|fi|esac)([^A-Za-z0-9_-]|$)")
         if (d2 <= 0) break
       }
     }
