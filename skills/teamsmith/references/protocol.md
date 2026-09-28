@@ -481,8 +481,14 @@ carries an illegal token, so the read side and the write side can never disagree
 The full gate — `openspec validate … && bash skills/teamsmith/tests/smoke.sh` — spends the machine's tmux servers,
 node/bun processes and login shells, so it is serialised on **one gate lock**
 (`${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}`, holder recorded in `<lock>.holder`, wait capped by
-`TEAM_SMOKE_LOCK_WAIT`, default 1800 s). Use `TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections,
-~10 s) and the **full** suite for delivery and review.
+`TEAM_SMOKE_LOCK_WAIT`, default 1800 s). Use `TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections
+only; measured in the low minutes on a loaded 32-core box, not the seconds it once was - P100's F6) and the
+**full** suite for delivery and review.
+
+**A lock that cannot be taken is a visible degradation, not a hard failure.** If the lock file cannot be
+created (or `flock` is absent) the suite prints `注意：锁文件 … 建不了 → 不做排队` and runs anyway; only a
+*queue overrun* is loud (a one-line `排队超限` naming the holder in `<lock>.holder`, exit 2), and a genuine
+red is exit 1 with no queue wording (P66/P100's F1).
 
 **How often the full suite runs (2026-09-23, user directive).** The full suite takes 13-20 minutes and the
 machine runs one at a time, so it is a *milestone* gate, not a per-change habit: a task runs it **once at
