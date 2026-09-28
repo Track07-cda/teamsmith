@@ -605,6 +605,57 @@ PY
   esac
   run_in "$p" config set-agent-model pm vendor/pm9 --yes >/dev/null 2>&1; rc=$?
   assert_eq "⑪ pm 席位照旧可直接设模型 → 0" "$rc" "0"
+
+  # ⑫ 席位名是一个 token（P105/F1）：空白形状必须在**任何写入之前**被拒。旧行为（红侧）：
+  #    `api 1` 被当作两个各自合法的 token 追加进名册（写脏 + 一行 result=ok），命令随后才在
+  #    worktree 步骤以「未知 agent：api 1」失败（rc=1）—— 失败的命令改了状态还谎报成功。
+  for shape in "space-inner:api 1" "space-lead: api" "space-trail:api " "tab:$(printf 'api\t1')"; do
+    label="${shape%%:*}"; name="${shape#*:}"
+    p3="$(new_proj "roster-shape-$label")" || exit 3
+    cfg3="$p3/.pi/team/config.sh"; log3="$(audit_of "$p3")"; mkdir -p "$(dirname "$log3")"; : > "$log3"
+    sha3="$(sha_of "$cfg3")"
+    out="$(run_in "$p3" add-agent "$name" --register --no-install)"; rc=$?
+    assert_eq "⑫ $label：4（invalid，写入前就拒）" "$rc" "4"
+    assert_eq "⑫ $label：名册字节不变" "$(sha_of "$cfg3")" "$sha3"
+    assert_eq "⑫ $label：审计里没有 ok 行" "$(grep -c 'result=ok' "$log3" 2>/dev/null || true)" "0"
+    case "$out" in *'[A-Za-z0-9]'*) ok "⑫ $label：点名接受形状" ;; *) bad "⑫ $label：没给接受形状（$out）" ;; esac
+    case "$out" in *config.sh*) ok "⑫ $label：给出手改路线" ;; *) bad "⑫ $label：没给路线（$out）" ;; esac
+  done
+
+  # ⑬ teardown 的 present 判定按 token 精确匹配（P105/F1 半边）：名册里同时有 api 与 1 两个合法 token，
+  #    但 `api 1` 不是一个席位。旧行为（红侧）：`case " $old " in *" $seat "*)` 跨 token 命中 → 走 remove
+  #    → 循环删不掉任何 token → 同名写回 + 一行 result=ok + exit 0（假成功）。
+  p4="$(new_proj roster-teardown-token 'dev api 1')" || exit 3
+  cfg4="$p4/.pi/team/config.sh"; log4="$(audit_of "$p4")"; mkdir -p "$(dirname "$log4")"; : > "$log4"
+  sha4="$(sha_of "$cfg4")"
+  out="$(run_in "$p4" teardown --agent 'api 1' --register)"; rc=$?
+  assert_eq "⑬ 空白名 teardown：5（名册里没有这个席位）" "$rc" "5"
+  assert_eq "⑬ 名册字节不变" "$(sha_of "$cfg4")" "$sha4"
+  assert_eq "⑬ 审计里没有 ok 行" "$(grep -c 'result=ok' "$log4" 2>/dev/null || true)" "0"
+  # 反面：真的席位照旧删得掉（这条守卫不能把正常路径一起挡了）
+  out="$(run_in "$p4" teardown --agent api --register)"; rc=$?
+  assert_eq "⑬ 真席位 api 照旧可删 → 0" "$rc" "0"
+  assert_eq "⑬ api 从名册移除" "$(grep -c "^TEAM_AGENTS='dev 1'$" "$cfg4" || true)" "1"
+
+  # ⑭ --model 写完的 state 记录与配置同源（P105/F2）：夹具先埋一个旧记录（上一版漏掉的形状），
+  #    写完读回 —— 席位行必须是配置生效的值，不能是写盘前的旧值。
+  p5="$(new_proj roster-model-readback)" || exit 3
+  cfg5="$p5/.pi/team/config.sh"; mkdir -p "$p5/.pi/team/state"
+  printf 'model=old/legacy-model\nmodel_src=config\n' > "$p5/.pi/team/state/dev.env"
+  out="$(run_in "$p5" add-agent dev --model vendor/m2 --no-install)"; rc=$?
+  assert_eq "⑭ add-agent dev --model vendor/m2 → 0" "$rc" "0"
+  assert_eq "⑭ 配置行 = dev=vendor/m2" "$(grep -c "^TEAM_AGENT_MODELS='dev=vendor/m2'$" "$cfg5" || true)" "1"
+  assert_eq "⑭ state 记录没有留下写盘前的旧模型" \
+    "$(grep -c '^model=old/legacy-model$' "$p5/.pi/team/state/dev.env" 2>/dev/null || true)" "0"
+  assert_eq "⑭ state 记录与配置同源（model=vendor/m2）" \
+    "$(grep -c '^model=vendor/m2$' "$p5/.pi/team/state/dev.env" 2>/dev/null || true)" "1"
+  json="$(run_in "$p5" config list --json)"
+  json_check "$json" "⑭ 席位行显示配置生效的模型（不是写盘前的旧值）" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]=="vendor/m2"'
+  json_check "$json" "⑭ 席位行 override=true" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
+  json_check "$json" "⑭ 席位行来源 = config（记录与配置同源，不是历史记录）" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["source"]=="config"'
 fi
 
 # ---------------------------------------------------------------- models

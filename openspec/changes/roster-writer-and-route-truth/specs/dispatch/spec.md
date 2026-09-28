@@ -15,10 +15,14 @@ violates that rule (a hand-edited duplicate or an illegal token) SHALL instead e
 before any worktree or state is touched. `team teardown --register` SHALL require `--agent` (`--all --register` is a usage error,
 exit 2) and SHALL refuse a seat the roster does not carry (exit 5 naming the roster, nothing written). Both
 entries SHALL accept `--fingerprint <sha256>` with `team config set`'s semantics, and their own read-modify-write
-SHALL pass the fingerprint of the bytes they read. `--model <m>` SHALL be validated before any write and SHALL set
+SHALL pass the fingerprint of the bytes they read. A seat name the roster's value rule refuses (whitespace, `/`,
+`pm`) SHALL exit 4 **before any write** — the roster byte-identical and no `result=ok` line — never a written
+roster with a later worktree failure. `--model <m>` SHALL be validated before any write and SHALL set
 that seat's configured model through the same writer and the same pairlist serializer
 `team config set-agent-model` uses (`-` removes the override), and SHALL refuse exactly like the roster case when
-the seat is outside the roster and `--register` was not given. The roster write SHALL come first (`team add-agent`
+the seat is outside the roster and `--register` was not given. Whatever that same command records about the seat's
+model afterwards SHALL be read from the configuration the write just produced, not from the value resolved before
+it — a record that contradicts a configured override is a lie the read surface cannot label away. The roster write SHALL come first (`team add-agent`
 cannot build a worktree for a seat the tool does not know), and the command SHALL state what it wrote and what it
 did not when the second write does not land. `team help`'s `add-agent` line SHALL print `--register`, `--model`,
 `--create`, `--no-install` and `--print`, and `teardown`'s line SHALL print `--register`.
@@ -58,14 +62,18 @@ did not when the second write does not land. `team help`'s `add-agent` line SHAL
   `actor=cli` line names `TEAM_AGENTS`, and the window/state cleanup of a plain `teardown --agent api` happened too
 - **AND** `team teardown --agent api` (no flag) leaves the roster byte-identical (today's behaviour is the default),
   `team teardown --all --register` exits 2 without touching anything, and `team teardown --agent nosuch --register`
-  exits 5 naming the roster with the sha256 unchanged
+  exits 5 naming the roster with the sha256 unchanged; a name that is only a concatenation of two roster tokens
+  (`api 1` where the roster carries `api` and `1`) is not a seat either — exit 5, byte-identical, no `result=ok`
+  line (the pre-change membership test matched it across tokens and reported a successful removal of nothing)
 
 #### Scenario: `--model` is the seat's configured model, not a per-run choice
 
 - **GIVEN** the same contract and a seat `dev` in the roster
 - **WHEN** `team add-agent dev --model vendor/m2 --no-install` runs
-- **THEN** the `TEAM_AGENT_MODELS` line carries `dev=vendor/m2`, exactly one audit line names that key, and
-  `team config list --json` reports the seat with that model and `"override":true`
+- **THEN** the `TEAM_AGENT_MODELS` line carries `dev=vendor/m2`, exactly one audit line names that key,
+  `team config list --json` reports the seat with that model and `"override":true`, and the state record the
+  command leaves (if any) agrees with the configuration — the pre-change command copied the model resolved before
+  the write into the record, so the row showed an old model while reporting the override
 - **AND** `team config set-agent-model dev vendor/m3` afterwards produces the same line with `vendor/m3` (the two
   routes are the same write), `team add-agent dev --model -` removes the token, and `team add-agent api
   --model vendor/m2` without `--register` exits 5 naming `--register` with nothing written

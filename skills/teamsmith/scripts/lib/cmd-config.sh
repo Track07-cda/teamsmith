@@ -479,6 +479,22 @@ team_config_list_violation() { # <value> → 0 合法；1 时 stdout 是原因
   return 0
 }
 
+# 席位名（**单个** token）的规则：名册值规则管的是**结果值**，而写入器把席位名当一个 token 追加 ——
+# `api 1` 加进去会变成两个各自合法的 token，值规则不会响（P105/F1 实测：名册被写脏 + 一行 result=ok，
+# 命令随后才在 worktree 步骤以「未知 agent」失败）。所以 add 路径在任何写入之前先在这一层拒：空、
+# 含空白（空格/制表符/换行）、以及单 token 上跑列表规则的一切（形状、pm、斜杠）—— 一条规则，读写同源。
+# 合法 → 0；不合法 → stdout 是原因，返回 1。remove 路径不查：移掉手改出来的非法 token 是合法的。
+team_config_seat_violation() { # <seat> → 0 合法；1 时 stdout 是原因
+  local seat="${1-}" why shape='[A-Za-z0-9][A-Za-z0-9._-]*'
+  case "$seat" in
+    '') printf '席位名不能为空\n'; return 1 ;;
+    *[[:space:]]*)
+      printf '席位名 %s 非法：席位名是一个 token，不能含空白（空格/制表符）；接受 %s\n' "$seat" "$shape"; return 1 ;;
+  esac
+  if ! why="$(team_config_list_violation "$seat")"; then printf '%s\n' "$why"; return 1; fi
+  return 0
+}
+
 # danger：合法的值也会关掉已发布的守卫（设计 §5）。命中 → stdout 一行理由，返回 1。
 team_config_danger_reason() { # <KEY> <value>
   local key="$1" val="${2-}"
@@ -916,11 +932,19 @@ team_config_write_roster() { # <add|remove> <seat> [<fingerprint>] [<dry>] → �
   local old; old="$(team_config_file_value "$path" TEAM_AGENTS 2>/dev/null || true)"
   local old_fp; old_fp="$(team_config_fingerprint "$path")"
 
-  local present=0
-  case " $old " in *" $seat "*) present=1 ;; esac
+  local present=0 t
+  # present 按 token 精确匹配：`case " $old " in *" $seat "*)` 会在 seat 含空白时**跨 token** 命中
+  # —— 名册里的 api + 1 两个 token 会让 `api 1` 冒充「已在名册」（P105/F1 的另一半）。
+  for t in $old; do [ "$t" = "$seat" ] && { present=1; break; }; done
   local new="" tok
   case "$op" in
     add)
+      # 席位名自己先是一个合法 token（P105/F1）：任何写入之前拒，名册字节不动、不写 ok 审计。
+      local seat_why
+      if ! seat_why="$(team_config_seat_violation "$seat")"; then
+        team_err "TEAM_AGENTS：$seat_why"
+        return "$TEAM_CONFIG_EXIT_INVALID"
+      fi
       if [ "$present" = "1" ]; then
         # 「已在名册」不豁免值规则（P99 spec 的第三条）：手改出来的重复/非法 token 不能因为
         # 一次 no-op 就继续冒充健康状态 —— `dev api api` 上再加 api 也是 exit 4 并点名重复 token。
@@ -1061,6 +1085,9 @@ team_cmd_config_set_agent_model() {
     [ "$remove" = "1" ] && newval=""
     local rc=0
     team_config_write_checked TEAM_PM_MODEL "$newval" "$actor" "$dry" "$fp" "$allow_danger" || rc=$?
+    # 同进程刷新（与名册写入器的 TEAM_AGENTS="$new" 同一纪律，P105/F2）：写盘后的后续步骤
+    # 必须读到这个新值，不能留一个「写盘前的旧值」冒充配置解析。
+    if [ "$rc" -eq 0 ] && [ "$dry" != "1" ]; then TEAM_PM_MODEL="$newval"; fi
     return $rc
   fi
 
@@ -1069,6 +1096,9 @@ team_cmd_config_set_agent_model() {
   local newval; newval="$(team_config_pairlist_upsert "$old" "$seat" "$([ "$remove" = "1" ] && printf '' || printf '%s' "$model")")"
   local rc=0
   team_config_write_checked TEAM_AGENT_MODELS "$newval" "$actor" "$dry" "$fp" "$allow_danger" || rc=$?
+  # 同进程刷新（P105/F2）：add-agent --model 写完后走同一个进程的 worktree/state 记录步骤，
+  # 不刷新的话 state 记的是写盘前的旧模型，而配置已经有 override —— 席位行自相矛盾。
+  if [ "$rc" -eq 0 ] && [ "$dry" != "1" ]; then TEAM_AGENT_MODELS="$newval"; fi
   return $rc
 }
 

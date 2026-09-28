@@ -211,6 +211,18 @@ team_cmd_add_agent() {
     return "$TEAM_CONFIG_EXIT_INVALID"
   fi
 
+  # ①′ 席位名是一个 token（P105/F1）：名册值规则判的是**结果值**，而 `api 1` 加进去会变成两个各自
+  # 合法的 token（value rule 不会响）—— 必须在任何写入之前先拒。写入器里有同一份守卫（team_config_
+  # seat_violation）；这里提前一层是为了给出两条真能用的路线而不是一个干巴巴的 4。
+  local seat_why
+  if ! seat_why="$(team_config_seat_violation "$agent")"; then
+    team_err "add-agent：$seat_why"
+    team_dim "  席位名要能当工作树目录名/窗口名/state 文件名，接受形状 [A-Za-z0-9][A-Za-z0-9._-]*（一个 token）。两条真能用的路线：" >&2
+    team_dim "    · 换成形状合法的名字再跑：$TEAM_CLI add-agent <名字> --register" >&2
+    team_dim "    · 或手改 $TEAM_MAIN_ROOT/.pi/team/config.sh 里的 TEAM_AGENTS（名字同样要匹配这个形状）" >&2
+    return "$TEAM_CONFIG_EXIT_INVALID"
+  fi
+
   # ② 名册：--register 走契约的审计写入器（唯一授权入口）；没有旗标的未知席位 → exit 5 +
   # 两条真能用的路线，且不碰窗口/worktree/state/契约（P99/R2）。
   if [ "$register" = "1" ]; then
@@ -224,15 +236,6 @@ team_cmd_add_agent() {
     team_dim "    · 或手改 $TEAM_MAIN_ROOT/.pi/team/config.sh 里的 TEAM_AGENTS" >&2
     team_dim "  本次什么都没做：没有开窗、没有工作树、没有 state、契约未动" >&2
     return "$TEAM_CONFIG_EXIT_REFUSE"
-  fi
-
-  # ③ 席位名自己也要过同一份值规则：手改出来的非法 token 哪怕仍在名册里（team_agent_known 认它），
-  # 也不是一个能开工的席位 —— 它会被带到 .worktrees/ 目录名、state 文件名与分支名上（实测
-  # `state/api/1.env: No such file or directory` 的裸 bash 报错、rc=1）。退出码与写入侧同族：4。
-  local seat_why
-  if ! seat_why="$(team_config_list_violation "$agent")"; then
-    team_err "add-agent：$seat_why"
-    return "$TEAM_CONFIG_EXIT_INVALID"
   fi
 
   # ③ 席位模型（--model）：同一个写入器 + 同一个 pairlist 序列化器（D4）

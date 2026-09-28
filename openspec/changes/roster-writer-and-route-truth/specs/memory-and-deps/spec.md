@@ -23,8 +23,11 @@ read (a change in between is exit 3 with one `result=conflict` audit line and no
 `refuse`: `team config set TEAM_AGENTS …` SHALL keep exiting 5, the console SHALL keep refusing the key, and the
 refusal SHALL name the register entry rather than a command that cannot write it. The roster value SHALL be a
 space-separated list of seat names, each matching `[A-Za-z0-9][A-Za-z0-9._-]*`, each appearing once, none of them
-`pm` (the PM seat is not a roster member); the rule is the roster key's value rule (`list` kind), so a value that
-violates it is exit 4 naming the offending token, nothing written, and the same rule is what
+`pm` (the PM seat is not a roster member); an `add` SHALL validate its seat argument as **that single token
+before any write** — a name carrying whitespace is two tokens in the value, not a seat, so the command SHALL exit 4
+with the contract byte-identical and no `result=ok` line rather than smuggle both in; the rule is the roster key's
+value rule (`list` kind), so a value that violates it is exit 4 naming the offending token, nothing written, and the
+same rule is what
 `team config list --json` reports as that key's `warning` (naming the token) when the file already carries one —
 the write side and the read side MUST NOT grow two rules.
 
@@ -77,10 +80,12 @@ byte-identical.
 #### Scenario: The roster value has one rule, and a violating value is refused
 
 - **GIVEN** a contract whose sha256 is recorded
-- **WHEN** `team add-agent 'api/1' --register`, `team add-agent pm --register`, and `team add-agent api --register`
-  against a contract whose roster already reads `dev api api` are attempted
+- **WHEN** `team add-agent 'api/1' --register`, `team add-agent pm --register`, `team add-agent 'api 1' --register`
+  (and the same name with a tab for the space), and `team add-agent api --register` against a contract whose roster
+  already reads `dev api api` are attempted
 - **THEN** each exits 4, names the offending token (or `pm`, or the repeated token) and the accepted shape, and the
-  sha256 is unchanged
+  sha256 is unchanged; the whitespace name also leaves no `result=ok` line — the pre-change entry appended its two
+  legal tokens and wrote that line before failing, which is the flip
 - **AND** a hand-edited contract whose roster reads `dev api/1` makes `team config list --json` report `api/1` in
   that key's `warning`, and the same value is what the register entry refuses — one rule, read and write
 
