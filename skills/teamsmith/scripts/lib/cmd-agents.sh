@@ -62,7 +62,7 @@ team_worktree_add() { # <agent> [--create] [--no-install]
 team_pi_args() { # <model> → 打印已转义的 pi 参数
   local model="$1" provider piargs=()
   provider="${model%%/*}"
-  piargs=(--provider "$provider" --model "${model##*/}")
+  piargs=(--provider "$provider" --model "${model#*/}")
   piargs+=(-e "$TEAM_SKILL_DIR/extension/team-notify.ts")
   # M27：团队后台车道与 notify 并列注入（worker 的长门禁/长构建用它，收割纪律写在提示词里）
   piargs+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
@@ -207,7 +207,7 @@ team_cmd_add_agent() {
 
   # ① 模型形状先判：可预测的错误写不进任何东西（P99/D2 的写序）
   if [ "$has_model" = "1" ] && [ "$model" != "-" ] && ! team_config_model_shape_ok "$model"; then
-    team_err "add-agent --model：模型必须是 provider/model 形状（恰好一个 /）：$model"
+    team_err "add-agent --model：模型必须是 provider/model 形状（$(team_config_model_violation "$model")）：$model"
     return "$TEAM_CONFIG_EXIT_INVALID"
   fi
 
@@ -1024,7 +1024,7 @@ team_cmd_dispatch() {
     done <<< "$TEAM_DISPATCH_AUDIT_LINES"
     TEAM_DISPATCH_AUDIT_LINES=""
   fi
-  team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；provider=$provider model=${model##*/} session=$sid）"
+  team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；provider=$provider model=${model#*/} session=$sid）"
   # 观察结论也要说出来（不是只报“成功”）：内建 Pi 路径下，agent 是「已经退出」还是「还在跑」，
   # PM 都要拿到**观察到的事实**（退出码来自窗口 harness 写下的事件证据，不是猜的；也不再假设
   # 「窗口一定已经回到 shell」——那正是 M7.5 里被环境 churn 打脸的那句话）。

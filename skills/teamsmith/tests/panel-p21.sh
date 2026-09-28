@@ -1225,7 +1225,9 @@ EOF2
   assert_match "$tmp/$current/zzz-picker.txt" '› 保持未设' "未设的新键也以保持未设开头"
   assert_has "$tmp/$current/zzz-picker.txt" "red · 默认" "constraints 里的 red 是默认条目"
   assert_has "$tmp/$current/zzz-picker.txt" "blue" "constraints 里的 blue 也在（原序，零代码改动）"
-  assert_not "$tmp/$current/zzz-picker.txt" "自由输入" "enum 是封闭域：没有自由输入项"
+  # 针是「…（自由输入）」条目形（不是裸词）：选择器的页脚帮助行本身就写着「『自由输入』才进编辑器」
+  # （M68 a36a7c0c 起），裸针会把页脚当命中 —— 这条断言关的是封闭域**没有那个条目**。
+  assert_not "$tmp/$current/zzz-picker.txt" "…（自由输入）" "enum 是封闭域：没有自由输入项"
   leave_picker TEAM_ZZZ_MODE
   # 去掉 constraints：同一个 bundle 必须可见地退回自由输入并写明原因（不是静默空白框）。
   python3 - "$scratch/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
@@ -1422,10 +1424,12 @@ scn_seats() {
   section "seats · 来源三态 / picker / 一 token diff / 移除回退 / 运行中的席位不变（B4）"
   server_up seats "dev verify dev2"
   python3 - "$(cfg)" <<'PY'
-import sys
+import re, sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev=deepseek/deepseek-flash"')
+# model-id-shape R1：known 里必须有一个三段 id（pm 席位）——席位选择器要能列出并选中它。
+s = re.sub(r'^TEAM_PM_MODEL=.*$', 'TEAM_PM_MODEL="openrouter/amazon/nova-lite-v1"', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY
   mkdir -p "$state"
@@ -1456,15 +1460,16 @@ PY
   else
     bad "没能把焦点移到 dev 席位行"
   fi
-  # M59: conditional — wait for the seat picker on a settled frame (title + a known entry).
-  pty_wait_frame "$tmp/$current/picker.txt" "seat picker dev" "选择 dev 的模型" "kimi-coding/k3-256k" \
+  # M59: conditional — wait for the seat picker on a settled frame (title + the three-segment known entry).
+  pty_wait_frame "$tmp/$current/picker.txt" "seat picker dev" "选择 dev 的模型" "openrouter/amazon/nova-lite-v1" \
     || bad "seat picker 没有打开（标题或已知模型不在稳定帧上）"
   assert_match "$tmp/$current/picker.txt" '选择 dev 的模型' "picker 打开并点名席位"
-  assert_has "$tmp/$current/picker.txt" "kimi-coding/k3-256k" "picker 列出命令报告的已知模型"
+  assert_has "$tmp/$current/picker.txt" "openrouter/amazon/nova-lite-v1" "picker 列出命令报告的三段已知模型"
+  assert_has "$tmp/$current/picker.txt" "kimi-coding/k3-256k" "picker 同时列出记录来源的已知模型"
   assert_has "$tmp/$current/picker.txt" "-（移除覆盖，回退默认）" "picker 有移除项"
   assert_has "$tmp/$current/picker.txt" "自由输入" "picker 有自由输入项"
-  # Choose a known model that differs from the seat's displayed one, then confirm through the editor.
-  pick_option 'kimi-coding/k3-256k' || bad "picker 里没有 kimi-coding/k3-256k"
+  # Choose the three-segment known model that differs from the seat's displayed one, then confirm through the editor.
+  pick_option 'openrouter/amazon/nova-lite-v1' || bad "picker 里没有 openrouter/amazon/nova-lite-v1"
   wait_editor dev || bad "seat 编辑器没有打开"
   sleep 0.3
   local line_before; line_before="$(grep '^TEAM_AGENT_MODELS=' "$(cfg)")"
@@ -1474,11 +1479,11 @@ PY
   keys Enter
   if wait_cap seat-written "✓ 已写入席位 dev = "; then
     cap_to seat-written
-    assert_match "$tmp/$current/seat-written.txt" '✓ 已写入席位 dev = .* · 下次 dispatch/resume 生效' "写入回执点名席位与规则"
+    assert_match "$tmp/$current/seat-written.txt" '✓ 已写入席位 dev = openrouter/amazon/nova-lite-v1 · 下次 dispatch/resume 生效' "写入回执带完整三段 id（不是最后一段）"
   else
     bad "席位写入的回执没有出现（见 seat-written.txt）"
   fi
-  assert_match "$(cfg)" '^TEAM_AGENT_MODELS=.*dev=.*' "契约里 dev 的 token 落盘"
+  assert_match "$(cfg)" '^TEAM_AGENT_MODELS=.*dev=openrouter/amazon/nova-lite-v1' "契约里 dev 的 token 落盘（完整三段 id）"
   assert_eq "契约行只改了一行" "$(diff <(printf '%s\n' "$line_before") <(grep '^TEAM_AGENT_MODELS=' "$(cfg)") | grep -c '^[<>]' || true)" "2"
   assert_match "$(argv_log)" 'config set-agent-model dev .* --actor panel --dry-run --fingerprint [0-9a-f]{64}' "wrapper 记录了 set-agent-model 的 --dry-run"
   assert_match "$(argv_log)" 'config set-agent-model dev .* --actor panel --yes --fingerprint [0-9a-f]{64}' "wrapper 记录了 set-agent-model 的写入"

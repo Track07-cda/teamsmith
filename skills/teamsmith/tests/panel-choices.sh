@@ -161,7 +161,7 @@ if want known; then
 import re, sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev=deepseek/deepseek-flash"')
+s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev=deepseek/deepseek-flash verify=openrouter/stealth/union-alpha"')
 s = re.sub(r'^TEAM_PM_MODEL=.*$', 'TEAM_PM_MODEL="kimi-coding/k3-256k"', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY
@@ -169,7 +169,13 @@ PY
   printf 'model=openai-codex/gpt-5.6-terra:xhigh\n' > "$state/dev.env"
   json="$(run_in "$p" config list --json)"
   json_check "$json" "known = 配置 default + 席位记录 + pm 的 TEAM_PM_MODEL（各一次）" \
-    'sorted(d["models"]["known"])==["deepseek/deepseek-flash","kimi-coding/k3-256k","openai-codex/gpt-5.6-terra:xhigh"]'
+    'sorted(d["models"]["known"])==["deepseek/deepseek-flash","kimi-coding/k3-256k","openai-codex/gpt-5.6-terra:xhigh","openrouter/stealth/union-alpha"]'
+  json_check "$json" "三段 id 逐字进 known 与 model/pairlist 的 choices.values" \
+    '"openrouter/stealth/union-alpha" in d["models"]["known"] and "openrouter/stealth/union-alpha" in [k for k in d["keys"] if k["name"]=="TEAM_DEFAULT_MODEL"][0]["choices"]["values"] and "openrouter/stealth/union-alpha" in [k for k in d["keys"] if k["name"]=="TEAM_AGENT_MODELS"][0]["choices"]["values"]'
+  json_check "$json" "三段 id 的席位行也逐字（verify 行）" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="verify"][0]["model"]=="openrouter/stealth/union-alpha"'
+  out="$(run_in "$p" config set-agent-model verify openrouter/stealth/union-alpha --dry-run)"; rc=$?
+  assert_eq "三段 id 被写路径校验器接受（set-agent-model --dry-run → 0）" "$rc" "0"
   json_check "$json" "pm 的模型恰好出现一次（去重）" 'd["models"]["known"].count("kimi-coding/k3-256k")==1'
   json_check "$json" "models.seats 的 pm 行 = TEAM_PM_MODEL 且 override=true" \
     '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]=="kimi-coding/k3-256k" and [s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["override"] is True'
@@ -185,7 +191,7 @@ open(p, 'w', encoding='utf-8').write(s)
 PY
   json="$(run_in "$p" config list --json)"
   json_check "$json" "去掉 TEAM_PM_MODEL 后 pm 回退默认，记录席位的模型仍在 known 且各一次" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]=="deepseek/deepseek-flash" and sorted(d["models"]["known"])==["deepseek/deepseek-flash","openai-codex/gpt-5.6-terra:xhigh"] and d["models"]["known"].count("openai-codex/gpt-5.6-terra:xhigh")==1'
+    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]=="deepseek/deepseek-flash" and sorted(d["models"]["known"])==["deepseek/deepseek-flash","openai-codex/gpt-5.6-terra:xhigh","openrouter/stealth/union-alpha"] and d["models"]["known"].count("openai-codex/gpt-5.6-terra:xhigh")==1'
 fi
 
 # ---------------------------------------------------------------- walk（门禁）
@@ -197,6 +203,9 @@ walk_section() { # <tree> <label>
   local wt="$1" label="$2"
   local wp json out rc
   wp="$(new_proj "walk-$label")" || exit 3
+  # model-id-shape R1：走查的 known 里必须带一个三段 id —— 它进 model/pairlist 的 choices.values，
+  # 走查作业逐条拿它去 `team config set … --dry-run`（旧校验器会在这里红，这是闸门要抓回归的方向）。
+  run_in "$wp" config set TEAM_DEFAULT_MODEL openrouter/amazon/nova-lite-v1 --yes >/dev/null || exit 3
   json="$(run_in "$wp" config list --json)"
   printf '%s' "$json" > "$tmp/walk-list.json"
   local sha_before; sha_before="$(sha_of "$wp/.pi/team/config.sh")"

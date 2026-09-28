@@ -6,7 +6,7 @@
 #   TEAM_CONFIG_KEEP=1 bash ...                              # keep the fixture directory
 #   TEAM_CONFIG_TREE=<tree> bash ...                         # run against another checkout (used by flip)
 #
-# Sections: list groups writer inject cas validate audit models seats completeness docs callers flip groups-flip json
+# Sections: list groups writer inject cas validate audit models shape flip-shape seats completeness docs callers flip groups-flip json
 # Exit: 0 every selected section green, 1 at least one assertion failed, 3 setup failure.
 #
 # Nothing here touches the caller's project: every fixture is a fresh git repo under $TMPDIR, the
@@ -106,7 +106,7 @@ need_python() { command -v python3 >/dev/null 2>&1; }
 need_python || { printf 'config-cli: 需要 python3（JSON 断言）\n' >&2; exit 3; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit roster models seats completeness docs callers flip groups-flip json)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit roster models shape flip-shape seats completeness docs callers flip groups-flip json)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- list
@@ -771,6 +771,232 @@ PY
     esac
   else
     bad "空值 token：逃辑夹具没搭起来（worktree=$([ -d "$wte" ] && printf 有 || printf 无) brief=$([ -n "$brief_e" ] && printf 有 || printf 无)）"
+  fi
+fi
+
+# ---------------------------------------------------------------- shape（change: model-id-shape）
+# R1 的证伪器：三段 model（provider = 第一段，model 可含 /）在 model-kind / pairlist / set-agent-model /
+# add-agent --model 四条写入路上共用一个判定；拒绝集闭且**点名段落**；读面逐字；渲染器按**第一个** `/`
+# 切；窗口解析两条来源（Pi 目录 / TEAM_MODEL_WINDOWS）都认三段 id。红侧（F-S1 放宽判定 / F-S2 改成最后
+# 一个 / 切）在 flip-shape 段 —— 下面每条拒绝断言都是给它们当靶子的。
+if want shape; then
+  section "shape · 三段 model：三处写入器一处判定；拒绝集闭点名段落；渲染器与窗口按第一个 / 切"
+  p="$(new_proj shape)" || exit 3
+  cfg="$p/.pi/team/config.sh"
+  tok="openrouter/amazon/nova-lite-v1"
+
+  # ── 接受矩阵：四条写入路全过，写下的字节逐字
+  run_in "$p" config set TEAM_DEFAULT_MODEL "$tok" --yes >/dev/null; rc=$?
+  assert_eq "接受[model-kind] config set TEAM_DEFAULT_MODEL $tok → 0" "$rc" "0"
+  assert_eq "接受[model-kind]：TEAM_DEFAULT_MODEL 行逐字" "$(grep -c "^TEAM_DEFAULT_MODEL='$tok'\$" "$cfg" || true)" "1"
+  run_in "$p" config set TEAM_AGENT_MODELS "dev=$tok" --yes >/dev/null; rc=$?
+  assert_eq "接受[pairlist] TEAM_AGENT_MODELS dev=$tok → 0" "$rc" "0"
+  assert_eq "接受[pairlist]：pairlist 行带完整 token" "$(grep -c "^TEAM_AGENT_MODELS='dev=$tok'\$" "$cfg" || true)" "1"
+  run_in "$p" config set-agent-model dev "$tok" --yes >/dev/null; rc=$?
+  assert_eq "接受[set-agent-model] dev $tok → 0" "$rc" "0"
+  out="$(run_in "$p" add-agent api --register --model "$tok" --no-install)"; rc=$?
+  assert_eq "接受[add-agent --model] api $tok → 0" "$rc" "0"
+  assert_eq "接受[add-agent --model]：token 写进同一对表" "$(grep -c "api=$tok" "$cfg" || true)" "1"
+
+  # ── 思考档后缀：先剥后缀再判形状，值里逐字保留
+  run_in "$p" config set TEAM_DEFAULT_MODEL kimi-coding/kimi-for-coding:high --yes >/dev/null; rc=$?
+  assert_eq "后缀[model-kind] kimi-coding/kimi-for-coding:high → 0" "$rc" "0"
+  assert_eq "后缀：写入行逐字保留 :high" "$(grep -c "^TEAM_DEFAULT_MODEL='kimi-coding/kimi-for-coding:high'\$" "$cfg" || true)" "1"
+  run_in "$p" config set-agent-model dev "$tok:high" --yes >/dev/null; rc=$?
+  assert_eq "后缀[set-agent-model] dev $tok:high → 0" "$rc" "0"
+  assert_eq "后缀：席位 token 逐字保留 :high" "$(grep -c "dev=$tok:high" "$cfg" || true)" "1"
+  json="$(run_in "$p" config list --json)"
+  json_check "$json" "后缀：known 带两种 :high 形态的完整 id" \
+    'set(d["models"]["known"]) >= set(["openrouter/amazon/nova-lite-v1:high","kimi-coding/kimi-for-coding:high"])'
+  # 归位：后面的读面/渲染器用无后缀的三段 id
+  run_in "$p" config set TEAM_DEFAULT_MODEL "$tok" --yes >/dev/null
+  run_in "$p" config set-agent-model dev "$tok" --yes >/dev/null
+
+  # ── 读面：完整 id 逐字回来（default / known / dev 席位行）
+  json="$(run_in "$p" config list --json)"
+  json_check "$json" "读面：models.default 是完整三段 id" 'd["models"]["default"]=="openrouter/amazon/nova-lite-v1"'
+  json_check "$json" "读面：known 含完整三段 id" \
+    '"openrouter/amazon/nova-lite-v1" in d["models"]["known"]'
+  json_check "$json" "读面：dev 席位行 = 配置覆盖的完整 id" \
+    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]=="openrouter/amazon/nova-lite-v1" and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
+
+  # ── 拒绝矩阵：闭集 + 点名段落 + 零写入（sha 与 result=ok 审计行都不动）
+  sha_rej="$(sha_of "$cfg")"; ok_rej="$(grep -ac 'result=ok' "$(audit_of "$p")" 2>/dev/null || true)"
+  rej_default() { # <val> <fault phrase>
+    local v="$1" phrase="$2" o r
+    o="$(run_in "$p" config set TEAM_DEFAULT_MODEL "$v" --yes)"; r=$?
+    assert_eq "拒绝[model-kind] $v → 4" "$r" "4"
+    case "$o" in
+      *"$phrase"*) ok "拒绝[model-kind] $v 点名：$phrase" ;;
+      *) bad "拒绝[model-kind] $v 没有点名 [$phrase]（$(printf '%s' "$o" | head -1)）" ;;
+    esac
+  }
+  rej_default 'a' 'provider 缺失'
+  rej_default '/a' 'provider 为空'
+  rej_default 'a/' 'model 为空'
+  rej_default 'a//b' 'model 有空段'
+  rej_default 'a/b/' 'model 有空段'
+  rej_default 'a/:high' 'model 为空'
+  rej_default 'a:q/b' 'provider 不能含 :'
+  rej_default 'a b/c' 'provider 含空白'
+  rej_seat() { # <val> <fault phrase>
+    local v="$1" phrase="$2" o r
+    o="$(run_in "$p" config set-agent-model dev "$v" --yes)"; r=$?
+    assert_eq "拒绝[set-agent-model] dev $v → 4" "$r" "4"
+    case "$o" in
+      *"$phrase"*) ok "拒绝[set-agent-model] dev $v 点名：$phrase" ;;
+      *) bad "拒绝[set-agent-model] dev $v 没有点名 [$phrase]（$(printf '%s' "$o" | head -1)）" ;;
+    esac
+  }
+  rej_seat '/a' 'provider 为空'
+  rej_seat 'a/' 'model 为空'
+  rej_seat 'a//b' 'model 有空段'
+  out="$(run_in "$p" config set TEAM_AGENT_MODELS 'dev=a//b' --yes)"; rc=$?
+  assert_eq "拒绝[pairlist] dev=a//b → 4" "$rc" "4"
+  case "$out" in
+    *'model 有空段'*) ok "拒绝[pairlist] dev=a//b 点名：model 有空段" ;;
+    *) bad "拒绝[pairlist] dev=a//b 没有点名 [model 有空段]（$(printf '%s' "$out" | head -1)）" ;;
+  esac
+  out="$(run_in "$p" add-agent api2 --register --model 'a//b' --no-install)"; rc=$?
+  assert_eq "拒绝[add-agent --model] api2 a//b → 4" "$rc" "4"
+  case "$out" in
+    *'model 有空段'*) ok "拒绝[add-agent --model] a//b 点名：model 有空段" ;;
+    *) bad "拒绝[add-agent --model] a//b 没有点名 [model 有空段]（$(printf '%s' "$out" | head -1)）" ;;
+  esac
+  assert_eq "拒绝矩阵后契约 sha 不变" "$(sha_of "$cfg")" "$sha_rej"
+  assert_eq "拒绝矩阵没有新增 result=ok 审计行" "$(grep -ac 'result=ok' "$(audit_of "$p")" 2>/dev/null || true)" "$ok_rej"
+
+  # ── 渲染器：--provider 取第一段，--model 取第一个 / 之后的全部
+  run_in "$p" config set TEAM_PI_BIN /bin/true --yes >/dev/null
+  run_in "$p" task SHP --title "P114 shape 夹具" --agent dev --deps - >/dev/null 2>&1 || true
+  brief="$(ls "$p"/docs/team/tasks/SHP-*.md 2>/dev/null | head -1)"
+  if [ -n "$brief" ]; then
+    sed -i 's|^anchor: -.*$|anchor: none (infra) — P114 fixture|' "$brief"
+    run_in "$p" add-agent dev --create --no-install >/dev/null 2>&1 || true
+    bre="$( cd "$p" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+        bash -c '. "'"$skill"'/scripts/lib/common.sh"; for _f in "'"$skill"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent dev SHP' )"
+    git -C "$p/.worktrees/dev" switch -c "$bre" main >/dev/null 2>&1 || git -C "$p/.worktrees/dev" switch "$bre" >/dev/null 2>&1
+    out="$(run_in "$p" dispatch dev SHP "$brief" --print)"; rc=$?
+    assert_eq "渲染器：dispatch --print 退出 0" "$rc" "0"
+    case "$out" in
+      *"--provider openrouter --model amazon/nova-lite-v1"*)
+        ok "渲染器：dispatch 的 worker 命令按第一个 / 切（--model amazon/nova-lite-v1）" ;;
+      *) bad "渲染器：dispatch 的 --model 不是第一个 / 之后（$(printf '%s' "$out" | grep -oE -- '--provider [^ ]+ --model [^ ]+' | tail -1)）" ;;
+    esac
+  else
+    bad "渲染器：dispatch 夹具的任务书没搭起来"
+  fi
+  run_in "$p" config set TEAM_PM_MODEL "$tok" --yes >/dev/null
+  out="$(run_in "$p" up --print)"; rc=$?
+  assert_eq "渲染器：up --print 退出 0" "$rc" "0"
+  case "$out" in
+    *"--provider openrouter --model amazon/nova-lite-v1"*)
+      ok "渲染器：PM 启动命令按第一个 / 切（--model amazon/nova-lite-v1）" ;;
+    *) bad "渲染器：PM 启动命令没有完整 model（$(printf '%s' "$out" | grep -oE -- '--provider [^ ]+ --model [^ ]+' | tail -1)）" ;;
+  esac
+  exp="$( cd "$p" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$skill"'/scripts/lib/common.sh"; for _f in "'"$skill"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_agent_expand launch "{model}" dev s w /tmp/pf "" "" ""' 2>/dev/null )"
+  assert_eq "渲染器：{model} 占位符 = 第一个 / 之后的全部" "$exp" "amazon/nova-lite-v1"
+
+  # ── 窗口：Pi 目录与 TEAM_MODEL_WINDOWS 两条来源都认三段 id（切成最后一段会读成 ?）
+  pw="$(new_proj shape-window)" || exit 3
+  cfgw="$pw/.pi/team/config.sh"
+  run_in "$pw" config set TEAM_DEFAULT_MODEL openrouter/stealth/union-alpha --yes >/dev/null
+  mkdir -p "$pw/.pi-agent"
+  printf '{"providers":{"openrouter":{"models":[{"id":"stealth/union-alpha","contextWindow":131072}]}}}\n' > "$pw/.pi-agent/models.json"
+  python3 - "$cfgw" "$pw" <<'PY'
+import sys
+p, root = sys.argv[1], sys.argv[2]
+s = open(p, encoding='utf-8').read()
+s += '\nTEAM_PI_AGENT_DIR="%s/.pi-agent"\n' % root
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  psw="$(run_in "$pw" ps)"
+  win="$(printf '%s\n' "$psw" | awk '/openrouter\/stealth\/union-alpha/ {print $NF; exit}')"
+  assert_eq "窗口[Pi 目录]：三段 id 的 catalogue 窗口 → 131k" "$win" "131k"
+  psw="$( cd "$pw" && TEAM_MODEL_WINDOWS='openrouter/stealth/union-alpha=300000' bash "$team" ps 2>&1 )"
+  win="$(printf '%s\n' "$psw" | awk '/openrouter\/stealth\/union-alpha/ {print $NF; exit}')"
+  assert_eq "窗口[TEAM_MODEL_WINDOWS]：三段 key 命中 → 300k" "$win" "300k"
+fi
+
+# ---------------------------------------------------------------- flip-shape（F-S1 / F-S2）
+# 红侧两态（都在 scratch 树里跑，真树不动；再入不递归）：
+#   F-S1：把唯一判定放宽成「含 / 就过」→ shape 段必须红，且在 model-kind / pairlist / set-agent-model
+#         三条路上点名 a//b —— 三条路真的共用这一处判定。
+#   F-S2：窗口解析改成最后一个 / 切 → shape 段的「窗口[Pi 目录] 131k」必须红（最后一段切分读不到）。
+if want flip-shape; then
+  section "flip-shape · 放宽唯一判定 → 三条路点名 a//b；窗口改成最后一个 / 切 → 解析红；还原 → 绿"
+  if [ -n "$_tree_arg" ]; then
+    skip "F-S1/F-S2 翻转：本次已是 scratch 树再入运行（TEAM_CONFIG_TREE 已设），不重复嵌套"
+  else
+    stree="$tmp/shape-tree"; mkdir -p "$stree/skills/teamsmith"
+    cp -a "$skill/scripts" "$skill/templates" "$skill/references" "$stree/skills/teamsmith/"
+    scc="$stree/skills/teamsmith/scripts/lib/cmd-config.sh"
+    scm="$stree/skills/teamsmith/scripts/lib/common.sh"
+    set +e
+    TEAM_CONFIG_TREE="$stree" bash "$here/config-cli.sh" shape > "$tmp/shape-flip-green0.log" 2>&1
+    s_rc0=$?
+    [ "$s_rc0" -eq 0 ] && ok "F-S1 绿侧：scratch 树原状 shape 段绿（rc=0，红不是因为缺文件）" \
+      || { bad "F-S1 绿侧就红了（rc=$s_rc0，翻转无效）"; grep -a '✗' "$tmp/shape-flip-green0.log" | head -3 | sed 's/^/      /'; }
+    python3 - "$scc" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+needle = 'team_config_model_violation() { # <model> → 0 合法；1 时 stdout 是原因\n  local val="${1-}" prov body'
+assert needle in s, 'predicate needle not found'
+s = s.replace(needle, needle + '\n  case "$val" in */*) return 0 ;; esac', 1)
+open(p, 'w', encoding='utf-8').write(s)
+PY
+    if grep -qF 'case "$val" in */*) return 0 ;; esac' "$scc"; then
+      ok "F-S1 mutant：唯一判定被放宽成「含 / 就过」"
+    else
+      bad "F-S1 mutant 没打中（判定原样）"
+    fi
+    TEAM_CONFIG_TREE="$stree" bash "$here/config-cli.sh" shape > "$tmp/shape-flip-red.log" 2>&1
+    s_rc_red=$?
+    if [ "$s_rc_red" -ne 0 ] \
+       && grep -q '拒绝\[model-kind\] a//b' "$tmp/shape-flip-red.log" \
+       && grep -q '拒绝\[pairlist\] dev=a//b' "$tmp/shape-flip-red.log" \
+       && grep -q '拒绝\[set-agent-model\] dev a//b' "$tmp/shape-flip-red.log"; then
+      ok "F-S1 红侧：放宽后 shape 段非 0（rc=$s_rc_red），三条路都点名 a//b"
+    else
+      bad "F-S1 红侧：放宽后没有在三条路上全部点名 a//b（rc=$s_rc_red）"
+      grep -a '✗' "$tmp/shape-flip-red.log" | grep 'a//b' | head -6 | sed 's/^/      /'
+    fi
+    printf '    --- F-S1 红侧尾部 ---\n'
+    { grep -aE '✗.*a//b|== 结果' "$tmp/shape-flip-red.log" || true; } | tail -6 | sed 's/^/    /'
+    cp -a "$cmd_config" "$scc"
+    # F-S2：窗口解析改成最后一个 / 切
+    python3 - "$scm" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = 'case "$want" in */*) prov="${want%%/*}"; model="${want#*/}" ;; *) prov=""; model="$want" ;; esac'
+new = 'case "$want" in */*) prov="${want%%/*}"; model="${want##*/}" ;; *) prov=""; model="$want" ;; esac'
+assert old in s, 'window split needle not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
+    if grep -qF 'model="${want##*/}"' "$scm"; then
+      ok "F-S2 mutant：窗口解析改成最后一个 / 切"
+    else
+      bad "F-S2 mutant 没打中（窗口解析原样）"
+    fi
+    TEAM_CONFIG_TREE="$stree" bash "$here/config-cli.sh" shape > "$tmp/shape-flip-last-red.log" 2>&1
+    s_rc_last=$?
+    if [ "$s_rc_last" -ne 0 ] && grep -q '✗.*窗口\[Pi 目录\]' "$tmp/shape-flip-last-red.log"; then
+      ok "F-S2 红侧：最后一个 / 切分让窗口断言红（rc=$s_rc_last）"
+    else
+      bad "F-S2 红侧：窗口断言没红/没点名（rc=$s_rc_last）"
+      grep -a '✗' "$tmp/shape-flip-last-red.log" | head -3 | sed 's/^/      /'
+    fi
+    printf '    --- F-S2 红侧尾部 ---\n'
+    { grep -aE '✗.*窗口|== 结果' "$tmp/shape-flip-last-red.log" || true; } | tail -4 | sed 's/^/    /'
+    cp -a "$skill/scripts/lib/common.sh" "$scm"
+    TEAM_CONFIG_TREE="$stree" bash "$here/config-cli.sh" shape > "$tmp/shape-flip-restored.log" 2>&1
+    s_rc_rest=$?
+    [ "$s_rc_rest" -eq 0 ] && ok "F-S1/F-S2 还原：两处改动都撤销 → shape 段重新绿（rc=0）" \
+      || { bad "还原后没有变绿（rc=$s_rc_rest）"; grep -a '✗' "$tmp/shape-flip-restored.log" | head -3 | sed 's/^/      /'; }
+    set +e
   fi
 fi
 

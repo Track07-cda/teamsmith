@@ -1961,7 +1961,7 @@ team_pm_model_resolve() { printf '%s\n' "${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}";
 
 team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）与 team-inbox-watch（PM 的投递换道）；默认 -c 延续本目录上一个会话以保住历史
   local model="$(team_pm_model_resolve)" args=()
-  args=(--provider "${model%%/*}" --model "${model##*/}")
+  args=(--provider "${model%%/*}" --model "${model#*/}")
   # M27：PM 的团队后台车道（team_bg_run/team_bg_wait），与 worker 侧同一个扩展
   [ -d "$TEAM_SKILL_DIR" ] && args+=(-e "$TEAM_SKILL_DIR/extension/team-bg.ts")
   # M30：PM 的收件箱监视唤醒（投递换道：pi 通道不再往输入框粘贴）
@@ -2514,7 +2514,7 @@ team_model_window() { # <provider/model 或 model>
 team_model_window_from_pi() { # <provider/model>
   local want="${1:-}" prov model f got
   [ -n "$want" ] || return 0
-  case "$want" in */*) prov="${want%%/*}"; model="${want##*/}" ;; *) prov=""; model="$want" ;; esac
+  case "$want" in */*) prov="${want%%/*}"; model="${want#*/}" ;; *) prov=""; model="$want" ;; esac
   for f in "$(team_pi_agent_dir)/models.json" "$(team_pi_agent_dir)/models-store.json"; do
     [ -f "$f" ] || continue
     got="$(awk -v want_prov="$prov" -v want_model="$model" '
@@ -4244,7 +4244,7 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
     case "$tok" in
       '{cwd}')         val="$(printf '%q' "$wt")" ;;
       '{session_id}')  val="$(printf '%q' "$sid")" ;;
-      '{model}')       val="$(printf '%q' "${model##*/}")" ;;
+      '{model}')       val="$(printf '%q' "${model#*/}")" ;;
       '{provider}')    val="$(printf '%q' "$provider")" ;;
       '{prompt_file}') val="$(printf '%q' "$prompt_file")" ;;
       '{prompt}')      val='"$0"' ;;

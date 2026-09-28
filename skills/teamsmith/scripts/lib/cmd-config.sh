@@ -370,13 +370,11 @@ team_config_validate_value() {
     model)
       local optm=0; [ "$spec" = "opt" ] && optm=1
       [ -z "$val" ] && { [ "$optm" = "1" ] && return 0; printf '必须形如 provider/model\n'; return 1; }
-      case "$val" in
-        */*) case "$val" in /*|*/|*/*/*) printf '必须形如 provider/model（恰好一个 /）\n'; return 1 ;; esac
-             return 0 ;;
-        *) printf '必须形如 provider/model（%s 里没有 /）\n' "$val"; return 1 ;;
-      esac ;;
+      local mwhy
+      if mwhy="$(team_config_model_violation "$val")"; then return 0; fi
+      printf '%s\n' "$mwhy"; return 1 ;;
     pairlist)
-      local tok seat model r; r=0
+      local tok seat model r mwhy; r=0
       for tok in $val; do
         case "$tok" in
           *=*) seat="${tok%%=*}"; model="${tok#*=}" ;;
@@ -385,10 +383,10 @@ team_config_validate_value() {
         if ! team_config_seat_known "$seat"; then
           printf '席位 %s 不在名册（%s）也不叫 pm\n' "$seat" "$(team_config_roster_text)"; return 1
         fi
-        case "$model" in
-          */*) case "$model" in /*|*/|*/*/*) printf '席位 %s 的模型必须形如 provider/model\n' "$seat"; return 1 ;; esac ;;
-          *) printf '席位 %s 的模型必须形如 provider/model\n' "$seat"; return 1 ;;
-        esac
+        local mwhy
+        if ! mwhy="$(team_config_model_violation "$model")"; then
+          printf '席位 %s 的模型：%s\n' "$seat" "$mwhy"; return 1
+        fi
       done
       return 0 ;;
     pattern)
@@ -451,12 +449,33 @@ team_config_canonical_value() { # <KEY> <value> → 规范值
   printf '%s\n' "$val"
 }
 
-# 模型值形状（provider/model，恰好一个 /）—— set-agent-model 与 add-agent --model 共用这一份判定。
-team_config_model_shape_ok() { # <model> → 0 合法 / 1 不合法
-  case "${1-}" in
-    */*) case "$1" in /*|*/|*/*/*) return 1 ;; esac; return 0 ;;
+# 模型值形状的**一处判定**（change: model-id-shape R1）：provider = 第一个 `/` 之前（非空、不含 `:`），
+# model = 之后全部（先剥第一个 `:` 起的思考档后缀再判：body 非空、每段非空），整体不含空白。
+# 合法 → 返回 0、无输出；不合法 → 返回 1、stdout 是**点名段落**（provider/model）的原因。
+# model kind、pairlist token、set-agent-model 与 add-agent --model 全走这里，不许长第二份。
+team_config_model_violation() { # <model> → 0 合法；1 时 stdout 是原因
+  local val="${1-}" prov body
+  case "$val" in
+    */*) ;;
+    *) printf 'provider 缺失：需要 provider/model 形状（没有 /）\n'; return 1 ;;
   esac
-  return 1
+  prov="${val%%/*}"; body="${val#*/}"
+  case "$val" in *[[:space:]]*)
+      case "$prov" in *[[:space:]]*) printf 'provider 含空白（空格/制表符/换行）\n'; return 1 ;; esac
+      printf 'model 含空白（空格/制表符/换行）\n'; return 1 ;; esac
+  [ -n "$prov" ] || { printf 'provider 为空（/ 前没有内容）\n'; return 1; }
+  case "$prov" in *:*) printf 'provider 不能含 :（:思考档 后缀只属于 model 段）\n'; return 1 ;; esac
+  body="${body%%:*}"    # 后缀先剥再判形状；调用方写盘的值仍保留后缀
+  [ -n "$body" ] || { printf 'model 为空（/ 后没有内容，或 :思考档 后缀前为空）\n'; return 1; }
+  case "/$body/" in
+    *//*) printf 'model 有空段（/ 分隔的每一段都必须非空）\n'; return 1 ;;
+  esac
+  return 0
+}
+
+# 布尔包装（面板与旧调用方问「行不行」）：判定本体在 team_config_model_violation。
+team_config_model_shape_ok() { # <model> → 0 合法 / 1 不合法
+  team_config_model_violation "${1-}" >/dev/null 2>&1
 }
 
 # 名册值规则（唯一一份）：空格分隔的席位名，每个匹配 [A-Za-z0-9][A-Za-z0-9._-]*、只出现一次、
@@ -1073,7 +1092,7 @@ team_cmd_config_set_agent_model() {
     return "$TEAM_CONFIG_EXIT_REFUSE"
   fi
   if [ "$model" != "-" ] && ! team_config_model_shape_ok "$model"; then
-    team_err "模型必须是 provider/model 形状（恰好一个 /）：$model"
+    team_err "模型必须是 provider/model 形状（$(team_config_model_violation "$model")）：$model"
     [ "$dry" = "1" ] || team_config_audit_write invalid "$actor" "$audit_key" "$seat" "$model" || true
     return "$TEAM_CONFIG_EXIT_INVALID"
   fi
