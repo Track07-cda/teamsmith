@@ -16,9 +16,10 @@
 #           (probes assert the EFFECT, never the exit code). The set of keys needing a probe is derived
 #           from the schema, so a note added without one is RED naming the key.
 #
-#   flips   six scratch-tree shapes that MUST redden the walk (the field defect, a sibling flag, a
-#           swallowing parser, an unattributable line, a fake schema route, an unprobed note, and a
-#           broken promise). They are the walk's own proof that it can fail.
+#   flips   eight mutations that MUST redden their guard: seven scratch-tree shapes that redden the walk
+#           (the field defect, a sibling flag, a swallowing parser, an unattributable line, a fake schema
+#           route, an unprobed note, a broken promise) plus a nested run that does not reap, which proves
+#           the tail's leftover assertion can fail. They are the walk's own proof that it can fail.
 #
 # Usage / knobs:
 #   bash skills/teamsmith/tests/routes.sh [walk] [control] [promises] [flips]
@@ -27,13 +28,16 @@
 #   TEAM_ROUTES_TIMEOUT=<s>     per-probe timeout, default 15 (containment, never a verdict: a probe
 #                               that times out is recorded as accepted with a visible note)
 #   TEAM_ROUTES_FAST=1          (or TEAM_SMOKE_FAST=1) run walk/control/promises, SKIP the flips visibly
+#   TEAM_TMP_KEEP=1             inherited from the gate's `--keep`: the flips' nested runs keep their
+#                               temp roots on purpose — the tail prints them and does NOT call it a leak
 # Exit: 0 every selected section green; 1 at least one finding; 3 setup failure.
 #
 # Containment (the walk must not touch the caller): one owned temp root via tests/lib/tmp-root.sh
 # (`${TMPDIR:-/tmp}/teamsmith-routes.XXXXXX`), every run in a fresh git repo under it, a recording
 # `tmux` shim first on PATH that answers session queries as absent and NEVER calls the real tmux,
 # TEAM_MEETINGS_DIR/TEAM_PI_AGENT_DIR inside the fixture, stdin from /dev/null, a hard timeout per probe
-# and an EXIT trap that reaps every directory. Nothing here reads or writes the caller's project.
+# and an EXIT trap that reaps every directory (unless TEAM_TMP_KEEP=1 asks to keep it, as the CI gate's
+# `--keep` does). Nothing here reads or writes the caller's project.
 set -uo pipefail
 
 # ── knobs + identity isolation (must happen first): never inherit the caller's team identity ────────
@@ -61,6 +65,11 @@ case "${_fast_arg:-${_smoke_fast_arg:-0}}" in
   *) FAST=0 ;;
 esac
 [ -n "$_tmpkeep" ] && export TEAM_TMP_KEEP="$_tmpkeep"
+
+# 嵌套 run 与父 run 共享同一份 run 台账：SMOKE_TMP_RUN_ID 是非 TEAM_ 的传播位（嵌套 run 的身份清理
+# 会清掉 TEAM_*，清不掉它）；没有它时自己起一个 —— 收尾的「嵌套根都回收了」据此能看见**每一个**
+# 嵌套根（find -newer 只看得到最后一个：任何后续 scratch 树的建删都会刷新 $tmp 的 mtime）。
+export SMOKE_TMP_RUN_ID="${SMOKE_TMP_RUN_ID:-routes-$$-$(date +%s 2>/dev/null || printf 0)}"
 
 # shellcheck source=tests/lib/tmp-root.sh
 . "$here/lib/tmp-root.sh"
@@ -725,6 +734,22 @@ mr_flip_run() {
   env -u TMUX -u TMUX_PANE TEAM_ROUTES_NESTED=1 TEAM_ROUTES_TREE="$scratch" bash "$here/routes.sh" "$@" >"$logf" 2>&1
   MR_FLIP_RC=$?
   MR_FLIP_LOG="$(cat "$logf")"
+  # TEAM_TMP_KEEP=1 时嵌套 run 的助手会保留自己的根并**打印路径**——收起来给收尾的可见说明用
+  # （$tmp/flip-run.log 每次覆盖，只有这里攒得下每一个保留的根）。
+  grep -a '^保留临时根：' "$logf" 2>/dev/null >>"$tmp/kept-roots.log" || true
+}
+
+# 嵌套 run 的根：本轮台账里 kind=routes 且 pid 不是本进程的存活根，加上文件系统里新于本夹具根的
+# owned 家族目录（兜住「不用助手、裸 mkdir」的形状）。台账是主来源（父/子共享 run 台账，每个嵌套
+# 根都在册，与 mtime 无关）；find 是次要来源（原始形状，保留不放松）。
+# <base> 可换：翻转⑧在私有 TMPDIR 里造「不回收」形状，不让刻意的残留落进共享临时目录。
+mr_nested_leftovers() { # [<base>]
+  local base="${1:-${TMPDIR:-/tmp}}"
+  {
+    tmp_root_ledger_survivors 2>/dev/null | awk -F'\t' -v me="$$" -v base="$base" \
+      '$2 != me && $3 == "routes" && index($1, base "/") == 1 { print $1 }'
+    find "$base" -maxdepth 1 -name 'teamsmith-routes.*' -newer "$tmp" 2>/dev/null | grep -v "^$tmp\$" || true
+  } | sed '/^$/d' | sort -u
 }
 
 mr_flips() {
@@ -832,13 +857,41 @@ PY
   else
     finding "翻转⑦没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
   fi
-  # 收尾：flips 自己的 scratch 树与嵌套 run 的根都不留下
-  local leftovers
-  leftovers="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'teamsmith-routes.*' -newer "$tmp" 2>/dev/null | grep -v "^$tmp\$" | wc -l | tr -d ' ')"
-  if [ "${leftovers:-0}" = "0" ]; then
-    ok "翻转收尾：嵌套 run 的临时根都回收了"
+  # ⑧ 收尾断言本身必须能被证伪：让嵌套 run 的回收失效（TMP_ROOT_BREAK=noreap，tmp-root.sh 自带的
+  #    自检旋钮）跑一次 walk —— 收尾扫描必须看得见那个残留（默认 KEEP 未设时，这就是那条断言的红侧）。
+  #    刻意的残留落在私有 TMPDIR 里，随本夹具的根一起被回收，不进共享临时目录。
+  s="$(mr_scratch_tree flip-tail-leak)"
+  local lkdir="$tmp/flip-tail-leak-tmp"
+  mkdir -p "$lkdir"
+  env -u TMUX -u TMUX_PANE TEAM_ROUTES_NESTED=1 TEAM_ROUTES_TREE="$s" TMPDIR="$lkdir" TMP_ROOT_BREAK=noreap \
+    bash "$here/routes.sh" walk >"$tmp/flip-tail-leak.log" 2>&1 || true
+  grep -a '^保留临时根：' "$tmp/flip-tail-leak.log" 2>/dev/null >>"$tmp/kept-roots.log" || true
+  if [ -n "$(mr_nested_leftovers "$lkdir")" ]; then
+    ok "翻转⑧：嵌套 run 不回收 → 收尾扫描看得见残留（默认 KEEP 未设时判红）"
   else
-    finding "翻转收尾：留下 $leftovers 个嵌套临时根"
+    finding "翻转⑧没有兑现：嵌套 run 不回收，收尾扫描却没看见残留"
+  fi
+  # 收尾：flips 自己的 scratch 树与嵌套 run 的根都不留下。
+  # TEAM_TMP_KEEP=1（门禁的 --keep 让子进程都继承它）是**刻意的保留**，不是泄漏 —— 与 smoke §40
+  # 同口径：打一条可见说明，并把嵌套 run 打印的保留路径逐个列出（静默保留仍是缺陷）。
+  # 本夹具自己的根也会被保留：助手在 EXIT 时打印它的路径。
+  if [ "${TEAM_TMP_KEEP:-0}" = "1" ]; then
+    ok "翻转收尾：本轮声明保留（TEAM_TMP_KEEP=1），不判泄漏"
+    printf '  \033[2m·\033[0m 保留本夹具的根：%s（助手在 EXIT 时也会打印）\n' "$tmp"
+    if [ -s "$tmp/kept-roots.log" ]; then
+      sort -u "$tmp/kept-roots.log" | while IFS= read -r line; do
+        printf '  \033[2m·\033[0m %s\n' "$line"
+      done
+    fi
+  else
+    local leftovers n
+    leftovers="$(mr_nested_leftovers)"
+    n="$(printf '%s\n' "$leftovers" | grep -c . || true)"
+    if [ "${n:-0}" = "0" ]; then
+      ok "翻转收尾：嵌套 run 的临时根都回收了"
+    else
+      finding "翻转收尾：留下 $n 个嵌套临时根：$(printf '%s' "$leftovers" | tr '\n' ' ')"
+    fi
   fi
 }
 
