@@ -448,7 +448,7 @@ if [ -n "$SMOKE_INVOKE_ROOT" ]; then
 fi
 
 # 「真实账本」的夹具痕迹扫描（M7.2 纪律）——所有隔离断言共用同一口径：
-#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，恰排**两条流量记录**（都按确切路径）。
+#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，恰排**三条流量记录**（都按确切路径）。
 # 排除之一：.pi/team/state/bg/**（M30 实测）——team_bg_run 把后台作业的 stdout 存进 state/bg/<id>.log，
 # 门禁自己的 stdout（含各段夹具的名字）就在里面 —— 不排它，下一次门禁的 M16/M98 隔离断言会把「按提示词
 # 把门禁放后台跑」判成夹具泄漏（假红：同一棵树、同一套断言，只因上一次的作业日志还在）。
@@ -456,9 +456,13 @@ fi
 # 排除之二：.pi/team/state/tmux-calls.log（P77）——闸门代调用者写的**调用记录**（内容是调用者自己的
 # argv/socket；契约见 boundary#The gate's actions are logged…）。夹具名字出现在那里正是这份日志的本职，
 # 把它算成「夹具写进了项目的账本状态」是把证据倒置。
-# P87（P83-F1）：**两条排除都是确切路径**，不是目录名/文件名的 glob。老实现用 `--exclude-dir=bg`，会把
+# 排除之三：.pi/team/state/tmux-calls.log.forensics（P132）——同一条调用记录的**长保留付本**（act≠pass
+# 的那些行；契约见 boundary#A destructive call's record outlives the call log's rotation）：内容仍是
+# 调用者自己的 argv，只是活得更久，所以同样是流量记录、同样按确切路径排除。
+# P87（P83-F1）：**三条排除都是确切路径**，不是目录名/文件名的 glob。老实现用 `--exclude-dir=bg`，会把
 # `docs/team/inbox/bg/` 与 `.pi/team/state/nested/bg/` 也静默掉 —— 那两处是真账本，必须被点名。
-# 同名兄弟（tmux-calls.log.1）、子目录里的同名文件、任何别处的 bg/ 目录都仍是真泄漏（12b-j / M16 钉住）。
+# 同名兄弟（tmux-calls.log.1 / tmux-calls.log.forensics.1）、子目录里的同名文件、任何别处的 bg/ 目录都仍是
+# 真泄漏（12b-j / M16 钉住）。
 real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去重）
   local pats="$1" root="${2%/}" d
   { for d in "$root/docs/team/inbox" "$root/.pi/team/state"; do
@@ -466,8 +470,9 @@ real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去�
       grep -rlE "$pats" "$d" 2>/dev/null || true
     done; } \
     | awk -v audit="$root/.pi/team/state/tmux-calls.log" \
+          -v forensics="$root/.pi/team/state/tmux-calls.log.forensics" \
           -v jobs="$root/.pi/team/state/bg/" \
-          '$0 != audit && index($0, jobs) != 1' \
+          '$0 != audit && $0 != forensics && index($0, jobs) != 1' \
     | sort -u || true
 }
 
@@ -7643,21 +7648,27 @@ assert_eq "12b-j 隔离：调用方项目的 inbox/state 里没有夹具痕迹" 
 
 # 负对照（tasks 7.2）：泄漏扫描本身必须**能红**——否则它是个永远报绿的假守卫。
 # 把夹具痕迹（沙盒 session 名）栽进一个假「真项目」目录，同一个扫描函数必须把它揪出来。
-# P77：作用域恰有两条**流量记录**排除——审计日志 tmux-calls.log（闸门代写的调用行，内容是调用者
-# 自己的 argv）与 state/bg/**（后台作业 stdout）；同名兄弟（.log.1）、子目录同名文件与别处的 bg/ 目录
-# 仍是真泄漏。P87（F1）：两条排除都按**确切路径**（bg 不是 `--exclude-dir=bg` 的目录名 glob）。
+# P77/P132：作用域恰有**三条流量记录**排除——审计日志 tmux-calls.log、它的长保留付本
+# tmux-calls.log.forensics（两者都是闸门代写的调用行，内容是调用者自己的 argv）与 state/bg/**（后台作业
+# stdout）；同名兄弟（.log.1 / .forensics.1）、子目录同名文件与别处的 bg/ 目录仍是真泄漏。
+# P87（F1）：三条排除都按**确切路径**（bg 不是 `--exclude-dir=bg` 的目录名 glob）。
 OB_NEG="$TMP/ob-negroot"; rm -rf "$OB_NEG"
 mkdir -p "$OB_NEG/.pi/team/state/bg" "$OB_NEG/.pi/team/state/nested" "$OB_NEG/.pi/team/state/nested/bg" \
          "$OB_NEG/docs/team/inbox/bg"
 ob_neg_scan() { SMOKE_INVOKE_ROOT="$OB_NEG" SMOKE_INVOKE_MAIN="" ob_leak_scan; }
 ob_neg_has() { ob_neg_scan | grep -qxF "$OB_NEG/$1"; }
-# ① 两条流量记录腿：审计日志（夹具的 session 名 + argv 原样在行里）与 state/bg —— 都必须静默
+# ① 三条流量记录腿：审计日志（夹具的 session 名 + argv 原样在行里）、长保留付本（act≠pass 的同一
+#    行，P132）与 state/bg —— 都必须静默
 printf '%s · act=pass · sock=/tmp/tmux-1000/private · TMUX=- · TMUX_TMPDIR=- · argv=new-window -t %s:dev · pid=1 ppid=1 cwd=/tmp\n' \
   "2026-09-22T17:00:00+00:00" "$SESSION" > "$OB_NEG/.pi/team/state/tmux-calls.log"
+printf '%s · act=refused · sock=/tmp/tmux-1000/default · TMUX=- · TMUX_TMPDIR=- · argv=kill-window -t %s:dev · pid=1 ppid=1 cwd=/tmp\n' \
+  "2026-09-22T17:00:00+00:00" "$SESSION" > "$OB_NEG/.pi/team/state/tmux-calls.log.forensics"
 printf 'job stdout: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/bg/gate.log"
 assert_eq "12b-j 负对照：审计日志是调用记录，不算账本痕迹（M7.2 红侧的成因）" "$(ob_neg_scan | wc -l | tr -d ' ')" "0"
+assert_eq "12b-j 负对照：长保留付本 tmux-calls.log.forensics 也是调用记录，不算账本痕迹（P132）" \
+  "$(ob_neg_scan | wc -l | tr -d ' ')" "0"
 assert_eq "12b-j 负对照：state/bg/ 的作业日志也不算账本痕迹（M30 口径）" "$(ob_neg_scan | wc -l | tr -d ' ')" "0"
-# ② 六条真泄漏腿（逐条栽、逐条点名；后四条钉住「确切路径，不是 basename / 目录名」）
+# ② 八条真泄漏腿（逐条栽、逐条点名；后六条钉住「确切路径，不是 basename / 目录名 / 前缀」）
 printf 'planted: %s\n' "$SESSION" > "$OB_NEG/docs/team/inbox/leak.md"
 assert_eq "12b-j 负对照：inbox 里的痕迹必须被点名" "$(ob_neg_has docs/team/inbox/leak.md && echo yes || echo no)" "yes"
 assert_eq "12b-j 负对照：inbox 腿之外没有多余命中" "$(ob_neg_scan | wc -l | tr -d ' ')" "1"
@@ -7681,7 +7692,13 @@ assert_eq "12b-j 负对照：同名兄弟 tmux-calls.log.1 必须被点名（排
 printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/nested/tmux-calls.log"
 assert_eq "12b-j 负对照：子目录里的同名文件必须被点名" \
   "$(ob_neg_has .pi/team/state/nested/tmux-calls.log && echo yes || echo no)" "yes"
-assert_eq "12b-j 负对照：六条真泄漏腿逐条点名（审计日志与 state/bg/ 仍不在清单里）" "$(ob_neg_scan | wc -l | tr -d ' ')" "6"
+printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/tmux-calls.log.forensics.1"
+assert_eq "12b-j 负对照：长保留付本的同名兄弟 tmux-calls.log.forensics.1 必须被点名（排除是确切路径，不是前缀）" \
+  "$(ob_neg_has .pi/team/state/tmux-calls.log.forensics.1 && echo yes || echo no)" "yes"
+printf 'planted: %s\n' "$SESSION" > "$OB_NEG/.pi/team/state/nested/tmux-calls.log.forensics"
+assert_eq "12b-j 负对照：子目录里的同名保留文件必须被点名" \
+  "$(ob_neg_has .pi/team/state/nested/tmux-calls.log.forensics && echo yes || echo no)" "yes"
+assert_eq "12b-j 负对照：八条真泄漏腿逐条点名（审计日志、长保留付本与 state/bg/ 仍不在清单里）" "$(ob_neg_scan | wc -l | tr -d ' ')" "8"
 rm -rf "$OB_NEG"
 
 if [ "$(ob_hash_real)" = "$REAL_FP_BEFORE" ]; then
@@ -11484,15 +11501,23 @@ assert_eq "M16 隔离对照：state/bg/ 里的门禁作业日志不算账本痕�
 printf '2026-09-22T17:00:00+00:00 · act=pass · argv=new-window -t M16A:dev · cwd=/tmp\n' > "$M16_NEG/.pi/team/state/tmux-calls.log"
 assert_eq "M16 隔离对照：审计日志 tmux-calls.log 是调用记录，不算账本痕迹" \
   "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "0"
+# P132：长保留付本（act≠pass 的调用行）同样按确切路径排除；子目录里的同名保留文件仍是账本
+printf '2026-09-22T17:00:00+00:00 · act=refused · argv=kill-window -t M16A:dev · cwd=/tmp\n' > "$M16_NEG/.pi/team/state/tmux-calls.log.forensics"
+assert_eq "M16 隔离对照：长保留付本 tmux-calls.log.forensics 是调用记录，不算账本痕迹（P132）" \
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "0"
+mkdir -p "$M16_NEG/.pi/team/state/nested"
+printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/nested/tmux-calls.log.forensics"
+assert_eq "M16 隔离对照：nested/tmux-calls.log.forensics 必须被抓到（排除是确切路径）" \
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | grep -c 'nested/tmux-calls.log.forensics')" "1"
 printf 'M16A phantom\n' > "$M16_NEG/.pi/team/state/phantom.log"
 assert_eq "M16 隔离对照：真正写进 state/ 的痕迹必须被同一个扫描抓到" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "1"
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "2"
 # P87（P83-F1）：bg 的排除是确切路径，不是目录名 —— 别处的 bg/ 目录仍是账本，必须被同一个扫描抓到
 printf 'M16A phantom\n' > "$M16_NEG/docs/team/inbox/bg/leak.md"
 assert_eq "M16 隔离对照：inbox/bg/ 里的痕迹必须被抓到（bg 排除是确切路径，不是目录名）" \
   "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | grep -c 'inbox/bg/leak.md')" "1"
-assert_eq "M16 隔离对照：两条真痕迹腿恰两条命中（state/bg/ 与审计日志仍不在清单里）" \
-  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "2"
+assert_eq "M16 隔离对照：三条真痕迹腿恰三条命中（state/bg/、审计日志与长保留付本仍不在清单里）" \
+  "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "3"
 rm -rf "$M16_NEG"
 # ---------------------------------------------------------------- 31. tmux 接触面（M28）
 # 五次 tmux server 全灭事故 → 两条护栏在这里钉死：
@@ -11617,6 +11642,9 @@ fi
 #   · 私有 socket → act=pass；假隔离（TMUX_TMPDIR 不可用）→ 拒绝（M41 原样保留）；
 #   · 唯一的带内放行 = 调用者 argv 里的 --teamsmith-allow-destructive（全局参数位；剥掉、记 act=explicit-flag）；
 #   · TEAM_ALLOW_DESTRUCTIVE_TMUX 退役：在任何环境里（含 server 全局环境）都不改变判定。
+#   · act≠pass 的记录再逐字节复制进 <log>.forensics（P132 长保留：主日志轮转后破坏性记录仍可读；
+#     pass 不承诺保留；同一套 2000/1000 界限与 dropped 自述）；复制不成功时调用行尾带 retention=failed
+#     + stderr 一行 ✗（判定与退出码不变；FIFO 目标跳过而不阻塞）。
 # 这一段自己的安全纪律（与 #1250 同族，宁可繁琐不可碰默认 server）：
 #   · 默认 socket 的探针（放行/拒绝/只读）把 TEAM_TMUX_REAL **钉到 argv 记录桩**（只记 argv 的假命令）——
 #     就算闸门逻辑整个坏掉，被执行的也只是桩，结构上碰不到真默认 server；
@@ -11910,6 +11938,109 @@ head -n 1 "$M36_LOG" > "$TMP/m36-rot-big.log"
 assert_match "$TMP/m36-rot-big.log" ' · rotation · dropped=1094$' "⑤ 超大 N：从 0 重算（2094 条调用行裁 1094，不是回绕假数）"
 assert_not "$M36_LOG" "99999999999999999999" "⑤ 超大的旧 marker 被顶替（不保留）"
 assert_has_echo "$(sed -n '2p' "$M36_LOG")" 'big 1095' "⑤ 超大 N：留下的最老一行是 big 1095"
+
+# ── ⑤b 长保留（P132，boundary#A destructive call's record outlives the call log's rotation）：
+#     act≠pass 的记录逐字节复制进 <log>.forensics（写主日志**之前**），熬得过主日志的轮转；pass 不承诺
+#     保留（不建文件、不追行）；保留付本同一套 2000/1000 界限 + dropped 自述；写不进去必须可见（stderr
+#     的 ✗ + 调用行尾 retention=failed），但绝不改判定/退出码、也绝不挂住调用。───────────────────────
+M36_FL="$M36_LOG.forensics"
+m36_flog() { # <log 路径> <tmux argv…>：同 m36_bound 的绑定身份，只换日志路径（付本是 <log>.forensics）
+  local lg="$1"; shift
+  m36_probe_in "$REPO" TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_SESSION="$M36_SESS" \
+    TEAM_TMUX_CALLS_LOG="$lg" "$@"
+}
+
+# (a) 逐字节同一行：拒绝调用后，主日志那一行与保留付本 cmp 相同
+: > "$M36_LOG"; rm -f "$M36_FL"; rm -f "$M36_STUB_CALLS"
+m36_bound tmux kill-server >/dev/null 2>&1; M36_RC=$?
+assert_eq "⑤b (a) 拒绝调用照常 exit 64" "$M36_RC" "64"
+assert_file "$M36_FL" "⑤b (a) 拒绝调用写出了保留付本 <log>.forensics"
+assert_eq "⑤b (a) 保留付本恰一行" "$(wc -l < "$M36_FL" | tr -d ' ')" "1"
+if cmp -s <(tail -1 "$M36_LOG") <(tail -1 "$M36_FL"); then
+  ok "⑤b (a) 保留行与主日志行逐字节相同（cmp）"
+else bad "⑤b (a) 保留行与主日志行不逐字节相同"; fi
+assert_has "$M36_FL" "act=refused" "⑤b (a) 保留行带 act=refused"
+assert_has "$M36_FL" "argv=kill-server" "⑤b (a) 保留行带着调用的 argv"
+
+# (b) 熬过主日志的轮转：先留住一条拒绝记录，再灌满主日志触发轮转 → 主日志丢掉它、保留付本留着它
+: > "$M36_LOG"; rm -f "$M36_FL"
+m36_bound tmux kill-server >/dev/null 2>&1
+M36_KEPT="$(tail -1 "$M36_FL")"
+seq 1 2100 | sed 's/^/rotseed /' >> "$M36_LOG"
+m36_bound tmux ls >/dev/null 2>&1
+if grep -qF -- "$M36_KEPT" "$M36_LOG"; then bad "⑤b (b) 主日志轮转后那一行仍在（前提没成立）"
+else ok "⑤b (b) 主日志轮转把拒绝行挤掉了"; fi
+assert_match "$M36_LOG" ' · rotation · dropped=1102$' "⑤b (b) 主日志轮转计数正确（1 拒绝 + 2100 seed + 1 调用 = 2102 行，裁 1102）"
+if grep -qF -- "$M36_KEPT" "$M36_FL"; then ok "⑤b (b) 破坏性记录在保留付本里活着（熬过轮转）"
+else bad "⑤b (b) 保留付本丢了那条拒绝记录"; fi
+cmp -s <(printf '%s\n' "$M36_KEPT") <(tail -1 "$M36_FL") \
+  && ok "⑤b (b) 保留行仍是原字节（cmp）" || bad "⑤b (b) 保留行变了"
+
+# (c) pass 不承诺保留：只读调用与私有 socket 的破坏性调用都不追行（判定说了算，不是子命令名）
+: > "$M36_LOG"; rm -f "$M36_FL"
+m36_bound tmux kill-server >/dev/null 2>&1      # 先留一条（建立保留付本）
+cp "$M36_FL" "$M36_D/fl-before"
+: > "$M36_LOG"
+m36_bound tmux ls >/dev/null 2>&1
+m36_bound tmux list-windows >/dev/null 2>&1
+m36_bound tmux display-message -p hi >/dev/null 2>&1
+m36_probe TMUX_TMPDIR="$M36_D/priv" tmux kill-server >/dev/null 2>&1
+assert_eq "⑤b (c) 三次只读 + 一次私有 socket 的 kill-server：主日志恰四条 act=pass" \
+  "$(grep -c 'act=pass' "$M36_LOG" | tr -d ' ')" "4"
+assert_eq "⑤b (c) 保留付本仍只有那一条拒绝记录" "$(wc -l < "$M36_FL" | tr -d ' ')" "1"
+if cmp -s "$M36_D/fl-before" "$M36_FL"; then ok "⑤b (c) pass 不承诺保留：保留付本逐字节没变（cmp）"
+else bad "⑤b (c) 保留付本被 pass 调用改动了"; fi
+assert_not "$M36_FL" "argv=ls" "⑤b (c) 只读调用没有进保留付本"
+
+# (d) 保留付本自己有界 + 自述轮转：2100 行（含一条 pass 形状的种子）+ 一发拒绝 → dropped=1101 + 1000 行；
+#     另一台只有 3 行的闸门 + 一发拒绝 → 四行、无 marker。
+{ printf '%s · act=pass · sock=/tmp/nowhere · TMUX=- · TMUX_TMPDIR=- · argv=ls · pid=1 ppid=1 cwd=/tmp\n' "2026-09-22T00:00:00+00:00"
+  seq 1 2099 | sed 's/^/flseed /'; } > "$M36_FL"
+m36_refuse "⑤b (d) 灌满保留付本后的拒绝调用" m36_bound tmux kill-server
+assert_eq "⑤b (d) 保留付本轮转：1 标记 + 1000 行" "$(wc -l < "$M36_FL" | tr -d ' ')" "1001"
+head -n 1 "$M36_FL" > "$TMP/m36-fl-rot.log"
+assert_match "$TMP/m36-fl-rot.log" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[^ ]* · rotation · dropped=1101$' "⑤b (d) 保留付本首行是轮转标记（dropped=1101）"
+assert_not "$TMP/m36-fl-rot.log" "act=" "⑤b (d) 保留 marker 不是调用行"
+assert_eq "⑤b (d) 标记之后恰 1000 行" "$(tail -n +2 "$M36_FL" | wc -l | tr -d ' ')" "1000"
+assert_has_echo "$(tail -1 "$M36_FL")" 'argv=kill-server' "⑤b (d) 最新一行（那发拒绝）在末尾"
+assert_not "$M36_FL" "argv=ls" "⑤b (d) 种子里的 pass 形状行也被同一轮转裁掉（文件里没有豁免）"
+M36_LOG2="$M36_D/tmux-calls-2.log"; M36_FL2="$M36_LOG2.forensics"
+: > "$M36_LOG2"; rm -f "$M36_FL2"
+printf 'fl2seed a\nfl2seed b\nfl2seed c\n' > "$M36_FL2"
+m36_flog "$M36_LOG2" tmux kill-server >/dev/null 2>&1; M36_RC=$?
+assert_eq "⑤b (d) 第二台闸门：拒绝 exit 64" "$M36_RC" "64"
+assert_eq "⑤b (d) 第二台闸门：保留付本恰四行（3 种子 + 1 拒绝）" "$(wc -l < "$M36_FL2" | tr -d ' ')" "4"
+assert_eq "⑤b (d) 第二台闸门：没越界就不写 marker" "$(grep -c ' · rotation · dropped=' "$M36_FL2" | tr -d ' ')" "0"
+assert_eq "⑤b (d) 第二台闸门：主日志也恰一行" "$(wc -l < "$M36_LOG2" | tr -d ' ')" "1"
+
+# (e) 写不进去必须可见、但绝不阻塞/改判：保留路径是目录 / FIFO 两种形态
+M36_LOG3="$M36_D/tmux-calls-3.log"; : > "$M36_LOG3"; rm -rf "$M36_LOG3.forensics"; mkdir -p "$M36_LOG3.forensics"
+rm -f "$M36_STUB_CALLS"
+M36_OUT="$(m36_flog "$M36_LOG3" tmux kill-window -t "$M36_OWN" 2>&1)"; M36_RC=$?
+assert_eq "⑤b (e) 保留路径是目录：放行判定不变（exit 0）" "$M36_RC" "0"
+assert_has "$M36_STUB_CALLS" "STUB argc=3 argv=kill-window -t $M36_OWN" "⑤b (e) 调用照常落到下游（桩收到）"
+assert_has "$M36_LOG3" "act=allowed-owned" "⑤b (e) 调用行仍记放行动作"
+assert_has "$M36_LOG3" "retention=failed" "⑤b (e) 调用行尾自述 retention=failed"
+assert_has_echo "$M36_OUT" "✗" "⑤b (e) stderr 有 ✗ 标记的失败诊断"
+assert_has_echo "$M36_OUT" "$M36_LOG3.forensics" "⑤b (e) 诊断点名保留路径"
+: > "$M36_LOG3"; rm -f "$M36_STUB_CALLS"
+M36_OUT="$(m36_flog "$M36_LOG3" tmux kill-server 2>&1)"; M36_RC=$?
+assert_eq "⑤b (e) 保留路径是目录：拒绝仍 exit 64" "$M36_RC" "64"
+assert_not_file "$M36_STUB_CALLS" "⑤b (e) 拒绝时桩没被叫（保留失败没改判定）"
+assert_has "$M36_LOG3" "retention=failed" "⑤b (e) 拒绝行也自述 retention=failed"
+# FIFO：跳过而不是挂住（timeout 10 当绊线），判定/退出码不变
+M36_LOG4="$M36_D/tmux-calls-4.log"; : > "$M36_LOG4"; rm -rf "$M36_LOG4.forensics"; mkfifo "$M36_LOG4.forensics"
+M36_OUT="$(m36_flog "$M36_LOG4" timeout 10 tmux kill-server 2>&1)"; M36_RC=$?
+assert_eq "⑤b (e) FIFO 保留目标：不挂住、拒绝照旧 exit 64（124=挂死回归）" "$([ "$M36_RC" = 124 ] && echo HANG || echo "$M36_RC")" "64"
+assert_has_echo "$M36_OUT" "$M36_LOG4.forensics" "⑤b (e) FIFO 形态的 ✗ 诊断也点名保留路径"
+assert_has "$M36_LOG4" "retention=failed" "⑤b (e) FIFO 形态的调用行自述 retention=failed"
+rm -f "$M36_LOG4.forensics"
+# 恢复（删掉目录）：新调用写回**不带后缀**的行，保留付本重新长出来
+rm -rf "$M36_LOG3.forensics"; : > "$M36_LOG3"
+m36_flog "$M36_LOG3" tmux kill-server >/dev/null 2>&1
+assert_has "$M36_LOG3" "act=refused" "⑤b (e) 恢复后拒绝照常"
+assert_not "$M36_LOG3" "retention=failed" "⑤b (e) 恢复后写回不带 retention=failed 的行"
+assert_file "$M36_LOG3.forensics" "⑤b (e) 恢复后保留付本重新出现"
 
 # ── ⑥ 边界不挂 + 透传保真（M36 返工必修：无子命令 / 缺值参数 / -V 全部透传或明确退出，绝不能挂住；
 #     保真钉桩收到的**完整 argv 与参数个数** —— 不含 token 的调用逐字节原样，含空格/连写也不许被吃。

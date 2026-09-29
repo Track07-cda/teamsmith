@@ -291,25 +291,19 @@ elif [ "$_destructive" = "1" ] && [ "$_sock" = "$_default_sock" ]; then
 fi
 
 # ── 记录（尽力而为：写不进去不挡路；FIFO 目标会阻塞写端，直接跳过 —— 日志绝不能挂住调用）────────
-if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
-  _log="${TEAM_TMUX_CALLS_LOG}"
-  _ld="$(dirname "$_log")"
-  [ -d "$_ld" ] || mkdir -p "$_ld" 2>/dev/null || true
-  _argv="$(printf '%s' "$*" | tr '\r\n' '  ')"
-  printf '%s · act=%s · sock=%s · TMUX=%s · TMUX_TMPDIR=%s · argv=%s · pid=%s ppid=%s cwd=%s\n' \
-    "$(date -Is)" "$_act" "$_sock" "${TMUX:--}" "${TMUX_TMPDIR:--}" "$_argv" "$$" "${PPID:-?}" "$PWD" \
-    >> "$_log" 2>/dev/null || true
-  # 截断：超 2000 条**调用行**留最新 1000 条（同目录临时文件 + mv；失败就算了，日志不是命门）。
-  # P77：被裁掉的历史必须**自述**——轮转后首行是 `<ISO 时间> · rotation · dropped=<N>`，
-  # N = 累计被裁掉的调用行数（前一个 marker 的 N + 本次裁掉的）；marker 不是调用行（不带 act=，
-  # 四值动作词汇表保持封闭），没越界就一条 marker 都不写。
-  # P87（P83-F2）：marker **无论可读与否**都不是调用行——不计入调用行数、也不保留（新的 marker 顶替它），
-  # 所以「恰 2000 条调用行」不会因为顶上的 marker 而被误判越界。读不出 N（空/非数字/超出整数范围）时
-  # 不编造数字：累计计数从 0 起点按**可读部分**重算（契约见 boundary#The gate's actions are logged…）。
-  _n="$(wc -l < "$_log" 2>/dev/null | tr -dc '0-9')"
+# 有界追加（P132）：$_line 追加进 <file>，超 2000 条**调用行**留最新 1000 条（同目录临时文件 + mv；
+# 失败就算了，日志不是命门）。主日志与长保留付本共用这一条路径 —— 同一套自述规则（P77/P87）：
+# 轮转后首行 `<ISO 时间> · rotation · dropped=<N>`，N = 累计被裁掉的调用行数（前一个 marker 的 N +
+# 本次裁掉的）；marker 不是调用行（不带 act=，不计入上限、也不保留）；N 读不出（空/非数字/超出整数
+# 范围）时累计从 0 重启。返回非 0 **只**表示追加本身失败（FIFO 目标直接判失败，绝不阻塞写端）。
+_bounded_append() { # <file>
+  local _f="$1" _n _prev _first _t _rest _d _p _z _canon
+  [ -p "$_f" ] && return 1
+  { printf '%s\n' "$_line" >> "$_f"; } 2>/dev/null || return 1
+  _n="$(wc -l < "$_f" 2>/dev/null | tr -dc '0-9')"
   if [ -n "$_n" ] && [ "$_n" -gt 2000 ]; then
     _prev=0
-    _first="$(head -n 1 "$_log" 2>/dev/null || true)"
+    _first="$(head -n 1 "$_f" 2>/dev/null || true)"
     # marker 形状是**严格**的：时间戳之后紧接 ` · rotation · dropped=<N>`。不能用带 * 的 glob
     # 一把抓（`T*' · rotation · dropped='*` 会把 argv 里带这句话的**调用行**也吃掉），
     # 所以先按第一个 ` · ` 切出时间戳，再要求剩余部分**以** ` · rotation · dropped=` 开头。
@@ -331,10 +325,36 @@ if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
     esac
     if [ "$_n" -gt 2000 ]; then
       { printf '%s · rotation · dropped=%s\n' "$(date -Is)" "$((_prev + _n - 1000))"
-        tail -n 1000 "$_log"; } > "$_log.tmp.$$" 2>/dev/null \
-        && mv "$_log.tmp.$$" "$_log" 2>/dev/null || rm -f "$_log.tmp.$$" 2>/dev/null
+        tail -n 1000 "$_f"; } > "$_f.tmp.$$" 2>/dev/null \
+        && mv "$_f.tmp.$$" "$_f" 2>/dev/null || rm -f "$_f.tmp.$$" 2>/dev/null
     fi
   fi
+  return 0
+}
+
+if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
+  _log="${TEAM_TMUX_CALLS_LOG}"
+  _ld="$(dirname "$_log")"
+  [ -d "$_ld" ] || mkdir -p "$_ld" 2>/dev/null || true
+  _argv="$(printf '%s' "$*" | tr '\r\n' '  ')"
+  # 这一行是**唯一**的格式源：主日志与长保留付本逐字节同一行（跨文件 grep -F / cmp 对齐的锚）。
+  printf -v _line '%s · act=%s · sock=%s · TMUX=%s · TMUX_TMPDIR=%s · argv=%s · pid=%s ppid=%s cwd=%s' \
+    "$(date -Is)" "$_act" "$_sock" "${TMUX:--}" "${TMUX_TMPDIR:--}" "$_argv" "$$" "${PPID:-?}" "$PWD"
+  # 长保留（P132，boundary#A destructive call's record outlives the call log's rotation）：act≠pass 的
+  # 记录在写主日志**之前**先复制进 <log>.forensics —— 破坏性判定熬得过主日志的轮转；pass 不承诺保留
+  # （不建文件、不追行）。复制失败仍走原判定与退出码，只在本行**末尾**补 `retention=failed` 自述 +
+  # stderr 一行 ✗ 点名路径（失败必须可见，但绝不改闸门的判定，也绝不挂住调用）。
+  _retfail=0
+  if [ "$_act" != "pass" ]; then
+    _flog="${_log}.forensics"
+    _bounded_append "$_flog" || _retfail=1
+  fi
+  if [ "$_retfail" = 1 ]; then
+    _line="$_line · retention=failed"
+    printf '✗ teamsmith tmux 闸门：本次调用的破坏性记录没能写进长保留文件（%s）—— 判定与退出码不受影响；本行已用 retention=failed 自述\n' \
+      "$_flog" >&2
+  fi
+  _bounded_append "$_log" || true
 fi
 
 # ── 拒绝解释 / 放行 ──────────────────────────────────────────────────────────────────────────
