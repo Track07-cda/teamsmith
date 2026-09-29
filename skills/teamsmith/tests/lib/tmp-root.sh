@@ -12,8 +12,9 @@
 #      名字进一个 owned 家族 `teamsmith-<kind>.XXXXXX`（sweep 只认这个前缀，别的前缀不碰）；
 #   ② 根里写 owner 标记 `.teamsmith-tmp`（kind / 创建 pid / 该进程启动时间 / boot id / run id），
 #      于是 killed run 的残留**可归因**，且「owner 已死」判定对 pid 复用安全；
-#   ③ 每次创建追加一条 run 台账（`$TEAM_TMP_LEDGER`，默认临时根下的点开头文件）——门禁据此断言
-#      「本轮创建的根一个都不许留下」，而不是去猜文件系统；
+#   ③ 每次创建追加一条 run 台账（`$TEAM_TMP_LEDGER`，默认临时根下的点开头文件；台账头从 P122 起带
+#      `repo=<主仓库>` 仓库身份）—— 门禁据此断言「本轮创建的根一个都不许留下」，而不是去猜文件系统，
+#      tmp-hygiene 也据此把带 owner 标记的 `teamsmith-*` 归因到仓库；
 #   ④ 对出界进程（anchor / sleep）**spawn 时** `tmp_root_track_pid <pid>` 记账，cleanup **只对记录的
 #      pid** 发信号（D37）：禁止按名字 / 命令行匹配 —— `--self-test` 的 `nokill` 反转钉住这一条。
 #
@@ -97,11 +98,19 @@ tmp_root_path_ok() {
 }
 
 # ---------------------------------------------------------------- 创建
+# 仓库身份（P122）：写进 run 台账头 —— 「归属」不只靠名字前缀，台账里可证到仓库
+_tmp_root_repo_id() {
+  local lib g
+  lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  [ -n "$lib" ] || { printf 'unknown\n'; return 0; }
+  g="$(git -C "$lib" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$g" ]; then dirname "$g"; else printf 'unknown\n'; fi
+}
 _tmp_root_ledger_append() { # <path> <pid> <start> <kind> <created>
   local f; f="$(tmp_root_ledger)"
   if [ ! -f "$f" ]; then
-    printf '# teamsmith temp ledger run=%s owner=%s started=%s\n' \
-      "$(tmp_root_run_id)" "$$" "$(date +%s 2>/dev/null || printf 0)" >"$f" 2>/dev/null || return 1
+    printf '# teamsmith temp ledger run=%s owner=%s started=%s repo=%s\n' \
+      "$(tmp_root_run_id)" "$$" "$(date +%s 2>/dev/null || printf 0)" "$(_tmp_root_repo_id)" >"$f" 2>/dev/null || return 1
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$(tmp_root_run_id)" >>"$f" 2>/dev/null || return 1
   return 0
@@ -341,6 +350,11 @@ _tmp_root_selftest() {
     st_ok "run 台账里有这一条（$(tmp_root_ledger)）"
   else
     st_bad "run 台账里没有这条根"
+  fi
+  if head -1 "$(tmp_root_ledger)" 2>/dev/null | grep -Eq ' repo=[^ ]'; then
+    st_ok "run 台账头记了仓库身份（$(head -1 "$(tmp_root_ledger)" | sed -n 's/.* repo=//p')）"
+  else
+    st_bad "run 台账头没有 repo= 仓库身份"
   fi
 
   # ② notmpdir：写死 /tmp 的路径不许被当成合规根

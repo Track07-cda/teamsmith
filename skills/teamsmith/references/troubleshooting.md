@@ -1053,12 +1053,22 @@ bash skills/teamsmith/tests/tmp-hygiene.sh --status   # roots + size/files/age/o
 bash skills/teamsmith/tests/tmp-hygiene.sh --sweep    # reclaim stale, unoccupied roots (--dry-run first)
 ```
 
-`--status` lists only the owned family (directories named `teamsmith-*`/`review-*`, plus the family's files and the
-gate's dot-prefixed diagnostics marked as *not a root*) and the temp root's free/total bytes and inodes; `--sweep`
-proves a candidate is unoccupied (`/proc` scan of cwd/fd/exe, `lsof` as fallback) before deleting anything, skips
-occupied roots whatever their age (`--age N`, default 30 minutes via `TEAM_TMP_SWEEP_AGE`), never `rm -rf`s a
-registered git worktree, refuses (exit 3, nothing deleted) a `review-<ID>` whose verification record is missing or
-uncommitted, and prints the whole inventory before the first deletion. `team doctor` carries the same headroom as
+`--status` lists only the family entries whose **ownership is proven** (directories named `teamsmith-*`/`review-*`;
+a bare `review-<ID>` name is not evidence — it needs this repo's git trace, or — only when the directory carries no
+git trace at all — a board/`docs/team/reviews` record; a `.git`/`gitdir` pointing at another repo **or an
+unreadable one is a rebuttal**, so an ID that also exists here cannot claim it; for `teamsmith-*` the run ledger's
+`repo=` attributes it), plus the family's files and the gate's dot-prefixed diagnostics marked as *not a root*, and
+the temp root's free/total bytes and inodes. Foreign/unproven family directories are **named line by line** with
+their reason (`[foreign] <path> —— the git trace points elsewhere`, `[unproven] …`), and every run prints which
+copy of the tool it is (`工具：<path> · rev <hash>`) — an unmerged copy in another worktree is visible at a glance.
+`--sweep` proves a candidate is unoccupied (`/proc` scan of cwd/fd/exe, `lsof` as fallback) before deleting anything,
+skips occupied roots whatever their age (`--age N`, default 30 minutes via `TEAM_TMP_SWEEP_AGE`), never `rm -rf`s a
+registered git worktree, **skips and names** a candidate whose safe precondition fails (a `review-<ID>` whose
+verification record is missing or uncommitted) while reclaiming the rest, and prints the whole inventory before the
+first deletion (exit 0 when something was done — skips are listed; exit 3 when every candidate was blocked and
+nothing was done). `--status` also counts tmux-side residue — orphan private servers whose socket is gone and stale
+non-`default` sockets with no listener older than the age threshold; `--sweep --tmux-sockets` clears them, the
+default never touches them, and `default` is never a candidate. `team doctor` carries the same headroom as
 one line (free/total bytes and inodes; warning only, threshold `TEAM_TMP_MIN_FREE_MB` /
 `TEAM_TMP_MIN_FREE_INODES`), so a filling tmpfs is visible *before* it turns into a red.
 

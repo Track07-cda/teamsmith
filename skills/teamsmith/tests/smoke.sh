@@ -13880,6 +13880,102 @@ if [ "$P53_FLIP" != "lint" ]; then
   fi
 fi
 
+# ③ P122 返工：归属读 git 痕迹（真 ID + 别仓库 → 拒并点名 + 记录同名也不行）/ 拒绝不阻塞
+#    （做事了→0；合格的真被删）/ tmux 残留可见。现场形状：/tmp/review-M8.2 是 <peer-project> 的
+#    worktree，而本项目恰好也有 M8.2 记录 —— 记录同名不是证据。
+P122D="$TMP/p122-fixture"; P122_REPO="$TMP/p122-repo"; P122_TMDS="$P122D/tmux-sock"
+rm -rf "$P122D"; mkdir -p "$P122D" "$P122_REPO/docs/team/reviews" "$P122_TMDS"
+( cd "$P122_REPO" && git init -q -b main && git config user.email t@t && git config user.name t \
+    && printf '# board\n' >docs/team/BOARD.md && printf 'r1\n' >docs/team/reviews/M8.2.md \
+    && git add -A && git commit -qm init ) >/dev/null 2>&1
+P122_HYG() { env -u TEAM_TMP_HYGIENE_FLIP -u TEAM_SMOKE_FIXTURE -u TEAM_TMP_HYGIENE_TMUX_FAKE_SERVERS \
+  TEAM_TMP_HYGIENE_REPO="$P122_REPO" TEAM_TMP_HYGIENE_TMUX_DIR="$P122_TMDS" TMPDIR="$P122D" \
+  bash "$SKILL_DIR/tests/tmp-hygiene.sh" "$@"; }
+P122_HYG_FLIP() { env TEAM_SMOKE_FIXTURE=1 TEAM_TMP_HYGIENE_FLIP=reviewproof \
+  TEAM_TMP_HYGIENE_REPO="$P122_REPO" TEAM_TMP_HYGIENE_TMUX_DIR="$P122_TMDS" TMPDIR="$P122D" \
+  bash "$SKILL_DIR/tests/tmp-hygiene.sh" "$@"; }
+# 真 ID + 别仓库（本项目有同名已提交记录）；不明确的 .git；我们的、记录缺失；两个干净的可回收根
+mkdir -p "$P122D/foreign/.git/worktrees/review-M8.2" "$P122D/review-M8.2" "$P122D/review-U6.6" \
+  "$P122D/review-T5.5/skills/teamsmith" "$P122D/teamsmith-good.H1" "$P122D/teamsmith-good.H2"
+printf 'gitdir: %s\n' "$P122D/foreign/.git/worktrees/review-M8.2" >"$P122D/review-M8.2/.git"
+: >"$P122D/review-U6.6/.git"
+touch -d '2 hours ago' "$P122D/review-M8.2" "$P122D/review-U6.6" "$P122D/review-T5.5" \
+  "$P122D/teamsmith-good.H1" "$P122D/teamsmith-good.H2"
+P122_OUT="$(P122_HYG --status 2>&1)"
+if printf '%s\n' "$P122_OUT" | grep -qxF "  $P122D/review-M8.2"; then
+  bad "40 P122 真 ID + 别仓库的影子进了 status 根清单（.git 指向别处 = 反证）"
+else
+  ok "40 P122 真 ID + 别仓库（M8.2）不在根清单（同名记录也救不了；现场 /tmp/review-M8.2 形状）"
+fi
+if grep -qF "[foreign] $P122D/review-M8.2" <<<"$P122_OUT"; then
+  ok "40 P122 status 逐条点名别家（[foreign] + 路径 + 理由）"
+else
+  bad "40 P122 status 没有点名别家的归因"
+fi
+if grep -qF "[unproven] $P122D/review-U6.6" <<<"$P122_OUT"; then
+  ok "40 P122 status 逐条点名不明确（[unproven] + 路径）"
+else
+  bad "40 P122 status 没有点名不明确的归因"
+fi
+if grep -qF "tmux 侧残留" <<<"$P122_OUT"; then
+  ok "40 P122 status 有 tmux 侧残留的计数行"
+else
+  bad "40 P122 status 没有 tmux 侧残留行"
+fi
+P122_RC=0; P122_OUT="$(P122_HYG --sweep --age 0 2>&1)" || P122_RC=$?
+if [ "$P122_RC" = 0 ]; then
+  ok "40 P122 1 拒绝 + 2 合格：sweep 退出 0（拒绝不再全停）"
+else
+  bad "40 P122 sweep 退出 $P122_RC（期望 0）"
+fi
+if [ ! -d "$P122D/teamsmith-good.H1" ] && [ ! -d "$P122D/teamsmith-good.H2" ]; then
+  ok "40 P122 1 拒绝 + ≥2 合格 → 两个合格的真被删"
+else
+  bad "40 P122 合格根没被回收（拒绝阻塞了其余候选）"
+fi
+if [ -d "$P122D/review-M8.2" ] && [ -d "$P122D/review-U6.6" ] && [ -d "$P122D/review-T5.5" ]; then
+  ok "40 P122 别家 / 不明 / 被拒的检出一个都没动"
+else
+  bad "40 P122 不安全候选被动了"
+fi
+if grep -qF "[foreign] $P122D/review-M8.2" <<<"$P122_OUT" \
+    && grep -qF "[unproven] $P122D/review-U6.6" <<<"$P122_OUT" \
+    && grep -qF "[refuse] $P122D/review-T5.5" <<<"$P122_OUT" \
+    && grep -qF "docs/team/reviews/T5.5.md" <<<"$P122_OUT"; then
+  ok "40 P122 sweep 逐条点名（别家 / 不明 / 被拒 + 缺失记录路径）"
+else
+  bad "40 P122 sweep 跳过时没有逐条点名"
+fi
+# 红侧：把归属证明关掉 → 同一个影子进候选（带同名已提交记录 → 会被删）
+mkdir -p "$P122D/foreign/.git/worktrees/review-R5.5" "$P122D/review-R5.5" "$P122D/review-V6.6/skills/teamsmith"
+printf 'gitdir: %s\n' "$P122D/foreign/.git/worktrees/review-R5.5" >"$P122D/review-R5.5/.git"
+printf 'r5\n' >"$P122_REPO/docs/team/reviews/R5.5.md"
+( cd "$P122_REPO" && git add -A && git commit -qm r55 ) >/dev/null 2>&1
+touch -d '2 hours ago' "$P122D/review-R5.5" "$P122D/review-V6.6"
+P122_FLIP_RC=0; P122_HYG_FLIP --sweep --age 0 >"$TMP/p122-flip.log" 2>&1 || P122_FLIP_RC=$?
+if [ ! -d "$P122D/review-R5.5" ] && [ -d "$P122D/review-V6.6" ]; then
+  ok "40 P122 红侧：关掉归属证明后影子确实会被删（守门的就是这条证明）"
+else
+  bad "40 P122 红侧：关掉归属证明后影子仍未被删（rc=$P122_FLIP_RC）"
+fi
+# tmux 残留：status 数得出来；不给 --tmux-sockets 时 sweep 只报不动
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$P122_TMDS/stale-a" <<'P122PY' >/dev/null 2>&1
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()
+P122PY
+  touch -d '2 hours ago' "$P122_TMDS/stale-a"
+  P122_T_OUT="$(P122_HYG --status 2>&1)"
+  if grep -qF "陈旧 socket 1 个" <<<"$P122_T_OUT"; then
+    ok "40 P122 status 把无监听的陈旧 socket 数出来"
+  else
+    bad "40 P122 陈旧 socket 没被数出来：$(grep -aF '陈旧 socket' <<<"$P122_T_OUT" | head -1)"
+  fi
+  P122_HYG --sweep --age 0 >/dev/null 2>&1
+  [ -S "$P122_TMDS/stale-a" ] && ok "40 P122 没给 --tmux-sockets 时 sweep 不动 tmux 残留" \
+    || bad "40 P122 sweep 没给开关就动了 tmux 残留"
+fi
+
 # ② 结束用量行 + 泄漏断言：台账里本轮创建的根必须都没了（本进程自己的根除外 —— 它由 EXIT
 #    trap 的 cleanup 在断言之后回收，p53 的「一个都不留」正是冲着嵌套夹具泄漏去的）。
 smoke_tmp_usage end
