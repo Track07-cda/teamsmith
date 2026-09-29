@@ -22,9 +22,19 @@ name: gates
 # Manual + `main` only (no pull_request trigger): this repository may be private, and Actions
 # minutes are billed — the PM's independent `team review <ID> --dir …` run stays the gate that
 # decides a merge. Enable more triggers (see docs/team/PUBLISH.md §7) when the repository goes public.
+#
+# P130/A (D60 #1, after D54 records ~30 pushes burning the account's Actions quota): a push whose
+# every changed file is under docs/** — the team ledger BOARD/DECISIONS/reports/reviews/threads —
+# cannot change the gate's outcome, so it no longer pays for a run. GitHub skips the run only when
+# *all* changed files match paths-ignore; one non-ignored file in the same push still triggers it.
+# `workflow_dispatch` has no path filter and always runs. The trigger matrix, including the
+# counterexamples that prove skills/**, openspec/**, ci/** and .github/** still trigger, is in
+# docs/team/reports/P130-dev.md (§触发矩阵) and executable in docs/team/reports/P130-dev/pkg/.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
   workflow_dispatch:
 
 permissions:
@@ -37,8 +47,8 @@ concurrency:
 jobs:
   gates:
     runs-on: ubuntu-latest
-    # The suite takes ~10 minutes in the container; the image build adds a few. Same order of
-    # magnitude as the previous runner-only job (12–13 min).
+    # The correctness suite takes ~10 minutes in the container and the image build a few; P130 moved
+    # the perf suite into this same job (see below), so the budget covers both suites + one build.
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -103,23 +113,24 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # M58 (perf-suite-split): the performance suite is a **second, independent conclusion**. It runs the
-  # same script in the same pinned image on its own runner (so it never contends with the correctness
-  # job), and the step is tolerated (`continue-on-error: true`): its red stays visible in the log and as
-  # an annotation without failing this workflow — a failing performance run neither blocks a merge nor
-  # changes the correctness conclusion. The numbers to record before a release come from this run (see
-  # docs/team/PUBLISH.md). Nothing here adds a merge-blocking path; the correctness job above is unchanged.
-  perf:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Build the gate image
-        run: docker build -f ci/Containerfile -t teamsmith-gates:ci .
-
+      # P130/B (D60 #1): the performance suite is a **second, independent conclusion** — never a
+      # merge gate. It used to be a second job, and each of the two jobs built the same pinned image
+      # again, so every run paid two `docker build`s (the quota burn D54 records). Option ① (merge it
+      # into this job) was chosen over option ② (keep two jobs + a GHCR-cached image): one runner, one
+      # build, no registry credentials or permissions, no `docker pull` that can go stale or fail and
+      # silently turn back into a second build. The price — correctness and perf now run sequentially
+      # in one job, so a correctness hang consumes this job's timeout before perf starts — is
+      # acceptable: perf numbers are recorded by the release-time run (docs/team/PUBLISH.md §0) and
+      # perf gates nothing. Reasons and failure modes: docs/team/reports/P130-dev.md §B.
+      #
+      # `if: ${{ !cancelled() }}` keeps the old two-job property that perf still reports when the
+      # correctness step failed, without trying to run during an explicit cancellation (GitHub's docs
+      # recommend it over `always()`); `continue-on-error: true` is what makes the failure
+      # non-blocking: the step shows red with an annotation, later steps run, and the job/workflow
+      # conclusion is untouched. The correctness step above has no such tolerance — it stays the hard
+      # gate, and the static checks in docs/team/reports/P130-dev/pkg/ assert exactly that.
       - name: Performance suite (pinned container, non-blocking)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           docker run --rm --pid=host \
