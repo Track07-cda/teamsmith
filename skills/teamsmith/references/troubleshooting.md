@@ -1140,3 +1140,11 @@ basis — in a linear history that commit contains the earlier ones, so it can o
 never laxer — and it prints `注：这个任务在 <branch> 上有 N 个候选合并提交 … 取最新的那个` naming the commit
 it used in the header line.
 
+
+**When the whole suite runs red inside a container but green on the host** — a run of several hundred
+environment-shaped failures (no `flock --close`, no `perl`, nobody can resolve the git common dir) is the
+container, not the deliverable. The suite needs a full environment: the skill's own tmux fixture image
+(`teamsmith-tmux-test:alpine`) carries tmux and little else, so it is for tmux probes only. The pinned gate
+image (`ci/Containerfile`) is the one built for the suite. A `git worktree` cannot be mounted for a container
+run either: its `.git` is a pointer file to the main checkout, so every git-dependent fixture fails. Mount an
+independent `git clone` instead, and give the container `--pid=host` as the CI workflow does.
