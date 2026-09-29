@@ -16,12 +16,15 @@ widens the lanes that still show cards. When the width cannot satisfy every unfo
 line SHALL truncate first: the fold degrades before the cards' shares do.
 
 A folded lane's presentation follows the pane's width tier, because the scarce resource differs by width. In the
-tiers where the board draws its lanes side by side, the folded lanes SHALL leave the lane row: they SHALL render
-as one summary row above the lanes (`▸ 待复验 0（已折叠） · ▸ 阻塞 0（已折叠）`), and the whole usable width SHALL
-go to the unfolded lanes — folding gives columns back, and the lane row SHALL NOT render wider than the usable
-width in any tier. In the tiers where the usable width cannot hold the unfolded lanes' floors and the board
-groups its lanes, a folded lane SHALL stay in place as its single line — there folding is what saves rows — and
-the summary row SHALL NOT be used.
+tiers where the board draws its lanes side by side, a folded lane SHALL take a three-column frame: a vertical
+border on each side and, in the middle column, the ellipsis (`│…│`, the middle column drawn down the lane's
+height). The folded lane SHALL keep its position in the fixed lane order, so the frame alone says which lane it
+is, and the whole width the three columns do not use SHALL go to the unfolded lanes — folding gives columns back,
+and the lane row SHALL NOT render wider than the usable width in any tier. The focused folded lane SHALL name
+itself — its label and card count — where the focused card's demoted pair renders, since three columns cannot
+carry the label. In the tiers where the usable width cannot hold the unfolded lanes' floors and the board groups
+its lanes, a folded lane SHALL stay in place as its single line carrying the label, the count and the folded
+marker — there folding is what saves rows — and the three-column frame SHALL NOT be used.
 
 A folded lane SHALL stay reachable through its cards: `←`/`→` still stop on a folded lane that holds cards, and
 while the focused card lives in a folded lane the lane's one line SHALL carry the focus cursor and the `selected`
@@ -94,15 +97,22 @@ and `--print`/`--json` MUST NOT read these keys: a machine frame renders the def
 - **GIVEN** the fixture board whose `review` and `blocked` lanes are both empty, the board page at 190 columns,
   and the board page rendering wider than 190 columns before the fold
 - **WHEN** the empty default folds both lanes
-- **THEN** the lane row renders within the 190 columns, the two folded lanes appear as one summary row rather
-  than two columns, and the unfolded lanes' combined width is larger than in the in-place form
+- **THEN** each folded lane renders as a three-column frame whose middle column carries the ellipsis, the lane
+  row renders within the 190 columns, and the unfolded lanes' combined width is larger than in the in-place form
+
+#### Scenario: A focused folded lane names itself
+
+- **GIVEN** a folded lane holding cards, the focus moved onto its three-column frame
+- **WHEN** the frame renders
+- **THEN** the lane's label and card count appear where the focused card's demoted pair renders, and the frame
+  carries the focus cursor
 
 #### Scenario: A narrow pane saves rows, not columns
 
 - **GIVEN** a fixture board at 59 columns whose `done` lane holds cards
 - **WHEN** that lane is folded
-- **THEN** the frame's card rows shrink by that lane's cards, the folded lane draws in place as its single line,
-  and the summary row of the wide form is not used
+- **THEN** the frame's card rows shrink by that lane's cards, the folded lane draws in place as its single line
+  carrying its label and count, and the three-column frame of the wide form is not used
 
 #### Scenario: Machine frames ignore the human's fold state
 
