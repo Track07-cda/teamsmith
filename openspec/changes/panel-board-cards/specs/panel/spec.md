@@ -25,7 +25,10 @@ and the lane row SHALL NOT render wider than the usable width in any tier. The f
 itself — its label and card count — where the focused card's demoted pair renders, since three columns cannot
 carry the label. In the tiers where the usable width cannot hold the unfolded lanes' floors and the board groups
 its lanes, a folded lane SHALL stay in place as its single line carrying the label, the count and the folded
-marker — there folding is what saves rows — and the three-column frame SHALL NOT be used.
+marker — there folding is what saves rows — and the three-column frame SHALL NOT be used. That in-place line
+SHALL sit in the column its own card lines use: the same leading indent (including the focus cursor's column),
+with its fold marker in the column where those cards' state glyphs are drawn, so the folded line lines up with
+the cards it stands for instead of hanging at the lane header's marker column.
 
 A folded lane SHALL stay reachable through its cards: `←`/`→` still stop on a folded lane that holds cards, and
 while the focused card lives in a folded lane the lane's one line SHALL carry the focus cursor and the `selected`
@@ -107,6 +110,15 @@ and `--print`/`--json` MUST NOT read these keys: a machine frame renders the def
 - **WHEN** the frame renders
 - **THEN** the lane's label and card count appear where the focused card's demoted pair renders, and the frame
   carries the focus cursor
+
+#### Scenario: The in-place folded line lines up with the cards it replaces
+
+- **GIVEN** the board page in a grouped tier (the narrow form) whose `done` lane holds cards and the focus on a
+  card of that lane
+- **WHEN** the lane is folded
+- **THEN** the lane's one line starts in the same column its card lines started in (its marker in the cards'
+  glyph column) and the focus cursor still marks that line, while the lane's header keeps the marker column of
+  the other headers
 
 #### Scenario: A narrow pane saves rows, not columns
 
