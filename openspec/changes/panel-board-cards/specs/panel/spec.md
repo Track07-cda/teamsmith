@@ -16,9 +16,10 @@ widens the lanes that still show cards. When the width cannot satisfy every unfo
 line SHALL truncate first: the fold degrades before the cards' shares do.
 
 A folded lane's presentation follows the pane's width tier, because the scarce resource differs by width. In the
-tiers where the board draws its lanes side by side, a folded lane SHALL take a three-column frame: a vertical
-border on each side and, in the middle column, the ellipsis (`│…│`, the middle column drawn down the lane's
-height). The folded lane SHALL keep its position in the fixed lane order, so the frame alone says which lane it
+tiers where the board draws its lanes side by side, a folded lane SHALL take a three-column frame: a rounded
+corner at each of its four corners (the panel's own corner glyphs, `╭ ╮ ╰ ╯`), a vertical border on each side and,
+in the middle column, the ellipsis (`╭─╮` over `│…│` over `╰─╯`, the middle column drawn down the lane's height
+as the vertical ellipsis). The folded lane SHALL keep its position in the fixed lane order, so the frame alone says which lane it
 is, and the whole width the three columns do not use SHALL go to the unfolded lanes — folding gives columns back,
 and the lane row SHALL NOT render wider than the usable width in any tier. The focused folded lane SHALL name
 itself — its label and card count — where the focused card's demoted pair renders, since three columns cannot
@@ -97,8 +98,8 @@ and `--print`/`--json` MUST NOT read these keys: a machine frame renders the def
 - **GIVEN** the fixture board whose `review` and `blocked` lanes are both empty, the board page at 190 columns,
   and the board page rendering wider than 190 columns before the fold
 - **WHEN** the empty default folds both lanes
-- **THEN** each folded lane renders as a three-column frame whose middle column carries the ellipsis, the lane
-  row renders within the 190 columns, and the unfolded lanes' combined width is larger than in the in-place form
+- **THEN** each folded lane renders as a three-column frame — rounded corners, a border column, an ellipsis
+  column, a border column — the lane row renders within the 190 columns, and the unfolded lanes' combined width is larger than in the in-place form
 
 #### Scenario: A focused folded lane names itself
 
