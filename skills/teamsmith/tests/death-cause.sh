@@ -494,7 +494,7 @@ td_live() {
   tmux respawn-pane -k -t "$sess:td" bash -lc 'echo "Error: 403 permission_error: reached your weekly (7-day) usage limit"; sleep 300' >/dev/null 2>&1 || true
   local i pid pgid mypg dead=""
   for i in $(seq 1 30); do
-    tmux capture-pane -p -S - -t "$sess:td" 2>/dev/null | grep -q 'usage limit' && break
+    { tmux capture-pane -p -S - -t "$sess:td" 2>/dev/null || true; } | grep -q 'usage limit' && break
     sleep 0.2
   done
   pid="$(tmux list-panes -t "$sess:td" -F '#{pane_pid}' 2>/dev/null | head -1)"

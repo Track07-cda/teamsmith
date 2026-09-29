@@ -2746,7 +2746,7 @@ EOF
   pm_wait_delta() { # <秒> <起始行数> <正则>：等 PM_LOG 的新增行里出现模式
     local secs="$1" from="$2" pat="$3" i=0 ticks=$(( ${1:-5} * 10 ))
     while [ "$i" -lt "$ticks" ]; do
-      sed -n "$((from + 1)),\$p" "$PM_LOG" 2>/dev/null | grep -qE -- "$pat" && return 0
+      { sed -n "$((from + 1)),\$p" "$PM_LOG" 2>/dev/null || true; } | grep -qE -- "$pat" && return 0
       sleep 0.1; i=$((i + 1))
     done
     return 1
@@ -14452,7 +14452,7 @@ P55AG2
     "$(tmux show-options -w -v -t "$SESSION:pm" remain-on-exit 2>/dev/null)" ""
   P55_W=0
   while [ "$P55_W" -lt 30 ]; do
-    tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null | grep -q 'P55-MARK-5' && break
+    { tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null || true; } | grep -q 'P55-MARK-5' && break
     sleep 0.3; P55_W=$((P55_W + 1))
   done
   tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null > "$TMP/p55-pane-alive.txt" || true
@@ -16221,6 +16221,36 @@ if [ -f "$SKILL_DIR/tests/death-cause.sh" ]; then
   fi
 else
   bad "52 缺 tests/death-cause.sh（P113 的席位死因夹具）"
+fi
+# ---------------------------------------------------------------- 53. P127 等待引擎长帧
+# 等待引擎的四个 needle 曾走 `printf '%s\n' "$c" | grep -qF`：grep 命中即退 → 写端 SIGPIPE →
+# lib 的 `set -o pipefail` 把真命中读成 rc=141 → 等待报「没出现」（P124 的 120607 B 合成帧上
+# 确定性复现）。这里钉住：>128 KiB 的长帧里 needle 在首行必须命中、不在必须照缺报；红侧把
+# 匹配器影子回旧管道（--break=pipeshadow），长帧命中那条必须红。不依赖 tmux，FAST 照跑。
+section "53 · 等待引擎长帧：命中/缺失不被管道缓冲吃掉（P127）"
+P127_LIB="$SKILL_DIR/tests/lib/pty-wait.sh"
+if [ -f "$P127_LIB" ]; then
+  P127_GREEN_RC=0
+  bash "$P127_LIB" --self-test >"$TMP/p127-selftest-green.log" 2>&1 || P127_GREEN_RC=$?
+  if [ "$P127_GREEN_RC" -eq 0 ] \
+     && grep -qa '长帧命中：.*（>128 KiB）里第一行的 needle 直接命中' "$TMP/p127-selftest-green.log" \
+     && grep -qa '长帧缺失：同一个 .*B 的帧里 needle 不在 → 照缺报' "$TMP/p127-selftest-green.log"; then
+    ok "53 绿侧：长帧两向都在自检里（首行命中 rc=0 / 缺失 rc=1+点名缺项；$(grep -a '== 结果 ==' "$TMP/p127-selftest-green.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')）"
+  else
+    bad "53 绿侧：长帧守卫没有全绿（rc=$P127_GREEN_RC）"
+    grep -a '✗' "$TMP/p127-selftest-green.log" | head -5 | sed 's/^/      /'
+  fi
+  P127_SHADOW_RC=0
+  bash "$P127_LIB" --self-test --break=pipeshadow >"$TMP/p127-selftest-shadow.log" 2>&1 || P127_SHADOW_RC=$?
+  if [ "$P127_SHADOW_RC" -ne 0 ] \
+     && grep -a '✗' "$TMP/p127-selftest-shadow.log" | grep -qa '长帧命中被判成没出现'; then
+    ok "53 红侧：影子回 printf|grep -q（--break=pipeshadow）→ 长帧命中那条红（rc=$P127_SHADOW_RC，点名的就是 SIGPIPE 假缺）"
+  else
+    bad "53 红侧：旧写法没有让长帧命中那条红（rc=$P127_SHADOW_RC）"
+    grep -a '✗' "$TMP/p127-selftest-shadow.log" | head -5 | sed 's/^/      /'
+  fi
+else
+  bad "53 缺 tests/lib/pty-wait.sh"
 fi
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：

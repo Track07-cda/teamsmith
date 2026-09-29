@@ -124,7 +124,7 @@ PY
 
   local want_flipped="" l
   for l in '✗ M48 重复 ID：↓ 走到同 ID 的第二行（不卡死）' '✗ M48 重复 ID：焦点光标恰好一个（不是两行都亮）'; do
-    plain "$flipped_log" | grep -qF -- "$l" || want_flipped="$want_flipped
+    { plain "$flipped_log" || true; } | grep -qF -- "$l" || want_flipped="$want_flipped
      $l"
   done
   if [ -n "$want_flipped" ]; then
@@ -133,7 +133,7 @@ PY
   else
     pass "focus：翻转（改回按 ID 比较）→ 重复 ID 的行走/单光标断言变红"
   fi
-  if [ "$rc2" -eq 0 ] && ! plain "$now_log" | grep -q '^  .*✗'; then
+  if [ "$rc2" -eq 0 ] && ! { plain "$now_log" || true; } | grep -q '^  .*✗'; then
     pass "focus：提交的 bundle 在同一场景全绿（同一夹具、同一判据红→绿）"
   else
     fail "focus：提交的 bundle 在 board 场景有失败项（rc=$rc2）"
@@ -211,14 +211,14 @@ PY
   printf '  翻转 skill 的 §4c：rc=%s（✗ %s 条）｜真树 §4c：rc=%s（✗ %s 条）\n' \
     "$mrc" "$(plain "$mutated_log" | grep -ac '^  .*✗' || true)" "$rrc" "$(plain "$real_log" | grep -ac '^  .*✗' || true)"
 
-  if [ "$mrc" -ne 0 ] && plain "$mutated_log" | grep -qF '✗ M48：重复 ID 的 board add 应当被拒'; then
+  if [ "$mrc" -ne 0 ] && { plain "$mutated_log" || true; } | grep -qF '✗ M48：重复 ID 的 board add 应当被拒'; then
     pass "add：去掉检查 → §4c 的「重复 ID 应当被拒」变红（守卫测试真的咬在检查上）"
     plain "$mutated_log" | grep -aF 'M48：' | grep -aF '✗' | sed 's/^/      /' | head -5
   else
     fail "add：去掉检查后 §4c 没有红在预期断言上（rc=$mrc）"
     plain "$mutated_log" | grep -aE '^  .*✗' | sed 's/^/      /' | head -8
   fi
-  if [ "$rrc" -eq 0 ] && ! plain "$real_log" | grep -q '^  .*✗'; then
+  if [ "$rrc" -eq 0 ] && ! { plain "$real_log" || true; } | grep -q '^  .*✗'; then
     pass "add：真树（带检查）在同一探针上全绿"
   else
     fail "add：真树在 §4c 探针上有失败项（rc=$rrc）"
@@ -264,7 +264,7 @@ PY
 
   local want="" l
   for l in '✗ M48：assign 后行数不变（不是又加一行）' '✗ M48：assign 后 T1.1 仍是两行（没有顺手改历史数据）'; do
-    plain "$mutated_log" | grep -qF -- "$l" || want="$want
+    { plain "$mutated_log" || true; } | grep -qF -- "$l" || want="$want
      $l"
   done
   if [ -n "$want" ]; then
@@ -273,7 +273,7 @@ PY
   else
     pass "assign：翻转（指派 = 再写一行）→ 行数/去重断言变红（守卫真的咬在「原地改」上）"
   fi
-  if [ "$rrc" -eq 0 ] && ! plain "$real_log" | grep -q '^  .*✗'; then
+  if [ "$rrc" -eq 0 ] && ! { plain "$real_log" || true; } | grep -q '^  .*✗'; then
     pass "assign：真树（原地改 agent）在同一探针上全绿"
   else
     fail "assign：真树在 §4c 探针上有失败项（rc=$rrc）"

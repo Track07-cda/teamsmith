@@ -101,7 +101,7 @@ flip() { # <名字> <段> <变异函数> <期望红断言正则...>
   fi
   local miss="" pat
   for pat in "$@"; do
-    grep -E '✗' "$TMP/$name-red.log" | grep -qE -- "$pat" || miss="$miss [$pat]"
+    { grep -E '✗' "$TMP/$name-red.log" || true; } | grep -qE -- "$pat" || miss="$miss [$pat]"
   done
   if [ -z "$miss" ]; then ok "$name：红侧点在预期的断言上"
   else bad "$name：红侧没点到预期断言$miss"; show_red "$TMP/$name-red.log"; fi

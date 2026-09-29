@@ -74,8 +74,8 @@ p55_leg() { # <leg> <skill_dir>
   [ "$roe" = "on" ]; ck A1 "remain-on-exit 读回是 on" "$?" "$roe"
   roe_pm="$(tmux show-options -w -v -t "$SESS:pm" remain-on-exit 2>/dev/null)"
   [ -z "$roe_pm" ]; ck A2 "PM 窗口无该设置" "$?" "$roe_pm"
-  i=0; while [ "$i" -lt 30 ]; do tmux capture-pane -p -S - -t "$SESS:p55w" 2>/dev/null | grep -q P55-MARK-3 && break; sleep 0.3; i=$((i+1)); done
-  tmux capture-pane -p -S - -t "$SESS:p55w" 2>/dev/null | grep -q P55-MARK-3; ck A3 "marker 画上" "$?"
+  i=0; while [ "$i" -lt 30 ]; do { tmux capture-pane -p -S - -t "$SESS:p55w" 2>/dev/null || true; } | grep -q P55-MARK-3 && break; sleep 0.3; i=$((i+1)); done
+  { tmux capture-pane -p -S - -t "$SESS:p55w" 2>/dev/null || true; } | grep -q P55-MARK-3; ck A3 "marker 画上" "$?"
   [ "$(tmux list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null | grep -cx p55w)" = "1" ]; ck A4 "恰好一个窗口" "$?"
 
   # ── B：kill → 遗体 ──
@@ -87,7 +87,7 @@ p55_leg() { # <leg> <skill_dir>
   [ "$(tmux list-panes -t "$SESS:p55w" -F '#{pane_dead}' 2>/dev/null | head -1)" = "1" ]; ck B1 "kill 后 pane_dead=1（遗体留存）" "$?"
   [ "$(tmux list-panes -t "$SESS:p55w" -F '#{pane_dead_signal}' 2>/dev/null | head -1)" = "9" ]; ck B2 "退出证据 signal=9" "$?"
   [ "$(tmux list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null | grep -cx p55w)" = "1" ]; ck B3 "窗口没跟 pane 消失" "$?"
-  tmux capture-pane -p -S - -t "$SESS:p55w" 2>/dev/null | grep -q P55-MARK-3; ck B4 "遗体画面含 marker" "$?"
+  { tmux capture-pane -p -S - -t "$SESS:p55w" 2>/dev/null || true; } | grep -q P55-MARK-3; ck B4 "遗体画面含 marker" "$?"
 
   # ── C：say 对死 pane ──
   before="$(tmux capture-pane -p -S - -t "$SESS:p55w" 2>/dev/null | cksum)"
@@ -106,7 +106,7 @@ p55_leg() { # <leg> <skill_dir>
   grep -qF "上一个 pane 已死（signal=9）" "$T/d2.log"; ck D2 "复用点名上一个 pane 已死" "$?"
   f="$REPO/.pi/team/state/dispatch-p55w-pane-dead.txt"
   grep -qF "exit: signal=9" "$f" 2>/dev/null; ck D3 "现场文件带退出证据" "$?"
-  [ -f "$f" ] && sed -n '/^--- scene ---/,$p' "$f" | tail -n +2 | grep -q 'P55-MARK'; ck D4 "现场文件画面含 marker" "$?"
+  [ -f "$f" ] && { sed -n '/^--- scene ---/,$p' "$f" | tail -n +2 || true; } | grep -q 'P55-MARK'; ck D4 "现场文件画面含 marker" "$?"
   [ "$(tmux list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null | grep -cx p55w)" = "1" ]; ck D5 "替换后恰好一个窗口" "$?"
   [ "$(tmux show-options -w -v -t "$SESS:p55w" remain-on-exit 2>/dev/null)" = "on" ]; ck D6 "新窗口仍 on" "$?"
 

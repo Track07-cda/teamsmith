@@ -57,7 +57,7 @@ PYEDIT
   else
     bad "$name：断掉之后 $scn 居然还是绿的（翻转失效）"
   fi
-  if grep -E '✗' "$tmp/$name-red.log" | grep -q -- "$red_re"; then
+  if { grep -E '✗' "$tmp/$name-red.log" || true; } | grep -q -- "$red_re"; then
     ok "$name：红侧的失败点就是预期的那条（$red_re）"
   else
     bad "$name：红侧没有点到预期的那条（$red_re）"

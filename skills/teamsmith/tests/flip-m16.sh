@@ -114,7 +114,7 @@ name_check() { # <log> → 0 = 名字都在（实现正确）
   done
   # ④ 负对照：查不到名字 → 只印代号（不编名字）
   grep -qF -- 'M16D-dev' "$log" || return 1
-  if grep -F -- 'M16D-dev' "$log" | grep -qF '（'; then return 1; fi
+  if { grep -F -- 'M16D-dev' "$log" || true; } | grep -qF '（'; then return 1; fi
   return 0
 }
 

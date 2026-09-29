@@ -486,7 +486,9 @@ leave_picker() { # <KEY>
 # that the view did not go back to grouping by class (both languages' six words).
 assert_no_class_heading() { # <capture file> [label]
   local f="$1" label="${2:-视图没有类分组标题（分组是功能域）}"
-  if sed 's/[│|]//g' "$f" | grep -qE '^ *(立即生效|需要重启|只读|Takes effect now|Needs a restart|Read-only) *$'; then
+  # M59/P127: `{ … || true; } | grep -q` — the capture file can outgrow the pipe buffer; grep -q
+  # exits on the first hit and sed would take SIGPIPE (rc=141 → a class heading falsely "absent").
+  if { sed 's/[│|]//g' "$f" || true; } | grep -qE '^ *(立即生效|需要重启|只读|Takes effect now|Needs a restart|Read-only) *$'; then
     bad "$label（捕获里出现了只有类词的行）"
   else
     ok "$label"
@@ -649,7 +651,9 @@ PYFIX
     local opened="" _probe_i c_probe
     for _probe_i in $(seq 1 24); do
       c_probe="$(cap)"
-      if { printf '%s\n' "$c_probe" | grep -qF "╭─ $keyname" || printf '%s\n' "$c_probe" | grep -qF " · $keyname"; } \
+      # P127: here-strings, not `printf | grep -q` — the probe frame can outgrow the pipe buffer
+      # and grep's early exit would SIGPIPE the printf writer (rc=141 → the open falsely unseen).
+      if { grep -qF -- "╭─ $keyname" <<< "$c_probe" || grep -qF -- " · $keyname" <<< "$c_probe"; } \
          && pty_frame_settled "$c_probe"; then
         opened="$c_probe"; break
       fi

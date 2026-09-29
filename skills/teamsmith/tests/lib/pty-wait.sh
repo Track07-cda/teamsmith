@@ -39,7 +39,7 @@
 #   PTY_TRACE=0            print every wait/cleanup decision to stderr (fixture diagnostics)
 #   PTY_SELFTEST_BREAK=""  self-test only (`--self-test`): sabotage one rule so the guard test
 #                          can go red (early / nosettle / noclockmask / unguarded / noscene /
-#                          noext / alwaysext / noskip / alwaysskip)
+#                          noext / alwaysext / noskip / alwaysskip / pipeshadow)
 #
 # P48 `pty-fixture-load-premise` (panel#The project-settings pty fixture judges under a machine
 # premise; the gate rule is verification#The correctness gate judges correctness only): the horizon
@@ -111,14 +111,30 @@ pty_trace() {
 
 # ---- predicates -------------------------------------------------------------
 
+# _pty_contains <capture> <literal> — 0 when <literal> sits inside <capture>.
+#
+# P127: this matcher is bash-internal on purpose. `printf '%s\n' "$c" | grep -qF` hands the
+# capture to a separate writer; grep -q exits on the first hit and the writer takes SIGPIPE, so
+# under `set -o pipefail` a real hit comes back as rc=141 and the wait reports "not there" — the
+# engine's four sites were that shape and P124's 120607-byte frame hit them deterministically.
+# `pipeshadow` is the self-test's red side: it shadows this helper back to the pre-fix pipeline
+# so the long-frame guard must go red (the guard test asserts exactly that).
+_pty_contains() {
+  if [ "${PTY_SELFTEST_BREAK:-}" = "pipeshadow" ]; then
+    printf '%s\n' "$1" | grep -qF -- "$2"
+    return $?
+  fi
+  [[ "$1" == *"$2"* ]]
+}
+
 _pty_has_all() { # <capture> <needle...> — a `!text` needle must be ABSENT from the capture
   local c="$1"; shift
   local n
   for n in "$@"; do
     [ -n "$n" ] || continue
     case "$n" in
-      '!'*) printf '%s\n' "$c" | grep -qF -- "${n#!}" && return 1 ;;
-      *)    printf '%s\n' "$c" | grep -qF -- "$n" || return 1 ;;
+      '!'*) _pty_contains "$c" "${n#!}" && return 1 ;;
+      *)    _pty_contains "$c" "$n" || return 1 ;;
     esac
   done
   return 0
@@ -130,8 +146,8 @@ _pty_report_missing() { # <capture> <needle...> → a one-line "缺 […]；仍�
   for n in "$@"; do
     [ -n "$n" ] || continue
     case "$n" in
-      '!'*) printf '%s\n' "$c" | grep -qF -- "${n#!}" && still="$still ${n#!}" ;;
-      *)    printf '%s\n' "$c" | grep -qF -- "$n" || miss="$miss $n" ;;
+      '!'*) _pty_contains "$c" "${n#!}" && still="$still ${n#!}" ;;
+      *)    _pty_contains "$c" "$n" || miss="$miss $n" ;;
     esac
   done
   if [ -n "$miss" ]; then printf '缺 [%s]' "${miss# }"; fi
@@ -421,6 +437,8 @@ pty_selftest() {
   pty_cap() {
     local mode paint ticks
     mode="$(cat "$st_dir/mode")"; paint="$(cat "$st_dir/paint")"; ticks="$(cat "$st_dir/ticks")"
+    # 判据⑥（P127）：一个静态的超大帧（>128 KiB），第一行就是 needle —— 旧写法在这里被 SIGPIPE 吃掉。
+    if [ "$mode" = "long" ]; then cat "$st_dir/longframe"; return 0; fi
     printf '╭─ 项目设置 · 09:41:%02d\n' "$ticks"
     case "$mode" in
       view)   printf '%s\n' '│ 监控界面  tui · 当前' '│ 会话名  readonly · 只读' ;;
@@ -476,6 +494,8 @@ pty_selftest() {
   printf '  标题时钟每次 capture 跳一秒（只有 HH:MM:SS 掩码后的比较才算「帧静止」）。\n'
   printf '  判据④/⑤：慢但仍在绘制的场景会被延长（第 %s 拍才到条目），静态场景一点不延长；耗尽那一刻\n' "${_ST_SLOW_AT:-9}"
   printf '  按机器读数归因 —— 超前提 → 一行可见 SKIP（rc=3），前提之内 → 红（rc=1 + 现场）。\n'
+  printf '  判据⑥（P127）：>128 KiB 的长帧里，第一行的 needle 必须命中、缺失必须照缺报；旧写法\n'
+  printf '  `printf | grep -q` 在长帧上给写端 SIGPIPE → pipefail 下 rc=141 → 假缺（红侧见 --break=pipeshadow）。\n'
 
   # ── 判据①：同一个中间帧序列，旧逻辑放行（演示红）/ 新逻辑不放行 ──
   # A picker opens on Enter; the fake pane then paints it one line per capture.
@@ -616,6 +636,34 @@ pty_selftest() {
     _st_ok "前提之内：同一个静态现场仍是红（rc=1 + M59 现场）—— SKIP 不是逃逸门"
   else
     _st_bad "前提之内的耗尽没有红（rc=$red_rc PTY_SKIPPED=${PTY_SKIPPED:-}；断点=${PTY_SELFTEST_BREAK:-无}）"
+  fi
+
+  # ── 判据⑥：长帧（>128 KiB）的两向 —— 命中不能被 SIGPIPE 吃掉，缺失必须照缺报（P127）──
+  # P124 的最小复现：帧 120607 B > 管道缓冲（64 KiB），needle 在最前面；旧写法
+  # `printf '%s\n' "$c" | grep -qF` 命中即退 → 写端 SIGPIPE → pipefail 下 rc=141 → 假「没出现」。
+  # 这里把帧撑到 >128 KiB，正反两向都走等待引擎本身（不是直调内部谓词）。
+  head -c 140000 /dev/zero | tr '\0' 'x' > "$st_dir/long-body"
+  { printf 'P127-LONG-NEEDLE\n'; cat "$st_dir/long-body"; } > "$st_dir/longframe"
+  local long_bytes long_hit_rc long_miss_rc
+  long_bytes="$(wc -c < "$st_dir/longframe" | tr -d ' ')"
+  _pty_selftest_premise="under"
+  _st_reset long
+  PTY_WAIT_ITERS=6 PTY_WAIT_PAUSE=0.01 PTY_SETTLE_PAUSE=0.01 \
+    pty_wait_frame "$st_dir/longhit.txt" "P127 长帧命中" "P127-LONG-NEEDLE" 2> "$st_dir/longhit.err"
+  long_hit_rc=$?
+  if [ "$long_hit_rc" -eq 0 ] && [ "$(sed -n 1p "$st_dir/longhit.txt")" = "P127-LONG-NEEDLE" ]; then
+    _st_ok "长帧命中：${long_bytes}B（>128 KiB）里第一行的 needle 直接命中（rc=0；旧写法在这里 rc=141 假缺）"
+  else
+    _st_bad "长帧命中被判成没出现（rc=$long_hit_rc；断点=${PTY_SELFTEST_BREAK:-无}）"
+  fi
+  _st_reset long
+  PTY_WAIT_ITERS=6 PTY_WAIT_PAUSE=0.01 PTY_SETTLE_PAUSE=0.01 \
+    pty_wait_frame "$st_dir/longmiss.txt" "P127 长帧缺失" "P127-NEEDLE-NEVER" 2> "$st_dir/longmiss.err"
+  long_miss_rc=$?
+  if [ "$long_miss_rc" -eq 1 ] && grep -qF '缺 [P127-NEEDLE-NEVER]' "$st_dir/longmiss.err"; then
+    _st_ok "长帧缺失：同一个 ${long_bytes}B 的帧里 needle 不在 → 照缺报（rc=1 + 现场点名缺项）"
+  else
+    _st_bad "长帧缺失没有照缺报（rc=$long_miss_rc；断点=${PTY_SELFTEST_BREAK:-无}）"
   fi
 
   printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d  SKIP %d\n' "$_PASS" "$_FAIL" "$_SKIP"

@@ -187,7 +187,7 @@ flip() {
     # fail there even though the frame checks are (by design) still green — a persistence flip is
     # not observable on one frame.
     TEAM_B3_PANEL="$tmp/$name.js" bash "$src_tree/panel-b3.sh" fold >"$tmp/$name-b3.log" 2>&1 || true
-    if sed 's/\x1b\[[0-9;]*m//g' "$tmp/$name-b3.log" | grep -qF "✗ $runner"; then
+    if { sed 's/\x1b\[[0-9;]*m//g' "$tmp/$name-b3.log" || true; } | grep -qF "✗ $runner"; then
       ok "$name：b3 fold 场景点名红了「$runner」"
     else
       bad "$name：b3 fold 场景没有点名红「$runner」"; sed 's/\x1b\[[0-9;]*m//g' "$tmp/$name-b3.log" | grep '✗' | head -3

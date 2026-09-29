@@ -161,7 +161,7 @@ run_probe "$PROBE" "$ACC" "$TMP/2-accident.log"; rc=$?
 probe_shape "$TMP/2-accident.log"
 missing=""
 for want in 'notes.md:2:' 'notes.md:4:' 'notes.md:6:'; do
-  plain "$TMP/2-accident.log" | grep -q "     $want" || missing="$missing $want"
+  { plain "$TMP/2-accident.log" || true; } | grep -q "     $want" || missing="$missing $want"
 done
 if [ "$rc" -ne 0 ] && [ -z "$missing" ]; then
   pass "② 事故现场（merge --squash 冲突 + add -A && commit）：红，并逐条点名 notes.md:2 / :4 / :6"
@@ -204,7 +204,7 @@ run_probe "$PROBE" "$STAGED" "$TMP/6-staged.log"; rc=$?
 probe_shape "$TMP/6-staged.log"
 missing=""
 for want in 'notes.md:2:' 'notes.md:4:' 'notes.md:6:'; do
-  plain "$TMP/6-staged.log" | grep -q "     $want" || missing="$missing $want"
+  { plain "$TMP/6-staged.log" || true; } | grep -q "     $want" || missing="$missing $want"
 done
 if [ "$rc" -ne 0 ] && [ -z "$missing" ]; then
   pass "⑥ 索引里有三件套、工作树干净：红并点名 notes.md:2/4/6（下一次提交会写进历史，不许放行）"

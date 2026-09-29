@@ -128,4 +128,5 @@
 50	50 · P95 合并基准 = 该任务的 squash 提交（解冲突不再假红）	skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/team	-	段内点名 3 条真实路径 token；自造仓库驱动 team init/review --post-merge
 51	51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）	skills/teamsmith/tests/routes.sh skills/teamsmith/tests/config-cli.sh	-	段内点名 4 条真实路径 token；跑 tests/routes.sh（用法走查）与 config-cli.sh 的名册半边
 52	52 · 席位死因：闭集分类 + 当前一次死亡 + 恰好一次通报（P113）	skills/teamsmith/tests/death-cause.sh skills/teamsmith/scripts/lib/cmd-death.sh skills/teamsmith/scripts/lib/common.sh skills/teamsmith/scripts/lib/cmd-status.sh skills/teamsmith/scripts/lib/cmd-watch.sh skills/teamsmith/scripts/panel/src/types.ts skills/teamsmith/scripts/panel/src/layout.ts skills/teamsmith/scripts/panel/panel.js	-	段内点名 1 条真实路径 token（$SKILL_DIR/tests/death-cause.sh）；夹具本体 tests/death-cause.sh 自己 source 这些 lib / 面板源码（--pure / --flip / --live 三档）
+53	53 · 等待引擎长帧：命中/缺失不被管道缓冲吃掉（P127）	skills/teamsmith/tests/lib/pty-wait.sh	-	段内点名 1 条真实路径 token（$SKILL_DIR/tests/lib/pty-wait.sh）；跑 pty-wait.sh 两次（--self-test 绿侧 17✓0✗ + --break=pipeshadow 影子红侧必须红在长帧命中那条）
 15	15 · 完成	-	-	收尾段（只打印一行，无断言）

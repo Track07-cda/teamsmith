@@ -980,14 +980,14 @@ scn_detail() {
   t0="$(date +%s.%N)"
   keys Enter
   for i in $(seq 1 40); do
-    if cap | grep -qF '详情'; then opened=0; break; fi
+    if { cap || true; } | grep -qF '详情'; then opened=0; break; fi
     sleep 0.03
   done
   t1="$(date +%s.%N)"
   assert_eq "Enter 后 1.2s 内出现详情视图" "$opened" "0"
   printf '  \033[36m·\033[0m 首帧耗时（Enter→详情标题上屏）：%ss\n' "$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')"
   for i in $(seq 1 40); do
-    if cap | grep -qF '[brief]'; then break; fi
+    if { cap || true; } | grep -qF '[brief]'; then break; fi
     sleep 0.05
   done
   dcap open

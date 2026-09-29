@@ -844,7 +844,7 @@ EOS
   keys C-o
   local saw_editor=1 i
   for i in $(seq 1 25); do
-    if cap | grep -q 'EDITOR-ACTIVE'; then saw_editor=0; break; fi
+    if { cap || true; } | grep -q 'EDITOR-ACTIVE'; then saw_editor=0; break; fi
     sleep 0.2
   done
   cap_to during-editor
@@ -860,7 +860,7 @@ EOS
   fi
   assert_not_has "$tmp/editor/during-editor.txt" 'EDITOR-DONE' "B3 编辑器还在跑"
   for i in $(seq 1 25); do
-    cap | grep -q 'EDITOR-DONE' && break
+    { cap || true; } | grep -q 'EDITOR-DONE' && break
     sleep 0.4
   done
   sleep 1
