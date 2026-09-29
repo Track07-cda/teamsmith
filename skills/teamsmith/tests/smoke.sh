@@ -13344,18 +13344,59 @@ else
   bad "36⑦ 红侧夹具没打上（选择器的 span_parses 形状变了？）"
 fi
 p117_own_line() { sed 's/\x1b\[[0-9;]*m//g' "$1" | awk -v k="$2" '$1 ~ /^#[0-9]+$/ && $2 == k && /用时/ { print; exit }'; }
+# P120：这两条绿侧夹具不能裸判 rc —— 深 caller TMPDIR 会把**嵌套 run** 的私有 tmux socket 路径顶过
+# AF_UNIX 上限 107 字节（外层 run 自己的 socket 可能刚好合规），嵌套 run 的前导段先红、rc=1，而键自己
+# 的收口行照旧 `✗0`：承诺没坏，坏的只是前置环境。判定顺序（与 P115 的 p98_nest_state 同口径）：
+#   ① 键自己的收口行有真红（✗>0）→ 照旧红（环境归因不许吞真红）；
+#   ② rc=0 → 收口行必须在且 `✗0`（缺行也是夹具坏，照样红）；
+#   ③ 其余交给 p98_nest_state：env（私有 socket 没生效/锁排队）→ 可见 SKIP + 归因点名深 caller
+#      TMPDIR 与超限字节数；其它任何形状照旧红。
+p117_green_verdict() { # <key> <日志> <rc> → ok / 可见 SKIP + 归因 / bad
+  local key="$1" log="$2" rc="$3" line out st ev sl
+  line="$(p117_own_line "$log" "$key")"
+  if [ -n "$line" ] && ! printf '%s' "$line" | grep -q '✗0 '; then
+    bad "36⑦ 夹具依赖键 --select $key 的选集有红（rc=$rc；own=[$line]）"
+    return 0
+  fi
+  if [ "$rc" = "0" ]; then
+    if [ -n "$line" ]; then
+      ok "36⑦ 夹具依赖键 --select $key 的选集全绿（$line）"
+    else
+      bad "36⑦ 夹具依赖键 --select $key 的选集有红（rc=0 但日志里没有该键的收口行）"
+    fi
+    return 0
+  fi
+  out="$(p98_nest_state "$log" "$rc")"; st="${out%%$'\t'*}"; ev="${out#*$'\t'}"
+  if [ "$st" = "env" ]; then
+    sl="$(p98_nest_sock_len "$log" || true)"
+    if [ -n "$sl" ] && [ "$sl" -gt 107 ] 2>/dev/null; then
+      ev="$ev ｜ 私有 socket 路径 ${sl} 字节 > AF_UNIX 上限 107"
+    fi
+    cond_skip "36⑦ 夹具依赖键 --select $key 的选集全绿" \
+      "深 caller TMPDIR 导致嵌套 run 的私有 socket 不可用（前置环境起不来，rc=$rc）：$ev"
+  else
+    bad "36⑦ 夹具依赖键 --select $key 的选集有红（rc=$rc；own=[${line:-缺}]；嵌套 run 里的红不是环境前置：$ev）"
+  fi
+  return 0
+}
 for P117_K in 3b 6; do
   P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p117-green-$P117_K.log" --select "$P117_K"
-  P117_GRC=$?; P117_LINE="$(p117_own_line "$TMP/p117-green-$P117_K.log" "$P117_K")"
-  if [ "$P117_GRC" -eq 0 ] && [ -n "$P117_LINE" ] && printf '%s' "$P117_LINE" | grep -q '✗0 '; then
-    ok "36⑦ 夹具依赖键 --select $P117_K 的选集全绿（$P117_LINE）"
-  else
-    bad "36⑦ 夹具依赖键 --select $P117_K 的选集有红（rc=$P117_GRC；own=[$P117_LINE]）"
-  fi
+  p117_green_verdict "$P117_K" "$TMP/p117-green-$P117_K.log" "$?"
 done
 unset P117_K
+# P120 合成形状（不增嵌套跑成本）：同一判定出口的两个方向都必须对 —— 真红优先于环境归因，环境侧
+# 才走可见 SKIP 并点名深 caller TMPDIR。合成日志直接喂判定，不去动真嵌套 run。
+printf '  ✗ tmux 隔离：私有 socket 没生效（期望 /x/tmux-1000/default，TMUX_TMPDIR=/x）\n#8 3b · 合成 · 用时 1s · ✓1 ✗7 SKIP0 · ticks 1\n' > "$TMP/p117-syn-mixed.log"
+P117_MV="$( ( p117_green_verdict 3b "$TMP/p117-syn-mixed.log" 1 ) 2>&1 || true )"
+assert_has_echo "$P117_MV" "✗" "36⑦ 合成（环境红 + 键自身真红）：判定出口照旧红"
+assert_not_echo "$P117_MV" "SKIP（条件不满足）" "36⑦ 合成（环境红 + 键自身真红）：真红没有被环境归因吞掉"
+printf '  ✗ tmux 隔离：私有 socket 没生效（期望 /x/tmux-1000/default，TMUX_TMPDIR=/x）\n#8 3b · 合成 · 用时 1s · ✓7 ✗0 SKIP0 · ticks 1\n' > "$TMP/p117-syn-env.log"
+P117_SV="$( ( p117_green_verdict 3b "$TMP/p117-syn-env.log" 1 ) 2>&1 || true )"
+assert_has_echo "$P117_SV" "SKIP（条件不满足）" "36⑦ 合成（环境红 + 收口行 ✗0）：判定出口是可见 SKIP（不判红）"
+assert_has_echo "$P117_SV" "深 caller TMPDIR" "36⑦ 合成（环境红 + 收口行 ✗0）：归因点名深 caller TMPDIR"
+assert_not_echo "$P117_SV" "✗" "36⑦ 合成（环境红 + 收口行 ✗0）：环境侧出口不带红标"
 p117_red_side() { # <名字> <key> <awk 变异> <说明>
-  local name="$1" key="$2" mut="$3" desc="$4" V rc line
+  local name="$1" key="$2" mut="$3" desc="$4" V rc line P117_RV
   V="$(p98_variant "$name")" || { bad "36⑦ 红侧 $name：建不出变体树"; return 0; }
   awk -F'\t' -v OFS='\t' "$mut" "$SKILL_DIR/tests/section-paths.tsv" > "$V/tests/section-paths.tsv" \
     || { bad "36⑦ 红侧 $name：表变异失败"; return 0; }
@@ -13366,6 +13407,10 @@ p117_red_side() { # <名字> <key> <awk 变异> <说明>
   else
     bad "36⑦ 红侧：$desc 没让 --select $key 红（rc=$rc；own=[$line]）"
   fi
+  # P120：真红破坏的是绿侧断言的实质（needs 闭包），经**新的判定出口**必须照旧红 —— 环境归因不许吞。
+  P117_RV="$( ( p117_green_verdict "$key" "$TMP/p117-red-$name.log" "$rc" ) 2>&1 || true )"
+  assert_has_echo "$P117_RV" "✗" "36⑦ 红侧 $name：判定出口照旧红（真红没被环境归因吞掉）"
+  assert_not_echo "$P117_RV" "SKIP（条件不满足）" "36⑦ 红侧 $name：判定出口没把真红当环境跳过"
 }
 p117_red_side p117red3b 3b '$1 == "3b" { $4 = "4" } 1' '3b 去掉 needs:5'
 p117_red_side p117red6 6 '$1 == "6" { $4 = "4,5" } 1' '6 去掉 needs:3b'
