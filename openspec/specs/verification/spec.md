@@ -689,20 +689,22 @@ into the caller's real project — SHALL search the caller's ledger state only: 
 gate run inside a task worktree still scans the project's main roots, and it SHALL report each hit by path so the
 failing assertion can name it.
 
-Exactly two paths SHALL be out of scope, because they are **traffic records** — their content is what some caller
+Exactly three paths SHALL be out of scope, because they are **traffic records** — their content is what some caller
 did or printed, so a fixture's own name appearing there is their intended function, not state written into the
 project:
 
 - `.pi/team/state/bg/**` — the gate's own background-job logs;
 - `.pi/team/state/tmux-calls.log` — the tmux call audit log, whose own contract is
-  `boundary#The gate's actions are logged, and no window carries a destructive-call grant`.
+  `boundary#The gate's actions are logged, and no window carries a destructive-call grant`;
+- `.pi/team/state/tmux-calls.log.forensics` — the long-retention copy of the gate's destructive-call records,
+  whose own contract is `boundary#A destructive call's record outlives the call log's rotation`.
 
-Both exclusions MUST be by exact path. Every other file under the two roots MUST stay in scope, including a file
-in a subdirectory, a file that merely shares the audit log's name, and a directory that merely shares the excluded
-job-log directory's name, and a trace planted in any of them MUST be reported.
+All three exclusions MUST be by exact path. Every other file under the two roots MUST stay in scope, including a
+file in a subdirectory, a file that merely shares the audit log's name, and a directory that merely shares the
+excluded job-log directory's name, and a trace planted in any of them MUST be reported.
 
 The scan MUST stay falsifiable: a fixture trace planted in the ledger — `docs/team/inbox/**` or any file under
-`.pi/team/state/**` other than the two excluded paths — MUST be found and reported by the same scan. The positive
+`.pi/team/state/**` other than the three excluded paths — MUST be found and reported by the same scan. The positive
 and negative controls of the isolation sections are part of this requirement, so a green isolation assertion can
 never come from a scan that stopped scanning.
 
@@ -713,6 +715,14 @@ never come from a scan that stopped scanning.
 - **WHEN** the fixture-trace scan runs over that root
 - **THEN** it reports no hit and the isolation assertion stays green — on the pre-change scope the same line is
   reported, which is the sticky red this change removes (that red side is in the delivery report)
+
+#### Scenario: A trace in the retention file is not a leak
+
+- **GIVEN** a scratch project root whose `.pi/team/state/tmux-calls.log.forensics` holds the gate's record of a
+  refused call — a line carrying the caller's own session name and argv
+- **WHEN** the fixture-trace scan runs over that root
+- **THEN** it reports no hit and the isolation assertion stays green — the file is the gate's traffic record, the
+  same way the audit log is
 
 #### Scenario: A trace in ledger state is still a leak
 
@@ -728,6 +738,14 @@ never come from a scan that stopped scanning.
   `.pi/team/state/nested/tmux-calls.log`
 - **WHEN** the scan runs
 - **THEN** both files are reported, because the exclusion covers `.pi/team/state/tmux-calls.log` only
+
+#### Scenario: The retention exclusion is an exact path too
+
+- **GIVEN** the same trace planted in `.pi/team/state/tmux-calls.log.forensics.1` and in
+  `.pi/team/state/nested/tmux-calls.log.forensics`
+- **WHEN** the scan runs
+- **THEN** both files are reported by path, because the exclusion covers `.pi/team/state/tmux-calls.log.forensics`
+  only
 
 #### Scenario: The background-job logs stay out of scope
 
