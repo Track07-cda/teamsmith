@@ -15,6 +15,14 @@ by a documented floor, and the lanes that are not folded SHALL share the remaini
 widens the lanes that still show cards. When the width cannot satisfy every unfolded lane's floor, the folded
 line SHALL truncate first: the fold degrades before the cards' shares do.
 
+A folded lane's presentation follows the pane's width tier, because the scarce resource differs by width. In the
+tiers where the board draws its lanes side by side, the folded lanes SHALL leave the lane row: they SHALL render
+as one summary row above the lanes (`▸ 待复验 0（已折叠） · ▸ 阻塞 0（已折叠）`), and the whole usable width SHALL
+go to the unfolded lanes — folding gives columns back, and the lane row SHALL NOT render wider than the usable
+width in any tier. In the tiers where the usable width cannot hold the unfolded lanes' floors and the board
+groups its lanes, a folded lane SHALL stay in place as its single line — there folding is what saves rows — and
+the summary row SHALL NOT be used.
+
 A folded lane SHALL stay reachable through its cards: `←`/`→` still stop on a folded lane that holds cards, and
 while the focused card lives in a folded lane the lane's one line SHALL carry the focus cursor and the `selected`
 tone (exactly one cursor in the frame). `↑`/`↓` SHALL NOT move the focus while the focused lane is folded, and
@@ -80,6 +88,21 @@ and `--print`/`--json` MUST NOT read these keys: a machine frame renders the def
 - **WHEN** the empty lane is folded, and later unfolded
 - **THEN** the unfolded lanes' borders move apart (a wider share each) while the frame's rows stay within 160
   columns and the six lane positions keep their legend order
+
+#### Scenario: A wide pane gives a folded lane's columns to the unfolded lanes
+
+- **GIVEN** the fixture board whose `review` and `blocked` lanes are both empty, the board page at 190 columns,
+  and the board page rendering wider than 190 columns before the fold
+- **WHEN** the empty default folds both lanes
+- **THEN** the lane row renders within the 190 columns, the two folded lanes appear as one summary row rather
+  than two columns, and the unfolded lanes' combined width is larger than in the in-place form
+
+#### Scenario: A narrow pane saves rows, not columns
+
+- **GIVEN** a fixture board at 59 columns whose `done` lane holds cards
+- **WHEN** that lane is folded
+- **THEN** the frame's card rows shrink by that lane's cards, the folded lane draws in place as its single line,
+  and the summary row of the wide form is not used
 
 #### Scenario: Machine frames ignore the human's fold state
 
