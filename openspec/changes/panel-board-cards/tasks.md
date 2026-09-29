@@ -34,7 +34,7 @@ pinned bun and must reproduce byte-for-byte.
   the focused card's pair, right-aligned in the width the chips leave, `dim`, no hit target, built only when the
   chips already fit, and dropping the agent before the phase (design §1). Verify: `--snapshot --page 4` frames
   at 190/160/120/99 columns show the card line without agent/phase and the pair dropping in that order.
-- [ ] 1.3 `scripts/panel/src/layout.ts`: the fold branch — a folded lane draws its one line
+- [x] 1.3 `scripts/panel/src/layout.ts`: the fold branch — a folded lane draws its one line
   (`▸ <label> <count><laneFolded>`), builds no card line, no edge counter and no empty marker, pads its column to
   the lane body's height, and an unfolded lane's header carries the mirror marker (`▾`); the width share follows
   design §2's algorithm (folded line natural width, shown lanes' floor 8, the folded line truncates first). The
@@ -58,7 +58,7 @@ pinned bun and must reproduce byte-for-byte.
   Enter still opens the focused card. Verify: the pty `fold` scenario.
 - [x] 2.3 `scripts/panel/src/App.tsx`: the wheel over a folded lane stays that lane's (no page scroll), through
   the `LaneWindow` of 1.3. Verify: the pty `fold` scenario's wheel step.
-- [ ] 2.4 `scripts/panel/src/layout.ts` + `App.tsx`: the lane header line (both states) carries the
+- [x] 2.4 `scripts/panel/src/layout.ts` + `App.tsx`: the lane header line (both states) carries the
   `{kind:'lane-fold', lane}` action; the App dispatches it like `c` for that lane and its wheel branch accepts
   `lane-fold` as the lane's region. Verify: the pty `fold` scenario's click step and the `28-h` target map.
 - [x] 2.5 The `c 折叠` chip is pushed in the board page's nav chips after `↑/↓ 卡片`; the target map carries it.
@@ -76,11 +76,11 @@ pinned bun and must reproduce byte-for-byte.
   chip toggles the focused lane, the wheel over the folded line does not scroll the page, and a quit+relaunch
   keeps the state (the empty lane's explicit unfold sticks too). Verify:
   `bash skills/teamsmith/tests/panel-b3.sh fold` (slow batch).
-- [ ] 3.3 `skills/teamsmith/tests/panel-snapshots.sh`: re-pin the `*-p4.txt` snapshots (the card line and the
+- [x] 3.3 `skills/teamsmith/tests/panel-snapshots.sh`: re-pin the `*-p4.txt` snapshots (the card line and the
   empty-lane default change them) and add one pinned folded-lane frame; the p1/`-detail` pins stay byte-identical.
   Verify: `bash skills/teamsmith/tests/panel-snapshots.sh` green with the new pins, and `git diff` showing only
   the intended `*-p4.txt` files plus the new one.
-- [ ] 3.4 The flips of design §5, each with its red and green tail: (1) fold short-circuit removed, (2) the agent
+- [x] 3.4 The flips of design §5, each with its red and green tail: (1) fold short-circuit removed, (2) the agent
   back on the card line, (3) `--print` reading the fold keys, (4) the empty default off, (5) the width re-share
   dropped, (6) the toggle without `saveSettings`.
 
@@ -89,7 +89,7 @@ pinned bun and must reproduce byte-for-byte.
 - [x] 4.1 `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` and
   `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null`, then the **full** smoke and the pty batch
   once — paste the tails; `git status --porcelain` clean.
-- [ ] 4.2 Trial archive on a scratch copy (`cp -r openspec /tmp/panel-board-cards-trial && (cd /tmp/panel-board-cards-trial
+- [x] 4.2 Trial archive on a scratch copy (`cp -r openspec /tmp/panel-board-cards-trial && (cd /tmp/panel-board-cards-trial
   && PATH="$HOME/.bun/bin:$PATH" openspec archive -y panel-board-cards)`) — proves the MODIFIED blocks keep every
   base scenario and merge without a collision with whatever changes are in flight at apply time.
 - [x] 4.3 The report's evidence: the delta→requirement map for `panel`, the requirement→item and
@@ -99,6 +99,6 @@ pinned bun and must reproduce byte-for-byte.
 
 ## 5. V — independent verification (a different agent)
 
-- [ ] 5.1 Rerun, out of tree and on the apply's tip: every flip of 3.4 (red and green), the pty `fold` scenario,
+- [x] 5.1 Rerun, out of tree and on the apply's tip: every flip of 3.4 (red and green), the pty `fold` scenario,
   the snapshot suite, `openspec validate --all --strict` and the **full** smoke; the record goes to
   `docs/team/reviews/<ID>.md` with a verdict and any findings (a PASS carrying findings is rework, not archive).
