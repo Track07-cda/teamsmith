@@ -10460,9 +10460,13 @@ p28h_frame() { # <width> <height> [额外 args…]
 }
 p28h_frame 160 40 >"$TMP/p28h-160.txt"
 assert_eq "28-h 看板页 160x40：帧高恰好 40（有界帧）" "$(wc -l < "$TMP/p28h-160.txt" | tr -d ' ')" "40"
-for lane in 待办 进行 待复验 完成 阻塞 已放弃; do
-  assert_has "$TMP/p28h-160.txt" "$lane" "28-h 六车道之一渲染：$lane"
+for lane in 待办 进行 完成 阻塞; do
+  assert_has "$TMP/p28h-160.txt" "$lane" "28-h 展开车道渲染标签：$lane"
 done
+# P125：宽档里默认折叠的空车道是三列小框（不带标签），所以“六条车道都渲染”的判据是六个车道起点。
+P28H_STARTS="$(grep -o '╭' "$TMP/p28h-160.txt" | wc -l | tr -d ' ')"
+assert_eq "28-h 六车道全部渲染：恰好六个车道起点（盒子或三列小框）" "$P28H_STARTS" "6"
+assert_has "$TMP/p28h-160.txt" "╭─╮" "28-h 折叠的空车道是三列小框（待复验/已放弃）"
 assert_has "$TMP/p28h-160.txt" "P14" "28-h 看板页有 P14 卡片"
 assert_has "$TMP/p28h-160.txt" "verify · verify" "28-h 焦点卡的 agent · phase 在键位带上（P123）"
 P28H_P14_ROW="$(grep -a 'P14' "$TMP/p28h-160.txt" | head -1 | sed 's/\x1b\[[0-9;]*m//g')"
@@ -10520,7 +10524,8 @@ mkdir -p "$TMP/p28h/state"
 printf 'lang=zh\npage=4\nactivity=1\nmouse=1\ndensity=comfortable\ntheme=dark\n' >"$TMP/p28h/state/panel.conf"
 ( cd "$P27R" && "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28H_FX" --state-dir "$P28H_FX/state" \
     --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 30 2>/dev/null ) >"$TMP/p28h-conf4.txt"
-assert_has "$TMP/p28h-conf4.txt" "已放弃" "28-h panel.conf page=4：无 --page 时按第四页起（defaultPage 覆盖四页）"
+assert_has "$TMP/p28h-conf4.txt" "[看板]" "28-h panel.conf page=4：无 --page 时按第四页起（defaultPage 覆盖四页）"
+assert_has "$TMP/p28h-conf4.txt" "╭─╮" "28-h panel.conf page=4：第四页的看板确实在渲染（折叠空车道的三列小框）"
 rm -f "$TMP/p28h/state/panel.conf"
 
 # ---- 28-h2 工作页的看板行（P20/B5）：行可聚焦、行键有目标；降级/空看板没有死项
@@ -10819,7 +10824,10 @@ p28j_machine() { # <conf 行…> —— 机读出口的命令行（--print --pag
 
 p28j_render "$TMP/p28j-default.txt" 160 32
 assert_has "$TMP/p28j-default.txt" "▾ 待办 1" "28-j 展开的车道头带镜像标记（折叠开关两态可见）"
-assert_has "$TMP/p28j-default.txt" "▸ 待复验 0（已折叠）" "28-j 空车道默认折叠（一行：计数 + 折叠标记）"
+# P125：宽档（车道并排）的折叠车道不再是原地一行（那是分组窄档的形状），而是三列小框。
+assert_not "$TMP/p28j-default.txt" "▸ 待复验 0（已折叠）" "28-j 宽档：折叠车道不占原地一行"
+assert_has "$TMP/p28j-default.txt" "╭─╮" "28-j 宽档：折叠车道是三列小框（面板自己的圆角）"
+assert_has "$TMP/p28j-default.txt" "│⋮│" "28-j 宽档：省略号列按车道高度画满（中间行竖省略号）"
 assert_has "$TMP/p28j-default.txt" "verify · verify" "28-j 键位带带焦点卡 V14 的 agent · phase"
 assert_has "$TMP/p28j-default.txt" "c 折叠" "28-j 键位带带 c 折叠 chip"
 P28J_V14_ROW="$(p28j_strip "$TMP/p28j-default.txt" | grep -a 'V14' | head -1)"
@@ -10847,7 +10855,7 @@ assert_has "$TMP/p28j-99.txt" "V14" "28-j 99 列：卡片仍带序号（序号�
 
 # 折叠 = 不建卡片行；同帧其它车道的卡片不动；计数与标记在那一行。
 p28j_render "$TMP/p28j-folddone.txt" 160 32 "lang=zh" "boardFold=done"
-assert_has "$TMP/p28j-folddone.txt" "▸ 完成 8（已折叠）" "28-j 显式折叠：done 一行带计数 8"
+assert_not "$TMP/p28j-folddone.txt" "▸ 完成 8（已折叠）" "28-j 宽档显式折叠：done 不再是一行（三列小框）"
 assert_not "$TMP/p28j-folddone.txt" "P13 消息入口" "28-j 显式折叠：done 的卡片一张都不建"
 assert_has "$TMP/p28j-folddone.txt" "P14" "28-j 折叠：其他车道的卡片仍在"
 assert_eq "28-j 折叠帧仍是有界帧（行数 = 高度）" \
@@ -10914,12 +10922,13 @@ esac
 p28j_render "$TMP/p28j-show.txt" 160 32 "boardShow=review"
 assert_has "$TMP/p28j-show.txt" "▾ 待复验 0" "28-j boardShow：显式展开的空车道保持展开"
 p28j_render "$TMP/p28j-both.txt" 160 32 "boardFold=review" "boardShow=review"
-assert_has "$TMP/p28j-both.txt" "▸ 待复验 0（已折叠）" "28-j 同一车道同时在两表：折叠胜出（显式隐藏更强）"
+assert_not "$TMP/p28j-both.txt" "▾ 待复验 0" "28-j 同一车道同时在两表：折叠胜出（显式隐藏更强）"
 p28j_render "$TMP/p28j-dup.txt" 160 32 "boardFold=done,bogus,done"
 p28j_render "$TMP/p28j-done.txt" 160 32 "boardFold=done"
-# en：折叠行的标签/标记与 `c fold` chip 来自 en 表（delta 的「labels come from the en table」）。
+# en：分组档的折叠行与 `c fold` chip 来自 en 表（delta 的「labels come from the en table」）。
+P28J_LANG=en p28j_render "$TMP/p28j-en99.txt" 99 32 "boardFold=done"
+assert_has "$TMP/p28j-en99.txt" "▸ done 8 (folded)" "28-j en：分组档的折叠行用 en 表的标签与标记"
 P28J_LANG=en p28j_render "$TMP/p28j-en.txt" 160 32 "boardFold=done"
-assert_has "$TMP/p28j-en.txt" "▸ done 8 (folded)" "28-j en：折叠行用 en 表的标签与标记"
 assert_has "$TMP/p28j-en.txt" "c fold" "28-j en：键位带给出 c fold chip"
 if cmp -s "$TMP/p28j-dup.txt" "$TMP/p28j-done.txt"; then
   ok "28-j 未知车道名丢弃 + 重复去重：帧与 boardFold=done 逐字节一致"
@@ -10936,7 +10945,7 @@ if cmp -s "$P28J_MA" "$P28J_MB"; then
 else
   bad "28-j 机读帧读了 panel.conf 的折叠键（两份 print 不一致）"
 fi
-assert_has "$P28J_MA" "▸ 待复验 0（已折叠）" "28-j 机读帧按默认态渲染（空车道折叠）"
+assert_has "$P28J_MA" "╭─╮" "28-j 机读帧按默认态渲染（空车道折叠成三列小框）"
 
 # 目标表：车道头/折叠行与 c chip 都是 lane-fold；对本身不是目标（数据不是 affordance）。
 "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$P28J_FX" --state-dir "$P28J_FX/state" \
@@ -10950,10 +10959,228 @@ P28J_FOLD_TARGETS="$(python3 - "$TMP/p28j-targets.json" <<'PYT'
 import json, sys
 
 data = json.load(open(sys.argv[1]))
-print(sum(1 for t in data if t["action"]["kind"] == "lane-fold"))
+# P125: an unfolded lane's header is one target; a folded lane's three-column frame owns one target
+# per row of its column (a click anywhere on the frame toggles, the wheel anywhere stays the lane's);
+# the `c 折叠` chip names the focused lane. Counted per lane, the shape is visible in one line.
+rows = {}
+for t in data:
+    if t["action"]["kind"] != "lane-fold":
+        continue
+    rows.setdefault(t["action"]["lane"], set()).add(t["row"])
+print(" ".join(f"{lane}:{len(rs)}" for lane, rs in sorted(rows.items())))
 PYT
 )"
-assert_eq "28-j 目标表：六条车道头 + 一个 c chip = 7 个 lane-fold" "$P28J_FOLD_TARGETS" "7"
+assert_eq "28-j 目标表：展开的车道头各 1、折叠车道的每一行各 1、c chip 归焦点车道" \
+  "$P28J_FOLD_TARGETS" "blocked:1 done:1 dropped:29 review:29 todo:2 wip:1"
+
+# ---- 28-k 看板折叠的宽度自适应（P125 · change panel-board-cards：ADDED「A lane folds from its
+# header…」的宽度档段落 + P125 的两个 scenario）。宽档（车道并排）折叠 = 三列小框（面板自己的圆角四角、
+# 每侧竖边框、省略号列按车道高度画满且中间行用竖省略号），其余整幅宽度给展开车道；窄档（装不下下限、
+# 看板把车道合并成一组）折叠 = 原地一行（那里省的是行）。判据用算出来的宽度档（ctx 的并排/分组），
+# 不写死阈值；此处仅用 --snapshot 可判定的部分，真 pty 的点击/滚轮在 panel-b3.sh fold。
+P28K_FX="$TMP/p28k"; rm -rf "$P28K_FX"; mkdir -p "$P28K_FX/state"
+p28k_render() { # <out> <w> <h> [conf 行…]（P28K_DONE=N 时给 done 车道塞 N 张卡）
+  local out="$1" w="$2" h="$3"; shift 3
+  rm -f "$P28K_FX/state/panel.conf"
+  [ $# -gt 0 ] && printf '%s\n' "$@" >"$P28K_FX/state/panel.conf"
+  ( cd "$P27R" && B3_STUB_DONE="${P28K_DONE:-}" "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28K_FX" \
+      --state-dir "$P28K_FX/state" --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark \
+      --width "$w" --height "$h" --page 4 ) >"$out.raw" 2>/dev/null
+  sed 's/\x1b\[[0-9;]*m//g' "$out.raw" >"$out"
+}
+# 宽档三列小框的形状与宽度分配：每个折叠车道恰好 3 列（╭─╮ / │…│ / │⋮│ / ╰─╯，竖省略号恰在纵向中点）；
+# 展开车道 = floor((可用宽 - 3×折叠数) / 展开数)；任何一行都不得超过宽度。
+p28k_wide() { # <frame> <width> <folded> <shown_w|-1>
+  python3 - "$@" <<'PYK'
+import re, sys
+
+WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+        (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+        (0xff00, 0xff60), (0xffe0, 0xffe6), (0x1f300, 0x1f64f), (0x1f900, 0x1f9ff)]
+
+def chw(ch):
+    cp = ord(ch)
+    if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+        return 0
+    return 2 if any(a <= cp <= b for a, b in WIDE) else 1
+
+def dw(text):
+    return sum(chw(c) for c in text)
+
+def slice_dw(text, start, n):
+    out, pos = [], 0
+    for ch in text:
+        w = chw(ch)
+        if start <= pos < start + n:
+            out.append(ch)
+        pos += w
+        if pos >= start + n:
+            break
+    return "".join(out)
+
+rows = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8")]
+limit, folded, shown_w = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+problems = []
+over = [(i + 1, dw(r)) for i, r in enumerate(rows) if dw(r) > limit]
+if over:
+    problems.append(f"行超过 {limit} 列：{over[:2]}")
+top = next((i for i, r in enumerate(rows) if "╭─" in r), -1)
+if top < 0:
+    problems.append("没有车道行（找不到 ╭─）")
+else:
+    row = rows[top]
+    frames = [dw(row[:m.start()]) for m in re.finditer("╭─╮", row)]
+    if len(frames) != folded:
+        problems.append(f"三列小框 {len(frames)} 个，期望 {folded}")
+    if "（已折叠）" in row:
+        problems.append("宽档还画了原地折叠行")
+    for x in frames:
+        cells, i = [], top
+        while i < len(rows):
+            cells.append(slice_dw(rows[i], x, 3))
+            i += 1
+            if cells[-1] == "╰─╯":
+                break
+        if cells[0] != "╭─╮" or cells[-1] != "╰─╯":
+            problems.append(f"框的角落 {cells[0]!r}..{cells[-1]!r}")
+        body = cells[1:-1]
+        if not body or not all(c in ("│…│", "│⋮│", "│›│") for c in body):
+            problems.append(f"框体 {set(body)}")
+        mid = [j for j, c in enumerate(body) if c == "│⋮│"]
+        want = (len(body) - 1) // 2
+        if mid != [want]:
+            problems.append(f"竖省略号在 {mid} 行，期望 [{want}]（共 {len(body)} 行）")
+    if shown_w > 0:
+        m = re.search("╭─ ▾ 完成", row)
+        if not m:
+            problems.append("没有展开的 done 盒子")
+        else:
+            x = dw(row[:m.start()])
+            j = next(j for j in range(x, dw(row)) if slice_dw(row, j, 1) == "╮")
+            if j - x + 1 != shown_w:
+                problems.append(f"展开车道宽 {j - x + 1}，期望 {shown_w}")
+print("ok" if not problems else "；".join(problems))
+PYK
+}
+# 窄档（分组）：必须是原地折叠行（带标签+计数+折叠词），不得出现三列小框的圆角。
+p28k_grouped() { # <frame> <width>
+  python3 - "$@" <<'PYK2'
+import re, sys
+
+WIDE = [
+    (0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+    (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+    (0xff00, 0xff60), (0xffe0, 0xffe6), (0x1f300, 0x1f64f), (0x1f900, 0x1f9ff),
+]
+
+def dw(text):
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+            continue
+        total += 2 if any(a <= cp <= b for a, b in WIDE) else 1
+    return total
+
+rows = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8")]
+limit = int(sys.argv[2])
+problems = []
+over = [(i + 1, dw(r)) for i, r in enumerate(rows) if dw(r) > limit]
+if over:
+    problems.append(f"行超过 {limit} 列：{over[:2]}")
+if any("╭" in r for r in rows):
+    problems.append("分组档出现了三列小框的圆角")
+if not any("（已折叠）" in r for r in rows):
+    problems.append("没有原地折叠行")
+print("ok" if not problems else "；".join(problems))
+PYK2
+}
+
+# ① 宽档 190：默认折叠的两条空车道是三列小框；四条展开车道各 (185-3×2)/4 = 44 列（> 均分 30）。
+p28k_render "$TMP/p28k-190.txt" 190 32
+P28K_W190="$(p28k_wide "$TMP/p28k-190.txt" 190 2 44)"
+assert_eq "28-k 宽档 190：两个三列小框 + 四条展开车道各 44 列（均分只 30）+ 没有一行超宽" "$P28K_W190" "ok"
+# ② 全部折叠（六条）也是六个三列小框，行宽仍有界。
+p28k_render "$TMP/p28k-190-all.txt" 190 32 "boardFold=todo,wip,review,done,blocked,dropped"
+P28K_ALL="$(p28k_wide "$TMP/p28k-190-all.txt" 190 6 -1)"
+assert_eq "28-k 宽档 190 全折叠：六条车道六个三列小框、行不超宽" "$P28K_ALL" "ok"
+# ③ 宽档 120（仍是并排档）：同样的形状，展开车道 (115-3×2)/4 = 27 列。
+p28k_render "$TMP/p28k-120.txt" 120 32
+P28K_W120="$(p28k_wide "$TMP/p28k-120.txt" 120 2 27)"
+assert_eq "28-k 宽档 120：三列小框 + 展开车道各 27 列 + 行不超宽" "$P28K_W120" "ok"
+# ④ 聚焦到折叠车道：框内第一行 │›│、全帧恰好一个光标、底栏给出「待办 1」（三列放不下标签）、卡片不渲染。
+p28k_render "$TMP/p28k-focus.txt" 190 32 "boardFold=todo"
+P28K_FOCUS="$(python3 - "$TMP/p28k-focus.txt" <<'PYK3'
+import sys
+
+WIDE = [
+    (0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+    (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+    (0xff00, 0xff60), (0xffe0, 0xffe6), (0x1f300, 0x1f64f), (0x1f900, 0x1f9ff),
+]
+
+def chw(ch):
+    cp = ord(ch)
+    if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+        return 0
+    return 2 if any(a <= cp <= b for a, b in WIDE) else 1
+
+def slice_dw(text, start, n):
+    out, pos = [], 0
+    for ch in text:
+        w = chw(ch)
+        if start <= pos < start + n:
+            out.append(ch)
+        pos += w
+        if pos >= start + n:
+            break
+    return "".join(out)
+
+rows = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8")]
+problems = []
+top = next((i for i, r in enumerate(rows) if "╭─" in r), -1)
+if top < 0:
+    problems.append("没有车道行")
+else:
+    cells, i = [], top
+    while i < len(rows):
+        cells.append(slice_dw(rows[i], 0, 3))
+        i += 1
+        if cells[-1] == "╰─╯":
+            break
+    if not cells or cells[0] != "╭─╮":
+        problems.append("首车道不是三列小框")
+    elif cells[1] != "│›│":
+        problems.append(f"聚焦框内第一行为 {cells[1]!r}，期望 │›│")
+    if sum(r.count("›") for r in rows) != 1:
+        problems.append("焦点光标不是恰好一个")
+    if "待办 1" not in rows[-1]:
+        problems.append("底栏没有给出被聚焦折叠车道的标签与计数")
+    if any("V14" in r for r in rows):
+        problems.append("折叠车道仍渲染卡片")
+print("ok" if not problems else "；".join(problems))
+PYK3
+)"
+assert_eq "28-k 聚焦折叠车道：框内第一行 │›│ / 恰好一个光标 / 底栏「待办 1」/ 卡片不渲染" "$P28K_FOCUS" "ok"
+# ⑤ 窄档 99 / 59：折叠是原地一行（省行），没有三列小框，行不超宽。
+p28k_render "$TMP/p28k-99.txt" 99 32
+P28K_N99="$(p28k_grouped "$TMP/p28k-99.txt" 99)"
+assert_eq "28-k 窄档 99：原地一行（省行）、无三列小框、行不超宽" "$P28K_N99" "ok"
+assert_has "$TMP/p28k-99.txt" "▸ 待复验 0（已折叠）" "28-k 窄档 99：原地折叠行带标签、计数与折叠词"
+p28k_render "$TMP/p28k-59.txt" 59 32
+P28K_N59="$(p28k_grouped "$TMP/p28k-59.txt" 59)"
+assert_eq "28-k 窄档 59：原地一行（省行）、无三列小框、行不超宽" "$P28K_N59" "ok"
+# ⑥ 「窄屏省行」的直接观量：99 列、done 20 张卡时，折叠让后面的车道进入窗口，展开则进不来。
+P28K_DONE=20 p28k_render "$TMP/p28k-99-show.txt" 99 32 "boardShow=done"
+P28K_DONE=20 p28k_render "$TMP/p28k-99-fold.txt" 99 32 "boardFold=done"
+if ! grep -qF "已放弃" "$TMP/p28k-99-show.txt" && grep -qF "已放弃" "$TMP/p28k-99-fold.txt"; then
+  ok "28-k 窄屏省行：折叠 done（20 卡）让「已放弃」进入窗口，展开时进不来"
+else
+  bad "28-k 窄屏省行：折叠没有减少行车（展开见 $(grep -cF '已放弃' "$TMP/p28k-99-show.txt") / 折叠见 $(grep -cF '已放弃' "$TMP/p28k-99-fold.txt")）"
+fi
+# ⑦ 宽档与窄档切换点：99 列分组、100 列起并排（判据是布局自己的宽度档，不是这里写死的数）。
+p28k_render "$TMP/p28k-100.txt" 100 32
+assert_not "$TMP/p28k-100.txt" "（已折叠）" "28-k 切档：100 列起走宽档（折叠是三列小框而非原地一行）"
 
 section "29 · 派单模型解析：配置压过名册旧记录（M14）"
 

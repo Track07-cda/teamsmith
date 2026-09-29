@@ -575,13 +575,25 @@ import re, sys
 
 rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
 lane_labels = ["待办", "进行", "待复验", "完成", "阻塞", "已放弃"]
-head = next((r for r in rows if "已放弃" in r), "")
-pos = [head.find(l) for l in lane_labels]
+head = next((r for r in rows if "待办" in r), "")
 problems = []
-if not head or -1 in pos or pos != sorted(pos):
-    problems.append(f"车道顺序不对：{pos}")
-if len([p for p in pos if p >= 0]) != 6:
-    problems.append(f"六条车道没有全部渲染：{pos}")
+if not head:
+    problems.append("没有车道行")
+else:
+    # Every lane starts with its own `╭` (an unfolded box `╭─ ▾ …` or a folded three-column frame
+    # `╭─╮`); the legend order is the left-to-right order of those starts.
+    starts = len(re.findall("╭", head))
+    if starts != 6:
+        problems.append(f"六条车道没有全部渲染（{starts} 个车道起点）")
+    pos = [head.find(l) for l in lane_labels]
+    present = [p for p in pos if p >= 0]
+    if present != sorted(present):
+        problems.append(f"车道标签顺序不对：{pos}")
+    # P125: the two empty lanes fold by default in the wide tier; each is the three-column frame
+    # (rounded corners, border/ellipsis/border) rather than an in-place one-line label.
+    frames = len(re.findall("╭─╮", head))
+    if frames != 2:
+        problems.append(f"宽档折叠车道不是两个三列小框：{head[:80]}")
 # P123：卡片行只留序号+标题（agent/phase 不上卡片），键位带带焦点卡的对。
 card_rows = [r for r in rows if re.search(r"[·▸◆✓✗—]\s+[PV]\d+\s", r)]
 for r in card_rows:
@@ -596,7 +608,7 @@ print("ok" if not problems else "；".join(problems))
 PY4
 )"
 if [ "${p4_check:-}" = "ok" ]; then
-  ok "page4 160：六车道顺序 / 卡片只留序号+标题 / 键位带带焦点卡的对 / 只有一个焦点光标"
+  ok "page4 160：六车道顺序 / 折叠车道是三列小框 / 卡片只留序号+标题 / 键位带带焦点卡的对 / 只有一个焦点光标"
 else
   bad "page4 160：${p4_check:-没有渲染出 page4 帧}"
 fi

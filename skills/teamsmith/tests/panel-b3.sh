@@ -1108,9 +1108,12 @@ scn_fold() {
   server_up fold
   fcap() { cap > "$tmp/$current/$1.txt"; }
   ffile() { printf '%s/%s.txt' "$tmp/$current" "$1"; }
-  # The display column (1-based) where <needle> starts in the first captured row that carries it.
-  lane_col() { # <capture file> <needle>
-    python3 - "$1" "$2" <<'PYC'
+  # The display column (1-based) where the <nth> occurrence of <needle> starts. The default is
+  # the first occurrence; a folded lane's frame is found with its corner glyph `╭─╮` (the rows of
+  # two frames look alike, so the caller picks the ordinal instead of a label the frame cannot
+  # carry).
+  lane_col() { # <capture file> <needle> [nth]
+    python3 - "$1" "$2" "${3:-1}" <<'PYC'
 import re, sys
 
 WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
@@ -1127,20 +1130,29 @@ def dw(text):
     return total
 
 rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+needle, want = sys.argv[2], int(sys.argv[3])
+seen = 0
 for row in rows:
-    i = row.find(sys.argv[2])
-    if i >= 0:
-        print(dw(row[:i]) + 1)
-        break
+    i = -1
+    while True:
+        i = row.find(needle, i + 1)
+        if i < 0:
+            break
+        seen += 1
+        if seen == want:
+            print(dw(row[:i]) + 1)
+            sys.exit(0)
 PYC
   }
   conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
   printf '4\n' > "$(page_file)"
   start_panel
-  # Default: the empty review/dropped lanes fold to one line; the focus sits on the todo card.
+  # Default: the empty review/dropped lanes fold to their three-column frames; the focus sits on
+  # the todo card.
   sleep 0.8
   fcap p123-default
-  assert_has "$(ffile p123-default)" "▸ 待复验 0（已折叠）" "空车道默认折叠（一行带计数 0）"
+  assert_not "$(ffile p123-default)" "▸ 待复验 0（已折叠）" "宽档：空车道不再是原地一行"
+  assert_has "$(ffile p123-default)" "╭─╮" "空车道默认折叠（三列小框：圆角 + 省略号列）"
   assert_has "$(ffile p123-default)" "▾ 待办 1" "展开的车道头带镜像标记"
   focused_row "$(ffile p123-default)" > "$tmp/$current/p123-default-row.txt"
   assert_has "$tmp/$current/p123-default-row.txt" "V14" "初始焦点在 todo 的 V14"
@@ -1148,10 +1160,12 @@ PYC
   keys c
   sleep 1
   fcap p123-folded
-  assert_has "$(ffile p123-folded)" "▸ 待办 1（已折叠）" "c 把焦点车道折成一行"
+  assert_has "$(ffile p123-folded)" "╭─╮" "c 把焦点车道折成三列小框"
+  assert_not "$(ffile p123-folded)" "▸ 待办 1（已折叠）" "宽档折叠后不再画原地一行"
   assert_not "$(ffile p123-folded)" "V14" "折叠后该车道不再建卡片行"
+  assert_has "$(ffile p123-folded)" "待办 1" "聚焦折叠车道的标签与计数显示在底栏（三列放不下标签）"
   focused_row "$(ffile p123-folded)" > "$tmp/$current/p123-folded-row.txt"
-  assert_has "$tmp/$current/p123-folded-row.txt" "待办 1（已折叠）" "聚焦车道折叠时焦点光标落在那一行上"
+  assert_has "$tmp/$current/p123-folded-row.txt" "│›│" "聚焦车道折叠时焦点光标落在三列小框里（恰好一个）"
   conf_of > "$tmp/$current/p123-conf-folded.txt"
   assert_match "$tmp/$current/p123-conf-folded.txt" '^boardFold=todo$' "c 立即把 boardFold=todo 写进 panel.conf"
   # ↑/↓ no-op while the focused lane is folded; ←/→ still stop on it; Enter still opens the card.
@@ -1159,7 +1173,7 @@ PYC
   sleep 0.6
   fcap p123-down
   focused_row "$(ffile p123-down)" > "$tmp/$current/p123-down-row.txt"
-  assert_has "$tmp/$current/p123-down-row.txt" "待办 1（已折叠）" "聚焦车道折叠时 ↓ 不动焦点"
+  assert_has "$tmp/$current/p123-down-row.txt" "│›│" "聚焦车道折叠时 ↓ 不动焦点"
   keys Right
   sleep 0.8
   fcap p123-right
@@ -1169,7 +1183,7 @@ PYC
   sleep 0.8
   fcap p123-left
   focused_row "$(ffile p123-left)" > "$tmp/$current/p123-left-row.txt"
-  assert_has "$tmp/$current/p123-left-row.txt" "待办 1（已折叠）" "← 仍然停在持卡的折叠车道上"
+  assert_has "$tmp/$current/p123-left-row.txt" "│›│" "← 仍然停在持卡的折叠车道上"
   keys Enter
   sleep 1.4
   fcap p123-detail
@@ -1180,7 +1194,9 @@ PYC
   start_panel
   sleep 0.8
   fcap p123-restart
-  assert_has "$(ffile p123-restart)" "▸ 待办 1（已折叠）" "重启后面板仍折叠 todo（显式状态持久）"
+  assert_not "$(ffile p123-restart)" "▾ 待办 1" "重启后 todo 仍折叠（显式状态持久：展开头不出现）"
+  assert_has "$(ffile p123-restart)" "│›│" "重启后 todo 的三列小框仍带焦点光标"
+  assert_has "$(ffile p123-restart)" "待办 1" "重启后底栏仍点名被聚焦的折叠车道"
   # A second `c` is an explicit unfold, and it sticks across emptiness (review stays boxed).
   keys c
   sleep 1
@@ -1205,7 +1221,7 @@ PYC
   start_panel
   sleep 0.8
   fcap p123-clickbase
-  review_col="$(lane_col "$(ffile p123-clickbase)" '▸ 待复验')"
+  review_col="$(lane_col "$(ffile p123-clickbase)" '╭─╮' 1)"
   python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
     --out "$tmp/$current/p123-click.bin" --expect-enable yes \
     --click-col "${review_col:-40}" --click-row 3 --cols 120 --rows 32 >"$tmp/$current/p123-click.log" 2>&1
@@ -1218,7 +1234,7 @@ PYC
   start_panel
   sleep 0.8
   fcap p123-wheelbase
-  done_col="$(lane_col "$(ffile p123-wheelbase)" '▸ 完成 8')"
+  done_col="$(lane_col "$(ffile p123-wheelbase)" '╭─╮' 2)"
   python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
     --out "$tmp/$current/p123-wheel.bin" --out2 "$tmp/$current/p123-wheel-after.bin" --expect-enable yes --no-click \
     --wheel down --wheel-clicks 3 --click-col "${done_col:-60}" --click-row 3 --cols 120 --rows 32 \

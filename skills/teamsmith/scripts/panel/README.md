@@ -30,14 +30,19 @@ Four pages, switched by `Tab` or `1`–`4`, remembered in `state/panel-page` and
 | 3 messages & logs | the deferred queue (list + read-only full text), inbox/threads, the patrol log, the capacity trend, health (skill version, `doctor`, last gates `—`) |
 | 4 board | the board block as a kanban over the board's states, plus the entry's read-only markdown detail view while one is open |
 
-**The board page** renders six lanes in `BOARD.md` legend order — every lane always present, an empty one as a dim
-marker — with one card per row (id, state glyph, agent, `phase`, truncated title). At ≥100 columns the lanes sit
-side by side and share the width; below 100 columns they stack as one state-grouped column, and below 60 a card
-folds to one line (id + title, no agent). `←`/`→` moves the focus between lanes and `↑`/`↓` between cards; a lane
-taller than the pane scrolls (the wheel scrolls the lane under the cursor, other lanes keep their position) and its
-edge shows how many cards are hidden above/below, the `done`/`dropped` windows anchored on the newest cards. The
-focused card carries `›` and is tracked by entry **id**, so a reordering board never moves the focus; the entry
-disappearing lands it on that lane's first card.
+**The board page** renders six lanes in `BOARD.md` legend order — every lane always present. A card's line is
+its state glyph, id and title (the focused card's `agent · phase` pair rides the key band's free width), and an
+empty lane folds by default; `c` or a click on a lane's header toggles any lane. At ≥100 columns the lanes sit
+side by side and the unfolded lanes share the width: a folded lane takes a three-column frame (`╭─╮` over
+`│…│`/`│⋮│` over `╰─╯`) in its fixed lane position, so the columns it does not use go to the unfolded lanes.
+Below 100 columns they stack as one state-grouped column, where a folded lane stays its one labelled line
+(`▸ 完成 8（已折叠）`) because folding there saves rows, and below 60 a card folds to one line (id + title, no
+agent). `←`/`→` moves the focus between lanes and `↑`/`↓` between cards; a lane taller than the pane scrolls (the
+wheel scrolls the lane under the cursor, other lanes keep their position) and its edge shows how many cards are
+hidden above/below, the `done`/`dropped` windows anchored on the newest cards. The focused card carries `›` and
+is tracked by entry **id**, so a reordering board never moves the focus; the entry disappearing lands it on that
+lane's first card. While the focused card lives in a folded lane the frame carries the cursor and the band names
+the lane (its label and card count).
 
 **The detail view** is the focused card's read-only markdown: `Enter` (or a click on the already focused card)
 opens the files discovered for that entry id — its task brief, delivery reports and review records — one per tab,
@@ -59,10 +64,11 @@ CJK literal outside `src/strings/**`.
 
 **Mouse** follows the preference: on enables SGR reporting (`ESC[?1000h` `ESC[?1006h`) for the console's lifetime
 and disables it on exit; off emits no sequence at all. Every documented key — `m`, `f`, `s`, `,`, Tab, `1`–`4`,
-`↑`/`↓`, `q` — is a click target (Ink strips the leading ESC from the SGR sequence; the parser tolerates both
+`↑`/`↓`, `q`, and on the board page `←`/`→`, `c` and Enter — is a click target (Ink strips the leading ESC from
+the SGR sequence; the parser tolerates both
 spellings) and the wheel scrolls the page's list. On the board page the wheel scrolls the lane under the cursor
 while the other lanes and the focus stay put, a click focuses a card and a click on the focused card opens its
-detail view; in the detail view the tabs and both nav chips are targets and the replacement leaves no card target
+detail view, and a click on a lane's header — or on a folded lane's three-column frame — toggles that lane's fold; in the detail view the tabs and both nav chips are targets and the replacement leaves no card target
 behind (a replaced block is dead). The fixtures drive real SGR bytes through a pty (`tests/panel-b3-pty-mouse.py`)
 and through a real terminal→tmux→pane chain (`tests/panel-b3-pty-tmux-mouse.py`), because `tmux send-keys` cannot inject `0x1b`.
 

@@ -752,6 +752,11 @@ const FOCUS_CURSOR = '›'
 /** The folded lane's marker; an unfolded lane's header carries the mirror marker (P123). */
 const FOLD_MARKER = '▸'
 const UNFOLD_MARKER = '▾'
+/** P125: the side-by-side folded lane's three-column frame (border, ellipsis column, border). */
+const FOLD_FRAME_W = 3
+/** P125: the frame's middle-column glyphs — the horizontal ellipsis, its vertical twin. */
+const FOLD_ELLIPSIS = '…'
+const FOLD_VERT_ELLIPSIS = '⋮'
 /** The grouped form's pseudo-lane key for the single page window (`< 100` columns). */
 const GROUPED_WINDOW = '\u0000page'
 
@@ -786,16 +791,15 @@ function foldedLaneHead(s: Strings, lane: string, count: number): string {
   return `${FOLD_MARKER} ${laneLabel(lane, s)} ${count}`
 }
 
-/** The full folded line text (what `natural width` measures). */
-function foldedLaneText(s: Strings, lane: string, count: number): string {
-  return `${foldedLaneHead(s, lane, count)}${s.laneFolded}`
-}
-
 /**
  * A folded lane renders as exactly this one line: the marker, the label, the count and the folded
  * token, truncated to the width it was given. When the focused card lives in the lane the line
  * carries the cursor glyph and the selected tone. The line owns the lane's click/wheel region
  * (clicking it toggles the fold; the wheel stays this lane's and never reaches the page behind it).
+ *
+ * P125: this is the grouped tier's form, where folding saves rows. In the side-by-side tier the
+ * folded lane takes the three-column frame instead (`foldedLaneFrame`), so the columns the frame
+ * does not use go to the unfolded lanes.
  */
 function foldedLaneLine(ctx: Ctx, lane: string, count: number, width: number, focused: boolean): PlacedLine {
   const { s } = ctx
@@ -806,6 +810,31 @@ function foldedLaneLine(ctx: Ctx, lane: string, count: number, width: number, fo
   )
   const hits: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: Math.max(1, width), action: { kind: 'lane-fold', lane } }] : undefined
   return { line: truncLine(line, width), hits }
+}
+
+/**
+ * P125: a folded lane in the side-by-side tier is a three-column frame that keeps the lane's
+ * position in the fixed lane order — a rounded corner at each of its four corners (the panel's own
+ * glyphs), a vertical border on each side and the ellipsis in the middle column, drawn down the
+ * lane's height (the vertical ellipsis marks the middle row). The frame alone says which lane it is
+ * because the order never moves. When the focused card lives in the lane its first body row carries
+ * the focus cursor and the selected tone — exactly one cursor in the frame. Every row owns the
+ * lane's click/wheel region: a click toggles the fold and the wheel stays this lane's, never the
+ * page behind it.
+ */
+function foldedLaneFrame(ctx: Ctx, lane: string, focused: boolean, height: number): PlacedLine[] {
+  const body = Math.max(1, Math.floor(height) - 2)
+  const mid = Math.floor((body - 1) / 2)
+  const hit = (): Hit[] | undefined =>
+    ctx.view.tui ? [{ start: 0, end: FOLD_FRAME_W, action: { kind: 'lane-fold', lane } }] : undefined
+  const out: PlacedLine[] = [{ line: ln(seg(BOX_TL + BOX_H + BOX_TR, 'dim')), hits: hit() }]
+  for (let i = 0; i < body; i++) {
+    const cursor = focused && i === 0
+    const glyph = cursor ? FOCUS_CURSOR : i === mid ? FOLD_VERT_ELLIPSIS : FOLD_ELLIPSIS
+    out.push({ line: ln(seg(BOX_V, 'dim'), seg(glyph, cursor ? 'selected' : 'dim'), seg(BOX_V, 'dim')), hits: hit() })
+  }
+  out.push({ line: ln(seg(BOX_BL + BOX_H + BOX_BR, 'dim')), hits: hit() })
+  return out
 }
 
 /**
@@ -968,13 +997,13 @@ function laneColumn(
   if (folded) {
     // P123: the fold branch returns before the window loop, so not one card line (nor an edge
     // counter, nor the empty marker) is built — the bounded-frame promise can only get cheaper.
-    // The window record reports nothing to scroll; the column pads to the lane body's height so
-    // the frame keeps its shape when every lane folds.
+    // The window record reports nothing to scroll; the frame keeps the lane body's height so the
+    // board keeps its shape when every lane folds.
+    // P125: in the side-by-side tier the folded lane is the three-column frame — the columns it
+    // does not use are handed to the unfolded lanes by the width algorithm in `kanbanBlock`.
     windows.push({ lane, offset: 0, visible: 0, count: 0 })
     const focused = target != null && target.state === lane
-    const out: PlacedLine[] = [foldedLaneLine(ctx, lane, cards.length, width, focused)]
-    while (out.length < slots + 2) out.push({ line: [] })
-    return out
+    return foldedLaneFrame(ctx, lane, focused, slots + 2)
   }
   const win = laneWindow(ctx, lane, cards, slots - LANE_MARKER_SLOTS, target)
   windows.push({ lane, offset: win.start, visible: win.end - win.start, count: cards.length })
@@ -1118,35 +1147,27 @@ function kanbanBlock(ctx: Ctx): Block | null {
   }
   const slots = Math.max(2, Math.floor(ctx.laneRows ?? LANE_KEEP_DEFAULT) + LANE_MARKER_SLOTS)
   const windows: LaneWindow[] = []
-  // P123: folding changes the width share, not the lane order. A folded lane's line takes the
-  // width it needs (bounded by the documented floor of four columns); the lanes that still show
-  // cards share what is left, each never under the existing lane floor. The folded line truncates
-  // first — the fold degrades before the cards' shares do.
+  // P125: folding changes the width share, not the lane order. In the side-by-side tier a folded
+  // lane is the three-column frame (`foldedLaneFrame`), so it takes exactly `FOLD_FRAME_W` columns
+  // and the whole rest goes to the unfolded lanes, each never under the documented lane floor —
+  // folding gives columns back and the lane row never renders wider than the usable width. The
+  // verdict is computed from the width itself (the layout's own two-column tier), never a
+  // hardcoded threshold here.
   const usable = Math.max(0, ctx.width - LANE_GAP * (LANES.length - 1))
   const foldOf = (lane: string): boolean => laneFolded(ctx.view, lane, !laneCards(rows, lane).length)
   const foldedLanes = LANES.filter(foldOf)
   const shownLanes = LANES.filter((lane) => !foldOf(lane))
   const widths = new Map<string, number>()
-  if (!foldedLanes.length || !shownLanes.length) {
-    // Nobody (or everybody) folded: the historical even share, so an all-unfolded board keeps its
-    // exact geometry.
+  if (!foldedLanes.length) {
+    // Nobody folded: the historical even share, so an all-unfolded board keeps its exact geometry.
     const laneW = Math.max(8, Math.floor(usable / LANES.length))
     for (const lane of LANES) widths.set(lane, laneW)
+  } else if (!shownLanes.length) {
+    // Everybody folded: the row is six three-column frames (the free width has no lane to take).
+    for (const lane of foldedLanes) widths.set(lane, FOLD_FRAME_W)
   } else {
-    const floorShown = 8
-    const pool = usable - floorShown * shownLanes.length
-    const perFolded = Math.max(4, Math.floor(pool / foldedLanes.length))
-    let spent = 0
-    for (const lane of foldedLanes) {
-      // The focused lane's line carries the cursor glyph too, so its natural width is what the
-      // line really needs — otherwise the focus would truncate the fold token away.
-      const natural =
-        dispWidth(foldedLaneText(ctx.s, lane, laneCards(rows, lane).length)) + (target?.state === lane ? 2 : 0)
-      const w = Math.max(1, Math.min(natural, perFolded))
-      widths.set(lane, w)
-      spent += w
-    }
-    const eachShown = Math.max(1, Math.floor((usable - spent) / shownLanes.length))
+    for (const lane of foldedLanes) widths.set(lane, FOLD_FRAME_W)
+    const eachShown = Math.max(8, Math.floor((usable - FOLD_FRAME_W * foldedLanes.length) / shownLanes.length))
     for (const lane of shownLanes) widths.set(lane, eachShown)
   }
   const cols = LANES.map((lane) => laneColumn(ctx, lane, widths.get(lane) ?? 8, slots, target, ordinals, windows, foldedLanes.includes(lane)))
@@ -1942,6 +1963,14 @@ function demotedPair(ctx: Ctx): { full: string; phase: string } | null {
   if (!rows.length) return null
   const card = focusRow(rows, resolveFocus(rows, ctx.view.focus))
   if (!card) return null
+  // P125: in the side-by-side tier the folded lane is the three-column frame, which cannot carry
+  // its label — the band names the lane it holds the focus for (its label and card count) exactly
+  // where the demoted pair would render. In the grouped tier the folded line still carries them,
+  // so the pair stays as it was.
+  if (ctx.twoColumn && laneFolded(ctx.view, card.state, !laneCards(rows, card.state).length)) {
+    const text = `${laneLabel(card.state, s)} ${laneCards(rows, card.state).length}`
+    return { full: text, phase: text }
+  }
   const phase = card.phase && card.phase !== '-' ? card.phase : s.dash
   // No cursor glyph here: the frame carries exactly one `›` (the focused card's), and the pair is
   // data, not a marker — the design's example glyph would have made every board frame carry two.

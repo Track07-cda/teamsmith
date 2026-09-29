@@ -96,12 +96,14 @@ frame_checks() { # <panel.js> <dir>
   else
     printf '  \033[31m✗\033[0m 键位带没有焦点卡的 agent · phase 对\n'; rc=1
   fi
-  # 2) folding builds no card rows (and the folded line carries the count).
+  # 2) folding builds no card rows; in the side-by-side tier the folded lane is the three-column
+  # frame (P125), so the check counts the frames and the absence of the lane's cards.
   render "$d/folddone.txt" 160 32 "boardFold=done"
-  if grep -aqF '▸ 完成 8（已折叠）' "$d/folddone.txt" && ! grep -aqF 'P13' "$d/folddone.txt"; then
-    printf '  \033[32m✓\033[0m 折叠的 done 一行带计数 8、没有建卡片行\n'
+  frames="$(grep -o '╭─╮' "$d/folddone.txt" | wc -l | tr -d ' ')"
+  if [ "$frames" = "3" ] && grep -aqF '│⋮│' "$d/folddone.txt" && ! grep -aqF 'P13' "$d/folddone.txt"; then
+    printf '  \033[32m✓\033[0m 折叠的 done 是三列小框（3 个、省略号列在）、没有建卡片行\n'
   else
-    printf '  \033[31m✗\033[0m 折叠的 done 仍建了卡片行或没渲染折叠行\n'; rc=1
+    printf '  \033[31m✗\033[0m 折叠的 done 仍建了卡片行或没有三列小框（%s 个）\n' "$frames"; rc=1
   fi
   # 3) the width re-share: folding a lane widens the unfolded ones.
   render "$d/width.txt" 160 32 "boardFold=done"
@@ -120,9 +122,10 @@ PYW
   else
     printf '  \033[31m✗\033[0m 折叠没有让出宽度（wip 盒 %s → %s）\n' "$wip_before" "$wip_after"; rc=1
   fi
-  # 4) empty lanes fold by default; 5) an explicit show keeps an empty lane unfolded.
-  if grep -aqF '▸ 待复验 0（已折叠）' "$d/default.txt"; then
-    printf '  \033[32m✓\033[0m 空车道默认折叠\n'
+  # 4) empty lanes fold by default (in the wide tier as the three-column frame); 5) an explicit
+  # show keeps an empty lane unfolded (checked in the grouped tier, where the in-place line lives).
+  if grep -aqF '╭─╮' "$d/default.txt" && ! grep -aqF '▾ 待复验 0' "$d/default.txt"; then
+    printf '  \033[32m✓\033[0m 空车道默认折叠（三列小框）\n'
   else
     printf '  \033[31m✗\033[0m 空车道没有按默认折叠\n'; rc=1
   fi
@@ -226,7 +229,7 @@ old = """    `boardFold=${BOARD_LANES.filter((lane) => s.boardFold.includes(lane
 new = "    // FLIP P123: the fold state is never written to the file\n"
 assert s.count(old) == 1, "anchor"
 open(p, "w", encoding="utf-8").write(s.replace(old, new))
-' "重启后面板仍折叠 todo（显式状态持久）" "折叠状态不落盘（重启断言红）"
+' "重启后 todo 仍折叠（显式状态持久：展开头不出现）" "折叠状态不落盘（重启断言红）"
 fi
 
 if want F-MACHINE; then
@@ -253,9 +256,9 @@ if want F-WIDTH; then
   flip F-WIDTH 'p = f"{tree}/layout.ts"
 s = open(p, encoding="utf-8").read()
 old = """  const widths = new Map<string, number>()
-  if (!foldedLanes.length || !shownLanes.length) {"""
+  if (!foldedLanes.length) {"""
 new = """  const widths = new Map<string, number>()
-  if (foldedLanes.length >= 0 || shownLanes.length >= 0) { // FLIP P123: every lane keeps the even share"""
+  if (!foldedLanes.length || true) { // FLIP P123: every lane keeps the even share"""
 assert s.count(old) == 1, "anchor"
 open(p, "w", encoding="utf-8").write(s.replace(old, new))
 ' "" "宽度不随折叠再分配"
