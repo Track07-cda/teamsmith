@@ -11182,6 +11182,95 @@ fi
 p28k_render "$TMP/p28k-100.txt" 100 32
 assert_not "$TMP/p28k-100.txt" "（已折叠）" "28-k 切档：100 列起走宽档（折叠是三列小框而非原地一行）"
 
+# ---- 28-m 原地折叠行落在卡片列（P128 · change panel-board-cards：delta 的场景「The in-place folded
+# line lines up with the cards it replaces」）。窄档（分组）里卡片行是 `' ' + 光标(2 列) + 状态字形`
+# ——字形在第 3 列、聚焦光标在第 1 列；车道头是 `' ' + ▾`——标记在第 1 列，P128 不动它。折叠行必须
+# 落在卡片列：标记在第 3 列；折叠车道是焦点所在时，光标在第 1 列（与聚焦卡片同列）。判据按显示列算
+# （CJK 记 2 列），与 28-k 的「省行」判据互补——那里只看形状，这里看对齐。
+p28m_align() { # <frame> <plain|focus>
+  python3 - "$@" <<'PYM'
+import sys
+
+WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+        (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+        (0xff00, 0xff60), (0xffe0, 0xffe6), (0x1f300, 0x1f64f), (0x1f900, 0x1f9ff)]
+
+def chw(ch):
+    cp = ord(ch)
+    if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+        return 0
+    return 2 if any(a <= cp <= b for a, b in WIDE) else 1
+
+def col_of(row, ch):
+    pos = 0
+    for c in row:
+        if c == ch:
+            return pos
+        pos += chw(c)
+    return -1
+
+rows = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8")]
+mode = sys.argv[2]
+problems = []
+folded = [r for r in rows if "（已折叠）" in r]
+
+def find(sub):
+    return next((r for r in rows if sub in r), "")
+
+# ① 车道头：展开的 `进行` 头仍是 `' ' + ▾`（标记列不动）。
+head = find("▾ 进行")
+if not head:
+    problems.append("没有展开的 `▾ 进行` 车道头")
+elif col_of(head, "▾") != 1:
+    problems.append(f"车道头 ▾ 在第 {col_of(head, '▾')} 列，期望 1：{head!r}")
+
+# ② 卡片行：未聚焦卡片的字形在第 3 列。
+card = find("P14")
+if not card:
+    problems.append("没有 P14 卡片行")
+elif col_of(card, "▸") != 3:
+    problems.append(f"卡片 ▸ 在第 {col_of(card, '▸')} 列，期望 3：{card!r}")
+
+# ③ 折叠行：标记必须在第 3 列（卡片字形列），不能还在第 0/1 列（车道头列）。
+if not folded:
+    problems.append("没有原地折叠行")
+for r in folded:
+    at = col_of(r, "▸")
+    if at != 3:
+        problems.append(f"折叠行 ▸ 在第 {at} 列，期望 3（卡片字形列）：{r!r}")
+
+# ④ 焦点：plain 帧在 V14 卡片上（› 第 1 列 / 状态字形 · 第 3 列）；focus 帧在折叠行上（› 同样第 1
+#    列，标记仍在第 3 列）。两种帧都恰好一个光标。
+cursors = sum(r.count("›") for r in rows)
+if cursors != 1:
+    problems.append(f"焦点光标应当恰好一个，实际 {cursors}")
+if mode == "plain":
+    v14 = find("V14")
+    if not v14:
+        problems.append("plain 帧没有 V14 聚焦卡片行")
+    elif col_of(v14, "›") != 1 or col_of(v14, "·") != 3:
+        problems.append(f"聚焦卡片 › 在第 {col_of(v14, '›')} 列 / · 在第 {col_of(v14, '·')} 列，期望 1/3：{v14!r}")
+else:
+    fr = next((r for r in folded if "›" in r), "")
+    if not fr:
+        problems.append("focus 帧的折叠行没有光标（焦点没落在折叠车道上）")
+    elif col_of(fr, "›") != 1:
+        problems.append(f"聚焦折叠行 › 在第 {col_of(fr, '›')} 列，期望 1（与聚焦卡片同列）：{fr!r}")
+    if "待办 1" not in fr:
+        problems.append(f"聚焦折叠行没有标签与计数：{fr!r}")
+print("ok" if not problems else "；".join(problems))
+PYM
+}
+p28k_render "$TMP/p28m-99.txt" 99 32
+assert_eq "28-m 对齐 99：车道头 ▾ 第 1 列（不动）/ 卡片字形第 3 列 / 折叠行标记也在第 3 列（与卡片同列）" \
+  "$(p28m_align "$TMP/p28m-99.txt" plain)" "ok"
+p28k_render "$TMP/p28m-60.txt" 60 32
+assert_eq "28-m 对齐 60（PM 现场档）：同 99 —— 折叠行落在卡片列" \
+  "$(p28m_align "$TMP/p28m-60.txt" plain)" "ok"
+p28k_render "$TMP/p28m-focus.txt" 99 32 "boardFold=todo"
+assert_eq "28-m 聚焦折叠行：光标也在第 1 列（与聚焦卡片同列）、标记第 3 列、恰好一个光标、车道头不动" \
+  "$(p28m_align "$TMP/p28m-focus.txt" focus)" "ok"
+
 section "29 · 派单模型解析：配置压过名册旧记录（M14）"
 
 M14R="$TMP/m14repo"; rm -rf "$M14R"; mkdir -p "$M14R"

@@ -800,11 +800,17 @@ function foldedLaneHead(s: Strings, lane: string, count: number): string {
  * P125: this is the grouped tier's form, where folding saves rows. In the side-by-side tier the
  * folded lane takes the three-column frame instead (`foldedLaneFrame`), so the columns the frame
  * does not use go to the unfolded lanes.
+ *
+ * P128: the in-place line sits in the column its own card lines use — the grouped card rows are
+ * `' '` + cursor + glyph, so the folded line takes the same leading indent and the focus cursor's
+ * column, its fold marker landing in the cards' state-glyph column. The lane header keeps its own
+ * marker column, which is why the old line looked grouped with the header instead of the cards.
  */
 function foldedLaneLine(ctx: Ctx, lane: string, count: number, width: number, focused: boolean): PlacedLine {
   const { s } = ctx
   const line = ln(
-    seg(focused ? `${FOCUS_CURSOR} ` : '', 'selected'),
+    seg(' '),
+    seg(focused ? `${FOCUS_CURSOR} ` : '  ', focused ? 'selected' : 'dim'),
     seg(foldedLaneHead(s, lane, count), focused ? 'selected' : 'heading'),
     seg(s.laneFolded, 'dim'),
   )
