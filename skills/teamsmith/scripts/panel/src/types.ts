@@ -12,6 +12,12 @@ export type AgentState = 'running' | 'exited' | 'absent'
 
 /** The four console pages (TUI-only; `--print`/`--json` render the overview). */
 export type PageId = 1 | 2 | 3 | 4
+
+/**
+ * The board's six lanes in the fixed order BOARD.md's header legend declares (P123). Both the layout
+ * and the `state/panel.conf` fold lists order themselves by this one list.
+ */
+export const BOARD_LANES = ['todo', 'wip', 'review', 'done', 'blocked', 'dropped'] as const
 export type Density = 'comfortable' | 'compact'
 export type ThemeName = 'dark' | 'light'
 export type ThemeChoice = ThemeName | 'auto'
@@ -455,6 +461,10 @@ export type Action =
   | { kind: 'card-move'; delta: number }
   /** Board page: the wheel's lane hit — scroll this lane's window (never the focus). */
   | { kind: 'lane-scroll'; lane: string; delta: number }
+  /** Board page: toggle this lane's fold (the `c` chip or a click on the lane's header line).
+   * `scroll` names the wheel region the same line keeps when the tier batches every lane into one
+   * window (the grouped form); absent = the lane's own window. */
+  | { kind: 'lane-fold'; lane: string; scroll?: string }
   /** Detail view: switch to the file tab at `index` (a click on the tab row). */
   | { kind: 'detail-tab'; index: number }
   /** Detail view: move the file tab one step (the key band's ←/→ chip). */
@@ -583,6 +593,12 @@ export interface ViewState {
   focus?: FocusRef | null
   /** Per-lane window offsets (the board page's wheel); absent lanes anchor on their newest cards. */
   laneOffset?: Record<string, number>
+  /** The board's explicitly folded lanes (P123, legend order); empty/absent = none. */
+  boardFold?: string[]
+  /** The board's explicitly shown lanes (P123, legend order): they stay unfolded even when empty. */
+  boardShow?: string[]
+  /** The empty-lane fold default (P123): `undefined`/`true` folds an empty lane nobody showed. */
+  boardEmptyFold?: boolean
   /** The entry id whose read-only detail view is open (null = the page itself is showing). */
   detail?: string | null
   /** The open detail view's file tab (clamped by the layout; 0 = the first file). */

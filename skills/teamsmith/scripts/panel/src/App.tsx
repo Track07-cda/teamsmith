@@ -769,6 +769,41 @@ export function App({
   /** The board's rows as the last assembly saw them (the kanban moves over these). */
   const boardRows = useCallback(() => dataRef.current.blocks?.board?.rows ?? [], [])
 
+  /**
+   * P123: the effective fold of one lane, exactly as the layout resolves it (explicit fold wins,
+   * then explicit show, then the empty default). The App needs it for the no-op card walk and for
+   * what a toggle writes; the layout is still the single place the frame is drawn from.
+   */
+  const laneFoldedNow = useCallback((lane: string, empty: boolean): boolean => {
+    const cur = settingsRef.current
+    if (cur.boardFold.includes(lane)) return true
+    if (cur.boardShow.includes(lane)) return false
+    return empty && cur.boardEmptyFold
+  }, [])
+
+  /**
+   * P123's `c` / header click: flip the lane's fold and write the explicit state in the same step
+   * (the requirement is "each toggle is written as it happens", so a quit cannot lose it). An
+   * explicit show survives emptiness and restarts; the default state is recomputed per frame.
+   */
+  const toggleLaneFold = useCallback(
+    (lane: string) => {
+      const cur = settingsRef.current
+      const rows = boardRows()
+      const empty = !rows.some((r) => r.state === lane)
+      const next: Settings = { ...cur }
+      if (laneFoldedNow(lane, empty)) {
+        next.boardFold = cur.boardFold.filter((l) => l !== lane)
+        next.boardShow = [...cur.boardShow.filter((l) => l !== lane), lane]
+      } else {
+        next.boardFold = [...cur.boardFold.filter((l) => l !== lane), lane]
+        next.boardShow = cur.boardShow.filter((l) => l !== lane)
+      }
+      saveSettings(next)
+    },
+    [boardRows, laneFoldedNow, saveSettings],
+  )
+
   const moveFocus = useCallback(
     (laneDelta: number, cardDelta: number) => {
       const rows = boardRows()
@@ -795,6 +830,10 @@ export function App({
       // (the resolved row object), and every drawn card is exactly one step.
       const row = focusRow(rows, current)
       if (!row) return
+      // P123: while the focused lane is folded its one line draws at the top of its column, so a
+      // card move would be an invisible state change (the cursor would leave the only drawn row).
+      // The keys no-op; `c` first, or `←`/`→` to another lane, brings the cards back.
+      if (laneFoldedNow(current.lane, !rows.some((r) => r.state === current.lane))) return
       const inLane = rows.filter((r) => r.state === current.lane)
       const idx = inLane.indexOf(row)
       const next = idx < 0 ? undefined : inLane[idx + cardDelta]
@@ -816,7 +855,7 @@ export function App({
         setLaneOffset((prev) => ({ ...prev, [current.lane]: start }))
       }
     },
-    [boardRows],
+    [boardRows, laneFoldedNow],
   )
 
   /**
@@ -1431,6 +1470,12 @@ export function App({
         case 'lane-scroll':
           scrollLane(action.lane, action.delta)
           return
+        case 'lane-fold': {
+          // P123: a click on a lane header/folded line toggles that lane; the chip names the
+          // focused lane (empty when the board has no cards — nothing to fold, nothing to write).
+          if (action.lane) toggleLaneFold(action.lane)
+          return
+        }
         case 'detail-tab':
           setDetailIndex(action.index)
           setDetailScroll(0)
@@ -1480,7 +1525,7 @@ export function App({
           return
       }
     },
-    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, updateScroll],
+    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, toggleLaneFold, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -1542,6 +1587,9 @@ export function App({
       scroll,
       focus,
       laneOffset,
+      boardFold: settings.boardFold,
+      boardShow: settings.boardShow,
+      boardEmptyFold: settings.boardEmptyFold,
       detail: detailId,
       detailIndex,
       detailScroll,
@@ -1585,6 +1633,9 @@ export function App({
     scroll,
     focus,
     laneOffset,
+    settings.boardFold,
+    settings.boardShow,
+    settings.boardEmptyFold,
     detailId,
     detailIndex,
     detailScroll,
@@ -1715,12 +1766,20 @@ export function App({
           // lane, the lane's own hover target covers the rest); elsewhere it scrolls the page's list.
           if (pageRef.current === 4) {
             const over = targetsRef.current.find((t) => t.row === y - 1 && x - 1 >= t.hit.start && x - 1 < t.hit.end)
-            const lane = over && (over.hit.action.kind === 'lane-scroll' || over.hit.action.kind === 'focus' || over.hit.action.kind === 'open-focused')
-              ? over.hit.action.lane
-              : ''
-            if (lane) {
-              scrollLane(lane, delta)
+            const a = over?.hit.action
+            if (a && (a.kind === 'lane-scroll' || a.kind === 'focus' || a.kind === 'open-focused')) {
+              scrollLane(a.lane, delta)
               return
+            }
+            if (a && a.kind === 'lane-fold') {
+              // P123: a lane's header/folded line keeps that lane's wheel region — the folded line
+              // has no window to move (nothing to scroll), and the grouped tier's header names the
+              // one page window it shares with the other lanes. The page behind is never touched.
+              const key = a.scroll ?? a.lane
+              if (lanesRef.current.some((w) => w.lane === key)) {
+                scrollLane(key, delta)
+                return
+              }
             }
           }
           // The wheel scrolls the page's list: down reveals later rows, up goes back.
@@ -1984,6 +2043,13 @@ export function App({
         setReceipt(null)
         setStatus(null)
         api.refreshNow()
+        return
+      }
+      if (page === 4 && input === 'c' && !detailId) {
+        // P123: `c` folds/unfolds the lane the focus names. The detail view and the settings
+        // surfaces own the page region and never reach here (their branches returned above).
+        const current = resolveFocus(boardRows(), focusRef.current)
+        if (current) toggleLaneFold(current.lane)
         return
       }
       if (page === 4 && (key.leftArrow || key.rightArrow)) {

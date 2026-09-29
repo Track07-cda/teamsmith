@@ -23,6 +23,7 @@ import { fmtAge, fmtMB, GLYPH, clockOf, shortBranch, sparkline } from './format.
 import { markdownMemo } from './markdown.js'
 import { fill, keyLabel, OVERLAY_LABEL_W } from './strings/index.js'
 import type { Strings } from './strings/index.js'
+import { BOARD_LANES } from './types.js'
 import type {
   Action,
   ActivityBlock,
@@ -735,7 +736,7 @@ function boardBlock(ctx: Ctx): Block | null {
 // ------------------------------------------------------------------ the board page (kanban, P18/B2)
 
 /** The six lanes, in the order BOARD.md's own header legend declares — the file is the contract. */
-const LANES: readonly string[] = ['todo', 'wip', 'review', 'done', 'blocked', 'dropped']
+const LANES: readonly string[] = BOARD_LANES
 /** The state glyph a card carries; the state's name lives in the lane header. */
 const LANE_GLYPH: Record<string, string> = { todo: '·', wip: '▸', review: '◆', done: '✓', blocked: '✗', dropped: '—' }
 /** Columns between two lanes side by side. */
@@ -748,6 +749,9 @@ const LANE_MARKER_SLOTS = 2
 const LANE_CHROME_ROWS = 2
 /** The cursor in front of the focused card: a glyph, never color alone. */
 const FOCUS_CURSOR = '›'
+/** The folded lane's marker; an unfolded lane's header carries the mirror marker (P123). */
+const FOLD_MARKER = '▸'
+const UNFOLD_MARKER = '▾'
 /** The grouped form's pseudo-lane key for the single page window (`< 100` columns). */
 const GROUPED_WINDOW = '\u0000page'
 
@@ -763,6 +767,45 @@ function laneLabel(lane: string, s: Strings): string {
 /** The cards of one lane, in BOARD.md order (the file lists oldest → newest). */
 function laneCards(rows: BoardRow[], lane: string): BoardRow[] {
   return rows.filter((r) => r.state === lane)
+}
+
+/**
+ * The board page's effective fold state for one lane (P123). An explicit fold wins over an explicit
+ * show (the explicit hide is the stronger statement); a lane nobody named folds only while it is
+ * empty and the empty default is on. The default is recomputed per frame, so an empty lane unfolds
+ * by itself as soon as it holds a card, while an explicit state survives emptiness and restarts.
+ */
+function laneFolded(view: ViewState, lane: string, empty: boolean): boolean {
+  if ((view.boardFold ?? []).includes(lane)) return true
+  if ((view.boardShow ?? []).includes(lane)) return false
+  return empty && (view.boardEmptyFold ?? true)
+}
+
+/** The folded lane's marker + label + count; the folded token is the line's dim tail. */
+function foldedLaneHead(s: Strings, lane: string, count: number): string {
+  return `${FOLD_MARKER} ${laneLabel(lane, s)} ${count}`
+}
+
+/** The full folded line text (what `natural width` measures). */
+function foldedLaneText(s: Strings, lane: string, count: number): string {
+  return `${foldedLaneHead(s, lane, count)}${s.laneFolded}`
+}
+
+/**
+ * A folded lane renders as exactly this one line: the marker, the label, the count and the folded
+ * token, truncated to the width it was given. When the focused card lives in the lane the line
+ * carries the cursor glyph and the selected tone. The line owns the lane's click/wheel region
+ * (clicking it toggles the fold; the wheel stays this lane's and never reaches the page behind it).
+ */
+function foldedLaneLine(ctx: Ctx, lane: string, count: number, width: number, focused: boolean): PlacedLine {
+  const { s } = ctx
+  const line = ln(
+    seg(focused ? `${FOCUS_CURSOR} ` : '', 'selected'),
+    seg(foldedLaneHead(s, lane, count), focused ? 'selected' : 'heading'),
+    seg(s.laneFolded, 'dim'),
+  )
+  const hits: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: Math.max(1, width), action: { kind: 'lane-fold', lane } }] : undefined
+  return { line: truncLine(line, width), hits }
 }
 
 /**
@@ -876,30 +919,23 @@ function laneWindow(
   return { start, end: Math.min(count, start + span), above: start, below: Math.max(0, count - (start + span)) }
 }
 
-/** One card's line: cursor, state glyph, id, agent, phase, title — truncated to the lane's width. */
+/**
+ * One card's line: cursor, state glyph, id, title — truncated to the lane's width. P123: the agent
+ * and the phase never render here; the focused card's pair rides the key band instead, so the title
+ * is the line's last truncation and no width exists at which a card drops its title to keep them.
+ */
 function cardLine(ctx: Ctx, card: BoardRow, width: number, focused: boolean): Line {
-  const { s, minimal } = ctx
+  const { minimal } = ctx
   const glyph = LANE_GLYPH[card.state] ?? '·'
   const tone = BOARD_STATE_TONE[card.state] ?? 'text'
-  const phase = card.phase && card.phase !== '-' ? card.phase : s.dash
   const cursorTone: Tone = focused ? 'selected' : 'dim'
   const idTone: Tone = focused ? 'selected' : 'accent'
   const cursor = focused ? `${FOCUS_CURSOR} ` : '  '
   if (minimal) {
-    // Under 60 columns a card is one line: glyph, id, title (the agent and phase drop).
+    // Under 60 columns a card is one line: glyph, id, title (the demoted pair drops first).
     return truncLine(ln(seg(cursor, cursorTone), seg(`${glyph} `, tone), seg(`${cell(card.id, 6)} `, idTone), seg(card.title)), width)
   }
-  return truncLine(
-    ln(
-      seg(cursor, cursorTone),
-      seg(`${glyph} `, tone),
-      seg(`${card.id} `, idTone),
-      seg(`${card.agent} `, 'dim'),
-      seg(`${phase} `, 'dim'),
-      seg(card.title),
-    ),
-    width,
-  )
+  return truncLine(ln(seg(cursor, cursorTone), seg(`${glyph} `, tone), seg(`${card.id} `, idTone), seg(card.title)), width)
 }
 
 /**
@@ -925,15 +961,30 @@ function laneColumn(
   target: BoardRow | null,
   ordinals: Map<BoardRow, number>,
   windows: LaneWindow[],
+  folded: boolean,
 ): PlacedLine[] {
   const { s } = ctx
   const cards = laneCards(ctx.blocks.board?.rows ?? [], lane)
+  if (folded) {
+    // P123: the fold branch returns before the window loop, so not one card line (nor an edge
+    // counter, nor the empty marker) is built — the bounded-frame promise can only get cheaper.
+    // The window record reports nothing to scroll; the column pads to the lane body's height so
+    // the frame keeps its shape when every lane folds.
+    windows.push({ lane, offset: 0, visible: 0, count: 0 })
+    const focused = target != null && target.state === lane
+    const out: PlacedLine[] = [foldedLaneLine(ctx, lane, cards.length, width, focused)]
+    while (out.length < slots + 2) out.push({ line: [] })
+    return out
+  }
   const win = laneWindow(ctx, lane, cards, slots - LANE_MARKER_SLOTS, target)
   windows.push({ lane, offset: win.start, visible: win.end - win.start, count: cards.length })
   // Everything in the lane that is not a card resolves to the lane itself, so the wheel scrolls the
   // lane under the cursor (the card hits win the lookup where a card is — `.find()` takes the first).
   const hover: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: width, action: laneHover(lane) }] : undefined
-  const out: PlacedLine[] = [{ line: cardTop(`${laneLabel(lane, s)} ${cards.length}`, width), hits: hover }]
+  // P123: the lane's header line (this top border) is the `c` key's click target; the wheel over it
+  // is this lane's too (the App's wheel branch accepts the same action).
+  const headerHit: Hit[] | undefined = ctx.view.tui ? [{ start: 0, end: width, action: { kind: 'lane-fold', lane } }] : undefined
+  const out: PlacedLine[] = [{ line: cardTop(`${UNFOLD_MARKER} ${laneLabel(lane, s)} ${cards.length}`, width), hits: headerHit }]
   if (win.above > 0) out.push(cardBody({ line: ln(seg(` ${fill(s.laneHiddenAbove, { n: win.above })}`, 'dim')) }, width))
   if (!cards.length) out.push(cardBody({ line: ln(seg(` ${s.kanbanEmptyLane}`, 'dim')) }, width))
   for (let i = win.start; i < win.end; i++) {
@@ -995,7 +1046,17 @@ function kanbanGrouped(
   const focusLine = { i: -1 }
   for (const lane of LANES) {
     const cards = laneCards(rows, lane)
-    all.push({ line: truncLine(ln(seg(` ${laneLabel(lane, s)} ${cards.length}`, 'heading')), width) })
+    if (laneFolded(ctx.view, lane, !cards.length)) {
+      // P123: a folded lane is its one line here too — no cards, no empty marker, no card rows.
+      const focused = target != null && target.state === lane
+      if (focused) focusLine.i = all.length
+      all.push(foldedLaneLine(ctx, lane, cards.length, width, focused))
+      continue
+    }
+    const head: Hit[] | undefined = ctx.view.tui
+      ? [{ start: 0, end: width, action: { kind: 'lane-fold', lane, scroll: GROUPED_WINDOW } }]
+      : undefined
+    all.push({ line: truncLine(ln(seg(` ${UNFOLD_MARKER} ${laneLabel(lane, s)} ${cards.length}`, 'heading')), width), hits: head })
     if (!cards.length) all.push({ line: truncLine(ln(seg(`  ${s.kanbanEmptyLane}`, 'dim')), width) })
     for (const card of cards) {
       const focused = card === target
@@ -1055,11 +1116,41 @@ function kanbanBlock(ctx: Ctx): Block | null {
     const grouped = kanbanGrouped(ctx, rows, target, ordinals)
     return { ...one(grouped.lines), lanes: grouped.lanes }
   }
-  const laneW = Math.max(8, Math.floor((ctx.width - LANE_GAP * (LANES.length - 1)) / LANES.length))
   const slots = Math.max(2, Math.floor(ctx.laneRows ?? LANE_KEEP_DEFAULT) + LANE_MARKER_SLOTS)
   const windows: LaneWindow[] = []
-  const cols = LANES.map((lane) => laneColumn(ctx, lane, laneW, slots, target, ordinals, windows))
-  return { ...one(mergeLaneColumns(cols, LANES.map(() => laneW))), lanes: windows }
+  // P123: folding changes the width share, not the lane order. A folded lane's line takes the
+  // width it needs (bounded by the documented floor of four columns); the lanes that still show
+  // cards share what is left, each never under the existing lane floor. The folded line truncates
+  // first — the fold degrades before the cards' shares do.
+  const usable = Math.max(0, ctx.width - LANE_GAP * (LANES.length - 1))
+  const foldOf = (lane: string): boolean => laneFolded(ctx.view, lane, !laneCards(rows, lane).length)
+  const foldedLanes = LANES.filter(foldOf)
+  const shownLanes = LANES.filter((lane) => !foldOf(lane))
+  const widths = new Map<string, number>()
+  if (!foldedLanes.length || !shownLanes.length) {
+    // Nobody (or everybody) folded: the historical even share, so an all-unfolded board keeps its
+    // exact geometry.
+    const laneW = Math.max(8, Math.floor(usable / LANES.length))
+    for (const lane of LANES) widths.set(lane, laneW)
+  } else {
+    const floorShown = 8
+    const pool = usable - floorShown * shownLanes.length
+    const perFolded = Math.max(4, Math.floor(pool / foldedLanes.length))
+    let spent = 0
+    for (const lane of foldedLanes) {
+      // The focused lane's line carries the cursor glyph too, so its natural width is what the
+      // line really needs — otherwise the focus would truncate the fold token away.
+      const natural =
+        dispWidth(foldedLaneText(ctx.s, lane, laneCards(rows, lane).length)) + (target?.state === lane ? 2 : 0)
+      const w = Math.max(1, Math.min(natural, perFolded))
+      widths.set(lane, w)
+      spent += w
+    }
+    const eachShown = Math.max(1, Math.floor((usable - spent) / shownLanes.length))
+    for (const lane of shownLanes) widths.set(lane, eachShown)
+  }
+  const cols = LANES.map((lane) => laneColumn(ctx, lane, widths.get(lane) ?? 8, slots, target, ordinals, windows, foldedLanes.includes(lane)))
+  return { ...one(mergeLaneColumns(cols, LANES.map((lane) => widths.get(lane) ?? 8))), lanes: windows }
 }
 
 // ------------------------------------------------------------------ the detail view (markdown, P18/B3)
@@ -1838,6 +1929,25 @@ function healthBlock(ctx: Ctx): Block | null {
 
 // ------------------------------------------------------------------ footer and overlay
 
+/**
+ * P123: the focused card's demoted `agent · phase` pair, which the board page's key band renders in
+ * the width its chips leave free. Only the card line hides these fields; the pair is built only
+ * while the kanban is on screen (the detail view and the settings surfaces replace the page's
+ * blocks, so no card is focused on screen there). `null` when the board page has no focused card.
+ */
+function demotedPair(ctx: Ctx): { full: string; phase: string } | null {
+  const { s } = ctx
+  if (ctx.view.page !== 4 || ctx.view.detail || ctx.view.overlay || ctx.view.settings) return null
+  const rows = ctx.blocks.board?.rows ?? []
+  if (!rows.length) return null
+  const card = focusRow(rows, resolveFocus(rows, ctx.view.focus))
+  if (!card) return null
+  const phase = card.phase && card.phase !== '-' ? card.phase : s.dash
+  // No cursor glyph here: the frame carries exactly one `›` (the focused card's), and the pair is
+  // data, not a marker — the design's example glyph would have made every board frame carry two.
+  return { full: `${card.agent} · ${phase}`, phase }
+}
+
 function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
   const { s, width } = ctx
   const actions: { text: string; action: Action }[] = [
@@ -1887,6 +1997,10 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
           { text: s.keyLanes, action: { kind: 'lane-move', delta: 1 } },
           { text: s.keyCards, action: { kind: 'card-move', delta: 1 } },
           {
+            text: s.keyFold,
+            action: { kind: 'lane-fold', lane: resolveFocus(ctx.blocks.board?.rows ?? [], ctx.view.focus)?.lane ?? '' },
+          },
+          {
             text: s.keyOpen,
             action: { kind: 'open-focused', lane: resolveFocus(ctx.blocks.board?.rows ?? [], ctx.view.focus)?.lane ?? 'todo' },
           },
@@ -1933,6 +2047,18 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
     x += 3
     push(item.text, item.action, false, chip)
   })
+  // P123: the focused card's demoted pair rides the free width the chips leave — right-aligned,
+  // dim, no hit target (data, not an affordance). The agent drops before the phase, and the pair
+  // disappears before it could push a documented chip out (the chips were laid out first).
+  const pair = demotedPair(ctx)
+  if (pair) {
+    const free = width - x
+    const text = dispWidth(pair.full) <= free ? pair.full : dispWidth(pair.phase) <= free ? pair.phase : ''
+    if (text) {
+      line.push(seg(' '.repeat(free - dispWidth(text)), 'dim'), seg(text, 'dim'))
+      x += free
+    }
+  }
   return { id: 'keys', full: true, priority: 99, lines: [placedWithHits(ln(seg(' '), ...line), hits, width)], separator: 'none' }
 }
 

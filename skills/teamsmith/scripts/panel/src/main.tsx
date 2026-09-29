@@ -300,6 +300,11 @@ async function main(): Promise<void> {
       density: settings.density,
       overlay: wantOverlay,
       detail: detailArg || null,
+      // P123: the snapshot is the TUI's own render path, so it reads the fold keys (the machine exits
+      // stay on `defaultView` and never look at them).
+      boardFold: settings.boardFold,
+      boardShow: settings.boardShow,
+      boardEmptyFold: settings.boardEmptyFold,
     }
     const themed = layout({
       ...frame,
@@ -327,10 +332,14 @@ async function main(): Promise<void> {
   }
 
   if (mode === 'text') {
+    // `--page` is honoured here too (P123's machine-frame identity fixture renders page 4); absent,
+    // the machine frame stays the overview it always was.
+    const machinePage: PageId =
+      pageArg === '1' || pageArg === '2' || pageArg === '3' || pageArg === '4' ? (Number(pageArg) as PageId) : 1
     if (once || wantPrint) {
       // One frame; `--once` then keeps today's tick semantics, `--print` (the observer) never ticks.
       const frame = frameOrFail(await loadPanelData({ root, teamCli, activity: rawActivityOn, events, blocks: MACHINE_BLOCKS }), rawActivityOn, MACHINE_BLOCKS)
-      const themed = layout({ ...frame, strings: stringsFor('zh'), view: defaultView('zh', 1) } as LayoutInput)
+      const themed = layout({ ...frame, strings: stringsFor('zh'), view: defaultView('zh', machinePage) } as LayoutInput)
       out(`${renderPlain(themed).join('\n')}\n`)
       if (once) await runTickIfDue()
       process.exit(0)
@@ -340,7 +349,7 @@ async function main(): Promise<void> {
     // caller's output. One frame per iteration, no clear, never a TUI escape sequence.
     for (;;) {
       const frame = frameOrFail(await loadPanelData({ root, teamCli, activity: rawActivityOn, events, blocks: MACHINE_BLOCKS }), rawActivityOn, MACHINE_BLOCKS)
-      const themed = layout({ ...frame, strings: stringsFor('zh'), view: defaultView('zh', 1) } as LayoutInput)
+      const themed = layout({ ...frame, strings: stringsFor('zh'), view: defaultView('zh', machinePage) } as LayoutInput)
       out(`${renderPlain(themed).join('\n')}\n`)
       await runTickIfDue()
       sleepSync(Math.max(1, refresh) * 1000)

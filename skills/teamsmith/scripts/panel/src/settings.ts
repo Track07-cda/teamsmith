@@ -9,6 +9,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { BOARD_LANES } from './types.js'
 import type { Density, PageId, ThemeChoice } from './types.js'
 import { isLang, type Lang } from './strings/index.js'
 
@@ -22,6 +23,12 @@ export interface Settings {
   mouse: boolean
   density: Density
   theme: ThemeChoice
+  /** Board lanes folded explicitly (P123), in the lane legend's order. */
+  boardFold: string[]
+  /** Board lanes kept unfolded explicitly (P123): they stay unfolded even while empty. */
+  boardShow: string[]
+  /** Empty lanes fold by default (P123); `false` renders them boxed with the dim empty marker. */
+  boardEmptyFold: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -31,6 +38,9 @@ export const DEFAULT_SETTINGS: Settings = {
   mouse: true,
   density: 'comfortable',
   theme: 'auto',
+  boardFold: [],
+  boardShow: [],
+  boardEmptyFold: true,
 }
 
 function boolOf(value: string): boolean | null {
@@ -44,6 +54,16 @@ function pageOf(value: string): PageId | null {
   const v = value.trim()
   if (v === '1' || v === '2' || v === '3' || v === '4') return Number(v) as PageId
   return null
+}
+
+/**
+ * A `boardFold`/`boardShow` value (P123): comma list of lane names. Unknown names are dropped,
+ * duplicates dedupe, and the survivors come out in the lane legend's order — the same order
+ * `serializePanelConf` writes, so a hand-edited list normalises on the first save.
+ */
+function lanesOf(value: string): string[] {
+  const named = new Set(value.split(',').map((v) => v.trim()))
+  return BOARD_LANES.filter((lane) => named.has(lane))
 }
 
 /** Parse a `panel.conf` body; unknown keys and unusable values are ignored (defaults survive). */
@@ -66,7 +86,15 @@ export function parsePanelConf(text: string): Settings {
       if (b !== null) out[key] = b
     } else if (key === 'density' && (value === 'comfortable' || value === 'compact')) out.density = value
     else if (key === 'theme' && (value === 'dark' || value === 'light' || value === 'auto')) out.theme = value
+    else if (key === 'boardFold') out.boardFold = lanesOf(value)
+    else if (key === 'boardShow') out.boardShow = lanesOf(value)
+    else if (key === 'boardEmptyFold') {
+      const b = boolOf(value)
+      if (b !== null) out.boardEmptyFold = b
+    }
   }
+  // A lane named by both lists folds: the explicit hide is the stronger statement.
+  out.boardShow = out.boardShow.filter((lane) => !out.boardFold.includes(lane))
   return out
 }
 
@@ -78,6 +106,9 @@ export function serializePanelConf(s: Settings): string {
     `mouse=${s.mouse ? 1 : 0}`,
     `density=${s.density}`,
     `theme=${s.theme}`,
+    `boardFold=${BOARD_LANES.filter((lane) => s.boardFold.includes(lane)).join(',')}`,
+    `boardShow=${BOARD_LANES.filter((lane) => s.boardShow.includes(lane)).join(',')}`,
+    `boardEmptyFold=${s.boardEmptyFold ? 1 : 0}`,
     '',
   ].join('\n')
 }

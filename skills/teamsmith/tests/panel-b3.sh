@@ -837,7 +837,9 @@ import json, sys
 def row(i, state, title, agent):
     return {"id": i, "title": title, "agent": agent, "branch": "-", "deps": "-", "state": state, "phase": "apply"}
 
-rows = [row("M39", "todo", "重复的第一条", "dev1"), row("M39", "todo", "重复的第二条", "dev2"), row("M48", "todo", "第三条", "dev3")]
+# P123: the card line no longer carries the agent, so the two same-id rows are told apart by their
+# titles — short enough to survive the 120-column lane's title truncation (每条 3 个汉字).
+rows = [row("M39", "todo", "第一条", "dev1"), row("M39", "todo", "第二条", "dev2"), row("M48", "todo", "第三条", "dev3")]
 json.dump({"rows": rows, "counts": {}, "total": len(rows), "deliveries": []}, open(sys.argv[1], "w"))
 PYD
   printf '4\n' > "$(page_file)"
@@ -847,25 +849,25 @@ PYD
   assert_eq "M48 重复 ID：初始焦点在第一行 M39" "$(focused_id "$(bfile dup-1)")" "M39"
   assert_eq "M48 重复 ID：焦点光标恰好一个（不是两行都亮）" "$(grep -o '›' "$(bfile dup-1)" | wc -l | tr -d ' ')" "1"
   focused_row "$(bfile dup-1)" > "$tmp/$current/dup-1-row.txt"
-  assert_has "$tmp/$current/dup-1-row.txt" "M39 dev1" "M48 重复 ID：高亮落在第一条（按行身份，不是裸 ID）"
+  assert_has "$tmp/$current/dup-1-row.txt" "M39 第一条" "M48 重复 ID：高亮落在第一条（按行身份，不是裸 ID）"
   keys Down; sleep 0.5
   bcap dup-2
   assert_eq "M48 重复 ID：↓ 后仍只有一个光标" "$(grep -o '›' "$(bfile dup-2)" | wc -l | tr -d ' ')" "1"
   focused_row "$(bfile dup-2)" > "$tmp/$current/dup-2-row.txt"
-  assert_has "$tmp/$current/dup-2-row.txt" "M39 dev2" "M48 重复 ID：↓ 走到同 ID 的第二行（不卡死）"
+  assert_has "$tmp/$current/dup-2-row.txt" "M39 第二条" "M48 重复 ID：↓ 走到同 ID 的第二行（不卡死）"
   # Cross-frame persistence (the brief's requirement): a refresh and a detail round trip must keep the
   # *second* row of the id, not snap back to the first one.
   keys r; sleep 1
   bcap dup-refresh
   focused_row "$(bfile dup-refresh)" > "$tmp/$current/dup-refresh-row.txt"
-  assert_has "$tmp/$current/dup-refresh-row.txt" "M39 dev2" "M48 重复 ID：刷新（r）后焦点仍在第二条同 ID 行"
+  assert_has "$tmp/$current/dup-refresh-row.txt" "M39 第二条" "M48 重复 ID：刷新（r）后焦点仍在第二条同 ID 行"
   keys Enter; sleep 1.4
   bcap dup-detail
   assert_has "$(bfile dup-detail)" "详情 M39" "M48 重复 ID：Enter 打开的是焦点那一行的详情"
   keys Escape; sleep 0.8
   bcap dup-back
   focused_row "$(bfile dup-back)" > "$tmp/$current/dup-back-row.txt"
-  assert_has "$tmp/$current/dup-back-row.txt" "M39 dev2" "M48 重复 ID：详情返回后焦点仍在第二条同 ID 行"
+  assert_has "$tmp/$current/dup-back-row.txt" "M39 第二条" "M48 重复 ID：详情返回后焦点仍在第二条同 ID 行"
   keys Down; sleep 0.5
   bcap dup-3
   assert_eq "M48 重复 ID：再 ↓ 走到 M48（同 ID 两行之后继续前进）" "$(focused_id "$(bfile dup-3)")" "M48"
@@ -873,7 +875,7 @@ PYD
   bcap dup-4
   assert_eq "M48 重复 ID：↑↑ 回到第一行 M39" "$(focused_id "$(bfile dup-4)")" "M39"
   focused_row "$(bfile dup-4)" > "$tmp/$current/dup-4-row.txt"
-  assert_has "$tmp/$current/dup-4-row.txt" "M39 dev1" "M48 重复 ID：↑ 逐行经过第二条，回到第一条"
+  assert_has "$tmp/$current/dup-4-row.txt" "M39 第一条" "M48 重复 ID：↑ 逐行经过第二条，回到第一条"
   # The work page walks the same rows through its own drawn order (M48 changed both walks). Its
   # first `↓` anchors on the first drawn row (P20/B5), so the second press is the first real step.
   printf '2\n' > "$(page_file)"
@@ -883,11 +885,11 @@ PYD
   assert_eq "M48 重复 ID（工作页）：初始焦点在第一绘制行 M39" "$(focused_id "$(bfile dup-work-1)")" "M39"
   assert_eq "M48 重复 ID（工作页）：焦点光标恰好一个" "$(grep -o '›' "$(bfile dup-work-1)" | wc -l | tr -d ' ')" "1"
   focused_row "$(bfile dup-work-1)" > "$tmp/$current/dup-work-1-row.txt"
-  assert_has "$tmp/$current/dup-work-1-row.txt" "重复的第一条" "M48 重复 ID（工作页）：高亮落在第一条"
+  assert_has "$tmp/$current/dup-work-1-row.txt" "第一条" "M48 重复 ID（工作页）：高亮落在第一条"
   keys Down; sleep 0.5; keys Down; sleep 0.5
   bcap dup-work-2
   focused_row "$(bfile dup-work-2)" > "$tmp/$current/dup-work-2-row.txt"
-  assert_has "$tmp/$current/dup-work-2-row.txt" "重复的第二条" "M48 重复 ID（工作页）：↓ 走到第二条同 ID 行"
+  assert_has "$tmp/$current/dup-work-2-row.txt" "第二条" "M48 重复 ID（工作页）：↓ 走到第二条同 ID 行"
   keys Down; sleep 0.5
   bcap dup-work-3
   assert_eq "M48 重复 ID（工作页）：再 ↓ 走到 M48" "$(focused_id "$(bfile dup-work-3)")" "M48"
@@ -1100,6 +1102,152 @@ PYX
   fi
 }
 
+# ---------------------------------------------------------------- P123 fold (看板卡片与车道折叠)
+scn_fold() {
+  section "fold · 看板折叠：c 键 / 车道头点击 / 滚轮 / 空车道默认 / 重启持久化（P123）"
+  server_up fold
+  fcap() { cap > "$tmp/$current/$1.txt"; }
+  ffile() { printf '%s/%s.txt' "$tmp/$current" "$1"; }
+  # The display column (1-based) where <needle> starts in the first captured row that carries it.
+  lane_col() { # <capture file> <needle>
+    python3 - "$1" "$2" <<'PYC'
+import re, sys
+
+WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+        (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+        (0xff00, 0xff60), (0xffe0, 0xffe6), (0x1f300, 0x1f64f), (0x1f900, 0x1f9ff)]
+
+def dw(text):
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+            continue
+        total += 2 if any(a <= cp <= b for a, b in WIDE) else 1
+    return total
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+for row in rows:
+    i = row.find(sys.argv[2])
+    if i >= 0:
+        print(dw(row[:i]) + 1)
+        break
+PYC
+  }
+  conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  printf '4\n' > "$(page_file)"
+  start_panel
+  # Default: the empty review/dropped lanes fold to one line; the focus sits on the todo card.
+  sleep 0.8
+  fcap p123-default
+  assert_has "$(ffile p123-default)" "▸ 待复验 0（已折叠）" "空车道默认折叠（一行带计数 0）"
+  assert_has "$(ffile p123-default)" "▾ 待办 1" "展开的车道头带镜像标记"
+  focused_row "$(ffile p123-default)" > "$tmp/$current/p123-default-row.txt"
+  assert_has "$tmp/$current/p123-default-row.txt" "V14" "初始焦点在 todo 的 V14"
+  # `c` folds the focused lane and writes the explicit state at once.
+  keys c
+  sleep 1
+  fcap p123-folded
+  assert_has "$(ffile p123-folded)" "▸ 待办 1（已折叠）" "c 把焦点车道折成一行"
+  assert_not "$(ffile p123-folded)" "V14" "折叠后该车道不再建卡片行"
+  focused_row "$(ffile p123-folded)" > "$tmp/$current/p123-folded-row.txt"
+  assert_has "$tmp/$current/p123-folded-row.txt" "待办 1（已折叠）" "聚焦车道折叠时焦点光标落在那一行上"
+  conf_of > "$tmp/$current/p123-conf-folded.txt"
+  assert_match "$tmp/$current/p123-conf-folded.txt" '^boardFold=todo$' "c 立即把 boardFold=todo 写进 panel.conf"
+  # ↑/↓ no-op while the focused lane is folded; ←/→ still stop on it; Enter still opens the card.
+  keys Down
+  sleep 0.6
+  fcap p123-down
+  focused_row "$(ffile p123-down)" > "$tmp/$current/p123-down-row.txt"
+  assert_has "$tmp/$current/p123-down-row.txt" "待办 1（已折叠）" "聚焦车道折叠时 ↓ 不动焦点"
+  keys Right
+  sleep 0.8
+  fcap p123-right
+  focused_row "$(ffile p123-right)" > "$tmp/$current/p123-right-row.txt"
+  assert_has "$tmp/$current/p123-right-row.txt" "P14" "→ 仍能走到（折叠车道之外的）下一车道卡片"
+  keys Left
+  sleep 0.8
+  fcap p123-left
+  focused_row "$(ffile p123-left)" > "$tmp/$current/p123-left-row.txt"
+  assert_has "$tmp/$current/p123-left-row.txt" "待办 1（已折叠）" "← 仍然停在持卡的折叠车道上"
+  keys Enter
+  sleep 1.4
+  fcap p123-detail
+  assert_has "$(ffile p123-detail)" "详情 V14" "Enter 仍打开折叠车道里焦点卡的详情"
+  keys Escape
+  sleep 0.8
+  # Restart: the explicit fold survives.
+  start_panel
+  sleep 0.8
+  fcap p123-restart
+  assert_has "$(ffile p123-restart)" "▸ 待办 1（已折叠）" "重启后面板仍折叠 todo（显式状态持久）"
+  # A second `c` is an explicit unfold, and it sticks across emptiness (review stays boxed).
+  keys c
+  sleep 1
+  fcap p123-unfolded
+  assert_has "$(ffile p123-unfolded)" "▾ 待办 1" "第二次 c 显式展开 todo"
+  focused_row "$(ffile p123-unfolded)" > "$tmp/$current/p123-unfolded-row.txt"
+  assert_has "$tmp/$current/p123-unfolded-row.txt" "V14" "第二次 c 展开后焦点仍落在同一张卡（V14）"
+  conf_of > "$tmp/$current/p123-conf-shown.txt"
+  assert_match "$tmp/$current/p123-conf-shown.txt" '^boardShow=todo$' "显式展开写 boardShow=todo"
+  # The empty-lane default can be turned off: the empty lanes render boxed with the dim marker.
+  keys c
+  sleep 0.6 # (todo folded again; the next restart reads the file below)
+  conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark" "boardEmptyFold=0"
+  start_panel
+  sleep 0.8
+  fcap p123-emptyoff
+  assert_has "$(ffile p123-emptyoff)" "▾ 待复验 0" "boardEmptyFold=0：空车道展开成盒子"
+  assert_not "$(ffile p123-emptyoff)" "▸ 待复验 0（已折叠）" "boardEmptyFold=0：空车道不再默认折叠"
+  # A click on a lane's header line toggles that lane: click the folded review line (row 3 = the
+  # board's header row) and the conf records the explicit unfold.
+  conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  start_panel
+  sleep 0.8
+  fcap p123-clickbase
+  review_col="$(lane_col "$(ffile p123-clickbase)" '▸ 待复验')"
+  python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+    --out "$tmp/$current/p123-click.bin" --expect-enable yes \
+    --click-col "${review_col:-40}" --click-row 3 --cols 120 --rows 32 >"$tmp/$current/p123-click.log" 2>&1
+  assert_eq "直驱 pty：折叠车道头上的点击注入成功" "$?" "0"
+  conf_of > "$tmp/$current/p123-conf-click.txt"
+  assert_match "$tmp/$current/p123-conf-click.txt" '^boardShow=review$' "点击折叠车道头 = 展开该车道（写 boardShow）"
+  # The wheel over a folded line is that lane's region: the folded lane has nothing to scroll, and
+  # the page behind is not the target either — the fold stays folded and no card appears.
+  conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark" "boardFold=done"
+  start_panel
+  sleep 0.8
+  fcap p123-wheelbase
+  done_col="$(lane_col "$(ffile p123-wheelbase)" '▸ 完成 8')"
+  python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+    --out "$tmp/$current/p123-wheel.bin" --out2 "$tmp/$current/p123-wheel-after.bin" --expect-enable yes --no-click \
+    --wheel down --wheel-clicks 3 --click-col "${done_col:-60}" --click-row 3 --cols 120 --rows 32 \
+    >"$tmp/$current/p123-wheel.log" 2>&1
+  assert_eq "直驱 pty：折叠车道线上的滚轮注入成功" "$?" "0"
+  if grep -aq 'P13' "$tmp/$current/p123-wheel-after.bin" 2>/dev/null || grep -aq '▾ 完成' "$tmp/$current/p123-wheel-after.bin" 2>/dev/null; then
+    bad "滚轮在折叠车道线上把折叠翻开了（出现卡片或展开的车道头）"
+  else
+    ok "滚轮在折叠车道线上：折叠保持、没有卡片出现（页面没被滚动）"
+  fi
+  # The header of an *unfolded* lane keeps that lane's wheel region (the pre-P123 behaviour).
+  conf_set "lang=zh" "page=4" "activity=1" "mouse=1" "density=comfortable" "theme=dark"
+  printf '4\n' > "$(page_file)"
+  start_panel "B3_STUB_DONE=20"
+  sleep 0.8
+  fcap p123-hwheelbase
+  done_col="$(lane_col "$(ffile p123-hwheelbase)" '▾ 完成')"
+  B3_STUB_DONE=20 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+    --out "$tmp/$current/p123-hwheel.bin" --out2 "$tmp/$current/p123-hwheel-after.bin" --expect-enable yes --no-click \
+    --wheel up --wheel-clicks 3 --click-col "${done_col:-60}" --click-row 3 --cols 120 --rows 32 \
+    >"$tmp/$current/p123-hwheel.log" 2>&1
+  assert_eq "直驱 pty：展开车道头上的滚轮注入成功" "$?" "0"
+  if grep -aqE 'D0[1-5]' "$tmp/$current/p123-hwheel-after.bin" 2>/dev/null; then
+    ok "展开车道头上的滚轮仍滚该车道（原先隐藏的 D01–D05 进入视图）"
+  else
+    bad "展开车道头上的滚轮没有滚动它的车道（车道区域丢了）"
+  fi
+}
+
 # ---------------------------------------------------------------- run
 want=("$@")
 run_scn() {
@@ -1117,6 +1265,7 @@ run_scn settings scn_settings
 run_scn conf scn_conf
 run_scn queue scn_queue
 run_scn board scn_board
+run_scn fold scn_fold
 run_scn detail scn_detail
 run_scn workdetail scn_workdetail
 run_scn mouse scn_mouse

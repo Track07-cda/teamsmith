@@ -84,6 +84,7 @@ export const zh = {
   boardDoneCollapsed: '… 其余 {n} 条 done/dropped 收起',
   boardEmpty: '（看板为空）',
   kanbanEmptyLane: '·',
+  laneFolded: '（已折叠）',
   laneHiddenAbove: '↑{n}',
   laneHiddenBelow: '↓{n}',
 
@@ -369,6 +370,7 @@ export const zh = {
   keyScroll: '↑/↓ 滚动',
   keyLanes: '←/→ 车道',
   keyCards: '↑/↓ 卡片',
+  keyFold: 'c 折叠',
   keyRows: '↑/↓ 行',
   keyOpen: 'Enter 打开',
   keyDetailClose: 'Esc/q 返回',

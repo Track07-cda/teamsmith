@@ -582,8 +582,13 @@ if not head or -1 in pos or pos != sorted(pos):
     problems.append(f"车道顺序不对：{pos}")
 if len([p for p in pos if p >= 0]) != 6:
     problems.append(f"六条车道没有全部渲染：{pos}")
-if not any("P14" in r and "apply" in r for r in rows):
-    problems.append("P14 卡片上没有 phase 标记 apply")
+# P123：卡片行只留序号+标题（agent/phase 不上卡片），键位带带焦点卡的对。
+card_rows = [r for r in rows if re.search(r"[·▸◆✓✗—]\s+[PV]\d+\s", r)]
+for r in card_rows:
+    if " apply " in r or " verify " in r or " dev " in r or " dev2 " in r:
+        problems.append(f"卡片行仍带 agent/phase：{r.strip()[:70]}")
+if "verify · verify" not in rows[-1]:
+    problems.append("键位带没有焦点卡 V14 的 agent · phase 对")
 cursors = sum(r.count("›") for r in rows)
 if cursors != 1:
     problems.append(f"焦点光标应当恰好一个，实际 {cursors}")
@@ -591,7 +596,7 @@ print("ok" if not problems else "；".join(problems))
 PY4
 )"
 if [ "${p4_check:-}" = "ok" ]; then
-  ok "page4 160：六车道顺序 / 空车道标记 / phase 落在卡片上 / 只有一个焦点光标"
+  ok "page4 160：六车道顺序 / 卡片只留序号+标题 / 键位带带焦点卡的对 / 只有一个焦点光标"
 else
   bad "page4 160：${p4_check:-没有渲染出 page4 帧}"
 fi
@@ -604,24 +609,30 @@ import re, sys
 
 rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
 labels = ["待办", "进行", "待复验", "完成", "阻塞", "已放弃"]
-idx = [next((i for i, r in enumerate(rows) if r.strip().startswith(l)), -1) for l in labels]
+# P123: a lane title now wears the state marker (`▾` unfolded / `▸ …（已折叠）` folded).
+idx = [next((i for i, r in enumerate(rows) if re.search(rf"[▾▸]\s*{re.escape(l)}\s", r)), -1) for l in labels]
 problems = []
 if -1 in idx or idx != sorted(idx):
     problems.append(f"车道标题顺序不对：{idx}")
-# Every lane header renders; a lane whose count is 0 shows the dim empty marker on the next row.
+# Every lane header renders; with the empty-lane default on, a lane whose count is 0 is folded to
+# its one line (marker + count + folded token) and no dim empty marker follows. An explicitly
+# unfolded empty lane (the `boardEmptyFold=0` fixture) still shows the dim marker on the next row.
 for i, at in enumerate(idx):
     if at < 0:
         continue
     head = rows[at]
-    if not re.search(r"\s0\s*$", head):
+    m = re.search(r"\s(\d+)\s*$", head)
+    if not m or m.group(1) != "0":
+        continue
+    if "（已折叠）" in head:
         continue
     nxt = next((r for r in rows[at + 1 :] if r.strip()), "")
     if "·" not in nxt:
-        problems.append(f"{labels[i]} 空车道的下一行不是空标记：{nxt!r}")
+        problems.append(f"{labels[i]} 空车道既没折叠也没有空标记：{nxt!r}")
 print("ok" if not problems else "；".join(problems))
 PY5
 )"
-  [ "$p4n" = "ok" ] && ok "page4 $w：单列按车道顺序分组、空车道有标记" || bad "page4 $w：$p4n"
+  [ "$p4n" = "ok" ] && ok "page4 $w：单列按车道顺序分组、空车道默认折叠（显式展开才有空标记）" || bad "page4 $w：$p4n"
 done
 
 # The minimal tier must not overrun a tiny pane (the spec's "A tiny pane is not overrun"): rows are

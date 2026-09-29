@@ -84,6 +84,7 @@ export const en = {
   boardDoneCollapsed: '… {n} older done/dropped rows folded',
   boardEmpty: '(board is empty)',
   kanbanEmptyLane: '·',
+  laneFolded: ' (folded)',
   laneHiddenAbove: '↑{n}',
   laneHiddenBelow: '↓{n}',
 
@@ -371,6 +372,7 @@ export const en = {
   keyScroll: '↑/↓ scroll',
   keyLanes: '←/→ lanes',
   keyCards: '↑/↓ cards',
+  keyFold: 'c fold',
   keyRows: '↑/↓ rows',
   keyOpen: 'Enter open',
   keyDetailClose: 'Esc/q back',

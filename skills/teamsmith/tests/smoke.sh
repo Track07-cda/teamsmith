@@ -10464,7 +10464,12 @@ for lane in 待办 进行 待复验 完成 阻塞 已放弃; do
   assert_has "$TMP/p28h-160.txt" "$lane" "28-h 六车道之一渲染：$lane"
 done
 assert_has "$TMP/p28h-160.txt" "P14" "28-h 看板页有 P14 卡片"
-assert_has "$TMP/p28h-160.txt" "apply" "28-h 卡片带任务书 phase（P14=apply）"
+assert_has "$TMP/p28h-160.txt" "verify · verify" "28-h 焦点卡的 agent · phase 在键位带上（P123）"
+P28H_P14_ROW="$(grep -a 'P14' "$TMP/p28h-160.txt" | head -1 | sed 's/\x1b\[[0-9;]*m//g')"
+case "$P28H_P14_ROW" in
+  *" apply "*|*" dev "*) bad "28-h 卡片行仍带 agent/phase：$(printf '%s' "$P28H_P14_ROW" | cut -c1-100)" ;;
+  *) ok "28-h 卡片行只留序号+标题（P14 不再带 dev/apply）" ;;
+esac
 P28H_CURSORS="$(grep -o '›' "$TMP/p28h-160.txt" | wc -l | tr -d ' ')"
 assert_eq "28-h 焦点光标恰好一个（首条非空车道的首卡）" "$P28H_CURSORS" "1"
 assert_has "$TMP/p28h-160.txt" "Tab/1-4" "28-h 键位带说明翻页键到 4"
@@ -10787,6 +10792,168 @@ B3_STUB_SPAWN_LOG="$P28I_SPAWN" B3_STUB_DETAIL_FILE="$TMP/p28i-render.json" "$JS
   --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 30 --page 4 --detail X1 >/dev/null 2>&1
 P28I_OPEN_SPAWNS="$(grep -c '^detail$' "$P28I_SPAWN" || true)"
 assert_eq "28-i 空载：打开详情时恰好 spawn 一次 detail 块" "$P28I_OPEN_SPAWNS" "1"
+
+# ---- 28-j 卡片降级序与车道折叠（P123 · change panel-board-cards：ADDED「A lane folds from its
+# header…」与 MODIFIED「The board page is a kanban…」的场景）。真空 pty（c 键 / 车道头点击 / 滚轮 /
+# 重启持久化）在 tests/panel-b3.sh fold；这里钉 --snapshot 可判定的那一半（帧内容、宽度再分配、
+# 机读出口的字节同一性、有界帧、目标表）。
+P28J_FX="$TMP/p28j"; rm -rf "$P28J_FX"; mkdir -p "$P28J_FX/state"
+p28j_render() { # <out> <w> <h> [conf 行…] —— 去 ANSI 后的帧（断言按可见文本匹配）；`P28J_LANG` 切语言
+  local out="$1" w="$2" h="$3"; shift 3
+  rm -f "$P28J_FX/state/panel.conf"
+  [ $# -gt 0 ] && printf '%s\n' "$@" >"$P28J_FX/state/panel.conf"
+  ( cd "$P27R" && "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28J_FX" --state-dir "$P28J_FX/state" \
+      --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang "${P28J_LANG:-zh}" --theme dark --width "$w" --height "$h" --page 4 ) >"$out.raw" 2>/dev/null
+  # A redirect + sed, never a pipe: the panel exits right after its write and a piped reader can
+  # lose the tail (measured while writing this block).
+  sed 's/\x1b\[[0-9;]*m//g' "$out.raw" >"$out"
+}
+p28j_strip() { cat "$1"; }
+p28j_band() { p28j_strip "$1" | grep -a '写信' | tail -1; }
+p28j_machine() { # <conf 行…> —— 机读出口的命令行（--print --page 4，P123 让 --page 也作用于机读帧）
+  local conf="$1"
+  printf '%s\n' "$conf" >"$P28J_FX/state/panel.conf"
+  ( cd "$P27R" && "$JS_RUNNER" "$P28_PANEL" --print --page 4 --root "$P28J_FX" --state-dir "$P28J_FX/state" \
+      --team-cli "$P28_TESTS/panel-b3-stub.sh" 2>/dev/null )
+}
+
+p28j_render "$TMP/p28j-default.txt" 160 32
+assert_has "$TMP/p28j-default.txt" "▾ 待办 1" "28-j 展开的车道头带镜像标记（折叠开关两态可见）"
+assert_has "$TMP/p28j-default.txt" "▸ 待复验 0（已折叠）" "28-j 空车道默认折叠（一行：计数 + 折叠标记）"
+assert_has "$TMP/p28j-default.txt" "verify · verify" "28-j 键位带带焦点卡 V14 的 agent · phase"
+assert_has "$TMP/p28j-default.txt" "c 折叠" "28-j 键位带带 c 折叠 chip"
+P28J_V14_ROW="$(p28j_strip "$TMP/p28j-default.txt" | grep -a 'V14' | head -1)"
+case "$P28J_V14_ROW" in
+  *" verify "*|*" apply "*) bad "28-j 卡片行仍带 agent/phase：$(printf '%s' "$P28J_V14_ROW" | cut -c1-90)" ;;
+  *) ok "28-j 卡片行只留序号+标题（没有 agent/phase 字段）" ;;
+esac
+assert_eq "28-j 焦点光标恰好一个" "$(p28j_strip "$TMP/p28j-default.txt" | grep -o '›' | wc -l | tr -d ' ')" "1"
+
+# 降级序 agent → phase → 标题：160 全对；120 只剩 phase；99 整对消失而序号仍在卡片行。
+p28j_render "$TMP/p28j-120.txt" 120 32
+p28j_render "$TMP/p28j-99.txt" 99 32
+P28J_120_BAND="$(p28j_band "$TMP/p28j-120.txt")"
+P28J_99_BAND="$(p28j_band "$TMP/p28j-99.txt")"
+case "$P28J_120_BAND" in
+  *"verify · verify"*) bad "28-j 120 列的键位带仍带完整对（agent 应先掉）" ;;
+  *verify*) ok "28-j 120 列：对降级为 phase 一条（agent 先掉）" ;;
+  *) bad "28-j 120 列的键位带既没有对也没有 phase" ;;
+esac
+case "$P28J_99_BAND" in
+  *verify*) bad "28-j 99 列的键位带仍带 phase（整对应消失）" ;;
+  *) ok "28-j 99 列：对消失（chip 不受挤压）" ;;
+esac
+assert_has "$TMP/p28j-99.txt" "V14" "28-j 99 列：卡片仍带序号（序号不是被掉的字段）"
+
+# 折叠 = 不建卡片行；同帧其它车道的卡片不动；计数与标记在那一行。
+p28j_render "$TMP/p28j-folddone.txt" 160 32 "lang=zh" "boardFold=done"
+assert_has "$TMP/p28j-folddone.txt" "▸ 完成 8（已折叠）" "28-j 显式折叠：done 一行带计数 8"
+assert_not "$TMP/p28j-folddone.txt" "P13 消息入口" "28-j 显式折叠：done 的卡片一张都不建"
+assert_has "$TMP/p28j-folddone.txt" "P14" "28-j 折叠：其他车道的卡片仍在"
+assert_eq "28-j 折叠帧仍是有界帧（行数 = 高度）" \
+  "$(p28j_render "$TMP/p28j-bounded.txt" 160 40 "boardFold=done" "boardEmptyFold=0"; wc -l <"$TMP/p28j-bounded.txt" | tr -d ' ')" "40"
+
+# 宽度再分配：折叠一条车道 → 未折叠车道分到更宽的一份（同一个 wip 盒子的边框距离）。
+P28J_WIDTH="$(python3 - "$TMP/p28j-default.txt" "$TMP/p28j-folddone.txt" <<'PYW'
+import re, sys
+
+def wip_box(path):
+    row = re.sub(r"\x1b\[[0-9;]*m", "", open(path, encoding="utf-8").read()).split("\n")[2]
+    i = row.find("▾ 进行")
+    left = row.rfind("╭", 0, i)
+    right = row.find("╮", i)
+    return right - left + 1 if i >= 0 and left >= 0 and right >= 0 else -1
+
+before, after = wip_box(sys.argv[1]), wip_box(sys.argv[2])
+print("ok %s->%s" % (before, after) if before > 0 and after > before else "no %s->%s" % (before, after))
+PYW
+)"
+case "$P28J_WIDTH" in
+  ok*) ok "28-j 折叠让出宽度：未折叠车道变宽（$P28J_WIDTH）" ;;
+  *) bad "28-j 折叠没有让出宽度（$P28J_WIDTH）" ;;
+esac
+P28J_OVERRUN="$(python3 - "$TMP/p28j-folddone.txt" 160 <<'PYO'
+import re, sys
+WIDE = [(0x1100, 0x115f), (0x2e80, 0x303e), (0x3041, 0x33ff), (0x3400, 0x4dbf), (0x4e00, 0x9fff),
+        (0xa000, 0xa4cf), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19), (0xfe30, 0xfe6f),
+        (0xff00, 0xff60), (0xffe0, 0xffe6), (0x1f300, 0x1f64f), (0x1f900, 0x1f9ff)]
+
+def width(text):
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        if cp in (0x200d, 0xfe0f) or 0x0300 <= cp <= 0x036f:
+            continue
+        total += 2 if any(a <= cp <= b for a, b in WIDE) else 1
+    return total
+
+limit = int(sys.argv[2])
+over = [width(re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n"))) for l in open(sys.argv[1], encoding="utf-8")]
+print("no" if any(w > limit for w in over) else "ok %d" % max(over))
+PYO
+)"
+case "$P28J_OVERRUN" in
+  ok*) ok "28-j 折叠帧没有行超过 160 列（最宽 $P28J_OVERRUN）" ;;
+  *) bad "28-j 折叠帧有行超过 160 列" ;;
+esac
+
+# 空车道默认可关；显式展开会粘住；同一车道同时在两表时折叠胜出；未知名丢弃、重复去重。
+p28j_render "$TMP/p28j-nofold.txt" 99 40 "boardEmptyFold=0"
+assert_has "$TMP/p28j-nofold.txt" "▾ 待复验 0" "28-j boardEmptyFold=0：空车道不折叠"
+P28J_EMPTY_NEXT="$(p28j_strip "$TMP/p28j-nofold.txt" | grep -A1 '▾ 待复验' | tail -1)"
+case "$P28J_EMPTY_NEXT" in
+  *"·"*) ok "28-j boardEmptyFold=0：展开的空车道带 dim 空标记" ;;
+  *) bad "28-j boardEmptyFold=0：空车道下一行没有空标记（$P28J_EMPTY_NEXT）" ;;
+esac
+p28j_render "$TMP/p28j-fold99.txt" 99 40
+P28J_FOLD_NEXT="$(p28j_strip "$TMP/p28j-fold99.txt" | grep -A1 '▸ 待复验' | tail -1)"
+case "$P28J_FOLD_NEXT" in
+  *"▾"*) ok "28-j 默认折叠的空车道不建空标记行（下一行就是下一条车道）" ;;
+  *) bad "28-j 折叠的空车道后面还有多余行（$P28J_FOLD_NEXT）" ;;
+esac
+p28j_render "$TMP/p28j-show.txt" 160 32 "boardShow=review"
+assert_has "$TMP/p28j-show.txt" "▾ 待复验 0" "28-j boardShow：显式展开的空车道保持展开"
+p28j_render "$TMP/p28j-both.txt" 160 32 "boardFold=review" "boardShow=review"
+assert_has "$TMP/p28j-both.txt" "▸ 待复验 0（已折叠）" "28-j 同一车道同时在两表：折叠胜出（显式隐藏更强）"
+p28j_render "$TMP/p28j-dup.txt" 160 32 "boardFold=done,bogus,done"
+p28j_render "$TMP/p28j-done.txt" 160 32 "boardFold=done"
+# en：折叠行的标签/标记与 `c fold` chip 来自 en 表（delta 的「labels come from the en table」）。
+P28J_LANG=en p28j_render "$TMP/p28j-en.txt" 160 32 "boardFold=done"
+assert_has "$TMP/p28j-en.txt" "▸ done 8 (folded)" "28-j en：折叠行用 en 表的标签与标记"
+assert_has "$TMP/p28j-en.txt" "c fold" "28-j en：键位带给出 c fold chip"
+if cmp -s "$TMP/p28j-dup.txt" "$TMP/p28j-done.txt"; then
+  ok "28-j 未知车道名丢弃 + 重复去重：帧与 boardFold=done 逐字节一致"
+else
+  bad "28-j 未知名/重复没有被归一化"
+fi
+
+# 机读入口不读折叠键：两份 panel.conf 的 --print --page 4 帧逐字节一致，空车道在两个里都折叠。
+P28J_MA="$TMP/p28j-machine-a.txt"; P28J_MB="$TMP/p28j-machine-b.txt"
+p28j_machine "boardFold=done" >"$P28J_MA"
+p28j_machine "lang=en" >"$P28J_MB"
+if cmp -s "$P28J_MA" "$P28J_MB"; then
+  ok "28-j 机读帧忽略折叠键：两份 panel.conf 的 --print --page 4 逐字节一致"
+else
+  bad "28-j 机读帧读了 panel.conf 的折叠键（两份 print 不一致）"
+fi
+assert_has "$P28J_MA" "▸ 待复验 0（已折叠）" "28-j 机读帧按默认态渲染（空车道折叠）"
+
+# 目标表：车道头/折叠行与 c chip 都是 lane-fold；对本身不是目标（数据不是 affordance）。
+"$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$P28J_FX" --state-dir "$P28J_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --width 160 --height 32 --page 4 >"$TMP/p28j-targets.json" 2>/dev/null
+P28J_KINDS="$(p28_kinds "$TMP/p28j-targets.json")"
+case ",$P28J_KINDS," in
+  *",lane-fold,"*) ok "28-j 目标表：lane-fold（车道头 + c chip）有目标" ;;
+  *) bad "28-j 目标表：没有 lane-fold 目标（$P28J_KINDS）" ;;
+esac
+P28J_FOLD_TARGETS="$(python3 - "$TMP/p28j-targets.json" <<'PYT'
+import json, sys
+
+data = json.load(open(sys.argv[1]))
+print(sum(1 for t in data if t["action"]["kind"] == "lane-fold"))
+PYT
+)"
+assert_eq "28-j 目标表：六条车道头 + 一个 c chip = 7 个 lane-fold" "$P28J_FOLD_TARGETS" "7"
 
 section "29 · 派单模型解析：配置压过名册旧记录（M14）"
 
