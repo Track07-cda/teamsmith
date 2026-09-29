@@ -6,7 +6,7 @@
 #   TEAM_CONFIG_KEEP=1 bash ...                              # keep the fixture directory
 #   TEAM_CONFIG_TREE=<tree> bash ...                         # run against another checkout (used by flip)
 #
-# Sections: list groups writer inject cas validate audit models shape flip-shape seats completeness docs callers flip groups-flip json
+# Sections: list groups writer inject cas validate audit models shape flip-shape model-window flip-model-window seats completeness docs callers flip groups-flip json
 # Exit: 0 every selected section green, 1 at least one assertion failed, 3 setup failure.
 #
 # Nothing here touches the caller's project: every fixture is a fresh git repo under $TMPDIR, the
@@ -106,7 +106,7 @@ need_python() { command -v python3 >/dev/null 2>&1; }
 need_python || { printf 'config-cli: 需要 python3（JSON 断言）\n' >&2; exit 3; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit roster models shape flip-shape seats completeness docs callers flip groups-flip json)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit roster models shape flip-shape model-window flip-model-window seats completeness docs callers flip groups-flip json)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- list
@@ -996,6 +996,160 @@ PY
     s_rc_rest=$?
     [ "$s_rc_rest" -eq 0 ] && ok "F-S1/F-S2 还原：两处改动都撤销 → shape 段重新绿（rc=0）" \
       || { bad "还原后没有变绿（rc=$s_rc_rest）"; grep -a '✗' "$tmp/shape-flip-restored.log" | head -3 | sed 's/^/      /'; }
+    set +e
+  fi
+fi
+
+# ---------------------------------------------------------------- model-window（P126）
+# `:思考档` 后缀的窗口解析：原样优先；只有尾段是闭集档位（Pi 的 off/minimal/low/medium/high/xhigh/max，
+# 见 P102 design.md 对 parseModelPattern 的记录）才去一次后缀重试；真实模型 id 的其它 `:` 后缀
+# （如 gpt-6-sol-pro:batch）必须原样匹配、也不回落基名。两条来源（TEAM_MODEL_WINDOWS / Pi 目录）同一口径。
+# 红侧 F-W1/F-W2 在 flip-model-window 段。
+if want model-window; then
+  section "model-window · :思考档 后缀原样优先、闭集才去一次；:batch 这类真实 id 原样匹配（P126）"
+  pw="$(new_proj model-window)" || exit 3
+  cfgw="$pw/.pi/team/config.sh"
+  mkdir -p "$pw/.pi-agent"
+  cat > "$pw/.pi-agent/models.json" <<'JSON'
+{
+  "providers": {
+    "openai-codex": {
+      "models": [
+        { "id": "gpt-6-sol", "contextWindow": 272000 }
+      ]
+    },
+    "openai": {
+      "models": [
+        { "id": "gpt-6-sol-pro:batch", "contextWindow": 456789 },
+        { "id": "gpt-6-sol-pro", "contextWindow": 111111 }
+      ]
+    }
+  }
+}
+JSON
+  python3 - "$cfgw" "$pw" <<'PY'
+import sys
+p, root = sys.argv[1], sys.argv[2]
+s = open(p, encoding='utf-8').read()
+s += '\nTEAM_PI_AGENT_DIR="%s/.pi-agent"\n' % root
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  win() { # <model> [TEAM_MODEL_WINDOWS=…]… → team_model_window 的原始输出（空 = 解析不到）
+    local m="$1"; shift
+    ( cd "$pw" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR "$@" \
+        bash -c '. "'"$skill"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_model_window "$1"' p126 "$m" )
+  }
+
+  # ── 闭集档位：与无后缀的同一个模型同一个值
+  assert_eq "窗口[闭集]：openai-codex/gpt-6-sol → 272000" "$(win openai-codex/gpt-6-sol)" "272000"
+  for _t in off minimal low medium high xhigh max; do
+    assert_eq "窗口[闭集]：openai-codex/gpt-6-sol:$_t → 与基名同值 272000" "$(win "openai-codex/gpt-6-sol:$_t")" "272000"
+  done
+  unset _t
+
+  # ── 真实 id 的其它后缀：原样匹配（不被砍），也不回落基名
+  assert_eq "窗口[原样]：openai/gpt-6-sol-pro:batch 取自己的 456789（不是基名 111111）" \
+    "$(win openai/gpt-6-sol-pro:batch)" "456789"
+  assert_eq "窗口[原样]：openai/gpt-6-sol-pro → 111111" "$(win openai/gpt-6-sol-pro)" "111111"
+  assert_eq "窗口[反例]：openai-codex/gpt-6-sol:batch（基名在目录里）→ 空，不回落基名" \
+    "$(win openai-codex/gpt-6-sol:batch)" ""
+  assert_eq "窗口[反例]：openai/gpt-6-sol-pro:other → 空，不回落基名" \
+    "$(win openai/gpt-6-sol-pro:other)" ""
+
+  # ── TEAM_MODEL_WINDOWS 同一口径：显式覆盖也吃闭集后缀；原样命中的项优先；非闭集后缀不砍
+  assert_eq "窗口[覆盖]：'x/y=123' + x/y:high → 123" \
+    "$(win x/y:high TEAM_MODEL_WINDOWS='x/y=123')" "123"
+  assert_eq "窗口[覆盖·原样优先]：'…:high=888' 赢过 '…=999'" \
+    "$(win openai-codex/gpt-6-sol:high TEAM_MODEL_WINDOWS='openai-codex/gpt-6-sol:high=888 openai-codex/gpt-6-sol=999')" "888"
+  assert_eq "窗口[覆盖·闭集]：'…gpt-6-sol=999' + :xhigh → 999（覆盖赢过目录的 272000）" \
+    "$(win openai-codex/gpt-6-sol:xhigh TEAM_MODEL_WINDOWS='openai-codex/gpt-6-sol=999')" "999"
+  assert_eq "窗口[覆盖·原样]：'…gpt-6-sol:batch=777' 按原样命中" \
+    "$(win openai-codex/gpt-6-sol:batch TEAM_MODEL_WINDOWS='openai-codex/gpt-6-sol:batch=777')" "777"
+  assert_eq "窗口[覆盖·反例]：'…gpt-6-sol=999' + :batch → 空（非闭集后缀不砍）" \
+    "$(win openai-codex/gpt-6-sol:batch TEAM_MODEL_WINDOWS='openai-codex/gpt-6-sol=999')" ""
+
+  # ── 读面集成：ps 的 WINDOW 列对带 :high 的模型显示解析出的窗口（工具链真的用上这个解析）
+  run_in "$pw" config set TEAM_DEFAULT_MODEL openai-codex/gpt-6-sol:high --yes >/dev/null
+  psw="$(run_in "$pw" ps)"
+  assert_eq "窗口[ps 集成]：模型带 :high 时 WINDOW 列 = 272k" \
+    "$(printf '%s\n' "$psw" | awk '/openai-codex\/gpt-6-sol:high/ {print $NF; exit}')" "272k"
+fi
+
+# ---------------------------------------------------------------- flip-model-window（F-W1 / F-W2）
+# 红侧两态（scratch 树；真树不动；再入不递归）：
+#   F-W1：闭集判定影子成「任意 `:` 后缀都砍」 → :batch 反例（基名在目录里 / 覆盖项在）必须红。
+#   F-W2：去后缀整个拿掉（只原样匹配） → :high 这类闭集档位必须红。
+if want flip-model-window; then
+  section "flip-model-window · 砍任意 : 后缀 → :batch 反例红；完全不砍 → :high 红；还原 → 绿"
+  if [ -n "$_tree_arg" ]; then
+    skip "F-W1/F-W2 翻转：本次已是 scratch 树再入运行（TEAM_CONFIG_TREE 已设），不重复嵌套"
+  else
+    wtree="$tmp/model-window-tree"; mkdir -p "$wtree/skills/teamsmith"
+    cp -a "$skill/scripts" "$skill/templates" "$skill/references" "$wtree/skills/teamsmith/"
+    wcm="$wtree/skills/teamsmith/scripts/lib/common.sh"
+    set +e
+    TEAM_CONFIG_TREE="$wtree" bash "$here/config-cli.sh" model-window > "$tmp/model-window-flip-green0.log" 2>&1
+    w_rc0=$?
+    [ "$w_rc0" -eq 0 ] && ok "F-W1 绿侧：scratch 树原状 model-window 段绿（rc=0，红不是因为缺文件）" \
+      || { bad "F-W1 绿侧就红了（rc=$w_rc0，翻转无效）"; grep -a '✗' "$tmp/model-window-flip-green0.log" | head -3 | sed 's/^/      /'; }
+    # F-W1：闭集判定影子成「任意 : 后缀都砍」
+    python3 - "$wcm" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+needle = '''  case " $_TEAM_MODEL_THINKING_TIERS " in
+    *" $tier "*) printf '%s\\n' "${want%:*}" ;;
+  esac
+'''
+assert needle in s, 'thinking-tier gate needle not found'
+open(p, 'w', encoding='utf-8').write(s.replace(needle, '  printf \'%s\\n\' "${want%:*}"   # P126 F-W1：任意 : 后缀都砍（红侧）\n', 1))
+PY
+    if grep -qF 'P126 F-W1' "$wcm"; then
+      ok "F-W1 mutant：闭集判定换成「任意 : 后缀都砍」"
+    else
+      bad "F-W1 mutant 没打中（闭集判定原样）"
+    fi
+    TEAM_CONFIG_TREE="$wtree" bash "$here/config-cli.sh" model-window > "$tmp/model-window-flip-batch-red.log" 2>&1
+    w_rc_red=$?
+    if [ "$w_rc_red" -ne 0 ] && grep -q '✗.*窗口\[反例\].*:batch' "$tmp/model-window-flip-batch-red.log"; then
+      ok "F-W1 红侧：砍任意 : 后缀后 :batch 反例红（rc=$w_rc_red）"
+    else
+      bad "F-W1 红侧：:batch 反例没红/没点名（rc=$w_rc_red）"; grep -a '✗' "$tmp/model-window-flip-batch-red.log" | head -4 | sed 's/^/      /'
+    fi
+    printf '    --- F-W1 红侧尾部 ---\n'
+    { grep -aE '✗.*窗口|== 结果' "$tmp/model-window-flip-batch-red.log" || true; } | tail -6 | sed 's/^/    /'
+    cp -a "$skill/scripts/lib/common.sh" "$wcm"
+    # F-W2：去后缀整个拿掉（只原样匹配）
+    python3 - "$wcm" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+needle = '''  case " $_TEAM_MODEL_THINKING_TIERS " in
+    *" $tier "*) printf '%s\\n' "${want%:*}" ;;
+  esac
+'''
+assert needle in s, 'thinking-tier gate needle not found'
+open(p, 'w', encoding='utf-8').write(s.replace(needle, '  : # P126 F-W2：去掉去后缀重试（红侧）\n', 1))
+PY
+    if grep -qF 'P126 F-W2' "$wcm"; then
+      ok "F-W2 mutant：只原样匹配（去后缀整个拿掉）"
+    else
+      bad "F-W2 mutant 没打中（闭集判定原样）"
+    fi
+    TEAM_CONFIG_TREE="$wtree" bash "$here/config-cli.sh" model-window > "$tmp/model-window-flip-tier-red.log" 2>&1
+    w_rc_tier=$?
+    if [ "$w_rc_tier" -ne 0 ] && grep -q '✗.*窗口\[闭集\].*:high' "$tmp/model-window-flip-tier-red.log"; then
+      ok "F-W2 红侧：不去前缀后 :high 闭集断言红（rc=$w_rc_tier）"
+    else
+      bad "F-W2 红侧：:high 闭集断言没红/没点名（rc=$w_rc_tier）"; grep -a '✗' "$tmp/model-window-flip-tier-red.log" | head -4 | sed 's/^/      /'
+    fi
+    printf '    --- F-W2 红侧尾部 ---\n'
+    { grep -aE '✗.*窗口|== 结果' "$tmp/model-window-flip-tier-red.log" || true; } | tail -6 | sed 's/^/    /'
+    cp -a "$skill/scripts/lib/common.sh" "$wcm"
+    TEAM_CONFIG_TREE="$wtree" bash "$here/config-cli.sh" model-window > "$tmp/model-window-flip-restored.log" 2>&1
+    w_rc_rest=$?
+    [ "$w_rc_rest" -eq 0 ] && ok "F-W1/F-W2 还原：两处改动都撤销 → model-window 段重新绿（rc=0）" \
+      || { bad "还原后没有变绿（rc=$w_rc_rest）"; grep -a '✗' "$tmp/model-window-flip-restored.log" | head -3 | sed 's/^/      /'; }
     set +e
   fi
 fi

@@ -2493,19 +2493,50 @@ team_tokens_human() { # <tokens> → 361k / 1.0M / 512 / ?
   printf '\n'
 }
 
+# `:思考档` 后缀的闭集，就是 Pi 的档位表（P102 design.md 记的 Pi 源码：parseModelPattern 先原样匹配，
+# 再在最后一个 `:` 处切、后缀落在 `off|minimal|low|medium|high|xhigh|max` 里才算档位）。窗口解析只在
+# 尾段正好是其中之一时才允许去后缀重试；其它 `:` 后缀（如 openai/gpt-6-sol-pro:batch）是真实模型 id
+# 的一部分，按原样匹配。
+_TEAM_MODEL_THINKING_TIERS="off minimal low medium high xhigh max"
+
+# 窗口查询的候选形态（**唯一一份**去后缀口径）：原样在前；只有尾段落在闭集里才追加去掉它的形态。
+# TEAM_MODEL_WINDOWS 与 Pi 模型目录两条来源都必须经这里取候选，不许各写一份。
+team_model_window_candidates() { # <provider/model> → 逐行候选（原样优先）
+  local want="${1:-}" tier
+  [ -n "$want" ] || return 0
+  printf '%s\n' "$want"
+  case "$want" in *:*) ;; *) return 0 ;; esac
+  tier="${want##*:}"
+  case " $_TEAM_MODEL_THINKING_TIERS " in
+    *" $tier "*) printf '%s\n' "${want%:*}" ;;
+  esac
+  return 0
+}
+
 # 模型窗口（tokens）：TEAM_MODEL_WINDOWS 显式覆盖 → Pi 的模型目录（models.json / models-store.json）。
+# 两条来源用同一份候选口径（team_model_window_candidates）：每个候选先按原样比，匹配不到再试去后缀的形态；
+# 每个来源内先原样、后去后缀，TEAM_MODEL_WINDOWS 整体仍优先于 Pi 目录（显式覆盖赢过目录）。
 # 解析不到 → **空**：调用方必须明说自己不知道并退回保守阈值，绝不猜一个数字出来
 # （猜错会让守卫误拦合法派单，或者误放行一个必然 wedge 的组合）。
 team_model_window() { # <provider/model 或 model>
-  local want="${1:-}" pair pat w
+  local want="${1:-}" cands cand pair pat w got
   [ -n "$want" ] || return 0
-  for pair in $(printf '%s' "${TEAM_MODEL_WINDOWS:-}" | tr '\n\t' '  '); do
-    case "$pair" in *=*) ;; *) continue ;; esac
-    pat="${pair%=*}"; w="${pair#*=}"
-    case "$w" in ''|*[!0-9]*) continue ;; esac
-    case "$want" in "$pat"|*/"$pat") printf '%s\n' "$w"; return 0 ;; esac
-  done
-  team_model_window_from_pi "$want"
+  cands="$(team_model_window_candidates "$want")"   # 一份候选，两条来源共用
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    for pair in $(printf '%s' "${TEAM_MODEL_WINDOWS:-}" | tr '\n\t' '  '); do
+      case "$pair" in *=*) ;; *) continue ;; esac
+      pat="${pair%=*}"; w="${pair#*=}"
+      case "$w" in ''|*[!0-9]*) continue ;; esac
+      case "$cand" in "$pat"|*/"$pat") printf '%s\n' "$w"; return 0 ;; esac
+    done
+  done <<< "$cands"
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    got="$(team_model_window_from_pi "$cand")"
+    if [ -n "$got" ]; then printf '%s\n' "$got"; return 0; fi
+  done <<< "$cands"
+  return 0
 }
 
 # 从 Pi 的模型目录解析窗口：models.json（providers.<p>.models[]）与 models-store.json（<p>.models[]）。
