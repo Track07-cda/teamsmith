@@ -1849,6 +1849,9 @@ rm -f "$REPO/docs/team/reports/P2-closure.md" "$REPO/docs/team/reports/T2.6-dev.
 if $TEAM merge T1.1 >/dev/null 2>&1; then bad "merge 应已移除"; else ok "merge 已移除（不再包装 git）"; fi
 if $TEAM pr T1.1 >/dev/null 2>&1; then bad "pr 应已移除"; else ok "pr 已移除"; fi
 assert_has "$SKILL_DIR/references/workflows.md" "git -C" "workflows 文档给出 PM 直接跑的 git 步骤"
+# CEP 0007(1)（D65）：合并 403（缺 Contents: write）必须是**可判定**的 fallback，不是一句「权限问题」
+assert_has "$SKILL_DIR/references/workflows.md" "若 forge 合并 403（缺 Contents: write）：本地 squash + push + 评论 + 关 PR" \
+  "workflows 给了 forge 合并 403 的可判定 fallback（本地 squash+push+评论+关 PR）"
 assert_has "$SKILL_DIR/references/protocol.md" "does not perform" "protocol 写明 skill 不执行 git/forge 写操作"
 
 # ④ 翻转证据进模板与派单提示词
@@ -3885,8 +3888,19 @@ assert_has "$REPO/docs/team/reviews/T1.1-done.md" "判定 PASS" "done 审计记�
 # close：未知 id 不假装关闭；有复验记录时给出真实路径（F2）；复位命令是打印而不是执行（F5）
 if $TEAM close NOSUCH >"$TMP/close-nosuch.log" 2>&1; then bad "close 未知 id 应被拒"; else ok "close 未知 id 被拒（不假装关闭）"; fi
 assert_has "$TMP/close-nosuch.log" "没有可关闭的东西" "说清楚没有可关的东西"
+# D62-a：关任务后 state 里的 branch= 必须一起清掉 —— 残留会叫下一次派单的分支守卫读到旧分支而误拒。
+# 夹具两种模式都成立：close 前把「这个席位正在跑 T1.1」的完整状态写到台面上（红侧：不清则下面的断言红）。
+P135_ENVF="$REPO/.pi/team/state/dev.env"
+mkdir -p "$REPO/.pi/team/state"
+printf 'window=dev\ntask=T1.1\nbranch=%s\n' "$T1_BRANCH" > "$P135_ENVF"
+assert_match "$P135_ENVF" "^branch=$T1_BRANCH$" "P135 夹具：close 前 state 里确有非空 branch= 记录"
 $TEAM close T1.1 >"$TMP/close.log" 2>&1 && ok "close 退出码 0" || bad "close 失败"
 assert_has "$TMP/close.log" "复验记录 docs/team/reviews/T1.1.md 保留" "close 报的是真实存在的复验记录"
+if grep -qE '^branch=.+' "$P135_ENVF"; then
+  bad "P135（D62-a）：close 后 state 里仍留着非空 branch=（$(grep -E '^branch=' "$P135_ENVF" | head -1)）"
+else
+  ok "P135（D62-a）：close 清掉 state 的 branch= 记录（空或删除）"
+fi
 assert_has "$SKILL_DIR/scripts/lib/cmd-review.sh" "TEAM_TASK_BRANCH_RESET" "close 真的读了这个配置键（F5 不再是死配置）"
 assert_not "$SKILL_DIR/references/workflows.md" "goes back to" "workflows.md 不再宣称 close 自动复位"
 # 没有证据的 done（close 的默认状态）也被拒；--force --reason 才允许，而且说谎要留痕

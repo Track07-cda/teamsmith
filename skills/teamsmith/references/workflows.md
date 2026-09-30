@@ -236,6 +236,7 @@ bash <skill>/scripts/team close T1.1            # close the window, clear the ta
 
 ```bash
 gh pr merge --squash --delete-branch <PR>                  # GitLab: glab mr merge <iid> --squash
+# 若 forge 合并 403（缺 Contents: write）：本地 squash + push + 评论 + 关 PR
 git -C <root> fetch origin <protected-branch> && git -C <root> merge --ff-only FETCH_HEAD
 bash <skill>/scripts/team board set <ID> done
 ```
@@ -244,6 +245,13 @@ bash <skill>/scripts/team board set <ID> done
 > commits), while the error is often misread as "the PAT lacks pull-requests:write". Merging the PR first avoids the
 > whole problem.
 > For a forge without a CLI (Gitea/self-hosted): use `tea` or the web UI, same order.
+>
+> **Fallback when the forge itself returns 403 on the merge** (the permission a squash-merge needs is
+> **Contents: write**; a token can be allowed to open/read PRs and still be refused here): land it locally with the
+> local-mode sequence — `git -C <root> merge --squash <branch>` + `git -C <root> commit`, then
+> `git -C <root> push origin <protected-branch>` — leave one comment on the PR/MR saying it landed locally, and
+> **close the PR/MR instead of merging it** (the content is already in; merging afterwards would create a second,
+> empty change). The `board set <ID> done` step below is unchanged.
 
 When the whole change (not just this task) is done, close the spec side too — **after** the verification record
 exists, the code landed, and the user confirmed:

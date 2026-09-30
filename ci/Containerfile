@@ -24,10 +24,14 @@ FROM debian:trixie
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- system packages + locale --------------------------------------------------------------
+# iproute2 (`ss`) is here for the isolation self-check (P135/D63): without it
+# `tests/tmp-hygiene.sh` cannot tell "no listener" from "cannot look", its tmux-socket half
+# degrades to "无法判定" and a complete run needs a derived image. The suite's own cp/perl/etc.
+# needs are unchanged.
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
       ca-certificates curl unzip xz-utils git locales \
-      perl python3 procps util-linux time \
+      perl python3 procps util-linux time iproute2 \
       build-essential libevent-dev libncurses-dev pkg-config bison \
  && printf 'en_US.UTF-8 UTF-8\n' > /etc/locale.gen \
  && locale-gen \
@@ -39,8 +43,11 @@ RUN apt-get update -qq \
 # M51: CI was red because this image lacked it — the fixture exited 3 (setup failure) instead of
 # judging, and smoke §36 reported the two premise cases as failures. A missing tool in the gate
 # image is an image bug; fail the build here rather than in a red gate nobody can act on.
+# P135/D63: same rule for `ss` (iproute2) — the call `tmp-hygiene.sh` makes must work here, not
+# only on a machine that happens to have iproute2.
 RUN [ -x /usr/bin/time ] \
- && /usr/bin/time -f 'gnu-time:%U/%S/%e' -- true 2>&1 | grep -q '^gnu-time:'
+ && /usr/bin/time -f 'gnu-time:%U/%S/%e' -- true 2>&1 | grep -q '^gnu-time:' \
+ && ss -xlH >/dev/null
 
 # --- tmux 3.7b (source): the bracketed-paste capability format needs >= 3.7 -----------------
 ARG TMUX_VERSION=3.7b
@@ -70,13 +77,29 @@ RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERS
  && [ "$(bun --version)" = "${BUN_VERSION}" ]
 
 # --- pi + openspec (pinned npm packages) ---------------------------------------------------
+# P135/P103: install with `--ignore-scripts` and run the one skipped installer that matters as
+# its own process, after npm has exited. Letting npm run every lifecycle script during the
+# install made esbuild's postinstall (`node install.js`) exec the binary it had just hardlinked
+# and die with ETXTBSY — a red image build, not a test red. The still-open write handle rides in
+# the forked child's fd table while npm is mid-install; run once npm is gone, there is none. The
+# race is removed, not retried and not hidden. What the flag skips in these two pinned trees
+# (measured on npm 11.16.0 / node 24.19.0, the versions below): esbuild (run explicitly — it
+# replaces bin/esbuild's JS shim with the platform ELF and self-checks with `--version`),
+# protobufjs (only prints a version-scheme warning), @google/genai (an `echo` no-op) and
+# openspec (only prints its opt-in shell-completion tip). Pins are untouched.
 ARG PI_VERSION=0.86.0
 ARG OPENSPEC_VERSION=1.8.0
-RUN npm install -g --no-fund --no-audit \
+RUN npm install -g --no-fund --no-audit --ignore-scripts \
       "@earendil-works/pi-coding-agent@${PI_VERSION}" \
       "@fission-ai/openspec@${OPENSPEC_VERSION}" \
  && npm cache clean --force >/dev/null 2>&1 \
- && command -v pi >/dev/null && command -v openspec >/dev/null
+ && command -v pi >/dev/null && command -v openspec >/dev/null \
+ && esbuild_install="$(find "$(npm root -g)" -path '*/esbuild/install.js' -print -quit)" \
+ && [ -n "$esbuild_install" ] \
+ && node "$esbuild_install" \
+ && esbuild_bin="$(dirname "$esbuild_install")/bin/esbuild" \
+ && [ -x "$esbuild_bin" ] \
+ && "$esbuild_bin" --version
 
 # The suite's skill-load fixture imports pi's parser; a global install is not resolvable from the
 # mounted checkout's module graph, so point PI_DIST at the pinned copy explicitly.

@@ -1361,6 +1361,11 @@ team_cmd_close() {
       tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && team_ok "kill window $TEAM_SESSION:$w"
     fi
     team_state_set "$a" task ""
+    # D62-a：任务结束就把 state 里的 branch= 一起清掉 —— 否则下一次派单的分支守卫会读到
+    # 上一个任务的分支名，把「工作树已按规矩切回/准备好」的席位误判成「还停在旧任务分支上」而拒单。
+    # 分支记录只是「这个席位正在跑什么」的一部分，和 task= 同生命周期；工作树实际在哪个分支
+    # 由下面的 `git -C … rev-parse` 现场读，不受这一行影响。
+    team_state_set "$a" branch ""
     # 分支归 PM：这里只说清楚「现在在哪、复位命令是什么」，不替 PM 切分支（见 openspec board-and-status）
     b="$(git -C "$(team_agent_worktree "$a")" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
     case "$b" in
