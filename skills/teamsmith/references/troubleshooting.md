@@ -1149,7 +1149,7 @@ it used in the header line.
 environment-shaped failures (no `flock --close`, no `perl`, nobody can resolve the git common dir) is the
 container, not the deliverable. The suite needs a full environment: the skill's own tmux fixture image
 (`teamsmith-tmux-test:alpine`) carries tmux and little else, so it is for tmux probes only. The pinned gate
-image (`ci/Containerfile`) is the one built for the suite. A `git worktree` cannot be mounted for a container
+image (`ci/Containerfile`) is the one built for the suite: `tests/smoke.sh` and `tests/perf.sh` are what run inside it, and `tests/container-tmux.sh` is the helper for the few probes that need a disposable server. A `git worktree` cannot be mounted for a container
 run either: its `.git` is a pointer file to the main checkout, so every git-dependent fixture fails. Mount an
 independent `git clone` instead, and give the container `--pid=host` as the CI workflow does.
 
