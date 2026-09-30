@@ -257,6 +257,10 @@ the box is not part of the delivery channel at all.
 
 ## 4. `team dispatch` refuses to dispatch
 
+Beyond the table below, the three refusals that cost the most retries — a worktree on another task's branch, a
+brief header line that does not parse, and a review without `--dir` — have their own section with paste-ready
+fixes: §27.
+
 | Error | Cause | What to do |
 |---|---|---|
 | only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for an agent to finish; if slowness is acceptable, `TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` |
@@ -1148,3 +1152,97 @@ container, not the deliverable. The suite needs a full environment: the skill's 
 image (`ci/Containerfile`) is the one built for the suite. A `git worktree` cannot be mounted for a container
 run either: its `.git` is a pointer file to the main checkout, so every git-dependent fixture fails. Mount an
 independent `git clone` instead, and give the container `--pid=host` as the CI workflow does.
+
+## 27. Common rejections and how to fix them
+
+Three refusals cause most of the friction for a project that is still learning teamsmith from the briefs alone: a
+worktree sitting on the wrong task branch, a task-brief header line that does not parse, and a review run without
+the checkout it refuses to prepare itself. Each one is decided **before** a window opens or any git command runs,
+so a refusal leaves the worktree, the board and `state/<agent>.env` exactly as they were. §4 covers the other
+dispatch refusals; this section names the shape, the reason and the exact command that clears it.
+
+### 27a. The worktree is on a branch that does not belong to this task
+
+Task mode refuses a dispatch whose worktree sits on another task's branch (the check also runs for `--print`, so
+the printed plan can never describe a wrong target):
+
+```console
+$ bash <skill>/scripts/team dispatch dev P137 docs/team/tasks/P137-references.md
+✗ /path/to/project/.worktrees/dev 停在不属于本任务（P137）的分支上：
+✗   现在的分支：task/P136-propose ｜ 本任务要的分支：task/P137-references
+  切过去：git -C /path/to/project/.worktrees/dev switch task/P137-references
+  （拒绝的理由：复验/交付记录会以工作树的分支为证据，不能张冠李戴）
+```
+
+**How the expected name is derived.** In the default task mode the branch is `task/<ID>-<slug>` (protocol.md
+§8b). The slug comes from the **task title** — the `任务` column of `BOARD.md` when the row exists, otherwise the
+first `# <ID> · …` heading of `docs/team/tasks/<ID>-*.md`:
+
+1. lowercase;
+2. every run of characters outside `[a-z0-9]` collapses into one `-`;
+3. leading/trailing `-` are trimmed and the result is cut to 28 characters;
+4. if nothing survives (a title with no ASCII letters or digits — an all-CJK one, for example), the slug falls
+   back to the ID: `task/P134-p134`.
+
+Because the title can change (a phase word added, say), one task can legitimately have had two names over its
+life — `task/P134-p134` → `task/P134-propose`. Resuming the **same** task (`state/<agent>.env` still records it)
+accepts any `task/<ID>-*`; a **new** task must sit on exactly the name computed for it. That mismatch is what the
+refusal above reports.
+
+**The fix.** The refusal prints one of the two commands below with the real worktree and branch; the skill never
+runs git itself:
+
+```bash
+git -C <worktree> switch <expected-name>                        # the branch already exists
+git -C <worktree> switch -c <expected-name> <protected-branch>  # cut it off the protected branch
+```
+
+**Why it has to refuse.** The verification record and the delivery ledger cite the worktree's branch as the thing
+they describe. On the wrong branch a review stamps another task's commits and merge/`close` sees the wrong diff
+(`M6.3 F16`); the refusal states it in one line: the record must not name the wrong head.
+
+### 27b. A task-brief header line is refused
+
+`team dispatch` reads four header lines before it opens a window (rules collected in protocol.md §5b). The
+accepted/refused contrast, including the two shapes real users hit first — a parenthetical `change:` and a
+middle-dot `deltas:` list:
+
+| Line | Accepted | Refused | How it clears |
+|---|---|---|---|
+| `change:` | exactly one token — `change: panel`, `change: -`; a note needs whitespace before `#`: `change: panel  # it owns that capability` | `change: panel（说明）` (a parenthetical explanation is outside the token shape `[A-Za-z0-9][A-Za-z0-9._-]*`), `change: alpha, beta`, two `change:` lines | edit the line to one id (or `-`). **No `--force`** here: one task implementing two changes is a mis-dispatch |
+| `deltas:` | a comma list of tokens — `deltas: capability-a, capability-b`; `deltas: -` for "writes no delta" | `deltas: capability-a · capability-b` (the middle dot is neither a separator nor a token character), `deltas: capability-a,` (a trailing comma is an empty item), two `deltas:` lines | edit to a comma list or `-`. An **absent** line is read as the whole change's delta set, never as "none" |
+| `specs:` (with `change: -`) | a capability that resolves — `specs: verification`; with a requirement — `specs: verification#Gates run under a hard timeout` (the file must carry `### Requirement: Gates run under a hard timeout`) | a capability that does not resolve, or a requirement name that is not a `### Requirement:` heading in the file; the refusal prints the path it looked in | fix the name, or declare `anchor:` instead |
+| `anchor:` (with `change: -`) | `anchor: none (infra) — <non-empty reason>` (an em dash; `–`, `--`, `-` also parse as the separator) | `anchor: none`, `anchor: none (infra)` with no reason, any other value | write the full form with a real reason, or a resolving `specs:` entry |
+
+Two details worth knowing: a present-but-invalid `anchor:` takes precedence and a valid `specs:` line next to it
+is never tried, so remove the bad anchor instead of hoping the other line wins; and only ` #` (a `#` preceded by
+whitespace) starts a comment, which is why `specs: capability#Requirement` keeps its `#` as the separator.
+`--force` does not cover all of them: the `change:` rule and a **malformed** `deltas:` line have no escape (the
+latter decides the single-writer check, so it is never read as an empty set); `anchor:` is overridden with a
+warning plus one audit line, and so is a **valid** `deltas:` list that collides with an unfinished sibling's —
+that overlap is the single-writer rule of protocol.md §5b, not a parse error. Every one of them names the
+offending line, so the fix stays local to the brief.
+
+### 27c. `team review` refuses without `--dir`: the one-command independent review
+
+`team review` runs the gates against a checkout **the PM prepared** and writes the verdict record itself; it does
+not create the checkout and does not run git. One command line covers both steps:
+
+```bash
+git -C <root> worktree add --detach /tmp/review-<ID> <task-branch> && \
+  bash <skill>/scripts/team review <ID> --dir /tmp/review-<ID>            # add --strong for the structural checks
+```
+
+Both forms write `docs/team/reviews/<ID>.md` (HEAD, diffstat, commit list, gate tail, verdict checklist) — the
+record that `team board set <ID> done` and the merge step read. The details that bite:
+
+- `--dir` is the **root** of the checkout; a subdirectory is refused with the path it resolved.
+- The checkout must be clean and sit at the branch under review; a dirty or mismatched one is refused, and the
+  refusal names the matching `TEAM_REVIEW_ALLOW_DIRTY=1` / `TEAM_REVIEW_ANY_DIR=1` override.
+- `--no-gates` records `SKIPPED` and is **not** evidence — `digest` keeps listing the task as awaiting
+  verification.
+- `--pre-merge` / `--post-merge` are different checks (they inspect the task worktree and the protected branch
+  directly) and do not take `--dir`; the recipe above is for the full review.
+- A container run cannot mount a `git worktree` — its `.git` is a pointer file to the main checkout, so every
+  git-dependent fixture fails. Check the branch out with `git clone -b <task-branch> <root> /tmp/review-<ID>`
+  instead and pass that clone's root to `--dir` (see the note at the end of §26; give the run `--pid=host`).
