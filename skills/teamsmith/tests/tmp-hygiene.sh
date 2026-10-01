@@ -14,7 +14,7 @@
 #     痕迹指向本仓库（`.git`/gitdir 解析后落在本仓库的 git 公共目录里），或 ② 本项目的看板 /
 #     `docs/team/reviews/<ID>.md` 有该 ID 的记录，或 ③ 目录里有本仓库的 `skills/teamsmith/` 结构。
 #     目录里的 git 痕迹指向**别的**仓库则是反证 —— 即使记录同名也拒收（现场：/tmp/review-M8.2 是
-#     <peer-project> 的 worktree，本项目也有 M8.2 记录）。`teamsmith-*` 带 owner 标记时按 run 台账头里的
+#     另一个项目的 worktree，本项目也有同名记录）。`teamsmith-*` 带 owner 标记时按 run 台账头里的
 #     `repo=` 归因（P122 起台账记录仓库身份）。**归属未证的目录不是候选**，且**逐条点名**（路径 +
 #     理由）：`--status` 列在「归属未证/别家」段，`--sweep` 列在「不碰的家族目录」段。**归属读 git
 #     痕迹**：有痕迹时它说了算（指向别的仓库 / 解析不出 → 拒）；无痕迹时才看本项目记录，最后才是结构。
@@ -1075,7 +1075,7 @@ EOS
   rm -rf -- "$ygbase"
 
   # ── ⑪ 归属证明（P122 返工）：review-* 只靠名字不够 —— 「真 ID + 别仓库」必须被拒且逐条点名
-  # 现场形状：/tmp/review-M8.2 是 <peer-project> 的 worktree（.git 指向别处），本项目恰好也有 M8.2 记录。
+  # 现场形状：/tmp/review-M8.2 属于另一个项目的 worktree（.git 指向别处），本项目恰好也有 M8.2 记录。
   local foreign_repo="$D/foreign-repo" fr="$D/review-M8.2" fu="$D/review-U6.6" ours5="$D/review-T5.5"
   mkdir -p "$foreign_repo/.git/worktrees/review-M8.2" "$fr" "$fu" "$ours5/skills/teamsmith" \
     "$D/teamsmith-good.H1" "$D/teamsmith-good.H2"

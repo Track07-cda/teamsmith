@@ -414,8 +414,8 @@ team_scan_warm() { # [--reports]：两档预热，按命令的真实读取面付
 
 # ---------------------------------------------------------------- M40 · 身份 = 运行时目录
 # 两起同族实测事故（2026-09-19）：shell 继承了别的项目的 TEAM_* 身份，而解析顺序是「env 优先于 cwd」。
-#   ① 在 ai_interview 目录里跑 team up，被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
-#   ② pulse 面板进程 cwd=ai_interview，却渲染了 pm-skills 的看板（没有护栏，静默读错项目）。
+#   ① 在 other_project 目录里跑 team up，被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
+#   ② pulse 面板进程 cwd=other_project，却渲染了 pm-skills 的看板（没有护栏，静默读错项目）。
 # 用户的规格：身份（项目根/主工作树/项目名/会话名）**默认从 cwd 推导**；继承来的 TEAM_* 身份
 # **绝不许静默赢过 cwd**。规则只在这里实现一处，所有入口共用（team CLI / draft-send / 面板子进程）：
 #   · 会改共享状态/起进程的命令：冲突 → 拒绝（与 team_assert_own_session 同款语义与措辞）；

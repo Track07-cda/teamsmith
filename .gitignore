@@ -5,7 +5,7 @@ docs/team/inbox/
 docs/team/reviews/*.log
 .worktrees/
 .gh-pat
-<home>/.gitlab-pa-token
+# 本机凭据文件（路径因人而异，不要写进仓库）
 
 # GitHub PAT
 .github-pat

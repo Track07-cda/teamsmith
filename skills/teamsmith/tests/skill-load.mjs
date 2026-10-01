@@ -16,7 +16,7 @@ const expectedName = basename(skillDir)
 
 const candidates = [
   process.env.PI_DIST,
-  '$HOME/.bun/install/global/node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js',
+  process.env.HOME ? join(process.env.HOME, '.bun/install/global/node_modules/@earendil-works/pi-coding-agent/dist/core/skills.js') : undefined,
 ].filter(Boolean)
 
 let skillsMod = ''

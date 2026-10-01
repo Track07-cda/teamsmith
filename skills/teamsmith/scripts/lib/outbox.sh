@@ -908,7 +908,7 @@ team_outbox_status_line() { # [前缀]
       detail="$detail：已收回 $retracted · 留在框里 $left"
       [ "${other:-0}" -gt 0 ] && detail="$detail · 其它 $other"
     fi
-    # M46：目标已消失的 held 条目不能静默堆着（ai_interview 的旧会话名残渣就是这样）
+    # M46：目标已消失的 held 条目不能静默堆着（other_project 的旧会话名残渣就是这样）
     local gone; gone="$(team_outbox_held_gone_count)"
     [ "${gone:-0}" -gt 0 ] && detail="$detail · $gone 条目标已消失（$TEAM_CLI outbox drop gone）"
   fi

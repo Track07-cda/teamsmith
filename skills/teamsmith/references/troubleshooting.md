@@ -912,7 +912,7 @@ This is not `/reload` work. Pi hot-reloads extensions from its auto-discovery lo
 Pi's own extension docs). The teamsmith launch paths pass all extensions with `-e`, so after an extension is
 added — or after its startup-time behaviour changes — the session must be restarted. `/reload` still
 refreshes the *skill text* (`SKILL.md` / `references/**`); it does not make a missing `-e` extension appear.
-An earlier revision of this skill told the reader to wait for `/reload`, which is what kept an ai_interview
+An earlier revision of this skill told the reader to wait for `/reload`, which is what kept a worker in a neighbouring project
 PM waiting while its messages silently took the paste path.
 
 **The watcher never treats another project's state as home**: its state directory is anchored to the

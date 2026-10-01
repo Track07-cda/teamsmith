@@ -819,7 +819,7 @@ PY
   local home="$tmp/$current-home"
   mkdir -p "$home/.pi/agent"
   cat > "$home/.pi/agent/models-store.json" <<'JSON'
-{ "sub2api": { "models": { "gpt-5.6-luna": { "name": "gpt-5.6-luna", "baseUrl": "http://<internal>/v1" } } },
+{ "sub2api": { "models": { "gpt-5.6-luna": { "name": "gpt-5.6-luna", "baseUrl": "http://127.0.0.1:8080/v1" } } },
   "openrouter": { "models": { "anthropic/claude-x": { "name": "claude-x" } } } }
 JSON
   # M65/D11：读取窗口的判据是「按键与帧之间没有读取」。后台节拍（activity 块 3s TTL）会无关地

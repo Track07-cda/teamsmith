@@ -636,7 +636,7 @@ if (only('S13')) {
 }
 
 // ── M46：跳过留痕 / 注册清痕 / 继承的 TEAM_STATE_DIR 不许指向别的项目 ──────────────────
-// 事故（2026-09-20）：ai_interview 的 PM 加载的是旧扩展，按继承的 TEAM_* 解到 pm-skills，
+// 事故（2026-09-20）：other_project 的 PM 加载的是旧扩展，按继承的 TEAM_* 解到 pm-skills，
 // 用 pm-skills 的会话名算出期望 target 与真实会话不符 → 每 2 秒 skip setup 一次，痕迹全写进
 // **别人的** state，而投递已经静默退回输入框粘贴路径（draft-raced-left + 两条消息滞留）。
 // 这三条钉住修复后的契约：① 跳过的原因留在**本项目**；② 成功注册会把旧痕迹删掉；
@@ -648,22 +648,22 @@ const cliPath = join(SKILL_DIR, 'scripts/team')
   const savedOverride = process.env.TEAM_INBOX_WATCH_TARGET
   const savedState = process.env.TEAM_STATE_DIR
 
-  // ── S14：会话名不符（配置说 m30s，target 指向 ai-interview）→ 本项目 state 里的 skip 记录
+  // ── S14：会话名不符（配置说 m30s，target 指向 other-project）→ 本项目 state 里的 skip 记录
   // 注意：TEAM_INBOX_WATCH_TARGET 只改「从哪读 target」，不改「哪个会话是本项目的」——所以这条
   // 显式覆盖同样会被拒（bun 会缓存启动时的 PATH，夹具不能靠 PATH 假 tmux 来造这个形状）。
-  process.env.TEAM_INBOX_WATCH_TARGET = 'ai-interview:pm'
+  process.env.TEAM_INBOX_WATCH_TARGET = 'other-project:pm'
   await sessionStart()
   const skips = skipFiles()
   check('M46-S14 a session-name mismatch leaves exactly one .skip record', skips.length === 1, `skips=${skips.length}`)
   const skipText = skips.length ? readFileSync(join(WATCH_DIR, skips[0]), 'utf8') : ''
-  for (const [field, want] of [['session', 'ai-interview'], ['window', 'pm'], ['expect', 'm30s'], ['reason', 'session-mismatch'], ['pid', String(process.pid)], ['cwd', ROOT]]) {
+  for (const [field, want] of [['session', 'other-project'], ['window', 'pm'], ['expect', 'm30s'], ['reason', 'session-mismatch'], ['pid', String(process.pid)], ['cwd', ROOT]]) {
     check(`M46-S14 the skip record carries ${field}=${want}`, new RegExp(`^${field}=${want}$`, 'm').test(skipText), skipText.replace(/\n/g, ' | '))
   }
   check('M46-S14 the skip record lives in the cwd-derived project state dir',
     skips.length === 1 && existsSync(join(WATCH_DIR, skips[0])), `watch=${WATCH_DIR}`)
   check('M46-S14 a foreign session is not registered', regs().length === 0, `regs=${regs().length}`)
   check('M46-S14 the ledger still records the skip reason',
-    ledger().some(l => /skip setup: session ai-interview != m30s/.test(l)), ledger().at(-1) || '(no ledger)')
+    ledger().some(l => /skip setup: session other-project != m30s/.test(l)), ledger().at(-1) || '(no ledger)')
   // 端到端：真 CLI 读这条痕迹 → status 报降级（不是只有日志里有）
   {
     let out = ''

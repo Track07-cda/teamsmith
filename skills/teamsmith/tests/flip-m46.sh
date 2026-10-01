@@ -4,7 +4,7 @@
 #   bash skills/teamsmith/tests/flip-m46.sh
 #   TEAM_FLIP_BASE=<sha> bash skills/teamsmith/tests/flip-m46.sh   # 覆盖「修复前」的 revision
 #
-# 事故（2026-09-20，用户报「ai_interview 又没自动发消息」）：PM 进程加载的是 M40 之前的
+# 事故（2026-09-20，用户报「other_project 又没自动发消息」）：PM 进程加载的是 M40 之前的
 # team-inbox-watch.ts，按继承的 TEAM_* 解到 pm-skills，用 pm-skills 的会话名算出期望 target
 # 与真实会话不符 → 每 2s 一次 `skip setup`，而痕迹全写进**别人的** state；投递静默退回输入框
 # 粘贴路径 → 一次 draft-raced-left + 两条消息滞留。M46 修的是「降级没被看见 + 慢路径残留/
@@ -129,8 +129,8 @@ FIX_ROOT="$M46FIX/proj"
 mkdir -p "$FIX_ROOT/.pi/team/state/outbox/held" "$FIX_ROOT/.pi/team/state/inbox-watch" "$FIX_ROOT/docs/team/inbox"
 ( cd "$FIX_ROOT" && git init -q -b main . ) >/dev/null 2>&1
 printf 'TEAM_PROJECT="m46-flip"\nTEAM_SESSION="live-sess"\nTEAM_PM_WINDOW="pm"\nTEAM_DOCS_DIR="docs/team"\nTEAM_VCS="local"\n' > "$FIX_ROOT/.pi/team/config.sh"
-printf 'version=1\ntarget=ai-interview:pm\nkey=ai-interview_pm-00000000\nsession=ai-interview\nwindow=pm\nexpect=live-sess\ninbox=pm\nreason=session-mismatch\ndetail=session ai-interview != live-sess\npid=%s\ncwd=%s\nheartbeat=%s\n' \
-  "$$" "$FIX_ROOT" "$(date +%s)" > "$FIX_ROOT/.pi/team/state/inbox-watch/ai-interview_pm-00000000.skip"
+printf 'version=1\ntarget=other-project:pm\nkey=other-project_pm-00000000\nsession=other-project\nwindow=pm\nexpect=live-sess\ninbox=pm\nreason=session-mismatch\ndetail=session other-project != live-sess\npid=%s\ncwd=%s\nheartbeat=%s\n' \
+  "$$" "$FIX_ROOT" "$(date +%s)" > "$FIX_ROOT/.pi/team/state/inbox-watch/other-project_pm-00000000.skip"
 printf 'kind: say\ntarget: old-session:pi\nfrom: pm\ncreated: x\ndedup: -\n---\nM46-FLIP-DEAD\n' > "$FIX_ROOT/.pi/team/state/outbox/held/1700000000000-0001-old-session:pi.msg"
 printf 'kind: say\ntarget: live-sess:pm\nfrom: pm\ncreated: x\ndedup: -\n---\nM46-FLIP-STUCK\n' > "$FIX_ROOT/.pi/team/state/outbox/held/1700000000001-0002-live-sess:pm.msg"
 printf 'kind: say\ntarget: live-sess:pm\nfrom: pm\ncreated: x\ndedup: -\n---\nM46-FLIP-BOXCLEAR\n' > "$FIX_ROOT/.pi/team/state/outbox/held/1700000000002-0003-live-sess:pm.msg"

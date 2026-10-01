@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * teamsmith 监视器（可由 node/bun 运行）：把每个 agent 的活动渲染成一段流。
- * 灵感来自 <peer-project> 的 scripts/pm-watch.py，但这里做成项目无关：
+ * 设计上刻意做成项目无关（不读任何其它项目的脚本或状态）：
  *   - agent 列表来自 <root>/.worktrees/<agent>/（外加 PM 自己的会话）
  *   - **Pi（默认）**：会话文件按 Pi 的目录规则推出（--<cwd 去前导 / 并把 / 换成 -->--）
  *   - **内部接缝（frozen，为将来非 Pi 适配预留、不承诺兼容）**：配了 --log-glob / TEAM_AGENT_LOG_GLOB 时，显示最新匹配文件的尾部

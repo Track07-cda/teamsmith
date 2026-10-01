@@ -7436,7 +7436,7 @@ fi
 piw_reset
 
 # ---------------------------------------------------------------- 12b-pi2. M46 投递降级可见 + 慢路径自愈
-# 事故（2026-09-20，用户报「ai_interview 又没自动发消息」）：PM 进程加载的是旧扩展 → 按继承的
+# 事故（2026-09-20，用户报「other_project 又没自动发消息」）：PM 进程加载的是旧扩展 → 按继承的
 # TEAM_* 解到 pm-skills → 会话名不符 → 每 2s 一次 `skip setup` 而痕迹全写进**别人的** state；
 # 投递静默退回输入框粘贴路径 → 一次 draft-raced-left + 两条消息滞留。M46 的三条契约在这里钉住：
 #   ① 跳过要在**本项目**留痕，doctor/status/面板看得见（活注册在 / 死 pid 旧痕时不报）；
@@ -7446,8 +7446,8 @@ section "12b-pi2 · M46 投递降级可见（skip 留痕）与慢路径自愈（
 
 # ① 会话名不符的**活**痕迹 → status / doctor / 面板都报降级；活注册在则一个字都不加
 ob_reset; piw_reset; mkdir -p "$PIW"
-printf 'version=1\ntarget=ai-interview:pm\nkey=ai-interview_pm-00000000\nsession=ai-interview\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=session ai-interview != %s\npid=%s\ncwd=%s\nts=2026-09-20T16:11:45.129Z\nheartbeat=%s\n' \
-  "$SESSION" "$SESSION" "$$" "$REPO" "$(date +%s)" > "$PIW/ai-interview_pm-00000000.skip"
+printf 'version=1\ntarget=other-project:pm\nkey=other-project_pm-00000000\nsession=other-project\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=session other-project != %s\npid=%s\ncwd=%s\nts=2026-09-20T16:11:45.129Z\nheartbeat=%s\n' \
+  "$SESSION" "$SESSION" "$$" "$REPO" "$(date +%s)" > "$PIW/other-project_pm-00000000.skip"
 ob_run $TEAM status >"$TMP/m46-status.log" 2>&1 || true
 assert_has "$TMP/m46-status.log" "投递通道降级" "12b-pi2 ① status 报投递通道降级（不再静默退回慢路径）"
 assert_has "$TMP/m46-status.log" "会话名不符" "12b-pi2 ① status 说出原因（会话名不符）"
@@ -7467,8 +7467,8 @@ assert_has "$TMP/m46-pm-ok.json" '"delivery_warning": ""' "12b-pi2 ①（负对�
 # 负对照：死 pid 的旧痕迹不是证据（不制造假警报）
 piw_reset; mkdir -p "$PIW"
 ( sleep 0.05 ) & M46_DEAD=$!; wait "$M46_DEAD" 2>/dev/null || true
-printf 'version=1\ntarget=ai-interview:pm\nkey=ai-interview_pm-00000000\nsession=ai-interview\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=x\npid=%s\ncwd=%s\nheartbeat=%s\n' \
-  "$SESSION" "$M46_DEAD" "$REPO" "$(date +%s)" > "$PIW/ai-interview_pm-00000000.skip"
+printf 'version=1\ntarget=other-project:pm\nkey=other-project_pm-00000000\nsession=other-project\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=x\npid=%s\ncwd=%s\nheartbeat=%s\n' \
+  "$SESSION" "$M46_DEAD" "$REPO" "$(date +%s)" > "$PIW/other-project_pm-00000000.skip"
 ob_run $TEAM status >"$TMP/m46-status-stale.log" 2>&1 || true
 assert_not "$TMP/m46-status-stale.log" "投递通道降级" "12b-pi2 ①（负对照）死 pid 的旧痕迹不报降级"
 piw_reset
@@ -7622,8 +7622,8 @@ piw_reset
 
 # ④ M46 的「没有注册」类措辞逐字不变（反向夹具：降级类不许把这类措辞吃掉）
 piw_reset; mkdir -p "$PIW"
-printf 'version=1\ntarget=ai-interview:pm\nkey=ai-interview_pm-00000000\nsession=ai-interview\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=session ai-interview != %s\npid=%s\ncwd=%s\nts=2026-09-20T16:11:45.129Z\nheartbeat=%s\n' \
-  "$SESSION" "$SESSION" "$$" "$REPO" "$(date +%s)" > "$PIW/ai-interview_pm-00000000.skip"
+printf 'version=1\ntarget=other-project:pm\nkey=other-project_pm-00000000\nsession=other-project\nwindow=pm\nexpect=%s\ninbox=pm\nreason=session-mismatch\ndetail=session other-project != %s\npid=%s\ncwd=%s\nts=2026-09-20T16:11:45.129Z\nheartbeat=%s\n' \
+  "$SESSION" "$SESSION" "$$" "$REPO" "$(date +%s)" > "$PIW/other-project_pm-00000000.skip"
 ob_run $TEAM status >"$TMP/m53-status-skip.log" 2>&1 || true
 assert_has "$TMP/m53-status-skip.log" "会话名不符" "12b-pi3 ④ .skip 类降级照旧报会话名不符"
 assert_has "$TMP/m53-status-skip.log" "退回输入框粘贴慢路径" "12b-pi3 ④ .skip 类照旧给粘贴慢路径的出路"
@@ -12376,8 +12376,8 @@ fi
 # ---------------------------------------------------------------- 32. 身份 = 运行时目录（M40）
 # 两起同族实测事故（2026-09-19，用户拍板的设计方向）：shell 继承了别的项目的身份四件套
 # （TEAM_ROOT / TEAM_MAIN_ROOT / TEAM_PROJECT / TEAM_SESSION），而解析顺序是「env 优先于 cwd」：
-#   ① 在 ai_interview 目录里跑 `team up` 被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
-#   ② 在 ai_interview 目录里起的 pulse，面板渲染出 pm-skills 的看板（没有护栏，静默读错项目）。
+#   ① 在 other_project 目录里跑 `team up` 被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
+#   ② 在 other_project 目录里起的 pulse，面板渲染出 pm-skills 的看板（没有护栏，静默读错项目）。
 # 规格：身份默认从**运行时目录**推导，继承的 TEAM_* 绝不许静默赢过 cwd。这一段钉住四件事：
 #   a) 冲突时观察形式（paths/--print）按 cwd 解析 + 大声告警；env 与目录一致时不吵；
 #   b) 会改共享状态的命令在冲突时被拒，而且真的没落盘；显式授权后按 cwd 动手并落审计；
@@ -14509,7 +14509,7 @@ if [ "$P53_FLIP" != "lint" ]; then
 fi
 
 # ③ P122 返工：归属读 git 痕迹（真 ID + 别仓库 → 拒并点名 + 记录同名也不行）/ 拒绝不阻塞
-#    （做事了→0；合格的真被删）/ tmux 残留可见。现场形状：/tmp/review-M8.2 是 <peer-project> 的
+#    （做事了→0；合格的真被删）/ tmux 残留可见。现场形状：/tmp/review-M8.2 是 别的项目 的
 #    worktree，而本项目恰好也有 M8.2 记录 —— 记录同名不是证据。
 P122D="$TMP/p122-fixture"; P122_REPO="$TMP/p122-repo"; P122_TMDS="$P122D/tmux-sock"
 rm -rf "$P122D"; mkdir -p "$P122D" "$P122_REPO/docs/team/reviews" "$P122_TMDS"

@@ -107,7 +107,7 @@ function staleSec(): number { return envNum('TEAM_INBOX_WATCH_STALE_SEC', DEFAUL
  * 定位团队根（主工作树）：M40 —— **cwd 推导为准**（与 team CLI 同一条原则）。
  * TEAM_ROOT 只在①与推导结果一致，或②完全推导不出来且它指向一个真项目时被信任；
  * 不一致时按 cwd 走，并往 state/inbox-watch.log 记一行 —— 绝不静默服务别的项目
- * （事故②：cwd=ai_interview 的进程却渲染/读写 pm-skills）。
+ * （事故②：cwd=other_project 的进程却渲染/读写 pm-skills）。
  * 推导顺序：git 主工作树（账本所在地；worktree 里的 `.pi/team/config.sh` 是副本）→ 向上找 config.sh。
  */
 function findRoot(cwd: string): string {
@@ -148,7 +148,7 @@ function findRoot(cwd: string): string {
  *  是 → 返回那个项目根（调用方拒绝该路径）。不是（本项目内 / 项目外的普通目录）= null。
  *  为什么只拒「别的项目」而不是「项目外的一切」：TEAM_STATE_DIR 是显式旋钮（夹具把它指到
  *  /tmp/xxx 搬家队列 —— 规格 scenario「TEAM_STATE_DIR moves the queue」）；但**继承来的**旋钮
- *  若落在别的项目的 state 上，就是把别人家当自己家（M40 事故②的形状：cwd=ai_interview 的进程
+ *  若落在别的项目的 state 上，就是把别人家当自己家（M40 事故②的形状：cwd=other_project 的进程
  *  读写 pm-skills 的 state）——那条绝不许静默通过。 */
 function foreignProjectRoot(dir: string, root: string): string | null {
   const norm = (p: string): string => { try { return realpathSync(p) } catch { return resolve(p) } }
