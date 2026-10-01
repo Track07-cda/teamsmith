@@ -2676,7 +2676,7 @@ team_mem_guard() {
   # 硬线 ①：MemAvailable（zram 里的页也算在 RAM 里，所以这条最能反映真实余量）
   if [ "$min_avail" -gt 0 ] && [ "$avail" -lt "$min_avail" ]; then
     team_err "MemAvailable 只剩 ${avail}MB（底线 ${min_avail}MB）：拒绝派单（机上有 zram=${zram_pct}%）"
-    team_err "处理：等一个 agent 结束；或显式冒险 TEAM_MIN_AVAIL_MB=0 team dispatch …"
+    team_err "处理：等一个 agent 结束后重派；或显式降低底线（派单不接受项会给出具体命令）"
     return 1
   fi
   # 硬线 ②：磁盘 swap 空闲（**不计 zram** —— zram 占的是 RAM，不是安全网）

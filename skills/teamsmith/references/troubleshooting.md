@@ -263,9 +263,10 @@ fixes: §27.
 
 | Error | Cause | What to do |
 |---|---|---|
-| only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for an agent to finish; if slowness is acceptable, `TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` |
+| only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for a seat to finish (`team ps` shows who is running) — or paste the refusal's own `修法：TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` line; that override trades the safety net away for this launch and is printed as a real risk, not a formality |
 | available memory X MB < 2048 | a warning only (RAM is tight) | you may continue; lower concurrency if it feels sluggish. To silence it completely: `TEAM_WARN_AVAIL_MB=0` |
-| available memory + free swap only X MB | the hard `TEAM_MIN_TOTAL_MB` floor | the machine really is out of resources: stop an agent first |
+| available memory + free swap only X MB | the hard `TEAM_MIN_TOTAL_MB` floor | the machine really is out of resources: stop an agent first; the refusal prints the matching `TEAM_MIN_TOTAL_MB=0 …` route if you accept the risk |
+| MemAvailable down to X MB | the hard `TEAM_MIN_AVAIL_MB` floor (default 1024) | stop or wait for a seat first; the printed `修法：TEAM_MIN_AVAIL_MB=0 team dispatch …` line is the explicit override |
 | model X concurrency limit N | `TEAM_MODEL_LIMITS` | wait, or temporarily `TEAM_MODEL_LIMITS="" team dispatch ...` |
 | unknown agent | not in the roster | grow the roster through its one audited entry: `team add-agent <a> --register` (or hand-edit `TEAM_AGENTS` in `.pi/team/config.sh`) |
 | worktree does not exist | `add-agent` was never run | dispatch creates it automatically, but an explicit `team add-agent <a> --register` is preferable (for a seat already in the roster the flag is a visible no-op) |
@@ -372,6 +373,25 @@ merged or decided by the board. When the state cannot be determined — no `stat
 worktree, a detached/unreadable branch — dispatch proceeds and prints one line naming the missing signal; it does not
 guess. A dispatch whose id matches two briefs is refused for the same reason (`docs/team/tasks/<ID>-*.md`), with both
 paths listed: clean up the briefs instead of letting glob order choose the scope.
+
+### 4f. Dispatch warns that this seat burned its last round (or produced nothing)
+
+Before a launch — `--print` included — dispatch prints a visible, non-blocking `⚠` line when either leg of the
+seat's last round is judgeable and bad, and prints **nothing** when it cannot judge (silence, never a guess):
+
+- **death leg**: the seat's latest record in `state/deaths.log` is classified `quota` or `balance` by the death
+  reader; the warning names the classification, the source, the time and the raw evidence line (for example
+  `weekly usage limit exceeded (403)`). Check the quota/balance, or move the seat to another model, before
+  re-dispatching;
+- **zero-output leg**: `state/<agent>.env` records the previous round's `sid` and the session file's size **at
+  launch**; if that same file is still exactly that size, the round wrote nothing and the warning says so in the
+  tool's own coarse vocabulary (`0 bytes ≈ 0 tokens`), naming the session file.
+
+Both are hints: they never change the exit status, never block and never open a window by themselves. The size is
+recorded *before* the worker can run, so bytes written during that round are never counted as the previous round's
+output; a missing record, an unreadable file or an unparsable value keeps the leg silent. Read the line before
+re-dispatching: a `quota` death usually means the next launch dies the same way, and a zero-output round usually
+means the previous dispatch never got going — the same refusal repeats until its fix is applied.
 
 ## 5. git worktree errors
 
@@ -1161,6 +1181,11 @@ the checkout it refuses to prepare itself. Each one is decided **before** a wind
 so a refusal leaves the worktree, the board and `state/<agent>.env` exactly as they were. §4 covers the other
 dispatch refusals; this section names the shape, the reason and the exact command that clears it.
 
+**Every blocker found in the same pre-launch pass is reported in one refusal.** Each item names its artifact and
+reason and carries a paste-able `修法：<command>` or `改行：<exact line>`, and the last line counts the blockers. The
+command is the **whole** line — there is no trailing explanation to strip, and nothing after it may be typed along
+with it.
+
 ### 27a. The worktree is on a branch that does not belong to this task
 
 Task mode refuses a dispatch whose worktree sits on another task's branch (the check also runs for `--print`, so
@@ -1188,6 +1213,14 @@ Because the title can change (a phase word added, say), one task can legitimatel
 life — `task/P134-p134` → `task/P134-propose`. Resuming the **same** task (`state/<agent>.env` still records it)
 accepts any `task/<ID>-*`; a **new** task must sit on exactly the name computed for it. That mismatch is what the
 refusal above reports.
+
+**When the name comes from `--branch` or the brief.** `dispatch --branch <name>` wins over the brief's `branch:`
+line, which wins over the title derivation; `team task` writes the derived name into the brief as its `branch:`
+line, so the target is fixed before any worktree exists. Without `--branch`, a worktree on **this task's own**
+branch is accepted even when its slug differs (`task/P134-p134` vs `task/P134-propose` — the same task, a title
+that changed), and both names are printed; with `--branch`, only the declared name is accepted, because the
+explicit declaration wins. The printed plan states the resolved name and its source, and the launch prompt names
+the branch the guard actually accepted — read it before assuming the worker was told the wrong branch.
 
 **The fix.** The refusal prints one of the two commands below with the real worktree and branch; the skill never
 runs git itself:

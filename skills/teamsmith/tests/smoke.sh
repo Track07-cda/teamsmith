@@ -16734,6 +16734,11 @@ case "$sub" in
         nonce="$(printf '%s' "$inner" | sed -n 's/.*printf "%s %s\\n" \([^ ][^ ]*\) \$\$ >.*/\1/p' | head -1)"
         [ -n "$marker" ] && [ -n "$nonce" ] && printf '%s %s\n' "$nonce" 4242 > "$marker"
         [ -n "$exitf" ] && [ -n "$nonce" ] && printf '%s %s\n' "$nonce" 0 > "$exitf"
+        # P151/F5：仿真「agent 一开跑就往自己的会话文件里写」——只有显式准备好的那条路径才追加，
+        # 其它夹具的 shim 行为逐字节不变。
+        if [ -n "${TEAM_ROUTES_SESSION_FILE:-}" ] && [ -f "$TEAM_ROUTES_SESSION_FILE" ]; then
+          printf 'roundout' >> "$TEAM_ROUTES_SESSION_FILE"
+        fi
       fi
     fi
     exit 0 ;;
@@ -16785,6 +16790,12 @@ p140_run() { # <repo> <team 参数…> → 组合输出；rc = CLI 的 rc（录�
       TEAM_PI_AGENT_DIR="$p/.pi-agent" TEAM_MEETINGS_DIR="$p/.meetings" $TEAM "$@" </dev/null ) 2>&1
 }
 p140_windows() { grep -cE 'new-window|respawn-pane' "$P140_CALLS" 2>/dev/null || true; }
+p140_sh() { # <repo> <命令字符串> → 把打印出来的路线**原样**当命令跑（同 p140_run 的环境）
+  local p="$1" cmd="$2"
+  ( cd "$p" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" TEAM_ROUTES_WINDOWS="$P140_WINREG" \
+      TEAM_ROUTES_TMUX_LOG="$P140_CALLS" TEAM_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
+      TEAM_PI_AGENT_DIR="$p/.pi-agent" TEAM_MEETINGS_DIR="$p/.meetings" bash -c "$cmd" </dev/null ) 2>&1
+}
 
 # ---- R4/R5 ⇂ 三项阻塞的一次拒绝（可清）
 P140A="$(p140_repo once)"
@@ -16892,6 +16903,145 @@ assert_not_echo "$P140C_OUT" "0 bytes" "R6：追加一个字节后零产出警�
 rm -f "$P140C/.pi-agent/sessions/--$P140C_ENC--/x_$P140C_SID.jsonl"
 P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
 assert_not_echo "$P140C_OUT" "0 bytes" "R6：会话文件不在了 → 沉默（不猜）"
+# ---------------------------------------------------------------- P151 · 返工（F1/F2 可粘贴 · F3 容量修法 · F4 一次列全 · F5 产出时点 · W3 分支一致）
+# P149 判定的四条缺陷与 W2/W3：每条都有可证伪的断言（旧实现在报告里给了红侧原始输出）。
+
+# ---- F1：修法行只有命令（说明另起一行）；把打印出的**整行**原样喂回去必须真的生效
+P151A="$(p140_repo paste-route)"
+p140_run "$P151A" board add OLD "OLD fixture" dev - - >/dev/null 2>&1
+p140_run "$P151A" board add P201 "P201 fixture" dev - - >/dev/null 2>&1
+p140_run "$P151A" board set OLD wip >/dev/null 2>&1
+p140_brief "$P151A" OLD dev apply - 'none (infra) — fixture' -
+p140_brief "$P151A" P201 dev apply - - -
+p140_wt "$P151A" dev "$(p140_branch "$P151A" dev P201)"
+mkdir -p "$P151A/.pi/team/state"
+printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' \
+  "$P151A/.worktrees/dev" "$P151A/docs/team/tasks/OLD-fixture.md" "$(p140_branch "$P151A" dev OLD)" > "$P151A/.pi/team/state/dev.env"
+: > "$P151A/.pi/team/state/watchdog.log"
+P151A_REF="$(p140_run "$P151A" dispatch dev P201 docs/team/tasks/P201-fixture.md --print)"; P151A_RC=$?
+assert_eq "P151/F1：叠任务 + 锚缺失一次拒绝" "$([ "$P151A_RC" -ne 0 ] && echo yes || echo no)" "yes"
+P151A_LINE="$(printf '%s\n' "$P151A_REF" | grep -aF '修法：' | grep -aF -- '--force' | head -1 | sed 's/^.*修法：//')"
+if [ -z "$P151A_LINE" ]; then
+  bad "P151/F1：拒绝里没有可粘的 --force 修法行"
+elif printf '%s' "$P151A_LINE" | grep -q '（\|拒绝\|警告\|审计'; then
+  bad "P151/F1：修法行里还夹着说明文字（原样粘贴会把说明当参数）：[$P151A_LINE]"
+else
+  ok "P151/F1：修法行只有命令（说明在另一行）：$(printf '%s' "$P151A_LINE" | cut -c1-64)…"
+fi
+: > "$P140_CALLS"
+P151A_OUT2="$(p140_sh "$P151A" "$P151A_LINE")"; P151A_RC2=$?
+assert_eq "P151/F1：整行原样粘贴真的生效（rc=0）" "$P151A_RC2" "0"
+assert_has_echo "$P151A_OUT2" "dispatched P201" "P151/F1：粘贴后真的派出去（不是又一个拒绝）"
+assert_eq "P151/F1：粘贴的路线真的开了窗" "$([ "$(p140_windows)" -ge 1 ] && echo yes || echo no)" "yes"
+
+# ---- F2：分支修法行只有 git 命令（替代方案另起一行）；整行原样粘贴真的建出分支
+P151B="$(p140_repo paste-branch)"
+p140_run "$P151B" board add P1 "P1 fixture" dev - - >/dev/null 2>&1
+p140_brief "$P151B" P1 dev apply - 'none (infra) — fixture' -
+p140_wt "$P151B" dev task/P1-legacy
+P151B_REF="$(p140_run "$P151B" dispatch dev P1 docs/team/tasks/P1-fixture.md --branch task/P1-pm-named --print)"; P151B_RC=$?
+assert_eq "P151/F2：--branch 与工作树不符 → 拒绝（不静默替换）" "$([ "$P151B_RC" -ne 0 ] && echo yes || echo no)" "yes"
+P151B_LINE="$(printf '%s\n' "$P151B_REF" | grep -aF '修法：git -C' | head -1 | sed 's/^.*修法：//')"
+if [ -z "$P151B_LINE" ]; then
+  bad "P151/F2：拒绝里没有可粘的分支修法行"
+elif printf '%s' "$P151B_LINE" | grep -q '（\|或让\|替代'; then
+  bad "P151/F2：git 修法行里还夹着说明文字：[$P151B_LINE]"
+else
+  ok "P151/F2：git 修法行只有命令（替代方案在另一行）"
+fi
+P151B_OUT2="$(p140_sh "$P151B" "$P151B_LINE")"; P151B_RC2=$?
+assert_eq "P151/F2：整行原样粘贴 git switch -c 成功" "$P151B_RC2" "0"
+P151B_OUT3="$(p140_run "$P151B" dispatch dev P1 docs/team/tasks/P1-fixture.md --branch task/P1-pm-named --print)"; P151B_RC3=$?
+assert_eq "P151/F2：粘贴后同一派单通过" "$P151B_RC3" "0"
+assert_not_echo "$P151B_OUT3" "拒绝派单" "P151/F2：粘贴后不再有阻塞项"
+
+# ---- F3：容量拒绝带具体修法（无占位符）；打印出的覆盖命令粘回去真的能派
+P151C="$(p140_repo paste-capacity)"
+p140_run "$P151C" board add P1 "P1 fixture" dev - - >/dev/null 2>&1
+p140_brief "$P151C" P1 dev apply - 'none (infra) — fixture' -
+p140_wt "$P151C" dev "$(p140_branch "$P151C" dev P1)"
+printf 'MemTotal:       32768000 kB\nMemFree:        1024000 kB\nMemAvailable:    102400 kB\nSwapTotal:     16777216 kB\nSwapFree:       8388608 kB\n' > "$P151C/meminfo-low"
+printf 'Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n/var/swapfile                           file\t\t67108860\t1048576\t\t-1\n' > "$P151C/swaps-plenty"
+p151c_run() { # <命令字符串> → 仍带着低内存环境跑（证明修法真的打开了那条硬线，而不是换了机器）
+  ( cd "$P151C" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" TEAM_ROUTES_WINDOWS="$P140_WINREG" \
+      TEAM_ROUTES_TMUX_LOG="$P140_CALLS" TEAM_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
+      TEAM_MEMINFO_FILE="$P151C/meminfo-low" TEAM_SWAPFILE_PATH="$P151C/swaps-plenty" TEAM_MIN_AVAIL_MB=1024 \
+      TEAM_PI_AGENT_DIR="$P151C/.pi-agent" TEAM_MEETINGS_DIR="$P151C/.meetings" bash -c "$1" </dev/null ) 2>&1
+}
+P151C_REF="$(p151c_run "$TEAM dispatch dev P1 docs/team/tasks/P1-fixture.md --print")"; P151C_RC=$?
+assert_eq "P151/F3：内存见底 → 拒绝" "$([ "$P151C_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$P151C_REF" "MemAvailable 只剩" "P151/F3：容量拒绝的理由在"
+P151C_FIX="$(printf '%s\n' "$P151C_REF" | grep -aF '修法：' | grep -aF 'TEAM_MIN_AVAIL_MB=0' | head -1 | sed 's/^.*修法：//')"
+if [ -z "$P151C_FIX" ]; then
+  bad "P151/F3：容量拒绝没有具体修法行（不许只留占位符）"
+elif printf '%s' "$P151C_FIX" | grep -q '（\|…\|<ID>'; then
+  bad "P151/F3：容量修法行里还有占位符/说明：[$P151C_FIX]"
+else
+  ok "P151/F3：容量拒绝给出具体的降低底线命令"
+fi
+P151C_OUT2="$(p151c_run "$P151C_FIX")"; P151C_RC2=$?
+assert_eq "P151/F3：粘贴容量修法（仍带低内存环境）后真的能派" "$P151C_RC2" "0"
+assert_has_echo "$P151C_OUT2" "dispatched P1" "P151/F3：覆盖路线走到开窗"
+
+# ---- F4：同一族的两个冲突兄弟一次列全（编号与计数自洽）；旧实现在第一个 return
+P151D="$(p140_repo siblings)"
+mkdir -p "$P151D/openspec/changes/p151d/specs/panel" "$P151D/openspec/changes/p151d/specs/verification"
+printf '## MODIFIED Requirements\n\n### Requirement: p151d panel fixture\n' > "$P151D/openspec/changes/p151d/specs/panel/spec.md"
+printf '## MODIFIED Requirements\n\n### Requirement: p151d verification fixture\n' > "$P151D/openspec/changes/p151d/specs/verification/spec.md"
+for _id in SIB1 SIB2 P1; do p140_run "$P151D" board add "$_id" "$_id fixture" dev - - >/dev/null 2>&1; done
+p140_run "$P151D" board set SIB1 wip >/dev/null 2>&1
+p140_run "$P151D" board set SIB2 wip >/dev/null 2>&1
+p140_brief "$P151D" SIB1 dev apply p151d - panel
+p140_brief "$P151D" SIB2 dev apply p151d - panel
+p140_brief "$P151D" P1 dev apply p151d - panel
+p140_wt "$P151D" dev "$(p140_branch "$P151D" dev P1)"
+: > "$P140_CALLS"
+P151D_OUT="$(p140_run "$P151D" dispatch dev P1 docs/team/tasks/P1-fixture.md)"; P151D_RC=$?
+assert_eq "P151/F4：两个未完成兄弟 → 拒绝" "$([ "$P151D_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$P151D_OUT" "冲突 1/2：兄弟任务：SIB1" "P151/F4：第一个冲突兄弟列出"
+assert_has_echo "$P151D_OUT" "冲突 2/2：兄弟任务：SIB2" "P151/F4：第二个冲突兄弟在**同一次**调用里（旧实现只给一个）"
+assert_has_echo "$P151D_OUT" "共享文件：openspec/changes/p151d/specs/panel/spec.md" "P151/F4：逐条给出共享文件"
+assert_has_echo "$P151D_OUT" "列全自对账" "P151/F4：总数与逐条数显式自洽"
+assert_eq "P151/F4：拒绝时不建窗" "$(p140_windows)" "0"
+
+# ---- F5：上一轮的字节在 worker 能跑之前取；上一轮真有产出就不许被说成 0 bytes
+P151E="$(p140_repo seat-bytes)"
+p140_run "$P151E" board add P300 "P300 fixture" dev - - >/dev/null 2>&1
+p140_brief "$P151E" P300 dev apply - 'none (infra) — fixture' -
+p140_wt "$P151E" dev "$(p140_branch "$P151E" dev P300)"
+P151E_SID="p140-seat-bytes-dev"
+P151E_ENC="$(printf '%s' "$P151E/.worktrees/dev" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
+P151E_FILE="$P151E/.pi-agent/sessions/--$P151E_ENC--/x_$P151E_SID.jsonl"
+mkdir -p "$(dirname "$P151E_FILE")"; : > "$P151E_FILE"
+export TEAM_ROUTES_SESSION_FILE="$P151E_FILE"   # shim 在「启动」时追加 8 字节 = 本轮产出
+P151E_REAL="$(p140_run "$P151E" dispatch dev P300 docs/team/tasks/P300-fixture.md)"; P151E_RC=$?
+unset TEAM_ROUTES_SESSION_FILE
+assert_eq "P151/F5：首轮派单成功（假启动）" "$P151E_RC" "0"
+assert_eq "P151/F5：shim 在启动时写了 8 字节（本轮产出）" "$(wc -c < "$P151E_FILE" | tr -d ' ')" "8"
+assert_eq "P151/F5：sid_bytes 记的是**启动前**的字节数（旧实现会记成启动后的 8）" \
+  "$(grep '^sid_bytes=' "$P151E/.pi/team/state/dev.env" | head -1 | cut -d= -f2-)" "0"
+P151E_OUT="$(p140_run "$P151E" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
+assert_not_echo "$P151E_OUT" "0 bytes" "P151/F5：上一轮真有产出 → 不许被说成 0 bytes（不假报）"
+
+# ---- W3：提示词写守卫实际接受的分支（不是推导名），且与 state 的 branch= 同源
+P151F="$(p140_repo prompt-branch)"
+p140_run "$P151F" board add P1 "P1 fixture" dev - - >/dev/null 2>&1
+p140_brief "$P151F" P1 dev apply - 'none (infra) — fixture' -
+P151F_DERIVED="$(p140_branch "$P151F" dev P1)"
+p140_wt "$P151F" dev task/P1-legacy
+P151F_PRINT="$(p140_run "$P151F" dispatch dev P1 docs/team/tasks/P1-fixture.md --print)"; P151F_RC=$?
+assert_eq "P151/W3：同任务另一 slug 的分支被接受" "$P151F_RC" "0"
+assert_has_echo "$P151F_PRINT" "工作树实际分支：task/P1-legacy" "P151/W3：计划里点名守卫接受的分支"
+assert_has_echo "$P151F_PRINT" "$(printf 'Your task branch is `%s`' task/P1-legacy)" "P151/W3：提示词写的是工作树的分支"
+if printf '%s' "$P151F_PRINT" | grep -aqF "$(printf 'Your task branch is `%s`' "$P151F_DERIVED")"; then
+  bad "P151/W3：提示词仍写着推导名 $P151F_DERIVED（与现场不符）"
+else
+  ok "P151/W3：提示词没有再写推导名"
+fi
+P151F_REAL="$(p140_run "$P151F" dispatch dev P1 docs/team/tasks/P1-fixture.md)"; P151F_RC2=$?
+assert_eq "P151/W3：真派单成功" "$P151F_RC2" "0"
+assert_eq "P151/W3：state 的 branch= 与提示词同源" \
+  "$(grep '^branch=' "$P151F/.pi/team/state/dev.env" | head -1 | cut -d= -f2-)" "task/P1-legacy"
 # ---------------------------------------------------------------- 55. meeting-liveness（发现性 / 过期 / 队列 / 标识）
 # P139 · change: meeting-liveness。纯逻辑面（不建 tmux、不起真实 pi）：未读读数与待办元组（1.1/1.2）、
 # status/digest 的会议现场行（1.3/2.3）、过期与收尾（2.1/2.2）、每方窗口解析（4.1）、身份轴与第三方拒绝

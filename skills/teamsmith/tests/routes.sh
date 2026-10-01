@@ -786,6 +786,7 @@ RC_CLAIMS=(
   'config-pi-bin|修法：$TEAM_CLI config set TEAM_PI_BIN'
   'session-fresh|修法：$TEAM_CLI dispatch $agent $id $taskfile --fresh'
   'session-overflow|修法：$TEAM_CLI dispatch $agent $id $taskfile --allow-overflow'
+  'capacity-override|修法：$(team_dispatch_mem_fix_cmd'
 )
 RC_EXTRA=()
 RC_PI_BIN=""
@@ -852,7 +853,7 @@ rc_wt() { # <dir> <agent> <branch>
     || git -C "$d" worktree add -q "$d/.worktrees/$a" "$br" >/dev/null 2>&1 || true
 }
 
-rc_route() { # <输出> <片段> → 提取打印出来的路线（去前缀与尾部全角注记）
+rc_route() { # <输出> <片段> → 提取打印出来的路线（**原样**：去标记与首尾空白，不剥尾注）
   local out="$1" frag="$2" line txt
   line="$(printf '%s\n' "$out" | grep -aF -- "$frag" | head -1)"
   [ -n "$line" ] || return 1
@@ -861,7 +862,8 @@ rc_route() { # <输出> <片段> → 提取打印出来的路线（去前缀与�
     *改行：*) txt="${line#*改行：}" ;;
     *) return 1 ;;
   esac
-  txt="${txt%%（*}"
+  # P151（F1/F2）：不再在「（」处截断 —— 打印出来的**整行**就是整条命令（命令与说明分行）。
+  # 这一行就是原样粘贴回归的判据：任何还留在路线行上的说明文字都会让下面的粘贴失败。
   printf '%s\n' "$(printf '%s' "$txt" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 }
 
@@ -1187,6 +1189,18 @@ mr_refusals() {
       ok "C2/session-overflow：路线按自己的契约兑现（显式放行警告，rc=0）"
     fi
   fi
+
+  # ⑱ 容量底线拒绝 → 修法：显式降低底线重派（覆盖路线：真的放行）；「等一个席位」是建议行，不是路线
+  d="$(new_fixture refuse-capacity)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  printf 'MemTotal:       32768000 kB\nMemFree:        1024000 kB\nMemAvailable:    102400 kB\nSwapTotal:     16777216 kB\nSwapFree:       8388608 kB\n' > "$d/meminfo-low"
+  printf 'Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n/var/swapfile                           file\t\t67108860\t1048576\t\t-1\n' > "$d/swaps-plenty"
+  RC_EXTRA=("TEAM_MEMINFO_FILE=$d/meminfo-low" "TEAM_SWAPFILE_PATH=$d/swaps-plenty" "TEAM_MIN_AVAIL_MB=1024")
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case capacity-override 'MemAvailable 只剩' '修法：TEAM_MIN_AVAIL_MB=0' 'apply:cmd' route proceed "dispatched P1"
+  RC_EXTRA=()
 }
 
 # ── flips: scratch trees that MUST redden the walk ──────────────────────────────────────────────────

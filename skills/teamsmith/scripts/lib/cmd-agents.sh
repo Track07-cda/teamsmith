@@ -347,7 +347,8 @@ team_dispatch_judge_worktree_branch() { # <agent> <ID> <wt> <声明分支> <来�
       if git -C "$wt" show-ref --verify --quiet "refs/heads/$want"; then
         team_df_dim "$(printf '  修法：git -C %q switch %q' "$wt" "$want")"
       else
-        team_df_dim "$(printf '  修法：git -C %q switch -c %q %q（或让 --branch 指向一条已存在的本任务分支）' "$wt" "$want" "$TEAM_PROTECTED_BRANCH")"
+        team_df_dim "$(printf '  修法：git -C %q switch -c %q %q' "$wt" "$want" "$TEAM_PROTECTED_BRANCH")"
+        team_df_dim "       （替代方案：让 --branch 指向一条已存在的本任务分支；显式声明赢）"
       fi
       return 1
     fi
@@ -419,11 +420,15 @@ team_guard_resume_session() { # <agent> <model> <sid> <worktree> <fresh> <allow-
   team_dim "  复用它极可能直接 Context full / 连接错误循环，而 roster 还会显示「pi 在跑」" >&2
   team_dim "  两条出路（P140：带具体 ID/任务书的可粘命令）" >&2
   if [ -n "$id" ] && [ -n "$taskfile" ]; then
-    team_dim "    修法：$TEAM_CLI dispatch $agent $id $taskfile --fresh（换新会话，推荐；旧历史仍在原文件里）" >&2
-    team_dim "    修法：$TEAM_CLI dispatch $agent $id $taskfile --allow-overflow（确认要复用；显式放行会醒目警告）" >&2
+    team_dim "    修法：$TEAM_CLI dispatch $agent $id $taskfile --fresh" >&2
+    team_dim "          （换新会话，推荐；旧历史仍在原文件里）" >&2
+    team_dim "    修法：$TEAM_CLI dispatch $agent $id $taskfile --allow-overflow" >&2
+    team_dim "          （确认要复用；显式放行会醒目警告）" >&2
   else
-    team_dim "    · 换新会话（推荐；旧历史仍在原文件里）：$TEAM_CLI dispatch $agent <ID> <task-file> --fresh" >&2
-    team_dim "    · 确认要复用（例如换成窗口更大的模型）：$TEAM_CLI dispatch $agent <ID> <task-file> --allow-overflow（显式放行会醒目警告）" >&2
+    # 没有具体 ID/任务书时给的是**模板**，不是可粘路线 —— 因此不带 `修法：` 标记（不许把占位符
+    # 冒充成一条能跑的命令）。
+    team_dim "    · 换新会话（推荐；旧历史仍在原文件里）：$TEAM_CLI dispatch <agent> <ID> <task-file> --fresh" >&2
+    team_dim "    · 确认要复用（例如换成窗口更大的模型）：$TEAM_CLI dispatch <agent> <ID> <task-file> --allow-overflow" >&2
   fi
   return 1
 }
@@ -767,8 +772,10 @@ team_dispatch_judge_stack() { # <agent> <ID> <任务书> <force> → 0=继续 / 
     team_df_err "  分支    ：工作树 $wt 停在 $wt_branch（state 记的是 ${prev_branch:-没有记录}）"
   fi
   team_df_err "  没结束  ：$reason"
-  team_df_err "  修法：$TEAM_CLI resume --agent $agent（先收尾 $prev；复验/合并后再 team board set $prev done）"
-  team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force（显式覆盖：警告 + 一行审计）"
+  team_df_err "  修法：$TEAM_CLI resume --agent $agent"
+  team_df_err "        （先收尾 $prev；复验/合并后再 team board set $prev done）"
+  team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force"
+  team_df_err "        （显式覆盖：警告 + 一行审计）"
   return 1
 }
 
@@ -792,7 +799,8 @@ team_dispatch_judge_briefs() { # <ID> <briefs（每行一个）> <数量> <本�
     [ -n "$stale" ] && continue
     stale="$b"
   done <<< "$briefs"
-  [ -n "$stale" ] && team_df_dim "$(printf '  修法：git -C %q mv %q %q（把过期的那份改名出 glob；保留历史）' "$TEAM_MAIN_ROOT" "$stale" "$stale.bak")"
+  [ -n "$stale" ] && team_df_dim "$(printf '  修法：git -C %q mv %q %q' "$TEAM_MAIN_ROOT" "$stale" "$stale.bak")"
+  [ -n "$stale" ] && team_df_dim "       （把过期的那份改名出 glob；保留历史）"
   team_df_err "  确定性做法：只留一份 —— 把过期的那份改名/删掉（或给它自己的 ID），再派单。"
   return 1
 }
@@ -842,7 +850,8 @@ team_dispatch_judge_anchor() { # <agent> <ID> <任务书> <change> <force>
   body="$(printf '%s\n' "$out" | sed 's/^/  /')"
   team_df_lines_raw_err "$body"
   team_df_err "  编辑 $rel 的 specs:/anchor: 行（specs: <capability>#<requirement> 或 anchor: none (infra) — <非空理由>；改完重派）"
-  team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force（警告 + 一行审计）"
+  team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force"
+  team_df_err "        （警告 + 一行审计：覆盖的是「没有 change 也没有锚」这一项）"
   return 1
 }
 
@@ -863,6 +872,7 @@ team_dispatch_judge_delta_writer() { # <agent> <ID> <任务书> <change> <force>
   local agent="$1" id="$2" brief="$3" change="$4" force="${5:-0}"
   [ "$change" != "-" ] || return 0
   local mine mine_decl mine_text sib sde sdt sib_text shared sid sphase sst sreason sbrief
+  local -a conf_items=()
   if ! mine="$(team_task_delta_targets "$brief" "$change")"; then
     team_df_dim "  deltas: 行不合法 → change $change 的 delta 单写者检查判不了（见上一项）"
     return 0
@@ -901,16 +911,26 @@ team_dispatch_judge_delta_writer() { # <agent> <ID> <任务书> <change> <force>
       TEAM_DISPATCH_AUDIT_LINES="${TEAM_DISPATCH_AUDIT_LINES}dispatch $agent: --force 覆盖 delta 单写者（$sid 与 $id 共享 $shared）"$'\n'
       continue
     fi
-    team_df_err "拒绝派单：change $change 的同一个 delta 文件被两个未结束的任务声明（单写者规则）"
-    team_df_err "  兄弟任务：$sid ｜阶段 ${sphase:--} ｜看板 $sst"
-    team_df_err "  它没结束：$sreason"
-    team_df_err "  共享文件：$shared"
-    team_df_err "  它的声明：$sib_text"
-    team_df_err "  本次声明：$mine_text"
-    team_df_err "  等 $sid 结束（done/closed/交付证据）再派，或把两边的 deltas: 写成互不相交的 capability"
-    team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force（显式覆盖：警告 + 一行审计）"
-    return 1
+    # F4：不在第一个冲突兄弟处 return —— 先收集，循环结束后**一次列全**
+    #（编号 i/n 与总数 n 同源，逐条数与总数自洽）。
+    conf_items+=("$(printf '兄弟任务：%s ｜阶段 %s ｜看板 %s\n它没结束：%s\n共享文件：%s\n它的声明：%s\n本次声明：%s' \
+      "$sid" "${sphase:--}" "$sst" "$sreason" "$shared" "$sib_text" "$mine_text")")
   done < <(team_change_unfinished "$change")
+  if [ "${#conf_items[@]}" -gt 0 ]; then
+    local n="${#conf_items[@]}" i=0 item line
+    team_df_err "拒绝派单：change $change 的同一个 delta 文件被 $n 个未结束的兄弟任务声明（单写者规则）"
+    for item in "${conf_items[@]}"; do
+      i=$((i + 1))
+      while IFS= read -r line; do
+        [ -n "$line" ] && team_df_err "  冲突 $i/$n：$line"
+      done <<< "$item"
+    done
+    team_df_err "  列全自对账：上面的编号 1..$n 与计数 $n 同源（逐条数 = 总数）"
+    team_df_err "  等这些兄弟结束（done/closed/交付证据）再派，或把两边的 deltas: 写成互不相交的 capability"
+    team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force"
+    team_df_err "        （显式覆盖：警告 + 一行审计；每个冲突兄弟一行审计）"
+    return 1
+  fi
   return 0
 }
 
@@ -937,7 +957,8 @@ team_dispatch_judge_verify_seat() { # <agent> <ID> <任务书> <change> <phase> 
       team_df_err "拒绝派单：verification 不独立 —— $agent 写过 change $change 的 apply 任务（$authored），不能自己验自己"
       team_df_err "  change：$change ｜ agent：$agent ｜ 它写过的任务：$authored"
       team_df_err "  换一个没写过这些 apply 任务的 agent 来 verify（独立验证不换人就不成立）"
-      team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force（显式覆盖：警告 + 一行审计）"
+      team_df_err "  修法：$TEAM_CLI dispatch $agent $id $brief --force"
+      team_df_err "        （显式覆盖：警告 + 一行审计）"
       return 1
     fi
   fi
@@ -968,7 +989,8 @@ team_dispatch_judge_agent_bin() { # <agent>
     if ! command -v "$agent_bin" >/dev/null 2>&1; then
       probe="${TEAM_AGENT_CMD%% *}"; [ -n "$probe" ] || probe="$(basename "$agent_bin")"
       team_df_err "找不到 agent 可执行文件：$agent_bin（检查 TEAM_AGENT_BIN 或 TEAM_AGENT_CMD 的首词）"
-      team_df_err "  修法：$TEAM_CLI config set TEAM_AGENT_BIN \"$(command -v "$probe")\"（把可执行文件指到真的路径；command -v $probe 找不到就得先装/先修 PATH）"
+      team_df_err "  修法：$TEAM_CLI config set TEAM_AGENT_BIN \"$(command -v "$probe")\""
+      team_df_err "        （把可执行文件指到真的路径；command -v $probe 找不到就得先装/先修 PATH）"
       return 1
     fi
   else
@@ -976,11 +998,38 @@ team_dispatch_judge_agent_bin() { # <agent>
     case "$agent_bin" in /*) ;; *) team_df_warn "TEAM_PI_BIN 不是绝对路径（$agent_bin）：窗口里可能 PATH 未就绪，建议写死绝对路径";; esac
     if ! command -v "$TEAM_PI_BIN" >/dev/null 2>&1; then
       team_df_err "找不到 pi 可执行文件：TEAM_PI_BIN=$TEAM_PI_BIN（设成绝对路径再派单）"
-      team_df_err "  修法：$TEAM_CLI config set TEAM_PI_BIN \"$(command -v pi)\"（指向真的 pi；command -v 找不到就得先装/先修 PATH）"
+      team_df_err "  修法：$TEAM_CLI config set TEAM_PI_BIN \"$(command -v pi)\""
+      team_df_err "        （指向真的 pi；command -v 找不到就得先装/先修 PATH）"
       return 1
     fi
   fi
   return 0
+}
+
+# ---------------------------------------------------------------- P151（F3）· 容量拒绝的可粘修法
+# 容量守卫（team_mem_guard）只做判定与诊断，不知道自己在为谁派单 —— 修法要含真的 agent / ID /
+# 任务书路径，所以由 driver 这侧补上（判定与覆盖语义一字不动：这里只是多打印两条能跑的命令，
+# 且只打开真正拦住的那条硬线）。
+team_dispatch_mem_fix_cmd() { # <agent> <ID> <任务书> <守卫输出> → 覆盖命令
+  local agent="$1" id="$2" taskfile="$3" out="$4" knobs=""
+  case "$out" in *"MemAvailable 只剩"*) knobs="$knobs TEAM_MIN_AVAIL_MB=0" ;; esac
+  case "$out" in *"磁盘 swap 只剩"*) knobs="$knobs TEAM_MIN_FREE_SWAP_MB=0" ;; esac
+  case "$out" in *"MemAvailable + 磁盘 swap 空闲仅"*) knobs="$knobs TEAM_MIN_TOTAL_MB=0" ;; esac
+  [ -n "$knobs" ] || knobs=" TEAM_MIN_AVAIL_MB=0 TEAM_MIN_FREE_SWAP_MB=0 TEAM_MIN_TOTAL_MB=0"
+  printf '%s %s dispatch %s %s %s\n' "${knobs# }" "$TEAM_CLI" "$agent" "$id" "$(printf '%q' "$taskfile")"
+}
+
+team_dispatch_judge_mem() { # <agent> <ID> <任务书>（team_df_run_lib 守卫：透传 team_mem_guard 的判定）
+  local agent="$1" id="$2" taskfile="$3" out rc=0
+  out="$(team_mem_guard 2>&1)" || rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  [ "$rc" -eq 0 ] && return 0
+  local override_line override_note
+  override_line="  修法：$(team_dispatch_mem_fix_cmd "$agent" "$id" "$taskfile" "$out")"
+  override_note="        （显式降低底线：拿机器稳定性冒险；确认余量真的够再用）"
+  printf '%s\n' "  等一个席位结束后再重派（$TEAM_CLI ps 看谁在跑；这行不是可粘路线，只是建议）" \
+                 "$override_line" "$override_note"
+  return 1
 }
 
 # ---------------------------------------------------------------- P140（dispatch-friction · R6）· 席位上一轮预提示
@@ -1123,7 +1172,7 @@ team_cmd_dispatch() {
   local sid="$TEAM_SESSION-$agent"
   [ "$fresh" = "1" ] && sid="$sid-$(date +%s)"
 
-  team_df_run_lib team_mem_guard
+  team_df_run_lib team_dispatch_judge_mem "$agent" "$id" "$taskfile"
   team_df_run_lib team_model_guard "$model"
   # M4.3 A：会话规模 vs 模型窗口（默认拒绝，--fresh / --allow-overflow 是出路）
   team_df_run_lib team_guard_resume_session "$agent" "$model" "$sid" "$wt" "$fresh" "$overflow" "$id" "$taskfile"
@@ -1149,11 +1198,18 @@ team_cmd_dispatch() {
   local dep_issues; dep_issues="$(team_required_dep_issues)"
   [ -n "$dep_issues" ] && team_warn "依赖缺失（不阻塞派单）：$(printf '%s' "$dep_issues" | tr '\n' '; ')"
   local agent_bin; agent_bin="$(team_agent_bin_path)"
-  local task_branch="${TEAM_CHECKED_BRANCH:-}"
+  # W3：提示词必须写守卫**实际接受**的那条分支（工作树已属于本任务时就是它），并与 state 的
+  # `branch=` 同源；解析名与来源照旧单独打印（R1 的可观测面不变）。
+  local task_branch="${TEAM_CHECKED_BRANCH:-$br_name}" task_branch_src="$br_src"
+  if [ -n "$task_branch" ] && [ "$task_branch" != "$br_name" ]; then
+    task_branch_src="worktree (this task's other slug; resolved name $br_name via $br_src)"
+  fi
   # P140：解析出的分支名与来源（--branch / 任务书 branch: 行 / 由标题推导）在开窗前可见；--print 同样有。
   team_info "  分支：$br_name（来源：$br_src）"
+  [ -n "$task_branch" ] && [ "$task_branch" != "$br_name" ] \
+    && team_info "  工作树实际分支：$task_branch（守卫接受的是它；提示词与 state 都按它写）"
   local prompt prompt_file agent_cmd inner
-  prompt="$(team_build_prompt "$agent" "$id" "$taskfile" "$wt" "$model" "$sid" "$br_name" "$br_src")"
+  prompt="$(team_build_prompt "$agent" "$id" "$taskfile" "$wt" "$model" "$sid" "$task_branch" "$task_branch_src")"
   # 提示词落盘：模板里的 {prompt_file} 用它，排查“到底派了什么”也看它（state/ 已 gitignore）
   prompt_file="$(team_agent_prompt_file "$agent" "$id")"
   mkdir -p "$TEAM_STATE_DIR"
@@ -1185,6 +1241,11 @@ team_cmd_dispatch() {
     return 0
   fi
 
+  # F5：取字节的时点必须在 **worker 能跑之前**（这时同会话文件还是上一轮结束时的大小）。旧实现把它
+  # 放在 respawn 之后 —— 新一轮已经写进去的字节被算成「上一轮的产出」，上一轮真算出东西的席位会被
+  # 说成 0 bytes（假陈述）。读不到就记空：下一轮的零产出腿要求非空记录，空 = 沉默，不猜。
+  local sid_bytes_at_launch=""
+  sid_bytes_at_launch="$(team_session_bytes "$sid" "$wt" 2>/dev/null || true)"
   team_tmux_ensure_session
   # 启动 + 校验（M4.3 B）：最多两次（第一次没证据 → 杀窗口重试一次）。
   # 只有拿到**本轮 nonce** 的启动证据才算「发出去了」；失败则如实报告并杀掉窗口（不留半启动现场）。
@@ -1289,9 +1350,10 @@ team_cmd_dispatch() {
   team_state_set "$agent" taskfile "$taskfile"
   [ -n "$task_branch" ] && team_state_set "$agent" branch "$task_branch"
   team_state_set "$agent" started "$(team_timestamp)"
-  # P140（R6）：记下这一轮的会话 id 与启动时会话文件的字节数 —— 下一轮据此判「一个字节没长」。
+  # P140（R6）/ P151（F5）：记下这一轮的会话 id 与**启动时**（worker 能跑之前）的会话文件字节数
+  # —— 下一轮据此判「一个字节没长」。只在派单真的成功之后才落盘。
   team_state_set "$agent" sid "$sid"
-  team_state_set "$agent" sid_bytes "$(team_session_bytes "$sid" "$wt")"
+  team_state_set "$agent" sid_bytes "$sid_bytes_at_launch"
   team_board_set "$id" wip 2>/dev/null || true
 
   # M9.3：`--force` 接管了另一个没结束的任务 —— 审计里留一条（输出里已经写明，这里落盘）

@@ -119,6 +119,23 @@ exactly as it was. The readiness view and the archive gate share one predicate (
 iff at least one task is mapped and every mapped task is finished): an `archive` task cannot be set `done` while a
 sibling of its change is unfinished, and the existing `TEAM_BOARD_DONE_FORCE=1` override still records itself.
 
+### 5b-1. One refusal, every blocker, a fix that runs
+
+Every pre-launch guard that can be decided without side effects is judged in **one pass**, and the driver prints
+**one** refusal: the blockers in guard order, each naming the artifact it is about (brief, worktree, seat, model or
+session) and its reason, each followed by the lines that clear it — `修法：<command>` (a command with real values:
+worktree path, branch name, task id) or `改行：<exact line>` (the brief header line to write) — and a final
+`共 N 个阻塞项` line. The refusal opens with the first blocker's own first line (there is no separate banner), and
+nothing is written before it passes: no window, no `state/<agent>.env`, no board change, not even a branch switch.
+A guard whose precondition is missing says so instead of being reported as passed. In a printed route the command
+stands **alone on its line** — an explanation, if any, is a separate line — because a trailing parenthetical is
+exactly how a printed fix turned into `✗ dispatch: 未知参数 --force（…）` for real users.
+
+`--force` keeps each guard's own meaning: an overridable blocker becomes a warning plus exactly one
+`state/watchdog.log` audit line (written only after a launch really happened, never for `--print`), while a blocker
+with no override still refuses. A printed route is a promise, not decoration: `tests/routes.sh` applies every
+`修法：`/`改行：` family in a fixture and reddens when a route stops clearing its blocker or is no longer honored.
+
 ## 6. Model strategy: cheap models do the work, a different family does the adversarial verification
 
 | Use | Selection principle |
@@ -236,6 +253,14 @@ a human.
   `close`d the worktree returns to `detached@protected branch`, so the next task starts clean.
 - `TEAM_BRANCH_MODE=agent`: one long-lived branch `agent/<name>` per agent (fits long refactors, or a team where each
   agent only ever does one thing).
+- **The branch a task runs on has one declared name**, resolved in this order: `dispatch --branch <name>`, else the
+  brief's `branch:` line, else the derivation from the title; `team task` writes the derived name into the brief as
+  its `branch:` line, so a later title change does not move the target under a running task. Dispatch prints the
+  resolved name **and its source** before the launch (`--print` too). Without `--branch`, a worktree sitting on
+  **this task's** branch is accepted even when its slug differs (both names are printed — the slug is a display
+  detail, not the identity of the work); with `--branch` the worktree must be on exactly that name, because the
+  explicit declaration wins. The launch prompt names the branch the guard actually accepted and
+  `state/<agent>.env: branch=` records the same one, so the worker, the ledger and the worktree tell one story.
 - When the worktree is dirty, switching branches is refused (otherwise the previous task's changes leak into the new
   task); that is a hard rule, not a reminder.
 
