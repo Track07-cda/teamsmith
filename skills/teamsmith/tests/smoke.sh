@@ -16911,10 +16911,10 @@ p139_repo() { # <名> → 最小夹具仓库 + init（日志落 $P139/init-<名>
          $TEAM init --session "$name" --agents dev --vcs local --gates true --docs docs/team \
     && printf 'TEAM_OPENSPEC_BIN="%s"\n' "$FAKE/openspec" >> .pi/team/config.sh ) >"$P139/init-$name.log" 2>&1
 }
-for _p139r in alpha beta <peer-project> third notify ticker opener; do p139_repo "$_p139r" || true; done
+for _p139r in alpha beta lab-repo third notify ticker opener; do p139_repo "$_p139r" || true; done
 assert_file "$P139/alpha/.pi/team/config.sh" "P139 夹具：alpha 仓库已初始化（六个夹具就位）"
-# D66 形状：<peer-project> 的声明名与主工作树 basename 都是 <peer-project>，但它的 TEAM_SESSION 是 <peer>
-printf 'TEAM_SESSION="<peer>"\n' >> "$P139/<peer-project>/.pi/team/config.sh"
+# D66 形状：lab-repo 的声明名与主工作树 basename 都是 lab-repo，但它的 TEAM_SESSION 是 lab-sess
+printf 'TEAM_SESSION="lab-sess"\n' >> "$P139/lab-repo/.pi/team/config.sh"
 p139() { # <repo> <team 命令…>：在夹具仓库里跑 CLI（身份按 cwd，夹具身份不继承给别的项目）
   local repo="$1"; shift
   ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM "$@" )
@@ -17061,38 +17061,38 @@ p139_fn_ax() { # <repo> <project> <session> <bash 片段>
       bash -c '. "$1/scripts/lib/common.sh"; for f in "$1"/scripts/lib/cmd-*.sh; do . "$f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$4" _ "$SKILL_DIR" )
 }
 p139_mine() { p139_fn_ax "$1" "$2" "$3" 'team_meeting_is_mine id-meet && echo yes || echo no'; }
-p139_env id-meet 'PARTICIPANTS=opener,<peer>' 'PEER_SESSIONS=opener=opener-sess;<peer>=<peer>' \
+p139_env id-meet 'PARTICIPANTS=opener,lab-sess' 'PEER_SESSIONS=opener=opener-sess;lab-sess=lab-sess' \
   'PM_WINDOWS=opener=pm' 'PM_WINDOW=pm' 'PARTICIPANT_REPOS=opener=opener'
 assert_eq "P139 4.4 声明名命中参与方 → 是" \
   "$(p139_mine "$P139/alpha" opener xx)" "yes"
 assert_eq "P139 4.4 受邀 session 命中 → 是（声明名不同也对）" \
-  "$(p139_mine "$P139/<peer-project>" declared-x <peer>)" "yes"
+  "$(p139_mine "$P139/lab-repo" declared-x lab-sess)" "yes"
 assert_eq "P139 4.4 三个名字都未登记 → 否（第三方）" \
   "$(p139_mine "$P139/third" third third)" "no"
 assert_eq "P139 4.4 声明名/session 都不在名单、仓库名也还没登记 → 否" \
-  "$(p139_mine "$P139/<peer-project>" declared-x other)" "no"
-p139 "$P139/<peer-project>" meeting peer id-meet <peer-project>:<peer> --repo <peer-project> >"$P139/peer.log" 2>&1 \
+  "$(p139_mine "$P139/lab-repo" declared-x other)" "no"
+p139 "$P139/lab-repo" meeting peer id-meet lab-repo:lab-sess --repo lab-repo >"$P139/peer.log" 2>&1 \
   && ok "P139 4.5 meeting peer --repo 由 D66 形状的项目自己登记成功" || bad "P139 4.5 meeting peer --repo 失败"
-assert_has "$P139_MEET/id-meet/state.env" "PARTICIPANT_REPOS=opener=opener;<peer>=<peer-project>" \
+assert_has "$P139_MEET/id-meet/state.env" "PARTICIPANT_REPOS=opener=opener;lab-sess=lab-repo" \
   "P139 4.5 仓库名与 session 并列记进 state.env"
 assert_eq "P139 4.4 记录仓库名（basename）命中 → 是（声明名与 session 都与名单无关）" \
-  "$(p139_mine "$P139/<peer-project>" declared-x other)" "yes"
+  "$(p139_mine "$P139/lab-repo" declared-x other)" "yes"
 p139_turn id-meet 1 opener info
 P139_TURNS_BEFORE="$(ls "$P139_MEET/id-meet/transcript" | wc -l | tr -d ' ')"
-p139 "$P139/<peer-project>" meeting read id-meet >/dev/null 2>&1 \
+p139 "$P139/lab-repo" meeting read id-meet >/dev/null 2>&1 \
   && ok "P139 4.5 D66 形状的 read 退出码 0" || bad "P139 4.5 D66 形状的 read 失败"
-p139 "$P139/<peer-project>" meeting say id-meet --intent report "hello from <peer-project>" >"$P139/d66-say.log" 2>&1 \
+p139 "$P139/lab-repo" meeting say id-meet --intent report "hello from lab-repo" >"$P139/d66-say.log" 2>&1 \
   && ok "P139 4.5 D66 形状的 say 退出码 0" || bad "P139 4.5 D66 形状的 say 失败"
 assert_eq "P139 4.5 say 真的写进 transcript（+1 条）" \
   "$(ls "$P139_MEET/id-meet/transcript" | wc -l | tr -d ' ')" "$((P139_TURNS_BEFORE + 1))"
 p139_turn id-meet 3 opener info
-p139 "$P139/<peer-project>" meeting inbox >"$P139/d66-inbox.log" 2>&1
+p139 "$P139/lab-repo" meeting inbox >"$P139/d66-inbox.log" 2>&1
 assert_has "$P139/d66-inbox.log" "id-meet" "P139 4.5 D66 形状的 inbox 认得这场会议（有一条新 peer turn）"
 P139_TURNS_BEFORE="$(ls "$P139_MEET/id-meet/transcript" | wc -l | tr -d ' ')"
 if p139 "$P139/third" meeting read id-meet >"$P139/third-read.log" 2>&1; then
   bad "P139 4.4 第三方 read 应被拒"
 else ok "P139 4.4 第三方 read 被拒（点名参与方）"; fi
-assert_has "$P139/third-read.log" "opener,<peer>" "P139 4.4 拒绝理由点名参与方"
+assert_has "$P139/third-read.log" "opener,lab-sess" "P139 4.4 拒绝理由点名参与方"
 if p139 "$P139/third" meeting say id-meet --intent info "sneak in" >"$P139/third-say.log" 2>&1; then
   bad "P139 4.4 第三方 say 应被拒"
 else ok "P139 4.4 第三方 say 被拒"; fi

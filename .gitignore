@@ -12,3 +12,7 @@ docs/team/reviews/*.log
 # teamsmith
 .pi/skills/
 .ci-artifacts/
+
+# Python 编译缓存：绝不进仓库（会内嵌绝对路径，且是审计泄漏源）
+__pycache__/
+*.pyc
