@@ -70,6 +70,23 @@ team_outbox_list() {
     printf '  #%-2s [%s] %s\n' "$n" "$state" "$(basename "$e")"
     printf '       kind=%s target=%s from=%s age=%ss dedup=%s%s%s%s\n' \
       "$kind" "$target" "$from" "$age" "$dedup" "$([ "$state" = "held" ] && printf ' held-reason=%s' "$reason")" "$tmark" "$resid"
+    # delivery-truth D2：阻碍条目的原因 / 观察次数 / durable 全文路径 / 恢复命令逐条可见。
+    # 只读 sidecar（缺失/读不出写着 unavailable，不静默当零阻碍），绝不在这里读框或排水。
+    if [ "$state" = "held" ]; then
+      case "$reason" in
+        geometry-untrusted|queue-stalled)
+          local obs dpath davail dtrust
+          obs="$(team_outbox_diag_num "$e" consecutive_empty 2>/dev/null || true)"
+          dpath="$(team_outbox_diag_field "$e" durable_text_path 2>/dev/null || true)"
+          dtrust="$(team_outbox_diag_field "$e" trust 2>/dev/null || true)"
+          if team_outbox_diag_available "$e"; then davail=available; else davail=unavailable; fi
+          printf '       \033[33m⚠\033[0m 投递阻碍：reason=%s observations=%s trust=%s durable=%s（diagnostic=%s）\n' \
+            "$reason" "${obs:--}" "${dtrust:--}" "${dpath:--}" "$davail"
+          printf '         恢复：%s（几何恢复可信后重试；payload 与条目头不改，已碰过框的条目绝不重贴）\n' \
+            "$(team_outbox_recovery_hint "$reason")"
+          ;;
+      esac
+    fi
   done < <(team_outbox_entries)
   if [ "$gone_n" -gt 0 ]; then
     printf '  %s 条 held 的目标窗口已不存在（旧会话名/窗口删了）→ 清理：%s outbox drop gone（只丢这些）\n' \
@@ -103,6 +120,9 @@ team_outbox_cmd_flush() {
   [ "$now" = "1" ] && args+=(--now)
   [ "$quiet" = "1" ] && args+=(--quiet)
   [ "$max" -gt 0 ] && args+=(--max "$max")
+  # 人的显式排水 = 恢复动作：允许重试 geometry-untrusted / queue-stalled 的阻碍 hold
+  # （tick / 发送方的排水不重试，阻碍停靠点因此可见；delivery-truth D2）。
+  args+=(--retry-impeded)
   team_outbox_drain ${args[@]+"${args[@]}"}
   if [ "${TEAM_OUTBOX_LAST_DELIVERED:-0}" -eq 0 ] && [ "$quiet" != "1" ]; then
     local n; n="$(team_outbox_count)"
@@ -110,6 +130,23 @@ team_outbox_cmd_flush() {
       0) team_dim "outbox：队列已空，没有可投递的条目" ;;
       *) team_dim "outbox：$n 条仍在队列（目标输入框有草稿 / 目标没在跑；outbox list 看原因）" ;;
     esac
+  fi
+  # 阻碍（geometry-untrusted / queue-stalled）：报 held + 原因 + 恢复命令并非零退出
+  # （"一个永不兑现的承诺"与 0 退出分开；payload 与条目头不变）。
+  local imp="${TEAM_OUTBOX_LAST_IMPEDED:-0}" imp_reason="${TEAM_OUTBOX_LAST_IMPEDED_REASON:-}"
+  case "${imp:-0}" in ''|*[!0-9]*) imp=0 ;; esac
+  if [ "$imp" -gt 0 ]; then
+    if [ "$quiet" != "1" ]; then
+      team_err "outbox：$imp 条被阻碍（${imp_reason:--}）→ held/：未投递、原因为按当下几何测得的结论；恢复：$(team_outbox_recovery_hint "$imp_reason")"
+      # 逐条点名：entry / target / reason / durable 全文路径 / 诊断是否可读（规格：阻碍命令必须点名
+      # 存在的 durable payload 与恢复命令；这里就是那个出口）。
+      local _e _t _r _lo _dp _dg
+      while IFS=$'\t' read -r _e _t _r _lo _dp _dg; do
+        [ -n "$_e" ] || continue
+        team_dim "  $(basename "$_e")｜target=$_t｜reason=$_r｜durable 全文=${_dp:--}｜diagnostic=$_dg"
+      done < <(team_outbox_impediments)
+    fi
+    return 1
   fi
   return 0
 }
@@ -126,7 +163,7 @@ team_outbox_cmd_drop() {
       target="$(team_outbox_header "$e" target)"
       team_outbox_target_gone "$target" || continue
       kind="$(team_outbox_header "$e" kind)"
-      rm -f "$e"; team_outbox_release "$e"; c=$((c + 1))
+      rm -f "$e"; team_outbox_release "$e"; team_outbox_diag_rm "$e"; c=$((c + 1))
       printf '  已丢弃 %s（kind=%s target=%s：目标窗口已不存在）\n' "$(basename "$e")" "$kind" "$target"
     done < <(team_outbox_entries)
     if [ "$c" -eq 0 ]; then team_dim "outbox：没有目标已消失的条目"; else team_ok "outbox：丢弃 $c 条（人显式 drop gone）"; fi
@@ -136,7 +173,7 @@ team_outbox_cmd_drop() {
     local c=0
     while IFS= read -r e; do
       [ -n "$e" ] || continue
-      rm -f "$e"; team_outbox_release "$e"; c=$((c + 1))
+      rm -f "$e"; team_outbox_release "$e"; team_outbox_diag_rm "$e"; c=$((c + 1))
     done < <(team_outbox_entries)
     team_ok "outbox：丢弃 $c 条（人显式 drop）"
     return 0
@@ -149,7 +186,7 @@ team_outbox_cmd_drop() {
     n=$((n + 1))
     if [ "$n" -eq "$what" ]; then
       target="$(team_outbox_header "$e" target)"
-      rm -f "$e"; team_outbox_release "$e"
+      rm -f "$e"; team_outbox_release "$e"; team_outbox_diag_rm "$e"
       team_ok "outbox：#$what 已丢弃（$(basename "$e") → $target）"
       return 0
     fi

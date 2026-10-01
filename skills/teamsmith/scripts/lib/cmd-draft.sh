@@ -90,6 +90,12 @@ team_draft_send() { # [<file>] [--target T] [--now]
   case "$TEAM_SEND_OUTCOME" in
     delivered) team_ok "draft：已确认送达 $target（$file）" ;;
     queued)    team_ok "queued for $target（输入框有草稿或目标没在跑；条目已入 state/outbox/，清空后自动投递）" ;;
+    held)
+      # delivery-truth D2：geometry-untrusted / queue-stalled —— 不打字、不承诺「清空后自动投递」，
+      # 报 held + 原因 + durable 条目与恢复命令并非零退出（草稿文件的 durable 副本已在收件箱）。
+      team_err "held for $target（reason=${TEAM_SEND_REASON:--}：几何/进展无法可信确认，没有写任何键；草稿文件仍是 $file）"
+      team_dim "  条目：$(basename "${TEAM_SEND_ENTRY:--}")｜原因：$TEAM_CLI outbox list ｜恢复：$(team_outbox_recovery_hint "${TEAM_SEND_REASON:--}")"
+      return 1 ;;
     forced)    team_ok "draft：--now 已跳过守卫直投 $target（记入 outbox/forced.log）" ;;
     unknown-sent) team_ok "draft：输入框形状未知，按旧行为投递 $target" ;;
     duplicate) team_ok "duplicate：同一条草稿刚刚已经投过（没重复入队）" ;;

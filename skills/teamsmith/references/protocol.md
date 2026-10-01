@@ -69,7 +69,9 @@ Guards and limitations:
 - The same briefing is sent once per `TEAM_NOTIFY_DEDUP_SEC` seconds: Pi may settle several times inside one stretch
   of work.
 - For a proactive notification (blocked, someone else's bug) use `team notify <agent> "<one line>"`, which arrives
-  earlier than the automatic one.
+  earlier than the automatic one. The **recipient** names the durable inbox file (`docs/team/inbox/<agent>.md`);
+  the PM is still the **knock destination** — the queue entry's declaration and the wake pointer both name that
+  same recipient file, and a durable append that fails exits non-zero without a wake.
 - The **other** injected extension is `extension/team-bg.ts` (M27) — not notification, but the team's own
   background lane: `team_bg_run` starts a detached job (bounded `state/bg/<id>.log`), `team_bg_wait <id>` harvests
   it, a harvested job stays silent, several finishing jobs arrive as one message, and every turn end appends

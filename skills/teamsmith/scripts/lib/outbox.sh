@@ -150,8 +150,9 @@ _team_box_top_border_max_row() { # <cy> → 上边框允许的最大行号（= �
   printf '%s\n' "$(( cy - 1 ))"
 }
 
-# 几何定位的唯一实现：stdin=capture 全文，$1=光标行（1-based）→ 输出 "top bottom"（找不到 → 空）。
-_team_box_geometry() { # <cy>
+# 旧域几何（无支持布局证据时）：stdin=capture 全文，$1=光标行（1-based）→ "top bottom"（找不到 → 空）。
+# P147 起这是**后备域**：有 Pi 支持布局证据时先走 _team_box_layout_decision（见下）。
+_team_box_geometry_legacy() { # <cy>
   local cy="${1:-}" raw ban pass useban res ordered pick maxrow
   raw="$(cat)"
   maxrow="$(_team_box_top_border_max_row "$cy")"
@@ -214,14 +215,96 @@ _team_box_geometry() { # <cy>
   return 0
 }
 
-# 帧 → 框内容行（纯函数：stdin=capture 全文，$1=光标行 1-based）。
+# ---------------------------------------------------------------- 支持布局准入（delivery-truth D1，P147）
+# Pi 0.99.2 真帧（P138/P147 两次实拍）把编辑器画成：
+#   [b] 整行 ─ 下边框 → [b+1] cwd 行（可选 ` (分支)` 装饰）→ [b+2] `1.2%/128k (auto) …` 状态行
+# 而对话区里也常有整行 ─（P138 真帧 row 21）——旧的「取最高」把对话区那条当上边框，
+# 框 [21 30] 覆盖了对话文字 → 假 BUSY → 一条永不兑现的「清空后自动投递」（P147 的红）。
+#
+# 准入规则（design D1；唯一决策点，红侧由测试进程把本函数影子成 `none` 实现，生产无开关）：
+#   1. 末两行是 Pi 页脚：cwd 行（去掉末尾 ` (…)` 装饰后与 expected cwd 逐字相等；cwd 本身
+#      以 `(…)` 结尾时原样相等也算）+ 状态行闭集语法（`<pct>%/<ctx><k|M> (mode)`）。
+#   2. 下边框 = 紧贴页脚上方那条整行 ─；光标严格在它上面。
+#   3. 上边框候选 = 同年宽（= pane 宽）的整行 ─、严格在光标上方、内容行数 <= max(5, R*3/10)。
+#   4. 候选矩形内部：每行字节数 <= 规则行字节数-3（多字节字符只让字节数更大 → 这是
+#      terminal-cell 宽度的**保守上界**：能装进 pane_width-1 列的行不可能超过它），且内部
+#      不能再有整宽 ─（对话区的另一条规则行把更大的矩形判死 → 编辑器顶线才是唯一存活者）。
+#   5. 恰好一个矩形存活 → `closed <top> <bottom>`；0 或 >1 → `untrusted`（识别出 Pi 但几何
+#      冲突：不打字、不给人扣「有草稿」的帽子）；不认识页脚 → `none`（维持既有保守域）。
+_team_box_layout_decision() { # <cy> [<expect_cwd>]；stdin = capture 全文 → closed t b | untrusted | none
+  local cy="${1:-}" cwd="${2:-}"
+  [ -n "$cy" ] || { printf 'none\n'; return 0; }
+  [ -n "$cwd" ] || { printf 'none\n'; return 0; }
+  LC_ALL=C awk -v cy="$cy" -v cwd="$cwd" '
+    { L[NR]=$0 }
+    END {
+      R=NR
+      if (R < 8) { print "none"; exit }
+      f1=L[R-1]; f2=L[R]
+      p=f1; sub(/[ \t]+$/, "", p)
+      q=p; sub(/ \([^()]*\)$/, "", q)
+      # 第一级：末行必须是 Pi 的 context 状态行、上一行必须是绝对路径——两条同时成立 =「识别出
+      # Pi 页脚」。不成立 → none（旧域，既有的保守几何不动）。
+      if (f2 !~ /^[ \t]*[0-9]+(\.[0-9]+)?%\/[0-9]+[kKmM][ \t]+\([A-Za-z0-9_-]+\)/) { print "none"; exit }
+      if (p !~ /^\//) { print "none"; exit }
+      # 第二级：页脚目录必须与 target 的运行时 cwd 一致（用户像不像路径不算证据）——
+      # 是 Pi 页脚但目录对不上 = 冲突证据 → untrusted，不打字、不给人扣「有草稿」的帽子。
+      if (!(p==cwd || q==cwd)) { print "untrusted"; exit }
+      b=R-2
+      if (b <= cy) { print "untrusted"; exit }
+      if (L[b] !~ /^(\xe2\x94\x80)+$/) { print "untrusted"; exit }
+      W=length(L[b])
+      if (W < 30) { print "untrusted"; exit }
+      H=int(R*3/10); if (H < 5) H=5
+      n=0; best=0
+      for (i=1;i<cy;i++) {
+        if (L[i] !~ /^(\xe2\x94\x80)+$/ || length(L[i])!=W) continue
+        h=b-i-1
+        if (h<1 || h>H) continue
+        bad=0
+        for (j=i+1;j<b;j++) {
+          s=L[j]
+          if (length(s) > W-3) { bad=1; break }
+          if (s ~ /^(\xe2\x94\x80)+$/ && length(s)==W) { bad=1; break }
+        }
+        if (bad) continue
+        n++; best=i
+      }
+      if (n==1) print "closed " best " " b; else print "untrusted"
+    }'
+}
+
+# 几何定位的唯一实现：stdin=capture 全文，$1=光标行（1-based），$2=期望 cwd → 输出 "top bottom"；
+# 识别出 Pi 但几何冲突 → `UNTRUSTED`（调用方必须走「不打字」的路径，不能当 UNKNOWN 打字）。
+_team_box_geometry() { # <cy> [<expect_cwd>]
+  local cy="${1:-}" cwd="${2:-}" raw dec
+  raw="$(cat)"
+  dec="$(printf '%s\n' "$raw" | _team_box_layout_decision "$cy" "$cwd")"
+  case "$dec" in
+    closed\ *) printf '%s\n' "${dec#closed }"; return 0 ;;
+    untrusted) printf 'UNTRUSTED\n'; return 0 ;;
+  esac
+  printf '%s\n' "$raw" | _team_box_geometry_legacy "$cy"
+}
+
+# target 的运行时 cwd（页脚必须与它一致；读不出来 → 空 = 不做支持布局判定）。
+team_pane_cwd() { # <target>
+  tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null || true
+}
+
+# 帧 → 框内容行（纯函数：stdin=capture 全文，$1=光标行 1-based，$2=期望 cwd）。
 # 抽出来是为了让夹具能拿**真实帧**跑同一条判据（M45：更新横幅），不必开 tmux ——
 # 端到端（真 pane）与纯帧用同一条实现，不会漂移。
-_team_box_rows_of_frame() { # <cy>
-  local cy="${1:-}" raw geo t b
+_team_box_rows_of_frame() { # <cy> [<expect_cwd>]
+  local cy="${1:-}" cwd="${2:-}" raw geo t b dec
   raw="$(cat)"
-  geo="$(printf '%s\n' "$raw" | _team_box_geometry "$cy")"
-  [ -n "$geo" ] || { printf 'NONE\n'; return 0; }
+  dec="$(printf '%s\n' "$raw" | _team_box_layout_decision "$cy" "$cwd")"
+  case "$dec" in
+    untrusted) printf 'NONE\n'; return 0 ;;
+    closed\ *) geo="${dec#closed }" ;;
+    *) geo="$(printf '%s\n' "$raw" | _team_box_geometry_legacy "$cy")"
+       case "$geo" in ''|UNTRUSTED) printf 'NONE\n'; return 0 ;; esac ;;
+  esac
   t="${geo%% *}"; b="${geo##* }"
   printf '%s\n' "$raw" | LC_ALL=C awk -v t="$t" -v b="$b" '
     NR>t && NR<b { s=$0; sub(/[ \t]+$/, "", s); printf "%d|%s|%d\n", b-NR, s, NR }'
@@ -241,13 +324,14 @@ team_input_box_rows() { # <target>
 # M45：横幅块的行不算对话内容（它们是 pi 画的通知 chrome）——不排除的话，引用了横幅原文的
 # payload 特征串会在基线里就命中一次（把「已经提交了」的证据做成真假象）。
 team_transcript_text() { # <target>
-  local target="$1" cy cap geo ban
+  local target="$1" cy cap geo ban cwd
   cy="$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null || true)"
   [ -n "$cy" ] || return 1
   cy=$(( cy + 1 ))
   cap="$(tmux capture-pane -p -t "$target" 2>/dev/null)" || return 1
-  geo="$(printf '%s\n' "$cap" | _team_box_geometry "$cy")"
-  [ -n "$geo" ] || return 1
+  cwd="$(team_pane_cwd "$target")"
+  geo="$(printf '%s\n' "$cap" | _team_box_geometry "$cy" "$cwd")"
+  case "$geo" in ''|UNTRUSTED) return 1 ;; esac
   ban="$(_team_box_banner_rows "$cy" <<< "$cap")"
   printf '%s\n' "$cap" | LC_ALL=C awk -v t="${geo%% *}" -v ban="$ban" '
     BEGIN { if (ban != "") { n=split(ban, X, " "); for (z=1;z<=n;z++) BAN[X[z]+0]=1 } }
@@ -332,10 +416,13 @@ _team_box_row_is_chrome() { # <cy> <row> <text> → 0 = 框自带 chrome（排�
   LC_ALL=C grep -qE '^ [^ ]+  [^ ].*  (off|minimal|low|medium|high|xhigh|max)$' <<< "$text"
 }
 
-_team_box_text_of_frame() { # <cy>；stdin = capture 全文 → 框内容行拼起来（去空白）
-  local cy="${1:-}" raw line off row text out="" rows
+_team_box_text_of_frame() { # <cy> [<expect_cwd>]；stdin = capture 全文 → 框内容行拼起来（去空白）
+  # rc 0 = 读到；rc 1 = 找不到框；rc 2 = geometry-untrusted（识别出 Pi 但几何冲突）。
+  local cy="${1:-}" cwd="${2:-}" raw line off row text out="" rows dec
   raw="$(cat)"
-  rows="$(printf '%s\n' "$raw" | _team_box_rows_of_frame "$cy")"
+  dec="$(printf '%s\n' "$raw" | _team_box_layout_decision "$cy" "$cwd")"
+  [ "$dec" = "untrusted" ] && return 2
+  rows="$(printf '%s\n' "$raw" | _team_box_rows_of_frame "$cy" "$cwd")"
   case "$rows" in ""|NONE) return 1 ;; esac
   # _team_box_rows_of_frame 已按屏幕行号自上而下输出，不再排序（老实现那句 sort 键在
   # 行文本含 `|` 时会错位）。
@@ -351,24 +438,40 @@ _team_box_text_of_frame() { # <cy>；stdin = capture 全文 → 框内容行拼�
 }
 
 team_input_box_text() { # <target>
-  local target="${1:-}" cy cap
+  local target="${1:-}" cy cap cwd
   team_tmux_target_required "input-box" "$target" || return 1
   cy="$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null || true)"
   [ -n "$cy" ] || return 1
   cy=$(( cy + 1 ))
   cap="$(tmux capture-pane -p -t "$target" 2>/dev/null)" || return 1
-  printf '%s\n' "$cap" | _team_box_text_of_frame "$cy"
+  cwd="$(team_pane_cwd "$target")"
+  printf '%s\n' "$cap" | _team_box_text_of_frame "$cy" "$cwd"
 }
 
 # 只有空白（或什么都没画出来）时的判定：
-#   EMPTY   = 框内（提示行除外）没有内容 → 可以打字
-#   BUSY    = 有内容（光标上下都算）→ 一个键都不发
-#   UNKNOWN = 找不到输入框（非 Pi TUI / 主题破坏了几何）→ 按今天的行为投递 + 一行警告
-team_input_box_state() { # <target> → EMPTY|BUSY|UNKNOWN
-  local rows text
-  rows="$(team_input_box_rows "$1" 2>/dev/null || true)"
-  if [ -z "$rows" ] || [ "$rows" = "NONE" ]; then printf 'UNKNOWN\n'; return 0; fi
-  text="$(team_input_box_text "$1" 2>/dev/null || true)"
+#   EMPTY     = 框内（提示行除外）没有内容 → 可以打字
+#   BUSY      = 有内容（光标上下都算）→ 一个键都不发
+#   UNTRUSTED = 识别出 Pi 但支持布局几何冲突（footer 在、矩形不唯一）→ 不打字、不给「有草稿」
+#              的结论，走 held/geometry-untrusted（delivery-truth D1）
+#   UNKNOWN   = 找不到输入框（非 Pi TUI / 主题破坏了几何）→ 按今天的行为投递 + 一行警告
+team_input_box_state() { # <target> → EMPTY|BUSY|UNTRUSTED|UNKNOWN
+  local target="${1:-}" rows text rc=0
+  rows="$(team_input_box_rows "$target" 2>/dev/null || true)"
+  if [ -z "$rows" ] || [ "$rows" = "NONE" ]; then
+    # 读不出框：先看这是不是「识别出 Pi 但几何冲突」——那要 hold，不能按 UNKNOWN 打字。
+    local cy cap cwd dec
+    cy="$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null || true)"
+    if [ -n "$cy" ]; then
+      cy=$(( cy + 1 ))
+      cap="$(tmux capture-pane -p -t "$target" 2>/dev/null || true)"
+      cwd="$(team_pane_cwd "$target")"
+      dec="$(printf '%s\n' "$cap" | _team_box_layout_decision "$cy" "$cwd")"
+      [ "$dec" = "untrusted" ] && { printf 'UNTRUSTED\n'; return 0; }
+    fi
+    printf 'UNKNOWN\n'; return 0
+  fi
+  text="$(team_input_box_text "$target" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 2 ] && { printf 'UNTRUSTED\n'; return 0; }
   if [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ]; then printf 'BUSY\n'; else printf 'EMPTY\n'; fi
 }
 
@@ -391,7 +494,7 @@ team_box_mid_render() { # <文本>
 #   NOPANE  = 窗口不在 → 不投、留在队列
 #   SHELL   = 停在空提示符 → 绝不能打字（会被 shell 当命令执行；历史上真实事故）
 #   BUSY / EMPTY / UNKNOWN = 交给守卫
-team_delivery_verdict() { # <target> → NOPANE|SHELL|BUSY|EMPTY|UNKNOWN
+team_delivery_verdict() { # <target> → NOPANE|SHELL|BUSY|EMPTY|UNTRUSTED|UNKNOWN
   local target="${1:-}" sess
   [ -n "$target" ] || { printf 'NOPANE\n'; return 0; }
   sess="${target%%:*}"
@@ -746,6 +849,14 @@ team_outbox_hold_reason() { # <entry> → HOLDING.log 里最后一次原因（�
   r="$(grep -s "name=$base " "$(team_outbox_holding_log)" | tail -1 | sed -n 's/.*reason=\([^ ]*\).*/\1/p' || true)"
   printf '%s\n' "${r:--}"
 }
+# 只读版的 hold 原因（观察者用：HOLDING.log 不存在就是无记录，绝不建目录）
+_team_outbox_hold_reason_ro() { # <entry> → 原因（没有则空）
+  local base hlog
+  base="$(basename "$1")"
+  hlog="$(team_outbox_dir_ro)/HOLDING.log"
+  [ -r "$hlog" ] || return 0
+  grep -s "name=$base " "$hlog" 2>/dev/null | tail -1 | sed -n 's/.*reason=\([^ ]*\).*/\1/p' || true
+}
 team_outbox_forced_log() { mkdir -p "$TEAM_STATE_DIR/outbox"; printf '%s\n' "$TEAM_STATE_DIR/outbox/forced.log"; }
 
 # 队列锁（mkdir 原子；拿不到就回收陈旧锁再试）。所有写队列的动作都拿它。
@@ -902,6 +1013,13 @@ team_outbox_status_line() { # [前缀]
   oldest="$(team_outbox_entries | head -1)"
   age="$(team_entry_age_sec "$oldest")"
   detail="held $held"
+  # delivery-truth D2：阻碍（geometry-untrusted / queue-stalled）必须在 status/digest 上以
+  # 非零计数 + 原因可见（只读 HOLDING.log/条目，绝不读框、绝不排水）。
+  local imp imp_sum
+  imp_sum="$(team_outbox_impeded_summary)"
+  imp="${imp_sum%% *}"
+  case "${imp:-0}" in ''|*[!0-9]*) imp=0 ;; esac
+  [ "$imp" -gt 0 ] && detail="$detail · 阻碍 $imp（${imp_sum#* }）→ $TEAM_CLI outbox list（恢复：$(team_outbox_recovery_hint geometry-untrusted)）"
   if [ "$held" -gt 0 ]; then
     read -r retracted left other <<< "$(team_outbox_held_residue_counts)"
     if [ "$((retracted + left))" -gt 0 ]; then
@@ -1208,6 +1326,156 @@ team_outbox_record_delivered() { # <entry> <dedup> <outcome>
   printf '%s\t%s\t%s\t%s\n' "$(team_epoch_sec)" "$k" "$(basename "$1")" "$3" >> "$(team_outbox_delivered_log)"
 }
 
+# ---------------------------------------------------------------- 投递阻碍诊断（delivery-truth D2）
+# `state/outbox/diagnostics/<entry>.json` 记录**可信空框读**的连续计数与阻碍原因（design D2）：
+#   schema / entry / target / observed_verdict / trust / consecutive_empty / first_observed /
+#   last_observed / reason / durable_inbox / durable_text_path
+# 写入者只有持有条目 claim 的那次评估（tmp+rename 原子）；观察者（list/status/digest/panel）
+# 只读、绝不在这里加一次框读或发一个键。缺失/读不出的 sidecar = 未知（renders unavailable），
+# **不是**「零阻碍」的证据；阻碍计数以 HOLDING.log 的 hold 原因为准，缺失 sidecar 也照数。
+# 只读的 outbox 目录路径（观察者用：**绝不 mkdir** —— smoke §26-j 钉住「面板不许把 outbox/ 建出来」；
+# team_outbox_dir() 会 mkdir，写命令用它，读命令只用这一对 _ro）。
+team_outbox_dir_ro() { printf '%s\n' "$TEAM_STATE_DIR/outbox"; }
+team_outbox_diag_dir_ro() { printf '%s\n' "$TEAM_STATE_DIR/outbox/diagnostics"; }
+
+team_outbox_diag_dir() { team_outbox_diag_dir_ro; }
+team_outbox_diag_file() { printf '%s\n' "$(team_outbox_diag_dir_ro)/$(basename "$1" .msg).json"; }
+
+# 只读取值（字段不存在/文件坏 → 空；不报错、不建目录）
+team_outbox_diag_field() { # <entry> <字段> → 字符串值
+  local f; f="$(team_outbox_diag_file "$1")"
+  [ -r "$f" ] || return 1
+  sed -n 's/.*"'"$2"'": *"\([^"]*\)".*/\1/p' "$f" 2>/dev/null | head -1
+}
+team_outbox_diag_num() { # <entry> <字段> → 整数值
+  local f; f="$(team_outbox_diag_file "$1")"
+  [ -r "$f" ] || return 1
+  sed -n 's/.*"'"$2"'": *\([0-9][0-9]*\).*/\1/p' "$f" 2>/dev/null | head -1
+}
+team_outbox_diag_available() { [ -r "$(team_outbox_diag_file "$1")" ]; }
+team_outbox_diag_rm() { [ -n "${1:-}" ] && rm -f "$(team_outbox_diag_file "$1")" 2>/dev/null || true; }
+
+# sidecar 的 durable 全文路径：条目头部的 inbox（写了/将写进 docs/team/inbox/<name>.md）；
+# 没有 durable 收件人（knock/nudge）时就是条目文件自己（held 后也指那里）。
+team_outbox_durable_path() { # <entry>
+  local e="$1" ib
+  ib="$(team_outbox_header "$e" inbox)"
+  if [ -n "$ib" ] && [ "$ib" != "-" ]; then printf '%s\n' "$TEAM_DOCS_DIR/inbox/$ib.md"
+  else printf '%s\n' "$e"; fi
+}
+team_outbox_durable_inbox() { # <entry> → 收件人名（无 → -）
+  local ib; ib="$(team_outbox_header "$1" inbox)"
+  if [ -n "$ib" ] && [ "$ib" != "-" ]; then printf '%s\n' "$ib"; else printf '%s\n' '-'; fi
+}
+
+_team_outbox_json_escape() { # <文本> → JSON 字符串转义（只有反斜杠/引号需要）
+  printf '%s' "${1:-}" | LC_ALL=C sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+# 写 sidecar（原子；只应由持有 claim 的评估调用）。first_observed 从旧文件继承（若有）。
+team_outbox_diag_write() { # <entry> <observed_verdict> <trust> <consecutive_empty> <reason>
+  local e="$1" verdict="$2" trust="$3" count="$4" reason="$5"
+  local d f t first last target inbox durable
+  [ -f "$e" ] || return 0
+  d="$(team_outbox_diag_dir)"; mkdir -p "$d" 2>/dev/null || return 0
+  f="$(team_outbox_diag_file "$e")"
+  target="$(team_outbox_header "$e" target)"
+  inbox="$(team_outbox_durable_inbox "$e")"
+  durable="$(team_outbox_durable_path "$e")"
+  first="$(team_outbox_diag_field "$e" first_observed 2>/dev/null || true)"
+  case "$first" in ''|*[!0-9T:-]*) first="$(team_timestamp)" ;; esac
+  last="$(team_timestamp)"
+  t="$f.tmp.$$"
+  {
+    printf '{\n'
+    printf '  "schema": 1,\n'
+    printf '  "entry": "%s",\n' "$(_team_outbox_json_escape "$(basename "$e")")"
+    printf '  "target": "%s",\n' "$(_team_outbox_json_escape "$target")"
+    printf '  "observed_verdict": "%s",\n' "$(_team_outbox_json_escape "$verdict")"
+    printf '  "trust": "%s",\n' "$(_team_outbox_json_escape "$trust")"
+    printf '  "consecutive_empty": %s,\n' "$(team_panel_num "$count" 2>/dev/null || printf '%s' "${count:-0}")"
+    printf '  "first_observed": "%s",\n' "$(_team_outbox_json_escape "$first")"
+    printf '  "last_observed": "%s",\n' "$(_team_outbox_json_escape "$last")"
+    printf '  "reason": "%s",\n' "$(_team_outbox_json_escape "$reason")"
+    printf '  "durable_inbox": "%s",\n' "$(_team_outbox_json_escape "$inbox")"
+    printf '  "durable_text_path": "%s"\n' "$(_team_outbox_json_escape "$durable")"
+    printf '}\n'
+  } > "$t" 2>/dev/null && mv -f "$t" "$f" 2>/dev/null || rm -f "$t" 2>/dev/null
+  return 0
+}
+
+# 一次**评估**的观察（唯一计数规则；入队/重试/tick/flush 都经 process_entry 走这里）：
+#   EMPTY 且条目仍留在队列（无进展）→ 连续空读 +1；BUSY/working 读 → 清零（有草稿/在工作，
+#   不是「空框投不出去」这个缺陷）；其它 verdict 不适用。 stdout = 新计数（不适用 → 空）。
+# 并发安全：只有在自己的条目 claim 下调用；sidecar 是 tmp+rename。
+team_outbox_observe() { # <entry> <EMPTY|BUSY> → 新计数
+  local e="$1" v="$2" prev
+  case "$v" in
+    EMPTY)
+      prev="$(team_outbox_diag_num "$e" consecutive_empty 2>/dev/null || true)"
+      case "${prev:-}" in ''|*[!0-9]*) prev=0 ;; esac
+      prev=$((prev + 1))
+      team_outbox_diag_write "$e" EMPTY trusted "$prev" ""
+      printf '%s\n' "$prev" ;;
+    BUSY)
+      team_outbox_diag_available "$e" || return 0
+      team_outbox_diag_write "$e" BUSY trusted 0 ""
+      printf '0\n' ;;
+  esac
+}
+
+# 阻碍（impediment）的唯一定义：held 且 hold 原因属于闭集（geometry-untrusted / queue-stalled）。
+# 只读条目 + HOLDING.log + sidecar；**绝不**读 pane、绝不排水（观察者契约）。
+# 每行：<entry>\t<target>\t<reason>\t<last_observed|->\t<durable_text_path|->\t<diag:available|unavailable>
+team_outbox_impediments() { _team_outbox_impediment_scan; }
+
+# 唯一一份阻碍扫描（只读、不 mkdir、不看 pane、不排水）：
+#   <entry>\t<target>\t<reason>\t<last_observed|->\t<durable_text_path|->\t<diagnostic:available|unavailable>
+# list / status / digest / __panel-data 都从这里派生，避免四处各写一份「什么算阻碍」。
+_team_outbox_impediment_scan() {
+  local dir e base r t lo dp dg
+  dir="$(team_outbox_dir_ro)"                   # 读路径：绝不 mkdir（观察者契约）
+  [ -d "$dir/held" ] || return 0
+  while IFS= read -r e; do
+    [ -n "$e" ] && [ -f "$e" ] || continue
+    base="$(basename "$e")"
+    r="$(_team_outbox_hold_reason_ro "$e")"
+    case "$r" in geometry-untrusted|queue-stalled) ;; *) continue ;; esac
+    t="$(team_outbox_header "$e" target 2>/dev/null || true)"
+    lo="$(team_outbox_diag_field "$e" last_observed 2>/dev/null || true)"
+    dp="$(team_outbox_diag_field "$e" durable_text_path 2>/dev/null || true)"
+    if team_outbox_diag_available "$e"; then dg=available; else dg=unavailable; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$e" "${t:--}" "$r" "${lo:--}" "${dp:--}" "$dg"
+  done < <(find "$dir/held" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | LC_ALL=C sort)
+  return 0
+}
+team_outbox_impeded_count() { team_outbox_impediments | grep -c . 2>/dev/null || true; }
+
+# status/digest 共用的一份汇总：“<count> geometry-untrusted=<n> queue-stalled=<n>”
+team_outbox_impeded_summary() {
+  local e t r lo dp dg n=0 gu=0 qs=0
+  while IFS=$'\t' read -r e t r lo dp dg; do
+    [ -n "$e" ] || continue
+    case "$r" in
+      geometry-untrusted) gu=$((gu + 1)); n=$((n + 1)) ;;
+      queue-stalled)      qs=$((qs + 1)); n=$((n + 1)) ;;
+    esac
+  done < <(_team_outbox_impediment_scan)
+  printf '%s' "$n"
+  [ "$gu" -gt 0 ] && printf ' geometry-untrusted=%s' "$gu"
+  [ "$qs" -gt 0 ] && printf ' queue-stalled=%s' "$qs"
+  printf '\n'
+}
+
+# 阻碍的恢复命令（同一份措辞给 say/notify/flush/list 用）。
+team_outbox_recovery_hint() { # <reason>
+  case "${1:-}" in
+    geometry-untrusted) printf '%s outbox flush' "${TEAM_CLI:-team}" ;;
+    queue-stalled)      printf '%s outbox flush' "${TEAM_CLI:-team}" ;;
+    *)                  printf '%s outbox list' "${TEAM_CLI:-team}" ;;
+  esac
+}
+
 # 掉队：条目移进 held/（保持同名 → FIFO 不变），HOLDING.log 记一行（含 hold 时刻与尝试次数）
 team_outbox_hold() { # <entry> <reason> [--claimed]
   local e="$1" why="${2:--}" claimed="${3:-}" held attempts t base ib
@@ -1351,6 +1619,7 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
   done
   TEAM_OUTBOX_RESULT="skip"
   TEAM_OUTBOX_CHANNEL=""                # "watch" = pi 收件箱监视通道；空 = 粘贴路径
+  TEAM_OUTBOX_IMPEDED=""                # geometry-untrusted / queue-stalled（本次评估产生的阻碍）
   local target kind from dedup age ttl payload v rc=0 resume=0 route
   target="$(team_outbox_header "$e" target)"
   kind="$(team_outbox_header "$e" kind)"
@@ -1373,6 +1642,21 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
     esac
   fi
 
+  # delivery-truth D2 · 阻碍 hold（geometry-untrusted / queue-stalled）是**可见的停靠点**：
+  # tick / 发送方排水不自动重试（否则 held 原因每个 tick 都会消失），只有人显式 `outbox flush`
+  # （TEAM_OUTBOX_RETRY_IMPEDED=1）才重试。终态（draft-raced* / unconfirmed）在上面已拦，任何
+  # 情况下都不重试。
+  if team_outbox_is_held "$e"; then
+    case "$(team_outbox_hold_reason "$e")" in
+      geometry-untrusted|queue-stalled)
+        if [ "${TEAM_OUTBOX_RETRY_IMPEDED:-0}" != "1" ]; then
+          TEAM_OUTBOX_RESULT="held"
+          team_outbox_release "$e"
+          return 0
+        fi ;;
+    esac
+  fi
+
   payload="$(team_outbox_payload "$e")"
 
   # M30 · pi 通道：目标是装了 inbox-watch 扩展的 pi 会话 → 只写收件箱 + spool 指针，**不碰输入框**。
@@ -1382,6 +1666,7 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
     rkey="${route%%$'\t'*}"; rib="${route#*$'\t'}"
     if team_inbox_watch_deliver "$e" "$kind" "$from" "$rkey" "$rib" "$payload"; then
       rm -f "$e"
+      team_outbox_diag_rm "$e"
       team_outbox_record_delivered "$e" "$dedup" "watch"
       team_outbox_note ok "outbox：已投递（pi 监视通道）$(basename "$e") → ${rib}.md（输入框零按键）"
       team_outbox_release "$e"
@@ -1409,6 +1694,7 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
     team_tmux_type_payload "$target" "$(team_deliver_text "$target" "$payload")" 2>/dev/null || true
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     rm -f "$e"
+    team_outbox_diag_rm "$e"
     team_outbox_record_delivered "$e" "$dedup" "forced"
     team_outbox_release "$e"
     team_outbox_note ok "outbox：--now 已投递 $(basename "$e") → $target"
@@ -1433,6 +1719,9 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
       # stall-timeout 的重试（resume）：框里应当是我们的折叠占位符——不进这个分支的
       # 「有别人的草稿」处理，交给下面的投递路径（它自己用 holds_only 判框里是不是我们）。
       if [ "$resume" != "1" ]; then
+        # 有草稿 / 正在工作 = 不是「可信空框却投不出去」这个缺陷：连续空读计数清零
+        # （规格：a later busy/working read resets the consecutive-empty count）。
+        team_outbox_observe "$e" BUSY >/dev/null
         if [ "$age" -ge "$ttl" ]; then
           team_outbox_hold "$e" "expired-ttl" --claimed
           team_outbox_note warn "outbox：$(basename "$e") 输入框一直有草稿且超过 TTL=$(team_defer_ttl)s → held/"
@@ -1443,6 +1732,18 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
         team_outbox_release "$e"
         return 0
       fi ;;
+    UNTRUSTED)
+      # delivery-truth D1/D2：识别出 Pi 但支持布局几何冲突 —— 一个键都不发、不给人扣「有草稿」
+      # 的帽子，立即终态化这条**从未碰过框**的消息：durable 副本 + held/geometry-untrusted +
+      # 非零退出（可恢复：几何回到可信后 `outbox flush` 重试）。
+      team_outbox_diag_write "$e" "-" untrusted 0 "geometry-untrusted"
+      local _durable; _durable="$(team_outbox_durable_path "$e")"   # 在 hold 挪走文件**之前**取
+      team_outbox_hold "$e" "geometry-untrusted" --claimed
+      team_outbox_note warn "outbox：$(basename "$e") 识别出 Pi 但支持布局几何冲突（$target）→ held/geometry-untrusted：一个键都没发；durable 全文：$_durable；恢复：$(team_outbox_recovery_hint geometry-untrusted)"
+      TEAM_OUTBOX_IMPEDED="geometry-untrusted"
+      team_outbox_release "$e"
+      TEAM_OUTBOX_RESULT="held"
+      return 0 ;;
   esac
 
   # EMPTY（或 UNKNOWN = 按今天的行为投递）
@@ -1458,6 +1759,7 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
   case "$rc" in
     0)
       rm -f "$e"
+      team_outbox_diag_rm "$e"
       team_outbox_record_delivered "$e" "$dedup" "delivered"
       team_outbox_note ok "outbox：已投递 $(basename "$e") → $target"
       TEAM_OUTBOX_RESULT="delivered" ;;
@@ -1514,25 +1816,48 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
         TEAM_OUTBOX_RESULT="queued"
       fi ;;
   esac
+  # delivery-truth D2 · 「可信空框 + 无进展」的连续计数（唯一规则）：只在这次评估读的是可信 EMPTY
+  # 且条目仍留在队列时 +1；打字前复检看到真草稿（rc 2 → busy）时清零。第三条 → held/queue-stalled
+  # （可见结论 + 恢复命令 + 非零退出），payload 与不可变头部一个字都不改。
+  if [ "$v" = "EMPTY" ] && [ "$resume" != "1" ]; then
+    case "$TEAM_OUTBOX_RESULT" in
+      queued)
+        local n; n="$(team_outbox_observe "$e" EMPTY)"
+        case "${n:-}" in ''|*[!0-9]*) n=0 ;; esac
+        if [ "$n" -ge 3 ]; then
+          local _durable; _durable="$(team_outbox_durable_path "$e")"   # 在 hold 挪走文件**之前**取
+          team_outbox_diag_write "$e" EMPTY trusted "$n" "queue-stalled"
+          team_outbox_hold "$e" "queue-stalled" --claimed
+          team_outbox_note warn "outbox：$(basename "$e") 连续 $n 次可信空框评估都在队列里没有进展 → held/queue-stalled（durable 全文：$_durable；恢复：$(team_outbox_recovery_hint queue-stalled)）"
+          TEAM_OUTBOX_IMPEDED="queue-stalled"
+          TEAM_OUTBOX_RESULT="held"
+        fi ;;
+      busy) team_outbox_observe "$e" BUSY >/dev/null ;;
+    esac
+  fi
   team_outbox_release "$e"
   return 0
 }
 
 # 排水：所有调用者唯一入口（sender 的有界重试 / watchdog 一拍一次 / team outbox flush）
-team_outbox_drain() { # [--now] [--quiet] [--max N]
-  local now=0 quiet=0 max=0
+# --retry-impeded（只有 `outbox flush` 传）：让 geometry-untrusted / queue-stalled 的 held 条目
+# 用当下的几何重试一次（人的恢复动作）；默认 tick/发送方不重试，阻碍停靠点保持可见。
+team_outbox_drain() { # [--now] [--quiet] [--max N] [--retry-impeded]
+  local now=0 quiet=0 max=0 retry_impeded=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --now) now=1; shift ;;
       --quiet) quiet=1; shift ;;
       --max) max="${2:?}"; shift 2 ;;
+      --retry-impeded) retry_impeded=1; shift ;;
       *) shift ;;
     esac
   done
   team_outbox_reap_claims
   team_outbox_sweep_residue   # M46：先把「残留已清」的事实记下来（只读；不碰任何框）
   TEAM_OUTBOX_QUIET=$quiet
-  local e n=0 delivered=0 held=0
+  TEAM_OUTBOX_RETRY_IMPEDED=$retry_impeded
+  local e n=0 delivered=0 held=0 impeded=0 imp_reason=""
   while IFS= read -r e; do
     [ -n "$e" ] || continue
     [ -f "$e" ] || continue
@@ -1547,15 +1872,23 @@ team_outbox_drain() { # [--now] [--quiet] [--max N]
       delivered) delivered=$((delivered + 1)) ;;
       held)      held=$((held + 1)) ;;
     esac
+    if [ -n "${TEAM_OUTBOX_IMPEDED:-}" ]; then
+      impeded=$((impeded + 1))
+      imp_reason="$TEAM_OUTBOX_IMPEDED"
+    fi
   done < <(team_outbox_entries)
   TEAM_OUTBOX_LAST_DELIVERED="$delivered"
+  TEAM_OUTBOX_LAST_IMPEDED="$impeded"
+  TEAM_OUTBOX_LAST_IMPEDED_REASON="$imp_reason"
   [ "$delivered" -gt 0 ] && team_outbox_note ok "outbox：投递 $delivered 条"
+  [ "$impeded" -gt 0 ] && team_outbox_note warn "outbox：$impeded 条被阻碍（${imp_reason}）→ held/：原因与 durable 副本见 $TEAM_CLI outbox list；恢复：$(team_outbox_recovery_hint "$imp_reason")"
   return 0
 }
 
 # ---------------------------------------------------------------- 守卫 + 队列的对外入口
 # 所有「往 TUI 输入框打字」的发送方都走这里。设置 TEAM_SEND_OUTCOME：
 #   delivered（已确认送达）｜watched（pi 监视通道：已写收件箱 + 唤醒指针，输入框零按键）｜queued（进队列了）
+#   ｜held（阻碍 hold：geometry-untrusted / queue-stalled，返回非 0）
 #   ｜forced（--now）｜unknown-sent｜unknown-failed｜offline｜duplicate
 team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbox A] [--inbox-written A] [--now] [--no-verify]
   local target="$1" payload="$2" kind="$3"; shift 3
@@ -1573,6 +1906,8 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
     esac
   done
   TEAM_SEND_OUTCOME=""
+  TEAM_SEND_ENTRY=""
+  TEAM_SEND_REASON=""
   local entry="" rc=0 v=""
 
   if [ "$now" = "1" ]; then
@@ -1649,6 +1984,7 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
     return 0
   fi
   [ -n "$entry" ] && [ -f "$entry" ] || { TEAM_SEND_OUTCOME="offline"; return 1; }
+  TEAM_SEND_ENTRY="$entry"
   if [ "$noverify" = "1" ]; then
     team_outbox_process_entry "$entry" --no-verify
   else
@@ -1658,6 +1994,15 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
     delivered)
       if [ "$TEAM_OUTBOX_CHANNEL" = "watch" ]; then TEAM_SEND_OUTCOME="watched"
       else TEAM_SEND_OUTCOME="delivered"; fi ;;
+    held)
+      # delivery-truth D2：阻碍 hold（geometry-untrusted / queue-stalled）不是一个「已排队」的
+      # 好消息 —— 调用方必须报 held + 原因 + 恢复命令并非零退出；不是阻碍的 held 仍按 queued 语义。
+      if [ -n "${TEAM_OUTBOX_IMPEDED:-}" ]; then
+        TEAM_SEND_OUTCOME="held"
+        TEAM_SEND_REASON="$TEAM_OUTBOX_IMPEDED"
+        return 1
+      fi
+      TEAM_SEND_OUTCOME="queued" ;;
     *)         TEAM_SEND_OUTCOME="queued" ;;
   esac
   return 0

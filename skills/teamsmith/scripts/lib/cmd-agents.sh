@@ -1482,6 +1482,12 @@ team_cmd_say() {
       team_ok "queued for $target: $msg（目标输入框里有草稿：没有写任何键；条目已入 state/outbox/，清空后自动投递）"
       team_dim "  原因/条目：$TEAM_CLI outbox list ｜ 投递未确认的兜底：消息已在 $TEAM_DOCS_DIR/inbox/$agent.md"
       return 0 ;;
+    held)
+      # delivery-truth D1/D2：geometry-untrusted / queue-stalled —— 一个键都没发，报 held + 原因 +
+      # durable 条目 + 恢复命令并非零退出（“退出 0 + 永不兑现的承诺”就是本 change 要消灭的假绿）。
+      team_err "held for $target: $msg（reason=${TEAM_SEND_REASON:--}：目标框的几何/进展无法可信确认，没有写任何键）"
+      team_dim "  条目：$(basename "${TEAM_SEND_ENTRY:--}")｜durable 全文：$(team_outbox_durable_path "${TEAM_SEND_ENTRY:--}" 2>/dev/null || printf '%s' -)（payload 与条目头未改）｜原因：$TEAM_CLI outbox list ｜恢复：$(team_outbox_recovery_hint "${TEAM_SEND_REASON:--}")"
+      return 1 ;;
     forced)
       team_ok "said to $target: $msg（--now：跳过守卫直投，记入 outbox/forced.log）"
       return 0 ;;
@@ -1588,18 +1594,25 @@ team_cmd_notify() {
   [ -n "$stamp" ] && revsuffix=" · $stamp"
   local knock_payload="[manual] agent:$sender · $msg$revsuffix"
   # P82：发送者进 durable 收件箱行（第 4 参），收件人仍是文件名
-  team_inbox_append "$agent" manual "$msg$revsuffix" "$sender" \
-    || team_warn "notify：收件箱行写不进去（$TEAM_DOCS_DIR/inbox/$agent.md）—— 下面的投递会把这条声明当已落地"
+  # delivery-truth D3（P147）：durable 写入是**声明的前提** —— 写不进去就在这里非零退出，
+  # 不敲门、不写任何 inbox-written 声明（否则 wake 会指向一个不存在的文件）。
+  team_inbox_append "$agent" manual "$msg$revsuffix" "$sender" || {
+    team_err "notify：收件箱行写不进去（$TEAM_DOCS_DIR/inbox/$agent.md）—— 不敲门、不声明已写（退出非零）"
+    return 1
+  }
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
+  local knock_rc=0
   # M30 · pi 通道优先：目标有**活的**收件箱监视器时，敲门交给它（注册里的 pid+cwd 就是「PM 会话活着」
   # 的证据，比 tmux/pane 启发式直接），而且这条链不需要 tmux、不碰输入框。
-  # --inbox-written pm：上面的 durable 行已经写了，通道不能再写一遍（条目头部的契约）。
+  # delivery-truth D3：--inbox-written <recipient> = 上面写的就是收件人的 durable 文件；wake 的
+  # 全文路径必须指同它（旧实现写死 pm → 收件人 dev 时 wake 指向不存在的 pm.md）。
   if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_inbox_watch_route "$target" >/dev/null 2>&1; then
     team_send_guarded "$target" "$knock_payload" knock --from "$sender" \
-      --dedup "$(team_notify_dedup_key "$agent" "$msg$revsuffix")" --inbox-written pm
+      --dedup "$(team_notify_dedup_key "$agent" "$msg$revsuffix")" --inbox-written "$agent"
     case "$TEAM_SEND_OUTCOME" in
       watched) team_dim "  pi 监视通道：收件箱已写，会话里的监视扩展负责唤醒（输入框零按键）" ;;
       queued)  team_dim "  pi 监视通道投递没落地（条目入队）：$TEAM_CLI outbox list" ;;
+      held)    knock_rc=1; team_warn "  敲门被阻碍（reason=${TEAM_SEND_REASON:--}）：held/，唤醒未发；消息仍在 docs/team/inbox/$agent.md" ;;
       duplicate) team_dim "  duplicate：同一份通知在 ${TEAM_NOTIFY_DEDUP_SEC:-20}s 内已经投过（没有重复入队）" ;;
       offline|unknown-failed) team_warn "敲门没落地（pi 通道写不进去）：消息只落收件箱" ;;
     esac
@@ -1608,9 +1621,10 @@ team_cmd_notify() {
     # 只给「正在跑 pi 的 PM」打字：PM 没在跑时写进 shell 会被当命令执行。
     # 敲门也走投递守卫：输入框里有草稿 → 入队，草稿不动（规格 notify-and-inbox 的 dirty-PM 场景）
     team_send_guarded "$target" "$knock_payload" knock --from "$sender" \
-      --dedup "$(team_notify_dedup_key "$agent" "$msg$revsuffix")" --inbox-written pm
+      --dedup "$(team_notify_dedup_key "$agent" "$msg$revsuffix")" --inbox-written "$agent"
     case "$TEAM_SEND_OUTCOME" in
       queued) team_dim "  PM 输入框里有草稿：敲门入队（$TEAM_CLI outbox list），清空后自动投递" ;;
+      held)   knock_rc=1; team_warn "  敲门被阻碍（reason=${TEAM_SEND_REASON:--}）：held/，唤醒未发；消息仍在 docs/team/inbox/$agent.md" ;;
       duplicate) team_dim "  duplicate：同一份通知在 ${TEAM_NOTIFY_DEDUP_SEC:-20}s 内已经投过（没有重复入队）" ;;
       offline|unknown-failed) team_warn "敲门没落地（PM 窗口不可投）：消息只落收件箱" ;;
     esac
@@ -1621,6 +1635,7 @@ team_cmd_notify() {
     team_warn "不在 tmux 会话里（TMUX 未设置）：敲门不试、不入队，消息只落收件箱"
   fi
   team_ok "notified pm: $msg"
+  return "$knock_rc"
 }
 
 team_cmd_teardown() {

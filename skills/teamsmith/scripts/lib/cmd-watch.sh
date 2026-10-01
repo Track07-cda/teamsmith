@@ -319,6 +319,11 @@ team_watch_once() {
   #     放在待办/待命判断之前：队列里的消息是人或别的路径明确要投的，不属于「待办」，
   #     也不该因为 PM standby 而烂在队列里。没有 daemon：不新建窗口、不留后台进程。
   team_outbox_drain --quiet
+  # delivery-truth D2：阻碍（geometry-untrusted / queue-stalled）在巡检日志里留一条可审计记录 ——
+  # 巡检不承诺「清空后自动投递」，也不静默：held 的条目与诊断 sidecar 同时可见（status/digest/panel）。
+  if [ "${TEAM_OUTBOX_LAST_IMPEDED:-0}" -gt 0 ]; then
+    team_wlog "outbox-impeded n=${TEAM_OUTBOX_LAST_IMPEDED} reason=${TEAM_OUTBOX_LAST_IMPEDED_REASON:--}（held/：原因与恢复见 $TEAM_CLI outbox list）"
+  fi
 
   # ② 待办（快速读者：与 team_pending_counts 同值，见 team_panel_pending_counts_fast）
   local counts text sig
@@ -509,10 +514,33 @@ team_panel_num() { # <值> [默认] → 非负整数（面板字段只接受数�
   printf '%s' "$v"
 }
 
+# delivery-truth D2 · 阻碍（held 且原因 ∈ geometry-untrusted / queue-stalled）的**只读**呈现。
+# 扫描/判定只有一份实现（`_team_outbox_impediment_scan`，outbox.sh）；这里只把它渲染成面板 JSON。
+# 计数以 HOLDING.log 的 hold 原因为准（sidecar 缺失/读不出 → diagnostic=unavailable，绝不静默当零）；
+# 绝不建目录、绝不读 pane、绝不排水。
+team_panel_impediments_json() {
+  local e t r lo dp dg n=0 out="" first=1
+  while IFS=$'\t' read -r e t r lo dp dg; do
+    [ -n "$e" ] || continue
+    n=$((n + 1))
+    [ "$first" = "1" ] || out="$out, "
+    first=0
+    out="$out{\"entry\": $(team_panel_json_str "$(basename "$e")"), \"target\": $(team_panel_json_str "$t"), \
+\"reason\": $(team_panel_json_str "$r"), \"last_observed\": $(team_panel_json_str "${lo:--}"), \
+\"durable_text_path\": $(team_panel_json_str "${dp:--}"), \"diagnostic\": $(team_panel_json_str "$dg")}"
+  done < <(_team_outbox_impediment_scan)
+  printf '{"impeded": %s, "impediments": [%s]}' "$(team_panel_num "$n")" "$out"
+}
+
 # 延后投递：只读计数，**绝不创建目录、绝不排水**（排水属于 sender / tick / outbox flush）。
 # 目录不存在 = 0（P5 未 apply 的项目就是这个形状，不是错误）。
 team_panel_outbox_json() {
-  local dir="$TEAM_STATE_DIR/outbox" queued=0 held=0 forced=0 oldest="" age="null"
+  local dir="$TEAM_STATE_DIR/outbox" queued=0 held=0 forced=0 oldest="" age="null" imp _p1 _p2
+  imp="$(team_panel_impediments_json)"
+  _p1="$(printf '%s' "$imp" | sed -n 's/.*"impeded": \([0-9][0-9]*\).*/\1/p')"
+  _p2="$(printf '%s' "$imp" | sed -n 's/^{"impeded": [0-9][0-9]*, "impediments": \(.*\)}$/\1/p')"
+  case "${_p1:-}" in ''|*[!0-9]*) _p1=0 ;; esac
+  case "${_p2:-}" in '') _p2='[]' ;; esac
   if [ -d "$dir" ]; then
     queued="$(find "$dir" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | grep -c . || true)"
     held="$(find "$dir/held" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | grep -c . || true)"
@@ -528,8 +556,9 @@ team_panel_outbox_json() {
          if [ "$now_ms" -gt "$ms" ]; then age=$(( (now_ms - ms) / 1000 )); else age=0; fi ;;
     esac
   fi
-  printf '{"queued": %s, "held": %s, "oldest_age_s": %s, "forced": %s}' \
-    "$(team_panel_num "$queued")" "$(team_panel_num "$held")" "$age" "$(team_panel_num "$forced")"
+  printf '{"queued": %s, "held": %s, "oldest_age_s": %s, "forced": %s, "impeded": %s, "impediments": %s}' \
+    "$(team_panel_num "$queued")" "$(team_panel_num "$held")" "$age" "$(team_panel_num "$forced")" \
+    "$_p1" "$_p2"
 }
 
 # 容量：RAM/磁盘 swap/还能再加几个 + capacity.log 尾部的迷你图 + P144 的磁盘/inode 条目。

@@ -91,8 +91,10 @@ Honest edges of the Pi channel (visible, never silent):
 of the box** — including rows below the cursor, because a draft typed after a leading newline or recalled with `Up`
 sits below the cursor row. If the box already holds text, the sender writes **no key at all**: the message goes
 into `state/outbox/` as one immutable entry and is delivered when the box is free (`team outbox list` shows what is
-waiting, `team outbox flush` drains it, and every watchdog tick drives one drain as well). A message that was held
-is reported as **`queued`**, never as delivered.
+waiting, `team outbox flush` drains it, and every watchdog tick drives one drain as well). A message deferred behind a
+**trusted** non-empty box is reported as **`queued`** (exit 0), never as delivered. The two impediment outcomes below —
+`geometry-untrusted` and `queue-stalled` — are instead reported as **`held`** with the machine reason and a **non-zero
+exit**, because no trustworthy read exists to say "you have a draft" and there is nothing to promise about clearing it.
 
 What this means for you:
 
@@ -249,6 +251,52 @@ Honest edges (documented, not hidden):
   clears (unless its reason is `draft-raced-left`, `draft-raced-retracted` or `unconfirmed`, which are terminal). The payload is always already durable in the
   recipient's inbox (or `state/nudges.log` for a wake) by the time the hold completes, so an expired hold can
   never lose a message — and a delivery the drain confirmed never appears in the inbox at all.
+- **The real Pi editor suffix is located from a closed layout shape, not from the highest rule (delivery-truth,
+  2026-10).** Pi 0.99.2 draws the editor as *bottom rule / cwd line (with the measured optional `(branch)`
+  decoration) / context status line* (`1.2%/128k (auto) …`), and the conversation area above it can carry a
+  full-width rule row of its own — the P138/P147 real capture has one at row 21. The legacy highest-rule pairing
+  took that transcript rule as the editor's top border, read the conversation as box content and reported BUSY
+  on an **idle, empty editor**: `team say` exited 0 with "clear the box and it will be delivered automatically"
+  while nothing would ever deliver it (the P147 red). The guard now admits a narrower candidate domain only when
+  the frame is a supported Pi layout: the last two rows are the cwd line and the measured status grammar; the
+  equal-width rule directly above them is the bottom border; and exactly one equal-width rule above the cursor
+  bounds an editor whose content rows fit the renderer's measured width and height (a full-width rule inside a
+  candidate rectangle disqualifies it, which is what rejects the transcript rule and admits the editor top).
+  The footer directory must agree with the target pane's runtime cwd. Zero or several surviving rectangles, a
+  missing/short bottom rule, or a content row wider than the pane (a clipping or scrolled TUI, a draft whose own
+  rule row makes the rectangle ambiguous) are **`geometry-untrusted`**: no key is sent, the payload is moved to
+  `state/outbox/held/` with that reason plus its durable inbox copy, the sender exits non-zero and names the
+  entry and the recovery command, and `team say` asserts no draft and promises no automatic delivery. Recovery
+  is `team outbox flush` once the layout is supported again (the entry is never-typed, so it may be retried; a
+  terminal `draft-raced*`/`unconfirmed` entry never is). Real captures and the red side (`admission shadowed
+  off` → the same bytes read `[21 30]`/BUSY) are pinned in `tests/frames/` and
+  `tests/delivery-truth.sh --section frames --mutations`.
+- **A trusted empty box that keeps not progressing becomes a visible stall (delivery-truth, 2026-10).** A
+  never-typed entry that reads a **trusted empty** box but makes no progress (the paste fails, or a delivery
+  attempt returns it to the queue) records one observation in an atomic sidecar under
+  `state/outbox/diagnostics/<entry>.json` — schema, target, verdict, trust, `consecutive_empty`, first/last
+  observation time, impediment reason and the durable full-text path. The **third consecutive eligible
+  evaluation** (the evaluation owns the entry's claim, the target is alive and the entry is FIFO-eligible)
+  moves it to `held/` with reason **`queue-stalled`**; the sidecar and `team outbox list` / `team status` /
+  `team digest` show the count and reason, and the command exits non-zero. Counting is deliberately narrow: a
+  BUSY/working read resets the count to zero (a real draft or a working target is not this defect), queueing
+  during work, offline targets and lock contention are never counted, and observers (`outbox list`, `status`,
+  `digest`, the panel) never advance a count, capture a pane or touch the queue. `queue-stalled` is a
+  never-typed hold: unlike the terminal `draft-raced*`/`unconfirmed` holds it is retried, but only by an
+  explicit `team outbox flush` (the pulse tick leaves the visible hold alone instead of hammering it), and the
+  entry's payload and immutable header are never rewritten. `TEAM_DEFER_TTL` remains a backstop, not the first
+  signal of this defect.
+- **Manual `notify`'s three pointers name one file (delivery-truth, 2026-10).** `team notify <recipient>` writes
+  the durable line to `docs/team/inbox/<recipient>.md`; the queue entry's declaration and the wake pointer now
+  carry **that same recipient** (the old code declared and woke `pm`, the knock target, so a notify to `dev`
+  woke a PM session that pointed at a nonexistent `pm.md`). The PM is still the **knock destination** — the wake
+  reaches the PM; the durable message lives in the recipient's inbox. A durable append that fails exits
+  non-zero, emits no wake and writes no "inbox written" declaration (the `--inbox-written` contract).
+- **The console shows impediments read-only.** `panel.outbox.impeded` and `panel.outbox.impediments` (JSON),
+  the status band and the messages page (TUI and `team monitor --print`) name the count and reasons
+  (`geometry-untrusted`, `queue-stalled`), each item's entry id, target and last observation time. A missing or
+  unreadable diagnostic renders as `unavailable` — never as zero impediments — and none of these observers
+  captures a pane, advances a drain observation or retries a delivery.
 
 If a notification really did get glued (e.g. the whitespace-only case), the mitigations from before still apply:
 answer with a short sentence right after reading it, lower the volume with `TEAM_INBOX_MAX_CHARS`, or set

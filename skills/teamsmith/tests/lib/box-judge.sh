@@ -50,16 +50,18 @@ team_box_overlay_kind() { # stdin = capture-pane 全文 → stdout: trust-prompt
   return 0
 }
 
-team_box_frame_verdict() { # <光标行 1-based>；stdin = capture 全文 → 一行判定 + rc（见文件头）
-  local cy="${1:-}" raw kind text
+team_box_frame_verdict() { # <光标行 1-based> [<expect_cwd>]；stdin = capture 全文 → 一行判定 + rc（见文件头）
+  # rc 0 = overlay|EMPTY；rc 1 = NOT-EMPTY（含读不出框）；rc 2 = geometry=UNTRUSTED（delivery-truth D1：
+  # 识别出 Pi 页脚但支持布局矩形不唯一 —— 调用方必须走「不打字」的路径，不能当 UNKNOWN 打字）。
+  local cy="${1:-}" cwd="${2:-}" raw kind text rc=0
   raw="$(cat)"
   kind="$(printf '%s\n' "$raw" | team_box_overlay_kind)"
   if [ -n "$kind" ]; then printf 'overlay=%s\n' "$kind"; return 0; fi
   # 与 `team_input_box_text` 同一个提取（P67：光标锚定 + 边框邻行按内容读）——
   # 本函数不再自带任何排除逻辑；找不到框（rc 1）按「读不出来 = 不敢当空框」处理。
-  if ! text="$(printf '%s\n' "$raw" | _team_box_text_of_frame "$cy" 2>/dev/null)"; then
-    printf 'idle-read=NOT-EMPTY\n'; return 1
-  fi
+  text="$(printf '%s\n' "$raw" | _team_box_text_of_frame "$cy" "$cwd" 2>/dev/null)" || rc=$?
+  if [ "$rc" -eq 2 ]; then printf 'geometry=UNTRUSTED\n'; return 2; fi
+  if [ "$rc" -ne 0 ]; then printf 'idle-read=NOT-EMPTY\n'; return 1; fi
   if [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ]; then printf 'idle-read=NOT-EMPTY\n'; return 1; fi
   printf 'idle-read=EMPTY\n'
   return 0

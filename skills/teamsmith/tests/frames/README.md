@@ -4,7 +4,7 @@
 （`_team_box_rows_of_frame` / `_team_box_geometry`）当输入 —— 这样「真实现场 → 判据」这条链
 不必开 tmux 就能在门禁里复跑，端到端（真 pane）与纯帧也共用同一份实现。
 
-两类文件分得很清：前五份是**真 pi 实拍**（来源逐字写在下表）；`p78-*.txt` 八份是 **P80 的合成帧**、
+两类文件分得很清：前七份是**真 pi 实拍**（来源逐字写在下表）；`p78-*.txt` 八份是 **P80 的合成帧**、
 `p86-f1-*.txt` 三份是 **P86 的合成帧** —— 「裁切型 TUI」的模型，**不是** pi 输出、没有真 pi 出处（P80 的
 八份构造与 `docs/team/reports/P78-verify/pkg/lib.sh` 的 `p78_build_frames` 逐字节相同，`cmp` 可验；P86 的
 三份与 P84 复验时自造的 `f1.txt`/`f1b.txt`/`f1c.txt` 逐字节相同）。
@@ -129,3 +129,30 @@ bash skills/teamsmith/tests/pm-box-real.sh --frame skills/teamsmith/tests/frames
 bash skills/teamsmith/tests/pm-box-real.sh --frame skills/teamsmith/tests/frames/p78-conversation-rule-below-box.txt --cursor 2
 #   → idle-read=NOT-EMPTY（rc 1）—— 记录在案的镜像代价：框下方的整行 rule 把框撑大、判忙
 ```
+
+## P147：支持布局准入 —— Pi 0.99.2 的闭集编辑器矩形（两份新真帧）
+
+`pi-0.99.2-empty-editor.txt` / `pi-0.99.2-human-draft.txt` 是 **P147 自己的容器跑出来的真帧**
+（P138 的 Poda 配方 + 宿主 Pi 0.99.2，isolated HOME/session；见
+`docs/team/reports/P147-dev/logs/tmux-delivery-truth-before-dirty/` 与 `...-draft-before-dirty/`）：
+
+| 文件 | 光标行（1-based） | 记录下来的页脚 cwd | sha256 |
+|---|---|---|---|
+| `pi-0.99.2-empty-editor.txt` | 29 | `/tmp/p138.8HwUSx/proj/.worktrees/dev` | `61153ab21abac7bef005e7a16e75b87a7f5ff20b38c430c3310ac2f7531d526a` |
+| `pi-0.99.2-human-draft.txt` | 29 | `/tmp/p138.yalHes/proj/.worktrees/dev` | `a0198a0f36d94e217b0a65b80c9afabb78bc454a70e916f3bc7a692c1161253f` |
+
+两份都是 120×32 的整屏 capture，页脚两行 = `<cwd> (branch)` + `1.2%/128k (auto) … p138`；
+对话区第 21 行还有一条整宽规则行（旧域把它当编辑器顶线 → 框 `[21 30]`、空编辑器被读成 BUSY →
+`say` 退出 0 并承诺「清空后自动投递」而永不兑现 —— P147 的红）。
+
+- **规则**（唯一决策点 `_team_box_layout_decision`，实现见 `scripts/lib/outbox.sh`）：末两行是 Pi 页脚
+  （cwd 行 + 状态行闭集语法）；紧贴页脚上方的等宽整行 ─ 是下边框；光标上方**恰好一个**等宽整行
+  ─ 能框出一个内部行不超过 `max(5, floor(R×0.3))`、每行字节数 ≤ 规则行字节数-3（terminal-cell 宽度的
+  保守上界）且内部**没有**别的整宽规则行的矩形 → 收窄候选域；反之（0 个或多个矩形、底线缺失/太短、
+  内容超宽、页脚 cwd 与 target 运行时 cwd 不符）→ `geometry-untrusted`：一个键都不发、held + 非零退出。
+  没有 expect cwd（纯帧探针不带上下文）或页脚形状不成立 → 维持旧域（已存 0.85.1/0.87.0 帧的判定
+  逐字不变）。
+- **判据只有一份实现**：`team_input_box_text`（真 pane）、`team_box_frame_verdict`（纯帧）与门禁探针
+  都走 `_team_box_layout_decision`；红侧 = 测试进程把它影子成 `none`，同一份真帧退回 `[21 30]`/BUSY。
+- 判据/门禁：`bash skills/teamsmith/tests/delivery-truth.sh --section frames --mutations`
+  （真帧 `[28 30]`/EMPTY、真草稿 `P143-HUMAN-DRAFT`/BUSY、全部既有帧判定保持、两条红侧）。

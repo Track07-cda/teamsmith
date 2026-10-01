@@ -58,6 +58,20 @@ export interface PanelOutbox {
   held: number
   oldest_age_s: number | null
   forced: number
+  /** delivery-truth D2: held entries whose reason is geometry-untrusted / queue-stalled. */
+  impeded?: number
+  impediments?: Impediment[]
+}
+
+/** One read-only delivery impediment (never a pane capture or a queue action). */
+export interface Impediment {
+  entry: string
+  target: string
+  reason: string
+  /** The sidecar's last observation time, or '' when the diagnostic is unreadable. */
+  last_observed: string
+  durable_text_path: string
+  diagnostic: 'available' | 'unavailable'
 }
 
 export interface PanelDiskEntry {

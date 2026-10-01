@@ -1,0 +1,32 @@
+ ripgrep not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+ Warning: Failed to download ripgrep: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+
+ P138-SEED-DIRTY
+
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys on` to ~/.tmux.conf
+ and restart tmux.
+
+
+ write leftover.txt
+
+ P138 uncommitted evidence
+
+
+
+ P138-ACK settled; no commit performed.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ P138-SAY-tmux-delivery-truth-before-dirty
+
+
+ P138-ACK settled; no commit performed.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/p138.8HwUSx/proj/.worktrees/dev (task/P138)
+1.2%/128k (auto)                                                                                                    p138

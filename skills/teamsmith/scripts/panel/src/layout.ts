@@ -45,6 +45,7 @@ import type {
   PlacedLine,
   PrefName,
   QueueEntry,
+  Impediment,
   Segment,
   SettingsBlock,
   SettingsChoiceEntry,
@@ -391,7 +392,7 @@ function statusBlock(ctx: Ctx): Block {
   const queue =
     !ob || deg.has('outbox')
       ? `${s.outboxLabel} ${s.dash}`
-      : `${s.outboxLabel} ${ob.queued}${ob.held > 0 ? fill(s.outboxHeldSuffix, { n: ob.held }) : ''}`
+      : `${s.outboxLabel} ${ob.queued}${ob.held > 0 ? fill(s.outboxHeldSuffix, { n: ob.held }) : ''}${ob.impeded && ob.impeded > 0 ? ` ${fill(s.outboxImpededSuffix, { n: ob.impeded })}` : ''}`
   const lines: PlacedLine[] = [
     { line: truncLine(ln(seg(' '), seg(pmText), seg('    '), seg(pend), seg('    '), seg(queue, 'accent')), ctx.width) },
   ]
@@ -400,6 +401,12 @@ function statusBlock(ctx: Ctx): Block {
   const delivery = !panel.pm || deg.has('pm') ? '' : (panel.pm.delivery_warning || '')
   if (delivery) {
     lines.push({ line: truncLine(ln(seg(' '), seg(fill(s.pmDeliveryWarning, { reason: delivery }), 'warn')), ctx.width) })
+  }
+  // delivery-truth D2: the machine reasons ride the status band so the plain-text exit (the
+  // overview) names the same count/reasons as the TUI's messages page.
+  if (ob && !deg.has('outbox') && ob.impeded && ob.impeded > 0) {
+    const reasons = Array.from(new Set((ob.impediments ?? []).map((i) => i.reason))).join(' · ') || s.dash
+    lines.push({ line: truncLine(ln(seg(' '), seg(fill(s.queueImpededLine, { n: ob.impeded, reasons }), 'warn')), ctx.width) })
   }
   return {
     id: 'status',
@@ -1850,6 +1857,16 @@ function queueBlock(ctx: Ctx): Block | null {
     return { id: 'queue', title: s.queueHeading, priority: 10, lines: [{ line: ln(seg(` ${s.queueEmpty}`, 'dim')) }] }
   }
   const lines: PlacedLine[] = []
+  // delivery-truth D2：阻碍是**测量事实**（原因、观察时刻、诊断可否读），不是「有草稿」的暗示。
+  const imps: Impediment[] = q.impediments ?? []
+  if (q.impeded && q.impeded > 0) {
+    const reasons = Array.from(new Set(imps.map((i) => i.reason))).join(' · ') || s.dash
+    lines.push({ line: truncLine(ln(seg(`  ${fill(s.queueImpededLine, { n: q.impeded, reasons })}`, 'warn')), width) })
+    for (const im of imps.slice(0, 3)) {
+      const when = im.diagnostic === 'available' && im.last_observed ? im.last_observed : s.queueImpededUnavailable
+      lines.push({ line: truncLine(ln(seg(fill(s.queueImpededItem, { entry: im.entry, reason: im.reason, when }), 'warn')), width) })
+    }
+  }
   q.entries.slice(0, 20).forEach((e: QueueEntry, i: number) => {
     const state = e.state === 'held' ? s.queueStateHeld : s.queueStateQueued
     const row = ln(
