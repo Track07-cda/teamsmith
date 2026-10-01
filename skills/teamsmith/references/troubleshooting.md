@@ -263,12 +263,8 @@ fixes: §27.
 
 | Error | Cause | What to do |
 |---|---|---|
-<<<<<<< HEAD
 | only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for a seat to finish (`team ps` shows who is running) — or paste the refusal's own `修法：TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` line; that override trades the safety net away for this launch and is printed as a real risk, not a formality |
-=======
-| only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for an agent to finish; if slowness is acceptable, `TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` |
 | the temp root (or the worktree filesystem) is below the disk floor | the disk/inode leg: `TEAM_TMP_MIN_FREE_MB` (default 1024) / `TEAM_TMP_MIN_FREE_INODES` (default 100000) over the filesystems a worker will write to (the temp root and the agent's worktree) | the refusal names the path, the measured bytes/inodes, the threshold and the remedy (temp root: `bash skills/teamsmith/tests/tmp-hygiene.sh --status`, then `--sweep`; worktree: free that path); a leg is turned off with `TEAM_TMP_MIN_FREE_MB=0` / `TEAM_TMP_MIN_FREE_INODES=0`, or permanently through the audited writer `team config set <KEY> 0 --allow-danger --yes` — see §25 |
->>>>>>> task/P144-capacity-floor-disk-apply-sc
 | available memory X MB < 2048 | a warning only (RAM is tight) | you may continue; lower concurrency if it feels sluggish. To silence it completely: `TEAM_WARN_AVAIL_MB=0` |
 | available memory + free swap only X MB | the hard `TEAM_MIN_TOTAL_MB` floor | the machine really is out of resources: stop an agent first; the refusal prints the matching `TEAM_MIN_TOTAL_MB=0 …` route if you accept the risk |
 | MemAvailable down to X MB | the hard `TEAM_MIN_AVAIL_MB` floor (default 1024) | stop or wait for a seat first; the printed `修法：TEAM_MIN_AVAIL_MB=0 team dispatch …` line is the explicit override |

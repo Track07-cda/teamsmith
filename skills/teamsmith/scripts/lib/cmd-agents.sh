@@ -1172,10 +1172,7 @@ team_cmd_dispatch() {
   local sid="$TEAM_SESSION-$agent"
   [ "$fresh" = "1" ] && sid="$sid-$(date +%s)"
 
-<<<<<<< HEAD
   team_df_run_lib team_dispatch_judge_mem "$agent" "$id" "$taskfile"
-=======
-  team_df_run_lib team_mem_guard
   # P144：磁盘/inode 腿 —— 判的是这个 worker 真正要写的两个文件系统（临时根 + 它的工作树，
   # 不是共享的 worktrees 根），在**任何开窗动作之前**（--print 也在内），并且是 P140 的启动前
   # 那一趟里的一个 finding（拒绝时和别的阻塞项一起交底，不抢自己的单独出口）。
@@ -1183,7 +1180,6 @@ team_cmd_dispatch() {
   team_df_run_lib team_disk_guard "$disk_tmp" "$wt"
   # 读数是一条「说明」（rc=0 的 finding）：放行时在启动前那一趟里打印；被拒时由拒绝本身带读数。
   if [ "$_TEAM_DF_RUN_RC" -eq 0 ]; then team_df_run_lib team_capacity_line "$disk_tmp" "$wt"; fi
->>>>>>> task/P144-capacity-floor-disk-apply-sc
   team_df_run_lib team_model_guard "$model"
   # M4.3 A：会话规模 vs 模型窗口（默认拒绝，--fresh / --allow-overflow 是出路）
   team_df_run_lib team_guard_resume_session "$agent" "$model" "$sid" "$wt" "$fresh" "$overflow" "$id" "$taskfile"
