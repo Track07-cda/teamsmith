@@ -25,6 +25,7 @@ export const zh = {
   capacityRam: 'RAM {mb}',
   capacitySwap: 'swap {mb}',
   capacityAgents: '可再加 {n} 个 agent',
+  capacityDisk: '{path} {mb}（inode {ino}）',
   dash: '—',
 
   // 项目进度
@@ -276,6 +277,7 @@ export const zh = {
   label_TEAM_PI_AGENT_DIR: 'Pi 配置目录',
   label_TEAM_PI_SETTINGS_FILE: 'Pi 设置文件',
   label_TEAM_MEMINFO_FILE: '内存信息文件',
+  label_TEAM_DISK_STATS_FILE: '磁盘读数夹具',
   label_TEAM_SMOKE_FAST: '冒烟快模式',
   // —— 名册、模型解析与适配器
   label_TEAM_MODEL_LIMITS: '模型并发上限',
@@ -312,6 +314,8 @@ export const zh = {
   label_TEAM_MIN_FREE_SWAP_MB: 'swap 底线',
   label_TEAM_MIN_TOTAL_MB: '内存硬底线',
   label_TEAM_MIN_AVAIL_MB: '可用内存底线',
+  label_TEAM_TMP_MIN_FREE_MB: '临时根空间底线',
+  label_TEAM_TMP_MIN_FREE_INODES: '临时根 inode 底线',
   label_TEAM_WARN_AVAIL_MB: '可用内存告警线',
   label_TEAM_ZRAM_WARN_PCT: 'zram 告警比例',
   label_TEAM_AGENT_MEM_MB: '席位内存上限',

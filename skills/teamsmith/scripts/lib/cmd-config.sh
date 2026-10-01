@@ -75,6 +75,7 @@ TEAM_REQUIRE_MAGIC_CONTEXT|refuse|bool||plain|1|-|依赖策略：手改 .pi/team
 TEAM_PI_AGENT_DIR|refuse|path|dir,opt|plain||-|机器路径：手改 .pi/team/config.sh||policy
 TEAM_PI_SETTINGS_FILE|refuse|path|file,opt|plain|$HOME/.pi/agent/settings.json|-|机器路径：手改 .pi/team/config.sh||policy
 TEAM_MEMINFO_FILE|refuse|path|file,opt|plain||-|机器路径：手改 .pi/team/config.sh||policy
+TEAM_DISK_STATS_FILE|refuse|path|file,opt|plain||-|测试旋钮：磁盘读数夹具（TEAM_MEMINFO_FILE 同族）；只在夹具里用||policy
 TEAM_SMOKE_FAST|refuse|bool||plain|0|-|测试旋钮：环境变量或手改 .pi/team/config.sh||policy
 TEAM_INBOX_WATCH_FORCE_FAIL|refuse|text||plain||-|测试旋钮（M53）：强制 watcher 注册失败路径，记录标 forced=1；只在夹具里用||policy
 TEAM_IW_REQUIRE_WATCH|refuse|bool||plain|0|-|测试旋钮（M53）：inbox-watch 门禁严格模式——不可用的前提判红而不是可见 SKIP||policy
@@ -113,6 +114,8 @@ TEAM_BOARD_DONE_REASON|apply|text||plain||-|||workflow
 TEAM_MIN_FREE_SWAP_MB|apply|mb|0,|plain|1024|0 = 磁盘 swap 底线关闭||512,1024,2048|delivery
 TEAM_MIN_TOTAL_MB|apply|mb|0,|plain|512|0 = RAM+swap 绝对底线关闭||256,512,1024|delivery
 TEAM_MIN_AVAIL_MB|apply|mb|0,|plain|1024|0 = MemAvailable 底线关闭||512,1024,2048|delivery
+TEAM_TMP_MIN_FREE_MB|apply|mb|0,|plain|1024|0 = 临时根可用空间底线关闭||512,1024,2048|delivery
+TEAM_TMP_MIN_FREE_INODES|apply|int|0,|plain|100000|0 = 临时根 inode 底线关闭||50000,100000,200000|delivery
 TEAM_WARN_AVAIL_MB|apply|mb|0,|plain|2048|0 = 内存只警告的水位关闭||1024,2048,4096|delivery
 TEAM_ZRAM_WARN_PCT|apply|pct|0,100|plain|85|-||70,80,85,90|delivery
 TEAM_AGENT_MEM_MB|apply|mb|1,|plain|6144|-||2048,4096,6144|delivery
@@ -518,7 +521,7 @@ team_config_seat_violation() { # <seat> → 0 合法；1 时 stdout 是原因
 team_config_danger_reason() { # <KEY> <value>
   local key="$1" val="${2-}"
   case "$key" in
-    TEAM_MIN_FREE_SWAP_MB|TEAM_MIN_TOTAL_MB|TEAM_MIN_AVAIL_MB|TEAM_WARN_AVAIL_MB)
+    TEAM_MIN_FREE_SWAP_MB|TEAM_MIN_TOTAL_MB|TEAM_MIN_AVAIL_MB|TEAM_WARN_AVAIL_MB|TEAM_TMP_MIN_FREE_MB|TEAM_TMP_MIN_FREE_INODES)
       [ "$val" = "0" ] && { printf '容量底线归零（守卫失效）\n'; return 1; } ;;
     TEAM_SQUASH_LOOKBACK)
       [ "$val" = "0" ] && { printf '「已 squash 合并」判定关闭\n'; return 1; } ;;

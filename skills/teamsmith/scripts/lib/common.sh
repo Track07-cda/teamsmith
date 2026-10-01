@@ -2698,6 +2698,153 @@ team_mem_guard() {
   return 0
 }
 
+# ---------------------------------------------------------------- 磁盘/inode 腿（P144 · capacity-floor-disk）
+# 一次真实事故（D67）：`/tmp` 是共享 tmpfs，被门禁夹具填满后 pi 以 ENOSPC 死在回合中间（报告与证据全丢）。
+# 旧的内存腿只看 RAM/swap，于是 worker 是在文件系统已经贴墙时被拉起来的 —— 这里补上磁盘/inode 读数，
+# 并用**同一份读数**做派单前的拒绝判断（doctor / capacity.log / 面板读的都是这几个函数，不另造一份）。
+#
+# 读数口径（change design D3）：
+#   team_disk_stats <path> → "total_kb<TAB>avail_kb<TAB>itotal<TAB>ifree<TAB>fsid>"
+#     * 生产：`df -P -k` 与 `df -P -i` 的第 2 行；fsid = df 的挂载点（同一个挂载点 = 同一个文件系统，
+#       于是 /tmp 与工作树落在同一个 fs 时只判一次、只印一次）。
+#     * 夹具：TEAM_DISK_STATS_FILE（`path<TAB>total<TAB>avail<TAB>itotal<TAB>ifree`，最长前缀匹配；
+#       这就是 TEAM_MEMINFO_FILE 的同一招）；fsid = 命中的行路径。
+#     * 读不到（df 失败 / 缺列 / 非数字 / 夹具里没有行）→ 字段留空；调用方**绝不**据此拒绝或猜数。
+#     * itotal 空 / 0 / "-" = 这个文件系统不报 inode 表 → inode 腿不适用（ifree 也留空）。
+team__disk_norm() { # <total> <avail> <itotal> <ifree> <fsid> → 归一化的五字段行（空字段印 "-"）
+  local t="$1" a="$2" it="$3" iff="$4" id="$5"
+  # 字节腿：总数与可用都必须是纯数字；任缺一个 → 这条腿读不到（空）
+  case "$t" in ''|*[!0-9]*) t="" ;; esac
+  case "$a" in ''|*[!0-9]*) a="" ;; esac
+  [ -n "$a" ] || t=""
+  # inode 腿：itotal 空/0/"-" = 不报 inode 表（n/a）；ifree 非数字 = 这条腿读不到
+  case "$it" in ''|'-'|*[!0-9]*) it="" ;; esac
+  case "$iff" in ''|'-'|*[!0-9]*) iff="" ;; esac
+  if [ -z "$it" ] || [ "$it" -eq 0 ]; then it=""; iff=""; fi
+  [ -n "$it" ] || iff=""
+  printf '%s\t%s\t%s\t%s\t%s\n' "${t:--}" "${a:--}" "${it:--}" "${iff:--}" "${id:--}"
+}
+
+# 按 tab 精确切 5 列（空字段不折叠；bash 的 IFS 会把连续 tab 当一个分隔符，这里不能用 read）
+team__disk_split5() { # <line> → _S1.._S5
+  local line="$1" rest
+  _S1="${line%%$'\t'*}"; rest="${line#*$'\t'}"
+  _S2="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+  _S3="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+  _S4="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+  _S5="$rest"
+}
+
+team_disk_stats() { # <path> → "total_kb<TAB>avail_kb<TAB>itotal<TAB>ifree<TAB>fsid>"（读不到 = 每列 "-"）
+  local p="$1" f="${TEAM_DISK_STATS_FILE:-}" best_ln=0 bt="" ba="" bi="" bf="" bid="" ln line
+  if [ -n "$f" ] && [ -r "$f" ]; then
+    while IFS= read -r line; do
+      case "$line" in ''|'#'*) continue ;; esac
+      case "$line" in *$'\t'*$'\t'*$'\t'*$'\t'*) ;; *) continue ;; esac   # 列数不够的畸形行：当没有这行
+      team__disk_split5 "$line"
+      case "$p" in "$_S1"|"$_S1"/*)
+        ln=${#_S1}
+        [ "$ln" -gt "$best_ln" ] && { best_ln=$ln; bt="$_S2"; ba="$_S3"; bi="$_S4"; bf="$_S5"; bid="$_S1"; } ;;
+      esac
+    done < "$f"
+    [ -n "$bid" ] || { printf -- '-\t-\t-\t-\t-\n'; return 0; }
+    team__disk_norm "$bt" "$ba" "$bi" "$bf" "$bid"
+    return 0
+  fi
+  local k i t a it iff mnt
+  k="$(df -P -k "$p" 2>/dev/null)" || { printf -- '-\t-\t-\t-\t-\n'; return 0; }
+  i="$(df -P -i "$p" 2>/dev/null)" || i=""
+  t="$(printf '%s\n' "$k" | awk 'NR==2{print $2}')"
+  a="$(printf '%s\n' "$k" | awk 'NR==2{print $4}')"
+  mnt="$(printf '%s\n' "$k" | awk 'NR==2{print $6}')"
+  it="$(printf '%s\n' "$i" | awk 'NR==2{print $2}')"
+  iff="$(printf '%s\n' "$i" | awk 'NR==2{print $4}')"
+  team__disk_norm "$t" "$a" "$it" "$iff" "$mnt"
+}
+
+# 进程内读者（tab 字段可能是空的，bash 的 IFS 会把连续 tab 折叠，所以走 "-" 占位再还原）：
+#   team__disk_stats <path> → _D_T / _D_A / _D_IT / _D_IFF / _D_ID（空串 = 读不到或不适用）
+team__disk_stats() {
+  local t a it iff id
+  IFS=$'\t' read -r t a it iff id < <(team_disk_stats "$1")
+  _D_T=""; _D_A=""; _D_IT=""; _D_IFF=""; _D_ID=""
+  case "${t:--}" in '-'|'') ;; *) _D_T="$t" ;; esac
+  case "${a:--}" in '-'|'') ;; *) _D_A="$a" ;; esac
+  case "${it:--}" in '-'|'') ;; *) _D_IT="$it" ;; esac
+  case "${iff:--}" in '-'|'') ;; *) _D_IFF="$iff" ;; esac
+  case "${id:--}" in '-'|'') ;; *) _D_ID="$id" ;; esac
+}
+
+# <KB> → 人话（与 P53 的临时根行同一口径：GB/MB/KB 三档）
+team_disk_human_kb() {
+  local kb="${1:-0}"
+  case "$kb" in ''|*[!0-9]*) kb=0 ;; esac
+  if [ "$kb" -ge 1048576 ]; then awk -v k="$kb" 'BEGIN{printf "%.1f GB", k/1048576}'
+  elif [ "$kb" -ge 1024 ]; then awk -v k="$kb" 'BEGIN{printf "%.1f MB", k/1024}'
+  else printf '%s KB' "$kb"; fi
+}
+
+# 一条读数的人话（可见面共用）：可用 7.4 GB（inode 3017869）/（inode n/a）/ 无法读取
+team_disk_reading_text() { # <total_kb> <avail_kb> <itotal> <ifree>
+  local a="$2" it="$3" iff="$4" ino
+  if [ -z "$a" ]; then printf '无法读取'; return 0; fi
+  if [ -z "$it" ]; then ino="n/a"
+  elif [ -z "$iff" ]; then ino="无法读取"
+  else ino="$iff"; fi
+  printf '可用 %s（inode %s）' "$(team_disk_human_kb "$a")" "$ino"
+}
+
+# 这条路径在读数里的身份（派单腿只判这两类路径；其余按工作树处理）
+team_disk_label() { # <path> → 临时根 / 工作树
+  local p="$1" tmp="${TMPDIR:-/tmp}"
+  if [ "$p" = "$tmp" ] || [ "$p" = "${tmp%/}" ]; then printf '临时根'; else printf '工作树'; fi
+}
+
+# 拒绝时的修法（D6：归属有据的回收才是修法 —— 临时根走 tmp-hygiene 的归属证明，工作树只腾自己的路径）
+team_disk_remedy() { # <path> → 一行修法
+  local p="$1" tmp="${TMPDIR:-/tmp}" skill_dir="${TEAM_SKILL_DIR:-skills/teamsmith}"
+  if [ "$p" = "$tmp" ] || [ "$p" = "${tmp%/}" ]; then
+    printf 'bash %s/tests/tmp-hygiene.sh --status 看清单，再 --sweep 回收（只回收归属可证的根）' "$skill_dir"
+  else
+    printf '腾空这个文件系统：%s（清掉占用它的产物；本工具不代删）' "$p"
+  fi
+}
+
+# 派单前的磁盘/inode 守卫：0 = 放行，1 = 拒绝（拒绝理由逐条打印，含路径/读数/阈值/修法/逃生口令）。
+# 三条纪律（design D3/D7）：读不到不判、inode 表不适用只判字节、同一个文件系统只判一次。
+team_disk_guard() { # <path...>
+  local min_mb="${TEAM_TMP_MIN_FREE_MB:-1024}" min_ino="${TEAM_TMP_MIN_FREE_INODES:-100000}"
+  case "$min_mb" in ''|*[!0-9]*) min_mb=1024 ;; esac
+  case "$min_ino" in ''|*[!0-9]*) min_ino=100000 ;; esac
+  local p t a it iff id seen_ids=" " seen_paths=" " crossed rc=0
+  for p in "$@"; do
+    [ -n "$p" ] || continue
+    team__disk_stats "$p"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
+    [ -n "$a" ] || continue                       # 读不到 → 不判、不说（绝不猜一个数字来拒绝）
+    if [ -n "$id" ]; then                          # 同一个文件系统只判一次（真实 df 用挂载点；夹具用命中的行）
+      case "$seen_ids" in *" $id "*) continue ;; esac
+      seen_ids="$seen_ids$id "
+    else
+      case "$seen_paths" in *" $p "*) continue ;; esac
+      seen_paths="$seen_paths$p "
+    fi
+    crossed=""
+    if [ "$min_mb" -gt 0 ] && [ "$a" -lt "$((min_mb * 1024))" ]; then
+      crossed="可用 $(team_disk_human_kb "$a") < 底线 ${min_mb}MB"
+    fi
+    if [ -n "$it" ] && [ -n "$iff" ] && [ "$min_ino" -gt 0 ] && [ "$iff" -lt "$min_ino" ]; then
+      crossed="${crossed:+$crossed、}inode 可用 ${iff} < 底线 ${min_ino}"
+    fi
+    [ -n "$crossed" ] || continue
+    rc=1
+    team_err "$(team_disk_label "$p") $p 磁盘不足（$crossed）：拒绝派单"
+    team_err "  读数：$(team_disk_reading_text "$t" "$a" "$it" "$iff")（总 $(team_disk_human_kb "${t:-0}")）"
+    team_err "  修法：$(team_disk_remedy "$p")"
+    team_err "  或显式冒险：TEAM_TMP_MIN_FREE_MB=0（关字节腿）/ TEAM_TMP_MIN_FREE_INODES=0（关 inode 腿）team dispatch …"
+  done
+  return "$rc"
+}
+
 # 粗略估算还能再加几个 agent（team ps 显示用；TEAM_AGENT_MEM_MB 是经验值）
 team_agent_capacity() {
   local avail swapfree per min_total n diskfree
@@ -2711,14 +2858,29 @@ team_agent_capacity() {
   printf '%s' "$n"
 }
 
+# 容量读数（P144 起带磁盘/inode 腿）：RAM 在最前、agent 估算在最后，中间是每个被判文件系统的一段。
+# 默认判「临时根 + 工作树根」（无目标的共享面）；派单传自己真正要写的两个路径。
+# 同一个文件系统只印一次；读不到印「无法读取」，不适用印 n/a —— 都不编数字。
 team_capacity_line() {
   local avail swapfree swaptotal diskfree disktotal zram_pct zram_phys
   read -r avail swapfree swaptotal <<< "$(team_mem_stats)"
   read -r diskfree disktotal zram_pct zram_phys <<< "$(team_swap_breakdown)"
   local zram_note=""
   [ "$zram_pct" -gt 0 ] && zram_note="，zram 用 ${zram_pct}%${zram_phys:+/物理 ${zram_phys}MB}"
-  printf 'RAM 可用 %sMB%s ｜ 磁盘 swap 空闲 %sMB%s ｜ 估算可再加 %s 个 agent\n' \
-    "$avail" "" "${diskfree}" "$zram_note" "$(team_agent_capacity)"
+  local -a paths=("$@")
+  [ "${#paths[@]}" -gt 0 ] || paths=("${TMPDIR:-/tmp}" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")
+  local disk="" p t a it iff id seen=" "
+  for p in "${paths[@]}"; do
+    [ -n "$p" ] || continue
+    team__disk_stats "$p"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
+    if [ -n "$id" ]; then
+      case "$seen" in *" $id "*) continue ;; esac
+      seen="$seen$id "
+    fi
+    disk="$disk$(team_disk_label "$p") $p $(team_disk_reading_text "$t" "$a" "$it" "$iff") ｜ "
+  done
+  printf 'RAM 可用 %sMB%s ｜ 磁盘 swap 空闲 %sMB%s ｜ %s估算可再加 %s 个 agent\n' \
+    "$avail" "" "${diskfree}" "$zram_note" "$disk" "$(team_agent_capacity)"
 }
 
 # ---------------------------------------------------------------- 巡检待办

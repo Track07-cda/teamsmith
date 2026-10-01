@@ -263,7 +263,12 @@ fixes: §27.
 
 | Error | Cause | What to do |
 |---|---|---|
+<<<<<<< HEAD
 | only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for a seat to finish (`team ps` shows who is running) — or paste the refusal's own `修法：TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` line; that override trades the safety net away for this launch and is printed as a real risk, not a formality |
+=======
+| only X MB of swap left | the `TEAM_MIN_FREE_SWAP_MB` floor (default 1024) | wait for an agent to finish; if slowness is acceptable, `TEAM_MIN_FREE_SWAP_MB=0 team dispatch …` |
+| the temp root (or the worktree filesystem) is below the disk floor | the disk/inode leg: `TEAM_TMP_MIN_FREE_MB` (default 1024) / `TEAM_TMP_MIN_FREE_INODES` (default 100000) over the filesystems a worker will write to (the temp root and the agent's worktree) | the refusal names the path, the measured bytes/inodes, the threshold and the remedy (temp root: `bash skills/teamsmith/tests/tmp-hygiene.sh --status`, then `--sweep`; worktree: free that path); a leg is turned off with `TEAM_TMP_MIN_FREE_MB=0` / `TEAM_TMP_MIN_FREE_INODES=0`, or permanently through the audited writer `team config set <KEY> 0 --allow-danger --yes` — see §25 |
+>>>>>>> task/P144-capacity-floor-disk-apply-sc
 | available memory X MB < 2048 | a warning only (RAM is tight) | you may continue; lower concurrency if it feels sluggish. To silence it completely: `TEAM_WARN_AVAIL_MB=0` |
 | available memory + free swap only X MB | the hard `TEAM_MIN_TOTAL_MB` floor | the machine really is out of resources: stop an agent first; the refusal prints the matching `TEAM_MIN_TOTAL_MB=0 …` route if you accept the risk |
 | MemAvailable down to X MB | the hard `TEAM_MIN_AVAIL_MB` floor (default 1024) | stop or wait for a seat first; the printed `修法：TEAM_MIN_AVAIL_MB=0 team dispatch …` line is the explicit override |
@@ -1092,9 +1097,7 @@ verification record is missing or uncommitted) while reclaiming the rest, and pr
 first deletion (exit 0 when something was done — skips are listed; exit 3 when every candidate was blocked and
 nothing was done). `--status` also counts tmux-side residue — orphan private servers whose socket is gone and stale
 non-`default` sockets with no listener older than the age threshold; `--sweep --tmux-sockets` clears them, the
-default never touches them, and `default` is never a candidate. `team doctor` carries the same headroom as
-one line (free/total bytes and inodes; warning only, threshold `TEAM_TMP_MIN_FREE_MB` /
-`TEAM_TMP_MIN_FREE_INODES`), so a filling tmpfs is visible *before* it turns into a red.
+default never touches them, and `default` is never a candidate. `team doctor` carries the same headroom as one row per judged filesystem (the temp root and the worktrees root — one row when they share a filesystem; free/total bytes and inodes, warning only, thresholds `TEAM_TMP_MIN_FREE_MB` / `TEAM_TMP_MIN_FREE_INODES`), so a filling tmpfs is visible *before* it turns into a red. The same floor is a **dispatch refusal** (P144): the refusal names the path, the figures, the threshold, the `tmp-hygiene.sh` remedy and the explicit override, and `TEAM_TMP_MIN_FREE_MB=0` / `TEAM_TMP_MIN_FREE_INODES=0` (or the audited `team config set <KEY> 0 --allow-danger --yes`) turn that leg off while the other keeps judging.
 
 **Why the roots exist at all**: every fixture creates its temp root through the single owner helper
 `tests/lib/tmp-root.sh` (`${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX`), which writes an owner marker inside and a run

@@ -39,115 +39,115 @@ compare against.
 
 ## 1. R1 · the measurement and the disk/inode leg (`dispatch`)
 
-- [ ] 1.1 `common.sh`: add `team_disk_stats <path>` — production path `df -P -k` + `df -P -i` row 2; fixture path
+- [x] 1.1 `common.sh`: add `team_disk_stats <path>` — production path `df -P -k` + `df -P -i` row 2; fixture path
   `TEAM_DISK_STATS_FILE` (rows `path<TAB>total<TAB>avail<TAB>itotal<TAB>ifree`, longest matching prefix wins); a
   missing row, a failing `df` or a missing/non-numeric column yields no figure; `itotal` empty/0 means the inode
   table is not applicable. Verify: a fixture row resolves to its four numbers; a path with no row yields empties;
   the real worktree (`df -P -i` reports `0/0` here) yields an inapplicable inode leg, and `/nonexistent-p141`
   yields nothing.
-- [ ] 1.2 `common.sh`: add `team_disk_guard <path...>` and the human-size helper — refuse when available bytes <
+- [x] 1.2 `common.sh`: add `team_disk_guard <path...>` and the human-size helper — refuse when available bytes <
   `TEAM_TMP_MIN_FREE_MB` (default 1024) or, only for a reporting filesystem, free inodes <
   `TEAM_TMP_MIN_FREE_INODES` (default 100000); non-numeric threshold → default; `0` → leg off; one judgement per
   resolved device; unreadable/not-applicable = silent. Verify: the recon's five fixture outcomes (full → both
   legs refuse; plenty → allow with figures; no row → silent allow; `itotal=0` plenty → allow; `itotal=0` low bytes
   → bytes-only refusal) reproduce with the production functions.
-- [ ] 1.3 `cmd-agents.sh`: call the guard in the pre-launch phase (before any window, `--print` included, next to
+- [x] 1.3 `cmd-agents.sh`: call the guard in the pre-launch phase (before any window, `--print` included, next to
   `team_mem_guard`), print the measured capacity line when it passes, and make the refusal carry the path, the
   figures, the threshold and one `修法：` line (temp root → `tmp-hygiene.sh --status`, then `--sweep`; worktree →
   free that path) plus the `TEAM_TMP_MIN_FREE_MB=0` / `TEAM_TMP_MIN_FREE_INODES=0` override. Verify: R1's five
   `--print` fixtures; the full fixture's refusal names both measured figures and the remedy, and the override
   clears it; no window is requested on any refusal.
-- [ ] 1.4 `cmd-agents.sh`/`common.sh`: resolve the judged worktree path for a dispatch to the agent's worktree
+- [x] 1.4 `cmd-agents.sh`/`common.sh`: resolve the judged worktree path for a dispatch to the agent's worktree
   (`team_agent_worktree`), not the shared worktrees root. Verify: a fixture whose worktree row is low refuses
   naming that worktree path; the same fixture with only the worktrees root low still judges the temp root.
 
 ## 2. R2 · the patrol and the capacity line (`watchdog`)
 
-- [ ] 2.1 `common.sh`: extend `team_capacity_line` with the temp root's and the worktrees root's measured
+- [x] 2.1 `common.sh`: extend `team_capacity_line` with the temp root's and the worktrees root's measured
   availability and inode figures (`无法读取` / `n/a` where a leg is not judged), keeping RAM first and the agent
   estimate last. Verify: `team ps` under the fixture names both paths with the fixture's figures; the zram
   assertions of smoke 6b stay green.
-- [ ] 2.2 `cmd-watch.sh`: make the tick line carry the new figures and keep the 500-line cap working; `[real]`
+- [x] 2.2 `cmd-watch.sh`: make the tick line carry the new figures and keep the 500-line cap working; `[real]`
   the two ticks run in the fixture session with the record-only shim. Verify: two `team watch --once` runs leave
   two `capacity.log` lines with timestamp + RAM/swap + both filesystems' bytes and inodes; the panel spark still
   finds its RAM samples.
 
 ## 3. R3 · `team doctor` (`watchdog`)
 
-- [ ] 3.1 `cmd-status.sh`: make the temp-root row a per-filesystem row (temp root + worktrees root, one row when
+- [x] 3.1 `cmd-status.sh`: make the temp-root row a per-filesystem row (temp root + worktrees root, one row when
   the device is shared), same floor and figures, warning text says the next dispatch will be refused, unreadable
   and no-inode-table say so instead of a number or a pass. Verify: three doctor shapes — healthy (`pass` rows),
   fixture-low (warn naming path/figures/threshold/remedy, exit 0), unreadable (warn, never pass) — and a
   `df -i`-reports-nothing filesystem (no inode verdict).
-- [ ] 3.2 `cmd-project.sh`: keep the capacity check's structure but reuse the new row(s) so doctor prints one
+- [x] 3.2 `cmd-project.sh`: keep the capacity check's structure but reuse the new row(s) so doctor prints one
   verdict per judged filesystem and the swap warning is unchanged. Verify: `team doctor` output carries both rows
   once and the existing swap-warning assertion still passes.
 
 ## 4. R4 · the panel (`panel`)
 
-- [ ] 4.1 `cmd-watch.sh` (`team_panel_capacity_json`): add `disk` entries (`path`, `avail_mb`, `free_inodes` or
+- [x] 4.1 `cmd-watch.sh` (`team_panel_capacity_json`): add `disk` entries (`path`, `avail_mb`, `free_inodes` or
   `null`, `readable`) sourced from the same measurement. Verify: `team __panel-data --block capacity` carries the
   fixture's paths and figures; the unreadable fixture carries `null`, not a number; the degraded contract (no
   readable `capacity.log` → non-zero) is unchanged.
-- [ ] 4.2 `scripts/panel/src/**`: render the disk readings in the status band with the `—` fallback and add the
+- [x] 4.2 `scripts/panel/src/**`: render the disk readings in the status band with the `—` fallback and add the
   zh/en strings, then rebuild the committed bundle per the panel bundle requirement. Verify: `team monitor
   --print` shows the readings; `team monitor --json` parses; the string-table and bundle tests stay green.
-- [ ] 4.3 Confirm no zram physical figure and no disk spark entered the band (the band's existing rule). Verify:
+- [x] 4.3 Confirm no zram physical figure and no disk spark entered the band (the band's existing rule). Verify:
   the `--json` output carries no `zram` key in `panel.capacity` and the spark is still RAM-built.
 
 ## 5. Scenarios and flips
 
-- [ ] 5.1 `tests/smoke.sh` (section 6b): add the six disk fixtures from R1 (full, plenty, unreadable, `itotal=0`
+- [x] 5.1 `tests/smoke.sh` (section 6b): add the six disk fixtures from R1 (full, plenty, unreadable, `itotal=0`
   plenty, `itotal=0` low, full + both legs zeroed) with the assertions of R1's table, plus the capacity-line and
   doctor reading assertions. Verify: the section is green; each fixture's output tail is pasted in the report.
-- [ ] 5.2 Flip: break the implementation (remove the guard call, or swap the `df` total/avail columns) → the
+- [x] 5.2 Flip: break the implementation (remove the guard call, or swap the `df` total/avail columns) → the
   full/plenty assertions must go red; restore → green. Verify: both raw outputs in the report, with the restored
   run green.
-- [ ] 5.3 FAST behaviour: `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` stays green and the
+- [x] 5.3 FAST behaviour: `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` stays green and the
   new section is either run or visibly skipped, never silently absent. Verify: the tail naming section 6b.
-- [ ] 5.4 R1's escape scenario in the config fixture or smoke: with the full temp-root fixture, `team dispatch …
+- [x] 5.4 R1's escape scenario in the config fixture or smoke: with the full temp-root fixture, `team dispatch …
   --print` refuses; `team config set TEAM_TMP_MIN_FREE_MB 0` exits 7 with the contract byte-identical and a
   `danger-refused` audit line; `team config set TEAM_TMP_MIN_FREE_MB 0 --allow-danger --yes` exits 0, leaves the
   contract parseable with one `result=ok` line, and the same dispatch then exits 0. Verify: the raw before/after
   tails in the report.
-- [ ] 5.5 R5's scenario: `team config list --json` records (`apply`/`1024`/`100000`/`delivery`, seam `refuse`) and
+- [x] 5.5 R5's scenario: `team config list --json` records (`apply`/`1024`/`100000`/`delivery`, seam `refuse`) and
   the settings fixture's three rows (labels, no `TEAM_…` main text; the seam's row opens no editor). Verify: the
   JSON tail and the fixture's scene in the report.
 
 ## 6. Gates and evidence
 
-- [ ] 6.1 `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` passes with the change's deltas.
-- [ ] 6.2 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` passes.
-- [ ] 6.3 `bash skills/teamsmith/tests/smoke.sh </dev/null` passes on an idle-enough machine (if the machine
+- [x] 6.1 `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` passes with the change's deltas.
+- [x] 6.2 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` passes.
+- [x] 6.3 `bash skills/teamsmith/tests/smoke.sh </dev/null` passes on an idle-enough machine (if the machine
   premise reddens a timed panel section, record the load and re-run; the section's own premise governs).
-- [ ] 6.4 Report `docs/team/reports/<ID>-<agent>.md`: the red→green tails of 5.1–5.2, the doctor/panel/
+- [x] 6.4 Report `docs/team/reports/<ID>-<agent>.md`: the red→green tails of 5.1–5.2, the doctor/panel/
   capacity-log raw outputs, both gate tails, and the delta→requirement map.
 
 ## 7. Docs
 
-- [ ] 7.1 `references/config.md`: the two keys' widened scope (temp root **and** worktrees filesystem) with the
+- [x] 7.1 `references/config.md`: the two keys' widened scope (temp root **and** worktrees filesystem) with the
   defaults' derivation; register both in the backticked key table (the schema→docs completeness direction reads
   it) and move them out of the "deliberately not part of the config surface" paragraph — `TEAM_TMP_KEEP` and
   `TEAM_TMP_SWEEP_AGE` stay there; add the `TEAM_DISK_STATS_FILE` fixture row. Verify: `tests/config-cli.sh`
   completeness green in both directions and the env-only paragraph names only the two remaining knobs.
-- [ ] 7.2 `references/troubleshooting.md` (and `SKILL.md` only if its command table mentions the floor): the
+- [x] 7.2 `references/troubleshooting.md` (and `SKILL.md` only if its command table mentions the floor): the
   ENOSPC row — what refuses, what the refusal prints, the `tmp-hygiene` remedy and the explicit override.
   Verify: `grep` finds the disk leg next to the memory/swap floor in both docs.
 
 ## 8. R5 · the three keys are contract rows (schema + labels)
 
-- [ ] 8.1 `cmd-config.sh` (PM-owned hunk): register the two thresholds —
+- [x] 8.1 `cmd-config.sh` (PM-owned hunk): register the two thresholds —
   `TEAM_TMP_MIN_FREE_MB|apply|mb|0,|plain|1024|0 = 临时根可用空间底线关闭||512,1024,2048|delivery` and
   `TEAM_TMP_MIN_FREE_INODES|apply|int|0,|plain|100000|0 = 临时根 inode 底线关闭||50000,100000,200000|delivery` —
   and the seam `TEAM_DISK_STATS_FILE|refuse|path|file,opt|plain||-|测试旋钮：磁盘读数夹具（TEAM_MEMINFO_FILE 同族）；只在夹具里用||policy`.
   Verify: `team config list --json` reports class/default/group/known for all three; `team config set
   TEAM_TMP_MIN_FREE_MB 0` exits 7 writing nothing and its `--allow-danger` form validates; `team config set
   TEAM_DISK_STATS_FILE <path>` exits 5; `tests/config-cli.sh` green (groups / choices / completeness walks).
-- [ ] 8.2 `panel/src/strings/{zh,en}.ts`: `label_TEAM_TMP_MIN_FREE_MB` (planned `临时根空间底线` / `Temp root space
+- [x] 8.2 `panel/src/strings/{zh,en}.ts`: `label_TEAM_TMP_MIN_FREE_MB` (planned `临时根空间底线` / `Temp root space
   floor`), `label_TEAM_TMP_MIN_FREE_INODES` (`临时根 inode 底线` / `Temp root inode floor`) and
   `label_TEAM_DISK_STATS_FILE` (`磁盘读数夹具` / `Disk stats fixture`) — non-empty, not a re-spelling of the key,
   ≤22 cells in en (the planned en labels measure 21/21/18) — then rebuild the committed bundle. Verify:
   `node skills/teamsmith/tests/panel-strings.mjs` green.
-- [ ] 8.3 the fixtures that count schema keys get the new total, never a hardcoded stale number (the config
+- [x] 8.3 the fixtures that count schema keys get the new total, never a hardcoded stale number (the config
   fixture's group/choices walks and `panel-p21.sh settings`' row count). Verify: the named fixtures green before
   delivery; a correct row count does not turn one red.

@@ -150,6 +150,8 @@ empty panel reported as success.
 |---|---|---|
 | `TEAM_MIN_FREE_SWAP_MB` | `1024` | **floor**: below this much free swap the dispatch is refused (a full swap gets processes killed by the OOM killer) |
 | `TEAM_MIN_TOTAL_MB` | `512` | the absolute RAM+swap floor |
+| `TEAM_TMP_MIN_FREE_MB` | `1024` | **floor**: below this much free space the dispatch is refused — judged on the filesystems a worker writes to (the temp root `${TMPDIR:-/tmp}` **and** the worktree filesystem). Derivation: one gate round's root measured 95 MB / 11,797 files, a killed `config-cli` root 99 MB / 10,954 files, so 1 GiB leaves ~10 gate rounds of headroom |
+| `TEAM_TMP_MIN_FREE_INODES` | `100000` | **floor**: the same filesystems' free inodes (judged only where the filesystem reports an inode table). Derivation: the same 10,954-file roots → ~9 roots of headroom; the tmpfs died with 4,645 of 3,811,434 inodes free |
 | `TEAM_WARN_AVAIL_MB` | `2048` | below this much available RAM: warn only (slowness is acceptable), never refuse |
 | `TEAM_AGENT_MEM_MB` | `6144` | empirical footprint of one agent, used by `team ps` for its "how many more fit" estimate |
 | `TEAM_NOTIFY_TMUX` | `1` | `0` = write the inbox only, never type into the PM window |
@@ -302,13 +304,15 @@ see it.
 | `TEAM_REVIEW_ANY_DIR` | `0` | `1` = skip the “checkout HEAD == branch tip” guard when deliberately reviewing a historical revision (pair it with `--branch <sha>`) |
 | `TEAM_MIN_FREE_SWAP_MB` | temporarily override the disk swap floor |
 | `TEAM_MEMINFO_FILE` | point at another meminfo file (for containers/tests without `/proc/meminfo`) |
+| `TEAM_DISK_STATS_FILE` | the disk-reading fixture (`TEAM_MEMINFO_FILE`'s sibling): rows `path<TAB>total_kb<TAB>avail_kb<TAB>itotal<TAB>ifree`, longest matching path prefix wins; a path with no row reads as unreadable — tests only |
 | `TMPDIR` | the temp root every fixture's root resolves to (`${TMPDIR:-/tmp}`); `TMPDIR=D bash tests/config-cli.sh` is the shape of the temp-root flip, and no fixture template may hardcode `/tmp` |
 
 Environment-only temp-root knobs are deliberately **not** part of the config surface (no schema row, not writable into
 `.pi/team/config.sh`): they live in `references/protocol.md` §9b-2 and `references/troubleshooting.md` §25 —
-TEAM_TMP_KEEP (1 = keep the fixture's temp root and print its path), TEAM_TMP_SWEEP_AGE (minutes, default 30),
-TEAM_TMP_MIN_FREE_MB (default 1024) and TEAM_TMP_MIN_FREE_INODES (default 100000) for the `team doctor`
-headroom line.
+TEAM_TMP_KEEP (1 = keep the fixture's temp root and print its path) and TEAM_TMP_SWEEP_AGE (minutes, default 30).
+`TEAM_TMP_MIN_FREE_MB` and `TEAM_TMP_MIN_FREE_INODES` **left** that list (P144): they are the dispatch floor's
+thresholds now, so they are schema rows (class `apply`, group `delivery`) whose `0` goes through
+`team config set … --allow-danger` and the audit line — see the Guards (capacity) table above and §5.
 | `TEAM_MODEL_LIMITS` | temporarily loosen/tighten concurrency (`""` means unlimited) |
 | `TEAM_ASSUME_YES` | `1` = skip `--yes` (only recommended inside automation scripts) |
 | `TEAM_BOARD_DONE_FORCE` | `1` = PM override for the `done` gate: write `done` even though neither a usable review record nor a merged branch exists (`close --status done` has the `--force` flag for the same thing) |
@@ -355,7 +359,7 @@ The vocabulary is exactly these twelve tokens; the visible heading is the table 
 | `roster` | roster, model resolution and adapters | `TEAM_AGENT_CMD`, `TEAM_AGENT_BIN`, `TEAM_MODEL_LIMITS` |
 | `seat-model` | per-seat models | `TEAM_DEFAULT_MODEL`, `TEAM_AGENT_MODELS`, `TEAM_PM_MODEL` |
 | `workflow` | workflow and gates | `TEAM_GATES`, `TEAM_REVIEW_TIMEOUT` |
-| `delivery` | capacity and delivery notices | `TEAM_MIN_AVAIL_MB`, `TEAM_DEFER_TTL` |
+| `delivery` | capacity and delivery notices | `TEAM_MIN_AVAIL_MB`, `TEAM_TMP_MIN_FREE_MB`, `TEAM_DEFER_TTL` |
 | `panel` | pulse and console | `TEAM_PULSE_INTERVAL`, `TEAM_MONITOR_REFRESH` |
 | `patrol` | patrol policy | `TEAM_PULSE_NUDGE_GAP`, `TEAM_PULSE_MAX_RESTARTS` |
 | `pm-lifecycle` | PM lifecycle | `TEAM_PM_CMD`, `TEAM_PM_RESUME_ARGS` |
@@ -388,7 +392,7 @@ under its domain with the committed console bundle, and no group list exists any
 
 A **valid** value that disables a shipped guard or makes a shipped loop spin needs the explicit
 `--allow-danger`: the capacity floors at `0` (`TEAM_MIN_FREE_SWAP_MB`, `TEAM_MIN_TOTAL_MB`, `TEAM_MIN_AVAIL_MB`,
-`TEAM_WARN_AVAIL_MB`), `TEAM_PULSE_INTERVAL` below 60, `TEAM_REVIEW_TIMEOUT` below 60,
+`TEAM_WARN_AVAIL_MB`, `TEAM_TMP_MIN_FREE_MB`, `TEAM_TMP_MIN_FREE_INODES`), `TEAM_PULSE_INTERVAL` below 60, `TEAM_REVIEW_TIMEOUT` below 60,
 `TEAM_PULSE_MAX_RESTARTS=0`, `TEAM_DEFER_TTL=0`, `TEAM_OUTBOX_MAX=0`, `TEAM_SQUASH_LOOKBACK=0`, the
 `TEAM_REVIEW_ALLOW_*` / `TEAM_REVIEW_ANY_DIR` overrides at `1`, `TEAM_BOARD_DONE_FORCE=1`, a non-empty
 `TEAM_MEETING_ALLOW_USER_ID`, and a `TEAM_PULSE_WINDOW` change while a pulse backend still runs under the old

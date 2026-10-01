@@ -60,10 +60,21 @@ export interface PanelOutbox {
   forced: number
 }
 
+export interface PanelDiskEntry {
+  path: string
+  /** null when the figure could not be read (the band renders `—`, never a number). */
+  avail_mb: number | null
+  /** null when the figure is unreadable or the filesystem reports no inode table. */
+  free_inodes: number | null
+  readable: boolean
+}
+
 export interface PanelCapacity {
   ram_avail_mb: number
   swap_free_mb: number
   agents: number
+  /** P144: one entry per judged filesystem (temp root + worktrees root). */
+  disk?: PanelDiskEntry[]
   spark: number[]
   /** `team_capacity_line` verbatim (the one-line fallback when the height folds it). */
   line: string

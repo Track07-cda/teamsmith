@@ -532,8 +532,10 @@ team_panel_outbox_json() {
     "$(team_panel_num "$queued")" "$(team_panel_num "$held")" "$age" "$(team_panel_num "$forced")"
 }
 
-# 容量：RAM/磁盘 swap/还能再加几个 + capacity.log 尾部的迷你图。zram 物理 MB **不进面板**
-# （它留在 `team pulse status`）；所以这里自己算，不直接用 team_capacity_line 的整行。
+# 容量：RAM/磁盘 swap/还能再加几个 + capacity.log 尾部的迷你图 + P144 的磁盘/inode 条目。
+# zram 物理 MB **不进面板**（它留在 `team pulse status`）；所以这里自己算，不直接用 team_capacity_line 的整行。
+# 磁盘条目与派单腿读**同一个** team_disk_stats（临时根 + 工作树根；同一个文件系统只出一条）：
+# 读不到的 avail_mb/readable=false、不报 inode 表的 free_inodes=null —— 面板渲染 `—`，绝不编数字。
 # 源不可用（没有可读、非空的 capacity.log）= 这个块降级：打印尽力而为的 JSON 并返回非 0，面板渲染 `—`。
 team_panel_capacity_json() {
   local avail swapfree swaptotal diskfree disktotal zram_pct zram_phys
@@ -553,9 +555,24 @@ team_panel_capacity_json() {
     degraded=0
   fi
   [ -n "${ram:-}" ] || ram=0
-  printf '{"ram_avail_mb": %s, "swap_free_mb": %s, "agents": %s, "spark": %s}\n' \
+  local p t a it iff id seen=" " entries="" avail_json ino_json readable
+  for p in "${TMPDIR:-/tmp}" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}"; do
+    [ -n "$p" ] || continue
+    team__disk_stats "$p"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
+    if [ -n "$id" ]; then
+      case "$seen" in *" $id "*) continue ;; esac
+      seen="$seen$id "
+    fi
+    avail_json="null"; ino_json="null"; readable="false"
+    if [ -n "$a" ]; then
+      avail_json="$(team_panel_num "$((a / 1024))")"; readable="true"
+      [ -n "$iff" ] && ino_json="$(team_panel_num "$iff")"
+    fi
+    entries="$entries${entries:+, }{\"path\": $(team_panel_json_str "$p"), \"avail_mb\": $avail_json, \"free_inodes\": $ino_json, \"readable\": $readable}"
+  done
+  printf '{"ram_avail_mb": %s, "swap_free_mb": %s, "agents": %s, "disk": [%s], "spark": %s}\n' \
     "$(team_panel_num "$ram")" "$(team_panel_num "$diskfree")" \
-    "$(team_panel_num "$(team_agent_capacity)")" "$spark"
+    "$(team_panel_num "$(team_agent_capacity)")" "$entries" "$spark"
   [ "$degraded" = "0" ]
 }
 

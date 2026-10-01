@@ -25,6 +25,7 @@ export const en = {
   capacityRam: 'RAM {mb}',
   capacitySwap: 'swap {mb}',
   capacityAgents: '{n} more agents fit',
+  capacityDisk: '{path} {mb} (inode {ino})',
   dash: '—',
 
   // Project progress
@@ -278,6 +279,7 @@ export const en = {
   label_TEAM_PI_AGENT_DIR: 'Pi agent dir',
   label_TEAM_PI_SETTINGS_FILE: 'Pi settings file',
   label_TEAM_MEMINFO_FILE: 'meminfo file',
+  label_TEAM_DISK_STATS_FILE: 'Disk stats fixture',
   label_TEAM_SMOKE_FAST: 'Smoke fast mode',
   // -- roster, model resolution and adapters
   label_TEAM_MODEL_LIMITS: 'Concurrency limits',
@@ -314,6 +316,8 @@ export const en = {
   label_TEAM_MIN_FREE_SWAP_MB: 'Free swap floor',
   label_TEAM_MIN_TOTAL_MB: 'RAM+swap floor',
   label_TEAM_MIN_AVAIL_MB: 'Free memory floor',
+  label_TEAM_TMP_MIN_FREE_MB: 'Temp root space floor',
+  label_TEAM_TMP_MIN_FREE_INODES: 'Temp root inode floor',
   label_TEAM_WARN_AVAIL_MB: 'Memory warn line',
   label_TEAM_ZRAM_WARN_PCT: 'zram warn percent',
   label_TEAM_AGENT_MEM_MB: 'Seat memory cap',

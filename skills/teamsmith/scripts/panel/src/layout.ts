@@ -416,13 +416,29 @@ function capacityBlock(ctx: Ctx): Block {
   if (!c || deg.has('capacity')) {
     return { id: 'capacity', title: s.capacityLabel, full: true, priority: 2, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
-  const spark = sparkline(c.spark, Math.min(18, Math.max(0, ctx.width - 60)))
+  const spark0 = Math.min(18, Math.max(0, ctx.width - 60))
+  // P144: one reading per judged filesystem, the `—` fallback for a figure that cannot be read or
+  // an inode table the filesystem does not report. The spark keeps its width rule minus what the
+  // readings take (the band is one line: RAM, swap, the estimate, the filesystems, the chart).
+  const diskSegs = (c.disk ?? []).flatMap((d) => [
+    seg(' ｜ ', 'dim'),
+    seg(
+      fill(s.capacityDisk, {
+        path: d.path,
+        mb: d.avail_mb == null ? s.dash : fmtMB(d.avail_mb),
+        ino: d.free_inodes == null ? s.dash : String(d.free_inodes),
+      }),
+    ),
+  ])
+  const diskW = diskSegs.reduce((n, x) => n + dispWidth(x.text), 0)
+  const spark = sparkline(c.spark, Math.max(0, spark0 - diskW))
   const line = ln(
     seg(fill(s.capacityRam, { mb: fmtMB(c.ram_avail_mb) })),
     seg(' ｜ ', 'dim'),
     seg(fill(s.capacitySwap, { mb: fmtMB(c.swap_free_mb) })),
     seg(' ｜ ', 'dim'),
     seg(fill(s.capacityAgents, { n: c.agents })),
+    ...diskSegs,
     spark ? seg(`  ${spark}`, 'accent') : null,
   )
   return { id: 'capacity', title: s.capacityLabel, full: true, priority: 2, lines: [{ line: truncLine(line, ctx.width) }] }

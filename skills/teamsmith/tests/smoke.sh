@@ -1854,6 +1854,228 @@ if env "$MEMENV-doomed" "$SWAPENV" $TEAM dispatch dev T1.1 "$TASKFILE" --print >
   bad "RAM+swap 都见底时应当拒绝"
 else ok "RAM+swap 双低 → 拒绝派单"; fi
 
+# ---------------------------------------------------------------- 6b-2. 磁盘/inode 腿（P144 · capacity-floor-disk）
+# R1 的六个夹具（change design D7 的表）+ 读数面（capacity line / doctor / capacity.log）+ 逃生口令。
+# 夹具表 = path<TAB>total<TAB>avail<TAB>itotal<TAB>ifree（最长前缀匹配）；路径用**真**临时根与这个
+# 夹具仓库的工作树，于是断言与机器无关。三条纪律各有一个夹具：读不到 → 不判不说；不报 inode 表 →
+# 只判字节；同一个文件系统只判一次（夹具表里同一行 = 同一个文件系统）。
+DISK_TMP="${TMPDIR:-/tmp}"
+DISK_WTROOT="$REPO/.worktrees"
+DISK_WTDEV="$REPO/.worktrees/dev"
+DISK_PLENTY_KB=5242880
+DISK_PLENTY_INO=2978499
+disk_row() { # <文件> <路径> <avail_kb> <itotal> <ifree>（avail_kb = "-" → 这一行不写）
+  [ "$3" = "-" ] || printf '%s\t15245736\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" >> "$1"
+}
+disk_new() { : > "$1"; }
+disk_dispatch() { # <夹具表> <日志> [额外 env...] → dispatch --print（内存/swap 也走夹具，只看磁盘腿）
+  local table="$1" log="$2"; shift 2
+  env "$MEMENV-plenty" "$SWAPENV" "TEAM_DISK_STATS_FILE=$table" "$@" \
+    $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$log" 2>&1
+}
+DISK_FULL="$TMP/disk-full.table";        disk_new "$DISK_FULL"
+disk_row "$DISK_FULL" "$DISK_TMP"      122880 "$DISK_PLENTY_INO" 40000
+disk_row "$DISK_FULL" "$DISK_WTROOT"  "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_FULL" "$DISK_WTDEV"   "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+DISK_PLENTY="$TMP/disk-plenty.table";    disk_new "$DISK_PLENTY"
+disk_row "$DISK_PLENTY" "$DISK_TMP"     "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_PLENTY" "$DISK_WTROOT" "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_PLENTY" "$DISK_WTDEV"  "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+DISK_NONE="$TMP/disk-none.table";        disk_new "$DISK_NONE"
+disk_row "$DISK_NONE" "$DISK_TMP"       - - -                                  # 临时根读不到
+disk_row "$DISK_NONE" "$DISK_WTROOT"   "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_NONE" "$DISK_WTDEV"    "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+DISK_NOINO_PLENTY="$TMP/disk-noino-plenty.table"; disk_new "$DISK_NOINO_PLENTY"
+disk_row "$DISK_NOINO_PLENTY" "$DISK_TMP"     "$DISK_PLENTY_KB" 0 0            # 不报 inode 表
+disk_row "$DISK_NOINO_PLENTY" "$DISK_WTROOT" "$DISK_PLENTY_KB" 0 0
+disk_row "$DISK_NOINO_PLENTY" "$DISK_WTDEV"  "$DISK_PLENTY_KB" 0 0
+DISK_NOINO_LOW="$TMP/disk-noino-low.table";     disk_new "$DISK_NOINO_LOW"
+disk_row "$DISK_NOINO_LOW" "$DISK_TMP"     122880 0 0
+disk_row "$DISK_NOINO_LOW" "$DISK_WTROOT"  "$DISK_PLENTY_KB" 0 0
+disk_row "$DISK_NOINO_LOW" "$DISK_WTDEV"   "$DISK_PLENTY_KB" 0 0
+DISK_LOWWT="$TMP/disk-lowwt.table";       disk_new "$DISK_LOWWT"
+disk_row "$DISK_LOWWT" "$DISK_TMP"      "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_LOWWT" "$DISK_WTROOT"  "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_LOWWT" "$DISK_WTDEV"   122880 3811434 "$DISK_PLENTY_INO"
+
+# ① 不足 → 拒绝：点名路径/读数/阈值 + 一条修法（临时根 → tmp-hygiene）+ 逃生口令；不开窗
+if disk_dispatch "$DISK_FULL" "$TMP/disk-full.log"; then
+  bad "临时根低于磁盘底线时应当拒绝派单"
+else ok "磁盘不足（字节 + inode 两条腿）→ 拒绝派单"; fi
+assert_has "$TMP/disk-full.log" "临时根 $DISK_TMP 磁盘不足" "拒绝点名临时根路径"
+assert_has "$TMP/disk-full.log" "可用 120.0 MB < 底线 1024MB" "拒绝点名实测字节与阈值"
+assert_has "$TMP/disk-full.log" "inode 可用 40000 < 底线 100000" "拒绝点名实测 inode 与阈值"
+assert_has "$TMP/disk-full.log" "tmp-hygiene.sh --status 看清单，再 --sweep" "拒绝给临时根的归属有据修法"
+assert_has "$TMP/disk-full.log" "TEAM_TMP_MIN_FREE_MB=0" "拒绝给显式逃生口令"
+assert_not "$TMP/disk-full.log" "=== agent 命令" "拒绝发生在任何开窗动作之前（没有打出启动计划）"
+
+# ② 充足 → 放行 + 打印读数（判的是这个 worker 自己的工作树，不是共享的 worktrees 根）
+if disk_dispatch "$DISK_PLENTY" "$TMP/disk-plenty.log"; then ok "磁盘充足 → 允许派单"
+else bad "磁盘充足时不应拒绝"; sed -n '1,4p' "$TMP/disk-plenty.log"; fi
+assert_has "$TMP/disk-plenty.log" "临时根 $DISK_TMP 可用 5.0 GB（inode $DISK_PLENTY_INO）" "容量行打印临时根读数"
+assert_has "$TMP/disk-plenty.log" "工作树 $DISK_WTDEV 可用 5.0 GB（inode $DISK_PLENTY_INO）" "容量行判的是这个 agent 的工作树"
+
+# ③ 读不到 → 不判不说：放行、不印数字、可见地写「无法读取」
+if disk_dispatch "$DISK_NONE" "$TMP/disk-none.log"; then ok "临时根读不到 → 仍然放行（不判不说）"
+else bad "读不到时不应拒绝"; fi
+assert_has "$TMP/disk-none.log" "临时根 $DISK_TMP 无法读取" "读不到 → 可见地写「无法读取」"
+assert_not "$TMP/disk-none.log" "拒绝派单" "读不到时不拒绝"
+
+# ④ 不报 inode 表（itotal=0）→ 只判字节：充足放行、inode 腿不吭声
+if disk_dispatch "$DISK_NOINO_PLENTY" "$TMP/disk-noino.log"; then ok "不报 inode 表 + 字节充足 → 放行"
+else bad "不报 inode 表时不该因为 inode 拒绝"; fi
+assert_has "$TMP/disk-noino.log" "临时根 $DISK_TMP 可用 5.0 GB（inode n/a）" "inode 腿不适用 → 不印数字（n/a）"
+# ⑤ 同一个不报 inode 表的文件系统、字节低 → 只按字节拒绝
+if disk_dispatch "$DISK_NOINO_LOW" "$TMP/disk-noino-low.log"; then bad "字节低（无 inode 表）时应当拒绝"
+else ok "不报 inode 表 + 字节低 → 按字节拒绝"; fi
+assert_has "$TMP/disk-noino-low.log" "可用 120.0 MB < 底线 1024MB" "拒绝点名字节阈值"
+assert_not "$TMP/disk-noino-low.log" "底线 100000" "拒绝没有点 inode 阈值（那条腿不判）"
+
+# ⑥ 两条腿归零 → 同一个 full 夹具放行（逃生口令的环境形态）
+if disk_dispatch "$DISK_FULL" "$TMP/disk-off.log" TEAM_TMP_MIN_FREE_MB=0 TEAM_TMP_MIN_FREE_INODES=0; then
+  ok "两条腿归零 → 同一个 full 夹具放行"
+else bad "两条腿归零后仍然拒绝"; fi
+
+# ⑦ 判的是这个 agent 的工作树，不是共享的 worktrees 根
+if disk_dispatch "$DISK_LOWWT" "$TMP/disk-lowwt.log"; then bad "工作树低于底线时应当拒绝"
+else ok "工作树低于底线 → 拒绝派单"; fi
+assert_has "$TMP/disk-lowwt.log" "工作树 $DISK_WTDEV 磁盘不足" "拒绝点名该 agent 的工作树路径"
+assert_not "$TMP/disk-lowwt.log" "工作树 $DISK_WTROOT 磁盘不足" "共享 worktrees 根没有冒充被拒的路径"
+
+# ⑧ 同一个文件系统只判一次（夹具表里同一行 = 同一个文件系统）
+DISK_SAME="$TMP/disk-same.table"; disk_new "$DISK_SAME"
+disk_row "$DISK_SAME" "$DISK_TMP" 122880 3811434 40000
+disk_same_out="$(env "TEAM_DISK_STATS_FILE=$DISK_SAME" bash -c '
+  . "$1/scripts/lib/common.sh"
+  team_disk_guard "$2" "$2/sub" 2>&1; printf "rc=%s\n" "$?"' _ "$SKILL_DIR" "$DISK_TMP" 2>&1)"
+assert_eq "同一个文件系统只判一次（拒绝只出现一次）" "$(printf '%s\n' "$disk_same_out" | grep -c '磁盘不足')" "1"
+
+# ⑨ 读数面：capacity line（team ps）与 doctor 行读同一个测量、同一对阈值
+env "$MEMENV-plenty" "$SWAPENV" "TEAM_DISK_STATS_FILE=$DISK_PLENTY" $TEAM ps >"$TMP/disk-ps.log" 2>&1
+assert_has "$TMP/disk-ps.log" "临时根 $DISK_TMP 可用 5.0 GB（inode $DISK_PLENTY_INO）" "team ps 的容量行带临时根读数"
+assert_has "$TMP/disk-ps.log" "工作树 $DISK_WTROOT 可用 5.0 GB（inode $DISK_PLENTY_INO）" "team ps 的容量行带工作树根读数"
+env "TEAM_DISK_STATS_FILE=$DISK_FULL" $TEAM doctor >"$TMP/disk-doctor.log" 2>&1; DISK_DRC=$?
+assert_eq "磁盘低的 doctor 仍然退出 0（宿主资源行不改退出码）" "$DISK_DRC" "0"
+assert_has "$TMP/disk-doctor.log" "临时根余量" "doctor 有临时根余量行"
+assert_has "$TMP/disk-doctor.log" "工作树余量" "doctor 有工作树余量行"
+assert_has "$TMP/disk-doctor.log" "现在派单会被拒绝" "doctor 的警告说清楚下一次派单会被拒"
+assert_match "$TMP/disk-doctor.log" "临时根余量 +! $DISK_TMP：可用 120\.0 MB / 总 14\.5 GB 低于底线 1024MB" "doctor 点名路径/读数/阈值"
+env "TEAM_DISK_STATS_FILE=$DISK_NONE" $TEAM doctor >"$TMP/disk-doctor-none.log" 2>&1
+assert_match "$TMP/disk-doctor-none.log" "临时根余量 +! $DISK_TMP 的余量读不出来" "读不到 → warn（绝不报 ok）"
+env "TEAM_DISK_STATS_FILE=$DISK_NOINO_PLENTY" $TEAM doctor >"$TMP/disk-doctor-noino.log" 2>&1
+assert_has "$TMP/disk-doctor-noino.log" "inode 不适用（这个文件系统不报 inode 表）" "不报 inode 表 → 说出来，不印数字"
+
+# ⑩ 逃生口令经审计写入器（R1 的验收面）：字节腿关掉、inode 腿照旧判。
+# 契约用**副本**（TEAM_CONFIG_FILE）—— 不碰 $REPO 的契约，后面的段落不受影响。
+DISK_ESC="$TMP/disk-esc.table"; disk_new "$DISK_ESC"
+disk_row "$DISK_ESC" "$DISK_TMP"     122880 3811434 "$DISK_PLENTY_INO"      # 字节低、inode 足
+disk_row "$DISK_ESC" "$DISK_WTROOT"  "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_ESC" "$DISK_WTDEV"   "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+DISK_ESC_INO="$TMP/disk-esc-ino.table"; disk_new "$DISK_ESC_INO"
+disk_row "$DISK_ESC_INO" "$DISK_TMP"     "$DISK_PLENTY_KB" 3811434 40000          # 字节足、inode 低
+disk_row "$DISK_ESC_INO" "$DISK_WTROOT" "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+disk_row "$DISK_ESC_INO" "$DISK_WTDEV"  "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+ESC_CONFIG="$TMP/disk-escape-config.sh"
+cp "$REPO/.pi/team/config.sh" "$ESC_CONFIG"
+esc_main_before="$(sha256sum "$REPO/.pi/team/config.sh" | awk '{print $1}')"
+if disk_dispatch "$DISK_ESC" "$TMP/disk-esc1.log" "TEAM_CONFIG_FILE=$ESC_CONFIG"; then
+  bad "逃生口令前：字节腿低于底线应当拒绝"
+else ok "逃生口令前：字节腿拒绝派单（inode 腿不在这次判据里）"; fi
+assert_has "$TMP/disk-esc1.log" "可用 120.0 MB < 底线 1024MB" "第一次拒绝点名字节阈值"
+esc_cfg_before="$(sha256sum "$ESC_CONFIG" | awk '{print $1}')"
+env "TEAM_CONFIG_FILE=$ESC_CONFIG" $TEAM config set TEAM_TMP_MIN_FREE_MB 0 >"$TMP/disk-set1.log" 2>&1; DISK_SET1=$?
+assert_eq "没有 --allow-danger 的写是危险值（exit 7）" "$DISK_SET1" "7"
+assert_eq "被拒的写没有动契约" "$(sha256sum "$ESC_CONFIG" | awk '{print $1}')" "$esc_cfg_before"
+env "TEAM_CONFIG_FILE=$ESC_CONFIG" $TEAM config log 3 >"$TMP/disk-audit1.log" 2>&1 || true
+assert_has "$TMP/disk-audit1.log" "result=danger-refused" "被拒的写留了 danger-refused 审计行"
+env "TEAM_CONFIG_FILE=$ESC_CONFIG" $TEAM config set TEAM_TMP_MIN_FREE_MB 0 --allow-danger --yes >"$TMP/disk-set2.log" 2>&1; DISK_SET2=$?
+assert_eq "--allow-danger --yes 的写成功（exit 0）" "$DISK_SET2" "0"
+if bash -n "$ESC_CONFIG" 2>/dev/null; then ok "写入后契约仍可解析"; else bad "写入后契约解析失败"; fi
+env "TEAM_CONFIG_FILE=$ESC_CONFIG" $TEAM config log 20 >"$TMP/disk-audit2.log" 2>&1 || true
+assert_eq "这次写入恰好一条 result=ok" "$(grep -c 'result=ok.*key=TEAM_TMP_MIN_FREE_MB' "$TMP/disk-audit2.log")" "1"
+if disk_dispatch "$DISK_ESC" "$TMP/disk-esc2.log" "TEAM_CONFIG_FILE=$ESC_CONFIG"; then
+  ok "逃生口令生效：同一条派单放行（字节腿关、inode 腿仍判）"
+else bad "逃生口令没有生效"; sed -n '1,4p' "$TMP/disk-esc2.log"; fi
+if disk_dispatch "$DISK_ESC_INO" "$TMP/disk-esc3.log" "TEAM_CONFIG_FILE=$ESC_CONFIG"; then
+  bad "关掉字节腿不该关掉 inode 腿"
+else ok "字节腿关掉后 inode 腿仍然拒绝"; fi
+assert_has "$TMP/disk-esc3.log" "inode 可用 40000 < 底线 100000" "inode 腿的拒绝理由照旧"
+assert_eq "逃生场景没有碰主契约" "$(sha256sum "$REPO/.pi/team/config.sh" | awk '{print $1}')" "$esc_main_before"
+
+# ⑪ R5：三个键是契约行（机器读 + 夹具缝拒绝可写）
+env "TEAM_CONFIG_FILE=$ESC_CONFIG" $TEAM config list --json >"$TMP/disk-keys.json" 2>/dev/null
+if python3 - "$TMP/disk-keys.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+by = {k['name']: k for k in d['keys']}
+bad = []
+for name, cls, default, group in (('TEAM_TMP_MIN_FREE_MB', 'apply', '1024', 'delivery'),
+                                  ('TEAM_TMP_MIN_FREE_INODES', 'apply', '100000', 'delivery'),
+                                  ('TEAM_DISK_STATS_FILE', 'refuse', '', 'policy')):
+    k = by.get(name)
+    if k is None:
+        bad.append('%s: 没有记录' % name)
+        continue
+    if k['class'] != cls: bad.append('%s: class %r != %r' % (name, k['class'], cls))
+    if k['default'] != default: bad.append('%s: default %r != %r' % (name, k['default'], default))
+    if k['group'] != group: bad.append('%s: group %r != %r' % (name, k['group'], group))
+print('OK' if not bad else '\n'.join('PROBLEM\t' + b for b in bad))
+PY
+then ok "三个键的 class/default/group 与 schema 一致（机器读）"
+else bad "三个键的机器读不对"; sed -n '1,6p' "$TMP/disk-keys.json"; fi
+env "TEAM_CONFIG_FILE=$ESC_CONFIG" $TEAM config set TEAM_DISK_STATS_FILE "$DISK_PLENTY" >"$TMP/disk-set3.log" 2>&1; DISK_SET3=$?
+assert_eq "夹具缝是 refuse 类（写 → exit 5）" "$DISK_SET3" "5"
+
+# ⑫ [real] 两拍 capacity.log：真跑 watch --once 会写 capacity.log（FAST 的全局不变量不许），
+# 所以在**自己的** scratch 项目里跑两拍，断言每行带时间戳 + RAM/swap + 两个文件系统的字节/inode。
+if [ "$FAST" = "1" ]; then
+  fast_skip "6b·磁盘容量日志（两拍 watch --once）" "真跑两拍会写 capacity.log（FAST 的全局不变量不许）"
+else
+  DISK_TICKR="$TMP/disk-tick-repo"
+  mkdir -p "$DISK_TICKR"
+  ( cd "$DISK_TICKR" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+      && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+  ( cd "$DISK_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      -u TEAM_STATE_DIR $TEAM init --session "teamsmith-smoke-disk-$$" --agents dev --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+  DISK_TICK_TABLE="$TMP/disk-tick.table"; disk_new "$DISK_TICK_TABLE"
+  disk_row "$DISK_TICK_TABLE" "$DISK_TMP"          "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+  disk_row "$DISK_TICK_TABLE" "$DISK_TICKR/.worktrees" "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
+  ( cd "$DISK_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      -u TEAM_STATE_DIR "TEAM_DISK_STATS_FILE=$DISK_TICK_TABLE" $TEAM watch --once ) >"$TMP/disk-tick1.log" 2>&1 || true
+  ( cd "$DISK_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      -u TEAM_STATE_DIR "TEAM_DISK_STATS_FILE=$DISK_TICK_TABLE" $TEAM watch --once ) >"$TMP/disk-tick2.log" 2>&1 || true
+  DISK_TICK_LOG="$DISK_TICKR/.pi/team/state/capacity.log"
+  assert_eq "两拍 watch --once 给 capacity.log 添了两行" "$(wc -l < "$DISK_TICK_LOG" 2>/dev/null | tr -d ' ' || echo 0)" "2"
+  tail -2 "$DISK_TICK_LOG" >"$TMP/disk-tick-tail.log" 2>/dev/null || true
+  assert_match "$TMP/disk-tick-tail.log" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z RAM 可用 [0-9]+MB .* 磁盘 swap 空闲 [0-9]+MB .*临时根 .*可用 5\.0 GB（inode 2978499）.*工作树 .*可用 5\.0 GB（inode 2978499）.*估算可再加' "每行带时间戳 + RAM/swap + 两个文件系统的字节/inode"
+fi
+
+# ⑬ 反向：既有的容量腿（RAM/swap/zram）行为与文案没被动过 —— 上面那几条内存守卫断言（MemAvailable
+# 见底 / 磁盘 swap 见底 / zram 打满只警告）就是旧腿的反向守门人；这里再钉形状：RAM 在前、swap 次之、
+# 磁盘读数居中、估算在最后（磁盘读数只插进去，没有把旧字段挪位或改名）。
+assert_match "$TMP/disk-plenty.log" 'RAM 可用 [0-9]+MB.*磁盘 swap 空闲 [0-9]+MB.*临时根 .*（inode [0-9]+）.*工作树 .*（inode [0-9]+）.*估算可再加 [0-9?]+ 个 agent$' \
+  "P144 反向：容量行仍是 RAM → swap → 磁盘读数 → 估算（旧字段没挪位）"
+assert_has "$TMP/ps-cap.log" "zram 用" "P144 反向：zram 分账文案照旧"
+
+# ⑭ 读数只读（1.4）：测量函数与 doctor 跑一圈，state/ 一个字节不变（F28 的口径）
+DISK_FP_BEFORE="$(state_fp)"
+env "$MEMENV-plenty" "$SWAPENV" "TEAM_DISK_STATS_FILE=$DISK_PLENTY" $TEAM doctor >/dev/null 2>&1 || true
+env "TEAM_DISK_STATS_FILE=$DISK_FULL" bash -c '
+  . "$1/scripts/lib/common.sh"
+  team_disk_stats "$2" >/dev/null
+  team_disk_guard "$2" >/dev/null 2>&1
+  team_capacity_line "$2" >/dev/null' _ "$SKILL_DIR" "$DISK_TMP" >/dev/null 2>&1 || true
+assert_eq "读数只读：doctor 与测量函数不改 state/ 一个字节" "$(state_fp)" "$DISK_FP_BEFORE"
+
+# ⑮ P140 整合：磁盘腿是启动前那一趟里的一个 finding —— 它和别的阻塞项在同一份拒绝里交底
+# （旧形状：磁盘腿自己 return 1 先走，内存的阻塞项就看不到了）
+if disk_dispatch "$DISK_FULL" "$TMP/disk-combo.log" "TEAM_MEMINFO_FILE=$TMP/meminfo-lowram"; then
+  bad "磁盘 + 内存双低时应当拒绝"
+else ok "磁盘 + 内存双低 → 拒绝派单"; fi
+assert_has "$TMP/disk-combo.log" "磁盘不足" "同一份拒绝里有磁盘阻塞项"
+assert_has "$TMP/disk-combo.log" "MemAvailable 只剩" "同一份拒绝里有内存阻塞项（磁盘腿没抢自己的出口）"
+assert_has "$TMP/disk-combo.log" "共 2 个阻塞项" "拒绝末行数出两个阻塞项"
+
 # 模型限额通配（D8）
 section "6c · 模型并发限额（含通配）"
 assert_eq "openai-codex/* 通配上限生效" "$(TEAM_ROOT=$REPO bash -c '. "'$SKILL_DIR'/scripts/lib/common.sh"; team_load_config; team_model_limit openai-codex/gpt-5.4-codex')" "1"
@@ -9524,7 +9746,11 @@ assert_eq "26-b 观察者：临时 state 目录逐字节不变（含已有文件
 # 所以连 6b 造的 swaps 夹具一起钉。
 p10cap=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps")
 p10c() { p10m env "${p10cap[@]}" "$@"; }                 # 26-c 里所有真跑：带容量夹具
-p10_norm() { sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' "${1:-/dev/null}"; }
+p10_norm() { # 归一化时钟与实时容量（P144 起含每个文件系统的读数），其余逐字节比
+  sed -E -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' \
+      -e 's/可用 [0-9.]+ [KMG]B（inode [0-9]+）/可用 X（inode N）/' \
+      -e 's/[0-9.]+[KMG]（inode [0-9]+）/[X]（inode N）/' "${1:-/dev/null}"
+}
 p10_diff1() { diff <(p10_norm "$1") <(p10_norm "$2") 2>/dev/null | head -4 | tr '\n' ' '; }  # 失败信息里的首个差异
 
 p10c $TEAM monitor --print >"$TMP/p10-print.txt" 2>"$TMP/p10-print.err"
@@ -9939,7 +10165,9 @@ if [ "${P10_TICK2:-0}" = "${P10_TICK1:-0}" ]; then ok "26-n tick：--no-pulse �
 else bad "26-n tick：--no-pulse 仍然 tick（$P10_TICK1 → $P10_TICK2）"; fi
 p10_stable() { # 归一化帧里随时间/内存变化的量（时钟与实时容量），其余逐字节比
   sed -E -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/g' -e 's/RAM [0-9.]+[MG]/RAM X/' -e 's/swap [0-9.]+[MG]/swap X/' \
-      -e 's/可再加 [0-9?]+ 个/可再加 N 个/' -e 's/[▁▂▃▄▅▆▇█]+/SPARK/' "$1"
+      -e 's/可再加 [0-9?]+ 个/可再加 N 个/' -e 's/[▁▂▃▄▅▆▇█]+/SPARK/' \
+      -e 's/可用 [0-9.]+ [KMG]B（inode [0-9]+）/可用 X（inode N）/' \
+      -e 's/[0-9.]+[KMG]（inode [0-9]+）/[X]（inode N）/' "$1"
 }
 if diff <(p10_stable "$TMP/p10-tick-print.txt") <(p10_stable "$TMP/p10-tick-once.txt") >/dev/null; then
   ok "26-n tick：--once 的帧与 --print 一致（只差时间戳与实时容量；tick 在渲染之后）"
@@ -10457,7 +10685,10 @@ fi
 assert_match "$SKILL_DIR/references/config.md" '^\| `TEAM_MONITOR_REFRESH` \| `3`' "28-d config.md：TEAM_MONITOR_REFRESH 的默认写成 3"
 
 # ---- 28-e panel.conf 是运行时偏好：机读出口 --print/--json 完全不读它
-p28cap=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps")
+p28cap=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps" TEAM_DISK_STATS_FILE="$TMP/p28-disk.table")
+# P144：磁盘读数也会动（inode 计数随文件创建变），所以机读出口的比较也给它一个夹具表
+printf '%s\t15245736\t5242880\t3811434\t2978499\n%s/.worktrees\t975437824\t303232680\t3811434\t2978499\n' \
+  "${TMPDIR:-/tmp}" "$P27R" >"$TMP/p28-disk.table"
 printf 'lang=en\npage=3\nactivity=0\nmouse=0\ndensity=compact\ntheme=light\n' >"$P27R/.pi/team/state/panel.conf"
 p27 env "${p28cap[@]}" $TEAM monitor --json >"$TMP/p28-conf-a.json" 2>/dev/null
 p27 env "${p28cap[@]}" $TEAM monitor --print >"$TMP/p28-conf-a.txt" 2>/dev/null

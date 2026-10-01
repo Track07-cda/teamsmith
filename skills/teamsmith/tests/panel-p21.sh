@@ -687,6 +687,26 @@ PYFIX
   fi
   if wait_cap refuse-route "手改"; then ok "refuse 行的回执点名路线"; else bad "refuse 行的回执没出现"; fi
   assert_eq "refuse 行没有写契约" "$(sha "$(cfg)")" "$before"
+  # P144：磁盘底线的两行 + 夹具缝一行 —— 行主文本是标签（不是裸键），类徽章照旧；缝是 refuse：
+  # 回车只给路线，不开编辑器、不写契约。
+  filter_to 临时根空间底线
+  cap_to p144-mb
+  assert_match "$tmp/$current/p144-mb.txt" '› 临时根空间底线 +未设 · 默认 1024 · 立即生效' \
+    "P144：临时根空间底线 行是人话标签 + apply 徽章"
+  assert_not "$tmp/$current/p144-mb.txt" '临时根空间底线 +TEAM_' "P144：字节底线行主文本不是裸键"
+  filter_to inode 底线
+  if focus_row '临时根 inode 底线 +未设 · 默认 100000'; then :; else bad "P144：没能把焦点移到 inode 底线行"; fi
+  cap_to p144-ino
+  assert_match "$tmp/$current/p144-ino.txt" '› 临时根 inode 底线 +未设 · 默认 100000 · 立即生效' \
+    "P144：临时根 inode 底线 行是人话标签 + apply 徽章"
+  local p144_before; p144_before="$(sha "$(cfg)")"
+  filter_to 磁盘读数夹具
+  cap_to p144-seam
+  assert_match "$tmp/$current/p144-seam.txt" '› 磁盘读数夹具 +.*只读' \
+    "P144：磁盘读数夹具 行是人话标签 + refuse 徽章"
+  if focus_row '磁盘读数夹具 +.*只读'; then keys Enter; else bad "P144：没能把焦点移到夹具缝行"; fi
+  if wait_cap p144-seam-route "手改"; then ok "P144：缝行的回执点名手改路线（不开编辑器）"; else bad "P144：缝行的回执没出现"; fi
+  assert_eq "P144：缝行没有写契约" "$(sha "$(cfg)")" "$p144_before"
   # M59: the navigation esc is state-checked too — it fires only while the settings view is on a
   # settled frame, so a drifted scene gets a named red instead of a blind key.
   pty_key_when "esc 回浮层" '╭─ 项目设置' Escape || bad "esc 前设置视图已经不在屏幕上"
