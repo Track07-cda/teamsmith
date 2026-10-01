@@ -151,12 +151,19 @@ chk_wrapper_transparent() { # <tree>：包装器与 bash 入口逐字节、逐 r
   return 0
 }
 
+# 最低大版本只有一处真源：bin/team.mjs 的 BASH_MIN_MAJOR。夹具从这里读，禁止写死
+# （2026-10-01 实测：把 CLI 的下限从 4 提到 5 之后，本文件里写死的 4 让 39 段红了三条 ✗）
+bash_floor_of() { # <tree>
+  grep -oE 'BASH_MIN_MAJOR *= *[0-9]+' "$1/bin/team.mjs" 2>/dev/null | grep -oE '[0-9]+' | head -1
+}
+
 chk_no_bash_red() { # <tree> <空 PATH 目录>：没有 bash 时必须拒跑、给修法、不打版本行
-  local t="$1" d="$2" out rc
+  local t="$1" d="$2" out rc floor; floor="$(bash_floor_of "$t")"
+  [ -n "$floor" ] || { printf '找不到 BASH_MIN_MAJOR（真源缺失）\n'; return 1; }
   out="$(PATH="$d" "$NODE_BIN" "$t/bin/team.mjs" version 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then printf '没有 bash 时居然 rc=0\n'; return 1; fi
   case "$out" in *bash*) ;; *) printf '没点名 bash：[%s]\n' "$out"; return 1 ;; esac
-  case "$out" in *4*) ;; *) printf '没点名最低版本 4：[%s]\n' "$out"; return 1 ;; esac
+  case "$out" in *"$floor"*) ;; *) printf '没点名最低版本 %s：[%s]\n' "$floor" "$out"; return 1 ;; esac
   case "$out" in *Requirements*) ;; *) printf '没有指向 README 的 Requirements：[%s]\n' "$out"; return 1 ;; esac
   if printf '%s' "$out" | grep -qE '^teamsmith [0-9]'; then printf '居然打了版本行：[%s]\n' "$out"; return 1; fi
   printf '拒跑并给修法（rc=%s）\n' "$rc"
@@ -164,14 +171,15 @@ chk_no_bash_red() { # <tree> <空 PATH 目录>：没有 bash 时必须拒跑、�
 }
 
 chk_old_bash_red() { # <tree> <假 bash 目录（对 BASH_VERSINFO 探针答 3，其余转交真 bash）>
-  local t="$1" shim="$2" out rc
+  local t="$1" shim="$2" out rc floor; floor="$(bash_floor_of "$t")"
+  [ -n "$floor" ] || { printf '找不到 BASH_MIN_MAJOR（真源缺失）\n'; return 1; }
   out="$(PATH="$shim:$PATH" "$NODE_BIN" "$t/bin/team.mjs" version 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then printf '老 bash 下居然 rc=0\n'; return 1; fi
   case "$out" in *bash*) ;; *) printf '没点名 bash：[%s]\n' "$out"; return 1 ;; esac
   case "$out" in *3*) ;; *) printf '没点名找到的大版本 3：[%s]\n' "$out"; return 1 ;; esac
-  case "$out" in *4*) ;; *) printf '没点名最低大版本 4：[%s]\n' "$out"; return 1 ;; esac
+  case "$out" in *"$floor"*) ;; *) printf '没点名最低大版本 %s：[%s]\n' "$floor" "$out"; return 1 ;; esac
   if printf '%s' "$out" | grep -qE '^teamsmith [0-9]'; then printf 'CLI 居然跑了：[%s]\n' "$out"; return 1; fi
-  printf '点名找到的 3 与最低的 4（rc=%s）\n' "$rc"
+  printf '点名找到的 3 与最低的 %s（rc=%s）\n' "$floor" "$rc"
   return 0
 }
 
@@ -380,8 +388,9 @@ if want surfaces; then
   else
     bad "README §Install 行序不对：npm=[$n_r_npm] pi install=[$n_r_pi] install.sh=[$n_r_sh]"
   fi
-  grep -F 'bash' "$tree/README.md" | grep -F '≥ 4' | grep -qiF 'checks' \
-    && ok "README 的 bash 行写明入口会检查它" || bad "README 的 bash 行没写检查"
+  local floor_r; floor_r="$(bash_floor_of "$tree")"
+  grep -F 'bash' "$tree/README.md" | grep -F "≥ $floor_r" | grep -qiF 'checks' \
+    && ok "README 的 bash 行写明入口会检查它（≥ $floor_r）" || bad "README 的 bash 行没写检查（要求 ≥ $floor_r 且有 checks；真源 BASH_MIN_MAJOR=$floor_r）"
 fi
 
 # ---------------------------------------------------------------- install · R2
@@ -498,13 +507,13 @@ if want shell; then
   else
     check_holds "真实树：包装器与 bash 入口逐字节逐 rc 一致" chk_wrapper_transparent "$tree"
     nobash="$tmp/no-bash"; mkdir -p "$nobash"
-    check_holds "没有 bash：拒跑、点名 bash/4、指向 Requirements" chk_no_bash_red "$tree" "$nobash"
+    check_holds "没有 bash：拒跑、点名 bash 与最低版本、指向 Requirements" chk_no_bash_red "$tree" "$nobash"
     real_bash="$(command -v bash)"
     shim="$tmp/old-bash"; mkdir -p "$shim"
     printf '#!%s\nfor a in "$@"; do case "$a" in *BASH_VERSINFO*) printf 3; exit 0 ;; esac; done\nexec %s "$@"\n' \
       "$real_bash" "$real_bash" > "$shim/bash"
     chmod +x "$shim/bash"
-    check_holds "老 bash（探针答 3）：点名 3 与 4、CLI 没跑" chk_old_bash_red "$tree" "$shim"
+    check_holds "老 bash（探针答 3）：点名找到的版本与最低版本、CLI 没跑" chk_old_bash_red "$tree" "$shim"
   fi
 fi
 
