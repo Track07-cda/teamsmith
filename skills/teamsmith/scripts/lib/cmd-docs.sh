@@ -23,11 +23,20 @@ team_cmd_task() {
   local file="$TEAM_DOCS_ABS/tasks/$id-$slug.md"
   [ -f "$file" ] && team_die "任务书已存在：$file"
 
+  # P140（dispatch-friction · R1）：任务书自己带一条 `branch:` 行 —— 名字在 worktree 存在之前就可见，
+  # 标题后来改名也不动它（dispatch 的解析顺序：--branch ＞ 这一行 ＞ 由标题推导；推导只有一份）。
+  local branch_name
+  if team_branch_mode_is_task; then branch_name="$(team_task_branch_for_id "$id" "$title")"
+  else branch_name="$(team_agent_branch "$agent")"; fi
   team_render "$(team_tmpl_dir)/task.md.tmpl" \
     "ID=$id" "TITLE=$title" "AGENT=$agent" "DEPS=$deps" "ISSUE=$issue" "SLUG=$slug" \
     "PROJECT=$TEAM_PROJECT" "DOCS_DIR=$TEAM_DOCS_DIR" "GATES=${TEAM_GATES:-<未配置：先跟 PM 约定验收命令>}" \
-    "DATE=$(date +%F)" > "$file"
+    "DATE=$(date +%F)" \
+    | awk -v br="$branch_name" '
+        !done && /^agent:/ { print; print "branch: " br; done=1; next }
+        { print }' > "$file"
   team_ok "write $file"
+  team_dim "  分支：$branch_name（dispatch 按它检查工作树；--branch 可显式覆盖）"
 
   if [ -z "$(team_board_row "$id" 2>/dev/null || true)" ]; then
     team_board_add "$id" "$title" "$agent" "-" "$deps"

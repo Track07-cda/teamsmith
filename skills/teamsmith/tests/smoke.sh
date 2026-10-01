@@ -1472,6 +1472,9 @@ TASKFILE="$(ls "$REPO"/docs/team/tasks/T1.1-*.md 2>/dev/null | head -1)"
 sed -i 's|^anchor: -.*$|anchor: none (infra) — smoke fixture (test scaffolding, no product requirement)|' "$TASKFILE"
 assert_file "$TASKFILE" "生成任务书"
 assert_has "$TASKFILE" "agent:  dev" "任务书含 agent 字段"
+# P140（dispatch-friction · R1）：任务书自己带 `branch:` 行 —— 名字在 worktree 存在之前就可见，
+# dispatch 按同一份推导检查（标题改了也不动它）。
+assert_has "$TASKFILE" "branch: $(canon_branch dev T1.1)" "P140：任务书写入 `branch:` 行（与 dispatch 的推导同源）"
 assert_has "$TASKFILE" "true" "任务书写入门禁命令"
 assert_eq "BOARD 建行（todo）" "$($TEAM board row T1.1 2>/dev/null | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$(NF-1)); print $(NF-1)}' || true)" "todo"
 
@@ -1694,6 +1697,56 @@ assert_eq "F3：team status 打印的是同一份 roster 行" \
 assert_has "$TMP/status-branch.log" "任务 T1.1：" "F3：team status 打印该任务的标题行"
 assert_has "$TMP/status-branch.log" "报告" "F3：team status 打印该任务的报告行"
 [ -f "$REPO/.pi/team/state/dev.env" ] && sed -i '/^task=T1.1$/d' "$REPO/.pi/team/state/dev.env" || true
+# ---------------------------------------------------------------- P140（dispatch-friction · R1）分支身份可见可指定
+# 实测摩擦（recon A1）：PM 预先建了 task/P134-p134，dispatch 从标题推导出另一个 slug 直接拒绝 ——
+# 而那条分支**就是本任务的**（同 ID）。旧行为的红侧在 recon.log；这里钉住新行为的三半：
+# ① 同一任务、另一个 slug、**第一次派单**（state 里没有 task 记录）→ 放行，两个名字都打印；
+# ② 解析出的名字与来源在开窗前可见（任务书 branch: 行 / 标题推导）；
+# ③ --branch 可用、不许被静默换成同任务的另一个分支；指到别的任务仍然拒绝。
+P140_LEGACY="task/T1.1-legacy2"
+git -C "$REPO" branch -D "$P140_LEGACY" >/dev/null 2>&1 || true
+git -C "$REPO/.worktrees/dev" switch -c "$P140_LEGACY" "$PROTECTED" >/dev/null 2>&1 || git -C "$REPO/.worktrees/dev" switch "$P140_LEGACY" >/dev/null 2>&1
+if $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/p140-same-task.log" 2>&1; then
+  ok "P140/R1：工作树停在本任务另一个 slug（$P140_LEGACY）→ 放行（旧实现拒绝，recon A1）"
+else bad "P140/R1：同一任务的另一个 slug 仍被拒（见 $TMP/p140-same-task.log）"; fi
+assert_has "$TMP/p140-same-task.log" "$P140_LEGACY" "R1：打印工作树当前分支"
+assert_has "$TMP/p140-same-task.log" "$T1_BRANCH" "R1：打印解析出的分支"
+assert_has "$TMP/p140-same-task.log" "属于本任务" "R1：说明 slug 差异不算换任务"
+assert_has "$TMP/p140-same-task.log" "分支：$T1_BRANCH（来源：任务书 branch: 行）" "R1：解析名与来源=任务书 branch: 行"
+assert_has "$TMP/p140-same-task.log" "Your task branch is" "R1：生成的派单提示词里也带上任务分支（agent 不必猜）"
+# 去掉 branch: 行 → 退回标题推导（同一名字，来源注解不同）
+P140_BRANCH_LINE="$(grep -m1 '^branch:' "$TASKFILE" || true)"
+sed -i '/^branch:/d' "$TASKFILE"
+if $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/p140-title-source.log" 2>&1; then
+  ok "P140/R1：没有 branch: 行时按标题推导照旧派单"
+else bad "P140/R1：标题推导路径失败（见 $TMP/p140-title-source.log）"; fi
+assert_has "$TMP/p140-title-source.log" "（来源：由标题" "R1：来源写明由标题推导"
+assert_has "$TMP/p140-title-source.log" "$T1_BRANCH" "R1：标题推导出的名字与任务书行一致"
+grep -q '^branch:' "$TASKFILE" || sed -i "s|^agent:  dev$|agent:  dev\n${P140_BRANCH_LINE}|" "$TASKFILE"
+assert_has "$TASKFILE" "$P140_BRANCH_LINE" "P140 夹具：branch: 行已还原"
+# --branch 可用：显式声明的本任务名字被接受，来源打印
+if $TEAM dispatch dev T1.1 "$TASKFILE" --branch "$P140_LEGACY" --print >"$TMP/p140-branch-flag.log" 2>&1; then
+  ok "P140/R1：--branch 声明本任务分支 → 接受"
+else bad "P140/R1：--branch 被拒（见 $TMP/p140-branch-flag.log）"; fi
+assert_has "$TMP/p140-branch-flag.log" "分支：$P140_LEGACY（来源：--branch）" "R1：--branch 的来源被打印"
+# --branch 指到别的任务 → 拒绝，点名接受形状，不开窗
+if $TEAM dispatch dev T1.1 "$TASKFILE" --branch task/T9.9-other --print >"$TMP/p140-branch-other.log" 2>&1; then
+  bad "P140/R1：--branch 指到别的任务应当拒绝"
+else ok "P140/R1：--branch 指到别的任务 → 拒绝"; fi
+assert_has "$TMP/p140-branch-other.log" "task/T9.9-other" "R1：点名被拒的分支"
+assert_has "$TMP/p140-branch-other.log" "task/T1.1-" "R1：点名接受的形状"
+assert_not "$TMP/p140-branch-other.log" "=== agent 命令" "R1：拒绝时没有派单计划"
+# --branch 的显式声明不被同任务的另一个 slug 静默替换（声明赢）
+if $TEAM dispatch dev T1.1 "$TASKFILE" --branch "$T1_BRANCH" --print >"$TMP/p140-branch-mismatch.log" 2>&1; then
+  bad "P140/R1：声明的 --branch 与工作树不一致时应当拒绝"
+else ok "P140/R1：--branch 与工作树不一致 → 拒绝（不静默替换）"; fi
+assert_has "$TMP/p140-branch-mismatch.log" "$P140_LEGACY" "R1：点名工作树当前分支"
+assert_has "$TMP/p140-branch-mismatch.log" "$T1_BRANCH" "R1：点名 --branch 声明的分支"
+assert_match "$TMP/p140-branch-mismatch.log" "git -C .* switch" "R1：给出该跑的切换命令"
+assert_not "$TMP/p140-branch-mismatch.log" "=== agent 命令" "R1：不一致时不派单"
+# 还原：工作树回到任务分支、删掉临时分支（后面的段落依赖这个状态）
+git -C "$REPO/.worktrees/dev" switch "$T1_BRANCH" >/dev/null 2>&1 || true
+git -C "$REPO" branch -D "$P140_LEGACY" >/dev/null 2>&1 || true
 # M6.3 F15：项目外的任务书必须被拒。旧行为：--print 成功，还把 /tmp/x.md 标成 "repo-relative
 # path"；而同一份提示词命令 worker "work only inside <project>" —— 自相矛盾。
 OUTSIDE_BRIEF="$TMP/outside-brief.md"
@@ -12998,6 +13051,36 @@ for _case in "G1:change: 的值是 \`alpha, beta\`" "G2:change: 的值是 \`alph
   assert_eq "12g $_id 拒绝发生在开窗之前" "$(p24_shim_windows)" "0"
 done
 p24_unchanged "$P24G" G1 "$G1_ROW" "12g 派单被拒"
+# P140（dispatch-friction · R2）：拒绝的**第一行**就带合法示例与具体原因（不必读两遍）；
+# 每条给一条可粘的 `改行：`。旧行为的红侧在 recon B1/B2：首行没有示例，且把尾随文字错报成「多个 change」。
+for _case in "G1:change: alpha" "G3:change: alpha"; do
+  _id="${_case%%:*}"; _fix="${_case#*:}"
+  _out="$(p24_dispatch "$P24G" dev "$_id" "docs/team/tasks/$_id-fixture.md" --print)"
+  _first="$(printf '%s\n' "$_out" | grep -m1 .)"
+  case "$_first" in
+    *"合法示例：change:"*) ok "P140/R2：$_id 拒绝的第一行带合法示例" ;;
+    *) bad "P140/R2：$_id 首行没有示例：$(printf '%s' "$_first" | cut -c1-140)" ;;
+  esac
+  assert_has_echo "$_out" "改行：$_fix" "P140/R2：$_id 给出可粘的改行（$_fix）"
+done
+# 尾随文字：点名 id 之外的字符（旧实现错报「超过一个 change」）
+p24_brief "$P24G" G4 dev apply "panel（说明）" -
+p24_add "$P24G" G4 dev
+G4_ROW="$(p24_board_row "$P24G" G4)"
+G4_OUT="$(p24_dispatch "$P24G" dev G4 docs/team/tasks/G4-fixture.md --print)"
+G4_FIRST="$(printf '%s\n' "$G4_OUT" | grep -m1 .)"
+case "$G4_FIRST" in
+  *"合法示例：change: panel"*) ok "P140/R2：尾随文字的首行给出示例 change: panel" ;;
+  *) bad "P140/R2：尾随文字的首行没有示例（$(printf '%s' "$G4_FIRST" | cut -c1-140)）" ;;
+esac
+case "$G4_FIRST" in
+  *"（说明）"*) ok "P140/R2：尾随文字的首行点名 id 之外的字符" ;;
+  *) bad "P140/R2：尾随文字没有点名 id 之外的字符" ;;
+esac
+assert_has_echo "$G4_OUT" "改行：change: panel" "P140/R2：尾随文字给出改行"
+assert_not_echo "$G4_OUT" "一个任务最多属于一个 change" "P140/R2：不再错报原因（尾随文字不是「多个 change」）"
+assert_eq "P140/R2：尾随文字拒绝发生在开窗之前" "$(p24_shim_windows)" "0"
+p24_unchanged "$P24G" G4 "$G4_ROW" "12g P140 尾随文字被拒"
 for _case in "N1:specs: 是空的" "N2:少了理由" "N3:openspec/specs/no-such-capability/spec.md" "N4:### Requirement: Not A Requirement"; do
   _id="${_case%%:*}"; _frag="${_case#*:}"
   N_ROW="$(p24_board_row "$P24G" "$_id")"
@@ -13125,6 +13208,47 @@ elif [ "$HAVE_TMUX" = "1" ]; then
 else
   printf '  (跳过 12h --force 审计落盘：没有 tmux)\n'
 fi
+
+# P140（dispatch-friction · R3）：deltas: 畸形的首行教学 + 可粘的 改行；逗号列表是接受形态
+mkdir -p "$P24H/openspec/changes/p140d/specs/verification"
+printf '## MODIFIED Requirements\n\n### Requirement: p140d verification fixture\n' > "$P24H/openspec/changes/p140d/specs/verification/spec.md"
+for _case in 'D1|panel · verification|·' 'D2|panel,|末尾有空项' 'D3|panel verification|空白不是分隔符'; do
+  _id="${_case%%|*}"; _rest="${_case#*|}"; _val="${_rest%%|*}"; _why="${_rest#*|}"
+  p24_brief "$P24H" "$_id" dev apply p140d "$_val"
+  p24_add "$P24H" "$_id" dev
+  p24_wt "$P24H" dev "$_id"
+  D_ROW="$(p24_board_row "$P24H" "$_id")"
+  D_OUT="$(p24_dispatch "$P24H" dev "$_id" "docs/team/tasks/$_id-fixture.md" --print)"
+  D_FIRST="$(printf '%s\n' "$D_OUT" | grep -m1 .)"
+  case "$D_FIRST" in
+    *"合法示例：deltas:"*) ok "P140/R3：$_id 拒绝的第一行带合法示例" ;;
+    *) bad "P140/R3：$_id 首行没有示例（$(printf '%s' "$D_FIRST" | cut -c1-140)）" ;;
+  esac
+  case "$D_FIRST" in
+    *"$_why"*) ok "P140/R3：$_id 点名具体原因（$_why）" ;;
+    *) bad "P140/R3：$_id 没有点名 $_why" ;;
+  esac
+  D_FIX="$(printf '%s\n' "$D_OUT" | sed -n 's/^.*改行：deltas: //p' | head -1)"
+  if [ -z "$D_FIX" ]; then
+    bad "P140/R3：$_id 没有可粘的改行建议"
+  else
+    sed -i "s|^deltas: .*|deltas: $D_FIX|" "$P24H/docs/team/tasks/$_id-fixture.md"
+    D_OUT2="$(p24_dispatch "$P24H" dev "$_id" "docs/team/tasks/$_id-fixture.md" --print)"; D_RC2=$?
+    assert_eq "P140/R3：$_id 按改行建议（deltas: $D_FIX）写入后放行" "$D_RC2" "0"
+    assert_not_echo "$D_OUT2" "deltas: 行不合法" "P140/R3：$_id 写入建议后不再报 deltas 畸形"
+  fi
+  p24_unchanged "$P24H" "$_id" "$D_ROW" "12h P140 $_id 被拒"
+done
+# 接受形态（示例形状真的能用）：逗号分隔的两个 capability（全新 change，避免 D2 已改成 panel 的单写者重叠）
+mkdir -p "$P24H/openspec/changes/p140e/specs/panel" "$P24H/openspec/changes/p140e/specs/verification"
+printf '## MODIFIED Requirements\n\n### Requirement: p140e panel fixture\n' > "$P24H/openspec/changes/p140e/specs/panel/spec.md"
+printf '## MODIFIED Requirements\n\n### Requirement: p140e verification fixture\n' > "$P24H/openspec/changes/p140e/specs/verification/spec.md"
+p24_brief "$P24H" D4 dev apply p140e "panel, verification"
+p24_add "$P24H" D4 dev
+p24_wt "$P24H" dev D4
+D4_OUT="$(p24_dispatch "$P24H" dev D4 docs/team/tasks/D4-fixture.md --print)"; D4_RC=$?
+assert_eq "P140/R3：逗号列表 panel, verification 被接受（示例形状真的能用）" "$D4_RC" "0"
+assert_not_echo "$D4_OUT" "deltas: 行不合法" "P140/R3：逗号列表没有被拒"
 
 # ---------------------------------------------------------------- 12i · 按 change 判独立性（B5）
 section "12i · 按 change 判独立性（P24/B5）"
@@ -16409,13 +16533,13 @@ if [ -f "$SKILL_DIR/tests/routes.sh" ]; then
   ( cd "$TMP" && bash "$SKILL_DIR/tests/routes.sh" ) >"$TMP/routes.log" 2>&1 || P99_ROUTES_RC=$?
   if [ "$P99_ROUTES_RC" -eq 0 ]; then
     ok "51 routes.sh 全绿（$(grep -ac '✓' "$TMP/routes.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/routes.log" || true) 条可见跳过）"
-    { grep -aE '== (walk|control|promises|flips) ==' "$TMP/routes.log" || true; } | sed 's/^/      /'
+    { grep -aE '== (walk|control|promises|refusals|flips) ==' "$TMP/routes.log" || true; } | sed 's/^/      /'
   else
-    bad "51 routes.sh 有失败（rc=$P99_ROUTES_RC）——用法行/注释承诺与真实解析器不一致"
+    bad "51 routes.sh 有失败（rc=$P99_ROUTES_RC）——用法行/注释承诺/拒绝路线与真实解析器不一致"
     grep -a '✗' "$TMP/routes.log" | head -10 | sed 's/^/      /'
   fi
   # 翻转段的红侧尾巴（完整门禁才有；FAST 里是 SKIP）——留给现场
-  { grep -aE '翻转[①②③④⑤⑥⑦]' "$TMP/routes.log" || true; } | head -8 | sed 's/^/      /'
+  { grep -aE '翻转[①②③④⑤⑥⑦⑧⑨⑩]' "$TMP/routes.log" || true; } | head -12 | sed 's/^/      /'
 else
   bad "51 缺 tests/routes.sh（P99 的用法诚实性走查）"
 fi
@@ -16506,6 +16630,219 @@ if [ -f "$P127_LIB" ]; then
 else
   bad "53 缺 tests/lib/pty-wait.sh"
 fi
+# ═════════════════════════════════════════════════════════════════════
+# 54 · 派单摩擦（P140 · dispatch-friction）：一次拒绝列全 + 覆盖审计 + 席位预提示
+#
+# 夹具是自己的 scratch 项目 + 一个**会签启动证据**的录制 shim（窗口注册表 + 从 harness 命令行里
+# 解析 (nonce, marker) 写下 spawn/exit 证据）—— 没有一条命令碰真 tmux。
+# 覆盖：R4/R5（三项阻塞 → 一份拒绝 + 计行；不开窗/不写 state/不动看板；粘贴修法后重跑通过；
+# --print 同样判定；--force 每个覆盖项恰一行审计且 --print 不写）与 R6（quota / 0 字节 / 三种沉默）。
+section "54 · 派单摩擦：一次拒绝列全 + 覆盖审计 + 席位预提示（P140）"
+P140_ROOT="$TMP/p140"
+P140_SHIM="$P140_ROOT/shim"
+P140_CALLS="$P140_ROOT/shim-calls.log"
+P140_WINREG="$P140_ROOT/windows.reg"
+mkdir -p "$P140_SHIM"
+cat > "$P140_SHIM/tmux" <<'P140SHIM'
+#!/usr/bin/env bash
+# 录制 tmux：窗口注册表；TEAM_ROUTES_FAKE_LAUNCH=1 时替窗口 harness 写启动/退出证据。不碰真 tmux。
+printf '%s\n' "$*" >> "${TEAM_ROUTES_TMUX_LOG:-/dev/null}" 2>/dev/null || true
+win="${TEAM_ROUTES_WINDOWS:-/dev/null}"
+sub="" t="" name=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -L|-S|-f|-T|-c) shift 2 ;;
+    -*) shift ;;
+    *) sub="$1"; shift; break ;;
+  esac
+done
+rest=("$@"); _i=0
+while [ "$_i" -lt ${#rest[@]} ]; do
+  case "${rest[$_i]}" in
+    -t) t="${rest[$((_i+1))]:-}"; _i=$((_i+2)) ;;
+    -n) name="${rest[$((_i+1))]:-}"; _i=$((_i+2)) ;;
+    *) _i=$((_i+1)) ;;
+  esac
+done
+reg() { [ -n "$1" ] || return 0; grep -qxF "$1" "$win" 2>/dev/null || printf '%s\n' "$1" >> "$win"; }
+unreg() { [ -n "$1" ] || return 0; [ -f "$win" ] || return 0; grep -vxF "$1" "$win" > "$win.tmp" 2>/dev/null || true; mv "$win.tmp" "$win"; }
+case "$sub" in
+  has-session) exit 1 ;;
+  list-windows)
+    [ -f "$win" ] || exit 0
+    if [ -n "$t" ]; then awk -F: -v s="$t" '$1==s{print $2}' "$win"; else cat "$win"; fi
+    exit 0 ;;
+  new-window) reg "${t:-?}:$name"; exit 0 ;;
+  kill-window) unreg "${t:-?}"; exit 0 ;;
+  respawn-pane)
+    if [ "${TEAM_ROUTES_FAKE_LAUNCH:-0}" = "1" ]; then
+      inner="" prev=""
+      for a in "${rest[@]}"; do [ "$prev" = "-lc" ] && inner="$a"; prev="$a"; done
+      if [ -n "$inner" ]; then
+        marker="$(printf '%s' "$inner" | grep -oE "/[^ \"']*dispatch-[A-Za-z0-9_.-]+\.spawn" | head -1)"
+        exitf="$(printf '%s' "$inner" | grep -oE "/[^ \"']*dispatch-[A-Za-z0-9_.-]+\.exit" | head -1)"
+        nonce="$(printf '%s' "$inner" | sed -n 's/.*printf "%s %s\\n" \([^ ][^ ]*\) \$\$ >.*/\1/p' | head -1)"
+        [ -n "$marker" ] && [ -n "$nonce" ] && printf '%s %s\n' "$nonce" 4242 > "$marker"
+        [ -n "$exitf" ] && [ -n "$nonce" ] && printf '%s %s\n' "$nonce" 0 > "$exitf"
+      fi
+    fi
+    exit 0 ;;
+  list-panes|list-sessions|display-message|set-window-option|capture-pane) exit 0 ;;
+  show-options) printf 'on\n'; exit 0 ;;
+esac
+exit 0
+P140SHIM
+chmod +x "$P140_SHIM/tmux"
+printf '#!/usr/bin/env bash\nexec bash %q "$@"\n' "$SKILL_DIR/scripts/team" > "$P140_SHIM/team"
+chmod +x "$P140_SHIM/team"
+: > "$P140_CALLS"; : > "$P140_WINREG"
+
+p140_repo() { # <名字> → 全新 git 项目（team init + pi=/bin/true）
+  local n="$1" p
+  p="$P140_ROOT/$n"
+  rm -rf "$p"; mkdir -p "$p"
+  ( cd "$p" && git init -q -b main && git config user.email p140@smoke && git config user.name p140 \
+      && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+  ( cd "$p" && $TEAM init --session "p140-$n" --agents "dev verify" --vcs local --gates true --docs docs/team ) >"$p/.init.log" 2>&1
+  printf 'TEAM_PI_BIN="/bin/true"\n' >> "$p/.pi/team/config.sh"
+  printf '%s\n' "$p"
+}
+p140_brief() { # <repo> <ID> <agent> <phase> <change> <anchor> <deltas>
+  local p="$1" id="$2" agent="$3" ph="$4" ch="$5" an="$6" de="$7"
+  mkdir -p "$p/docs/team/tasks"
+  {
+    printf '# %s · P140 fixture\n\n```\ntask:   %s\nagent:  %s\nissue:  -\n' "$id" "$id" "$agent"
+    printf 'change: %s\nspecs:  -\nanchor: %s\nphase:  %s\ndeltas: %s\ndeps:   -\nstatus: todo\nbudget: -\n```\n\nbody\n' \
+      "$ch" "$an" "$ph" "$de"
+  } > "$p/docs/team/tasks/$id-fixture.md"
+}
+p140_branch() { # <repo> <agent> <ID> → 规范任务分支
+  local p="$1" a="$2" id="$3"
+  ( cd "$p" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR bash -c '
+      . "'"$SKILL_DIR"'/scripts/lib/common.sh"
+      for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+      team_load_config >/dev/null 2>&1; team_branch_for_agent "$1" "$2"' _ "$a" "$id" )
+}
+p140_wt() { # <repo> <agent> <branch>
+  local p="$1" a="$2" br="$3"
+  git -C "$p" worktree add -q -b "$br" "$p/.worktrees/$a" main >/dev/null 2>&1 \
+    || git -C "$p" worktree add -q "$p/.worktrees/$a" "$br" >/dev/null 2>&1 || true
+}
+p140_run() { # <repo> <team 参数…> → 组合输出；rc = CLI 的 rc（录制 shim + 假启动证据）
+  local p="$1"; shift
+  ( cd "$p" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" TEAM_ROUTES_WINDOWS="$P140_WINREG" \
+      TEAM_ROUTES_TMUX_LOG="$P140_CALLS" TEAM_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
+      TEAM_PI_AGENT_DIR="$p/.pi-agent" TEAM_MEETINGS_DIR="$p/.meetings" $TEAM "$@" </dev/null ) 2>&1
+}
+p140_windows() { grep -cE 'new-window|respawn-pane' "$P140_CALLS" 2>/dev/null || true; }
+
+# ---- R4/R5 ⇂ 三项阻塞的一次拒绝（可清）
+P140A="$(p140_repo once)"
+p140_run "$P140A" board add P200 "P200 fixture" dev - - >/dev/null 2>&1
+p140_brief "$P140A" P200 dev apply 'panel（说明）' - 'panel · verification'
+p140_wt "$P140A" dev task/T9.9-other
+P140A_ROW0="$(p140_run "$P140A" board row P200 | tail -1)"
+: > "$P140_CALLS"
+P140A_OUT="$(p140_run "$P140A" dispatch dev P200 docs/team/tasks/P200-fixture.md)"; P140A_RC=$?
+assert_eq "R4：三项阻塞的一次派单被拒" "$([ "$P140A_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$P140A_OUT" "change: 行不合法" "R4：拒绝列全——change 行"
+assert_has_echo "$P140A_OUT" "deltas: 行不合法" "R4：拒绝列全——deltas 行"
+assert_has_echo "$P140A_OUT" "停在不属于本任务" "R4：拒绝列全——分支身份"
+assert_has_echo "$P140A_OUT" "共 3 个阻塞项" "R4：末行计数 = 3（一次列全）"
+assert_eq "R4：拒绝时一个窗口都没要" "$(p140_windows)" "0"
+assert_not_file "$P140A/.pi/team/state/dev.env" "R4：拒绝时不写 state"
+p140_unchanged_ok() { [ "$(p140_run "$1" board row "$2" | tail -1)" = "$3" ] && ok "$4" || bad "$4"; }
+p140_unchanged_ok "$P140A" P200 "$P140A_ROW0" "R4：拒绝时不动看板"
+P140A_PRINT="$(p140_run "$P140A" dispatch dev P200 docs/team/tasks/P200-fixture.md --print)"; P140A_PRINT_RC=$?
+assert_eq "R5：--print 同样拒绝（rc≠0）" "$([ "$P140A_PRINT_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$P140A_PRINT" "共 3 个阻塞项" "R5：--print 也是同一份三项拒绝"
+assert_not_echo "$P140A_PRINT" "=== 提示词" "R5：--print 被拒时不打印提示词"
+assert_eq "R5：--print 也不开窗" "$(p140_windows)" "0"
+# 粘贴打印出来的修法：两条改行 + 一条 switch → 一次清掉
+P140A_CHANGE_FIX="$(printf '%s\n' "$P140A_OUT" | sed -n 's/^.*改行：change: //p' | head -1)"
+P140A_DELTAS_FIX="$(printf '%s\n' "$P140A_OUT" | sed -n 's/^.*改行：deltas: //p' | head -1)"
+P140A_SWITCH="$(printf '%s\n' "$P140A_OUT" | sed -n 's/^.*修法：\(git -C .* switch .*\)$/\1/p' | head -1)"
+[ -n "$P140A_CHANGE_FIX" ] && [ -n "$P140A_DELTAS_FIX" ] && [ -n "$P140A_SWITCH" ] \
+  && ok "R5：三项各有一条可粘的修法（$(printf '%s' "$P140A_SWITCH" | cut -c1-60)…）" \
+  || bad "R5：没有抽到全部三条修法（change=[$P140A_CHANGE_FIX] deltas=[$P140A_DELTAS_FIX] switch=[$P140A_SWITCH]）"
+sed -i "s|^change: .*|change: $P140A_CHANGE_FIX|" "$P140A/docs/team/tasks/P200-fixture.md"
+sed -i "s|^deltas: .*|deltas: $P140A_DELTAS_FIX|" "$P140A/docs/team/tasks/P200-fixture.md"
+( cd "$P140A" && bash -c "$P140A_SWITCH" ) >/dev/null 2>&1 || bad "R5：打印的 switch 命令没跑成"
+: > "$P140_CALLS"
+P140A_OUT2="$(p140_run "$P140A" dispatch dev P200 docs/team/tasks/P200-fixture.md)"; P140A_RC2=$?
+assert_eq "R5：粘贴三条修法后重派通过" "$P140A_RC2" "0"
+assert_not_echo "$P140A_OUT2" "拒绝派单" "R5：重派没有任何阻塞项"
+assert_has_echo "$P140A_OUT2" "dispatched P200" "R5：重派真的起了 worker（假证据）"
+assert_eq "R5：重派真的开了一个窗口" "$([ "$(p140_windows)" -ge 1 ] && echo yes || echo no)" "yes"
+
+# ---- R5 ⇂ --force：每个覆盖项一行审计；--print 不写
+P140B="$(p140_repo force)"
+p140_run "$P140B" board add OLD "OLD fixture" dev - - >/dev/null 2>&1
+p140_run "$P140B" board add P201 "P201 fixture" dev - - >/dev/null 2>&1
+p140_run "$P140B" board set OLD wip >/dev/null 2>&1
+p140_brief "$P140B" OLD dev apply - 'none (infra) — fixture' -
+p140_brief "$P140B" P201 dev apply - - -
+P140B_BR="$(p140_branch "$P140B" dev P201)"
+p140_wt "$P140B" dev "$P140B_BR"
+mkdir -p "$P140B/.pi/team/state"
+printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' \
+  "$P140B/.worktrees/dev" "$P140B/docs/team/tasks/OLD-fixture.md" "$(p140_branch "$P140B" dev OLD)" > "$P140B/.pi/team/state/dev.env"
+: > "$P140B/.pi/team/state/watchdog.log"
+P140B_PRINT="$(p140_run "$P140B" dispatch dev P201 docs/team/tasks/P201-fixture.md --print --force)"; P140B_PRINT_RC=$?
+assert_eq "R5：--print --force 两个覆盖项都放行（rc=0）" "$P140B_PRINT_RC" "0"
+assert_has_echo "$P140B_PRINT" "显式覆盖（--force）：dev 上还有没结束的任务" "R5：叠任务覆盖警告在"
+assert_has_echo "$P140B_PRINT" "显式覆盖（--force）：P201 没有 change:，锚也缺失" "R5：锚缺失覆盖警告在"
+assert_eq "R5：--print --force 一个审计都不写" "$(grep -cE '显式覆盖叠任务|覆盖锚缺失' "$P140B/.pi/team/state/watchdog.log" 2>/dev/null || true)" "0"
+P140B_REAL="$(p140_run "$P140B" dispatch dev P201 docs/team/tasks/P201-fixture.md --force)"; P140B_REAL_RC=$?
+assert_eq "R5：--force 真派单成功（假启动证据）" "$P140B_REAL_RC" "0"
+assert_has_echo "$P140B_REAL" "dispatched P201" "R5：真派单走到开窗"
+assert_eq "R5：--force 恰每个覆盖项一行审计" "$(grep -cE '显式覆盖叠任务|覆盖锚缺失' "$P140B/.pi/team/state/watchdog.log" 2>/dev/null || true)" "2"
+assert_has "$P140B/.pi/team/state/watchdog.log" "显式覆盖叠任务" "R5：审计行一（叠任务）"
+assert_has "$P140B/.pi/team/state/watchdog.log" "覆盖锚缺失" "R5：审计行二（锚缺失）"
+# R6（5.1）：成功派单记下本轮的 sid 与启动时会话文件字节数（下一轮据此判 0 产出）
+assert_eq "R6：成功派单写下本轮 sid" "$(grep -c '^sid=p140-force-dev$' "$P140B/.pi/team/state/dev.env" || true)" "1"
+assert_eq "R6：成功派单写下 sid_bytes" "$(grep -c '^sid_bytes=' "$P140B/.pi/team/state/dev.env" || true)" "1"
+
+# ---- R6 ⇂ 席位预提示：quota / 0 字节 / 三种沉默
+P140C="$(p140_repo hints)"
+p140_run "$P140C" board add P300 "P300 fixture" dev - - >/dev/null 2>&1
+p140_brief "$P140C" P300 dev apply - 'none (infra) — fixture' -
+P140C_BR="$(p140_branch "$P140C" dev P300)"
+p140_wt "$P140C" dev "$P140C_BR"
+mkdir -p "$P140C/.pi/team/state"
+P140C_DEATHS="$P140C/.pi/team/state/deaths.log"
+# 死因腿要「当前启动」的记录：state 里有 started，记录时间要比它新（与巡检读法同源）
+printf 'task=P300\nstarted=2026-01-01 00:00:00 +0000\n' > "$P140C/.pi/team/state/dev.env"
+printf '%s\tdev\tquota\tpane\tline:deadbeef\tdeath:p140-quota\tweekly usage limit exceeded (403)\n' \
+  "$(date '+%Y-%m-%d %H:%M:%S %z')" > "$P140C_DEATHS"
+P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"; P140C_RC=$?
+assert_eq "R6：quota 预提示不阻断、不改退出码" "$P140C_RC" "0"
+assert_has_echo "$P140C_OUT" "上一次死于 quota" "R6：quota 被点名"
+assert_has_echo "$P140C_OUT" "weekly usage limit exceeded (403)" "R6：原始证据行被点名"
+assert_has_echo "$P140C_OUT" "=== 提示词" "R6：预提示之后照旧打印计划"
+printf '%s\tdev\twindow\tpane\tline:deadc0de\tdeath:p140-window\tpane closed\n' \
+  "$(date '+%Y-%m-%d %H:%M:%S %z')" > "$P140C_DEATHS"
+P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
+assert_not_echo "$P140C_OUT" "上一次死于" "R6：window 死因不预提示（只有 quota/balance）"
+rm -f "$P140C_DEATHS"
+P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
+assert_not_echo "$P140C_OUT" "上一次死于" "R6：没有死因记录 → 沉默"
+assert_not_echo "$P140C_OUT" "0 bytes" "R6：没有上一轮记录 → 零产出腿也沉默"
+P140C_SID="p140-hints-dev"
+P140C_ENC="$(printf '%s' "$P140C/.worktrees/dev" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
+mkdir -p "$P140C/.pi-agent/sessions/--$P140C_ENC--"
+head -c 100 /dev/zero | tr '\0' 'x' > "$P140C/.pi-agent/sessions/--$P140C_ENC--/x_$P140C_SID.jsonl"
+printf 'task=P300\nworktree=%s\nsid=%s\nsid_bytes=100\n' "$P140C/.worktrees/dev" "$P140C_SID" > "$P140C/.pi/team/state/dev.env"
+P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
+assert_has_echo "$P140C_OUT" "0 bytes ≈ 0 tokens" "R6：一个字节没长的上一轮被点名（工具自己的粗粒度词）"
+assert_has_echo "$P140C_OUT" "$P140C_SID" "R6：点名上一轮的会话"
+printf 'x' >> "$P140C/.pi-agent/sessions/--$P140C_ENC--/x_$P140C_SID.jsonl"
+P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
+assert_not_echo "$P140C_OUT" "0 bytes" "R6：追加一个字节后零产出警告消失"
+rm -f "$P140C/.pi-agent/sessions/--$P140C_ENC--/x_$P140C_SID.jsonl"
+P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
+assert_not_echo "$P140C_OUT" "0 bytes" "R6：会话文件不在了 → 沉默（不猜）"
+
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：
 # 用时 + ✓/✗/SKIP 增量 + ticks）、sections.tsv 一行。

@@ -22,7 +22,7 @@
 #           the tail's leftover assertion can fail. They are the walk's own proof that it can fail.
 #
 # Usage / knobs:
-#   bash skills/teamsmith/tests/routes.sh [walk] [control] [promises] [flips]
+#   bash skills/teamsmith/tests/routes.sh [walk] [control] [promises] [refusals] [flips]
 #   TEAM_ROUTES_TREE=<tree>     tree under test (default: this checkout; flips use scratch copies)
 #   TEAM_ROUTES_KEEP=1          keep the fixture root and print it
 #   TEAM_ROUTES_TIMEOUT=<s>     per-probe timeout, default 15 (containment, never a verdict: a probe
@@ -99,35 +99,81 @@ SECTIONS=("$@")
 # 旧写法给任何不含 flips 的子集追加 flips —— flips 的每一臂都在 scratch 树上再跑一遍
 # `routes.sh walk`，那个嵌套 run 又被追加 flips，于是自己生自己：实测进程链每 ~40 秒长一层、
 # 跑 12 分钟不返回（08:08 → 08:20，32 个进程），只能人工杀。子集的边界由调用者给。
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(walk control promises flips)
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(walk control promises)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(walk control promises refusals flips)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(walk control promises refusals)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ── containment: the recording tmux shim (never calls the real tmux) ────────────────────────────────
+# P140 扩展：除了记账，它还替窗口 harness 签证 —— 窗口注册表（new-window/kill-window/list-windows）
+# 让“窗口存在”这件事自洽；TEAM_ROUTES_FAKE_LAUNCH=1 时，respawn-pane 把 harness 命令里的
+# (nonce, marker) 解析出来写下启动/退出证据（假窗口但真证据，不碰真 server）。
 SHIM="$tmp/shim"
 TMUX_LOG="$tmp/tmux-calls.log"
+WINREG="$tmp/windows.reg"
 mkdir -p "$SHIM"
 cat > "$SHIM/tmux" <<'SHIM'
 #!/usr/bin/env bash
-# Recording tmux: session queries answer "absent", everything else is recorded and exits 0.
-# It never invokes the real tmux, so no call this process makes can reach a live server.
+# Recording tmux: session queries answer "absent", windows live in a registry file, everything is
+# recorded and exits 0. It never invokes the real tmux, so no call this process makes can reach a
+# live server.
 printf '%s\n' "$*" >> "${TEAM_ROUTES_TMUX_LOG:-/dev/null}" 2>/dev/null || true
-sub=""
+win="${TEAM_ROUTES_WINDOWS:-/dev/null}"
+sub="" t="" name=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    -L|-S|-f|-T|-c) [ $# -ge 2 ] || break; shift 2 ;;
+    -L|-S|-f|-T|-c) shift 2 ;;
     -*) shift ;;
-    *) sub="$1"; break ;;
+    *) sub="$1"; shift; break ;;
   esac
 done
+rest=("$@")
+_i=0
+while [ "$_i" -lt ${#rest[@]} ]; do
+  case "${rest[$_i]}" in
+    -t) t="${rest[$((_i+1))]:-}"; _i=$((_i+2)) ;;
+    -n) name="${rest[$((_i+1))]:-}"; _i=$((_i+2)) ;;
+    *) _i=$((_i+1)) ;;
+  esac
+done
+reg() { [ -n "$1" ] || return 0; grep -qxF "$1" "$win" 2>/dev/null || printf '%s\n' "$1" >> "$win"; }
+unreg() { [ -n "$1" ] || return 0; [ -f "$win" ] || return 0; grep -vxF "$1" "$win" > "$win.tmp" 2>/dev/null || true; mv "$win.tmp" "$win"; }
 case "$sub" in
   has-session) exit 1 ;;
-  list-windows|list-panes|list-sessions|display-message) exit 0 ;;
+  list-windows)
+    [ -f "$win" ] || exit 0
+    if [ -n "$t" ]; then awk -F: -v s="$t" '$1==s{print $2}' "$win"; else cat "$win"; fi
+    exit 0 ;;
+  new-window) reg "${t:-?}:$name"; exit 0 ;;
+  kill-window) unreg "${t:-?}"; exit 0 ;;
+  respawn-pane)
+    # P140：TEAM_ROUTES_FAKE_LAUNCH=1 时替窗口 harness 写下本轮 (nonce, pid) 启动证据与 (nonce, 0)
+    # 退出证据 —— 内容从 harness 命令行里解析，不是猜的；默认关着（只有最终拒绝路线真拉起时用）。
+    if [ "${TEAM_ROUTES_FAKE_LAUNCH:-0}" = "1" ]; then
+      inner="" prev=""
+      for a in "${rest[@]}"; do [ "$prev" = "-lc" ] && inner="$a"; prev="$a"; done
+      if [ -n "$inner" ]; then
+        marker="$(printf '%s' "$inner" | grep -oE "/[^ \"']*dispatch-[A-Za-z0-9_.-]+\.spawn" | head -1)"
+        exitf="$(printf '%s' "$inner" | grep -oE "/[^ \"']*dispatch-[A-Za-z0-9_.-]+\.exit" | head -1)"
+        nonce="$(printf '%s' "$inner" | sed -n 's/.*printf "%s %s\\n" \([^ ][^ ]*\) \$\$ >.*/\1/p' | head -1)"
+        [ -n "$marker" ] && [ -n "$nonce" ] && printf '%s %s\n' "$nonce" 4242 > "$marker"
+        [ -n "$exitf" ] && [ -n "$nonce" ] && printf '%s %s\n' "$nonce" 0 > "$exitf"
+      fi
+    fi
+    exit 0 ;;
+  list-panes|list-sessions|display-message|set-window-option|capture-pane) exit 0 ;;
+  show-options) printf 'on\n'; exit 0 ;;
 esac
 exit 0
 SHIM
 chmod +x "$SHIM/tmux"
+# `team` 解析器（Walk C 要**粘贴路线本身**并执行：路线里的 `team …` 必须落在被测的那棵树上）
+cat > "$SHIM/team" <<EOF
+#!/usr/bin/env bash
+exec bash $(printf '%q' "$team") "\$@"
+EOF
+chmod +x "$SHIM/team"
 : > "$TMUX_LOG"
+: > "$WINREG"
 
 # ── fixtures ───────────────────────────────────────────────────────────────────────────────────────
 # new_fixture <name> → a fresh git repo under $tmp, `team init`-ed with a clean identity.
@@ -713,6 +759,436 @@ BRIEF
   return 0
 }
 
+# ── Walk C（P140 · dispatch-friction）· 拒绝路线：每条打印出来的 修法/改行 都真的能粘 ──────────────
+#
+# 两个判定：
+#   C1 目录对账：cmd-agents.sh 里每一条 `修法：`/`改行：` 发射必须被下面的 family 表认领（认领片段）；
+#      没人认领 = finding —— 新守卫的路线不能绕过走查（"印了一条没人走过"就是缺陷）。
+#   C2 逐族走查：每个 family 在一个全新夹具里跑一次拒绝命令 → 期望的阻塞项 + 路线；把**打印出来的**
+#      路线原样粘回去（`改行：` 写进任务书头，`修法：` 当命令跑）；重跑要求阻塞项消失（clear）
+#      或按覆盖契约兑现（force：警告 + 真拉起时恰好多一行审计）。
+#
+# 夹具纪律：一律 new_fixture（私有 git 仓库 + 私有身份）、PATH 最前是录制 shim（假窗口但真启动证据）、
+# stdin /dev/null、每条命令有硬超时；没有一条命令能碰到调用者的项目或真 tmux。
+RC_CLAIMS=(
+  'dirty-stash|修法：git -C %q stash push -u -m %q'
+  'branch-create|修法：git -C %q switch -c %q'
+  'branch-switch|修法：git -C %q switch %q'
+  'worktree-add|修法：git -C %q worktree add -b %q'
+  'briefs|修法：git -C %q mv %q %q'
+  'stack-resume|修法：$TEAM_CLI resume --agent $agent'
+  'force|修法：$TEAM_CLI dispatch $agent $id $brief --force'
+  'branch-decl|修法：$TEAM_CLI dispatch $agent $id $brief --branch $derived'
+  'change-line|改行：change: '
+  'deltas-line|改行：deltas: '
+  'branch-line|改行：branch: '
+  'config-agent-bin|修法：$TEAM_CLI config set TEAM_AGENT_BIN'
+  'config-pi-bin|修法：$TEAM_CLI config set TEAM_PI_BIN'
+  'session-fresh|修法：$TEAM_CLI dispatch $agent $id $taskfile --fresh'
+  'session-overflow|修法：$TEAM_CLI dispatch $agent $id $taskfile --allow-overflow'
+)
+RC_EXTRA=()
+RC_PI_BIN=""
+RC_OMIT_PI_BIN=0
+RC_FAKE_LAUNCH=0
+
+# rc_team <dir> <team 参数…> → 组合输出；rc = 被测 CLI 的 rc
+rc_team() {
+  local d="$1"; shift
+  local -a e=(env -u TMUX -u TMUX_PANE "PATH=$SHIM:$PATH" "TEAM_ROUTES_WINDOWS=$WINREG"
+              "TEAM_ROUTES_TMUX_LOG=$TMUX_LOG" "TEAM_MEETINGS_DIR=$d/.meetings" "TEAM_PI_AGENT_DIR=$d/.pi-agent")
+  [ "$RC_OMIT_PI_BIN" = "1" ] || e+=("TEAM_PI_BIN=${RC_PI_BIN:-/bin/true}")
+  [ "$RC_FAKE_LAUNCH" = "1" ] && e+=("TEAM_ROUTES_FAKE_LAUNCH=1" "TEAM_DISPATCH_VERIFY_SEC=2" "TEAM_DISPATCH_ALIVE_SEC=0")
+  [ "${#RC_EXTRA[@]}" -gt 0 ] && e+=("${RC_EXTRA[@]}")
+  ( cd "$d" && ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$timeout_sec"} "${e[@]}" bash "$team" "$@" </dev/null 2>&1 )
+}
+
+# rc_sh <dir> <命令字符串> → 把打印出来的路线原样当命令跑（fake launch 开着）
+rc_sh() {
+  local d="$1" cmd="$2"
+  local -a e=(env -u TMUX -u TMUX_PANE "PATH=$SHIM:$PATH" "TEAM_ROUTES_WINDOWS=$WINREG"
+              "TEAM_ROUTES_TMUX_LOG=$TMUX_LOG" "TEAM_MEETINGS_DIR=$d/.meetings" "TEAM_PI_AGENT_DIR=$d/.pi-agent"
+              "TEAM_ROUTES_FAKE_LAUNCH=1" "TEAM_DISPATCH_VERIFY_SEC=2" "TEAM_DISPATCH_ALIVE_SEC=0")
+  [ "$RC_OMIT_PI_BIN" = "1" ] || e+=("TEAM_PI_BIN=${RC_PI_BIN:-/bin/true}")
+  [ "${#RC_EXTRA[@]}" -gt 0 ] && e+=("${RC_EXTRA[@]}")
+  ( cd "$d" && ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$timeout_sec"} "${e[@]}" bash -c "$cmd" </dev/null 2>&1 )
+}
+
+# rc_canon <dir> <ID> [agent] → 被测 CLI 给这个任务推导出的分支名
+rc_canon() {
+  local d="$1" id="$2" agent="${3:-dev}"
+  ( cd "$d" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      bash -c '
+        . "'"$skill"'/scripts/lib/common.sh"
+        for _f in "'"$skill"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done
+        team_load_config >/dev/null 2>&1
+        team_branch_for_agent "$1" "$2"' _ "$agent" "$id" )
+}
+
+# rc_brief <dir> <ID> <change> <anchor> <deltas> [phase] [agent] [branch-line] → 打印任务书路径
+rc_brief() {
+  local d="$1" id="$2" change="$3" anchor="$4" deltas="$5" phase="${6:-apply}" agent="${7:-dev}" br="${8:-}" f
+  f="$d/docs/team/tasks/$id-fixture.md"
+  mkdir -p "$d/docs/team/tasks"
+  {
+    printf '# %s · fixture\n\n```\n' "$id"
+    printf 'task:   %s\nagent:  %s\nissue:  -\n' "$id" "$agent"
+    [ -n "$br" ] && printf 'branch: %s\n' "$br"
+    printf 'change: %s\nspecs:  -\nanchor: %s\nphase:  %s\n' "$change" "$anchor" "$phase"
+    printf 'deltas: %s\ndeps:   -\nstatus: todo\nbudget: -\n```\n\nbody\n' "$deltas"
+  } > "$f"
+  printf '%s\n' "$f"
+}
+
+rc_board() { # <dir> <ID> <title> [status]
+  local d="$1" id="$2" title="$3" st="${4:-todo}"
+  rc_team "$d" board add "$id" "$title" dev - - >/dev/null 2>&1 || true
+  [ "$st" = "todo" ] || rc_team "$d" board set "$id" "$st" >/dev/null 2>&1 || true
+}
+
+rc_wt() { # <dir> <agent> <branch>
+  local d="$1" a="$2" br="$3"
+  git -C "$d" worktree add -q -b "$br" "$d/.worktrees/$a" main >/dev/null 2>&1 \
+    || git -C "$d" worktree add -q "$d/.worktrees/$a" "$br" >/dev/null 2>&1 || true
+}
+
+rc_route() { # <输出> <片段> → 提取打印出来的路线（去前缀与尾部全角注记）
+  local out="$1" frag="$2" line txt
+  line="$(printf '%s\n' "$out" | grep -aF -- "$frag" | head -1)"
+  [ -n "$line" ] || return 1
+  case "$line" in
+    *修法：*) txt="${line#*修法：}" ;;
+    *改行：*) txt="${line#*改行：}" ;;
+    *) return 1 ;;
+  esac
+  txt="${txt%%（*}"
+  printf '%s\n' "$(printf '%s' "$txt" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+}
+
+rc_apply_line() { # <任务书> <字段> <确切行>：把该字段的现有行换成这条
+  local f="$1" field="$2" line="$3" tmp="$1.p140tmp"
+  awk -v field="$field" -v line="$line" '
+    index($0, field ":") == 1 { if (!done) { print line; done=1 } ; next }
+    { print }
+  ' "$f" > "$tmp" && mv "$tmp" "$f"
+}
+
+rc_audit_lines() { local f="$1/.pi/team/state/watchdog.log"; if [ -f "$f" ]; then wc -l < "$f" | tr -d ' '; else printf '0'; fi; }
+
+# rc_case <family> <期望阻塞项正则> <路线片段> <apply:line:<字段>|apply:cmd> <rerun:same|route> <effect:clear|proceed|force|resume> [<重跑额外断言片段>]
+rc_case() {
+  local fam="$1" expect="$2" frag="$3" apply="$4" rerun="$5" effect="$6" extra="${7:-}"
+  local d="$RC_DIR" b="$RC_BRIEF" out rc route audit0 audit1 out2="" rc2=0
+  apply="${apply#apply:}"    # 调用点写 apply:cmd / apply:line:<字段>，这里归一到 cmd / line:<字段>
+  out="$(rc_team "$d" "${RC_CMD[@]}")"; rc=$?
+  if [ "$rc" -eq 0 ]; then finding "C2/$fam：拒绝命令没有拒绝（rc=0）"; return 1; fi
+  if ! printf '%s' "$out" | grep -aqE -- "$expect"; then
+    finding "C2/$fam：拒绝输出里没有期望的阻塞项（$expect）：$(first_line "$out")"; return 1
+  fi
+  route="$(rc_route "$out" "$frag")" || { finding "C2/$fam：拒绝输出里没有路线（片段 $frag）"; return 1; }
+  audit0="$(rc_audit_lines "$d")"
+  case "$apply" in
+    line:*)
+      rc_apply_line "$b" "${apply#line:}" "$route"
+      out2="$(rc_team "$d" "${RC_CMD[@]}")"; rc2=$?
+      ;;
+    cmd)
+      if [ "$rerun" = "route" ]; then
+        out2="$(rc_sh "$d" "$route")"; rc2=$?
+      else
+        rc_sh "$d" "$route" >/dev/null 2>&1 || true
+        out2="$(rc_team "$d" "${RC_CMD[@]}")"; rc2=$?
+      fi
+      ;;
+  esac
+  case "$effect" in
+    clear)
+      if printf '%s' "$out2" | grep -aqE -- "$expect"; then
+        finding "C2/$fam：粘了路线后阻塞项还在（$expect）"
+      elif [ "$rc2" != "0" ]; then
+        finding "C2/$fam：路线清了阻塞项但重跑仍失败（rc=$rc2）：$(first_line "$out2")"
+      else
+        ok "C2/$fam：$([ "$apply" = "cmd" ] && echo '修法' || echo '改行')路线让阻塞项消失（$(printf '%s' "$route" | cut -c1-72)）"
+      fi ;;
+    proceed)
+      if [ "$rc2" != "0" ]; then
+        finding "C2/$fam：路线没有兑现（rc=$rc2）：$(first_line "$out2")"
+      elif [ -n "$extra" ] && ! printf '%s' "$out2" | grep -aqF -- "$extra"; then
+        finding "C2/$fam：重跑缺少期望的说明（$extra）"
+      else
+        ok "C2/$fam：打印出来的路线真的能跑（rc=0${extra:+；$extra}）"
+      fi ;;
+    force)
+      audit1="$(rc_audit_lines "$d")"
+      if [ "$rc2" != "0" ]; then
+        finding "C2/$fam：--force 路线没有兑现（rc=$rc2）：$(first_line "$out2")"
+      elif ! printf '%s' "$out2" | grep -aqF '显式覆盖'; then
+        finding "C2/$fam：重跑没有打印覆盖警告（不许静默接管）"
+      elif [ "$((audit1 - audit0))" != "1" ]; then
+        finding "C2/$fam：覆盖后应恰好多一行审计（$audit0 → $audit1）"
+      else
+        ok "C2/$fam：覆盖路线兑现（警告 + 恰好多一行审计 $audit0 → $audit1）"
+      fi ;;
+    resume)
+      if [ "$rc2" != "0" ] || ! printf '%s' "$out2" | grep -aqF -- "$extra"; then
+        finding "C2/$fam：继续旧任务的路线没有兑现（rc=$rc2）：$(first_line "$out2")"
+      else
+        ok "C2/$fam：路线让旧任务继续（$extra）"
+      fi ;;
+  esac
+}
+
+mr_refusals_catalog() {
+  local f="$skill/scripts/lib/cmd-agents.sh" line hit claim n=0 claimed=0
+  [ -f "$f" ] || { finding "C1：找不到派单文案目录：$f"; return 0; }
+  while IFS= read -r line; do
+    case "$line" in
+      *修法：*|*改行：*) ;;
+      *) continue ;;
+    esac
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue      # 注释（含缩进注释）里提到标记不算发射
+    n=$((n + 1))
+    claim=""
+    for hit in "${RC_CLAIMS[@]}"; do
+      case "$line" in *"${hit#*|}"*) claim="${hit%%|*}"; break ;; esac
+    done
+    if [ -z "$claim" ]; then
+      finding "C1：没人认领的路线发射（family 表里没有条目）：$(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1-110)"
+    else
+      claimed=$((claimed + 1))
+    fi
+  done < "$f"
+  if [ "$n" -eq 0 ]; then
+    finding "C1：没有扫到任何路线发射（$f 里一条都没有？）"
+  elif [ "$n" -eq "$claimed" ]; then
+    ok "C1：$n 条路线发射全部被 family 表认领（$(printf '%s\n' "${RC_CLAIMS[@]}" | cut -d'|' -f1 | sort -u | wc -l | tr -d ' ') 个 family）"
+  fi
+}
+
+mr_refusals() {
+  section "refusals · 拒绝路线：每条打印的 修法/改行 都被粘回去并且真的生效（P140）"
+  mr_refusals_catalog
+  local d b br wt
+
+  # ① 脏工作树（换任务）→ 修法：git -C … stash push
+  d="$(new_fixture refuse-dirty)"; RC_DIR="$d"
+  rc_board "$d" OLD "OLD fixture" dropped
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  printf 'wip from OLD\n' > "$d/.worktrees/dev/wip.txt"
+  mkdir -p "$d/.pi/team/state"
+  printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" "$br" > "$d/.pi/team/state/dev.env"
+  rc_brief "$d" OLD - "none (infra) — fixture" - >/dev/null
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case dirty-stash '有 1 个未提交改动.*属于上一个任务 OLD' '修法：git -C' 'apply:cmd' same clear
+  # ② 工作树停在别的任务的分支上 → 修法：git -C … switch（清掉）
+  d="$(new_fixture refuse-branch-switch)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  rc_wt "$d" dev task/P9-other
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case branch-switch '停在不属于本任务（P1）的分支上' ' switch ' 'apply:cmd' same clear
+
+  # ③ 工作树 detached → 修法：git -C … switch -c（建好并切过去）
+  d="$(new_fixture refuse-branch-create)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  git -C "$d" worktree add -q --detach "$d/.worktrees/dev" main >/dev/null 2>&1 || true
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case branch-create 'detached HEAD' ' switch -c ' 'apply:cmd' same clear
+
+  # ④ 工作树不存在 → 修法：git -C … worktree add -b（PM 该跑的那条命令）
+  d="$(new_fixture refuse-worktree-add)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case worktree-add 'worktree 不存在' ' worktree add -b ' 'apply:cmd' same clear
+
+  # ⑤ 同一个 ID 两份任务书 → 修法：git mv 把过期那份改名出 glob
+  d="$(new_fixture refuse-briefs)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  rc_brief "$d" P1-stale - "none (infra) — fixture" - >/dev/null
+  # 路线是 git mv：真实项目里任务书受版本控制（未跟踪的文件 git mv 会拒）——夹具照现实提交
+  git -C "$d" add -A >/dev/null 2>&1 && git -C "$d" -c user.email=routes@teamsmith -c user.name=routes commit -qm briefs >/dev/null 2>&1 || true
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case briefs '有多份任务书' ' mv ' 'apply:cmd' same clear
+
+  # ⑥ change: 行尾随文字 → 改行：change: <第一个合法 id>
+  d="$(new_fixture refuse-change-line)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 'panel（说明）' - -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case change-line 'change: 行不合法' '改行：change: ' 'apply:line:change' same clear
+
+  # ⑦ change: 两行 → 改行：change: alpha（把该字段的行全部换成这一条）
+  #    R2 的"第一行就带示例与原因"在同一夹具里再纬一次（两行的原因点名）
+  d="$(new_fixture refuse-change-line-two)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 alpha - -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  printf 'change: beta\n' >> "$b"
+  out="$(rc_team "$d" dispatch dev P1 "$b" --print)" || true
+  case "$(printf '%s\n' "$out" | head -1)" in
+    *合法示例*change:*) ok "C2/change-line：第二行 change: 时首行带具体原因与合法示例" ;;
+    *) finding "C2/change-line：两行 change: 的首行没有示例：$(printf '%s\n' "$out" | head -1 | cut -c1-160)" ;;
+  esac
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case change-line 'change: 有 2 行' '改行：change: ' 'apply:line:change' same clear
+
+  # ⑧ deltas: 三种畸形 → 改行：deltas: <建议>；逗号列表本身被接受（控制组）
+  d="$(new_fixture refuse-deltas-line)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  b="$(rc_brief "$d" P1 alpha - 'panel · verification')"; RC_BRIEF="$b"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case deltas-line 'deltas: 行不合法' '改行：deltas: ' 'apply:line:deltas' same clear
+  for pair in 'panel,|尾部空项' 'panel verification|空白不是分隔符'; do
+    val="${pair%%|*}"; why="${pair#*|}"
+    b="$(rc_brief "$d" P1 alpha - "$val")"; RC_BRIEF="$b"
+    out="$(rc_team "$d" dispatch dev P1 "$b" --print)" || true
+    case "$(printf '%s\n' "$out" | head -1)" in
+      *合法示例*deltas:*) ok "C2/deltas-line[$val]：首行带具体原因（$why）与合法示例" ;;
+      *) finding "C2/deltas-line[$val]：首行没有示例：$(printf '%s\n' "$out" | head -1 | cut -c1-160)" ;;
+    esac
+    RC_CMD=(dispatch dev P1 "$b" --print)
+    rc_case "deltas-line[$val]" 'deltas: 行不合法' '改行：deltas: ' 'apply:line:deltas' same clear
+  done
+  b="$(rc_brief "$d" P1 alpha - 'panel, verification')"; RC_BRIEF="$b"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  if rc_team "$d" "${RC_CMD[@]}" >/dev/null 2>&1; then ok "C2/deltas-line：示例形状 \`panel, verification\` 真的被接受（控制组）"
+  else finding "C2/deltas-line：示例形状却没被接受"; fi
+
+  # ⑨ 任务书 branch: 行指到别的任务 → 改行：branch: <本任务分支>
+  d="$(new_fixture refuse-branch-line)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" - apply dev task/P9-other)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case branch-line '分支声明不属于本任务' '改行：branch: ' 'apply:line:branch' same clear
+
+  # ⑩ --branch 指到别的任务 → 修法：用本任务的 --branch 重派（路线本身就是重跑命令）
+  d="$(new_fixture refuse-branch-decl)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  RC_CMD=(dispatch dev P1 "$b" --branch task/P9-other --print)
+  rc_case branch-decl '分支声明不属于本任务' '修法：team dispatch' 'apply:cmd' route proceed
+  # ⑪ 叠任务 → 修法一 resume（让旧任务继续）/ 修法二 --force（覆盖 + 一行审计）
+  d="$(new_fixture refuse-stack)"; RC_DIR="$d"
+  rc_board "$d" OLD "OLD fixture" wip
+  rc_board "$d" P1 "P1 fixture"
+  rc_brief "$d" OLD - "none (infra) — fixture" - >/dev/null
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  mkdir -p "$d/.pi/team/state"
+  printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" "$br" > "$d/.pi/team/state/dev.env"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case stack-force '还有一个没结束的任务' '修法：team dispatch' 'apply:cmd' route force
+
+  # ⑪b 叠任务 · resume 路线：先收尾旧任务（honored：旧任务的窗口真的被拉起，不是 cleared）
+  #     夹具与 ⑪ 不同：工作树停在 OLD 自己的分支上（resume OLD 要被放行）
+  d="$(new_fixture refuse-stack-resume)"; RC_DIR="$d"
+  rc_board "$d" OLD "OLD fixture" wip
+  rc_board "$d" P1 "P1 fixture"
+  rc_brief "$d" OLD - "none (infra) — fixture" - >/dev/null
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br_old="$(rc_canon "$d" OLD)"; rc_wt "$d" dev "$br_old"
+  mkdir -p "$d/.pi/team/state"
+  printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" "$br_old" > "$d/.pi/team/state/dev.env"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  out="$(rc_team "$d" "${RC_CMD[@]}")" || true
+  route="$(rc_route "$out" '修法：team resume') || true"
+  if [ -z "$route" ]; then
+    finding "C2/stack-resume：叠任务拒绝里没有 resume 路线"
+  else
+    out2="$(rc_sh "$d" "$route")"; rc2=$?
+    if [ "$rc2" != "0" ] || ! printf '%s' "$out2" | grep -aqF 'dispatched OLD'; then
+      finding "C2/stack-resume：resume 路线没有把旧任务交回座位（rc=$rc2）：$(first_line "$out2")"
+    else
+      ok "C2/stack-resume：resume 路线真的让旧任务继续（dispatched OLD，rc=0）"
+    fi
+  fi
+
+  # ⑫ 没有 change 也没有锚 → 修法：--force（覆盖 + 一行审计）
+  d="$(new_fixture refuse-anchor)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - - -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case anchor-force '必须声明它的锚' '修法：team dispatch' 'apply:cmd' route force
+
+  # ⑬ delta 单写者冲突 → 修法：--force
+  d="$(new_fixture refuse-delta-writer)"; RC_DIR="$d"
+  rc_board "$d" SIB "SIB fixture" wip
+  rc_board "$d" P1 "P1 fixture"
+  rc_brief "$d" SIB alpha - panel >/dev/null
+  b="$(rc_brief "$d" P1 alpha - panel)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case delta-writer-force '单写者规则' '修法：team dispatch' 'apply:cmd' route force
+
+  # ⑭ verify 席位 = apply 作者 → 修法：--force
+  d="$(new_fixture refuse-verify-seat)"; RC_DIR="$d"
+  rc_board "$d" AP "AP fixture" wip
+  rc_board "$d" V1 "V1 fixture"
+  rc_brief "$d" AP alpha - panel apply dev >/dev/null
+  b="$(rc_brief "$d" V1 alpha - - verify dev)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" V1)"; rc_wt "$d" dev "$br"
+  RC_CMD=(dispatch dev V1 "$b" --print)
+  rc_case verify-seat-force 'verification 不独立' '修法：team dispatch' 'apply:cmd' route force
+
+  # ⑮ TEAM_PI_BIN 解析不到 → 修法：team config set TEAM_PI_BIN "$(command -v pi)"
+  d="$(new_fixture refuse-config-pi)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  sed -i 's|^TEAM_PI_BIN=.*|TEAM_PI_BIN="/nonexistent/pi-fixture"|' "$d/.pi/team/config.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/pi"; chmod +x "$SHIM/pi"
+  RC_OMIT_PI_BIN=1
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case config-pi-bin '找不到 pi 可执行文件' '修法：team config set TEAM_PI_BIN' 'apply:cmd' same clear
+  RC_OMIT_PI_BIN=0
+
+  # ⑯ 自定义 adapter 的可执行文件解析不到 → 修法：team config set TEAM_AGENT_BIN
+  d="$(new_fixture refuse-config-agent)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  sed -i 's|^TEAM_AGENT_CMD=.*|TEAM_AGENT_CMD="fakeagent --run {prompt_file}"|' "$d/.pi/team/config.sh"
+  sed -i 's|^TEAM_AGENT_BIN=.*|TEAM_AGENT_BIN="/nonexistent/fakeagent"|' "$d/.pi/team/config.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/fakeagent"; chmod +x "$SHIM/fakeagent"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case config-agent-bin '找不到 agent 可执行文件' '修法：team config set TEAM_AGENT_BIN' 'apply:cmd' same clear
+
+  # ⑰ 会话超过窗口 → 修法：--fresh / --allow-overflow
+  d="$(new_fixture refuse-session)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  printf 'TEAM_MODEL_WINDOWS="deepseek/deepseek-flash=8"\n' >> "$d/.pi/team/config.sh"
+  enc="$(printf '%s' "$d/.worktrees/dev" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
+  mkdir -p "$d/.pi-agent/sessions/--$enc--"
+  printf '%s\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" > "$d/.pi-agent/sessions/--$enc--/x_routes-refuse-session-dev.jsonl"
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case session-fresh '拒绝复用这个会话' '修法：team dispatch' 'apply:cmd' route proceed
+  out="$(rc_team "$d" "${RC_CMD[@]}")" || true
+  route="$(printf '%s\n' "$out" | grep -aF '修法：team dispatch' | grep -aF -- '--allow-overflow' | head -1 | sed 's/.*修法：//; s/（.*//' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)"
+  if [ -z "$route" ]; then
+    finding "C2/session-overflow：拒绝输出里没有 --allow-overflow 路线"
+  else
+    out2="$(rc_sh "$d" "$route")"; rc2=$?
+    if [ "$rc2" != "0" ] || ! printf '%s' "$out2" | grep -aqF '显式放行'; then
+      finding "C2/session-overflow：路线没有兑现（rc=$rc2）"
+    else
+      ok "C2/session-overflow：路线按自己的契约兑现（显式放行警告，rc=0）"
+    fi
+  fi
+}
+
 # ── flips: scratch trees that MUST redden the walk ──────────────────────────────────────────────────
 mr_scratch_tree() { # <name> → 打印 scratch 树（skills/teamsmith + skills/teamsmith-init 的最小副本）
   local name="$1"
@@ -871,6 +1347,51 @@ PY
   else
     finding "翻转⑧没有兑现：嵌套 run 不回收，收尾扫描却没看见残留"
   fi
+  # ⑨ P140：印了一条 family 表里没有条目的路线 → C1 目录对账必须红并点名它（沉默的路线不可接受）
+  s="$(mr_scratch_tree flip-unclaimed-route)"
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-agents.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+anchor = 'team_df_err "  规则 1 没有 --force 逃生门'
+assert anchor in s, 'anchor not found'
+s = s.replace(anchor, 'team_df_err "  修法：team frob on（没有走查条目的路线）"\n  ' + anchor, 1)
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  mr_flip_run "$s" refusals
+  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q '没人认领' && printf '%s' "$MR_FLIP_LOG" | grep -q 'team frob'; then
+    ok "翻转⑨：印了一条 family 表没有的路线 → C1 目录对账红并点名它"
+  else
+    finding "翻转⑨没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  fi
+  # ⑩ P140：打印的修法修错了目标（switch 到别的任务）→ 逐族走查必须红并点名 family；Walk A/B 同树照旧绿
+  s="$(mr_scratch_tree flip-mutated-fix)"
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-agents.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+# 只改**别的任务分支**那一支的两条路线（switch / switch -c），别动 detached 支的同形路线
+anchor = 'team_df_dim "  （拒绝的理由：复验/交付记录会以工作树的分支为证据，不能张冠李戴）"'
+assert anchor in s, 'reason anchor not found'
+a = s.index(anchor)
+start = s.rindex('  if git -C "$wt" show-ref --verify --quiet "refs/heads/$want"; then', 0, a)
+block = s[start:a]
+assert block.count('"$want"') >= 2, 'expected both route variants in the block'
+s = s[:start] + block.replace('"$want"', '"task/T9-wrong"') + s[a:]
+open(p, 'w', encoding='utf-8').write(s)
+PY
+  mr_flip_run "$s" refusals
+  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q 'C2/branch-switch' && printf '%s' "$MR_FLIP_LOG" | grep -q '路线'; then
+    ok "翻转⑩：打印的 switch 目标修错（task/T9-wrong）→ 逐族走查红并点名 branch-switch"
+  else
+    finding "翻转⑩没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  fi
+  mr_flip_run "$s" walk control
+  if [ "$MR_FLIP_RC" = "0" ]; then
+    ok "翻转⑩对照：同一棵修坏的树上 Walk A/控制臂照旧绿（只红拒绝路线那一族）"
+  else
+    finding "翻转⑩对照：修坏的树上 Walk A/控制臂不该变红（rc=$MR_FLIP_RC）"
+  fi
   # 收尾：flips 自己的 scratch 树与嵌套 run 的根都不留下。
   # TEAM_TMP_KEEP=1（门禁的 --keep 让子进程都继承它）是**刻意的保留**，不是泄漏 —— 与 smoke §40
   # 同口径：打一条可见说明，并把嵌套 run 打印的保留路径逐个列出（静默保留仍是缺陷）。
@@ -904,6 +1425,9 @@ if want control; then
 fi
 if want promises; then
   if mr_walk_b; then :; fi
+fi
+if want refusals; then
+  if mr_refusals; then :; fi
 fi
 if want flips; then
   if [ "${TEAM_ROUTES_NESTED:-0}" = "1" ]; then

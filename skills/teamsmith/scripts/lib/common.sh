@@ -3300,27 +3300,59 @@ team_task_token_ok() { # <值> <前缀（报错用）> → 0=形状合法
 }
 
 # → 0 = stdout 一行值：一个 change id，或 `-`（行缺失与 `-` 同义）；1 = stdout 一行拒绝原因
+# P140（dispatch-friction · R2）：拒绝原因说具体（两行 / 多个 id / id 之外的字符），dispatch 把
+# 「合法示例 + 原因」拼在拒绝的第一行；这里保持「一行原因」的契约不变。
 team_task_change_value() { # <任务书>
-  local f="$1" vals n val
+  local f="$1" vals n val lead rest why
   vals="$(team_brief_field_raw "$f" change)"
   n="$(printf '%s\n' "$vals" | grep -c . || true)"
   [ "${n:-0}" -eq 0 ] && { printf -- '-\n'; return 0; }
   if [ "$n" -gt 1 ]; then
-    printf 'change: 有 %s 行（%s）—— 一个任务最多属于一个 change，只留一行\n' \
+    printf 'change: 有 %s 行（%s）—— 只接受一个 change id（[A-Za-z0-9][A-Za-z0-9._-]*）或 `-`；一个任务最多属于一个 change，只留一行\n' \
       "$n" "$(printf '%s\n' "$vals" | awk 'NR>1{printf "、"} {printf "%s", $0}')"
     return 1
   fi
   val="$vals"
   [ "$val" = "-" ] && { printf -- '-\n'; return 0; }
   if team_task_token_ok "$val"; then printf '%s\n' "$val"; return 0; fi
-  printf 'change: 的值是 `%s` —— 只接受一个 change id（[A-Za-z0-9][A-Za-z0-9._-]*）或 `-`\n' "$val"
+  # 值里第一个合法的 id 前缀（可能为空）与它之外的尾巴 —— 失败原因据此点名具体的那一段
+  lead="$(printf '%s' "$val" | sed -n 's/^\([A-Za-z0-9][A-Za-z0-9._-]*\).*/\1/p')"
+  rest="${val#"$lead"}"
+  case "$val" in
+    *,*|*" "*|*$'\t'*)
+      why='逗号/空白分开的是多个 id（一个任务只写一个 id，不要用逗号或空格列）' ;;
+    *)
+      if [ -n "$lead" ]; then why="id 之外的字符 \`$rest\` 不接受"
+      else why="\`$val\` 不是合法 id（首字符必须是字母数字，其余是字母数字与 . _ -）"; fi ;;
+  esac
+  printf 'change: 的值是 `%s` —— 只接受一个 change id（[A-Za-z0-9][A-Za-z0-9._-]*）或 `-`；%s\n' "$val" "$why"
   return 1
+}
+
+# P140：给 `deltas:` 行的 `改行：` 建议 —— 一个**合法**的确切值（design D3）：
+# 按逗号切、每段 trim；每一段都是合法 capability → 用 `, ` 重连；否则 `-`（不替调用方猜意图）。
+team_task_deltas_suggestion() { # <任务书> → 一行 `<cap>[, <cap>…]` 或 `-`
+  local f="$1" vals val rest tok out="" all=1
+  vals="$(team_brief_field_raw "$f" deltas)"
+  if [ "$(printf '%s\n' "$vals" | grep -c . || true)" != "1" ]; then printf '%s\n' "-"; return 0; fi
+  val="$vals"
+  [ "$val" = "-" ] && { printf '%s\n' "-"; return 0; }
+  rest="$val"
+  while [ -n "$rest" ]; do
+    if [ "${rest#*,}" = "$rest" ]; then tok="$rest"; rest=""; else tok="${rest%%,*}"; rest="${rest#*,}"; fi
+    tok="$(team_trim "$tok")"
+    if team_task_token_ok "$tok"; then out="${out:+$out, }$tok"; else all=0; fi
+  done
+  if [ "$all" = "1" ] && [ -n "$out" ]; then printf '%s\n' "$out"; else printf '%s\n' "-"; fi
+  return 0
 }
 
 # → 0 = stdout 声明：每行一个 capability token；空输出 = `-`（本任务不写任何 delta）；
 #       `*` = 行缺失（unknown —— 按「整个 change 的 delta 集」处理）；1 = 一行拒绝原因
+# P140（dispatch-friction · R3）：拒绝原因点名具体分隔符（`·`/`;`/空白）与首个坏 token，不再把整个值
+# 当「不是一个 token」；合法示例由 dispatch 拼在第一行。
 team_task_deltas() { # <任务书>
-  local f="$1" vals n val rest tok
+  local f="$1" vals n val rest tok why
   vals="$(team_brief_field_raw "$f" deltas)"
   n="$(printf '%s\n' "$vals" | grep -c . || true)"
   [ "${n:-0}" -eq 0 ] && { printf '*\n'; return 0; }
@@ -3332,14 +3364,22 @@ team_task_deltas() { # <任务书>
   val="$vals"
   [ "$val" = "-" ] && return 0
   # 末尾逗号 = 空项（列表说「有一个 capability」，但那个名字是空的）—— 不静默当空集
-  case "$val" in *,) printf 'deltas: 的值是 `%s` —— 逗号列表末尾有空项\n' "$val"; return 1 ;; esac
+  case "$val" in *,)
+    printf 'deltas: 的值是 `%s` —— 逗号列表末尾有空项（`,` 后面要跟一个 capability）\n' "$val"
+    return 1 ;;
+  esac
   rest="$val"
   while [ -n "$rest" ]; do
     if [ "${rest#*,}" = "$rest" ]; then tok="$rest"; rest=""; else tok="${rest%%,*}"; rest="${rest#*,}"; fi
     tok="$(team_trim "$tok")"
     if team_task_token_ok "$tok"; then printf '%s\n' "$tok"; continue; fi
-    printf 'deltas: 的值是 `%s` —— `%s` 不是 capability token（[A-Za-z0-9][A-Za-z0-9._-]*）\n' \
-      "$val" "${tok:-（空项）}"
+    case "$tok" in
+      *·*) why='分隔符是英文逗号 `,`，`·` 不是分隔符' ;;
+      *\;*) why='分隔符是英文逗号 `,`，`;` 不是分隔符' ;;
+      *[[:space:]]*) why='分隔符是英文逗号 `,`，空白不是分隔符' ;;
+      *) why="\`${tok:-（空项）}\` 不是 capability token（[A-Za-z0-9][A-Za-z0-9._-]*）" ;;
+    esac
+    printf 'deltas: 的值是 `%s` —— %s\n' "$val" "$why"
     return 1
   done
   return 0
