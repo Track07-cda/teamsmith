@@ -21,15 +21,19 @@ name: gates
 #
 # Manual + `main` only (no pull_request trigger): this repository may be private, and Actions
 # minutes are billed — the PM's independent `team review <ID> --dir …` run stays the gate that
-# decides a merge. Enable more triggers (see docs/team/PUBLISH.md §7) when the repository goes public.
+# decides a merge. This workflow is also the public repository's own signal: on a public repo
+# Actions minutes are free, so a `push` run on `main` is worth having; add `pull_request` here if the
+# project ever takes outside contributions.
 #
 # P130/A (D60 #1, after D54 records ~30 pushes burning the account's Actions quota): a push whose
 # every changed file is under docs/** — the team ledger BOARD/DECISIONS/reports/reviews/threads —
 # cannot change the gate's outcome, so it no longer pays for a run. GitHub skips the run only when
 # *all* changed files match paths-ignore; one non-ignored file in the same push still triggers it.
 # `workflow_dispatch` has no path filter and always runs. The trigger matrix, including the
-# counterexamples that prove skills/**, openspec/**, ci/** and .github/** still trigger, is in
-# docs/team/reports/P130-dev.md (§触发矩阵) and executable in docs/team/reports/P130-dev/pkg/.
+# counterexamples that prove skills/**, openspec/**, ci/** and .github/** still trigger, lives in the
+# project ledger's P130 report; the matrix itself is small enough to state here: a push touching only
+# `docs/**` is ignored, and any of `skills/**`, `openspec/**`, `ci/**`, `.github/**`, `bin/**`,
+# `install.sh`, `package.json`, `README.md` or `LICENSE` triggers a run.
 on:
   push:
     branches: [main]
@@ -120,15 +124,15 @@ jobs:
       # build, no registry credentials or permissions, no `docker pull` that can go stale or fail and
       # silently turn back into a second build. The price — correctness and perf now run sequentially
       # in one job, so a correctness hang consumes this job's timeout before perf starts — is
-      # acceptable: perf numbers are recorded by the release-time run (docs/team/PUBLISH.md §0) and
-      # perf gates nothing. Reasons and failure modes: docs/team/reports/P130-dev.md §B.
+      # acceptable: perf numbers are recorded by the release-time run and perf gates nothing (the perf
+      # suite's own verdicts are non-blocking by design). §B.
       #
       # `if: ${{ !cancelled() }}` keeps the old two-job property that perf still reports when the
       # correctness step failed, without trying to run during an explicit cancellation (GitHub's docs
       # recommend it over `always()`); `continue-on-error: true` is what makes the failure
       # non-blocking: the step shows red with an annotation, later steps run, and the job/workflow
       # conclusion is untouched. The correctness step above has no such tolerance — it stays the hard
-      # gate, and the static checks in docs/team/reports/P130-dev/pkg/ assert exactly that.
+      # gate, and the ledger's static checks assert exactly that this stays so.
       - name: Performance suite (pinned container, non-blocking)
         if: ${{ !cancelled() }}
         continue-on-error: true
