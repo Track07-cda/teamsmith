@@ -1446,6 +1446,29 @@ team_notify_dedup_key() { # <agent> <msg>
   printf 'notify|%s|%s:%s\n' "$1" "$len" "$sum"
 }
 
+# R2 · 发送方工作树里的修订标识（<ID> 取自分支，tip 取自 HEAD）：
+#   能证明的就写「task=<ID> tip=<7-hex>」，推不出来（没有该工作树/分支不是任务分支/git 失败）就什么都不写。
+#   绝不编造：工作树外的手工 notify 没有标识，不是「按收件人猜一个」。
+team_notify_rev_stamp() { # <sender> → "task=<ID> tip=<短哈希>" | 空
+  local sender="${1:-}" wt="" branch="" task="" id="" tip=""
+  case "$sender" in
+    ""|-) return 0 ;;
+    pm) wt="$TEAM_MAIN_ROOT" ;;
+    *) wt="$TEAM_MAIN_ROOT/$TEAM_WORKTREES_DIR/$sender" ;;
+  esac
+  [ -d "$wt" ] || return 0
+  branch="$(team_worktree_branch "$wt" 2>/dev/null || true)"
+  case "$branch" in
+    task/*|agent/*) ;;
+    *) return 0 ;;
+  esac
+  task="${branch#*/}"
+  id="${task%%-*}"
+  tip="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || true)"
+  [ -n "$id" ] && [ -n "$tip" ] && printf 'task=%s tip=%s\n' "$id" "$tip"
+  return 0
+}
+
 team_cmd_notify() {
   local from_file="" msg="" agent="" any=0 claim="" claim_set=0 have_msg=0
   # P82：--from <名字> 是**发送者**的显式声明（收件人永远只是收件人）。参数顺序自由，
@@ -1490,16 +1513,21 @@ team_cmd_notify() {
     else team_die "notify：摘要不能为空（收到空参数；如果用 \"\$(cat <摘要文件>)\" 取摘要，先确认那个文件写好且非空）"; fi
   fi
   team_require_recipient "$agent" "$any" notify || return 1
+  # R2：能证明就带修订标识（inbox 行与 knock 载荷同一个后缀；摘要本身逐字节不变）
+  local stamp="" revsuffix=""
+  stamp="$(team_notify_rev_stamp "$sender")"
+  [ -n "$stamp" ] && revsuffix=" · $stamp"
+  local knock_payload="[manual] agent:$sender · $msg$revsuffix"
   # P82：发送者进 durable 收件箱行（第 4 参），收件人仍是文件名
-  team_inbox_append "$agent" manual "$msg" "$sender" \
+  team_inbox_append "$agent" manual "$msg$revsuffix" "$sender" \
     || team_warn "notify：收件箱行写不进去（$TEAM_DOCS_DIR/inbox/$agent.md）—— 下面的投递会把这条声明当已落地"
   local target="$TEAM_SESSION:$TEAM_PM_WINDOW"
   # M30 · pi 通道优先：目标有**活的**收件箱监视器时，敲门交给它（注册里的 pid+cwd 就是「PM 会话活着」
   # 的证据，比 tmux/pane 启发式直接），而且这条链不需要 tmux、不碰输入框。
   # --inbox-written pm：上面的 durable 行已经写了，通道不能再写一遍（条目头部的契约）。
   if [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_inbox_watch_route "$target" >/dev/null 2>&1; then
-    team_send_guarded "$target" "[manual] agent:$sender · $msg" knock --from "$sender" \
-      --dedup "$(team_notify_dedup_key "$agent" "$msg")" --inbox-written pm
+    team_send_guarded "$target" "$knock_payload" knock --from "$sender" \
+      --dedup "$(team_notify_dedup_key "$agent" "$msg$revsuffix")" --inbox-written pm
     case "$TEAM_SEND_OUTCOME" in
       watched) team_dim "  pi 监视通道：收件箱已写，会话里的监视扩展负责唤醒（输入框零按键）" ;;
       queued)  team_dim "  pi 监视通道投递没落地（条目入队）：$TEAM_CLI outbox list" ;;
@@ -1510,8 +1538,8 @@ team_cmd_notify() {
      && team_pm_alive; then
     # 只给「正在跑 pi 的 PM」打字：PM 没在跑时写进 shell 会被当命令执行。
     # 敲门也走投递守卫：输入框里有草稿 → 入队，草稿不动（规格 notify-and-inbox 的 dirty-PM 场景）
-    team_send_guarded "$target" "[manual] agent:$sender · $msg" knock --from "$sender" \
-      --dedup "$(team_notify_dedup_key "$agent" "$msg")" --inbox-written pm
+    team_send_guarded "$target" "$knock_payload" knock --from "$sender" \
+      --dedup "$(team_notify_dedup_key "$agent" "$msg$revsuffix")" --inbox-written pm
     case "$TEAM_SEND_OUTCOME" in
       queued) team_dim "  PM 输入框里有草稿：敲门入队（$TEAM_CLI outbox list），清空后自动投递" ;;
       duplicate) team_dim "  duplicate：同一份通知在 ${TEAM_NOTIFY_DEDUP_SEC:-20}s 内已经投过（没有重复入队）" ;;

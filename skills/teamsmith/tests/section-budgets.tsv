@@ -139,3 +139,5 @@
 53 · 等待引擎长帧：命中/缺失不被管道缓冲吃掉（P127）	9	60	9	5.3/32	-	-	-	P127 实测（FAST §113 = 9s；loadavg1 5.3/32 核，2026-09-29）；×4 · floor 60
 15 · 完成	0.00	60	0.00	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 36 · 选段与分段账本自检（P98 · gate-runtime-budget）	50	200	50	10.6/?/14.0/10.5	-	-	-	P98 F2 实测（merge main 后）：host=[FAST2 §36 49s 上取整 50]；容器/CI 未测 · ×4 · floor 60
+55 · meeting-liveness：未读 / 过期 / 队列 / 标识（P139，纯逻辑）	30	120	30	-/-/-/-	-	-	-	P139 实测（占位，出数后改）：host=[P139 FAST §54] container=[未测] ci=[未测] · ×4 · floor 60
+56 · meeting-liveness 真 tmux：敲门 / 排水 / 每方窗口（P139）	60	240	60	-/-/-/-	-	-	-	P139 实测（占位，出数后改）：host=[P139 full §55] container=[未测] ci=[未测] · ×4 · floor 60

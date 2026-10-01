@@ -496,6 +496,10 @@ team_cmd_status() {
   # M46：投递通道降级（没有 inbox-watch 注册时绝不静默退回慢路径；没降级就一个字都不加）
   local dbg; dbg="$(team_inbox_watch_degraded_line 2>/dev/null || true)"
   [ -n "$dbg" ] && team_warn "$dbg"
+  # 会议现场（D4）：未读会议与过期未关闭的会议；没有事项 → 一行都不加
+  if command -v team_meeting_status_lines >/dev/null 2>&1; then
+    team_meeting_status_lines || true
+  fi
   printf '\n'
   if [ -n "$id" ]; then
     # M16：抬头行也带名字（`任务 M16：沟通纪律…`）—— 保持 `任务 <ID>：` 前缀不变（既有断言/习惯），
@@ -719,6 +723,12 @@ team_cmd_digest() {
   else
     printf '  待办             无（pulse 不会打扰 PM）\n'
   fi
+  # 会议现场（D4）：未读的会议与过期未关闭的会议（没有事项 → 一行都不加）
+  local mtg=""
+  if command -v team_meeting_status_lines >/dev/null 2>&1; then
+    mtg="$(team_meeting_status_lines 2>/dev/null || true)"
+  fi
+  [ -n "$mtg" ] && printf '%s\n' "$mtg"
   # M48：看板重复 ID 的可见性（面板光标按行身份走，但状态/报告按 ID 指行——重复不能只靠肉眼）
   local bdup; bdup="$(team_board_duplicate_line || true)"
   [ -n "$bdup" ] && team_warn "  $bdup（board add 会拒绝新重复；board set / assign 按 ID 寻址）"

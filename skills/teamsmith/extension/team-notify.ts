@@ -293,6 +293,11 @@ export default function (pi: ExtensionAPI) {
     const branch = run('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'])
     const task = /^(?:task|agent)\/([^/]+)/.exec(branch)?.[1] ?? ''
     const id = task.split('-')[0] || 'unknown'
+    // R2：通知要指认它讲的是哪个修订 —— task 从分支推，tip 从 HEAD 短哈希；
+    // 非任务分支（主工作树/临时工作树）没有 task 语义就不盖（宁可没有，不许编造）。
+    const isTaskBranch = /^(?:task|agent)\//.test(branch)
+    const tip = isTaskBranch ? run('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD']) : ''
+    const revStamp = isTaskBranch && tip ? ` · task=${id} tip=${tip}` : ''
     const dirty = run('git', ['-C', cwd, 'status', '--porcelain']).split('\n').filter(Boolean).length
     // 未提交 = 没交付干净：让 PM 一眼看出来（CEP 实测：这种状态和"干净交付"在通知里长得一样）
     const dirtyFlag = dirty > 0 ? `⚠ 未提交 ${dirty} 个文件 · ` : '' 
@@ -337,9 +342,9 @@ export default function (pi: ExtensionAPI) {
 
     count++
     const tag = completed ? '[auto]' : '[auto·interrupted]'
-    // 去重键：整条末消息的「长度+指纹」，而不是它的前 60 个字符。
+    // 去重键：整条末消息的「长度+指纹」+ 修订标识（新 tip = 新修订，不该被去重吞掉）。
     // 老键（last[0:60]）会把三条开头相同、后半不同的简报当成同一条吞掉（M6.3 F17）。
-    const key = `${agent}|${tag}|${summary}|${last.length}:${fingerprint(last)}`
+    const key = `${agent}|${tag}|${summary}|${revStamp}|${last.length}:${fingerprint(last)}`
 
     const stateDir = join(root, '.pi/team/state')
     try {
@@ -352,7 +357,7 @@ export default function (pi: ExtensionAPI) {
       return
     }
 
-    const line = `${new Date().toISOString()} ${dirtyFlag}${tag} ${summary}${completed && last ? ` :: ${last}` : ''}`
+    const line = `${new Date().toISOString()} ${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? ` :: ${last}` : ''}`
     try {
       const dir = join(root, cfg.docsDir, 'inbox')
       mkdirSync(dir, { recursive: true })
@@ -380,7 +385,7 @@ export default function (pi: ExtensionAPI) {
     // 为什么：扩展原来直接 `send-keys -l` + Enter，人正在 PM 输入框里写草稿时会把草稿粘走
     // （D20 的原始事故）。入队时带上扩展自己的去重键（key），两层抑制不会打架。
     // 失败只记日志：绝不回退到打字（那会悄悄重建同一个 bug）。
-    const notice = `${dirtyFlag}${tag} ${summary}${completed && last ? `\n> ${last}` : ''}`
+    const notice = `${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? `\n> ${last}` : ''}`
     const cli = join(skillDir(), 'scripts/team')
     const tmp = join(stateDir, `knock-${process.pid}-${Date.now()}.txt`)
     try {

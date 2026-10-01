@@ -2880,7 +2880,7 @@ team_board_counts() { # → "todo wip review blocked"
   team_board_counts_direct
 }
 
-team_pending_counts() { # → "inbox reports todo wip review blocked stopped"
+team_pending_counts() { # → "inbox reports todo wip review blocked stopped meetings"
   local a n inbox=0 stopped=0 task
   # 未读通知按**收件人**算（含 pm 与任何有收件箱文件的名字），不是只按名册
   for a in $(team_inbox_recipients); do
@@ -2896,12 +2896,20 @@ team_pending_counts() { # → "inbox reports todo wip review blocked stopped"
     # 只保留“现在就等 PM 处理”的信号：todo/wip/review 列仍会在面板与 digest 里显示
     todo=0; wip=0; review=0
   fi
-  printf '%s %s %s %s %s %s %s\n' "$inbox" "$(team_reports_pending)" "$todo" "$wip" "$review" "$blocked" "$stopped"
+  # 未读会议轮次（D2）：函数只在完整 CLI 上下文里定义（只 source common.sh 的夹具退回 0，待办形状不变）
+  local meetings=0
+  if command -v team_meetings_unread_count >/dev/null 2>&1; then
+    meetings="$(team_meetings_unread_count 2>/dev/null || true)"
+    case "$meetings" in ''|*[!0-9]*) meetings=0 ;; esac
+  fi
+  printf '%s %s %s %s %s %s %s %s\n' "$inbox" "$(team_reports_pending)" "$todo" "$wip" "$review" "$blocked" "$stopped" "$meetings"
 }
 
 team_pending_text() { # <counts> → 人类可读摘要（空字符串 = 无待办）
-  local inbox reports todo wip review blocked stopped
-  read -r inbox reports todo wip review blocked stopped <<< "${1:-$(team_pending_counts)}"
+  # 末字段 meetings 是后加的：旧形状（7 词）照读 —— bash 会把多余的词折进最后一个变量，
+  # 所以这里必须多读一个变量、且对缺失值按 0 处理（旧夹具字面量不许因此变红）。
+  local inbox reports todo wip review blocked stopped meetings
+  read -r inbox reports todo wip review blocked stopped meetings <<< "${1:-$(team_pending_counts)}"
   local parts=()
   [ "$inbox" -gt 0 ] && parts+=("未读通知 ${inbox}")
   [ "$reports" -gt 0 ] && parts+=("待复验 ${reports}")
@@ -2918,6 +2926,7 @@ team_pending_text() { # <counts> → 人类可读摘要（空字符串 = 无待�
     fi
     parts+=("停了的 agent ${stopped}${deaths}")
   fi
+  [ "${meetings:-0}" -gt 0 ] 2>/dev/null && parts+=("未读会议 ${meetings}")
   [ "${#parts[@]}" -eq 0 ] && return 0
   local out="" p
   for p in "${parts[@]}"; do out="${out}${out:+ · }$p"; done

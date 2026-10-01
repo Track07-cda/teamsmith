@@ -78,6 +78,8 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 # P70（change: gate-section-accounting）：每段自述 + 硬预算 + 现场。
 # shellcheck source=tests/lib/section-guard.sh
 . "$SKILL_DIR/tests/lib/section-guard.sh"
+# shellcheck source=tests/lib/tmux-cap.sh
+. "$SKILL_DIR/tests/lib/tmux-cap.sh"
 # tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
 # tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
 # 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新跑一遍自己**
@@ -2649,15 +2651,8 @@ login_shell_hides() { # <目录> <名字> → 它打印的 command -v 结果（�
   env HOME="$home" PATH="$dir:$PATH" bash -lc "command -v $name || echo MISSING" </dev/null
 }
 
-# M47：`#{bracket_paste_flag}` 是 tmux **3.7 起**才有的格式（同族的旧 tmux 上产品保守地走「多行落文件
-# + 一行指针」，那不是缺陷，是无从探测）。自建一个微 session 问一句，不赌调用者有没有 server。
-tmux_has_bracket_paste_format() {
-  local s="bpf-$$" v
-  tmux new-session -d -s "$s" -x 80 -y 24 'sleep 5' 2>/dev/null || return 1
-  v="$(tmux display-message -p -t "$s" '#{bracket_paste_flag}' 2>/dev/null)"
-  tmux kill-session -t "$s" 2>/dev/null || true
-  [ -n "$v" ]
-}
+# M47 的 `tmux_has_bracket_paste_format` 挪进 tests/lib/tmux-cap.sh（前导段 source）：选段运行时
+# 段体定义会随未选中的段消失，跨段调用就变成 command not found（P139 §55 实测的假跳过）。
 assert_eq "夹具有效：登录 bash 看不到 $BARE_DIR（否则下面那条是假绿；受控 HOME profile，不赌本机 profile）" \
   "$(login_shell_hides "$BARE_DIR" pm-bare)" "MISSING"
 assert_eq "夹具有效：调用者 PATH 看得到它" \
@@ -4986,6 +4981,29 @@ $TEAM meeting close order-api --summary "契约已定，双方各自落地" >"$T
 $TEAM meeting say order-api --intent info "关了还能说吗" >"$TMP/mtg-after.log" 2>&1 \
   && bad "close 后不应允许发言" || ok "close 后 transcript 冻结（发言被拒）"
 $TEAM meeting read order-api >/dev/null 2>&1 && ok "close 后仍可读（只读）" || bad "close 后应可读"
+
+# ── 2.4 close --stale：四种去向（P139 · meeting-liveness）──────────────────────────────────
+# 过期是派生值：把 OPENED_EPOCH 拨到过去（TTL 默认 72h），不去改 STATUS。
+for _s in stale-exp stale-closed stale-fresh; do
+  $TEAM meeting open "$_s" --with "$MEET_PROJ" --topic t --yes >/dev/null 2>&1
+done
+sed -i 's/^OPENED_EPOCH=.*/OPENED_EPOCH=1000/' "$TMP/meetings/stale-exp/state.env" "$TMP/meetings/stale-closed/state.env"
+$TEAM meeting close stale-closed --summary "already done" >/dev/null 2>&1
+STALE_FRESH_BEFORE="$(cksum "$TMP/meetings/stale-fresh/state.env" | awk '{print $1":"$2}')"
+if $TEAM meeting close --stale >"$TMP/mtg-stale.log" 2>&1; then
+  ok "2.4 close --stale 退出码 0（有过得掉的）"
+else bad "2.4 close --stale 应成功"; fi
+assert_has "$TMP/mtg-stale.log" "stale-exp 已过期：已关闭" "2.4 过期的那场被关（并点名）"
+assert_has "$TMP/mtg-stale.log" "stale-closed 已关闭：跳过" "2.4 已关闭的跳过（并点名）"
+assert_has "$TMP/mtg-stale.log" "stale-fresh 未过期：跳过" "2.4 新鲜的一律不碰（并点名）"
+assert_has "$TMP/meetings/stale-exp/state.env" "STATUS=closed" "2.4 过期会议的 state.env 写成 closed"
+assert_eq "2.4 未过期会议的 state.env 逐字节不变" \
+  "$(cksum "$TMP/meetings/stale-fresh/state.env" | awk '{print $1":"$2}')" "$STALE_FRESH_BEFORE"
+assert_has "$TMP/meetings/stale-fresh/state.env" "STATUS=open" "2.4 未过期会议仍是 open"
+if $TEAM meeting close --stale >"$TMP/mtg-stale2.log" 2>&1; then
+  bad "2.4 没有过期会议时 close --stale 应非 0"
+else ok "2.4 没有过期会议时 close --stale 非 0"; fi
+assert_has "$TMP/mtg-stale2.log" "没有已过期未关闭的会议" "2.4 非 0 时说明原因"
 unset TEAM_MEETINGS_DIR
 
 # ---------------------------------------------------------------- 11f. 更新分发与版本自检
@@ -5865,6 +5883,21 @@ let lines = readFileSync(inbox, 'utf8').trim().split('\n')
 if (lines.length !== 1) { console.error(`FAIL: 期望 1 行（去重），实际 ${lines.length}`); process.exit(4) }
 if (!lines[0].includes('ALLDONE feature implemented')) { console.error('FAIL: 没有带上 agent 末条消息'); process.exit(5) }
 if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错误'); process.exit(6) }
+// P139：通知要指认修订 —— task 从分支推、tip = 工作树 HEAD 短哈希（非任务分支就没有，不编造）
+{
+  const { execSync } = await import('node:child_process')
+  const br = execSync(`git -C "${wt}" rev-parse --abbrev-ref HEAD`).toString().trim()
+  const tip = execSync(`git -C "${wt}" rev-parse --short HEAD`).toString().trim()
+  if (/^(?:task|agent)\//.test(br)) {
+    const tid = br.slice(br.indexOf('/') + 1).split('-')[0]
+    if (!lines[0].includes(`task=${tid} tip=${tip}`)) {
+      console.error(`FAIL: 通知缺修订标识 task=${tid} tip=${tip}（实际：${lines[0]}）`); process.exit(30)
+    }
+    if (!lines[0].includes('ALLDONE feature implemented')) { console.error('FAIL: 修订标识吃掉了摘要'); process.exit(31) }
+  } else {
+    console.log(`note: 工作树在 ${br}（非任务分支），P139 修订标识断言按设计不适用`)
+  }
+}
 // M6.3 F17：去重键必须能区分「开头 60 字符相同、后半不同」的简报（旧键只取前缀 → 会吞掉）
 {
   rmSync(inbox, { force: true })
@@ -7197,6 +7230,18 @@ OBEXT
   assert_eq "12b-i 扩展自己不敲键盘（零 send-keys / paste-buffer）" "$(grep -c 'send-keys\|paste-buffer' "$TMP/ob-ext-tmux.log" || true)" "0"
   assert_eq "12b-i 扩展把敲门入队一条" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
   assert_has "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' | head -1)" "dedup: dev|[auto]|" "12b-i 扩展把自己的去重键带进条目"
+  # P139 R2：通知要指认修订 —— 扩展的 knock **载荷**（不只是收件箱行）也要带 task/tip。
+  # 工作树在任务分支上才盖（非任务分支按设计不盖，那就如实说）。
+  P139_EXT_BR="$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  case "$P139_EXT_BR" in
+    task/*|agent/*)
+      P139_EXT_ID="${P139_EXT_BR#*/}"; P139_EXT_ID="${P139_EXT_ID%%-*}"
+      P139_EXT_TIP="$(git -C "$REPO/.worktrees/dev" rev-parse --short HEAD 2>/dev/null || true)"
+      assert_has "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' | head -1)" \
+        "task=$P139_EXT_ID tip=$P139_EXT_TIP" "12b-i 扩展的敲门载荷带 task/tip（R2，$P139_EXT_BR）"
+      ;;
+    *) ok "12b-i 扩展载荷标识：工作树在 ${P139_EXT_BR:-?}（非任务分支），按设计不盖" ;;
+  esac
 fi
 
 # ---------------------------------------------------------------- 12b-pi. M30 投递换道：pi 通道零粘贴（收件箱监视唤醒）
@@ -15844,7 +15889,9 @@ p82_ck() { cksum "${1:-$P82_INBOX}" 2>/dev/null | awk '{print $1":"$2}'; }
 # 夹具命令：清掉继承身份（M40 纪律）+ 关掉敲门 —— 这一组只看**解析出的发送者**与 durable 行
 p82() { ( cd "$1" ; shift; env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT -u TEAM_SKILL_DIR \
             TEAM_NOTIFY_TMUX=0 $TEAM "$@" ); }
-p82_last() { tail -1 "${1:-$P82_INBOX}" 2>/dev/null | sed 's/.*\[manual\] //'; }
+# P139：inbox 行现在还带修订标识（` · task=<ID> tip=<短哈希>`）——本节只看发送者，把标识剥掉后比较；
+# 标识本身由 54 段与 §47 末尾那一条单独断言。
+p82_last() { tail -1 "${1:-$P82_INBOX}" 2>/dev/null | sed 's/.*\[manual\] //; s/ · task=[^ ]* tip=[0-9a-f]*$//'; }
 
 # ── 1.2 运行时目录：worker 工作树（根 / 子目录）→ 席位名；主工作树 → pm ──────────────────────
 p82 "$P82_WT" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-worker.log" 2>&1 \
@@ -15857,6 +15904,9 @@ assert_eq "P82 1.2 在 <worktree>/docs 里跑也解析成 dev2（不是 docs）"
 p82 "$P82R" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-main.log" 2>&1 \
   && ok "P82 1.2 主工作树里 notify 退出码 0" || bad "P82 1.2 主工作树里 notify 失败"
 assert_eq "P82 1.2 主工作树 → pm（PM 自己的通知仍记 pm）" "$(p82_last)" "agent:pm · P82-SUMMARY-1"
+# P139：worker 的 inbox 行要自带修订标识（task 从分支推、tip 是工作树 HEAD 短哈希）
+P82_TIP="$(git -C "$P82_WT" rev-parse --short HEAD 2>/dev/null)"
+assert_has "$P82_INBOX" "task=P82 tip=$P82_TIP" "P82 1.2 worker 行的修订标识 = 分支 ID + 工作树 HEAD 短哈希（P139）"
 
 # ── 1.3 继承的 TEAM_AGENT 不许压过运行时目录（分歧点名，目录赢）─────────────────────────────
 ( cd "$P82_WT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_SKILL_DIR \
@@ -16842,6 +16892,480 @@ assert_not_echo "$P140C_OUT" "0 bytes" "R6：追加一个字节后零产出警�
 rm -f "$P140C/.pi-agent/sessions/--$P140C_ENC--/x_$P140C_SID.jsonl"
 P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
 assert_not_echo "$P140C_OUT" "0 bytes" "R6：会话文件不在了 → 沉默（不猜）"
+# ---------------------------------------------------------------- 55. meeting-liveness（发现性 / 过期 / 队列 / 标识）
+# P139 · change: meeting-liveness。纯逻辑面（不建 tmux、不起真实 pi）：未读读数与待办元组（1.1/1.2）、
+# status/digest 的会议现场行（1.3/2.3）、过期与收尾（2.1/2.2）、每方窗口解析（4.1）、身份轴与第三方拒绝
+# （4.4/4.5）、通知标识与 stale/fresh 比较（3.5/3.6）、面板 band（5.1）。真 tmux 的那半（watch 拍 /
+# 敲门 / 排水 / 每方窗口投递）在 55 段；两段共用 $TMP/p139 下的夹具与只属于夹具的会议共享区。
+section "55 · meeting-liveness：未读 / 过期 / 队列 / 标识（P139，纯逻辑）"
+P139="$TMP/p139"; rm -rf "$P139"; mkdir -p "$P139"
+P139_MEET="$P139/meetings"; mkdir -p "$P139_MEET"
+P139_MEET_SAVE="${TEAM_MEETINGS_DIR:-}"
+export TEAM_MEETINGS_DIR="$P139_MEET"    # 会议共享区只写夹具自己的目录（不碰真项目/调用方）
+p139_repo() { # <名> → 最小夹具仓库 + init（日志落 $P139/init-<名>.log）
+  local name="$1" d="$P139/$1"
+  ( cd "$P139" && git init -q -b main "$name" && cd "$name" \
+    && git config user.email smoke@teamsmith && git config user.name smoke \
+    && git commit -q --allow-empty -m init \
+    && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_MEETINGS_DIR \
+         $TEAM init --session "$name" --agents dev --vcs local --gates true --docs docs/team \
+    && printf 'TEAM_OPENSPEC_BIN="%s"\n' "$FAKE/openspec" >> .pi/team/config.sh ) >"$P139/init-$name.log" 2>&1
+}
+for _p139r in alpha beta <peer-project> third notify ticker opener; do p139_repo "$_p139r" || true; done
+assert_file "$P139/alpha/.pi/team/config.sh" "P139 夹具：alpha 仓库已初始化（六个夹具就位）"
+# D66 形状：<peer-project> 的声明名与主工作树 basename 都是 <peer-project>，但它的 TEAM_SESSION 是 <peer>
+printf 'TEAM_SESSION="<peer>"\n' >> "$P139/<peer-project>/.pi/team/config.sh"
+p139() { # <repo> <team 命令…>：在夹具仓库里跑 CLI（身份按 cwd，夹具身份不继承给别的项目）
+  local repo="$1"; shift
+  ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM "$@" )
+}
+p139_fn() { # <repo> <session> <bash 片段>：直接 source 库执行（函数级夹具；session 显式给）
+  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT TEAM_SESSION="$2" \
+      TEAM_MEETINGS_DIR="$P139_MEET" \
+      bash -c '. "$1/scripts/lib/common.sh"; for f in "$1"/scripts/lib/cmd-*.sh; do . "$f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$3" _ "$SKILL_DIR" )
+}
+p139_turn() { # <slug> <seq> <from-project> <intent>
+  local d="$P139_MEET/$1"; mkdir -p "$d/transcript" "$d/read"
+  printf -- '---\nseq: %s\nfrom: %s/pm@2026-09-30T00:00:00Z\nintent: %s\n---\n\n%s turn %s\n' \
+    "$2" "$3" "$4" "$3" "$2" > "$d/transcript/$(printf '%04d' "$2")_${3}_${4}.md"
+}
+p139_env() { # <slug> <state.env 行…>：手写 state.env（身份/窗口形状夹具）
+  local d="$P139_MEET/$1"; mkdir -p "$d/transcript" "$d/read"
+  { printf 'SLUG=%s\nTOPIC=t\nSTATUS=open\n' "$1"; printf '%s\n' "${@:2}"; \
+    printf 'OPENED_BY=x\nOPENED_AT=2026-09-30T00:00:00Z\nOPENED_EPOCH=%s\nTTL_HOURS=72\nMAX_TURNS=20\n' "$(date +%s)"; } \
+    > "$d/state.env"
+}
+
+# ── 1.1 / 1.2 未读读数与待办元组 ────────────────────────────────────────────────────────────
+for _p139m in m-unread m-own m-closed m-exp m-fresh; do
+  p139 "$P139/alpha" meeting open "$_p139m" --with beta:beta --topic t --yes >"$P139/open-$_p139m.log" 2>&1 \
+    || bad "P139 夹具：meeting open $_p139m 失败（见 $P139/open-$_p139m.log）"
+done
+p139_turn m-unread 1 beta info                    # 一条 peer turn（未读）
+p139 "$P139/alpha" meeting say m-own --intent info "own turn" >"$P139/own.log" 2>&1 \
+  && ok "P139 1.1 夹具：m-own 的发言由本项目自己写（say 推进自己的读位）" || bad "P139 夹具：m-own say 失败"
+p139_turn m-closed 1 beta info                    # 未读 peer turn，但会议已关闭
+p139 "$P139/alpha" meeting close m-closed >/dev/null 2>&1
+sed -i 's/^OPENED_EPOCH=.*/OPENED_EPOCH=1000/' "$P139_MEET/m-exp/state.env"   # 过期但未关闭
+assert_eq "P139 1.1 未读计数：一条 peer turn = 1（自己的 & 已关闭的都不算）" \
+  "$(p139_fn "$P139/alpha" alpha 'team_meetings_unread_count')" "1"
+P139_COUNTS="$(p139_fn "$P139/alpha" alpha 'team_pending_counts')"
+P139_FAST="$(p139_fn "$P139/alpha" alpha 'team_panel_pending_counts_fast')"
+assert_eq "P139 1.2 canonical 与 panel fast 两个读者逐字节同值" "$P139_FAST" "$P139_COUNTS"
+assert_eq "P139 1.2 元组字段数 = 8（旧 7 词 + meetings）" "$(printf '%s\n' "$P139_COUNTS" | wc -w | tr -d ' ')" "8"
+assert_eq "P139 1.2 末字段 = 未读会议数" "$(printf '%s\n' "$P139_COUNTS" | awk '{print $NF}')" "1"
+assert_has_echo "$(p139_fn "$P139/alpha" alpha 'team_pending_text "$(team_pending_counts)"')" \
+  "未读会议 1" "P139 1.2 team_pending_text 渲染 未读会议 N"
+assert_has_echo "$(p139_fn "$P139/alpha" alpha 'team_pending_text "0 0 0 0 0 0 2"')" \
+  "停了的 agent 2" "P139 1.2 旧 7 词元组照读（stopped 仍读对）"
+assert_not_echo "$(p139_fn "$P139/alpha" alpha 'team_pending_text "0 0 0 0 0 0 2"')" \
+  "未读会议" "P139 1.2 旧 7 词元组不会把多出的词当会议数"
+assert_has_echo "$(p139_fn "$P139/alpha" alpha 'team_pending_text "0 0 0 0 0 0 0 3"')" \
+  "未读会议 3" "P139 1.2 8 词元组的 meetings 读对"
+
+# ── 1.3 / 2.3 status 与 digest 的会议现场行 ─────────────────────────────────────────────────
+p139 "$P139/alpha" status >"$P139/status.log" 2>&1
+assert_has "$P139/status.log" "m-unread 1 条新 → team meeting read m-unread" "P139 1.3 status 现场行给出 slug 与 read 命令"
+assert_has "$P139/status.log" "m-exp 已过期未关闭 → team meeting close --stale" "P139 2.3 status 现场行给出过期与 close --stale"
+assert_eq "P139 2.3 status 只打一行过期现场（一场过期一条，不是每场）" \
+  "$(grep -ac '已过期未关闭' "$P139/status.log" || true)" "1"
+p139 "$P139/alpha" digest >"$P139/digest.log" 2>&1
+assert_has "$P139/digest.log" "未读会议 1" "P139 1.3 digest 带未读会议数"
+assert_has "$P139/digest.log" "m-unread 1 条新" "P139 1.3 digest 现场行给出 slug"
+assert_has "$P139/digest.log" "m-exp 已过期未关闭" "P139 2.3 digest 现场行给出过期未关闭"
+
+# ── 5.1 面板 band：两条未读 peer turn ──────────────────────────────────────────────────────
+p139_turn m-unread 2 beta report
+if [ -n "$JS_RUNNER" ]; then
+  p139 "$P139/alpha" monitor --json >"$P139/panel.json" 2>"$P139/panel.err"
+  if python3 -c 'import json,sys; p=json.load(open(sys.argv[1]))["panel"]["pending"]; sys.exit(0 if (p["meetings"],p["total"],p["text"])==(2,2,"未读会议 2") else 1)' \
+       "$P139/panel.json" 2>/dev/null; then
+    ok "P139 5.1 monitor --json：pending.meetings=2 · total=2 · text=未读会议 2"
+  else
+    bad "P139 5.1 monitor --json 的 pending 块不含两条未读（见 $P139/panel.json）"
+  fi
+  p139 "$P139/alpha" monitor --print --width 120 --height 29 >"$P139/panel.print" 2>&1
+  assert_has "$P139/panel.print" "未读会议 2" "P139 5.1 monitor --print 的 band 行显示未读会议 2"
+else
+  cond_skip "54·面板 band" "没有 JS 运行时（§27 同一条件）"
+fi
+
+# ── 1.3 / 2.1 读位：peek 不动读位，read 推进；自有发言不计 ───────────────────────────────────
+P139_SEQ="$P139_MEET/m-unread/read/alpha.seq"
+printf '0\n' > "$P139_SEQ"
+P139_BEFORE="$(cksum "$P139_SEQ" | awk '{print $1":"$2}')"
+p139 "$P139/alpha" meeting read m-unread --peek >"$P139/peek.log" 2>&1 \
+  && ok "P139 1.3 --peek 退出码 0 并打印发言" || bad "P139 1.3 --peek 失败"
+assert_has "$P139/peek.log" "turn 2" "P139 1.3 --peek 真的打印了最新一轮"
+assert_eq "P139 1.3 --peek 不动 read/<project>.seq（逐字节）" \
+  "$(cksum "$P139_SEQ" | awk '{print $1":"$2}')" "$P139_BEFORE"
+p139 "$P139/alpha" meeting read m-unread >/dev/null 2>&1
+assert_eq "P139 1.3 read 推进到最新一轮" "$(cat "$P139_SEQ")" "2"
+assert_eq "P139 1.1 读完只剩自有/关闭 → 未读 0" "$(p139_fn "$P139/alpha" alpha 'team_meetings_unread_count')" "0"
+
+# ── 2.1 过期：状态词、只读、可关闭 ─────────────────────────────────────────────────────────
+p139_turn m-exp 1 beta info
+p139 "$P139/alpha" meeting list >"$P139/list.log" 2>&1
+assert_match "$P139/list.log" "^m-exp +expired" "P139 2.1 list 行的状态是 expired"
+assert_not "$P139/list.log" "open(过期)" "P139 2.1 list 不再出现 open(过期) 拼写"
+p139 "$P139/alpha" meeting read m-exp >"$P139/exp-read.log" 2>&1
+assert_eq "P139 2.1 过期会议 read 退出码 0" "$?" "0"
+assert_has "$P139/exp-read.log" "expired（已过期）" "P139 2.1 read 头部报 expired"
+assert_has "$P139/exp-read.log" "beta turn 1" "P139 2.1 过期会议仍能读到发言"
+if p139 "$P139/alpha" meeting say m-exp --intent info "one more" >"$P139/exp-say.log" 2>&1; then
+  bad "P139 2.1 过期会议 say 应被拒（只读）"
+else
+  ok "P139 2.1 过期会议 say 被拒（只读）"
+fi
+assert_has "$P139/exp-say.log" "已过期" "P139 2.1 拒绝理由点名过期"
+assert_has "$P139/exp-say.log" "TTL 72h" "P139 2.1 拒绝理由点名 TTL"
+p139 "$P139/alpha" meeting close m-exp --summary "leftovers: none" >"$P139/exp-close.log" 2>&1 \
+  && ok "P139 2.1 过期会议能被 close 收尾（旧实现的死锁不再来）" || bad "P139 2.1 过期会议 close 失败"
+assert_has "$P139_MEET/m-exp/state.env" "STATUS=closed" "P139 2.1 close 写入 STATUS=closed"
+# 规格场景「An expired meeting can be closed」还要求：关闭后 list 不再报它 expired
+p139 "$P139/alpha" meeting list >"$P139/list-closed.log" 2>&1
+assert_not_echo "$(grep -a m-exp "$P139/list-closed.log" | head -1)" "expired" "P139 2.1 关闭后 list 不再把它报成 expired"
+
+# ── 2.4 TTL：夹到 8760 / 非法拒绝 / 存坏的登记值退回默认 ─────────────────────────────────────
+p139 "$P139/alpha" meeting open m-ttl --with beta:beta --topic t --ttl 99999 --yes >"$P139/ttl.log" 2>&1 \
+  && ok "P139 2.4 --ttl 99999 被接受并夹取" || bad "P139 2.4 --ttl 99999 失败"
+assert_has_echo "$(cat "$P139/ttl.log" | tr '\n' ' ')" "8760" "P139 2.4 夹取有警告（点名 8760）"
+assert_has "$P139_MEET/m-ttl/state.env" "TTL_HOURS=8760" "P139 2.4 存下的是 8760"
+if p139 "$P139/alpha" meeting open m-bad-ttl --with beta:beta --topic t --ttl abc --yes >"$P139/ttl-bad.log" 2>&1; then
+  bad "P139 2.4 --ttl abc 应被拒"
+else ok "P139 2.4 --ttl abc 被拒（正整数小时 only）"; fi
+sed -i 's/^TTL_HOURS=.*/TTL_HOURS=garbage/' "$P139_MEET/m-ttl/state.env"
+assert_eq "P139 2.4 存坏的 TTL_HOURS 退回文档默认 72" "$(p139_fn "$P139/alpha" alpha 'team_meeting_ttl_hours m-ttl')" "72"
+sed -i 's/^TTL_HOURS=.*/TTL_HOURS=0/' "$P139_MEET/m-ttl/state.env"
+assert_eq "P139 2.4 非正 TTL_HOURS 也退回 72（不永生）" "$(p139_fn "$P139/alpha" alpha 'team_meeting_ttl_hours m-ttl')" "72"
+assert_has_echo "$(p139_fn "$P139/alpha" alpha 'team_meeting_ttl_note m-ttl')" "不会永生" "P139 2.4 read 头部会说明退回原因"
+
+# ── 4.1 每方窗口：映射 ＞ 旧字段 ＞ pm；open 两个字段都写 ─────────────────────────────────────
+p139_env wtest 'PARTICIPANTS=alpha,beta' 'PEER_SESSIONS=alpha=a;beta=b' 'PM_WINDOWS=alpha=pm;beta=pi' 'PM_WINDOW=legacy'
+assert_eq "P139 4.1 映射行优先（beta → pi）" "$(p139_fn "$P139/alpha" alpha 'team_meeting_peer_window wtest beta')" "pi"
+p139_env wtest 'PARTICIPANTS=alpha,beta' 'PEER_SESSIONS=alpha=a;beta=b' 'PM_WINDOW=legacy'
+assert_eq "P139 4.1 只有旧字段 → 读旧字段" "$(p139_fn "$P139/alpha" alpha 'team_meeting_peer_window wtest beta')" "legacy"
+p139_env wtest 'PARTICIPANTS=alpha,beta' 'PEER_SESSIONS=alpha=a;beta=b'
+assert_eq "P139 4.1 都没有 → 文档默认 pm" "$(p139_fn "$P139/alpha" alpha 'team_meeting_peer_window wtest beta')" "pm"
+p139_env wtest 'PARTICIPANTS=alpha,beta' 'PEER_SESSIONS=alpha=a;beta=b' 'PM_WINDOWS=alpha=pm;beta=pi' 'PM_WINDOW=legacy'
+assert_eq "P139 4.1 两者都在 → 映射赢" "$(p139_fn "$P139/alpha" alpha 'team_meeting_peer_window wtest beta')" "pi"
+assert_has "$P139_MEET/m-fresh/state.env" "PM_WINDOWS=alpha=pm" "P139 4.1 open 写发起方自己的窗口行"
+assert_has "$P139_MEET/m-fresh/state.env" "PM_WINDOW=pm" "P139 4.1 open 同时写旧字段（值相同）"
+assert_has "$P139_MEET/m-fresh/state.env" "PARTICIPANT_REPOS=alpha=alpha" "P139 4.4 open 记下发起方的仓库名"
+
+# ── 4.4 / 4.5 身份：记录的任一名字都算，第三方仍被拒 ─────────────────────────────────────────
+# 每条身份轴单独造形状（函数级：显式给声明名与 session，不经过 CLI 的身份闸门）
+p139_fn_ax() { # <repo> <project> <session> <bash 片段>
+  ( cd "$1" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT TEAM_PROJECT="$2" TEAM_SESSION="$3" \
+      TEAM_MEETINGS_DIR="$P139_MEET" \
+      bash -c '. "$1/scripts/lib/common.sh"; for f in "$1"/scripts/lib/cmd-*.sh; do . "$f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$4" _ "$SKILL_DIR" )
+}
+p139_mine() { p139_fn_ax "$1" "$2" "$3" 'team_meeting_is_mine id-meet && echo yes || echo no'; }
+p139_env id-meet 'PARTICIPANTS=opener,<peer>' 'PEER_SESSIONS=opener=opener-sess;<peer>=<peer>' \
+  'PM_WINDOWS=opener=pm' 'PM_WINDOW=pm' 'PARTICIPANT_REPOS=opener=opener'
+assert_eq "P139 4.4 声明名命中参与方 → 是" \
+  "$(p139_mine "$P139/alpha" opener xx)" "yes"
+assert_eq "P139 4.4 受邀 session 命中 → 是（声明名不同也对）" \
+  "$(p139_mine "$P139/<peer-project>" declared-x <peer>)" "yes"
+assert_eq "P139 4.4 三个名字都未登记 → 否（第三方）" \
+  "$(p139_mine "$P139/third" third third)" "no"
+assert_eq "P139 4.4 声明名/session 都不在名单、仓库名也还没登记 → 否" \
+  "$(p139_mine "$P139/<peer-project>" declared-x other)" "no"
+p139 "$P139/<peer-project>" meeting peer id-meet <peer-project>:<peer> --repo <peer-project> >"$P139/peer.log" 2>&1 \
+  && ok "P139 4.5 meeting peer --repo 由 D66 形状的项目自己登记成功" || bad "P139 4.5 meeting peer --repo 失败"
+assert_has "$P139_MEET/id-meet/state.env" "PARTICIPANT_REPOS=opener=opener;<peer>=<peer-project>" \
+  "P139 4.5 仓库名与 session 并列记进 state.env"
+assert_eq "P139 4.4 记录仓库名（basename）命中 → 是（声明名与 session 都与名单无关）" \
+  "$(p139_mine "$P139/<peer-project>" declared-x other)" "yes"
+p139_turn id-meet 1 opener info
+P139_TURNS_BEFORE="$(ls "$P139_MEET/id-meet/transcript" | wc -l | tr -d ' ')"
+p139 "$P139/<peer-project>" meeting read id-meet >/dev/null 2>&1 \
+  && ok "P139 4.5 D66 形状的 read 退出码 0" || bad "P139 4.5 D66 形状的 read 失败"
+p139 "$P139/<peer-project>" meeting say id-meet --intent report "hello from <peer-project>" >"$P139/d66-say.log" 2>&1 \
+  && ok "P139 4.5 D66 形状的 say 退出码 0" || bad "P139 4.5 D66 形状的 say 失败"
+assert_eq "P139 4.5 say 真的写进 transcript（+1 条）" \
+  "$(ls "$P139_MEET/id-meet/transcript" | wc -l | tr -d ' ')" "$((P139_TURNS_BEFORE + 1))"
+p139_turn id-meet 3 opener info
+p139 "$P139/<peer-project>" meeting inbox >"$P139/d66-inbox.log" 2>&1
+assert_has "$P139/d66-inbox.log" "id-meet" "P139 4.5 D66 形状的 inbox 认得这场会议（有一条新 peer turn）"
+P139_TURNS_BEFORE="$(ls "$P139_MEET/id-meet/transcript" | wc -l | tr -d ' ')"
+if p139 "$P139/third" meeting read id-meet >"$P139/third-read.log" 2>&1; then
+  bad "P139 4.4 第三方 read 应被拒"
+else ok "P139 4.4 第三方 read 被拒（点名参与方）"; fi
+assert_has "$P139/third-read.log" "opener,<peer>" "P139 4.4 拒绝理由点名参与方"
+if p139 "$P139/third" meeting say id-meet --intent info "sneak in" >"$P139/third-say.log" 2>&1; then
+  bad "P139 4.4 第三方 say 应被拒"
+else ok "P139 4.4 第三方 say 被拒"; fi
+assert_eq "P139 4.4 第三方没有写进 transcript" \
+  "$(ls "$P139_MEET/id-meet/transcript" | wc -l | tr -d ' ')" "$P139_TURNS_BEFORE"
+p139 "$P139/third" meeting inbox >"$P139/third-inbox.log" 2>&1 || true
+assert_not "$P139/third-inbox.log" "id-meet" "P139 4.4 第三方的 inbox 不列这场会议"
+
+# ── 3.5 通知标识：CLI 从发送者工作树盖章；没有工作树就不编 ───────────────────────────────────
+git -C "$P139/notify" worktree add -q -b task/P9-parser "$P139/notify/.worktrees/dev" >/dev/null 2>&1
+git -C "$P139/notify/.worktrees/dev" commit -q --allow-empty -m "P9 work"
+P139_TIP="$(git -C "$P139/notify/.worktrees/dev" rev-parse --short HEAD)"
+printf 'P9 交付：解析器已上线\n' >"$P139/summary.txt"
+printf '' > "$P139/notify/docs/team/inbox/pm.md"
+( cd "$P139/notify/.worktrees/dev" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT \
+    TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from dev --from-file "$P139/summary.txt" ) >"$P139/notify.log" 2>&1 \
+  && ok "P139 3.5 工作树里 notify 退出码 0" || bad "P139 3.5 工作树里 notify 失败"
+assert_has "$P139/notify/docs/team/inbox/pm.md" "task=P9 tip=$P139_TIP" "P139 3.5 inbox 行带 task=<ID> tip=<短哈希>"
+assert_has "$P139/notify/docs/team/inbox/pm.md" "P9 交付：解析器已上线" "P139 3.5 摘要逐字节仍在"
+( cd "$P139/notify" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+    TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from ghost "no worktree here" ) >"$P139/notify2.log" 2>&1
+assert_not "$P139/notify/docs/team/inbox/pm.md" "task=ghost" "P139 3.5 没有任务工作树的发送者不编造标识"
+
+# ── 3.6 stale/fresh：接收方只读自己的账本（评审记录 HEAD / knock 轮次 vs 读位）────────────────
+mkdir -p "$P139/alpha/docs/team/reviews"
+printf '# P9\n\n- HEAD `abc1234`\n' > "$P139/alpha/docs/team/reviews/P9.md"
+p139_stale() { # <task> <tip> [<repo>] —— 规范里的接收方判据：tip == 评审记录的 HEAD → stale
+  local id="$1" tip="$2" repo="${3:-$P139/alpha}" head
+  head="$(sed -n 's/.*HEAD `\([0-9a-f]\{7,\}\)`.*/\1/p' "$repo/docs/team/reviews/$id.md" 2>/dev/null | head -1)"
+  [ -n "$head" ] && [ "$tip" = "$head" ] && printf 'stale' || printf 'fresh'
+}
+assert_eq "P139 3.6 同一 tip → stale（评审记录已覆盖这个修订）" "$(p139_stale P9 abc1234)" "stale"
+assert_eq "P139 3.6 不同 tip → fresh（接收方没判过这个修订）" "$(p139_stale P9 def5678)" "fresh"
+p139_turn m-knock 4 beta report
+printf '3\n' > "$P139_MEET/m-knock/read/alpha.seq"
+p139_knock_stale() { # <N> <position> —— knock 的 #N 对读位：position >= N → stale
+  [ "${2:-0}" -ge "$1" ] && printf 'stale' || printf 'fresh'
+}
+assert_eq "P139 3.6 knock #4 对读位 3 → fresh" "$(p139_knock_stale 4 "$(cat "$P139_MEET/m-knock/read/alpha.seq")")" "fresh"
+printf '4\n' > "$P139_MEET/m-knock/read/alpha.seq"
+assert_eq "P139 3.6 knock #4 对读位 4 → stale" "$(p139_knock_stale 4 "$(cat "$P139_MEET/m-knock/read/alpha.seq")")" "stale"
+assert_eq "P139 3.6 判据只读共享区（transcript 轮数仍是 1 轮 = #4 的声明对象）" \
+  "$(ls "$P139_MEET/m-knock/transcript" | wc -l | tr -d ' ')" "1"
+
+# ── 1.3 空现场：全部读完/关闭后两个表面都不再打会议行 ────────────────────────────────────────
+p139 "$P139/alpha" status >"$P139/status-empty.log" 2>&1
+assert_not "$P139/status-empty.log" "未读会议" "P139 1.3 没有未读时 status 的待办行不含未读会议"
+assert_not "$P139/status-empty.log" "已过期未关闭" "P139 2.3 没有过期未关闭时 status 不打那条现场行"
+assert_not "$P139/status-empty.log" "条新 →" "P139 1.3 没有未读时 status 不打读位现场行"
+
+# ---------------------------------------------------------------- 56. meeting-liveness 真 tmux（敲门 / 排水 / 每方窗口 / 巡检拍）
+# P139 · change: meeting-liveness 的真进程面：1.4（巡检拍带未读会议）、3.1–3.3（敲门走投递守卫、脏框排队、
+# 清空排水）、3.4（载荷带轮次）、4.2/4.3（每方窗口、未解析窗口的现场诊断）。夹具仓库与会议共享区沿用
+# 54 段的 $P139/$P139_MEET（needs: 54），tmux 全部在本轮私有 socket 的私有 session 上。
+section "56 · meeting-liveness 真 tmux：敲门 / 排水 / 每方窗口（P139）"
+if [ "$FAST" = "1" ]; then
+  fast_skip "55·会议真 tmux" "要真 tmux pane（假 TUI：脏框排队 / 清空排水 / 每方窗口 / 巡检拍）"
+elif [ "$HAVE_TMUX" != "1" ] || ! command -v python3 >/dev/null 2>&1; then
+  cond_skip "55·会议真 tmux" "本机没有 tmux 或 python3"
+elif ! tmux_has_bracket_paste_format; then
+  cond_skip "55·会议真 tmux" "$(tmux -V)：没有 #{bracket_paste_flag} 格式（tmux ≥3.7 才有），投递判据测不了"
+else
+  live_mark
+  # 每家夹具项目一个**自己的** tmux session：R1 起 session 也是身份轴，三个项目挤在同一个 session 名上
+  # 会互相被认成参与方（未读计数串台），pane 的 cwd 也会让对方的 PM 窗口判成 foreign（PM 找不到）。
+  P139_SESS="teamsmith-smoke-meet-$$"      # beta：alpha 的敲门对象（pi=脏框 / shell=裸壳）
+  P139_ASESS="teamsmith-smoke-meet-a-$$"   # alpha：beta 反向敲门的目标（new）
+  P139_NSESS="teamsmith-smoke-meet-n-$$"   # notify：通知的 PM 框（pi）
+  P139_TSESS="teamsmith-smoke-meet-t-$$"   # ticker：巡检叫醒的 PM 框（pi）
+  P139_FTUI="$SKILL_DIR/tests/fake-tui.py"
+  P139_SUB_PI="$TMP/p139-submit-pi.log"; : > "$P139_SUB_PI"
+  P139_SUB_NEW="$TMP/p139-submit-new.log"; : > "$P139_SUB_NEW"
+  P139_SUB_NOTIFY="$TMP/p139-submit-notify.log"; : > "$P139_SUB_NOTIFY"
+  P139_SUB_TICK="$TMP/p139-submit-tick.log"; : > "$P139_SUB_TICK"
+  for _p139sess in "$P139_SESS" "$P139_ASESS" "$P139_NSESS" "$P139_TSESS"; do
+    tmux kill-session -t "$_p139sess" 2>/dev/null || true
+    tmux new-session -d -s "$_p139sess" -n seed -x 120 -y 30 -c "$P139" 2>/dev/null || true
+  done
+  p139_tui() { # <session> <窗口> <cwd 仓库> <草稿> <提交日志>
+    local cmd
+    cmd="$(printf 'FAKE_TUI_DRAFT=%q FAKE_TUI_COLS=100 FAKE_TUI_SUBMIT_LOG=%q python3 %q' "$4" "$5" "$P139_FTUI")"
+    tmux kill-window -t "$1:$2" 2>/dev/null || true
+    tmux new-window -d -t "$1" -n "$2" -c "$3" "$cmd" 2>/dev/null || true
+  }
+  p139_ready() { # <session> <窗口>：有界等输入框画出来
+    local i=0
+    for i in $(seq 1 40); do
+      tmux capture-pane -p -t "$1:$2" 2>/dev/null | grep -q '─' && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  p139_md5() { tmux capture-pane -p -t "$1:$2" 2>/dev/null | cksum | awk '{print $1":"$2}'; }
+  p139_submits() { grep -c '^SUBMIT:' "${1:-$P139_SUB_PI}" 2>/dev/null || true; }
+  p139_outbox_n() { find "$P139/$1/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | grep -c . || true; }
+  p139_outbox_payload() { # <repo> → 活动队列条目的 payload（去掉头部与 --- 分隔行）
+    find "$P139/$1/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | sort | while read -r f; do
+      awk 'f { print } /^---$/ { f = 1 }' "$f"
+    done
+  }
+  p139_knock() { # <repo> <say|knock> <slug> <文本…>：TEAM_MEETING_KNOCK=1 的一次敲门
+    local repo="$1" kind="$2" slug="$3"; shift 3
+    if [ "$kind" = "say" ]; then
+      ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION TEAM_MEETING_KNOCK=1 \
+          $TEAM meeting say "$slug" --intent info "$*" --knock )
+    else
+      ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION TEAM_MEETING_KNOCK=1 \
+          $TEAM meeting knock "$slug" )
+    fi
+  }
+
+  # ── 4.3 每方窗口：自己的行重登记不动对方的行 ───────────────────────────────────────────────
+  p139 "$P139/alpha" meeting open m-tmux --with beta:"$P139_SESS" --topic t --yes >"$P139/open-m-tmux.log" 2>&1 \
+    && ok "P139 夹具：m-tmux 会议已开（peer session 是本轮私有 session）" || bad "P139 夹具：m-tmux 开不出来"
+  p139_tui "$P139_SESS" pi "$P139/beta" '半句草稿 half a sentence' "$P139_SUB_PI"
+  p139_tui "$P139_ASESS" new "$P139/alpha" '' "$P139_SUB_NEW"
+  tmux new-window -d -t "$P139_SESS" -n shell -c "$P139/beta" bash --noprofile --norc 2>/dev/null || true
+  p139_ready "$P139_SESS" pi && ok "P139 夹具：beta 的 pi 窗口假 TUI 已就绪" || bad "P139 夹具：beta 的 pi 窗口没画出输入框"
+  p139_ready "$P139_ASESS" new && ok "P139 夹具：alpha 的 new 窗口假 TUI 已就绪" || bad "P139 夹具：alpha 的 new 窗口没画出输入框"
+  p139 "$P139/alpha" meeting peer m-tmux beta:"$P139_SESS" --window pi >"$P139/peer-beta.log" 2>&1 \
+    && ok "P139 4.3 登记对方那一行 beta=pi" || bad "P139 4.3 登记 beta 行失败"
+  P139_ROW_BETA_BEFORE="$(sed -n 's/^PM_WINDOWS=//p' "$P139_MEET/m-tmux/state.env" | tr ';' '\n' | grep '^beta=')"
+  p139 "$P139/alpha" meeting peer m-tmux alpha:"$P139_ASESS" --window new >"$P139/peer-alpha.log" 2>&1 \
+    && ok "P139 4.3 alpha 重登记自己的行为 new" || bad "P139 4.3 alpha 重登记自己的行失败"
+  P139_ROW_BETA_AFTER="$(sed -n 's/^PM_WINDOWS=//p' "$P139_MEET/m-tmux/state.env" | tr ';' '\n' | grep '^beta=')"
+  assert_eq "P139 4.3 beta=pi 行逐字节不变（各管各的行）" "$P139_ROW_BETA_AFTER" "$P139_ROW_BETA_BEFORE"
+  assert_eq "P139 4.3 alpha 的行换成 new" \
+    "$(sed -n 's/^PM_WINDOWS=//p' "$P139_MEET/m-tmux/state.env" | tr ';' '\n' | grep '^alpha=')" "alpha=new"
+
+  # ── 3.1 脏框：敲门排队，草稿一动不动，共享区只多了那一轮发言 ─────────────────────────────────
+  P139_PI_BEFORE="$(p139_md5 "$P139_SESS" pi)"
+  P139_TRANS_BEFORE="$(find "$P139_MEET/m-tmux/transcript" -type f -exec cksum {} \; | cksum | awk '{print $1":"$2}')"
+  p139_knock "$P139/alpha" say m-tmux "hello beta tiny" >"$P139/knock-queued.log" 2>&1
+  assert_has "$P139/knock-queued.log" "queued" "P139 3.1 脏框敲门报 queued（不是 knocked）"
+  assert_eq "P139 3.1 对方 pane 逐字节不变（草稿没被粘走）" "$(p139_md5 "$P139_SESS" pi)" "$P139_PI_BEFORE"
+  assert_eq "P139 3.1 队列里恰好一条 meeting-knock" "$(p139_outbox_n alpha)" "1"
+  P139_PAYLOAD="$(p139_outbox_payload alpha)"
+  assert_has_echo "$P139_PAYLOAD" "[meeting:m-tmux#1]" "P139 3.4 队列载荷带轮次标识 [meeting:m-tmux#1]"
+  assert_has_echo "$P139_PAYLOAD" "有新发言" "P139 3.1 载荷就是那条单行通知（不是副本）"
+  assert_file "$P139_MEET/m-tmux/transcript/0001_alpha_info.md" "P139 3.1 say 的发言已经落在共享区"
+  P139_TRANS_AFTER_SAY="$(find "$P139_MEET/m-tmux/transcript" -type f -exec cksum {} \; | cksum | awk '{print $1":"$2}')"
+  if [ "$P139_TRANS_AFTER_SAY" != "$P139_TRANS_BEFORE" ]; then
+    ok "P139 3.1 排队只多出那一轮发言（共享区不再有别的改动）"
+  else bad "P139 3.1 排队后共享区没有那一轮发言"; fi
+  p139 "$P139/alpha" outbox list >"$P139/outbox-list.log" 2>&1
+  assert_has "$P139/outbox-list.log" "meeting-knock" "P139 3.3 排队敲门的 kind 在 outbox list 里可见"
+  p139 "$P139/alpha" status >"$P139/knock-status.log" 2>&1
+  assert_has "$P139/knock-status.log" "outbox 1 条待投递" "P139 3.3 status 的 outbox 行计数排队敲门"
+
+  # ── 3.5（载荷那一半）：通知的 knock 载荷也带 task/tip ──────────────────────────────────────
+  printf 'TEAM_SESSION="%s"\nTEAM_PM_WINDOW="pi"\n' "$P139_NSESS" >> "$P139/notify/.pi/team/config.sh"
+  p139_tui "$P139_NSESS" pi "$P139/notify" 'notify 的 PM 草稿 half' "$P139_SUB_NOTIFY"
+  p139_ready "$P139_NSESS" pi && ok "P139 夹具：notify 的 PM 框（脏）已就绪" || bad "P139 夹具：notify 的 PM 框没画出输入框"
+  ( cd "$P139/notify" && exec sleep 600 ) &
+  P139_NOTIFY_PID=$!
+  mkdir -p "$P139/notify/.pi/team/state"   # 夹具仓库没有 state/：脏框/叫醒路径要先有位置记假 PM pid
+  printf '%s\n' "$P139_NOTIFY_PID" > "$P139/notify/.pi/team/state/pm.pid"
+  P139_TMUX_ENV="$(tmux display-message -p -t "$P139_NSESS:seed" '#{socket_path}'),$$,$(tmux display-message -p -t "$P139_NSESS:seed" '#{session_id}')"
+  ( cd "$P139/notify" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      TEAM_NOTIFY_TMUX=1 TMUX="$P139_TMUX_ENV" TMUX_PANE= $TEAM notify pm --from dev --from-file "$P139/summary.txt" ) >"$P139/notify-knock.log" 2>&1 \
+    && ok "P139 3.5 带 TMUX 的通知在脏框下走完（入队）" || bad "P139 3.5 通知的 knock 路径失败"
+  assert_eq "P139 3.5 通知的 knock 排进队列（脏框）" "$(p139_outbox_n notify)" "1"
+  assert_has_echo "$(p139_outbox_payload notify)" "task=P9 tip=$P139_TIP" "P139 3.5 knock 载荷带 task/tip（不只是 inbox 行）"
+  assert_has_echo "$(p139_outbox_payload notify)" "P9 交付：解析器已上线" "P139 3.5 knock 载荷里摘要逐字节仍在"
+
+  # ── 1.4 巡检拍：未读会议叫醒 PM（脏框 → 叫醒语入队）──────────────────────────────────────
+  printf 'TEAM_SESSION="%s"\nTEAM_PM_WINDOW="pi"\n' "$P139_TSESS" >> "$P139/ticker/.pi/team/config.sh"
+  p139_tui "$P139_TSESS" pi "$P139/ticker" 'ticker 的 PM 草稿 half' "$P139_SUB_TICK"
+  p139_ready "$P139_TSESS" pi && ok "P139 夹具：ticker 的 PM 框（脏）已就绪" || bad "P139 夹具：ticker 的 PM 框没画出输入框"
+  P139_TICKPANE_BEFORE="$(p139_md5 "$P139_TSESS" pi)"
+  p139 "$P139/ticker" meeting open m-watch --with beta:"$P139_SESS" --topic t --yes >/dev/null 2>&1
+  p139_turn m-watch 1 beta info
+  ( cd "$P139/ticker" && exec sleep 600 ) &
+  P139_TICK_PID=$!
+  mkdir -p "$P139/ticker/.pi/team/state"
+  printf '%s\n' "$P139_TICK_PID" > "$P139/ticker/.pi/team/state/pm.pid"
+  : > "$P139/ticker/.pi/team/state/nudges.log"
+  p139 "$P139/ticker" watch --once >"$P139/tick1.log" 2>&1 \
+    && ok "P139 1.4 watch --once 退出码 0" || bad "P139 1.4 watch --once 失败"
+  assert_has "$P139/ticker/.pi/team/state/watchdog.log" "未读会议 1" "P139 1.4(a) 巡检日志点名未读会议 1"
+  assert_eq "P139 1.4(a) 叫醒记录恰好一行" "$(grep -c . "$P139/ticker/.pi/team/state/nudges.log")" "1"
+  assert_eq "P139 1.4(e) 脏 PM 框：叫醒语进队列而不是粘字" "$(p139_outbox_n ticker)" "1"
+  assert_has_echo "$(p139_outbox_payload ticker)" "[pulse]" "P139 1.4(e) 队列载荷是叫醒语"
+  assert_has_echo "$(p139_outbox_payload ticker)" "未读会议 1" "P139 1.4(a) 叫醒语带未读会议数"
+  assert_eq "P139 1.4(e) 脏 PM pane 逐字节不变" "$(p139_md5 "$P139_TSESS" pi)" "$P139_TICKPANE_BEFORE"
+
+  # ── 3.2 清空后排水：三条通知各自投一次、队列清空、transcript 早已有那一轮 ────────────────────
+  P139_PI_SUBS0="$(p139_submits "$P139_SUB_PI")"
+  tmux send-keys -t "$P139_SESS:pi" C-u
+  tmux send-keys -t "$P139_NSESS:pi" C-u
+  tmux send-keys -t "$P139_TSESS:pi" C-u
+  sleep 0.4
+  p139 "$P139/alpha" outbox flush >"$P139/flush-alpha.log" 2>&1 \
+    && ok "P139 3.2 alpha 的排水退出码 0" || bad "P139 3.2 alpha 排水失败"
+  p139 "$P139/notify" outbox flush >"$P139/flush-notify.log" 2>&1 || true
+  p139 "$P139/ticker" outbox flush >"$P139/flush-ticker.log" 2>&1 || true
+  assert_eq "P139 3.2 敲门通知投进 beta 的 pi（+1）" "$(p139_submits "$P139_SUB_PI")" "$((P139_PI_SUBS0 + 1))"
+  assert_has "$P139_SUB_PI" "[meeting:m-tmux#1]" "P139 3.2 敲门通知投递内容正确"
+  assert_eq "P139 3.5 通知的 knock 投进 notify 自己的 PM 框（+1）" "$(p139_submits "$P139_SUB_NOTIFY")" "1"
+  assert_has "$P139_SUB_NOTIFY" "task=P9 tip=$P139_TIP" "P139 3.5 通知的 knock 载荷逐字投递"
+  assert_eq "P139 1.4(e) 叫醒语投进 ticker 自己的 PM 框（+1）" "$(p139_submits "$P139_SUB_TICK")" "1"
+  assert_has "$P139_SUB_TICK" "[pulse]" "P139 1.4(e) 叫醒语清空后被投递"
+  assert_eq "P139 3.2 alpha 队列清空" "$(p139_outbox_n alpha)" "0"
+  assert_eq "P139 3.2 notify 队列清空" "$(p139_outbox_n notify)" "0"
+  assert_eq "P139 1.4(e) ticker 队列清空" "$(p139_outbox_n ticker)" "0"
+  assert_file "$P139_MEET/m-tmux/transcript/0001_alpha_info.md" "P139 3.2 transcript 早在任何打字之前就有那一轮"
+  assert_eq "P139 3.1/3.2 排水也不改共享区（transcript 逐字节仍是 say 之后那份）" \
+    "$(find "$P139_MEET/m-tmux/transcript" -type f -exec cksum {} \; | cksum | awk '{print $1":"$2}')" "$P139_TRANS_AFTER_SAY"
+
+  # ── 3.4 / 4.3 空框直投：alpha→beta 的 pi；beta→alpha 的 new ───────────────────────────────
+  P139_PI_SUBS="$(p139_submits "$P139_SUB_PI")"
+  p139_knock "$P139/alpha" say m-tmux "second to beta" >"$P139/knock-pi.log" 2>&1
+  assert_has "$P139/knock-pi.log" "已敲门" "P139 4.2 空框敲门成功"
+  assert_has "$P139/knock-pi.log" "$P139_SESS:pi" "P139 4.2 成功行点名解析出的 session:window"
+  assert_eq "P139 3.4 直投只投一次（提交日志 +1）" "$(p139_submits "$P139_SUB_PI")" "$((P139_PI_SUBS + 1))"
+  assert_has "$P139_SUB_PI" "[meeting:m-tmux#2]" "P139 3.4 直投载荷带 [meeting:m-tmux#2]"
+  assert_has "$P139_MEET/m-tmux/knocks.log" "[meeting:m-tmux#2]" "P139 3.4 knocks.log 记同一个轮次"
+  P139_SUB_NEW_BEFORE="$(p139_submits "$P139_SUB_NEW")"
+  p139_knock "$P139/beta" say m-tmux "to alpha window new" >"$P139/knock-new.log" 2>&1
+  assert_has "$P139/knock-new.log" "$P139_ASESS:new" "P139 4.3 beta 的敲门目标是 alpha 自己的行 new"
+  assert_eq "P139 4.3 投进 new 窗口（+1）" "$(p139_submits "$P139_SUB_NEW")" "$((P139_SUB_NEW_BEFORE + 1))"
+  assert_has "$P139_SUB_NEW" "[meeting:m-tmux#3]" "P139 3.4 new 窗口收到带轮次的通知"
+
+  # ── 4.2 未解析窗口：诊断点名解析出的 session:window 与登记命令，什么都不打 ──────────────────
+  p139 "$P139/alpha" meeting open m-shell --with beta:"$P139_SESS" --topic t --yes >/dev/null 2>&1
+  p139 "$P139/alpha" meeting peer m-shell beta:"$P139_SESS" --window shell >/dev/null 2>&1
+  P139_SUB_PI_BEFORE="$(p139_submits "$P139_SUB_PI")"
+  if p139_knock "$P139/alpha" say m-shell "shell cannot take it" >"$P139/knock-shell.log" 2>&1; then
+    ok "P139 4.2 目标不是 TUI：敲门命令退出码 0（消息仍在共享区）"
+  else
+    bad "P139 4.2 目标不是 TUI 时敲门命令不该失败"
+  fi
+  assert_has "$P139/knock-shell.log" "敲门排查" "P139 4.2 失败诊断给排查清单"
+  assert_has "$P139/knock-shell.log" "$P139_SESS:shell" "P139 4.2 诊断点名解析出的 session:window"
+  assert_has "$P139/knock-shell.log" "meeting peer m-shell beta:$P139_SESS --window shell" "P139 4.2 诊断给出登记命令"
+  assert_eq "P139 4.2 没在跑 TUI：一个键都没打" "$(p139_submits "$P139_SUB_PI")" "$P139_SUB_PI_BEFORE"
+
+  # ── 4.3 旧会议（没有 PM_WINDOWS 行）：读旧 PM_WINDOW ───────────────────────────────────────
+  p139_env m-legacy 'PARTICIPANTS=alpha,beta' "PEER_SESSIONS=alpha=alpha;beta=$P139_SESS" 'PM_WINDOW=pi'
+  p139_turn m-legacy 1 beta info
+  P139_PI_SUBS="$(p139_submits "$P139_SUB_PI")"
+  p139_knock "$P139/alpha" knock m-legacy >"$P139/knock-legacy.log" 2>&1
+  assert_has "$P139/knock-legacy.log" "$P139_SESS:pi" "P139 4.3 旧会议按 PM_WINDOW=pi 敲门"
+  assert_eq "P139 4.3 旧会议也真的投到了（+1）" "$(p139_submits "$P139_SUB_PI")" "$((P139_PI_SUBS + 1))"
+
+  # ── 1.4(b)(c)：读完 / 只有自己的发言 → 下一拍不叫醒 ────────────────────────────────────────
+  p139 "$P139/ticker" meeting read m-watch >/dev/null 2>&1
+  P139_WD_N="$(grep -c . "$P139/ticker/.pi/team/state/watchdog.log")"
+  P139_NUDGE_N="$(grep -c . "$P139/ticker/.pi/team/state/nudges.log")"
+  p139 "$P139/ticker" watch --once >"$P139/tick2.log" 2>&1
+  P139_WD_NEW="$(tail -n "+$((P139_WD_N + 1))" "$P139/ticker/.pi/team/state/watchdog.log")"
+  assert_not_echo "$P139_WD_NEW" "未读会议" "P139 1.4(b) 读完的下一拍不再报未读会议"
+  assert_not_echo "$P139_WD_NEW" "叫醒 PM：" "P139 1.4(b) 读完的下一拍不叫醒"
+  assert_eq "P139 1.4(b) 读完的下一拍没有新叫醒记录" \
+    "$(grep -c . "$P139/ticker/.pi/team/state/nudges.log")" "$P139_NUDGE_N"
+  assert_eq "P139 1.4(b) 读完的下一拍队列仍空" "$(p139_outbox_n ticker)" "0"
+  p139 "$P139/ticker" meeting open m-watch-own --with beta:"$P139_SESS" --topic t --yes >/dev/null 2>&1
+  p139 "$P139/ticker" meeting say m-watch-own --intent info "自己的发言" >/dev/null 2>&1
+  P139_WD_N="$(grep -c . "$P139/ticker/.pi/team/state/watchdog.log")"
+  p139 "$P139/ticker" watch --once >"$P139/tick3.log" 2>&1
+  P139_WD_NEW="$(tail -n "+$((P139_WD_N + 1))" "$P139/ticker/.pi/team/state/watchdog.log")"
+  assert_not_echo "$P139_WD_NEW" "未读会议" "P139 1.4(c) 只有自己的发言 → 不叫醒"
+  assert_not_echo "$P139_WD_NEW" "叫醒 PM：" "P139 1.4(c) 自己的发言不算未读（没有叫醒记录）"
+
+  # ── 收尾：只收自己 spawn 的进程与本轮私有 session ──────────────────────────────────────────
+  kill "$P139_TICK_PID" "${P139_NOTIFY_PID:-}" 2>/dev/null || true
+  rm -f "$P139/ticker/.pi/team/state/pm.pid" "$P139/notify/.pi/team/state/pm.pid"
+  for _p139sess in "$P139_SESS" "$P139_ASESS" "$P139_NSESS" "$P139_TSESS"; do
+    tmux kill-session -t "$_p139sess" 2>/dev/null || true
+  done
+  export TEAM_MEETINGS_DIR="${P139_MEET_SAVE:-$TMP/meetings}"
+  ok "P139 55 段收尾：私有 session、假 PM pid 与叫醒进程都已回收"
+fi
 
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：

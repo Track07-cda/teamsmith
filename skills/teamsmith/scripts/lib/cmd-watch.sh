@@ -685,7 +685,7 @@ team_panel_reports_pending_fast() { # → 与 team_reports_pending 相同的数
 
 # 待办计数（面板与巡检共用）：与 team_pending_counts 同值，只把待复验换成快速枚举。
 # BOARD.md 存在但读不了 = 源坏：仍打印计数形状，但返回非 0（面板降级为 `—`，巡检忽略 rc）。
-team_panel_pending_counts_fast() { # → "inbox reports todo wip review blocked stopped"
+team_panel_pending_counts_fast() { # → "inbox reports todo wip review blocked stopped meetings"
   local board="$TEAM_DOCS_ABS/BOARD.md" a n inbox=0 stopped=0 task board_ok=1
   if [ -e "$board" ] && [ ! -r "$board" ]; then board_ok=0; fi
   for a in $(team_inbox_recipients); do
@@ -704,23 +704,30 @@ team_panel_pending_counts_fast() { # → "inbox reports todo wip review blocked 
     # 只保留“现在就等 PM 处理”的信号：todo/wip/review 列仍会在面板与 digest 里显示
     todo=0; wip=0; review=0
   fi
-  printf '%s %s %s %s %s %s %s\n' "$inbox" "$(team_panel_reports_pending_fast)" \
-    "$todo" "$wip" "$review" "$blocked" "$stopped"
+  # 未读会议轮次：与 team_pending_counts **同一份**读数（D2：单一实现，两个读者不各自扫）
+  local meetings=0
+  if command -v team_meetings_unread_count >/dev/null 2>&1; then
+    meetings="$(team_meetings_unread_count 2>/dev/null || true)"
+    case "$meetings" in ''|*[!0-9]*) meetings=0 ;; esac
+  fi
+  printf '%s %s %s %s %s %s %s %s\n' "$inbox" "$(team_panel_reports_pending_fast)" \
+    "$todo" "$wip" "$review" "$blocked" "$stopped" "$meetings"
   [ "$board_ok" = "1" ]
 }
 
 team_panel_pending_json() {
   local counts="" rc=0
   counts="$(team_panel_pending_counts_fast)" || rc=$?
-  local inbox reports todo wip review blocked stopped
-  read -r inbox reports todo wip review blocked stopped <<< "$counts"
+  local inbox reports todo wip review blocked stopped meetings
+  read -r inbox reports todo wip review blocked stopped meetings <<< "$counts"
   local total=$(( $(team_panel_num "$inbox") + $(team_panel_num "$reports") + $(team_panel_num "$todo") \
                   + $(team_panel_num "$wip") + $(team_panel_num "$review") + $(team_panel_num "$blocked") \
-                  + $(team_panel_num "$stopped") ))
-  printf '{"inbox": %s, "reports": %s, "todo": %s, "wip": %s, "review": %s, "blocked": %s, "stopped": %s, "total": %s, "text": %s}\n' \
+                  + $(team_panel_num "$stopped") + $(team_panel_num "${meetings:-0}") ))
+  printf '{"inbox": %s, "reports": %s, "todo": %s, "wip": %s, "review": %s, "blocked": %s, "stopped": %s, "meetings": %s, "total": %s, "text": %s}\n' \
     "$(team_panel_num "$inbox")" "$(team_panel_num "$reports")" "$(team_panel_num "$todo")" \
     "$(team_panel_num "$wip")" "$(team_panel_num "$review")" "$(team_panel_num "$blocked")" \
-    "$(team_panel_num "$stopped")" "$total" "$(team_panel_json_str "$(team_pending_text "$counts")")"
+    "$(team_panel_num "$stopped")" "$(team_panel_num "${meetings:-0}")" "$total" \
+    "$(team_panel_json_str "$(team_pending_text "$counts")")"
   return "$rc"
 }
 

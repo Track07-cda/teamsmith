@@ -56,11 +56,46 @@ team_meeting_set() { # <slug> <key> <value>（覆盖式，写 state.env）
 team_meeting_exists() { [ -f "$(team_meeting_dir "$1")/state.env" ]; }
 
 team_meeting_is_mine() { # <slug>
-  local parts; parts="$(team_meeting_state "$1" PARTICIPANTS '')"
-  case ",$parts," in *",$TEAM_PROJECT,"*) return 0 ;; *) return 1 ;; esac
+  # R1（D9）：参与方按**记录名任一并集**判定 —— 实现只有一份（team_meeting_record_is_mine）：
+  # 候选记录名 = PARTICIPANTS 名单 ∪ PARTICIPANT_REPOS 的键；命中轴 = 声明名 / 主工作树 basename /
+  # 记录仓库名 / 受邀 session。一个都匹配不上 → 拒绝（第三方仍被拒：这是「同一个人换拼写」，不是放行所有人）。
+  local slug="$1" names n kv
+  names="$(team_meeting_participants "$slug"),"
+  for kv in $(printf '%s' "$(team_meeting_participant_repos "$slug")" | tr ';' ' '); do
+    [ -n "$kv" ] || continue
+    names="$names${kv%%=*},"
+  done
+  for n in $(printf '%s' "$names" | tr ',' ' '); do
+    [ -n "$n" ] || continue
+    team_meeting_record_is_mine "$slug" "$n" && return 0
+  done
+  return 1
+}
+
+# 主工作树的 basename（R1：仓库名是身份的一根轴；推导不出 → 空，绝不编）
+team_meeting_repo_basename() {
+  local root="${TEAM_MAIN_ROOT:-${TEAM_ROOT:-$PWD}}"
+  case "$root" in ''|/) return 0 ;; esac
+  basename "${root%/}"
 }
 
 team_meeting_is_closed() { [ "$(team_meeting_state "$1" STATUS open)" = "closed" ]; }
+
+# 会议的报告状态（D1：expired 是派生值，绝不写回 state.env）。read/list/读位/状态行只用它 ——
+# 旧实现把 STATUS 与 "(过期)" 拼成 open(过期)，同一场会议两个表面两种写法。
+team_meeting_state_word() { # <slug> → open|expired|closed
+  if team_meeting_is_closed "$1"; then printf 'closed\n'; return 0; fi
+  if team_meeting_is_expired "$1"; then printf 'expired\n'; return 0; fi
+  printf 'open\n'
+}
+
+team_meeting_state_text() { # <slug> → 人读形态（状态词 + 过期中文标注，旧断言仍看得见「已过期」）
+  case "$(team_meeting_state_word "$1")" in
+    expired) printf 'expired（已过期）\n' ;;
+    closed)  printf 'closed\n' ;;
+    *)       printf 'open\n' ;;
+  esac
+}
 
 # F19：TTL 必须是正整数小时。旧实现里：open 不校验（`--ttl 0/-5/abc` 直接写进 state.env），
 # is_expired 把 0/负数/非数字当成「永不过期」（`[ "$ttl" -gt 0 ] 2>/dev/null || return 1`），
@@ -105,8 +140,11 @@ team_meeting_require_open() { # <slug> <动作>
     team_die "会议 $1 已关闭（closed by $(team_meeting_state "$1" CLOSED_BY -)）：只读；要继续就 open --force 或新开一个"
   fi
   if team_meeting_is_expired "$1"; then
-    [ "$2" = "read" ] && return 0
-    team_die "会议 $1 已过期（TTL $(team_meeting_ttl_hours "$1")h）：先 $TEAM_CLI meeting close $1，或 open --force 续期"
+    # D7：过期 = 双方都写不了的只读会议；close 是唯一的收尾动作（旧实现把 close 一起拒了 → 死锁）。
+    case "$2" in
+      read|close) return 0 ;;
+    esac
+    team_die "会议 $1 已过期（TTL $(team_meeting_ttl_hours "$1")h）：先 $TEAM_CLI meeting close $1（或 $TEAM_CLI meeting close --stale），要续期就 open --force"
   fi
   return 0
 }
@@ -121,21 +159,85 @@ team_meeting_turns() { # <slug> <project> → 该项目已发言条数
   ls "$(team_meeting_dir "$1")/transcript" 2>/dev/null | grep -c "_${2}_" || true
 }
 
+# 本项目的未读会议轮次（watchdog 待办 × panel 的单一读数，D2/D3）：
+#   对每一场「我在参与且未关闭」的会议，取 max(0, transcript 轮数 - read/<项目>.seq) 再求和。
+#   * 过期但未关闭的会议**照算**（transcript 可读）；closed 冻结、不算。
+#   * `meeting say` 写自己那条发言时已推进自己的读位（D3），所以自己的发言永远不算未读。
+#   * 会议根不存在 → 0（不建目录、不报错）；读位文件缺失/不可解析 → 0。
+#   两个待办读者（team_pending_counts / team_panel_pending_counts_fast）都调用它 —— 值的唯一来源。
+team_meetings_unread_count() {
+  local root slug d last read n total=0
+  root="$(team_meetings_dir)"
+  [ -d "$root" ] || { printf '0\n'; return 0; }
+  for slug in "$root"/*/; do
+    [ -d "$slug" ] || continue
+    slug="$(basename "$slug")"
+    team_meeting_is_mine "$slug" || continue
+    team_meeting_is_closed "$slug" && continue
+    d="$(team_meeting_dir "$slug")"
+    last="$(ls "$d/transcript" 2>/dev/null | grep -c '\.md$' || true)"
+    read="$(cat "$d/read/$TEAM_PROJECT.seq" 2>/dev/null || echo 0)"
+    case "$read" in ''|*[!0-9]*) read=0 ;; esac
+    n=$((last - read)); [ "$n" -lt 0 ] && n=0
+    total=$((total + n))
+  done
+  printf '%s\n' "$total"
+}
+
 team_meeting_participants() { team_meeting_state "$1" PARTICIPANTS ''; }
+
+# 登记表读写（PEER_SESSIONS / PM_WINDOWS / PARTICIPANT_REPOS 共用的 `<键>=<值>;…` 串行化）
+team_meeting_map_get() { # <map> <key>
+  local kv
+  for kv in $(printf '%s' "$1" | tr ';' ' '); do
+    case "$kv" in
+      "$2=") printf '\n'; return 0 ;;
+      "$2="*) printf '%s\n' "${kv#*=}"; return 0 ;;
+    esac
+  done
+  printf '\n'
+}
+team_meeting_map_put() { # <map> <key> <value>（保留其它行，覆盖同键行）
+  local kv out=""
+  for kv in $(printf '%s' "$1" | tr ';' ' '); do
+    [ -n "$kv" ] || continue
+    case "$kv" in "$2="*) ;; *) out="${out:+$out;}$kv" ;; esac
+  done
+  out="${out:+$out;}$2=$3"
+  printf '%s\n' "$out"
+}
+
+team_meeting_participant_repos() { # <slug> → 参与方仓库名映射（PROJ=basename;…）
+  team_meeting_state "$1" PARTICIPANT_REPOS ''
+}
 
 team_meeting_peer_sessions() { # <slug> → 参与方 session 映射（PROJ=session;…）
   team_meeting_state "$1" PEER_SESSIONS ''
 }
 
 team_meeting_peer_session() { # <slug> <project>
-  local map; map="$(team_meeting_peer_sessions "$1")"
-  local kv
-  for kv in $(printf '%s' "$map" | tr ';' ' '); do
-    case "$kv" in
-      "$2="*) printf '%s\n' "${kv#*=}"; return 0 ;;
-    esac
-  done
-  printf '\n'
+  team_meeting_map_get "$(team_meeting_peer_sessions "$1")" "$2"
+}
+
+# D6：每方自己的 PM 窗口（`PM_WINDOWS=<项目>=<窗口>;…`）；旧会议退回 legacy PM_WINDOW，再退回 pm。
+team_meeting_pm_windows() { team_meeting_state "$1" PM_WINDOWS ''; }
+team_meeting_peer_window() { # <slug> <项目> → 该项目的窗口（映射行 ＞ 旧字段 ＞ pm）
+  local w
+  w="$(team_meeting_map_get "$(team_meeting_pm_windows "$1")" "$2")"
+  [ -n "$w" ] || w="$(team_meeting_state "$1" PM_WINDOW pm)"
+  printf '%s\n' "${w:-pm}"
+}
+# `meeting peer` 缺省窗口：自己项目的窗口优先 TEAM_PM_WINDOW，其次当前 tmux 窗口，最后 pm；
+# 给别人登记且没给 --window 时不猜对方环境（那是猜测，不是登记）→ pm。
+team_meeting_window_default() { # <项目>
+  if [ "$1" = "${TEAM_PROJECT:-}" ]; then
+    if [ -n "${TEAM_PM_WINDOW:-}" ]; then printf '%s\n' "$TEAM_PM_WINDOW"; return 0; fi
+    if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+      local w; w="$(tmux display-message -p '#W' 2>/dev/null || true)"
+      [ -n "$w" ] && { printf '%s\n' "$w"; return 0; }
+    fi
+  fi
+  printf 'pm\n'
 }
 
 # ---------------------------------------------------------------- open
@@ -170,9 +272,13 @@ team meeting —— 跨项目会议（peer 交流，不是指挥通道）
   read <slug> [--since N] [--peek]    读发言（默认读到哪标记到哪；--peek 不标记）
   inbox                                哪些会议在等我回应
   list [--all]                         我在参与的会议
+  peer <slug> <项目>:<session> [--window <名>] [--repo <仓库名>]
+      登记一方的 session/PM 窗口/仓库名（各管各的行；敲门按对方那一行解析目标窗口）
+  knock <slug>                         重敲最后一条发言（载荷带 [meeting:<slug>#<N>]）
   propose <slug> "接口契约…" [--sides "我方:X / 对方:Y"]   提议一条共识
   agree <slug> <A1> [--note "我方落地：T4.2"]              对方确认（不能自己确认自己提的）
-  close <slug> [--summary "结论与遗留"]
+  close <slug> [--summary "结论与遗留"]   关闭（唯一收尾动作；过期后仍可用它收尾）
+  close --stale                            关闭本项目所有“已过期未关闭”的会议；一个都没有时非 0 且不写任何东西
 
 规则：只写共享区（$(team_meetings_dir)），不动对方仓库；共识由双方各自 agree；
 用户是唯一能跨项目下指令的人（人类终端可 team meeting say --as-user）。
@@ -221,13 +327,17 @@ team_meeting_open() {
 
   local peers="${proj}=${psess}"
   [ -n "$peer_sess" ] && peers="$peers;$peer_proj=$peer_sess"
+  local pmwin="${TEAM_PM_WINDOW:-pm}"
+  [ -n "$pmwin" ] || pmwin="pm"
   cat > "$d/state.env" <<EOF
 SLUG=$slug
 TOPIC=$topic
 STATUS=open
 PARTICIPANTS=$proj,$peer_proj
 PEER_SESSIONS=$peers
-PM_WINDOW=${TEAM_PM_WINDOW:-pm}
+PM_WINDOWS=$proj=$pmwin
+PM_WINDOW=$pmwin
+PARTICIPANT_REPOS=$proj=$(team_meeting_repo_basename)
 OPENED_BY=$proj
 OPENED_AT=$(team_timestamp)
 OPENED_EPOCH=$(date +%s)
@@ -336,101 +446,179 @@ team_meeting_say() {
   team_ok "已写入共享区：${file#"$(team_meetings_dir)/"}（intent=$intent）"
 
   if [ "$knock" = "1" ]; then
-    team_meeting_knock "$slug" "$sender" "$intent"
+    # R2：轮次标识用十进制（transcript 文件名是零填充的 0004 → #4，两侧同号）
+    team_meeting_knock "$slug" "$sender" "$intent" "$((10#${seq:-0}))"
   else
     team_dim "  未敲门（默认关）：对方 PM 下次巡检看到 $TEAM_CLI meeting inbox；紧急再加 --knock"
   fi
 }
 
-# 敲门：唯一允许的跨 session 动作 —— 只发一条"有会议消息"通知，对方自己决定怎么回
-# 敲门失败的排查清单（CEP 报过"敲门失败"却不知道卡在哪）
-team_meeting_knock_diag() { # <slug> <target> <peer_sess>
-  local slug="$1" target="$2" peer_sess="$3"
+# 一条「记录名是不是本项目」的判定（R1 的单行版）：敲门的“哪一行是对方”与 peer 的“登记到哪个记录名”
+# 都用它 —— 同一套身份轴（声明名 / 仓库 basename / 记录仓库名 / 受邀 session），不另写第二份。
+team_meeting_record_is_mine() { # <slug> <记录里的项目名>
+  local slug="$1" p="$2" proj base repos kv k v s
+  proj="${TEAM_PROJECT:-}"
+  base="$(team_meeting_repo_basename 2>/dev/null || true)"
+  if [ -n "$proj" ] && [ "$p" = "$proj" ]; then return 0; fi
+  if [ -n "$base" ] && [ "$p" = "$base" ]; then return 0; fi
+  s="$(team_meeting_map_get "$(team_meeting_peer_sessions "$slug")" "$p")"
+  if [ -n "${TEAM_SESSION:-}" ] && [ "$s" = "$TEAM_SESSION" ]; then return 0; fi
+  repos="$(team_meeting_participant_repos "$slug")"
+  for kv in $(printf '%s' "$repos" | tr ';' ' '); do
+    [ -n "$kv" ] || continue
+    k="${kv%%=*}"; v="${kv#*=}"
+    [ "$k" = "$p" ] || continue
+    if [ -n "$proj" ] && [ "$v" = "$proj" ]; then return 0; fi
+    if [ -n "$base" ] && [ "$v" = "$base" ]; then return 0; fi
+  done
+  return 1
+}
+
+# 把 <项目> 解析为记录里的参与方名（peer 登记用）：先认名单，再认 session，再认仓库记录。
+team_meeting_resolve_participant() { # <slug> <项目> <session>
+  local slug="$1" want="$2" sess="$3" p parts kv k v
+  parts="$(team_meeting_participants "$slug")"
+  for p in $(printf '%s' "$parts" | tr ',' ' '); do
+    [ "$p" = "$want" ] && { printf '%s\n' "$p"; return 0; }
+  done
+  if [ -n "$sess" ]; then
+    for p in $(printf '%s' "$parts" | tr ',' ' '); do
+      [ "$(team_meeting_map_get "$(team_meeting_peer_sessions "$slug")" "$p")" = "$sess" ] && { printf '%s\n' "$p"; return 0; }
+    done
+  fi
+  for p in $(printf '%s' "$parts" | tr ',' ' '); do
+    for kv in $(printf '%s' "$(team_meeting_participant_repos "$slug")" | tr ';' ' '); do
+      [ -n "$kv" ] || continue
+      k="${kv%%=*}"; v="${kv#*=}"
+      [ "$k" = "$p" ] || continue
+      { [ "$k" = "$want" ] || [ "$v" = "$want" ]; } && { printf '%s\n' "$p"; return 0; }
+    done
+  done
+  return 1
+}
+
+# 敲门：唯一允许的跨 session 动作 —— 只发一条"有会议消息"通知，对方自己决定怎么回。
+# 敲门走**受守卫的投递**（D5）：对方输入框有空就打字，有草稿就入队报 queued；本函数不再自己 send-keys。
+# 载荷带轮次标识（R2）：[meeting:<slug>#<N>] —— 接收方只凭自己的 read/<project>.seq 就能判 stale。
+team_meeting_knock_diag() { # <slug> <target> <peer_sess> [<peer_proj>]
+  local slug="$1" target="$2" peer_sess="$3" peer_proj="${4:-<对方项目>}"
+  local peer_win="${target#*:}"
   printf '  敲门排查（按顺序）：\n'
   printf '    1) 全局开关        %s\n' "$([ "${TEAM_MEETING_KNOCK:-0}" = "1" ] && echo "TEAM_MEETING_KNOCK=1 ✓" || echo "TEAM_MEETING_KNOCK=0 ✗ ← 用它拦住的；设 1 才允许敲门")"
   printf '    2) 对方 session    %s\n' "${peer_sess:-（未登记）← 跑 $TEAM_CLI meeting peer $slug <项目>:<session>}"
   printf '    3) session 存在    %s\n' "$(tmux has-session -t "$peer_sess" 2>/dev/null && echo "✓ $peer_sess" || echo "✗ tmux 里没有 $peer_sess")"
-  printf '    4) PM 窗口在跑 pi %s\n' "$(team_pane_busy "$target" && echo "✓ $target" || echo "✗ $target 没在跑 pi（空提示符/不存在）")"
-  printf '    5) 边界守卫        %s\n' "$(team_foreign_target_ok "$target" "$slug" >/dev/null 2>&1 && echo "✓ 已登记会议的敲门放行" || echo "✗ 目标 session 不在本会议登记里")"
+  printf '    4) 敲门目标        %s（%s 自己的 PM_WINDOWS 行）\n' "$target" "$peer_proj"
+  printf '    5) PM 窗口在跑 pi %s\n' "$(team_pane_busy "$target" && echo "✓ $target" || echo "✗ $target 没在跑 pi（空提示符/不存在）")"
+  printf '    6) 边界守卫        %s\n' "$(team_foreign_target_ok "$target" "$slug" >/dev/null 2>&1 && echo "✓ 已登记会议的敲门放行" || echo "✗ 目标 session 不在本会议登记里")"
+  printf '  登记/改窗：%s meeting peer %s %s:%s --window %s\n' "$TEAM_CLI" "$slug" "$peer_proj" "$peer_sess" "${peer_win:-pm}"
   printf '  注：敲门失败不影响消息——它已经在共享区，对方 $TEAM_CLI meeting inbox 能看到。\n'
   return 0
 }
 
-team_meeting_knock() { # <slug> <sender> <intent>
-  local slug="$1" sender="$2" intent="$3"
+team_meeting_knock() { # <slug> <sender> <intent> [<turn>]
+  local slug="$1" sender="$2" intent="$3" turn="${4:-}"
   if [ "${TEAM_MEETING_KNOCK:-0}" != "1" ]; then
     team_dim "  --knock 被全局开关拦住（TEAM_MEETING_KNOCK=0）：只落盘不打扰对方"
     team_dim "  要允许敲门：在双方项目 config 里设 TEAM_MEETING_KNOCK=1（或临时 TEAM_MEETING_KNOCK=1 $TEAM_CLI meeting say … --knock）"
     return 0
   fi
   team_have_cmd tmux || { team_warn "没有 tmux：敲门跳过（消息仍在共享区）"; return 0; }
+  # R2：没有可指认的轮次就不敲门（载荷里的 #N 必须真的在 transcript 里）
+  case "$turn" in
+    ''|*[!0-9]*) team_warn "没有可指认的发言轮次：不敲门（消息仍在共享区）"; return 0 ;;
+  esac
+  [ "$turn" -gt 0 ] 2>/dev/null || { team_warn "轮次标识非法（$turn）：不敲门（消息仍在共享区）"; return 0; }
   local peer_sess="" peer_proj="" kv map
   map="$(team_meeting_peer_sessions "$slug")"
   for kv in $(printf '%s' "$map" | tr ';' ' '); do
-    case "$kv" in
-      "$TEAM_PROJECT="*) ;;
-      *=*) peer_proj="${kv%%=*}"; peer_sess="${kv#*=}" ;;
-    esac
+    [ -n "$kv" ] || continue
+    team_meeting_record_is_mine "$slug" "${kv%%=*}" && continue
+    peer_proj="${kv%%=*}"; peer_sess="${kv#*=}"
+    break
   done
   if [ -z "$peer_sess" ]; then
     team_dim "  对方 session 未知 → 只落盘"
     team_dim "  登记方式：$TEAM_CLI meeting peer $slug ${peer_proj:-<对方项目>}:<对方 session>（然后重敲：$TEAM_CLI meeting knock $slug）"
     return 0
   fi
-  local target="$peer_sess:$(team_meeting_state "$slug" PM_WINDOW pm)"
+  # D6：目标是**对方自己那一行**的窗口（映射 ＞ 旧 PM_WINDOW ＞ pm），不再共用单个字段
+  local peer_win target
+  peer_win="$(team_meeting_peer_window "$slug" "$peer_proj")"
+  target="$peer_sess:$peer_win"
   if ! team_foreign_target_ok "$target" "$slug"; then
-    team_meeting_knock_diag "$slug" "$target" "$peer_sess"
+    team_meeting_knock_diag "$slug" "$target" "$peer_sess" "$peer_proj"
     return 1
   fi
   if ! tmux has-session -t "$peer_sess" 2>/dev/null; then
     team_dim "  对方 session 不在（$peer_sess）：只落盘"
-    team_meeting_knock_diag "$slug" "$target" "$peer_sess"
+    team_meeting_knock_diag "$slug" "$target" "$peer_sess" "$peer_proj"
     return 0
   fi
   if ! team_pane_busy "$target"; then
     team_dim "  对方 PM 窗口没在跑 pi（$target）：只落盘（等他起来看 inbox）"
-    team_meeting_knock_diag "$slug" "$target" "$peer_sess"
+    team_meeting_knock_diag "$slug" "$target" "$peer_sess" "$peer_proj"
     return 0
   fi
-  local notice="[meeting:$slug] $sender 有新发言（intent=$intent）→ 跑 $TEAM_CLI meeting read $slug"
-  if team_tmux_send_text "$target" "$notice" "$slug"; then
-    team_ok "已敲门：$target"
-    printf '%s knocked %s by %s intent=%s\n' "$(team_timestamp)" "$peer_proj" "$sender" "$intent" \
-      >> "$(team_meeting_dir "$slug")/knocks.log"
-  else
-    team_warn "敲门失败（消息仍在共享区）"
-  fi
+  local notice="[meeting:$slug#$turn] $sender 有新发言（intent=$intent）→ 跑 $TEAM_CLI meeting read $slug"
+  team_send_guarded "$target" "$notice" meeting-knock --from "$sender"
+  case "$TEAM_SEND_OUTCOME" in
+    delivered|watched|unknown-sent)
+      if [ "$TEAM_SEND_OUTCOME" = "unknown-sent" ]; then
+        team_warn "已敲门（未确认）：$target（[meeting:$slug#$turn]）"
+      else
+        team_ok "已敲门：$target（[meeting:$slug#$turn]）"
+      fi
+      # knocks.log 记同一个轮次标识（R2：接收方不读发送方仓库也能判这条通知指的是哪一轮）
+      printf '%s knocked %s by %s intent=%s [meeting:%s#%s]\n' "$(team_timestamp)" "$peer_proj" "$sender" "$intent" "$slug" "$turn" \
+        >> "$(team_meeting_dir "$slug")/knocks.log" ;;
+    queued)
+      team_dim "  敲门 queued：对方 PM 输入框里有草稿，通知已入队（$TEAM_CLI outbox list），清空后自动投递" ;;
+    *)
+      # offline / unknown-failed：对方不可投 —— 消息不丢（shared area），队列里也不留假承诺
+      team_warn "敲门没落地（${TEAM_SEND_OUTCOME:-offline}）：消息仍在共享区"
+      team_meeting_knock_diag "$slug" "$target" "$peer_sess" "$peer_proj" ;;
+  esac
   return 0
 }
 
-team_meeting_peer() { # <slug> <项目>[:<session>] —— 登记/更新参与方的 tmux session（敲门用）
-  local slug="${1:?usage: meeting peer <slug> <项目>[:<session>]}"; shift || true
+team_meeting_peer() { # <slug> <项目>[:<session>] [--window <名>] [--repo <仓库名>]
+  local slug="" win="" repo="" repo_set=0 spec=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --window) win="${2:?--window 需要窗口名}"; shift 2 ;;
+      --repo) repo="${2:?--repo 需要仓库名}"; repo_set=1; shift 2 ;;
+      -*) team_usage_die "meeting peer: 未知参数 $1" ;;
+      *) if [ -z "$slug" ]; then slug="$1"; elif [ -z "$spec" ]; then spec="$1"; else team_usage_die "meeting peer: 多余参数 $1"; fi; shift ;;
+    esac
+  done
+  [ -n "$slug" ] && [ -n "$spec" ] || team_usage_die "meeting peer <slug> <项目>[:<session>] [--window <名>] [--repo <仓库名>]"
   team_meeting_require_open "$slug" say
-  local spec="${1:?需要 <项目>[:<session>]}"
   local proj="${spec%%:*}" sess=""
   case "$spec" in *:*) sess="${spec#*:}" ;; esac
   [ -n "$sess" ] || team_die "需要 session：$TEAM_CLI meeting peer $slug $proj:<session>（用 tmux ls 看）"
-  case ",$(team_meeting_participants "$slug")," in
-    *",$proj,"*) ;;
-    *) team_die "$proj 不是本会议参与方（参与方：$(team_meeting_participants "$slug")）" ;;
-  esac
-  local map newmap="" kv found=0
-  map="$(team_meeting_peer_sessions "$slug")"
-  for kv in $(printf '%s' "$map" | tr ';' ' '); do
-    case "$kv" in
-      ""|"$proj="*) [ -n "$kv" ] && newmap="${newmap:+$newmap;}$proj=$sess" && found=1 ;;
-      *) newmap="${newmap:+$newmap;}$kv" ;;
-    esac
-  done
-  [ "$found" = "0" ] && newmap="${newmap:+$newmap;}$proj=$sess"
-  team_meeting_set "$slug" PEER_SESSIONS "$newmap"
-  team_ok "已登记 $proj=$sess（敲门目标 $sess:$(team_meeting_state "$slug" PM_WINDOW pm)）"
-  [ "$proj" != "$TEAM_PROJECT" ] && team_dim "  提示：登记的是对方 session；对方也可以自己登记自己的（以他那边的为准）"
+  local pname
+  pname="$(team_meeting_resolve_participant "$slug" "$proj" "$sess")" \
+    || team_die "$proj（session $sess）不是本会议参与方（参与方：$(team_meeting_participants "$slug")）"
+  # D6：窗口缺省 —— 自己项目用 TEAM_PM_WINDOW→当前 tmux 窗口→pm；给别人登记又没给 --window 用 pm
+  [ -n "$win" ] || win="$(team_meeting_window_default "$pname")"
+  # 仓库名：显式 --repo 优先；自己的登记缺省 = 主工作树 basename（不编别人的）
+  if [ "$repo_set" != "1" ] && team_meeting_record_is_mine "$slug" "$pname"; then
+    repo="$(team_meeting_repo_basename 2>/dev/null || true)"
+  fi
+  team_meeting_set "$slug" PEER_SESSIONS "$(team_meeting_map_put "$(team_meeting_peer_sessions "$slug")" "$pname" "$sess")"
+  team_meeting_set "$slug" PM_WINDOWS "$(team_meeting_map_put "$(team_meeting_pm_windows "$slug")" "$pname" "$win")"
+  if [ -n "$repo" ]; then
+    team_meeting_set "$slug" PARTICIPANT_REPOS "$(team_meeting_map_put "$(team_meeting_participant_repos "$slug")" "$pname" "$repo")"
+  fi
+  team_ok "已登记 $pname: session=$sess window=$win${repo:+ repo=$repo}"
+  [ "$pname" != "$TEAM_PROJECT" ] && team_dim "  提示：登记的是对方 session；对方也可以自己登记自己的（以他那边的为准）"
   return 0
 }
 
 team_meeting_knock_cmd() { # <slug> —— 重新敲门（登记 session 之后用）
-  local slug="${1:?usage: meeting knock <slug>}"
+  local slug=""
+  case "${1:-}" in ''|-*) team_usage_die "meeting knock <slug>" ;; esac
+  slug="$1"
   team_meeting_require_open "$slug" say
   local last_intent="" f seq="" from=""
   f="$(ls "$(team_meeting_dir "$slug")/transcript/"*.md 2>/dev/null | sort | tail -1)"
@@ -443,9 +631,8 @@ team_meeting_knock_cmd() { # <slug> —— 重新敲门（登记 session 之后�
   seq="$(basename "$f" | cut -c1-4)"
   seq=$((10#${seq:-0}))
   team_info "重敲最后一条发言（#$seq from=${from:-?} intent=${last_intent:-?}）"
-  team_meeting_knock "$slug" "${from:-$TEAM_PROJECT}" "${last_intent:-info}"
+  team_meeting_knock "$slug" "${from:-$TEAM_PROJECT}" "${last_intent:-info}" "$seq"
 }
-
 # ---------------------------------------------------------------- read / list / inbox
 team_meeting_read() {
   local slug="" since=0 peek=0
@@ -461,10 +648,9 @@ team_meeting_read() {
   team_meeting_require_open "$slug" read
   local d; d="$(team_meeting_dir "$slug")"
   team_hdr "meeting $slug · $(team_meeting_state "$slug" TOPIC -)"
-  printf '  参与方 %s ｜ 状态 %s%s ｜ TTL %sh%s\n' \
+  printf '  参与方 %s ｜ 状态 %s ｜ TTL %sh%s\n' \
     "$(team_meeting_state "$slug" PARTICIPANTS -)" \
-    "$(team_meeting_state "$slug" STATUS open)" \
-    "$(team_meeting_is_expired "$slug" && echo '（已过期）' || true)" \
+    "$(team_meeting_state_text "$slug")" \
     "$(team_meeting_ttl_hours "$slug")" \
     "$(team_meeting_ttl_note "$slug")"
   local f n last=0
@@ -524,7 +710,7 @@ team_meeting_list() {
     read="$(cat "$(team_meeting_dir "$slug")/read/$TEAM_PROJECT.seq" 2>/dev/null || echo 0)"
     pend=$((last - read)); [ "$pend" -lt 0 ] && pend=0
     printf '%-24s %-10s %-8s %s\n' "$slug" \
-      "$(team_meeting_state "$slug" STATUS open)$(team_meeting_is_expired "$slug" && echo '(过期)' || true)" \
+      "$(team_meeting_state_word "$slug")" \
       "$pend" "$(team_meeting_state "$slug" TOPIC -)"
   done
   return 0
@@ -548,6 +734,35 @@ team_meeting_inbox() {
     printf '  %s（%s 条新发言）→ %s meeting read %s\n' "$slug" "$pend" "$TEAM_CLI" "$slug"
   done
   [ "$n" -eq 0 ] && team_dim "  （没有待回应的会议）"
+  return 0
+}
+
+# 会议现场行（D4）：status 与 digest 共用的唯一实现 —— 每场会议至多一行，没有事项就一个字都不印。
+#   先报到读位之后还有新发言的（含过期但未关闭的——transcript 可读，能读就能清）：
+#     <slug> N 条新 → team meeting read <slug>
+#   再报到过期未关闭的（read 位已清的人才需要它）：
+#     <slug> 已过期未关闭 → team meeting close --stale
+# 读位缺失/不可解析按 0（与未读计数同一口径：宁可多报，不许少报）。
+team_meeting_status_lines() {
+  local root slug d last read n
+  root="$(team_meetings_dir)"
+  [ -d "$root" ] || return 0
+  for slug in "$root"/*/; do
+    [ -d "$slug" ] || continue
+    slug="$(basename "$slug")"
+    team_meeting_is_mine "$slug" || continue
+    team_meeting_is_closed "$slug" && continue
+    d="$(team_meeting_dir "$slug")"
+    last="$(ls "$d/transcript" 2>/dev/null | grep -c '\.md$' || true)"
+    read="$(cat "$d/read/$TEAM_PROJECT.seq" 2>/dev/null || echo 0)"
+    case "$read" in ''|*[!0-9]*) read=0 ;; esac
+    n=$((last - read)); [ "$n" -lt 0 ] && n=0
+    if [ "$n" -gt 0 ]; then
+      printf '  %s %s 条新 → %s meeting read %s\n' "$slug" "$n" "$TEAM_CLI" "$slug"
+    elif team_meeting_is_expired "$slug"; then
+      printf '  %s 已过期未关闭 → %s meeting close --stale\n' "$slug" "$TEAM_CLI"
+    fi
+  done
   return 0
 }
 
@@ -605,23 +820,67 @@ team_meeting_agree() {
 }
 
 # ---------------------------------------------------------------- close
+# ---------------------------------------------------------------- close
+# 一场会议的收尾写入（单场 close 与 close --stale 共用；只改 state.env + agenda，不动 transcript）。
+team_meeting_do_close() { # <slug> [<summary>]
+  team_meeting_set "$1" STATUS closed
+  team_meeting_set "$1" CLOSED_BY "$TEAM_PROJECT"
+  team_meeting_set "$1" CLOSED_AT "$(team_timestamp)"
+  [ -n "${2:-}" ] && team_meeting_set "$1" SUMMARY "$2"
+  printf '\n## 关闭 · %s\n\n- by: %s\n- summary: %s\n' \
+    "$(team_timestamp)" "$TEAM_PROJECT" "${2:-（无）}" >> "$(team_meeting_dir "$1")/agenda.md"
+  return 0
+}
+
 team_meeting_close() {
-  local slug="" summary=""
+  local slug="" summary="" stale=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --summary) summary="${2:?}"; shift 2 ;;
+      --stale) stale=1; shift ;;
       -*) team_usage_die "meeting close: 未知参数 $1" ;;
       *) if [ -z "$slug" ]; then slug="$1"; else summary="${summary:+$summary }$1"; fi; shift ;;
     esac
   done
-  [ -n "$slug" ] || team_usage_die "meeting close <slug> [--summary \"结论与遗留\"]"
-  team_meeting_require_open "$slug" say
-  team_meeting_set "$slug" STATUS closed
-  team_meeting_set "$slug" CLOSED_BY "$TEAM_PROJECT"
-  team_meeting_set "$slug" CLOSED_AT "$(team_timestamp)"
-  [ -n "$summary" ] && team_meeting_set "$slug" SUMMARY "$summary"
-  printf '\n## 关闭 · %s\n\n- by: %s\n- summary: %s\n' \
-    "$(team_timestamp)" "$TEAM_PROJECT" "${summary:-（无）}" >> "$(team_meeting_dir "$slug")/agenda.md"
+  # D7：批量形式只收**过期**的会议（未过期的一律不碰：那一侧的 PM 可能还在用）。
+  if [ "$stale" = "1" ]; then
+    [ -z "$slug" ] || team_usage_die "meeting close --stale 不接受 slug（批量入口只关过期的）"
+    team_meeting_close_stale
+    return $?
+  fi
+  [ -n "$slug" ] || team_usage_die "meeting close <slug> [--summary \"结论与遗留\"] | meeting close --stale"
+  team_meeting_require_open "$slug" close
+  team_meeting_do_close "$slug" "$summary"
   team_ok "会议已关闭：$slug（transcript 冻结，只读）"
   team_dim "  共识 $(ls "$(team_meeting_dir "$slug")/agreements" 2>/dev/null | grep -c '^A[0-9]*\.md$' || true) 条；各自在自己的项目里落地并记录"
+}
+
+# close --stale（D7）：逐场报告本次项目里每个未关闭会议的去向；一个都没关 → 非 0 且什么都不写。
+team_meeting_close_stale() {
+  local root slug closed=0
+  root="$(team_meetings_dir)"
+  if [ -d "$root" ]; then
+    for slug in "$root"/*/; do
+      [ -d "$slug" ] || continue
+      slug="$(basename "$slug")"
+      team_meeting_is_mine "$slug" || continue
+      if team_meeting_is_closed "$slug"; then
+        team_dim "  $slug 已关闭：跳过"
+        continue
+      fi
+      if team_meeting_is_expired "$slug"; then
+        team_meeting_do_close "$slug" "过期未关闭：由 $TEAM_PROJECT 批量收尾（close --stale）"
+        team_ok "  $slug 已过期：已关闭"
+        closed=$((closed + 1))
+      else
+        team_dim "  $slug 未过期：跳过（在用）"
+      fi
+    done
+  fi
+  if [ "$closed" -eq 0 ]; then
+    team_err "没有已过期未关闭的会议（$TEAM_PROJECT）：什么都没写（会议还在用就逐场 close）"
+    return 1
+  fi
+  team_ok "close --stale：关闭了 $closed 场过期会议"
+  return 0
 }
