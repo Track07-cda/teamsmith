@@ -27,18 +27,24 @@ Design rationale: [references/philosophy.md](skills/teamsmith/references/philoso
 | [`teamsmith`](skills/teamsmith/SKILL.md) | See above. Former name: `pi-team` (the `skills/pi-team` compatibility symlink was removed — old absolute paths must be updated) |
 | [`teamsmith-init`](skills/teamsmith-init/SKILL.md) | The new-project entry point: settles the setup questions with the user, then runs the one command that writes config, the `docs/team/` skeleton and the protocol section |
 
-This repository's own `docs/team/` **is** its ledger: the board, task briefs, reports, reviews and decisions in it are
-the real records of teamsmith being built with teamsmith.
+The maintainers build teamsmith *with* teamsmith, and their ledger — board, task briefs, reports, reviews, decisions —
+lives in `docs/team/` of their own checkout. That ledger is deliberately **not** part of the distributed package: what
+you install is the product (this file, `skills/`, `bin/`, `openspec/specs/`), not the record of building it.
 
 ## Install
 
 ### Global CLI + project install (recommended)
 
 ```bash
-npm install -g teamsmith     # the `team` CLI: one npm bin entry, checks bash >= 4 and prints the fix if it is missing
+npm install -g teamsmith     # the `team` CLI: one npm bin entry, checks bash >= 5 and prints the fix if it is missing
 cd your-project
 team init                    # config + docs skeleton + both skills into the project's .pi/skills/
 ```
+
+> First session in that project: Pi asks **“Project is not trusted”** before it will load project resources
+> (`.pi/skills/` is one), and the skills stay invisible until you answer. `team init` prints the same line:
+> answer `pi --approve` (this once) or approve the project in Pi's UI — nothing else is needed, and the skills are
+> not modified either way.
 
 `team init` installs `teamsmith` and `teamsmith-init` into the project's **`.pi/skills/`** — Pi's project-level
 skill search path — so any session in that project sees the toolkit (the `openspec init` model: per project, and
@@ -97,10 +103,10 @@ extension, command or hook to your own session.
 | Need | Why |
 |---|---|
 | **Pi ≥ 0.76.0** | The session harness needs `--session-id`, which `team doctor` fails without; it landed in Pi 0.76.0 and is verified working on 0.85.1. Package installs work from 0.74.0 on, but 0.74.0 lacks `--session-id`, so 0.76.0 is the floor |
-| `bash` ≥ 4 | The CLI is bash (no jq/python); the npm `team` entry point checks this before running and prints the fix when it is missing |
+| `bash` ≥ 5 | The CLI is bash (no jq/python); the npm `team` entry point checks this before running and prints the fix when it is missing. Measured: `team help` and `team init` exit 2 under bash 4.0; we test on 5.2, so 5 is what we can stand behind |
 | `git` ≥ 2.31 | One worktree per agent; the PM does all branching/merging |
 | `tmux` | One window per agent, the PM window, and the pulse window |
-| `node` ≥ 20 or `bun` ≥ 1.3 | Only for the pulse console/patrol (`scripts/panel`); point `TEAM_JS_BIN` at it when it is not on `PATH` |
+| `node` ≥ 20 or `bun` ≥ 1.3 | Needed by the npm-installed `team` wrapper (its shebang is `node`) and by the pulse console/patrol (`scripts/panel`). The Pi-package route and `./install.sh` are bash-only and do not need it; point `TEAM_JS_BIN` at it when it is not on `PATH` |
 | **magic-context** — `pi install npm:@cortexkit/pi-magic-context` | Recommended: the PM's cross-session memory (`ctx_search` / `ctx_memory` / `ctx_note`). `team doctor` checks it |
 | **OpenSpec CLI** (`openspec`) | The spec layer and `openspec validate --all --strict` inside the gates |
 | `podman` | Optional: only for the tmux-touching tests (`skills/teamsmith/tests/container-tmux.sh`) |

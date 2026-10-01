@@ -359,7 +359,7 @@ team_cmd_doctor() {
   check "BOARD 重复 ID"; local bdups; bdups="$(team_board_duplicate_ids || true)"
   if [ -z "$bdups" ]; then pass "无"
   else warn "$(printf '%s' "$bdups" | awk 'NR>1{printf "、"} {printf "%s", $0}') （同 ID 多行：焦点按行身份走，但状态/报告按 ID 指行；$TEAM_CLI board ls）"; fi
-  check "bash"; if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then pass "${BASH_VERSION%%(*}"; else fail "需要 bash >= 4"; fi
+  check "bash"; if [ "${BASH_VERSINFO[0]}" -ge 5 ]; then pass "${BASH_VERSION%%(*}"; else fail "需要 bash >= 5（实测 4.0 下 help/init 退出 2）"; fi
   check "git"; if team_have_cmd git; then pass "$(git --version | awk '{print $3}')"; else fail "缺 git"; fi
 
   check "tmux"; if team_have_cmd tmux; then

@@ -14,7 +14,7 @@ with the user, run one command, then hand day-to-day operation to the **`teamsmi
 ## 0. Install the CLI and the project's skills
 
 ```bash
-npm install -g teamsmith     # the `team` CLI (one npm bin entry; it checks bash >= 4 and prints the fix)
+npm install -g teamsmith     # the `team` CLI (one npm bin entry; it checks bash >= 5 and prints the fix)
 team init                    # in this project: config + docs skeleton + the skills into .pi/skills/
 ```
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // teamsmith 的 npm bin 入口（package.json 的 bin.team）。**透明包装器**：它不实现、不包装、不改写
 // 任何子命令，只做两件事：
-//   ① 先检查自己依赖的 shell（bash >= 4，README.md 的 Requirements 表）—— 缺 shell 或 shell 太旧时
+//   ① 先检查自己依赖的 shell（bash >= 5，README.md 的 Requirements 表；实测 4.0 下 help/init 退出 2）—— 缺 shell 或 shell 太旧时
 //      印出确切的修法并非 0 退出，**不跑 CLI**；
 //   ② 否则原样把 argv / stdio / env 交给 bash CLI（skills/teamsmith/scripts/team），退出码逐字透传
 //      （被信号打断 → 128 + signo）。
@@ -9,14 +9,14 @@
 //
 // 为什么是包装器而不是直接 `bin: {"team": ".../scripts/team"}`：npm 在 Windows 上生成的
 // `team.cmd` / `team.ps1` 跑不了 `.sh` 目标（CreateProcess 报错且没有任何提示）；包装器能在同一个
-// 代码路径上把「装 bash 4+ / 用 Git Bash 或 WSL」说清楚 —— 这正是 `team doctor` 已经做出的承诺。
+// 代码路径上把「装 bash 5+ / 用 Git Bash 或 WSL」说清楚 —— 这正是 `team doctor` 已经做出的承诺。
 import { spawnSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { constants as osConstants } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASH_MIN_MAJOR = 4
+const BASH_MIN_MAJOR = 5
 const REQUIREMENTS = 'README.md 的 Requirements 表'
 const SELF = realpathSync(fileURLToPath(import.meta.url))
 const CLI = resolve(dirname(SELF), '..', 'skills', 'teamsmith', 'scripts', 'team')
