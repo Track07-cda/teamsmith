@@ -579,7 +579,7 @@ TTY 下渲染新的 Ink 前端：PM 状态、待办、延后投递队列、容�
 **修一个会把 PM 自己打死的 bug：测试隔离 + 破坏性 tmux 守卫**
 
 - 事故：V1.1 复验的门禁（全量 smoke）从 PM 的 Pi 会话里跑，继承了 `TEAM_ROOT` →
-  `team` 读到**真实项目**的配置（session=`pm-skills`、pm_window=`pi`）→ smoke 里的
+  `team` 读到**真实项目**的配置（session=`this-project`、pm_window=`pi`）→ smoke 里的
   tmux/watchdog 段落作用到真实 session 上：空目标的 `tmux respawn-pane -k -t ""`
   （tmux 里等于"当前 pane"）杀掉了 PM 自己的 pi 进程，真实 session 的 dev/verify/watchdog 窗口一并消失。
 - 修复：`team_assert_own_session`（cwd 仓库 == TEAM_ROOT 仓库 + session 显式/等于项目名）、

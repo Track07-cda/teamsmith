@@ -526,7 +526,7 @@ if (only('S10')) {
 }
 
 // ── S11：外部截断+重写（M43 事故形状）：已投递行不得重放，total 不灌水 ─────────────────
-// 2026-09-19 事故（pm-skills 主树 inbox-watch.log:118-120）：外部力量把 spool **原位截断又写回
+// 2026-09-19 事故（this-project 主树 inbox-watch.log:118-120）：外部力量把 spool **原位截断又写回
 // 同样内容**（两次，间隔 6 秒；inode btime 证明不是 rename 替换；仓内写路径只有 `>>` 追加）。
 // 旧实现 `size < offset → offset = 0` 静默重置 → 下一拍从 0 全量重读 → 同一份 42 行被叫两遍、
 // total 被灌水 84。修复后：shrink 必须记账本、已投递行靠去重记忆压掉、total 只随真新增涨。
@@ -636,8 +636,8 @@ if (only('S13')) {
 }
 
 // ── M46：跳过留痕 / 注册清痕 / 继承的 TEAM_STATE_DIR 不许指向别的项目 ──────────────────
-// 事故（2026-09-20）：other_project 的 PM 加载的是旧扩展，按继承的 TEAM_* 解到 pm-skills，
-// 用 pm-skills 的会话名算出期望 target 与真实会话不符 → 每 2 秒 skip setup 一次，痕迹全写进
+// 事故（2026-09-20）：other_project 的 PM 加载的是旧扩展，按继承的 TEAM_* 解到 this-project，
+// 用 this-project 的会话名算出期望 target 与真实会话不符 → 每 2 秒 skip setup 一次，痕迹全写进
 // **别人的** state，而投递已经静默退回输入框粘贴路径（draft-raced-left + 两条消息滞留）。
 // 这三条钉住修复后的契约：① 跳过的原因留在**本项目**；② 成功注册会把旧痕迹删掉；
 // ③ 继承的 TEAM_STATE_DIR 指向别的项目时一律拒绝（M40 的 state 面）。

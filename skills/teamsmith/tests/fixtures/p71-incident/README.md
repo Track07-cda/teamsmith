@@ -5,8 +5,8 @@
 
 | 文件 | 原始路径 | 大小 |
 |---|---|---|
-| `dev2.wake` | `<pm-skills>/.pi/team/state/inbox-watch/teamsmith_dev2-e88859f1.wake` | 1929 B · 9 行 |
-| `dev2.seen` | `<pm-skills>/.pi/team/state/inbox-watch/teamsmith_dev2-e88859f1.seen` | 1701 B · 8 行 |
+| `dev2.wake` | `<this-project>/.pi/team/state/inbox-watch/teamsmith_dev2-e88859f1.wake` | 1929 B · 9 行 |
+| `dev2.seen` | `<this-project>/.pi/team/state/inbox-watch/teamsmith_dev2-e88859f1.seen` | 1701 B · 8 行 |
 | `pm-nudges.wake` | `/var/tmp/P71-pm-wake-spool-1746.bak`（76100 B 的 PM spool 前身）里含三个 nudge 时间戳的行 | 690 B · 3 行 |
 
 形状（design §1 引用的事实）：

@@ -151,9 +151,9 @@ JSON
 
 outbox_list_json() { cat <<'JSON'
 {"queued": 2, "held": 1, "entries": [
- {"name": "1758000000000-001-pm.msg", "state": "queued", "age_s": 42, "target": "pm-skills:pm", "kind": "notify", "from": "dev", "reason": "", "text": "第一行\n第二行"},
- {"name": "1758000001000-002-pm.msg", "state": "queued", "age_s": 7, "target": "pm-skills:pm", "kind": "say", "from": "verify", "reason": "", "text": "排队中的第二条"},
- {"name": "1757990000000-003-pm.msg", "state": "held", "age_s": 3600, "target": "pm-skills:pm", "kind": "notify", "from": "dev", "reason": "draft-raced", "text": "被扣住的副本"}
+ {"name": "1758000000000-001-pm.msg", "state": "queued", "age_s": 42, "target": "this-project:pm", "kind": "notify", "from": "dev", "reason": "", "text": "第一行\n第二行"},
+ {"name": "1758000001000-002-pm.msg", "state": "queued", "age_s": 7, "target": "this-project:pm", "kind": "say", "from": "verify", "reason": "", "text": "排队中的第二条"},
+ {"name": "1757990000000-003-pm.msg", "state": "held", "age_s": 3600, "target": "this-project:pm", "kind": "notify", "from": "dev", "reason": "draft-raced", "text": "被扣住的副本"}
 ]}
 JSON
 }

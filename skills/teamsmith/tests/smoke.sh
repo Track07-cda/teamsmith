@@ -7437,7 +7437,7 @@ piw_reset
 
 # ---------------------------------------------------------------- 12b-pi2. M46 投递降级可见 + 慢路径自愈
 # 事故（2026-09-20，用户报「other_project 又没自动发消息」）：PM 进程加载的是旧扩展 → 按继承的
-# TEAM_* 解到 pm-skills → 会话名不符 → 每 2s 一次 `skip setup` 而痕迹全写进**别人的** state；
+# TEAM_* 解到 this-project → 会话名不符 → 每 2s 一次 `skip setup` 而痕迹全写进**别人的** state；
 # 投递静默退回输入框粘贴路径 → 一次 draft-raced-left + 两条消息滞留。M46 的三条契约在这里钉住：
 #   ① 跳过要在**本项目**留痕，doctor/status/面板看得见（活注册在 / 死 pid 旧痕时不报）；
 #   ② 没有 watcher 时慢路径仍能投完（串行重试，不永久滞留）；
@@ -12376,8 +12376,8 @@ fi
 # ---------------------------------------------------------------- 32. 身份 = 运行时目录（M40）
 # 两起同族实测事故（2026-09-19，用户拍板的设计方向）：shell 继承了别的项目的身份四件套
 # （TEAM_ROOT / TEAM_MAIN_ROOT / TEAM_PROJECT / TEAM_SESSION），而解析顺序是「env 优先于 cwd」：
-#   ① 在 other_project 目录里跑 `team up` 被解析成 pm-skills（护栏拦住了，方向对，但用户被迫清环境）；
-#   ② 在 other_project 目录里起的 pulse，面板渲染出 pm-skills 的看板（没有护栏，静默读错项目）。
+#   ① 在 other_project 目录里跑 `team up` 被解析成 this-project（护栏拦住了，方向对，但用户被迫清环境）；
+#   ② 在 other_project 目录里起的 pulse，面板渲染出 this-project 的看板（没有护栏，静默读错项目）。
 # 规格：身份默认从**运行时目录**推导，继承的 TEAM_* 绝不许静默赢过 cwd。这一段钉住四件事：
 #   a) 冲突时观察形式（paths/--print）按 cwd 解析 + 大声告警；env 与目录一致时不吵；
 #   b) 会改共享状态的命令在冲突时被拒，而且真的没落盘；显式授权后按 cwd 动手并落审计；
@@ -12558,7 +12558,7 @@ else
   else
     bad "32⑧b 等不到面板进程（pane_pid=${M40_PID:-?} cmd=[$M40_PCMD]）—— 无法证明窗口进程的身份"
   fi
-  # 面板渲染的是本项目（标题带带项目名）：事故②「渲染出 pm-skills 看板」的反面
+  # 面板渲染的是本项目（标题带带项目名）：事故②「渲染出 this-project 看板」的反面
   M40_LOGS_WAIT=0
   $TEAM pulse logs >"$M40_D/8b-logs.log" 2>&1 || true
   while [ "$M40_LOGS_WAIT" -lt 40 ]; do

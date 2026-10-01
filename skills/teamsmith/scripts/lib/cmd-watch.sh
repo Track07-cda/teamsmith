@@ -1394,7 +1394,7 @@ team_pulse_shape() { # console | headless | unknown
 
 # 巡检窗口（console / headless 两种形态）里跑的完整命令（M40）：先清掉继承的 TEAM_* 身份、
 # 写入**按目录推导的**身份，再 cd 到主工作树 —— 「在哪个目录里启动，长驻进程就属于哪个项目」。
-# 事故②（cwd=other_project 却渲染 pm-skills 看板）的修复点就在这里；`pulse --print` 打印的也是这条。
+# 事故②（cwd=other_project 却渲染 this-project 看板）的修复点就在这里；`pulse --print` 打印的也是这条。
 team_pulse_window_cmd() { # [--headless]
   local mode="${1:-}" cli="$TEAM_SKILL_DIR/scripts/team"
   printf '%scd %s && exec bash %s monitor' \
