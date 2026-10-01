@@ -5479,17 +5479,27 @@ P16_INIT_HITS="$(doc_stale_hits "$P16_SB_INIT")"
 rm -rf "$P16_SB_INIT"
 
 # 依赖收窄不变量（v1.12.0）：文档/模板里不得再把容器后端或 forge CLI 当依赖。
-# M28 细化：这条不变量管的是「**产品**不得以容器为后端」，而 tmux 接触型**测试**在容器里跑是用户
-# 拍板的纪律（tests/container-tmux.sh）。所以把「提到测试 harness」的行从豁免里单独放行，
-# 同时用双向夹具钉住它：讲产品依赖容器要报红，讲测试 harness 不报（否则文档只能绕着 podman 写）。
-# M58 同理：**性能套件**（`tests/` 里那个，前门 `team perf`）的参考环境就是钉死门禁镜像 ——
-# 它是测试 harness，不是产品后端；命中 perf 套件的行同样按 harness 放行（豁免仍然**逐行**，
-# 产品语境里的 podman/--container 照旧报红，双向夹具在下面）。
+# M28/M58 的背景：这条不变量管的是「**产品**不得以容器为后端」，而 tmux 接触型**测试**在容器里跑
+# 是用户拍板的纪律（tests/container-tmux.sh）；**性能套件**（`tests/` 里那个，前门 `team perf`）的
+# 参考环境就是钉死门禁镜像 —— 两者都是测试 harness，不是产品后端。
+# P142 修正（**按主题判，不按工具名判**）：旧豁免是一个工具名白名单
+# （container-tmux.sh|team perf|perf[.]sh|TEAM_PERF|性能套件），于是 PM 一段**没有任何工具名**的
+# 排障说明（「整套门禁在容器里跑红、在宿主绿」，主题是 harness）被判「文档把容器当依赖」——
+# 判据逼作者把工具名写进句子才放行。现在：这一行只要在讲 harness/门禁**这个话题**就放行
+# （tests/ 路径、suite/fixture/harness/gate/CI、测试/门禁/套件/夹具/冒烟/自测…）；工具名只是
+# 话题证据之一。
+# 反向仍有牙：产品语境（daemon/console/看门狗 跑在 podman 里、安装需要 podman）没有话题词
+# → 照旧报红；双向夹具（含中文产品句 + 工具名-free 的 harness 句）把两个方向都钉住。
+# 豁免**逐行**，且话题词只在**正文**里算：`grep -rn` 的行自带 `路径:行号:` 前缀，而沙箱/临时根
+# 的名字里就有 `teamsmith-smoke.<rand>` —— 不锚定前缀的话，路径里的 smoke 会把每一行都豁免掉
+# （P142 实测：两个产品行在沙箱路径下被整片放行，判据形同虚设）。
+DEP_HARNESS_TOPIC_RE='(^|[^[:alnum:]_])(tests?|testing|suites?|fixtures?|harness(es)?|smoke|gate|ci|lint|perf)([^[:alnum:]_]|$)'
+DEP_HARNESS_TOPIC_RE="$DEP_HARNESS_TOPIC_RE"'|tests/|ci/Containerfile|container-tmux[.]sh|pm-box-real[.]sh|TEAM_PERF|测试|门禁|套件|夹具|冒烟|自测|用例|参考镜像|参考环境|钉死镜像|门禁镜像|pinned (image|gate)|reference (image|environment)'
 dep_scope_hits() { # <skill 目录> <init 目录>
   grep -rniE 'podman|\-\-container|看门狗容器|Containerfile' "$1/SKILL.md" "$1/references" "$1/templates" \
       "$2/SKILL.md" "$2/references" "$2/templates" 2>/dev/null \
     | grep -vE '不再需要|不再有|已移除|v1\.12' \
-    | grep -vE 'container-tmux\.sh|team perf|perf[.]sh|TEAM_PERF|性能套件' || true
+    | grep -viE "^[^:]*:[0-9]+:.*($DEP_HARNESS_TOPIC_RE)" || true
 }
 DEP_HITS="$(dep_scope_hits "$SKILL_DIR" "$SKILL_INIT_DIR")"
 if [ -n "$DEP_HITS" ]; then bad "文档还在把容器当依赖：$(printf '%s' "$DEP_HITS" | head -1)"; else ok "文档不再把容器当前提（只有一个后端）"; fi
@@ -5497,15 +5507,25 @@ if [ -n "$DEP_HITS" ]; then bad "文档还在把容器当依赖：$(printf '%s' 
 if [ -d "$SANDBOX" ]; then
   DEP_SB="$SANDBOX-dep"; rm -rf "$DEP_SB"; cp -r "$SANDBOX" "$DEP_SB"
   printf '%s\n' 'The pulse daemon now runs inside a podman container on every host.' >> "$DEP_SB/references/philosophy.md"
-  [ -n "$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")" ] && ok "翻转自测：文档讲「产品跑在容器里」会被抓到" \
-    || bad "翻转自测：产品依赖容器的表述竟然漏报（检查器太弱）"
+  printf '%s\n' '装 teamsmith 需要 podman；看门狗跑在容器里。' >> "$DEP_SB/references/philosophy.md"
+  DEP_PRODUCT_HITS="$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")"
+  if printf '%s' "$DEP_PRODUCT_HITS" | grep -q 'pulse daemon' && printf '%s' "$DEP_PRODUCT_HITS" | grep -q '看门狗'; then
+    ok "翻转自测：文档讲「产品跑在容器里」（英文 + 中文两条）都会被抓到"
+  else
+    bad "翻转自测：产品依赖容器的表述竟漏报（检查器太弱）：$(printf '%s' "$DEP_PRODUCT_HITS" | head -2 | tr '\n' ';')"
+  fi
+  # P142：这条 harness 文案**一个工具名都不含**（没有 container-tmux.sh / team perf / TEAM_PERF /
+  # 性能套件 这些名字）—— 判据若还按工具名白名单豁免，它必红。主题证据：suite / fixtures / 门禁 / 套件 / 夹具。
   rm -rf "$DEP_SB"; cp -r "$SANDBOX" "$DEP_SB"
-  printf '%s\n' 'The tmux-touching tests run inside a container through tests/container-tmux.sh (podman runtime, optional).' \
+  printf '%s\n' 'The gate suite keeps its tmux-touching fixtures in a disposable container (podman runtime, optional).' \
     >> "$DEP_SB/references/troubleshooting.md"
-  [ -z "$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")" ] && ok "翻转自测：文档讲「测试 harness 用容器」不误报（M28 新纪律不被旧不变量拦住）" \
-    || bad "翻转自测：测试 harness 的容器说明被误报：$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR" | head -1)"
+  printf '%s\n' '门禁套件里接触 tmux 的夹具在一次性容器里跑（podman，可选）。' \
+    >> "$DEP_SB/references/troubleshooting.md"
+  DEP_HARNESS_HITS="$(dep_scope_hits "$DEP_SB" "$SKILL_INIT_DIR")"
+  [ -z "$DEP_HARNESS_HITS" ] && ok "翻转自测：harness/门禁主题的容器说明不误报（P142：不带工具名也放行）" \
+    || bad "翻转自测：harness 主题的容器说明被误报：$(printf '%s' "$DEP_HARNESS_HITS" | head -1)"
   # M58 双向：① 讲**性能套件**在参考镜像里跑 → 放行（它也是测试 harness）；
-  #          ② 同一个词写在**产品**语境（不带 perf 标记）→ 照旧报红（豁免逐行，不整文件放行）。
+  #          ② 同一个词写在**产品**语境（不带 harness 话题词）→ 照旧报红（豁免逐行，不整文件放行）。
   rm -rf "$DEP_SB"; cp -r "$SANDBOX" "$DEP_SB"
   printf '%s\n' 'Run team perf --container to judge the panel red lines inside the pinned image.' >> "$DEP_SB/references/workflows.md"
   printf '%s\n' 'The console backend runs in a podman container on every host.' >> "$DEP_SB/references/workflows.md"
