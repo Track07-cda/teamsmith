@@ -95,9 +95,17 @@ forced a hand-edited `state.env`). Alternatives rejected: names+basenames only (
 until someone edits shared state); a separate alias file (more state to keep in sync, no gain); accepting any
 project that asks (that is the third-party leak scenario ② pins).
 
-**D10 · Notices carry the revision and the turn.** A turn-end notification is stamped `task=<ID> tip=<7-hex>` —
-the extension already resolves the branch, so it reads `git rev-parse --short HEAD` beside it; the CLI resolves the
-sender's worktree the same way. A meeting knock is stamped `[meeting:<slug>#<N>]` from the transcript turn name.
+**D10 · Notices carry the revision and the turn.** A turn-end notification is stamped `task=<ID> tip=<12-hex>` —
+P160 fixed the width: both senders take the first twelve hex characters of the full HEAD themselves
+(`git rev-parse HEAD | cut -c1-12`, the extension's `TIP_WIDTH`), because `--short` follows `core.abbrev` and the
+object count and gave the same HEAD two spellings. The receiver compares against its own ledger without a checkout:
+the review record's HEAD and the tip name the same revision when one is a prefix of the other (the tool writes nine
+hex today, a hand-written record may carry the full id; the twelve-wide wire form is what keeps that decision stable).
+Only a branch that really is a task (`task/<ID>-…` whose ID exists in
+`state/<agent>.env`, the board or a task brief) is stamped: an ordinary seat branch `agent/<seat>` used to invent
+`task=<seat>`. A meeting knock is stamped `[meeting:<slug>#<N>]` from the transcript turn name, and its ledger line
+is written when the notice is really delivered — immediately, or by the outbox drain when the peer box was busy
+(queueing itself still writes nothing to the shared area).
 Staleness is then a comparison against the receiver's own ledger: board `done`/`closed`, or
 `reviews/<ID>.md`'s HEAD equal to the stamp, or `read/<project>.seq` ≥ `N`. Why the tip hash rather than a
 timestamp or a notification UUID: only `(task, tip)` names the object version, and a timestamp cannot separate a

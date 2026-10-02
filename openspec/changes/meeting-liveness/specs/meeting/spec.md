@@ -163,6 +163,11 @@ number. The identifier SHALL let a receiver decide staleness from the shared are
 the receiver's `read/<project>.seq` is greater than or equal to that turn number. A knock MUST NOT be sent for a
 turn that is not in the transcript.
 
+The ledger SHALL name a turn exactly when the notice was really delivered: an immediately typed knock records it at
+that moment, a knock the delivery guard queues records it when the drained notice is delivered, and one that stays
+queued or is skipped records nothing. Enqueueing alone MUST NOT write to the shared area — the transcript keeps
+being the only thing the queue changes.
+
 #### Scenario: A knock names the turn it announces
 
 - **GIVEN** a meeting whose newest transcript turn is `0004` and a registered peer session
@@ -177,4 +182,12 @@ turn that is not in the transcript.
 - **THEN** the notice is not stale and `team meeting read <slug>` prints turn `0004`; with the position at `4` the
   same notice is stale and the read prints no turn after `0003` — the check reads only the transcript and the
   `read/<project>.seq` file, not any repository
+
+#### Scenario: A drained queued knock records its turn at delivery
+
+- **GIVEN** a knock for `#4` that the peer's busy input box queued — the payload names `[meeting:<slug>#4]` and the
+  ledger names no turn yet
+- **WHEN** the peer's box is cleared and the drained notice is delivered
+- **THEN** `knocks.log` gains exactly one line naming turn `4`, and the receiver's stale check against
+  `read/<project>.seq` reaches the same verdict as for an immediately typed knock
 

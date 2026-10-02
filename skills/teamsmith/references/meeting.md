@@ -31,7 +31,7 @@ reports); it is not a chat room and certainly not a command channel.
 ├── transcript/0001_<project>_<intent>.md    # append-only turns (the only truth; written before any knock)
 ├── agreements/A1.md          # consensus entries (proposal + agreed-by of each side)
 ├── read/<project>.seq        # each side's read position (inbox counts unread from it)
-└── knocks.log                # knock record (when knocking is used)
+└── knocks.log                # knock record (one line per turn whose notice was really delivered)
 ```
 
 ## Commands
@@ -92,6 +92,12 @@ team meeting knock <slug>                   # knock again for the last turn afte
 `knock` reports five things in order: ① the `TEAM_MEETING_KNOCK` switch ② whether the peer session is registered
 ③ whether that session exists in tmux ④ whether Pi is really running in the peer PM's window ⑤ whether the boundary
 guard lets it through. **A failed knock does not affect the message** — it is already in the shared area.
+
+A busy peer box does not lose the knock either: the command reports `queued` and the single-line notice waits in the
+sender's `state/outbox/`. The `knocks.log` line names `[meeting:<slug>#<N>]` **when that notice is really delivered**
+— immediately, or by `team outbox flush` once the box is free (the same single writer records both ways, so a queued
+knock is never counted twice and a notice that is still waiting writes nothing). The receiver's staleness check
+(`read/<project>.seq >= N`, only the shared area) therefore sees the same ledger entry either way.
 
 ## Guards (at the code level)
 

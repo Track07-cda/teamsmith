@@ -81,17 +81,21 @@ against the default socket; no signal is sent by command-line pattern (record th
   `outbox` line of `team status`/`team digest` (the existing `delivery-guard` requirement; no new surface). Verify:
   the same fixture's output lines.
 - [x] 3.4 `cmd-meeting.sh`: the knock payload and `knocks.log` carry `[meeting:<slug>#<N>]`, `N` taken from the
-  transcript turn the knock refers to; `say --knock` and `meeting knock` both stamp. Verify (**real tmux** or the
-  header fixture): with turn `0004` newest, the payload contains `[meeting:<slug>#4]` and the `knocks.log` line names
-  `4`. Red: drop the turn number → the assertion fails.
-- [x] 3.5 `extension/team-notify.ts` + `cmd-agents.sh`: the turn-end notification stamps `task=<ID> tip=<7-hex>`
-  (task from the branch, tip from `git rev-parse --short HEAD`) into the durable inbox line **and** the knock
-  payload, leaving the summary text byte-identical; `team notify` stamps what it can from the resolved sender's
-  worktree and never invents one. Verify: a fixture worktree on `task/P9-parser` at a pinned tip → the line and
-  payload each contain `task=P9 tip=<that hash>` and the summary is unchanged; the extension leg reuses the driver
-  pattern of `skills/teamsmith/tests/flip-m4.3.sh` (`e_run`) / `flip-m6.3.sh` (tsx driver) rather than a new
-  harness. Red: stamp only the knock → the inbox-line assertion fails; invent a stamp without a task → the skip
-  case reddens.
+  transcript turn the knock refers to; `say --knock` and `meeting knock` both stamp. The ledger line is written by
+  one writer (`team_meeting_knock_ledger_record`) at the moment the notice is really delivered — immediately, or by
+  `outbox flush` for a queued knock (P160 F1); enqueueing alone writes nothing to the shared area. Verify (**real
+  tmux** or the header fixture): with turn `0004` newest, the payload contains `[meeting:<slug>#4]` and the
+  `knocks.log` line names `4`; after a dirty-box knock is queued and the box cleared, the drain adds exactly that
+  one line. Red: drop the turn number → the assertion fails; skip the queued delivery → the ledger assertion fails.
+- [x] 3.5 `extension/team-notify.ts` + `cmd-agents.sh`: the turn-end notification stamps `task=<ID> tip=<12-hex>`
+  (task from a proven `task/<ID>-…` branch, tip = the first twelve hex characters of the full HEAD, truncated by the
+  sender itself) into the durable inbox line **and** the knock payload, leaving the summary text byte-identical;
+  `team notify` stamps what it can from the resolved sender's worktree and never invents one. Verify: a fixture
+  worktree on `task/P9-parser` at a pinned tip → the line and payload each contain `task=P9 tip=<12-hex>` and the
+  summary is unchanged; the extension leg reuses the driver pattern of `skills/teamsmith/tests/flip-m4.3.sh`
+  (`e_run`) / `flip-m6.3.sh` (tsx driver) rather than a new harness. Red: stamp only the knock → the inbox-line
+  assertion fails; invent a stamp without a task → the skip case reddens. P160 F2/F3: the same HEAD under
+  `core.abbrev` 7 and 12 stamps byte-identically, and `agent/<seat>` / unproven IDs stamp nothing.
 - [x] 3.6 `skills/teamsmith/tests/smoke.sh`: the stale/fresh comparisons — `docs/team/reviews/P9.md` HEAD equal to
   the stamp → stale; a different tip → not stale; a `#4` knock against `read/<project>.seq` 3 → fresh and 4 →
   stale. Verify: the section's result lines.
@@ -153,3 +157,25 @@ against the default socket; no signal is sent by command-line pattern (record th
   re-glue and the resolution fallback), the **real tmux** knock and window scenarios, `openspec validate --all
   --strict` and the **full** smoke; the record goes to `docs/team/reviews/<ID>.md` with a verdict and any findings
   (a PASS carrying findings is rework, not archive).
+
+## 8. Rework after the independent verification (P160 — three findings of `P153-verify`)
+
+- [x] 8.1 F1 `cmd-meeting.sh` + `outbox.sh`: the ledger line moves into one writer
+  (`team_meeting_knock_ledger_record`) and `team_outbox_record_delivery_receipt` calls it when a meeting-knock entry
+  is really delivered — the immediate path keeps its turn, a queued knock is recorded by the drain, and enqueueing
+  still writes nothing to the shared area. Verify: §56 (real tmux) asserts the ledger is untouched at enqueue time,
+  then names exactly one `[meeting:m-tmux#1]` line after the drain; `flip-p160.sh` shows the pre-fix tree red on it.
+- [x] 8.2 F2 `cmd-agents.sh` + `extension/team-notify.ts`: both senders stamp the first twelve hex characters of
+  the full HEAD (`cut -c1-12`, `TIP_WIDTH = 12`); no `--short` anywhere in the stamp; the receiver's comparison is
+  written down as a prefix match against its own ledger (`references/protocol.md` §4; the review record the tool
+  writes today is nine hex wide, so the spec names the twelve-wide wire form as what keeps the decision stable) and
+  the smoke fixture truncates the review's HEAD to twelve (a seven-hex abbreviation is not "already reviewed").
+  Verify: §55 runs the same HEAD under `core.abbrev` 7 and 12 → byte-identical twelve-wide tips; the extension leg
+  does the same.
+- [x] 8.3 F3 `cmd-agents.sh` + `extension/team-notify.ts`: the stamp needs proof — `task/<ID>-…` **and** the ID in
+  `state/<agent>.env`, the board or a task brief; `agent/<seat>`, protected branches, detached worktrees and
+  worktree-less manual notifications stamp nothing. Verify: §55/§56 idle-branch fixtures (inbox line and knock
+  payload both carry no `task=`) and the function-level empty stamp.
+- [x] 8.4 Gates: `openspec validate --all --strict` ✓, sections `55`/`56`/`12b-pi`/`13` ✓, FAST ✓, one full smoke ✓;
+  red→green raw output in `docs/team/reports/P160-dev-bob/pkg/` (`red.log`, `green.log`, `summary.txt`, produced by
+  `skills/teamsmith/tests/flip-p160.sh`). The rework author is not the verifier (D31).

@@ -1326,6 +1326,28 @@ team_outbox_record_delivered() { # <entry> <dedup> <outcome>
   printf '%s\t%s\t%s\t%s\n' "$(team_epoch_sec)" "$k" "$(basename "$1")" "$3" >> "$(team_outbox_delivered_log)"
 }
 
+# ---------------------------------------------------------------- 投递回执（P160 F1）
+# 条目可以带一个 `meeting-ledger: <slug>\t<turn>\t<peer_proj>\t<intent>` 头（只有 kind=meeting-knock 会有）：
+# 入队时不写共享区（`meeting` 规格的承诺），**真正投递确认后**在这里补记会议的敲门账本 ——
+# 只写一次（写完后调用方紧接着删掉条目），发送者取条目自己的 `from:` 字段。
+# 会议库不在（函数没被加载/目录没了）就什么都不写；回执绝不影响本次投递的结论。
+team_outbox_record_delivery_receipt() { # <entry>
+  local e="$1" kind="" line="" slug="" turn="" proj="" intent=""
+  [ -n "$e" ] && [ -f "$e" ] || return 0
+  [ "$(team_outbox_header "$e" kind)" = "meeting-knock" ] || return 0
+  line="$(team_outbox_header "$e" meeting-ledger)"
+  [ -n "$line" ] || return 0
+  IFS=$'\t' read -r slug turn proj intent <<< "$line"
+  [ -n "$slug" ] && [ -n "$turn" ] || return 0
+  declare -F team_meeting_knock_ledger_record >/dev/null 2>&1 || return 0
+  # 账本写不进去不能让一次**已经发生的投递**半途中断（那会让条目留下、下一次再投一遍）：
+  # 记账失败只响亮地说出来，投递结论不变。
+  if ! team_meeting_knock_ledger_record "$slug" "$turn" "$proj" "$(team_outbox_header "$e" from)" "$intent"; then
+    team_outbox_note warn "outbox：会议敲门账本写不进去（$slug#$turn）—— 投递已完成，账本缺这一行"
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------- 投递阻碍诊断（delivery-truth D2）
 # `state/outbox/diagnostics/<entry>.json` 记录**可信空框读**的连续计数与阻碍原因（design D2）：
 #   schema / entry / target / observed_verdict / trust / consecutive_empty / first_observed /
@@ -1508,7 +1530,7 @@ team_outbox_hold() { # <entry> <reason> [--claimed]
 #        [--inbox-defer AGENT]（只记 destination；投递/进 held 那一刻才写）
 #        [--inbox-written AGENT]（调用方**已经**写了 durable 行：只记 destination，绝不重复写）
 team_outbox_enqueue() {
-  local kind="" target="" from="-" dedup="" file="" payload="" payload_set=0 inbox="" inbox_defer="" inbox_written=""
+  local kind="" target="" from="-" dedup="" file="" payload="" payload_set=0 inbox="" inbox_defer="" inbox_written="" meeting_ledger=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --kind) kind="${2:?}"; shift 2 ;;
@@ -1520,6 +1542,7 @@ team_outbox_enqueue() {
       --inbox) inbox="${2:?}"; shift 2 ;;
       --inbox-defer) inbox_defer="${2:?}"; shift 2 ;;
       --inbox-written) inbox_written="${2:?}"; shift 2 ;;
+      --meeting-ledger) meeting_ledger="${2:-}"; shift 2 ;;
       --durable) shift 2 ;;
       *) shift ;;
     esac
@@ -1561,6 +1584,9 @@ team_outbox_enqueue() {
     printf 'from: %s\n' "$from"
     printf 'created: %s\n' "$(team_timestamp)"
     printf 'dedup: %s\n' "${dedup:--}"
+    # P160 F1：投递回执（只有会议敲门会带）—— 入队时不写共享区，投递确认后由
+    # team_outbox_record_delivery_receipt 补记；头部里是 tab 分隔的 <slug> <turn> <peer_proj> <intent>。
+    if [ -n "$meeting_ledger" ]; then printf 'meeting-ledger: %s\n' "$meeting_ledger"; fi
     if [ -n "$inbox" ]; then
       printf 'inbox: %s\n' "$inbox"
       printf 'inbox-written: 1\n'
@@ -1665,6 +1691,7 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
     local rkey rib
     rkey="${route%%$'\t'*}"; rib="${route#*$'\t'}"
     if team_inbox_watch_deliver "$e" "$kind" "$from" "$rkey" "$rib" "$payload"; then
+      team_outbox_record_delivery_receipt "$e"
       rm -f "$e"
       team_outbox_diag_rm "$e"
       team_outbox_record_delivered "$e" "$dedup" "watch"
@@ -1693,6 +1720,7 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
     team_warn "--now：跳过守卫，直接往 $target 打字（今天的旧行为，已记入 outbox/forced.log）"
     team_tmux_type_payload "$target" "$(team_deliver_text "$target" "$payload")" 2>/dev/null || true
     tmux send-keys -t "$target" Enter 2>/dev/null || true
+    team_outbox_record_delivery_receipt "$e"
     rm -f "$e"
     team_outbox_diag_rm "$e"
     team_outbox_record_delivered "$e" "$dedup" "forced"
@@ -1758,6 +1786,7 @@ team_outbox_process_entry() { # <entry> [--now] [--no-verify]
   fi
   case "$rc" in
     0)
+      team_outbox_record_delivery_receipt "$e"
       rm -f "$e"
       team_outbox_diag_rm "$e"
       team_outbox_record_delivered "$e" "$dedup" "delivered"
@@ -1890,9 +1919,9 @@ team_outbox_drain() { # [--now] [--quiet] [--max N] [--retry-impeded]
 #   delivered（已确认送达）｜watched（pi 监视通道：已写收件箱 + 唤醒指针，输入框零按键）｜queued（进队列了）
 #   ｜held（阻碍 hold：geometry-untrusted / queue-stalled，返回非 0）
 #   ｜forced（--now）｜unknown-sent｜unknown-failed｜offline｜duplicate
-team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbox A] [--inbox-written A] [--now] [--no-verify]
+team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbox A] [--inbox-written A] [--now] [--no-verify] [--meeting-ledger V]
   local target="$1" payload="$2" kind="$3"; shift 3
-  local from="-" dedup="" inbox="" inbox_written="" now=0 noverify=0 queue_offline=0
+  local from="-" dedup="" inbox="" inbox_written="" now=0 noverify=0 queue_offline=0 meeting_ledger=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from) from="${2:-}"; shift 2 ;;
@@ -1902,6 +1931,7 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
       --now) now=1; shift ;;
       --no-verify) noverify=1; shift ;;
       --queue-offline) queue_offline=1; shift ;;
+      --meeting-ledger) meeting_ledger="${2:-}"; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -1933,6 +1963,7 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
   # 入队的参数只构造一次：离线也排队（--queue-offline）和正常路径共用同一份参数
   local enq=(--kind "$kind" --target "$target" --from "$from")
   [ -n "$dedup" ] && enq+=(--dedup "$dedup")
+  [ -n "$meeting_ledger" ] && enq+=(--meeting-ledger "$meeting_ledger")
   # --inbox-written 是「调用方已经写过 durable 行」的声明：优先于 --inbox（否则会重复写一行）
   if [ -n "$inbox_written" ]; then enq+=(--inbox-written "$inbox_written")
   elif [ -n "$inbox" ]; then enq+=(--inbox "$inbox"); fi
@@ -1974,9 +2005,11 @@ team_send_guarded() { # <target> <payload> <kind> [--from F] [--dedup K] [--inbo
   # 用 --inbox-defer —— 已确认送达就不写收件箱（不制造假待办）；真进了 held/ 再落盘。
   # M30：pi 通道走同一条 defer —— durable 收件箱行由投递那一刻写（tag = kind），一次都不重。
   if { [ "$v" = "EMPTY" ] || [ -n "$watch_route" ]; } && [ -n "$inbox" ] && [ -z "$inbox_written" ]; then
-    enq=(--kind "$kind" --target "$target" --from "$from" --inbox-defer "$inbox")
-    [ -n "$dedup" ] && enq+=(--dedup "$dedup")
-    enq+=(--payload "$payload")
+    local enq_defer=(--kind "$kind" --target "$target" --from "$from" --inbox-defer "$inbox")
+    [ -n "$dedup" ] && enq_defer+=(--dedup "$dedup")
+    [ -n "$meeting_ledger" ] && enq_defer+=(--meeting-ledger "$meeting_ledger")
+    enq_defer+=(--payload "$payload")
+    enq=("${enq_defer[@]}")
   fi
   entry="$(team_outbox_enqueue "${enq[@]}")" || rc=$?
   if [ "$rc" = "3" ]; then

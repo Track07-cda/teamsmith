@@ -6489,17 +6489,51 @@ let lines = readFileSync(inbox, 'utf8').trim().split('\n')
 if (lines.length !== 1) { console.error(`FAIL: 期望 1 行（去重），实际 ${lines.length}`); process.exit(4) }
 if (!lines[0].includes('ALLDONE feature implemented')) { console.error('FAIL: 没有带上 agent 末条消息'); process.exit(5) }
 if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错误'); process.exit(6) }
-// P139：通知要指认修订 —— task 从分支推、tip = 工作树 HEAD 短哈希（非任务分支就没有，不编造）
+// P160 F2/F3: the notification names the revision it describes - task from the branch, tip = the first 12 hex
+// characters of HEAD (a fixed width, independent of core.abbrev); only a proven task branch stamps at all.
 {
   const { execSync } = await import('node:child_process')
   const br = execSync(`git -C "${wt}" rev-parse --abbrev-ref HEAD`).toString().trim()
-  const tip = execSync(`git -C "${wt}" rev-parse --short HEAD`).toString().trim()
-  if (/^(?:task|agent)\//.test(br)) {
-    const tid = br.slice(br.indexOf('/') + 1).split('-')[0]
-    if (!lines[0].includes(`task=${tid} tip=${tip}`)) {
-      console.error(`FAIL: 通知缺修订标识 task=${tid} tip=${tip}（实际：${lines[0]}）`); process.exit(30)
+  const full = execSync(`git -C "${wt}" rev-parse HEAD`).toString().trim()
+  const tip12 = full.slice(0, 12)
+  const tipOf = (line) => /tip=([0-9a-f]+)/.exec(line)?.[1] ?? ''
+  if (br.startsWith('task/')) {
+    const tid = br.slice(5).split('-')[0]
+    if (!lines[0].includes(`task=${tid} tip=${tip12}`)) {
+      console.error(`FAIL: 通知缺修订标识 task=${tid} tip=${tip12}（实际：${lines[0]}）`); process.exit(30)
     }
     if (!lines[0].includes('ALLDONE feature implemented')) { console.error('FAIL: 修订标识吃掉了摘要'); process.exit(31) }
+    // F2: the same HEAD under core.abbrev 7 and 12 must stamp a byte-identical 12-wide tip.
+    const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text }] } }] } })
+    execSync(`git -C "${wt}" config core.abbrev 7`)
+    await handler({}, ctxN('P160 abbrev 7'))
+    execSync(`git -C "${wt}" config core.abbrev 12`)
+    await handler({}, ctxN('P160 abbrev 12'))
+    execSync(`git -C "${wt}" config --unset core.abbrev`)
+    const all = readFileSync(inbox, 'utf8').trim().split('\n')
+    const t7 = tipOf(all[all.length - 2]), t12 = tipOf(all[all.length - 1])
+    if (t7 !== t12 || t7 !== tip12) {
+      console.error(`FAIL: P160 F2 core.abbrev 改变了 tip 拼写（${t7} vs ${t12}，期望 ${tip12}）`); process.exit(34)
+    }
+    // F3: an idle seat branch agent/<seat> with no task evidence must not invent a task stamp.
+    const idleWt = join(root, '.worktrees/p160idle')
+    try {
+      execSync(`git -C "${root}" worktree add -q -b agent/p160idle "${idleWt}"`, { stdio: 'ignore' })
+      rmSync(join(root, 'docs/team/inbox/p160idle.md'), { force: true })
+      await handler({}, { cwd: idleWt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text: 'P160 idle branch notice' }] } }] } })
+      const idleLine = readFileSync(join(root, 'docs/team/inbox/p160idle.md'), 'utf8').trim()
+      if (idleLine.includes('task=')) {
+        console.error(`FAIL: P160 F3 agent/ 分支编造了 task 标识（${idleLine}）`); process.exit(35)
+      }
+      if (!idleLine.includes('agent:p160idle')) { console.error('FAIL: P160 F3 idle 夹具的发送者解析不对'); process.exit(36) }
+    } finally {
+      try { execSync(`git -C "${root}" worktree remove --force "${idleWt}"`, { stdio: 'ignore' }) } catch { /* ignore */ }
+      try { execSync(`git -C "${root}" branch -D agent/p160idle`, { stdio: 'ignore' }) } catch { /* ignore */ }
+    }
+  } else if (br.startsWith('agent/')) {
+    if (lines[0].includes('task=')) {
+      console.error(`FAIL: P160 F3 普通席位分支编造了 task 标识（${lines[0]}）`); process.exit(33)
+    }
   } else {
     console.log(`note: 工作树在 ${br}（非任务分支），P139 修订标识断言按设计不适用`)
   }
@@ -7842,7 +7876,8 @@ OBEXT
   case "$P139_EXT_BR" in
     task/*|agent/*)
       P139_EXT_ID="${P139_EXT_BR#*/}"; P139_EXT_ID="${P139_EXT_ID%%-*}"
-      P139_EXT_TIP="$(git -C "$REPO/.worktrees/dev" rev-parse --short HEAD 2>/dev/null || true)"
+      # P160 F2：与两个发送方同一契约 —— 前 12 个十六进制字符，工具自己截（不受 core.abbrev 影响）
+      P139_EXT_TIP="$(git -C "$REPO/.worktrees/dev" rev-parse HEAD 2>/dev/null | cut -c1-12 || true)"
       assert_has "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' | head -1)" \
         "task=$P139_EXT_ID tip=$P139_EXT_TIP" "12b-i 扩展的敲门载荷带 task/tip（R2，$P139_EXT_BR）"
       ;;
@@ -16802,6 +16837,11 @@ else
 fi
 P82_WT="$P82R/.worktrees/dev2"
 git -C "$P82R" worktree add -q -b task/P82-smoke "$P82_WT" main >/dev/null 2>&1
+# P160 F3：修订标识要"有证据"才盖 —— 真任务分支总有一份任务书（dispatch 必留）；这个夹具是**合成**的
+# 任务分支（自己 worktree add -b 建的），所以补一份 P82 的简报，才是"真任务分支"的形状（反向：
+# 没证据的 task/* 与空闱的 agent/* 都不盖）。
+mkdir -p "$P82R/docs/team/tasks"
+printf '# P82 · notify 发送者身份（夹具任务书）\n' > "$P82R/docs/team/tasks/P82-smoke.md"
 if [ -e "$P82_WT/.git" ]; then ok "P82 夹具：席位 dev2 的工作树就位（.worktrees/dev2）"; else bad "P82 夹具：dev2 工作树起不来（后续断言无意义）"; fi
 P82_OUT="$TMP/p82-elsewhere"
 git -C "$P82R" worktree add -q -b task/P82-elsewhere "$P82_OUT" main >/dev/null 2>&1
@@ -16828,9 +16868,10 @@ assert_eq "P82 1.2 在 <worktree>/docs 里跑也解析成 dev2（不是 docs）"
 p82 "$P82R" notify pm --from-file "$TMP/p82-sum.txt" >"$TMP/p82-main.log" 2>&1 \
   && ok "P82 1.2 主工作树里 notify 退出码 0" || bad "P82 1.2 主工作树里 notify 失败"
 assert_eq "P82 1.2 主工作树 → pm（PM 自己的通知仍记 pm）" "$(p82_last)" "agent:pm · P82-SUMMARY-1"
-# P139：worker 的 inbox 行要自带修订标识（task 从分支推、tip 是工作树 HEAD 短哈希）
-P82_TIP="$(git -C "$P82_WT" rev-parse --short HEAD 2>/dev/null)"
-assert_has "$P82_INBOX" "task=P82 tip=$P82_TIP" "P82 1.2 worker 行的修订标识 = 分支 ID + 工作树 HEAD 短哈希（P139）"
+# P160 F2：worker 的 inbox 行要自带修订标识（task 从分支推、tip 是工作树 HEAD 的**前 12 个十六进制字符**，
+# 由工具自己截 —— 与 CLI / 扩展同一契约，不受 core.abbrev 影响）
+P82_TIP="$(git -C "$P82_WT" rev-parse HEAD 2>/dev/null | cut -c1-12)"
+assert_has "$P82_INBOX" "task=P82 tip=$P82_TIP" "P82 1.2 worker 行的修订标识 = 分支 ID + 工作树 HEAD 前 12 位（P139）"
 
 # ── 1.3 继承的 TEAM_AGENT 不许压过运行时目录（分歧点名，目录赢）─────────────────────────────
 ( cd "$P82_WT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_SKILL_DIR \
@@ -18177,29 +18218,76 @@ assert_not "$P139/third-inbox.log" "id-meet" "P139 4.4 第三方的 inbox 不列
 
 # ── 3.5 通知标识：CLI 从发送者工作树盖章；没有工作树就不编 ───────────────────────────────────
 git -C "$P139/notify" worktree add -q -b task/P9-parser "$P139/notify/.worktrees/dev" >/dev/null 2>&1
+# P160 F3: the task stamp needs evidence - give this fixture a real task brief (dispatch always leaves one).
+mkdir -p "$P139/notify/docs/team/tasks"
+printf '# P9 parser\n' > "$P139/notify/docs/team/tasks/P9-parser.md"
 git -C "$P139/notify/.worktrees/dev" commit -q --allow-empty -m "P9 work"
-P139_TIP="$(git -C "$P139/notify/.worktrees/dev" rev-parse --short HEAD)"
+# P160 F2: tip = the first 12 hex characters of HEAD (the tool truncates), not the configuration-dependent --short.
+P139_TIP="$(git -C "$P139/notify/.worktrees/dev" rev-parse HEAD | cut -c1-12)"
 printf 'P9 交付：解析器已上线\n' >"$P139/summary.txt"
 printf '' > "$P139/notify/docs/team/inbox/pm.md"
 ( cd "$P139/notify/.worktrees/dev" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT \
     TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from dev --from-file "$P139/summary.txt" ) >"$P139/notify.log" 2>&1 \
   && ok "P139 3.5 工作树里 notify 退出码 0" || bad "P139 3.5 工作树里 notify 失败"
-assert_has "$P139/notify/docs/team/inbox/pm.md" "task=P9 tip=$P139_TIP" "P139 3.5 inbox 行带 task=<ID> tip=<短哈希>"
+assert_has "$P139/notify/docs/team/inbox/pm.md" "task=P9 tip=$P139_TIP" "P139 3.5 inbox 行带 task=<ID> tip=<12-hex>"
 assert_has "$P139/notify/docs/team/inbox/pm.md" "P9 交付：解析器已上线" "P139 3.5 摘要逐字节仍在"
+# P160 F2 red side: run once with core.abbrev=7 and once with 12 -> the same HEAD must yield a byte-identical,
+# 12-wide tip= equal to the prefix of the full HEAD.
+printf 'P9 delivery: second run (abbrev 7)\n' >"$P139/summary-abbrev7.txt"
+printf 'P9 delivery: third run (abbrev 12)\n' >"$P139/summary-abbrev12.txt"
+git -C "$P139/notify" config core.abbrev 7
+( cd "$P139/notify/.worktrees/dev" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT \
+    TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from dev --from-file "$P139/summary-abbrev7.txt" ) >"$P139/notify-a7.log" 2>&1 || true
+git -C "$P139/notify" config core.abbrev 12
+( cd "$P139/notify/.worktrees/dev" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT \
+    TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from dev --from-file "$P139/summary-abbrev12.txt" ) >"$P139/notify-a12.log" 2>&1 || true
+git -C "$P139/notify" config --unset core.abbrev 2>/dev/null || true
+P139_TIP7="$(grep -a 'abbrev 7' "$P139/notify/docs/team/inbox/pm.md" | sed -n 's/.*tip=\([0-9a-f]*\).*/\1/p' | tail -1)"
+P139_TIP12="$(grep -a 'abbrev 12' "$P139/notify/docs/team/inbox/pm.md" | sed -n 's/.*tip=\([0-9a-f]*\).*/\1/p' | tail -1)"
+P139_FULL="$(git -C "$P139/notify/.worktrees/dev" rev-parse HEAD)"
+assert_eq "P160 F2 same HEAD under core.abbrev 7 and 12 yields a byte-identical tip" "$P139_TIP7" "$P139_TIP12"
+assert_eq "P160 F2 the tip width is fixed at 12 (does not follow core.abbrev)" "${#P139_TIP12}" "12"
+assert_eq "P160 F2 the tip is the first 12 characters of the full HEAD" "$P139_TIP12" "$(printf '%s' "$P139_FULL" | cut -c1-12)"
+# P160 F3: an idle seat branch agent/<seat> (no state file, no task brief, no board row) must not invent a task.
+git -C "$P139/notify" worktree add -q -b agent/idle "$P139/notify/.worktrees/idle" >/dev/null 2>&1
+assert_eq "P160 F3 fixture premise: the worktree sits on the ordinary seat branch agent/idle" \
+  "$(git -C "$P139/notify/.worktrees/idle" rev-parse --abbrev-ref HEAD)" "agent/idle"
+assert_not_file "$P139/notify/.pi/team/state/idle.env" "P160 F3 fixture premise: no state/idle.env"
+if ls "$P139/notify/docs/team/tasks"/idle*.md >/dev/null 2>&1; then
+  bad "P160 F3 fixture premise: there must be no task brief for idle"
+else ok "P160 F3 fixture premise: no task brief for idle"; fi
+( cd "$P139/notify/.worktrees/idle" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT \
+    TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from idle "idle seat turn end" ) >"$P139/notify-idle.log" 2>&1 \
+  && ok "P160 F3 the idle-branch notification completes (exit 0)" || bad "P160 F3 the idle-branch notification failed"
+assert_has "$P139/notify/docs/team/inbox/pm.md" "agent:idle" "P160 F3 the idle-branch notice was really written (fixture holds)"
+assert_not "$P139/notify/docs/team/inbox/pm.md" "task=idle" "P160 F3 an idle seat branch stamps no task= (nothing invented)"
+assert_eq "P160 F3 function level: the revision stamp of agent/idle is empty" \
+  "$( cd "$P139/notify" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT TEAM_SESSION=notify \
+      bash -c '. "$1/scripts/lib/common.sh"; for f in "$1"/scripts/lib/cmd-*.sh; do . "$f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_notify_rev_stamp idle' _ "$SKILL_DIR" )" ""
 ( cd "$P139/notify" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
     TEAM_NOTIFY_TMUX=0 $TEAM notify pm --from ghost "no worktree here" ) >"$P139/notify2.log" 2>&1
 assert_not "$P139/notify/docs/team/inbox/pm.md" "task=ghost" "P139 3.5 没有任务工作树的发送者不编造标识"
 
 # ── 3.6 stale/fresh：接收方只读自己的账本（评审记录 HEAD / knock 轮次 vs 读位）────────────────
 mkdir -p "$P139/alpha/docs/team/reviews"
-printf '# P9\n\n- HEAD `abc1234`\n' > "$P139/alpha/docs/team/reviews/P9.md"
-p139_stale() { # <task> <tip> [<repo>] —— 规范里的接收方判据：tip == 评审记录的 HEAD → stale
+# P160 F2：接收方不需要 checkout —— 评审记录里的 HEAD 是 tip 的**前缀**就算这个修订已经判过。
+# 夹具记三份：12 位（与 wire 同宽）、9 位（`team review` 今天写的就是 9 位）、以及一个不是前缀的短值。
+printf '# P9\n\n- HEAD `abc1234def567890abcdef1234567890abcdef12`\n' > "$P139/alpha/docs/team/reviews/P9.md"
+printf '# P9b\n\n- HEAD `abc1234de`\n' > "$P139/alpha/docs/team/reviews/P9b.md"
+printf '# P9c\n\n- HEAD `9999999`\n' > "$P139/alpha/docs/team/reviews/P9c.md"
+p139_stale() { # <task> <tip> [<repo>] —— 规范里的接收方判据：两边指向同一个 revision（互为前缀）→ stale
   local id="$1" tip="$2" repo="${3:-$P139/alpha}" head
   head="$(sed -n 's/.*HEAD `\([0-9a-f]\{7,\}\)`.*/\1/p' "$repo/docs/team/reviews/$id.md" 2>/dev/null | head -1)"
-  [ -n "$head" ] && [ "$tip" = "$head" ] && printf 'stale' || printf 'fresh'
+  [ -n "$head" ] || { printf 'fresh'; return 0; }
+  case "$tip" in "$head"*) printf 'stale'; return 0 ;; esac   # 记录更短（team review 今天写 9 位）
+  case "$head" in "$tip"*) printf 'stale'; return 0 ;; esac   # 记录更长（手写记录可能记完整 40 位）
+  printf 'fresh'
 }
-assert_eq "P139 3.6 同一 tip → stale（评审记录已覆盖这个修订）" "$(p139_stale P9 abc1234)" "stale"
-assert_eq "P139 3.6 不同 tip → fresh（接收方没判过这个修订）" "$(p139_stale P9 def5678)" "fresh"
+assert_eq "P139 3.6 同一 tip → stale（评审记录已覆盖这个修订）" "$(p139_stale P9 abc1234def56)" "stale"
+assert_eq "P139 3.6 不同 tip → fresh（接收方没判过这个修订）" "$(p139_stale P9 def5678abc12)" "fresh"
+# P160 F2 反向：记录里是**短**前缀也照样判已覆盖 —— 工具今天写 9 位，12 位的 wire 形状只是让这个判定稳定。
+assert_eq "P160 F2 记录里的 9 位前缀（team review 今天的写法）也算已覆盖" "$(p139_stale P9b abc1234def56)" "stale"
+assert_eq "P160 F2 不是前缀的短值不算已覆盖（另一个 revision）" "$(p139_stale P9c abc1234def56)" "fresh"
 p139_turn m-knock 4 beta report
 printf '3\n' > "$P139_MEET/m-knock/read/alpha.seq"
 p139_knock_stale() { # <N> <position> —— knock 的 #N 对读位：position >= N → stale
@@ -18304,6 +18392,10 @@ else
   assert_eq "P139 3.1 对方 pane 逐字节不变（草稿没被粘走）" "$(p139_md5 "$P139_SESS" pi)" "$P139_PI_BEFORE"
   assert_eq "P139 3.1 队列里恰好一条 meeting-knock" "$(p139_outbox_n alpha)" "1"
   P139_PAYLOAD="$(p139_outbox_payload alpha)"
+  # P160 F1: queueing must not claim a knock happened - the knocks.log line appears only at real delivery.
+  if grep -qaF -- '[meeting:m-tmux#1]' "$P139_MEET/m-tmux/knocks.log" 2>/dev/null; then
+    bad "P160 F1 the ledger must stay untouched at enqueue time"
+  else ok "P160 F1 enqueue writes the turn nowhere in the ledger (not yet delivered)"; fi
   assert_has_echo "$P139_PAYLOAD" "[meeting:m-tmux#1]" "P139 3.4 队列载荷带轮次标识 [meeting:m-tmux#1]"
   assert_has_echo "$P139_PAYLOAD" "有新发言" "P139 3.1 载荷就是那条单行通知（不是副本）"
   assert_file "$P139_MEET/m-tmux/transcript/0001_alpha_info.md" "P139 3.1 say 的发言已经落在共享区"
@@ -18377,6 +18469,22 @@ else
     "$(find "$P139_MEET/m-tmux/transcript" -type f -exec cksum {} \; | cksum | awk '{print $1":"$2}')" "$P139_TRANS_AFTER_SAY"
 
   # ── 3.4 / 4.3 空框直投：alpha→beta 的 pi；beta→alpha 的 new ───────────────────────────────
+  # P160 F1: after the box was cleared and the drain delivered the queued knock, the ledger must carry that turn.
+  assert_match "$P139_MEET/m-tmux/knocks.log" 'knocked beta by alpha intent=info \[meeting:m-tmux#1\]' \
+    "P160 F1 the delivered queued knock is recorded with the same turn"
+  assert_eq "P160 F1 the queued knock is recorded exactly once" \
+    "$(grep -ac '\[meeting:m-tmux#1\]' "$P139_MEET/m-tmux/knocks.log" 2>/dev/null || true)" "1"
+  # P160 F3 (payload half): an idle seat branch agent/idle56 must not stamp task= into the knock payload either.
+  git -C "$P139/notify" worktree add -q -b agent/idle56 "$P139/notify/.worktrees/idle56" >/dev/null 2>&1 || true
+  printf 'idle payload check\n' >"$P139/summary-idle.txt"
+  P139_SUB_NOTIFY_N="$(p139_submits "$P139_SUB_NOTIFY")"
+  ( cd "$P139/notify/.worktrees/idle56" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      TEAM_NOTIFY_TMUX=1 TMUX="$P139_TMUX_ENV" TMUX_PANE= $TEAM notify pm --from idle56 --from-file "$P139/summary-idle.txt" ) >"$P139/notify-idle-knock.log" 2>&1 || true
+  assert_eq "P160 F3 the idle-branch knock really went through (one submit)" \
+    "$(p139_submits "$P139_SUB_NOTIFY")" "$((P139_SUB_NOTIFY_N + 1))"
+  P139_IDLE_SUBMIT="$(tail -n1 "$P139_SUB_NOTIFY")"
+  assert_has_echo "$P139_IDLE_SUBMIT" "[manual] agent:idle56" "P160 F3 the knock payload names the idle sender"
+  assert_not_echo "$P139_IDLE_SUBMIT" "task=" "P160 F3 an idle seat branch stamps no task= into the knock payload"
   P139_PI_SUBS="$(p139_submits "$P139_SUB_PI")"
   p139_knock "$P139/alpha" say m-tmux "second to beta" >"$P139/knock-pi.log" 2>&1
   assert_has "$P139/knock-pi.log" "已敲门" "P139 4.2 空框敲门成功"

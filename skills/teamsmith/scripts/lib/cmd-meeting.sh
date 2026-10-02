@@ -497,6 +497,21 @@ team_meeting_resolve_participant() { # <slug> <项目> <session>
   return 1
 }
 
+# 敲门账本**只有这一处写法**（P160 F1）：立刻投递与排队后投递写出的行逐字节同形，
+# 时间戳是**实际投递**的时刻。入队那一刻不写（共享区零写入的承诺不破）；投递确认后由
+# outbox 的 `team_outbox_record_delivery_receipt` 调到这里补记同一轮次。
+# 会议目录不在（会议被清掉）就什么都不写 —— 绝不凭空造出一个会议目录。
+team_meeting_knock_ledger_record() { # <slug> <turn> <peer_proj> <sender> <intent>
+  local slug="$1" turn="$2" proj="$3" sender="$4" intent="$5" d=""
+  [ -n "$slug" ] || return 0
+  case "$turn" in ''|*[!0-9]*) return 0 ;; esac
+  d="$(team_meeting_dir "$slug")"
+  [ -d "$d" ] || return 0
+  printf '%s knocked %s by %s intent=%s [meeting:%s#%s]\n' \
+    "$(team_timestamp)" "${proj:--}" "${sender:--}" "${intent:--}" "$slug" "$turn" >> "$d/knocks.log"
+  return 0
+}
+
 # 敲门：唯一允许的跨 session 动作 —— 只发一条"有会议消息"通知，对方自己决定怎么回。
 # 敲门走**受守卫的投递**（D5）：对方输入框有空就打字，有草稿就入队报 queued；本函数不再自己 send-keys。
 # 载荷带轮次标识（R2）：[meeting:<slug>#<N>] —— 接收方只凭自己的 read/<project>.seq 就能判 stale。
@@ -560,7 +575,11 @@ team_meeting_knock() { # <slug> <sender> <intent> [<turn>]
     return 0
   fi
   local notice="[meeting:$slug#$turn] $sender 有新发言（intent=$intent）→ 跑 $TEAM_CLI meeting read $slug"
-  team_send_guarded "$target" "$notice" meeting-knock --from "$sender"
+  # P160 F1：`meeting-ledger` 是「真投出去了才补账本」的凭据 —— 入队时**不写**共享区（规格承诺
+  # 不破），由 outbox 在投递确认后调 team_meeting_knock_ledger_record 补记同一轮次（tab 分隔字段）。
+  local ledger
+  ledger="$(printf '%s\t%s\t%s\t%s' "$slug" "$turn" "$peer_proj" "$intent")"
+  team_send_guarded "$target" "$notice" meeting-knock --from "$sender" --meeting-ledger "$ledger"
   case "$TEAM_SEND_OUTCOME" in
     delivered|watched|unknown-sent)
       if [ "$TEAM_SEND_OUTCOME" = "unknown-sent" ]; then
@@ -569,8 +588,7 @@ team_meeting_knock() { # <slug> <sender> <intent> [<turn>]
         team_ok "已敲门：$target（[meeting:$slug#$turn]）"
       fi
       # knocks.log 记同一个轮次标识（R2：接收方不读发送方仓库也能判这条通知指的是哪一轮）
-      printf '%s knocked %s by %s intent=%s [meeting:%s#%s]\n' "$(team_timestamp)" "$peer_proj" "$sender" "$intent" "$slug" "$turn" \
-        >> "$(team_meeting_dir "$slug")/knocks.log" ;;
+      team_meeting_knock_ledger_record "$slug" "$turn" "$peer_proj" "$sender" "$intent" ;;
     queued)
       team_dim "  敲门 queued：对方 PM 输入框里有草稿，通知已入队（$TEAM_CLI outbox list），清空后自动投递" ;;
     *)

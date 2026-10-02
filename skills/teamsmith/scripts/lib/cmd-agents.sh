@@ -1521,10 +1521,27 @@ team_notify_dedup_key() { # <agent> <msg>
   printf 'notify|%s|%s:%s\n' "$1" "$len" "$sum"
 }
 
-# R2 · 发送方工作树里的修订标识（<ID> 取自分支，tip 取自 HEAD）：
-#   能证明的就写「task=<ID> tip=<7-hex>」，推不出来（没有该工作树/分支不是任务分支/git 失败）就什么都不写。
+# P160 F3 · 任务标识的证据：<ID> 必须在 state/<sender>.env 的 task=、看板行或任务书里真的存在。
+#   席位名（agent/<席位> 这类分支的后缀）不是任务 —— 没有证据就什么都不盖（不编造）。
+team_notify_task_proven() { # <sender> <id> → 0 = 这个 ID 有任务证据
+  local sender="$1" id="$2" cur=""
+  [ -n "$id" ] || return 1
+  cur="$(team_state_get "$sender" task '' 2>/dev/null || true)"
+  if [ -n "$cur" ] && [ "$cur" = "$id" ]; then return 0; fi
+  if team_board_has "$id"; then return 0; fi
+  if [ -n "$(team_task_briefs "$id")" ]; then return 0; fi
+  return 1
+}
+
+# R2/P160 · 发送方工作树里的修订标识（<ID> 取自分支，tip 取自 HEAD）：
+#   只有**能证明**是任务分支才盖：分支形如 task/<ID>-…（agent/* 与其它分支没有任务语义，一律不盖），
+#   且 <ID> 在 state/<sender>.env 的 task=、看板行或任务书里存在；推不出来就什么都不写。
 #   绝不编造：工作树外的手工 notify 没有标识，不是「按收件人猜一个」。
-team_notify_rev_stamp() { # <sender> → "task=<ID> tip=<短哈希>" | 空
+#   P160 F2：tip = HEAD 的**前 12 个十六进制字符**，工具自己截 —— 不用 `--short`（它服从 core.abbrev
+#   与对象数，同一 HEAD 会在 CLI 与扩展两处盖出不同拼写）。接收方不需要 checkout：reviews/<ID>.md 里记的
+#   HEAD 与 tip **互为前缀**（两边指向同一个 revision）就算这个修订已经判过（`team review` 今天写 9 位，
+#   12 位的 wire 形状让这个判定不受 Git 设置影响），见 references/protocol.md 与 change 的 notify-and-inbox 规格。
+team_notify_rev_stamp() { # <sender> → "task=<ID> tip=<12-hex>" | 空
   local sender="${1:-}" wt="" branch="" task="" id="" tip=""
   case "$sender" in
     ""|-) return 0 ;;
@@ -1534,12 +1551,13 @@ team_notify_rev_stamp() { # <sender> → "task=<ID> tip=<短哈希>" | 空
   [ -d "$wt" ] || return 0
   branch="$(team_worktree_branch "$wt" 2>/dev/null || true)"
   case "$branch" in
-    task/*|agent/*) ;;
+    task/*) ;;
     *) return 0 ;;
   esac
-  task="${branch#*/}"
+  task="${branch#task/}"
   id="${task%%-*}"
-  tip="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || true)"
+  team_notify_task_proven "$sender" "$id" || return 0
+  tip="$(git -C "$wt" rev-parse HEAD 2>/dev/null | cut -c1-12 || true)"
   [ -n "$id" ] && [ -n "$tip" ] && printf 'task=%s tip=%s\n' "$id" "$tip"
   return 0
 }

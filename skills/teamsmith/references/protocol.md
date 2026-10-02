@@ -68,6 +68,18 @@ Guards and limitations:
 - The inbox is transient state (gitignored); the durable record is still the report + verification + decision log.
 - The same briefing is sent once per `TEAM_NOTIFY_DEDUP_SEC` seconds: Pi may settle several times inside one stretch
   of work.
+- **A notice names the revision it describes** (R2/P139; width and branch proof fixed by P160): the durable inbox
+  line and the knock payload carry `task=<ID> tip=<12-hex>` — the **first twelve hex characters of the branch tip,
+  truncated by the sender itself** (`git rev-parse HEAD | cut -c1-12`; the extension's `TIP_WIDTH`), never a Git
+  abbreviation whose width follows `core.abbrev` or the object count, so one HEAD has one spelling in both senders.
+  The stamp is written only when the branch can **prove** it is a task: `task/<ID>-…` and the ID exists in
+  `state/<agent>.env` (`task=<ID>`), on the board, or as a task brief. An ordinary seat branch (`agent/<seat>`), a
+  protected-branch or detached worktree and a manual `team notify` outside a worktree stamp nothing — the identifier
+  is never invented from a branch or seat name.
+- **The receiver never needs a checkout**: the notice is stale when the board row is `done`/`closed`, or when the
+  HEAD recorded in `docs/team/reviews/<ID>.md` and the tip name the same revision — one is a prefix of the other
+  (the record `team review` writes today is nine hex wide; a hand-written one may carry the full id; the twelve-wide
+  wire form is what keeps the decision stable across Git settings).
 - For a proactive notification (blocked, someone else's bug) use `team notify <agent> "<one line>"`, which arrives
   earlier than the automatic one. The **recipient** names the durable inbox file (`docs/team/inbox/<agent>.md`);
   the PM is still the **knock destination** — the queue entry's declaration and the wake pointer both name that

@@ -20,8 +20,9 @@ indistinguishable from a fresh one.
 - **R1 — identity** (`meeting` ADDED): a participant is recognized by any recorded name — project name,
   repository basename, or invited session; `state.env` records both.
 - **R2 — stale-proof notices** (`meeting`/`notify-and-inbox` ADDED/MODIFIED): a knock carries
-  `[meeting:<slug>#<N>]`, a turn-end notification carries `task=<ID> tip=<7-hex>`; staleness is decidable from the
-  receiver's ledger (read position; board/review HEAD), no checkout.
+  `[meeting:<slug>#<N>]` and its ledger line lands at delivery (queued knocks included); a turn-end notification
+  carries `task=<ID> tip=<12-hex>` — a fixed-width prefix both senders truncate themselves, on a task branch with
+  evidence only; staleness is decidable from the receiver's ledger (read position; board/review HEAD), no checkout.
 - **Backfill**: the read position behind "unread" is specified; MODIFIED blocks keep their base scenarios.
 
 ## Capabilities

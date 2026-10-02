@@ -19,7 +19,7 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -46,6 +46,12 @@ const DEFAULTS: Cfg = {
   log: '/tmp/teamsmith-notify.log',
   roster: [],
 }
+
+/** P160 F2 · 修订标识的宽度：HEAD 的**前 12 个十六进制字符**，工具自己截（不用受 core.abbrev
+ *  和对象数影响的 `--short`）—— 与 CLI 的 `cut -c1-12` 是同一契约，同一 HEAD 在两个发送方逐字节相同。
+ *  接收方不需要 checkout：reviews/<ID>.md 里记的 HEAD 与 tip 互为前缀（同一个 revision）就算已判过
+ *  （`team review` 今天写 9 位，12 位的 wire 形状让这个判定不受 Git 设置影响）。 */
+const TIP_WIDTH = 12
 
 /** 本扩展所在 skill 的目录（<skill>/extension/team-notify.ts） */
 function skillDir(): string {
@@ -172,6 +178,29 @@ function tail(line: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
+/** P160 F3 · 任务标识的证据：<ID> 必须在 state/<sender>.env 的 task=、看板行或任务书里真的存在
+ *  （与 CLI 的 team_notify_task_proven 同一组判据）。席位名（agent/<席位>）不是任务；没有证据就不盖。 */
+function hasTaskEvidence(root: string, cfg: Cfg, agent: string, id: string): boolean {
+  const stateDir = process.env.TEAM_STATE_DIR || join(root, '.pi/team/state')
+  try {
+    const st = readFileSync(join(stateDir, `${agent}.env`), 'utf8')
+    if (st.split(/\r?\n/).some(l => l.trim() === `task=${id}`)) return true
+  } catch { /* 没有这个席位的状态记录 */ }
+  const tasksDir = join(root, cfg.docsDir, 'tasks')
+  try {
+    if (existsSync(join(tasksDir, `${id}.md`))) return true
+    if (readdirSync(tasksDir).some(f => f.startsWith(`${id}-`) && f.endsWith('.md'))) return true
+  } catch { /* 没有任务书目录 */ }
+  try {
+    for (const line of readFileSync(join(root, cfg.docsDir, 'BOARD.md'), 'utf8').split(/\r?\n/)) {
+      if (!line.trimStart().startsWith('|')) continue
+      const cells = line.split('|')
+      if ((cells[1] ?? '').trim() === id) return true
+    }
+  } catch { /* 没有看板 */ }
+  return false
+}
+
 /** 一条 assistant 消息里的文本（字符串或 content parts） */
 function messageText(content: unknown): string {
   if (typeof content === 'string') return content
@@ -293,11 +322,13 @@ export default function (pi: ExtensionAPI) {
     const branch = run('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'])
     const task = /^(?:task|agent)\/([^/]+)/.exec(branch)?.[1] ?? ''
     const id = task.split('-')[0] || 'unknown'
-    // R2：通知要指认它讲的是哪个修订 —— task 从分支推，tip 从 HEAD 短哈希；
-    // 非任务分支（主工作树/临时工作树）没有 task 语义就不盖（宁可没有，不许编造）。
-    const isTaskBranch = /^(?:task|agent)\//.test(branch)
-    const tip = isTaskBranch ? run('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD']) : ''
-    const revStamp = isTaskBranch && tip ? ` · task=${id} tip=${tip}` : ''
+    // R2/P160：通知要指认它讲的是哪个修订 —— task 从分支推，tip 从 HEAD 推；非任务分支（主工作树/
+    // 临时工作树/普通席位分支 agent/<席位>）没有 task 语义就不盖（宁可没有，不许编造），
+    // 而且 task/<ID>-… 的 <ID> 必须有任务证据（state/<agent>.env 的 task=、看板行或任务书）。
+    const isTaskBranch = /^task\//.test(branch)
+    const proven = isTaskBranch && id !== 'unknown' && hasTaskEvidence(root, cfg, agent, id)
+    const tip = proven ? run('git', ['-C', cwd, 'rev-parse', 'HEAD']).slice(0, TIP_WIDTH) : ''
+    const revStamp = tip ? ` · task=${id} tip=${tip}` : ''
     const dirty = run('git', ['-C', cwd, 'status', '--porcelain']).split('\n').filter(Boolean).length
     // 未提交 = 没交付干净：让 PM 一眼看出来（CEP 实测：这种状态和"干净交付"在通知里长得一样）
     const dirtyFlag = dirty > 0 ? `⚠ 未提交 ${dirty} 个文件 · ` : '' 
