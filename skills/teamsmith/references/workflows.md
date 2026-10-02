@@ -393,12 +393,16 @@ logged).
 
 ### Boundaries (deliberate)
 
-- **It does not manage tmux layout**: a missing session/window is only reported, never rebuilt
-  (`TEAM_PULSE_REBUILD_TMUX=0`, the default).
-  To let it recover from "the machine rebooted / the window was closed" by itself, set `TEAM_PULSE_REBUILD_TMUX=1`.
-- **It does not manage agents**: an agent with a task whose window is gone is not resumed automatically — that is the
-  PM's call (the PM runs `team resume --dry-run` at the start of its shift and decides; a human can do it in one shot
-  with `team up --agents`).
+- **It does not manage tmux layout by default**: a missing session/window is only reported, never rebuilt
+  (`TEAM_PULSE_REBUILD_TMUX=0`).
+  With `TEAM_PULSE_REBUILD_TMUX=1` it rebuilds the session and the PM window when it notices they are gone — useful
+  for "the window was closed while the server still lives". It **cannot** help when the tmux *server* dies: the
+  patrol runs in a pane of that server, so it dies with it, and nothing in the project restarts it (a human runs
+  `team up`, which also rebuilds the session).
+- **It does manage stopped agents, in one narrow way**: a seat with an unfinished task whose process has stopped is
+  auto-dispatched back onto **the same task** (the resume path in `cmd-watch.sh`; each attempt writes
+  `resume agent=<a> task=<id>` to `state/watchdog.log`). This is not a substitute for the PM's own `team resume`
+  decision — it exists so a seat that died mid-task comes back without waiting for a human.
 - **It does not manage model quota and never merges**: those are the PM's job.
 - **The PM is not required to run continuously**: between pending batches the PM may sit quietly (or not be running at
   all); the pulse will not wake it just to "keep it alive".

@@ -259,9 +259,13 @@ an occupant (`unknown`).
 - Division of labour with instant notifications: the notification at the end of an agent's turn is **instant** (the
   notify extension: write the inbox + knock on the PM window); the pulse's reminder is a **timed fallback**: as
   long as that batch is unread/unhandled, the next round (or a change in pending work) raises it again.
-- Boundaries: it does not manage tmux layout (`TEAM_PULSE_REBUILD_TMUX=0`, a lost state is only reported), does not
-  manage agents (the PM's job), does not manage model quota and never merges automatically. Runaway protection: the
-  auto-start quota of 5 per hour plus the pulse's own pid lock.
+- Boundaries: it does not manage tmux layout by default (`TEAM_PULSE_REBUILD_TMUX=0`, a lost session/window is only
+  reported; with the knob set to 1 it rebuilds the session and the PM window **when it notices they are gone** --
+  which cannot help if the tmux *server* died, because the patrol itself lives in a pane of that server). It does
+  **not** leave agents alone, though: a seat that has stopped while its task is unfinished is auto-dispatched back
+  onto the same task (`cmd-watch.sh`'s resume path, one `resume agent=<a> task=<id>` line in `watchdog.log` per
+  attempt). It does not manage model quota and never merges automatically. Runaway protection: the auto-start quota
+  of 5 per hour plus the pulse's own pid lock.
 
 Why the boundaries are drawn this narrow: an "everything-managing" daemon would manipulate tmux layout, agent
 lifecycles and model quota at the same time, and when something breaks nobody can tell who corrupted the state;
