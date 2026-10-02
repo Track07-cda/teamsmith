@@ -14,6 +14,10 @@
 #   ⑤ 内部部分树：删 SCOPE.md → --select 18 红并点名；删 opsx-apply.md → --select 19 红并点名（不许跳过）
 #   ⑥ 覆盖守门：一条旧断言被换成前提跳过 → coverage-inventory.sh --compare 点名；还原后绿
 #   ⑦ coverage-inventory.sh 自身的两向自检（合成清单：新增允许；丢标签/降计数/降通过数/丢段必红）
+#   ⑨ §12k/§31 的内部面前提在产品面**逐条**跳过、而产品红线照旧：牙齿一（植入裸 tmux 调用 → §31
+#      判红并点名；前提：那棵树里就在 P162 的 tmux() 包装）· 牙齿一的两个影子（一：把 lint 的
+#      归属规则改回「同目录互认」→ 牙齿一必须随之变红；二：用 lint 自己的豁免机制把植入调用记绿 →
+#      牙齿一必须失去牙）· 牙齿二（清单含产品路径 → 不享受前提跳过）· 产品面正常时判**净**
 set -uo pipefail
 
 SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -346,6 +350,10 @@ phas "⑨ 产品面：§12k 的 AGENTS.md 比对按前提跳过并点名" "$(sed
 phas "⑨ 产品面：§31 的豁免清单按前提跳过并点名 docs/team/reports/**" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po2.log")" "docs/team/reports/**"
 pnot "⑨ 产品面：§12k 的比对没被执行（没有它的 ok 行）" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po2.log")" "✓ 7.4 repo AGENTS.md 与模板逐字一致"
 peq "⑨ 产品面：--select 12k,31 的红数为 0" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po2.log" | grep -c '^  ✗ ' || true)" "0"
+# 反向控制（P173）：§31 里的 M28 判定必须**照常执行并判净** —— 不是被弄成恒红（牙齿一靠的就是它
+# 真的会红），也不是恒跳过。判定行与前提跳过的行文本不同（多一段「另有 N 个历史豁免文件」）。
+phas "⑨ 产品面：§31 的 M28 判定照常执行并判净（不是恒红、也不是被跳过）" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po2.log")" "✓ M28 真树：变更类 tmux 调用全部有隔离证据（另有 0"
 
 # 源检出本身是产品面（导出树）时，这棵树里没有 §12k/§31 要判的内部材料（仓库 AGENTS.md 的历史段落 /
 # 豁免清单冻结的 16 个证据包）—— 这不是失败也不是通过：可见跳过，并点名为什么。内部检出里照旧执行。
@@ -381,14 +389,64 @@ peq "⑨ 继承身份下仍是同一组 11 条前提跳过" \
 peq "⑨ 继承身份下零红" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-env.log" | grep -c '^  ✗ ' || true)" "0"
 
 # 牙齿一：产品面树里塞一条裸 tmux 变更调用（真实副本，不穿软链）→ §31 必须红并点名该文件
-# （这一条证明「豁免清单跳过」不会把产品文件里的真问题吞掉；RED 与跳过可以共存，跳过不是失败也不是通过。）
+# （这一条证明「豁免清单跳过」不会把产品文件里的真问题吞掉，且 §31 的产品判定**真的接在那一棵树上**：
+#  P173 之前，同目录 smoke.sh 的 tmux() 包装让这条植入被 lint 记成「有隔离证据」—— 牙齿就是被它吞的。）
 P_TEETH="$(scratch_tree teeth product-only)"
 printf '\ntmux kill-server\n' >> "$P_TEETH/skills/teamsmith/tests/tmp-hygiene.sh"
+# 前提：这棵树里**必须**有 P162 那个同名包装（`smoke.sh` 的 `tmux()`）—— 牙齿咬的正是「同目录互认」这个
+# 形状；包装哪天不在了，这条牙齿会因为别的原因变绿，那就得有人重新想它还在测什么。
+if grep -q 'tmux() {  # P162' "$P_TEETH/skills/teamsmith/tests/smoke.sh"; then
+  pok "⑨ 牙齿一的前提：那棵树里就在 P162 的 tmux() 包装（smoke.sh）—— 咬的正是「同目录互认」这个形状"
+else
+  pbad "⑨ 牙齿一的前提不在：树里的 smoke.sh 没有 P162 的 tmux() 包装，这条牙齿会因别的原因通过"
+fi
 if nest "$P_TEETH" "$T/nest-teeth.log" --select 31; then
-  pbad "⑨ 产品面树里出现裸 tmux 变更调用，§31 仍然绿（跳过把产品问题吞了）"
+  pbad "⑨ 产品面树里出现裸 tmux 变更调用，§31 仍然绿（产品问题被吞了：判定没接在现场）"
 else
   phas "⑨ 产品面树里的裸 tmux 调用照旧判红（RED 点名）" "$(cat "$T/nest-teeth.log")" "tmp-hygiene.sh"
   phas "⑨ 裸调用让 M28 判红（不是把整条检查记成跳过）" "$(cat "$T/nest-teeth.log")" "M28 真树有未隔离的 tmux 变更命令"
+fi
+
+# 牙齿一的**影子一**（P173，任务书更正里的要求）：把那棵树里的 lint 归属规则**改回「同目录互认」**
+# （删掉 `return undef if $name eq 'tmux';` 那一行 = P173 之前的行为）→ 同一条植入又被记成「有隔离证据」、
+# §31 判绿、**牙齿一随之变红**。它证明牙齿咬的是归属规则本身，而不是一条恒绿的装饰。
+# 括号表与 P170 的独立验证一致（无 wrapper 的树 → RED；含 P162 wrapper 的树 → 旧规则下 ok）。
+P_MUT="$(scratch_tree mutant product-only)"
+printf '\ntmux kill-server\n' >> "$P_MUT/skills/teamsmith/tests/tmp-hygiene.sh"
+MUT_LINT="$P_MUT/skills/teamsmith/tests/tmux-lint.pl"
+# 变异 = 把 P173 那一改**整体退回去**：①删掉归属守卫那一行；②它自己的自检夹具也跟着退回旧期望
+# （generic 跨文件包装在旧规则下就该是「净」）—— 这样变异体是一份**自洽**的旧实现，
+# §31 的红只能来自归属规则本身，不会与「自检夹具红」搅在一起。
+perl -0pi -e 's/\n    return undef if \$name eq '"'"'tmux'"'"';\n/\n/' "$MUT_LINT"
+perl -0pi -e 's/(\x27cross_file_generic_wrapper\x27,\s*"tmux kill-server\\n",\s*)1,/${1}0,/' "$MUT_LINT"
+MUT_VERDICT="$(perl "$MUT_LINT" --root "$P_MUT/skills/teamsmith/tests" --list 2>/dev/null | grep 'tmp-hygiene.sh' | head -1)"
+if grep -q "return undef if \$name eq 'tmux';" "$MUT_LINT"; then
+  pbad "⑨ 影子一：归属规则没被改回去（守卫行还在）—— 这条控制空转了"
+elif ! perl "$MUT_LINT" --selftest >/dev/null 2>&1; then
+  pbad "⑨ 影子一：变异后的 lint 自检不绿（夹具没跟着退回去）—— §31 的红会来自自检而不是归属规则"
+elif [ "${MUT_VERDICT%% *}" != "ok" ]; then
+  pbad "⑨ 影子一：归属规则改回「同目录互认」后，植入的裸调用仍不是 ok（实际：${MUT_VERDICT:-无输出}）—— 变异没打对地方"
+elif nest "$P_MUT" "$T/nest-mutant.log" --select 31; then
+  pok "⑨ 影子一：归属规则改回「同目录互认」→ 同一条植入又被记成有隔离证据、§31 判绿 —— 牙齿一随之变红（牙齿真的咬在归属规则上）"
+else
+  pbad "⑨ 影子一：归属规则改回「同目录互认」后 §31 没有变回绿（$T/nest-mutant.log）—— 牙齿红的原因可能与归属规则无关"
+fi
+
+# 牙齿一的**影子二**（P173）：用 lint 自己的豁免机制（sha256 冻结 + 条数）把植入的调用记成豁免 → §31 的
+# 判定必然变绿 —— 牙齿一必须**随之失去牙**（嵌套 run 退出 0）。这一条证明牙齿接在 §31 的判定上，
+# 不是「嵌套 run 因为别的原因非零」；影子一证明的是「接在归属规则上」，两条合起来才把牙齿钉死。
+# 清单里带一条**产品**路径，§31 就不走「豁免清单」前提跳过，而是带这份清单跑（同下面牙齿二的前提）。
+P_SHADOW="$(scratch_tree shadow product-only)"
+printf '\ntmux kill-server\n' >> "$P_SHADOW/skills/teamsmith/tests/tmp-hygiene.sh"
+{
+  sed '/^[^#]/d' "$REAL_ROOT/skills/teamsmith/tests/tmux-lint-legacy.txt"
+  printf '%s  1  skills/teamsmith/tests/tmp-hygiene.sh  # P173 影子：把植入的裸调用按 lint 自己的豁免机制记绿\n' \
+    "$(sha256sum "$P_SHADOW/skills/teamsmith/tests/tmp-hygiene.sh" | cut -d' ' -f1)"
+} > "$P_SHADOW/skills/teamsmith/tests/tmux-lint-legacy.txt"
+if nest "$P_SHADOW" "$T/nest-shadow.log" --select 31; then
+  pok "⑨ 影子：lint 用豁免机制把植入的调用记绿 → 牙齿一随之失去牙（判定确实接在 §31 的 lint 上）"
+else
+  pbad "⑨ 影子：植入的调用已被 lint 豁免、§31 已判绿，牙齿却仍红（牙齿不是接在 §31 的判定上）"
 fi
 
 # 牙齿二：产品面树里的豁免清单若含**产品**路径，§31 不得享受「豁免清单」前提跳过（逐条检查的前提）

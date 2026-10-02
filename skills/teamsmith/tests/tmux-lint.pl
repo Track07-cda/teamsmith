@@ -19,8 +19,14 @@
 #   判定口径（每条变更命令必须命中其一，缺一即红）：
 #     A. 命令里带 `-L <名字≠default>` 或 `-S <路径，不以 /default 结尾>`；
 #     B. `env -u TMUX`（或同一命令里 `unset TMUX`）**且**同一命令里 `TMUX_TMPDIR=<非默认目录的值>`；
-#     C. 调用的是**本文件/同目录**里定义的隔离包装（体内命中 A 或 B，例如
-#        `m24_tmux() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$D" tmux "$@"; }`）；
+#     C. 调用的是**本文件**定义的隔离包装，或**同目录**里定义的**专用名**隔离包装（体内命中 A 或 B，
+#        例如 `m24_tmux() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$D" tmux "$@"; }`）；
+#        例外（P173）：**通用命令名 `tmux` 不跨文件互认** —— 一个文件里定义 tmux() 只对该文件生效。
+#        现场：smoke.sh 的 P162 包装（`env -u TMUX … TMUX_TMPDIR=… "$REAL_TMUX"`，合法且必需）让
+#        同目录**别的**文件（tmp-hygiene.sh）里的裸 `tmux kill-server` 也成了「有隔离证据」——
+#        产品面检出的牙齿（植入裸调用必须判红并点名）因此失去牙。名字就是命令本身时，「同目录有人
+#        包过它」不是这个文件里那次调用的任何证据；专用名（m24_tmux / pkg_tm …）跨文件互认照旧
+#        （夹具 source 同目录的 lib 是常规写法）。
 #     D. 文件级白名单：文件在**使用之前**顶层 `unset …TMUX…`，并在顶层把 TMUX_TMPDIR 指到私有目录
 #        （smoke.sh 第 42 行式的 unset 就是这一条），且此后没再把 TMUX 导回来。
 #     M41 追加一条**否定式**规则：变更命令**不许写字面绝对路径**（`/usr/bin/tmux kill-server`）——
@@ -45,6 +51,8 @@
 #       判据内；这些夹具的 tmux 调用都走 `-L`，真要藏成字符串对只能人工看。
 #     * `tmux new-window … "<窗口命令串>"` 里嵌的 tmux 调用不递归扫描（窗口命令串按数据看）。
 #     * `-L "$v"`/`-S "$p"` 用变量时按字面量判：只挡得住字面写 `default` 的。
+#     * 同一文件里 `tmux()` 的定义落在**条件分支或子壳**里时，文件级白名单照旧按「该文件有包装」
+#       处理：这条静态判据只读文本，读不出某次调用实际有没有经过那个函数（P173 记录的边界）。
 use strict;
 use warnings;
 use File::Basename qw(dirname basename);
@@ -260,6 +268,9 @@ sub collect_wrappers {
 sub wrapper_iso {
     my ($file, $name) = @_;
     return $WRAP_FILE{$file}{$name} if exists $WRAP_FILE{$file}{$name};
+    # P173：通用命令名 `tmux` 不做目录级回退 —— 同目录**别的**文件里定义的 tmux() 不能给本文件的
+    # 裸调用背书（真实的 tmux 命令就在 PATH 里，那条调用根本不会进到别人的函数）。专用名跨文件互认。
+    return undef if $name eq 'tmux';
     my $d = dirname($file);
     return $WRAP_DIR{$d}{$name} if exists $WRAP_DIR{$d}{$name};
     return undef;    # 不是已知包装
@@ -517,16 +528,29 @@ if ($SELFTEST) {
         ['real_tmux_var_iso',      "REAL_TMUX=/usr/bin/tmux\n\"\$REAL_TMUX\" -L private-name kill-server\n", 0],
         ['real_tmux_var_no_iso',   "REAL_TMUX=/usr/bin/tmux\n\"\$REAL_TMUX\" kill-server\n", 1],
         ['braced_tmux_var_iso',    "TMUX_BIN=/usr/bin/tmux\n\"\${TMUX_BIN}\" -L private-name kill-server\n", 0],
+        # P173：包装的跨文件互认只对**专用名**成立；通用命令名 `tmux` 只在本文件里生效。
+        # 形态来源：smoke.sh 的 P162 tmux() 包装 + 同目录 tmp-hygiene.sh 里的裸调用 —— 产品面检出的
+        # 牙齿（植入裸调用必须判红）正是被这个形状吞掉的。第四项 = 同一目录里的其它文件（可选）。
+        ['cross_file_named_wrapper',   "ptm kill-server\n", 0,
+         { 'lib.sh' => "ptm() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR=\"\$D\" tmux \"\$@\"; }\n" }],
+        ['cross_file_generic_wrapper', "tmux kill-server\n", 1,
+         { 'sibling.sh' => "tmux() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR=\"\$D\" \"\$REAL_TMUX\" \"\$@\"; }\n" }],
     );
     my $bad = 0;
     for my $c (@cases) {
-        my ($name, $src, $want) = @$c;
+        my ($name, $src, $want, $extra) = @$c;
         my $dir = File::Spec->catdir($tmp, $name);
         File::Path::make_path($dir);
         my $f = File::Spec->catfile($dir, 'case.sh');
         open(my $o, '>', $f) or die "写不了 $f: $!";
         print $o $src;
         close $o;
+        for my $fn (sort keys %{ $extra || {} }) {
+            my $ef = File::Spec->catfile($dir, $fn);
+            open(my $eo, '>', $ef) or die "写不了 $ef: $!";
+            print $eo $extra->{$fn};
+            close $eo;
+        }
         my $rc = system($^X, abs_path($0), '--root', $dir, '--quiet') >> 8;
         my $got = $rc ? 1 : 0;
         my $ok = ($got == $want);
