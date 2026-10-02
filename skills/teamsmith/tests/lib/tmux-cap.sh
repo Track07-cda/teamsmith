@@ -12,6 +12,10 @@
 # 只定义函数，不自动执行：没有 tmux 的机器 source 它也不会失败。
 # shellcheck shell=bash
 
+# P162：破坏性调用（kill-server）动手前先证明私有 socket 生效（不成立 → 拒绝执行）
+# shellcheck source=tmux-iso.sh
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tmux-iso.sh"
+
 # M47：`#{bracket_paste_flag}` 是 tmux **3.7 起**才有的格式（同族的旧 tmux 上产品保守地走「多行落文件
 # + 一行指针」，那不是缺陷，是无从探测）。
 tmux_has_bracket_paste_format() {
@@ -21,8 +25,11 @@ tmux_has_bracket_paste_format() {
     v="$(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$d" tmux display-message -p -t "$s" '#{bracket_paste_flag}' 2>/dev/null)"
     [ -n "$v" ] && rc=0
   fi
-  # 自己的私有 server：只杀自己刚起的那个（私有目录 + env -u TMUX，构造上打不到调用者的 server）
-  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$d" tmux kill-server 2>/dev/null || true
+  # 自己的私有 server：只杀自己刚起的那个（私有目录 + env -u TMUX，构造上打不到调用者的 server）。
+  # P162：动手前先证明隔离生效；不成立就拒绝执行（被 source 的库，绝不能 exit）。
+  if tmux_iso_guard_soft "tmux-cap" "能力探测的私有 server 收尾" --tmpdir "$d"; then
+    env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$d" tmux kill-server 2>/dev/null || true
+  fi
   rm -rf "$d"
   return $rc
 }

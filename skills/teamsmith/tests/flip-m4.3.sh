@@ -20,6 +20,8 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$SELF_DIR/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$SELF_DIR/lib/tmux-iso.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m4.3: 找不到 git 仓库（本脚本用 git archive 取修复前的树）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m4.3: 需要 tmux（A/B 的现场是 tmux 现场的）\n' >&2; exit 2; }
@@ -54,7 +56,10 @@ chmod +x "$TMP/shim/tmux"
 PATH="$TMP/shim:$PATH"; export PATH
 export TMUX="$SOCK,0,0" TMUX_PANE=""
 cleanup() {
-  tmux kill-server >/dev/null 2>&1 || true
+  # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  if tmux_iso_guard_soft "flip-m4.3" "收尾：私有 server" --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$SOCK" --own-root "$TMP"; then
+    tmux kill-server >/dev/null 2>&1 || true
+  fi
   tmp_root_reap_all
 }
 trap cleanup EXIT

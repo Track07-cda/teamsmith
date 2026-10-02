@@ -21,6 +21,8 @@ FIXTURE_TUI="$SELF_DIR/fake-tui.py"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$SELF_DIR/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$SELF_DIR/lib/tmux-iso.sh"
 KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -69,7 +71,9 @@ real_fp() { # <根> → 目录指纹（不存在也算一个值）
 REAL_BEFORE="$(real_fp "$REAL_MAIN")"
 
 cleanup() {
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  tmux_iso_guard_soft "flip-glue" "收尾：私有 session" --tmpdir "${TMUX_TMPDIR:-}" --own-root "$SB" \
+    && tmux kill-session -t "$SESSION" 2>/dev/null || true
   if [ "$KEEP" = "1" ]; then printf '保留临时目录：%s\n' "$SB"
   else tmp_root_reap_all; fi
 }
@@ -100,6 +104,7 @@ case "$PATHS" in
 esac
 
 # 夹具 pane：输入框里已经有草稿
+tmux_iso_require "flip-glue" "重建私有 session 前收掉旧的" --tmpdir "${TMUX_TMPDIR:-}" --own-root "$SB"
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -n pm -x 100 -y 24 -c "$REPO" || { fail "建 tmux session 失败"; exit 2; }
 tmux new-window -d -t "$SESSION" -n dev -c "$REPO" \

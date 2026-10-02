@@ -40,6 +40,8 @@ fi
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$here/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$here/lib/tmux-iso.sh"
 # P68/fixture-waits-for-landed-reads：控制台自己的状态（首帧标题、日志、capacity.log 行数）也要等数据态，
 # 不再是固定 sleep + 单次采样。复用 P48 的等待引擎（settled frame / 轮数 / 上界 / 归因），不另造一套。
 . "$here/lib/pty-wait.sh"
@@ -64,7 +66,9 @@ current=""
 
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
-  tmux -L "$sock" kill-server 2>/dev/null || true
+  # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  tmux_iso_guard_soft "panel-b3" "收尾：私有 server" --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$sock" \
+    && tmux -L "$sock" kill-server 2>/dev/null || true
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   if [ "$keep" = "1" ]; then
     printf '\n保留夹具目录：%s\n' "$tmp"
@@ -204,6 +208,8 @@ server_up() { # <name> → fresh project + private tmux session
   ( cd "$ROOT" && git init -q -b main && git config user.email b3@teamsmith && git config user.name b3 \
     && echo "# $1" > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
   mkdir -p "$ROOT/docs/team" "$ROOT/.pi/team/state"
+  # P162：重启前的 kill-server 也要先证明私有 socket 生效（不成立 → 硬停，绝不静默回退）
+  tmux_iso_require "panel-b3" "重起私有 server 前的 kill-server" --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$sock"
   tmux -L "$sock" kill-server 2>/dev/null || true
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   ( cd "$ROOT" && bash "$skill/scripts/team" init --session "$sess" --agents "dev verify" --vcs local \

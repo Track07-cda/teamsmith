@@ -18,6 +18,8 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$SELF_DIR/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$SELF_DIR/lib/tmux-iso.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m6.5: 找不到 git 仓库（本脚本需要 git archive 取修复前的树）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m6.5: 需要 tmux（本复现是 tmux 现场的）\n' >&2; exit 2; }
@@ -38,7 +40,11 @@ SESS="teamsmith-flip-m65-$$"
 # unset TMUX + 私有 TMUX_TMPDIR；工具在私有 server 的窗口里跑，继承同一套环境。口径见 tests/tmux-lint.pl。
 unset TMUX TMUX_PANE 2>/dev/null || true
 TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
-cleanup() { tmux kill-session -t "$SESS" 2>/dev/null || true; tmp_root_reap_all; }
+cleanup() { # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  tmux_iso_guard_soft "flip-m6.5" "收尾：私有 session" --tmpdir "${TMUX_TMPDIR:-}" --own-root "$TMP" \
+    && tmux kill-session -t "$SESS" 2>/dev/null || true
+  tmp_root_reap_all
+}
 trap cleanup EXIT
 
 # ---- 夹具：临时仓库 + teamsmith init + 记录 argv 的假 agent --------------------
@@ -65,6 +71,8 @@ sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$TMP/fake-bin/pi-log\"|" .pi/team/config
 
 # ---- 造「cwd 在项目内 + 前台不是 shell（tmux）」这一格，然后跑某一版 skill 的 up ----
 false_liveness_scene() {
+  # P162：重建现场前先证明私有 socket 生效（不成立 → 硬停）
+  tmux_iso_require "flip-m6.5" "重建现场：收掉旧 session" --tmpdir "${TMUX_TMPDIR:-}" --own-root "$TMP"
   tmux kill-session -t "$SESS" 2>/dev/null || true
   tmux new-session -d -s "$SESS" -n pm -c "$TMP/repo" 2>/dev/null || true
   tmux respawn-pane -k -t "$SESS:pm" "cd $TMP/repo && exec tmux wait-for flip-m65-never" >/dev/null 2>&1 || true

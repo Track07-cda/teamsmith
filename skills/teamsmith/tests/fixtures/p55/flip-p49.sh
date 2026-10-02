@@ -29,6 +29,11 @@ line_red() { note "  ✗ $*"; }
 FLIP_SOCK="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p55-flip-sock.XXXXXX")"
 TMUX_TMPDIR="$FLIP_SOCK"; export TMUX_TMPDIR
 unset TMUX TMUX_PANE
+# P162：破坏性调用（kill-session）动手前先证明私有 socket 生效；skill 树不全（缺库）就响亮失败，
+# 不静默降级成裸调用。
+# shellcheck source=../../lib/tmux-iso.sh
+. "$FLIP_SKILL/tests/lib/tmux-iso.sh" 2>/dev/null \
+  || { note "P162：找不到 $FLIP_SKILL/tests/lib/tmux-iso.sh（skill 树不全）"; exit 2; }
 
 # ---------------------------------------------------------------- 单腿：建夹具 + 跑核心断言
 # 用法：p55_leg <leg名> <skill_dir>；结果写入 $LEG_RESULTS（"OK|RED <id> <desc>" 一行一条）
@@ -132,7 +137,9 @@ p55_leg() { # <leg> <skill_dir>
   i=0; while [ "$i" -lt 25 ]; do tmux list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null | grep -qx p55w || break; sleep 0.2; i=$((i+1)); done
   [ "$(tmux list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null | grep -cx p55w)" = "0" ]; ck F1 "teardown 拆掉遗体窗口" "$?"
 
-  tmux kill-session -t "$SESS" 2>/dev/null || true
+  # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  tmux_iso_guard_soft "flip-p49" "收尾：私有 session" --tmpdir "${TMUX_TMPDIR:-}" \
+    && tmux kill-session -t "$SESS" 2>/dev/null || true
   ) || true
   LEG_RESULTS="$LEG_ROOT/results"
 }

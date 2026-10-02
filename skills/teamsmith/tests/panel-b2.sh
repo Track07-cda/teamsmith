@@ -36,6 +36,8 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT TEAM_
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$here/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$here/lib/tmux-iso.sh"
 tree="${TEAM_B2_TREE:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 panel="${TEAM_B2_PANEL:-$skill/scripts/panel/panel.js}"
@@ -67,7 +69,9 @@ fi
 
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
-  tmux -L "$sock" kill-server 2>/dev/null || true
+  # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  tmux_iso_guard_soft "panel-b2" "收尾：私有 server" --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$sock" \
+    && tmux -L "$sock" kill-server 2>/dev/null || true
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   if [ "$keep" = "1" ]; then
     printf '\n保留夹具目录：%s\n' "$tmp"

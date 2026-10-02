@@ -20,6 +20,8 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 # shellcheck source=tests/lib/tmp-root.sh
 . "$SELF_DIR/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$SELF_DIR/lib/tmux-iso.sh"
 
 MODE="all"
 case "${1:-}" in
@@ -488,7 +490,9 @@ td_live() {
     return 0
   fi
   TD_LIVE_SESS="$sess"
-  trap 'tmux kill-session -t "$TD_LIVE_SESS" 2>/dev/null || true; cleanup' EXIT
+  # P162：私有 socket 可能是**调用者**（smoke）传进来的那一个（本函数优先复用已存在的 TMUX_TMPDIR），
+  # 所以这里只证「tmux 解析出的就是这条私有路径、且不是共享默认 socket」，不要求它在自己的临时根之下。
+  trap 'tmux_iso_guard_soft "death-cause" "收尾：真遗体 session" --tmpdir "${TMUX_TMPDIR:-}" && tmux kill-session -t "$TD_LIVE_SESS" 2>/dev/null || true; cleanup' EXIT
 
   tmux set-window-option -t "$sess:td" remain-on-exit on >/dev/null 2>&1 || true
   tmux respawn-pane -k -t "$sess:td" bash -lc 'echo "Error: 403 permission_error: reached your weekly (7-day) usage limit"; sleep 300' >/dev/null 2>&1 || true
@@ -542,6 +546,8 @@ td_live() {
   td_has "⑧ 真遗体 → 面板 state=exited（词表不变）" "$panel" '"state": "exited"'
   td_has "⑧ 真遗体 → 面板 pane=dead" "$panel" '"pane": "dead"'
   td_has "⑧ 真遗体 → 面板 pane_exit 仍在" "$panel" '"pane_exit": "signal=9"'
+  # P162：同上（socket 可能是调用者的私有目录；判据是「解析出的路径就是它、且不是共享默认 socket」）
+  tmux_iso_require "death-cause" "真遗体场景收尾" --tmpdir "${TMUX_TMPDIR:-}"
   tmux kill-session -t "$sess" 2>/dev/null || true
 }
 

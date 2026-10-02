@@ -44,6 +44,8 @@ set -uo pipefail
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # P53/P68：临时根的唯一创建者（固定中性测量目标就建在它下面）
 . "$here/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$here/lib/tmux-iso.sh"
 tree="${1:-$(cd -P "$here/../../.." && pwd)}"
 secs="${2:-${TEAM_PANEL_CPU_SECS:-60}}"
 
@@ -103,7 +105,9 @@ js="${TEAM_JS_BIN:-$(command -v node || true)}"
 rc=3
 
 cleanup() {
-  tmux -L "$sock" kill-server 2>/dev/null || true
+  # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  tmux_iso_guard_soft "panel-cpu" "收尾：私有 server" --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$sock" \
+    && tmux -L "$sock" kill-server 2>/dev/null || true
   # tmux 在服务器已死时会把 socket 文件留在 /tmp/tmux-<uid>/：夹具自己收干净
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   rm -rf "${time_out:-}.state" 2>/dev/null || true

@@ -46,6 +46,8 @@ set -uo pipefail
 SKILL_DIR="${M24_SKILL_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"   # 可指向另一份 skill 副本（flip 证据用）
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$SKILL_DIR/tests/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$SKILL_DIR/tests/lib/tmux-iso.sh"
 TEAM="bash $SKILL_DIR/scripts/team"
 PI_BIN="${M24_PI_BIN:-$HOME/.bun/bin/pi}"
 [ -x "$PI_BIN" ] || PI_BIN="$(command -v pi 2>/dev/null || true)"
@@ -101,8 +103,13 @@ mkdir -p "$SOCKDIR" "$REPO" "$TMP/pi-sessions"
 
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
-  m24_tmux kill-session -t "$SESS" 2>/dev/null || true
-  m24_tmux kill-server 2>/dev/null || true
+  # P162：收尾的破坏性调用先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  if tmux_iso_guard_soft "pm-box-real" "收尾：私有 session" --tmpdir "$SOCKDIR" --own-root "$TMP"; then
+    m24_tmux kill-session -t "$SESS" 2>/dev/null || true
+  fi
+  if tmux_iso_guard_soft "pm-box-real" "收尾：私有 server" --tmpdir "$SOCKDIR" --own-root "$TMP"; then
+    m24_tmux kill-server 2>/dev/null || true
+  fi
   if [ "$KEEP" = "1" ]; then printf '保留临时目录：%s\n' "$TMP"; else tmp_root_reap_all; fi
 }
 trap cleanup EXIT

@@ -51,7 +51,7 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
 # ① 它是「调用者环境」的一部分，夹具要证明漏进来的值对判定毫无影响（31c ①e 用显式赋值正面钉住）；
 # ② TEAM_TMUX_CALLS_LOG/TEAM_TMUX_REAL 漏进来会把夹具的 tmux 调用写进真项目的 forensics 日志 /
 #    把 shim 指到错误真身（M7.2 同族污染）。
-unset TEAM_ALLOW_DESTRUCTIVE_TMUX TEAM_TMUX_CALLS_LOG TEAM_TMUX_REAL TEAM_SIGNAL_CALLS_LOG TEAM_SIGNAL_REAL 2>/dev/null || true
+unset TEAM_ALLOW_DESTRUCTIVE_TMUX TEAM_TMUX_CALLS_LOG TEAM_TMUX_REAL TEAM_SIGNAL_CALLS_LOG TEAM_SIGNAL_REAL TEAM_TMUX_ISO_LOG 2>/dev/null || true
 # ── M36 闸门在 PATH 里的那一格也属于「调用者身份」────────────────────────────────────────
 # 调用方是 PM/worker 会话（M36 起 PATH 最前是 scripts/shim）时，夹具里 `command -v tmux` 会解析到
 # shim 而不是真 tmux：M8.1 的逐字节参考值与 m36 段的 TEAM_TMUX_REAL 断言都会跟着漂（v1.42.0 发布
@@ -80,6 +80,9 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 . "$SKILL_DIR/tests/lib/section-guard.sh"
 # shellcheck source=tests/lib/tmux-cap.sh
 . "$SKILL_DIR/tests/lib/tmux-cap.sh"
+# P162（change: - · infra）：破坏性 tmux 调用的隔离前置（证明 → 才动手；头注见 lib/tmux-iso.sh）
+# shellcheck source=tests/lib/tmux-iso.sh
+. "$SKILL_DIR/tests/lib/tmux-iso.sh"
 # tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
 # tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
 # 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新跑一遍自己**
@@ -398,6 +401,14 @@ cond_skip() { # <段落标记> [<原因>]：条件不满足时的跳过出口（
   SKIP_SEGS="${SKIP_SEGS}|$1"
   printf '  \033[33mSKIP（条件不满足）\033[0m %s\n' "$1${2:+ —— $2}"
 }
+# P162：前置硬停的 SKIP 出口 —— 任务书逐字要求的格式（`SKIP（前置不成立：<哪一条>）`）+ 进本轮账本的
+# SKIP 计数（硬停前调它，收口行里就会看到这一段是 SKIP 而不是假绿）。
+tmux_iso_skip() { # <段> <细节>
+  section_guard_check
+  SKIP_N=$((SKIP_N + 1))
+  SKIP_SEGS="${SKIP_SEGS}|$1"
+  printf '  \033[33mSKIP（前置不成立：%s）\033[0m %s\n' "$2" "$1"
+}
 
 PASS=0; FAIL=0
 section() {
@@ -512,6 +523,9 @@ section_guard_init "$TMP" --budgets "$SKILL_DIR/tests/section-budgets.tsv"
 # M36：本轮自己的 shim 调用日志落在 $TMP（调用者窗口若已装闸门，smoke 的夹具 tmux 调用会被它记录 ——
 # 记到这里而不是真项目的 state/tmux-calls.log，真账本零污染）。31c 自己按需逐条覆盖这个变量。
 TEAM_TMUX_CALLS_LOG="$TMP/tmux-calls-caller.log"; export TEAM_TMUX_CALLS_LOG
+# P162：硬停审计（段号 / 哪一条不成立 / 实际 socket 路径）落在本轮临时根里；硬停会保留临时根，
+# 所以现场（含这份日志）和 --keep 一样留下来。它只决定落点，不改判定。
+TEAM_TMUX_ISO_LOG="$TMP/tmux-iso-guard.log"; export TEAM_TMUX_ISO_LOG
 
 # ── tmux 私有 socket（M23）────────────────────────────────────────────────────────
 # 对照组早已存在：V15/V16 的对抗探针包用私有 socket（`-L v16pkg-$$` + PATH shim），两套并发从来不
@@ -529,6 +543,22 @@ REAL_TMUX="$(command -v tmux 2>/dev/null || true)"
 # P159：信号闸门的真身（与 REAL_TMUX 同口径；PATH 里的 scripts/shim 已在文件头剥掉，
 # 所以这里拿到的是真身而不是闸门入口）。team_signal_real_bin 先 pkill 后 killall，这里同序。
 REAL_SIGNAL="$(command -v pkill 2>/dev/null || command -v killall 2>/dev/null || true)"
+# ── P162 · 破坏性调用的隔离前置：本套的唯一入口 ──────────────────────────────────────────
+# 本套自己发出的 kill-server/kill-session/kill-window/kill-pane 都要先过 tmux_iso_require 的三条件
+# （目标路径存在且属于本轮 / 真 tmux 解析出的 socket 就是它 / 不是共享默认 socket）；一条不成立就
+# 硬停（exit 2，段记 SKIP），那条调用绝不执行。**没有**环境变量、--force 或 CI 模式的绕过路径。
+# 非破坏性调用原样透传（PATH 解析与改动前一致）；破坏性调用按 M23 的形态执行（env -u TMUX/TMUX_PANE
+# + 本轮私有 TMUX_TMPDIR）—— 这也是 lint（M28）认的隔离证据形态。
+if [ -n "$REAL_TMUX" ]; then
+  tmux() {  # P162：破坏性调用先证明本轮隔离（形态同 M23：env -u TMUX -u TMUX_PANE TMUX_TMPDIR=私有目录）
+    case "${1:-}" in
+      kill-server|kill-session|kill-window|kill-pane)
+        tmux_iso_require "${SMOKE_SEC_OPEN_ID:-?}" "tmux $*" --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}" || return 1
+        env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$REAL_TMUX" "$@" ;;
+      *) command tmux "$@" ;;
+    esac
+  }
+fi
 SMOKE_PRIVATE_TMUX=0
 if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
   SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
@@ -683,9 +713,20 @@ cleanup() {
   smoke_tmp_tripwire_stop    # 先收哨兵：下面的临时根回收是**合法**删除，不许被当成事故
   section_guard_stop_watchdog  # P70：收看门狗（trip 现场在 $TMP 之外，回收带不走）
   section_guard_sweep
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # P162：收尾的 kill 也要先证明隔离；不成立就**拒绝执行**（soft：响亮 + 审计，但不在这里 exit）。
+  # 第二个 kill 前的那次探测用的是「server 不在也要读得出解析路径」的形态：kill-session 可能刚把
+  # 最后一个 session 收掉、server 随之消失 —— 证明的仍是「tmux 会连哪条路径」，打不到 server 时放行。
+  if [ -n "${REAL_TMUX:-}" ] \
+     && tmux_iso_guard_soft cleanup "收尾：kill-session（本轮 session）" \
+          --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
+    env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$REAL_TMUX" kill-session -t "$SESSION" 2>/dev/null || true
+  fi
   # 私有 socket：连本轮的 server 一起收掉（调用者的默认 server 原样不动）
-  [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && tmux kill-server 2>/dev/null || true
+  if [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] \
+     && tmux_iso_guard_soft cleanup "收尾：kill-server（本轮私有 server）" \
+          --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
+    env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$REAL_TMUX" kill-server 2>/dev/null || true
+  fi
   [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && rm -f "${SMOKE_LOCK:-/nonexistent}.holder" 2>/dev/null || true
   # P53：结束用量行（早退也打）→ 助手回收（KEEP 时打印保留路径）→ 诊断文件收尾
   if [ -n "${TMP:-}" ]; then
@@ -827,11 +868,16 @@ if [ -x "$SKILL_DIR/tests/smoke.sh" ]; then ok "tests/smoke.sh 可执行"
 else bad "tests/smoke.sh 没有 +x"; fi
 
 # tmux 隔离自检（M23）：本轮必须落在自己的 server 上，且绝不能出现在调用者的默认 server 上。
-# 负对照：TEAM_SMOKE_NO_PRIVATE_TMUX=1 时这条会红（隔离真的没了）。
+# P162 起这是**前置**：证明不成立就硬停（exit 2），不是报一条红继续跑后面的破坏性段。
+# 负对照：TEAM_SMOKE_NO_PRIVATE_TMUX=1 时没有私有 socket → 第一条破坏性调用就被前置硬停
+#（没有绕过路径；对照模式只用于非破坏性观测）。
 if [ "${HAVE_TMUX:-0}" = "1" ]; then
   if [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ]; then
     SMOKE_SOCK_PROBE="teamsmith-smoke-socketprobe-$$"
     tmux new-session -d -s "$SMOKE_SOCK_PROBE" sleep 30 2>/dev/null || true
+    # P162：隔离自检从「断言」升级成「前置」——不成立就硬停（后面任何破坏性调用都不许跑）
+    tmux_iso_require "0c · 静态检查（函数结尾的 set -e 陷阱）" "M23 隔离自检：本轮私有 socket 必须已生效" \
+      --tmpdir "$SMOKE_TMUX_TMPDIR" --own-root "$TMP" --caller-tmpdir "$SMOKE_CALLER_TMUX_TMPDIR"
     if [ -S "$SMOKE_TMUX_SOCK" ] \
        && [ "${TMUX_TMPDIR:-}" = "$SMOKE_TMUX_TMPDIR" ] \
        && tmux has-session -t "$SMOKE_SOCK_PROBE" 2>/dev/null; then
@@ -848,7 +894,7 @@ if [ "${HAVE_TMUX:-0}" = "1" ]; then
     fi
     tmux kill-session -t "$SMOKE_SOCK_PROBE" 2>/dev/null || true
   else
-    printf '  \033[2m·\033[0m %s\n' "（TEAM_SMOKE_NO_PRIVATE_TMUX=1：显式用调用者的默认 server，对照实验用）"
+    printf '  \033[2m·\033[0m %s\n' "（TEAM_SMOKE_NO_PRIVATE_TMUX=1：显式用调用者的默认 server；P162 起破坏性调用会被前置硬停，对照实验用）"
   fi
 else
   printf '  \033[2m·\033[0m %s\n' "（无 tmux：跳过私有 socket 自检）"
@@ -1151,6 +1197,112 @@ assert_has "$TMP/p70-wait.log" "最后一次读数：reader-3" "P70 等待到顶
 assert_eq "P70 等待到顶：每轮都刷新了进度 ticks（心跳）" "$((P70_TICKS1 - P70_TICKS0))" "3"
 P70_WAIT_HEAD="$(head -1 "$TMP/p70-wait.log")"
 assert_has_echo "$P70_WAIT_HEAD" "等待到顶" "P70 等待到顶：第一行就是归因（不被别的输出淹没）"
+
+# ---------------------------------------------------------------- 0h. P162 隔离前置（三条件 + 硬停 + 影子）
+# 共享 server 四次死亡都与门禁运行重合，而 tmux 审计里零 kill 类调用 —— 形状是「私有 socket
+# 静默未生效」。这段把前置本身做成可证伪的：两个已知假隔离形状必须在**动手之前**硬停并点名，
+# 正常隔离照常跑，再把判据改成恒真（影子变异）证明红侧不是橡皮章。探针全部在**子进程**里跑；
+# 「破坏性动作」默认是桩，只有正常隔离那一腿在 $TMP 的私有 server 上真杀一次。
+section "0h · tmux 隔离前置：三条件 + 硬停 + 影子（P162）"
+P162_LIB="$SKILL_DIR/tests/lib/tmux-iso.sh"
+P162_PROBE="$SKILL_DIR/tests/lib/tmux-iso-probe.sh"
+P162_GUARD_LOG="$TMP/p162-guard.log"
+P162_STUB="$TMP/p162-stub"
+P162_NOPE="$TMP/p162-nope/sock"                                       # 不存在（不 mkdir -p）→ #1250 回退形状
+P162_DEEP="$TMP/p162-deep/$(printf 'd%.0s' $(seq 1 120))"; mkdir -p "$P162_DEEP"   # socket 路径 >107 字节
+P162_GOOD="$TMP/p162-good"; mkdir -p "$P162_GOOD"                      # 正常隔离（本轮私有目录）
+assert_file "$P162_LIB" "P162 前置库在（lib/tmux-iso.sh）"
+assert_file "$P162_PROBE" "P162 红侧探针在（lib/tmux-iso-probe.sh）"
+p162_run() { # <lib> [证明参数…]：跑探针；输出进 $TMP/p162-out，rc 由调用方读
+  local lib="$1"; shift
+  rm -f "$P162_GUARD_LOG" "$P162_STUB"
+  TEAM_TMUX_ISO_LOG="$P162_GUARD_LOG" bash "$P162_PROBE" "$lib" "$P162_GUARD_LOG" "$P162_STUB" "$@" >"$TMP/p162-out" 2>&1
+  return $?
+}
+# ① 不存在目录（#1250 回退形状）：硬停 + 点名 + 审计 + 没动手
+p162_run "$P162_LIB" --tmpdir "$P162_NOPE"; P162_RC=$?
+assert_eq "P162 红侧①：TMUX_TMPDIR 指向不存在的目录 → 硬停（exit 2）" "$P162_RC" "2"
+assert_has "$TMP/p162-out" "隔离前置不成立" "P162 红侧①：一行醒目结论"
+assert_has "$TMP/p162-out" "SKIP（前置不成立：" "P162 红侧①：段记为 SKIP（前置不成立：…）"
+assert_has "$TMP/p162-out" "指向不存在的目录" "P162 红侧①：点名「目录不存在」"
+assert_has "$P162_GUARD_LOG" "段=P162 探针" "P162 审计格式：带段号"
+assert_has "$P162_GUARD_LOG" "不成立=tmpdir-missing" "P162 红侧①：审计行点明哪一条不成立"
+assert_has "$P162_GUARD_LOG" "实际 socket=/tmp/tmux-$(id -u)/default" "P162 红侧①：审计行给出实际 socket（回退靶）"
+assert_not_file "$P162_STUB" "P162 红侧①：破坏性动作没执行"
+# ② 超深路径（P115/P120 形状）：硬停 + 点名 AF_UNIX 上限 + 没动手
+p162_run "$P162_LIB" --tmpdir "$P162_DEEP"; P162_RC=$?
+assert_eq "P162 红侧②：socket 路径 >107 字节 → 硬停（exit 2）" "$P162_RC" "2"
+assert_has "$TMP/p162-out" "AF_UNIX 上限" "P162 红侧②：点名「路径超 AF_UNIX 上限」"
+assert_has "$P162_GUARD_LOG" "不成立=sock-path-too-long" "P162 红侧②：审计行点明哪一条不成立"
+assert_not_file "$P162_STUB" "P162 红侧②：破坏性动作没执行"
+# ③ 正常隔离：证明通过 → 动作照常执行（默认桩；另起真私有 server 真杀一腿）
+p162_run "$P162_LIB" --tmpdir "$P162_GOOD"; P162_RC=$?
+assert_eq "P162 反向：正常隔离 → 探针照常跑（exit 0）" "$P162_RC" "0"
+assert_has "$P162_STUB" "DESTRUCTIVE-RAN" "P162 反向：动作执行了"
+assert_not_file "$P162_GUARD_LOG" "P162 反向：没有硬停 → 审计为空"
+if [ "$HAVE_TMUX" = "1" ]; then
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$P162_GOOD" tmux new-session -d -s "p162victim-$$" sleep 60 2>/dev/null || true
+  if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$P162_GOOD" tmux has-session -t "p162victim-$$" 2>/dev/null; then
+    p162_run "$P162_LIB" --tmpdir "$P162_GOOD" -- env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$P162_GOOD" tmux kill-server; P162_RC=$?
+    assert_eq "P162 反向：真跑一次私有 kill-server（证明通过 → exit 0）" "$P162_RC" "0"
+    if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$P162_GOOD" tmux ls >/dev/null 2>&1; then
+      bad "P162 反向：私有 server 没被收掉"
+    else ok "P162 反向：私有 server 真的被收掉（结论与今天一致）"; fi
+  else
+    cond_skip "P162 反向·真杀" "私有 server 起不来（跳过这一腿）"
+  fi
+else
+  cond_skip "P162 反向·真杀" "没有 tmux"
+fi
+# ④ 本套自己的入口（tmux() 包装）：在子 shell 里弄坏 TMUX_TMPDIR，kill-session 必须硬停。
+#    探针无副作用：目标名不存在，就算守卫坏了也只是打在默认 socket 上的一个不存在的 session。
+(
+  unset -f smoke_section_close 2>/dev/null || true
+  TEAM_TMUX_ISO_LOG="$TMP/p162-wrapper.log"
+  TMUX_TMPDIR="$P162_NOPE" tmux kill-session -t "p162-probe-$$"
+) >"$TMP/p162-wrapper-out" 2>&1
+P162_RC=$?
+assert_eq "P162 本套入口：TMUX_TMPDIR 坏了 → tmux() 包装硬停（exit 2）" "$P162_RC" "2"
+assert_has "$TMP/p162-wrapper-out" "隔离前置不成立" "P162 本套入口：一行醒目结论"
+assert_has "$TMP/p162-wrapper-out" "SKIP（前置不成立：" "P162 本套入口：SKIP 字面格式"
+assert_has "$TMP/p162-wrapper.log" "不成立=tmpdir-missing" "P162 本套入口：审计行落盘（段号 + 哪一条）"
+# ⑤ 影子：判据改成恒真 → ①②两条红侧必须**不再硬停**（证明红侧不是橡皮章）
+P162_MUT="$TMP/p162-mutant.sh"
+sed 's/^tmux_iso_prove() {/tmux_iso_prove() { return 0  # P162 影子变异：判据恒真/' "$P162_LIB" > "$P162_MUT"
+if grep -q 'P162 影子变异' "$P162_MUT"; then
+  ok "P162 影子：变异体生成（判据恒真）"
+else
+  bad "P162 影子：sed 没改到 tmux_iso_prove（夹具失效）"
+fi
+p162_run "$P162_MUT" --tmpdir "$P162_NOPE"; P162_RC=$?
+assert_eq "P162 影子①：判据恒真 → 不再硬停（红侧①会红）" "$P162_RC" "0"
+assert_has "$P162_STUB" "DESTRUCTIVE-RAN" "P162 影子①：变异体照旧动手（红侧是承重的）"
+p162_run "$P162_MUT" --tmpdir "$P162_DEEP"; P162_RC=$?
+assert_eq "P162 影子②：判据恒真 → 不再硬停（红侧②会红）" "$P162_RC" "0"
+# ⑥ 无绕过路径：TEAM_* 一堆 + --force 都改不了判定
+env TEAM_ALLOW_DESTRUCTIVE_TMUX=1 TEAM_SMOKE_NO_PRIVATE_TMUX=1 TEAM_SMOKE_CI=1 TEAM_TMP_KEEP=1 \
+  bash "$P162_PROBE" "$P162_LIB" "$TMP/p162-bypass.log" "$P162_STUB" --tmpdir "$P162_NOPE" >"$TMP/p162-bypass-out" 2>&1
+P162_RC=$?
+assert_eq "P162 无绕过：一堆 TEAM_* 下照样硬停" "$P162_RC" "2"
+assert_has "$TMP/p162-bypass-out" "指向不存在的目录" "P162 无绕过：点名同一条判据"
+p162_run "$P162_LIB" --tmpdir "$P162_GOOD" --force; P162_RC=$?
+assert_eq "P162 无绕过：--force 不是后门（bad-option 硬停）" "$P162_RC" "2"
+assert_has "$P162_GUARD_LOG" "不成立=bad-option" "P162 无绕过：审计记 bad-option"
+# ⑦ 静态钉子：本套 tmux() 包装体里必须看得见前置调用与私有 socket 形态（删掉 → 这两条红）
+P162_WRAP_BODY="$(sed -n '/^  tmux() {/,/^  }/p' "$SKILL_DIR/tests/smoke.sh")"
+assert_has_echo "$P162_WRAP_BODY" "tmux_iso_require" "P162 静态钉子：tmux() 包装体里看得见 tmux_iso_require"
+assert_has_echo "$P162_WRAP_BODY" "TMUX_TMPDIR=" "P162 静态钉子：包装体里看得见私有 socket 形态"
+# ⑧ 端到端：嵌套 smoke + 超深 TMPDIR → 0c 的前置在真套件里硬停，0c 在账本里记 SKIP（不是假绿）
+#    （深路径上私有 server 根本绑不上；FAST 不拿机器锁，也不会有任何破坏性调用落地）
+P162_DEEP_ROOT="$TMP/p162-deeproot/$(printf 'd%.0s' $(seq 1 60))"; mkdir -p "$P162_DEEP_ROOT"
+env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_TMUX_ISO_LOG \
+  TMPDIR="$P162_DEEP_ROOT" TEAM_SMOKE_FAST=1 bash "$SKILL_DIR/tests/smoke.sh" </dev/null >"$TMP/p162-deep-smoke.log" 2>&1
+P162_RC=$?
+assert_eq "P162 端到端：超深 TMPDIR 的嵌套 smoke → 0c 前置硬停（exit 2）" "$P162_RC" "2"
+assert_has "$TMP/p162-deep-smoke.log" "AF_UNIX 上限" "P162 端到端：点名「路径超上限」"
+assert_has "$TMP/p162-deep-smoke.log" "SKIP（前置不成立：" "P162 端到端：SKIP 字面格式"
+assert_match "$TMP/p162-deep-smoke.log" "0c · 静态检查.*SKIP[1-9]" "P162 端到端：0c 段收口行记 SKIP（该段真的被记成 SKIP）"
+assert_not "$TMP/p162-deep-smoke.log" "== 结果 ==" "P162 端到端：没有结果行（硬停，不是跑完报红）"
 
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
@@ -4153,6 +4305,9 @@ EOS
     fi
     assert_has "$M25_GATE_LOG" "gate_read_done=yes" "M25-② 门禁在后台进程组里读到 EOF 并跑完（stdin=/dev/null，没被 SIGTTIN 停住）"
     assert_has "$M25_GATE_LOG" "gate_stdin=/dev/null" "M25-② 门禁 stdin 确实是 /dev/null"
+    # P162：M25 自己的私有 server 收尾也要先证明（--tmpdir 指它自己的目录）
+    tmux_iso_require "10c-②·后台进程组里的门禁（M25）" "M25 私有 server 收尾（kill-server）" \
+      --tmpdir "$M25_SOCK" --own-root "$TMP"
     m25_tm kill-server 2>/dev/null || true
   fi
 fi
@@ -12592,6 +12747,8 @@ else
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" "$REAL_TMUX" ls 2>/dev/null | grep -q '^m36victim'; then
     ok "私有 server 起起来了（m36victim 在）"
   else bad "私有 server 没起起来"; fi
+  tmux_iso_require "31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）" "真私有 server 收尾（m36victim）" \
+    --tmpdir "$M36_PRIV" --own-root "$TMP"
   m36_priv tmux kill-server >/dev/null 2>&1; M36_RC=$?
   assert_eq "私有 socket 的 kill-server 放行（exit 0）" "$M36_RC" "0"
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" "$REAL_TMUX" ls >/dev/null 2>&1; then
@@ -12601,6 +12758,8 @@ else
   assert_has "$M36_LOG" "sock=$M36_PRIV/tmux-$M36_UID/default" "私有 socket 路径进了日志"
   # 退役键在私有 socket 上也不改变动作（照样 pass；不许出现 override）
   m36_priv tmux new-session -d -s m36victim2 >/dev/null 2>&1
+  tmux_iso_require "31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）" "真私有 server 收尾（m36victim2）" \
+    --tmpdir "$M36_PRIV" --own-root "$TMP"
   m36_priv TEAM_ALLOW_DESTRUCTIVE_TMUX=1 tmux kill-server >/dev/null 2>&1; M36_RC=$?
   assert_eq "退役键=1 + 私有 server：照常放行（exit 0，退役键零影响）" "$M36_RC" "0"
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" "$REAL_TMUX" ls >/dev/null 2>&1; then
@@ -12609,6 +12768,8 @@ else
   assert_not "$M36_LOG" "act=override" "私有 socket 的 ledger 里没有 act=override"
   # token 在私有 socket 上照记 explicit-flag（token 是调用者的授权，任何 socket 都执行）
   m36_priv tmux new-session -d -s m36victim3 >/dev/null 2>&1
+  tmux_iso_require "31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）" "真私有 server 收尾（m36victim3）" \
+    --tmpdir "$M36_PRIV" --own-root "$TMP"
   m36_priv tmux --teamsmith-allow-destructive kill-server >/dev/null 2>&1; M36_RC=$?
   assert_eq "token + 私有 server：执行（exit 0）" "$M36_RC" "0"
   assert_has "$M36_LOG" "act=explicit-flag" "token 在私有 socket 上记 act=explicit-flag"
@@ -14004,6 +14165,11 @@ p98_nest() { # <树> <日志> <参数…>；额外 env 由调用方放在 P98_NE
 #   env    rc≠0 但日志里**全部**红行都是可归因的环境前置（私有 socket 绑不上），或一条红行都没有的
 #          锁排队（exit 2，点名 holder）→ 可见 SKIP + 归因（不判产品红）；
 #   red    其它任何形状（有非环境红行；或 rc≠0 却没有任何可归因的红行）→ 照旧红（真红保留）。
+# P162 起这个环境形状**更早**就响：0c 的隔离前置直接硬停（一行「✗ 隔离前置不成立」+ 审计 + SKIP
+# + exit 2），不再跑到断言里；随后 EXIT 里的收尾软守卫也会拒一次（同一个成因，两条都算环境侧）。
+# 所以环境归因多认 P162 的两条**环境**成因（路径超 AF_UNIX 上限 / TMUX_TMPDIR 指向不存在或不是
+# 目录的路径，硬停与软拒两种写法都算）；其余成因（目标就是默认 socket、目标不在自有目录下、
+# server 不符、bad-option）是代码/夹具的缺陷，照旧算真红。
 p98_nest_state() { # <日志> <rc> → 打印 "<green|env|red>\t<归因或证据（一行）>"
   local log="$1" rc="$2" plain reds nr env_reds ne first
   plain="$(sed 's/\x1b\[[0-9;]*m//g' "$log" 2>/dev/null || true)"
@@ -14011,13 +14177,13 @@ p98_nest_state() { # <日志> <rc> → 打印 "<green|env|red>\t<归因或证据
   reds="$(printf '%s\n' "$plain" | grep '^  ✗ ' || true)"
   if [ -n "$reds" ]; then
     nr="$(printf '%s\n' "$reds" | grep -c . || true)"
-    env_reds="$(printf '%s\n' "$reds" | grep -E '私有 socket 没生效' || true)"
+    env_reds="$(printf '%s\n' "$reds" | grep -E '私有 socket 没生效|隔离前置不成立(（拒绝执行）)?：(TMUX_TMPDIR=.* 指向不存在的目录|TMUX_TMPDIR=.* 不是目录|socket 路径 [0-9]+ 字节 > AF_UNIX 上限)' || true)"
     ne=0; [ -n "$env_reds" ] && ne="$(printf '%s\n' "$env_reds" | grep -c . || true)"
     if [ "$ne" -gt 0 ] && [ "$ne" -eq "$nr" ]; then
       first="$(printf '%s\n' "$env_reds" | head -1 | sed 's/^  ✗ //' | cut -c1-220)"
       printf 'env\t%s\n' "$first"; return 0
     fi
-    first="$(printf '%s\n' "$reds" | grep -v -E '私有 socket 没生效' | head -1 | sed 's/^  ✗ //' | cut -c1-200)"
+    first="$(printf '%s\n' "$reds" | grep -v -E '私有 socket 没生效|隔离前置不成立(（拒绝执行）)?：(TMUX_TMPDIR=.* 指向不存在的目录|TMUX_TMPDIR=.* 不是目录|socket 路径 [0-9]+ 字节 > AF_UNIX 上限)' | head -1 | sed 's/^  ✗ //' | cut -c1-200)"
     printf 'red\t%s\n' "$first"; return 0
   fi
   # 一条 ✗ 都没有：锁排队（exit 2）点名 holder 的是**环境**；其它形状没有可归因的红 → 照旧红。
@@ -14381,7 +14547,7 @@ P98_DEEP_TMP="$TMP/p115-deep/aaaaaaaa/bbbbbbbb/cccccccc/dddddddd"
 mkdir -p "$P98_DEEP_TMP"
 P98_NEST_TMPDIR="$P98_DEEP_TMP" P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p115-env.log" --select 0b
 P98_ENV_RC=$?
-p98_state_has "$TMP/p115-env.log" "$P98_ENV_RC" "env" "私有 socket 没生效" "36⑥ 环境侧（深 TMPDIR）"
+p98_state_has "$TMP/p115-env.log" "$P98_ENV_RC" "env" "AF_UNIX 上限" "36⑥ 环境侧（深 TMPDIR）"
 P98_ENV_SL="$(p98_nest_sock_len "$TMP/p115-env.log" || true)"
 if [ -n "$P98_ENV_SL" ] && [ "$P98_ENV_SL" -gt 107 ] 2>/dev/null; then
   ok "36⑥ 环境侧夹具有效：嵌套私有 socket 路径 ${P98_ENV_SL} 字节 > AF_UNIX 上限 107"
@@ -14391,6 +14557,12 @@ fi
 P98_VOUT="$( ( p98_nest_verdict "36⑥ 环境侧判定出口" "$P98_ENV_RC" "$TMP/p115-env.log" ) 2>&1 || true )"
 assert_has_echo "$P98_VOUT" "SKIP（条件不满足）" "36⑥ 环境侧经断言出口是可见 SKIP（不判红）"
 assert_not_echo "$P98_VOUT" "✗" "36⑥ 环境侧经断言出口没有红标"
+# P162：隔离前置硬停的**环境成因**也算环境侧（合成的深路径日志直接钉判定，不靠真跑）；但代码/夹具
+# 缺陷的硬停（目标就是默认 socket / 不在自有目录下 / bad-option）**不许**被环境吞掉 —— 照旧真红。
+printf '  ✗ 隔离前置不成立：socket 路径 119 字节 > AF_UNIX 上限 107（私有 server 绑不上）\n' > "$TMP/p162-env.log"
+p98_state_has "$TMP/p162-env.log" "2" "env" "AF_UNIX 上限" "36⑥ P162 前置硬停（环境成因）"
+printf '  ✗ 隔离前置不成立：目标就是共享默认 socket（/tmp/tmux-1000/default）\n' > "$TMP/p162-def.log"
+p98_state_has "$TMP/p162-def.log" "2" "red" "目标就是共享默认 socket" "36⑥ P162 前置硬停（代码缺陷）"
 # 锁排队（exit 2、没有 ✗ 行）也必须归 env：合成日志直接钉判定，并把 holder 名字带出来。
 printf '排队超限：等满 1s 仍拿不到门禁锁 /x/teamsmith-smoke.lock（持锁者：pid=999 cmd=p115-holder）→ 本套没有运行\n' > "$TMP/p115-queue.log"
 p98_state_has "$TMP/p115-queue.log" "2" "env" "cmd=p115-holder" "36⑥ 锁排队（exit 2）"

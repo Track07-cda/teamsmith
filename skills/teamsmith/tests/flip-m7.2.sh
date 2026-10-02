@@ -29,6 +29,8 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$SELF_DIR/lib/tmp-root.sh"
+# P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
+. "$SELF_DIR/lib/tmux-iso.sh"
 REPO_ROOT="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$REPO_ROOT" ] || { printf 'flip-m7.2: 找不到 git 仓库（本脚本需要 git archive 取修复前的树）\n' >&2; exit 2; }
 command -v tmux >/dev/null 2>&1 || { printf 'flip-m7.2: 需要 tmux（本复现是 tmux 现场的）\n' >&2; exit 2; }
@@ -54,8 +56,11 @@ SESS_GREEN="teamsmith-flip-m72-green-$$"
 unset TMUX TMUX_PANE 2>/dev/null || true
 TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
 cleanup() {
-  tmux kill-session -t "$SESS_RED" 2>/dev/null || true
-  tmux kill-session -t "$SESS_GREEN" 2>/dev/null || true
+  # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
+  if tmux_iso_guard_soft "flip-m7.2" "收尾：私有 session" --tmpdir "${TMUX_TMPDIR:-}" --own-root "$TMP"; then
+    tmux kill-session -t "$SESS_RED" 2>/dev/null || true
+    tmux kill-session -t "$SESS_GREEN" 2>/dev/null || true
+  fi
   if [ "${TEAM_FLIP_KEEP:-0}" = "1" ]; then printf '\n保留现场：%s\n' "$TMP"
   else tmp_root_reap_all; fi
 }
@@ -166,7 +171,7 @@ run_once() { # <tag> <skill-dir> <session> <attempt> → 打印 "second_started 
   tmux new-window -t "$sess" -n keep -d -c "$repo" >/dev/null 2>&1 || true
   tmux list-windows -t "$sess" -F '#{window_id} #{window_name}' 2>/dev/null \
     | awk '$2=="pm" {print $1}' \
-    | while read -r wid; do [ -n "$wid" ] && tmux kill-window -t "$wid" 2>/dev/null || true; done
+    | while read -r wid; do [ -n "$wid" ] && { tmux_iso_require "flip-m7.2" "收掉重建的 pm 窗口" --tmpdir "${TMUX_TMPDIR:-}" --own-root "$TMP"; tmux kill-window -t "$wid" 2>/dev/null || true; }; done
   tmux new-window -t "$sess" -n pm -d -c "$repo" >/dev/null 2>&1 || true
   local i cmd=""
   for i in $(seq 1 20); do

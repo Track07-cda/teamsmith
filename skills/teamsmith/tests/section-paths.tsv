@@ -22,6 +22,7 @@
 0e	0e · 段落自述：看门狗 / 预算表 / 循环清单（P70）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/section-guard.sh skills/teamsmith/tests/lib/section-guard.sh skills/teamsmith/tests/section-budgets.tsv skills/teamsmith/tests/loop-inventory.tsv skills/teamsmith/tests/lib/loop-scan.awk skills/teamsmith/tests/gate-guard.sh skills/teamsmith/tests/panel-knobs.sh skills/teamsmith/tests/perf.sh skills/teamsmith/tests	-	P70（gate-section-accounting）报文里的行（当时不在本表）；P98 F2 合并 main 后按已有判据补齐——段内点名 13 条真实路径 token；改守卫/预算表/循环清单/第四向守卫都要重跑这段模块自检
 0f	0f · 超时段落：点名 + 停跑 + 现场（P70）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/lib/section-guard.sh	-	P70 报文里的行；P98 F2 补齐——嵌套跑真 smoke（私有 TMPDIR / 私有身份 / TEAM_SMOKE_FIXTURE），造超时要动的是守卫与门禁本体
 0g	0g · 等待有界：到顶归因 + ticks（P70）	skills/teamsmith/tests/lib/section-guard.sh	-	P70 报文里的行；P98 F2 补齐——等待助手 section_guard_wait 定义在守卫模块里
+0h	0h · tmux 隔离前置：三条件 + 硬停 + 影子（P162）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/lib/tmux-iso.sh skills/teamsmith/tests/lib/tmux-iso-probe.sh	-	P162（infra）：前置库/探针/包装体都是这段的产物（改它们或 0c 的隔离前置都要重跑这段）
 1	1 · doctor（未初始化应失败）	skills/teamsmith/scripts/lib/cmd-project.sh skills/teamsmith/scripts/team	-	段内调用 team doctor
 1b	1b · bootstrap（一条命令初始化）	README.md skills/teamsmith/scripts/lib/cmd-bootstrap.sh skills/teamsmith/scripts/team	-	段内点名 1 条真实路径 token；段内调用 team bootstrap
 1c	1c · bootstrap 的 PM 窗口名：约定不是现场（M11）	README.md skills/teamsmith/scripts/team skills/teamsmith/scripts/lib/cmd-bootstrap.sh skills/teamsmith/scripts/lib/cmd-project.sh	-	段内点名 2 条真实路径 token；段内调用 team bootstrap/doctor

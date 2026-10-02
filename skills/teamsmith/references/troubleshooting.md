@@ -800,6 +800,43 @@ Two hard rules follow (2026-09-19: the 6th and the 8th default-server deaths):
    the resolved real binary (`"$REAL_TMUX"`, `${TMUX_BIN}`) is the intended exception and is judged by the normal
    isolation rules.
 
+### 18.1 The gate's own precondition (P162): prove isolation before any destructive call
+
+The rules above are the *product's* gate (the shim). The suite had the same hole in its own fixtures: on
+2026-10-02 the shared server died four times, each death overlapping a gate run, while our tmux audit showed zero
+kill-class calls — the shape of a fixture whose private socket silently did not take effect. So the suite now
+proves before it acts.
+
+`tests/lib/tmux-iso.sh` decides exactly three conditions:
+
+1. **The target path exists and belongs to this run** — `TMUX_TMPDIR` is an existing directory (or the `-L` name
+   makes the socket private while the directory is `/tmp`), the socket path is within the AF_UNIX limit of 107
+   bytes, and with `--own-root` the path is under that root; a live server's socket file must be present.
+2. **The socket tmux itself resolves is that one** — observed with `display-message -p '#{socket_path}'`; when no
+   server is up, the path the real tmux names in its own `error connecting to …` / `no server running on …`
+   message. The proof is about the path a kill would hit, not about server liveness (a teardown often runs after
+   the last session is gone).
+3. **It is not the shared default** (`/tmp/tmux-<uid>/default`) and not the caller's own default socket.
+
+Any failure is a **hard stop**: one loud line, one audit line (section, which condition, the actual socket), the
+section recorded as `SKIP（前置不成立：…）`, `exit 2` — and the destructive call never runs. There is no bypass:
+`--force` and every `TEAM_*` variable are ignored (`TEAM_TMUX_ISO_LOG` only moves the audit line). In
+`tests/smoke.sh` a `tmux()` wrapper routes every in-process `kill-server`/`kill-session`/`kill-window`/`kill-pane`
+through it (non-destructive calls pass through unchanged), `0c`'s isolation self-check became a precondition, the
+`EXIT` trap's teardown uses the soft form (loud refusal, never `exit` inside a trap), and the fixtures
+(`pm-box-real.sh`, `flip-*`, `panel-*`, `death-cause.sh`, `lib/tmux-cap.sh`) use the same library.
+
+Section `0h` pins the falsifiable sides: `TMUX_TMPDIR` pointing at a nonexistent directory (the #1250 fallback
+shape), a socket path over 107 bytes, the reverse leg (normal isolation → a real private `kill-server`), a shadow
+mutation that forces the predicate true (the red sides must stop firing), no-bypass probes, and a nested smoke on
+a deep `TMPDIR` that hard-stops in `0c` and records that section as `SKIP`. `tests/container-tmux.sh` is
+deliberately untouched: its destructive calls run inside the disposable container, which is isolation by
+construction.
+
+What to do when you hit it: read the audit line (it names the actual socket), `mkdir -p` the directory you meant,
+and pass `--own-root`/`--caller-tmpdir`; never work around the stop by exporting a variable — that path does not
+exist.
+
 ## 19. A command refuses because of an inherited identity ("the directory owns the identity")
 
 `team` derives the project from the directory it runs in (`--root <dir>` if given, otherwise the cwd): root = the git
