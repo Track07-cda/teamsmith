@@ -9125,6 +9125,8 @@ section "18c · 公开契约的自洽：账本引用须声明 + 记录 id 须带
 # 规范正文里每条 `docs/team/…` 引用都必须在 tests/spec-ledger-refs.tsv 里声明（槽位形状只由 slot 行放行，
 # 确切引用只由逐字相等的 ledger/example 行放行，槽位模式不许吞具体记录），记录 id 的族必须被
 # `Id families:` 一行点名，被未归档 change 退场的引用逐条点名但不判失败。走查是纯文本、不开窗口/进程。
+# 声明表自己的加载规则（P185）：每条非注释数据行必须恰好三列、kind 闭集、basis 非空，ledger/example 行的
+# pattern 必须是字面引用 —— 不满足就**拒绝加载**并点名表名/行号/行内容，静默丢弃或放行 = 假绿。
 # 产品面检出（交付树导出后：没有账本、也没有叠加层）用 P148 的 `checkout_shape` 判据整段可见跳过
 # （prereq_skip，与 FAST 的 cond_skip 分开记账）并点名缺的内部面。
 
@@ -9174,18 +9176,58 @@ else
     fi
     rm -rf "$P150_CP"
   fi
-  # ④ --flips：双向自检（4 红 3 绿 + 真树反向守卫）
+  # ④ --flips：双向自检（每行一个用例，含声明表加载规则与真树反向守卫）
   if bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p150-flips.log" 2>&1; then
     ok "18c --flips 全绿：$(grep -acE '^(red|clean) ' "$TMP/p150-flips.log") 个变异按预期，反向守卫绿"
   else
     bad "18c --flips 红：$(grep -aE '^(BAD|spec-refs: --flips FAIL)' "$TMP/p150-flips.log" | head -3 | tr '\n' ' ')"
   fi
+  assert_match "$TMP/p150-flips.log" '^red +table-wildcard-ledger ' \
+    "18c --flips 钉住通配 ledger 行被拒绝加载（P185 F1：那种行会吞具体引用）"
+  assert_match "$TMP/p150-flips.log" '^red +table-one-col ' \
+    "18c --flips 钉住缺列数据行被拒绝加载（P185 F2）"
+  assert_match "$TMP/p150-flips.log" '^clean +declared-ledger-rows ' \
+    "18c --flips 反向：ledger 根/固定文件照旧按字面行放行"
   # ⑤ --flips 的敏感性：把匹配器放回宽松版本（槽位模式吞具体引用）→ --flips 必须自己报 BAD（假绿不再无声）
   SPEC_REFS_BREAK=slotmatcher bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p150-flips-break.log" 2>&1
   if grep -aq '^BAD ' "$TMP/p150-flips-break.log"; then
     ok "18c --flips 敏感性：宽松匹配器下 --flips 报 BAD（$(grep -am1 '^BAD ' "$TMP/p150-flips-break.log" | tr -d '\r')）"
   else
     bad "18c --flips 敏感性：宽松匹配器下 --flips 没有报 BAD（变异 1 的假绿没被钉住）"
+  fi
+  # ⑤b 声明表的**加载规则**（P185 返工）：通配/占位形状只属于 slot 行 —— ledger/example 行带 `<…>`/`*`
+  #     与任何畸形数据行（缺列/多列/空 basis/非法 kind）都必须**拒绝加载**并点名表名/行号/行内容；
+  #     静默丢弃或放行就是假绿。表副本在 owned tmp 里，真表只读（未动的表由 ① 断绿）。
+  P185_CP="$(tmp_root_create spec-refs-table)" || bad "18c 建不出声明表夹具"
+  if [ -n "${P185_CP:-}" ] && [ -d "$P185_CP" ]; then
+    cp -a "$P150_SRC/openspec" "$P185_CP/openspec"
+    p185_table_case() { # <标签> <追加行（\t 转义）> <要出现在 stderr 的 ERE>
+      local label="$1" row="$2" want="$3" rc=0
+      cp "$P150_TABLE" "$P185_CP/table.tsv"
+      printf '%b\n' "$row" >> "$P185_CP/table.tsv"
+      bash "$P150_WALK" --check --root "$P185_CP" --table "$P185_CP/table.tsv" \
+        >"$TMP/p185-$label.log" 2>&1 || rc=$?
+      if [ "$rc" -ne 0 ] && grep -aqE "$want" "$TMP/p185-$label.log"; then
+        ok "18c 声明表拒绝加载 $label：$(grep -am1 -E "$want" "$TMP/p185-$label.log" | tr -d '\r' | cut -c1-110)"
+      else
+        bad "18c 声明表 $label：要拒绝加载并点名表名/行号/行内容（rc=$rc）"
+      fi
+    }
+    p185_table_case wildcard-ledger 'docs/team/reports/P184*.md\tledger\t18c fixture' 'table\.tsv:[0-9]+ .*P184\*\.md'
+    p185_table_case wildcard-example 'docs/team/reports/P184-<agent>.md\texample\t18c fixture' 'table\.tsv:[0-9]+ .*P184-<agent>\.md'
+    p185_table_case one-col 'docs/team/18c-one-col.md' 'table\.tsv:[0-9]+ .*docs/team/18c-one-col\.md'
+    p185_table_case two-col 'docs/team/18c-two-col.md\tledger' 'table\.tsv:[0-9]+ .*docs/team/18c-two-col\.md'
+    p185_table_case empty-basis 'docs/team/18c-empty-basis.md\tledger\t' 'table\.tsv:[0-9]+ .*docs/team/18c-empty-basis\.md'
+    p185_table_case bad-kind 'docs/team/18c-bad-kind.md\tbogus\tx' "table\\.tsv:[0-9]+ .*bogus.*docs/team/18c-bad-kind\\.md"
+    p185_table_case extra-col 'docs/team/18c-extra-col.md\tledger\tx\ty' 'table\.tsv:[0-9]+ .*docs/team/18c-extra-col\.md.*y'
+    rm -rf "$P185_CP"
+  fi
+  # ⑤c --flips 的第二种敏感度：把声明表加载放回 P150 的宽松版本 → 声明表用例必须全部变 BAD（换实现 → 守卫红）
+  SPEC_REFS_BREAK=toleranttable bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p185-flips-break.log" 2>&1
+  if grep -aq '^BAD ' "$TMP/p185-flips-break.log"; then
+    ok "18c --flips 敏感性（宽松加载）：toleranttable 下报 BAD（$(grep -am1 '^BAD ' "$TMP/p185-flips-break.log" | tr -d '\r' | cut -c1-90)）"
+  else
+    bad "18c --flips 敏感性（宽松加载）：toleranttable 下没有报 BAD（声明表的假绿没被钉住）"
   fi
   # ⑥ 归档顺序依赖（main 上 signal-gate-pgrep/safe-signal-discipline 的真实形状）：一个未归档
   #    change 的 MODIFIED 改另一个未归档 change 才 ADDED 的 requirement —— 取提供方的块当基线、

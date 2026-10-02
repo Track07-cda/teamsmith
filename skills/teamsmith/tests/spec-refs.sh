@@ -12,7 +12,12 @@
 #     `openspec/changes/*/specs/<cap>/*.md`（`MODIFIED` 按 requirement 标题替换、`ADDED` 追加、
 #     `REMOVED` 丢弃）——走查判的是归档将写出的那份文本，不是今天磁盘上尚未归档的基线。
 #   - `docs/team/…` 引用必须命中声明表 `spec-ledger-refs.tsv`：槽位形状（引用自带 `<…>`/`*`）只由
-#     `slot` 行放行，确切引用只由逐字相等的 `ledger`/`example` 行放行 → 具体报告引用不会被槽位模式吞掉。
+#     `slot` 行放行，确切引用只由**字符级相等**的 `ledger`/`example` 行放行 → 具体报告引用不会
+#     被槽位模式吞掉。
+#   - **声明表自身的加载规则**（P185）：每条非注释数据行必须恰好三列（`pattern`/`kind`/`basis`，
+#     kind 闭集 `slot|ledger|example`、basis 非空），且 `ledger`/`example` 行的 pattern 必须是
+#     **字面引用**（带 `<…>`/`*` 的行只属于 `slot`）—— 任一不成立就**读表即拒绝**并点名表名、
+#     行号、行内容；静默丢弃或放行 = 假绿。
 #   - 被 pending change 退场的引用（基线里有、**每个** pending 版本都不再有）打印
 #     `retired <file>:<line> <ref> by <change>`，不判失败；其余未声明引用打印
 #     `undeclared <file>:<line> <ref>` 并 exit 1。
@@ -30,7 +35,7 @@ SELF="${BASH_SOURCE[0]}"
 SELF_DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
 REPO_ROOT="$(cd -P "$SELF_DIR/../../.." && pwd)"
 
-usage() { sed -n '2,22p' "$SELF"; }
+usage() { sed -n '2,27p' "$SELF"; }
 
 ROOT="$REPO_ROOT"
 TABLE="$SELF_DIR/spec-ledger-refs.tsv"
@@ -62,9 +67,9 @@ esac
 export SPEC_REFS_BREAK="$BREAK"
 
 # ── 走查核心（纯文本；python3 只做文本处理，不碰 tmux / git / 网络）─────────────────────────────
-walk() { # <root> <mode> [caparg] → 走查输出；退出码 0 绿 / 1 红 / 2 用法或内部错
+walk() { # <root> <table> <mode> [caparg] → 走查输出；退出码 0 绿 / 1 红 / 2 用法或内部错
   command -v python3 >/dev/null 2>&1 || { printf 'spec-refs: 需要 python3（文本走查的核心）\n' >&2; return 2; }
-  python3 - "$1" "$TABLE" "$2" "${3:-}" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
 import os, re, sys
 
 root, table, mode = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -76,21 +81,44 @@ def die(msg):
     sys.exit(2)
 
 # ---------------------------------------------------------------- 声明表
+KINDS = ("slot", "ledger", "example")
+
 def load_rows(path):
+    """读声明表。畸形行**拒绝加载**（点名表名/行号/行内容）—— 静默丢弃 = 假绿（P185）。
+
+    `--break=toleranttable` 把加载放回 P150 的宽松版本（缺列 continue、basis/kind 只点名模式、
+    通配行照收），`--flips` 的声明表用例必须因此全部 BAD —— 这是「换掉实现 → 守卫必红」的旋钮。
+    """
     rows = []
+    tolerant = breakstage == "toleranttable"
     with open(path, encoding="utf-8") as fh:
-        for raw in fh:
+        for lineno, raw in enumerate(fh, 1):
             if not raw.strip() or raw.lstrip().startswith("#"):
                 continue
-            parts = raw.rstrip("\n").split("\t")
-            if len(parts) < 2:
-                continue
-            pat, kind = parts[0], parts[1]
-            basis = parts[2] if len(parts) > 2 else ""
-            if kind not in ("slot", "ledger", "example"):
-                die("声明表 kind 非法：%s（%s）" % (kind, pat))
-            if not basis.strip():
-                die("声明表行没有 basis：%s" % pat)
+            line = raw.rstrip("\r\n")
+            parts = line.split("\t")
+            if tolerant:
+                if len(parts) < 2:
+                    continue
+                pat, kind = parts[0], parts[1]
+                basis = parts[2] if len(parts) > 2 else ""
+                if kind not in KINDS:
+                    die("声明表 kind 非法：%s（%s）" % (kind, pat))
+                if not basis.strip():
+                    die("声明表行没有 basis：%s" % pat)
+            else:
+                if len(parts) != 3:
+                    die("声明表 %s:%d 数据行不是三列 pattern<TAB>kind<TAB>basis：%s"
+                        % (path, lineno, line))
+                pat, kind, basis = parts
+                if kind not in KINDS:
+                    die("声明表 %s:%d kind 非法（只许 %s）：%r（行：%s）"
+                        % (path, lineno, "/".join(KINDS), kind, line))
+                if not basis.strip():
+                    die("声明表 %s:%d basis 为空（行：%s）" % (path, lineno, line))
+                if kind in ("ledger", "example") and ("*" in pat or "<" in pat):
+                    die("声明表 %s:%d %s 行必须是字面引用，通配/占位形状只属于 slot：%r（行：%s）"
+                        % (path, lineno, kind, pat, line))
             s = re.sub(r"<[^>]*>", "\x01", pat)
             s = s.replace("**", "\x02").replace("*", "\x03")
             s = re.escape(s)
@@ -103,17 +131,16 @@ def load_rows(path):
 ROWS = load_rows(table)
 
 def declared(ref):
-    """槽位形状的引用只由 slot 行放行；确切引用只由 ledger/example 行放行（宽松匹配 = 假绿）。"""
+    """槽位形状的引用只由 slot 行放行；确切引用与 ledger/example 行**逐字相等**（宽松匹配 = 假绿）。"""
     slot_shaped = ("<" in ref) or ("*" in ref)
-    if slot_shaped:
-        cands = [r for r in ROWS if r[1] == "slot"]
-    else:
-        cands = [r for r in ROWS if r[1] in ("ledger", "example")]
     if breakstage == "slotmatcher":
         # 翻转：放回 P145 dryrun §1 的第一版匹配器（任何行匹配任何引用）——它会把具体引用
         # docs/team/reports/P52-dev2.md 吞进槽位模式，正是 --flips 用例 1 要钉住的假绿。
-        cands = list(ROWS)
-    return any(rx.match(ref) for rx, _, _, _ in cands)
+        return any(rx.match(ref) for rx, _, _, _ in ROWS)
+    if slot_shaped:
+        return any(kind == "slot" and rx.match(ref) for rx, kind, _, _ in ROWS)
+    # 字面相等：ledger/example 行读表时已保证不含 `<…>`/`*`，所以这是真正的字符串相等，不是正则。
+    return any(kind in ("ledger", "example") and pat == ref for _, kind, pat, _ in ROWS)
 
 # ---------------------------------------------------------------- 文本解析
 REQ_RE = re.compile(r"^### Requirement: (.+?)\s*$")
@@ -423,7 +450,8 @@ list_declared() {
 
 # ── --flips：双向自检 ────────────────────────────────────────────────────────────────────────
 # 每个变异都在 owned tmp 家族里的 scratch 副本上做；`--break=slotmatcher` 把匹配器放回宽松版本
-# （用例 1 必须因此从「红」变成「没抓到」→ --flips 自己报 BAD 并非 0）；
+# （用例 1 必须因此从「红」变成「没抓到」→ --flips 自己报 BAD 并非 0）；`--break=toleranttable`
+# 把声明表加载放回 P150 的宽松版本（通配行照收、缺列静默丢弃 → 声明表用例必须全部 BAD）；
 # `--break=writeroot` 把变异写进被检的那棵树（默认拒绝在真仓库根上跑）→ 反向守卫必须报红。
 flips() {
   # shellcheck source=tests/lib/tmp-root.sh
@@ -467,9 +495,25 @@ flips() {
 
   local log="$scratch/walk.log" rc=0
 
+  local flip_table=""
   run_flip() { # <label> <root> → 全局 FLIP_RC / 日志
     FLIP_RC=0
-    walk "$2" "$TABLE" check >"$log" 2>&1 || FLIP_RC=$?
+    walk "$2" "${flip_table:-$TABLE}" check >"$log" 2>&1 || FLIP_RC=$?
+  }
+  mk_table() { # <标签> <追加行（\t 转义）→ 新 scratch 声明表（真表只读）
+    local t="$scratch/table-$1.tsv"
+    cp "$TABLE" "$t" || return 1
+    printf '%b\n' "$2" >> "$t" || return 1
+    printf '%s' "$t"
+  }
+  expect_refused() { # <label> <ERE>：声明表必须**拒绝加载**（rc≠0 且点名表名/行号/该行内容）
+    local label="$1" pat="$2" hit=""
+    hit="$(grep -m1 -E -- "$pat" "$log" || true)"
+    if [ "$FLIP_RC" -ne 0 ] && [ -n "$hit" ]; then
+      red "$label" "exit $FLIP_RC · $hit"
+    else
+      flipbad "$label" "要拒绝加载（exit≠0 且有一行匹配 [$pat]），实得 exit $FLIP_RC：$(tail -2 "$log" | tr '\n' ' ')"
+    fi
   }
   expect_red() { # <label> <ERE>：必须出现一条**判红**的行（undeclared / family-unnamed），不能只是被别的行提到
     local label="$1" pat="$2" hit=""
@@ -491,7 +535,7 @@ flips() {
 
   # ① 红：具体报告引用落在 ## Purpose 里 —— 槽位模式不许吞掉它（P145 dryrun §1 的第一版就吞了）
   # `--break=writeroot`：变异写进**被检的那棵树**（拒绝在真仓库根上跑）→ 反向守卫必须报红
-  local s="" f="" target=""
+  local s="" f="" target="" tbl=""
   s="$(mk_scratch plant-purpose)" || return 2
   target="$(first_spec "$s")" || true
   if [ "$BREAK" = "writeroot" ]; then
@@ -580,7 +624,60 @@ flips() {
   run_flip untouched-tree "$ROOT"
   expect_clean "untouched-tree" "$ROOT"
 
-  # ⑧⑨ 归档顺序依赖：一个未归档 change 的 MODIFIED 改另一个未归档 change 才 ADDED 的 requirement。
+  # ⑧ 红：声明表自己的加载规则（P185 F1）—— 通配/占位形状只属于 `slot` 行：`ledger`/`example` 行
+  #    带 `<…>`/`*` 必须**拒绝加载**并点名表名、行号、行内容；否则一条通配行会吞掉具体引用
+  #    （F1 的现场：植入的具体引用 `docs/team/reports/P184-dev.md` 被 `…P184*.md` 放行）。
+  s="$(mk_scratch table-wildcard)" || return 2
+  f="$(first_spec "$s")" || true
+  if [ -n "$f" ]; then
+    awk '{ print } /^## Purpose/ && !done { print "- planted citation: docs/team/reports/P184-dev.md"; done=1 }' \
+      "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+    tbl="$(mk_table wildcard-ledger 'docs/team/reports/P184*.md\tledger\tP185：通配行只许出现在 slot')" || return 2
+    flip_table="$tbl"; run_flip table-wildcard-ledger "$s"
+    expect_refused "table-wildcard-ledger" 'table-wildcard-ledger\.tsv:[0-9]+ .*P184\*\.md'
+    tbl="$(mk_table wildcard-example 'docs/team/reports/P184-<agent>.md\texample\tP185：占位形状只许出现在 slot')" || return 2
+    flip_table="$tbl"; run_flip table-wildcard-example "$s"
+    expect_refused "table-wildcard-example" 'table-wildcard-example\.tsv:[0-9]+ .*P184-<agent>\.md'
+  else
+    flipbad "table-wildcard-ledger" "副本里找不到 ## Purpose"
+    flipbad "table-wildcard-example" "副本里找不到 ## Purpose"
+  fi
+
+  # ⑨ 红：畸形数据行必须**拒绝加载并点名行号与行内容**（P185 F2）—— 缺列/多列/空 basis/非法 kind，
+  #    一条都不许静默丢弃（P150 的加载对 1 列行直接 continue）。
+  s="$(mk_scratch table-shapes)" || return 2
+  tbl="$(mk_table one-col 'docs/team/one-col.md')" || return 2
+  flip_table="$tbl"; run_flip table-one-col "$s"
+  expect_refused "table-one-col" 'table-one-col\.tsv:[0-9]+ .*docs/team/one-col\.md'
+  tbl="$(mk_table two-col 'docs/team/two-col.md\tledger')" || return 2
+  flip_table="$tbl"; run_flip table-two-col "$s"
+  expect_refused "table-two-col" 'table-two-col\.tsv:[0-9]+ .*docs/team/two-col\.md'
+  tbl="$(mk_table empty-basis 'docs/team/empty-basis.md\tledger\t')" || return 2
+  flip_table="$tbl"; run_flip table-empty-basis "$s"
+  expect_refused "table-empty-basis" 'table-empty-basis\.tsv:[0-9]+ .*docs/team/empty-basis\.md'
+  tbl="$(mk_table bad-kind 'docs/team/bad-kind.md\tbogus\tP185')" || return 2
+  flip_table="$tbl"; run_flip table-bad-kind "$s"
+  expect_refused "table-bad-kind" "table-bad-kind\\.tsv:[0-9]+ .*'bogus'.*docs/team/bad-kind\\.md"
+  tbl="$(mk_table extra-col 'docs/team/extra-col.md\tledger\tP185\textra')" || return 2
+  flip_table="$tbl"; run_flip table-extra-col "$s"
+  expect_refused "table-extra-col" 'table-extra-col\.tsv:[0-9]+ .*docs/team/extra-col\.md.*extra'
+  flip_table=""
+
+  # ⑩ 绿：确切引用照旧由 `ledger`/`example` 行放行（P185 反向，不许误伤）：账本根 `docs/team/reports/`
+  #    与固定文件 `docs/team/DECISIONS.md` 都是字面行，逐字相等即放行。
+  s="$(mk_scratch ledger-ok)" || return 2
+  f="$(first_spec "$s")" || true
+  if [ -n "$f" ]; then
+    awk '{ print } /^## Purpose/ && !done { print "- declared ledger root: docs/team/reports/"; \
+        print "- declared ledger file: docs/team/DECISIONS.md"; done=1 }' \
+      "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+    run_flip declared-ledger-rows "$s"
+    expect_clean "declared-ledger-rows" "$s"
+  else
+    flipbad "declared-ledger-rows" "副本里找不到 ## Purpose"
+  fi
+
+  # ⑪⑫ 归档顺序依赖：一个未归档 change 的 MODIFIED 改另一个未归档 change 才 ADDED 的 requirement。
   # 取提供方的块当基线 → 绿且点名提供方与归档顺序；提供方不在 → 红且点名解析不了的标题。
   # 夹具是自足的最小树（不拷真 openspec）：结论不随 main 上哪些 change 还没归档而变。
   mk_dep_tree() { # <根> <带提供方:1|0>
@@ -647,7 +744,7 @@ SPEC
   run_flip pending-dependency-missing "$s"
   expect_red "pending-dependency-missing" '^spec-refs: .*Proof-of-life slot.*在基线里不存在'
 
-  # ⑧ 反向守卫：真树的 openspec/specs/** 与 docs/team/inbox/** 逐字节未动
+  # ⑬ 反向守卫：真树的 openspec/specs/** 与 docs/team/inbox/** 逐字节未动
   local after_specs after_inbox
   after_specs="$(tree_hash "$ROOT/openspec/specs")"
   after_inbox="$(tree_hash "$ROOT/docs/team/inbox")"
@@ -667,8 +764,8 @@ SPEC
 }
 
 case "$MODE" in
-  check)  walk "$ROOT" check ;;
-  blocks) walk "$ROOT" blocks "$CAPARG" ;;
+  check)  walk "$ROOT" "$TABLE" check ;;
+  blocks) walk "$ROOT" "$TABLE" blocks "$CAPARG" ;;
   list)   list_declared ;;
   flips)  flips ;;
 esac

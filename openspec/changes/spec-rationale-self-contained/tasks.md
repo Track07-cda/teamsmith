@@ -5,8 +5,8 @@ requirement. Nothing else below is executed by it. The apply is one dependency-o
 declared table first (it must be able to redden before anything is retired), then the retirements the walk reports,
 then the gate wiring and the authoring rule. The verify phase is a separate brief owned by a different agent.
 
-Coverage map (requirement → items): **R1** `boundary#Specs are the contract` → 1.1–1.5, 2.5, 3.1–3.2, 4.1;
-its two scenarios' flips → 1.4, 1.5, 2.5; the MODIFIED requirements of R1's retirement rule → 2.1–2.4;
+Coverage map (requirement → items): **R1** `boundary#Specs are the contract` → 1.1–1.5, 1.8, 2.5, 3.1–3.2, 4.1;
+its three scenarios' flips → 1.4, 1.5, 1.8, 2.5; the MODIFIED requirements of R1's retirement rule → 2.1–2.4;
 gates and evidence → 5.1–5.4.
 
 How each scenario is re-checked (run what → read which part → expected value):
@@ -70,6 +70,17 @@ How each scenario is re-checked (run what → read which part → expected value
 - [x] 1.6 reverse guard: before/after hashes of `openspec/specs/**` and `docs/team/inbox/**` must be identical
   after a `--flips` run (the fixture writes only under the tmp root), asserted inside `--flips`. Verify: the
   assertion is green, and it is red when the fixture is pointed at the real tree by hand.
+- [x] 1.8 (P185 rework of 1.1–1.5 after the P184 verification findings; the delta's own requirement text and a
+  third scenario were amended with it) the declared table's own load rules and the exact matcher: every
+  non-comment row carries exactly its three columns (closed-set `kind`, non-empty `basis`) and a `ledger`/`example`
+  row holds a literal reference — a row that lacks any of that, or carries `<…>`/`*` outside a `slot` row, is
+  refused when the table is read, naming table, line number and row text; a concrete reference equals a
+  `ledger`/`example` row character for character, while a slot row keeps allowing slot-shaped references.
+  `--break=toleranttable` restores the lenient load. Verify: `--flips` (18 cases in all, of which the eight new
+  ones are the two wildcard-kind refusals, the five malformed-row refusals — one-col, two-col, extra-col, empty
+  basis, bad kind — and the ledger-root/fixed-file green) and section 18c's seven table cases plus the
+  toleranttable sensitivity; both break stages (`slotmatcher`, `toleranttable`) must redden the flips.
+  Evidence: `docs/team/reports/P185-dev.md` and `docs/team/reports/P185-dev/`.
 
 ## 2. R1 · the retirements (`verification`, `notify-and-inbox`)
 
