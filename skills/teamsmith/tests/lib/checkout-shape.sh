@@ -28,9 +28,12 @@
 # 六个内部开发面（相对仓库根）
 CHECKOUT_INTERNAL_SURFACES=(docs/team openspec/changes AGENTS.md SCOPE.md .pi/prompts .pi/skills)
 
-# 选段器 --check 只放这四个**精确**路径。设计决议 3 的原文口径：这是「存在性例外」，不是「前缀豁免」；
+# 选段器 --check 只放这几个**精确**路径。设计决议 3 的原文口径：这是「存在性例外」，不是「前缀豁免」；
 # 没见过的拼写（例如 openspec/changes/typo-planning-file.md）与任意 .pi/ 下的新路径照旧红。
-CHECKOUT_SELECTOR_LITERALS=(AGENTS.md SCOPE.md .pi/skills openspec/changes/archive)
+# 每加一条都要能点名它的行：`AGENTS.md`/`SCOPE.md` 是 18 与 12k 的，`.pi/skills` 与
+# `openspec/changes/archive` 是 19 与 20 的，`openspec/changes` 是 18c 的（P150 的走查在内部面里读
+# 未归档 change 的 delta；产品面检出里它按构造不存在 —— 精确相等，不豁免它下面的任何拼写）。
+CHECKOUT_SELECTOR_LITERALS=(AGENTS.md SCOPE.md .pi/skills openspec/changes/archive openspec/changes)
 
 # ── 条目存在性（空目录 / 坏软链 / 类型不对都算**有**）────────────────────────────────────────
 checkout_entry_exists() { [ -e "$1" ] || [ -L "$1" ]; }

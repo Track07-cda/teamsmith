@@ -8747,6 +8747,150 @@ git -C "$P16_R/.worktrees/dev" switch -c "$P16_BR" main >/dev/null 2>&1 \
 assert_has "$TMP/p16-dispatch-print.log" "--skill $SKILL_DIR" "渲染的启动命令仍挂日常 skill 目录（--skill）"
 assert_not "$TMP/p16-dispatch-print.log" "teamsmith-init" "渲染的启动命令不含 teamsmith-init"
 
+section "18c · 公开契约的自洽：账本引用须声明 + 记录 id 须带键（P150）"
+# 契约（boundary#Specs are the contract）：公开树发布 openspec/specs，维护者账本 docs/team/** 不发布 ——
+# 规范正文里每条 `docs/team/…` 引用都必须在 tests/spec-ledger-refs.tsv 里声明（槽位形状只由 slot 行放行，
+# 确切引用只由逐字相等的 ledger/example 行放行，槽位模式不许吞具体记录），记录 id 的族必须被
+# `Id families:` 一行点名，被未归档 change 退场的引用逐条点名但不判失败。走查是纯文本、不开窗口/进程。
+# 产品面检出（交付树导出后：没有账本、也没有叠加层）用 P148 的 `checkout_shape` 判据整段可见跳过
+# （prereq_skip，与 FAST 的 cond_skip 分开记账）并点名缺的内部面。
+
+P150_SRC="$(cd -P "$SKILL_DIR" && cd ../.. && pwd)"
+P150_WALK="$SKILL_DIR/tests/spec-refs.sh"
+P150_TABLE="$SKILL_DIR/tests/spec-ledger-refs.tsv"
+# 检出形状用 P148 的共享判据（`tests/lib/checkout-shape.sh`，smoke 顶部已加载）：门禁与选段器
+# 对“什么算产品面检出”必须给出同一个答案，这段不再自足实现（原先的六面循环已删）。
+P150_SHAPE="$(checkout_shape "$P150_SRC")"
+
+if [ "$P150_SHAPE" = "product-only" ]; then
+  prereq_skip "18c · 公开契约的自洽" "docs/team、openspec/changes"
+else
+  # ① 活体走查：本树绿，被 pending change 退场的引用逐条点名、未声明为 0
+  P150_RC=0
+  bash "$P150_WALK" --check --root "$P150_SRC" >"$TMP/p150-check.log" 2>&1 || P150_RC=$?
+  if [ "$P150_RC" -eq 0 ]; then
+    ok "18c --check 绿：$(grep -a -m1 '^spec-refs: judged ' "$TMP/p150-check.log")"
+  else
+    bad "18c --check 红（rc=$P150_RC）：$(grep -aE '^(undeclared|family-unnamed)' "$TMP/p150-check.log" | head -3 | tr '\n' ' ')"
+  fi
+  # ② 声明表真的被读（不是空转）：行数对账 + 走查打印它判过多少条引用
+  assert_eq "18c 声明表行数（--list-declared 与文件数据行一致）" \
+    "$(bash "$P150_WALK" --list-declared | grep -cvE '^[[:space:]]*(#|$)' || true)" \
+    "$(grep -cvE '^[[:space:]]*(#|$)' "$P150_TABLE" || true)"
+  assert_has "$TMP/p150-check.log" "spec-refs: judged " "18c 走查打印了判过的引用计数"
+  assert_match "$TMP/p150-check.log" '^retired ' "18c 被 pending change 退场的引用逐条点名（retired 行）"
+  # ③ 同一次走查在 owned scratch 副本上必须是红的（敏感性），在无账本副本上必须显式跳过
+  P150_CP="$(tmp_root_create spec-refs-gate)" || bad "18c 建不出 scratch 副本"
+  if [ -n "${P150_CP:-}" ] && [ -d "$P150_CP" ]; then
+    cp -a "$P150_SRC/openspec" "$P150_CP/openspec"
+    P150_NO_RC=0
+    bash "$P150_WALK" --check --root "$P150_CP" >"$TMP/p150-noledger.log" 2>&1 || P150_NO_RC=$?
+    assert_match "$TMP/p150-noledger.log" '^skip: no ledger' "18c 无账本检出（产品面）打印显式 skip 行，不静默假绿"
+    assert_eq "18c 无账本检出的退出码" "$P150_NO_RC" "0"
+    P150_F="$(grep -rl '^## Purpose' "$P150_CP/openspec/specs" 2>/dev/null | LC_ALL=C sort | head -1)"
+    if [ -n "$P150_F" ]; then
+      awk '{ print } /^## Purpose/ && !done { print "- planted: `docs/team/scratch/notes.md`"; done=1 }' \
+        "$P150_F" >"$P150_F.tmp" && mv "$P150_F.tmp" "$P150_F"
+      if bash "$P150_WALK" --check --root "$P150_CP" >"$TMP/p150-check-red.log" 2>&1; then
+        bad "18c 敏感性：副本里种的未声明引用没有让走查变红"
+      else
+        ok "18c 敏感性：副本里种的未声明引用被抓住（$(grep -am1 '^undeclared' "$TMP/p150-check-red.log" | tr -d '\r' )）"
+      fi
+    else
+      bad "18c 敏感性：副本里找不到可种引用的 spec"
+    fi
+    rm -rf "$P150_CP"
+  fi
+  # ④ --flips：双向自检（4 红 3 绿 + 真树反向守卫）
+  if bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p150-flips.log" 2>&1; then
+    ok "18c --flips 全绿：$(grep -acE '^(red|clean) ' "$TMP/p150-flips.log") 个变异按预期，反向守卫绿"
+  else
+    bad "18c --flips 红：$(grep -aE '^(BAD|spec-refs: --flips FAIL)' "$TMP/p150-flips.log" | head -3 | tr '\n' ' ')"
+  fi
+  # ⑤ --flips 的敏感性：把匹配器放回宽松版本（槽位模式吞具体引用）→ --flips 必须自己报 BAD（假绿不再无声）
+  SPEC_REFS_BREAK=slotmatcher bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p150-flips-break.log" 2>&1
+  if grep -aq '^BAD ' "$TMP/p150-flips-break.log"; then
+    ok "18c --flips 敏感性：宽松匹配器下 --flips 报 BAD（$(grep -am1 '^BAD ' "$TMP/p150-flips-break.log" | tr -d '\r')）"
+  else
+    bad "18c --flips 敏感性：宽松匹配器下 --flips 没有报 BAD（变异 1 的假绿没被钉住）"
+  fi
+  # ⑥ 归档顺序依赖（main 上 signal-gate-pgrep/safe-signal-discipline 的真实形状）：一个未归档
+  #    change 的 MODIFIED 改另一个未归档 change 才 ADDED 的 requirement —— 取提供方的块当基线、
+  #    逐条点名归档顺序、不判红；**提供方不在**时才是红。夹具自足（最小树，不拷真 openspec），
+  #    所以结论不随 main 上哪些 change 还没归档而变；两条都断（绿+点名 / 红+点名标题）。
+  p150_dep_tree() { # <根> <带提供方:1|0>
+    local d="$1" with="${2:-1}"
+    mkdir -p "$d/openspec/specs/boundary" "$d/openspec/changes/zz-consumer/specs/boundary"
+    [ "$with" = "1" ] && mkdir -p "$d/openspec/changes/zz-provider/specs/boundary"
+    cat > "$d/openspec/specs/boundary/spec.md" <<'SPEC'
+# boundary Specification
+
+## Purpose
+
+Fixture baseline for section 18c's dependency case.
+
+Id families: `P<n>` a task brief.
+
+## Requirements
+
+### Requirement: Base slot
+
+The baseline text.
+
+#### Scenario: Base scenario
+
+- **WHEN** the fixture runs
+- **THEN** it runs
+SPEC
+    if [ "$with" = "1" ]; then
+      cat > "$d/openspec/changes/zz-provider/specs/boundary/spec.md" <<'SPEC'
+## ADDED Requirements
+
+### Requirement: Proof-of-life slot
+
+The provider's text.
+
+#### Scenario: Provider scenario
+
+- **WHEN** the provider runs
+- **THEN** it runs
+SPEC
+    fi
+    cat > "$d/openspec/changes/zz-consumer/specs/boundary/spec.md" <<'SPEC'
+## MODIFIED Requirements
+
+### Requirement: Proof-of-life slot
+
+The consumer's rewritten text.
+
+#### Scenario: Consumer scenario
+
+- **WHEN** the consumer runs
+- **THEN** it runs
+SPEC
+  }
+  P150_DEP="$(tmp_root_create spec-refs-dep)" || bad "18c 建不出归档顺序依赖夹具"
+  if [ -n "${P150_DEP:-}" ] && [ -d "$P150_DEP" ]; then
+    p150_dep_tree "$P150_DEP" 1
+    P150_DEP_RC=0
+    bash "$P150_WALK" --check --root "$P150_DEP" >"$TMP/p150-dep.log" 2>&1 || P150_DEP_RC=$?
+    if [ "$P150_DEP_RC" -eq 0 ] && grep -aq '^pending-dependency .*zz-provider.*zz-consumer' "$TMP/p150-dep.log"; then
+      ok "18c 归档顺序依赖取提供方的块当基线（$(grep -am1 '^pending-dependency' "$TMP/p150-dep.log" | tr -d '\r')）"
+    else
+      bad "18c 归档顺序依赖（rc=$P150_DEP_RC）：$(grep -aE '^(pending-dependency|spec-refs:)' "$TMP/p150-dep.log" | head -2 | tr '\n' ' ')"
+    fi
+    rm -rf "$P150_DEP/openspec/changes/zz-provider"
+    P150_DEP2_RC=0
+    bash "$P150_WALK" --check --root "$P150_DEP" >"$TMP/p150-dep-missing.log" 2>&1 || P150_DEP2_RC=$?
+    if [ "$P150_DEP2_RC" -ne 0 ] && grep -aq "Proof-of-life slot.*在基线里不存在" "$TMP/p150-dep-missing.log"; then
+      ok "18c 提供方不在时同一形状变红并点名解析不了的标题"
+    else
+      bad "18c 归档顺序依赖的敏感性（rc=$P150_DEP2_RC）：$(tail -2 "$TMP/p150-dep-missing.log" | tr '\n' ' ')"
+    fi
+    rm -rf "$P150_DEP"
+  fi
+fi
+
 section "19 · OpenSpec 五阶段流水线：每阶段有所有者与门禁（M9.1）"
 
 OS_PHASES="explore propose apply verify archive"

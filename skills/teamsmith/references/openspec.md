@@ -62,6 +62,12 @@ An exploration whose conclusion is "not worth doing", and a verification that fa
   `anchor: none (infra) — <reason>`) and `deltas:` (the change's delta files this task writes; absent = the whole
   set). `team dispatch` enforces the mapping before it opens a window; `team change status <id>` shows it. The
   grammar and the template live in `templates/task.md.tmpl`, the rules in the skill's `references/protocol.md` §5b.
+- A spec stands on its own: evidence belongs in the spec's own text, and a `docs/team/…` reference is allowed
+  only when `skills/teamsmith/tests/spec-ledger-refs.tsv` declares it with its kind and its basis — a slot
+  pattern never lets a concrete record through. Record ids stay defined by the one `Id families:` line of
+  `boundary#Specs are the contract`. Before hand-off run `bash skills/teamsmith/tests/spec-refs.sh --check`:
+  it judges the text the archive will write, names what a pending change retires, and is red on anything
+  undeclared or on a family the key line does not name.
 
 ## 3. How it maps onto teamsmith
 

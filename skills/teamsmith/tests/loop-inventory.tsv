@@ -9,6 +9,7 @@ flip-m37.sh	113	cap="$m37_i" -lt 50	while [ "$m37_i" -lt 50 ] && { [ -z "$(m37_c
 flip-m4.3.sh	86	cap="$i" -lt $((n * 4))	while [ "$i" -lt $((n * 4)) ]; do
 flip-m7.2.sh	190	bound=夹具的停止位文件（采集器随调用方写 stop 一起退出）	while [ ! -f "$stop" ]; do
 flip-m7.2.sh	217	cap="$i" -lt 60	while [ "$i" -lt 60 ]; do
+flip-p171.sh	108	cap="$i" -lt 3000	while [ "$i" -lt 3000 ]; do
 load-experiment.sh	128	cap=$(( $(date +%s) - start )) -lt "$secs"	while [ $(( $(date +%s) - start )) -lt "$secs" ]; do
 panel-b3.sh	144	cap="$i" -le "${B3_FILE_ITERS:-20}"	while [ "$i" -le "${B3_FILE_ITERS:-20}" ]; do
 panel-b3.sh	158	cap="$i" -le "${B3_ARGS_ITERS:-30}"	while [ "$i" -le "${B3_ARGS_ITERS:-30}" ]; do
@@ -61,6 +62,7 @@ smoke.sh	13165	cap="$P55_W" -lt 20	while [ "$P55_W" -lt 20 ]; do
 smoke.sh	13303	cap="$P55_W" -lt 20	while [ "$P55_W" -lt 20 ]; do
 smoke.sh	13348	cap="$P55_W" -lt 25	while [ "$P55_W" -lt 25 ]; do
 tmp-hygiene.sh	691	cap="$_i" -lt 50	while [ "$_i" -lt 50 ] && ! grep -q '^ROOT=' "$kr_out" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
+tmp-hygiene.sh	1149	cap="$_j" -lt 50	while [ "$_j" -lt 50 ] && kill -0 "$orphan" 2>/dev/null; do sleep 0.1; _j=$((_j + 1)); done
 lib/pty-wait.sh	229	cap="$i" -lt "$ceiling"	while [ "$i" -lt "$ceiling" ]; do
 lib/pty-wait.sh	360	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do
 lib/pty-wait.sh	384	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do

@@ -93,6 +93,7 @@
 17 · 迁移指南与 doctor 指引（M7.1）	29.00	116	29.00	10.6/?/14.0/10.5	24.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 18 · 英文正文不变量与安装器唯一入口（M7.3）	2.00	60	1.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 18b · 拆分不变量（P16）：description 路由 / init 无代码 / 指纹范围 / 零改动	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+18c · 公开契约的自洽：账本引用须声明 + 记录 id 须带键（P150）	3.00	60	2.00	10.26/9.41/32核	3.00	-	-	P150 实测：host=[P150-18c-select]（TEAM_SMOKE_FAST=1 smoke.sh --select 18c，用时 2s，loadavg1 10.26/32 核）container=[P150-18c-select-ctr]（localhost/teamsmith-gate:local 同命令，用时 3s）取最差 3 · ×4 · floor 60
 19 · OpenSpec 五阶段流水线：每阶段有所有者与门禁（M9.1）	1.00	60	1.00	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 20 · done 证据的阶段感知（M9.2）	5.00	60	4.00	10.6/?/14.0/10.5	5.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 21 · 待复验清单不得越过看板决定（M9.4）	10.00	60	8.00	10.6/?/14.0/10.5	10.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
@@ -133,7 +134,7 @@
 48 · P91 合并后的「分支又动了」核对（D49 的另一半）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 49 · P94 现场行数为 0：按配置不打印画面（P88 的 F1）	2.00	60	2.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 50 · P95 合并基准 = 该任务的 squash 提交（解冲突不再假红）	2	60	2	5.9/9.8	2	9.4/8.1	-	P70 F1 实测（merge main 后）：host=[full1m] container=[ctr1m] 取最差 · ×4 · floor 60
-51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）	231	924	231	6.7/32	-	-	-	P140 实测（select 51，loadavg1 6.7/32）：routes.sh 全量 224.5s + config-cli.sh = 231s；容器/CI 未测 · ×4 · floor 60
+51 · 用法诚实性：help 的每条承诺与名册的每条路线都有夹具兑现（P99）	231	924	231	6.7/32	127	9.4/8.1	-	P150 合并 main 后去重（两条并存 → band==max 一条）：host=[P140 select 51：routes.sh 全量 224.5s + config-cli.sh = 231s；P70 F1：full1m 118→最终 121] 取最差 231；container=[ctr1m 123, ctr2m 127] 取 127 · ×4 · floor 60
 54 · 派单摩擦：一次拒绝列全 + 覆盖审计 + 席位预提示（P140）	12	60	12	8.1/32	-	-	-	P140 实测（select 54 两次，loadavg1 6.7/32）：host=5s；P151 追加 F1–F5/W3 腿后重测（select 54 两次，loadavg1 8.1/32）：host=[12s, 12s]（带内 ✓91 ✗0）；容器/CI 未测 · ×4 · floor 60
 57 · delivery-truth：真帧几何 / 队列阻碍 / notify 三处同名（P147）	26	110	26	-	-	-	-	P147 实测（FAST §57 = 26s 上取整 26，host loadavg1 1-2；×4 取 104 → floor… 见预算公式取 110）
 58 · 信号纪律：闸门 / 作业 pid / lint（P159）	7	60	-	-	7	-/-/-/-	-	P159 实测（container=teamsmith-gate:local 跑 smoke --select 58，段用时 7s；纯逻辑段：perl lint + 两只夹具 + harness S13）· ×4 · floor 60

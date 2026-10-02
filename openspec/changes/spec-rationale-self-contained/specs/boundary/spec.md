@@ -22,7 +22,12 @@ outside the distributed tree and are not needed to re-run any scenario.
 
 The project gate SHALL judge the contract's text as the archive will write it: the base spec for a capability no
 pending change touches and, for a requirement a pending change adds, modifies or removes, that change's own block.
-A reference the pending changes retire MUST be reported once with the file, the line and the retiring change and
+It SHALL read the pending changes in dependency order rather than directory order: when a pending change's
+`MODIFIED` or `REMOVED` block names a requirement the base spec does not have and another pending change's `ADDED`
+block supplies it, the walk SHALL take that block as the baseline, SHALL name the supplying change and the archive
+order that implies, and MUST NOT fail; a block whose title neither the base nor any pending change supplies MUST
+fail, naming its file and the title. A reference the pending changes retire MUST be reported once with the file,
+the line and the retiring change and
 MUST NOT fail the run; a reference no pending change retires MUST fail it, naming the file, the line and the path.
 The walk SHALL need no window, process or network — it reads text, so it runs in the fast gate as well.
 
@@ -46,3 +51,11 @@ The walk SHALL need no window, process or network — it reads text, so it runs 
 - **THEN** each run exits non-zero and names the file and the unnamed family, while the untouched copy exits 0
 - **AND** `bash skills/teamsmith/tests/spec-refs.sh --flips` prints one `red` line per mutation that must be caught
   and one `clean` line per mutation that must stay green, and exits 0 only when every mutation behaved as required
+
+#### Scenario: A requirement another pending change supplies and one nothing supplies
+
+- **GIVEN** a tree where change `zz-provider`'s `ADDED` block introduces a requirement and change `zz-consumer`'s
+  `MODIFIED` block rewrites it, and the same tree with `zz-provider`'s change directory removed
+- **WHEN** `bash skills/teamsmith/tests/spec-refs.sh --check` runs on each
+- **THEN** the first exits 0 and names `zz-provider` as the provider of that baseline and the order that implies,
+  while the second exits non-zero and names `zz-consumer`'s file and the title it could not resolve

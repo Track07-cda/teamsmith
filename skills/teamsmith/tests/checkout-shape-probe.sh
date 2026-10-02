@@ -158,7 +158,10 @@ phas "③ 产品面 --check 点名 SKIP（条件不满足）" "$(cat "$P_CK")" "
 for lit in AGENTS.md SCOPE.md .pi/skills openspec/changes/archive; do
   phas "③ 产品面 --check 点名精确前提 $lit" "$(cat "$P_CK")" "$lit"
 done
-phas "③ 产品面 --check 汇总把 SKIP 分开计数" "$(cat "$P_CK")" "SKIP 6"
+# 汇总里的 SKIP 数 = 逐条 SKIP 行的条数（分开计数的**不变量**，不写死数字：P150 的 18c 行又加了一条
+# 内部面字面量，写死的 6 会随表长腐——探针要钉的是「分开计数」这件事本身）。
+P_CK_SKIPS="$(grep -c 'SKIP（条件不满足）' "$P_CK" || true)"
+phas "③ 产品面 --check 汇总把 SKIP 分开计数" "$(cat "$P_CK")" "SKIP $P_CK_SKIPS"
 pnot "③ 产品面 --check 没有 bad" "$(cat "$P_CK")" "bad:"
 
 P_MIXCK="$T/check-mix.log"

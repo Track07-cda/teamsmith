@@ -1,0 +1,73 @@
+# teamsmith · 公开契约里允许出现的账本引用（change: spec-rationale-self-contained · boundary#Specs are the contract）
+#
+# `openspec/specs/**` 随公开树发布，`docs/team/**`（维护者账本：任务书 / 报告 / 复验 / 决策）不发布。
+# 所以规范里出现的每条 `docs/team/…` 引用都必须在这里**声明**：kind 说它是哪一类，basis 说它凭什么
+# 能出现在公开契约里。走查（`tests/spec-refs.sh --check`）拿这张表判；未声明的引用 = 红。
+#
+# columns: pattern <TAB> kind <TAB> basis
+#   pattern  一条账本引用的模式；`<…>` = 一段不含 `/` 与空白的成分；`*` = 段内通配；`**` = 任意后缀
+#   kind     slot（槽位）| ledger（账本根本身或它的固定文件）| example（一条确切的示例记录）
+#   basis    为什么它能出现在公开契约里（人读；空 = 该行不合格，走查拒绝加载）
+#
+# 匹配器（这条区分是规则的一部分，宽松 = 假绿）：
+#   - **槽位形状**的引用（引用自己带 `<…>` 或 `*`）只由 `slot` 行放行；
+#   - **确切的**引用只由逐字相等的 `ledger` / `example` 行放行。
+#   于是槽位模式 `docs/team/reports/<ID>-*.md` 不会吞掉具体记录 `docs/team/reports/P52-dev2.md` ——
+#   具体报告引用在槽位形状之外，未声明就是红（P145 dryrun §1 的第一版匹配器正是这样放过了它，
+#   所以 `spec-refs.sh --flips` 把这个变异钉在清单里）。
+#
+# 未列出的引用 = 未声明 = 红。新增一条引用是一次**有意的动作**：加行、写 basis，再跑走查。
+
+docs/team/	ledger	账本根，spec 引用「项目自己的账本」这一层
+docs/team/**	slot	整个账本（agent-adapters 用它说明「历史不延续时靠账本接手」）
+docs/team/tasks/<ID>-<slug>.md	slot	skill 定义的任务书槽位（dispatch 的交付物）
+docs/team/tasks/<ID>-*.md	slot	任务书槽位（同上的多份形状）
+docs/team/reports/	ledger	报告目录本身
+docs/team/reports/**	slot	报告子树（boundary 用它说「brief 只允许写这里」）
+docs/team/reports/<ID>-*.md	slot	报告槽位
+docs/team/reviews/<ID>.md	slot	复验记录槽位
+docs/team/reviews/<ID>-*.md	slot	复验记录的附属记录槽位
+docs/team/inbox/**	slot	收件箱子树（fixture 痕迹扫描的范围）
+docs/team/inbox/<agent>.md	slot	收件箱槽位
+docs/team/inbox/<inbox>.md	slot	收件箱槽位（同一形状的另一处拼写）
+docs/team/inbox/<recipient>.md	slot	收件箱槽位
+docs/team/inbox/<target>.md	slot	收件箱槽位
+docs/team/threads/	ledger	往来记录目录（memory-and-deps 的用词不变量）
+docs/team/BOARD.md	ledger	账本固定文件：看板
+docs/team/DECISIONS.md	ledger	账本固定文件：决策记录
+docs/team/OWNERSHIP.md	ledger	账本固定文件：目录归属（boundary 的 ownership 来源）
+docs/team/threads/README.md	ledger	templates/threads-README.md 渲染出来的固定文件
+docs/team/PUBLISH.md	ledger	项目自有的发布清单（shipped references/workflows.md 点名同一路径；设计 D6 记录了这个判断）
+docs/team/tasks/T1.1-*.md	slot	specs 自己的示例 id T1.1（dispatch 的验收示例）
+docs/team/tasks/T1.1-first-task.md	example	同上
+docs/team/reports/T1.1-dev.md	example	同上
+docs/team/reviews/T1.1.md	example	同上
+docs/team/reports/T9-dev.md	example	看板/摘要夹具的示例记录
+docs/team/reviews/T9.md	example	同上
+docs/team/reviews/A1-done.md	example	收尾证据行的示例记录
+docs/team/reports/V1-verify.md	example	verify 席位 grant 的示例记录
+docs/team/tasks/P1-a.md	example	panel 夹具建的文件（smoke.sh:10698）
+docs/team/tasks/P17-b.md	example	panel 夹具的诱饵（smoke.sh:10699）
+docs/team/reports/P1-dev.md	example	同一 panel 夹具的报告页签
+docs/team/reviews/P1.md	example	同一 panel 夹具的复验页签
+docs/team/reviews/P1-done.md	example	同一 panel 夹具的收尾页签（smoke.sh:10702）
+docs/team/reports/P2-closure.md	example	摘要夹具的结项报告（smoke.sh:1892, 5142）
+docs/team/reports/P97-dev3.md	example	选段选择器的夹具参数（smoke.sh:13816；设计 D6 记录了这个判断）
+docs/team/inbox/dev.md	example	notify 夹具的收件箱
+docs/team/inbox/dev2.md	example	notify 夹具的收件箱
+docs/team/inbox/pm.md	example	notify 夹具的收件箱（PM 侧）
+docs/team/inbox/leak.md	example	夹具种下的痕迹样本（verification:729）
+docs/team/inbox/bg/leak.md	example	夹具种下的痕迹样本（verification:759）
+docs/team/threads/dev.md	example	往来记录夹具（memory-and-deps:94）
+
+# ── 其他未归档 change 的 delta 文本里出现的引用 ─────────────────────────────────────────────────
+# 走查判的是「归档将写出的文本」＝ 基线 + 全部未归档 change 的 delta，所以这些引用今天就在有效文本里。
+# 它们由**各自的 change** 拥有（P150 的 grant 只覆盖本 change 的 delta，不能替它们改写正文），P150
+# 按上面的 kind 口径判定放行，行尾 basis 写明归属；PM 若判其中哪条该退役，把行去掉、指名该 change 修。
+#
+docs/team/…	ledger	契约正文自己的省略号记号：`docs/team/…` 指代「一条账本引用」这个形状（boundary#Specs are the contract 的正文；不是一条记录）
+docs/team/tools/publish-public.sh	ledger	项目自有的发布工具（product-checkout-gate/P148 的 GIVEN 用它导出产品树；该 change 的 apply/verify 拥有这条引用）
+docs/team/reports/P143-verify/logs/tmux-p143-dirty/second-before.frame	example	delivery-truth/P147 的 GIVEN 把这份真实抓帧当夹具输入（该 change 的 apply/verify 拥有这条引用）
+docs/team/reports/P143-verify/logs/tmux-p143-draft-dirty/draft-before.frame	example	delivery-truth/P147 的 GIVEN 把这份真实抓帧当夹具输入（同上）
+docs/team/reports/P143-verify/pkg/run-case.sh	example	delivery-truth/P147 的 GIVEN 用它复现容器用例（同上）
+docs/team/reviews/P9.md	example	meeting-liveness/P139 的 GIVEN 用它当复验记录夹具输入（该 change 的 apply/verify 拥有这条引用）
