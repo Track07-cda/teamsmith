@@ -19,6 +19,8 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   roster          名册：agent、窗口是否在跑、分支、脏文件、领先提交数
   status [ID]     roster + 任务/report 状态；给 ID 时只显示该任务
   ps              容量：RAM/swap/还能再跑几个 agent + 模型并发占用（派单前看）
+  bg list|stop <id>  后台作业车道：list 看本项目记录到的作业（pid/启动指纹/命令）；stop 只按记录里的
+                  (pid, 启动时间指纹) 停那一个作业（组内子孙一起；身份对不上就拒）
   digest          给 PM 的待办摘要：收件箱未处理项 + 待复验报告 + 任务状态
   inbox [agent]   打印收件箱（agent 在回合结束时自动追加）
   paths           打印当前解析出的路径/ session（JSON），排障用

@@ -51,7 +51,7 @@ unset TEAM_ROOT TEAM_MAIN_ROOT TEAM_ROOT_SOURCE TEAM_ROOT_WAS TEAM_PROJECT \
 # ① 它是「调用者环境」的一部分，夹具要证明漏进来的值对判定毫无影响（31c ①e 用显式赋值正面钉住）；
 # ② TEAM_TMUX_CALLS_LOG/TEAM_TMUX_REAL 漏进来会把夹具的 tmux 调用写进真项目的 forensics 日志 /
 #    把 shim 指到错误真身（M7.2 同族污染）。
-unset TEAM_ALLOW_DESTRUCTIVE_TMUX TEAM_TMUX_CALLS_LOG TEAM_TMUX_REAL 2>/dev/null || true
+unset TEAM_ALLOW_DESTRUCTIVE_TMUX TEAM_TMUX_CALLS_LOG TEAM_TMUX_REAL TEAM_SIGNAL_CALLS_LOG TEAM_SIGNAL_REAL 2>/dev/null || true
 # ── M36 闸门在 PATH 里的那一格也属于「调用者身份」────────────────────────────────────────
 # 调用方是 PM/worker 会话（M36 起 PATH 最前是 scripts/shim）时，夹具里 `command -v tmux` 会解析到
 # shim 而不是真 tmux：M8.1 的逐字节参考值与 m36 段的 TEAM_TMUX_REAL 断言都会跟着漂（v1.42.0 发布
@@ -526,6 +526,9 @@ TEAM_TMUX_CALLS_LOG="$TMP/tmux-calls-caller.log"; export TEAM_TMUX_CALLS_LOG
 # PM 拉起断言整段变红）。`TMUX_TMPDIR` 是环境变量，会随 tmux server 传进每个 pane，里层同样有效。
 #   TEAM_SMOKE_NO_PRIVATE_TMUX=1  关掉（回到调用者的默认 server；对照实验用）
 REAL_TMUX="$(command -v tmux 2>/dev/null || true)"
+# P159：信号闸门的真身（与 REAL_TMUX 同口径；PATH 里的 scripts/shim 已在文件头剥掉，
+# 所以这里拿到的是真身而不是闸门入口）。team_signal_real_bin 先 pkill 后 killall，这里同序。
+REAL_SIGNAL="$(command -v pkill 2>/dev/null || command -v killall 2>/dev/null || true)"
 SMOKE_PRIVATE_TMUX=0
 if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
   SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
@@ -2804,6 +2807,10 @@ PM_SUPPORT="${PM_SUPPORT% }"
 #    真 tmux 路径三段 export）——前缀同样字面写死；前缀以外的历史部分保持逐字节一致。
 M36_REF_PREFIX="export PATH=$(printf '%q' "$SKILL_DIR/scripts/shim"):\"\$PATH\"; export TEAM_TMUX_CALLS_LOG=$(printf '%q' "$REPO/.pi/team/state/tmux-calls.log"); "
 [ -n "$REAL_TMUX" ] && M36_REF_PREFIX="${M36_REF_PREFIX}export TEAM_TMUX_REAL=$(printf '%q' "$REAL_TMUX"); "
+# P159：前缀再带**信号闸门的两段**（tmux 两段在前、信号两段在后；同样字面写死，不调实现）。
+# 这里同样**不写任何授权变量** —— 环境不授权信号判定（TEAM_ALLOW_PATTERN_KILL 之类不改变任何分支）。
+M36_REF_PREFIX="${M36_REF_PREFIX}export TEAM_SIGNAL_CALLS_LOG=$(printf '%q' "$REPO/.pi/team/state/signal-calls.log"); "
+[ -n "$REAL_SIGNAL" ] && M36_REF_PREFIX="${M36_REF_PREFIX}export TEAM_SIGNAL_REAL=$(printf '%q' "$REAL_SIGNAL"); "
 # M40 起再带一段**身份环境前缀**（继承的 TEAM_* 身份先清掉，只写本命令现场推导出的身份）：
 # 前缀同样字面写死（值只取夹具已知量），前缀以外的历史部分保持逐字节一致。
 m40sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
@@ -4103,10 +4110,11 @@ EOS
     # 事故（M34 复验 17:58 的假红）：旧写法是自匹配的 ps|grep（第一次就 break）+ 单次 assert_file，
     # 负载高时 pane 里的交互 shell 还没 exec 出脚本 → 「m25-control.out 找不到」红，而几秒后文件其实出现了；
     # 同一处自匹配还让下一行「对照组没有被停住」**假绿**（ps 命中 grep 自己，文件不存在反而满足条件）。
-    M25_CWAIT=0; M25_CSTATE=""; M25_CDIAG="ps 里 30s 都没看到对照组（pane 里的 shell 没起来？）"
+    M25_CWAIT=0; M25_CSTATE=""; M25_CPID=""; M25_CDIAG="ps 里 30s 都没看到对照组（pane 里的 shell 没起来？）"
     while [ "$M25_CWAIT" -lt 60 ]; do
       M25_CSTATE="$(m25_ctl_stat)"
       if [ -n "$M25_CSTATE" ]; then
+        M25_CPID="${M25_CSTATE%% *}"
         M25_CDIAG="ps 里最后是 [$M25_CSTATE]"
         case "$M25_CSTATE" in *" T"*) M25_CDIAG=""; break ;; esac
       fi
@@ -4136,10 +4144,13 @@ EOS
       sed 's/^/    | /' "$TMP/m25-tty-review.log" 2>/dev/null | head -8
       printf '  pane 尾巴：\n'; tail -5 "$TMP/m25-tty-pane.log" 2>/dev/null | sed 's/^/    | /'
     fi
-    # 对照组是被停住的进程：显式收掉，别留给后面小节（kill 只针对本夹具的脚本名；
-    # 被 SIGTTIN 停住的进程收不到 TERM，得先 -CONT 让它跑起来）
-    pkill -CONT -f "m25-control-read.sh" 2>/dev/null || true
-    pkill -TERM -f "m25-control-read.sh" 2>/dev/null || true
+    # 对照组是被停住的进程：显式收掉，别留给后面小节。信号只发给**本夹具定位到并记录过的 pid**
+    # （P159 起模式选择全面禁止：那正是误伤别人进程的形状）；被 SIGTTIN 停住的进程收不到 TERM，
+    # 得先 -CONT 让它跑起来。
+    if [ -n "$M25_CPID" ]; then
+      kill -CONT "$M25_CPID" 2>/dev/null || true
+      kill -TERM "$M25_CPID" 2>/dev/null || true
+    fi
     assert_has "$M25_GATE_LOG" "gate_read_done=yes" "M25-② 门禁在后台进程组里读到 EOF 并跑完（stdin=/dev/null，没被 SIGTTIN 停住）"
     assert_has "$M25_GATE_LOG" "gate_stdin=/dev/null" "M25-② 门禁 stdin 确实是 /dev/null"
     m25_tm kill-server 2>/dev/null || true
@@ -12691,6 +12702,9 @@ else
   cat > "$FAKE/gate-probe.sh" <<EOF
 #!/usr/bin/env bash
 env | sort > "$M36_D/env-worker.log"
+# P159：窗口里 pkill/killall 必须解析到闸门入口（PATH 最前 + 同名入口）
+printf 'pkill_at=%s\n' "\$(command -v pkill)" >> "$M36_D/env-worker.log"
+printf 'killall_at=%s\n' "\$(command -v killall)" >> "$M36_D/env-worker.log"
 tmux ls >> "$M36_D/env-worker.log" 2>&1 || true
 # M67 R2：CLI 自己的破坏性调用 = 本项目自己的命名对象（\$TEAM_SESSION:gatevictim），在默认 socket
 # 上应记 act=allowed-owned。真身钉桩（默认 socket 探针纪律），TMUX 清掉才会解析到默认 socket。
@@ -12719,6 +12733,12 @@ EOF
     assert_match "$M36_D/env-worker.log" "^PATH=$M36_SHIM_DIR:" "⑪ worker 窗口 env：PATH 最前是 shim 目录"
     assert_match "$M36_D/env-worker.log" "^TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log\$" "⑪ worker 窗口 env：日志指向本 fixture 的 state/"
     assert_match "$M36_D/env-worker.log" "^TEAM_TMUX_REAL=$REAL_TMUX\$" "⑪ worker 窗口 env：真 tmux 路径也进了 env"
+    # P159：信号闸门同形 —— 日志钉进本项目 state、真身钉住（拒绝不依赖它）、入口真的在 PATH 最前
+    assert_match "$M36_D/env-worker.log" "^TEAM_SIGNAL_CALLS_LOG=$REPO/.pi/team/state/signal-calls.log\$" "⑪ worker 窗口 env：信号调用日志指向本 fixture 的 state/"
+    assert_match "$M36_D/env-worker.log" "^TEAM_SIGNAL_REAL=/" "⑪ worker 窗口 env：信号真身路径也进了 env（绝对路径）"
+    assert_match "$M36_D/env-worker.log" "^pkill_at=$M36_SHIM_DIR/pkill\$" "⑪ worker 窗口里 pkill 解析到闸门入口"
+    assert_match "$M36_D/env-worker.log" "^killall_at=$M36_SHIM_DIR/killall\$" "⑪ worker 窗口里 killall 解析到闸门入口"
+    assert_not "$M36_D/env-worker.log" "ALLOW_PATTERN" "⑪ worker 窗口 env：没有任何信号授权键（环境不授权）"
     assert_not "$M36_D/env-worker.log" "TEAM_ALLOW_DESTRUCTIVE_TMUX=" "⑪ worker 窗口 env：没有退役键（派单 shell 带着它也没用）"
     assert_not "$M36_D/env-worker.log" "DESTRUCTIVE" "⑪ worker 窗口 env：没有任何破坏性授权键"
   else bad "worker 窗口的 env 没落盘（gateprobe 没跑起来）"; fi
@@ -12746,6 +12766,9 @@ EOF
   cat > "$FAKE/gate-pm.sh" <<EOF
 #!/usr/bin/env bash
 env | sort > "$M36_D/env-pm.log"
+# P159：PM 窗口与 worker 窗口共用同一段前缀 —— 信号入口也必须解析到闸门（与 gate-probe.sh 同形）
+printf 'pkill_at=%s\\n' "\$(command -v pkill)" >> "$M36_D/env-pm.log"
+printf 'killall_at=%s\\n' "\$(command -v killall)" >> "$M36_D/env-pm.log"
 printf 'done\\n' > "$M36_D/env-pm.done"
 sleep 300
 EOF
@@ -12760,6 +12783,8 @@ EOF
   if [ -f "$M36_D/env-pm.log" ]; then
     assert_match "$M36_D/env-pm.log" "^PATH=$M36_SHIM_DIR:" "⑪ PM 窗口 env：PATH 最前是 shim 目录"
     assert_match "$M36_D/env-pm.log" "^TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log\$" "⑪ PM 窗口 env：日志指向本 fixture 的 state/"
+    assert_match "$M36_D/env-pm.log" "^TEAM_SIGNAL_CALLS_LOG=$REPO/.pi/team/state/signal-calls.log\$" "⑪ PM 窗口 env：信号调用日志也钉了（同一段前缀）"
+    assert_match "$M36_D/env-pm.log" "^pkill_at=$M36_SHIM_DIR/pkill\$" "⑪ PM 窗口里 pkill 也解析到闸门入口"
     assert_not "$M36_D/env-pm.log" "TEAM_ALLOW_DESTRUCTIVE_TMUX=" "⑪ PM 窗口 env：没有退役键"
   else bad "PM 窗口的 env 没落盘（gate-pm 没跑起来）"; fi
   # 收尾：PM 窗口 + pm.pid 系列清掉（与 6i 收尾同口径，后面没有依赖它们的段落了）
@@ -17816,6 +17841,104 @@ if [ -f "$SKILL_DIR/tests/delivery-truth.sh" ]; then
   fi
 else
   bad "57 缺 tests/delivery-truth.sh（P147 的 delivery-truth 门禁）"
+fi
+
+# ---------------------------------------------------------------- 58. P159 信号纪律
+# 四条腿，全部纯逻辑（不起 tmux、不进容器；FAST 照跑，live_mark 一次都不点）：
+#   ① lint（静态那一半）：仓库脚本/夹具里按名字或模式选进程 → 红；scratch 副本上翻转
+#      （种一条 `pkill -f` 必红并按 file:line 点名 → 改成 `kill "$pid"` 转绿）
+#   ② signal-gate.sh（运行时那一半）：一切选择形态 exit 64、真身零调用、诱饵活着；只读四词透传；
+#      记录/轮转/长保留/保留失败可见
+#   ③ team-bg-stop.sh：按 (pid, 启动时间指纹) 停作业；四种拒绝零信号；邻居活着
+#   ④ harness --record-only（真扩展写 state/bg/<id>.job）+ 段内 `team bg stop`：把「记录 → 按记录停」接上
+section "58 · 信号纪律：闸门 / 作业 pid / lint（P159）"
+P159_LINT="$SKILL_DIR/tests/signal-lint.pl"
+P159_LOG="$TMP/p159-lint.log"
+P159_ROOT=""; P159_PID=""
+if ! command -v perl >/dev/null 2>&1; then
+  bad "没有 perl：P159 信号纪律 lint 跑不了（装上 perl 才能跑这条门禁）"
+else
+  if perl "$P159_LINT" >"$P159_LOG" 2>&1; then
+    ok "58 lint 真树：仓库脚本/夹具没有按名字或模式选进程（$(grep -c '^  LEGACY' "$P159_LOG" 2>/dev/null || printf 0) 个历史豁免文件逐条打印）"
+    grep '^  LEGACY\|^signal-lint' "$P159_LOG" 2>/dev/null | sed 's/^/      /'
+  else
+    bad "58 lint 真树判红（见 $P159_LOG）"
+    grep -a '^  RED\|^  ✗' "$P159_LOG" 2>/dev/null | head -5 | sed 's/^/      /'
+  fi
+  if perl "$P159_LINT" --selftest --quiet >>"$P159_LOG" 2>&1; then
+    ok "58 lint --selftest：双向夹具全部符合预期"
+  else
+    bad "58 lint --selftest 有夹具不符合预期（见 $P159_LOG）"
+  fi
+  # 门禁级翻转：干净 → 种一条 pkill -f 必须红并点名 → 换成 kill "$pid" 转绿
+  P159_SB="$TMP/p159-lint-flip"; rm -rf "$P159_SB"; mkdir -p "$P159_SB"
+  printf '#!/usr/bin/env bash\ntrue\n' > "$P159_SB/x.sh"
+  if perl "$P159_LINT" --root "$P159_SB" --quiet >/dev/null 2>&1; then ok "58 翻转①：干净文件不报红"
+  else bad "58 翻转①：干净文件被误报"; fi
+  printf '#!/usr/bin/env bash\npkill -f p159-planted-marker\n' > "$P159_SB/x.sh"
+  if perl "$P159_LINT" --root "$P159_SB" >"$TMP/p159-lint-red.log" 2>&1; then
+    bad "58 翻转②：种下的 pkill -f 没被抓到（检查器太弱）"
+  else
+    assert_has "$TMP/p159-lint-red.log" "p159-lint-flip/x.sh:2" "58 翻转②：种下的 pkill -f 被判红并按 file:line 点名"
+  fi
+  printf '#!/usr/bin/env bash\nkill -TERM "$pid"\n' > "$P159_SB/x.sh"
+  if perl "$P159_LINT" --root "$P159_SB" --quiet >/dev/null 2>&1; then ok "58 翻转③：kill \"\$pid\" 形态不报红（反向不误报）"
+  else bad "58 翻转③：pid 精确形态被误报"; fi
+  rm -rf "$P159_SB"
+fi
+# ② 运行时闸门：夹具自钉 argv 记录桩，拒绝路径不执行任何东西（不起 tmux、不碰真 pkill）
+if [ -f "$SKILL_DIR/tests/signal-gate.sh" ]; then
+  P159_GRC=0
+  bash "$SKILL_DIR/tests/signal-gate.sh" >"$TMP/p159-signal-gate.log" 2>&1 || P159_GRC=$?
+  if [ "$P159_GRC" -eq 0 ]; then
+    ok "58 signal-gate 全绿（$(grep -ac '✓' "$TMP/p159-signal-gate.log" || true) 条断言）"
+  else
+    bad "58 signal-gate 有失败（rc=$P159_GRC）"
+    grep -a '✗' "$TMP/p159-signal-gate.log" | head -8 | sed 's/^/      /'
+  fi
+else
+  bad "58 缺 tests/signal-gate.sh（P159 的运行时闸门）"
+fi
+# ③ 作业车道：按记录停（身份 = pid + 启动时间指纹；四种拒绝零信号；邻居活着）
+if [ -f "$SKILL_DIR/tests/team-bg-stop.sh" ]; then
+  P159_BRC=0
+  bash "$SKILL_DIR/tests/team-bg-stop.sh" >"$TMP/p159-bg-stop-fixture.log" 2>&1 || P159_BRC=$?
+  if [ "$P159_BRC" -eq 0 ]; then
+    ok "58 team-bg-stop 全绿（$(grep -ac '✓' "$TMP/p159-bg-stop-fixture.log" || true) 条断言）"
+  else
+    bad "58 team-bg-stop 有失败（rc=$P159_BRC）"
+    grep -a '✗' "$TMP/p159-bg-stop-fixture.log" | head -8 | sed 's/^/      /'
+  fi
+else
+  bad "58 缺 tests/team-bg-stop.sh（P159 的作业车道夹具）"
+fi
+# ④ 记录 → 按记录停：真扩展写 state/bg/<id>.job（harness S13），段内用 team bg stop 停它
+if [ -n "$TS_RUNNER" ]; then
+  P159_RRC=0
+  $TS_RUNNER "$SKILL_DIR/tests/team-bg-harness.mjs" "$SKILL_DIR/extension/team-bg.ts" --record-only \
+    >"$TMP/p159-bg-record.log" 2>&1 || P159_RRC=$?
+  P159_REC="$(grep -a '^TEAM-BG-RECORD ' "$TMP/p159-bg-record.log" | tail -1)"
+  if [ "$P159_RRC" -eq 0 ] && [ -n "$P159_REC" ]; then
+    P159_ID="$(printf '%s' "$P159_REC" | sed -n 's/.* id=\([^ ]*\).*/\1/p')"
+    P159_PID="$(printf '%s' "$P159_REC" | sed -n 's/.* pid=\([^ ]*\).*/\1/p')"
+    P159_ROOT="$(printf '%s' "$P159_REC" | sed -n 's/.* root=\([^ ]*\).*/\1/p')"
+    ok "58 harness S13：真扩展写的作业记录（$(grep -ac 'TEAM-BG-CASE PASS S13' "$TMP/p159-bg-record.log" || true) 条断言，job=$P159_ID pid=$P159_PID）"
+    P159_SRC_RC=0
+    ( cd "$P159_ROOT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
+        "$SKILL_DIR/scripts/team" --root "$P159_ROOT" bg stop "$P159_ID" ) >"$TMP/p159-bg-stop.log" 2>&1 || P159_SRC_RC=$?
+    assert_eq "58 段内 team bg stop 用记录停掉 harness 起的作业（rc）" "$P159_SRC_RC" "0"
+    assert_has "$TMP/p159-bg-stop.log" "result=stopped" "58 stop 打印它信号了谁（result=stopped）"
+    assert_has "$TMP/p159-bg-stop.log" "cmd: sleep 300" "58 stop 点名被停的命令"
+    kill -0 "$P159_PID" 2>/dev/null && bad "58 harness 作业 pid $P159_PID 还活着" || ok "58 harness 作业已按记录停掉（pid $P159_PID 不在）"
+  else
+    bad "58 harness --record-only 失败（rc=$P159_RRC）"
+    tail -5 "$TMP/p159-bg-record.log" | sed 's/^/      /'
+  fi
+  # 兜底：不管断言结果，都不留一个 5 分钟的 sleep 与临时根（只按记录到的 pid 发信号）
+  [ -n "$P159_PID" ] && kill -KILL "$P159_PID" 2>/dev/null || true
+  [ -n "$P159_ROOT" ] && rm -rf "$(dirname "$P159_ROOT")" || true
+else
+  printf '  \033[33mSKIP\033[0m 58 harness S13：没有可跑 TypeScript 的运行时（node 类型剥离 / bun / tsx）\n'
 fi
 
 # ---------------------------------------------------------------- 14d. P70 本套自述对账

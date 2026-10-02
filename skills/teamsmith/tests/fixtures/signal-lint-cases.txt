@@ -1,0 +1,40 @@
+# signal-lint · 双向夹具表（P159 · safe-signal-discipline）
+#
+# 为什么是纯数据文件而不是写在 lint 源码里的数组：signal-lint.pl 用 shell 词法解析所有被扫脚本，
+# 它的**自己的源码**也在 tests/** 扫描面里 —— 把 `pkill -f x` 这类夹具源码写进 .pl 数组，会让
+# lint 在自己的 Perl 引号/正则语法上失步，然后把字符串里的词当成命令词误报成红。夹具表放这里
+# （.txt 不在被扫扩展名里），lint 源码保持「树扫描下干净」，这条不变量由 --selftest 的
+# `self_clean` 一例钉住（拿本文件自己的源码再扫一次，必须 0）。
+#
+# 格式（一行一例；源码整行读入后**补一个换行**喂给词法解析器，所以源码里不写转义）：
+#   <name><TAB><red|clean><TAB><源码>
+# red = 该例必须被判红；clean = 必须干净。
+pkill_f	red	pkill -f x
+pkill_x	red	pkill -x sleep
+killall	red	killall sleep
+command_prefix	red	command pkill -f x
+env_prefix	red	env FOO=1 pkill -f x
+abs_path	red	/usr/bin/pkill -f x
+abs_path_killall	red	/bin/killall sleep
+xargs_kill	red	pgrep -f x | xargs kill
+xargs_r_kill_term	red	printf '%s\n' "$p" | xargs -r kill -TERM
+kill_pgrep_subst	red	kill $(pgrep -f x)
+kill_pidof_subst	red	kill $(pidof sleep)
+kill_ps_subst	red	kill $(ps -ef | awk '{print $2}')
+kill_fuser_subst	red	kill $(fuser -k /tmp/x)
+kill_backtick_pgrep	red	kill `pgrep -f x`
+bash_c_string	red	bash -c 'pkill -f x'
+if_then	red	if true; then pkill -f x; fi
+kill_term_pid	clean	kill -TERM "$pid"
+kill_zero_pid	clean	kill -0 "$pid"
+kill_pgid	clean	kill -- -"$pgid"
+kill_two_pids	clean	kill "$pid1" "$pid2"
+kill_cat_pidfile	clean	kill "$(cat "$pidfile")"
+kill_cat_plain	clean	kill $(cat job.pid)
+comment	clean	# pkill -f x
+quoted_data	clean	echo 'pkill -f x'
+grep_argument	clean	grep -n pkill "$f"
+variable_path	clean	GATE=/x/shim; "$GATE/pkill" -f x
+bash_c_clean	clean	bash -c 'kill -TERM "$pid"'
+pgrep_readonly	clean	pgrep -f x
+killall_readonly	clean	command -v killall

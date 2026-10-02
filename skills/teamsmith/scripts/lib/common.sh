@@ -2189,15 +2189,44 @@ team_tmux_real_bin() {
   return 0
 }
 
-# 窗口启动命令的闸门前缀（三段 export；shim 缺失 → 空串）。
-# TEAM_TMUX_CALLS_LOG 用**渲染时**解析出的 state 路径写死：窗口里谁也不保证还读得到团队配置。
+# 真 pkill 的绝对路径（P159 信号闸门的 TEAM_SIGNAL_REAL）：与 team_tmux_real_bin 同一形状 ——
+# PATH 扫描（先 pkill 后 killall），跳过 shim 自己（窗口里 PATH 最前就是这个目录，
+# 直接 `command -v pkill` 会解析成闸门入口，渲染进窗口就成递归）。找不到 → 空。
+team_signal_real_bin() {
+  local self="" d c cd name
+  self="$(cd -P "$(team_tmux_shim_dir)" 2>/dev/null && pwd)" || self=""
+  if [ -n "${TEAM_SIGNAL_REAL:-}" ] && [ -x "${TEAM_SIGNAL_REAL:-}" ]; then
+    cd="$(cd -P "$(dirname "${TEAM_SIGNAL_REAL}")" 2>/dev/null && pwd)"
+    if [ -z "$self" ] || [ "$cd" != "$self" ]; then printf '%s\n' "$TEAM_SIGNAL_REAL"; return 0; fi
+  fi
+  local IFS=':'
+  for name in pkill killall; do
+    for d in $PATH; do
+      [ -n "$d" ] || continue
+      c="$d/$name"
+      [ -x "$c" ] || continue
+      cd="$(cd -P "$d" 2>/dev/null && pwd)"
+      if [ -n "$self" ] && [ "$cd" = "$self" ]; then continue; fi
+      printf '%s\n' "$c"; return 0
+    done
+  done
+  return 0
+}
+
+# 窗口启动命令的闸门前缀（五段 export；shim 缺失 → 空串）。
+# 日志路径用**渲染时**解析出的 state 路径写死：窗口里谁也不保证还读得到团队配置。
+# 两个 pin 的顺序与内容都是断言锚（M36 段 + P159 段逐段比）：tmux 两段在前、信号两段在后，
+# 且这里**不写任何授权变量**（M62/M67 的泄漏链：环境不是授权）。
 team_tmux_shim_exports() {
-  local d real; d="$(team_tmux_shim_dir)"
+  local d real sreal; d="$(team_tmux_shim_dir)"
   [ -x "$d/tmux" ] || { printf ''; return 0; }
   printf 'export PATH=%s:"$PATH"; export TEAM_TMUX_CALLS_LOG=%s; ' \
     "$(printf '%q' "$d")" "$(printf '%q' "$TEAM_STATE_DIR/tmux-calls.log")"
   real="$(team_tmux_real_bin)"
   [ -n "$real" ] && printf 'export TEAM_TMUX_REAL=%s; ' "$(printf '%q' "$real")"
+  printf 'export TEAM_SIGNAL_CALLS_LOG=%s; ' "$(printf '%q' "$TEAM_STATE_DIR/signal-calls.log")"
+  sreal="$(team_signal_real_bin)"
+  [ -n "$sreal" ] && printf 'export TEAM_SIGNAL_REAL=%s; ' "$(printf '%q' "$sreal")"
   return 0
 }
 

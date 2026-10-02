@@ -475,18 +475,19 @@ _sg_trip() { # <no> <id> <armed> <budget> <ticks> <last_seen> <now>
 }
 
 _sg_stop_children() { # <no>：只停这个套件进程树里的子孙（不含看门狗），TERM → 有界宽限 → KILL
-  local no="$1" p grace=0
+  local no="$1" p grace=0 _sg_p
   while :; do
     p="$(_sg_descendants "$SG_OWNER_PID" "$BASHPID" | tac)"
     [ -n "$p" ] || break
     [ "$grace" -ge "$SG_DESC_GRACE" ] && break
-    printf '%s\n' "$p" | xargs -r kill -TERM 2>/dev/null || true
+    # 信号只发给 _sg_descendants 从 /proc 里**读出来并记下的 pid**（P159：xargs 的 stdin 是选择，禁止）
+    for _sg_p in $p; do kill -TERM "$_sg_p" 2>/dev/null || true; done
     sleep 0.2; grace=$((grace + 1))
   done
   if [ "$grace" -ge "$SG_DESC_GRACE" ]; then
     p="$(_sg_descendants "$SG_OWNER_PID" "$BASHPID" | tac)"
     if [ -n "$p" ]; then
-      printf '%s\n' "$p" | xargs -r kill -KILL 2>/dev/null || true
+      for _sg_p in $p; do kill -KILL "$_sg_p" 2>/dev/null || true; done
       # 只声明确实知道的：grace 用尽 + 已发 KILL。谁真的扛过了 TERM 是**现场判定**的事
       # （P108 F1：套件退出路径持续产出短命子进程时，「子孙忽略 TERM」是与现场矛盾的归因）。
       printf 'escalation: 段落 #%s 的 grace 用尽（仍有子孙存活）→ 已对它们发 KILL（归因以现场为准）\n' "$no" >> "$SG_SCENE/summary.txt" 2>/dev/null || true

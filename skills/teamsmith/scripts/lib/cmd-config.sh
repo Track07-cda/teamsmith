@@ -157,6 +157,10 @@ TEAM_INBOX_WATCH_POLL_MS|restart|int|100,|export|5000|-|||session
 TEAM_INBOX_WATCH_HEARTBEAT_MS|restart|int|100,|export|5000|-|||session
 TEAM_INBOX_WATCH_TARGET|restart|text||export||-|||session
 TEAM_BG_LOG_MAX_BYTES|restart|bytes|1024,|export|524288|-|||session
+# ---- 信号纪律（P159 · refuse：闸门接缝与宽限由手改契约控制）----
+TEAM_SIGNAL_CALLS_LOG|refuse|path|file,opt|plain||-|P159 信号闸门：每次调用一行（拒绝另存 <log>.forensics，熬得过轮转）；窗口启动时由闸门前缀钉值，要改就手改 .pi/team/config.sh||policy
+TEAM_SIGNAL_REAL|refuse|path|exec,opt|plain||-|P159 信号闸门的真身路径（夹具钉桩用；拒绝不依赖它能否解析）；手改 .pi/team/config.sh||policy
+TEAM_BG_STOP_GRACE|refuse|seconds|0,|plain|5|-|P159 team bg stop 的宽限：组 TERM 之后等这么多秒再 KILL（0 = 不等待，立刻升级）；手改 .pi/team/config.sh||policy
 # ---- 跨项目会议（apply）----
 TEAM_MEETING_TTL_HOURS|apply|int|1,|plain|72|-||24,72,168|meeting
 TEAM_MEETING_MAX_TURNS|apply|int|1,|plain|20|-||5,20,50|meeting

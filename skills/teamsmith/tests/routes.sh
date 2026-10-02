@@ -546,6 +546,7 @@ mr_probe_for() { # <KEY> → probe id（空 = 没有声明）
     TEAM_PM_MODEL)                            printf 'pm-model\n' ;;
     TEAM_PULSE_WINDOW)                        printf 'pulse-window\n' ;;
     TEAM_DEFAULT_MODEL)                       printf 'default-model\n' ;;
+    TEAM_BG_STOP_GRACE)                       printf 'bg-stop-grace\n' ;;
     *) printf '\n' ;;
   esac
 }
@@ -597,6 +598,7 @@ mr_walk_b() {
       pm-model)      mr_promise_pm_model "$key" || bad=1 ;;
       pulse-window)  mr_promise_pulse_window "$key" || bad=1 ;;
       default-model) mr_promise_default_model "$key" || bad=1 ;;
+      bg-stop-grace) mr_promise_bg_stop_grace "$key" || bad=1 ;;
       *)             finding "promise：$key 的探针 id「$probe」没有实现（覆盖表与实现脱节）"; bad=1 ;;
     esac
   done < "$rows"
@@ -604,7 +606,68 @@ mr_walk_b() {
   return 0
 }
 
-# -- the six promise probes -------------------------------------------------------------------------
+# -- the promise probes -----------------------------------------------------------------------------
+# P159：宽限旋钮的探针。作业是夹具自己 spawn 的**新会话组头**（pgid == pid）且 **trap "" TERM**
+# （SIG_IGN 会被 exec 继承，组里那个 sleep 也一样）——于是只有 KILL 能收掉它，"先 TERM、等宽限、
+# 再 KILL" 这条承诺真的会发生。两次跑只差 config.sh 里手改的那个值：0 必须**不等待**（< 3s），
+# 2 必须**等够**（≥ 2s）。判的是效果（进程死了 + 账本 signal=TERM,KILL + 用时差），不看退出码。
+mr_bg_ignore_term_job() { # <fixture> <id> → 起作业、写记录；MR_BG_PID/MR_BG_PGID/MR_BG_START
+  local d="$1" id="$2" st rest
+  setsid bash -c 'trap "" TERM; sleep 300 & echo $! > "$1"; wait' _ "$d/$id-child.pid" >/dev/null 2>&1 &
+  MR_BG_PID=$!
+  disown "$MR_BG_PID" 2>/dev/null || true   # 收掉作业时不要打「Killed」噪声（判定只看进程与账本）
+  sleep 0.3
+  st="$(cat "/proc/$MR_BG_PID/stat" 2>/dev/null)" || return 1
+  rest="${st##*)}"
+  # shellcheck disable=SC2086
+  set -- $rest
+  MR_BG_PGID="$3"; MR_BG_START="${20}"
+  mkdir -p "$d/.pi/team/state/bg"
+  printf 'id=%s\npid=%s\npgid=%s\nstart=%s\ncwd=%s\nlog=%s\ncmd=sleep 300\n' \
+    "$id" "$MR_BG_PID" "$MR_BG_PGID" "$MR_BG_START" "$d" "$d/.pi/team/state/bg/$id.log" \
+    > "$d/.pi/team/state/bg/$id.job"
+  return 0
+}
+
+mr_promise_bg_stop_grace() { # <KEY>
+  local key="$1" d t0 t1 spent
+  d="$(new_fixture promise-bg-stop-grace)" || return 1
+  # ① 宽限 0：TERM 之后**不等待**，直接 KILL
+  printf 'TEAM_BG_STOP_GRACE=0\n' >> "$d/.pi/team/config.sh"
+  mr_bg_ignore_term_job "$d" grace0 || { finding "promise（$key）：作业夹具起不来"; return 1; }
+  t0="$(date +%s)"; mr_run "$d" bg stop grace0; t1="$(date +%s)"; spent=$((t1 - t0))
+  if kill -0 "$MR_BG_PID" 2>/dev/null; then
+    kill -KILL "$MR_BG_PID" 2>/dev/null || true
+    finding "promise（$key）：宽限 0 时忽略 TERM 的作业没有被 KILL 收掉（rc=$MR_RC，$(first_line "$MR_OUT")）"
+    return 1
+  fi
+  if [ "$spent" -ge 3 ]; then
+    finding "promise（$key）：宽限 0 却等了 ${spent}s（旋钮没生效）"
+    return 1
+  fi
+  if ! grep -q 'stop id=grace0 signal=TERM,KILL result=stopped' "$d/.pi/team/state/bg.log" 2>/dev/null; then
+    finding "promise（$key）：账本没有记下 TERM→KILL 的升级（$(first_line "$(cat "$d/.pi/team/state/bg.log" 2>/dev/null)"）)"
+    return 1
+  fi
+  ok "promise（$key）：宽限 0 → 忽略 TERM 的作业被立刻 KILL（账本 signal=TERM,KILL，用时 ${spent}s）"
+  # ② 宽限 2：同样的作业要等够 2s 才升级 —— 旋钮真的改变等待
+  sed -i 's/^TEAM_BG_STOP_GRACE=0$/TEAM_BG_STOP_GRACE=2/' "$d/.pi/team/config.sh"
+  mr_bg_ignore_term_job "$d" grace2 || { finding "promise（$key）：第二个作业夹具起不来"; return 1; }
+  t0="$(date +%s)"; mr_run "$d" bg stop grace2; t1="$(date +%s)"; spent=$((t1 - t0))
+  if kill -0 "$MR_BG_PID" 2>/dev/null; then
+    kill -KILL "$MR_BG_PID" 2>/dev/null || true
+    finding "promise（$key）：宽限 2 时作业没有被 KILL 收掉（rc=$MR_RC，$(first_line "$MR_OUT")）"
+    return 1
+  fi
+  if [ "$spent" -lt 2 ]; then
+    finding "promise（$key）：宽限 2 却只等了 ${spent}s（旋钮没生效）"
+    return 1
+  fi
+  ok "promise（$key）：宽限 2 → 先 TERM、等 ${spent}s 后 KILL（旋钮改变等待）"
+  return 0
+}
+
+# -- the other promise probes -----------------------------------------------------------------------
 mr_promise_identity() { # <KEY>（三个身份键共享一条承诺：手改有效；team init 是 skip；--force 重渲染并回模板值）
   local key="$1" d base
   d="$(new_fixture promise-identity)" || return 1

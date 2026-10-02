@@ -19,7 +19,7 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 type Job = {
@@ -154,6 +154,39 @@ function displayCmd(raw: string): string {
   return cps.length <= CMD_DISPLAY_MAX ? one : `${cps.slice(0, CMD_DISPLAY_MAX).join('')}${CMD_ELLIPSIS}`
 }
 
+/**
+ * /proc/<pid>/stat 的 (进程组, 启动时间指纹)：第 5 与第 22 字段。
+ * comm 字段带空格/括号，所以按**最后一个** `)` 切开再数。读不到 → 两个都是空串
+ * （记录照写；`team bg stop` 拿空指纹做身份比对会拒 —— fail-closed 方向）。
+ */
+function procStat(pid: number): { pgid: string; start: string } {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const rest = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
+    return { pgid: rest[2] ?? '', start: rest[19] ?? '' }
+  } catch {
+    return { pgid: '', start: '' }
+  }
+}
+
+/**
+ * state/bg/<id>.job：作业的身份记录（P159）。`team bg list|stop` 只读这里 —— 停作业用的是
+ * 记录里的 (pid, 启动时间指纹)，绝不按名字/命令行/tree 找进程。在返回 job id **之前**写。
+ * 写不进去不抛（会话不能因此中断）：没有记录 = 停不了，而那是 `team bg list` 里看得见的 fail-closed。
+ */
+function writeJobRecord(root: string, job: Job): void {
+  try {
+    const dir = join(stateDir(root), 'bg')
+    mkdirSync(dir, { recursive: true })
+    const { pgid, start } = procStat(job.pid)
+    const one = job.command.replace(/[\r\n]+/g, ' ')
+    writeFileSync(join(dir, `${job.id}.job`),
+      `id=${job.id}\npid=${job.pid}\npgid=${pgid}\nstart=${start}\ncwd=${job.cwd}\nlog=${job.log}\ncmd=${one}\n`)
+  } catch {
+    /* 记录写不进去 = 这个作业停不了（fail-closed，且 team bg list 里可见）；作业本身照常跑 */
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   const jobs = new Map<string, Job>()
   let active = false // agent 正在跑（工具调用/流式输出）——完成通知要等它闲下来
@@ -266,6 +299,7 @@ export default function (pi: ExtensionAPI) {
         done: false, exitCode: null, harvested: false, notified: false, waiters: [],
       }
       jobs.set(id, job)
+      if (job.pid > 0) writeJobRecord(root, job)
       child.on('exit', (code: number | null) => finishJob(root, job, code))
       child.on('error', (error: Error) => {
         appendLedger(root, `spawn-error id=${id} ${String(error?.message ?? error)}`)

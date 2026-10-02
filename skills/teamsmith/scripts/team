@@ -86,6 +86,7 @@ case "$CMD" in
   config)     team_cmd_config "$@" ;;
   status)     team_cmd_status "$@" ;;
   ps)         team_cmd_ps "$@" ;;
+  bg)         team_cmd_bg "$@" ;;
   digest)     team_cmd_digest "$@" ;;
   inbox)      team_cmd_inbox "$@" ;;
   paths)      team_paths_json ;;

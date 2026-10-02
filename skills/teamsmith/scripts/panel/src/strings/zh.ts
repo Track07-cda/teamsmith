@@ -363,6 +363,10 @@ export const zh = {
   label_TEAM_INBOX_WATCH_HEARTBEAT_MS: '心跳间隔',
   label_TEAM_INBOX_WATCH_TARGET: '投递目标',
   label_TEAM_BG_LOG_MAX_BYTES: '后台日志上限',
+  // —— 信号纪律（P159）
+  label_TEAM_SIGNAL_CALLS_LOG: '信号调用审计',
+  label_TEAM_SIGNAL_REAL: '信号真身',
+  label_TEAM_BG_STOP_GRACE: '作业停止宽限',
   // —— 跨项目会议
   label_TEAM_MEETING_TTL_HOURS: '会议有效期',
   label_TEAM_MEETING_MAX_TURNS: '会议轮次上限',

@@ -365,6 +365,10 @@ export const en = {
   label_TEAM_INBOX_WATCH_HEARTBEAT_MS: 'Heartbeat interval',
   label_TEAM_INBOX_WATCH_TARGET: 'Delivery target',
   label_TEAM_BG_LOG_MAX_BYTES: 'Background log cap',
+  // -- signal discipline (P159)
+  label_TEAM_SIGNAL_CALLS_LOG: 'Signal call log',
+  label_TEAM_SIGNAL_REAL: 'Real signal tool',
+  label_TEAM_BG_STOP_GRACE: 'Job stop grace',
   // -- cross-project meetings
   label_TEAM_MEETING_TTL_HOURS: 'Meeting TTL',
   label_TEAM_MEETING_MAX_TURNS: 'Meeting turn cap',

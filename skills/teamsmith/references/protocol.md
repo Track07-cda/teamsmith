@@ -76,6 +76,27 @@ Guards and limitations:
   background lane: `team_bg_run` starts a detached job (bounded `state/bg/<id>.log`), `team_bg_wait <id>` harvests
   it, a harvested job stays silent, several finishing jobs arrive as one message, and every turn end appends
   `settled-with-unharvested=<n>` to `state/bg.log` (runbook: `workflows.md` §E2).
+  - **The identity record** (P159): the extension writes `state/bg/<id>.job` **before** it returns the id — `id`,
+    `pid`, `pgid`, `start` (the start-time fingerprint from `/proc/<pid>/stat`), `cwd`, `log`, `cmd`.
+    `team bg list` prints one row per record of **this** project's state directory and signals nothing;
+    `team bg stop <id>` signals exactly the recorded job and prints what it signalled. Identity is
+    `(pid, start-time)`: the pid must be alive **and** the fingerprint must match, so a reused pid is refused
+    (exit 5) instead of killed. With `pgid == pid` it signals the process group `TERM`, then `KILL` after
+    `TEAM_BG_STOP_GRACE` seconds; with a different group it signals the pid alone and says descendants were not
+    reached. One `stop` line lands in `state/bg.log`; exit codes are 0 stopped-or-already-gone / 2 usage /
+    3 no record / 4 malformed record / 5 identity mismatch / 6 still alive. Every refusal signals nothing, and the
+    lane never searches by name, command line, process tree, another worktree or another project.
+  - **The signal gate** (P159; the shape behind D37/D57/D72): the launch prefix puts `scripts/shim` first on a
+    window's `PATH`, where `pkill` and `killall` are the gate. It refuses **every** selecting form (`-f`, `-x`,
+    `-P`, `-u`, `killall <name>`, and any inherited environment token) with exit 64, prints why a name or a
+    command-line pattern is not an identity, and names the safe routes (`team bg list`, `team bg stop <id>`,
+    `kill <recorded pid>`); the read-only forms `--help`/`-h`/`-V`/`--version` pass through to the real executable,
+    and a refusal resolves and executes nothing. It deliberately does **not** wrap `kill`, `pgrep`, `ps` or `pidof`
+    (at exec time `kill $(pgrep -f x)` and `kill $(cat job.pid)` are the same four words), so absolute paths and
+    shells without the gate directory first stay outside its reach — that half is held by the static lint over the
+    repository's own scripts and fixtures (`tests/signal-lint.pl`: red on a name/pattern selection, clean on
+    `kill "$pid"`). Every intercepted call appends one line to `state/signal-calls.log` (`TEAM_SIGNAL_CALLS_LOG`),
+    and a refusal is also copied byte for byte into `<log>.forensics` so it outlives the call log's rotation.
 
 ## 5. Task briefs: written for "a weak model without context"
 

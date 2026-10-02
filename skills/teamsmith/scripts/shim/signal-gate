@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# teamsmith · 信号闸门（P159 · safe-signal-discipline）—— 被注入到 agent 会话（PM 与 worker 窗口）
+# PATH 最前的 `pkill` / `killall` 包装（同目录的 `pkill` / `killall` 是指向本文件的软链）。
+#
+# 为什么存在：三次同族事故都是「按名字/命令行模式选进程」——模式命中了别的项目、别的会话里的同名
+# 进程，也命中了调用者自己的 shell（模式串就在那条命令行里）：
+#   · D37（2026-09-22）dev3 按 `panel.js.*--root /tmp/panel-p21` 模式 SIGSTOP 冻结了别人的夹具；
+#   · D57/#1529（2026-09-29）用 `pgrep -f "<模式>"` 取 pid 时模式命中**自己这条命令**，随后按模式
+#     比对的「来源核对」给自身发了信号；
+#   · D72 dev-bob 的 `pkill -f` 误杀了同期的门禁客户端。
+# 名字/命令行模式不是身份。闸门管的正是窗口里的 ad-hoc 调用（静态那一半由 tests/signal-lint.pl 管）。
+#
+# 判定（D1/D2/D3，见 openspec/changes/safe-signal-discipline/design.md）：
+#   · **没有可证明的选择形式**：`-f <模式>`、`-x <名字>`、`-P <pid>`、`-u <user>`、`killall` 的
+#     各种形态都会选中调用者无法枚举的集合 —— 一律拒绝（exit 64），不执行真身、不发任何信号；
+#   · 放行的只有**不选择任何进程**的四个只读词：`--help` / `-h` / `-V` / `--version`（单个参数），
+#     它们原样递给真身并记 act=pass；
+#   · **没有带内放行 token**（tmux 闸门有 `--teamsmith-allow-destructive`，因为人在 argv 里能点名
+#     对象；信号没有对象可点，那正是问题本身），也**不读任何环境变量当授权**
+#     （TEAM_ALLOW_PATTERN_KILL=1 之类的继承值不改变任何判定）；
+#   · `kill` / `pgrep` / `ps` / `pidof` **不拦**：闸门是 PATH shim，exec 时只看到展开后的 argv，
+#     `kill $(pgrep -f x)` 与 `kill $(cat job.pid)` 在它看来同样四个词 —— 拦 `kill` 要么堵死安全
+#     路线、要么放过不安全的那条。绝对路径（/usr/bin/pkill）与没有把闸门目录放 PATH 最前的 shell
+#     同样是**明说的边界**，由 tests/signal-lint.pl 静态覆盖仓库脚本。
+#
+# 记录（D4，与 tmux 家族同形）：每次调用追加一行到 $TEAM_SIGNAL_CALLS_LOG
+#    `<ISO> · act=<pass|refused> · tool=<pkill|killall> · argv=<…> · pid=<…> ppid=<…> cwd=<…>`
+# 上限 2000 条**调用行**（超了留最新 1000 条；首行 `<ISO> · rotation · dropped=<N>` 轮转标记自述
+# 被裁掉多少，N 读不出时从 0 重算）。`act=refused` 的行在写主日志**之前**先逐字节复制进
+# `<log>.forensics` —— 拒绝记录熬得过主日志轮转；复制失败仍走原判定与退出码，只在本行末尾补
+# `retention=failed` + stderr 一行 ✗ 点名路径（失败可见，绝不改判定，也绝不挂住调用）。
+#
+# 真身解析（只读形式才需要）：优先 TEAM_SIGNAL_REAL（fixture 钉桩用，与 TEAM_TMUX_REAL 同形），
+# 否则在 PATH 里找第一个**不是我自己**的同名文件。拒绝**不依赖**真身能不能解析出来。
+set -u
+
+# ── 我是谁：软链名字 = 被拦截的工具（只应是 pkill / killall）──────────────────────────────────
+_shim_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+_tool="$(basename "$0")"
+case "$_tool" in
+  pkill|killall) ;;
+  *)
+    printf '✗ teamsmith 信号闸门：本文件只应以 pkill / killall 的名字被调用（当前 %s）—— 同目录的 pkill/killall 是软链入口\n' \
+      "${_tool:-?}" >&2
+    exit 2 ;;
+esac
+
+# 原始 argv 快照（记录与「逐字节透传」都看它）
+_shim_argv=("$@")
+_shim_argc=$#
+_shim_cwd="$(pwd -P 2>/dev/null || printf '%s' "${PWD:-}")"
+_argv="$(printf '%s' "$*" | tr '\r\n' '  ')"
+
+# ── 判定：只读四词以外的一律拒绝（没有可证明的选择形式，D1）──────────────────────────────────
+_readonly=0
+if [ "$_shim_argc" -eq 1 ]; then
+  case "$1" in
+    --help|-h|-V|--version) _readonly=1 ;;
+  esac
+fi
+_act="refused"
+if [ "$_readonly" = "1" ]; then _act="pass"; fi
+
+# ── 有界追加（与 tmux 闸门逐字同源，P132/P77/P87）：<file> ← $_line ─────────────────────────────
+# 写不进去不挡路；FIFO 目标直接判失败（日志绝不能挂住调用）；超 2000 条调用行留最新 1000 条，
+# 首行一条累计 `dropped=<N>` 的轮转标记；marker 不是调用行（不计入上限、也不保留）；N 读不出
+# （空/非数字/超出整数范围回绕）时累计从 0 重启，绝不把读错的数写回去。返回非 0 只表示追加失败。
+_bounded_append() { # <file>
+  local _f="$1" _n _prev _first _t _rest _d _p _z _canon
+  [ -p "$_f" ] && return 1
+  { printf '%s\n' "$_line" >> "$_f"; } 2>/dev/null || return 1
+  _n="$(wc -l < "$_f" 2>/dev/null | tr -dc '0-9')"
+  if [ -n "$_n" ] && [ "$_n" -gt 2000 ]; then
+    _prev=0
+    _first="$(head -n 1 "$_f" 2>/dev/null || true)"
+    _t="${_first%% · *}"
+    _rest="${_first#"$_t"}"
+    case "$_rest" in
+      ' · rotation · dropped='*)
+        _n=$((_n - 1))
+        _d="${_rest#' · rotation · dropped='}"
+        case "$_d" in
+          ''|*[!0-9]*) _prev=0 ;;
+          *)
+            _p="$((10#$_d))"
+            _z="${_d%%[!0]*}"; _canon="${_d#"$_z"}"
+            if [ "$_canon" = "$_p" ]; then _prev="$_p"; else _prev=0; fi ;;
+        esac ;;
+    esac
+    if [ "$_n" -gt 2000 ]; then
+      { printf '%s · rotation · dropped=%s\n' "$(date -Is)" "$((_prev + _n - 1000))"
+        tail -n 1000 "$_f"; } > "$_f.tmp.$$" 2>/dev/null \
+        && mv "$_f.tmp.$$" "$_f" 2>/dev/null || rm -f "$_f.tmp.$$" 2>/dev/null
+    fi
+  fi
+  return 0
+}
+
+if [ -n "${TEAM_SIGNAL_CALLS_LOG:-}" ] && [ ! -p "${TEAM_SIGNAL_CALLS_LOG}" ]; then
+  _log="${TEAM_SIGNAL_CALLS_LOG}"
+  _ld="$(dirname "$_log")"
+  [ -d "$_ld" ] || mkdir -p "$_ld" 2>/dev/null || true
+  # 这一行是唯一的格式源：主日志与长保留副本逐字节同一行（跨文件 grep -F / cmp 对齐的锚）。
+  printf -v _line '%s · act=%s · tool=%s · argv=%s · pid=%s ppid=%s cwd=%s' \
+    "$(date -Is)" "$_act" "$_tool" "$_argv" "$$" "${PPID:-?}" "$_shim_cwd"
+  # 长保留：拒绝的记录在写主日志**之前**先复制进 <log>.forensics；pass 不承诺保留（不建文件、不追行）。
+  _retfail=0
+  if [ "$_act" != "pass" ]; then
+    _flog="${_log}.forensics"
+    _bounded_append "$_flog" || _retfail=1
+  fi
+  if [ "$_retfail" = 1 ]; then
+    _line="$_line · retention=failed"
+    printf '✗ teamsmith 信号闸门：本次调用的拒绝记录没能写进长保留文件（%s）—— 判定与退出码不受影响；本行已用 retention=failed 自述\n' \
+      "$_flog" >&2
+  fi
+  _bounded_append "$_log" || true
+fi
+
+# ── 拒绝解释（exit 64；不执行真身、不发信号、不解析真身）──────────────────────────────────────
+if [ "$_act" = "refused" ]; then
+  printf '✗ teamsmith 信号闸门：已拒绝 %s —— 名字或命令行模式**不是身份**，无法证明这些进程归调用者\n' "$_tool" >&2
+  printf '  调用参数：%s\n' "$_tool${_argv:+ $_argv}" >&2
+  printf '  为什么：模式/名字会同时命中别的项目、别的会话里的同名进程，也会命中调用者自己的 shell（模式串就在这条命令行里）。\n' >&2
+  printf '  安全路线（信号只发给**记录过的 pid**）：\n' >&2
+  printf '    · team bg list           看本项目后台作业记录到的 pid\n' >&2
+  printf '    · team bg stop <id>      按记录停作业（先验 pid + 启动时间指纹）\n' >&2
+  printf '    · kill <记录过的 pid>     你自己 spawn 时记下的 pid（kill 不经过本闸门）\n' >&2
+  exit 64
+fi
+
+# ── 放行：解析真身（TEAM_SIGNAL_REAL 优先，否则 PATH 里第一个不是我的同名文件），逐字节透传 ──
+_real=""
+if [ -n "${TEAM_SIGNAL_REAL:-}" ] && [ -x "${TEAM_SIGNAL_REAL:-}" ]; then
+  _c="$(readlink -f "$TEAM_SIGNAL_REAL" 2>/dev/null || printf '%s' "$TEAM_SIGNAL_REAL")"
+  [ "$_c" != "$_shim_self" ] && _real="$TEAM_SIGNAL_REAL"
+fi
+if [ -z "$_real" ]; then
+  _oldifs="$IFS"; IFS=':'
+  for _d in $PATH; do
+    IFS="$_oldifs"
+    [ -n "$_d" ] || continue
+    _cand="$_d/$_tool"
+    [ -x "$_cand" ] || continue
+    _cc="$(readlink -f "$_cand" 2>/dev/null || printf '%s' "$_cand")"
+    [ "$_cc" = "$_shim_self" ] && continue
+    _real="$_cand"; break
+  done
+  IFS="$_oldifs"
+fi
+if [ -z "$_real" ]; then
+  printf '✗ teamsmith 信号闸门：PATH 里找不到真的 %s（只找到我自己）——把真身的目录加进 PATH，或设 TEAM_SIGNAL_REAL=<绝对路径>\n' \
+    "$_tool" >&2
+  exit 127
+fi
+exec "$_real" ${_shim_argv[@]+"${_shim_argv[@]}"}

@@ -22,6 +22,9 @@ import { join, resolve, basename } from 'node:path'
 
 const args = process.argv.slice(2)
 const keep = args.includes('--keep') || process.env.TEAM_BG_KEEP === '1'
+// P159：--record-only 只跑「作业身份记录」用例，并**故意留着作业**（sleep 300）把 id/root 交给
+// 调用方（门禁段接着跑 `team bg stop <id>`）——那是「记录 → 按记录停」的端到端衔接点。
+const recordOnly = args.includes('--record-only')
 const ext = args.find(a => !a.startsWith('--'))
 if (!ext) {
   console.error('usage: team-bg-harness.mjs <path/to/team-bg.ts> [--keep]')
@@ -47,7 +50,7 @@ const TMP = mkdtempSync(join(tmpdir(), 'teamsmith-bg-'))
 const ROOT = join(TMP, 'repo')
 mkdirSync(ROOT, { recursive: true })
 process.env.TEAM_ROOT = ROOT
-if (!keep) process.on('exit', () => { try { rmSync(TMP, { recursive: true, force: true }) } catch {} })
+if (!keep && !recordOnly) process.on('exit', () => { try { rmSync(TMP, { recursive: true, force: true }) } catch {} })
 try { execFileSync('git', ['init', '-q', '-b', 'main', ROOT], { stdio: 'ignore' }) } catch {}
 mkdirSync(join(ROOT, '.pi/team'), { recursive: true })
 writeFileSync(join(ROOT, '.pi/team/config.sh'), 'TEAM_PROJECT="bg-harness"\n')
@@ -112,6 +115,52 @@ const run = async (command, name) => {
 const wait = async (id, timeout_ms) => String((await tools.team_bg_wait.execute('call-wait', { id, timeout_ms }, null)).content[0].text)
 const ledger = () => existsSync(join(STATE, 'bg.log')) ? readFileSync(join(STATE, 'bg.log'), 'utf8').trim().split('\n') : []
 const settledCounts = () => ledger().map(l => Number(/ settled-with-unharvested=(\d+)/.exec(l)?.[1] ?? -1))
+
+// ── P159 · 作业身份记录（state/bg/<id>.job）的读取与断言 ───────────────────────────
+// 契约：扩展在**返回 job id 之前**落盘 id/pid/pgid/start/cwd/log/cmd；`team bg stop` 只按这份
+// 记录里的 (pid, 启动时间指纹) 停作业。判据全部从**真文件**与 **/proc** 读回，不看扩展内部变量。
+const recordOf = (id) => join(STATE, 'bg', `${id}.job`)
+const readRecord = (id) => {
+  const f = recordOf(id)
+  if (!existsSync(f)) return {}
+  return Object.fromEntries(readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map(l => {
+    const i = l.indexOf('=')
+    return [l.slice(0, i), l.slice(i + 1)]
+  }))
+}
+const procStatFields = (pid) => {
+  let stat = ''
+  try { stat = readFileSync(`/proc/${pid}/stat`, 'utf8') } catch { return {} }
+  const rest = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
+  return { pgid: rest[2] ?? '', start: rest[19] ?? '' }
+}
+const checkJobRecord = (id, pid, expectedCmd, tag) => {
+  const rec = recordOf(id)
+  check(`${tag} the job record exists`, existsSync(rec), rec)
+  const f = readRecord(id)
+  const st = procStatFields(pid)
+  const live = existsSync(`/proc/${pid}`)
+  check(`${tag} record id/pid match the live process`, f.id === id && Number(f.pid) === pid && live,
+    JSON.stringify({ id: f.id, pid: f.pid, live }))
+  check(`${tag} record pgid is the live pid's process group (detached spawn ⇒ pgid == pid)`,
+    f.pgid !== '' && f.pgid === st.pgid, `record=${f.pgid} proc=${st.pgid} pid=${pid}`)
+  check(`${tag} record start is the /proc/<pid>/stat start-time fingerprint`,
+    f.start !== '' && f.start === st.start, `record=${f.start} proc=${st.start}`)
+  check(`${tag} record carries cwd/log/cmd`, f.cwd === ROOT && String(f.log).startsWith(`${STATE}/bg/`) && f.cmd === expectedCmd,
+    JSON.stringify({ cwd: f.cwd, log: f.log, cmd: f.cmd }))
+  return f
+}
+
+// --record-only：起一个**真作业**（sleep 300，真扩展真 spawn），断言记录，然后把 id/根交给调用方，
+// 自己**不退临时根、不杀作业**。调用方按 `team bg stop` 停它 —— 记录与停止两头都用真东西。
+if (recordOnly) {
+  const { id, pid } = await run('sleep 300', 'p159-record')
+  checkJobRecord(id, pid, 'sleep 300', 'S13')
+  console.log(`TEAM-BG-RECORD id=${id} pid=${pid} root=${ROOT} record=${recordOf(id)} state=${STATE}`)
+  console.log(failures === 0 ? 'TEAM-BG-HARNESS OK' : `TEAM-BG-HARNESS FAIL (${failures})`)
+  console.log(`fixture: ${TMP}`)
+  process.exit(failures === 0 ? 0 : 1)
+}
 
 // ── S1：未收割 → 空闲时被唤醒（合并窗口后一条消息） ─────────────────────────────
 {
@@ -321,6 +370,14 @@ const settledCounts = () => ledger().map(l => Number(/ settled-with-unharvested=
   try { process.kill(pid, 0); alive = true } catch { alive = false }
   check('S7 the detached job survives session_shutdown', alive, `pid=${pid}`)
   try { process.kill(pid, 'SIGKILL') } catch {}
+}
+
+// ── S13：作业身份记录在返回 id 之前落盘（P159：pid + 启动时间指纹 + 组）────────────────
+// 为什么：`team bg stop` 的全部依据就是这份记录（pid 会被复用，所以还要启动时间指纹）。
+{
+  const { id, pid } = await run('sleep 2; echo S13-DONE', 's13')
+  checkJobRecord(id, pid, 'sleep 2; echo S13-DONE', 'S13')
+  check('S13 the recorded job can still be harvested inline', (await wait(id)).includes('S13-DONE'))
 }
 
 // ── 反向守卫：真实仓库 state/ 未被触碰 ───────────────────────────────────────

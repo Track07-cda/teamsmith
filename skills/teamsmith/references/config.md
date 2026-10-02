@@ -464,3 +464,11 @@ file's last 16 KiB and print at most N lines (default 10).
 | `TEAM_INBOX_WATCH_HEARTBEAT_MS` | restart · export | `5000` | registry heartbeat (ms) |
 | `TEAM_INBOX_WATCH_TARGET` | restart · export | empty | explicit knock target |
 | `TEAM_BG_LOG_MAX_BYTES` | restart · export | `524288` | background job log cap (bytes) |
+| `TEAM_SIGNAL_CALLS_LOG` | refuse | empty | P159 signal gate: one line per intercepted `pkill`/`killall` call; a refusal is copied byte for byte into `<log>.forensics` before the main line is written, so it outlives the log's rotation. The window prefix pins it to `state/signal-calls.log`; fixtures may point it elsewhere |
+| `TEAM_SIGNAL_REAL` | refuse | empty | P159 signal gate: the real executable the read-only pass-through forms (`--help`/`-h`/`-V`/`--version`) go to; fixtures pin their argv-recording stub here. A refusal resolves nothing, so the gate still refuses when this is unset or unresolvable |
+| `TEAM_BG_STOP_GRACE` | refuse | `5` | P159 `team bg stop`: seconds to wait after the group `TERM` before escalating to `KILL` (`0` = escalate at once, no wait). A job that ignores `TERM` is reachable only through the escalation, so this is the knob that decides how long it lingers |
+
+The tmux family's own two launch seams (its call log and its real-binary pin, TEAM_TMUX_CALLS_LOG /
+TEAM_TMUX_REAL — deliberately written without the backticks the completeness walk scans) predate this rule and stay
+**environment-only**: the launch prefix writes them and nothing validates them, so they are deliberately not schema
+rows. The signal family above is registered (all three keys are `refuse` rows: `team config set` writes none of them).

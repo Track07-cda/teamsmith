@@ -1,0 +1,14 @@
+# P159 signal-lint 历史豁免清单 —— P159 之前写下的对抗性证据包（按 sha256 冻结）
+#
+# 为什么要有它：那些证据包写在「信号只发给记录过的 pid」这条纪律成型之前，它们里的
+# pkill -f 不能就地改（那是别人验过、sha 冻结过的证据，改了就动了账本）。豁免必须可审计：
+#   * 按 sha256 冻结 —— 文件一改（包括把 pkill 修成 pid 形态）豁免立刻失效，按普通文件重判；
+#   * 条数每一轮核对，对不上就红（baseline 过期）；
+#   * 每个文件每一轮都打印出来（不静默）；--no-legacy 让它们全部报红（人工审计用）。
+# 硬规矩：skills/teamsmith/tests/** 不许进这份清单 —— tests/ 里的违规必须真修（lint 拒绝豁免）。
+# 注：docs/team/reports/P119-verify/pkg/logs/**/copies/*.sh 里也有同样的历史 pkill 行，但扫描面
+# （与 tmux-lint.pl 同源）跳过 logs/ 目录，它们根本不在判定面内，因此不需要（也不该）冻结在这里
+# —— 写进来会因「记 2 条、实际 0 条」判 baseline 过期。
+#
+# 格式：<sha256>  <命中条数>  <仓库相对路径>  # 理由
+60ed8d86d57df08a655cea11aeb7ee9d2da0aa4e7768cb9b7fba39a3749b0637  2  docs/team/reports/M35-dev2/pkg/lib.sh  # M35-dev2 证据包（P159 之前：M25 对照组的 pkill -f 清理）
