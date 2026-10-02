@@ -18479,7 +18479,29 @@ P159_ROOT=""; P159_PID=""
 if ! command -v perl >/dev/null 2>&1; then
   bad "没有 perl：P159 信号纪律 lint 跑不了（装上 perl 才能跑这条门禁）"
 else
-  if perl "$P159_LINT" >"$P159_LOG" 2>&1; then
+  # P176：signal-lint 的豁免清单（signal-lint-legacy.txt）与 §31 的 M28 清单**同一契约**：它冻结的也是
+  # **内部面**历史包（docs/team/reports/**）。清单本身是产品文件，不在就报红；产品面检出里它的条目按构造
+  # 不在位 —— lint 会把「清单里的文件不在了」判成过期（假红）。清单**每一条都落在内部面**时，产品面检出
+  # 改用一份空清单跑：RED 命中照判、产品文件的判定照旧（lint 的牙全在），并把「豁免清单这一册账在检出里
+  # 无法判定」如实记一次前提跳过。清单里只要有一条产品面路径（或清单不在位），就照旧用原清单跑 —— 那时
+  # 缺的是**产品**文件，必须判红（两条牙齿与影子见 §36⑩）。
+  assert_file "$SKILL_DIR/tests/signal-lint-legacy.txt" "58：signal-lint 豁免清单存在"
+  P159_LEGACY_ARGS=()
+  if [ "$CHECKOUT_SHAPE" = "product-only" ] && [ -f "$SKILL_DIR/tests/signal-lint-legacy.txt" ]; then
+    P159_LEGACY_ALL_INTERNAL=1
+    while IFS= read -r _p159l; do
+      case "$_p159l" in ''|'#'*) continue ;; esac
+      read -r _p159sha _p159cnt _p159p _p159rest <<<"$_p159l"
+      [ -n "${_p159p:-}" ] || continue
+      checkout_surface_path "$_p159p" || { P159_LEGACY_ALL_INTERNAL=0; break; }
+    done < "$SKILL_DIR/tests/signal-lint-legacy.txt"
+    if [ "$P159_LEGACY_ALL_INTERNAL" = 1 ]; then
+      : > "$TMP/p159-legacy-product-only.txt"
+      P159_LEGACY_ARGS=(--legacy "$TMP/p159-legacy-product-only.txt")
+      prereq_skip "58 lint 真树：仓库脚本/夹具没有按名字或模式选进程（豁免清单）" "docs/team/reports/**"
+    fi
+  fi
+  if perl "$P159_LINT" ${P159_LEGACY_ARGS[@]+"${P159_LEGACY_ARGS[@]}"} >"$P159_LOG" 2>&1; then
     ok "58 lint 真树：仓库脚本/夹具没有按名字或模式选进程（$(grep -c '^  LEGACY' "$P159_LOG" 2>/dev/null || printf 0) 个历史豁免文件逐条打印）"
     grep '^  LEGACY\|^signal-lint' "$P159_LOG" 2>/dev/null | sed 's/^/      /'
   else

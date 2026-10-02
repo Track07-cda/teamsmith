@@ -85,17 +85,19 @@ scratch_tree() { # <名字> <product-only|internal>
     if [ -d "$REAL_ROOT/openspec/changes" ]; then cp -a "$REAL_ROOT/openspec/changes" "$d/openspec/changes"; fi
     for x in "$REAL_ROOT/.pi/prompts"/*; do [ -e "$x" ] || continue; cp -a "$x" "$d/.pi/prompts/$(basename "$x")"; done
     for x in "$REAL_ROOT/.pi/skills"/*; do [ -e "$x" ] || continue; cp -a "$x" "$d/.pi/skills/$(basename "$x")"; done
-    # M28 的豁免清单冻结了 16 个历史证据包（docs/team/reports/*/pkg/**）：源树里在就拷进来，§31 的 lint
-    # 才能像真树一样逐条判它们（其余账本内容不参与嵌套选择，不必复制 97M）。源树里不在（产品面检出）
-    # 就什么都不拷 —— ⑨ 的内部树控制会据此可见跳过，而不是拿假文件去骗 lint。
-    if [ -f "$REAL_ROOT/skills/teamsmith/tests/tmux-lint-legacy.txt" ]; then
+    # 两份历史豁免清单（M28 的 tmux-lint 与 P159 的 signal-lint；P176 起两份走同一契约）冻结的证据包同属
+    # 内部面：源树里在就拷进来，两棵 lint 的**内部树**判定才能像真树一样逐条核对（其余账本内容不参与嵌套
+    # 选择，不必复制 97M）。源树里不在（产品面检出）就什么都不拷 —— ⑨/⑩ 的控制据此可见跳过或按前提跳过，
+    # 而不是拿假文件去骗 lint。
+    for _sleg in tmux-lint-legacy.txt signal-lint-legacy.txt; do
+      [ -f "$REAL_ROOT/skills/teamsmith/tests/$_sleg" ] || continue
       while IFS= read -r _sl; do
         case "$_sl" in ''|'#'*) continue ;; esac
         read -r _ssha _scnt _spath _srest <<<"$_sl"
         [ -n "${_spath:-}" ] || continue
         case "$_spath" in docs/team/*) [ -e "$REAL_ROOT/$_spath" ] || continue; mkdir -p "$d/$(dirname "$_spath")"; cp -a "$REAL_ROOT/$_spath" "$d/$_spath" 2>/dev/null || true ;; esac
-      done < "$REAL_ROOT/skills/teamsmith/tests/tmux-lint-legacy.txt"
-    fi
+      done < "$REAL_ROOT/skills/teamsmith/tests/$_sleg"
+    done
   fi
   # 每棵 scratch 树自己是一个 git 仓库：嵌套 run 的 §0d（冲突标记守卫）要的是「受检的 git 工作树」——
   # 产品面检出的宿主树未必是仓库（PM 也可能直接在导出的目录里跑），不能让嵌套 run 因此假红。
@@ -460,6 +462,74 @@ peq "⑨ 清单含产品路径 → 不以「豁免清单」为由跳过（前提
   "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-prodent.log" | grep -c '^  SKIP（条件不满足） M28 真树' || true)" "0"
 peq "⑨ 清单含产品路径 → 那一轮 §31 的判定照旧（该条过时条目本身零命中，惰性、不判红）" "$P_PRODENT_RC" "0"
 phas "⑨ 清单含产品路径 → M28 照旧带清单跑（不是跳过）" "$(cat "$T/nest-prodent.log")" "M28 真树：变更类 tmux 调用全部有隔离证据"
+
+# ── ⑩ §58 signal-lint 的豁免清单：与 §31 同一契约（P176）────────────────────────────────
+# P159 的 signal-lint 豁免清单（signal-lint-legacy.txt）冻结的同样是**内部面**历史包
+# （docs/team/reports/**）：产品面检出里按前提跳过并点名，不再拿「清单里的文件不在了」判假红；
+# 但清单里出现**产品**路径时不得跳过 —— 产品文件缺失照旧判红（影子：把逐条内部面判据删掉
+# 就是「任何缺失即跳过」，同一条缺失必须被吞、§58 必须判绿 —— 牙齿随之失去牙）。
+P_PO10="$(scratch_tree po10 product-only)"
+nest "$P_PO10" "$T/nest-po10.log" --select 58 && P_PO10_RC=0 || P_PO10_RC=$?
+peq "⑩ 产品面树 --select 58 退出 0（豁免清单不再假红）" "$P_PO10_RC" "0"
+phas "⑩ 产品面：signal-lint 的豁免清单按前提跳过并点名 docs/team/reports/**" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log")" "SKIP（条件不满足） 58 lint 真树"
+phas "⑩ 产品面：跳过点名的前提是 docs/team/reports/**" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log")" "内部开发面前提 docs/team/reports/** 不存在"
+phas "⑩ 产品面：lint 照跑（不是把 58 整条记成跳过）" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log")" "✓ 58 lint 真树：仓库脚本/夹具没有按名字或模式选进程"
+peq "⑩ 产品面：--select 58 的红数为 0" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log" | grep -c '^  ✗ ' || true)" "0"
+
+# 内部树控制：源检出不是产品面时，豁免清单照旧参与判定（内部那条 LEGACY 照旧打印）—— 只有产品面
+# 检出才按前提跳过，内部检出不许少判。同 ⑨：源检出本身是产品面时这条控制在内部检出里运行。
+if [ ! -f "$REAL_ROOT/AGENTS.md" ] || [ ! -d "$REAL_ROOT/docs/team/reports" ]; then
+  pskip "⑩ 内部树控制（§58 带清单跑）：源检出是产品面，没有可分发的内部面材料 —— 这条控制在内部检出里运行"
+else
+  nest "$P_IN2" "$T/nest-in10.log" --select 58 && P_IN10_RC=0 || P_IN10_RC=$?
+  peq "⑩ 内部树 --select 58 退出 0" "$P_IN10_RC" "0"
+  peq "⑩ 内部树：§58 不出现检出前提跳过" \
+    "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-in10.log" | grep -c '^  SKIP（条件不满足） 58 lint' || true)" "0"
+  phas "⑩ 内部树：豁免清单照旧逐条核对（M35-dev2 的 pkill 包记 LEGACY）" \
+    "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-in10.log")" "LEGACY  docs/team/reports/M35-dev2/pkg/lib.sh"
+fi
+
+# 牙齿（P176）：清单里指向**产品面**的文件缺失（这里故意指向不存在的 skills/ 路径）→ 必须红并点名 ——
+# 这是产品文件的问题，不是内部开发面前提；跳过只许发生在清单**每一条都落在内部面**上时。
+P_TEETH10="$(scratch_tree teeth10 product-only)"
+{
+  sed '/^[^#]/d' "$REAL_ROOT/skills/teamsmith/tests/signal-lint-legacy.txt"
+  printf '0000000000000000000000000000000000000000000000000000000000000000  1  skills/teamsmith/scripts/p176-no-such-product-file.sh  # P176 控制：清单指向缺失的产品面文件
+'
+} > "$P_TEETH10/skills/teamsmith/tests/signal-lint-legacy.txt"
+if nest "$P_TEETH10" "$T/nest-teeth10.log" --select 58; then
+  pbad "⑩ 清单指向缺失的产品面文件，§58 仍然绿（内面前提跳过被放宽成了「任何缺失即跳过」）"
+else
+  phas "⑩ 缺失的产品面条目照旧判红并点名该文件" "$(cat "$T/nest-teeth10.log")" "p176-no-such-product-file.sh"
+  phas "⑩ 红的是 lint 的基线过期（清单里的文件不在了）" "$(cat "$T/nest-teeth10.log")" "清单里的文件不在了"
+  peq "⑩ 缺失的产品面条目不得记成前提跳过" \
+    "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-teeth10.log" | grep -c '^  SKIP（条件不满足） 58 lint' || true)" "0"
+fi
+
+# 牙齿的影子（P176）：把「清单条目必须落在内部面」这一条删掉 = 放宽成「任何缺失即跳过」→ 同一棵树的
+# 同一条产品面缺失被当成前提跳过、§58 判绿 —— 牙齿随之失去牙（证明红咬在逐条内部面判据上，不是别的）。
+sed -i '/checkout_surface_path "\$_p159p"/d' "$P_TEETH10/skills/teamsmith/tests/smoke.sh"
+if grep -q 'checkout_surface_path "\$_p159p"' "$P_TEETH10/skills/teamsmith/tests/smoke.sh"; then
+  pbad "⑩ 影子：变异没打对地方（逐条内部面判据还在）"
+elif nest "$P_TEETH10" "$T/nest-teeth10-shadow.log" --select 58; then
+  pok "⑩ 影子：删掉逐条内部面判据（=「任何缺失即跳过」）→ 同一条产品面缺失被吞、§58 判绿（牙齿真咬在判据上）"
+else
+  pbad "⑩ 影子：放宽成「任何缺失即跳过」后 §58 仍红（$T/nest-teeth10-shadow.log）—— 红的原因可能不是逐条判据"
+fi
+
+# 反向「仍然有牙」（P176）：产品文件里种一条按名字选进程的调用 → 空清单下照旧判红并点名 file:line。
+# 它证明「豁免清单按前提跳过」只免掉了那一册内部面账，lint 对**产品**文件的判定一条不少。
+P_PLANT10="$(scratch_tree plant10 product-only)"
+printf '\npkill -f p176-planted-marker\n' >> "$P_PLANT10/skills/teamsmith/tests/tmp-hygiene.sh"
+if nest "$P_PLANT10" "$T/nest-plant10.log" --select 58; then
+  pbad "⑩ 产品文件里种下的 pkill -f 没被抓到（空清单把 lint 的牙拔了）"
+else
+  phas "⑩ 产品文件里的 pkill -f 照旧判红并点名 file:line" "$(cat "$T/nest-plant10.log")" "tmp-hygiene.sh:"
+fi
 
 # ── ⑧ 真实树没有被任何夹具写过一个字节 ───────────────────────────────────────────────────
 P_REAL_FP1="$(real_fp)"

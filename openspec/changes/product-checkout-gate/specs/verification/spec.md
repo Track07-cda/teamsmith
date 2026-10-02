@@ -29,6 +29,13 @@ The same correctness command SHALL run on both shapes, with no second public sui
 - **THEN** the first tree is red and names the planted file — a wrapper defined in another file is not evidence of isolation for that call — and the second and third trees are green, so the red judgment is demonstrably attached to §31's lint verdict and to the attribution rule itself rather than to an unrelated failure
 - **AND** the unmodified product-only tree keeps the lint's green verdict, so the product check is not made red unconditionally
 
+#### Scenario: The signal lint's frozen ledger is an internal prerequisite, not a product one
+
+- **GIVEN** a product-only scratch tree whose P159 signal lint carries its frozen exemption ledger for `docs/team/reports/**`, a copy whose ledger also names an absent product file (`skills/teamsmith/scripts/p176-no-such-product-file.sh`), and a third copy whose per-entry attribution is relaxed so that any absent ledger entry is skipped
+- **WHEN** §58's signal-discipline lint runs in each tree (the internal-only ledger attributed as a prerequisite skip in the first)
+- **THEN** the first tree exits 0 with the ledger's absence printed as a counted `SKIP（条件不满足）` naming `docs/team/reports/**` while the lint's own verdict still executes, the second is red and names the missing product path, and the third is green — the skip is attributed to the internal surface, not to absence as such
+- **AND** a name-selected signal call planted in a product file still makes the same check red in the product-only tree, so attributing the ledger as a prerequisite does not disarm the lint
+
 #### Scenario: The internal checkout loses no existing coverage
 
 - **GIVEN** pre-change and post-change independent internal checkouts with identical tools and FAST settings
