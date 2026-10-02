@@ -18469,7 +18469,8 @@ fi
 #      （种一条 `pkill -f` 必红并按 file:line 点名 → 改成 `kill "$pid"` 转绿）
 #   ② signal-gate.sh（运行时那一半）：一切选择形态 exit 64、真身零调用、诱饵活着；只读四词透传；
 #      记录/轮转/长保留/保留失败可见
-#   ③ team-bg-stop.sh：按 (pid, 启动时间指纹) 停作业；四种拒绝零信号；邻居活着
+#   ③ team-bg-stop.sh：按 (pid, 启动时间指纹) 停作业；四种拒绝零信号；邻居活着；
+#      记录与 **bg 目录自身** 都必须在项目内（P187 · F1'：软链目录读写两侧同一条规则）
 #   ④ harness --record-only（真扩展写 state/bg/<id>.job）+ 段内 `team bg stop`：把「记录 → 按记录停」接上
 section "58 · 信号纪律：闸门 / 作业 pid / lint（P159）"
 P159_LINT="$SKILL_DIR/tests/signal-lint.pl"

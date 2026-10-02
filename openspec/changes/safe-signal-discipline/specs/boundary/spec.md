@@ -235,10 +235,15 @@ spawner's slug is at most 32 characters; the command's own bound is 128) — and
 file that resolves inside the project's own `bg` directory: a symbolic link, a FIFO, a device, a directory, or a
 path that resolves outside that directory MUST be refused as a malformed record (exit 4) before the payload is
 read, so no such record can block the command, and nothing is signalled; an id that is not a flat name is a usage
-error (exit 2). The recorded `pid` and `pgid` SHALL both be positive decimal integers, and before any signal the
-process's current process group SHALL equal the recorded `pgid` — a non-positive or non-numeric value is a
-malformed record (exit 4), a live process that has left the recorded group is a failed identity check (exit 5),
-and each refusal signals nothing.
+error (exit 2). The `bg` directory itself SHALL resolve inside the project's own state directory — both sides are
+read through `realpath`, so the state directory's own spelling and symlinked ancestors are not a boundary — and
+`team bg list` and `team bg stop` SHALL apply that same check before touching any record: when the directory
+resolves outside, both MUST refuse as a malformed record (exit 4) with a diagnostic naming the `bg` directory and
+the directory it resolves to, `team bg list` MUST NOT print a row from it, and nothing is signalled — a `bg`
+symbolic link MUST NOT be a route to another project's records. The recorded `pid` and `pgid` SHALL both be
+positive decimal integers, and before any signal the process's current process group SHALL equal the recorded
+`pgid` — a non-positive or non-numeric value is a malformed record (exit 4), a live process that has left the
+recorded group is a failed identity check (exit 5), and each refusal signals nothing.
 
 #### Scenario: Stopping a job kills the job and not its neighbour
 
@@ -277,6 +282,14 @@ and each refusal signals nothing.
 - **WHEN** `team bg stop <the linked id>` runs, and `team bg stop <the traversing id>` runs
 - **THEN** the traversing id exits 2 as a usage error, the symbolic link exits 4 as a malformed record, each names
   the check that failed, and the sibling's process is still alive
+
+#### Scenario: A bg directory that resolves outside the project is refused by both read and write
+
+- **GIVEN** a scratch project whose `bg` directory is a symbolic link to a sibling directory holding a live job
+  record written by a sibling project
+- **WHEN** `team bg stop <that id>` runs, and `team bg list` runs
+- **THEN** each exits 4 with a diagnostic naming the `bg` directory and the directory it resolves to, the sibling's
+  process is still alive, `state/bg.log` gains no line, and `team bg list` prints no row from the linked directory
 
 #### Scenario: A malformed record is refused before it can be read or block
 

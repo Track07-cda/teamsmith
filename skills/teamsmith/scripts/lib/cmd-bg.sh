@@ -12,7 +12,11 @@
 #
 # 状态边界（P169 · F1，CRITICAL）：job id 是**平坦名字**、记录必须是**本项目 bg 目录里的正规文件** ——
 # 路径语义不在这条命令的语法里，所以 `bg stop ../../…/邻居.job`（穿越）与 bg 目录里的软链都拒；
-# realpath 之后记录仍须落在本项目 bg 目录内（bg 目录本身在符号链接路径下也照常解析）。
+# realpath 之后记录仍须落在本项目 bg 目录内。
+#
+# 目录边界（P187 · F1'，CRITICAL）：bg 目录**自身**（realpath 后）必须落在本项目的 state 目录里 ——
+# `state/bg` 被指到别处时，「记录在 bg 目录内」会自洽地成立，于是兄弟项目的记录借道进来；所以
+# **解析记录之前**先证目录，读写两侧（list/stop）同一条规则，不成立 → rc=4 并点名解析目标。
 #
 # 退出码（机器契约）：
 #   0 已停 / 进程早就不在（什么都没发）｜2 用法（含 job id 不是平坦名字）｜3 本项目 state 里没有这个 id 的记录
@@ -24,6 +28,23 @@ set -uo pipefail
 
 team_bg_dir() { local d; d="$(team_state_dir)"; printf '%s\n' "$d/bg"; }
 
+# 目录边界（P187 · F1'）：bg 目录**自身**（realpath 后）必须落在本项目的 state 目录里 —— 两侧都取实路径，
+# 所以 `/home` 与 `/var/home` 两种拼写、state 目录本身在软链下，都不算越界。0=打印解析后的 bg 目录；
+# 1=bg 目录还不存在（没有记录可谈，调用处照旧走「无记录 / 空」）；2=解析后越界（悬空软链也算）。
+team_bg_dir_resolve() { # <bg-dir>
+  local _d="$1" _sreal _dreal
+  if [ ! -e "$_d" ]; then
+    [ -L "$_d" ] && return 2   # 悬空软链：解析目标不存在，但它是「指到别处」的形状，照拒
+    return 1
+  fi
+  _sreal="$(realpath -- "$(team_state_dir)" 2>/dev/null)" || return 2
+  _dreal="$(realpath -- "$_d" 2>/dev/null)" || return 2
+  case "$_dreal" in
+    "$_sreal"|"$_sreal"/*) printf '%s\n' "$_dreal"; return 0 ;;
+  esac
+  return 2
+}
+
 # job id 的合法形状：**平坦名字**，没有路径语义。车道自己生成的名字（扩展的 slug 正则
 # `[A-Za-z0-9._-]`、长度 ≤ 32）永远在集合里；128 的上限给路径长度与诊断文案留余地，也远低于
 # NAME_MAX(255)，同时挡住「用超长 id 构造路径 / 刷日志」的形态。
@@ -33,6 +54,7 @@ TEAM_BG_ID_MAX=128
 #   ① id 是平坦名字（非空、≤ 上限、不含 `/`、不是 `.`/`..`、字符集 [A-Za-z0-9._-]）；
 #   ② 记录是本项目 bg 目录里的**正规文件**（软链、FIFO、设备、目录都拒 —— FIFO 在读之前就拒，不会挂住）；
 #   ③ realpath 之后父目录仍是本项目的 bg 目录（拒绝穿越；两侧都取实路径，home 的两种拼写不算越界）。
+# bg 目录**自身**是否在项目内由 team_bg_dir_resolve 先行证明（P187）—— 这里只判「记录落在它里面」。
 team_bg_record_resolve() { # <id> <bg-dir> → 记录路径；1=没有记录 2=id 不是平坦名字 3=不是正规记录/越界
   local _id="$1" _d="$2" _f _dreal _freal
   [ -n "$_id" ] && [ "${#_id}" -le "$TEAM_BG_ID_MAX" ] || return 2
@@ -83,11 +105,16 @@ team_bg_ledger() { # <id> <signal> <result> <pid> <pgid>
 
 # ── list：只读本项目 state 目录里的记录，一行一个作业 ────────────────────────────────────────────
 team_bg_list() {
-  local d f id pid pgid start state n=0
+  local d f id pid pgid start state n=0 drc=0
   d="$(team_bg_dir)"
-  if [ ! -d "$d" ]; then
+  team_bg_dir_resolve "$d" >/dev/null || drc=$?
+  if [ "$drc" -eq 1 ]; then
     team_dim "（本项目 state 里还没有后台作业记录：$d）"
     return 0
+  fi
+  if [ "$drc" -ne 0 ]; then
+    team_err "bg list: state/bg 目录自身解析到了本项目 state 之外（$d → $(realpath -- "$d" 2>/dev/null || printf '解析不了')）—— 不列它里面的记录（记录必须留在本项目内）"
+    return 4
   fi
   for f in "$d"/*.job; do
     [ -f "$f" ] || continue
@@ -115,9 +142,14 @@ team_bg_list() {
 
 # ── stop：只按记录停这一个作业 ──────────────────────────────────────────────────────────────────
 team_bg_stop() { # <id>
-  local id="${1:-}" d f pid pgid start cmd grace sig target ticks i now_start now_pgid res_rc=0
+  local id="${1:-}" d f pid pgid start cmd grace sig target ticks i now_start now_pgid res_rc=0 drc=0
   [ -n "$id" ] || team_usage_die "bg stop: 需要一个 job id（team bg list 看全部）"
   d="$(team_bg_dir)"
+  team_bg_dir_resolve "$d" >/dev/null || drc=$?
+  if [ "$drc" -gt 1 ]; then
+    team_err "bg stop: state/bg 目录自身解析到了本项目 state 之外（$d → $(realpath -- "$d" 2>/dev/null || printf '解析不了')）—— 记录畸形，什么都没发"
+    return 4
+  fi
   f="$(team_bg_record_resolve "$id" "$d")" || res_rc=$?
   case "$res_rc" in
     0) ;;

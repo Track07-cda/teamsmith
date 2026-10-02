@@ -105,7 +105,10 @@ bash skills/teamsmith/tests/smoke.sh </dev/null
   regular file that `realpath` keeps inside this project's `bg` directory — a traversing id exits 2, a symlink,
   `pgid=0` and a FIFO record exit 4 (the FIFO before any read, never 124), and each refusal leaves the sibling's
   process alive; a live process whose current group differs from the recorded `pgid` exits 5. Verified by the
-  fixture's F1/F2 sections and the `--break=no-boundary` red side.
+  fixture's F1/F2 sections and the `--break=no-boundary` red side. **P187 (F1') addendum**: the `bg` directory
+  itself must resolve inside the project's state directory before any record is resolved — `team bg stop` and
+  `team bg list` apply that same check, refuse (exit 4) with the resolved target named, and neither signals nor
+  lists; verified by the fixture's F1' section and the `--break=no-dir-boundary` red side.
 - [x] 2.4 `tests/team-bg-harness.mjs`: a case that starts a job through the real tool and asserts the record file,
   its fields and the live pid, plus that `team bg stop` of that id (run by the section, not the harness) finds it.
   Verify: `TEAM-BG-CASE PASS` for the new case in `13c`/the new section's log.
@@ -193,3 +196,14 @@ FAST), 5.1–5.3 (config-cli completeness, panel strings, config.md rows), 6.1/6
 re-running here: 1.4 (the real PM/worker windows — full gate only), 3.4's M25 leg (the pid-form rewrite is in
 `smoke.sh` and the lint is clean for `tests/**`; the section itself runs in the full suite), 6.3 (the full suite;
 last recorded run is P159's `✓4149 ✗0` — this rework's gate contract is the container `--select 58` + FAST).
+
+## Apply status (P187 rework, 2026-10-02)
+
+The F1' boundary — a `bg` directory that is itself a symlink to a sibling project's directory — is closed in
+`cmd-bg.sh`: `team_bg_dir_resolve` proves the directory before any record is resolved, and `team bg list` uses the
+same check (one rule, both sides). The delta carries the refusal scenario and item 2.3's addendum; the fixture
+pins it in both directions plus its own `--break=no-dir-boundary` shadow. Verified by this rework's runs
+(`docs/team/reports/P187-dev3.md`): the new fixture section red on the unfixed parser (7 assertions), green after
+the fix (66 ✓ / 0 ✗), the shadow red again (7), the two older break modes unchanged (`no-identity` 4,
+`no-boundary` 11), `openspec validate --all --strict`, the container `--select 58` and FAST. The other ticks keep
+the P169 footer's provenance; this rework touched only 2.3's boundary sentence, the delta and the fixture.

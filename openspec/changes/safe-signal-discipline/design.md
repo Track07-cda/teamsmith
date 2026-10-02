@@ -108,6 +108,17 @@ and a non-flat id is a usage error (exit 2). `pid` and `pgid` must both be posit
 the live process's current process group must equal the recorded `pgid` (mismatch = exit 5). `team bg list` applies
 the same shape and skips symlinks with a visible warning.
 
+**P187 (F1') closes the directory layer.** P169 compared the record's real parent with the `bg` directory's real
+path — a comparison that stays self-consistent when `state/bg` itself is a symlink to a sibling project's
+directory, because both sides resolve there. A redirected `bg` (the non-malicious shape: several worktrees
+sharing one state) would therefore accept another project's records and stop its processes. So the `bg` directory
+itself must resolve inside the project's own state directory **before any record is resolved**, and `team bg list`
+applies the same check — one rule, both sides; a directory that resolves outside is refused (exit 4) with a
+diagnostic naming the link's target, and a missing `bg` directory is still "no records" (exit 3 / the empty list),
+not a refusal. The fixture pins the shape (the sibling's process stays alive, `state/bg.log` gains no line), the
+reverse (a real directory keeps stopping its jobs) and a `--break=no-dir-boundary` shadow that turns the shape red
+again.
+
 ### D7 — one lexer, two lints; the hidden boundary is the legacy list, not silence
 
 The signal lint needs the command-position parsing the tmux lint already implements (including the substitution

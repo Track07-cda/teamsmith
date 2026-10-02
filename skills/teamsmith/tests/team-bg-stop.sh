@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # P159 · `team bg stop` 夹具（safe-signal-discipline · RA3）
 #
-#   bash skills/teamsmith/tests/team-bg-stop.sh [--break=no-identity] [--keep]
+#   bash skills/teamsmith/tests/team-bg-stop.sh [--break=no-identity|no-boundary|no-dir-boundary] [--keep]
 #
 # 证明什么（每条断言都对着 RA3 的 scenario）：
 #   · 真作业按**记录里的 (pid, 启动时间指纹)** 停掉：组 TERM（leader 是组头 → 组内子孙一起），
@@ -11,12 +11,16 @@
 #   · 状态边界（P169 · F1，CRITICAL）：id 是平坦名字（路径语义不在语法里）、记录必须是本项目
 #     bg 目录里的正规文件 —— 穿越 id 2 / 软链 4 / pgid=0 4 / FIFO 4（读取前就拒，不许挂住），
 #     三种畸形都零信号、邻居全活；反向：本项目自己的正规记录照常收（`job.2-fine` 那种名字不误伤）；
+#   · 目录边界（P187 · F1'，CRITICAL）：**bg 目录自身**也必须在项目 state 内 —— `state/bg` 是软链时
+#     读写两侧都拒绝（stop/list 同一条规则），点名 `state/bg` 的解析目标；反向：真目录照常收作业；
 #   · 已结束的 leader 不追猎：rc=0 + 明说子孙不会被找（活着的子孙留在原地）；
 #   · `team bg list` 一行一作业，身份成不成立逐行标出（holds/gone/mismatch/malformed）。
 #
 # 红侧（默认不跑）：`--break=no-identity` 把 cmd-bg.sh 的指纹核对那一行改成 `if false` 的**副本**
 # —— 「pid 复用必须被拒」与「邻居必须活着」必须变红；`--break=no-boundary` 把记录解析器短路的
-# 副本 —— 「穿越 id / 软链记录必须被拒且邻居活着」必须变红。这是断侧，用来证明断言不是空转。
+# 副本 —— 「穿越 id / 软链记录必须被拒且邻居活着」必须变红；`--break=no-dir-boundary` 把「bg 目录
+# 自身也在项目内」的检查短路的副本 —— 「软链目录必须被拒且邻居活着」必须变红。这是断侧，
+# 用来证明断言不是空转。
 #
 # 纪律：清掉继承的团队身份与 tmux 身份；产物落 tmp_root_create 的私有根；每个作业/邻居都是夹具
 # spawn、pid 记录在案，收尾**只按记录的 pid** 发信号（绝不按名字/模式）。夹具不起 tmux、不进容器。
@@ -33,11 +37,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --break=*) BREAK="${1#--break=}"; shift ;;
     --keep)    KEEP=1; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) printf 'team-bg-stop: 未知参数 %s\n' "$1" >&2; exit 2 ;;
   esac
 done
-case "$BREAK" in ''|no-identity|no-boundary) ;; *) printf 'team-bg-stop: --break 只认 no-identity / no-boundary（收到 %s）\n' "$BREAK" >&2; exit 2 ;; esac
+case "$BREAK" in ''|no-identity|no-boundary|no-dir-boundary) ;; *) printf 'team-bg-stop: --break 只认 no-identity / no-boundary / no-dir-boundary（收到 %s）\n' "$BREAK" >&2; exit 2 ;; esac
 [ "$KEEP" = "1" ] && export TEAM_TMP_KEEP=1
 
 # ── 身份隔离：绝不继承调用者的团队/tmux 身份 ─────────────────────────────────────────────────
@@ -114,6 +118,14 @@ if [ -n "$BREAK" ]; then
         printf '红侧：cmd-bg.sh 副本的记录边界解析已短路（%s）\n' "$MUT/scripts/lib/cmd-bg.sh"
       else
         printf '✗ 红侧不成立：sed 没改到 team_bg_record_resolve 的第一行\n' >&2; exit 2
+      fi ;;
+    no-dir-boundary)
+      # 把「bg 目录自身也必须在项目 state 内」短路成恒真：软链目录里的记录照常被解析、被停
+      sed -i 's#^  local _d="\$1" _sreal _dreal$#  printf "%s" "$1"; return 0#' "$MUT/scripts/lib/cmd-bg.sh"
+      if grep -q 'printf "%s" "\$1"; return 0' "$MUT/scripts/lib/cmd-bg.sh"; then
+        printf '红侧：cmd-bg.sh 副本的 bg 目录边界检查已短路（%s）\n' "$MUT/scripts/lib/cmd-bg.sh"
+      else
+        printf '✗ 红侧不成立：sed 没改到 team_bg_dir_resolve 的第一行\n' >&2; exit 2
       fi ;;
   esac
   TEAM="$MUT/scripts/team"
@@ -246,6 +258,37 @@ assert_eq "FIFO 记录 → 4（拒绝在读之前，rc 不是 124）" "$RC" "4"
 assert_has "诊断点名「正规记录」" "$OUT" "正规记录"
 case "$(bg list)" in *fifo*) bad "list 列出了 FIFO 记录" ;; *) ok "list 不列 FIFO 记录" ;; esac
 
+hdr "F1' · bg 目录自身必须在项目内：软链目录读写两侧都拒，兄弟进程活着"
+# 现场（P175 的 finding F1'）：state/bg 指到兄弟项目的 bg 目录 —— 记录解析两侧 realpath 一起落到
+# 同一处，「在 bg 目录内」自洽通过。目录这一层单独收口：stop 与 list 同一条规则，都拒绝并点名目标。
+SYM_PID="$(spawn_neighbour)"; SPAWNED+=("$SYM_PID")
+printf 'id=symdir\npid=%s\npgid=%s\nstart=%s\ncwd=%s\nlog=%s\ncmd=sleep 300\n' \
+  "$SYM_PID" "$(proc_word "$SYM_PID" 2)" "$(now_start "$SYM_PID")" "$OTHER" "$OTHER_BGD/symdir.log" > "$OTHER_BGD/symdir.job"
+rm -rf "$BGD"; ln -s "$OTHER_BGD" "$BGD"
+assert_eq "夹具前提：state/bg 现在是指向兄弟 bg 目录的软链" "$(readlink "$BGD")" "$OTHER_BGD"
+assert_alive "夹具前提：兄弟记录里的进程活着" "$SYM_PID"
+SYM_LOG_BEFORE="$(wc -l < "$STATE/bg.log" 2>/dev/null | tr -dc '0-9' || true)"; SYM_LOG_BEFORE="${SYM_LOG_BEFORE:-0}"
+OUT="$(bg stop symdir)"; RC=$?
+assert_eq "① 软链 bg 目录里的记录 → 4（目录自身越界）" "$RC" "4"
+assert_has "① 诊断点名 state/bg 的解析目标" "$OUT" "$OTHER_BGD"
+assert_alive "① 兄弟项目的真进程仍然活着（目录越界 → 什么都没发）" "$SYM_PID"
+SYM_LOG_AFTER="$(wc -l < "$STATE/bg.log" 2>/dev/null | tr -dc '0-9' || true)"; SYM_LOG_AFTER="${SYM_LOG_AFTER:-0}"
+assert_eq "① 拒绝没有写账本（没有 stop 行）" "$SYM_LOG_AFTER" "$SYM_LOG_BEFORE"
+OUT="$(bg list)"; RC=$?
+assert_eq "② bg list 同一收口 → 4（不列软链目录里的记录）" "$RC" "4"
+assert_has "② list 的诊断同样点名解析目标" "$OUT" "$OTHER_BGD"
+case "$OUT" in *symdir*) bad "② list 列出了软链目录里的兄弟记录" ;; *) ok "② list 不列软链目录里的记录" ;; esac
+# 反向：恢复真目录 → 照常收作业（新检查不许误伤正常形态）
+rm -f "$BGD"; mkdir -p "$BGD"
+REV_JOB="job.3-rev"; REVF="$TMP/rev-child.pid"
+RPID="$(spawn_group_job "$REVF")"; SPAWNED+=("$RPID")
+sleep 0.3
+write_record "$REV_JOB" "$RPID" "$RPID" "$(now_start "$RPID")" "sleep 300"
+OUT="$(bg stop "$REV_JOB")"; RC=$?
+assert_eq "③ 反向：真目录（非软链）照常收作业 → 0" "$RC" "0"
+assert_has "③ 输出说 result=stopped" "$OUT" "result=stopped"
+assert_gone "③ 作业被停掉" "$RPID"
+
 hdr "RA3 · 已结束的 leader：rc=0，不追猎活着的子孙"
 GONE_JOB="gone1"; GCPIDF="$TMP/gone1-child.pid"
 GPID="$(spawn_group_job "$GCPIDF")"; SPAWNED+=("$GPID")
@@ -277,6 +320,7 @@ if [ -n "$BREAK" ]; then
     case "$BREAK" in
       no-identity) printf '（跳过指纹核对后，记录里的 pid 被直接当身份：pid 复用场景不再被拒、邻居被误杀）\n' ;;
       no-boundary) printf '（短路记录边界解析后，穿越 id / 软链记录都能走到邻居的记录并停掉它）\n' ;;
+      no-dir-boundary) printf '（短路 bg 目录边界检查后，软链目录里的兄弟记录被接受并真的停掉了兄弟进程）\n' ;;
     esac
     exit 1
   fi
