@@ -1246,6 +1246,22 @@ p162_run() { # <lib> [证明参数…]：跑探针；输出进 $TMP/p162-out，r
   TEAM_TMUX_ISO_LOG="$P162_GUARD_LOG" bash "$P162_PROBE" "$lib" "$P162_GUARD_LOG" "$P162_STUB" "$@" >"$TMP/p162-out" 2>&1
   return $?
 }
+# P188 · 变异树：共享分类器 + shim + 前置的副本，**布局同真实 skill 树**——lib 现在从自己所在位置解析
+# 共享分类器，孤零零一份 $TMP/tmux-iso.sh 连共享文件都找不到（fail closed 127，P188 实测过）。
+iso_mut_tree() { # <树根>
+  local root="$1"
+  rm -rf "$root"; mkdir -p "$root/scripts/lib" "$root/scripts/shim" "$root/tests/lib"
+  cp "$SKILL_DIR/scripts/lib/tmux-argv.sh" "$root/scripts/lib/tmux-argv.sh"
+  cp "$SKILL_DIR/scripts/shim/tmux" "$root/scripts/shim/tmux"
+  cp "$SKILL_DIR/tests/lib/tmux-iso.sh" "$root/tests/lib/tmux-iso.sh"
+}
+iso_mut_sed() { # <文件> <sed 脚本>：就地改（不依赖 GNU sed -i）
+  local f="$1" script="$2" t
+  t="$(mktemp "$f.XXXXXX")" || return 1
+  if sed "$script" "$f" > "$t"; then mv "$t" "$f"; else rm -f "$t"; return 1; fi
+}
+P188_SHARED="$SKILL_DIR/scripts/lib/tmux-argv.sh"
+P188_SHARED_BODY="$(cat "$P188_SHARED" 2>/dev/null || true)"
 # ① 不存在目录（#1250 回退形状）：硬停 + 点名 + 审计 + 没动手
 p162_run "$P162_LIB" --tmpdir "$P162_NOPE"; P162_RC=$?
 assert_eq "P162 红侧①：TMUX_TMPDIR 指向不存在的目录 → 硬停（exit 2）" "$P162_RC" "2"
@@ -1293,9 +1309,11 @@ assert_eq "P162 本套入口：TMUX_TMPDIR 坏了 → tmux() 包装硬停（exit
 assert_has "$TMP/p162-wrapper-out" "隔离前置不成立" "P162 本套入口：一行醒目结论"
 assert_has "$TMP/p162-wrapper-out" "SKIP（前置不成立：" "P162 本套入口：SKIP 字面格式"
 assert_has "$TMP/p162-wrapper.log" "不成立=tmpdir-missing" "P162 本套入口：审计行落盘（段号 + 哪一条）"
-# ⑤ 影子：判据改成恒真 → ①②两条红侧必须**不再硬停**（证明红侧不是橡皮章）
-P162_MUT="$TMP/p162-mutant.sh"
-sed 's/^tmux_iso_prove() {/tmux_iso_prove() { return 0  # P162 影子变异：判据恒真/' "$P162_LIB" > "$P162_MUT"
+# ⑤ 影子：判据改成恒真 → ①②两条红侧必须**不再硬停**（证明红侧不是橡皮章）。
+#    变异体是**一棵树**（P188：lib 从同源的共享分类器取分类，孤立的 $TMP 副本会 fail closed 127）。
+iso_mut_tree "$TMP/p162-mut"
+iso_mut_sed "$TMP/p162-mut/tests/lib/tmux-iso.sh" 's/^tmux_iso_prove() {/tmux_iso_prove() { return 0  # P162 影子变异：判据恒真/'
+P162_MUT="$TMP/p162-mut/tests/lib/tmux-iso.sh"
 if grep -q 'P162 影子变异' "$P162_MUT"; then
   ok "P162 影子：变异体生成（判据恒真）"
 else
@@ -1315,14 +1333,72 @@ assert_has "$TMP/p162-bypass-out" "指向不存在的目录" "P162 无绕过：�
 p162_run "$P162_LIB" --tmpdir "$P162_GOOD" --force; P162_RC=$?
 assert_eq "P162 无绕过：--force 不是后门（bad-option 硬停）" "$P162_RC" "2"
 assert_has "$P162_GUARD_LOG" "不成立=bad-option" "P162 无绕过：审计记 bad-option"
-# ⑦ 静态钉子：壳函数本体在 lib 里（smoke 只装它）——“生效的那一份”与“分析用的那一份”必须同一份
+# ⑦ 静态钉子（P188）：分类只有**一份** —— 「生效的那一份」与「分析用的那一份」必须同一份代码。
+#    两侧都必须引用共享分类器 skills/teamsmith/scripts/lib/tmux-argv.sh；前置里不许再有第二份候选表。
 P162_WRAP_BODY="$(cat "$SKILL_DIR/tests/lib/tmux-iso.sh")"
-assert_has "$SKILL_DIR/tests/smoke.sh" "tmux_iso_install_suite_guards" "P180 静态钉子：smoke 的 tmux 壳由 lib 统一安装（套件与探针同源）"
+P188_SHIM_BODY="$(cat "$SKILL_DIR/scripts/shim/tmux")"
+assert_file "$P188_SHARED" "P188 静态钉子：共享分类器在（skills/teamsmith/scripts/lib/tmux-argv.sh）"
+assert_has_echo "$P188_SHARED_BODY" "tmux_cls_scan() {" "P188 静态钉子：共享分类器本体（tmux_cls_scan）在这里"
+assert_has_echo "$P188_SHARED_BODY" "killw" "P188 静态钉子：共享分类器收 tmux 的别名（killp/killw）"
+assert_has_echo "$P188_SHARED_BODY" '[ "${a[$end]}" != ";" ]' "P188 静态钉子：共享分类器逐词比较链分隔符（分号 token，不靠子串匹配）"
+assert_has_echo "$P188_SHARED_BODY" 'TMC_HITS' "P188 静态钉子：共享分类器逐命令产出破坏性命中（链的每个动词都扫）"
+assert_has_echo "$P162_WRAP_BODY" "tmux_cls_scan" "P188 静态钉子：套件前置调共享分类器（不带第二份解析器）"
+assert_has_echo "$P162_WRAP_BODY" "../../scripts/lib" "P188 静态钉子：套件前置按自身位置解析共享分类器"
 assert_has_echo "$P162_WRAP_BODY" "tmux_iso_require" "P162 静态钉子：破坏性入口里看得见 tmux_iso_require"
 assert_has_echo "$P162_WRAP_BODY" "TMUX_TMPDIR=" "P162 静态钉子：入口里看得见私有 socket 形态"
-assert_has_echo "$P162_WRAP_BODY" "tmux_iso_argv_parse" "P180 静态钉子：入口按 argv 解析动词（不再只看首参）"
-assert_has_echo "$P162_WRAP_BODY" "builtin command tmux" "P180 静态钉子：非破坏性调用仍按 PATH 原样透传"
+assert_has_echo "$P162_WRAP_BODY" "tmux_iso_argv_parse" "P180 静态钉子：入口保留按 argv 解析的接口（现在是共享分类器的薄适配层）"
 assert_has_echo "$P162_WRAP_BODY" "command() {" "P180 静态钉子：command tmux 与裸 tmux 同源纳入（同一个壳）"
+assert_has_echo "$P162_WRAP_BODY" "builtin() {" "P188 静态钉子：builtin command tmux 也纳入（P186 F1 的绕过）"
+assert_has_echo "$P162_WRAP_BODY" "env tmux" "P188 静态钉子：非破坏性调用经外部 env 走 PATH（壳函数已全被拦，不能再自调）"
+assert_has_echo "$P188_SHIM_BODY" "tmux_cls_scan" "P188 静态钉子：运行时闸门调同一个共享分类器"
+assert_has_echo "$P188_SHIM_BODY" "../lib/tmux-argv.sh" "P188 静态钉子：运行时闸门按自身位置解析同一个共享分类器"
+# 反向：两侧的**旧候选表**都不许留下（第二份分类器的形状）—— 表只该在共享文件里
+P188_NOCAND=0
+for _body in "$P162_WRAP_BODY" "$P188_SHIM_BODY"; do
+  printf '%s\n' "$_body" | grep -q 'kill-server kill-session kill-window kill-pane' && P188_NOCAND=1
+done
+assert_eq "P188 静态钉子：前置与闸门里都没有第二份候选表（表只该在共享文件里）" "$P188_NOCAND" "0"
+# —— P188：查询口 `command -v/-V` 的语义必须与真 command 一致（**rc 是承重的**：套件用它判「有没有」，
+#    例如 command -v pi || NEED_PI_STUB=1；壳一旦恒返回 0，缺 pi 的环境就悄悄不装桩）——
+p188_qv_ref() { bash -c 'command -v -- "$1" >/dev/null 2>&1; exit $?' _ "$1"; }   # 真 bash（没装壳）的 rc
+p188_qv_out() { bash -c 'command -v -- "$1"' _ "$1"; }                          # 真 bash 的输出
+p188_qv_echo() { bash -c 'command -v -- "$1" >/dev/null 2>&1; echo $?' _ "$1"; } # 真 bash 的 rc（可嵌进字符串）
+for _q in tmux ls echo no-such-cmd-p188; do
+  command -v -- "$_q" >/dev/null 2>&1; _here=$?
+  p188_qv_ref "$_q"; _ref=$?
+  assert_eq "P188 查询口：command -v $_q 的 rc 与真 bash 一致" "$_here" "$_ref"
+done
+p188_qv_ref tmux || bad "P188 查询口：参照实现（真 bash）找不到 tmux（夹具失效）"
+assert_eq "P188 查询口：缺失的命令仍返回 1（不许恒 0）" "$(command -v no-such-cmd-p188 >/dev/null 2>&1; echo $?)" "1"
+assert_eq "P188 查询口：command -V 同 rc" \
+  "$(command -V no-such-cmd-p188 >/dev/null 2>&1; echo $?)/$(p188_qv_echo no-such-cmd-p188)" "1/1"
+assert_eq "P188 查询口：-- 分隔符下的 rc 与真 bash 一致" \
+  "$(command -v -- tmux >/dev/null 2>&1; echo $?)/$(p188_qv_echo tmux)" "0/0"
+assert_eq "P188 查询口：多名字（含缺失）仍是 rc=0（与真 bash 同口径）" \
+  "$(command -v ls no-such-cmd-p188 >/dev/null 2>&1; echo $?)/$(bash -c 'command -v ls no-such-cmd-p188 >/dev/null 2>&1; echo $?')" "0/0"
+assert_eq "P188 查询口：命中的输出与真 bash 一致（路径）" "$(command -v ls)" "$(p188_qv_out ls)"
+# —— P188 fail closed：共享分类器**不可用**（缺文件 / 被截断成 0 字节）时，两侧都不许静默放行 ——
+#    「没规则 ≠ 没危险」：闸门判不出 → 拒绝执行（127）；前置判不出 → source 就 127，不让调用方以为装好了壳。
+P188_FC="$TMP/p188-failclosed"; rm -rf "$P188_FC"
+mkdir -p "$P188_FC/shim-alone/scripts/shim" "$P188_FC/lib-alone/tests/lib"
+mkdir -p "$P188_FC/shim-broken/scripts/shim" "$P188_FC/shim-broken/scripts/lib"
+mkdir -p "$P188_FC/lib-broken/tests/lib" "$P188_FC/lib-broken/scripts/lib"
+cp "$SKILL_DIR/scripts/shim/tmux" "$P188_FC/shim-alone/scripts/shim/tmux"
+cp "$SKILL_DIR/scripts/shim/tmux" "$P188_FC/shim-broken/scripts/shim/tmux"
+cp "$SKILL_DIR/tests/lib/tmux-iso.sh" "$P188_FC/lib-alone/tests/lib/tmux-iso.sh"
+cp "$SKILL_DIR/tests/lib/tmux-iso.sh" "$P188_FC/lib-broken/tests/lib/tmux-iso.sh"
+: > "$P188_FC/shim-broken/scripts/lib/tmux-argv.sh"
+: > "$P188_FC/lib-broken/scripts/lib/tmux-argv.sh"
+for _case in alone broken; do
+  env -u TMUX -u TMUX_PANE TEAM_TMUX_REAL="$REAL_TMUX"     bash "$P188_FC/shim-$_case/scripts/shim/tmux" kill-server >"$P188_FC/shim-$_case.out" 2>&1
+  assert_eq "P188 fail closed：闸门·共享分类器$_case → 127" "$?" "127"
+  assert_has "$P188_FC/shim-$_case.out" "共享分类器不可用" "P188 fail closed：闸门·$_case 点名共享分类器"
+  assert_has "$P188_FC/shim-$_case.out" "fail closed" "P188 fail closed：闸门·$_case 结论是 fail closed"
+  bash -c '. "$1"; printf reached' _ "$P188_FC/lib-$_case/tests/lib/tmux-iso.sh" >"$P188_FC/lib-$_case.out" 2>&1
+  assert_eq "P188 fail closed：前置·共享分类器$_case → source 就 127" "$?" "127"
+  assert_not "$P188_FC/lib-$_case.out" "reached" "P188 fail closed：前置·$_case 没让调用方继续"
+  assert_has "$P188_FC/lib-$_case.out" "fail closed" "P188 fail closed：前置·$_case 结论是 fail closed"
+done
 # ⑧ 端到端：嵌套 smoke + 超深 TMPDIR → 0c 的前置在真套件里硬停，0c 在账本里记 SKIP（不是假绿）
 #    （深路径上私有 server 根本绑不上；FAST 不拿机器锁，也不会有任何破坏性调用落地）
 P162_DEEP_ROOT="$TMP/p162-deeproot/$(printf 'd%.0s' $(seq 1 60))"; mkdir -p "$P162_DEEP_ROOT"
@@ -1335,7 +1411,7 @@ assert_has "$TMP/p162-deep-smoke.log" "SKIP（前置不成立：" "P162 端到�
 assert_match "$TMP/p162-deep-smoke.log" "0c · 静态检查.*SKIP[1-9]" "P162 端到端：0c 段收口行记 SKIP（该段真的被记成 SKIP）"
 assert_not "$TMP/p162-deep-smoke.log" "== 结果 ==" "P162 端到端：没有结果行（硬停，不是跑完报红）"
 
-# ⑨ P180：动词不在首位的每一种绕过形态 → **硬停 + 记录桩为空**；正常形态照常执行（不许误伤）。
+# ⑨ P180/P188：动词不在首位的每一种绕过形态 → **硬停 + 记录桩为空**；正常形态照常执行（不许误伤）。
 #    探针（lib/tmux-iso-call-probe.sh）装上与门禁**同一份**壳（同一份 tmux_iso_install_suite_guards），
 #    再用记录桩量：硬停的形态一条调用都到不了桩；放行的形态桩收到 argv。
 #    场景：own = 本轮私有目录（已 mkdir -p）｜broken = 不存在的目录（#1250 回退形状）｜unset = 没设。
@@ -1400,16 +1476,44 @@ p180_red "命令链 a && tmux -S 共享默认 socket kill-server" \
   "true && tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN" "explicit-target-is-default"
 p180_red "command tmux -f /dev/null kill-server（本轮隔离坏）" \
   "command tmux -f /dev/null kill-server" "$P180_BROKEN" "tmpdir-missing"
+# —— P188：共享分类器新纳入的形态（命令链 / 别名 / builtin command / 组合簇）——逐条硬停 + 桩为空 ——
+p180_red "tmux 自己的命令链：list-sessions ';' kill-server（本轮隔离坏）" \
+  "tmux list-sessions ';' kill-server" "$P180_BROKEN" "tmpdir-missing"
+# 记录桩按**首词**分流：这条链的首词是只读词，桩会把它记进 .ro（前置自己的 socket 观察也在那儿）。
+# 所以「没放行」要看 .ro 里有没有这条链本身（前置的观察是 ls/display-message，不含链）。
+assert_not "$P180_REC.ro" "kill-server" "P188 红侧：命令链一条都没到记录桩（只读面也没有它）"
+p180_red "tmux 自己的命令链：-u list-sessions ';' kill-server（本轮隔离坏）" \
+  "tmux -u list-sessions ';' kill-server" "$P180_BROKEN" "tmpdir-missing"
+p180_red "命令链：kill-session -t x ';' killw -t y（本轮隔离坏）" \
+  "tmux kill-session -t x ';' killw -t y" "$P180_BROKEN" "tmpdir-missing"
+p180_red "命令链：-S 共享默认 socket 打头，链尾才是 kill-server" \
+  "tmux -S $P180_DEF_SOCK list-sessions ';' kill-server" "$P180_OWN" "explicit-target-is-default"
+p180_red "别名 killw（tmux 命令表的第二列）" \
+  "tmux killw -t x" "$P180_BROKEN" "tmpdir-missing"
+p180_red "别名 killp（tmux 命令表的第二列）" \
+  "tmux killp -t x" "$P180_BROKEN" "tmpdir-missing"
+p180_red "别名 killw + -S 共享默认 socket" \
+  "tmux -S $P180_DEF_SOCK killw -t x" "$P180_OWN" "explicit-target-is-default"
+p180_red "builtin command tmux -S 共享默认 socket kill-server（P186 F1）" \
+  "builtin command tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN" "explicit-target-is-default"
+p180_red "builtin command tmux -f /dev/null kill-server（本轮隔离坏）" \
+  "builtin command tmux -f /dev/null kill-server" "$P180_BROKEN" "tmpdir-missing"
+p180_red "组合簇 -uf /dev/null kill-server（本轮隔离坏）" \
+  "tmux -uf /dev/null kill-server" "$P180_BROKEN" "tmpdir-missing"
 # —— 反向：正常形态照常执行（不代表它真杀了：记录桩只记录、绝不动手）——
 p180_ok "tmux kill-server（动词在首位）" "tmux kill-server" "$P180_OWN" "kill-server"
 p180_ok "tmux -S <本轮私有 socket> kill-session -t <本轮>" \
   "tmux -S $P180_OWN_SOCK kill-session -t p180victim" "$P180_OWN" "-S $P180_OWN_SOCK kill-session -t p180victim"
 p180_ok "tmux -f /dev/null kill-server（本轮隔离健康，不误伤）" \
   "tmux -f /dev/null kill-server" "$P180_OWN" "-f /dev/null kill-server"
-p180_ok "command tmux kill-session -t x（command 壳照常执行）" \
-  "command tmux kill-session -t x" "$P180_OWN" "kill-session -t x"
-p180_ok "tmux -L default list-sessions（只读调用不误伤）" \
-  "tmux -L default list-sessions" "$P180_OWN" "-L default list-sessions"
+p180_ok "tmux -S <本轮私有 socket> killw -t <本轮>（别名不误伤）" \
+  "tmux -S $P180_OWN_SOCK killw -t p180victim" "$P180_OWN" "-S $P180_OWN_SOCK killw -t p180victim"
+p180_ok "tmux -f /dev/null list-sessions ';' list-windows（只读链不误伤）" \
+  "tmux -f /dev/null list-sessions ';' list-windows" "$P180_OWN" "-f /dev/null list-sessions"
+p180_ok "builtin command tmux -f /dev/null list-sessions（只读不误伤）" \
+  "builtin command tmux -f /dev/null list-sessions" "$P180_OWN" "-f /dev/null list-sessions"
+p180_ok "tmux -uf /dev/null list-sessions（组合簇只读不误伤）" \
+  "tmux -uf /dev/null list-sessions" "$P180_OWN" "-uf /dev/null list-sessions"
 # —— 真杀一腿（本轮自己的私有 server + 一次性受害 session；-S 指本轮私有 socket 必须真执行）——
 if [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && [ -n "${SMOKE_TMUX_SOCK:-}" ]; then
   P180_VICTIM="p180victim-$$"
@@ -1426,58 +1530,96 @@ if [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && [ -n "${SMOKE_TMUX_SOCK:-}" ]; then
 else
   cond_skip "P180 反向·真杀" "本轮没有私有 server（TEAM_SMOKE_NO_PRIVATE_TMUX=1）"
 fi
-# —— ⑩ 影子：把动词解析改回“只看首参”（P162 的形状）→ 上面每一种绕过形态必须**不再硬停** ——
-P180_MUT="$P180_ROOT/p180-mutant.sh"
-sed 's/^tmux_iso_argv_scan() {/tmux_iso_argv_scan() { TMUX_ISO_ARGV_VERB="${1:-}"; TMUX_ISO_ARGV_SOCKPATH=""; TMUX_ISO_ARGV_SOCKNAME=""; TMUX_ISO_ARGV_UNCERTAIN=0; return 0  # P180 影子变异：只看首参/' \
-  "$SKILL_DIR/tests/lib/tmux-iso.sh" > "$P180_MUT"
-if grep -q 'P180 影子变异' "$P180_MUT"; then
-  ok "P180 影子：变异体生成（动词解析退回只看首参）"
-else
-  bad "P180 影子：sed 没改到 tmux_iso_argv_scan（夹具失效）"
-fi
-p180_shadow_red() { # <说明> <形态> <tmpdir>：影子下必须不再硬停，且记录桩收到调用
-  local what="$1" form="$2" tmpdir="$3"
-  p180_call "$P180_MUT" "$form" "$tmpdir"
-  assert_eq "P180 影子：$what → 不再硬停（红侧真的在挡）" "$P180_RC" "0"
-  if [ "$(p180_rec_lines)" -gt 0 ]; then
-    ok "P180 影子：$what → 记录桩收到调用（影子下真的会执行）"
-  else
-    bad "P180 影子：$what → 记录桩没收到（影子没生效？）"
-  fi
-}
-p180_shadow_red "-S 共享默认 socket" "tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN"
-p180_shadow_red "-L 私有名" "tmux -L p180-other kill-server" "$P180_OWN"
-p180_shadow_red "-f 之后的动词（隔离坏）" "tmux -f /dev/null kill-server" "$P180_BROKEN"
-p180_shadow_red "-L default（隔离坏）" "tmux -L default kill-server" "$P180_BROKEN"
-p180_shadow_red "-L default（TMUX_TMPDIR 未设）" "tmux -L default kill-session -t p180" "-"
-p180_shadow_red "command tmux -S 共享默认 socket" "command tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN"
-p180_shadow_red "\\tmux -S 共享默认 socket" "\\tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN"
-p180_shadow_red "命令链 a; tmux -S 共享默认 socket" "true; tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN"
-# —— 组合簇（-uf /dev/null）：解析侧多认一格（不装懂）—— 单列一条红侧，同套影子 ——
-p180_red "组合簇 -uf /dev/null 之后的动词（本轮隔离坏）" \
-  "tmux -uf /dev/null kill-server" "$P180_BROKEN" "tmpdir-missing"
-p180_shadow_red "组合簇 -uf /dev/null" "tmux -uf /dev/null kill-server" "$P180_BROKEN"
-# —— ⑫ 同源契约（P180 的「别另立一套」）：lib 的 argv 解析与 M36/M67 的运行时闸门（scripts/shim/tmux）
-#    在同一张形态矩阵上必须判到**同一边**：破坏性 ⇔ 闸门在默认 socket 上拒绝（exit 64），
-#    非破坏性 ⇔ 闸门放行。两边都不执行真东西：闸门的「真身」指到空桩，破坏性形态在拒绝分支就结束
-#    （默认 socket 上闸门自己就不会动手），非破坏性形态只会打到那个空桩。
-#    矩阵只放**两边语法都覆盖**的形态：值类全局选项分开写或 -Lx/-Sx 粘连、开关任意；组合簇
-#    （-uf /dev/null）是解析侧多认的一格 —— 闸门那侧不认它，所以不塞进 parity（见报告的风险节）。
+# —— P188 ⑬ 闸门侧的量具（同源契约与影子都用它；TEAM_TMUX_REAL 指空桩：绝不打真 server）——
 P180_SHIM="$SKILL_DIR/scripts/shim/tmux"
 P180_SHIM_STUB_DIR="$P180_ROOT/shim-stub"; mkdir -p "$P180_SHIM_STUB_DIR"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$P180_SHIM_STUB_DIR/tmux"; chmod +x "$P180_SHIM_STUB_DIR/tmux"
-assert_file "$P180_SHIM" "P180 同源契约：M36/M67 的运行时闸门在（scripts/shim/tmux）"
-p180_parity() { # <期望：destructive|clean> <argv…>：同一张形态矩阵上解析侧与闸门侧必须同边
+assert_file "$P180_SHIM" "P188 同源契约：M36/M67 的运行时闸门在（scripts/shim/tmux）"
+p188_shim_run() { # <shim 路径> <argv…>：$P188_SHIM_RC = 退出码；$P188_SHIM_ACT = 审计里的 act
+  local shim="$1"; shift
+  rm -f "$P180_ROOT/shim-calls.log"
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$P180_BROKEN" \
+      TEAM_TMUX_CALLS_LOG="$P180_ROOT/shim-calls.log" TEAM_TMUX_REAL="$P180_SHIM_STUB_DIR/tmux" \
+      "$shim" "$@" >/dev/null 2>&1
+  P188_SHIM_RC=$?
+  P188_SHIM_ACT="$(sed -n 's/.* · act=\([^ ]*\) ·.*/\1/p' "$P180_ROOT/shim-calls.log" 2>/dev/null | tail -1)"
+}
+# —— P188 ⑭ 影子（**一份实现**的可证伪性）：只改共享分类器里的一处 → **两侧判定必须同时变** ——
+#    变异体是**一棵树**（iso_mut_tree：共享文件 + shim + 前置各一份副本，布局同真实 skill 树），
+#    同一棵变异树同时喂给两侧。两次变异各钉一半射程：① 分类恒「非破坏性」；② 退回「只看首参」。
+P188_MUT_CLEAN="$P180_ROOT/p188-clean"; iso_mut_tree "$P188_MUT_CLEAN"
+iso_mut_sed "$P188_MUT_CLEAN/scripts/lib/tmux-argv.sh" \
+  's|^tmux_cls_scan() {.*|tmux_cls_scan() { TMC_VERB=""; TMC_SOCKPATH=""; TMC_SOCKNAME=""; TMC_UNCERTAIN=0; TMC_TOKENS=0; TMC_GLOB_END=0; TMC_CHAIN_N=0; TMC_VERBS=""; TMC_DESTRUCTIVE=0; TMC_KIND=""; TMC_HITS=(); TMC_HIT_N=0; return 0  # P188 影子变异：分类恒非破坏性|'
+P188_MUT_FIRST="$P180_ROOT/p188-first"; iso_mut_tree "$P188_MUT_FIRST"
+iso_mut_sed "$P188_MUT_FIRST/scripts/lib/tmux-argv.sh" \
+  's|^tmux_cls_scan() {.*|tmux_cls_scan() { TMC_VERB="${1:-}"; TMC_SOCKPATH=""; TMC_SOCKNAME=""; TMC_UNCERTAIN=0; TMC_TOKENS=0; TMC_GLOB_END=0; TMC_CHAIN_N=1; TMC_VERBS="${1:--}"; TMC_KIND="$(tmux_cls_kind "${1:-}")"; TMC_DESTRUCTIVE=0; [ -n "$TMC_KIND" ] \&\& TMC_DESTRUCTIVE=1; TMC_HITS=(); TMC_HIT_N=0; return 0  # P188 影子变异：只看首参|'
+for _m in "$P188_MUT_CLEAN" "$P188_MUT_FIRST"; do
+  if grep -q 'P188 影子变异' "$_m/scripts/lib/tmux-argv.sh"; then
+    ok "P188 影子：变异体生成（$_m）"
+  else
+    bad "P188 影子：sed 没改到共享分类器（$_m）"
+  fi
+done
+p188_pair() { # <说明> <套件形态> <tmpdir> <shim argv…>：正常树 → 套件硬停 + 闸门拒绝 —— 影子前的基线
+  local what="$1" form="$2" tmpdir="$3"; shift 3
+  p180_call "$SKILL_DIR/tests/lib/tmux-iso.sh" "$form" "$tmpdir"
+  assert_eq "P188 成对：$what → 正常树·套件侧硬停" "$P180_RC" "2"
+  p188_shim_run "$P180_SHIM" "$@"
+  assert_eq "P188 成对：$what → 正常树·闸门侧拒绝（exit 64）" "$P188_SHIM_RC" "64"
+}
+p188_shadow_clean() { # <说明> <套件形态> <tmpdir> <shim argv…>：恒非破坏性变异树 → 两侧都放行
+  local what="$1" form="$2" tmpdir="$3"; shift 3
+  p180_call "$P188_MUT_CLEAN/tests/lib/tmux-iso.sh" "$form" "$tmpdir"
+  assert_eq "P188 影子·套件侧：$what → 变异后不再硬停（红侧是承重的）" "$P180_RC" "0"
+  if [ "$(p180_rec_lines)" -gt 0 ]; then
+    ok "P188 影子·套件侧：$what → 记录桩收到调用（变异后真的会执行）"
+  else
+    bad "P188 影子·套件侧：$what → 记录桩没收到（变异没生效？）"
+  fi
+  p188_shim_run "$P188_MUT_CLEAN/scripts/shim/tmux" "$@"
+  assert_eq "P188 影子·闸门侧：$what → 同一处变异后不再拒绝（两侧一起翻转）" "$P188_SHIM_RC" "0"
+  assert_eq "P188 影子·闸门侧：$what → 审计 act=pass" "$P188_SHIM_ACT" "pass"
+}
+p188_shadow_first() { # <说明> <套件形态> <tmpdir> <shim argv…>：只看首参变异 → 动词不在首位的形态两侧放行
+  local what="$1" form="$2" tmpdir="$3"; shift 3
+  p180_call "$P188_MUT_FIRST/tests/lib/tmux-iso.sh" "$form" "$tmpdir"
+  assert_eq "P188 影子·只看首参：$what → 套件侧不再硬停" "$P180_RC" "0"
+  p188_shim_run "$P188_MUT_FIRST/scripts/shim/tmux" "$@"
+  assert_eq "P188 影子·只看首参：$what → 闸门侧不再拒绝（同上）" "$P188_SHIM_RC" "0"
+}
+p188_shadow_first_keeps() { # <说明> <形态> <tmpdir>：只看首参变异下，动词在首位的形态**仍然**硬停
+  local what="$1" form="$2" tmpdir="$3"
+  p180_call "$P188_MUT_FIRST/tests/lib/tmux-iso.sh" "$form" "$tmpdir"
+  assert_eq "P188 影子·只看首参：$what → 动词在首位仍硬停（变异不是全局关闸）" "$P180_RC" "2"
+}
+p188_pair "kill-server" "tmux kill-server" "$P180_BROKEN" kill-server
+p188_shadow_clean "kill-server" "tmux kill-server" "$P180_BROKEN" kill-server
+p188_pair "命令链 -u list-sessions ';' kill-server" "tmux -u list-sessions ';' kill-server" "$P180_BROKEN" -u list-sessions ';' kill-server
+p188_shadow_clean "命令链 -u list-sessions ';' kill-server" "tmux -u list-sessions ';' kill-server" "$P180_BROKEN" -u list-sessions ';' kill-server
+p188_pair "别名 killw -t x" "tmux killw -t x" "$P180_BROKEN" killw -t x
+p188_shadow_clean "别名 killw -t x" "tmux killw -t x" "$P180_BROKEN" killw -t x
+p188_pair "组合簇 -uf /dev/null kill-server" "tmux -uf /dev/null kill-server" "$P180_BROKEN" -uf /dev/null kill-server
+p188_shadow_clean "组合簇 -uf /dev/null kill-server" "tmux -uf /dev/null kill-server" "$P180_BROKEN" -uf /dev/null kill-server
+p188_shadow_first "-S 共享默认 socket kill-server" "tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN" -S "$P180_DEF_SOCK" kill-server
+p188_shadow_first "-f /dev/null kill-server" "tmux -f /dev/null kill-server" "$P180_BROKEN" -f /dev/null kill-server
+p188_shadow_first "-L default kill-session -t x" "tmux -L default kill-session -t x" "$P180_BROKEN" -L default kill-session -t x
+p188_shadow_first "命令链 -u list-sessions ';' kill-server" "tmux -u list-sessions ';' kill-server" "$P180_BROKEN" -u list-sessions ';' kill-server
+p188_shadow_first "组合簇 -uf /dev/null kill-server" "tmux -uf /dev/null kill-server" "$P180_BROKEN" -uf /dev/null kill-server
+p188_shadow_first_keeps "kill-server（动词在首位）" "tmux kill-server" "$P180_BROKEN"
+p188_shadow_first_keeps "killw（别名在首位）" "tmux killw -t x" "$P180_BROKEN"
+# —— ⑮ 同源契约（P180 的「别另立一套」升级为 P188 的「同一份代码」）：同一张形态矩阵上，
+#    解析侧（共享分类器）与闸门侧（同一个共享分类器的判定结果）必须判到**同一边**。
+#    矩阵只放**两边语法都覆盖**的形态：值类全局选项分开写或 -Lx/-Sx 粘连、开关任意、组合簇、
+#    别名、tmux 自己的 `;` 链。两边都不执行真东西：闸门的「真身」指到空桩（破坏性形态在拒绝
+#    分支就结束；非破坏性形态只会打到那个空桩）。
+p180_parity() { # <期望：destructive|clean> <argv…>
   local want="$1"; shift
   tmux_iso_argv_parse "$@"
   local mine="clean"; [ "$TMUX_ISO_ARGV_DESTRUCTIVE" = "1" ] && mine="destructive"
-  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$P180_ROOT/no-such-dir" \
-      TEAM_TMUX_CALLS_LOG="$P180_ROOT/shim-calls.log" TEAM_TMUX_REAL="$P180_SHIM_STUB_DIR/tmux" \
-      "$P180_SHIM" "$@" >/dev/null 2>&1
-  local rc=$?                       # 先收 rc：下一行 local/赋値 会把它冲掉（自己的那个坑）
-  local gate="clean"; [ "$rc" = "64" ] && gate="destructive"
-  assert_eq "P180 同源契约：[$*] 解析侧=$want" "$mine" "$want"
-  assert_eq "P180 同源契约：[$*] 闸门侧与解析侧同边（$want）" "$gate" "$want"
+  p188_shim_run "$P180_SHIM" "$@"
+  local gate="clean"; [ "$P188_SHIM_RC" = "64" ] && gate="destructive"
+  assert_eq "P188 同源契约：[$*] 解析侧=$want" "$mine" "$want"
+  assert_eq "P188 同源契约：[$*] 闸门侧与解析侧同边（$want）" "$gate" "$want"
 }
 p180_parity destructive kill-server
 p180_parity destructive -f /dev/null kill-server
@@ -1488,15 +1630,24 @@ p180_parity destructive -Ldefault kill-server
 p180_parity destructive -2C kill-window -t x
 p180_parity destructive -- kill-pane -t x
 p180_parity destructive kill-s
+p180_parity destructive killw -t x
+p180_parity destructive killp -t x
+p180_parity destructive list-sessions ';' kill-server
+p180_parity destructive -u list-sessions ';' kill-server
+p180_parity destructive kill-session -t x ';' killw -t y
+p180_parity destructive -uf /dev/null kill-server
 p180_parity clean list-sessions
 p180_parity clean -f /dev/null list-sessions
 p180_parity clean -L default list-windows
 p180_parity clean kill-servers
 p180_parity clean new-session -d -s p180parity
-# —— ⑬ 影子二：把 P180 的「显式目标（-S/-L）必须仍是本轮私有 socket」判据整段摸掉
+p180_parity clean list-sessions ';' list-windows
+p180_parity clean -uf /dev/null list-sessions
+# —— ⑯ 影子二：把前置里 P180 的「显式目标（-S/-L）必须仍是本轮私有 socket」判据整段摸掉
 #    → 上面那三种显式目标绕过形态必须都不再硬停（证明那把判据真的在挡，不是装饰）——
-P180_MUT2="$P180_ROOT/p180-mutant2.sh"
-sed '/P180：调用方在 argv 里/,/^  fi$/d' "$SKILL_DIR/tests/lib/tmux-iso.sh" > "$P180_MUT2"
+P180_MUT2_ROOT="$P180_ROOT/p180-mut2"; iso_mut_tree "$P180_MUT2_ROOT"
+iso_mut_sed "$P180_MUT2_ROOT/tests/lib/tmux-iso.sh" '/P180：调用方在 argv 里/,/^  fi$/d'
+P180_MUT2="$P180_MUT2_ROOT/tests/lib/tmux-iso.sh"
 if grep -q 'P180：调用方在 argv 里' "$P180_MUT2"; then
   bad "P180 影子二：sed 没摸掉显式目标判据（夹具失效）"
 else
@@ -1516,12 +1667,11 @@ p180_shadow2 "-S 共享默认 socket" "tmux -S $P180_DEF_SOCK kill-server" "$P18
 p180_shadow2 "-S 经 ../../ 绕一圈" "tmux -S /tmp/tmux-$(id -u)/../tmux-$(id -u)/default kill-server" "$P180_OWN"
 p180_shadow2 "-L 私有名（不是本轮那个 socket）" "tmux -L p180-other kill-server" "$P180_OWN"
 p180_shadow2 "command tmux -S 共享默认 socket" "command tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN"
-# —— ⑪ 不挂死（M36 的教训）：值类选项缺值不许让证明循环原地打转（timeout 5 是绊线）——
+# —— ⑰ 不挂死（M36 的教训）：值类选项缺值不许让证明循环原地打转（timeout 5 是绊线）——
 timeout 5 bash -c '. "$1"; tmux_iso_prove --tmpdir' _ "$SKILL_DIR/tests/lib/tmux-iso.sh" >/dev/null 2>&1
 assert_eq "P180 边界：tmux_iso_prove --tmpdir（缺值）→ bad-option 立刻返回，不挂死" "$?" "1"
 timeout 5 bash -c '. "$1"; tmux_iso_argv_parse --argv' _ "$SKILL_DIR/tests/lib/tmux-iso.sh" >/dev/null 2>&1
 assert_eq "P180 边界：tmux_iso_argv_parse 无参数 → 立刻返回，不挂死" "$?" "0"
-
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
 if $TEAM doctor >"$TMP/doctor-pre.log" 2>&1; then bad "未初始化时 doctor 应失败"; else ok "未初始化时 doctor 正确报错"; fi
@@ -13089,10 +13239,14 @@ rm -f "$M36_D/f"
 
 # ── ⑦ M41 翻转：把 shim 的目录可用性检查摘掉（mutant）→ 同一发假隔离探针必须不再被拒、直接落桩。
 #     这证明 ③ 钉的是「目录可用性检查」这条逻辑本身（去掉 shim 整体的翻转由 ⑩ 覆盖）。
-M36_MUT="$M36_D/mut"; rm -rf "$M36_MUT"; mkdir -p "$M36_MUT"
+# P188：闸门从**自己所在位置**解析共享分类器（scripts/lib/tmux-argv.sh），所以 mutant 要成一棵树
+# （scripts/shim/tmux + scripts/lib/tmux-argv.sh）；孤立一份 $TMP/tmux 会因为找不到分类器 fail closed（127）。
+M36_MUT_ROOT="$M36_D/mut"; rm -rf "$M36_MUT_ROOT"; mkdir -p "$M36_MUT_ROOT/scripts/shim" "$M36_MUT_ROOT/scripts/lib"
 sed 's#_tmpdir="$(_real_dir "${TMUX_TMPDIR:-}")" || _tmpdir_fell_back=1#_tmpdir="${TMUX_TMPDIR:-}"#' \
-  "$M36_SHIM_DIR/tmux" > "$M36_MUT/tmux"
-chmod +x "$M36_MUT/tmux"
+  "$M36_SHIM_DIR/tmux" > "$M36_MUT_ROOT/scripts/shim/tmux"
+cp "$SKILL_DIR/scripts/lib/tmux-argv.sh" "$M36_MUT_ROOT/scripts/lib/tmux-argv.sh"
+chmod +x "$M36_MUT_ROOT/scripts/shim/tmux"
+M36_MUT="$M36_MUT_ROOT/scripts/shim"
 if cmp -s "$M36_SHIM_DIR/tmux" "$M36_MUT/tmux"; then
   bad "⑦ M41 翻转夹具：sed 没打中（mutant 与原件逐字节相同）—— 翻转断言无意义"
 else

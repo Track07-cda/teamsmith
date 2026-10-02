@@ -395,12 +395,39 @@ peq "⑨ 继承身份下零红" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-env.log" |
 #  P173 之前，同目录 smoke.sh 的 tmux() 包装让这条植入被 lint 记成「有隔离证据」—— 牙齿就是被它吞的。）
 P_TEETH="$(scratch_tree teeth product-only)"
 printf '\ntmux kill-server\n' >> "$P_TEETH/skills/teamsmith/tests/tmp-hygiene.sh"
-# 前提：这棵树里**必须**有 P162 那个同名包装（`smoke.sh` 的 `tmux()`）—— 牙齿咬的正是「同目录互认」这个
-# 形状；包装哪天不在了，这条牙齿会因为别的原因变绿，那就得有人重新想它还在测什么。
-if grep -q 'tmux() {  # P162' "$P_TEETH/skills/teamsmith/tests/smoke.sh"; then
-  pok "⑨ 牙齿一的前提：那棵树里就在 P162 的 tmux() 包装（smoke.sh）—— 咬的正是「同目录互认」这个形状"
+# 前提（P188 改写）：牙齿咬的正是「同目录互认」这个形状 —— 那棵树里**必须有** tmux 包装，而且包装
+# 与运行时闸门（scripts/shim/tmux）必须**同源**（同一份分类器）。P180 把包装本体搬进了 lib
+# （smoke.sh 只调 tmux_iso_install_suite_guards），所以字面的 `tmux() {  # P162` 不再存在于 smoke.sh
+# —— 过时的是**前提的写法**，不是这条检查；改成证明「包装器存在且与 shim 同源」后，牙齿的口径不变。
+P_TEETH_SHARED="$P_TEETH/skills/teamsmith/scripts/lib/tmux-argv.sh"
+# 前提函数：<树根> → 打印不成立的原因（空 = 前提成立）；控制项要能反过来用它
+shape_teeth_premise() {
+  local tree="$1"
+  local shared="$tree/skills/teamsmith/scripts/lib/tmux-argv.sh"
+  grep -q 'tmux_iso_install_suite_guards' "$tree/skills/teamsmith/tests/smoke.sh" || {
+    printf '%s' "那棵树里的 smoke.sh 没有安装套件壳（tmux_iso_install_suite_guards）"; return 0; }
+  grep -q 'tmux_cls_scan' "$tree/skills/teamsmith/tests/lib/tmux-iso.sh" || {
+    printf '%s' "那棵树里的套件前置没有引用共享分类器（tmux_cls_scan）"; return 0; }
+  grep -q 'tmux_cls_scan' "$tree/skills/teamsmith/scripts/shim/tmux" || {
+    printf '%s' "那棵树里的运行时闸门没有引用共享分类器（tmux_cls_scan）"; return 0; }
+  [ -f "$shared" ] && grep -q 'tmux_cls_scan() {' "$shared" || {
+    printf '%s' "那棵树里没有共享分类器（scripts/lib/tmux-argv.sh 缺失或没有本体）"; return 0; }
+  return 0
+}
+P_TEETH_PREMISE="$(shape_teeth_premise "$P_TEETH")"
+if [ -z "$P_TEETH_PREMISE" ]; then
+  pok "⑨ 牙齿一的前提：那棵树里有 tmux 包装且与运行时闸门同源（同一份共享分类器）—— 咬的正是「同目录互认」这个形状"
 else
-  pbad "⑨ 牙齿一的前提不在：树里的 smoke.sh 没有 P162 的 tmux() 包装，这条牙齿会因别的原因通过"
+  pbad "⑨ 牙齿一的前提不在：$P_TEETH_PREMISE，这条牙齿会因别的原因通过"
+fi
+# 前提本身的两向控制：把共享分类器从 scratch 树里拿掉 → 前提必须**不成立**（不能是橡皮章）
+P_TEETH_CTRL="$(scratch_tree teethctrl product-only)"
+rm -f "$P_TEETH_CTRL/skills/teamsmith/scripts/lib/tmux-argv.sh"
+P_TEETH_CTRL_WHY="$(shape_teeth_premise "$P_TEETH_CTRL")"
+if [ -n "$P_TEETH_CTRL_WHY" ]; then
+  pok "⑨ 前提控制：拿掉共享分类器 → 前提不成立并点名（$P_TEETH_CTRL_WHY）"
+else
+  pbad "⑨ 前提控制：拿掉共享分类器后前提仍成立（这条前提不读同源证据）"
 fi
 if nest "$P_TEETH" "$T/nest-teeth.log" --select 31; then
   pbad "⑨ 产品面树里出现裸 tmux 变更调用，§31 仍然绿（产品问题被吞了：判定没接在现场）"

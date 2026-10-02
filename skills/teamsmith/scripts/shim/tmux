@@ -35,6 +35,12 @@
 #   TEAM_ALLOW_DESTRUCTIVE_TMUX 已退役（M67）：本闸门不读它，它在调用方环境里、甚至在这台 server 的
 #   全局环境里都不改变任何判定；团队 CLI 不再导出它。
 #
+# P188（**一份实现**）：动词的分类不再写在本文件里 —— 本闸门与套件隔离前置（tests/lib/tmux-iso.sh）
+#   都 source `scripts/lib/tmux-argv.sh` 的那一份扫描器。三轮返工（P178/P180/P186）的根因是同一份契约
+#   写了两遍、各自漂移（别名 killp/killw、tmux 自己的 `;` 命令链、组合簇选项在一侧认另一侧不认）。
+#   现在判定的射程：一次调用里 `;` 分隔的**每个**动词都扫（任一是破坏性 → 整条破坏性，逐条要求目标是
+#   本项目自己的命名对象），别名与前缀写法与全名同表。
+#
 # socket 解析与 tmux（3.7b）一致：-S/-L（命令行显式） > $TMUX（第一个逗号前，且不以逗号开头） >
 # <tmpdir>/tmux-<uid>/default。tmpdir 不是「${TMUX_TMPDIR:-/tmp}」这么一条公式，而是一张**路径表**
 # `TMUX_SOCK = "$TMUX_TMPDIR:/tmp/"`（strings 实证）：逐项 env 展开 + realpath(3)，**realpath 失败的项
@@ -97,60 +103,25 @@ _shim_argv=("$@")
 _shim_argc=$#
 _shim_cwd="$(pwd -P 2>/dev/null || printf '%s' "${PWD:-}")"
 
-# ── 解析全局参数（**只吃副本**：函数位置参数是调用者 "$@" 的拷贝，caller 的 "$@" 不动）────────
-# 缺值参数（$#<2）直接 break：不完整调用透传给真 tmux 自己报错；每条路径要么 shift ≥1 要么 break，绝不挂住。
-# 产出：_sockname/_sockpath（-L/-S）、_sub（子命令）、_glob_end（全局区结束下标 = 子命令所在下标，
-# 没有子命令时 = 词数）、_tokenn（全局区里的 token 次数）、_tail（子命令之后的参数）。
-_parse_globals() {
-  _sockname="" _sockpath="" _sub="" _tokenn=0 _glob_end=0 _tail=()
-  local _n=$# _i=0
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      -L)
-        [ $# -ge 2 ] || { _i=$((_i + 1)); shift; break; }
-        _sockname="$2"; _i=$((_i + 2)); shift 2 ;;
-      -L*) _sockname="${1#-L}"; _i=$((_i + 1)); shift ;;
-      -S)
-        [ $# -ge 2 ] || { _i=$((_i + 1)); shift; break; }
-        _sockpath="$2"; _i=$((_i + 2)); shift 2 ;;
-      -S*) _sockpath="${1#-S}"; _i=$((_i + 1)); shift ;;
-      -c|-f|-T)
-        [ $# -ge 2 ] || { _i=$((_i + 1)); shift; break; }
-        _i=$((_i + 2)); shift 2 ;;
-      --)
-        # `--` 之后的第一个词是子命令位：token 只认它**之前**的全局参数位
-        _glob_end=$((_i + 1)); _i=$((_i + 1)); shift
-        [ $# -gt 0 ] && { _sub="$1"; _i=$((_i + 1)); shift; }
-        _tail=("$@"); return 0 ;;
-      --teamsmith-allow-destructive) _tokenn=$((_tokenn + 1)); _i=$((_i + 1)); shift ;;
-      -*) _i=$((_i + 1)); shift ;;            # 其它全局开关（-2 -C -l -u -v -V …）
-      *)  _glob_end="$_i"; _sub="$1"; _i=$((_i + 1)); shift; _tail=("$@"); return 0 ;;
-    esac
-  done
-  _glob_end="$_i"
-  _tail=()
-}
-# 空数组在 set -u 下的展开（bash < 4.4 会报 unbound）：有元素才展开
-_parse_globals ${_shim_argv[@]+"${_shim_argv[@]}"}
-
-# ── 破坏性集合 → 具体子命令：四个 kill-*；tmux 允许前缀写法（kill-s 之类），多个候选 = 前缀有歧义 ──
-_destructive=0 _kind=""
-case "$_sub" in
-  kill-*)
-    _hits=""
-    for _cand in kill-server kill-session kill-window kill-pane; do
-      case "$_cand" in "$_sub"*) _hits="${_hits:+$_hits }$_cand" ;; esac
-    done
-    case "$_hits" in
-      '') ;;
-      *' '*) _destructive=1; _kind="ambiguous" ;;
-      *)     _destructive=1; _kind="$_hits" ;;
-    esac ;;
-esac
+# ── P188 · 分类只有**一份**（scripts/lib/tmux-argv.sh）：本闸门与套件隔离前置同源 ──────────────
+# 这里只做「调用方语义」的适配：把共享扫描器（链 / 别名 / 前缀 / 全局位 / uncertain）的产出接进
+# M67 的判定表。写在这里的第二份解析器在 P178/P180/P186 三轮里与套件那一份漂移过（别名、命令链、
+# 组合簇在一侧认另一侧不认）——**别再添一份**。共享文件不在 = 闸门无法判定 → fail closed（127）。
+_shim_lib="$(cd -P "$(dirname "$_shim_self")" 2>/dev/null && pwd)/../lib/tmux-argv.sh"
+# 缺文件、被截断、被清空都算「不可用」：**没规则 ≠ 没危险** —— 判不出就拒绝执行（fail closed）
+if ! . "$_shim_lib" 2>/dev/null || ! declare -F tmux_cls_scan >/dev/null 2>&1; then
+  printf '✗ teamsmith tmux 闸门：共享分类器不可用（%s）——判定无法进行，拒绝执行（fail closed）\n' "$_shim_lib" >&2
+  exit 127
+fi
+tmux_cls_scan ${_shim_argv[@]+"${_shim_argv[@]}"}
+_sub="$TMC_VERB"; _sockname="$TMC_SOCKNAME"; _sockpath="$TMC_SOCKPATH"
+_glob_end="$TMC_GLOB_END"; _tokenn="$TMC_TOKENS"
+_destructive="$TMC_DESTRUCTIVE"; _kind="$TMC_KIND"
 
 # ── 子命令之后的参数 → 有效 -t 与加宽旗标 -a（tmux 的 args_parse 语义：最后一个 -t 胜出；
 #    `-t x` 与 `-tx` 都认；组合旗标簇逐字符走，`t` 吃掉本词剩余部分或下一个词）──────────────
 # 认不出的旗标 / 位置参数 = 不可证明（默认 socket 上拒；tmux 本来也会报 usage 错）。
+# P188：链里的**每个**破坏性命令各调一次（参数区间由共享扫描器的 TMC_HITS 给出）。
 _t_set=0 _t_val="" _widening=0 _unprovable=0
 _parse_target() {
   _t_set=0 _t_val="" _widening=0 _unprovable=0
@@ -184,7 +155,7 @@ _parse_target() {
     esac
   done
 }
-if [ "${#_tail[@]}" -gt 0 ]; then _parse_target "${_tail[@]}"; fi
+# （P188：目标解析改在裁决块里逐条破坏性命令调用 —— 原先这里只看第一个子命令的参数）
 
 # ── 解析 socket（与 tmux 同源，含**回退**；M41）────────────────────────────────────────────────
 _uid="${UID:-$(id -u 2>/dev/null || echo 0)}"
@@ -260,6 +231,8 @@ _identity_bound() {
 }
 
 # ── 裁决：token > 只读/私有 socket > 默认 socket 上的目标归属 ─────────────────────────────────
+# P188：判定按**每个破坏性命令**各走一次 —— `;` 链里任一动词是破坏性 → 整条破坏性；每条都要能证明
+# 目标是本项目自己的命名对象，否则整条拒绝（分类本身在 scripts/lib/tmux-argv.sh，只有一份）。
 _act="pass" _cls="" _sess=""
 if [ "$_tokenn" -gt 0 ]; then
   _act="explicit-flag"
@@ -267,25 +240,45 @@ elif [ "$_destructive" = "1" ] && [ "$_sock" = "$_default_sock" ]; then
   if [ "$_tmpdir_fell_back" = "1" ]; then
     _cls="fake-isolation"
   else
-    case "$_kind" in
-      kill-server) _cls="server" ;;
-      ambiguous)   _cls="ambiguous" ;;
-      *)
-        if [ "$_kind" = "kill-session" ] && [ "$_widening" = "1" ]; then _cls="widening"
-        elif [ "$_t_set" != "1" ] || [ -z "$_t_val" ]; then _cls="no-target"
-        elif [ "$_unprovable" = "1" ]; then _cls="unprovable"
-        else
-          _sess="${_t_val%%:*}"
-          case "$_sess" in
-            ''|'%'*|'@'*|'.'|'+'|'-') _cls="not-literal" ;;
-            *)
-              if [ -z "${TEAM_SESSION:-}" ]; then _cls="no-identity"
-              elif [ "$_sess" != "$TEAM_SESSION" ]; then _cls="not-own"
-              elif ! _identity_bound; then _cls="unbound"
-              fi ;;
-          esac
-        fi ;;
-    esac
+    _has_server=0 _has_ambiguous=0 _specific="" _fail_verb="" _fail_tval="" _fail_sess=""
+    _hn=0
+    while [ "$_hn" -lt "${#TMC_HITS[@]}" ]; do
+      _hit="${TMC_HITS[$_hn]}"; _hn=$((_hn + 1))
+      _hkind="${_hit%%:*}"; _hrest="${_hit#*:}"
+      _hstart="${_hrest%%:*}"; _hrest="${_hrest#*:}"
+      _hend="${_hrest%%:*}"; _hverb="${_hrest#*:}"
+      case "$_hkind" in
+        kill-server) _has_server=1; [ -z "$_fail_verb" ] && _fail_verb="$_hverb"; continue ;;
+        ambiguous)   _has_ambiguous=1; [ -z "$_fail_verb" ] && _fail_verb="$_hverb"; continue ;;
+      esac
+      _hargs=()
+      [ "$_hend" -gt "$_hstart" ] && _hargs=("${_shim_argv[@]:$_hstart:$((_hend - _hstart))}")
+      _parse_target ${_hargs[@]+"${_hargs[@]}"}
+      if [ "$_hkind" = "kill-session" ] && [ "$_widening" = "1" ]; then _specific="${_specific:-widening}"
+      elif [ "$_t_set" != "1" ] || [ -z "$_t_val" ]; then _specific="${_specific:-no-target}"
+      elif [ "$_unprovable" = "1" ]; then _specific="${_specific:-unprovable}"
+      else
+        _sess="${_t_val%%:*}"
+        case "$_sess" in
+          ''|'%'*|'@'*|'.'|'+'|'-') _specific="${_specific:-not-literal}" ;;
+          *)
+            if [ -z "${TEAM_SESSION:-}" ]; then _specific="${_specific:-no-identity}"
+            elif [ "$_sess" != "$TEAM_SESSION" ]; then _specific="${_specific:-not-own}"
+            elif ! _identity_bound; then _specific="${_specific:-unbound}"
+            fi ;;
+        esac
+      fi
+      if [ -n "$_specific" ] && [ -z "$_fail_verb" ]; then
+        _fail_verb="$_hverb"; _fail_tval="$_t_val"; _fail_sess="$_sess"
+      fi
+    done
+    if [ "$_has_server" = "1" ]; then _cls="server"
+    elif [ "$_has_ambiguous" = "1" ]; then _cls="ambiguous"
+    else _cls="$_specific"
+    fi
+    [ -n "$_fail_verb" ] && _sub="$_fail_verb"
+    [ -n "$_fail_tval" ] && _t_val="$_fail_tval"
+    [ -n "$_fail_sess" ] && _sess="$_fail_sess"
   fi
   [ -n "$_cls" ] && _act="refused" || _act="allowed-owned"
 fi
