@@ -18,9 +18,11 @@
 # 夹具里不执行真的 pkill/killall；红侧里桩按**夹具记录过的诱饵 pid** 收掉诱饵，于是 decoys-alive 也红。
 #
 # 纪律：清掉继承的团队身份与 tmux 身份；一切产物落 tmp_root_create 的私有根；诱饵/邻居进程由夹具
-# spawn、pid 记录在案，收尾**只按记录的 pid** 发信号；真实仓库 state/ 前后快照对比（反向守卫）——
-# 快照按**路径**排除后台作业并发车道 `state/bg/` 与 `state/bg.log`（runner `team bg` / `team_bg_run`
-# 自己并发写的东西，见下面 BG_LANE_PATHS 的注释）；跑动中写入的红侧在 tests/flip-p168.sh。
+# spawn、pid 记录在案，收尾**只按记录的 pid** 发信号；真实仓库 state/ 的反向守卫做成**白名单** ——
+# 只看「夹具的产品代码可能写到」的那族路径（当前就是闸门自己的日志族 `signal-calls.log*`，逐条从
+# 代码列在下面 FIXTURE_WRITE_WATCH 的注释里）；活着的 PM 运行时每拍都在写别的车道（巡检的
+# capacity.log 等），那不是夹具的事，**不进判据**（P171 的现场同源）。跑动中写入的各面红侧在
+# tests/flip-p171.sh。
 set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,26 +62,38 @@ assert_has() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1（[$2] 里没有 [$3]�
 assert_alive() { kill -0 "$2" 2>/dev/null && ok "$1" || bad "$1（pid $2 不在）"; }
 assert_gone() { kill -0 "$2" 2>/dev/null && bad "$1（pid $2 还活着）" || ok "$1"; }
 
-# ── 反向守卫：真实仓库 state/ 的前后快照（排除后台作业的并发车道）──────────────────────────────
+# ── 反向守卫（白名单）：只看真实仓库 state/ 里**夹具的产品代码可能写到**的那族路径 ─────────────
+# 为什么不是「整份 state/ 前后逐字节相同」（P171 的现场，2026-10-02 实测）：门禁本来就**要在真实
+# 仓库里跑**，而仓库里活着的 PM 运行时每拍都在往自己的车道追加 —— 巡检 `team watch --once` 写
+# capacity.log、通知扩展写 nudges.log、后台作业扩展写 bg.log、窗口写 *.env …… 「整份 state/ 不变」
+# 这条不变量在活仓库里**不可满足**，红的是运行时不是夹具：P168 把 bg.log 补进排除名单，下一个 tick
+# 就轮到 capacity.log（PM 复验原文：合并 P168 后 `--select 58` 仍红 1 条，差异行是 capacity.log）。
+# 反过来问「**夹具（及其产品）能写到真实 state 的哪些路径**」才有确定答案 —— 逐条从代码列，不许凭猜：
+#   ① signal-calls.log            闸门每次调用追加一行（scripts/shim/signal-gate 的 `_bounded_append`）。
+#                                 窗口启动时由 `team_tmux_shim_exports` 把它钉成
+#                                 `$TEAM_STATE_DIR/signal-calls.log`（scripts/lib/common.sh:2227），
+#                                 而 TEAM_STATE_DIR 默认就是 `<repo>/.pi/team/state`（同文件 927）——
+#                                 这就是**夹具漏钉**（某一腿没把 TEAM_SIGNAL_CALLS_LOG 指到自己的私有根）
+#                                 时那一行落地的地方。
+#   ② signal-calls.log.forensics  同一行的长保留副本（闸门里 `<log>.forensics`，只有拒绝路径写它）。
+# 两条归一族（glob `signal-calls.log*`）：闸门轮转时还会写 `<log>.tmp.<pid>` / `<log>.forensics.tmp.<pid>`
+# 再 mv（`_bounded_append`），族 glob 把这些瞬态残留也圈进来。
+# **除这一族之外，夹具（及其产品）在真实 state/ 里没有别的写入面**：夹具自己的产物全在
+# tmp_root_create 的私有根里，每个调用点都显式钉 TEAM_SIGNAL_CALLS_LOG/TEAM_SIGNAL_REAL。
+# 判据取**内容哈希**（不是大小/时间戳）：同长度的改写也看得见；目录不在 → 记 absent（连「凭空建出
+# state/」也算变化）。覆盖与不覆盖的边界，报告里逐条写；受看面的形状由段尾 watch-shape 探针在合成
+# 树上钉住（不许扩成「整个 state/」，也不许缩成空转），跑动中写入的各面在 tests/flip-p171.sh。
+FIXTURE_WRITE_WATCH='signal-calls.log*'
 REAL_STATE="$REPO_ROOT/.pi/team/state"
-# **并发车道清单 —— 唯一声明处，按路径不按名字**：runner（`team bg` / `team_bg_run`）在门禁跑动时
-# 自己就在写这些路径，所以它们的变化**不能**算成「夹具碰了真实 state」。逐条列出来，也就这两条：
-#   ① bg/     作业产物目录：<id>.log（作业自己的 stdout —— 门禁输出被 runner 抄进去）、
-#             <id>.job（作业身份记录，`team bg list|stop` 读它，P159）。
-#   ② bg.log  作业账本：扩展每回合追加一行 `settled-with-unharvested=`/`wake`，`team bg stop` 追加一行
-#             `stop id=… signal=… result=…`。
-# 现场（P168，2026-10-02 实测）：PM 用 `team_bg_run` 跑门禁 → 两次快照之间账本多了一行 → 整段唯一
-# 一条红就是这个假红；同一个夹具在干净克隆里（没有 bg.log）是绿的 —— 是排除面不够，不是产品。
-# P73/P87 的先例是同一个洞的目录版：bg/ 已排除、bg.log 漏了。**车道之外的文件（哪怕也叫 *.log）
-# 一律进快照** —— 排除面就这两条，形状由段尾的 lane-shape 探针在合成树上钉住（不许扩成
-# 「整个 state/ 都不看」）。
-BG_LANE_PATHS=(bg bg.log)
-state_snapshot() { # <state-root>
-  local root="$1" rel expr=()
-  [ -d "$root" ] || { printf 'absent\n'; return 0; }
-  for rel in "${BG_LANE_PATHS[@]}"; do expr+=(-path "$root/$rel" -o); done
-  expr=("${expr[@]:0:${#expr[@]}-1}")   # 去掉末尾那个 -o → \( -path <root>/bg -o -path <root>/bg.log \) -prune
-  find "$root" -mindepth 1 \( "${expr[@]}" \) -prune -o -printf '%P\t%s\t%T@\n' 2>/dev/null | sort
+# 两个函数都先**跟随软链**把根解成真路径：`find "<软链>"` 默认不走命令行上的软链（只报软链自己，
+# 后面统统为空）—— state/ 若是软链，判据会静默瞎掉。解不开（不存在/读不到）就记 absent。
+state_snapshot() { # <state-root> → 每个受看文件一行「<sha256>  <相对路径>」；目录不在 → absent
+  local root="$1"
+  root="$(cd -P "$root" 2>/dev/null && pwd)" || { printf 'absent\n'; return 0; }
+  ( cd "$root" 2>/dev/null || exit 0
+    find . -maxdepth 1 -type f -name "$FIXTURE_WRITE_WATCH" -print0 2>/dev/null \
+      | sort -z | xargs -0 -r sha256sum 2>/dev/null \
+      | sed 's|^\([0-9a-f]\{1,\}\)  \./|\1  |' ) | sort
 }
 REAL_BEFORE="$(state_snapshot "$REAL_STATE")"
 
@@ -274,34 +288,76 @@ if [ "$BREAK" = "pass" ]; then
   exit 1
 fi
 
-hdr "反向守卫：真实仓库 state/ 未被触碰"
+hdr "反向守卫：真实仓库 state/ 里夹具的写入面没被碰过（白名单 + 签名）"
+# 名单不许和产品源码漂移：闸门前缀把日志名一改，这条断言就地变红，提示把 FIXTURE_WRITE_WATCH
+# 一起改（而不是静默失守 —— 受看面写着一个再也不会出现的名字时，段尾 watch-shape 探针也会红）。
+assert_has "守卫名单与产品一致：闸门前缀仍把日志钉成 state/signal-calls.log（scripts/lib/common.sh）" \
+  "$(grep -h 'TEAM_SIGNAL_CALLS_LOG=' "$SKILL_DIR/scripts/lib/common.sh" 2>/dev/null)" \
+  'TEAM_STATE_DIR/signal-calls.log'
 REAL_AFTER="$(state_snapshot "$REAL_STATE")"
-assert_eq "真实仓库 state/ 前后一致（排除后台作业车道 bg/ 与 bg.log）" "$REAL_AFTER" "$REAL_BEFORE"
-# 形状探针（P168 的正向对照）：在合成树上钉住排除面的**形状** —— 车道两条被排除、车道之外的（包括
-# 别的 .log 与子目录里的文件）照旧进快照。任何「扩成整个 state/ 都不看」的改动在这里立刻变红，
-# 不必等一次真跑；跑动中写 bg.log / 写 state/other.log 的两面在 tests/flip-p168.sh。
-LANE_PROBE="$TMP/lane-shape"; rm -rf "$LANE_PROBE"; mkdir -p "$LANE_PROBE/bg" "$LANE_PROBE/sub"
-: > "$LANE_PROBE/bg/job-1.log"; : > "$LANE_PROBE/bg/job-1.job"; : > "$LANE_PROBE/bg.log"
-: > "$LANE_PROBE/other.log"; : > "$LANE_PROBE/sub/keep.txt"
-LANE_SHAPE="$(state_snapshot "$LANE_PROBE")"
-case "$LANE_SHAPE" in *"other.log"*) ok "形状：车道之外的 other.log 照旧进快照（排除面没放宽）" ;; *) bad "形状：other.log 没进快照（排除面过宽）" ;; esac
-case "$LANE_SHAPE" in *"sub/keep.txt"*) ok "形状：车道之外子目录里的文件照旧进快照" ;; *) bad "形状：sub/keep.txt 没进快照（排除面过宽）" ;; esac
-LANE_SHAPE_FLAT="$(printf '%s' "$LANE_SHAPE" | tr '\n' ' ')"
-case "$LANE_SHAPE" in
-  *"bg/"*|*"bg.log"*) bad "形状：并发车道里的路径还是进了快照（排除面漏了：$LANE_SHAPE_FLAT）" ;;
-  *) ok "形状：车道两条路径（bg/ 与 bg.log）都在排除面里" ;;
+assert_eq "真实仓库 state/ 受看面（产品日志 signal-calls.log*）前后一致" "$REAL_AFTER" "$REAL_BEFORE"
+# 形状探针（P171 的正向对照）：在合成树上钉住白名单的**形状** —— 受看那一族进快照；活运行时的车道
+# （capacity.log/panel.log/dev.env/bg/bg.log/inbox-watch/sub 里的文件）一律不进。任何「放宽成整个
+# state/」或「受看面写成不存在的名字（空转）」的改动在这里当场变红，不必等一次真跑；跑动中写入的
+# 各面（受看面红 / 活车道绿 / 整份快照变异红 / 签名红 / runner 车道绿）在 tests/flip-p171.sh。
+WATCH_PROBE="$TMP/watch-shape"; rm -rf "$WATCH_PROBE"
+mkdir -p "$WATCH_PROBE/bg" "$WATCH_PROBE/sub" "$WATCH_PROBE/inbox-watch"
+: > "$WATCH_PROBE/signal-calls.log"; : > "$WATCH_PROBE/signal-calls.log.forensics"
+: > "$WATCH_PROBE/capacity.log"; : > "$WATCH_PROBE/panel.log"; : > "$WATCH_PROBE/dev.env"
+: > "$WATCH_PROBE/bg.log"; : > "$WATCH_PROBE/bg/job-1.log"; : > "$WATCH_PROBE/sub/keep.txt"
+: > "$WATCH_PROBE/inbox-watch/w0.msg"
+WATCH_SHAPE="$(state_snapshot "$WATCH_PROBE")"
+WATCH_SHAPE_FLAT="$(printf '%s' "$WATCH_SHAPE" | tr '\n' ' ')"
+case "$WATCH_SHAPE" in
+  *"signal-calls.log"*) ok "形状：受看面 signal-calls.log 进了快照（判据不是空转）" ;;
+  *) bad "形状：受看面 signal-calls.log 没进快照（判据空转：$WATCH_SHAPE_FLAT）" ;;
 esac
-# 签名断言：夹具的诱饵名不得出现在真实 state 的**普通文件**里（跳过 FIFO 之类会挂住的节点）。
-# 排除面**复用上面那一份**（state_snapshot 输出；不另写第二份判据 —— 两份会漂移）：车道被排除，
-# 车道之外的每个普通文件都查。签名在脚本里分段拼接：这样任何一跑的**输出**都不含完整串，
-# bg 车道即便被扫也不会自命中。
+case "$WATCH_SHAPE" in
+  *"signal-calls.log.forensics"*) ok "形状：受看那一族（.forensics）也进了快照" ;;
+  *) bad "形状：.forensics 没进快照（$WATCH_SHAPE_FLAT）" ;;
+esac
+case "$WATCH_SHAPE" in
+  *"capacity.log"*|*"panel.log"*|*"dev.env"*|*"bg"*|*"sub/"*|*"inbox-watch"*)
+    bad "形状：活运行时的车道混进了快照（判据过宽了：$WATCH_SHAPE_FLAT）" ;;
+  *) ok "形状：活运行时的车道（capacity.log/panel.log/dev.env/bg/bg.log/inbox-watch/sub）都不进快照" ;;
+esac
+# 内容敏感：同长度的改写也要看得见（大小/时间戳那套判据看不出来）。
+printf 'AAAA\n' > "$WATCH_PROBE/signal-calls.log"; WATCH_A="$(state_snapshot "$WATCH_PROBE")"
+printf 'BBBB\n' > "$WATCH_PROBE/signal-calls.log"; WATCH_B="$(state_snapshot "$WATCH_PROBE")"
+if [ -n "$WATCH_A" ] && [ "$WATCH_A" != "$WATCH_B" ]; then
+  ok "形状：同长度的内容改写也进快照（判据是内容哈希）"
+else bad "形状：同长度的内容改写看不出来（判据太弱）"; fi
+# 软链的 state/ 也必须看得见：不做这一步的话 `find "<软链>"` 什么都不报，判据会**静默**瞎掉。
+LINK_PROBE="$TMP/watch-shape-link"; rm -rf "$LINK_PROBE"
+mkdir -p "$LINK_PROBE/real" && : > "$LINK_PROBE/real/signal-calls.log" && ln -s "$LINK_PROBE/real" "$LINK_PROBE/state-link"
+case "$(state_snapshot "$LINK_PROBE/state-link")" in
+  *"signal-calls.log"*) ok "形状：state/ 是软链时受看面照样进快照（判据不瞎）" ;;
+  *) bad "形状：state/ 是软链时看不到受看面（find 不走命令行软链）" ;;
+esac
+# 签名断言：夹具的诱饵名不得出现在真实 state 的**普通文件**里 —— 这是「夹具没碰账本」的**主证据**，
+# 与上面的白名单**互补**：白名单只管产品那一族日志（连没带签名的写入也看得见），签名扫全树（不管
+# 文件名是什么、只要那行字带着夹具自己的记号）。唯一放过的路径是 runner 自己的并发车道（下面
+# RUNNER_LANE_EXCLUDE）：用 `team_bg_run` / `team bg` 跑门禁时，runner 把**本夹具自己的 stdout**
+# 抄进作业日志，一次失败跑的 bad() 文案里就带着诱饵名 —— 那是夹具的输出被 runner 抄走，不是夹具
+# 写了账本（P168 的现场同源：假红来自 runner 写的东西）。扫描只走 `find -type f`（FIFO 之类特殊节点
+# 天然跳过，grep 不会挂住）；签名在脚本里分段拼接，任何一跑的**输出**都不含完整串。
+RUNNER_LANE_EXCLUDE=(bg bg.log)
+state_files_for_signature() { # <state-root> → 除 runner 车道外的普通文件（一条一行）
+  local root="$1" rel expr=()
+  root="$(cd -P "$root" 2>/dev/null && pwd)" || return 0   # 同 state_snapshot：软链也跟
+  for rel in "${RUNNER_LANE_EXCLUDE[@]}"; do expr+=(-path "$root/$rel" -o); done
+  if [ "${#expr[@]}" -eq 0 ]; then
+    find "$root" -mindepth 1 -type f -print 2>/dev/null | sort
+  else
+    expr=("${expr[@]:0:${#expr[@]}-1}")
+    find "$root" -mindepth 1 \( "${expr[@]}" \) -prune -o -type f -print 2>/dev/null | sort
+  fi
+}
 SIG="p159-""decoy-"
-REAL_LEAK="$(state_snapshot "$REAL_STATE" | cut -f1 | while IFS= read -r _rel; do
-  [ -n "$_rel" ] || continue
-  [ -f "$REAL_STATE/$_rel" ] || continue
-  grep -lF "$SIG" "$REAL_STATE/$_rel" 2>/dev/null || true
+REAL_LEAK="$(state_files_for_signature "$REAL_STATE" | while IFS= read -r _f; do
+  grep -lF "$SIG" "$_f" 2>/dev/null || true
 done | head -3 | tr '\n' ' ')"
-if [ -z "$REAL_LEAK" ]; then ok "真实 state（不含后台作业车道）里没有夹具的诱饵名签名"
+if [ -z "$REAL_LEAK" ]; then ok "真实 state（不含 runner 自己的作业车道 bg/ 与 bg.log）里没有夹具的诱饵名签名"
 else bad "真实 state 里出现了夹具的诱饵名签名：$REAL_LEAK"; fi
 
 printf '\n== signal-gate 结果 == ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
