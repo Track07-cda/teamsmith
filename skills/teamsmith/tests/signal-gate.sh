@@ -18,8 +18,9 @@
 # 夹具里不执行真的 pkill/killall；红侧里桩按**夹具记录过的诱饵 pid** 收掉诱饵，于是 decoys-alive 也红。
 #
 # 纪律：清掉继承的团队身份与 tmux 身份；一切产物落 tmp_root_create 的私有根；诱饵/邻居进程由夹具
-# spawn、pid 记录在案，收尾**只按记录的 pid** 发信号；真实仓库 state/ 前后快照对比（反向守卫；
-# 快照排除 bg/ —— 那是 runner（`team bg`）自己的并发车道，见段尾注释）。
+# spawn、pid 记录在案，收尾**只按记录的 pid** 发信号；真实仓库 state/ 前后快照对比（反向守卫）——
+# 快照按**路径**排除后台作业并发车道 `state/bg/` 与 `state/bg.log`（runner `team bg` / `team_bg_run`
+# 自己并发写的东西，见下面 BG_LANE_PATHS 的注释）；跑动中写入的红侧在 tests/flip-p168.sh。
 set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,14 +60,26 @@ assert_has() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1（[$2] 里没有 [$3]�
 assert_alive() { kill -0 "$2" 2>/dev/null && ok "$1" || bad "$1（pid $2 不在）"; }
 assert_gone() { kill -0 "$2" 2>/dev/null && bad "$1（pid $2 还活着）" || ok "$1"; }
 
-# ── 反向守卫：真实仓库 state/ 的前后快照 ──────────────────────────────────────────────────────
+# ── 反向守卫：真实仓库 state/ 的前后快照（排除后台作业的并发车道）──────────────────────────────
 REAL_STATE="$REPO_ROOT/.pi/team/state"
-# bg/ 是 runner 自己的并发车道：门禁被 `team bg` 跑（本任务书要求的跑法）时，**它自己这次运行的
-# 作业日志**就落在这里，每写一行快照都会变 —— 实测（2026-10-02 第一跑）整段唯一一条红就是这个假红，
-# 而不是夹具碰了账本。快照排除这一条车道；夹具的签名另有专门断言（见段尾），泄漏照样红。
-state_snapshot() {
-  [ -d "$1" ] || { printf 'absent\n'; return 0; }
-  find "$1" -mindepth 1 -path "$1/bg" -prune -o -printf '%P\t%s\t%T@\n' 2>/dev/null | sort
+# **并发车道清单 —— 唯一声明处，按路径不按名字**：runner（`team bg` / `team_bg_run`）在门禁跑动时
+# 自己就在写这些路径，所以它们的变化**不能**算成「夹具碰了真实 state」。逐条列出来，也就这两条：
+#   ① bg/     作业产物目录：<id>.log（作业自己的 stdout —— 门禁输出被 runner 抄进去）、
+#             <id>.job（作业身份记录，`team bg list|stop` 读它，P159）。
+#   ② bg.log  作业账本：扩展每回合追加一行 `settled-with-unharvested=`/`wake`，`team bg stop` 追加一行
+#             `stop id=… signal=… result=…`。
+# 现场（P168，2026-10-02 实测）：PM 用 `team_bg_run` 跑门禁 → 两次快照之间账本多了一行 → 整段唯一
+# 一条红就是这个假红；同一个夹具在干净克隆里（没有 bg.log）是绿的 —— 是排除面不够，不是产品。
+# P73/P87 的先例是同一个洞的目录版：bg/ 已排除、bg.log 漏了。**车道之外的文件（哪怕也叫 *.log）
+# 一律进快照** —— 排除面就这两条，形状由段尾的 lane-shape 探针在合成树上钉住（不许扩成
+# 「整个 state/ 都不看」）。
+BG_LANE_PATHS=(bg bg.log)
+state_snapshot() { # <state-root>
+  local root="$1" rel expr=()
+  [ -d "$root" ] || { printf 'absent\n'; return 0; }
+  for rel in "${BG_LANE_PATHS[@]}"; do expr+=(-path "$root/$rel" -o); done
+  expr=("${expr[@]:0:${#expr[@]}-1}")   # 去掉末尾那个 -o → \( -path <root>/bg -o -path <root>/bg.log \) -prune
+  find "$root" -mindepth 1 \( "${expr[@]}" \) -prune -o -printf '%P\t%s\t%T@\n' 2>/dev/null | sort
 }
 REAL_BEFORE="$(state_snapshot "$REAL_STATE")"
 
@@ -263,14 +276,32 @@ fi
 
 hdr "反向守卫：真实仓库 state/ 未被触碰"
 REAL_AFTER="$(state_snapshot "$REAL_STATE")"
-assert_eq "真实仓库 state/ 前后一致（排除 bg/ 并发车道）" "$REAL_AFTER" "$REAL_BEFORE"
-# 签名断言：夹具的诱饵名不得出现在真实 state 的**普通文件**里（-type f 避开 FIFO 之类会挂住的节点）。
-# 同样排除 bg/：那是 runner（`team bg`）的并发车道，夹具的 stdout 由它按设计抄进自己的作业日志 ——
-# 第一次实现把断言文案也写进输出，于是下一跑在自己的 bg 日志里读到上一跑的文案，自命中假红（2026-10-02）。
-# 签名在脚本里分段拼接：这样任何一跑的**输出**都不含完整串，bg 车道即便被扫也不会自命中。
+assert_eq "真实仓库 state/ 前后一致（排除后台作业车道 bg/ 与 bg.log）" "$REAL_AFTER" "$REAL_BEFORE"
+# 形状探针（P168 的正向对照）：在合成树上钉住排除面的**形状** —— 车道两条被排除、车道之外的（包括
+# 别的 .log 与子目录里的文件）照旧进快照。任何「扩成整个 state/ 都不看」的改动在这里立刻变红，
+# 不必等一次真跑；跑动中写 bg.log / 写 state/other.log 的两面在 tests/flip-p168.sh。
+LANE_PROBE="$TMP/lane-shape"; rm -rf "$LANE_PROBE"; mkdir -p "$LANE_PROBE/bg" "$LANE_PROBE/sub"
+: > "$LANE_PROBE/bg/job-1.log"; : > "$LANE_PROBE/bg/job-1.job"; : > "$LANE_PROBE/bg.log"
+: > "$LANE_PROBE/other.log"; : > "$LANE_PROBE/sub/keep.txt"
+LANE_SHAPE="$(state_snapshot "$LANE_PROBE")"
+case "$LANE_SHAPE" in *"other.log"*) ok "形状：车道之外的 other.log 照旧进快照（排除面没放宽）" ;; *) bad "形状：other.log 没进快照（排除面过宽）" ;; esac
+case "$LANE_SHAPE" in *"sub/keep.txt"*) ok "形状：车道之外子目录里的文件照旧进快照" ;; *) bad "形状：sub/keep.txt 没进快照（排除面过宽）" ;; esac
+LANE_SHAPE_FLAT="$(printf '%s' "$LANE_SHAPE" | tr '\n' ' ')"
+case "$LANE_SHAPE" in
+  *"bg/"*|*"bg.log"*) bad "形状：并发车道里的路径还是进了快照（排除面漏了：$LANE_SHAPE_FLAT）" ;;
+  *) ok "形状：车道两条路径（bg/ 与 bg.log）都在排除面里" ;;
+esac
+# 签名断言：夹具的诱饵名不得出现在真实 state 的**普通文件**里（跳过 FIFO 之类会挂住的节点）。
+# 排除面**复用上面那一份**（state_snapshot 输出；不另写第二份判据 —— 两份会漂移）：车道被排除，
+# 车道之外的每个普通文件都查。签名在脚本里分段拼接：这样任何一跑的**输出**都不含完整串，
+# bg 车道即便被扫也不会自命中。
 SIG="p159-""decoy-"
-REAL_LEAK="$(find "$REAL_STATE" -path "$REAL_STATE/bg" -prune -o -type f -exec grep -lF "$SIG" {} + 2>/dev/null | head -3 | tr '\n' ' ')"
-if [ -z "$REAL_LEAK" ]; then ok "真实 state（不含 bg/ 并发车道）里没有夹具的诱饵名签名"
+REAL_LEAK="$(state_snapshot "$REAL_STATE" | cut -f1 | while IFS= read -r _rel; do
+  [ -n "$_rel" ] || continue
+  [ -f "$REAL_STATE/$_rel" ] || continue
+  grep -lF "$SIG" "$REAL_STATE/$_rel" 2>/dev/null || true
+done | head -3 | tr '\n' ' ')"
+if [ -z "$REAL_LEAK" ]; then ok "真实 state（不含后台作业车道）里没有夹具的诱饵名签名"
 else bad "真实 state 里出现了夹具的诱饵名签名：$REAL_LEAK"; fi
 
 printf '\n== signal-gate 结果 == ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
