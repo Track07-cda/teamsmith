@@ -73,6 +73,12 @@ else
 fi
 TSV="$ROOT/skills/teamsmith/tests/section-paths.tsv"
 SUITE="$ROOT/skills/teamsmith/tests/smoke.sh"
+# ── 检出形状（change: product-checkout-gate）────────────────────────────────────────────
+# 与门禁共用同一份「产品面检出」判据（纯文件，不看 TEAM_* / git / CI）：§③ 的字面存在性检查
+# 只有在**产品面检出**里、且字面量落在那四个**精确**内部前提上时才允许按缺失跳过。
+# shellcheck source=tests/lib/checkout-shape.sh
+. "$SEL_DIR/lib/checkout-shape.sh"
+CHECKOUT_SHAPE="$(checkout_shape "$ROOT")"
 # 夹具旋钮：换一张表来跑 --check（只有夹具用；语义/格式一模一样，真路径仍是 $ROOT）
 [ -z "${TABLE:-}" ] || TSV="$TABLE"
 
@@ -475,9 +481,12 @@ do_list() {
 # 段正文的 normalizer（与 P97 探针同一口径）：$SKILL_DIR→skills/teamsmith、
 #   $SKILL_INIT_DIR→skills/teamsmith-init、$SRC_ROOT/$OS_ROOT/$V94_ROOT→仓库根；
 #   裸前缀 skills/ panel/ extension/ openspec/ ci/；根文件 SCOPE.md/README.md/AGENTS.md/CHANGELOG.md。
-CHECK_OK=0; CHECK_BAD=0
+CHECK_OK=0; CHECK_BAD=0; CHECK_SKIP=0
 cok()  { printf 'ok: %s\n' "$1"; CHECK_OK=$((CHECK_OK + 1)); }
 cbad() { printf 'bad: %s\n' "$1"; CHECK_BAD=$((CHECK_BAD + 1)); }
+# 前提缺失（产品面检出里刻意不存在的内部开发面）：与 ok/bad 分开点名、分开计数（SKIP 不是通过，
+# 也不是失败）。行里带行 key 与精确路径 —— 读者能照着重跑、也能照着核。
+csk()  { printf 'SKIP（条件不满足）: %s\n' "$1"; CHECK_SKIP=$((CHECK_SKIP + 1)); }
 
 # 一行 → 追加规范化 token 到全局数组 TOKS（纯内建，无 fork）
 line_tokens() {
@@ -520,7 +529,7 @@ trim_token() {
 
 do_check() {
   local i j k line n=0 pp dup="" missing_rows=() missing_rows_n=() missing_secs=()
-  local nb=0 n_ok=0 lit_bad=0 lit_n=0 ex_bad=0 pro_bad=0 tok_bad=0 tok_n=0 ex_tok_n=0
+  local nb=0 n_ok=0 lit_bad=0 lit_n=0 lit_skip_c=0 ex_bad=0 pro_bad=0 tok_bad=0 tok_n=0 ex_tok_n=0
   local cur="" curline=0 ri="" covered pp PARR=() TOKS=() t
   # ① 段 ↔ 行
   for ((i = 0; i < T_N; i++)); do
@@ -551,17 +560,28 @@ do_check() {
     done
   done
   [ "$nb" -eq "$n_ok" ] && cok "needs 声明全部存在且指向更早的段（$nb 条）"
-  # ③ 字面模式存在
+  # ③ 字面模式存在（产品面检出里，四个**精确**内部前提按缺失跳过 —— 不是前缀豁免、不是整表放行）
   for ((i = 0; i < T_N; i++)); do
     [ "${T_PAT[i]}" = "-" ] && continue
     IFS=' ' read -r -a PARR <<<"${T_PAT[i]}"
     for pp in "${PARR[@]}"; do
       case "$pp" in *'*'*) continue ;; esac
       lit_n=$((lit_n + 1))
-      [ -e "$ROOT/$pp" ] || { cbad "行 ${T_KEY[i]} 的字面模式在工作树里不存在：$pp"; lit_bad=$((lit_bad + 1)); }
+      [ -e "$ROOT/$pp" ] && continue
+      if checkout_literal_skippable "$CHECKOUT_SHAPE" "$pp"; then
+        csk "行 ${T_KEY[i]} 的字面模式在检出里不存在（产品面检出，内部开发面前提）：$pp"
+        lit_skip_c=$((lit_skip_c + 1))
+      else
+        cbad "行 ${T_KEY[i]} 的字面模式在工作树里不存在：$pp"
+        lit_bad=$((lit_bad + 1))
+      fi
     done
   done
-  [ "$lit_bad" -eq 0 ] && cok "字面模式全部存在于工作树（$lit_n 条）"
+  if [ "$lit_bad" -eq 0 ] && [ "$lit_skip_c" -eq 0 ]; then
+    cok "字面模式全部存在于工作树（$lit_n 条）"
+  elif [ "$lit_bad" -eq 0 ]; then
+    cok "字面模式（$lit_n 条）里 $((lit_n - lit_skip_c)) 条在位；$lit_skip_c 条内部开发面前提按缺失跳过（跳过不等于检查过）"
+  fi
   # ④ 豁免类没有任何行声明
   for ((i = 0; i < T_N; i++)); do
     [ "${T_PAT[i]}" = "-" ] && continue
@@ -613,7 +633,7 @@ do_check() {
   done < "$SUITE"
   [ "$tok_bad" -eq 0 ] && cok "段正文点名的真实路径 token 都被各自的行覆盖（$tok_n 个 token 检查过；$ex_tok_n 个豁免类 token 不参与）"
 
-  printf '== 选段自检 ==  ok %d  bad %d\n' "$CHECK_OK" "$CHECK_BAD"
+  printf '== 选段自检 ==  ok %d  bad %d  SKIP %d\n' "$CHECK_OK" "$CHECK_BAD" "$CHECK_SKIP"
   [ "$CHECK_BAD" -eq 0 ] || return 1
   return 0
 }

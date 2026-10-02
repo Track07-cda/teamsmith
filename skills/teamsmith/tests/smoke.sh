@@ -83,6 +83,12 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 # P162（change: - · infra）：破坏性 tmux 调用的隔离前置（证明 → 才动手；头注见 lib/tmux-iso.sh）
 # shellcheck source=tests/lib/tmux-iso.sh
 . "$SKILL_DIR/tests/lib/tmux-iso.sh"
+# P148（change: product-checkout-gate）：检出形状判据（纯文件，不看 TEAM_* / git / CI）。
+# 快照必须在**任何夹具之前**做：夹具自己造的账本不许决定分类（源根从脚本自己算）。
+# shellcheck source=tests/lib/checkout-shape.sh
+. "$SKILL_DIR/tests/lib/checkout-shape.sh"
+CHECKOUT_REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
+CHECKOUT_SHAPE="$(checkout_shape "$CHECKOUT_REPO_ROOT")"
 # tmux 的窗口身份也属于「调用者的身份」（M23）：不清掉的话，调用者 pane 里的 $TMUX 会让夹具的
 # tmux 调用落到**调用者的 server** 上。清了之后 tmux 按 TMUX_TMPDIR 自己算（见下面的私有 socket）。
 # 调用者是不是在 tmux 里：只在第一趟算，并 export 出去 —— 全量模式会经 `flock` **重新跑一遍自己**
@@ -131,8 +137,13 @@ case "${TEAM_SMOKE_FAST:-0}" in
 esac
 FAST=$FAST_REQ
 LIVE_RAN=0     # 真进程段落实际执行了几次（FAST 模式下必须保持 0）
-SKIP_SEGS=""   # FAST 显式跳过的段落标记（末尾自检用）
-SKIP_N=0
+SKIP_SEGS=""   # 所有显式跳过的段落标记（skipped() 用）
+FAST_SKIP_SEGS=""  # 只装 FAST 跳过的真进程段落（收尾行报的就是它们）
+SKIP_N=0       # 跳过总数 = FAST_SKIP_N + COND_SKIP_N + PREREQ_SKIP_N（账本自查钉住恒等式）
+FAST_SKIP_N=0
+COND_SKIP_N=0
+PREREQ_SKIP_N=0
+PREREQ_SKIP_SEGS=""  # 检出前提跳过的条目名（收尾行分开报；不进 FAST 段落列表）
 
 # ── P98 · 选段（change: gate-runtime-budget · verification#A changed-path list selects…）──
 # 决定在**拿机器锁之前**算：NONE 不排队、不建临时根、一段都不跑；FULL 打印兜底原因后照旧跑全套；
@@ -261,6 +272,9 @@ smoke_ledger_selfcheck() { # 段落增量之和 vs 结果行总数：不一致�
   local same=1
   [ "$SMOKE_SEC_SUM_P" -eq "$PASS" ] || same=0
   [ "$SMOKE_SEC_SUM_F" -eq "$FAIL" ] || same=0
+  # P148：SKIP 也入对账（段计数与总数自洽 = 每条跳过都经了出口、都被记进了段落增量）
+  [ "$SMOKE_SEC_SUM_S" -eq "$SKIP_N" ] || same=0
+  [ "$SKIP_N" -eq "$((FAST_SKIP_N + COND_SKIP_N + PREREQ_SKIP_N))" ] || same=0
   # 冒号要留在颜色序列**里面**：assert_has 搜的是连续字节 `账本自查：`（P98 实测）。
   printf '\033[2m账本自查：\033[0m %s 段收口 · 增量 ✓%d ✗%d SKIP%d ｜ 结果行 ✓%d ✗%d —— %s\n' \
     "$SMOKE_SEC_CLOSES" "$SMOKE_SEC_SUM_P" "$SMOKE_SEC_SUM_F" "$SMOKE_SEC_SUM_S" "$PASS" "$FAIL" \
@@ -389,15 +403,16 @@ fi
 live_mark() { LIVE_RAN=$((LIVE_RAN + 1)); }
 fast_skip() { # <段落标记> <原因>：FAST 模式跳过真进程段落时唯一的出口（必须打印）
   section_guard_check
-  SKIP_N=$((SKIP_N + 1))
+  SKIP_N=$((SKIP_N + 1)); FAST_SKIP_N=$((FAST_SKIP_N + 1))
   SKIP_SEGS="${SKIP_SEGS}|$1"
+  FAST_SKIP_SEGS="${FAST_SKIP_SEGS}|$1"
   printf '  \033[33mSKIP（FAST 模式）\033[0m %s —— %s\n' "$1" "$2"
 }
 skipped() { case "|$SKIP_SEGS|" in *"|$1|"*) return 0 ;; *) return 1 ;; esac; }   # 首尾补 | ，最后一段也能匹配
 
 cond_skip() { # <段落标记> [<原因>]：条件不满足时的跳过出口（V7-F6：skip 是约定不是 FAIL，必须打印）
   section_guard_check
-  SKIP_N=$((SKIP_N + 1))
+  SKIP_N=$((SKIP_N + 1)); COND_SKIP_N=$((COND_SKIP_N + 1))
   SKIP_SEGS="${SKIP_SEGS}|$1"
   printf '  \033[33mSKIP（条件不满足）\033[0m %s\n' "$1${2:+ —— $2}"
 }
@@ -408,6 +423,21 @@ tmux_iso_skip() { # <段> <细节>
   SKIP_N=$((SKIP_N + 1))
   SKIP_SEGS="${SKIP_SEGS}|$1"
   printf '  \033[33mSKIP（前置不成立：%s）\033[0m %s\n' "$2" "$1"
+}
+
+# P148 · 产品面检出的内部前提跳过（change: product-checkout-gate）：与 FAST 的 cond_skip 分开记账
+# —— FAST 收尾行只该报「真进程段落」；把「内部开发面缺失」混进那个数会把两件事都说错。仍然计入
+# SKIP_N（段落/结果账）、仍然打印 SKIP（条件不满足）：跳过不是通过。
+prereq_skip() { # <检查名> <缺失的内部前提路径>
+  section_guard_check
+  SKIP_N=$((SKIP_N + 1)); PREREQ_SKIP_N=$((PREREQ_SKIP_N + 1))
+  PREREQ_SKIP_SEGS="${PREREQ_SKIP_SEGS}|$1"
+  printf '  \033[33mSKIP（条件不满足）\033[0m %s —— 产品面检出：内部开发面前提 %s 不存在（跳过不是通过）\n' "$1" "$2"
+}
+# <相对路径>：0 = 该走前提跳过（产品面检出 + 这条前提落在六个内部面上 + 条目确实不在）。
+smoke_prereq_absent() {
+  checkout_entry_absent "$CHECKOUT_REPO_ROOT/$1" || return 1
+  checkout_prereq_missing "$CHECKOUT_SHAPE" "$1"
 }
 
 PASS=0; FAIL=0
@@ -8374,7 +8404,13 @@ section "18 · 英文正文不变量与安装器唯一入口（M7.3）"
 
 SRC_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
 assert_dir "$SRC_ROOT/skills/teamsmith/references" "扫描根存在（references/**）"
-assert_file "$SRC_ROOT/SCOPE.md" "扫描根存在（SCOPE.md）"
+# P148：SCOPE.md 是六个内部面之一；产品面检出（发布导出树）里按构造不在 —— 只有这时才以
+# SKIP（条件不满足）点名它，且必须同时压过「条目真的不在」这一条（空目录/坏软链算存在）。
+if smoke_prereq_absent "SCOPE.md"; then
+  prereq_skip "扫描根存在（SCOPE.md）" "SCOPE.md"
+else
+  assert_file "$SRC_ROOT/SCOPE.md" "扫描根存在（SCOPE.md）"
+fi
 # 测试卫生（实测的坑）：本段只允许写临时目录，**不许往真树里写**。夹具里 `ln -s … <dest>` 的 dest
 # 若已存在且是「指向目录的软链」，ln 会**钻进去**在真仓库里建文件（pre-fix 安装器 + 卸载夹具就踩过：
 # 目标里的 pi-team 指向真 skills/teamsmith，于是 ln 在真树里建出 skills/teamsmith/teamsmith）。
@@ -8774,11 +8810,21 @@ else
   printf '%s\n' "$OS_HITS" | head -5 | sed 's/^/     /'
 fi
 # 阶段命令必须真的存在（否则「跑 opsx-propose」只是名字，不是能敲的命令）
+# P148：产品面检出里 .pi/ 按构造不在 —— 这十条**各自**以 SKIP（条件不满足）点名；内部树（含只缺
+# 一个文件的部分内部树）照旧执行、照旧判红，整段不会被 skip 掉。
 for p in $OS_PHASES; do
-  assert_file "$OS_ROOT/.pi/prompts/opsx-$p.md" "本仓库为 Pi 生成了相位命令 opsx-$p"
+  if smoke_prereq_absent ".pi/prompts/opsx-$p.md"; then
+    prereq_skip "本仓库为 Pi 生成了相位命令 opsx-$p" ".pi/prompts/opsx-$p.md"
+  else
+    assert_file "$OS_ROOT/.pi/prompts/opsx-$p.md" "本仓库为 Pi 生成了相位命令 opsx-$p"
+  fi
 done
 for p in explore:openspec-explore propose:openspec-propose apply:openspec-apply-change verify:openspec-verify-change archive:openspec-archive-change; do
-  assert_file "$OS_ROOT/.pi/skills/${p#*:}/SKILL.md" "相位 skill ${p#*:} 在位（${p%%:*} 阶段）"
+  if smoke_prereq_absent ".pi/skills/${p#*:}/SKILL.md"; then
+    prereq_skip "相位 skill ${p#*:} 在位（${p%%:*} 阶段）" ".pi/skills/${p#*:}/SKILL.md"
+  else
+    assert_file "$OS_ROOT/.pi/skills/${p#*:}/SKILL.md" "相位 skill ${p#*:} 在位（${p%%:*} 阶段）"
+  fi
 done
 
 # 翻转夹具：沙箱副本里逐项破坏契约，检查器必须**点名**报红。
@@ -12113,7 +12159,29 @@ if ! command -v perl >/dev/null 2>&1; then
   bad "没有 perl：tmux 隔离 lint 跑不了（装上 perl 才能跑这条门禁）"
 else
   assert_file "$M28_LINT" "M28：tmux 隔离 lint 存在"
-  if perl "$M28_LINT" >"$M28_LOG" 2>&1; then
+  # 豁免清单本身是产品文件：不在就报红（下面的产品面跳过也要求它在位）。
+  assert_file "$SKILL_DIR/tests/tmux-lint-legacy.txt" "M28：豁免清单存在"
+  # P148：豁免清单（tmux-lint-legacy.txt）冻结的是**内部面**历史包（docs/team/reports/**）。产品面检出里
+  # 它们按构造不在 —— lint 会把「清单里的文件不在了」判成过期（16 条）。清单**每一条都落在内部面**时，
+  # 产品面检出改用一份空清单跑：RED 命中照判、产品文件的隔离证据照判（lint 的牙全在），并把「豁免清单
+  # 这一册账在检出里无法判定」如实记一次前提跳过。清单里只要有一条产品面路径（或清单不在位），就照旧
+  # 用原清单跑。
+  M28_LEGACY_ARGS=()
+  if [ "$CHECKOUT_SHAPE" = "product-only" ] && [ -f "$SKILL_DIR/tests/tmux-lint-legacy.txt" ]; then
+    M28_LEGACY_ALL_INTERNAL=1
+    while IFS= read -r _m28l; do
+      case "$_m28l" in ''|'#'*) continue ;; esac
+      read -r _m28sha _m28cnt _m28p _m28rest <<<"$_m28l"
+      [ -n "${_m28p:-}" ] || continue
+      checkout_surface_path "$_m28p" || { M28_LEGACY_ALL_INTERNAL=0; break; }
+    done < "$SKILL_DIR/tests/tmux-lint-legacy.txt"
+    if [ "$M28_LEGACY_ALL_INTERNAL" = 1 ]; then
+      : > "$TMP/m28-legacy-product-only.txt"
+      M28_LEGACY_ARGS=(--legacy "$TMP/m28-legacy-product-only.txt")
+      prereq_skip "M28 真树：变更类 tmux 调用全部有隔离证据（豁免清单）" "docs/team/reports/**"
+    fi
+  fi
+  if perl "$M28_LINT" ${M28_LEGACY_ARGS[@]+"${M28_LEGACY_ARGS[@]}"} >"$M28_LOG" 2>&1; then
     ok "M28 真树：变更类 tmux 调用全部有隔离证据（另有 $(grep -c '^  LEGACY' "$M28_LOG" 2>/dev/null || printf 0) 个历史豁免文件，逐条打印在 $M28_LOG）"
   else
     bad "M28 真树有未隔离的 tmux 变更命令（见 $M28_LOG）"
@@ -13886,8 +13954,14 @@ assert_has "$SKILL_DIR/references/protocol.md" "self-verify: <agent>" "7.3 proto
 assert_has "$P24K/AGENTS.md" "The change is the assignment unit" "7.4 rendered AGENTS carries the paragraph"
 assert_has "$P24K/docs/team/PROTOCOL.md" "The change is the assignment unit" "7.4 rendered PROTOCOL carries it"
 _para_tmpl="$(awk '/\*\*The change is the assignment unit\*\*/,/while a sibling is unfinished\./' "$SKILL_DIR/templates/AGENTS.section.md.tmpl")"
-_para_repo="$(awk '/\*\*The change is the assignment unit\*\*/,/while a sibling is unfinished\./' "$SKILL_DIR/../../AGENTS.md")"
-assert_eq "7.4 repo AGENTS.md 与模板逐字一致（模板是源）" "$_para_repo" "$_para_tmpl"
+# P148：这条比对的**被检对象**是仓库根 AGENTS.md（六个内部面之一）—— 产品面检出里按构造不在，
+# 无法判定时如实记一次前提跳过（标签里点名 AGENTS.md）；模板侧是产品面，照旧检查。
+if smoke_prereq_absent "AGENTS.md"; then
+  prereq_skip "7.4 repo AGENTS.md 与模板逐字一致（模板是源）" "AGENTS.md"
+else
+  _para_repo="$(awk '/\*\*The change is the assignment unit\*\*/,/while a sibling is unfinished\./' "$SKILL_DIR/../../AGENTS.md")"
+  assert_eq "7.4 repo AGENTS.md 与模板逐字一致（模板是源）" "$_para_repo" "$_para_tmpl"
+fi
 assert_has "$SKILL_DIR/templates/PROTOCOL.md.tmpl" "The change is the assignment unit" "7.4 PROTOCOL 模板也带这段"
 
 section "34 · 门禁锁：排队/运行分开记账（P26/G1：verification#The hard timeout covers the gate run, not the queue）"
@@ -14236,6 +14310,22 @@ p98_ledger() {
   read -r P98_CLOSE_N P98_SUM_P P98_SUM_F P98_SUM_S P98_RES_P P98_RES_F <<<"$out"
   return 0
 }
+# P148：选择器 --check 的**前提跳过**经 smoke 的跳过出口转发（计数 + 可见 + 点名）。三次捕获（真树 /
+# 表副本 / 变体树）都转发 —— 重复调用要累计，不许静默丢（design 决议 4）。只认选择器自己那行
+# `SKIP（条件不满足）: …`，且只从**退出 0**的成功捕获转发（红的变异夹具另有自己的断言）。
+p98_relay_skips() { # <日志> <上下文>
+  local log="$1" ctx="$2" line entry path
+  [ -r "$log" ] || return 0
+  while IFS= read -r line; do
+    case "$line" in
+      'SKIP（条件不满足）'*)
+        entry="${line#SKIP（条件不满足）}"; entry="${entry#:}"; entry="${entry# }"
+        path="${entry##*：}"
+        prereq_skip "$ctx：$entry" "$path" ;;
+    esac
+  done < "$log"
+  return 0
+}
 # 映射表副本（--check 的四个方向都在副本上翻，改完即弃；分析对象仍是真树）
 p98_table() { # <名字> [<awk-脚本>] → 打印副本路径
   local d="$TMP/p98-table-$1"
@@ -14280,12 +14370,22 @@ p98_variant() { # <名字> → 打印变体 skill 树路径（仓库根按真树
 
 # ── ① --check：真树绿 + 四个方向各自红且点名 ───────────────────────────────────────────
 if bash "$SEL36" --check >"$TMP/p98-check.log" 2>&1; then
-  ok "36① --check 绿：$(sed -n 's/^== 选段自检 ==  //p' "$TMP/p98-check.log" | tail -1)"
+  P148_CK_SUM="$(sed -n 's/^== 选段自检 ==  //p' "$TMP/p98-check.log" | tail -1)"
+  case "$P148_CK_SUM" in
+    *'SKIP 0') ok "36① --check 绿：$P148_CK_SUM（没有前提跳过）" ;;
+    *)         ok "36① --check 绿：$P148_CK_SUM —— 内部开发面缺失以 SKIP 计，不是「都检查过了」" ;;
+  esac
 else
   bad "36① --check 红：$(grep -m1 '^bad:' "$TMP/p98-check.log" 2>/dev/null | cut -c1-160)"
 fi
+p98_relay_skips "$TMP/p98-check.log" "36① --check（真树）"
 P98_T0="$(p98_table clean)"
-if bash "$SEL36" --check --table "$P98_T0" >/dev/null 2>&1; then ok "36① 副本表（未改）也绿（负面夹具的基准）"; else bad "36① 副本表未改就红（夹具本身有问题）"; fi
+if bash "$SEL36" --check --table "$P98_T0" >"$TMP/p98-check-copy.log" 2>&1; then
+  ok "36① 副本表（未改）也绿（负面夹具的基准）"
+else
+  bad "36① 副本表未改就红（夹具本身有问题）"
+fi
+p98_relay_skips "$TMP/p98-check-copy.log" "36① --check（表副本）"
 p98_flip() { # <名字> <期望命中的字样> <awk-脚本>
   local t log
   t="$(p98_table "$1" "$3")"
@@ -14312,6 +14412,7 @@ if bash "$SEL36" --check --root "$P98_TK_ROOT" >"$TMP/p98-check-token-clean.log"
 else
   bad "36① 变体树注入前就红了（夹具本身有问题）：$(grep -m1 '^bad:' "$TMP/p98-check-token-clean.log" | cut -c1-160)"
 fi
+p98_relay_skips "$TMP/p98-check-token-clean.log" "36① --check（变体树）"
 perl -0pi -e 's/(section "1 · doctor（未初始化应失败）"\n)/$1: P98 夹具 token skills\/teamsmith\/tests\/section-select.sh\n/' \
   "$P98_TK/tests/smoke.sh"
 grep -qF 'P98 夹具 token skills/teamsmith/tests/section-select.sh' "$P98_TK/tests/smoke.sh" \
@@ -14706,6 +14807,21 @@ p117_red_side() { # <名字> <key> <awk 变异> <说明>
 }
 p117_red_side p117red3b 3b '$1 == "3b" { $4 = "4" } 1' '3b 去掉 needs:5'
 p117_red_side p117red6 6 '$1 == "6" { $4 = "4,5" } 1' '6 去掉 needs:3b'
+
+# ── ⑧ P148：产品面检出判据的纯夹具（形状 / 边界 / 前提跳过 / 覆盖守门）────────────────────
+# 探针是一个独立脚本（纯文件 + 嵌套 FAST 选段，不起真进程、不碰调用者的 tmux/项目）：这里只驱动
+# 一次，把它的判断转成一条门禁断言（失败时点名前几条）。它覆盖 design 决议 2/3/4 的夹具面：
+# ①形状（product-only/内部/空目录/类型不对/不可读/坏软链/缺产品面）②继承身份与夹具账本不改变分类
+# ③选段器 --check 两种形状（精确白名单 / 拼错的前提照旧红 / 缺产品字面照旧红）④产品面树
+# --select 18,19（11 条前提 SKIP、零红）⑤内部部分树删文件必须红、不许跳过 ⑥旧断言被压成跳过 →
+# 覆盖清单比对点名；还原后绿 ⑦覆盖比对器自身两向 ⑧真实树指纹前后一致（夹具只动 scratch 树）。
+P148_PROBE="$SKILL_DIR/tests/checkout-shape-probe.sh"
+if bash "$P148_PROBE" >"$TMP/p148-shape-probe.log" 2>&1; then
+  ok "36⑧ 产品面检出探针全绿（$(sed -n 's/^== 检出形状探针 == //p' "$TMP/p148-shape-probe.log" | tail -1)）"
+else
+  bad "36⑧ 产品面检出探针有失败（$(grep -c '^bad:' "$TMP/p148-shape-probe.log" 2>/dev/null || printf '?' ) 条）"
+  grep '^bad:' "$TMP/p148-shape-probe.log" 2>/dev/null | head -8 | sed 's/^/      /'
+fi
 
 # ---------------------------------------------------------------- 37. 读路径：根一次解析 + 单进程扫描（M50）
 # 实测现场（M50 任务书，PM 在 main 上量的）：BOARD.md 只有 141 行，`team digest` 却要 89 秒 ——
@@ -18159,7 +18275,10 @@ else
 fi
 if [ "$FAST_REQ" = "1" ]; then
   printf '\033[33mFAST 模式：跳过 %d 个真进程段落（%s）——完整门禁请不带 TEAM_SMOKE_FAST 重跑\033[0m\n' \
-    "$SKIP_N" "${SKIP_SEGS#|}"
+    "$FAST_SKIP_N" "${FAST_SKIP_SEGS#|}"
+  # P148：条件跳过与检出前提跳过分开口径（都不是「真进程段落」；都仍然计入上面的 SKIP 总数）
+  [ "$COND_SKIP_N" -eq 0 ] || printf '\033[33m条件 SKIP（条件不满足）：%d 条 —— 本次运行被前置环境拦住的检查（跳过不是通过）\033[0m\n' "$COND_SKIP_N"
+  [ "$PREREQ_SKIP_N" -eq 0 ] || printf '\033[33m检出前提 SKIP（条件不满足）：%d 条 —— 产品面检出里刻意缺失的内部开发面（跳过不是通过）\033[0m\n' "$PREREQ_SKIP_N"
 fi
 # 选段运行：未跑清单就在最后几行里（team review 记录的就是尾部）；不是 RUN 子进程才在这里打（RUN 由
 # 父进程在子进程结束后打，保证它落在最后）
