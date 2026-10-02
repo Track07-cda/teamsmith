@@ -1,0 +1,32 @@
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Extensions]
+  observe.ts, team-notify.ts
+
+
+ fd not found. Downloading...
+ ripgrep not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+ Warning: Failed to download ripgrep: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+
+ P138-SEED-DIRTY
+
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys on` to ~/.tmux.conf
+ and restart tmux.
+
+
+ write leftover.txt
+
+ P138 uncommitted evidence
+
+
+ P138-ACK settled; no commit performed.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+fatal: no upstream configured for branch 'task/P138'
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/tmp/p138.i7rnVy/proj/.worktrees/dev (task/P138)
+1.2%/128k (auto)                                                                                                    p138

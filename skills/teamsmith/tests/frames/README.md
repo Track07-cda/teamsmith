@@ -156,3 +156,21 @@ bash skills/teamsmith/tests/pm-box-real.sh --frame skills/teamsmith/tests/frames
   都走 `_team_box_layout_decision`；红侧 = 测试进程把它影子成 `none`，同一份真帧退回 `[21 30]`/BUSY。
 - 判据/门禁：`bash skills/teamsmith/tests/delivery-truth.sh --section frames --mutations`
   （真帧 `[28 30]`/EMPTY、真草稿 `P143-HUMAN-DRAFT`/BUSY、全部既有帧判定保持、两条红侧）。
+
+## P163：宿主 Pi **1.0.0** 的同一布局 + 框内一行非人类文本（一份新真帧）
+
+`pi-1.0.0-git-error-in-box.txt` 是 **P157 复验在宿主 Pi 1.0.0 上跑出来的真帧**（逐字节 = `docs/team/reports/P157-verify/logs/tmux-p157-after-dirty/second-before.frame`，`cmp` 可验；sha256 `c248aed1f1b95496b5254c7b000c06531d263ebdeb3c99cf4c42f24b16a959e0`）：
+
+| 文件 | 光标行（1-based） | 记录下来的页脚 cwd | 现场 |
+|---|---|---|---|
+| `pi-1.0.0-git-error-in-box.txt` | `29`（框内唯一内容行，光标停在它上面） | `/tmp/p138.i7rnVy/proj/.worktrees/dev` | 布局与 P147 的 0.99.2 真帧**同形**（框 `[28 30]` + 页脚两行），但框内多了一行 **`fatal: no upstream configured for branch 'task/P138'`** —— 那是配方自己那条 git 命令在 1.0.0 下报的错，被 Pi 画进了输入框。**不是人手打的草稿**，是「框内异物」的真实来源 |
+
+为什么收进夹具：0.99.2 下同一位置是空行、产品投递成功；1.0.0 下那行字被画进框，产品**不打字、不弄丢、可见地报告**（`queued` + 原因 + 恢复命令），
+这正是要钉住的行为（P157 的 F2 是「宿主版本不可复现」，不是产品缺陷 —— PM 读了真帧后裁定）。
+夹具同时钉住它旁边的形状：同一份字节、光标落在上边框（`TMUX cursor_y` 是 0-based，少加一的真实误读）→
+几何不可信 → `held/geometry-untrusted` + 非零退出 + 恢复命令，仍然零按键。
+
+- 判据/门禁：`bash skills/teamsmith/tests/delivery-truth.sh --section foreign --mutations`
+  （真进程 `team say`：零按键、帧逐字节不变、队列 + durable 收件箱都在、可见报告；两向 off-by-one；
+  红侧 = 把产品的 queued 报告影子掉 → 「可见报告」必须红、安全断言保持绿）。
+- 真 Pi 复现配方（判据版本钉死 0.99.2）：`skills/teamsmith/tests/fixtures/delivery-truth-real/`（见其 README）。

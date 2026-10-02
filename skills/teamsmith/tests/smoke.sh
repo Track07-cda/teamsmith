@@ -16945,7 +16945,7 @@ assert_eq "P86 一处实现：准入决策在 outbox.sh 里定义恰一处" \
 assert_eq "P86 一处实现：几何里向它要上界恰一处" \
   "$(grep -c 'maxrow="\$(_team_box_top_border_max_row' "$SKILL_DIR/scripts/lib/outbox.sh")" "1"
 
-# ── 全部已存帧（发现式：frames/*.txt = 7 真帧 + 8 份 p78 + 3 份 p86 = 18）────────────
+# ── 全部已存帧（发现式：frames/*.txt = 8 真帧 + 8 份 p78 + 3 份 p86 = 19）────────────
 # ① 框含光标：定位出的框必须包含光标行（geometry=[t b] ⇒ t < cy < b）；没有框的帧只能是最上面那份
 #    信任弹窗（覆盖层先行，几何为空是**既有路径**）。
 # ② 单调性（可机读）：对每一帧对比「准入关掉（P86 前）」与修后 —— 不许 ANY 帧 BUSY→EMPTY；反向的
@@ -16956,6 +16956,7 @@ p86_cursor() { # <帧路径> → 光标行（未知 → 空）
   case "$(basename "$1")" in
     pi-0.87.0-project-trust-prompt.txt) printf '16\n' ;;
     pi-0.99.2-*.txt) printf '29\n' ;;   # P147：两份真 0.99.2 帧（空编辑器 / 人草稿）
+    pi-1.0.0-*.txt) printf '29\n' ;;    # P163：宿主 1.0.0 真帧（框内一行异物，布局与 0.99.2 同形）
     pi-0.8*) printf '26\n' ;;
     p78-cursor-mid-draft.txt) printf '3\n' ;;
     p78-*.txt|p86-f1-*.txt) printf '2\n' ;;
@@ -16988,7 +16989,7 @@ for _p86r in "$P86_FD"/*.txt; do
     *"verdict=idle-read=EMPTY"*) P86_LEGACY="$P86_LEGACY $_p86n" ;; esac ;; esac
 done
 assert_eq "P86 语料口径：全部已存帧都声明了光标行（发现式；新增帧不改表 → 这一段直接红）" "${P86_UNCOVERED:-none}" "none"
-assert_eq "P86 语料口径：已存帧 18 份（7 真帧 + 8 份 p78 + 3 份 p86）" "$P86_N" "18"
+assert_eq "P86 语料口径：已存帧 19 份（8 真帧 + 8 份 p78 + 3 份 p86）" "$P86_N" "19"
 assert_eq "P86 ① 定位出的框总是包含光标行（top < cy < bottom，全部帧）" "${P86_NOCURSOR:-none}" "none"
 assert_eq "P86 ① 没有框的帧只能是覆盖层那份（unknown-shape 是既有路径，不是新行为）" \
   "$P86_NOBOX" " pi-0.87.0-project-trust-prompt.txt"
@@ -18745,9 +18746,10 @@ else
   ok "P139 55 段收尾：私有 session、假 PM pid 与叫醒进程都已回收"
 fi
 # ---------------------------------------------------------------- 57. P147 delivery-truth
-# 夹具本体是 tests/delivery-truth.sh（六段，全部自带私有临时根与假 tmux，不碰真实 session/进程）：
+# 夹具本体是 tests/delivery-truth.sh（七段，全部自带私有临时根与假 tmux，不碰真实 session/进程）：
 #   frames   真 Pi 0.99.2 帧的闭集矩形 [28 30] + 全部既有帧判定保持 + 红侧影子
 #   drafts   真进程草稿对抗（规则行 / spinner / 页脚克隆 / 光标位置 / 双宽字符 / 裁切 / 半帧）
+#   foreign  宿主 Pi 1.0.0 真帧（框内一行非人类文本）：零按键 / 不丢 / 可见报告；红侧 = 静默报告
 #   queue    三次可信空读 → held/queue-stalled；并发 / 观察者 / 恢复 / 终态绝不重贴
 #   receipts held 的原因与非零退出传播（干净框仍确认送达）
 #   notify   收件人文件 / outbox 声明 / wake 全文路径三处同名；写失败非零退出
@@ -18757,7 +18759,7 @@ if [ -f "$SKILL_DIR/tests/delivery-truth.sh" ]; then
   P147_RC=0
   bash "$SKILL_DIR/tests/delivery-truth.sh" --section all --mutations >"$TMP/p147-delivery-truth.log" 2>&1 || P147_RC=$?
   if [ "$P147_RC" -eq 0 ]; then
-    ok "57 delivery-truth 六段全绿（$(grep -ac '✓' "$TMP/p147-delivery-truth.log" || true) 条断言，$(grep -ac '· skip' "$TMP/p147-delivery-truth.log" || true) 条可见跳过）"
+    ok "57 delivery-truth 七段全绿（$(grep -ac '✓' "$TMP/p147-delivery-truth.log" || true) 条断言，$(grep -ac '· skip' "$TMP/p147-delivery-truth.log" || true) 条可见跳过）"
     grep -aE '^== [0-9]+ .* 结果 ==' "$TMP/p147-delivery-truth.log" | sed 's/^/      /'
   else
     bad "57 delivery-truth 有失败（rc=$P147_RC）"

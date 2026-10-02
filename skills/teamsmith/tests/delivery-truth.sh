@@ -8,6 +8,8 @@
 #   frames   纯帧：支持布局准入（Pi 0.99.2 真帧 [28 30]）与全部既有帧的判定保持；--mutations 跑红侧
 #   drafts   真进程草稿对抗（假 tmux + 生产判定）：规则行 / spinner / 页脚克隆 / 光标位置 / 双宽字符 /
 #            裁切 / 滚动 / 半帧 —— 一个键都不发
+#   foreign  宿主 Pi 1.0.0 真帧（框内一行非人类文本）：绝不打字进去、消息不丢、可见报告；
+#            红侧把产品影子成「静默排队不报告」→ 只红「可见报告」那条（P163 F2）
 #   queue    同一真帧上的队列阻碍：三次可信空读 → held/queue-stalled；并发 / work / draft / offline /
 #            锁竞争不计；观察者零变更；终态绝不重贴；恢复只经显式 flush
 #   receipts say/flush 的 held 原因/非零退出传播 + 干净框仍确认送达 + 草稿只报 queued
@@ -40,8 +42,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$SECTION" in
-  frames|drafts|queue|receipts|notify|panel|all) ;;
-  '') printf 'delivery-truth: 需要 --section <frames|drafts|queue|receipts|notify|panel|all>\n' >&2; exit 2 ;;
+  frames|drafts|foreign|queue|receipts|notify|panel|all) ;;
+  '') printf 'delivery-truth: 需要 --section <frames|drafts|foreign|queue|receipts|notify|panel|all>\n' >&2; exit 2 ;;
   *) printf 'delivery-truth: 未知段 %s\n' "$SECTION" >&2; exit 2 ;;
 esac
 
@@ -56,6 +58,7 @@ run_section() { # <name>
   case "$1" in
     frames)   section_frames ;;
     drafts)   section_drafts ;;
+    foreign)  section_foreign ;;
     queue)    section_queue ;;
     receipts) section_receipts ;;
     notify)   section_notify ;;
@@ -193,11 +196,12 @@ SHIM
 
 # 在夹具项目里跑 team CLI（清掉全部继承 TEAM_*；PATH 前置假 tmux）
 # FIX_ENV=(VAR=VAL …) 可给这一条命令加夹具环境（如 TMUX=… 让 notify 的 tmux 分支可达）
-FIX_ENV=()
+# FIX_SKILL 可指向一份变异副本（红侧专用），默认 = 被测的 $SKILL_DIR
+FIX_ENV=(); FIX_SKILL=""
 fix_team() {
   local -a unset_args=()
   while IFS='=' read -r v _; do unset_args+=(-u "$v"); done < <(env | sed -n 's/^\(TEAM_[A-Za-z0-9_]*\)=.*/\1/p')
-  ( cd "$FIX/proj" && env "${unset_args[@]}" PATH="$FIX/bin:$PATH" ${FIX_ENV[@]+"${FIX_ENV[@]}"} bash "$SKILL_DIR/scripts/team" "$@" )
+  ( cd "$FIX/proj" && env "${unset_args[@]}" PATH="$FIX/bin:$PATH" ${FIX_ENV[@]+"${FIX_ENV[@]}"} bash "${FIX_SKILL:-$SKILL_DIR}/scripts/team" "$@" )
 }
 
 # 在夹具项目里 source 生产库跑一段脚本（测试进程影子用；同样隔离身份）
@@ -229,8 +233,34 @@ fix_q() { fix_team outbox "$@"; }
 # 夹具 state 里的一个文件的 sha256（不存在 → 空）
 fix_sha() { [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || printf 'missing'; }
 
+# 变异副本（红侧专用）：只拷 team CLI 真正需要的最小集（team + lib + shim，约 1 MB），
+# 再把 cmd-agents.sh 的 queued 分支两行报告删掉 = 「见到框里有东西就静默排队、不报告」的形状。
+# 生产文件绝不被改写：新内容写进 .new 再 mv 覆盖（避免任何原地写回）。
+mut_skill_silent_say() { # → stdout: 变异 SKILL_DIR；锚点漂了 → 非 0（绝不静默返回一个假副本）
+  local mut="$TMP/mut-silent-say" new
+  rm -rf "$mut"; mkdir -p "$mut/scripts"
+  cp -a "$SKILL_DIR/scripts/team" "$SKILL_DIR/scripts/lib" "$SKILL_DIR/scripts/shim" "$mut/scripts/" || return 1
+  new="$mut/scripts/lib/cmd-agents.sh.new"
+  python3 - "$SKILL_DIR/scripts/lib/cmd-agents.sh" "$new" <<'PY' || return 1
+import pathlib, sys
+old = '''    queued)
+      # 契约：排队 ≠ 送达 —— 输出里只许有 queued，绝不能写「已确认送达」
+      team_ok "queued for $target: $msg（目标输入框里有草稿：没有写任何键；条目已入 state/outbox/，清空后自动投递）"
+      team_dim "  原因/条目：$TEAM_CLI outbox list ｜ 投递未确认的兜底：消息已在 $TEAM_DOCS_DIR/inbox/$agent.md"
+      return 0 ;;'''
+src = pathlib.Path(sys.argv[1]).read_text()
+if old not in src:
+    sys.stderr.write('mutation anchor missing in cmd-agents.sh（产品的 queued 分支改了？）\n')
+    sys.exit(1)
+pathlib.Path(sys.argv[2]).write_text(src.replace(old, '    queued)\n      return 0 ;;', 1))
+PY
+  mv -f "$new" "$mut/scripts/lib/cmd-agents.sh" || return 1
+  printf '%s\n' "$mut"
+}
+
 REAL_CWD_EMPTY='/tmp/p138.8HwUSx/proj/.worktrees/dev'
 REAL_CWD_DRAFT='/tmp/p138.yalHes/proj/.worktrees/dev'
+REAL_CWD_FOREIGN='/tmp/p138.i7rnVy/proj/.worktrees/dev'
 RULE120="$(printf '%.0s─' $(seq 1 120))"
 # 两份真帧页脚的第二行（状态行）逐字复制；第一行 = cwd + 记录下来的分支装饰。
 FOOT1="/tmp/p138.8HwUSx/proj/.worktrees/dev (task/P138)"
@@ -257,12 +287,14 @@ p86-f1-spinner-top-disjoint-box.txt 2 busy
 p86-f1-narrower-width-disjoint-box.txt 2 busy
 pi-0.99.2-empty-editor.txt 29 empty
 pi-0.99.2-human-draft.txt 29 busy
+pi-1.0.0-git-error-in-box.txt 29 busy
 EOF
 }
-frame_cwd_for() { # <帧名> → 记录下来的 cwd（写死的 0.99.2 真帧；其余帧没有 → 空）
+frame_cwd_for() { # <帧名> → 记录下来的 cwd（写死的真帧；其余帧没有 → 空）
   case "$1" in
     pi-0.99.2-empty-editor.txt) printf '%s\n' "$REAL_CWD_EMPTY" ;;
     pi-0.99.2-human-draft.txt)  printf '%s\n' "$REAL_CWD_DRAFT" ;;
+    pi-1.0.0-git-error-in-box.txt) printf '%s\n' "$REAL_CWD_FOREIGN" ;;
   esac
 }
 
@@ -454,6 +486,125 @@ section_drafts() {
   mk_frame "$FIX/draft-rule2.frame" " draft\n$RULE120"
   try_say "DRAFT-RULE2" busy-or-held "$FIX/draft-rule2.frame" 6
   finish "drafts"
+}
+
+# ---------------------------------------------------------------- foreign（1.0.0 真帧：框内异物）
+# P163 F2②：把宿主 Pi 1.0.0 的真帧收进夹具 —— 框里有一行**非人类文本**（夹具自己那条 git 命令的
+# 错误行 `fatal: no upstream configured …`，不是人手打的草稿）。断言：闭集几何仍可信、异物绝不被
+# 当空框放行；真进程 team say 一个键都不发、帧逐字节不变；消息不丢（队列 + durable 收件箱全文）；
+# 可见地报告原因与恢复命令；绝不出「已确认送达」。
+# 红侧（--mutations）：把产品影子成「见到框里有东西就静默排队、不报告」→ 「可见报告」那条必须红，
+# 其余安全断言保持绿（证明它钉住的正是报告这一个决策点，不是顺手把整个用例弄红）。
+section_foreign() {
+  begin "foreign（1.0.0 真帧：框内异物 → 不投递 + 可见报告 + 不丢）"
+  local f="$FRAMES/pi-1.0.0-git-error-in-box.txt" cy=29 cwd="$REAL_CWD_FOREIGN"
+  local p dec geo text verdict out rc frame_sha_before frame_sha_after
+
+  # 判读：闭集几何仍成立，框内文本就是那行 git 错误（不是空框，也不是草稿指控）
+  p="$(frame_probe "$f" "$cy" "$cwd")"; dec="$(probe_field "$p" decision)"; geo="$(probe_field "$p" geometry)"; text="$(probe_field "$p" text)"
+  [ "$dec" = "closed 28 30" ] && ok "1.0.0 真帧：admission 选出闭集矩形 (closed 28 30)" \
+    || bad "1.0.0 真帧：admission = [$dec]，期望 closed 28 30"
+  [ "$geo" = "28 30" ] && ok "1.0.0 真帧：几何 =[28 30]" || bad "1.0.0 真帧：几何 =[$geo]，期望 [28 30]"
+  [ "$text" = "fatal: no upstream configured for branch 'task/P138'" ] \
+    && ok "1.0.0 真帧：框内文本 = 夹具自造的那行 git 错误（异物在框内可见）" \
+    || bad "1.0.0 真帧：框内文本 =[$text]"
+  verdict="$(frame_verdict "$f" "$cy" "$cwd")"
+  [ "$verdict" = "idle-read=NOT-EMPTY" ] && ok "1.0.0 真帧：判定 BUSY（异物绝不被当空框放行）" \
+    || bad "1.0.0 真帧：判定 =[$verdict]，期望 idle-read=NOT-EMPTY"
+
+  # 真进程：同一份帧跑 team say（假 tmux pane = 真进程读同一份字节）
+  fix_setup x1
+  fix_frame "$f" "$cy" "$cwd"
+  fix_clear_keys
+  frame_sha_before="$(sha256sum "$FIX/frame" | cut -d' ' -f1)"
+  out="$(fix_team say dev "P163-FOREIGN-1.0.0" 2>&1)"; rc=$?
+  frame_sha_after="$(sha256sum "$FIX/frame" | cut -d' ' -f1)"
+  # 「可见报告」= 状态 + 原因 + 恢复命令 + durable 全文指针，四样都在
+  fix_report_visible() { # <out> → 0 = 可见报告完整
+    local o="$1"
+    printf '%s' "$o" | grep -q 'queued' \
+      && printf '%s' "$o" | grep -q '没有写任何键' \
+      && printf '%s' "$o" | grep -q 'outbox list' \
+      && printf '%s' "$o" | grep -q 'inbox/dev.md'
+  }
+  if [ "$rc" -eq 0 ] && [ "$(fix_keys)" = "0" ]; then
+    ok "1.0.0 真帧：team say 一个键都不发（异物绝不打字进去）"
+  else
+    bad "1.0.0 真帧：rc=$rc keys=$(fix_keys)（期望 rc=0 且零按键）"
+  fi
+  [ "$frame_sha_before" = "$frame_sha_after" ] && ok "1.0.0 真帧：say 之后输入框字节不变" \
+    || bad "1.0.0 真帧：say 改动了输入框（sha 变了）"
+  if fix_report_visible "$out"; then
+    ok "1.0.0 真帧：可见报告 = queued + 没写任何键 + 恢复命令 outbox list + durable 收件箱指针"
+  else
+    bad "1.0.0 真帧：可见报告不完整：$(printf '%s' "$out" | tr '\n' ' ' | head -c 240)"
+  fi
+  if printf '%s' "$out" | grep -q '已确认送达'; then
+    bad "1.0.0 真帧：把没投出去的消息报成「已确认送达」"
+  else
+    ok "1.0.0 真帧：绝不出「已确认送达」（queued ≠ 送达）"
+  fi
+  # 「不是丢失」：活动队列条目里有全文，durable 收件箱也有全文
+  fix_queue_has() { # <payload> → 0 = outbox 活动队列（不含 held/）里有含全文的条目
+    local q
+    for q in "$FIX/proj/.pi/team/state/outbox/"*.msg; do
+      [ -f "$q" ] || continue
+      grep -q -- "$1" "$q" && return 0
+    done
+    return 1
+  }
+  if fix_queue_has 'P163-FOREIGN-1.0.0' && grep -q 'P163-FOREIGN-1.0.0' "$FIX/proj/docs/team/inbox/dev.md" 2>/dev/null; then
+    ok "1.0.0 真帧：消息不丢（活动队列条目 + docs/team/inbox/dev.md 都有全文）"
+  else
+    bad "1.0.0 真帧：消息不在队列/账本里（可能被静默吞掉）"
+  fi
+
+  # 同一份帧、光标落在上边框（TMUX cursor_y 是 0-based —— off-by-one 误读的真实形状）→ 几何不可信：
+  # 产品必须 held + 非零退出 + 可见原因/恢复命令，仍然一个键都不发。
+  fix_setup x2
+  fix_frame "$f" 28 "$cwd"
+  fix_clear_keys
+  out="$(fix_team say dev "P163-FOREIGN-OFFBYONE" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'held' && printf '%s' "$out" | grep -q 'geometry-untrusted' \
+     && printf '%s' "$out" | grep -q 'outbox flush' && printf '%s' "$out" | grep -q 'inbox/dev.md' \
+     && ! printf '%s' "$out" | grep -q '清空后自动投递'; then
+    ok "同帧 off-by-one（光标在上边框）：held/geometry-untrusted + 原因/恢复命令，且不承诺自动投递"
+  else
+    bad "同帧 off-by-one：rc=$rc out=$(printf '%s' "$out" | tr '\n' ' ' | head -c 240)"
+  fi
+  [ "$(fix_keys)" = "0" ] && ok "同帧 off-by-one：零按键" || bad "同帧 off-by-one 发了 $(fix_keys) 个键"
+  grep -q 'P163-FOREIGN-OFFBYONE' "$FIX/proj/docs/team/inbox/dev.md" 2>/dev/null \
+    && ok "同帧 off-by-one：held 也不丢（durable 收件箱有全文）" || bad "同帧 off-by-one：消息没落账本"
+
+  # 红侧：变异副本只删 queued 分支的两行报告（静默排队）→「可见报告」必须红；安全断言保持绿
+  if [ "$MUTATIONS" = "1" ]; then
+    local mut sha_before sha_after
+    mut="$(mut_skill_silent_say)" || { bad "红侧：变异副本没造出来（锚点漂了？）"; mut=""; }
+    if [ -n "$mut" ]; then
+      sha_before="$(fix_sha "$SKILL_DIR/scripts/lib/cmd-agents.sh")"
+      fix_setup x3
+      fix_frame "$f" "$cy" "$cwd"
+      fix_clear_keys
+      FIX_SKILL="$mut"; out="$(fix_team say dev "P163-FOREIGN-MUT" 2>&1)"; rc=$?; FIX_SKILL=""
+      sha_after="$(fix_sha "$SKILL_DIR/scripts/lib/cmd-agents.sh")"
+      if fix_report_visible "$out"; then
+        bad "红侧（静默排队）：变异后「可见报告」仍成立 —— 判据没咬住那个决策点"
+      else
+        ok "红侧（静默排队）：可见报告 → 红（判据钉住的正是这个决策点）"
+        finding "变异进程原始输出=[$(printf '%s' "$out" | tr '\n' '|' | head -c 160)]（对照上一条 ✓ 的正常输出）"
+      fi
+      [ "$(fix_keys)" = "0" ] && ok "红侧对照：静默变异下仍零按键（安全断言不受影子影响）" \
+        || bad "红侧对照：静默变异下发了 $(fix_keys) 个键"
+      fix_queue_has 'P163-FOREIGN-MUT' \
+        && ok "红侧对照：静默变异下消息仍在队列（红的是报告，不是丢失）" \
+        || bad "红侧对照：静默变异下消息没进队列"
+      [ "$sha_before" = "$sha_after" ] && ok "红侧：变异只动副本，生产 cmd-agents.sh 的 sha 不变" \
+        || bad "红侧：生产 cmd-agents.sh 被变异污染"
+    fi
+  else
+    skipnote "红侧 mutation（--mutations 才跑）"
+  fi
+  finish "foreign"
 }
 
 # ---------------------------------------------------------------- queue（同一真帧上的阻碍与恢复）
@@ -926,7 +1077,7 @@ JSON
 }
 
 if [ "$SECTION" = "all" ]; then
-  for s in frames drafts queue receipts notify panel; do run_section "$s"; done
+  for s in frames drafts foreign queue receipts notify panel; do run_section "$s"; done
 else
   run_section "$SECTION"
 fi
