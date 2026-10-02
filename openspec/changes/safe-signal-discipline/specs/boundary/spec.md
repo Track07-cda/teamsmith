@@ -230,6 +230,16 @@ a finished leader MUST NOT be hunted — no name, command-line or tree search is
 resolved through the current project's state directory only: an id with no record there MUST be refused, and the
 command MUST NOT look for the process in another working tree, another project or another session's state.
 
+A job id SHALL be a flat name — non-empty, without a path separator, not `.` or `..`, and bounded in length (the
+spawner's slug is at most 32 characters; the command's own bound is 128) — and the record file SHALL be a regular
+file that resolves inside the project's own `bg` directory: a symbolic link, a FIFO, a device, a directory, or a
+path that resolves outside that directory MUST be refused as a malformed record (exit 4) before the payload is
+read, so no such record can block the command, and nothing is signalled; an id that is not a flat name is a usage
+error (exit 2). The recorded `pid` and `pgid` SHALL both be positive decimal integers, and before any signal the
+process's current process group SHALL equal the recorded `pgid` — a non-positive or non-numeric value is a
+malformed record (exit 4), a live process that has left the recorded group is a failed identity check (exit 5),
+and each refusal signals nothing.
+
 #### Scenario: Stopping a job kills the job and not its neighbour
 
 - **GIVEN** a scratch project whose state directory holds a job record written by the job's spawner and a live job
@@ -259,6 +269,22 @@ command MUST NOT look for the process in another working tree, another project o
 - **WHEN** `team bg stop <id>` runs
 - **THEN** it exits 0, prints that nothing was signalled and that descendants are not hunted, and the descendant is
   still alive
+
+#### Scenario: A record outside the project's bg directory is refused
+
+- **GIVEN** a scratch project whose `bg` directory holds a symbolic link to a live job record written by a sibling
+  project, and an id that names the sibling's record through a relative path
+- **WHEN** `team bg stop <the linked id>` runs, and `team bg stop <the traversing id>` runs
+- **THEN** the traversing id exits 2 as a usage error, the symbolic link exits 4 as a malformed record, each names
+  the check that failed, and the sibling's process is still alive
+
+#### Scenario: A malformed record is refused before it can be read or block
+
+- **GIVEN** a record with a matching live pid and start-time fingerprint whose `pgid` is `0`, and a second record
+  path that is a FIFO with no writer
+- **WHEN** `team bg stop <id>` runs for each
+- **THEN** each exits 4 within the command's own bounded wait — never a timeout — with a diagnostic naming the
+  record and the failed check, and no process is signalled
 
 ### Requirement: Scripts select processes by recorded pid, and the lint keeps it that way
 

@@ -8,11 +8,15 @@
 #     job 死了、**没有记录过的邻居活着**、`state/bg.log` 留下 stop 行（RA3 的 happy path）；
 #   · 四种拒绝都**什么都没发**：无记录 3 / 记录畸形 4 / pid 复用（指纹对不上）5 / 用法 2；
 #   · 记录只认本项目 state 目录：兄弟 state 目录里的 id 不会被找到，也不会去别处搜进程；
+#   · 状态边界（P169 · F1，CRITICAL）：id 是平坦名字（路径语义不在语法里）、记录必须是本项目
+#     bg 目录里的正规文件 —— 穿越 id 2 / 软链 4 / pgid=0 4 / FIFO 4（读取前就拒，不许挂住），
+#     三种畸形都零信号、邻居全活；反向：本项目自己的正规记录照常收（`job.2-fine` 那种名字不误伤）；
 #   · 已结束的 leader 不追猎：rc=0 + 明说子孙不会被找（活着的子孙留在原地）；
 #   · `team bg list` 一行一作业，身份成不成立逐行标出（holds/gone/mismatch/malformed）。
 #
-# 红侧（--break=no-identity）：把 cmd-bg.sh 的指纹核对那一行改成 `if false` 的**副本**上跑同一套断言
-# —— 「pid 复用必须被拒」与「邻居必须活着」必须变红。这是断侧，默认不跑。
+# 红侧（默认不跑）：`--break=no-identity` 把 cmd-bg.sh 的指纹核对那一行改成 `if false` 的**副本**
+# —— 「pid 复用必须被拒」与「邻居必须活着」必须变红；`--break=no-boundary` 把记录解析器短路的
+# 副本 —— 「穿越 id / 软链记录必须被拒且邻居活着」必须变红。这是断侧，用来证明断言不是空转。
 #
 # 纪律：清掉继承的团队身份与 tmux 身份；产物落 tmp_root_create 的私有根；每个作业/邻居都是夹具
 # spawn、pid 记录在案，收尾**只按记录的 pid** 发信号（绝不按名字/模式）。夹具不起 tmux、不进容器。
@@ -33,7 +37,7 @@ while [ $# -gt 0 ]; do
     *) printf 'team-bg-stop: 未知参数 %s\n' "$1" >&2; exit 2 ;;
   esac
 done
-case "$BREAK" in ''|no-identity) ;; *) printf 'team-bg-stop: --break 只认 no-identity（收到 %s）\n' "$BREAK" >&2; exit 2 ;; esac
+case "$BREAK" in ''|no-identity|no-boundary) ;; *) printf 'team-bg-stop: --break 只认 no-identity / no-boundary（收到 %s）\n' "$BREAK" >&2; exit 2 ;; esac
 [ "$KEEP" = "1" ] && export TEAM_TMP_KEEP=1
 
 # ── 身份隔离：绝不继承调用者的团队/tmux 身份 ─────────────────────────────────────────────────
@@ -91,16 +95,27 @@ mkdir -p "$OTHER_BGD"
 printf 'TEAM_PROJECT="p159-other"\n' > "$OTHER/.pi/team/config.sh"
 
 TEAM="$SKILL_DIR/scripts/team"
-if [ "$BREAK" = "no-identity" ]; then
-  # 红侧：scripts/ 的副本 + 把恒等判定改成 `if false`（只改那一行）—— 跳过指纹核对
+if [ -n "$BREAK" ]; then
+  # 红侧：scripts/ 的副本 + 只改一处（每个 --break 一个断点）
   MUT="$TMP/skill"; mkdir -p "$MUT"
   cp -a "$SKILL_DIR/scripts" "$MUT/scripts"
-  sed -i 's/^  if \[ -z "\$start" \] || \[ "\$now_start" != "\$start" \]; then$/  if false; then/' "$MUT/scripts/lib/cmd-bg.sh"
-  if grep -qx '  if false; then' "$MUT/scripts/lib/cmd-bg.sh"; then
-    printf '红侧：cmd-bg.sh 副本的指纹核对已改成 if false（%s）\n' "$MUT/scripts/lib/cmd-bg.sh"
-  else
-    printf '✗ 红侧不成立：sed 没改到指纹核对那一行\n' >&2; exit 2
-  fi
+  case "$BREAK" in
+    no-identity)
+      sed -i 's/^  if \[ -z "\$start" \] || \[ "\$now_start" != "\$start" \]; then$/  if false; then/' "$MUT/scripts/lib/cmd-bg.sh"
+      if grep -qx '  if false; then' "$MUT/scripts/lib/cmd-bg.sh"; then
+        printf '红侧：cmd-bg.sh 副本的指纹核对已改成 if false（%s）\n' "$MUT/scripts/lib/cmd-bg.sh"
+      else
+        printf '✗ 红侧不成立：sed 没改到指纹核对那一行\n' >&2; exit 2
+      fi ;;
+    no-boundary)
+      # 把记录解析器短路：不再要求「平坦 id / 本项目 bg 目录里的正规文件 / realpath 仍在目录内」
+      sed -i 's#^  local _id="\$1" _d="\$2" _f _dreal _freal$#  printf "%s" "$2/$1.job"; return 0#' "$MUT/scripts/lib/cmd-bg.sh"
+      if grep -q 'printf "%s" "\$2/\$1.job"; return 0' "$MUT/scripts/lib/cmd-bg.sh"; then
+        printf '红侧：cmd-bg.sh 副本的记录边界解析已短路（%s）\n' "$MUT/scripts/lib/cmd-bg.sh"
+      else
+        printf '✗ 红侧不成立：sed 没改到 team_bg_record_resolve 的第一行\n' >&2; exit 2
+      fi ;;
+  esac
   TEAM="$MUT/scripts/team"
 fi
 
@@ -112,6 +127,11 @@ bg() { ( cd "$ROOT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEA
           "$TEAM" --root "$ROOT" bg "$@" ) 2>&1; }
 bg_rc() { ( cd "$ROOT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
           "$TEAM" --root "$ROOT" bg "$@" ) >/dev/null 2>&1; printf '%s\n' "$?"; }
+bg_timeout() { # <秒> <bg 参数…>：给「非正规记录不许挂住」这条腿一个硬上界
+  local _t="$1"; shift
+  ( cd "$ROOT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
+      timeout "$_t" "$TEAM" --root "$ROOT" bg "$@" ) 2>&1
+}
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 hdr "RA3 · 真作业按记录停掉：job 死、邻居活、账本留痕"
@@ -176,6 +196,56 @@ assert_eq "兄弟 state 里的 id 在本项目 → 3" "$RC" "3"
 assert_alive "兄弟记录的进程没有被本项目动到" "$OTHER_PID"
 case "$(bg list)" in *sibling*) bad "list 里出现了兄弟 state 目录的作业" ;; *) ok "list 不列兄弟 state 目录的作业" ;; esac
 
+hdr "F1 · 记录必须留在本项目里：穿越 id / 软链都拒，邻居活着"
+# ① 邻居的记录 + id 里带路径（PM 的形状）：id 不是平坦名字 → 2，记录没有被解析
+OUT_PID="$(spawn_neighbour)"; SPAWNED+=("$OUT_PID")
+printf 'id=outside\npid=%s\npgid=%s\nstart=%s\ncwd=%s\nlog=%s\ncmd=sleep 300\n' \
+  "$OUT_PID" "$(proc_word "$OUT_PID" 2)" "$(now_start "$OUT_PID")" "$OTHER" "$OTHER_BGD/outside.log" > "$OTHER_BGD/outside.job"
+TRAV_ID="$(realpath --relative-to="$BGD" "$OTHER_BGD" 2>/dev/null)/outside"
+case "$TRAV_ID" in */*) ok "夹具前提：穿越 id 带路径分隔符（$TRAV_ID）" ;; *) bad "夹具前提：没算出带路径的 id" ;; esac
+OUT="$(bg stop "$TRAV_ID")"; RC=$?
+assert_eq "① 路径穿越的 id → 2（id 没有路径语义）" "$RC" "2"
+assert_has "① 诊断点名「平坦名字」" "$OUT" "平坦名字"
+assert_alive "① 邻居记录没有被本项目执行（pid 活着）" "$OUT_PID"
+# ② 软链记录（PM 的形状）：bg/ 里一个指向邻居记录的软链 → 4，邻居活着
+LINK_PID="$(spawn_neighbour)"; SPAWNED+=("$LINK_PID")
+printf 'id=linked-target\npid=%s\npgid=%s\nstart=%s\ncwd=%s\nlog=%s\ncmd=sleep 300\n' \
+  "$LINK_PID" "$(proc_word "$LINK_PID" 2)" "$(now_start "$LINK_PID")" "$OTHER" "$OTHER_BGD/linked.log" > "$OTHER_BGD/linked.job"
+ln -s "$OTHER_BGD/linked.job" "$BGD/linked.job"
+OUT="$(bg stop linked)"; RC=$?
+assert_eq "② 软链记录 → 4（不是本项目的正规文件）" "$RC" "4"
+assert_has "② 诊断点名「正规记录」" "$OUT" "正规记录"
+assert_alive "② 软链指向的邻居进程没有被误杀" "$LINK_PID"
+LIST_SKIP="$(bg list)"
+if printf '%s\n' "$LIST_SKIP" | grep -q '^linked '; then
+  bad "list 列出了软链记录（越界的记录不许出现在本项目视图里）"
+else
+  ok "list 不列软链记录（只有跳过告警）"
+fi
+# ③ 反向：本项目自己的正规记录照常收（名字里带 . 与 - 也不误伤）
+FLAT_JOB="job.2-fine"; FLATF="$TMP/flat-child.pid"
+FPID="$(spawn_group_job "$FLATF")"; SPAWNED+=("$FPID")
+sleep 0.3
+write_record "$FLAT_JOB" "$FPID" "$FPID" "$(now_start "$FPID")" "sleep 300"
+OUT="$(bg stop "$FLAT_JOB")"; RC=$?
+assert_eq "③ 平坦名字（含 . 与 -）的正规记录照常收作业 → 0" "$RC" "0"
+assert_has "③ 输出说 result=stopped" "$OUT" "result=stopped"
+assert_gone "③ 作业被停掉" "$FPID"
+
+hdr "F2 · 畸形记录一致 fail-closed：pgid=0 与 FIFO 都拒、有界"
+# pgid=0（Linux 的进程组 id 必为正）：pid/start 都对，只有 pgid 畸形 → 4，零信号
+write_record zero "$NPID" "0" "$(now_start "$NPID")" "sleep 300"
+OUT="$(bg stop zero)"; RC=$?
+assert_eq "pgid=0 → 4（pid/pgid 必须正整数）" "$RC" "4"
+assert_has "诊断点名 pgid" "$OUT" "pgid"
+assert_alive "记录里的真进程没有被误杀" "$NPID"
+# FIFO 记录：读取之前就要拒（`-f` 且非 FIFO），不许挂住
+mkfifo "$BGD/fifo.job"
+OUT="$(bg_timeout 5 stop fifo)"; RC=$?
+assert_eq "FIFO 记录 → 4（拒绝在读之前，rc 不是 124）" "$RC" "4"
+assert_has "诊断点名「正规记录」" "$OUT" "正规记录"
+case "$(bg list)" in *fifo*) bad "list 列出了 FIFO 记录" ;; *) ok "list 不列 FIFO 记录" ;; esac
+
 hdr "RA3 · 已结束的 leader：rc=0，不追猎活着的子孙"
 GONE_JOB="gone1"; GCPIDF="$TMP/gone1-child.pid"
 GPID="$(spawn_group_job "$GCPIDF")"; SPAWNED+=("$GPID")
@@ -200,14 +270,17 @@ assert_eq "team bg stop 缺 id → 2" "$RC" "2"
 assert_has "用法行点名 job id 从哪来" "$OUT" "team bg list 看全部"
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-if [ "$BREAK" = "no-identity" ]; then
-  printf '\n== 红侧（--break=no-identity）==\n'
+if [ -n "$BREAK" ]; then
+  printf '\n== 红侧（--break=%s）==\n' "$BREAK"
   if [ "$FAIL" -gt 0 ]; then
     printf '红侧成立：%d 条断言变红 —— %s\n' "$FAIL" "$FAILED"
-    printf '（跳过指纹核对后，记录里的 pid 被直接当身份：pid 复用场景不再被拒、邻居被误杀）\n'
+    case "$BREAK" in
+      no-identity) printf '（跳过指纹核对后，记录里的 pid 被直接当身份：pid 复用场景不再被拒、邻居被误杀）\n' ;;
+      no-boundary) printf '（短路记录边界解析后，穿越 id / 软链记录都能走到邻居的记录并停掉它）\n' ;;
+    esac
     exit 1
   fi
-  printf '✗ 红侧不成立：把指纹核对改成 if false 之后，夹具居然还是绿的\n'
+  printf '✗ 红侧不成立：动了副本（%s）之后，夹具居然还是绿的\n' "$BREAK"
   exit 1
 fi
 

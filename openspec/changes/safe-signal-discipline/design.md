@@ -100,6 +100,14 @@ command are printed, and one `stop` line (job, signal, result, the stopper's pid
 A leader that is already gone is a no-op with an explicit "descendants are not hunted" line; the lane never
 searches by name or tree.
 
+**P169 (F1/F2) sharpens D6 into a state boundary.** The job id is a **flat name** — non-empty, no path separator,
+not `.`/`..`, bounded at 128 characters (the spawner's own slug allows 32) — and the record must be a regular file
+that `realpath` still places inside the project's own `bg` directory: a symbolic link, a FIFO, a device, a
+directory or a path resolving outside is refused (exit 4) **before the payload is read** (so a FIFO cannot block),
+and a non-flat id is a usage error (exit 2). `pid` and `pgid` must both be positive integers, and before any signal
+the live process's current process group must equal the recorded `pgid` (mismatch = exit 5). `team bg list` applies
+the same shape and skips symlinks with a visible warning.
+
 ### D7 — one lexer, two lints; the hidden boundary is the legacy list, not silence
 
 The signal lint needs the command-position parsing the tmux lint already implements (including the substitution
