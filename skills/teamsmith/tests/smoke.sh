@@ -18229,6 +18229,29 @@ else
   printf '  \033[33mSKIP\033[0m 58 harness S13：没有可跑 TypeScript 的运行时（node 类型剥离 / bun / tsx）\n'
 fi
 
+# ---------------------------------------------------------------- 59. pulse-nudge-key（P174 · change: pulse-nudge-key）
+# 夹具本体五档全跑（tasks 2.1–3.1）：
+#   · keys/transitions/policy/migration 直接 source 真库，只影子化运行时边界（扫描/容量/死亡/排水/
+#     PM 判定/投递），不碰 tmux —— FAST 照跑
+#   · observers 在私有夹具仓库里跑真 CLI（monitor --print/--json、__panel-data --block pending），
+#     tmux 走私有 shim（只读）；没有 JS 运行时则显式 SKIP monitor 两条腿
+# 红侧 / 翻转：tests/pulse-nudge-key.sh 自己的模式（破实现 → 该模式必须红）+ P172 证据包的
+# run.sh --expect-current-red / --assert-fixed / --mutations（见 docs/team/reports/P174-dev.md）
+section "59 · pulse-nudge-key：叫醒键按类别集合（P174）"
+if [ -f "$SKILL_DIR/tests/pulse-nudge-key.sh" ]; then
+  P174_RC=0
+  bash "$SKILL_DIR/tests/pulse-nudge-key.sh" --all >"$TMP/p174-nudge-key.log" 2>&1 || P174_RC=$?
+  if [ "$P174_RC" -eq 0 ]; then
+    ok "59 pulse-nudge-key 五档全绿（$(grep -ac '✓' "$TMP/p174-nudge-key.log" || true) 条断言，$(grep -ac 'SKIP\b' "$TMP/p174-nudge-key.log" || true) 条可见跳过）"
+    grep -a 'SKIP\b' "$TMP/p174-nudge-key.log" | sed 's/^/      /'
+  else
+    bad "59 pulse-nudge-key 有失败（rc=$P174_RC）"
+    grep -a '✗' "$TMP/p174-nudge-key.log" | head -12 | sed 's/^/      /'
+  fi
+else
+  bad "59 缺 tests/pulse-nudge-key.sh（P174 的聚焦夹具）"
+fi
+
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：
 # 用时 + ✓/✗/SKIP 增量 + ticks）、sections.tsv 一行。

@@ -3126,6 +3126,26 @@ team_pending_text() { # <counts> → 人类可读摘要（空字符串 = 无待�
 
 team_pending_sig() { team_hash "${1:-$(team_pending_counts)}"; }
 
+# P174（change: pulse-nudge-key）：叫醒批次的**身份** = 正类别集合；计数与文案不参与。
+# 与 team_pending_sig（计数签名，日志去重照用）分开：计数变、类别不变 → 不叫
+# （现场：未读 1→4 在 3600s 的 gap 里每 15 分钟被叫一次）。八字段按既有顺序序列化；
+# 七字段旧快照缺 meetings 按 0；空集合有明确表示（none）。
+TEAM_PENDING_NUDGE_KEY_EMPTY="pending:v1:none"
+team_pending_nudge_key() { # <counts|空=现读> → "pending:v1:<name,…>"（无正类别 = pending:v1:none）
+  local inbox reports todo wip review blocked stopped meetings
+  read -r inbox reports todo wip review blocked stopped meetings <<< "${1:-$(team_pending_counts)}"
+  local names=(inbox reports todo wip review blocked stopped meetings)
+  local values=("$inbox" "$reports" "$todo" "$wip" "$review" "$blocked" "$stopped" "${meetings:-0}")
+  local out="" i
+  for i in 0 1 2 3 4 5 6 7; do
+    if [ "${values[$i]:-0}" -gt 0 ] 2>/dev/null; then out="${out:+$out,}${names[$i]}"; fi
+  done
+  printf 'pending:v1:%s\n' "${out:-none}"
+}
+team_pending_nudge_empty() { # <counts|空=现读> → 0 = 没有正类别（空批次）
+  [ "$(team_pending_nudge_key "${1:-}")" = "$TEAM_PENDING_NUDGE_KEY_EMPTY" ]
+}
+
 # ---------------------------------------------------------------- 待命（PM 主动停工）
 team_standby_file() { printf '%s\n' "$TEAM_STATE_DIR/standby"; }
 team_standby_on() { # <reason>
@@ -3141,11 +3161,14 @@ team_standby_reason() {
 team_in_standby() { [ -f "$(team_standby_file)" ]; }
 
 # 提醒（叫醒）PM：只写记录 + 尽力敲一下窗口，不靠它保证送达
-team_nudge() { # <摘要文本>
-  local text="$1" msg
+# P174：第二个参数是**叫醒键**（类别集合，省略时按当前快照现算）——watchdog.nudge 与
+# _watch.env:nudge_sig 描述同一份快照；单参数旧调用照用（兼容路径）。
+team_nudge() { # <摘要文本> [<叫醒键>]
+  local text="$1" key="${2:-}" msg
+  [ -n "$key" ] || key="$(team_pending_nudge_key)"
   mkdir -p "$TEAM_STATE_DIR"
   printf '%s %s\n' "$(team_timestamp)" "$text" >> "$TEAM_STATE_DIR/nudges.log"
-  printf '%s %s\n' "$(date +%s)" "$(team_pending_sig)" > "$TEAM_STATE_DIR/watchdog.nudge"
+  printf '%s %s\n' "$(date +%s)" "$key" > "$TEAM_STATE_DIR/watchdog.nudge"
   msg="[pulse] 待办：$text → 跑 $TEAM_CLI digest 看详情；若确实没活可推或需人工介入，跑 $TEAM_CLI standby on --reason \"…\" 让自己停下（之后不会再叫醒你）"
   # 叫醒语也走投递守卫（delivery-guard）：PM 输入框里有草稿时入队，不粘字。
   # nudges.log / watchdog.nudge 的 durable 记录（state 文件名别名期不动，D22）已经在上面写完了，所以排队不会丢消息。

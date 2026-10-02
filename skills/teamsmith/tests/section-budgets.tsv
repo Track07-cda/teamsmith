@@ -144,3 +144,4 @@
 36 · 选段与分段账本自检（P98 · gate-runtime-budget）	338	1400	50	10.6/?/14.0/10.5	338	8.2/32 核	-	P98 F2 host=50（FAST2 §36 49s 上取整）+ P148 apply 容器实测 =338s（2026-10-01，rev ac8bfdff，localhost/teamsmith-gate:p135，`TEAM_SMOKE_FAST=1 … --select 36`，新增的检出形状探针约 226s）· ×4 · floor 60
 55 · meeting-liveness：未读 / 过期 / 队列 / 标识（P139，纯逻辑）	30	120	30	-/-/-/-	-	-	-	P139 实测（占位，出数后改）：host=[P139 FAST §54] container=[未测] ci=[未测] · ×4 · floor 60
 56 · meeting-liveness 真 tmux：敲门 / 排水 / 每方窗口（P139）	60	240	60	-/-/-/-	-	-	-	P139 实测（占位，出数后改）：host=[P139 full §55] container=[未测] ci=[未测] · ×4 · floor 60
+59 · pulse-nudge-key：叫醒键按类别集合（P174）	8	60	-	-	8	-/-/-/-	-	P174 实测（container=teamsmith-gate:local 跑 smoke --select 59，段用时 7–8s；纯逻辑四档 + observers 私有仓库真 CLI）· ×4 · floor 60

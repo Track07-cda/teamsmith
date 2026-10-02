@@ -326,10 +326,21 @@ team_watch_once() {
   fi
 
   # ② 待办（快速读者：与 team_pending_counts 同值，见 team_panel_pending_counts_fast）
-  local counts text sig
+  local counts text sig key
   counts="$(team_panel_pending_counts_fast || true)"
   text="$(team_pending_text "$counts")"
   sig="$(team_pending_sig "$counts")"
+  key="$(team_pending_nudge_key "$counts")"   # P174：提醒去重按**类别集合**（计数只进日志/文本/面板）
+
+  # ②a P174：观察到的空批次重置叫醒历史（放在任何早退之前 —— standby 下的空拍也要重置，
+  #      否则空过之后同一个类别回来，会被「同一批」的旧签名吃掉）。重置本身不发消息；
+  #      只在确有历史时落盘（空拍不制造 mtime 噪声）。
+  if team_pending_nudge_empty "$counts"; then
+    if [ -n "$(team_state_get _watch nudge_sig '')" ] || [ "$(team_state_get _watch nudge_epoch 0)" != "0" ]; then
+      team_state_set _watch nudge_sig ''
+      team_state_set _watch nudge_epoch 0
+    fi
+  fi
 
   # ④ 待命：PM 明确说了不要叫醒它
   if team_in_standby; then
@@ -360,15 +371,16 @@ team_watch_once() {
   #     两次读取之间状态会变 —— 同一拍里既报「PM 在跑」又按「没在跑」去启动（M7.2 的抖动来源之一）。
   local st; st="$(team_pm_state)"
   if [ "${st%%:*}" = "running" ]; then
-    local last_epoch last_sig gap now
+    local last_epoch last_key gap now
     now="$(date +%s)"
     last_epoch="$(team_state_get _watch nudge_epoch 0)"
-    last_sig="$(team_state_get _watch nudge_sig '')"
+    last_key="$(team_state_get _watch nudge_sig '')"
     gap="$TEAM_PULSE_NUDGE_GAP"
-    if [ "$sig" != "$last_sig" ] || [ $((now - last_epoch)) -ge "$gap" ]; then
-      team_nudge "$text"
+    # P174：类别集合变（增/删）或 gap 到 —— 计数只变不算「批次变了」，被抑制的拍也不推进 epoch
+    if [ "$key" != "$last_key" ] || [ $((now - last_epoch)) -ge "$gap" ]; then
+      team_nudge "$text" "$key"
       team_state_set _watch nudge_epoch "$now"
-      team_state_set _watch nudge_sig "$sig"
+      team_state_set _watch nudge_sig "$key"
       team_state_set _watch last_sig "$sig"
       team_wlog "叫醒 PM：$text"
       team_ok "pulse: 有待办（$text）→ 已提醒 PM"
