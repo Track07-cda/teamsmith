@@ -9739,17 +9739,29 @@ fi
 assert_eq "26-b 观察者：临时 state 目录逐字节不变（含已有文件与新增文件）" "$P10_OBS_AFTER" "$P10_OBS_BEFORE"
 
 # ---------------------------------------------------------------- 26-c. 纯文本契约（--print / 重定向 / UI=text）
-# M12 追加：下面两条断言把两次**实时执行**逐字对比 ⇒ 容量数据源必须钉住：默认读 /proc/meminfo 与
-# /proc/swaps，数值天然会动（实测 MemAvailable ±100MB/s；「可再加 N 个」= (avail+disk_free−512)/6144，
-# 在边界附近两次采样就能差 1 —— PM 复验就在这里红过，而报错把原因说成了 ESC）。
-# 只钉 TEAM_MEMINFO_FILE 不够：面板的 swap 列与「可再加」还走 team_swap_breakdown(/proc/swaps)，
-# 所以连 6b 造的 swaps 夹具一起钉。
+# M12 追加：下面每条断言都把两次**独立执行**的帧逐字对比。容量夹具（6b 造的 meminfo + swaps）仍然钉着
+# —— 它让这一段的现场稳定、也让守卫自检有个确定的底座 —— 但断言**不依赖**它：`--print` 与 `--once`
+# 是两次独立采样，任何「采样时刻的函数」在两次之间都可能变（M12 实测 MemAvailable ±100MB/s；
+# 「可再加 N 个」= (avail+disk_free−512)/6144，在边界附近两次采样就能差 1；P144 加的磁盘腿读真文件系统：
+# 实测 /tmp 的 inode 计数每秒动几十上百，剩余空间也能在两次采样间跨过 0.1G 的档）。
+# P156：这些值由 p10_norm 归一，结构照旧逐字节比 —— 「归一化放过了什么、没放过什么」由紧跟 --print
+# 之后的守卫自检双向钉住（只动实时读数的数值必须相同；动字段名/行数/ESC/分隔符/单位必须仍然不同）。
 p10cap=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps")
 p10c() { p10m env "${p10cap[@]}" "$@"; }                 # 26-c 里所有真跑：带容量夹具
-p10_norm() { # 归一化时钟与实时容量（P144 起含每个文件系统的读数），其余逐字节比
+# p10_norm：只把「实时读数」的**数值**换成 `·`；字段名、单位、分隔符、行结构一个字节都不放宽。
+#   面板容量行：RAM 3.9G ｜ swap 63.0G ｜ 可再加 11 个 agent ｜ /tmp 9.4G（inode 3302289）
+#            → RAM ·G ｜ swap ·G ｜ 可再加 · 个 agent ｜ /tmp ·G（inode ·）
+#   时钟 HH:MM:SS → TIME（M12）；shell 容量行的「可用 9.4 GB（inode 3302289）」也归一到同一种形状
+#   （机器出口自己渲染面板行，不渲染 team_capacity_line —— 这条是旧口径的等价延续，不是新放宽）。
+# 单位留在原位是有意的（任务书：单位照旧逐字节比）：值在 1024M↔1.0G 边界上换了单位仍会红；
+# 读不到读数的 `—`/`?` 没有数字，也就不会被归一，两次采样必须一致。
+p10_norm() {
   sed -E -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TIME/' \
-      -e 's/可用 [0-9.]+ [KMG]B（inode [0-9]+）/可用 X（inode N）/' \
-      -e 's/[0-9.]+[KMG]（inode [0-9]+）/[X]（inode N）/' "${1:-/dev/null}"
+      -e 's/(RAM|swap) [0-9.]+([KMG])/\1 ·\2/g' \
+      -e 's/可再加 [0-9]+ 个 agent/可再加 · 个 agent/g' \
+      -e 's/[0-9.]+([KMG])（inode /·\1（inode /g' \
+      -e 's/（inode [0-9]+）/（inode ·）/g' \
+      -e 's/可用 [0-9.]+ ([KMG])B（inode /可用 · \1B（inode /g' "${1:-/dev/null}"
 }
 p10_diff1() { diff <(p10_norm "$1") <(p10_norm "$2") 2>/dev/null | head -4 | tr '\n' ' '; }  # 失败信息里的首个差异
 
@@ -9762,6 +9774,41 @@ else
 fi
 assert_has "$TMP/p10-print.txt" "· $(basename "$P10R")" "26-c 纯文本：第一行点名项目"
 assert_has "$TMP/p10-print.txt" "巡检 900s" "26-c 纯文本：第一行点名巡检周期"
+# —— P156 · 归一化守卫自检（绿侧 / 红侧）───────────────────────────────────────────────────
+# 绿侧的「第二次采样」从**这一帧真实输出**里造：只换实时读数的数值，字段名/单位/分隔符/行数一字不动。
+# 两条守卫都是双向的：绿侧先证明两段真的不同（否则「归一后相同」可能是两段一模一样 —— 空跑的绿），
+# 红侧先证明两段不同、再要求归一后**仍然**不同（把归一化掏空成恒等 → 红侧必须失败）。
+p10_norm_same() { # <a> <b> <说明>：原始必须不同 + 归一后必须逐字节相同
+  if cmp -s "$1" "$2"; then bad "$3（两段本来就一样 —— 这条绿侧是空的）"; return; fi
+  if diff <(p10_norm "$1") <(p10_norm "$2") >/dev/null; then
+    ok "$3（原始差异：$(diff "$1" "$2" | head -2 | tr '\n' ' ' | head -c 140)）"
+  else
+    bad "$3（归一后仍不同：$(p10_diff1 "$1" "$2" | head -c 140)）"
+  fi
+}
+p10_norm_keep() { # <a> <b> <说明>：原始必须不同 + 归一后必须仍然不同
+  if cmp -s "$1" "$2"; then bad "$3（两段本来就一样 —— 这条红侧是空的）"; return; fi
+  if diff <(p10_norm "$1") <(p10_norm "$2") >/dev/null; then
+    bad "$3（归一后被吃掉 —— 红侧空了：$(diff "$1" "$2" | head -2 | tr '\n' ' ' | head -c 140)）"
+  else
+    ok "$3"
+  fi
+}
+P10N="$TMP/p10-norm"; mkdir -p "$P10N"
+sed -E -e 's/(RAM|swap) [0-9.]+([KMG])/\1 1.1\2/g' \
+       -e 's/可再加 [0-9]+ 个 agent/可再加 999 个 agent/g' \
+       -e 's/[0-9.]+([KMG])（inode [0-9]+）/1.1\1（inode 9000001）/g' "$TMP/p10-print.txt" >"$P10N/live.txt"
+sed -e 's/RAM/内存/'                          "$TMP/p10-print.txt" >"$P10N/name.txt"     # 字段名不同
+{ cat "$TMP/p10-print.txt"; printf 'P156 多出来的一行\n'; } >"$P10N/more.txt"            # 行数不同
+{ printf '\033'; cat "$TMP/p10-print.txt"; }                 >"$P10N/esc.txt"      # 混进 ESC
+sed -e 's/ ｜ / | /'                          "$TMP/p10-print.txt" >"$P10N/sep.txt"      # 分隔符不同
+sed -E -e 's/(RAM|swap) ([0-9.]+)([KMG])/\1 \2X/' "$TMP/p10-print.txt" >"$P10N/unit.txt"  # 单位不同
+p10_norm_same "$TMP/p10-print.txt" "$P10N/live.txt" "26-c P156 绿侧：只有实时读数不同 → 归一后逐字节相同"
+p10_norm_keep "$TMP/p10-print.txt" "$P10N/name.txt" "26-c P156 红侧：字段名不同仍然不同"
+p10_norm_keep "$TMP/p10-print.txt" "$P10N/more.txt" "26-c P156 红侧：多一行仍然不同"
+p10_norm_keep "$TMP/p10-print.txt" "$P10N/esc.txt"  "26-c P156 红侧：混进 ESC 仍然不同"
+p10_norm_keep "$TMP/p10-print.txt" "$P10N/sep.txt"  "26-c P156 红侧：分隔符不同仍然不同"
+p10_norm_keep "$TMP/p10-print.txt" "$P10N/unit.txt" "26-c P156 红侧：单位不同仍然不同"
 # 失败信息分开报：① ESC（=控制字节）与 ② 内容 diff 是两回事，后者要带首个差异（否则又要考古）
 p10c $TEAM monitor --once --no-pulse >"$TMP/p10-once-redirect.txt" 2>/dev/null
 P10_ONCE_ESC="$(p10_esc "$TMP/p10-once-redirect.txt")"
