@@ -21,10 +21,28 @@
 #   硬停）。唯一的旋钮 TEAM_TMUX_ISO_LOG 只决定审计行写哪（不改判定；自检 0h 正面钉住）。
 #
 #   入口：
-#     tmux_iso_prove       [--tmpdir D] [--sock-name N] [--own-root R] [--caller-tmpdir C]  → 0/1（判定）
+#     tmux_iso_prove       [--tmpdir D] [--sock-name N] [--own-root R] [--caller-tmpdir C] [--argv <tmux argv…>]  → 0/1（判定）
 #     tmux_iso_require     <段> <用途> [同上]      → 证明通过则静默返回；不通过则硬停（exit 2）
 #     tmux_iso_guard_soft  <段> <用途> [同上]      → 不通过则「响亮拒绝但不 exit」（收尾路径用）
+#     tmux_iso_argv_parse  <argv…>                 → 解析动词/显式目标（只吃逐词 argv，产出见下）
+#     tmux_iso_install_suite_guards <真 tmux>      → 装上 tmux() 与 command() 两个壳（套件与探针同一份代码）
 #     tmux_iso_hard_stop / tmux_iso_audit / tmux_iso_skip  → 硬停、审计、SKIP 三个组件（可被套件覆盖 SKIP）
+#
+#   P180（返工）：P162 的“破坏性”判定原本只看 argv 第一个词（`case "${1:-}"`），于是
+#     tmux -S /tmp/tmux-<uid>/default kill-server   # 显式指共享默认 socket
+#     tmux -L default kill-server                   # 等价写法
+#     tmux -f /dev/null kill-server                 # 其它前置选项
+#   都**不进前置**、原样执行 —— 与“私有 socket 静默没生效”叠加时正是打死共享 server 的形状。
+#   现在动词按 **argv 逐词**解析（契约同 M36/M67 的 shim：先跳过全局选项及其值，取第一个非选项词；
+#   见 tmux_iso_argv_scan），并且 **argv 里显式给的 -S/-L 目标必须仍是本轮的私有 socket**：
+#   指共享默认 socket（或任何别处）→ 直接硬停，哪怕三条件都成立。
+#
+#   P180 的射程边界（与 M41 的 shim 同一条已知盲区，别把它当保证）：
+#     · 绝对路径（`/usr/bin/tmux kill-server`）不经 PATH、也不经壳函数 —— 射程外（设计如此，
+#       仓库脚本/fixture 里禁止这么写，tmux-lint 的 M41 规则静态拦）；
+#     · **子进程**（`env tmux …` / `bash -c 'tmux …'` / 窗口 harness）不继承壳函数（不 export -f），
+#       它们按 PATH 解析 —— 窗口里那一层由 M36/M67 的运行时闸门管，本库管的是**本 shell 自己的**调用。
+#     · `\tmux` / `"tmux"` **不**是绕过：bash 对函数照查（0h 段有记录桩断言钉住这条）。
 #
 # shellcheck shell=bash
 
@@ -41,6 +59,87 @@ tmux_iso_norm() { # <路径> → 规范化（不存在也能算：realpath -m）
   local p="$1" r=""
   r="$(realpath -m -- "$p" 2>/dev/null)" || r="$p"
   printf '%s' "${r:-$p}"
+}
+
+# ── P180 · argv 解析（逐词；契约同 M36/M67 的 shim scripts/shim/tmux 的 _parse_globals）──────
+# 跳过全局选项及其值，取第一个**非选项**词作为动词；顺带取出显式目标 -S <路径> / -L <名字>。
+# 全局选项的闭集（与 shim 逐条同源）：值类 -L -S -c -f -T（含 -Lx/-Sx 粘连、组合簇里的 c/f/T/L/S），
+# 无值开关 -2 -8 -C -D -l -u -v -V -N，`--` 之后第一个词是子命令，其余 `-*` 按开关跳过。
+# 缺值 / 认不出的组合 → TMUX_ISO_ARGV_UNCERTAIN=1（不装懂）；
+# **绝不**用“整条命令行包含某串”当判据（#1529：模式字符串会命到自己）。
+# 产出（调用方读这五个全局）：
+#   TMUX_ISO_ARGV_VERB          动词（第一个非选项词；没有则空）
+#   TMUX_ISO_ARGV_SOCKPATH      -S 的值（最后一个胜出）
+#   TMUX_ISO_ARGV_SOCKNAME      -L 的值（最后一个胜出）
+#   TMUX_ISO_ARGV_UNCERTAIN     0/1（解析不确定）
+#   TMUX_ISO_ARGV_DESTRUCTIVE   0/1（破坏性；由 tmux_iso_argv_parse 分类）
+tmux_iso_argv_scan() { # <argv…>
+  TMUX_ISO_ARGV_VERB=""; TMUX_ISO_ARGV_SOCKPATH=""; TMUX_ISO_ARGV_SOCKNAME=""
+  TMUX_ISO_ARGV_UNCERTAIN=0
+  local -a a=("$@")
+  local n=$# i=0 w rest ch
+  while [ "$i" -lt "$n" ]; do
+    w="${a[$i]}"
+    case "$w" in
+      -L|-S|-c|-f|-T)
+        if [ $((i + 1)) -lt "$n" ]; then
+          case "$w" in
+            -L) TMUX_ISO_ARGV_SOCKNAME="${a[$((i + 1))]}" ;;
+            -S) TMUX_ISO_ARGV_SOCKPATH="${a[$((i + 1))]}" ;;
+          esac
+          i=$((i + 2))
+        else
+          TMUX_ISO_ARGV_UNCERTAIN=1; i=$((i + 1))     # 缺值：不装懂（真 tmux 自己会报错）
+        fi ;;
+      -L*) TMUX_ISO_ARGV_SOCKNAME="${w#-L}"; i=$((i + 1)) ;;
+      -S*) TMUX_ISO_ARGV_SOCKPATH="${w#-S}"; i=$((i + 1)) ;;
+      --) i=$((i + 1)); [ "$i" -lt "$n" ] && TMUX_ISO_ARGV_VERB="${a[$i]}"; break ;;
+      -) TMUX_ISO_ARGV_UNCERTAIN=1; i=$((i + 1)) ;;
+      -*)  # 组合簇：逐字符走；值类字符吃掉本词剩余部分或下一个词（同 M67 的 _parse_target 口径）
+        rest="${w#-}"
+        while [ -n "$rest" ]; do
+          ch="${rest%"${rest#?}"}"; rest="${rest#?}"
+          case "$ch" in
+            c|f|T)
+              if [ -z "$rest" ]; then
+                if [ $((i + 1)) -lt "$n" ]; then i=$((i + 1)); else TMUX_ISO_ARGV_UNCERTAIN=1; fi
+              fi
+              rest="" ;;
+            L|S)
+              if [ -n "$rest" ]; then
+                case "$ch" in L) TMUX_ISO_ARGV_SOCKNAME="$rest" ;; S) TMUX_ISO_ARGV_SOCKPATH="$rest" ;; esac
+              elif [ $((i + 1)) -lt "$n" ]; then
+                case "$ch" in L) TMUX_ISO_ARGV_SOCKNAME="${a[$((i + 1))]}" ;; S) TMUX_ISO_ARGV_SOCKPATH="${a[$((i + 1))]}" ;; esac
+                i=$((i + 1))
+              else
+                TMUX_ISO_ARGV_UNCERTAIN=1
+              fi
+              rest="" ;;
+            2|8|C|D|l|u|v|V|N) : ;;
+            *) TMUX_ISO_ARGV_UNCERTAIN=1 ;;
+          esac
+        done
+        i=$((i + 1)) ;;
+      *) TMUX_ISO_ARGV_VERB="$w"; break ;;
+    esac
+  done
+  return 0
+}
+
+# 分类：动词属于 kill-server|kill-session|kill-window|kill-pane（含 tmux 允许的前缀写法，多候选也认）
+# → 破坏性；解析不确定（认不出的全局选项/缺值）也按破坏性对待 —— 不装懂，交给前置判定（健康轮次零代价）。
+tmux_iso_argv_parse() { # <argv…>
+  tmux_iso_argv_scan "$@"
+  TMUX_ISO_ARGV_DESTRUCTIVE=0
+  case "$TMUX_ISO_ARGV_VERB" in
+    kill-*)
+      local c
+      for c in kill-server kill-session kill-window kill-pane; do
+        case "$c" in "$TMUX_ISO_ARGV_VERB"*) TMUX_ISO_ARGV_DESTRUCTIVE=1; break ;; esac
+      done ;;
+  esac
+  [ "$TMUX_ISO_ARGV_UNCERTAIN" = "1" ] && TMUX_ISO_ARGV_DESTRUCTIVE=1
+  return 0
 }
 
 tmux_iso_log() { # 审计行落点（只影响落点，不影响判定）
@@ -91,12 +190,16 @@ tmux_iso_prove() { # [--tmpdir D] [--sock-name N] [--own-root R] [--caller-tmpdi
   TMUX_ISO_REASON=""; TMUX_ISO_DETAIL=""; TMUX_ISO_EXPECTED=""; TMUX_ISO_ACTUAL=""; TMUX_ISO_SERVER="absent"
   TMUX_ISO_EFFECTIVE_TMPDIR=""
   local dir="" name="default" own="" caller=""
+  TMUX_ISO_CALL_ARGV=()
+  # 值类选项缺值时**立刻**以 bad-option 退出（M36 的教训：`shift 2` 在 $#<2 上失败会让 while
+  # 原地打转 → 挂死；这里每条路径都 shift ≥1 或 break）。
   while [ $# -gt 0 ]; do
     case "$1" in
-      --tmpdir)        dir="${2-}"; shift 2 ;;
-      --sock-name)     name="${2-}"; [ -n "$name" ] || name="default"; shift 2 ;;
-      --own-root)      own="${2-}"; shift 2 ;;
-      --caller-tmpdir) caller="${2-}"; shift 2 ;;
+      --tmpdir)        [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--tmpdir 缺值"; return 1; }; dir="${2-}"; shift 2 ;;
+      --sock-name)     [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--sock-name 缺值"; return 1; }; name="${2-}"; [ -n "$name" ] || name="default"; shift 2 ;;
+      --own-root)      [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--own-root 缺值"; return 1; }; own="${2-}"; shift 2 ;;
+      --caller-tmpdir) [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--caller-tmpdir 缺值"; return 1; }; caller="${2-}"; shift 2 ;;
+      --argv)          shift; TMUX_ISO_CALL_ARGV=("$@"); break ;;
       *) TMUX_ISO_REASON="bad-option"
          TMUX_ISO_DETAIL="前置不接受参数 ${1:-}（没有 --force/环境变量绕过路径）"
          return 1 ;;
@@ -164,6 +267,32 @@ tmux_iso_prove() { # [--tmpdir D] [--sock-name N] [--own-root R] [--caller-tmpdi
     esac
   fi
 
+  # ── P180：调用方在 argv 里**显式**给了目标（-S <路径> / -L <名字>）→ 它必须仍是本轮的私有 socket ──
+  # -S/-L 是 tmux 的命令行显式目标，优先级高于 TMUX_TMPDIR：即使上面三条都成立，显式指到别处
+  # （尤其是共享默认 socket）也不许动手。判据只有逐词解析出的目标，不做任何子串匹配（#1529）。
+  if [ "${#TMUX_ISO_CALL_ARGV[@]}" -gt 0 ]; then
+    tmux_iso_argv_parse ${TMUX_ISO_CALL_ARGV[@]+"${TMUX_ISO_CALL_ARGV[@]}"}
+    local want=""
+    if [ -n "$TMUX_ISO_ARGV_SOCKPATH" ]; then
+      want="$(tmux_iso_norm "$TMUX_ISO_ARGV_SOCKPATH")"
+    elif [ -n "$TMUX_ISO_ARGV_SOCKNAME" ]; then
+      want="$(tmux_iso_norm "$base/tmux-$uid/$TMUX_ISO_ARGV_SOCKNAME")"
+    fi
+    if [ -n "$want" ]; then
+      TMUX_ISO_EXPECTED="$expected"; TMUX_ISO_ACTUAL="$want"
+      if [ "$want" = "$(tmux_iso_norm "$default_sock")" ]; then
+        TMUX_ISO_REASON="explicit-target-is-default"
+        TMUX_ISO_DETAIL="argv 里的 -S/-L 直接指向共享默认 socket（$default_sock）"
+        return 1
+      fi
+      if [ "$want" != "$(tmux_iso_norm "$expected")" ]; then
+        TMUX_ISO_REASON="explicit-target-mismatch"
+        TMUX_ISO_DETAIL="argv 里的 -S/-L 指向 $want，不是本轮的私有 socket（$expected）"
+        return 1
+      fi
+    fi
+  fi
+
   # ② 实际 server 就是它（用刚才观察到的那条路径）
   if [ -z "$actual" ]; then
     TMUX_ISO_REASON="resolution-unobservable"
@@ -218,4 +347,50 @@ tmux_iso_guard_soft() { # <段> <用途> [证明参数…]：通过 → 0；不�
   printf '  \033[31m✗\033[0m 隔离前置不成立（拒绝执行）：%s（段 %s；实际 socket %s；审计 %s）\n' \
     "$TMUX_ISO_DETAIL" "$label" "${TMUX_ISO_ACTUAL:-（未解析出）}" "$(tmux_iso_log)"
   return 1
+}
+
+# ── P180 · 套件的壳函数（tmux / command tmux）：两个壳共用同一条入口 ───────────────────────────
+# 非破坏性调用原样透传（PATH 解析与改动前一致）；破坏性调用先过前置（不成立 → 硬停），再按 M23 的
+# 形态执行（env -u TMUX -u TMUX_PANE + 本轮私有 TMUX_TMPDIR）—— 那也是 tmux-lint 认的隔离证据形态。
+tmux_iso_suite_call() { # <段> [--tmpdir D --own-root R --caller-tmpdir C] -- <argv…>
+  local label="${1:-?}"; shift || true
+  local dir="" own="" caller=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --tmpdir)        [ $# -ge 2 ] || break; dir="${2-}"; shift 2 ;;
+      --own-root)      [ $# -ge 2 ] || break; own="${2-}"; shift 2 ;;
+      --caller-tmpdir) [ $# -ge 2 ] || break; caller="${2-}"; shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  tmux_iso_argv_parse "$@"
+  if [ "$TMUX_ISO_ARGV_DESTRUCTIVE" = "1" ]; then
+    tmux_iso_require "$label" "tmux $*" --tmpdir "$dir" --own-root "$own" \
+      --caller-tmpdir "$caller" --argv "$@" || return 1
+    env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$dir" "${TMUX_ISO_REAL_TMUX:-tmux}" "$@"
+  else
+    # 非破坏性：PATH 解析原样（`builtin command` 跳壳函数，但不跳 PATH；与 P180 之前一致）
+    builtin command tmux "$@"
+  fi
+}
+
+# 装壳（<真 tmux 路径>）：两个壳只在**本 shell 内**生效 —— 刻意**不** export -f：子进程按 PATH 解析
+# （与改动前一致），窗口/子进程那一层由 M36/M67 的运行时闸门管。
+#   `tmux …` / `\tmux …` / `"tmux" …` → 壳函数（bash 对函数照查；见 0h 段的记录桩断言）
+#   `command tmux …`             → command() 壳（P180：它与裸 tmux 是同一条 PATH 解析，必须同源纳入）
+#   `command <其它>`             → builtin command 原样
+#   `env tmux …` / 绝对路径 / 子进程 → 不在本壳射程内（边界见文件头）
+tmux_iso_install_suite_guards() { # <真 tmux 路径>
+  TMUX_ISO_REAL_TMUX="${1:-}"
+  tmux() {
+    tmux_iso_suite_call "${SMOKE_SEC_OPEN_ID:-?}" --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" \
+      --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}" -- "$@"
+  }
+  command() {
+    case "${1:-}" in
+      tmux) shift; tmux "$@" ;;
+      *) builtin command "$@" ;;
+    esac
+  }
 }
