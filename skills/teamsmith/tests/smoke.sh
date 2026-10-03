@@ -17218,7 +17218,7 @@ P82R="$TMP/p82repo"; rm -rf "$P82R"; mkdir -p "$P82R"
     && echo '# p82' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 P82_SES="teamsmith-smoke-p82-$$"
 ( cd "$P82R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$P82_SES" --agents "dev dev2" --vcs local --gates true --docs docs/team ) >"$TMP/p82-init.log" 2>&1 \
+    $TEAM init --session "$P82_SES" --agents "dev dev2 dev3" --vcs local --gates true --docs docs/team ) >"$TMP/p82-init.log" 2>&1 \
   && ok "P82 夹具仓库 init 成功" || bad "P82 夹具仓库 init 失败（见 $TMP/p82-init.log）"
 ( cd "$P82R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p82-paths.json" 2>&1 || true
 assert_eq "P82 隔离：team paths 的 main_root 就是 P82 夹具仓库" \
@@ -17437,6 +17437,8 @@ fi
 # 红侧判据：① 主检出 + 窗口 dev（本会话的名册席位）→ 非 0 + 零写入 + 点名目录说 pm / 线索说 dev +
 # 两条出路；② 主检出 + TEAM_AGENT=dev → 同样拒绝；③ 反向：主检出 + 窗口 pm / 无线索 / **别的会话**里的
 # 同名窗口 → 照旧 pm（不许误伤 PM 自己的调用，也不把别的会话的窗口当成本项目的席位）。
+# ③d–③g（P204 delta 的四条新 scenario）：名册外的名字（窗口 / TEAM_AGENT）不是线索；席位工作树
+# + 名册 TEAM_AGENT 不被拒（线索只否决主检出的 pm）；带线索时显式 --from 仍胜（分歧点名）。
 # 窗口名必须问**调用者自己那块 pane**（-t $TMUX_PANE）：无目标的 display-message 回答的是 attached
 # client 的当前窗口（tmux 3.7c 实测：dev2 pane 里问出来 pm）—— 夹具只回答带 -t %4242 的查询，
 # 所以“回到无目标形态”这种回归会把 ①② 打红（回声不算线索）。
@@ -17516,6 +17518,37 @@ p201 "$P82R" dev "p201-foreign-$$" - "$TMP/p201-3c.log" notify pm --from-file "$
   && ok "P201 ③ 别的会话里的窗口 dev → 退出码 0（同名窗口不是本项目的席位）" \
   || bad "P201 ③ 别的会话的同名窗口被当成本项目席位（误拒）"
 assert_eq "P201 ③ 别的会话 → 照旧记 pm" "$(p201_last)" "agent:pm · P201-SUMMARY"
+
+# ③d 名册外的窗口名不是线索（delta「A name outside the roster is not a clue」的窗口那一半）
+: > "$P82_INBOX"
+p201 "$P82R" nosuch "$P82_SES" - "$TMP/p201-3d.log" notify pm --from-file "$P201_SUM" \
+  && ok "P201 ③ 名册外的窗口名不是线索：主检出 + 窗口 nosuch → 退出码 0" \
+  || bad "P201 ③ 名册外的窗口名被当成了线索（误拒）"
+assert_eq "P201 ③ 名册外的窗口名 → 照旧记 pm" "$(p201_last)" "agent:pm · P201-SUMMARY"
+assert_not "$P82_INBOX" "agent:nosuch" "P201 ③ 名册外的名字绝不会变成发送者"
+
+# ③e 名册外的 TEAM_AGENT 不是线索（同一 scenario 的 TEAM_AGENT 那一半）
+: > "$P82_INBOX"
+p201 "$P82R" - - nosuch "$TMP/p201-3e.log" notify pm --from-file "$P201_SUM" \
+  && ok "P201 ③ 名册外的 TEAM_AGENT 不是线索：主检出 + TEAM_AGENT=nosuch → 退出码 0" \
+  || bad "P201 ③ 名册外的 TEAM_AGENT 被当成了线索（误拒）"
+assert_eq "P201 ③ 名册外的 TEAM_AGENT → 照旧记 pm" "$(p201_last)" "agent:pm · P201-SUMMARY"
+
+# ③f 席位工作树不被名册线索拒（「A seat worktree is not refused by a roster clue」）
+: > "$P82_INBOX"
+p201 "$P82_WT" - - dev3 "$TMP/p201-3f.log" notify pm --from-file "$P201_SUM" \
+  && ok "P201 ③ 席位工作树 + 名册 TEAM_AGENT=dev3 → 退出码 0" \
+  || bad "P201 ③ 席位工作树被名册线索误拒（线索只否决主检出的 pm）"
+assert_eq "P201 ③ 席位工作树的目录赢（dev2，不是线索 dev3）" "$(p201_last)" "agent:dev2 · P201-SUMMARY"
+assert_has "$TMP/p201-3f.log" "TEAM_AGENT=dev3" "P201 ③ stderr 点名被忽略的 TEAM_AGENT=dev3"
+
+# ③g 显式 --from 仍胜于线索（「An explicit --from is still honoured with a seat clue present」）
+: > "$P82_INBOX"
+p201 "$P82R" dev "$P82_SES" - "$TMP/p201-3g.log" notify pm --from dev3 --from-file "$P201_SUM" \
+  && ok "P201 ③ 主检出 + 窗口 dev + --from dev3 → 退出码 0（显式声明仍胜）" \
+  || bad "P201 ③ 带线索的显式 --from 被拒（声明不再优先）"
+assert_eq "P201 ③ 显式 --from 原样记录（线索不采纳）" "$(p201_last)" "agent:dev3 · P201-SUMMARY"
+assert_has "$TMP/p201-3g.log" "座位 'pm'" "P201 ③ stderr 点名与目录 pm 的分歧"
 
 section "48 · P91 合并后的「分支又动了」核对（D49 的另一半）"
 # 事实（D49，2026-09-22）：P82 被 squash 合并（16 个提交）之后，作者又在分支上提交了两条**只动记录**
