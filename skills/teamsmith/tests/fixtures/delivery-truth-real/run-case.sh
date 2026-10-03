@@ -13,7 +13,8 @@
 #
 # 与 P147/P157 作者配方的两处有意差异（P163 的两条 finding）：
 #   ① 现场重置：每个 case 先 rm -rf 自己的现场目录，再写 run.json 运行戳；scenario.sh 在判据读的
-#      事件文件第一行写单次 run_start 标记；judge-second.py 拒绝缺戳 / 多标记 / 有旧文件 / 观察模式的现场。
+#      事件文件第一行写单次 run_start 标记；judge-second.py 拒绝缺戳 / 标记不是恰好一条 / 标记不在第一行 /
+#      run-start.txt 缺失·为空·run= 不符 / 有旧文件 / 观察模式的现场。
 #   ② 版本钉死：判决路线只有容器里的 0.99.2；宿主路线（当前 1.0.0）在 run.json 里标 observation，
 #      judge-second.py 拒绝给它出判据 —— 避免把「宿主版本差异」当产品红绿。
 #

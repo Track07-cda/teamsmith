@@ -11,7 +11,9 @@ P163 F1：只对「由 run-case.sh 清空过、且只跑过一次」的现场出
   * run.json.case / run_id 与现场不符；
   * run.json.mode != verdict（host 路线是人工观察，不作为判据）；
   * run.json.pi_version != 0.99.2（判据版本钉死）；
-  * 判据读的事件文件第一行不是本次 run_start，或文件里出现第二个/别的 run id（跨次累积）；
+  * 判据读的事件文件里 run_start 标记不是**恰好一条**（P197：集合相等会吞掉同 ID 的重复标记），
+    或它不在**第一行**，或它的 run 与 run.json.run_id 不一致（跨次累积）；
+  * run-start.txt 缺 / 空 / 里面的 run= 戳不是本次 run id（P197：P194-F1，单次运行戳必须被核）；
   * 现场里有早于本次运行开始的残留文件（没有清空现场）。
 
 计数沿用 P147/P157：second_received 恰好 1、后台模型请求恰好 1、settle 在收到之后且编辑器为空。
@@ -19,6 +21,7 @@ P163 F1：只对「由 run-case.sh 清空过、且只跑过一次」的现场出
 import json
 import os
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(os.environ.get('P163_EVIDENCE') or pathlib.Path(__file__).resolve().parent.parent)
@@ -29,6 +32,40 @@ SCENE_FILES = ('dev-events.jsonl', 'requests.jsonl')
 def refuse(name, why):
     print(f'judge-second: 拒绝出判据（{name}）：{why}', file=sys.stderr)
     sys.exit(2)
+
+
+def check_single_run_mark(name, rel, lines, run_id):
+    """P197：run_start 标记必须恰好一条、在第一行、且 run == run.json.run_id。
+
+    用集合比较（`sorted({m.get('run') …})`）会把同 ID 的重复标记吞成一条 —— 现场跨次累积
+    最坏的形状恰恰是「同一次运行的标记被追加了第二遍」：必须数**条数**，不是比**集合**。
+    """
+    marks = [(i, json.loads(x)) for i, x in enumerate(lines) if '"run_start"' in x]
+    if len(marks) != 1:
+        refuse(name, f'{rel} 的 run_start 标记 {len(marks)} 条（要求恰好一条）：'
+                    f'{[m.get("run") for _, m in marks]}')
+    idx, mark = marks[0]
+    if idx != 0:
+        refuse(name, f'{rel} 的 run_start 在第 {idx + 1} 行（要求第一行）')
+    if mark.get('run') != run_id:
+        refuse(name, f'{rel} 的 run_start.run={mark.get("run")!r} != run.json.run_id={run_id!r}')
+
+
+def check_run_start_stamp(name, scene, run_id):
+    """P197（P194-F1）：run-start.txt 是 run-case.sh 写给现场的单次运行戳，判据必须核它 ——
+    存在、非空、且里面的 run= 与 run.json.run_id 一致。留一个「看起来是戳、判据却不看」的文件
+    只会让人以为它被检查过。"""
+    stamp = scene / 'run-start.txt'
+    if not stamp.is_file():
+        refuse(name, '缺 run-start.txt（run-case.sh 的单次运行戳；判据不猜）')
+    text = stamp.read_text().strip()
+    if not text:
+        refuse(name, 'run-start.txt 是空的（没有单次运行戳）')
+    m = re.search(r'(?:^|\s)run=(\S+)', text)
+    if not m:
+        refuse(name, f'run-start.txt 里没有 run= 戳：{text!r}')
+    if m.group(1) != run_id:
+        refuse(name, f'run-start.txt run={m.group(1)!r} != run.json.run_id={run_id!r}（不是本次运行的戳）')
 
 
 def load_scene(name):
@@ -60,13 +97,8 @@ def load_scene(name):
         lines = [x for x in p.read_text().splitlines() if x.strip()]
         if not lines:
             refuse(name, f'{rel} 是空的')
-        marks = [json.loads(x) for x in lines if '"run_start"' in x]
-        ids = sorted({m.get('run') for m in marks})
-        if ids != [run['run_id']]:
-            refuse(name, f'{rel} 的单次运行标记={ids}，与 run.json.run_id={run["run_id"]} 不一致（现场跨次累积？）')
-        first = json.loads(lines[0])
-        if first.get('event') != 'run_start' or first.get('run') != run['run_id']:
-            refuse(name, f'{rel} 第一行不是本次 run_start（旧现场或追加写入）')
+        check_single_run_mark(name, rel, lines, run['run_id'])
+    check_run_start_stamp(name, scene, run['run_id'])
     for f in sorted(scene.rglob('*')):
         if f.is_dir() or f == rp:
             continue

@@ -18746,7 +18746,7 @@ else
   ok "P139 55 段收尾：私有 session、假 PM pid 与叫醒进程都已回收"
 fi
 # ---------------------------------------------------------------- 57. P147 delivery-truth
-# 夹具本体是 tests/delivery-truth.sh（七段，全部自带私有临时根与假 tmux，不碰真实 session/进程）：
+# 夹具本体是 tests/delivery-truth.sh（八段，全部自带私有临时根与假 tmux，不碰真实 session/进程）：
 #   frames   真 Pi 0.99.2 帧的闭集矩形 [28 30] + 全部既有帧判定保持 + 红侧影子
 #   drafts   真进程草稿对抗（规则行 / spinner / 页脚克隆 / 光标位置 / 双宽字符 / 裁切 / 半帧）
 #   foreign  宿主 Pi 1.0.0 真帧（框内一行非人类文本）：零按键 / 不丢 / 可见报告；红侧 = 静默报告
@@ -18754,12 +18754,13 @@ fi
 #   receipts held 的原因与非零退出传播（干净框仍确认送达）
 #   notify   收件人文件 / outbox 声明 / wake 全文路径三处同名；写失败非零退出
 #   panel    panel.outbox.impeded/impediments 在 JSON/纯文本/TUI 上只读呈现
+#   judge    判据本体的单次运行戳（P197）：run_start 恰好一条/第一行/与 run.json 一致 + run-start.txt 被核
 section "57 · delivery-truth：真帧几何 / 队列阻碍 / notify 三处同名（P147）"
 if [ -f "$SKILL_DIR/tests/delivery-truth.sh" ]; then
   P147_RC=0
   bash "$SKILL_DIR/tests/delivery-truth.sh" --section all --mutations >"$TMP/p147-delivery-truth.log" 2>&1 || P147_RC=$?
   if [ "$P147_RC" -eq 0 ]; then
-    ok "57 delivery-truth 七段全绿（$(grep -ac '✓' "$TMP/p147-delivery-truth.log" || true) 条断言，$(grep -ac '· skip' "$TMP/p147-delivery-truth.log" || true) 条可见跳过）"
+    ok "57 delivery-truth 八段全绿（$(grep -ac '✓' "$TMP/p147-delivery-truth.log" || true) 条断言，$(grep -ac '· skip' "$TMP/p147-delivery-truth.log" || true) 条可见跳过）"
     grep -aE '^== [0-9]+ .* 结果 ==' "$TMP/p147-delivery-truth.log" | sed 's/^/      /'
   else
     bad "57 delivery-truth 有失败（rc=$P147_RC）"

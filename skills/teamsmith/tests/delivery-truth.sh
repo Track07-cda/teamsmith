@@ -16,6 +16,9 @@
 #   notify   手动通知的三个指针（durable 收件人文件、outbox 声明、wake 全文路径）指向同一文件；
 #            写不进去 → 非零退出、不敲门；自动改名多日志路径仍保留 PM knock
 #   panel    panel.outbox.impeded / impediments 在 JSON / 纯文本 / TUI 上只读呈现，观察不改队列
+#   judge    判据本体（fixtures/delivery-truth-real/judge-second.py）的单次运行戳（P197）：
+#            run_start 恰好一条 / 在第一行 / run 与 run.json 一致；run-start.txt 存在/非空/run= 一致。
+#            合成现场（不跑真 Pi、不进容器）；--mutations 把「恰好一条」影子回旧的集合相等 → 同 ID 重复必须被吞
 #
 # 输出契约：每条断言一行 `✓` / `✗` / `· finding` / `· skip`；段末 `== <n> <段名> 结果 == ✓ x ✗ y`；
 # 有任何 ✗ 时脚本非 0 退出。fixture 全部落在 tmp-root（${TMPDIR:-/tmp}）下，EXIT 时回收。
@@ -42,8 +45,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$SECTION" in
-  frames|drafts|foreign|queue|receipts|notify|panel|all) ;;
-  '') printf 'delivery-truth: 需要 --section <frames|drafts|foreign|queue|receipts|notify|panel|all>\n' >&2; exit 2 ;;
+  frames|drafts|foreign|queue|receipts|notify|panel|judge|all) ;;
+  '') printf 'delivery-truth: 需要 --section <frames|drafts|foreign|queue|receipts|notify|panel|judge|all>\n' >&2; exit 2 ;;
   *) printf 'delivery-truth: 未知段 %s\n' "$SECTION" >&2; exit 2 ;;
 esac
 
@@ -63,6 +66,7 @@ run_section() { # <name>
     receipts) section_receipts ;;
     notify)   section_notify ;;
     panel)    section_panel ;;
+    judge)    section_judge ;;
   esac
 }
 
@@ -1076,8 +1080,148 @@ JSON
   finish "panel"
 }
 
+# ---------------------------------------------------------------- judge（P197：判据的单次运行戳）
+# 判据本体 fixtures/delivery-truth-real/judge-second.py 的红侧，全部用**合成现场**（不跑真 Pi、
+# 不进容器、不碰 tmux）：run_start 标记必须恰好一条 / 在第一行 / run 与 run.json.run_id 一致；
+# run-start.txt 必须存在、非空、run= 与本次 run id 一致。--mutations 把「恰好一条」影子回旧的
+# 集合相等（sorted({…})）→ 同 ID 的重复标记必须被吞成一条（红），证明条数检查是承重的。
+judge_scene() { # <evidence-dir> <case> <run-id>
+  mkdir -p "$1/logs/$2"
+  P197_CASE="$2" P197_RID="$3" python3 - "$1/logs/$2" <<'PY'
+import json, os, pathlib, sys, time
+L = pathlib.Path(sys.argv[1])
+case, rid = os.environ['P197_CASE'], os.environ['P197_RID']
+now = int(time.time())
+mark = {'event': 'run_start', 'run': rid, 'ts': now}
+marker = 'P138-SECOND-' + case
+(L / 'run.json').write_text(json.dumps({
+    'case': case, 'run_id': rid, 'rev': 'HEAD', 'rev_full': '0' * 40,
+    'pi_version': '0.99.2', 'mode': 'verdict', 'started_at': now}, indent=1, sort_keys=True) + '\n')
+(L / 'pi-version.txt').write_text('0.99.2\n')
+(L / 'run-start.txt').write_text(f'P163 case={case} run={rid} mode=verdict runtime=0.99.2\n')
+(L / 'dev-events.jsonl').write_text('\n'.join(json.dumps(x) for x in [
+    mark,
+    {'event': 'message_end', 'ts': now + 1, 'message': {'role': 'user', 'content': [{'type': 'text', 'text': marker}]}},
+    {'event': 'agent_settled', 'ts': now + 2, 'editor': '', 'idle': True}]) + '\n')
+(L / 'pm-events.jsonl').write_text(json.dumps(mark) + '\n')
+(L / 'requests.jsonl').write_text('\n'.join(json.dumps(x) for x in [
+    mark,
+    {'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': marker}]}]}]) + '\n')
+PY
+}
+
+judge_mutate() { # <evidence-dir> <case> <kind>
+  P197_KIND="$3" python3 - "$1/logs/$2" <<'PY'
+import json, os, pathlib, sys
+L = pathlib.Path(sys.argv[1]); kind = os.environ['P197_KIND']
+judged = ('dev-events.jsonl', 'requests.jsonl')   # 判据读的两个事件文件
+if kind in ('dup-same', 'dup-diff'):
+    mark = json.loads((L / 'dev-events.jsonl').read_text().splitlines()[0])
+    if kind == 'dup-diff':
+        mark['run'] = 'ffffffffffff'
+    for rel in judged:
+        (L / rel).write_text((L / rel).read_text() + json.dumps(mark) + '\n')
+elif kind == 'not-first':
+    for rel in judged:
+        lines = (L / rel).read_text().splitlines()
+        (L / rel).write_text('\n'.join(lines[1:2] + lines[0:1] + lines[2:]) + '\n')
+elif kind == 'wrong-run':
+    for rel in judged:
+        lines = (L / rel).read_text().splitlines()
+        mark = json.loads(lines[0])
+        mark['run'] = 'ffffffffffff'
+        lines[0] = json.dumps(mark)
+        (L / rel).write_text('\n'.join(lines) + '\n')
+elif kind == 'no-mark':
+    for rel in judged:
+        lines = (L / rel).read_text().splitlines()
+        (L / rel).write_text('\n'.join(lines[1:]) + '\n')
+elif kind == 'no-stamp':
+    (L / 'run-start.txt').unlink()
+elif kind == 'empty-stamp':
+    (L / 'run-start.txt').write_text('\n')
+elif kind == 'wrong-stamp':
+    (L / 'run-start.txt').write_text('P163 case=x run=ffffffffffff mode=verdict runtime=0.99.2\n')
+else:
+    raise SystemExit(f'unknown mutation {kind}')
+PY
+}
+
+section_judge() {
+  begin "judge（恰好一条 / 第一行 / run 一致 / run-start.txt 被核；红侧标记 5 + 戳 3 + 影子）"
+  local J="$SKILL_DIR/tests/fixtures/delivery-truth-real/judge-second.py"
+  local CASE="tmux-p163-p197-synth" RID="aabbccddeeff" E="$TMP/judge-evidence" M="$TMP/judge-mutations"
+  local rc rc2 out out2 before after miss want
+  if ! command -v python3 >/dev/null 2>&1; then
+    bad "没有 python3：judge 的单次运行戳红侧跑不了（判据本体就是 python）"
+    finish "judge"; return 0
+  fi
+  [ -f "$J" ] || { bad "缺判据本体 $J"; finish "judge"; return 0; }
+
+  judge_red() { # <label> <mutation> <期望子串>…
+    local label="$1" kind="$2"; shift 2
+    local r o miss="" w
+    rm -rf "$M"; mkdir -p "$M"
+    judge_scene "$M" "$CASE" "$RID"
+    judge_mutate "$M" "$CASE" "$kind"
+    o="$(P163_EVIDENCE="$M" python3 "$J" "$CASE" 2>&1)"; r=$?
+    for w in "$@"; do printf '%s' "$o" | grep -qF -- "$w" || miss="$miss「$w」"; done
+    if [ "$r" -eq 2 ] && [ -z "$miss" ]; then
+      ok "红侧 $label：拒绝出判据（rc=2）并点名 $*"
+    else
+      bad "红侧 $label：rc=$r，没点名 $miss：$(printf '%s' "$o" | tail -1)"
+    fi
+  }
+
+  # ① 反向：正常现场照旧出判据（PASS），跑两次逐字节相同，判据不改现场
+  judge_scene "$E" "$CASE" "$RID"
+  before="$(find "$E/logs/$CASE" -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)"
+  out="$(P163_EVIDENCE="$E" python3 "$J" "$CASE" 2>&1)"; rc=$?
+  out2="$(P163_EVIDENCE="$E" python3 "$J" "$CASE" 2>&1)"
+  after="$(find "$E/logs/$CASE" -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)"
+  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^PASS second say delivered'; then
+    ok "反向：正常现场 rc=0 且照旧出 PASS 判据"
+  else
+    bad "正常现场没有 PASS（rc=$rc）：$(printf '%s' "$out" | tail -1)"
+  fi
+  [ "$out" = "$out2" ] && ok "同一现场跑两次：判据输出逐字节相同" || bad "判据输出不确定（两次不同）"
+  [ "$before" = "$after" ] && ok "判据不改现场（跑前跑后文件哈希相同）" || bad "判据改了现场文件"
+
+  # ② 红侧：三条标记红侧（同 ID / 异 ID / 不在第一行）+ run-start.txt 三条（缺 / 空 / 不是本次）
+  judge_red "同 ID 第二个标记" dup-same 'run_start 标记 2 条' "'$RID'"
+  judge_red "异 ID 第二个标记" dup-diff 'run_start 标记 2 条' "'ffffffffffff'"
+  judge_red "标记不在第一行" not-first '在第 2 行'
+  judge_red "标记的 run 不是本次" wrong-run '!= run.json.run_id' "'ffffffffffff'"
+  judge_red "一条标记都没有" no-mark 'run_start 标记 0 条'
+  judge_red "缺 run-start.txt" no-stamp '缺 run-start.txt'
+  judge_red "run-start.txt 为空" empty-stamp '是空的'
+  judge_red "run-start.txt 的 run 不是本次" wrong-stamp '不是本次运行的戳' "'ffffffffffff'"
+
+  # ③ 影子：把「恰好一条」改回集合相等 → 同 ID 重复被吞（PASS）；真判据在同一现场拒绝
+  if [ "$MUTATIONS" = "1" ]; then
+    local SH="$TMP/judge-shadow.py"
+    sed 's/    if len(marks) != 1:/    if sorted({m.get("run") for _, m in marks}) != [run_id]:/' "$J" > "$SH"
+    if ! grep -qF 'sorted({m.get("run") for _, m in marks}) != [run_id]' "$SH"; then
+      bad "影子没生效：判据里「恰好一条」那一行的形状变了（影子 sed 要跟着改）"
+    else
+      rm -rf "$M"; mkdir -p "$M"; judge_scene "$M" "$CASE" "$RID"; judge_mutate "$M" "$CASE" dup-same
+      out="$(P163_EVIDENCE="$M" python3 "$SH" "$CASE" 2>&1)"; rc=$?
+      out2="$(P163_EVIDENCE="$M" python3 "$J" "$CASE" 2>&1)"; rc2=$?
+      if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^PASS'; then
+        [ "$rc2" -eq 2 ] && ok "影子（集合相等）：同 ID 重复被吞 → PASS；真判据同时拒绝 —— 条数检查是承重的" \
+          || bad "真判据在影子现场没有拒绝（rc=$rc2）：红侧没钉住"
+      else
+        bad "影子没有吞掉同 ID 重复（rc=$rc）：这条红侧不是由「恰好一条」决定的"
+      fi
+    fi
+  else
+    skipnote "judge 的影子 mutation（--mutations 才跑）"
+  fi
+  finish "judge"
+}
+
 if [ "$SECTION" = "all" ]; then
-  for s in frames drafts foreign queue receipts notify panel; do run_section "$s"; done
+  for s in frames drafts foreign queue receipts notify panel judge; do run_section "$s"; done
 else
   run_section "$SECTION"
 fi

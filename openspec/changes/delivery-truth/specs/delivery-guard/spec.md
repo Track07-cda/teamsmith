@@ -38,7 +38,7 @@ The obstructing command SHALL print `held`, the reason and the recovery command 
 ### Requirement: An automated send never types into a non-empty input box
 
 Every sender that would type into a TUI input box (`team say`'s pane delivery, `team notify`'s pane delivery, the
-watchdog wake line, the notify extension's knock) SHALL locate the target pane's input box from the captured pane
+watchdog wake line, the notify extension's knock, the meeting knock) SHALL locate the target pane's input box from the captured pane
 and, when the box holds text, MUST send no key at all — neither the payload nor an `Enter`; it MUST hold the message
 in `state/outbox/` instead. The check MUST be cursor-anchored (the box is not pinned to the pane bottom, so the
 top/bottom borders are found from the cursor row), and the border pairing MUST reject rule-looking rows that
@@ -243,6 +243,14 @@ For a supported Pi layout, the candidate domain SHALL be a closed editor rectang
   `idle-read=EMPTY`)
 - **AND** with the status-row predicate shadowed to the legacy "always chrome" behaviour in the probe process, the
   draft frame flips back to `EMPTY` in both paths — proving they share the predicate instead of re-implementing it
+
+#### Scenario: A meeting knock never lands on a draft
+
+- **GIVEN** a fixture peer pane whose input box holds the draft `half a sentence`, and a meeting whose peer row
+  resolves to that pane with `TEAM_MEETING_KNOCK=1`
+- **WHEN** `team meeting say <slug> --intent info "…" --knock` runs
+- **THEN** the pane still shows exactly that draft and no `Enter` was sent, and the sender's `state/outbox/` holds
+  exactly one entry whose payload is the `[meeting:<slug>] …` notice
 
 ### Requirement: Delivery is confirmed by the pane, and a queued message is reported as queued
 

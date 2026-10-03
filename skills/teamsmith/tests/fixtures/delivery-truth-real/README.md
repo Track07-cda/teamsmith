@@ -8,7 +8,7 @@
 |---|---|---|
 | `scenario.sh` | `docs/team/reports/P157-verify/pkg/scenario.sh` `3fa9d3d6…` | 改：读 `run.json` 运行戳 + 在判据读的事件文件第一行写单次 `run_start` 标记 |
 | `run-case.sh` | `docs/team/reports/P157-verify/pkg/run-case.sh` `167c474c…` | 改：case 名 `*-p163-*`、现场强制重置 + `run.json`、变量名 `P163_EVIDENCE`、版本路线 0.99.2/host |
-| `judge-second.py` | `docs/team/reports/P157-verify/pkg/judge-second.py` `e6735be5…` | 改：严格单次运行校验（缺戳 / 多 run 标记 / 有旧文件 / observation 一律拒绝） |
+| `judge-second.py` | `docs/team/reports/P157-verify/pkg/judge-second.py` `e6735be5…` | 改：严格单次运行校验（缺戳 / 多 run 标记 / 有旧文件 / observation 一律拒绝）；P197 起标记必须**恰好一条**（集合相等会吞掉同 ID 的重复）且在**第一行**，`run-start.txt` 必须存在/非空/`run=` 与 `run.json` 一致 |
 | `mock-server.py` | `docs/team/reports/P157-verify/pkg/mock-server.py` `629963db…` | 逐字相同（回环 mock 模型，`--network=none`） |
 | `observe.ts` | `docs/team/reports/P157-verify/pkg/observe.ts` `3bab2cb4…` | 逐字相同（把 pane 帧/事件写成 jsonl 证据） |
 
@@ -16,6 +16,10 @@
 
 - **判据路线 = 容器里的 Pi `0.99.2`**，由 `run-case.sh` 默认并校验（`$E/.runtime` 挂只读进容器）；
   `judge-second.py` 也要求 `run.json.pi_version=0.99.2`、现场 `pi-version.txt=0.99.2`。
+- **单次运行的三重钉（P197）**：判据读的每个事件文件里 `run_start` 必须**恰好一条**、在**第一行**、
+  且 `run` 等于 `run.json.run_id`；`run-start.txt` 必须存在、非空、`run=` 与 `run.json.run_id` 一致。
+  数条数而不是比集合 —— 同 ID 的第二个标记正是「现场跨次累积」最坏的形状。红侧见
+  `delivery-truth.sh --section judge`（含把「恰好一条」影子回集合相等的变异）。
 - **宿主路线（当前 Pi 1.0.0）仅供人工观察**：`run-case.sh … host` 会把 `run.json.mode` 写成
   `observation`，并在终端打印醒目提示；`judge-second.py` **拒绝**给这种现场出判据（exit 2）。
   为什么：宿主 1.0.0 会把夹具自己那条 git 命令的错误行（`fatal: no upstream configured …`）画进输入框，

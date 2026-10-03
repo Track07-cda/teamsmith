@@ -3,7 +3,8 @@
 #
 # P163：从 P147/P157 的授权配方提升进夹具。两处有意改动（P163 的两条 finding）：
 #   ① 现场单次性：读 run-case.sh 写的 run.json 运行戳，并在每个判据读的事件文件第一行写
-#      run_start 标记；judge-second.py 靠这两样拒绝旧现场 / 跨次累积的现场。
+#      run_start 标记；judge-second.py 靠这一对证据（+ run-start.txt 单次运行戳，P197）拒绝旧现场 /
+#      跨次累积的现场。
 #   ② 版本透传：P163_MODE/P163_PI_VERSION 由 run-case.sh 决定（host = 人工观察，judge 拒绝出判据）。
 set -euo pipefail
 [ "${P138_CONTAINER:-}" = 1 ] || { echo 'refused: container only'; exit 64; }
