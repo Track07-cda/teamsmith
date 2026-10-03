@@ -7076,7 +7076,7 @@ assert_has "$TMP/ob-dup2.log" "duplicate" "12b-d 同键不同正文也算重复�
 # TTL：脏框 + TEAM_DEFER_TTL=1 → 排水时转 held，一个键都不打
 ob_reset; OB_BOX="$TMP/ob-box-draft"
 printf 'held body\n' > "$TMP/ob-held.txt"
-ob_run env OB_BOX="$OB_BOX" $TEAM notify pm --from-file "$TMP/ob-held.txt" >/dev/null 2>&1 || true   # PM 没在跑：只落收件箱
+ob_run env OB_BOX="$OB_BOX" $TEAM notify pm --from pm --from-file "$TMP/ob-held.txt" >/dev/null 2>&1 || true   # PM 没在跑：只落收件箱（P201：主检出里显式声明发送者，假 tmux 报的窗口名不作数）
 ob_run env OB_BOX="$OB_BOX" $TEAM outbox enqueue --kind notify --target "$SESSION:pm" --from dev --payload 'held body' >/dev/null 2>&1
 sleep 2
 ob_run env OB_BOX="$OB_BOX" TEAM_DEFER_TTL=1 $TEAM outbox flush >"$TMP/ob-ttl.log" 2>&1 || true
@@ -8115,7 +8115,7 @@ ob_reset; piw_reset
 piw_reg pi-pm "$SESSION:pm" pm
 printf 'M30-PI-KNOCK summary\n' > "$TMP/pi-knock.txt"
 : > "$TMP/ob-calls.log"
-ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM notify pm --from-file "$TMP/pi-knock.txt" >"$TMP/pi-knock.log" 2>&1 || true
+ob_run env OB_BOX="$TMP/ob-box-draft" $TEAM notify pm --from pm --from-file "$TMP/pi-knock.txt" >"$TMP/pi-knock.log" 2>&1 || true
 assert_has "$TMP/pi-knock.log" "pi 监视通道" "12b-pi notify：走 pi 通道"
 assert_not "$TMP/pi-knock.log" "不在 tmux 会话里" "12b-pi notify：pi 通道不吃「不在 tmux 里」那条门（它不需要 tmux）"
 assert_not "$TMP/pi-knock.log" "PM 不在运行" "12b-pi notify：注册（pid+cwd）本身就是 PM 活着的证据"
@@ -17099,6 +17099,8 @@ assert_eq "P86 ③ 全部帧：相对最近的旧顺序也没有 BUSY→EMPTY" "
 # 本段钉住四条：显式 --from ＞ 运行时目录（主工作树 → pm；.worktrees/<name> → 目录名，含子目录）
 # ＞ 未解析 = 拒绝（非 0 + 零收件箱行 + 零 knock，输出点名 --from）；TEAM_AGENT 不许压过目录；
 # 收件人仍然只是收件人（文件名 + 敲门目标）。两条路同源（[auto] 由扩展负责）在 3.x 的对手段落里。
+# P201（本段末尾）：主工作树那一格不再是「无条件 pm」——主检出 + 本名册的席位线索（窗口名 / TEAM_AGENT）
+# 必须**拒绝**，只有无线索的主检出才是 PM 自己（P155 实测的缺陷：席位的活被静默记成 agent:pm）。
 section "47 · P82 notify 发送者 = 运行时目录（notify-sender-identity）"
 
 P82R="$TMP/p82repo"; rm -rf "$P82R"; mkdir -p "$P82R"
@@ -17317,6 +17319,93 @@ EOS
   assert_not_file "$P82R/docs/team/inbox/dev.md" "P82 3.2 窗口名没有变成发送者（不存在 inbox/dev.md）"
   assert_has "$P82_EXT_LOG" "window dev ignored: the runtime directory names dev2" "P82 3.2 扩展日志点名被忽略的窗口"
 fi
+
+# ── P201 · 主检出 + 席位线索 = 拒绝（P155 实测的缺陷；实现：skills/teamsmith/scripts/lib/common.sh 的
+# team_sender_resolve / team_sender_seat_clues）──────────────────────────────────────────────────
+# 现场：worker 的 cwd 落在**主检出**里时，旧的 team_sender_from_dir 直接返回 pm —— 不看任何会话线索、
+# 零告警，与 PM 自己的合法调用逐字节相同（账本记的是**作者** ⇒ 这会把席位的活记成 PM）。
+# 红侧判据：① 主检出 + 窗口 dev（本会话的名册席位）→ 非 0 + 零写入 + 点名目录说 pm / 线索说 dev +
+# 两条出路；② 主检出 + TEAM_AGENT=dev → 同样拒绝；③ 反向：主检出 + 窗口 pm / 无线索 / **别的会话**里的
+# 同名窗口 → 照旧 pm（不许误伤 PM 自己的调用，也不把别的会话的窗口当成本项目的席位）。
+# 窗口名必须问**调用者自己那块 pane**（-t $TMUX_PANE）：无目标的 display-message 回答的是 attached
+# client 的当前窗口（tmux 3.7c 实测：dev2 pane 里问出来 pm）—— 夹具只回答带 -t %4242 的查询，
+# 所以“回到无目标形态”这种回归会把 ①② 打红（回声不算线索）。
+P201_SHIM="$TMP/p201-shim"; mkdir -p "$P201_SHIM"
+P201_LOG="$TMP/p201-tmux.log"; : > "$P201_LOG"
+printf '%s\n' "$P82_SES" > "$TMP/p201-session"
+printf 'dev\n' > "$TMP/p201-window"
+cat > "$P201_SHIM/tmux" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$P201_LOG"
+case "\$*" in *display-message*) ;; *) exit 0 ;; esac
+# 只回答「问到调用者自己那块 pane」（-t \$TMUX_PANE）的查询：无目标 / 问别的 pane = 不回答。
+case "\$*" in *"-t %4242"*) ;; *) exit 0 ;; esac
+case "\$*" in
+  *window_name*)  cat "$TMP/p201-window" ;;
+  *session_name*) cat "$TMP/p201-session" ;;
+esac
+exit 0
+EOF
+chmod +x "$P201_SHIM/tmux"
+P201_SUM="$TMP/p201-sum.txt"; printf 'P201-SUMMARY\n' > "$P201_SUM"
+# p201 <cwd> <窗口名|-> <会话名|-> <TEAM_AGENT|-> <日志> <team 参数…>：清掉继承身份；给了会话就带 shim
+p201() {
+  local cwd="$1" win="$2" ses="$3" agent="$4" log="$5"; shift 5
+  [ "$win" = "-" ] || printf '%s\n' "$win" > "$TMP/p201-window"
+  [ "$ses" = "-" ] || printf '%s\n' "$ses" > "$TMP/p201-session"
+  local -a E=(env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT -u TEAM_SKILL_DIR)
+  if [ "$ses" = "-" ]; then E+=(-u TMUX -u TMUX_PANE)
+  else E+=("PATH=$P201_SHIM:$PATH" "TMUX=$ses,0,0" "TMUX_PANE=%4242"); fi
+  [ "$agent" = "-" ] || E+=("TEAM_AGENT=$agent")
+  ( cd "$cwd" && "${E[@]}" TEAM_NOTIFY_TMUX=0 $TEAM "$@" ) >"$log" 2>&1
+}
+p201_last() { tail -1 "$P82_INBOX" 2>/dev/null | sed 's/.*\[manual\] //; s/ · task=[^ ]* tip=[0-9a-f]*$//'; }
+p201_ck() { cksum "$P82_INBOX" 2>/dev/null | awk '{print $1":"$2}'; }
+p201_outbox_n() { find "$P82R/.pi/team/state/outbox" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l | tr -d ' '; }
+
+# ① 主检出 + 窗口 dev（本会话的名册席位）→ 拒绝
+rm -rf "$P82R/.pi/team/state/outbox"; : > "$P82_INBOX"; : > "$P201_LOG"
+P201_B="$(p201_ck)"
+if p201 "$P82R" dev "$P82_SES" - "$TMP/p201-1.log" notify pm --from-file "$P201_SUM"; then
+  bad "P201 ① 主检出 + 窗口 dev 应当拒绝（当前退出码 0）"
+else
+  ok "P201 ① 主检出 + 窗口 dev → 非 0 退出（不猜）"
+fi
+assert_eq "P201 ① 拒绝时零写入：收件箱逐字节不变" "$(p201_ck)" "$P201_B"
+assert_eq "P201 ① 拒绝时零 knock：队列里没有条目" "$(p201_outbox_n)" "0"
+assert_has "$TMP/p201-1.log" "目录说 'pm'" "P201 ① 拒绝输出点名目录说的名字（pm）"
+assert_has "$TMP/p201-1.log" "窗口名 'dev'" "P201 ① 拒绝输出点名线索说的名字（dev）"
+assert_has "$TMP/p201-1.log" "--from" "P201 ① 拒绝输出给出出路：--from"
+assert_has "$TMP/p201-1.log" "worktree" "P201 ① 拒绝输出给出出路：从自己的 worktree 调用"
+assert_has "$P201_LOG" "-t %4242" "P201 ① 窗口名问的是调用者自己那块 pane（-t \$TMUX_PANE，不是回声）"
+assert_not "$TMP/p201-1.log" "agent:pm" "P201 ① 没有把作者记成 pm 的假声明"
+
+# ② 主检出 + 继承的 TEAM_AGENT=dev → 同样拒绝（线索不要求 tmux）
+: > "$P82_INBOX"
+P201_B2="$(p201_ck)"
+if p201 "$P82R" - - dev "$TMP/p201-2.log" notify pm --from-file "$P201_SUM"; then
+  bad "P201 ② 主检出 + TEAM_AGENT=dev 应当拒绝（当前退出码 0）"
+else
+  ok "P201 ② 主检出 + TEAM_AGENT=dev → 非 0 退出"
+fi
+assert_eq "P201 ② 拒绝时零写入：收件箱逐字节不变" "$(p201_ck)" "$P201_B2"
+assert_has "$TMP/p201-2.log" "目录说 'pm'" "P201 ② 拒绝输出点名目录说的名字（pm）"
+assert_has "$TMP/p201-2.log" "TEAM_AGENT 'dev'" "P201 ② 拒绝输出点名线索说的名字（TEAM_AGENT dev）"
+
+# ③ 反向：不许误伤 PM 自己的调用（窗口 pm / 无线索 / 别的会话的同名窗口都照旧 pm）
+p201 "$P82R" pm "$P82_SES" - "$TMP/p201-3a.log" notify pm --from-file "$P201_SUM" \
+  && ok "P201 ③ 主检出 + 窗口 pm → 退出码 0（PM 自己的通知照旧）" \
+  || bad "P201 ③ 主检出 + 窗口 pm 被误拒（窗口 pm 与目录一致）"
+assert_eq "P201 ③ 窗口 pm 与目录一致 → 发送者仍是 pm" "$(p201_last)" "agent:pm · P201-SUMMARY"
+: > "$P82_INBOX"
+p201 "$P82R" - - - "$TMP/p201-3b.log" notify pm --from-file "$P201_SUM" \
+  && ok "P201 ③ 主检出 + 无线索 → 退出码 0" || bad "P201 ③ 主检出 + 无线索被误拒"
+assert_eq "P201 ③ 无线索的主检出照旧记 pm" "$(p201_last)" "agent:pm · P201-SUMMARY"
+: > "$P82_INBOX"
+p201 "$P82R" dev "p201-foreign-$$" - "$TMP/p201-3c.log" notify pm --from-file "$P201_SUM" \
+  && ok "P201 ③ 别的会话里的窗口 dev → 退出码 0（同名窗口不是本项目的席位）" \
+  || bad "P201 ③ 别的会话的同名窗口被当成本项目席位（误拒）"
+assert_eq "P201 ③ 别的会话 → 照旧记 pm" "$(p201_last)" "agent:pm · P201-SUMMARY"
 
 section "48 · P91 合并后的「分支又动了」核对（D49 的另一半）"
 # 事实（D49，2026-09-22）：P82 被 squash 合并（16 个提交）之后，作者又在分支上提交了两条**只动记录**

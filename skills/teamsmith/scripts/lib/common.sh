@@ -647,6 +647,8 @@ team_identity_env_prefix() { # [<目标目录>]
 # 所以：解析不出来**拒绝**，绝不静默退回 `pm`。规则只在这两个函数里实现一处：
 #   --from <名字>（显式声明，原样记录）＞ 运行时目录（M40 身份；主工作树 → pm，
 #   <main>/<worktrees>/<name> → <name>，在它的子目录里跑也算）＞ 未解析（调用方负责拒绝）。
+# P201：主工作树那一格不再是「无条件 pm」——主检出里出现本名册的席位线索时**拒绝**（见下面
+# team_sender_seat_clues 的头注）；只有无线索的主检出才是 PM 自己。
 # 收件人**永远只是收件人**（收件箱文件名 + 敲门目标）。
 
 # 运行时目录 → 座位名；推不出来 → 空（stdout）。
@@ -674,6 +676,42 @@ team_sender_from_dir() { # → stdout: <座位名> | 空
   printf '%s\n' "$n"
 }
 
+# P201 · 主检出的**席位线索**：只许**否决**目录的 `pm` 声明，绝不自行成为发送者。
+# 事故（P155 实测）：worker 的 cwd 落在**主检出**里时（例如去主树里跑一条命令），旧的
+# team_sender_from_dir 直接返回 `pm` —— 不看任何会话线索、零告警，和 PM 自己的合法调用逐字节相同。
+# 账本记的是**作者**：「目录赢」是 M40 给读/状态命令的规矩，用在署名上会把席位的活记成 PM。
+# 线索清单（都只认**本名册**里的名字；非名册的名字一律不是线索）：
+#   ① 调用者自己那块 pane 的窗口名 —— 必须 `-t $TMUX_PANE` 问它**自己**：不带目标的
+#      display-message 回答的是 attached client 的当前窗口（tmux 3.7c 实测：从 dev2 pane 里问出来
+#      `pm`，那是回声不是线索）；而且窗口名只在 pane 的会话就是本项目会话（TEAM_SESSION）时算数 ——
+#      别的会话里的同名窗口不是本项目的席位（扩展的 [auto] 路径 P82 起就是这条口径）。
+#   ② 继承来的 TEAM_AGENT。
+# 线索只在「目录声称 pm（主检出）」时起作用，作用只有一个：**拒绝**（判不出来时不猜 —— P82/哲学：
+# 假绿比没有更糟）。有线索的席位要署自己的名，两条出路：从自己的工作树里调用，或显式 --from。
+team_sender_is_main_checkout() { # 运行时目录是不是主检出（与 team_sender_from_dir 的 pm 分支同一判据）
+  local nroot nmain
+  nroot="$(team_identity_norm_dir "${TEAM_ROOT:-}")"
+  nmain="$(team_identity_norm_dir "${TEAM_MAIN_ROOT:-}")"
+  [ -n "$nroot" ] || return 1
+  [ "$nroot" = "$nmain" ]
+}
+
+team_sender_seat_clues() { # → stdout: "<来源>\t<名字>" 每行一个；无线索 → 空
+  local a w s pane="${TMUX_PANE:-}"
+  if [ -n "$pane" ] && [ -n "${TMUX:-}" ] && team_have_cmd tmux; then
+    w="$(tmux display-message -p -t "$pane" '#{window_name}' 2>/dev/null || true)"
+    s="$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null || true)"
+    w="$(team_trim "$w")"; s="$(team_trim "$s")"
+    if [ -n "$w" ] && [ -n "$s" ] && [ "$s" = "${TEAM_SESSION:-}" ] && team_agent_known "$w"; then
+      printf '窗口名\t%s\n' "$w"
+    fi
+  fi
+  a="${TEAM_AGENT:-}"
+  if [ -n "$a" ] && team_agent_known "$a"; then
+    printf 'TEAM_AGENT\t%s\n' "$a"
+  fi
+}
+
 # 一次解析出**发送者**（收件人不是发送者）。显式 --from ＞ 运行时目录 ＞ 拒绝。
 # 拒绝 = 返回 1（调用方必须在此之后**什么都不写**：不收件箱行、不入队 knock），错误里点名 --from。
 team_sender_resolve() { # [<显式 --from>] → stdout:<发送者>；1 = 未解析（已打错误）
@@ -693,6 +731,22 @@ team_sender_resolve() { # [<显式 --from>] → stdout:<发送者>；1 = 未解�
     team_dim "  发送者按运行时目录解析，绝不用收件人冒充；这里没有任何东西被写入。" >&2
     team_dim "  从别处调用请显式声明发送者：$TEAM_CLI notify <收件人> --from <你的名字> --from-file <摘要文件>" >&2
     return 1
+  fi
+  # P201：主检出（目录声称 pm）+ 本名册的席位线索 → **拒绝**（不猜）。谁是作者判不出来：
+  # 按目录记 pm 会把席位的活记成 PM，按线索记又会把可改的 UI 状态/继承值当成身份（P82 已否决）。
+  if [ "$dir" = "pm" ] && team_sender_is_main_checkout; then
+    local src name conflicts=""
+    while IFS=$'\t' read -r src name; do
+      [ -n "$name" ] || continue
+      [ "$name" = "pm" ] && continue
+      conflicts="${conflicts:+$conflicts、}$src '$name'"
+    done < <(team_sender_seat_clues)
+    if [ -n "$conflicts" ]; then
+      team_err "notify：发送者冲突 —— 目录说 'pm'（运行时目录是主检出），线索说 $conflicts"
+      team_dim "  账本记的是作者：主检出里按目录署 'pm' 会把席位的活记成 PM，所以这里拒绝而不是猜。" >&2
+      team_dim "  两条出路：① 从自己的 worktree（$TEAM_MAIN_ROOT/${TEAM_WORKTREES_DIR:-.worktrees}/<你的名字>）里调用；② 显式声明发送者：$TEAM_CLI notify <收件人> --from <你的名字> --from-file <摘要文件>" >&2
+      return 1
+    fi
   fi
   # 继承来的 TEAM_AGENT（dispatch/install 都不设它）绝不许压过运行时目录 —— 分歧点名，目录赢
   if [ -n "${TEAM_AGENT:-}" ] && [ "$TEAM_AGENT" != "$dir" ]; then

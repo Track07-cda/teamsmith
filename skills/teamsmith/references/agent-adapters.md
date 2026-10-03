@@ -278,10 +278,26 @@ arguments and no quotes**.
 caller's runtime context: an explicit `--from <name>` claim wins (recorded verbatim; a disagreement with the
 runtime directory is named on stderr), otherwise the runtime directory — the project's main worktree resolves to
 `pm`, and a worktree under the main worktree's worktrees directory resolves to its own directory name, also when
-the command runs in one of its subdirectories. An inherited `TEAM_AGENT` never overrides the runtime directory.
-If neither names a sender the call **refuses** (non-zero, no inbox line, no knock) and names `--from`; a worker's
-notification is never recorded as `pm`. The same name appears on the durable inbox line, in the knock text and in
-the queued entry's `from:` field.
+the command runs in one of its subdirectories.
+
+The main worktree is the PM's **only when nothing says otherwise**. Because the ledger records the **author**, a
+call from the main worktree that carries a seat clue is **refused** instead of being recorded as `pm` (P201): it
+exits non-zero, writes nothing (no inbox line, no knock) and names both the directory's `pm` and the clue, plus
+the two ways out — state the sender with `--from <your name>`, or run the command from your own worktree. A
+clue is a name from this project's roster (`TEAM_AGENTS`); anything else is not a clue. The clue list:
+
+1. the window name of the caller's **own pane** — read with
+   `tmux display-message -p -t "$TMUX_PANE" '#{window_name}'`, and only when that pane's session is this
+   project's `TEAM_SESSION`. Asking without `-t` answers the attached client's current window instead (measured
+   on tmux 3.7c: from a `dev2` pane that returns `pm`), which is an echo, not evidence; a window in another
+   session is not this project's seat window either.
+2. an inherited `TEAM_AGENT`.
+
+Clues never *become* the sender — the window name is mutable UI state and an inherited value can be stale, so a
+clue only vetoes the directory's `pm` claim. On a worktree the runtime directory wins outright, and a
+disagreeing `TEAM_AGENT` is named on stderr. If neither names a sender the call **refuses** (non-zero, no inbox
+line, no knock) and names `--from`; a worker's notification is never recorded as `pm`. The same name appears on
+the durable inbox line, in the knock text and in the queued entry's `from:` field.
 
 Dispatch **warns but never blocks** when `TEAM_AGENT_NOTIFY_CMD` looks unusable (unknown placeholder, newline,
 whitespace-only, unexecutable first word) — that is the M3.0 contract. When that happens the prompt section is
