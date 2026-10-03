@@ -98,17 +98,26 @@ Guards and limitations:
     reached. One `stop` line lands in `state/bg.log`; exit codes are 0 stopped-or-already-gone / 2 usage /
     3 no record / 4 malformed record / 5 identity mismatch / 6 still alive. Every refusal signals nothing, and the
     lane never searches by name, command line, process tree, another worktree or another project.
-  - **The signal gate** (P159; the shape behind D37/D57/D72): the launch prefix puts `scripts/shim` first on a
-    window's `PATH`, where `pkill` and `killall` are the gate. It refuses **every** selecting form (`-f`, `-x`,
-    `-P`, `-u`, `killall <name>`, and any inherited environment token) with exit 64, prints why a name or a
-    command-line pattern is not an identity, and names the safe routes (`team bg list`, `team bg stop <id>`,
-    `kill <recorded pid>`); the read-only forms `--help`/`-h`/`-V`/`--version` pass through to the real executable,
-    and a refusal resolves and executes nothing. It deliberately does **not** wrap `kill`, `pgrep`, `ps` or `pidof`
-    (at exec time `kill $(pgrep -f x)` and `kill $(cat job.pid)` are the same four words), so absolute paths and
-    shells without the gate directory first stay outside its reach — that half is held by the static lint over the
-    repository's own scripts and fixtures (`tests/signal-lint.pl`: red on a name/pattern selection, clean on
-    `kill "$pid"`). Every intercepted call appends one line to `state/signal-calls.log` (`TEAM_SIGNAL_CALLS_LOG`),
-    and a refusal is also copied byte for byte into `<log>.forensics` so it outlives the call log's rotation.
+  - **The signal gate** (P159/P167; the shape behind D37/D57/D72): the launch prefix puts `scripts/shim` first on a
+    window's `PATH`, where `pkill`, `killall`, `pgrep` and `pidof` are the gate. It classifies the **whole argv**,
+    never the presence of one flag. `pkill` and `killall` refuse every selecting form (`-f`, `-x`, `-P`, `-u`,
+    `killall <name>`). `pgrep` passes only two explicit positive scalar IDs (`-g N`, `-P N`) and the three
+    full-command count spellings (`-fc P`, `-f -c P`, `-c -f P`) that return a number rather than a PID list;
+    `pidof` selects by name by definition, so only its informational token passes. Everything else is refused with
+    exit 64 and an empty stdout — default name selection, a PID-producing pattern, owner selection (`-u`/`-U`/`-G`),
+    zero or implicit IDs, lists, inversion, added predicates, unrecognised spellings, `pidof` selection, and any
+    inherited environment token. A refusal prints the tool, its full argv, why a name or a command-line pattern is
+    not an identity, and the safe routes (`team bg list`, `team bg stop <id>`, `kill <recorded pid>`), and it
+    resolves and executes nothing. An allowed call passes through to the real executable of the **same name** —
+    the inherited `TEAM_SIGNAL_REAL` pin, normally the real `pkill`, never routes a `pgrep`/`pidof` call — with
+    argv, stdout, stderr and exit status preserved. A `-g`/`-P` query is a diagnostic, not proof: the PIDs it
+    prints were not recorded by any spawner, and a count is not a PID, so neither is signalling authority. The gate
+    deliberately does **not** wrap `kill`, `ps` or `fuser`, and it is a `PATH` shim: absolute paths
+    (`/usr/bin/pgrep`), a shell without the gate directory first, shell functions and any other source of a PID
+    list stay outside its reach. That half is held by the static lint over the repository's own scripts and
+    fixtures (`tests/signal-lint.pl`: red on a name/pattern selection, clean on `kill "$pid"`). Every intercepted
+    call appends one line to `state/signal-calls.log` (`TEAM_SIGNAL_CALLS_LOG`), and a refusal is also copied byte
+    for byte into `<log>.forensics` so it outlives the call log's rotation.
 
 ## 5. Task briefs: written for "a weak model without context"
 
