@@ -2,7 +2,8 @@
 # teamsmith · 后台作业车道：按**记录过的 pid** 看/停作业（P159 · safe-signal-discipline）
 #
 #   team bg list        读本项目 state 目录（$TEAM_STATE_DIR/bg/*.job）里的作业记录，一行一个作业；
-#                       **不发任何信号**；记录里的身份（pid + 启动时间指纹）成不成立逐行标出。
+#                       **不发任何信号**；判定与 `bg stop` **完全同源**（同一个 team_bg_check_record）——
+#                       不可用时标 identity=unusable / mismatch，并打出与 stop **同一句**原因；
 #                       只认本项目 bg 目录里的**正规文件**：软链、FIFO/设备/目录不列（越界的记录不在视图里）。
 #   team bg stop <id>   只停这个 id 记录到的那一个作业：先证明 id/记录/身份都成立，再发信号；
 #                       每次拒绝都**什么都没发**。
@@ -17,6 +18,10 @@
 # 目录边界（P187 · F1'，CRITICAL）：bg 目录**自身**（realpath 后）必须落在本项目的 state 目录里 ——
 # `state/bg` 被指到别处时，「记录在 bg 目录内」会自洽地成立，于是兄弟项目的记录借道进来；所以
 # **解析记录之前**先证目录，读写两侧（list/stop）同一条规则，不成立 → rc=4 并点名解析目标。
+#
+# 读面 == 写面（P195 · F1）：`bg list` 与 `bg stop` 调**同一个** team_bg_check_record —— 平坦 id、
+# 记录的位置与类型、pid/pgid 形状、启动指纹、实时进程组，只有这一处判定。读面**没有**自己的检查，
+# 所以它不会说「成立」而写面拒绝；原因句是两侧打印的**同一个字符串**（TEAM_BG_REASON）。
 #
 # 退出码（机器契约）：
 #   0 已停 / 进程早就不在（什么都没发）｜2 用法（含 job id 不是平坦名字）｜3 本项目 state 里没有这个 id 的记录
@@ -103,9 +108,80 @@ team_bg_ledger() { # <id> <signal> <result> <pid> <pgid>
   return 0
 }
 
-# ── list：只读本项目 state 目录里的记录，一行一个作业 ────────────────────────────────────────────
+# ── 记录判定：**唯一一份**（P195 · F1）─────────────────────────────────────────────────────
+# `bg list` 与 `bg stop` 都调这一个函数 —— 读面没有自己的判断，于是两侧不可能分叉（P169/P187 立的
+# 「stop 与 list 一条规则」在身份这一层收口）。判定顺序：一步拒绝之后不再往下猜。
+#   ① bg 目录自身解析在项目 state 内（P187）
+#   ② id 是平坦名字 + 记录是本项目 bg 目录里的正规文件（P169）
+#   ③ 记录读得开
+#   ④ pid / pgid 是正整数、start 指纹在场（畸形 → 4）
+#   ⑤ pid 活着（不在 → gone：写面 rc=0，什么都没发）
+#   ⑥ 启动时间指纹一致 ⑦ 实时进程组 == 记录的 pgid（不一致 → mismatch：写面 rc=5）
+# 出口：0 可收（holds/gone）｜2 id 不是平坦名字｜3 没有记录｜4 记录畸形/读不了｜5 身份对不上。
+# 出口变量（读面渲染 / 写面执行）：TEAM_BG_VERDICT（holds|gone|unusable|mismatch，词表封闭）、
+#   TEAM_BG_REASON（人话理由 —— **读写两侧打印的是同一个字符串**）、TEAM_BG_PID/PGID/START/CMD。
+team_bg_check_record() { # <id> <bg-dir>
+  local _id="$1" _d="$2" _drc=0 _rrc=0 _f="" pid pgid start now_start now_pgid
+  TEAM_BG_VERDICT="unusable"; TEAM_BG_REASON=""
+  TEAM_BG_PID=""; TEAM_BG_PGID=""; TEAM_BG_START=""; TEAM_BG_CMD=""
+
+  # ① 目录边界（P187）：bg 目录自身在项目 state 内，才谈它里面的记录
+  team_bg_dir_resolve "$_d" >/dev/null || _drc=$?
+  case "$_drc" in
+    0) ;;
+    1) TEAM_BG_REASON="bg 目录 $_d 还不存在 —— 没有记录可谈"; return 3 ;;
+    *) TEAM_BG_REASON="state/bg 目录自身解析到了本项目 state 之外（$_d → $(realpath -- "$_d" 2>/dev/null || printf '解析不了')）—— 记录畸形，什么都没发"; return 4 ;;
+  esac
+  # ② 状态边界（P169）：平坦 id + 正规记录且解析后仍在 bg 目录里
+  _f="$(team_bg_record_resolve "$_id" "$_d")" || _rrc=$?
+  case "$_rrc" in
+    0) ;;
+    1) TEAM_BG_REASON="本项目 state 里没有作业 '$_id' 的记录（找过：$_d/$_id.job）—— 不按名字/命令行/进程树找进程"; return 3 ;;
+    2) TEAM_BG_REASON="job id '$_id' 不是平坦名字（只允许 [A-Za-z0-9._-]、长度 ≤ $TEAM_BG_ID_MAX）—— id 没有路径语义，什么都没发"; return 2 ;;
+    *) TEAM_BG_REASON="'$_d/$_id.job' 不是本项目 bg 目录里的正规记录（软链 / FIFO / 设备 / 目录，或解析后落在目录外）—— 记录畸形，什么都没发"; return 4 ;;
+  esac
+  # ③ 读得开（在解析之后、任何算术之前）
+  [ -r "$_f" ] || { TEAM_BG_REASON="记录 '$_f' 读不了 —— 记录畸形，什么都没发"; return 4; }
+  pid="$(team_bg_record_get "$_f" pid || true)"
+  pgid="$(team_bg_record_get "$_f" pgid || true)"
+  start="$(team_bg_record_get "$_f" start || true)"
+  TEAM_BG_PID="$pid"; TEAM_BG_PGID="$pgid"; TEAM_BG_START="$start"
+  TEAM_BG_CMD="$(team_bg_record_get "$_f" cmd || true)"
+  # ④ 形状：正整数（10 位上限让超长数字走拒绝，而不是让 `[ -gt ]` 自己往 stderr 里报错）
+  case "$pid" in
+    ''|*[!0-9]*) TEAM_BG_REASON="记录 $_f 的 pid 不是数字（'${pid:-<缺失>}'）—— 记录畸形，什么都没发"; return 4 ;;
+  esac
+  if [ "${#pid}" -gt 10 ] || [ "$pid" -eq 0 ]; then
+    TEAM_BG_REASON="记录 $_f 的 pid 不是可取的正整数（'$pid'）—— 记录畸形，什么都没发"; return 4
+  fi
+  case "$pgid" in
+    ''|*[!0-9]*) TEAM_BG_REASON="记录 $_f 的 pgid 不是数字（'${pgid:-<缺失>}'）—— 记录畸形，什么都没发"; return 4 ;;
+  esac
+  if [ "${#pgid}" -gt 10 ] || [ "$pgid" -eq 0 ]; then
+    TEAM_BG_REASON="记录 $_f 的 pgid 不是可取的正整数（'$pgid'）—— 记录畸形，什么都没发"; return 4
+  fi
+  [ -n "$start" ] || { TEAM_BG_REASON="记录 $_f 没有启动时间指纹（start=）—— 记录畸形，什么都没发"; return 4; }
+  # ⑤ 已结束的 leader：可收（写面 rc=0），但没有任何身份可谈
+  if ! team_bg_pid_alive "$pid"; then TEAM_BG_VERDICT="gone"; return 0; fi
+  # ⑥⑦ 身份 = (pid, 启动指纹) + 实时进程组；读面与写面用的是同一个结论
+  TEAM_BG_VERDICT="mismatch"
+  now_start="$(team_bg_start_of "$pid")" || now_start=""
+  if [ "$now_start" != "$start" ]; then
+    TEAM_BG_REASON="pid $pid 的启动时间指纹对不上（记录 '$start' ≠ 现在 '${now_start:-读不到}'）—— 身份不成立（pid 复用？），什么都没发"
+    return 5
+  fi
+  now_pgid="$(team_bg_pgid_of "$pid")" || now_pgid=""
+  if [ -z "$now_pgid" ] || [ "$now_pgid" != "$pgid" ]; then
+    TEAM_BG_REASON="pid $pid 现在的进程组是 '${now_pgid:-读不到}'，记录里是 $pgid —— 进程组身份对不上，什么都没发"
+    return 5
+  fi
+  TEAM_BG_VERDICT="holds"
+  return 0
+}
+
+# ── list：只读本项目 state 目录里的记录，一行一作业；判定与 stop 同源（team_bg_check_record） ────────────────────────────────────────────
 team_bg_list() {
-  local d f id pid pgid start state n=0 drc=0
+  local d f id n=0 drc=0
   d="$(team_bg_dir)"
   team_bg_dir_resolve "$d" >/dev/null || drc=$?
   if [ "$drc" -eq 1 ]; then
@@ -119,21 +195,12 @@ team_bg_list() {
   for f in "$d"/*.job; do
     [ -f "$f" ] || continue
     if [ -L "$f" ]; then team_warn "bg list: 跳过软链 $f（记录必须是本项目 bg 目录里的正规文件）"; continue; fi
-    id="$(team_bg_record_get "$f" id || true)"
-    [ -n "$id" ] || id="$(basename "$f" .job)"
-    pid="$(team_bg_record_get "$f" pid || true)"
-    pgid="$(team_bg_record_get "$f" pgid || true)"
-    start="$(team_bg_record_get "$f" start || true)"
-    case "$pid" in
-      ''|*[!0-9]*) state="malformed" ;;
-      *)
-        if ! team_bg_pid_alive "$pid"; then state="gone"
-        elif [ -n "$start" ] && [ "$(team_bg_start_of "$pid")" = "$start" ]; then state="holds"
-        else state="mismatch"
-        fi ;;
-    esac
+    id="$(basename "$f" .job)"
+    # 唯一一份判定（与 stop 同源）；结论在 TEAM_BG_* 里，list 不因某一行不可用而中止
+    team_bg_check_record "$id" "$d" || true
     printf '%-16s pid=%-8s pgid=%-8s identity=%-9s cmd=%s\n' \
-      "$id" "${pid:--}" "${pgid:--}" "$state" "$(team_bg_record_get "$f" cmd || true)"
+      "$id" "${TEAM_BG_PID:--}" "${TEAM_BG_PGID:--}" "$TEAM_BG_VERDICT" "${TEAM_BG_CMD:-}"
+    if [ -n "$TEAM_BG_REASON" ]; then team_warn "bg list: $id：$TEAM_BG_REASON"; fi
     n=$((n + 1))
   done
   [ "$n" -gt 0 ] || team_dim "（state 里还没有作业记录：$d）"
@@ -142,62 +209,25 @@ team_bg_list() {
 
 # ── stop：只按记录停这一个作业 ──────────────────────────────────────────────────────────────────
 team_bg_stop() { # <id>
-  local id="${1:-}" d f pid pgid start cmd grace sig target ticks i now_start now_pgid res_rc=0 drc=0
+  local id="${1:-}" d pid pgid cmd grace sig target ticks i rc=0
   [ -n "$id" ] || team_usage_die "bg stop: 需要一个 job id（team bg list 看全部）"
   d="$(team_bg_dir)"
-  team_bg_dir_resolve "$d" >/dev/null || drc=$?
-  if [ "$drc" -gt 1 ]; then
-    team_err "bg stop: state/bg 目录自身解析到了本项目 state 之外（$d → $(realpath -- "$d" 2>/dev/null || printf '解析不了')）—— 记录畸形，什么都没发"
-    return 4
-  fi
-  f="$(team_bg_record_resolve "$id" "$d")" || res_rc=$?
-  case "$res_rc" in
+  team_bg_check_record "$id" "$d" || rc=$?          # ← 与 list 同一个函数，不是两份判断（`||` 挡住 set -e）
+  case "$rc" in
     0) ;;
-    1)
-      team_err "bg stop: 本项目 state 里没有作业 '$id' 的记录（找过：$d/$id.job）—— 不按名字/命令行/进程树找进程"
-      return 3 ;;
-    2)
-      team_err "bg stop: job id '$id' 不是平坦名字（只允许 [A-Za-z0-9._-]、长度 ≤ $TEAM_BG_ID_MAX）—— id 没有路径语义，什么都没发"
-      return 2 ;;
-    *)
-      team_err "bg stop: '$d/$id.job' 不是本项目 bg 目录里的正规记录（软链 / FIFO / 设备 / 目录，或解析后落在目录外）—— 记录畸形，什么都没发"
-      return 4 ;;
+    2|3|4|5) team_err "bg stop: $TEAM_BG_REASON"; return "$rc" ;;
+    *) team_err "bg stop: 记录 '$d/$id.job' 的判定失败（内部错误 rc=$rc）—— 什么都没发"; return 4 ;;
   esac
-  if [ ! -r "$f" ]; then
-    team_err "bg stop: 记录 '$f' 读不了 —— 什么都没发"
-    return 4
-  fi
-  pid="$(team_bg_record_get "$f" pid || true)"
-  pgid="$(team_bg_record_get "$f" pgid || true)"
-  start="$(team_bg_record_get "$f" start || true)"
-  cmd="$(team_bg_record_get "$f" cmd || true)"
-  case "$pid" in
-    ''|*[!0-9]*) team_err "bg stop: 记录 $f 的 pid 不是数字（'${pid:-<缺失>}'）—— 记录畸形，什么都没发"; return 4 ;;
-    *) [ "$pid" -gt 0 ] || { team_err "bg stop: 记录 $f 的 pid 是 0 —— 记录畸形，什么都没发"; return 4; } ;;
-  esac
-  case "$pgid" in
-    ''|*[!0-9]*) team_err "bg stop: 记录 $f 的 pgid 不是数字（'${pgid:-<缺失>}'）—— 记录畸形，什么都没发"; return 4 ;;
-    *) [ "$pgid" -gt 0 ] || { team_err "bg stop: 记录 $f 的 pgid 是 0（Linux 的进程组 id 必为正）—— 记录畸形，什么都没发"; return 4; } ;;
-  esac
-  team_bg_record_get "$f" start >/dev/null \
-    || { team_err "bg stop: 记录 $f 没有启动时间指纹（start=）—— 记录畸形，什么都没发"; return 4; }
-
-  if ! team_bg_pid_alive "$pid"; then
+  pid="$TEAM_BG_PID"; pgid="$TEAM_BG_PGID"; cmd="$TEAM_BG_CMD"
+  if [ "$TEAM_BG_VERDICT" = "gone" ]; then
     team_info "bg stop: job=$id 记录的进程 $pid 已经不在（什么都没发信号）"
     team_dim "  已结束 leader 的子孙不会被追猎（本车道从不按名字/命令行/进程树找进程）"
     team_bg_ledger "$id" "none" "already-gone" "$pid" "$pgid"
     return 0
   fi
-
-  now_start="$(team_bg_start_of "$pid")"
-  if [ -z "$start" ] || [ "$now_start" != "$start" ]; then
-    team_err "bg stop: pid $pid 的启动时间指纹对不上（记录 '${start:-<空>}' ≠ 现在 '${now_start:-<读不到>}'）—— 身份不成立（pid 复用？），什么都没发"
-    return 5
-  fi
-  now_pgid="$(team_bg_pgid_of "$pid")"
-  if [ -z "$now_pgid" ] || [ "$now_pgid" != "$pgid" ]; then
-    team_err "bg stop: pid $pid 现在的进程组是 '${now_pgid:-<读不到>}'，记录里是 $pgid —— 进程组身份对不上，什么都没发"
-    return 5
+  if [ "$TEAM_BG_VERDICT" != "holds" ]; then
+    team_err "bg stop: 记录 '$d/$id.job' 的判定是 '$TEAM_BG_VERDICT'（既不是 holds 也不是 gone）—— 什么都没发"
+    return 4
   fi
 
   grace="${TEAM_BG_STOP_GRACE:-5}"

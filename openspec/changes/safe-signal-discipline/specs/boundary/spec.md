@@ -212,8 +212,15 @@ cannot be written MUST NOT block the call, and a file that never crossed the bou
 The job lane SHALL record every job it starts before the job id is returned to its caller: `state/bg/<id>.job`
 carrying the job's pid, its process-group id, the process's start-time fingerprint, its working directory, its log
 path and its command. `team bg list` SHALL read those records from the project's own state directory and print one
-row per job — the id, the pid and group, whether the recorded identity still holds, and the command — without
-signalling anything.
+row per job — the id, the pid and group, the identity verdict, and the command — without signalling anything, and
+it SHALL reach that verdict through the same validation `team bg stop` runs on the same record (the flat-id rule,
+the record's location and type, the readable payload, the positive-integer `pid`/`pgid`, the start-time
+fingerprint's presence and match, and the live process group): a record `stop` would refuse MUST NOT be shown as a
+holding identity. The verdict vocabulary is closed — `holds` and `gone` are the usable outcomes (`stop` exits 0),
+`unusable` covers the unknown and malformed records (`stop` exits 2, 3 or 4), and `mismatch` is the failed
+identity check (`stop` exits 5) — and a row whose verdict is not usable SHALL be shown with the same reason
+sentence `stop` prints for that refusal. The row's id SHALL be the record's own name, the one
+`team bg stop <id>` accepts.
 
 `team bg stop <id>` SHALL stop exactly the job whose record it finds there, and MUST verify, before any signal,
 that the recorded pid is alive and that its start-time fingerprint equals the recorded one: the (pid, start-time)
@@ -298,6 +305,16 @@ recorded group is a failed identity check (exit 5), and each refusal signals not
 - **WHEN** `team bg stop <id>` runs for each
 - **THEN** each exits 4 within the command's own bounded wait — never a timeout — with a diagnostic naming the
   record and the failed check, and no process is signalled
+
+#### Scenario: The read side refuses what the write side refuses
+
+- **GIVEN** a scratch project whose `bg` directory holds a live flat-named record, a record whose file is named
+  with a space, a record whose `pgid` is `0`, and a record whose recorded group differs from the live process's
+  current group
+- **WHEN** `team bg list` runs, and `team bg stop <id>` runs for each of the last three
+- **THEN** none of those three rows claims a holding identity — they carry `unusable`, `unusable` and `mismatch`
+  — `stop` exits 2, 4 and 5 with nothing signalled, each row carries the same reason sentence its `stop` printed,
+  and the flat-named record's row still carries `holds` and its `stop` still stops the job
 
 ### Requirement: Scripts select processes by recorded pid, and the lint keeps it that way
 

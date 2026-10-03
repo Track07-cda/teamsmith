@@ -207,3 +207,14 @@ pins it in both directions plus its own `--break=no-dir-boundary` shadow. Verifi
 the fix (66 ✓ / 0 ✗), the shadow red again (7), the two older break modes unchanged (`no-identity` 4,
 `no-boundary` 11), `openspec validate --all --strict`, the container `--select 58` and FAST. The other ticks keep
 the P169 footer's provenance; this rework touched only 2.3's boundary sentence, the delta and the fixture.
+
+## Apply status (P195 rework, 2026-10-02)
+
+The third verify round's F1 — `team bg list` claiming a holding identity for records `bg stop` refuses — is closed
+in `cmd-bg.sh`: `team_bg_check_record <id> <bg-dir>` is now the single record judgment with one shared reason
+sentence, and both sides call it (list renders its verdict and reason and keeps going; stop maps its exit code
+0/2/3/4/5). The fixture pins the three shapes that round found plus the reverse control, and a new
+`--break=read-side-pid-only` swaps list's verdict for the old read side in a copy and reddens exactly those three
+shapes (6 assertions). Evidence: `docs/team/reports/P195-dev-bob.md` and `docs/team/reports/P195-dev-bob/logs/`
+(red before 6, green 81 ✗ 0, the four break runs, the container `--select 58` and FAST, the delta validation). The
+delta carries the read-side sentence and the new scenario; the other ticks keep the P169/P187 provenance.

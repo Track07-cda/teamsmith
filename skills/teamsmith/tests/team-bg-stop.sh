@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # P159 · `team bg stop` 夹具（safe-signal-discipline · RA3）
 #
-#   bash skills/teamsmith/tests/team-bg-stop.sh [--break=no-identity|no-boundary|no-dir-boundary] [--keep]
+#   bash skills/teamsmith/tests/team-bg-stop.sh [--break=no-identity|no-boundary|no-dir-boundary|read-side-pid-only] [--keep]
 #
 # 证明什么（每条断言都对着 RA3 的 scenario）：
 #   · 真作业按**记录里的 (pid, 启动时间指纹)** 停掉：组 TERM（leader 是组头 → 组内子孙一起），
@@ -14,12 +14,16 @@
 #   · 目录边界（P187 · F1'，CRITICAL）：**bg 目录自身**也必须在项目 state 内 —— `state/bg` 是软链时
 #     读写两侧都拒绝（stop/list 同一条规则），点名 `state/bg` 的解析目标；反向：真目录照常收作业；
 #   · 已结束的 leader 不追猎：rc=0 + 明说子孙不会被找（活着的子孙留在原地）；
-#   · `team bg list` 一行一作业，身份成不成立逐行标出（holds/gone/mismatch/malformed）。
+#   · `team bg list` 一行一作业，判定逐行标出（holds/gone/unusable/mismatch）；**读面没有自己的
+#     判断**（P195 · F1）：list 与 stop 走同一个 team_bg_check_record，不可用的记录标 unusable /
+#     mismatch 并打出与 stop **同一句**原因（同一个 TEAM_BG_REASON）。
 #
 # 红侧（默认不跑）：`--break=no-identity` 把 cmd-bg.sh 的指纹核对那一行改成 `if false` 的**副本**
 # —— 「pid 复用必须被拒」与「邻居必须活着」必须变红；`--break=no-boundary` 把记录解析器短路的
 # 副本 —— 「穿越 id / 软链记录必须被拒且邻居活着」必须变红；`--break=no-dir-boundary` 把「bg 目录
-# 自身也在项目内」的检查短路的副本 —— 「软链目录必须被拒且邻居活着」必须变红。这是断侧，
+# 自身也在项目内」的检查短路的副本 —— 「软链目录必须被拒且邻居活着」必须变红；
+# `--break=read-side-pid-only` 把 **list 的判定**换回旧读法（只看 pid 活着 + 指纹，写面不动）的
+# 副本 —— 「非平坦 id / pgid=0 / 实时组不符」三条形状在 list 里必须重新变成 holds。这是断侧，
 # 用来证明断言不是空转。
 #
 # 纪律：清掉继承的团队身份与 tmux 身份；产物落 tmp_root_create 的私有根；每个作业/邻居都是夹具
@@ -37,11 +41,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --break=*) BREAK="${1#--break=}"; shift ;;
     --keep)    KEEP=1; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) printf 'team-bg-stop: 未知参数 %s\n' "$1" >&2; exit 2 ;;
   esac
 done
-case "$BREAK" in ''|no-identity|no-boundary|no-dir-boundary) ;; *) printf 'team-bg-stop: --break 只认 no-identity / no-boundary / no-dir-boundary（收到 %s）\n' "$BREAK" >&2; exit 2 ;; esac
+case "$BREAK" in ''|no-identity|no-boundary|no-dir-boundary|read-side-pid-only) ;; *) printf 'team-bg-stop: --break 只认 no-identity / no-boundary / no-dir-boundary / read-side-pid-only（收到 %s）\n' "$BREAK" >&2; exit 2 ;; esac
 [ "$KEEP" = "1" ] && export TEAM_TMP_KEEP=1
 
 # ── 身份隔离：绝不继承调用者的团队/tmux 身份 ─────────────────────────────────────────────────
@@ -105,11 +109,11 @@ if [ -n "$BREAK" ]; then
   cp -a "$SKILL_DIR/scripts" "$MUT/scripts"
   case "$BREAK" in
     no-identity)
-      sed -i 's/^  if \[ -z "\$start" \] || \[ "\$now_start" != "\$start" \]; then$/  if false; then/' "$MUT/scripts/lib/cmd-bg.sh"
+      sed -i 's#^  if \[ "\$now_start" != "\$start" \]; then$#  if false; then#' "$MUT/scripts/lib/cmd-bg.sh"
       if grep -qx '  if false; then' "$MUT/scripts/lib/cmd-bg.sh"; then
         printf '红侧：cmd-bg.sh 副本的指纹核对已改成 if false（%s）\n' "$MUT/scripts/lib/cmd-bg.sh"
       else
-        printf '✗ 红侧不成立：sed 没改到指纹核对那一行\n' >&2; exit 2
+        printf '✗ 红侧不成立：sed 没改到共享判定里的指纹核对那一行\n' >&2; exit 2
       fi ;;
     no-boundary)
       # 把记录解析器短路：不再要求「平坦 id / 本项目 bg 目录里的正规文件 / realpath 仍在目录内」
@@ -127,6 +131,38 @@ if [ -n "$BREAK" ]; then
       else
         printf '✗ 红侧不成立：sed 没改到 team_bg_dir_resolve 的第一行\n' >&2; exit 2
       fi ;;
+    read-side-pid-only)
+      # 把 **list 的判定**换回旧读法（只要 pid 活着 + 指纹一致就说 holds）：写面一个字节不动，
+      # 于是「非平坦 id / pgid=0 / 实时组不符」三条形状在 list 里必须重新变成 identity=holds。
+      sed -i 's#^    team_bg_check_record "\$id" "\$d" || true$#    team_bg_read_side_legacy "$id" "$d"#' "$MUT/scripts/lib/cmd-bg.sh"
+      cat >> "$MUT/scripts/lib/cmd-bg.sh" <<'SHADOW'
+
+# ── 影子（夹具注入，只存在于副本里）：P195 之前 list 自己的读法 —— 只看 pid 活着 + 指纹 ──────
+team_bg_read_side_legacy() { # <id> <bg-dir>
+  local _id="$1" _d="$2" _f _pid _pgid _start
+  _f="$_d/$_id.job"
+  TEAM_BG_VERDICT="unusable"; TEAM_BG_REASON=""
+  _pid="$(team_bg_record_get "$_f" pid || true)"
+  _pgid="$(team_bg_record_get "$_f" pgid || true)"
+  _start="$(team_bg_record_get "$_f" start || true)"
+  TEAM_BG_PID="$_pid"; TEAM_BG_PGID="$_pgid"; TEAM_BG_START="$_start"
+  TEAM_BG_CMD="$(team_bg_record_get "$_f" cmd || true)"
+  case "$_pid" in
+    ''|*[!0-9]*) TEAM_BG_VERDICT="malformed" ;;
+    *)
+      if ! team_bg_pid_alive "$_pid"; then TEAM_BG_VERDICT="gone"
+      elif [ -n "$_start" ] && [ "$(team_bg_start_of "$_pid")" = "$_start" ]; then TEAM_BG_VERDICT="holds"
+      else TEAM_BG_VERDICT="mismatch"
+      fi ;;
+  esac
+  return 0
+}
+SHADOW
+      if grep -qF '    team_bg_read_side_legacy "$id" "$d"' "$MUT/scripts/lib/cmd-bg.sh"; then
+        printf '红侧：cmd-bg.sh 副本的 list 判定已换回旧读法（只看 pid 活着 + 指纹）（%s）\n' "$MUT/scripts/lib/cmd-bg.sh"
+      else
+        printf '✗ 红侧不成立：sed 没改到 list 的判定调用行\n' >&2; exit 2
+      fi ;;
   esac
   TEAM="$MUT/scripts/team"
 fi
@@ -143,6 +179,14 @@ bg_timeout() { # <秒> <bg 参数…>：给「非正规记录不许挂住」这�
   local _t="$1"; shift
   ( cd "$ROOT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
       timeout "$_t" "$TEAM" --root "$ROOT" bg "$@" ) 2>&1
+}
+# 读面断言的小工具（P195）：从 list 输出里取一行 / 取原因句，再与写面的诊断逐字比对。
+list_row()    { printf '%s\n' "$1" | awk -v id="$2" 'index($0, id " ") == 1 { print; exit }'; }
+stop_reason() { local _l; _l="$(printf '%s\n' "$1" | head -n1)"; printf '%s\n' "${_l#*bg stop: }"; }
+list_reason() { # <list 输出> <id>
+  local _l _p="! bg list: $2："
+  _l="$(printf '%s\n' "$1" | grep -F -m1 -- "$_p")"
+  printf '%s\n' "${_l#"$_p"}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -258,6 +302,61 @@ assert_eq "FIFO 记录 → 4（拒绝在读之前，rc 不是 124）" "$RC" "4"
 assert_has "诊断点名「正规记录」" "$OUT" "正规记录"
 case "$(bg list)" in *fifo*) bad "list 列出了 FIFO 记录" ;; *) ok "list 不列 FIFO 记录" ;; esac
 
+hdr "P189 · F1：读面与写面同一条规则（list 不许说「成立」，原因句与 stop 逐字相同）"
+# 三条形状**逐字**用第三轮复验的夹具（docs/team/reports/P189-verify/pkg/verify.py §20）：
+#   ① 记录名/id 带空格（非平坦 id）② pgid=0 ③ 实时进程组与记录不符。
+# 每条都双向：stop 拒绝（2/4/5、零信号、邻居活着）＋ list 行不再说 identity=holds ＋ 两边的原因句相同。
+RSTART="$(now_start "$NPID")"
+# ① 非平坦 id（验证者的 `two words` 形状：文件 two words.job + id=two words）
+write_record "two words" "$NPID" "$NPID" "$RSTART" "sleep 300"
+OUT="$(bg stop "two words")"; RC=$?
+assert_eq "① stop 'two words' → 2（非平坦 id）" "$RC" "2"
+assert_alive "① 记录里的真进程没有被误杀" "$NPID"
+LISTV="$(bg list)"; ROW="$(list_row "$LISTV" "two words")"
+case "$ROW" in
+  *identity=holds*) bad "① list 对非平坦 id 说了 identity=holds（读面说谎）" ;;
+  *identity=unusable*) ok "① list 标 identity=unusable（不再说成立）" ;;
+  *) bad "① list 行没有给出不可用判定（[$ROW]）" ;;
+esac
+assert_eq "① list 与 stop 打的是同一句原因" "$(list_reason "$LISTV" "two words")" "$(stop_reason "$OUT")"
+# ② pgid=0（验证者的 pgid-zero-list 形状）
+write_record pgid-zero-list "$NPID" 0 "$RSTART" "sleep 300"
+OUT="$(bg stop pgid-zero-list)"; RC=$?
+assert_eq "② stop pgid=0 → 4（pid/pgid 必须正整数）" "$RC" "4"
+assert_alive "② 记录里的真进程没有被误杀" "$NPID"
+LISTV="$(bg list)"; ROW="$(list_row "$LISTV" pgid-zero-list)"
+case "$ROW" in
+  *identity=holds*) bad "② list 对 pgid=0 说了 identity=holds（读面说谎）" ;;
+  *identity=unusable*) ok "② list 标 identity=unusable（不再说成立）" ;;
+  *) bad "② list 行没有给出不可用判定（[$ROW]）" ;;
+esac
+assert_eq "② list 与 stop 打的是同一句原因" "$(list_reason "$LISTV" pgid-zero-list)" "$(stop_reason "$OUT")"
+# ③ 实时进程组与记录不符（验证者的 group-mismatch 形状）
+write_record group-mismatch "$NPID" "$((NPID + 1))" "$RSTART" "sleep 300"
+OUT="$(bg stop group-mismatch)"; RC=$?
+assert_eq "③ stop 实时组不符 → 5（进程组身份对不上）" "$RC" "5"
+assert_alive "③ 记录里的真进程没有被误杀" "$NPID"
+LISTV="$(bg list)"; ROW="$(list_row "$LISTV" group-mismatch)"
+case "$ROW" in
+  *identity=holds*) bad "③ list 对实时组不符说了 identity=holds（读面说谎）" ;;
+  *identity=mismatch*) ok "③ list 标 identity=mismatch（与写面 rc=5 同一张表）" ;;
+  *) bad "③ list 行没有给出身份判定（[$ROW]）" ;;
+esac
+assert_eq "③ list 与 stop 打的是同一句原因" "$(list_reason "$LISTV" group-mismatch)" "$(stop_reason "$OUT")"
+# ④ 反向（不许误伤）：正规记录 → list 仍是 holds 且 stop 照常收
+P195F="$TMP/p195-child.pid"; P195PID="$(spawn_group_job "$P195F")"; SPAWNED+=("$P195PID")
+sleep 0.3
+P195CHILD="$(cat "$P195F" 2>/dev/null || true)"; [ -n "$P195CHILD" ] && SPAWNED+=("$P195CHILD")
+write_record p195-ok "$P195PID" "$P195PID" "$(now_start "$P195PID")" "sleep 300"
+LISTV="$(bg list)"; ROW="$(list_row "$LISTV" p195-ok)"
+case "$ROW" in
+  *identity=holds*) ok "④ 反向：正规记录在 list 里仍是 identity=holds" ;;
+  *) bad "④ 反向：正规记录没有被标成 holds（[$ROW]）" ;;
+esac
+OUT="$(bg stop p195-ok)"; RC=$?
+assert_eq "④ 反向：正规记录照常收作业 → 0" "$RC" "0"
+assert_gone "④ 反向：作业被停掉（新判定没有误伤）" "$P195PID"
+
 hdr "F1' · bg 目录自身必须在项目内：软链目录读写两侧都拒，兄弟进程活着"
 # 现场（P175 的 finding F1'）：state/bg 指到兄弟项目的 bg 目录 —— 记录解析两侧 realpath 一起落到
 # 同一处，「在 bg 目录内」自洽通过。目录这一层单独收口：stop 与 list 同一条规则，都拒绝并点名目标。
@@ -321,6 +420,7 @@ if [ -n "$BREAK" ]; then
       no-identity) printf '（跳过指纹核对后，记录里的 pid 被直接当身份：pid 复用场景不再被拒、邻居被误杀）\n' ;;
       no-boundary) printf '（短路记录边界解析后，穿越 id / 软链记录都能走到邻居的记录并停掉它）\n' ;;
       no-dir-boundary) printf '（短路 bg 目录边界检查后，软链目录里的兄弟记录被接受并真的停掉了兄弟进程）\n' ;;
+      read-side-pid-only) printf '（把 list 的判定换回旧读法后，非平坦 id / pgid=0 / 实时组不符 三条形状在 list 里又都变成 identity=holds）\n' ;;
     esac
     exit 1
   fi

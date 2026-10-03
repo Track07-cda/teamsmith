@@ -106,7 +106,8 @@ that `realpath` still places inside the project's own `bg` directory: a symbolic
 directory or a path resolving outside is refused (exit 4) **before the payload is read** (so a FIFO cannot block),
 and a non-flat id is a usage error (exit 2). `pid` and `pgid` must both be positive integers, and before any signal
 the live process's current process group must equal the recorded `pgid` (mismatch = exit 5). `team bg list` applies
-the same shape and skips symlinks with a visible warning.
+the same shape and skips symlinks with a visible warning; P195 below turns its verdict into the write side's own
+verdict instead of a second judgment.
 
 **P187 (F1') closes the directory layer.** P169 compared the record's real parent with the `bg` directory's real
 path — a comparison that stays self-consistent when `state/bg` itself is a symlink to a sibling project's
@@ -118,6 +119,22 @@ diagnostic naming the link's target, and a missing `bg` directory is still "no r
 not a refusal. The fixture pins the shape (the sibling's process stays alive, `state/bg.log` gains no line), the
 reverse (a real directory keeps stopping its jobs) and a `--break=no-dir-boundary` shadow that turns the shape red
 again.
+
+**P195 (F1) makes the read side a view of the write side.** P169/P187 gave `team bg list` the same *boundary*
+checks as `stop`, but its identity verdict was still computed separately and only from `(pid alive, fingerprint)`
+— so a record `stop` refused could print `identity=holds`, and the operator's read said the identity held while
+the writer would refuse it. The validation now lives in one function, `team_bg_check_record <id> <bg-dir>`, which
+both callers use and neither works around: the `bg` directory's real location, the flat-id and regular-file rules,
+the readable payload, the positive-integer `pid`/`pgid`, the fingerprint's presence, the pid's liveness (verdict
+`gone`, `stop` exits 0), the fingerprint match and the live process group (verdict `mismatch`, `stop` exits 5). Its
+exit code is exactly what `stop` maps to its own (0/2/3/4/5), its `TEAM_BG_VERDICT` is a closed vocabulary
+(`holds`/`gone`/`unusable`/`mismatch`) and its `TEAM_BG_REASON` is one sentence both sides print byte for byte.
+Two consequences are deliberate: a row names the record's own filename — the id `stop` accepts — instead of a
+name read out of the payload, and an unusable record never aborts the view (`list` prints the row, the verdict and
+the reason and keeps going; the command's own exit code stays 0). The fixture pins the three shapes the third
+verify round found (`two words`, `pgid=0`, live group mismatch), the reverse (a healthy record still holds and
+still stops), and a `--break=read-side-pid-only` shadow that swaps list's verdict back to the old read side and
+reddens exactly those three shapes.
 
 ### D7 — one lexer, two lints; the hidden boundary is the legacy list, not silence
 
