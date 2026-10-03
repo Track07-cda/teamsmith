@@ -92,6 +92,14 @@ object carries the unread-meeting count as `meetings` and includes it in `total`
 standby as `{on, reason}`; `panel.capacity.disk` SHALL be one entry per judged filesystem carrying its path, its
 available bytes and free inodes, or `null` for a figure that cannot be read.
 
+The pending counts, their total and their human-readable text SHALL reflect the current pending snapshot rather
+than the last reminded snapshot, even when a count-only change was suppressed by `TEAM_PULSE_NUDGE_GAP`. The
+existing pending JSON fields (`inbox`, `reports`, `todo`, `wip`, `review`, `blocked`, `stopped`, `meetings`, `total`,
+`text`) SHALL retain their count/text meanings: a category-only wake identity MUST NOT replace counts with
+booleans. `team monitor --print`, `team monitor --json` and `team __panel-data --block pending` MUST remain
+read-only and MUST NOT advance, clear or create reminder state. Rationale for observer modes and pending-only
+patrols: `skills/teamsmith/references/config.md` and `skills/teamsmith/references/workflows.md` §I.
+
 #### Scenario: The band mirrors the measured state
 
 - **GIVEN** a fixture project with no PM window, one unread inbox line, two task reports without review records, one
@@ -129,6 +137,16 @@ available bytes and free inodes, or `null` for a figure that cannot be read.
 - **WHEN** `team monitor --print` and `team monitor --json` run
 - **THEN** `panel.pending.meetings` is 2, `panel.pending.total` is 2, `panel.pending.text` contains `未读会议 2`,
   and the printed band shows `未读会议 2`
+
+#### Scenario: A suppressed reminder does not freeze the displayed counts
+
+- **GIVEN** a running fixture PM reminded for one unread notification, `TEAM_PULSE_NUDGE_GAP=3600`, and a later
+  tick inside that gap after the count becomes four without another pending category
+- **WHEN** `team monitor --print`, `team monitor --json` and `team __panel-data --block pending` run
+- **THEN** the JSON and pending block carry `inbox=4`, `total=4` and text containing `未读通知 4`, and the print
+  shows the current unread count rather than one
+- **AND** file contents and timestamps under `state/` remain the same across these observer reads, with no
+  additional `state/nudges.log` line, new outbox entry or reminder-state update
 
 ### Requirement: The agent table keeps today's fields and adds the branch columns the PM asks for
 
