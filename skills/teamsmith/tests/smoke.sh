@@ -14675,6 +14675,84 @@ assert_eq "12j change: - 的归档任务行为不变" "$([ "$C1_RC" -ne 0 ] && e
 assert_has_echo "$C1_OUT" "任务书没有 change: 行" "12j change: - 走旧的拒绝文案"
 assert_not_echo "$C1_OUT" "还没就绪" "12j change: - 不会被新判据接管"
 
+# ---- P209：归档前置要看**清单**（同族第三次：P151 F3 · P175 F3 · P206 F1 —— 23/24/16 项 0 勾却归档了）
+# 判据只数空框（`[ ]`）：勾上并注明原因的项不算未勾。三条可证伪形状各自独立：有未勾项 → 非 0 且点名；
+# 全勾 → 0、归档任务放行；反向（清单全勾、映射任务没结束）→ 既有那条 blocker 照旧（不许被新检查顶掉）。
+P209A="$(p24_project 12j-checklist)"
+p24_change "$P209A" alpha
+mkdir -p "$P209A/openspec/changes/archive/2026-10-03-alpha"
+p24_brief "$P209A" M1 dev apply alpha -
+p24_brief "$P209A" A1 pm archive alpha -
+p24_add "$P209A" M1 dev; p24_add "$P209A" A1 pm
+p24_pass "$P209A" M1
+p24_team "$P209A" board set M1 done >/dev/null 2>&1
+cat > "$P209A/openspec/changes/alpha/tasks.md" <<'EOT'
+# Tasks: alpha
+
+- [x] 1.1 已做（引用 P206）
+- [ ] 2.1 未做 A
+- [ ] 2.2 未做 B
+- [ ] 2.3 未做 C
+- [ ] 2.4 未做 D
+- [x] 3.1 已做
+EOT
+A_NC="$(p24_team "$P209A" change status alpha)"; A_NC_RC=$?
+assert_eq "12j P209 清单有未勾项 → change status 非 0" "$A_NC_RC" "1"
+assert_has_echo "$A_NC" "checklist · 4 项未勾" "12j P209 blocker 点名未勾条数"
+assert_has_echo "$A_NC" "tasks.md:4「2.1 未做 A」" "12j P209 第一条：行号 + 标题"
+assert_has_echo "$A_NC" "tasks.md:6「2.3 未做 C」" "12j P209 第三条：行号 + 标题"
+assert_has_echo "$A_NC" "另有 1 项" "12j P209 第四条只留计数"
+assert_not_echo "$A_NC" "2.4 未做 D" "12j P209 前三条之外不逐条点名（行宽有界）"
+assert_not_echo "$A_NC" "已做（引用 P206）" "12j P209 勾上并注明原因的项不算未勾"
+A_NC_JSON="$(p24_team "$P209A" change status alpha --json)"; A_NC_JSON_RC=$?
+assert_eq "12j P209 --json 未就绪退出 1" "$A_NC_JSON_RC" "1"
+if p24_json_ok "$A_NC_JSON"; then ok "12j P209 --json 是合法 JSON"; else bad "12j P209 --json 解析失败（$A_NC_JSON）"; fi
+assert_has_echo "$A_NC_JSON" "checklist · 4 项未勾" "12j P209 --json 的 blockers 也带清单行"
+# 归档闸门与视图同源：归档目录在、兄弟都结束，A1 done 仍被清单拒绝
+A1_ROW="$(p24_board_row "$P209A" A1)"
+A_NC_DONE="$(p24_team "$P209A" board set A1 done)"; A_NC_DONE_RC=$?
+assert_eq "12j P209 归档任务 done 也被清单拒绝" "$([ "$A_NC_DONE_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$A_NC_DONE" "checklist · 4 项未勾" "12j P209 归档拒绝里就是同一条 blocker"
+assert_has_echo "$A_NC_DONE" "还没就绪" "12j P209 归档拒绝说明前提是整个 change"
+p24_unchanged "$P209A" A1 "$A1_ROW" "12j P209 被拒后 A1 的看板行没动"
+# ② 全勾 → change status 0，归档任务放行
+sed -i 's/^- \[ \]/- [x]/' "$P209A/openspec/changes/alpha/tasks.md"
+A_TC="$(p24_team "$P209A" change status alpha)"; A_TC_RC=$?
+assert_eq "12j P209 全勾 → change status 0" "$A_TC_RC" "0"
+assert_has_echo "$A_TC" "change alpha · ready" "12j P209 全勾后视图 ready"
+A_TC_DONE="$(p24_team "$P209A" board set A1 done)"; A_TC_DONE_RC=$?
+assert_eq "12j P209 全勾后归档任务可以 done" "$A_TC_DONE_RC" "0"
+assert_file "$P209A/docs/team/reviews/A1-done.md" "12j P209 done 证据落盘"
+# ③ 反向：清单全勾、映射任务没结束 → 既有那条 blocker 原样拦住（新检查不许把它顶掉）
+p24_brief "$P209A" M2 dev2 apply alpha -
+p24_add "$P209A" M2 dev2
+p24_team "$P209A" board set M2 wip >/dev/null 2>&1
+p24_brief "$P209A" A2 pm archive alpha -
+p24_add "$P209A" A2 pm
+A_RV="$(p24_team "$P209A" change status alpha)"; A_RV_RC=$?
+assert_eq "12j P209 清单全勾但兄弟没结束 → 仍然非 0" "$A_RV_RC" "1"
+assert_has_echo "$A_RV" "M2 · apply · wip ·" "12j P209 反向阻塞来自映射任务（不是清单）"
+assert_not_echo "$A_RV" "checklist" "12j P209 清单全勾时不出现 checklist 行"
+A_RV_DONE="$(p24_team "$P209A" board set A2 done)"; A_RV_DONE_RC=$?
+assert_eq "12j P209 归档闸门的反向：兄弟没结束 → done 被拒" "$([ "$A_RV_DONE_RC" -ne 0 ] && echo yes || echo no)" "yes"
+assert_has_echo "$A_RV_DONE" "M2 · apply · wip ·" "12j P209 反向拒绝点名 M2"
+assert_not_echo "$A_RV_DONE" "checklist" "12j P209 反向拒绝不提清单（新检查没顶掉旧的）"
+# 归档之后：活动目录没了，读归档那份（真实时序里归档任务的 done 闸门这时才跑）
+P209B="$(p24_project 12j-archived)"
+p24_brief "$P209B" B1 pm archive beta -
+p24_add "$P209B" B1 pm
+mkdir -p "$P209B/openspec/changes/archive/2026-10-03-beta"
+printf '# Tasks: beta\n\n- [ ] 1.1 没勾\n' > "$P209B/openspec/changes/archive/2026-10-03-beta/tasks.md"
+B_NC="$(p24_team "$P209B" change status beta)"; B_NC_RC=$?
+assert_eq "12j P209 归档拷贝未勾 → 仍然非 0" "$B_NC_RC" "1"
+assert_has_echo "$B_NC" "checklist · 1 项未勾" "12j P209 归档拷贝的未勾项也被点名"
+assert_has_echo "$B_NC" "tasks.md:3「1.1 没勾」" "12j P209 归档拷贝按那份文件的行号点名"
+B_DONE="$(p24_team "$P209B" board set B1 done)"; B_DONE_RC=$?
+assert_eq "12j P209 归档后的归档任务 done 被拒" "$([ "$B_DONE_RC" -ne 0 ] && echo yes || echo no)" "yes"
+sed -i 's/^- \[ \]/- [x]/' "$P209B/openspec/changes/archive/2026-10-03-beta/tasks.md"
+B_TC="$(p24_team "$P209B" change status beta)"; B_TC_RC=$?
+assert_eq "12j P209 归档拷贝全勾 → 0" "$B_TC_RC" "0"
+
 # ---------------------------------------------------------------- 12k · 模板与文档（B7）
 section "12k · 模板与文档（P24/B7）"
 P24K="$(p24_project 12k)"

@@ -3991,17 +3991,59 @@ team_change_blockers() { # <change id> [<排除的任务 id>]
   [ "$n" -eq 0 ]
 }
 
-# 就绪判据只有这一处（design §6）：至少一个任务指向它，且除 <排除的任务> 外全部结束。
+# P209 · 清单（tasks.md）也是归档前提：同族第三次（P151 F3 · P175 F3 · P206 F1 —— 每次都有人
+# 发现 23/24/16 项 0 勾却归档了）。判据只数**空框**（`[ ]`）：勾上并注明原因的项（例如「引用 P206」）
+# 不拦——「勾选要如实」是 apply 作者的承诺，不是这里能判的。
+# 清单文件在哪：活动目录优先；change 已归档时读归档那一份（`openspec archive` 之后归档任务的 done
+# 闸门才跑，这时活动目录已经不在；只读活动目录的话，真实时序里的第二道闸门永远看不到清单）。
+# 解析与 openspec 自己的 task-progress.js 对齐：允许前导空白与 `*` 项目符号，`[x]`/`[X]` 一律算勾上。
+team_change_tasks_file() { # <change id> → stdout 清单路径（没有 → 空输出，恒 rc 0）
+  local id="$1" root d best=""
+  [ -n "$id" ] || return 0
+  root="$(team_spec_dir_abs)/changes"
+  if [ -f "$root/$id/tasks.md" ]; then printf '%s\n' "$root/$id/tasks.md"; return 0; fi
+  for d in "$root/archive/$id/tasks.md" "$root/archive/"*"-$id/tasks.md"; do
+    [ -f "$d" ] && best="$d"
+  done
+  if [ -n "$best" ]; then printf '%s\n' "$best"; fi
+  return 0
+}
+
+# 未勾项 > 0 → stdout 一行（计数 + 前三条的行号/标题，行宽有界）；0 = 没有未勾项。
+# 与 team_change_blockers 同一份措辞口径：调用方（team change status / 归档闸门）原样打印。
+team_change_checklist_blockers() { # <change id> → 0=没有未勾项 / 1=有（stdout 一行点名）
+  local id="$1" f n=0 out="" line no body title
+  f="$(team_change_tasks_file "$id")"
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    no="${line%%:*}"
+    body="${line#*:}"
+    title="$(printf '%s\n' "$body" | sed -E 's/^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\][[:space:]]*//; s/[[:space:]]+$//')"
+    [ -n "$title" ] || title="-"
+    if [ "${#title}" -gt 60 ]; then title="${title:0:60}…"; fi
+    n=$((n + 1))
+    if [ "$n" -le 3 ]; then out="${out}${out:+ · }tasks.md:${no}「${title}」"; fi
+  done < <(grep -nE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\][[:space:]]*' "$f" 2>/dev/null || true)
+  [ "$n" -gt 0 ] || return 0
+  [ "$n" -gt 3 ] && out="${out} · 另有 $((n - 3)) 项"
+  printf 'checklist · %s 项未勾 · %s\n' "$n" "$out"
+  return 1
+}
+
+# 就绪判据只有这一处（design §6）：至少一个任务指向它，且除 <排除的任务> 外全部结束，且清单没有未勾项。
 # stdout = 「为什么没就绪」（ready 时为空）；0 = ready / 1 = 没就绪。
 team_change_readiness() { # <change id> [<排除的任务 id>（归档任务自己）]
-  local id="$1" skip="${2:-}" rows n=0
+  local id="$1" skip="${2:-}" rows n=0 rc=0
   rows="$(team_change_tasks "$id")"
   [ -n "$rows" ] && n="$(printf '%s\n' "$rows" | grep -c . || true)"
   if [ "${n:-0}" -eq 0 ]; then
     printf '没有任务指向 change %s（就绪 = 至少一个任务，且除归档任务自己外全部结束）\n' "$id"
     return 1
   fi
-  team_change_blockers "$id" "$skip"
+  team_change_blockers "$id" "$skip" || rc=1
+  team_change_checklist_blockers "$id" || rc=1
+  return "$rc"
 }
 
 team_change_ready() { # <change id> → 0 = ready / 1 = 没就绪（stdout 吞掉明细）

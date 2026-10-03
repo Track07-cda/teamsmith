@@ -254,9 +254,11 @@ bash <skill>/scripts/team board set <ID> done
 > empty change). The `board set <ID> done` step below is unchanged.
 
 When the whole change (not just this task) is done, close the spec side too — **after** the verification record
-exists, the code landed, and the user confirmed:
+exists, the code landed, the user confirmed, and **the change's own ledger is reconciled** (every box in its
+`tasks.md` ticked against evidence, or ticked with the reason it could not be run):
 
 ```bash
+bash <skill>/scripts/team change status <change>   # must exit 0: every task finished + no unchecked item
 openspec archive -y <change>        # merges the deltas into openspec/specs/ and archives the change (see §0)
 ```
 

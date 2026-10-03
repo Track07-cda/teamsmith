@@ -41,7 +41,7 @@ CLI they are the equivalent prompt/skill files (§0).
 | 2 | `opsx-propose` | the **explorer** (the same agent — it holds the context) | the accepted approach | `openspec/changes/<id>/` (proposal, delta specs, design, tasks) — **planning only, no code** (the workflow itself states this boundary) | **PM proposal review — a recorded gate, same standing as `team review`**: `openspec validate --all --strict` green **and** the verdict written to `docs/team/reviews/<change>-proposal.md` as ACCEPTED (§4). **No apply brief may be dispatched before that.** |
 | 3 | `opsx-apply` | a **dev** agent, different from 1 and 4 | the change + the brief | code committed on its task branch + report | **independent verification** is dispatched to a different agent |
 | 4 | `opsx-verify` | an **independent verify** agent (never the implementer) | the change, the landed code, the report | verification record `docs/team/reviews/<ID>.md` + findings; every scenario of the change exercised, with red/green evidence | **PM**: re-runs the gate on the merged tree, decides `done`, and only then proposes archiving |
-| 5 | `opsx-archive` | **PM** (it changes the ledger) | the verified change | `openspec/changes/archive/<date>-<id>/` + updated capability specs | **the user** confirms; the PM may confirm as the user's proxy only when it states that plainly and records why (small, reversible, already covered by the approved approach) |
+| 5 | `opsx-archive` | **PM** (it changes the ledger) | the verified change | `openspec/changes/archive/<date>-<id>/` + updated capability specs | `team change status <id>` exits 0 (every task finished **and** its `tasks.md` checklist fully ticked — §5); **the user** confirms; the PM may confirm as the user's proxy only when it states that plainly and records why (small, reversible, already covered by the approved approach) |
 
 An exploration whose conclusion is "not worth doing", and a verification that fails twice, do not advance: see §7.
 
@@ -150,7 +150,15 @@ $ <a command the proposal itself promises> # → spot-checked: it exists and run
 | propose | `openspec/changes/<id>/` end to end | `openspec validate --all --strict` green and all eight checklist points pass | `docs/team/reviews/<change>-proposal.md` = ACCEPTED (or NEEDS-CHANGES + per-item findings) |
 | apply | the brief, the change, the branch, the report | the branch carries exactly the change's scenarios; the acceptance commands really ran; nothing outside the boundaries was touched | the verify brief (a different agent) |
 | verify | the change, the landed code, the verification record, the diff | every scenario was exercised with red/green evidence, on a clean independent checkout | `docs/team/reviews/<ID>.md`; then `team board set <ID> done` after re-running the gate on the merged tree |
-| archive | the verified change + the user's confirmation | `team change status <id>` exits 0 (every task of the change is finished) and the user confirmed; **trial archive first**: `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y <id>)` — OpenSpec catches some delta defects (a MODIFIED naming a requirement the base lacks, an ADDED collision, …) *only here*; the trial surfaces them while fixing is cheap, and a failure hands the change back to apply with the archiver's message | then `openspec archive -y <id>` for real, and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
+| archive | the verified change + the user's confirmation | `team change status <id>` exits 0 — every task of the change is finished **and the change's `tasks.md` has no unchecked `- [ ]` item** (the command names the count and the first three line numbers/titles and exits non-zero) — and the user confirmed; **trial archive first**: `cp -r openspec /tmp/trial && (cd /tmp/trial && openspec archive -y <id>)` — OpenSpec catches some delta defects (a MODIFIED naming a requirement the base lacks, an ADDED collision, …) *only here*; the trial surfaces them while fixing is cheap, and a failure hands the change back to apply with the archiver's message | then `openspec archive -y <id>` for real, and the user's confirmation recorded (who confirmed, or why the PM acted as proxy) |
+
+The checklist half of that exit code is the apply phase's own ledger: three changes reached archive with 23/24/16
+items unticked (P151 F3, P175 F3, P206 F1), each caught by a human instead of by the gate. The check counts
+**empty boxes only** — an item ticked with its reason (`- [x] 2.3 … 引用 P206`) is complete, and a box ticked to
+clear the gate is no evidence: the ledger is reconciled on the apply side (tick what was really done, say in the
+item what was not). Since `openspec archive` does not consult teamsmith, the gate that still catches a skipped
+checklist afterwards is the archive task's `team board set <ID> done`: it reads the change's `tasks.md` in the
+archive copy once the live directory is gone.
 
 `team board set <ID> done` reads those same phases from the brief: `explore` is done on the PM's recorded
 acceptance (a `DECISIONS.md` entry whose heading names the task, or `reviews/<ID>.md`), `propose` only on an `ACCEPTED`

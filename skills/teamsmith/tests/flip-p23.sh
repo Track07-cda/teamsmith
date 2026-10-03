@@ -4,7 +4,7 @@
 #   bash skills/teamsmith/tests/flip-p23.sh
 #   bash skills/teamsmith/tests/flip-p23.sh --keep     # 保留临时目录（排查）
 #
-# 九对「断掉 → 变红 → 还原 → 变绿」，每对都跑**对应段落的聚焦探针**（smoke 前导 + P24 夹具助手 + 那一段）：
+# 十对「断掉 → 变红 → 还原 → 变绿」，每对都跑**对应段落的聚焦探针**（smoke 前导 + P24 夹具助手 + 那一段）：
 #   1.6  让就绪判据忽略未结束的兄弟                  → 12e 变红
 #   3.7a 严格读取器退回「取第一行」的旧行为            → 12g 的 two-id 用例变红
 #   3.7b 锚守卫变成 no-op                            → 12g 的 change-less 用例变红
@@ -14,10 +14,11 @@
 #   5.5b 缺作者信号静默通过                           → 12i 的「缺信号很吵」变红
 #   6.4  归档路线不再要求 change 就绪                  → 12j 的阻塞/一致用例变红
 #   7.5  删掉清单第 10 点                             → 12k 的 7.2 断言变红
+#   P209 就绪不看 tasks.md 清单（P151/P175/P206 同族）  → 12j 的清单用例变红
 # §2.4（digest/面板归组）属 B2，本任务**明确不做**（M48/M49/M50 正在动那些文件），因此不在此包内。
 #
 # 变异只打在 /tmp 下的**技能树副本**上（真实工作树一个字节都不动）；探针用 TEAM_SMOKE_FAST=1 跑纯逻辑，
-# 不建 tmux、不起进程。退出码：0=九对全部成立；1=有反例；3=前置不满足。
+# 不建 tmux、不起进程。退出码：0=十对全部成立；1=有反例；3=前置不满足。
 set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -116,9 +117,9 @@ m_16() { python3 - "$MUT_SKILL" <<'PY'
 import sys, io
 p = sys.argv[1] + "/scripts/lib/common.sh"
 s = io.open(p, encoding="utf-8").read()
-old = '  team_change_blockers "$id" "$skip"\n'
+old = '  team_change_blockers "$id" "$skip" || rc=1\n'
 assert s.count(old) == 1, "1.6 anchor not found"
-s = s.replace(old, '  return 0  # MUTATION 1.6: ignore unfinished siblings\n', 1)
+s = s.replace(old, '  true  # MUTATION 1.6: ignore unfinished siblings\n', 1)
 io.open(p, "w", encoding="utf-8").write(s)
 PY
 }
@@ -140,9 +141,9 @@ m_37b() { python3 - "$MUT_SKILL" <<'PY'
 import sys, io
 p = sys.argv[1] + "/scripts/lib/cmd-agents.sh"
 s = io.open(p, encoding="utf-8").read()
-old = '    if out="$(team_task_anchor "$brief")"; then\n'
+old = '  if out="$(team_task_anchor "$brief")"; then return 0; fi\n'
 assert s.count(old) == 1, "3.7b anchor not found"
-s = s.replace(old, '    if out=""; then  # MUTATION 3.7b: anchor guard is a no-op\n', 1)
+s = s.replace(old, '  return 0  # MUTATION 3.7b: anchor guard is a no-op\n', 1)
 io.open(p, "w", encoding="utf-8").write(s)
 PY
 }
@@ -160,9 +161,9 @@ m_46b() { python3 - "$MUT_SKILL" <<'PY'
 import sys, io
 p = sys.argv[1] + "/scripts/lib/cmd-agents.sh"
 s = io.open(p, encoding="utf-8").read()
-old = '      [ "$sid" = "$id" ] && continue\n'
+old = '    [ "$sid" = "$id" ] && continue\n'
 assert s.count(old) == 1, "4.6b anchor not found"
-ins = old + '      [ "$(team_brief_field_raw "$sbrief" agent | head -1)" = "$agent" ] || continue  # MUTATION 4.6b: agent-local only\n'
+ins = old + '    [ "$(team_brief_field_raw "$sbrief" agent | head -1)" = "$agent" ] || continue  # MUTATION 4.6b: agent-local only\n'
 s = s.replace(old, ins, 1)
 io.open(p, "w", encoding="utf-8").write(s)
 PY
@@ -171,9 +172,9 @@ m_55a() { python3 - "$MUT_SKILL" <<'PY'
 import sys, io
 p = sys.argv[1] + "/scripts/lib/cmd-agents.sh"
 s = io.open(p, encoding="utf-8").read()
-old = '        agent)   [ "$aauth" = "$agent" ] && authored="${authored:+$authored、}$aid" ;;\n'
+old = '      agent)   [ "$aauth" = "$agent" ] && authored="${authored:+$authored、}$aid" ;;\n'
 assert s.count(old) == 1, "5.5a anchor not found"
-new = '        agent)   [ "$aid" = "$(team_state_get "$agent" task \'\')" ] && [ -n "$aid" ] && authored="${authored:+$authored、}$aid" ;;  # MUTATION 5.5a\n'
+new = '      agent)   [ "$aid" = "$(team_state_get "$agent" task \'\')" ] && [ -n "$aid" ] && authored="${authored:+$authored、}$aid" ;;  # MUTATION 5.5a\n'
 s = s.replace(old, new, 1)
 io.open(p, "w", encoding="utf-8").write(s)
 PY
@@ -182,9 +183,9 @@ m_55b() { python3 - "$MUT_SKILL" <<'PY'
 import sys, io
 p = sys.argv[1] + "/scripts/lib/cmd-agents.sh"
 s = io.open(p, encoding="utf-8").read()
-old = '    [ -n "$missing" ] && team_warn "  作者信号缺失：$missing'
+old = '  [ -n "$missing" ] && team_df_warn "  作者信号缺失：$missing —— 判不出它们的作者，不当作干净（照常派单）"\n'
 assert s.count(old) == 1, "5.5b anchor not found"
-s = s.replace(old, '    true # MUTATION 5.5b: missing signal passes silently\n    [ -n "$missing" ] && false && team_warn "  作者信号缺失：$missing', 1)
+s = s.replace(old, '  true  # MUTATION 5.5b: missing signal passes silently\n', 1)
 io.open(p, "w", encoding="utf-8").write(s)
 PY
 }
@@ -195,6 +196,16 @@ s = io.open(p, encoding="utf-8").read()
 old = '          if [ -z "${TEAM_CHANGE_READY_GATE:-}" ]; then\n'
 assert s.count(old) == 1, "6.4 anchor not found"
 s = s.replace(old, '          if false; then  # MUTATION 6.4: archive route drops the readiness requirement\n', 1)
+io.open(p, "w", encoding="utf-8").write(s)
+PY
+}
+m_p209() { python3 - "$MUT_SKILL" <<'PY'
+import sys, io
+p = sys.argv[1] + "/scripts/lib/common.sh"
+s = io.open(p, encoding="utf-8").read()
+old = '  team_change_checklist_blockers "$id" || rc=1\n'
+assert s.count(old) == 1, "P209 anchor not found"
+s = s.replace(old, '  true  # MUTATION P209: the checklist is not a precondition\n', 1)
 io.open(p, "w", encoding="utf-8").write(s)
 PY
 }
@@ -209,7 +220,7 @@ io.open(p, "w", encoding="utf-8").write(s)
 PY
 }
 
-printf '\033[1m== flip-p23 · 九对断点（§1.6 / §3.7a-b / §4.6a-b / §5.5a-b / §6.4 / §7.5） ==\033[0m\n'
+printf '\033[1m== flip-p23 · 十对断点（§1.6 / §3.7a-b / §4.6a-b / §5.5a-b / §6.4 / §7.5 / P209） ==\033[0m\n'
 printf '  （§2.4 digest/面板归组属 B2，本任务不做 —— 不在包内，见报告）\n'
 
 flip "1.6 就绪忽略未结束兄弟" 12e m_16 '12e 有未结束兄弟' '12e blocker' '12e --json 未就绪'
@@ -221,6 +232,7 @@ flip "5.5a 作者集合只看记录任务" 12i m_55a '12i 拒绝来自作者守�
 flip "5.5b 缺信号静默通过" 12i m_55b '12i 缺信号很吵'
 flip "6.4 归档不要求 change 就绪" 12j m_64 '12j 未结束兄弟' '12j 拒绝'
 flip "7.5 删掉清单第 10 点" 12k m_75 '7.2 checklist gains point 10' '7.2 checklist now has exactly ten points'
+flip "P209 清单不是归档前置" 12j m_p209 '12j P209 清单有未勾项' '12j P209 blocker 点名未勾条数' '12j P209 归档任务 done 也被清单拒绝' '12j P209 归档后的归档任务 done 被拒'
 
 printf '\n== 结果 ==  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
