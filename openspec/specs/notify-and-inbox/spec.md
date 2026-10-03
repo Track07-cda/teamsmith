@@ -531,14 +531,31 @@ context and MUST NOT use the recipient as the sender. The resolution SHALL be, i
 
 - an explicit `--from <name>` claim, recorded verbatim; when it disagrees with the runtime directory the
   disagreement MUST be named on stderr;
-- the runtime directory (`team`'s M40 identity): the project's main worktree resolves to `pm`, and a worktree
-  under the main worktree's worktrees directory resolves to that worktree's own directory name, also when the
-  process runs in one of its subdirectories;
+- the runtime directory (`team`'s M40 identity): a worktree under the main worktree's worktrees directory
+  resolves to that worktree's own directory name, also when the process runs in one of its subdirectories; the
+  project's main worktree resolves to `pm` only while no **seat clue** is present — with a seat clue the call is
+  refused instead of resolved (below);
 - otherwise the sender is unresolved.
 
-An inherited `TEAM_AGENT` MUST NOT override the runtime directory: when it disagrees, the runtime directory
-wins and the ignored value MUST be named on stderr. An unresolved call MUST exit non-zero, MUST NOT write an
-inbox line and MUST NOT enqueue a knock, and its output MUST name `--from` as the way to state the sender.
+A **seat clue** is a name of this project's roster (`TEAM_AGENTS`): a name outside the roster is not a clue, and
+a clue MUST NOT become the sender — it only vetoes the main worktree's `pm`. The clues are the window name of
+the caller's own tmux pane, read with `tmux display-message -p -t "$TMUX_PANE" '#{window_name}'` and only when
+that pane's session is this project's `TEAM_SESSION`, and an inherited `TEAM_AGENT`. A window name read without
+the caller's own pane answers the attached client's current window — an echo, not evidence — and a window of
+the same name in another session is not this project's seat. A clue that names `pm` agrees with the directory
+and is not a conflict.
+
+A call from the main worktree that carries a seat clue MUST exit non-zero, MUST NOT write an inbox line and MUST
+NOT enqueue a knock: the ledger records the author, so the directory's `pm` claim MUST NOT be recorded and the
+clue MUST NOT be adopted. Its output MUST name the directory's `pm`, each clue with its source and its name, and
+both ways out — state the sender explicitly with `--from <name>`, or run the command from the caller's own
+worktree under the main worktree's worktrees directory.
+
+An inherited `TEAM_AGENT` MUST NOT override the runtime directory: when it disagrees, the runtime directory wins
+and the ignored value MUST be named on stderr — except that a roster name in `TEAM_AGENT` makes the main
+worktree's call the seat-clue refusal above, where that value is named as the clue instead. An unresolved call
+MUST exit non-zero, MUST NOT write an inbox line and MUST NOT enqueue a knock, and its output MUST name
+`--from` as the way to state the sender.
 
 The resolved sender MUST be the name in the durable inbox line and in the knock text, in the
 `[<tag>] agent:<name> · <text>` position the turn-end notification already uses, and the knock SHALL carry the
@@ -619,6 +636,61 @@ window) yields the same `agent:<name>` in both. Why a silent `pm` fallback is wo
   turn-end extension's settle
 - **WHEN** both lines are read
 - **THEN** each line's `agent:<name>` token is `dev2`
+
+#### Scenario: A seat clue in the main worktree refuses instead of claiming `pm`
+
+- **GIVEN** the project's main worktree, run from a pane whose own window is named `dev` in this project's
+  session, with `TEAM_AGENT` unset and no `--from`
+- **WHEN** `team notify pm --from-file <file>` runs
+- **THEN** the command exits non-zero, `docs/team/inbox/pm.md` is byte-identical to its previous content,
+  `state/outbox/` gains no entry, and the output names `pm` as what the runtime directory claims, names `dev`
+  as the window-name clue, and names both ways out: `--from`, and the caller's own worktree
+
+#### Scenario: The window clue is the caller's own pane, not the client's current window
+
+- **GIVEN** the project's main worktree, run from a pane whose own window is named `dev2` in this project's
+  session, with the attached client's current window named `pm`
+- **WHEN** `team notify pm --from-file <file>` runs
+- **THEN** the command exits non-zero, no line is added to `docs/team/inbox/pm.md`, and the output names `dev2`
+  as the window-name clue (a window name read without the caller's own pane answers the attached client's
+  current window — an echo, not evidence)
+
+#### Scenario: An inherited roster name refuses the main worktree's call
+
+- **GIVEN** the project's main worktree with no tmux and `TEAM_AGENT=dev` exported
+- **WHEN** `team notify pm --from-file <file>` runs
+- **THEN** the command exits non-zero, `docs/team/inbox/pm.md` is byte-identical to its previous content,
+  `state/outbox/` gains no entry, and the output names `TEAM_AGENT` and `dev` as the clue
+
+#### Scenario: A name outside the roster is not a clue
+
+- **GIVEN** the project's main worktree with `TEAM_AGENT=nosuch` exported and no tmux
+- **WHEN** `team notify pm --from-file <file>` runs
+- **THEN** the command exits 0 and the new line matches `[manual] agent:pm · `
+- **AND** the same holds when the caller's window is named `nosuch` in this project's session, so an unknown
+  name neither refuses the call nor becomes the sender
+
+#### Scenario: Another session's window of the same name is not a clue
+
+- **GIVEN** the project's main worktree, run from a pane whose own window is named `dev` in a session that is
+  not this project's `TEAM_SESSION`
+- **WHEN** `team notify pm --from-file <file>` runs
+- **THEN** the command exits 0 and the new line matches `[manual] agent:pm · `
+
+#### Scenario: An explicit `--from` is still honoured with a seat clue present
+
+- **GIVEN** the project's main worktree, run from a pane whose own window is named `dev` in this project's
+  session
+- **WHEN** `team notify pm --from dev3 --from-file <file>` runs
+- **THEN** the command exits 0, the new line matches `[manual] agent:dev3 · `, and stderr names the
+  disagreement with the runtime directory's `pm`
+
+#### Scenario: A seat worktree is not refused by a roster clue
+
+- **GIVEN** the `dev2` worktree context with `TEAM_AGENT=dev3` exported
+- **WHEN** `team notify pm --from-file <file>` runs
+- **THEN** the command exits 0, the new line matches `[manual] agent:dev2 · `, and stderr names the ignored
+  `TEAM_AGENT=dev3` (the clue list vetoes the main worktree's `pm` only)
 
 ### Requirement: A wake is at most once: the delivery record is written before the send and survives a restart
 
