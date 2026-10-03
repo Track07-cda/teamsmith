@@ -563,6 +563,21 @@ created (or `flock` is absent) the suite prints `注意：锁文件 … 建不�
 *queue overrun* is loud (a one-line `排队超限` naming the holder in `<lock>.holder`, exit 2), and a genuine
 red is exit 1 with no queue wording (P66/P100's F1).
 
+**The gate fingerprints the tree it judges (P158).** Once the run's own root exists it records `HEAD` and the
+sha256 of `git status --porcelain --untracked-files=all` (untracked files included) into the run's scene file
+(`<run tmp>/run-fingerprint.txt`, next to `sections.tsv`), and compares that fingerprint again after the last
+section. If the tree moved while the run was in flight — a merge into the same checkout, an edit to any path,
+even one no section read — the run prints one conspicuous line
+`本次运行无效：树在跑动中被改动（HEAD A→B / 脏文件 N→M）` right next to the result line, leaves every ✓/✗ it
+already printed standing (the reds are not swallowed) and exits **4**: the verdict is *invalid*, not a judgement
+on the code, because the tree that ran is not the tree the result line names. 1 stays “there are failures”, 2
+“the gate stopped itself” (precondition or queue), 3 “no temp root”, so the four codes do not overlap; rerun
+once the tree is stable. The criterion is deliberately the whole worktree rather than “the files the suite
+read”: cheaper and unambiguous, and a record under `docs/team/**` that no section consumed still counts as the
+tree having moved (conservative). A tree that is not a git checkout prints one visible note and does not judge
+what it cannot judge (P148's rule); an unchanged tree adds no stdout at all. The red side and its teeth are
+`tests/flip-p158.sh` (four cases plus two `--break=` shadows), and suite section `0i` runs it.
+
 **How often the full suite runs (2026-09-23, user directive).** The full suite takes 13-20 minutes and the
 machine runs one at a time, so it is a *milestone* gate, not a per-change habit: a task runs it **once at
 delivery** (not per batch), a review runs it **once**, and the PM runs it on the protected branch **only at

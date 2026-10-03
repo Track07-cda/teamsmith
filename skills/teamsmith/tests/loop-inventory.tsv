@@ -77,3 +77,4 @@ lib/tmp-root.sh	441	cap="$_i" -lt 50	while [ "$_i" -lt 50 ]; do
 lib/tmp-root.sh	452	cap="$_i" -lt 100	while [ "$_i" -lt 100 ] && kill -0 "$term_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
 lib/tmp-root.sh	478	cap="$_i" -lt 50	while [ "$_i" -lt 50 ]; do
 lib/tmp-root.sh	488	cap="$_i" -lt 25	while [ "$_i" -lt 25 ] && kill -0 "$fg_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
+flip-p158.sh	109	cap="$i" -lt 500	while [ "$i" -lt 500 ] && [ -z "$fp" ]; do

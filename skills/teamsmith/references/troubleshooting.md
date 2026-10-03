@@ -1193,6 +1193,18 @@ marker inside each root names the creating pid, its start time and the kind, and
 `config-cli.*` roots (3.2 GB) that kept being created and never reclaimed; the fix is the ownership rule above,
 not a periodic cleanup daemon.
 
+**A red that is not the code, part 2: the tree moved while the gate ran (P158).** On 2026-10-02 a
+`fast-full-capture` run reported 138 reds because a merge (P147) landed in the same checkout while it was
+running; every red fell in the sections whose files the merge touched, and the diagnosis first blamed the
+fixtures, then the product. The gate now fingerprints the tree (`HEAD` + the sha256 of
+`git status --porcelain --untracked-files=all`, untracked included) in `<run tmp>/run-fingerprint.txt` when it
+starts and compares it after the last section. A changed tree prints the one-line verdict
+`本次运行无效：树在跑动中被改动（HEAD A→B / 脏文件 N→M）` next to the result line, keeps every ✓/✗ it already printed, and exits **4** — that is not
+a verdict on the code, so wait for the tree to be stable and rerun once; do not start bisecting the reds. The
+fingerprint covers the whole worktree on purpose (not just the files the suite read), so a record under
+`docs/team/**` committed mid-run invalidates the run too. A tree that is not a git checkout prints one visible
+note instead. The flip fixture is `tests/flip-p158.sh` (section `0i` runs it).
+
 ## 26. `team review <ID> --post-merge` says both sides touched — read the content first
 
 **Symptom**: after a squash merge the post-merge check exits non-zero and names paths, for example

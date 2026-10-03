@@ -23,6 +23,7 @@
 0f	0f · 超时段落：点名 + 停跑 + 现场（P70）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/lib/section-guard.sh	-	P70 报文里的行；P98 F2 补齐——嵌套跑真 smoke（私有 TMPDIR / 私有身份 / TEAM_SMOKE_FIXTURE），造超时要动的是守卫与门禁本体
 0g	0g · 等待有界：到顶归因 + ticks（P70）	skills/teamsmith/tests/lib/section-guard.sh	-	P70 报文里的行；P98 F2 补齐——等待助手 section_guard_wait 定义在守卫模块里
 0h	0h · tmux 隔离前置：三条件 + 硬停 + 影子（P162）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/lib/tmux-iso.sh skills/teamsmith/tests/lib/tmux-iso-probe.sh skills/teamsmith/tests/lib/tmux-iso-call-probe.sh skills/teamsmith/scripts/shim/tmux skills/teamsmith/scripts/lib/tmux-argv.sh	-	P162（infra）：前置库/探针/包装体都是这段的产物；P180：动词按 argv 解析 + 壳函数（tmux/command）住在 lib 里，调用形态探针也是这段的产物（改它们或 0c 的隔离前置都要重跑这段）；P188：分类抽成共享文件（scripts/lib/tmux-argv.sh），本段与运行时闸门同源（链/别名/builtin command 的形态也在本段）
+0i	0i · 运行指纹：树在跑动中被改 → 本次运行无效（P158）	skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/flip-p158.sh	-	P158（infra）：实现写在 smoke.sh 前导/收尾（开跑指纹 + 收尾复测），段内跑夹具本体 tests/flip-p158.sh（变体树里的真门禁运行：四条用例 + 牙齿）
 1	1 · doctor（未初始化应失败）	skills/teamsmith/scripts/lib/cmd-project.sh skills/teamsmith/scripts/team	-	段内调用 team doctor
 1b	1b · bootstrap（一条命令初始化）	README.md skills/teamsmith/scripts/lib/cmd-bootstrap.sh skills/teamsmith/scripts/team	-	段内点名 1 条真实路径 token；段内调用 team bootstrap
 1c	1c · bootstrap 的 PM 窗口名：约定不是现场（M11）	README.md skills/teamsmith/scripts/team skills/teamsmith/scripts/lib/cmd-bootstrap.sh skills/teamsmith/scripts/lib/cmd-project.sh	-	段内点名 2 条真实路径 token；段内调用 team bootstrap/doctor

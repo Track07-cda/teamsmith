@@ -550,6 +550,91 @@ mkdir -p "$REPO" "$FAKE"
 # P70：阈值表在 skill 树里（只读）；计时记录 sections.tsv / 开跑行 sections.log 在 $TMP。
 section_guard_init "$TMP" --budgets "$SKILL_DIR/tests/section-budgets.tsv"
 
+# ── P158 · 运行指纹：门禁自证「我判的那棵树在跑动中没被改」──────────────────────────────────
+# 事故（D79）：`fast-full-capture` 跑动期间 PM 在同一棵树里合并了 P147 → 该次运行报 ✗138 ✓，
+# 红全落在被改动的段上 ✗ —— **假红** ✓，而且归因成本极高（先怀疑夹具、再怀疑产品）✗。
+# 判据（保守、便宜、无歧义）：开跑时记 `HEAD` + `git status --porcelain --untracked-files=all`
+# （含未跟踪）的哈希 → 写进本轮的现场文件 `$TMP/run-fingerprint.txt`（与 sections.tsv 同处）；
+# 收尾再记一次并比较：
+#   * 一致 → 一个字节都不多打（与改动前的可观测行为逐字节相同）；
+#   * 不一致 → 一行醒目的「本次运行无效」（紧挨结果行、在它之前）+ 约定的退出码 4；已跑出的
+#     ✓/✗ 照旧原样打印（**不吞**红），但都不作数；
+#   * 口径是**整棵树**，不问「门禁读了哪些文件」：比追踪读集便宜且无歧义 —— 跑动中改的是
+#     `docs/team/**` 里门禁没读过的记录，也照样算「树被改了」（保守方向）；
+#   * 退出码：1 已经被「有失败项」占用、2 是门禁自己停跑/前置不成立、3 是建不出临时根，
+#     所以「无效」用 **4**（写进 references/protocol.md §9b-2）；
+#   * 树不是 git 检出（产品面安装树 / 不带 .git 的拷贝）→ 打印一行可见的「运行指纹不可用」，
+#     不做「树被改动」判定 —— 门禁不许对自己没判的事假装判过（P148 同一条纪律）。
+RF_EXIT_INVALID=4
+RF_ROOT="${CHECKOUT_REPO_ROOT:-}"
+RF_FILE=""
+RF_PROBE0=""
+RF_STATE="idle"      # idle（没装）| armed（收尾比较）| unavailable（不是 git 检出）
+SMOKE_RUN_INVALID=0
+rf_field() { # <字段名> <探针串> → 值（缺字段 → `-`）
+  local k="$1" p="$2" v
+  v="${p#*"$k="}"; v="${v%% *}"
+  if [ "$v" != "$p" ] && [ -n "$v" ]; then printf '%s' "$v"; else printf -- '-'; fi
+}
+rf_short() { # <sha> → 12 位短 sha（`-` 原样）
+  case "$1" in -|'') printf -- '-' ;; *) printf '%s' "${1:0:12}" ;; esac
+}
+rf_probe() { # <树根> → `head=<sha|-> dirty=<N|-> sha=<hash|->`；不是 git 检出 → `unavailable`
+  local root="$1" head body n sha
+  command -v git >/dev/null 2>&1 || { printf 'unavailable'; return 0; }
+  git --no-optional-locks -C "$root" rev-parse --git-dir >/dev/null 2>&1 || { printf 'unavailable'; return 0; }
+  head="$(git --no-optional-locks -C "$root" rev-parse HEAD 2>/dev/null)" || head="-"
+  # -c status.renames=false：把「重命名怎么显示」钉死；--untracked-files=all：未跟踪也算树的一部分
+  # （brief 逐字要求「含未跟踪」）；--no-optional-locks：只读探测，不去抢索引锁。
+  body="$(git --no-optional-locks -C "$root" -c status.renames=false status --porcelain --untracked-files=all 2>/dev/null)" || body=""
+  n="$(printf '%s\n' "$body" | grep -c .)"; n="${n:-0}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha="$(printf '%s\n' "$body" | sha256sum 2>/dev/null | awk '{print $1}')"
+  else
+    sha="$(printf '%s\n' "$body" | cksum 2>/dev/null | awk '{print $1}')"
+  fi
+  [ -n "$sha" ] || sha="-"
+  printf 'head=%s dirty=%s sha=%s' "$head" "$n" "$sha"
+  return 0
+}
+rf_capture() { # 开跑：记指纹（只写现场文件，不改 stdout —— 一致时要与改动前逐字节相同）
+  [ -n "$RF_ROOT" ] || return 0
+  RF_FILE="$TMP/run-fingerprint.txt"
+  RF_PROBE0="$(rf_probe "$RF_ROOT")"
+  if [ "$RF_PROBE0" = "unavailable" ]; then RF_STATE=unavailable; else RF_STATE=armed; fi
+  {
+    printf '# P158 · 运行指纹（门禁自证：树在跑动中没被改）\n'
+    printf 'root: %s\n' "$RF_ROOT"
+    printf 'status_cmd: git --no-optional-locks -C %s -c status.renames=false status --porcelain --untracked-files=all\n' "$RF_ROOT"
+    printf 'at_start: %s\n' "$(date -Is)"
+    printf 'start: %s\n' "$RF_PROBE0"
+    [ "$RF_STATE" = "unavailable" ] && printf 'note: %s 不是 git 检出 → 不做「树被改动」判定\n' "$RF_ROOT"
+  } >>"$RF_FILE" 2>/dev/null || true
+  if [ "$RF_STATE" = "unavailable" ]; then
+    printf '  \033[33m注意\033[0m：运行指纹不可用（%s 不是 git 检出）—— 本次不判「树在跑动中被改动」\n' "$RF_ROOT"
+  fi
+  return 0
+}
+smoke_fingerprint_compare() { # 收尾：复测并比较；不一致 → 「本次运行无效」+ 约定退出码
+  [ "$RF_STATE" = "armed" ] || return 0
+  local probe
+  probe="$(rf_probe "$RF_ROOT")"
+  {
+    printf 'at_end: %s\n' "$(date -Is)"
+    printf 'end: %s\n' "$probe"
+    printf 'verdict: %s\n' "$([ "$probe" = "$RF_PROBE0" ] && printf same || printf changed)"
+  } >>"$RF_FILE" 2>/dev/null || true
+  [ "$probe" = "$RF_PROBE0" ] && return 0
+  SMOKE_RUN_INVALID=1
+  printf '\n\033[1;31m本次运行无效：树在跑动中被改动（HEAD %s→%s / 脏文件 %s→%s）\033[0m\n' \
+    "$(rf_short "$(rf_field head "$RF_PROBE0")")" "$(rf_short "$(rf_field head "$probe")")" \
+    "$(rf_field dirty "$RF_PROBE0")" "$(rf_field dirty "$probe")"
+  printf '  指纹（开跑→收尾）：%s；退出码 %s —— 本轮的 ✓/✗ 都不作数（已跑出的红原样打印在上面，没被吞），等树稳定后重跑再判\n' \
+    "$RF_FILE" "$RF_EXIT_INVALID"
+  return 0
+}
+rf_capture
+
 # M36：本轮自己的 shim 调用日志落在 $TMP（调用者窗口若已装闸门，smoke 的夹具 tmux 调用会被它记录 ——
 # 记到这里而不是真项目的 state/tmux-calls.log，真账本零污染）。31c 自己按需逐条覆盖这个变量。
 TEAM_TMUX_CALLS_LOG="$TMP/tmux-calls-caller.log"; export TEAM_TMUX_CALLS_LOG
@@ -1672,6 +1757,31 @@ timeout 5 bash -c '. "$1"; tmux_iso_prove --tmpdir' _ "$SKILL_DIR/tests/lib/tmux
 assert_eq "P180 边界：tmux_iso_prove --tmpdir（缺值）→ bad-option 立刻返回，不挂死" "$?" "1"
 timeout 5 bash -c '. "$1"; tmux_iso_argv_parse --argv' _ "$SKILL_DIR/tests/lib/tmux-iso.sh" >/dev/null 2>&1
 assert_eq "P180 边界：tmux_iso_argv_parse 无参数 → 立刻返回，不挂死" "$?" "0"
+# ---------------------------------------------------------------- 0i. P158 运行指纹（树在跑动中被改 → 无效）
+# 事故（D79）：`fast-full-capture` 跑动期间 PM 在**同一棵树**里合并了 P147 → 那次运行报 ✗138，红全落在
+# 被改动的段上（假红），归因成本极高。判据：开跑时记 HEAD + `git status --porcelain`（含未跟踪）的哈希
+# 到本轮现场文件（$TMP/run-fingerprint.txt，与 sections.tsv 同处），收尾复测比较；不一致 → 一行醒目的
+# 「本次运行无效」（在结果行之前）+ 约定的退出码 4（1 已被「有失败项」占用；红照旧打印，**不吞**）。
+# 本段跑夹具本体 tests/flip-p158.sh：真门禁在**变体树**（真 .git + 私有 TMPDIR）里跑，跑动中按用例
+# 改变体树；四条用例（基线不报 / docs/team 记录 / 未跟踪文件 / HEAD 前进）+ 牙齿（把变体里的比较砸成
+# no-op → 本包必须发现）。真树一个字节都不碰，不起真进程夹具（FAST 模式）。
+section "0i · 运行指纹：树在跑动中被改 → 本次运行无效（P158）"
+# 红侧要一棵**真 git 树**才能建变体树（产品面安装树 / 导出的 tarball 里没有仓库元数据）：那种形状下
+# 这段必须**可见跳过**，不能把「本节判不了」报成红（P148 的同一纪律）。
+if git -C "$SKILL_DIR" rev-parse --show-toplevel >/dev/null 2>&1; then
+  P158_RC=0
+  bash "$SKILL_DIR/tests/flip-p158.sh" >"$TMP/p158-flip.log" 2>&1 || P158_RC=$?
+  assert_eq "0i 红侧：四条用例全过（基线 rc=0 不报；三条改动 rc=4 都报「无效」）" "$P158_RC" "0"
+  [ "$P158_RC" -eq 0 ] || tail -14 "$TMP/p158-flip.log" | sed 's/^/      /'
+  assert_eq "0i 四条用例各自有 ✓（不是只报了一个总数）" "$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p158-flip.log" | grep -ac '^  ✓ ' || true)" "4"
+  assert_has "$TMP/p158-flip.log" "flip-p158：四条都对上了" "0i 夹具自报四条都对上"
+  P158_BRC=0
+  bash "$SKILL_DIR/tests/flip-p158.sh" --break=ignore >"$TMP/p158-flip-break.log" 2>&1 || P158_BRC=$?
+  assert_eq "0i 牙齿：把变体里的比较砸成 no-op → 本包必须发现（rc=0）" "$P158_BRC" "0"
+  assert_has "$TMP/p158-flip-break.log" "本包确实在读实现" "0i 牙齿：砸掉实现后本条不再判无效（本包确实读实现，不是空跑）"
+else
+  cond_skip "0i 红侧（树在跑动中被改 → 本次运行无效）" "这棵树不是 git 检出（建不出变体树）—— 指纹腿本身照旧打印可见提示「不可用」且不判无效；本段判不了，不报红"
+fi
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
 if $TEAM doctor >"$TMP/doctor-pre.log" 2>&1; then bad "未初始化时 doctor 应失败"; else ok "未初始化时 doctor 正确报错"; fi
@@ -19136,6 +19246,7 @@ smoke_section_close          # 最后一段也必须有收口行（统一行）�
 section_guard_finish         # P70：关看门狗（最后一段已收口；干净跑不留哨兵文件）
 smoke_slowest_summary        # 最慢 N 段（纯记录：不判定、不改退出码）
 smoke_ledger_selfcheck       # 段落增量之和 vs 结果行总数（不一致只打印一行）
+smoke_fingerprint_compare    # P158：收尾复测指纹；树被跑动中改过 → 在结果行之前打印「本次运行无效」
 if [ "$SELECT_MODE" = "1" ]; then
   printf '\n\033[1m== 选段结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
 else
@@ -19151,6 +19262,11 @@ fi
 # 选段运行：未跑清单就在最后几行里（team review 记录的就是尾部）；不是 RUN 子进程才在这里打（RUN 由
 # 父进程在子进程结束后打，保证它落在最后）
 if [ "$SELECT_MODE" = "1" ] && [ "$SMOKE_SEL_IS_CHILD" != "1" ]; then smoke_select_tail; fi
+if [ "$SMOKE_RUN_INVALID" = "1" ]; then
+  # P158：无效优先 —— 红/绿都不作数（红已原样打印过，没被吞）；1 留给「有失败项」
+  printf '\033[1;31m本次运行无效（树在跑动中被改动）\033[0m —— 退出码 %s（不是 1：1 是「有失败项」）；本轮的 ✓/✗ 都不作数，等树稳定后重跑\n' "$RF_EXIT_INVALID"
+  exit "$RF_EXIT_INVALID"
+fi
 if [ "$FAIL" -eq 0 ]; then
   # 选段运行绝不打印 smoke 全绿：它只说明「跑了的段是绿的」，不是全套门禁（D7）
   [ "$SELECT_MODE" = "1" ] && exit 0
