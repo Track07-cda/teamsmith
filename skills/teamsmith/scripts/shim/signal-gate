@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# teamsmith · 信号闸门（P159 · safe-signal-discipline）—— 被注入到 agent 会话（PM 与 worker 窗口）
-# PATH 最前的 `pkill` / `killall` 包装（同目录的 `pkill` / `killall` 是指向本文件的软链）。
+# teamsmith · 信号闸门（P159 · safe-signal-discipline；P167 · signal-gate-pgrep）—— 被注入到 agent
+# 会话（PM 与 worker 窗口）PATH 最前的包装（同目录的 `pkill` / `killall` / `pgrep` / `pidof`
+# 都是指向本文件的软链）。
 #
 # 为什么存在：三次同族事故都是「按名字/命令行模式选进程」——模式命中了别的项目、别的会话里的同名
 # 进程，也命中了调用者自己的 shell（模式串就在那条命令行里）：
@@ -10,18 +11,25 @@
 #   · D72 dev-bob 的 `pkill -f` 误杀了同期的门禁客户端。
 # 名字/命令行模式不是身份。闸门管的正是窗口里的 ad-hoc 调用（静态那一半由 tests/signal-lint.pl 管）。
 #
-# 判定（D1/D2/D3，见 openspec/changes/safe-signal-discipline/design.md）：
-#   · **没有可证明的选择形式**：`-f <模式>`、`-x <名字>`、`-P <pid>`、`-u <user>`、`killall` 的
-#     各种形态都会选中调用者无法枚举的集合 —— 一律拒绝（exit 64），不执行真身、不发任何信号；
-#   · 放行的只有**不选择任何进程**的四个只读词：`--help` / `-h` / `-V` / `--version`（单个参数），
-#     它们原样递给真身并记 act=pass；
+# 判定（D1/D2/D3，见 openspec/changes/safe-signal-discipline/design.md；选择器语法表见
+# openspec/changes/signal-gate-pgrep/specs/boundary/spec.md 与 references/protocol.md）：
+#   · **没有可证明的选择形式**：`pkill`/`killall` 的 `-f <模式>`、`-x <名字>`、`-P <pid>`、`-u <user>`、
+#     `killall` 的裸名字；`pgrep` 的按名字/模式/所有者选择（裸名字、`-f` 出 PID、`-u`/`-U`/`-G`…）、
+#     `pidof` 的**一切选择形态** —— 一律拒绝（exit 64），不执行真身、不发任何信号；
+#   · 放行的是**不选择任何进程**的只读形式：单个 `--help` / `-h` / `-V` / `--version`（四个工具都有），
+#     加上 `pgrep` 的 `-g N` / `-P N`（N 是显式正整数）与三种「整命令计数」拼写
+#     （`-fc P` / `-f -c P` / `-c -f P`，P 非空且不以 `-` 开头 —— 只出计数，不出 PID 列表）；
+#     放行的调用原样递给真身并记 act=pass；分类看的是**整个 argv**，不是「成员里有没有某个旗标」；
 #   · **没有带内放行 token**（tmux 闸门有 `--teamsmith-allow-destructive`，因为人在 argv 里能点名
 #     对象；信号没有对象可点，那正是问题本身），也**不读任何环境变量当授权**
 #     （TEAM_ALLOW_PATTERN_KILL=1 之类的继承值不改变任何判定）；
-#   · `kill` / `pgrep` / `ps` / `pidof` **不拦**：闸门是 PATH shim，exec 时只看到展开后的 argv，
+#   · `pgrep -g`/`-P` 是**诊断**：返回的 pid 没有被 spawner 记录过，不等于它们可被信号；计数也不是
+#     PID。两条都不构成按谓词发信号的授权。
+#   · `kill` / `ps` / `fuser` **不拦**：闸门是 PATH shim，exec 时只看到展开后的 argv，
 #     `kill $(pgrep -f x)` 与 `kill $(cat job.pid)` 在它看来同样四个词 —— 拦 `kill` 要么堵死安全
-#     路线、要么放过不安全的那条。绝对路径（/usr/bin/pkill）与没有把闸门目录放 PATH 最前的 shell
-#     同样是**明说的边界**，由 tests/signal-lint.pl 静态覆盖仓库脚本。
+#     路线、要么放过不安全的那条。绝对路径（/usr/bin/pkill、/usr/bin/pgrep）与没有把闸门目录放
+#     PATH 最前的 shell、shell 函数、其它产 PID 列表的工具**同样是明说的边界**，由
+#     tests/signal-lint.pl 静态覆盖仓库脚本。
 #
 # 记录（D4，与 tmux 家族同形）：每次调用追加一行到 $TEAM_SIGNAL_CALLS_LOG
 #    `<ISO> · act=<pass|refused> · tool=<pkill|killall> · argv=<…> · pid=<…> ppid=<…> cwd=<…>`
@@ -38,9 +46,9 @@ set -u
 _shim_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 _tool="$(basename "$0")"
 case "$_tool" in
-  pkill|killall) ;;
+  pkill|killall|pgrep|pidof) ;;
   *)
-    printf '✗ teamsmith 信号闸门：本文件只应以 pkill / killall 的名字被调用（当前 %s）—— 同目录的 pkill/killall 是软链入口\n' \
+    printf '✗ teamsmith 信号闸门：本文件只应以 pkill / killall / pgrep / pidof 的名字被调用（当前 %s）—— 同目录的同名软链才是入口\n' \
       "${_tool:-?}" >&2
     exit 2 ;;
 esac
@@ -51,15 +59,44 @@ _shim_argc=$#
 _shim_cwd="$(pwd -P 2>/dev/null || printf '%s' "${PWD:-}")"
 _argv="$(printf '%s' "$*" | tr '\r\n' '  ')"
 
-# ── 判定：只读四词以外的一律拒绝（没有可证明的选择形式，D1）──────────────────────────────────
-_readonly=0
-if [ "$_shim_argc" -eq 1 ]; then
-  case "$1" in
-    --help|-h|-V|--version) _readonly=1 ;;
+# ── 判定：按**整个 argv** 分类（D2/D3）───────────────────────────────────────────────────────
+# `_is_positive_int` 只认 [1-9][0-9]*：0 是「隐式调用者进程组/父进程」的简写、负数与前导 0 都是
+# 非显式 ID，一律不算「有记录的显式标量」。`_is_info_token` 是四个工具共享的只读信息词。
+_is_positive_int() { # <v> → 0 = 显式正整数
+  case "${1:-}" in
+    ''|*[!0-9]*) return 1 ;;
+    0*) return 1 ;;
+    *) return 0 ;;
   esac
-fi
+}
+_is_info_token() { case "${1:-}" in --help|-h|-V|--version) return 0 ;; *) return 1 ;; esac; }
+
 _act="refused"
-if [ "$_readonly" = "1" ]; then _act="pass"; fi
+_pat=""
+case "$_tool" in
+  pkill|killall)
+    [ "$_shim_argc" -eq 1 ] && _is_info_token "$1" && _act="pass"
+    ;;
+  pgrep)
+    if [ "$_shim_argc" -eq 1 ]; then
+      _is_info_token "$1" && _act="pass"
+    elif [ "$_shim_argc" -eq 2 ]; then
+      case "$1" in
+        -g|-P) _is_positive_int "$2" && _act="pass" ;;
+        -fc)   [ -n "$2" ] && [ "${2#-}" = "$2" ] && _act="pass" ;;
+      esac
+    elif [ "$_shim_argc" -eq 3 ]; then
+      case "$1" in
+        -f) [ "$2" = "-c" ] && _pat="$3" ;;
+        -c) [ "$2" = "-f" ] && _pat="$3" ;;
+      esac
+      if [ -n "$_pat" ] && [ "${_pat#-}" = "$_pat" ]; then _act="pass"; fi
+    fi
+    ;;
+  pidof)
+    [ "$_shim_argc" -eq 1 ] && _is_info_token "$1" && _act="pass"
+    ;;
+esac
 
 # ── 有界追加（与 tmux 闸门逐字同源，P132/P77/P87）：<file> ← $_line ─────────────────────────────
 # 写不进去不挡路；FIFO 目标直接判失败（日志绝不能挂住调用）；超 2000 条调用行留最新 1000 条，
@@ -122,6 +159,12 @@ if [ "$_act" = "refused" ]; then
   printf '✗ teamsmith 信号闸门：已拒绝 %s —— 名字或命令行模式**不是身份**，无法证明这些进程归调用者\n' "$_tool" >&2
   printf '  调用参数：%s\n' "$_tool${_argv:+ $_argv}" >&2
   printf '  为什么：模式/名字会同时命中别的项目、别的会话里的同名进程，也会命中调用者自己的 shell（模式串就在这条命令行里）。\n' >&2
+  case "$_tool" in
+    pgrep)
+      printf '  pgrep 只放行不选择进程的只读形式：`-g <正整数>`、`-P <正整数>`、`-fc <命令>`（整命令计数，只出个数不出 PID 列表）。\n' >&2 ;;
+    pidof)
+      printf '  pidof 按名字选择是它的定义：只放行单个 `--help`/`-h`/`-V`/`--version`。\n' >&2 ;;
+  esac
   printf '  安全路线（信号只发给**记录过的 pid**）：\n' >&2
   printf '    · team bg list           看本项目后台作业记录到的 pid\n' >&2
   printf '    · team bg stop <id>      按记录停作业（先验 pid + 启动时间指纹）\n' >&2
@@ -129,11 +172,16 @@ if [ "$_act" = "refused" ]; then
   exit 64
 fi
 
-# ── 放行：解析真身（TEAM_SIGNAL_REAL 优先，否则 PATH 里第一个不是我的同名文件），逐字节透传 ──
+# ── 放行：解析真身，逐字节透传 ────────────────────────────────────────────────────────────────
+# pkill/killall 沿用 TEAM_SIGNAL_REAL 钉桩；**pgrep/pidof 忽略这个旧 pin** —— 它通常钉在 pkill 上，
+# 那是信号工具、不是诊断工具，把放行的诊断调用路由过去等于换个名字发信号。新选择器只按**自己的
+# 名字**在 PATH 里找第一个不是闸门自己的同名文件（D3/D4）。
 _real=""
-if [ -n "${TEAM_SIGNAL_REAL:-}" ] && [ -x "${TEAM_SIGNAL_REAL:-}" ]; then
-  _c="$(readlink -f "$TEAM_SIGNAL_REAL" 2>/dev/null || printf '%s' "$TEAM_SIGNAL_REAL")"
-  [ "$_c" != "$_shim_self" ] && _real="$TEAM_SIGNAL_REAL"
+if [ "$_tool" = "pkill" ] || [ "$_tool" = "killall" ]; then
+  if [ -n "${TEAM_SIGNAL_REAL:-}" ] && [ -x "${TEAM_SIGNAL_REAL:-}" ]; then
+    _c="$(readlink -f "$TEAM_SIGNAL_REAL" 2>/dev/null || printf '%s' "$TEAM_SIGNAL_REAL")"
+    [ "$_c" != "$_shim_self" ] && _real="$TEAM_SIGNAL_REAL"
+  fi
 fi
 if [ -z "$_real" ]; then
   _oldifs="$IFS"; IFS=':'
