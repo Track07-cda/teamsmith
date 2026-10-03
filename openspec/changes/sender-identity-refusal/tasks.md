@@ -23,7 +23,7 @@ How each added scenario is re-checked (run what → read which part → expected
 
 ## 1. R1 · the contract text (`notify-and-inbox`)
 
-- [ ] 1.1 re-baseline the delta against the spec this apply will actually replace. Extract both requirements and
+- [x] 1.1 re-baseline the delta against the spec this apply will actually replace. Extract both requirements and
   diff them:
   `awk '/^### Requirement: A manual notification is attributed/{f=1} f && /^### Requirement: A wake is at most once/{exit} f{print}' openspec/specs/notify-and-inbox/spec.md > /tmp/p204-base.md`
   and `sed -n '/^### Requirement: A manual notification is attributed/,$p' openspec/changes/sender-identity-refusal/specs/notify-and-inbox/spec.md > /tmp/p204-delta.md`, then `diff /tmp/p204-base.md /tmp/p204-delta.md`.
@@ -31,12 +31,12 @@ How each added scenario is re-checked (run what → read which part → expected
   and one new paragraph) plus the appended scenarios. If another change archived a modification of this
   requirement in the meantime, its sentences are folded in here — an unexpected hunk is a merge, never noise.
   The eleven baseline scenarios must survive as the baseline's own text.
-- [ ] 1.2 the scenario inventory, both directions:
+- [x] 1.2 the scenario inventory, both directions:
   `diff <(awk '/^### Requirement: A manual notification is attributed/{f=1} f && /^### Requirement: A wake is at most once/{exit} f{print}' openspec/specs/notify-and-inbox/spec.md | grep '^#### Scenario:' | sort) <(sed -n '/^### Requirement: A manual notification is attributed/,$p' openspec/changes/sender-identity-refusal/specs/notify-and-inbox/spec.md | grep '^#### Scenario:' | sort)`.
   Read: no `<` line (nothing dropped), exactly seven `>` lines (the additions), eleven titles on both sides.
   Red side (never on the real tree): delete one baseline scenario from a scratch copy of the delta and run
   `openspec validate` there — it fails naming the omitted scenario (`trial.sh` step 2 does this).
-- [ ] 1.3 `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` — green, and
+- [x] 1.3 `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` — green, and
   `PATH="$HOME/.bun/bin:$PATH" bash skills/teamsmith/tests/spec-refs.sh --check` names no undeclared reference
   (the walk judges the delta as the effective text).
 
@@ -45,7 +45,7 @@ How each added scenario is re-checked (run what → read which part → expected
 The three "nothing yet" rows of `design.md` §5 are this section's work. Fixtures only: no real tmux is needed
 (the section's `tmux` is a shim), and nothing here writes outside the suite's own scratch root.
 
-- [ ] 2.1 `skills/teamsmith/tests/smoke.sh` section 47 case ③ (the no-misfire direction) gains the four runs the
+- [x] 2.1 `skills/teamsmith/tests/smoke.sh` section 47 case ③ (the no-misfire direction) gains the four runs the
   delta's added scenarios pin but the block does not exercise yet: the main checkout with a window named
   `nosuch` (non-roster) → exit 0 and `agent:pm`; the main checkout with `TEAM_AGENT=nosuch` → exit 0 and
   `agent:pm`; the `dev2` worktree with `TEAM_AGENT=dev3` (a roster seat) → exit 0 and `agent:dev2` with stderr
@@ -53,48 +53,51 @@ The three "nothing yet" rows of `design.md` §5 are this section's work. Fixture
   `agent:dev3` with stderr naming the disagreement with `pm`. Verify:
   `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh --select 47 </dev/null` green, and each new assertion
   reddens under its shadow (2.2–2.4).
-- [ ] 2.2 `skills/teamsmith/tests/flip-p201.sh`, shadow B: drop the roster membership test in
+- [x] 2.2 `skills/teamsmith/tests/flip-p201.sh`, shadow B: drop the roster membership test in
   `team_sender_seat_clues` (a non-empty window name or `TEAM_AGENT` becomes a clue). The two new non-roster
   assertions of 2.1 must be red, cases ①② must stay red-capable (they still refuse), and the restore must be
   green. This is the red side of "a name outside the roster is not a clue".
-- [ ] 2.3 shadow C: move the clue refusal above the explicit-claim branch (`--from` no longer wins). The new
+- [x] 2.3 shadow C: move the clue refusal above the explicit-claim branch (`--from` no longer wins). The new
   `--from dev3`-with-a-clue assertion must be red (the call refuses instead of recording `agent:dev3`), the
   no-clue runs must stay green, and the restore must be green.
-- [ ] 2.4 shadow D: drop the refusal's directory precondition (`[ "$dir" = "pm" ]`) so it fires from any
+- [x] 2.4 shadow D: drop the refusal's directory precondition (`[ "$dir" = "pm" ]`) so it fires from any
   directory. The new worktree assertion must be red (the `dev2` call refuses instead of recording `agent:dev2`);
   the mutation is deliberately broad, so other worktree-with-clue assertions may redden too — the criterion is
   that the new assertion is among them and the restore is green.
-- [ ] 2.5 `bash skills/teamsmith/tests/flip-p201.sh` (all shadows) reports its two-sided result and exits 0;
+- [x] 2.5 `bash skills/teamsmith/tests/flip-p201.sh` (all shadows) reports its two-sided result and exits 0;
   `bash skills/teamsmith/tests/section-guard.sh --budget-check` and `--loop-check` are green (section 47's row
   keeps `band_s >= max(host, container, ci)`; re-measure the row only if the added assertions exceed the band of
   2 s / budget 60 s, and only in `section-budgets.tsv`), and `bash skills/teamsmith/tests/section-select.sh --check` is green.
 
 ## 3. R1 · the archive shape (`notify-and-inbox`)
 
-- [ ] 3.1 `bash docs/team/reports/P204-dev2/trial.sh` — all three trials green, i.e. the delivered tree
+- [x] 3.1 `bash docs/team/reports/P204-dev2/trial.sh` — all three trials green, i.e. the delivered tree
   validates; a scratch copy with one baseline scenario deleted fails naming it; a scratch
   `openspec archive -y sender-identity-refusal` reports `~ 1 modified`, validates green afterwards, and the
   archived base requirement holds 18 scenarios with the refusal paragraph present and the retired sentence gone.
-- [ ] 3.2 the same scratch tree holds `openspec/changes/archive/<date>-sender-identity-refusal` and no unarchived
+- [x] 3.2 the same scratch tree holds `openspec/changes/archive/<date>-sender-identity-refusal` and no unarchived
   change directory, and the real `openspec/specs/**` is byte-identical to its pre-trial content (`git status`
   clean for it).
 
 ## 4. Gates
 
-- [ ] 4.1 `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` — green.
-- [ ] 4.2 `PATH="$HOME/.bun/bin:$PATH" bash skills/teamsmith/tests/spec-refs.sh --check` — green.
-- [ ] 4.3 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` — green.
-- [ ] 4.4 the full suite in the disposable container (never the shared tmux server):
+- [x] 4.1 `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict` — green.
+- [x] 4.2 `PATH="$HOME/.bun/bin:$PATH" bash skills/teamsmith/tests/spec-refs.sh --check` — green.
+- [x] 4.3 `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` — green.
+- [x] 4.4 the full suite in the disposable container (never the shared tmux server):
   `distrobox-host-exec podman run --rm --pid=host --cgroups=enabled --userns=keep-id -e HOME=/tmp -v "$PWD":/work -w /work localhost/teamsmith-gate:local bash -c 'git config --global --add safe.directory /work; bash skills/teamsmith/tests/smoke.sh </dev/null'`
   — green; a panel timing section that reddens on load records its load (its premise governs).
+  **P208 ran no full suite (no log attached): the full run belongs to the PM's final release gate.** This tick
+  rests on the apply's own two container full runs — 4566 ✓ 0 ✗ in `docs/team/reports/P205-dev/44-container-full.log`
+  and `45-container-full-delivered-tip.log`.
 
 ## 5. Record
 
-- [ ] 5.1 `docs/team/reports/<ID>-<agent>.md`: the 1.1 diff hunks, the 1.2 title diff (11/18, the seven
+- [x] 5.1 `docs/team/reports/<ID>-<agent>.md`: the 1.1 diff hunks, the 1.2 title diff (11/18, the seven
   additions named), the 2.2–2.4 shadow outputs (red before, green after), the three trial logs, the four gate
   tails, the delta→scenario map, the exact changed-path list, and what was **not** tested (no real tmux: the
   section shims it; no model call).
-- [ ] 5.2 the flip evidence is pasted, not summarized: for each shadow, the red lines naming the new assertions
+- [x] 5.2 the flip evidence is pasted, not summarized: for each shadow, the red lines naming the new assertions
   and the green restore run.
 
 ## 6. Path grants the apply brief must state
