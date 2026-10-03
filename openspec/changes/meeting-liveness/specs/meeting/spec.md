@@ -4,9 +4,10 @@
 
 A meeting SHALL carry a TTL (`TEAM_MEETING_TTL_HOURS`, default 72) and a per-side message cap
 (`TEAM_MEETING_MAX_TURNS`, default 20); `team meeting say` MUST refuse further messages once the cap is reached, and
-`team meeting close` SHALL be the only way to end a meeting. `--ttl` SHALL accept a positive integer number of hours
-only; a value above 8760 SHALL be clamped to 8760 with a warning, and a stored value that is missing or not a
-positive integer SHALL fall back to the documented default instead of granting immortality.
+`team meeting close` SHALL be the only way to end a meeting (with `--yes`, because it changes shared state).
+`--ttl` SHALL accept a positive integer number of hours only; a value above 8760 SHALL be clamped to 8760 with a
+warning, and a stored value that is missing or not a positive integer SHALL fall back to the documented default
+instead of granting immortality.
 
 Expiry is a derived state, not a rewrite of the record: a meeting whose TTL has passed SHALL be reported as
 `expired` (never as `open`), it stays read-only — every command except `read` and `close` refuses it — and
