@@ -11,7 +11,7 @@ must stay visible, bounded and recoverable: `references/philosophy.md` (principl
 ### Requirement: An automated send never types into a non-empty input box
 
 Every sender that would type into a TUI input box (`team say`'s pane delivery, `team notify`'s pane delivery, the
-watchdog wake line, the notify extension's knock) SHALL locate the target pane's input box from the captured pane
+watchdog wake line, the notify extension's knock, the meeting knock) SHALL locate the target pane's input box from the captured pane
 and, when the box holds text, MUST send no key at all — neither the payload nor an `Enter`; it MUST hold the message
 in `state/outbox/` instead. The check MUST be cursor-anchored (the box is not pinned to the pane bottom, so the
 top/bottom borders are found from the cursor row), and the border pairing MUST reject rule-looking rows that
@@ -188,6 +188,14 @@ is NEVER reported as confirmed; its output names the unknown shape (V9-C3).
   `idle-read=EMPTY`)
 - **AND** with the status-row predicate shadowed to the legacy "always chrome" behaviour in the probe process, the
   draft frame flips back to `EMPTY` in both paths — proving they share the predicate instead of re-implementing it
+
+#### Scenario: A meeting knock never lands on a draft
+
+- **GIVEN** a fixture peer pane whose input box holds the draft `half a sentence`, and a meeting whose peer row
+  resolves to that pane with `TEAM_MEETING_KNOCK=1`
+- **WHEN** `team meeting say <slug> --intent info "…" --knock` runs
+- **THEN** the pane still shows exactly that draft and no `Enter` was sent, and the sender's `state/outbox/` holds
+  exactly one entry whose payload is the `[meeting:<slug>] …` notice
 
 ### Requirement: Queue entries are immutable files under the team state directory
 
@@ -439,8 +447,10 @@ today's rule (multi-line goes to a file and the message points at it).
 `team say` SHALL defer for every target whose box is busy (worker targets included, not only the PM); `team say
 --now` and `team outbox flush --now` SHALL type immediately even into a non-empty box and SHALL append one line
 naming the sender, the target and the entry to `state/outbox/forced.log`. A `team dispatch` prompt SHALL NOT be
-deferred by the guard (it travels as the agent CLI's argument, not through the input box), a meeting knock SHALL keep
-today's behaviour (cross-project), and with `TEAM_NOTIFY_TMUX=0` no knock is attempted and no queue entry is created.
+deferred by the guard (it travels as the agent CLI's argument, not through the input box), a meeting knock SHALL
+defer on a busy peer box and its entry SHALL target the registered peer `session:window` (the knock is the one
+sender whose target is outside the team session, and the meeting registration is what authorizes it), and with
+`TEAM_NOTIFY_TMUX=0` no knock is attempted and no queue entry is created.
 When `TMUX` is unset (a non-tmux shell, CI) the knock path is likewise not attempted and no queue entry is created,
 but the command MUST say so with one warning line instead of staying silent (V7-F6); the inbox record is written in
 all cases.
@@ -457,6 +467,12 @@ all cases.
 - **GIVEN** `TEAM_NOTIFY_TMUX=0` and a dirty PM box
 - **WHEN** `team notify pm --from-file <file>` runs
 - **THEN** `docs/team/inbox/pm.md` gains one line and `state/outbox/` stays empty
+
+#### Scenario: A queued knock drains to the registered peer window
+
+- **GIVEN** one queued meeting-knock entry in the sender's `state/outbox/` and the peer box cleared
+- **WHEN** the sender's next drain runs
+- **THEN** the notice is typed into the registered `<peer-session>:<peer-window>` and the entry leaves the queue
 
 ### Requirement: The input-box verdict tolerates pi's update banner
 
