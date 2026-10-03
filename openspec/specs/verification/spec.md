@@ -608,7 +608,7 @@ fixture is about to assert has landed.
 
 - **GIVEN** a scratch copy of `skills/teamsmith/tests/panel-p21.sh` whose CLI wrapper delays the settings block
   read (`__panel-data --block settings`) by a fixed delay that is inside the bounded wait (the attribution
-  recipe of `docs/team/reports/P52-dev2.md` §C measured 0 s green, 6 s red, 6 s + 5× horizon still red)
+  recipe: 0 s green, 6 s red, 6 s plus five times the horizon still red)
 - **WHEN** the hand-edited-value scenario runs (the contract is edited by hand to `TEAM_NOTIFY_TMUX=true`, the
   view is reopened, the row is filtered to, and the picker is opened)
 - **THEN** the fixture observes the derived state (the hand-edited value is in the picker's current entry) and the
@@ -629,7 +629,7 @@ fixture is about to assert has landed.
 
 - **GIVEN** `bash skills/teamsmith/tests/panel-b3.sh collapse` and a console whose first frame lands later than
   the fixed window the scene samples today — a delayed bundle injected through the fixture's own `TEAM_B3_PANEL`
-  hook, or the loaded host on which 4 of 6 runs were red (`docs/team/reports/P52-dev2.md`, F2)
+  hook, or the loaded host on which 4 of 6 runs were red
 - **WHEN** the scene runs
 - **THEN** it observes the console's own title (`teamsmith pulse`) on a settled frame by polling inside a bound
   and is green, while the pre-change shape — `sleep 5` then one `capture-pane`, and `sleep 6` then one capture for
@@ -669,9 +669,8 @@ caller's working directory MUST NOT change what is measured, and a checkout's ow
 - **WHEN** `bash skills/teamsmith/tests/panel-cpu.sh` runs with default arguments from each
 - **THEN** both runs measure the fixture's fixed project root, name it in their output, and reach the same
   conclusion — both green, both red, or both visibly skipped with the same attribution; the pre-change shape
-  measures the caller's tree instead, measured in `docs/team/reports/P52-dev2.md` F4 as 3683 ms from this
-  worktree against 391 ms from a fresh project, one of the two past the fixture's ~3 s polling budget and
-  therefore red — the red side of this flip
+  measures the caller's tree instead — measured as 3683 ms from a large checkout against 391 ms from a fresh
+  project, one of the two past the fixture's ~3 s polling budget and therefore red — the red side of this flip
 
 #### Scenario: The measured root and the revision under test are named
 

@@ -152,7 +152,8 @@ that box `EMPTY`).
 #### Scenario: A single-line draft queues the message
 
 - **GIVEN** `dev`'s window runs Pi 0.87.0 whose input box holds the single line `half a sentence` with the cursor
-  on it (the shape of the real frame `docs/team/reports/P61-dev3/logs/15b-one-line-draft-frame.log`)
+  on it (the shape of the captured single-line-draft frame shipped at
+  `skills/teamsmith/tests/frames/pi-0.87.0-one-line-draft.txt`)
 - **WHEN** `team say dev "check the failing test"` runs
 - **THEN** the pane still shows exactly that line, no key was sent, the output contains `queued`,
   `state/outbox/` holds exactly one entry for `dev` whose payload is that message, and the text does not appear in
