@@ -16,3 +16,10 @@ docs/team/reviews/*.log
 # Python 编译缓存：绝不进仓库（会内嵌绝对路径，且是审计泄漏源）
 __pycache__/
 *.pyc
+
+# 证据包里的"可重建安装/克隆"绝不进仓库（2026-10-03）：
+# P157 的证据包曾把整个钉住的 pi 运行时（node_modules，15466 个文件）一起提交 —— 工作树后来剪了，
+# 但历史里留着（约占 .git 的一半）。每个包事后都补了包内 .gitignore，这里补一条**全局**规则。
+**/node_modules/
+docs/team/reports/**/.runtime/
+docs/team/reports/**/.scratch/
