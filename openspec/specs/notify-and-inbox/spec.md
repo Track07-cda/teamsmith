@@ -543,10 +543,34 @@ inbox line and MUST NOT enqueue a knock, and its output MUST name `--from` as th
 The resolved sender MUST be the name in the durable inbox line and in the knock text, in the
 `[<tag>] agent:<name> · <text>` position the turn-end notification already uses, and the knock SHALL carry the
 same name as the outbox entry's `from:` field, so the wake text and the delivery ledger name the sender too.
-The recipient stays the inbox file (`docs/team/inbox/<recipient>.md`) and the knock target. The `[auto]` and
+The recipient stays the inbox file (`docs/team/inbox/<recipient>.md`); the manual notification knock still targets the PM. The inbox declaration carried through the outbox and the wake full-text path MUST identify that same recipient file, not infer a file from the PM knock destination. The declaration MUST be made only after a successful durable write. A failed write MUST exit non-zero without a wake that asserts the file was written; it MUST NOT be converted into success by a warning. The `[auto]` and
 `[manual]` paths SHALL resolve the sender by this same rule, so one runtime context (working directory and
 window) yields the same `agent:<name>` in both. Why a silent `pm` fallback is worse than a refusal:
 `references/philosophy.md` (a false green is worse than nothing).
+
+#### Scenario: A manual worker inbox and PM wake name the same full-text file
+
+- **GIVEN** a real Pi PM inbox watcher and recipient `dev` in the roster, with no `docs/team/inbox/pm.md`, and explicit sender `pm`
+- **WHEN** `team notify dev --from pm "pointer truth probe"` runs
+- **THEN** exactly one durable line is appended to `docs/team/inbox/dev.md` naming `agent:pm`, the PM receives one wake, the outbox inbox-written declaration and wake full-text path both name `dev`, the referenced file exists and contains the full text, and no `pm.md` is fabricated merely to conceal a pointer mismatch
+
+#### Scenario: The same pointer survives a queued PM knock
+
+- **GIVEN** recipient `dev`, sender `dev2`, a PM draft, and then a cleared PM box
+- **WHEN** `team notify dev --from dev2 "queued pointer probe"` runs and later `team outbox flush` drains its knock
+- **THEN** `dev.md` holds one durable line, the queued entry's inbox-written declaration names `dev`, the PM draft receives no key before clearing, and the eventual knock points to that same existing full-text file with sender `dev2`
+
+#### Scenario: A failed durable write cannot authorize a wake
+
+- **GIVEN** an unwritable recipient inbox directory and a live PM watcher
+- **WHEN** `team notify dev --from pm "write refusal probe"` runs
+- **THEN** it exits non-zero and names the failed path, emits no wake asserting that the inbox was written, and creates no inbox-written declaration for a nonexistent line
+
+#### Scenario: An inbox-only notification retains its named recipient
+
+- **GIVEN** `TEAM_NOTIFY_TMUX=0`, recipient `dev` and explicit sender `pm`
+- **WHEN** `team notify dev --from pm "inbox only probe"` runs
+- **THEN** it writes one line to `dev.md` naming `agent:pm`, attempts no knock and creates no outbox entry
 
 #### Scenario: A worker's notification names the worker
 

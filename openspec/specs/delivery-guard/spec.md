@@ -21,7 +21,7 @@ draws its working row as ` ⠋ Blanching… · 0s` — a braille glyph plus text
 (its top border stays a full rule row and tier1 still locates it) — which is deliberately NOT an eligible border,
 V9-D2: admitting a row that normally sits above the box would extend the box over conversation text and read
 busy forever, so the documented fallback applies instead — if a future TUI promotes that row to the top border,
-the pairing finds no box and the pane is typed as today with one warning). When several rows qualify, the top border is the HIGHEST qualifying row above the
+the pairing finds no box and the pane is typed as today with one warning). Outside the supported closed Pi layout defined below, when several rows qualify, the top border is the HIGHEST qualifying row above the
 bottom border, never the nearest one (V9-A4/A5/A8/A10: a rule row the draft itself draws — equal-width, wider, or
 spinner-shaped — must become box content, so the box reads busy; the old nearest-candidate rule let such a draft
 row pose as the border and reproduced the dirty-box-misread-as-empty incident again). The cost is documented:
@@ -89,6 +89,34 @@ the box in that case, and the human is holding the pane.
 A pane whose input-box shape cannot be located MUST be treated as "deliver as today" with one warning, never as a
 permanent hold — and because no box can be read there, no submission proof can be collected either, so such a pane
 is NEVER reported as confirmed; its output names the unknown shape (V9-C3).
+
+For a supported Pi layout, the candidate domain SHALL be a closed editor rectangle: its top and bottom enclose the cursor (`top < cursor < bottom`), their rule widths match the pane, the bottom directly precedes the verified two-row Pi footer, and every editor row between them fits the measured renderer's content-width and visible-height bounds. The footer's directory MUST agree with the target's runtime directory; a transcript's blank line, a status-looking draft or a rule near the cursor alone is not layout evidence. Supported-layout provenance and terminal-cell bounds MUST be recorded with real captures. Only a unique rectangle satisfying the whole shape admits the narrower candidate domain; the highest top and lowest bottom rules still apply within that domain. Unsupported, scrolled, clipped, ambiguous or partially drawn layouts MUST NOT acquire an EMPTY verdict by this exception. Existing conservative border selection, banner fallback, status-row cursor precedence and documented unknown-shape handling remain outside the domain. The documented whitespace-only and off-cursor verbatim status-clone misses remain explicitly named; this change MUST NOT claim to close them. A recognised Pi layout with conflicting geometry MUST instead defer without typing and expose `geometry-untrusted`, not treat uncertainty as a proven draft or pass it to the unknown non-Pi typing fallback. Rationale and known limits belong in `references/troubleshooting.md` §3.
+
+#### Scenario: A real settled editor excludes transcript separators
+
+- **GIVEN** the Pi 0.99.2 real capture `docs/team/reports/P143-verify/logs/tmux-p143-dirty/second-before.frame`, 120×32 pane, cursor row 29, actual editor empty and idle, with a transcript rule at row 21, editor top at 28 and bottom at 30 and the verified footer at 31–32
+- **WHEN** the production extraction and frame judgement read the captured frame
+- **THEN** the geometry is `[28 30]`, text is empty and the verdict is `EMPTY`; the transcript message and assistant reply above row 28 are not box text
+- **AND** a probe that disables the supported-layout admission reads the same bytes as `[21 30]` and `BUSY`, proving the red side uses a real frame
+
+#### Scenario: A real draft in the same layout is still protected
+
+- **GIVEN** `docs/team/reports/P143-verify/logs/tmux-p143-draft-dirty/draft-before.frame`, actual editor `P143-HUMAN-DRAFT`, cursor row 29 and the same footer layout
+- **WHEN** the production extraction and `team say dev "draft guard probe"` inspect that pane
+- **THEN** text is `P143-HUMAN-DRAFT`, the verdict is `BUSY`, the send is queued, no key is sent, and the editor/frame are unchanged
+
+#### Scenario: A rule-shaped draft cannot borrow the closed-layout exception
+
+- **GIVEN** a real Pi draft containing a 120-character rule, a spinner-shaped line or a footer-shaped line with the cursor before, on or after that text, a status-row clone with the cursor on the clone, and the pre-change equal-width synthetic draft frames
+- **WHEN** each capture is read and a different payload is sent
+- **THEN** every draft reads `BUSY` or a visibly untrusted geometry, never `EMPTY`; no key is sent; the real wrapping and Unicode terminal-cell measurements are retained
+- **AND** enabling a nearest-top or nearest-bottom selection without the closed-layout admission makes the equal-width draft guard test fail
+
+#### Scenario: An ambiguous Pi suffix is held, not guessed empty
+
+- **GIVEN** a Pi frame with a footer mismatch, a clipped editor, scroll-indicator borders, two eligible rectangles or an incomplete redraw
+- **WHEN** a send cannot establish the supported rectangle with a trustworthy conservative read
+- **THEN** it sends no key, retains a durable payload with reason `geometry-untrusted`, exits non-zero and gives the entry and recovery command rather than claiming a human draft
 
 #### Scenario: An empty box with a package hint row is free
 
@@ -254,8 +282,8 @@ stays a metronome, `watchdog`).
 
 ### Requirement: Delivery is confirmed by the pane, and a queued message is reported as queued
 
-`team say` and `team notify` SHALL report a held message as queued (exit code 0, the literal token `queued`, never
-`已确认送达`) and MUST return before the pane-verification loop, because a queued message provokes no pane change.
+`team say` and `team notify` SHALL report a message deferred behind a trusted non-empty box as queued (exit code 0, the literal token `queued`, never
+`已确认送达`). An untrusted-geometry or queue-stalled outcome from *Queue impediments are factual, bounded and recoverable* SHALL instead exit non-zero and name the durable held entry and reason. Both deferral outcomes MUST return before the pane-verification loop, because an untyped message provokes no pane change.
 Delivery is confirmed by reading the pane back after the `Enter` (V9-B5): the delivery SHALL count as confirmed
 only when the payload has left the box **and** a new submission proof appeared in the conversation area above the
 box — the count of the payload's signature there (its first non-blank line, whitespace-stripped, up to 48 bytes,
@@ -279,6 +307,12 @@ found a draft at the pre-`Enter` re-check is
 terminal (V7-F3): the payload already reached the input box once and may have ridden the human's own submit to
 the agent, so no automatic path — `team outbox flush --now` included — SHALL paste it again; the entry stays under
 `outbox/held/` until the human drops it or re-sends the content explicitly.
+
+#### Scenario: The real second correction reaches the settled fallback once
+
+- **GIVEN** the P143 container recipe with real Pi, no dev inbox watcher, a completed first correction and an idle empty editor
+- **WHEN** `P138_SECOND=1 bash docs/team/reports/P143-verify/pkg/run-case.sh tmux-delivery-truth-dirty HEAD 0 host` and its second-message judge run
+- **THEN** exactly one second-message reception and backend submission are observed, a later settle occurs, and the judge prints `PASS second say delivered`; the first actual submission is not falsely retained as `draft-raced`, and neither message is duplicated by flush
 
 #### Scenario: A queued message says queued, not delivered
 
@@ -528,7 +562,7 @@ unlucky draft cannot open the box and let a send paste over it.
 
 ### Requirement: The bottom border is the lowest qualifying rule row below the cursor
 
-When the guard locates the input box from the cursor row, the bottom border SHALL be the **LOWEST** row below the
+Outside the supported closed Pi layout defined in *An automated send never types into a non-empty input box*, when the guard locates the input box from the cursor row, the bottom border SHALL be the **LOWEST** row below the
 cursor that qualifies as a bottom border: a full-rule row (the whole row is the rule character, no other text) that
 pairs with a top-border candidate **strictly above the cursor row** under the pairing rule of *An automated send
 never types into a non-empty input box* — an equal-width full-rule row, or a spinner-shaped row where a spinner-shaped
@@ -549,7 +583,7 @@ row (V9-A10). When no row pairs, the existing unknown-shape path applies unchang
 warning; never a permanent hold).
 
 The admission condition is a statement about what the located box IS — always a box that contains the cursor row —
-and not a licence to claim that any frame's verdict is monotone. What the gate MUST pin instead: for every frame
+and not a licence to claim that any frame's verdict is monotone. What the gate MUST pin instead: for every pre-change frame
 stored under `skills/teamsmith/tests/frames/`, the verdict read with the admission in place is compared with the
 verdict read with the admission shadowed off (the pre-fix rule: lowest candidate, no admission), and the gate MUST
 fail if any frame's verdict moves from busy to `EMPTY`; the reverse moves MUST be exactly the frames the admission
@@ -684,4 +718,37 @@ one that cannot glue.
   (`p78-wider-rule-below-cursor.txt`, `p78-spinner-row-below-cursor.txt`, `p78-cursor-mid-draft.txt` and the
   stored real captures) keep their verdicts in both directions — proving the fixtures read the same decision the
   production guard does
+
+### Requirement: Queue impediments are factual, bounded and recoverable
+
+A draft-clearing explanation SHALL be emitted only for a trustworthy non-empty box read. A `geometry-untrusted` outcome SHALL send no key, durably hold the payload, exit non-zero and name the entry, target, reason and recovery command. It MUST NOT state that the human has a draft or promise that clearing the box will automatically deliver it.
+
+For an entry that has not touched the input box, three consecutive eligible drain evaluations that read a trusted empty box but leave the entry queued without progress SHALL move it to durable `held/` with reason `queue-stalled` by the third evaluation. An eligible evaluation is one that owns the entry's claim, has a live target and is not blocked by an earlier entry or another delivery in progress; queueing during work, real drafts, lock contention and offline targets MUST NOT be counted as this empty-box defect. The diagnostic SHALL record the entry id, target, first/last observation time, consecutive count, read verdict and geometry/trust reason, and its durable full-text path. Enqueue, bounded retry, tick and flush SHALL use the same observation rule. A later busy/working read resets the consecutive-empty count; the payload and original immutable entry header MUST NOT be rewritten to track attempts.
+
+The obstructing command SHALL print `held`, the reason and the recovery command and exit non-zero. `team outbox list`, `team status` and `team digest` SHALL expose a nonzero impeded count and the reason while such an entry exists. Geometry/stall holds MUST NOT bypass terminal `draft-raced` or `unconfirmed` protections: once any payload reached the box, later drains never repaste it. A never-typed hold MAY be retried only after fresh trusted geometry permits it. Observer commands MUST NOT advance attempt counts, emit a wake or mutate the queue. The existing TTL remains a backstop, not the first indication of this defect. Rationale belongs in `references/troubleshooting.md` §3.
+
+#### Scenario: Untrusted geometry is not a draft-clearing promise
+
+- **GIVEN** a replay of the real P143 frame with an invalidated supported-layout/footer premise and no trustworthy conservative box read
+- **WHEN** `team say dev "geometry diagnostic"` runs
+- **THEN** it exits non-zero, prints `held` and `geometry-untrusted`, names an existing durable payload and recovery command, sends no key, and prints neither a draft assertion nor an automatic-after-clearing promise
+
+#### Scenario: Three empty-box evaluations expose a stalled entry
+
+- **GIVEN** a queued, never-typed entry and the real P143 idle-empty frame, with a test-only shadow that prevents progress after a trusted empty read
+- **WHEN** three eligible drain evaluations run before the TTL
+- **THEN** the third exits non-zero and reports `held` / `queue-stalled`; the payload is unchanged under `held/`, the diagnostic records three observations and the original entry id, and list/status/digest show the impediment
+- **AND** suppressing the observation/diagnostic transition in the test process makes the guard test fail on the same frame
+
+#### Scenario: A human draft and a working target are not labelled stalled
+
+- **GIVEN** the real P143 human-draft frame or a real working-Pi frame
+- **WHEN** three drain evaluations run
+- **THEN** no key is sent into the draft, the empty-observation count does not reach three, and no `queue-stalled` defect is inferred from work or a draft
+
+#### Scenario: Recovery does not double-send a terminal payload
+
+- **GIVEN** a never-typed `geometry-untrusted` hold, a never-typed `queue-stalled` hold and a terminal `draft-raced` hold
+- **WHEN** trustworthy empty geometry returns and `team outbox flush` then `team outbox flush --now` run
+- **THEN** the never-typed entries can each be submitted once through the guard, while the terminal entry receives no key and remains held; no payload is silently dropped
 

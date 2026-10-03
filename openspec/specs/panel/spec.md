@@ -303,6 +303,14 @@ action (`f`) SHALL invoke `team outbox flush` as a subprocess and report its out
 the queue's files. The messages page SHALL list the queued and held entries individually and SHALL show one
 entry's full text read-only and sanitized; discarding an entry is not a console action in v1.
 
+The read-only panel SHALL additionally expose impeded delivery count and reasons (`geometry-untrusted`, `queue-stalled`) from the delivery diagnostics in the status band and messages page, and as additive fields `panel.outbox.impeded` and `panel.outbox.impediments` in JSON. An impediment item SHALL name its entry id, target, reason and last observation time. The plain-text path SHALL expose the same impediment facts; a TUI-only field is not sufficient. Reasons MUST NOT be replaced by a draft-clearing promise. An unreadable diagnostic SHALL render as unknown/unavailable, never silently infer zero impediments. These observers MUST NOT capture a pane, advance drain observations, create a diagnostic or retry delivery; the existing flush subprocess owns all changes.
+
+#### Scenario: An impediment is visible in every observer mode without mutation
+
+- **GIVEN** a held `queue-stalled` entry and a held `geometry-untrusted` entry with recorded payload/diagnostic hashes
+- **WHEN** `team monitor --json`, `team monitor --print` and a TUI messages frame render
+- **THEN** JSON reports `panel.outbox.impeded=2` and both entry ids/reasons in `panel.outbox.impediments`; text and TUI name the same impediment count/reasons; all hashes and drain observation counts are unchanged, and the outbox block itself performs no pane capture or key operation
+
 #### Scenario: A missing queue is a zero
 
 - **GIVEN** a fixture project with no `state/outbox/` directory
@@ -543,10 +551,16 @@ the next compose. `C-o` SHALL hand the draft to `$EDITOR` and return to an intac
 suspended while the editor runs; `C-e` is the line-end key, not the editor relay (the migration to pi's key map,
 which the key-map requirement owns), and the compose hint SHALL name both the editor relay's key and the newline
 key in the frame, in both languages. The receipt SHALL be exactly one of three honest states — delivered, queued
-(the PM's box is busy) or held (a durable copy under `outbox/held/`) — mapped from the send command's
-machine-readable outcome and exit code, never parsed from human prose. While composing, the input line SHALL
+(a trusted read observed a draft) or held (a durable copy under `outbox/held/`) — mapped from the send command's
+machine-readable outcome and exit code, never parsed from human prose. A `geometry-untrusted` or `queue-stalled` held outcome MUST retain that reason in the receipt rather than say that the PM has a draft or promise automatic delivery after clearing it. While composing, the input line SHALL
 pause refreshing and every other block SHALL keep refreshing; multi-line input, pasted or typed, SHALL stay one
 draft (a `\r` is normalized — E6 §2.2) and SHALL be sent as one message (E6 §2.1).
+
+#### Scenario: Geometry and stalled outcomes retain their machine reason
+
+- **GIVEN** a compose send or flush subprocess returning a machine-readable held outcome with reason `geometry-untrusted` or `queue-stalled` and non-zero exit
+- **WHEN** the panel displays its receipt
+- **THEN** the receipt says held with that reason and durable entry id, not delivered or a draft-clearing promise; removing the reason mapping in a test process makes the receipt test fail
 
 #### Scenario: A busy box yields an honest queued receipt
 
