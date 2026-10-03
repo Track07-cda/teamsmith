@@ -16,10 +16,16 @@
 #           (probes assert the EFFECT, never the exit code). The set of keys needing a probe is derived
 #           from the schema, so a note added without one is RED naming the key.
 #
-#   flips   eight mutations that MUST redden their guard: seven scratch-tree shapes that redden the walk
-#           (the field defect, a sibling flag, a swallowing parser, an unattributable line, a fake schema
-#           route, an unprobed note, a broken promise) plus a nested run that does not reap, which proves
-#           the tail's leftover assertion can fail. They are the walk's own proof that it can fail.
+#   flips   ten mutations that MUST redden their guard (a field defect, a sibling flag, a swallowing
+#           parser, an unattributable line, a fake schema route, an unprobed note, a broken promise, a
+#           nested run that does not reap, an unclaimed route, a mutated repair), plus a control arm on
+#           the last tree that must stay green, plus two red sides of the landing check itself. They are
+#           the walk's own proof that it can fail.
+#           Every mutation must PROVE IT LANDED (target text 1→0 / new text 0→1, and the copy must
+#           differ from the pristine file byte-wise) BEFORE its verdict is judged: a silent no-op patch is
+#           reported as `变异没落地（夹具缺陷）`, never as `没有兑现` (M21). And every verdict reads the
+#           nested log as a FILE — never `printf … | grep -q`, which under `set -o pipefail` can read a
+#           matched log as unmatched (grep -q exits first, printf takes SIGPIPE, the pipeline turns 141).
 #
 # Usage / knobs:
 #   bash skills/teamsmith/tests/routes.sh [walk] [control] [promises] [refusals] [flips]
@@ -1278,18 +1284,78 @@ mr_scratch_tree() { # <name> → 打印 scratch 树（skills/teamsmith + skills/
   printf '%s\n' "$s"
 }
 
-# mr_flip_run <scratch> <section...> → 在 scratch 树上跑 walk 子集；结果落在 $tmp/flip-<name>.log
+# mr_flip_run <scratch> <section...> → 在 scratch 树上跑 walk 子集；日志落在 $tmp/flip-run.log
+#   （路径记进 MR_FLIP_LOGF：判据读**文件**，不再把日志搬进变量再走管道 —— 见 mr_flip_log_has）
 mr_flip_run() {
   local scratch="$1"; shift
-  local logf="$tmp/flip-run.log"
+  MR_FLIP_LOGF="$tmp/flip-run.log"
   # TEAM_ROUTES_NESTED：flips 在 scratch 树上跑 walk —— 嵌套 run 永不跑 flips（结构上的不递归守卫，
   # 与段集规则双保险：谁给嵌套 run 传 flips 都只会打印一行 skip）。
-  env -u TMUX -u TMUX_PANE TEAM_ROUTES_NESTED=1 TEAM_ROUTES_TREE="$scratch" bash "$here/routes.sh" "$@" >"$logf" 2>&1
+  env -u TMUX -u TMUX_PANE TEAM_ROUTES_NESTED=1 TEAM_ROUTES_TREE="$scratch" bash "$here/routes.sh" "$@" >"$MR_FLIP_LOGF" 2>&1
   MR_FLIP_RC=$?
-  MR_FLIP_LOG="$(cat "$logf")"
   # TEAM_TMP_KEEP=1 时嵌套 run 的助手会保留自己的根并**打印路径**——收起来给收尾的可见说明用
   # （$tmp/flip-run.log 每次覆盖，只有这里攒得下每一个保留的根）。
-  grep -a '^保留临时根：' "$logf" 2>/dev/null >>"$tmp/kept-roots.log" || true
+  grep -a '^保留临时根：' "$MR_FLIP_LOGF" 2>/dev/null >>"$tmp/kept-roots.log" || true
+}
+
+# mr_flip_log_has <literal…> → 0 = 本次嵌套 run 的日志里逐字都在（**直接读文件**，不走管道）
+#   P202：旧写法 `printf '%s' "$MR_FLIP_LOG" | grep -q …` 在 set -o pipefail 下会假红 —— grep -q 一命中
+#   就退出，仍在写的 printf 收 SIGPIPE(141)，整条管道变非 0，判据于是把「红且点名」读成「没有兑现」
+#   （现场：同一段日志既被当证据贴出来、又被判成没兑现）。实测：170KB 日志、命中点在中间 → 3/3 误判。
+mr_flip_log_has() {
+  local p
+  for p in "$@"; do grep -qF -- "$p" "$MR_FLIP_LOGF" || return 1; done
+  return 0
+}
+
+# mr_flip_evidence → 「没有兑现」时贴的现场：优先前两条**真 finding**（红色 ✗；正文里那个 ✗ 是
+#   用法行的标记，不是 finding）；一条都没有时贴日志尾巴（例如嵌套 run 起不来时只有一句 setup 失败）。
+mr_flip_evidence() {
+  local ev
+  ev="$(grep -aF -e $'\033[31m✗' "$MR_FLIP_LOGF" 2>/dev/null | head -2 | tr '\n' ' ')"
+  [ -n "$ev" ] || ev="$(grep -a . "$MR_FLIP_LOGF" 2>/dev/null | tail -2 | tr '\n' ' ')"
+  printf '%s' "$ev"
+}
+
+# mr_flip_cnt <file> <literal> → 含该文本的行数（文件不在/无命中都是 0）
+mr_flip_cnt() { grep -cF -- "$2" "$1" 2>/dev/null || true; }
+
+# mr_flip_landed <label> <scratch> <rel-path> <gone|-> <present|-> → 0 = 变异落地；1 = 没落地
+#   纯判据（不发 finding，理由写在 MR_FLIP_WHY）：红侧要的就是「没落地」这个判定本身；
+#   翻转本身用 mr_flip_require。
+#   变异**前**的状态取自真树（副本是它的 cp -a），**后**取自副本：
+#     a) 副本必须与真树逐字节不同 —— 「补丁静默 no-op」在这里就断了；
+#     b) <gone>（≠ -）：真树 ≥1 → 副本 0（目标文本由 1 变 0；模式陈旧当场露馅）；
+#     c) <present>（≠ -）：真树 0 → 副本 ≥1（新文本由 0 变 1；只删不插、只插不删都过不去）。
+#   任一不成立 → MR_FLIP_WHY 写成原因并返回 1 —— 这是**夹具缺陷**，不是「没有兑现」；外层的嵌套 run
+#   由调用者跳过（既然没改到东西，判它红不红没有信息）。
+mr_flip_landed() {
+  local label="$1" scratch="$2" rel="$3" gone="$4" present="$5"
+  local real="$skill/$rel" copy="$scratch/skills/teamsmith/$rel" g n p
+  MR_FLIP_WHY=""
+  if [ ! -f "$copy" ]; then
+    MR_FLIP_WHY="$rel 在副本里不存在（cp 没落或路径变了）"
+  elif cmp -s "$real" "$copy"; then
+    MR_FLIP_WHY="$rel 与真树逐字节相同 —— 变异一个字都没改"
+  elif [ "$gone" != "-" ]; then
+    g="$(mr_flip_cnt "$real" "$gone")"; n="$(mr_flip_cnt "$copy" "$gone")"
+    if [ "${g:-0}" -lt 1 ]; then MR_FLIP_WHY="目标文本在真树里就找不到（模式已陈旧）：gone 0→${n:-0}"
+    elif [ "${n:-0}" -ne 0 ]; then MR_FLIP_WHY="目标文本还在：gone ${g:-0}→${n:-0}（替换没匹配上）"; fi
+  fi
+  if [ -z "$MR_FLIP_WHY" ] && [ "$present" != "-" ]; then
+    g="$(mr_flip_cnt "$real" "$present")"; p="$(mr_flip_cnt "$copy" "$present")"
+    if [ "${g:-0}" -ne 0 ]; then MR_FLIP_WHY="新文本在真树里本来就有（判据不成立）：present ${g:-0}→${p:-0}"
+    elif [ "${p:-0}" -lt 1 ]; then MR_FLIP_WHY="新文本没出现：present 0→${p:-0}"; fi
+  fi
+  [ -z "$MR_FLIP_WHY" ] && return 0
+  return 1
+}
+
+# mr_flip_require <label> <scratch> <rel-path> <gone|-> <present|-> → 落地则 0；没落地则发 finding 并返回 1
+mr_flip_require() {
+  mr_flip_landed "$1" "$2" "$3" "$4" "$5" && return 0
+  finding "$1：变异没落地（夹具缺陷）—— $MR_FLIP_WHY"
+  return 1
 }
 
 # 嵌套 run 的根：本轮台账里 kind=routes 且 pid 不是本进程的存活根，加上文件系统里新于本夹具根的
@@ -1307,7 +1373,19 @@ mr_nested_leftovers() { # [<base>]
 
 mr_flips() {
   section "flips · 把树改坏 → walk 必须红并点名（翻转证据）"
-  local s log out
+  local s log out ev
+  # 判据卫生（P202）：现场那条「没有兑现」贴出来的证据必须是真的 finding。旧写法 `grep '✗'` 会把
+  # ✓ 断言正文里那个用法行标记（`｜ ✗ change status <id> [--json]`）当 finding 贴出去 —— 读者于是
+  # 分不清「守卫没红」和「变异没落地」（P202 的现场证词就是这种形状）。这条把「只贴真 finding」
+  # 钉住：把 mr_flip_evidence 改回宽 grep 就会红。
+  MR_FLIP_LOGF="$tmp/flip-evidence-probe.log"
+  printf '  \033[32m✓\033[0m 断言 L31：change status --json → rc=2 ｜ ✗ change status <id> [--json]\n  \033[31m✗\033[0m 断言 L38：add-agent --fresh 被自己的解析器拒绝\n' > "$MR_FLIP_LOGF"
+  ev="$(mr_flip_evidence)"
+  if [ "${ev#*add-agent --fresh}" != "$ev" ] && [ "${ev#*change status <id>}" = "$ev" ]; then
+    ok "判据卫生：没有兑现时的现场只贴真 finding（正文里的用法行标记不冒充 finding）"
+  else
+    finding "判据卫生：证据里混进了正文的用法行标记（$ev）"
+  fi
   # ① 场地缺陷：help 打印 add-agent --model，解析器拒绝它
   s="$(mr_scratch_tree flip-model)"
   python3 - "$s/skills/teamsmith/scripts/lib/cmd-agents.sh" <<'PY'
@@ -1319,20 +1397,45 @@ s = s.replace('--model) model="${2:?--model 需要 <provider/model> 或 -}"; has
 s = s.replace('--model=*) model="${1#*=}"; has_model=1; shift ;;', '', 1)
 open(p, 'w', encoding='utf-8').write(s)
 PY
-  mr_flip_run "$s" walk
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q 'add-agent --model'; then
-    ok "翻转①：help 打印 --model 而解析器拒绝 → walk 红并点名 add-agent --model"
-  else
-    finding "翻转①没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  # 落地证明（P202）：①改了两处，两处都要真的落到副本里
+  if mr_flip_require "翻转①" "$s" scripts/lib/cmd-agents.sh \
+       '--model) model="${2:?--model 需要 <provider/model> 或 -}"; has_model=1; shift 2 ;;' \
+       '--model) team_usage_die "add-agent: 未知参数 --model" ;;' \
+     && mr_flip_require "翻转①" "$s" scripts/lib/cmd-agents.sh '--model=*) model="${1#*=}"; has_model=1; shift ;;' -; then
+    mr_flip_run "$s" walk
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'add-agent --model'; then
+      ok "翻转①：help 打印 --model 而解析器拒绝 → walk 红并点名 add-agent --model"
+    else
+      finding "翻转①没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
   fi
   # ② 兄弟旗标：--fresh 是 dispatch 的，add-agent 不接受
   s="$(mr_scratch_tree flip-sibling)"
   sed -i 's/add-agent <a> \[--register\]/add-agent <a> [--fresh]/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
-  mr_flip_run "$s" walk
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q 'add-agent --fresh'; then
-    ok "翻转②：add-agent 行印上兄弟命令的 --fresh → walk 红并点名 add-agent --fresh"
+  if mr_flip_require "翻转②" "$s" scripts/lib/cmd-project.sh 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
+    mr_flip_run "$s" walk
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'add-agent --fresh'; then
+      ok "翻转②：add-agent 行印上兄弟命令的 --fresh → walk 红并点名 add-agent --fresh"
+    else
+      finding "翻转②没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
+  fi
+  # 落地判据自己的红侧（P202：判据不能是橡皮章）。两条都只做文件级检查，不跑嵌套 run：
+  #   a) 陈旧模式：sed 的搜索端在文件里根本不存在 → 谁都没改 → 必须报「变异没落地」；
+  #   b) 只插不删：新文本出现了、旧文本还在 → 判据的另一侧必须红（证明 gone 一侧承重）。
+  s="$(mr_scratch_tree flip-stale-pattern)"
+  sed -i 's/add-agent <a> \[--frosh\]/add-agent <a> [--fresh]/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
+  if mr_flip_landed "落地判据红侧 a" "$s" scripts/lib/cmd-project.sh 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
+    finding "落地判据红侧 a：陈旧 sed 什么也没改，判据却放行了（判据是橡皮章）"
   else
-    finding "翻转②没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+    ok "落地判据红侧 a：陈旧 sed（搜索端不存在）→ 判据报「变异没落地」：$MR_FLIP_WHY"
+  fi
+  s="$(mr_scratch_tree flip-half-landed)"
+  sed -i 's/^  add-agent <a> \[--register\]/  add-agent <a> [--register] [--fresh]/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
+  if mr_flip_landed "落地判据红侧 b" "$s" scripts/lib/cmd-project.sh 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
+    finding "落地判据红侧 b：旧文本还在（只插不删），判据却放行了"
+  else
+    ok "落地判据红侧 b：只插不删 → 判据报「变异没落地」：$MR_FLIP_WHY"
   fi
   # ③ 吞旗标：ps 不再拒绝未知参数（今天 version/meeting list 是实测的两种形状，已在 D6 修掉）
   s="$(mr_scratch_tree flip-swallow)"
@@ -1350,29 +1453,38 @@ PY
   # ps 在 help 里不打印旗标 —— 控制臂按设计只覆盖「打印旗标的路径」；这里把 ps 的用法行改印一个旗标，
   # 让这段翻转的能量落在「吞旗标必须红」上（形状与今天实测的 version/meeting list 同类）。
   sed -i 's/^  ps              容量：/  ps [--frobnicate-probe] 容量：/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
-  mr_flip_run "$s" walk control
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q '控制：ps'; then
-    ok "翻转③：ps 吞掉未知旗标 → 控制臂红并点名 ps"
-  else
-    finding "翻转③没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  if mr_flip_require "翻转③" "$s" scripts/lib/cmd-status.sh - '-*) shift ;;' \
+     && mr_flip_require "翻转③" "$s" scripts/lib/cmd-project.sh '  ps              容量：' '  ps [--frobnicate-probe] 容量：'; then
+    mr_flip_run "$s" walk control
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '控制：ps'; then
+      ok "翻转③：ps 吞掉未知旗标 → 控制臂红并点名 ps"
+    else
+      finding "翻转③没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
   fi
   # ④ 无法归属的行：命令块里列 0 的行（修复前的 board 形状）
   s="$(mr_scratch_tree flip-unattributable)"
   sed -i 's/^  board add|assign|set|row|ls/board add|assign|set|row|ls/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
-  mr_flip_run "$s" walk
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q '列 0 的行'; then
-    ok "翻转④：命令块里的列 0 行 → walk 红并点名该行（修复前的 board 形状）"
-  else
-    finding "翻转④没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  # 落地证明只查 gone 一侧：这步只动行首两个空格，去空格后的行**仍包含**原来那段文本，所以「0→1」
+  # 用子串表达不出来；而「带两个空格的形式由 1 变 0」＋ cmp 的字节差就是确证（只有 sed 能改出这个形状）。
+  if mr_flip_require "翻转④" "$s" scripts/lib/cmd-project.sh '  board add|assign|set|row|ls' -; then
+    mr_flip_run "$s" walk
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '列 0 的行'; then
+      ok "翻转④：命令块里的列 0 行 → walk 红并点名该行（修复前的 board 形状）"
+    else
+      finding "翻转④没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
   fi
   # ⑤ schema 注释点名不存在的命令
   s="$(mr_scratch_tree flip-schema-route)"
   sed -i 's/TEAM_GATES|apply|cmd||plain||-|||workflow/TEAM_GATES|apply|cmd||plain||-|team frob off||workflow/' "$s/skills/teamsmith/scripts/lib/cmd-config.sh"
-  mr_flip_run "$s" promises
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q 'team frob' && printf '%s' "$MR_FLIP_LOG" | grep -q 'TEAM_GATES'; then
-    ok "翻转⑤：TEAM_GATES 的注释点名 team frob → walk 红并点名 TEAM_GATES / team frob"
-  else
-    finding "翻转⑤没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  if mr_flip_require "翻转⑤" "$s" scripts/lib/cmd-config.sh 'TEAM_GATES|apply|cmd||plain||-|||workflow' 'TEAM_GATES|apply|cmd||plain||-|team frob off||workflow'; then
+    mr_flip_run "$s" promises
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'team frob' 'TEAM_GATES'; then
+      ok "翻转⑤：TEAM_GATES 的注释点名 team frob → walk 红并点名 TEAM_GATES / team frob"
+    else
+      finding "翻转⑤没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
   fi
   # ⑥ schema 注释点名命令但没有 promise 探针
   s="$(mr_scratch_tree flip-unprobed)"
@@ -1386,11 +1498,13 @@ row = "TEAM_ROUTES_UNPROBED|apply|text||plain||-|维护：team config set-agent-
 s = s[:i] + row + s[i:]
 open(p, 'w', encoding='utf-8').write(s)
 PY
-  mr_flip_run "$s" promises
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q 'TEAM_ROUTES_UNPROBED' && ! printf '%s' "$MR_FLIP_LOG" | grep -q 'promise：TEAM_GATES'; then
-    ok "翻转⑥：新键的注释点名命令却没有探针 → walk 红并只点名该键"
-  else
-    finding "翻转⑥没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -3 | tr '\n' ' ')"
+  if mr_flip_require "翻转⑥" "$s" scripts/lib/cmd-config.sh - 'TEAM_ROUTES_UNPROBED|apply|text||plain||-|维护：team config set-agent-model <seat> <model>||workflow'; then
+    mr_flip_run "$s" promises
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'TEAM_ROUTES_UNPROBED' && ! mr_flip_log_has 'promise：TEAM_GATES'; then
+      ok "翻转⑥：新键的注释点名命令却没有探针 → walk 红并只点名该键"
+    else
+      finding "翻转⑥没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
   fi
   # ⑦ 承诺被破坏：注册命令 rc=0 但名册没变
   s="$(mr_scratch_tree flip-broken-promise)"
@@ -1404,11 +1518,13 @@ assert a in s, 'anchor not found'
 s = s.replace(a, b, 1)
 open(p, 'w', encoding='utf-8').write(s)
 PY
-  mr_flip_run "$s" promises
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q 'promise（TEAM_AGENTS）'; then
-    ok "翻转⑦：注册报成功而名册没变 → promise 探针红并点名 TEAM_AGENTS（断言的是效果）"
-  else
-    finding "翻转⑦没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  if mr_flip_require "翻转⑦" "$s" scripts/lib/cmd-config.sh - '# flip: 注册命令报成功但不写'; then
+    mr_flip_run "$s" promises
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'promise（TEAM_AGENTS）'; then
+      ok "翻转⑦：注册报成功而名册没变 → promise 探针红并点名 TEAM_AGENTS（断言的是效果）"
+    else
+      finding "翻转⑦没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
   fi
   # ⑧ 收尾断言本身必须能被证伪：让嵌套 run 的回收失效（TMP_ROOT_BREAK=noreap，tmp-root.sh 自带的
   #    自检旋钮）跑一次 walk —— 收尾扫描必须看得见那个残留（默认 KEEP 未设时，这就是那条断言的红侧）。
@@ -1416,13 +1532,24 @@ PY
   s="$(mr_scratch_tree flip-tail-leak)"
   local lkdir="$tmp/flip-tail-leak-tmp"
   mkdir -p "$lkdir"
+  #    变异（这个旋钮）的落地证明：helper 里**有**这个分支（在真树里数得着），且这次 run 真的没回收 ——
+  #    私有 TMPDIR 里直接看得见一个 teamsmith-routes.* 根。它与收尾扫描互为对照（后者走台账+find）：
+  #    根在、扫描看不见 = 扫描瞎了；根不在 = 旋钮没生效。
+  s="$(mr_scratch_tree flip-tail-leak)"
+  local lkdir="$tmp/flip-tail-leak-tmp"
+  mkdir -p "$lkdir"
+  local knob left_fs
+  knob="$(mr_flip_cnt "$skill/tests/lib/tmp-root.sh" '[ "${TMP_ROOT_BREAK:-}" = "noreap" ] && continue')"
   env -u TMUX -u TMUX_PANE TEAM_ROUTES_NESTED=1 TEAM_ROUTES_TREE="$s" TMPDIR="$lkdir" TMP_ROOT_BREAK=noreap \
     bash "$here/routes.sh" walk >"$tmp/flip-tail-leak.log" 2>&1 || true
   grep -a '^保留临时根：' "$tmp/flip-tail-leak.log" 2>/dev/null >>"$tmp/kept-roots.log" || true
-  if [ -n "$(mr_nested_leftovers "$lkdir")" ]; then
+  left_fs="$(find "$lkdir" -maxdepth 1 -name 'teamsmith-routes.*' -type d 2>/dev/null | head -1)"
+  if [ "${knob:-0}" -lt 1 ] || [ -z "$left_fs" ]; then
+    finding "翻转⑧：变异没落地（夹具缺陷）—— helper 里的 noreap 分支 ${knob:-0} 处；私有 TMPDIR 里没留下根（旋钮没生效）"
+  elif [ -n "$(mr_nested_leftovers "$lkdir")" ]; then
     ok "翻转⑧：嵌套 run 不回收 → 收尾扫描看得见残留（默认 KEEP 未设时判红）"
   else
-    finding "翻转⑧没有兑现：嵌套 run 不回收，收尾扫描却没看见残留"
+    finding "翻转⑧没有兑现：嵌套 run 不回收（根还在：$left_fs），收尾扫描却没看见残留"
   fi
   # ⑨ P140：印了一条 family 表里没有条目的路线 → C1 目录对账必须红并点名它（沉默的路线不可接受）
   s="$(mr_scratch_tree flip-unclaimed-route)"
@@ -1435,11 +1562,13 @@ assert anchor in s, 'anchor not found'
 s = s.replace(anchor, 'team_df_err "  修法：team frob on（没有走查条目的路线）"\n  ' + anchor, 1)
 open(p, 'w', encoding='utf-8').write(s)
 PY
-  mr_flip_run "$s" refusals
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q '没人认领' && printf '%s' "$MR_FLIP_LOG" | grep -q 'team frob'; then
-    ok "翻转⑨：印了一条 family 表没有的路线 → C1 目录对账红并点名它"
-  else
-    finding "翻转⑨没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
+  if mr_flip_require "翻转⑨" "$s" scripts/lib/cmd-agents.sh - '修法：team frob on（没有走查条目的路线）'; then
+    mr_flip_run "$s" refusals
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '没人认领' 'team frob'; then
+      ok "翻转⑨：印了一条 family 表没有的路线 → C1 目录对账红并点名它"
+    else
+      finding "翻转⑨没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
   fi
   # ⑩ P140：打印的修法修错了目标（switch 到别的任务）→ 逐族走查必须红并点名 family；Walk A/B 同树照旧绿
   s="$(mr_scratch_tree flip-mutated-fix)"
@@ -1457,17 +1586,19 @@ assert block.count('"$want"') >= 2, 'expected both route variants in the block'
 s = s[:start] + block.replace('"$want"', '"task/T9-wrong"') + s[a:]
 open(p, 'w', encoding='utf-8').write(s)
 PY
-  mr_flip_run "$s" refusals
-  if [ "$MR_FLIP_RC" != "0" ] && printf '%s' "$MR_FLIP_LOG" | grep -q 'C2/branch-switch' && printf '%s' "$MR_FLIP_LOG" | grep -q '路线'; then
-    ok "翻转⑩：打印的 switch 目标修错（task/T9-wrong）→ 逐族走查红并点名 branch-switch"
-  else
-    finding "翻转⑩没有兑现（rc=$MR_FLIP_RC）：$(printf '%s' "$MR_FLIP_LOG" | grep -a '✗' | head -2 | tr '\n' ' ')"
-  fi
-  mr_flip_run "$s" walk control
-  if [ "$MR_FLIP_RC" = "0" ]; then
-    ok "翻转⑩对照：同一棵修坏的树上 Walk A/控制臂照旧绿（只红拒绝路线那一族）"
-  else
-    finding "翻转⑩对照：修坏的树上 Walk A/控制臂不该变红（rc=$MR_FLIP_RC）"
+  if mr_flip_require "翻转⑩" "$s" scripts/lib/cmd-agents.sh - 'task/T9-wrong'; then
+    mr_flip_run "$s" refusals
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'C2/branch-switch' '路线'; then
+      ok "翻转⑩：打印的 switch 目标修错（task/T9-wrong）→ 逐族走查红并点名 branch-switch"
+    else
+      finding "翻转⑩没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
+    mr_flip_run "$s" walk control
+    if [ "$MR_FLIP_RC" = "0" ]; then
+      ok "翻转⑩对照：同一棵修坏的树上 Walk A/控制臂照旧绿（只红拒绝路线那一族）"
+    else
+      finding "翻转⑩对照：修坏的树上 Walk A/控制臂不该变红（rc=$MR_FLIP_RC）"
+    fi
   fi
   # 收尾：flips 自己的 scratch 树与嵌套 run 的根都不留下。
   # TEAM_TMP_KEEP=1（门禁的 --keep 让子进程都继承它）是**刻意的保留**，不是泄漏 —— 与 smoke §40
