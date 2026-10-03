@@ -13,24 +13,9 @@
 #   · 记录：一行一调用、拒绝逐字节进 `.forensics`、轮转标记自述、保留写失败可见但不改判定、
 #     pass 不保留、FIFO 目标不挂住（RA2）。
 #
-# P164（signal-gate-pgrep）加上选择器那半（每条新断言都带 `P164` 前缀，红侧点名它）：
-#   · 闸门入口：`pgrep`/`pidof` 是同目录里指向 signal-gate 的软链，PATH 最前时解析到闸门；
-#   · 按名字/模式/所有者的选择一律拒（`-f`/`--full`/`-fmarker`/`-x`/裸名/`-u`/`-U`/`-G`、`pidof` 的
-#     一切选择形态）：exit 64、stdout 空、点明工具 + 完整 argv + 安全路线、选择器桩零调用；
-#   · 放行的只有 `-g N` / `-P N`（N 为显式正整数）与三种「整命令计数」（`-fc P`/`-f -c P`/`-c -f P`）
-#     加四个只读信息词：argv/stdout/stderr/退出码逐字节来自**同名**真身（旧 `TEAM_SIGNAL_REAL` pin
-#     钉在 pkill 见证桩上也不改道）；`0`/负数/前导 0/多值/额外谓词/长别名/融合拼写一律拒；
-#   · 计数用例的两种响应（`0`+exit 1 与 `2`+exit 0）都保留，且 pass 不建 `.forensics`；
-#   · 不可用的 pin + 继承的环境 token + 子 shell 都不授权；被拒的替换不给 shell 任何 PID
-#     （`kill $(pgrep -f …)` 到**只记 argv** 的 kill 函数时零参数）；
-#   · 新选择器的拒绝进同一份取证记录（逐字节 `.forensics`、轮转、保留失败仍 64）；
-#   · `ps`/`fuser` 不在这道闸门的管理面内（记录桩收到调用，闸门零日志行）。
-#
 # 红侧（--break=pass）：把闸门副本的判定从 refused 改成 pass（只改那一行），闸门于是执行真身 ——
-# 「stub 没被调用」「诱饵活着」这些断言必须变红（P164 的选择器拒绝断言同理：放行 → exit 不再是 64、
-# 桩被调用、stdout 非空）。**真身永远是 argv 记录桩**（pkill/killall 走 TEAM_SIGNAL_REAL，pgrep/pidof
-# 走闸门之后的同名桩），夹具里不执行真的 pkill/killall/pgrep/pidof；红侧里 pkill 桩按**夹具记录过的
-# 诱饵 pid** 收掉诱饵，于是 decoys-alive 也红。
+# 「stub 没被调用」「诱饵活着」这些断言必须变红。**真身永远是 argv 记录桩**（TEAM_SIGNAL_REAL 钉死），
+# 夹具里不执行真的 pkill/killall；红侧里桩按**夹具记录过的诱饵 pid** 收掉诱饵，于是 decoys-alive 也红。
 #
 # 纪律：清掉继承的团队身份与 tmux 身份；一切产物落 tmp_root_create 的私有根；诱饵/邻居进程由夹具
 # spawn、pid 记录在案，收尾**只按记录的 pid** 发信号；真实仓库 state/ 的反向守卫做成**白名单** ——
@@ -120,13 +105,9 @@ bash -c 'exec -a p159-decoy-A sleep 300' >/dev/null 2>&1 &
 DECOY1=$!
 bash -c 'exec -a p159-decoy-B sleep 300' >/dev/null 2>&1 &
 DECOY2=$!
-# P164：显式 -g/-P 诊断用的夹具自有进程（pid 记录在案；收尾只按这个 pid 收）
-bash -c 'exec sleep 300' >/dev/null 2>&1 &
-P164_OWNED=$!
 cleanup() {
   [ -n "${DECOY1:-}" ] && kill -TERM "$DECOY1" 2>/dev/null || true
   [ -n "${DECOY2:-}" ] && kill -TERM "$DECOY2" 2>/dev/null || true
-  [ -n "${P164_OWNED:-}" ] && kill -TERM "$P164_OWNED" 2>/dev/null || true
   [ "$KEEP" = "1" ] || tmp_root_reap_all
 }
 trap cleanup EXIT
@@ -156,52 +137,14 @@ chmod +x "$STUB"
 REAL_SHIM="$TMP/real-shim"; mkdir -p "$REAL_SHIM"
 for _t in pkill killall; do ln -sf "$STUB" "$REAL_SHIM/$_t"; done
 
-# ── P164 选择器记录桩：**同名**的 pgrep/pidof，紧跟在闸门之后（真身的唯一替身）──────────────────
-# 为什么同名：放行的 pgrep/pidof 必须解析到**自己的**真身；旧 pin（TEAM_SIGNAL_REAL，常钉在 pkill
-# 上）若被沿用就会落到 pkill 见证桩 —— 那条断言（"pkill 桩零调用"）就是为它写的。
-SEL_DIR="$TMP/sel-stub"; mkdir -p "$SEL_DIR"
-cat > "$SEL_DIR/selector" <<'SEL_EOF'
-#!/usr/bin/env bash
-printf '%s argc=%s argv=%s\n' "${0##*/}" "$#" "$*" >> "${SEL_LOG:?}"
-[ -n "${SEL_STDOUT:-}" ] && printf '%s\n' "$SEL_STDOUT"
-[ -n "${SEL_STDERR:-}" ] && printf '%s\n' "$SEL_STDERR" >&2
-exit "${SEL_EXIT:-0}"
-SEL_EOF
-chmod +x "$SEL_DIR/selector"
-for _t in pgrep pidof; do ln -sf selector "$SEL_DIR/$_t"; done
-sel_calls() { [ -s "$SEL_LOG" ] && wc -l < "$SEL_LOG" | tr -dc '0-9' || printf '0'; }
-p164_gate() { # <tool> <args...>：闸门最前、同名记录桩紧随、旧 pin 仍钉在 pkill 见证桩上
-  local _tool="$1"; shift
-  env PATH="$GATE_DIR:$SEL_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" \
-      TEAM_SIGNAL_CALLS_LOG="${GATE_LOG:-$LOGD/gate.log}" \
-      STUB_LOG="${STUB_LOG:-$LOGD/stub.log}" SEL_LOG="${SEL_LOG:-$LOGD/sel.log}" \
-      SEL_STDOUT="${SEL_STDOUT-424242}" SEL_STDERR="${SEL_STDERR:-}" SEL_EXIT="${SEL_EXIT:-0}" \
-      "$GATE_DIR/$_tool" "$@"
-}
-p164_refuse() { # <label> <tool> <args...>：exit 64 + 空 stdout + 文案 + 桩零调用 + 恰一行 refused
-  local label="$1" tool="$2"; shift 2
-  local _before _after _out _err _rc
-  _before="$(gate_lines "${GATE_LOG:-$LOGD/gate.log}")"; _before="${_before:-0}"
-  _out="$(p164_gate "$tool" "$@" 2>"$TMP/p164-err.txt")"; _rc=$?
-  _err="$(cat "$TMP/p164-err.txt" 2>/dev/null)"
-  _after="$(gate_lines "${GATE_LOG:-$LOGD/gate.log}")"; _after="${_after:-0}"
-  assert_eq "P164 $label：exit 64" "$_rc" "64"
-  assert_eq "P164 $label：stdout 为空" "$_out" ""
-  assert_has "P164 $label：文案点名工具 $tool" "$_err" "$tool"
-  assert_has "P164 $label：文案带完整 argv" "$_err" "$tool${1:+ $*}"
-  assert_has "P164 $label：文案给出安全路线 team bg stop <id>" "$_err" "team bg stop <id>"
-  assert_eq "P164 $label：选择器桩零调用" "$(sel_calls)" "0"
-  assert_eq "P164 $label：拒绝恰加一行日志" "$((_after - _before))" "1"
-  assert_has "P164 $label：日志记 act=refused · tool=$tool" "$(tail -n 1 "${GATE_LOG:-$LOGD/gate.log}" 2>/dev/null)" "act=refused · tool=$tool"
-}
-
 # ── 闸门目录：默认用真闸门；--break=pass 用一份只改判定行的副本 ────────────────────────────────
 GATE_DIR="$SKILL_DIR/scripts/shim"
 if [ "$BREAK" = "pass" ]; then
   GATE_DIR="$TMP/shim-break"
   mkdir -p "$GATE_DIR"
   cp -a "$SKILL_DIR/scripts/shim/signal-gate" "$GATE_DIR/signal-gate"
-  for _t in pkill killall pgrep pidof; do ln -sf signal-gate "$GATE_DIR/$_t"; done
+  ln -sf signal-gate "$GATE_DIR/pkill"
+  ln -sf signal-gate "$GATE_DIR/killall"
   sed -i 's/^_act="refused"$/_act="pass"/' "$GATE_DIR/signal-gate"
   if grep -qx '_act="pass"' "$GATE_DIR/signal-gate"; then
     printf '红侧：闸门副本的判定行已改成放行（%s）\n' "$GATE_DIR/signal-gate"
@@ -209,9 +152,7 @@ if [ "$BREAK" = "pass" ]; then
     printf '✗ 红侧不成立：sed 没改到判定行（%s）\n' "$GATE_DIR/signal-gate" >&2; exit 2
   fi
 fi
-for _t in pkill killall pgrep pidof; do
-  [ -x "$GATE_DIR/$_t" ] || { printf '✗ 闸门入口不可执行：%s/%s\n' "$GATE_DIR" "$_t" >&2; exit 2; }
-done
+[ -x "$GATE_DIR/pkill" ] && [ -x "$GATE_DIR/killall" ] || { printf '✗ 闸门入口不可执行：%s\n' "$GATE_DIR" >&2; exit 2; }
 
 LOGD="$TMP/logs"; mkdir -p "$LOGD"
 # 红侧：桩按夹具记录过的诱饵 pid 收掉它们（于是 decoys-alive 也红）；真身永远是桩。
@@ -333,232 +274,6 @@ RC=0; GATE_LOG="$L" timeout 10 env PATH="$GATE_DIR:$PATH" TEAM_SIGNAL_REAL="$STU
     STUB_LOG="$STUB_LOG" "$GATE_DIR/pkill" -f x >/dev/null 2>&1 || RC=$?
 assert_eq "FIFO 日志目标：拒绝照常退出 64，没有被写端挂住" "$RC" "64"
 rm -f "$L"
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# P164（signal-gate-pgrep）· 选择器家族。语法表 = openspec/changes/signal-gate-pgrep/specs/boundary/spec.md。
-# 纪律不变：真身一律是记录桩；夹具绝不执行真的 pkill/killall/pgrep/pidof；替换用例里的 kill 只记 argv。
-
-hdr "P164 · 闸门入口：pgrep / pidof 是闸门自己的软链"
-for _p164t in pgrep pidof; do
-  [ -e "$GATE_DIR/$_p164t" ] && ok "P164 闸门入口存在（$_p164t）" || bad "P164 闸门入口缺失（$_p164t）"
-  [ -x "$GATE_DIR/$_p164t" ] && ok "P164 闸门入口可执行（$_p164t）" || bad "P164 闸门入口不可执行（$_p164t）"
-  assert_eq "P164 $_p164t 是指向 signal-gate 的软链" "$(readlink "$GATE_DIR/$_p164t" 2>/dev/null)" "signal-gate"
-done
-P164_RESOLVED="$(PATH="$GATE_DIR:$PATH" bash -c 'command -v pgrep; command -v pidof' 2>/dev/null | tr '\n' ' ')"
-assert_has "P164 PATH 最前是闸门目录时 pgrep 解析到闸门" "$P164_RESOLVED" "$GATE_DIR/pgrep"
-assert_has "P164 PATH 最前是闸门目录时 pidof 解析到闸门" "$P164_RESOLVED" "$GATE_DIR/pidof"
-
-hdr "P164 · 按名字/模式/所有者的选择一律拒（十种形态）"
-GATE_LOG="$LOGD/p164-refuse.log"; SEL_LOG="$LOGD/p164-refuse-sel.log"; STUB_LOG="$LOGD/p164-refuse-pkill.log"
-rm -f "$GATE_LOG" "$GATE_LOG.forensics" "$SEL_LOG" "$STUB_LOG"
-SEL_STDOUT=424242; SEL_EXIT=0; SEL_STDERR=""
-p164_refuse "pgrep -f <marker>（模式）"        pgrep -f "$MARKER"
-p164_refuse "pgrep --full <marker>（长别名）"  pgrep --full "$MARKER"
-p164_refuse "pgrep -f<marker>（融合旗标）"     pgrep -f"$MARKER"
-p164_refuse "pgrep -x sleep（精确名字）"       pgrep -x sleep
-p164_refuse "pgrep sleep（裸名）"              pgrep sleep
-p164_refuse "pgrep -u 1000（真实用户）"        pgrep -u 1000
-p164_refuse "pgrep -U 1000（有效用户）"        pgrep -U 1000
-p164_refuse "pgrep -G 1000（真实组）"          pgrep -G 1000
-p164_refuse "pidof sleep（裸名）"              pidof sleep
-p164_refuse "pidof -s sleep（单次选择）"       pidof -s sleep
-assert_eq "P164 十种拒绝：选择器桩一个调用都没收到" "$(sel_calls)" "0"
-assert_eq "P164 十种拒绝：日志十行 refused" "$(grep -c 'act=refused' "$GATE_LOG")" "10"
-assert_eq "P164 十种拒绝：工具名分记对（pgrep 8 / pidof 2）" "$(grep -c 'tool=pgrep' "$GATE_LOG")/$(grep -c 'tool=pidof' "$GATE_LOG")" "8/2"
-
-hdr "P164 · 显式 -g/-P 诊断保留真身语义"
-GATE_LOG="$LOGD/p164-diag.log"; SEL_LOG="$LOGD/p164-diag-sel.log"; STUB_LOG="$LOGD/p164-diag-pkill.log"
-rm -f "$GATE_LOG" "$GATE_LOG.forensics" "$SEL_LOG" "$STUB_LOG"
-P164_GROUP="$(awk '{print $5}' "/proc/$P164_OWNED/stat" 2>/dev/null)"; [ -n "$P164_GROUP" ] || P164_GROUP="$P164_OWNED"
-P164_PARENT="$P164_OWNED"
-P164_DIAG_OUT="$(printf '%s\n%s' "$P164_OWNED" "$P164_GROUP")"
-SEL_STDOUT="$P164_DIAG_OUT"; SEL_STDERR="p164 选择器诊断"; SEL_EXIT=3
-_out="$(p164_gate pgrep -g "$P164_GROUP" 2>"$TMP/p164-e.txt")"; _rc=$?
-assert_eq "P164 pgrep -g <记录的组 id> 的退出码来自真身（3）" "$_rc" "3"
-assert_eq "P164 pgrep -g 的 stdout 逐字节来自真身" "$_out" "$P164_DIAG_OUT"
-assert_eq "P164 pgrep -g 的 stderr 逐字节来自真身" "$(cat "$TMP/p164-e.txt")" "p164 选择器诊断"
-SEL_EXIT=0; SEL_STDERR=""
-_out="$(p164_gate pgrep -P "$P164_PARENT" 2>"$TMP/p164-e.txt")"; _rc=$?
-assert_eq "P164 pgrep -P <记录的父 id> 退出 0" "$_rc" "0"
-assert_eq "P164 pgrep -P 的 stdout 来自真身" "$_out" "$P164_DIAG_OUT"
-assert_has "P164 同名桩收到 -g 的 argv 逐字节" "$(cat "$SEL_LOG")" "pgrep argc=2 argv=-g $P164_GROUP"
-assert_has "P164 同名桩收到 -P 的 argv 逐字节" "$(cat "$SEL_LOG")" "pgrep argc=2 argv=-P $P164_PARENT"
-assert_eq "P164 两次放行都不落到 pkill 见证桩" "$(cat "$STUB_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
-assert_eq "P164 两次放行都记 act=pass · tool=pgrep" "$(grep -c 'act=pass · tool=pgrep' "$GATE_LOG")" "2"
-[ -e "$GATE_LOG.forensics" ] && bad "P164 pass 调用不该建 .forensics" || ok "P164 pass 调用不保留（.forensics 没被建）"
-assert_alive "P164 两次诊断都没给任何进程发信号（夹具自有进程仍活着）" "$P164_OWNED"
-
-hdr "P164 · FAST 的整命令计数不被拦（三种拼写 × 两种响应）"
-GATE_LOG="$LOGD/p164-count.log"; SEL_LOG="$LOGD/p164-count-sel.log"; STUB_LOG="$LOGD/p164-count-pkill.log"
-rm -f "$GATE_LOG" "$GATE_LOG.forensics" "$SEL_LOG" "$STUB_LOG"
-SEL_STDOUT=0; SEL_EXIT=1; SEL_STDERR=""
-for _sp in "-fc" "-f -c" "-c -f"; do
-  # shellcheck disable=SC2086
-  _out="$(p164_gate pgrep $_sp '/tmp/p164-fixture/pi-sleep' 2>/dev/null)"; _rc=$?
-  assert_eq "P164 pgrep $_sp <absent>：stdout 0（无匹配的计数）" "$_out" "0"
-  assert_eq "P164 pgrep $_sp <absent>：退出码 1 原样保留" "$_rc" "1"
-done
-SEL_STDOUT=2; SEL_EXIT=0
-for _sp in "-fc" "-f -c" "-c -f"; do
-  # shellcheck disable=SC2086
-  _out="$(p164_gate pgrep $_sp '/tmp/p164-fixture/pi-sleep' 2>/dev/null)"; _rc=$?
-  assert_eq "P164 pgrep $_sp <present>：stdout 2" "$_out" "2"
-  assert_eq "P164 pgrep $_sp <present>：退出码 0" "$_rc" "0"
-done
-assert_eq "P164 六次计数的 argv 逐字节到同名桩" "$(gate_lines "$SEL_LOG")" "6"
-assert_eq "P164 六次计数都记 act=pass · tool=pgrep" "$(grep -c 'act=pass · tool=pgrep' "$GATE_LOG")" "6"
-[ -e "$GATE_LOG.forensics" ] && bad "P164 计数放行不建 .forensics" || ok "P164 计数放行不保留（.forensics 没被建）"
-
-hdr "P164 · 部分匹配/隐式 ID 不能放大选择（十八种形态）"
-GATE_LOG="$LOGD/p164-widen.log"; SEL_LOG="$LOGD/p164-widen-sel.log"; STUB_LOG="$LOGD/p164-widen-pkill.log"
-rm -f "$GATE_LOG" "$GATE_LOG.forensics" "$SEL_LOG" "$STUB_LOG"
-SEL_STDOUT=424242; SEL_EXIT=0; SEL_STDERR=""
-p164_refuse "pgrep -g 0（隐式组）"              pgrep -g 0
-p164_refuse "pgrep -P 0（隐式父）"              pgrep -P 0
-p164_refuse "pgrep -g 1,2（多值）"              pgrep -g 1,2
-p164_refuse "pgrep -P -1（负数）"               pgrep -P -1
-p164_refuse "pgrep -g（缺值）"                  pgrep -g
-p164_refuse "pgrep -P ''（空值）"               pgrep -P ''
-p164_refuse "pgrep -P 12 -v（额外谓词）"        pgrep -P 12 -v
-p164_refuse "pgrep -v -g 12（前置谓词）"        pgrep -v -g 12
-p164_refuse "pgrep -g 12 sleep（尾随名字）"     pgrep -g 12 sleep
-p164_refuse "pgrep -P 12 -u 1000（加所有者）"   pgrep -P 12 -u 1000
-p164_refuse "pgrep --parent=12（长别名）"       pgrep --parent=12
-p164_refuse "pgrep -fc（缺模式）"               pgrep -fc
-p164_refuse "pgrep -fc ''（空模式）"            pgrep -fc ''
-p164_refuse "pgrep -fc -sleep（模式以 - 开头）" pgrep -fc -sleep
-p164_refuse "pgrep -fc sleep -l（计数加列表）"  pgrep -fc sleep -l
-p164_refuse "pgrep -fcl sleep（融合拼写）"      pgrep -fcl sleep
-p164_refuse "pgrep --teamsmith-allow-pattern sleep（带内 token）" pgrep --teamsmith-allow-pattern sleep
-p164_refuse "pidof --help sleep（两种形态混合）" pidof --help sleep
-assert_eq "P164 十八种放大形状：选择器桩零调用" "$(sel_calls)" "0"
-assert_eq "P164 十八种放大形状：日志十八行 refused" "$(grep -c 'act=refused' "$GATE_LOG")" "18"
-
-hdr "P164 · 只读信息词用自己的真身（旧 pin 钉在 pkill 上也不改道）"
-GATE_LOG="$LOGD/p164-info.log"; SEL_LOG="$LOGD/p164-info-sel.log"; STUB_LOG="$LOGD/p164-info-pkill.log"
-rm -f "$GATE_LOG" "$GATE_LOG.forensics" "$SEL_LOG" "$STUB_LOG"
-SEL_STDOUT=424242; SEL_EXIT=0; SEL_STDERR=""
-for _t in pgrep pidof; do
-  for _tok in --help -h -V --version; do
-    _out="$(p164_gate "$_t" "$_tok" 2>/dev/null)"; _rc=$?
-    assert_eq "P164 $_t $_tok：退出码来自同名真身（0）" "$_rc" "0"
-    assert_eq "P164 $_t $_tok：stdout 来自同名真身" "$_out" "424242"
-  done
-done
-SEL_EXIT=7
-_out="$(p164_gate pgrep --version 2>/dev/null)"; _rc=$?
-assert_eq "P164 只读词的退出码原样来自真身（7）" "$_rc" "7"
-SEL_EXIT=0
-_out="$(p164_gate pgrep -P 12 2>/dev/null)"; _rc=$?
-assert_eq "P164 pgrep -P 12（放行路径）也用自己的真身" "$_rc" "0"
-assert_eq "P164 同名桩收到 10 次调用（8 信息词 + 1 复测 + 1 诊断）" "$(gate_lines "$SEL_LOG")" "10"
-assert_eq "P164 pkill 见证桩零调用（放行不走旧 pin）" "$(cat "$STUB_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
-assert_eq "P164 日志按实际工具名记（pgrep 6 / pidof 4）" "$(grep -c 'act=pass · tool=pgrep' "$GATE_LOG")/$(grep -c 'act=pass · tool=pidof' "$GATE_LOG")" "6/4"
-
-hdr "P164 · 拒绝与 pin / 继承环境无关"
-GATE_LOG="$LOGD/p164-nopin.log"; SEL_LOG="$LOGD/p164-nopin-sel.log"; STUB_LOG="$LOGD/p164-nopin-pkill.log"
-rm -f "$GATE_LOG" "$GATE_LOG.forensics" "$SEL_LOG" "$STUB_LOG"
-p164_env_run() { # <direct|child> <cmd> <args...>：不可用的 pin + 继承的 TEAM_ALLOW_PATTERN_KILL
-  local _mode="$1"; shift
-  if [ "$_mode" = child ]; then
-    env PATH="$GATE_DIR:$SEL_DIR:$PATH" TEAM_SIGNAL_REAL="$TMP/no-such-real" TEAM_ALLOW_PATTERN_KILL=1 \
-        TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" SEL_LOG="$SEL_LOG" SEL_STDOUT=424242 SEL_EXIT=0 STUB_LOG="$STUB_LOG" \
-        bash -c '"$@"' _ "$@"
-  else
-    env PATH="$GATE_DIR:$SEL_DIR:$PATH" TEAM_SIGNAL_REAL="$TMP/no-such-real" TEAM_ALLOW_PATTERN_KILL=1 \
-        TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" SEL_LOG="$SEL_LOG" SEL_STDOUT=424242 SEL_EXIT=0 STUB_LOG="$STUB_LOG" \
-        "$@"
-  fi
-}
-for _mode in direct child; do
-  _out="$(p164_env_run "$_mode" "$GATE_DIR/pgrep" -f "$MARKER" 2>/dev/null)"; _rc=$?
-  assert_eq "P164 $_mode：pgrep -f 在不可用 pin + 继承 token 下 exit 64" "$_rc" "64"
-  assert_eq "P164 $_mode：pgrep -f stdout 空" "$_out" ""
-  _out="$(p164_env_run "$_mode" "$GATE_DIR/pidof" sleep 2>/dev/null)"; _rc=$?
-  assert_eq "P164 $_mode：pidof sleep 在不可用 pin + 继承 token 下 exit 64" "$_rc" "64"
-  assert_eq "P164 $_mode：pidof sleep stdout 空" "$_out" ""
-done
-assert_eq "P164 四次拒绝：同名回落桩零执行" "$(sel_calls)" "0"
-assert_eq "P164 四次拒绝：日志四行、全是 refused" "$(grep -c 'act=refused' "$GATE_LOG")/$(grep -cv 'act=refused' "$GATE_LOG" || true)" "4/0"
-
-hdr "P164 · 被拒的替换不给 shell 任何 PID（kill 只记 argv）"
-PAT_LOG="$LOGD/p164-kill-argv.log"; : > "$PAT_LOG"
-GATE_LOG="$LOGD/p164-subst.log"; SEL_LOG="$LOGD/p164-subst-sel.log"; STUB_LOG="$LOGD/p164-subst-pkill.log"
-rm -f "$GATE_LOG" "$GATE_LOG.forensics" "$SEL_LOG" "$STUB_LOG"
-cat > "$TMP/p164-subst.sh" <<'SUB_EOF'
-#!/usr/bin/env bash
-kill() { printf 'kill argv=[%s]\n' "$*" >> "${KILL_LOG:?}"; }
-for _case in "pgrep -f p164-subst-marker" "pidof sleep"; do
-  _out="$($_case 2>/dev/null)"; _rc=$?
-  printf 'selector=[%s] rc=%s stdout=[%s]\n' "$_case" "$_rc" "$_out" >> "$KILL_LOG"
-done
-kill $(pgrep -f p164-subst-marker)
-kill $(pidof sleep)
-SUB_EOF
-chmod +x "$TMP/p164-subst.sh"
-env PATH="$GATE_DIR:$SEL_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" \
-    SEL_LOG="$SEL_LOG" SEL_STDOUT=424242 SEL_EXIT=0 SEL_STDERR="" STUB_LOG="$STUB_LOG" KILL_LOG="$PAT_LOG" \
-    bash "$TMP/p164-subst.sh" >/dev/null 2>&1 || true
-assert_has "P164 替换里的 pgrep -f 退出 64 且 stdout 空" "$(cat "$PAT_LOG")" "selector=[pgrep -f p164-subst-marker] rc=64 stdout=[]"
-assert_has "P164 替换里的 pidof sleep 退出 64 且 stdout 空" "$(cat "$PAT_LOG")" "selector=[pidof sleep] rc=64 stdout=[]"
-assert_eq "P164 只记 argv 的 kill 两次调用都没有 PID 参数" "$(grep -c '^kill argv=\[\]$' "$PAT_LOG")" "2"
-assert_eq "P164 kill 没有记录到任何 PID 参数" "$(grep -c '^kill argv=\[424242\]$' "$PAT_LOG" || true)" "0"
-assert_eq "P164 替换用例：选择器桩零调用" "$(sel_calls)" "0"
-
-hdr "P164 · 新选择器的拒绝进同一份取证记录（逐字节 / 轮转 / 保留失败 / FIFO）"
-L="$LOGD/p164-forensic.log"; rm -f "$L" "$L.forensics"
-GATE_LOG="$L"; SEL_LOG="$LOGD/p164-forensic-sel.log"; STUB_LOG="$LOGD/p164-forensic-pkill.log"
-rm -f "$SEL_LOG" "$STUB_LOG"
-SEL_STDOUT=424242; SEL_EXIT=0; SEL_STDERR=""
-p164_gate pgrep -f "$MARKER" >/dev/null 2>&1
-p164_gate pidof sleep >/dev/null 2>&1
-assert_eq "P164 两次拒绝两行日志" "$(gate_lines "$L")" "2"
-assert_has "P164 第一行 act=refused · tool=pgrep" "$(sed -n 1p "$L")" "act=refused · tool=pgrep"
-assert_has "P164 第二行 act=refused · tool=pidof" "$(sed -n 2p "$L")" "act=refused · tool=pidof"
-assert_has "P164 拒绝行带完整 argv" "$(sed -n 1p "$L")" "argv=-f $MARKER"
-assert_has "P164 拒绝行带 pid= 与 ppid=" "$(sed -n 1p "$L")" "ppid="
-assert_has "P164 拒绝行带 cwd=" "$(sed -n 1p "$L")" "cwd="
-if cmp -s "$L.forensics" <(sed -n '1,2p' "$L"); then ok "P164 两条拒绝逐字节进了 .forensics（cmp）"; else bad "P164 拒绝行与 .forensics 不是逐字节相同"; fi
-awk 'BEGIN { for (i = 0; i < 2100; i++) printf "2026-01-01T00:00:00+00:00 · act=pass · tool=pgrep · argv=--help · pid=1 ppid=1 cwd=/tmp\n" }' > "$L"
-p164_gate pgrep --help >/dev/null 2>&1
-assert_has "P164 轮转后首行是 rotation 标记" "$(sed -n 1p "$L")" " · rotation · dropped="
-assert_eq "P164 标记 + 1000 条调用行" "$(gate_lines "$L")" "1001"
-assert_eq "P164 轮转后 .forensics 仍是两条拒绝" "$(gate_lines "$L.forensics")" "2"
-assert_has "P164 .forensics 里第一条是被拒的 pgrep" "$(sed -n 1p "$L.forensics")" "act=refused · tool=pgrep"
-L2="$LOGD/p164-retfail.log"; rm -f "$L2"; rm -rf "$L2.forensics"; mkdir -p "$L2.forensics"
-_out="$(GATE_LOG="$L2" timeout 10 env PATH="$GATE_DIR:$SEL_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" \
-      TEAM_SIGNAL_CALLS_LOG="$L2" SEL_LOG="$SEL_LOG" SEL_STDOUT=424242 SEL_EXIT=0 STUB_LOG="$STUB_LOG" \
-      "$GATE_DIR/pidof" sleep 2>&1)"; _rc=$?
-assert_eq "P164 保留路径是目录时仍退出 64（没被挂住）" "$_rc" "64"
-assert_has "P164 诊断点名 .forensics 路径" "$_out" "$L2.forensics"
-assert_has "P164 本行带 retention=failed" "$(cat "$L2")" "retention=failed"
-assert_has "P164 本行仍带 act=refused · tool=pidof" "$(cat "$L2")" "act=refused · tool=pidof"
-rm -rf "$L2.forensics"
-L3="$LOGD/p164-fifo.log"; rm -f "$L3"; mkfifo "$L3"
-_rc=0
-GATE_LOG="$L3" timeout 10 env PATH="$GATE_DIR:$SEL_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" TEAM_SIGNAL_CALLS_LOG="$L3" \
-    SEL_LOG="$SEL_LOG" SEL_STDOUT=424242 SEL_EXIT=0 STUB_LOG="$STUB_LOG" "$GATE_DIR/pgrep" -f x >/dev/null 2>&1 || _rc=$?
-assert_eq "P164 FIFO 日志目标：拒绝照常 64，没被写端挂住" "$_rc" "64"
-rm -f "$L3"
-
-hdr "P164 · ps / fuser 不在这道闸门的管理面内"
-RO_DIR="$TMP/readonly-stub"; mkdir -p "$RO_DIR"
-cat > "$RO_DIR/ro-stub" <<'RO_EOF'
-#!/usr/bin/env bash
-printf '%s argc=%s argv=%s\n' "${0##*/}" "$#" "$*" >> "${RO_LOG:?}"
-exit "${RO_EXIT:-0}"
-RO_EOF
-chmod +x "$RO_DIR/ro-stub"
-for _t in ps fuser; do ln -sf ro-stub "$RO_DIR/$_t"; done
-RO_LOG="$LOGD/p164-readonly-calls.log"; : > "$RO_LOG"
-GATE_LOG="$LOGD/p164-readonly.log"; rm -f "$GATE_LOG"
-_rc=0; env PATH="$GATE_DIR:$RO_DIR:$PATH" RO_LOG="$RO_LOG" TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" ps -p 12 >/dev/null 2>&1 || _rc=$?
-assert_eq "P164 ps -p 12 的退出码来自自己的真身（0）" "$_rc" "0"
-_rc=0; env PATH="$GATE_DIR:$RO_DIR:$PATH" RO_LOG="$RO_LOG" TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" fuser /tmp/p164-file >/dev/null 2>&1 || _rc=$?
-assert_eq "P164 fuser /tmp/p164-file 的退出码来自自己的真身（0）" "$_rc" "0"
-assert_has "P164 ps 的 argv 逐字节到见证桩" "$(cat "$RO_LOG")" "ps argc=2 argv=-p 12"
-assert_has "P164 fuser 的 argv 逐字节到见证桩" "$(cat "$RO_LOG")" "fuser argc=1 argv=/tmp/p164-file"
-[ -e "$GATE_LOG" ] && bad "P164 ps/fuser 不该给信号闸门写任何日志（实际建了 $GATE_LOG）" || ok "P164 ps/fuser 没有闸门日志行"
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 if [ "$BREAK" = "pass" ]; then

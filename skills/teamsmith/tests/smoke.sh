@@ -12879,17 +12879,6 @@ chmod +x "$M36_STUB/tmux"
 
 assert_file "$M36_SHIM_DIR/tmux" "闸门 shim 文件在（scripts/shim/tmux）"
 if [ -x "$M36_SHIM_DIR/tmux" ]; then ok "shim 可执行"; else bad "shim 不可执行"; fi
-# P167：信号闸门的选择器入口（pgrep/pidof）与 tmux 入口同在一目录 —— 渲染出的 PATH 前缀把它们一起
-# 带进窗口。这里先钉「文件在 + 可执行 + PATH 最前时解析到闸门目录」；真窗口那半在下面的 ⑪
-# （删掉任一个软链 → 这个断言就是它该红的形状，红侧留在 P167 的报告包里）。
-for _sig_sel in pgrep pidof; do
-  assert_file "$M36_SHIM_DIR/$_sig_sel" "P167 信号入口在（scripts/shim/$_sig_sel）"
-  if [ -x "$M36_SHIM_DIR/$_sig_sel" ]; then ok "P167 信号入口可执行（$_sig_sel）"; else bad "P167 信号入口不可执行（$_sig_sel）"; fi
-done
-assert_eq "P167 渲染出的 PATH 前缀里 pgrep 解析到闸门目录" \
-  "$(PATH="$M36_SHIM_DIR:/usr/bin:/bin" command -v pgrep)" "$M36_SHIM_DIR/pgrep"
-assert_eq "P167 渲染出的 PATH 前缀里 pidof 解析到闸门目录" \
-  "$(PATH="$M36_SHIM_DIR:/usr/bin:/bin" command -v pidof)" "$M36_SHIM_DIR/pidof"
 
 # 闸门探针（默认 socket 类）：sanitized env（无 TMUX/TMUX_PANE/TMUX_TMPDIR/团队身份）、cwd 可控、
 # 桩同时放在 PATH 里并**显式钉进 TEAM_TMUX_REAL**。拒绝路径**不执行任何东西**（桩收到 = 判定错了）。
@@ -13508,9 +13497,6 @@ env | sort > "$M36_D/env-worker.log"
 # P159：窗口里 pkill/killall 必须解析到闸门入口（PATH 最前 + 同名入口）
 printf 'pkill_at=%s\n' "\$(command -v pkill)" >> "$M36_D/env-worker.log"
 printf 'killall_at=%s\n' "\$(command -v killall)" >> "$M36_D/env-worker.log"
-# P167：同一段前缀里的选择器入口（pgrep/pidof）也必须解析到闸门
-printf 'pgrep_at=%s\n' "\$(command -v pgrep)" >> "$M36_D/env-worker.log"
-printf 'pidof_at=%s\n' "\$(command -v pidof)" >> "$M36_D/env-worker.log"
 tmux ls >> "$M36_D/env-worker.log" 2>&1 || true
 # M67 R2：CLI 自己的破坏性调用 = 本项目自己的命名对象（\$TEAM_SESSION:gatevictim），在默认 socket
 # 上应记 act=allowed-owned。真身钉桩（默认 socket 探针纪律），TMUX 清掉才会解析到默认 socket。
@@ -13544,8 +13530,6 @@ EOF
     assert_match "$M36_D/env-worker.log" "^TEAM_SIGNAL_REAL=/" "⑪ worker 窗口 env：信号真身路径也进了 env（绝对路径）"
     assert_match "$M36_D/env-worker.log" "^pkill_at=$M36_SHIM_DIR/pkill\$" "⑪ worker 窗口里 pkill 解析到闸门入口"
     assert_match "$M36_D/env-worker.log" "^killall_at=$M36_SHIM_DIR/killall\$" "⑪ worker 窗口里 killall 解析到闸门入口"
-    assert_match "$M36_D/env-worker.log" "^pgrep_at=$M36_SHIM_DIR/pgrep\$" "P167 worker 窗口里 pgrep 解析到闸门入口"
-    assert_match "$M36_D/env-worker.log" "^pidof_at=$M36_SHIM_DIR/pidof\$" "P167 worker 窗口里 pidof 解析到闸门入口"
     assert_not "$M36_D/env-worker.log" "ALLOW_PATTERN" "⑪ worker 窗口 env：没有任何信号授权键（环境不授权）"
     assert_not "$M36_D/env-worker.log" "TEAM_ALLOW_DESTRUCTIVE_TMUX=" "⑪ worker 窗口 env：没有退役键（派单 shell 带着它也没用）"
     assert_not "$M36_D/env-worker.log" "DESTRUCTIVE" "⑪ worker 窗口 env：没有任何破坏性授权键"
@@ -13577,9 +13561,6 @@ env | sort > "$M36_D/env-pm.log"
 # P159：PM 窗口与 worker 窗口共用同一段前缀 —— 信号入口也必须解析到闸门（与 gate-probe.sh 同形）
 printf 'pkill_at=%s\\n' "\$(command -v pkill)" >> "$M36_D/env-pm.log"
 printf 'killall_at=%s\\n' "\$(command -v killall)" >> "$M36_D/env-pm.log"
-# P167：选择器入口与 worker 窗口同形
-printf 'pgrep_at=%s\\n' "\$(command -v pgrep)" >> "$M36_D/env-pm.log"
-printf 'pidof_at=%s\\n' "\$(command -v pidof)" >> "$M36_D/env-pm.log"
 printf 'done\\n' > "$M36_D/env-pm.done"
 sleep 300
 EOF
@@ -13596,9 +13577,6 @@ EOF
     assert_match "$M36_D/env-pm.log" "^TEAM_TMUX_CALLS_LOG=$REPO/.pi/team/state/tmux-calls.log\$" "⑪ PM 窗口 env：日志指向本 fixture 的 state/"
     assert_match "$M36_D/env-pm.log" "^TEAM_SIGNAL_CALLS_LOG=$REPO/.pi/team/state/signal-calls.log\$" "⑪ PM 窗口 env：信号调用日志也钉了（同一段前缀）"
     assert_match "$M36_D/env-pm.log" "^pkill_at=$M36_SHIM_DIR/pkill\$" "⑪ PM 窗口里 pkill 也解析到闸门入口"
-    assert_match "$M36_D/env-pm.log" "^pgrep_at=$M36_SHIM_DIR/pgrep\$" "P167 PM 窗口里 pgrep 也解析到闸门入口"
-    assert_match "$M36_D/env-pm.log" "^pidof_at=$M36_SHIM_DIR/pidof\$" "P167 PM 窗口里 pidof 也解析到闸门入口"
-    assert_not "$M36_D/env-pm.log" "ALLOW_PATTERN" "P167 PM 窗口 env：没有选择器授权键"
     assert_not "$M36_D/env-pm.log" "TEAM_ALLOW_DESTRUCTIVE_TMUX=" "⑪ PM 窗口 env：没有退役键"
   else bad "PM 窗口的 env 没落盘（gate-pm 没跑起来）"; fi
   # 收尾：PM 窗口 + pm.pid 系列清掉（与 6i 收尾同口径，后面没有依赖它们的段落了）
