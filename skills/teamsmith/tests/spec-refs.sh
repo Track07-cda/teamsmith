@@ -339,6 +339,11 @@ for cap in caps:
         for relf, ln, r in base_refs:
             if r in pending_refs:
                 continue
+            if breakstage == "noretired":
+                # P200 的影子：关掉「退场引用被点名」（连同汇总里的 retired 计数）—— --flips 的
+                # retired-naming 用例必须因此 BAD。判红/判绿这两条路不受影响：retired 只是点名，
+                # 从来不是 undeclared（真树在任何归档状态下都不该因此变红）。
+                continue
             bys = sorted({ch for (ch, sec, lines) in vers
                           if sec == "REMOVED" or r not in {x for _, _, t in lines for x in refs_in(t)}})
             retired.append((relf, ln, r, ",".join(bys) if bys else ",".join(sorted(set(changes_touching)))))
@@ -452,7 +457,8 @@ list_declared() {
 # 每个变异都在 owned tmp 家族里的 scratch 副本上做；`--break=slotmatcher` 把匹配器放回宽松版本
 # （用例 1 必须因此从「红」变成「没抓到」→ --flips 自己报 BAD 并非 0）；`--break=toleranttable`
 # 把声明表加载放回 P150 的宽松版本（通配行照收、缺列静默丢弃 → 声明表用例必须全部 BAD）；
-# `--break=writeroot` 把变异写进被检的那棵树（默认拒绝在真仓库根上跑）→ 反向守卫必须报红。
+# `--break=writeroot` 把变异写进被检的那棵树（默认拒绝在真仓库根上跑）→ 反向守卫必须报红；
+# `--break=noretired` 关掉「退场引用被点名」（连同汇总计数，P200）→ retired-naming 用例必须 BAD。
 flips() {
   # shellcheck source=tests/lib/tmp-root.sh
   . "$SELF_DIR/lib/tmp-root.sh" 2>/dev/null || { printf 'spec-refs: 找不到 tests/lib/tmp-root.sh\n' >&2; return 2; }
@@ -744,7 +750,56 @@ SPEC
   run_flip pending-dependency-missing "$s"
   expect_red "pending-dependency-missing" '^spec-refs: .*Proof-of-life slot.*在基线里不存在'
 
-  # ⑬ 反向守卫：真树的 openspec/specs/** 与 docs/team/inbox/** 逐字节未动
+  # ⑬ 退场点名（P200）：一个未归档 change 的 MODIFIED 退场基线里的一条账本引用 → 逐条点名、**不判
+  #    失败**（retired 行不是 undeclared）。夹具自足（最小树，不拷真 openspec）：结论不随真仓库里
+  #    哪些 change 还没归档而变 —— 旧断言钉在「真树里恰好有未归档的退场引用」这种临时状态上，
+  #    真树一归档（retired 4 → 0）就必红。影子 `--break=noretired` 关掉点名 → 本用例必须 BAD。
+  mk_retire_tree() { # <根>：基线里一条账本引用被未归档 change 的 MODIFIED 退场
+    local d="$1"
+    mkdir -p "$d/openspec/specs/boundary" "$d/openspec/changes/zz-retire/specs/boundary"
+    cat > "$d/openspec/specs/boundary/spec.md" <<'SPEC'
+# boundary Specification
+
+## Purpose
+
+Fixture baseline for the walk's retired-reference case.
+
+Id families: `P<n>` a task brief.
+
+## Requirements
+
+### Requirement: Retire slot
+
+The baseline text keeps a ledger citation: `docs/team/reports/P200-fixture.md`.
+
+#### Scenario: Retire scenario
+
+- **WHEN** the fixture runs
+- **THEN** it runs
+SPEC
+    cat > "$d/openspec/changes/zz-retire/specs/boundary/spec.md" <<'SPEC'
+## MODIFIED Requirements
+
+### Requirement: Retire slot
+
+The rewritten text drops the citation.
+
+#### Scenario: Rewritten scenario
+
+- **WHEN** the rewrite runs
+- **THEN** it runs
+SPEC
+  }
+  s="$(mk_scratch retired-naming)" || return 2
+  rm -rf "$s/openspec"; mk_retire_tree "$s"
+  run_flip retired-naming "$s"
+  if [ "$FLIP_RC" -eq 0 ] && grep -qaE '^retired .*docs/team/reports/P200-fixture\.md by zz-retire$' "$log"; then
+    clean "retired-naming" "$(grep -m1 '^retired ' "$log")"
+  else
+    flipbad "retired-naming" "要绿且逐条点名（retired … by zz-retire），实得 exit $FLIP_RC：$(tail -2 "$log" | tr '\n' ' ')"
+  fi
+
+  # ⑭ 反向守卫：真树的 openspec/specs/** 与 docs/team/inbox/** 逐字节未动
   local after_specs after_inbox
   after_specs="$(tree_hash "$ROOT/openspec/specs")"
   after_inbox="$(tree_hash "$ROOT/docs/team/inbox")"

@@ -9153,7 +9153,12 @@ else
     "$(bash "$P150_WALK" --list-declared | grep -cvE '^[[:space:]]*(#|$)' || true)" \
     "$(grep -cvE '^[[:space:]]*(#|$)' "$P150_TABLE" || true)"
   assert_has "$TMP/p150-check.log" "spec-refs: judged " "18c 走查打印了判过的引用计数"
-  assert_match "$TMP/p150-check.log" '^retired ' "18c 被 pending change 退场的引用逐条点名（retired 行）"
+  # P200：判据钉在**机制**上，不许钉在「真仓库里恰好有未归档的退场引用」这种临时状态上
+  # （spec-rationale-self-contained 归档后 retired 4 → 0，旧断言 `^retired ` 于是必红）。真树这里
+  # 只判**状态无关**的形状（汇总行任何时候都打印 retired 计数，0 也算）；点名机制由 --flips 的
+  # retired-naming 用例（④）与它的影子（④b）钉住。
+  assert_match "$TMP/p150-check.log" '^spec-refs: judged .*; retired [0-9]+; undeclared [0-9]+' \
+    "18c 真树汇总行在任何归档状态下都打印退场计数（retired <n>）"
   # ③ 同一次走查在 owned scratch 副本上必须是红的（敏感性），在无账本副本上必须显式跳过
   P150_CP="$(tmp_root_create spec-refs-gate)" || bad "18c 建不出 scratch 副本"
   if [ -n "${P150_CP:-}" ] && [ -d "$P150_CP" ]; then
@@ -9176,6 +9181,55 @@ else
     fi
     rm -rf "$P150_CP"
   fi
+  # ③b P200 的第二条红侧：**真树在任何归档状态下都绿**。现在（spec-rationale 已归档、retired 0）
+  #     那条由 ① 断；这里在真树 openspec 的 owned 副本里再**造**一个未归档的退场引用（唯一标题 +
+  #     自己的 change）→ 退场点名出现而走查照旧绿（retired 不判失败）。副本只用真树的字节。
+  P200_REAL="$(tmp_root_create spec-refs-p200-real)" || bad "18c 建不出真树退场副本"
+  if [ -n "${P200_REAL:-}" ] && [ -d "$P200_REAL" ]; then
+    cp -a "$P150_SRC/openspec" "$P200_REAL/openspec"
+    P200_F="$(grep -rl '^## Purpose' "$P200_REAL/openspec/specs" 2>/dev/null | LC_ALL=C sort | head -1)"
+    P200_CAP=""
+    [ -n "$P200_F" ] && P200_CAP="$(basename "$(dirname "$P200_F")")"
+    if [ -n "$P200_F" ] && [ -n "$P200_CAP" ]; then
+      cat >>"$P200_F" <<'SPEC'
+
+### Requirement: P200 fixture slot
+
+The fixture slot keeps a planted citation: `docs/team/reports/P200-fixture.md`.
+
+#### Scenario: P200 fixture scenario
+
+- **WHEN** the fixture runs
+- **THEN** it runs
+SPEC
+      mkdir -p "$P200_REAL/openspec/changes/zz-p200-retire/specs/$P200_CAP"
+      cat >"$P200_REAL/openspec/changes/zz-p200-retire/specs/$P200_CAP/spec.md" <<'SPEC'
+## MODIFIED Requirements
+
+### Requirement: P200 fixture slot
+
+The rewritten slot drops the planted citation.
+
+#### Scenario: P200 rewritten scenario
+
+- **WHEN** the rewrite runs
+- **THEN** it runs
+SPEC
+      P200_RC=0
+      bash "$P150_WALK" --check --root "$P200_REAL" >"$TMP/p200-real-retire.log" 2>&1 || P200_RC=$?
+      P200_HIT="$(grep -am1 '^retired .*docs/team/reports/P200-fixture\.md by zz-p200-retire$' "$TMP/p200-real-retire.log" | tr -d '\r')"
+      if [ "$P200_RC" -eq 0 ] && [ -n "$P200_HIT" ]; then
+        ok "18c 真树副本 + 一个未归档的退场引用仍绿并点名（$(printf '%s' "$P200_HIT" | cut -c1-120)）"
+      elif [ "$P200_RC" -ne 0 ]; then
+        bad "18c 真树副本 + 未归档的退场引用（rc=$P200_RC）：$(grep -aE '^(undeclared|family-unnamed)' "$TMP/p200-real-retire.log" | head -2 | tr '\n' ' ')"
+      else
+        bad "18c 真树副本 + 未归档的退场引用：走查绿但没有点名（$(grep -am1 '^spec-refs: judged ' "$TMP/p200-real-retire.log" | tr -d '\r' | cut -c1-140)）"
+      fi
+    else
+      bad "18c 真树副本里找不到带 ## Purpose 的 spec（没法种退场引用）"
+    fi
+    rm -rf "$P200_REAL"
+  fi
   # ④ --flips：双向自检（每行一个用例，含声明表加载规则与真树反向守卫）
   if bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p150-flips.log" 2>&1; then
     ok "18c --flips 全绿：$(grep -acE '^(red|clean) ' "$TMP/p150-flips.log") 个变异按预期，反向守卫绿"
@@ -9188,6 +9242,22 @@ else
     "18c --flips 钉住缺列数据行被拒绝加载（P185 F2）"
   assert_match "$TMP/p150-flips.log" '^clean +declared-ledger-rows ' \
     "18c --flips 反向：ledger 根/固定文件照旧按字面行放行"
+  # ④b P200：点名机制由 scratch 状态钉住 —— --flips 的 retired-naming 用例（自足最小树里造一个
+  #     未归档 change 退场一条引用）必须绿且逐条点名；把点名关掉的影子必须让**同一条判据**变红
+  #     （同一条 ERE 两处用：绿日志 1 命中、影子日志 0 命中；且只有这一条用例掉出预期集合）。
+  P200_RETIRED_CRIT='^clean +retired-naming +retired .*docs/team/reports/P200-fixture\.md by zz-retire$'
+  assert_match "$TMP/p150-flips.log" "$P200_RETIRED_CRIT" \
+    "18c --flips 钉住退场引用被逐条点名（P200：scratch 里造的未归档退场状态，不依赖真树归档进度）"
+  SPEC_REFS_BREAK=noretired bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p200-flips-break.log" 2>&1
+  P200_CASES_GREEN="$(grep -acE '^(red|clean) ' "$TMP/p150-flips.log")"
+  P200_CASES_SHADOW="$(grep -acE '^(red|clean) ' "$TMP/p200-flips-break.log")"
+  if grep -aqE '^BAD +retired-naming ' "$TMP/p200-flips-break.log" \
+     && ! grep -aqE "$P200_RETIRED_CRIT" "$TMP/p200-flips-break.log" \
+     && [ "$P200_CASES_SHADOW" = "$((P200_CASES_GREEN - 1))" ]; then
+    ok "18c 退场点名的红侧：影子（SPEC_REFS_BREAK=noretired）下同一条判据 0 命中、--flips 报 BAD retired-naming，其余 $P200_CASES_SHADOW 条照旧"
+  else
+    bad "18c 退场点名的红侧：影子下要「同一条判据 0 命中 + BAD retired-naming + 只少一条用例」（绿 $P200_CASES_GREEN / 影子 $P200_CASES_SHADOW；$(grep -am1 -E '^BAD ' "$TMP/p200-flips-break.log" | tr -d '\r' | cut -c1-100)）"
+  fi
   # ⑤ --flips 的敏感性：把匹配器放回宽松版本（槽位模式吞具体引用）→ --flips 必须自己报 BAD（假绿不再无声）
   SPEC_REFS_BREAK=slotmatcher bash "$P150_WALK" --flips --root "$P150_SRC" >"$TMP/p150-flips-break.log" 2>&1
   if grep -aq '^BAD ' "$TMP/p150-flips-break.log"; then
