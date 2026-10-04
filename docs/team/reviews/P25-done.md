@@ -1,0 +1,1 @@
+- 2026-09-20T10:25:30Z · `team board set P25 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/inbox-spool-resilience-proposal.md（判定 ACCEPTED）

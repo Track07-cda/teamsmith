@@ -1,0 +1,4 @@
+- 2026-09-22T16:52:10Z · `team close P62 --status done` · FORCED：PM 显式覆盖（理由：propose 阶段验收 ACCEPTED（记录 docs/team/reviews/fixture-waits-for-landed-reads-proposal.md）；提案已 squash 合并进 main）
+  -   - ① 复验记录 docs/team/reviews/P62.md：存在但判定是 ACCEPTED（FAIL/TIMEOUT 不算证据）
+  -   - ② 分支是否已并入 main：task/P62-propose（116ded7bc）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/fixture-waits-for-landed-reads-proposal.md 没有可识别的判定行（要 `verdict: **ACCEPTED**`）

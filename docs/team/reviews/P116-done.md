@@ -1,0 +1,4 @@
+- 2026-09-28T21:36:10Z · `team close P116 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS（183 ok/0 bad/0 finding）：三路九格 + 15 格畸形矩阵 + 红队值 + 一处判定四层证明（含 trace 影子）+ 两条影子红侧 + 真实值零回归 + validate 16/0）
+  -   - ① 复验记录 docs/team/reviews/P116.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P116-id（76fa562b7）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P116.md（用 ① 的 team review 生成，判定 PASS）

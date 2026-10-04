@@ -1,0 +1,4 @@
+- 2026-09-22T16:54:22Z · `team close P60 --status done` · FORCED：PM 显式覆盖（理由：verify 完成但结论 FAIL（卡在既有 lint 红 = P64）；记录 docs/team/reviews/P60.md，P64 落地后重跑两条命令收口）
+  -   - ① 复验记录 docs/team/reviews/P60.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P60-test-tmp-hygiene（4998902bc）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P60.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-28T16:17:25Z · `team close P110 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：F2 数值比较+decimal 用例、F1 诚实归因，两条都有内置红侧；自检 55/0、budget 112/112、loop 70/70、gate-guard 四向、FAST 全绿）
+  -   - ① 复验记录 docs/team/reviews/P110.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P110-f2-f1（c86750298）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

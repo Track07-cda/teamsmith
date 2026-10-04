@@ -1,0 +1,4 @@
+- 2026-09-22T21:57:41Z · `team close P84 --status done` · FORCED：PM 显式覆盖（理由：verify 已交付（六项 + 三条变异全绿、全量 3216/0）并交出 F1；F1 裁定为必须修 → delta 交回 P86（同 change 的 apply），本行关单以便单写者规则放行）
+  -   - ① 复验记录 docs/team/reviews/P84.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P84-p84（6acae81ff）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P84.md（用 ① 的 team review 生成，判定 PASS）

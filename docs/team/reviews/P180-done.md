@@ -1,0 +1,4 @@
+- 2026-10-02T19:36:05Z · `team close P180 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复验（容器内）：0h 段 ✓192 ✗0（从 38 涨到 192，含逐形态红侧与和运行时 shim 的同源矩阵）；选段合计 ✓213 ✗0；代码确认动词按 argv 逐词解析、-S/-L 目标必须是本轮私有 socket、command tmux 与裸 tmux 同源且无绕过路径）
+  -   - ① 复验记录 docs/team/reviews/P180.md：不存在
+  -   - ② 分支是否已并入 main：task/P180-rework（53de814c5）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

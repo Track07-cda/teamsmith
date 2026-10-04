@@ -1,0 +1,8 @@
+- 2026-09-21T07:03:01Z · `team board set M53 done` · FORCED：PM 显式覆盖（理由：验收环境 = 钉死容器/CI（本机唯一红条为宿主特有、load 1.8 仍复现、容器同样负载下全绿）；待查问题交给独立验证 M56）
+  -   - ① 复验记录 docs/team/reviews/M53.md：存在但判定是 FAIL（FAIL/TIMEOUT 不算证据）
+  -   - ② 分支是否已并入 main：task/M53-watch-degradation-apply-doct（e2b4478cc）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
+- 2026-09-21T08:03:57Z · `team close M53 --status done` · FORCED：PM 显式覆盖（理由：验收环境 = 钉死容器/CI（容器 A/B 均 ✓18/0；宿主红条经 A/B、探针短路、数据路径三证定性为前提校准问题）；待修项已交 M56 与 D32）
+  -   - ① 复验记录 docs/team/reviews/M53.md：存在但判定是 FAIL（FAIL/TIMEOUT 不算证据）
+  -   - ② 分支是否已并入 main：task/M53-watch-degradation-apply-doct（e2b4478cc）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

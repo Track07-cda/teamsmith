@@ -1,0 +1,4 @@
+- 2026-10-04T14:08:01Z · `team close P103 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手构建镜像验证：BUILD_EXIT=0；镜像内 esbuild = 11,427,952 字节、magic=7f454c46（真 ELF，不是 9,350B 的 JS 垫片）——与 Containerfile 注释的预测逐字相符）
+  -   - ① 复验记录 docs/team/reviews/P103.md：不存在
+  -   - ② 分支是否已并入 main：task/P103-apply（32ada4214）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

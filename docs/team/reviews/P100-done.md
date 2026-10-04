@@ -1,0 +1,4 @@
+- 2026-09-28T10:32:06Z · `team close P100 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS：A1–A5/B1–B4/C 逐项自造夹具复核；F1（锁建不了 = M23 可见降级，我的措辞太宽）与 F6（FAST 口径过时）由 PM 修正并记录，F2–F5 备查）
+  -   - ① 复验记录 docs/team/reviews/P100.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P100-infra-p66-p94（402781b26）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P100.md（用 ① 的 team review 生成，判定 PASS）

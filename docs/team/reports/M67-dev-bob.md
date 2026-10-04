@@ -1,0 +1,349 @@
+# M67 · tmux 闸门重做：按目标判定 + argv token（apply：B1 实现 / B2 夹具·lint·翻转）
+
+agent: dev-bob   status: done   time: 2026-09-21T18:12:00Z
+branch: `task/M67-apply-argv-token`   PR/MR: -（local 模式：分支留在本地工作树，PM 复验后本地合并）
+
+change: `tmux-gate-grant-redesign` · phase: `apply` · delta: `boundary`（B3 的台账/归档归 PM）
+
+## 交付清单
+
+| Path | 改了什么 |
+|---|---|
+| `skills/teamsmith/scripts/shim/tmux` | B1.1/B1.2：**按目标判定**（环境零授权）+ argv token；审计词汇只剩 `pass`/`allowed-owned`/`refused`/`explicit-flag`；socket 表、假隔离判定、只读直通、日志字段/截断原样 |
+| `skills/teamsmith/scripts/team` | B1.3：删掉 `TEAM_ALLOW_DESTRUCTIVE_TMUX` 的 export（第 19 行）与注释；B1.4：CLI 把**推导出来的**身份导出给子进程（见「设计缺口」一节） |
+| `skills/teamsmith/scripts/lib/common.sh` | 闸门段落注释改为新模型（代码未动：`team_tmux_shim_exports` / `team_tmux_*` 包装逐字不变） |
+| `skills/teamsmith/scripts/lib/cmd-config.sh` | B1.5：退役键的行描述（`refuse` 类不变：`config set` 仍 exit 5） |
+| `skills/teamsmith/scripts/lib/cmd-project.sh` | B1.5：doctor 加只读残留探针（`tmux show-environment -g`；tmux 缺席时可见 SKIP） |
+| `skills/teamsmith/references/config.md` / `troubleshooting.md` §18 / `CHANGELOG.md` | B1.5：改写为新模型（闸门词汇表里 "override" 清零） |
+| `skills/teamsmith/tests/smoke.sh` §31c | B2.1/B2.2：整段重写到 R1 探针矩阵（默认 socket 探针全部钉桩）+ 窗口 env/CLI 调用断言 + ⑫ 身份导出守卫 |
+| `skills/teamsmith/tests/tmux-lint.pl` | B2.3：token 作为全局选项（不能藏调用、不算隔离证据）+ 3 条新 selftest 夹具 |
+| `skills/teamsmith/tests/container-tmux.sh` | B2.4：容器内泄漏形状夹具（退役键进 server 全局环境 → refused 然后 explicit-flag） |
+
+提交（`git log --oneline`，自 9325666 起）：
+
+```
+3d1f2f5 test(teamsmith): M67 — pin the CLI's identity export in the fast gate section
+5a86913 test(teamsmith): M67 B2.1–2.2 — gate section rewritten to the target verdict
+6d4b929 fix(teamsmith): M67 B1.4 — the CLI exports the identity its own tmux calls need
+5ce73a9 test(teamsmith): M67 B2.4 — container leak-shape fixture
+87cb51e test(teamsmith): M67 B2.3 — lint pins the gate token as a global option
+52a7065 feat(teamsmith): M67 B1.5 — retire TEAM_ALLOW_DESTRUCTIVE_TMUX visibly
+0389df4 feat(teamsmith): M67 B1.1–1.3 — tmux gate decides by target, argv token grants
+```
+
+---
+
+## B1 · 判定与放行（R1、R2）
+
+### 1.1 判定 = 目标（`shim/tmux`）
+
+判定顺序（**token 最先**，然后才是目标归属；私有 socket 不参与裁决）：
+
+| 输入 | 动作 |
+|---|---|
+| argv 全局位有 `--teamsmith-allow-destructive` | `explicit-flag`（执行；任何 socket） |
+| 非破坏性子命令 / 非默认 socket | `pass` |
+| 默认 socket + `kill-server` | `refused`（对象是整台 server） |
+| 默认 socket + 前缀歧义（如 `kill-s`） | `refused`（tmux 自己也会报 ambiguous） |
+| 默认 socket + `kill-session -a`（含 `-at x` 组合旗标） | `refused`（加宽到所有其他会话） |
+| 默认 socket + `kill-session/-window/-pane` | 有效 `-t`（最后一个胜出；`-t x` 与 `-tx`；组合旗标簇按 tmux 的 args_parse 逐字符走）非空、其 session 段（第一个 `:` 之前）字面等于非空 `TEAM_SESSION`、且身份**绑定**（`TEAM_ROOT`/`TEAM_MAIN_ROOT` realpath 后是调用者 cwd 或它的祖先）→ `allowed-owned`；其余（无 `-t`/空/`%N`/`@N`/`:win`/`.`/`+`/`-`/别的会话/身份缺失或未绑定）→ `refused` |
+| 默认 socket + 假隔离（TMUX_TMPDIR 声明了但不可用） | `refused`（M41 原样；即使 `-t` 看着是自己的——同名会话可能是共享 server 上别人的） |
+
+逐项对照 `tasks.md` 1.1：socket 块（L89–147 的路径表/realpath/假隔离）、破坏性集合前缀识别、私有 socket 直通**逐字保留**；`_parse_globals` 只在副本上解析（透传保真），并新增 `_glob_end`/`_tokenn`/`_tail`；`_parse_target` 是新的目标解析；裁决块替换原三态。
+
+### 1.2 argv token（`shim/tmux`）
+
+- 只在**子命令之前**的全局参数位识别（`--` 之后的第一个词算子命令位，之后的同名词是数据）；
+- 消费：执行前从副本里剥掉**每一处**，原始 argv 只用于日志；
+- `--teamsmith-allow-destructive=1` 不识别 → 透传给真 tmux 报错（fail closed）；
+- 不进被执行进程的环境（见 §31c ② 的桩 env 断言）；
+- 记 `act=explicit-flag`，任何 socket 都执行（token 是调用者的授权）。
+
+### 1.3 删掉 CLI 的 export
+
+```
+$ grep -rn 'TEAM_ALLOW_DESTRUCTIVE_TMUX' skills/teamsmith/scripts/
+skills/teamsmith/scripts/shim/tmux:32:#   TEAM_ALLOW_DESTRUCTIVE_TMUX 已退役（M67）：本闸门不读它，它在调用方环境里、甚至在这台 server 的
+skills/teamsmith/scripts/team:15:# M67 · 这里**不再**导出 TEAM_ALLOW_DESTRUCTIVE_TMUX（M36 的放行通道）：环境变量不授权任何 tmux
+skills/teamsmith/scripts/lib/common.sh:2060:#     的命名对象；私有 socket 放行；TEAM_ALLOW_DESTRUCTIVE_TMUX 已退役、对判定零影响；
+skills/teamsmith/scripts/lib/cmd-config.sh:65:TEAM_ALLOW_DESTRUCTIVE_TMUX|refuse|bool||plain|0|-|权限守卫（M67 退役）：不再授权任何操作（判定按目标）；保留为不接受写入的只读墓碑，手改 .pi/team/config.sh
+skills/teamsmith/scripts/lib/cmd-project.sh:340:  # TEAM_ALLOW_DESTRUCTIVE_TMUX 时提示一行 —— 它**不再授权任何操作**（闸门按目标判定），残留只是
+skills/teamsmith/scripts/lib/cmd-project.sh:344:    retired_residue="$(tmux show-environment -g TEAM_ALLOW_DESTRUCTIVE_TMUX 2>/dev/null | head -1 || true)"
+skills/teamsmith/scripts/panel/src/strings/en.ts:260:  label_TEAM_ALLOW_DESTRUCTIVE_TMUX: 'Allow destructive ops',
+skills/teamsmith/scripts/panel/src/strings/zh.ts:259:  label_TEAM_ALLOW_DESTRUCTIVE_TMUX: '放行破坏性操作',
+$ grep -rn 'act=override' skills/teamsmith/scripts/ skills/teamsmith/tests/   # → 无输出
+```
+
+剩下的 mention 只有三类：注释里的「已退役」说明、`cmd-config.sh` 的墓碑描述、doctor 的 `show-environment -g` 探针（规格 R2 要求）；**没有任何 `${TEAM_ALLOW_DESTRUCTIVE_TMUX}` 读取、没有 export**。`scripts/panel/**` 的两条 UI label 不在本任务授权内（`panel/**` 不动），且它只是短标签、不是闸门词汇。
+
+### 1.4 CLI 调用点审计 + 发现的设计缺口（**请 PM 重点看这一节**）
+
+静态复核（D5 点名的站点）——每个目标都是 `$TEAM_SESSION:<命名对象>`：
+
+```
+lib/cmd-agents.sh:779   team_tmux_kill_window "$TEAM_SESSION:$agent"
+lib/cmd-agents.sh:812   team_tmux_kill_window "$TEAM_SESSION:$agent"
+lib/cmd-agents.sh:1069  tmux kill-window -t "$TEAM_SESSION:$w"
+lib/cmd-review.sh:883   tmux kill-window -t "$TEAM_SESSION:$w"
+lib/cmd-watch.sh:1361   tmux kill-window -t "$TEAM_SESSION:$w"
+lib/cmd-watch.sh:1376   tmux kill-window -t "$TEAM_SESSION:$w"
+lib/cmd-watch.sh:1380   tmux kill-window -t "$TEAM_SESSION:watchdog"
+```
+
+**缺口（实测）**：真跑这些路径时 ledger 记的是 `act=refused`——不是目标不对，而是 **M40 的身份锁在 CLI 进程里 `unset TEAM_ROOT/TEAM_MAIN_ROOT/TEAM_PROJECT/TEAM_SESSION`**（只留进程内变量、不 export），于是 CLI 的 tmux 子进程（PATH 最前的 shim）**看不到身份**，判定掉进 `no-identity` 拒绝。设计 D5「CLI 自己的调用按归属放行、不需要 token」在今天的实现上**不成立**——`team teardown` / `team close` 的窗口清理、pulse 窗口关闭在 gated 窗口里会静默不再杀窗口。
+
+按任务书「1.4：站点若不是打自己的会话 → BLOCKED」的判定：**站点都打自己的会话**，缺的是身份传递，所以我没停单，而是在**授权文件内**补上最小配套（`scripts/team` 载入配置后导出**推导出来的**身份；值不来自继承，窗口启动前缀照旧先 unset 再写目标目录的身份），并用同一夹具做了前后对照：
+
+```
+# 前置：/tmp 丢置仓库（team init --session tst）、闸门 PATH 最前、TEAM_TMUX_REAL=argv 记录桩、
+#       TMUX/TMUX_TMPDIR 清空（= 解析到共享默认 socket）、M67_STUB_WINDOWS 让 CLI 看到窗口
+# BEFORE（把这个 export 行摘掉）：
+2026-09-21T17:47:31+00:00 · act=pass   · … · argv=list-windows -t tst -F #{window_name} …
+2026-09-21T17:47:31+00:00 · act=refused · … · argv=kill-window -t tst:winA …      ← 窗口没被杀（输出里没有「✓ kill window」）
+2026-09-21T17:47:32+00:00 · act=refused · … · argv=kill-window -t tst:winB …
+# AFTER（本次实现）：
+2026-09-21T17:47:28+00:00 · act=pass        · … · argv=list-windows -t tst -F #{window_name} …
+2026-09-21T17:47:28+00:00 · act=allowed-owned · … · argv=kill-window -t tst:winA …   → ✓ kill window tst:winA
+2026-09-21T17:47:28+00:00 · act=allowed-owned · … · argv=kill-window -t tst:winB …   → ✓ kill window tst:winB
+STUB argc=3 argv=kill-window -t tst:winA
+STUB argc=3 argv=kill-window -t tst:winB
+```
+
+结论：**没有任何 CLI 站点需要 token**（D5 结论保住），但 D5 少了「CLI 必须把推导身份导出给子进程」这一句。⑪ 的窗口端到端与新增的 §31c ⑫（FAST 也跑）都钉住它。如果 PM 认为这超出 B1.3「nothing else in the CLI changes argv」的边界，请按设计缺口处置（替换/回退都只涉及 `scripts/team` 那一行 + 注释）。
+
+### 1.5 退役键可见化（R2）
+
+- `cmd-config.sh`：行保留、class 仍 `refuse`，描述改成退休说明；
+- doctor：`tmux show-environment -g TEAM_ALLOW_DESTRUCTIVE_TMUX` 只读探针（不建 server；tmux 缺席打可见 SKIP）；
+- `references/config.md` 行、`troubleshooting.md` §18、`CHANGELOG.md` 的 M36 条目改写；闸门词汇表无 override。
+
+原始验证：
+
+```
+$ team config set TEAM_ALLOW_DESTRUCTIVE_TMUX 1 --dry-run
+✗ TEAM_ALLOW_DESTRUCTIVE_TMUX 是只读键，控制台不改它
+  权限守卫（M67 退役）：不再授权任何操作（判定按目标）；保留为不接受写入的只读墓碑，手改 .pi/team/config.sh
+rc=5   config file unchanged: yes
+$ team config list | grep TEAM_ALLOW_DESTRUCTIVE_TMUX
+TEAM_ALLOW_DESTRUCTIVE_TMUX                refuse   bool       0  (unset · default)
+
+# 残留（容器/私有 socket 里起一台 server，启动进程带退役键）：
+$ env TMUX=$SOCK,1,0 team doctor | grep 退役键
+  tmux 闸门退役键     ! 运行的 tmux server 全局环境里还有 TEAM_ALLOW_DESTRUCTIVE_TMUX=1（M67 退役）：它不再授权任何操作（判定按目标）；重启该 server 后残留消失
+# 无残留（默认 socket）：
+$ env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR team doctor | grep -c 退役键
+0
+```
+
+---
+
+## B2 · 夹具、lint 与翻转（R1、R3）
+
+### 2.1 §31c 探针矩阵（默认 socket 探针全部钉桩）
+
+段首打印真身解析（helper 层证据）：默认 socket 探针 `TEAM_TMUX_REAL=<stub>`（桩），真杀探针只用私有 socket。段首/段尾仍各探一次默认 server 的存活。矩阵（全绿，节选原始输出）：
+
+```
+== 31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67） ==
+  · 31c 真身解析：默认 socket 探针 → …/m36/stub/tmux（argv 记录桩，TEAM_TMUX_REAL 钉死）；真杀探针 → /usr/bin/tmux（只打私有 socket）
+  ✓ ⓪ 默认 socket 探针的真身就是桩（-V 直通到桩，不是真 tmux）
+  ✓ ①a 自己的命名目标（window/pane/session）放行（exit 0 ×3）      ✓ ①a 三次都记 act=allowed-owned
+  ✓ ①a -t 连写形式逐字节透传                        ✓ ①a 最后一个 -t 胜出（自己的在最后）
+  ✓ ①b 别的项目会话 otherproj:pm：exit 64 + act=refused + 桩没被叫   （×12：别的会话/%1/@1/dev/:dev/空目标/无 -t/./+/-/最后一个 -t）
+  ✓ ①c kill-server / kill-ser / kill-s / kill-session -a / -at / -a（无目标）：全部 exit 64 + refused + 桩没被叫
+  ✓ ①c 文案点名子命令 / socket / 原因 / argv token / 私有 socket 路线
+  ✓ ①d 未绑定 / TEAM_SESSION 缺失 / 为空 / 两根都缺 / 根在外：refused；TEAM_MAIN_ROOT 是 cwd 祖先 → allowed-owned
+  ✓ ①e 退役键=1 + kill-server / 别的会话 / 空目标：全 refused；ledger 无 act=override；shim 源码不读退役键
+  ✓ ② token + kill-server：exit 0 + act=explicit-flag；桩 argv = kill-server（剥掉）；token 不进执行进程 env
+  ✓ ② token=1 不识别（exit 64）；② 载荷里的 token 原样到达下游；② kill-server 之后的同名词不授权
+  ✓ ③ 私有 TMUX_TMPDIR / -L 私有 / TMUX 指私有：pass；假隔离（缺失目录 / 普通文件）：refused，文案含「假隔离」与回退原因
+  ✓ ③ 假隔离 + 自己的目标名也拒；✓ ③ 已建私有目录照常放行；✓ ③ 五个只读调用全 pass
+  ✓ ④ 日志行首 ISO 时间 / pid+ppid / cwd / TMUX / TMUX_TMPDIR 字段
+  ✓ ⑤ 2100 行→1000 行、最新一行还在、丢的是最旧
+  ✓ 边界[-L/-S/-c/-f/-T/-V/-2 -v ls/-L m36priv kill-server/-S … ls/含空格载荷/无参数]：10s 不挂 + argv 逐字节 + 参数个数
+  ✓ ⑥ FIFO 日志目标不阻塞、照常透传
+  ✓ ⑦ M41 mutant：摘掉目录检查后假隔离 kill-server 落桩（rc=0）
+  ✓ ⑧ PM/worker × 内置/模板四条启动命令：shim 前缀 + 日志/真身 + **不含任何破坏性授权**
+  ✓ ⑨ PATH 去掉 shim：kill-server 直通（rc=0）且无拒绝文案
+  ✓ ⑫ CLI 的 tmux 子进程看得到 TEAM_SESSION / TEAM_ROOT（B1.4 的身份导出）
+  ✓ 默认 server 前后都活着（本段没碰它）
+  SKIP（FAST 模式） 31c·真私有 server 生死 / 31c·窗口注入端到端
+```
+
+### 2.2 窗口探针（真进程，非 FAST）
+
+- 派单 shell 故意带 `TEAM_ALLOW_DESTRUCTIVE_TMUX=1`；worker 窗口 env 断言：`PATH` 最前是 shim、`TEAM_TMUX_CALLS_LOG`/`TEAM_TMUX_REAL` 在场、**没有退役键、没有任何 `DESTRUCTIVE` 键**；
+- 夹具在窗口里跑一次 ad-hoc `tmux ls`（记 `act=pass`）和一次 CLI 的 `team teardown --agent gatevictim`（`env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR` + `TEAM_TMUX_REAL=<stub>`，目标 = 真窗口 `$SESSION:gatevictim`）→ 断言 ledger 是 `act=allowed-owned`、argv = `kill-window -t $SESSION:gatevictim`、**没有 explicit-flag / override**；
+- PM 窗口同口径断言（PATH + 日志 + 无退役键）。
+结果见下面的全量门禁（该段在 FAST 下显式 SKIP）。
+
+### 2.3 lint（`tmux-lint.pl`）
+
+`subcommand_and_route` 把 token 当普通全局选项跳过（加了注释钉语义：token 不能藏调用、不算隔离证据）；新增夹具 3 条。原始输出：
+
+```
+$ perl skills/teamsmith/tests/tmux-lint.pl --selftest --quiet | tail -3
+  ok  selftest exempt_stale_hash      期望红 实际红
+✓ tmux-lint --selftest：35 个夹具 + 历史豁免机制全部符合预期（该红的红、该净的净）
+$ perl skills/teamsmith/tests/tmux-lint.pl   # 真树
+tmux-lint：红 0 条；另有 36 条落在**历史豁免**的 16 个文件里（M28 之前的证据包，按 sha256 冻结；--no-legacy 可让它们全部报红）
+rc=0
+```
+
+### 2.4 容器泄漏形状（`container-tmux.sh --selftest`）
+
+容器里用带退役键的环境起 server，再从它的 pane 经闸门跑两次：
+
+```
+M67 泄漏形状夹具（容器内）：
+    ok   server 全局环境带着退役键（泄漏形状成立） (TEAM_ALLOW_DESTRUCTIVE_TMUX=1)
+    ok   无 token 的 kill-server 被拒（pane 里拿到 exit 64） (first=64)
+    ok   无 token 的 kill-server 记 act=refused (1)
+    ok   拒绝之后 server 还在（没有真的执行） (alive)
+    ok   带 token 的 kill-server 执行了（容器内 server 消失） (gone)
+    ok   带 token 的调用记 act=explicit-flag (1)
+    ok   ledger 里没有 act=override（该词汇退役） (0)
+宿主 tmux 指纹（前）：02df86bfcb6394831d0844e646d6cd87
+宿主 tmux 指纹（后）：02df86bfcb6394831d0844e646d6cd87
+✓ 自检通过：容器内 tmux 生死正常（含裸 kill-server），宿主 server 指纹逐字节不变
+rc=0
+```
+
+（pane 里的第二次调用随 kill-server 一起死，拿不到它的 rc——ledger 的 `explicit-flag` 与「容器内 server 消失」是这条的执行证据；这也是为什么第一发的 rc 单独在拒绝后立刻落盘。无容器运行时仍是 exit 77 可见 SKIP。）
+
+### 2.5 翻转（每条 mutant 在 `/tmp` 副本上改 `shim/tmux`，跑同名同判据的探针；恢复即全绿）
+
+夹具：`/tmp/m67-flips.sh <mutant>`（不入库：它是探针脚本，库里由 §31c 常驻）。BASE 全绿：
+
+```
+===== mutant: base · shim=/tmp/m67flip.…/shim/tmux =====
+ok   ①a 自己的命名目标 kill-window -t teamx:dev：exit 0 + act=allowed-owned + 桩收到
+ok   ①c kill-server（对象是整台 server）：exit 64 + act=refused + 桩没被叫
+ok   ①b 别的项目会话 otherproj:pm：exit 64 + act=refused + 桩没被叫
+ok   ①b 空目标 -t ''：exit 64 + act=refused + 桩没被叫
+ok   ①b 完全没有 -t：exit 64 + act=refused + 桩没被叫
+ok   ①d 未绑定：cwd 在 TEAM_ROOT 之外、环境带着 TEAM_SESSION：exit 64 + act=refused + 桩没被叫
+ok   ①e 退役键=1 + kill-server：exit 64 + act=refused + 桩没被叫
+ok   ①e 退役键在场时也没有任何 act=override
+ok   ② token + kill-server（默认 socket）：执行（exit 0）
+ok   ② 记 act=explicit-flag
+ok   ② 桩收到的 argv = 调用者 argv 剥掉 token
+ok   ② token 不进被执行进程的环境
+ok   ② 载荷里的 token 原样到达下游
+----- base: bad=0 -----
+```
+
+**F1（设计 a）· 恢复 `TEAM_ALLOW_DESTRUCTIVE_TMUX` 读取** → 退役键探针变红、且动作退化成 `override`：
+
+```
+===== mutant: f1-env-grant =====
+bad  ①e 退役键=1 + kill-server：exit 64 + act=refused + 桩没被叫（rc=0 act=act=override 桩=yes）
+bad  ①e 退役键在场时也没有任何 act=override（期望 [0] 实际 [1]）
+----- f1-env-grant: bad=2 -----
+```
+
+**F2（设计 d）· token 不剥（全局位识别仍在）** → 桩看到 token：
+
+```
+===== mutant: f2-token-not-stripped =====
+bad  ② 桩收到的 argv = 调用者 argv 剥掉 token（期望 [kill-server] 实际 [--teamsmith-allow-destructive kill-server]）
+----- f2-token-not-stripped: bad=1 -----
+```
+
+**F2b（token 完全不识别）** → token 调用被拒：
+
+```
+===== mutant: f6-token-not-recognized =====
+bad  ② token + kill-server（默认 socket）：执行（exit 0）（期望 [0] 实际 [64]）
+bad  ② 记 act=explicit-flag（期望 [act=explicit-flag] 实际 [act=refused]）
+bad  ② 桩收到的 argv = 调用者 argv 剥掉 token（期望 [kill-server] 实际 []）
+----- f6-token-not-recognized: bad=3 -----
+```
+
+**F3 · 子命令之后的同名词也被剥**（两处 mutant：取消位置守卫 + 总是走过滤）→ 载荷被吃掉：
+
+```
+===== mutant: f3-token-stripped-anywhere =====
+bad  ② 载荷里的 token 原样到达下游（期望 [STUB argc=4 argv=send-keys -t teamx:dev --teamsmith-allow-destructive]
+                                   实际 [STUB argc=3 argv=send-keys -t teamx:dev]）
+----- f3-token-stripped-anywhere: bad=1 -----
+```
+
+**F4a（设计 b）· 接受任何目标** → 别的会话的执行：
+
+```
+===== mutant: f4-accept-any-target =====
+bad  ①b 别的项目会话 otherproj:pm：exit 64 + act=refused + 桩没被叫（rc=0 act=act=allowed-owned 桩=STUB argc=3 argv=kill-window -t otherproj:pm）
+----- f4-accept-any-target: bad=1 -----
+```
+
+**F4b（设计 c）· 摘掉 M40 绑定** → 未绑定身份放行：
+
+```
+===== mutant: f5-drop-binding =====
+bad  ①d 未绑定：cwd 在 TEAM_ROOT 之外、环境带着 TEAM_SESSION：exit 64 + act=refused + 桩没被叫（rc=0 act=act=allowed-owned 桩=STUB argc=3 argv=kill-window -t teamx:dev）
+----- f5-drop-binding: bad=1 -----
+```
+
+每条 mutant 里非目标断言保持绿（红的正好是它该守住的那条）；`base`（原件）在同一次 harness 下 bad=0。
+
+---
+
+## Acceptance（真跑）
+
+```sh
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict
+✓ change/tmux-gate-grant-redesign …
+Totals: 18 passed, 0 failed (18 items)        # rc=0
+
+$ bash skills/teamsmith/tests/smoke.sh </dev/null
+（见下节：全量门禁原始结果行）
+
+$ bash skills/teamsmith/tests/container-tmux.sh --selftest
+✓ 自检通过：容器内 tmux 生死正常（含裸 kill-server），宿主 server 指纹逐字节不变（02df86bfcb6394831d0844e646d6cd87）   # rc=0
+
+$ perl skills/teamsmith/tests/tmux-lint.pl
+tmux-lint：红 0 条；另有 36 条落在**历史豁免**的 16 个文件里                      # rc=0
+```
+
+### 全量 smoke
+
+```
+$ bash skills/teamsmith/tests/smoke.sh </dev/null
+（… 31c 段全绿，含真进程两块：）
+  ✓ 私有 server 起起来了（m36victim 在）        ✓ 私有 server 真的被收掉了
+  ✓ 私有 server 的 kill 记 act=pass            ✓ 退役键=1 + 私有 server：照常放行（exit 0，退役键零影响）
+  ✓ 私有 socket 的 ledger 里没有 act=override   ✓ token + 私有 server：执行（exit 0）
+  ✓ token 在私有 socket 上记 act=explicit-flag  ✓ 真杀私有 server 之后，默认 server 仍活着
+  ✓ ⑪ worker 窗口 env：PATH 最前是 shim 目录 / 日志指向本 fixture 的 state/ / 真 tmux 路径也进了 env
+  ✓ ⑪ worker 窗口 env：没有退役键（派单 shell 带着它也没用）    ✓ ⑪ worker 窗口 env：没有任何破坏性授权键
+  ✓ ⑪ worker 窗口里的 ad-hoc tmux 调用被记进 state/tmux-calls.log
+  ✓ ⑪ CLI 自己的破坏性调用记 act=allowed-owned（M67 R2）
+  ✓ ⑪ 记下的目标就是 CLI 自己的命名对象        ✓ ⑪ CLI 自己不带 token（never explicit-flag）
+  ✓ ⑪ 窗口 ledger 里没有 act=override
+  ✓ ⑪ PM 窗口 env：PATH 最前是 shim 目录 / 日志指向本 fixture 的 state/ / 没有退役键
+  ✓ 默认 server 前后都活着（本段没碰它）
+
+== 结果 ==  ✓ 2798  ✗ 0
+smoke 全绿
+full_rc=0   （1444.7s，机器上有别的全量 smoke 在跑）
+```
+
+§31c 快段（FAST 也跑）全部 ✓，含矩阵、token、私有/假隔离、日志格式/截断、边界保真、M41 mutant、注入渲染的「不写授权」、⑨ PATH 去 shim 翻转控制、⑫ 身份导出。
+
+---
+
+## 与设计/任务书的差异与我做的裁决（给 PM）
+
+1. **B1.4 的身份导出（设计缺口，已补）**：见上。改动只有 `scripts/team` 的 export 一行 + 注释；若 PM 不认可，回退它会让 R2 的 CLI 场景（`act=allowed-owned`）重新失败——请在设计里补一句「CLI 载入配置后导出推导身份」，或改判该场景。
+2. **`kill-session -C`**：tmux 里 `-C` 是清告警、不是杀会话；解析器把它当已知旗标跳过（仍按目标判定），避免把无害形状误拒。设计表只枚举了 `-a`，这是我按「不可证明才拒」的口径做的延伸，已写进 §31c ①c 的对照用例。
+3. **`-t =name`（tmux 的精确匹配前缀）**：保守拒绝（session 段 `=name` 不等于 `TEAM_SESSION`）——「不可证明一律拒」，CLI 自己不用这个写法；已按此口径实现，未加入矩阵（避免把未文档化的保守行为固化成规格）。
+4. **`panel/**` 的两条 UI 短标签未动**（授权边界外）：`label_TEAM_ALLOW_DESTRUCTIVE_TMUX` 仍写「放行破坏性操作 / Allow destructive ops」。闸门词汇表已清零，但面板标签会误导操作者——建议 PM 起一个小任务或授权我改（含 bundle 重建）。
+5. **CHANGELOG**：只重写了 M36 条目（tasks.md 1.5 指定 `CHANGELOG.md:21`），未新增版本段/未动 `TEAM_VERSION`（并行任务可能也在改版本号，避免撞车）。
+6. **F3 的 mutant 需要两处改动**（取消 `_tokenn -eq 0` 的直通 + 取消位置守卫）才能在「子命令之后」的形状上真的剥——单改一处时 `_tokenn=0` 的直通路径保住了载荷。
+7. **🔴 注意**：`scripts/panel/panel.js` 是 bundle，含 `TEAM_ALLOW_DESTRUCTIVE_TMUX` 字符串（来自 panel strings）；本任务不碰 `panel/**`，故未重建。
+
+## 未完成 / 未覆盖
+
+- B3（spec-backfill 转移、trial archive、正式归档、`team change status`）按 tasks.md 归 PM；
+- 全量 smoke 的 §31c 真进程段落（⑪/⑫ 之外的私有 server 生死、窗口端到端）以全量结果为准（见上）。

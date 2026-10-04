@@ -1,0 +1,4 @@
+- 2026-09-29T06:32:18Z · `team close P123 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手出帧复验 PASS：190 列下卡片=序号+标题（无 agent/阶段）· 空车道默认折叠一行带计数 · 完成车道折叠后卡片行 8→0 且待办车道宽 82→100 · 手写 panel.conf 重启后仍折叠 · --print/--json 两种 conf 仅时间戳不同（折叠痕迹 0）· validate 13/0 · FAST ✓3080 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P123.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P123-apply（2d42fddd0）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

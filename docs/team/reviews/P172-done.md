@@ -1,0 +1,4 @@
+- 2026-10-02T15:30:36Z · `team close P172 --status done` · FORCED：PM 显式覆盖（理由：提案验收并合入 main：validate 22/0；watchdog 与 panel 的 MODIFIED 基线场景零丢失（+8 新增）；设计把计数/文本/唤醒身份分开、空集合重新武装、不加新设置或守护进程；三条红侧在 delta 里；PARTIAL 的原因（基线全量红在 P173）与我无关且已转）
+  -   - ① 复验记录 docs/team/reviews/P172.md：不存在
+  -   - ② 分支是否已并入 main：task/P172-propose（86c47cc69）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/pulse-nudge-key-proposal.md 不存在

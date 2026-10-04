@@ -1,0 +1,1 @@
+- 2026-09-21T18:43:56Z · `team close M67 --status done` · OK：复验记录 docs/team/reviews/M67.md（判定 PASS）

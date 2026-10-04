@@ -1,0 +1,194 @@
+# M30 · 投递换道：收件箱监视唤醒取代输入框粘贴（pi 通道废弃框侦探）
+
+agent: dev2   status: DONE   time: 2026-09-18T07:05:00Z
+branch: `task/M30-draft-race-chars-payload`（验收 tip `c88d137`，报告是紧随其后的 docs-only 提交；local 模式不 push，PM 复验后本地合并）   PR/MR: -
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/extension/team-inbox-watch.ts` | 新扩展：会话在 `state/inbox-watch/<key>.reg` 写就绪注册（target/inbox/pid/cwd/heartbeat，5s 刷新），`fs.watch`（+5s 轮询兜底）读 spool 增量，新行 → `pi.sendMessage({customType:'team-inbox'}, {triggerTurn:true, deliverAs:'followUp'})`。启动基线（历史行不叫醒任何人）、同拍合并成一条、只带指针+截断预览、spool 上限截头留尾、shutdown 清注册/停表/删注册。 |
+| `skills/teamsmith/scripts/lib/outbox.sh` | pi 通道分流（`team_inbox_watch_route` / `team_inbox_watch_deliver`）：目标有**活的**注册（pid 活着 + cwd 在本项目）→ 写 durable 收件箱 + spool 一行指针，**不碰输入框**；否则老路（守卫/收回/held）。新增头部契约 `--inbox-written`（发送方已写过 durable 行；`-` = 记录在自家日志）。`--now` 仍是显式逃生门（照旧打字 + forced.log）。 |
+| `skills/teamsmith/scripts/lib/cmd-agents.sh` | worker 启动链 `-e` 注入 inbox-watch；`team say` 在 pi 通道上**零 tmux 调用**（跳过窗口/pane 检查）；`watched` 结果分支；`team notify` 对活注册的 PM 走 pi 通道（不需要 tmux / `team_pm_alive` 启发式），durable 行只写一次。 |
+| `skills/teamsmith/scripts/lib/common.sh` | PM 启动链 `-e` 注入 inbox-watch。 |
+| `skills/teamsmith/scripts/lib/cmd-outbox.sh` | `enqueue` 用法补 `--inbox-written`。 |
+| `skills/teamsmith/extension/team-bg.ts`（M30 追加必修） | 根解析改**会话自己的工作树**（`--show-toplevel`，原 `--git-common-dir` 会把 worker 的作业日志写进主工作树的 `state/bg/`）：顺序 = 会话工作树（带 config）> TEAM_ROOT > 向上查找 > 主工作树兜底；TEAM_STATE_DIR 仍最高。 |
+| `skills/teamsmith/tests/smoke.sh` | 12b-pi 新段（pi 通道零粘贴 / 判据负例 / `--now` 逃生门 / notify 真路径 / draft / 启动链注入 / 扩展夹具）；13c 加 S11 worktree 断言；`real_ledger_hits` 统一隔离扫描并**跳过 `state/bg/`**（见「Decisions」）+ 双向对照。 |
+| `skills/teamsmith/tests/team-inbox-watch-harness.mjs` | 43 用例的确定性夹具（假 Pi 宿主；含 S10 真 CLI 端到端）。 |
+| `skills/teamsmith/tests/team-inbox-watch-flip.sh` | 红①（修复前树无扩展）+ 红②×7 定点破坏 → 绿。 |
+| `skills/teamsmith/tests/team-bg-harness.mjs` | S11：worktree 会话的作业日志/账本/唤醒行必须落在 worktree 侧，共享根不得收到副本（TEAM_ROOT 仍指向共享根的对抗配置）。夹具现为 49 用例。 |
+| `skills/teamsmith/tests/team-bg-flip.sh` | 新定点破坏 `--show-toplevel` → `--git-common-dir` 必须让 S11 红。 |
+| `skills/teamsmith/references/agent-adapters.md` | 新 §4a（双通道、就绪注册判据、唤醒内容、durable 头部契约）；§3a 补「车道产物在会话自己的根」；启动表两行；§9 notifying-PM 一格。 |
+| `skills/teamsmith/references/troubleshooting.md` | §3 开头改写：双通道 + 五起 draft-race 事故 + pi 通道的诚实边界；粘贴路径的既有边界逐条保留。 |
+| `docs/team/reports/M30-dev2/pkg/**` | 独立复验包（4 段 × 自写夹具/宿主/PATH shim，不复用实现者 fixtures）。 |
+
+## Verification evidence (must have actually been run)
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict
+Totals: 13 passed, 0 failed (13 items)          # rc=0
+
+$ bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1998  ✗ 0                          # rc=0（完整门禁，tip c88d137）
+smoke 全绿
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1568  ✗ 0                          # rc=0（快模式，tip c88d137）
+smoke 全绿
+
+$ bash docs/team/reports/M30-dev2/pkg/run.sh     # 独立复验包（另写夹具；tip c88d137）
+== 10 结果 == ✓30 ✗0 finding 0
+== 20 结果 == ✓22 ✗0 finding 0
+== 30 结果 == ✓10 ✗0 finding 0
+== 40 结果 == ✓10 ✗0 finding 0
+== 总结果 == ✓72 ✗0 finding 0
+独立复验包：全绿（finding 是提示，不影响结论）
+
+$ <home>/.bun/bin/bun skills/teamsmith/tests/team-inbox-watch-harness.mjs skills/teamsmith/extension/team-inbox-watch.ts
+TEAM-IW-CASE PASS S10 real `team notify pm` exits 0
+TEAM-IW-CASE PASS S10 the CLI reports the pi watch channel (not a paste, not a tmux gate)
+TEAM-IW-CASE PASS S10 the durable inbox line exists exactly once (no duplicate from the channel)
+TEAM-IW-CASE PASS S10 the running extension wakes the session (zero model calls)
+TEAM-IW-CASE PASS S10 the wake carries the summary and points at the inbox
+TEAM-IW-CASE PASS S10 the outbox is empty after the watch delivery
+TEAM-IW-CASE PASS reverse guard: the real repo state/ is untouched
+TEAM-IW-HARNESS OK                              # 43 用例
+
+# 「指针 ≠ 正文」：3000 字符的 say 进去，spool 行有界、收件箱行全文
+$ TEAM_ROOT=<fixture> team say dev "$(python3 -c "print('A'*3000)")"
+5 fields, line bytes=725        # spool 指针（预览封顶 700 字节；扩展再按 160 字符截）
+inbox line bytes: 3104          # durable 收件箱行 = 全文
+```
+
+**端到端实录（零模型调用，等价证据）**：假 worker 走**真 CLI** `team notify pm --from-file` →
+pi 通道把 durable 行写进 `docs/team/inbox/pm.md`（恰好一行）→ spool 落一行指针 → **真的在跑的扩展**
+（假 Pi 宿主只实现 `on`/`sendMessage`）收到唤醒：
+
+```
+[teamsmith] inbox wake: 1 new team message(s).
+- [knock] from pm → pm.md :: [manual] agent:pm · M30-E2E: fake worker turn end went thro…
+Full text: read docs/team/inbox/pm.md — this wake-up carries a one-line pointer, not the payload.
+```
+
+真实 pi 的加载链与「唤醒一个空闲会话（含一轮模型）」由 E8 探针实证（`docs/team/reports/E8-verify/probes`，
+§2.2/§2.3）；本次另用真 pi 做了零模型调用的加载对照：三个 `-e` 并列可加载，坏扩展让 pi 非 0 退出
+（见 flip 输出末尾两条）。
+
+- Verdict: **pass**（tip `c88d137` 上实测：openspec 13/0；完整 smoke ✓1998 ✗0；FAST ✓1568 ✗0；独立包
+  ✓72 ✗0；夹具 43/49 用例。报告本身是紧随其后的一个 docs-only 提交，不在门禁扫描范围内）
+- Notes / 没验的：
+  * 唤醒消息的**模型处理**（PM/worker 读到后按提示词去读收件箱）没有在门禁里花模型调用验证——E8 探针
+    已证 `sendMessage(triggerTurn)` 会真的叫醒空闲会话；门禁验到「唤醒消息被会话进程收到且指针对」为止。
+  * 交互式 TUI 下的观感（会话里多一条 custom 消息的排版）没有在真 TUI 上人工看过。
+  * `state/bg/` 隔离扫描的放宽（见 Decisions）解释了「PM 自己会话的后台门禁日志也会被当成账本痕迹」这一类；
+    真正的泄漏（夹具往真 inbox/state 写东西）仍被抓（12b-j / M16 双向对照）。
+  * 「pi 通道 + `TEAM_NOTIFY_TMUX=0`」= 不敲门、只落收件箱（尊重用户「安静模式」的选择；pulse 保底）——
+    这是刻意保留的语义，报告里点名。
+
+## Flip evidence
+
+**红①（修复前的树）/ 红②（七个定点破坏）→ 绿**：`skills/teamsmith/tests/team-inbox-watch-flip.sh`
+
+```
+$ bash skills/teamsmith/tests/team-inbox-watch-flip.sh
+修复前 revision: d63cd49（M27: team-bg.ts …）
+== 红①：修复前的树没有 team-inbox-watch.ts（投递换道不存在） ==
+  ✓ 修复前：夹具非 0 退出（import :: extension missing: …/red/skills/teamsmith/extension/team-inbox-watch.ts）
+  ✓ 修复前：一个用例都没有通过（import 阶段就红）
+== 红②：六个定点破坏（每个只改一行，各自必须红在对应用例） ==
+  ✓ merge-one-wake：红在「S3 a burst of three lines produces exactly one wake」
+  ✓ wake-mode：红在「S2 wake is a custom team-inbox message with triggerTurn+followUp」
+  ✓ startup-baseline：红在「S5 startup baseline equals the current spool size」
+  ✓ registry-cwd：红在「S1 registry carries cwd=」
+  ✓ preview-cap：红在「S4 long payload is truncated in the wake (no payload dump)」
+  ✓ shutdown-cleanup：红在「S7 shutdown removes the registry file」
+  ✓ trim-offset：红在「S6 exactly one new wake after the trim (tail line is not replayed)」
+== 绿：当前树的真扩展（同一套夹具） ==
+  ✓ 绿：夹具全绿（43 条用例，TEAM-IW-HARNESS OK）
+  ✓ 反向守卫：夹具确认真实仓库 state/ 未被触碰
+  ✓ 真 pi 接受三个 -e（notify + bg + inbox-watch）且无加载错误
+  ✓ 坏扩展对照：pi 拒绝加载（rc≠0 且报出被抛的错误）
+team-inbox-watch-flip：翻转已复现（红① + 红②×7 → 绿）
+```
+
+**M30 追加必修（team-bg 根解析）的翻转**：`skills/teamsmith/tests/team-bg-flip.sh`（新增一处定点破坏）
+把 `--show-toplevel` 换回 `--git-common-dir`，S11 必须红 —— 这一处不是「论证」，而是把泄漏**重新装回去**；
+而修复前的那棵树（main 已合 M27，带旧根解析）也让 S11 红（泄漏被夹具复现）：
+
+```
+$ bash skills/teamsmith/tests/team-bg-flip.sh
+修复前 revision: d63cd49（M27: team-bg.ts …）
+== 红①：修复前的树里的 team-bg（M30 修正前 / 或根本没有这个扩展） ==
+  ✓ 前提成立：d63cd49… 里有 M30 之前的 team-bg.ts（旧根解析）
+  ✓ 修复前：旧根解析（--git-common-dir）让 S11 红 —— 泄漏被夹具复现
+== 红②：五个定点破坏（每个只改一行，各自必须红在对应用例） ==
+  ✓ harvest-silent：红在「S2 harvested job never wakes the agent」
+  ✓ merge-window：红在「S3 two jobs finishing together produce exactly one message」
+  ✓ wake-mode：红在「S1 wake is a followUp with triggerTurn」
+  ✓ ledger-format：红在「S5 settled lines report the unharvested count」
+  ✓ log-cap：红在「S6 log stays under the cap」
+  ✓ worktree-root：红在「S11 a worktree session writes its job log inside the worktree」   ← M30 新增
+== 绿：当前树的真扩展（同一套夹具） ==
+  ✓ 绿：夹具全绿（49 条用例，TEAM-BG-HARNESS OK）
+  ✓ 反向守卫：夹具确认真实仓库 state/ 未被触碰
+  ✓ 真 pi 加载链：notify + bg 两个 -e 可加载；坏扩展对照非 0 退出
+team-bg-flip：翻转已复现（红① + 红②×6 → 绿）
+```
+
+泄漏样本对照（PM 留在 `/tmp/m30-leak-evidence/`）：那些日志当时落在
+`<主工作树>/.pi/team/state/bg/`，根因就是 `--git-common-dir`；修好之后同一个作业的路径变成
+`<worktree>/.pi/team/state/bg/<id>.log`（pkg §40 的原样输出）：
+
+```
+  ✓ 根因：--show-toplevel 指向 worktree（/tmp/…/bgroot-wt）
+  ✓ 根因：--git-common-dir 指向共享根（/tmp/…/bgroot）—— 旧写法就是从这里泄漏的
+  ✓ worktree session: the job log path is inside the worktree :: /tmp/…/bgroot-wt/.pi/team/state/bg/pkgbg.log
+  ✓ the shared root received no copy of that log (TEAM_ROOT still pointed there)
+  ✓ 共享根里连 state/bg/ 都没被创建
+```
+
+## Decisions and deviations
+
+1. **就绪判据 = 扩展自己写的注册（pid 活着 + cwd 在本项目），不是 `adapter=pi` 配置。** 配置只能证明意图，
+   注册能证明「扩展真的加载了、进程真的在跑」。`cwd` 缺席时才退回心跳新鲜度（`TEAM_INBOX_WATCH_STALE`，
+   默认 300s）——心跳不是身份证。负例（死 pid / 外来 cwd / 陈旧心跳）在 smoke 12b-pi 与 pkg §10 各钉一遍。
+2. **唤醒用 spool 一行指针，而不是盯 durable 收件箱。** 若盯收件箱，nudge/knock 这类「唤醒本身」就得写进收件箱，
+   会把 pulse 的未读计数语义改掉（brief 要求不动 pulse）。spool 只记 kind/from/durable/截断预览；
+   全文永远在收件箱或发送方自己的日志里。唤醒消息也只带指针（不带 payload 全文）。
+3. **durable 头部契约（`--inbox-written`）而不是「正文 grep 猜谁写过」。** 第一版用 payload 特征串去收件箱尾部
+   找「发送方是不是已经写了」，实测不成立：`team notify` 的行是 `[manual] agent:pm · …` 而敲门 payload 是
+   `[manual] agent:dev · …`（收件人 vs 发送者），于是会误判「没写过」而补出重复行。现在由发送方**声明**
+   （notify 声明 `--inbox-written pm`；`-` = 记录在自家日志，如 nudges.log），可验证、无启发式。
+4. **`--now` / `flush --now` 保持粘贴。** brief 要求保留显式逃生门；pi 通道不吃它（smoke 12b-pi ⑦ 与
+   pkg §10-d 都钉了「--now 打字 + forced.log + 不写 spool」）。
+5. **`team notify` 对活注册的 PM 不再需要 tmux / `team_pm_alive`。** 注册里的 pid+cwd 就是「PM 会话活着」的
+   直接证据；这条链因此也不需要 `TMUX`（smoke 断言：pi 通道不吃「不在 tmux 会话里」那条门）。
+   `TEAM_NOTIFY_TMUX=0` 仍然整条跳过（尊重「别打扰我」的设置，pulse 保底）。
+6. **team-bg 会话本地、inbox-watch 共享根——这是刻意的分工**（PM 的必修项）。作业日志/账本是会话本地的，
+   跟会话自己的工作树走；注册与 spool 是**发送方（CLI，主工作树 state）与会话之间的接口**，必须待在共享根，
+   否则 worker 的 watcher 永远收不到 PM 发来的东西。两个扩展的注释与 `agent-adapters.md` 都写明了这条边界。
+7. **`state/bg/` 从「真实账本」隔离扫描里排除（独立提交 `03b4e29`）。** 这条与必修项①互补：修好①之后 worker
+   的日志不再进主工作树，但**PM 自己**用 team_bg_run 跑门禁时日志仍在主工作树（它就是主工作树会话），
+   而门禁 stdout 里带着各段夹具的名字 → 下一拍 M16/M98 隔离断言假红。`state/bg` 是作业日志不是账本；
+   排除不影响真泄漏的侦测（同一扫描器加了双向对照：`state/bg/` 里的痕迹不报、`state/` 里的必须报）。
+   如果 PM 认为这条不该留，`git revert 03b4e29` 即可（必修项①与它互不依赖）。
+8. **没有加 `{inbox_ext}` 占位符。** 加一个新的模板占位符要动 `openspec/specs/agent-adapters/spec.md`（PM 目录），
+   而 brief 的 `specs:` 是 `-`。自定义 Pi 形状的模板可以直接写
+   `-e {skill_dir}/extension/team-inbox-watch.ts`（文档 §4a 写明）。
+9. **文档范围**：只改 brief 点名的两个文件（agent-adapters.md / troubleshooting.md）。`SKILL.md`、`workflows.md`
+   （M29 正在主工作树里改）、`references/config.md`、`CHANGELOG.md` 里还有 `/state/bg/` 的旧措辞 → 见建议。
+10. **收件箱不写 nudge/knock。** nudge 的账本是 `state/nudges.log`（不制造假待办、不改 pulse 语义）；
+    knock 的 durable 记录由发送方写（worker 收件箱 / `pm.md` 的 `[manual]` 行）。draft/say 默认落进目标收件箱
+    ——「正文绝不能只活在指针里」。
+
+## Suggested next steps
+
+- PM 可决定的三处收尾：① `SKILL.md` 后台车道那行与 `references/workflows.md` §E2 的 `state/bg/<id>.log`
+  改成「会话自己的根」（我没有动这两个 PM 文件，workflows.md 正被 M29 占用）；② `references/config.md` 加一行
+  `TEAM_INBOX_WATCH_*` 旋钮（或说一声我加，属于 references/**）；③ 若愿意让自定义 Pi 形状模板也拿到唤醒能力，
+  加 `{inbox_ext}` 占位符 + openspec delta（需要 PM 的 spec 授权）。
+- 我的会话（dev2）是 dispatch 时用**旧代码**加载的扩展：`/reload`（或 `team reload`）之后，本会话的
+  `team_bg_run` 才会把日志写进 `.worktrees/dev2/.pi/team/state/bg/`；在此之前不要在本会话里跑后台门禁，
+  否则又会写进主工作树（隔离扫描已能容忍，但边界上不该）。PM 复验用的 `team review` 走 CLI，不受影响。
+- 若复验要重放泄漏现场：`bash docs/team/reports/M30-dev2/pkg/run.sh 40`（含 `--show-toplevel` 与
+  `--git-common-dir` 的原始输出对照 + 真扩展在「TEAM_ROOT=共享根、cwd=worktree」下的选择）。

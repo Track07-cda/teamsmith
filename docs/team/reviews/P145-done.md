@@ -1,0 +1,4 @@
+- 2026-10-01T17:11:03Z · `team close P145 --status done` · FORCED：PM 显式覆盖（理由：提案验收并合入 main：validate 18/0；boundary 新增一条 requirement 与两个可证伪场景；D5 的四次重写、D2 的 slot/concrete 区分、D4 的 id 族键行、未覆盖范围都在设计中写明）
+  -   - ① 复验记录 docs/team/reviews/P145.md：不存在
+  -   - ② 分支是否已并入 main：task/P145-propose（97dee75ae）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/spec-rationale-self-contained-proposal.md 不存在

@@ -1,0 +1,4 @@
+- 2026-09-22T00:54:28Z · `team close M64 --status done` · FORCED：PM 显式覆盖（理由：verify 阶段 PASS：F1/F3 关闭；F2 三轮（M66/M69/M73）全部落地并终验；PM 各轮独立复核在案）
+  -   - ① 复验记录 docs/team/reviews/M64.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/M64-perf-suite-split-ci（00387fe9a）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/M64.md（用 ① 的 team review 生成，判定 PASS）

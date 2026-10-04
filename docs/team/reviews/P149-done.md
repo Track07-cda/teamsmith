@@ -1,0 +1,8 @@
+- 2026-10-01T17:20:44Z · `team close P149 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被我采纳（FAIL/需返工）；五条缺陷与两条警告均有可复现证据，返工排成 P151；验证者可复跑的包在 docs/team/reports/P149-verify/pkg/）
+  -   - ① 复验记录 docs/team/reviews/P149.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P149-verify（cbb2f16d8）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P149.md（用 ① 的 team review 生成，判定 PASS）
+- 2026-10-01T17:20:54Z · `team close P149 --status done` · FORCED：PM 显式覆盖（理由：verification delivered and upheld as FAIL; rework is P151）
+  -   - ① 复验记录 docs/team/reviews/P149.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P149-verify（cbb2f16d8）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P149.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-28T15:01:01Z · `team close P107 --status done` · FORCED：PM 显式覆盖（理由：换人重验 PASS（0 finding，自造夹具 + 埋旧值）；报告与证据已合入 main，change 已归档）
+  -   - ① 复验记录 docs/team/reviews/P107.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P107-p107（64ae17f10）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P107.md（用 ① 的 team review 生成，判定 PASS）

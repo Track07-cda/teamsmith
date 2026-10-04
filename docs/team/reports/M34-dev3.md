@@ -1,0 +1,157 @@
+# M34 · fix: work 页看板卡：活跃态置顶（用户拍板）
+
+agent: dev3   status: **DONE**   time: 2026-09-18T17:48Z
+branch: `task/M34-work`（local 模式：不 push，分支留在 `.worktrees/dev3`，PM 复验后本地合并）   PR/MR: -（local 模式）
+task: `docs/team/tasks/M34-board-active-first.md`   change: -（无需求变更，理由见下）
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/scripts/panel/src/layout.ts` | `boardBlock` 的行序改成**活跃态优先**：todo/wip/review/blocked 按 BOARD.md 文件序在前，随后是 keep 的 done/dropped（仍是文件序）。+13/-2 行，只碰这一个函数 |
+| `skills/teamsmith/scripts/panel/panel.js` | 重建的 bundle（899778 B，sha256 `682c19f1f0a0be02a4425487e157350b0a1eb22b53e267e527a6b3c1f9f2122a`；沙盒重建逐字节一致，见 26-a） |
+| `skills/teamsmith/tests/panel-snapshots.sh` | 新 M34 段（+93 行）：夹具板子 **活跃 2 行 + done 8 行**，两个几何（120x14 折叠态 / 120x40 余高放满）各一条断言 |
+| `skills/teamsmith/tests/flip-m34.sh` | 翻转夹具（new，+93 行）：同一套断言换 bundle 跑两侧，要求 pre 恰好 2 条 M34 红 + 当前树全绿 |
+| `docs/team/reports/M34-dev3.md` | 本报告 |
+
+提交（分支 tip）：`aa92557` test（夹具先红）→ `78b3977` fix（源 + bundle）→ `1d87d6e` test（翻转夹具）→ 本报告。
+`git diff --stat 946b7fc..HEAD` 只有上面四个文件：**没动** `panel-b3-stub.sh`、数据读取器、strings、BOARD.md 存储、kanban 页、pinned 快照。
+
+## 排序决定（任务书要求：写明选的是「新→老」还是「老→新」+ 为什么）
+
+**选文件序 = 老→新**（keep 的那几条 done/dropped 内部顺序不变，相对次序与改动前逐条一致）：
+
+1. **最小改动面**：历史块被整体挪到活跃行下面，块内顺序一个都没变——回答「谁被挪了」只需要一句「活跃行提到最上」，而不是「历史行还翻了个方向」。
+2. **与看板页同一份口径**：`laneCards` 的契约就是「按 BOARD.md 序（文件里是老→新）」（`layout.ts` 里那条注释），第 4 页六车道就是这个方向。同一行 id 在两页不会因为一边翻向而反着读。
+3. **折叠行的位置不动**：任务书说折叠规则不动，`……其余 N 条 done/dropped` 仍然在卡片最后一行。老→新下它承接的是**更老**的隐藏条目（老→新排到最底就是最老端），方向自洽。
+   （曾考虑新→老：最新历史紧贴活跃行、折叠行承接更老的条目；但那要额外反转历史块，属于任务书没要的重排，弃。）
+
+## 机制
+
+```diff
+-  for (const r of rows) {
+-    if ((r.state === 'done' || r.state === 'dropped') && !keepDone.has(r.id)) continue
++  // M34 (the user's call after a live look at the work page): the card reads active work first.
++  const rendered = [
++    ...rows.filter((r) => r.state !== 'done' && r.state !== 'dropped'),
++    ...rows.filter((r) => (r.state === 'done' || r.state === 'dropped') && keepDone.has(r.id)),
++  ]
++  for (const r of rendered) {
+```
+
+`doneRows` / `keep`（默认 `BOARD_DONE_KEEP=5`，装配层按余高放大）/ `keepDone`（`slice(-keep)` = 最新 keep 条）/ `folded`（计数）**一行未改**：
+计数行、keep 窗口、折叠行、`boardFoldedRows`（P18.1 的余高放宽）都用原来的值，只有「哪些行、按什么顺序进 `lines`」变了。
+
+## change: - 的依据
+
+`openspec/specs/panel/spec.md` 只规定 work 页有「board rows」「folded done/dropped history」以及有界帧里折叠历史吃余高
+（「…the work page's board SHALL spend that spare height on its folded done/dropped history before any blank filler row appears」），
+**没有任何一句规定行序**——行序是呈现细节，被 spec 覆盖的折叠/放宽/同底行为一条没变。所以按任务书 `change: -`，不提 delta。
+
+## Verification evidence
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict
+Totals: 14 passed, 0 failed (14 items)
+OPENSPEC_RC=0
+
+$ bash skills/teamsmith/tests/smoke.sh </dev/null                              # 全量
+  ✓ 26-a bundle：沙盒里重建逐字节一致（899778 字节）
+  ✓ 28-c 快照：4 档宽度 × 2 主题 + 60x8 极小 pane 全部逐字节一致
+== 结果 ==  ✓ 2079  ✗ 0
+smoke 全绿
+FULL_SMOKE_RC=0
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh                       # 快模式
+== 结果 ==  ✓ 1646  ✗ 0
+smoke 全绿
+FAST_SMOKE_RC=0
+```
+
+三个命令串行跑在同一个后台作业里，实测 500.8s（全量含真 tmux/podman 段落）。日志：`/tmp/m34/gates.log`。
+
+## 翻转证据（red before → green after）
+
+1) **夹具先红**（`aa92557`，旧 bundle + 新断言，任务书要求的「用旧排序必须红」）：
+
+```
+$ TEAM_SNAPSHOTS_JS=node bash skills/teamsmith/tests/panel-snapshots.sh
+== M34 · work 页看板卡：活跃态置顶 ==
+  ✗ M34 120x14（history 折叠：keep 5 + 其余 3）：活跃行不在最顶：A1@9 A2@10，而 done 行在 [4, 5, 6, 7, 8]
+  ✗ M34 120x40（余高把折叠放满：8 条历史全在）：活跃行不在最顶：A1@12 A2@13，而 done 行在 [4, 5, 6, 7, 8, 9, 10, 11]
+== 结果 ==  ✓ 50  ✗ 2
+panel-snapshots 有失败项
+rc=1
+```
+
+    只有这两条红，其余 50 条（含 P18.1 三条、pinned 快照）全绿——夹具测的就是这次改的排序。
+
+2) **修完转绿**（同一脚本，新 bundle）：`== 结果 == ✓ 52 ✗ 0` / `panel-snapshots 全绿`，
+   P18.1 三条同时是绿的（`✓ P18.1 270x66 / 120x40 / B1 不回归`）。日志 `/tmp/m34/snap-green.log`。
+
+3) **常驻翻转夹具** `flip-m34.sh`（PM 可原样复跑）：
+
+```
+$ bash skills/teamsmith/tests/flip-m34.sh
+== flip-m34 · pre = 78b39777784704439af732b7bc5b434844a76832^ ==
+  ✓ pre（文件序渲染）：M34 两条夹具红，其余断言全绿
+        ✗ M34 120x14（history 折叠：keep 5 + 其余 3）：活跃行不在最顶：A1@9 A2@10，而 done …
+        ✗ M34 120x40（余高把折叠放满：8 条历史全在）：活跃行不在最顶：A1@12 A2@13，…
+  ✓ 当前树（活跃态置顶）：== 结果 ==  ✓ 52  ✗ 0
+flip-m34 翻转成立
+FLIP_M34_RC=0
+```
+
+## 排序前后快照对照（同一夹具、同一几何，只换 bundle）
+
+夹具 = `B3_STUB_BOARD_FILE`（文件序：D01…D08 八条 done → A1 wip → A2 blocked）。左列 = 旧 bundle，右列 = 当前树：
+
+```
+120x14（折叠态：keep 5 + 其余 3）            120x40（余高把折叠放满）
+旧：D04 D05 D06 D07 D08 A1 A2 …其余3        旧：D01…D08 A1 A2
+新：A1 A2 D04 D05 D06 D07 D08 …其余3        新：A1 A2 D01…D08
+```
+
+（`/tmp/m34/pre-120x14.txt` / `post-120x14.txt` / `pre-120x40.txt` / `post-120x40.txt`；报告里只摘行序。）
+
+## P18.1 回归证据（交付物 3）
+
+- **当前树**：P18.1 三条断言绿（上 §翻转证据 2），大折叠池夹具 `B3_STUB_DONE=95` 在 270x66 / 120x40 都仍然
+  「右栏三卡在 + board 填满左栏 + 两列同底 + 帧高恰好」；全量门禁的 28-c 也全绿。
+- **反向（对抗）**：把 bundle 换回 P18.1 修复前的 revision，同一套断言里 P18.1 两条夹具照样红
+  （右栏三卡整块消失、两列不同底）——证明这两条断言在 M34 之后**仍然是活的**，没被我的排序变更顺手放松：
+
+```
+$ bash skills/teamsmith/tests/flip-p18.1.sh --pre-rev 094589e^ --keep
+  ✗ pre：期望恰好 2 条 P18.1 红 + 0 条其它红，实际 rc=1 / P18.1 红=2 / 其它红=2
+  ✓ 当前树（每列独立记账）：== 结果 ==  ✓ 52  ✗ 0
+$ grep '✗' /tmp/teamsmith-flip-p18.1.hodaes/pre.log     # 4 条红 = 2 P18.1 + 2 M34
+  ✗ P18.1 270x66：右栏缺「活动变更」卡片；右栏缺「规格」卡片；右栏缺「最近决策」卡片；…
+  ✗ P18.1 120x40：右栏缺「活动变更」卡片；…
+  ✗ M34 120x14（…）：活跃行不在最顶：A1@9 A2@10，…
+  ✗ M34 120x40（…）：活跃行不在最顶：A1@12 A2@13，…
+== 结果 ==  ✓ 48  ✗ 4
+```
+
+  `094589e^` 那个 bundle 早于 M34，所以它必然也红 M34 的两条——**不是** P18.1 的回归；「其它红 = 2」就是这两条。
+- **另一半**：`flip-m34.sh` 的 pre 侧 = 当前树减掉 M34 排序（即 P18.1 修复后的代码）→ M34 两条红、P18.1 三条绿。
+  两侧合起来：M34 与 P18.1 的守卫互不影响，两条守卫各自都还咬得住。
+
+## 边界（没有动的）
+
+BOARD.md 的读写/格式、`team board` 的任何命令、kanban 页（`kanbanBlock`/车道/焦点/滚动）、数据读取器
+（`data.ts`、`team __panel-data`）、strings（zh/en）、`BOARD_DONE_KEEP` 的默认值、折叠行文案、pinned 快照文件
+（`git diff --stat` 里一个 `tests/snapshots/*.txt` 都没有）、`panel-b3-stub.sh`（夹具用现成的 `B3_STUB_BOARD_FILE` 覆盖位，未加旋钮）。
+
+## 给 PM 的记录 / 下一步建议
+
+1. **`flip-p18.1.sh` 的默认 pre-rev 会漂移**（本次未动它，建议另立小任务）：它的默认口径是「最近一次改过
+   `src/layout.ts` 的提交的父提交」，任何更晚的 layout.ts 提交都会让它指向 M34 的父提交（= P18.1 已修好的代码），
+   默认跑必然红；而它的「其它红必须为 0」也没把后来新增的段落算进去（今天 `--pre-rev 094589e^` 会数到 M34 的两条红，
+   如 §P18.1 回归证据）。建议把计数改成「按段落名归属 + 其它红只打印不计入」，或把 pre-rev 固定成显式常量。
+2. **边界自报**：翻转收尾时我顺手跑了一条机器级 `pkill -f 'sleep 600'`（本意是清我 P18 遗留的私有 socket 夹具 session：
+   `tmux -L p18tr2-2887688 … sleep 600`，已随之消失，默认 server 未受影响——`tmux ls` 复核 teamsmith 会话仍在）。
+   当时现场只有我自己那一条匹配，但它按机器级进程名匹配，属于越边界的灰区动作；后续清理应当按「私有 socket + 精确
+   `-t` 目标」删 session，不用机器级 pkill。记在这里而不是藏起来。
+3. 用户原始诉求「活跃任务应当排在顶部」现在在 `120x14`（折叠态）和 `120x40`（放满态）两档都有常驻断言；若用户之后
+   想要「最新完成紧贴活跃行」的新→老读法，那是一条独立的呈现决策（本报告 §排序决定 里说明了当时为什么没选）。

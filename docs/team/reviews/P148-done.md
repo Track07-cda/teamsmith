@@ -1,0 +1,4 @@
+- 2026-10-02T14:26:49Z · `team close P148 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复验 PASS：真导出树（publish-public.sh 从其分支导出）在钉死容器里跑 FAST → ✓3405 ✗0 SKIP36，并打印"检出前提 SKIP（条件不满足）… 跳过不是通过"；把产品字面（SKILL.md 的 name）弄坏 → 0b 段红（skill-load 失败）；半边内部树不被当作产品面（内部文件仍被扫描）。合并冲突我语义解（P162 库加载 + P148 形状快照两边都留），合并后 0c/0e/0h ✓82 ✗0、选择器自检 ok 7 bad 0）
+  -   - ① 复验记录 docs/team/reviews/P148.md：不存在
+  -   - ② 分支是否已并入 main：task/P148-product-checkout-gate-apply（b811fb6a8）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

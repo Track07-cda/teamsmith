@@ -1,0 +1,4 @@
+- 2026-10-01T17:51:28Z · `team close P139 --status done` · FORCED：PM 显式覆盖（理由：PM 合并前复验通过：validate 15/0；两段自跑 160 ✓ 0 ✗（重编号后 55/56）；我的手验四组（未过期拒 close --stale、过期可关、身份按记录名任一并集且第三方仍拒、knock 带 #turn 与通知带 task/tip、无事时 pending 全零）；独立验证另派换人）
+  -   - ① 复验记录 docs/team/reviews/P139.md：不存在
+  -   - ② 分支是否已并入 main：task/P139-meeting-liveness-apply（6a7dcf581）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

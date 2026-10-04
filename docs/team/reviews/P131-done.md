@@ -1,0 +1,4 @@
+- 2026-09-29T19:08:23Z · `team close P131 --status done` · FORCED：PM 显式覆盖（理由：propose 阶段完成并已验收：提案合入 main（reviews/P131.md ✓ MODIFIED 无丢场景 ✓ validate 14/0 ✓）；其 apply 由 P132 交付、P133 独立验证中）
+  -   - ① 复验记录 docs/team/reviews/P131.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P131-propose（2ff747ee6）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/destructive-call-forensics-proposal.md 不存在

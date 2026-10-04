@@ -1,0 +1,4 @@
+- 2026-10-02T20:05:37Z · `team close P186 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳（四条全成立：F1 builtin command 绕过、F2 命令链真杀了 server、F3 别名漂移、F4 探针过时前提真红）；根因裁定为"写了第二套实现"→ P188 一份分类器 + 命令链 + 别名 + 探针前提，落地后第四轮换人复验）
+  -   - ① 复验记录 docs/team/reviews/P186.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P186-verify（b0989c2f4）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P186.md（用 ① 的 team review 生成，判定 PASS）

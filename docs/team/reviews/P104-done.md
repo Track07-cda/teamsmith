@@ -1,0 +1,4 @@
+- 2026-09-28T10:30:11Z · `team close P104 --status done` · FORCED：PM 显式覆盖（理由：验证完成（判定 FAIL 成立）：自建包 bad=0、真名册未被动；两条 finding 由 PM 逐条复现（空白席位名写脏名册+ok 审计；--model 的 state 记录与配置不同源）→ 返工单 P105）
+  -   - ① 复验记录 docs/team/reviews/P104.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P104-p104（270ab2536）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P104.md（用 ① 的 team review 生成，判定 PASS）

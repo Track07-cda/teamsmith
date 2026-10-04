@@ -1,0 +1,4 @@
+- 2026-10-02T18:29:07Z · `team close P150 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复验：validate 22/0；走查在本树绿（99 条引用/49 唯一/0 未声明/4 条 retired）；我的两条变异都红并点名文件行——未声明的具体指针、以及"具体 id 借槽位形状"（M99-dev.md）。独立验证换人另派 P184）
+  -   - ① 复验记录 docs/team/reviews/P150.md：不存在
+  -   - ② 分支是否已并入 main：task/P150-apply（e0d9605b5）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

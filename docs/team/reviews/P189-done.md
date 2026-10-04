@@ -1,0 +1,4 @@
+- 2026-10-02T23:44:51Z · `team close P189 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳：P187 目录边界 PASS；F1（读侧对非平坦 id/pgid=0/组不符仍标 holds）我复现并裁为要修 → P195；门禁 22/22、select58 429/0、FAST 3792/0 说明与门禁无关；落地后第四轮复验 P196）
+  -   - ① 复验记录 docs/team/reviews/P189.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P189-verify（39ceb48bd）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P189.md（用 ① 的 team review 生成，判定 PASS）

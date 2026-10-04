@@ -1,0 +1,4 @@
+- 2026-10-03T00:59:40Z · `team close P191 --status done` · FORCED：PM 显式覆盖（理由：换人复验已交付并被采纳：F1/F2 由独立证据关闭（各自变异 + 影子），无范围内 finding；交付 BLOCKED 的唯一原因是无关的 delta 漂移门禁红（pulse 已归档修好、delivery-truth 在 P197）。该 change 待门禁转绿即可归档）
+  -   - ① 复验记录 docs/team/reviews/P191.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：分支 task/P196-verify（76f68d407）已经是 main 的祖先，但它的提交里没有报告 docs/team/reports/P191-*.md（刚建出来、一个提交都没有的分支也长这样 —— 报告要提交进 git，工作区里的草稿不算）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P191.md（用 ① 的 team review 生成，判定 PASS）

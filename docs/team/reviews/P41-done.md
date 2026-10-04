@@ -1,0 +1,4 @@
+- 2026-09-22T08:35:02Z · `team close P41 --status done` · FORCED：PM 显式覆盖（理由：verify 阶段 PASS：R1-R5 独立复跑 + 自己复现两版渲染 diff 逐字节一致；F1 是 PM 验收命令的假设失效（非缺陷））
+  -   - ① 复验记录 docs/team/reviews/P41.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P41-pi-only-scope（e9236d1b9）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P41.md（用 ① 的 team review 生成，判定 PASS）

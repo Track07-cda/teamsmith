@@ -1,0 +1,4 @@
+- 2026-10-01T15:18:46Z · `team close P141 --status done` · FORCED：PM 显式覆盖（理由：提案验收通过并合入 main：validate 16/0；MODIFIED 逐 requirement 比对基线场景丢失 0、新增 9；R1 已把两个阈值键的 schema 注册 + zh/en 标签 + 夹具缝旋钮写进 delta，并给出「从审计写入器把底线置 0 后放行」的 scenario；实现计划在它自己的 tasks 8.1–8.3）
+  -   - ① 复验记录 docs/team/reviews/P141.md：不存在
+  -   - ② 分支是否已并入 main：task/P141-propose（b41079007）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/capacity-floor-disk-proposal.md 的判定是 NEEDS-CHANGES（先按 findings 改提案并复审，再 done）

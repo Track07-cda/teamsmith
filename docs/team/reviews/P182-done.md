@@ -1,0 +1,4 @@
+- 2026-10-02T23:43:04Z · `team close P182 --status done` · FORCED：PM 显式覆盖（理由：换人复验 PASS：三条缺陷各自独立夹具 + 六个影子各自点名变红（CLI 与扩展两面都覆盖）；我此前在实现分支上探过同一宽度/不编造行为，属相互印证）
+  -   - ① 复验记录 docs/team/reviews/P182.md：不存在
+  -   - ② 分支是否已并入 main：task/P182-verify（d80f0214b）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P182.md（用 ① 的 team review 生成，判定 PASS）

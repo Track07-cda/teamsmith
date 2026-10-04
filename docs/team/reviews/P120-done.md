@@ -1,0 +1,4 @@
+- 2026-09-29T03:14:38Z · `team close P120 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：深 TMPDIR（70 字符）前后对照（main ✓89+2红 → 分支 ✓98 ✗0 且两条变归因 SKIP、隔离真红保留）· 默认 TMPDIR ✓105 ✗0 · helper 只对已知环境前置 SKIP、其余真红 · 合并 FAST ✓3052 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P120.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P120-36⑦-tmpdir-infra-apply（42dd67f80）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

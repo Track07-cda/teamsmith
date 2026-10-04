@@ -1,0 +1,4 @@
+- 2026-09-29T17:59:02Z · `team close P130 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：paths-ignore=['docs/**'] + 无 pull_request；1 个 jobs 块 → 镜像只构建一次（真构建命令 1 条）；唯一 continue-on-error 在 perf 步骤 → perf 非阻塞、正确性仍硬门；路径语义反例成立）
+  -   - ① 复验记录 docs/team/reviews/P130.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P130-ci-paths-ignore（ca83e6a8e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

@@ -1,0 +1,4 @@
+- 2026-10-03T03:36:38Z · `team close P155 --status done` · FORCED：PM 显式覆盖（理由：诊断交付并被采纳：确认是缺陷（主检出+席位线索被静默记成 agent:pm，零告警，与合法场景逐字节相同）；我读码定位到 common.sh:653-666；修复排成 P201）
+  -   - ① 复验记录 docs/team/reviews/P155.md：不存在
+  -   - ② 分支是否已并入 main：分支 task/P201-apply（33bbbb4f2）已经是 main 的祖先，但它的提交里没有报告 docs/team/reports/P155-*.md（刚建出来、一个提交都没有的分支也长这样 —— 报告要提交进 git，工作区里的草稿不算）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P155.md（用 ① 的 team review 生成，判定 PASS）

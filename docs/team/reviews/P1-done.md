@@ -1,0 +1,6 @@
+- 2026-09-15T04:22:48Z · `team board set P1 done` · FORCED：PM 显式覆盖（理由：propose 阶段的证据是 PM 的提案审查记录 docs/team/reviews/spec-delta-gate-proposal.md（verdict ACCEPTED）；现有 done 证据模型只认 reviews/<任务ID>.md，phase-aware 识别尚未实现（正是 M9.2 的活））
+  -   - ① 复验记录 docs/team/reviews/P1.md：不存在
+  -   - ② 分支是否已并入 main：task/P1-propose-spec-delta-gate-c0-g（82bf656b5）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+- 2026-09-15T04:22:48Z · `team close P1 --status done` · FORCED：PM 显式覆盖（理由：同上）
+  -   - ① 复验记录 docs/team/reviews/P1.md：不存在
+  -   - ② 分支是否已并入 main：task/P1-propose-spec-delta-gate-c0-g（82bf656b5）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）

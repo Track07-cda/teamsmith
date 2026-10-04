@@ -1,0 +1,4 @@
+- 2026-10-02T15:56:24Z · `team close P170 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳（FAIL：F1 内部 FAST §36⑧ + F2 产品面 FAST §58）；F1 的根因（M28 lint 的 wrapper 归属）折进 P173 并更正了我的错误猜测，F2 另开 P176；两者落地后由换人复验（P177））
+  -   - ① 复验记录 docs/team/reviews/P170.md：不存在
+  -   - ② 分支是否已并入 main：task/P170-verify（dacab8aed）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P170.md（用 ① 的 team review 生成，判定 PASS）

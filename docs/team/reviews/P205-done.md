@@ -1,0 +1,4 @@
+- 2026-10-03T10:05:05Z · `team close P205 --status done` · FORCED：PM 显式覆盖（理由：PM 复验（容器内）：§47 ✓102 ✗0（四条新运行）、flip-p201 ✓21 ✗0（四影子 A/B/C/D + 还原）；validate 14/0）
+  -   - ① 复验记录 docs/team/reviews/P205.md：不存在
+  -   - ② 分支是否已并入 main：task/P205-apply（e5fb239a6）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

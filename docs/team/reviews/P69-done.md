@@ -1,0 +1,4 @@
+- 2026-09-22T18:55:33Z · `team close P69 --status done` · FORCED：PM 显式覆盖（理由：verify PASS：六段 188 断言（三道守卫红绿两侧 + 单写者 + 不许自验 + change 视图对账 + 归档前置实测 + 三条变异）；F1 段号重复另开小任务）
+  -   - ① 复验记录 docs/team/reviews/P69.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P69-change-centric（b12c72bcf）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P69.md（用 ① 的 team review 生成，判定 PASS）

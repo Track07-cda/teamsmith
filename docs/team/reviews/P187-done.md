@@ -1,0 +1,4 @@
+- 2026-10-02T20:25:57Z · `team close P187 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手复验（容器内两个 scratch 项目）：state/bg 软链到邻居目录 → bg stop rc=4 并点名两个路径、邻居进程活着；bg list 同样拒绝；反向正常目录照常收作业。边界已写进 delta）
+  -   - ① 复验记录 docs/team/reviews/P187.md：不存在
+  -   - ② 分支是否已并入 main：task/P187-rework（56b7e8909）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

@@ -1,0 +1,4 @@
+- 2026-10-02T16:56:59Z · `team close P179 --status done` · FORCED：PM 显式覆盖（理由：换人复验已交付并被采纳：范围 PASS（36 条独立探针含"逐字粘贴修法能跑通"、旧实现 12 条红侧）+ 交付 BLOCKED（唯一原因是基线 FAST 红在 P173，与派单无关，它拒绝忽略）。归档等 P173 落地）
+  -   - ① 复验记录 docs/team/reviews/P179.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P179-verify（28b00d97c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P179.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-23T00:24:11Z · `team close P90 --status done` · FORCED：PM 显式覆盖（理由：换人重验 PASS：自造混宽度三变体框含光标、全语料与两旧侧一致、边界按裁定、影子可打回旧行为、三变异红、FAST 2642/0、run.sh ok=178 bad=0；唯一 finding 是 delta 散文，PM 已当场修）
+  -   - ① 复验记录 docs/team/reviews/P90.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P90-p90（96470cdef）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P90.md（用 ① 的 team review 生成，判定 PASS）

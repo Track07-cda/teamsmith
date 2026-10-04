@@ -1,0 +1,4 @@
+- 2026-09-28T23:11:04Z · `team close P117 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：--select 14 恢复 rc=0（原现场）；三个常用入口副本 bash -n 全通过；3b 107/0、6 113/0（原 ✗8/✗15）；我自写全键扫描 113 键 0 不可解析；FAST ✓3041 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P117.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P117-needs（53c3e7cea）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

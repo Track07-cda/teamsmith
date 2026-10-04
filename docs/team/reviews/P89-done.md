@@ -1,0 +1,4 @@
+- 2026-09-23T03:03:48Z · `team close P89 --status done` · FORCED：PM 显式覆盖（理由：换人验证 PASS：自建 86 断言包 + 干净副本复跑；fail-closed 实证（不可写 → 零投递/保持未读/恢复后恰好一次且记为普通唤醒）；flip-p71 6 条、FAST 2641、全量 3308 全绿）
+  -   - ① 复验记录 docs/team/reviews/P89.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P89-p89（cfc10faca）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P89.md（用 ① 的 team review 生成，判定 PASS）

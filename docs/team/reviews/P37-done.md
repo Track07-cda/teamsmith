@@ -1,0 +1,1 @@
+- 2026-09-22T07:30:11Z · `team board set P37 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/npm-cli-and-project-init-proposal.md（判定 ACCEPTED）

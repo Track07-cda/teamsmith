@@ -1,0 +1,4 @@
+- 2026-10-03T04:29:05Z · `team close P200 --status done` · FORCED：PM 显式覆盖（理由：PM 复验：分支上 --select 18c = ✓46 ✗0（每次归档后必红的那条消失）；判据改为 scratch 树自造状态 + --break=noretired 影子 + 真树状态无关（作者证据含一处自我修正））
+  -   - ① 复验记录 docs/team/reviews/P200.md：不存在
+  -   - ② 分支是否已并入 main：task/P200-apply（b21977265）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

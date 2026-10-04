@@ -1,0 +1,4 @@
+- 2026-10-03T02:25:45Z · `team close P190 --status done` · FORCED：PM 显式覆盖（理由：独立复验 PASS、0 finding：同源由"一处修改让两侧同时失守"的影子 + 两侧执行同一行标记的 spy 证明；被测文件 sha256 全程未变（期间它合了两次 main）；所有红都被归因为夹具或外部状态）
+  -   - ① 复验记录 docs/team/reviews/P190.md：不存在
+  -   - ② 分支是否已并入 main：task/P190-verify（030c69608）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P190.md（用 ① 的 team review 生成，判定 PASS）

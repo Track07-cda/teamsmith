@@ -1,0 +1,281 @@
+# P28 · 收件箱投递韧性（apply：B1–B6）
+
+agent: dev2   status: done（B4.4 除外，见文末 BLOCKED）   time: 2026-09-20T11:12Z
+branch: `task/P28-apply-offset`   PR/MR: -（本地模式：分支留在 `.worktrees/dev2`，PM 复验后本地合并）
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/extension/team-inbox-watch.ts` | **B1** `readNewLines()` 字节真值（raw buffer 上找 `\n`、认 `readSync` 返回值、逐行解码、`advance = end + 1`）；行中起步的碎片跳过（`offset resync`）。**B2** 头部前缀证据 + `offset clamp`（同头小回退=修复）+ `shrink repeat`（同一 `(size, head)` 不重扫第二次）收敛记忆。**B3** `TEAM_INBOX_WATCH_STALE_SEC`（默认 900）过期门槛：普通路径与重扫都不过期行，`unparsable` 照投。**B4** 账本字段契约（`wake n=`/`total=`/rescan 五元组/每条动作一行）。 |
+| `skills/teamsmith/scripts/lib/outbox.sh` | **B6** `team_inbox_watch_clip()`：预览按**字符**边界裁（`head -c` + `iconv -c -f UTF-8 -t UTF-8`，iconv 不可用时退回 ASCII 前缀）——`cut -c1-700` 在本机任何 locale（含 `LC_ALL=C`）下都按字节，会把多字节字符截半。三个发送路径（`say`/`notify`/`draft`）其它逻辑未动。 |
+| `skills/teamsmith/tests/team-inbox-watch-harness.mjs` | `appendWakeRaw()`（按字节写 spool）+ **S18**（字节裁切的基线不越界、不重扫、不唤醒、下一条完整行唤醒一次）、**S19a/b/c**（一次修复 / 行中碎片 resync / 头部变化=一次有界重扫并收敛 / 同一 `(size, head)` 记 `shrink repeat` 不再重扫）、**S20a–d**（过期行两条路径都不唤醒、只计数、durable 与 spool 字节都在；`zzz` 时间戳照投并计 `unparsable=1`）、**S21a–c**（去重重扫/过期重扫 `deliver=0` 且 `total` 不动、真投递 `n=2` 且 `total` +2）；**S6** 补一条「裁剪后账本不许出现恢复行」（快照取在裁剪**之前**）。 |
+| `skills/teamsmith/tests/flip-p25.sh` | 三树翻转包：红 = `TEAM_FLIP_BASE`（默认 `git merge-base HEAD main`）的扩展；绿 = 本 worktree；变异 A（旧 advance）/B（A + 去掉 clamp/repeat 守卫）/C（无条件 clamp）。退出 0 仅当红树复现、绿树全绿、每个变异红在指定用例。 |
+| `skills/teamsmith/tests/smoke.sh` | 12b-pi ⑨ 新增 S18–S21 的 `assert_has` 钉子（与 M43/M46 同风格）；12b-pi ⑩ 新增 B6 生产者断言（含「旧 `cut -c` 对同一 payload 确实写出非法 UTF-8」的夹具有效性对照）。 |
+| `skills/teamsmith/tests/flip-m43.sh`、`flip-m46.sh` | 两处 `printf` 喂 `grep -q` 的条件管道在 `set -o pipefail` 下会因 grep 提前退出（SIGPIPE/141）假红——P28 把 harness 日志从 ~14KB 撑到 ~17KB 后实测命中；换成 `case` 子串判定（同样的针，无管道）。 |
+| `skills/teamsmith/tests/team-inbox-watch-flip.sh` | M30 翻转包的两处 sed 锚点跟随新代码形状（合并点现在在 `deliverNormal`；trim 的 offset 对账有了独立块），`trim-offset` 定点破坏改写 S6 新增的那条断言。 |
+| `openspec/changes/inbox-spool-resilience/specs/notify-and-inbox/spec.md` | B6 的 ADDED requirement「The sender clips the spool preview on a character boundary, under `LC_ALL=C` as well」+ 两个 scenario。 |
+| `openspec/changes/inbox-spool-resilience/{proposal,tasks}.md` | B6 记进「What Changes」与计划（第 6 节）；B1–B6 勾选，4.4 标注 BLOCKED。 |
+| `docs/team/reports/P28-dev2/pkg/` | 报告证据包（独立于 `tests/` 的实现夹具）：`run.sh` + `probe-p28.mjs`（red/green 两态）+ `b6-clip-check.sh`（真 CLI 的生产者黑盒）。 |
+
+## Coverage per requirement（`notify-and-inbox` 的 5 条 ADDED）
+
+| Requirement（spec 原文的关键句） | 批次 | 实现点 | 夹具 |
+|---|---|---|---|
+| R1 offset 按**实际读到的字节**推进，永不越过文件末尾；不完整尾行不计数 | B1 | `readNewLines()`：`bytesRead = readSync(...)`、`win = buf.subarray(0, bytesRead)`、`end = win.lastIndexOf(0x0a)`、`advance = end + 1`、逐行解码 | S18；pkg 探针 ① |
+| R1 行中起步不投碎片（跳到下一个 `\n` 并记录） | B1 | `midLine`（offset 前一字节非 `\n`）→ `start = win.indexOf(0x0a) + 1`；`offset resync skipped=<bytes>` | S19a；pkg 探针 ②；flip 变异 A/B |
+| R2 同头部 + 小回退（≤ `TEAM_INBOX_WATCH_CLAMP_BYTES`，默认 64）= 一次修复、不重扫、不唤醒 | B2 | `handleShrink()`：`headUnchanged(cur) && regress <= clampBytes()` → `offset = size`、`offset clamp from=… to=… head=same` | S19a；flip 变异 C（反向） |
+| R2 头部变化/大回退 = 一次有界重扫，并在下一拍收敛 | B2 | 保留 M43 的 `spool shrink` + `rescan()`；重扫后 `offset ≤ size` | S19b；pkg 探针 ② |
+| R2 同一 `(size, head)` 不再重扫第二次 | B2 | `lastShrink` 事件记忆 + `shrink repeat size=… head=… action=clamp` | S19c；flip 变异 B（去掉守卫 → 循环） |
+| R3 过期行在**任何路径**都不唤醒，只计数，字节保留 | B3 | `freshness()`（只用行自带的 `team_epoch_ms`）；`deliverNormal()` 与 `rescan()` 都先分类；`stale=` 进 rescan 行、`classify stale=… unparsable=…` 进普通路径 | S20a/d；S21b |
+| R3 时间戳不可解析的行照投并计数 | B3 | `unparsable` → 投递 + `unparsable=<n>` | S20c |
+| R4 账本把新流量与恢复分开 | B3/B4 | `wake n=` 只含本条唤醒携带的行、`total=` 只随真投递、rescan 行保留 `lines=/dup=/skipped=/deliver=` 再追加 `stale=`/`unparsable=`、`offset clamp`/`shrink repeat`/`offset resync` 各自一行 | S19–S21；pkg 探针 ④ |
+| B6 生产者写出的 spool 行必须是合法 UTF-8（`LC_ALL=C` 下同样成立，且不出现 U+FFFD） | B6 | `team_inbox_watch_clip()`（`head -c` 取字节前缀 + `iconv -c` 丢弃不完整尾序列） | smoke 12b-pi ⑩；`pkg/b6-clip-check.sh` |
+
+## Verification evidence（全部真跑）
+
+### 1. 门禁（任务书 Acceptance 的三条）
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict
+✓ spec/boundary … ✓ change/inbox-spool-resilience … ✓ spec/notify-and-inbox …
+Totals: 16 passed, 0 failed (16 items)
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null
+== 结果 ==  ✓ 1893  ✗ 0
+FAST 模式：跳过 24 个真进程段落 …——完整门禁请不带 TEAM_SMOKE_FAST 重跑
+smoke 全绿
+（12b-pi ⑩ B6 六条 + 12b-pi P28 十一条 assert_has 全部 ✓，见下）
+
+$ bash skills/teamsmith/tests/smoke.sh </dev/null
+<见下方「完整门禁」小节>
+```
+
+### 2. 完整门禁
+
+```
+$ bash skills/teamsmith/tests/smoke.sh </dev/null
+== 33 · 项目契约的读写面（P22/B1：team config 单一写入口 + schema） ==
+  ✓ 33 config-cli.sh 全绿（122 条断言）
+      == 结果 ==  ✓ 116  ✗ 0  SKIP 0
+== 15 · 完成 ==
+== 结果 ==  ✓ 2384  ✗ 0
+smoke 全绿
+（退出码 0；12b-pi ⑩ 与 S18–S21 的钉子都在这一段里真跑了）
+```
+
+这条完整门禁在实现提交 `6f07240` 上跑出 `✓ 2383 ✗ 0`，在分支 tip 上又跑了一遍得到 `✓ 2384 ✗ 0`
+（两次数量的差异来自一个条件断言的计数，失败数都是 0）。`openspec validate --all --strict` 在 tip 上重跑：
+`Totals: 16 passed, 0 failed`。
+
+### 3. 真实扩展夹具（harness，112 条用例）
+
+```
+$ "$HOME/.bun/bin/bun" skills/teamsmith/tests/team-inbox-watch-harness.mjs skills/teamsmith/extension/team-inbox-watch.ts
+TEAM-IW-CASE PASS S18 precondition: the clipped preview is not valid UTF-8 (the incident trigger) :: bytes=700
+TEAM-IW-CASE PASS S18 the baseline is the spool byte size (no U+FFFD skew) :: … started target=m30s:pm inbox=pm spool=… baseline=862 (size=862)
+TEAM-IW-CASE PASS S18 idle ticks after a byte-clipped line add no spool shrink :: timers-alive=true shrink lines 3 -> 3
+TEAM-IW-CASE PASS S18 the byte-clipped line stays in the baseline (no wake for it) :: messages=0
+TEAM-IW-CASE PASS S18 the next line after a byte-clipped line wakes exactly once :: messages=1
+TEAM-IW-CASE PASS S18 the wake preview is the appended line, byte-complete (no leading fragment) :: … :: after-clipped-line …
+TEAM-IW-CASE PASS S18 total grows by exactly one (the clipped baseline line never counts) :: total=1
+TEAM-IW-CASE PASS S19a a one-byte regression with an unchanged head is repaired with one offset clamp :: … offset clamp from=905 to=904 head=same inbox=pm
+TEAM-IW-CASE PASS S19a the clamp is recorded with head=same (auditable repair) :: … offset clamp from=905 to=904 head=same inbox=pm
+TEAM-IW-CASE PASS S19a the clamp neither rescans nor wakes :: rescans=3 messages=0
+TEAM-IW-CASE PASS S19a the read that starts inside the clamped line resyncs instead of delivering a fragment :: … offset resync skipped=60 inbox=pm
+TEAM-IW-CASE PASS S19a the resync records the skipped byte count (one line per action) :: … offset resync skipped=60 inbox=pm
+TEAM-IW-CASE PASS S19a a line appended after the resync wakes exactly once :: messages=1
+TEAM-IW-CASE PASS S19a the fragment itself never appears in a wake :: … :: clean-line-after-resync …
+TEAM-IW-CASE PASS S19b precondition: the rewrite is shorter than the offset and its head differs :: 123 < 1012
+TEAM-IW-CASE PASS S19b a rewrite with a changed head is rescanned exactly once :: … rescan lines=3 dup=0 skipped=0 deliver=3 stale=0 unparsable=0 total=1 inbox=pm
+TEAM-IW-CASE PASS S19b the rescan delivers the rewritten content :: messages=1
+TEAM-IW-CASE PASS S19b the next tick adds nothing (converged) :: shrink=4 rescan=4 messages=1
+TEAM-IW-CASE PASS S19c (setup) the clamp into the middle of a line is recorded once :: … offset clamp from=123 to=122 head=same inbox=pm
+TEAM-IW-CASE PASS S19c (setup) the restored fragment is skipped as a resync (no line is delivered) :: … offset resync skipped=201 inbox=pm
+TEAM-IW-CASE PASS S19c the same (size, head) is recorded as a repeat and clamped, not rescanned twice :: … shrink repeat size=122 head=fnv50647011 action=clamp inbox=pm
+TEAM-IW-CASE PASS S19c the repeat line names the state and the action :: … shrink repeat size=122 head=fnv50647011 action=clamp inbox=pm
+TEAM-IW-CASE PASS S20a an hour-old unseen line is rescan-counted, never woken about :: … rescan lines=1 dup=0 skipped=0 deliver=0 stale=1 unparsable=0 total=0 inbox=pm
+TEAM-IW-CASE PASS S20a a stale-only recovery moves neither the wake count nor total :: messages=0 total=0->0
+TEAM-IW-CASE PASS S20a the durable inbox copy is still there and the spool keeps the bytes :: spool=41B
+TEAM-IW-CASE PASS S20c a line whose timestamp is not a number is delivered (never swallowed) :: messages=1
+TEAM-IW-CASE PASS S20c the ledger counts it as unparsable=1 :: … classify stale=0 unparsable=1 inbox=pm
+TEAM-IW-CASE PASS S21a precondition: a rewrite built from delivered lines, smaller, with a different head :: picked=3 119 < 167
+TEAM-IW-CASE PASS S21a a dedup-only rescan reads deliver=0 with a non-zero dup and moves nothing :: … rescan lines=3 dup=3 skipped=0 deliver=0 stale=0 unparsable=0 total=0 inbox=pm
+TEAM-IW-CASE PASS S21b precondition: a stale-only rewrite, smaller, with a different head :: 76 < 119
+TEAM-IW-CASE PASS S21b a stale-only rescan reads deliver=0 with stale=<n> and moves nothing :: … rescan lines=2 dup=0 skipped=0 deliver=0 stale=2 unparsable=0 total=0 inbox=pm
+TEAM-IW-CASE PASS S21c a real delivery is one wake naming both lines :: messages=1
+TEAM-IW-CASE PASS S21c the wake line reads n=2 and total grows by exactly two :: total=0->2 … wake n=2 total=2 inbox=pm kinds=say,say
+TEAM-IW-CASE PASS reverse guard: the real repo state/ is untouched
+TEAM-IW-HARNESS OK
+（退出码 0；S20b/S20d 及其它 M30/M43/M46 用例也全 PASS，共 112 条）
+```
+
+### 4. 回归翻转包（既有断言没有被改弱）
+
+```
+$ TEAM_FLIP_BASE=150c575… bash skills/teamsmith/tests/flip-m43.sh
+✓ 红树（150c575…）复现成功：S11/S12/S13 全红（修复前：外部截断+重写 = 整份重放 + total 灌水）
+✓ 绿树（本 worktree）：harness 全绿（112 条用例，含 S11/S12/S13）
+✓ 变异树（去重过滤改恒真）：S11/S13 红 —— 翻转成立（测试咬在去重实现上）
+exit=0
+
+$ TEAM_FLIP_BASE=8a8b655… bash skills/teamsmith/tests/flip-m46.sh
+✓ 红树（8a8b655…）复现成功：M46-S14/S15/S16 全红 …  exit=0（6 条全 ✓）
+
+$ TEAM_FLIP_BASE=$(git rev-parse d0f8b9a^) bash skills/teamsmith/tests/team-inbox-watch-flip.sh
+✓ 红①：修复前的树没有 team-inbox-watch.ts … ✓ merge-one-wake … ✓ trim-offset：红在
+  「S6 the trim is reconciled locally (no spool shrink / rescan / clamp afterwards)」
+✓ 绿：夹具全绿（112 条用例，TEAM-IW-HARNESS OK）… ✓ 真 pi 接受三个 -e … ✓ 坏扩展对照
+team-inbox-watch-flip：翻转已复现（红① + 红②×7 → 绿）
+```
+
+## Flip evidence（红 → 绿，逐批次）
+
+**B1 / B2（S18 · 2026-09-20 事故形状）** —— 红树 = `git merge-base HEAD main`（P28 之前）：
+
+```
+$ bash skills/teamsmith/tests/flip-p25.sh        # 红树 + 绿树 + 三个变异，全跑同一套 harness
+✓ 红树（1a7210b…）复现成功：S18 全红（baseline 被 U+FFFD 撑成 size+1，空闲每拍假缩容）
+  red: TEAM-IW-CASE FAIL S18 the baseline is the spool byte size (no U+FFFD skew) :: … baseline=863 (size=862)
+  red: TEAM-IW-CASE FAIL S18 idle ticks after a byte-clipped line add no spool shrink :: timers-alive=true shrink lines 3 -> 6
+✓ 绿树（本 worktree）：harness 全绿（112 条用例，含 S18/S19/S20/S21）
+✓ 变异 A（旧 advance）：S18 红 —— 翻转成立（S18 真的咬在字节推进上）
+  mutA: TEAM-IW-CASE FAIL S18 the baseline is the spool byte size :: … baseline=863 (size=862)
+✓ 变异 B（旧 advance + 无 clamp/repeat 守卫）：S18 红，空闲期反复写 spool shrink（shrink lines 3 -> 6）—— 2026-09-20 的循环复现
+✓ 变异 C（无条件 clamp）：S19b 红 —— 证据门槛真的在区分「修复」与「重写」
+  mutC: TEAM-IW-CASE FAIL S19b a rewrite with a changed head is rescanned exactly once :: (no rescan line)
+  mutC: TEAM-IW-CASE FAIL S19b the next tick adds nothing (converged) :: shrink=0 rescan=0 messages=0
+exit=0
+```
+
+**B6（生产者）** —— 同一个 payload，旧字节裁法 vs 现在的按字符裁（smoke 12b-pi ⑩ 的固定断言）：
+
+```
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null   # 12b-pi ⑩ 节选
+✓ 12b-pi ⑩ B6：夹具前提成立（旧的字节裁法会把 700 字节边界上的字符截半）
+✓ 12b-pi ⑩ B6：走 pi 通道（spool 行就是写入者的产物）
+✓ 12b-pi ⑩ B6：spool 行是合法 UTF-8
+✓ 12b-pi ⑩ B6：预览里没有 U+FFFD 替换符
+✓ 12b-pi ⑩ B6：预览裁在完整字符上（698 = 2 + 3×232 字节，不是 700 的字节截断）
+✓ 12b-pi ⑩ B6：durable 收件箱仍是全文（只有 spool 预览被裁）
+```
+
+**账本样本：改造前 → 改造后**（`pkg/run.sh`，同一夹具、同一 payload；红树 = `git merge-base HEAD main`）：
+
+```
+① red（修复前）—— 每一拍都在「外部缩容」，直到有人手清 spool：
+  started … baseline=728 (size=727)
+  spool shrink: size fell below offset=728 inbox=pm → bounded rescan from 0
+  rescan lines=1 dup=1 skipped=0 deliver=0 total=1 inbox=pm
+  spool shrink: size fell below offset=728 inbox=pm → bounded rescan from 0      ← 100ms 后又一拍
+  rescan lines=1 dup=1 skipped=0 deliver=0 total=1 inbox=pm
+  … 700ms 内 spool shrink ×6；唯一的唤醒还带着被截半的预览（xy红红红…）
+
+② green（现在）—— 同一形态：基线 = 文件字节数，空闲期零恢复行，恢复逐条可审计：
+  started … baseline=727 (size=727)
+  （600ms 空闲：没有 spool shrink / rescan / clamp；心跳仍在刷新 → 定时器真在跑）
+  wake n=1 total=1 … after-clipped-line
+  offset clamp from=770 to=769 head=same inbox=pm
+  offset resync skipped=60 inbox=pm
+  rescan lines=3 dup=0 skipped=0 deliver=3 stale=0 unparsable=0 total=2 inbox=pm
+  rescan lines=1 dup=0 skipped=0 deliver=0 stale=1 unparsable=0 total=5 inbox=pm   ← 过期行只计数
+  rescan lines=2 dup=2 skipped=0 deliver=0 stale=0 unparsable=0 total=7 inbox=pm   ← 去重不灌水
+  wake n=2 total=9 inbox=pm kinds=say,say                                          ← 真投递 +2
+```
+
+## Independent verification package
+
+`docs/team/reports/P28-dev2/pkg/run.sh`（不引用 `tests/` 里的实现夹具：真扩展 + 真 CLI + 临时仓库 + 自己的假 Pi 宿主）：
+
+```
+$ bash docs/team/reports/P28-dev2/pkg/run.sh
+===== ① red tree (base=1a7210b…) =====
+PROBE PASS red: the baseline is one byte past the file end (U+FFFD arithmetic) :: … baseline=728 (size=727)
+PROBE PASS red: an idle spool is re-detected as a shrink over and over :: spool shrink lines in 700ms = 6
+P28-PROBE OK (red)            → ① RED SIGNATURE REPRODUCED
+===== ② green tree (worktree) =====
+PROBE PASS ① baseline == the spool byte size (no U+FFFD skew) :: … baseline=727 (size=727)
+PROBE PASS ① idle ticks add no spool shrink (timers really ran)
+PROBE PASS ② a one-byte regression with an unchanged head is one repair (offset clamp), not a rescan :: … offset clamp from=770 to=769 head=same
+PROBE PASS ② a read starting inside the clamped line is skipped as a fragment (resync), never woken :: … offset resync skipped=60
+PROBE PASS ② a changed head is one bounded rescan and then it converges :: … rescan lines=3 … deliver=3
+PROBE PASS ③ an hour-old unseen line is counted stale=1 / deliver=0 and wakes nobody
+PROBE PASS ③ the durable inbox copy and the spool bytes both survive
+PROBE PASS ④ a dedup-only rescan keeps total unchanged / a stale-only rescan keeps total unchanged /
+           a real two-line delivery moves total by exactly two and prints n=2
+P28-PROBE OK (green)          → ② GREEN SCENARIOS OK
+===== ③ producer clip (B6) =====
+B6 PASS fixture-validity :: 旧的字节裁法对这个 payload 写出的字节不是合法 UTF-8
+B6 PASS spool line is valid UTF-8 (iconv accepts it)
+B6 PASS no U+FFFD replacement character
+B6 PASS preview is 698 bytes = 2 + 3x232 (whole characters, not a 700-byte cut)
+B6 PASS the durable inbox line still carries the full payload
+B6-PROBE OK                   → ③ CLIP OK
+run.sh exit=0
+```
+
+四处手工实录对应关系：① → 探针 ①②；② → 探针 ②；③ → 探针 ③；④ → 探针 ④；⑤ → `b6-clip-check.sh`。
+
+## Decisions and deviations
+
+1. **R2 的收敛记忆只在进程内，不落盘。** 头部前缀（≤256 字节）与上一个 shrink 事件的 `(size, head)` 是 `offset` 的伴生状态；`offset` 本来就是进程内量、每次 `session_start` 都重新取基线。持久化它会造出「第二份真源」（规格/审查要点明确禁止），而重启后的行为是确定的：重新基线 → 不缩容 → 无循环。
+2. **「正常推进」定义为「读到了完整行」**（`res.lines.length > 0`），不是「offset 移动了」。这样 `offset resync` 这种只跳碎片、不投递的恢复动作不会清掉事件记忆——S19c 正是靠这一点在同一 `(size, head)` 上触发 `shrink repeat`；一次真实投递（含全部去重跳过的读）会清掉它。
+3. **clamp 目标是当前文件末尾（`offset := size`），不是上一行边界**（设计 D3 已定）：走回上一个换行会把基线之前的内容重新投出去。落在行中的碎片由 B1 的 resync 规则吸收；**代价是**：clamp 之后紧跟的那一次「与旧行粘连」的追加行会被当作碎片跳过（计入 `offset resync skipped=`，不唤醒）——它的 durable 收件箱行还在，下一条干净追加照常唤醒（S19a 正面覆盖）。B6 落地后，正常写入不再产生非法 UTF-8，这个形状只剩外部截断才会出现。
+4. **头部比较用「当前前缀是记录前缀的前缀」**（文件在头部范围内变短、留下的字节一个没动 → 算没变），这样小于 256 字节的小 spool 删掉尾字节也是一次 clamp，而不是误判成重写。
+5. **B6 用 `head -c` + `iconv -c`，不用 `${var:0:700}`**：本机实测 `cut -c` 在 `C`/`C.UTF-8`/`en_US.UTF-8`/无 locale 下都按字节，bash 的 `${var:0:n}`/`head -c` 在 `LC_ALL=C` 下同理；而 B6 的要求是 `LC_ALL=C` 下也成立。`iconv -c` 与面板 `cmd-watch.sh` 的收尾是同一惯用法（丢字节、不造 U+FFFD）；判据只看输出不看退出码——GNU iconv 丢掉尾部半截序列时仍以 1 退出，但 stdout 上已经给出合法前缀（实测 700 字节输入 → 698 字节输出 + rc=1）。
+6. **改了两个既有翻转包**（`flip-m43.sh`/`flip-m46.sh`）：它们的 `if … | grep -q …` 在 `set -o pipefail` 下会因 grep 提前退出把管道判成 141（SIGPIPE），日志越大越容易假红——P28 让 harness 日志从 ~14KB 涨到 ~17KB 后稳定复现（实测 `B-status=141`）。换成 `case` 子串判定，针完全一样，不是放宽判据。M30 的 `team-inbox-watch-flip.sh` 两处 sed 锚点随函数形状更新；`trim-offset` 定点破坏现在钉 S6 新增的「裁剪后账本不许出现恢复行」。
+7. **测试侧改动的边界**：`tests/**` 属 `agent:dev`，本任务书明授「tests/smoke.sh / 对应夹具」；`team-inbox-watch-harness.mjs` 的既有用例（S1–S17）只加了 S6 的一条断言，其它用例文本一字未改；smoke 只在 12b-pi 里**追加**段落（⑩ 与 S18–S21 钉子），没有重排他人段落。
+
+## BLOCKED: the two reference sections, prepared for the PM
+
+`references/agent-adapters.md`（§4a.1）与 `references/troubleshooting.md`（现 §20「The same inbox wake arrives twice」；任务书写的是 §19，那是继承身份那一节，投递语义在 §20）属 **PM 独占**（`docs/team/OWNERSHIP.md`），本任务书的 Boundaries 只授予 `extension/**`、`outbox.sh` 的预览裁切与 `tests/**`。下面是我准备好的正文，PM 可直接落笔（或授权后交回我来提交这一批）：
+
+**`references/agent-adapters.md` §4a.1 追加（接在三条规则之后）**
+
+> **P28 (byte-true offsets, evidence-based shrink, freshness).** Three properties now hold on top of the above:
+>
+> 1. **The offset is a byte count, never a decode round trip.** The reader finds `\n` on the raw buffer, honours
+>    `readSync`'s return value and decodes only the line text, so the offset can never pass the file's size — even
+>    when the spool holds bytes that are not valid UTF-8 (a preview clipped mid-character used to make the offset
+>    measure one byte too many, `baseline = size + 1`, and every tick looked like an external shrink). A read that
+>    starts inside a line (possible only right after a clamp) skips the fragment up to its `\n` and records
+>    `offset resync skipped=<bytes>`.
+> 2. **A shrink needs evidence.** On `size < offset` the reader compares the file's head (first `min(256, size)`
+>    bytes) with the head recorded when the offset was established: the same head plus a regression ≤
+>    `TEAM_INBOX_WATCH_CLAMP_BYTES` (default 64) is repaired with one `offset clamp from=… to=… head=same` line;
+>    a changed head or a larger regression keeps the bounded rescan. The same `(size, head)` is never rescanned
+>    twice — it prints `shrink repeat size=… head=… action=clamp` and clamps. Named trade-off: a same-head rewrite
+>    inside the clamp bound is treated as a repair, and the ledger shows it.
+> 3. **Only fresh lines wake.** A spool line older than `TEAM_INBOX_WATCH_STALE_SEC` (default 900 s) never wakes,
+>    on the ordinary path or through a rescan; it is counted (`stale=` on the rescan line, `classify stale=… …` on
+>    the ordinary path) and its readable copy is the durable inbox line the sender wrote first
+>    (`say`/`notify`/`draft`) or the sender's own log (`knock`/`nudge`). A timestamp that does not parse is
+>    delivered and counted (`unparsable=`), never swallowed.
+>
+> Ledger fields: `wake n=` counts only the lines a wake carries, `total=` only woken lines, and the rescan line
+> keeps `lines=/dup=/skipped=/deliver=` and then adds `stale=`/`unparsable=`. A `spool shrink` repeating with
+> `deliver=0` is a defect signal, not news. The sender clips the preview on a character boundary
+> (`head -c` + `iconv -c -f UTF-8 -t UTF-8`, ASCII-only fallback), so a cut that would split a multi-byte
+> character no longer puts invalid UTF-8 into the spool even under `LC_ALL=C` — the trigger of 2026-09-20.
+
+**`references/troubleshooting.md` §20 追加（接在 M43 段之后）**
+
+> **Since P28** the loop cannot come back through the reader's own arithmetic: a spool line whose preview was
+> clipped mid-character used to make the reader's offset one byte larger than the file (`baseline = size + 1`),
+> which looked like a shrink on every tick and replayed the backlog every 5 s. The offset is now a byte count taken
+> from the raw buffer; a small regression with an unchanged head is repaired in place (`offset clamp … head=same`,
+> one line, no rescan, no wake); a genuine rewrite is one bounded rescan; the same `(size, head)` is never rescanned
+> twice (`shrink repeat … action=clamp`). Lines older than `TEAM_INBOX_WATCH_STALE_SEC` (default 900 s) never wake
+> at all — they are counted (`stale=`) and stay readable in the durable inbox — so a stale backlog can no longer be
+> delivered by a recovery. Reading the ledger: `wake n=`/`total=` are real traffic, `rescan
+> lines=/dup=/skipped=/deliver=/stale=/unparsable=` is a recovery breakdown, and a `spool shrink` repeating with
+> `deliver=0` is a defect. Writers clip previews on a character boundary now, so the spool stays valid UTF-8 even
+> under `LC_ALL=C`.
+
+（若 PM 更愿意自己落笔或派回给我，请在线程里说一声；这一批之外 P28 的全部验收项都已跑过并在上面留了原始输出。）
+
+## Suggested next steps
+
+- `docs/team/reviews/P28-proposal.md` 之外的独立复验：建议按 `docs/team/tasks` 的流程跑 `team review P28 --strong`，并用 `pkg/run.sh` 与 `flip-p25.sh` 交叉核对（两条链用的是**不同的夹具**）。
+- 合入后留意线上账本：`offset clamp` / `shrink repeat` / `offset resync` 是新词；如果 `spool shrink` 在合并后仍然重复出现且 `deliver=0`，那就是又一个没被覆盖的触发形状，请把它按事故立案。
+- 4.4 的两个文档小节（见上）需要一个授权或由 PM 落笔，才谈得上 archive。

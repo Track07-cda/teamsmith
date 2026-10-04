@@ -1,0 +1,4 @@
+- 2026-09-21T20:06:29Z · `team board set M69 done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：verify 的伪造命令现在 exit 3 点名缺镜像标识文件；四条翻转成立；顺手清了 4 个 fake-tui 孤儿）
+  -   - ① 复验记录 docs/team/reviews/M69.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/M69-perf-sh-in-container-f2（c82eacb12）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

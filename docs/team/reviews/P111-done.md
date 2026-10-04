@@ -1,0 +1,4 @@
+- 2026-09-28T18:38:06Z · `team close P111 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS（0 finding）：静态 5 种自造变异、运行时卡住/慢对照、F2/F1 各自的红侧与真实门禁记录行、循环清单抽样核对、canonical FAST ✓3001 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P111.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P111-p110（e2acf9b69）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P111.md（用 ① 的 team review 生成，判定 PASS）

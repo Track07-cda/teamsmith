@@ -1,0 +1,4 @@
+- 2026-10-03T04:11:01Z · `team close P167 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手容器内探针：pgrep -f / pgrep -u 1000 / pidof sleep 全部 rc=64；合法形态 pgrep -g <pgid> 与 pgrep -P <pid> rc=0；夹具 388/0（作者）；delta 已在当前基线上重写、validate 15/0）
+  -   - ① 复验记录 docs/team/reviews/P167.md：不存在
+  -   - ② 分支是否已并入 main：task/P167-apply（bd2d62c8c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

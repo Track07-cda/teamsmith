@@ -1,0 +1,4 @@
+- 2026-09-22T20:25:54Z · `team close P77 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：自造六个植入点（审计日志/bg 静默；inbox/phantom/.log.1/nested 全点名）；R1-R4 红绿两侧齐全；marker 严格形状且不带 act=；门禁 FAST 2450/0、全量 3095/0）
+  -   - ① 复验记录 docs/team/reviews/P77.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P77-apply（6c3b2db50）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

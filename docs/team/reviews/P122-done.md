@@ -1,0 +1,4 @@
+- 2026-09-29T06:08:13Z · `team close P122 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS（四组自造现场）：真 /tmp 计划 5 个别家目录变 [foreign] 点名 <peer-project> + 实跑后 3 个仍存；沙盒 1 拒绝 + 2 合格→合格真删、太新保留、rc=0；全拒→rc=3；tmux 残留默认只报不删、default 永不碰；validate 13/0 · FAST ✓3063 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P122.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P122-tmp-hygiene-tmux（a9362028f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

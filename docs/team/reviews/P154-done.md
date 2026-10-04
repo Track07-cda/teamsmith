@@ -1,0 +1,4 @@
+- 2026-10-01T22:05:24Z · `team close P154 --status done` · FORCED：PM 显式覆盖（理由：提案验收并合入 main：validate 20/0；boundary 4 条新增（25 场景）+ 1 条 MODIFIED（基线 7 场景全在，+2）；判据可证伪（拒绝 pkill -f 时两个诱饵都活着、argv 记录桩为空、exit 64）；设计把"信号没有 argv 目标 → 守卫应落在模式选择工具上"讲清）
+  -   - ① 复验记录 docs/team/reviews/P154.md：不存在
+  -   - ② 分支是否已并入 main：task/P154-propose（cab8d93ea）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/safe-signal-discipline-proposal.md 不存在

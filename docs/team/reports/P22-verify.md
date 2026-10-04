@@ -1,0 +1,272 @@
+# P22 report — apply: `console-project-settings`（控制台里改项目契约）
+
+**Phase**: apply · **Agent**: verify · **Branch**: `task/P22-apply-console-project-settin` · **Local mode**: 没有 push；
+分支留在 `.worktrees/verify`，PM 复验后本地合并 · **Date**: 2026-09-20 · **Base**: `e626325`（P22 brief）
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/scripts/lib/cmd-config.sh`（新） | schema（108 键：class/kind/spec/form/default/danger/route）+ `team config list [--json]` / `log [N]` / `set` / `set-agent-model`；值校验、danger 清单、sha256 指纹 CAS、`--dry-run`、每次尝试一行审计（`state/config.log`）、退出码契约 0/3/4/5/6/7 |
+| `skills/teamsmith/scripts/lib/cmd-bootstrap.sh` | `team_config_set_in_file` 重写为唯一底层写入口：整行替换 + 引号感知的行内注释保留、缺尾换行先补再追加、写入器决定引号形态（`KEY='value'` / `export KEY='value'` / `'`→`'\''`）、换行与 `#` 与扁平读取器键上的 `'` 拒写、同目录临时文件 + `bash -n` + 保权限 `mv`；bootstrap 的两处写入失败改为响亮非 0 |
+| `skills/teamsmith/scripts/lib/cmd-project.sh` | `team init` 在写契约前用同一校验器验 `--gates`，不可表示就非 0（不再静默少一个键）；`team help` 增 `config` 行 |
+| `skills/teamsmith/scripts/team` | `config` 子命令分发 |
+| `skills/teamsmith/scripts/lib/cmd-watch.sh` | `team __panel-data --block settings`：payload 就是 `team config list --json`（仅视图打开时请求） |
+| `skills/teamsmith/scripts/panel/src/{types,data,layout,App,main,compose}.ts(x)`、`strings/{zh,en}.ts` | 设置浮层多一行导航入口；项目设置视图（按 effect class 分组、值/未设默认/行内注释/警告与 refuse 路由、过滤、窗口焦点、点击、审计页脚 ≤3 行）；`setting` 编辑器（dry-run→确认→`--yes` 两次 Enter、danger 多一步、冲突重读、退出码回执）；seats 块（来源三态 + picker → `team config set-agent-model`） |
+| `skills/teamsmith/scripts/panel/panel.js` | 从源码重建（构建脚本可复现，恢复后与提交逐字节一致） |
+| `skills/teamsmith/references/config.md` | §5：effect class、写入形态、danger 清单、命令面与退出码、审计格式、19 个此前没写进文档的键；块清单加 `settings` |
+| `skills/teamsmith/SKILL.md`、`templates/config.sh.tmpl`、`scripts/panel/README.md` | 项目设置行（命令表）/ 模板指向 `team config` 的一行 / 视图与夹具说明 |
+| `skills/teamsmith/tests/config-cli.sh`（新） | B1 headless 夹具 12 段（list/writer/inject/cas/validate/audit/models/seats/completeness/docs/callers/flip） |
+| `skills/teamsmith/tests/panel-p21.sh`（新） | B2–B4 pty/tmux 夹具 5 个场景（settings/write/conflict/seats/readonly，78 条断言），真 CLI + argv 记录 wrapper |
+| `skills/teamsmith/tests/flip-p22.sh`（新） | 三处断点翻转（B2 2.6 键表硬编码 / B3 3.4 丢指纹 / B4 4.5 裸模型名） |
+| `skills/teamsmith/tests/smoke.sh` | 新增 §33：门禁里跑 `config-cli.sh`（FAST 模式照跑） |
+| `skills/teamsmith/tests/panel-cpu.sh` | 新增 `TEAM_PANEL_CPU_VIEW/EDIT`：带着视图与编辑器测性能红线 |
+
+提交：`cee4a51`（B1 命令+写入器）→ `20994e3`（B1 夹具+文档+门禁）→ `4782178`（B2–B4 面板+夹具+文档+重
+建 panel.js）→ 本报告与 `flip-p22.sh`（最后一次提交）。
+
+## 每批的翻转（red → green）
+
+**B1 · 唯一写入器（`config-cli.sh flip`）**：把改动前的 `team_config_set_in_file` 装回 scratch 树（双引号、
+丢注释、不查 `bash -n`），同一组断言变红 10 条 —— 最要命的两条：
+
+```
+✗ source 回来是原字节的数据（期望 [$(touch PWNED)]，实际 []）
+✗ PWNED 被执行了（命令注入）
+✗ 值往返逐字节相等：[trailing\]（期望 [trailing\]，实际 []）
+✗ 元字符值把文件写坏了
+✗ 新键单独成行且是 export 形态（…实际 [TEAM_LAST_LINE_KEEPME=1TEAM_AGENT_LOG_TAIL_BYTES="65536"]）
+```
+
+换回现写入器后同两段 21/21 绿。`config-cli.sh completeness` 另有一处小翻转：删掉 schema 一行 → 检查器红
+并点名 `TEAM_AGENT_MEM_MB`。
+
+**B2 · 键表来自命令（`flip-p22.sh` 2.6）**：在 bundle 里硬编码类表（被否掉的第二张表）→
+`panel-p21.sh settings` 红（`scratch CLI 改过的类跟着变` 等 3 条徽章断言）；恢复后绿，bundle 与提交逐字节
+一致。
+
+**B3 · 指纹守冲突（`flip-p22.sh` 3.4）**：把面板 `set` 调用的 `--fingerprint` 去掉 → `panel-p21.sh conflict`
+红（回执没有冲突、对方字节被覆盖、审计没有 `result=conflict`）；恢复后绿。
+
+**B4 · 来源三态（`flip-p22.sh` 4.5）**：seats 块只打裸模型名（去掉来源徽章）→ `panel-p21.sh seats` 红
+（`配置`/`显式`/`历史记录` 三条断言）；恢复后绿。
+
+`flip-p22.sh` 运行输出（✓ 12 ✗ 0，三段都点到预期的那条断言）：
+
+```
+✓ 2.6 键表硬编码：断掉之后 settings 变红（rc=1）
+✓ 2.6 键表硬编码：红侧的失败点就是预期的那条（scratch CLI 改过的类跟着变）
+✓ 2.6 键表硬编码：恢复之后 settings 变绿 / 恢复后 bundle 与提交的逐字节一致
+✓ 3.4 丢掉指纹：断掉之后 conflict 变红（rc=1）… 红侧：回执点名指纹冲突 / 对方的字节被保住 / 审计一行 conflict
+✓ 4.5 裸模型名：断掉之后 seats 变红（rc=1）… 红侧：配置 / 显式 / 历史记录 三条行断言
+```
+
+## Requirement 覆盖表（每行：规格条目 → tasks.md 项 → 能失败的夹具 → 翻转证据）
+
+| Requirement | 项 | 夹具/证据 | 翻转 |
+|---|---|---|---|
+| `memory-and-deps` · 唯一写入器、只改它改的那一行、缺尾换行不粘行、不可表示的值响亮拒绝 | 1.1 1.2 1.6 1.7 1.9 | `config-cli.sh list/writer/inject/completeness/callers`；手录 ① | flip：旧写入器 10 红 |
+| `memory-and-deps` · 指纹 CAS + `--dry-run` 什么都不写 | 1.3 | `config-cli.sh cas`；手录 ② | 面板侧 3.4（丢指纹→conflict 红） |
+| `memory-and-deps` · 值校验/写入器引号/危险清单/原子性与 `bash -n` | 1.2 1.4 1.9 | `config-cli.sh validate/inject/writer`；手录 ③ | 旧写入器把 trailing-backslash 写坏 → 红 |
+| `memory-and-deps` · 每次尝试一行审计（含拒绝、actor、16KiB 有界） | 1.5 3.3 | `config-cli.sh audit`（含 10 MiB 尾巴）；`panel-p21.sh write` 审计页脚 | 面板 3.4 红侧同时给出「审计没有 conflict 行」 |
+| `memory-and-deps` · 席位模型按席位读写、来源三态、`-` 回退、未知席位/形状拒绝 | 1.11 1.12 1.13 4.1 4.4 | `config-cli.sh models/seats`；`panel-p21.sh seats`；手录 ⑤ | 4.5：裸模型名→三态断言红 |
+| `panel` · 视图列出契约与 effect class、从命令取行集、过滤、窗口、点击、refuse 不开编辑器、机读出口不变 | 2.1 2.2 2.3 2.4 2.6 | `panel-p21.sh settings`（含 scratch CLI 加键/改类）；快照 52 绿 | 2.6：bundle 硬编码键表→红 |
+| `panel` · 只走 `team config set`、dry-run 确认、danger 两步、四种回执、冲突重读、审计页脚、不谎报 restart、不自重启 pulse | 3.1 3.2 3.3 3.5 | `panel-p21.sh write/conflict`；`panel-cpu.sh`（VIEW/EDIT） | 3.4：丢指纹→conflict 红 |
+| `panel` · seats 块 + picker + 下次 spawn 生效 + 不重启席位 | 4.1 4.2 4.3 4.5 | `panel-p21.sh seats`（真 tmux 席位窗口 + `dispatch --print`） | 4.5：裸模型名→红 |
+| `panel` MODIFIED · 浮层多一行导航、panel.conf 不带 `TEAM_*`、打开视图不写偏好 | 2.3 3.2 | `panel-p21.sh settings`（panel.conf sha 不变 + 当前帧无 `TEAM_`） | 同上（导航行若写偏好，panel.conf 断言红） |
+| `panel` REMOVED+ADDED · 只读纪律（四个动作、控制台自己的三个文件、取消的编辑零写入） | 5.1 | `panel-p21.sh readonly`；`panel-b2.sh` §3.2 只读扫描（172 绿） | wrapper argv 里没有 `config set`；契约/审计/docs 哈希不变 |
+| 文档与门禁（SKILL.md 行、help、模板指针、最终重建与全量门禁） | 5.2 5.3 5.4 | 本报告「验收」一节；`team help \| grep -A2 config` | `flip-p22.sh` 的「恢复后 bundle 与提交逐字节一致」 |
+
+## 验收（真跑的输出）
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict
+Totals: 15 passed, 0 failed (15 items)                      # exit 0
+
+$ bash skills/teamsmith/tests/smoke.sh </dev/null
+== 结果 ==  ✓ 2300  ✗ 0                                       # smoke 全绿（§33 里 config-cli.sh 122 条断言）
+                                                             # 最终提交 23c0930 上重跑，rc=0
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1819  ✗ 0                                       # smoke 全绿
+```
+
+**过程中出现过一次全量门禁红（已复核为环境噪声，非 P22）**：早先那次全量 smoke 唯一红的是 31b2「容器里跑真
+pi 体检」——容器里的 pi 当时弹了**更新横幅**（`New version 0.86.0 is available …`），输入框判据因此报
+`verdict=BUSY`、`RETRACT=failed`。我把它单独重跑拿到现场日志：
+
+```
+$ bash skills/teamsmith/tests/container-tmux.sh --with-pi --cmd "bash …/pm-box-real.sh --idle-secs 3"
+  box_rows=[7| Update Available|21|6| New version 0.86.0 is available. Run pi update|…]
+  verdict=BUSY state=BUSY
+  HOLDS_ONLY=no MID_RENDER=no RETRACT_SAFE=no
+  RETRACT=failed
+```
+
+这就是 M45 的记录（用户的红线：**不要关掉 pi 的更新检查**，修判据层）。P22 的 brief 明令「别碰 M45
+（`extension/team-inbox-watch.ts` 与 outbox 判据）」，所以我没有动它；`git diff --name-only main...HEAD`
+里没有任何 M45/M40 相关文件。最终提交上的全量重跑已经全绿（横幅不再出现）。
+
+B1 与面板的独立套件（都在最终源码/最终 bundle 上跑过）：
+
+```
+$ bash skills/teamsmith/tests/config-cli.sh          → ✓ 116  ✗ 0（12 段，含 flip 段红→绿）
+$ bash skills/teamsmith/tests/panel-p21.sh           → ✓ 78  ✗ 0（settings 23 / write 23 / conflict 5 / seats 22 / readonly 5）
+$ bash skills/teamsmith/tests/panel-snapshots.sh     → ✓ 52  ✗ 0（11 宽度 × 主题 + detail，无重钉）
+$ bash skills/teamsmith/tests/panel-b2.sh            → ✓ 172 ✗ 0
+$ bash skills/teamsmith/tests/panel-b3.sh            → ✓ 139 ✗ 0
+$ bash skills/teamsmith/tests/flip-p22.sh            → ✓ 12  ✗ 0（三处断点都红→绿）
+$ TEAM_PANEL_CPU_VIEW=1 TEAM_PANEL_CPU_EDIT=1 bash skills/teamsmith/tests/panel-cpu.sh
+  == first frame: 1454 (budget 2000ms) ==
+  == project-settings view open for the sampling window (1) + an editor holding a typed draft (nothing written) ==
+  == summary over 30s: console pane process 0.433% of one core …
+  panel-cpu: OK — the pane process is under 1% of one core and the first frame is in budget
+```
+
+## 五条手工实录
+
+### ① `team config set TEAM_PULSE_INTERVAL 300`：注释/未改动行逐字节保留、`bash -n`、审计行
+
+```
+$ team config set TEAM_PULSE_INTERVAL 300 --yes
+rc=0
+$ diff before after
+99c99
+< TEAM_PULSE_INTERVAL=900               # patrol interval (seconds): 15 minutes by default, 300-3600 recommended
+---
+> TEAM_PULSE_INTERVAL='300'               # patrol interval (seconds): 15 minutes by default, 300-3600 recommended
+$ bash -n .pi/team/config.sh && echo ok
+bash -n ok
+$ team config log 1
+2026-09-20T02:48:08Z result=ok actor=cli key=TEAM_PULSE_INTERVAL old='900' new='300'
+```
+
+（面板侧同一形状：`panel-p21.sh write` 断言 `diff` 只有一对增删、注释行仍是
+`TEAM_PULSE_NUDGE_GAP='1200'  # 15min`，wrapper argv 里先 `--dry-run` 再 `--yes`。）
+
+### ② 编辑器开着时外部写者改文件 → 提交被拒、文件未被覆盖
+
+```
+$ fp=$(team config list --json | …)          # 读时刻的指纹
+$ printf '\n# another writer was here\n' >> .pi/team/config.sh
+$ team config set TEAM_GATES 'bash gate.sh' --yes --fingerprint $fp
+✗ TEAM_GATES：文件在读取之后变过（指纹不符）—— 什么都没写
+  expected=7ab43de9… actual=4d5e95d5…
+rc=3
+$ sha256sum .pi/team/config.sh                 # 与外部写者留下的字节一致（4d5e95d5…）
+$ team config log 1
+2026-09-20T02:48:16Z result=conflict actor=cli key=TEAM_GATES old='true' new='bash gate.sh' expected=7ab4… actual=4d5e…
+```
+
+面板端同一场景（`panel-p21.sh conflict`）：回执 `指纹不符`、对方字节被保住、审计一行
+`result=conflict actor=panel key=TEAM_PULSE_NUDGE_GAP`、视图重读后显示对方的 900。
+
+### ③ 值校验：`TEAM_PULSE_INTERVAL=0`、未知键、未知席位各自被拒并点名原因
+
+```
+$ team config set TEAM_PULSE_INTERVAL 0 --yes
+✗ TEAM_PULSE_INTERVAL=0 不合法：超出范围：最小 60                          rc=4
+$ team config set TEAM_NOTIFY_TMUX maybe --yes
+✗ TEAM_NOTIFY_TMUX=maybe 不合法：只接受 0/1（也认 true/false/yes/no/on/off）  rc=4
+$ team config set TEAM_MONITOR_UI colour --yes
+✗ TEAM_MONITOR_UI=colour 不合法：只接受：auto|tui|text                      rc=4
+$ team config set TEAM_ZZZ_TEST x --yes
+✗ TEAM_ZZZ_TEST 不是已知的项目设置键（…自定义键请手改 .pi/team/config.sh）    rc=5
+$ team config set-agent-model dev4 x/y --yes
+✗ 未知席位 dev4：名册是（dev verify）加 pm（…team add-agent / team teardown）  rc=5
+$ team config set-agent-model dev deepseek-flash --yes
+✗ 模型必须形如 provider/model（deepseek-flash 里没有 /）                     rc=4
+$ team config set TEAM_PULSE_INTERVAL 0 --yes --allow-danger
+✗ 超出范围：最小 60                                                          rc=4   # danger 不合法化非法值
+$ team config set TEAM_MIN_FREE_SWAP_MB 0 --yes
+✗ …是危险值：容量底线归零（守卫失效）（确认要写就加 --allow-danger）           rc=7
+$ team config set TEAM_MIN_FREE_SWAP_MB 0 --dry-run --allow-danger
+ok: TEAM_MIN_FREE_SWAP_MB=0（dry-run，未写契约、未写审计）                   rc=0
+```
+
+### ④ 面板：视图能开、能过滤、能编辑并落盘；refuse 类只读且给出正确命令
+
+`bash skills/teamsmith/tests/panel-p21.sh settings write` 的真实断言（节选）：
+
+```
+✓ 导航行打开视图没有写 panel.conf      ✓ 项目设置视图（行集/徽章/未设默认/注释）
+✓ apply 行带 立即生效 徽章             ✓ restart 行带 需重启 徽章
+✓ refuse 行带 只读 徽章                ✓ 未设的键显示 schema 默认值 + unset 标记
+✓ 过滤留下 pulse 行 / 过滤掉不匹配的行  ✓ esc 清过滤后全部行回来（视图没关）
+✓ 窗口顶部显示被隐藏的行数             ✓ 第一次点击把光标放到那一行 / 第二次点击打开该行的编辑器
+✓ refuse 行的回执点名路线（手改 …）    ✓ refuse 行没有写契约（sha 不变）
+✓ esc 回到设置浮层且仍选中那一行       ✓ q 仍然触发全局的收起动作
+✓ scratch CLI 新增的键出现在视图里（不重建 panel.js）
+✓ scratch CLI 改过的类跟着变（bundle 没有第二张键表）
+✓ 第一次 Enter 只给确认行（没写）      ✓ 确认行说明 apply 的时机
+✓ 第二次 Enter 的回执说已写入          ✓ 只改了一行 / 注释原样保留 / bash -n 通过
+✓ 取消后契约不变 / 审计不增长 / 无临时文件
+✓ 非法值的回执说明被拒 + 点名「最小 60」且编辑器留在草稿上
+✓ 危险值先要一个额外确认 → 第二次 Enter 才写入
+✓ restart 值已写入；运行中的控制台仍拿着旧 argv；team monitor --json 报 refresh_s=7
+```
+
+`refuse` 行的回执原文（捕获）：`TEAM_SESSION · 身份：手改 .pi/team/config.sh（或重新 team init）`；名册
+键给的是 `team add-agent / team teardown`（由 schema 的 route 字段提供，面板不自己写第二份文案）。
+
+### ⑤ seats：改 `dev` 的模型 → 运行中的窗口参数不变、回执说明下次生效；来源三态与 `team ps` 一致
+
+面板侧（`panel-p21.sh seats`）：
+
+```
+✓ 配置解析 → 配置（verify 行）        ✓ 显式记录 → 显式（dev2 行）
+✓ 记录与配置不一致 → 历史记录 + 记录的模型（dev 行）
+✓ team roster 的标签与 models 块同口径
+✓ picker 打开并点名席位 / 列出命令报告的已知模型 / 有移除项 / 有自由输入项
+✓ 确认行点名席位 + 说明「下次 dispatch/resume 生效（运行中的窗口保持旧模型）」
+✓ 写入回执点名席位与规则；契约行只改了一行
+✓ wrapper 记录了 set-agent-model 的 --dry-run 与 --yes
+✓ 席位记录 state/dev.env 未被碰
+✓ 移除回执说回到默认；dev 的 token 离开契约行
+✓ 没有 provider 的模型被命令拒绝；被拒后契约 sha 不变
+✓ 运行中的 dev 窗口参数不变（真 tmux 窗口的 pane_start_command 前后一致）
+✓ 下一次 dispatch --print 用新模型（--provider kimi-coding --model k3-256k）
+```
+
+CLI 侧同一口径（真 `team ps` 的「agent 会话」列，用真实会话文件驱动）：
+
+```
+$ team ps | grep '^  dev '
+  dev        xai/grok-4.6·历史记录              1k/4k
+$ team config list --json | seats[dev]
+{'agent': 'dev', 'model': 'xai/grok-4.6', 'source': 'record', 'override': True}
+$ team config set-agent-model dev - --yes
+$ team ps | grep '^  dev '
+  dev        xai/grok-4.6·历史记录              1k/4k
+$ … seats[dev] → {'agent': 'dev', 'model': 'xai/grok-4.6', 'source': 'record', 'override': False}
+  default: deepseek/deepseek-flash
+```
+
+## 决定与偏差
+
+- **写入器用单引号形态（设计 §4）**：因此「结尾反斜杠」在新写入器下是**可表示**的（`KEY='abc\'` 是合法
+  bash）——任务书 1.9 想要的「写一个 `bash -n` 过不了的文件」我改成两条更诚实的取证：(a) 值往返断言
+  （含 `trailing\`）在旧写入器下红（它写 `KEY="abc\"` 把文件写坏）；(b) 原子性守卫用「契约本来就坏」的
+  夹具直接调底层写入器：`rc=1`、sha 不变、无临时文件。
+- **编辑器打开时从新读的块里取指纹**（设计 §3「指纹在编辑器打开时钉住」的加固）：缓存块可能还停在刚 settle
+  的那次写之前，用旧指纹会让紧跟着的下一次编辑假冲突（夹具实测到）。`panel` 侧因此多一次
+  `team config list --json` 的按需读（`api.refreshSettings()`），编辑器比按键晚约几百毫秒打开——夹具里用
+  `wait_editor` 等 tray 出现，不再靠固定 sleep。
+- **面板的确认/回执行放在输入行上方的 hint 行**：设置编辑器要保持编辑器开着（非法值保留草稿），而输入
+  行必须仍是最后一行（IME 锚点，V15/F1）。窄屏多一行 hint，帧预算里已扣除。
+- **`q` 在视图里保留全局含义**：视图打开时 `q` 触发 `pulse collapse`（wrapper argv 实证），`esc` 才回
+  浮层。
+- **`--dry-run` 不写审计**（规格明文），所以冲突场景的审计行由「第二次 Enter 的真写入」产生；dry-run 遇
+  到 `rc=3` 会先把冲突说清楚，第二次 Enter 仍去写 → 命令记 `result=conflict`。
+- **重复键不在范围内**：同一 `KEY=` 出现两行时读/写第一行（正常契约由写入器保证只有一行）；发现于手工
+  取数时自己造的重复行，已在夹具里避免。
+- **未改**：M45（`extension/team-inbox-watch.ts` / outbox 判据）、M40（身份/spawn）、`panel.conf` 的语义、
+  键名与模板键集（只加了一行注释指针）。
+
+## 建议下一步
+
+- **PM 复验入口**：`team review P22 --strong`（本报告已带三处翻转与独立夹具路径）。分支
+  `task/P22-apply-console-project-settin` 在 `.worktrees/verify`（本地模式，未 push）。
+- **全量门禁的唯一红是 M45 的容器真 pi 判据**（更新横幅 → BUSY），不是 P22 引入的：本次 diff 未触任何
+  M45/M40 文件。建议按 M45 的既定方向修判据层，**不要**用 `PI_OFFLINE` 之类开关绕开。
+- 归档顺序仍是设计 §10：`panel-ergonomics`（P20）先归档，再归档 `console-project-settings`。

@@ -1,0 +1,4 @@
+- 2026-09-29T03:36:32Z · `team close P121 --status done` · FORCED：PM 显式覆盖（理由：PM 提案审查 ACCEPTED：三件事逐条落点齐（含降级序写成'无此宽度'性质、折叠不建卡片行、机器帧忽略折叠）· MODIFIED 未丢基准场景（6→8 / 10→11）· validate 14/0）
+  -   - ① 复验记录 docs/team/reviews/P121.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P121-propose（883822e77）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/panel-board-cards-proposal.md 不存在

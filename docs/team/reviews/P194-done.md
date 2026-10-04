@@ -1,0 +1,4 @@
+- 2026-10-03T00:19:15Z · `team close P194 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳：现场重置/宿主帧/P147 抽样均 PASS；两条 fail-closed 洞（缺 run-start.txt、同 ID 重复标记）成立（我读码确认 F2、F1 与其实测一致）→ 返工 P197，落地后换人复验；delivery-truth 不可归档）
+  -   - ① 复验记录 docs/team/reviews/P194.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P194-verify（d14a381d9）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P194.md（用 ① 的 team review 生成，判定 PASS）

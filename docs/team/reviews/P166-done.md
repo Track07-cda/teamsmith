@@ -1,0 +1,4 @@
+- 2026-10-02T14:34:22Z · `team close P166 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳（NEEDS-CHANGES：F1 CRITICAL 由我复现、F2 两条形状、F3 清单、D1 我的任务书错误）；返工是 P169）
+  -   - ① 复验记录 docs/team/reviews/P166.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P166-verify（ea493ab99）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P166.md（用 ① 的 team review 生成，判定 PASS）

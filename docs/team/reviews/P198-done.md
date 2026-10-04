@@ -1,0 +1,4 @@
+- 2026-10-03T00:36:33Z · `team close P198 --status done` · FORCED：PM 显式覆盖（理由：并入 P197（单写者规则：同一 delta 文件 delivery-guard 只能有一个未结束的写者）。P197 的任务书已追加该 delta 重写要求）
+  -   - ① 复验记录 docs/team/reviews/P198.md：不存在
+  -   - ② 分支是否已并入 main：分支 task/P198-apply（874862186）已经是 main 的祖先，但它的提交里没有报告 docs/team/reports/P198-*.md（刚建出来、一个提交都没有的分支也长这样 —— 报告要提交进 git，工作区里的草稿不算）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

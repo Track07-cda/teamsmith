@@ -1,0 +1,119 @@
+# M29 · init/doctor UX：插件只报已装、推荐只限必需；名册改最小起点
+
+agent: dev3   status: done（4 项交付物齐、三条翻转证据齐、openspec 13/13 + FAST ✓1498 + 全量 smoke ✓1928 全绿）
+time: 2026-09-18T06:20Z
+branch: `task/M29-init-doctor-ux`（local 模式：不 push，分支留 `.worktrees/dev3`，PM 复验后本地合并）
+依据：`docs/team/tasks/M29-doctor-init-ux.md`（4 项交付物）——用户 <ontology-project> 首次实战后拍板的三条 + 名册 UX
+
+> 开工前按 PM 的 thread 指示核对过现场：`env -u TMUX -u TMUX_PANE tmux ls` → 默认 server 活着
+> （`<crm-project>`/`do`/`teamsmith` 三个 session），**没有** `m2-*`/`m3-*` 残留 session，无需清理；本任务全程没有
+> 起过任何 tmux 探针（纯逻辑 + 夹具）。
+
+## Deliverables
+
+| 文件 | 做了什么 |
+|---|---|
+| `skills/teamsmith/scripts/lib/cmd-project.sh` | ① `background jobs` 行改写为 **`已装插件 packages`** 信息行（列包名 + 级别 项目级/用户级，≤3 个详列、更多只报个数；无则一条信息行）；**删掉**安装推荐文案与 attribution 警告；`harness` 行保留（文案不再指路行名）；② 名册为空 **fail → warn**「可以 PM-only 开局；要派单先 `team add-agent <name>`」 |
+| `skills/teamsmith/scripts/lib/common.sh` | 新增 `team_plugin_settings_files` / `team_plugin_list`（读两份设置文件，按级别列包、同名去重、**不 spawn harness**）；删除 M26 的 `team_bg_pkg_names` / `team_bg_pkg_found` / `team_bg_commands_probe` / `team_bg_probe_signature_names`（推荐与加载探测一起去掉） |
+| `skills/teamsmith-init/SKILL.md` | 条目 2 改「Identity and a **minimal starting roster**」（1 dev + 1 verify 起步、`team add-agent` 随时增减、PM-only 开局合法）；条目 4 改「Harness and **installed plugins**」（告知已装、`已装插件 packages` 是信息不是推荐、omp 已自带后台、团队会话由自带 team-bg 覆盖）；**删掉**第三方包安装建议与 attribution 警告 |
+| `skills/teamsmith/references/troubleshooting.md` | §17 重写：Lane A 从「第三方后台任务包」改成**团队自带的 `team-bg`**，去掉包名选择段与 attribution 段；四条投递规则保留（出处改述为「生态里那些后台任务扩展在 issue tracker 里写下的失败模式」） |
+| `skills/teamsmith/tests/smoke.sh` | §15c 重写为 M29 口径：政策不变量（全树无第三方包安装字样，含**翻转自测**）、插件清单三态（无插件/项目级/用户级 + 同名去重）、**不 spawn harness**（假 pi 标记文件）、harness 四形态、名册空 = warn 且 `doctor rc=0`、init/文档措辞落盘 |
+| `docs/team/reports/M29-dev3/**` | 本报告 + `logs/`（门禁、三条翻转） |
+
+提交：
+
+```
+46846b3 feat(teamsmith): M29 doctor reports installed plugins instead of recommending one
+```
+
+## doctor 三形态（真实输出；夹具：假 pi/omp + 影子 PATH）
+
+**① 无插件（项目与用户设置里都没有 packages）**
+
+```
+  harness                  ! PATH 里有 omp（自带后台任务：bash 后台派发 / hub wait·cancel / /jobs）；本项目配的是 pi（内置无后台 bash）
+  已装插件 packages    ! 未检测到插件（teamsmith 不依赖第三方插件；团队会话的后台任务由自带 team-bg 覆盖）
+  名册 TEAM_AGENTS       ✓ dev
+```
+
+**② 有插件（项目级 + 用户级 + 同名去重）**
+
+```
+  harness                  ! PATH 里有 omp（自带后台任务：bash 后台派发 / hub wait·cancel / /jobs）；本项目配的是 pi（内置无后台 bash）
+  已装插件 packages    ✓ npm:pi-demo-tool（项目级）、npm:shared-tool（项目级）、npm:user-tool（用户级）
+  名册 TEAM_AGENTS       ✓ dev
+```
+
+**③ omp 是配置的 harness（`TEAM_PI_BIN` 指向 omp）**
+
+```
+  harness                  ! omp 自带后台任务（bash 后台派发 / hub wait·cancel / /jobs）
+  已装插件 packages    ✓ npm:user-tool（用户级）、npm:shared-tool（用户级）
+  名册 TEAM_AGENTS       ! 名册为空：可以 PM-only 开局；要派单先 team add-agent <name>
+```
+
+**名册空的收尾**：同一夹具下 `doctor rc=0`（名册是 warn 不再是 fail）；真正拦住的是 dispatch ——
+`team dispatch dev T1.1 …` 在空名册下报 `✗ 未知 agent：dev（名册：）`、rc=1（实测）。
+
+## Flip evidence（改坏 → 断言红 → 还原；日志 `logs/flip-*.txt`）
+
+| 项 | 改坏 | 红（FAST smoke） |
+|---|---|---|
+| 政策不变量（brief 指定的那条） | 往 `troubleshooting.md` 塞回一行 `Install the plugin: \`pi install npm:@aliou/pi-processes -l\` (narrow).` | `✗ 还在推第三方包：…/troubleshooting.md:517:Install the plugin: \`pi install npm:@aliou/pi-processes -l\`` → `✓ 1497 ✗ 1` |
+| 名册 warn | `warn "名册为空：…"` → `fail "名册为空"` | `✗ 名册为空时 doctor 仍退 0（期望 [0]，实际 [1]）`、`✗ 名册为空是一条 warn…`、`✗ 名册为空不再以 ✗ 出现` → `✓ 1495 ✗ 3` |
+| 不 spawn harness | 在插件行前临时 `"$(team_pi_bin_path)" list --approve` | `✗ 插件探测不 spawn harness（pi list 一次都没跑）`、`✗ 没有插件时也不 spawn harness` → `✓ 1496 ✗ 2` |
+
+三次改坏后都 `git checkout` 还原，`git status` 除报告目录外干净；还原后 FAST smoke `✓ 1498 ✗ 0`。
+
+## 与任务书的出入 / 需要 PM 知情的决定
+
+1. **`pi list --approve` 没被调用**（任务书写「读 `.pi/settings.json` 的 packages + `pi list --approve` 兜底」）：
+   实现只读**两份设置文件**（项目 `.pi/settings.json` + 用户设置 `TEAM_PI_SETTINGS_FILE`）——这正是
+   `pi list --approve` 自己打印的 "Project packages" / "User packages" 两个小节的数据来源（M26 实测核对过），
+   覆盖等价、**零 spawn**。理由：doctor 在巡检面板 health 块的等待路径上（`panel/src/data.ts`: ttl 600s /
+   timeout 30s），`TEAM_PI_BIN` 指到一个不响应的东西时 spawn 会白等满超时 —— M26 正是这么把面板首帧推后、
+   连累既有断言变红的。smoke 有两条断言（假 pi 的标记文件）钉死「不 spawn」这个性质，注入 spawn 会红。
+2. **删掉了 M26 的第三行 `background jobs 加载`（RPC 加载探测）**：它的用途是「推荐装了这个包，帮你看装没装对」；
+   推荐被砍后它只剩一次 spawn 的成本。若 PM 想保留「装了但没加载」的信号，可以只在检测到**已知后台任务包**时
+   恢复这一行（有界 2s），我按「少一行、少一次 spawn」的选择先删了。
+3. **`troubleshooting.md` §17 一起改了**（brief 只点名 init/doctor/smoke）：边界写着「不推任何第三方包的安装命令」，
+   而 §17 里正是我 M26 写的「选哪个包 + attribution 副作用」段 —— 留着就自相矛盾；现在 Lane A 是团队自带的 `team-bg`。
+4. **harness 行文案微调**：不再出现「看下一行 background jobs」这类行名指路；omp 分支去掉了「→ 不需要装插件」
+   （改为直接陈述 omp 自带后台任务），避免把「插件」当成本项目的叙事主轴。
+5. **行名**：brief 说「已安装插件信息行」，实现里的标签是 **`已装插件 packages`**（对齐全仓库 doctor 的中英混排风格：
+   `门禁 TEAM_GATES`、`名册 TEAM_AGENTS`、`PM 记忆 magic-context`）。
+6. **列表上限**：插件多于 3 个时只详列前 3 个 + 「等 N 个」（一行内可读）；完整清单仍在两份设置文件里。
+7. **`team-bg` 尚未落地**（M27 在飞）：文案按 brief 的说法写「团队会话的后台任务由自带 team-bg 覆盖」。
+   如果 M27 最终的文件名/命令名不同，这处文案要跟着改（代码里没有引用它的路径，只影响文案）。
+
+## 未验证 / 风险
+
+- 政策不变量只覆盖 `skills/**` 的代码与文档（**tests/ 故意排除** —— 断言里必须能写这些模式）：任务书、报告、
+  历史 CHANGELOG 里的第三方包名不在口径内（与 14b 的既有口径一致）。
+- `.pi/settings.json` 的解析是最小实现（压平后取 `"packages": [ … ]` 里的带引号条目，不引入 jq/python）：
+  文件畸形 → 当成「没装插件」（信息行），不报错；包名原样呈现（含 `npm:` 前缀）。
+- 插件清单只看**设置文件**：在别处（环境变量/其他 profile）装的包不会被列出 —— 与「不 spawn」是一体两面，已记录。
+- 名册降级为 warn 后，「名册为空」不再让 doctor 失败；拦人的是 dispatch（已实测 `✗ 未知 agent：dev（名册：）`）。
+
+## 门禁（`logs/` 里是全文）
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict
+Totals: 13 passed, 0 failed (13 items)                      （rc=0，logs/openspec-final.txt）
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1498  ✗ 0                                     （rc=0，logs/smoke-fast-final.txt）
+
+$ bash skills/teamsmith/tests/smoke.sh                      # 全量（真 tmux 舞台）
+== 结果 ==  ✓ 1928  ✗ 0        smoke 全绿                    （rc=0，logs/smoke-full.txt）
+```
+
+全量跑在提交 `9a9304a`（报告）之前的代码上；其后只有一处文档改动 —— `workflows.md` 里把旧行名
+（`background jobs` / `background jobs 加载`）改成新行名（`已装插件 packages`）。这处改完在最终 tip 上重跑了
+**FAST（✓1498/✗0，覆盖 14b 文档一致性、18 英文正文/安装器、15c 政策不变量）与 openspec（13/13）**；
+全量 smoke 里读这份文档的也只有这两段的同类检查。
+
+## Next steps
+
+1. PM：复验 → 本地合并；发布时在 CHANGELOG 的未发布块补一条 M29 条目（doctor 插件行改造 + 名册 warn + init 文案）。
+2. 若 M27（team-bg）先落地，合并后确认 §17/init 的文案与它一致。

@@ -1,0 +1,1 @@
+- 2026-09-23T02:18:27Z · `team board set P97 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/gate-runtime-budget-proposal.md（判定 ACCEPTED）

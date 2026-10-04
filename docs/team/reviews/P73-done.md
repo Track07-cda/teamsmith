@@ -1,0 +1,1 @@
+- 2026-09-22T17:55:33Z · `team board set P73 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/gate-isolation-scan-scope-proposal.md（判定 ACCEPTED）

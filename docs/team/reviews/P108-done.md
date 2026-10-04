@@ -1,0 +1,4 @@
+- 2026-09-28T15:00:27Z · `team close P108 --status done` · FORCED：PM 显式覆盖（理由：验证完成 PARTIAL：四要件自造夹具全绿；两条 finding 经 PM 复核成立（F2 小数 band 的警告不可达 110/112、F1 escalation 归因与现场矛盾）→ 返工 P110）
+  -   - ① 复验记录 docs/team/reviews/P108.md：不存在
+  -   - ② 分支是否已并入 main：task/P108-p108（359f0700f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P108.md（用 ① 的 team review 生成，判定 PASS）

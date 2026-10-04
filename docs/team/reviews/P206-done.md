@@ -1,0 +1,4 @@
+- 2026-10-03T10:39:09Z · `team close P206 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳：行为 PASS（14 独立用例 + 两条影子）；F1（16 项清单全未勾）成立 → 由实现者按事实勾选（P208）；同族第三次 → 归档前置加清单检查（P209））
+  -   - ① 复验记录 docs/team/reviews/P206.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P206-verify（36a36e673）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P206.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-22T22:53:09Z · `team close P85 --status done` · FORCED：PM 显式覆盖（理由：verify PASS 无 finding：自造延迟注入（0s/6s 结果行逐字相同、前形状 6s 复现 108/3、放大视界无影响）、永不落定 57/82 红不假绿、超前提可见 SKIP、两工作树同一被量根）
+  -   - ① 复验记录 docs/team/reviews/P85.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P85-p85（039be8b91）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P85.md（用 ① 的 team review 生成，判定 PASS）

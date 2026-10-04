@@ -1,0 +1,4 @@
+- 2026-09-28T20:15:12Z · `team close P112 --status done` · FORCED：PM 显式覆盖（理由：独立验证完成：V1（剪贴副本语法坏，最常用三入口都中招）与 V2（needs 闭包不全）经 PM 复核成立 → 返工 P117；V3 已被 P115 修掉）
+  -   - ① 复验记录 docs/team/reviews/P112.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P112-p112（9443cab4c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P112.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-22T18:36:47Z · `team close P74 --status done` · FORCED：PM 显式覆盖（理由：verify PASS：自造双布局帧 + 同源证明 + 真 pane 安全面（零按键）+ 三条变异；门禁 FAST 2430/0、全量 3074/0；F2=我 brief 措辞错（已更正）、F1=后续 change、F3=跨 change 残余）
+  -   - ① 复验记录 docs/team/reviews/P74.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P74-p74（a82a25ceb）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P74.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-22T23:28:37Z · `team close P82 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：CLI 侧（未解析=拒绝、运行时目录解析、三处同名）+ 扩展侧（senderFromDir，窗口只记分歧）；我自跑扩展包红 bad=5 / 绿 9/0；旧代码+新夹具 22/28 → 本 tip 段 50/0；四对变异各自红）
+  -   - ① 复验记录 docs/team/reviews/P82.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P82-sender-apply（a4fb5a3fe）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

@@ -1,0 +1,4 @@
+- 2026-09-22T19:12:07Z · `team close P75 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：直接调读取器三例（N=3 去尾空行 / 全空 → 空输出 / 不足 N 给全部）；红侧用修复前 cmd-status.sh 装进同夹具复现旧措辞；FAST 2447/0、全量 3091/0）
+  -   - ① 复验记录 docs/team/reviews/P75.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P75-p75（b22bdff14）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

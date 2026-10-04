@@ -1,0 +1,4 @@
+- 2026-10-02T22:19:11Z · `team close P160 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复验：§55 ✓88 ✗0（F2 的 core.abbrev 7/12 同源断言 + F3 的 agent 分支不编造）；§56 里 F1 两向断言（入队时账本不动、排水投递后同轮恰好一次）；我的 scratch 探针复现 F2 宽度固定与 F3 两向）
+  -   - ① 复验记录 docs/team/reviews/P160.md：不存在
+  -   - ② 分支是否已并入 main：task/P160-rework（c6997209b）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

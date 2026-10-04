@@ -1,0 +1,4 @@
+- 2026-10-02T16:30:32Z · `team close P178 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳（NEEDS-CHANGES：F1 首参分类可被 -S/-L/前置选项绕过，我读代码确认；普通 11 条硬停与影子 11/11 通过）；返工是 P180，复验换人）
+  -   - ① 复验记录 docs/team/reviews/P178.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P178-verify（8d56db9d3）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P178.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-10-01T16:42:31Z · `team close P140 --status done` · FORCED：PM 显式覆盖（理由：PM 手工复验通过：临时项目里一次拒绝列全 4 个阻塞项且每条带可粘贴修法；同任务另一 slug 被识别为本任务（我夜里撞的那条摩擦）；--branch 指向别的任务仍被拒并给出接受形状；分支上全量 3910 ✓ 0 ✗、routes 201 ✓ 0 ✗）
+  -   - ① 复验记录 docs/team/reviews/P140.md：不存在
+  -   - ② 分支是否已并入 main：task/P140-dispatch-friction-apply（8dec060dc）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

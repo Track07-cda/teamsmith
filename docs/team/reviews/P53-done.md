@@ -1,0 +1,4 @@
+- 2026-09-22T14:31:33Z · `team close P53 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：TMPDIR 零残留 + TERM 回收 + 自检 34/0 + sweep 点名占用者只列陈旧项（PM 自造两例））
+  -   - ① 复验记录 docs/team/reviews/P53.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P53-test-tmp-hygiene-apply-sweep（f8725c162）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

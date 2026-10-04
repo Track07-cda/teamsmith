@@ -1,0 +1,4 @@
+- 2026-10-02T23:06:33Z · `team close P185 --status done` · FORCED：PM 显式覆盖（理由：PM 四条变异复验：通配行 rc=2 并点名表+行（ledger 行必须字面）、缺列行 rc=2 并点名行与三列形状、空 basis rc=2 并点名、还原后 rc=0（99 条引用/0 未声明）。P184 的两条 finding 都闭合）
+  -   - ① 复验记录 docs/team/reviews/P185.md：不存在
+  -   - ② 分支是否已并入 main：task/P185-rework（e079ea56e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

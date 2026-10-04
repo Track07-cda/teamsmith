@@ -1,0 +1,1 @@
+- 2026-09-22T20:05:34Z · `team board set P71 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/wake-delivery-idempotence-proposal.md（判定 ACCEPTED）

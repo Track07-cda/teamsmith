@@ -1,0 +1,4 @@
+- 2026-10-02T16:01:15Z · `team close P165 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付：范围判定 PASS（磁盘/inode 腿、审计写入器、组合拒绝、渲染都对）+ 交付判定 BLOCKED（仅因基线 FAST 红在 P173，与本次无关）。按规矩不宣称"门禁全绿"，归档等 P173 落地后重跑）
+  -   - ① 复验记录 docs/team/reviews/P165.md：不存在
+  -   - ② 分支是否已并入 main：task/P165-verify（ee7c920e2）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P165.md（用 ① 的 team review 生成，判定 PASS）

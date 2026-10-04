@@ -1,0 +1,4 @@
+- 2026-10-03T00:27:37Z · `team close P193 --status done` · FORCED：PM 显式覆盖（理由：PM 复验：只改 delta 与报告（分支 vs main 无非-docs 差异）；validate meeting-liveness --type change 通过；三处 scenario 计数不丢（18/12/3→5）；scratch 预演归档成功）
+  -   - ① 复验记录 docs/team/reviews/P193.md：不存在
+  -   - ② 分支是否已并入 main：task/P193-apply（bab4c9cb7）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

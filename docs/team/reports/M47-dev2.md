@@ -1,0 +1,216 @@
+# M47 · CI 可移植性：让 GitHub Actions 的门禁真的可信（48 条红的分类与修复）
+
+agent: dev2   status: done（CI 绿待 PM 推送验证）   time: 2026-09-20
+branch: `task/M47-ci-48`   PR/MR: -（local 模式：分支留在 `.worktrees/dev2`，不 push）
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `ci/Containerfile` | 新增：钉死的门禁镜像（debian:trixie + **tmux 3.7b（源码）** + node 24.19.0 + bun 1.3.14 + pi 0.86.0 + openspec 1.8.0 + en_US.UTF-8/TZ=UTC/SHELL=bash） |
+| `.github/workflows/gates.yml` | 重写：`docker build` 镜像 → 在镜像里跑两条门禁命令（checkout 只读挂载），不再用 rolling runner 的宿主环境；M38 时代的注释同步更新 |
+| `skills/teamsmith/scripts/panel/src/main.tsx` + `panel.js` | 产品修：面板 `render(..., { interactive: Boolean(process.stdout.isTTY) })` —— Ink 7 的 `is-in-ci` 会把任何 CI 环境当非交互，**一帧都不写**（bug 类） |
+| `skills/teamsmith/tests/smoke.sh` | 6 处最小可移植性改动（清单见下） |
+| `skills/teamsmith/tests/team-bg-harness.mjs` | 夹具 commit 显式带 `-c user.email/-c user.name`（runner 没有全局 git 身份） |
+| `docs/team/reports/M47-dev2/pkg/**` | 独立复验包：`lib.sh` + `run.sh` + 4 节（面板翻转 / harness 身份翻转 / 登录 shell 夹具翻转 / 旧 tmux 能力门） |
+
+## CI 运行环境的决定与落地（Deliverable 2）
+
+**决定：容器化（brief 的推荐项）**，`ci/Containerfile` + workflow 里 `docker build` → `docker run`。
+
+理由（每条都有 CI 实测对应，不是猜测）：
+
+1. **runner 的 tmux 3.4 不够**：多行投递判据要问 `#{bracket_paste_flag}`，这个格式 **tmux 3.7 才加**（CHANGES: "Add bracket_paste_flag format flag", issue 4951；debian trixie 的 3.5a 也还没有 —— 见 `pkg/40`）。所以镜像里 **源码编译 tmux 3.7b**（与开发者机器同版本），构建阶段断言 `tmux -V`。
+2. **bundle 可复现是钉版本的**：`panel.js` 是提交进仓库的产物，门禁 26-a 会用 `bun install --frozen-lockfile && build.sh` 重建并**逐字节**比对。runner 的 `setup-bun@v2` 当时拉到 1.4.2，重建字节不同 → 红。镜像钉 **bun 1.3.14**（生成该 bundle 的版本）。
+3. **套件断言真工具的习性**：登录 profile、pi 自己的 skill 解析器（`dist/core/skills.js`）、`chmod 000` 类夹具（root 读得到 → 假绿）、tmux 里 `$SHELL` 决定 pane 的登录 shell。镜像把 locale/TZ/SHELL 与非 root 运行一起钉住（workflow `--user "$(id -u):$(id -g)"`）。
+4. **`--pid=host`（实测必需）**：smoke 10c-② 用「后台进程组 + 控制终端里裸 `read` 被 SIGTTIN 停住」证明 M25 那次 28 分钟挂死的机制。**私有 PID namespace 下内核改成返回 EIO**（不是停住），夹具就变成假绿/假红。同一镜像同一内核实测：
+   - `--pid=private`（podman 默认，docker 默认同理）：`grandchild state=Z … errno=5`（EIO，进程跑完）；
+   - `--pid=host`：`grandchild state=T …`（SIGTTIN 停住）。
+   所以 workflow 用 `docker run --pid=host`（不能用 `--init`：它要求私有 PID namespace）——容器在这一条 POSIX 语义上保持与原生 runner 一致，其余不变。
+5. **不做的事**：不注入 `CI`/`GITHUB_*` 给容器（门禁不依赖调用者环境）；**没有** `PI_OFFLINE`、**没有** `continue-on-error`、**没有**任何静默 skip（跳过一律 `SKIP` + 理由行）。
+
+未选“钉死 runner 依赖”的理由：tmux ≥3.7 在 ubuntu-24.04 的 apt 里不存在（3.4），要满足就得在 runner 上源码编译 + 装 pi 钉版本，等于把容器内容散进 workflow；容器一次做完且本机可复现（PM 可以用同一条 `podman run` 复核）。
+
+### 门禁镜像的钉法（`ci/Containerfile`）
+
+```
+FROM debian:trixie
+apt: ca-certificates curl unzip xz-utils git locales perl python3 procps util-linux + 编译 tmux 的 build-essential/libevent-dev/libncurses-dev/pkg-config/bison（装完即 purge）
+tmux 3.7b   ← https://github.com/tmux/tmux/releases/download/3.7b/tmux-3.7b.tar.gz（--prefix=/usr/local）
+node 24.19.0← nodejs.org 官方 tarball        bun 1.3.14 ← oven-sh release zip
+pi 0.86.0 / openspec 1.8.0 ← npm -g 钉版本；ENV PI_DIST=<pi>/dist/core/skills.js（skill-load 夹具 import 它）
+ENV LANG=en_US.UTF-8 TZ=UTC SHELL=/bin/bash HOME=/root
+CMD: openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null
+```
+
+每个 `RUN` 里都有版本断言（`[ "$(tmux -V)" = "tmux 3.7b" ]` 等），构建阶段就拦住漂移。
+
+## 逐条分类表（48 条 → env / assumption / bug）
+
+CI run 35488632867（main `2752ad1`）原始结果：**✓2300 ✗48**。48 条逐条归簇如下（每簇的“类”是根因性质；“修法”是实际落地的动作）：
+
+| # | 簇（CI 原文片段） | 条数 | 类 | 根因（证据） | 修法 | 复验 |
+|---|---|---|---|---|---|---|
+| A | `✗ skill-load 失败（teamsmith）`、`（teamsmith-init）` | 2 | assumption + env | runner 上没有 pi；`skill-load.mjs` 找不到解析器时 `exit 2`，而 smoke 把任何非 0 都判红 | ① 镜像钉装 pi 0.86.0（+`PI_DIST`）→ CI 真跑；② smoke 把 `exit 2` 改成**可见 skip**（别的机器不再假红） | 容器门禁 0b 段 ✓；`pkg` 无 |
+| B | `夹具有效：登录 bash 看不到 …/m81-bare-bin`、`M8.2 … m82-bare-bin` | 2 | assumption | 夹具赌“本机登录 profile 会重设 PATH”：distrobox 会、runner/普通容器的 `/etc/profile` 不会 | 夹具改**构造性**：`login_shell_hides()` 给登录 shell 一个受控 HOME，`.bash_profile` 明确重置 PATH | `pkg/30`：runner 形状下旧探针看到 `/tmp/bare-bin/pm-bare`（假绿），新 helper `MISSING` |
+| C | `✗ team-bg 夹具失败（runner=node）` + 4 条 `M30：…S11…` | 5 | assumption | 夹具 `git commit` 不带身份：runner 没有全局 git config → commit 静默失败 → `git worktree add` 没有 HEAD → 链接工作树根本不存在 | `team-bg-harness.mjs` 的 commit 显式带 `-c user.email/-c user.name` | `pkg/20`：无身份环境下旧 harness **6×FAIL S11**，新 harness 0 |
+| D | `12b-h ③/⑨/⑨b/⑫/⑰a-d/⑲a-c/⑳` 共 29 条 | 29 | env（+产品约束另立任务） | runner 的 tmux 3.4 **没有** `#{bracket_paste_flag}`（3.7 才加）→ `team_pane_bracketed_paste` 永远 false → 多行 payload 走“指针文件”降级，整族判据的前提没了 | ① 镜像钉 tmux 3.7b → CI 跑全套；② smoke 12b-h 加能力门：旧 tmux 上打印**一条可见 SKIP**并点名版本（不是 29 条级联红） | `pkg/40`：tmux 3.4 下格式答案 `[]`；stub 两形状分别 skip/run；容器门禁 12b-h 全绿 |
+| E | `26-a bundle：重建后与提交的 bundle 不一致` | 1 | env | runner 的 bun 1.4.2 与生成 `panel.js` 的 1.3.14 输出字节不同 | 镜像钉 bun 1.3.14 | 容器门禁 26-a ✓ |
+| F | `26-k paths：TEAM_JS_BIN 优先` | 1 | assumption | 测试写死 `/usr/bin/node` 当夹具；runner 的 node 在 hostedtoolcache、容器里在 /usr/local/bin | 夹具改用**本机实际解析到的那份**绝对路径（判据不变） | 容器门禁 26-k ✓ |
+| G | `26-m 真 pane` 6 条（首帧 / 会话范围 / 回响 / 节拍 / 60x8 / tick 帧） | 6 | **bug**（产品） | **Ink 7 的 `is-in-ci`**：CI 环境一律按非交互渲染，非交互模式**只写 `<Static>`** → 面板一帧都不写；pane 里只剩那条绕过 React 的时钟（CI 现场：`pulse 窗口最后快照（33 字节）：| 04:17:02`） | 面板 `render()` 显式 `interactive: Boolean(process.stdout.isTTY)`（重编 `panel.js`）；smoke 26-m 增 `CI=1` pane 夹具钉死 | `pkg/10`：旧 bundle 在 `CI=1` 下 35 字节（只有时钟），新 bundle 一帧 4158 字节；容器门禁该断言 ✓（1271ms） |
+| H | `logs 显示面板画面`、`32⑧b 面板画面是 cwd 项目` | 2 | **bug**（同 G） | 同上：pulse 窗口的 pane 一直空白 | 同 G | 容器门禁 26-m/32⑧b ✓ |
+
+合计：env **32**（A 的 env 半边 + D 29 + E 1）、assumption **8**（B 2 + C 5 + F 1）、bug **8**（G 6 + H 2）= **48**。
+
+### smoke.sh 的可移植性改动清单（最小改动，逐条）
+
+1. `0b` skill-load：`exit 2`（本机没有 pi 解析器）→ `cond_skip` 可见跳过。
+2. `6i ②c` / `6j ①`：新增 `login_shell_hides()`（受控 HOME profile），两处登录 shell 探针改用它。
+3. `12b-h` 段入口：新增 `tmux_has_bracket_paste_format()` + 旧 tmux 的可见 SKIP（点名 `tmux -V`）。
+4. `26-k`：`TEAM_JS_BIN` 夹具不再写死 `/usr/bin/node`；没有 node/bun 时可见 skip。
+5. `26-m`：`p10_panel_cmd()` 支持附加环境前缀（第三个参数）；新增 `CI=1` pane 夹具（翻转证据的守门断言）。
+6. `26-m` 收尾的“夹具 session 已收干净”断言纳入新 session 名。
+
+## Verification evidence (must have actually been run)
+
+### 1) 本机全量门禁（acceptance 第一条）
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null
+Totals: 15 passed, 0 failed (15 items)        # openspec validate --all --strict
+== 结果 ==  ✓ 2363  ✗ 0
+smoke 全绿
+$ echo $?
+0
+```
+
+- 对照基线（改动前、同一 worktree）：`== 结果 == ✓ 2362 ✗ 0`；改动后 **2363**（唯一 +1 = 新增的 `26-m CI=1` 翻转守门断言，逐段对比确认没有任何一条断言被拿掉）。
+- 第一次跑（同一改动）曾出现 5 条红，全部在 `12b-pi` 的 fs.watch 唤醒族：那台机器当时 loadavg 10–15（verify 的 FAST 门禁 + dev3 的全量门禁并发），夹具 3s 有界等待被压过去；独立重跑 harness 3/3 全过，随后这次全量门禁也在同样负载下全绿。见「Decisions」里的记录 —— 没有为它放宽任何断言。
+
+### 2) 本机 FAST 门禁（acceptance 第二条）
+
+```
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1873  ✗ 0
+FAST 模式：跳过 24 个真进程段落（…）——完整门禁请不带 TEAM_SMOKE_FAST 重跑
+smoke 全绿
+```
+
+### 3) CI 等价运行：在钉死的门禁镜像里跑同两条命令（干净 clone、非 root、`--pid=host`）
+
+```
+$ git clone .worktrees/dev2 /tmp/m47/clone            # 真实仓库（linked worktree 的 .git 是文件，容器里不可用）
+$ distrobox-host-exec podman run --rm --userns=keep-id --pid=host --cgroups=enabled \
+    -e HOME=/tmp -v /tmp/m47/clone:/work:ro -w /work teamsmith-gates:test \
+    bash -c 'openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null'
+== 结果 ==  ✓ 2347  ✗ 1          # 唯一一红 = 27-d 装配红线（见下）
+   ✓ 26-a bundle：沙盒里重建逐字节一致（930655 字节）          # bun 1.3.14 钉住 → 可复现
+   ✓ 12b-h ③ 三行 = 一次提交 / ⑨ 打字期间有草稿介入 → 没有提交   # tmux 3.7b → bracketed paste 路径
+   ✓ 26-m CI=1：TTY 里的面板照常渲染（… 有界轮询 1271ms）        # 产品修复生效
+   ✓ M25-② 夹具有效性：裸 read 在后台进程组 + tty 下确实被停住    # --pid=host
+   SKIP（条件不满足） 31b·容器 tmux 自检（podman）—— 容器里没有 podman：可见跳过（不是静默）
+```
+
+唯一的红是**负载敏感的性能断言**，不是可移植性缺陷：
+
+```
+✗ 27-d 装配红线：5 次采样的中位 2108ms（> 2000ms；样本 2096, 2058, 2108, 3188, 2134ms；采样时 loadavg 4.65 …）
+CI 原环境（run 35488632867，原生、loadavg 1.92）：✓ 27-d 装配红线：中位 1401ms ≤ 2000ms（样本 1400,1405,1406,1401,1397ms）
+本机首次容器运行（同一镜像，loadavg 3.79）：中位 1910ms（样本 1243,1910,1276,3012,4496ms）
+```
+
+同一台机器上当时还有别的 worker 的全量门禁在排队/运行（`/tmp/teamsmith-smoke.lock` 持有者 = dev3 的 M48 门禁），loadavg 4.65–12.8；runner 上只有这一套门禁。该断言是 M20 定下的「5 次中位 ≤ 2s（不放宽）」判定，中位越线才是红 —— 这里就是中位越线，但原因是共享机器并发，现场数据（loadavg + 样本分布 2096/2058/2108/3188/2134）已经写在失败行里。
+
+（本机对照：workflow 里对应 `docker run --user "$(id -u):$(id -g)" --pid=host`；本机用 `--userns=keep-id` 等价，因为 rootless podman 的 `--user 1000` 会映射成 subuid 而不是宿主 1000，git 会以 `dubious ownership` 拒绝。）
+
+镜像按最终 `ci/Containerfile` 重建后，容器内 FAST 门禁复跑一次：`== 结果 == ✓ 1872 ✗ 0`（容器里 `31b` 的容器 tmux 自检按预期可见跳过，故比本机少 1 条）。
+
+### 4) CI 现场（只读）
+
+```
+$ export GH_TOKEN="$(cat .github-pat)" && gh run list --limit 3
+completed	failure	P22: console-project-settings — …	gates	main	push	35488632867	12m5s	2026-09-20T04:14:20Z
+completed	failure	M45: the box reader tolerates pi's built-in update banner (…)	gates	main	push	35485969886	11m1s	2026-09-20T03:12:23Z
+completed	failure	docs(team): M40 brief — cwd is identity, inherited TEAM_* must never …	gates	main	push	35447687646	10m12s	2026-09-19T14:05:40Z
+$ gh run view 35488632867 --log-failed | grep '✗' | wc -l   # 50（48 条红 + 2 条总结行里的“✗”字样）
+```
+
+### 5) 独立复验包
+
+```
+$ bash docs/team/reports/M47-dev2/pkg/run.sh
+── §10-panel-ci-flip.sh ──     finding 10 CI=1 pane (old): blank as expected — 35 bytes, clock only
+                               ok      10 CI=1 pane (new): frame rendered (4158 bytes) — teamsmith pulse · fixture …
+                               finding 10 flip: pre-fix bundle blank under CI=1 -> post-fix bundle renders (red before / green after)
+── §20-harness-git-identity.sh ──  finding 20 flip: identity-free environment -> pre-fix harness 6×FAIL S11, fixed harness 0
+── §30-login-shell-fixture.sh ──   finding 30 flip: runner-like profile -> old probe sees [/tmp/bare-bin/pm-bare], fixed helper MISSING
+── §40-tmux-capability-skip.sh ──  ok 40 old-tmux shape: guard says 'no capability' -> 12b-h prints a visible SKIP
+                                   finding 40 real old tmux in the CI-like image: tmux 3.4 []  (the format's raw answer)
+== M47 包总览 == bad=0 日志=/tmp/m47pkg-logs-3183630
+```
+
+## Flip evidence (required for defect-fix tasks)
+
+三条翻转，全部是**先红后绿**、且红旗在修复前是真实存在的（前两条的“红”来自 CI 原始日志，第三条是同一夹具的旧实现）：
+
+**① 面板 / CI（产品修复）** —— `pkg/10`（独立夹具：从 git 取修复前的 `panel.js`，两份 skill 副本各自在真 tmux pane 里、env 显式 `CI=1`）：
+
+```
+finding 10 pre-fix bundle = 930613 bytes from a824987; post-fix = 930655 bytes
+finding 10 CI=1 pane (old): blank as expected — 35 bytes, clock only (05:55:56)
+ok      10 CI=1 pane (new): frame rendered (4158 bytes) — teamsmith pulse · fixture  05:55:57  巡检 900s · 待命
+finding 10 flip: pre-fix bundle blank under CI=1 -> post-fix bundle renders (red before / green after)
+```
+
+CI 原始红（同一形状，run 35488632867）：
+
+```
+✗ logs 显示面板画面（…/wd-logs.log 中找不到 [teamsmith pulse]）
+      ℹ pulse 窗口最后快照（33 字节）：
+      |                         04:17:02
+```
+
+守门断言：`smoke.sh` 26-m 的 `26-m CI=1：TTY 里的面板照常渲染`（容器门禁实测 1268ms）。破坏实现 → 这条必须红（本包第 10 节就是把旧 bundle 装回去跑同一条路径）。
+
+**② team-bg S11 夹具（身份缺口）** —— `pkg/20`（无全局 git 身份的环境里分别跑修复前/后的 harness）：
+
+```
+old| TEAM-BG-CASE FAIL S11 fixture: linked worktree with its own .pi/team/config.sh :: wt=…
+old| TEAM-BG-CASE FAIL S11 a worktree session writes its job log inside the worktree :: log=…/repo/.pi/team/state/bg/wt.log
+old| TEAM-BG-CASE FAIL S11 the shared root does not receive that job log
+old| TEAM-BG-CASE FAIL S11 the wake names the worktree-side log :: - wt2 exit=0 log=…/repo/.pi/team/state/bg/wt2.log
+old| TEAM-BG-CASE FAIL S11 the session ledger line lands in the worktree :: ledger lines=0
+new| TEAM-BG-CASE PASS S11 fixture: linked worktree with its own .pi/team/config.sh :: wt=…
+new| TEAM-BG-CASE PASS S11 a worktree session writes its job log inside the worktree :: log=…/wt/.pi/team/state/bg/wt.log
+finding 20 flip: identity-free environment -> pre-fix harness 6×FAIL S11, fixed harness 0 (red before / green after)
+```
+
+**③ 登录 shell 夹具（环境依赖 → 构造性）** —— `pkg/30`（runner-like 环境：`/etc/profile` 不重设 PATH，在 CI 同族镜像 ubuntu:24.04 里跑）：
+
+```
+        probe| old=/tmp/bare-bin/pm-bare
+        probe| new=MISSING
+finding 30 flip: runner-like profile -> old probe sees [/tmp/bare-bin/pm-bare] (fixture invalid), fixed helper MISSING (valid)
+```
+
+配套（同族，能力门而不是红）：`pkg/40` 在 tmux 3.4 下拿到格式答案 `[]`（= 格式不存在），smoke 的 `tmux_has_bracket_paste_format` 对旧/新两种形状分别给出 skip / run。
+
+## Decisions and deviations
+
+- **改了一个产品行为（面板 `interactive`）**：这是 bug 类（brief 允许“修或另立任务”）。判据是「stdout 是 TTY → 交互渲染」，与 `team monitor` 自己的文档契约（`--ui auto`：非 TTY 走纯文本）一致；Ink 的 `is-in-ci` 会在 CI 环境里把 TTY 也当非 TTY。**没有**用 `PI_OFFLINE`、没有关更新检查、没有 `continue-on-error`。若不希望动产品，替代方案是镜像里清掉 `CI` 再跑门禁 —— 但那样 CI 这一路的产品行为永远不被测；我选了“修 + 加夹具”。
+- **渲染回退的用途**：删掉 `interactive` 只影响「TTY + CI」这一格；非 TTY 下 Ink 仍是非交互（与修复前一致）。
+- **tmux <3.7 的产品降级不修，另立任务**：旧 tmux 上无法探测 DECSET 2004（格式不存在），产品保守走“多行落文件 + 一行指针”（不丢数据、不拆成多次提交）。这是平台约束不是数据损坏；建议要么在文档写明 `tmux ≥3.7`，要么做一版不依赖该格式的探测。**这条不进本任务的 CI 门禁**（镜像钉 3.7b），但已用可见 SKIP 兜住旧机器。
+- **门禁不注入 `CI`/`GITHUB_*`**：容器环境必须可复现，不能依赖调用者。唯一已知的 CI 敏感路径（Ink `is-in-ci`）由 smoke 26-m 的显式 `CI=1` 夹具覆盖 —— 本机门禁也会跑它。
+- **本机复现容器需要 `--userns=keep-id`**（rootless podman）：workflow 的 `docker run --user` 在 docker 下是对的；本机 podman 的 `--user 1000` 会映射成 subuid，git 拒绝该仓（`dubious ownership`）。这是**测试方法**差异，不是镜像差异。
+- **观察到一次负载敏感 flake（未改夹具）**：本机第一次全量门禁在共享机器 loadavg 10–15（verify 的 FAST 门禁 + dev3 的全量门禁同时在跑）时，`12b-pi` 的 fs.watch 唤醒族 5 条红（`S2 … :: messages=0`，轮询被夹具显式关掉，等待上限 3s）。独立重跑同一个 harness **3/3 全过**（同样负载下），容器门禁与 CI 原生也都过；inotify 实例占用只有 11/1024。判定为负载下的时序 flake，不属于本次 48 条的分类，也没有为了它放宽任何断言 —— 但 PM 在忙机器上复验时可能撞见，现场数据在此备查。
+- **顺带发现（不在本任务范围，未修）**：
+  1. 仓库根有一个被跟踪的空文件 `PWNED`（P21 那笔提交 `beb0c81` 带进来的）——它是 `config-cli.sh` 注入夹具的产物（`config set TEAM_GATES '$(touch PWNED)'`），说明当时有夹具在仓库树里跑过并 `git add -A`。建议单独清理。
+  2. `skill-load.mjs` 的候选里写死了 `<home>/.bun/install/global/...`（开发者机器的路径）。镜像用 `PI_DIST` 绕过；长期建议改成从 PATH 上的 `pi` 反推安装位置。
+
+## Suggested next steps
+
+- **PM**：把 `task/M47-ci-48` 合并进本地 main 并 push（本模式不 push；CI 触发靠 PM）→ 预期 CI 一次绿；若红，按上面分类表逐条对号（每一簇的修法都已落地）。
+  - 若 CI 在 **`docker run` 这一步**就报错（`--pid=host` 被拒）：把 workflow 的 `--pid=host` 去掉、`--init` 加回，并把 smoke 10c-② 的「夹具有效性」断言按本报告的做法降成一条**可见 SKIP**（私有 PID namespace 下读 tty 是 EIO 不是 SIGTTIN，`pkg/40` 同族的处理）。
+  - 若 CI 只红 `27-d 装配红线`：那是负载敏感的性能断言（runner 上只有这一套门禁；原生 CI 实测中位 1401ms/上限 2000ms）。看失败行里的 loadavg 与 5 个样本再决定是否重跑。
+- **PM**：决定 tmux <3.7 的产品口径（文档写明 ≥3.7，或另立任务做版本无关的探测）——本报告 `pkg/40` 有复现证据。
+- **PM**：`PWNED`、`skill-load.mjs` 的硬编码路径这两条小清理，是否并进下一个任务。

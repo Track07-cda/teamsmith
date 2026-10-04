@@ -1,0 +1,1 @@
+- 2026-09-28T19:17:02Z · `team close P102 --status done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/model-id-shape-proposal.md（判定 ACCEPTED）

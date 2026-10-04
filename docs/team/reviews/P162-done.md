@@ -1,0 +1,8 @@
+- 2026-10-02T13:37:30Z · `team close P162 --status done` · FORCED：PM 显式覆盖（理由：PM 独立验证 PASS（全在容器内）：0h ✓38 ✗0；不存在的 TMPDIR 与超深 TMPDIR 两种回退形状都被拒且点名原因；我注入"前置恒通过"影子后 8 条断言变红（含 TEAM_* 与 --force 两条无绕过）。审计行含段号/哪一条/期望与实际 socket）
+  -   - ① 复验记录 docs/team/reviews/P162.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P162-apply（0ea7f5204）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
+- 2026-10-02T13:41:03Z · `team close P162 --status done` · FORCED：PM 显式覆盖（理由：PM 独立验证 PASS：容器内 0h ✓38 ✗0；不存在的 TMPDIR 与超深 TMPDIR 都被拒且点名；影子（前置恒通过）→ 8 条断言变红含两条无绕过。合并冲突我语义解（unset 并集 + REAL_SIGNAL 与 tmux() 包装器并存）；合并后 0h/0c 绿。发现一条与本次无关的夹具缺口（state/bg.log 未排除 → 后台作业在跑时假红）→ 转 P168）
+  -   - ① 复验记录 docs/team/reviews/P162.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P162-apply（0ea7f5204）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

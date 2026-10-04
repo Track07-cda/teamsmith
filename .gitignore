@@ -24,6 +24,15 @@ __pycache__/
 docs/team/reports/**/.runtime/
 docs/team/reports/**/.scratch/
 
-# 账本与团队运行时在仓外（2026-10-04 起公开仓只放产品面）
+# 账本：可读层（任务书、报告与复验的正文、决策、看板、往来）进仓库；
+# 证据包、运行时简报与维护工具不进（见 docs/team/DECISIONS.md 的 D94）。
 .pi/
-docs/team/
+docs/team/inbox/
+docs/team/tools/
+docs/team/RELEASE-PUBLIC.md
+docs/team/reports/**
+!docs/team/reports/*.md
+docs/team/reviews/**
+!docs/team/reviews/*.md
+docs/team/**/*.log
+docs/team/tasks/*.msg

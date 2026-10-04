@@ -1,0 +1,4 @@
+- 2026-09-23T03:25:52Z · `team close P96 --status done` · FORCED：PM 显式覆盖（理由：复核 PASS：157/0 + 两影子变异；四条任务书项逐项自查；F6 是时序（我的文档改动已修，两条不变量在 main 上 0 命中），F1 并入 P95）
+  -   - ① 复验记录 docs/team/reviews/P96.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P96-p96（c423e8b3c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P96.md（用 ① 的 team review 生成，判定 PASS）

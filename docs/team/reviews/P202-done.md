@@ -1,0 +1,4 @@
+- 2026-10-03T07:14:03Z · `team close P202 --status done` · FORCED：PM 显式覆盖（理由：PM 复验（容器内独立克隆）：--select 51 = ✓23 ✗0（冻结那次是 ✓1 ✗1）；根因是 printf|grep -q 在 pipefail 下把命中读成未命中（P94/P127 同族），十处判定改为读文件；每个翻转先证明变异落地）
+  -   - ① 复验记录 docs/team/reviews/P202.md：不存在
+  -   - ② 分支是否已并入 main：分支 task/P205-apply（456176753）已经是 main 的祖先，但它的提交里没有报告 docs/team/reports/P202-*.md（刚建出来、一个提交都没有的分支也长这样 —— 报告要提交进 git，工作区里的草稿不算）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

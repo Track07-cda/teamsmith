@@ -1,0 +1,247 @@
+# P24 · change 为中心的派单纪律（apply）
+
+agent: dev-bob   status: DONE（分支未合并：local 模式交 PM 复验；B2 未做，见末节）   time: 2026-09-20T10:40Z
+change: `change-centric-discipline`（apply 阶段）   branch: `task/P24-change-apply-b1-b3-b7-b2-m48`   PR/MR: -（local 模式：不 push，分支留在本地）
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/scripts/lib/common.sh` | B1 严格头部读取器（`team_brief_field_raw` / `team_task_change_value` / `team_task_deltas` / `team_task_anchor`）+ change read-model（`team_change_tasks` / `team_change_unfinished` / `team_change_blockers` / `team_change_ready`）+ B4 的 `team_change_delta_files` / `team_task_delta_targets` + B5 的 `team_change_apply_authors` + B6 的归档前提（`team_done_phase_evidence` 的 archive 路线接上 readiness） |
+| `skills/teamsmith/scripts/lib/cmd-status.sh` | B1：`team_cmd_change`（人类视图 + `--json`，退出码 = readiness；`touched` 列每个任务一次 `git diff --name-only`）+ `self-verify:` 标记（与守卫共用一个谓词） |
+| `skills/teamsmith/scripts/lib/cmd-agents.sh` | B3/B4/B5：`team_dispatch_change_guard`（规则 1 / 锚 / delta 单写者 / 不独立复验），挂在整个开窗动作之前；`--force` 的审计行在派单成功后落盘，`--print` 不写 state |
+| `skills/teamsmith/scripts/team`、`skills/teamsmith/scripts/lib/cmd-project.sh` | `change status` 动词 + help 行 |
+| `skills/teamsmith/tests/task-header-model.sh` | B1 1.1 的头部模型夹具（26 例：接受值与畸形值，拒绝时点名的字段） |
+| `skills/teamsmith/tests/smoke.sh` | 12e / 12g / 12h / 12i / 12j / 12k 六个新段落 + 派单夹具的锚回填 + M9.1 清单计数 8→10 |
+| `skills/teamsmith/tests/flip-p23.sh` | 九对翻转包（§1.6 / §3.7a-b / §4.6a-b / §5.5a-b / §6.4 / §7.5）；§2.4 属 B2，不在包内 |
+| `skills/teamsmith/templates/task.md.tmpl`、`references/openspec.md`、`references/protocol.md`、`SKILL.md`、`AGENTS.md`、`templates/AGENTS.section.md.tmpl`、`templates/PROTOCOL.md.tmpl` | B7：头部语法进模板；openspec 清单第 9/10 点；`protocol.md §5b` 四条拒绝的 why；命令表与协议段 |
+| `docs/team/reports/P24-dev-bob/record.sh`、`docs/team/reports/P24-dev-bob/logs/*` | B8.3：手工实录 ①–⑤ 的夹具与原始输出、全量/FAST/flip 的日志 |
+
+提交（`main..HEAD`，全部带 `Agent: dev-bob`）：
+
+```
+d7cf98d feat(P24): strict brief header readers + change read-model (B1 1.1-1.2, 4.1, 5.1, 6.1)
+ae02866 feat(P24): team change status view + verb (B1 1.3-1.4)
+32a93ae feat(P24): change-centric dispatch guards (B3, B4, B5)
+75c5261 test(P24): task-header-model fixture — 26 cases over the accepted/malformed header values (B1 1.1)
+3638a26 test(P24): smoke 12e-12j — change view, dispatch anchors, delta single writer, self-verify, archive gate
+2793458 docs(P24): template header grammar + openspec checklist 9/10 + protocol/SKILL/AGENTS (B7)
+2011a6c test(P24): flip package for the change discipline + strengthen the refusal assertions (B8 8.2)
+3dbdcbd test(P24): backfill the dispatch fixtures with the anchor the new guard requires (B8 gate)
+2c67abd fix(P24): join multi-line header values with a real `、` (tr mangles UTF-8) + the manual record harness (B8.3)
+```
+
+## Verification evidence（真正跑过的；原始日志在 `docs/team/reports/P24-dev-bob/logs/`）
+
+### ① 全量门禁（Acceptance 第一条）
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null
+- Validating...
+✓ spec/agent-adapters
+✓ spec/board-and-status
+✓ spec/boundary
+✓ change/change-centric-discipline
+...（18 份 spec/change 全过）
+== 结果 ==  ✓ 2542  ✗ 0
+smoke 全绿
+GATE_EXIT=0
+```
+
+`logs/gate-full.log` = openspec 抬头 + 12e–12k 六个段落全文 + 结果行（0–11 节的逐条 ✓ 省略，命令可原样重跑）。
+本段落含 `[real]` 子段（12g 的真实拒绝、12h 的 `--force` 真审计 + monitor 事件列），它们**不是 FAST 模式**跑的。
+
+### ② FAST 门禁（Acceptance 第二条）
+
+```
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 2046  ✗ 0
+FAST 模式：跳过 26 个真进程段落（列在日志末行）
+smoke 全绿
+FAST_EXIT=0
+```
+
+### ③ 翻转包（Acceptance 第三条）
+
+```
+$ bash skills/teamsmith/tests/flip-p23.sh
+✓ 1.6 就绪忽略未结束兄弟：断掉之后 12e 变红（rc=1） ｜ 还原之后 12e 变绿（✓ 25 条）
+✓ 3.7a 读取器退回第一行：断掉之后 12g 变红（rc=1） ｜ 还原之后 12g 变绿（✓ 63 条）
+✓ 3.7b 锚守卫 no-op：断掉之后 12g 变红（rc=1） ｜ 还原之后 12g 变绿（✓ 63 条）
+✓ 4.6a 缺失声明读成空集：断掉之后 12h 变红（rc=1） ｜ 还原之后 12h 变绿（✓ 22 条）
+✓ 4.6b 交集只比本 agent 记录：断掉之后 12h 变红（rc=1） ｜ 还原之后 12h 变绿（✓ 22 条）
+✓ 5.5a 作者集合只看记录任务：断掉之后 12i 变红（rc=1） ｜ 还原之后 12i 变绿（✓ 18 条）
+✓ 5.5b 缺信号静默通过：断掉之后 12i 变红（rc=1） ｜ 还原之后 12i 变绿（✓ 18 条）
+✓ 6.4 归档不要求 change 就绪：断掉之后 12j 变红（rc=1） ｜ 还原之后 12j 变绿（✓ 18 条）
+✓ 7.5 删掉清单第 10 点：断掉之后 12k 变红（rc=1） ｜ 还原之后 12k 变绿（✓ 33 条）
+== 结果 ==  ✓ 27  ✗ 0
+FLIP_EXIT=0
+```
+
+每对还有一条「红侧点在预期的断言上」（27 条里 9 条），即翻转失效（断掉却不红）会被点名。全文：`logs/flip-p23.log`。
+
+### ④ 手工实录 ①–⑤（Acceptance 的加项）
+
+```
+$ bash docs/team/reports/P24-dev-bob/record.sh      # 原始输出：docs/team/reports/P24-dev-bob/logs/manual-record.log
+━━━ ① 一个任务书两个 change id → dispatch 拒绝
+[G1] 头部：change: alpha, beta
+  ✗ 拒绝派单：G1 的任务书 change: 行不合法（一个任务最多属于一个 change）
+    change: 的值是 `alpha, beta` —— 只接受一个 change id（[A-Za-z0-9][A-Za-z0-9._-]*）或 `-`
+  → 退出码 1 ｜ 看板行 |G1|G1fixture|dev|-|-|todo| → 未改动 ｜ tmux 开窗请求 0 条
+[G2] 头部：change: alpha beta     → 同样拒绝（点名这一行）
+[G3] 头部两行 change: alpha + change: beta
+    change: 有 2 行（alpha、beta）—— 一个任务最多属于一个 change，只留一行
+[G1 --force] 规则 1 没有逃生门：--force 也拒绝（退出码 1）
+━━━ ② change-less 的 brief 没声明可用锚 → 拒绝
+[N1] specs: -，没有 anchor:  → 拒绝，列两种形式（specs 解析 / anchor: none (infra) — 理由）
+[N2] anchor: none (infra)（少 `—` 与理由）→ 拒绝：「少了 `—` 分隔符 —— 写成 `none (infra) — <理由>`」
+[N3] specs: no-such-capability#x → 拒绝，点名它找的是 openspec/specs/no-such-capability/spec.md
+[N1 --force] 覆盖警告 + 派单（开窗请求 2 条）；审计行在成功后落盘
+━━━ ③ 同一 change 的两个未结束任务声明同一 delta → 拒绝
+  ✗ 拒绝派单：change alpha 的同一个 delta 文件被两个未结束的任务声明（单写者规则）
+    兄弟任务：M1 ｜阶段 apply ｜看板 wip
+    共享文件：openspec/changes/alpha/specs/panel/spec.md
+    它的声明：deltas: panel ｜ 本次声明：deltas: panel
+  → 退出码 1 ｜ M1 看板行 未改动 ｜ tmux 开窗请求 0 条
+[M2 --force] 警告点名 M1（看板 wip）与 M2 及共享文件；一行审计
+━━━ ④ phase: archive 的任务在兄弟未结束前 board set done → 拒绝
+$ team board set A1 done        # 兄弟 M1 还在 wip
+  ✗ 没有可核对的证据（BOARD 未改动）——done 是一句承诺，不能只凭手写
+    - ③ 阶段 archive 的交付证据：change alpha 还没就绪（归档前提：至少一个任务，且除归档任务自己外全部结束）：
+      M1 · apply · wip · 看板状态 wip；① 复验记录 … 不存在；② 分支 … 找不到 M1 的分支；③ 阶段证据 …
+  → 退出码 1 ｜ A1 看板行 未改动
+$ team change status alpha       # 视图与闸门点同一个 blocker
+  change alpha · not ready   （blockers 里同一条 M1 · apply · wip …）  → 退出码 1
+$ team board set A1 done         # M1 拿到 PASS + done 之后
+  done 证据：OK：阶段 archive 的交付证据：归档目录 openspec/changes/archive/2026-09-20-alpha
+  ✓ board A1 → done   → 退出码 0 ｜ 证据文件 reviews/A1-done.md
+━━━ ⑤ team change status <id> 的三种输入
+$ team change status alpha       # 全完成（A1/M1 都 done）
+  change alpha · ready ｜ tasks 两行都带证据 ｜ blockers：（无：全部任务已结束）  → 退出码 0
+$ team change status alpha       # 有一个未完成（M1 wip）
+  change alpha · not ready ｜ delta files: panel/spec.md declared by M1、M2 ｜ blockers 两条  → 退出码 1
+$ team change status no-such-change
+  ✗ change no-such-change：没有任务指向它（… 里没有 change: no-such-change），也没有 openspec/changes/no-such-change/ 目录
+  → 退出码 1
+```
+
+## Per-requirement 覆盖（requirement → 条目 → 能红的夹具 → 翻转）
+
+| requirement（delta） | 条目 | 夹具（能红） | 翻转 |
+|---|---|---|---|
+| `dispatch#A brief names at most one change id` | 3.1, 3.2, 3.4, 3.5, 3.6 | 12g G1/G2/G3（comma / 空格 / 两行）+ `--print` + 规则 1 的 `--force` 不放行 + 板行不变 + shim 0 窗 | 3.7a |
+| `dispatch#A change-less brief declares its spec anchor` | 3.3, 3.4, 3.5, 3.6 | 12g N1–N4（无锚 / 缺理由 / capability 不存在 / requirement 不存在）+ A2/A3 放行 + `--force` 一行审计；12k 的模板待填空用例 | 3.7b |
+| `dispatch#Two unfinished tasks of one change do not write the same delta file` | 4.1–4.5 | 12h（同声明拒绝、`-` 放行、缺行=全量、跨 change 不比、已结束不拦、`--force` 一行审计 + monitor 看得到） | 4.6a / 4.6b |
+| `verification#The verifier of a change is not one of its authors` | 5.1–5.4 | 12i（自验拒绝、换人放行、dropped 排除、缺信号很吵、`--force`、视图与守卫同一个谓词） | 5.5a / 5.5b |
+| `board-and-status#team change status reports a change's readiness` | 1.1–1.6 | 12e（ready/not-ready/`--json`/未知 id/只读证明）+ `task-header-model.sh` 26 例 | 1.6 |
+| `board-and-status#tasks are grouped in the digest and the panel` | 2.1–2.4 | **未做** —— 见「B2 未做」 | 无（不在包内） |
+| `board-and-status#An archive waits for every task of the change` | 6.1–6.4 | 12j（阻塞、视图与闸门同一 blocker、兄弟结束后放行、FORCED 覆盖、`change: -` 回归） | 6.4 |
+
+## tasks.md 逐条账（1.1–8.3）
+
+| 条目 | 状态 | 证据 |
+|---|---|---|
+| 1.1 严格读取器 + 头部夹具 | ✅ | `d7cf98d`；`tests/task-header-model.sh`（12e 段先跑它，26 例） |
+| 1.2 `team_change_tasks` 单趟扫描 + ready | ✅ | `d7cf98d`；12e/12h/12i/12j 共用；「不起子进程」由该夹具钉住 |
+| 1.3 `team change status` 视图 + `--json` | ✅ | `ae02866`；12e（人类视图 + `--json` 的 id/ready/tasks/deltas/blockers） |
+| 1.4 `self-verify:` 标记 + 未知 id 两种事实 | ✅ | `ae02866`；12e（标记 / 不带标记 / 「没有任务」+「没有目录」） |
+| 1.5 smoke 12e | ✅ | `3638a26`；本报告 ① 里全绿 |
+| 1.6 翻转（忽略未结束兄弟） | ✅ | `flip-p23.sh` 1.6（红:12e 变红；绿:✓ 25 条） |
+| 2.1–2.4（B2 归组） | ⛔ 未做 | 任务书明确要求留到 M48/M49/M50 之后 |
+| 3.1 规则 1 前置块（无 `--force`） | ✅ | `32a93ae`；12g G1–G3 + `--force` 用例 |
+| 3.2 畸形值 / `--print` 同样拒绝 | ✅ | `32a93ae`；12g「--print 不打印提示词」三条 |
+| 3.3 锚守卫（两种形式 + `--force` 一行审计） | ✅ | `32a93ae`；12g N1–N4、A2、A3、`--force`（12h/12i 也有覆盖用例） |
+| 3.4 拒绝前不开窗、不写板 | ✅ | `32a93ae`；12g 每条拒绝都断言 shim 0 窗 + 板行不变 |
+| 3.5 smoke 12g | ✅ | `3638a26` |
+| 3.6 `[real]` 拒绝路径 | ✅ | `3638a26`；全量门禁里 12g 的 `[real]` 三条（非 FAST） |
+| 3.7 翻转 a/b | ✅ | `flip-p23.sh` 3.7a / 3.7b |
+| 4.1 delta 目标集读取器 | ✅ | `d7cf98d`；12h 的声明用例（`-` / 缺行 / 列表） |
+| 4.2 单写者守卫 + `--force` 审计 | ✅ | `32a93ae`；12h 主用例 + `--force`「只写一行审计」 |
+| 4.3 跨 change 不比、已结束不拦 | ✅ | `32a93ae`；12h 的 beta vs alpha、done 兄弟 |
+| 4.4 smoke 12h | ✅ | `3638a26` |
+| 4.5 `[real]` `--force` 审计 + monitor | ✅ | `3638a26`；全量门禁里 12h 的 `[real]` 四条 |
+| 4.6 翻转 a/b | ✅ | `flip-p23.sh` 4.6a / 4.6b |
+| 5.1 作者集合（dropped 排除 + 缺信号） | ✅ | `d7cf98d`；12i 的 dropped / 缺 `agent:` 用例 |
+| 5.2 verify 守卫 + `--force` | ✅ | `32a93ae`；12i 主用例 + 覆盖 |
+| 5.3 视图与守卫共用一个谓词 | ✅ | `ae02866`；12i「视图同意守卫：self-verify 标记」+ 12e 的标记断言 |
+| 5.4 smoke 12i | ✅ | `3638a26` |
+| 5.5 翻转 a/b | ✅ | `flip-p23.sh` 5.5a / 5.5b |
+| 6.1 archive 路线接 readiness | ✅ | `d7cf98d`；12j 阻塞用例（错误文案里点名未结束兄弟） |
+| 6.2 覆盖开关与 `change: -` 逐字不变 | ✅ | `d7cf98d`；12j 的 FORCED 用例 + `change: -` 回归用例 |
+| 6.3 smoke 12j | ✅ | `3638a26` |
+| 6.4 翻转 | ✅ | `flip-p23.sh` 6.4 |
+| 7.1 模板头部（`anchor:`/`deltas:` + 注释语法） | ✅ | `2793458`；12k「模板含 5 个字段」+「`anchor: -` 是待填空」 |
+| 7.2 openspec 清单 9/10 + §5 归档行 | ✅ | `2793458`；12k 的 7.2 六条断言 |
+| 7.3 protocol/SKILL 的 why 与命令表 | ✅ | `2793458`；12k 的 7.3 六条断言 |
+| 7.4 AGENTS + 两个模板 | ✅ | `2793458`；12k 的 7.4 四条（含「仓库 AGENTS.md 与模板逐字一致」） |
+| 7.5 翻转 | ✅ | `flip-p23.sh` 7.5 |
+| 8.1 全量 + FAST 门禁 | ✅ | 本报告 ①② |
+| 8.2 翻转包 | ✅ | 本报告 ③（`skills/teamsmith/tests/flip-p23.sh`） |
+| 8.3 本报告 | ✅ | 覆盖表 + 翻转 + 独立包路径 + B2 说明 |
+
+## Flip evidence
+
+### (a) 九对「断掉 → 红 → 还原 → 绿」
+
+见上 ③。变异只打在 `/tmp` 的技能树副本上（真实工作树一个字节不动）；每对还断言**红侧点在了预期的断言上**，防止「随手红」冒充翻转。
+
+### (b) 本批次最重的一次红→绿：新守卫把整套门禁打红（回填夹具）
+
+B3 落地的锚守卫第一次跑全量门禁时，把**所有**用「模板默认值」派单的段落打红 —— 模板渲染的 `anchor: -` 是待填空，而 `change: -` 的 brief 现在必须有锚：
+
+```
+# 修复前（.pi/team/state/bg/p24-full-gate.log，§11b 处被后续修复取代前终止）
+== 3b · git 归 PM …      ✗ 给出了 PM 该跑的分支创建命令 / ✗ 建好分支后 dispatch 仍失败
+== 6 · dispatch          ✗ dispatch --print 失败 / ✗ 提示词声明了 agent 身份 …
+== 6g / 6j / …           ✗ 非 Pi dispatch 失败 / ✗ 派单失败 …
+== 结果 ==               累计 216 ✗（跑到 §11b）
+被拒的 brief：docs/team/tasks/T1.1-smoke-task.md（15 次）、.pi/team/state/T1.2-nonpi-brief.md、
+              .pi/team/state/T1.3-m82-brief.md（2 次）
+样例：✗ 拒绝派单：T1.1 没有 change: 行（或值是 `-`），必须声明它的锚
+      anchor: `-` 不是可识别的锚 —— 只接受 `none (infra) — <理由>`
+
+# 修复后（3dbdcbd + 2c67abd）
+== 结果 ==  ✓ 2542  ✗ 0
+smoke 全绿
+```
+
+回填的 10 个夹具点（只加一行锚/一次 sed，不改任何断言语义）：`4·task+board` 的 `$TASKFILE`、6g 的 `ATASK`、6j 的 `M82_TASK`、18b 的 P16 `T1.1`、22 的 `m93_brief` + `M93E-legacy/reverify`、29 的 `M14X`、31c 的 `M36W`、32 的 `M40W`；另加 **M9.1 的清单计数 8→10**（B7 加了两点清单，旧断言 `CHECKLIST-COUNT` 把 10 读成违规）。
+
+### (c) `tr` 吃掉多字节分隔符（自己发现并修）
+
+```
+# 修复前（手工实录 ① 的 G3 行）
+change: 有 2 行（alpha<?>beta）—— 一个任务最多属于一个 change，只留一行
+# 修复后（2c67abd）
+change: 有 2 行（alpha、beta）—— 一个任务最多属于一个 change，只留一行
+```
+
+## Independent package
+
+- 权威翻转包：`skills/teamsmith/tests/flip-p23.sh`（任务书点名要求；九对，`flip-p23.log`）。
+- 手工实录包：`docs/team/reports/P24-dev-bob/record.sh` + `logs/manual-record.log`（Acceptance ①–⑤ 的原始输出）。
+  **注意**：它从 `smoke.sh` 现抽「前导 + P24 夹具助手」，因此必须带 `TEAM_SMOKE_FAST=1 TEAM_SMOKE_NO_LOCK=1` 跑
+  ——前导里的 M23 互斥器会 `exec flock … bash smoke.sh` 把整套门禁重跑一遍（脚本里已写死这两个变量）。
+- 段落日志：`logs/gate-full.log`（全量门禁）、`logs/fast-mode-tail.log`（FAST）。
+
+## Decisions and deviations
+
+- **B2（digest 归组 `[6]` + 面板 token）按任务书未做**：M48/M49/M50 正在改 digest 读取路径与面板渲染，任务书要求留到它们落地后另派。本分支只留下 B2 需要的 read-model 导出函数（`team_change_tasks`/`team_change_ready`），没有碰 digest 的读取路径与面板渲染。
+- **跨段落夹具回填**（§(b)）：为让「锚守卫」不把别人的段落打红，10 个既有夹具点补了 `anchor: none (infra) — smoke fixture`；`smoke.sh` 只做了追加式修改（未重排任何段落，未改任何断言语义），并在 `4·task+board` 处留了「模板的 `-` 是待填空」的注释。
+- **M9.1 的 `CHECKLIST-COUNT` 8→10**：这是 B7 7.2 的必然结果（清单加了两点），旧断言把「10」当违规。翻转换成「砍掉一条 → 9」。
+- **规则实现细节（与 design 一致）**：守卫在「任务书路径检查之后、叠任务守卫之前」；`deltas:` 缺失 = 整个 change 的 delta 集，`-` = 空集；`--force` 的审计行在**派单成功后**逐条落盘，`--print` 不写 state；「判不出来」（兄弟 brief 坏 / 缺 `agent:`）一律吵但放行。
+- **多行头部的拒绝文案**用 awk 连接（`tr` 会把 `、` 截成一个字节，`2c67abd`）。
+
+## 未验证 / 风险 / 未做
+
+- **B2 未做** → `board-and-status` delta 里的「tasks are grouped in the digest and the panel」在本分支**没有实现**，`openspec/changes/change-centric-discipline` 因此不能归档（归档前必须有实现 + 独立复验）。建议按任务书在 M48/M49/M50 落地后另派一个 B2 任务。
+- 本分支基于 P24 派单时的 main；main 之后又落了 M47/M49 等提交（`git log HEAD..main` 有 5 个）。合并由 PM 做；合并后请重跑全量门禁（12b/26-28 段落与 M49 的面板改动相邻）。
+- `[real]` 子段只在全量模式跑（FAST 会跳过）；本报告 ① 的全量结果包含它们。
+- 未知 change id 的退出码是 1（requirement 只要求非 0；`team change status` 的 ready/not-ready 用 0/1，未知 id 与「没就绪」同为 1，靠文案区分）。
+
+## Suggested next steps
+
+- PM 复验：`team review P24 --strong`（重点看 §(b) 的跨段落回填与 12g/12h/12i/12j 的拒绝文案）。
+- 复验通过后本地合并（local 模式不 push）：`git -C .worktrees/dev-bob log` 的九个提交压在 `task/P24-change-apply-b1-b3-b7-b2-m48` 上。
+- B2 另派（等 M48/M49/M50 落地）：digest `[6] change 归组` + `team_panel_changes_json` 的 `tasks` token。

@@ -1,0 +1,4 @@
+- 2026-09-23T03:03:00Z · `team close P66 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：自造持锁现场 → 点名持有者 + rc=2（不再静默 1）；红侧逐字节还原旧守卫复现事故；既有 NO_LOCK/FAST/账本口径未变）
+  -   - ① 复验记录 docs/team/reviews/P66.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P66-p66（dcf3c9360）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

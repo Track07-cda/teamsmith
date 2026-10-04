@@ -1,0 +1,4 @@
+- 2026-10-03T09:16:10Z · `team close P158 --status done` · FORCED：PM 显式覆盖（理由：PM 复验（容器内独立克隆）：--select 0i = ✓26 ✗0；读码确认：不一致打印一行"本次运行无效：树在跑动中被改动（HEAD A→B / 脏文件 N→M）"并用约定退出码 4（不是 1，真红仍可区分），非 git 检出报"指纹不可用，本次不判"）
+  -   - ① 复验记录 docs/team/reviews/P158.md：不存在
+  -   - ② 分支是否已并入 main：task/P158-apply（d27cb6f69）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

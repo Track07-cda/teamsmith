@@ -1,0 +1,1 @@
+- 2026-09-22T19:06:25Z · `team board set P78 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/bottom-border-candidate-selection-proposal.md（判定 ACCEPTED）

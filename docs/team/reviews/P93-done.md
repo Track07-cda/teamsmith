@@ -1,0 +1,4 @@
+- 2026-09-23T01:20:46Z · `team close P93 --status done` · FORCED：PM 显式覆盖（理由：verify PASS（实现逐条成立、四条变异红）；F1（flip 引用错段号，源于我的合并重命名）由 PM 当场修并自验 flip 13/0）
+  -   - ① 复验记录 docs/team/reviews/P93.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P93-sender（3504656e1）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P93.md（用 ① 的 team review 生成，判定 PASS）

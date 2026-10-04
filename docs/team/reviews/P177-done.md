@@ -1,0 +1,4 @@
+- 2026-10-02T23:00:53Z · `team close P177 --status done` · FORCED：PM 显式覆盖（理由：换人复验已交付并被采纳：范围 PASS（P173 归属修正的牙齿会咬 + P176 的 §58 绿+可见跳过）；交付 FAIL 的唯一原因是已知的 §36⑧（P186 F4，P188 已修）→ PM 自跑内部树与产品树 FAST 做决定性复验；标签清单观察记为边界）
+  -   - ① 复验记录 docs/team/reviews/P177.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：分支 task/P182-verify 解析不到 commit
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P177.md（用 ① 的 team review 生成，判定 PASS）

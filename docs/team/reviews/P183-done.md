@@ -1,0 +1,4 @@
+- 2026-10-02T22:58:15Z · `team close P183 --status done` · FORCED：PM 显式覆盖（理由：独立验证 PASS 且我复核：128 条独立断言零 finding；我自己的变异（键恒常数）让 §59 rc=1；它报的唯一红是已知 P186 F4（P188 已修）。该 change 三阶段由三人完成，可归档）
+  -   - ① 复验记录 docs/team/reviews/P183.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P183-verify（9496e2132）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P183.md（用 ① 的 team review 生成，判定 PASS）

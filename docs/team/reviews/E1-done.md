@@ -1,0 +1,6 @@
+- 2026-09-15T03:55:16Z · `team board set E1 done` · FORCED：PM 显式覆盖（理由：explore 阶段的门是 PM 接受方案（DECISIONS D15）；本任务只产出探索报告、无代码与复验记录，现有证据模型（PASS 记录或分支已并入）不适用——已开 M9.2 让 done 证据识别 phase）
+  -   - ① 复验记录 docs/team/reviews/E1.md：不存在
+  -   - ② 分支是否已并入 main：task/E1-explore-spec-backfill-m6-m8-（3fbc10d3e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+- 2026-09-15T03:55:16Z · `team close E1 --status done` · FORCED：PM 显式覆盖（理由：同上（explore 阶段无代码））
+  -   - ① 复验记录 docs/team/reviews/E1.md：不存在
+  -   - ② 分支是否已并入 main：task/E1-explore-spec-backfill-m6-m8-（3fbc10d3e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）

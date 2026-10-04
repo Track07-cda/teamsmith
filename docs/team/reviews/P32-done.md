@@ -1,0 +1,3 @@
+- 2026-09-22T08:34:30Z · `team close P32 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：gap=0（45/30 实测）、标题分节线、38-f 接线 + 增量 148s<180s；delta base scenario 未丢）
+  -   - ① 复验记录 docs/team/reviews/P32.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P32-p32（769baf0dd）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）

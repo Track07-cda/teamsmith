@@ -1,0 +1,4 @@
+- 2026-10-02T15:46:05Z · `team close P169 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手复验（容器内、两个 scratch 项目）：路径穿越 id 与软链记录都被拒且邻居进程活着；pgid=0 → rc4 且真进程活着；FIFO → rc4 且 0 秒（不是 124）；自己的正规记录照常收。F3 清单 24/24 按实际勾选。它报的既有红就是 P173）
+  -   - ① 复验记录 docs/team/reviews/P169.md：不存在
+  -   - ② 分支是否已并入 main：task/P169-rework（2f6f02ce3）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

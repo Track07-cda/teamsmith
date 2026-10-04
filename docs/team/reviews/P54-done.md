@@ -1,0 +1,4 @@
+- 2026-09-22T13:15:48Z · `team close P54 --status done` · FORCED：PM 显式覆盖（理由：verify 阶段完成：三个缺陷面独立复跑全绿 + 三条变异；F1 已裁为返工尾单（P58），F2 另立任务（P57））
+  -   - ① 复验记录 docs/team/reviews/P54.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P54-ledger-and-gate-noise（736b299f6）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P54.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-23T03:03:28Z · `team close P94 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：n=0 → 不打印且 rc=0（修前 141）；n=1/3 与既有逐字一致；端到端 status rc=0；§49 进 FAST 与全量）
+  -   - ① 复验记录 docs/team/reviews/P94.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P94-scene-lines-0（0adb55dde）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

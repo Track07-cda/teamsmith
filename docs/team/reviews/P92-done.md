@@ -1,0 +1,4 @@
+- 2026-09-23T01:09:29Z · `team close P92 --status done` · FORCED：PM 显式覆盖（理由：换人重验 PASS 0 finding：五条腿 + 两条静默、两个反向腿、恒空变异让 12b-j/M16 红、轮转 marker 与 F2 重算；openspec 30/0 · FAST 2712 · 全量 3378/0）
+  -   - ① 复验记录 docs/team/reviews/P92.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P92-p92（e40ca6e69）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P92.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-22T13:52:33Z · `team close P58 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：pm 行与启动解析同源（PM 自跑夹具）+ R5 文字改正 + 防分叉断言翻转 7/4）
+  -   - ① 复验记录 docs/team/reviews/P58.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P58-f1-pm-r5（21709394b）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

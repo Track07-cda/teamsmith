@@ -1,0 +1,4 @@
+- 2026-09-29T10:19:24Z · `team close P126 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：三个档位全解析 272000（修前 :high 为空）；两个 :batch 真实 id 原样 1050000；覆盖 x/y:high=123456；夹具 ✓18 ✗0（含 ps WINDOW=272k）；两条红侧分别红在 :batch 反例与闭集断言；FAST ✓3091 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P126.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P126-09-21（919d3495c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

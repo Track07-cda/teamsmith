@@ -1,0 +1,4 @@
+- 2026-10-02T12:27:29Z · `team close P159 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复验 PASS：容器内夹具 ✓62 ✗0、闸门拒绝 pkill -f（64）、我的三条 lint 探针双向正确、段 58 ✓366 ✗0、构造性证明真身未被调用（witness 空）。残余边界（pgrep/pidof 未纳入闸门）转 P164 提案；独立验证另派换人）
+  -   - ① 复验记录 docs/team/reviews/P159.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P159-apply（b3bf41fe2）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

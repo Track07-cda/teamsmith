@@ -1,0 +1,4 @@
+- 2026-10-02T15:02:02Z · `team close P171 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：合并后在本仓库（有活的 pulse / bg.log / capacity.log）容器内跑 58 段 = ✓366 ✗0（此前 365/1，红在 capacity.log）；判据是白名单 signal-calls.log* 内容哈希 + 形状探针（防空转）+ 诱饵签名扫全树（2 处断言保留）；它的七面翻转 ✓22 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P171.md：不存在
+  -   - ② 分支是否已并入 main：task/P171-apply（931a0ca97）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

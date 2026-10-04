@@ -1,0 +1,4 @@
+- 2026-09-22T02:11:46Z · `team close M74 --status done` · FORCED：PM 显式覆盖（理由：verify 阶段 PASS：六条对抗性验证全过；PM 重跑读等价段（逐字节一致 + 3574→220ms））
+  -   - ① 复验记录 docs/team/reviews/M74.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/M74-settings-choice-editors-argv（28560b4c5）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/M74.md（用 ① 的 team review 生成，判定 PASS）

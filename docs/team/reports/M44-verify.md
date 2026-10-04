@@ -1,0 +1,181 @@
+# M44 · 门禁守卫：受版本控制的文件里不许有冲突标记
+
+agent: verify   status: done   time: 2026-09-19T18:33Z
+branch: `task/M44-m44`   PR/MR: -（local 模式，分支留在 `.worktrees/verify`）
+code commits: `3eb7927`（smoke §0d）/ `9825a99`（flip-m44）/ `e6ece3d`（protocol 一句话）/ `bf4b387`（索引侧加严）
+base: `main`（`45146e4`）+ `be0fe8c`（简报要求先落地的 M39 **(c3)** 增补；开工时已是提交，本任务没有遗留未提交内容）
+
+**一句话**：门禁新增 §0d —— `git grep` 只扫**已跟踪**文件，**工作树 + 索引两侧**的行首三件套命中就红，并逐条
+打 `文件:行号`；§0d 自带 9 条翻转自测（每一次门禁都会跑，防「判据太弱所以绿」），`flip-m44.sh` 用真事故形状
+（`git merge --squash` 冲突 + `git add -A && git commit`）证明红→绿，并用三条变异证明断言咬在判据上。其中
+「索引侧」那条是复验中**实测出来的漏报形状**（先 `add` 带标记的版本、再把工作树改回干净 → 工作树侧看不见，
+而下次提交会把标记写进历史），已加严并在门禁里钉住。
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/tests/smoke.sh` | §0d（插在静态检查族 0c 之后，539–641 行；`+110 / -0`，**只追加**，既有段落一字未动）：`CM_RE='^(<<<<<<<( |$)|={7,}$|>>>>>>>( |$))'`；`cm_hits()` = 工作树 + `--cached` 的并集（`sort -u`），两侧同排除 `:(exclude).worktrees/**` `:(exclude)**/.worktrees/**` 且同用 `-I`；命中逐条打 `文件:行号:内容`；9 条翻转自测 |
+| `skills/teamsmith/tests/flip-m44.sh` | 翻转包（259 行，新文件）：探针 = smoke 前导 + §0d（**同一份判据，不是副本**），六个现场 + 三条变异；退出码 0/1/2；只写 /tmp，不用 tmux |
+| `skills/teamsmith/references/protocol.md` | §8e「Conflict handling」runbook 里加一句（英文，`+4 / -0`）：门禁 §0d 会拦下残留标记并报 `file:line` |
+
+## Verification evidence (must have actually been run)
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict    # 进全量门禁同一条链
+✓ spec/watchdog
+Totals: 14 passed, 0 failed (14 items)
+
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null
+== 0d · 冲突标记守卫（受版本控制的文件里不许有冲突标记） ==
+  ✓ 受版本控制的文件里没有冲突标记（…/.worktrees/verify：1358 个已跟踪文件）
+  ✓ 翻转自测：干净副本无命中（正对照）
+  ✓ 翻转自测：已跟踪文件里的三件套被抓到并点名 tracked.txt:2（还没提交也算）
+  ✓ 翻转自测：标记进提交之后仍然红（事故形状）
+  ✓ 翻转自测：清干净后回到绿（同一判据红→绿都成立）
+  ✓ 翻转自测：索引里有标记（工作树已改回干净）仍然红并点名 notes2.txt:2
+  ✓ 翻转自测：未跟踪文件里的标记不算问题（只扫已跟踪）
+  ✓ 翻转自测：.worktrees/** 里的标记被排除（强制跟踪也不误伤）
+  ✓ 翻转自测：二进制文件被 -I 跳过（NUL 字节 + 标记也不误报）
+…
+== 结果 ==  ✓ 2292  ✗ 0
+smoke 全绿
+GATE_RC=0                                        # 367.6s
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1811  ✗ 0
+FAST 模式：跳过 24 个真进程段落（…）
+smoke 全绿
+FAST_RC=0                                        # 174.1s（§0d 自己那一段 ~0.27s，见下）
+
+$ bash skills/teamsmith/tests/flip-m44.sh
+== flip-m44 · 冲突标记守卫（探针 = smoke 前导 + §0d，547 行）==
+  ✓ ① 干净仓库：绿（判据不误报，也不是「总是红」）
+  ✓ ② 事故现场（merge --squash 冲突 + add -A && commit）：红，并逐条点名 notes.md:2 / :4 / :6
+  ✓ ③ 解掉冲突后再提交：回到绿（②的现场，同一判据红→绿）
+  ✓ ④ 未跟踪的临时文件里有三件套：绿（判据只扫已跟踪文件）
+  ✓ ⑤ 本 worktree（…/.worktrees/verify）：绿
+  ✓ ⑥ 索引里有三件套、工作树干净：红并点名 notes.md:2/4/6（下一次提交会写进历史，不许放行）
+  ✓ ⑦ 变异 m1（CM_RE 永不匹配）：同一个事故现场不再红 —— ② 的红来自判据本身
+  ✓ ⑧ 变异 m2（--untracked）：未跟踪文件被误报 —— ④ 的绿不是侥幸
+  ✓ ⑨ 变异 m3（去掉 --cached）：同一个索引侧现场不再红 —— ⑥ 的红来自索引侧那条路
+== 结果 ==  九条预期全部成立（红→绿 + 三条变异）
+exit=0                                           # ~2.1s
+
+$ git status --short                             # 空（工作树干净）
+$ git ls-files | wc -l ; git grep -c -I -E '^(<<<<<<<( |$)|={7,}$|>>>>>>>( |$))' -- . … | wc -l
+1358
+0                                                # 真树两侧零命中（上面 §0d 的 ✓ 不是空跑）
+$ git merge-tree --write-tree main HEAD          # 只读的合入预演：rc=0（与 main 的 45146e4 无冲突）
+d99ac88f75b34596704e0ba9038b8a87ad5e76f3
+```
+
+- Verdict: **pass**（三条验收命令都实际跑过，全绿；翻转包九条预期全部成立）
+- Notes / 明确没验的与已知边界（见下「Limits」）：
+  - 全量门禁**在最终 revision（`bf4b387`）上跑的那一次**才算数：更早一次全量跑到一半时判据被我加严，我
+    主动杀掉它、改完重跑（所以日志里没有那一跑的结论，也没有拿它当证据）。
+  - `openspec validate` 的成绩是单独重跑一次抓的尾巴：后台日志超过 log cap、头部被截断了，但门禁是同一条
+    `&&` 链（validate 不过就不会跑到 smoke）。
+  - 报告本身是最后一个提交：验收成绩是在代码 tip `bf4b387` 上跑的。报告只会影响 §0d 这一条判据（其它段落
+    扫的是 `$SKILL_DIR` 与 fixture 仓库，不看 `docs/team/reports/**`），而 §0d 在**含报告的最终树**上已单独
+    复核零命中（上面 `git grep … | wc -l` = 0），所以成绩对最终 revision 也成立。
+  - 没验的东西：合并到 `main` 之后的门禁（PM 的独立复验本来就要重跑，且合并后的树才是我这堆改动的最终形态）；
+    其它任务的行为（本任务只碰了 §0d + 一个新翻转包 + 一句文档）。
+
+## Flip evidence (required for defect-fix tasks)
+
+红 → 绿（同一现场、同一判据，现场是真 `git merge --squash` 冲突，不是手写的标记）：
+
+```
+$ git -C <accident> merge --squash task ; git -C <accident> status --porcelain
+Auto-merging notes.md
+CONFLICT (content): Merge conflict in notes.md
+Squash commit -- not updating HEAD
+Automatic merge failed; fix conflicts and then commit the result.
+UU notes.md
+$ git -C <accident> add -A && git -C <accident> commit -m "M43: squash merge（事故形状）"   # 复刻 PM 的操作
+$ TEAM_SMOKE_NO_LOCK=1 TEAM_SMOKE_MARKER_ROOT=<accident> bash <探针>
+== 0d · 冲突标记守卫（受版本控制的文件里不许有冲突标记） ==
+  ✗ 受版本控制的文件里有冲突标记（合并/解冲突后残留）—— 解掉再重跑门禁：…/accident
+     notes.md:2:<<<<<<< HEAD
+     notes.md:4:=======
+     notes.md:6:>>>>>>> task
+$ <把冲突真解掉并提交> ; TEAM_SMOKE_NO_LOCK=1 TEAM_SMOKE_MARKER_ROOT=<accident> bash <探针>
+== 0d · 冲突标记守卫（受版本控制的文件里不许有冲突标记） ==
+  ✓ 受版本控制的文件里没有冲突标记（…/accident：1 个已跟踪文件）
+== 结果 ==  ok 9  bad 0
+```
+
+破坏实现 → 守卫掉红 → 恢复（三条变异，都作用在**同一个探针**上，只改被测判据本身）：
+
+| 变异 | 改法 | 现场 | 期望 / 实测 |
+|---|---|---|---|
+| m1 | `CM_RE` 改成永不匹配 | ②事故现场 | 判定行变 ✓（不再红）—— ②的红来自判据，不是别的东西 |
+| m2 | 工作树侧那行加 `--untracked` | ④未跟踪现场 | 判定行变 ✗ 并点名 `tmp-leftover.md:2/4/6` —— 「只扫已跟踪」是活边界 |
+| m3 | 索引侧那行去掉 `--cached` | ⑥索引现场 | 判定行变 ✓（不再红）—— ⑥的红来自索引侧那条路 |
+
+复验中实测出来的漏报形状（加严的动机，`bf4b387` 之前的行为）：
+
+```
+$ # 索引 = 带标记的版本，工作树改回干净（`git status` = MM notes.md）
+$ git grep -n -I -E '<三件套>' -- .                      # 加严前的判据（只看工作树）
+(none)                                                    # ← 漏报
+$ git -c core.editor=true commit -q -m "accident via index" ; git show HEAD:notes.md | head -3
+one
+  <<<<<<< HEAD                                            # ← 引用 git 输出时缩进（否则门禁红：判据只认列 0）
+ours                                                      # 标记已经进了历史，门禁当时却是绿的
+$ git grep -n -I --cached -E '<三件套>' -- .
+notes.md:2:<<<<<<< HEAD
+notes.md:4:=======
+notes.md:6:>>>>>>> task                                   # ← 加严后的判据抓到的就是这三行
+```
+
+## Decisions and deviations
+
+1. **判据是简报口径的超集**：`^<<<<<<<( |$)` / `^={7,}$` / `^>>>>>>>( |$)`。除简报点名的「行首 `<<<<<<< `／整行
+   `=======`／行首 `>>>>>>> `」外，裸标记（行尾即 EOL）与长于 7 个 `=` 的行也算 —— git 的 marker 宽度可配
+   （`conflict-marker-size`）、两边标签可空。真树两侧当前零命中，不引入假红。
+2. **多扫了索引侧（`--cached`）**，这是简报「工作树文件」字面口径之外的一步。理由是上面那段实测：漏报的正是
+   「标记已经进历史、门禁却绿」这一类事故（本任务存在的理由）。代价：多一条 `git grep`；边界不变（同排除、
+   同 `-I`、并集去重后仍是 `文件:行号`）。冲突进行中索引没有 stage 0，`--cached` 零命中也不报错（实测），
+   那时红由工作树侧给。
+3. **段号 0d**（静态检查族，紧跟 0c）：P20 也在动 `smoke.sh`，但它的段落是面板族（26x/33）；0d 不会撞号。本
+   次对 `smoke.sh` 是**纯插入**（`+110 / -0`）。
+4. **§0d 自带翻转自测**（简报只要求绿侧 + 翻转脚本）：每套门禁都会跑这 9 条，所以「真树 ✓」永远不可能是
+   「判据空跑」。自测还钉住简报文字里没细说但写进判据的三条边界（未跟踪不算 / `.worktrees/**` 不算 / 二进制
+   不算）—— 一个会误报临时文件的守卫比没有守卫更糟。
+5. **`references/protocol.md` 的改动**：`OWNERSHIP.md` 把 `references/**` 记为 PM 所有，但简报的 Deliverable 3
+   明确把这一句话派给了本任务（先例：M43 的简报同样让 dev 改了 `references/troubleshooting.md`）。只加了一句
+   英文、没动别处；PM 若想换位置（troubleshooting.md）或换措辞，直接改即可 —— 守卫不依赖这句文档。
+6. **翻转包的探针必须先 `TEAM_SMOKE_NO_LOCK=1` 再跑**，并加 `PROBE-0D-END` 形状守卫：M23 的 flock 包装会
+   `exec … smoke.sh` 把探针换成整份门禁（`flip-m12-26c.sh` 的模板早于 M23，带着这个隐患）。拿不到形状标记
+   就 exit 2，绝不让「跑到的是整份 smoke」伪装成聚焦探针的结论。
+7. **时间开销**：§0d 整块（含它自己造的 8 次提交的临时仓库）实测 ~0.27s（探针整个进程，含 smoke 前导）。
+   FAST 这套门禁在这台机器上跑了 174s（全量 368s）—— 机器上有别的历史遗留 smoke 进程在跑，负载偏高；
+   §0d 的份额 ≤0.3s，不是这次加的段落造成的。
+
+## Limits（判据管不到的地方，写清楚而不是假装没有）
+
+- **它是网，不是锁**：不阻止 `commit`/`push`，只在**下一次门禁**上把树判红。已经推出去的树管不到。
+- **只判它跑在的那一棵树**（`git -C "$SKILL_DIR" rev-parse --show-toplevel`）：每个 worktree 各自在自己那次门禁
+  里被扫；`.worktrees/**` 是别的 agent 的工作树，按简报口径**排除**。
+- **只认文本内容**：已经进 `.git` 对象/历史的标记看不见；未跟踪（含 gitignore）文件与二进制按口径不扫。
+- **列 0 一律算**：git 写冲突标记永远在第 0 列，所以文档里**缩进或行内**引用的例子不受影响；但真在列 0 打印
+  一个裸标记（哪怕是代码块里的示例）也会红。当前真树两侧零命中。
+- **`=======`（≥7 个 `=`）整行**：合法的 markdown setext 标题下划线会长这样，当前真树没有这种行；按简报口径
+  接受这个代价（收紧成 `={7}` 也躲不开，真正的假阳风险来自「正好 7 个 `=` 的下划线」）。
+- 这条判据会咬到**引用现场输出的人**（含本报告）：初稿里把 `git show` 的 `<<<<<<< HEAD` 原样顶到列 0，
+  门禁立刻点名 `docs/team/reports/M44-verify.md:121` —— 缩进后绿。这是故意保留的取舍：报 `文件:行号` 的价值
+  大于「引用输出必须缩进」的不便。
+- 找不到受检 git 工作树时**响亮报红**（`✗ 冲突标记守卫：找不到受检的 git 工作树…`），不静默跳过。
+- 重跑本报告里的命令需要：`git`、`bash`；`openspec` 在 `~/.bun/bin`（门禁要在 PATH 前加它）。
+
+## Suggested next steps
+
+- 合入：分支干净，`git merge-tree --write-tree main HEAD` rc=0（与 main 的 `45146e4` 无冲突）；按 local 模式
+  留在 `.worktrees/verify`，等 PM 复验后本地合并。
+- 合入后请在**合并后的树**上再跑一遍两件套门禁（本报告的门禁是我这一支的 tip 上跑的）；这也是 M44 想要的效果
+  —— 以后每次合并/解冲突后的门禁都会替人看着这棵树。
+- 若 PM 认为「索引侧」这一步超出简报（Decision 2），可以只删 `cm_hits()` 里 `--cached` 那一行 —— 但请连带删掉
+  门禁里的 `notes2.txt` 自测与 flip 的 ⑥⑨，否则门禁会自己红着提醒你：漏报形状还在。
+- 无 `BLOCKED:` 项。

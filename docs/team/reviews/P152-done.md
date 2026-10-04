@@ -1,0 +1,4 @@
+- 2026-10-01T18:36:23Z · `team close P152 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被我采纳（FAIL：八条发现，逐条已修或已成任务）；证据包与可复跑对抗器在 docs/team/reports/P152-verify/**；修复后 release-check 17/17、--self-test 4/4、扫描 0 命中）
+  -   - ① 复验记录 docs/team/reviews/P152.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P152-verify（080f59cd7）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P152.md（用 ① 的 team review 生成，判定 PASS）

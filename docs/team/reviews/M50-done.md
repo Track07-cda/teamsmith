@@ -1,0 +1,3 @@
+- 2026-09-21T03:21:50Z · `team board set M50 done` · FORCED：PM 显式覆盖（理由：M50 的实现由 M50b 的分支携带并入 main（281a308）；证据 = reviews/M50b.md（本机门禁因宿主 inotify 配额耗尽改以 CI 为准：run success））
+  -   - ① 复验记录 docs/team/reviews/M50.md：不存在
+  -   - ② 分支是否已并入 main：分支 task/M50-digest-89s（d46fd4eed）已经是 main 的祖先，但它的提交里没有报告 docs/team/reports/M50-*.md（刚建出来、一个提交都没有的分支也长这样 —— 报告要提交进 git，工作区里的草稿不算）

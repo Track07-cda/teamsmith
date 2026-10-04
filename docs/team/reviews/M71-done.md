@@ -1,0 +1,3 @@
+- 2026-09-21T19:06:47Z · `team close M71 --status done` · FORCED：PM 显式覆盖（理由：PM 直接复核：boundary 目录移除、其余 7 行逐字节未动（空 diff）、validate 18/18；纯文本修订无实现面）
+  -   - ① 复验记录 docs/team/reviews/M71.md：不存在
+  -   - ② 分支是否已并入 main：task/M71-delta-boundary-tmux-gate-gra（51d6bf315）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）

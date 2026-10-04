@@ -1,0 +1,1 @@
+- 2026-09-21T11:30:27Z · `team close M58 --status done` · OK：复验记录 docs/team/reviews/M58.md（判定 PASS）

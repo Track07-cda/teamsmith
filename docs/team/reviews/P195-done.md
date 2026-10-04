@@ -1,0 +1,4 @@
+- 2026-10-03T00:58:50Z · `team close P195 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手三形状复验（容器内）：pgid=0 → list=unusable（点名规则）+ stop 同措辞拒绝；非平坦 id → unusable 点名 id 规则；实时组不符 → mismatch 点名两个组且 stop 一致。读面不再与写面矛盾）
+  -   - ① 复验记录 docs/team/reviews/P195.md：不存在
+  -   - ② 分支是否已并入 main：task/P195-rework（98ec50123）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

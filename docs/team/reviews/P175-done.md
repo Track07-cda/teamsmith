@@ -1,0 +1,4 @@
+- 2026-10-02T19:42:42Z · `team close P175 --status done` · FORCED：PM 显式覆盖（理由：换人复验已交付并被采纳：枚举项 F1/F2/F3 全 PASS（含它的 F2 红侧证明判据承重）；枚举外同族 finding F1（bg 目录软链借道）我裁为要修 → P187 返工 + delta 补 scenario，落地后再换人复验）
+  -   - ① 复验记录 docs/team/reviews/P175.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P175-verify（6a3a2f6d5）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P175.md（用 ① 的 team review 生成，判定 PASS）

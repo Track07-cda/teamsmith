@@ -1,0 +1,207 @@
+# P12 · Apply: `pulse-console` B1 —— 数据装配异步化 + 缓存化（D26 前置）
+
+agent: dev   status: DONE   time: 2026-09-16T18:46:00Z
+branch: `task/P12-apply-pulse-console-b1`   PR/MR: -（本仓库 local 模式，分支留本地）
+
+范围 = `openspec/changes/pulse-console/tasks.md` 的 **B1 全段（0.1–1.6）**。B2（compose 入口与三动作）与
+B3（三页控制台）没有碰；`[v1.1]` 列表没有碰。
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/scripts/panel/src/data.ts` | 异步核心：`spawnSync` 全部删除；每块一个子进程（`team __panel-data --block <name>`）+ 每块独立超时 + 内存缓存；`createPanelCache()`（TTL 重建、`snapshot()` 纯读缓存）；`loadPanelData()` 变成一次并行冷装配；tick（`team watch --once`）同样异步 |
+| `skills/teamsmith/scripts/panel/src/types.ts` | 块字段全部可选（缺块 = 该块降级）；`FrameInput.degraded`（块名列表，只进内存，不进 JSON） |
+| `skills/teamsmith/scripts/panel/src/layout.ts` | 坏块渲染 `—`：标题/待命/PM/待办/队列/容量/agent 表/活动/最近动作各自独立，坏一块不牵连别的块 |
+| `skills/teamsmith/scripts/panel/src/main.tsx` | 四个模式都走缓存：`--print`/`--json`/`--once` 等一次完整装配；TUI 用缓存 + TTL 重建，刷新不再阻塞输入；全部块都失败时仍然响亮失败（不假绿） |
+| `skills/teamsmith/scripts/panel/src/App.tsx` | 采纳父层异步送来的新帧（prop → state）；`reload()` 仍然同步返回当前缓存快照 |
+| `skills/teamsmith/scripts/panel/panel.js` | 重建的单文件 bundle：836 171 字节，sha256 `67564913…7b79`（README.md 同步更新大小/哈希与数据层说明） |
+| `skills/teamsmith/scripts/lib/cmd-watch.sh` | `__panel-data --block <名>` 块协议（闭集，未知块名 rc≠0）；块级降级信号（BOARD 读不了 / capacity.log 缺失 → 该块 rc≠0）；快速报告枚举（bash 内建，语义抄自 cmd-status.sh 并复用它的全部过滤）；快速待办计数接到巡检 tick 与 `pulse status` |
+| `skills/teamsmith/tests/smoke.sh` | 新增 §27（21 条断言，纯逻辑，FAST 模式照跑）；§26-a…26-n **一行未改**（`git diff`：+154 / −0） |
+| `skills/teamsmith/tests/panel-keyprobe.{sh,tsx,stub.sh}` + `panel-keyprobe-pty.py` | 1.4 的按键夹具：pty 驱动、5 秒慢读者、`m`+`hello`+Enter，逐事件日志；同一份夹具可跑旧树（红）与新树（绿） |
+| `skills/teamsmith/tests/panel-cpu.sh` | 1.5 的 CPU 夹具：私有 tmux socket 里的真 pane，60 秒采样（面板进程 + 整棵读者树） |
+| `docs/team/reports/P12-dev/evidence/**` | 原始日志：改前计时与进程计数、翻转红/绿、CPU 采样、最终门禁日志 |
+
+## Verification evidence
+
+### 0.1 改前实测（`evidence/00-before-timings.txt`，revision `06c43a2` = P11 提案 tip）
+
+```
+== time team monitor --print（观察者，不 tick）==      run1 real 7.38s user 6.55s sys 1.90s
+                                                     run2 real 7.22s user 6.37s sys 1.92s
+                                                     run3 real 7.30s user 6.40s sys 1.97s
+== time team monitor --once --print ==               run1 real 21.91s user 18.62s sys 5.65s
+                                                     run2 real 14.18s …
+== time team __panel-data ==                         real 7.09s user 6.29s sys 1.88s
+== PATH-shim 进程计数（一次装配）==                    total execs: 4736
+   2032 awk · 1188 basename · 505 grep · 311 sed · 199 head · 187 cut · 185 git · 86 tr · 16 tmux
+```
+
+按键失真夹具的红日志（`evidence/01-keyprobe-before-red.txt`，同一份夹具跑 `39180fb` 树 = P11 tip + 夹具）：
+
+```
+{"kind":"assembly","t":…,"ms":5006,"ok":true}          ← spawnSync 把事件循环堵了 5.0s
+{"kind":"input","t":…,"input":"mhello\r",…}            ← E6 §2.3 的合并形态：7 次按键变成一个事件
+TIMEOUT                                                 ← compose 从未打开，draft 空
+panel-keyprobe: RED …                                   probe rc: 2
+```
+
+### 1.1 异步核心（`spawnSync` 清零 + 每块一个子进程）
+
+```
+$ grep -n spawnSync skills/teamsmith/scripts/panel/src/data.ts     → （无输出）
+$ for b in frame pm pending outbox capacity agents recent activity; do team __panel-data --block $b; done
+  → 八块都 rc=0 + 合法 JSON；`--block nope` rc≠0（闭集）
+$ team monitor --print --width 120 --height 29        → 与改前同一帧形状（26-c/26-e 全绿）
+```
+
+### 1.2 块隔离（坏源 → 该块 `—`，其余照常，退出 0）
+
+`BOARD.md chmod 000` + 没有 `capacity.log`：
+
+```
+teamsmith pulse · repo  18:34:24  巡检 900s · 待命 off
+────────────────────────────────────────────────────────────
+ PM absent · 未在跑    待办 —    延后投递 0
+ 容量 —
+────────────────────────────────────────────────────────────
+AGENT      状态     任务    分支               会话       活动（仅本 session 在跑的窗口）
+$ echo rc=$?   → 0
+$ 块 rc：pending=1  capacity=1  pm=0  frame=0     ← 只有坏源那两块降级
+```
+
+smoke §27-b 把这四件事都钉住了（含「队列块没有被牵连」）。
+
+### 1.3 读者裁剪（一次装配的进程数与装配时间）
+
+```
+== 改前（team __panel-data）==  total execs 4736
+== 改后（同一请求）==           total execs 472      （awk 200 · tr 87 · grep 40 · head 37 · cut 25 · git 24 · tmux 20）
+== 改后（team monitor --print，8 块并行）==  total execs 541
+$ time team monitor --print                （最终 tip，3 次）   real 0.73 / 0.73 / 0.71s   user 1.31/1.29/1.23s
+$ time team monitor --once --print          （帧 + 一拍 tick，3 次）real 1.31 / 1.25 / 1.25s
+$ time team watch --once                    （2 次）             real 0.58 / 0.61s   （改前 6.3s）
+$ time team __panel-data（full，2 次）                          real 1.01 / 1.04s   （改前 7.03–7.09s）
+```
+
+成本主项是待复验报告扫描：旧路径对 177 个报告文件逐个 `basename`/`sed`/`grep`/`awk`（一次 4300+ execs、6.3s）。
+新路径把**枚举**换成 bash 内建（BOARD 一次 awk + 每个工作树一次 git），过滤仍然调用 `team_reports_pending_list
+--actionable`（看板 done/closed、草稿、复验记录一条都没复制）：
+
+```
+$ 同一夹具：canonical primary_candidates  vs  fast primary_candidates   → 逐行一致（46 行，cmp 通过）
+$           canonical team_reports_pending vs  fast                    → 0 vs 0；整条 team_pending_counts 同值
+$ 真实仓库：候选枚举 5.96s → 0.061s；pending 块整体 0.48s（TTL 10s）
+```
+
+smoke §27-c 在夹具上把「候选清单逐行一致 + 待复验数同值 + 整条待办计数同值 + 断言没跑空」全部钉住；
+夹具里 P27H 只在工作树里以继承副本（rank 2）形式存在，专门押住 rank 那一趟（见 Flip evidence）。
+
+### 1.4 按键失真夹具（翻转两侧日志）
+
+同一份夹具、同一条 pty 脚本，只换树：
+
+```
+旧树（39180fb）：{"input":"mhello\r"} 一次合并事件 → TIMEOUT → rc=2      （evidence/01-keyprobe-before-red.txt）
+新树（本分支）：  m / h / e / l / l / o / \r 七个独立事件 → SUBMITTED draft=hello → rc=0
+                  （evidence/02-keyprobe-after-green.txt）
+```
+
+### 1.5 CPU 红线（`evidence/03-cpu-after.txt`，真 pane、私有 tmux socket、refresh 3s）
+
+```
+== /usr/bin/time ==   P12CPU user=8.04 sys=2.35 elapsed=68.07
+== summary over 60s: console pane process 0.649% of one core · reader tree 15.264% of one core ==
+   t   ps_lifetime%  pane_delta%
+   5s   1.9           0.80   … 稳定段 0.2–1.4，均值 0.65
+   60s  0.8           0.40
+```
+
+**面板进程 <1%（0.649%）达标**；同时如实报出**整棵读者树 15.3%**（改前同一口径 ≈ 6.3s CPU / 5s 周期 ≈ 125%）。
+差额来自 bash 读者的既有成本（tick 每 3s 仍要起 5–6 个短命子进程，每个 ~22ms 是 `team` CLI 的启动成本），
+不是这次引入的回归；要再往下压需要「源变更探测」或常驻读者进程——那超出 B1 的授权与设计文字，交 PM 裁决
+（见「Decisions and deviations」3）。
+
+### 1.6 回归（§26-a…26-n 未改，全绿）
+
+见下方 gate 段。
+
+### 门禁（代码+测试 tip `3aa9109` 上实跑；日志 `evidence/09-gate-final-tip.txt`；其后只有本报告与证据的提交）
+
+```
+$ ~/.bun/bin/openspec validate --all --strict
+Totals: 13 passed, 0 failed (13 items)
+
+$ bash skills/teamsmith/tests/smoke.sh
+…
+== 27 · 面板异步数据层（pulse-console B1：块协议 / 块隔离 / 快速读者等价 / 装配时间） ==
+  ✓ 27-a 块协议：八个块名都是 rc=0 + 合法 JSON
+  ✓ 27-a 无同步 spawn：data.ts 里没有 spawnSync（渲染路径不再阻塞事件循环）
+  ✓ 27-b 块隔离：读不了的 BOARD 让待办块渲染 —
+  ✓ 27-b 块隔离：没有 capacity.log 让容量块渲染 —
+  ✓ 27-b 块隔离：其余块照常渲染（agent 表）
+  ✓ 27-c 快速读者：候选清单与 canonical 逐行一致（6 行）
+  ✓ 27-c 快速读者：待复验数与 canonical 同值
+  ✓ 27-c 快速读者：整条待办计数与 canonical 同值
+  ✓ 27-d 装配红线：夹具上一帧 322ms ≤ 2000ms
+== 结果 ==  ✓ 1756  ✗ 0
+smoke 全绿
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1355  ✗ 0
+FAST 模式：跳过 18 个真进程段落（…）
+smoke 全绿
+```
+
+§26-a…26-n **一行未改**（`git diff --stat`：`smoke.sh | 154 ++++++`，`0` 删除行）且全绿。
+
+## Flip evidence
+
+三处都是**真实跑过的 break → red → restore → green**（原始输出在 `evidence/06-…`、`07-…`；按键那条是跨 revision 的红/绿）：
+
+| 项 | 红（破坏实现 / 改前树） | 绿（还原 / 本分支） |
+|---|---|---|
+| 按键失真（1.4） | `39180fb` 树（P11 tip + 夹具）上跑同一夹具：`{"input":"mhello\r"}` 合并事件 → TIMEOUT → rc=2（`evidence/01-…`、`04-…`） | 七个独立事件 → `SUBMITTED draft=hello` → rc=0（`evidence/02-…`） |
+| 快速读者等价（1.3） | 快速枚举删掉 rank-2 那一趟（`for pass in 0 1 2` → `0 1`）：<br>`BAD 27-c 候选清单与 canonical 不一致` · `BAD 27-c 待复验数 期望 [4] 实际 [3]` · `BAD 27-c 整条计数 期望 [0 4 …] 实际 [0 3 …]` → `ok 18 / bad 3` | 还原后 `结果 == ok 21 / bad 0` |
+| 块隔离（1.2） | 让待办块不再把「BOARD 读不了」当降级信号（`[ "$board_ok" = "1" ]` → `true`，块 rc 恒 0）：<br>`BAD 27-b 读不了的 BOARD 让待办块渲染 —` · `BAD 27-b --block pending 对坏源返回非 0 期望 [1] 实际 [0]` → `ok 19 / bad 2` | 还原后 `结果 == ok 21 / bad 0` |
+
+## Decisions and deviations
+
+1. **快速读者放在 `cmd-watch.sh`，不改 `cmd-status.sh`/`common.sh`**：本批路径授权是
+   `scripts/panel/**` + `scripts/lib/cmd-watch.sh` + `references/config.md`。报告扫描（`team_reports_pending_list`
+   的候选枚举）住在 `cmd-status.sh`，我没有动它——`cmd-watch.sh` 里的快速版本只重写**枚举**，过滤仍然调用
+   canonical 实现。代价是两份枚举实现，因此 smoke §27-c 用「逐行 `cmp` + 计数同值 + 非空自检」押住一致性；
+   如果 PM 更愿意让 canonical 枚举本身变快（单实现、零漂移风险），给我一次 `cmd-status.sh` 的授权即可，我把它
+   搬过去并把快速版删掉。
+2. **巡检 tick 也改用快速待办计数**（`team_watch_once` / `pulse status` / `standby status`）：这是 1.3 的
+   「读者裁剪」在 tick 上的同一件事——不换，`team monitor --once --print` 仍是 7.4s（tick 里 6.3s 的报告扫描），
+   红线只测不到。数值口径与改前完全一致（§27-c 的整条计数等价断言）。这条改动落在巡检的唤醒判据路径上，
+   请 PM 复验时重点看。
+3. **1.5 的两个数**：任务书写的是「sample the console pane's process ... <1%」，面板进程 0.649% 达标；
+   整棵读者树 15.3% 我一并报出来，没有藏。若 PM 认定红线是「树」而不是「面板进程」，B1 需要追加一次设计决定
+   （源变更探测 / 常驻读者），不在本批授权内。
+4. **`capacity.log` 缺失现在 = 容量块降级**（`容量 —`），这是 tasks.md 1.2 明确要求的夹具形状；副作用是
+   全新项目在第一拍 tick 之前不再显示 RAM/swap。行为变更已进 §27-b 断言。
+5. **`--json` 的键在正常状态下与改前完全一致**（26-d/26-f 全绿）；只有块降级时该块字段才会缺失——降级状态
+   本身不进 JSON（`degraded` 只在内存的 `FrameInput` 里）。这样不违反设计 §5「`--json` 只增一次
+   `panel.refresh_s`」的承诺。
+6. **TTL 日程**：frame/pm/outbox/recent/activity 3s，capacity 5s，pending/agents 10s（贵的块慢一拍重建，
+   这是设计 §3「cached」的落点）。没有引入 `panel.conf`（那是 B2/B3）。
+7. **没有动 `references/config.md`**：本批没有新的用户可见配置项（块协议与 TTL 都是内部机制），B3 的
+   `refresh_s`/state 文件登记留在它自己的批次。
+8. 计时/CPU/§27 的日志取自实现冻结的 `f28572f`（此后只有测试脚本、报告与夹具清理两处提交，面板与 bash 读者未再变）；
+   门禁日志取自最终 tip `3aa9109`。
+9. `docs/team/reports/P12-dev/evidence/` 里的日志是原始输出（未编辑），其中 `00-before-timings.txt`
+   同时含改前与改后的两段计时（文件前缀是采集顺序，不是结论顺序）。
+
+## Suggested next steps
+
+- PM 复验点建议：① 在独立 checkout 上重跑三段门禁；② 重跑 `tests/panel-keyprobe.sh <pre-tip 树>` 与
+  `<本分支>` 两条翻转；③ 复跑 `tests/panel-cpu.sh`（60s）核对面板进程 <1%；④ 抽验 §27-c 的等价断言在
+  canonical 侧确实非空（它自带非空自检）。
+- 若接受「树 CPU」口径的追加要求，请另开一个 change（源变更探测/常驻读者），不要在 B2/B3 里夹带。
+- B2 开工前请确认：compose 的暂停刷新语义要建立在 `createPanelCache` 的 TTL 之上（B1 已给出
+  `degraded`/缓存失效的接口位置）。
+- 另一条与本任务无关的观察（未动）：`pgrep -af fake-tui.py` 仍有 5 个 1 天以上的残留夹具进程
+  （pid 253358 / 328915 是 P6 thread 点名的那对，另有 65534 / 1556076 / 3433937）。我这次的夹具
+  两轮下来零残留（私有 tmux socket 已随夹具删除），但这几个不是我起的，没动它们。

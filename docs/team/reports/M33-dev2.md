@@ -1,0 +1,226 @@
+# M33 · 调查：smoke 运行中 `$TMP` 写入瞬时 ENOENT（bg6 的 50 红）+ `$TMP` 存活性哨兵
+
+agent: dev2   status: DONE（待 PM 复验）   time: 2026-09-18T15:35Z
+branch: `task/M33-smoke-tmp-enoent-bg6-50`（local 模式：不 push，分支留在 `.worktrees/dev2`）
+change: -（规格无变更；只动门禁与测试）
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/tests/smoke.sh` | ① `$TMP` 存活性哨兵：金丝雀 `$TMP/.smoke-alive` + 0.2s 后台哨兵 + `$TMP` 之外的诊断文件；② 段落边界 / 每条红 / 26-j 首尾 / 结果行前都过哨兵 —— 丢了就**一条点名红 + 立刻停跑**（exit 2，保留现场）；③ 哨兵用双重 fork（不进作业表）：12b-i 的裸 `wait` 不会把它等成挂死；④ 12b-i 的裸 `wait` 收窄成等两个具体 pid；⑤ 0 段加守门断言「哨兵活着但不在作业表里」；⑥ 干净跑收掉哨兵的兄弟文件（只有出过事才留证据） |
+| `skills/teamsmith/tests/flip-m33.sh` | 翻转夹具：外部「收割机」等本轮场景 + 26-i 锚点（bg6 的窗口）后删/移走 `$TMP`；带哨兵 → 1 条点名红 + 停跑；pre-change（git 上最近一版**不含哨兵**的 `smoke.sh`）→ 57 条红、不点名、门禁照旧跑完。支持 `--reap-via mv|rm`、`--reap loop`、`--pre-skill`、`--expect`、`--break-sentinel` |
+| `docs/team/reports/M33-dev2.md` | 本报告（调查报告 + 证据） |
+
+产品代码（`scripts/**`、`extension/**`、`references/**`）**一个字节都没动** —— 根因不在那里（见 §1.2）。
+提交序列：`37f16c2`（哨兵本体）→ `2ea592e`（不进作业表 + 12b-i 的裸 wait + 0 段守门断言）→ `b3754bb`/`dc00ea6`/`ea908de`
+（翻转夹具 + 自身清理 + `--break-sentinel`）→ `db65ee4`（干净跑收哨兵的兄弟文件）→ `aee1c48`（本报告）。
+门禁与翻转证据跑的 `smoke.sh`/`flip-m33.sh` 就是分支 tip 上的这两个文件（本报告之后没有再改 `smoke.sh`）。
+
+## §1 调查：`$TMP` 中途消失的机制
+
+### 1.1 先说证据状况（bg6 的完整日志没有了）
+
+brief 里写的「日志全文已存证：`docs/team/tasks/M33-evidence-bg6.log`」那份**只有 review 包装器的 7 行**，
+不是门禁全文：
+
+```
+$ wc -l docs/team/tasks/M33-evidence-bg6.log && cat docs/team/tasks/M33-evidence-bg6.log
+7 docs/team/tasks/M33-evidence-bg6.log
+✓ review checkout: /tmp/review-P18 @ 6b54bdb7f（分支 task/P18-apply-console-board-page-mar，干净）
+✓ 已摘录 agent 报告：docs/team/reports/P18-dev3.md
+跑门禁：openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh（硬超时 1800s；可调 TEAM_REVIEW_TIMEOUT）
+✓ 门禁输出：docs/team/reviews/P18-verify.log（FAIL，446s）
+! 强复验证据不完整：看复验记录里的结构化清单（缺什么、在哪一行看到的）
+✓ 复验记录：docs/team/reviews/P18.md（FAIL）
+EXIT=1
+```
+
+门禁全文写在 `docs/team/reviews/P18-verify.log`，而**同 ID 的串行复跑（14:29，PASS）把同一路径覆盖了**：
+
+```
+$ git show f6f2b9d:docs/team/reviews/P18.md | sed -n '179p'    # 提交在案的那次 FAIL（13:17，446s）
+== 结果 ==  ✓ 1945  ✗ 50
+$ grep -a '结果 ==' docs/team/reviews/P18-verify.log | tail -1  # 现在这份是 14:29 的 PASS 复跑
+== 结果 ==  ✓ 1994  ✗ 0
+```
+
+bg6 那份 50 红的**全文**在磁盘上（/tmp 与仓库都搜过：`grep -rl 'p10-noqueue' /tmp /run/host/tmp`、
+`grep -rl 'teamsmith-smoke.EloKhO' .`）已经不存在。**影响**：brief 清单第 1 条（「全文过一遍 bg6 日志，
+定位第一条失败断言与上一条成功断言之间的窗口」）没法照做。我改成两件事：
+① 用**可证明的源码与行为证据**把「谁不可能删」逐个排除；② 用翻转夹具在**同一个窗口**（26-i→26-j）
+从外部复现这次删除，量出它的形状（57–65 条红）。这条「FAIL 日志被同 ID 复跑覆盖」本身是账本问题
+（建议见 §5）。
+
+能从源码里重建的窗口信息（另一个版本的行号对不上就是证据）：P18 分支那棵树的
+`p10-noqueue.json` 重定向在第 **7069** 行（我这棵树在 7387 行），而 26-j 的夹具写在 7047–7060、
+队列读取在 7061——这些**只有 `$TMP` 还在才可能成功**。所以删除落在「队列读完 → noqueue 重定向」之间，
+也就是 `rm -rf "$P10_OBOX"`（`$TMP/p10-repo/.pi/team/state/outbox`，不是 `$TMP` 本体）与
+`p10m … >"$TMP/p10-noqueue.json"` 之间的那一小段。
+
+### 1.2 内部路径逐个排除（`$TMP` 不是 smoke 自己删的）
+
+```sh
+$ grep -n 'rm -rf' skills/teamsmith/tests/smoke.sh | head -3      # 删 $TMP 本体的只有 cleanup()
+239:    rm -rf "$TMP"
+$ grep -n 'trap ' skills/teamsmith/tests/smoke.sh | head -3        # 全脚本只有一个 trap
+242:trap cleanup EXIT
+$ grep -rn 'rm -rf' skills/teamsmith/scripts/ | wc -l              # 产品代码：一个 rm -rf 都没有
+0
+$ git log --all --oneline -S 'rm -rf /tmp/teamsmith' -- skills/teamsmith/tests/smoke.sh
+（空：历史里从来没有按前缀收割 /tmp/teamsmith-smoke.* 的写法）
+```
+
+- `cleanup()` 是**主 shell 的 EXIT trap**；bash 的 EXIT trap 不会在 subshell / 命令替换里触发（实测）：
+  `bash -c 'trap "echo X" EXIT; ( echo sub )'` 只打印一次 X（`pid=3374220`）。
+- 而 bg6 那轮**跑到了结尾**（结果行 `✓ 1945 ✗ 50` 打出来了），26-k 之后就又绿了 —— 主 shell 一路活着，
+  `cleanup()` 没在途中跑过。
+- 产品侧也不删目录：`rm -rf` 零命中；只有 `rm -f` 单文件、`rmdir` 清 claim/lock 目录、
+  `find -type d -exec rmdir`；扩展里是 `rmSync(file, {force:true})`（非递归）。26-j 夹具自己的
+  `rm -rf "$P10_OBOX"` 目标是 `$TMP/p10-repo/.pi/team/state/outbox`，解析不到 `$TMP` 本体。
+
+**结论：删除发生在 smoke 进程树之外**（同机并发 / 外部清理）。这台机器确实多项目共用：
+`ps` 里能看到 <erp-project> / <frontend-project> / <cep-project> / <crm-project> 的 teamsmith 面板与 pm 会话在同跑。
+
+### 1.3 「谁删的」：现有证据不够点名（不猜）
+
+失败时刻只能定到秒级窗口（26-j），删除者**已经不在现场**，没有任何日志能指向它。所以本任务**不写「是谁」**，
+而是把「下一次再发生」变成有证据的事件：哨兵在 0.2s 内记下时刻、新旧 inode、cwd 还指着那个目录的进程
+（谁在里面 / 谁刚删完还站着）、当时的整个 `ps` 快照，全部落在 `$TMP` **之外**（删 `$TMP` 带不走，见 §3 的
+诊断样例）。
+
+### 1.4 复现记录（brief 清单第 4 条）
+
+- **不能复现的**：同 tip 串行复跑（PM 已做，PASS）；本任务前后跑了 6 轮全量/FAST 门禁（§2 与 §3 里的每一轮），
+  再没有出现过一次「途中消失」。
+- **能复现的是形状**：在**同一窗口**从外部把场景目录移走/删掉，旧版门禁给出 **57–65 条红、不点名、
+  还跑到结果行**（`rc=1 … 到结果行 1`）——与 bg6 的「半红半绿」完全相同，说明「一次外部删除」足以解释
+  全部现象。翻转夹具把这件事做成可重跑的（§3）。
+
+## §2 验收（在最终树 `db65ee4` 上实跑）
+
+```sh
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null
+- Validating...
+✓ spec/agent-adapters
+✓ spec/board-and-status
+✓ spec/boundary
+✓ change/console-board-page
+✓ spec/delivery-guard
+✓ spec/dispatch
+✓ spec/init-skill
+✓ spec/meeting
+✓ spec/memory-and-deps
+✓ spec/notify-and-inbox
+✓ spec/panel
+✓ spec/pm-lifecycle
+✓ spec/verification
+✓ spec/watchdog
+…
+== 结果 ==  ✓ 2079  ✗ 0
+smoke 全绿
+EXIT=0
+```
+
+```sh
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+…
+== 结果 ==  ✓ 1646  ✗ 0
+FAST 模式：跳过 20 个真进程段落（1c·M11 真沙盒窗口|6·dispatch 真拉起|…|31b·容器 tmux 自检（podman））
+smoke 全绿
+EXIT=0
+```
+
+- Verdict: **pass**（两条都 `smoke 全绿`、exit 0）。三条命令（全量 + FAST + 翻转夹具）一次作业共 1054.6s。
+- 哨兵自身开销：30s 只花 3 ticks CPU（≈0.10% 单核，实测）；轮询 0.2s 且不 fork（判据只用 bash 内建 `[ -e ]`）；
+  干净跑不在 /tmp 留文件（§4.3）。
+- Notes: 附加变体：`--reap-via rm`（撕裂）与 `--break-sentinel`（反向）已在 §3 跑过并列出；
+  `--reap loop`（连删）本任务**没跑** —— 它不是 brief 的验收线，需要时可以再跑（约 2.5 分钟一轮）。
+  本任务也没有再复现出真实事故（§1.4）：验的是防线，不是「事故必现」。
+
+## §3 Flip evidence（翻转：`$TMP` 中途消失 → 一条点名红，而不是一堆级联红）
+
+主翻转 —— 同一棵树，**只差哨兵**（右侧用 git 上最近一版不含哨兵的 `smoke.sh`）：
+`bash skills/teamsmith/tests/flip-m33.sh`（默认 `reap=once/mv`：外部收割机等 26-i 锚点后把场景目录移走）
+
+```
+== 跑 sentinel（skill=…/dev2/skills/teamsmith；reap=once/mv；期望=sentinel） ==
+  rc=2 · 红行 1 条 · 哨兵点名 1 条 · 到结果行 0 · 全绿 0 · 26-k 之后仍绿 0 条
+  ok sentinel：期望成立
+pre 树：/tmp/teamsmith-flip-m33.m6U7NX/pre/skills-teamsmith（git 上最近一版不含哨兵的 smoke.sh，f6f2b9dd9）
+
+== 跑 pre-change（skill=/tmp/…/pre/skills-teamsmith；reap=once/mv；期望=unnamed） ==
+  rc=1 · 红行 57 条 · 哨兵点名 0 条 · 到结果行 1 · 全绿 0 · 26-k 之后仍绿 0 条
+  ok pre-change：期望成立
+
+flip-m33：证据成立（哨兵把「$TMP 中途消失」变成一条点名红 + 停跑）
+```
+
+附加形状（同一夹具的另外两个变体，同样跑在最终树 `db65ee4` 上）：
+
+```
+$ bash skills/teamsmith/tests/flip-m33.sh --no-pre --reap-via rm     # 撕裂删除：rm -rf 删到一半
+  rc=2 · 红行 1 条 · 哨兵点名 1 条 · 到结果行 0 · 全绿 0 · 26-k 之后仍绿 0 条
+  ok sentinel：期望成立
+  # 这一档的判据是「1–5 条红」（删到一半时下游可能先冒 1 条 TMP 起因的红，哨兵 0.2s 内接手）；
+  # 实测两次：本次 1 条（rm 跑得快）、上一轮 2 条（先冒了一条「26-i 净化…可见字符丢了」）
+
+$ bash skills/teamsmith/tests/flip-m33.sh --break-sentinel           # 反向：把哨兵弄瞎（tmp_alive 恒真）
+== 破坏实现：把哨兵弄瞎（tmp_alive 恒真）→ sentinel 期望必须不成立 ==
+  rc=1 · 红行 65 条 · 哨兵点名 0 条 · 到结果行 1 · 全绿 0 · 26-k 之后仍绿 0 条
+  ok 破坏实现后 sentinel 期望不成立（守门期望打得到病根）
+```
+
+一句话：**带哨兵 1 条红 + 停跑（exit 2）+ 留诊断；不带哨兵 57/65 条红 + 不点名 + 门禁照旧跑完；
+把哨兵弄瞎就退回后者 —— 这条期望不是空转的。**
+
+诊断文件长这样（撕裂那次，删到一半的现场；`$TMP` 之外的独立文件）：
+
+```
+== 2026-09-18T14:47:50+00:00 · $TMP 中途消失 · 断言失败：26-j 队列：queued=3 / held=1（python: json.decoder.JSONDecodeError …） ==
+期望：/tmp/teamsmith-smoke.JYQix6（判据文件 /tmp/teamsmith-smoke.JYQix6/.smoke-alive）
+现在：exists=yes dev:ino=29:10465479          # 目录被重建过：存在，但判据文件没了
+smoke：pid=3917203 · 最后经过的段落：26 · 面板（…） · 哨兵 pid=3917230
+M23 锁：（无）（holder=）
+-- cwd 还指着它的进程（正在里面干活的 / 刚删完还没走远的）--
+pid=3917203 cwd=/tmp/teamsmith-smoke.JYQix6/repo (deleted) cmd=bash …/tests/smoke.sh
+pid=3942544 cwd=/tmp/teamsmith-smoke.JYQix6/repo (deleted) cmd=sleep 300
+-- ps 快照（按启动时间；最后 40 行 = 最近起来的）--
+（80 行进程快照）
+== 2026-09-18T14:47:50+00:00 · $TMP 中途消失 · 后台哨兵（0.2s 轮询）第一次发现 ==
+…
+```
+
+## §4 决定与偏离
+
+1. **清单第 1 条没照做**（bg6 全文日志不存在，见 §1.1）：改成源码/行为证据排除 + 同窗口形状复现。
+   这不是「跳过」，是证据状况变了；把「FAIL 日志被同 ID 复跑覆盖」当发现报出来（§5 第 1 条）。
+2. **多修了一处门禁自身的潜在挂死点**：12b-i 用裸 `wait` 等两个并发排水。哨兵一进来它就会等到哨兵退出
+   （哨兵只在 cleanup 退）→ 实测挂死在 12b-i（第一次 flip 跑到 12b-e 就不动了）。修法：哨兵双重 fork
+   （不进作业表），并把那处裸 `wait` 收窄成等两个具体 pid（这处写法本来就脆）。0 段加了守门断言，
+   翻转：把启动行改回 `smoke_tmp_tripwire &` → 那条红。
+3. **诊断落在 `$TMP` 之外，且以点开头**（`/tmp/.teamsmith-smoke-diag.<pid>.log`）：`rm -rf "$TMP"` 带不走它；
+   前缀 glob（`/tmp/teamsmith-smoke*`）也匹配不到点开头的名字。干净跑收掉兄弟文件（`.stop/.stop-ack/
+   .tripwire.pid`；实测一开始每跑一次门禁在 /tmp 留 3 个文件，`db65ee4` 修掉），出过事才留（含 `--keep`）。
+4. **只在 tests/ 与本报告动刀**（brief 边界）：`scripts/**` 未动；§5 的两条建议只报不改。
+5. 本任务自己踩到的两个「假绿陷阱」，都写进夹具注释（免得下次再犯）：
+   - `set -o pipefail` 下 `git show … | grep -q …` **取反**会把「带哨兵」的版本当成「不含哨兵」
+     （grep -q 命中即退 → git 吃 SIGPIPE → 管道非 0 → 取反为真）：flip 夹具第一版就这么自己骗自己，
+     表现是 pre 侧被 SKIP（不是假绿，但也没跑成）。改成先落盘再 `grep`。
+   - `local name="$1" … log="$SB/$name.log"` 写在同一行：local 的实参在 builtin 执行前就展开，
+     `set -u` 下直接 `name: unbound variable`。拆成两行。
+6. 26-j 的显式哨兵断言是 brief 点名要的（开头/结尾各一条 ✓，活着时进证据）；另外三条挂点
+   （段落边界 / 每条红 / 结果行）是我加的，理由：只靠 26-j 首尾挡不住「段落中间丢、又被 mkdir -p 建回来」
+   这种形状（bg6 就是这样）。
+
+## §5 建议下一步（给 PM；含 BLOCKED 类）
+
+- **账本口径（建议，需你决定）**：`docs/team/reviews/<ID>-verify.log` 会被同 ID 的后来复跑覆盖 ——
+  bg6 的 50 红全文就是这么丢的。建议 review 包装器在**覆盖前**把非空的旧日志挪成
+  `<ID>-verify.<时间戳>.log`（或在旧日志首行是 FAIL 时拒绝覆盖）。这属于 `scripts/**`，我没有动。
+  `BLOCKED:`（若要落地）请 PM 在 `scripts/lib/cmd-review.sh` 里改，或派单给 agent。
+- **跨项目嫌疑（只报，不越界）**：这台机器上别的项目的 teamsmith 也在跑（§1.2）。若哨兵下一次点名出
+  外部进程，PM 可以用 `team meeting`（PM 对 PM）问一句对方是否在按前缀清 `/tmp`；我不会去碰别的项目。
+- **遗留现场（顺手报，不越界）**：`ps` 里有两个孤儿 smoke 锚点 session
+  （`teamsmith-smoke-anchor-483109` / `-1995236`，ppid=1，私有 socket）和一个 01:26 起的真 `pi` 会话
+  （`/tmp/m24-dbg.Y4TX6o`）——都是更早的任务留下的，本次没动它们。

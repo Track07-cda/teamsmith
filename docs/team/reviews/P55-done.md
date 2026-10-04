@@ -1,0 +1,4 @@
+- 2026-09-22T16:49:45Z · `team close P55 --status done` · FORCED：PM 显式覆盖（理由：squash 合并进 main（0b2d9473）；PM 复验 docs/team/reviews/P55.md：翻转夹具 green 腿 + 三条变异腿各在锚点红；合并后全量门禁 ✓2991 ✗1（唯一红=P61 的 F3，已开 P64））
+  -   - ① 复验记录 docs/team/reviews/P55.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P55-agent-pane-survivability-app（7b0a46f4b）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

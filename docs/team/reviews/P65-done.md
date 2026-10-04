@@ -1,0 +1,8 @@
+- 2026-09-22T17:42:34Z · `team close P65 --status done` · FORCED：PM 显式覆盖（理由：verify PASS：六条对抗判据 + 199 断言 + 六条变异；F1 另开小任务、F2 已由 P64 修、F3=P73）
+  -   - ① 复验记录 docs/team/reviews/P65.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P65-agent-pane（f63953b13）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P65.md（用 ① 的 team review 生成，判定 PASS）
+- 2026-09-22T17:42:42Z · `team close P65 --status done` · FORCED：PM 显式覆盖（理由：verify PASS：六条对抗判据 + 199 断言 + 六条变异；F1 另开小任务、F2 已由 P64 修、F3=P73）
+  -   - ① 复验记录 docs/team/reviews/P65.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P65-agent-pane（f63953b13）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P65.md（用 ① 的 team review 生成，判定 PASS）

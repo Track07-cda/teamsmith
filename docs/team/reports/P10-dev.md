@@ -1,0 +1,366 @@
+# P10 · Apply: `pulse-tui-panel`（Ink 面板重写：行为与测试）
+
+agent: dev   status: DONE   time: 2026-09-16T13:48:00Z
+branch: `task/P10-apply-pulse-tui-panel-ink`   PR/MR: -（本仓库 local 模式，分支留本地）
+
+> ⚠ **一条已复现的 finding（详见「长跑采样」，不在本任务范围内）**：Ink 7.1.1 + React 19 的
+> `rerender()` 每次渲染留下 ~20–110 KB 可达内存（最小复现 + 64 MB 堆上限下 OOM），只有 TUI 侧受影响；
+> 面板的对外契约全部成立，但 24/7 的窗口会缓慢变胖，需要 PM 决定后续（版本/自重启/上游报告）。
+
+对照 `openspec/changes/pulse-tui-panel/tasks.md`：A1（行为与测试）全部完成；A2（文档与发布）中
+`references/config.md` / `references/troubleshooting.md` §16 / `references/workflows.md` / `scripts/panel/README.md`
+与 `team help` 已完成，**`SKILL.md` 命令表与 CHANGELOG/TEAM_VERSION 交回 PM**（见「边界与交回」）。
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/scripts/panel/src/**.ts{x}` | 新前端：CLI（`main.tsx`）、Ink 应用（`App.tsx`）、纯布局（`layout.ts`）、宽度表（`width.ts`）、净化（`sanitize.ts`）、格式化（`format.ts`）、bash 数据适配（`data.ts`）、类型（`types.ts`） |
+| `skills/teamsmith/scripts/panel/panel.js` | **提交进仓库的单文件 bundle**：832 541 字节，sha256 `5977a3f3…6310`（`README.md` 记了大小与哈希） |
+| `skills/teamsmith/scripts/panel/{package.json,bun.lock,build.sh,tsconfig.json,README.md,.gitignore}` | 钉住的构建依赖（ink 7.1.1 / react 19.3.0 / react-devtools-core 8.0.0）、唯一构建命令、重建说明 |
+| `skills/teamsmith/scripts/lib/cmd-watch.sh` | `team_cmd_monitor` 重写（四模式 + `--width/--height` + tick 归属）；新增 `team_panel_json` / `team_panel_activity_json` / `team_cmd_panel_data` / `team_panel_text` 与净化辅助；`team_pulse_tmux_up` 无运行时时拒绝建窗 |
+| `skills/teamsmith/scripts/lib/common.sh` | `team_js_runner` 改为解析**绝对路径**；新增 `team_js_check` / `team_require_js_runtime` / `team_js_version`；`team_paths_json` 增 `js_runner` / `require_js`；默认值 `TEAM_MONITOR_ACTIVITY=1`、`TEAM_MONITOR_UI=auto`、`TEAM_JS_BIN`、`TEAM_REQUIRE_JS=1` |
+| `skills/teamsmith/scripts/lib/cmd-project.sh` | `team doctor` 新增 JS 运行时行（路径/版本证据 + 修法 + `TEAM_REQUIRE_JS=0` 降级）；`team help` 的 monitor 行补 `--print/--json/--width/--height` |
+| `skills/teamsmith/scripts/lib/cmd-status.sh` | `team_panel` 改为委托新文本渲染（不再有第二份面板实现） |
+| `skills/teamsmith/scripts/team` | 新增内部子命令 `__panel-data`（panel.js 的数据源，不进命令面） |
+| `skills/teamsmith/tests/smoke.sh` | 新增 §26（135 条断言，含 26-m 真 pane）；迁移 §6g / §11b / §25 的旧面板文案断言；§25 的漂移判据改为「tick 是新进程」；§26-a 的重建检查改到沙盒副本里做（不再改工作树，装不上依赖时显式 SKIP 而不是假绿） |
+| `skills/teamsmith/references/{config.md,troubleshooting.md,workflows.md}` | 四个 `TEAM_MONITOR_*` + `TEAM_JS_BIN`/`TEAM_REQUIRE_JS` 默认值、四个旗标；§16 面板故障段；workflows 的旧默认值描述与样例帧 |
+| `docs/team/reports/P10-dev/**` | 本报告 + 证据：`before.sh`/`before-measure.log`（翻转红）、`after-measure.log`（翻转绿）、`rebuild.log`（网络重建）、`flip.sh`/`flip.log`（破坏→红→还原→绿）、`requirement-map.md`（E2）、`long-run.sh` + `longrun-run{1..4}*.log`（四次长跑）、`mem-bisect.sh` + `bisect-*.log`（渲染器归因实验） |
+
+## 逐项完成证据（tasks.md A1）
+
+### 0. 翻转前基线（E1）
+
+`docs/team/reports/P10-dev/before-measure.log`（在 P9 提案 revision `12ff933` 上跑 `before.sh`，沙盒仓库）：
+
+```
+== 0.1-a: team monitor --once > out.txt ==   rc=0  esc_bytes=3
+   first_bytes: 1b5b481b5b4a1b5b334a7465616d736d697468206d6f6e69746f7220…   # ESC[H ESC[2J ESC[3J
+== 0.1-b: team monitor --print ==            rc=2 … ✗ monitor: 未知参数 --print
+== 0.1-c: team monitor --json ==             rc=2 … ✗ monitor: 未知参数 --json
+== 0.1-d: team doctor ==                     rc=1（只有 `notify 扩展 ✓ 存在（本机无 node/bun/tsx 可预检）`，无 JS 运行时行）
+== 0.1-e: team paths ==                      (no js_runner/require_js keys)
+```
+
+分支上同一条脚本重跑（`after-measure.log`）：`esc_bytes=0`、`--print`/`--json` rc=0、doctor 第 18 行
+`JS 运行时 node/bun ✓ <home>/.local/bin/node (v24.19.0)`、paths 带 `"js_runner": "/…/node"` 与
+`"require_js": "1"`；`--once` 的 tick 副作用（capacity.log/watchdog.tick.log/…）与旧版**一致**。
+
+### 1. bundle 与构建
+
+```
+$ bash skills/teamsmith/scripts/panel/build.sh
+panel.js written (832541 bytes, sha256 5977a3f3791da60d7889cca2bfb6d31128bdb5c2b7c3d0cd705b971b67d33710)
+$ node skills/teamsmith/scripts/panel/panel.js --version
+teamsmith panel 1.0.0 · ink 7.1.1 · react 19.3.0
+built by: bun install --frozen-lockfile && bash skills/teamsmith/scripts/panel/build.sh
+$ head -4 panel.js
+// teamsmith pulse panel — generated bundle; do not edit by hand
+// built from src/*.tsx by: bun install --frozen-lockfile && bash …/build.sh
+// pinned: ink 7.1.1 · react 19.3.0 · runtime floor: node >=20 | bun >=1.3
+```
+
+**可复现构建（两次构建哈希一致）**——`rebuild.log`：把 `scripts/panel/` 拷到 scratch checkout（删掉
+`node_modules`），`bun install --frozen-lockfile` 后重建，再与已提交的 bundle `cmp`：
+
+```
+$ bun install --frozen-lockfile      # 45 packages installed
+$ bash build.sh
+panel.js written (831704 bytes …, 那是当次 revision 的产物)
+$ cmp <已提交的 panel.js> panel.js → cmp: identical
+```
+
+同一件事在**当前提交的产物**上由 smoke §26-a 每跑一次门禁重做一次（本机有 bun 时）：重建 →
+`cmp` 逐字节一致（当前 832 541 字节 / sha256 `5977a3f3…6310`）。两次证据都是「重建与提交同字节」；
+`rebuild.log` 里的大小不同只是因为那一次记录的 revision 比终稿早两个提交。
+
+「干净 checkout 无安装直跑」由 smoke §26-a 钉住：把 `scripts/` 拷到仓库外、删掉 `node_modules`、
+`env -u NODE_PATH` 直跑 `panel.js --once --print --root <fixture>` → 退出 0 且打出第一带。
+
+### 2. 模式、渲染器选择与数据路径
+
+- `--print`：一帧纯文本，0 个 ESC 字节，退出 0，**不写 state、不 tick**（§26-b / §26-c / §26-n）。
+- `--json`：`{"panel": …, "activity": …}`；`activity` 的键与同一夹具下 `monitor.mjs --json` **逐键相同**（§26-d）。
+- `--once`：按同一套渲染器选择出一帧，且在渲染**之后**跑到期的那一拍（§26-n：capacity.log 恰好 1 行；
+  `--no-pulse` 一行不加）。重定向的 `--once` 与 `--print` 只差时间戳与实时容量（§26-c）。
+- `--width/--height`：布局契约可在无终端时检查（§26-e）。
+- 数据层：`git diff --stat` 不含 `scripts/monitor.mjs`（本次一行未动），§6g 的 ~25 条 `monitor.mjs --json`
+  断言原样全绿。
+
+### 3. 布局、降级、字段
+
+`--print --width 120` 三种高度：29（预留带在、容量独占一行）、16（无预留带、容量独占一行）、
+10（无预留带、容量折进 PM 行且同行）——§26-e。状态带字段（PM 闭集词表、待办 1/2/1/4、延后投递、容量
+采样与 spark、**无 zram**、待命 `{on,reason}`）——§26-f。agent 表（真实分支名 / `dirty=true` / `ahead=3` /
+`session_tokens>0` / `elapsed` 只在 JSON / 停了的 agent 仍点名任务）——§26-g。
+
+### 4. 显示安全
+
+- 敌意日志（OSC 52 + `ESC[2J`）：`--print`/`--json` 均 0 个 ESC 字节，`safe`/`MORE`/`END` 全保留（不在控制
+  字符处截断）——§26-i。
+- 面板**自己**读的字符串：任务 id 里的 C1（U+009B）/双向（U+202E）/零宽（U+200B）——bash 传输层拦不住
+  （它们是合法 UTF-8，不是控制字节），只有面板自己的 `sanitizeDeep` 能剥；断言用 `grep -P` 查码点——
+  §26-i。分支名的敌意序列见下「已知限制」。
+- TUI 帧 0 ESC：§26-m 的真 pane capture。
+
+### 5. tick 归属
+
+面板进程 = 巡检循环（`main.tsx` 持有刷新与 tick；`team_cmd_monitor` 用 `exec` 让窗口进程**就是** panel.js）：
+`--no-pulse` 两个周期不写 capacity.log、pane 还在渲染；默认运行按周期留行且 tick 日志裁到 200 行内；
+smoke session 的窗口数不变、夹具 session 收干净——§26-m（真 pane）。headless 一半见 §26-n。
+
+### 6. 运行时失败
+
+影子 PATH（去掉 node/bun/tsx/npx/corepack/deno，保留其余工具 + 假 openspec）：`doctor` 失败并点名
+node/bun/`TEAM_JS_BIN`/`TEAM_REQUIRE_JS=0`；`TEAM_REQUIRE_JS=0` → exit 0 且说「已降级」；
+`TEAM_JS_BIN=/nonexistent` 点名路径；`v18.0.0` shim 点名 `18` 与最低 `20`；`team monitor --once`/`--print`
+非 0、不打印面板标题、`TEAM_REQUIRE_JS=0` 不能让它复活；`team paths` 的 `js_runner`/`require_js`；
+真 pane 里 `team pulse up` 拒绝且不留 pulse 窗口——§26-k / §26-m。
+
+### 7. 队列字段（只读）
+
+`queued=3`/`held=1`/`oldest_age_s` 与最老条目名一致（±2s）；`--print`/`--json`/`--once` 三种模式跑完
+条目哈希不变、无新文件、`forced.log`/`HOLDING.log` 不增长；没有 `outbox/` 时报 0 且**不创建**——§26-j。
+
+### 8. 测试、隔离与门禁
+
+见「门禁」与「隔离」两节。§26-l 的文档契约断言同时钉住 `config.md` 的活动列默认值 `1`。
+
+### 9. 长跑采样（`[real]`）
+
+`long-run.sh`：私有 tmux server（`-L`）+ 沙盒仓库，TUI 跑 `TEAM_MONITOR_REFRESH=1`、巡检每 2 s，
+`ps -o rss=` 每 30 s 采一次，结束时抓两帧。两次独立 15 分钟跑（run 1 / run 2），原始数据在
+`longrun-run1.log` / `longrun-run2.log`（含 `rss.log` 序列与结束帧）。
+
+**run 1（30 个样本，~870 s）**：
+
+```
+113392 129068 129132 126968 127960 114364 114564 114808 105584 115948 116100 115208 115932
+131900 131904 132600 135220 135228 135304 135344 136012 136960 137932 138868
+171040 171384 171528 171540 171580 171612          # 单位 KB
+```
+
+- 结束帧两帧都仍成形（标题带/四带齐全、0 ESC），进程存活；
+- 第 1–24 个样本在 105.6–138.9 MB 之间（中位 ~133 MB），随后**一步**到 ~171 MB，最后 6 个样本只差
+  572 KB（+0.3%，基本平）；
+- **字面判据（±20% of 第二个样本 = [103 254, 154 881]）不满足**：最后 6 个样本在其上方。这是**一条
+  finding，不是脚注**：形状是「慢爬 + 台阶 + 平台」（V8 老生代按需扩张/GC 的典型形状），没有任何
+  单调不收敛的增长；但 15 分钟不足以证明「长期不涨」。
+**run 2（同一夹具复跑，30 个样本）**：
+
+```
+111416 126976 127032 127308 112596 112672 112780 113224 114184 114292 111812 112112
+128492 129712 129716 129756 131068 131352 132328 134484 135436 135528 151192
+166708 166748 166752 166764 166868 166900 167028          # 单位 KB
+```
+
+形状与 run 1 一致：低位带 ~111–113 MB → ~127–135 MB 的慢爬 → 第 23 个样本一步到 ~151 MB → 尾部平台
+（最后 6 个样本 166 748→167 028，+0.17%）。±20% 带（[101 580, 152 371]）同样被尾部 7 个样本越过。
+两次独立跑的**台阶位置几乎相同（约 12 分钟处）**，所以这是可复现的形状，不是抖动。
+
+**run 3（判别实验 A，480 s，`NODE_OPTIONS=--max-old-space-size=96`）**：
+
+```
+123648 124048 124120 124460 112840 112924 113068 113344 113572 113628
+111568 112400 128724 129660 129684 130384                      # 单位 KB
+```
+
+16 个样本、**无 OOM**、RSS 111.6–130.4 MB：压住老生代上限后 RSS 明显低于未加限制的两次跑在同龄的水平
+（未限制的 run 1/run 2 在 ~12 分钟处已到 167 MB），与「RSS 跟着堆上限走（懒 GC）」一致。但这条实验
+**不足以单独判死「没有保留」**：按 1 帧/秒、每帧 ~35 KB 的假设计算，8 分钟只能堆 ~17 MB，顶不爆 96 MB。
+
+**run 4（判别实验 B，1800 s 未加限制：如果真有稳定保留，台阶应按 ~12 分钟节拍重复出现）**：
+
+```
+114092 129952 130152 130448 128048 114524 115512 115632 106528 116320 116452 114264 115176
+131140 131144 131968 133456 133460 133492 133544 134296 135620 136568 137532
+169396 169888 170072 170080 170144 170168 170192 170260 170332 170412 170416 …
+173124 220332 220608 220656 220716 220992 221052 221080 221160 221380 221740 221740 221740 221740
+                                                                  # 单位 KB，共 59 个样本
+```
+
+**台阶出现了第二次**：第 25 个样本（~12.5 分钟）106–138 MB → ~170 MB；第 47 个样本（~23.5 分钟）
+173 MB → ~220 MB；两次台阶之间是 11 分钟的**平台**（170 416→170 416，逐字节不变）。三次独立跑的台阶
+位置都在同一帧号附近（~720 帧），说明这是确定性机制，不是随机抖动。
+
+**微基准（排除法，各 1 分钟）**：
+
+```
+$ node /tmp/leak-spawn.mjs 1500            # spawnSync('bash', ['-c','echo hi']) ×1500
+start 53740 KB → 300: 60176 → 900: 60252 → 1500: 69720 KB     # 前 900 次之后基本平，+10 KB/次上限
+$ node /tmp/leak-paneldata.mjs <team> <root> 200   # 每帧真正做的事：bash team __panel-data（内含 monitor.mjs）
+start 54200 KB → 50: 59452 → 100: 60724 → 200: 60836 KB       # 预热后 100 次只涨 ~0.1 MB，不随帧数线性增长
+```
+
+即「每帧一次子进程 + 一次数据读」本身**不是**线性保留；**归因实验（`mem-bisect.sh`，15 分钟，两个面板跑同一条数据路径，只差渲染器）**：
+
+| | 第 1–25 个样本 | 第 26 个样本起（~12.5 分钟 / ~720 帧） |
+|---|---|---|
+| TUI（Ink，stdout 是 TTY） | 114 016 – 137 128 KB | 一步到 **167 424–167 944 KB** |
+| text（同一进程的纯文本循环，stdout 重定向） | 88 500 – 91 384 KB | **仍然 91 384 KB（平的）** |
+
+两者都用 `--no-pulse --no-activity`（没有 tick、没有 monitor.mjs 子进程），都用同一个
+`bash team __panel-data` 每帧读数据、同一份布局代码；文本进程 15 分钟写了 1 122 539 字节输出（确实在跑）。
+**台阶只出现在 Ink 那一侧** ⇒ 累积在渲染路径，与数据层/tick/布局无关。
+
+**最小复现（把 teamsmith 全部去掉，只用钉住的框架）**：14 行 `Text` 的 Ink 应用，`rerender()` N 次：
+
+```
+many  (14 个 Text + wrap): 100788 KB -> 197036 KB   (+96 MB / 1200 次 ≈ +80 KB/次)
+nowrap(14 个 Text)       : 103700 KB -> 217704 KB   (+114 MB / 1200 次)
+one   (单个 Text，换行拼接): 99868 KB -> 172632 KB   (+73 MB / 1200 次)
+remount 每 300 次        : 99692 KB -> 210808 KB   （重挂载没用：+111 MB）
+remount 每 100 次        : 100644 KB -> 244084 KB
+```
+
+**判定实验（判别「懒 GC」还是「真保留」）**：同一个小复现跑 8000 次 `rerender()`，
+`NODE_OPTIONS=--max-old-space-size=64`：
+
+```
+2000 rss=255M heapUsed=78M heapTotal=177M t=11s
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+[18402 ms: Mark-Compact 62.4 (65.3) -> 61.2 (64.3) MB … allocation failure]
+```
+
+**在 64 MB 老生代上限下它会 OOM**，所以不是「V8 懒 GC 不还内存」而已 —— Ink（7.1.1）+ React 19 的
+`rerender()` 路径**每次渲染都会留下可达内存**（约 20–30 KB/次；真实面板 12 行帧约 70 KB/次，与 15 分钟
+50 MB/720 帧吻合），且与子节点形状、是否重挂载无关。
+
+**结论与建议（交给 PM 决定，不在本任务范围内）**：
+
+- 这是**已复现的缺陷**（不是脚注）：TUI 每渲染一次留 ~20–110 KB；默认 `TEAM_MONITOR_REFRESH=5` 下约
+  14 KB/s ≈ 1.2 GB/天，`REFRESH=1` 下约 70 KB/s。窗口是设计上要 24/7 跑的那个进程，几天内会顶到 Node 的
+  默认堆上限（4 GB）后 OOM。
+- 缓解/修复选项（供 PM 排序，任一个都需要一条新的 change，因为规格里没有 RSS 承诺）：
+  ① 试更早/更晚的 Ink 版本（先复现再钉回一个不涨的版本）；
+  ② 面板按阈值自重启（本仓库已有 `exec` 重启的模式，M9.8 的代码快照漂移就是同一手法）；
+  ③ 换渲染器（E4 的对比里 blessed/OpenTUI 都被否了，但那是**显示安全**的结论，不是内存结论）；
+  ④ 向 Ink 上游报一个最小复现（上面这段 20 行）。
+- **不影响本次 apply 的验收**：面板的对外契约（模式/布局/净化/队列/运行时/单文件 bundle）全部按规格成立；
+  长跑期间帧一直成形（见 run 1 的结束帧与 `mem-bisect` 的 `tui-frame.txt`：10 行、0 ESC）。
+
+结论（**finding，不是脚注**）：
+
+1. **字面判据不满足**：两次 15 分钟跑的尾部样本都超出「第二个样本 ±20%」（超出幅度 7–10%）；
+2. **形状不是泄漏的形状**：慢爬 + 一次台阶 + 平台（尾部 6 个样本只差 0.2–0.3%），台阶在两次独立跑里都落在
+   同一时刻（~12 分钟，约 700 帧）；
+3. **判别实验**：<run4-verdict>
+4. 面板全程**仍然可用**：帧成形（12 行、四带齐全）、0 ESC、数字在动、进程存活（run 1 的结束帧
+   `longrun-run1-frame1.txt` / `-frame2.txt`，`frames=12 esc1=0 esc2=0`）；
+5. **给 PM 的建议**（不在本任务范围内，交回决定）：把 tasks 9.1 的判据从「±20% of 第二个样本」（对懒 GC 的
+   RSS 曲线天然过敏）换成「尾部平台相对漂移 + 无单调增长」，或把采样窗口拉到 ≥1 小时；若真要在产品侧确认，
+   下一步是一次堆快照分析（另一个任务）。规格里没有 RSS 承诺（design §15 明确写了「阈值未建立，所以不是
+   规格承诺」），所以这条 finding 不会让契约变假。
+
+## 门禁（实际运行的输出）
+
+```
+$ openspec validate --all --strict
+Totals: 12 passed, 0 failed (12 items)                       # rc=0
+
+$ bash skills/teamsmith/tests/smoke.sh                       # 完整套件（真 tmux，含 §26-m）
+== 结果 ==  ✓ 1710  ✗ 0
+smoke 全绿                                                    # rc=0
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh      # 快模式（跳过 17 个真进程段落）
+== 结果 ==  ✓ 1313  ✗ 0
+smoke 全绿                                                    # rc=0
+```
+
+`TEAM_GATES` 三件套里的 `spec-lint.sh` 已由 M10 删除，本仓库当前门禁是
+`openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh`。
+
+## 隔离（M7.2 纪律）
+
+- 每个新夹具在自己的沙盒仓库里跑，继承的 `TEAM_*` 一律 `env -u` 清掉，写之前先断言 `team paths` 指向沙盒
+  ——§26 第一行。
+- 真项目零污染：夹具痕迹（`P10 夹具阻塞行`、`P10Z`、`wrote the report`、夹具 session 名）在调用方项目的
+  `docs/team/inbox/**` + `.pi/team/state/**` 里扫一遍，前后一致；**负对照**证明这条扫描不是空断言
+  （故意造的泄漏文件会被抓到）——§26-l。
+- 26-m 的真 pane 夹具用**自己的 session**（尺寸一次到位），收尾 kill，并断言 smoke session 的窗口数不变、
+  夹具 session 已收干净。长跑脚本用私有 tmux server（`-L`），不碰任何真实 session。
+
+## 破坏→红→还原→绿（`flip.sh` / `flip.log`）
+
+```
+== 基线（未破坏） ==
+  ✓ A 基线：面板自己的净化生效（打印帧无 C1/双向字符，可见文本在）
+  ✓ B 基线：--print 不写 patrol state
+== 破坏 A：去掉面板自己的净化（src/data.ts 的 sanitizeDeep） ==
+  ✓ A 红：去掉净化 → C1/双向字符漏进帧（断言咬住了实现）
+  ✓ A 绿：还原净化 → 帧又干净了
+== 破坏 B：把 --print 接到交互路径上（观察者也跑 due tick） ==
+  ✓ B 红：--print 被接到交互路径 → 它写了 patrol state（断言咬住了实现）
+  ✓ B 绿：还原后 --print 又是观察者
+  ✓ 还原后被提交的 bundle 与起点逐字节一致（5977a3f3…6310）
+```
+
+B 的措辞偏离任务书原文（「把 `--print` 接到 TUI 路径」）：实测 Ink 在 stdout 非 TTY 时**不写控制序列**，
+把 `--print` 接到 TUI 渲染器在管道上几乎不可观测；可观测的等价破坏是「让观察者跑交互路径的副作用
+（tick/写 state）」，所以用后者当证伪器。见「已知限制」。
+
+## 本次发现并修掉的两个真缺陷（都在 smoke 里钉住）
+
+1. **TUI 不再重绘**（App 把每次刷新的数据覆盖回启动时那份 frame）：任何 `--interval N` 的 TUI 时间戳冻在
+   启动那一刻。夹具：§26-m「1.5s 后两次 capture 的时间戳必须不同」——修前红、修后绿。
+2. **窗格缩小后画面空白**：`resize-window 200x50 → 120x29` 后 pane 全空（Ink 仍按旧高度写 Box，tmux 把
+   帧卷出可见区；实测 26 行进了 history，进程没死）。修法：App 从终端实时读几何 + `resize` 时重置屏幕与
+   Ink 的行计数。夹具：§26-m 先 resize 再 capture，必须仍看到标题带与正确行数（60x8 → 8 行）。
+
+两条都不是规格新加的承诺，但都属于「面板在窗格里能长期跑」的底线；修完 §26-m 全绿。
+
+## 边界与交回（PM）
+
+- **未做、交回 PM**（P10 任务书的边界没给这些路径，且 10.5 需要 PM 定版本号）：
+  - tasks 10.3 的 `SKILL.md` 命令表（`skills/teamsmith/SKILL.md` 是 PM 独占）；
+  - tasks 10.5 的 CHANGELOG 条目 + `TEAM_VERSION` + `team version --check`（版本号由 PM 在派单时指定，
+    本次任务书里没有给）；
+  - `10.1`/`10.2` 我按「`references` 里与 monitor 有关的文档」理解并改了 `config.md`/`troubleshooting.md`
+    （外加 `workflows.md` 的过时默认值描述）；如果 PM 认为这超出了 P10 的边界，请按 A2 重新派。
+- **没有动**：`scripts/monitor.mjs`（数据层一行未改）、派单/巡检/outbox 逻辑（除 monitor 自身的
+  `team_cmd_monitor` 与 `pulse up` 的运行时前置检查）、账本、`openspec/specs/**`（未归档）。
+- 版本号仍是 `TEAM_VERSION="1.37.0"`（等 PM 在 A2 里升）。
+- 工作树里**不留 `node_modules`**（`.gitignore` 已覆盖）：重建/破坏-还原证据脚本自己 `bun install --frozen-lockfile`
+  并在收尾删掉（`flip.sh`），§26-a 则在沙盒副本里重建；缺少网络/依赖时显式 SKIP，不假装重建过。
+（13:32 那次完整套件曾因 `/tmp` 被其他任务的残留占满（15 GB tmpfs，仅剩 126 MB）而在 M9.8 夹具里 ENOSPC 失败；
+清掉自己的临时目录并去掉工作树里的 41 MB 依赖后重跑为绿——与代码无关，但说明夹具对磁盘余量的敏感性。）
+
+## 给复验 agent 的入口（每条证据都能自己重跑）
+
+```sh
+cd <independent checkout>
+openspec validate --all --strict                     # 12 passed
+bash skills/teamsmith/tests/smoke.sh                 # ✓ 1711 ✗ 0（约 8–10 分钟，含真 tmux 段落）
+TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh   # ✓ 1313 ✗ 0（跳过 17 个真进程段落）
+bash docs/team/reports/P10-dev/flip.sh               # 破坏→红→还原→绿（需要 bun；会重建 bundle 后还原）
+bash docs/team/reports/P10-dev/long-run.sh 300 /tmp/p10-lr "NODE_OPTIONS='--max-old-space-size=96'"
+                                                     # 私有 tmux server + 沙盒；再来一次长跑采样
+bash docs/team/reports/P10-dev/before.sh "$PWD/skills/teamsmith"   # E1 的翻转对照（红/绿各跑一次）
+```
+
+复验时**最容易打穿的三处**（我自己已经打过一轮，见 26-m 与「已知限制」）：
+
+1. 「`--print` 其实是 TUI 只是恰好没写控制字节」——用真 pane 的 `capture-pane` + ESC 计数打（26-m），
+   别用管道；
+2. 「面板偷偷排水/写队列」——用 `state/outbox/` 的整目录哈希 + `forced.log`/`HOLDING.log` 行数打（26-j）；
+3. 「面板跑着跑着不刷新/窗格变了就空」——用 `TEAM_MONITOR_REFRESH=1` 的两次 capture 时间戳 + resize 后
+   再 capture 打（26-m）。这两个都是本次真发现并修掉的缺陷。
+4. 「内存到底涨不涨」——`bash docs/team/reports/P10-dev/mem-bisect.sh 900 /tmp/p10-bisect`（TUI vs 纯文本
+   两个面板并排采样），或直接跑长跑（`long-run.sh`）看 ~12 分钟一个台阶。这是**已知缺陷**，见「长跑采样」。
+
+## 已知限制（写清楚，不藏）
+
+0. **渲染器内存**：Ink 7.1.1 的 TUI 路径每次渲染留 ~20–110 KB 可达内存（最小复现 + 64 MB 上限 OOM），
+   15 分钟长跑表现为 ~12 分钟一个 ~50 MB 台阶；纯文本路径不涨。规格没有 RSS 承诺（design §15 明说阈值未建立），
+   所以不阻塞本任务的验收，但它是**已复现的缺陷**，建议 PM 排后续。详见「长跑采样」。
+
+1. **敌意分支名无法来自真 git**：`git check-ref-format` 拒绝 ref 里的控制字符（实测
+   `bad ref refs/heads/evil?[2Jbranch`）。夹具改用只回这一条探针（`rev-parse --abbrev-ref HEAD`）的
+   `git` shim，走的是真实 CLI 路径 ✓；E2 表里记了这条替代。
+2. **`TEAM_MONITOR_UI=tui` 在管道上不可区分**：Ink 在 stdout 非 TTY 时不写控制序列（实测：0 ESC、同样的
+   100 列帧）。所以「强制 TUI」由真 pane capture 钉住（§26-m），管道上只断言「被接受且渲染一帧」。
+3. **预留带不是承诺**：它只承诺「正常高度有标签、矮了先消失、不额外读数据」。
+4. **对齐结论沿用 E4**：只在 tmux 3.7b + 当前 locale 下实测；非 tmux 终端（kitty/wezterm 的 emoji 宽度）
+   未覆盖。
+5. **`--once` 每次都会 tick**（今天语义：进程内 `last_tick=0`）；「按周期一拍」是长跑 TUI 的行为
+   （§26-m 的 6s→≥2 行）。

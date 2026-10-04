@@ -1,0 +1,4 @@
+- 2026-10-02T19:27:34Z · `team close P173 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复验（容器内）：探针 77 ok / 0 bad / 0 skip（牙齿一 + 两条影子 + 产品路径豁免检查全绿）；段 31 与 36 合计 ✓140 ✗0——挡着整条队列与发布的那条红消失）
+  -   - ① 复验记录 docs/team/reviews/P173.md：不存在
+  -   - ② 分支是否已并入 main：task/P173-apply（fc5247782）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

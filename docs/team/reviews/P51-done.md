@@ -1,0 +1,4 @@
+- 2026-09-22T11:44:46Z · `team close P51 --status done` · FORCED：PM 显式覆盖（理由：verify 阶段 PASS：151/0 + 四条变异钉住；F1 是 PM 自有文档行，PM 当场修正不作返工）
+  -   - ① 复验记录 docs/team/reviews/P51.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P51-npm（5d4d5ff5f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P51.md（用 ① 的 team review 生成，判定 PASS）

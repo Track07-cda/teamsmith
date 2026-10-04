@@ -1,0 +1,4 @@
+- 2026-09-29T11:19:03Z · `team close P124 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS：§5.1 六条翻转红绿均成立 + P125/P128 三条翻转 + 真 pty fold ✓28 ✗0 + 它自测三档对齐 + 全量门禁 ✓3769 ✗0（首轮 §38-f 假红随 P127 解除））
+  -   - ① 复验记录 docs/team/reviews/P124.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P124-p124（855c35ea4）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P124.md（用 ① 的 team review 生成，判定 PASS）

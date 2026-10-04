@@ -1,0 +1,4 @@
+- 2026-09-22T23:46:16Z · `team close P87 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：自造五个植入点确认确切路径语义（inbox/bg 与 nested/bg 点名、state/bg 与审计日志静默、.log.1 点名）；F2 只累计可解析的 N）
+  -   - ① 复验记录 docs/team/reviews/P87.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P87-bg（03b41806f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

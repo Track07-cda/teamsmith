@@ -1,0 +1,1 @@
+- 2026-09-22T07:00:59Z · `team board set P34 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/pi-only-scope-proposal.md（判定 ACCEPTED）

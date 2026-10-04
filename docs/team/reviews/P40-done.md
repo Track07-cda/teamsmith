@@ -1,0 +1,4 @@
+- 2026-09-22T10:18:52Z · `team close P40 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：包装器逐字节一致 + init 安装/幂等/三条冲突出路/--force 不删不认识的目录/--no-skills/doctor 三态/shell 前置检查，九节证据包 rc=0）
+  -   - ① 复验记录 docs/team/reviews/P40.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P40-npm-cli-team-init-pi-skills-（12cd1cec0）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

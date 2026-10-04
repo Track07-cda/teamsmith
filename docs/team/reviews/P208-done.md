@@ -1,0 +1,4 @@
+- 2026-10-03T11:16:07Z · `team close P208 --status done` · FORCED：PM 显式覆盖（理由：PM 复验：4.4 已改成如实形态并指向 P205 的两次容器全量（45-container-full-delivered-tip.log = smoke 全绿，我核过）；其余 15 条各有日志；validate 14/0）
+  -   - ① 复验记录 docs/team/reviews/P208.md：不存在
+  -   - ② 分支是否已并入 main：task/P208-apply（45be12155）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

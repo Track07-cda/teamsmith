@@ -1,0 +1,4 @@
+- 2026-09-28T12:07:17Z · `team close P105 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：四种空白形状 rc=4 且名册字节不变、无审计；teardown 按 token 精确（rc=5）；--model 后记录与配置同源；合并后 validate 17/0 · routes 171/0 · config-cli 135/0 · FAST 全绿）
+  -   - ① 复验记录 docs/team/reviews/P105.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P105-p105（e27df2873）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

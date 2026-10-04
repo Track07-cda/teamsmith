@@ -1,0 +1,4 @@
+- 2026-10-03T06:14:06Z · `team close P204 --status done` · FORCED：PM 显式覆盖（理由：提案验收：MODIFIED 保住基线 11 场景 + 新增 7（含"窗口线索是调用者自己的 pane 而不是客户端当前窗口"、"别的会话同名窗口不算线索"、"名册外名字不算线索"、"显式 --from 仍胜"、"席位工作树不被拒"），validate 14/0，基线场景零丢失）
+  -   - ① 复验记录 docs/team/reviews/P204.md：不存在
+  -   - ② 分支是否已并入 main：task/P204-propose（888cbf484）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/sender-identity-refusal-proposal.md 不存在

@@ -1,0 +1,4 @@
+- 2026-09-22T22:01:00Z · `team close P83 --status done` · FORCED：PM 显式覆盖（理由：verify 已交付（10 个植入点 + 六变异 + 反向控制 + 零回归）并交出 F1/F2；F1 必修 → delta 交回 P87）
+  -   - ① 复验记录 docs/team/reviews/P83.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P83-p83（e335588d3）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P83.md（用 ① 的 team review 生成，判定 PASS）

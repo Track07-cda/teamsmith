@@ -1,0 +1,310 @@
+# M35 · smoke 抖动清查：attempts state=idle（两连）、M25-② 对照组（一见）、pulse 面板首帧（两见）
+
+agent: dev2   status: done   time: 2026-09-19
+branch: `task/M35-smoke-attempts-state-idle-m2`   PR/MR: -（本仓库 local 模式，分支留在 `.worktrees/dev2`）
+
+## Deliverables
+
+| Path | What |
+|---|---|
+| `skills/teamsmith/tests/smoke.sh` | 11b3 ⑤：PM 窗口改 `bash --noprofile --norc`（确定性空提示符）+ 连续 3 次采样；10c-②：`m25_ctl_stat`（ps 整行匹配，`$0` 不是 `$3`）+ 轮询到 STAT=T；11b「logs 显示面板画面」：首帧改有界轮询；attempts 断言红时打印实际那行 |
+| `docs/team/reports/M35-dev2.md` | 本报告 |
+| `docs/team/reports/M35-dev2/pkg/**` | 独立复验包（`lib.sh` + `run.sh` + 分节 10/20/21/22/30/60/50/40 + `inject-run.sh` + `zshrc-inject` + `probe-11b3-idle.sh` + `rc-debug.sh`） |
+| `docs/team/reports/M35-dev2/logs/**` | 全部证据（分节日志、翻转日志、验收日志） |
+
+提交（本分支，`Agent: dev2`）：
+
+| 提交 | 内容 |
+|---|---|
+| `a0c833e` | 10c-②：旧 `ps -eo args \| grep` 自匹配 → 改轮询真实条件（进程在 + STAT=T） |
+| `866cc49` | 11b3 ⑤：窗口形状 `bash --noprofile --norc`；make_pm_idle 3 次连续采样；11b wd-logs 首帧轮询（PM 09-19 范围+1）；attempts 断言红时打印现场 |
+| `5adf823` | `m25_ctl_stat` 改 `$0`（args 第一词 `$3` 是 `bash`，永远匹配不到——pkg 10 节实测） |
+| `777cdca` `36f40bb` `f09bcf1` + 本次 | 复验包（分节 10/20/21/22/30/60/50/40 + probe 断言级模式）、报告、run.sh 汇总解析修正 |
+
+## 三条断言的病根（一条一句话）
+
+1. **attempts `state=idle`（P18 B2、M34 复验两次假红）**
+   `make_pm_idle` 等的「空提示符」是**登录 zsh**：distrobox profile 在提示符出现之后仍会间歇起前台
+   子进程（`host-spawn …`），两次采样可以落在子进程之间的空档里就返回；紧接的一拍 `watch` 撞上子进程，
+   `team_pm_state` 如实报 `unknown:host-spawn`，attempts 行就写下 `state=unknown`（注入下 20/20 复现）。
+   **修法**：窗口改成 `bash --noprofile --norc`（没有 rc ⇒ 没有异步子进程，「空提示符」是构造性的），
+   并把「稳定」判据从 2 次连续采样提到 3 次（覆盖 ≥1s）。
+2. **10c-②「对照组脚本起来了」（M30 复验一次假红）**
+   等对照组的循环是 `ps -eo args | grep -q "m25-control-read.sh"` —— **grep 自己的命令行里就有这个名字**
+   （实测 20/20 自匹配），循环第一次就 break（等于没等）；随后单次 `assert_file` 就断言，负载高时 pane
+   里的交互 shell 还没 exec 出脚本 → 假红；同一个自匹配让下一行 `ps | grep` 恒真、文件不存在反而满足
+   `! grep control_done`，于是「对照组没被停住」报 **ok**（假绿，两头都错）。
+   **修法**：`m25_ctl_stat` = `ps -eo pid=,stat=,args= | awk '$0 ~ /m25-control-read[.]sh/ {print $1,$2; exit}'`
+   （`[.]` 构造性排除自匹配、匹配整行避免 `$3` 只是 `bash`），轮询「进程出现 **且** STAT=T」最多 30s 再断言；
+   失败时打印实际形状（`control_done=yes` 等）；并且对照组的脚本确认停住之后才把门禁敲进同一个 pane
+   （原来靠 `sleep 1.5` 赌它起没起来）。
+3. **§11b「logs 显示面板画面」（M34 二次复验 15:3xZ + PM 归档门禁 09:1xZ 各一次；PM 后续范围+1）**
+   `pulse up` 只保证**进程在跑**（`team_pulse_window_state = team_pane_busy`），node/Ink 把第一屏画进 pane 是
+   **异步**的：那一瞬间的 `pulse logs`（就是 `tmux capture-pane`，`cmd-watch.sh:1383`）读到 **0 字节**快照，
+   紧跟的单次 `assert_has` 就断死（M34 现场：`wd-logs.log` 大小 = 0，同一个 pane 稍后就有画面）。
+   **修法**：判据不变（快照里必须出现 `teamsmith pulse`），换成有界轮询（40 × 0.5s）实际条件；
+   超时把最后一次快照原样打出来（大小 + 前 5 行）。
+
+## Verification evidence
+
+### 验收命令（任务书原文）
+
+- `PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null`：
+  - `openspec validate --all --strict`：`Totals: 14 passed, 0 failed (14 items)`，`VALIDATE_RC=0`
+  - 全量 smoke：**`✓ 2079  ✗ 0`，`smoke 全绿`，`SMOKE_RC=0`**；日志 `logs/accept-full.log`。
+    这一次是**排过队的**（日志有 `轮到本套了（排过队）`；任务书套件与同级另两套全量门禁共用
+    `/tmp/teamsmith-smoke.lock`，wrapper 从 09:39:21 开始等，整个作业 1162s）。
+    两条被修的断言在该次全量跑里：`✓ M25-② 夹具有效性：对照组脚本起来了`、
+    `✓ M25-② …裸 read 在后台进程组 + tty 下确实被停住`、`✓ attempts 行带决策证据（state=…）`、
+    `✓ pulse logs（pane 快照）退出码 0` + `✓ logs 显示面板画面`（第三条，钉在 866cc49 上的那条；
+    PM 归档门禁 09:1xZ 的红是在 **main** 上——那里还没有这个修）。
+- `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh`：**✓ 1646 ✗ 0，`smoke 全绿`，RC=0**
+  （`logs/accept-fast.log`；165s，当时同机还有别的 agent 的两套 FAST 门禁在跑。FAST 模式按设计跳过
+  `10c-②`、`11b`（pulse 面板）与 `11b3` 三个真 tmux 段落——这三条只由上面的全量跑覆盖。）
+
+### 复验包分节（`M35_LOADN=10 bash docs/team/reports/M35-dev2/pkg/run.sh`）
+
+**只排一次队**跑完整包（wrapper 用 `flock --close` 把分节包在一起；分节自己拿锁的路径在
+`lib.sh: m35_take_smoke_lock`），作业总耗时 1877s（其中大多是等锁：另两套全量门禁排在同一把锁上）；
+当时包里还没有分节 60（后续按 PM 范围+1 加的），所以那次跑的是 `10/20/21/22/30/50/40`；
+分节 60 随后**单独跑**（`bash pkg/60-wd-logs.sh`，每次跑完都探活），再用 `M35_SUMMARY_ONLY=1`
+把全部日志重新解析一遍（把 60 也算上）。两次汇总都是：
+
+```
+== run.sh 结果 ==  bad=0 finding=0  （分节全过）
+```
+
+| 节 | 结果 | 关键数字 | 日志 |
+|---|---|---|---|
+| `10-self-match` | `ok=4 bad=0` | 旧 `ps\|grep` 自匹配 20/20；`$3` 匹配真进程 0/1；`$0` 匹配真进程 1/1；无真进程时 `$0` 自匹配 0/20 | `logs/pkg-10-self-match.log` |
+| `20-m25-old` | `ok=3 bad=0` | 旧片段在忙 pane 下**预期红 1 条**（`对照组脚本起来了（缺 …/m25-control.out）`）+ 同一处的**假绿**（`ps\|grep` 自匹配，另起一行 ok）；旁证：对照组 3215855 **TN** 后来确实起来并被停住 | `logs/pkg-20-m25-old.log` |
+| `21-m25-new` | `ok=3 bad=0` | 新片段 + 同样的忙 pane：两条真 tmux 断言全绿（包括「对照组起来了」） | `logs/pkg-21-m25-new.log` |
+| `22-m25-new-break` | `ok=3 bad=0` | 破坏实现（对照组 `< /dev/null`）→ 守卫**必须红**，且红消息点名 `control_done=yes` | `logs/pkg-22-m25-new-break.log` |
+| `30-11b3-probe` | `ok=4 bad=0` | 采样级 `now` 20/20 非 idle（9 host-spawn / 11 zsh）、`plain` 0/20；断言级 `now` 红 20/20、`plain` 红 0/20 | `logs/pkg-30-11b3-probe.log` |
+| `60-wd-logs` | `ok=9 bad=0` | 旧片段（单次采样）+ 首帧延迟 2s → 红 1；旁证：2s 后同一 pane 有标题（34 字节）；新片段同样现场 0 红；破坏用例（永画不出标题）→ 仍红 1 且打印最后快照（45 字节） | `logs/pkg-60-wd-logs.log` |
+| `50-load-loops` | `ok=3 bad=0` | 见下一节 | `logs/pkg-50-load-loops.log` |
+| `40-full-suite-flip` | `ok=0 bad=0`（只打印指令） | 默认不跑（`M35_FULL=1`；理由见 Decisions） | `logs/pkg-40-full-suite-flip.log` |
+
+> 一个包自己的 bug 记在这里：整包第一次跑时 run.sh 的汇总解析把每节都报成「解析失败」（分节抬头带
+> ANSI 颜色，`^== ` 永远匹配不到）——已修（先剥色再解析），并用 `M35_SUMMARY_ONLY=1` 从**同一批分节日志**
+> 重新得出上面的汇总（`logs/pkg-run-summary.log`）。所以 `logs/pkg-run.log` 末尾那次历史汇总
+> 写的是 `bad=7 … (解析失败)`，不是分节真的红。
+
+### 加压 10 连跑（任务书验收项）
+
+`pkg/50-load-loops.sh`（`M35_LOADN=10` = 10 个 `yes` 占 ~1/3 核；`M35_LOAD_ITERS=10` = 每次 probe 10 拍）：
+
+```
+负载 10 × yes｜循环 10 次｜probe 每次 10 拍｜翻转 3 次；负载已起：loadavg=4.16
+M25-② 第 1..10/10 次：bad=0（10/10）
+M25-② 新等待：加压下 10/10 次 bad=0（0 红）
+§11b3 ⑤ 第 1..10/10 次：0/10 拍红（10 × 10 = 100 拍全绿）
+翻转（加压下）：旧窗口形状 2/30 拍红 —— 假红可复现（ #1(0/10) #2(1/10) #3(1/10)）
+== 50 · 加压 10 连跑 结果 ==  ok=3 bad=0 finding=0
+```
+
+计数：新等待方式 **M25-② 10 次连跑 0 红**；新窗口形状 **100 拍 watch 0 红**；同一注入下把窗口
+换回旧的登录 zsh，**30 拍里 2 拍红**（假红可复现，且与注入的忙碌占空比同量级）。
+日志：`logs/pkg-50-load-loops.log`。
+
+参考（不加抖动、也不加压，只关相位）：同一套 probe 在无负载下 `now` 是 20/20 红（§30）——两者不是矛盾，
+前者是「相位锁定」，后者才是「抖动率」；细节见 Decisions。
+
+### 事故复现尝试（PM 续跑要求 ③④）
+
+分节跑法（每节之间探活）：本节次会话把复验包的每一节**单独**跑（不再一次性长跑 `run.sh`），
+每节前后各一次 `tmux ls`：
+
+| 次序 | 节 | 跑前 | 跑后 | 默认 server 死亡？ |
+|---|---|---|---|---|
+| 1 | `pkg/10-self-match.sh` | 4 窗 | 4 窗 | 否 |
+| 2 | `pkg/20-m25-old.sh` | 4 窗 | 4 窗（一次读到 5 窗） | 否 |
+| 3 | `pkg/21-m25-new.sh` | 4 窗 | 4 窗 | 否 |
+| 4 | `pkg/22-m25-new-break.sh` | 4 窗 | 4 窗 | 否 |
+| 5 | `pkg/30-11b3-probe.sh`（后台作业，4 次 probe，214s） | 4 窗 | 4 窗 | 否 |
+
+**结论：没有再死**（同一套 server，创建时间始终是 `Sat Sep 19 08:49:27 2026`）。
+（`run.sh` 那次整包跑同样不碰默认 server；它的分节日志见 `logs/pkg-run.log`。）
+
+那次「读到 5 窗」与后来「读到 7 窗」**不是本包的泄漏**：多出来的窗口是 PM/其他 agent 自己开的
+（现场取证：`teamsmith:pm` 窗里一个子进程的命令行就是 `tmux new-window -d -t teamsmith -n final-gates7 "… smoke.sh …"`；
+另有 `verify`/`dev-bob` 两个 agent 窗）。本包自己的每次 tmux 调用都带私有 socket（见下）。
+
+18:17:20Z 那次默认 server 死亡的**具体肇事命令仍未找到**（PM 已做过取证：无 OOM、无裸 tmux 调用、
+时间窗里只有本包在跑）。本次分节重跑没有复现。一个已确认的**自己的过失**记在这里：
+上次的 `logs/flip-pm-new.txt` 是**无效证据** —— 那一跑还在进行时我编辑了 `smoke.sh`，bash 增量读脚本
+读到了改动后的偏移，在 3438 行报 `syntax error near unexpected token '('` 中断（日志尾巴能看到）。
+该文件不作为本任务的证据使用；后果是那次全量翻转只留下旧树的一半（`flip-pm-old.txt`，2081 ✓ 0 ✗，
+旧树 + pm 注入的那一次没抖）。教训：**长跑期间不碰被测文件**（本节次会话的分节跑都遵守了）。
+
+### 隔离证据
+
+- 复验包：`pkg/lib.sh` 的 `m35_tm()` = `env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M35_SOCK" tmux "$@"`，
+  `m35_start` 每节自建 server、`m35_finish`/`m35_clean` 只 `kill-server` 自己那一套；
+  分节 60 里走 `team` CLI 的每一句都用 `$M35_WD_ENV` 前缀（`env -u TEAM_* -u TMUX -u TMUX_PANE
+  TMUX_TMPDIR=$M35_SOCK`）——所以 CLI 内部的 tmux 调用（`pulse logs` 的 capture-pane）也只落在私有 server；
+  `probe-11b3-idle.sh` / `rc-debug.sh` 各自 `export TMUX_TMPDIR=$TMP/tmux` + `unset TMUX TMUX_PANE` +
+  只在自己的 trap 里 `kill-server`（#1250 的写法，逐字节照旧）。
+- 真 smoke 自己也是私有 socket：日志抬头那行 `tmux 私有 socket：/tmp/teamsmith-smoke.XXXX/tmux/tmux-1000/default
+  （夹具与产品调用都走它；调用者的默认 server 不参与）`。
+- 上一次留下的**私有** server 残留（`/tmp/m35pkg.22 · 破坏实现 → 新守卫必须红.PgVWVG`，创建时间 `Fri Sep 18 18:17:22`
+  = 事故发生的那一秒）也是走它**自己的 socket** 收掉的：
+  `env -u TMUX -u TMUX_PANE TMUX_TMPDIR="<那个私有目录>/tmux" tmux kill-server` —— 全程没有对默认 server 发过任何命令。
+- 复验包与真实 smoke 的**夹具同名**（`m25-control-read.sh`）：两边都会在「全机 ps」里找这个名字，
+  并发时会互相看见。所以 `pkg/run.sh` 整包**只排一次队**（`flock --close` 包住整个包，子进程拿不到 fd）
+  才跑 20/21/22/50；分节单独跑时每节自己拿锁（`flock -w 1800 /tmp/teamsmith-smoke.lock`），
+  `M35_NO_LOCK=1` 可跳过——排队而不是并发。
+
+## Flip evidence（defect-fix 必须）
+
+两条断言各自都有「红 → 绿」和「破坏实现 → 守卫必须红」两半。片段不是重写的副本：
+`pkg/lib.sh` 的 `m35_old_fragment` 用 `git show ac6def5:…/smoke.sh` 取**修之前的真实片段**，
+`m35_new_fragment` 从**当前工作树**里按注释锚点取修后的真实片段。
+
+### 10c-②（M25 对照组）
+
+```
+$ bash pkg/20-m25-old.sh    # 旧片段（ac6def5）+ 忙 pane（等价于负载下命令还在排队）
+  bad     M25-② 夹具有效性：对照组脚本起来了（缺 /tmp/m35pkg.20-pane.Kzd7Rn/m25-control.out）
+  ok      M25-② 夹具有效性：裸 read 在后台进程组 + tty 下确实被停住（这就是「挂死」的形状）   ← 自匹配带来的假绿
+  ok      旁证：对照组 2426471 TN 后来确实起来并被停住（旧断言只是等得太短）
+
+$ bash pkg/21-m25-new.sh    # 新片段（当前 worktree）+ 同样的忙 pane
+  ok      M25-② 夹具有效性：对照组脚本起来了
+  ok      M25-② 夹具有效性：裸 read 在后台进程组 + tty 下确实被停住（这就是「挂死」的形状）
+
+$ bash pkg/22-m25-new-break.sh   # 破坏实现：对照组改读 /dev/null（不会 SIGTTIN 停住）
+  bad     M25-② 夹具有效性：对照组没有被停住（对照组把 read 跑完了（control_done=yes）——本环境读 tty 没被停住）
+  ok      机制被破坏时新写法报红 1 条
+  ok      红消息点名了实际形状（control_done=yes → 没被停住）
+```
+
+### §11b3 ⑤（attempts `state=idle`）
+
+`pkg/30-11b3-probe.sh`（注入 = 登录 profile 形状的 `host-spawn 0.3` + `read -t 0.9` 空档 ×12）：
+
+```
+$ bash pkg/30-11b3-probe.sh        # 每边 20 次
+  采样级：旧窗口形状（登录 zsh）20/20 个样本不是 idle:*（unknown:host-spawn 9 / unknown:zsh 11；
+            另一次独立跑是 17/3 —— 两种形状混合，分布随相位变）
+  采样级：新窗口形状（bash --noprofile --norc）0/20 个样本非 idle（同样的注入）
+  断言级：旧窗口形状下 §11b3 ⑤ 的断言红 20/20 次（attempts 行真的写下了非 idle 的 state=）
+  断言级：新窗口形状下 §11b3 ⑤ 的断言 0/20 次红（同样的注入）
+```
+
+断言级的那条就是「真跑 `TEAM_PM_START_WAIT=0 team watch --once` → 读 `state/pm-start-attempts.log`」：
+红样本的实际那行（真实日志）：
+
+```
+1789808329 2026-09-19T08:58:49Z state=unknown evidence=PM 窗口里是项目内非 agent 进程（cmd=host-spawn，cwd=/tmp/m35-idle.I5ztOl/repo）
+```
+
+加压版（分节 50，真实抖动率而不是锁相位）：
+
+```
+$ M35_LOADN=10 bash pkg/50-load-loops.sh          # 10 × yes 加压
+  M25-② 新等待：加压下 10/10 次 bad=0（0 红）
+  §11b3 ⑤ 新窗口形状：加压下 100 拍 watch 全绿（0 红）
+  翻转（加压下）：旧窗口形状 2/30 拍红 —— 假红可复现（ #1(0/10) #2(1/10) #3(1/10)）
+```
+
+### §11b「logs 显示面板画面」（pulse 面板首帧）
+
+`pkg/60-wd-logs.sh`：用「2s 后才画出标题的假面板」把 node/Ink 的异步首帧确定性放大（`team pulse logs`
+就是 `capture-pane`，代码路径一致）：
+
+```
+$ bash pkg/60-wd-logs.sh
+  ok      pulse logs（pane 快照）退出码 0
+  bad     logs 显示面板画面（…/wd-logs.log 中找不到 [teamsmith pulse]）      ← 旧片段（单次采样）
+  ok      旧写法（单次采样）在首帧没落画时假红 1 条
+  ok      旁证：2s 后同一个 pane 的快照里有面板标题（34 字节）——旧断言只是等得太短
+  ok      pulse logs（pane 快照）退出码 0
+  ok      logs 显示面板画面                                                    ← 新片段（条件轮询）
+  ok      新写法（条件轮询）在同样的现场 0 红
+  · 破坏用例（面板永远不画标题）里新片段的输出：
+    |   ok      pulse logs（pane 快照）退出码 0
+    |   ℹ pulse 窗口最后快照（45 字节）：
+    |     | M35 fake panel：这一版永远不画标题
+    |   bad     logs 显示面板画面（…）
+  ok      判据没放水：面板永远不画标题时新写法仍然红 1 条
+  ok      红时打印了最后快照（可见性；4 行输出）
+== 60 · pulse 面板首帧（wd-logs） 结果 ==  ok=9 bad=0 finding=0
+```
+
+（这一次的假红提示与 PM 报的一模一样：`logs 显示面板画面（/tmp/…/wd-logs.log 中找不到 [teamsmith pulse]）`。）
+
+### `$3` → `$0`（5adf823 的成因）
+
+```
+$ bash pkg/10-self-match.sh
+  ok      ① 旧写法对不存在的进程自匹配 20/20（循环第一次就 break，等于没等）
+  ok      ② 只看 $3 的写法匹配不到真进程（$3=args 第一词是 bash）
+  ok      ③ 修完的 $0 写法匹配到真进程
+  ok      ④ 没有真进程时 $0 写法 0/20 自匹配（非空 = 会误判）
+```
+
+②就是最早那次「修」不完整的地方：真进程是 `bash <脚本>`，`$3` 永远是 `bash`，拿 `$3 ~ /m25-control-read[.]sh/`
+去等 30s 只会得到假红（全量跑里实测 1 次，见 `logs/flip-pm-new.txt` 尾巴——那份日志本身因为
+「跑的时候改文件」而中断，只当这条假红的现场用）。
+
+## 同类断言清单（本任务只修两条 + 同函数直系亲属，其余列出）
+
+扫描法：`smoke.sh` 里 `sleep <数字>` 后面 8 行内出现 `assert_*` / `ok` / `bad` 的位置（`/tmp/m35-sleep-scan.txt`，
+27 处），逐条看它是「固定窗口赌时机」还是「协议/域时间」或「已有界轮询」。
+
+**本任务已顺手修的同族**（都在被修函数内/同一处现场）：
+
+| 位置 | 形状 | 处置 |
+|---|---|---|
+| §11b3 ⑤ 的 `make_pm_idle` | 2 次连续采样 + 登录 zsh 的 profile 异步子进程 | 改 `bash --noprofile --norc` + 3 次采样 |
+| §10c-② 的对照组等待 | `ps \| grep` 自匹配 = 没等；单次 `assert_file` | 改 `m25_ctl_stat`（`$0` + `[.]`）+ 轮询 STAT=T |
+| `§11b「pulse logs 显示面板画面」（M34 二次复验 + PM 归档门禁）` | `pulse up` 后单次快照（首帧异步，读到 0 字节） | **已修 + 已有独立翻转**：分节 60（旧片段红 / 新片段绿 / 永画不出标题仍然红） |
+
+**留下的清单（后续任务，不在本任务范围）**：
+
+| 位置 | 形状 | 为什么同族 |
+|---|---|---|
+| `smoke.sh:1874` | 起 `fake-pm-name` 后 `sleep 0.5`，再断言 `team_proc_is_pm_bin` 两条 | 固定窗口赌进程身份可读；可轮询 `kill -0` + 身份判据 |
+| `smoke.sh:4180`、`4191` | p8-migB 夹具 `new-session/new-window` 后 `sleep 0.3`、`pulse restart` 后 `sleep 1`，再数窗口 | 赌 tmux 建窗/收窗谁先落地；可轮询 `list-windows` 的实际集合 |
+| `smoke.sh:5209`、`5252`、`5280`、`5322`、`5447` | 12b-h 真 pane `send-keys C-u` 后 `sleep 0.3–0.4`，再断言提交/入队/held | 赌「清框已生效」；可轮询框内容或提交日志 |
+| `smoke.sh:4953`、`5431` | `sleep 2`（等 TTL 过期）、`sleep 2.6`（等夹具把补全计划跑完） | **不同性质**：等的是域时间/夹具进度，不是渲染；保留（若要改也是条件等待，不是判据） |
+| 其余 `sleep 0.25/0.5` 命中 | 都落在 `for … ; do [ 实际条件 ] && break; sleep …; done` 里 | 已有界轮询，不是单次采样 |
+
+## Decisions and deviations
+
+- **第三条（pulse 面板首帧）是 PM 09-19 范围+1 点名要的**：它在同一天红了两次（M34 二次复验 15:3xZ、
+  PM 归档门禁 09:1xZ），形态与前两条同族（固定窗口 + 单次采样）。改动只在那一处现场，**判据未动**，
+  并用「面板永远不画标题 → 仍然红」钉住不放水（分节 60 的用例④）。
+- **attempts 断言红时的现场打印**（`866cc49` 第三段）只加可见性，**不动判据**：P18 B2 / M34 两次排查都卡在
+  「只知道找不到 `state=idle`，不知道 watch 看见的是什么」。
+- **翻转的形态**：attempts 那条在**采样级**（20/20 vs 0/20）与**断言级**（真跑 `TEAM_PM_START_WAIT=0 team watch --once`
+  后读 `pm-start-attempts.log`，20/20 红 vs 0/20）两边都做了。断言级是真正的代码路径（`cmd-watch.sh:384`
+  写 `state=${st%%:*}`），不是模型；`pkg/probe-11b3-idle.sh` 的 `M35_PROBE_ASSERT=watch` 就是它。
+  注入用 `M35_INJECT_ROUNDS × (host-spawn 0.3 + read -t 0.9)` 放大登录 profile 的「前台子进程 + 空档」——
+  与 M23 现场记的形状一致（`/etc/zsh/zprofile` → distrobox profile 的 `host-spawn sh -c …`）。
+- **相位问题（诚实说明）**：注入周期是 1.2s，而 smoke 里 `make_pm_idle` 到 `watch` 之间的延时是固定的，
+  所以一次实验里红/绿会**锁定相位**：无负载时 20/20 全红，加压时反而 0/30 全绿（都实测过）。
+  为了给出「真实抖动率」，probe 加了 `M35_PROBE_JITTER=1`（make_pm_idle 与 watch 之间加 0.1–1.0s 随机延时）；
+  加压下旧窗口形状实测 4/30 红（≈13%，与注入的 0.3/1.2 忙碌占空比同量级），新窗口形状 0/30。
+  本报告不把 20/20 当成「抖动率」，只当成「机制必然会被撞上」的证明。
+- **加压用 `yes` 而不是并行 smoke**：两边夹具同名（`m25-control-read.sh`），并行跑一套 smoke 会污染 M25 断言；
+  `yes` 只占 CPU。最终 10 连跑用 `M35_LOADN=10`（≈1/3 核）而不是默认 24：实测开始跑时 PM/verify/dev-bob
+  三个全量门禁正排在同一把锁上（`/tmp/teamsmith-smoke.lock`），24 个 `yes` 会把 loadavg 抬到 36 ——
+  那是拿别人的复验当赌注。**第一节 50 的尝试因此被我自己中止**（只留下一行 `M25-② 第 1/10 次：bad=0`），
+  等队列清了再用 10 个 `yes` 重跑；`logs/pkg-50-load-loops.log` 是重跑后的完整版。
+- **`M35_FULL=1`（40 节：两次全量 smoke 翻转）没有重跑**：全量 smoke 走同一把互斥锁，重跑 4 套 × ~10 分钟
+  会在队列里排很久，而且本条 flake 已经能用 probe 在断言级确定性复现（比全量跑更有信息量，还快 100 倍）。
+  旧树的 pm 注入全量跑（`flip-pm-old.txt`，上一节次）留作旁证：**那一次没抖**（2081 ✓ 0 ✗）——
+  flake 是概率性的，这也解释了为什么两次假红相隔很久。
+
+## Suggested next steps
+
+- **后续清单里的 3 组断言**（`smoke.sh:1874` / `4180,4191` / `5209,5252,5280,5322,5447`）留给下一个 flake 任务；
+  形状与本次两条一样（固定窗口 + 单次采样），修法也是同一个模板：轮询实际条件 + 超时打印现场。
+- **门禁队列**（信息）：本节次会话同时段里 PM/verify/dev-bob 三条全量 smoke 在 `/tmp/teamsmith-smoke.lock`
+  上排队（同一把锁），每套 7–12 分钟。这使得「多人同时收尾」时队尾要等很久（我的全量跑 1162s 里大半是排队）。
+  如果这不是有意为之，可能值得 PM 决定一个优先级/时段策略（本任务不改行为）。
+- **本次没做的**：`M35_FULL=1`（§40 的两套全量翻转）没有重跑，理由见「Decisions」；旧树 + pm 注入的那一次
+  留了日志但不作为主证据（flake 概率性，那一次没抖）。
+- 本任务没有跨目录/跨项目需求，无 BLOCKED。

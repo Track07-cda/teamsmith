@@ -1,0 +1,4 @@
+- 2026-09-29T19:07:24Z · `team close P132 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS（自造桩端到端）：两次 refused 逐字节进 <log>.forensics 且桩从未被执行；pass 不进保留；2600→1001 行 + dropped=1601 自述；保留路径不可写时 rc 仍 64 且标 retention=failed；对抗包 rc=0 并证明改动只在记录块内；FAST ✓3153 ✗0）
+  -   - ① 复验记录 docs/team/reviews/P132.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P132-apply（b4ea83704）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

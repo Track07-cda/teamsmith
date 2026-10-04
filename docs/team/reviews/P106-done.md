@@ -1,0 +1,4 @@
+- 2026-09-28T11:40:08Z · `team close P106 --status done` · FORCED：PM 显式覆盖（理由：PM 两向复验 PASS：未设 KEEP 时严格断言生效（✓171✗0）· KEEP=1 时可见说明+列出 9 条保留根且不判泄漏（✓171✗0）· 翻转⑧证明断言可红）
+  -   - ① 复验记录 docs/team/reviews/P106.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P106-team-tmp-keep-infra-apply（e51b7141c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

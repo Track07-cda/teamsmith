@@ -1,0 +1,4 @@
+- 2026-09-28T23:13:38Z · `team close P118 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS（0 bad / 0 finding）：自造帧矩阵 + 双代现场 + 三 tick 一 knock / 静默 / standby 顺延 + 三读面亲验）
+  -   - ① 复验记录 docs/team/reviews/P118.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P118-p118（2c027ec5c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P118.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-09-30T06:37:22Z · `team close P135 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS 并合并：真构建镜像 rc=0 + 进镜像探针（node/bun/pi/openspec pin 未动、iproute2-6.15.0、esbuild --version 0.28.2）；分支 --select 11 180✓0✗ 含两条新断言；main 上复跑 180✓0✗（此前 177✓1✗，那条预存红已随之修复）；403 fallback 行有线有断言）
+  -   - ① 复验记录 docs/team/reviews/P135.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P135-infra-tidy-close-iproute2-fa（8b62c99c7）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

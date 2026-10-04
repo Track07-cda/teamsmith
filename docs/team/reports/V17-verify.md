@@ -1,0 +1,180 @@
+# V17 · verify：split-teamsmith-init-skill（P16 apply 的独立验证）
+
+agent: verify   status: **PASS**   time: 2026-09-18T03:30:00Z
+branch: `task/V17-verify-split-teamsmith-init-`   PR/MR: -（local 模式：分支留 `.worktrees/verify`，PM 复验后本地合并）
+验证对象：**main @ 9b8ed70**（P16 已合入；`v1.40.0` 标签 = `a0cd880`）；提案四件套在 `openspec/changes/split-teamsmith-init-skill/`
+证物：`docs/team/reports/V17-verify/`（`pkg/` 可复跑的小节脚本、`logs/` 本次全部输出）
+
+## 判定
+
+**PASS** —— capability `init-skill` 的 **6 条 requirement、15 个 scenario 全部满足**（逐条证据见 §1），
+无一条 finding 构成规格违反。4 条 finding 分两类：**2 条质量建议**（F-V17-1 init 正文里出现 `team dispatch`；
+F-V17-2 指路路径写成仓库根相对）、**2 条 PM 侧记录**（F-V17-3 规格句与实现措辞不符；F-V17-4 归档门要的
+`reviews/P16.md` 不存在、看板也没有 P16 行）。**没有改任何 `skills/**`、`openspec/**` 与账本。**
+
+## 1. 六条 requirement × 15 个 scenario 逐条对账
+
+判定列里 `ok=` 是本包该小节通过的断言数；每个 scenario 都附上**实跑的命令**（不是「读代码推断」）。
+
+| # | requirement / scenario | 判定 | 证据（命令 → 结果） |
+|---|---|---|---|
+| R1/S1 | init SKILL.md 存在、≤100 行、Pi 解析器可加载 | ✓ | `wc -l` = **58**；`bun tests/skill-load.mjs skills/teamsmith-init` → `✓ name=teamsmith-init desc=800 字符 诊断=0`（`logs/10-init.log`，ok=21 bad=0） |
+| R1/S2 | 三拍：有序清单 → bootstrap → 交接句 | ✓ | 清单 6 条（`^[0-9]+\. \*\*` = 6）；`scripts/team bootstrap` 出现 2 次；末尾 `## 2. Handoff` 点名 `**teamsmith**` skill + 三问命令 |
+| R1/S3 | 两个迁移文件只有新家 | ✓ | `test -f` ×2（新家）+ `test ! -e` ×2（旧家）；另做**内容口径**：与 `a0cd880^` 的旧家文件逐行 diff，唯一差异是互链改写（`[migration.md](migration.md)` → `[migration.md](../../teamsmith/references/migration.md)`） |
+| R1/S4 | init 不带 scripts/extension/tests | ✓ | `find skills/teamsmith-init -maxdepth 1 -type d` → 只有 `references/`、`templates/` |
+| R2/S1 | 两节消失 + 指路行在 | ✓ | `grep -cE '^## (New project\|30-second start)'` = **0**；`## Starting a new project: use the teamsmith-init skill` 在位（`logs/20-daily.log`，ok=9 bad=0） |
+| R2/S2 | 日常 description 无 init 短语、点名 init skill | ✓ | 三条 init 短语逐条 `case` 检查 → 全不在；`teamsmith-init` 在（末尾新句 `To start a new project, use the teamsmith-init skill.`） |
+| R2/S3 | 旧路径无残留（SKILL.md / references / templates） | ✓ | SKILL.md 0 命中；`references/`+`templates/` 7 处命中**全部**指向 `../../teamsmith-init/…`（脚本逐行分类，不在白名单的写法会判红） |
+| R3/S1 | 两个目录都能被解析器加载 | ✓ | 两个目录各跑一次 `skill-load.mjs`：rc=0 + 注入 XML 里 `<name>` 与目录名一致（`logs/30-routing.log`，ok=23 bad=0） |
+| R3/S2 | 两条 description 不串词、都 ≤1024 | ✓ | 3+3 短语逐条检查通过；长度 **daily 912 / init 800**（python `len` 与 bash `${#}` 两口径一致，都在 1024 内） |
+| R4/S1 | bootstrap 仍是那一个 CLI 的子命令 | ✓ | 夹具里 `team bootstrap --print` rc=0，计划 5 步（`计划步骤：1. team init… 2. 写 config… 3. 建 worktree… 4. team pulse up… 5. 下一步清单`）；**并与 `a0cd880^` 的同夹具输出逐字对照**（等长路径 + 归一化后 `diff` 为空） |
+| R4/S2 | 工具面从不引用 init skill | ✓ | `grep -rn teamsmith-init skills/teamsmith/{scripts,extension}` → 无；`grep -rn bootstrap-prompt skills/teamsmith/scripts` → 无 |
+| R5/S1 | 四处版本相等、只有一个 CHANGELOG | ✓ | `common.sh=1.40.0 ｜ daily=1.40.0 ｜ init=1.40.0 ｜ CHANGELOG=1.40.0`；`test ! -e skills/teamsmith-init/CHANGELOG.md` 通过（`logs/50-version.log`，ok=12 bad=0） |
+| R5/S2 | 指纹范围不变（双向翻转） | ✓ | **本包自己的夹具**：夹具指纹 == 真树指纹（代表性自检）→ 改 init `SKILL.md` 指纹**不变** → 改 init `references/bootstrap.md` 仍**不变** → 改日常 `SKILL.md` **变** → 改 `extension/team-notify.ts` **变**；并核对 `team_skill_hash` 实现里不提 init skill |
+| R6/S1 | 模板不带 init skill | ✓ | `config.sh.tmpl` / `AGENTS.section.md.tmpl` / `pm-prompt.md.tmpl` 0 命中；整个 `skills/teamsmith/templates/` 也 0 命中（`logs/60-existing.log`，ok=12 bad=0） |
+| R6/S2 | 渲染的启动命令形状不变 | ✓ | 夹具 `dispatch --print` → 含 `--skill <日常 skill 目录>`、不含 `teamsmith-init`；**同一夹具在拆前树上对比**：init / doctor / dispatch 三份输出（归一化版本串、路径、会话名、机器读数、commit 号后）**逐字相同**，`config.sh` / `OWNERSHIP.md` / `AGENTS.md` 产物也逐字相同 |
+
+## 2. 主动攻击（brief 第二段）
+
+### 2.1 smoke §18b 的五条断言是不是剧场 —— 五个真树翻转
+
+方法：改**真树**的一个构件 → 跑**门禁本体**（`TEAM_SMOKE_FAST=1 smoke.sh`）→ 要求（a）门禁退非 0、
+（b）红行**点名**被打坏的目标 → `git checkout -- skills` 还原 → 断言 `skills/` 逐字节干净（否则立刻中止）。
+脚本 `pkg/flip-smoke18b.sh`，实录 `logs/flip-smoke18b.out`：
+
+| 翻转 | 注入的变异 | 门禁的红行（原文） | 还原 |
+|---|---|---|---|
+| A 版本漂移 | `init SKILL.md` 的 `version: 1.40.0` → `1.40.1` | `✗ 版本号四处一致（common/两个 SKILL/CHANGELOG）（期望 [1.40.0\|1.40.0\|1.40.0\|1.40.0]，实际 [1.40.0\|1.40.0\|1.40.1\|1.40.0]）` | ✓ 干净 |
+| B init 里出现代码目录 | `mkdir skills/teamsmith-init/scripts` | `✗ init skill 里出现了代码目录：scripts` | ✓ 干净 |
+| C description 污染 | 把 `organize multiple agents into a team` 追加回日常 description | `✗ description 交叉污染： daily-[organize multiple agents into a team]` | ✓ 干净 |
+| D 指纹口径被扩 | 给 `team_skill_hash` 加上 init SKILL.md | `✗ 改 init SKILL.md：会话指纹不变（init 文本不吵醒在跑的 PM）（期望 [9d31c0d1947f]，实际 [ea599b5adc3d]）` | ✓ 干净 |
+| E frontmatter 名漂 | `name: teamsmith-init` → `teamsmith-init-wrong` | `✗ skill-load 失败（teamsmith-init）` | ✓ 干净 |
+
+`五个翻转全部按预期红，且都点名了自己的目标；还原后树干净`（RC=0）。**结论：§18b 不是剧场** —— 五条
+断言都被真实破坏击穿过，且每条都指向正确的构件。（§18b 内部那两条「注入副本必须被抓到」的正对照也都在
+FAST 模式下真跑，见 `logs/flip-baseline.log` 的 18b 段落。）
+
+### 2.2 附录 A 的 5 个散点是否真被清单收编
+
+按 `tasks.md` 附录 A 的 6 条逐条查关键词（本包独立写死，不读实现）：①前置体检（`git repository`/`tmux`/`team doctor`）②
+身份与名册（`TEAM_SESSION`/`TEAM_AGENTS`/`TEAM_AGENT_MODELS`/`TEAM_MODEL_LIMITS`/`TEAM_AGENT_CMD`）③
+门禁/安装/VCS/巡检节奏（`TEAM_GATES`/`TEAM_INSTALL_CMD`/`TEAM_VCS`/`TEAM_PULSE_INTERVAL`）④文档骨架
+（`ROADMAP.md`/`OWNERSHIP.md`/`AGENTS.md`）⑤跑 bootstrap（`team bootstrap --print`/`team doctor`/`openspec init`）⑥
+交接（`team digest`/`team pulse status`）——**六条全部命中**。散点收编属实：`bootstrap-prompt` 模板、`config.sh.tmpl`
+注释、`bootstrap.md`、SKILL.md §New project、workflows.md §A 这五处的问答现在集中在 init SKILL.md 一份清单里
+（原 §New project 与 workflows.md §A 已删/缩，前四处见 §1 的 R2/S3、R4/S2 证据）。
+
+### 2.3 跨 skill 相对链接
+
+**26 条**相对 markdown 链接逐个按「文件所在目录」解析 → **全部存在**（`logs/70-attacks.log`，ok=18）。
+双向互链两条特别核对：`skills/teamsmith-init/references/bootstrap.md` → `../../teamsmith/references/migration.md` ✓；
+`skills/teamsmith/references/migration.md:77` → `../../teamsmith-init/references/bootstrap.md` ✓。
+
+### 2.4 装好的软链（只读；不动 `~/.agents/`）
+
+```
+teamsmith-init -> <home>/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith-init   （PM 已建）
+teamsmith      -> <home>/Documents/syncthing/Work/Projects/pm-skills/skills/teamsmith
+```
+- 两条软链都在，**SKILL.md 内容哈希与被验树一致**；
+- 穿软链跑解析器：`bun tests/skill-load.mjs ~/.agents/skills/{teamsmith,teamsmith-init}` 都 rc=0，
+  `<name>` 与目录名一致（解析器跟随软链，`baseDir` 是软链路径）；
+- 顺带验证了 F-V17-2 的修法：在安装形态下 `../<另一个 skill>/SKILL.md` **可解析**（`~/.agents/skills/` 下两个
+  兄弟目录都在），而仓库根相对写法 `skills/...` 在这种形态下根本不存在。
+- 任务书 4.2（安装软链交给 PM）**已完成**，本项从「未验证」转为已验证。
+
+### 2.5 额外探针：两条 description 真能把请求路由开吗（超出规格字面）
+
+规格只要求词汇不串（3+3 短语）。既然拆分的理由是「路由干净」，本包另外用模型做了**端到端路由探针**
+（`pkg/80-routing-probe.sh`，只把两条 description 给模型，8 条真实语气请求 × 3 次）：
+
+```
+第 1/2/3 次标签（完全一致）：1: A 2: B 3: A 4: B 5: A 6: B 7: A 8: B
+纯项命中 18/18（纯初始化 1、5 → A；纯日常 2、4、6、8 → B）
+混合项 3、7（新项目里也要派活）三次都判 A（初始化），与拆分意图一致
+```
+这是**弱证据**（一个模型、三次、prompt 我写的），但它把「路由」从词汇层抬到行为层，方向是对的；详见 §5。
+
+## 3. Findings
+
+| # | 级别 | 内容 | 建议 | 谁修 |
+|---|---|---|---|---|
+| **F-V17-1** | 建议（灰色地带） | `skills/teamsmith-init/SKILL.md:51`（§1.6 The first task）给出 `team dispatch dev T1.1 …` 命令。R1 原文要求 init「MUST NOT … nor claim ownership of the pulse, dispatch, review or merge」；同一文件第 8 行有免责句把它们归给日常 skill，且「把项目带到 ready to dispatch」本身就包含第一次派单 —— 我判定**不构成违反**，但这是边界文字，值得 PM 拍一下：删掉 §1.6 只留交接口令，或保留并明确「示范一次，之后归日常 skill」 | PM 一句话决定 | PM（`skills/**`） |
+| **F-V17-2** | 建议 | 4 处指路写成**仓库根相对**：`skills/teamsmith/SKILL.md:26`、`:233`（Deeper reading 表）、`skills/teamsmith/references/workflows.md:38`、`skills/teamsmith-init/SKILL.md:56`（反向）。Pi 注入的 skill 指令明确说相对路径按 **skill 目录**解析 → `skills/teamsmith-init/SKILL.md` 会落到 `skills/teamsmith/skills/teamsmith-init/SKILL.md`（不存在）；安装形态（`~/.agents/skills/<skill>`）下更无从解析。仓库里 `migration.md`/`troubleshooting.md` 的同类写法是**命令**（从仓库根跑 `bash skills/teamsmith/tests/smoke.sh`），性质不同 | 改成 `../teamsmith-init/SKILL.md`（skill 相对，两种读法都对；已在软链形态下实测可解析）或写成 markdown 链接 | PM（`skills/**`） |
+| **F-V17-3** | 记录（规格措辞） | R4/S1 的场景文字写 `prints the plan (detect / config / docs skeleton / worktrees / pulse)`，实际输出是中文 5 步、没有 `detect`/`docs` 字面串。行为对（与拆前逐字相同，§1 R4/S1 证据），偏差只在规格文本的英文转述 | 归档前把场景改成实际输出或明确「阶段」措辞 | PM（`openspec/**`） |
+| **F-V17-4** | 记录（归档门输入） | brief 指名的 `docs/team/reviews/P16.md` **在树与全部历史里都不存在**（`git log --all --pretty=format: --name-only -- docs/team/reviews/ \| sort -u` 只有 `split-teamsmith-init-skill-proposal.md`）；`BOARD.md` 也没有 P16 行（最后两行 P15=done、M25=todo）。按协议 apply 的 PM 复验记录是归档门的输入之一 | 归档前补一份 `reviews/P16.md`（或把复验结论写进 V17 的评审记录并指明），并把 P16/V17 补进看板 | PM |
+
+## 4. 方法学：两处「看起来是回归」的假象（我自己踩的，写下来免得 PM 复验再踩）
+
+1. **dispatch 提示词「差了 21 个字符」** —— 首轮对照显示 `提示词（3956 字）` vs `（3935 字）`，看着像真回归。
+   逐行 diff 后确认差异**全部来自 skill 目录绝对路径的长度**：`dispatch --print` 会把 `<skill>/scripts/team`
+   写进跨项目边界的文字里，而我的「等长临时树」第一版**多算了 `/skills` 的 7 字符**（× 3 处 = 21）。
+   修正等长公式后，两份提示词逐字相同。**教训**：对照两棵树时，凡是嵌了绝对路径的计数行都要么等长、要么归一化。
+2. **doctor 输出的 8 行差异** —— 拆前/拆后各自建夹具，天然会差：会话名（`v17-r6-old-*` vs `-new-*`）、
+   RAM/swap 读数、`main @ <commit>`、时间戳。这些都不是行为差异；归一化规则（§60 的 `normalize()`）写成
+   显式 sed 清单留在脚本里，PM 可以核、也可以加。
+
+顺带一条**自查**：本包第一版有三处判定范围写得太宽（把 `docs/team/reviews` 历史记录、`openspec/changes/archive`
+冻结文档、`skills/pi-team` 兼容软链都当成「死引用/代码目录」），还有两处断言脚本自身的 bug（YAML 引号没剥、
+`${#"/skills"}` 非法替换、BRE `\|` 在这台 sed 4.9 上不生效）。**这些都在提交前修掉并重跑**，报告里给的是
+修好之后、可复跑的绿结果 —— 没有拿早期假红当证据。
+
+## 5. 未验证 / 边界
+
+- **模型级路由只做了弱探针**（§2.5）：18/18 命中给了信心，但样本小、模型单一、prompt 由我构造；
+  「真实首次会话是否把新项目路由到 init skill」仍需一次真实使用来确认（P16 报告也把这条列为未验证）。
+- **已在跑的会话**：`team_skill_hash` 不含 init 文本（已验证），所以拆分不会吵醒在跑的 PM；但会话里缓存的
+  description 仍是旧文本，要 `/reload` —— 既有机制，非本 change 引入。
+- **翻转只覆盖 5 条断言**（§18b 共 16 条）：挑的是最关键的 5 类（版本/结构/路由/指纹/加载）。其余 11 条
+  由本包 §1 的独立实现逐条复核，但**没有**逐条做破坏实验。
+- 没有改 `skills/**`：五个翻转是真树临时改 + `git checkout -- skills` 还原，每一步的 `git status` 都留在
+  `logs/flip-smoke18b.out`；还原后 `skills/` 为空。
+- `docs/team/reviews/P16.md` 不存在 —— 我**没有**创建它（PM 的文件）。
+
+## Flip evidence（本任务书要求的那一节）
+
+> 「改坏实现 → 守门测试必须红 → 还原」的实录。本任务不是 defect-fix，但同样的要求适用于「每条断言是否
+> 真的能被打坏」，所以给了两组：
+
+**① 门禁侧（smoke §18b，五个翻转）** —— 见 §2.1 的表与 `logs/flip-smoke18b.out`；每条的红行原文、还原后
+`skills/` 干净的断言都在同一份日志里，脚本 `pkg/flip-smoke18b.sh` 可一键复跑（约 12 分钟）。
+
+**② 本包自己的判定器（反向自检）** —— 本包在写的过程中被自己的 bug 咬过五次（§4 末段），每一次都是
+「本包报红 → 查出是判定器的问题 → 修判定器 → 重跑变绿」；这条恰恰证明这些检查**不是恒绿的空跑**：
+例如 `bootstrap --print` 的关键词检查最初报 3 个 bad（英文关键词对不上中文输出），修成实际措辞并补上与
+拆前树的逐字对照后变绿；`70-c` 最初把 `docs/team/reviews/M4.1.md` 的历史提及判成死引用，收窄判定面后变绿。
+每轮重跑的输出都在 `logs/pkg-run.out` 与 `logs/*.log`（最后一次的 `SUMMARY.txt` 是权威结果）。
+
+## 验收（brief 要求的两条门禁，最终 tip 上实跑）
+
+```
+$ PATH="$HOME/.bun/bin:$PATH" openspec validate --all --strict
+✓ change/split-teamsmith-init-skill（含在 13 项里）
+Totals: 13 passed, 0 failed (13 items)                     （openspec_rc=0）
+
+$ TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1460  ✗ 0                                    （fast_smoke_rc=0）
+```
+
+全文 `logs/acceptance-final.log`；另有一次**同款基线**跑在五个翻转之前（`logs/flip-baseline.log`，也是
+`✓ 1460 ✗ 0`），两次都在未变异的同一棵树上。本包自己的全部小节：`logs/pkg-run.out` + `logs/SUMMARY.txt`
+（`ok=115 bad=0 finding=3`，`failed sections: none`）。
+
+## Decisions and deviations
+
+- **验证对象 = main 合并后的树**（brief 指定），不是 P16 的分支——因此本报告同时是「合并后不变量仍成立」的证据。
+- **五个翻转打真树**：走的是 brief 明确要求的「改坏→断言红→还原」；每次都用 `git checkout -- skills` 还原并在
+  还原后断言 `skills/` 干净，还原失败会**立刻中止整个实验**（不让脏树污染后续判定）。包自己的证物文件未提交，
+  所以「树干净」的判定范围是 `skills/`。
+- **判定面收窄的三处**（§4 末段）与 **两个未走通的检查**（英文关键词、软链形态的 `../` 判定）都写进了日志，
+  不是为了好看而删掉。
+- **没有顺手修任何东西**：F-V17-1/2/3/4 全部留痕交回；`reviews/P16.md` 我没有创建（PM 的文件）。
+
+## Suggested next steps
+
+1. PM：把 F-V17-1（init 里那句 `team dispatch`）与 F-V17-2（`../teamsmith-init/SKILL.md` 指路写法）拍一下——
+   两条都改文案，十分钟的量，但都是「下一版会被继承」的口径。
+2. 归档前补齐 F-V17-4 的两件记录（`reviews/P16.md`、看板 P16/V17 行）—— 归档门的输入应当齐备。
+3. 归档 `split-teamsmith-init-skill` 时，把本报告 §1 的表 + §2.1 的五个翻转作为「归档候选树上的不变量证据」留痕；
+   §18b 现在有 16 条断言，建议以后每次动 skill 边界时整套重跑本包（`bash docs/team/reports/V17-verify/pkg/run.sh`）。
+4. 下一次真实的新项目会话，留意一次路由是否落到 init skill（§5 的未验证项），有偏差再回看 F-V17-2 的写法。

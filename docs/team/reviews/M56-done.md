@@ -1,0 +1,8 @@
+- 2026-09-21T09:30:54Z · `team close M56 --status done` · FORCED：PM 显式覆盖（理由：verify 席位的独立复验 PASS（tip f9e4605），无实现阻塞项）
+  -   - ① 复验记录 docs/team/reviews/M56.md：不存在
+  -   - ② 分支是否已并入 main：task/M56-watch-degradation（f9e460553）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/M56.md（用 ① 的 team review 生成，判定 PASS）
+- 2026-09-21T09:32:58Z · `team close M56 --status done` · FORCED：PM 显式覆盖（理由：verify 阶段独立复验 PASS（tip f9e4605）；PM 亲自复跑证据包 30-gate-modes.sh（ok=16 bad=0），翻转证据成立）
+  -   - ① 复验记录 docs/team/reviews/M56.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/M56-watch-degradation（f9e460553）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/M56.md（用 ① 的 team review 生成，判定 PASS）

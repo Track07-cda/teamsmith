@@ -1,0 +1,4 @@
+- 2026-09-22T08:15:44Z · `team close P36 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：37/0，含 argv 级无 -c 证据与反向用例；help 与 init 交接成文）
+  -   - ① 复验记录 docs/team/reviews/P36.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P36-pm-fresh-pm-init-cwd（f40b9c4d8）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

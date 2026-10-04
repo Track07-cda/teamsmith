@@ -1,0 +1,4 @@
+- 2026-09-22T07:34:20Z · `team close P39 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：禁语清零、冻结标注 JSON 逐字、问卷收窄、两版渲染 diff 空；PM 代跑三条翻转）
+  -   - ① 复验记录 docs/team/reviews/P39.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P39-pi-only-scope-apply-pi-only-（9324a40d0）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

@@ -1,0 +1,4 @@
+- 2026-09-22T14:52:40Z · `team close P52 --status done` · FORCED：PM 显式覆盖（理由：verify PASS：四条承诺独立成立（含恒真绘制变异仍停在 120/120）；CI 红 2 核 5/5 复现并归因到夹具节奏（delay 注入 0s 绿 / 6s 红 / 放大视界无效））
+  -   - ① 复验记录 docs/team/reviews/P52.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P52-pty（21ee1ff76）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P52.md（用 ① 的 team review 生成，判定 PASS）

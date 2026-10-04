@@ -1,0 +1,4 @@
+- 2026-10-03T06:08:58Z · `team close P203 --status done` · FORCED：PM 显式覆盖（理由：独立验证已交付并被采纳：16 格 + 两影子/还原成立（含"线索只在命中名册才算"这一误伤面）；F1 规范漂移我读原文确认 → 转 P204 规格变更补齐；不影响发布门禁）
+  -   - ① 复验记录 docs/team/reviews/P203.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P203-verify（5c9ceb871）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P203.md（用 ① 的 team review 生成，判定 PASS）

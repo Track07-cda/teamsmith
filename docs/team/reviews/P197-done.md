@@ -1,0 +1,4 @@
+- 2026-10-03T02:05:48Z · `team close P197 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手用构造现场直接驱动判据：缺 run-start.txt → 拒绝并点名；同 ID 第二个标记 → 拒绝并报"2 条（要求恰好一条）"。两条洞闭合；delta 重写后 validate --all --strict 17/0（门禁的契约面转绿））
+  -   - ① 复验记录 docs/team/reviews/P197.md：不存在
+  -   - ② 分支是否已并入 main：task/P197-rework（b4782596c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

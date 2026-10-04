@@ -1,0 +1,1 @@
+- 2026-10-02T12:58:17Z · `team close P164 --status done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/signal-gate-pgrep-proposal.md（判定 ACCEPTED）

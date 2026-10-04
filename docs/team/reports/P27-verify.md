@@ -1,0 +1,209 @@
+# P27 · apply：门禁资源纪律（`gate-hygiene` G1–G5）
+
+agent: verify   status: **返工已完成（PM 复验 FAIL → 修 d-realpath + 阈值复核数据）**
+branch: `task/P27-apply`（本地模式：不 push，分支留 `.worktrees/verify`，PM 复验后本地合并）
+change: `gate-hygiene`（提案已验收：`docs/team/reviews/gate-hygiene-proposal.md` ACCEPTED）
+计划：`openspec/changes/gate-hygiene/tasks.md` 的 G1…G5（唯一实施计划）
+证物：`docs/team/reports/P27-verify/`（`pkg/flip.sh` 翻转矩阵 + `logs/` 原始输出）
+
+## 复验返工（PM 复验 2026-09-20T11:45Z 判 FAIL，消息 13:33Z）
+
+**FAIL 内容**：`panel-cpu-premise.sh` 的 `d-realpath` 写死期望 `exit 0` —— 那是假设机器安静。PM 在 load≈20 下复跑，
+真路径**诚实地**判红（exit 2，首帧 2442ms）。**修复**（`ad321aa`）：
+
+- `d-realpath`：期望集合 **{0,4}**；反后门断言**加强**且与负载无关 ——
+  ① 三个旋钮各自的「忽略…」行；② premise 行只反映真实读数（机检：不得出现 `loadavg 9999` / `0.75 x 1 cores`）；
+  ③ 若真路径判 **2**，跑一次**不带旋钮的对照**：两边同码 ⇒ 是这台机器的读数（记 finding，把首帧/CPU/load 写出来）；
+  两边不同码 ⇒ 旋钮漏进真路径 ⇒ **红**。
+- `c-healthy`：机器安静（load ≤ 0.5 × 阈值，会打印）时**严格**要求 exit 0；机器不安静时接受 0 或「2 + 实测数」并记 finding；
+  **不允许 4**、也不允许静默通过。
+- 顺带修两处夹具钝角：`a-above` 的 pattern 改为匹配夹具自己的 `== first frame:` 行（忙机器读到 `never`，同样超过预算）；
+  `panel-cpu.sh` 的跳过行不再打印 `neverms`。
+
+**PM 那个形状的实证**（`logs/premise-under-load-run3.log`，真造 load 20）：
+
+```
+== 实测 loadavg（跑夹具前）：18.13
+  finding c-healthy：机器不安静（loadavg 18.13 > 12.00）时判红：首帧 2495ms、窗格 CPU 0.399% —— 这台机器的读数，不是面板回归
+  ✓ d-realpath：退出码 2（本条不断言）   ✓ 三个「忽略…」行   ✓ premise 行只反映真实读数
+  ✓ d-control：退出码 2（不带旋钮的对照）
+  finding d-realpath：真路径判红（exit 2）—— 对照跑同样 exit 2 ⇒ 不是旋钮漏进真路径
+== 结果 ==  ✓ 18  ✗ 0 finding 2
+panel-cpu-premise：有 finding（机器不够安静）→ 退出 4（没结论）
+```
+
+PM 复验里那一条 ✗ 现在变成 **exit 4（可见跳过，无结论）**，smoke §36 本来就把 4 读成显式 SKIP ⇒ PM 的全量复跑不再红。
+
+### 第二批返工：口径决定（PM 消息 2026-09-20T14:2xZ）
+
+PM 的三条决定 = 三件事：① 27-d **维持 0.75 × 核**（不动）；② `panel-cpu.sh` 的首帧与窗格 CPU% 改成
+**中位 of 3**（三样本都打印，2000ms / 1% 阈值不动）；③ 重跑三档后**按数据**决定它是否需要自己的更紧前提；
+④ spec 里写明前提的**实测出处**。逐条落地（提交 `3644da4`、`724c82f`、`f7b9d24`）：
+
+**② 中位 of 3**：首帧 = 三次**独立 spawn**（每次「窗口创建 → 第一帧可见」），三样本打印、取中位参与判定
+（`never` 以超预算参与）；窗格 CPU% = 同一个采样窗口**三等分**的三个子窗均值，中位参与判定（采样时长不变）。
+实测（load 6.8）：`first frame: 1561 1569 1672 -> median 1569`；`pane CPU thirds: 0.00 0.50 0.00 -> median 0.00% (overall 0.165%)`。
+
+**③ 三档复核（median-of-3 之后；`logs/load-sweep-after-median.log`）**
+
+| 目标 | 实测 load | ×核 | 装配中位（5 样本） | 首帧三样本 → 中位 | CPU 三样本 → 中位 | panel-cpu 判定 |
+|---|---|---|---|---|---|---|
+| 5 | 6.94 | 0.22× | 1238ms 绿 | 1656 1536 1542 → **1542** | 0.50 0.00 0.00 → 0.00 | **绿** |
+| 15 | 12.98 | 0.40× | 1573ms 绿 | 2005 1995 2137 → **2005** | 4.47 0.50 0.00 → 0.50 | **红**（首帧 2005 ≥ 2000） |
+| 25 | 22.80 | 0.71× | 1713ms 绿 | 3887 4157 3919 → **3919** | 0.99 0.50 0.49 → 0.50 | SKIP（0.75 不成立） |
+
+**数据结论**：中位 of 3 已经把**低载假红**修掉了（0.22× 那档单次是 2141ms 红，中位是 1542ms 绿）；但首帧的
+绿→红交叉落在 **0.22× 与 0.40× 之间**（0.40× 中位 2005ms，三样本 1995/2005/2137）⇒ **它确实需要自己的更紧前提**。
+因此 `panel-cpu.sh` 用 **0.25 × 核**（本机 load 8；`TEAM_PANEL_CPU_PREMISE_FACTOR` 可覆盖），落在交叉之下、
+实测绿之上；装配中位那侧仍用 0.75（它到 0.71× 仍 1.2–1.7s 绿，M49 的红在 0.81–1.0×）。CPU% 三档全绿（中位吸收掉
+预热子窗的 4.47%），但它与首帧同一条前提（一次 SKIP 一起跳过）。
+**代价（如实记录）**：在这台被队友门禁占着的机器上（load 5–25 常见），`panel-cpu.sh` 现在**多数时候会可见 SKIP**
+（退出 4）—— 这是有意的：跳过比假红便宜，且 SKIP 会打印实测三数与 load，随时可复跑。
+
+**④ spec 出处**：`openspec/changes/gate-hygiene/specs/panel/spec.md` 现在逐条写明两个 factor 及其实测带
+（0.75：0.22/0.40/0.71× 绿、M49 的 0.81–1.0× 红；0.25：0.22× 绿、0.40× 起红）与中位 of 3 规则，并加了一条
+scenario 钉住「这些出处必须写在需求里」；三份文档（protocol §9b-2 / AGENTS 模板 + `AGENTS.md` / `SKILL.md`）
+用同一句话说明两个 factor。
+
+**返工中我自己修掉的一个设计缺陷**（`f7b9d24`）：`d-realpath` 原来用「带旋钮 exit 2 而对照跑 exit 0 ⇒ 后门」
+的**跨跑比较** —— 实测它会在两次跑之间机器变忙/变闲时**冤枉实现**（真出现过：2 与 0）。反后门改为**单次跑内**
+的三条断言（三个「忽略…」行 + premise 行只反映真实读数），对照跑降级为日志读数，判红记 finding。
+
+### 返工过程中的两次门禁噪声（如实记录，都不是本任务引入的缺陷）
+
+1. `acceptance-rework2.log`：全量门禁 `✓ 2411 ✗ 1` —— 唯一红是 **27-d 装配红线**：5 样本 `1447, 2269, 1520, 2392, 2457` → 中位
+   2269ms，而采样时 loadavg 只有 **4.51**（前提成立 → 照判）。同一台机器上其它项目的门禁/复验在并发跑（`ps` 里能看到
+   若干 `fake-tui.py`/`smoke.sh`），属于「突发争用没被 1 分钟平均反映」这一类 —— M49 前提管的是**持续负载**，管不了突发。
+   复跑（`acceptance-rework2-rerun.log`）同一断言 `中位 1435ms ≤ 2000ms（loadavg 1.87）` ✓ 绿。
+   **我没有改 27-d**（PM 已裁定维持 0.75 × 核）；这属于需要 PM 决定是否再加一层（例如越线时复测一轮）的观测。
+2. `acceptance-rework2-rerun.log`：全量门禁 `✓ 2411 ✗ 1`，这次红在 **§36 的 a-above**（注入的慢帧在中位 of 3 下有可能落在
+   2000ms 线下方 —— 夹具在**断言一个时序巧合**而不是一个状态）。已修（`91a3a94`）：注入 1300ms → 2500ms（中位必然越线），
+   并让 §36 打印**任何**含 `✗` 的行（原来只打印两空格缩进的，导致门禁日志里看不到失败原因）。
+   修后连续两次本地跑：`== 结果 ==  ✓ 18  ✗ 0 finding 0`。
+
+## 判定
+
+**交付完成（含两轮返工）。** G1…G5 全部实施并在**冻结的树**上跑完验收：openspec 15/15、全量 smoke `✓ 2412 ✗ 0`、
+FAST `✓ 1921 ✗ 0`、翻转矩阵 `14 ✓ / 0 ✗`（7 条，每条红→绿→树干净）、试归档证明 MODIFIED 块保留全部
+base scenario。两条 PM 审查要点各有专属证据（§6）。没有放宽任何红线，没有复验插队，`panel.js` 未重建。
+
+需要 PM 裁定的只有一处：**G4 的 4 个文档文件属 PM 路径**（见 §8），若 PM 不接受可单独回退这 4 个文件，
+G1–G3（行为）不依赖它们。
+
+## 1. G1 — `team review` 的排队阶段与记账（requirement：verification#The hard timeout covers the gate run, not the queue）
+
+实现：`skills/teamsmith/scripts/lib/cmd-review.sh`（队列阶段 + 记账 + 记录）/ `skills/teamsmith/tests/smoke.sh`（§34 夹具 + FAST 子树隔离）。
+
+| 项 | 落地 | 证据 |
+|---|---|---|
+| 1.1 锁解析（路径 / 上限 / 持锁者） | `${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}`、`TEAM_SMOKE_LOCK_WAIT`（非数字→1800）、`<lock>.holder` | §34② 记录里点名 `cmd=p34-holder`；§34⑤ 无 flock 的降级行 |
+| 1.2 队列阶段在时钟之前 | `flock --close -w <cap> <lock> bash -c '<marker+holder+exec>'`，`SMOKE_LOCK_WRAPPED=1` 跳过排队，`--no-gates`/空 `TEAM_GATES` 路径不变 | §34①（queued 6s + ran 3s > limit 5s 仍 PASS）/ §34④（祖先持锁 → queued=0s） |
+| 1.3 记账与记录 | `queued = marker − start`、`ran = end − marker`；记录写 `limit=Ns queued=Ns ran=Ns`；超上限 → `FAIL`+「门禁没有运行」+持锁者；`TIMEOUT` 带 `ran=Ns`；PM 结论块加超限条目 | §34①②③ 的断言 + `team_review_verdict` 三条 |
+| 1.4 套件子树不碰机器锁 | 全量：已持锁（wrapped）→ 嵌套 review 走 held；FAST：导出私有 `TEAM_SMOKE_LOCK` + wrapped | §34⑤⑥；FAST 全量回归（见 §5） |
+| 1.5 需求段落 | §34 六个夹具（a–f） | `logs/acceptance-frozen.log` 的 §34 段 |
+| 1.6 翻转 | F1 排队挪进计时区 → TIMEOUT；F2 删超限分支 → 红；F3 `**TIMEOUT(ran=…)` → parser `none` | `logs/flip-matrix.log` |
+| 1.7 真路径 | 本任务自己的全量门禁在 P24 复验占锁时**真的排了队**并打印持锁者 | `logs/gates-full.log` 顶部 |
+
+## 2. G2 — 装配红线的测量前提（requirement：panel#Frame assembly is asynchronous, cached and never blocks input，MODIFIED）
+
+- 前提：`loadavg_1m ≤ 0.75 × 逻辑核数`（`nproc` → `getconf _NPROCESSORS_ONLN`），一行打印 load / 核数 / 阈值 / 决定。
+- 前提成立：判定与阈值**一字未改**（5 次采样中位 ≤ 2000ms）。
+- 前提不成立：`SKIP（负载前提不成立）` + 实测样本/中位/load，计数进 **`P27_TIMING_SKIP`**（与 `SKIP_N` 分开），结果块打印一行点名 + load，**退出码不变**。
+- 夹具旋钮 `TEAM_SMOKE_LOADAVG` / `TEAM_SMOKE_CORES` / `TEAM_SMOKE_FRAME_DELAY_MS` 只在 `TEAM_SMOKE_FIXTURE=1` 下生效（裸设→忽略并打印）。
+
+## 3. G3 — `panel-cpu.sh` 的同一前提
+
+- 前提不成立 → 打印首帧 ms、窗格 CPU%、load → **exit 4**；成立 → 今天的两条红线判定（exit 2 / 0）。
+- 头注释写全退出码表（0/2/3/4）与前提公式；夹具旋钮 `TEAM_PANEL_CPU_LOADAVG` / `TEAM_PANEL_CPU_CORES` / `TEAM_PANEL_CPU_FRAME_DELAY_MS`（同样只在夹具模式生效）。
+- 夹具：`tests/panel-cpu-premise.sh` 四形状（above+慢帧→4；below+同慢帧→2；below+健康→0；真路径带旋钮→忽略且判定不变）。
+
+## 4. G4 — 文档（无 requirement，按用户决定不进 spec）
+
+`references/protocol.md` §9b-2（锁/上限/持锁者/wrapped/记账/前提/可见跳过 + 指向两条 requirement）、
+`templates/AGENTS.section.md.tmpl` 与 `AGENTS.md`（同一段操作规则，占位符归一化后逐字一致）、`SKILL.md`（诊断行与测试表行带上 FAST/全量分工与排队）。
+
+一致性：`TEAM_SMOKE_LOCK` / `TEAM_SMOKE_LOCK_WAIT` / `SMOKE_LOCK_WRAPPED` / `TEAM_SMOKE_FIXTURE` 在三份文档与实现里的拼写逐字相同；公式 `0.75 ×` 在文档与实现里同形。
+
+## 5. 验收（rework 2 定稿的冻结树，原始输出 `logs/acceptance-final.log`）
+
+```
+### openspec validate --all --strict
+Totals: 15 passed, 0 failed (15 items)                     openspec_rc=0
+
+### bash skills/teamsmith/tests/smoke.sh </dev/null
+== 结果 ==  ✓ 2412  ✗ 0
+smoke 全绿                                                 full_rc=0
+（27-d 装配红线：5 次采样中位 1714ms ≤ 2000ms，采样时 loadavg 2.16；
+  §36 panel-cpu-premise 全绿（中位 of 3 的新形态）；§34 门禁锁、§35 性能前提全绿）
+
+### TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh
+== 结果 ==  ✓ 1921  ✗ 0       + FAST 模式：跳过 25 个真进程段落（含 36·panel-cpu-premise）   fast_rc=0
+```
+
+返工期间的中间两轮（`acceptance-rework2.log` / `acceptance-rework2-rerun.log`）各有一条红，都不是本任务引入的缺陷，
+逐条记在下面的「门禁噪声」小节里；定稿这一轮全绿。
+
+### 试归档（/tmp 副本，5.4）
+
+`openspec archive -y gate-hygiene` → rc=0；归档后的 `panel` 规范保留 base 的 **3** 条 scenario 并新增前提的 **3** 条
+（共 6 条），`verification` 规范新增该 requirement ✓（`logs/trial-archive.log`）。
+
+## 6. PM 审查要点（任务书点名的两条）
+
+### 6.1 记录词汇闭集不许动
+
+三条夹具各一条记录，都用 CLI 自己的解析器（`common.sh::team_review_verdict`）读：
+
+| 结局 | 记录里的判定行 | parser |
+|---|---|---|
+| PASS（排队 6s + 运行 3s，limit 5s） | `判定: **PASS**` | `PASS` |
+| FAIL（排队超上限 2s） | `判定: **FAIL**` | `FAIL` |
+| TIMEOUT（真跑 60s，limit 2s） | `判定: **TIMEOUT**` | `TIMEOUT` |
+
+F3 反向证明：把记账写进 token（`**TIMEOUT(ran=2s)**`）→ parser 得到 `none`（记录看起来没有判定），
+所以记账一律写在 `**TOKEN**` **之外**（`limit=… queued=… ran=…`）。
+
+### 6.2 夹具旋钮不是真路径的后门
+
+§35 的两条断言（真路径、未打开 `TEAM_SMOKE_FIXTURE`）：
+
+- `TEAM_SMOKE_LOADAVG=9999` → `p27_load_reading` 仍返回 `/proc/loadavg` 的真值，并打印「忽略…」；
+- `TEAM_SMOKE_FRAME_DELAY_MS=99999` → `p27_inject_ms` 返回 0，并打印「忽略…」；
+- 前提判定只由真读数决定（当前真读数成立 ⇒ 照判）。
+`panel-cpu-premise.sh` 的 d 用例把同样的规则钉在 `panel-cpu.sh` 上。
+
+## 7. 翻转矩阵（红→绿）
+
+`logs/acceptance-frozen.log` 的 `########## flips ##########` 段（脚本 `pkg/flip.sh`；每条日志另存
+`logs/flip-F*.log` 与其 `-restored.log`）：
+
+```
+== 翻转矩阵结果 ==  ✓ 14  ✗ 0
+  树干净（skills/ 逐字节还原）        flips_rc=0
+F1 去掉排队阶段（变异 cmd-review.sh）      → §34 红（34① 判成 TIMEOUT，M49 的形状）→ 还原绿
+F2 删掉排队超限分支                        → §34 红（44 ✓ / 1 ✗：不再说「门禁没有运行」）→ 还原绿
+F3 把记账写进 **TOKEN**                    → parser 由 TIMEOUT 变 none（词汇闭集被破坏）→ 记录写法回退
+F4 premise 改成 always-skip                → §35 红（42 ✓ / 3 ✗：安静机器上的慢帧不再判红）→ 还原绿
+F5 premise 改成 always-judge               → §35 红（39 ✓ / 7 ✗：高负载夹具又被判红 = M49 假红）→ 还原绿
+F6 核数读成 0                              → §35 红（37 ✓ / 9 ✗：阈值行与边界都立不住）→ 还原绿
+F7 panel-cpu 去掉前提门                    → premise 夹具红（8 ✓ / 7 ✗：expect exit 4 got 2）→ 还原绿
+```
+
+每一轮的变异都用带校验的补丁器（锚点必须恰好命中一次、写回必须变化、否则拒绝），还原用
+`git checkout --` + `git status --porcelain` 断言；矩阵结束时再断言一次树字节级干净。
+
+## 8. Decisions and deviations
+
+- **G4 的路径**：`references/**`、`templates/**`、`SKILL.md`、`AGENTS.md` 按 `docs/team/OWNERSHIP.md` 属 PM；本任务书把
+  `tasks.md` 指定为唯一实施计划且 G4 在计划里，故一并实施，并在报告里逐文件列出改动供 PM 复核（若不接受，回退这 4 个文件即可，G1–G3 不依赖它们）。
+- **夹具旋钮的开关**：design 只点名了 `TEAM_SMOKE_LOADAVG` / `TEAM_PANEL_CPU_LOADAVG`；为了满足 PM 要点②（不能是后门）
+  与可确定地验边界，新增**夹具模式开关** `TEAM_SMOKE_FIXTURE=1`（并给核数/慢帧各一个同族旋钮）。这是测试侧的实现细节，不改产品键。
+- **`p27_assembly_judge` 单次评估**：第一版经 `p27_assembly_rc` 会评两次前提，真实门禁里出现「前提成立」与「SKIP」自相矛盾（已修，见提交）。
+- **夹具 SKIP 不进真计数**：§35 的可见性用例改在子 shell 里跑（第一版把 `loadavg 24.10` 这种夹具数写进了真实结果块）。
+- **我自己踩的两个坑（记录在案）**：① 在 `flip.sh` 运行时改了它 → bash 顺序读文件读进半新半旧的内容并报语法错；② 在排队中的门禁开始读 `smoke.sh` 时改了 `smoke.sh` → 那一次全量门禁的 §35 结果不可信（已作废，改为冻结树后重跑）。
+- `panel.js` 未改（判据未触及），未重建 bundle。
+
+## 9. Next steps
+
+- PM：G4 的 4 个文件是否照单接受（否则回退）；`team_review_verdict` 的记账位置约定（`limit/queued/ran`）是否照此固化。
+- 归档前按流程让用户确认；`openspec archive` 的试跑已在 `/tmp` 副本上做过（MODIFIED 块保留全部 base scenario）。

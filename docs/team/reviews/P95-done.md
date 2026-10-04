@@ -1,0 +1,4 @@
+- 2026-09-28T08:49:20Z · `team close P95 --status done` · FORCED：PM 显式覆盖（理由：PM 复验 PASS：真仓库 P82 解冲突形状 rc=0（旧实现假红已消）· 未合并分支仍 rc=1 · 打印的取记录修法原样执行后收敛（scratch 实测）· 翻转包 22/0 · 只读）
+  -   - ① 复验记录 docs/team/reviews/P95.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P95-post-merge（b53304dcb）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

@@ -1,0 +1,8 @@
+- 2026-09-29T19:58:53Z · `team close P133 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS：它自写桩探针 + pre/post-P132 逐字节契约（socket 表/判定/拒绝/exec）+ 隔离容器分段 + 自跑 FAST ✓3152 ✗0 SKIP34（账本一致）+ 自己 validate；首轮 PARTIAL 是环境（Alpine 夹具镜像/worktree 挂载），已按其重跑闭环）
+  -   - ① 复验记录 docs/team/reviews/P133.md：不存在
+  -   - ② 分支是否已并入 main：task/P133-p133（b00ce8e6e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P133.md（用 ① 的 team review 生成，判定 PASS）
+- 2026-09-29T19:59:09Z · `team close P133 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS：verify 自写桩探针 + pre/post-P132 逐字节契约（socket 表/判定/拒绝/exec）+ 隔离容器分段 + 自跑 FAST ✓3152 ✗0 SKIP34（账本一致）；首轮 PARTIAL 属环境（Alpine 夹具镜像 + worktree 挂载）已重跑闭环；PM 合并前另用自造桩端到端验过同一实现）
+  -   - ① 复验记录 docs/team/reviews/P133.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P133-p133（b00ce8e6e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P133.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,5 @@
+- 2026-09-22T13:15:52Z · `team close P56 --status done` · FORCED：PM 显式覆盖（理由：P56 propose 已交付（报告在顶层 reports/P56-dev-bob.md））
+  -   - ① 复验记录 docs/team/reviews/P56.md：不存在
+  -   - ② 分支是否已并入 main：task/P56-propose（4c1cb0275）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/gate-section-accounting-proposal.md 不存在
+- 2026-09-22T13:53:23Z · `team board set P56 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/gate-section-accounting-proposal.md（判定 ACCEPTED）

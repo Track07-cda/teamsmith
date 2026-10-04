@@ -1,0 +1,4 @@
+- 2026-10-03T12:48:20Z · `team close P209 --status done` · FORCED：PM 显式覆盖（理由：PM 亲手探针（容器内 scratch 项目）：有映射任务 + 未勾项 → blockers 里出现 checklist · 2 项未勾 · tasks.md:1「1.1 todo」 · tasks.md:2「1.2 todo」；全勾后该条消失、既有任务类 blocker 保留（不顶掉））
+  -   - ① 复验记录 docs/team/reviews/P209.md：不存在
+  -   - ② 分支是否已并入 main：task/P209-apply（e10c187d6）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

@@ -1,0 +1,4 @@
+- 2026-10-02T10:57:38Z · `team close P157 --status done` · FORCED：PM 显式覆盖（理由：PM 采纳 PASS（带两条 finding）：真实红侧在历史版本上仍成立；验证把 Pi 版本钉死为 0.99.2 并分版本报告宿主 1.0.0 的红；我自己读了两份真帧，确认 1.0.0 的红是夹具自造了一行框内输出、产品侧"安全扣住+可见报告"行为正确。F1/F2 转 P163，归档前落地）
+  -   - ① 复验记录 docs/team/reviews/P157.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P157-verify（e82e5e12f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P157.md（用 ① 的 team review 生成，判定 PASS）

@@ -1,0 +1,4 @@
+- 2026-10-01T16:25:45Z · `team close P143 --status done` · FORCED：PM 显式覆盖（理由：提案验收通过并合入 main：validate 16/0；三个 capability 的 MODIFIED 逐条比对基线场景丢失 0（+10 新增）；新增 requirement 不在基线；守卫的既有承诺（真草稿仍受保护、规则形草稿不得借道、至多一次）在 delta 里保留；开场用的是我在今天的 main 上亲自复现的红；非目标（不加 intent、不加守护进程）写明）
+  -   - ① 复验记录 docs/team/reviews/P143.md：不存在
+  -   - ② 分支是否已并入 main：task/P143-busy-notify-propose（d92f0edeb）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：docs/team/reviews/delivery-truth-proposal.md 不存在

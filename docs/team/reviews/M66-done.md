@@ -1,0 +1,4 @@
+- 2026-09-21T18:06:24Z · `team board set M66 done` · FORCED：PM 显式覆盖（理由：M66 复验 PASS（reviews/M66.md，PM 独立复验：宿主直跑 exit 3、信号须来自镜像、旧镜像被拒、拆守卫翻转成立）；属 apply 返工交付）
+  -   - ① 复验记录 docs/team/reviews/M66.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/M66-perf-sh-in-container-m64-f2（b32d84699）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

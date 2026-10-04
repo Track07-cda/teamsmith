@@ -1,0 +1,4 @@
+- 2026-09-30T06:27:47Z · `team close P137 --status done` · FORCED：PM 显式覆盖（理由：PM 判定 PASS 并合并：独立 checkout 上 14b/15b/18 ✓193 ✗2（两条为预存、与本改动无关）；合并后 main 上 14b 26✓0✗ · 15b 26✓0✗ · 18 36✓0✗；§27 三条内容与不变量均核实；其余见 docs/team/reviews/P137.md）
+  -   - ① 复验记录 docs/team/reviews/P137.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P137-references（337eaf82d）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

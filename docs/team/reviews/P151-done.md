@@ -1,0 +1,4 @@
+- 2026-10-01T21:38:21Z · `team close P151 --status done` · FORCED：PM 显式覆盖（理由：PM 复验：拒绝消息里两条修法都是干净命令（无说明拼接）✓；原样粘贴 --force 那条在 scratch 项目里被解析、打印覆盖证据并继续（用假 launcher 验证）✓；段 54 自跑绿 ✓；P149 的五条缺陷各自有红→绿证据 ✓；独立复验另派换人）
+  -   - ① 复验记录 docs/team/reviews/P151.md：不存在
+  -   - ② 分支是否已并入 main：task/P151-rework（d55daf02f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

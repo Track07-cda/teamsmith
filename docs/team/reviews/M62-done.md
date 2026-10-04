@@ -1,0 +1,4 @@
+- 2026-09-21T18:44:08Z · `team board set M62 done` · FORCED：PM 显式覆盖（理由：M62 的 BLOCKED 项（窗口破坏性调用必须拒）已由 M67 落地为真：环境零授权、kill-server 永远 64；它的证据核对 10/11 完成，第 11 行现成立）
+  -   - ① 复验记录 docs/team/reviews/M62.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/M62-spec-backfill-apply（0aa85afe7）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
