@@ -4232,6 +4232,29 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     *)     bad "6k ⑦ P210：遗体席位的四态不是 dead（现场：$(m37_bash 'team_seat_condition "$1"' "$M37_AGENT" | tr '\n' ' ')）" ;;
   esac
 
+  # ⑧ P217：`bash <agent>`（argv[1] 就是 agent、且**再没有** agent 子进程）算**在跑** —— 脚本型 agent
+  #    被直接当 pane 命令起的形状（人工在座位窗口里直接起 agent；§41 的旧夹具就是它）。P210 的收紧
+  #    把这一种也一起否掉了：读数 exited → 下一次 resume 就 respawn 掉一个**正在干活的 agent**。
+  #    与 ⑥ 的分界就是 argv[1]：⑥ 的 `-s <agent>` 里 agent 只是选项的值（“提到它”），不算。
+  tmux kill-window -t "$M37_W_AGENT_T" 2>/dev/null || true
+  tmux new-window -t "$SESSION" -n "$M37_W_AGENT" -d -c "$REPO" -- "$M37_STUB" 2>/dev/null \
+    || bad "6k ⑧ 夹具：脚本型 agent 窗口没建起来"
+  if m37_wait_shape "$M37_W_AGENT_T" "$M37_STUB"; then
+    M37_SHAPE_CHILD="$(m37_child_of "$M37_W_AGENT_T")"
+    ok "6k ⑧ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（pane 命令行=[$(m37_pane_args "$M37_W_AGENT_T")]；agent 子进程=[${M37_SHAPE_CHILD:-无}]）"
+  else
+    bad "6k ⑧ 夹具：5s 内 pane 命令行里没出现 $M37_STUB（现场 args=[$(m37_pane_args "$M37_W_AGENT_T")]）"
+  fi
+  m37_assert_verdict "6k ⑧ P217：pane_pid 自己就在跑 agent（argv[1] 就是 agent、没有 agent 子进程）判活" \
+    "$M37_W_AGENT_T" "alive"
+  assert_eq "6k ⑧ P217：这个形状确实没有 agent 子进程（旧口径「只看直接子进程」在这里判停 —— P217 修的就是它）" \
+    "$(m37_child_of "$M37_W_AGENT_T")" ""
+  assert_eq "6k ⑧ P217：pane_current_command 是 bash（判据走的是「前台是 shell」那一支）" \
+    "$(m37_pane_field "$M37_W_AGENT_T" pane_current_command)" "bash"
+  M37_RESUME_SHAPE="$(env TEAM_AGENTS="$M37_AGENT" TEAM_PI_BIN="$M37_STUB" $TEAM resume --dry-run 2>&1 || true)"
+  assert_not_echo "$M37_RESUME_SHAPE" "$M37_AGENT 可续跑" \
+    "6k ⑧ P217：resume --dry-run **不列**它（判活的直接后果：不会把正在干活的 agent respawn 掉）"
+
   # 清场：窗口 + 夹具 agent 的 state 不能留给后面的段落（尤其 12/14c 的零写入与真进程自检）
   for _w in "$M37_W_LIT" "$M37_W_AGENT" "$M37_W_START"; do tmux kill-window -t "$SESSION:$_w" 2>/dev/null || true; done
   rm -f "$REPO/.pi/team/state/$M37_AGENT.env"
@@ -16450,7 +16473,11 @@ P55AG2
     "$(tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null | cksum)" "$P55_BEFORE"
 
   # ── ④ 四态夹具 + 读面（3.1/3.2/3.3/3.4/3.5 + pending stopped）────────────────
-  tmux new-window -d -c "$REPO" -n p55live -t "$SESSION" "$FAKE/p55-agent" 2>/dev/null || true
+  # P217：p55live 用**生产里真正的形状**起 agent —— dispatch 走 `respawn-pane … bash -lc <harness>`，
+  # harness 在 agent 前后都有语句、末尾还 `exec bash`（scripts/lib/cmd-agents.sh），所以 agent 是
+  # pane shell 的**直接子进程**。注意“外套一层 bash -lc <agent>”不够（bash 对 `-c` 的最后一条命令
+  # 会直接 exec，进程形状与“直接当 pane 命令”逐项相同——P214 实测），要的是**后面还有语句**。
+  tmux new-window -d -c "$REPO" -n p55live -t "$SESSION" bash -lc "$FAKE/p55-agent; :" 2>/dev/null || true
   tmux new-window -d -c "$REPO" -n p55exit -t "$SESSION" 2>/dev/null || true
   printf 'window=p55live\ntask=T9.56\n' > "$REPO/.pi/team/state/p55live.env"
   printf 'window=p55exit\n' > "$REPO/.pi/team/state/p55exit.env"

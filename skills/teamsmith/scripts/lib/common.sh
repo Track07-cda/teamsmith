@@ -1770,6 +1770,36 @@ team_proc_cmdline_is_bin() { # <pid> <可执行文件路径或名字> [已读到
   return 1
 }
 
+# P217：这个 pid **自己正在执行** <bin> 吗 —— 判据是 argv[1]（`bash <agent>` 的语义就是「跑这个脚本」）。
+# 与 team_proc_cmdline_is_bin 的分岔点正是 P103 的那条洞：那个问「命令行里**提到**它吗」
+# （harness 的 `-lc '<agent>; :'`、启动壳的 `-s <agent>` 都只是提到），这个问「它**在跑**它吗」。
+# 两个形状的 argv 前几个词几乎一样，唯一稳定的分界是**第二个词**：
+#   bash /path/agent                     → argv[1] 就是它 = 在执行它（P217：算在跑）
+#   bash --noprofile --norc -s /path/agent → argv[1] 是选项 = 只是提到它（P103：不算，绝不放回来）
+# 为什么必须分开（P217 的现场）：`bash <agent>` 是脚本型 agent 被**直接当 pane 命令**起的形状
+# （§41 夹具、人工在座位窗口里直接起 agent）。只认「直接子进程」会把它判成 exited，而判停的下一步
+# 就是 `team resume` 的 respawn —— 那个误判会**杀掉一个正在干活的 agent**（比假活更贵）。
+team_proc_executing_bin() { # <pid> <可执行文件路径或名字> [已读到的 args（可选）]
+  local pid="${1:-}" want="${2:-}" preraw="${3:-}" base args argv1 rest
+  [ -n "$pid" ] && [ -n "$want" ] || return 1
+  case "$want" in
+    /*) base="$(basename "$want")" ;;
+    *)  base="$want" ;;
+  esac
+  [ -n "$base" ] || return 1
+  args="${preraw:-$(ps -o args= -p "$pid" 2>/dev/null | head -1)}"
+  [ -n "$args" ] || return 1
+  # M7.2/M8.1 同款排除：启动壳与派单 harness 的命令行里也写着 agent 路径，但它们还没在跑它
+  # （整串判断，理由同 team_proc_cmdline_is_bin 里那条注释）。
+  case "$args" in *pm.pid.spawn*|*dispatch-*.spawn*) return 1 ;; esac
+  read -r _ argv1 rest <<< "$args" || return 1
+  [ -n "${argv1:-}" ] || return 1
+  case "${argv1##*/}" in
+    "$base") return 0 ;;
+  esac
+  return 1
+}
+
 # 这个 pid 是不是「本项目的 PM」的 CLI 进程？M8.1：身份按 **PM 的**可执行文件判定
 # （team_pm_bin_path = TEAM_PM_BIN > TEAM_PM_CMD 首词 > TEAM_PI_BIN），不再按 worker adapter 的
 # TEAM_AGENT_BIN/CMD —— 于是「worker 用 codex、PM 还是 pi」这种组合下，人工启动的 Pi PM 也认得出来，
@@ -1944,7 +1974,8 @@ team_pm_pending_suffix() { # <state>
 #   （TEAM_AGENT_BIN > TEAM_AGENT_CMD 首词 > TEAM_PI_BIN，解析见 team_agent_bin_path），
 #   且该进程 cwd 在本项目内（含它的 worktree）。缺任一 → 非 0：报告「没证据」，不猜。
 # P210 起对 worker 这一侧再加两道（裸 shell 的 pane 不算在跑：遗体 pane 的号会被回收、前台是
-# shell 时 pane_pid 自己的命令行不算证据）：判据在 team_agent_alive_in_pane，扫描仍只有这一份。
+# shell 时 pane_pid 自己的命令行不算证据）；P217 把第二道补准（「在执行 agent」= argv[1] 就是它，
+# 也算证据；只有「命令里提到它」不算）—— 三道都在 team_agent_alive_in_pane，扫描仍只有这一份。
 # 放在 common.sh 是因为 team_pending_counts（digest / pulse 的「停了的 agent」、面板待办）与
 # roster / resume / 面板 agents 块共用它 —— 各写一份就是下一个假告警的温床。
 team_proc_is_agent_bin() { # <pid>
@@ -1993,9 +2024,16 @@ team_pm_other_sessions_in_dir() { # <dir> → 该目录里活着的 PM CLI 进�
 #      命令行里出现 agent 可执行文件时，旧判据会把一个**没有进程的 pane** 说成「在跑」——
 #      2026-10-03→04 的 P103 就是这样被静默漏掉一天的：dev-bob 的 pane 已是遗体，pulse 每 15 分钟
 #      算一次「无待办」，PM 26 小时没被叫醒（P103 报告在看板上 wip、席位记录着任务）。
-#   ② 前台命令是**裸 shell**（bash/sh/zsh…）→ pane_pid 自己的命令行不是证据，只认它的**直接子进程**。
-#      M37 的承诺不变（不许误杀）：真干活的 agent 就是 pane shell 的直接子进程 —— dispatch 的 harness
-#      正是「bash 父 + agent 子」（旧判据在启动壳/遗留壳的 argv 里读到 agent 路径就会假活）。
+#   ② 前台命令是**裸 shell**（bash/sh/zsh…）→ pane_pid 「命令行里提到 agent」不算证据，只认它的
+#      **直接子进程**。M37 的承诺不变（不许误杀）：真干活的 agent 就是 pane shell 的直接子进程 ——
+#      dispatch 的 harness 正是「bash 父 + agent 子」（旧判据在启动壳/遗留壳的 argv 里读到 agent 路径
+#      就会假活）。
+# P217（判据补准，不是放宽）：② 的判词曾是「pane_pid 自己的命令行一概不算」，把**真的在执行 agent**
+# 的那一种形状（`bash <agent>`，argv[1] 就是 agent）也一起否掉了 —— §41 的夹具与人工在座位窗口里
+# 直接起脚本型 agent 都是这个形状，读成 exited 之后 resume 会把一个活着的 agent 重新 respawn 掉。
+# 现在这一支分两步：pane_pid **在执行**那个 agent（team_proc_executing_bin，argv[1] 逐词相等）→
+# 算证据；否则才退回「只看直接子进程」。P103 的洞照旧堵着：那条假活是 `-s <agent>`（argv[1] 是选项），
+# 不属于「在执行」。
 team_agent_alive_in_pane() { # <session:window>
   local target="${1:-}" facts pane dead cmd pid cwd
   [ -n "$target" ] || return 1
@@ -2004,7 +2042,13 @@ team_agent_alive_in_pane() { # <session:window>
   [ -n "$pane" ] || return 1
   [ "$dead" = "1" ] && return 1
   if team_is_shell_cmd "$cmd"; then
-    pid="$(team_pane_proc_tree_pid "$target" team_proc_is_agent_bin children 2>/dev/null || true)"
+    # P217：前台是 shell 时，pane_pid **自己**可能就在执行 agent（`bash <agent>`，argv[1] 是它）。
+    # 先问这一条（逐词相等，不是「整串里提到」），不成立才退回「只看直接子进程」。
+    if team_proc_executing_bin "$pane" "$(team_agent_bin_path 2>/dev/null || true)"; then
+      pid="$pane"
+    else
+      pid="$(team_pane_proc_tree_pid "$target" team_proc_is_agent_bin children 2>/dev/null || true)"
+    fi
   else
     pid="$(team_pane_agent_pid "$target" 2>/dev/null || true)"
   fi

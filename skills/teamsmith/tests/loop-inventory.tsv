@@ -6,6 +6,7 @@
 # 范围：tests/*.sh + tests/lib/*.sh 的**自身** while+sleep 循环；heredoc/字符串里拼出来的
 # 脚本（如 container-tmux.sh 写进容器的 inner 脚本、嵌入的 python/awk）不在扫描面内。
 flip-m37.sh	113	cap="$m37_i" -lt 50	while [ "$m37_i" -lt 50 ] && { [ -z "$(m37_child_of "$SESS:m37w")" ] || [ -z "$(m37_child_of "$SESS:m37-lit")" ]; }; do
+flip-p217.sh	157	cap="$i" -lt 40	while [ "$i" -lt 40 ]; do
 flip-p210.sh	130	cap="$p210_i" -lt 50	while [ "$p210_i" -lt 50 ] && [ "$(tmux list-panes -t "$SESS:p210dead" -F '#{pane_dead}' 2>/dev/null | head -1)" != "1" ]; do
 flip-p210.sh	135	cap="$p210_j" -lt 20	while [ "$p210_j" -lt 20 ]; do
 flip-m4.3.sh	86	cap="$i" -lt $((n * 4))	while [ "$i" -lt $((n * 4)) ]; do
