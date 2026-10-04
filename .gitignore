@@ -23,3 +23,7 @@ __pycache__/
 **/node_modules/
 docs/team/reports/**/.runtime/
 docs/team/reports/**/.scratch/
+
+# 账本与团队运行时在仓外（2026-10-04 起公开仓只放产品面）
+.pi/
+docs/team/
