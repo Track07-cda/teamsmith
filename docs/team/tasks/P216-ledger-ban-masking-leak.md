@@ -19,11 +19,11 @@ priority: 高（这条改动**自己的承诺**是"输出里的敏感 token 一�
 ## 现场（PM 用 P212 的实现自己跑的，探针两行）
 
 ```
-docs/team/probe.md:2: [home] 混合：家目录 <home>/secret 与地址 192.168.7.9 以及名字 acme-corp
+docs/team/probe.md:2: [home] 混合：家目录 <home>/secret 与地址 <internal> 以及名字 <names#1>
 docs/team/probe.md:3: [net] 超量<internal<internal<internal<internal<internal<internal<internal<internal<internal<internal<internal<internal<inter…
 ```
 
-- **F1 · 混合形状只遮第一类**：第 2 行同时有家目录、内网地址、名单里的名字，输出**只遮了家目录** —— 地址 `192.168.7.9` 与 `acme-corp` **原样进日志**（主循环 `match(home_re)` 命中后直接 `continue`）。
+- **F1 · 混合形状只遮第一类**：第 2 行同时有家目录、内网地址、名单里的名字，输出**只遮了家目录** —— 地址 `<internal>` 与 `<names#1>` **原样进日志**（主循环 `match(home_re)` 命中后直接 `continue`）。
 - **F2 · 同类超过 20 个剩下的漏出，且输出被自己搅乱**：第 3 行 25 个地址，`mask_span` 的 `g < 20` 上限导致其余未遮，且替换文本被**二次扫描**（`<internal<internal…` 这种拼接说明它在改写自己的输出）。
 
 ## 要做的

@@ -5,7 +5,7 @@ branch: `task/P214-apply`   PR/MR: -（local 模式：分支留本地，PM 复�
 tip: `726273b4`（本报告与证据所在的 tip；**被诊断的 run 是公开仓 run 2 = `fc9c570d`**）
 container: `localhost/teamsmith-gate:local`（`HOME=/tmp`、`--pid=host`、`--userns=keep-id`，与 CI 同一枚镜像）
 evidence: `docs/team/reports/P214-dev/`（按 `.gitignore:34` 的 `docs/team/reports/**` + `!*.md` 例外，只有本报告进仓库；
-脚本与日志在分支的工作树里：`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/docs/team/reports/P214-dev/`）
+脚本与日志在分支的工作树里：`.worktrees/dev/docs/team/reports/P214-dev/`）
 本报告里引的 `evidence/...` 都相对它；合并分支不会把它们带过去（结束语里已点名）。
 
 ```
