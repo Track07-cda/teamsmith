@@ -195,6 +195,9 @@ one audit line to `state/outbox/forced.log`; `team outbox drop <n|all>` discards
 <project root>/
 ├── .pi/team/
 │   ├── config.sh          # configuration (committed, shared by the team)
+│   ├── forbidden-names.txt # ledger-ban list: other-project names that may not appear in the committed
+│   │                      #   ledger, one per line (gitignored; this repository's PM maintains it by hand —
+│   │                      #   the gate reads it, `init` does not create it; see protocol.md §9b-3)
 │   └── state/             # runtime state (gitignored): <agent>.env (the durable record),
 │                          #   pm.pid (pid of the PM this tool started: the liveness proof),
 │                          #   notify-dedup, prompt-<agent>-<ID>.md (the prompt of this dispatch;

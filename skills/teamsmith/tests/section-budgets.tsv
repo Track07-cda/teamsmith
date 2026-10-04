@@ -147,3 +147,4 @@
 55 · meeting-liveness：未读 / 过期 / 队列 / 标识（P139，纯逻辑）	30	120	30	-/-/-/-	-	-	-	P139 实测（占位，出数后改）：host=[P139 FAST §54] container=[未测] ci=[未测] · ×4 · floor 60
 56 · meeting-liveness 真 tmux：敲门 / 排水 / 每方窗口（P139）	60	240	60	-/-/-/-	-	-	-	P139 实测（占位，出数后改）：host=[P139 full §55] container=[未测] ci=[未测] · ×4 · floor 60
 59 · pulse-nudge-key：叫醒键按类别集合（P174）	8	60	-	-	8	-/-/-/-	-	P174 实测（container=teamsmith-gate:local 跑 smoke --select 59，段用时 7–8s；纯逻辑四档 + observers 私有仓库真 CLI）· ×4 · floor 60
+60 · 账本禁令：家目录 / 私有网段 / 用户名 / 他项目名（P212 · D94）	1	60	1	-	1	-	-	P212 实测（2026-10-04，teamsmith-gate:local）：host=[全量 FAST §60 = 1s（17:02，tip 98eb798b）+ --select 60 = 1s（16:16）] container=[全量 FAST §60 = 0s（16:40，6165708c）与 1s（17:1x，98eb798b）取最差] ci=[未测] · ×4 · floor 60

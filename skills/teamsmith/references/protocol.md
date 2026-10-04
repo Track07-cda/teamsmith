@@ -623,6 +623,34 @@ by hand is not in the gate lock, so pattern-deleting in the shared temp filesyst
 prints the temp root's headroom (free/total bytes and inodes, warning only) so a full tmpfs is visible before it
 turns into a red a fixture cannot explain.
 
+### 9b-3. The ledger is public, so the ban is a gate check (D94)
+
+Since 2026-10-04 the readable ledger — board, decisions, roadmap, ownership, briefs, the text of reports and
+verification records, threads — is committed to the repository (D94). A brief or a report is therefore public the
+moment it is written, and the one mechanical redaction pass that produced the first batch has no net behind it.
+So the ban is a check in the gate: suite section `60` runs `tests/ledger-ban.sh`, which scans `docs/team/**/*.md`
+and fails, naming file and line, on
+
+- a home directory (`/home/<name>…` or `/Users/<name>…`; the ellipsis placeholders `/home/.../` and `/home/…/` pass);
+- a private IPv4 address (`192.168.<x>`, `10.<x>.<x>`, `172.16–31.<x>` — three octets minimum, and the bare
+  `192.168.` prefix, the way this very rule writes it, never matches);
+- the local username, resolved at run time (`id -un` → `$USER`/`$LOGNAME` → the tail of `$HOME`) and never written
+  into the repository; a name that cannot be resolved is a visible skip, not a silent pass;
+- a name from the other-project list `.pi/team/forbidden-names.txt` — one name per line, `#` comments and blank
+  lines ignored, matched as a whole word, case-insensitive. The list is gitignored, and it has to be: the names it
+  spells out are exactly what the ban protects. A missing or empty list is a **visible skip**
+  (`SKIP names —— 禁令名单未配置… 这一项不是通过`), never a pass.
+
+The `<home>` / `<user>` / `<peer>` / `<internal>` placeholders are stripped before matching, so the redacted ledger
+passes; text outside `docs/team/**` is not in scope (the skill's own docs talk about *the user's* projects), and the
+gitignored evidence packages (`docs/team/reports/<ID>-<agent>/…`) are not scanned — they never enter the public
+surface. A hit line is masked: it names the file and line and replaces the offending token with a placeholder, so a
+gate log can be pasted anywhere without leaking the thing it reported. Exit codes: `0` every shape was checked and
+clean, `3` clean but a sub-check was skipped (missing/empty list, unresolved username), `1` a hit, `4` the scanner
+itself failed. Falsifiability lives in the fixture self-test (`bash tests/ledger-ban.sh --self-test`): a planted home
+path and a planted forbidden name must come back red with file:line, a missing list must show the visible skip, and a
+shadow scanner whose hit counter is broken must make the two red cases fail.
+
 ## 9c. Strong verification (adversarial package + finding flips, for milestones)
 
 `team review <ID> --strong` checks two extra things and writes the conclusion into the verification record. The check is

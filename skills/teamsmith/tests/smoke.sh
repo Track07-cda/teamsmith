@@ -19410,6 +19410,80 @@ else
   bad "59 缺 tests/pulse-nudge-key.sh（P174 的聚焦夹具）"
 fi
 
+# ---------------------------------------------------------------- 60. 账本禁令（P212 · D94 的机制）
+# D94（2026-10-04）把可读账本（BOARD / DECISIONS / tasks / reports / reviews / threads）放进了仓库 ——
+# 任务书与复验记录从此「写下去即公开」。这次检查是那次决定的兜底：每次门禁扫一遍 docs/team 的 .md，
+# 家目录 / 私有网段 / 本机用户名 / 他项目名 命中即红并点名 file:line；他项目名单从**被忽略**的配置读
+# （.pi/team/forbidden-names.txt，一行一个），名单没配 → 可见 SKIP（不算通过）。纯逻辑（只读、不起进程）。
+section "60 · 账本禁令：家目录 / 私有网段 / 用户名 / 他项目名（P212 · D94）"
+P212_BAN="$SKILL_DIR/tests/ledger-ban.sh"
+# ① 自检：五形状 + 四条可证伪（家目录红 / 他项目名红 / 名单缺失可见跳过 / 影子必红）+ 不误伤
+TEAM_SMOKE_FIXTURE=1 bash "$P212_BAN" --self-test >"$TMP/p212-selftest.log" 2>&1; P212_RC=$?
+if [ "$P212_RC" = "0" ]; then
+  ok "P212 自检全绿（✓ $(grep -ac '✓' "$TMP/p212-selftest.log" || true) 条：五形状 + 四条可证伪 + 不误伤）"
+else
+  bad "P212 自检红（rc=$P212_RC）"; grep -a '✗' "$TMP/p212-selftest.log" | head -6 | sed 's/^/      /'
+fi
+for p212c in ① ② ③ ④; do
+  assert_has "$TMP/p212-selftest.log" "✓ $p212c" "P212 可证伪用例 $p212c 绿"
+done
+# ② 影子（门禁侧独立再做一次，不复用自检里的那次）：命中计数被砸掉 = 永远通过 → 自检必须红并点名 ①②
+#     反自指：锚点由两段拼出来，否则这段夹具自己的字符串也会被 grep 数到（P70 的老坑）。
+P212_BRK="$TMP/p212-break"; rm -rf "$P212_BRK"; mkdir -p "$P212_BRK/lib"
+cp "$P212_BAN" "$P212_BRK/ledger-ban.sh"; cp "$SKILL_DIR/tests/lib/tmp-root.sh" "$P212_BRK/lib/tmp-root.sh"
+P212_CT='BAN_HITS=$((BAN_HITS'; P212_CT="${P212_CT} + 1))"
+if [ "$(grep -cF "$P212_CT" "$P212_BRK/ledger-ban.sh")" = "1" ]; then
+  awk -v pat="$P212_CT" '{ if (index($0, pat) > 0) print ": # 门禁影子：永远不记命中"; else print }' \
+    "$P212_BRK/ledger-ban.sh" >"$P212_BRK/new" && mv "$P212_BRK/new" "$P212_BRK/ledger-ban.sh"
+  TEAM_SMOKE_FIXTURE=1 bash "$P212_BRK/ledger-ban.sh" --self-test >"$TMP/p212-shadow.log" 2>&1; P212_RC=$?
+  assert_eq "P212 影子（命中计数被砸掉 = 永远通过）：自检必须红" "$P212_RC" "1"
+  assert_has "$TMP/p212-shadow.log" "✗ ①" "P212 影子红了并点名 ①（家目录）"
+  assert_has "$TMP/p212-shadow.log" "✗ ②" "P212 影子红了并点名 ②（他项目名）"
+else
+  bad "P212 影子：命中计数的锚点在源码里不是恰好一处（夹具失效）"
+fi
+# ③ 名单文件必须落在被忽略的位置（否则名单本身会随仓库公开 —— 它写的正是他项目的名字）
+if command -v git >/dev/null 2>&1 && git -C "$CHECKOUT_REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if git -C "$CHECKOUT_REPO_ROOT" check-ignore -q .pi/team/forbidden-names.txt; then
+    ok "P212 禁令名单的路径被 .gitignore 忽略（.pi/team/forbidden-names.txt 不随仓库公开）"
+  else
+    bad "P212 禁令名单的路径没有被忽略 —— 名单会随仓库公开"
+  fi
+else
+  cond_skip "P212 名单路径的忽略判据" "这里不是 git 工作树"
+fi
+# ④ 真实账本（检出树）：形状全绿；名单缺失 / 无本机用户名 → 可见跳过（不是通过）
+if smoke_prereq_absent docs/team; then
+  prereq_skip "P212 真实账本禁令扫描" docs/team
+else
+  bash "$P212_BAN" --root "$CHECKOUT_REPO_ROOT" >"$TMP/p212-real.log" 2>&1; P212_RC=$?
+  P212_SUM="$(grep -a '^ledger-ban: root=' "$TMP/p212-real.log" | tail -1)"
+  case "$P212_RC" in
+    0|3) ok "P212 真实账本：无命中（${P212_SUM#ledger-ban: }）" ;;
+    1)  bad "P212 真实账本有命中（${P212_SUM#ledger-ban: }）"
+        grep -aE '^[^ ].*: \[(home|net|user|names)\]' "$TMP/p212-real.log" | head -5 | sed 's/^/      /' ;;
+    *)  bad "P212 真实账本扫描内部错误（rc=$P212_RC）"; tail -3 "$TMP/p212-real.log" | sed 's/^/      /' ;;
+  esac
+  if [ "$P212_RC" = "0" ] || [ "$P212_RC" = "3" ]; then
+    if grep -qa '^ledger-ban: SKIP names' "$TMP/p212-real.log"; then
+      cond_skip "P212 他项目名形状（真实账本）" "$(grep -a '^ledger-ban: SKIP names' "$TMP/p212-real.log" | head -1 | sed 's/^ledger-ban: //')"
+    else
+      ok "P212 他项目名形状：名单已配置（$(grep -a '^ledger-ban: names：' "$TMP/p212-real.log" | head -1 | sed 's/^ledger-ban: names：//')"
+    fi
+    if grep -qa '^ledger-ban: SKIP user' "$TMP/p212-real.log"; then
+      cond_skip "P212 本机用户名形状（真实账本）" "$(grep -a '^ledger-ban: SKIP user' "$TMP/p212-real.log" | head -1 | sed 's/^ledger-ban: //')"
+    else
+      # needle 必须是运行时解析出来的（id -un → $USER → $HOME），不是仓库里的字面量；值不进日志
+      P212_NEEDLE="$(bash "$P212_BAN" --print-user 2>/dev/null)"
+      if [ -n "$P212_NEEDLE" ] && [ "$P212_NEEDLE" = "$(id -un 2>/dev/null || true)" ]; then
+        ok "P212 本机用户名形状：needle 来自运行时解析（与 id -un 一致）"
+      else
+        bad "P212 本机用户名形状：needle 不是运行时解析出来的（--print-user 与 id -un 不一致）"
+      fi
+    fi
+  fi
+fi
+
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：
 # 用时 + ✓/✗/SKIP 增量 + ticks）、sections.tsv 一行。
