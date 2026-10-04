@@ -87,6 +87,12 @@ RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERS
 # replaces bin/esbuild's JS shim with the platform ELF and self-checks with `--version`),
 # protobufjs (only prints a version-scheme warning), @google/genai (an `echo` no-op) and
 # openspec (only prints its opt-in shell-completion tip). Pins are untouched.
+#
+# The ELF assertion at the end is what makes that install provable rather than assumed
+# (P103): with esbuild 0.28.2 an un-replaced shim is a 9,350 B JS script and the replaced
+# binary is an 11,427,952 B static ELF — both are executable and both print `0.28.2`, so the
+# `--version` check alone passes in either state. The magic bytes are the difference, and
+# they are what turns `--ignore-scripts` + a silently ineffective installer into a red build.
 ARG PI_VERSION=0.86.0
 ARG OPENSPEC_VERSION=1.8.0
 RUN npm install -g --no-fund --no-audit --ignore-scripts \
@@ -99,6 +105,7 @@ RUN npm install -g --no-fund --no-audit --ignore-scripts \
  && node "$esbuild_install" \
  && esbuild_bin="$(dirname "$esbuild_install")/bin/esbuild" \
  && [ -x "$esbuild_bin" ] \
+ && [ "$(head -c 4 "$esbuild_bin" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] \
  && "$esbuild_bin" --version
 
 # The suite's skill-load fixture imports pi's parser; a global install is not resolvable from the
