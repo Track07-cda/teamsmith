@@ -12,7 +12,7 @@ deltas: -
 grant:  skills/teamsmith/scripts/lib/** · skills/teamsmith/tests/** · skills/teamsmith/references/** · docs/team/reports/P209-<agent>.md · docs/team/reports/P209-<agent>/**
 deps:   **同族第三次** ✗：P151 F3（`dispatch-friction` 23 项 0 勾 ✓）· P175 F3（`safe-signal-discipline` 24 项 0 勾 ✓）· **P206 F1**（`sender-identity-refusal` 16 项 0 勾 ✓）——
         每次都要人发现 ✗ → 机制缺口：`team change status` 只看"映射任务是否完成" ✓、**不看 `tasks.md` 的勾选** ✗
-status: wip
+status: done
 budget: 小到中
 priority: 中高（"事件要变成机制" ✓ —— 否则还会有第四次 ✓）
 ```

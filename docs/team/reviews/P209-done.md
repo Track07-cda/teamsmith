@@ -2,3 +2,7 @@
   -   - ① 复验记录 docs/team/reviews/P209.md：不存在
   -   - ② 分支是否已并入 main：task/P209-apply（e10c187d6）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
   -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
+- 2026-10-04T15:48:50Z · `team board set P209 done` · FORCED：PM 显式覆盖（理由：PM 复验并合并（见 DECISIONS/评审记录）；改写后工作树作废，账本登记补齐）
+  -   - ① 复验记录 docs/team/reviews/P209.md：不存在
+  -   - ② 分支是否已并入 main：task/P209-apply（0360206a1）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

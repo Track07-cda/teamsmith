@@ -13,7 +13,7 @@ grant:  skills/teamsmith/scripts/lib/common.sh · skills/teamsmith/tests/** · s
 deps:   **现场（PM 2026-10-04 实测）**：dev-bob 的 `pi` 早已退出（pane 无子进程 ✓、`pane_current_command=bash` ✓、最后提交 32 小时前 ✓），
         但 `team resume --dry-run` 报「**没有需要续跑的 agent（在跑 1 个）**」✗ → 它的 P103（`wip` ✓）**没被当成待续跑** ✗；
         **连带后果**：巡检因此**没有叫醒 PM** ✗（P109 的规则本该把它算成待办 ✓ ✗）—— 我漏验 P103 整整一天 ✓ ✗ 就是这么来的 ✓
-status: wip
+status: done
 budget: 小到中
 priority: 中高（"停了的席位"是巡逻的核心信号之一 ✓；判错会让人**静默地**漏掉交付 ✓）
 ```

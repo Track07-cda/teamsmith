@@ -11,7 +11,7 @@ anchor: change
 deltas: -
 grant:  openspec/changes/sender-identity-refusal/tasks.md · docs/team/reports/P208-dev.md · docs/team/reports/P208-dev/**
 deps:   独立验证 `docs/team/reports/P206-verify.md`（行为 PASS ✓ + F1 ✓）· PM 评审 `docs/team/reviews/P206.md` ✓
-status: wip
+status: done
 budget: 十分钟
 priority: 高（它是该变更归档的唯一前置）
 ```

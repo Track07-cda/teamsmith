@@ -12,7 +12,7 @@ deltas: -
 grant:  docs/team/tools/publish-public.sh · docs/team/tools/release-check.sh · CONTRIBUTING.md · docs/team/reports/P207-<agent>.md · docs/team/reports/P207-<agent>/**
 deps:   第 24/25 节的实测（用户提问后 PM 量过 ✓）：设计记录 = `openspec/changes/archive`（275 文件 / 3.0 MB ✓）+ `docs/team/DECISIONS.md`（72 KB ✓）+ `docs/team/ROADMAP.md`（20 KB ✓）；
         需遮蔽的形状共 **52 处**（家目录 3 ✓、他项目名 16+30+1 ✓、内网地址 2 ✓）；审计面（reports 124 MB / reviews 17 MB / threads / BOARD）**不公开** ✗。
-status: todo
+status: done
 budget: 一个工作块
 priority: 中高（用户已表态"不喜欢快照模型" ✓ → 这条把公开面做成"真实历史 + 设计记录" ✓）
 ```

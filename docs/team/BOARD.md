@@ -339,10 +339,12 @@
 | P204 | spec 同步：发送者身份的拒绝规则 | dev2 | - | - | done |
 | P205 | sender-identity-refusal apply（实现与规范对齐） | dev | - | - | done |
 | P206 | sender-identity-refusal 独立验证 | verify | - | - | done |
-| P207 | 公开面加设计记录（导出+遮蔽+扫描+过滤历史） | - | - | - | todo |
-| P208 | P208 · `sender-identity-refusal` 收尾：按事实勾选 16 项清单（归档前置） | - | - | - | done |
-| P209 | P209 · 归档前置要看**清单**：`tasks.md` 还有未勾项时，`team change status` / 归档必须拒绝 | dev2 | - | - | done |
-| P210 | 席位存活判据：裸 shell 不算在跑 | dev3 | - | - | wip |
+| P207 | 公开面加设计记录（导出+遮蔽+扫描+过滤历史） | - | - | - | done |
+| P208 | sender-identity-refusal 收尾：按事实勾选 16 项清单（归档前置） | - | - | - | done |
+| P209 | 归档前置要看清单：tasks.md 有未勾项时拒绝就绪 | dev2 | - | - | done |
+| P210 | 席位存活判据：裸 shell 不算在跑 | dev3 | - | - | done |
+| P211 | P211 · 看板裁决 `dropped` 的报告不该再算「待复验」 | - | - | - | todo |
+| P212 | P212 · 账本禁令检查进 FAST 门禁（D94 的机制） | - | - | - | todo |
 
 ## 当前里程碑
 
