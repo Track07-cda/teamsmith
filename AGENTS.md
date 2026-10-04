@@ -1,0 +1,147 @@
+<!-- teamsmith:begin -->
+## Team protocol (teamsmith)
+
+This project runs a team of agents: a **PM (orchestrator)** in tmux `teamsmith:pm` owns tasks and merge
+authority, while **worker agents** implement in parallel inside their own git worktrees.
+Tooling: `bash skills/teamsmith/scripts/team help`.
+
+### Roles and boundaries
+
+| Role | Owns | Must not |
+|---|---|---|
+| PM | Briefs / roadmap / decision log, dispatch, independent verification, merging, wrap-up | Treat "the agent says it passed" as evidence |
+| agent:<name> | Exactly the brief, tests and reports, opening PR/MRs | push `main`, force-push, merge PR/MRs, touch other people's directories |
+
+Roster: dev verify dev2 dev3 (editable in `.pi/team/config.sh`).
+
+### Reading order (before any agent starts)
+
+1. This file (especially this section)
+2. Your own thread `docs/team/threads/<agent>.md` (the PM may have added instructions)
+3. The task brief `docs/team/tasks/<ID>-<slug>.md` (the single source of scope and acceptance commands)
+
+### Specs (OpenSpec)
+
+Specs and change proposals live in `openspec/` -- a **required dependency** (`openspec init --tools none` creates
+the spec root; `openspec init --tools pi` also generates the five phase commands, see
+`skills/teamsmith/references/openspec.md`). Before implementing a change, read its proposal in
+`openspec/changes/<id>/` and the capability spec it touches (`openspec/specs/<capability>/spec.md`; finished changes
+move to `openspec/changes/archive/`). `openspec validate --all --strict` is part of the gate. **Do not create a
+parallel spec system**: no requirement lists, spec copies or design sections in task briefs or docs -- if it must
+hold, it goes into a spec.
+
+A change runs as **five phases, one brief and one owner each**: an explorer runs `opsx-explore`, then
+`opsx-propose` (planning only); a dev runs `opsx-apply`; a **different** agent runs `opsx-verify`; the PM runs
+`opsx-archive`. Two hard rules: **no `apply` brief before the PM's proposal review
+(`docs/team/reviews/<change>-proposal.md`) is ACCEPTED**, and no agent verifies its own work; the PM archives
+only after independent verification **and the user's confirmation**. The phase names go in the brief's `phase:`
+line; the full pipeline and its gates are in `skills/teamsmith/references/openspec.md`.
+
+**The change is the assignment unit** (`1 change : N tasks`, `1 task : 0..1 change`): the brief's header is the
+foreign key — `change:` (exactly one id, or `-`), `specs:`/`anchor:` (a change-less brief must resolve
+`openspec/specs/<capability>/spec.md#<requirement>` or declare `anchor: none (infra) — <reason>`) and `deltas:`
+(the change's delta files this task writes; an absent line means the whole set). `team dispatch` refuses **before it
+opens a window**: more than one `change:` id (no override), an unresolvable anchor, two unfinished tasks of one
+change writing the same delta file, and a `verify` task whose agent authored an `apply` task of that change (the
+last three take `--force` + one audited line). `team change status <id>` shows the tasks/deltas/blockers and exits
+0 only when every mapped task is finished; an `archive` task cannot be set `done` while a sibling is unfinished.
+
+### Non-negotiable discipline
+
+- **Only change directories you own** (`docs/team/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
+  the report and hand it back to the PM.
+- **Never stop mid-task to ask for confirmation**: either deliver (gates run + report + push + PR/MR) or be
+  hard-blocked (notify the PM + PARTIAL report).
+- **Never claim tests passed without having run them.** The PM re-runs in an independent worktree; a false report
+  fails the task.
+- Never write tokens/secrets into code, config, logs or commit messages; never read credential files
+  (e.g. `~/.pi/agent/auth.json`).
+- Never push `main`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
+- Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
+
+### Collaboration loop
+
+```
+PM writes the brief + creates the agent worktree
+      │  team dispatch <agent> <ID> <task-file>
+      ▼
+agent implements in its worktree → small commits → runs gates → writes report → pushes branch → opens PR/MR
+      │  on turn end, automatically: appends docs/team/inbox/<agent>.md + knocks teamsmith:pm
+      ▼
+PM reads the inbox → team review <ID> (independent worktree, runs gates)
+      ▼
+pass → the PM runs git itself (`merge --squash` + commit + push; with a PR, merge the PR first then
+  `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`
+fail → team say <agent> "..." with the concrete failure evidence
+```
+
+- Blocked, or found someone else's bug: `bash skills/teamsmith/scripts/team notify <agent> "<one line>"`, and write a
+  PARTIAL report.
+- Gates: `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh` (a brief may require stricter commands; the brief wins).
+- One gate at a time: the full suite is the machine's shared resource — `TEAM_SMOKE_FAST=1` inside a batch, the
+  full suite before delivery and review. `team review` queues on the gate lock (`TEAM_SMOKE_LOCK`,
+  `TEAM_SMOKE_LOCK_WAIT`, the holder in `<lock>.holder`) before its hard timeout starts, so the record shows
+  `queued` and `ran` separately; a queue past the cap is a loud `FAIL` naming the holder, not a `TIMEOUT`. On a
+  busy machine the panel timing lines (2000 ms frame, 1 % CPU — medians of three printed samples) print the
+  measured values and the load and **skip visibly** instead of reporting a red the machine owes; the premise is
+  `loadavg ≤ factor × cores` with `factor` 0.75 in the gate and 0.25 for the cold-start fixture.
+- Messages are not deliverables: the real evidence lives in `docs/team/reports/`, `docs/team/reviews/` and commits.
+
+### Bootstrap (first step in a new project)
+
+```bash
+bash skills/teamsmith/scripts/team bootstrap   # idempotent: config + docs skeleton + worktrees + pulse window + next steps
+```
+
+### Cross-project meetings (PM to PM)
+
+```bash
+bash skills/teamsmith/scripts/team meeting inbox          # meetings waiting for my reply
+bash skills/teamsmith/scripts/team meeting say <slug> --intent proposal "…"
+```
+
+Allowed: interface work, advice with evidence, problem reports, scheduling joint test windows. Not allowed:
+commanding another PM, deciding on their behalf, impersonating a human. Consensus requires both sides to `agree`;
+landing the work always happens in each side's own project. **Workers do not attend** (cross-project traffic is PM-only).
+
+### Periodic patrol (not a heartbeat)
+
+The pulse is a **metronome that wakes the PM**, not a daemon that keeps it alive:
+
+- **The PM owns the pulse**: `team pulse up|status|logs|down` -- by default it runs `team monitor` in a
+  `pulse` window of the same tmux session (team status on top, per-agent activity below, optional) and patrols
+  on an interval. There is exactly one backend (that window) -- no container, no systemd.
+- **Bring it up at session start**: if the pulse is not running and you are not on standby, `team pulse up` is part of
+  the PM's job -- no one else will do it; while `standby on` is set, leave it alone.
+- Every **15 minutes** by default (`TEAM_PULSE_INTERVAL=900`, 300-3600 recommended) it asks "is there work for the
+  PM?": unread notifications / reports awaiting verification / board todo·wip (opt-in) / blocked / agents with
+  unfinished tasks that stopped running.
+- **Pending work** → wake the PM (nudge it if running, start it if not). **Nothing pending** → do nothing at all --
+  the team stays quiet and the PM is not required to be running.
+- If there is nothing to do, or a human is needed, the PM can `team standby on --reason "…"` and stand down; the
+  pulse stops waking it (backlog still lands in `state/watchdog.log`). A human runs `team standby off`.
+- It **does not manage tmux layout or agents** (agents belong to the PM: `team resume`).
+
+```bash
+bash <skill>/scripts/team pulse status        # interval / standby / pending / PM state
+bash <skill>/scripts/team standby on --reason "waiting for the user to pick a stack"
+bash <skill>/scripts/team standby off
+bash <skill>/scripts/team up                  # manual rescue: build the tmux stage + start the PM (agents untouched)
+bash <skill>/scripts/team up --agents         # also resume agents that have tasks but no window
+bash <skill>/scripts/team watch --once        # run a single patrol tick
+```
+
+- The capacity floor is **swap must not be exhausted** (tight RAM only means slowness, not refusal); `team ps` shows headroom.
+
+### Directories
+
+| Path | Owner | Purpose |
+|---|---|---|
+| `docs/team/tasks/` | PM | Task briefs |
+| `docs/team/reports/` | agent (its own file only) | Delivery reports |
+| `docs/team/reviews/` | PM | Independent verification records |
+| `docs/team/threads/` | PM + that agent (append-only) | Decision/clarification messages |
+| `docs/team/inbox/` | generated (gitignored) | Turn-end briefings |
+| `docs/team/{BOARD,ROADMAP,OWNERSHIP,DECISIONS}.md` | PM | Board / milestones / ownership / decisions |
+| `.worktrees/<agent>/` | that agent | Long-lived worktree (sessions are keyed by cwd -- keep it stable) |
+<!-- teamsmith:end -->
