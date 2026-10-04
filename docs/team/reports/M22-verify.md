@@ -3,7 +3,7 @@
 agent: verify   status: DONE   time: 2026-09-18T06:30:00Z
 branch: `task/M22-skills-pi-team`   PR/MR: -（本仓库 local 模式：不 push，分支留 `.worktrees/verify`，PM 复验后本地合并）
 
-用户 2026-09-17 拍板**提前结束别名期**（<crm-project> 已全部转用 teamsmith 路径），把 v1.13.0 改名时留下的
+用户 2026-09-17 拍板**提前结束别名期**（<peer-d> 已全部转用 teamsmith 路径），把 v1.13.0 改名时留下的
 `skills/pi-team → teamsmith` 兼容软链删掉。软链一删，钉住它的三处断言、安装器的历史别名清理、
 以及散在文档里的「软链还在」承诺都要一起改 —— 而且**旧路径的清理承诺不能被静默丢掉**（见「Flip evidence」的 F3/F4 与「关键决策与偏差」：
 门禁自己抓出了我第一版的漏洞）。
@@ -109,7 +109,7 @@ $ test ! -e skills/pi-team && echo removed  → removed
   `.worktrees/verify`。两处都只是文字过期，不影响交付内容。
 - **`.gitignore` 顶部的 `# pi-team` 注释**：那是忽略清单的分组注释（旧名遗留），改它不属于本次验收面；
   我**没有动**，留给 PM（一行决定）。
-- **`docs/alignment-cep-reply.md`** 里的历史提及（<cep-project> 对齐回信，v1.7.0 时代）：属历史文档，brief 明确不改 ✓。
+- **`docs/alignment-<peer>-reply.md`** 里的历史提及（<peer-c> 对齐回信，v1.7.0 时代）：属历史文档，brief 明确不改 ✓。
 
 ## 未验证 / 风险
 

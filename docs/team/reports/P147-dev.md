@@ -180,7 +180,7 @@ turn-end 简报 + `[manual] agent:pm` 的这条通知），**没有 `pm.md`**。
 `references/troubleshooting.md` §3 新增四段（支持布局的边界与 `geometry-untrusted`、`queue-stalled` 的计数
 规则、notify 的收件人 vs PM knock、panel 只读阻碍）；`config.md`（`TEAM_DEFER_TTL` + deferred-delivery 段）、
 `protocol.md`（notify）、`SKILL.md`（Draft/deferred delivery 行）同步。**没有**擦掉旧的残余洞（whitespace-only
-草稿、状态行克隆、P86 混宽度边界都还在原文里），也没有声称 <cep-project> 原始事故已修 —— 原文的 <cep-project> 归因段落未改动。
+草稿、状态行克隆、P86 混宽度边界都还在原文里），也没有声称 <peer-c> 原始事故已修 —— 原文的 <peer-c> 归因段落未改动。
 
 ## 6. 保留场景（六块 MODIFIED，`check-deltas.py` 输出）
 
@@ -254,7 +254,7 @@ turn-end 简报 + `[manual] agent:pm` 的这条通知），**没有 `pm.md`**。
 - **自己跑**：上面所有容器真 Pi 场景（红/绿/草稿负例/watcher 正控）、全部 `delivery-truth.sh` 段、FAST、
   容器全量、`openspec validate`、`check-deltas.py`、panel 夹具。红侧的 `pkg/` 与 P143 逐字节相同（`diff` 只有
   `run-case.sh` 的证据目录一行），但**命令是我在这个 worktree 的 HEAD/修前提交上跑的**。
-- **引用**：P138 的原始事故描述与 <cep-project> 归因（未复现、未改动文档）；P143 的规划探针（我只用了它的帧与
+- **引用**：P138 的原始事故描述与 <peer-c> 归因（未复现、未改动文档）；P143 的规划探针（我只用了它的帧与
   配方，判据用的是生产提取和新的门禁）。没有把 P138/P143 的绿色当成自己的绿色。
 
 ## 9. 残余与 finding

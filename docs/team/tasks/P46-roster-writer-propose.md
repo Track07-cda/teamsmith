@@ -9,7 +9,7 @@ specs:  -
 phase:  propose
 anchor: change
 deltas: memory-and-deps, init-skill, dispatch
-deps:   D36/D37（本轮实测）· <ontology-project>（`do` 项目）的现场 · M48（`--allow-dup` 的先例）
+deps:   D36/D37（本轮实测）· <peer-f>（`do` 项目）的现场 · M48（`--allow-dup` 的先例）
 status: todo（等席位）
 sequencing: **必须排在 P43 的 apply 之后**（两者都写 memory-and-deps 的席位模型那条 requirement；delta 单写者）
 budget: 一个工作块（只出提案包；不写实现）
@@ -17,7 +17,7 @@ budget: 一个工作块（只出提案包；不写实现）
 
 > 本地模式：不 push。**只 propose。**
 
-## 现场（`do`/<ontology-project> 项目的 PM 遇到的，PM 已逐环复现）
+## 现场（`do`/<peer-f> 项目的 PM 遇到的，PM 已逐环复现）
 
 它的原话（session + `.pi/team/config.sh` 的提交）：
 

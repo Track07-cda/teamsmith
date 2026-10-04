@@ -80,7 +80,7 @@ $ git log --all --oneline -S 'rm -rf /tmp/teamsmith' -- skills/teamsmith/tests/s
   `rm -rf "$P10_OBOX"` 目标是 `$TMP/p10-repo/.pi/team/state/outbox`，解析不到 `$TMP` 本体。
 
 **结论：删除发生在 smoke 进程树之外**（同机并发 / 外部清理）。这台机器确实多项目共用：
-`ps` 里能看到 <erp-project> / <frontend-project> / <cep-project> / <crm-project> 的 teamsmith 面板与 pm 会话在同跑。
+`ps` 里能看到 <peer-e> / <peer-g> / <peer-c> / <peer-d> 的 teamsmith 面板与 pm 会话在同跑。
 
 ### 1.3 「谁删的」：现有证据不够点名（不猜）
 

@@ -215,7 +215,7 @@ flip-m45.sh,frames/README.md,frames/pi-0.87.0-*.txt,lib/box-judge.sh,pm-box-real
 - 一切 tmux 调用经 PATH shim → `/usr/bin/tmux -L p74pkg-<pid>`，`TMUX`/`TMUX_PANE` 清空、
   `TMUX_TMPDIR` 指向已 `mkdir -p` 的私有目录（memory #1250 的两个回落陷阱都堵住）；
   破坏性命令（kill-server/kill-session）只打自己的 socket；默认 server 只做只读 `tmux ls`。
-- 包运行前后默认 server 的会话列表不变（`<peer>`/`<crm-project>`/`do`/`teamsmith` 四会话仍在）；
+- 包运行前后默认 server 的会话列表不变（`<peer>`/`<peer-d>`/`do`/`teamsmith` 四会话仍在）；
   未触碰 `teamsmith` 会话。
 - 真实仓库 `docs/team/inbox/**` + `.pi/team/state/**`（去 `bg/`，那是后台作业日志）前后逐文件 sha256 相同（§40④）。
 - 继承的 `TEAM_*` 身份与 `TEAM_REVIEW_*` 旋钮全部清掉；夹具仓库/会话名 `p74*`；`team paths`

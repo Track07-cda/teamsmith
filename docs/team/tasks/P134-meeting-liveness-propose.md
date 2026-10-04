@@ -10,7 +10,7 @@ phase:  propose
 anchor: change
 deltas: meeting,notify-and-inbox,watchdog,delivery-guard,panel
 grant:  openspec/changes/meeting-liveness/** · docs/team/reports/P134-dev3.md · docs/team/reports/P134-dev3/**
-deps:   D64/D65（两条实测缺陷 + <cep-project> 的实证 ✓）· `docs/team/DECISIONS.md` D64/D65 · **不做**：① 不写对方仓库（`meeting#Zero writes into the peer project` 保持 ✓）· ② 不引入 `order/command` 类 intent（`meeting#Intents are informational…` 保持 ✓）· ③ 不做跨机器 ✓
+deps:   D64/D65（两条实测缺陷 + <peer-c> 的实证 ✓）· `docs/team/DECISIONS.md` D64/D65 · **不做**：① 不写对方仓库（`meeting#Zero writes into the peer project` 保持 ✓）· ② 不引入 `order/command` 类 intent（`meeting#Intents are informational…` 保持 ✓）· ③ 不做跨机器 ✓
 status: todo
 budget: 一个提案
 priority: 高（用户已批"AB+规格" ✓；D65 的实证：同行 PM 的反馈躺了 2.5 周 ✗）
@@ -21,7 +21,7 @@ priority: 高（用户已批"AB+规格" ✓；D65 的实证：同行 PM 的反�
 ## 现场（PM 实测，都要变成可证伪的 requirement）
 
 1. **发现性 = 0** ✗：`team watch` / `team status` / `digest` 里 **grep `meeting` 0 命中** ✗ →
-   对端发言后**没有任何东西叫醒 PM** ✗。实证：`cep-pi-team-feedback` 的 3 条同行报告 **躺了 2.5 周** ✗（D65 ✓）。
+   对端发言后**没有任何东西叫醒 PM** ✗。实证：`<peer>-pi-team-feedback` 的 3 条同行报告 **躺了 2.5 周** ✗（D65 ✓）。
 2. **收尾靠自觉** ✗：TTL 到期只变**只读** ✓，不标 `expired` ✗、不在任何视图显示 ✓ → 该会议至今 `open(过期)` ✗。
 3. **投递安全** ✗（PM 今晚实测，D64）：敲门走 `team_tmux_send_text` = **裸 `send-keys -l` + `Enter`** ✓，
    **不经过** P63/P67 的输入框判定 ✓ → 若对方 PM 输入框里有草稿 ✗，通知会被**粘进草稿** ✗。

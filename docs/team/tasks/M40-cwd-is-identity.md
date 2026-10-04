@@ -16,11 +16,11 @@ budget: 一个工作块；超出就交 PARTIAL 报告
 
 ## Context（2026-09-19 两起同族实测事故，用户已拍板设计方向）
 
-**事故 ①**：用户在 <frontend-project> 目录里跑 `/pm-skills/skills/teamsmith/scripts/team up` 被拒：
-「当前目录属于 <frontend-project>，而要被操作的是 pm-skills」——shell 继承了 pm-skills 的 `TEAM_*`，
+**事故 ①**：用户在 <peer-g> 目录里跑 `/pm-skills/skills/teamsmith/scripts/team up` 被拒：
+「当前目录属于 <peer-g>，而要被操作的是 pm-skills」——shell 继承了 pm-skills 的 `TEAM_*`，
 CLI 把项目解析成了 pm-skills。护栏拦住了，**方向是对的**。
 
-**事故 ②**：<frontend-project> 的 pulse 面板渲染出 **pm-skills 的看板**。面板进程 cwd=<frontend-project> 但
+**事故 ②**：<peer-g> 的 pulse 面板渲染出 **pm-skills 的看板**。面板进程 cwd=<peer-g> 但
 `TEAM_ROOT=pm-skills`（启动 pulse 的 shell 带着 pm-skills 的环境），而解析顺序是 **env 优先于 cwd**
 → 静默读错项目。这道门没有护栏，直接错了。
 

@@ -17,7 +17,7 @@ budget: 一个工作块；超出就交 PARTIAL 报告
 ## Context
 
 **事故第 5 次（2026-09-18T18:17:20Z）**：默认 tmux server 整台死亡，PM/pulse/worker 三进程同时被杀，
-**其他项目（<crm-project>/<cep-project>/<frontend-project>…）共用同一 server，一起陪葬**。取证：无 OOM（`oom_kill 0`）、无重启；
+**其他项目（<peer-d>/<peer-c>/<peer-g>…）共用同一 server，一起陪葬**。取证：无 OOM（`oom_kill 0`）、无重启；
 死亡瞬间机器上只有 dev2 的 M35 复验包在跑，但它 pkg/ 里所有 tmux 调用都查过是隔离形态（`env -u TMUX
 -u TMUX_PANE TMUX_TMPDIR=<私有>`）——**肇事命令查不出来，因为默认 server 死亡不留任何日志**。
 

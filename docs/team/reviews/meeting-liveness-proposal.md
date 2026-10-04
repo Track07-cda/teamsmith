@@ -17,7 +17,7 @@ change: meeting-liveness（propose=dev3 · tip 9c98fad1 · 8 commits）
 | B 收尾 | `expired` 为派生态（`STATUS` 仍 `open|closed`）+ `close --stale` 只碰过期项 + 过期可关（解开死锁） |
 | 投递安全（D64 发现 2） | 敲门走 `team_send_guarded`，忙则**排队**并报 `queued` 而非 `knocked`，红侧场景齐 |
 | 每方窗口（D64 发现 1） | `PM_WINDOWS=<proj>=<win>;…` + 兼容旧 `PM_WINDOW` + 重登记我方行不影响对方行 |
-| **R1** | 新增 requirement「A participant is recognized by its recorded names, not by one spelling」：记三种名字（声明名 / 仓库 basename / session），**任一匹配即算参与方**；<peer>/<peer-project> 的真实形状写成场景；**第三方仍被拒**的场景也在 |
+| **R1** | 新增 requirement「A participant is recognized by its recorded names, not by one spelling」：记三种名字（声明名 / 仓库 basename / session），**任一匹配即算参与方**；<peer>/<peer-b> 的真实形状写成场景；**第三方仍被拒**的场景也在 |
 | **R2** | 会议侧：knock 载荷带 `#<turn>` + `knocks.log` 同步，**只用 transcript + read/<proj>.seq 即可判 stale**；任务侧：turn-end 通知的 inbox 行与 knock 载荷都带 `task=<ID> tip=<7-hex>`，且**不打开发送方工作树**即可判定（board done/closed 或 (task,tip) 与 reviews/<ID>.md 记录的 HEAD 相同 ⇒ stale） |
 | 非目标 | 未扩到 N 方会议；不写对方仓库；无 order/command intent |
 

@@ -43,7 +43,7 @@ judge: second_received=0 backend=0 settled=2 settle_editors_empty=1 → FAIL sec
 5. **证据用 P138 的配方** ✅：真 Pi + 容器（`pkg/run-case.sh` + `judge-second.py` ✅）作为**红侧基准** ✅；
    合成帧可以辅助 ✅，但"真帧绿"必须自己跑出来 ✅（写明 Pi 版本与你实际跑的命令 ✅）。
 
-**非目标**：不动 M6.5 存活判据 ✅ · 不加新 intent ✅ · 不跨机器 ✅ · 不重设 <cep-project> 原事故的归因 ✗（P138 已说明不能冒认 ✅）。
+**非目标**：不动 M6.5 存活判据 ✅ · 不加新 intent ✅ · 不跨机器 ✅ · 不重设 <peer-c> 原事故的归因 ✗（P138 已说明不能冒认 ✅）。
 
 ## 交付
 

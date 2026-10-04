@@ -3,10 +3,10 @@
 agent: dev3   status: done（4 项交付物齐、三条翻转证据齐、openspec 13/13 + FAST ✓1498 + 全量 smoke ✓1928 全绿）
 time: 2026-09-18T06:20Z
 branch: `task/M29-init-doctor-ux`（local 模式：不 push，分支留 `.worktrees/dev3`，PM 复验后本地合并）
-依据：`docs/team/tasks/M29-doctor-init-ux.md`（4 项交付物）——用户 <ontology-project> 首次实战后拍板的三条 + 名册 UX
+依据：`docs/team/tasks/M29-doctor-init-ux.md`（4 项交付物）——用户 <peer-f> 首次实战后拍板的三条 + 名册 UX
 
 > 开工前按 PM 的 thread 指示核对过现场：`env -u TMUX -u TMUX_PANE tmux ls` → 默认 server 活着
-> （`<crm-project>`/`do`/`teamsmith` 三个 session），**没有** `m2-*`/`m3-*` 残留 session，无需清理；本任务全程没有
+> （`<peer-d>`/`do`/`teamsmith` 三个 session），**没有** `m2-*`/`m3-*` 残留 session，无需清理；本任务全程没有
 > 起过任何 tmux 探针（纯逻辑 + 夹具）。
 
 ## Deliverables

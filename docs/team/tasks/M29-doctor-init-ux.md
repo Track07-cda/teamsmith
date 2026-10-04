@@ -16,7 +16,7 @@ budget: 一个工作块；超出就交 PARTIAL 报告
 
 ## Context
 
-用户在 <ontology-project> 首次实战 teamsmith-init 后拍板三条（原话整理）：
+用户在 <peer-f> 首次实战 teamsmith-init 后拍板三条（原话整理）：
 
 1. **后台任务插件的主动推荐砍掉**——「这个推荐不需要」。team 机械的后台车道是自写的 team-bg
    （M27 在飞），不向用户推第三方包。

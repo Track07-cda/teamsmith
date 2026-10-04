@@ -16,7 +16,7 @@ budget: 半小时以内；超出就交 PARTIAL 报告
 
 ## Context
 
-用户实测反馈（<crm-project> session)：手动开一个 Pi 会话、注入 teamsmith skill 后，agent 没有自动启动 pulse，要人开口才起。根因是指引断在这条路径上：
+用户实测反馈（<peer-d> session)：手动开一个 Pi 会话、注入 teamsmith skill 后，agent 没有自动启动 pulse，要人开口才起。根因是指引断在这条路径上：
 
 1. 手动注入 skill 的会话读到的是 `skills/teamsmith/SKILL.md`。其启动清单（约第 98 行，`## The PM loop` 的引用块）是
    `team digest` → `team inbox --ack` → `team resume --dry-run` → `team pulse status`

@@ -21,7 +21,7 @@ The design keeps legacy highest-top/lowest-bottom/cursor containment and admits 
 
 **Personally run in P143:** three fresh disposable-container real Pi cases; fallback second-message red, watcher second-message positive control, real-editor draft negative control; notify path mismatch measured from the PM's actual wake and disk snapshot; production extraction versus planning-only selector on two new real frames; strict all-spec validation; verbatim scenario preservation and its test-only deletion negative control; package syntax and diff/scope checks.
 
-**Referenced, not rerun as P143:** P138's historical version matrix, Pi 0.86.0/0.99.1 runs, 867-file evidence body, <cep-project> original feedback, and the PM's `fe46eae6` reproduction. The dispatched worktree lacked P138's package/report; I read their git objects from `42e364fb` without checking out or changing another branch. The reusable six-file recipe was copied into **this task's own** report directory; modifications are documented in `pkg/README.md`.
+**Referenced, not rerun as P143:** P138's historical version matrix, Pi 0.86.0/0.99.1 runs, 867-file evidence body, <peer-c> original feedback, and the PM's `fe46eae6` reproduction. The dispatched worktree lacked P138's package/report; I read their git objects from `42e364fb` without checking out or changing another branch. The reusable six-file recipe was copied into **this task's own** report directory; modifications are documented in `pkg/README.md`.
 
 No personal claim of a repaired fallback, new panel behavior, Unicode-layout proof or complete smoke green is made. The planning-only frame probe is deliberately separate from the shipped selector and never sends keys.
 

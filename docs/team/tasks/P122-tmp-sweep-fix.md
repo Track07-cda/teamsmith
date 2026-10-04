@@ -21,7 +21,7 @@ priority: 中高（直接挡了"清理 /tmp"这个真实操作）
 ## 现场（PM 今天实测，逐条可复现）
 
 1. **把别的项目的 `review-*` 当成我们的** ✗✗：`--status` 的清单里包含 `/tmp/review-M7.35`（884M）、
-   `/tmp/review-M7.36`、`/tmp/review-M8.2`（879M）—— 它们的 `.git` **指向 `<peer-project>`** ✗（PM 已读证 ✓）；
+   `/tmp/review-M7.36`、`/tmp/review-M8.2`（879M）—— 它们的 `.git` **指向 `<peer-b>`** ✗（PM 已读证 ✓）；
    其中 `review-M8.2` 的 mtime 是**今天** ✓（很可能在用 ✓）。→ 判定「是不是我们的」目前只靠**名字前缀** ✗。
 2. **一处拒绝 → 一个都不删** ✗：114 个合格候选（2.3 GB）被 **2 个** review 拒绝项**全部阻塞** ✗
    （PM 实测：`拒绝：有 2 个候选的安全前提不成立 —— 一个都没删`，rc=3 ✓）。
@@ -46,8 +46,8 @@ priority: 中高（直接挡了"清理 /tmp"这个真实操作）
 
 ## 复验返工（2026-09-29 PM，细节见 `docs/team/threads/dev-bob.md`）
 
-- **F1（严重）**：`--sweep` 计划把 **<peer-project> 的** `/tmp/review-M8.1`、`/tmp/review-M8.2` 标成 `[reclaim]` ✗
-  （它们的 `.git` gitdir 指向 <peer-project> ✓；只因我们 `docs/team/reviews/` 里有同名 `M8.1.md`/`M8.2.md` 才被当成"记录可回收" ✗）。
+- **F1（严重）**：`--sweep` 计划把 **<peer-b> 的** `/tmp/review-M8.1`、`/tmp/review-M8.2` 标成 `[reclaim]` ✗
+  （它们的 `.git` gitdir 指向 <peer-b> ✓；只因我们 `docs/team/reviews/` 里有同名 `M8.1.md`/`M8.2.md` 才被当成"记录可回收" ✗）。
   → 归属必须**读 git 痕迹**：指向别的仓库 → 拒并点名 ✓；证据不足 → 拒 ✓。
 - **F2**：拒绝/young/occupied **仍然阻塞全部** ✗（真 /tmp：8 个可回收 1.7 GB → 实删 0 ✓，rc=3 ✓）。
   → **跳过并点名**，其余照常回收 ✓；**做事了但有跳过 → 0** ✓ / 一个都没做 → 3 ✓。

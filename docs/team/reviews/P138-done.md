@@ -1,4 +1,4 @@
-- 2026-10-01T15:08:34Z · `team close P138 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复跑红侧命中（rev fe46eae6：second_received=0 / backend=0 / 空且 idle 仍卡住）→ 诊断成立；F1（tmux 降级通道的几何假 BUSY + 退出 0 的永不兑现承诺）与 F2（notify 耐久收件人/声明/wake 路径三者不一致）转 P143（propose）；归因与边界照收，不许宣称 <cep-project> 原事故已修）
+- 2026-10-01T15:08:34Z · `team close P138 --status done` · FORCED：PM 显式覆盖（理由：PM 独立复跑红侧命中（rev fe46eae6：second_received=0 / backend=0 / 空且 idle 仍卡住）→ 诊断成立；F1（tmux 降级通道的几何假 BUSY + 退出 0 的永不兑现承诺）与 F2（notify 耐久收件人/声明/wake 路径三者不一致）转 P143（propose）；归因与边界照收，不许宣称 <peer-c> 原事故已修）
   -   - ① 复验记录 docs/team/reviews/P138.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
-  -   - ② 分支是否已并入 main：task/P138-cep-team-say（e80c1ddbc）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ② 分支是否已并入 main：task/P138-<peer>-team-say（e80c1ddbc）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
   -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P138.md（用 ① 的 team review 生成，判定 PASS）

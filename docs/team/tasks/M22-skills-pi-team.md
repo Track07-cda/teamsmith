@@ -16,7 +16,7 @@ budget: 一个工作块；超出就交 PARTIAL 报告
 
 ## Context
 
-v1.13.0 改名时留了 `skills/pi-team → teamsmith` 兼容软链，承诺到 v2.0.0。**用户 2026-09-17 拍板提前移除**(<crm-project> 已全部转用 teamsmith 路径）。PM 已盘点依赖：
+v1.13.0 改名时留了 `skills/pi-team → teamsmith` 兼容软链，承诺到 v2.0.0。**用户 2026-09-17 拍板提前移除**(<peer-d> 已全部转用 teamsmith 路径）。PM 已盘点依赖：
 
 - `~/.agents/skills/pi-team`（本机 skill 安装路径）链到仓库的 `skills/pi-team`——**PM 会先把它改成指向 `skills/teamsmith` 的 `~/.agents/skills/teamsmith`，再撤旧链**（这步 PM 已做/或自己做，worker 不动家目录）。
 - smoke.sh 三处钉着软链：约 3735 行（软链在位断言）、4861 行附近注释、4974-75 行（软链目标断言）。

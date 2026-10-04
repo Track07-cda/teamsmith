@@ -12,14 +12,14 @@ deltas: -
 |---|---|
 | `ci/Containerfile` | **①** pi/openspec 改成 `npm install -g … --ignore-scripts` + 显式 `node <esbuild>/install.js` + `[ -x bin/esbuild ] && --version`（P103）；**②** apt 列表补 `iproute2`（D63）；**③** 镜像自检加 `ss -xlH`（与夹具实际调用同形） |
 | `skills/teamsmith/scripts/lib/cmd-review.sh` | `close` 的席位收尾循环里 `branch=` 与 `task=` 同生命周期一起清（D62-a） |
-| `skills/teamsmith/references/workflows.md` | `--pr` 食谱补一行可判定 fallback：`# 若 forge 合并 403（缺 Contents: write）：本地 squash + push + 评论 + 关 PR` + 403 的权限归属说明（<cep-project> 0007(1) / D65） |
+| `skills/teamsmith/references/workflows.md` | `--pr` 食谱补一行可判定 fallback：`# 若 forge 合并 403（缺 Contents: write）：本地 squash + push + 评论 + 关 PR` + 403 的权限归属说明（<peer-c> 0007(1) / D65） |
 | `skills/teamsmith/tests/smoke.sh` | §11 夹具（close 前写非空 `branch=` → close 后断言空/删）；§6d 钉住 fallback 那一行 |
 | `docs/team/reports/P135-dev/**` | 本报告 + 5 份证据日志（`fast-gate.log` 全量 FAST、两份 red 侧、`image-build.log`、`inherited-14b-red.log`） |
 
 提交（branch tip 见 `git log`）：
 
 ```
-49d67e8f fix(teamsmith): P135 close 清 branch= + forge 403 fallback 落文档（D62-a · <cep-project> 0007(1)）
+49d67e8f fix(teamsmith): P135 close 清 branch= + forge 403 fallback 落文档（D62-a · <peer-c> 0007(1)）
 ce7cbc8f ci: P135 镜像构建确定性（--ignore-scripts + 显式 esbuild installer）+ 补 iproute2（P103/D63）
 （+ 本报告）
 ```
@@ -142,7 +142,7 @@ AFTER   teamsmith-gates:p135 :  ✓ 40 P122 status 把无监听的陈旧 socket 
 > **worktree**（`.git` 是指向主 checkout 的指针文件），该段要求真仓库根。CI 的完整 checkout 不受影响；
 > 本报告不把它算进容器证据。另外 `ss -V` 只是版本打印，镜内自检用的是夹具真正的调用形状 `ss -xlH`。
 
-## 4 · `workflows.md` 的 403 fallback 一行（<cep-project> 0007(1) / D65）
+## 4 · `workflows.md` 的 403 fallback 一行（<peer-c> 0007(1) / D65）
 
 `--pr` 食谱里补的那一行**逐字**：
 

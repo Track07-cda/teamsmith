@@ -91,7 +91,7 @@ P96 的 F1 并入你的 P95：`--post-merge` 打印的'取记录'修法要在**�
   [reclaim] /tmp/review-M8.1   886.6 MB · 无占用、年龄 44 分钟 ≥ 30 分钟
   [reclaim] /tmp/review-M8.2   878.5 MB · 无占用、年龄 1 小时 ≥ 30 分钟
 ```
-但它们**是 <peer-project> 的 worktree** ✓（我读证：`/tmp/review-M8.1/.git` → `gitdir: …/<peer-project>/.git/worktrees/review-M8.1` ✓，M8.2 同 ✓，M7.36 同 ✓）。
+但它们**是 <peer-b> 的 worktree** ✓（我读证：`/tmp/review-M8.1/.git` → `gitdir: …/<peer-b>/.git/worktrees/review-M8.1` ✓，M8.2 同 ✓，M7.36 同 ✓）。
 它们没被拒是因为**我们的 `docs/team/reviews/` 里恰好也有 `M8.1.md`/`M8.2.md`** ✓（M 时代的工具任务重名 ✗）——
 也就是说：**"名字 + 记录存在"这条链路会把另一个项目的 1.8 GB 判成可回收** ✗✗，其中 `M8.2` **今天 03:11 还被改过** ✓。
 今天没有真删，**唯一原因**是那条"一处拒绝 → 一个都不删" ✗（偶然保住了 ✓）。
@@ -114,7 +114,7 @@ P96 的 F1 并入你的 P95：`--post-merge` 打印的'取记录'修法要在**�
    (b) 沙盒里放 1 个拒绝项 + ≥2 个合格项 → **合格的真的被删掉** ✓、拒绝项被点名 ✓（**别只验 `--dry-run` 的计划** ✗）。
 4. 其余照 brief 不变 ✓（tmux 残留可见性那条我还没验 ✓ —— 先修完 1、2 我再一起验 ✓）。
 
-**警示**：修好之前**不要跑 `--sweep`**（真跑会删 <peer-project> 的 worktree ✗）。我已叫人别跑；你修完叫我 ✓。
+**警示**：修好之前**不要跑 `--sweep`**（真跑会删 <peer-b> 的 worktree ✗）。我已叫人别跑；你修完叫我 ✓。
 
 ## 2026-09-30 · PM → dev-bob：你被 ENOSPC 打死（不是你的活），断点续跑 P137
 

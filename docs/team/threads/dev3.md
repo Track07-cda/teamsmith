@@ -79,7 +79,7 @@ P44 追加硬要求（事故后）：你那支 blackout 脚本按命令行模式
 
 评审记录：`docs/team/reviews/meeting-liveness-proposal.md`（其余全部通过：validate 14/0、MODIFIED 逐 requirement 比对丢失 0、A/B/规格/投递安全/每方窗口/非目标/What flips 都对）。
 
-**R1（必须）参与方身份的判定口径** —— D66 里 <peer> 的真缺陷：参与方按 **session slug**（`<peer>`）登记，而 CLI 按 **仓库 basename**（`<peer-project>`）判定自己的身份 → 对方 `team meeting read/say` 被判「你不是参与方」、`meeting inbox` 也看不到待回应，他最后只能直接读写共享区文件。
+**R1（必须）参与方身份的判定口径** —— D66 里 <peer> 的真缺陷：参与方按 **session slug**（`<peer>`）登记，而 CLI 按 **仓库 basename**（`<peer-b>`）判定自己的身份 → 对方 `team meeting read/say` 被判「你不是参与方」、`meeting inbox` 也看不到待回应，他最后只能直接读写共享区文件。
 PM 只**手工改了一个会议的 `state.env`** 绕开，机制层还在。请在 `meeting` 里规定：
 - 参与方判定以 config 里**显式声明的 slug** 为准，或**同时**接受 `TEAM_PROJECT` 与仓库 basename（任一匹配即算参与方）；
 - `state.env` 同时记录 session 与 project basename。

@@ -61,7 +61,7 @@ smoke 全绿
 $ bash docs/team/reports/M46-dev3/pkg/run.sh     # 现场复现（本任务的验收第 3 条）
 == 10 · 扩展启动时会话名不符 → 本项目留痕 + doctor/status/面板报降级 ==
   ✓ 真扩展跳过了 setup（未注册）
-  ✓ 跳过痕迹落在**本项目** state（<frontend-project>_pm-4ce4341b.skip）
+  ✓ 跳过痕迹落在**本项目** state（<peer-g>_pm-4ce4341b.skip）
   ✓ 痕迹写明原因：会话名不符
   ✓ 痕迹记下真实会话名
   ✓ 痕迹记下配置期望的会话名

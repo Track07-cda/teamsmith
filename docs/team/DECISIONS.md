@@ -163,7 +163,7 @@ TEAM_MODEL_WINDOWS  'openai-codex/gpt-5.6-terra=272000' → '… kimi-coding/kim
 
 | 证据源 | 结论 |
 |---|---|
-| 五个项目的闸门日志（pm-skills · <peer-project> · <frontend-project> · <erp-project> · <ontology-project>） | **死亡窗口内没有任何破坏性调用** ✓（pm-skills 00:00–01:48 共 130 条**全为 `act=pass`** ✓；其他项目同窗口也无 ✗✗——**谁都不是**）✓ |
+| 五个项目的闸门日志（pm-skills · <peer-b> · <peer-g> · <peer-e> · <peer-f>） | **死亡窗口内没有任何破坏性调用** ✓（pm-skills 00:00–01:48 共 130 条**全为 `act=pass`** ✓；其他项目同窗口也无 ✗✗——**谁都不是**）✓ |
 | 系统日志（01:35–01:50） | **无 tmux/session/logind/kill/oom 事件** ✓ |
 | 内核 OOM | **0 命中**（近 3 小时）✓ |
 | 容器/宿主重启 | `/proc/1` = systemd，**11.8 天** ✓ → 未重启 ✓ |
@@ -206,7 +206,7 @@ TEAM_MODEL_WINDOWS  'openai-codex/gpt-5.6-terra=272000' → '… kimi-coding/kim
 ### D58 · P122 近失事故：名字/记录巧合差点删掉另一个项目 1.8 GB（2026-09-29）
 
 **事实**：`tmp-hygiene --sweep` 的候选判定一直是**名字前缀**（`^(teamsmith-|review-)` ✓）+ 对 `review-*` 再查
-**我们的** `docs/team/reviews/<ID>.md` ✓。<peer-project> 的 `/tmp/review-M8.1`、`/tmp/review-M8.2`（`.git` → `<peer-project>` ✓，
+**我们的** `docs/team/reviews/<ID>.md` ✓。<peer-b> 的 `/tmp/review-M8.1`、`/tmp/review-M8.2`（`.git` → `<peer-b>` ✓，
 M8.2 今天 03:11 还被改过 ✓）因**我们的 M 时代任务重名**（`M8.1.md`/`M8.2.md` 存在 ✓）被判为**可回收** ✗。
 今天没真删的唯一原因是「一处拒绝 → 一个都不删」那条阻塞行为 ✗（偶然救命 ✓）。
 
@@ -299,27 +299,27 @@ verify 本次是**派生镜像只补 iproute2** 才跑全 ✓。与 D62 两个�
 
 **这两条正是"会议机制"该做的 A（发现性）/B（收尾）之外的第三件（投递安全）** ✓ → 计入该 change 的范围 ✓。
 
-### D65 · <cep-project> 的会议里躺着 **3 条我们 2.5 周没读的反馈**（2026-09-30 才读到）——缺口 A 的最硬证据
+### D65 · <peer-c> 的会议里躺着 **3 条我们 2.5 周没读的反馈**（2026-09-30 才读到）——缺口 A 的最硬证据
 
 起因：用户让我去和 <peer> 的 PM 开会问"用 teamsmith 有什么问题" ✓。开完会顺手跑 `team meeting inbox` ✓ →
-**`cep-pi-team-feedback`（4 条新发言）** ✗ —— 该会议共 **7 条**发言 ✓，我们只读到第 3 条（我方回执 ✓），
-**0004–0007 四条从 2026-09-11 15:10 起一直没读** ✗✗（其中三条是 <cep-project> 的 `report` ✓）。
+**`<peer>-pi-team-feedback`（4 条新发言）** ✗ —— 该会议共 **7 条**发言 ✓，我们只读到第 3 条（我方回执 ✓），
+**0004–0007 四条从 2026-09-11 15:10 起一直没读** ✗✗（其中三条是 <peer-c> 的 `report` ✓）。
 
 **其中是可直接执行的 teamsmith 缺陷/改进报告**：
 1. **0006**：我们代码里**断言了某个具体项目的凭据状态** ✗（旧 `forge.sh:123/:144` 写着"很多 PAT 没有
-   `pull-requests: write`（<cep-project> 就是 403）" ✓）→ 请改成中性表述 ✓。**今天核查：`forge.sh` 已不存在** ✓
+   `pull-requests: write`（<peer-c> 就是 403）" ✓）→ 请改成中性表述 ✓。**今天核查：`forge.sh` 已不存在** ✓
    （重构中消失 ✓），当前 `references/workflows.md` 的 forge-first 食谱**没有**任何凭据断言 ✓ → **此项已自然消解** ✓。
 2. **0007(1)**：真实的 403 归属是 **Contents: write**（PR 写不够 ✓）→ 建议 `--pr` 食谱加一行
    **可判定的 fallback**：「若合并 403（缺 Contents: write）：本地 squash + push + 评论 + 关 PR」✓。
    **今天核查：食谱里没有这一行** ✗ → 仍待补 ✓（一行文档 ✓）。
-3. **0005/0007(3)**：**`team say` 在 agent 「已 settle 但 worktree 脏」时报成功却没投递** ✗ —— <cep-project> 发了
+3. **0005/0007(3)**：**`team say` 在 agent 「已 settle 但 worktree 脏」时报成功却没投递** ✗ —— <peer-c> 发了
    **两遍**都没等到评估 ✗。**今天核查：未评估** ✗（投递栈此后改过很多：M24/P63/P67/P71/P81 ✓ → 需要**实测**它今天是否还成立 ✓）。
 
 **我自己的一个测量错误（记录在案）**：我更早对用户说该会议"**0 条往来**"✗ —— 错 ✓。`transcript` 是一个**目录** ✓，
 我用 `wc -l` 数了目录 ✗ → 实际 **7 条** ✓。教训：跨项目账本要看 `transcript/*.md` ✓，不是目录本身 ✓。
 
 **结论**：缺口 A（"没人被叫醒" ✓）不是理论风险 ✓ —— 它已经**真实地**让我们漏掉了一个同行 PM 的缺陷报告 2.5 周 ✓✗。
-→ 会议机制该做的是 **A 发现性 + B 收尾 + 投递安全（D64 发现 2）** ✓ + 顺手把 <cep-project> 这两条未决项处理掉 ✓。
+→ 会议机制该做的是 **A 发现性 + B 收尾 + 投递安全（D64 发现 2）** ✓ + 顺手把 <peer-c> 这两条未决项处理掉 ✓。
 
 ### D66 · <peer> 的 PM 答了 8 条（首次真用会议机制）——2026-09-30
 
@@ -335,7 +335,7 @@ verify 本次是**派生镜像只补 iproute2** 才跑全 ✓。与 D62 两个�
 | 6 | 文档：**分支命名规则与 `change:` 行格式只能靠报错学** ✗ → 要一份**反面清单**；AGENTS.md 协议段很好 ✓ | 文档小改动（PM 直接做 ✓） |
 | 7 | 配额：撞过 kimi 周额度 / Codex 额度两次 ✗，**当时工具沉默** ✗（会话空转 0 token，他手查 tmux 才发现 ✓）→ 死因分类正合他要 ✓；另建议**派单时**若席位上一轮 0 token → 提示"疑似配额耗尽" | 并入派单摩擦 propose ✓ |
 | 8 | **最想补：派单幂等** ✗ —— 一次派单最多被不同守卫各拦一次、**共重试 5 次** | 同上 propose ✓（**PM 今晚同样重试多次** ✗ → 强证据 ✓） |
-| 附 | 会议机制**他第一次真用**：knock 唤醒**成功** ✓，但 `read`/`say` 报「你不是参与方」✗、`inbox` 看不到待回应 ✗ → 根因：**参与方按 session slug（`<peer>`）登记，而 CLI 按仓库 basename（`<peer-project>`）判定** ✗，他最后直接读写共享区文件完成答复 ✗ | **PM 已即时修**：`PARTICIPANTS`/`PEER_SESSIONS` 改为 `<peer-project>`（session 仍 `<peer>` ✓，窗口 `pi` ✓）；**机制层修复**并入 `meeting-liveness` ✓ |
+| 附 | 会议机制**他第一次真用**：knock 唤醒**成功** ✓，但 `read`/`say` 报「你不是参与方」✗、`inbox` 看不到待回应 ✗ → 根因：**参与方按 session slug（`<peer>`）登记，而 CLI 按仓库 basename（`<peer-b>`）判定** ✗，他最后直接读写共享区文件完成答复 ✗ | **PM 已即时修**：`PARTICIPANTS`/`PEER_SESSIONS` 改为 `<peer-b>`（session 仍 `<peer>` ✓，窗口 `pi` ✓）；**机制层修复**并入 `meeting-liveness` ✓ |
 
 **另**：`meeting` 机制目前是**两方**的 ✗（`open --with` 单 peer ✓、`PARTICIPANTS=$proj,$peer_proj` ✓、knock 只取 map 里最后一个 ✓）→ >2 方需改 open/knock/共识计数 ✓（列为候选项 ✓，用户尚未要求 ✓）。
 
@@ -346,8 +346,8 @@ verify 本次是**派生镜像只补 iproute2** 才跑全 ✓。与 D62 两个�
 pane 里它还停在"smoke 段被 ENOSPC 卡住"的排查上 —— 是**环境**把它打死的，不是它的活。
 
 **环境读数**（事后）：`/tmp` 是 **tmpfs，上限 15 G**（当时 7.1 G 已用）；根分区 287 G 空闲 ——
-所以是 `/tmp` 这一类**内存盘**瞬时空了：我们的门禁夹具 + 其它项目常驻的 review 目录（<peer-project> ≈1.8 G、
-<frontend-project>-frontend ≈2 G）叠到顶就会炸；**我们的残留当时是 0**（`tmp-hygiene --status`：49 个根、可回收 49、占用 0）。
+所以是 `/tmp` 这一类**内存盘**瞬时空了：我们的门禁夹具 + 其它项目常驻的 review 目录（<peer-b> ≈1.8 G、
+<peer-g>-frontend ≈2 G）叠到顶就会炸；**我们的残留当时是 0**（`tmp-hygiene --status`：49 个根、可回收 49、占用 0）。
 
 **缺口**：容量地板只看**内存**（`TEAM_MIN_AVAIL_MB`），**没有磁盘/inode 腿** —— 磁盘满时派单照常放行，
 worker 中途被 ENOSPC 打死（本次实测：一个席位直接崩、报告未写、证据未提交）。
@@ -373,7 +373,7 @@ worker 中途被 ENOSPC 打死（本次实测：一个席位直接崩、报告�
 ### D69 · 同一个 `reset --hard` 家族 15 分钟内犯两次 + `git clean` 把整个未跟踪目录删光（2026-10-01）
 
 **第二次（verify）**：为派 P143 我照旧 `git -C .worktrees/verify reset --hard main` ✗ ——
-工作树正停在 `task/P138-cep-team-say` 上 ✗ → 分支指针被推到 main ✗，**它 4 个提交**（含 16.7 KB 诊断报告）从分支上消失 ✗；
+工作树正停在 `task/P138-<peer>-team-say` 上 ✗ → 分支指针被推到 main ✗，**它 4 个提交**（含 16.7 KB 诊断报告）从分支上消失 ✗；
 紧接着我又 `git clean -fdq <某未跟踪目录下的子路径>` ✗ —— git 把**整个未跟踪目录**（867 个证据文件 / 4.1 MB，含可复用的容器配方）当成匹配项**整体删掉** ✗✗。
 
 **两次都完全恢复**：分支用 `reflog`（`e80c1ddb` ✅）；文件用**它提交过的版本**（`git checkout e80c1ddb -- …` ✅ 867 个全回来 ✅）。
@@ -732,8 +732,8 @@ socket 路径超 AF_UNIX 107 字节（深 TMPDIR ✓）→ 私有 server 绑不�
 其他项目路径）；可读层回答"要求了什么、交付了什么、怎么复验、为什么这么定"，正是这套方法值得被看见的部分。
 
 **遮蔽**（一次机械 pass，字节级、覆盖全部 1359 个文件，改 210 个文件 503 处）：家目录 → `<home>`、用户名 → `<user>`、
-内网地址 → `<internal>`、同机其他项目名 → `<peer>` / `<peer-project>` / `<frontend-project>` / `<crm-project>` /
-`<erp-project>` / `<ontology-project>` / `<cep-project>`、`/do/` → `/<other-project>/`。遮蔽后全部形状扫描为 0。
+内网地址 → `<internal>`、同机其他项目名 → `<peer>` / `<peer-b>` / `<peer-g>` / `<peer-d>` /
+`<peer-e>` / `<peer-f>` / `<peer-c>`、`/do/` → `/<other-project>/`。遮蔽后全部形状扫描为 0。
 
 **代价与机制**：账本一旦在仓库里，任务书与复验记录就是"写下去即公开"，没有发布前那道遮蔽网兜着 —— 所以禁令必须变成
 **门禁里的一条检查**（扫描账本文本中的上述形状，命中即红并点名），否则就是靠人记着。

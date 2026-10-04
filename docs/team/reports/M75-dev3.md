@@ -238,7 +238,7 @@ CLI 真执行（§5）；完整 smoke（含 ⑩/⑪）仍是 PM/`team review` �
 2. **`container-tmux.sh --selftest` 的宿主指纹检查对共享 server 的并发活动敏感**：7 次运行中 2 次
    fixture 内部前/后指纹不等（逐字节证据 `logs/70-fingerprint-flake-evidence.txt`），两次里本包在整段
    外捕获的宿主指纹都前后一致、容器内泄漏形状断言全过；随后 3 次直跑 + watcher 观测（默认 server
-   上 <peer>/<crm-project>/<other-project>/teamsmith 四个活动会话的窗口数在动）全绿。指纹含 `#{session_windows}` 与
+   上 <peer>/<peer-d>/<other-project>/teamsmith 四个活动会话的窗口数在动）全绿。指纹含 `#{session_windows}` 与
    `list-clients` 数，他项目窗口增删就会抖动 —— 环境竞争，非 M67 引入；若 PM 认为 gate 需要稳定，
    处置在 fixture（比如只比 socket 存在性与 server 进程集）而非闸门。
 3. **B1.4（`scripts/team` 载入配置后导出推导身份）**：超出 B1.3「nothing else changes argv」的字面，

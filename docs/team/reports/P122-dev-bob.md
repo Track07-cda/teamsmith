@@ -13,7 +13,7 @@
 
 | brief 条目 | 结果 |
 |---|---|
-| 1. 「是不是我们的」要有证（`review-*` 不能只靠名字）+ 台账记录仓库身份 | ✅ 归属证明链（git 痕迹 → 本项目记录 → 结构痕迹；指向别的仓库 = 反证）+ run 台账头 `repo=` 归因；归属未证/别家的目录**不进清单、绝不碰、逐条点名**（现场 4 个 <peer-project> 检出从根清单消失，见 §1.1） |
+| 1. 「是不是我们的」要有证（`review-*` 不能只靠名字）+ 台账记录仓库身份 | ✅ 归属证明链（git 痕迹 → 本项目记录 → 结构痕迹；指向别的仓库 = 反证）+ run 台账头 `repo=` 归因；归属未证/别家的目录**不进清单、绝不碰、逐条点名**（现场 4 个 <peer-b> 检出从根清单消失，见 §1.1） |
 | 2. 拒绝不阻塞：跳过并点名、其余照常回收；退出码 0/3 写清 | ✅ 逐条 `[refuse]/[foreign]/[unproven]` + 原因，其余照常删；**0 = 做了事（有跳过也照常）· 3 = 一个都没做**（双向夹具 + 翻转，见 §1.2、§2.2） |
 | 3. 可见性（D57 缺口 A）：`--status` 增 tmux 残留计数；清扫默认不动 + 显式开关；绝不动 `default` | ✅ 两行计数（孤儿私有 server / 陈旧 socket）；`--tmux-sockets` 才清；`default` 永不触碰；TERM（非 KILL）且只对逐字段证明的 pid（§2.3） |
 | 4. 证据：两个方向 + 红侧 + FAST 全绿 + `openspec validate` | ✅ 方向 a/b/c 双方向（§1）；12 个 break 全红在各自守卫上（§3）；FAST **✓3063 ✗0**（返工轮）；`openspec validate --all --strict` **13/13** |
@@ -30,18 +30,18 @@
 $ cd <主工作树>            # P122 未合并（local 模式）的 tmp-hygiene.sh
 $ bash skills/teamsmith/tests/tmp-hygiene.sh --sweep --dry-run --age 30
   [refuse] /tmp/review-M7.35
-  [reclaim] /tmp/review-M8.1     ← F1 的形状（.git 指向 <peer-project>，只因 reviews/ 有同名记录）
+  [reclaim] /tmp/review-M8.1     ← F1 的形状（.git 指向 <peer-b>，只因 reviews/ 有同名记录）
   [reclaim] /tmp/review-M8.2
 将回收：11 个根 · 1.7 GB · 文件合计 62508
 拒绝：有 2 个候选的安全前提不成立 —— 一个都没删   ← F2 的形状（计划 N 个，实删 0）
 rc=3
 ```
 
-`logs/field-status-before.txt`：同一副本的 `--status` 把 4 个 <peer-project> 检出列进根清单（合计 17 个根）。
+`logs/field-status-before.txt`：同一副本的 `--status` 把 4 个 <peer-b> 检出列进根清单（合计 17 个根）。
 **这正是 P122 要修的两个缺陷本身** —— 旧副本（主工作树）上没有本分支的改动。
 
 **分支 tip 上的同一条命令**（`logs/field-status-after.txt` / `logs/field-sweep-dryrun.txt`）：4 个别家目录只在
-「归属未证/别家」段逐条点名（`[foreign] … —— 目录的 git 指向别的仓库（/home/…/<peer-project>/.git）`），
+「归属未证/别家」段逐条点名（`[foreign] … —— 目录的 git 指向别的仓库（/home/…/<peer-b>/.git）`），
 不在候选；计划 9 个可回收根、跳过 4 个、**rc=0**。
 
 **尽管如此，返工轮做了四处真改动**（PM 的验收词比 brief 更严，逐条对表）：

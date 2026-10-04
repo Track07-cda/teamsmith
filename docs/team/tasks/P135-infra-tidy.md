@@ -10,7 +10,7 @@ phase:  apply
 anchor: none (infra) — 只修构建确定性、状态清理、镜像依赖与一行文档
 deltas: -
 grant:  ci/** · .github/workflows/gates.yml · skills/teamsmith/scripts/lib/cmd-agents.sh · skills/teamsmith/references/workflows.md · skills/teamsmith/tests/** · docs/team/reports/P135-dev.md · docs/team/reports/P135-dev/**
-deps:   D62（两个工具坑 ✓）· D63（镜像缺 iproute2 ✓）· D65（<cep-project> 的 0007(1) 建议 ✓）· P130（`.github/workflows/gates.yml` 刚改过 ✓ 顺手 ✓）
+deps:   D62（两个工具坑 ✓）· D63（镜像缺 iproute2 ✓）· D65（<peer-c> 的 0007(1) 建议 ✓）· P130（`.github/workflows/gates.yml` 刚改过 ✓ 顺手 ✓）
 status: todo
 budget: 一个工作块
 priority: 中（都小 ✓ 但都会反复咬人 ✓）
@@ -32,7 +32,7 @@ priority: 中（都小 ✓ 但都会反复咬人 ✓）
 3. **`ci/Containerfile` 缺 `iproute2`** ✗（D63）：`ss` 不在 → 镜像里的**隔离自检会可见降级** ✓
    （verify 今晚不得不派生镜像才跑全 ✓）。加进包列表 ✓。
    证据：构建后镜像里 `ss -V` 可用 ✓（或 `command -v ss` ✓）+ 相关夹具在该镜像里**不再 SKIP** ✓（列举前后 ✓）。
-4. **合并食谱加一行可判定 fallback** ✓（<cep-project> 的 0007(1) ✓）：`references/workflows.md` 的 `--pr` 食谱里补：
+4. **合并食谱加一行可判定 fallback** ✓（<peer-c> 的 0007(1) ✓）：`references/workflows.md` 的 `--pr` 食谱里补：
    `# 若 forge 合并 403（缺 Contents: write）：本地 squash + push + 评论 + 关 PR` ✓
    （**中文允许** ✓ —— workflows.md 是中文文档 ✓；但**不要**断言任何项目的凭据状态 ✗ ✓）。
    证据：那一行在文件里 ✓ + `references` 的文档检查段仍绿 ✓。

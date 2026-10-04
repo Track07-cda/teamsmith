@@ -271,7 +271,7 @@
 | P135 | infra tidy：镜像确定性 + close 清分支 + iproute2 + 一行 fallback | dev | - | - | done |
 | P136 | 派单摩擦与幂等（propose） | dev2 | - | - | done |
 | P137 | references 反面清单（常见被拒与修法） | dev-bob | - | - | done |
-| P138 | <cep-project> 报告复现：team say 脏工作树投递 | verify | - | - | done |
+| P138 | <peer-c> 报告复现：team say 脏工作树投递 | verify | - | - | done |
 | P139 | meeting-liveness apply（发现性/收尾/投递安全/身份/标识） | dev3 | - | - | done |
 | P140 | dispatch-friction apply | dev2 | - | - | done |
 | P141 | 容量地板补磁盘腿（propose） | dev-bob | - | - | done |
@@ -345,7 +345,7 @@
 | P210 | 席位存活判据：裸 shell 不算在跑 | dev3 | - | - | done |
 | P211 | P211 · 看板裁决 `dropped` 的报告不该再算「待复验」 | - | - | - | done |
 | P212 | P212 · 账本禁令检查进 FAST 门禁（D94 的机制） | - | - | - | wip |
-| P213 | P211 的换人独立验证（dropped 不再算待复验） | verify | - | - | wip |
+| P213 | P211 的换人独立验证（dropped 不再算待复验） | verify | - | - | done |
 | P214 | 公开仓 CI 20 条红的定性（只读） | dev | - | - | wip |
 
 ## 当前里程碑

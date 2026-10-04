@@ -1,7 +1,7 @@
-# P138 · <cep-project> 的 settled + dirty 场景：当前 tmux 降级通道仍可卡住追问
+# P138 · <peer-c> 的 settled + dirty 场景：当前 tmux 降级通道仍可卡住追问
 
 agent: verify   status: PARTIAL（诊断交付；发现留给 PM 另开 apply）   time: 2026-09-30
-branch: `task/P138-cep-team-say`   PR/MR: -（local，不 push）
+branch: `task/P138-<peer>-team-say`   PR/MR: -（local，不 push）
 被测 main：`59f5463e1486a184bd9d47ad6dea21c30ea221e9`；没有修改实现。
 
 ## 结论
@@ -13,7 +13,7 @@ branch: `task/P138-cep-team-say`   PR/MR: -（local，不 push）
 - **没有复现“明确报已确认送达，实际上未送达”**。当前输出明说 queued，不能把它描述成假 ACK。问题是空框误判使本应排水的队列卡住，而非队列丢掉消息；durable 副本仍在。
 - 未提交文件不是必要条件：clean 对照也出现空框误判和第二条追问卡住；投递判据读框几何，不检查 git dirty。不要派成“放宽脏工作树检查”。
 
-<cep-project> 的两份指定原文只有现象句，没有 Pi 版本、原始帧、具体消息、启动参数和时序。因此，上述是**当前树上独立构造的同类投递失败**，不是声称重建了 <cep-project> 当时的完整现场。
+<peer-c> 的两份指定原文只有现象句，没有 Pi 版本、原始帧、具体消息、启动参数和时序。因此，上述是**当前树上独立构造的同类投递失败**，不是声称重建了 <peer-c> 当时的完整现场。
 
 ## Deliverables
 
@@ -130,14 +130,14 @@ journal 的同一个 seq：`read seq=1` → `intent seq=1` → `sent seq=1`；�
 
 可派单：**“notify 的 durable 收件人、outbox inbox-written 声明与 PM wake 的全文路径保持一致；用实际存在的全文文件验收。”** PM 先定接口契约，再派 owner；本任务不改。
 
-## 历史比较：不能冒认某次改动修好了 <cep-project> 原事故
+## 历史比较：不能冒认某次改动修好了 <peer-c> 原事故
 
 开始时默认通道不复现，因此做了历史区间端点/中点实跑，而非引用 M24/M30 的交付结论：
 
 | 版本/节点 | Pi | 同一 seed + settle + dirty，首条追问的接收端 |
 |---|---|---|
-| <cep-project> 改动前 `7adc831a` | 0.99.1 | 收到 1 次 |
-| <cep-project> 改动 `40bbad6a` | 0.99.1 | 收到 2 次；sender 最后 exit 1（旧确认器误判后重发） |
+| <peer-c> 改动前 `7adc831a` | 0.99.1 | 收到 1 次 |
+| <peer-c> 改动 `40bbad6a` | 0.99.1 | 收到 2 次；sender 最后 exit 1（旧确认器误判后重发） |
 | M24 前 `d37ac18b^` / 后 `d37ac18b` | 0.99.1 | 都收到；都可能误记 held |
 | M24 前 / 后 | 0.86.0 | 都收到；前 held，后这一轮确认成功 |
 | M30 前 `d0f8b9a6^` / 后 `d0f8b9a6` | 0.99.1 | 都收到；后观察到 2 次 wake |
@@ -145,7 +145,7 @@ journal 的同一个 seq：`read seq=1` → `intent seq=1` → `sent seq=1`；�
 | 后段 P81 `b14157b1` | 0.99.1 | 收到 1 次，有 journal |
 | 当前 main | 0.86.0 / 0.99.1 | 默认 watcher 均收到 |
 
-原始证据是 `logs/hist-*` / `logs/pi86-*`，判据汇总 `logs/judge.txt`。P63/P71 是 proposal，不当成实现修复点。没有“首条不送达”的历史红端点，因而**不能完成有意义的 first-fixed 折半定位，也不能把当前绿武断归给 M24/M30/P67/P81 某一个**。M30 确实提供绕开输入框的通道；这解释默认路径为何不受 F1 影响，不等于证明它修复了 <cep-project> 当年的时序缺陷。后来已经在当前降级路径取到明确红侧，故任务的“仍复现 → 给最小现场和派单描述”分支适用。
+原始证据是 `logs/hist-*` / `logs/pi86-*`，判据汇总 `logs/judge.txt`。P63/P71 是 proposal，不当成实现修复点。没有“首条不送达”的历史红端点，因而**不能完成有意义的 first-fixed 折半定位，也不能把当前绿武断归给 M24/M30/P67/P81 某一个**。M30 确实提供绕开输入框的通道；这解释默认路径为何不受 F1 影响，不等于证明它修复了 <peer-c> 当年的时序缺陷。后来已经在当前降级路径取到明确红侧，故任务的“仍复现 → 给最小现场和派单描述”分支适用。
 
 ## Verification evidence
 
@@ -194,7 +194,7 @@ P138_SECOND=1 bash docs/team/reports/P138-verify/pkg/run-case.sh tmux-second-hos
 
 ## 没有测到的边界 / 偏离
 
-- 没测非 Pi adapter、<cep-project> 原现场的 Pi/模型版本、真实远程 provider 延迟、机器负载下的概率、TTL 到期后的人工处置。
+- 没测非 Pi adapter、<peer-c> 原现场的 Pi/模型版本、真实远程 provider 延迟、机器负载下的概率、TTL 到期后的人工处置。
 - loopback SSE 返回是确定性的测试模型；**Pi TUI、工具执行、生命周期、watcher、tmux 与生产投递代码都是真实运行**。这不能替代用户原 provider 的时序证据。
 - 只观察发送、两次 flush 与之后的真实事件，不把“此后永远不会送”当作已证明；消息在 durable inbox / queued 中可人工恢复。
 - 不把 `notify dev` 解释为唤醒 worker；它的当前实现敲 PM，实际接收侧也测了 PM。
@@ -206,4 +206,4 @@ P138_SECOND=1 bash docs/team/reports/P138-verify/pkg/run-case.sh tmux-second-hos
 1. PM 独立重跑 F1 红侧/正控，评估真实 Pi 聊天分隔线这一新几何形状，再开最小 apply；不要当 dirty-git 放行问题修。
 2. PM 确定 notify 收件人/敲门/全文路径契约并单独处理 F2。
 3. 接管 F3 的全门禁红项，修正文档扫描前提、root 权限夹具与 config-cli group 的未归因失败后独立重跑；本分支不是全门禁绿状态。
-4. 若仍要归因 **<cep-project> 原事故**，请 PM 从该反馈渠道取得原始 Pi 版本、命令文本、pane 帧与启动方式，再寻找有实测红端点的历史区间；本记录不提供未经证明的 first-fixed SHA。
+4. 若仍要归因 **<peer-c> 原事故**，请 PM 从该反馈渠道取得原始 Pi 版本、命令文本、pane 帧与启动方式，再寻找有实测红端点的历史区间；本记录不提供未经证明的 first-fixed SHA。

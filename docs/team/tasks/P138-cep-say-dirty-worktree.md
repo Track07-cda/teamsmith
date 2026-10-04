@@ -1,4 +1,4 @@
-# P138 · 复现并归因 <cep-project> 报的"`team say` 在 agent 已 settle 且 worktree 脏时投递失败"
+# P138 · 复现并归因 <peer-c> 报的"`team say` 在 agent 已 settle 且 worktree 脏时投递失败"
 
 ```
 task:   P138
@@ -10,7 +10,7 @@ phase:  verify
 anchor: none (infra) — 诊断与复现，只写报告
 deltas: -
 grant:  docs/team/reports/P138-verify.md · docs/team/reports/P138-verify/**
-deps:   <cep-project> 的原始报告（共享区 `~/.pi/team/meetings/cep-pi-team-feedback/transcript/0005_*` 与 `0007_*` 的第 3 条 ✅）· 投递栈此后改过多处：M24/M30/P63/P67/P71/P81 ✅
+deps:   <peer-c> 的原始报告（共享区 `~/.pi/team/meetings/<peer>-pi-team-feedback/transcript/0005_*` 与 `0007_*` 的第 3 条 ✅）· 投递栈此后改过多处：M24/M30/P63/P67/P71/P81 ✅
 status: todo
 budget: 一个诊断
 priority: 中高（同行 PM 报了两遍、我们两周没评估 ✅）
@@ -18,7 +18,7 @@ priority: 中高（同行 PM 报了两遍、我们两周没评估 ✅）
 
 ## 要回答的问题（不许引用别人的结论，自己造现场）
 
-<cep-project> 的原话（两遍）：**`team say` 在 agent「已 settle 但留下未提交文件」时报成功却没投递**。
+<peer-c> 的原话（两遍）：**`team say` 在 agent「已 settle 但留下未提交文件」时报成功却没投递**。
 
 1. **今天是否仍复现？** 在**当前 main** 上自己造场景：一个真实 agent 窗口（私有 socket ✅ 见安全铁律）+
    让它停下并**留下未提交文件** ✅ → 对它 `team say` / `team notify` ✅ →

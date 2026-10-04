@@ -132,7 +132,7 @@ The sole FAST failure is reproducible, not load/timing-related:
 
 PM notification was sent with `env -u TMUX -u TMUX_PANE TEAM_NOTIFY_TMUX=0 bash skills/teamsmith/scripts/team notify verify --from verify ...` (inbox-only, no shared tmux access), naming the exact failure and evidence path.
 
-Not measured this round: full non-FAST correctness suite, performance/release gate, newly launched host-1.0.0 observation, fresh watcher-route end-to-end, or the original <cep-project> incident. Real model evidence uses the local mock backend, not an external provider. No archive, merge, push, board completion or cross-project operation occurred.
+Not measured this round: full non-FAST correctness suite, performance/release gate, newly launched host-1.0.0 observation, fresh watcher-route end-to-end, or the original <peer-c> incident. Real model evidence uses the local mock backend, not an external provider. No archive, merge, push, board completion or cross-project operation occurred.
 
 ## Suggested next steps
 

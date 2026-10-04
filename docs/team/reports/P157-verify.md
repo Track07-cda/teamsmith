@@ -149,7 +149,7 @@ Evidence: `logs/real-{before,after}-{run,judge}.txt`, `logs/tmux-p157-{before,af
 - No other adapter/TUI was measured. The non-root synthetic notify registration is not a live Pi watcher; live watcher confirmation comes from the separate container cases.
 - The independently generated working/spinner control proves the BUSY exclusion, not every real Pi working/render phase.
 - Unicode, long rule/spinner/footer-clone drafts at every cursor position, CJK/emoji/combining/tab terminal-cell widths, scrolling and renderer clipping were **not independently recaptured with real Pi**. The author's `drafts` fixture is fake tmux + subprocess/production judgment, not renderer evidence for those cases. 0.99.2 real ASCII draft and one incomplete redraw adversary do not close that wider coverage gap.
-- Panel JSON/text/TUI and recovery/concurrency mutations have freshly rerun author-fixture coverage through section 57, not independently constructed panel real-process controls here. Existing whitespace-only/status-clone/folded-paste limitations remain; I do not claim to fix the <cep-project> incident.
+- Panel JSON/text/TUI and recovery/concurrency mutations have freshly rerun author-fixture coverage through section 57, not independently constructed panel real-process controls here. Existing whitespace-only/status-clone/folded-paste limitations remain; I do not claim to fix the <peer-c> incident.
 - No full non-FAST gate, archive, push, merge, task-checkbox update or protected-branch decision was performed.
 
 ## Delivery

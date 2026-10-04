@@ -7,9 +7,9 @@ branch: `task/M40-team-cwd`   PR/MR: -（本仓库 local 模式：不 push，分
 
 ## Context（用户拍板的两起实测事故，2026-09-19）
 
-① 在 <frontend-project> 目录里跑 `team up`：shell 继承了 pm-skills 的 `TEAM_*`，CLI 把项目解析成 pm-skills，
-   被「当前目录属于 <frontend-project>」的护栏拦住（方向对，但用户被迫清环境）。
-② 同一个 shell 里起的 pulse：面板进程 cwd=<frontend-project>，却渲染出 **pm-skills 的看板**（没有护栏，
+① 在 <peer-g> 目录里跑 `team up`：shell 继承了 pm-skills 的 `TEAM_*`，CLI 把项目解析成 pm-skills，
+   被「当前目录属于 <peer-g>」的护栏拦住（方向对，但用户被迫清环境）。
+② 同一个 shell 里起的 pulse：面板进程 cwd=<peer-g>，却渲染出 **pm-skills 的看板**（没有护栏，
    静默读错项目）。
 
 规格（用户原话）：身份默认从 cwd 推导；继承来的 `TEAM_*` 身份变量**绝不许静默赢过 cwd**。

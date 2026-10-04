@@ -122,7 +122,7 @@ OpenSpec 协议指引缺口（用户指出）。工作流决策见 DECISIONS D10
 ## 遗留 / 观察（不阻塞，记着）
 
 - `team_pm_state` 的 cwd 归属判定在没有 `/proc` 且没有 `lsof` 的环境会退化成旧行为（macOS 需 lsof）。
-- 其他在用项目（<cep-project>/<erp-project> 等）需要跟上 v1.11+ 的命令面：`team merge/pr/gh/gl` 已删、`review` 必须带 `--dir`；
+- 其他在用项目（<peer-c>/<peer-e> 等）需要跟上 v1.11+ 的命令面：`team merge/pr/gh/gl` 已删、`review` 必须带 `--dir`；
   现状靠"报错自解释 + `/reload`"覆盖，M3 时再评估要不要写一页迁移说明。
 - 跨项目通道（`team meeting`）已在真实项目间跑通一次；M3 要在新项目上再验一遍。
 
