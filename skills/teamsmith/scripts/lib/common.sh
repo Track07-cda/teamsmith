@@ -1515,6 +1515,21 @@ team_pane_cmd() { # <session:window> → 前台命令名
   tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
 }
 
+# P210：本窗口 pane 的三件事**一次读全**（pid / 是否遗体 / 前台命令）。为什么必须一次读：同一拍里
+# 「pane 是死的吗」「前台是什么」必须来自同一个 pane —— 分成两次读，中间 pane 可以被 respawn/替换，
+# 两次读数就不是同一个现场了（判据要的是证据，不是采样）。
+# 没有窗口/pane、读不到 → 非 0 + 无输出（失败关闭；不拿值当证据）。
+# 注意别用 display-message 读这些字段：窗口名写错时它会**静默回退到当前窗口**（M37 的实测），
+# 判据会拿到别的窗口的 pane。list-panes 找不到目标就报错、没有输出。
+team_pane_facts() { # <session:window> → "<pane_pid> <pane_dead> <pane_current_command>"
+  local target="${1:-}" fmt='#{pane_active} #{pane_pid} #{pane_dead} #{pane_current_command}' line
+  team_tmux_target_required "pane_facts" "$target" || return 1
+  line="$(tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | awk '$1 == "1" { print $2, $3, $4; exit }')"
+  [ -n "$line" ] || line="$(tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | head -1 | awk '{ print $2, $3, $4 }')"
+  [ -n "$line" ] || return 1
+  printf '%s\n' "$line"
+}
+
 team_is_shell_cmd() { # 空/常见 shell → 窗口可能停在提示符，也可能是 shell 脚本在跑（需再查子进程）
   case "${1:-}" in
     bash|sh|zsh|fish|dash|ash|ksh|nu|elvish|'') return 0 ;;
@@ -1804,11 +1819,14 @@ team_pm_starting() {
 }
 
 # pane_pid 本身或它的直接子进程里，第一个满足 <谓词函数> 的 pid（谓词按可执行文件身份判定）。
+# <scope>（P210）：all（默认）= 历史口径（pane_pid 自己 + 直接子进程）；children = 只看直接子进程。
+# children 给「前台是 shell 的 worker 窗口」用：那时 pane_pid 自己的命令行不是 agent 证据
+# （启动壳里写着 agent 路径、遗体 pane 的号还可能已被回收给别的进程），见 team_agent_alive_in_pane。
 # M37：worker 存活（team_pane_agent_pid）与 M6.5 的 PM 存活（team_pm_pane_agent_pid）共用这条扫描 ——
 # 「同源」是字面意义上的同一份代码，不是两句长得像的注释。为什么必须是进程树而不是
 # pane_current_command：真干活的 CLI 常常是 pane shell 的子进程（前台名显示 bash，见 team_proc_is_agent_bin）。
-team_pane_proc_tree_pid() { # <session:window> <谓词函数>
-  local target="${1:-}" pred="${2:-}" pane p
+team_pane_proc_tree_pid() { # <session:window> <谓词函数> [all|children]
+  local target="${1:-}" pred="${2:-}" scope="${3:-all}" pane p
   [ -n "$target" ] && [ -n "$pred" ] || return 1
   # list-panes 而不是 display-message：窗口名写错/窗口已消失时 display-message 会**静默回退到当前窗口**
   # （实测 `-t teamsmith:nope-window` 返回当前窗口的 pane_pid 且 rc=0），探活会拿到别的窗口的进程 ——
@@ -1816,7 +1834,9 @@ team_pane_proc_tree_pid() { # <session:window> <谓词函数>
   pane="$(tmux list-panes -t "$target" -F '#{pane_active} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }')"
   [ -n "$pane" ] || pane="$(tmux list-panes -t "$target" -F '#{pane_pid}' 2>/dev/null | head -1)"
   [ -n "$pane" ] || return 1
-  "$pred" "$pane" && { printf '%s\n' "$pane"; return 0; }
+  if [ "$scope" != "children" ]; then
+    "$pred" "$pane" && { printf '%s\n' "$pane"; return 0; }
+  fi
   for p in $(ps -o pid= --ppid "$pane" 2>/dev/null | tr -d ' '); do
     "$pred" "$p" && { printf '%s\n' "$p"; return 0; }
   done
@@ -1923,6 +1943,8 @@ team_pm_pending_suffix() { # <state>
 #   pane_pid **本身或它的直接子进程**的命令行里出现配置的 agent 可执行文件
 #   （TEAM_AGENT_BIN > TEAM_AGENT_CMD 首词 > TEAM_PI_BIN，解析见 team_agent_bin_path），
 #   且该进程 cwd 在本项目内（含它的 worktree）。缺任一 → 非 0：报告「没证据」，不猜。
+# P210 起对 worker 这一侧再加两道（裸 shell 的 pane 不算在跑：遗体 pane 的号会被回收、前台是
+# shell 时 pane_pid 自己的命令行不算证据）：判据在 team_agent_alive_in_pane，扫描仍只有这一份。
 # 放在 common.sh 是因为 team_pending_counts（digest / pulse 的「停了的 agent」、面板待办）与
 # roster / resume / 面板 agents 块共用它 —— 各写一份就是下一个假告警的温床。
 team_proc_is_agent_bin() { # <pid>
@@ -1964,11 +1986,28 @@ team_pm_other_sessions_in_dir() { # <dir> → 该目录里活着的 PM CLI 进�
   return 0
 }
 
-# 窗口里**证明**跑着配置的 worker agent：进程树命中 + cwd 在本项目内（缺证据 → 非 0）
+# 窗口里**证明**跑着配置的 worker agent：进程树命中 + cwd 在本项目内（缺证据 → 非 0）。
+# P210（判据收紧）：**裸 shell 的 pane 不算在跑**。两条，都是「不许把不是证据的东西当证据」：
+#   ① 遗体 pane（pane_dead=1）→ 不在跑。`pane_pid` 是**过期的号**：进程已经退出，内核会把号回收给
+#      别的进程（本机 pid 空间 4M、实测 churn ~2 万/分钟 → 几小时内必定回收）。回收到的那个进程
+#      命令行里出现 agent 可执行文件时，旧判据会把一个**没有进程的 pane** 说成「在跑」——
+#      2026-10-03→04 的 P103 就是这样被静默漏掉一天的：dev-bob 的 pane 已是遗体，pulse 每 15 分钟
+#      算一次「无待办」，PM 26 小时没被叫醒（P103 报告在看板上 wip、席位记录着任务）。
+#   ② 前台命令是**裸 shell**（bash/sh/zsh…）→ pane_pid 自己的命令行不是证据，只认它的**直接子进程**。
+#      M37 的承诺不变（不许误杀）：真干活的 agent 就是 pane shell 的直接子进程 —— dispatch 的 harness
+#      正是「bash 父 + agent 子」（旧判据在启动壳/遗留壳的 argv 里读到 agent 路径就会假活）。
 team_agent_alive_in_pane() { # <session:window>
-  local target="${1:-}" pid cwd
+  local target="${1:-}" facts pane dead cmd pid cwd
   [ -n "$target" ] || return 1
-  pid="$(team_pane_agent_pid "$target" 2>/dev/null || true)"
+  facts="$(team_pane_facts "$target" 2>/dev/null || true)"
+  read -r pane dead cmd <<< "$facts"
+  [ -n "$pane" ] || return 1
+  [ "$dead" = "1" ] && return 1
+  if team_is_shell_cmd "$cmd"; then
+    pid="$(team_pane_proc_tree_pid "$target" team_proc_is_agent_bin children 2>/dev/null || true)"
+  else
+    pid="$(team_pane_agent_pid "$target" 2>/dev/null || true)"
+  fi
   [ -n "$pid" ] || return 1
   cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
   [ -n "$cwd" ] || return 1

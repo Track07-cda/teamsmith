@@ -6,6 +6,8 @@
 # 范围：tests/*.sh + tests/lib/*.sh 的**自身** while+sleep 循环；heredoc/字符串里拼出来的
 # 脚本（如 container-tmux.sh 写进容器的 inner 脚本、嵌入的 python/awk）不在扫描面内。
 flip-m37.sh	113	cap="$m37_i" -lt 50	while [ "$m37_i" -lt 50 ] && { [ -z "$(m37_child_of "$SESS:m37w")" ] || [ -z "$(m37_child_of "$SESS:m37-lit")" ]; }; do
+flip-p210.sh	130	cap="$p210_i" -lt 50	while [ "$p210_i" -lt 50 ] && [ "$(tmux list-panes -t "$SESS:p210dead" -F '#{pane_dead}' 2>/dev/null | head -1)" != "1" ]; do
+flip-p210.sh	135	cap="$p210_j" -lt 20	while [ "$p210_j" -lt 20 ]; do
 flip-m4.3.sh	86	cap="$i" -lt $((n * 4))	while [ "$i" -lt $((n * 4)) ]; do
 flip-m7.2.sh	190	bound=夹具的停止位文件（采集器随调用方写 stop 一起退出）	while [ ! -f "$stop" ]; do
 flip-m7.2.sh	217	cap="$i" -lt 60	while [ "$i" -lt 60 ]; do
@@ -28,6 +30,7 @@ smoke.sh	2557	cap="$i" -lt "$ticks"	while [ "$i" -lt "$ticks" ]; do
 smoke.sh	2649	cap="$PM_TICKS" -lt 3	while [ "$PM_TICKS" -lt 3 ]; do
 smoke.sh	2847	cap="$M82_WAIT" -lt 60	while [ "$M82_WAIT" -lt 60 ] && [ ! -s "$TMP/m82-bare-ran.log" ]; do sleep 0.25; M82_WAIT=$((M82_WAIT + 1)); done
 smoke.sh	2950	cap="$i" -lt "${2:-50}"	local i=0; while [ "$i" -lt "${2:-50}" ]; do [ -n "$(m37_child_of "$1")" ] && return 0; sleep 0.1; i=$((i + 1)); done
+smoke.sh	4066	cap="$i" -lt "${4:-50}"	while [ "$i" -lt "${4:-50}" ]; do
 smoke.sh	2973	cap="$i" -lt "${3:-50}"	while [ "$i" -lt "${3:-50}" ]; do
 smoke.sh	3638	cap="$M25_CWAIT" -lt 60	while [ "$M25_CWAIT" -lt 60 ]; do
 smoke.sh	3659	cap="$M25_WAIT" -lt 120	while [ "$M25_WAIT" -lt 120 ]; do

@@ -4027,8 +4027,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   printf '#!/usr/bin/env bash\nsleep 600\n' > "$M37_STUB"
   chmod +x "$M37_STUB"
   mkdir -p "$REPO/.pi/team/state"
-  # 有任务但（判活时）窗口在跑 agent：进「停了的 agent」计数的那个形状
-  printf 'task=T1.1\nwindow=%s\n' "$M37_AGENT" > "$REPO/.pi/team/state/$M37_AGENT.env"
+  # 有任务但（判活时）窗口在跑 agent：进「停了的 agent」计数的那个形状；taskfile 落到 $TMP 是给
+  # ⑥ 的 resume --dry-run 用的（任务书在，resume 才列「可续跑」而不是去写 thread/收件箱）
+  printf '# T1.1 · 6k 夹具任务\n' > "$TMP/m37-task.md"
+  printf 'task=T1.1\nwindow=%s\ntaskfile=%s\n' "$M37_AGENT" "$TMP/m37-task.md" > "$REPO/.pi/team/state/$M37_AGENT.env"
 
   # 按 CLI 的方式加载夹具仓库的库（agent 可执行文件与名册用环境覆盖；不改 config.sh）。
   # 片段经 M37_BODY 传入、在加载完库之后 eval —— 避免在函数体里做多层引号拼接（M37 实测踩过：
@@ -4057,6 +4059,16 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     return 1
   }
   m37_shape() { tmux display-message -p -t "$1" 'pane_pid=#{pane_pid} cmd=#{pane_current_command}' 2>/dev/null | tr -d '\n'; }
+  m37_pane_field() { # <session:window> <字段名> → 值（窗口不在 → 空）
+    tmux list-panes -t "$1" -F "#{$2}" 2>/dev/null | head -1
+  }
+  m37_wait_field() { # <session:window> <字段名> <期望值> [十分之一秒数] → 0=等到了
+    local i=0; while [ "$i" -lt "${4:-50}" ]; do
+      [ "$(m37_pane_field "$1" "$2")" = "$3" ] && return 0
+      sleep 0.1; i=$((i + 1))
+    done
+    return 1
+  }
   m37_stopped_count() { # → 待办里第 7 个字段（停了的 agent）
     m37_bash 'team_pending_counts' | awk '{print $7}'
   }
@@ -4171,6 +4183,54 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   fi
   m37_assert_verdict "6k ③ 对照（bash 里没有 agent 子进程）判停" "$M37_W_AGENT_T" "stopped"
   assert_eq "6k ③ 对照：待办把它算成「停了的 agent 1」" "$(m37_stopped_count)" "1"
+
+  # ⑥ P210（判据收紧）：**裸 shell 的 pane 不算在跑** —— pane_pid 自己的命令行不是证据。
+  #    形状 = dev-bob 2026-10-03/04 的读数：tmux 报 pane_current_command=bash、**没有 agent 子进程**，
+  #    而 pane_pid 的命令行里带着 agent 可执行文件（真实实例：遗体 pane 的号被内核回收给了一个活着的
+  #    agent 进程 —— 本机 pid 空间 4M、实测 churn ~2 万/分钟；夹具里用「shell 的 argv 里带着 agent
+  #    路径」构造同一个读数，走的是判据的同一段代码）。旧判据在这里判 alive：pulse 每 15 分钟算一次
+  #    「无待办」，看板 wip 的 P103 报告 26 小时没人管。
+  tmux kill-window -t "$M37_W_AGENT_T" 2>/dev/null || true
+  tmux new-window -t "$SESSION" -n "$M37_W_AGENT" -d -c "$REPO" -- \
+    bash --noprofile --norc -s "$M37_STUB" 2>/dev/null || bad "6k ⑥ 夹具：裸 shell 窗口没建起来"
+  if m37_wait_field "$M37_W_AGENT_T" pane_current_command "bash"; then
+    M37_BARE_CHILD="$(m37_child_of "$M37_W_AGENT_T")"
+    ok "6k ⑥ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（pane 命令行=[$(m37_pane_args "$M37_W_AGENT_T")]；agent 子进程=[${M37_BARE_CHILD:-无}]）"
+  else
+    bad "6k ⑥ 夹具：5s 内 pane_current_command 没变成 bash（现场 $(m37_shape "$M37_W_AGENT_T")）"
+  fi
+  m37_assert_verdict "6k ⑥ P210：裸 shell（argv 带 agent 路径、没有 agent 子进程）判停" "$M37_W_AGENT_T" "stopped"
+  assert_eq "6k ⑥ P210：裸 shell 的 pane_current_command 确实是 bash（判据不是靠前台名过的）" \
+    "$(m37_pane_field "$M37_W_AGENT_T" pane_current_command)" "bash"
+  M37_SEAT_BARE="$(m37_bash 'team_seat_condition "$1"' "$M37_AGENT")"
+  assert_eq "6k ⑥ P210：座位四态判 exited（status/roster 说「已退出」，不是「在跑」）" "$M37_SEAT_BARE" "exited"
+  assert_has_echo "$(m37_bash 'team_seat_condition_text exited')" "已退出" "6k ⑥ P210：座位文案是「已退出」（就是 status/roster 印的那一行）"
+  M37_RESUME="$(env TEAM_AGENTS="$M37_AGENT" TEAM_PI_BIN="$M37_STUB" $TEAM resume --dry-run 2>&1 || true)"
+  assert_has_echo "$M37_RESUME" "$M37_AGENT 可续跑" "6k ⑥ P210：resume --dry-run 把裸 shell 的席位列成可续跑"
+  assert_eq "6k ⑥ P210：巡检的量（pulse 读的那条路：team_panel_pending_counts_fast 第 7 字段）＝停了的 agent 1" \
+    "$(m37_bash 'team_panel_pending_counts_fast' | awk '{print $7}')" "1"
+  assert_has_echo "$(m37_bash 'team_pending_text "$(team_pending_counts)"')" "停了的 agent 1" \
+    "6k ⑥ P210：巡逻待办文本把「席位停了 + 任务未完」算成待办（叫醒 PM 的输入）"
+
+  # ⑦ P210：**遗体 pane（pane_dead=1）不算在跑** —— pane_pid 是**过期的号**：进程已经退出，内核会把
+  #    号回收给别的进程。夹具里没法让内核立刻把号还给一个活着的 agent（那是 ⑥ 用同一段代码构造的读数），
+  #    这里钉住另一半：pane_dead=1 时判据**不去读那个号**，直接判停。
+  tmux kill-window -t "$M37_W_AGENT_T" 2>/dev/null || true
+  tmux new-window -t "$SESSION" -n "$M37_W_AGENT" -d -c "$REPO" 'sleep 30' 2>/dev/null || bad "6k ⑦ 夹具：遗体窗口没建起来"
+  tmux set-window-option -t "$M37_W_AGENT_T" remain-on-exit on 2>/dev/null || true
+  tmux respawn-pane -k -t "$M37_W_AGENT_T" 'sleep 0.2' 2>/dev/null || true
+  if m37_wait_field "$M37_W_AGENT_T" pane_dead "1"; then
+    M37_CORPSE_PID="$(m37_pane_field "$M37_W_AGENT_T" pane_pid)"
+    if kill -0 "$M37_CORPSE_PID" 2>/dev/null; then M37_CORPSE_ALIVE="还在"; else M37_CORPSE_ALIVE="不在了（过期的号）"; fi
+    ok "6k ⑦ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（pane_pid=$M37_CORPSE_PID $M37_CORPSE_ALIVE）"
+  else
+    bad "6k ⑦ 夹具：5s 内没等到遗体（现场 $(m37_shape "$M37_W_AGENT_T")）"
+  fi
+  m37_assert_verdict "6k ⑦ P210：遗体 pane（pane_dead=1，pane_pid 是过期的号）判停" "$M37_W_AGENT_T" "stopped"
+  case "$(m37_bash 'team_seat_condition "$1"' "$M37_AGENT")" in
+    dead*) ok "6k ⑦ P210：座位四态判 dead（遗体不当活座位，与 P55 的读面一致）" ;;
+    *)     bad "6k ⑦ P210：遗体席位的四态不是 dead（现场：$(m37_bash 'team_seat_condition "$1"' "$M37_AGENT" | tr '\n' ' ')）" ;;
+  esac
 
   # 清场：窗口 + 夹具 agent 的 state 不能留给后面的段落（尤其 12/14c 的零写入与真进程自检）
   for _w in "$M37_W_LIT" "$M37_W_AGENT" "$M37_W_START"; do tmux kill-window -t "$SESSION:$_w" 2>/dev/null || true; done

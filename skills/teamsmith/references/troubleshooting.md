@@ -600,6 +600,13 @@ seat's last screen and tmux's exit evidence survive the death. Reading such a se
   shows `▲ 已死 signal=9`-style with the evidence inline), `absent` (no window). A dead pane is **never** reported as
   running, and `team say` to it does not press a single key — the message lands in `docs/team/inbox/<agent>.md` and
   the output says the seat is dead.
+- **Since P210 the proof rule itself (not only this reader) refuses the two shapes that used to read as "running"**
+  (they are the same verdict everywhere: `team resume`, the "stopped agent" pending count, the P109 "the seat is
+  still working" suppression): a **corpse** pane (its `pane_pid` is a stale number the kernel hands to some other
+  process — this host wraps its 4M pid space in hours, so that number can well belong to a live `pi`), and a pane
+  whose **foreground command is a bare shell** (then only a *direct child* counts as the agent — the dispatch harness
+  shape `bash ─ kind:pi` still proves a live seat). The 2026-10-03→04 P103 was missed for 26 hours exactly because a
+  corpse pane read as `running` and the patrol therefore kept saying "nothing to do".
 - **Where the scene comes from** (`team status <ID>` prints it labelled with its source and time): the retained corpse
   pane read with its scrollback (`capture-pane -p -S -` — the visible screen alone can lose the last line), then
   `state/dispatch-<agent>-pane-dead.txt` (captured when a later dispatch replaced the corpse), then
