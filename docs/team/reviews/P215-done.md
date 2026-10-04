@@ -1,0 +1,4 @@
+- 2026-10-04T18:29:53Z · `team close P215 --status done` · FORCED：PM 显式覆盖（理由：复验任务完成：范围 PASS + 两条真缺陷（F1 混合形状只遮首类、F2 超 20 泄漏），PM 已独立复现；返工 P216 已派原实现者，返工后换人复验。证据包按 D94 归档仓外）
+  -   - ① 复验记录 docs/team/reviews/P215.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P215-verify（c09c5b6f8）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/P215.md（用 ① 的 team review 生成，判定 PASS）
