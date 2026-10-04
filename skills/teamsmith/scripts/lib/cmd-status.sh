@@ -156,9 +156,11 @@ team_wrapup_is_squash_merged() { # <worktree> <dirty> <ahead> <upstream-ahead>
 # 注意：这是对 common.sh 同名函数的**覆盖**（cmd-status.sh 在它之后 source）；pending 逻辑
 # 归 M6.2（见 M6.2 任务书），M6.1 负责的状态/看板函数不动。
 # M9.4 再加两条（都是真实假信号：P1 已 done 还每拍被列出来）：
-#   ③ **看板已裁决的不列**：done/closed 的行不能同时又「等 PM 复验」——证据是在看板转变那一刻
-#      核对的（M9.2 的 team_done_evidence），清单不得反过来质疑看板。跳过的报告不静默丢：
+#   ③ **看板已裁决的不列**：done/closed/dropped 的行不能同时又「等 PM 复验」——done/closed 的证据是
+#      在看板转变那一刻核对的（M9.2 的 team_done_evidence），dropped 是 PM 的显式丢弃（不是「已交付
+#      待复验」），三种都算「看板已裁决」，清单不得反过来质疑看板。跳过的报告不静默丢：
 #      digest 用一行点名（team_reports_skipped_by_board），team status <ID> 也说明为什么；
+#      （P211 现场：BOARD 两行 V1.1 都是 dropped，digest 仍把它列进「待复验 1」并让巡逻叫醒 PM。）
 #   ④ **副本归属**：叠分支（apply 建在 propose 上，DECISIONS D16）会把 propose 阶段的报告带进
 #      apply 的工作树。同一个 id 有多份副本时先归属副本、后继承副本，digest 也不会把继承副本
 #      说成「在 <别人的> 分支上」。
@@ -178,8 +180,8 @@ team_reports_pending_list() { # [候选清单] [--actionable] → 每行 "<id>\t
   [ -n "$cands" ] || cands="$(team_report_primary_candidates)"
   while IFS=$'\t' read -r id path; do
     [ -n "$id" ] || continue
-    # M9.4 ③：看板已裁决（done/closed）→ 不列。跳过的那些由 team_reports_skipped_by_board 点名。
-    team__board_status "$id"; bst="$_R"; case "$bst" in done|closed) continue ;; esac
+    # M9.4 ③ + P211：看板已裁决（done/closed/dropped）→ 不列。跳过的那些由 team_reports_skipped_by_board 点名。
+    team__board_status "$id"; bst="$_R"; case "$bst" in done|closed|dropped) continue ;; esac
     if [ "$only_actionable" = "1" ]; then
       # M9.8：草稿不叫醒（标注但不计数）。
       if team_report_is_draft "$path"; then continue; fi
@@ -275,7 +277,7 @@ team_report_primary_candidates() { # → 每行 "<id>\t<路径>"
 }
 
 # M9.8：唤醒判定的「待复验」= digest [3] **可行动**列表的行数：同一个函数、同一套过滤
-# （看板 done/closed 跳过、草稿标注但不计数、verify 任务按绑定 revision 判）。
+# （看板 done/closed/dropped 跳过、草稿标注但不计数、verify 任务按绑定 revision 判）。
 # 这是对 common.sh 同名实现的**覆盖**（cmd-status.sh 在它之后 source）：旧实现自己数一遍报告数，
 # M9.4 给清单加上看板/副本过滤之后就分家了 —— 现场 2026-09-15：watchdog 的唤醒理由「待复验 6」，
 # 同一时刻 digest [3] 的清单是空的（那 6 份全是看板已裁决的）。改这里的过滤 = 同时改唤醒理由与
@@ -316,7 +318,7 @@ team_reports_skipped_by_board() { # [候选清单] → 每行 "<id>\t<显示名>
   while IFS=$'\t' read -r id path; do
     [ -n "$id" ] || continue
     st="$(team_board_status "$id")"
-    case "$st" in done|closed) ;; *) continue ;; esac
+    case "$st" in done|closed|dropped) ;; *) continue ;; esac
     team_report_unverified "$id" || continue
     printf '%s\t%s\t%s\n' "$id" "$(basename "$path" .md)" "$path"
   done <<< "$cands"
@@ -521,7 +523,7 @@ team_cmd_status() {
       [ -n "$rnote" ] && rextra="$rextra · $rnote"
       printf '  复验 %s（判定: %s%s）\n' "$TEAM_DOCS_ABS/reviews/$id.md" "${rv:-未知}" "$rextra"
     }
-    # M9.4：看板已裁决（done/closed）→ 这份报告不列在待复验里。为什么必须说出来：
+    # M9.4 + P211：看板已裁决（done/closed/dropped）→ 这份报告不列在待复验里。为什么必须说出来：
     # 静默跳过是假阴性藏身的地方，PM 看不到“它没被列”就只能猜。
     local bst brp
     bst="$(team_board_status "$id")"
@@ -531,6 +533,12 @@ team_cmd_status() {
         if [ -n "$brp" ] && team_report_unverified "$id"; then
           printf '  待复验：**不列**（看板是 %s；报告的证据在看板转变时核对，见 %s/reviews/%s-done.md）\n' \
             "$bst" "$TEAM_DOCS_DIR" "$id"
+        fi ;;
+      dropped)
+        # dropped 不走 done 的证据闸门，也没有 reviews/<ID>-done.md 可指：如实说「被丢弃」，别指一份不存在的记录。
+        brp="$(team_find_report "$id" 2>/dev/null || true)"
+        if [ -n "$brp" ] && team_report_unverified "$id"; then
+          printf '  待复验：**不列**（看板是 dropped：任务已被显式丢弃，不是「已交付待复验」；digest 的「已按看板跳过」一行会点名它）\n'
         fi ;;
     esac
   else
@@ -750,7 +758,7 @@ team_cmd_digest() {
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 
-  printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标；看板已 done/closed 的不列）"
+  printf '\n%s\n' "[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标；看板已 done/closed/dropped 的不列）"
   any=0
   # M9.4：候选清单只解析一轮，列清单与被看板跳过的清单共用它（这个段落每次巡检都跑）
   local cands; cands="$(team_report_primary_candidates)"
@@ -797,7 +805,7 @@ team_cmd_digest() {
     sn=$((sn + 1)); sname_list="${sname_list:+$sname_list、}${sname}$(team_task_name_suffix "$sid")"
   done <<< "$sskip"
   if [ "$sn" -gt 0 ]; then
-    team_dim "  已按看板跳过 ${sn} 份报告（任务已 done/closed）：$sname_list · 证据在 board set 时核对（M9.2），这里不重复质疑"
+    team_dim "  已按看板跳过 ${sn} 份报告（任务已 done/closed/dropped）：$sname_list · done/closed 的证据在 board set 时核对（M9.2），dropped 是显式丢弃，这里不重复质疑"
   fi
 
   # 待收尾：agent 做了活但没收干净（脏工作区 / 相对 upstream 有未 push 的提交）——CEP 实测的盲区。

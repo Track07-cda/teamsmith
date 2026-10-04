@@ -9795,13 +9795,14 @@ assert_not "$TMP/m92-X9.10.log" "阶段" "未知 phase 的拒绝信息也不提�
 
 # ---------------------------------------------------------------- 21. 待复验清单不得越过看板决定（M9.4）
 # 契约（真实假信号：P1 已 REVIEW+done 还每拍被列为待复验）：
-#   ① 看板已裁决（done/closed）的任务**永远不列**在待复验里 —— 证据是在看板转变那一刻核对的
-#      （M9.2），清单不得反过来质疑看板；
+#   ① 看板已裁决（done/closed/dropped）的任务**永远不列**在待复验里 —— done/closed 的证据是在看板转变
+#      那一刻核对的（M9.2），dropped 是 PM 的显式丢弃（P211），三者都不得又同时「等 PM 复验」；
 #   ② 还挂在 todo/wip 的任务保持 M6.2 的旧规则（控制组：跳过只能来自看板，不能来自文件名）；
 #   ③ 声明了 phase 的任务给的是**阶段**的下一步 —— explore/propose/archive 的交付不在代码分支上，
 #      那句通用的 `team review <ID>` 会让 PM 去验错东西；
 #   ④ 叠分支（apply 建在 propose 上，D16）带来的报告副本不能抢走正本，也不能被说成「在别人的分支上」；
-#   ⑤ 跳过的报告不静默丢：digest 用一行点名，team status <ID> 也说明为什么。
+#   ⑤ 跳过的报告不静默丢：digest 用一行点名，team status <ID> 也说明为什么（dropped 单独有一句
+#      「被显式丢弃」，不指一份不存在的 reviews/<ID>-done.md）。
 # 纯逻辑（只写夹具自己的 docs/team + 夹具工作树），快慢模式都跑。
 section "21 · 待复验清单不得越过看板决定（M9.4）"
 cd "$REPO" || exit 1
@@ -9883,6 +9884,37 @@ m94_pending >"$TMP/m94-d-pending.log"
 assert_has "$TMP/m94-d-pending.log" "M94D" "控制组：没有 phase 的报告照旧列为待复验"
 $TEAM digest >"$TMP/m94-d-digest.log" 2>&1 || true
 assert_has "$TMP/m94-d-digest.log" "team review M94D" "代码任务照旧给 team review 待办"
+
+# ⑥ dropped（P211 现场：BOARD 两行 V1.1 都是 dropped，digest 仍报「待复验 1」并让巡逻叫醒 PM）
+#    看板已裁决 = 不进待复验清单；跳过的要点名，status <ID> 也要说明为什么不列。
+m94_add M94F dev - -
+m94_report M94F dev
+$TEAM board set M94F dropped >"$TMP/m94-f-dropped.log" 2>&1 || true
+assert_eq "P211 夹具有效：看板确实停在 dropped（不用 done 的证据闸门）" "$(board_status M94F)" "dropped"
+m94_pending >"$TMP/m94-f-pending.log"
+assert_not "$TMP/m94-f-pending.log" "M94F" "P211：看板 dropped 的报告不再列为待复验"
+$TEAM digest >"$TMP/m94-f-digest.log" 2>&1 || true
+assert_not "$TMP/m94-f-digest.log" "team review M94F" "P211：digest 不再给 dropped 的报告派 review 待办"
+assert_has "$TMP/m94-f-digest.log" "已按看板跳过" "P211：跳过行仍然说明它为什么没列（不静默跳过）"
+# 只认「已按看板跳过」那一行里的名字：digest [4] 的「记录未入账」也会原样列出这份未提交的报告，
+# 拿整份 digest 匹配会假绿（P211 夹具自测过）。
+grep -aF '已按看板跳过' "$TMP/m94-f-digest.log" >"$TMP/m94-f-skipline.log" 2>/dev/null || true
+assert_has "$TMP/m94-f-skipline.log" "M94F-dev" "P211：跳过行点名了那份 dropped 的报告"
+assert_has "$TMP/m94-f-skipline.log" "任务已 done/closed/dropped" "P211：跳过行的状态清单点名 dropped（不是只说 done/closed）"
+$TEAM status M94F >"$TMP/m94-f-status.log" 2>&1 || true
+assert_has "$TMP/m94-f-status.log" "不列" "P211：team status <ID> 也说明这份 dropped 的报告为什么不列"
+assert_has "$TMP/m94-f-status.log" "dropped" "P211：status 说明点名 dropped"
+
+# ⑦ 控制组：同一形状，只把看板换成 wip → **仍然在清单里**（不许把 dropped 之外的也一并放过）
+m94_add M94G dev - -
+m94_report M94G dev
+$TEAM board set M94G wip >/dev/null 2>&1 || true
+m94_pending >"$TMP/m94-g-pending.log"
+assert_has "$TMP/m94-g-pending.log" "M94G" "P211 控制组：看板 wip 的报告仍然列为待复验"
+$TEAM digest >"$TMP/m94-g-digest.log" 2>&1 || true
+assert_has "$TMP/m94-g-digest.log" "team review M94G" "P211 控制组：wip 的报告照旧给 review 待办（没被一并放过）"
+grep -aF '已按看板跳过' "$TMP/m94-g-digest.log" >"$TMP/m94-g-skipline.log" 2>/dev/null || true
+assert_not "$TMP/m94-g-skipline.log" "M94G" "P211 控制组：wip 的报告不会被算进「已按看板跳过」"
 
 # ⑤ 叠分支（D16）：apply 分支建在 propose 分支上 → 同一份报告出现在两份工作树里。
 #    工作树名字故意让**副本**排在字母前面（m94a < m94z）：只按 glob 顺序挑副本的实现会把这份报告
@@ -14284,7 +14316,7 @@ F_HDRS="$(printf '%s\n' "$F_DG" | grep -E '^\[[0-9]+\]')"
 F_HDRS_EXPECTED="$(cat <<'EOH'
 [1] 容量与存活
 [2] 待处理通知
-[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标；看板已 done/closed 的不列）
+[3] 待复验（真任务报告：记录缺失 / 记录已过期（分支又动了）/ 没跑过门禁；草稿另标；看板已 done/closed/dropped 的不列）
 [4] 待收尾（脏工作区 / 相对 upstream 未 push 的提交；领先按 main 另计；squash 已合并单独标注）
 [5] 任务板
 [5] 建议
