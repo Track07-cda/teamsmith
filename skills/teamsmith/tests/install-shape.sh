@@ -104,6 +104,53 @@ inbox_hash() { # <仓库>：真实仓库收件箱指纹（M7.2 的反向守卫�
   )
 }
 
+# ── 版本锚点（P218）：唯一来源 = 那棵树自己的 common.sh（TEAM_VERSION），本文件里不出现版本字面量 ──
+# 现场（P214）：这四处改坏副本的 sed 原来写死成当时的版本号（`1.42.0`）；版本改成 0.1.0 后 sed 空转 → 副本没被改坏 →
+# 五条断言连带红，而 flip ③ 的红侧成了橡皮章（它红是因为前提不成立，证明不了「warn 被静默」）。
+# 纪律：改坏之后必须**回读**证明版本真的与运行版本不同；不成立就报「夹具没生效」并停（exit 3），
+# 不许继续往下跑 —— 假红之后跟着的每一条绿都没有意义。
+fail_setup() { # <原因>：夹具前提不成立 —— 响亮、非 0（3 = setup failure，见文件头），不往下跑
+  printf '\033[31m✗ 夹具没生效（setup）\033[0m %s\n' "$*" >&2
+  [ "${BASHPID:-$$}" = "$$" ] \
+    || printf '  注意：在子 shell 里（$(…)/管道）被调用 —— exit 只杀子 shell，父进程会继续跑。\n' >&2
+  exit 3
+}
+tree_version() { # <tree> → 该树的运行版本（TEAM_VERSION，唯一来源）
+  local t="$1" v
+  v="$(sed -n 's/^TEAM_VERSION="\([^"]*\)"[[:space:]]*$/\1/p' \
+       "$t/skills/teamsmith/scripts/lib/common.sh" 2>/dev/null | head -1)"
+  [ -n "$v" ] || fail_setup "读不到 TEAM_VERSION（$t/skills/teamsmith/scripts/lib/common.sh）"
+  case "$v" in *[!A-Za-z0-9._+-]*) fail_setup "运行版本含 sed 元字符：[$v]" ;; esac
+  printf '%s' "$v"
+}
+skill_md_version_of() { # <skill 目录> → frontmatter 的 version（与产品 team_skill_md_version 同一读法）
+  awk '
+    /^---[[:space:]]*$/ { n++; if (n == 2) exit 0; next }
+    n == 1 && /^[[:space:]]+version:[[:space:]]*/ {
+      sub(/^[[:space:]]+version:[[:space:]]*/, ""); gsub(/"/, ""); sub(/[[:space:]]+$/, ""); print; exit 0
+    }
+  ' "$1/SKILL.md" 2>/dev/null
+}
+drift_skill_copy() { # <tree> <repo> → DRIFT_VER = 漂移版本；自检不过 = 报「夹具没生效」并 exit 3
+  # 结果走全局 DRIFT_VER（照上面 doctor_capture 的 DOC_OUT 形态），**不靠 stdout**：
+  # 若在 $(…) 里调用，fail_setup 的 exit 只杀子 shell，守卫会静默失效（P218 红侧实测把它抓了出来）。
+  local t="$1" p="$2" dest v_run v_before v_drift
+  DRIFT_VER=""
+  dest="$p/.pi/skills/teamsmith"
+  v_run="$(tree_version "$t")"
+  v_before="$(skill_md_version_of "$dest")"
+  [ -n "$v_before" ] || fail_setup "副本没有可读的 SKILL.md frontmatter version（$dest）"
+  [ "$v_before" = "$v_run" ] || fail_setup "副本版本 $v_before ≠ 运行版本 $v_run（副本不是这棵树装的？）"
+  v_drift="${v_run}-drift"
+  sed -i "s/^  version: \"[^\"]*\"/  version: \"$v_drift\"/" "$dest/SKILL.md"
+  [ "$(skill_md_version_of "$dest")" = "$v_drift" ] \
+    || fail_setup "副本版本改不动（sed 没命中 frontmatter 的 version 行）：$dest/SKILL.md"
+  [ "$v_drift" != "$v_run" ] || fail_setup "漂移版本与运行版本相同：[$v_drift]"
+  ok "漂移副本自检：$dest 的版本 $v_before → $v_drift（≠ 运行版本 $v_run）"
+  DRIFT_VER="$v_drift"
+}
+DRIFT_VER=""
+
 # 假 pi：doctor 的其它行不该由宿主环境决定（本节只测 install 行）
 FAKE_PI="$tmp/fake-pi"
 mkdir -p "$FAKE_PI"
@@ -210,15 +257,15 @@ mk_unknown() { # <repo> <shape>：造一个不认识的条目（nodir=没有 SKI
   esac
 }
 
-chk_doctor_drift_warns() { # <tree> <已装了一份漂移副本的仓库>
+chk_doctor_drift_warns() { # <tree> <已装了一份漂移副本的仓库> <漂移版本（drift_skill_copy 的输出）>
   local out rc row
   out="$(run_doctor "$1" "$2")"; rc=$?
   if [ "$rc" -ne 0 ]; then printf 'doctor 因 install 行以外的东西非 0（rc=%s）\n' "$rc"; return 1; fi
   row="$(install_row_in "$out")"
   case "$row" in *'!'*) ;; *) printf 'install 行没有 warn：[%s]\n' "$row"; return 1 ;; esac
-  case "$row" in *0.0.1*) ;; *) printf 'warn 没点名找到的版本：[%s]\n' "$row"; return 1 ;; esac
+  case "$row" in *"$3"*) ;; *) printf 'warn 没点名找到的版本 %s：[%s]\n' "$3" "$row"; return 1 ;; esac
   case "$row" in *'team init --force'*) ;; *) printf 'warn 没给修法：[%s]\n' "$row"; return 1 ;; esac
-  printf 'warn 点名版本与修法（%s）\n' "$(printf '%s' "$row" | awk '{print $NF}')"
+  printf 'warn 点名版本 %s 与修法（%s）\n' "$3" "$(printf '%s' "$row" | awk '{print $NF}')"
   return 0
 }
 
@@ -477,7 +524,7 @@ if want conflict; then
   done
   # ② 手改过的副本：默认拒绝（字节不动），--force 换成源
   p="$tmp/c-copy"; git_new "$p"; init_proj "$tree" "$p" --copy >/dev/null
-  sed -i 's/^  version: "1\.42\.0"/  version: "0.0.1"/' "$p/.pi/skills/teamsmith/SKILL.md"
+  drift_skill_copy "$tree" "$p"
   before="$(file_hash "$p/.pi/skills/teamsmith/SKILL.md")"
   out="$(init_proj "$tree" "$p")"; rc=$?
   [ "$rc" -ne 0 ] && ok "手改副本：默认 init 非 0（rc=$rc）" || bad "手改副本：默认 init 居然 0"
@@ -546,8 +593,8 @@ if want doctor; then
   assert_eq "没有安装：doctor 退出 0" "$DOC_RC" "0"
   # ③ 漂移的副本 → warn 点名版本与修法；--force 之后回到 pass
   p="$tmp/d-drift"; git_new "$p"; init_proj "$tree" "$p" --copy >/dev/null 2>&1
-  sed -i 's/^  version: "1\.42\.0"/  version: "0.0.1"/' "$p/.pi/skills/teamsmith/SKILL.md"
-  check_holds "漂移副本：warn 点名 0.0.1 与 team init --force" chk_doctor_drift_warns "$tree" "$p"
+  drift_skill_copy "$tree" "$p"; d_drift="$DRIFT_VER"
+  check_holds "漂移副本：warn 点名 $d_drift 与 team init --force" chk_doctor_drift_warns "$tree" "$p" "$d_drift"
   init_proj "$tree" "$p" --force >/dev/null 2>&1
   doctor_capture "$tree" "$p"; row="$(install_row_in "$DOC_OUT")"
   case "$row" in *'✓'*"$tree/skills/teamsmith"*) ok "漂移修复：--force 后回到 pass" ;; *) bad "漂移修复后行不对（$row）" ;; esac
@@ -603,11 +650,11 @@ PYCONF
   printf '\n# FLIP：把 doctor 的 install 行静默掉\nteam_project_skill_install_row() { return 0; }\n' \
     >> "$ft/skills/teamsmith/scripts/lib/cmd-init.sh"
   pg="$tmp/f-doctor-green"; git_new "$pg"; init_proj "$tree" "$pg" --copy >/dev/null 2>&1
-  sed -i 's/^  version: "1\.42\.0"/  version: "0.0.1"/' "$pg/.pi/skills/teamsmith/SKILL.md"
+  drift_skill_copy "$tree" "$pg"; pg_drift="$DRIFT_VER"
   pf="$tmp/f-doctor-red"; git_new "$pf"; init_proj "$ft" "$pf" --copy >/dev/null 2>&1
-  sed -i 's/^  version: "1\.42\.0"/  version: "0.0.1"/' "$pf/.pi/skills/teamsmith/SKILL.md"
-  check_holds "③ 对照：真实树漂移 warn" chk_doctor_drift_warns "$tree" "$pg"
-  check_breaks "③ 翻转：doctor 的 warn 被静默" chk_doctor_drift_warns "$ft" "$pf"
+  drift_skill_copy "$ft" "$pf"; pf_drift="$DRIFT_VER"
+  check_holds "③ 对照：真实树漂移 warn" chk_doctor_drift_warns "$tree" "$pg" "$pg_drift"
+  check_breaks "③ 翻转：doctor 的 warn 被静默" chk_doctor_drift_warns "$ft" "$pf" "$pf_drift"
   # ④ bootstrap 的装 skill 步去掉 → 升级路径判据红
   ft="$tmp/f-bootstrap"; scratch_tree "$ft"
   python3 - "$ft/skills/teamsmith/scripts/lib/cmd-bootstrap.sh" <<'PYBOOT'

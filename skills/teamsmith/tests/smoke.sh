@@ -15634,8 +15634,8 @@ p98_state_has "$TMP/p115-red1.log" "$P98_R1_RC" "red" "P115 夹具：1 段里的
 # 于是「保留 14、丢弃 14c」的副本会剪掉那个 fi —— 跑完全部选中段之后才在 EOF 上 exit 2，
 # 没有结果行。判据：① 全键副本 bash -n 扫描必须 ok 全部 / bad 0；② 把裁判砸掉（还原
 # 「按段头一刀切」）→ 同一个扫描必须红，且坏副本必须在**跑任何段之前**被拒（rc=2、点名、零段头）。
-# V2（P112 §5.2）：夹具前提段补进 needs 后，夹具依赖键（3b/6）的选集必须全绿；删掉一条
-# needs → 该键的选集必须红。全键逐键审计是 tests/section-needs-audit.sh（验收时整跑；
+# V2（P112 §5.2）：夹具前提段补进 needs 后，夹具依赖键（3b/6/41）的选集必须全绿；删掉一条
+# needs → 该键的选集必须红（P218：41 的依赖是同一种病，P214 实测单独 --select 41 → ✓36 ✗67）。全键逐键审计是 tests/section-needs-audit.sh（验收时整跑；
 # 默认门禁里钉的是采样 + 两个红侧，是时间预算与覆盖面的折中）。
 P117_N="$(awk -F'\t' '!/^#/ && NF { n++ } END { print n + 0 }' "$SKILL_DIR/tests/section-paths.tsv")"
 P117_SWEEP_RC=0
@@ -15707,7 +15707,7 @@ p117_green_verdict() { # <key> <日志> <rc> → ok / 可见 SKIP + 归因 / bad
   fi
   return 0
 }
-for P117_K in 3b 6; do
+for P117_K in 3b 6 41; do
   P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p117-green-$P117_K.log" --select "$P117_K"
   p117_green_verdict "$P117_K" "$TMP/p117-green-$P117_K.log" "$?"
 done
@@ -15742,6 +15742,13 @@ p117_red_side() { # <名字> <key> <awk 变异> <说明>
 }
 p117_red_side p117red3b 3b '$1 == "3b" { $4 = "4" } 1' '3b 去掉 needs:5'
 p117_red_side p117red6 6 '$1 == "6" { $4 = "4,5" } 1' '6 去掉 needs:3b'
+# P218：41 的前提是 §2（项目骨架 .pi/team/config.sh）—— 去掉这条 needs 时，--select 41 缺的不能是 60+ 条级联，
+# 而必须是 §41 自己那条点名的前提红（该守卫在 §41 段头；红侧证明它真的承重）。
+p117_red_side p218red41 41 '$1 == "41" { $4 = "-" } 1' '41 去掉 needs:2'
+P218_RED_NAMED="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p117-red-p218red41.log" 2>/dev/null | grep -c '^  ✗ P55 前置缺失' || true)"
+[ -n "$P218_RED_NAMED" ] || P218_RED_NAMED=0
+assert_eq "36⑦ P218 红侧：缺 §2 时 §41 恰好一条点名的前提红（不是级联）" "$P218_RED_NAMED" "1"
+assert_has "$TMP/p117-red-p218red41.log" "needs 应为 2" "36⑦ P218 红侧：那条红点名 needs:2 与缺失的 config.sh"
 
 # ── ⑧ P148：产品面检出判据的纯夹具（形状 / 边界 / 前提跳过 / 覆盖守门）────────────────────
 # 探针是一个独立脚本（纯文件 + 嵌套 FAST 选段，不起真进程、不碰调用者的 tmux/项目）：这里只驱动
@@ -16345,13 +16352,22 @@ fi
 #   噪音判据：close --keep-window 的遗体不算异常、不计 stopped；teardown 后恢复「无窗口」。
 section "41 · pane 留存：死 pane 是座位状况，不是活座位（P55 / agent-pane-survivability）"
 
-if [ "$FAST" = "1" ]; then
+# P218：本段的前提（项目骨架 .pi/team/config.sh，由 §2 的 init 写）在映射表里由 needs:2 声明（唯一声明处）。
+# 缺它时这一段会以「T9.55-brief.md: No such file or directory」起头级联（P214 实测 --select 41 → ✓36 ✗67）；
+# 守卫把级联压成**一条**点名的红，并且不再往下跑 —— 缺前提时后面 60+ 条断言没有一条说得通。
+if [ ! -f "$REPO/.pi/team/config.sh" ]; then
+  bad "P55 前置缺失：$REPO/.pi/team/config.sh 不在（§2 没跑；映射表里 41 的 needs 应为 2）"
+elif [ "$FAST" = "1" ]; then
   fast_skip "41·p55-pane-留存" "真实 tmux + 真实派单夹具（占位/respawn/kill -9/遗体画面）"
 elif [ "$HAVE_TMUX" = "1" ]; then
   live_mark
   P55_A="p55w"; P55_ID="T9.55"
   P55_WT="$REPO/.worktrees/$P55_A"
   P55_BRIEF="$REPO/.pi/team/state/$P55_ID-brief.md"
+  # .pi/team/state/ 不在 §2 的 init 产出里（那是运行时目录，产品第一次写 state 时才 mkdir）；
+  # 夹具自己往那里写 brief，就得自己保证它在 —— §6g/§6h 也是这么做的。（P218：此前靠别的段
+  # 顺手创建，单独选跑时 printf 就死在目录不存在上，后面 60+ 条级联。）
+  mkdir -p "$REPO/.pi/team/state"
   printf '# %s · pane survivability probe\n\ntask: %s\nagent: %s\nchange: -\nanchor: none (infra) — P55 留存夹具\n' \
     "$P55_ID" "$P55_ID" "$P55_A" > "$P55_BRIEF"
   P55_BR="$(canon_branch "$P55_A" "$P55_ID")"
