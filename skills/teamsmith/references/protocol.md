@@ -645,11 +645,18 @@ The `<home>` / `<user>` / `<peer>` / `<internal>` placeholders are stripped befo
 passes; text outside `docs/team/**` is not in scope (the skill's own docs talk about *the user's* projects), and the
 gitignored evidence packages (`docs/team/reports/<ID>-<agent>/…`) are not scanned — they never enter the public
 surface. A hit line is masked: it names the file and line and replaces the offending token with a placeholder, so a
-gate log can be pasted anywhere without leaking the thing it reported. Exit codes: `0` every shape was checked and
+gate log can be pasted anywhere without leaking the thing it reported. Since P216 that promise covers **every shape on
+the line and every occurrence of it**, not just the first shape the scanner recognized: the hit spans are collected
+first and the line is assembled once from the original text, so a replacement is never scanned again (what a hit
+looks like in the log is `<home>` / `<internal>` / `<names#N>` / `<user>`, with the first shape found naming the
+line), and a line longer than `BAN_LINE_MAX` (4096 bytes) is masked first and truncated after, with an explicit
+`…(截断)` marker. Exit codes: `0` every shape was checked and
 clean, `3` clean but a sub-check was skipped (missing/empty list, unresolved username), `1` a hit, `4` the scanner
 itself failed. Falsifiability lives in the fixture self-test (`bash tests/ledger-ban.sh --self-test`): a planted home
-path and a planted forbidden name must come back red with file:line, a missing list must show the visible skip, and a
-shadow scanner whose hit counter is broken must make the two red cases fail.
+path and a planted forbidden name must come back red with file:line, a missing list must show the visible skip, a
+shadow scanner whose hit counter is broken must make the two red cases fail, and a second shadow whose masking is
+turned off must make the “no raw text in the output” cases fail — a mixed line, twenty-five occurrences on one line,
+a placeholder standing before the hit (the offset must survive the blanking), and an over-long line.
 
 ## 9c. Strong verification (adversarial package + finding flips, for milestones)
 
