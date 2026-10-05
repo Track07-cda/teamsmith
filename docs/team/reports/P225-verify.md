@@ -1,6 +1,6 @@
 # P225 · P222 换人独立验证
 
-agent: verify   status: IN-PROGRESS   time: 2026-10-05
+agent: verify   status: PARTIAL / NEEDS-CHANGES   time: 2026-10-05
 branch: `task/P225-verify`   PR/MR: -（local 模式）
 被验修订：`ac4c49ffd68576cf3736ab1c502147ee1b1f4dcf`，含实现 `73ae5a77`；apply=dev，verify 未参与实现。
 
@@ -58,7 +58,12 @@ SKIP（条件不满足） 相位 skill openspec-verify-change 在位（verify �
 SKIP（条件不满足） 相位 skill openspec-archive-change 在位（archive 阶段） —— 检出形状 internal：机器生成面（由工具在本机生成、不进仓库） .pi/skills/openspec-archive-change/SKILL.md 在检出里不存在（跳过不是通过）
 ```
 
-两个证据层点名行在最终收口时补充。
+两个证据层点名行：
+
+```text
+SKIP（条件不满足） M28 真树：变更类 tmux 调用全部有隔离证据（豁免清单） —— 检出形状 internal：豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在（跳过不是通过）
+SKIP（条件不满足） 58 lint 真树：仓库脚本/夹具没有按名字或模式选进程（豁免清单） —— 检出形状 internal：豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在（跳过不是通过）
+```
 
 ### 文档核对：真实 OpenSpec 1.8.0
 
@@ -142,12 +147,59 @@ RED skills/teamsmith/tests/p225-adversarial.sh:3 pkill -f p225-adversarial-marke
 
 同一混合树创建空 `.pi/prompts`、`.pi/skills`：§19 `✓16 ✗10 SKIP0`，exit 1。删除这两个空面：`✓16 ✗0 SKIP10`，exit 0。两向日志为 `empty-surfaces-19.log` / `absent-again-19.log`。
 
+## Finding F1 · 探针在证据文件已复原的完整内部树上判红
+
+**Verdict：NEEDS-CHANGES。** 前述三形状 §19/§31/§58、证据复原/篡改、混合形状牙齿与文档核对均符合预期，但探针本身未通过，不能给本任务 PASS。
+
+实际命令（由 `team_bg_run` 拉起、`team_bg_wait` 已收割）：
+
+```bash
+distrobox-host-exec podman run --rm --pid=host --cgroups=enabled --userns=keep-id \
+  -e HOME=/tmp -v "$PWD/docs/team/reports/P225-verify:/evidence" \
+  -w /evidence/.scratch/internal localhost/teamsmith-gate:local bash /evidence/probes.sh
+# probes.sh 第一条，在完整内部副本中：
+bash skills/teamsmith/tests/checkout-shape-probe.sh
+```
+
+实际输出尾与失败项：
+
+```text
+name=standalone-shape-probe rc=1 expected=0 elapsed=586s
+bad: ⑨ 内部树 + 清单文件都在 → --select 31 退出 0（照旧判定）（期望 [0]，实际 [1]）
+bad: ⑨ 内部树 + 清单文件都在 → M28 照旧带清单跑（1 个历史豁免文件）
+bad: ⑩ 内部树 + 清单文件都在 → --select 58 退出 0（照旧判定）（期望 [0]，实际 [1]）
+bad: ⑩ 内部树 + 清单文件都在 → signal-lint 照旧逐条核对（LEGACY 打印）
+== 检出形状探针 == ok 134 bad 4 skip 0
+```
+
+**根因是探针夹具没有隔离好证据层，不是 lint 放过了真实违规，也不是机器慢。**
+
+- `checkout-shape-probe.sh:100-108` 的 `scratch_tree()` 把源内部树中实际存在的历史注册证据文件拷进夹具；本次源内部树拥有已经核过 SHA 的 17 个文件。
+- `checkout-shape-probe.sh:536-542` 的 ⑨b 控制在同一树里创建 `P222-fixture/pkg/legacy.sh`，再把 tmux 清单替换成**仅这一条**合成记录，但没有移走原始历史文件。
+- ⑩ 的 signal 控制沿用同一棵树，并同样改写成仅一条合成清单。两个 lint 扫描到仍在树中的原始文件时，它们已经不在当前清单里，依法报 RED。
+- 原始日志的嵌套 §31 已明确点名 `docs/team/reports/M23-dev2/pkg/namespace-demo.sh:36` 等；嵌套 §58 点名 `docs/team/reports/M35-dev2/pkg/lib.sh:46` 等。直接跑同一来源、未被探针改写清单的内部树 §31/§58 却是绿，见三形状计数。这排除了缺依赖、SHA 错误和源文件本来就不合法等解释。
+
+探针的关键牙齿和影子**仍实际执行并通过**，这不能抵消上述四条红：
+
+```text
+ok: ⑩ 缺失的产品面条目照旧判红并点名该文件
+ok: ⑩ 缺失的产品面条目不得记成前提跳过
+ok: ⑩ 影子：删掉逐条内部面判据（=「任何缺失即跳过」）→ 同一条产品面缺失被吞、§58 判绿（牙齿真咬在判据上）
+ok: ⑩ 产品文件里的 pkill -f 照旧判红并点名 file:line
+ok: ⑧ 真实树指纹前后一致（夹具只动 scratch 树）
+```
+
+完整输出在 `logs/standalone-shape-probe.log`，包含四条失败的嵌套门禁输出。我的独立 `judge.py` 也真实运行：三形状、逐段计数、原始恢复、SHA 失效、确切 file:line、双向恢复、空面拒绝与真实生成物断言全部通过，随后在 `standalone shape probe executes all 138 controls` 上失败，exit 1；没有把失败改成预期绿。
+
 ## Decisions and deviations
 
-- 独立形状探针和混合形状 §36 正在容器中顺序运行；完成前不作最终 PASS 裁定。
-- 没有运行整套 smoke，也没有运行性能门禁；本任务书要求选段门禁，不能把选段结果称作整套全绿。
-- 证据包按 D94 保留在当前工作树且被 gitignore；仅顶层可读报告提交。
+- **自己跑过**：容器内三种形状各自的 §19/§31/§58 与选择器 `--check`；两次 lint 原始恢复与篡改；混合形状植入/移除两条调用；生成面空目录/整面缺席；真实 OpenSpec 初始化/profile；严格 spec 校验；完整内部形状的 standalone probe（586 秒，失败）；独立日志断言（失败点与 probe 一致）。
+- **没跑**：混合形状的独立 §36 调用。`probes.sh` 在第一条 standalone probe 返回 1 时按 `set -e` 中止，第二条 §36 没有执行；它不是超时，也不能把计划写成已跑。完整内部与纯产品形状也没有单独跑 §36。其余未选 smoke 段、整套 smoke、性能门禁均未跑；每份选段日志附有完整未跑键列表。
+- §31 的嵌套容器自检是既有工具前提跳过，不能记成已通过；本次所有门禁都在容器中跑，没有在宿主跑 smoke。
+- 两个后台作业均已收割：cases exit 0（535.3 秒）；probes exit 1（590.5 秒，含容器拉起时间）。
+- 证据包按 D94 保留在当前工作树且被 gitignore；只提交顶层报告。本任务不改实现、不合并、不归档，也不用 push/PR（local 模式）。
 
 ## Suggested next steps
 
-- 等探针与 §36 完成后收口报告，交 PM 独立复验；本任务不改实现、不合并、不归档。
+- **BLOCKED:** 需 PM 派给 `dev` 修 `skills/teamsmith/tests/checkout-shape-probe.sh` 的合成证据控制：构造只有合成证据的隔离树，或完整保留仍被扫描文件的豁免记录，不能清空/跳过真树 lint 来换绿。复验应同时覆盖原始证据缺席和 17 文件恢复在位这两个源形状，并保留产品违规与缺失产品条目的牙齿/影子。
+- 已通过 `team notify verify` 通知 PM，工具确认 `notified pm`；verify 未越权修改实现。修复后由 PM 安排重验探针及 §36。
