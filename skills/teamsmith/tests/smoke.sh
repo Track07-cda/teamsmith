@@ -124,6 +124,20 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ── P223 · 保留现场的决定必须在拿机器锁之前落进环境 ────────────────────────────────────────────
+# 事故（2026-10-04，P214 的两次 CI 红）：CI 的 `gate-failure-scene` 工件里只有一份 285 字节的
+# `teamsmith-smoke.lock.tgz`，整个 `teamsmith-smoke.*` 根都不在里面 —— 而工作流的 gate 步明明是
+# `smoke.sh --keep`。根因就在这里：`--keep` 在参数解析时被 `shift` 掉、不会随 "$@" 传下去，
+# 而**全量**门禁默认走下面 flock 的 re-exec（`--close` 起的第二个 smoke 进程才是真跑套件、
+# 真建根、真收尾的那一个）→ 子进程按默认 KEEP=0 在收尾把现场收干净，收集步再晚也只能拿到锁文件。
+# 症状的旁证（CI 日志，run 2）：§40 打的是「本轮创建的临时根一个都没留下」那一支，
+# 而全篇没有一行「保留临时根：」（= TEAM_TMP_KEEP 从没被设上）。
+# 形态照 SMOKE_CALLER_HAD_TMUX：同一个原因（子进程拿不到父进程的现场），所以同样是**在 re-exec
+# 之前就 export**。P98 选段那条路（父进程把过滤副本交给子进程）也靠这个继承，不再各传一遍。
+# 门禁：§40 的 P223 自检真跑 `--keep`（真排队、真 re-exec）并断言根留在原处，反向对照断言
+# 不带 `--keep` 时根被收走 —— 这条决定不许再被静静地丢掉。
+[ "$KEEP" = "1" ] && export TEAM_TMP_KEEP=1
+
 # 快模式开关（TEAM_SMOKE_FAST=1）：只跑纯逻辑段落，跳过需要真进程的段落（tmux/真实 pi）。
 #   FAST_REQ = 用户是不是要了快模式（原始诉求）：快模式自检与结果行用它——就算有人把内部开关
 #              FAST 改成 0（就等于“照跑全量”），自检仍然会跑并在 LIVE_RAN>0 时报红。
@@ -538,8 +552,8 @@ smoke_tmp_usage() { # start|end
   return 0
 }
 
-# KEEP 映射到助手的保留旋钮（TEAM_SMOKE_KEEP / --keep 语义不变）
-[ "$KEEP" = "1" ] && export TEAM_TMP_KEEP=1
+# KEEP → TEAM_TMP_KEEP 的映射在**参数解析之后、拿机器锁之前**就做过了（见那一段的 P223 注）：
+# 锁的 re-exec 换一个进程跑套件，值必须那时就在环境里，晚了就只影响本进程、救不了真正建根的子进程。
 TMP="$(tmp_root_create smoke)" || { printf 'smoke: 建不出临时根（TMPDIR=%s）\n' "${TMPDIR:-/tmp}" >&2; exit 3; }
 smoke_tmp_usage start
 SESSION="teamsmith-smoke-$$"
@@ -16349,7 +16363,58 @@ P122PY
     || bad "40 P122 sweep 没给开关就动了 tmux 残留"
 fi
 
-# ② 结束用量行 + 泄漏断言：台账里本轮创建的根必须都没了（本进程自己的根除外 —— 它由 EXIT
+# ② P223：`--keep` 必须**穿过机器锁的 re-exec** —— CI 的失败现场就靠它（2026-10-04，P214 的两次 CI 红）
+#    工作流的 gate 步是 `smoke.sh --keep`，而 `gate-failure-scene` 工件里只有一份 285 字节的锁文件。
+#    根因：全量门禁默认走 flock 的 re-exec，真跑套件、真建/收临时根的是第二个进程；`--keep` 在参数
+#    解析时就被 shift 掉、没传给子进程，于是子进程按默认 KEEP=0 把现场收干净（旁证：CI 日志里 §40
+#    打的是「一个都没留下」那一支，全篇没有一行「保留临时根：」）。
+#    判据两个方向都跑**真入口**（真排队、真 re-exec、真收尾），只把子套件缩到选段（`--select 15`，几秒）：
+#      (a) `--keep` → 跑完根还在（日志里也有「保留临时根：」）；
+#      (b) 反向对照：同一命令去掉 `--keep` → 根不在（证明 (a) 不是橡皮章）。
+#    两次都断言日志里有「持有」行（锁那条路真的走到了），并各自用**私有** base 目录（互不干扰，
+#    也不碰机器锁、不碰真项目）；身份清洗与 §34b 同形。
+P223D="$TMP/p223-keep"; rm -rf "$P223D"; mkdir -p "$P223D/keep-base" "$P223D/nokeep-base"
+p223_keep_probe() { # <keep|nokeep> <私有 base> <日志>：真入口 + 私有锁 / 私有 TMPDIR
+  local mode="$1" base="$2" out="$3"
+  local -a keep=()
+  [ "$mode" = "keep" ] && keep=(--keep)
+  ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_DOCS_DIR -u TEAM_STATE_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_SKILL_DIR -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR \
+      -u TEAM_TMP_KEEP -u TEAM_SMOKE_KEEP -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK \
+      -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED \
+      -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_TMP_RUN_ID -u SMOKE_TMP_LEDGER -u TEAM_TMP_RUN_ID \
+      -u TEAM_TMP_LEDGER \
+      TMPDIR="$base" TEAM_SMOKE_LOCK="$base/probe.lock" \
+      bash "$SKILL_DIR/tests/smoke.sh" "${keep[@]}" --select 15 </dev/null ) >"$out" 2>&1
+}
+P223_RC=0; p223_keep_probe keep "$P223D/keep-base" "$P223D/keep.log" || P223_RC=$?
+assert_has "$P223D/keep.log" "全量门禁互斥：持有" "P223 --keep 探针真走了机器锁的 re-exec（不是白捡的绿）"
+if [ "$P223_RC" = "0" ] || [ "$P223_RC" = "1" ]; then
+  ok "P223 --keep 探针：选段子套件真跑完（rc=$P223_RC）"
+else
+  bad "P223 --keep 探针：子套件没跑起来（rc=$P223_RC；0/1 才是套件自己的判定）—— 下面两条不作数"
+fi
+P223_KEPT="$(find "$P223D/keep-base" -maxdepth 1 -type d -name 'teamsmith-smoke.*' 2>/dev/null | head -1)"
+if [ -n "$P223_KEPT" ]; then
+  ok "P223 --keep 穿过 re-exec：根留在原处（${P223_KEPT##*/}）"
+else
+  bad "P223 --keep 没有穿过 re-exec：跑完根被收走了（$P223D/keep-base 里没有 teamsmith-smoke.*）"
+fi
+assert_has "$P223D/keep.log" "保留临时根：" "P223 --keep：收尾行点名保留路径（现场真的留下了）"
+# 反向对照：同一条路去掉 `--keep`，根必须被收走（否则上面的绿说明不了任何事）
+P223_RC2=0; p223_keep_probe nokeep "$P223D/nokeep-base" "$P223D/nokeep.log" || P223_RC2=$?
+assert_has "$P223D/nokeep.log" "全量门禁互斥：持有" "P223 反向对照也走了同一条 re-exec"
+P223_LEFT="$(find "$P223D/nokeep-base" -maxdepth 1 -type d -name 'teamsmith-smoke.*' 2>/dev/null | head -1)"
+if [ -z "$P223_LEFT" ]; then
+  ok "P223 反向对照：不带 --keep 时根被收走（判据分得出两者）"
+else
+  bad "P223 反向对照：不带 --keep 时根还在（${P223_LEFT##*/}）—— 判据是橡皮章"
+fi
+assert_not "$P223D/nokeep.log" "保留临时根：" "P223 反向对照：日志里也没有「保留临时根：」"
+rm -rf "$P223D" 2>/dev/null || true
+
+# ③ 结束用量行 + 泄漏断言：台账里本轮创建的根必须都没了（本进程自己的根除外 —— 它由 EXIT
 #    trap 的 cleanup 在断言之后回收，p53 的「一个都不留」正是冲着嵌套夹具泄漏去的）。
 smoke_tmp_usage end
 if [ "${TEAM_TMP_KEEP:-0}" = "1" ]; then

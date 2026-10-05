@@ -75,10 +75,13 @@ jobs:
       # --pid=host -> SIGTTIN stop, same image/kernel). Sharing the runner's PID namespace keeps
       # the container faithful to a native run in that one POSIX corner; nothing else changes.
       - name: Gates (pinned container)
+        id: gates
         run: |
           # 失败现场必须能离开容器（D39）：两次尝试（挂载宿主目录到 /tmp）在 runner 上都没能带出文件——
-          # 所以改成"容器不自动删（没有 --rm）→ 下一步用 docker cp 把 /tmp 整份拷出来 → 再删容器"。
+          # 所以改成"容器不自动删（没有 --rm）→ 下一步把现场族拷出来 → 再删容器"。
           # `smoke.sh --keep` 让套件把现场留下（默认失败也删，那行提示不是事实）。
+          # P223：`--keep` 真生效的判据在 smoke 自己的 §40（它以前被机器锁的 re-exec 吃掉，
+          # 两次 CI 红的工件里就只剩一个锁文件）——这里只负责留下容器。
           mkdir -p .ci-artifacts
           docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
           docker run --name teamsmith-gates-run --pid=host \
@@ -89,23 +92,19 @@ jobs:
 
       - name: Collect the failure scene
         if: always()
+        env:
+          GATES_OUTCOME: ${{ steps.gates.outcome }}
         run: |
-          # 现场必须离开容器，而上传器**不能**容忍软链环：
-          #   ① `docker cp 'c:/tmp/x.*'` 不做通配（实测 "could not be found on container"）→ 整份拷到暂存；
-          #   ② 暂存里只挑现场家族（否则 HOME 缓存的自指软链会 ELOOP）；
-          #   ③ 现场**自身**也可能含软链环（实测 teamsmith-smoke.5ZKyQI **里面**就有），
-          #      所以每个家族先 `tar` 成单个文件再进产物——tar 只记录软链、不跟随，上传器就只看到普通文件。
-          rm -rf /tmp/scene-staging; mkdir -p /tmp/scene-staging .ci-artifacts
-          docker cp teamsmith-gates-run:/tmp/. /tmp/scene-staging/ 2>/dev/null || true
-          for fam in teamsmith-smoke. panel-p21. config-cli. pty-wait-selftest.; do
-            for d in /tmp/scene-staging/$fam*; do
-              [ -e "$d" ] || continue
-              b="$(basename "$d")"
-              tar -czf ".ci-artifacts/$b.tgz" -C /tmp/scene-staging "$b" 2>/dev/null || true
-            done
-          done
-          docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
-          echo "=== .ci-artifacts ==="; ls -la .ci-artifacts | head -20
+          # P223：收集步必须**自证现场真的带出来了**（判断逻辑在 ci/collect-scene.sh，本地也能跑）。
+          # 为什么要有这道自证：原来这一段是 `docker cp … || true` + `tar … || true`，
+          # 一个现场文件都没找到也照样绿 —— 2026-10-04 两次 CI 红的工件里就只有一个 285 字节的锁文件
+          # （现场族一个都没有），而这一步「成功」得毫无痕迹。现在的契约：
+          #   * 只收现场家族（前缀表在脚本里），不收整份 /tmp；
+          #   * 打印找过的路径 + 每个现场族的文件数/字节数；
+          #   * 现场族低于阈值 → 这一步红（打印它找过的路径）；gate 绿时不收集（没东西要带），
+          #     但容器照旧收掉。
+          bash ci/collect-scene.sh --container teamsmith-gates-run --out .ci-artifacts \
+            --gate-outcome "$GATES_OUTCOME"
 
       - name: Upload the failure scene
         if: failure()
