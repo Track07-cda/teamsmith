@@ -1,5 +1,9 @@
 # pm-skills · 任务板
 
+> **读这份账本之前**：仓库在 2026-10-04 被 `git filter-repo` 改写过一次（把审计证据层移出仓库，见 `DECISIONS.md` 的 D94）。
+> 因此**记录里引用的提交哈希多数指向改写前的历史**，在当前仓库里解析不到；它们是历史文本，不是可核对的对象。
+> 可核对的是：报告/复验记录里给出的**命令与数字**（重跑即可），以及改写之后新写的记录里的哈希。
+
 > PM 维护；agent 只读。状态：`todo` / `wip` / `review`(已交付待复验) / `done` / `blocked` / `dropped`
 > 工具：`team task <ID> --title ...` 建行 ｜ `team board set <ID> <状态>` 改状态 ｜ `team board ls`
 
