@@ -739,3 +739,19 @@ socket 路径超 AF_UNIX 107 字节（深 TMPDIR ✓）→ 私有 server 绑不�
 **门禁里的一条检查**（扫描账本文本中的上述形状，命中即红并点名），否则就是靠人记着。
 
 **账本的工作位置**：`docs/team` 是**唯一工作副本**（工具零改造）；仓外那份 153 MB 副本降级为改写前的归档，不再同步。
+
+### D95 · 发布到 npm：用暂存式发布（stage-only token + 维护者 2FA 批准），版本 0.1.1（2026-10-05）
+
+**用户选择**：npm 的 token 类型里选 **A（stage-only）** —— token 只能提交待审版本，真正上线由**持有 2FA 的维护者批准**。
+
+**为什么不是另外两条**：bypass-2FA 的 granular token 被 npm 明确警告、且正在被收掉（2026-01 起不再允许直接发布）；"用户自己 `npm login` 后发布"也可以，但那样没有"先审后发"这一步，而我做不了核对之外的任何检查。
+
+**执行**：`npm stage publish`（带 `--registry https://registry.npmjs.org` —— 本机默认 registry 是镜像站 `registry.npmmirror.com`，不带这个参数会推错地方）→ stage-id `674fa3bf-872b-407f-a33c-ce6bfdaa4f1e` → 用户在网页批准 → `latest` = `0.1.1`。
+
+**PM 的独立核对**（不看命令输出、自己重做）：① 从标签 `v0.1.1` 重新打一次包，sha1 与暂存时报告的 `cbeacebb36cd312a641dd93f7305123f0b9f52da` **完全相同**（暂存的 tarball 就是标签那棵树）；② 批准后从 registry 真装一遍（`npm i -g teamsmith --prefix /tmp/npmtest`）→ `team version` 报 `teamsmith 0.1.1`、`team help` 正常；③ 在一个干净 git 仓库里跑 `team init` → 两个 skill 以软链装进 `.pi/skills/`，信任提示与下一步清单都照常打印。
+
+**版本为什么是 0.1.1 而不是 0.1.0**：`v0.1.0` 的标签早于当天合并的四条修复（其中两条直接影响使用者：席位存活判据、`team digest` 假待办）。若从当前树发 0.1.0，npm 上的 0.1.0 就与名为 `v0.1.0` 的标签内容不一致 —— 补一个补丁版本让 **npm / 标签 / tarball 三者同一**。
+
+**副作用（新包第一次暂存必然发生）**：registry 上会立刻出现公开占位版本 `0.0.0-stage`，名字当场被占；批准后 `latest` 从它移到 `0.1.1`，但 `0.0.0-stage` 会永久留在版本列表里。
+
+**后续（不是现在）**：首次发布之后可在包页配 **Trusted Publishing**（GitHub Actions + 仓库 `Track07-cda/teamsmith`），以后由 CI 用 OIDC 发布、自带 provenance、不再需要任何长期 token —— 它要求包已存在，所以只能放在首發之后。
