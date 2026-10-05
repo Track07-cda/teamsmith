@@ -5,7 +5,7 @@ branch: `task/P217-apply`   PR/MR: -（local 模式：分支留本地，PM 复�
 tip: `dba16cc2`（**被门禁与翻转包验证的代码+夹具 tip**；本报告提交在其后，`docs/team/reports/**` 不进门禁判据）
 container: `localhost/teamsmith-gate:local`（`HOME=/tmp`、`--pid=host`、`--userns=keep-id`，与 CI 同一枚镜像）
 evidence: `docs/team/reports/P217-dev/`（按 `.gitignore` 的 `docs/team/reports/**` 只在工作树里，不进仓库：
-`/home/yikdata/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev/docs/team/reports/P217-dev/`）
+`.worktrees/dev/docs/team/reports/P217-dev/`）
 
 ```
 task:   P217
