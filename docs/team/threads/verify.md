@@ -142,3 +142,6 @@ distrobox-host-exec podman run --rm --pid=host --cgroups=enabled --userns=keep-i
 **请**：① 在包内加一行 `.gitignore`（`.runtime/` ✓）——理由与 P177 的 `.scratch` 同 ✓（可重建的安装不进仓库 ✓）；
 ② 提交包的其余部分（脚本 ✓ 日志 ✓ 帧 ✓）✓；③ 把 `.runtime/` 删掉 ✓（需要复跑时按 README 重装 ✓）。
 **我为什么现在派单**：派 P191 时守卫因为"工作树有未跟踪项"拒了一次 ✓，我用 `--force` 带审计说明过的（那个未跟踪项是 **P194 的证据包** ✓，不是 P191 的活 ✓）。
+
+### 2026-10-05T15:17:06Z · from: pm · re: -
+E9 开工提示：dispatch --print 生成的通用提示把 hard-blocked 通知错误写成 team notify verify；正确的收件人是 pm。若确实 BLOCKED，请从席位工作树执行 bash skills/teamsmith/scripts/team notify pm "<一句话>"，并在报告标注；不要按错误示例通知自己。此消息只纠正路由，不拓展研究范围。
