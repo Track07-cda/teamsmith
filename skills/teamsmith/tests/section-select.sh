@@ -73,9 +73,10 @@ else
 fi
 TSV="$ROOT/skills/teamsmith/tests/section-paths.tsv"
 SUITE="$ROOT/skills/teamsmith/tests/smoke.sh"
-# ── 检出形状（change: product-checkout-gate）────────────────────────────────────────────
-# 与门禁共用同一份「产品面检出」判据（纯文件，不看 TEAM_* / git / CI）：§③ 的字面存在性检查
-# 只有在**产品面检出**里、且字面量落在那四个**精确**内部前提上时才允许按缺失跳过。
+# ── 检出形状（change: product-checkout-gate；P222 加机器生成面）────────────────────────
+# 与门禁共用同一份判据（纯文件，不看 TEAM_* / git / CI）：§③ 的字面存在性检查里，机器生成面
+# （`.pi/prompts` / `.pi/skills`）整棵不在时按缺失跳过；其余字面量只有在**产品面检出**里、且落在
+# 那几个**精确**内部前提上时才允许按缺失跳过。
 # shellcheck source=tests/lib/checkout-shape.sh
 . "$SEL_DIR/lib/checkout-shape.sh"
 CHECKOUT_SHAPE="$(checkout_shape "$ROOT")"
@@ -484,8 +485,8 @@ do_list() {
 CHECK_OK=0; CHECK_BAD=0; CHECK_SKIP=0
 cok()  { printf 'ok: %s\n' "$1"; CHECK_OK=$((CHECK_OK + 1)); }
 cbad() { printf 'bad: %s\n' "$1"; CHECK_BAD=$((CHECK_BAD + 1)); }
-# 前提缺失（产品面检出里刻意不存在的内部开发面）：与 ok/bad 分开点名、分开计数（SKIP 不是通过，
-# 也不是失败）。行里带行 key 与精确路径 —— 读者能照着重跑、也能照着核。
+# 前提缺失（机器生成面整棵不在；或产品面检出里刻意不存在的内部开发面）：与 ok/bad 分开点名、
+# 分开计数（SKIP 不是通过，也不是失败）。行里带行 key 与精确路径 —— 读者能照着重跑、也能照着核。
 csk()  { printf 'SKIP（条件不满足）: %s\n' "$1"; CHECK_SKIP=$((CHECK_SKIP + 1)); }
 
 # 一行 → 追加规范化 token 到全局数组 TOKS（纯内建，无 fork）
@@ -530,7 +531,7 @@ trim_token() {
 do_check() {
   local i j k line n=0 pp dup="" missing_rows=() missing_rows_n=() missing_secs=()
   local nb=0 n_ok=0 lit_bad=0 lit_n=0 lit_skip_c=0 ex_bad=0 pro_bad=0 tok_bad=0 tok_n=0 ex_tok_n=0
-  local cur="" curline=0 ri="" covered pp PARR=() TOKS=() t
+  local cur="" curline=0 ri="" covered pp PARR=() TOKS=() t _lit_why=""
   # ① 段 ↔ 行
   for ((i = 0; i < T_N; i++)); do
     for ((j = i + 1; j < T_N; j++)); do [ "${T_KEY[i]}" = "${T_KEY[j]}" ] && dup="${dup} ${T_KEY[i]}"; done
@@ -560,7 +561,8 @@ do_check() {
     done
   done
   [ "$nb" -eq "$n_ok" ] && cok "needs 声明全部存在且指向更早的段（$nb 条）"
-  # ③ 字面模式存在（产品面检出里，四个**精确**内部前提按缺失跳过 —— 不是前缀豁免、不是整表放行）
+  # ③ 字面模式存在（机器生成面整棵不在、或产品面检出里的**精确**内部前提按缺失跳过 ——
+  #     不是前缀豁免、不是整表放行；其余缺失一律红）
   for ((i = 0; i < T_N; i++)); do
     [ "${T_PAT[i]}" = "-" ] && continue
     IFS=' ' read -r -a PARR <<<"${T_PAT[i]}"
@@ -568,8 +570,13 @@ do_check() {
       case "$pp" in *'*'*) continue ;; esac
       lit_n=$((lit_n + 1))
       [ -e "$ROOT/$pp" ] && continue
-      if checkout_literal_skippable "$CHECKOUT_SHAPE" "$pp"; then
-        csk "行 ${T_KEY[i]} 的字面模式在检出里不存在（产品面检出，内部开发面前提）：$pp"
+      if checkout_literal_skippable "$ROOT" "$CHECKOUT_SHAPE" "$pp"; then
+        if checkout_generated_surface_absent "$ROOT" "$pp"; then
+          _lit_why="机器生成面（工具在本机生成、不进仓库）"
+        else
+          _lit_why="内部开发面前提"
+        fi
+        csk "行 ${T_KEY[i]} 的字面模式在检出里不存在（检出形状 $CHECKOUT_SHAPE，$_lit_why）：$pp"
         lit_skip_c=$((lit_skip_c + 1))
       else
         cbad "行 ${T_KEY[i]} 的字面模式在工作树里不存在：$pp"
@@ -580,7 +587,7 @@ do_check() {
   if [ "$lit_bad" -eq 0 ] && [ "$lit_skip_c" -eq 0 ]; then
     cok "字面模式全部存在于工作树（$lit_n 条）"
   elif [ "$lit_bad" -eq 0 ]; then
-    cok "字面模式（$lit_n 条）里 $((lit_n - lit_skip_c)) 条在位；$lit_skip_c 条内部开发面前提按缺失跳过（跳过不等于检查过）"
+    cok "字面模式（$lit_n 条）里 $((lit_n - lit_skip_c)) 条在位；$lit_skip_c 条检出前提按缺失跳过（跳过不等于检查过）"
   fi
   # ④ 豁免类没有任何行声明
   for ((i = 0; i < T_N; i++)); do

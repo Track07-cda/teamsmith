@@ -439,19 +439,30 @@ tmux_iso_skip() { # <段> <细节>
   printf '  \033[33mSKIP（前置不成立：%s）\033[0m %s\n' "$2" "$1"
 }
 
-# P148 · 产品面检出的内部前提跳过（change: product-checkout-gate）：与 FAST 的 cond_skip 分开记账
-# —— FAST 收尾行只该报「真进程段落」；把「内部开发面缺失」混进那个数会把两件事都说错。仍然计入
-# SKIP_N（段落/结果账）、仍然打印 SKIP（条件不满足）：跳过不是通过。
-prereq_skip() { # <检查名> <缺失的内部前提路径>
+# P148 · 检出前提跳过（change: product-checkout-gate；P222 扩到机器生成面与缺席的证据层）：与 FAST 的
+# cond_skip 分开记账 —— FAST 收尾行只该报「真进程段落」；把「检出里按构造没有的前提」混进那个数会把
+# 两件事都说错。仍然计入 SKIP_N（段落/结果账）、仍然打印 SKIP（条件不满足）：跳过不是通过。
+# 文案要点名三件事：检出形状、这是哪一类前提、缺的是哪一个（第三个参数给不落在机器生成面上的前提用；
+# 落在生成面上的由函数自己认出来）。
+prereq_skip() { # <检查名> <缺失的前提路径> [<这是哪一类前提>]
   section_guard_check
   SKIP_N=$((SKIP_N + 1)); PREREQ_SKIP_N=$((PREREQ_SKIP_N + 1))
   PREREQ_SKIP_SEGS="${PREREQ_SKIP_SEGS}|$1"
-  printf '  \033[33mSKIP（条件不满足）\033[0m %s —— 产品面检出：内部开发面前提 %s 不存在（跳过不是通过）\n' "$1" "$2"
+  local why="${3:-}"
+  if [ -z "$why" ]; then
+    if checkout_generated_surface_absent "$CHECKOUT_REPO_ROOT" "$2"; then
+      why="机器生成面（由工具在本机生成、不进仓库）"
+    else
+      why="内部开发面前提"
+    fi
+  fi
+  printf '  \033[33mSKIP（条件不满足）\033[0m %s —— 检出形状 %s：%s %s 在检出里不存在（跳过不是通过）\n' \
+    "$1" "$CHECKOUT_SHAPE" "$why" "$2"
 }
-# <相对路径>：0 = 该走前提跳过（产品面检出 + 这条前提落在六个内部面上 + 条目确实不在）。
+# <相对路径>：0 = 该走前提跳过（这条前提确实不在 + 形状/机器生成面口径允许跳过）。
 smoke_prereq_absent() {
   checkout_entry_absent "$CHECKOUT_REPO_ROOT/$1" || return 1
-  checkout_prereq_missing "$CHECKOUT_SHAPE" "$1"
+  checkout_prereq_missing "$CHECKOUT_REPO_ROOT" "$CHECKOUT_SHAPE" "$1"
 }
 
 PASS=0; FAIL=0
@@ -9646,8 +9657,9 @@ else
   printf '%s\n' "$OS_HITS" | head -5 | sed 's/^/     /'
 fi
 # 阶段命令必须真的存在（否则「跑 opsx-propose」只是名字，不是能敲的命令）
-# P148：产品面检出里 .pi/ 按构造不在 —— 这十条**各自**以 SKIP（条件不满足）点名；内部树（含只缺
-# 一个文件的部分内部树）照旧执行、照旧判红，整段不会被 skip 掉。
+# P148 · P222：`.pi/prompts` / `.pi/skills` 是**机器生成面**（工具在本机生成、不进仓库）—— 整棵面不在时
+# 这十条**各自**以 SKIP（条件不满足）点名跳过；面在位（哪怕是空目录）而面里的文件缺失时照旧执行、照旧
+# 判红（只缺一个文件的部分内部树同样判红），整段不会被 skip 掉。
 for p in $OS_PHASES; do
   if smoke_prereq_absent ".pi/prompts/opsx-$p.md"; then
     prereq_skip "本仓库为 Pi 生成了相位命令 opsx-$p" ".pi/prompts/opsx-$p.md"
@@ -13029,13 +13041,13 @@ else
   assert_file "$M28_LINT" "M28：tmux 隔离 lint 存在"
   # 豁免清单本身是产品文件：不在就报红（下面的产品面跳过也要求它在位）。
   assert_file "$SKILL_DIR/tests/tmux-lint-legacy.txt" "M28：豁免清单存在"
-  # P148：豁免清单（tmux-lint-legacy.txt）冻结的是**内部面**历史包（docs/team/reports/**）。产品面检出里
-  # 它们按构造不在 —— lint 会把「清单里的文件不在了」判成过期（16 条）。清单**每一条都落在内部面**时，
-  # 产品面检出改用一份空清单跑：RED 命中照判、产品文件的隔离证据照判（lint 的牙全在），并把「豁免清单
-  # 这一册账在检出里无法判定」如实记一次前提跳过。清单里只要有一条产品面路径（或清单不在位），就照旧
-  # 用原清单跑。
+  # P148 · P222：豁免清单（tmux-lint-legacy.txt）冻结的是**内部面**历史包（docs/team/reports/**）—— 证据层
+  # 刻意不进仓库。清单**每一条都落在内部面、且都确实不在这棵检出里**时，这一册账在检出里无法裁决：改用
+  # 一份空清单跑（RED 命中照判、产品文件的隔离证据照判，lint 的牙全在），并如实记一次前提跳过、点名清单
+  # 指向的证据层。只要有一条产品面路径、或清单里有一条文件**在位**（哪怕 sha 已经对不上），就照旧用原清单
+  # 跑 —— 缺的是产品文件、或这一册账其实可裁决，两条都必须照旧判（P222 的证伪方向）。
   M28_LEGACY_ARGS=()
-  if [ "$CHECKOUT_SHAPE" = "product-only" ] && [ -f "$SKILL_DIR/tests/tmux-lint-legacy.txt" ]; then
+  if [ -f "$SKILL_DIR/tests/tmux-lint-legacy.txt" ]; then
     M28_LEGACY_ALL_INTERNAL=1
     while IFS= read -r _m28l; do
       case "$_m28l" in ''|'#'*) continue ;; esac
@@ -13043,10 +13055,12 @@ else
       [ -n "${_m28p:-}" ] || continue
       checkout_surface_path "$_m28p" || { M28_LEGACY_ALL_INTERNAL=0; break; }
     done < "$SKILL_DIR/tests/tmux-lint-legacy.txt"
-    if [ "$M28_LEGACY_ALL_INTERNAL" = 1 ]; then
-      : > "$TMP/m28-legacy-product-only.txt"
-      M28_LEGACY_ARGS=(--legacy "$TMP/m28-legacy-product-only.txt")
-      prereq_skip "M28 真树：变更类 tmux 调用全部有隔离证据（豁免清单）" "docs/team/reports/**"
+    if [ "$M28_LEGACY_ALL_INTERNAL" = 1 ] \
+       && checkout_registered_paths_absent "$CHECKOUT_REPO_ROOT" "$SKILL_DIR/tests/tmux-lint-legacy.txt"; then
+      : > "$TMP/m28-legacy-unjudgeable.txt"
+      M28_LEGACY_ARGS=(--legacy "$TMP/m28-legacy-unjudgeable.txt")
+      prereq_skip "M28 真树：变更类 tmux 调用全部有隔离证据（豁免清单）" "docs/team/reports/*/pkg/**" \
+        "豁免清单注册的路径逐条不在（冻结的证据层）"
     fi
   fi
   if perl "$M28_LINT" ${M28_LEGACY_ARGS[@]+"${M28_LEGACY_ARGS[@]}"} >"$M28_LOG" 2>&1; then
@@ -15787,13 +15801,14 @@ P218_RED_NAMED="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p117-red-p218red41.log" 2>/dev
 assert_eq "36⑦ P218 红侧：缺 §2 时 §41 恰好一条点名的前提红（不是级联）" "$P218_RED_NAMED" "1"
 assert_has "$TMP/p117-red-p218red41.log" "needs 应为 2" "36⑦ P218 红侧：那条红点名 needs:2 与缺失的 config.sh"
 
-# ── ⑧ P148：产品面检出判据的纯夹具（形状 / 边界 / 前提跳过 / 覆盖守门）────────────────────
+# ── ⑧ P148 · P222：检出形状判据的纯夹具（形状 / 边界 / 前提跳过 / 覆盖守门）──────────────────
 # 探针是一个独立脚本（纯文件 + 嵌套 FAST 选段，不起真进程、不碰调用者的 tmux/项目）：这里只驱动
 # 一次，把它的判断转成一条门禁断言（失败时点名前几条）。它覆盖 design 决议 2/3/4 的夹具面：
-# ①形状（product-only/内部/空目录/类型不对/不可读/坏软链/缺产品面）②继承身份与夹具账本不改变分类
-# ③选段器 --check 两种形状（精确白名单 / 拼错的前提照旧红 / 缺产品字面照旧红）④产品面树
-# --select 18,19（11 条前提 SKIP、零红）⑤内部部分树删文件必须红、不许跳过 ⑥旧断言被压成跳过 →
-# 覆盖清单比对点名；还原后绿 ⑦覆盖比对器自身两向 ⑧真实树指纹前后一致（夹具只动 scratch 树）。
+# ①形状（product-only/内部/混合/空目录/类型不对/不可读/坏软链/缺产品面）与机器生成面的跳过边界
+# ②继承身份与夹具账本不改变分类 ③选段器 --check 三种形状（精确白名单 / 拼错的前提照旧红 / 缺产品字面
+# 照旧红）④产品面树 --select 18,19（11 条前提 SKIP、零红）⑤内部部分树删文件必须红、不许跳过
+# ⑤b 混合形状（P222：账本在、.pi/** 与证据层不在）→ §19/§31/§58 各自可见 SKIP、产品红线照旧
+# ⑥旧断言被压成跳过 → 覆盖清单比对点名；还原后绿 ⑦覆盖比对器自身两向 ⑧真实树指纹前后一致。
 P148_PROBE="$SKILL_DIR/tests/checkout-shape-probe.sh"
 if bash "$P148_PROBE" >"$TMP/p148-shape-probe.log" 2>&1; then
   ok "36⑧ 产品面检出探针全绿（$(sed -n 's/^== 检出形状探针 == //p' "$TMP/p148-shape-probe.log" | tail -1)）"
@@ -19390,15 +19405,15 @@ P159_ROOT=""; P159_PID=""
 if ! command -v perl >/dev/null 2>&1; then
   bad "没有 perl：P159 信号纪律 lint 跑不了（装上 perl 才能跑这条门禁）"
 else
-  # P176：signal-lint 的豁免清单（signal-lint-legacy.txt）与 §31 的 M28 清单**同一契约**：它冻结的也是
-  # **内部面**历史包（docs/team/reports/**）。清单本身是产品文件，不在就报红；产品面检出里它的条目按构造
-  # 不在位 —— lint 会把「清单里的文件不在了」判成过期（假红）。清单**每一条都落在内部面**时，产品面检出
-  # 改用一份空清单跑：RED 命中照判、产品文件的判定照旧（lint 的牙全在），并把「豁免清单这一册账在检出里
-  # 无法判定」如实记一次前提跳过。清单里只要有一条产品面路径（或清单不在位），就照旧用原清单跑 —— 那时
-  # 缺的是**产品**文件，必须判红（两条牙齿与影子见 §36⑩）。
+  # P176 · P222：signal-lint 的豁免清单（signal-lint-legacy.txt）与 §31 的 M28 清单**同一契约**：它冻结的
+  # 也是**内部面**历史包（docs/team/reports/**）。清单本身是产品文件，不在就报红；清单**每一条都落在内部
+  # 面、且都确实不在这棵检出里**时改用空清单跑（RED 命中照判、产品文件的判定照旧，lint 的牙全在），并把
+  # 「豁免清单这一册账在检出里无法裁决」如实记一次前提跳过、点名证据层。清单里只要有一条产品面路径、或
+  # 清单里有一条文件**在位**，就照旧用原清单跑 —— 那时缺的是**产品**文件、或这一册账其实可裁决，两条都
+  # 必须照旧判（两条牙齿与影子见 §36⑩）。
   assert_file "$SKILL_DIR/tests/signal-lint-legacy.txt" "58：signal-lint 豁免清单存在"
   P159_LEGACY_ARGS=()
-  if [ "$CHECKOUT_SHAPE" = "product-only" ] && [ -f "$SKILL_DIR/tests/signal-lint-legacy.txt" ]; then
+  if [ -f "$SKILL_DIR/tests/signal-lint-legacy.txt" ]; then
     P159_LEGACY_ALL_INTERNAL=1
     while IFS= read -r _p159l; do
       case "$_p159l" in ''|'#'*) continue ;; esac
@@ -19406,10 +19421,12 @@ else
       [ -n "${_p159p:-}" ] || continue
       checkout_surface_path "$_p159p" || { P159_LEGACY_ALL_INTERNAL=0; break; }
     done < "$SKILL_DIR/tests/signal-lint-legacy.txt"
-    if [ "$P159_LEGACY_ALL_INTERNAL" = 1 ]; then
-      : > "$TMP/p159-legacy-product-only.txt"
-      P159_LEGACY_ARGS=(--legacy "$TMP/p159-legacy-product-only.txt")
-      prereq_skip "58 lint 真树：仓库脚本/夹具没有按名字或模式选进程（豁免清单）" "docs/team/reports/**"
+    if [ "$P159_LEGACY_ALL_INTERNAL" = 1 ] \
+       && checkout_registered_paths_absent "$CHECKOUT_REPO_ROOT" "$SKILL_DIR/tests/signal-lint-legacy.txt"; then
+      : > "$TMP/p159-legacy-unjudgeable.txt"
+      P159_LEGACY_ARGS=(--legacy "$TMP/p159-legacy-unjudgeable.txt")
+      prereq_skip "58 lint 真树：仓库脚本/夹具没有按名字或模式选进程（豁免清单）" "docs/team/reports/*/pkg/**" \
+        "豁免清单注册的路径逐条不在（冻结的证据层）"
     fi
   fi
   if perl "$P159_LINT" ${P159_LEGACY_ARGS[@]+"${P159_LEGACY_ARGS[@]}"} >"$P159_LOG" 2>&1; then
@@ -19645,7 +19662,7 @@ if [ "$FAST_REQ" = "1" ]; then
     "$FAST_SKIP_N" "${FAST_SKIP_SEGS#|}"
   # P148：条件跳过与检出前提跳过分开口径（都不是「真进程段落」；都仍然计入上面的 SKIP 总数）
   [ "$COND_SKIP_N" -eq 0 ] || printf '\033[33m条件 SKIP（条件不满足）：%d 条 —— 本次运行被前置环境拦住的检查（跳过不是通过）\033[0m\n' "$COND_SKIP_N"
-  [ "$PREREQ_SKIP_N" -eq 0 ] || printf '\033[33m检出前提 SKIP（条件不满足）：%d 条 —— 产品面检出里刻意缺失的内部开发面（跳过不是通过）\033[0m\n' "$PREREQ_SKIP_N"
+  [ "$PREREQ_SKIP_N" -eq 0 ] || printf '\033[33m检出前提 SKIP（条件不满足）：%d 条 —— 检出里按构造缺失的内部开发面/机器生成面/证据层，逐条点名（跳过不是通过）\033[0m\n' "$PREREQ_SKIP_N"
 fi
 # 选段运行：未跑清单就在最后几行里（team review 记录的就是尾部）；不是 RUN 子进程才在这里打（RUN 由
 # 父进程在子进程结束后打，保证它落在最后）

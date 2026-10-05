@@ -122,7 +122,9 @@ No forge dependency: the PM uses `git`/`gh`/`glab` directly, and cross-project c
    bash <skill>/scripts/team bootstrap --print    # the plan; writes nothing
    bash <skill>/scripts/team bootstrap            # .pi/team/config.sh + docs/team/** + agent worktrees + pulse
    bash <skill>/scripts/team doctor               # self-check: git/tmux/agent CLI/dependencies/gates/capacity
-   openspec init --tools pi                       # required dependency: spec root + the five phase commands
+   openspec init --tools pi                       # required dependency: spec root + the generated phase commands
+                                                  # (a pin without a `verify` workflow — 1.8.0 has only `core` —
+                                                  # does not generate `opsx-verify`; see references/openspec.md §6)
    ```
 
    `bootstrap` is idempotent and prints the `git worktree add` command for each agent (git stays with the PM).

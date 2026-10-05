@@ -14,7 +14,8 @@ CLI reference, `validate` output). Those live where they are generated and maint
 ## 0. Where the authoritative OpenSpec documentation is
 
 - **The phase commands themselves** — `.pi/prompts/opsx-*.md` and `.pi/skills/openspec-*/SKILL.md`, generated for
-  this project's agent tool (`openspec init --tools pi`). That is what an agent actually follows. They describe the
+  this project's agent tool (`openspec init --tools pi`; §6 states exactly which of the five phases the installed
+  OpenSpec actually generates). That is what an agent actually follows. They describe the
   *mechanics* of a phase (how to explore, how to write the artifacts); **who may invoke a phase, and behind which
   gate, is teamsmith's rule, not theirs** — see §1, §2 and §4.
 - **The artifact instructions** — `openspec instructions <artifact>` (proposal / specs / design / tasks / apply /
@@ -184,14 +185,27 @@ tip.
 
 ## 6. Preconditions
 
-- The phase commands must be generated for the agents' tool: `openspec init --tools pi` writes
-  `.pi/prompts/opsx-*.md` and `.pi/skills/openspec-*/SKILL.md` (use the tool's own id for a non-Pi CLI). Once a
-  project has them, `openspec update` refreshes them; it finds the configured tools from the generated files and
-  answers "No configured tools found" when there are none. Commit the generated files with the project.
-- Without them, a phase cannot be invoked **as a command**: an agent can still do the same steps by hand from
-  OpenSpec's own docs, but then the PM cannot check that the phase really ran its workflow, the planning-only
-  boundary of propose is only a convention, and the numbered phases in a brief point at nothing. Prefer generating
-  and committing them.
+- Generate what the installed OpenSpec can generate: `openspec init --tools pi` writes the command and skill files
+  for the workflows of the active profile (use the tool's own id for a non-Pi CLI). With the version this project
+  pins — **1.8.0, whose only profile is `core`** (`openspec config list` prints
+  `workflows: propose, explore, apply, update, sync, archive (from core profile)`) — that is
+  `opsx-{explore,propose,apply,archive}` plus the helper commands `opsx-update`/`opsx-sync`, and the matching
+  skills `openspec-{explore,propose,apply-change,archive-change}` plus `openspec-sync-specs`/`openspec-update-change`.
+  **It does not generate the verify pair** (`opsx-verify.md`,
+  `openspec-verify-change/SKILL.md`): 1.8.0 has no `verify` workflow, and the `expanded` profile this guide used to
+  name does not exist (`openspec config profile expanded` → `Error: Unknown profile preset "expanded". Available
+  presets: core`). Once a project has generated files, `openspec update` refreshes them; it finds the configured
+  tools from those files and answers "No configured tools found" when there are none.
+- **A phase whose command is missing is not a phase that did not run.** The verify phase is owned by this guide, not
+  by a generated file: run it from §1 and §5 — a different agent than the implementer, the change + the landed code
+  + the report as its hand-in, `docs/team/reviews/<ID>.md` as its hand-out. If you want a command for it, write the
+  prompt yourself and say it is yours; do not record a hand-written prompt as generated. What teamsmith gates on is
+  the **artifact** (the review record); the command file is only checked where the checkout carries one (a checkout
+  without the machine-generated surface gets a named skip, never a red — P222).
+- Whether the generated files are committed follows the project's own ignore rules. This repository ignores `.pi/**`
+  (`.gitignore`): the files are per-machine, every clone and every CI checkout starts without them, and the gate
+  reports the `.pi/prompts` / `.pi/skills` checks as named skips there. A project that does commit them gets those
+  checks on every checkout, which is strictly more coverage.
 - Resolve the CLI and the spec root: `team paths` (and `team doctor`) print `TEAM_OPENSPEC_BIN` / `TEAM_SPEC_DIR`;
   with `TEAM_REQUIRE_OPENSPEC=1` (the default) a missing CLI or spec directory fails the doctor. The gate needs the
   CLI on `PATH` (or an absolute path in `TEAM_OPENSPEC_BIN`).
