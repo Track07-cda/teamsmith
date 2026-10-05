@@ -357,7 +357,7 @@ ban_selftest() {
   cat >"$c/docs/team/clean.md" <<'EOF'
 # 干净账本
 
-- 家目录占位：`<home>/work/pm-skills`、`/home/.../pm-skills`、`/home/…/.worktrees`
+- 家目录占位：`<home>/work/example-project`、`/home/.../example-project`、`/home/…/.worktrees`
 - 用户名占位：`<user>`；他项目占位：`<peer>` / `<peer-project>` / `<internal>`
 - 版本与负载：node 24.19.0 · perl 5.40.1 · loadavg 1.98
 - 相近但不算：172.15.1.1 · 127.0.0.1 · 10 次 · 3.10.4 · fixtureuserx
