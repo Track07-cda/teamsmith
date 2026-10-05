@@ -1,0 +1,1 @@
+- 2026-10-05T07:59:04Z · `team close P222 --status done` · OK：复验记录 docs/team/reviews/P222.md（判定 PASS）
