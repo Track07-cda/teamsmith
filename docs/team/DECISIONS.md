@@ -777,3 +777,16 @@ socket 路径超 AF_UNIX 107 字节（深 TMPDIR ✓）→ 私有 server 绑不�
 **规矩**：① 一次 push 里只要含**产品路径**的提交，头提交就**不许**带 `[skip ci]`；② 要批量推账本提交，就**分两次推**（先推产品提交，再推账本提交），或对产品提交单独 `git push` 一次；③ 推完**查一次 run 列表**（`actions/runs?head_sha=…`），确认那次合并真的被跑到——`team doctor` 的账本检查不覆盖这一条。
 
 **补做**：本次用 `workflow_dispatch` 在 main 上手动起了一次 run（#8，提交 `cd414d28`）。
+
+### D98 · A 组账本卫生：陈旧分支清空、看板重复 ID 合并、活动文档改名（2026-10-05）
+
+**用户授权**：他在听完待办清单后说"A 组你可以做"（第 1、2、3 条：分支清理、看板重复 ID、命名一致性）。
+
+**① 分支清理**：本地有 **356 条非 main 分支**，其中没有一条携带 main 缺失的实用内容——"多出来的文件"全是历史路径（旧的 `skills/pi-team`、已移除的 `references/bootstrap.md` 与 `tests/spec-lint.sh`、以及早已归档的 `openspec/changes/<old>/**`）。判定依据与清单落在 `docs/team/ledger/`：
+`branch-inventory-20261005.tsv`（全部 356 条：分支、tip、日期、分类）、`branch-cleanup-20261005.tsv`（同一批，附"main 缺的文件数"判定列）。
+**动手前的保险**：① 新建当前仓库的**镜像备份** `~/Documents/syncthing/Work/Projects/pm-skills-branches-20261005.git`（362 个 ref、44 MB，删除后完全可回滚）；② 改写前的旧历史仍在三处——`origin`（teamsmith-internal）、`pm-skills-backup-20261004-1458.git`（164 MB，含 338 条原始 task 分支）、账本归档 bundle。
+**做法**：先把五个工作树切到 detached main（避免"分支被占用"且席位空闲无影响），再逐条 `git branch -D`，**留 `main` 与 `held/archive-npm-pty`**（后者是 D52 刻意保留的 hold 分支）。结果：357 → 2 条，`git branch --no-merged main` 为 0，`git gc` 后 `.git` 从 45 MB 降到 **16 MB**（pack 13.4 MB）。
+
+**② 看板重复 ID**：三对（V1.1 · M4.3 · M6.3）各两行。做法是**每 ID 只留一行**，把两行的描述与依赖合并进该行并原地注明"此 ID 曾被两用"，删掉另外三行；图例加一行说明。没有发明新 ID、没有改状态（V1.1 两条都是 dropped，M4.3/M6.3 四条都是 done）。
+
+**③ 命名一致性**：`BOARD.md`、`OWNERSHIP.md`、`ROADMAP.md` 的抬头与 `ROADMAP` 里的会话名从内部旧名 `pm-skills` 改为公开名 `teamsmith`；`ledger-ban.sh` 自检夹具里那处示例路径（`<home>/work/pm-skills`）改成中性名（断言判的是家目录形状，不受影响）。**历史报告里的旧名保留**——那是历史，改它就是篡改记录；`DECISIONS.md` 里两处旧名是引用当时的材料，同样保留。

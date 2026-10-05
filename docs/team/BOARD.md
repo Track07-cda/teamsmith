@@ -1,4 +1,4 @@
-# pm-skills · 任务板
+# teamsmith · 任务板
 
 > **读这份账本之前**：仓库在 2026-10-04 被 `git filter-repo` 改写过一次（把审计证据层移出仓库，见 `DECISIONS.md` 的 D94）。
 > 因此**记录里引用的提交哈希多数指向改写前的历史**，在当前仓库里解析不到；它们是历史文本，不是可核对的对象。
@@ -6,12 +6,13 @@
 
 > PM 维护；agent 只读。状态：`todo` / `wip` / `review`(已交付待复验) / `done` / `blocked` / `dropped`
 > 工具：`team task <ID> --title ...` 建行 ｜ `team board set <ID> <状态>` 改状态 ｜ `team board ls`
+> 每个 ID 只留一行：历史上一行两用的（V1.1 · M4.3 · M6.3）已把两行内容与依赖合并进一行并注明（D98）。
 
 | ID | 任务 | Agent | 分支 | 依赖 | 状态 |
 |---|---|---|---|---|---|
 | — | （还没有任务：`team task T1.1 --title "第一个任务" --agent dev`） | - | - | - | dropped |
 | T1.1 | smoke 快慢分层：给门禁一个 60 秒内的快模式 | dev | - | - | done |
-| V1.1 | 对抗性复核：文档一致性不变量与 review --dir 只读性 | verify | - | - | dropped |
+| V1.1 | 对抗性复核：文档一致性不变量与 review --dir 只读性（此 ID 曾被两用：另一行是 spec-delta-gate 的 re-verify，与 V2 重复，已合并，见 D98） | verify | - | P2.1 | dropped |
 | M3.0 | Agent adapter layer: any TUI agent | dev | - | - | done |
 | V3.0 | Adversarial verification: agent adapter layer | verify | - | - | done |
 | M3.2 | Adapter hardening: V3.0 findings F1/F4/F5/F6/F7/F8 | dev | - | - | done |
@@ -20,16 +21,14 @@
 | M4.1 | English for the remaining reference docs + SCOPE.md | dev | - | - | done |
 | V4.0 | Adversarial verification: core lifecycle | verify | - | - | done |
 | M2.5 | PM memory manual (references/memory.md) | dev | - | - | done |
-| M4.3 | Make the two stuck-worker paths visible (queued until V4.0 lands) | dev | - | M4.1 | done |
+| M4.3 | Make the two stuck-worker paths visible（queued until V4.0 lands）｜ Signal honesty: stuck agents, wedged panes, draft reports, squash noise, false settles（此 ID 曾被两用：两行都是 done，已合并，见 D98） | dev | - | M4.1, M6.3 | done |
 | M5.1 | magic-context + OpenSpec as required dependencies (doctor fails without them) | dev | - | - | done |
 | M5.2 | Adopt OpenSpec: specs + change workflow + gates | dev2 | - | - | done |
 | M6.1 | State honesty: durable task record, board writes, close claims | dev | - | V4.0 | done |
 | M6.2 | Review evidence integrity: branch guard, dirty/ignored/timeout/no-gates/--strong/revision | dev2 | - | V4.0 | done |
-| M6.3 | Dispatch/notify/boundary: branch match, PM inbox, real recipients, empty-target guard | dev | - | V4.0 | done |
+| M6.3 | Dispatch/notify/boundary: branch match, PM inbox, real recipients, empty-target guard ｜ + F30 wrapper proof + OpenSpec protocol guidance（此 ID 曾被两用：两行都是 done，已合并，见 D98） | dev | - | V4.0, M6.5 | done |
 | M6.4 | Digest/version/meeting: upstream-aware, id parsing, SIGPIPE, reload claim, TTL | dev2 | - | V4.0 | done |
 | M6.5 | False PM liveness (breaks up + own gate) and honest TIMEOUT attribution | dev | - | M6.2 | done |
-| M6.3 | Dispatch/notify/boundary + F30 wrapper proof + OpenSpec protocol guidance | dev | - | M6.5 | done |
-| M4.3 | Signal honesty: stuck agents, wedged panes, draft reports, squash noise, false settles | dev | - | M6.3 | done |
 | M5.3 | Spec falsifiability lint (openspec validate does not check scenarios) | dev2 | - | M5.2 | done |
 | M7.1 | Migration and upgrade guide + doctor pointer | dev | - | v1.22.0 | done |
 | M7.2 | Watchdog single-tick jitter root cause | dev2 | - | v1.22.0 | done |
@@ -45,7 +44,6 @@
 | V1 | verify: spec-delta-gate — differential vs openspec archive (adversarial) | verify | - | P2 | done |
 | M9.4 | pending verification must not outlive the board's decision | dev2 | - | M9.2 | done |
 | P2.1 | apply rework: close V1 findings F1–F5 (differential parity) | dev | - | V1 | dropped |
-| V1.1 | re-verify spec-delta-gate after F1–F5 rework (own matrix as the net) | verify | - | P2.1 | dropped |
 | V2 | re-verify spec-delta-gate after F1–F5 rework (verifier's own matrix as the net) | verify | - | P2.1 | done |
 | E2 | explore: scope and split for C1 launch-and-adapter-evidence | dev2 | - | E1 | done |
 | P2.2 | apply rework 2: close F-V2-1 (symlinked delta spec.md invisible to the gate) | dev | - | V2 | dropped |

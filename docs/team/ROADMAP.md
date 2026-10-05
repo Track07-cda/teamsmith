@@ -1,4 +1,4 @@
-# pm-skills · Roadmap
+# teamsmith · Roadmap
 
 > PM 维护。里程碑的退出标准必须是**可执行的验证**（能跑的命令 + 可看的证据），不是「感觉做完了」。
 
@@ -138,7 +138,7 @@ OpenSpec 协议指引缺口（用户指出）。工作流决策见 DECISIONS D10
 - 测试即门禁：`skills/teamsmith/tests/smoke.sh`（临时仓库里端到端，不碰当前项目；带身份隔离自检）。
 - 文档与命令必须一致：已删命令不得再出现在 `SKILL.md`/`references`/`templates`/`README.md`/`scripts`
   （smoke 有词边界判据 + 翻转自测；用法级不变量：#review 必须带 `--dir`）。
-- 本仓库的 PM 是「当前 Pi 会话」（`pm-skills:pi`），agent 在 `.worktrees/{dev,verify}` 里工作。
+- 本仓库的 PM 是「当前 Pi 会话」（`teamsmith:pi`），agent 在 `.worktrees/{dev,verify}` 里工作。
 
 ## 状态快照（2026-09-14 收工）
 

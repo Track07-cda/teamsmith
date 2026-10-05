@@ -1,4 +1,4 @@
-# pm-skills · 目录归属（Ownership）
+# teamsmith · 目录归属（Ownership）
 
 > **只改属于你的目录。** 需要跨目录改动 → 在报告里写 `BLOCKED:` 说明谁该改什么，交回 PM 协调。
 > 没有列出的目录 = PM 独占。
