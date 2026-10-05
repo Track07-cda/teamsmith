@@ -3,7 +3,7 @@ name: teamsmith
 description: teamsmith gives one agent real ownership of a project — it plans, writes self-contained task briefs, dispatches worker agents into their own tmux windows and git worktrees, verifies their work on an independent checkout, merges, and keeps an auditable ledger (BOARD/reviews/threads/DECISIONS). A pulse window (the periodic patrol) wakes the owner only when there is pending work, and the owner can deliberately stand down. Works with Pi; the launch/notify seam is an internal seam (frozen) reserved for a possible future non-Pi adapter, with no compatibility promise. Use when the user wants an agent to own a project end to end, dispatch tasks to worker agents, run agents in parallel in tmux with git worktree isolation, act as a PM/orchestrator over other agents, review an agent's work independently, run the patrol (`pulse`) as a tmux window, wake the PM only when there is pending work, or resume and coordinate a multi-agent project. To start a new project, use the teamsmith-init skill.
 license: MIT
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
 ---
 
 # teamsmith · one agent that actually owns the project

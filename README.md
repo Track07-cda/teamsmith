@@ -56,14 +56,14 @@ than replaced (`--force` replaces only an entry recognised as this skill).
 ### As a Pi package (no global CLI)
 
 ```bash
-pi install git:git@github.com:Track07-cda/teamsmith@v0.1.0      # user level: every project
-pi install -l git:git@github.com:Track07-cda/teamsmith@v0.1.0   # project level: recorded in .pi/settings.json
+pi install git:git@github.com:Track07-cda/teamsmith@v0.1.1      # user level: every project
+pi install -l git:git@github.com:Track07-cda/teamsmith@v0.1.1   # project level: recorded in .pi/settings.json
 ```
 
 - **Pin a released tag**: `@v<version>`, the version `team version` prints. Latest tag:
   `git tag --sort=-v:refname | head -1`.
-- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v0.1.0`) uses your SSH key and works
-  whether or not you have a token; the shorthand `git:github.com/Track07-cda/teamsmith@v0.1.0` takes the HTTPS
+- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v0.1.1`) uses your SSH key and works
+  whether or not you have a token; the shorthand `git:github.com/Track07-cda/teamsmith@v0.1.1` takes the HTTPS
   route, so it works anonymously on the public repository and asks for credentials if your access is private.
 - The clone lands in `~/.pi/agent/git/<host>/<path>` (user level) or `.pi/git/<host>/<path>` (project level); the
   skill directory — the `<skill>` used in every command below — is `<clone>/skills/teamsmith`.

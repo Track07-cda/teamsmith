@@ -3,7 +3,7 @@
 # 由 scripts/team 与各 cmd-*.sh source；不要直接执行。
 # 约定：所有函数名以 team_ 前缀；不依赖 jq / python / node。
 
-TEAM_VERSION="0.1.0"
+TEAM_VERSION="0.1.1"
 
 # ---------------------------------------------------------------- 输出
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then

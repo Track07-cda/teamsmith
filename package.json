@@ -1,6 +1,6 @@
 {
   "name": "teamsmith",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Turn one agent session into a project owner: self-contained task briefs dispatched to worker agents in their own git worktrees, independent verification on a separate checkout, and an auditable ledger (BOARD / reviews / threads / DECISIONS). Runs on Pi today.",
   "license": "MIT",
   "bin": {
