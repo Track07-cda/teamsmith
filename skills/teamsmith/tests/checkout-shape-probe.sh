@@ -15,12 +15,15 @@
 #   ④ 产品面 scratch 树里跑 --select 18,19 → rc 0，11 条内部前提各自 SKIP、零红
 #   ⑤ 内部部分树：删 SCOPE.md → --select 18 红并点名；删 opsx-apply.md → --select 19 红并点名（不许跳过）
 #   ⑤c 反向：机器生成面在位且十个相位文件齐全 → §19 的十条照旧判定（十个 ✓、零 SKIP）
+#   ⑤d 空面不算缺席（P226）：机器生成面在位但是**空目录** → §19 的十条相位检查照旧判定并判红（§19 的
+#      账本 ✓16 ✗10 SKIP0，不是 SKIP10）；同一棵树删掉这两个空面 → 回到 10 条 SKIP、绿（差别只在空目录）
 #   ⑤b 混合形状（P222）：§19 的十条各自可见 SKIP 并点名；§31/§58 的豁免清单按「证据层缺席」跳过并点名，
 #      而两份 lint 的判定照旧；产品文件里植入真问题（裸 tmux / pkill）照旧红并点名
 #   ⑥ 覆盖守门：一条旧断言被换成前提跳过 → coverage-inventory.sh --compare 点名；还原后绿
 #   ⑦ coverage-inventory.sh 自身的两向自检（合成清单：新增允许；丢标签/降计数/降通过数/丢段必红）
 #   ⑨ §12k/§31 的内部依赖：产品面逐条跳过；内部树里 §12k 照旧执行；豁免清单文件**都在**时 §31 照旧
-#      逐条核对（LEGACY 打印）；牙齿一（植入裸 tmux 调用 → §31 判红并点名；前提：那棵树里就在 P162 的
+#      逐条核对（LEGACY 打印）——「都在」指**用例自己声明**的那一条：scratch 树显式剔除环境里的证据层
+#      （P226），树的内容与本地账本归档有没有复原无关；牙齿一（植入裸 tmux 调用 → §31 判红并点名；前提：那棵树里就在 P162 的
 #      tmux() 包装）· 牙齿一的两个影子（一：把 lint 的归属规则改回「同目录互认」→ 牙齿一必须随之变红；
 #      二：用 lint 自己的豁免机制把植入调用记绿 → 牙齿一必须失去牙）· 牙齿二（清单含产品路径 → 不享受
 #      前提跳过）· 产品面正常时判**净** · 影子三（把生成面判据改成恒真 → 删掉的文件从红变跳过）
@@ -64,6 +67,18 @@ pnot() { case "$2" in *"$3"*) pbad "$1（不该出现 [$3]）" ;; *) pok "$1" ;;
 # 翻转）—— 若 scratch 树里的 `scripts/` 是软链，`cp -a` 会把软链原样带进夹具沙箱，改写就穿回真实树
 # （P148 实测两次：references/templates 一次、scripts/lib 一次）。副本很便宜（47M，~0.2s），所以一律真拷。
 # ⑧ 的真树指纹把这条纪律钉在门禁里。
+#
+# P226：scratch 树**不许吃环境**。两份历史豁免清单（tmux-lint / signal-lint）按 sha256 冻结的证据包
+# （`docs/team/reports/*/pkg/**`）刻意不进仓库，但本地检出可能刚从账本归档复原了它们（P225 的复验就是
+# 这么做的）。P226 之前这里「源树里在就拷进来」→ ⑨/⑩ 的内部 scratch 树继承了环境里另外那些注册文件，
+# 而用例合成的那份清单只登记自己声明的一条 → 嵌套 lint 按清单逐条核对时把继承来的文件判红（4 条假红）。
+# 现在构造完**一律显式剔除证据层**：用例要证明「有一条注册文件在位 → 照旧判定」，就自己声明那一条
+# （⑨b/⑩ 的做法），scratch 树的内容因此与环境无关。
+scratch_prune_evidence_layer() { # <树根>：删掉冻结证据层的所有 pkg 目录（找不到就是空的）
+  [ -d "$1/docs/team" ] || return 0
+  find "$1/docs/team" -type d -name pkg -prune -exec rm -rf {} + 2>/dev/null || true
+}
+
 scratch_tree() { # <名字> <product-only|internal|mixed>
   local name="$1" mode="$2" d="$T/$1" x b
   rm -rf "$d"; mkdir -p "$d/skills" "$d/openspec"
@@ -91,19 +106,6 @@ scratch_tree() { # <名字> <product-only|internal|mixed>
     if [ -d "$REAL_ROOT/openspec/changes" ]; then cp -a "$REAL_ROOT/openspec/changes" "$d/openspec/changes"; fi
     for x in "$REAL_ROOT/.pi/prompts"/*; do [ -e "$x" ] || continue; cp -a "$x" "$d/.pi/prompts/$(basename "$x")"; done
     for x in "$REAL_ROOT/.pi/skills"/*; do [ -e "$x" ] || continue; cp -a "$x" "$d/.pi/skills/$(basename "$x")"; done
-    # 两份历史豁免清单（M28 的 tmux-lint 与 P159 的 signal-lint；P176 起两份走同一契约）冻结的证据包同属
-    # 内部面：源树里在就拷进来，两棵 lint 的**内部树**判定才能像真树一样逐条核对（其余账本内容不参与嵌套
-    # 选择，不必复制 97M）。源树里不在（产品面检出）就什么都不拷 —— ⑨/⑩ 的控制据此可见跳过或按前提跳过，
-    # 而不是拿假文件去骗 lint。
-    for _sleg in tmux-lint-legacy.txt signal-lint-legacy.txt; do
-      [ -f "$REAL_ROOT/skills/teamsmith/tests/$_sleg" ] || continue
-      while IFS= read -r _sl; do
-        case "$_sl" in ''|'#'*) continue ;; esac
-        read -r _ssha _scnt _spath _srest <<<"$_sl"
-        [ -n "${_spath:-}" ] || continue
-        case "$_spath" in docs/team/*) [ -e "$REAL_ROOT/$_spath" ] || continue; mkdir -p "$d/$(dirname "$_spath")"; cp -a "$REAL_ROOT/$_spath" "$d/$_spath" 2>/dev/null || true ;; esac
-      done < "$REAL_ROOT/skills/teamsmith/tests/$_sleg"
-    done
   fi
   if [ "$mode" = "mixed" ]; then
     # P222：公开仓/CI 检出的形状（与源树里有没有证据包无关，夹具必须确定性）—— 账本可读层、
@@ -111,8 +113,9 @@ scratch_tree() { # <名字> <product-only|internal|mixed>
     # **证据层**（docs/team/reports/*/pkg/**，被 .gitignore 刻意排除）都不在。
     rm -rf "$d/.pi/prompts" "$d/.pi/skills"
     mkdir -p "$d/openspec/changes/archive" "$d/docs/team/reports"
-    find "$d/docs/team" -type d -name pkg -prune -exec rm -rf {} + 2>/dev/null || true
   fi
+  # P226：所有形状共用同一个执行点 —— 构造完就剔除证据层（不能有第二条拷贝路径把它带进来）。
+  scratch_prune_evidence_layer "$d"
   # 每棵 scratch 树自己是一个 git 仓库：嵌套 run 的 §0d（冲突标记守卫）要的是「受检的 git 工作树」——
   # 产品面检出的宿主树未必是仓库（PM 也可能直接在导出的目录里跑），不能让嵌套 run 因此假红。
   git -C "$d" init -q -b main 2>/dev/null || true
@@ -333,6 +336,31 @@ peq "⑤c 十条相位前提全部照旧判定（十条 ✓）" \
 peq "⑤c 一条机器生成面前提 SKIP 都没有" \
   "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-rev19.log" | grep -c '^  SKIP（条件不满足）.*机器生成面' || true)" "0"
 
+# ── ⑤d 空面不算缺席（P226 固化 P225 的实测）：机器生成面**在位但是空目录**时，「整棵面不在」这个跳过
+#      前提不成立 —— 人在本机装了生成器却一个相位文件都没有，那是真问题：§19 的十条照旧判定并判红
+#      （§19 自身的账本 = ✓16 ✗10 SKIP0，exit 1）。同一棵树删掉这两个空面 → 回到 10 条 SKIP、绿：
+#      差别只在空目录，证明这条控制咬的正是「面在（哪怕是空目录）就不许跳」。
+P_EMPTY="$(scratch_tree empty mixed)"
+mkdir -p "$P_EMPTY/.pi/prompts" "$P_EMPTY/.pi/skills"
+if nest "$P_EMPTY" "$T/nest-empty19.log" --select 19; then
+  pbad "⑤d 空生成面（.pi/prompts、.pi/skills 都是空目录）→ §19 仍判绿（空面被当成了缺席）"
+else
+  peq "⑤d 空生成面的 §19 账本计数 = ✓16 ✗10 SKIP0（不是 SKIP10）" \
+    "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-empty19.log" | grep -E '^#[0-9]+ 19 · ' | grep -o '✓16 ✗10 SKIP0' | head -1)" \
+    "✓16 ✗10 SKIP0"
+  peq "⑤d 十条相位检查照旧判定并判红（十条 ✗）" \
+    "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-empty19.log" | grep -c '^  ✗ \(本仓库为 Pi 生成了相位命令\|相位 skill \)' || true)" "10"
+  peq "⑤d 一条机器生成面前提 SKIP 都没有（空面不算缺席）" \
+    "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-empty19.log" | grep -c '^  SKIP（条件不满足）.*机器生成面' || true)" "0"
+fi
+rm -rf "$P_EMPTY/.pi/prompts" "$P_EMPTY/.pi/skills"
+nest "$P_EMPTY" "$T/nest-empty19-gone.log" --select 19 && P_EMPTY_GONE_RC=0 || P_EMPTY_GONE_RC=$?
+peq "⑤d 同一棵树删掉两个空面 → §19 退出 0（回到可跳过形状）" "$P_EMPTY_GONE_RC" "0"
+peq "⑤d 删掉空面后十条相位前提各自 SKIP（十个）" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-empty19-gone.log" | grep -c '^  SKIP（条件不满足）.*机器生成面' || true)" "10"
+peq "⑤d 删掉空面后零红（差别只在空目录）" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-empty19-gone.log" | grep -c '^  ✗ ' || true)" "0"
+
 # ── ⑤b 混合形状（P222）：公开仓 CI / 干净 clone 的形状 —— 账本、AGENTS.md、SCOPE.md、openspec/changes
 #      都在，.**机器生成面**（.pi/prompts、.pi/skills）与**证据层**（docs/team/reports/*/pkg/**）不在。
 #      要的是：⓪ 旧规则下同一棵树红十条（红→绿现场）；① §19 的十条从断言变成**可见 SKIP 且各自点名**；
@@ -507,6 +535,11 @@ phas "⑦ 真实源码静态清单里有 18 段" "$(cat "$T/static-self.tsv")" "
 # 产品路径）必须照旧判红。
 P_PO2="$(scratch_tree po2 product-only)"
 P_IN2="$(scratch_tree in2 internal)"
+# P226 夹具自洽的直接守卫：构造完的 scratch 树**不含任何证据层文件**（不吃环境里的账本归档）——
+# ⑨b/⑩ 的合成清单只登记下面自己声明的那一条。影子（报告里有）：把「源树里在就拷进来」加回去 →
+# 在复原了 17 个注册文件的环境里这条立刻变红（期望 0、实际 17）。
+peq "⑨ scratch 树自洽：构造后证据层为空（不吃环境里的注册文件）" \
+  "$(find "$P_IN2/docs/team/reports" -path '*/pkg/*' -type f 2>/dev/null | wc -l | tr -d ' ')" "0"
 
 nest "$P_PO2" "$T/nest-po2.log" --select 12k,31 && P_PO2_RC=0 || P_PO2_RC=$?
 peq "⑨ 产品面树 --select 12k,31 退出 0" "$P_PO2_RC" "0"
@@ -537,6 +570,8 @@ P_IN2_LEG="$P_IN2/skills/teamsmith/tests/tmux-lint-legacy.txt"
 mkdir -p "$P_IN2/docs/team/reports/P222-fixture/pkg"
 printf '#!/usr/bin/env bash\ntmux kill-server\npkill -f p222-fixture-marker\n' > "$P_IN2/docs/team/reports/P222-fixture/pkg/legacy.sh"
 _EV_SHA="$(sha256sum "$P_IN2/docs/team/reports/P222-fixture/pkg/legacy.sh" | cut -d' ' -f1)"
+peq "⑨ 证据层只有用例自己声明的那一条注册文件（树自洽）" \
+  "$(find "$P_IN2/docs/team/reports" -path '*/pkg/*' -type f 2>/dev/null | wc -l | tr -d ' ')" "1"
 { sed '/^[^#]/d' "$P_IN2_LEG"
   printf '%s  1  docs/team/reports/P222-fixture/pkg/legacy.sh  # P222 反向控制：证据层在位，这一册账照旧核对\n' "$_EV_SHA"; } \
   > "$P_IN2_LEG"
