@@ -365,7 +365,7 @@
 | E9 | 平级产品探索角色：需求来源、直接异议通道与最小诚实试点（只读探索） | verify | - | - | done |
 | E10 | 产品探索能力试跑：自主研究项目负责人目标并提出候选需求（只读） | dev-bob | - | - | done |
 | E11 | Product discovery from a concrete usage workflow | dev2 | - | - | wip |
-| E12 | Product opportunity exploration in a real business project | dev3 | - | - | todo |
+| E12 | Product opportunity exploration in a real business project | dev3 | - | - | wip |
 
 ## 当前里程碑
 
