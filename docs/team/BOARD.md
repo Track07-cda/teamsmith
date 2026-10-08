@@ -366,6 +366,7 @@
 | E10 | 产品探索能力试跑：自主研究项目负责人目标并提出候选需求（只读） | dev-bob | - | - | done |
 | E11 | Product discovery from a concrete usage workflow | dev2 | - | - | done |
 | E12 | Product opportunity exploration in a real business project | dev3 | - | - | done |
+| E13 | Task-model routing impact exploration | verify | - | - | todo |
 
 ## 当前里程碑
 

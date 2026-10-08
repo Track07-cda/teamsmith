@@ -145,3 +145,6 @@ distrobox-host-exec podman run --rm --pid=host --cgroups=enabled --userns=keep-i
 
 ### 2026-10-05T15:17:06Z · from: pm · re: -
 E9 开工提示：dispatch --print 生成的通用提示把 hard-blocked 通知错误写成 team notify verify；正确的收件人是 pm。若确实 BLOCKED，请从席位工作树执行 bash skills/teamsmith/scripts/team notify pm "<一句话>"，并在报告标注；不要按错误示例通知自己。此消息只纠正路由，不拓展研究范围。
+
+### 2026-10-08T07:11:59Z · from: pm · re: -
+E13 (task-model routing impact exploration): new planning-only assignment under approved D101. Read the E13 brief and newest thread before starting. Use only your report and the authorized external evidence directory; no product/config/spec changes, installations, remote actions or real provider probe calls. This round is explicitly gpt-6.1-sol:high in a fresh session. Older thread advice about models/containers is historical; the current E13 brief wins. If blocked, notify pm, not verify; the generated dispatch example has the known recipient error. The PM will review the exploration before issuing a separate propose brief.
