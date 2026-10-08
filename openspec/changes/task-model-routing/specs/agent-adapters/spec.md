@@ -1,0 +1,147 @@
+## MODIFIED Requirements
+
+### Requirement: The PM is an adapter too
+
+teamsmith SHALL launch the PM through the same template engine, configured by `TEAM_PM_CMD` (the PM placeholder set
+plus the PM-only `{resume_args}`), `TEAM_PM_BIN` (the executable for the start-time existence check and the liveness
+identity check: `TEAM_PM_BIN` > the first word of `TEAM_PM_CMD` > `TEAM_PI_BIN`) and `TEAM_PM_RESUME_ARGS`. With all
+three empty, `team up` SHALL use the existing built-in Pi launcher, with independent required `TEAM_PM_MODEL` and the PM lifecycle continuity guard — `TEAM_PI_BIN --provider <p> --model <m>
+--skill <skill dir> <guarded continuity arguments> @state/pm-prompt.md`, with the briefing passed as the window harness' `argv[0]` and never on
+the command line. A configured template MUST be expanded under the same placeholder rules and fail the same way as
+the worker side: a blank, multi-line or unknown-token `TEAM_PM_CMD` (including the worker-only `{notify_ext}` and
+`{summary}`) MUST fail before the PM window is respawned, naming `TEAM_PM_CMD` and the supported placeholders; an
+unresolvable `TEAM_PM_BIN` MUST fail the same way, naming the key and the `PATH`. When `TEAM_PM_RESUME_ARGS` is
+empty on a custom CLI the start MUST state that the session history is **not** continued and name the handover
+(`docs/team/**`, `team inbox`, `team digest`); when the key is set but the template does not reference
+`{resume_args}`, that too MUST be reported as not continued. A launched attempt that fails MUST write
+`state/pm-launch-failed.log` (rendered command, resolved binary, exit code, window tail) and exit non-zero. Why the
+PM side is deliberately asymmetric (no turn-end notification, no guaranteed continuity):
+`references/agent-adapters.md` §2.
+
+#### Scenario: The empty keys keep the built-in Pi launch path
+
+- **GIVEN** a fixture project with `TEAM_PM_CMD`, `TEAM_PM_BIN` and `TEAM_PM_RESUME_ARGS` empty and `TEAM_PI_BIN`
+  pointing at a CLI that stays alive, and a valid same-model PM launch record
+- **WHEN** `team up` starts the PM
+- **THEN** the argv of the process recorded in `state/pm.pid` is the built-in one: `<TEAM_PI_BIN> --provider <p>
+  --model <m> --skill <skill dir> -c @.pi/team/state/pm-prompt.md`, with no leftover `{` token and no briefing text
+- **AND** `team paths` reports the worker adapter as `built-in (Pi)`
+
+#### Scenario: A malformed PM template fails before the window is respawned
+
+- **GIVEN** `TEAM_PM_CMD` is one of `'mycli {sessionid} {prompt}'`, `'mycli { cwd } {prompt}'`, `'   '`, a
+  two-line template whose second line is `touch <sentinel>`, or a template using the worker-only `{notify_ext}` /
+  `{summary}`
+- **WHEN** `team up` runs
+- **THEN** it exits non-zero, the message names `TEAM_PM_CMD` and the supported placeholder list (including
+  `{resume_args}`), no PM window is respawned, and the sentinel file of the multi-line template does not exist
+
+#### Scenario: An unresolvable PM CLI fails before the start
+
+- **GIVEN** `TEAM_PM_CMD='nosuchcli {prompt}'` and no such executable
+- **WHEN** `team up` runs
+- **THEN** it exits non-zero naming the resolved binary and `TEAM_PM_BIN`, instead of respawning a window and
+  reporting a missing agent afterwards
+
+#### Scenario: A custom PM CLI receives the briefing and runs in the main worktree
+
+- **GIVEN** `TEAM_PM_CMD='fake-pm.sh --pf {prompt_file} --ask {prompt}'` with `TEAM_PM_BIN` pointing at that script
+- **WHEN** `team up` starts the PM
+- **THEN** the window runs that CLI with its working directory set to the project's main worktree
+- **AND** the single argument delivered as `{prompt}` is byte-identical to `state/pm-prompt.md`, and the process
+  recorded in `state/pm.pid` is the CLI itself (not the harness shell that outlives it)
+
+#### Scenario: An empty resume setting is reported as not continuing
+
+- **GIVEN** a custom `TEAM_PM_CMD` and empty `TEAM_PM_RESUME_ARGS`
+- **WHEN** `team up` starts the PM
+- **THEN** the output says the history is not continued and points at `docs/team/**`, `team inbox` and
+  `team digest` as the handover
+- **AND** in a separate fixture with trusted same-model PM metadata, `TEAM_PM_RESUME_ARGS=--continue` and a template consuming `{provider}`, `{model}` and `{resume_args}`, the output reports how the session is continued and the arguments really appear in the CLI's argv
+- **AND** with the key set but `{resume_args}` missing from the template, the output reports that the arguments
+  are not used
+
+#### Scenario: A failed PM start leaves evidence and exits non-zero
+
+- **GIVEN** a custom PM CLI that prints an error and exits 7
+- **WHEN** `team up` runs
+- **THEN** it exits non-zero and names `state/pm-launch-failed.log`
+- **AND** that file holds the rendered command, the resolved binary, `exit   : 7` and the window's last non-blank
+  output, and the window is not killed together with the diagnostic
+
+### Requirement: The contract promises Pi; the launch and notify seam is an internal frozen seam
+
+teamsmith SHALL promise exactly one harness: **Pi**, at the version floor `README.md` states and `team doctor`
+enforces (Pi ≥ 0.76.0 today — the `--session-id` floor). The four worker keys (`TEAM_AGENT_CMD`,
+`TEAM_AGENT_NOTIFY_CMD`, `TEAM_AGENT_LOG_GLOB`, `TEAM_AGENT_BIN`) and the three PM keys (`TEAM_PM_CMD`,
+`TEAM_PM_BIN`, `TEAM_PM_RESUME_ARGS`) SHALL be described as an **internal seam (frozen)**: the built-in Pi
+paths are rendered by the same engine, the seam is reserved for a possible future non-Pi adapter, and
+teamsmith makes no compatibility promise about it — it is not a public extension point and the new-project
+questionnaire MUST NOT ask about it or name its keys.
+
+The claimed surface — `README.md`, `skills/teamsmith/SKILL.md` (frontmatter `description`, the
+`## Agent adapters` section and the deep-reading table row), `skills/teamsmith-init/SKILL.md`,
+`skills/teamsmith/references/agent-adapters.md`, `references/config.md`, `references/migration.md`,
+`references/troubleshooting.md`, `templates/config.sh.tmpl` and the degradation message `scripts/monitor.mjs`
+prints when no session log matches — MUST NOT advertise another harness as supported: the phrases
+`any TUI agent`, `any TUI Agent`, `another TUI agent`, `其它 TUI agent` and `任意 TUI agent` MUST NOT appear
+anywhere on it, and
+every mention of a non-Pi CLI SHALL carry the frozen wording (reserved for a possible future non-Pi adapter,
+no compatibility promise, not a supported extension point). Source comments inside `scripts/**` and the test
+suite are outside that documentation-advertising surface, not outside the safety contract. This routing change modifies model/SID/continuity arguments and associated guards as specified here and by dispatch/PM lifecycle, while preserving the template placeholder vocabulary, engine validation, first-word binary resolution, notification data handling, extension/skill set and PID/nonce proof safety. It does not widen harness support or permit skipping those regression assertions.
+
+The frozen seam remains usable and the template/first-word/notification contracts remain. Built-in worker commands SHALL keep all existing extensions and `--skill`, but use the routing assignment's model and unique SID. PM commands SHALL keep their existing extensions, skill and out-of-band briefing but take only independent PM policy and guarded continuity arguments. Parameter changes do not widen harness support or introduce another launcher. Pi alone owns reasoning, message conversion, provider compatibility and later internal manual model switches; Teamsmith records its own selected launch parameters, not every later inference.
+
+#### Scenario: No claimed file advertises another harness
+
+- **WHEN** the claimed surface is searched for `any TUI agent`, `any TUI Agent`, `another TUI agent`,
+  `其它 TUI agent` and `任意 TUI agent`
+- **THEN** no hit remains, and the fixture's red side — the same search against a scratch tree with one of the
+  phrases appended to `README.md` or `skills/teamsmith/SKILL.md` — prints that file and line and exits
+  non-zero
+
+#### Scenario: The seam is documented as frozen and stays usable
+
+- **GIVEN** `TEAM_AGENT_CMD='myagent run --ask {prompt}'` and `TEAM_AGENT_BIN=bash`
+- **WHEN** `team dispatch dev T1.1 <brief> --print` runs, and `references/agent-adapters.md` is read from its
+  first heading onwards
+- **THEN** the dispatch prints `adapter: custom: myagent run` and renders the command — no refusal, no
+  "unsupported" error, no doctor failure for the sole reason that the harness is not Pi — and the doc states,
+  before its first worked non-Pi example, that the seam is internal and frozen with no compatibility promise
+
+#### Scenario: The worked non-Pi examples are marked as seam documentation
+
+- **GIVEN** `references/agent-adapters.md` and `templates/config.sh.tmpl`
+- **WHEN** both are read
+- **THEN** the reference doc keeps its worker launch table, its notify table and its
+  `<!-- pm-side:begin -->`/`<!-- pm-side:end -->` PM table with every supported placeholder (the smoke
+  suite's doc↔engine scanners, §6f and §6i, still assert all supported placeholders and missing/unknown-token failures; fixtures may receive legitimate new model policy/assignment inputs, but no assertion is removed, weakened or skipped), while the contract template offers
+  no ready-to-use example of another CLI: its adapter section states the seam is internal and frozen and
+  points at the reference doc
+
+#### Scenario: The built-in Pi commands are byte-for-byte unchanged
+
+- **GIVEN** every adapter key empty and valid routing/PM identities
+- **WHEN** worker and PM renderers run
+- **THEN** the extension and skill portions remain byte-identical to their previous forms, while model/SID/continuity portions match the new resolved identities; neither contains leftover `{` or inlined briefing
+- **AND** the updated render fixtures capture the same full arguments that actual recording launches receive
+
+#### Scenario: The daily description routes Pi and still points at the init skill
+
+- **WHEN** the `description` of `skills/teamsmith/SKILL.md` is extracted
+- **THEN** it names Pi as the harness, contains none of the five banned phrases, still contains the
+  `teamsmith-init` pointer, and stays within the 1024-character limit the skill-load gate checks
+
+## ADDED Requirements
+
+### Requirement: Launch parameter ownership ends at the Pi boundary
+
+Worker built-in/template rendering SHALL consume one resolved complete launch identity; first slash splits provider from model remainder, including multi-slash names and suffix verbatim. PM rendering SHALL use only its required independent model through the existing engine. Built-in Pi continuity and identity extra-argument checks SHALL share the same ownership rules; templates/extra args cannot secretly replace a guarded identity and still claim exact resume. Frozen seam remains internal and does not imply other-harness compatibility. Teamsmith SHALL not inspect, transform or replay hidden/encrypted reasoning or message blocks, enforce a model compatibility matrix or claim detection of later Pi-internal manual model changes.
+
+#### Scenario: Rendered arguments and records describe the same selection
+- **WHEN** a worker override `openrouter/vendor/model:custom` and an independent PM `vendor/pm:high` are rendered and recording-launched
+- **THEN** provider/model split, suffix, SID and source match their respective committed identity/preview; the PM does not select worker policy
+
+#### Scenario: Boundary guidance cannot promise reasoning conversion
+- **WHEN** PM/worker/model migration/adapter guidance is read and its fixture assertions run
+- **THEN** it assigns model/message compatibility to Pi, describes only Teamsmith launch/resume restrictions and contains no reasoning bridge/replay/classifier/matrix promise

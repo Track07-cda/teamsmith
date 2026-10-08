@@ -1,13 +1,34 @@
 # task-model-routing · Proposal review
 
 时间: 2026-10-08
-verdict: **NEEDS-CHANGES**
+verdict: **ACCEPTED**
 任务: E14（任务模型路由提案）
 作者: verify；评审: pm
 受检分支: `task/E14-task-model-routing-propose`
-受检 HEAD: `357c88c8872bee7aa4cef7e722828f4c7c9acab5`
+受检 HEAD: `1ea1ba61a48b2a698c491db26790826818a2a70f`
 
-## Independent checks and their limit
+## 修订复核与当前结论
+
+R1–R4 已在 proposal/design/tasks、相关 deltas 和作者追加报告中闭合：
+
+- R1：合法删除未来类别映射不使完整、匹配的同任务身份失效；新任务仍须合法映射，整体非法配置、身份变化和换模型守卫保留。配置/读面/恢复规划已一致。
+- R2：正限额目标遇到其他 proven-live 但模型身份不可判定的 worker，不能按零占用放行；预览/force、无副作用、显式本项目修复及 dead/PM/unlimited 对照齐全。
+- R3：旧的 never-behavior、不可编辑测试文件及冻结旧模型字节表述已限定或修正；允许合法夹具适配，不允许削弱或跳过通知、Pi版本、插件、占位符及 PID/nonce 安全断言。
+- R4：切片依赖和文件交接在私有非部署源码树进行，不将部分实现放共享 main，不提前标 apply done。完整源码的共享源隔离或明确共享影响、保护分支落地、本项目配置/fresh 和其他项目采纳分别授权；不承诺未知消费者零影响，不新增自动部署器。
+
+PM 逐份复核修订 diff。独立冻结副本重跑官方 context/status、change strict、all strict（14/14）、spec-refs、ledger-ban、diff-check；另在 disposable projection 执行官方试归档后 all strict（13/13）与 spec-refs，均 exit 0。27 个实施项仍未勾，试归档告警保留。独立记录检查的选段为 NONE；收录覆盖 OpenSpec 路径后另实跑 `0 0b 0c 0d 18c`：46 通过、0 失败、0 跳过，其他 120 段未跑，命令与摘录在独立证据目录 `collection-smoke-receipt.txt`。没有全量 smoke、真实归档、产品实现反例翻转、TUI 或 provider 质量测试。
+
+独立证据：`../pm-skills-ledger/team/reviews/E14/revision-1ea1ba6/`。检查前后共享产品字节、实际配置、worker launch record 和全局技能链接快照一致；没有用户真实会话读取、安装、配置迁移或链接替换。
+
+十项审核均闭合：批准范围一致、可观察场景、双向任务覆盖、职责边界、现有规划命令实跑与未来接口明确标注、反例控制、正确 MODIFIED/REMOVED、切片及串行所有权、单一 change 绑定、七个 capability 与 brief anchor 可解析。
+
+**仅批准提案，不是实现或上线验收。** 当前恢复缺陷尚未修复。收录只增加规划工件与团队记录，不改 canonical specs 或产品代码。用户明确批准隔离实现后，PM 再写 apply briefs；协调使用既有控制 CLI，被测私有 CLI 只指向授权夹具，避免误用真实团队配置。完整实现由非 apply 作者验证，main 落地、共享采纳、配置/fresh 和真正归档仍守原授权门槛。Pulse 关键回复页不纳入本变更。
+
+## 初审历史（NEEDS-CHANGES，修订后已关闭）
+
+初审提交：`357c88c8872bee7aa4cef7e722828f4c7c9acab5`。以下保留当时证据与返工要求，不代表当前判定。
+
+### Independent checks and their limit
 
 PM 从自己的 main 建独立干净 clone，再从受检提交提取 11 份 OpenSpec 工件和原报告；未复用作者的执行脚本，也未写入其证据目录。逐份阅读 proposal/design/tasks 和七份 delta。
 
@@ -17,7 +38,7 @@ PM 从自己的 main 建独立干净 clone，再从受检提交提取 11 份 Ope
 
 这些结果只验证结构、引用、隐私和试归档可应用性。未跑产品 smoke、真实 TUI、真实 Pi/provider 或模型质量评测；尚不存在新功能实现。结构检查不能证明以下语义问题已经解决。
 
-## Required revisions
+## 初审要求（R1–R4 已关闭）
 
 ### R1 · Configuration edits must not invalidate an otherwise complete same-task assignment
 
@@ -57,6 +78,6 @@ PM 只读核对发现：本机 `~/.agents/skills/teamsmith` 和 `~/.agents/skill
 
 正式 source/main 采纳之前，说明共享源隔离或明确批准共享影响所需的额外授权/前置步骤；本轮不得自行改全局链接/安装或其他项目。区分源代码验证、保护分支落地、本项目配置切换、共享来源采纳；不能以“不调用 installer”证明“共享安装无影响”。在本设计与相关 rollout 场景中限定能实际保证的范围，不另造自动扫描/部署系统。
 
-## Handoff
+## 初审返工交接（已完成，保留原文）
 
 退回原 propose 作者，只修规划工件与自己的报告，补跑原 brief 的规划检查和私有试归档。可在报告追加更正与新证据，保留已提交原版本供对照。全部实现任务仍未勾选，不改产品代码/当前配置、规范基线或共享链接。修订报告再次交 PM 审核；现在不收录为获批方案，不关单，不派 apply。Pulse 关键回复页是另外的方向，不纳入本变更。
