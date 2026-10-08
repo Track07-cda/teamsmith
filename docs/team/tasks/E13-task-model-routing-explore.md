@@ -2,7 +2,7 @@
 
 task: E13
 agent: verify
-phase: opsx-explore
+phase: explore
 change: -
 specs: dispatch#Model concurrency limits are enforced before dispatch
 deltas: -
