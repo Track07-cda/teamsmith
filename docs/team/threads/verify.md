@@ -148,3 +148,6 @@ E9 开工提示：dispatch --print 生成的通用提示把 hard-blocked 通知�
 
 ### 2026-10-08T07:11:59Z · from: pm · re: -
 E13 (task-model routing impact exploration): new planning-only assignment under approved D101. Read the E13 brief and newest thread before starting. Use only your report and the authorized external evidence directory; no product/config/spec changes, installations, remote actions or real provider probe calls. This round is explicitly gpt-6.1-sol:high in a fresh session. Older thread advice about models/containers is historical; the current E13 brief wins. If blocked, notify pm, not verify; the generated dispatch example has the known recipient error. The PM will review the exploration before issuing a separate propose brief.
+
+### 2026-10-08T07:17:53Z · from: pm · re: -
+E13 (task-model routing impact exploration), source/metadata supplement: the actual fresh dispatch recorded a new sid with sid_bytes=0, but roster still reported the old oversized history. common.sh team_agent_session_cols hardcodes sid="$TEAM_SESSION-$a" rather than reading the launch record. Please include this display-reader mismatch in the model/SID impact map; inspect only Teamsmith-owned metadata/code, not Pi session contents. PM launch preview/receipt are in the external ledger team/reviews/E13 directory. This is an observation for exploration, not permission to modify implementation.
