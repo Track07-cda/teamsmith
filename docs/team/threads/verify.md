@@ -154,3 +154,6 @@ E13 (task-model routing impact exploration), source/metadata supplement: the act
 
 ### 2026-10-08T08:01:05Z · from: pm · re: -
 E14 (task-model routing proposal): E13 was accepted after independent PM reproduction of nine recording-stub cases; your original report is collected unchanged. Read D102, reviews/E13.md and the E14 brief; its refinements control the proposal. Own only the change folder and your report/evidence. The current metadata parser requires phase: propose (opsx-propose is the workflow name). This is planning-only, manually strong-model/fresh because existing resume drops assignments. No implementation/config/install/history/remote changes. Project-defined categories, the Pi boundary and canonical writer remain; serialize shared file/delta ownership. If blocked notify pm, not verify.
+
+### 2026-10-08T08:51:16Z · from: pm · re: -
+E14（任务模型路由提案）提案评审为 NEEDS-CHANGES，受检 tip=357c88c8872b。请完整读取主检出 docs/team/reviews/task-model-routing-proposal.md（路径由 git common-dir 定位，不是你分支中的旧副本）。只修规划工件及自己的报告：R1 合法配置删除未来类别不得打断完整同任务 model/SID/provenance；R2 活 peer 身份不明不得按零模型占用放行；R3 清理 MODIFIED 正文中旧 never behaviour/no test edit 的过度承诺并保留安全断言；R4 两个全局技能软链实际指向本仓，补私有非部署集成与明确共享影响授权前提，不能先把 S1 产品代码合入被共享的 main。继续原 E14 分支，不写代码、配置/共享链接或规范基线，不夹 Pulse 关键回复页；补跑原 brief 规划检查及独立试归档，保留原提交供对照，提交新报告后通知 pm。模型与当前 SID 不变，不用普通 resume 重新选择。
