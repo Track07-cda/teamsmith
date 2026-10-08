@@ -367,7 +367,7 @@
 | E11 | Product discovery from a concrete usage workflow | dev2 | - | - | done |
 | E12 | Product opportunity exploration in a real business project | dev3 | - | - | done |
 | E13 | Task-model routing impact exploration | verify | task/E13-task-model-routing-explore | - | done |
-| E14 | Task-model routing proposal | verify | - | E13 | todo |
+| E14 | Task-model routing proposal | verify | task/E14-task-model-routing-propose | E13 | wip |
 
 ## 当前里程碑
 
