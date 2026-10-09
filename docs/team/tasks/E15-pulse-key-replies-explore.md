@@ -6,7 +6,6 @@ phase: explore
 category: routine
 change: -
 specs: panel#The console composes four pages and remembers the position
-anchor: specs
 deltas: -
 branch: task/E15-pulse-key-replies-explore
 deps: D104
