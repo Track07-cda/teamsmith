@@ -257,3 +257,6 @@ P228 新授权：只做 task-model-routing 的 S1 私有核心实现；先读新
 
 ### 2026-10-09T03:23:38Z · from: pm · re: P228
 P228 授权阻塞已解除。PM 独立核对 be7f76f1d563 PARTIAL 与原 close 调用链，确认属于接受提案 tasks 3.2，补 cmd-review.sh 的 team_cmd_close 及仅此入口使用的必要新局部 helper 窄授权；其余 review/gate/复验和合并路径不动。必须在杀窗前取得正确锁、最终复核身份、清理完整记录，按接受的既有合同测试；不要在 common 重定义入口绕过授权。当前分支干净，仅有 PARTIAL 报告，保留该提交及阻塞证据，交付时补完成记录。主检出任务书和本线程最新条目是更新后的授权，自己的旧 worktree 文档不要改。你仍是 P228 唯一核心作者；已有进程、模型和 fresh SID 保留，本次只发继续消息，不用普通 resume 或重启。继续 read-only 核对后实施并完成切片验收，不做其他范围。
+
+### 2026-10-09T08:54:41Z · from: pm · re: P228
+P228 中断恢复：PM已核对两条auto interrupted、147e233eabae和8个未提交文件，dev进程仍存活，原强模型/fresh SID teamsmith-dev-1791515808保留。没有重启/普通resume/丢弃修改。先读git status、log、本线程最新条目及主检出最新版P228 brief，保留全部已改和新helper；收割P228-acceptance-flips并逐项看rc（不是总体摘要绿）。05:49最终日志仍有routes-final rc=1：翻转①变异未落地、cmd-agents.sh与真树同字节；routing-flips rc=1：flip-unmapped-override-red及named-assertion未判红；翻转子组中的故意红是预期对照，不能混成产品失败或忽略顶层失败。修正真实实现或断言/变异定位，保留原失败证据，在隔离稳定副本补跑定向及反例，不改树时跑长门禁，不删/skip/弱化旧断言。所有验收完成后小步提交8文件、提交更新后的S1报告与coverage/冻结交接、确认干净且所有job收割，再notify pm。旧close授权PARTIAL报告保留历史，追加实际进展；不要以旧报告当新交付。如果调用/环境硬阻塞，先给可核验的原因和PARTIAL，不无说明结束。保持仅私有S1范围；当前未独立复验/交付，不mark done、不改main/实际配置/共享来源。
