@@ -266,3 +266,6 @@ P228私有候选16842c9已收到，PM只确认干净及受检017fbf9到报告tip
 
 ### 2026-10-09T15:26:17Z · from: pm · re: P228
 P228返修：V19 0380cdd与PM新clone/新私有fixture都确认F1/F2，16842c9判FAIL，不接收、不做S2/S3。原S1写集合现仅返还给你；请先读主检出最新版brief、reviews/V19.md和本条，保留旧报告追加修订。F1: worker硬编码provider/model/SID模板preview/real均rc0而actual argv与assignment矛盾；合法占位符控制一致。F2: nonce含空格时Bash拒绝但monitor仍吐合成SID事件。不要只特判这两条：审查共享launcher/PM相关入口的参数所有权与重复/缺失/硬编码旁路；审查各完整assignment读者的nonce/SID/path/started/model等统一数据判据，非法身份不可用。Pi内部手动切换/推理完全不碰。旧验收全绿却漏缺陷，必须补真实argv、纯拒绝前后hash、合法模型/SID控制、跨读者损坏矩阵及真实坏源码翻转；原11条/245+59及其他既有断言不弱化，完整重跑brief切片。代码先小步验证，长门禁在稳定隔离副本后台跑并全收割。PM显式原强模型fresh交接，不能普通resume或用便宜默认；结束时提交修订报告/冻结新tip/树干净/notify pm。新源如必须超授权具体BLOCKED，勿改main/配置/共享/真实团队。
+
+### 2026-10-09T17:04:46Z · from: pm · re: P228
+P228返修a21a0a324805已收到，仍未独立验收。候选及fbc42f4源码/测试冻结；当前暂停本实现席位释放强模型给dev3/V19 fresh第二轮。保留原报告及失败；不要修改冻结路径、派S2/S3、切配置或推送。候选新clone/独立结果和私有RECEIVED均由PM处理，原S1写权限暂收回。

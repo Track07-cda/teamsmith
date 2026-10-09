@@ -154,3 +154,6 @@ V19 两次 interrupted 通知已收到；进程仍在，原模型/SID保持，�
 
 ### 2026-10-09T15:21:44Z · from: pm · re: V19
 V19冻结S1结论FAIL经PM在新clone/新私有fixture复现，报告原件收录，PM reviews/V19.md为FAIL，不接收P228。验证任务保持未通过；暂停本席位让强模型名额返给作者修F1/F2。旧失败证据/报告不改，不修候选、不处理其它任务；新候选产生后由PM另更输入并fresh复验。
+
+### 2026-10-09T17:04:46Z · from: pm · re: V19
+V19第二轮：主检出brief已更新为返修a21a0a324805，新独立clone与新证据目录，旧FAIL/clone/脚本保留。显式原强模型fresh；先读主检出最新线程/brief与D109，不能继续对旧输入作结论。补旧红→新拒绝/合法控制及独立相邻反例，审fresh/opaque/continued合同边界及monitor共用Bash解析的阻塞风险，只写自己的报告追加及仓外证据，不修候选；S1结果不可泛化整个change。
