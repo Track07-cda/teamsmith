@@ -6,7 +6,7 @@ phase: propose
 category: analysis
 change: pulse-key-replies
 specs: panel, key-replies
-deltas: specs/panel/spec.md, specs/key-replies/spec.md
+deltas: panel, key-replies
 branch: task/E16-pulse-key-replies-propose
 deps: E15
 
