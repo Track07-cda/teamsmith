@@ -14,7 +14,7 @@ deps: P228 repaired S1 candidate a21a0a32480557b847d3b0ea43ad88a0847823df; E14 a
 
 用户已批准隔离实现与独立验证。你未参与该 change 的提案或实现。只复验 P228 的 S1 私有候选，不验证尚未实施的 S2 panel、S3 初始化/指南，不把局部通过说成整个 change 已通过。第一轮候选 16842c9 的 FAIL 报告及独立原证据保持不变。本轮输入是作者返修后的冻结候选；由 PM 暂停已交付的实现席位，显式使用原强模型、fresh 派单，不超并发、不自行启动。
 
-阅读 AGENTS、自己的最新线程、本 brief、OWNERSHIP、D104–D108；再读接受的 task-model-routing proposal/design/tasks、七份 delta 与对应 canonical specs、P228 brief/完整报告/冻结清单。历史线程的 E12/P158 命令不属于本任务。原生 OpenSpec 1.8.0 没有 verify workflow，按本仓 openspec reference 的独立验证流程执行，不安装或生成工具。
+阅读 AGENTS、自己的最新线程、本 brief、OWNERSHIP、D104–D109；再读接受的 task-model-routing proposal/design/tasks、七份 delta 与对应 canonical specs、P228 brief/完整报告/冻结清单。历史线程的 E12/P158 命令不属于本任务。原生 OpenSpec 1.8.0 没有 verify workflow，按本仓 openspec reference 的独立验证流程执行，不安装或生成工具。
 
 ## 被检树与控制面
 
