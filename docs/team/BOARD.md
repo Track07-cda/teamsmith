@@ -368,6 +368,8 @@
 | E12 | Product opportunity exploration in a real business project | dev3 | - | - | done |
 | E13 | Task-model routing impact exploration | verify | task/E13-task-model-routing-explore | - | done |
 | E14 | Task-model routing proposal | verify | task/E14-task-model-routing-propose | E13 | done |
+| P228 | Task-model routing core: private implementation | dev | - | E14 | todo |
+| E15 | Pulse key replies: entrypoint exploration | dev2 | - | - | todo |
 
 ## 当前里程碑
 
