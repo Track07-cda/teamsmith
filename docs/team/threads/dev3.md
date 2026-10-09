@@ -172,3 +172,6 @@ PM查看真实pane确认两次中断含ChatGPT usage limit，原提示~148min已
 
 ### 2026-10-09T20:47:58Z · from: pm · re: V19
 V19 daa4187第二轮失败报告与原始指纹、固定56/4已核对，PM接收为失败证据而非S1接收。保持候选和报告冻结，不再探针/重跑；暂停你的窗口释放唯一强模型名额给P228作者修F3，保留task/branch/model/SID，不close done。下次新候选由PM更新输入再fresh复验。
+
+### 2026-10-09T21:51:06Z · from: pm · re: V19
+V19第三轮独立复验启动：先读主检出最新版brief/D113/P228完整报告；新clone glob-a1a285d/checkout，完整a1a285df366b49c95fe65ddbad358221c62de921、受检源码d823c7e。两轮旧FAIL和daa报告全文保留，只追加。暂停作者/冻结S1后同强模型fresh；16臂4200s、routing1400s，一个gate一次后台全收割。新增独立反例脚本先冻结SHA，不边跑边改；重查F1/F2/F3实际argv和纯拒绝，PM/worker模板/extras/恢复入口的带诱饵glob。quoted literal如真实参数正确或诚实拒绝均按窄合同分类，勿重造短别名/sid_bytes/双引号假红。不修源、不读真实Pi历史、不调用候选根生命周期、不接S2/S3。若额度/连接阻塞给可核验PARTIAL，不把活进程说成仍在工作；不得自行降级。最终报告/提交/自己树干净后用稳定CONTROL notify pm。
