@@ -56,6 +56,7 @@ mkdir -p "$EVIDENCE"
 依据 OWNERSHIP 的任务书明授条款，以下是你在本 worktree 的唯一产品写集合：
 
 - `skills/teamsmith/scripts/lib/{common,cmd-config,cmd-agents,cmd-watch,cmd-status,cmd-death}.sh`。
+- 补充窄授权（阻塞 tip `be7f76f1d563` 核查后）：`skills/teamsmith/scripts/lib/cmd-review.sh` 的 `team_cmd_close` 函数及仅该入口使用的必要新局部 helper，用于落实已接受 tasks 3.2 的锁、最终身份复核与完整 assignment 生命周期清理；保持既有 close/window/board/done 合同。不改此文件其余 review/gate/复验/合并相关路径，不增加真实团队操作。
 - `skills/teamsmith/scripts/lib/cmd-bootstrap.sh` 的 writer 部分、`cmd-project.sh` 的 CLI/help 部分；不做新项目 init/bootstrap 教程或模板，留给 S3。
 - `skills/teamsmith/scripts/lib/cmd-docs.sh` 的 task/category header 生成部分临时借予 S1，以执行 tasks 3.1；其余文档/初始化职责不变，交付后与共享文件一并冻结交给 S3。
 - `skills/teamsmith/scripts/monitor.mjs`。
@@ -65,7 +66,7 @@ mkdir -p "$EVIDENCE"
 
 S2 panel、S3 init-skill delta 不属于你；不改 panel/bundle/strings、SKILL/references/templates/README、canonical specs、OpenSpec root config、公共任务书/看板/评审/决策/ownership、任何真实 `.pi/` 配置。如 core 必须触及未授路径，记录具体调用链和 BLOCKED 给 PM，不能通过宽目录授权绕开边界。
 
-冻结/释放记录必须逐路径说明：共享脚本及 config/routes/smoke/routing fixtures 哪些留给 UI 只读、哪些之后借给 S3。S1 返修已交出的文件必须先让 PM 收回权限；不能与下一 owner 同时写。
+冻结/释放记录必须逐路径说明：共享脚本（含新增借用的 cmd-review/close）及 config/routes/smoke/routing fixtures 哪些留给 UI 只读、哪些之后借给 S3。S1 返修已交出的文件必须先让 PM 收回权限；不能与下一 owner 同时写。
 
 ## 实施与验收指向
 

@@ -254,3 +254,6 @@ P204 的规格提案已验收并合入 main ✓（把 P201 的"主检出 + 席�
 
 ### 2026-10-09T03:14:01Z · from: pm · re: P228
 P228 新授权：只做 task-model-routing 的 S1 私有核心实现；先读新 brief 与 D104，历史线程其他任务不带入。显式强模型/fresh，独立隔离 fixture，仅稳定主检出 CLI 用于通知。cmd-docs task/header 为本阶段临时授权，UI/init/教程仍不写。私有交付后留 wip 等完整采纳，不自行 main/push/config/install/归档；生成阻塞通知接收人必须 pm。完整实现后由未参与 apply 的席位独立复验。
+
+### 2026-10-09T03:23:38Z · from: pm · re: P228
+P228 授权阻塞已解除。PM 独立核对 be7f76f1d563 PARTIAL 与原 close 调用链，确认属于接受提案 tasks 3.2，补 cmd-review.sh 的 team_cmd_close 及仅此入口使用的必要新局部 helper 窄授权；其余 review/gate/复验和合并路径不动。必须在杀窗前取得正确锁、最终复核身份、清理完整记录，按接受的既有合同测试；不要在 common 重定义入口绕过授权。当前分支干净，仅有 PARTIAL 报告，保留该提交及阻塞证据，交付时补完成记录。主检出任务书和本线程最新条目是更新后的授权，自己的旧 worktree 文档不要改。你仍是 P228 唯一核心作者；已有进程、模型和 fresh SID 保留，本次只发继续消息，不用普通 resume 或重启。继续 read-only 核对后实施并完成切片验收，不做其他范围。
