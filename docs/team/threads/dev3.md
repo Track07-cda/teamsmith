@@ -166,3 +166,6 @@ PM首次复跑误用了仍由你迭代的live探针，已保留但不作为有�
 
 ### 2026-10-09T17:23:37Z · from: pm · re: V19
 PM固化探针40c59de19519复跑完成：53/4，四红均glob(template/extras × preview/real)，恢复普通argv及坏nonce控制绿；源/脚本前后hash稳定。首次live复跑作废，固定脚本的后检文件名比较失误也保留并按digest补验。当前a21不接收，见主检出review/V19与D110。继续收割第二轮gates并提交追加报告，保留早期假定勘误，PM不据中间通知关闭复验。
+
+### 2026-10-09T20:41:37Z · from: pm · re: V19
+PM查看真实pane确认两次中断含ChatGPT usage limit，原提示~148min已过去。现仅在原model/原SID尝试一次恢复；不要扩大调查。你已提交f9e3718但报告说明切片收尾待附，实际acceptance-run.rc=0、所有gate日志已终止。请首先收割本会话V19-repair-gates（PM跨session wait尝试被unknown-job拒绝，不能替你收割）；追加11条rc/源指纹闭环、最新quoted-boundary结果及探针hash/勘误，保留F3等确证反例和首轮正文，提交干净报告并通知pm。报告可FAIL/PARTIAL，严禁无限重跑或等确认；若额度仍拒绝，不换便宜模型，PM处理后续阻塞。
