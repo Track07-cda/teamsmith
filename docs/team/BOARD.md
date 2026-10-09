@@ -370,6 +370,7 @@
 | E14 | Task-model routing proposal | verify | task/E14-task-model-routing-propose | E13 | done |
 | P228 | Task-model routing core: private implementation | dev | task/P228-task-model-routing-core | E14 | wip |
 | E15 | Pulse key replies: entrypoint exploration | dev2 | task/E15-pulse-key-replies-explore | - | wip |
+| E16 | Pulse key replies: formal proposal (queued strong slot) | dev2 | - | E15 | todo |
 
 ## 当前里程碑
 

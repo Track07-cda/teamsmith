@@ -265,3 +265,6 @@ E15 新授权：仅探索 Pulse 关键回复页现有机制，报告之外 sourc
 
 ### 2026-10-09T03:33:35Z · from: pm · re: E15
 E15 原稿 4143bdb 已收到，PM 正在独立副本复跑。只追加一个事实勘误，保留原正文及建议：§8 把 proposal deps: 写成 spec-refs 能解析的排序机制不准确。spec-refs.sh:194–254 收集 delta，并按 MODIFIED/REMOVED 对 ADDED requirement 的提供关系推导依赖；它不解析 proposal.md 的 deps:。请依据现有代码核对并追加更正，不改源码、不建 change、不延伸调查；完成后提交、保持树干净通知 pm。其余设计问题（列表上限后如何访问旧条目、审计目录不可写、总览最新标题与按需读取、存储规模/锁中断）留给正式 propose，不把它们宣称现有能力；PM 不要求重写原稿。propose 将用强模型 fresh，但目前核心占用唯一名额，排队而不 force 超额。继续当前快模型同一会话完成勘误。
+
+### 2026-10-09T03:42:19Z · from: pm · re: E15
+E15 修订24c94b963e15已核对：初稿原文保留，仅追加勘误；PM reviews/E15.md 为ACCEPTED，按原字节收录报告并办理探索关单。E16正式提案brief已准备，保持同一owner；待P228的强模型worker名额释放再用强模型fresh启动，不超额、不自行在快模型继续propose。不派本功能apply、不改实际Pulse/共享来源。你本轮无需再执行，后续以新的正式派单为准。
