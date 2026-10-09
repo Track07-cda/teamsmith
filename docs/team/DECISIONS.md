@@ -912,3 +912,9 @@ P228交付a1a285df366b49c95fe65ddbad358221c62de921，源码受检d823c7e497a6215
 暂停完成的dev窗口保留其任务/分支/model/SID，释放唯一强模型名额；dev3仍是未参与提案/实现的复验者，以同强模型、新会话检查新SHA。V19主检出brief更新新路径、16臂与足够timeout、冻结探针输入；须读报告后重查F1/F2/F3的真实argv、纯拒绝和合法字面量控制，按实际合同判定，不原封照跑只期待旧缺陷存在的探针。作者称quoted literal支持、double-quoted escapes保守拒绝，独立验证其实际语义与PM/worker入口一致；不能替作者改源。
 
 保持本仓隔离授权边界，未切实际配置、共享技能来源、合产品main或推送；最终整体apply/全量验收仍等S2/S3集成。无需新增用户方向决策。
+
+## D114 · 第三轮确认占位符出现不等于启动身份绑定（2026-10-09）
+
+dev3报告continued模板将model放在label后仍成功。PM据已接受合同及guard源码，在新的固定输入/私有fixture复现model/provider/SID错槽和纯positional四组preview/real，共11/8；相应真实selector缺失但assignment仍记原模型/SID，合法模板控制绿。源及输入SHA前后一致，原证据留V19/glob-a1a285d/pm-binding-replay。反例确认工具自己发出的参数和记录不一致，不判断真实模型效果，不扩到Pi内部或非Pi兼容。
+
+a1尚不接收；完整第三轮报告/源码翻转由dev3继续收尾，未提前改候选或启动作者，不用占位符字符串出现过替代selector消费证据。后续按原S1范围返修，完整报告、旧FAIL与每次原探针保留。配置/共享来源和产品main未改，无新增用户方向决策。
