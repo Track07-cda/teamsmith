@@ -275,3 +275,6 @@ P228第三次交接：先读主检出更新brief、reviews/V19.md、收录daa418
 
 ### 2026-10-09T21:49:25Z · from: pm · re: P228
 P228新候选a1a285d已收到；源码d823c7e与报告tip产品差异为空，树干净。现在冻结原S1源码/测试/报告，暂停本实现窗口释放唯一强模型给dev3/V19 fresh第三轮；保留任务/分支/原model/SID，不close done、不接S2/S3。作者1244/0与94/0仍SELF-PASSED，须独立复验，RECEIVED/串行解冻仅PM决定。
+
+### 2026-10-09T22:36:55Z · from: pm · re: P228
+P228 F4返修：先读主检出更新brief、reviews/V19.md、完整ef8f952报告及D115；a1仍FAIL。11切片/1244+94绿不能抵销continued错槽/positional占位符发布，PM新fixture已实复11/8。原S1写集合再次仅归你，S2/S3冻结。先审查selector存在/消费、字段值绑定及actual argv与完整assignment的机制，不只增加refs计数或特判label；对PM邻边先隔离实测，保留已验证literal/拒绝/opaque边界，不能新增Pi语义或非Pi兼容。旧FAIL/报告保留、只追加；补旧源码红→新绿及能抓回missing-binding类的源码破坏/恢复。局部相关检查先跑，稳定隔离副本交付清单一次性跑，原断言不弱化，所有jobs收割、报告提交、树干净后稳定CONTROL notify pm。PM同强模型fresh交接，不普通resume、不动main/实际配置/共享来源。

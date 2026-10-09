@@ -13,9 +13,9 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
 ## 当前返修输入（2026-10-09）
 
-最新冻结候选 `a21a0a32480557b847d3b0ea43ad88a0847823df` 未被接收。V19 第二轮报告 `daa4187df7bf4f0a2f0fdf947a3fc1697ffd1a0c` 与 PM 固定脚本复跑确认 F3：模板和 builtin extras 中未引用的 `--mod*` 展开为 fixture 文件 `--model=wrong:low`，preview/real 均成功，actual argv 与 assignment 矛盾。旧 F1/F2 防护和合法控制已绿，不能因此忽略 F3；两轮报告及旧失败均保留。先读主检出 `docs/team/reviews/V19.md`、收录的新报告及线程最新条目；旧 own-worktree 线程不是此次返修授权。原 S1 写集合再次仅返还给你，S2/S3 未接手。PM 显式同强模型、fresh 新会话交接，不使用旧版 resume，不尝试重写 Pi 历史。
+最新冻结候选 `a1a285df366b49c95fe65ddbad358221c62de921` 判 FAIL，未被接收。V19 第三轮完整报告 `ef8f952672a2d9f81a195b79ecd415d556f4dac9` 已收录；11条指定切片全rc0、1244/0及16臂94/0仍漏掉F4：continued模板中的provider/model/SID占位符可作为普通positional或放在label后，真实argv缺相应selector，工具仍成功发布原身份并标continued。PM另行固定输入复现11/8；verifier固定大包144/8、小纯positional包1/6分别保留，不混统计。旧F1/F2/F3绿不代表F4消失。先读主检出reviews/V19.md、收录的新报告、D114–D115及线程最新条目；自己worktree旧线程不是返修授权。原S1写集合再次仅返还你，S2/S3不接手；PM同强模型fresh交接，旧版resume和Pi历史重写都不用。
 
-按已接受的参数所有权合同审查允许的词法与最终启动表示之间的差异，不只封堵 `--mod*` 字符串。覆盖 worker 模板、worker extra、PM 相关入口及 provider/model/SID/continue 选择器；不要实现完整 shell AST 或扩展 Pi 内部职责。对于未实测的 PM glob 风险先用隔离 fixture 验证，不把静态推测写成既成缺陷。quoted 控制、`-pother` 别名假定、未知/前导零 sid_bytes 的合法边界按第二轮报告分类，不能靠新增假红或扩大格式禁令消红。补真实 argv 和拒绝前后无副作用、合法字面量控制以及源码破坏/恢复；验收命令和原非模型断言不删、不 skip。
+先按已接受的精确启动身份合同补足绑定判据：占位符出现、selector存在、值归属及最终argv一致不能相互替代。审查guard收集seen却只以refs止点判continued的缺口，并覆盖缺失、错槽、重复和合法绑定，不能只特判label。对PM共享guard等未实测路径先在私有fixture确认，不把猜测或未知CLI参数语义记成缺陷；不能扩成完整shell AST、Pi兼容矩阵或非Pi支持。保留诚实opaque/fresh磁盘交接和窄grammar的合法字面量/明确拒绝；按报告区分未加引号的身份占位符与普通quoted literal。补preview/real拒绝前后record/board/proof不变、合法actual argv对照、真实源码红→绿与恢复，以及能抓回这类绑定缺失的源码翻转；原验收和非模型断言不删、不skip。先完成并验证局部机制，再在稳定独立副本一次性跑交付清单，别每个小改都重跑长suite。
 
 只修已接受模型/身份/读侧合同的缺口，维持原验收清单，增加可复现的源码红绿与合法控制。未授路径或规格语义变化仍先 BLOCKED 给 PM。修后冻结新 SHA，当前失败输入不能标已接收或 done。
 
@@ -30,7 +30,7 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 ## 阅读顺序与 workflow
 
 1. `AGENTS.md`、自己线程最新条目、此任务书、`docs/team/OWNERSHIP.md`。
-2. `docs/team/DECISIONS.md` D101–D104、`docs/team/reviews/task-model-routing-proposal.md` 当前接受意见。
+2. `docs/team/DECISIONS.md` D101–D115、`docs/team/reviews/task-model-routing-proposal.md` 当前接受意见。
 3. change 的 proposal/design/tasks、全部七份 delta 和对应 canonical capability specs；重点执行 tasks 1.1–5.3，并按 coverage index 逐 scenario 映射证据。
 4. 按 opsx-apply workflow 获取原生 apply instructions。生成文件若不存在，读取现有 OpenSpec 1.8.0 workflow/templates 与相关 store-selection 文档，不运行 init/update/install 生成它们。
 
@@ -92,6 +92,7 @@ bash skills/teamsmith/tests/death-cause.sh --pure
 bash skills/teamsmith/tests/death-cause.sh --live
 bash skills/teamsmith/tests/death-cause.sh --flip
 bash skills/teamsmith/tests/task-model-routing.sh --select policy,machine,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,boundary
+bash skills/teamsmith/tests/task-model-routing.sh --select flip
 bash skills/teamsmith/tests/ledger-ban.sh --names-file "$CONTROL_ROOT/.pi/team/forbidden-names.txt"
 git diff --check
 ```

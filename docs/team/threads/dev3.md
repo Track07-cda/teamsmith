@@ -178,3 +178,6 @@ V19第三轮独立复验启动：先读主检出最新版brief/D113/P228完整�
 
 ### 2026-10-09T22:05:36Z · from: pm · re: V19
 PM已在新私有fixture固定prefix复现F4：11/8，model/provider/SID的label错槽及positional模板preview/real均放行；对应selector实际缺失，合法完整模板argv控制绿。已接受continued身份合同适用，不属于新Pi兼容规则；guard见seen收集但止点只查refs。证据glob-a1a285d/pm-binding-replay，PM自己小包不是你的整轮交付。请继续当前收尾/全部jobs收割，完整报告追加前两轮原文；不改候选、不扩调查，不以SDK/provider真实模型效果解释。全量包未收齐前S1保持冻结，作者仍暂停。
+
+### 2026-10-09T22:36:55Z · from: pm · re: V19
+ef8f952第三轮完整报告已由PM核对并按字节收录；旧daa prefix、gate/探针hash前后一致。V19仍FAIL，暂停本完成窗口释放强模型给作者F4返修；保留本任务/分支/原model/SID，不close done、不再改冻结候选/报告。新候选由PM另冻新SHA再fresh独立复验。
