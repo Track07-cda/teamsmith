@@ -371,7 +371,7 @@
 | P228 | Task-model routing core: private implementation | dev | task/P228-task-model-routing-core | E14 | wip |
 | E15 | Pulse key replies: entrypoint exploration | dev2 | task/E15-pulse-key-replies-explore | - | done |
 | E16 | Pulse key replies: formal proposal | dev2 | task/E16-pulse-key-replies-propose | E15 | wip |
-| V19 | Task-model routing S1: independent private verification (queued) | dev3 | - | P228 | todo |
+| V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | wip |
 
 ## 当前里程碑
 
