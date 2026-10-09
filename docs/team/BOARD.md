@@ -370,7 +370,7 @@
 | E14 | Task-model routing proposal | verify | task/E14-task-model-routing-propose | E13 | done |
 | P228 | Task-model routing core: private implementation | dev | task/P228-task-model-routing-core | E14 | wip |
 | E15 | Pulse key replies: entrypoint exploration | dev2 | task/E15-pulse-key-replies-explore | - | done |
-| E16 | Pulse key replies: formal proposal | dev2 | task/E16-pulse-key-replies-propose | E15 | wip |
+| E16 | Pulse key replies: formal proposal | dev2 | task/E16-pulse-key-replies-propose | E15 | done |
 | V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | wip |
 
 ## 当前里程碑
