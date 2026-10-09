@@ -13,7 +13,9 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
 ## 当前返修输入（2026-10-09）
 
-冻结候选 `16842c9ddf6f83db0e43f4fdbcfb2a4cc5170c74` 未被接收。V19 独立报告及 PM 新 clone 复现确认 F1/F2，见主检出 `docs/team/reviews/V19.md` 与线程最新条目；先读这两份，旧 own-worktree 线程不是此次返修授权。P228 的原 S1 写集合现仅返还给你，S2/S3 未接手；保留旧报告并追加修订回执。PM 显式同强模型、fresh 新会话交接，不使用旧版 resume，也不尝试重写 Pi 历史。
+最新冻结候选 `a21a0a32480557b847d3b0ea43ad88a0847823df` 未被接收。V19 第二轮报告 `daa4187df7bf4f0a2f0fdf947a3fc1697ffd1a0c` 与 PM 固定脚本复跑确认 F3：模板和 builtin extras 中未引用的 `--mod*` 展开为 fixture 文件 `--model=wrong:low`，preview/real 均成功，actual argv 与 assignment 矛盾。旧 F1/F2 防护和合法控制已绿，不能因此忽略 F3；两轮报告及旧失败均保留。先读主检出 `docs/team/reviews/V19.md`、收录的新报告及线程最新条目；旧 own-worktree 线程不是此次返修授权。原 S1 写集合再次仅返还给你，S2/S3 未接手。PM 显式同强模型、fresh 新会话交接，不使用旧版 resume，不尝试重写 Pi 历史。
+
+按已接受的参数所有权合同审查允许的词法与最终启动表示之间的差异，不只封堵 `--mod*` 字符串。覆盖 worker 模板、worker extra、PM 相关入口及 provider/model/SID/continue 选择器；不要实现完整 shell AST 或扩展 Pi 内部职责。对于未实测的 PM glob 风险先用隔离 fixture 验证，不把静态推测写成既成缺陷。quoted 控制、`-pother` 别名假定、未知/前导零 sid_bytes 的合法边界按第二轮报告分类，不能靠新增假红或扩大格式禁令消红。补真实 argv 和拒绝前后无副作用、合法字面量控制以及源码破坏/恢复；验收命令和原非模型断言不删、不 skip。
 
 只修已接受模型/身份/读侧合同的缺口，维持原验收清单，增加可复现的源码红绿与合法控制。未授路径或规格语义变化仍先 BLOCKED 给 PM。修后冻结新 SHA，当前失败输入不能标已接收或 done。
 

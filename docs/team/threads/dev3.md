@@ -169,3 +169,6 @@ PM固化探针40c59de19519复跑完成：53/4，四红均glob(template/extras ×
 
 ### 2026-10-09T20:41:37Z · from: pm · re: V19
 PM查看真实pane确认两次中断含ChatGPT usage limit，原提示~148min已过去。现仅在原model/原SID尝试一次恢复；不要扩大调查。你已提交f9e3718但报告说明切片收尾待附，实际acceptance-run.rc=0、所有gate日志已终止。请首先收割本会话V19-repair-gates（PM跨session wait尝试被unknown-job拒绝，不能替你收割）；追加11条rc/源指纹闭环、最新quoted-boundary结果及探针hash/勘误，保留F3等确证反例和首轮正文，提交干净报告并通知pm。报告可FAIL/PARTIAL，严禁无限重跑或等确认；若额度仍拒绝，不换便宜模型，PM处理后续阻塞。
+
+### 2026-10-09T20:47:58Z · from: pm · re: V19
+V19 daa4187第二轮失败报告与原始指纹、固定56/4已核对，PM接收为失败证据而非S1接收。保持候选和报告冻结，不再探针/重跑；暂停你的窗口释放唯一强模型名额给P228作者修F3，保留task/branch/model/SID，不close done。下次新候选由PM更新输入再fresh复验。

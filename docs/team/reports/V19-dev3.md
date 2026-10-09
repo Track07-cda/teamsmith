@@ -199,3 +199,143 @@ monitor: malformed-monitor.json 仍包含 V19_OWNED_EXPECTED_EVENT
 - 只提交本报告；源码、change/canonical specs、tasks勾选、PM治理账本及候选clone不改。报告独立隐私检查 `ledger-ban --root <本worktree> --names-file <主检出名单>` 为 rc=0、hits=0、names=ok，日志 `report-ledger-ban.log/.rc`。报告提交后核对自己任务分支/干净状态，再通过稳定主检出 CLI 明确通知 `pm`。
 - 未测/未授权：S2 panel交互/构建/真实UI帧，S3 init/template/guidance/共享采纳，完整change全量smoke，真实Pi/provider质量与跨模型会话兼容，共享skill/main更新、真实项目升级/fresh、部署/远端写入、归档。
 - 请求 PM 独立复现 F1/F2 后交回 apply 作者，修正实现及防护，再冻结新 tip、另行复验；本报告不对下一阶段调度或采纳作授权。
+
+---
+
+## 第二轮独立修订：a21a0a3 的 S1 仍为 FAIL
+
+以上首轮正文及 FAIL 原样保留。本轮只评审返修核心 S1，不是整个 change 或 PM 正式 review。新受检完整 SHA：`a21a0a32480557b847d3b0ea43ad88a0847823df`，独立真实 clone：`../pm-skills-ledger/team/reviews/V19/repair-a21a0a3/checkout`。与作者受检 `fbc42f4b315dc5b6253c1e91274151450dedbd41` 的 `skills` 差异为空，最终差异仅作者报告。下文 **E2** 指 `../pm-skills-ledger/team/reports/V19-dev3/repair-a21a0a3/`；证据均由我独立执行，不采用作者 857/0、72/0 代替验收。
+
+**结论原因**：首轮 F1/F2 在新输入的防护及合法控制均成立，但我补的 glob 反例仍使真实 argv 带矛盾模型选择器；preview 和真实启动都成功并提交 assignment。因此新输入也不接受。这是稳定未修改源码上的缺陷，不是源码 mutant 的预期红。
+
+**BLOCKED:** 修复属于 P228 核心作者的产品/测试写集合，交回 PM；我没有修改候选、产品、规格、治理账本或真实配置，没有启动 Pi/provider、部署、合并或推送。完整切片验收及源稳定性收尾另附在后续小节；本节先提交已经完成的代码审查与独立反例证据。
+
+### 输入检查和修复差异审查
+
+- 先读 git status/log、主检出最新 thread/brief、OWNERSHIP、D104–D109；初始报告树干净。候选 `.git` 是目录，HEAD/status 正确，`preflight.txt` 保存路径、容量及作者树对照。
+- 独立 diff：首轮 `16842c9` → 本轮 `a21a0a3`，保存在 `E2/repair-source.diff`。新增窄 argv lexer/identity option guard、worker模板身份绑定/worker继续方式拒绝、PM fresh/continued/opaque 分类与 metadata 校验、monitor 调用同一个 bounded DATA parser；`model-routing-boundary.sh` 增加接缝/坏记录/extra 矩阵与两臂 flips。没有发现移除原非模型断言、借 skip 保绿，或扩大 close/review/merge 权限。
+- 重读接受的 proposal/design/tasks、相关 delta、canonical 受影响要求及 P228/V19 输入。身份保证止于 Teamsmith 的启动 argv，不要求 Pi 内部模型判定、推理桥接或通用 Bash parser。`sid_bytes` 空字符串是设计允许的未知快照，不能判为损坏。
+- monitor 从已打开的 bounded snapshot 调用 Bash shared parser，未再次打开 assignment、未 source/eval 数据或项目配置，不以 config 的 future policy 代替 committed identity；但同步子进程引入额外延迟，观察值另列，不声称通过性能门禁。
+
+### 旧红 → 新防护及相邻绿控制
+
+实际运行旧控制：`bash E/independent-probes.sh <旧checkout> E2/old-control`，rc=0；`E2/old-control.sha` 为首轮 `16842c9ddf6f83db0e43f4fdbcfb2a4cc5170c74`，初始 status 空。此旧脚本的 rc=0 表示两旧缺陷仍成功复现，不表示产品通过。`old-control.log` 再次捕获固定错误 provider/model/SID，及 shell 拒绝坏 nonce 而旧 monitor 展示事件；合法模板/记录控制绿。
+
+新脚本不是原封不动期望旧漏洞存在：`bash E2/independent-probes.sh <新checkout> E2`，rc=1，`TOTAL pass=53 fail=4`。有效 fixture 副本：`E2/own-probes/teamsmith-v19-repair-own.gkjL8K/`（下称 **P**）；其 `argv.jsonl`、每项 `.log/.rc`、record/config 和 repo 副本保留。全部运行于新私有 HOME/repo/tmux socket，结束回收自己的 server/临时根；没有运行候选 CLI 管理真实团队。
+
+| 自设断言 / 场景 | 实际结果及证据（P） |
+|---|---|
+| 原 F1：固定错误身份；attached wrong model；重复 model；固定 SID | preview/real 均早拒绝，record/board/argv 数量不变；`hardcoded-*`、`attached-*`、`duplicate-*`、`hardcoded-sid-*` |
+| worker 模板借 `-c` 绕过 SID | preview/real 早拒绝且状态不变；`worker-continue-*` |
+| 合法 quoted/equals 占位符实际消费身份 | rc=0；argv 的 `--provider vendor --model=expected:high --session-id=<record SID>` 与完整 assignment 一致；`placeholder-real.*`、`argv.jsonl` |
+| extras 的短、引号拼接、escaped、equals 身份选择器 | `-mwrong:low`、quoted `-m`、`--'model'=...`、escaped `-m`、quoted provider/session/continue/resume；preview/real 均拒绝且状态不变；`extras-*` |
+| 原 F2 与相邻坏记录 | 坏 nonce、坏 started、负 sid_bytes、重复 sid_bytes、错 window：Bash machine read assigned=false；monitor 不显示 owned 事件、报 unavailable；读前后 record/board 不变；`invalid-*` |
+| 正常记录与未知/前导零快照控制 | 正常记录展示 owned SID 事件；空 `sid_bytes` 和 `0005` 两读者都接受、无副作用；`valid-monitor.json`、`valid-size-*` |
+| PM 已知模型恢复、opaque fresh/交接 | 已知 metadata 的 up preview rc=0；无 identity/无 resume_args 的 opaque 模板诚实 `lost:` 交接；unused resume args 仍不称 continued；`pm-known-preview.*`、`pm-opaque-preview.*`、`pm-opaque-unused-resume.*` |
+| PM opaque 冒称继续及 suffix 漂移 | 缺身份占位符的 `{resume_args}` 继续 rc=1；suffix 改变无 fresh rc=1，显式 fresh preview rc=0；所有检查无写盘；`pm-opaque-continuation-refused.*`、`pm-suffix-drift-*` |
+| 去掉 glob 的合法实际启动控制 | rc=0，actual argv 只带选定模型和原 SID；`glob-restored-control.*` |
+
+PM 自设补充检查是 render/preflight 和 metadata helper，不声称真实 provider 或 PM 全生命周期由这些 probe 证明；真实 launcher/失败回收另由独立执行的切片断言覆盖。
+
+### F3：字面 token 校验后，shell glob 生成第二个身份选择器
+
+关联：agent-adapters `Launch parameter ownership ends at the Pi boundary`、dispatch `Extra identity arguments cannot contradict records` / `Same-task recovery preserves the full committed launch identity`；S1 tasks 3.1、3.4、5.2–5.3。
+
+复现根是 owned repo/worktree；两边创建并提交名为 `--model=wrong:low` 的普通文件，因此 worktree 干净，不借 `--force` 放行。已有完整合法 assignment 的模型为 `vendor/expected:high`，恢复使用原 SID。
+
+1. 自定义 worker 模板：`recording-pi --provider {provider} --model {model} --session-id {session_id} --mod* {prompt}`。`--mod*` 在 lexer 中不是 model 选择器，但实际 shell 将它展开为 fixture 文件名。
+2. 普通 builtin worker：只令 `TEAM_EXTRA_PI_ARGS='--mod*'`。同一字面 token guard 接受，builtin 实际启动也传入展开的文件名。
+3. 两种路径 `--print` 与真实 dispatch **全部 rc=0**；真实 recording-agent 得到 `--model expected:high` 和 `--model=wrong:low` 两个矛盾选择器。assignment 仍只发布 `model=vendor/expected:high`，并有新 proof nonce，不能表示真实 argv 已不再唯一。
+
+自定义路径的精确捕获：
+
+```text
+['--provider', 'vendor', '--model', 'expected:high', '--session-id',
+ 'v19-repair-owned-dev-1791566284-1369667-32451-20298', '--model=wrong:low']
+assignment.model=vendor/expected:high
+preview rc=0; real rc=0
+```
+
+builtin 记录亦含 `--model expected:high`、扩展/skill参数、`--model=wrong:low`、原 `--session-id`。精确 argv 在 `P/argv.jsonl`，日志 `E2/independent-probes.log` 的 `glob-template/extra actual argv=` 行；`P/glob-template-*`、`P/glob-extra-*` 保存 preview/real 输出和 rc。4 条 FAIL 分别对应这两路径的 preview/real，不是 4 个不同根因。
+
+绿对照：恢复不含 wildcard 的 builtin 配置，在同一合法任务/assignment/干净分支实际 dispatch，rc=0；捕获模型和 SID与 record 一致且没有矛盾选择器。没有删除/修改候选 guard 来造红。
+
+根因位置：`common.sh:1480–1547` 的窄 literal argv 校验把 shell wildcard 当普通 token；worker `team_agent_check_launch` 及实际模板/extra 渲染（`:4931–5198`）用同一 raw 字符串，但启动时 shell 还会 expansion。PM builtin `args+=($TEAM_PM_EXTRA_PI_ARGS)`（`:2458`）也具有相同解析分层风险，**本反例没有执行 PM glob 实际启动，不能宣称该路径已实测复现**。词法 token 与最后 argv 不同，不能用 nonce/proof 抹平。
+
+这是 Teamsmith 已承诺的 selector ownership 缺口，而不是 Pi兼容性问题：不主张 Pi最终一定选择后者，也不探测 provider。规格明确不能依赖 Pi最后参数优先；重复矛盾 selector 已足以推翻“actual argv与record一致”的证明。请求作者令可接受窄 grammar 与实际启动表示一致（例如保守拒绝未支持的 expansion 或安全 literal argv 表示），仍无需实现通用 shell AST；我不代作者修复。
+
+### 探针错误及不成立的假定（原始证据保留，不算产品缺陷）
+
+- 初轮曾将 `-pother` 视为 provider 短别名，没有承诺/实际 parser 证据，已移出身份拒绝矩阵，不能因它被接受而判产品失败。
+- 曾把 `sid_bytes=0005`、空 `sid_bytes` 视为坏形状。接受设计允许未知空快照，前导零也是非负数字；两个读者均接受，不存在判据分叉。新有效轮改测负数/重复字段，并补两条合法快照控制。
+- 补 PM preview 时误传不存在的 up `--no-pulse`，得到 usage rc=2；该组不能作为身份拒绝证据。随后去掉该参数，全新 fixture重跑全部probe，得到上列正确 rc=0/1及原始诊断。
+- 这些探索/无效假定分别保存在 `E2/independent-probes-exploratory.*`、`independent-probes-exploratory2.*`、`independent-probes-pm-invalid.*` 及各自 owned fixture 副本。未掩掉失败、未拿中间假红判产品缺陷。
+
+### monitor 多席位同步读取观察（不是性能门禁）
+
+实际命令：`python3 E2/monitor-multiseat.py <新checkout> E2`，rc=0。独立8席位、私有 HOME、每席位完整 record/SID/一条事件，1/4/8 席位分别三次采样；每次 JSON席位数及各自 owned marker均核实，不以 missing identity跳过解析。观察日志 `monitor-multiseat.log/.rc`、fixture及各次 JSON/stderr保留。
+
+| 席位数 | 三次整轮耗时 ms | median ms |
+|---:|---|---:|
+| 1 | 59.1、56.0、53.8 | 56.0 |
+| 4 | 125.7、125.2、128.2 | 125.7 |
+| 8 | 216.3、222.3、222.4 | 222.3 |
+
+当时 loadavg 为 1.38/1.58/1.56、32 cores。观察到随同步 Bash子进程数增长的近线性延迟，但本小 fixture未见秒级明显阻塞。没有运行正式 panel性能门禁、CPU SLA或真用户大历史测试，不据此声称性能通过。
+
+## 第二轮收尾：有效验收、固定探针与最终交付
+
+**当前限定 S1 结论：FAIL。** 11 条指定切片验收全部 rc=0；固定的自设边界探针 56/4，四红仍只是 F3 两种路径各自的 preview/real。首轮 F1/F2 的修复和合法控制成立，不消除新缺口。S2/S3、全量 smoke、真实 Pi/provider、共享采纳及其它项目均未测/未执行。本报告不是 PM review，不设 P228/V19 done。
+
+### 11 条切片验收与源指纹闭环
+
+实际从候选真实 clone 执行 `bash E2/run-gates.sh <候选> E2 <CONTROL_ROOT>`；`acceptance-run.rc=0`，所有子命令的精确 argv 在 `E2/<name>.command`，原始日志及 rc 在同名 `.log/.rc`。日志执行区间 2026-10-09 17:07:08–17:27:23 UTC。随后模型使用额度中断导致收割延迟，不是 gate 运行了三个小时；恢复后本会话已正式 `team_bg_wait V19-repair-gates`。
+
+| 日志名 | 实际命令（路径前缀为候选 `skills/teamsmith/tests/`，原生工具用原用户 bun 路径） | rc / 结果 |
+|---|---|---|
+| openspec | `bun openspec validate --all --strict` | 0；14 passed / 0 failed |
+| spec-refs | `bash spec-refs.sh --check` | 0 |
+| config-cli | `bash config-cli.sh writer inject cas validate audit shape json groups models seats` | 0；外层169/0，SKIP 0 |
+| routes | `bash routes.sh` | 0；207/0，SKIP 0 |
+| death-pure | `bash death-cause.sh --pure` | 0；87/0，SKIP 0 |
+| death-live | `bash death-cause.sh --live` | 0；7/0，SKIP 0 |
+| death-flip | `bash death-cause.sh --flip` | 0；4/0，SKIP 0 |
+| routing | `bash task-model-routing.sh --select policy,machine,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,boundary` | 0；857/0 |
+| flips | `bash task-model-routing.sh --select flip` | 0；72/0，13 源码破坏臂及完整恢复857/0 |
+| ledger-ban | `bash ledger-ban.sh --names-file <CONTROL_ROOT>/.pi/team/forbidden-names.txt` | 0；hits=0、names=ok |
+| diff-check | `git diff --check` | 0 |
+
+`gate-manifest.txt` 与 `gate-after.txt` 逐字节一致：HEAD=`a21a0a32480557b847d3b0ea43ad88a0847823df`，status 全空，所有 tracked `skills` 文件逐项 sha256再汇总的 digest 为 `12713e2b69946d006e849b087a7680bdfd4904722e73e8f33fca1ecbca44d58d`。未在 gate期间改候选；报告提交只发生于自身 worktree。`gate-summary.txt` 保存收尾汇总。初次汇总读取 routes 的非纯 UTF-8输出遇到 decode error，改为仅汇总显示 `errors=replace`；原始日志、测试rc及源指纹未改，这不是测试失败或重跑。
+
+### S1 场景 → 实际断言 → 独立执行证据
+
+下列断言名来自我本轮 `routing.log` 的 PASS 行；全部由上表 routing 命令独立执行、rc=0。它们说明现有护栏工作，不证明边界已经穷尽；F3 为同一原候选上的独立反例。
+
+| S1 tasks / 场景 | 真实断言举例 | 证据 |
+|---|---|---|
+| 1.1–1.3：整体策略、显式类别，不以 phase推断 | `policy-minimum-analysis-verify`、`policy-custom-category`、`generated-category-header`、`phase-does-not-infer-category:verify`、`new-unmapped-category-override-refused` | routing.log policy/machine/dispatch 段；spec-refs.log |
+| 2.1–2.3：配置 writer/CAS、完整升级、旧字段及审计失败 | `map-cas-first`、`map-cas-loser`、`simultaneous-map-cas`、`upgrade-retired-removed`、`upgrade-whole-file-fault:late-cas`、`upgrade-readers-wholly-old-before-rename-new-after`、`upgrade-audit-unwritable-honest-committed-result` | routing.log config/upgrade；config-cli.log 外层169/0 |
+| 3.1 / 3.4：新派单与同任务原模型/SID，删类别仅恢复豁免 | `first-recorded-launch`、`untrusted-recovery-refused:category`、`deleted-routine-recovery`、`recovery-model`；原 F1早拒绝/合法 argv及 F3矛盾 argv由我自设 probe 捕获 | routing.log dispatch/resume/preview；固定探针日志与argv |
+| 3.2：proof/nonce、原子发布、close/teardown锁顺序 | `failed-launch-old-record-bytes`、`stale-launch-proof-refused`、`close-waits-for-publication-lock`、`close-no-identity-resurrection`、`teardown-waits-for-publication-lock`、`teardown-race-no-resurrection`、`lock-owner-liveness-and-reclaim` | routing.log transaction；对应源码 flips |
+| 3.3：配额及未知身份 fail-closed | `unknown-live-peer-fail-closed-even-force`、`unknown-live-peer-real-launch-refused`、`unknown-live-peer-real-record-preserved`、`unknown-live-peer-real-no-launch` | routing.log limits；unknown-as-zero mutant |
+| 4.1–4.3：PM独立模型、恢复/fresh/opaque、失败回收；SID A不读B/base | `pm-independent-model`、`pm-known-continues`、`pm-changed-resume-selector-needs-fresh`、`pm-publication-failure-stops-uncommitted`、`reader-session-A`、`reader-cause-A`、`monitor-missing-A-unavailable`；坏记录matrix覆盖所有reader | routing.log pm/sid-readers/boundary；固定 probe PM控制及坏nonce |
+| 5.1–5.3：各正/负矩阵、实际源码破坏、接缝范围 | routing857/0、13臂flip72/0及恢复857/0；自设 F3红/普通argv绿、quoted边界分类 | routing.log、flips.log、固定探针与下节 |
+
+13 源码破坏臂均仅改 owned scratch：`unmapped-override`、`fingerprint`、`expanding-quote`、`recovery-drift`、`partial-publication`、`unknown-as-zero`、`latest-shell`、`latest-monitor`、`pm-fallback`、`pm-publication`、`extra-shadow`、`template-shadow`、`monitor-record-drift`。每臂都有目标 matched、shape-valid、子命令rc=1、具名断言抓到红、source_before=source_restored。尤其新两臂分别抓到worker/PM模板身份绑定及nonce reader分叉。完整 baseline/restored 两端均857/0；`flips.log`/`gate-summary.txt` 保留13组hash及控制，`flip-fixtures/teamsmith-task-model-routing.sZazVp/` 保留子日志。config-cli内部和flip日志出现的 mutant红是防护证据，不算原始候选失败；F3才是原始候选自身的红。
+
+### 固定版本与 quoted 边界：替代迭代探针的正式收尾
+
+上一节53/4来自已保留的开发式探针迭代，且后来再加了3条quoted控制。我没有为早轮记录脚本的前后hash，故**不把这些迭代轮作为本次正式固定探针验收**；保留其原始证据与诊断，不追补或伪造前置hash。PM曾读到运行中的live脚本的情况由PM自己的记录判无效，不借其结果证明我的执行。
+
+本次收尾未扩大调查：仅复制现有完整脚本为 `E2/frozen-final/independent-probes.sh` 并设只读，在新 owned HOME/repo/socket 重跑已有全部断言。命令：`bash E2/frozen-final/independent-probes.sh <候选> E2/frozen-final`。实际rc=1，`TOTAL pass=56 fail=4`；这是最终有效反例轮，不是门禁通过。
+
+- 固定脚本 sha256：`c89a34054df1ee286d7296ff92408aed86d4a5366176a61970f107140f95077a`，`script.before.sha256` / `script.after.sha256` 逐字节一致。
+- `source.before.txt` / `source.after.txt` 逐字节一致：完整SHA仍为受检对象，status空，tracked skills digest同上；`stability.txt` 明确记录 `script/source stable`。
+- 最终证据根 **PF**：`E2/frozen-final/own-probes/teamsmith-v19-repair-own.HyKxQ0/`；每例.log/.rc、完整record/config和 `argv.jsonl` 留存。`frozen-final/independent-probes.log/.rc` 是唯一用于最终56/4统计的日志。
+- F3本轮的原SID=`v19-repair-owned-dev-1791578561-1194519-31239-11715`；模板/extras 的 preview/real均rc=0，actual argv均有 `--model expected:high` 和 `--model=wrong:low`，完整record仍为`vendor/expected:high`。四红各有精确argv及成功发布的nonce。恢复普通启动rc=0，只有正确模型、原SID，无矛盾选择器；原F1/F2防护及所有相邻绿控制同时成立。
+- 新增的 quoted 控制**不是另一缺陷**：将整个 `{provider}`/`{model}` 值置于单/双引号的模板均诚实rc=1，诊断明确“{provider} 必须是独立未加引号的 argv 值”，recording-agent未启动。未加引号的标准占位符模板配合法形状`vendor/expected*`，rc=0，实际model字面量为`expected*`，与record一致。这是窄 grammar支持/拒绝的边界，不证明所有quoted形式受支持，也没有发现 model字面量被改写；不要把拒绝或可能的escaping假定算作F4。
+- `-pother` 无provider别名证据、未知空/前导零sid_bytes合法、错误`up --no-pulse`等前述勘误保持；均不计入56/4的失败。
+
+### 最终交付与止点
+
+本轮独立长作业均已收割，包括 gates、旧控制、monitor观察、各探针迭代及 `V19-quoted-boundary`、最终 `V19-frozen-closeout`；无尚在运行的候选作业。额度中断及收割延迟如实记录，没有换模型或读取Pi credential/history。先提交了已验证反例步骤 `f9e3718`，本节再提交收尾；最终报告只追加首轮，不改首轮正文。报告收尾 `git diff --check` 为rc=0；隐私检查 `report-ledger-ban-final.log/.rc` 为rc=0、hits=0、names=ok；首轮0380cdd报告prefix逐字节一致，13臂源码hash全部恢复。提交后核对自身任务分支干净，再从稳定CONTROL_ROOT CLI通知PM。候选源树、实际团队/共享安装及远端保持不变。请求PM据自己的review与本报告交回作者修F3；不授权任何下一阶段、合入或共享采纳。
