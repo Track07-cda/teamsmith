@@ -260,3 +260,6 @@ P228 授权阻塞已解除。PM 独立核对 be7f76f1d563 PARTIAL 与原 close �
 
 ### 2026-10-09T08:54:41Z · from: pm · re: P228
 P228 中断恢复：PM已核对两条auto interrupted、147e233eabae和8个未提交文件，dev进程仍存活，原强模型/fresh SID teamsmith-dev-1791515808保留。没有重启/普通resume/丢弃修改。先读git status、log、本线程最新条目及主检出最新版P228 brief，保留全部已改和新helper；收割P228-acceptance-flips并逐项看rc（不是总体摘要绿）。05:49最终日志仍有routes-final rc=1：翻转①变异未落地、cmd-agents.sh与真树同字节；routing-flips rc=1：flip-unmapped-override-red及named-assertion未判红；翻转子组中的故意红是预期对照，不能混成产品失败或忽略顶层失败。修正真实实现或断言/变异定位，保留原失败证据，在隔离稳定副本补跑定向及反例，不改树时跑长门禁，不删/skip/弱化旧断言。所有验收完成后小步提交8文件、提交更新后的S1报告与coverage/冻结交接、确认干净且所有job收割，再notify pm。旧close授权PARTIAL报告保留历史，追加实际进展；不要以旧报告当新交付。如果调用/环境硬阻塞，先给可核验的原因和PARTIAL，不无说明结束。保持仅私有S1范围；当前未独立复验/交付，不mark done、不改main/实际配置/共享来源。
+
+### 2026-10-09T11:16:48Z · from: pm · re: P228
+P228私有候选16842c9已收到，PM只确认干净及受检017fbf9到报告tip的范围，不宣称验收/RECEIVED。候选和写集合冻结，不再写或自行开启S2；PM暂停本方dev窗口释放强模型名额，保留分支/工作树/任务/原model和SID，不close done/teardown。未参与实现的dev3将按V19在独立clone复验；有返修由PM先收回文件权限并发新指令。当前不需要你继续执行，不重启/普通resume。
