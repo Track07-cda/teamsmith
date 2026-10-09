@@ -11,6 +11,12 @@ branch: task/P228-task-model-routing-core
 anchor: change
 deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
+## 当前返修输入（2026-10-09）
+
+冻结候选 `16842c9ddf6f83db0e43f4fdbcfb2a4cc5170c74` 未被接收。V19 独立报告及 PM 新 clone 复现确认 F1/F2，见主检出 `docs/team/reviews/V19.md` 与线程最新条目；先读这两份，旧 own-worktree 线程不是此次返修授权。P228 的原 S1 写集合现仅返还给你，S2/S3 未接手；保留旧报告并追加修订回执。PM 显式同强模型、fresh 新会话交接，不使用旧版 resume，也不尝试重写 Pi 历史。
+
+只修已接受模型/身份/读侧合同的缺口，维持原验收清单，增加可复现的源码红绿与合法控制。未授路径或规格语义变化仍先 BLOCKED 给 PM。修后冻结新 SHA，当前失败输入不能标已接收或 done。
+
 ## 授权与交付阶段
 
 用户于 2026-10-09 批准启动隔离实现，见 D104。你不是 E13/E14 的探索或提案作者，只实施已接受 change 的 S1 核心切片。产品约束的唯一来源是 `openspec/changes/task-model-routing/`；本任务书是执行和目录授权，不另建规格。
