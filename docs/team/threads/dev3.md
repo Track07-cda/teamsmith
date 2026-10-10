@@ -181,3 +181,6 @@ PM已在新私有fixture固定prefix复现F4：11/8，model/provider/SID的label
 
 ### 2026-10-09T22:36:55Z · from: pm · re: V19
 ef8f952第三轮完整报告已由PM核对并按字节收录；旧daa prefix、gate/探针hash前后一致。V19仍FAIL，暂停本完成窗口释放强模型给作者F4返修；保留本任务/分支/原model/SID，不close done、不再改冻结候选/报告。新候选由PM另冻新SHA再fresh独立复验。
+
+### 2026-10-10T00:01:02Z · from: pm · re: V19
+V19第四轮：新候选985328b（受检8201eec）已冻结binding-985328b/checkout。前三轮FAIL/ef8报告及原证据完整保留，最新执行brief与D116为准。原强模型、新会话：重新冻结自己的探针，前四项旧红/新拒绝、合法真实argv和诚实opaque边界、17臂与11条S1验收；不从字符串或占位符出现推断selector消费，不猜未知arity/做Pi parser，不更改被测源。报告只追加，所有jobs收割、树干净后notify pm。1796/0与103/0仅是作者数字，S2/S3仍未解冻。
