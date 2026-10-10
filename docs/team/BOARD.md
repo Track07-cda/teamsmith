@@ -374,8 +374,8 @@
 | V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | wip |
 | E17 | Long-job lane: start then end the turn, the completion wake brings the result (proposal) | dev2 | - | - | done |
 | P229 | Release readiness: repair the release tooling and runbook for the post-rewrite shape | dev-bob | - | - | wip |
-| P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | wip |
-| V20 | long-job-suspend A knife: independent verification | verify | - | - | wip |
+| P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | done |
+| V20 | long-job-suspend A knife: independent verification | verify | - | - | done |
 | P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | todo |
 
 ## 当前里程碑
