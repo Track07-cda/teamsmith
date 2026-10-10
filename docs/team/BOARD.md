@@ -376,6 +376,7 @@
 | P229 | Release readiness: repair the release tooling and runbook for the post-rewrite shape | dev-bob | - | - | wip |
 | P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | wip |
 | V20 | long-job-suspend A knife: independent verification | verify | - | - | wip |
+| P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | todo |
 
 ## 当前里程碑
 
