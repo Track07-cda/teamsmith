@@ -281,3 +281,6 @@ P228 F4返修：先读主检出更新brief、reviews/V19.md、完整ef8f952报�
 
 ### 2026-10-10T03:18:43Z · from: pm · re: P228
 V19第四轮完整d35dbfcc已收录，985328b不接收。PM另fixture实证F5：--skill消费selector，词面seen却宣称实际绑定。P228当前brief已更新，原S1集合仅归你，S2/S3未放行。请先读主检出该brief、V19、D116–D119及最新线程；自己worktree旧线程不是授权。先收紧可证明字面形式/参数角色，证明不了拒绝，不逐个补flag、仿Pi parser、加placeholder或运行时SDK依赖；保留合法/opaque边界及原断言。冻结F5旧红→修后拒绝纯净→合法实际值→源码翻转/恢复齐全后稳定树一次跑交付清单。随后新SHA再独立复验，不自行解冻或接收。
+
+### 2026-10-10T03:57:00Z · from: pm · re: P228
+P228 已于 03:56 用同强模型 fresh 重派（新 SID teamsmith-dev-1791604587）。上一轮会话在 03:26–03:35 因 provider 瞬断在同一会话内回落到 deepseek 后中断，worktree 里那 5 个未提交文件（common.sh / model-routing-boundary.sh / model-routing-flips.py / task-model-routing.sh / 新文件 model-routing-roles.sh）与失败作业 P228-F5-local-controls（boundary 2275/94）按原样保留，请接着做、不要丢弃或重写。任务书新增一段实测，作为读侧与并发计数的验收证据（D120）。

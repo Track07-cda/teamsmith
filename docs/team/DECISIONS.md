@@ -954,3 +954,11 @@ dev3发现selector token本身被--skill数据消费，词面seen仍误认身份
 暂停已交付dev3窗口释放唯一强模型名额，P228原S1集合归作者，以同强模型fresh交接。只修接受合同：收紧受支持字面形式并证明参数角色，证明不了就拒绝；不逐个加flag特判，不增加placeholder、运行时SDK依赖或Pi/任意CLI parser/兼容矩阵。合法内置/模板、诚实opaque fresh与quoted literal保留，不能靠重新标opaque让有精确身份宣称的错绑变绿。受控源码红→拒绝无副作用→合法参数/恢复→翻转防护保留；稳定后完整S1清单只跑一次。
 
 角色、模型预算和产品范围不变；后续新SHA再由独立席位新会话验，失败报告和四个隔离来源保留。不改配置/共享来源/其他项目，不合产品main或归档。
+
+## D120 · 强模型 provider 瞬断导致会话内回落，读侧与并发计数按实测收窄（2026-10-10）
+
+03:18 派发的 P228 强模型会话在 03:26–03:35 遇到 provider 连接失败（WebSocket / fetch failed；同刻 chatgpt.com HTTP 请求超时、TCP 可连，其余外网正常），Pi 在**同一会话内**回落到 `opencode-go/deepseek-v4.1-flash`，随后中断，留下 5 个未提交文件与一个未收割的失败作业（`P228-F5-local-controls`，boundary 2275/94，属作者自己的中间迭代）。此时 `.pi/team/state/dev.env` 与 `team ps` 仍记/计 `openai-codex/gpt-6.1-sol:high`，并发上限 1 被一个并不存在的强模型会话占用——读侧与名额计数同时失真。
+
+处置：不改写候选、不丢未提交工作；停掉回落会话（`tmux kill-window`，worktree 未触碰），03:56 用同强模型 fresh 重派（新 SID `teamsmith-dev-1791604587`，页脚实测 `(openai-codex) gpt-6.1-sol • high`）。任务书写明保留这 5 个文件、接着中间迭代做，并把这条实测列为 1.2（诚实 ps/roster/status）与 3.3/4.1（模型计数与读证据）的验收证据。不把 Pi 的回落策略、模型兼容矩阵或跨 provider 质量判断纳入 Teamsmith 实现——那是 Pi 的职责（#2027）。
+
+同批自查：PM 为查回落配置读了 `~/.pi/agent/models.json`，该文件内联 provider API key，属实际上的凭据文件；已停止读取该类文件，未把任何内容写进仓库、账本或提交。

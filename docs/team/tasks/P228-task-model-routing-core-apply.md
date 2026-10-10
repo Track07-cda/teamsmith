@@ -21,6 +21,10 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
 只修已接受模型/身份/读侧合同的缺口，维持原验收清单，增加可复现的源码红绿与合法控制。未授路径或规格语义变化仍先 BLOCKED 给 PM。修后冻结新 SHA，当前失败输入不能标已接收或 done。
 
+本次派单前的实测（PM，2026-10-10 03:18–03:52 UTC，D120）：上一轮会话在 03:26–03:35 遇到 provider 连接失败（WebSocket / fetch failed），Pi 在**同一会话内**回落到 `opencode-go/deepseek-v4.1-flash`，随后中断并留下 5 个未提交文件。恢复时先 `git status` / `git log --oneline -5` 读清这 5 个文件（`common.sh`、`model-routing-boundary.sh`、`model-routing-flips.py`、`task-model-routing.sh` 及新文件 `model-routing-roles.sh`）并**原样保留继续**，不要丢弃、重写或回退。失败作业 `P228-F5-local-controls`（boundary 选择集 2275 通过 / 94 红）是你自己的中间迭代，读它的日志接着做，不要重跑长套件。
+
+这条实测只作为读侧与并发计数的验收证据（对应 1.2 的诚实 ps/roster/status 与 3.3/4.1 的模型计数与读证据）：读侧不得把非活跃模型当成本会话在跑的模型——能用 Pi 会话记录判定就判定，判不了就如实标不可判定，不能继续宣称；并发名额不得被一个并不存在的强模型会话占用。不要实现 Pi 的回落策略、模型兼容矩阵或跨 provider 质量判断，那是 Pi 的职责。
+
 ## 授权与交付阶段
 
 用户于 2026-10-09 批准启动隔离实现，见 D104。你不是 E13/E14 的探索或提案作者，只实施已接受 change 的 S1 核心切片。产品约束的唯一来源是 `openspec/changes/task-model-routing/`；本任务书是执行和目录授权，不另建规格。
