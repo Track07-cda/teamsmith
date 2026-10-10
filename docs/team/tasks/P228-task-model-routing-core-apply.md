@@ -11,19 +11,31 @@ branch: task/P228-task-model-routing-core
 anchor: change
 deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
-## 当前返修输入（2026-10-10）
+## 当前返修输入（2026-10-10 · 第六轮：F6 + OBS1）
 
-冻结候选 `985328b0f96bd755b85d5c7f81eff92e9f4d7fd3` 判 FAIL，未接收。V19第四轮完整报告 `d35dbfcc164789b721ebc7d5f560305e63e70b20` 已按原字节收录；11条切片全rc0、1796/0及17臂103/0仍漏F5：`--skill`消费随后的`--model`/`--provider`/`--session-id`为数据，guard却计为身份selector；worker/PM continued/fresh的10真实调用及10预览误放行并发布完整身份。冻结反例1/20、合法harmless控制绿，PM另fixture逐项重放相同结果，原argv/record与已安装Pi纯parseArgs离线交叉一致。前F1–F4修后206/0、60/0、7/0及旧来源原红分开保留，不混统计。先读主检出reviews/V19.md、收录的新报告、D116–D119和线程最新条目；自己worktree旧线程不是返修授权。原S1写集合仅返还你，S2/S3不接手；按 D122 用项目默认快模型 fresh（有确定目标的实现类不用强模型），不用旧版resume或改Pi历史。
+第五轮独立复验（V19，候选 `aaffe5a`）结论 **FAIL**，报告 `docs/team/reports/V19-dev3.md`（第五轮修订）与证据根 `pm-skills-ledger/team/reports/V19-dev3/round5-aaffe5a/` 已按原字节收录。复验同时确认 **F5 参数角色修复通过**：PM 冻结探针旧 1/20 rc=1 → 新 21/0 rc=0、你自己第四轮的 206 项矩阵 206/0、复验者自设计 58 项角色矩阵 58/0、18 臂破坏套件 111/0（新 `template-roles` 臂三条定点全中）、13 条切片全 rc=0、前后源树逐字节一致。这些继续成立，不许回退。
 
-修的是参数角色证明，不是再补一个`--skill`特例。按已接受合同收紧支持的字面模板形式：不能证明身份选项及其值确实绑定就明确拒绝，不用词面seen或额外refs计数替代。允许保守拒绝无法证明的接缝形式，不为保住任意custom CLI而扩成Pi全参数/arity解析器、shell AST或兼容矩阵；不增加placeholder或运行时SDK依赖。先解释证明路径和拒绝边界，再覆盖整个selector-as-data类及已有工具参数路径，包括worker/PM的provider/model/SID和guarded恢复参数；未知arity不猜。保留空模板内置路径、已有合法绑定、诚实opaque/fresh磁盘交接及普通quoted literal；不能把这些带身份宣称的错绑模板重新标opaque，或把fresh当允许宣称精确身份的理由。
+本轮只修两点，都在已接受合同的车道内：
 
-在自己的隔离fixture保留冻结F5旧源码红→修后拒绝纯净、合法实际argv、真实源码翻转/恢复，核对record/board/prompt/proof/window不变。Pi纯parseArgs只能在离线合成测试交叉，不读取真实历史/认证、启动SDK/provider或承担其兼容职责。保留原验收和非模型断言，不能删/skip换绿。先做小范围机制和同类控制，稳定后一次性跑交付清单；别每个小改重跑长suite。
+### F6（真缺陷）：`analysis`/`verify` 被硬编码成必备类别
 
-只修已接受模型/身份/读侧合同的缺口，维持原验收清单，增加可复现的源码红绿与合法控制。未授路径或规格语义变化仍先 BLOCKED 给 PM。修后冻结新 SHA，当前失败输入不能标已接收或 done。
+- 合同原文：`specs/memory-and-deps/spec.md`（Requirement: Project task-model policy replaces seat and worker-default routing）写 `Initial routine/analysis/verify are examples, not mandatory engine categories.`；`design.md` 写「项目没有 routine 等键并非非法，映射为空才非法」；dispatch delta 另写 `Initial examples routine/analysis/verify do not close the engine vocabulary.`
+- 实现：`skills/teamsmith/scripts/lib/common.sh` 的 `team_task_map_violation` 末尾（候选树 1342–1344 行）对**每一份**映射强制 `analysis` 与 `verify` 出现；写者（`cmd-config.sh` 383/1168/1235）与读侧加载器（`common.sh` 1301/1364）共用它，无旁路。
+- 实证（证据 `round5-aaffe5a/required-category-check.log`、`required-category-asymmetry.log`）：整映射写 `maintenance=vendor/light` 被拒；`upgrade-models` 到自定义词汇 `ops=… audit=…` 被拒；去掉 `routine` 接受、去掉 `analysis` 或 `verify` 被拒（不对称，钉的是这两个名字）；手写合法映射后 `config list --json` 判 `policy.categories=[]`。delta 场景「Category map has one domain rule」（示例映射 maintenance/routine/verify，无 analysis）按整映射 SET 也会被拒。
+- 结果要求：唯一非法的映射是空映射（以及重复/畸形/不可表示等既有规则）；任意合法的项目自定义词汇整映射必须可写、可读、可升级、可派单；不含 analysis/verify 的映射合法；只含 analysis/verify 的映射仍合法。未在映射里的类别用于**新选择**仍按既有规则拒绝，删掉某类别后的同任务可信恢复仍按既有规则保持——这两条不许被本轮弄松。
+- 测试：写侧整映射/升级、读侧 `config list --json`、`team init`/`upgrade-models` 种子、以及 dispatch 场景各加断言；至少覆盖「自定义词汇整映射接受」「去掉 analysis/verify 接受」「只含 analysis/verify 接受」「空映射拒绝」四类；**红侧**：在 scratch 副本恢复那段必备循环 → 新断言必须变红。
+- 注意：套件现有夹具一律携带全词汇，所以这条合同此前从未被钉过——新增断言必须真的走「不含 analysis/verify」的路径，不能靠改夹具词汇蒙过。
 
-本次派单前的实测（PM，2026-10-10 03:18–03:52 UTC，D120）：上一轮会话在 03:26–03:35 遇到 provider 连接失败（WebSocket / fetch failed），Pi 在**同一会话内**回落到 `opencode-go/deepseek-v4.1-flash`，随后中断并留下 5 个未提交文件。恢复时先 `git status` / `git log --oneline -5` 读清这 5 个文件（`common.sh`、`model-routing-boundary.sh`、`model-routing-flips.py`、`task-model-routing.sh` 及新文件 `model-routing-roles.sh`）并**原样保留继续**，不要丢弃、重写或回退。失败作业 `P228-F5-local-controls`（boundary 选择集 2275 通过 / 94 红）是你自己的中间迭代，读它的日志接着做，不要重跑长套件。
+### OBS1（真缺陷，同一诚实性车道）：部分绑定的模板发布了未交付的身份
 
-2026-10-10 05:03 UTC 追加：上一轮 kimi-coding/k3 会话撞上 5 小时额度上限（403 permission_error）而中断，5 个未提交文件与后台倒转作业 `p228-flip-2`（pid 见 `state/bg/p228-flip-2.job`，日志 `pm-skills-ledger/team/reports/P228-dev/f5-repair-2/flip.log`）都还在；新会话先看这个日志与进程，**不要重复启一遍同一套倒转**，接着它的结果做。
+- 事实（证据 `round5-aaffe5a/roles-v4/own-probes/*/obs1-*`）：模板只绑 `--model {model}` 时，实际 argv 是 `["--model","expected:high",<prompt>]`、离线 Pi 解析 `provider=null sessionId=null`，而派单**发布**了完整身份（`provider=vendor model=expected:high session=<铸出的 sid>`）。
+- 合同依据：tasks 3.5 要求 `no falsely published identity`；dispatch delta 的记录字段是「实际启动身份」；agent-adapters delta 要求模板 `consume one resolved complete launch identity`。
+- 结果要求（两条路线任选其一，但**发布的身份不得多于 argv 实际交付的**）：要么拒绝「绑了部分身份占位符」的模板（全绑或全不绑；后者即诚实 opaque，不发布任何身份宣称）；要么照实发布——只交付到的字段进记录，未交付的（含 teamsmith 铸出的 SID）不得当作已启动身份发布。诚实 opaque 的既有路径与既有合法控制都要在这条规则下有明确定论。
+- 测试：obs1 形状（只绑 model）、全绑、全不绑三态各加断言，核对**发布记录 ⊆ 真实 argv**；**红侧**：在 scratch 副本把发布改回「一律写完整身份」→ 新断言必须变红。同任务恢复对未交付身份仍须诚实拒绝。
+
+保留所有既有验收与断言，不删/skip 换绿；F1–F5 的修复与冻结探针结果不得回退。修后冻结新 SHA；本轮输入 `aaffe5a` 不能标已接收或 done。未授路径或规格语义变化仍先 BLOCKED 给 PM。
+
+PM 实测（D120，2026-10-10 03:18–03:52 UTC）：provider 连接失败时 Pi 会**在同一会话内**回落到另一个模型（`openai-codex/gpt-6.1-sol:high` → `opencode-go/deepseek-v4.1-flash`），而席位 state 与 `team ps` 仍按派单时写入的模型展示与计数。这作为**读侧与并发计数**的验收证据（对应 1.2 的诚实 ps/roster/status 与 3.3/4.1 的模型计数与读证据）：读侧不得把非活跃模型当成本会话在跑的模型——能用 Pi 会话记录判定就判定，判不了就如实标不可判定，不能继续宣称；并发名额不得被一个并不存在的强模型会话占用。回落策略本身属 Pi 职责，Teamsmith 不实现兼容矩阵或跨 provider 质量判断。
 
 这条实测只作为读侧与并发计数的验收证据（对应 1.2 的诚实 ps/roster/status 与 3.3/4.1 的模型计数与读证据）：读侧不得把非活跃模型当成本会话在跑的模型——能用 Pi 会话记录判定就判定，判不了就如实标不可判定，不能继续宣称；并发名额不得被一个并不存在的强模型会话占用。不要实现 Pi 的回落策略、模型兼容矩阵或跨 provider 质量判断，那是 Pi 的职责。
 
@@ -31,7 +43,7 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
 用户于 2026-10-09 批准启动隔离实现，见 D104。你不是 E13/E14 的探索或提案作者，只实施已接受 change 的 S1 核心切片。产品约束的唯一来源是 `openspec/changes/task-model-routing/`；本任务书是执行和目录授权，不另建规格。
 
-当前控制面的 CLI 仍是旧版。PM 显式使用 `openai-codex/gpt-6.1-sol:high` 和 fresh 派单：核心事务、并发和 PM 启动身份属于复杂实现，使用强模型符合已批准的策略，不代表新路由已经生效。
+当前控制面的 CLI 仍是旧版。PM 按 D122 用项目默认快模型 `opencode-go/deepseek-v4.1-flash` 派单：有确定目标的实现类不用强模型；这不代表新路由已经生效。
 
 交付止于私有源码和定向验证。不得把产品代码合入主检出、部署或改实际配置。S1 私有交付不等于整个 apply 完成，不把本任务设 done/close；PM 记录私有验收和冻结交接后，才安排 S2、S3，完整集成后换人复验。
 

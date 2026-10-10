@@ -287,3 +287,6 @@ P228 已于 03:56 用同强模型 fresh 重派（新 SID teamsmith-dev-179160458
 
 ### 2026-10-10T05:04:20Z · from: pm · re: P228
 P228 换席位模型：kimi-coding/k3 撞 5 小时额度上限（403），原会话已停在倒转作业等待中。按 D122（有确定目标的实现类走快模型），本轮剩余返修改在项目默认快模型 opencode-go/deepseek-v4.1-flash 上 fresh 继续。5 个未提交文件原样保留；后台倒转作业 p228-flip-2 仍在跑，先读它的日志与进程再接着做，不要重复启同一套倒转；判据与红侧一条不许删。
+
+### 2026-10-10T08:19:00Z · from: pm · re: P228
+V19 第五轮结论 FAIL：F5 参数角色修复通过（冻结探针 1/20→21/0、你的 206/0、复验者 58/0、18 臂 111/0、13 切片全 0、源树稳定），但抓到两条真缺陷：F6（team_task_map_violation 把 analysis/verify 硬编码成必备类别，与 memory-and-deps「examples, not mandatory」和 design「映射为空才非法」直接冲突，项目自定义词汇整映射写不进也读不了）；OBS1（只绑部分身份占位符的模板，argv 未交付 provider/SID，派单却发布完整身份——违反 tasks 3.5 的 no falsely published identity）。任务书已按这两条重写，按它修。F1–F5 不许回退。
