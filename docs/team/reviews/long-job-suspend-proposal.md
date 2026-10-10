@@ -3,7 +3,8 @@
 - 复核者：PM（未参与该提案撰写）
 - 输入：任务分支 `task/E17-long-job-suspend-propose`，冻结 tip `d7f9453`（提案提交 `35ef7ad`，报告 `8dd1d11`）
 - 证据：`pm-skills-ledger/team/reviews/E17/`（独立 clone `scratch/`、试归档副本 `archive-trial/`、`run-independent.sh`、`trial-archive.log`）
-- 判定：**ACCEPTED**（可进入 apply；apply 的切片与前置见下方「准入条件」）
+- verdict: **ACCEPTED**（可进入 apply；apply 的切片与前置见下方「准入条件」）
+- 中文判定：接受
 
 ## 一、我独立跑过什么（不引用作者数字）
 
