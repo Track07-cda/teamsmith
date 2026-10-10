@@ -8,22 +8,29 @@ change: task-model-routing
 specs: dispatch, memory-and-deps, agent-adapters, pm-lifecycle, watchdog
 deltas: -
 branch: task/V19-task-model-routing-s1-verify
-deps: P228 F5-repaired S1 candidate aaffe5add59743809a44822ab77f0370da16b980 (product 55d3bc6cfa8c844ac0ace8d4a979ec03cf4811dc); E14 accepted proposal
+deps: P228 F6+OBS1-repaired S1 candidate 8bea13e7e325b10bb4032fcc9cb59fe04a7d7118 (前一个产品提交 55d3bc6); E14 accepted proposal
 
 ## 范围与调度
 
-用户已批准隔离实现与独立验证。你未参与该 change 的提案或实现。只复验 P228 的 S1 私有候选，不验证尚未实施的 S2 panel、S3 初始化/指南，不把局部通过说成整个 change 已通过。前四轮候选16842c9、a21a0a3、a1a285d、985328b 的FAIL报告及原证据保持不变。本轮输入是F5「参数角色证明」返修后的第五个冻结候选；PM 显式用强模型 fresh 派单，不超并发、不自行启动。
+用户已批准隔离实现与独立验证。你未参与该 change 的提案或实现。只复验 P228 的 S1 私有候选，不验证尚未实施的 S2 panel、S3 初始化/指南，不把局部通过说成整个 change 已通过。前四轮候选16842c9、a21a0a3、a1a285d、985328b 的FAIL报告及原证据保持不变。本轮输入是**第六轮**（F6 类别词汇 + OBS1 身份发布）返修后的候选；PM 显式用强模型 fresh 派单，不超并发、不自行启动。
 
 阅读 AGENTS、自己的最新线程、本 brief、OWNERSHIP、D104–D116；再读接受的 task-model-routing proposal/design/tasks、七份 delta 与对应 canonical specs、P228 brief/完整报告/冻结清单。历史线程的 E12/P158 命令不属于本任务。原生 OpenSpec 1.8.0 没有 verify workflow，按本仓 openspec reference 的独立验证流程执行，不安装或生成工具。
 
+## 第六轮重点（F6 + OBS1）
+
+- **F6（你上一轮判定的真缺陷）**：`analysis`/`verify` 曾被硬编码为必备类别。核实现在**唯一非法的映射是空映射**：整映射用自定义词汇（不含 analysis/verify）必须可写、可读、可升级、可派单；只含 analysis/verify 的映射仍合法；未映射的类别用于**新选择**仍拒绝；同任务可信恢复的既有规则不许放松。别只复跑作者的用例——自己造一份无 analysis/verify 的映射走一遍写侧/读侧/派单。
+- **OBS1（PM 裁定的真缺陷）**：只绑部分身份占位符的模板曾发布完整身份。核实规则是「**发布的身份不得多于 argv 实际交付的**」：部分绑定的模板要么被拒、要么只发布实际交付到的字段（teamsmith 铸的 SID 不得当已启动身份发布）；诚实 opaque 路径与既有合法控制在同一条规则下有明确结论。核对**发布记录 ⊆ 真实 argv**（读你自己的真实 argv 证据，不读报告结论）。
+- 回归：F1–F5 的既有结果不许回退（含 PM 冻结探针旧 1/20 → 新 21/0，以及 18 臂破坏套件）。
+- 夹具纪律：作者在 `smoke.sh`/适配器夹具上做过改动，逐条比对断言数量与强度，确认没有用改夹具代替删断言。
+
 ## 被检树与控制面
 
-自己长期 worktree 只写报告，不加载候选为实际运行的共享技能。PM 准备的新仓外独立真实 clone 为 `pm-skills-ledger/team/reviews/V19/round5-aaffe5a/checkout`，检出完整候选 `aaffe5add59743809a44822ab77f0370da16b980`（产品/测试 tip `55d3bc6cfa8c844ac0ace8d4a979ec03cf4811dc`，其后两个提交只改报告）。旧clone、前四轮报告与所有中断/勘误证据不覆盖。由主检出的 git common directory 解析路径：
+自己长期 worktree 只写报告，不加载候选为实际运行的共享技能。PM 准备的新仓外独立真实 clone 为 `pm-skills-ledger/team/reviews/V19/round6-8bea13e/checkout`，检出完整候选 `8bea13e7e325b10bb4032fcc9cb59fe04a7d7118`（第六轮 F6+OBS1 返修后的 tip；`55d3bc6` 是它之前的产品提交）。旧clone、前四轮报告与所有中断/勘误证据不覆盖。由主检出的 git common directory 解析路径：
 
 ```bash
 CONTROL_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)"
-CANDIDATE="$CONTROL_ROOT/../pm-skills-ledger/team/reviews/V19/round5-aaffe5a/checkout"
-EVIDENCE="$CONTROL_ROOT/../pm-skills-ledger/team/reports/V19-dev3/round5-aaffe5a"
+CANDIDATE="$CONTROL_ROOT/../pm-skills-ledger/team/reviews/V19/round6-8bea13e/checkout"
+EVIDENCE="$CONTROL_ROOT/../pm-skills-ledger/team/reports/V19-dev3/round6-8bea13e"
 OLD_CANDIDATE="$CONTROL_ROOT/../pm-skills-ledger/team/reviews/V19/binding-985328b/checkout"
 PM_PROBE="$CONTROL_ROOT/../pm-skills-ledger/team/reviews/V19/binding-985328b/pm-selector-data-replay/probe.sh"
 ```
