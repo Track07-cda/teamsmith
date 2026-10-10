@@ -984,3 +984,11 @@ PM 侧的执行约定：后续对原本走 codex 的席位（dev、dev3/verify�
 05:03 UTC，dev 会话（kimi-coding/k3）撞上 5 小时额度上限（`403 permission_error`，配额随窗口重置），返修回合中断；后台倒转作业 `p228-flip-2` 未受影响、仍在跑（独立进程组）。处置：停掉被限流的会话（`tmux kill-window`），05:04 按 D122 用项目默认快模型 `opencode-go/deepseek-v4.1-flash` fresh 重派（新 SID `teamsmith-dev-1791608661`，页脚实测 model=deepseek-v4.1-flash）。5 个未提交文件与在跑的倒转作业原样保留；任务书与线程写明先读 `f5-repair-2/flip.log` 与进程、不得重复启同一套倒转，判据与红侧一条不许删。
 
 三个 provider 的现状：codex 服务可疑、kimi 撞 5 小时额度、deepseek 为项目默认且未限流。因此本阶段席位模型回到默认，与 D122 一致；独立复验等 kimi 窗口恢复后再派。派单后一律核对实际模型（D120 同族），不只看记录。
+
+## D124 · 类别词汇是项目数据，发布身份不得多于交付（第五轮复验裁定，2026-10-10）
+
+V19 第五轮（候选 `aaffe5a`）结论 **FAIL**：F5 参数角色修复通过（冻结探针 1/20→21/0、作者 206/0、复验者自设计 58/0、18 臂 111/0、13 条切片全 rc=0、源树逐字节稳定），唯一失败理由是 **F6**：`team_task_map_violation`（`common.sh:1342-1344`）对**每一份**映射强制 `analysis` 与 `verify` 出现，与已接受合同直接冲突——`memory-and-deps` delta 写 `Initial routine/analysis/verify are examples, not mandatory engine categories.`，`dispatch` delta 写 `do not close the engine vocabulary`，`design.md:17` 写「项目没有 routine 等键并非非法，映射为空才非法」。后果是「项目自定义类别词汇」整条不可实现：自定义词汇整映射写不进、升级不了、读侧也判非法，写者与读侧共用同一函数无旁路；前四轮未发现是因为所有夹具都携带全词汇。PM 亲自核了合同三处原文、实现两处调用点与两份证据日志，判定成立。
+
+另裁定复验者交上来的边界观察 **OBS1 为真缺陷**：模板只绑 `--model {model}` 时真实 argv 不含 provider/SID（离线 Pi 解析 `provider=null sessionId=null`），派单却发布了完整身份（含 teamsmith 铸出的 SID）。依据 tasks 3.5 `no falsely published identity` 与 agent-adapters 「consume one resolved complete launch identity」，规则定为「**发布的身份不得多于 argv 实际交付的**」，修法二选一（拒绝部分绑定，或只发布交付到的字段），但必须有红侧。
+
+处置：第六轮（F6+OBS1）交回原作者，按 D122 用项目默认快模型；F1–F5 不得回退。另记一条同形操作事实：用旧控制面 CLI 不带 `--fresh` 派同模型时解析到席位基础 SID 而非该任务上轮的 fresh SID，正是本 change 要修的续跑形状（E13/#2019）。
