@@ -27,9 +27,11 @@ deps: -
 - `skills/teamsmith/extension/team-bg.ts:259-265`（工具面）：`Harvest it with team_bg_wait before you end your turn; otherwise the team wakes you once when it finishes.` 与 `promptGuidelines` 里的同义句。
 - `skills/teamsmith/templates/pm-prompt.md.tmpl:78-79`（PM 侧）：**已经写对了**——「不能让一个几十分钟的门禁卡在回合里：用 `team_bg_run` 起、让回合结束、叫醒时再收割」。说明正确措辞存在，只是没进工人那段；提案要让两者收敛到同一口径。
 - 运行实例（今天）：dev 席位在 08:28–08:56 起过 7 个 `p228-r6-*` 后台作业，其中两个各跑约 7 分 30 秒，随后立刻收割；同一天 PM 自己也多数是「起完就等」（跨回合等结果的只有少数）。这类等待期间 agent 答不了话、也不能并行推进别的事。
-- 误报实例：今天多条 `⚠ 未提交 N 个文件 · [auto·interrupted]`（例如 `tip=147e233`、`tip=985328b` 两次）——都是回合结束+未提交触发的自动告警，与真实中断混在同一形状里。
+- 误报实例：今天多条 `⚠ 未提交 N 个文件 · [auto·interrupted]`（例如 `tip=147e233`、`tip=985328b` 两次）——都是回合结束+未提交触发的自动告警，与真实中断混在同一形状里。一次更贴近本 change 的现场（09:32）：E17 提案席位的 kimi 会话在写完 `proposal/design/tasks` + 三份 delta（未提交）后撞上额度上限中断，PM 收到的就是同一个 `⚠ 未提交 1 个文件 · [auto·interrupted]` —— 与「故意挂起等作业」在收件箱里完全同形，提案要把这两类分开。
 
 ## 阶段与写边界
+
+> **续跑注记（PM，2026-10-10 09:35）**：上一轮 `kimi-coding/k3:max` 会话在 09:32 撞到 5 小时额度上限（403 permission_error）而中断；它已经把 `proposal.md`、`design.md`、`tasks.md` 与三份 delta（`dispatch`、`background-jobs`、`notify-and-inbox`）写在磁盘上（当时未提交）。新会话（同席位、同任务、同分支，项目默认快模型）开机先 `git status` 看这些草稿，**读完再接着完成，不要重写**；若草稿与本书范围冲突，以本书为准并在报告里点名。落点与 `deltas:` 头字段不同处，按上文要求一并报告，PM 改头字段。
 
 只写 `openspec/changes/long-job-suspend/` 的 proposal / design / tasks / delta specs，不写产品代码、不改 `extension/`、`cmd-agents.sh`、`templates/`、`references/`、`AGENTS.md`。后面由**另一个**席位 apply、再由第三个席位 verify，PM 审提案并归档。
 
