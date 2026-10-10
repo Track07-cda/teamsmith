@@ -934,3 +934,9 @@ P228交付985328b（受检8201eec）的干净本地候选；新binding-985328b�
 暂停已交付dev窗口释放唯一强模型名额；dev3仍未参与实现，同强模型fresh新会话对新clone验证。前四项F1–F4旧红/新拒绝、合法值与literal/opaque边界、实际argv与记录、无副作用及17源码臂在固定独立输入中重查，并另找承诺内新边界，不猜未知CLI参数arity或实现Pi解析器。11条S1验收逐一串行、长jobs收割；未跑全量/S2/S3/正式性能/provider不得冒称通过。
 
 四次输入/三轮FAIL及原证据保留。P228/V19保持wip，S2/S3不接手，源码不进部署main或私有集成，实际配置/共享来源/其他项目不改；完成独立复验才决定是否私有接收与串行移交。
+
+## D117 · 第四轮额度中断后，原模型原会话单次恢复（2026-10-10）
+
+00:02 dev3终端明确报`Codex error: The usage limit has been reached`，只完成启动阅读；到02:07仍无新第四轮验收证据。PM不把活PID/启动成功当复验在推进。02:09通过监视通道仅投递一次继续指令，model=openai-codex/gpt-6.1-sol:high、SID=teamsmith-dev3-1791590522均未变，无新launch/resume、降级或配置动作。
+
+此次请求后已看到新的代码/规格阅读工具调用，以及binding-985328b独立gate driver、输入SHA和config/routes等日志；确认恢复执行，不等于通过或交付。额度错误与恢复投递、终端片段保留在reviews/V19/binding-985328b/quota-recovery。原候选仍冻结，继续固定输入、串行验收和报告收尾；无重复API请求循环或跨会话代收割。
