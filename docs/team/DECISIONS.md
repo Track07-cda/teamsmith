@@ -962,3 +962,11 @@ dev3发现selector token本身被--skill数据消费，词面seen仍误认身份
 处置：不改写候选、不丢未提交工作；停掉回落会话（`tmux kill-window`，worktree 未触碰），03:56 用同强模型 fresh 重派（新 SID `teamsmith-dev-1791604587`，页脚实测 `(openai-codex) gpt-6.1-sol • high`）。任务书写明保留这 5 个文件、接着中间迭代做，并把这条实测列为 1.2（诚实 ps/roster/status）与 3.3/4.1（模型计数与读证据）的验收证据。不把 Pi 的回落策略、模型兼容矩阵或跨 provider 质量判断纳入 Teamsmith 实现——那是 Pi 的职责（#2027）。
 
 同批自查：PM 为查回落配置读了 `~/.pi/agent/models.json`，该文件内联 provider API key，属实际上的凭据文件；已停止读取该类文件，未把任何内容写进仓库、账本或提交。
+
+## D121 · codex 服务可疑，改走 kimi-coding/k3:max（用户手动切换，2026-10-10）
+
+用户指示：codex 可能服务有问题，改切 `kimi-coding/k3:max`；用户已**手动**在运行中的 dev 会话里切好（同一会话原地切模型，页脚实测 `(kimi-coding) k3 • max`，1.0M 窗口，未提交的 5 个文件未动），并明确要求**不要修改默认模型**——`TEAM_DEFAULT_MODEL` 与 `TEAM_AGENT_MODELS` 保持原值（默认仍 `opencode-go/deepseek-v4.1-flash`，verify 覆盖仍 codex），本次不动配置。
+
+PM 侧的执行约定：后续对原本走 codex 的席位（dev、dev3/verify、dev2）派单时显式带 `--model kimi-coding/k3:max`，不靠改配置；`TEAM_MODEL_LIMITS` 已有 `kimi-coding/k3=2`，允许两个 kimi 会话并行。注意续跑路径（`team_cmd_resume`）仍从席位/默认配置重解析模型，若席位被巡检自动续跑会回到配置模型而非 kimi，续跑后需核对实际模型（D120 同族）。
+
+记录口径：P228 这轮返修的后段实际在 kimi-coding/k3:max 上跑（会话前段为 codex），验收与报告按实际运行模型记述，不按派单时写入的记录。
