@@ -6,7 +6,7 @@ phase: verify
 category: verify
 change: long-job-suspend
 specs: background-jobs, notify-and-inbox
-deltas: background-jobs, notify-and-inbox
+deltas: -
 branch: task/V20-long-job-suspend-apply-a-verify
 deps: P230（A 刀 apply，已交付 8913ba341037）；E17（提案 ACCEPTED，docs/team/reviews/long-job-suspend-proposal.md）
 
