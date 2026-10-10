@@ -12,14 +12,14 @@
 
 ## 2. A 刀 · 车道侧（extension/team-bg.ts，无路由碰撞）
 
-- [ ] 2.1 重写 `team_bg_run` 的 description / promptGuidelines / 起作业回执文本与 `team_bg_wait` 的
+- [x] 2.1 重写 `team_bg_run` 的 description / promptGuidelines / 起作业回执文本与 `team_bg_wait` 的
   description：结束回合默认、完成叫醒为正常收割点、原地等例外三条（预算 + 阻塞 + 独占）、
   预算数字入文；不再出现「回合结束前必须收割」与「叫醒 = 损失」措辞。完成叫醒的合并消息继续
   点名每个 id 并指引收割（既有行为，钉住）。
-- [ ] 2.2 账本新增两类行：`start id=<id> pid=<pid>`（返回 id 前，与 `.job` 记录同点位）与
+- [x] 2.2 账本新增两类行：`start id=<id> pid=<pid>`（返回 id 前，与 `.job` 记录同点位）与
   `wait id=<id> outcome=<harvested|running|interrupted> waited_s=<s>`（每次 wait 返回，只量本调用）；
   `wake` / `settled-with-unharvested` / `spawn-error` / `stop` 行形状逐字节不变。
-- [ ] 2.3 新独立测试入口 `skills/teamsmith/tests/bg-ledger.sh`（遵循夹具隔离纪律：清继承 TEAM_*、
+- [x] 2.3 新独立测试入口 `skills/teamsmith/tests/bg-ledger.sh`（遵循夹具隔离纪律：清继承 TEAM_*、
   断言 `team paths` 解析到夹具、跑后断言真账本未动）覆盖：`--select wording,ledger,suspend-shape,flip`。
   A 刀的两个扩展（2.1/2.2 与 3.1）的用例都跑在这个入口里 —— 因为它不碰 S1 拥有的 `smoke.sh`；
   B 刀再把这些用例折回 smoke §13/§13c 并登记 section-select 映射（见 4.3）。
@@ -28,14 +28,14 @@
 
 ## 3. A 刀 · 通知侧（extension/team-notify.ts，无路由碰撞）
 
-- [ ] 3.1 实现挂起判定：从**车道写记录的那个目录**读 `state/bg/*.job`，按车道的解析规则定位（显式
+- [x] 3.1 实现挂起判定：从**车道写记录的那个目录**读 `state/bg/*.job`，按车道的解析规则定位（显式
   `TEAM_STATE_DIR` 优先；否则「cwd 的 worktree 带 `.pi/team/config.sh` → 它自己；`TEAM_ROOT`；
   最近的带 config 的祖先；git 主工作树」）—— **不许用 notify 自己的 root（`--git-common-dir`，落
   主工作树）顶替车道的目录**；逐条 `(pid, start-time)` 活体验证（与 `team bg list` 同一规则），
   验证不过不算在跑。完成 + 在跑非空 → `[auto·suspended]` + `awaiting=<id>[,…]`，省略 ⚠ 前缀、
   保留 `uncommitted=<n>`；未完成 + 在跑非空 → 保持 `[auto·interrupted]` + `awaiting=`；其余形状
   逐字节不变。判定的任何失败（目录不可读、记录畸形、/proc 读不到）一律退回非挂起。
-- [ ] 3.2 A 刀阶段：3.1 的用例先在 2.3 的独立入口里实现（S11 形状 worktree 侧记录算数 + 主根诱饵；
+- [x] 3.2 A 刀阶段：3.1 的用例先在 2.3 的独立入口里实现（S11 形状 worktree 侧记录算数 + 主根诱饵；
   显式 `TEAM_STATE_DIR` 里的记录算数 + notify 自己 root 下的诱饵不算）；B 刀再折回 smoke §13 并
   登记 section-select 映射（4.3）。用例主体：完成 + 活记录 → suspended；死 pid / 指纹不符（复用）→
   不挂起；中断 + 活记录 → interrupted + awaiting。

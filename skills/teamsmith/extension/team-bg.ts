@@ -24,6 +24,7 @@ import { dirname, join, resolve } from 'node:path'
 
 type Job = {
   id: string
+  root: string // 起作业时解析到的车道根 —— 账本/记录/wait 行都落它下面（会话中途换 cwd 也不漂）
   pid: number
   command: string
   cwd: string
@@ -44,6 +45,20 @@ const TAIL_BYTES = 8 * 1024
 const TRUNC_MARK = '[team-bg] truncated: output exceeded the log cap, earlier output dropped.'
 const CMD_DISPLAY_MAX = 100 // 结果文本里命令的码点上限（超出 → 前 100 码点 + …）
 const CMD_ELLIPSIS = '…'
+
+/**
+ * 车道口径（design 决策 1，单一来源）——两个工具的 description / snippet / guidelines / 起作业回执
+ * 都从这里取材，门禁（tests/bg-ledger.sh）逐字钉住：
+ *   ① 起完**默认结束回合**；
+ *   ② 作业完成时的**叫醒是正常收割点**（多条合并成一条，不是损失）；
+ *   ③ **原地等是有界例外**：预算（约 2 分钟）+ 结果卡住下一步 + 没有别的任务可推进，三条**同时**成立。
+ * 任何面都不得再出现「回合结束前必须收割」的措辞，也不得把叫醒写成惩罚/损失。
+ */
+const INLINE_WAIT_BUDGET = '~2 minutes'
+const SUSPEND_DEFAULT =
+  'End your turn after starting; the completion wake-up (several completions merge into one message) is the normal harvest point.'
+const INLINE_WAIT_EXCEPTION =
+  `Wait inline only in the bounded exception: all three must hold -- the job should finish within the inline-wait budget (${INLINE_WAIT_BUDGET}), its result blocks your immediate next step, and no other task work can advance meanwhile.`
 
 /**
  * 定位**本会话自己的根**：team-bg 的产物（作业日志、账本、合并窗口）都是会话本地的，
@@ -258,12 +273,13 @@ export default function (pi: ExtensionAPI) {
     label: 'Team background job',
     description:
       'Start a long command (a gate, a build) as a detached background job and return immediately with a job id. ' +
-      'Output goes to state/bg/<id>.log (bounded). Harvest it with team_bg_wait before you end your turn; ' +
-      'otherwise the team wakes you once when it finishes.',
-    promptSnippet: 'team_bg_run: start a long command in the background (returns a job id immediately)',
+      `Output goes to state/bg/<id>.log (bounded). ${SUSPEND_DEFAULT} Then run team_bg_wait <id> there to harvest it. ` +
+      INLINE_WAIT_EXCEPTION,
+    promptSnippet:
+      'team_bg_run: start a long command in the background and end your turn ' +
+      '(returns a job id immediately; the completion wake-up is the normal harvest point)',
     promptGuidelines: [
-      'Use team_bg_run for long gates or builds, and harvest every job with team_bg_wait before ending your turn ' +
-      '(a turn must not end with unharvested background jobs).',
+      `Use team_bg_run for long gates or builds. ${SUSPEND_DEFAULT} ${INLINE_WAIT_EXCEPTION}`,
     ],
     parameters: {
       type: 'object',
@@ -295,11 +311,16 @@ export default function (pi: ExtensionAPI) {
         closeSync(fd)
       }
       const job: Job = {
-        id, pid: child.pid ?? 0, command, cwd, log, startedAt: Date.now(),
+        id, root, pid: child.pid ?? 0, command, cwd, log, startedAt: Date.now(),
         done: false, exitCode: null, harvested: false, notified: false, waiters: [],
       }
       jobs.set(id, job)
-      if (job.pid > 0) writeJobRecord(root, job)
+      if (job.pid > 0) {
+        writeJobRecord(root, job)
+        // 起作业的账本行：与 .job 记录同一点位、返回 job id **之前**写（design 决策 6）。
+        // 「起了就等」与「挂起后被叫醒再收」从此只凭 state/bg.log 就能分开数。
+        appendLedger(root, `start id=${id} pid=${job.pid}`)
+      }
       child.on('exit', (code: number | null) => finishJob(root, job, code))
       child.on('error', (error: Error) => {
         appendLedger(root, `spawn-error id=${id} ${String(error?.message ?? error)}`)
@@ -310,7 +331,7 @@ export default function (pi: ExtensionAPI) {
         trimTimer = setInterval(() => { for (const j of jobs.values()) if (!j.done) trimLog(j.log) }, TRIM_EVERY_MS)
       }
       return {
-        content: [{ type: 'text', text: `job ${id} started (pid ${job.pid}); log: ${log}\n  cmd: ${displayCmd(command)}\nHarvest it with team_bg_wait ${id}.` }],
+        content: [{ type: 'text', text: `job ${id} started (pid ${job.pid}); log: ${log}\n  cmd: ${displayCmd(command)}\n${SUSPEND_DEFAULT} Harvest job ${id} with team_bg_wait when that wake-up arrives (the result comes back inline). ${INLINE_WAIT_EXCEPTION}` }],
         details: { id, pid: job.pid, log, cwd, cmd: command },
       }
     },
@@ -319,8 +340,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: 'team_bg_wait',
     label: 'Team background job wait',
-    description: 'Wait for a job started by team_bg_run, harvest it and return its exit code plus the log tail inline.',
-    promptSnippet: 'team_bg_wait: harvest a team_bg_run job (waits if it is still running)',
+    description:
+      'Wait for a job started by team_bg_run, harvest it and return its exit code plus the log tail inline. ' +
+      `${SUSPEND_DEFAULT} ${INLINE_WAIT_EXCEPTION}`,
+    promptSnippet:
+      'team_bg_wait: harvest a team_bg_run job (waits if it is still running; the completion wake-up is the normal harvest point)',
     parameters: {
       type: 'object',
       properties: {
@@ -330,7 +354,7 @@ export default function (pi: ExtensionAPI) {
       required: ['id'],
       additionalProperties: false,
     } as any,
-    async execute(_toolCallId: string, params: any, signal: any) {
+    async execute(_toolCallId: string, params: any, signal: any, _onUpdate: any, ctx: any) {
       const job = jobs.get(String(params?.id ?? ''))
       if (!job) {
         const known = [...jobs.keys()].join(', ') || '(none)'
@@ -340,23 +364,35 @@ export default function (pi: ExtensionAPI) {
         ? Math.max(0, Number(params.timeout_ms))
         : DEFAULT_WAIT_MS
       let running = false
+      let interrupted = false
+      let waitedMs = 0
       if (!job.done && timeout > 0) {
         job.harvested = true // 收割意图先落地：保证完成时静默（#689 第 1 条）
+        const waitingSince = Date.now()
         const exited = await waitForExit(job, timeout, signal)
+        waitedMs = Date.now() - waitingSince // 只量**本次调用**自己等的时间，不是作业年龄
         if (!exited && !job.done) {
           job.harvested = false // 没收成 → 撤销意图，完成时照常唤醒
           running = true
+          interrupted = signal?.aborted === true // 超时 vs 被中止：账本分开记（design 决策 6）
         }
       } else if (!job.done) {
         running = true
+        interrupted = signal?.aborted === true
       }
+      const waitedS = (waitedMs / 1000).toFixed(1)
+      const root = job.root || findRoot(String(ctx?.cwd ?? process.cwd()))
       if (running) {
+        // 每次 team_bg_wait 返回一行（超时 = running；信号中止 = interrupted）；既有的
+        // wake / settled-with-unharvested / spawn-error / stop 行形状一字不动。
+        appendLedger(root, `wait id=${job.id} outcome=${interrupted ? 'interrupted' : 'running'} waited_s=${waitedS}`)
         return {
           content: [{ type: 'text', text: `job ${job.id} is still running (pid ${job.pid}); log: ${job.log}\n  cmd: ${displayCmd(job.command)}` }],
           details: { id: job.id, running: true, log: job.log, cmd: job.command },
         }
       }
       job.harvested = true
+      appendLedger(root, `wait id=${job.id} outcome=harvested waited_s=${waitedS}`)
       const { text, truncated } = tailOf(job.log, TAIL_BYTES)
       const secs = ((Date.now() - job.startedAt) / 1000).toFixed(1)
       const body = truncated ? `${TRUNC_MARK}\n${text}` : text

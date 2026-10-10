@@ -19,7 +19,7 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -130,6 +130,94 @@ function findRoot(cwd: string): string {
     return ''
   }
   return derived || envRoot
+}
+
+/** 后台车道自己写记录的 state 目录（team-bg 的 findRoot + stateDir 两条规则的复刻）——挂起判定
+ *  **只**读这里。为什么不拿 notify 自己的 root 顶替（design 决策 4）：本仓 worker worktree 不带 config，
+ *  两侧今天巧合都落主工作树；而 worktree 自带 config 的形状（S11 夹具）下车道落 worktree 侧，
+ *  notify 的 git-common-dir 就会读错目录。规则：显式 TEAM_STATE_DIR 优先；否则「cwd 的 worktree 带
+ *  config → 它自己；TEAM_ROOT（带 config）；最近的带 config 的祖先；git 主工作树（最后的兜底）」。
+ *  任何一步推不出来 → 空串（调用方 fail-closed：不挂起）。 */
+function laneStateDir(cwd: string): string {
+  const envDir = process.env.TEAM_STATE_DIR
+  if (envDir) return resolve(envDir)
+  let root = ''
+  const top = run('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--show-toplevel'])
+  if (top && existsSync(join(top, '.pi/team/config.sh'))) root = resolve(top)
+  const envRoot = process.env.TEAM_ROOT ? resolve(process.env.TEAM_ROOT) : ''
+  if (!root && envRoot && existsSync(join(envRoot, '.pi/team/config.sh'))) root = envRoot
+  if (!root) {
+    let dir = resolve(cwd)
+    for (;;) {
+      if (existsSync(join(dir, '.pi/team/config.sh'))) { root = dir; break }
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  if (!root) {
+    const common = run('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
+    if (common) {
+      const main = dirname(common)
+      if (existsSync(join(main, '.pi/team/config.sh'))) root = main
+    }
+  }
+  return root ? join(root, '.pi/team/state') : ''
+}
+
+/** notify 自己的落点（它的项目根 + .pi/team/state）。**不许**拿它当车道的目录；只用来在两侧分歧时
+ *  记一行日志点名（否则这种错位会静默地读到错目录）。 */
+function notifyStateDir(root: string): string {
+  return root ? join(root, '.pi/team/state') : ''
+}
+
+/** /proc/<pid>/stat 的启动时间指纹（第 22 字段）。comm 字段带空格/括号 → 按**最后一个** `)` 切开再数。
+ *  进程不在 / 读不到 → 空串（调用方据此判「不算在跑」）。 */
+function procStartTime(pid: number): string {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const rest = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
+    return rest[19] ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** 在跑作业集合：读车道目录下的 `bg/*.job`，逐条做 (pid, start-time) 活体验证（与 `team bg list`
+ *  同一条身份规则）。任何一条失败都**跳过**（目录/记录读不了、软链-FIFO 记录、pid 非正整数、
+ *  start 缺失、/proc 读不到、指纹不符）—— fail-closed：判定的不确定方向永远是「不挂起」，
+ *  绝不假造挂起（design 决策 4）。 */
+function runningLaneJobs(laneDir: string): string[] {
+  if (!laneDir) return []
+  let names: string[]
+  try {
+    names = readdirSync(join(laneDir, 'bg'))
+  } catch {
+    return [] // 车道还没起过作业（目录不存在）/ 读不了：没有在跑作业
+  }
+  const ids: string[] = []
+  for (const name of names.sort()) {
+    if (!name.endsWith('.job')) continue
+    const id = name.slice(0, -'.job'.length)
+    if (!/^[A-Za-z0-9._-]+$/.test(id)) continue // 平坦 id（读侧边界与 team bg 同规则）
+    try {
+      const file = join(laneDir, 'bg', name)
+      if (!lstatSync(file).isFile()) continue // 软链 / FIFO / 目录：记录畸形
+      const fields: Record<string, string> = {}
+      for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+        const i = line.indexOf('=')
+        if (i > 0) fields[line.slice(0, i).trim()] = line.slice(i + 1).trim()
+      }
+      const pid = Number(fields.pid ?? '')
+      const start = fields.start ?? ''
+      if (!Number.isInteger(pid) || pid <= 0 || !start) continue
+      if (procStartTime(pid) !== start) continue // 死进程 / pid 复用 / /proc 读不到：都不算在跑
+      ids.push(id)
+    } catch {
+      continue // 读不了：不算在跑
+    }
+  }
+  return ids
 }
 
 function readCfg(root: string): Cfg {
@@ -330,8 +418,6 @@ export default function (pi: ExtensionAPI) {
     const tip = proven ? run('git', ['-C', cwd, 'rev-parse', 'HEAD']).slice(0, TIP_WIDTH) : ''
     const revStamp = tip ? ` · task=${id} tip=${tip}` : ''
     const dirty = run('git', ['-C', cwd, 'status', '--porcelain']).split('\n').filter(Boolean).length
-    // 未提交 = 没交付干净：让 PM 一眼看出来（CEP 实测：这种状态和"干净交付"在通知里长得一样）
-    const dirtyFlag = dirty > 0 ? `⚠ 未提交 ${dirty} 个文件 · ` : '' 
     const upstream = run('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
     const unpushed = upstream
       ? run('git', ['-C', cwd, 'rev-list', '--count', '@{upstream}..HEAD']) || '?'
@@ -355,11 +441,24 @@ export default function (pi: ExtensionAPI) {
       /* 通知绝不能打断会话 */
     }
 
+    // 挂起判定（design 决策 4）：在跑集合从**车道自己写记录的目录**读（laneStateDir），逐条 (pid,
+    // start-time) 验活；判定失败一律退回非挂起形状（fail-closed）——既不假造挂起，也不拿 notify 自己的
+    // root 顶替车道目录（两侧分歧时它只负责把这件事记进日志）。
+    const laneDir = laneStateDir(cwd)
+    const ownDir = notifyStateDir(root)
+    if (laneDir && ownDir && laneDir !== ownDir) {
+      log(`suspend check reads the lane's directory ${laneDir} (notify's own root would be ${ownDir})`, cfg)
+    }
+    const running = runningLaneJobs(laneDir)
+    const awaiting = running.length > 0 ? `awaiting=${running.join(',')}` : ''
+    const suspended = completed && running.length > 0
+
     const summary = [
       `agent:${agent}`,
       id,
       `branch=${branch || '-'}`,
       `uncommitted=${dirty}`,
+      ...(awaiting ? [awaiting] : []),
       `unpushed=${unpushed}${upstream ? '' : '(no-upstream)'}`,
     ].join(' · ')
     // 未完成的回合 + 本轮内有过生命周期事件 = 内部重启/压缩的产物，不是交付：不发简报、不敲门。
@@ -371,8 +470,12 @@ export default function (pi: ExtensionAPI) {
     }
     lifecycleDuringTurn = ''
 
+    // 未提交 = 没交付干净：让 PM 一眼看出来（CEP 实测：这种状态和"干净交付"在通知里长得一样）。
+    // 挂起不是交付主张：省略 ⚠ 前缀（事实留在 uncommitted=<n> 字段里），否则告警框只会误导。
+    const dirtyFlag = dirty > 0 && !suspended ? `⚠ 未提交 ${dirty} 个文件 · ` : ''
+
     count++
-    const tag = completed ? '[auto]' : '[auto·interrupted]'
+    const tag = completed ? (suspended ? '[auto·suspended]' : '[auto]') : '[auto·interrupted]'
     // 去重键：整条末消息的「长度+指纹」+ 修订标识（新 tip = 新修订，不该被去重吞掉）。
     // 老键（last[0:60]）会把三条开头相同、后半不同的简报当成同一条吞掉（M6.3 F17）。
     const key = `${agent}|${tag}|${summary}|${revStamp}|${last.length}:${fingerprint(last)}`
