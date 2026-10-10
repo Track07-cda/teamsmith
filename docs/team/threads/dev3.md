@@ -190,3 +190,6 @@ V19第四轮启动后00:02终端报Codex usage limit，只有阅读准备，尚�
 
 ### 2026-10-10T02:29:48Z · from: pm · re: V19
 F5 PM固定输入重放已确认：10真实误放行/20应拒绝红，合法harmless控制绿；纯parseArgs、候选及探针前后hash不变，原证据在reviews/V19/binding-985328b/pm-selector-data-replay。985不接收。继续原会话完整收尾、收割jobs并追加清楚哪些已实际执行；不要改被测源或扩未知arity/Pi parser。当前wtr报告仍未提交，完整交付请以实际commit/clean状态为准，不把保存仓外脚本称Git已提交。作者仍冻结，待完整报告后同范围返修。
+
+### 2026-10-10T06:08:42Z · from: pm · re: V19
+V19 第五轮：新候选已冻结 aaffe5add59743809a44822ab77f0370da16b980（产品/测试 55d3bc6），独立 clone 在 pm-skills-ledger/team/reviews/V19/round5-aaffe5a/checkout。你自己 worktree 只写报告，旧轮报告与证据不覆盖。重点 F5 参数角色证明：先用 PM 冻结探针（reviews/V19/binding-985328b/pm-selector-data-replay/probe.sh，sha256 7634…，本轮不得改）对旧 clone 复现红、对新候选验绿，再自设计角色反例（-e/--skill/未知开关/续跑形式 × worker-PM × preview-真实）；同时复审 F1–F4 与 TASK 未跑部分的根因是否真在 S1 车道外，不要照抄作者边界。任务书已更新，按它执行。
