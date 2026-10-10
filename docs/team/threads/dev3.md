@@ -187,3 +187,6 @@ V19第四轮：新候选985328b（受检8201eec）已冻结binding-985328b/check
 
 ### 2026-10-10T02:09:35Z · from: pm · re: V19
 V19第四轮启动后00:02终端报Codex usage limit，只有阅读准备，尚无独立第四轮gate。PM现在仅在原模型/原SID尝试一次恢复；不要自行换模型/重派/碰共享配置。若额度恢复，继续最新brief，先固定输入再串行验收、完整报告；若仍限制，停止重复API请求，保留现场与原失败，不把活PID报成在复验。
+
+### 2026-10-10T02:29:48Z · from: pm · re: V19
+F5 PM固定输入重放已确认：10真实误放行/20应拒绝红，合法harmless控制绿；纯parseArgs、候选及探针前后hash不变，原证据在reviews/V19/binding-985328b/pm-selector-data-replay。985不接收。继续原会话完整收尾、收割jobs并追加清楚哪些已实际执行；不要改被测源或扩未知arity/Pi parser。当前wtr报告仍未提交，完整交付请以实际commit/clean状态为准，不把保存仓外脚本称Git已提交。作者仍冻结，待完整报告后同范围返修。

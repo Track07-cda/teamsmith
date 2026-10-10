@@ -940,3 +940,9 @@ P228交付985328b（受检8201eec）的干净本地候选；新binding-985328b�
 00:02 dev3终端明确报`Codex error: The usage limit has been reached`，只完成启动阅读；到02:07仍无新第四轮验收证据。PM不把活PID/启动成功当复验在推进。02:09通过监视通道仅投递一次继续指令，model=openai-codex/gpt-6.1-sol:high、SID=teamsmith-dev3-1791590522均未变，无新launch/resume、降级或配置动作。
 
 此次请求后已看到新的代码/规格阅读工具调用，以及binding-985328b独立gate driver、输入SHA和config/routes等日志；确认恢复执行，不等于通过或交付。额度错误与恢复投递、终端片段保留在reviews/V19/binding-985328b/quota-recovery。原候选仍冻结，继续固定输入、串行验收和报告收尾；无重复API请求循环或跨会话代收割。
+
+## D118 · 第四轮F5角色绕过已实证，不提前接收（2026-10-10）
+
+dev3发现selector token本身被--skill数据消费，词面seen仍误认身份已绑定。PM固定输入重放985：10次worker/PM fresh/continued误放行，20项拒绝断言红，合法harmless数据控制绿；原argv/record与纯Pi parseArgs离线输出交叉一致，候选/脚本/parser hash未变。完整证据在reviews/V19/binding-985328b/pm-selector-data-replay，工具job已收割；没有真实SDK/provider/session/auth调用或业务服务动作。
+
+这不是模型质量或思维链兼容问题，而是工具对自己发出参数的绑定宣称错误。当前第四轮尚在完整收尾，只接收F5证据，985不接收、P228作者继续冻结、S2/S3不移交。最终返修优先收紧支持的字面模板/参数角色，不在Teamsmith复刻Pi parser、追踪内部模型切换或建立全CLI arity矩阵。
