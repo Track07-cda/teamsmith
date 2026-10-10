@@ -450,3 +450,132 @@ config 的嵌套 preview 控制显示 SKIP 1，顶层 SKIP 0，未隐去。routi
 本轮四个后台作业全部已工具收割：`V19-third-gates`、`V19-third-independent`、`V19-third-old-controls`、`V19-third-binding-control`。完整 gates/反例/旧红绿/固定输入闭环已落盘，没有悬挂工作。只提交自己的报告，前两轮正文保留；最终隐私、prefix/diff/自己树干净核对和稳定 CLI 通知记录另存 E3 的交付日志。
 
 未测/未授权：S2 UI、S3 init/指南，完整 change 的全量 smoke/独立验收，真实 Pi/provider/跨模型会话质量或消息/推理适配，其他项目、共享来源/main 采纳、真实配置升级/服务启动、远端写入、合并/部署/归档。本轮交付的是 **S1 完整失败证据**，请求 PM 在冻结候选上处理 F4；我不修作者源码，不 mark done，不解冻或派下一阶段。
+
+## 第四轮独立修订：985328b，选择器仍会被普通参数消费
+
+前三轮正文与 FAIL 保持原样。本轮受检完整 SHA 为 `985328b0f96bd755b85d5c7f81eff92e9f4d7fd3`；独立真实 clone 为 `../pm-skills-ledger/team/reviews/V19/binding-985328b/checkout`，不是共享技能来源。以下 **E4** 指 `../pm-skills-ledger/team/reports/V19-dev3/binding-985328b/`。产品/测试与作者受检 `8201eece2bab8e0806735ada6cc9861a58251090` 一致，final 差异仅报告；前置 HEAD、真 `.git`、干净树及源哈希见 `preflight.txt`。
+
+当前限定 **S1 FAIL**：独立新反例 F5 已复现。此条记录时，串行切片与破坏臂尚在运行，不能提前宣称验收完成；收尾追加实际 rc/输出及闭环，不覆盖本条时间事实。
+
+### F5：普通参数的数据是选择器 token，guard 仍把它当成选项
+
+第四轮的 F4 修复从占位符计数改成 `seen` selector 计数，能拒绝原 positional/数据槽；但 `common.sh:1548` 起的扫描没有区分一个 token 是选项还是前一个参数的数据。例如同一任务恢复模板：
+
+```text
+<recording-pi> --provider {provider} --skill --model {model} --session-id {session_id} {prompt}
+```
+
+`--skill` 消费紧随的 `--model`，所以实际 CLI 没有 model selector。guard 却继续扫描 `--model {model}` 并登记 `seen[model]=1`。这不是未知短别名、猜测未知参数 arity、quoted 字面 glob 或其它 harness 兼容问题：`--skill` 是本机 Pi 的现有公开参数，作者第四轮 option-aware 测试 oracle 也明确把它的数据消费掉。模板为窄 grammar 内单条 literal CLI，身份占位符齐全且未加引号，不属于无需承诺连续身份的 opaque fresh 模板。
+
+固定探针 `E4/selector-data-probe.sh`，SHA256=`76341583b85e1dd95e26b09b84989ef338b8842d85f149f0059a376e2ac5b2fd`，实际命令 `bash E4/run-probe.sh E4/selector-data-probe.sh <新候选> E4 selector-data`，rc=1，输出尾部 `TOTAL pass=1 fail=20`。20 个红断言来自 worker provider/model/SID 和 PM provider/model × continued/fresh × preview/真实调用；所有这些调用错误地返回 0，真实启动写入新 assignment/PM metadata。不是对坏源码的 mutant 红。
+
+原始 fixture 为 `E4/own-probes/teamsmith-v19-fourth-own.61DVgk/`。每项保留 `.argv.json`、`.parsed.json`、`.published.env`、preview/real `.rc/.log` 与 effect 前后哈希。实际启动的是记录 argv 的 fixture shell；之后仅离线调用已安装 Pi 的纯 `parseArgs(argv)` 作为交叉 oracle（不是主 CLI/SDK，没有 provider、真实会话或 credential 读取）。其 `dist/cli/args.js` SHA256 前后一致：`231eca0304b149165a35b12730052586603f23208667e3a57355638017450175`。
+
+| 真实调用 | 已发布记录 | 记录进程实际 argv 的离线解析 |
+|---|---|---|
+| worker continued：`--skill --model {model}` | `model=vendor/expected:high`、`mode=continued`、原 SID | provider=`vendor`、model=`null`、skills=`["--model"]`，SID仍正确 |
+| worker continued：`--skill --provider {provider}` | 同上 | provider=`null`、model=`expected:high`、skills=`["--provider"]` |
+| worker continued：`--skill --session-id {session_id}` | 同上 | SID=`null`、skills=`["--session-id"]`，provider/model仍正确 |
+| PM continued：`--skill --model {model}` | `model=vendor/pm:high`、`mode=continued`、`resume_key=args:-c` | model=`null`、continue=`true`、skills=`["--model"]` |
+| PM continued：`--skill --provider {provider}` | 同上 | provider=`null`、continue=`true`、skills=`["--provider"]` |
+
+同样的 fresh 变体也被误接受；它们不替 continued 红承担证据。相邻绿控制将普通数据改成 `--skill harmless`，完整 provider/model/SID selector 后真实启动 rc=0；同一纯 Pi parser 返回 `vendor / expected:high / assignment 原 SID`，skills=`["harmless"]`。这证明 fixture 能正确启动和判定绑定，不是所有模板都失败。
+
+`selector-data-source.before.txt` 与 `.after.txt`、script 前后 SHA 和 `selector-data-stability.txt` 证明测试过程中候选/脚本未改。BLOCKED: 实现缺陷属于 P228 owner，需 PM 决定由其收紧 literal 模板的参数角色证明并补相应 guard 控制；我只提交独立报告，不改候选或作者测试，不扩张为 Pi parser/其它 CLI 兼容矩阵。
+
+### 第四轮收尾：固定反例、旧源码对照与验收
+
+最新独立结论为 **S1 FAIL**，阻断项是上节 F5。旧 F1/F2/F3/F4 修复控制和约定的 S1 测试切片通过，也不能抵消固定新反例。第四轮不重用前三轮数字；所有旧失败、中断和本轮无效尝试保留。这是验证席报告，不冒充 PM 正式 review 或私有 RECEIVED。
+
+本轮读最新 dev3 thread、第四轮 brief、OWNERSHIP/D104–D116、接受的 proposal/design/tasks、七份 delta/canonical 与 P228 完整报告。`E4/preflight.txt` 固定 C4 为真实 clean clone，作者产品/测试 `8201eec` 到 delivery `985328b` 只差报告；`binding-repair-source.diff` 是我对前三轮候选到本轮源码/测试的审查输入。新增 guard 用已校验 selector 的 seen 代替 placeholder 的 refs，并拒绝未绑定 placeholder；新增断言与第 17 个源码破坏臂。没有扩大 close/review 权限、改变完整记录或锁接口，未见删除/skip/弱化原非模型断言；F5 是更严格守卫仍留下的参数角色缺口。
+
+#### 固定独立脚本与实际结果
+
+以下命令从自己的 `task/V19-task-model-routing-s1-verify` 启动。`E4`、`C4` 定义同上；wrapper 创建独立 repo/HOME/private tmux socket，记录脚本 SHA、候选 HEAD/status 和全部 skills hash。
+
+```bash
+bash "$E4/run-probe.sh" "$E4/independent-probes-fourth-v2.sh" "$C4" "$E4/fixed-v2" run
+bash "$E4/run-probe.sh" "$E4/selector-data-probe.sh" "$C4" "$E4" selector-data
+bash "$E4/run-probe.sh" "$E4/old-f3-control.sh" "$C4" "$E4/old-f3-control" run
+bash "$E4/run-probe.sh" "$E4/positional-binding-control.sh" "$C4" "$E4/positional-binding-control" run
+bash "$E4/run-old-red.sh"
+timeout 120 python3 "$E4/monitor-multiseat.py" "$C4" "$E4"
+```
+
+| 独立检查 | 输出尾部 / exit | 原始证据（相对 E4） |
+|---|---|---|
+| 完整身份、早拒绝、PM/worker、读侧、F4 错槽与合法控制 | `TOTAL pass=206 fail=0`；0 | `fixed-v2/run.log/.rc` |
+| 新 F5，10 个实际启动 + 10 个 preview，恢复合法控制 | `TOTAL pass=1 fail=20`；1；每个坏臂 actual/preview rc=0；合法臂 parser 精确匹配记录 | `selector-data.log/.rc` 与上节固定 fixture |
+| 旧 F3 反例和合法 snapshot 读侧控制 | `TOTAL pass=60 fail=0`；0 | `old-f3-control/run.log/.rc` |
+| 原 F4 positional 反例和合法 placeholder 对照 | `TOTAL pass=7 fail=0`；0 | `positional-binding-control/run.log/.rc` |
+| 同一旧反例在旧冻结源码重跑 | driver 0；三个来源/脚本都稳定；原红见下表 | `old-red/*/run.log/.rc` |
+| monitor 静态读，一/四/八席位，各三次 | 中位数 56.7 / 128.8 / 226.3 ms；0；32 cores、loadavg 约 3.8–5.1 | `monitor-multiseat.log/.rc` |
+
+新脚本 SHA256：`independent-probes-fourth-v2.sh` 为 `289982cf321fda0e0ce6f68d1ed2e49d153407a657ada2d6cc694671adf5a461`；`selector-data-probe.sh` 为 `76341583b85e1dd95e26b09b84989ef338b8842d85f149f0059a376e2ac5b2fd`；wrapper 为 `3a90716f3ea4f3ca12dbe8f644d08b2d4c593abe444fd118ecd9f6ad71dc9bfb`。`fixed-v2/run-{source,script}.before/after.*`、`selector-data-{source,script}.before/after.*`、`monitor-source.before/after.txt` 与 monitor 脚本 SHA 前后逐字节相同。
+
+真实 recorder 经产品 launcher/login bash、配置 PATH 和私有 tmux 启动，不是渲染字符串。纯 Pi `parseArgs` 只解析捕获的合成 argv，未启动 Pi 会话、读取真人历史、加载认证或调用 provider。`summary.json`/`.rc` 逐臂索引 F5 的 raw prefix、preview/actual rc、capture/parser identity 和完整发布记录，只读合成数据、不执行候选。
+
+#### 场景 → 实跑断言 → 命令/证据
+
+| S1 承诺 | 具名断言 / 新反例 | 实际命令与证据 |
+|---|---|---|
+| 类别/整体策略、CAS/整个升级与审计 | `policy-custom-category`、`category-explicit-phase-independent:*`、`simultaneous-map-cas`、`upgrade-readers-wholly-old-before-rename-new-after`、`upgrade-audit-unwritable-honest-committed-result` | 下表路由全 S1 组 rc0；`routing.log`/`routing-fixtures`；配置切片另见 `config-cli.log` |
+| same-task 原 model/suffix/SID、删除未来类别 | `actual-resume-after-policy-removal`、`actual-resume-argv-exact`、`resume-stored-identity` | 同组 rc0；routing fixture 的 recorder argv 与完整 assignment |
+| 启动证明/nonce、原子发布、配额未知身份、close/teardown 锁 | `interrupted-proven-old-record-bytes`、`interrupted-after-commit-recoverable`、`unknown-live-peer-real-launch-refused`、`teardown-waits-for-publication-lock` | transaction/limits 实跑 rc0；翻转只在 scratch，不在原 C4 变异 |
+| preview/拒绝无写、F1/F3/F4 模板与 extras | `preview-no-{assignment,board,prompt,session}`；独立 `binding-*-refuses-unchanged`、`expanded-*-preview/real`、`pm-resume-*`、`literal-*-actual-equals-or-pure-refusal` | `fixed-v2/run.log` 206/0；fixture 中 record/argv/mtime/window/PID/worker git status 的前后快照 |
+| PM 原模型恢复、独立 PM model、失败回收 | 原 `pm-template-*`/`pm-custom-*`、独立 `pm-bound-actual-identity` | `routing.log`、`fixed-v2/run.log`；可信 metadata 都是自己的合成数据 |
+| 完整数据 record、多个读者/有界快照、SID A 不读 B/base | `reader-session-A`、`reader-cause-A`、`reader-monitor-A`、`reader-record-rejected:nonce` 与 size/death/machine/unmodified/restored 同族；空/leading-zero snapshot 绿 | `routing.log`、`fixed-v2/run.log`、`old-f3-control/run.log`；source/record hash 保存 |
+| placeholder 真正属于对应 selector，不是词面出现 | 新 `selector-data-{worker,pm}-*-{preview,real}-must-refuse`：20 红；`selector-data-restored-exact-identity` 绿 | `selector-data.log` rc1；capture + 纯 parser + 完整发布记录；由此限定 S1 FAIL |
+
+F3 在独立 cwd 放可命中的 model/provider/SID/continue/resume 诱饵，覆盖 worker/PM template/extras 及 builtin/custom PM 恢复入口的 preview/real；quoted literal 对照核对真实值。F4 覆盖 worker/PM 单个/全部 positional 和其它参数数据槽、fresh/continued，不从相同字符串出现推断绑定。新 F5 只用已知 Pi `--skill` 单值消费规则，不猜未知选项 arity。
+
+旧源码对照不是“修后仍期待旧红”的错误判断：
+
+| 固定旧来源 | 原脚本实际结果 | C4 对照 |
+|---|---|---|
+| `16842c9ddf6f83db0e43f4fdbcfb2a4cc5170c74` | F1 错 model/SID 进入 recorder；F2 shell 拒绝损坏记录而 monitor 仍显示合成 A 事件；原复现脚本以成功复现为 rc0 | fixed-v2 早拒绝、不写入；完整坏记录多读侧 unavailable，合法 A 恢复 |
+| `a21a0a32480557b847d3b0ea43ad88a0847823df` | 56/4，rc1；template/extras glob 的 preview/real 四红 | 同一 old-f3-control 为 60/0，组合展开控制在 fixed-v2 |
+| `a1a285df366b49c95fe65ddbad358221c62de921` | 1/6，rc1；positional provider/model/all 的 preview/real 误启动 | 同一 positional-binding-control 为 7/0；完整 data-slot/PM/fresh/continued 矩阵在 fixed-v2 |
+
+三个旧来源的 `run-{source,script}.before/after.*` 均相同，`run-stability.txt` 记录稳定判定。原 F1/F2/F3/F4 在旧源码仍可复现，新候选修复了它们，但 F5 未修复。
+
+#### 按第四轮任务书实际执行的 S1 验收
+
+后台 `V19-fourth-gates` 从自己的 worktree 启动 `E4/run-gates.sh C4 E4 CONTROL_ROOT`，顺序执行下表。准确命令、完整输出和 rc 为 `E4/<tag>.command/.log/.rc`；timeout 固定 routing 1800s、flips 6600s、其它各 1800s。总体 driver 为 `acceptance-run.log/.rc`，前后源清单为 `gate-manifest.txt` / `gate-after.txt`。
+
+| 实际命令（相对 C4；绝对 bun/openspec 路径见 command） | 实际尾部 / rc | tag |
+|---|---|---|
+| `bun openspec validate --all --strict` | 14 passed / 0 failed；0 | openspec |
+| `bash skills/teamsmith/tests/spec-refs.sh --check` | judged 104；retired 0 / undeclared 0；0 | spec-refs |
+| `bash skills/teamsmith/tests/config-cli.sh writer inject cas validate audit shape json groups models seats` | 169/0，顶层 SKIP 0；0 | config-cli |
+| `bash skills/teamsmith/tests/routes.sh` | 207/0，SKIP 0；0 | routes |
+| `bash skills/teamsmith/tests/death-cause.sh --pure` | 87/0，SKIP 0；0 | death-pure |
+| 同脚本 `--live` / `--flip` | 7/0 / 4/0，SKIP 0；均 0 | death-live / death-flip |
+| `bash skills/teamsmith/tests/task-model-routing.sh --select policy,machine,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,boundary` | 1796/0；0 | routing |
+| 同脚本 `--select flip` | 103/0；17 臂坏源码各 rc1；baseline/restored 各 1796/0；0 | flips |
+| `bash skills/teamsmith/tests/ledger-ban.sh --names-file "$CONTROL_ROOT/.pi/team/forbidden-names.txt"` | files=1310 hits=0 names=ok；0 | ledger-ban |
+| `git diff --check` | 无输出；0 | diff-check |
+
+后台已收割，exit0，3016.9s，无 timeout；`acceptance-run.rc=0`。配置嵌套 preview/fault 控制显示 SKIP 1（包含预期 mutant 红），顶层 SKIP 0；没有隐藏跳过，不将预期坏源码红误记为基线失败。
+
+`gate-summary.txt` 核对 17 个 source_before=source_restored、baseline/restored rc0、全部切片 rc0。17 臂均在 owned scratch 真正破坏源码、目标 matched/shape-valid、具名红、恢复 hash 相同；`flip-fixtures/teamsmith-task-model-routing.bABpei/` 保留 `mutation-*.json`、嵌套失败日志、argv/record 和恢复 fixture。它们没有 F5 对应断言，全绿不能证明新漏洞已覆盖。
+
+开跑、中途、收尾 `/tmp` 均约 12 GB 可用。完整 HEAD 固定 `985328b0f96bd755b85d5c7f81eff92e9f4d7fd3`，C4 前后 clean；tracked skills 聚合 SHA 为 `218f832a5ff5eb80cb50cb16c7250edde5236a9dd7dbc5df7a0793ada440fb90`，gate/source/probe 冻结清单逐字节一致。按 brief，OpenSpec 1.8.0 没有原生 verify workflow；本轮使用已接受规格、独立代码/场景审查与切片，不假造 `instructions verify` 通过、不安装/生成工具，未写 spec/store/tasks。
+
+#### 无效/失败尝试保留，不作产品红
+
+- 首次 `independent-probes-fourth.sh` 为 202/4、rc1：PM 夹具主动覆写配置后，却仍比较上一次 before snapshot，产生四个 mtime 假红。保留四项拒绝和完整 state/window/prompt/argv/mtime 断言，只在当前 CLI 调用前取 snapshot，并清除上一循环遗留的 fresh 变量。原脚本/日志/fixture 保留，新 v2 冻结后完整重跑为 206/0。
+- `old-f1f2-control.sh` 在 C4 的首次 rc3 是旧复现脚本期待硬编码启动，但修后已拒绝，recorder 没有第二次调用。不计产品回归或合法绿控制；原日志保留。同脚本在旧 16842c9 成功复现，修后用固定的早拒绝矩阵，不偷改旧红脚本。
+- 首次 `V19-fourth-old-red` 包装 rc4：输出父目录未建立，realpath 失败后 `/run*` 写入被权限拒绝，未执行候选 CLI，也无成功的目录外写入。`old-red-invalid.txt` 与后台原日志保留。建立 owned 父目录后，以未改冻结脚本重跑，三个旧来源都恢复原红，driver rc0。
+- 离线汇总初版误把 proof JSON 的 null 写成 key 不存在，随后又误用 SHA 文件 basename；两版错误脚本/trace/rc 保留。只修汇总，不改候选、探针、argv/record；最终 `summary.json/.rc` 完整有效。读取 routes 日志的 UTF-8 显示摘要另遇非法字节，只在显示时使用 replacement decode，二进制原日志不改；源稳定性与17 hash 校验已先完成。
+- 新报告第一次 diff check 因 EOF 多一空行返回 rc2；只移除新追加末尾空白，后续检查通过。前三轮报告正文与失败未覆盖。
+
+#### 交回 PM
+
+**不建议私有 RECEIVED**：F5 违反已接受的自有身份参数与 assignment 一致性，不是新增模型/兼容需求。请保持 S1 未接收，将固定脚本、`--skill` 消费位置及原始 record/argv 交回作者修复，再由不同作者重跑。验证席不改源码、不替作者写 Pi parser。
+
+本轮只改自己的 V19 报告与 owned 仓外证据。报告提交、任务分支留本地、树干净；本轮全部背景作业已由 `team_bg_wait` 收割，再通过稳定 CONTROL_ROOT CLI 通知 PM。没有 push/远端写入/PR/MR/merge/archive/done/close，没有升级/install/bootstrap、实际 PM/worker/pulse 重启、共享技能替换或跨项目操作。
+
+**仍未执行**：完整 change/S2/S3、全量 smoke、真实 TUI/正式性能与 CPU SLA、真人会话、真实 provider/模型质量、Pi reasoning/message/SDK 或模型兼容、共享安装/采纳/部署。monitor 的多席位静态样本未见明显阻塞，但不是正式性能通过，更不是上述环境验收。
+
+报告收尾：`report-ledger-ban-final.log/.rc` 为 rc0、files=1315、hits=0、names=ok；`report-diff-final.log/.rc` 为 rc0；`report-prefix-final.log/.rc` 为 rc0，第三轮 ef8f952 的 57633 字节 prefix 原样保留。最终摘要无 PENDING，候选 gate 前后清单相同。源码仍只读，报告的两步本地提交带 V19 与 `Agent: dev3`，提交后再核对 branch/status 并通知 PM。

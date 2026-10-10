@@ -946,3 +946,11 @@ P228交付985328b（受检8201eec）的干净本地候选；新binding-985328b�
 dev3发现selector token本身被--skill数据消费，词面seen仍误认身份已绑定。PM固定输入重放985：10次worker/PM fresh/continued误放行，20项拒绝断言红，合法harmless数据控制绿；原argv/record与纯Pi parseArgs离线输出交叉一致，候选/脚本/parser hash未变。完整证据在reviews/V19/binding-985328b/pm-selector-data-replay，工具job已收割；没有真实SDK/provider/session/auth调用或业务服务动作。
 
 这不是模型质量或思维链兼容问题，而是工具对自己发出参数的绑定宣称错误。当前第四轮尚在完整收尾，只接收F5证据，985不接收、P228作者继续冻结、S2/S3不移交。最终返修优先收紧支持的字面模板/参数角色，不在Teamsmith复刻Pi parser、追踪内部模型切换或建立全CLI arity矩阵。
+
+## D119 · 第四轮正式FAIL收录，原S1返还做受限绑定证明（2026-10-10）
+
+完整d35dbfcc报告已核对并原字节收录，前三轮prefix保持；verifier树干净、7 jobs由原工具收割，11切片全rc0、1796/0、17臂103/0与恢复1796/0；旧红/修后控制分列，但新F5仍20红。PM已有固定独立重放，因此不为凑绿再跑一轮相同长验收，不接收985进集成或放行S2/S3。
+
+暂停已交付dev3窗口释放唯一强模型名额，P228原S1集合归作者，以同强模型fresh交接。只修接受合同：收紧受支持字面形式并证明参数角色，证明不了就拒绝；不逐个加flag特判，不增加placeholder、运行时SDK依赖或Pi/任意CLI parser/兼容矩阵。合法内置/模板、诚实opaque fresh与quoted literal保留，不能靠重新标opaque让有精确身份宣称的错绑变绿。受控源码红→拒绝无副作用→合法参数/恢复→翻转防护保留；稳定后完整S1清单只跑一次。
+
+角色、模型预算和产品范围不变；后续新SHA再由独立席位新会话验，失败报告和四个隔离来源保留。不改配置/共享来源/其他项目，不合产品main或归档。

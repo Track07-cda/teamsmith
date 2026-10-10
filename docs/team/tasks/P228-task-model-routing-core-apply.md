@@ -11,11 +11,13 @@ branch: task/P228-task-model-routing-core
 anchor: change
 deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
-## 当前返修输入（2026-10-09）
+## 当前返修输入（2026-10-10）
 
-最新冻结候选 `a1a285df366b49c95fe65ddbad358221c62de921` 判 FAIL，未被接收。V19 第三轮完整报告 `ef8f952672a2d9f81a195b79ecd415d556f4dac9` 已收录；11条指定切片全rc0、1244/0及16臂94/0仍漏掉F4：continued模板中的provider/model/SID占位符可作为普通positional或放在label后，真实argv缺相应selector，工具仍成功发布原身份并标continued。PM另行固定输入复现11/8；verifier固定大包144/8、小纯positional包1/6分别保留，不混统计。旧F1/F2/F3绿不代表F4消失。先读主检出reviews/V19.md、收录的新报告、D114–D115及线程最新条目；自己worktree旧线程不是返修授权。原S1写集合再次仅返还你，S2/S3不接手；PM同强模型fresh交接，旧版resume和Pi历史重写都不用。
+冻结候选 `985328b0f96bd755b85d5c7f81eff92e9f4d7fd3` 判 FAIL，未接收。V19第四轮完整报告 `d35dbfcc164789b721ebc7d5f560305e63e70b20` 已按原字节收录；11条切片全rc0、1796/0及17臂103/0仍漏F5：`--skill`消费随后的`--model`/`--provider`/`--session-id`为数据，guard却计为身份selector；worker/PM continued/fresh的10真实调用及10预览误放行并发布完整身份。冻结反例1/20、合法harmless控制绿，PM另fixture逐项重放相同结果，原argv/record与已安装Pi纯parseArgs离线交叉一致。前F1–F4修后206/0、60/0、7/0及旧来源原红分开保留，不混统计。先读主检出reviews/V19.md、收录的新报告、D116–D119和线程最新条目；自己worktree旧线程不是返修授权。原S1写集合仅返还你，S2/S3不接手；同强模型fresh，不用旧版resume或改Pi历史。
 
-先按已接受的精确启动身份合同补足绑定判据：占位符出现、selector存在、值归属及最终argv一致不能相互替代。审查guard收集seen却只以refs止点判continued的缺口，并覆盖缺失、错槽、重复和合法绑定，不能只特判label。对PM共享guard等未实测路径先在私有fixture确认，不把猜测或未知CLI参数语义记成缺陷；不能扩成完整shell AST、Pi兼容矩阵或非Pi支持。保留诚实opaque/fresh磁盘交接和窄grammar的合法字面量/明确拒绝；按报告区分未加引号的身份占位符与普通quoted literal。补preview/real拒绝前后record/board/proof不变、合法actual argv对照、真实源码红→绿与恢复，以及能抓回这类绑定缺失的源码翻转；原验收和非模型断言不删、不skip。先完成并验证局部机制，再在稳定独立副本一次性跑交付清单，别每个小改都重跑长suite。
+修的是参数角色证明，不是再补一个`--skill`特例。按已接受合同收紧支持的字面模板形式：不能证明身份选项及其值确实绑定就明确拒绝，不用词面seen或额外refs计数替代。允许保守拒绝无法证明的接缝形式，不为保住任意custom CLI而扩成Pi全参数/arity解析器、shell AST或兼容矩阵；不增加placeholder或运行时SDK依赖。先解释证明路径和拒绝边界，再覆盖整个selector-as-data类及已有工具参数路径，包括worker/PM的provider/model/SID和guarded恢复参数；未知arity不猜。保留空模板内置路径、已有合法绑定、诚实opaque/fresh磁盘交接及普通quoted literal；不能把这些带身份宣称的错绑模板重新标opaque，或把fresh当允许宣称精确身份的理由。
+
+在自己的隔离fixture保留冻结F5旧源码红→修后拒绝纯净、合法实际argv、真实源码翻转/恢复，核对record/board/prompt/proof/window不变。Pi纯parseArgs只能在离线合成测试交叉，不读取真实历史/认证、启动SDK/provider或承担其兼容职责。保留原验收和非模型断言，不能删/skip换绿。先做小范围机制和同类控制，稳定后一次性跑交付清单；别每个小改重跑长suite。
 
 只修已接受模型/身份/读侧合同的缺口，维持原验收清单，增加可复现的源码红绿与合法控制。未授路径或规格语义变化仍先 BLOCKED 给 PM。修后冻结新 SHA，当前失败输入不能标已接收或 done。
 
@@ -30,7 +32,7 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 ## 阅读顺序与 workflow
 
 1. `AGENTS.md`、自己线程最新条目、此任务书、`docs/team/OWNERSHIP.md`。
-2. `docs/team/DECISIONS.md` D101–D115、`docs/team/reviews/task-model-routing-proposal.md` 当前接受意见。
+2. `docs/team/DECISIONS.md` D101–D119、`docs/team/reviews/task-model-routing-proposal.md` 当前接受意见。
 3. change 的 proposal/design/tasks、全部七份 delta 和对应 canonical capability specs；重点执行 tasks 1.1–5.3，并按 coverage index 逐 scenario 映射证据。
 4. 按 opsx-apply workflow 获取原生 apply instructions。生成文件若不存在，读取现有 OpenSpec 1.8.0 workflow/templates 与相关 store-selection 文档，不运行 init/update/install 生成它们。
 

@@ -278,3 +278,6 @@ P228新候选a1a285d已收到；源码d823c7e与报告tip产品差异为空，�
 
 ### 2026-10-09T22:36:55Z · from: pm · re: P228
 P228 F4返修：先读主检出更新brief、reviews/V19.md、完整ef8f952报告及D115；a1仍FAIL。11切片/1244+94绿不能抵销continued错槽/positional占位符发布，PM新fixture已实复11/8。原S1写集合再次仅归你，S2/S3冻结。先审查selector存在/消费、字段值绑定及actual argv与完整assignment的机制，不只增加refs计数或特判label；对PM邻边先隔离实测，保留已验证literal/拒绝/opaque边界，不能新增Pi语义或非Pi兼容。旧FAIL/报告保留、只追加；补旧源码红→新绿及能抓回missing-binding类的源码破坏/恢复。局部相关检查先跑，稳定隔离副本交付清单一次性跑，原断言不弱化，所有jobs收割、报告提交、树干净后稳定CONTROL notify pm。PM同强模型fresh交接，不普通resume、不动main/实际配置/共享来源。
+
+### 2026-10-10T03:18:43Z · from: pm · re: P228
+V19第四轮完整d35dbfcc已收录，985328b不接收。PM另fixture实证F5：--skill消费selector，词面seen却宣称实际绑定。P228当前brief已更新，原S1集合仅归你，S2/S3未放行。请先读主检出该brief、V19、D116–D119及最新线程；自己worktree旧线程不是授权。先收紧可证明字面形式/参数角色，证明不了拒绝，不逐个补flag、仿Pi parser、加placeholder或运行时SDK依赖；保留合法/opaque边界及原断言。冻结F5旧红→修后拒绝纯净→合法实际值→源码翻转/恢复齐全后稳定树一次跑交付清单。随后新SHA再独立复验，不自行解冻或接收。
