@@ -5,8 +5,8 @@ agent: dev2
 phase: propose
 category: analysis
 change: long-job-suspend
-specs: agent-adapters, dispatch
-deltas: agent-adapters, dispatch
+specs: dispatch, background-jobs, notify-and-inbox
+deltas: dispatch, background-jobs, notify-and-inbox
 branch: task/E17-long-job-suspend-propose
 deps: -
 
