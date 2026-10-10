@@ -992,3 +992,11 @@ V19 第五轮（候选 `aaffe5a`）结论 **FAIL**：F5 参数角色修复通过
 另裁定复验者交上来的边界观察 **OBS1 为真缺陷**：模板只绑 `--model {model}` 时真实 argv 不含 provider/SID（离线 Pi 解析 `provider=null sessionId=null`），派单却发布了完整身份（含 teamsmith 铸出的 SID）。依据 tasks 3.5 `no falsely published identity` 与 agent-adapters 「consume one resolved complete launch identity」，规则定为「**发布的身份不得多于 argv 实际交付的**」，修法二选一（拒绝部分绑定，或只发布交付到的字段），但必须有红侧。
 
 处置：第六轮（F6+OBS1）交回原作者，按 D122 用项目默认快模型；F1–F5 不得回退。另记一条同形操作事实：用旧控制面 CLI 不带 `--fresh` 派同模型时解析到席位基础 SID 而非该任务上轮的 fresh SID，正是本 change 要修的续跑形状（E13/#2019）。
+
+## D125 · 长作业车道立项：起完就结束回合，叫醒带结果（用户指示，2026-10-10）
+
+用户 2026-10-10 指出：agent 常把长作业 `team_bg_run` 起完立刻 `team_bg_wait`（「那何必起后台」），并确认「作业结束时本来就会自动叫醒，不必主动收割」，要求按「**时间成本比 token 成本更宝贵**」的取向立项。根据：`cmd-agents.sh:136` 与 `extension/team-bg.ts:259-265` 只给了职责（「Harvest every job before your turn ends」，并把未收割被叫醒写成惩罚），没给目的；`templates/pm-prompt.md.tmpl:78-79`（PM 侧）其实已经写对了（「不能让几十分钟的门禁卡在回合里：起、让回合结束、叫醒时再收割」），说明正确措辞存在、只是没进工人那段。当天实例：dev 席位 08:28–08:56 起了 7 个后台作业（两个各跑约 7 分 30 秒）然后原地等；PM 自己多数也是「起完就等」。另一条同源事实：回合结束时工作树有未提交文件会发 `⚠ 未提交 N 个文件 · [auto·interrupted]`，与真实中断混在同一形状。
+
+范围四条：① 改写工人提示词与两个工具的 description/promptGuidelines（默认起完结束回合，叫醒带结果；原地等只限「作业短」或「结果卡住下一步且确实没别的可做」）；② 协议补第三种合法回合结束状态（挂起等作业，不是放弃），并在回合末尾点名 job id；③ 挂起对 PM 可见且**不误报为中断**；④ 希望论证可数性（harness 记起/醒/收事件，使「起了就等」可数；若认为不值需给反证）。不在范围：叫醒传输机制、工具名、Pi 自身行为。
+
+排期约束：`task-model-routing` 的 S1 私有实现正在改写 `cmd-agents.sh`（其 design 的 S1 所有权列了该文件），本 change 的 apply 不得与其并行写同一文件——已写进 E17 任务书。派单：propose 交给 dev2，`kimi-coding/k3:max` fresh；提案审后由另一个席位 apply、第三个席位 verify。

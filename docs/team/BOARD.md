@@ -372,6 +372,7 @@
 | E15 | Pulse key replies: entrypoint exploration | dev2 | task/E15-pulse-key-replies-explore | - | done |
 | E16 | Pulse key replies: formal proposal | dev2 | task/E16-pulse-key-replies-propose | E15 | done |
 | V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | wip |
+| E17 | Long-job lane: start then end the turn, the completion wake brings the result (proposal) | dev2 | - | - | wip |
 
 ## 当前里程碑
 
