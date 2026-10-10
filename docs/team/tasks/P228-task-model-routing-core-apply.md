@@ -13,7 +13,7 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 
 ## 当前返修输入（2026-10-10）
 
-冻结候选 `985328b0f96bd755b85d5c7f81eff92e9f4d7fd3` 判 FAIL，未接收。V19第四轮完整报告 `d35dbfcc164789b721ebc7d5f560305e63e70b20` 已按原字节收录；11条切片全rc0、1796/0及17臂103/0仍漏F5：`--skill`消费随后的`--model`/`--provider`/`--session-id`为数据，guard却计为身份selector；worker/PM continued/fresh的10真实调用及10预览误放行并发布完整身份。冻结反例1/20、合法harmless控制绿，PM另fixture逐项重放相同结果，原argv/record与已安装Pi纯parseArgs离线交叉一致。前F1–F4修后206/0、60/0、7/0及旧来源原红分开保留，不混统计。先读主检出reviews/V19.md、收录的新报告、D116–D119和线程最新条目；自己worktree旧线程不是返修授权。原S1写集合仅返还你，S2/S3不接手；同强模型fresh，不用旧版resume或改Pi历史。
+冻结候选 `985328b0f96bd755b85d5c7f81eff92e9f4d7fd3` 判 FAIL，未接收。V19第四轮完整报告 `d35dbfcc164789b721ebc7d5f560305e63e70b20` 已按原字节收录；11条切片全rc0、1796/0及17臂103/0仍漏F5：`--skill`消费随后的`--model`/`--provider`/`--session-id`为数据，guard却计为身份selector；worker/PM continued/fresh的10真实调用及10预览误放行并发布完整身份。冻结反例1/20、合法harmless控制绿，PM另fixture逐项重放相同结果，原argv/record与已安装Pi纯parseArgs离线交叉一致。前F1–F4修后206/0、60/0、7/0及旧来源原红分开保留，不混统计。先读主检出reviews/V19.md、收录的新报告、D116–D119和线程最新条目；自己worktree旧线程不是返修授权。原S1写集合仅返还你，S2/S3不接手；按 D122 用项目默认快模型 fresh（有确定目标的实现类不用强模型），不用旧版resume或改Pi历史。
 
 修的是参数角色证明，不是再补一个`--skill`特例。按已接受合同收紧支持的字面模板形式：不能证明身份选项及其值确实绑定就明确拒绝，不用词面seen或额外refs计数替代。允许保守拒绝无法证明的接缝形式，不为保住任意custom CLI而扩成Pi全参数/arity解析器、shell AST或兼容矩阵；不增加placeholder或运行时SDK依赖。先解释证明路径和拒绝边界，再覆盖整个selector-as-data类及已有工具参数路径，包括worker/PM的provider/model/SID和guarded恢复参数；未知arity不猜。保留空模板内置路径、已有合法绑定、诚实opaque/fresh磁盘交接及普通quoted literal；不能把这些带身份宣称的错绑模板重新标opaque，或把fresh当允许宣称精确身份的理由。
 
@@ -22,6 +22,8 @@ deps: E14; docs/team/reviews/task-model-routing-proposal.md ACCEPTED
 只修已接受模型/身份/读侧合同的缺口，维持原验收清单，增加可复现的源码红绿与合法控制。未授路径或规格语义变化仍先 BLOCKED 给 PM。修后冻结新 SHA，当前失败输入不能标已接收或 done。
 
 本次派单前的实测（PM，2026-10-10 03:18–03:52 UTC，D120）：上一轮会话在 03:26–03:35 遇到 provider 连接失败（WebSocket / fetch failed），Pi 在**同一会话内**回落到 `opencode-go/deepseek-v4.1-flash`，随后中断并留下 5 个未提交文件。恢复时先 `git status` / `git log --oneline -5` 读清这 5 个文件（`common.sh`、`model-routing-boundary.sh`、`model-routing-flips.py`、`task-model-routing.sh` 及新文件 `model-routing-roles.sh`）并**原样保留继续**，不要丢弃、重写或回退。失败作业 `P228-F5-local-controls`（boundary 选择集 2275 通过 / 94 红）是你自己的中间迭代，读它的日志接着做，不要重跑长套件。
+
+2026-10-10 05:03 UTC 追加：上一轮 kimi-coding/k3 会话撞上 5 小时额度上限（403 permission_error）而中断，5 个未提交文件与后台倒转作业 `p228-flip-2`（pid 见 `state/bg/p228-flip-2.job`，日志 `pm-skills-ledger/team/reports/P228-dev/f5-repair-2/flip.log`）都还在；新会话先看这个日志与进程，**不要重复启一遍同一套倒转**，接着它的结果做。
 
 这条实测只作为读侧与并发计数的验收证据（对应 1.2 的诚实 ps/roster/status 与 3.3/4.1 的模型计数与读证据）：读侧不得把非活跃模型当成本会话在跑的模型——能用 Pi 会话记录判定就判定，判不了就如实标不可判定，不能继续宣称；并发名额不得被一个并不存在的强模型会话占用。不要实现 Pi 的回落策略、模型兼容矩阵或跨 provider 质量判断，那是 Pi 的职责。
 

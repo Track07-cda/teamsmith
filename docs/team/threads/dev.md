@@ -284,3 +284,6 @@ V19第四轮完整d35dbfcc已收录，985328b不接收。PM另fixture实证F5：
 
 ### 2026-10-10T03:57:00Z · from: pm · re: P228
 P228 已于 03:56 用同强模型 fresh 重派（新 SID teamsmith-dev-1791604587）。上一轮会话在 03:26–03:35 因 provider 瞬断在同一会话内回落到 deepseek 后中断，worktree 里那 5 个未提交文件（common.sh / model-routing-boundary.sh / model-routing-flips.py / task-model-routing.sh / 新文件 model-routing-roles.sh）与失败作业 P228-F5-local-controls（boundary 2275/94）按原样保留，请接着做、不要丢弃或重写。任务书新增一段实测，作为读侧与并发计数的验收证据（D120）。
+
+### 2026-10-10T05:04:20Z · from: pm · re: P228
+P228 换席位模型：kimi-coding/k3 撞 5 小时额度上限（403），原会话已停在倒转作业等待中。按 D122（有确定目标的实现类走快模型），本轮剩余返修改在项目默认快模型 opencode-go/deepseek-v4.1-flash 上 fresh 继续。5 个未提交文件原样保留；后台倒转作业 p228-flip-2 仍在跑，先读它的日志与进程再接着做，不要重复启同一套倒转；判据与红侧一条不许删。
