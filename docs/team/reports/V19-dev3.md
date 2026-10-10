@@ -579,3 +579,93 @@ F3 在独立 cwd 放可命中的 model/provider/SID/continue/resume 诱饵，覆
 **仍未执行**：完整 change/S2/S3、全量 smoke、真实 TUI/正式性能与 CPU SLA、真人会话、真实 provider/模型质量、Pi reasoning/message/SDK 或模型兼容、共享安装/采纳/部署。monitor 的多席位静态样本未见明显阻塞，但不是正式性能通过，更不是上述环境验收。
 
 报告收尾：`report-ledger-ban-final.log/.rc` 为 rc0、files=1315、hits=0、names=ok；`report-diff-final.log/.rc` 为 rc0；`report-prefix-final.log/.rc` 为 rc0，第三轮 ef8f952 的 57633 字节 prefix 原样保留。最终摘要无 PENDING，候选 gate 前后清单相同。源码仍只读，报告的两步本地提交带 V19 与 `Agent: dev3`，提交后再核对 branch/status 并通知 PM。
+
+## 第五轮独立修订：aaffe5a，F5 参数角色修复核验 + 新发现 F6
+
+前四轮正文与 FAIL 原样保留。本轮受检完整 SHA：`aaffe5add59743809a44822ab77f0370da16b980`（任务书分支 `task/V19-task-model-routing-s1-verify` 的 PM 冻结对象），独立真实 clone：`../pm-skills-ledger/team/reviews/V19/round5-aaffe5a/checkout`。产品/测试与作者受检 `55d3bc6cfa8c844ac0ace8d4a979ec03cf4811dc` 逐字节一致，最终两个提交（`55d3bc6`、`aaffe5a`）只改 `docs/team/reports/P228-dev.md`。下文 **E5** 指 `../pm-skills-ledger/team/reports/V19-dev3/round5-aaffe5a/`。
+
+### 前置核验（E5/preflight.txt）
+
+- `HEAD=aaffe5ad…`；`.git` 是真目录；`git status --porcelain --untracked-files=all` 为空。
+- `git diff --exit-code 55d3bc6 aaffe5a -- skills tests` 通过；`55d3bc6..aaffe5a` 的 name-only 只有 `docs/team/reports/P228-dev.md`。
+- 旧候选 `binding-985328b/checkout` 仍是 `985328b0` 且干净；PM 冻结探针 `pm-selector-data-replay/probe.sh` 的 sha256 仍是 `76341583…`（与第四轮钉住值一致）。
+- 跑前门容量 `/tmp` 余量 12G。
+
+### 代码审查（`8201eec..55d3bc6`；E5/common-sh.diff、tests-diff.txt）
+
+产品改动只有 `skills/teamsmith/scripts/lib/common.sh` 一处 +54 行，分四层，逐行核过：
+
+1. 新增 `team_argv_roles_guard`（common.sh:1530）：在**去引号后的词法 token** 上做参数角色遍历，输出受保护下标。已知集只有 Teamsmith 自己发出的 `-e`/`--skill` 两个工具加载开关（消费一个后续词）+ 身份/续跑词表（`--provider`/`--model`/`-m`/`--session-id`/`--session`/`-s`/`--continue`/`-c`/`--resume`/`-r` 及 `=`/粘连变体）+ 历史合法 extras 里唯一的零消费旗标 `--no-tools`。未知开关**不猜 arity**：出现在受保护组之前按保守拒绝处理，出现在所有受保护组之后是普通数据后缀。第二遍只对已知 selector 查"后面是否还有受保护词被吞"，`-c*`/`-m*`/`--session*` 这类同族前缀也列入防吞模式（本仓模板只有两个真 selector 源，广一些不损失合同）。
+2. F4 的"出现即绑定"遍历（seen/refs/值配对）原样保留，角色守卫只负责提供下标，两遍职责分离干净。
+3. 三处接线：extras 守卫（worker/PM 共用）、模板守卫（worker launch/continued、PM pm/continued 各两对）、`team_pm_resume_args_guard`（PM 恢复参数，`-e`/`--skill` 的数据明确不是续跑选择器）。
+4. 调用点核对：worker preview（cmd-agents.sh:1302）与真实启动（common.sh:5237，`team_agent_launch_cmd` 内）双路都过守卫；PM 经 `team_pm_identity_guard`（up/patrol 各入口）；extras 守卫在选型（cmd-agents.sh:1111）与启动两处。
+
+对照本机已装 Pi 的 `dist/cli/args.js`（sha256 `231eca03…`，前后一致）核实事实表：`--continue`/`-c` 与 `--resume`/`-r` 在 parser 里都是**布尔、零消费**（守卫按零消费建模正确）；`team_pm_resume_args_guard` 对 `--resume`/`--r` 单独保留"可选值"的保守建模，比 Pi 严但方向安全（value 合法性校验，拒绝了 Pi 会吞掉的歧形）。Pi 对未知 `--flag` 的行为是**贪心吃掉下一个非 `-`/`@` 词**（`unknownFlags.set(name, next)`）——这正是守卫拒绝"受保护组之前的未知开关"的合同理由，实测属实。实现未引入 Pi 参数表/arity 解析/兼容矩阵，已知集严格限于自身发出的对子，职责边界守住（D101/D102）。
+
+smoke.sh 四处夹具改动逐条比对：`§6f②` 断言数 13→13（`--prov`→`--provider`、`--sid`→`--session-id` 换名，渲染断言一条不减）；`§6f⑧` 2→4 条（未引用 `{"a":1}` 与 `${HOME}` 由"接受"改为"拒绝并点名规则"，quoted JSON 与相邻占位符的接受断言保留——方向是收紧，且与第三轮已接受的窄 literal grammar 一致；该段在 S1 树上本就因 seed 链红着，不是把绿改弱）；`§6g` 1→1（裸 `{session_id}` 改为 `--session-id` 消费，真实渲染值断言保留）；`§6i②` 8→8。
+
+作者自报"smoke §4/§6f/§6i 未跑"的根因实证（E5/seed-chain-check*.log，隔离 scratch + 候选 CLI）：候选 `team init` 生成的 config 仍是 S1 前形状——含退休键 `TEAM_DEFAULT_MODEL`/`TEAM_AGENT_MODELS`、无 `TEAM_TASK_MODELS`（模板属 S3 任务 7.1/7.4 车道）；`team task` 无 `--category` → rc=2 usage；seeded 配置 + `--category routine` → rc=1 "category 未映射"。§4 建不出任务书 → `§6f`/`§6i` 级联红的因果链成立；按 design.md 的 S1/S3 交接表，新项目 seed 与 init 模板由 S1 owner 串行交接授权给 S3，不在 S1 承诺内。
+
+### 13 条切片验收（E5/acceptance-run.log，驱动 E5/run-gates.sh sha256 `0137dcfb…`，串行执行）
+
+| 步骤 | rc | 结果 |
+|---|---|---|
+| openspec validate --all --strict | 0 | 全绿 |
+| spec-refs --check | 0 | ok |
+| config-cli（writer/inject/cas/validate/audit/shape/json/groups/models/seats） | 0 | 全绿 |
+| routes | 0 | 全绿（290s） |
+| death-cause --pure/--live/--flip | 0/0/0 | 全绿 |
+| task-model-routing（12 组） | 0 | **2848/0**（453s；新增 worker/pm 角色断言 644 条、合法对照 42 条，`role-actual` 真实 argv 绑定全 PASS） |
+| task-model-routing --select flip | 0 | **111/0**（4467s；18 臂全红全恢复，`flip-restored-all-green`） |
+| ledger-ban --names-file | 0 | 无命中 |
+| git diff --check | 0 | 干净 |
+| PM 冻结探针 vs 旧 985328b | 1（预期红） | `TOTAL pass=1 fail=20` |
+| PM 冻结探针 vs 新候选 | 0 | `TOTAL pass=21 fail=0` |
+
+门禁全程未动源：`gate-manifest.txt` 与 `gate-after.txt` 逐字节一致。
+
+破坏臂 18 条全部按"target-matched → shape-valid → red（rc=1）→ named-assertion → source-restored"走完，新增 `template-roles` 臂的三条定点全中：`FAIL worker-role-refused:model:--skill:launch`、`FAIL pm-role-refused:provider:--skill:launch`、`FAIL pm-role-resume-refused:builtin:--skill --continue:launch`——变异体在复制源上真执行且只红目标断言。
+
+### F5 旧红 → 新绿（冻结脚本，SHA 均与第四轮钉住值一致）
+
+| 对象 | 结果 |
+|---|---|
+| `old-f1f2-control.sh`（e0dc63bf…） vs 旧 16842c9 | F1/F2 复现（rc=0 约定）：`RED worker hardcoded model: assignment= vendor/expected:high actual identity argv= ['--provider','other','--model','wrong:low',…]`、`RED worker hardcoded SID … actual= other-history`、`RED malformed assignment: shell refuses, monitor still displays`；合法对照 GREEN |
+| `old-f3-control.sh`（c89a3405…） vs 旧 a21a0a3 | rc=1，`TOTAL pass=56 fail=4`（4 条 glob 红复现） |
+| `positional-binding-control.sh`（6890e73d…） vs 旧 a1a285d | rc=1，`TOTAL pass=1 fail=6`（6 条 F4 红复现） |
+| `independent-probes-fourth-v2.sh`（289982cf…） vs **新候选** | rc=0，`TOTAL pass=206 fail=0`（第四轮 206 项 F1/F2/F3/F4 修复矩阵在新树上全保持） |
+| PM 冻结探针（76341583…） vs 旧/新 | 1/20 → 21/0（见上表） |
+
+每轮包装器（`run-probe.sh` sha256 `3a90716f…`）的脚本前后 hash 与源树前后指纹比对均输出 `source/script stable`。
+
+### 自设计角色反例（E5/v19-r5-roles-probe.sh，冻结 SHA `f6af194a…`，正式轮 roles-v4）
+
+**TOTAL pass=58 fail=0，rc=0**，证据 E5/roles-v4/（`run-stability.txt`：source/script stable）。形态自选，不与作者矩阵逐字重复：worker 模板故障 7 形 ×（preview/real/fresh-preview 三模态）=21 条、worker extras 故障 3 形 ×2=6 条、PM 故障 7 形 ×2=14 条，全部满足"拒绝纯净"（rc≠0/124、recording CLI 零新增 argv、config/BOARD/state/prompts/窗格快照逐字节不变）；绿面 17 条用**离线 parseArgs 神谕**断言精确 argv（provider/model/SID/continuation 逐字段比对，工具数据值逐字节相等）。我独有而作者矩阵没有的形态：dangling `-e`/`--skill` 作为 argv 末词、quoted 未知开关 `"--frobnicate"`、extras 内 `-e --session-id` 吞 selector、PM resume args 内 `--skill --session-id`、fresh 车道精确绑定新 SID。
+
+**OBS1 边界观察（非判定项，交 PM 裁量）**：fresh 模板只绑 `--model {model}` 时 rc=0 放行——落账记录发布完整身份（`model=vendor/expected:high`、minted `sid=`），但实际 argv 只交付 model 值（离线神谕：`provider=null`、`sessionId=null`）；同一模板的 continued 恢复会被守卫拒绝并指向 fresh 交接。两种读法：①合同只要求"引用身份占位符就必须绑到 selector"（F4 规则，本例满足）+ 续跑必须三占位符齐备（恢复侧诚实拒绝，记录不会被误用于续跑），fresh 部分绑定落在"不承诺兼容"的接缝内；②agent-adapters delta 的"consume one resolved complete launch identity"与 dispatch delta"事实恢复来源是落账记录"连读，记录发布的 provider/SID 对这类模板未经交付证明，介于不透明模板（合法，任何字段都不证明）与全绑定之间。实况影响面受恢复拒绝约束（并发计数/展示在 fresh 启动到恢复之间按记录模型计数）。事实已固定（E5/roles-v4/own-probes/*/obs1-*），分类请 PM 定。
+
+**作废轮（证据保留，均非产品问题）**：roles v1 rc=1——我把私有 anchor 窗建在私有 tmux server 首次启动之前，夹具顺序 bug；roles-v2 55/3——WG3 把空 body 写成"非空模板"，候选守卫正确拒绝（行为本身是对的）；roles-v3 57/1——我的断言用 `index('-e')` 取了内置扩展的第一对 `-e`（实际 argv 完全正确）；`old-red-invalid-1/`——输出目录未预建导致包装器 realpath 失败 rc=4，内层探针从未运行。正式轮以 roles-v4 与修正后的 `run-old-red.sh`（sha256 `970a9f47…`）为准。
+
+### 新发现 F6：`analysis`/`verify` 被硬编码成必备类别，与已接受合同直接冲突
+
+- **合同原文**：memory-and-deps delta "Project task-model policy replaces seat and worker-default routing"：`Initial routine/analysis/verify are examples, not mandatory engine categories.`；design.md：`项目没有 routine 等键并非非法，映射为空才非法`；同 requirement 还写明 `config task category mapping SHALL be representable for project-specific category vocabulary`。
+- **实现**：`team_task_map_violation`（common.sh:1343-1345）对**每一份**映射强制 `analysis` 与 `verify` 必须出现；写者（cmd-config.sh:383/1168/1235）与读侧加载器（common.sh:1301/1364）共用同一函数，无旁路。
+- **实证**（E5/required-category-check.log、required-category-asymmetry.log，隔离 fixture + 候选前门）：整映射写 `maintenance=vendor/light` → 拒（rc=4）；`upgrade-models` 到自定义词汇 `ops=… audit=…` → 拒；去掉 `routine` → **接受**；去掉 `analysis` 或 `verify` → 拒——不对称证明被钉死的是这两个名字而非"初始三类"；手写出合法映射 `maintenance=vendor/light` 后 `config list --json` 判 `policy.categories=[]`（读侧同判非法）。
+- **测试缺口**：routing/config 套件的所有夹具始终携带全词汇（`routine analysis verify custom`），没有任何断言钉过"不含 analysis/verify 的合法映射应被接受"；delta 场景 "Category map has one domain rule" 的示例映射（maintenance/routine/verify，无 analysis）按整映射 SET 路径也会被现实现拒绝。
+- **影响面**："项目自定义类别词汇"这一合同条款整体不可实现；`team init`/`upgrade-models` 也无法产出自定义词汇的种子。该检查随 147e233（P228 核心提交）引入、自第二轮候选起就在树内——前四轮未发现的原因：套件夹具全带全词汇，探针焦点在身份绑定/渲染/literal，没人写过自定义词汇的整映射。
+
+### monitor 多席位观察
+
+E5/monitor-multiseat.log（脚本 sha256 `51183e7a…` 未变，源/脚本前后一致）：同一真实候选 monitor.mjs 对 1/4/8 席、各 3 样本的中位 69.1ms/138.9ms/259.6ms——同步 Bash 子进程解析随席位近似线性（约 30ms/席），8 席未见明显阻塞。仅计时观察，非正式性能门禁。
+
+### 结论
+
+**FAIL**。理由只有一条：**F6**——`analysis`/`verify` 必备类别硬编码违反 memory-and-deps delta "Project task-model policy replaces seat and worker-default routing" 的已接受文本（examples, not mandatory；映射为空才非法），写读两侧共用同一实现、无合法途径写出项目自定义词汇，属 S1 任务 1.1/1.2 范围内未满足的承诺；作者新增的角色探针与 flip 臂都没有覆盖这条合同（套件夹具永远携带全词汇）。
+
+F5 本身的修复核验是**通过**的：PM 冻结探针红绿翻转（旧 1/20 rc=1 → 新 21/0 rc=0）、我 frozen 的第四轮 206 项矩阵在新候选 206/0、我自设计的 58 项角色矩阵 58/0、18 臂破坏套件 111/0 且 `template-roles` 新臂三条定点全中、13 条切片全 rc=0、门禁前后源树逐字节一致。`template-unbound` 臂的组合中和（同时移除外围角色证明）符合"同一接缝需同时中和才重现旧行为"的声明。
+
+### 交付与止点
+
+证据根：`../pm-skills-ledger/team/reports/V19-dev3/round5-aaffe5a/`（preflight/common-sh.diff/tests-diff.txt/13 个步骤的 command+log+rc/probe-old/probe-new/old-red 三克隆/fixed-v2/roles-v4 及三轮作废记录/required-category 两组/monitor-multiseat/run-gates.sh 与各脚本 SHA）。源码全程只读，未改、未合并、未推送；所有夹具在私有 HOME/TMPDIR/tmux socket 下，未碰共享安装/真实 PM/真实 Pi 会话/真实 provider。
+
+**仍未执行**：完整 change/S2/S3、全量 smoke、真实 TUI/正式性能与 CPU SLA、真人会话、真实 provider/模型质量、Pi reasoning/message/SDK 或模型兼容、共享安装/采纳/部署。F6 是否授权 P228 再修一轮（或修订合同文本）由 PM 决定；本席待命。
