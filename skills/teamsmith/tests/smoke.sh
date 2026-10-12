@@ -7110,6 +7110,36 @@ if [ -n "$TS_RUNNER" ]; then
 else
   printf '  (跳过 team-bg 夹具：node 未启用类型剥离，且没有 bun/tsx)\n'
 fi
+# P236 · 挂起判定的**归属范围**：同一车道目录里的活作业未必属于本会话（缺陷现场：dev 的作业把
+# dev2 的回合打成 awaiting=）。独立入口 tests/bg-ledger.sh 的 notify 侧两组钉住这件事：
+#   suspend-shape（A 刀既有合同：活记录 → suspended / 死 pid / 畸形 → 原形状 / 目录按车道规则解析）
+#   owner-scope（两席位各自只认自己的 id / 空席位不被别人的作业打成挂起 / 缺 cwd 与解析失败的畸形
+#   记录不判挂起（fail-closed）/ 软链与尾斜杠按真实路径归一 / 主工作树的作业不挂席位）
+# 这两组要起真后台作业、真 /proc 验活与真 git worktree，超过快模式目标 → FAST 下可见 SKIP；
+# 翻转组留在独立入口（--select flip），由任务验收与独立复验跑。
+if [ "$FAST" = "1" ]; then
+  fast_skip "13c·挂起归属（P236）" "要起真后台作业与真 git worktree（bg-ledger.sh 入口自带隔离）"
+elif [ -z "$TS_RUNNER" ]; then
+  printf '  (跳过 P236 挂起归属：node 未启用类型剥离，且没有 bun/tsx)\n'
+elif [ -f "$SKILL_DIR/tests/bg-ledger.sh" ]; then
+  P236_RC=0
+  bash "$SKILL_DIR/tests/bg-ledger.sh" --select suspend-shape,owner-scope >"$TMP/p236-owner.log" 2>&1 || P236_RC=$?
+  if [ "$P236_RC" -eq 0 ]; then
+    ok "P236 挂起归属：suspend-shape + owner-scope 全绿（$(grep -ac '✓' "$TMP/p236-owner.log" || true) 条断言）"
+  else
+    bad "P236 挂起归属有失败（rc=$P236_RC）"
+    grep -a '✗' "$TMP/p236-owner.log" | head -8 | sed 's/^/      /'
+  fi
+  # 入口的 stdout 带颜色（每个用例一行 ✓/✗）→ 先剥 ANSI 再按用例名断言（assert_has 是 grep -F）
+  sed 's/\x1b\[[0-9;]*m//g' "$TMP/p236-owner.log" >"$TMP/p236-owner.plain.log"
+  assert_has "$TMP/p236-owner.plain.log" "✓ suspend: a completed turn with a live job record is tagged suspended" "A 刀挂起合同未回退（活记录 → suspended）"
+  assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: each seat suspends on its own job only" "两席位各自只认自己的作业（P236 缺陷现场）"
+  assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev2)" "空席位（dev2）不被别人的作业打成挂起"
+  assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev3)" "第二个非拥有者席位（dev3）同样不被别人的作业打成挂起"
+  assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)" "缺 cwd / 解析失败的畸形记录不判挂起"
+else
+  bad "13c 缺 tests/bg-ledger.sh（P236 的挂起归属入口）"
+fi
 
 # ---------------------------------------------------------------- 12b. 延后投递与草稿入口（delivery-guard）
 # 事故背景（D20）：自动化消息 send-keys 到「人正在写草稿」的输入框，草稿被粘走、一起被提交。

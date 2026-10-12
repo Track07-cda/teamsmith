@@ -41,7 +41,12 @@ MUST NOT wear the alarm shape of one. The running set SHALL be read from the sam
 writes its records to, located by the lane's own rule — an explicit `TEAM_STATE_DIR` first, else the lane's
 project-root rule (a session whose working tree carries the project's config resolves to that working tree, one
 without it to the main worktree) — and the notify extension MUST NOT substitute its own project root for
-that directory; a record SHALL count as running only while
+that directory. Only a job the settling session itself started SHALL count: a record belongs to the
+session when its recorded `cwd` — the working directory the job was started in, which is the owning
+seat's working tree — resolves, through symlinks and trailing slashes, to the session's own working
+tree or working directory. A record with a missing, relative or unresolvable `cwd`, or one resolving
+to another session's directory, SHALL NOT make the turn suspended — the ownership check fails closed
+rather than guessing. A record SHALL count as running only while
 its recorded `(pid, start-time)` identity verifies live, the same identity rule
 `boundary#\`team bg\` stops a job by the pid it recorded, and prints what it signalled` applies: a dead pid, a
 reused pid and an unreadable or malformed record MUST NOT make a turn "suspended", and a failure in the check
@@ -137,6 +142,29 @@ stay visible as what they are; a completed turn with nothing running is byte-ide
 - **THEN** the notification is suspended on the worktree's own record and does not name the decoy — and the
   fixture's red side (an implementation resolving the main worktree's state directory, the way the notify
   extension's own project root does) fails this scenario
+
+#### Scenario: Seats, one job each
+
+- **GIVEN** three linked worktrees whose seat sessions share one lane state directory, each holding one
+  live-verified record whose `cwd` names its own worktree
+- **WHEN** each session ends a completed turn
+- **THEN** each line carries `awaiting=` with only the job its own session started — the other seats' jobs
+  are neither named nor counted, so each seat's turn reports exactly its own parked work
+
+#### Scenario: An idle seat is not suspended by another seat's job
+
+- **GIVEN** a live-verified record whose `cwd` names the `dev` worktree while two other seat sessions
+  (`dev2` and `dev3`) share the same lane state directory and hold no record of their own
+- **WHEN** each of the two idle sessions ends a completed turn
+- **THEN** each notification keeps the `[auto]` shape with no `awaiting=` field
+
+#### Scenario: A record with no owning directory does not suspend
+
+- **GIVEN** live-verified records whose `cwd` is absent, relative, or a path that no longer resolves, in a
+  session whose own worktree is known
+- **WHEN** a completed turn ends
+- **THEN** the notification keeps the `[auto]` shape with no `awaiting=` field — the ownership check fails
+  closed instead of guessing
 
 #### Scenario: An explicit state directory is the lane's directory
 

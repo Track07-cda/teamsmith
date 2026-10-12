@@ -19,7 +19,7 @@
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -183,12 +183,43 @@ function procStartTime(pid: number): string {
   }
 }
 
+/** 真实路径（软链与尾斜杠都归一）：只接受绝对路径 —— 相对路径在记录里没有对象可解析，属畸形；
+ *  解析失败（路径已不存在 / 无权限）返回空串。调用方拿空串一律 fail-closed（不判挂起，绝不猜）。 */
+function realPathOf(p: string): string {
+  if (!p || p[0] !== '/') return ''
+  try {
+    return realpathSync(p)
+  } catch {
+    return ''
+  }
+}
+
+/** P236 · 本会话的归属路径集合（真实路径）：会话自己的 cwd 与它所在的工作树。任一路径解析失败就不
+ *  放进去 —— 集合为空 = 一条作业都不认（fail-closed 的极端形状，好过认错别人的作业）。 */
+function ownedSessionPaths(cwd: string, worktree: string): Set<string> {
+  const owned = new Set<string>()
+  for (const p of [cwd, worktree]) {
+    const real = realPathOf(resolve(p))
+    if (real) owned.add(real)
+  }
+  return owned
+}
+
+/** P236 · 归属判据：作业记录里的 `cwd`（作业启动时的工作目录，也就是拥有它的那个席位的工作树）
+ *  解析到本会话自己的工作树/cwd（真实路径相等）才算「我的作业」。缺 `cwd`、相对路径、解析失败、
+ *  或指向别人的工作树 → 都不算（fail-closed）。 */
+function isOwnedCwd(jobCwd: string, owned: Set<string>): boolean {
+  const real = realPathOf(jobCwd)
+  return real !== '' && owned.has(real)
+}
+
 /** 在跑作业集合：读车道目录下的 `bg/*.job`，逐条做 (pid, start-time) 活体验证（与 `team bg list`
- *  同一条身份规则）。任何一条失败都**跳过**（目录/记录读不了、软链-FIFO 记录、pid 非正整数、
- *  start 缺失、/proc 读不到、指纹不符）—— fail-closed：判定的不确定方向永远是「不挂起」，
- *  绝不假造挂起（design 决策 4）。 */
-function runningLaneJobs(laneDir: string): string[] {
-  if (!laneDir) return []
+ *  同一条身份规则），再按 `cwd` 只留**本会话自己的**作业（P236 归属范围 —— 同一车道目录里的记录
+ *  可能属于别的席位，把别人的长作业算成自己挂起会污染 `awaiting=`）。任何一条失败都**跳过**
+ *  （目录/记录读不了、软链-FIFO 记录、pid 非正整数、start 缺失、/proc 读不到、指纹不符、cwd 缺失
+ *  或不属于本会话）—— fail-closed：判定的不确定方向永远是「不挂起」，绝不假造挂起（design 决策 4）。 */
+function runningLaneJobs(laneDir: string, owned: Set<string>): string[] {
+  if (!laneDir || owned.size === 0) return []
   let names: string[]
   try {
     names = readdirSync(join(laneDir, 'bg'))
@@ -212,6 +243,7 @@ function runningLaneJobs(laneDir: string): string[] {
       const start = fields.start ?? ''
       if (!Number.isInteger(pid) || pid <= 0 || !start) continue
       if (procStartTime(pid) !== start) continue // 死进程 / pid 复用 / /proc 读不到：都不算在跑
+      if (!isOwnedCwd(fields.cwd ?? '', owned)) continue // P236：别人的作业不算自己挂起
       ids.push(id)
     } catch {
       continue // 读不了：不算在跑
@@ -441,15 +473,19 @@ export default function (pi: ExtensionAPI) {
       /* 通知绝不能打断会话 */
     }
 
-    // 挂起判定（design 决策 4）：在跑集合从**车道自己写记录的目录**读（laneStateDir），逐条 (pid,
-    // start-time) 验活；判定失败一律退回非挂起形状（fail-closed）——既不假造挂起，也不拿 notify 自己的
-    // root 顶替车道目录（两侧分歧时它只负责把这件事记进日志）。
+    // 挂起判定（design 决策 4 + P236 归属范围）：在跑集合从**车道自己写记录的目录**读（laneStateDir），
+    // 逐条 (pid, start-time) 验活、再按 cwd 只留**本会话自己的**作业；判定失败一律退回非挂起形状
+    // （fail-closed）——既不假造挂起，也不拿 notify 自己的 root 顶替车道目录（两侧分歧时它只负责把
+    // 这件事记进日志）。
+    // P236（缺陷现场）：同一车道目录里的记录可能属于**别的席位** —— 只看「项目里有活作业」会把别人的
+    // 长作业算成自己挂起。归属判据 = 作业的 cwd 与本会话自己的工作树/cwd 解析到同一个真实路径。
     const laneDir = laneStateDir(cwd)
     const ownDir = notifyStateDir(root)
     if (laneDir && ownDir && laneDir !== ownDir) {
       log(`suspend check reads the lane's directory ${laneDir} (notify's own root would be ${ownDir})`, cfg)
     }
-    const running = runningLaneJobs(laneDir)
+    const owned = ownedSessionPaths(cwd, join(wtPrefix, agent))
+    const running = runningLaneJobs(laneDir, owned)
     const awaiting = running.length > 0 ? `awaiting=${running.join(',')}` : ''
     const suspended = completed && running.length > 0
 

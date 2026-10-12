@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # P230 · long-job-suspend · A 刀夹具（独立入口：extension 侧的合同，不碰 smoke.sh）
 #
-#   bash skills/teamsmith/tests/bg-ledger.sh --select wording,ledger,suspend-shape,flip
-#   bash skills/teamsmith/tests/bg-ledger.sh                    # 默认四组全跑
+#   bash skills/teamsmith/tests/bg-ledger.sh --select wording,ledger,suspend-shape,owner-scope,flip
+#   bash skills/teamsmith/tests/bg-ledger.sh                    # 默认五组全跑
 #   bash skills/teamsmith/tests/bg-ledger.sh --select flip --evidence <dir>   # 把每组原始日志拷进证据目录
 #   bash skills/teamsmith/tests/bg-ledger.sh --keep             # 保留临时根排查
 #
@@ -16,8 +16,13 @@
 #                  死 pid / pid 复用 / 畸形记录 → 今天的形状；中断 + 活记录 → [auto·interrupted] + awaiting=；
 #                  车道目录按**车道自己的规则**解析（worktree 自带 config / 显式 TEAM_STATE_DIR 都不许被
 #                  notify 自己的 root 顶替）。
+#   owner-scope   挂起判定**按归属范围**（P236）：同一车道目录里的记录可能属于别的席位 —— 记录里的
+#                  cwd 必须解析到本会话自己的工作树/cwd 才算「我的作业」；多席位各有作业时各自只认自己的
+#                  id；空席位（dev2 与 dev3 两个非拥有者）不被别人的作业打成挂起；缺 cwd / 相对 cwd /
+#                  解析不出来的畸形记录不判挂起（fail-closed）；软链与尾斜杠按真实路径归一。
 #   flip           对 scratch 源码做真实破坏必须变红（措辞回退 / 删 start 行 / waited_s 记作业年龄 /
-#                  去掉身份验证 / 改成读 notify 自己的 root），且同一用例在 pristine 树上必须 PASS。
+#                  去掉身份验证 / 改成读 notify 自己的 root / 删掉归属判据），且同一用例在 pristine
+#                  树上必须 PASS。
 #
 # 纪律（§13c）：清掉继承的 TEAM_*/SMOKE_*/TMUX*；写盘前断言 `team paths` 指向夹具仓库；跑后扫描真项目
 # state/ 与 inbox 的夹具标记（+ 前后快照）。夹具只写 ${TMPDIR:-/tmp} 下的 owned 根；不碰调用者仓库。
@@ -29,7 +34,7 @@ REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
 # shellcheck source=lib/tmp-root.sh
 . "$SELF_DIR/lib/tmp-root.sh"
 
-SELECT="wording,ledger,suspend-shape,flip"
+SELECT="wording,ledger,suspend-shape,owner-scope,flip"
 KEEP=0
 EVIDENCE=""
 while [ $# -gt 0 ]; do
@@ -45,7 +50,7 @@ while [ $# -gt 0 ]; do
 done
 IFS=',' read -r -a SEL_GROUPS <<<"$SELECT"
 for _g in "${SEL_GROUPS[@]}"; do
-  case "$_g" in wording|ledger|suspend-shape|flip) ;; *) printf 'bg-ledger: 未知组 %s（wording|ledger|suspend-shape|flip）\n' "$_g" >&2; exit 2 ;; esac
+  case "$_g" in wording|ledger|suspend-shape|owner-scope|flip) ;; *) printf 'bg-ledger: 未知组 %s（wording|ledger|suspend-shape|owner-scope|flip）\n' "$_g" >&2; exit 2 ;; esac
 done
 selects() { case ",$SELECT," in *",$1,"*) return 0 ;; esac; return 1; }
 
@@ -179,7 +184,7 @@ printf '[bg-ledger-run] %s\n' "$MARKER"   # 本入口自己的输出指纹（反
 
 # ── wording / ledger / suspend-shape ────────────────────────────────────────────────────
 SELECTED_GROUPS=""
-for _g in wording ledger suspend-shape; do
+for _g in wording ledger suspend-shape owner-scope; do
   if selects "$_g"; then SELECTED_GROUPS="${SELECTED_GROUPS:+$SELECTED_GROUPS,}$_g"; fi
 done
 if [ -n "$SELECTED_GROUPS" ]; then
@@ -191,7 +196,7 @@ fi
 # ── flip：对 scratch 源码做真实破坏，必须变红；pristine 树必须绿 ──────────────────────────
 if selects flip; then
   section "flip · pristine 树基线（同一批用例必须全绿）"
-  run_harness flip-green "wording,ledger,suspend-shape"
+  run_harness flip-green "wording,ledger,suspend-shape,owner-scope"
   report_group flip-green
 
   MUT="$TMP/mut"; mkdir -p "$MUT"
@@ -248,6 +253,16 @@ if selects flip; then
   flip_premise own-root "$M5" 'const laneDir = notifyStateDir(root)' has
   run_harness flip-own-root suspend-shape "$BG_EXT" "$M5"
   expect_red flip-own-root "suspend: a worktree carrying its own config uses its own lane records" "$TMP/h-flip-green.log"
+
+  # ⑥ 删掉归属判据（退回「同一车道目录里有活作业即算」）→ 归属用例必须红
+  M6="$(flip_mut owner-scope "$NOTIFY_EXT" "s#if (!isOwnedCwd(fields.cwd ?? '', owned)) continue#if (false) continue#")"
+  flip_premise owner-scope "$M6" 'if (false) continue' has
+  run_harness flip-owner-scope owner-scope "$BG_EXT" "$M6"
+  expect_red flip-owner-scope "owner-scope: each seat suspends on its own job only" "$TMP/h-flip-green.log"
+  expect_red flip-owner-scope "owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev2)" "$TMP/h-flip-green.log"
+  expect_red flip-owner-scope "owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev3)" "$TMP/h-flip-green.log"
+  expect_red flip-owner-scope "owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)" "$TMP/h-flip-green.log"
+  expect_red flip-owner-scope "owner-scope: a job started from the main worktree does not suspend a seat" "$TMP/h-flip-green.log"
 
   # 还原后绿：pristine 树重跑一遍（上面所有破坏都只写 scratch 副本）
   section "flip · 还原后绿（pristine 树重跑）"

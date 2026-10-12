@@ -3,7 +3,7 @@
  * P230 · long-job-suspend · A 刀夹具（`tests/bg-ledger.sh` 的确定性驱动）
  *
  *   <node|bun> bg-ledger-harness.mjs --bg <extension/team-bg.ts> --root <fixture repo> \
- *       [--notify <extension/team-notify.ts>] [--groups wording,ledger,suspend-shape] [--marker <pre>]
+ *       [--notify <extension/team-notify.ts>] [--groups wording,ledger,suspend-shape,owner-scope] [--marker <pre>]
  *
  * 为什么用「假 Pi 宿主」而不是真模型：本夹具要证的是**扩展自己的合同** —— 注册工具面的文本、
  * 账本两类新行、挂起判定的目录解析与身份验证。这些都被接口（registerTool / agent_settled）完全决定，
@@ -30,7 +30,7 @@ const BG = opt('bg') ? resolve(opt('bg')) : ''
 const NOTIFY = opt('notify', '-')
 const ROOT = opt('root') ? resolve(opt('root')) : ''
 const MARKER = opt('marker', 'bg-ledger')
-const GROUPS = new Set(opt('groups', 'wording,ledger,suspend-shape').split(',').filter(Boolean))
+const GROUPS = new Set(opt('groups', 'wording,ledger,suspend-shape,owner-scope').split(',').filter(Boolean))
 if (!BG || !existsSync(BG)) {
   console.error('bg-ledger-harness: --bg <extension/team-bg.ts> 是必需的')
   process.exit(2)
@@ -39,8 +39,8 @@ if (!ROOT || !existsSync(join(ROOT, '.pi/team/config.sh'))) {
   console.error('bg-ledger-harness: --root <夹具仓库> 是必需的（它必须带 .pi/team/config.sh）')
   process.exit(2)
 }
-if (GROUPS.has('suspend-shape') && NOTIFY === '-') {
-  console.error('bg-ledger-harness: suspend-shape 需要 --notify <extension/team-notify.ts>')
+if ((GROUPS.has('suspend-shape') || GROUPS.has('owner-scope')) && NOTIFY === '-') {
+  console.error('bg-ledger-harness: suspend-shape / owner-scope 需要 --notify <extension/team-notify.ts>')
   process.exit(2)
 }
 for (const key of Object.keys(process.env)) {
@@ -120,28 +120,44 @@ const waitedOf = line => Number(/ waited_s=([0-9.]+)/.exec(line)?.[1] ?? NaN)
 const SCRATCH = join(dirname(ROOT), 'p230-bg-ledger')
 mkdirSync(SCRATCH, { recursive: true })
 
-/** 一个独立夹具仓库：主工作树 + `.worktrees/dev` 链接工作树（默认不带 config —— 复现生产形状）。
- *  wip.txt 让树保持脏：挂起要证明「⚠ 前缀被省略」，非挂起形状要对出「前缀在」。 */
-const makeBase = (name, { ownConfigInWorktree = false } = {}) => {
+/** 一个独立夹具仓库：主工作树 + 每个席位一个链接工作树（默认只有 `dev`；不带 config —— 复现生产形状）。
+ *  wip.txt 让树保持脏：挂起要证明「⚠ 前缀被省略」，非挂起形状要对出「前缀在」。
+ *  seats 多于一个时（P236 owner-scope）名册与工作树同步扩展：两席位共享同一个车道 state 目录。 */
+const makeBase = (name, { ownConfigInWorktree = false, seats = ['dev'] } = {}) => {
   const base = join(SCRATCH, 'bases', name)
   rmSync(base, { recursive: true, force: true })
   mkdirSync(join(base, '.pi/team/state'), { recursive: true })
   mkdirSync(join(base, 'docs/team/inbox'), { recursive: true })
   writeFileSync(join(base, '.pi/team/config.sh'),
-    `TEAM_PROJECT="bg-ledger-${name}"\nTEAM_AGENTS="dev"\nTEAM_WORKTREES_DIR=".worktrees"\n` +
+    `TEAM_PROJECT="bg-ledger-${name}"\nTEAM_AGENTS="${seats.join(' ')}"\nTEAM_WORKTREES_DIR=".worktrees"\n` +
     `TEAM_NOTIFY_LOG="${base}/.pi/team/state/notify.log"\n`)
   writeFileSync(join(base, 'README.md'), `# bg-ledger fixture ${name}\n`)
   git(['init', '-q', '-b', 'main'], base)
   git(['add', 'README.md'], base)
   git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'init'], base)
-  const wt = join(base, '.worktrees', 'dev')
-  git(['worktree', 'add', '-q', '-b', `task/P230-${name}`, wt], base)
-  writeFileSync(join(wt, 'wip.txt'), 'uncommitted fixture line\n')
-  if (ownConfigInWorktree) {
-    mkdirSync(join(wt, '.pi/team'), { recursive: true })
-    writeFileSync(join(wt, '.pi/team/config.sh'), readFileSync(join(base, '.pi/team/config.sh'), 'utf8'))
+  const wts = {}
+  for (const [i, seat] of seats.entries()) {
+    const wt = join(base, '.worktrees', seat)
+    git(['worktree', 'add', '-q', '-b', i === 0 ? `task/P230-${name}` : `task/P230-${name}-${seat}`, wt], base)
+    writeFileSync(join(wt, 'wip.txt'), 'uncommitted fixture line\n')
+    if (ownConfigInWorktree) {
+      mkdirSync(join(wt, '.pi/team'), { recursive: true })
+      writeFileSync(join(wt, '.pi/team/config.sh'), readFileSync(join(base, '.pi/team/config.sh'), 'utf8'))
+    }
+    wts[seat] = wt
   }
-  return { base, wt, state: join(base, '.pi/team/state') }
+  return { base, wt: wts[seats[0]], wts, state: join(base, '.pi/team/state') }
+}
+
+/** /proc/<pid>/stat 的启动时间指纹（第 22 字段），与扩展同一规则 —— 手写记录要用真指纹。 */
+const procStartTime = pid => {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const rest = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)
+    return rest[19] ?? ''
+  } catch {
+    return ''
+  }
 }
 
 /** 写一条 `state/bg/<id>.job` 记录（与 team-bg 的记录同形状）。 */
@@ -182,12 +198,12 @@ const newNotify = async () => {
     }),
   }
 }
-const resetNotify = base => {
+const resetNotify = (base, agent = 'dev') => {
   rmSync(join(base, '.pi/team/state/notify-dedup'), { force: true })
-  rmSync(join(base, 'docs/team/inbox/dev.md'), { force: true })
+  rmSync(join(base, 'docs/team/inbox', `${agent}.md`), { force: true })
 }
-const inboxLine = base => {
-  const file = join(base, 'docs/team/inbox/dev.md')
+const inboxLine = (base, agent = 'dev') => {
+  const file = join(base, 'docs/team/inbox', `${agent}.md`)
   const lines = existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').filter(Boolean) : []
   return lines.at(-1) ?? ''
 }
@@ -439,7 +455,9 @@ const groupSuspendShape = async () => {
   {
     const b = makeBase('dead')
     const pid = await reapedPid()
-    writeRecord(join(b.state, 'bg'), 'bg-ledger-dead', { pid, pgid: pid, start: '1' })
+    // cwd 指到本会话的工作树：本用例判的只是身份指纹（不让归属判据替它挡枪），
+    // 否则「去掉身份验证」的翻转会被归属判据掩盖而不再变红（P236 实测）。
+    writeRecord(join(b.state, 'bg'), 'bg-ledger-dead', { pid, pgid: pid, start: '1', cwd: b.wt })
     resetNotify(b.base)
     await notify.settle(b.wt, 'stop', 'BG-LEDGER-DEAD dead pid must not suspend')
     const line = inboxLine(b.base)
@@ -452,7 +470,7 @@ const groupSuspendShape = async () => {
   {
     const b = makeBase('reused')
     const sleeper = spawnSleep(30)
-    writeRecord(join(b.state, 'bg'), 'bg-ledger-reused', { pid: sleeper.pid, pgid: sleeper.pid, start: '1' })
+    writeRecord(join(b.state, 'bg'), 'bg-ledger-reused', { pid: sleeper.pid, pgid: sleeper.pid, start: '1', cwd: b.wt })
     resetNotify(b.base)
     await notify.settle(b.wt, 'stop', 'BG-LEDGER-REUSED reused pid must not suspend')
     const line = inboxLine(b.base)
@@ -543,12 +561,120 @@ const groupSuspendShape = async () => {
   await bgHost.emit('session_shutdown', { reason: 'fixture' }, { cwd: ROOT })
 }
 
+// ── owner-scope：挂起判定只认**本会话自己的**作业（P236）────────────────────────
+// 缺陷现场（2026-10-12 真实运行）：两个席位共享同一个车道 state 目录，dev 的作业躺在里面，
+// dev2 结束回合时被打上 awaiting=<dev 的作业>。归属判据 = 记录里的 cwd（作业启动时的工作目录，
+// 也就是拥有它的那个席位的工作树）与本会话自己的工作树/cwd 解析到同一个真实路径；别人的记录、
+// 缺 cwd / 相对 cwd / 解析不出来的畸形记录一律不算（fail-closed）。
+const groupOwnerScope = async () => {
+  const bgMod = await loadModule(BG)
+  const bgHost = newBgHost(bgMod)
+  const notify = await newNotify()
+  const jobs = []
+
+  // ① 三个席位各有自己的活作业：各自只认自己的 id（另外两个席位的作业既不入 awaiting 也不改标签）
+  {
+    const b = makeBase('owner-two', { seats: ['dev', 'dev2', 'dev3'] })
+    const seats = ['dev', 'dev2', 'dev3']
+    const tag = { dev: 'own-a', dev2: 'own-b', dev3: 'own-c' } // 后缀互不为前缀（否则子串断言会互相命中）
+    const own = {}
+    for (const seat of seats) {
+      const R = makeRunner(bgHost, b.wts[seat])
+      own[seat] = await R.run('sleep 30', jobName(tag[seat]))
+      jobs.push([R, own[seat]])
+      resetNotify(b.base, seat)
+    }
+    for (const seat of seats) {
+      await notify.settle(b.wts[seat], 'stop', `BG-LEDGER-OWNER-THREE ${seat} settles with its own job`)
+      const line = inboxLine(b.base, seat)
+      const others = seats.filter(s => s !== seat).map(s => own[s].id)
+      check(`owner-scope: each seat suspends on its own job only (${seat})`,
+        line.includes('[auto·suspended]') && line.includes(`awaiting=${own[seat].id}`) && others.every(id => !line.includes(id)),
+        line || '(no inbox line)')
+    }
+  }
+
+  // ② 只有一个席位有作业：**另外两个席位**（dev2、dev3）都不得出现 awaiting= / suspended
+  //    （PM 在真实运行里两处都看到了：PM 2026-10-12 追加，dev3 的回合同样带着 dev 的 awaiting=）
+  {
+    const b = makeBase('owner-idle', { seats: ['dev', 'dev2', 'dev3'] })
+    const rDev = makeRunner(bgHost, b.wt)
+    const jDev = await rDev.run('sleep 30', jobName('own-busy'))
+    jobs.push([rDev, jDev])
+    for (const seat of ['dev2', 'dev3']) {
+      resetNotify(b.base, seat)
+      await notify.settle(b.wts[seat], 'stop', `BG-LEDGER-OWNER-IDLE ${seat} must not inherit the busy seat’s job`)
+      const line = inboxLine(b.base, seat)
+      check(`owner-scope: a seat with no job of its own is not suspended by another seat’s job (${seat})`,
+        line.includes('[auto] ') && !line.includes('awaiting=') && !line.includes('suspended') && line.includes('⚠ 未提交'),
+        line || '(no inbox line)')
+    }
+  }
+
+  // ③ 活 pid 的畸形记录：缺 cwd / 相对 cwd / 解析不出来的 cwd → 都不判挂起（fail-closed）
+  {
+    const b = makeBase('owner-nocwd')
+    const sleeper = spawnSleep(30)
+    const start = procStartTime(sleeper.pid)
+    const bgDir = join(b.state, 'bg')
+    mkdirSync(bgDir, { recursive: true })
+    writeFileSync(join(bgDir, 'bg-ledger-nocwd.job'),
+      `id=bg-ledger-nocwd\npid=${sleeper.pid}\npgid=${sleeper.pid}\nstart=${start}\nlog=\ncmd=fixture\n`)
+    writeRecord(bgDir, 'bg-ledger-relcwd', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: '.worktrees/dev' })
+    writeRecord(bgDir, 'bg-ledger-gonecwd', { pid: sleeper.pid, pgid: sleeper.pid, start, cwd: '/nonexistent/p236/worktree' })
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'BG-LEDGER-NOCWD records without an owning cwd must not suspend')
+    const line = inboxLine(b.base)
+    check('owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)',
+      line.includes('[auto] ') && !line.includes('awaiting=') && line.includes('⚠ 未提交'),
+      line || '(no inbox line)')
+    try { process.kill(sleeper.pid, 'SIGKILL') } catch { /* ignore */ }
+  }
+
+  // ④ 软链 + 尾斜杠：记录里的 cwd 文本不同、真实路径相同 → 仍然是本会话的作业（挂起）
+  {
+    const b = makeBase('owner-realpath')
+    const sleeper = spawnSleep(30)
+    const link = join(b.base, 'link-to-dev')
+    symlinkSync(b.wt, link)
+    writeRecord(join(b.state, 'bg'), 'bg-ledger-symlink', {
+      pid: sleeper.pid, pgid: sleeper.pid, start: procStartTime(sleeper.pid), cwd: `${link}/`,
+    })
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'BG-LEDGER-REALPATH symlink and trailing slash resolve to the seat worktree')
+    const line = inboxLine(b.base)
+    check('owner-scope: a job cwd reaching the session worktree through a symlink still belongs to it',
+      line.includes('[auto·suspended]') && line.includes('awaiting=bg-ledger-symlink'),
+      line || '(no inbox line)')
+    try { process.kill(sleeper.pid, 'SIGKILL') } catch { /* ignore */ }
+  }
+
+  // ⑤ 主工作树里起的作业（不属于任何席位工作树）→ 席位不判挂起
+  {
+    const b = makeBase('owner-main')
+    const rMain = makeRunner(bgHost, b.base)
+    const jMain = await rMain.run('sleep 30', jobName('own-main'))
+    jobs.push([rMain, jMain])
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'BG-LEDGER-MAINJOB a main-worktree job must not suspend a seat')
+    const line = inboxLine(b.base)
+    check('owner-scope: a job started from the main worktree does not suspend a seat',
+      line.includes('[auto] ') && !line.includes('awaiting=') && line.includes('⚠ 未提交'),
+      line || '(no inbox line)')
+  }
+
+  // 收尾：只按登记过的作业停（kill + 收割），然后清掉扩展的会话资源
+  for (const [R, job] of jobs) await R.stop(job)
+  await bgHost.emit('session_shutdown', { reason: 'fixture' }, { cwd: ROOT })
+}
+
 // ── 主流程 ────────────────────────────────────────────────────────────────────
 console.log(`bg-ledger-harness · root=${ROOT} · groups=${[...GROUPS].join(',')} · bg=${BG} · notify=${NOTIFY}`)
 try {
   if (GROUPS.has('wording')) await groupWording()
   if (GROUPS.has('ledger')) await groupLedger()
   if (GROUPS.has('suspend-shape')) await groupSuspendShape()
+  if (GROUPS.has('owner-scope')) await groupOwnerScope()
 } catch (error) {
   check('harness: no unexpected exception', false, String(error?.stack ?? error).split('\n').slice(0, 3).join(' / '))
 }
