@@ -382,8 +382,8 @@
 | P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | todo |
 | V21 | task-model-routing S2: independent verification | verify | - | - | done |
 | P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | wip |
-| P236 | long-job-suspend rework: suspend detection must be scoped to the owning session | dev-bob | - | - | wip |
-| V22 | Suspend owner-scope rework: independent verification | verify | - | - | wip |
+| P236 | long-job-suspend rework: suspend detection must be scoped to the owning session | dev-bob | - | - | done |
+| V22 | Suspend owner-scope rework: independent verification | verify | - | - | done |
 
 ## 当前里程碑
 
