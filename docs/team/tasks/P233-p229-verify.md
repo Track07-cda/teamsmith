@@ -5,6 +5,7 @@ agent: dev3
 phase: verify
 category: verify
 change: -
+anchor: none (infra) — 对发布工具与发布清单做独立复验，不写交付代码、不改产品契约行为
 deltas: -
 branch: task/P233-p229-verify
 deps: P229（apply 已交付 tip `7663ec663f91`）
