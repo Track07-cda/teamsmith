@@ -371,7 +371,7 @@
 | P228 | Task-model routing core: private implementation | dev | task/P228-task-model-routing-core | E14 | wip |
 | E15 | Pulse key replies: entrypoint exploration | dev2 | task/E15-pulse-key-replies-explore | - | done |
 | E16 | Pulse key replies: formal proposal | dev2 | task/E16-pulse-key-replies-propose | E15 | done |
-| V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | wip |
+| V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | done |
 | E17 | Long-job lane: start then end the turn, the completion wake brings the result (proposal) | dev2 | - | - | done |
 | P229 | Release readiness: repair the release tooling and runbook for the post-rewrite shape | dev-bob | - | - | wip |
 | P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | done |
