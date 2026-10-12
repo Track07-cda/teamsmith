@@ -1064,3 +1064,13 @@ V21 判定 **PASS**（复验记录 `docs/team/reviews/V21.md`，commit `ae006f0`
 影响：只要任一个席位在做长作业，其他席位每次结束回合都会带上 `awaiting=`——「挂起 vs 中断」这条判据再次失真，而这正是 A 刀的主要价值。V20 没抓到它，因为夹具是单会话形状。
 
 处置：返工 P236（按 `cwd` 归属判定 + fail-closed + 两席位交叉用例与红侧），派给 dev-bob；并入 main 后才收口。教训（同族第三次）：**单会话夹具验不出多会话语义**——凡涉及「谁在做什么」的判据，夹具必须至少两个并发主体。
+
+## D134 · 其他项目走 npm 发布版 + 配置迁移由 PM 执行（用户指示，2026-10-12）
+
+用户明确两点：① 本机其他项目要**使用 npm 发布的版本**（不是本仓工作树）；② 配置升级迁移必须被支持，或者由 PM 直接代做。
+
+事实基础（PM 实测）：npm 包只含 `skills/`、`bin/`、`install.sh`（`bin.team = bin/team.mjs`）；`team init` 会把技能装进项目的 `.pi/skills/`；`team config` 目前只有旧式 `set-agent-model`，新的 `set-task-model` / `upgrade-models` 随 `task-model-routing`（0.2.0）才有——0.1.2 里没有配置迁移能力。用户三个项目（agent-base / ai_interview / erp）的配置都是旧式三键（`TEAM_AGENT_MODELS`、`TEAM_DEFAULT_MODEL`、`TEAM_PM_MODEL`），本次已把三份配置备份到仓外 `migration-preflight/pre-0.2.0/`（改动前的原样，供迁移后对照）。
+
+因此的执行次序（不可颠倒）：**0.1.2 发布**（只含长作业工具侧修复与发布工具，不动配置）→ **0.2.0 落地**（routing：`set-task-model` / `upgrade-models` / 面板 / init 与指南）→ 然后逐项目：装 npm 版（全局 CLI + 从发布包含的技能装进项目，并把共享软链从「指向本仓工作树」改为「指向 npm 安装目录」，这样它们不再吃本仓的未发布改动）→ 跑 `config upgrade-models` 迁移（PM 代做，逐项目给出改动前后 diff）→ 修掉 `pi-team` 旧路径引用 → 重启各项目的 agent 会话。
+
+风险约束：routing 一旦并入 main，未迁移项目的 `team up` 会**拒绝**旧配置（这是设计行为）。所以并 main 与三项目迁移必须在同一个窗口内完成，不能先并后拖。另：`team init` 在既有项目上按缺省值渲染身份、`--force` 会覆盖配置与五份治理文件（#1981/#1982），迁移一律不用这两条路径，只改 `config.sh` 的模型相关键。
