@@ -1069,7 +1069,7 @@ V21 判定 **PASS**（复验记录 `docs/team/reviews/V21.md`，commit `ae006f0`
 
 用户明确两点：① 本机其他项目要**使用 npm 发布的版本**（不是本仓工作树）；② 配置升级迁移必须被支持，或者由 PM 直接代做。
 
-事实基础（PM 实测）：npm 包只含 `skills/`、`bin/`、`install.sh`（`bin.team = bin/team.mjs`）；`team init` 会把技能装进项目的 `.pi/skills/`；`team config` 目前只有旧式 `set-agent-model`，新的 `set-task-model` / `upgrade-models` 随 `task-model-routing`（0.2.0）才有——0.1.2 里没有配置迁移能力。用户三个项目（agent-base / ai_interview / erp）的配置都是旧式三键（`TEAM_AGENT_MODELS`、`TEAM_DEFAULT_MODEL`、`TEAM_PM_MODEL`），本次已把三份配置备份到仓外 `migration-preflight/pre-0.2.0/`（改动前的原样，供迁移后对照）。
+事实基础（PM 实测）：npm 包只含 `skills/`、`bin/`、`install.sh`（`bin.team = bin/team.mjs`）；`team init` 会把技能装进项目的 `.pi/skills/`；`team config` 目前只有旧式 `set-agent-model`，新的 `set-task-model` / `upgrade-models` 随 `task-model-routing`（0.2.0）才有——0.1.2 里没有配置迁移能力。用户本机另外三个项目的配置都是旧式三键（`TEAM_AGENT_MODELS`、`TEAM_DEFAULT_MODEL`、`TEAM_PM_MODEL`），本次已把三份配置备份到仓外 `migration-preflight/pre-0.2.0/`（改动前的原样，供迁移后对照）。
 
 因此的执行次序（不可颠倒）：**0.1.2 发布**（只含长作业工具侧修复与发布工具，不动配置）→ **0.2.0 落地**（routing：`set-task-model` / `upgrade-models` / 面板 / init 与指南）→ 然后逐项目：装 npm 版（全局 CLI + 从发布包含的技能装进项目，并把共享软链从「指向本仓工作树」改为「指向 npm 安装目录」，这样它们不再吃本仓的未发布改动）→ 跑 `config upgrade-models` 迁移（PM 代做，逐项目给出改动前后 diff）→ 修掉 `pi-team` 旧路径引用 → 重启各项目的 agent 会话。
 
