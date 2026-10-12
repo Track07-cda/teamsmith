@@ -377,6 +377,8 @@
 | P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | done |
 | V20 | long-job-suspend A knife: independent verification | verify | - | - | done |
 | P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | todo |
+| P232 | Task-model routing S2: panel category editing (private integration) | dev2 | - | - | wip |
+| P233 | Independent verification of the release tooling (P229) | dev3 | - | - | wip |
 
 ## 当前里程碑
 
