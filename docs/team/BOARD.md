@@ -377,12 +377,13 @@
 | P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | done |
 | V20 | long-job-suspend A knife: independent verification | verify | - | - | done |
 | P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | todo |
-| P232 | Task-model routing S2: panel category editing (private integration) | dev2 | - | - | wip |
+| P232 | Task-model routing S2: panel category editing (private integration) | dev2 | - | - | done |
 | P233 | Independent verification of the release tooling (P229) | dev3 | - | - | wip |
 | P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | todo |
 | V21 | task-model-routing S2: independent verification | verify | - | - | done |
 | P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | wip |
 | P236 | long-job-suspend rework: suspend detection must be scoped to the owning session | dev-bob | - | - | wip |
+| V22 | Suspend owner-scope rework: independent verification | verify | - | - | wip |
 
 ## 当前里程碑
 
