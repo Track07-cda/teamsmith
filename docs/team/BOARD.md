@@ -379,6 +379,7 @@
 | P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | todo |
 | P232 | Task-model routing S2: panel category editing (private integration) | dev2 | - | - | wip |
 | P233 | Independent verification of the release tooling (P229) | dev3 | - | - | wip |
+| P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | todo |
 
 ## 当前里程碑
 
