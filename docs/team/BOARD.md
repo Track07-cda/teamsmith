@@ -381,6 +381,7 @@
 | P233 | Independent verification of the release tooling (P229) | dev3 | - | - | wip |
 | P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | todo |
 | V21 | task-model-routing S2: independent verification | verify | - | - | wip |
+| P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | wip |
 
 ## 当前里程碑
 
