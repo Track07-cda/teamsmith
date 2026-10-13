@@ -30,3 +30,21 @@ deps: P234（apply 已交付，冻结 tip 见任务消息）；E16（提案已 A
 ## 交付
 
 `docs/team/reviews/V27.md`（抬头含机器可读的 `判定: **PASS**` / `判定: **FAIL**` 行；逐场景 command/assertion/rc/skip + 原始包路径；写明运行模型；缺测项单列、不许标 pass）；证据包按 D94 放仓外 `pm-skills-ledger/team/reports/V27-verify/`；结论按协议通知 PM。
+
+## 第二轮（2026-10-13，返修后）
+
+第一轮判定 FAIL、三条必修（见 `docs/team/reviews/V27.md` §2）。作者已在**同一分支**返修完毕（`a0107a0` → 新 tip 见派单消息），三条各自的修法：
+
+- **M1**：读路径（索引 fd 与 `readBody()`）加 `O_NONBLOCK` + 类型判定，FIFO 立即拒绝（rc4）而不是挂住。
+- **M2**：`scripts/lib/cmd-reply.sh` 的 list 分支改 `extra+=(--format json)`；两种参数顺序与 `--before=<no>` 等号形式都认游标。
+- **M3**：走路线①——**换掉编译器依赖**，改成读内核计数器（`/proc/<pid>/io` 的 `rchar/syscr` + `fd/fdinfo` 打开证据，新增 `tests/lib/proc-io.sh`）；缺观测器时**可见跳过并点名**（不是判红、也不是静默通过）。`section-paths.tsv` / `smoke.sh` 相应登记。
+
+**本轮要做的**：
+
+1. **逐条重验 M1/M2/M3**，每条都要自己造成红/绿两侧：M1 用 FIFO（索引与正文各一次，含 `--raw`）证明「rc≠124 且给出 `not a regular file` 诊断」；M2 把 `--before N --json`、`--before=N --json`、`--json --before N` 三种形态都跑到（并核对 `next_before` 正确）；M3 在**钉死容器**里跑该段——容器里没有编译器，应该看到的是「要么用 `/proc` 观测器真跑、要么可见跳过并点名」，而**不是**红；宿主上应当真跑。
+2. **确认没有为了修 M3 把牙齿拔掉**：`bounded` 与 `flip/full_scan` 在新方案下仍能判红（自己造一次变异/坏读证明），跳过的分支不许吞掉真问题。
+3. **回归**：上一轮为绿的项抽两条复核（建议：真 pty 第五页与 45 个快照的那个脚本）+ 该 change 三套入口在容器与宿主各一次。
+4. **文档与实现一致**：`SKILL.md` / `references/protocol.md §4b` 推荐的 `list [--before <no>] [--json]` 写法现在必须真的工作（M2 修的就是它）；若文档还有别的写法与实现不符，一并点名。
+5. 基线纪律与容器纪律同上一轮（同命令对照 v0.1.2；先看 `/tmp` 余量；真 tmux 只用私有 socket）。
+
+交付同上一轮：更新 `docs/team/reviews/V27.md`（**追加**一节，保留第一轮的原文与判定；抬头判定改为本轮结论）。**只有本轮判定为 PASS 才能关闭 V27**；若仍 FAIL，同样不关闭、写清实体交回作者。
