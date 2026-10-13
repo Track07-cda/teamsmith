@@ -1123,3 +1123,15 @@ release object 之后的 delta 只有两条账本记录（`docs/team/DECISIONS.m
 发布检查此刻唯一一条红仍是 13 行对端名（P231 的对象，用户已接受不等它）。
 
 不可逆步骤（**等用户逐条点头**）：`git push public main --tags`、`npm publish --access public`（有 2FA 时 npm 打暂存包、用户到网页批准）。推送后按清单第 6 节做发布后验证（新克隆 + 三条安装路径 + `team version --check`），并在推完才合并 routing（0.2.0，D138）。
+
+## D140 · 0.1.2 已推送公开仓，npm 暂存包等网页批准（2026-10-13）
+
+**推送完成**（用户授权「可以发」）：`git push public main --tags` → `0dbc6eb..ca7c176  main -> main`，tag `v0.1.2` 同时推上；`release-check.sh --remote` 核对 **公开远端与本地 main 同点**（`ca7c176`）。独立 clone 复核：公开 HEAD `ca7c176`、tag 指向 HEAD、跟踪文件 1936。
+
+**npm 暂存包**：stage-id `e56f5c2f-fcb6-42ee-9071-8d626ee7ec62`，tag `latest`、public access，shasum `4a88b436…` **与本地 `npm pack` 逐字节一致**（245 文件 / 2.2 MB）。等用户在网页 2FA 批准后成为 `latest`。
+
+两处要如实记下的观察：
+1. 本机 npm 未登录 npmjs（默认 registry 是镜像站，`~/.npmrc` 里的 `_auth` 只对镜像有效），本次用 `~/.npm-token` 通过一个**临时 600 权限 npmrc** 注入（token 未进 argv、未回显，用完删除）。
+2. `npm stage publish` 打了一条警告：`"bin[team]" script name bin/team.mjs was invalid and removed`。**检查结论**：打包出的 tarball 里 `bin` 字段完好（`{'team': './bin/team.mjs'}`），且暂存包 shasum 与本地 pack 相同 → 暂存的就是这份；批准后必须用**真实全局安装**验证 `team` 命令存在（发布后验证清单第 6 节已含）。
+
+已知未清：13 行对端项目名仍在树与已公开历史里（P231，用户已接受）。公开仓的 CI 会在这次推送后自己跑（本机无 GitHub token，我无法查 Actions 运行列表）。
