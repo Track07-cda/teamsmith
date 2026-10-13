@@ -44,3 +44,26 @@ git diff --check && git status --short
 ## 交付
 
 `docs/team/reports/P244-dev3.md`（复现、判据设计依据、改动、三条红侧的前后证据、未做项）；不合并、不推送；做完 `team notify pm`，随后由未写过本任务的席位独立复验。
+
+## 返修轮次 1（2026-10-13，独立复验 V30 判 FAIL：1 项必修 F1）
+
+复验记录 `docs/team/reviews/V30.md`（受检 `b9b242ee`）：方向对、三种状态与两个反例都过，**但有一条必修**。
+
+**F1（假阳，必修）**：`git diff --name-only`（默认 `core.quotePath=true`）对**非 ASCII / 含引号 / 含反斜杠**的路径会输出 **C 转义并加双引号**的串；实现把这一整串当成字面 pathspec 再 `git diff 分支 main -- …`，于是这些路径**永远匹配不到** → `still` 为空 → 判成 `merged`。V30 的现场（判据层）：
+
+```
+FAIL s11  want=unmerged  got=merged     branch-only path 从未进 main
+quoted-name probe: git diff --name-only base s11 = ["\344\270\255\346\226\207.txt"]
+control core.quotePath=false on s11: state=unmerged   ← 换成不转义就正常，坐实是转义问题
+```
+
+端到端后果：一个**内容从未进 main** 的 change 会被报成 `ready（无：全部任务已结束）`——正是「不能假阳」这条要求的直接违反。
+
+**修法要求**（你选并说明依据）：用 NUL 分隔、不转义的输出（例如 `git diff --name-only -z`）并用能承受任意字节的传递方式（数组 / `xargs -0`）逐路径比对内容；**不要**用字符串拼接后当 pathspec。修完给出：
+
+- 判据层红绿对照：含非 ASCII、含空格、含 `"`、含 `\` 的路径各一条 → 未合并/部分一致/已合并三态判定正确（改前是「假阳 merged」）；
+- 端到端小现场：一个**没进 main** 的 change 必须仍显示未合并 blocker（改前显示 ready）；
+- 回归：V30 已过的三态与两个反例不许回退；`smoke.sh --select 12e` 在**改前树**（`a671a162`）红、修后绿。
+- 另：把 `git -c core.quotePath=false` 这种「靠调用方设置」的替代方案在报告里评一句（为什么选或不选）。
+
+修后冻结新 tip，由 **V30 第二轮**（同一复验任务、换会话）复验；只有 PASS 才关闭 V30。
