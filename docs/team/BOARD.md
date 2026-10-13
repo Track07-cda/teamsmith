@@ -397,8 +397,10 @@
 | V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | wip |
 | V28 | P238: independent verification (routing suite in the gate, self-sufficiency, selector) | dev3 | - | - | done |
 | P243 | Select the routing section when product-side routing logic changes | dev3 | - | - | todo |
-| P244 | change status must recognise squash merges (archive precondition) | dev3 | - | - | todo |
+| P244 | change status must recognise squash merges (archive precondition) | dev3 | - | - | wip |
 | V29 | P242: independent verification (class-A clearance, full gate, no weakened assertions) | verify | - | - | done |
+| P245 | Routing checklist: tick S1 (1-5) and S3 (7) | dev | - | - | wip |
+| P246 | Routing checklist: tick S2 (6) | dev2 | - | - | wip |
 
 ## 当前里程碑
 
