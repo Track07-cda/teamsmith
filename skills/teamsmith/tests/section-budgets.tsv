@@ -148,3 +148,5 @@
 56 · meeting-liveness 真 tmux：敲门 / 排水 / 每方窗口（P139）	60	240	60	-/-/-/-	-	-	-	P139 实测（占位，出数后改）：host=[P139 full §55] container=[未测] ci=[未测] · ×4 · floor 60
 59 · pulse-nudge-key：叫醒键按类别集合（P174）	8	60	-	-	8	-/-/-/-	-	P174 实测（container=teamsmith-gate:local 跑 smoke --select 59，段用时 7–8s；纯逻辑四档 + observers 私有仓库真 CLI）· ×4 · floor 60
 60 · 账本禁令：家目录 / 私有网段 / 用户名 / 他项目名（P212 · D94）	10	60	10	13.6/12.7/13.2	1	-	-	P212 实测（2026-10-04，teamsmith-gate:local）：host=[全量 FAST §60 = 1s（17:02，tip 98eb798b）+ --select 60 = 1s（16:16）] container=[全量 FAST §60 = 0s（16:40，6165708c）与 1s（17:1x，98eb798b）取最差] ci=[未测] · P239 实测（2026-10-13，host，loadavg1 13.6/32 核）：host=[--select 60 = 10s = 新增 P239 归属与红侧夹具 8s（两次 --check + 三次 --paths）+ P212 自检/影子/真实扫描 2s] · ×4 · floor 60
+61 · 任务类别模型路由：分组前门（P228 · task-model-routing）	513	2052	513	13.2/13.4/15.6	-	-	-	P238 实测（2026-10-13，tip a3b3f71 之前一笔，选段 61,61b）：全量档 13 组，段内 ✓ 用时 513s（FAST 档 12 组 164s，只作参考）；取全量档 · ×4 · floor 60
+61b · 任务类别模型路由：翻转变异自检（P228 · task-model-routing）	4900	19600	4900	16.3/?/?	-	-	-	P238 实测（2026-10-13）：`task-model-routing.sh --flip` 独立跑 4883s（loadavg1 16.3，同机另有别的席位在跑）+ 段内包装 ≈ 4900s；22 条臂各跑一遍分组，所以比分组的全量还长；取本轮 · ×4 · floor 60

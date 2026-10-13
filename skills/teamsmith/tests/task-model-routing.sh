@@ -85,6 +85,19 @@ effect_snapshot() {
 }
 run() { local rc=0; effect_snapshot "before $*"; OUT="$(cd "$REPO" && timeout 35 bash "$CLI" "$@" 2>&1)" || rc=$?; RC="$rc"; printf 'command=%q ' "$@"; printf '\nrc=%s\n%s\n' "$RC" "$OUT"; effect_snapshot "after rc=$RC $*"; }
 STATE="$REPO/.pi/team/state"; CONFIG="$REPO/.pi/team/config.sh"
+# ── 每组自足：自己准备自己的前置（P238 坑 1）────────────────────────────────────────────
+# 以前夹具的 state 目录只在 sid-readers / boundary 组的正文里被建出来，于是单独 `--select pm`
+# 时发布记录（$STATE/pm-launch.env）写不进去、29 条断言连锁红（最早一条是 pm-partial-publication-record，
+# 诊断 .pm-launch-test-nonce: No such file or directory）。跨组共享的前置一律在这里按**选中的组**
+# 逐组准备，不靠兄弟组先跑过；准备失败时点名，而不是让下游断言各红一遍（缺前置不是静默跳过）。
+# 现只有一处：state 目录是发布记录 / 审计 / 快照的落点，每个组都可能写它。
+routing_group_setup() { # <组> → 0 = 就绪；1 = 前置准备失败（已点名）
+  local g="$1"
+  mkdir -p "$STATE" 2>/dev/null && return 0
+  printf 'FAIL group-setup:%s 前置准备失败：建不出夹具 state 目录 %s\n' "$g" "$STATE"
+  return 1
+}
+for _setup_group in ${SELECT//,/ }; do routing_group_setup "$_setup_group" || true; done
 # Direct library fixtures are still isolated; never load real project state/config.
 export TEAM_ROOT="$REPO" TEAM_MAIN_ROOT="$REPO" TEAM_STATE_DIR="$STATE" TEAM_CONFIG="$CONFIG" TEAM_CLI=team TEAM_SKILL_DIR="$SKILL" TEAM_DOCS_ABS="$REPO/docs/team" TEAM_DOCS_DIR=docs/team TEAM_SESSION=routing-fixture TEAM_PM_WINDOW=pm TEAM_AGENTS='dev verify' TEAM_WORKTREES_DIR=.worktrees TEAM_PI_AGENT_DIR="$HOME/.pi/agent"
 source "$SKILL/scripts/lib/common.sh"

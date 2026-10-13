@@ -83,6 +83,12 @@ elif name == 'literal-shell-expansion':
 elif name == 'init-legacy-proceeds':
     # P235 red side: the legacy-model gate is removed, so init/bootstrap migrate by overwrite.
     function(lib / 'cmd-project.sh', 'team_config_legacy_model_keys', '  return 0 # P235_FLIP_init-legacy-proceeds')
+    # P238: 拆掉退休键闸门后，plain 路径仍被 P235 的模型策略解析器独立拦住（这份夹具没有合法新策略
+    # → 拒绝），于是 `init-legacy-plain-refused` 永远不红 —— 臂头的命名期望形同虚设（P238 实测：
+    # 8 条红里没有它，且改前改后一模一样）。把解析器也一并短路，才真的是「闸门被拆掉」：
+    # plain / force / bootstrap 三条都按覆盖式迁移红出来。
+    function(lib / 'cmd-project.sh', 'team_init_model_policy_resolve',
+             '  printf \'%s\\n\' vendor/light; printf \'%s\\n\' vendor/pm:high # P238_FLIP_init-legacy-proceeds-policy')
 elif name == 'template-retired-key':
     # P235 red side: the shipped template carries the retired worker key again.
     replace(root / 'skills/teamsmith/templates/config.sh.tmpl',

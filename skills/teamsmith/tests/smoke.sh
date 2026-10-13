@@ -19830,6 +19830,64 @@ else
   bad "P239 缺 tests/ledger-claim.sh（归属与红侧夹具）"
 fi
 
+# ---------------------------------------------------------------- 61. 任务类别模型路由：分组前门（P238 · task-model-routing）
+# 夹具本体是 tests/task-model-routing.sh（13 组）+ 它 source 的 tests/lib/model-routing-{boundary,expansion,roles}.sh
+# 与 tests/lib/model-policy.sh；`--flip` 的变异器是 tests/lib/model-routing-flips.py。S1–S3 那三轮复验
+# 跑的都是默认 13 组全量，但**没有任何门禁段**在跑它（P238 坑 2 实测：smoke.sh 与选段表都不含这些文件）——
+# 于是改坏路由代码只能靠人手工跑才被发现。这一段把它登记进闸门。
+# 分档（判据 = 全量门禁能咬住路由回归 · FAST 的成本不失控；两档的实测时长写在报告里、寓意写进
+# section-budgets.tsv 的 provenance）：
+#   * FAST：除 boundary（真 tmux window 家族，占了整套时长的大头）之外的 12 组；
+#   * 全量：13 组全跑。`--flip` 变异套件在 §61b（同属前门，但它证的是「夹具有没有牙齿」）。
+# 隔离：夹具自带私有 tmux socket（lib/tmux-iso.sh 的硬停守卫）、记录桩 pi 与私有临时根；
+# FAST 档不起真 pi、不碰共享 tmux server（与 §59 同一形状），§14b 的 FAST 自检照旧成立。
+section "61 · 任务类别模型路由：分组前门（P228 · task-model-routing）"
+P238_SUITE="${P238_SUITE:-$SKILL_DIR/tests/task-model-routing.sh}"
+P238_GROUPS_FAST='policy,machine,init,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm'
+P238_GROUPS_ALL="$P238_GROUPS_FAST,boundary"
+if [ ! -f "$P238_SUITE" ]; then
+  bad "61 缺 tests/task-model-routing.sh（S1–S3 的路由前门夹具）"
+else
+  if [ "$FAST" = "1" ]; then
+    P238_TIER=FAST; P238_GROUPS="$P238_GROUPS_FAST"
+  else
+    live_mark; P238_TIER=全量; P238_GROUPS="$P238_GROUPS_ALL"
+  fi
+  P238_RC=0
+  bash "$P238_SUITE" --select "$P238_GROUPS" >"$TMP/p238-routing-$P238_TIER.log" 2>&1 || P238_RC=$?
+  P238_SUM="$(grep -a '^RESULT ' "$TMP/p238-routing-$P238_TIER.log" | tail -1)"
+  if [ "$P238_RC" -eq 0 ]; then
+    ok "61 路由分组前门（$P238_TIER · 组 $P238_GROUPS）全绿（$P238_SUM）"
+  else
+    bad "61 路由分组前门有失败（$P238_TIER rc=$P238_RC；$P238_SUM）"
+    grep -a '^FAIL ' "$TMP/p238-routing-$P238_TIER.log" | head -12 | sed 's/^/      /'
+  fi
+fi
+
+# ---------------------------------------------------------------- 61b. 任务类别模型路由：翻转变异自检（P238 · task-model-routing）
+# `--flip` 在 scratch 副本上把实现逐条改坏，要求**命名断言**变红、还原后全绿 —— 它证明的是
+# 「§61 那段前门真的会咬人」（夹具的牙齿），不是产品行为本身；每条臂都要跑一遍分组，整体比分组的
+# 一次全量还长，所以只在完整门禁里跑；FAST 里是**可见 SKIP**（快模式的成本不失控）。
+section "61b · 任务类别模型路由：翻转变异自检（P228 · task-model-routing）"
+P238_SUITE="${P238_SUITE:-$SKILL_DIR/tests/task-model-routing.sh}"
+if [ ! -f "$P238_SUITE" ]; then
+  bad "61b 缺 tests/task-model-routing.sh（翻转变异自检的前提）"
+elif [ "$FAST" = "1" ]; then
+  fast_skip "61b·路由翻转变异（--flip）" "变异套件要跑十几分钟（FAST 只跑 §61 的 12 组；完整门禁里跑）"
+else
+  live_mark
+  P238_FLIP_RC=0
+  bash "$P238_SUITE" --flip >"$TMP/p238-routing-flip.log" 2>&1 || P238_FLIP_RC=$?
+  P238_FLIP_SUM="$(grep -a '^RESULT ' "$TMP/p238-routing-flip.log" | tail -1)"
+  P238_ARMS="$(grep -ac '^CONTROL .*source_restored=' "$TMP/p238-routing-flip.log" || true)"
+  if [ "$P238_FLIP_RC" -eq 0 ]; then
+    ok "61b 路由翻转变异：$P238_ARMS 条臂按名变红并还原（$P238_FLIP_SUM）"
+  else
+    bad "61b 路由翻转变异有失败（rc=$P238_FLIP_RC；$P238_FLIP_SUM）"
+    grep -a '^FAIL ' "$TMP/p238-routing-flip.log" | head -12 | sed 's/^/      /'
+  fi
+fi
+
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：
 # 用时 + ✓/✗/SKIP 增量 + ticks）、sections.tsv 一行。
