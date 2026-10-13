@@ -373,12 +373,12 @@
 | E16 | Pulse key replies: formal proposal | dev2 | task/E16-pulse-key-replies-propose | E15 | done |
 | V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | done |
 | E17 | Long-job lane: start then end the turn, the completion wake brings the result (proposal) | dev2 | - | - | done |
-| P229 | Release readiness: repair the release tooling and runbook for the post-rewrite shape | dev-bob | - | - | wip |
+| P229 | Release readiness: repair the release tooling and runbook for the post-rewrite shape | dev-bob | - | - | done |
 | P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | done |
 | V20 | long-job-suspend A knife: independent verification | verify | - | - | done |
 | P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | todo |
 | P232 | Task-model routing S2: panel category editing (private integration) | dev2 | - | - | done |
-| P233 | Independent verification of the release tooling (P229) | dev3 | - | - | wip |
+| P233 | Independent verification of the release tooling (P229) | dev3 | - | - | done |
 | P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | todo |
 | V21 | task-model-routing S2: independent verification | verify | - | - | done |
 | P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | wip |
