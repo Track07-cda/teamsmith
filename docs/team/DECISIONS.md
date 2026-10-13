@@ -1169,3 +1169,16 @@ release object 之后的 delta 只有两条账本记录（`docs/team/DECISIONS.m
 3. **派单恢复**：迁移后 preflight 通过，`P237`（long-job-suspend B 刀：工人提示词三态合同）派给 dev，`P234`（Pulse 关键回复页实现）派给 dev2，两者 `category=code`、`selected_via=policy`。
 
 **新发现（待核实后立项）**：`task-model-routing` 的专属测试入口 `tests/task-model-routing.sh`（1001 行 + 5 个 `tests/lib/model-routing-*` 夹具）**没有被任何门禁段落调用**——设计里的说法是「未来门面 = `routing/<group>` + 相应 smoke 段」，也就是说它靠人手工跑。而 `section-paths.tsv` 里若干段用 `skills/teamsmith/tests/*` 这类通配，选段器于是把新增测试文件归到无关段（本次选段给出 55/56/59/14d，实际都不跑这个入口）。这意味着**路由行为没有自动化回归覆盖**。正在跑一次手工全量前门（job `routing-frontdoor`）确认现状，随后按结果立项（把它登记成独立门禁段 + 修选段归属）。
+
+## D144 · routing 合并后的手工前门体检：逮到三个坑，归档前先修（2026-10-13）
+
+合并后 PM 手工跑了一遍路由前门（13 组 + `--flip`），结论与处置：
+
+- **12 组全绿**：policy 26、machine 3、init 44、config 19、upgrade 41、dispatch 89、resume 78、transaction 106、limits 63、preview 44、sid-readers 251、boundary **2431**（零红）。
+- **`pm` 组 74/29 红**，根因是**夹具不自足**：它需要的 state 目录由 `boundary` 组创建（`task-model-routing.sh:694`），单独跑就没有该目录，`team_pm_metadata_publish` 写临时文件失败 → 连锁 29 红。PM 在 S1/S2/S3 三个 tip 上各跑一次，**三处同样 29 红**——不是任何切片引入，而是自始存在的设计缺口；三轮独立复验跑的是默认 13 组全量（boundary 在前），所以从未暴露。
+- **整套路由测试没有被任何门禁段调用**（设计说前门靠人手工跑）。13 组全量约 18 分钟，`--flip` 更久。
+- **选段归属错**：`section-paths.tsv` 里的 `tests/*` 通配把新增测试文件归到 55/56/59/14d（都不跑路由入口），于是「改了路由测试 → 选段不含路由段」。
+
+处置：立 **P238**（同一席位、三个坑一起修）：逐组自足 + 把前门登记成门禁段（FAST 跑核心组、live 跑全套与 `--flip`，成本要有实测依据）+ 修选段归属；判据里明确要求「每一组单独可跑」与「改路由测试文件 → 选段包含路由段」，并各带红侧。
+
+**归档次序**：`task-model-routing` **先不归档**，等 P238 落地——否则会把「测试没进闸门且有假红」的状态连同变更一起封存，日后没人会回头修。P238 交付并独立复验后，再归档该变更。
