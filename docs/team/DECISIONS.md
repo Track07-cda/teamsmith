@@ -1159,3 +1159,13 @@ release object 之后的 delta 只有两条账本记录（`docs/team/DECISIONS.m
 **未做**（有意）：没有改那五个项目的报告与 `DECISIONS.md`（历史记录不重写）；没有改它们的 `config.sh`（旧式配置在 0.1.2 下合法，迁移工具随 0.2.0）；没有提交它们的改动（那些仓库当时本来就有各自的未提交改动，提交归属由各自的 PM 决定）。
 
 **两个后果**：① 本项目 main 的改动**不再**泄漏给其他项目（它们读的是 npm 包）——之前记录在案的风险（review R4：共享软链指向本仓）至此消解；② 因此 routing 合并对它们**不再**是「立刻破坏旧配置」的操作，配置迁移可以等 0.2.0 发到 npm 后再做。各项目的 agent 会话需重启一次才会读到新技能文本。
+
+## D143 · routing 已并入 main 并完成本项目自己的配置迁移（2026-10-13）
+
+按 D138 的次序（发布完成后）执行：
+
+1. **合并**：`git merge --squash task/P235-routing-init-s3`（该支链含 S1+S2+S3）→ 无冲突；我逐项核过**发布敏感的版本落点没有被自动合并回退**（package.json / 两个 SKILL.md / common.sh 仍是 0.1.2，README 四处 pin 在），提交 `e897a7d`。合并后 `openspec validate --all --strict` **16/0**、`ledger-ban` 0 命中。
+2. **本项目配置迁移**（破坏式，已在 D126/D130 范围内授权执行）：`team config upgrade-models --task-models 'code=… verify=… analysis=… infra=…' --pm-model opencode-go/deepseek-v4.1-flash --yes`。移除退休键 `TEAM_DEFAULT_MODEL`/`TEAM_AGENT_MODELS`，新增 `TEAM_TASK_MODELS` 与独立 `TEAM_PM_MODEL`；审计记录写入（before/after 指纹），迁移前原样备份在 `/tmp/pm-skills-config-before-routing.sh`。**类别映射的取舍**：`code`/`verify`/`infra` → 默认快模型，`analysis` → `kimi-coding/k3:max`——依据 D129 补记（用户明确默认模型与 kimi-k3 能力相当）与 kimi 周额度现实：把独立复验绑死在 kimi 上会让它在额度用尽时硬阻塞，而独立性来自**另一个席位 + 独立 clone + 自造夹具**，不来自模型品牌。PM 模型显式记为默认模型（原本就是它，改键后必须显式）。
+3. **派单恢复**：迁移后 preflight 通过，`P237`（long-job-suspend B 刀：工人提示词三态合同）派给 dev，`P234`（Pulse 关键回复页实现）派给 dev2，两者 `category=code`、`selected_via=policy`。
+
+**新发现（待核实后立项）**：`task-model-routing` 的专属测试入口 `tests/task-model-routing.sh`（1001 行 + 5 个 `tests/lib/model-routing-*` 夹具）**没有被任何门禁段落调用**——设计里的说法是「未来门面 = `routing/<group>` + 相应 smoke 段」，也就是说它靠人手工跑。而 `section-paths.tsv` 里若干段用 `skills/teamsmith/tests/*` 这类通配，选段器于是把新增测试文件归到无关段（本次选段给出 55/56/59/14d，实际都不跑这个入口）。这意味着**路由行为没有自动化回归覆盖**。正在跑一次手工全量前门（job `routing-frontdoor`）确认现状，随后按结果立项（把它登记成独立门禁段 + 修选段归属）。
