@@ -1135,3 +1135,16 @@ release object 之后的 delta 只有两条账本记录（`docs/team/DECISIONS.m
 2. `npm stage publish` 打了一条警告：`"bin[team]" script name bin/team.mjs was invalid and removed`。**检查结论**：打包出的 tarball 里 `bin` 字段完好（`{'team': './bin/team.mjs'}`），且暂存包 shasum 与本地 pack 相同 → 暂存的就是这份；批准后必须用**真实全局安装**验证 `team` 命令存在（发布后验证清单第 6 节已含）。
 
 已知未清：13 行对端项目名仍在树与已公开历史里（P231，用户已接受）。公开仓的 CI 会在这次推送后自己跑（本机无 GitHub token，我无法查 Actions 运行列表）。
+
+## D141 · 0.1.2 已上线 npm，发布后验证通过（2026-10-13）
+
+用户在网页批准暂存包后：`npm view teamsmith version --registry https://registry.npmjs.org` = **0.1.2**，暂存列表清空（stage-id `e56f5c2f…` 已批准上线）。
+
+发布后验证（清单第 6 节，全部用**registry 上的包**做，不读本地树）：
+- 真实全局安装：`npm i -g --prefix /tmp/npmtest teamsmith@0.1.2` → `added 1 package`；`bin/team` 软链存在（`team -> ../lib/node_modules/teamsmith/bin/team.mjs`）→ 暂存时那条 `bin[team] … removed` 警告**不成立**，`team` 命令正常；`team version` = `teamsmith 0.1.2`；`team help` 正常。
+- `team version --check`：磁盘代码 0.1.2 / SKILL.md 0.1.2 / CHANGELOG 0.1.2（本会话加载仍是 0.1.1 → 需 `/reload`，属预期）。
+- `install.sh`（从装好的包里跑）：两个共享技能软链被指向**包内**的 `skills/`；`team init` 进一个空项目：生成 `AGENTS.md`、`docs/team`、`.pi/skills/{teamsmith,teamsmith-init}`，其中 `version: "0.1.2"` 与 `TEAM_VERSION="0.1.2"` 一致。
+
+**我造成并已修复的一处副作用**：跑 `install.sh` 时它把 `~/.agents/skills/{teamsmith,teamsmith-init}` 这两个共享软链重指到了 `/tmp/npmtest/...`（临时目录）。已按原样恢复为指向本仓工作树并验证可解析。**这条同时是迁移的正解**：等 0.2.0 落地后，装全局包再跑包内 `install.sh`，就能让其他项目用上 npm 版而不吃本仓未发布改动（D134 的第 3 步）。
+
+临时凭据文件 `/tmp/npmrc-npmjs` 已删除（token 未进 argv、未回显）。
