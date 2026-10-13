@@ -394,9 +394,10 @@
 | V26 | P239: independent verification (ledger claim + report template line) | dev | - | - | done |
 | P241 | Fix the 12 product regressions from the routing merge (inbox bookkeeping, common.sh self-sufficiency) | dev | - | - | done |
 | P242 | Turn the 210 class-A reds green under the new contract (fixtures, not assertions weakened) | dev | - | - | wip |
-| V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | blocked |
+| V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | wip |
 | V28 | P238: independent verification (routing suite in the gate, self-sufficiency, selector) | dev3 | - | - | done |
 | P243 | Select the routing section when product-side routing logic changes | dev3 | - | - | todo |
+| P244 | change status must recognise squash merges (archive precondition) | dev3 | - | - | todo |
 
 ## 当前里程碑
 
