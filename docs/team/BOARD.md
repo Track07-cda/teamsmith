@@ -398,6 +398,7 @@
 | V28 | P238: independent verification (routing suite in the gate, self-sufficiency, selector) | dev3 | - | - | done |
 | P243 | Select the routing section when product-side routing logic changes | dev3 | - | - | todo |
 | P244 | change status must recognise squash merges (archive precondition) | dev3 | - | - | todo |
+| V29 | P242: independent verification (class-A clearance, full gate, no weakened assertions) | verify | - | - | wip |
 
 ## 当前里程碑
 
