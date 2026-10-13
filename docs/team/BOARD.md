@@ -387,6 +387,7 @@
 | V23 | task-model-routing S3: independent verification | verify | - | - | done |
 | P237 | long-job-suspend B knife: the worker prompt's three-state contract | dev | - | - | wip |
 | V24 | long-job-suspend B knife: independent verification | verify | - | - | wip |
+| P238 | Routing suite into the gate: per-group self-sufficiency, a gate section, selector attribution | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
