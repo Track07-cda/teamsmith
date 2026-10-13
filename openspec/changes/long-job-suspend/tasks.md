@@ -2,11 +2,18 @@
 
 ## 1. 输入冻结与排期
 
-- [ ] 1.1 PM 记录提案接受与本 change 的输入基线 tip；确认 `task-model-routing` S1 对
+- [x] 1.1 PM 记录提案接受与本 change 的输入基线 tip；确认 `task-model-routing` S1 对
+  （完成：提案 E17 判定 ACCEPTED（`docs/team/reviews/long-job-suspend-proposal.md`，输入 tip `d7f9453`）；
+  释放状态按 design 决策 8 分两刀 —— A 刀 P230（扩展 + 独立入口，2026-10-10）、B 刀 P237 在 routing
+  S1/S2/S3 并入 main（`e897a7d`，2026-10-13）之后的同一天交付。以下原文保留：
   `scripts/lib/cmd-agents.sh`、S3 对 `templates/**` 与 `references/**` 的释放状态。未释放则按
   design 决策 8 分两刀派单：A 刀（扩展 + 独立测试入口）先行，B 刀（提示词/模板/文档/门禁登记）
   待释放；PM 在 apply 任务书里写明切片边界与输入 tip。
-- [ ] 1.2 派单守卫核对：本 change 的三份 delta（dispatch / background-jobs / notify-and-inbox）
+- [x] 1.2 派单守卫核对：本 change 的三份 delta（dispatch / background-jobs / notify-and-inbox）
+  （完成：两次派单的守卫都通过并留下记录 —— A 刀 P230 与 V20、返工 P236 与 V22、B 刀 P237 与 V24，
+  期间无第三个任务在写同一 delta（V20/V22/V24 的 `deltas:` 均为 `-`，即验证任务不写 delta）；
+  `notify-and-inbox` 的 MODIFIED 基线在派单时按磁盘文本刷新，V23 之后未再有其他 change 归档碰到该 requirement。
+  以下原文保留：
   各只有一份、无其他未完成任务在写同一 delta 文件；`notify-and-inbox` 的 MODIFIED 基线按派单时
   磁盘文本刷新（若期间有其他 change 归档碰到该 requirement）。
 
@@ -74,8 +81,13 @@
 
 ## 5. 独立验证与采纳
 
-- [ ] 5.1 未写过本 change apply 的席位在独立 clone 复验：三份 delta 的全部场景 + 全部红侧；报告逐条
+- [x] 5.1 未写过本 change apply 的席位在独立 clone 复验：三份 delta 的全部场景 + 全部红侧；报告逐条
   命令 / rc / 证据路径。
+  （完成，三刀各自的验证者都不是写它的人 —— A 刀 `docs/team/reviews/V20.md`（受检 `8913ba3`；
+  产品面 29 条独立断言 + 五面破坏有牙）、返工 `docs/team/reviews/V22.md`（受检 `2805fc1`；自造三会话
+  夹具 27 条 + 四种 fail-closed + 红侧）、B 刀 `docs/team/reviews/V24.md`（受检 `822a45c`；自建夹具
+  55/55 + 四条红侧各自点名并还原 + 门禁改动逐条审计）。三条记录都带命令 / rc / 证据路径，且都在
+  PM 冻结的独立 clone 上跑。）
 - [ ] 5.2 wrap-up 按门禁纪律跑全量（容器、干净 clone、后台起 + 叫醒收割）；归档前 PM 复核
   MODIFIED 与基线逐场景对照无丢失。
 - [ ] 5.3 PM 合并、用户确认、归档；共享技能软链接影响授权沿用既有程序（D107）。
