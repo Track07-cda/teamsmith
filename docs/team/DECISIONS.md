@@ -1148,3 +1148,14 @@ release object 之后的 delta 只有两条账本记录（`docs/team/DECISIONS.m
 **我造成并已修复的一处副作用**：跑 `install.sh` 时它把 `~/.agents/skills/{teamsmith,teamsmith-init}` 这两个共享软链重指到了 `/tmp/npmtest/...`（临时目录）。已按原样恢复为指向本仓工作树并验证可解析。**这条同时是迁移的正解**：等 0.2.0 落地后，装全局包再跑包内 `install.sh`，就能让其他项目用上 npm 版而不吃本仓未发布改动（D134 的第 3 步）。
 
 临时凭据文件 `/tmp/npmrc-npmjs` 已删除（token 未进 argv、未回显）。
+
+## D142 · 其他项目切到 npm 版：共享软链与五个项目的入口路径（2026-10-13）
+
+**已完成（机器层面）**：用户先自行 `npm i -g teamsmith@0.1.2`（全局 `team` 落在 `~/.local/bin`，`~/.local` 是本机 npm 前缀，已在 PATH）；PM 随后跑包内 `install.sh`，把两个共享软链改为指向**包内**技能：
+`~/.agents/skills/teamsmith{,-init} → ~/.local/lib/node_modules/teamsmith/skills/…`（`bash ~/.agents/skills/teamsmith/scripts/team version` = `0.1.2`）。
+
+**已完成（五个项目的入口路径）**：按用户指示「只处理其余项目、有一个先别动」（那个被点名的项目既没有 team 配置、也没有任何 teamsmith 引用，实际未受影响），把活文档与脚本里的工具入口从本仓绝对路径（以及早已失效的 `pi-team` 旧名）改成与安装位置无关的形式 `bash ~/.agents/skills/teamsmith/scripts/team`。共 5 个项目 / 14 个文件：`AGENTS.md` ×5、`PROTOCOL.md` ×4、`RESUME.md` ×1、`STATE.md` ×1、两个 shell 脚本（各 1–2 行）。改动前的原样备份在 `/tmp/proj-migration-backup-20261013-062413/`（临时目录，重启即失；如需长期留证应移到仓外账本）。
+
+**未做**（有意）：没有改那五个项目的报告与 `DECISIONS.md`（历史记录不重写）；没有改它们的 `config.sh`（旧式配置在 0.1.2 下合法，迁移工具随 0.2.0）；没有提交它们的改动（那些仓库当时本来就有各自的未提交改动，提交归属由各自的 PM 决定）。
+
+**两个后果**：① 本项目 main 的改动**不再**泄漏给其他项目（它们读的是 npm 包）——之前记录在案的风险（review R4：共享软链指向本仓）至此消解；② 因此 routing 合并对它们**不再**是「立刻破坏旧配置」的操作，配置迁移可以等 0.2.0 发到 npm 后再做。各项目的 agent 会话需重启一次才会读到新技能文本。
