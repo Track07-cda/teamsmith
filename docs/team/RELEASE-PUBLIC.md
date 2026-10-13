@@ -39,7 +39,9 @@
 V=0.1.2        # 本次要发的版本号；六处落点必须统一
 sed -i "s/\"version\": \"[0-9.]*\"/\"version\": \"$V\"/" package.json
 sed -i "s/TEAM_VERSION=\"[0-9.]*\"/TEAM_VERSION=\"$V\"/" skills/teamsmith/scripts/lib/common.sh
-sed -i "s/version: [0-9.]*/version: $V/" skills/teamsmith/SKILL.md skills/teamsmith-init/SKILL.md
+sed -i "s/version: \"[0-9.]*\"/version: \"$V\"/" skills/teamsmith/SKILL.md skills/teamsmith-init/SKILL.md
+# ↑ 两个 SKILL 的 front-matter 版本是**带引号**的：门禁里的解析器（smoke.sh 的 DOC_V/INIT_V）只认
+#   `version: "X"` 这一形状。不带引号写会静默把这两处读成空值，门禁那条「版本号五处一致」就会红。
 sed -i "s/v[0-9]\+\.[0-9]\+\.[0-9]\+/v$V/g" README.md          # 四处 @v pin
 # CHANGELOG：在 `## v<上一版>` 之前插入 `## v$V · <日期>` 段 —— 写**真摘要**（这一版改了什么），不是占位
 $EDITOR skills/teamsmith/CHANGELOG.md
