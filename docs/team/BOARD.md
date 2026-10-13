@@ -379,12 +379,13 @@
 | P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | todo |
 | P232 | Task-model routing S2: panel category editing (private integration) | dev2 | - | - | done |
 | P233 | Independent verification of the release tooling (P229) | dev3 | - | - | done |
-| P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | todo |
+| P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | wip |
 | V21 | task-model-routing S2: independent verification | verify | - | - | done |
 | P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | done |
 | P236 | long-job-suspend rework: suspend detection must be scoped to the owning session | dev-bob | - | - | done |
 | V22 | Suspend owner-scope rework: independent verification | verify | - | - | done |
 | V23 | task-model-routing S3: independent verification | verify | - | - | done |
+| P237 | long-job-suspend B knife: the worker prompt's three-state contract | dev | - | - | wip |
 
 ## 当前里程碑
 
