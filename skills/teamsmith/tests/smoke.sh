@@ -14638,6 +14638,175 @@ assert_eq "12e 未知 id → 非 0" "$([ "$E_UNK_RC" -ne 0 ] && echo yes || echo
 assert_has_echo "$E_UNK" "没有任务指向它" "12e 未知 id 说清「没有任务」"
 assert_has_echo "$E_UNK" "openspec/changes/no-such-change/ 目录" "12e 未知 id 说清「没有 change 目录」"
 
+# ---- P244：blocker ②「分支是否已并入」必须认 squash 合并（本队的合并方式就是 `merge --squash`）
+# 现场（D148②）：祖先判据在 squash 下恒假 —— 已合并的分支永远落在「未合并」文案里。四种形状都在
+# **真 git** 上造：真没合并 / squash 已合并（带报告、不带报告）/ 只合了一半 / 净改动为空；
+# 外加 P244 要求 2 的口径：已关单（看板 done）的任务不因为「内容不在 main」被新判据加一道 blocker。
+p244_file() { # <项目> <分支> <路径> <内容>：把一次改动提交到该分支上（分支不存在就从 main 新建）
+  local p="$1" br="$2" f="$3" c="$4"
+  local wt="$TMP/p244-wt-${br##*/}"
+  git -C "$p" worktree prune >/dev/null 2>&1 || true
+  git -C "$p" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  if git -C "$p" show-ref --verify --quiet "refs/heads/$br"; then
+    git -C "$p" worktree add -q "$wt" "$br" >/dev/null 2>&1 || return 1
+  else
+    git -C "$p" worktree add -q -b "$br" "$wt" main >/dev/null 2>&1 || return 1
+  fi
+  mkdir -p "$(dirname "$wt/$f")"
+  printf '%s\n' "$c" > "$wt/$f"
+  git -C "$wt" add -- "$f" >/dev/null 2>&1
+  git -C "$wt" commit -qm "feat: $f (P244 fixture)" >/dev/null 2>&1
+  git -C "$p" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  return 0
+}
+p244_squash() { # <项目> <分支> <提交信息>：本队的合并方式 —— squash 只带内容，不产生祖先关系
+  local p="$1" br="$2" msg="$3"
+  git -C "$p" merge --squash "$br" >/dev/null 2>&1 || return 1
+  git -C "$p" commit -qm "$msg" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+P244F="$(p24_project 12e-squash-merge)"
+# p24_project 只做了空提交，openspec/ 与 docs/team/ 都还是 untracked；而 squash 合并要求工作树干净
+# （否则 git 直接以「untracked 会被覆盖」拒绝）—— 先把夹具的树落地一个提交。
+git -C "$P244F" add -A >/dev/null 2>&1
+git -C "$P244F" commit -qm "chore: P244 fixture tree" >/dev/null 2>&1
+p24_brief "$P244F" M1 dev apply alpha -
+p24_brief "$P244F" M2 dev apply alpha -
+p24_brief "$P244F" M3 dev apply alpha -
+p24_brief "$P244F" M4 dev apply alpha -
+p24_brief "$P244F" M0 dev apply alpha -
+p24_brief "$P244F" M5 dev apply alpha -
+for _p244id in M1 M2 M3 M4 M0 M5; do p24_add "$P244F" "$_p244id" dev; done
+# ① 真没合并：分支有内容，main 上没有
+p244_file "$P244F" task/M1-real-work src/m1.txt "M1 unmerged work"
+# ② squash 已合并（带报告）：② 路线应当放行（M9.6 的「并入 + 报告」在内容判据下的形状）；
+#    分支也改一条 delta 文件 —— 合并后 `touched by` 仍须认得这个任务（三点差，不是 main..分支）
+p244_file "$P244F" task/M2-landed src/m2.txt "M2 landed work"
+p244_file "$P244F" task/M2-landed docs/team/reports/M2-dev.md "# M2 report (P244 fixture)"
+p244_file "$P244F" task/M2-landed openspec/changes/alpha/specs/panel/spec.md "## MODIFIED Requirements\n\n### Requirement: alpha delta fixture (M2)"
+p244_squash "$P244F" task/M2-landed "feat: M2 (squash merge, P244 fixture)" || bad "P244 夹具：M2 的 squash 合并失败"
+# ③ 只合了一半：分支改两条路径，main 只取了其中一条
+p244_file "$P244F" task/M3-half src/m3-a.txt "M3 half A"
+p244_file "$P244F" task/M3-half src/m3-b.txt "M3 half B"
+git -C "$P244F" checkout -q task/M3-half -- src/m3-a.txt
+git -C "$P244F" commit -qm "feat: M3 half merge (P244 fixture)" >/dev/null 2>&1 || bad "P244 夹具：M3 的半合并提交失败"
+# ④ squash 已合并但没有报告：仍要拦（报告是交付物），但文案必须说清「已合并」
+p244_file "$P244F" task/M4-noreport src/m4.txt "M4 landed without a report"
+p244_squash "$P244F" task/M4-noreport "feat: M4 (squash merge, P244 fixture)" || bad "P244 夹具：M4 的 squash 合并失败"
+# ⑤ 净改动为空的分支（提交了又撤掉）：tip 不是祖先，但「改过的路径」是空集 —— 绝不当作已合并
+p244_file "$P244F" task/M0-net-zero src/m0.txt "M0 net zero"
+git -C "$P244F" worktree add -q "$TMP/p244-wt-M0" task/M0-net-zero >/dev/null 2>&1 || bad "P244 夹具：M0 的工作树建不出来"
+rm -f "$TMP/p244-wt-M0/src/m0.txt"
+git -C "$TMP/p244-wt-M0" add -A >/dev/null 2>&1
+git -C "$TMP/p244-wt-M0" commit -qm "revert: M0 net zero (P244 fixture)" >/dev/null 2>&1 || bad "P244 夹具：M0 的撤销提交失败"
+git -C "$P244F" worktree remove --force "$TMP/p244-wt-M0" >/dev/null 2>&1 || true
+# ⑥ 已关单但内容不在 main（P244 要求 2 的口径：看板是权威，不因内容判据加新 blocker）
+p244_file "$P244F" task/M5-closed src/m5.txt "M5 unmerged but closed"
+p24_pass "$P244F" M5
+p24_team "$P244F" board set M5 done >/dev/null 2>&1
+
+CH_SQ="$(p24_team "$P244F" change status alpha)"; CH_SQ_RC=$?
+CH_SQ_JSON="$(p24_team "$P244F" change status alpha --json)"
+CH_SQ_BLK="$(printf '%s\n' "$CH_SQ" | sed -n '/^  blockers$/,$p' | tail -n +2)"
+CH_SQ_M4="$(printf '%s\n' "$CH_SQ_BLK" | grep -F 'M4 · apply · todo' | head -1)"
+M1_TIP="$(git -C "$P244F" rev-parse --short task/M1-real-work 2>/dev/null)"
+MAIN_TIP="$(git -C "$P244F" rev-parse --short main 2>/dev/null)"
+assert_eq "12e P244 有未结束任务 → 退出 1" "$CH_SQ_RC" "1"
+assert_not_echo "$CH_SQ" "squash 合并不会让分支 tip 变成祖先" "12e P244 不再拿「tip 不是祖先」当唯一判据"
+# ① 真没合并：仍然 blocker，点名分支 tip 与 main 现状
+assert_has_echo "$CH_SQ_BLK" "M1 · apply · todo" "12e P244 真没合并的任务仍在 blockers 里"
+assert_has_echo "$CH_SQ_BLK" "未合并：分支改过的 1 条路径没有一条在 main 上是分支那一版（分支 tip $M1_TIP · main 现状 $MAIN_TIP）" "12e P244 真没合并：点名分支 tip 与 main 现状"
+# ② squash 已合并 + 报告 → 不再是 blocker；evidence 列说清「已按 squash 合并（内容一致）」
+assert_not_echo "$CH_SQ_BLK" "M2 ·" "12e P244 squash 已合并（带报告）不再报 blocker"
+assert_has_echo "$CH_SQ" "已按 squash 合并（内容一致）：分支改过的 3 条路径，main 现在的内容就是分支那一版" "12e P244 evidence 列说清「已按 squash 合并（内容一致）」"
+assert_has_echo "$CH_SQ" "declared by — · touched by M2" "12e P244 合并后的分支仍认得它改过的 delta 文件（三点差）"
+# ③ 只合了一半 → 「内容部分一致」，既不是通过也不是「未合并」
+assert_has_echo "$CH_SQ_BLK" "M3 · apply · todo" "12e P244 只合了一半仍在 blockers 里"
+assert_has_echo "$CH_SQ_BLK" "内容部分一致：分支改过的 2 条路径里 1 条已是分支那一版，还差 1 条：src/m3-b.txt" "12e P244 半合并：报「内容部分一致」并点名没落地的路径"
+# ④ 已合并但没有报告 → 仍拦（报告是交付物，M9.6 不变），文案说清是「已合并」不是「未合并」
+assert_has_echo "$CH_SQ_M4" "已按 squash 合并（内容一致）" "12e P244 无报告的已合并任务：blocker 文案说清已合并"
+assert_not_echo "$CH_SQ_M4" "未合并" "12e P244 无报告的已合并任务不再被说成「未合并」"
+assert_has_echo "$CH_SQ_M4" "没有报告" "12e P244 无报告的已合并任务：缺的就报告那一项"
+# ⑤ 净改动为空 → 绝不当作已合并
+assert_has_echo "$CH_SQ_BLK" "M0 · apply · todo" "12e P244 净改动为空的分支仍是 blocker（不假阳）"
+assert_has_echo "$CH_SQ_BLK" "未合并（分支没有自己的改动）：分支 task/M0-net-zero 相对分叉点" "12e P244 净改动为空：文案说清「没有自己的改动」"
+assert_has_echo "$CH_SQ_BLK" "（main..分支 2 个提交）" "12e P244 净改动为空：点数了分支的提交数（不是空分支）"
+# ⑥ 已关单（看板 done）但内容不在 main：看板是权威，不因内容判据加新 blocker
+assert_not_echo "$CH_SQ_BLK" "M5 ·" "12e P244 已关单的任务不因内容不在 main 被新判据拦下"
+# --json 与人类视图同源
+assert_has_echo "$CH_SQ_JSON" "内容部分一致" "12e P244 --json 的 blockers 带同一份状态"
+assert_has_echo "$CH_SQ_JSON" "已按 squash 合并（内容一致）" "12e P244 --json 也带「已合并」状态"
+
+# ---- P244 返修轮次 1：路径名可以含任意字节，判定必须逐字节精确
+# 现场（V30 F1）：`git diff --name-only` 默认（core.quotePath=true）把含非 ASCII / 双引号 / 反斜杠的路径
+# **C 转义并加引号**后再打印；改前把整串当字面 pathspec 用 → 这些路径永远匹配不到 → 「一条都没落地」
+# 被判成 merged（假阳），端到端能把内容从未进 main 的 change 报成 ready。
+# 这里四条奇特路径（非 ASCII / 空格 / 双引号 / 反斜杠）+ 一条带换行的路径各过三态。
+p244_commit() { # <项目> <分支> [<路径> <内容>]...：一次工作树会话把全部改动提交成一个提交
+  local p="$1" br="$2"; shift 2
+  local wt="$TMP/p244w-wt-${br##*/}"
+  git -C "$p" worktree prune >/dev/null 2>&1 || true
+  git -C "$p" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  if git -C "$p" show-ref --verify --quiet "refs/heads/$br"; then
+    git -C "$p" worktree add -q "$wt" "$br" >/dev/null 2>&1 || return 1
+  else
+    git -C "$p" worktree add -q -b "$br" "$wt" main >/dev/null 2>&1 || return 1
+  fi
+  while [ "$#" -ge 2 ]; do
+    mkdir -p "$(dirname "$wt/$1")"; printf '%s\n' "$2" > "$wt/$1"; shift 2
+  done
+  git -C "$wt" add -A >/dev/null 2>&1 || return 1
+  git -C "$wt" commit -qm "feat: P244 weird fixture ($br)" >/dev/null 2>&1
+  git -C "$p" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  return 0
+}
+
+P244W="$(p24_project 12e-weird-paths)"
+p24_change "$P244W" wstates
+# W1 的报告先在 main 上（分叉点在报告之后）：分支只加奇特名字的文件，changed 集合全是「会被引号包住」的路径
+mkdir -p "$P244W/docs/team/reports"
+printf '# W1 report (P244 fixture, 已在 main)\n' > "$P244W/docs/team/reports/W1-dev.md"
+git -C "$P244W" add -A >/dev/null 2>&1
+git -C "$P244W" commit -qm "chore: P244 weird fixture tree" >/dev/null 2>&1
+p24_brief "$P244W" W1 dev apply alpha -
+p24_brief "$P244W" W2 dev apply wstates -
+p24_brief "$P244W" W3 dev apply wstates -
+for _p244id in W1 W2 W3; do p24_add "$P244W" "$_p244id" dev; done
+# W1（真没合并）：非 ASCII / 空格+非 ASCII / 双引号 / 反斜杠 / 换行 各一条，全部没进 main
+p244_commit "$P244W" task/W1-weird-unmerged '中文.txt' 'W1 未合并' 'a b 中.txt' 'W1 未合并（空格）' \
+  'q"uote.txt' 'W1 未合并（引号）' 'back\slash.txt' 'W1 未合并（反斜杠）' \
+  "$(printf 'nl\nname.txt')" 'W1 未合并（换行）' || bad "P244 夹具：W1 的奇特路径提交失败"
+# W2（半合并）：四条里只把「中文二.txt」与「q\"二.txt」放进 main
+p244_commit "$P244W" task/W2-weird-half '中文二.txt' 'W2 已落地' '纯 空格.txt' 'W2 未落地（纯空格）' \
+  'q"二.txt' 'W2 已落地（引号）' 'back\二.txt' 'W2 未落地（反斜杠）' || bad "P244 夹具：W2 的奇特路径提交失败"
+git -C "$P244W" checkout -q task/W2-weird-half -- '中文二.txt' 'q"二.txt' >/dev/null 2>&1
+git -C "$P244W" commit -qm "feat: W2 半合并（P244 fixture）" >/dev/null 2>&1 || bad "P244 夹具：W2 的半合并提交失败"
+# W3（已合并）：四条全部 squash 进 main，分支里有报告
+p244_commit "$P244W" task/W3-weird-merged '中文三.txt' 'W3 已落地' 'a b 三.txt' 'W3 已落地（空格）' \
+  'q"三.txt' 'W3 已落地（引号）' 'back\三.txt' 'W3 已落地（反斜杠）' \
+  'docs/team/reports/W3-dev.md' '# W3 report (P244 fixture)' || bad "P244 夹具：W3 的奇特路径提交失败"
+p244_squash "$P244W" task/W3-weird-merged "feat: W3 squash merge (P244 fixture)" || bad "P244 夹具：W3 的 squash 合并失败"
+
+CH_W_READY="$(p24_team "$P244W" change status alpha)"; CH_W_READY_RC=$?
+CH_W_STATES="$(p24_team "$P244W" change status wstates)"
+CH_W_JSON="$(p24_team "$P244W" change status alpha --json)"
+CH_W_BLK="$(printf '%s\n' "$CH_W_STATES" | sed -n '/^  blockers$/,$p' | tail -n +2)"
+# 端到端：内容从未进 main 的 change 不许报 ready（改前这里正是 `ready` + 「无：全部任务已结束」）
+assert_eq "12e P244 奇特路径：内容全没进 main 的 change → 退出 1" "$CH_W_READY_RC" "1"
+assert_not_echo "$CH_W_READY" "change alpha · ready" "12e P244 奇特路径：内容全没进 main 的 change 不报 ready"
+assert_not_echo "$CH_W_READY" "（无：全部任务已结束）" "12e P244 奇特路径：没有「全部任务已结束」这句假信号"
+assert_has_echo "$CH_W_READY" "未合并：分支改过的 5 条路径没有一条在 main 上是分支那一版" "12e P244 奇特路径（非 ASCII/空格/双引号/反斜杠/换行）：一条都没进 main → 未合并"
+# 半合并：四条里 2 条落地、2 条没落地，两条没落地的名字要原样点名（空格、反斜杠都不许被吞）
+assert_has_echo "$CH_W_BLK" "内容部分一致：分支改过的 4 条路径里 2 条已是分支那一版，还差 2 条" "12e P244 奇特路径：半合并报「内容部分一致」且计数正确"
+assert_has_echo "$CH_W_BLK" "back\\二.txt" "12e P244 奇特路径：反斜杠路径原名点名（不被引号包住）"
+assert_has_echo "$CH_W_BLK" "纯 空格.txt" "12e P244 奇特路径：空格路径原名点名"
+assert_not_echo "$CH_W_BLK" "\\\\二" "12e P244 奇特路径：不能再出现 C 转义后的路径"
+# 已合并：四条全部落地（squash）+ 报告 → 「已按 squash 合并（内容一致）」不变（V30 已过的三态不许回退）
+assert_has_echo "$CH_W_STATES" "已按 squash 合并（内容一致）：分支改过的 5 条路径" "12e P244 奇特路径：全部落地仍报「已按 squash 合并（内容一致）」"
+assert_not_echo "$CH_W_STATES" "\\\\344" "12e P244 奇特路径：人读输出里没有八进制转义残留"
+assert_has_echo "$CH_W_JSON" "未合并：分支改过的 5 条路径" "12e P244 奇特路径：--json 的 blockers 同一份状态"
+
 # ---------------------------------------------------------------- 12f · change 归组（P45/B2）
 # P45/B2：digest 的 [6] 段 + 面板的 token 行。夹具仍是 p24_project 的 scratch 项目（不碰 $REPO、
 # 不起真进程）。面板布局一节用**真读者**的输出（team __panel-data --block changes）渲染页 2 的帧：

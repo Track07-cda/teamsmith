@@ -4563,9 +4563,80 @@ team_done_phase_next() { # <ID>
   return 0
 }
 
-team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证据（stdout 检查明细）
-  local id="$1" rel="$TEAM_DOCS_DIR/reviews/$id.md" verdict branch tip detail="" phase="" change="" pev=""
-  local rep_glob="$TEAM_DOCS_DIR/reports/$id-*.md" rep="" report_detail=""
+# ---------------------------------------------------------------- P244 · 「分支已并入」要认 squash 合并
+# 现场（P244 · D148②）：blocker ②「分支是否已并入保护分支」原来只用祖先关系
+# （`merge-base --is-ancestor`）；而本队按纪律用 `git merge --squash` 合并 —— squash 只带**内容**、
+# 不产生祖先关系，于是已合并的分支永远报「未合并」，归档前置的核心信号对改过代码的 change 恒假。
+# 判据换成**内容**（在 squash 下成立，且不假阳）：分叉点 base = merge-base(保护分支, 分支)；分支相对
+# base 改过的路径 = 这次交付的内容；逐路径比较「保护分支现在的内容是不是分支那一版」：
+#   merged   每条都一致（squash 合并的常态）→ 内容已全部落地
+#   partial  只有一部分一致 → 点名还差的路径（解过冲突、或后来者又动过同一文件都长这样，交人核对）
+#   unmerged 一条都不一致 → 真的没合并（点名分支 tip 与保护分支现状）
+#   empty    分支相对 base 没有任何改动（刚建出来 / 净改动为空）——**绝不**当作已合并
+#            （M9.6 的同一个坑：空分支的 tip 同样是祖先、两边树也相同）
+#   nobranch 分支名解析不到 commit
+# 为什么不用 3 路合并（`git merge-tree`）当判据：「已解过冲突 + 后来者又动过同一文件」在本仓库是常态，
+# 3 路合并这时会冲突，把已合并的分支判成未合并 —— 宁可报 partial 让人按内容核对，也不假阳。
+# 路径一律用 `-z`（NUL 分隔、逐字节原样）读进数组：`git diff --name-only` 默认（core.quotePath=true）
+# 会把含非 ASCII / 双引号 / 反斜杠的路径**C 转义并加引号**后再打印，拿那一串当字面 pathspec 就永远
+# 匹配不到 —— 这些路径会被当成「main 上已经是分支那一版」（假阳，P244 返修轮次 1 · V30 F1）。
+# `-c core.quotePath=false` 救不了：它只放开非 ASCII，含 `"` 或 `\` 的路径照样被引号包住（实测）。
+# 输出：一行 `<state>\t<detail>`（恒 rc 0；调用方按 state 决定措辞与是否算证据）。
+team_branch_content_merge_state() { # <分支> [<保护分支>]
+  local br="${1:-}" into="${2:-$TEAM_PROTECTED_BRANCH}" root="${TEAM_MAIN_ROOT:-$PWD}"
+  local base btip ptip p n_all=0 n_diff=0 list="" i=0
+  local -a changed=() spec=() missing=()
+  if [ -z "$br" ]; then printf 'nobranch\t分支名为空\n'; return 0; fi
+  if ! git -C "$root" rev-parse --verify --quiet "$br^{commit}" >/dev/null 2>&1; then
+    printf 'nobranch\t分支 %s 解析不到 commit\n' "$br"; return 0
+  fi
+  base="$(git -C "$root" merge-base "$into" "$br" 2>/dev/null || true)"
+  if [ -z "$base" ]; then
+    printf 'unmerged\t分支 %s 与 %s 没有共同祖先（分叉点不存在）\n' "$br" "$into"; return 0
+  fi
+  btip="$(git -C "$root" rev-parse --short "$br" 2>/dev/null || true)"
+  ptip="$(git -C "$root" rev-parse --short "$into" 2>/dev/null || true)"
+  # --no-renames：改名的老路径也要留在「改过的路径」集合里，逐路径比较才不会漏（默认的改名检测会把它藏起来）
+  while IFS= read -r -d '' p; do [ -n "$p" ] && changed+=("$p"); done \
+    < <(git -C "$root" diff --name-only -z --no-renames "$base" "$br" 2>/dev/null || true)
+  n_all="${#changed[@]}"
+  if [ "$n_all" -eq 0 ]; then
+    printf 'empty\t分支 %s 相对分叉点 %s 没有任何改动（%s..分支 %s 个提交）—— 没东西可并，也绝不算已合并\n' \
+      "$br" "${base:0:9}" "$into" "$(git -C "$root" rev-list --count "$into..$br" 2>/dev/null || printf '?')"
+    return 0
+  fi
+  for p in "${changed[@]}"; do spec+=(":(literal)$p"); done
+  while IFS= read -r -d '' p; do [ -n "$p" ] && missing+=("$p"); done \
+    < <(git -C "$root" diff --name-only -z --no-renames "$br" "$into" -- "${spec[@]}" 2>/dev/null || true)
+  n_diff="${#missing[@]}"
+  if [ "$n_diff" -eq 0 ]; then
+    printf 'merged\t分支改过的 %s 条路径，%s 现在的内容就是分支那一版\n' "$n_all" "$into"
+    return 0
+  fi
+  if [ "$n_diff" -eq "$n_all" ]; then
+    printf 'unmerged\t分支改过的 %s 条路径没有一条在 %s 上是分支那一版（分支 tip %s · %s 现状 %s）\n' \
+      "$n_all" "$into" "${btip:-?}" "$into" "${ptip:-?}"
+    return 0
+  fi
+  for p in "${missing[@]}"; do
+    i=$((i + 1)); [ "$i" -gt 3 ] && break
+    # 显示用：控制字符（换行/制表/回车）会毁掉「一行一条 blocker」的结构，转义成可见写法；
+    # 其余字节原样（空格、双引号、反斜杠、非 ASCII 都能直接复制回命令行）。判定仍按原始字节。
+    p="${p//$'\n'/\\n}"; p="${p//$'\t'/\\t}"; p="${p//$'\r'/\\r}"
+    list="${list:+$list、}${p}"
+  done
+  [ "$n_diff" -gt 3 ] && list="${list}（另 $((n_diff - 3)) 条）"
+  printf 'partial\t分支改过的 %s 条路径里 %s 条已是分支那一版，还差 %s 条：%s（分支 tip %s · %s 现状 %s）\n' \
+    "$n_all" "$((n_all - n_diff))" "$n_diff" "$list" "${btip:-?}" "$into" "${ptip:-?}"
+  return 0
+}
+
+# <content_merge>=1 时 ② 路线改用上面的**内容**判据（认 squash 合并）；只有 change 读取链传 1
+# （team_change_unfinished → team_task_open_reason）；done 闸门（team close / board set done）不传，
+# 行为逐字不变（P244 要求 4）。
+team_done_evidence() { # <ID> [<content_merge>] → 0=有证据（stdout 一行证据）/1=没证据（stdout 检查明细）
+  local id="$1" content_merge="${2:-0}" rel="$TEAM_DOCS_DIR/reviews/$id.md" verdict branch tip detail="" phase="" change="" pev=""
+  local rep_glob="$TEAM_DOCS_DIR/reports/$id-*.md" rep="" report_detail="" csline="" cstate="" cdetail=""
   verdict="$(team_review_verdict "$id")"
   case "$verdict" in
     PASS)    printf '复验记录 %s（判定 PASS）\n' "$rel"; return 0 ;;
@@ -4589,6 +4660,27 @@ team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证�
       return 0
     fi
     report_detail="分支 $branch（${tip:0:9}）已经是 $TEAM_PROTECTED_BRANCH 的祖先，但它的提交里没有报告 $rep_glob（刚建出来、一个提交都没有的分支也长这样 —— 报告要提交进 git，工作区里的草稿不算）"
+  fi
+  # P244：② 路线的 squash 形状 —— tip 不是祖先，但分支改过的路径内容已经全在保护分支上。
+  if [ -z "$report_detail" ] && [ -n "$tip" ] && [ "$content_merge" = "1" ]; then
+    csline="$(team_branch_content_merge_state "$branch" "$TEAM_PROTECTED_BRANCH")"
+    cstate="${csline%%$'\t'*}"; cdetail="${csline#*$'\t'}"
+    case "$cstate" in
+      merged)
+        # 与 M9.6 的祖先路线同规则：并入之外还要分支的提交里有一份报告（报告是交付物）
+        if rep="$(team_committed_report "$id" "$tip")"; then
+          printf '分支 %s（%s）已按 squash 合并（内容一致）：%s；提交里有报告 %s（代码真的落地了）\n' \
+            "$branch" "${tip:0:9}" "$cdetail" "$rep"
+          return 0
+        fi
+        report_detail="已按 squash 合并（内容一致）：$cdetail；但分支的提交里没有报告 $rep_glob（报告要提交进 git，工作区里的草稿不算）" ;;
+      partial)
+        report_detail="内容部分一致：$cdetail（解过冲突、或后来者又动过同一文件都长这样 —— 按内容核对，别机械重并）" ;;
+      unmerged)
+        report_detail="未合并：$cdetail" ;;
+      empty)
+        report_detail="未合并（分支没有自己的改动）：$cdetail" ;;
+    esac
   fi
   # M9.2：声明了已知 phase 的任务再给一条**阶段专属**的证据路线；phase 为空（未声明/`-`/不认识）
   # 时整段跳过 —— 旧规则逐字不变。
@@ -4619,13 +4711,15 @@ team_done_evidence() { # <ID> → 0=有证据（stdout 一行证据）/1=没证�
 # 判据与 done 闸门同源（① 复验记录 / ② 已并入保护分支 / ③ 阶段证据），再加看板裁决：
 # done·closed·dropped 是在看板转变那一刻核对过证据的（M9.2/M9.4），这里不反过来质疑它。
 # 0 → stdout 一行「凭什么算结束」；1 → stdout 一行「为什么还没结束」（看板状态 + 交付证据的明细）。
-team_task_open_reason() { # <ID> → 0=已结束 / 1=还没结束（stdout 都是一行，供消息直接引用）
+team_task_open_reason() { # <ID> [<content_merge>] → 0=已结束 / 1=还没结束（stdout 都是一行，供消息直接引用）
+  # <content_merge>=1：② 路线用 P244 的**内容**判据（认 squash 合并）。change 读取链传 1
+  # （team_change_unfinished）；派单叠任务守卫不传，判据与 done 闸门保持一致。
   local id="$1" st ev detail
   st="$(team_board_status "$id")"
   case "$st" in
     done|closed|dropped) printf '看板状态 %s\n' "$st"; return 0 ;;
   esac
-  if ev="$(team_done_evidence "$id" 2>/dev/null)"; then printf '%s\n' "$ev"; return 0; fi
+  if ev="$(team_done_evidence "$id" "${2:-0}" 2>/dev/null)"; then printf '%s\n' "$ev"; return 0; fi
   # 没结束：把 team_done_evidence 的明细（每行 "  - …"）压成一行 —— 不另写一套判据，免得两处漂移
   detail="$(printf '%s\n' "$ev" | sed -n 's/^  - /；/p' | tr -d '\n')"
   printf '看板状态 %s%s\n' "${st:-（BOARD 里没有这一行）}" "${detail:-（没有交付证据）}"
@@ -4664,11 +4758,13 @@ team_change_tasks() { # <change id> → 每行 "<ID>\t<phase>\t<agent>\t<brief �
 }
 
 # 未结束的任务（判据 = team_task_open_reason，与 done 闸门/叠任务守卫同源，不另立一套）
+# P244：这里是 change 读取链（change status / 归档闸门 / delta 单写者守卫）的唯一入口 —— 传
+# content_merge=1，让 ② 路线认 squash 合并（不然「所有任务完成」对改过代码的 change 恒假）。
 team_change_unfinished() { # <change id> → 每行 "<ID>\t<phase>\t<看板状态>\t<没结束的原因>\t<brief 绝对路径>"
   local id="$1" tid tphase tagent brief reason st
   while IFS=$'\t' read -r tid tphase tagent brief; do
     [ -n "$tid" ] || continue
-    if reason="$(team_task_open_reason "$tid")"; then continue; fi
+    if reason="$(team_task_open_reason "$tid" 1)"; then continue; fi
     st="$(team_board_status "$tid")"
     printf '%s\t%s\t%s\t%s\t%s\n' "$tid" "$tphase" "${st:--}" "$reason" "$brief"
   done < <(team_change_tasks "$id")
@@ -4809,8 +4905,10 @@ team_self_verify_mark() { # <verify 任务的 agent> <team_change_apply_authors 
 }
 
 # 任务的**一行**交付证据（team change status 的 evidence 列；与 done 闸门同源）
-team_task_evidence_line() { # <ID>
-  local id="$1" v phase change pev st
+# P244：<分支> 传进来时，没有复验判定与阶段证据的行改用**内容**判据说清「分支落地了吗」——
+# 三种状态（已按 squash 合并 / 内容部分一致 / 未合并）在行里就读得出来，不必去 blockers 里找。
+team_task_evidence_line() { # <ID> [<分支>]
+  local id="$1" branch="${2:-}" v phase change pev st csline cstate cdetail
   v="$(team_review_verdict "$id")"
   case "$v" in
     PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN) printf '%s/%s.md: %s\n' "$TEAM_DOCS_DIR" "$id" "$v"; return 0 ;;
@@ -4821,6 +4919,16 @@ team_task_evidence_line() { # <ID>
     if pev="$(team_done_phase_evidence "$id" "$phase" "$change" 2>/dev/null)"; then
       printf '%s\n' "$pev"; return 0
     fi
+  fi
+  if [ -n "$branch" ]; then
+    csline="$(team_branch_content_merge_state "$branch" "$TEAM_PROTECTED_BRANCH")"
+    cstate="${csline%%$'\t'*}"; cdetail="${csline#*$'\t'}"
+    case "$cstate" in
+      merged)   printf '已按 squash 合并（内容一致）：%s\n' "$cdetail"; return 0 ;;
+      partial)  printf '内容部分一致：%s\n' "$cdetail"; return 0 ;;
+      unmerged) printf '未合并：%s\n' "$cdetail"; return 0 ;;
+      empty)    printf '未合并（分支没有自己的改动）：%s\n' "$cdetail"; return 0 ;;
+    esac
   fi
   st="$(team_board_status "$id")"
   printf '—（看板 %s）\n' "${st:-没有这一行}"

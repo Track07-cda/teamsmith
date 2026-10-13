@@ -1013,7 +1013,14 @@ team_cmd_change() {
   while IFS=$'\t' read -r tid tphase tagent brief; do
     [ -n "$tid" ] || continue
     st="$(team_board_status "$tid")"; [ -n "$st" ] || st='-'
-    ev="$(team_task_evidence_line "$tid")"
+    touched=""; branch=""; tip=""
+    # 注意：team_resolve_branch 解析不到时会 team_die（exit 1）—— `exit` 会直接终结它所在的那层
+    # 子 shell，`|| true` 根本没有机会跑（set -e 下会连带杀掉调用者）。多包一层 `( … )` 把
+    # 那个 exit 关在里层子 shell 里，本命令才能继续按「解析不到 → —」渲染。
+    branch="$( ( team_resolve_branch "$tid" "" 2>/dev/null ) || true )"
+    # P244：evidence 列要能说出「已按 squash 合并 / 内容部分一致 / 未合并」，判据与 blocker ② 同源 ——
+    # 分支先解析、再渲染 evidence（两处各写一份就会分家）。
+    ev="$(team_task_evidence_line "$tid" "$branch")"
     self=""
     [ "$tphase" = "verify" ] && self="$(team_self_verify_mark "$tagent" "$authors")"
     decl="$(team_task_delta_targets "$brief" "$id" 2>/dev/null || true)"
@@ -1023,16 +1030,15 @@ team_cmd_change() {
       -)   rawd='-' ;;
       *)   rawd="$raw" ;;
     esac
-    touched=""; branch=""; tip=""
-    # 注意：team_resolve_branch 解析不到时会 team_die（exit 1）—— `exit` 会直接终结它所在的那层
-    # 子 shell，`|| true` 根本没有机会跑（set -e 下会连带杀掉调用者）。多包一层 `( … )` 把
-    # 那个 exit 关在里层子 shell 里，本命令才能继续按「解析不到 → —」渲染。
-    branch="$( ( team_resolve_branch "$tid" "" 2>/dev/null ) || true )"
     if [ -n "$branch" ]; then
       tip="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"
       if [ -n "$tip" ]; then
-        touched="$(git -C "$TEAM_MAIN_ROOT" diff --name-only "$TEAM_PROTECTED_BRANCH..$branch" \
-          -- "$TEAM_SPEC_DIR/changes/$id/specs" 2>/dev/null || true)"
+        # P244：三点（merge-base → 分支）=「这个任务自己改过哪些 delta 文件」；两点在 squash 合并后
+        # 几乎恒空（内容被合并带走了），会把 touched by 变成一句谎。
+        # -z：路径名里的非 ASCII/引号/反斜杠默认会被 C 转义加引号打印（与判据同一个坑），
+        # 这里只要不转义的原样路径（合并成换行分隔，交给下面的逐行消费者）。
+        touched="$(git -C "$TEAM_MAIN_ROOT" diff --name-only -z "$TEAM_PROTECTED_BRANCH...$branch" \
+          -- "$TEAM_SPEC_DIR/changes/$id/specs" 2>/dev/null | tr '\0' '\n' || true)"
       fi
     fi
     T_ID+=("$tid"); T_PHASE+=("$tphase"); T_AGENT+=("$tagent"); T_BOARD+=("$st")
