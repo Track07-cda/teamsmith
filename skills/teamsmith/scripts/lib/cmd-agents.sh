@@ -126,7 +126,7 @@ team_build_prompt() { # <agent> <ID> <taskfile-abs> <worktree> <model> [<session
   # 其它 adapter 不提：工具不存在，教了只会让 worker 白找。
   case "${TEAM_AGENT_CMD:-}" in
     ''|*'{bg_ext}'*)
-      bg_block="$(printf '\n**Long jobs (a gate, a build)**: start them with `team_bg_run` (it returns a job id immediately and keeps\nworking while you go on), then harvest with `team_bg_wait <id>` (the result comes back inline). **Harvest every job\nbefore your turn ends** -- an unharvested job wakes you once when it finishes, and that costs a turn.\n')" ;;
+      bg_block="$(printf '\n**Long jobs (a gate, a build)**: start them with `team_bg_run` (it returns a job id immediately and keeps\nworking while you go on), then **end your turn** -- the completion wake-up is the normal harvest point: when the\njob finishes you are woken once (several jobs finishing together arrive as one message) and harvest it with\n`team_bg_wait <id>` (the exit code and the log tail come back inline). **In-turn waiting is the bounded\nexception**: use it only when all three hold -- the job is expected to finish within the inline-wait budget (about 2 minutes),\nits result blocks your immediate next step, and no other task work can advance meanwhile.\n')" ;;
   esac
 
   cat <<PROMPT
@@ -155,11 +155,15 @@ another project's help (cross-repo dependency, shared library change), write \`B
 needs to do what -- **cross-project communication is the PM's job via \`$cli meeting\` (peer exchange: interfaces,
 advice, problem reports); workers do not attend**. Only decisions that need the user's call go through the user.
 
-**Never stop mid-task to ask for confirmation**: end the turn in exactly two situations --
-(a) every acceptance command in the brief has been run + the report is written + the branch is pushed + the PR/MR is
+**Never stop mid-task to ask for confirmation**: end the turn in exactly three situations --
+(a) **delivered**: every acceptance command in the brief has been run + the report is written + the branch is pushed + the PR/MR is
     open (or, in local mode, the branch state is settled);
-(b) you are hard-blocked (missing dependency, missing permission, someone else's bug): notify the PM with
-    \`$cli notify $agent "<one line>"\`, state \`BLOCKED:\` clearly in the report, then end the turn.
+(b) **hard-blocked** (missing dependency, missing permission, someone else's bug): notify the PM with
+    \`$cli notify $agent "<one line>"\`, state \`BLOCKED:\` clearly in the report, then end the turn;
+(c) **suspended on background jobs**: jobs this session started are still running and every step that does not depend
+    on their results is done. A suspension is neither a delivery nor a blockage -- do not write the report's final
+    verdict and do not notify \`BLOCKED:\` for it; end the turn with its **last line** naming every job you are
+    waiting on (\`waiting on: <id>[, <id>…]\`), so the PM can see the ending was deliberate.
     **Never work around a boundary on your own.**
 
 Delivery process:
@@ -176,7 +180,8 @@ Delivery process:
 
 Task: **$id**${issue:+ (issue #$issue)}. The brief \`$taskfile\` is the PM's read-only file -- do not modify it.${bg_block}${notify_block}
 If this is a resumed run: start with \`git status\` / \`git log --oneline -5\` to see how far you got, and continue
-from that point instead of starting over.
+from that point instead of starting over. A previous session's wake-ups died with its process, so jobs it left
+running will never wake you: check \`state/bg.log\` and \`team bg list\` before you await or re-run their results.
 PROMPT
 }
 

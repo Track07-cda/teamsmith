@@ -2481,6 +2481,24 @@ else
   printf '  (跳过 tmux 相关断言：没有 tmux)\n'
 fi
 
+# 场景 2（无 {bg_ext} 的模板不注入车道段；带 {bg_ext} 才注入）——注入条件逐字节不变（M27）。
+# 模板必须绑定身份占位符（F5：--model/--provider/--session-id 会被续跑守卫核对），否则 dev 手上有
+# 在飞任务（上面那场真派单）时会被拒——这也是 §6f 的 $APLACE 形状。
+P237_TPL_NOBG='myagent run --model {model} --provider {provider} --session-id {session_id} --ask {prompt}'
+P237_TPL_BG="$P237_TPL_NOBG -e {bg_ext}"
+env TEAM_AGENT_CMD="$P237_TPL_NOBG" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/p237-nolane.log" 2>&1 \
+  && ok "A template without the lane placeholder：无 {bg_ext} 的模板派单 --print 成功" \
+  || bad "A template without the lane placeholder：无 {bg_ext} 的模板派单 --print 失败（见 $TMP/p237-nolane.log）"
+assert_has "$TMP/p237-nolane.log" "suspended on background jobs" "A template without the lane placeholder：没有车道段也带三态合同"
+assert_not "$TMP/p237-nolane.log" "team_bg_run" "A template without the lane placeholder：无 {bg_ext} → 不注入车道段"
+assert_not "$TMP/p237-nolane.log" "inline-wait budget" "A template without the lane placeholder：无 {bg_ext} → 没有内联等待预算段"
+assert_has "$TMP/p237-nolane.log" "state/bg.log" "The resume guidance points at the on-disk evidence：无车道段的适配器也拿得到盘上证据指引"
+env TEAM_AGENT_CMD="$P237_TPL_BG" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/p237-lane.log" 2>&1 \
+  && ok "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 成功" \
+  || bad "A template without the lane placeholder：带 {bg_ext} 的模板派单 --print 失败（见 $TMP/p237-lane.log）"
+assert_has "$TMP/p237-lane.log" "team_bg_run" "A template without the lane placeholder：带 {bg_ext} → 车道段出现"
+assert_has "$TMP/p237-lane.log" "the completion wake-up is the normal harvest point" "A template without the lane placeholder：带 {bg_ext} 的车道段是同一口径"
+
 # ---------------------------------------------------------------- 6b. 容量守卫矩阵（D2：zram 不当额度）
 section "6b · 容量守卫矩阵（zram / 磁盘 swap 分账）"
 MEMENV="TEAM_MEMINFO_FILE=$TMP/meminfo"
@@ -7156,16 +7174,20 @@ if [ "$FAST" = "1" ]; then
 elif [ -z "$TS_RUNNER" ]; then
   printf '  (跳过 P236 挂起归属：node 未启用类型剥离，且没有 bun/tsx)\n'
 elif [ -f "$SKILL_DIR/tests/bg-ledger.sh" ]; then
+  # 13c 折进（P237 §4.3）：A 刀的 wording/ledger 两组与 P236 的 suspend-shape/owner-scope 同入口同跑
+  # —— 工具面口径与账本两类行从这里进主门禁（此前只在独立入口里跑）。
   P236_RC=0
-  bash "$SKILL_DIR/tests/bg-ledger.sh" --select suspend-shape,owner-scope >"$TMP/p236-owner.log" 2>&1 || P236_RC=$?
+  bash "$SKILL_DIR/tests/bg-ledger.sh" --select wording,ledger,suspend-shape,owner-scope >"$TMP/p236-owner.log" 2>&1 || P236_RC=$?
   if [ "$P236_RC" -eq 0 ]; then
-    ok "P236 挂起归属：suspend-shape + owner-scope 全绿（$(grep -ac '✓' "$TMP/p236-owner.log" || true) 条断言）"
+    ok "P236/P237 车道合同入口：wording+ledger+suspend-shape+owner-scope 全绿（$(grep -ac '✓' "$TMP/p236-owner.log" || true) 条断言）"
   else
-    bad "P236 挂起归属有失败（rc=$P236_RC）"
+    bad "P236/P237 车道合同入口有失败（rc=$P236_RC）"
     grep -a '✗' "$TMP/p236-owner.log" | head -8 | sed 's/^/      /'
   fi
   # 入口的 stdout 带颜色（每个用例一行 ✓/✗）→ 先剥 ANSI 再按用例名断言（assert_has 是 grep -F）
   sed 's/\x1b\[[0-9;]*m//g' "$TMP/p236-owner.log" >"$TMP/p236-owner.plain.log"
+  assert_has "$TMP/p236-owner.plain.log" "✓ wording: the retired duty wording is gone from every registered text" "A 刀工具文本口径折进 13c（wording 组）"
+  assert_has "$TMP/p236-owner.plain.log" "✓ ledger: the start line lands on disk before the id is returned" "A 刀账本两类行折进 13c（ledger 组）"
   assert_has "$TMP/p236-owner.plain.log" "✓ suspend: a completed turn with a live job record is tagged suspended" "A 刀挂起合同未回退（活记录 → suspended）"
   assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: each seat suspends on its own job only" "两席位各自只认自己的作业（P236 缺陷现场）"
   assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev2)" "空席位（dev2）不被别人的作业打成挂起"
@@ -7173,6 +7195,112 @@ elif [ -f "$SKILL_DIR/tests/bg-ledger.sh" ]; then
   assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)" "缺 cwd / 解析失败的畸形记录不判挂起"
 else
   bad "13c 缺 tests/bg-ledger.sh（P236 的挂起归属入口）"
+fi
+
+# ── 13c·P237（B 刀）：车道三态合同跨面一致 + 挂席兜底 ─────────────────────────────────────
+# 合同是 long-job-suspend 的 dispatch delta（ADDED requirement 与四条场景），B 刀的价值就在这里：
+# 「任一面缺第三态或回退旧措辞 / 无 {bg_ext} 也注入车道段 / 续跑指引丢掉盘上证据 → 都必须红并点名
+# 那个面」。四处断言按场景名自称：One contract across the shipped surfaces / A template without the
+# lane placeholder / The built-in Pi prompt carries the three states / The resume guidance points at the
+# on-disk evidence。
+P237_TMPL="$SKILL_DIR/templates/AGENTS.section.md.tmpl"
+P237_PMP="$SKILL_DIR/templates/pm-prompt.md.tmpl"
+P237_PROTO="$SKILL_DIR/references/protocol.md"
+P237_WF="$SKILL_DIR/references/workflows.md"
+P237_LANE='the completion wake-up is the normal harvest point'
+P237_BUDGET='inline-wait budget (about 2 minutes)'
+P237_STATE3='suspended on background jobs'
+P237_RETIRED='Harvest every job|before your turn ends|costs a turn'
+p237_has() { # <面> <文件> <token> <说明>
+  local surface="$1" file="$2" token="$3" what="$4"
+  if [ -f "$file" ] && grep -qF -- "$token" "$file" 2>/dev/null; then
+    ok "One contract across the shipped surfaces：$surface 有$what"
+  else
+    bad "One contract across the shipped surfaces：$surface 缺 $what（找不到 [$token]）"
+  fi
+}
+p237_absent() { # <面> <文件> <ERE> <说明>
+  local surface="$1" file="$2" pat="$3" what="$4"
+  if [ -f "$file" ] && grep -qE -- "$pat" "$file" 2>/dev/null; then
+    bad "One contract across the shipped surfaces：$surface 还有$what（[$pat]）"
+  else
+    ok "One contract across the shipped surfaces：$surface 没有$what"
+  fi
+}
+
+# 场景 1（内置 Pi 提示词）：§6 的 --print 现场就是这份提示词
+assert_has "$TMP/print.log" "end the turn in exactly three situations" "The built-in Pi prompt carries the three states：恰好三种合法回合结束"
+assert_has "$TMP/print.log" "$P237_STATE3" "The built-in Pi prompt carries the three states：第三态点名 suspended on background jobs"
+assert_has "$TMP/print.log" "waiting on: <id>" "The built-in Pi prompt carries the three states：挂起要求回合末行点名在等的 job id"
+assert_has "$TMP/print.log" "end your turn" "The built-in Pi prompt carries the three states：起完默认结束回合"
+assert_has "$TMP/print.log" "$P237_LANE" "The built-in Pi prompt carries the three states：完成叫醒是正常收割点"
+assert_has "$TMP/print.log" "$P237_BUDGET" "The built-in Pi prompt carries the three states：例外三条带内联预算数字"
+assert_not "$TMP/print.log" "exactly two situations" "The built-in Pi prompt carries the three states：旧的两态措辞已被取代"
+
+# 场景 4（续跑指引指向盘上证据）：这句话在共用的续跑行里，与车道段注入无关
+assert_has "$TMP/print.log" "state/bg.log" "The resume guidance points at the on-disk evidence：点名 state/bg.log"
+assert_has "$TMP/print.log" "team bg list" "The resume guidance points at the on-disk evidence：点名 team bg list"
+assert_has "$TMP/print.log" "wake-ups died with its process" "The resume guidance points at the on-disk evidence：说明上一会话的叫醒随进程消失"
+
+# 场景 3（一份合同跨面）：四个面向同一组三态、同一条车道规则（同一个预算数字），零退休措辞；
+# PM 模板是参照措辞 —— 既有规则行仍在，且没被写成别的口径（其余面缺第三态即在这里红）。
+P237_SURFACES=("worker prompt:$TMP/print.log" "AGENTS template:$P237_TMPL" "protocol.md:$P237_PROTO" "workflows.md §E2:$P237_WF")
+for P237_PAIR in "${P237_SURFACES[@]}"; do
+  P237_SURFACE="${P237_PAIR%%:*}"; P237_FILE="${P237_PAIR#*:}"
+  p237_has "$P237_SURFACE" "$P237_FILE" "$P237_LANE" "车道默认（完成叫醒是正常收割点）"
+  p237_has "$P237_SURFACE" "$P237_FILE" "$P237_BUDGET" "例外预算数字"
+  p237_has "$P237_SURFACE" "$P237_FILE" "delivered" "第一态 delivered"
+  p237_has "$P237_SURFACE" "$P237_FILE" "hard-blocked" "第二态 hard-blocked"
+  p237_has "$P237_SURFACE" "$P237_FILE" "$P237_STATE3" "第三态 suspended on background jobs"
+  p237_absent "$P237_SURFACE" "$P237_FILE" "$P237_RETIRED" "退休措辞（回合结束前必须收割 / 叫醒=损失）"
+done
+p237_has "PM prompt template" "$P237_PMP" "team_bg_run" "既有车道规则（起作业）"
+p237_has "PM prompt template" "$P237_PMP" "let the turn end" "既有车道规则（让回合结束）"
+p237_has "PM prompt template" "$P237_PMP" "team_bg_wait" "既有车道规则（叫醒时收割）"
+p237_absent "PM prompt template" "$P237_PMP" "$P237_RETIRED" "退休措辞（PM 模板不许被弱化）"
+
+# ── 13c·P237 §4.4：挂起后死亡的席位命中**既有**巡检待办条款（不新增 watchdog 条款）────────────
+# 席位死了以后「任务未完成 + 窗口不在」这件事本身就进待办；车道里还有活作业（= 挂起的物理形态）
+# 既不遮住它、也不需要专门分支。夹具自造最小仓库（有 P235 的类别映射，config 校验才过），用真作业
+# + 真 /proc 指纹造出挂起形状，再用**读命令**（bg list / digest）取证 —— 不写巡检代码、不起 PM。
+if [ "$FAST" = "1" ]; then
+  fast_skip "13c·P237 挂席兜底" "要起真后台作业 + /proc 验活（§4.4：挂起后死亡的席位）"
+else
+  P237F="$TMP/p237-fallback"
+  rm -rf "$P237F"; mkdir -p "$P237F/.pi/team/state/bg" "$P237F/docs/team/inbox" "$P237F/docs/team/reports"
+  cat > "$P237F/.pi/team/config.sh" <<P237CONF
+TEAM_PROJECT="p237-fallback"
+TEAM_AGENTS="dev"
+TEAM_WORKTREES_DIR=".worktrees"
+TEAM_SESSION="p237-fallback-smoke-$$"
+TEAM_GATES="true"
+TEAM_VCS="local"
+TEAM_TASK_MODELS="routine=deepseek/deepseek-flash"
+TEAM_PM_MODEL="deepseek/deepseek-flash"
+P237CONF
+  ( cd "$P237F" && git init -q -b main \
+      && git -c user.email=smoke@teamsmith -c user.name=smoke commit -q --allow-empty -m init ) >/dev/null 2>&1
+  smoke_assignment "$P237F" dev P237FALLBACK
+  sleep 30 &
+  P237F_JOB_PID=$!
+  P237F_JOB_PGID="$(ps -o pgid= -p "$P237F_JOB_PID" 2>/dev/null | tr -d ' ')"
+  P237F_JOB_START="$(sed 's/.*) //' "/proc/$P237F_JOB_PID/stat" 2>/dev/null | awk '{print $20}')"
+  printf 'id=p237-fallback\npid=%s\npgid=%s\nstart=%s\ncwd=%s\nlog=%s\ncmd=smoke fixture\n' \
+    "$P237F_JOB_PID" "$P237F_JOB_PGID" "$P237F_JOB_START" "$P237F" \
+    "$P237F/.pi/team/state/bg/p237-fallback.log" > "$P237F/.pi/team/state/bg/p237-fallback.job"
+  p237f() { ( cd "$P237F" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_STATE_DIR "$@" ); }
+  p237f $TEAM bg list >"$TMP/p237f-bg.log" 2>&1 || bad "13c·P237 §4.4：夹具里 team bg list 失败"
+  assert_has "$TMP/p237f-bg.log" "identity=holds" "13c·P237 §4.4 夹具：车道记录是活的（挂起的物理形态在盘上）"
+  p237f $TEAM digest >"$TMP/p237f-digest.log" 2>&1 || bad "13c·P237 §4.4：夹具里 team digest 失败"
+  P237F_PENDING="$(grep -m1 '待办' "$TMP/p237f-digest.log" | sed 's/^[[:space:]]*//')"
+  printf '    13c·P237 §4.4 夹具输出：%s\n' "$P237F_PENDING"
+  assert_has_echo "$P237F_PENDING" "停了的 agent 1（dev=unknown）" "13c·P237 §4.4：挂起后死亡的席位进既有待办计数（任务未完成 + 窗口不在）"
+  assert_has "$TMP/p237f-digest.log" "dev 未在跑但仍有任务 P237FALLBACK" "13c·P237 §4.4：digest 的建议点名该席位与任务（同源判据）"
+  kill "$P237F_JOB_PID" 2>/dev/null; wait "$P237F_JOB_PID" 2>/dev/null
+  p237f $TEAM digest >"$TMP/p237f-digest2.log" 2>&1 || true
+  P237F_PENDING2="$(grep -m1 '待办' "$TMP/p237f-digest2.log" | sed 's/^[[:space:]]*//')"
+  assert_eq "13c·P237 §4.4：作业也结束后待办不变（既有条款只看任务 + 窗口，不看车道）" "$P237F_PENDING2" "$P237F_PENDING"
 fi
 
 # ---------------------------------------------------------------- 12b. 延后投递与草稿入口（delivery-guard）

@@ -184,10 +184,17 @@ team_bg_wait review-T1.1
 
 The four rules that make it safe (they are the extension's code, not a convention):
 
-1. **Harvest before the turn ends.** An unharvested job wakes you **once** when it finishes; a harvested job stays
-   silent (its result came back inline). Several jobs finishing together arrive as **one** message, and never while
-   you are running tools.
-2. **The ledger is on disk**: every turn end appends
+1. **End the turn after starting; the completion wake-up is the normal harvest point.** The tool returns at once,
+   so the turn is free: end it, and when the job finishes and you are idle you are woken once (several jobs
+   finishing together arrive as one message) to run `team_bg_wait <id>`; a harvested job stays silent (its result
+   came back inline). In-turn waiting is the bounded exception: use it only when all three hold -- the job is
+   expected to finish within the inline-wait budget (about 2 minutes), its result blocks your immediate next step,
+   and no other task work can advance meanwhile. A turn that ends with this session's jobs still running is
+   **suspended on background jobs** -- a third legal ending beside **delivered** and **hard-blocked**, not a
+   delivery and not a blockage, and its last line names every awaited job id.
+2. **The ledger is on disk**: `team_bg_run` appends `<ISO timestamp> start id=<id> pid=<pid>` before it returns the
+   id, and every `team_bg_wait` appends `<ISO timestamp> wait id=<id> outcome=<harvested|running|interrupted>
+   waited_s=<s>` (the seconds that call itself waited). Every turn end appends
    `<ISO timestamp> settled-with-unharvested=<n> jobs=<id>:<running|exit<code>>,…` to
    `<root>/.pi/team/state/bg.log` — a review or a digest can read “this turn ended with unharvested work”
    afterwards. Deliveries append `wake count=<n> ids=…`.

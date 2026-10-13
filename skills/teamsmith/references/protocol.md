@@ -84,6 +84,16 @@ Guards and limitations:
   earlier than the automatic one. The **recipient** names the durable inbox file (`docs/team/inbox/<agent>.md`);
   the PM is still the **knock destination** — the queue entry's declaration and the wake pointer both name that
   same recipient file, and a durable append that fails exits non-zero without a wake.
+- **The turn-end notice separates three endings**, the same three turn-end states the worker prompt names: a
+  **completed** turn with no job of that session still running is `[auto]`; the same turn with live jobs is
+  `[auto·suspended]`, carrying `awaiting=<id>[,<id>…]`; an **unfinished** turn stays `[auto·interrupted]` (with
+  `awaiting=` too when its jobs are alive). A suspension omits the `⚠ 未提交` prefix — it is not a delivery claim —
+  while `uncommitted=<n>` stays. The three states are **delivered**, **hard-blocked** and
+  **suspended on background jobs**, and the lane rule is the suspend default: `team_bg_run` starts a long job and
+  the turn ends; the completion wake-up is the normal harvest point; in-turn waiting is the bounded exception,
+  only inside the inline-wait budget (about 2 minutes), when the result blocks the next step and nothing else can
+  advance. A seat that suspended and then died needs no new patrol clause: an unfinished task with no live window
+  is already pending work (§8).
 - The **other** injected extension is `extension/team-bg.ts` (M27) — not notification, but the team's own
   background lane: `team_bg_run` starts a detached job (bounded `state/bg/<id>.log`), `team_bg_wait <id>` harvests
   it, a harvested job stays silent, several finishing jobs arrive as one message, and every turn end appends

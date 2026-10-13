@@ -50,8 +50,13 @@ last three take `--force` + one audited line). `team change status <id>` shows t
 
 - **Only change directories you own** (`{{DOCS_DIR}}/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
   the report and hand it back to the PM.
-- **Never stop mid-task to ask for confirmation**: either deliver (gates run + report + push + PR/MR) or be
-  hard-blocked (notify the PM + PARTIAL report).
+- **Never stop mid-task to ask for confirmation**: end the turn in exactly three states -- **delivered** (gates run
+  + report written + branch settled), **hard-blocked** (notify the PM + `BLOCKED:` in the report), or
+  **suspended on background jobs** (this session's jobs still running, every step independent of them done; its
+  last line names every awaited job id). The lane rule is the suspend default: `team_bg_run` starts a long job and
+  the turn ends -- the completion wake-up is the normal harvest point -- while in-turn waiting is the bounded
+  exception, only inside the inline-wait budget (about 2 minutes), when the result blocks the next step and nothing
+  else can advance.
 - **Never claim tests passed without having run them.** The PM re-runs in an independent worktree; a false report
   fails the task.
 - Never write tokens/secrets into code, config, logs or commit messages; never read credential files
