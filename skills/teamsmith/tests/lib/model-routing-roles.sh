@@ -14,7 +14,7 @@ routing_role_probes() { # worker|pm
     team_assignment_load dev; sid="${TEAM_ASSIGN[sid]}"; stop_fixture_seat dev
     good='--provider {provider} --model {model} --session-id {session_id}'
   else
-    tmux new-window -d -t routing-fixture -n role-anchor 'sleep 1200'
+    routing_fixture_tmux new-window -d -t routing-fixture -n role-anchor 'sleep 1200'
     stop_fixture_seat pm
     run config set TEAM_PM_EXTRA_PI_ARGS '' --yes
     # config set 的前门拒收 `-` 开头的值：按既有夹具惯例用前导空格写入（读取侧 team_trim）。

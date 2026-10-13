@@ -13,7 +13,7 @@ routing_expansion_probes() { # worker|pm
     team_assignment_load dev; sid="${TEAM_ASSIGN[sid]}"; stop_fixture_seat dev
   else
     # PM probes keep a private anchor alive; never use the shared session.
-    tmux new-window -d -t routing-fixture -n expansion-anchor 'sleep 600'
+    routing_fixture_tmux new-window -d -t routing-fixture -n expansion-anchor 'sleep 600'
     stop_fixture_seat pm
   fi
   local root="$REPO" custom=""

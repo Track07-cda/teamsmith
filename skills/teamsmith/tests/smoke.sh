@@ -2474,6 +2474,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/pi-args.log" "-e" "pi 收到 -e（扩展）"
   assert_has "$TMP/pi-args.log" "--skill" "pi 收到 --skill（团队协议）"
   assert_eq "state 记录了任务" "$(cat "$REPO/.pi/team/state/dev.env" | grep -c '^task=T1.1$')" "1"
+  # P242/A1：真派单仍然把提示词落盘（--print 不落盘是预览语义；这条把真派单的落盘钉住，
+  # 因为 §6f 的内容断言改读标准输出了）。
+  assert_file "$REPO/.pi/team/state/prompt-dev-T1.1.md" "真派单把提示词落盘（{prompt_file} 的内容）"
+  assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" "agent:dev" "落盘的是本次派单提示词"
   $TEAM roster >"$TMP/roster-live.log" 2>&1
   assert_has "$TMP/roster-live.log" "pi 在跑" "roster 看到 agent 的 pi 在跑"
   $TEAM say dev "ping" >/dev/null 2>&1 && ok "say 能向在跑的 agent 发消息" || bad "say 失败"
@@ -2877,6 +2881,13 @@ adapter_doc_unsupported() { # <doc> → 文档里列了、但引擎不认识的�
   done
 }
 ADOC="$SKILL_DIR/references/agent-adapters.md"
+# P242/A1：新合同（dispatch/spec.md「Launch assignments are complete transactions and previews
+# cannot mutate launch state」）—— `--print`/resume dry-run/被拒的预检都**不落盘提示词**；
+# 提示词只在 --print 的**标准输出**里（`=== 提示词（N 字）` 段），真派单才写 state/prompt-*.md。
+# 所以这一段的内容断言从「读旧文件」改成「读本次 --print 的标准输出」。
+m32_prompt_from_print() { # <print 日志> <输出文件>
+  awk '/^=== 提示词（/{f=1; next} f' "$1" > "$2"
+}
 
 # ① 默认不变：还是内置 Pi 命令
 assert_has "$TMP/print.log" 'adapter: built-in (Pi)' "默认仍是内置 Pi adapter（--print 标明）"
@@ -2901,18 +2912,23 @@ assert_has "$TMP/cmdline-custom.log" "$REPO/.pi/team/state/prompt-dev-T1.1.md" "
 assert_has "$TMP/cmdline-custom.log" '--prompt "$0"' "{prompt} 展开成窗口 harness 的 argv[0]（提示词不进命令行）"
 assert_not "$TMP/cmdline-custom.log" "{" "渲染后的命令没有残留占位符"
 assert_has "$TMP/print-custom.log" 'adapter: custom: myagent run' "--print 标明自定义 adapter"
-assert_file "$REPO/.pi/team/state/prompt-dev-T1.1.md" "派单把提示词落盘（{prompt_file} 的内容）"
-assert_has "$REPO/.pi/team/state/prompt-dev-T1.1.md" "agent:dev" "落盘的确实是本次派单提示词"
+# P242/A1：内容断言改读 --print 的标准输出（预览不落盘）；真派单的落盘由 §6 的真窗口段
+# （本文件新增的 prompt file 断言）与 §6g/§6j 的 {prompt_file} 路径守着。
+m32_prompt_from_print "$TMP/print-custom.log" "$TMP/m32-prompt-custom.md"
+assert_file "$TMP/m32-prompt-custom.md" "--print 给出本次派单的提示词（预览不落盘，读其标准输出）"
+assert_has "$TMP/m32-prompt-custom.md" "agent:dev" "提示词内容确实是本次派单（agent 身份在）"
 
 # ③ notify：摘要是数据（F1）—— worker 写文件、跑固定命令；提示词里没有任何 worker 文本
 ANOTIFY='bash {skill_dir}/scripts/team notify pm "{summary}"'
-M32_PF="$REPO/.pi/team/state/prompt-dev-T1.1.md"
+M32_PF="$TMP/m32-prompt-notify.md"
 M32_SF="$REPO/.pi/team/state/summary-dev-T1.1.md"
 env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD="$ANOTIFY" \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify.log" 2>&1 || true
+# P242/A1：这一段读的提示词来自 --print 的标准输出（预览不落盘）。
+m32_prompt_from_print "$TMP/print-notify.log" "$M32_PF"
 assert_has "$TMP/print-notify.log" "Notify the PM when your turn ends" "有 notify 模板时提示词含通知段落"
 assert_has "$TMP/print-notify.log" "$M32_SF" "--print 给出 worker 要写的摘要文件"
-assert_has "$M32_PF" "Notify the PM when your turn ends" "落盘提示词含通知段落"
+assert_has "$M32_PF" "Notify the PM when your turn ends" "提示词含通知段落（读 --print 的标准输出）"
 assert_has "$M32_PF" "not Pi" "自定义 CLI → 明说不是 Pi（没有自动通知）"
 assert_has "$M32_PF" "$M32_SF" "提示词给出摘要文件路径（teamsmith 生成的）"
 assert_has "$M32_PF" "no substitutions, no extra arguments and no quotes" "让 worker 原样跑固定命令"
@@ -2954,10 +2970,12 @@ assert_eq "缺文件时不写收件箱" "$(wc -l < "$REPO/docs/team/inbox/pm.md"
 env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash \
   TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from-file {summary_file}' \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-file.log" 2>&1 || true
+m32_prompt_from_print "$TMP/print-notify-file.log" "$M32_PF"
 assert_has "$M32_PF" "notify pm --from-file $M32_SF" "{summary_file} 渲染成路径（推荐形态，shell 里不读文件）"
 # ③d F7：内置 Pi（TEAM_AGENT_CMD 空）+ notify 键 → 不能说「不是 Pi、没有自动通知」
 env TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD="$ANOTIFY" \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-pi.log" 2>&1 || true
+m32_prompt_from_print "$TMP/print-notify-pi.log" "$M32_PF"
 # F7：内置 Pi 有自己的通知扩展 → 不把「回合结束跑这条」塞给 worker（也不谎称「不是 Pi」）
 assert_not "$M32_PF" "Notify the PM when your turn ends" "Pi 路径不给 worker 塞额外通知段（F7）"
 assert_not "$M32_PF" "not Pi, so there is no automatic notification" "Pi 路径下没有「不是 Pi」的谎话（F7）"
@@ -2967,6 +2985,7 @@ env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='bash {sk
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-bad.log" 2>&1 \
   && ok "notify 模板不可用时不阻断派单（只警告）" || bad "坏 notify 模板不应让 dispatch 失败"
 assert_has "$TMP/print-notify-bad.log" "TEAM_AGENT_NOTIFY_CMD 看起来不可用" "警告点名了坏模板"
+m32_prompt_from_print "$TMP/print-notify-bad.log" "$M32_PF"
 assert_has "$M32_PF" "is unusable" "坏模板 → 提示词通知段改成「配置不可用」（F8）"
 assert_has "$M32_PF" "into the report" "并告诉 worker 把摘要写进报告（F8）"
 assert_not "$M32_PF" "scripts/team notify pm" "坏模板下不给半截 notify 命令（F8）"
@@ -3126,16 +3145,16 @@ assert_has "$TMP/m32-bad-sp.log" "TEAM_AGENT_CMD" "F4 的报错点名配置键"
 assert_has "$TMP/m32-bad-sp.log" "{cwd}" "F4 的报错列出支持的占位符"
 # 合法写法不能被误伤：quoted 的 JSON body 与相邻占位符照旧接受；未引用的花括号 / shell 展开按已
 # 接受的窄 literal grammar 拒绝（原「一律接受」的断言改成「拒绝并点名规则」+ 合法形式仍接受）。
-if env TEAM_AGENT_CMD="myagent {prompt} -d '{\"a\":1}'" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-json.log" 2>&1; then
+if env TEAM_AGENT_CMD="myagent {prompt} --model {model} --provider {provider} --session-id {session_id} -d '{\"a\":1}'" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-json.log" 2>&1; then
   ok "quoted JSON body 里的花括号是 literal 数据，不被当成占位符"
 else bad "quoted JSON body 被误判成畸形占位符"; cat "$TMP/m32-json.log"; fi
 m32_expect_fail "F3 未引用的 JSON body" 'myagent {prompt} -d {"a":1}' "$TMP/m32-json-bare.log" "brace expansion"
-if env TEAM_AGENT_CMD='myagent {prompt} {cwd}{prompt_file}' TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-env.log" 2>&1; then
+if env TEAM_AGENT_CMD='myagent {prompt} --model {model} --provider {provider} --session-id {session_id} {cwd}{prompt_file}' TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-env.log" 2>&1; then
   ok "两个占位符相邻也能通过校验"
 else bad "相邻占位符被误判"; cat "$TMP/m32-env.log"; fi
 m32_expect_fail "F3 shell 展开 \${HOME}" 'myagent {prompt} ${HOME}' "$TMP/m32-home.log" "expansion"
 # nit：{extra_args} 的值只插一次，不会被当模板再扫一遍
-env TEAM_EXTRA_PI_ARGS='--x {cwd}' TEAM_AGENT_CMD='myagent {prompt} {extra_args}' TEAM_AGENT_BIN=bash \
+env TEAM_EXTRA_PI_ARGS='--x {cwd}' TEAM_AGENT_CMD='myagent {prompt} --model {model} --provider {provider} --session-id {session_id} {extra_args}' TEAM_AGENT_BIN=bash \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-extra.log" 2>&1 || true
 grep -m1 '^cd ' "$TMP/m32-extra.log" > "$TMP/m32-extra-cmd.log" || true
 assert_has "$TMP/m32-extra-cmd.log" '--x {cwd}' "nit：{extra_args} 里的 {cwd} 没有被二次展开"
@@ -3164,7 +3183,13 @@ elif [ "$HAVE_TMUX" = "1" ]; then
 #!/usr/bin/env bash
 # 假的「非 Pi」agent：证明 adapter 在完全没有 Pi 的环境里能跑完一条完整回路
 set -uo pipefail
-wt="\$1"; sid="\$2"; pf="\$3"; skill="\$4"
+# F5 起模板用 `--session-id {session_id}` 消费身份占位符（裸 {session_id} 不算绑定），
+# 所以这里按同名选项取 sid，选项后面才是 {cwd} {prompt_file} {skill_dir}。
+sid=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in --session-id) sid="\$2"; shift 2 ;; *) break ;; esac
+done
+wt="\$1"; pf="\$2"; skill="\$3"
 printf 'cwd=%s sid=%s prompt=%s\n' "\$wt" "\$sid" "\$pf" > "$ADAPTER_MARK"
 cd "\$wt" || exit 1
 echo hello-from-non-pi-agent > agent-artifact.txt
@@ -3185,7 +3210,7 @@ EOF
   mkdir -p "$REPO/.pi/team/state"
   ATASK="$REPO/.pi/team/state/$ADAPTER_ID-nonpi-brief.md"
   # P24（B3）：change-less 的任务书要有锚，否则派单守卫先拒（本节测的是非 Pi 路径）
-  printf '# %s · 非 Pi adapter 冒烟\n\ntask: %s\nagent: %s\nanchor: none (infra) — smoke fixture\n' \
+  printf '# %s · 非 Pi adapter 冒烟\n\ntask: %s\nagent: %s\ncategory: routine\nanchor: none (infra) — smoke fixture\n' \
     "$ADAPTER_ID" "$ADAPTER_ID" "$ADAPTER_AGENT" > "$ATASK"
   # 第二个 worker（agent 模式名册里新增一个），自己的 worktree/分支：不动 dev 的账
   ADAPTER_BRANCH="$(canon_branch "$ADAPTER_AGENT" "$ADAPTER_ID")"
@@ -3267,7 +3292,17 @@ M43_MODEL="$(sed -n 's/^model=//p' "$REPO/.pi/team/state/dev.env" 2>/dev/null | 
 [ -n "$M43_MODEL" ] || M43_MODEL="$(sed -n 's/^TEAM_DEFAULT_MODEL="\([^"]*\)".*/\1/p' "$REPO/.pi/team/config.sh" 2>/dev/null | head -1)"
 m43() { env TEAM_PI_AGENT_DIR="$M43_AGENT_DIR" "$@"; }
 
+# P242/A3：新合同（dispatch/spec.md）——同一任务换模型（含 suffix）必须 `--fresh`（显式 override
+# 不豁免），窗口守卫只在**续跑同一模型**时生效。旧夹具直接对 T1.1 换模型，于是全被换模型守卫拒在
+# 窗口守卫之前（A1/A3/A4/A6/A7/A8 的断言因此拿不到目标输出）。修法：先把这个席位已提交的
+# assignment 指向本次要用的模型（smoke_assignment 写一条完整 v1 记录；不用真派单，避免把这段变成
+# tmux 依赖），再验窗口守卫本身 —— A1–A9 的断言一条不减，测的还是窗口守卫/覆盖/roster。
+m43_commit_model() { # <完整 model>：把 dev 的已提交身份指向这个模型（同任务、同 sid）
+  smoke_assignment "$REPO" dev T1.1 routine "$(canon_branch dev T1.1)" "$1" "$SESSION-dev" policy "$TASKFILE"
+}
+
 # A1：小窗口模型 + 大会话 → 默认拒绝（旧行为：欣然派出去，然后 agent 陷在 Context full 循环里）
+m43_commit_model sub2api/gpt-5.6-sol
 if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol >"$TMP/m43-a1.log" 2>&1; then
   bad "M4.3 A1：大会话 + 小窗口模型应当被拒"
 else ok "M4.3 A1：大会话 + 小窗口模型被拒（不再派出去等 wedge）"; fi
@@ -3284,12 +3319,14 @@ if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --print >
 else ok "M4.3 A2：--print 也被拒（不会先打印一份注定 wedge 的计划）"; fi
 
 # A3：窗口更大的模型 → 允许复用同一个会话
+m43_commit_model big/wide
 if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model big/wide --print >"$TMP/m43-a3.log" 2>&1; then
   ok "M4.3 A3：大窗口模型可以复用同一会话"
 else bad "M4.3 A3：大窗口模型被误拒"; cat "$TMP/m43-a3.log"; fi
 assert_match "$TMP/m43-a3.log" "--session-id $SESSION-dev[ '\"]" "A3：复用的是同一个 session id"
 
 # A4：--allow-overflow 是显式且醒目的（不是静默放行）
+m43_commit_model sub2api/gpt-5.6-sol
 if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --allow-overflow --print >"$TMP/m43-a4.log" 2>&1; then
   ok "M4.3 A4：--allow-overflow 显式放行"
 else bad "M4.3 A4：--allow-overflow 仍被拒"; fi
@@ -3302,6 +3339,7 @@ else bad "M4.3 A5：--fresh 被误拒"; fi
 assert_match "$TMP/m43-a5.log" "--session-id $SESSION-dev-[0-9]+" "A5：--fresh 用带时间戳的新 session id"
 
 # A6：窗口解析不到 → 保守阈值，并且明说「我不知道」
+m43_commit_model nope/unknown
 if m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model nope/unknown >"$TMP/m43-a6.log" 2>&1; then
   bad "M4.3 A6：未知窗口 + 大会话应当被拒"
 else ok "M4.3 A6：未知窗口按保守阈值拒绝"; fi
@@ -3309,6 +3347,7 @@ assert_has "$TMP/m43-a6.log" "解析不到 nope/unknown 的窗口" "A6：明说�
 assert_has "$TMP/m43-a6.log" "保守阈值 ${TEAM_SESSION_WARN_TOKENS:-200000}" "A6：报出用的是保守阈值（不小于 200k）"
 
 # A7：TEAM_MODEL_WINDOWS 显式覆盖 → 以项目配置为准
+m43_commit_model sub2api/gpt-5.6-sol
 if m43 TEAM_MODEL_WINDOWS="sub2api/gpt-5.6-sol=1000000" $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --print >"$TMP/m43-a7.log" 2>&1; then
   ok "M4.3 A7：TEAM_MODEL_WINDOWS 可显式覆盖窗口"
 else bad "M4.3 A7：显式窗口覆盖没生效"; cat "$TMP/m43-a7.log"; fi
@@ -3319,11 +3358,14 @@ m43 $TEAM dispatch dev T1.1 "$TASKFILE" --model sub2api/gpt-5.6-sol --allow-over
 assert_has "$TMP/m43-a8.log" "--provider sub2api --model gpt-5.6-sol" "A8：启动命令用的是本次 --model（不是 state 里的旧模型）"
 
 # A9：roster / ps 把「会话大小 vs 模型窗口」放在模型旁边
-m43 TEAM_MODEL_WINDOWS="$M43_MODEL=272000" $TEAM roster >"$TMP/m43-roster.log" 2>&1 && ok "M4.3 A9：roster 退出码 0" || bad "M4.3 A9：roster 失败"
-assert_has "$TMP/m43-roster.log" "$M43_MODEL" "A9：roster 显示 agent 的模型"
+# P242/A3：这条断言读的是**当前已提交模型**的窗口；先用同一条完整记录把席位钉回这个模型。
+M43_ROSTER_MODEL="${M43_MODEL:-deepseek/deepseek-flash}"
+m43_commit_model "$M43_ROSTER_MODEL"
+m43 TEAM_MODEL_WINDOWS="$M43_ROSTER_MODEL=272000" $TEAM roster >"$TMP/m43-roster.log" 2>&1 && ok "M4.3 A9：roster 退出码 0" || bad "M4.3 A9：roster 失败"
+assert_has "$TMP/m43-roster.log" "$M43_ROSTER_MODEL" "A9：roster 显示 agent 的模型"
 assert_has "$TMP/m43-roster.log" "400k/272k ⚠" "A9：roster 显示已用/窗口并标出超窗"
 assert_has "$TMP/m43-roster.log" "会话=估算 tok/模型窗口" "A9：roster 说明会话数字的口径"
-m43 TEAM_MODEL_WINDOWS="$M43_MODEL=272000" $TEAM ps >"$TMP/m43-ps.log" 2>&1 || true
+m43 TEAM_MODEL_WINDOWS="$M43_ROSTER_MODEL=272000" $TEAM ps >"$TMP/m43-ps.log" 2>&1 || true
 assert_has "$TMP/m43-ps.log" "agent 会话（估算 tok / 模型窗口）" "A9：ps 有会话大小区块"
 assert_has "$TMP/m43-ps.log" "400k/272k" "A9：ps 显示 dev 的会话大小"
 
@@ -3363,7 +3405,10 @@ assert_has "$TMP/m43-b1.log" "已重试 1 次" "B1：按约定重试了一次"
 assert_has "$TMP/m43-b1.log" "杀掉" "B1：说明窗口被清掉（不留半启动现场）"
 assert_not "$TMP/m43-b1.log" "含启动校验" "B1：没有假成功"
 assert_eq "B1：new-window 试了两次（首发 + 重试）" "$(grep -c -- 'new-window' "$TMP/m43-wedge.log" 2>/dev/null | tr -d ' ')" "2"
-assert_eq "B1：残留窗口被显式 kill-window（失败路径也是真做，不是只在文案里说）" "$(grep -c -- 'kill-window' "$TMP/m43-wedge.log" 2>/dev/null | tr -d ' ')" "2"
+# P242/A5b：新合同的失败事务在 `[ -z pid ]` 块里杀一次、又经 attempt_fail 杀一次（同一窗口，
+# 第二次是 no-op）→ 调用次数是 3 而不是 2；规格没有钉精确次数，钉的是「真做 + 终态不存在」。
+assert_eq "B1：残留窗口被显式 kill-window（失败路径也是真做，不是只在文案里说）" \
+  "$([ "$(grep -c -- 'kill-window' "$TMP/m43-wedge.log" 2>/dev/null | tr -d ' ')" -ge 2 ] && echo yes || echo no)" "yes"
 assert_eq "B1：失败后的窗口终态 = 不存在" "$(env PATH="$TMP/m43-wedge:$PATH" tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr -d ' \n')" ""
 while IFS= read -r m43_wp; do case "$m43_wp" in ''|*[!0-9]*) ;; *) kill "$m43_wp" 2>/dev/null || true ;; esac; done < "$TMP/m43-wedge-pids.log"
 
@@ -3810,9 +3855,16 @@ EOF
   assert_eq "这一轮确实是新的 PM 进程（argv 日志增长）" "$([ "$(pm_lines)" -gt "$LINES1" ] && echo grew || echo same)" "grew"
 
   # 2b) 对照：配上 resume 参数（模板里用 {resume_args}）→ 文案变成「续跑」，参数真的进了 argv
-  PMCMD_R="$FAKE/fake-pm.sh {resume_args} --pf {prompt_file} --ask {prompt}"
+  # P242/A6：新合同——PM 强制续跑必须绑身份占位符（pm-template-identity-guard）；旧模板只引了
+  # {resume_args}，于是续跑模式被拒。模板补 --model/--provider 后，参数顺序不变（arg1 仍是 --continue）。
+  PMCMD_R="$FAKE/fake-pm.sh {resume_args} --model {model} --provider {provider} --pf {prompt_file} --ask {prompt}"
   LINES2="$(pm_lines)"; rm -f "$PM_SEEN"
   pm_close_windows
+  # P242/A6：强制续跑要求已发布的身份记录与当前续跑选择器一致（resume_key）。先用同一套环境发布
+  # 一份「--continue」档记录（与本节开头默认档的发布同一套路）；否则卫兵会**正确地**拒这次启动。
+  pm_bash 'team_pm_metadata_publish smoke-resume' 'TEAM_PM_FRESH_LAUNCH=0' 'TEAM_PM_RESUME_ARGS=--continue' >/dev/null 2>&1 \
+    && ok "M8.1 夹具：续跑档身份记录已写入（--continue）" \
+    || bad "M8.1 夹具：续跑档身份记录写入失败（这次的 up 会被连续性卫兵拒）"
   env TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$PMCMD_R" TEAM_PM_BIN="$FAKE/fake-pm.sh" \
     TEAM_PM_RESUME_ARGS='--continue' $TEAM up >"$TMP/pm-adapter-up3.log" 2>&1 || true
   assert_has "$TMP/pm-adapter-up3.log" "续跑：--continue" "配了 {resume_args} → 文案说明怎么延续"
@@ -3821,6 +3873,8 @@ EOF
     || pm_scene "有界轮询 5s 内新增行里没有 arg1=--continue（基线 $LINES2 行）"
   sed -n "$((LINES2 + 1)),\$p" "$PM_LOG" > "$TMP/pm-adapter-delta3.log" 2>/dev/null || true
   assert_has "$TMP/pm-adapter-delta3.log" "arg1=--continue" "resume 参数真的进了这一轮的 argv"
+  # P242/A6：还原默认档记录 —— 后面的段落（watchdog / wrapper / 裸名字）都不带 resume 参数。
+  pm_bash 'team_pm_metadata_publish smoke-fixture' 'TEAM_PM_FRESH_LAUNCH=0' >/dev/null 2>&1 || true
 
   # 3) watchdog：有待办 + PM 不在 → 同一套启动路径把它拉起来（非 Pi 也一样）
   $TEAM notify pm "M8.1 巡检：有待办" >/dev/null 2>&1 || true
@@ -3925,8 +3979,10 @@ EOF
   # 以前诊断用 `tail -30` 取，只留下空行、看起来像「窗口没输出」（M8.1 实测的第二只虫子）。
   assert_has "$REPO/.pi/team/state/pm-launch-tail.txt" "FAKE-PM-FAIL" "尾屏文件里既有报错行也有后续空行（夹具与真实形态一致）"
   assert_match "$TMP/pm-adapter-upfail-diag.log" "^--- pane（CLI 退出那一刻，harness 自抓）---$" "诊断用的是 harness 自抓的那份（不必事后重抓）"
-  tmux capture-pane -p -t "$SESSION:$PMW" -S -50 >"$TMP/pm-adapter-failpane.txt" 2>/dev/null || true
-  assert_has "$TMP/pm-adapter-failpane.txt" "FAKE-PM-FAIL" "窗口没被连诊断一起杀掉（报错还在 pane 里）"
+  # P242/A5：新合同（pm-lifecycle delta）——启动证明/发布失败时**未提交的 PM 会被停掉**，
+  # 窗口终态不存在；CLI 自己的报错原文已由上面的诊断文件断言（不是「看不见」）。
+  assert_eq "PM 启动失败后窗口终态 = 不存在（新合同：未提交的 PM 被停掉，诊断留在文件里）" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$PMW" || true)" "0"
 
   # 收尾：后面的段落要看到和改造前一样的现场（dev 窗口还在、PM 侧清理干净）
   pm_close_windows
@@ -4056,8 +4112,10 @@ M82EOF
   assert_has "$TMP/m82-die-diag.log" "bin    : $FAKE/worker-die" "M8.2：诊断里有解析到的可执行文件"
   assert_match "$TMP/m82-die-diag.log" '^pane   : .*（[0-9]+ 字节）' "M8.2：诊断记下尾屏抓取落盘的大小"
   assert_match "$TMP/m82-die-diag.log" '^--- pane（agent 退出那一刻，harness 自抓）---$' "M8.2：诊断用的是 harness 自抓的那份（CLI 退出后 shell 可能清屏）"
-  tmux capture-pane -p -t "$SESSION:$M82_AGENT" -S -50 >"$TMP/m82-die-pane.txt" 2>/dev/null || true
-  assert_has "$TMP/m82-die-pane.txt" "M82-WORKER-DIE" "M8.2：窗口没被连诊断一起杀掉（报错还在 pane 里）"
+  # P242/A5：新合同（dispatch/spec.md）——未被接受的启动不留在窗口里（终态不存在）；
+  # CLI 自己的报错原文已由上面的诊断文件断言（harness 自抓的尾屏）。
+  assert_eq "M8.2：失败的窗口终态 = 不存在（新合同：未提交的启动被停掉，诊断留在文件里）" \
+    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx "$M82_AGENT" || true)" "0"
   # (c) 正常 adapter 不受影响：6g 的假 agent（绝对路径、跑完退出 0）就是这条路径，这里再钉一次
   #     「以非 0 秒退才算失败」的另一半——退出码 0 的秒退只如实报告，不算失败。
   cat > "$FAKE/worker-done" <<'M82EOF'
@@ -5630,9 +5688,12 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_eq "配额仍然 0 行（失败的尝试一次都没记）" \
     "$([ -f "$REPO/.pi/team/state/pm-restarts.log" ] && wc -l < "$REPO/.pi/team/state/pm-restarts.log" | tr -d ' ' || echo 0)" "0"
   assert_eq "只起过一个 PM（没有重复启动）" "$(( $(start_count) - STARTS_BEFORE ))" "1"
+  # P242/A6：新合同（pm-lifecycle delta）——启动证明/发布失败时**未提交的 PM 会被停掉**，
+  # 所以这一拍看到的是「没有 PM」（missing/idle），而不是旧夹具期望的「靠窗口证据认出它」。
+  # 下面两条（不再拉起/配额 0 行/只起过一次）在**没有待办**的叠加下照旧成立。
   case "$(pm_state_now)" in
-    running:*) ok "状态是 running（靠窗口证据，而不是 pm.pid）：$(pm_state_now)" ;;
-    *)         bad "期望 running:*（窗口里的进程就是配置的 agent），实际 $(pm_state_now)" ;;
+    running:*|starting:*) bad "失败的拉起留下了 PM（$(pm_state_now)）：新合同要求未提交的启动被停掉" ;;
+    *)         ok "失败的拉起不留下 PM（$(pm_state_now)）：新合同要求未提交的启动被停掉" ;;
   esac
 
   # ⑥ 限流也认「尝试」：拉起反复失败（每次都留一行 attempts）也必须被拦住 ——
@@ -5687,10 +5748,15 @@ assert_not "$TMP/p36-cmd-prio.log" "--session-id" "P36 ①：--fresh-pm 压过 T
 assert_not "$TMP/p36-print-prio.log" "--continue" "P36 ①：--fresh-pm 压过 TEAM_PM_RESUME_ARGS"
 # 模板路径同一条口径（{resume_args} 这一次渲染为空）——用与 §6i 同形的渲染探针，目标固定在夹具仓库
 p36_render() { # [VAR=…]… → 渲染 PM 启动命令
+  # P242：身份卫兵要求当前 model/resume_key 与已发布的记录一致（pm-lifecycle 合同）。渲染前按同一批
+  # 环境变量发布一份记录（与 §6i 的 pm_render 同一套路），使断言测的仍是渲染本身，而不是卫兵。
+  mkdir -p "$REPO/.pi/team/state"
+  ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c 'for _a in "$@"; do export "$_a"; done; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_pm_metadata_publish p36-render' _ "$@" ) >/dev/null 2>&1
   ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
       bash -c 'for _a in "$@"; do export "$_a"; done; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_pm_launch_cmd "$TEAM_STATE_DIR/pm-prompt.md" "$TEAM_STATE_DIR/pm.pid.spawn"' _ "$@" )
 }
-P36_TPL_CMD='mycli run {resume_args} {prompt}'
+P36_TPL_CMD='mycli run --model {model} --provider {provider} {resume_args} {prompt}'
 P36_TPL_CONT="$(p36_render "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$P36_TPL_CMD" 'TEAM_PM_BIN=bash' 'TEAM_PM_RESUME_ARGS=--continue')"
 assert_has_echo "$P36_TPL_CONT" "--continue" "P36 ①：模板路径默认把 {resume_args} 渲染出来"
 P36_TPL_FRESH="$(p36_render "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$P36_TPL_CMD" 'TEAM_PM_BIN=bash' 'TEAM_PM_RESUME_ARGS=--continue' 'TEAM_PM_FRESH_LAUNCH=1')"
@@ -10208,7 +10274,9 @@ m93_run() { env TEAM_AGENTS="$M93_AGENTS" $TEAM "$@"; }   # 三个夹具 agent �
 m93_brief() { # <ID> <agent>：最小任务书（头块与 PM 的模板同形）
   mkdir -p "$REPO/docs/team/tasks"
   # P24（B3）：change-less 的任务书要有锚 —— 本节测的是叠任务守卫，得先过锚守卫
-  printf '# %s · M9.3 smoke fixture\n\ntask:   %s\nagent:  %s\nanchor: none (infra) — smoke fixture\ndeps:   -\nstatus: todo\n' \
+  # P242/A2：新合同要求任务书有唯一 `category:` 头（显式 override 不豁免）；本节测叠任务守卫，
+  # 用项目映射里真实存在的类别（smoke 夹具配置：TEAM_TASK_MODELS="routine=deepseek/deepseek-flash"）。
+  printf '# %s · M9.3 smoke fixture\n\ntask:   %s\nagent:  %s\ncategory: routine\nanchor: none (infra) — smoke fixture\ndeps:   -\nstatus: todo\n' \
     "$1" "$1" "$2" > "$REPO/docs/team/tasks/$1-m93-smoke.md"
 }
 m93_add() { # <ID> <agent>：BOARD 行 + 任务书
@@ -10227,11 +10295,11 @@ _git_add_commit() { # <工作树> <提交信息>：夹具提交（作者固定�
   git -C "$1" add -A >/dev/null 2>&1 || true
   git -C "$1" -c user.email=smoke@local -c user.name=smoke commit -qm "$2" >/dev/null 2>&1 || true
 }
-m93_state() { # <agent> <task> <taskfile> <branch>：夹具 state（键与 dispatch 写下的同形）
-  mkdir -p "$REPO/.pi/team/state"
-  { printf 'model=deepseek/deepseek-flash\nwindow=%s\nworktree=%s\n' "$1" "$REPO/.worktrees/$1"
-    printf 'task=%s\ntaskfile=%s\nbranch=%s\nstarted=2026-09-15T00:00:00Z\n' "$2" "$3" "$4"
-  } > "$REPO/.pi/team/state/$1.env"
+m93_state() { # <agent> <task> <taskfile> <branch>：夹具 state（一整条 v1 assignment，键与 dispatch 写下的同形）
+  # P242：新合同下 state/<seat>.env 是**版本化 assignment 记录**，半条记录（旧夹具的手写形状）
+  # 会在派单闸门被判 legacy/unknown assignment_version 而拒绝 —— 本节要测的是叠任务守卫，
+  # 所以写一整条完整记录（§54 的 P140 夹具同一套修法）。
+  smoke_assignment "$REPO" "$1" "$2" routine "$4" deepseek/deepseek-flash "$SESSION-$1" policy "$3"
 }
 
 # ① 叠任务的形状（D16 #1）：state 记着 M93A1（分支上真的有未交付的提交），工作树已被准备好接 M93A2
@@ -10320,21 +10388,41 @@ else bad "M9.3-④：没有 state 时不该拒绝（见 $TMP/m93-e-nostate.log�
 assert_has "$TMP/m93-e-nostate.log" "task=" "说明缺的信号是 state 里的 task="
 assert_has "$TMP/m93-e-nostate.log" "m93c.env" "点名是哪个 state 文件"
 assert_has "$TMP/m93-e-nostate.log" "=== agent 命令" "照旧打印派单计划"
-# state 在、但 task= 是空的（close 之后的正常状态，team close 就是这么清的）：同样不猜
-m93_state m93c "" "$M93C1_BRIEF" ""
+# state 在、但没有 assignment 字段（只有收件箱记账这种普通键）：新合同下它不是 assignment 记录
+# （P241 的「没有 assignment 字段的文件不当记录」）→ 同样不猜，照旧派单。
+# P242：旧夹具在这里写的是「半条 assignment 记录 + 空 task=」，新合同下那种形状是**可疑记录**
+# （解析器要求必需字段非空）→ 拒；本节测的「判不出信号就别拦」用合法形状继续测（见下一条的真拒绝）。
+printf 'inbox_lines=0\n' > "$REPO/.pi/team/state/m93c.env"
 if m93_run dispatch m93c M93C1 "$M93C1_BRIEF" --print >"$TMP/m93-e-emptytask.log" 2>&1; then
-  ok "M9.3-④：state 里 task= 为空 → 同样照旧派单"
-else bad "M9.3-④：task= 为空时不该拒绝"; fi
-assert_has "$TMP/m93-e-emptytask.log" "task=" "空 task= 也说清缺的是哪个信号"
+  ok "M9.3-④：state 里没有 assignment 记录（只有记账键）→ 同样照旧派单"
+else bad "M9.3-④：记账文件被当成 assignment 记录拒绝"; fi
+assert_has "$TMP/m93-e-emptytask.log" "task=" "没有记录也说清缺的是哪个信号"
 assert_has "$TMP/m93-e-emptytask.log" "=== agent 命令" "照旧打印派单计划"
+# P242 新增（新合同的另一半）：写了 assignment 字段却没写全 = 可疑记录 → 响亮拒 + 给出路，
+# 不能当成「没有任务」放行（那会让半个记录被静默忽略）。
+# 两种半条：① 有版本号但字段不全 → incomplete <字段>；② 没版本号 → legacy/unknown assignment_version。
+printf 'assignment_version=1\ntask=M93C1\n' > "$REPO/.pi/team/state/m93c.env"
+if m93_run dispatch m93c M93C1 "$M93C1_BRIEF" --print >"$TMP/m93-e-partial.log" 2>&1; then
+  bad "M9.3-④：半个 assignment 记录不该被当成「没有任务」放行"
+else ok "M9.3-④：半个 assignment 记录（字段不全）→ 拒绝"; fi
+assert_has "$TMP/m93-e-partial.log" "incomplete" "拒绝说清记录不完整（点名缺的字段）"
+assert_has "$TMP/m93-e-partial.log" "--fresh" "并给出显式出路（--fresh）"
+assert_not "$TMP/m93-e-partial.log" "=== agent 命令" "可疑记录下没有派单计划"
+printf 'task=M93C1\n' > "$REPO/.pi/team/state/m93c.env"
+if m93_run dispatch m93c M93C1 "$M93C1_BRIEF" --print >"$TMP/m93-e-legacy.log" 2>&1; then
+  bad "M9.3-④：没有版本号的半条记录不该被当成「没有任务」放行"
+else ok "M9.3-④：没有版本号的半条记录（历史形状）→ 拒绝"; fi
+assert_has "$TMP/m93-e-legacy.log" "legacy/unknown assignment_version" "拒绝点名历史记录形状"
+assert_has "$TMP/m93-e-legacy.log" "--fresh" "并给出显式出路（--fresh）"
+rm -f "$REPO/.pi/team/state/m93c.env"
 
 # ⑤ 同一个 ID 有多份任务书 → 拒绝并列出全部（旧实现按 glob 第一份算 slug：撞分支名 / 拿错 scope）
 $TEAM board add M93E "M9.3 fixture M93E" m93c - >/dev/null 2>&1 || true
 M93E_BR="$(m93_wt m93c M93E)"
 assert_eq "M9.3-⑤ 夹具有效：m93c 的工作树停在 M93E 的规范分支上" \
   "$(git -C "$REPO/.worktrees/m93c" rev-parse --abbrev-ref HEAD)" "$M93E_BR"
-printf '# M93E · 旧的那份\n\ntask: M93E\nagent: m93c\nanchor: none (infra) — smoke fixture\n' > "$REPO/docs/team/tasks/M93E-legacy.md"
-printf '# M93E · 新的那份\n\ntask: M93E\nagent: m93c\nanchor: none (infra) — smoke fixture\n' > "$REPO/docs/team/tasks/M93E-reverify.md"
+printf '# M93E · 旧的那份\n\ntask: M93E\nagent: m93c\ncategory: routine\nanchor: none (infra) — smoke fixture\n' > "$REPO/docs/team/tasks/M93E-legacy.md"
+printf '# M93E · 新的那份\n\ntask: M93E\nagent: m93c\ncategory: routine\nanchor: none (infra) — smoke fixture\n' > "$REPO/docs/team/tasks/M93E-reverify.md"
 M93E_BRIEF="$REPO/docs/team/tasks/M93E-reverify.md"
 if m93_run dispatch m93c M93E "$M93E_BRIEF" --print >"$TMP/m93-f-ambiguous.log" 2>&1; then
   bad "M9.3-⑤：两份任务书时不该猜哪一份是这次的 scope"
@@ -10599,6 +10687,19 @@ assert_eq "M9.8 隔离：team paths 的 main_root 就是 M9.8 夹具仓库" \
   "$(sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p' "$TMP/m98-paths.json")" "$M98"
 assert_has "$TMP/m98-paths.json" "\"session\": \"$M98SES\"" "M9.8 隔离：身份用的是本轮临时 session"
 
+# P242/A7：巡逻先过 PM 连续性守卫（pm-lifecycle delta：身份缺失/变更时只报阻塞、不自动续跑）。
+# 本节测的是「唤醒计数 = digest 可行动清单」，所以要给它一份**可证明的 PM 启动身份**：
+# 用产品自己的发布函数写一份续跑档记录（与 §6i 的 pm_bash 同一套路），不绕过守卫、也不改产品。
+m98_pm_identity() { # [<repo>]（默认 $M98）：巡逻循环要先过 PM 连续性守卫，夹具必须给它一份可证明的身份
+  local repo="${1:-$M98}"
+  mkdir -p "$repo/.pi/team/state"
+  ( cd "$repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
+      TEAM_PM_FRESH_LAUNCH=0 \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_pm_metadata_publish smoke-m98' )
+}
+m98_pm_identity >/dev/null 2>&1 && ok "M9.8 夹具：PM 启动身份已发布（巡逻守卫的前提）" \
+  || bad "M9.8 夹具：PM 启动身份发布失败（watch 会停在连续性守卫上）"
+
 m98() { ( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
 m98_lib() { # <函数> [参数…]：按 CLI 的方式加载库后调用（digest 与唤醒读的是同一批函数）
   local fn="$1"; shift
@@ -10712,6 +10813,9 @@ for i in A B C D E; do
   m98b env TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON=fx $TEAM board set "M98$i" done >/dev/null 2>&1 || true
 done
 M98COPY="$TMP/m98-skill"; rm -rf "$M98COPY"; cp -r "$SKILL_DIR" "$M98COPY"
+# P242/A7：⑥ 用自己的夹具仓库（$M98B），它的巡逻循环同样要先过 PM 连续性守卫 —— 给它同一份可证明身份。
+m98_pm_identity "$M98B" >/dev/null 2>&1 && ok "M9.8-⑥ 夹具：M98B 的 PM 启动身份已发布（巡逻守卫的前提）" \
+  || bad "M9.8-⑥ 夹具：M98B 的 PM 启动身份发布失败（tick 会停在连续性守卫上，测不到代码快照）"
 M98B_WDLOG="$M98B/.pi/team/state/watchdog.log"
 ( cd "$M98B" && exec env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
     TEAM_PULSE_INTERVAL=1 bash "$M98COPY/scripts/team" monitor --interval 1 ) >"$TMP/m98-monitor.log" 2>&1 &
@@ -11196,6 +11300,14 @@ assert_match "$TMP/p10-print.txt" "延后投递 [0-9]+" "26-f 状态带：打印
 # ---------------------------------------------------------------- 26-g. agent 表（band B）
 # verify：窗口不在但任务还在（停了的 agent 也要点名任务）。放在 26-f 之后：
 # 有 task= 且没在跑会进 pending.stopped，26-f 的 1/2/1/4 是另一个 GIVEN。
+# P242/A8：面板的会话大小按 **committed assignment** 关联（dispatch/spec.md：会话文件必须匹配
+# committed assignment 的 SID/worktree，miss 时读作 unavailable；不得退回邻居会话或伪造 0）。
+# 旧夹具只造了会话文件、没给 dev 写 assignment —— 补一条完整的 v1 记录（sid 与该文件名同源）。
+# 位置就在 26-f 之后：有 task= 且没在跑的席位会进 pending.stopped，26-f 的 1/2/1/4 是另一个 GIVEN。
+mkdir -p "$P10R/docs/team/tasks"
+smoke_assignment "$P10R" dev P10X routine task/P10X-fix deepseek/deepseek-flash "$P10SESS-dev" policy "$P10R/docs/team/tasks/P10X-smoke-task.md" \
+  && ok "26-g 夹具：dev 的 committed assignment 已写入（会话按 SID/worktree 关联的前提）" \
+  || bad "26-g 夹具：dev 的 assignment 写入失败（session_tokens 会读作 unavailable）"
 printf 'task=P10Z\n' > "$P10STATE/verify.env"
 p10ms $TEAM monitor --json >"$TMP/p10-agents.json" 2>"$TMP/p10-agents.err"
 p10_check "$TMP/p10-agents.json" '[a for a in p["agents"] if a["name"]=="dev"][0]["branch"].startswith("task/P10X")' \
@@ -14038,7 +14150,7 @@ EOF
   chmod +x "$FAKE/gate-probe.sh"
   GP_BRANCH="$(canon_branch gateprobe M36W)"
   # P24（B3）：change-less 的任务书要有锚（本节测的是 tmux 运行时闸门）
-  printf '# M36W 夹具 brief\n\nanchor: none (infra) — smoke fixture\n' > "$REPO/.pi/team/state/M36W-brief.md"
+  printf '# M36W 夹具 brief\n\ncategory: routine\nanchor: none (infra) — smoke fixture\n' > "$REPO/.pi/team/state/M36W-brief.md"
   git -C "$REPO" worktree add -b "$GP_BRANCH" "$REPO/.worktrees/gateprobe" "$PROTECTED" >/dev/null 2>&1
   # CLI 破坏性调用的目标：一个真窗口 + 一条 state 记录（stub 的 list-windows 也让 CLI 看得见它）
   tmux new-window -t "$SESSION" -n gatevictim -d -- sleep 60
@@ -14331,7 +14443,7 @@ exit 0
 EOF
   chmod +x "$FAKE/m40-probe.sh"
   # P24（B3）：change-less 的任务书要有锚（本节测的是身份推导）
-  printf '# M40W 夹具 brief\n\nanchor: none (infra) — smoke fixture\n' > "$REPO/.pi/team/state/M40W-brief.md"
+  printf '# M40W 夹具 brief\n\ncategory: routine\nanchor: none (infra) — smoke fixture\n' > "$REPO/.pi/team/state/M40W-brief.md"
   git -C "$REPO" worktree add -b "$GPW_BRANCH" "$REPO/.worktrees/m40w" "$PROTECTED" >/dev/null 2>&1
   rm -f "$M40_D/8c-worker-env.log" "$M40_D/8c-worker.done"
   m40_foreign TEAM_ALLOW_FOREIGN_IDENTITY=1 TEAM_AGENTS="dev m40w" \
@@ -14407,7 +14519,8 @@ p24_brief() { # <项目> <ID> <agent> <phase> <change> <deltas|@absent> [<anchor
   mkdir -p "$p/docs/team/tasks"
   {
     printf '# %s · fixture\n\n```\n' "$id"
-    printf 'task:   %s\nagent:  %s\nissue:  -\n' "$id" "$agent"
+    # P242/A2：唯一 category: 头是新合同的合法输入（本节测锚/delta/独立性，类别不是被测对象）。
+    printf 'task:   %s\nagent:  %s\nissue:  -\ncategory: routine\n' "$id" "$agent"
     printf 'change: %s\nspecs:  %s\nphase:  %s\ndeps:   -\nstatus: todo\nbudget: -\n' "$change" "$specs" "$phase"
     [ -n "$anchor" ] && printf 'anchor: %s\n' "$anchor"
     [ "$deltas" = "@absent" ] || printf 'deltas: %s\n' "$deltas"
@@ -16674,7 +16787,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 夹具自己往那里写 brief，就得自己保证它在 —— §6g/§6h 也是这么做的。（P218：此前靠别的段
   # 顺手创建，单独选跑时 printf 就死在目录不存在上，后面 60+ 条级联。）
   mkdir -p "$REPO/.pi/team/state"
-  printf '# %s · pane survivability probe\n\ntask: %s\nagent: %s\nchange: -\nanchor: none (infra) — P55 留存夹具\n' \
+  printf '# %s · pane survivability probe\n\ntask: %s\nagent: %s\ncategory: routine\nchange: -\nanchor: none (infra) — P55 留存夹具\n' \
     "$P55_ID" "$P55_ID" "$P55_A" > "$P55_BRIEF"
   P55_BR="$(canon_branch "$P55_A" "$P55_ID")"
   git worktree add -b "$P55_BR" "$P55_WT" "$PROTECTED" >/dev/null 2>&1 || bad "§40 夹具：worktree 建不起来"
@@ -16712,7 +16825,7 @@ P55AG2
   }
 
   # ── ① 创建期：选项先于 harness，读回为证（1.1/1.2）─────────────────────────
-  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent --model {model} --provider {provider} --session-id {session_id} {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
        TEAM_DISPATCH_ALIVE_SEC=0 \
        bash "$SKILL_DIR/scripts/team" dispatch "$P55_A" "$P55_ID" "$P55_BRIEF" >"$TMP/p55-dispatch-1.log" 2>&1
   then ok "P55 ①：派单成功"; else bad "P55 ①：派单失败"; fi
@@ -16874,19 +16987,19 @@ P55PY
       ok "P55 ⑤$rn：上一轮的 .exit 不冒充这一轮的退出（本轮 agent 在跑、无 .exit）"
     fi
   }
-  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent --model {model} --provider {provider} --session-id {session_id} {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
        TEAM_DISPATCH_ALIVE_SEC=0 TEAM_AGENT_SCENE_LINES=3 \
        bash "$SKILL_DIR/scripts/team" dispatch "$P55_A" "$P55_ID" "$P55_BRIEF" >"$TMP/p55-reuse-1.log" 2>&1
   then ok "P55 ⑤A：复用 dispatch 成功"; else bad "P55 ⑤A：复用 dispatch 失败"; fi
   P55_REUSE_CHECK "A·dispatch" "$TMP/p55-reuse-1.log"
   P55_KILL_PANE "$P55_A" || bad "P55 ⑤B 前置：第二轮 kill 没等到遗体"
-  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent --model {model} --provider {provider} --session-id {session_id} {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
        TEAM_DISPATCH_ALIVE_SEC=0 TEAM_AGENT_SCENE_LINES=3 \
        bash "$SKILL_DIR/scripts/team" dispatch "$P55_A" "$P55_ID" "$P55_BRIEF" --fresh >"$TMP/p55-reuse-2.log" 2>&1
   then ok "P55 ⑤B：--fresh 复用成功"; else bad "P55 ⑤B：--fresh 复用失败"; fi
   P55_REUSE_CHECK "B·--fresh" "$TMP/p55-reuse-2.log"
   P55_KILL_PANE "$P55_A" || bad "P55 ⑤C 前置：第三轮 kill 没等到遗体"
-  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
+  if env TEAM_AGENTS="dev verify $P55_A" TEAM_AGENT_CMD="$FAKE/p55-agent --model {model} --provider {provider} --session-id {session_id} {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent" \
        TEAM_DISPATCH_ALIVE_SEC=0 TEAM_AGENT_SCENE_LINES=3 \
        bash "$SKILL_DIR/scripts/team" resume --agent "$P55_A" >"$TMP/p55-reuse-3.log" 2>&1
   then ok "P55 ⑤C：resume 复用成功"; else bad "P55 ⑤C：resume 复用失败"; fi
@@ -16895,11 +17008,11 @@ P55PY
   # ── ⑥ 正常退出照旧是「已退出」（1.3）：agent 退 0 → pane 活着 → 状态/复用原义 ──
   P55_Z="p55z"; P55_ZID="T9.57"; P55_ZWT="$REPO/.worktrees/$P55_Z"
   P55_ZBRIEF="$REPO/.pi/team/state/$P55_ZID-brief.md"
-  printf '# %s · pane survivability fast-exit\n\ntask: %s\nagent: %s\nchange: -\nanchor: none (infra) — P55 留存夹具\n' \
+  printf '# %s · pane survivability fast-exit\n\ntask: %s\nagent: %s\ncategory: routine\nchange: -\nanchor: none (infra) — P55 留存夹具\n' \
     "$P55_ZID" "$P55_ZID" "$P55_Z" > "$P55_ZBRIEF"
   git worktree add -b "$(canon_branch "$P55_Z" "$P55_ZID")" "$P55_ZWT" "$PROTECTED" >/dev/null 2>&1 \
     || bad "§40 夹具：p55z worktree 建不起来"
-  if env TEAM_AGENTS="dev verify $P55_Z" TEAM_AGENT_CMD="$FAKE/p55-agent-fast {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent-fast" \
+  if env TEAM_AGENTS="dev verify $P55_Z" TEAM_AGENT_CMD="$FAKE/p55-agent-fast --model {model} --provider {provider} --session-id {session_id} {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent-fast" \
        TEAM_DISPATCH_ALIVE_SEC=0 \
        bash "$SKILL_DIR/scripts/team" dispatch "$P55_Z" "$P55_ZID" "$P55_ZBRIEF" >"$TMP/p55z-dispatch.log" 2>&1
   then ok "P55 ⑥：短命 agent 派单成功"; else bad "P55 ⑥：短命 agent 派单失败"; fi
@@ -16915,7 +17028,7 @@ P55PY
   assert_has "$TMP/p55z-roster.log" "已退出" "P55 ⑥：正常退出的席位 = 「已退出」（语义原样）"
   grep -E "^$P55_Z " "$TMP/p55z-roster.log" > "$TMP/p55z-row.txt"
   assert_not "$TMP/p55z-row.txt" "▲" "P55 ⑥：正常退出绝不显示成死 pane（限定席位行；图例恒有 ▲）"
-  if env TEAM_AGENTS="dev verify $P55_Z" TEAM_AGENT_CMD="$FAKE/p55-agent-fast {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent-fast" \
+  if env TEAM_AGENTS="dev verify $P55_Z" TEAM_AGENT_CMD="$FAKE/p55-agent-fast --model {model} --provider {provider} --session-id {session_id} {cwd}" TEAM_AGENT_BIN="$FAKE/p55-agent-fast" \
        TEAM_DISPATCH_ALIVE_SEC=0 \
        bash "$SKILL_DIR/scripts/team" resume --agent "$P55_Z" >"$TMP/p55z-resume.log" 2>&1
   then ok "P55 ⑥：exited 席位 resume 照常"; else bad "P55 ⑥：exited 席位 resume 失败"; fi
@@ -18748,7 +18861,8 @@ p140_brief() { # <repo> <ID> <agent> <phase> <change> <anchor> <deltas>
   local p="$1" id="$2" agent="$3" ph="$4" ch="$5" an="$6" de="$7"
   mkdir -p "$p/docs/team/tasks"
   {
-    printf '# %s · P140 fixture\n\n```\ntask:   %s\nagent:  %s\nissue:  -\n' "$id" "$id" "$agent"
+    # P242/A2：唯一 category: 头是新合同的合法输入；R4 的三项阻塞（change/deltas/分支身份）不变。
+    printf '# %s · P140 fixture\n\n```\ntask:   %s\nagent:  %s\nissue:  -\ncategory: routine\n' "$id" "$id" "$agent"
     printf 'change: %s\nspecs:  -\nanchor: %s\nphase:  %s\ndeltas: %s\ndeps:   -\nstatus: todo\nbudget: -\n```\n\nbody\n' \
       "$ch" "$an" "$ph" "$de"
   } > "$p/docs/team/tasks/$id-fixture.md"
@@ -18764,6 +18878,17 @@ p140_wt() { # <repo> <agent> <branch>
   local p="$1" a="$2" br="$3"
   git -C "$p" worktree add -q -b "$br" "$p/.worktrees/$a" main >/dev/null 2>&1 \
     || git -C "$p" worktree add -q "$p/.worktrees/$a" "$br" >/dev/null 2>&1 || true
+}
+p140_state() { # <repo> <task> [<sid>] [<sid_bytes>] [<started>]：dev 的在飞任务写成一整条 v1 assignment
+  # P242：新合同下 state/<seat>.env 是**版本化 assignment 记录**；旧夹具写的半条记录（只有
+  # task=/worktree=/branch=…）会在派单闸门被拒（legacy/unknown assignment_version）。这些夹具要的是
+  # 「这个席位手上有活」，所以写完整记录（模型/类别用项目映射里真实存在的 routine），再按需改字段。
+  local p="$1" task="$2" sid="${3:-}" bytes="${4:-}" started="${5:-}"
+  smoke_assignment "$p" dev "$task" routine "$(p140_branch "$p" dev "$task")" deepseek/deepseek-flash \
+    "${sid:-p140-$task-dev}" policy "$p/docs/team/tasks/$task-fixture.md"
+  [ -z "$sid" ] || sed -i "s|^sid=.*|sid=$sid|" "$p/.pi/team/state/dev.env"
+  [ -z "$bytes" ] || sed -i "s|^sid_bytes=.*|sid_bytes=$bytes|" "$p/.pi/team/state/dev.env"
+  [ -z "$started" ] || sed -i "s|^started=.*|started=$started|" "$p/.pi/team/state/dev.env"
 }
 p140_run() { # <repo> <team 参数…> → 组合输出；rc = CLI 的 rc（录制 shim + 假启动证据）
   local p="$1"; shift
@@ -18828,8 +18953,7 @@ p140_brief "$P140B" P201 dev apply - - -
 P140B_BR="$(p140_branch "$P140B" dev P201)"
 p140_wt "$P140B" dev "$P140B_BR"
 mkdir -p "$P140B/.pi/team/state"
-printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' \
-  "$P140B/.worktrees/dev" "$P140B/docs/team/tasks/OLD-fixture.md" "$(p140_branch "$P140B" dev OLD)" > "$P140B/.pi/team/state/dev.env"
+p140_state "$P140B" OLD
 : > "$P140B/.pi/team/state/watchdog.log"
 P140B_PRINT="$(p140_run "$P140B" dispatch dev P201 docs/team/tasks/P201-fixture.md --print --force)"; P140B_PRINT_RC=$?
 assert_eq "R5：--print --force 两个覆盖项都放行（rc=0）" "$P140B_PRINT_RC" "0"
@@ -18843,7 +18967,12 @@ assert_eq "R5：--force 恰每个覆盖项一行审计" "$(grep -cE '显式覆�
 assert_has "$P140B/.pi/team/state/watchdog.log" "显式覆盖叠任务" "R5：审计行一（叠任务）"
 assert_has "$P140B/.pi/team/state/watchdog.log" "覆盖锚缺失" "R5：审计行二（锚缺失）"
 # R6（5.1）：成功派单记下本轮的 sid 与启动时会话文件字节数（下一轮据此判 0 产出）
-assert_eq "R6：成功派单写下本轮 sid" "$(grep -c '^sid=p140-force-dev$' "$P140B/.pi/team/state/dev.env" || true)" "1"
+# P242：新合同下**新选择**的 SID 是 `<session>-<seat>-<ts>-<pid>-<r1>-<r2>`（防撞）；旧夹具钉的字面量
+# `p140-force-dev` 是旧分配形状。断言改成新形状（本项目 session + 本席位 + 四段随机/时间段），
+# 强度不减：记的确实是本轮分配的那一个，不是旧记录里的 sid。
+# 新合同 SID 形状：<session>-<seat>-<ts>-<pid>-<r1>-<r2>（assert_match 的参数序是 <文件> <正则> <标签>）
+assert_match "$P140B/.pi/team/state/dev.env" '^sid=p140-force-dev-[0-9]+-[0-9]+-[0-9]+-[0-9]+$' \
+  "R6：成功派单写下本轮 sid（新合同 SID 形状）"
 assert_eq "R6：成功派单写下 sid_bytes" "$(grep -c '^sid_bytes=' "$P140B/.pi/team/state/dev.env" || true)" "1"
 
 # ---- R6 ⇂ 席位预提示：quota / 0 字节 / 三种沉默
@@ -18855,7 +18984,8 @@ p140_wt "$P140C" dev "$P140C_BR"
 mkdir -p "$P140C/.pi/team/state"
 P140C_DEATHS="$P140C/.pi/team/state/deaths.log"
 # 死因腿要「当前启动」的记录：state 里有 started，记录时间要比它新（与巡检读法同源）
-printf 'task=P300\nstarted=2026-01-01 00:00:00 +0000\n' > "$P140C/.pi/team/state/dev.env"
+# P242：started 必须是 publisher 格式（v1 记录会被校验）；时间仍在夹具的 2026 假时钟里。
+p140_state "$P140C" P300 '' '' '2026-01-01T00:00:00Z'
 printf '%s\tdev\tquota\tpane\tline:deadbeef\tdeath:p140-quota\tweekly usage limit exceeded (403)\n' \
   "$(date '+%Y-%m-%d %H:%M:%S %z')" > "$P140C_DEATHS"
 P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"; P140C_RC=$?
@@ -18875,7 +19005,7 @@ P140C_SID="p140-hints-dev"
 P140C_ENC="$(printf '%s' "$P140C/.worktrees/dev" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
 mkdir -p "$P140C/.pi-agent/sessions/--$P140C_ENC--"
 head -c 100 /dev/zero | tr '\0' 'x' > "$P140C/.pi-agent/sessions/--$P140C_ENC--/x_$P140C_SID.jsonl"
-printf 'task=P300\nworktree=%s\nsid=%s\nsid_bytes=100\n' "$P140C/.worktrees/dev" "$P140C_SID" > "$P140C/.pi/team/state/dev.env"
+p140_state "$P140C" P300 "$P140C_SID" 100
 P140C_OUT="$(p140_run "$P140C" dispatch dev P300 docs/team/tasks/P300-fixture.md --print)"
 assert_has_echo "$P140C_OUT" "0 bytes ≈ 0 tokens" "R6：一个字节没长的上一轮被点名（工具自己的粗粒度词）"
 assert_has_echo "$P140C_OUT" "$P140C_SID" "R6：点名上一轮的会话"
@@ -18897,8 +19027,7 @@ p140_brief "$P151A" OLD dev apply - 'none (infra) — fixture' -
 p140_brief "$P151A" P201 dev apply - - -
 p140_wt "$P151A" dev "$(p140_branch "$P151A" dev P201)"
 mkdir -p "$P151A/.pi/team/state"
-printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' \
-  "$P151A/.worktrees/dev" "$P151A/docs/team/tasks/OLD-fixture.md" "$(p140_branch "$P151A" dev OLD)" > "$P151A/.pi/team/state/dev.env"
+p140_state "$P151A" OLD
 : > "$P151A/.pi/team/state/watchdog.log"
 P151A_REF="$(p140_run "$P151A" dispatch dev P201 docs/team/tasks/P201-fixture.md --print)"; P151A_RC=$?
 assert_eq "P151/F1：叠任务 + 锚缺失一次拒绝" "$([ "$P151A_RC" -ne 0 ] && echo yes || echo no)" "yes"

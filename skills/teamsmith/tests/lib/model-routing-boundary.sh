@@ -188,7 +188,7 @@ routing_pm_template_probes() {
   # Keep the private server/session alive while each arm deliberately stops PM.
   # Otherwise stopping its last window destroys the premise of the older rollback
   # control later in this same fixture (not a product publication failure).
-  tmux new-window -d -t routing-fixture -n boundary-anchor 'sleep 600'
+  routing_fixture_tmux new-window -d -t routing-fixture -n boundary-anchor 'sleep 600'
   check pm-template-private-anchor eq "$?" 0
   stop_fixture_seat pm
   for bad in "${faults[@]}"; do

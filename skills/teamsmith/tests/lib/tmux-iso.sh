@@ -379,3 +379,11 @@ tmux_iso_install_suite_guards() { # <真 tmux 路径>
     esac
   }
 }
+
+# P242/A9 · 路由夹具（task-model-routing.sh 与 model-routing-*.sh）的私有 server 调用。
+# 这三处以前写裸 `tmux new-window`，静态上没有任何隔离证据（M28 判据 A–D）→ §31 的隔离 lint 必红；
+# 而它们执行时靠的是 harness 的 TMUX_TMPDIR + PATH shim，**文本上看不出来**。这里把隔离写成
+# 文本可见的（env -u TMUX + 私有 TMUX_TMPDIR），并且缺私有目录时**响失败**，绝不回落默认 socket。
+routing_fixture_tmux() { # <tmux 参数…>
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:?routing fixture requires a private TMUX_TMPDIR}" tmux "$@"
+}
