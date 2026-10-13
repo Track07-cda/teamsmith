@@ -368,7 +368,7 @@
 | E12 | Product opportunity exploration in a real business project | dev3 | - | - | done |
 | E13 | Task-model routing impact exploration | verify | task/E13-task-model-routing-explore | - | done |
 | E14 | Task-model routing proposal | verify | task/E14-task-model-routing-propose | E13 | done |
-| P228 | Task-model routing core: private implementation | dev | task/P228-task-model-routing-core | E14 | wip |
+| P228 | Task-model routing core: private implementation | dev | task/P228-task-model-routing-core | E14 | done |
 | E15 | Pulse key replies: entrypoint exploration | dev2 | task/E15-pulse-key-replies-explore | - | done |
 | E16 | Pulse key replies: formal proposal | dev2 | task/E16-pulse-key-replies-propose | E15 | done |
 | V19 | Task-model routing S1: independent private verification | dev3 | task/V19-task-model-routing-s1-verify | P228 | done |
@@ -381,10 +381,10 @@
 | P233 | Independent verification of the release tooling (P229) | dev3 | - | - | done |
 | P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | todo |
 | V21 | task-model-routing S2: independent verification | verify | - | - | done |
-| P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | wip |
+| P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | done |
 | P236 | long-job-suspend rework: suspend detection must be scoped to the owning session | dev-bob | - | - | done |
 | V22 | Suspend owner-scope rework: independent verification | verify | - | - | done |
-| V23 | task-model-routing S3: independent verification | verify | - | - | wip |
+| V23 | task-model-routing S3: independent verification | verify | - | - | done |
 
 ## 当前里程碑
 
