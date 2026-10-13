@@ -385,10 +385,11 @@
 | P236 | long-job-suspend rework: suspend detection must be scoped to the owning session | dev-bob | - | - | done |
 | V22 | Suspend owner-scope rework: independent verification | verify | - | - | done |
 | V23 | task-model-routing S3: independent verification | verify | - | - | done |
-| P237 | long-job-suspend B knife: the worker prompt's three-state contract | dev | - | - | wip |
-| V24 | long-job-suspend B knife: independent verification | verify | - | - | wip |
+| P237 | long-job-suspend B knife: the worker prompt's three-state contract | dev | - | - | done |
+| V24 | long-job-suspend B knife: independent verification | verify | - | - | done |
 | P238 | Routing suite into the gate: per-group self-sufficiency, a gate section, selector attribution | dev-bob | - | - | wip |
 | P239 | Ledger ban must fire on report-only changes (+ template line) | dev3 | - | - | wip |
+| P240 | Restore the crashed-agent/resume path broken by the routing merge | dev | - | - | wip |
 
 ## 当前里程碑
 
