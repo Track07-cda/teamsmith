@@ -79,7 +79,9 @@ run_tree() { # <tree> <repo> <team args...>：在夹具仓库里跑那棵树的 
 
 init_proj() { # <tree> <repo> [extra init args...]
   local t="$1" p="$2"; shift 2
-  run_tree "$t" "$p" init --session "$(basename "$p")" --agents "dev verify" --vcs local --gates true "$@"
+  run_tree "$t" "$p" init --session "$(basename "$p")" --agents "dev verify" --vcs local --gates true \
+    --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' \
+    --pm-model 'deepseek/deepseek-flash' "$@"
 }
 
 paths_of() { local t="$1" d="$2"; ( cd "$d" && bash "$t/skills/teamsmith/scripts/team" paths 2>&1 ); }
@@ -435,7 +437,7 @@ if want surfaces; then
   else
     bad "README §Install 行序不对：npm=[$n_r_npm] pi install=[$n_r_pi] install.sh=[$n_r_sh]"
   fi
-  local floor_r; floor_r="$(bash_floor_of "$tree")"
+  floor_r="$(bash_floor_of "$tree")"
   grep -F 'bash' "$tree/README.md" | grep -F "≥ $floor_r" | grep -qiF 'checks' \
     && ok "README 的 bash 行写明入口会检查它（≥ $floor_r）" || bad "README 的 bash 行没写检查（要求 ≥ $floor_r 且有 checks；真源 BASH_MIN_MAJOR=$floor_r）"
 fi

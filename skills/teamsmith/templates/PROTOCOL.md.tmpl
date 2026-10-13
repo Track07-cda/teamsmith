@@ -40,6 +40,23 @@
   `team review <ID> --dir <checkout>` runs the gates and writes the evidence.
 - A brief may require stricter commands than the project gates; the brief wins.
 
+## Model policy: task categories, not seats
+
+- The contract maps **task categories** to models (`TEAM_TASK_MODELS`, e.g. `routine=… analysis=… verify=…`) and
+  names one independent `TEAM_PM_MODEL`; a seat is a roster name, not a model identity.
+- The brief's `category:` picks a **new** dispatch's model; `team dispatch --model` overrides it for that launch.
+  A same-task recovery keeps the committed model/SID even if the category later leaves the map; a new task citing a
+  dropped category is refused. Editing the map changes future selections only.
+- Choose by the work: routine for bounded ordinary implementation, analysis for complex planning/judgment, verify
+  for independent adversarial review (a project that uses other names says so in its briefs — the CLI never maps
+  phase or seat to a model automatically). Put the rationale in the brief when the choice is not obvious.
+- Shared-token concurrency: strong models are the scarce resource (`TEAM_MODEL_LIMITS`); `team ps` shows the
+  current occupancy, so keep the parallel agent count inside the provider quota and queue the rest.
+- A running PM keeps its model until an explicit `team up --fresh-pm`; hand over through disk (brief, report,
+  thread, `state/`), not through a session conversation.
+- Changing the project's own contract, launching a fresh PM, landing source on a shared branch/skill path and
+  adopting a shared source are **distinct gates**: preview the exact command and get authorization per operation.
+
 ## Specs (OpenSpec)
 
 Specs and change proposals live in `openspec/` (required dependency). `openspec validate --all --strict` is part of

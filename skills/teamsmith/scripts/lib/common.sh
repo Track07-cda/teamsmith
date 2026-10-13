@@ -815,9 +815,20 @@ team_load_config() {
   # 项目自己的配置或推导结果填值。非锁定调用（测试夹具直接 source common.sh）行为与历史一致。
   if [ "${TEAM_IDENTITY_LOCKED:-0}" = "1" ]; then team_identity_lock_env; fi
 
+  TEAM_MODEL_RETIRED_ENV=""
+  local _retired
+  for _retired in TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; do
+    [ -z "${!_retired+x}" ] || TEAM_MODEL_RETIRED_ENV="${TEAM_MODEL_RETIRED_ENV:+$TEAM_MODEL_RETIRED_ENV }$_retired"
+  done
+  TEAM_UPGRADE_CONFIRMED="${TEAM_ASSUME_YES:-0}"
   TEAM_CONFIG="$(team_find_config || true)"
+  # Migration must refuse dynamic relevant shapes before sourcing them. Normal config remains trusted Bash.
+  if [ -n "$TEAM_CONFIG" ] && [ "${CMD:-}" = config ] && [ "${ARGS[1]:-}" = upgrade-models ]; then
+    team_config_model_source_shape "$TEAM_CONFIG" || return $?
+  fi
 
   if [ -n "$TEAM_CONFIG" ]; then
+    TEAM_CONFIG_LOADED_FP="$(sha256sum "$TEAM_CONFIG" | cut -d' ' -f1)"
     # 环境变量优先于配置文件：用户临时覆盖（TEAM_MIN_FREE_SWAP_MB=0 team dispatch …）
     # 必须能赢过文件里的值，否则文档里的“临时绕过”根本不生效。
     # M40 例外：锁定模式下身份四件套不进这个覆盖表（继承值不许静默赢过 cwd）。
@@ -884,9 +895,9 @@ team_load_config() {
   TEAM_PI_BIN="${TEAM_PI_BIN:-pi}"
   TEAM_MEMINFO_FILE="${TEAM_MEMINFO_FILE:-}"
   TEAM_INSTALL_CMD="${TEAM_INSTALL_CMD:-}"
-  TEAM_DEFAULT_MODEL="${TEAM_DEFAULT_MODEL:-deepseek/deepseek-flash}"
-  # PM 自己的启动参数（team up / pulse 用）
-  TEAM_PM_MODEL="${TEAM_PM_MODEL:-}"          # 空 = 用 TEAM_DEFAULT_MODEL
+  TEAM_TASK_MODELS="${TEAM_TASK_MODELS:-}"
+  # PM policy is independent and required; loader remains reachable for repairs.
+  TEAM_PM_MODEL="${TEAM_PM_MODEL:-}"
   TEAM_PM_SESSION_ID="${TEAM_PM_SESSION_ID:-}" # 空 = 用 pi -c 延续本目录上一个会话（保住历史）
   TEAM_PM_EXTRA_PI_ARGS="${TEAM_PM_EXTRA_PI_ARGS:-}"
   # 模型并发上限：支持通配（如 openai-codex/*=1）。默认给低额度订阅留出安全边界。
@@ -955,7 +966,6 @@ team_load_config() {
   TEAM_INBOX_MAX_CHARS="${TEAM_INBOX_MAX_CHARS:-150}"
   TEAM_CONFIRM_WRITES="${TEAM_CONFIRM_WRITES:-1}"
   TEAM_AGENTS="${TEAM_AGENTS:-}"
-  TEAM_AGENT_MODELS="${TEAM_AGENT_MODELS:-}"
   TEAM_EXTRA_PI_ARGS="${TEAM_EXTRA_PI_ARGS:-}"
   # ---- agent adapter（任意 TUI agent）：空值 = 内置 Pi 行为（历史默认，逐字节不变） ----
   # TEAM_AGENT_CMD       ：启动 agent CLI 的命令模板（占位符见 references/agent-adapters.md）
@@ -1286,17 +1296,17 @@ team_agent_known() {
   return 1
 }
 
+team_models_known() {
+  local tok a
+  if team_task_map_violation "${TEAM_TASK_MODELS:-}" >/dev/null; then
+    for tok in $TEAM_TASK_MODELS; do printf '%s\n' "${tok#*=}"; done
+  fi
+  team_config_model_shape_ok "${TEAM_PM_MODEL:-}" && printf '%s\n' "$TEAM_PM_MODEL"
+  for a in $(team_agents); do team_assignment_load "$a" && team_identity_delivered model && printf '%s\n' "${TEAM_ASSIGN[model]}"; done
+}
 team_agent_model() {
-  local want="$1" pair val
-  for pair in $(printf '%s' "$TEAM_AGENT_MODELS" | tr '\n\t' '  '); do
-    case "$pair" in
-      "$want"=*)
-        val="${pair#*=}"
-        [ -n "$val" ] || continue      # 空值的 token（dev=）与「没这个 token」同一个解析（P47/R4）
-        printf '%s\n' "$val"; return 0 ;;
-    esac
-  done
-  printf '%s\n' "$TEAM_DEFAULT_MODEL"
+  team_assignment_load "$1" || return 0
+  printf '%s\n' "${TEAM_ASSIGN[model]}"
 }
 
 # M14：模型列的来源标注 —— 名册 state 里的 model 只是「上次用了什么」的展示记录，不参与派单解析
@@ -1305,17 +1315,418 @@ team_agent_model() {
 #   显式     = 上次派单由 --model 指定（dispatch 记 model_src=explicit）；
 #   历史记录 = 旧记录，配置在那之后改了 —— 下次派单会用新配置，不是它。
 team_agent_model_src() { # <agent> → 配置 | 显式 | 历史记录
-  local a="$1" st src
-  st="$(team_state_get "$a" model '')"
-  [ -n "$st" ] || { printf '配置\n'; return 0; }
-  src="$(team_state_get "$a" model_src '')"
-  [ "$src" = "explicit" ] && { printf '显式\n'; return 0; }
-  if [ "$st" = "$(team_agent_model "$a")" ]; then printf '配置\n'; else printf '历史记录\n'; fi
+  team_assignment_load "$1" || { printf 'unavailable\n'; return 0; }
+  printf '%s/%s\n' "${TEAM_ASSIGN[selected_via]}" "${TEAM_ASSIGN[launch_via]}"
   return 0
 }
 
 team_require_agent() {
   team_agent_known "$1" || team_die "未知 agent：$1（名册：$(team_agents | tr '\n' ' ')）"
+}
+
+# ---------------------------------------------------------------- Task model policy and committed launch identity (P228)
+team_category_valid() { [[ "${1:-}" =~ ^[a-z][a-z0-9-]*$ ]]; }
+
+team_task_map_violation() {
+  local value="${1:-}" tok cat model seen=' '
+  case "$value" in ''|*$'\n'*|*$'\r'*|*'#'*) printf 'task map 必须非空、单行、可表示\n'; return 1 ;; esac
+  for tok in $value; do
+    cat="${tok%%=*}"; model="${tok#*=}"
+    if [[ "$tok" != *=* ]] || [[ "$model" == *=* ]] || ! team_category_valid "$cat"; then
+      printf 'category token 不合法：%s；接受 category=provider/model\n' "$tok"; return 1
+    fi
+    case "$seen" in *" $cat "*) printf 'category 重复：%s\n' "$cat"; return 1 ;; esac
+    seen="$seen$cat "
+    team_config_model_violation "$model" || return 1
+  done
+  # 唯一非法的映射是**空映射**（上面第一行）以及重复/畸形/不可表示等值规则；类别词汇是项目自己的。
+  # 旧实现在这里强制 analysis/verify 两个名字（P228 第六轮 F6）：合同明确写 initial routine/analysis/verify
+  # 只是示例、示例映射不关闭引擎词汇（specs/memory-and-deps + dispatch delta），而写者/读侧加载器共用
+  # 这个函数，于是「自定义词汇整映射」被拒、config list --json 判 policy.categories=[]（V19 第五轮实测）。
+  # 未映射类别用于**新选择**仍由 team_task_policy_model 拒绝；可信恢复不看映射成员（同任务不改身份）。
+  return 0
+}
+
+team_task_policy_model() {
+  local tok
+  for tok in ${TEAM_TASK_MODELS:-}; do
+    [ "${tok%%=*}" != "$1" ] || { printf '%s\n' "${tok#*=}"; return 0; }
+  done
+  return 1
+}
+
+team_model_policy_issues() {
+  local key reason
+  for key in TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; do
+    if [ -n "${TEAM_CONFIG:-}" ] && grep -vE '^[[:space:]]*#' "$TEAM_CONFIG" | grep -Eq "(^|[^A-Za-z0-9_])$key([[:space:]]*=|[[:space:]])"; then
+      printf 'migration_required: %s 含退休键 %s；修法：%s config upgrade-models --task-models <完整映射> --pm-model <独立模型> --dry-run\n' "$TEAM_CONFIG" "$key" "$TEAM_CLI"
+    fi
+    case " ${TEAM_MODEL_RETIRED_ENV:-} " in *" $key "*) printf 'migration_required: 环境退休键 %s；修法：unset %s\n' "$key" "$key" ;; esac
+  done
+  if ! reason="$(team_task_map_violation "${TEAM_TASK_MODELS:-}")"; then printf 'TEAM_TASK_MODELS: %s；修法：%s config set TEAM_TASK_MODELS <完整映射> --yes\n' "$reason" "$TEAM_CLI"; fi
+  if ! reason="$(team_config_model_violation "${TEAM_PM_MODEL:-}")"; then printf 'TEAM_PM_MODEL: %s；修法：%s config set TEAM_PM_MODEL <独立模型> --yes\n' "$reason" "$TEAM_CLI"; fi
+}
+team_model_policy_guard() {
+  local issues; issues="$(team_model_policy_issues)"
+  [ -z "$issues" ] && return 0
+  team_err "$issues"; return 1
+}
+
+# Locks are outside project state: preview/refusal never alters project timestamps.
+# Fixed order: seat -> admission -> config. PID start time prevents PID-reuse theft.
+team_proc_start_identity() { [ -r "/proc/$1/stat" ] && awk '{print $22}' "/proc/$1/stat"; }
+team_lock_path() {
+  local identity="${TEAM_MAIN_ROOT:-$PWD}|$1" sum
+  sum="$(printf '%s' "$identity" | sha256sum | cut -d' ' -f1)"
+  printf '%s/teamsmith-lock-%s\n' "${TMPDIR:-/tmp}" "$sum"
+}
+team_with_lock() ( # <resource> <command> [args...]
+  local resource="$1"; shift
+  local lock owner start attempt i=0 max="${TEAM_LOCK_WAIT_TICKS:-100}" mine="$BASHPID"
+  lock="$(team_lock_path "$resource")"
+  while ! mkdir -m 700 "$lock" 2>/dev/null; do
+    owner=''; start=''; read -r owner start attempt < "$lock/owner" 2>/dev/null || true
+    if [[ "$owner" =~ ^[0-9]+$ ]] && [ -n "$start" ] && { [ ! -d "/proc/$owner" ] || [ "$(team_proc_start_identity "$owner")" != "$start" ]; }; then
+      # Preserve stale ownership evidence before reclaiming. Pending launch remains authoritative.
+      local stale="$lock.stale.$mine.$RANDOM"
+      mv "$lock" "$stale" 2>/dev/null && continue
+    fi
+    i=$((i + 1)); [ "$i" -le "$max" ] || { team_err "锁等待失败：$resource owner=${owner:-unknown}（不强抢）"; return 1; }
+    sleep 0.1
+  done
+  printf '%s %s %s\n' "$mine" "$(team_proc_start_identity "$mine")" "${TEAM_LAUNCH_NONCE:-none}" > "$lock/owner"
+  trap 'rm -f "$lock/owner"; rmdir "$lock" 2>/dev/null || true' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  "$@"
+)
+
+team_identity_snapshot() { # One bounded DATA snapshot, for worker and PM records.
+  local f="$1" data='' bytes
+  TEAM_IDENTITY_DATA=''; TEAM_IDENTITY_DIAGNOSTIC='missing identity record'
+  [ -f "$f" ] || return 1
+  bytes="$(team_file_bytes "$f")"
+  [[ "$bytes" =~ ^[0-9]+$ ]] && [ "$bytes" -le 65536 ] || { TEAM_IDENTITY_DIAGNOSTIC='identity exceeds bounded read'; return 1; }
+  # Bash would silently drop NUL. A successful read means NUL/overlong data,
+  # including growth after the stat. Monitor validates its own captured bytes.
+  if IFS= read -r -d '' -n 65537 data < "$f"; then TEAM_IDENTITY_DIAGNOSTIC='NUL/oversized identity'; return 1; fi
+  TEAM_IDENTITY_DATA="$data"; TEAM_IDENTITY_DIAGNOSTIC=''
+}
+team_assignment_load() { # DATA, never source/eval; shared parse also used by monitor.
+  local seat="$1" f="${2:-$TEAM_STATE_DIR/$1.env}"
+  declare -gA TEAM_ASSIGN=(); TEAM_ASSIGN_DIAGNOSTIC='missing assignment'
+  [ -f "$f" ] || return 1
+  team_identity_snapshot "$f" || { TEAM_ASSIGN_DIAGNOSTIC="$TEAM_IDENTITY_DIAGNOSTIC"; return 1; }
+  team_assignment_parse "$seat" "$TEAM_IDENTITY_DATA"
+}
+team_assignment_parse() { # seat snapshot; also the monitor's authoritative validator
+  local seat="$1" data="$2" line key val
+  declare -gA TEAM_ASSIGN=(); TEAM_ASSIGN_DIAGNOSTIC='malformed assignment'
+  [ "${#data}" -le 65536 ] || { TEAM_ASSIGN_DIAGNOSTIC='assignment exceeds bounded read'; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" == *=* ]] || { TEAM_ASSIGN_DIAGNOSTIC='malformed line'; return 1; }
+    key="${line%%=*}"; val="${line#*=}"
+    [[ "$key" =~ ^[a-z_]+$ ]] || { TEAM_ASSIGN_DIAGNOSTIC='malformed field'; return 1; }
+    [ -z "${TEAM_ASSIGN[$key]+x}" ] || { TEAM_ASSIGN_DIAGNOSTIC="duplicate $key"; return 1; }
+    TEAM_ASSIGN[$key]="$val"
+  done < <(printf '%s' "$data")
+  [ "${TEAM_ASSIGN[assignment_version]:-}" = 1 ] || { TEAM_ASSIGN_DIAGNOSTIC='legacy/unknown assignment_version'; return 1; }
+  for key in task taskfile category branch worktree window seat model selected_via launch_via sid launch_nonce started mode; do
+    [ -n "${TEAM_ASSIGN[$key]:-}" ] || { TEAM_ASSIGN_DIAGNOSTIC="incomplete $key"; return 1; }
+  done
+  # P228/R6（OBS1）：identity_via = 模板实际交付的身份字段（记录形状的一部分）。缺失 = 历史记录
+  # （内建 Pi 路径：Teamsmith 自己渲染完整身份），按完整交付读；写了就必须是合法集合，
+  # 否则这份记录本身可疑 → 当成不可信记录。
+  [ -n "${TEAM_ASSIGN[identity_via]+x}" ] || TEAM_ASSIGN[identity_via]='provider,model,session_id'
+  team_identity_field_list_valid "${TEAM_ASSIGN[identity_via]}" || { TEAM_ASSIGN_DIAGNOSTIC='malformed identity_via'; return 1; }
+  [ -n "${TEAM_ASSIGN[sid_bytes]+x}" ] || { TEAM_ASSIGN_DIAGNOSTIC='incomplete sid_bytes'; return 1; }
+  [ "${TEAM_ASSIGN[seat]}" = "$seat" ] && [ "${TEAM_ASSIGN[window]}" = "$seat" ] || { TEAM_ASSIGN_DIAGNOSTIC='seat/window mismatch'; return 1; }
+  team_category_valid "${TEAM_ASSIGN[category]}" && team_config_model_shape_ok "${TEAM_ASSIGN[model]}" || { TEAM_ASSIGN_DIAGNOSTIC='malformed category/model'; return 1; }
+  [[ "${TEAM_ASSIGN[sid]}" =~ ^[A-Za-z0-9._-]+$ ]] && [[ "${TEAM_ASSIGN[launch_nonce]}" =~ ^[A-Za-z0-9._-]+$ ]] || { TEAM_ASSIGN_DIAGNOSTIC='malformed SID/nonce'; return 1; }
+  case "${TEAM_ASSIGN[selected_via]}" in policy|explicit) ;; *) TEAM_ASSIGN_DIAGNOSTIC='malformed selected_via'; return 1 ;; esac
+  case "${TEAM_ASSIGN[launch_via]}" in policy|explicit|assignment) ;; *) TEAM_ASSIGN_DIAGNOSTIC='malformed launch_via'; return 1 ;; esac
+  case "${TEAM_ASSIGN[mode]}" in fresh|continued) ;; *) TEAM_ASSIGN_DIAGNOSTIC='malformed mode'; return 1 ;; esac
+  case "${TEAM_ASSIGN[sid_bytes]}" in *[!0-9]*) TEAM_ASSIGN_DIAGNOSTIC='malformed sid_bytes'; return 1 ;; esac
+  for key in taskfile worktree; do
+    team_launch_path_valid "${TEAM_ASSIGN[$key]}" || { TEAM_ASSIGN_DIAGNOSTIC="noncanonical $key"; return 1; }
+  done
+  team_launch_time_valid "${TEAM_ASSIGN[started]}" || { TEAM_ASSIGN_DIAGNOSTIC='malformed started'; return 1; }
+  [[ "${TEAM_ASSIGN[taskfile]}" == /* ]] && [[ "${TEAM_ASSIGN[worktree]}" == /* ]] || { TEAM_ASSIGN_DIAGNOSTIC='noncanonical path'; return 1; }
+  TEAM_ASSIGN_DIAGNOSTIC=''; return 0
+}
+team_launch_path_valid() { # canonical absolute data path; no GNU readlink -m dependency
+  local path="$1" probe="$1" suffix='' canonical base
+  [[ "$path" == /* ]] || return 1
+  [ "$path" != / ] || return 0
+  case "$path/" in *'//'*|*'/./'*|*'/../'*) return 1 ;; esac
+  # Resolve the nearest existing directory physically, preserving a missing
+  # suffix for historical records. A link as the final component is not the
+  # canonical name (including a dangling link).
+  while [ ! -d "$probe" ]; do
+    [ ! -L "$probe" ] || return 1
+    base="${probe##*/}"; suffix="/$base$suffix"; probe="${probe%/*}"
+    [ -n "$probe" ] || probe=/
+  done
+  [ ! -L "$probe" ] || return 1
+  canonical="$(cd "$probe" 2>/dev/null && pwd -P)" || return 1
+  if [ "$canonical" = / ] && [ -n "$suffix" ]; then canonical=''; fi
+  [ "$canonical$suffix" = "$path" ]
+}
+team_launch_time_valid() { # exact publisher UTC format; no GNU/BSD date dependency
+  local value="$1" year month day hour minute second max_day=31
+  [[ "$value" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$ ]] || return 1
+  year=$((10#${BASH_REMATCH[1]})); month=$((10#${BASH_REMATCH[2]})); day=$((10#${BASH_REMATCH[3]}))
+  hour=$((10#${BASH_REMATCH[4]})); minute=$((10#${BASH_REMATCH[5]})); second=$((10#${BASH_REMATCH[6]}))
+  ((year >= 1 && month >= 1 && month <= 12 && day >= 1 && hour <= 23 && minute <= 59 && second <= 59)) || return 1
+  case "$month" in
+    4|6|9|11) max_day=30 ;;
+    2) max_day=28; if ((year % 400 == 0 || (year % 4 == 0 && year % 100 != 0))); then max_day=29; fi ;;
+  esac
+  ((day <= max_day))
+}
+# A deliberately narrow literal argv grammar, not a shell parser. Never eval an
+# adapter to discover its argv: substitutions/operators make ownership unprovable.
+# Unquoted pathname/brace/tilde expansion is likewise not literal: its result
+# depends on the launch cwd/HOME and can introduce owned options after the guard.
+team_literal_argv() {
+  local text="$1" c quote='' word='' raw='' active=0 i placeholder
+  TEAM_LITERAL_TOKENS=(); TEAM_LITERAL_RAW=()
+  for ((i=0; i<${#text}; i++)); do
+    c="${text:i:1}"
+    case "$c" in '$'|'`'|$'\n'|$'\r') team_err 'identity argv cannot contain expansion/newline；使用 literal 参数和未加引号的身份占位符'; return 1 ;; esac
+    if [ -n "$quote" ]; then
+      # Double-quoted backslashes have shell escape semantics; single-quoted
+      # backslashes are literal. Do not silently parse a different value.
+      if [ "$quote" = '"' ] && [ "$c" = '\' ]; then
+        team_err 'identity argv cannot contain double-quoted shell escapes；改用 single-quoted literal 数据'; return 1
+      fi
+      raw+="$c"
+      if [ "$c" = "$quote" ]; then quote=''; else word+="$c"; fi
+      active=1; continue
+    fi
+    case "$c" in
+      "'"|'"') quote="$c"; raw+="$c"; active=1 ;;
+      '\') # Conservatively refuse escaping rather than infer a hidden option.
+        team_err 'identity argv cannot contain shell escapes；使用 literal 参数和身份占位符'; return 1 ;;
+      ';'|'|'|'&'|'<'|'>'|'('|')'|'#') team_err 'identity argv cannot contain shell operators；使用单条 CLI 与身份占位符'; return 1 ;;
+      '*'|'?'|'['|']'|'~')
+        team_err 'identity argv cannot contain unquoted pathname/tilde expansion；literal 数据须加引号'; return 1 ;;
+      '{')
+        # The template's closed placeholder vocabulary is data substituted with
+        # shell-quoted values. Everything else must be quoted literal data, not
+        # a brace expression for the launch shell to turn into another argv.
+        placeholder="${text:i}"; placeholder="${placeholder%%\}*}}"
+        case "$placeholder" in
+          '{cwd}'|'{session_id}'|'{model}'|'{provider}'|'{prompt_file}'|'{prompt}'|'{skill_dir}'|'{notify_ext}'|'{bg_ext}'|'{extra_args}'|'{resume_args}'|'{summary_file}'|'{summary}'|'{agent}')
+            word+="$placeholder"; raw+="$placeholder"; active=1; i=$((i+${#placeholder}-1)) ;;
+          *) team_err 'identity argv cannot contain unquoted brace expansion；使用已知占位符或加引号的 literal 数据'; return 1 ;;
+        esac ;;
+      '}') team_err 'identity argv cannot contain unquoted braces；literal 数据须加引号'; return 1 ;;
+      ' '|$'\t') if [ "$active" = 1 ]; then TEAM_LITERAL_TOKENS+=("$word"); TEAM_LITERAL_RAW+=("$raw"); word=''; raw=''; active=0; fi ;;
+      *) word+="$c"; raw+="$c"; active=1 ;;
+    esac
+  done
+  [ -z "$quote" ] || { team_err 'identity argv has unclosed quote'; return 1; }
+  [ "$active" != 1 ] || { TEAM_LITERAL_TOKENS+=("$word"); TEAM_LITERAL_RAW+=("$raw"); }
+}
+# Role proof for the literal grammar, not a Pi option/arity catalogue. The only
+# foreign scalar pairs interpreted here are the tool-loading pairs Teamsmith
+# itself emits (-e/--skill). Everything else with unknown arity must be AFTER
+# every protected selector/list: it cannot consume an earlier argument. Quoting
+# an option does not change its role. Ordinary suffix data stays literal/opaque.
+team_argv_roles_guard() { # first argv index; TEAM_LITERAL_* are caller-owned
+  local first="${1:-0}" i j arg value later
+  for ((i=first; i<${#TEAM_LITERAL_TOKENS[@]}; i++)); do
+    arg="${TEAM_LITERAL_TOKENS[i]}"
+    case "$arg" in
+      -e|--skill)
+        i=$((i+1)); value="${TEAM_LITERAL_TOKENS[i]:-}"
+        case "$value" in ''|-*|*'{provider}'*|*'{model}'*|*'{session_id}'*|*'{extra_args}'*|*'{resume_args}'*)
+          team_err "identity argv role unprovable: $arg needs one literal tool-data value, not a selector/list；补普通数据值"; return 1 ;; esac ;;
+      --provider|--model|--session-id|--session|-m|-s)
+        i=$((i+1)) ;; # ownership/value is checked separately, never counted twice
+      --provider=*|--model=*|--session-id=*|--session=*|-m?*|-s?*|--continue*|--resume*|-c*|-r*) ;;
+      --no-tools) ;; # the existing zero-arity literal control, not an unknown flag
+      -*)
+        for ((j=i+1; j<${#TEAM_LITERAL_TOKENS[@]}; j++)); do
+          later="${TEAM_LITERAL_TOKENS[j]}"
+          case "$later" in
+            *'{provider}'*|*'{model}'*|*'{session_id}'*|*'{extra_args}'*|*'{resume_args}'*|--provider*|--model*|--session*|--continue*|--resume*|-m*|-s*|-c*|-r*)
+              team_err "identity argv role unprovable: unknown arity $arg before protected $later；把未知参数移到全部身份/恢复参数之后"; return 1 ;; esac
+        done ;;
+    esac
+  done
+}
+team_identity_extra_guard() { # The same owned-option vocabulary for worker/PM.
+  local arg
+  team_literal_argv "${1:-}" && team_argv_roles_guard 0 || return 1
+  for arg in "${TEAM_LITERAL_TOKENS[@]}"; do
+    case "$arg" in --model*|--provider*|--session*|--continue*|--resume*|-c*|-r*|-m*|-s*|*.jsonl|*/sessions/*|--)
+      team_err "extra identity argument refused: $arg；移除该 extra，由 Teamsmith 选择 model/provider/session/continue"; return 1 ;; esac
+  done
+}
+team_template_identity_guard() { # kind template [fresh|continued]
+  local kind="$1" tpl="$2" mode="${3:-fresh}" arg raw value expected field i count token
+  TEAM_TEMPLATE_BOUND_FIELDS=''   # P228/R6：本函数证明出的「已绑定身份字段」只对本次调用有效
+  [ -n "$tpl" ] || return 0
+  team_literal_argv "$tpl" || { team_err "$(team_agent_kind_var "$kind"): 身份不可证明；修正为单条 literal CLI + 身份占位符"; return 1; }
+  local -a words=("${TEAM_LITERAL_TOKENS[@]}") raws=("${TEAM_LITERAL_RAW[@]}")
+  local -A seen=() refs=()
+  # Prove the surrounding roles before the ownership walk. Expand argv-list
+  # fragments into this proof too: a dangling tool flag or unknown-arity extra
+  # must not eat a later selector or {resume_args}. Retain list markers even when
+  # empty/fresh, since a template declaring a binding cannot downgrade to opaque.
+  local -a role_words=() role_raws=()
+  for ((i=0; i<${#words[@]}; i++)); do
+    role_words+=("${words[i]}"); role_raws+=("${raws[i]}")
+    case "${raws[i]}" in
+      '{extra_args}')
+        local extra="${TEAM_EXTRA_PI_ARGS:-}"
+        [ "$kind" != pm ] || extra="${TEAM_PM_EXTRA_PI_ARGS:-}"
+        team_literal_argv "$extra" || return 1
+        role_words+=("${TEAM_LITERAL_TOKENS[@]}"); role_raws+=("${TEAM_LITERAL_RAW[@]}") ;;
+      '{resume_args}')
+        team_literal_argv "${TEAM_PM_RESUME_ARGS:-}" || return 1
+        role_words+=("${TEAM_LITERAL_TOKENS[@]}"); role_raws+=("${TEAM_LITERAL_RAW[@]}") ;;
+    esac
+  done
+  TEAM_LITERAL_TOKENS=("${role_words[@]}"); TEAM_LITERAL_RAW=("${role_raws[@]}")
+  team_argv_roles_guard 1 || return 1
+  # Count every occurrence, including separate selector values and duplicates in
+  # one word, before the selector walk consumes those values.
+  for raw in "${raws[@]}"; do
+    for token in provider model session_id extra_args resume_args; do
+      local rest="$raw"
+      while [[ "$rest" == *"{$token}"* ]]; do
+        # An identity inside a quoted shell/script word or concatenated data is
+        # not an owned argv value, even when all placeholder names occur.
+        case "$token:$raw" in
+          'provider:{provider}'|'provider:--provider={provider}'|\
+          'model:{model}'|'model:--model={model}'|'model:-m{model}'|\
+          'session_id:{session_id}'|'session_id:--session-id={session_id}'|'session_id:-s{session_id}'|\
+          'extra_args:{extra_args}'|'resume_args:{resume_args}') ;;
+          *) team_err "$(team_agent_kind_var "$kind"): {$token} 必须是独立未加引号的 argv 值，不能藏在 shell/script/拼接词里"; return 1 ;;
+        esac
+        refs[$token]=$((${refs[$token]:-0}+1)); rest="${rest#*"{$token}"}"
+      done
+    done
+  done
+  for ((i=0; i<${#words[@]}; i++)); do
+    arg="${words[i]}"; raw="${raws[i]}"; field=''; value=''; expected=''
+    if [[ "$arg" =~ [[:space:]](--model|--provider|--session|--continue|--resume|-m|-s|-c|-r) ]]; then
+      team_err "$(team_agent_kind_var "$kind"): identity option hidden in quoted/script argv；使用单条 literal CLI + 身份占位符"; return 1
+    fi
+    case "$arg" in
+      -e|--skill) i=$((i+1)); continue ;; # proved scalar data, never a selector
+      --provider|--model|--session-id|-m|-s)
+        case "$arg" in --provider) field=provider ;; --model|-m) field=model ;; *) field=session_id ;; esac
+        i=$((i+1)); value="${raws[i]:-}" ;;
+      --provider=*|--model=*|--session-id=*)
+        field="${arg%%=*}"; field="${field#--}"; [ "$field" != session-id ] || field=session_id
+        value="${raw#*=}" ;;
+      -m*) field=model; value="${raw#-m}" ;;
+      -s*) field=session_id; value="${raw#-s}" ;;
+      --session*|--continue*|--resume*|-c*|-r*|*.jsonl|*/sessions/*|--)
+        team_err "$(team_agent_kind_var "$kind"): hard-coded continuity/identity refused: $arg；worker 用 --session-id {session_id}，PM 用 {resume_args}"; return 1 ;;
+    esac
+    if [ -n "$field" ]; then
+      expected="{$field}"
+      [ "$kind" != pm ] || [ "$field" != session_id ] || { team_err 'TEAM_PM_CMD: session selector 必须仅来自 {resume_args}（fresh-pm 会清空它）'; return 1; }
+      [ "$value" = "$expected" ] && [ "$raw" = "$arg" ] || { team_err "$(team_agent_kind_var "$kind"): $arg 必须绑定未加引号的 $expected；不接受 hard-coded/missing identity"; return 1; }
+      [ -z "${seen[$field]+x}" ] || { team_err "$(team_agent_kind_var "$kind"): duplicate identity selector $field"; return 1; }
+      seen[$field]=1
+    fi
+    case "$arg" in *'{extra_args}'*|*'{resume_args}'*)
+      [ "$raw" = '{extra_args}' ] || [ "$raw" = '{resume_args}' ] || { team_err 'argv-list placeholder must stand alone and unquoted'; return 1; } ;; esac
+  done
+  for token in provider model session_id extra_args resume_args; do
+    count="${refs[$token]:-0}"; [ "$count" -le 1 ] || { team_err "$(team_agent_kind_var "$kind"): duplicate {$token}"; return 1; }
+  done
+  # Presence is not ownership: a bare identity or an unrelated option's value
+  # never proves that the CLI receives that identity selector. This applies to
+  # fresh too; opaque fresh templates without identity refs remain opaque.
+  for token in provider model session_id; do
+    if [ "${refs[$token]:-0}" != 0 ] && [ "${seen[$token]:-0}" != 1 ]; then
+      team_err "$(team_agent_kind_var "$kind"): unbound {$token}；必须绑定对应 identity selector，不能作为 positional 或其他参数值"; return 1
+    fi
+  done
+  # P228/R6（OBS1）：把**已绑定**的身份字段留给发布方 —— 发布不得多于 argv 实际交付。
+  # 全绑（内建 Pi 与完整身份模板）→ 三个字段；部分绑定（如 codex 的 `-m {model}`）→ 只发布绑定的；
+  # opaque（一个不绑）→ 空 = 不宣称任何已启动身份。
+  for token in provider model session_id; do
+    [ "${seen[$token]:-0}" = 1 ] || continue
+    TEAM_TEMPLATE_BOUND_FIELDS="${TEAM_TEMPLATE_BOUND_FIELDS:+$TEAM_TEMPLATE_BOUND_FIELDS }$token"
+  done
+  if [ "$mode" = continued ]; then
+    local required='provider model session_id'; [ "$kind" != pm ] || required='provider model'
+    for token in $required; do
+      [ "${seen[$token]:-0}" = 1 ] || { team_err "$(team_agent_kind_var "$kind"): guarded continuation lacks bound {$token}；补完整身份 selector 或显式 fresh 磁盘交接"; return 1; }
+    done
+    if [ "$kind" = pm ] && [ "${refs[resume_args]:-0}" != 1 ]; then
+      team_err 'TEAM_PM_CMD: guarded continuation lacks {resume_args}；补完整身份占位符或显式 fresh 磁盘交接'; return 1
+    fi
+  fi
+}
+# P228/R6（OBS1）：「发布不得多于 argv 实际交付」的唯一判据来源。
+#   <kind> worker|pm，<tpl> 空 = 内建 renderer（Teamsmith 自己渲染完整身份）
+#   → 一行，逗号分隔的已交付字段（按 provider,model,session_id 的规范顺序）；模板不合法/判不出 → 非 0
+# 模板里已绑定的 selector 就是 argv 会拿到的字段（角色守卫刚刚逐词证明过）；partial/opaque 只是少发布，
+# 不是拒绝——诚实 opaque（如 `codex exec {prompt}`）仍在已接受合同的车道里。
+team_launch_identity_fields() { # <kind> <模板> [fresh|continued]
+  local kind="$1" tpl="$2" mode="${3:-fresh}" field out=''
+  if [ -z "$tpl" ]; then printf 'provider,model,session_id\n'; return 0; fi
+  team_template_identity_guard "$kind" "$tpl" "$mode" >/dev/null 2>&1 || return 1
+  for field in provider model session_id; do
+    case " ${TEAM_TEMPLATE_BOUND_FIELDS:-} " in *" $field "*) out="${out:+$out,}$field" ;; esac
+  done
+  printf '%s\n' "$out"
+}
+team_identity_field_list_valid() { # 记录里 identity_via 的形状：规范顺序、无重复、无未知字段
+  case "${1:-}" in
+    ''|provider|model|session_id|provider,model|provider,session_id|model,session_id|provider,model,session_id) return 0 ;;
+  esac
+  return 1
+}
+team_identity_field_in() { # <字段> <逗号列表>：字段是否在已交付集合里
+  case ",${2:-}," in *",$1,"*) return 0 ;; esac
+  return 1
+}
+team_identity_undelivered_text() { # <逗号列表> → 未交付字段（全交则空串）
+  local out='' field
+  for field in provider model session_id; do
+    team_identity_field_in "$field" "${1:-}" && continue
+    out="${out:+$out,}$field"
+  done
+  printf '%s\n' "$out"
+}
+team_identity_delivered_set() { # → 当前 assignment 的交付集合；键不存在 = 历史记录（内建 Pi：完整交付）
+  if [ -z "${TEAM_ASSIGN[identity_via]+x}" ]; then printf 'provider,model,session_id\n'
+  else printf '%s\n' "${TEAM_ASSIGN[identity_via]}"; fi
+}
+team_identity_delivered() { # <provider|model|session_id>：当前加载的 assignment 是否交付了该字段
+  team_identity_field_in "$1" "$(team_identity_delivered_set)"
+}
+team_dispatch_identity_claim() { # <已交付集合> <provider> <model（不含 provider）> <sid> → 横幅里的身份声明
+  # 全交付（内建 Pi / 完整身份模板）→ 与旧文案逐字节相同（`provider=P model=M session=S`）。
+  local delivered="$1" provider="$2" model="$3" sid="$4" parts='' missing
+  team_identity_field_in provider "$delivered" && parts="${parts:+$parts }provider=$provider"
+  team_identity_field_in model "$delivered" && parts="${parts:+$parts }model=$model"
+  team_identity_field_in session_id "$delivered" && parts="${parts:+$parts }session=$sid"
+  missing="$(team_identity_undelivered_text "$delivered")"
+  [ -z "$missing" ] || parts="${parts:+$parts；}模板未交付 $missing（不当作已启动身份发布）"
+  printf '%s\n' "$parts"
+}
+
+team_sid_candidate() { printf '%s-%s-%s-%s-%s-%s\n' "$TEAM_SESSION" "$1" "$(date +%s)" "$BASHPID" "$RANDOM" "$RANDOM"; }
+team_unique_sid() {
+  local seat="$1" wt="$2" sid i
+  for ((i=0; i<40; i++)); do
+    sid="$(team_sid_candidate "$seat")"
+    grep -qsFx "sid=$sid" "$TEAM_STATE_DIR"/*.env "$TEAM_STATE_DIR"/*.pending "$TEAM_STATE_DIR"/.assignment-* 2>/dev/null && continue
+    [ -z "$(team_session_file "$sid" "$wt" 2>/dev/null || true)" ] || continue
+    printf '%s\n' "$sid"; return 0
+  done
+  team_err '无法分配无冲突 SID'; return 1
 }
 
 # ---------------------------------------------------------------- 状态（PM 的仪表盘）
@@ -2089,14 +2500,110 @@ team_pm_prompt() { # PM 开场/恢复提示词（模板在 skill 内，可随 sk
 # TEAM_PM_RESUME_ARGS 这一次都不生效（显式的人造意图 > 持久配置键）。
 team_pm_fresh_launch() { [ "${TEAM_PM_FRESH_LAUNCH:-0}" = "1" ]; }
 
-# P58/F1：PM 席位模型的**唯一解析** —— 启动（team_pm_pi_args、team_pm_launch_cmd 的自定义 CLI 分支）与
-# 读出口（`team config list --json` 的 pm 行，见 cmd-config.sh 的 team_config_seat_state）都调它，
-# 「席位行的模型」因此不可能与实际会用的模型分叉。空 TEAM_DEFAULT_MODEL 在 team_load_config 里已回退成
-# schema 默认（那里的 `${TEAM_DEFAULT_MODEL:-…}`），所以这里的空值语义与启动逐字一致；没经过 load 的
-# 夹具（只 source common.sh）读到的就是环境原值 —— 与它自己调 team_pm_pi_args 得到的口径相同。
-team_pm_model_resolve() { printf '%s\n' "${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}"; }
+# Required independent PM policy. No worker/default fallback, even when empty.
+team_pm_model_resolve() { printf '%s\n' "${TEAM_PM_MODEL:-}"; }
+team_pm_resume_key() {
+  if team_pm_fresh_launch; then printf default
+  elif [ -n "${TEAM_PM_SESSION_ID:-}" ]; then printf 'sid:%s' "$TEAM_PM_SESSION_ID"
+  elif [ -n "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then printf 'args:%s' "$(team_trim "$TEAM_PM_RESUME_ARGS")"
+  else printf default; fi
+}
+team_pm_metadata_load() {
+  local f="$TEAM_STATE_DIR/pm-launch.env" line key val fields='' field
+  declare -A meta=()
+  TEAM_PM_SELECTED_MODEL=''; TEAM_PM_RECORDED_RESUME_KEY=''; TEAM_PM_METADATA_JSON='{}'; TEAM_PM_IDENTITY_VIA=''
+  team_identity_snapshot "$f" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" == *=* ]] || return 1
+    key="${line%%=*}"; val="${line#*=}"
+    [[ "$key" =~ ^[a-z_]+$ ]] && [ -z "${meta[$key]+x}" ] || return 1
+    meta[$key]="$val"
+  done < <(printf '%s' "$TEAM_IDENTITY_DATA")
+  [ "${meta[metadata_version]:-}" = 1 ] && [ "${meta[project]:-}" = "$TEAM_MAIN_ROOT" ] && [ "${meta[window]:-}" = "$TEAM_PM_WINDOW" ] || return 1
+  for field in model nonce time mode resume_key; do [ -n "${meta[$field]:-}" ] || return 1; done
+  # P228/R6（OBS1）：PM 记录里的 identity_via —— 缺失 = 历史记录（内建路径：完整交付）；
+  # 写了就必须是合法集合（否则这份记录本身可疑）。
+  [ -n "${meta[identity_via]+x}" ] || meta[identity_via]='provider,model,session_id'
+  team_identity_field_list_valid "${meta[identity_via]}" || return 1
+  TEAM_PM_IDENTITY_VIA="${meta[identity_via]}"
+  TEAM_PM_RECORDED_RESUME_KEY="${meta[resume_key]}"
+  team_config_model_shape_ok "${meta[model]}" && [[ "${meta[nonce]}" =~ ^[A-Za-z0-9._-]+$ ]] && team_launch_time_valid "${meta[time]}" || return 1
+  case "${meta[mode]}" in fresh|continued) ;; *) return 1 ;; esac
+  for field in project window model nonce time mode resume_key; do
+    team_config_json_escape_set "${meta[$field]}"; fields="${fields:+$fields,}\"$field\":\"$CFG_ESC\""
+  done
+  TEAM_PM_SELECTED_MODEL="${meta[model]}"; TEAM_PM_METADATA_JSON="{$fields}"
+}
+team_pm_resume_args_guard() {
+  team_literal_argv "${TEAM_PM_RESUME_ARGS:-}" && team_argv_roles_guard 0 || return 1
+  local -a words=("${TEAM_LITERAL_TOKENS[@]}")
+  local arg value i selectors=0
+  for ((i=0; i<${#words[@]}; i++)); do
+    arg="${words[i]}"
+    case "$arg" in
+      -e|--skill) i=$((i+1)) ;; # scalar role already proved; its data is not continuity
+      --model*|--provider*|-m*) team_err "PM resume_args may not override selected model/provider: $arg"; return 1 ;;
+      --session-id|--session)
+        i=$((i+1)); value="${words[i]:-}"
+        [ -n "$value" ] && [[ "$value" != -* ]] || { team_err 'PM resume_args missing session value'; return 1; }
+        selectors=$((selectors+1)) ;;
+      --session-id=*|--session=*) [ -n "${arg#*=}" ] || { team_err 'PM resume_args missing session value'; return 1; }; selectors=$((selectors+1)) ;;
+      --continue|-c|--resume|-r) selectors=$((selectors+1))
+        if [ "$arg" = --resume ] || [ "$arg" = -r ]; then
+          value="${words[i+1]:-}"; [ -z "$value" ] || [[ "$value" == -* ]] || i=$((i+1))
+        fi ;;
+      --continue=*|--resume=*|-r?*|-s?*) selectors=$((selectors+1)) ;;
+      -s) i=$((i+1)); [ -n "${words[i]:-}" ] && [[ "${words[i]}" != -* ]] || { team_err 'PM resume_args missing session value'; return 1; }; selectors=$((selectors+1)) ;;
+      *.jsonl|*/sessions/*) selectors=$((selectors+1)) ;;
+      --*session*|--*continue*|--*resume*|-c?*|--) team_err "PM resume_args unverifiable selector: $arg"; return 1 ;;
+    esac
+  done
+  [ "$selectors" -le 1 ] || { team_err 'PM resume_args duplicate/conflicting continuity selectors'; return 1; }
+}
+team_pm_identity_guard() {
+  team_pm_check_launch || return 1
+  team_model_policy_guard && team_identity_extra_guard "${TEAM_PM_EXTRA_PI_ARGS:-}" || return 1
+  team_pm_resume_args_guard || return 1
+  local continuity; continuity="$(team_pm_continuity)"
+  local mode=fresh; case "$continuity" in continued:*) mode=continued ;; esac
+  team_template_identity_guard pm "${TEAM_PM_CMD:-}" "$mode" || return 1
+  case "$continuity" in fresh:*|lost:*) return 0 ;; esac
+  if ! team_pm_metadata_load || [ "$TEAM_PM_SELECTED_MODEL" != "$(team_pm_model_resolve)" ] || [ "$TEAM_PM_RECORDED_RESUME_KEY" != "$(team_pm_resume_key)" ]; then
+    team_err "PM launch identity missing/changed（含 suffix）；先保留 BOARD/threads/reports 磁盘交接，再 $TEAM_CLI up --fresh-pm；不改 Pi 历史"; return 1
+  fi
+}
+team_pm_metadata_publish() {
+  local nonce="$1" tmp="$TEAM_STATE_DIR/.pm-launch-$1" mode=continued identity_via
+  team_pm_fresh_launch && mode=fresh
+  case "$(team_pm_continuity)" in lost:*) mode=fresh ;; esac
+  # P228/R6（OBS1）：发布不得多于 argv 交付 —— PM 侧与 worker 侧同一份判据（模板已绑定的 selector）。
+  # 模板**不可证明**（selector-as-data 之类，真实启动会被 team_pm_identity_guard 拒在前头）时不报错：
+  # 看作「什么都没证明交付」的空集（仍是诚实的 under-claim），因为这条 record 只服务于发布；
+  # 真实启动路径根本走不到这里。
+  identity_via="$(team_launch_identity_fields pm "${TEAM_PM_CMD:-}" "$mode" 2>/dev/null)" || identity_via=''
+  printf 'metadata_version=1\nproject=%s\nwindow=%s\nmodel=%s\nnonce=%s\ntime=%s\nmode=%s\nresume_key=%s\nidentity_via=%s\n' \
+    "$TEAM_MAIN_ROOT" "$TEAM_PM_WINDOW" "$(team_pm_model_resolve)" "$nonce" "$(team_timestamp)" "$mode" "$(team_pm_resume_key)" "$identity_via" > "$tmp" && mv -f "$tmp" "$TEAM_STATE_DIR/pm-launch.env" || {
+    team_err 'PM proof obtained but metadata publication failed；保留诊断，后续需 fresh-pm'; rm -f "$tmp"; return 1;
+  }
+}
+team_pm_identity_claim() { # P228/R6：PM 成功行的身份声明（只发布刚发布的记录里真交付了的字段）
+  local delivered='' loaded=0 model="${TEAM_PM_MODEL:-}"
+  if team_pm_metadata_load 2>/dev/null; then loaded=1; delivered="${TEAM_PM_IDENTITY_VIA:-}"; model="${TEAM_PM_SELECTED_MODEL:-$model}"; fi
+  [ "$loaded" = 1 ] || delivered='provider,model,session_id'   # 读不到记录：回退到内建 Pi 的完整交付（旧行为）
+  if team_identity_field_in model "$delivered"; then printf 'model=%s\n' "$model"
+  else printf 'model 未由模板交付（不当作已启动身份发布）\n'; fi
+}
+
+team_pm_abort_uncommitted() { # only the window started by this attempt
+  local target="$1"
+  team_pm_pid_clear
+  rm -f "$(team_pm_spawn_file)"
+  team_pm_starting_end
+  team_tmux_kill_window "$target" || { team_err "uncommitted PM stop failed: $target；检查保存的诊断"; return 1; }
+}
 
 team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但加载 team-bg（PM 的后台门禁）与 team-inbox-watch（PM 的投递换道）；默认 -c 延续本目录上一个会话以保住历史
+  team_pm_identity_guard || return 1
   local model="$(team_pm_model_resolve)" args=()
   args=(--provider "${model%%/*}" --model "${model#*/}")
   # M27：PM 的团队后台车道（team_bg_run/team_bg_wait），与 worker 侧同一个扩展
@@ -2109,9 +2616,14 @@ team_pm_pi_args() { # PM 不加载 notify 扩展（它就是收件人），但�
   # P36（A）：--fresh-pm 本次启动新开会话 → 上面三条都不走（旧会话文件原样留在历史里）。
   if team_pm_fresh_launch; then :
   elif [ -n "${TEAM_PM_SESSION_ID:-}" ]; then args+=(--session-id "$TEAM_PM_SESSION_ID")
-  elif [ -n "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then args+=($TEAM_PM_RESUME_ARGS)
+  elif [ -n "$(team_trim "${TEAM_PM_RESUME_ARGS:-}")" ]; then
+    team_literal_argv "$TEAM_PM_RESUME_ARGS" || return 1
+    args+=("${TEAM_LITERAL_TOKENS[@]}")
   else args+=(-c); fi
-  [ -n "${TEAM_PM_EXTRA_PI_ARGS:-}" ] && args+=($TEAM_PM_EXTRA_PI_ARGS)
+  if [ -n "${TEAM_PM_EXTRA_PI_ARGS:-}" ]; then
+    team_literal_argv "$TEAM_PM_EXTRA_PI_ARGS" || return 1
+    args+=("${TEAM_LITERAL_TOKENS[@]}")
+  fi
   printf '%q ' "${args[@]}"
 }
 
@@ -2368,6 +2880,7 @@ team_tmux_shim_exports() {
 }
 
 team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-command
+  team_pm_identity_guard || return 1
   local pf="$1" spawnfile="$2" pi_bin expanded inner pm_bin exitfile tailfile
   # 内置 Pi（默认）：M36 起带闸门 exports 前缀；其余与历史逐字节一致 —— cd && 写 spawn pid && exec pi <args> @<prompt 文件>
   if [ -z "$(team_trim "${TEAM_PM_CMD:-}")" ]; then
@@ -2378,7 +2891,7 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
     return 0
   fi
   expanded="$(team_agent_expand pm "$TEAM_PM_CMD" pm "${TEAM_PM_SESSION_ID:-}" \
-    "$TEAM_MAIN_ROOT" "$pf" "" "" "$(team_pm_model_resolve)")"
+    "$TEAM_MAIN_ROOT" "$pf" "" "" "$(team_pm_model_resolve)")" || return 1
   # 裸名字 → 解析出的绝对路径（M8.1 退回点 1；见 team_pm_subst_first_word 的注释）。
   # 只在「要执行的二进制 == 身份检查看的二进制」时替换：TEAM_PM_BIN 为空时它俩本来就是一个；
   # 显式把 TEAM_PM_BIN 指向**另一个**名字（例如 TEAM_PM_BIN=bash 配一个脚本型 CLI）时，
@@ -2487,8 +3000,10 @@ team_pm_start() {
   esac
   # 启动前的两道门（M8.1）：畸形的 PM adapter 模板 / 解析不到的 PM 可执行文件，都在这里就失败 ——
   # 不 respawn 一条半截命令、也不留下一枚没人清的 starting 标记。
+  team_pm_identity_guard || return 1
   team_pm_check_launch
   team_pm_check_bin
+  local pm_nonce="$(date +%s)-$BASHPID-$RANDOM-$RANDOM"
   pf="$(team_pm_write_prompt)"
   # spawn 证明（M6.3 F30）：让 pane 里的 shell 在 exec 之前把自己的 pid 写盘。
   # wrapper agent（脚本最后 exec 掉自己，用来钉环境变量/flags）会换掉进程映像，
@@ -2496,7 +3011,7 @@ team_pm_start() {
   local spawnfile; spawnfile="$(team_pm_spawn_file)"
   # 命令由 team_pm_launch_cmd 渲染：TEAM_PM_CMD 空 = 内置 Pi（与历史逐字节一致），
   # 非空 = 模板 + 窗口 harness（提示词以 argv[0] 交给 {prompt}，见那边的注释）。
-  cmd="$(team_pm_launch_cmd "$pf" "$spawnfile")"
+  cmd="$(team_pm_launch_cmd "$pf" "$spawnfile")" || return 1
   team_pm_starting_begin "$target"   # 启动在飞行中：别的拍从此看到 starting 而不是「没有 PM」
   team_pm_pid_clear      # 旧记录先作废（pid + 证据标记）：这一行下面是“换进程”
   rm -f "$spawnfile" "$(team_pm_launch_exit_file)" "$(team_pm_launch_tail_file)"    # 上一轮的 pid/退出码/尾屏不许当成这一轮的证据
@@ -2517,6 +3032,10 @@ team_pm_start() {
     apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record argv
+      team_pm_metadata_publish "$pm_nonce" || {
+        team_pm_launch_diag 'model metadata publication failed' "$cmd" >/dev/null
+        team_pm_abort_uncommitted "$target"; return 1;
+      }
       team_pm_starting_end
       team_pm_continuity_note   # 延续了就说怎么延续；没延续就明说 + 指出靠 docs/team/** 与 inbox 接手
       return 0
@@ -2524,6 +3043,10 @@ team_pm_start() {
     apid="$(team_pm_spawn_pid 2>/dev/null || true)"
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record spawn
+      team_pm_metadata_publish "$pm_nonce" || {
+        team_pm_launch_diag 'model metadata publication failed' "$cmd" >/dev/null
+        team_pm_abort_uncommitted "$target"; return 1;
+      }
       team_pm_starting_end
       team_pm_continuity_note
       return 0
@@ -2532,7 +3055,7 @@ team_pm_start() {
   done
   team_pm_starting_end
   # 失败必须留下证据（M8.1 退回点 2）：先把窗口最后几行 + 渲染出的命令 + CLI 退出码写进 state/pm-launch-failed.log，
-  # 再报错（窗口现在会停在提示符，不会「连诊断一起消失」；下一拍 up/watchdog 把空提示符当没有 PM 照样替换）。
+  # 再停止未提交窗口并报错；诊断在杀窗前保存，下一次启动不能把遗留进程当成功证明。
   local diag why ec
   ec="$(team_pm_launch_exit_code 2>/dev/null || true)"
   if [ -n "$ec" ]; then why="窗口里的 $(team_pm_cli_name) 立刻退出了（exit code $ec）"
@@ -2540,8 +3063,9 @@ team_pm_start() {
   diag="$(team_pm_launch_diag "$why" "$cmd")"
   team_err "PM 启动失败：$why"
   team_err "  诊断（窗口最后 30 行 + 渲染出的命令 + 解析到的可执行文件）已写入：$diag"
-  team_dim "  手工复现：到 $target 里跑上面 render 那行；或写绝对路径：TEAM_PM_BIN=/abs/path/<cli> $TEAM_CLI up" >&2
+  team_dim "  手工复现：在隔离窗口跑诊断中的 render；或写绝对路径：TEAM_PM_BIN=/abs/path/<cli> $TEAM_CLI up" >&2
   team_dim "  常见原因：CLI 在窗口的登录 PATH 里不存在（本工具已把裸名字换成解析出的绝对路径）、参数/模型不认、未登录" >&2
+  team_pm_abort_uncommitted "$target"
   return 1
 }
 
@@ -2746,12 +3270,14 @@ team_model_window_from_pi() { # <provider/model>
 # 一个 agent 的「模型 · 会话大小」原始列：model<TAB>tokens<TAB>window<TAB>bytes<TAB>file
 team_agent_session_cols() { # <agent>
   local a="$1" wt sid model f b
-  wt="$(team_agent_worktree "$a")"
-  model="$(team_state_get "$a" model "$(team_agent_model "$a")")"
-  sid="$TEAM_SESSION-$a"
+  team_assignment_load "$a" || { printf '\t\t\t\t\n'; return 0; }
+  wt="${TEAM_ASSIGN[worktree]}"; model="${TEAM_ASSIGN[model]}"; sid="${TEAM_ASSIGN[sid]}"
+  # P228/R6（OBS1）：模型列只发布模板真的交付了的模型（未交付 → 标出来，不当成在跑的模型）
+  team_identity_delivered model || model="$model（未交付）"
   f="$(team_session_file "$sid" "$wt" 2>/dev/null || true)"
-  b=0; [ -n "$f" ] && b="$(team_file_bytes "$f")"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$model" "$(team_session_tokens_est "$b")" "$(team_model_window "$model")" "$b" "${f:-}"
+  b=""; [ -n "$f" ] && b="$(team_file_bytes "$f")"
+  [ -n "$b" ] || [ "${TEAM_ASSIGN[mode]}" != fresh ] || b=0
+  printf '%s\t%s\t%s\t%s\t%s\n' "$model" "$([ -z "$b" ] || team_session_tokens_est "$b")" "$(team_model_window "${TEAM_ASSIGN[model]}")" "$b" "${f:-}"
 }
 
 # 人看的会话大小："361k/272k ⚠"（无会话 → "-"；窗口解析不到 → "361k/?"）
@@ -3329,6 +3855,7 @@ team_model_limit() {
     # 通配（openai-codex/*=1 这种）：取满足的最严格（最小）上限
     case "$want" in
       $pat)
+        [ "${pair#*=}" -gt 0 ] || continue
         if [ "$best" -eq 0 ] || [ "${pair#*=}" -lt "$best" ]; then best="${pair#*=}"; fi ;;
     esac
   done
@@ -3341,41 +3868,79 @@ team_model_limit() {
 # 「没有需要续跑的 agent」，工具正好在它存在的意义上瞎了。
 # 现在的口径：状态文件是「这个 agent 在干什么」的持久记录（只有 dispatch/close/teardown 这类真改状态
 # 的命令才写它）；「还在不在跑」是 tmux 的现场事实，每次查询现算。
-team_model_running() { # 统计「活着且用了该模型」的 agent 数（支持通配上限的归组统计）
-  local want="$1" n=0 a w m
-  for a in $(team_agents); do
-    m="$(team_state_get "$a" model '')"
-    if [ "$m" != "$want" ]; then
-      # 同一个通配上限下的其它模型也算进并发（例如 openai-codex/* = 1）
-      local pat; pat="$(team_model_limit_pattern_for "$want")"
-      [ -n "$pat" ] && [ "$pat" != "$want" ] || continue
-      case "$m" in $pat) ;; *) continue ;; esac
+team_assignment_running_proof() { # A complete *past* record alone cannot identify a live replacement.
+  local seat="$1" pending="$TEAM_STATE_DIR/$1.pending" nonce pid rest pane pending_nonce
+  if [ -f "$pending" ]; then
+    pending_nonce="$(awk -F= '$1=="launch_nonce"{print substr($0,14)}' "$pending")"
+    if [ "$pending_nonce" != "${TEAM_ASSIGN[launch_nonce]}" ]; then
+      TEAM_ASSIGN_DIAGNOSTIC='interrupted pending launch/assignment nonce mismatch'; return 1
     fi
-    w="$(team_state_get "$a" window "$a")"
-    team_tmux_has_window "$TEAM_SESSION" "$w" && n=$((n + 1))
+  fi
+  if ! IFS=' ' read -r nonce pid rest < "$TEAM_STATE_DIR/dispatch-$seat.spawn" 2>/dev/null ||
+     [ "$nonce" != "${TEAM_ASSIGN[launch_nonce]}" ] || ! [[ "$pid" =~ ^[0-9]+$ ]] || [ "$pid" -le 1 ]; then
+    TEAM_ASSIGN_DIAGNOSTIC='current launch proof missing/assignment nonce mismatch'; return 1
+  fi
+  read -r pane rest <<< "$(team_pane_facts "$TEAM_SESSION:${TEAM_ASSIGN[window]}" 2>/dev/null || true)"
+  if [ "$pane" != "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    TEAM_ASSIGN_DIAGNOSTIC='current pane PID does not match committed launch proof'; return 1
+  fi
+}
+team_model_peers() {
+  local want="$1" exclude="${2:-}" a m pat
+  TEAM_MODEL_KNOWN_COUNT=0; TEAM_MODEL_UNKNOWN=''; TEAM_MODEL_UNKNOWN_SEATS=''
+  pat="$(team_model_limit_pattern_for "$want")"; pat="${pat:-$want}"
+  for a in $(team_agents); do
+    [ "$a" != pm ] && [ "$a" != "$exclude" ] || continue
+    team_agent_live "$a" || continue
+    if ! team_assignment_load "$a" || ! team_assignment_running_proof "$a"; then
+      TEAM_MODEL_UNKNOWN="${TEAM_MODEL_UNKNOWN:+$TEAM_MODEL_UNKNOWN; }$a ($TEAM_ASSIGN_DIAGNOSTIC)"
+      TEAM_MODEL_UNKNOWN_SEATS="${TEAM_MODEL_UNKNOWN_SEATS:+$TEAM_MODEL_UNKNOWN_SEATS }$a"; continue
+    fi
+    # P228/R6（OBS1）：模板没把模型交给 CLI 的席位，其「完整已提交模型身份」就是没有的 ——
+    # 不得按记录里的**选择**计数（那是 Teamsmith 的意图，不是 argv 交付）。
+    if ! team_identity_delivered model; then
+      TEAM_MODEL_UNKNOWN="${TEAM_MODEL_UNKNOWN:+$TEAM_MODEL_UNKNOWN; }$a (template delivered no model identity)"
+      TEAM_MODEL_UNKNOWN_SEATS="${TEAM_MODEL_UNKNOWN_SEATS:+$TEAM_MODEL_UNKNOWN_SEATS }$a"; continue
+    fi
+    m="${TEAM_ASSIGN[model]}"
+    case "$m" in $pat) TEAM_MODEL_KNOWN_COUNT=$((TEAM_MODEL_KNOWN_COUNT+1)) ;; esac
   done
-  printf '%s\n' "$n"
+}
+team_model_running() {
+  team_model_peers "$1" "${2:-}"
+  if [ -n "$TEAM_MODEL_UNKNOWN" ]; then printf '%s+unknown\n' "$TEAM_MODEL_KNOWN_COUNT"
+  else printf '%s\n' "$TEAM_MODEL_KNOWN_COUNT"; fi
 }
 
 team_model_limit_pattern_for() { # <model> → 命中的通配模式（没有则是空）
-  local want="$1" pair pat
-  for pair in $(printf '%s' "$TEAM_MODEL_LIMITS" | tr '\n\t' '  '); do
-    case "$pair" in *=*) ;; *) continue ;; esac
-    pat="${pair%=*}"
-    case "$pat" in *\**) ;; *) continue ;; esac
-    case "$want" in $pat) printf '%s\n' "$pat"; return 0 ;; esac
+  local want="$1" pair pat lim best=0 chosen=''
+  for pair in ${TEAM_MODEL_LIMITS:-}; do
+    pat="${pair%=*}"; lim="${pair#*=}"
+    [ "$pat" != "$want" ] || { printf '%s\n' "$want"; return 0; }
+    case "$want" in $pat)
+      if [ "$lim" -gt 0 ] && { [ "$best" = 0 ] || [ "$lim" -lt "$best" ]; }; then best="$lim"; chosen="$pat"; fi ;; esac
   done
-  return 1
+  printf '%s\n' "$chosen"
 }
 
 team_model_guard() {
-  local model="$1" limit running
+  local model="$1" exclude="${2:-}" limit running rule
+  team_config_validate_value TEAM_MODEL_LIMITS "${TEAM_MODEL_LIMITS:-}" >/dev/null || { team_err 'invalid TEAM_MODEL_LIMITS；通过 config set 修复后重试，不猜容量'; return 1; }
   limit="$(team_model_limit "$model")"
   [ "$limit" -le 0 ] && return 0
-  running="$(team_model_running "$model")"
+  team_model_peers "$model" "$exclude"
+  running="$TEAM_MODEL_KNOWN_COUNT"; rule="$(team_model_limit_pattern_for "$model")"
+  if [ -n "$TEAM_MODEL_UNKNOWN" ]; then
+    team_err "unjudgeable admission: target=$model rule=$rule limit=$limit known_count=$running unknown=$TEAM_MODEL_UNKNOWN"
+    local peer
+    for peer in $TEAM_MODEL_UNKNOWN_SEATS; do
+      team_err "保留 $peer 的诊断/磁盘交接；用其合法 brief --fresh 接管，或由 PM 显式执行本项目 $TEAM_CLI teardown --agent $(printf '%q' "$peer")（不带 purge/register）；不代执行"
+    done
+    return 1
+  fi
   if [ "$running" -ge "$limit" ]; then
     team_err "模型 ${model} 并发上限 ${limit}，当前已运行 ${running} 个，拒绝派单"
-    team_err "空闲后重试，或临时放宽：TEAM_MODEL_LIMITS=\"\" team dispatch ..."
+    team_err "空闲后重试；调整本项目限额须经 $TEAM_CLI config set TEAM_MODEL_LIMITS '<完整限额映射>'，不绕过配置写入器"
     return 1
   fi
   return 0
@@ -4757,8 +5322,10 @@ team_agent_expand() { # <kind> <模板> <agent> <session_id> <worktree> <prompt_
 # 提示词通过窗口 harness 的 argv[0]（shell 里的 "$0"）传入，模板里用 {prompt} 取。
 team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file> [model]
   local agent="$1" sid="$2" wt="$3" prompt_file="$4" model="${5:-}" pi_bin piargs expanded agent_bin first
+  team_identity_extra_guard "${TEAM_EXTRA_PI_ARGS:-}" || return 1
   if [ -n "${TEAM_AGENT_CMD:-}" ]; then
-    expanded="$(team_agent_expand launch "$TEAM_AGENT_CMD" "$agent" "$sid" "$wt" "$prompt_file" "" "" "$model")"
+    team_agent_check_launch && team_template_identity_guard launch "$TEAM_AGENT_CMD" "${TEAM_SELECTED_MODE:-fresh}" || return 1
+    expanded="$(team_agent_expand launch "$TEAM_AGENT_CMD" "$agent" "$sid" "$wt" "$prompt_file" "" "" "$model")" || return 1
     # 裸名字 → 解析出的绝对路径（M8.2；与 PM 侧 M8.1 的 team_pm_launch_cmd 同一形状）。
     # 为什么需要：命令在窗口里由 `bash -lc` 执行，登录 bash 的 PATH（/etc/profile + ~/.bash_profile）
     # 常常没有用户交互式 rc 里加的目录 —— 模板首词写裸名字时窗口里就是 command not found，
@@ -4785,7 +5352,7 @@ team_agent_launch_cmd() { # <agent> <session_id> <worktree> <prompt_file> [model
   # 第一次派单会拿到旧值；配置才是解析来源）
   [ -n "$model" ] || model="$(team_agent_model "$agent")"
   pi_bin="$(team_pi_bin_path)"
-  piargs="$(team_pi_args "$model")"
+  piargs="$(team_pi_args "$model")" || return 1
   printf '%s%s %s--session-id %q "$0"' "$(team_tmux_shim_exports)" "$(printf '%q' "$pi_bin")" "$piargs" "$sid"
 }
 

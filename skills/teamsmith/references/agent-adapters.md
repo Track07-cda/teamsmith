@@ -59,7 +59,7 @@ malformed one such as `{ cwd }` all fail loudly, and the error names `TEAM_PM_CM
 
 - `{cwd}` — the project's **main worktree** (the PM's working directory)
 - `{session_id}` — `TEAM_PM_SESSION_ID`, empty by default (only meaningful if your CLI has its own session ids)
-- `{model}` — the model-name part of `TEAM_PM_MODEL` (default `TEAM_DEFAULT_MODEL`)
+- `{model}` — the model-name part of the independent `TEAM_PM_MODEL` (required; the PM has no worker fallback)
 - `{provider}` — the provider part
 - `{prompt_file}` — path of `state/pm-prompt.md`, the PM briefing (`team up --print` prints the same text)
 - `{prompt}` — `"$0"`: the briefing as a single argv token handed over by the window harness (keep the quotes)
@@ -171,10 +171,10 @@ Rules:
 - The template's first word must be a **bare executable name** (no quotes): `TEAM_AGENT_BIN`, `team doctor` and the
   window-readiness wait resolve it with `command -v`, which cannot see `"my agent"`. If your CLI really has a space
   in its name, set `TEAM_AGENT_BIN` to its absolute path.
-- `{model}`/`{provider}` come from teamsmith's model registry (`TEAM_DEFAULT_MODEL`,
-  `TEAM_AGENT_MODELS`), not from the CLI. For a custom CLI either hardcode the model in the template or
-  set `TEAM_AGENT_MODELS="dev=<provider>/<model>"` so `{model}` matches what the CLI really uses — that
-  also keeps `TEAM_MODEL_LIMITS` (model concurrency) meaningful.
+- `{model}`/`{provider}` come from the dispatch's **selected launch identity** — the brief's task category
+  resolved through `TEAM_TASK_MODELS`, or an explicit `team dispatch --model` override — not from the CLI and not
+  from a per-seat key. Set the category mapping so `{model}` matches what the CLI really uses; that also keeps
+  `TEAM_MODEL_LIMITS` (model concurrency) meaningful.
 - The rendered command is executed by `bash -lc` in the window; the usual quoting rules of your shell
   apply, and nothing is `eval`-ed twice.
 - **The first word is resolved, not guessed** (the same rule as the PM side, §2): the window shell is
@@ -566,7 +566,7 @@ TEAM_AGENT_CMD='codex exec -C {cwd} -m {model} -s workspace-write "$(cat {prompt
 TEAM_AGENT_BIN="$HOME/.bun/bin/codex"
 TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from {agent} --from-file {summary_file}'
 TEAM_AGENT_LOG_GLOB='~/.codex/sessions/**/*.jsonl'
-TEAM_AGENT_MODELS="dev=openai/gpt-5.6-terra"   # {model} → gpt-5.6-terra (the model name codex itself knows)
+TEAM_TASK_MODELS="routine=openai/gpt-5.6-terra analysis=openai/gpt-5.6-terra"  # {model} → the category's model (here gpt-5.6-terra)
 ```
 
 Notes:
@@ -592,7 +592,7 @@ TEAM_AGENT_CMD='opencode run --model {provider}/{model} --dir {cwd} "$(cat {prom
 TEAM_AGENT_BIN="$HOME/.opencode/bin/opencode"
 TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm --from {agent} --from-file {summary_file}'
 TEAM_AGENT_LOG_GLOB='~/.local/share/opencode/log/*.log'
-TEAM_AGENT_MODELS="dev=google/gemini-3-flash-preview"
+TEAM_TASK_MODELS="routine=google/gemini-3-flash-preview"
 ```
 
 **Verified end-to-end on this machine** (no Pi involved): `team dispatch` started opencode in the agent

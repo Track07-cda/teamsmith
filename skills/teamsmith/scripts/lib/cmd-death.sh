@@ -146,21 +146,8 @@ team_death_identity() { # <seat> <分类> <锚> → 身份哈希
 # `--fresh` 的 `*_<sid>-<epoch>.jsonl`；这里补上（design D2/D9：不复用共享函数，免得静默改变
 # roster/ps 的会话大小语义）。
 team_agent_session_latest() { # <agent> → 文件路径 | 非 0
-  local a="${1:-}" wt d sid f best="" bestm=-1 m
-  [ -n "$a" ] || return 1
-  wt="$(team_agent_worktree "$a")"
-  [ -d "$wt" ] || return 1
-  d="$(team_pi_session_dir "$wt")"
-  [ -d "$d" ] || return 1
-  sid="$TEAM_SESSION-$a"
-  for f in "$d"/*_"$sid".jsonl "$d"/*_"$sid"-*.jsonl; do
-    [ -f "$f" ] || continue
-    m="$(team_death_file_mtime "$f")"
-    case "$m" in ''|*[!0-9]*) continue ;; esac
-    if [ "$m" -gt "$bestm" ]; then best="$f"; bestm="$m"; fi
-  done
-  [ -n "$best" ] || return 1
-  printf '%s\n' "$best"
+  team_assignment_load "${1:-}" || return 1
+  team_session_file "${TEAM_ASSIGN[sid]}" "${TEAM_ASSIGN[worktree]}"
 }
 
 # 有界尾部（默认 64 KiB）里**最后**一条 assistant + stopReason=error 的 errorMessage。

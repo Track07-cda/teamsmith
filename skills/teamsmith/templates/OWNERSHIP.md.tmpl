@@ -12,9 +12,13 @@
 
 ## Roster
 
-| Agent | Model | Long-lived worktree | Scope |
-|---|---|---|---|
-| <name> | <provider/model> | `.worktrees/<name>` | <module> |
+| Agent | Long-lived worktree | Scope |
+|---|---|---|
+| <name> | `.worktrees/<name>` | <module> |
+
+> A seat is a roster name and a directory, **not a model**. Models are the project's task-category policy
+> (`TEAM_TASK_MODELS` in `.pi/team/config.sh`) plus the independent `TEAM_PM_MODEL`; a brief's `category:` selects
+> one, and ownership never follows model strength.
 
 ## Change process
 

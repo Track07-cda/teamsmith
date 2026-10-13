@@ -11,13 +11,14 @@ report back concisely. Do not invent scope beyond them.
 ## 1. Bring the project up
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team bootstrap --agents "<dev verify>" --session "<session>"   # idempotent
+bash {{SKILL_DIR}}/scripts/team bootstrap --agents "<dev verify>" --session "<session>" \
+     --task-models '<routine=provider/light analysis=provider/strong verify=provider/strong>' --pm-model '<provider/strong>'   # idempotent
 bash {{SKILL_DIR}}/scripts/team doctor
 ```
 
 `bootstrap` does all of this idempotently:
 
-1. writes `.pi/team/config.sh` (session, roster, gates, models, guards);
+1. writes `.pi/team/config.sh` (session, roster, the task-category model map, the independent PM model, guards);
 2. writes the `docs/team/` skeleton (BOARD / ROADMAP / OWNERSHIP / PROTOCOL / DECISIONS / tasks / reports / reviews / threads / inbox);
 3. **prints** the `git worktree add` command for each agent (git stays with you; `--create-worktrees` creates them);
 4. starts the pulse (`pulse` window in the same session);
@@ -27,14 +28,17 @@ bash {{SKILL_DIR}}/scripts/team doctor
 
 - `{{DOCS_DIR}}/ROADMAP.md` -- product goal, milestones with **executable** exit criteria, and explicit non-goals.
 - `{{DOCS_DIR}}/OWNERSHIP.md` -- which directories belong to which agent; everything unlisted belongs to you.
-- `.pi/team/config.sh` -- `TEAM_GATES` (the command that decides pass/fail during verification), the roster and
-  per-agent models, and `TEAM_MODEL_LIMITS` if a provider has a tight quota.
+- `.pi/team/config.sh` -- `TEAM_GATES` (the command that decides pass/fail during verification), the roster,
+  and `TEAM_MODEL_LIMITS` if a provider has a tight quota. Model policy is edited, not hand-written: a category by
+  `team config set-task-model <category> <model>`, the whole map or PM model by `team config set … --yes`; retire a
+  category only by rewriting the whole map (future dispatches only — a complete same-task recovery keeps its
+  committed model/SID).
 - `AGENTS.md` -- the protocol section is injected automatically; make sure the project-specific red lines are there.
 
 ## 3. Make the first task real
 
 ```bash
-bash {{SKILL_DIR}}/scripts/team task T1.1 --title "<first slice>" --agent dev
+bash {{SKILL_DIR}}/scripts/team task T1.1 --title "<first slice>" --category <routine|analysis|verify> --agent dev
 $EDITOR {{DOCS_DIR}}/tasks/T1.1-*.md      # context / deliverables / boundaries / acceptance commands
 bash {{SKILL_DIR}}/scripts/team dispatch dev T1.1 {{DOCS_DIR}}/tasks/T1.1-*.md
 ```

@@ -14,7 +14,7 @@ session) and for anyone deciding whether upgrading is safe.
 | Surface | Why it does not move |
 |---|---|
 | the `team` CLI | sub-commands are only ever **removed**, never renamed in place; everything that still exists keeps its name and flags |
-| `.pi/team/config.sh` | sourced by bash, flat `TEAM_*` keys; new keys ship with a default, so a config written years ago keeps working |
+| `.pi/team/config.sh` | sourced by bash, flat `TEAM_*` keys; new keys ship with a default, so a config written years ago keeps working (the one exception is the breaking model-policy upgrade — §5b) |
 | `TEAM_*` environment variables | override the config file (env beats config) and are read that way in every version |
 | the `docs/team/**` layout | `tasks/ reports/ reviews/ threads/ inbox/` plus `BOARD.md ROADMAP.md OWNERSHIP.md DECISIONS.md PROTOCOL.md` |
 | `docs/team/BOARD.md` columns | `ID · task · agent · branch · deps · status`, with the status vocabulary `todo/wip/review/done/blocked/dropped` |
@@ -137,6 +137,40 @@ one-line reaction.
 | the PM's own CLI is configurable (`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`) | M8.1 | nothing to do — all three keys are empty by default and the built-in Pi command is byte-for-byte unchanged. They belong to the internal seam (frozen): reserved for a possible future non-Pi adapter, no compatibility promise — the PM side runs Pi (`references/agent-adapters.md` §2) |
 | the console brings three state files and one changed default: `TEAM_MONITOR_REFRESH` drops `5` → `3` | v1.38.0 (pulse-console B3) | the TUI keeps its own preferences in `state/panel.conf` (`lang`, `page`, `activity`, `mouse`, `density` and an optional `theme`), remembers the last page in `state/panel-page`, and holds the PM's compose draft in `state/draft.md`. All three are runtime state: deleting them is safe and `--print`/`--json` never read them. Set `TEAM_MONITOR_REFRESH=5` to keep the old cadence (`references/config.md` lists the key) |
 
+## 5b. The breaking model-policy upgrade (task categories)
+
+This is the one upgrade that needs an explicit transaction instead of a re-render. The retired keys
+TEAM_AGENT_MODELS and TEAM_DEFAULT_MODEL are no longer read (an old seat model is **not** reinterpreted as a task
+model): a project that still carries them is refused by `team dispatch`/`team up` and by `team init`/
+`team bootstrap` — before any install, ledger, worktree or pulse work — and the repair is the dedicated
+four-key transaction:
+
+```bash
+team config upgrade-models --task-models 'routine=<model> analysis=<model> verify=<model>' --pm-model '<model>'        # preview: prints the diff, writes nothing
+team config upgrade-models --task-models '…' --pm-model '<model>' --yes                                                # the one write
+```
+
+It rewrites only those keys through the checked writer (temp file → `bash -n` → fingerprint CAS → atomic rename →
+one audit line), turns a removed line's inline comment into a standalone one and leaves every other byte alone.
+Shapes it cannot locate unambiguously (export/multiline/variable expansion/duplicate keys) are refused with the
+file and line plus the manual-normalization route. `team init --force`, `bootstrap` and inference are **not**
+migration routes; a fresh project passes `--task-models`/`--pm-model` to `init`/`bootstrap` instead.
+
+After the policy is in place: a **new** dispatch takes the brief's `category:` model (routine for bounded ordinary
+implementation, analysis for complex planning/judgment, verify for independent adversarial review — or the
+project's own names), while a running/completed assignment keeps its recorded model/SID and is never rewritten by
+the upgrade; a brief must carry a `category:` header before it can be dispatched again; the PM's own model is
+`TEAM_PM_MODEL`, and a running PM on a different model is continued only with `team up --fresh-pm`.
+
+The operations around a source upgrade are **separate recorded gates**, each previewed and authorized per command:
+private source verification; landing validated source on a shared/protected tree; writing this project's
+configuration (and the first fresh launch that reads it); and adopting a changed shared skill source. A shared
+skill link (e.g. `~/.agents/skills/teamsmith` → this checkout's `skills/teamsmith`) reads its target's **current**
+bytes, so changing that target affects later reads in other projects even without an installer; before landing,
+either isolate the known shared consumers to preserved stable source and verify the isolation, or obtain explicit
+approval of the identified shared impact. No partial slice should land on a shared main, and no zero-impact
+promise is made for unknown consumers.
+
 ## 6. Upgrade recipe
 
 Replace `<skill checkout>` with the git checkout the installed skill points at (`team paths` prints it).
@@ -154,7 +188,9 @@ team version --check
 team doctor
 
 # 4) re-render this project's contracts (idempotent: config is kept, the AGENTS.md
-#    section is refreshed in place, and a legacy marker is rewritten to the new one)
+#    section is refreshed in place, and a legacy marker is rewritten to the new one).
+#    A config still carrying the retired model keys is REFUSED here — run the explicit
+#    migration first: team config upgrade-models --task-models '…' --pm-model '…' [--yes]
 team init
 
 # 5) the spec layer, only when openspec/ is missing

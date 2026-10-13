@@ -91,10 +91,9 @@ TEAM_PI_BIN|apply|path|exec|plain|pi|-|||roster
 TEAM_AGENT_BIN|apply|path|exec,opt|plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
 TEAM_OPENSPEC_BIN|apply|path|exec|plain|openspec|-|||roster
 TEAM_JS_BIN|apply|path|exec,opt|plain||-|||roster
-# ---- 按席位模型（restart：运行中的席位保住旧模型，下一次 dispatch/resume 才换）----
-TEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|模型：下一个 spawn 生效（dispatch/resume/team up）||seat-model
-TEAM_AGENT_MODELS|restart|pairlist||plain||-|按席位模型：team config set-agent-model <seat> <model>||seat-model
-TEAM_PM_MODEL|restart|model|opt|plain||-|PM 席位模型：team up 重建 PM 后生效||seat-model
+# ---- Future policy, separate from committed assignments ----
+TEAM_TASK_MODELS|apply|task-model-map|req|plain||-|新任务类别：team config set-task-model <category> <model>；恢复保留已派身份||task-model
+TEAM_PM_MODEL|restart|model|req|plain||-|独立 PM 模型：team up 启动受 fresh-pm 守卫||task-model
 # ---- 工作流与门禁（apply）----
 TEAM_GATES|apply|cmd||plain||-|||workflow
 TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow
@@ -219,7 +218,7 @@ team_config_choices_set() { # <row> [known models: 每行一个] → CFG_CHOICES
       src="schema"
       IFS=, read -r min max _ <<< "$spec"
       val_list="${suggest//,/$'\n'}" ;;
-    model|pairlist|winlist|pattern)
+    model|task-model-map|pairlist|winlist|pattern)
       src="known"; val_list="$known" ;;
     path)
       local typ="${spec%%,*}"; note="${typ:-any}" ;;
@@ -380,6 +379,8 @@ team_config_validate_value() {
       local mwhy
       if mwhy="$(team_config_model_violation "$val")"; then return 0; fi
       printf '%s\n' "$mwhy"; return 1 ;;
+    task-model-map)
+      team_task_map_violation "$val" ;;
     pairlist)
       local tok seat model r mwhy; r=0
       for tok in $val; do
@@ -714,47 +715,49 @@ team_config_list_json() {
   team_config_scan "$path"
   # models 块的 known 先算：它也是模型类键的 choices 词表（choices 必须随键记录一起输出，所以
   # 不能等键循环结束）。token 与顺序和原来逐字一致；每个席位的**显示**模型也在表里（R2）。
-  local default_model known_models="" known_list="" seen=" " firstk=1
-  default_model="$(team_config_file_value "$path" TEAM_DEFAULT_MODEL 2>/dev/null || true)"
-  [ -n "$default_model" ] || default_model="$(team_config_field "$(team_config_row TEAM_DEFAULT_MODEL)" 6)"
-  local tok
-  for tok in $default_model ${TEAM_AGENT_MODELS:-}; do
-    case "$tok" in
-      *=*) tok="${tok#*=}" ;;
-    esac
+  local known_models="" known_list="" seen=' ' tok a
+  local categories='' assignments='' policy_pm='' pm_launch='{}'
+  if team_task_map_violation "${TEAM_TASK_MODELS:-}" >/dev/null; then
+    for tok in $TEAM_TASK_MODELS; do
+      team_config_json_escape_set "${tok%%=*}"; local ec="$CFG_ESC"
+      team_config_json_escape_set "${tok#*=}"; local em="$CFG_ESC"
+      categories="${categories:+$categories,}{\"category\":\"$ec\",\"model\":\"$em\"}"
+      known_models="$known_models${tok#*=}"$'\n'
+    done
+  fi
+  if team_config_model_shape_ok "${TEAM_PM_MODEL:-}"; then
+    policy_pm="$TEAM_PM_MODEL"; known_models="$known_models$policy_pm"$'\n'
+  fi
+  for a in $(team_agents); do
+    local assigned=false diagnostic='' fields='' field val
+    if team_assignment_load "$a"; then
+      assigned=true
+      # P228/R6（OBS1）：未交付的模型不进「已知模型」，也不当成该席位的模型
+      if team_identity_delivered model; then known_models="$known_models${TEAM_ASSIGN[model]}"$'\n'
+      else diagnostic='template delivered no model identity'; fi
+    else diagnostic="$TEAM_ASSIGN_DIAGNOSTIC"; fi
+    for field in task category model selected_via launch_via sid; do
+      val=''; [ "$assigned" = false ] || val="${TEAM_ASSIGN[$field]}"
+      if [ "$field" = model ] && ! team_identity_delivered model; then val=''; fi
+      team_config_json_escape_set "$val"; fields="$fields,\"$field\":\"$CFG_ESC\""
+    done
+    val=''; [ "$assigned" = false ] || val="$(team_identity_delivered_set)"
+    team_config_json_escape_set "$val"; fields="$fields,\"identity_via\":\"$CFG_ESC\""
+    team_config_json_escape_set "$diagnostic"; local ed="$CFG_ESC"
+    team_config_json_escape_set "$a"
+    assignments="${assignments:+$assignments,}{\"agent\":\"$CFG_ESC\",\"assigned\":$assigned$fields,\"diagnostic\":\"$ed\"}"
+  done
+  if team_pm_metadata_load; then
+    pm_launch="$TEAM_PM_METADATA_JSON"; known_models="$known_models$TEAM_PM_SELECTED_MODEL"$'\n'
+  fi
+  local dedup=''
+  while IFS= read -r tok; do
     [ -n "$tok" ] || continue
     case "$seen" in *" $tok "*) continue ;; esac
-    seen="$seen$tok "
-    known_models="$known_models$tok"$'\n'
-    [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0
-    team_config_json_escape_set "$tok"; known_list="$known_list\"$CFG_ESC\""
-  done
-  local a state_model
-  for a in $(team_agents); do
-    state_model="$(team_state_get "$a" model '' 2>/dev/null || true)"
-    [ -n "$state_model" ] || continue
-    case "$seen" in *" $state_model "*) continue ;; esac
-    seen="$seen$state_model "
-    known_models="$known_models$state_model"$'\n'
-    [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0
-    team_config_json_escape_set "$state_model"; known_list="$known_list\"$CFG_ESC\""
-  done
-  # R2：每个席位的显示模型都在词汇表里。名册席位由上面的解析/记录两支覆盖；pm 席位没有 state
-  # 记录（team_pm_start 不写），它的显示模型走 seats 块同一支 team_config_seat_state
-  # （TEAM_PM_MODEL > TEAM_DEFAULT_MODEL）—— 视图的选项与 seats 块不会各说各话。
-  local seat_model _src _override
-  for a in $(team_agents) pm; do
-    team_config_seat_split "$(team_config_seat_state "$a")" seat_model _src _override
-    [ -n "$seat_model" ] || continue
-    case "$seen" in *" $seat_model "*) continue ;; esac
-    seen="$seen$seat_model "
-    known_models="$known_models$seat_model"$'\n'
-    [ "$firstk" = "1" ] || known_list="$known_list,"
-    firstk=0
-    team_config_json_escape_set "$seat_model"; known_list="$known_list\"$CFG_ESC\""
-  done
+    seen="$seen$tok "; dedup="$dedup$tok"$'\n'
+    team_config_json_escape_set "$tok"; known_list="${known_list:+$known_list,}\"$CFG_ESC\""
+  done <<< "$known_models"
+  known_models="$dedup"
 
   local schema_keys="|"
   local -a f=()
@@ -770,9 +773,10 @@ team_config_list_json() {
       comment="${CFG_SCAN_COMMENT[$key]}"
       set="true"
     fi
-    if [ "$key" = "TEAM_AGENT_MODELS" ] && [ -n "$value" ]; then
-      local unknown; unknown="$(team_config_pairlist_unknown_seats "$value" | tr '\n' ' ')"
-      [ -n "$unknown" ] && warning="未知席位（名册没有，静默不生效）：${unknown% }"
+    if [ "$key" = TEAM_TASK_MODELS ]; then
+      local why; if ! why="$(team_task_map_violation "$value")"; then warning="$why"; fi
+    elif [ "$key" = TEAM_PM_MODEL ]; then
+      local why; if ! why="$(team_config_model_violation "$value")"; then warning="$why"; fi
     fi
     # P99/R1：名册的读侧 warning 与写侧的值规则是同一份判定（team_config_list_violation）——
     # 手改出一个非法 token 时，读给出警告、写入器拒绝的是同一条规则。
@@ -807,17 +811,6 @@ team_config_list_json() {
     out="$out,{\"name\":\"$u_key\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$u_val\",\"default\":\"\",\"set\":true,\"comment\":\"$u_com\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"choices\":$CFG_CHOICES_JSON,\"group\":\"\",\"known\":false}"
   done <<< "$CFG_SCAN_ORDER"
 
-  local seats="" firsts=1
-  for a in $(team_agents) pm; do
-    team_config_seat_split "$(team_config_seat_state "$a")" model src override
-    case "$override" in true) ;; *) override="false" ;; esac   # override 永远是 JSON 布尔值（P47/R5）
-    # 空模型也要出这一行（seats 覆盖每个名册席位 + pm）：空模型序列化成 ""，不是无值字段也不是丢行。
-    team_config_json_escape_set "$a"; local s_agent="$CFG_ESC"
-    team_config_json_escape_set "$model"; local s_model="$CFG_ESC"
-    [ "$firsts" = "1" ] || seats="$seats,"
-    firsts=0
-    seats="$seats{\"agent\":\"$s_agent\",\"model\":\"$s_model\",\"source\":\"$(team_config_seat_source_token "$src")\",\"override\":$override}"
-  done
 
   local audit="" firsta=1 l
   while IFS= read -r l; do
@@ -828,10 +821,10 @@ team_config_list_json() {
   done < <(team_config_audit_tail 10)
 
   team_config_json_escape_set "$path"; local e_path="$CFG_ESC"
-  team_config_json_escape_set "$default_model"; local e_default="$CFG_ESC"
-  printf '{"path":"%s","fingerprint":"%s","mtime":"%s","keys":[%s],"models":{"default":"%s","known":[%s],"seats":[%s]},"audit":[%s]}\n' \
-    "$e_path" "$fingerprint" "$mtime" "$out" \
-    "$e_default" "$known_list" "$seats" "$audit"
+  team_config_json_escape_set "$policy_pm"; local e_pm="$CFG_ESC"
+  team_config_json_escape_set "$(team_model_policy_issues)"; local e_diag="$CFG_ESC"
+  printf '{"path":"%s","fingerprint":"%s","mtime":"%s","keys":[%s],"models":{"policy":{"categories":[%s],"pm":"%s"},"assignments":[%s],"pm_launch":%s,"known":[%s],"diagnostic":"%s"},"audit":[%s]}\n' \
+    "$e_path" "$fingerprint" "$mtime" "$out" "$categories" "$e_pm" "$assignments" "$pm_launch" "$known_list" "$e_diag" "$audit"
 }
 
 team_cmd_config_list() {
@@ -860,6 +853,8 @@ team_cmd_config_list() {
     if value="$(team_config_file_value "$path" "$key")"; then set=1; else value="$def"; set=0; fi
     printf '%-42s %-8s %-10s %s%s\n' "$key" "$class" "$kind" "$value" "$([ "$set" = "0" ] && printf '  (unset · default)')"
   done < <(team_config_schema)
+  local issues; issues="$(team_model_policy_issues)"
+  [ -z "$issues" ] || printf '\n%s\n' "$issues"
   printf '\n审计   %s\n' "$(team_config_audit_file)"
   team_config_audit_tail 5 | sed 's/^/       /'
 }
@@ -884,7 +879,15 @@ TEAM_CONFIG_EXIT_DANGER=7
 
 # 共用的写路径：<KEY> <value> <actor> <dry> <fp> <allow_danger>
 # 返回值就是机器契约的退出码。
-team_config_write_checked() { # <KEY> <value> <actor> <dry> <fp> <allow_danger>
+team_config_locked_call() { local TEAM_CONFIG_LOCKED=1; "$@"; }
+team_config_write_checked() {
+  if [ "${4:-0}" = 1 ] || [ "${TEAM_CONFIG_LOCKED:-0}" = 1 ]; then team_config_write_checked_unlocked "$@"
+  else
+    local path; path="$(team_config_contract_path)" || return 1
+    team_with_lock "config:$path" team_config_locked_call team_config_write_checked_unlocked "$@"
+  fi
+}
+team_config_write_checked_unlocked() { # <KEY> <value> <actor> <dry> <fp> <allow_danger>
   local key="$1" val="$2" actor="$3" dry="$4" fp="$5" allow_danger="$6"
   local path; path="$(team_config_contract_path)" || return 1
   local row; row="$(team_config_row "$key" 2>/dev/null || true)"
@@ -892,7 +895,9 @@ team_config_write_checked() { # <KEY> <value> <actor> <dry> <fp> <allow_danger>
 
   if [ -z "$row" ]; then
     team_err "$key 不是已知的项目设置键"
-    team_dim "  已知键：$TEAM_CLI config list；自定义键请手改 $path" >&2
+    case "$key" in TEAM_DEFAULT_MODEL|TEAM_AGENT_MODELS)
+      team_dim "  retired: $TEAM_CLI config set-task-model <category> <model>；config set TEAM_PM_MODEL <model>；config upgrade-models" >&2 ;;
+      *) team_dim "  已知键：$TEAM_CLI config list；自定义键请手改 $path" >&2 ;; esac
     [ "$dry" = "1" ] || team_config_audit_write refused "$actor" "$key" "$old" "$val" || true
     return "$TEAM_CONFIG_EXIT_REFUSE"
   fi
@@ -952,7 +957,17 @@ team_config_write_checked() { # <KEY> <value> <actor> <dry> <fp> <allow_danger>
 # 3 指纹冲突 / 4 值不合法 / 5 remove 的席位不在名册 / 6 写失败。
 # 席位名合法性只对**结果值**判：移掉一个手改进来的非法 token 是合法的（结果干净），
 # 加进去才非法 —— 一条规则，读写同一份（team_config_list_violation）。
-team_config_write_roster() { # <add|remove> <seat> [<fingerprint>] [<dry>] → 详见上面的退出码
+team_config_write_roster() {
+  if [ "${4:-0}" = 1 ] || [ "${TEAM_CONFIG_LOCKED:-0}" = 1 ]; then team_config_write_roster_unlocked "$@"
+  else
+    local path; path="$(team_config_contract_path)" || return 1
+    local rc=0
+    team_with_lock "config:$path" team_config_locked_call team_config_write_roster_unlocked "$@" || rc=$?
+    [ "$rc" != 0 ] || TEAM_AGENTS="$(team_config_file_value "$path" TEAM_AGENTS)"
+    return "$rc"
+  fi
+}
+team_config_write_roster_unlocked() { # <add|remove> <seat> [fingerprint] [dry]
   local op="$1" seat="$2" fp="${3:-}" dry="${4:-0}"
   local path; path="$(team_config_contract_path)" || return 1
   local old; old="$(team_config_file_value "$path" TEAM_AGENTS 2>/dev/null || true)"
@@ -1128,6 +1143,139 @@ team_cmd_config_set_agent_model() {
   return $rc
 }
 
+# Category edit is a read/modify/write under the SAME file lock as whole-map writes.
+team_cmd_config_set_task_model() {
+  local cat='' model='' dry=0 fp='' allow_danger=0 actor="${TEAM_ACTOR:-cli}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;; --yes|-y) shift ;;
+      --fingerprint) fp="${2:?}"; shift 2 ;; --fingerprint=*) fp="${1#*=}"; shift ;;
+      --actor) actor="${2:?}"; shift 2 ;; --actor=*) actor="${1#*=}"; shift ;;
+      --allow-danger|--allow-dangerous) allow_danger=1; shift ;;
+      -) if [ -z "$cat" ]; then cat='-'; elif [ -z "$model" ]; then model='-'; else team_usage_die 'set-task-model: 多余参数'; fi; shift ;;
+      -*) team_usage_die "set-task-model: 未知参数 $1" ;;
+      *) if [ -z "$cat" ]; then cat="$1"; elif [ -z "$model" ]; then model="$1"; else team_usage_die 'set-task-model: 多余参数'; fi; shift ;;
+    esac
+  done
+  local path reason; path="$(team_config_contract_path)" || return 1
+  if ! team_category_valid "$cat" || [[ "$model" == *=* ]]; then reason='set-task-model requires category provider/model (no removal/fallback)'
+  elif ! reason="$(team_config_model_violation "$model")"; then :
+  else reason=''; fi
+  if [ -n "$reason" ]; then
+    team_err "$reason"
+    [ "$dry" = 1 ] || team_config_audit_write invalid "$actor" TEAM_TASK_MODELS "$(team_config_file_value "$path" TEAM_TASK_MODELS)" "$cat=$model" "$(team_config_fingerprint "$path")" || true
+    return 4
+  fi
+  if [ "$dry" = 1 ]; then team_config_task_upsert "$path" "$cat" "$model" "$actor" "$dry" "$fp" "$allow_danger"
+  else team_with_lock "config:$path" team_config_locked_call team_config_task_upsert "$path" "$cat" "$model" "$actor" "$dry" "$fp" "$allow_danger"; fi
+}
+team_config_task_upsert() {
+  local path="$1" cat="$2" model="$3" actor="$4" dry="$5" fp="$6" allow_danger="${7:-0}" old new
+  old="$(team_config_file_value "$path" TEAM_TASK_MODELS)"
+  [ -z "$old" ] || team_task_map_violation "$old" >/dev/null || { team_err '现有映射非法；请 config set TEAM_TASK_MODELS <完整映射> 修复'; return 4; }
+  new="$(team_config_pairlist_upsert "$old" "$cat" "$model")"
+  team_config_write_checked TEAM_TASK_MODELS "$new" "$actor" "$dry" "$fp" "$allow_danger"
+}
+
+# Only the four relevant keys are located; unsafe Bash shapes are NOT rewritten.
+team_config_model_source_shape() {
+  local path="$1" line n=0 key rhs comment quote ch i depth=0 seen=' '
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    case "$line" in *TEAM_DEFAULT_MODEL*|*TEAM_AGENT_MODELS*|*TEAM_TASK_MODELS*|*TEAM_PM_MODEL*) ;;
+      *)
+        [[ "$line" =~ ^[[:space:]]*(if|case|for|while|until|function)[[:space:]] ]] && depth=$((depth+1))
+        [[ "$line" =~ ^[[:space:]]*(fi|esac|done)([[:space:];]|$) ]] && depth=$((depth>0 ? depth-1 : 0))
+        continue ;;
+    esac
+    if ! [[ "$line" =~ ^(TEAM_DEFAULT_MODEL|TEAM_AGENT_MODELS|TEAM_TASK_MODELS|TEAM_PM_MODEL)= ]] || [ "$depth" -gt 0 ]; then
+      team_err "$path:$n: unsupported relevant source shape；请手工规范为顶层唯一 KEY='literal' 后重试"; return 5
+    fi
+    key="${BASH_REMATCH[1]}"
+    case "$seen" in *" $key "*) team_err "$path:$n: duplicate $key；请手工规范"; return 5 ;; esac
+    seen="$seen$key "
+    comment="$(printf '%s' "$line" | team_config_inline_comment_of_line)"
+    rhs="${line#*=}"; [ -z "$comment" ] || rhs="${rhs%"$comment"}"
+    rhs="$(team_trim "$rhs")"
+    quote=''; i=0
+    if [[ "$rhs" == \"* ]]; then
+      [[ "$rhs" == *\" ]] && [ "${#rhs}" -ge 2 ] || { team_err "$path:$n: multiline/unclosed literal"; return 5; }
+      rhs="${rhs:1:${#rhs}-2}"
+      case "$rhs" in *'$'*|*'`'*|*'\\'*|*'"'*) team_err "$path:$n: expanding double quote；请规范单行 literal"; return 5 ;; esac
+    elif [[ "$rhs" == "'"* ]]; then
+      while [ "$i" -lt "${#rhs}" ]; do
+        ch="${rhs:i:1}"
+        if [ "$quote" = single ]; then [ "$ch" != "'" ] || quote=''
+        else
+          if [ "$ch" = "'" ]; then quote=single
+          elif [ "${rhs:i:2}" = "\\'" ]; then i=$((i+1))
+          else team_err "$path:$n: unsupported literal concatenation"; return 5; fi
+        fi
+        i=$((i+1))
+      done
+      [ -z "$quote" ] || { team_err "$path:$n: multiline/unclosed literal"; return 5; }
+    elif ! [[ "$rhs" =~ ^[a-zA-Z0-9_./:=+-]+$ ]]; then
+      team_err "$path:$n: dynamic/indirect value；请规范顶层单行 literal"; return 5
+    fi
+  done < "$path"
+}
+team_cmd_config_upgrade_models() {
+  local map='' pm='' dry=1 yes="${TEAM_UPGRADE_CONFIRMED:-0}" fp='' actor="${TEAM_ACTOR:-cli}"
+  [ "$yes" != 1 ] || dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task-models) map="${2:?}"; shift 2 ;; --pm-model) pm="${2:?}"; shift 2 ;;
+      --dry-run) dry=1; shift ;; --yes|-y) yes=1; dry=0; shift ;;
+      --fingerprint) fp="${2:?}"; shift 2 ;; --fingerprint=*) fp="${1#*=}"; shift ;;
+      --actor) actor="${2:?}"; shift 2 ;; *) team_usage_die "upgrade-models: 未知参数 $1" ;;
+    esac
+  done
+  [ -n "$map" ] && [ -n "$pm" ] || { team_err 'upgrade-models requires --task-models <完整映射> --pm-model <独立模型>；默认 preview，--yes 才写'; return 4; }
+  local path; path="$(team_config_contract_path)" || return 1
+  if [ "$dry" = 1 ]; then team_config_upgrade_transaction "$path" "$map" "$pm" "$dry" "$fp" "$actor"
+  else team_with_lock "config:$path" team_config_locked_call team_config_upgrade_transaction "$path" "$map" "$pm" "$dry" "$fp" "$actor"; fi
+}
+team_config_upgrade_transaction() {
+  local path="$1" map="$2" pm="$3" dry="$4" fp="$5" actor="$6" before after tmp rc=0
+  before="$(team_config_fingerprint "$path")"
+  if ! team_task_map_violation "$map" || ! team_config_model_violation "$pm"; then
+    [ "$dry" = 1 ] || team_config_audit_write invalid "$actor" model-upgrade "$before" '' || true
+    return 4
+  fi
+  if [ -n "$fp" ] && [ "$before" != "$fp" ]; then
+    [ "$dry" = 1 ] || team_config_audit_write conflict "$actor" model-upgrade "$before" '' "$fp" "$before" || true
+    team_err 'upgrade-models: 指纹不符，未写'; return 3
+  fi
+  if ! team_config_model_source_shape "$path"; then
+    [ "$dry" = 1 ] || team_config_audit_write refused "$actor" model-upgrade "$before" '' || true
+    return 5
+  fi
+  printf 'upgrade-models: remove TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; TEAM_TASK_MODELS=%s; TEAM_PM_MODEL=%s; before=%s\n' "$map" "$pm" "$before"
+  [ "$dry" != 1 ] || { printf 'dry-run: no config/audit mutation; --yes to commit\n'; return 0; }
+  tmp="$(mktemp "$(dirname "$path")/.model-upgrade.XXXXXX")" || {
+    team_config_audit_write write-error "$actor" model-upgrade "$before" '' || true; return 6;
+  }
+  cp -p "$path" "$tmp" || {
+    rm -f "$tmp"; team_config_audit_write write-error "$actor" model-upgrade "$before" '' || true; return 6;
+  }
+  team_config_set_in_file "$tmp" TEAM_DEFAULT_MODEL '' remove &&
+    team_config_set_in_file "$tmp" TEAM_AGENT_MODELS '' remove &&
+    team_config_set_in_file "$tmp" TEAM_TASK_MODELS "$map" &&
+    team_config_set_in_file "$tmp" TEAM_PM_MODEL "$pm" && bash -n "$tmp" || rc=6
+  if [ "$rc" = 0 ] && [ "$(team_config_fingerprint "$path")" != "$before" ]; then rc=3; fi
+  if [ "$rc" = 0 ]; then mv -f "$tmp" "$path" || rc=6; fi
+  rm -f "$tmp"
+  if [ "$rc" != 0 ]; then
+    local result=write-error; [ "$rc" != 3 ] || result=conflict
+    team_config_audit_write "$result" "$actor" model-upgrade "$before" '' || true
+    return "$rc"
+  fi
+  after="$(team_config_fingerprint "$path")"
+  team_config_audit_write ok "$actor" 'TEAM_DEFAULT_MODEL,TEAM_AGENT_MODELS,TEAM_TASK_MODELS,TEAM_PM_MODEL' "$before" "$after" "$before" "$after" || true
+  printf 'committed: before=%s after=%s\n' "$before" "$after"
+}
+
 # ---------------------------------------------------------------- 子命令分发
 team_cmd_config() {
   local sub="${1:-}"
@@ -1136,21 +1284,25 @@ team_cmd_config() {
     list) team_cmd_config_list "$@" ;;
     set) team_cmd_config_set "$@" ;;
     log) team_cmd_config_log "$@" ;;
-    set-agent-model) team_cmd_config_set_agent_model "$@" ;;
+    set-task-model) team_cmd_config_set_task_model "$@" ;;
+    upgrade-models) team_cmd_config_upgrade_models "$@" ;;
+    set-agent-model) team_err "retired: use $TEAM_CLI config set-task-model <category> <model> or config set TEAM_PM_MODEL <model>"; return 5 ;;
     ''|help|-h|--help)
       cat <<EOF
-用法： $TEAM_CLI config <list|set|log|set-agent-model> …
+用法： $TEAM_CLI config <list|set|log|set-task-model|upgrade-models> …
 
   $TEAM_CLI config list [--json]                     列出契约里每个键（class/kind/当前值/默认值）与
-                                                 models 块（按席位模型 + 来源三态）
+                                                 models 块（未来策略与已提交启动身份）
   $TEAM_CLI config set <KEY> <VALUE> [--dry-run]     唯一写入口：校验 → 指纹 CAS → 原子写 → 审计
                      [--fingerprint <sha256>] [--actor <name>] [--allow-danger]
-  $TEAM_CLI config set-agent-model <seat> <model|->  按席位改模型（- 移除覆盖，回到 TEAM_DEFAULT_MODEL）
+  $TEAM_CLI config set-task-model <category> <model>  新增/修改类别模型，不改已派身份
+  $TEAM_CLI config upgrade-models --task-models <map> --pm-model <model> [--dry-run] [--yes]
+                     [--fingerprint <sha256>] [--actor <name>] 显式四键事务升级
   $TEAM_CLI config log [N]                           审计尾部（默认 10 行）
 
 退出码： 0 写入/校验通过 ｜ 3 指纹冲突 ｜ 4 值不合法 ｜ 5 键只读 ｜ 6 写失败 ｜ 7 危险值需 --allow-danger
 EOF
       ;;
-    *) team_usage_die "config: 未知子命令 $sub（list|set|log|set-agent-model）" ;;
+    *) team_usage_die "config: 未知子命令 $sub（list|set|log|set-task-model|upgrade-models）" ;;
   esac
 }

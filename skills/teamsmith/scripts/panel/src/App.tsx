@@ -12,13 +12,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
-import { layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsViewRows } from './layout.js'
-import type { LayoutInput } from './layout.js'
+import { layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows } from './layout.js'
+import type { LayoutInput, SettingsRow } from './layout.js'
 import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, SettingsWindow, ViewState } from './types.js'
+import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsBlock, SettingsCategory, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, SettingsWindow, ViewState } from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -27,13 +27,17 @@ const TRAY_TR = '╮'
 const TRAY_H = '─'
 const TRAY_V = '│'
 
+/** The focusable row of the view as the App walks it (headings are skipped). */
+type SettingsFocusRow = Extract<SettingsRow, { kind: 'key' | 'category' | 'assignment' | 'pm-launch' }>
+
 /**
  * The kinds whose editor is the choice picker (M55). `enum` joins only when the command reports
  * values (an enum with no constraints has no choice set: R3's visible fallback names the reason),
  * and a key the command reports without a `choices` object falls back to the compose editor — the
- * bundle works against an older command instead of inventing options.
+ * bundle works against an older command instead of inventing options. `task-model-map` is
+ * deliberately absent: its editor is the categories block (P232), never a composed pair list.
  */
-const CHOICE_KINDS = new Set(['bool', 'enum', 'int', 'seconds', 'mb', 'bytes', 'pct', 'path', 'model', 'pairlist', 'winlist', 'pattern'])
+const CHOICE_KINDS = new Set(['bool', 'enum', 'int', 'seconds', 'mb', 'bytes', 'pct', 'path', 'model', 'winlist', 'pattern'])
 const NUMERIC_KINDS = new Set(['int', 'seconds', 'mb', 'bytes', 'pct'])
 
 function hasChoiceEditor(key: SettingsKey): boolean {
@@ -110,9 +114,9 @@ export interface PanelApi {
    * next interaction sees. Never awaited on the interaction path.
    */
   refreshSettingsSoon(): void
-  /** One `team config set-agent-model <seat> <model|->` invocation (P22/B4). */
-  setSeatModel(
-    seat: string,
+  /** One `team config set-task-model <category> <model>` invocation (P232). */
+  setTaskModel(
+    category: string,
     model: string,
     opts: { dryRun?: boolean; fingerprint?: string | null },
   ): Promise<{ code: number; line: string }>
@@ -276,9 +280,7 @@ export function App({
   const [settingsOffset, setSettingsOffset] = useState<number | null>(null)
   /** The pending two-step write confirmation ({danger} = the command answered 7). */
   const [settingConfirm, setSettingConfirm] = useState<{ key: string; next: string; danger: boolean } | null>(null)
-  /** The seat picker (P22/B4): the seat, its row and the option list with the selection. */
-  const [seatPicker, setSeatPicker] = useState<{ agent: string; row: number; models: string[]; index: number } | null>(null)
-  /** The choice picker (M55): the key's schema-derived entries and the selection. */
+  /** The choice picker (M55/P232): the row's schema-derived entries and the selection. */
   const [choicePicker, setChoicePicker] = useState<SettingsChoicePicker | null>(null)
   const { exit } = useApp()
   const scrollRef = useRef(0)
@@ -316,10 +318,12 @@ export function App({
   const settingsOffsetRef = useRef<number | null>(null)
   /** The row window the last frame drew (the wheel and the focus keys clamp against it). */
   const settingsWindowRef = useRef<SettingsWindow | null>(null)
-  /** The row the open `setting` editor writes (the fingerprint was pinned when it opened). */
-  const settingRowRef = useRef<{ row: number; key: string; value: string; cls: string; fingerprint: string; seat?: string; kind?: string; choices?: SettingsKey['choices'] } | null>(null)
-  const seatPickerRef = useRef<{ agent: string; row: number; models: string[]; index: number } | null>(null)
-  seatPickerRef.current = seatPicker
+  /**
+   * The row the open `setting` editor writes (the fingerprint was pinned when it opened).
+   * `category` is set when the row is a task category: the same editor then writes through
+   * `team config set-task-model <category> <model>` instead of `team config set <KEY>` (P232).
+   */
+  const settingRowRef = useRef<{ row: number; key: string; value: string; cls: string; fingerprint: string; category?: string; kind?: string; choices?: SettingsKey['choices'] } | null>(null)
   const choicePickerRef = useRef<SettingsChoicePicker | null>(null)
   choicePickerRef.current = choicePicker
   const settingConfirmRef = useRef<{ key: string; next: string; danger: boolean } | null>(null)
@@ -521,12 +525,18 @@ export function App({
         const conf = settingConfirmRef.current
         const timing =
           target.cls === 'restart' ? stringsRef.current.settingTimingRestart : stringsRef.current.settingTimingApply
-        const isSeat = Boolean(target.seat)
-        const seatModel = text.trim() === '' ? '-' : text.trim()
+        // P232: a category row keeps the same editor, but its write is the CLI's per-category
+        // command (`set-task-model`) — the console never composes the pair list.
         const call = (dryRun: boolean, allowDanger: boolean): Promise<{ code: number; line: string }> =>
-          isSeat
-            ? api.setSeatModel(target.seat as string, seatModel, { dryRun, fingerprint: target.fingerprint })
+          target.category
+            ? api.setTaskModel(target.category, text, { dryRun, fingerprint: target.fingerprint })
             : api.setSetting(target.key, text, { dryRun, fingerprint: target.fingerprint, allowDanger })
+        const written = (): string =>
+          target.category
+            ? fill(stringsRef.current.settingCategoryWritten, { category: target.category, value: text })
+            : target.key === 'TEAM_PM_MODEL'
+              ? fill(stringsRef.current.settingPmWritten, { value: text })
+              : fill(stringsRef.current.settingWritten, { key: target.key, value: text, timing })
         if (!conf) {
           const r = await call(true, false)
           if (r.code === 0) {
@@ -534,11 +544,11 @@ export function App({
             setSettingConfirm(settingConfirmRef.current)
             setReceipt(null)
             setStatus(
-              isSeat
-                ? fill(stringsRef.current.settingSeatConfirm, {
-                    seat: target.seat as string,
+              target.category
+                ? fill(stringsRef.current.settingCategoryConfirm, {
+                    category: target.category,
                     old: target.value || stringsRef.current.dash,
-                    next: seatModel === '-' ? stringsRef.current.dash : seatModel,
+                    next: text,
                   })
                 : fill(stringsRef.current.settingConfirm, {
                     key: target.key,
@@ -570,14 +580,7 @@ export function App({
         const r = await call(false, conf.danger)
         if (r.code === 0) {
           setReceipt(null)
-          const fallback = dataRef.current.blocks?.settings?.models?.default ?? ''
-          setStatus(
-            isSeat
-              ? seatModel === '-'
-                ? fill(stringsRef.current.settingSeatRemoved, { seat: target.seat as string, value: fallback || stringsRef.current.dash })
-                : fill(stringsRef.current.settingSeatWritten, { seat: target.seat as string, value: seatModel })
-              : fill(stringsRef.current.settingWritten, { key: target.key, value: text, timing }),
-          )
+          setStatus(written())
           settingRowRef.current = null
           settingConfirmRef.current = null
           setSettingConfirm(null)
@@ -908,9 +911,9 @@ export function App({
   // ---- project settings (P22/B2): the view's focus walk, its origin and its row opening.
 
   /** The view's focusable rows as the last assembly saw them (the walk must match the screen). */
-  const settingsRowsNow = useCallback((): ({ kind: 'key'; key: import('./types.js').SettingsKey } | { kind: 'seat'; seat: import('./types.js').SettingsSeat })[] => {
+  const settingsRowsNow = useCallback((): SettingsFocusRow[] => {
     const rows = settingsViewRows(dataRef.current.blocks?.settings, settingsFilterRef.current, stringsRef.current)
-    return rows.filter((r): r is { kind: 'key'; key: import('./types.js').SettingsKey } | { kind: 'seat'; seat: import('./types.js').SettingsSeat } => r.kind === 'key' || r.kind === 'seat')
+    return rows.filter(settingsRowFocusable)
   }, [])
 
   const moveSettingsFocus = useCallback(
@@ -991,7 +994,7 @@ export function App({
       pushValue(key.value, 'current')
       pushValue(key.default, 'default')
       for (const v of values) pushValue(v, 'value')
-      if (kind === 'bool' || kind === 'enum' || kind === 'pairlist') return out
+      if (kind === 'bool' || kind === 'enum') return out
       if (kind === 'path') {
         if (ch.empty) out.push({ value: '', kind: 'clear' })
         out.push({ value: '', kind: 'free', seed: base })
@@ -1018,6 +1021,21 @@ export function App({
   const choiceTarget = useCallback(
     (picker: SettingsChoicePicker): NonNullable<typeof settingRowRef.current> => {
       const rows = settingsRowsNow()
+      const fingerprint = dataRef.current.blocks?.settings?.fingerprint ?? ''
+      if (picker.category) {
+        // P232: a category picker writes `set-task-model <category> <model>`; its "current" value is
+        // the future policy's model for that category — read from the row the picker was opened on.
+        const catNow = rows.find((r) => r.kind === 'category' && r.category.category === picker.key)
+        return {
+          row: picker.row,
+          key: picker.key,
+          value: catNow && catNow.kind === 'category' ? catNow.category.model : '',
+          cls: 'apply',
+          fingerprint,
+          category: picker.key,
+          kind: picker.kind,
+        }
+      }
       // By key name, not by index: the picker's row index is a focus index and the row list can be
       // replaced by a settle re-read while the picker is open.
       const rowNow = rows.find((r) => r.kind === 'key' && r.key.name === picker.key) ?? rows[picker.row]
@@ -1027,7 +1045,7 @@ export function App({
         key: picker.key,
         value: keyNow?.value ?? '',
         cls: keyNow?.class ?? 'apply',
-        fingerprint: dataRef.current.blocks?.settings?.fingerprint ?? '',
+        fingerprint,
         kind: picker.kind,
         choices: keyNow?.choices,
       }
@@ -1051,11 +1069,23 @@ export function App({
       setBusy(true)
       const timing =
         target.cls === 'restart' ? stringsRef.current.settingTimingRestart : stringsRef.current.settingTimingApply
+      // P232: a category accept writes through the CLI's per-category command; a key accept keeps
+      // the contract-set path. Both are the owning command's subprocess — never a direct write.
+      const call = (dryRun: boolean, allowDanger: boolean): Promise<{ code: number; line: string }> =>
+        target.category
+          ? api.setTaskModel(target.category, value, { dryRun, fingerprint: target.fingerprint })
+          : api.setSetting(target.key, value, { dryRun, fingerprint: target.fingerprint, allowDanger })
+      const writtenLine = (): string =>
+        target.category
+          ? fill(stringsRef.current.settingCategoryWritten, { category: target.category, value })
+          : target.key === 'TEAM_PM_MODEL'
+            ? fill(stringsRef.current.settingPmWritten, { value })
+            : fill(stringsRef.current.settingWritten, { key: target.key, value, timing })
       try {
         const danger = choiceDangerRef.current
         const dangerAccept = Boolean(danger && danger.key === target.key && danger.value === value)
         if (!dangerAccept) {
-          const dry = await api.setSetting(target.key, value, { dryRun: true, fingerprint: target.fingerprint })
+          const dry = await call(true, false)
           if (dry.code === 7) {
             choiceDangerRef.current = { key: target.key, value }
             setReceipt(null)
@@ -1079,15 +1109,11 @@ export function App({
             return
           }
         }
-        const r = await api.setSetting(target.key, value, {
-          dryRun: false,
-          fingerprint: target.fingerprint,
-          allowDanger: dangerAccept,
-        })
+        const r = await call(false, dangerAccept)
         choiceDangerRef.current = null
         if (r.code === 0) {
           setReceipt(null)
-          setStatus(fill(stringsRef.current.settingWritten, { key: target.key, value, timing }))
+          setStatus(writtenLine())
           settingRowRef.current = null
           setChoicePicker(null)
           choicePickerRef.current = null
@@ -1121,29 +1147,30 @@ export function App({
   )
 
   /**
-   * The pairlist row's editor is the seats block (the requirement that owns per-seat editing):
-   * `enter` moves the focus there, no compose editor and no option list opens. A filter that hides
-   * the seats is dropped, because otherwise "focus the seats block" would name a row that is not
-   * on screen.
+   * The whole-map row's editor is the categories block (P232): `enter` moves the focus to the first
+   * category row — no compose editor, no option list, and the pair list is never composed here. A
+   * filter that hides the block is dropped, because otherwise "focus the categories block" would
+   * name a row that is not on screen. When the policy carries no category at all (a legacy or empty
+   * map) the block has nothing to focus: the CLI route is named instead, and nothing is written.
    */
-  const routePairlist = useCallback(() => {
+  const routeCategories = useCallback(() => {
     const rows = settingsRowsNow()
-    let seat = rows.findIndex((r) => r.kind === 'seat')
-    if (seat < 0) {
+    let at = rows.findIndex((r) => r.kind === 'category')
+    if (at < 0) {
       settingsFilterRef.current = ''
       setSettingsFilter('')
       // The focus index counts focusable rows, not the group headings `settingsViewRows` also
       // returns — counting those would land the cursor on the wrong row (or past the end).
-      const all = settingsViewRows(dataRef.current.blocks?.settings, '', stringsRef.current).filter(
-        (r) => r.kind === 'key' || r.kind === 'seat',
-      )
-      seat = all.findIndex((r) => r.kind === 'seat')
+      const all = settingsRowsNow()
+      at = all.findIndex((r) => r.kind === 'category')
     }
     setChoicePicker(null)
     choicePickerRef.current = null
-    if (seat >= 0) setSettingsFocus(seat)
+    if (at >= 0) setSettingsFocus(at)
     setReceipt(null)
-    setStatus(stringsRef.current.settingsChoicePairlist)
+    setStatus(
+      at >= 0 ? stringsRef.current.settingsCategoryMapHint : stringsRef.current.settingsCategoryMapEmpty,
+    )
   }, [settingsRowsNow])
 
   /**
@@ -1232,8 +1259,6 @@ export function App({
     setSettingsOffset(null)
     settingsOffsetRef.current = null
     settingsWindowRef.current = null
-    setSeatPicker(null)
-    seatPickerRef.current = null
     setChoicePicker(null)
     choicePickerRef.current = null
     api.setSettingsOpen(false)
@@ -1244,8 +1269,39 @@ export function App({
   }, [api, settingsOrigin])
 
   /**
+   * Builds the entries of a category picker (P232). The vocabulary is exactly the project's own:
+   * the policy's model for the category when there is one, then the models the command reports as
+   * known — plus the free-text entry. The machine's Pi catalogue is not a source here, and there is
+   * no removal entry: the writer has no per-category delete, so the console must not invent one.
+   */
+  const buildCategoryEntries = useCallback(
+    (cat: SettingsCategory): SettingsChoiceEntry[] => {
+      const known = dataRef.current.blocks?.settings?.models?.known ?? []
+      const synthetic: SettingsKey = {
+        name: cat.category,
+        class: 'apply',
+        kind: 'model',
+        form: 'plain',
+        value: cat.model,
+        default: '',
+        set: cat.model !== '',
+        comment: '',
+        warning: '',
+        route: '',
+        choices: { source: 'known', values: [...known], min: '', max: '', empty: false, note: '' },
+        group: 'task-model',
+        known: true,
+      }
+      return buildChoiceEntries(synthetic)
+    },
+    [buildChoiceEntries],
+  )
+
+  /**
    * Enter on a view row: a `refuse` row opens no editor and surfaces the owning command's route;
-   * an editable row opens the value editor (the compose line's `setting` mode, B3).
+   * an editable row opens the value editor (the compose line's `setting` mode, B3); a category row
+   * opens its own picker (P232); a committed assignment is read-only and only names the route that
+   * decides it.
    */
   const openSettingsRow = useCallback(
     (index: number) => {
@@ -1255,14 +1311,31 @@ export function App({
       const at = index < 0 ? settingsFocusRef.current : index
       const row = rows[at]
       if (!row) return
-      if (row.kind === 'seat') {
-        // The picker: the command's known models, then the removal and the free-text line. The
-        // editor opens on the chosen option so the two-step confirmation has a surface.
-        const models = [...(dataRef.current.blocks?.settings?.models?.known ?? [])]
-        setSeatPicker({ agent: row.seat.agent, row: at, models, index: 0 })
-        seatPickerRef.current = { agent: row.seat.agent, row: at, models, index: 0 }
+      if (row.kind === 'category') {
+        const entries = buildCategoryEntries(row.category)
+        const picker: SettingsChoicePicker = {
+          row: at,
+          key: row.category.category,
+          kind: 'model',
+          entries,
+          index: 0,
+          interval: null,
+          category: true,
+        }
+        choiceDangerRef.current = null
+        setChoicePicker(picker)
+        choicePickerRef.current = picker
         setReceipt(null)
         setStatus(null)
+        return
+      }
+      if (row.kind === 'assignment' || row.kind === 'pm-launch') {
+        // Read-only: the actual model is the committed record's, decided by dispatch/resume. The
+        // console offers no editor for it (and never a "restart this seat" action).
+        setReceipt(null)
+        setChoicePicker(null)
+        choicePickerRef.current = null
+        setStatus(row.kind === 'assignment' ? stringsRef.current.settingsAssignmentHint : stringsRef.current.settingsPmLaunchHint)
         return
       }
       const key = row.key
@@ -1271,15 +1344,16 @@ export function App({
         setStatus(`${key.name} · ${key.route || key.warning || stringsRef.current.settingsRefusedRoute}`)
         return
       }
+      // The whole-map row's editor is the categories block, never a composed pair list (P232).
+      if (String(key.kind ?? '') === 'task-model-map') {
+        routeCategories()
+        return
+      }
       // M65/D11: the editor opens on the `settings` block already on screen — no `config list` or
       // `__panel-data` stands between the keystroke and the frame that answers it. The fingerprint
       // is that block's, so a contract changed underneath is the owning command's conflict verdict
       // (CAS), not a reason to re-read before every action.
       if (hasChoiceEditor(key)) {
-        if (String(key.kind ?? '') === 'pairlist') {
-          routePairlist()
-          return
-        }
         const entries = buildChoiceEntries(key)
         if (entries.length) {
           const kind = String(key.kind ?? '')
@@ -1300,7 +1374,7 @@ export function App({
         }
       }
       settingRowRef.current = {
-        row: index,
+        row: at,
         key: key.name,
         value: key.value,
         cls: key.class,
@@ -1317,62 +1391,8 @@ export function App({
         setStatus(fill(stringsRef.current.settingsChoiceNoChoice, { kind: String(key.kind ?? '') }))
       }
     },
-    [buildChoiceEntries, openCompose, routePairlist, settingsRowsNow],
+    [buildCategoryEntries, buildChoiceEntries, openCompose, routeCategories, settingsRowsNow],
   )
-
-  /**
-   * One picker choice: a model opens the editor holding it, `-` opens it holding the removal,
-   * the free-text row opens it empty. The editor's two Enter presses are the confirmation.
-   */
-  /** Resolve a picker index (or -1 = the selected one) into the picker + its option. */
-  const pickerIndex = useCallback(
-    (index: number): { picker: { agent: string; row: number; models: string[]; index: number }; option: string } | null => {
-      const p = seatPickerRef.current
-      if (!p) return null
-      const options = [...p.models, '-', '']
-      const i = index < 0 ? p.index : index
-      if (i < 0 || i >= options.length) return null
-      return { picker: p, option: options[i] }
-    },
-    [],
-  )
-
-  const chooseSeatOption = useCallback(
-    (index: number) => {
-      const picker = pickerIndex(index)
-      if (!picker) return
-      const { picker: p, option } = picker
-      const seat = p.agent
-      // M65/D11: the editor opens from the block already on screen (no read on the interaction
-      // path); its fingerprint is that block's, so CAS catches a contract changed underneath.
-      const block = dataRef.current.blocks?.settings
-      const seatRow = (block?.models?.seats ?? []).find((x) => x.agent === seat)
-      const initial = option === '' ? '' : option
-      settingRowRef.current = {
-        row: p.row,
-        key: seat,
-        value: seatRow?.model ?? '',
-        cls: 'restart',
-        fingerprint: block?.fingerprint ?? '',
-        seat,
-      }
-      settingConfirmRef.current = null
-      setSettingConfirm(null)
-      setSeatPicker(null)
-      seatPickerRef.current = null
-      openCompose('setting', initial)
-    },
-    [openCompose, pickerIndex],
-  )
-
-  const moveSeatPicker = useCallback((delta: number) => {
-    const p = seatPickerRef.current
-    if (!p) return
-    const count = p.models.length + 2
-    const next = { ...p, index: Math.max(0, Math.min(count - 1, p.index + delta)) }
-    seatPickerRef.current = next
-    setSeatPicker(next)
-  }, [])
 
   /** The detail view's file tabs: `←`/`→` clamp at the ends (no wrap — the row shows the order). */
   const moveDetailTab = useCallback((delta: number) => {
@@ -1516,16 +1536,9 @@ export function App({
         case 'choice-close':
           closeChoicePicker()
           return
-        case 'seat-pick':
-          if (action.index < 0) chooseSeatOption(-1)
-          else chooseSeatOption(action.index)
-          return
-        case 'seat-move':
-          moveSeatPicker(action.delta)
-          return
       }
     },
-    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSeatPicker, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, toggleLaneFold, updateScroll],
+    [boardRows, chooseChoiceOption, closeChoicePicker, closeSettingsView, collapse, cyclePref, goPage, moveBoardFocus, moveChoicePicker, moveDetailTab, moveFocus, moveSettingsFocus, openCompose, openDetail, openSettingsRow, openSettingsView, openWorkFocused, runAction, scrollDetail, scrollLane, scrollSettings, toggleLaneFold, updateScroll],
   )
 
   const effectiveActivity = activityPinned ? data.activity : settings.activity
@@ -1597,7 +1610,6 @@ export function App({
       settingsFocus,
       settingsFilter,
       settingsOffset,
-      seatPicker,
       choicePicker,
     }
     // The geometry comes from the live terminal, not from the frame's snapshot of it: a resize must
@@ -1643,7 +1655,6 @@ export function App({
     settingsFocus,
     settingsFilter,
     settingsOffset,
-    seatPicker,
     choicePicker,
     size,
     composing,
@@ -1742,14 +1753,8 @@ export function App({
           // on the page the view was opened from (the work page's rows open it too, P20/B5).
           if (choicePickerRef.current) {
             // The choice picker's entries may outrun the budget: the wheel walks the list like
-            // ↑/↓ (the window follows the selection, as the seat picker's does).
+            // ↑/↓ (the window follows the selection).
             moveChoicePicker(delta)
-            return
-          }
-          if (seatPickerRef.current) {
-            // P30/D5: the seat picker's wheel used to fall through to the page. It walks its
-            // entries now, exactly like the choice picker, and the page still does not move.
-            moveSeatPicker(delta)
             return
           }
           if (settingsViewRef.current) {
@@ -1948,22 +1953,6 @@ export function App({
           }
           if (key.return) {
             chooseChoiceOption(-1)
-            return
-          }
-          return
-        }
-        if (seatPickerRef.current) {
-          if (key.escape) {
-            setSeatPicker(null)
-            seatPickerRef.current = null
-            return
-          }
-          if (key.upArrow || key.downArrow) {
-            moveSeatPicker(key.upArrow ? -1 : 1)
-            return
-          }
-          if (key.return) {
-            chooseSeatOption(-1)
             return
           }
           return

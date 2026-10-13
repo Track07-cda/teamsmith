@@ -56,6 +56,14 @@ last three take `--force` + one audited line). `team change status <id>` shows t
   fails the task.
 - Never write tokens/secrets into code, config, logs or commit messages; never read credential files
   (e.g. `~/.pi/agent/auth.json`).
+- **A brief declares one task category; models belong to the project, not to your seat.** The `category:` line
+  selects the model the PM dispatches with (`routine` for bounded ordinary work, `analysis` for complex
+  planning/judgment, `verify` for independent adversarial review — or the project's own names). A same-task
+  recovery keeps its committed model/SID: do not re-select, and never treat model strength as a substitute for a
+  self-contained brief. **Independent verification cannot be waived by a strong model.**
+- **Scope, report and disk handover survive a fresh takeover**: keep exactly the brief's scope, commit in small
+  steps, write `{{DOCS_DIR}}/reports/<ID>-<agent>.md`, and leave the next step and evidence on disk — a new session
+  (or a verifier) must be able to continue from the files alone, never from your conversation.
 - Never push `{{PROTECTED_BRANCH}}`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
 - Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
 

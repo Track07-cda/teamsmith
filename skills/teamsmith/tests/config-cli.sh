@@ -26,6 +26,7 @@ unset _v 2>/dev/null || true
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$here/lib/tmp-root.sh"
+. "$here/lib/model-policy.sh"
 tree="${_tree_arg:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 team="$skill/scripts/team"
@@ -37,6 +38,7 @@ cmd_config="$skill/scripts/lib/cmd-config.sh"
 keep="$_keep_arg"
 [ "$keep" = "1" ] && export TEAM_TMP_KEEP=1
 tmp="$(tmp_root_create config-cli)" || exit 3
+export HOME="$tmp/home"; mkdir -p "$HOME"
 PASS=0
 FAIL=0
 SKIP=0
@@ -65,7 +67,8 @@ new_proj() {
   ( cd "$p" && git init -q -b main && git config user.email c@teamsmith && git config user.name c \
       && printf '{"name":"%s","scripts":{"verify":"true"}}\n' "$name" > package.json \
       && git add -A && git commit -qm init ) >/dev/null 2>&1
-  if ! ( cd "$p" && bash "$team" init --session "cfg-$name" --agents "$agents" --vcs local \
+  routing_fixture_config "$p/.pi/team/config.sh" "$template" "cfg-$name" "$agents" || return 1
+  if ! ( cd "$p" && bash "$team" init --no-skills --session "cfg-$name" --agents "$agents" --vcs local \
            --gates "true" --docs docs/team ) >"$tmp/$name-init.log" 2>&1; then
     printf 'config-cli: 夹具 %s 的 team init 失败\n' "$name" >&2
     tail -5 "$tmp/$name-init.log" >&2
@@ -122,8 +125,8 @@ if want list; then
   json_check "$json" "TEAM_PROJECT 的类 = refuse" '[k for k in d["keys"] if k["name"]=="TEAM_PROJECT"][0]["class"]=="refuse"'
   json_check "$json" "TEAM_PANEL_DETAIL_CAP 未设（set=False）且带着默认值 131072" '[k for k in d["keys"] if k["name"]=="TEAM_PANEL_DETAIL_CAP"][0]["set"] is False and [k for k in d["keys"] if k["name"]=="TEAM_PANEL_DETAIL_CAP"][0]["default"]=="131072"'
   json_check "$json" "TEAM_MONITOR_ACTIVITY 的 form=export" '[k for k in d["keys"] if k["name"]=="TEAM_MONITOR_ACTIVITY"][0]["form"]=="export"'
-  json_check "$json" "每个名册席位都有 models.seats 行" 'sorted(s["agent"] for s in d["models"]["seats"])==["dev","pm","verify"]'
-  json_check "$json" "models.default 非空" 'bool(d["models"]["default"])'
+  json_check "$json" "每个 worker 有 assignment 行；PM 元数据单列" 'sorted(s["agent"] for s in d["models"]["assignments"])==["dev","verify"] and "pm_launch" in d["models"]'
+  json_check "$json" "未来独立 PM 策略非空，无默认席位回退字段" 'bool(d["models"]["policy"]["pm"]) and "default" not in d["models"]'
 
   # 没有契约的仓库：非 0 且点名 team init
   none="$tmp/no-contract"; mkdir -p "$none"
@@ -200,7 +203,7 @@ PY
 import json, sys
 d = json.load(open(sys.argv[1], encoding='utf-8'))
 by = {k["name"]: k for k in d["keys"]}
-want = {"TEAM_PROJECT": "identity", "TEAM_PULSE_INTERVAL": "panel", "TEAM_DEFAULT_MODEL": "seat-model", "TEAM_GATES": "workflow"}
+want = {"TEAM_PROJECT": "identity", "TEAM_PULSE_INTERVAL": "panel", "TEAM_TASK_MODELS": "task-model", "TEAM_PM_MODEL": "task-model", "TEAM_GATES": "workflow"}
 bad = []
 for name, tok in want.items():
     got = by.get(name, {}).get("group")
@@ -217,7 +220,7 @@ PY
     bad "样本键的 group 不对"
     grep '^PROBLEM' "$tmp/groups-samples.log" | sed 's/^/      /'
   else
-    ok "样本键：TEAM_PROJECT=identity / TEAM_PULSE_INTERVAL=panel / TEAM_DEFAULT_MODEL=seat-model / TEAM_GATES=workflow；手加的未知键 = \"\""
+    ok "样本键：TEAM_PROJECT=identity / TEAM_PULSE_INTERVAL=panel / TEAM_TASK_MODELS,TEAM_PM_MODEL=task-model / TEAM_GATES=workflow；手加的未知键 = \"\""
   fi
   # human 表与「其它机器出口」不动：表头照旧、表里没有 group 列，monitor 的两个出口一个字都不多。
   grep -qE '^KEY[[:space:]]+CLASS[[:space:]]+KIND[[:space:]]+VALUE[[:space:]]*$' "$tmp/groups-human.txt" \
@@ -349,7 +352,8 @@ if want validate; then
   check_rc "TEAM_PULSE_INTERVAL=0 → 4" 4 TEAM_PULSE_INTERVAL 0 --yes
   check_rc "TEAM_NOTIFY_TMUX=maybe → 4" 4 TEAM_NOTIFY_TMUX maybe --yes
   check_rc "TEAM_MONITOR_UI=colour → 4" 4 TEAM_MONITOR_UI colour --yes
-  check_rc "TEAM_AGENT_MODELS='dev'（没有 =）→ 4" 4 TEAM_AGENT_MODELS dev --yes
+  check_rc "TEAM_TASK_MODELS='dev'（没有 =）→ 4" 4 TEAM_TASK_MODELS dev --yes
+  check_rc "退休 TEAM_AGENT_MODELS → 5" 5 TEAM_AGENT_MODELS dev --yes
   check_rc "TEAM_PULSE_INTERVAL=0 --allow-danger 仍是 4（danger 不合法化非法值）" 4 TEAM_PULSE_INTERVAL 0 --yes --allow-danger
   check_rc "TEAM_MIN_FREE_SWAP_MB=0 → 7" 7 TEAM_MIN_FREE_SWAP_MB 0 --yes
   check_rc "TEAM_MIN_FREE_SWAP_MB=0 --dry-run --allow-danger → 0" 0 TEAM_MIN_FREE_SWAP_MB 0 --dry-run --allow-danger
@@ -365,6 +369,15 @@ if want validate; then
   run_in "$p" config set TEAM_MIN_FREE_SWAP_MB 0 --yes --allow-danger >/dev/null; rc=$?
   assert_eq "danger + --allow-danger → 0 并写入" "$rc" "0"
   assert_eq "值确实写进去了" "$(grep -c "^TEAM_MIN_FREE_SWAP_MB='0'" "$cfg" || true)" "1"
+  # P228/R6（F6）：analysis/verify 只是示例，不是必备类别 —— init 生成的项目接受**自定义词汇整映射**，
+  # 读侧同一份规则报出同一套词汇；空映射仍是真拒绝（唯一非法的映射）。
+  run_in "$p" config set TEAM_TASK_MODELS 'maintenance=vendor/light ops=vendor/ops' --yes >/dev/null; rc=$?
+  assert_eq "F6：init 过的项目接受自定义词汇整映射 → 0" "$rc" "0"
+  assert_eq "F6：写下的就是那份映射（逐字节）" "$(grep -c "^TEAM_TASK_MODELS='maintenance=vendor/light ops=vendor/ops'\$" "$cfg" || true)" "1"
+  json="$(run_in "$p" config list --json)"
+  json_check "$json" "F6：读侧 list --json 报出同一套词汇（无 analysis/verify）" '[c["category"] for c in d["models"]["policy"]["categories"]]==["maintenance","ops"]'
+  run_in "$p" config set TEAM_TASK_MODELS '' --yes >/dev/null; rc=$?
+  assert_eq "F6：空映射仍是 4（唯一非法的映射）" "$rc" "4"
   # 缺失契约时 set 点名 team init
   none="$tmp/validate-none"; mkdir -p "$none"; ( cd "$none" && git init -q -b main ) >/dev/null 2>&1
   out="$(run_in "$none" config set TEAM_GATES x --yes)"; rc=$?
@@ -471,8 +484,8 @@ if want roster; then
   # help 的两行（R2 的打印面）：--register 必须出现在 add-agent/teardown 的用法行上
   help_out="$(run_in "$p" help)"
   case "$help_out" in
-    *'add-agent <a> [--register] [--model m] [--create] [--no-install] [--print]'*)
-      ok "③ help 的 add-agent 行打印 --register/--model/--create/--no-install/--print" ;;
+    *'add-agent <a> [--register] [--create] [--no-install] [--print]'*)
+      ok "③ help 的 add-agent 行打印 --register/--create/--no-install/--print（--model 已退休）" ;;
     *) bad "③ help 的 add-agent 行没打印齐旗标" ;;
   esac
   case "$help_out" in
@@ -547,27 +560,16 @@ if want roster; then
   run_in "$p" teardown --register >/dev/null 2>&1; rc=$?
   assert_eq "⑧ --register 缺 --agent → 2（用法错）" "$rc" "2"
 
-  # ⑨ --model：席位模型写进同一份契约；`-` 移除；模型形状坏时不留下任何写入
-  out="$(run_in "$p" add-agent dev --model vendor/m9 --no-install)"; rc=$?
-  assert_eq "⑨ add-agent dev --model vendor/m9 → 0" "$rc" "0"
-  assert_eq "⑨ 模型写进 TEAM_AGENT_MODELS" "$(grep -c "^TEAM_AGENT_MODELS='dev=vendor/m9'$" "$cfg" || true)" "1"
-  out="$(run_in "$p" add-agent dev --model - --no-install)"; rc=$?
-  assert_eq "⑨ --model - 移除覆盖 → 0" "$rc" "0"
-  assert_eq "⑨ 覆盖被清空" "$(grep -c "^TEAM_AGENT_MODELS=''$" "$cfg" || true)" "1"
+  # ⑨ --model（席位模型）已退休：写入前拒绝 + 点名新入口 + 契约/名册零写入。
+  #    退休前的旧断言在这里写席位 pairlist；它随 design 决策 4 一起退休（P235 重指向，不删除守卫）。
   sha_m="$(sha_of "$cfg")"
-  out="$(run_in "$p" add-agent zeta --register --model badshape --no-install)"; rc=$?
-  assert_eq "⑨ 坏模型形状 → 4（先判形状）" "$rc" "4"
-  case "$out" in *"provider/model"*) ok "⑨ 报错点名形状" ;; *) bad "⑨ 报错没点名形状（$out）" ;; esac
-  assert_eq "⑨ 形状错时契约逐字节不变（席位没被半建）" "$(sha_of "$cfg")" "$sha_m"
-  assert_eq "⑨ 形状错时名册没有 zeta" "$(grep -c 'zeta' "$cfg" || true)" "0"
-  # 写序：名册先、模型后（同一次 --register --model 的审计顺序）
-  out="$(run_in "$p" add-agent omicron --register --model vendor/m5 --no-install)"; rc=$?
-  assert_eq "⑨ add-agent omicron --register --model vendor/m5 → 0" "$rc" "0"
-  tail2="$(tail -2 "$log")"
-  case "$tail2" in
-    *"key=TEAM_AGENTS"*"key=TEAM_AGENT_MODELS"*) ok "⑨ 审计顺序：名册行在前、席位模型行在后" ;;
-    *) bad "⑨ 审计顺序不对（$(printf '%s' "$tail2" | tr '\n' ' ')）" ;;
-  esac
+  out="$(run_in "$p" add-agent dev --model vendor/m9 --no-install)"; rc=$?
+  assert_eq "⑨ add-agent --model 已退休 → 2" "$rc" "2"
+  case "$out" in *retired*) ok "⑨ 退休诊断点名" ;; *) bad "⑨ 退休诊断缺失（$out）" ;; esac
+  case "$out" in *set-task-model*) ok "⑨ 退休路线指向 category 写入器" ;; *) bad "⑨ 退休路线不可执行（$out）" ;; esac
+  assert_eq "⑨ 退休拒绝不动契约" "$(sha_of "$cfg")" "$sha_m"
+  assert_eq "⑨ 退休拒绝不建席位" "$(grep -c 'zeta' "$cfg" || true)" "0"
+  assert_eq "⑨ 退休拒绝不写席位模型键" "$(grep -c '^TEAM_AGENT_MODELS=' "$cfg" || true)" "0"
 
   # ⑩ list kind 的规则在 schema 里就位（1.1）：scratch 树加一条 list 行 → 违规值被 4 拒
   ltree="$tmp/list-tree"; mkdir -p "$ltree/skills/teamsmith"
@@ -596,15 +598,16 @@ PY
   assert_eq "⑩ kind=list 的键接受合法形状 → 0" "$rc" "0"
   assert_eq "⑩ 合法值确实写入" "$(grep -c "^TEAM_ZZZ_LIST='api_1 ok.2'$" "$cfg" || true)" "1"
 
-  # ⑪ set-agent-model 对未入册的席位：拒绝 + 一条真能走的路线（brief 第三条：不留死胡同）
+  # ⑪ set-agent-model 已退休（任何席位，包括 pm）：拒绝 + 一条真能走的路线；独立 PM 写入器照旧。
   out="$(run_in "$p" config set-agent-model nosuchseat vendor/m9 --yes)"; rc=$?
-  assert_eq "⑪ 未入册席位的 set-agent-model → 5" "$rc" "5"
-  case "$out" in
-    *"add-agent nosuchseat --register"*) ok "⑪ 拒绝给出一条真能走的路线（--register）" ;;
-    *) bad "⑪ 拒绝没有给路线（$out）" ;;
-  esac
+  assert_eq "⑪ set-agent-model 已退休 → 5" "$rc" "5"
+  case "$out" in *set-task-model*TEAM_PM_MODEL*) ok "⑪ 退休路线点名 category 与独立 PM 写入器" ;; *) bad "⑪ 退休路线不完整（$out）" ;; esac
+  sha_pm="$(sha_of "$cfg")"
   run_in "$p" config set-agent-model pm vendor/pm9 --yes >/dev/null 2>&1; rc=$?
-  assert_eq "⑪ pm 席位照旧可直接设模型 → 0" "$rc" "0"
+  assert_eq "⑪ pm 席位也只能走独立 PM 写入器（退休 → 5）" "$rc" "5"
+  assert_eq "⑪ 退休拒绝不动契约" "$(sha_of "$cfg")" "$sha_pm"
+  run_in "$p" config set TEAM_PM_MODEL vendor/pm9 --yes >/dev/null 2>&1; rc=$?
+  assert_eq "⑪ 独立 PM 模型照旧可写 → 0" "$rc" "0"
 
   # ⑫ 席位名是一个 token（P105/F1）：空白形状必须在**任何写入之前**被拒。旧行为（红侧）：
   #    `api 1` 被当作两个各自合法的 token 追加进名册（写脏 + 一行 result=ok），命令随后才在
@@ -637,141 +640,54 @@ PY
   assert_eq "⑬ 真席位 api 照旧可删 → 0" "$rc" "0"
   assert_eq "⑬ api 从名册移除" "$(grep -c "^TEAM_AGENTS='dev 1'$" "$cfg4" || true)" "1"
 
-  # ⑭ --model 写完的 state 记录与配置同源（P105/F2）：夹具先埋一个旧记录（上一版漏掉的形状），
-  #    写完读回 —— 席位行必须是配置生效的值，不能是写盘前的旧值。
+  # ⑭ 退休的 --model 不许把旧 state 记录改造成「配置生效」的样子（P105/F2 的取代场景）：
+  #    拒绝必须发生在任何写入之前 —— 契约与 state 字节都不动，读数只来自 committed assignment。
   p5="$(new_proj roster-model-readback)" || exit 3
   cfg5="$p5/.pi/team/config.sh"; mkdir -p "$p5/.pi/team/state"
   printf 'model=old/legacy-model\nmodel_src=config\n' > "$p5/.pi/team/state/dev.env"
+  sha5="$(sha_of "$cfg5")"; st5="$(sha_of "$p5/.pi/team/state/dev.env")"
   out="$(run_in "$p5" add-agent dev --model vendor/m2 --no-install)"; rc=$?
-  assert_eq "⑭ add-agent dev --model vendor/m2 → 0" "$rc" "0"
-  assert_eq "⑭ 配置行 = dev=vendor/m2" "$(grep -c "^TEAM_AGENT_MODELS='dev=vendor/m2'$" "$cfg5" || true)" "1"
-  assert_eq "⑭ state 记录没有留下写盘前的旧模型" \
-    "$(grep -c '^model=old/legacy-model$' "$p5/.pi/team/state/dev.env" 2>/dev/null || true)" "0"
-  assert_eq "⑭ state 记录与配置同源（model=vendor/m2）" \
-    "$(grep -c '^model=vendor/m2$' "$p5/.pi/team/state/dev.env" 2>/dev/null || true)" "1"
+  assert_eq "⑭ add-agent --model 退休 → 2" "$rc" "2"
+  assert_eq "⑭ 退休拒绝不动契约（没有席位模型写入）" "$(sha_of "$cfg5")" "$sha5"
+  assert_eq "⑭ 退休拒绝不动 state 记录" "$(sha_of "$p5/.pi/team/state/dev.env")" "$st5"
   json="$(run_in "$p5" config list --json)"
-  json_check "$json" "⑭ 席位行显示配置生效的模型（不是写盘前的旧值）" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]=="vendor/m2"'
-  json_check "$json" "⑭ 席位行 override=true" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
-  json_check "$json" "⑭ 席位行来源 = config（记录与配置同源，不是历史记录）" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["source"]=="config"'
+  json_check "$json" "⑭ 密钥表里没有席位模型键；模型身份只来自 committed assignment" \
+    'not any(k["name"]=="TEAM_AGENT_MODELS" for k in d["keys"]) and all(s["agent"]!="dev" or s["assigned"] is False for s in d["models"]["assignments"])'
 fi
 
 # ---------------------------------------------------------------- models
 if want models; then
-  section "models · 来源三态与 team ps/roster 同口径 + 未知席位的警告"
+  section "models · 未来策略与完整 assignment 分离；缺失/损坏不猜模型"
   p="$(new_proj models 'dev verify dev2')" || exit 3
-  cfg="$p/.pi/team/config.sh"
-  # 记录夹具：verify 是显式 --model；dev2 的记录与配置解析不一致（历史记录）；dev 没有记录
-  python3 - "$cfg" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev2=xai/grok-4.6"')
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  mkdir -p "$p/.pi/team/state"
-  printf 'model=xai/grok-4.6\nmodel_src=explicit\n' > "$p/.pi/team/state/verify.env"
-  printf 'model=kimi-coding/k3-256k\n' > "$p/.pi/team/state/dev2.env"
+  cfg="$p/.pi/team/config.sh"; state="$p/.pi/team/state"
+  routing_fixture_record "$state" verify M1 "$p/.worktrees/verify" "$p/docs/team/tasks/M1-fixture.md" xai/grok-4.6 cfg-models-verify explicit
+  routing_fixture_record "$state" dev2 M2 "$p/.worktrees/dev2" "$p/docs/team/tasks/M2-fixture.md" vendor/recorded cfg-models-dev2 policy
   json="$(run_in "$p" config list --json)"
-  json_check "$json" "dev 没有记录 → source=config" '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["source"]=="config"'
-  json_check "$json" "verify 记录 model_src=explicit → source=explicit" '[s for s in d["models"]["seats"] if s["agent"]=="verify"][0]["source"]=="explicit"'
-  json_check "$json" "dev2 记录与配置解析不一致 → source=record + 记录里的模型" '[s for s in d["models"]["seats"] if s["agent"]=="dev2"][0]["source"]=="record" and [s for s in d["models"]["seats"] if s["agent"]=="dev2"][0]["model"]=="kimi-coding/k3-256k"'
-  json_check "$json" "known[] 收敛了配置与记录的模型" 'set(d["models"]["known"]) >= {"xai/grok-4.6","kimi-coding/k3-256k"}'
-
-  # team roster / team ps 的标签同口径（ps 需要会话文件才会打模型列）
+  json_check "$json" "dev 缺失 → 不展示未来策略为实际模型" '[s for s in d["models"]["assignments"] if s["agent"]=="dev"][0]["assigned"] is False and [s for s in d["models"]["assignments"] if s["agent"]=="dev"][0]["model"]==""'
+  json_check "$json" "verify 完整记录保留 explicit 来源" '[s for s in d["models"]["assignments"] if s["agent"]=="verify"][0]["selected_via"]=="explicit"'
+  json_check "$json" "dev2 实际模型不随未来策略改写" '[s for s in d["models"]["assignments"] if s["agent"]=="dev2"][0]["model"]=="vendor/recorded"'
+  json_check "$json" "known[] 收敛未来策略和完整记录" 'set(d["models"]["known"]) >= {"xai/grok-4.6","vendor/recorded"}'
   roster="$(run_in "$p" roster)"
-  case "$roster" in *"kimi-coding/k3-256k·历史记录"*) ok "team roster 的 dev2 标签 = ·历史记录" ;; *) bad "team roster 的标签不一致（$roster）" ;; esac
-  case "$roster" in *"xai/grok-4.6·显式"*) ok "team roster 的 verify 标签 = ·显式" ;; *) bad "team roster 的 verify 标签不一致" ;; esac
-  # 造一份足够大的会话文件让 team ps 打出模型列（Pi 的目录规则：sessions/--<cwd>--/*_<sid>.jsonl）
-  wt="$p/.worktrees/dev2"; sid="cfg-models-dev2"; safe="$(printf '%s' "$wt" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
-  mkdir -p "$p/.pi-agent/sessions/--$safe--"
+  case "$roster" in *"vendor/recorded·policy/assignment"*) ok "roster 显示 committed model 和 provenance" ;; *) bad "roster 的实际模型标签不一致" ;; esac
+  case "$roster" in *"xai/grok-4.6·explicit/assignment"*) ok "roster 保留 explicit 来源" ;; *) bad "roster 的 explicit 标签不一致" ;; esac
+  wt="$p/.worktrees/dev2"; sid=cfg-models-dev2; safe="$(printf '%s' "$wt" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
+  mkdir -p "$wt" "$p/.pi-agent/sessions/--$safe--"
   python3 -c 'import sys; open(sys.argv[1],"w").write("x"*4000)' "$p/.pi-agent/sessions/--$safe--/2026_${sid}.jsonl"
-  python3 - "$cfg" "$p" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s += '\nTEAM_PI_AGENT_DIR="%s/.pi-agent"\n' % sys.argv[2]
-open(p, 'w', encoding='utf-8').write(s)
-PY
+  printf '\nTEAM_PI_AGENT_DIR="%s/.pi-agent"\n' "$p" >> "$cfg"
   psout="$(run_in "$p" ps)"
-  case "$psout" in *"kimi-coding/k3-256k·历史记录"*) ok "team ps 的模型列与 models 块同口径" ;; *) bad "team ps 没打出同一标签（$(printf '%s' "$psout" | grep -i model || true)）" ;; esac
-
-  # 手改出的未知席位：警告点名 dev4，seats 里没有 dev4 行
-  python3 - "$cfg" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS="dev2=xai/grok-4.6"', 'TEAM_AGENT_MODELS="dev2=xai/grok-4.6 dev4=x/y"')
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  json="$(run_in "$p" config list --json)"; rc=$?
-  assert_eq "手改出未知席位后 list --json 仍 exit 0" "$rc" "0"
-  json_check "$json" "TEAM_AGENT_MODELS 的记录带点名 dev4 的 warning" '"dev4" in [k for k in d["keys"] if k["name"]=="TEAM_AGENT_MODELS"][0]["warning"]'
-  json_check "$json" "models.seats 里没有 dev4 行" 'all(s["agent"]!="dev4" for s in d["models"]["seats"])'
-
-  # ── P47/R4：空值 token（dev=）是一个「存在的覆盖」，解析与「没这个 token」同一支 ──────────────
-  # 旧形状：team_agent_model 把空 token 原样返回 → 席位行前导空字段被 `IFS=$'\t' read` 吃掉 →
-  # model 变成来源标签「配置」、override 变成无值字段（`"override":}`），整份 JSON 失解。
-  pe="$(new_proj models-empty)" || exit 3
-  cfge="$pe/.pi/team/config.sh"
-  python3 - "$cfge" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev="')
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  sha_e="$(sha_of "$cfge")"
-  json="$(run_in "$pe" config list --json)"; rc=$?
-  assert_eq "空值 token：config list --json 退出 0" "$rc" "0"
-  if printf '%s' "$json" | python3 -m json.tool >/dev/null 2>&1; then
-    ok "空值 token：文档能被 python3 -m json.tool 解析（旧形状在这里 Expecting value）"
-  else
-    bad "空值 token：文档解析失败（$(printf '%s' "$json" | python3 -m json.tool 2>&1 | head -1)）"
-  fi
-  json_check "$json" "dev 行存在：model=默认解析、source=config、override 是布尔 true" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]==d["models"]["default"] and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["source"]=="config" and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
-  json_check "$json" "known[] 不带来源标签，且带着默认解析" \
-    '"配置" not in d["models"]["known"] and d["models"]["default"] in d["models"]["known"]'
-  assert_eq "空值 token：契约 sha 不变（只读路径不写盘）" "$(sha_of "$cfge")" "$sha_e"
-  defm="$(printf '%s' "$json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["models"]["default"])')"
-  # team roster 与读同源（空 token 不是空模型>）
-  roster="$(run_in "$pe" roster)"
-  case "$roster" in
-    *"$defm·配置"*) ok "空值 token：team roster 打出默认模型 + 配置标签（$defm）" ;;
-    *) bad "空值 token：roster 没有打出默认模型（$(printf '%s' "$roster" | grep -m1 '^dev ' || true)）" ;;
-  esac
-  # team ps 的会话行同一个解析（给它一个假会话文件才会打印该行；TEAM_PI_AGENT_DIR 钉在夹具里）
-  wte="$pe/.worktrees/dev"
-  run_in "$pe" task M47E --title "P47 空 token 夹具" --agent dev --deps - >/dev/null 2>&1 || true
-  brief_e="$(ls "$pe"/docs/team/tasks/M47E-*.md 2>/dev/null | head -1)"
-  if [ -n "$brief_e" ]; then sed -i 's|^anchor: -.*$|anchor: none (infra) — P47 fixture|' "$brief_e"; fi
-  run_in "$pe" add-agent dev --create --no-install >/dev/null 2>&1 || true
-  if [ -d "$wte" ] && [ -n "$brief_e" ]; then
-    bre="$( cd "$pe" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
-        bash -c '. "'"$skill"'/scripts/lib/common.sh"; for _f in "'"$skill"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_branch_for_agent dev M47E' )"
-    git -C "$wte" switch -c "$bre" main >/dev/null 2>&1 || git -C "$wte" switch "$bre" >/dev/null 2>&1
-    wtsafe="$(printf '%s' "$wte" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
-    mkdir -p "$pe/.pi-agent/sessions/--$wtsafe--"
-    python3 -c 'import sys; open(sys.argv[1],"w").write("x"*4000)' "$pe/.pi-agent/sessions/--$wtsafe--/2026_cfg-models-empty-dev.jsonl"
-    printf '\nTEAM_PI_AGENT_DIR="%s/.pi-agent"\nTEAM_PI_BIN="/bin/true"\n' "$pe" >> "$cfge"
-    psout="$(run_in "$pe" ps)"
-    case "$psout" in
-      *"$defm·配置"*) ok "空值 token：team ps 的会话行同一解析（$defm·配置）" ;;
-      *) bad "空值 token：ps 没有打出同一解析（$(printf '%s' "$psout" | grep -m1 '^  dev' || true)）" ;;
-    esac
-    # dispatch --print：同一个解析进渲染器（空 token 不能渲染成空模型）
-    dout="$(run_in "$pe" dispatch dev M47E "$brief_e" --print)"; rc=$?
-    assert_eq "空值 token：dispatch --print 退出 0" "$rc" "0"
-    case "$dout" in
-      *"--provider ${defm%%/*} --model ${defm##*/}"*) ok "空值 token：dispatch 渲染出默认模型（$defm）" ;;
-      *) bad "空值 token：dispatch 没渲染默认模型（$dout）" ;;
-    esac
-  else
-    bad "空值 token：逃辑夹具没搭起来（worktree=$([ -d "$wte" ] && printf 有 || printf 无) brief=$([ -n "$brief_e" ] && printf 有 || printf 无)）"
-  fi
+  case "$psout" in *"vendor/recorded·policy/assignment"*) ok "ps 与 JSON/roster 同一实际模型口径" ;; *) bad "ps 没显示 committed model" ;; esac
+  printf 'model=vendor/unknown\n' > "$state/dev4.env"
+  json="$(run_in "$p" config list --json)"
+  json_check "$json" "未知席位不入 assignments" 'all(s["agent"]!="dev4" for s in d["models"]["assignments"])'
+  printf 'model=\n' > "$state/dev.env"
+  before="$(sha_of "$cfg")"; json="$(run_in "$p" config list --json)"
+  json_check "$json" "空 legacy record 是可解析 JSON，诊断而非默认回退" '[s for s in d["models"]["assignments"] if s["agent"]=="dev"][0]["model"]=="" and bool([s for s in d["models"]["assignments"] if s["agent"]=="dev"][0]["diagnostic"])'
+  assert_eq "空 record 的只读检查不写契约" "$(sha_of "$cfg")" "$before"
+  printf '\nTEAM_AGENT_MODELS="dev="\n' >> "$cfg"
+  before="$(sha_of "$cfg")"; json="$(run_in "$p" config list --json)"; rc=$?
+  assert_eq "legacy 空 token machine read exit 0" "$rc" 0
+  json_check "$json" "legacy 空 token 点名升级，不生成 seats/default" '"migration_required" in d["models"]["diagnostic"] and "seats" not in d["models"] and "default" not in d["models"]'
+  assert_eq "legacy 诊断不偷偷升级" "$(sha_of "$cfg")" "$before"
 fi
 
 # ---------------------------------------------------------------- shape（change: model-id-shape）
@@ -785,46 +701,39 @@ if want shape; then
   cfg="$p/.pi/team/config.sh"
   tok="openrouter/amazon/nova-lite-v1"
 
-  # ── 接受矩阵：四条写入路全过，写下的字节逐字
-  run_in "$p" config set TEAM_DEFAULT_MODEL "$tok" --yes >/dev/null; rc=$?
-  assert_eq "接受[model-kind] config set TEAM_DEFAULT_MODEL $tok → 0" "$rc" "0"
-  assert_eq "接受[model-kind]：TEAM_DEFAULT_MODEL 行逐字" "$(grep -c "^TEAM_DEFAULT_MODEL='$tok'\$" "$cfg" || true)" "1"
-  run_in "$p" config set TEAM_AGENT_MODELS "dev=$tok" --yes >/dev/null; rc=$?
-  assert_eq "接受[pairlist] TEAM_AGENT_MODELS dev=$tok → 0" "$rc" "0"
-  assert_eq "接受[pairlist]：pairlist 行带完整 token" "$(grep -c "^TEAM_AGENT_MODELS='dev=$tok'\$" "$cfg" || true)" "1"
-  run_in "$p" config set-agent-model dev "$tok" --yes >/dev/null; rc=$?
-  assert_eq "接受[set-agent-model] dev $tok → 0" "$rc" "0"
-  out="$(run_in "$p" add-agent api --register --model "$tok" --no-install)"; rc=$?
-  assert_eq "接受[add-agent --model] api $tok → 0" "$rc" "0"
-  assert_eq "接受[add-agent --model]：token 写进同一对表" "$(grep -c "api=$tok" "$cfg" || true)" "1"
+  # Acceptance matrix: independent PM, complete map and category upsert share the shape validator.
+  run_in "$p" config set TEAM_PM_MODEL "$tok" --yes >/dev/null; rc=$?
+  assert_eq "接受[model-kind] TEAM_PM_MODEL $tok → 0" "$rc" 0
+  assert_eq "接受[model-kind]：TEAM_PM_MODEL 行逐字" "$(grep -c "^TEAM_PM_MODEL='$tok'\$" "$cfg" || true)" 1
+  run_in "$p" config set TEAM_TASK_MODELS "routine=$tok analysis=x/a verify=x/v" --yes >/dev/null; rc=$?
+  assert_eq "接受[pairlist] 完整类别 map → 0" "$rc" 0
+  assert_eq "接受[pairlist]：map 带完整 token" "$(grep -c "routine=$tok" "$cfg" || true)" 1
+  run_in "$p" config set-task-model routine "$tok" --yes >/dev/null; rc=$?
+  assert_eq "接受[set-task-model] routine $tok → 0" "$rc" 0
+  out="$(run_in "$p" add-agent api --register --no-install)"; rc=$?
+  assert_eq "接受[register-only] api → 0" "$rc" 0
+  assert_eq "注册不生成 api 模型覆盖" "$(grep -c "api=$tok" "$cfg" || true)" 0
 
-  # ── 思考档后缀：先剥后缀再判形状，值里逐字保留
-  run_in "$p" config set TEAM_DEFAULT_MODEL kimi-coding/kimi-for-coding:high --yes >/dev/null; rc=$?
-  assert_eq "后缀[model-kind] kimi-coding/kimi-for-coding:high → 0" "$rc" "0"
-  assert_eq "后缀：写入行逐字保留 :high" "$(grep -c "^TEAM_DEFAULT_MODEL='kimi-coding/kimi-for-coding:high'\$" "$cfg" || true)" "1"
-  run_in "$p" config set-agent-model dev "$tok:high" --yes >/dev/null; rc=$?
-  assert_eq "后缀[set-agent-model] dev $tok:high → 0" "$rc" "0"
-  assert_eq "后缀：席位 token 逐字保留 :high" "$(grep -c "dev=$tok:high" "$cfg" || true)" "1"
+  run_in "$p" config set TEAM_PM_MODEL kimi-coding/kimi-for-coding:high --yes >/dev/null; rc=$?
+  assert_eq "后缀[model-kind] kimi-coding/kimi-for-coding:high → 0" "$rc" 0
+  assert_eq "后缀：写入行逐字保留 :high" "$(grep -c "^TEAM_PM_MODEL='kimi-coding/kimi-for-coding:high'\$" "$cfg" || true)" 1
+  run_in "$p" config set-task-model routine "$tok:high" --yes >/dev/null; rc=$?
+  assert_eq "后缀[set-task-model] routine $tok:high → 0" "$rc" 0
+  assert_eq "后缀：category token 逐字保留 :high" "$(grep -c "routine=$tok:high" "$cfg" || true)" 1
   json="$(run_in "$p" config list --json)"
-  json_check "$json" "后缀：known 带两种 :high 形态的完整 id" \
-    'set(d["models"]["known"]) >= set(["openrouter/amazon/nova-lite-v1:high","kimi-coding/kimi-for-coding:high"])'
-  # 归位：后面的读面/渲染器用无后缀的三段 id
-  run_in "$p" config set TEAM_DEFAULT_MODEL "$tok" --yes >/dev/null
-  run_in "$p" config set-agent-model dev "$tok" --yes >/dev/null
-
-  # ── 读面：完整 id 逐字回来（default / known / dev 席位行）
+  json_check "$json" "后缀：known 带两种 :high 完整 id" 'set(d["models"]["known"]) >= {"openrouter/amazon/nova-lite-v1:high","kimi-coding/kimi-for-coding:high"}'
+  run_in "$p" config set TEAM_PM_MODEL "$tok" --yes >/dev/null
+  run_in "$p" config set-task-model routine "$tok" --yes >/dev/null
   json="$(run_in "$p" config list --json)"
-  json_check "$json" "读面：models.default 是完整三段 id" 'd["models"]["default"]=="openrouter/amazon/nova-lite-v1"'
-  json_check "$json" "读面：known 含完整三段 id" \
-    '"openrouter/amazon/nova-lite-v1" in d["models"]["known"]'
-  json_check "$json" "读面：dev 席位行 = 配置覆盖的完整 id" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]=="openrouter/amazon/nova-lite-v1" and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
+  json_check "$json" "读面：独立 PM 策略是完整三段 id" 'd["models"]["policy"]["pm"]=="openrouter/amazon/nova-lite-v1"'
+  json_check "$json" "读面：known 含完整三段 id" '"openrouter/amazon/nova-lite-v1" in d["models"]["known"]'
+  json_check "$json" "读面：类别策略完整，未派 dev 不伪造 assignment" '[s for s in d["models"]["policy"]["categories"] if s["category"]=="routine"][0]["model"]=="openrouter/amazon/nova-lite-v1" and not [s for s in d["models"]["assignments"] if s["agent"]=="dev"][0]["assigned"]'
 
   # ── 拒绝矩阵：闭集 + 点名段落 + 零写入（sha 与 result=ok 审计行都不动）
   sha_rej="$(sha_of "$cfg")"; ok_rej="$(grep -ac 'result=ok' "$(audit_of "$p")" 2>/dev/null || true)"
   rej_default() { # <val> <fault phrase>
     local v="$1" phrase="$2" o r
-    o="$(run_in "$p" config set TEAM_DEFAULT_MODEL "$v" --yes)"; r=$?
+    o="$(run_in "$p" config set TEAM_PM_MODEL "$v" --yes)"; r=$?
     assert_eq "拒绝[model-kind] $v → 4" "$r" "4"
     case "$o" in
       *"$phrase"*) ok "拒绝[model-kind] $v 点名：$phrase" ;;
@@ -841,34 +750,31 @@ if want shape; then
   rej_default 'a b/c' 'provider 含空白'
   rej_seat() { # <val> <fault phrase>
     local v="$1" phrase="$2" o r
-    o="$(run_in "$p" config set-agent-model dev "$v" --yes)"; r=$?
-    assert_eq "拒绝[set-agent-model] dev $v → 4" "$r" "4"
+    o="$(run_in "$p" config set-task-model routine "$v" --yes)"; r=$?
+    assert_eq "拒绝[set-task-model] routine $v → 4" "$r" "4"
     case "$o" in
-      *"$phrase"*) ok "拒绝[set-agent-model] dev $v 点名：$phrase" ;;
-      *) bad "拒绝[set-agent-model] dev $v 没有点名 [$phrase]（$(printf '%s' "$o" | head -1)）" ;;
+      *"$phrase"*) ok "拒绝[set-task-model] routine $v 点名：$phrase" ;;
+      *) bad "拒绝[set-task-model] routine $v 没有点名 [$phrase]（$(printf '%s' "$o" | head -1)）" ;;
     esac
   }
   rej_seat '/a' 'provider 为空'
   rej_seat 'a/' 'model 为空'
   rej_seat 'a//b' 'model 有空段'
-  out="$(run_in "$p" config set TEAM_AGENT_MODELS 'dev=a//b' --yes)"; rc=$?
+  out="$(run_in "$p" config set TEAM_TASK_MODELS 'routine=a//b analysis=x/a verify=x/v' --yes)"; rc=$?
   assert_eq "拒绝[pairlist] dev=a//b → 4" "$rc" "4"
   case "$out" in
     *'model 有空段'*) ok "拒绝[pairlist] dev=a//b 点名：model 有空段" ;;
     *) bad "拒绝[pairlist] dev=a//b 没有点名 [model 有空段]（$(printf '%s' "$out" | head -1)）" ;;
   esac
   out="$(run_in "$p" add-agent api2 --register --model 'a//b' --no-install)"; rc=$?
-  assert_eq "拒绝[add-agent --model] api2 a//b → 4" "$rc" "4"
-  case "$out" in
-    *'model 有空段'*) ok "拒绝[add-agent --model] a//b 点名：model 有空段" ;;
-    *) bad "拒绝[add-agent --model] a//b 没有点名 [model 有空段]（$(printf '%s' "$out" | head -1)）" ;;
-  esac
+  assert_eq "拒绝[add-agent --model] 已退休 → 2" "$rc" 2
+  case "$out" in *retired*) ok "退休 route 明确点名新入口" ;; *) bad "退休 route 缺诊断" ;; esac
   assert_eq "拒绝矩阵后契约 sha 不变" "$(sha_of "$cfg")" "$sha_rej"
   assert_eq "拒绝矩阵没有新增 result=ok 审计行" "$(grep -ac 'result=ok' "$(audit_of "$p")" 2>/dev/null || true)" "$ok_rej"
 
   # ── 渲染器：--provider 取第一段，--model 取第一个 / 之后的全部
   run_in "$p" config set TEAM_PI_BIN /bin/true --yes >/dev/null
-  run_in "$p" task SHP --title "P114 shape 夹具" --agent dev --deps - >/dev/null 2>&1 || true
+  run_in "$p" task SHP --title "P114 shape 夹具" --category routine --agent dev --deps - >/dev/null 2>&1 || true
   brief="$(ls "$p"/docs/team/tasks/SHP-*.md 2>/dev/null | head -1)"
   if [ -n "$brief" ]; then
     sed -i 's|^anchor: -.*$|anchor: none (infra) — P114 fixture|' "$brief"
@@ -887,7 +793,7 @@ if want shape; then
     bad "渲染器：dispatch 夹具的任务书没搭起来"
   fi
   run_in "$p" config set TEAM_PM_MODEL "$tok" --yes >/dev/null
-  out="$(run_in "$p" up --print)"; rc=$?
+  out="$(run_in "$p" up --fresh-pm --print)"; rc=$?
   assert_eq "渲染器：up --print 退出 0" "$rc" "0"
   case "$out" in
     *"--provider openrouter --model amazon/nova-lite-v1"*)
@@ -895,13 +801,13 @@ if want shape; then
     *) bad "渲染器：PM 启动命令没有完整 model（$(printf '%s' "$out" | grep -oE -- '--provider [^ ]+ --model [^ ]+' | tail -1)）" ;;
   esac
   exp="$( cd "$p" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
-      bash -c '. "'"$skill"'/scripts/lib/common.sh"; for _f in "'"$skill"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_agent_expand launch "{model}" dev s w /tmp/pf "" "" ""' 2>/dev/null )"
+      bash -c '. "'"$skill"'/scripts/lib/common.sh"; for _f in "'"$skill"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; team_agent_expand launch "{model}" dev s w /tmp/pf "" "" openrouter/amazon/nova-lite-v1' 2>/dev/null )"
   assert_eq "渲染器：{model} 占位符 = 第一个 / 之后的全部" "$exp" "amazon/nova-lite-v1"
 
   # ── 窗口：Pi 目录与 TEAM_MODEL_WINDOWS 两条来源都认三段 id（切成最后一段会读成 ?）
   pw="$(new_proj shape-window)" || exit 3
   cfgw="$pw/.pi/team/config.sh"
-  run_in "$pw" config set TEAM_DEFAULT_MODEL openrouter/stealth/union-alpha --yes >/dev/null
+  run_in "$pw" config set TEAM_PM_MODEL openrouter/stealth/union-alpha --yes >/dev/null
   mkdir -p "$pw/.pi-agent"
   printf '{"providers":{"openrouter":{"models":[{"id":"stealth/union-alpha","contextWindow":131072}]}}}\n' > "$pw/.pi-agent/models.json"
   python3 - "$cfgw" "$pw" <<'PY'
@@ -957,7 +863,7 @@ PY
     if [ "$s_rc_red" -ne 0 ] \
        && grep -q '拒绝\[model-kind\] a//b' "$tmp/shape-flip-red.log" \
        && grep -q '拒绝\[pairlist\] dev=a//b' "$tmp/shape-flip-red.log" \
-       && grep -q '拒绝\[set-agent-model\] dev a//b' "$tmp/shape-flip-red.log"; then
+       && grep -q '拒绝\[set-task-model\] routine a//b' "$tmp/shape-flip-red.log"; then
       ok "F-S1 红侧：放宽后 shape 段非 0（rc=$s_rc_red），三条路都点名 a//b"
     else
       bad "F-S1 红侧：放宽后没有在三条路上全部点名 a//b（rc=$s_rc_red）"
@@ -1069,7 +975,7 @@ PY
     "$(win openai-codex/gpt-6-sol:batch TEAM_MODEL_WINDOWS='openai-codex/gpt-6-sol=999')" ""
 
   # ── 读面集成：ps 的 WINDOW 列对带 :high 的模型显示解析出的窗口（工具链真的用上这个解析）
-  run_in "$pw" config set TEAM_DEFAULT_MODEL openai-codex/gpt-6-sol:high --yes >/dev/null
+  run_in "$pw" config set TEAM_PM_MODEL openai-codex/gpt-6-sol:high --yes >/dev/null
   psw="$(run_in "$pw" ps)"
   assert_eq "窗口[ps 集成]：模型带 :high 时 WINDOW 列 = 272k" \
     "$(printf '%s\n' "$psw" | awk '/openai-codex\/gpt-6-sol:high/ {print $NF; exit}')" "272k"
@@ -1156,74 +1062,47 @@ fi
 
 # ---------------------------------------------------------------- seats
 if want seats; then
-  section "seats · 一个 token 的 diff / 移除回退默认 / 未知席位与形状 / pm 席位"
+  section "seats · 席位覆盖退休；类别原子编辑与独立 PM 不碰已派身份"
   p="$(new_proj seats)" || exit 3
   cfg="$p/.pi/team/config.sh"
-  python3 - "$cfg" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev=deepseek/deepseek-flash verify=xai/grok-4.6"')
-s = s.replace('TEAM_DEFAULT_MODEL="deepseek/deepseek-flash"', 'TEAM_DEFAULT_MODEL="deepseek/deepseek-flash"')
-open(p, 'w', encoding='utf-8').write(s)
-PY
+  routing_fixture_record "$p/.pi/team/state" dev R1 "$p/.worktrees/dev" "$p/docs/team/tasks/R1-fixture.md" vendor/selected cfg-seats-selected explicit
+  state_sha="$(sha_of "$p/.pi/team/state/dev.env")"
   cp "$cfg" "$tmp/seats-before"
-  run_in "$p" config set-agent-model dev kimi-coding/k3-256k --yes >/dev/null; rc=$?
-  assert_eq "set-agent-model dev 退出 0" "$rc" "0"
-  assert_eq "只改一行且 dev 的 token 是新模型、verify 的 token 原样" \
-    "$(grep -c "^TEAM_AGENT_MODELS='dev=kimi-coding/k3-256k verify=xai/grok-4.6'\$" "$cfg" || true)" "1"
-  assert_eq "diff 只有一对增删" "$(diff "$tmp/seats-before" "$cfg" | grep -c '^[<>]' || true)" "2"
-  assert_eq "审计点名 TEAM_AGENT_MODELS" "$(tail -1 "$(audit_of "$p")" | grep -c 'key=TEAM_AGENT_MODELS' || true)" "1"
-
-  run_in "$p" config set-agent-model dev - --yes >/dev/null; rc=$?
-  assert_eq "移除覆盖退出 0" "$rc" "0"
-  assert_eq "dev 的 token 离开、其余字节不变" "$(grep -c "^TEAM_AGENT_MODELS='verify=xai/grok-4.6'\$" "$cfg" || true)" "1"
-
-  # ── P47/R4：空值 token（dev=）在写路径里就是一个普通 token（空值不等于无 token）──────────────
-  pe="$(new_proj seats-empty)" || exit 3
-  cfge="$pe/.pi/team/config.sh"
-  python3 - "$cfge" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev= verify=xai/grok-4.6"')
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  run_in "$pe" config set-agent-model dev kimi-coding/k3-256k --yes >/dev/null; rc=$?
-  assert_eq "空值 token：set-agent-model dev 退出 0" "$rc" "0"
-  assert_eq "空值 token：dev= 换成新模型、verify 的 token 原样" \
-    "$(grep -c "^TEAM_AGENT_MODELS='dev=kimi-coding/k3-256k verify=xai/grok-4.6'\$" "$cfge" || true)" "1"
-  run_in "$pe" config set-agent-model dev - --yes >/dev/null; rc=$?
-  assert_eq "空值 token：移除覆盖退出 0" "$rc" "0"
-  assert_eq "空值 token：dev 的 token 离开、verify 原样" \
-    "$(grep -c "^TEAM_AGENT_MODELS='verify=xai/grok-4.6'\$" "$cfge" || true)" "1"
-  json="$(run_in "$p" config list --json)"
-  json_check "$json" "移除后 dev 回到 TEAM_DEFAULT_MODEL、override=false" '[s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is False and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]==d["models"]["default"]'
-
+  run_in "$p" config set-task-model routine kimi-coding/k3-256k --yes >/dev/null; rc=$?
+  assert_eq "category upsert 退出 0" "$rc" 0
+  assert_eq "只改 routine，analysis/verify 保留" "$(grep -c "^TEAM_TASK_MODELS='routine=kimi-coding/k3-256k analysis=xai/grok-4.6 verify=kimi-coding/k3-256k'\$" "$cfg" || true)" 1
+  assert_eq "diff 只有一对增删" "$(diff "$tmp/seats-before" "$cfg" | grep -c '^[<>]' || true)" 2
+  assert_eq "审计点名 TEAM_TASK_MODELS" "$(tail -1 "$(audit_of "$p")" | grep -c 'key=TEAM_TASK_MODELS' || true)" 1
   sha_b="$(sha_of "$cfg")"
-  out="$(run_in "$p" config set-agent-model dev4 x/y --yes)"; rc=$?
-  assert_eq "pair 形态的未知席位 → 5" "$rc" "5"
-  case "$out" in *dev*verify*) ok "未知席位的报错点名名册" ;; *) bad "未知席位没点名名册（$out）" ;; esac
+  run_in "$p" config set-task-model routine - --yes >/dev/null 2>&1; rc=$?
+  assert_eq "类别删除语法不伪造默认 → 4" "$rc" 4
+  assert_eq "拒绝删除后契约不变" "$(sha_of "$cfg")" "$sha_b"
+  for seat in dev pm dev4; do
+    out="$(run_in "$p" config set-agent-model "$seat" vendor/model --yes)"; rc=$?
+    assert_eq "set-agent-model $seat 退休 → 5" "$rc" 5
+    case "$out" in *set-task-model*TEAM_PM_MODEL*) ok "退休错误给出类别/独立 PM 入口" ;; *) bad "退休错误缺可行入口" ;; esac
+  done
   out="$(run_in "$p" config set TEAM_AGENT_MODELS 'dev4=x/y' --yes)"; rc=$?
-  assert_eq "整值形态的未知席位 → 4" "$rc" "4"
-  out="$(run_in "$p" config set-agent-model dev deepseek-flash --yes)"; rc=$?
-  assert_eq "没有 provider/model 形状 → 4" "$rc" "4"
-  case "$out" in *provider/model*) ok "形状报错点名 provider/model" ;; *) bad "形状报错没点名 provider/model（$out）" ;; esac
-  assert_eq "两个拒绝都没改契约" "$(sha_of "$cfg")" "$sha_b"
-
-  # pm 席位走 TEAM_PM_MODEL，TEAM_AGENT_MODELS 行逐字节不变
-  line_before="$(grep '^TEAM_AGENT_MODELS=' "$cfg")"
-  run_in "$p" config set-agent-model pm kimi-coding/k3-256k --yes >/dev/null; rc=$?
-  assert_eq "pm 席位写入退出 0" "$rc" "0"
-  assert_eq "TEAM_PM_MODEL 行写入" "$(grep -c "^TEAM_PM_MODEL='kimi-coding/k3-256k'" "$cfg" || true)" "1"
-  assert_eq "TEAM_AGENT_MODELS 行逐字节不变" "$(grep '^TEAM_AGENT_MODELS=' "$cfg")" "$line_before"
-  assert_eq "审计点名 TEAM_PM_MODEL" "$(tail -1 "$(audit_of "$p")" | grep -c 'key=TEAM_PM_MODEL' || true)" "1"
-  # dry-run 不写
-  sha_b="$(sha_of "$cfg")"; lines_b="$(wc -l < "$(audit_of "$p")" 2>/dev/null || echo 0)"
-  run_in "$p" config set-agent-model pm xai/grok-4.6 --dry-run >/dev/null; rc=$?
-  assert_eq "set-agent-model dry-run → 0" "$rc" "0"
-  assert_eq "dry-run 后契约不变" "$(sha_of "$cfg")" "$sha_b"
-  assert_eq "dry-run 后审计不变" "$(wc -l < "$(audit_of "$p")" 2>/dev/null || echo 0)" "$lines_b"
+  assert_eq "旧整个席位 pairlist 退休 → 5" "$rc" 5
+  run_in "$p" config set-task-model routine deepseek-flash --yes >/dev/null 2>&1; rc=$?
+  assert_eq "新 category API 非 provider/model → 4" "$rc" 4
+  assert_eq "退休/无效 model 拒绝均不改契约" "$(sha_of "$cfg")" "$sha_b"
+  run_in "$p" config set-task-model custom-review vendor/custom --yes >/dev/null; rc=$?
+  assert_eq "非名册名称的自定义类别可登记" "$rc" 0
+  line_before="$(grep '^TEAM_TASK_MODELS=' "$cfg")"
+  run_in "$p" config set TEAM_PM_MODEL kimi-coding/k3-256k --yes >/dev/null; rc=$?
+  assert_eq "独立 PM writer 退出 0" "$rc" 0
+  assert_eq "TEAM_PM_MODEL 行写入" "$(grep -c "^TEAM_PM_MODEL='kimi-coding/k3-256k'" "$cfg" || true)" 1
+  assert_eq "PM 编辑不改类别 map" "$(grep '^TEAM_TASK_MODELS=' "$cfg")" "$line_before"
+  assert_eq "PM 审计点名 TEAM_PM_MODEL" "$(tail -1 "$(audit_of "$p")" | grep -c 'key=TEAM_PM_MODEL' || true)" 1
+  assert_eq "所有策略写入保留 committed assignment 字节" "$(sha_of "$p/.pi/team/state/dev.env")" "$state_sha"
+  sha_b="$(sha_of "$cfg")"; lines_b="$(wc -l < "$(audit_of "$p")")"
+  run_in "$p" config set-task-model routine vendor/dry --dry-run >/dev/null; rc=$?
+  assert_eq "category dry-run → 0" "$rc" 0
+  run_in "$p" config set TEAM_PM_MODEL vendor/dry --dry-run >/dev/null; rc=$?
+  assert_eq "independent PM dry-run → 0" "$rc" 0
+  assert_eq "两个 dry-run 后契约不变" "$(sha_of "$cfg")" "$sha_b"
+  assert_eq "两个 dry-run 后审计不变" "$(wc -l < "$(audit_of "$p")")" "$lines_b"
 fi
 
 # ---------------------------------------------------------------- json（P47/R5）
@@ -1239,8 +1118,8 @@ if want json; then
 import re, sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev="')
-s = re.sub(r'^TEAM_DEFAULT_MODEL=.*$', 'TEAM_DEFAULT_MODEL=""', s, count=1, flags=re.M)
+s = re.sub(r'^TEAM_TASK_MODELS=.*$', 'TEAM_TASK_MODELS=""', s, count=1, flags=re.M)
+s = re.sub(r'^TEAM_PM_MODEL=.*$', 'TEAM_PM_MODEL=""', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY
   # 一份「就绪」的 change（否则 change status 非 0）：与 §12e 同形状 —— 任务书 + 看板行 + PASS 记录 + done
@@ -1274,19 +1153,13 @@ PY
   else
     skip "monitor --json：没有 JS 运行时（面板要求 node/bun）——可见 SKIP，不是红"
   fi
-  # ── P58/F1：空默认角落的席位行必须与「实际会用的模型」同源（空 → 回退，不再是 ""）─────────────
-  # 启动解析不抄期望值：从真实渲染取（`team up --print` 的完整命令里的 --provider/--model）。
-  # 读出口的行与启动解析再次分叉时，这条断言必须红。序列化的 "" 形状由 F-J1 的无值字段翻转守着。
   json_e="$( cd "$pj" && bash "$team" config list --json 2>/dev/null )"
-  up_print="$( cd "$pj" && bash "$team" up --print 2>/dev/null || true )"
-  pm_model="$(printf '%s' "$json_e" | python3 -c 'import json,sys; print([s for s in json.load(sys.stdin)["models"]["seats"] if s["agent"]=="pm"][0]["model"])' 2>/dev/null)"
-  launch_pair="$(printf '%s' "$up_print" | grep -oE -- '--provider [^ ]+ --model [^ ]+' | tail -1 || true)"
-  assert_eq "空默认值：pm 行的模型 = PM 启动解析（up --print 的 --provider/--model），不是 \"\"" \
-    "--provider ${pm_model%%/*} --model ${pm_model##*/}" "$launch_pair"
-  json_check "$json_e" "空默认值：pm 行回退成非空模型（不是 \"\"），override 仍是布尔 false" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]!="" and [s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["override"] is False'
-  json_check "$json_e" "空默认值：dev 行仍在（seats 覆盖每个名册席位）、模型非空且 override 是布尔 true" \
-    'all(s["agent"] in ["dev","pm","verify"] for s in d["models"]["seats"]) and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["model"]!="" and [s for s in d["models"]["seats"] if s["agent"]=="dev"][0]["override"] is True'
+  before="$(sha_of "$cfgj")"
+  up_print="$( cd "$pj" && bash "$team" up --fresh-pm --print 2>&1 )"; rc=$?
+  [ "$rc" != 0 ] && ok "空独立 PM 策略即使 fresh 也拒绝，不回退" || bad "空 PM 策略被静默回退"
+  json_check "$json_e" "空策略 machine read 明确诊断" 'bool(d["models"]["diagnostic"]) and d["models"]["policy"]["pm"]==""'
+  json_check "$json_e" "缺记录的 assignments 覆盖名册但不造模型" 'sorted(s["agent"] for s in d["models"]["assignments"])==["dev","verify"] and all(s["model"]=="" and s["assigned"] is False for s in d["models"]["assignments"])'
+  assert_eq "空策略 preview 不写契约" "$(sha_of "$cfgj")" "$before"
 
   # ── F-J1：scratch 树里把席位行序列化器改回无值字段形状 → 解析走查必须红并点名位置 ────────────
   # 嵌套防护：红/绿两侧都是 `TEAM_CONFIG_TREE=<scratch>` 的**再入**运行 —— 再入时不再递归翻转
@@ -1305,12 +1178,12 @@ PY
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-# 打中的是 shell 双引号里的字节：\"override\":$override}
-old = r'\"override\":$override}'
-assert old in s, 'serializer shape not found'
-open(p, 'w', encoding='utf-8').write(s.replace(old, r'\"override\":}', 1))
+# Mutate the actual new assignment serializer, not the retired seat serializer.
+old = r'\"assigned\":$assigned'
+assert s.count(old)==1, 'assignment serializer target is not unique'
+open(p, 'w', encoding='utf-8').write(s.replace(old, r'\"assigned\":', 1))
 PY
-  if grep -qF '\"override\":$override}' "$jtree/skills/teamsmith/scripts/lib/cmd-config.sh"; then
+  if grep -qF '\"assigned\":$assigned' "$jtree/skills/teamsmith/scripts/lib/cmd-config.sh"; then
     bad "F-J1 mutant 没打中（席位行序列化器原样）"
   else
     ok "F-J1 mutant 已生成：席位行的 override 序列化成无值字段（valueless field，解析器会在它身上报位置）"
@@ -1414,7 +1287,8 @@ if want callers; then
   # ① team init --gates 'a # b' → 非 0 且契约里没有 TEAM_GATES
   p="$tmp/callers-init"; mkdir -p "$p"
   ( cd "$p" && git init -q -b main && git config user.email c@t && git config user.name c ) >/dev/null 2>&1
-  out="$( cd "$p" && bash "$team" init --session ci --agents dev --vcs local --gates 'a # b' --docs docs/team 2>&1 )"; rc=$?
+  out="$( cd "$p" && bash "$team" init --session ci --agents dev --vcs local --gates 'a # b' --docs docs/team \
+            --task-models 'routine=deepseek/deepseek-flash' --pm-model 'deepseek/deepseek-flash' 2>&1 )"; rc=$?
   [ "$rc" -ne 0 ] && ok "init --gates 'a # b' 非 0（rc=$rc）" || bad "init 居然接受了含 # 的 --gates"
   if [ -f "$p/.pi/team/config.sh" ]; then
     assert_eq "契约里没有 TEAM_GATES 行" "$(grep -c '^TEAM_GATES=' "$p/.pi/team/config.sh" || true)" "0"

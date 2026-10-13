@@ -4,7 +4,7 @@
 # failure carries its own scene — the mechanics live in tests/lib/pty-wait.sh (sourced below).
 #
 #   bash skills/teamsmith/tests/panel-p21.sh                  # every scenario
-#   bash skills/teamsmith/tests/panel-p21.sh settings seats    # selected scenarios
+#   bash skills/teamsmith/tests/panel-p21.sh settings categories    # selected scenarios
 #   bash skills/teamsmith/tests/panel-p21.sh settings groups wheel   # P30: grouping + the view's wheel
 #   TEAM_P21_KEEP=1 bash ...                                  # keep the fixture directory
 #
@@ -236,6 +236,8 @@ if [ -z "$js" ]; then printf 'panel-p21: no node/bun runtime\n' >&2; exit 3; fi
 # shared helper (its --self-test injects the incident's mid-frame; smoke §38-c runs it).
 # shellcheck source=lib/pty-wait.sh
 . "$here/lib/pty-wait.sh"
+# shellcheck source=lib/model-policy.sh
+. "$here/lib/model-policy.sh"   # P232：完整派单记录构造器（S1 的共享夹具）
 # Fixture-wide knobs. PTY_WAIT_ITERS is a failure-detector horizon, never spent on a green run (a
 # green wait returns on the first settled frame, usually rounds 1-3); per-wait overrides use local.
 PTY_TRACE="${_trace_arg:-0}"
@@ -255,7 +257,7 @@ if p21_fixture_on; then
 fi
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(settings groups wheel choices choices-schema write conflict seats readonly)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(settings groups wheel choices choices-schema write conflict categories policy readonly)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- fixture plumbing
@@ -269,7 +271,7 @@ server_up() { # <name> [agents] → fresh project + private tmux session + argv-
       && printf '{"name":"%s","scripts":{"verify":"true"}}\n' "$1" > package.json \
       && git add -A && git commit -qm init ) >/dev/null 2>&1
   ( cd "$ROOT" && bash "$skill/scripts/team" init --session "$sess" --agents "$agents" --vcs local \
-      --gates "true" --docs docs/team ) >"$tmp/$1-init.log" 2>&1 \
+      --gates "true" --docs docs/team --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) >"$tmp/$1-init.log" 2>&1 \
     || { printf 'panel-p21: team init failed (%s)\n' "$1" >&2; tail -3 "$tmp/$1-init.log" >&2; exit 3; }
   state="$ROOT/.pi/team/state"
   mkdir -p "$state" "$ROOT/docs/team"
@@ -376,6 +378,17 @@ audit_lines() { [ -f "$(audit_log)" ] && wc -l < "$(audit_log)" || echo 0; }
 sha() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 tree_hash() { ( cd "$ROOT" && find "$@" -type f 2>/dev/null | sort | while IFS= read -r f; do printf '%s ' "$f"; sha "$f"; done ) | sha256sum | awk '{print $1}'; }
 conf_set() { mkdir -p "$state"; printf '%s\n' "$@" > "$state/panel.conf"; }
+# P232：把 fixture 契约换成新的类别策略 + 独立 PM（走真实事务入口 upgrade-models）——退休键真的
+# 离开文件，视图才在「当前契约」这一档上跑；老契约的档由 scn_categories 的 legacy 段专门覆盖。
+policy_new() { # <task-models> <pm-model>
+  ( cd "$ROOT" && bash "$skill/scripts/team" config upgrade-models --task-models "$1" --pm-model "$2" --yes ) \
+    > "$tmp/$current-upgrade.log" 2>&1
+}
+# 一份**完整**的已提交派单记录（tests/lib/model-policy.sh 的共享构造器；S1 的读面契约）。
+record_fixture() { # <seat> <model> <sid> <task> <category>
+  mkdir -p "$state"
+  routing_fixture_record "$state" "$1" "$4" "$ROOT" "$ROOT/docs/team/tasks/$4-x.md" "$2" "$3" policy 2026-10-09T00:00:00Z "$5"
+}
 panel_pid() { tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_pid}' 2>/dev/null | head -1; }
 
 # Open the overlay and its project-settings navigation row (the sixth row), then wait for data.
@@ -549,6 +562,10 @@ pick_option() {
 scn_settings() {
   section "settings · 标签/类徽章/默认值/过滤/窗口/点击/CLI 对齐/refuse 路由/q（B2 + M49）"
   server_up settings
+  # P232：这一段的契约是新的（类别策略 + 独立 PM）。老契约的档由 scn_categories 的 legacy 段专门覆盖；
+  # 这里要的是「正常契约下视图里没有裸 TEAM_*」这一条能成立。
+  policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' 'openai-codex/gpt-6.1-sol:high' \
+    || bad "策略升级事务没有跑通"
   python3 - "$(cfg)" <<'PYFIX'
 import re, sys
 p = sys.argv[1]
@@ -742,8 +759,9 @@ import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 s = s.replace('TEAM_GATES|apply|cmd||plain||-|', 'TEAM_GATES|refuse|cmd||plain||-|改门禁请手改（scratch 夹具）')
-s = s.replace('TEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|',
-              'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\nTEAM_DEFAULT_MODEL|restart|model|req|plain|deepseek/deepseek-flash|-|')
+anchor = 'TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'
+assert anchor in s, '找不到 TEAM_INSTALL_CMD 的 schema 行'
+s = s.replace(anchor, 'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\n' + anchor, 1)
 open(p, 'w', encoding='utf-8').write(s)
 PYFIX
   cat > "$tmp/$current-scratch-wrapper.sh" <<EOF2
@@ -785,7 +803,7 @@ EOF2
   open_view
   local want_count
   want_count="$( (cd "$ROOT" && bash "$skill/scripts/team" config list --json) \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["keys"]) + len(d.get("models",{}).get("seats",[])))' )"
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); m=d.get("models",{}); print(len(d["keys"]) + len(m.get("policy",{}).get("categories",[])) + len(m.get("assignments",[])) + (1 if m.get("pm_launch") else 0))' )"
   [ "${want_count:-0}" -gt 0 ] || bad "读数拿不到键数（前提不成立）"
   local h s rows up down gap prev_rows=""
   for h in 45 33 30 25; do
@@ -796,7 +814,7 @@ EOF2
         # ① 内容结束到键栏的空白 ≤1 行（P32 前：45 行里 16 行）
         if [ "$gap" -le 1 ]; then ok "${h} 行：内容结尾到键栏只剩 $gap 行空白（≤1）"; else bad "${h} 行：内容结尾到键栏还有 $gap 行空白"; fi
         # ③ 记账诚实：窗口画出的行 + 两条计数 = 命令报的总行数
-        assert_eq "${h} 行：rows($rows) + ↑($up) + ↓($down) = 命令报的键+席位（$want_count）" \
+        assert_eq "${h} 行：rows($rows) + ↑($up) + ↓($down) = 命令报的键+类别+派单记录（$want_count）" \
           "$((rows + up + down))" "$want_count"
         case "$h" in
           45) prev_rows="$rows" ;;
@@ -836,9 +854,12 @@ s = re.sub(r'^TEAM_AGENT_BIN=.*$', 'TEAM_AGENT_BIN="/nonexistent/m55-agent"', s,
 s = re.sub(r'^TEAM_MIN_FREE_SWAP_MB=.*$', 'TEAM_MIN_FREE_SWAP_MB="0"', s, count=1, flags=re.M)
 open(p, 'w', encoding='utf-8').write(s)
 PY
-  # 席位模型：28 个记录 → known 变长，滚轮用例的条目列表会超出可视预算（不需要改 pane 几何）。
-  mkdir -p "$state"
-  for i in $(seq 2 28); do printf 'model=provider/m%s\n' "$i" > "$state/dev$i.env"; done
+  # 长词表：28 个类别（每类别一个模型）+ 独立 PM → known 变长，滚轮用例的条目列表会超出可视预算
+  # （不需要改 pane 几何）。P232：词汇表现在来自项目自己的类别策略，席位记录是**已提交派单**、
+  # 不完整的记录不贡献任何模型。
+  local map="routine=provider/m0 analysis=provider/m1"
+  for i in $(seq 2 27); do map="$map cat$i=provider/m$i"; done
+  policy_new "$map" 'provider/pm' || bad "策略升级事务没有跑通（见 $tmp/$current-upgrade.log）"
   conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   # R2 的机器目录夹具：scratch HOME 里放一个含 sub2api（已下线的 provider）与 openrouter 的 Pi 模型
   # 目录 —— 读与选择器都不许出现它们（真实的 models-store.json 是活缓存，绝不能被当成选项来源）。
@@ -1080,16 +1101,17 @@ PY2
   leave_editor TEAM_GATES
   wait_no_editor || bad "cmd 编辑器没有关干净"
 
-  # ── (7) pairlist：Enter 把焦点移到席位块，绝不在这里组合（不读、不开编辑器） ──
-  filter_to TEAM_AGENT_MODELS
+  # ── (7) task-model-map：Enter 把焦点移到类别块，绝不在这里组合映射（不读、不开编辑器） ──
+  # P232：夹具契约是先 upgrade-models 过的（这一段上面已经升过），所以类别块里至少有一个 routine 行。
+  filter_to TEAM_TASK_MODELS
   sleep 0.5
   keys Enter
-  if wait_cap pairlist "席位块就是这一行的编辑器"; then ok "pairlist 行把焦点交给席位块"; else bad "pairlist 路由的说明行没出现"; fi
+  if wait_cap pairlist "类别块就是这一行的编辑器"; then ok "整映射行把焦点交给类别块"; else bad "类别块路由的说明行没出现"; fi
   cap_to pairlist
-  assert_not "$tmp/$current/pairlist.txt" "╭─ TEAM_AGENT_MODELS" "pairlist 不开写编辑器"
-  assert_not "$tmp/$current/pairlist.txt" " · TEAM_AGENT_MODELS" "pairlist 不开选择器"
-  assert_match "$tmp/$current/pairlist.txt" '› dev +' "焦点移到席位块的第一行"
-  assert_has "$tmp/$current/pairlist.txt" "team config set-agent-model" "命令行点名 set-agent-model（唯一写者）"
+  assert_not "$tmp/$current/pairlist.txt" "╭─ TEAM_TASK_MODELS" "整映射行不开写编辑器"
+  assert_not "$tmp/$current/pairlist.txt" " · TEAM_TASK_MODELS" "整映射行不开选择器"
+  assert_match "$tmp/$current/pairlist.txt" '› 类别 routine' "焦点移到类别块的第一行"
+  assert_has "$tmp/$current/pairlist.txt" "team config set-task-model" "命令行点名 set-task-model（唯一写者）"
 
   # ── (8) 鼠标：第一次点击只移光标（不写）；第二次点击 = 接受并直写；esc 什么都不写 ──
   wait_no_editor || bad "点击用例开始前还有编辑器开着"
@@ -1131,7 +1153,7 @@ PY2
   assert_eq "esc 后审计不增长" "$(audit_lines)" "$esc_audit"
   argv_since "$esc0" "$tmp/$current/esc-argv.log"
   assert_not "$tmp/$current/esc-argv.log" "config set" "esc 的窗口里没有 config set"
-  assert_not "$tmp/$current/esc-argv.log" "set-agent-model" "esc 的窗口里没有席位写"
+  assert_not "$tmp/$current/esc-argv.log" "set-task-model" "esc 的窗口里没有类别写"
   # M59 判据②（真实场景）：此刻选择器已被上面那条 esc 关掉 —— 清理点的 esc 必须先确认状态。
   # 旧写法的裸 esc 在这里会把设置视图整个关掉，之后每段都在错的视图里跑（§38-b 的级联入口）。
   PTY_TRACE=1 pty_cleanup_esc "回归钉：已关闭的选择器" " · TEAM_MONITOR_UI" > "$tmp/$current/cleanup-trace.txt" 2>&1
@@ -1148,10 +1170,10 @@ PY2
 
   # ── (9) 滚轮：条目列表比可视预算长时滚得动（焦点走过的就是列表滚过的） ──
   wait_no_editor || bad "滚轮用例开始前还有编辑器开着"
-  filter_to TEAM_DEFAULT_MODEL
+  filter_to TEAM_PM_MODEL
   sleep 0.5
   keys Enter
-  wait_picker TEAM_DEFAULT_MODEL '↓' || bad "长列表选择器没有打开"
+  wait_picker TEAM_PM_MODEL '↓' || bad "长列表选择器没有打开"
   cap_to wheel-before
   local before_hidden
   before_hidden="$(grep -oE '↓[0-9]+' "$tmp/$current/wheel-before.txt" | head -1 | tr -d '↓' || true)"
@@ -1185,13 +1207,13 @@ PY2
   ( cd "$ROOT" && HOME="$home" bash "$skill/scripts/team" config list --json ) > "$tmp/$current/read-json.json" 2>&1
   assert_not "$tmp/$current/read-json.json" "sub2api" "同一 scratch HOME 下的读也不含目录 provider"
   # 硬化自检（M55 第一次复验 FAIL 的回归钉 + M59 判据①/③）……
-  if wait_picker_quick TEAM_DEFAULT_MODEL '这条目不存在-硬线自检'; then
+  if wait_picker_quick TEAM_PM_MODEL '这条目不存在-硬线自检'; then
     bad "wait_picker 只凭标题就放行了（条目标记/稳定帧没起作用）"
   else
     ok "wait_picker 要的条目不在稳定帧里时判负（标题命中不算，现场见上面的黄点场景）"
   fi
   # 清理守卫把 esc 只打在真开着的选择器上（这里选择器确实开着 → 恰好一个 esc）。
-  leave_picker TEAM_DEFAULT_MODEL || bad "回归钉之后的选择器没有关掉"
+  leave_picker TEAM_PM_MODEL || bad "回归钉之后的选择器没有关掉"
 
   # ── (10) 危险值来自选项：第一次 accept 只给警告（不写、不审计），第二次才带 danger allowance 写入 ──
   filter_to TEAM_MIN_FREE_SWAP_MB
@@ -1450,154 +1472,247 @@ PY
   assert_has "$tmp/$current/reloaded.txt" "team config set TEAM_PULSE_NUDGE_GAP" "视图仍点名原始键（照敲命令用）"
 }
 
-scn_seats() {
-  section "seats · 来源三态 / picker / 一 token diff / 移除回退 / 运行中的席位不变（B4）"
-  server_up seats "dev verify dev2"
-  python3 - "$(cfg)" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev=deepseek/deepseek-flash"')
-# model-id-shape R1：known 里必须有一个三段 id（pm 席位）——席位选择器要能列出并选中它。
-s = re.sub(r'^TEAM_PM_MODEL=.*$', 'TEAM_PM_MODEL="openrouter/amazon/nova-lite-v1"', s, count=1, flags=re.M)
-open(p, 'w', encoding='utf-8').write(s)
-PY
-  mkdir -p "$state"
-  printf 'model=xai/grok-4.6\n' > "$state/dev.env"
-  printf 'model=deepseek/deepseek-flash\n' > "$state/verify.env"
-  printf 'model=kimi-coding/k3-256k\nmodel_src=explicit\n' > "$state/dev2.env"
+# ---------------------------------------------------------------- P232（类别策略 vs 已派记录）
+# 窄判据：类别行 + 策略/实际分离 + 一次类别直写。flip 段把它当靶子（把写入路由或显示规则弄坏，
+# 这一段必须红）。它刻意只走一条路径，好让红侧点名到具体的断言。
+scn_policy() {
+  section "policy · 类别行 / 策略 vs 实际 / 类别直写走 set-task-model（P232 的窄判据）"
+  server_up policy "dev verify"
+  policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' 'openai-codex/gpt-6.1-sol:high' \
+    || bad "策略升级事务没有跑通（见 $tmp/$current-upgrade.log）"
+  record_fixture dev 'xai/grok-4.6' sid-dev-232 T232-x routine
+  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   start_panel
   open_view
+  # ① 类别行：未来策略 + 「新任务」徽章 + 命令行点名 set-task-model
+  filter_to 类别
+  wait_row policy-cat "类别 routine 行（策略模型 + 新任务徽章）" '任务类别（未来策略）' '类别 routine' 'kimi-coding/k3-256k' \
+    || bad "类别行没有在预算内出现"
+  # 视图的快照行、命令行提示行都跟着**焦点**走：先把光标移到类别行，再看这一行的两半（M49）。
+  if focus_row '› 类别 routine'; then :; else bad "没能把焦点移到类别 routine 行"; fi
+  cap_to policy-cat
+  assert_match "$tmp/$current/policy-cat.txt" '› 类别 routine +kimi-coding/k3-256k · 新任务' "类别行 = 类别 + 策略模型 + 新任务徽章"
+  assert_has "$tmp/$current/policy-cat.txt" "team config set-task-model routine <model>" "命令行点名 set-task-model（唯一写者）"
+  # ② 策略 ≠ 实际：dev 的只读行显示**记录**里的模型，行里不出现策略模型
+  filter_to dev
+  wait_row policy-dev "dev 的只读派单行" '实际派单记录（只读）' 'xai/grok-4.6' \
+    || bad "dev 的派单行没有在预算内出现"
+  if focus_row '› dev '; then :; else bad "没能把焦点移到 dev 的派单行"; fi
+  cap_to policy-dev
+  assert_match "$tmp/$current/policy-dev.txt" 'dev +xai/grok-4.6 · 只读' "记录模型逐字显示（不是策略模型）"
+  assert_not "$tmp/$current/policy-dev.txt" "kimi-coding/k3-256k" "派单行里不出现未来策略的模型"
+  assert_has "$tmp/$current/policy-dev.txt" "SID sid-dev-232" "派单行带已提交的 SID"
+  assert_has "$tmp/$current/policy-dev.txt" "只读：实际模型来自已提交的派单记录" "命令行说明这是派单决定的只读面"
+  # ③ 没有记录的席位：不借策略模型
   filter_to verify
-  wait_row seats-verify "席位 verify 行显示配置来源" 'verify' 'deepseek/deepseek-flash · 配置' \
-    || bad "席位 verify 的行没有在预算内出现"
-  assert_match "$tmp/$current/seats-verify.txt" 'verify +deepseek/deepseek-flash · 配置' "配置解析 → 配置"
-  filter_to dev2
-  wait_row seats-dev2 "席位 dev2 行显示显式来源" 'dev2' 'kimi-coding/k3-256k · 显式' \
-    || bad "席位 dev2 的行没有在预算内出现"
-  assert_match "$tmp/$current/seats-dev2.txt" 'dev2 +kimi-coding/k3-256k · 显式' "显式记录 → 显式"
-  filter_to dev
-  wait_row seats "席位 dev 行显示历史记录来源" 'dev' 'xai/grok-4.6 · 历史记录' \
-    || bad "席位 dev 的行没有在预算内出现"
-  assert_match "$tmp/$current/seats.txt" 'dev +xai/grok-4.6 · 历史记录' "记录与配置不一致 → 历史记录 + 记录的模型"
-  ( cd "$ROOT" && bash "$skill/scripts/team" roster ) > "$tmp/$current/roster.txt" 2>/dev/null
-  assert_match "$tmp/$current/roster.txt" 'xai/grok-4\.6·历史记录' "team roster 的标签与 models 块同口径"
-  # Focus the dev seat row (its line carries the record's model) and open the picker.
-  # M59: Enter only follows a successful walk (focus_row tolerates the row set being replaced).
-  sleep 0.3
-  if focus_row 'dev +xai/grok-4.6'; then
-    keys Enter
-  else
-    bad "没能把焦点移到 dev 席位行"
-  fi
-  # M59: conditional — wait for the seat picker on a settled frame (title + the three-segment known entry).
-  pty_wait_frame "$tmp/$current/picker.txt" "seat picker dev" "选择 dev 的模型" "openrouter/amazon/nova-lite-v1" \
-    || bad "seat picker 没有打开（标题或已知模型不在稳定帧上）"
-  assert_match "$tmp/$current/picker.txt" '选择 dev 的模型' "picker 打开并点名席位"
-  assert_has "$tmp/$current/picker.txt" "openrouter/amazon/nova-lite-v1" "picker 列出命令报告的三段已知模型"
-  assert_has "$tmp/$current/picker.txt" "kimi-coding/k3-256k" "picker 同时列出记录来源的已知模型"
-  assert_has "$tmp/$current/picker.txt" "-（移除覆盖，回退默认）" "picker 有移除项"
-  assert_has "$tmp/$current/picker.txt" "自由输入" "picker 有自由输入项"
-  # Choose the three-segment known model that differs from the seat's displayed one, then confirm through the editor.
-  pick_option 'openrouter/amazon/nova-lite-v1' || bad "picker 里没有 openrouter/amazon/nova-lite-v1"
-  wait_editor dev || bad "seat 编辑器没有打开"
-  sleep 0.3
-  local line_before; line_before="$(grep '^TEAM_AGENT_MODELS=' "$(cfg)")"
-  keys Enter
-  if wait_cap seat-confirm "确认席位 dev"; then ok "确认行点名席位"; else bad "确认行没有出现"; fi
-  assert_has "$tmp/$current/seat-confirm.txt" "下次 dispatch/resume 生效" "确认行说明下次 spawn 生效"
-  keys Enter
-  if wait_cap seat-written "✓ 已写入席位 dev = "; then
-    cap_to seat-written
-    assert_match "$tmp/$current/seat-written.txt" '✓ 已写入席位 dev = openrouter/amazon/nova-lite-v1 · 下次 dispatch/resume 生效' "写入回执带完整三段 id（不是最后一段）"
-  else
-    bad "席位写入的回执没有出现（见 seat-written.txt）"
-  fi
-  assert_match "$(cfg)" '^TEAM_AGENT_MODELS=.*dev=openrouter/amazon/nova-lite-v1' "契约里 dev 的 token 落盘（完整三段 id）"
-  assert_eq "契约行只改了一行" "$(diff <(printf '%s\n' "$line_before") <(grep '^TEAM_AGENT_MODELS=' "$(cfg)") | grep -c '^[<>]' || true)" "2"
-  assert_match "$(argv_log)" 'config set-agent-model dev .* --actor panel --dry-run --fingerprint [0-9a-f]{64}' "wrapper 记录了 set-agent-model 的 --dry-run"
-  assert_match "$(argv_log)" 'config set-agent-model dev .* --actor panel --yes --fingerprint [0-9a-f]{64}' "wrapper 记录了 set-agent-model 的写入"
-  assert_eq "席位记录 state/dev.env 未被碰" "$(cat "$state/dev.env")" "model=xai/grok-4.6"
-  # Removal: the picker's `-` row falls back to TEAM_DEFAULT_MODEL.
-  filter_to dev
-  # M55/M59：刚写过的席位让视图异步重读合同（行集会被整批替换、甚至整段空缺等块重建）。
-  # focus_row 自己容忍这个窗口；Enter 只跟在成功的走位后（盲发 Enter 实测打到 dev2 行）。
-  sleep 0.3
-  if focus_row 'dev +xai/grok-4.6'; then
-    keys Enter
-  else
-    bad "移除前没能把焦点移到 dev 席位行"
-  fi
-  pty_wait_frame - "seat picker dev（移除用例）" "选择 dev 的模型" || bad "移除用例的 seat picker 没有打开"
-  pick_option '-（移除覆盖' || bad "picker 里没有移除项"
-  wait_editor dev || bad "移除用例的 seat 编辑器没有打开"
-  keys Enter
-  sleep 2
-  keys Enter
-  if wait_cap removed "已移除席位 dev 的覆盖"; then
-    ok "移除回执说回到默认"
-  else
-    bad "移除回执没有出现（见 removed.txt）"
-  fi
-  assert_eq "dev 的 token 离开契约行" "$(grep '^TEAM_AGENT_MODELS=' "$(cfg)")" "TEAM_AGENT_MODELS=''"
-  # A shapeless model is refused by the owning command (free-text row → deepseek-flash).
-  local sha_b; sha_b="$(sha "$(cfg)")"
-  # 刚写过的席位：视图会重读合同（行上的“覆盖”变成“回退默认”）。等它落定再走位，否则走位可能在
-  # 一个正在被替换的行集上做过（实测：拿旧帧算出 40 步，新帧一到就冲过 dev 行）。
-  wait_cap removed-fresh 'xai/grok-4.6 · 历史记录 · 回退默认' || bad "移除后视图没有重读合同"
-  filter_to dev
-  sleep 0.3
-  if focus_row 'dev +xai/grok-4.6'; then
-    keys Enter
-  else
-    bad "拒绝用例没能把焦点移到 dev 席位行"
-  fi
-  pty_wait_frame - "seat picker dev（拒绝用例）" "选择 dev 的模型" || bad "拒绝用例的 seat picker 没有打开"
-  pick_option '自由输入' || bad "picker 里没有自由输入项"
-  wait_editor dev || bad "自由输入用例的 seat 编辑器没有打开"
-  type_text "deepseek-flash"
-  sleep 0.3
-  keys Enter
-  if wait_cap shapeless "provider/model"; then ok "没有 provider 的模型被命令拒绝"; else bad "拒绝回执没有出现"; fi
-  leave_editor dev || bad "拒绝用例的 esc 发了但 seat 编辑器还在"
-  assert_eq "被拒后契约 sha 不变" "$(sha "$(cfg)")" "$sha_b"
-  # The running seat's window keeps its model; the next dispatch would use the new one.
-  local sha_b; sha_b="$(sha "$(cfg)")"
-  # P24 起 dispatch 要求任务书声明锚（change: 或 anchor:）——夹具的 P22-x 也补上，否则
-  # `dispatch --print` 在渲染启动命令前就被拒（与面板无关的夹具漂移）。
-  cat > "$ROOT/docs/team/tasks/P22-x.md" <<'BRIEF'
-# P22-x fixture brief
-
-```
-task:   P22-x
-agent:  dev
-issue:  -
-change: -
-specs:  -
-phase:  apply
-deps:   -
-anchor: none (infra) — panel-p21 夹具：只为 dispatch --print 渲染启动命令
-status: todo
-budget: -
-```
-
-body
-BRIEF
-  tmux -L "$sock" new-window -d -t "$sess" -n dev -c "$ROOT" 'sleep 900'
-  # A stub `pi` so `dispatch --print` can render the command it would run.
-  printf '#!/bin/sh\nexit 0\n' > "$tmp/$current-pi.sh"; chmod +x "$tmp/$current-pi.sh"
-  ( cd "$ROOT" && bash "$skill/scripts/team" config set TEAM_PI_BIN "$tmp/$current-pi.sh" --yes ) >/dev/null 2>&1
+  wait_row policy-verify "verify 的「没有完整派单记录」行" 'verify' '没有完整派单记录' \
+    || bad "无记录席位行没有在预算内出现"
+  assert_not "$tmp/$current/policy-verify.txt" "kimi-coding/k3-256k" "无记录席位行不借未来策略的模型"
+  # ④ 一次类别直写：picker 用项目自己的词表，写走 set-task-model 的 dry-run → --yes
+  filter_to 类别
   sleep 0.5
-  local win_before; win_before="$(tmux -L "$sock" list-panes -t "$sess:dev" -F '#{pane_start_command}' 2>/dev/null)"
-  ( cd "$ROOT" && bash "$skill/scripts/team" config set-agent-model dev kimi-coding/k3-256k --yes ) >/dev/null 2>&1
+  if focus_row '› 类别 routine'; then keys Enter; else bad "没能把焦点移到类别行"; fi
+  if pty_wait_frame "$tmp/$current/policy-picker.txt" "类别 picker" "选择类别 routine 的模型" "…（自由输入）"; then
+    ok "类别 picker 打开（标题点名类别 + 自由输入项）"
+  else
+    bad "类别 picker 没有打开"
+  fi
+  cap_to policy-picker
+  assert_has "$tmp/$current/policy-picker.txt" "kimi-coding/k3-256k · 当前" "picker 标出策略的当前值"
+  assert_has "$tmp/$current/policy-picker.txt" "xai/grok-4.6" "picker 列出项目自己的已知模型"
+  assert_not "$tmp/$current/policy-picker.txt" "移除" "类别 picker 没有移除项（写者没有删除操作，面板不发明它）"
+  local pol_sha pol_audit pol_argv pol_pid_args pol_record
+  pol_sha="$(sha "$(cfg)")"; pol_audit="$(audit_lines)"; pol_argv="$(argv_count)"
+  pol_record="$(sha "$state/dev.env")"
+  pol_pid_args="$(tr '\0' ' ' < "/proc/$(panel_pid)/cmdline" 2>/dev/null || true)"
+  cp "$(cfg)" "$tmp/$current/before-cat.cfg"
+  pick_option 'xai/grok-4.6' || bad "picker 里没有 xai/grok-4.6"
+  if wait_cap policy-written "已写入类别 routine = xai/grok-4.6"; then
+    ok "类别直写的回执"
+  else
+    bad "类别直写的回执没有出现"
+  fi
+  cap_to policy-written
+  assert_not "$tmp/$current/policy-written.txt" "确认：" "值条目直写没有确认帧"
+  assert_has "$tmp/$current/policy-written.txt" "只影响新任务" "回执说明只影响新任务"
+  assert_has "$tmp/$current/policy-written.txt" "没有重启任何进程" "回执说明没有进程被重启"
+  argv_since "$pol_argv" "$tmp/$current/policy-argv.log"
+  assert_match "$tmp/$current/policy-argv.log" 'config set-task-model routine xai/grok-4.6 --actor panel --dry-run --fingerprint [0-9a-f]{64}' "argv 记录 set-task-model --dry-run"
+  assert_match "$tmp/$current/policy-argv.log" 'config set-task-model routine xai/grok-4.6 --actor panel --yes --fingerprint [0-9a-f]{64}' "argv 记录 set-task-model 的写入"
+  assert_not "$tmp/$current/policy-argv.log" "set-agent-model" "argv 里没有退休的席位写入"
+  assert_eq "类别写入审计长一行" "$(audit_lines)" "$((pol_audit + 1))"
+  assert_match "$(cfg)" '^TEAM_TASK_MODELS=.*routine=xai/grok-4.6' "契约里类别映射落盘（完整三段 id 逐字）"
+  assert_has "$(cfg)" "xai/grok-4.6" "契约里写的是完整 id"
+  assert_eq "契约只改了一行" "$(diff "$tmp/$current/before-cat.cfg" "$(cfg)" | grep -c '^[<>]' || true)" "2"
+  assert_match "$(cfg)" "^TEAM_PM_MODEL=" "PM 行没有被类别写碰"
+  assert_eq "派单记录 state/dev.env 未被碰" "$(sha "$state/dev.env")" "$pol_record"
+  assert_not "$tmp/$current/policy-argv.log" "dispatch" "写入窗口里没有 dispatch"
+  assert_not "$tmp/$current/policy-argv.log" "resume" "写入窗口里没有 resume"
+  assert_not "$tmp/$current/policy-argv.log" "restart" "写入窗口里没有 restart"
+  assert_eq "面板进程 argv 不变（没有重启）" "$(tr '\0' ' ' < "/proc/$(panel_pid)/cmdline" 2>/dev/null || true)" "$pol_pid_args"
+}
+
+scn_categories() {
+  section "categories · picker 条目与取消 / PM 编辑 / 陈旧指纹 / 删类别后的保留恢复 / 遗留配置 / 无 spawn（P232）"
+  server_up categories "dev verify"
+  policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh verify=deepseek/deepseek-flash' \
+    'openai-codex/gpt-6.1-sol:high' || bad "策略升级事务没有跑通（见 $tmp/$current-upgrade.log）"
+  record_fixture dev 'xai/grok-4.6' sid-dev-232 T232-x routine
+  conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
+  local scn_argv scn_windows
+  scn_argv="$(argv_count)"
+  start_panel
+  scn_windows="$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | sort | tr '\n' ',')"
+  open_view
+  # ① 类别 picker 的条目顺序（当前 → 已知模型（去重）→ 自由输入），没有任何移除/整映射组合项
+  filter_to 类别
   sleep 0.5
-  assert_eq "运行中的 dev 窗口参数不变" "$(tmux -L "$sock" list-panes -t "$sess:dev" -F '#{pane_start_command}' 2>/dev/null)" "$win_before"
-  ( cd "$ROOT" && bash "$skill/scripts/team" dispatch dev P22-x "$ROOT/docs/team/tasks/P22-x.md" --print ) > "$tmp/$current/dispatch.txt" 2>&1
-  local wtcmd
-  wtcmd="$(sed -n 's/^  先由 PM 建： //p' "$tmp/$current/dispatch.txt" | head -1)"
-  [ -n "$wtcmd" ] && eval "$wtcmd" >/dev/null 2>&1
-  ( cd "$ROOT" && bash "$skill/scripts/team" dispatch dev P22-x "$ROOT/docs/team/tasks/P22-x.md" --print ) > "$tmp/$current/dispatch.txt" 2>&1
-  assert_has "$tmp/$current/dispatch.txt" "--model k3-256k" "下一次 dispatch --print 用新模型（--provider kimi-coding --model k3-256k）"
+  if focus_row '› 类别 routine'; then keys Enter; else bad "没能把焦点移到类别 routine 行"; fi
+  if pty_wait_frame "$tmp/$current/cat-picker.txt" "类别 picker" "选择类别 routine 的模型" "…（自由输入）"; then
+    ok "类别 picker 打开"
+  else
+    bad "类别 picker 没有打开"
+  fi
+  cap_to cat-picker
+  assert_has "$tmp/$current/cat-picker.txt" "kimi-coding/k3-256k · 当前" "条目：策略当前值带「当前」标记"
+  assert_not "$tmp/$current/cat-picker.txt" "routing=" "picker 不组合整张映射"
+  local cat_sha cat_audit
+  cat_sha="$(sha "$(cfg)")"; cat_audit="$(audit_lines)"
+  # ② esc 取消：什么都不写、不留审计
+  pty_key_when "类别 picker 的 esc" "选择类别 routine 的模型" Escape || bad "类别 picker 不在稳定帧上，esc 没有发"
+  wait_row cat-picker-closed "一次 esc 关掉类别 picker" '!选择类别 routine 的模型' '╭─ 项目设置' \
+    || bad "一次 esc 没有关掉类别 picker"
+  assert_not "$tmp/$current/cat-picker-closed.txt" "选择类别 routine 的模型" "一次 esc 关掉 picker"
+  assert_eq "取消后契约不变" "$(sha "$(cfg)")" "$cat_sha"
+  assert_eq "取消后审计不增长" "$(audit_lines)" "$cat_audit"
+  # ③ PM 编辑：自由输入 + 两次确认；回执点名 team up / fresh；一行 diff；argv 走 config set
+  local pm_before; pm_before="$(grep '^TEAM_PM_MODEL=' "$(cfg)")"
+  local pm_audit; pm_audit="$(audit_lines)"
+  filter_to TEAM_PM_MODEL
+  sleep 0.5
+  keys Enter
+  wait_picker TEAM_PM_MODEL '· 当前' || bad "PM 行的选择器没有打开"
+  pick_option '自由输入' || bad "PM 行没有自由输入项"
+  wait_editor TEAM_PM_MODEL || bad "PM 行的编辑器没有打开"
+  keys C-u; sleep 0.3
+  type_text "kimi-coding/k3-256k"; sleep 0.4
+  keys Enter
+  if wait_cap pm-confirm "确认：TEAM_PM_MODEL"; then ok "PM 编辑先给确认行"; else bad "PM 的确认行没有出现"; fi
+  keys Enter
+  if wait_cap pm-written "已写入 PM 模型"; then ok "PM 编辑落盘"; else bad "PM 的写入回执没有出现"; fi
+  cap_to pm-written
+  assert_has "$tmp/$current/pm-written.txt" "fresh-pm" "PM 回执点名换模型的 fresh-pm 守卫"
+  assert_has "$tmp/$current/pm-written.txt" "没有重启任何进程" "PM 回执说明没有进程被重启"
+  assert_match "$(argv_log)" 'config set TEAM_PM_MODEL kimi-coding/k3-256k --actor panel --dry-run --fingerprint [0-9a-f]{64}' "argv 记录 PM 的 --dry-run"
+  assert_match "$(argv_log)" 'config set TEAM_PM_MODEL kimi-coding/k3-256k --actor panel --yes --fingerprint [0-9a-f]{64}' "argv 记录 PM 的写入"
+  assert_eq "PM 写入审计长一行" "$(audit_lines)" "$((pm_audit + 1))"
+  assert_neq "PM 行确实变了" "$(grep '^TEAM_PM_MODEL=' "$(cfg)")" "$pm_before"
+  assert_has "$(cfg)" "kimi-coding/k3-256k" "PM 的新模型在文件里"
+  # ④ 陈旧指纹：picker 开着时另一个写者改契约 → accept 判冲突、对方字节保住、审计一行 conflict
+  filter_to 类别
+  sleep 0.5
+  if focus_row '› 类别 analysis'; then keys Enter; else bad "没能把焦点移到类别 analysis 行"; fi
+  pty_wait_frame - "类别 picker（冲突用例）" "选择类别 analysis 的模型" || bad "冲突用例的 picker 没有打开"
+  printf '# other writer\n' >> "$(cfg)"
+  local other_sha; other_sha="$(sha "$(cfg)")"
+  pick_option 'deepseek/deepseek-flash' || bad "冲突用例的 picker 里没有 deepseek/deepseek-flash"
+  if wait_cap cat-conflict "指纹不符"; then ok "陈旧指纹被命令拒绝（回执点名冲突）"; else bad "陈旧指纹的冲突回执没有出现"; fi
+  assert_eq "对方的字节被保住" "$(sha "$(cfg)")" "$other_sha"
+  assert_match "$(audit_log)" 'result=conflict actor=panel key=TEAM_TASK_MODELS' "审计增了一行 conflict（actor=panel）"
+  # ⑤ 删掉未来类别：策略行消失，已提交记录的模型/SID 原样保留（恢复不看映射成员）
+  ( cd "$ROOT" && bash "$skill/scripts/team" config set TEAM_TASK_MODELS 'analysis=openai-codex/gpt-5.6-terra:xhigh verify=deepseek/deepseek-flash' --yes ) >/dev/null 2>&1 \
+    || bad "整映射删除 routine 失败"
+  reopen_view
+  filter_to dev
+  wait_row cat-kept "删类别后 dev 的派单行仍在" 'xai/grok-4.6' 'SID sid-dev-232' \
+    || bad "删类别后派单行没有在预算内出现"
+  assert_match "$tmp/$current/cat-kept.txt" 'dev +xai/grok-4.6 · 只读' "删类别后记录模型仍是记录里的值"
+  assert_has "$tmp/$current/cat-kept.txt" "SID sid-dev-232" "删类别后 SID 原样"
+  filter_to 类别
+  cap_to cat-deleted
+  assert_not "$tmp/$current/cat-deleted.txt" "类别 routine" "被删的类别不再有策略行"
+  assert_match "$tmp/$current/cat-deleted.txt" '类别 (analysis|verify)' "其余类别照旧在策略块里"
+  assert_match "$tmp/$current/cat-deleted.txt" '^│ ── 任务类别（未来策略） ─+' "类别块本身还在（只删了 routine）"
+  # ⑥ 无 spawn/重启：整段没有任何 dispatch/resume/restart，窗口集合不变
+  argv_since "$scn_argv" "$tmp/$current/categories-argv.log"
+  assert_not "$tmp/$current/categories-argv.log" "dispatch" "整个场景没有 dispatch"
+  assert_not "$tmp/$current/categories-argv.log" "resume" "整个场景没有 resume"
+  assert_not "$tmp/$current/categories-argv.log" "restart" "整个场景没有 restart"
+  assert_not "$tmp/$current/categories-argv.log" "set-agent-model" "整个场景没有退休的席位写入"
+  assert_eq "tmux 窗口集合不变（没有 spawn 席位）" \
+    "$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null | sort | tr '\n' ',')" "$scn_windows"
+  # ⑦ 遗留配置：退休键在文件里 → 可见的迁移诊断 + 命令行给 CLI 升级路线；没有席位编辑器
+  server_up categories-legacy "dev verify"
+  start_panel
+  open_view
+  # 诊断行按 头…尾 换行（不截断路线）：命令原文可能跨两行，所以断言的是路线的**词**都在屏幕上
+  # （升级命令名 + 它的参数），而不是一整串连续子串。
+  wait_row legacy-diagnosis "遗留配置的迁移诊断" '策略迁移诊断' '含退休键' 'upgrade-models' \
+    || bad "遗留配置的迁移诊断没有在预算内出现"
+  assert_has "$tmp/$current/legacy-diagnosis.txt" "upgrade-models" "诊断给出 CLI 升级命令（命令名可见）"
+  assert_has "$tmp/$current/legacy-diagnosis.txt" "--task-models" "诊断给出升级命令的参数（不被截掉）"
+  assert_has "$tmp/$current/legacy-diagnosis.txt" "--dry-run" "诊断给出升级命令的预览步骤（不被截掉）"
+  assert_has "$tmp/$current/legacy-diagnosis.txt" "TEAM_DEFAULT_MODEL" "诊断点名退休键"
+  local legacy_cat_heading
+  legacy_cat_heading="$(cap_line_heading "$tmp/$current/legacy-diagnosis.txt" '任务类别（未来策略）')"
+  assert_eq "遗留配置没有可编辑的类别块（没有假的可编辑策略）" "$legacy_cat_heading" "0"
+  filter_to TEAM_DEFAULT_MODEL
+  # 筛选也匹配行内注释（M49 的既有口径），而 TEAM_PM_MODEL 的初始化注释里就写着 TEAM_DEFAULT_MODEL ——
+  # 所以这里必须先把光标走到退休键那一行，否则回车打到的是 PM 行（第一遍就是这么红的）。
+  if focus_row '› TEAM_DEFAULT_MODEL'; then :; else bad "没能把焦点移到退休键行"; fi
+  cap_to legacy-key
+  assert_match "$tmp/$current/legacy-key.txt" 'TEAM_DEFAULT_MODEL +.*未知键' "退休键变成只读的未知键行（没有席位默认编辑器）"
+  keys Enter
+  if wait_cap legacy-route "不是已知的项目设置"; then ok "退休键的回执点名它不在 schema 里（不给编辑）"; else bad "退休键的回执没有出现"; fi
+  cap_to legacy-route
+  assert_not "$tmp/$current/legacy-route.txt" " · TEAM_DEFAULT_MODEL" "退休键不开选择器"
+  assert_not "$tmp/$current/legacy-route.txt" "╭─ TEAM_DEFAULT_MODEL" "退休键不开写编辑器"
+  assert_not "$tmp/$current/legacy-route.txt" "set-agent-model" "遗留视图里没有席位写入路线"
+}
+
+scn_flip() {
+  section "flip · 写入路由改成席位写入 / 把未来策略当实际显示 → policy 段必须红；还原 → 绿（P232 对抗控制）"
+  local ft="$tmp/flip"
+  mkdir -p "$ft"
+  cp "$panel" "$ft/panel-route.js"
+  cp "$panel" "$ft/panel-actual.js"
+  python3 - "$ft/panel-route.js" "$ft/panel-actual.js" <<'PYPATCH'
+import sys
+route, actual = sys.argv[1], sys.argv[2]
+s = open(route, encoding='utf-8').read()
+old = '"config","set-task-model"'
+assert old in s, "找不到面板的 set-task-model 路由字节"
+open(route, 'w', encoding='utf-8').write(s.replace(old, '"config","set-agent-model"', 1))
+a = open(actual, encoding='utf-8').read()
+old2 = 'B.assigned?B.model||J.dash:J.dash'
+assert old2 in a, "找不到派单行的显示规则字节"
+open(actual, 'w', encoding='utf-8').write(a.replace(old2, 'Q.blocks.settings.models.policy.categories[0].model', 1))
+PYPATCH
+  # 红侧 ①：面板的写入路由改成退休的席位写入 → 写路径的 argv 断言必须红
+  TEAM_P21_PANEL="$ft/panel-route.js" bash "$here/panel-p21.sh" policy > "$tmp/flip-route-red.log" 2>&1
+  local rc_red=$?
+  if [ "$rc_red" -eq 1 ] && grep -a '✗' "$tmp/flip-route-red.log" | grep -q 'set-task-model'; then
+    ok "红侧①：路由改成席位写入后 argv 断言红且点名 set-task-model（rc=$rc_red）"
+  else
+    bad "红侧①：路由改了却没人红（rc=$rc_red）"
+  fi
+  # 红侧 ②：把未来策略的模型当实际显示 → 策略/实际分离的断言必须红
+  TEAM_P21_PANEL="$ft/panel-actual.js" bash "$here/panel-p21.sh" policy > "$tmp/flip-actual-red.log" 2>&1
+  rc_red=$?
+  if [ "$rc_red" -eq 1 ] && grep -a '✗' "$tmp/flip-actual-red.log" | grep -q '策略'; then
+    ok "红侧②：把策略模型当实际显示后分离断言红且点名策略（rc=$rc_red）"
+  else
+    bad "红侧②：显示规则改了却没人红（rc=$rc_red）"
+  fi
+  # 绿侧：真树的 bundle（两个靶子的字节都还原）跑同一段必须全绿
+  bash "$here/panel-p21.sh" policy > "$tmp/flip-green.log" 2>&1
+  local rc_green=$?
+  [ "$rc_green" -eq 0 ] && ok "绿侧：真树 bundle 跑 policy 段全绿" || bad "绿侧：真树也红了（rc=$rc_green）"
+  { grep -a '== 结果 ==' "$tmp/flip-route-red.log" || true; } | grep -q '✗ 0$' && bad "红侧①的结果行是全绿（判据没抓住破坏）" || ok "红侧①的结果行确实不是全绿"
+  printf '    --- 红侧①尾部 ---\n'
+  { grep -aE '✗|== 结果' "$tmp/flip-route-red.log" || true; } | tail -5 | sed 's/^/    /'
+  printf '    --- 红侧②尾部 ---\n'
+  { grep -aE '✗|== 结果' "$tmp/flip-actual-red.log" || true; } | tail -5 | sed 's/^/    /'
 }
 
 scn_readonly() {
@@ -1830,7 +1945,7 @@ PY
   if [ "$rc" -eq 0 ]; then ok "$msg（$out）"; else bad "$msg：$out"; fi
 }
 
-# 把焦点走到列表末尾（窗口跟着焦点走），让尾部的「未分组」与席位块同一屏 —— 这两样都在
+# 把焦点走到列表末尾（窗口跟着焦点走），让尾部的「未分组」与类别块同一屏 —— 这两样都在
 # 「分组之后」，是场景要看的相对顺序。
 walk_to_tail() { # <capture name>
   local i attempt name="${1:-tail}" hit=0
@@ -1838,7 +1953,7 @@ walk_to_tail() { # <capture name>
     for i in $(seq 1 140); do keys Down; sleep 0.01; done
     for i in $(seq 1 12); do
       cap_to "$name"
-      if grep -q '席位' "$tmp/$current/$name.txt" && grep -q '›' "$tmp/$current/$name.txt"; then hit=1; break; fi
+      if grep -q '任务类别' "$tmp/$current/$name.txt" && grep -q '›' "$tmp/$current/$name.txt"; then hit=1; break; fi
       sleep 0.4   # 块被 TTL 重读换成摘要行（已知现象）→ 等它回来，必要时再走一轮
     done
     [ "$hit" = 1 ] && break
@@ -1849,6 +1964,9 @@ walk_to_tail() { # <capture name>
 scn_groups() {
   section "groups · 记录带 group、视图按功能域分组（P30/D1-D3）：功能域标题/读取顺序/schema 序/未分组降级/无键→域表/徽章词+tone"
   server_up groups
+  # P232：尾部的相对顺序现在是「未分组 → 类别块」，类别块要有行才画得出标题。
+  policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' 'openai-codex/gpt-6.1-sol:high' \
+    || bad "策略升级事务没有跑通"
   # 契约里手加一个 schema 不认识的键：它必须落在可见的「未分组」组里（和缺 token 的 schema 行同一条降级路径）。
   printf 'TEAM_HAND_ADDED="hand"\n' >> "$(cfg)"
   conf_set "lang=zh" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
@@ -1916,15 +2034,15 @@ scn_groups() {
   filter_clear
   sleep 0.4
   walk_to_tail tail
-  local n_ungrouped n_seats
+  local n_ungrouped n_categories
   n_ungrouped="$(cap_line_heading "$tmp/$current/tail.txt" '未分组')"
-  n_seats="$(cap_line_heading "$tmp/$current/tail.txt" '席位')"
-  if [ "$n_ungrouped" -gt 0 ] && [ "$n_seats" -gt 0 ] && [ "$n_ungrouped" -lt "$n_seats" ]; then
-    ok "「未分组」在席位块之前（未分组=$n_ungrouped < 席位=$n_seats）"
+  n_categories="$(cap_line_heading "$tmp/$current/tail.txt" '任务类别')"
+  if [ "$n_ungrouped" -gt 0 ] && [ "$n_categories" -gt 0 ] && [ "$n_ungrouped" -lt "$n_categories" ]; then
+    ok "「未分组」在类别块之前（未分组=$n_ungrouped < 任务类别=$n_categories）"
   else
-    bad "尾部顺序不对（未分组=$n_ungrouped 席位=$n_seats）"
+    bad "尾部顺序不对（未分组=$n_ungrouped 任务类别=$n_categories）"
   fi
-  assert_match "$tmp/$current/tail.txt" '^│ ── 席位 ─+' "席位块标题也是同一种分节线（标题体系一致）"
+  assert_match "$tmp/$current/tail.txt" '^│ ── 任务类别（未来策略） ─+' "类别块标题也是同一种分节线（标题体系一致）"
   # ⑤ 无键→域表：scratch CLI 让 TEAM_ZZZ_TEST 带 workflow、把 TEAM_GATES 移到 meeting；
   #    提交的那份 bundle 必须跟着两个标题走（bundle 里没有第二张键表/组表）。
   local scratch="$tmp/$current/scratch"
@@ -1992,17 +2110,20 @@ PY
   assert_has "$tmp/$current/tail-scratch.txt" "门禁命令" "降级组里畸形行同屏（schema 行可见）"
   local n_u n_s
   n_u="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '未分组')"
-  n_s="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '席位')"
+  n_s="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '任务类别')"
   if [ "$n_u" -gt 0 ] && [ "$n_s" -gt 0 ] && [ "$n_u" -lt "$n_s" ]; then
-    ok "scratch 尾部：「未分组」仍在席位块之前（$n_u < $n_s）"
+    ok "scratch 尾部：「未分组」仍在类别块之前（$n_u < $n_s）"
   else
-    bad "scratch 尾部顺序不对（未分组=$n_u 席位=$n_s）"
+    bad "scratch 尾部顺序不对（未分组=$n_u 任务类别=$n_s）"
   fi
 }
 
 scn_wheel_settings() {
   section "wheel · 设置视图自己的窗口（P30/D5）：一格一行/焦点不动/计数行跟随/不穿透页面/焦点推窗/两个 picker"
   server_up settings-wheel
+  # P232：类别 picker 用例要有类别可开。
+  policy_new 'routine=kimi-coding/k3-256k analysis=openai-codex/gpt-5.6-terra:xhigh' 'openai-codex/gpt-6.1-sol:high' \
+    || bad "策略升级事务没有跑通"
   # 页面（page 3 的巡检块）要真的滚得动，「页面没被穿透」才有可观察的对照：写满 12 行巡检日志。
   mkdir -p "$state"
   python3 - "$state/watchdog.log" <<'PY'
@@ -2094,36 +2215,34 @@ PY
     || bad "一次 esc 没有关掉选择器（或不在设置视图里了）"
   assert_not "$tmp/$current/picker-closed.txt" " · TEAM_PULSE_INTERVAL" "一次 esc 就把选择器关掉（不穿透）"
   assert_has "$tmp/$current/picker-closed.txt" "╭─ 项目设置" "关闭后仍在设置视图里"
-  # ⑤ 席位 picker 的滚轮同样走条目（这一支原来会穿透到页面）。
-  filter_to dev
+  # ⑤ 类别 picker 走同一套 widget（条目滚动已在 ④ 证过）。P232：席位 picker 随席位模型一起退休，
+  #    类别 picker 是它的接任者 —— 这里守两件事：它自己的条目列表在滚轮下会走，且页面不因此滚动
+  #    （⑥ 关掉视图后仍断言页面停在这一屏）。
+  filter_clear
+  filter_to 类别
   sleep 0.5
-  if focus_row 'dev +deepseek'; then
+  if focus_row '› 类别 routine'; then
     keys Enter
   else
-    bad "没能把焦点移到 dev 席位行"
+    bad "没能把焦点移到类别 routine 行"
   fi
-  # 席位 picker 的标题是「选择 <seat> 的模型」（没有 ` · KEY` 后缀），所以用 pty_wait_frame 等它。
-  if pty_wait_frame "$tmp/$current/seat-picker.txt" "seat picker dev" "选择 dev 的模型" "回退默认"; then
-    ok "席位 picker 打开（标题 + 已知模型）"
+  # 类别 picker 的标题是「选择类别 <category> 的模型」（没有 ` · KEY` 后缀），用 pty_wait_frame 等它。
+  if pty_wait_frame "$tmp/$current/cat-picker.txt" "类别 picker" "选择类别 routine 的模型" "…（自由输入）"; then
+    ok "类别 picker 打开（标题 + 自由输入项）"
   else
-    bad "席位 picker 没有打开"
+    bad "类别 picker 没有打开"
   fi
-  cap_to seat-wheel-before
-  sel_before="$(cap_line_of "$tmp/$current/seat-wheel-before.txt" '›')"
+  cap_to cat-wheel-before
+  sel_before="$(cap_line_of "$tmp/$current/cat-wheel-before.txt" '›')"
   wheel_at down 20 12 2
-  wait_line_gt seat-wheel-after "席位 picker 滚轮把选中行推下去" '›' "${sel_before:-0}" \
-    || bad "席位 picker 里的滚轮没有走条目（选中行停在 $sel_before）"
-  sel_after="$(cap_line_of "$tmp/$current/seat-wheel-after.txt" '›')"
-  if [ "$sel_before" -gt 0 ] && [ "$sel_after" -gt "$sel_before" ]; then
-    ok "席位 picker 里的滚轮走条目（$sel_before → $sel_after）"
-  else
-    bad "席位 picker 里的滚轮没有走条目（$sel_before → $sel_after）"
-  fi
-  pty_key_when "席位 picker 的 esc" '选择 dev 的模型' Escape || bad "席位 picker 不在稳定帧上，esc 没有发"
-  # P68：等席位 picker 关掉（仍在设置视图里）在稳定帧上。
-  wait_row seat-closed "一次 esc 关掉席位 picker" '!选择 dev 的模型' '╭─ 项目设置' \
-    || bad "一次 esc 没有关掉席位 picker"
-  assert_not "$tmp/$current/seat-closed.txt" "选择 dev 的模型" "一次 esc 关掉席位 picker"
+  sleep 0.6
+  cap_to cat-wheel-after
+  assert_has "$tmp/$current/cat-wheel-after.txt" "选择类别 routine 的模型" "滚轮之后类别 picker 还开着（没穿透）"
+  pty_key_when "类别 picker 的 esc" '选择类别 routine 的模型' Escape || bad "类别 picker 不在稳定帧上，esc 没有发"
+  # P68：等类别 picker 关掉（仍在设置视图里）在稳定帧上。
+  wait_row cat-picker-closed "一次 esc 关掉类别 picker" '!选择类别 routine 的模型' '╭─ 项目设置' \
+    || bad "一次 esc 没有关掉类别 picker"
+  assert_not "$tmp/$current/cat-picker-closed.txt" "选择类别 routine 的模型" "一次 esc 关掉类别 picker"
   # ⑥ 回到页面：视图把滚轮吃掉了 —— 页面还是进视图前的那一屏（P-01 出屏、P-04 可见）。
   pty_key_when "关设置视图" '╭─ 项目设置' Escape || bad "关闭视图前它不在稳定帧上"
   # P68：等浮层自己回到稳定帧上再发第二个 esc（原来是两个固定 sleep 给按键让路）。
@@ -2159,7 +2278,9 @@ for s in "${SECTIONS[@]}"; do
       choices-schema) scn_choices_schema ;;
       write) scn_write ;;
       conflict) scn_conflict ;;
-      seats) scn_seats ;;
+      categories) scn_categories ;;
+      policy) scn_policy ;;
+      flip) scn_flip ;;
       readonly) scn_readonly ;;
       *) printf 'panel-p21: 未知场景 %s\n' "$s" >&2; exit 3 ;;
     esac

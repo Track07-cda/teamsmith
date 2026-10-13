@@ -23,10 +23,6 @@ team_worktree_add() { # <agent> [--create] [--no-install]
     else
       printf '    git -C %s worktree add -b %s %s %s\n' "$TEAM_MAIN_ROOT" "$branch" "$wt" "$TEAM_PROTECTED_BRANCH"
     fi
-    team_state_set "$agent" model "$(team_agent_model "$agent")"
-    team_state_set "$agent" model_src config
-    team_state_set "$agent" window "$agent"
-    team_state_set "$agent" worktree "$wt"
     return 0
   fi
   mkdir -p "$(dirname "$wt")"
@@ -52,10 +48,6 @@ team_worktree_add() { # <agent> [--create] [--no-install]
     ( cd "$wt" && eval "$TEAM_INSTALL_CMD" ) || team_warn "install 失败，先手动装依赖再派单"
   fi
 
-  team_state_set "$agent" model "$(team_agent_model "$agent")"
-  team_state_set "$agent" model_src config
-  team_state_set "$agent" window "$agent"
-  team_state_set "$agent" worktree "$wt"
   return 0
 }
 
@@ -70,9 +62,10 @@ team_pi_args() { # <model> → 打印已转义的 pi 参数
   piargs+=(-e "$TEAM_SKILL_DIR/extension/team-inbox-watch.ts")
   [ -d "$TEAM_SKILL_DIR" ] && piargs+=(--skill "$TEAM_SKILL_DIR")
   if [ -n "$TEAM_EXTRA_PI_ARGS" ]; then
-    # 允许项目追加参数（空格分隔，不支持带空格的值）
-    # shellcheck disable=SC2206
-    piargs+=($TEAM_EXTRA_PI_ARGS)
+    # Match the ownership guard's literal grammar; never re-split/glob the
+    # original text, which would turn quote characters into argv data.
+    team_literal_argv "$TEAM_EXTRA_PI_ARGS" || return 1
+    piargs+=("${TEAM_LITERAL_TOKENS[@]}")
   fi
   printf '%q ' "${piargs[@]}"
 }
@@ -193,8 +186,7 @@ team_cmd_add_agent() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --register) register=1; shift ;;
-      --model) model="${2:?--model 需要 <provider/model> 或 -}"; has_model=1; shift 2 ;;
-      --model=*) model="${1#*=}"; has_model=1; shift ;;
+      --model|--model=*) team_err 'add-agent --model retired；使用 task category 和 config set-task-model'; return 2 ;;
       --fingerprint) fp="${2:?--fingerprint 需要 sha256}"; shift 2 ;;
       --fingerprint=*) fp="${1#*=}"; shift ;;
       --no-install) extra+=(--no-install); shift ;;
@@ -1052,8 +1044,10 @@ team_dispatch_judge_seat_hint() { # <agent> <worktree>
         fi ;;
     esac
   fi
-  sid="$(team_state_get "$agent" sid '')"
-  rec_bytes="$(team_state_get "$agent" sid_bytes '')"
+  # Even zero-output hints must use the same complete trusted identity as size,
+  # activity and death reads; never stitch partial fields onto the current cwd.
+  team_assignment_load "$agent" || return 0
+  sid="${TEAM_ASSIGN[sid]}"; rec_bytes="${TEAM_ASSIGN[sid_bytes]}"; wt="${TEAM_ASSIGN[worktree]}"
   if [ -n "$sid" ] && [ -n "$rec_bytes" ]; then
     f="$(team_session_file "$sid" "$wt" 2>/dev/null || true)"
     if [ -n "$f" ] && [ -f "$f" ]; then
@@ -1068,7 +1062,120 @@ team_dispatch_judge_seat_hint() { # <agent> <worktree>
   return 0
 }
 
-team_cmd_dispatch() {
+# Public front door: immutable preflight, then seat/admission serialization.
+team_cmd_dispatch() (
+  local -a original=("$@") positional=()
+  local seat='' printonly=0 arg cfg_fp state_fp task_fp output rc=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model|--branch) [ $# -ge 2 ] || team_usage_die "dispatch: $1 needs a value"; shift 2 ;;
+      --print) printonly=1; shift ;;
+      --*) shift ;; *) positional+=("$1"); [ -n "$seat" ] || seat="$1"; shift ;;
+    esac
+  done
+  cfg_fp="$(team_config_fingerprint "$TEAM_CONFIG")"
+  [ "${TEAM_CONFIG_LOADED_FP:-$cfg_fp}" = "$cfg_fp" ] || { team_err 'dispatch: config changed after load；重新读取后重试，未写/未启动'; return 1; }
+  if [ "$printonly" = 1 ]; then team_dispatch_execute "${original[@]}"; return $?; fi
+  state_fp="$(team_launch_state_fingerprint "$seat")"
+  task_fp="$(team_launch_task_fingerprint "$seat" "${positional[1]:-}")"
+  output="$( _TEAM_DISPATCH_PREFLIGHT_ONLY=1 team_dispatch_execute "${original[@]}" 2>&1)" || rc=$?
+  [ "$rc" = 0 ] || { printf '%s\n' "$output"; return "$rc"; }
+  local _TEAM_DISPATCH_CONFIG_FP="$cfg_fp" _TEAM_DISPATCH_STATE_FP="$state_fp" _TEAM_DISPATCH_TASK_FP="$task_fp" _TEAM_DISPATCH_TASK_ID="${positional[1]:-}"
+  team_with_lock "seat:$seat" team_with_lock worker-admission team_with_lock "config:$TEAM_CONFIG" team_dispatch_execute "${original[@]}"
+)
+team_launch_state_fingerprint() {
+  local f
+  for f in "$TEAM_STATE_DIR/$1.env" "$TEAM_STATE_DIR/$1.pending"; do
+    printf '%s\n' "$f"; [ ! -f "$f" ] || sha256sum "$f"
+  done | sha256sum | cut -d' ' -f1
+}
+team_launch_task_fingerprint() {
+  local f wt; wt="$(team_agent_worktree "$1")"
+  {
+    while IFS= read -r f; do [ -z "$f" ] || { printf '%s\n' "$f"; sha256sum "$f"; }; done < <(team_task_briefs "$2")
+    git -C "$wt" symbolic-ref -q HEAD 2>/dev/null || true
+    git -C "$wt" rev-parse HEAD 2>/dev/null || true
+  } | sha256sum | cut -d' ' -f1
+}
+team_dispatch_final_snapshot() {
+  [ "$(team_config_fingerprint "$TEAM_CONFIG")" = "$_TEAM_DISPATCH_CONFIG_FP" ] &&
+    [ "$(team_launch_state_fingerprint "$1")" = "$_TEAM_DISPATCH_STATE_FP" ] &&
+    [ "$(team_launch_task_fingerprint "$1" "$_TEAM_DISPATCH_TASK_ID")" = "$_TEAM_DISPATCH_TASK_FP" ] || {
+    team_err 'dispatch: policy/assignment/brief/branch changed during preflight；重新预览后重试，未写/未启动'; return 1;
+  }
+}
+team_dispatch_select_identity() {
+  local agent="$1" id="$2" taskfile="$3" wt="$4" branch="$5" override="$6" fresh="$7"
+  local declarations category oldtask complete=0 matching=0 oldmodel='' oldsid='' origin=''
+  declarations="$(grep -E '^category:' "$taskfile" || true)"
+  [ "$(printf '%s\n' "$declarations" | grep -c .)" = 1 ] || { team_err 'brief 必须唯一 category: header；显式 override 不豁免'; return 1; }
+  category="$(team_trim "${declarations#category:}")"
+  team_category_valid "$category" || { team_err "category 不合法：$category"; return 1; }
+  team_model_policy_guard || return 1
+  team_identity_extra_guard "${TEAM_EXTRA_PI_ARGS:-}" || return 1
+  if team_assignment_load "$agent"; then
+    complete=1; oldtask="${TEAM_ASSIGN[task]}"; oldmodel="${TEAM_ASSIGN[model]}"; oldsid="${TEAM_ASSIGN[sid]}"; origin="${TEAM_ASSIGN[selected_via]}"
+    if [ "$oldtask" = "$id" ] && [ "${TEAM_ASSIGN[taskfile]}" = "$taskfile" ] && [ "${TEAM_ASSIGN[category]}" = "$category" ] &&
+       [ "${TEAM_ASSIGN[branch]}" = "$branch" ] && [ "${TEAM_ASSIGN[worktree]}" = "$wt" ]; then matching=1; fi
+  elif [ -f "$TEAM_STATE_DIR/$agent.env" ] && [ "$fresh" != 1 ]; then
+    team_err "$agent: $TEAM_ASSIGN_DIAGNOSTIC；保留磁盘交接，dispatch $agent $id $taskfile --fresh"; return 1
+  fi
+  if [ -f "$TEAM_STATE_DIR/$agent.pending" ]; then
+    local pending_nonce; pending_nonce="$(awk -F= '$1=="launch_nonce"{print substr($0,14)}' "$TEAM_STATE_DIR/$agent.pending")"
+    if [ "$complete" != 1 ] || [ "$pending_nonce" != "${TEAM_ASSIGN[launch_nonce]}" ]; then
+      [ "$fresh" = 1 ] || { team_err 'interrupted pending launch；保存诊断并 --fresh 接管'; return 1; }
+    else team_warn 'committed nonce matches pending；保留完整身份，检查 BOARD 清理故障'; fi
+  fi
+  if [ "$complete" = 1 ] && [ "$oldtask" = "$id" ] && [ "$matching" != 1 ] && [ "$fresh" != 1 ]; then
+    team_err '同任务 brief/category/branch/worktree 身份变化；必须 --fresh'; return 1
+  fi
+  if [ "$matching" = 1 ]; then
+    if [ -n "$override" ] && [ "$override" != "$oldmodel" ] && [ "$fresh" != 1 ]; then
+      team_err '同任务不同完整 model（包括 thinking suffix）必须 --fresh'; return 1
+    fi
+    if [ -z "$override" ] || [ "$override" = "$oldmodel" ]; then
+      TEAM_SELECTED_MODEL="$oldmodel"; TEAM_SELECTED_SID="$oldsid"; TEAM_SELECTED_ORIGIN="$origin"; TEAM_LAUNCH_VIA=assignment
+      if [ -n "$override" ]; then TEAM_SELECTED_ORIGIN=explicit; TEAM_LAUNCH_VIA=explicit; fi
+      [ "$fresh" != 1 ] || TEAM_SELECTED_SID="$(team_unique_sid "$agent" "$wt")" || return 1
+      TEAM_SELECTED_CATEGORY="$category"; TEAM_SELECTED_MODE=continued; [ "$fresh" != 1 ] || TEAM_SELECTED_MODE=fresh
+      return 0
+    fi
+  fi
+  local policy_model; policy_model="$(team_task_policy_model "$category")" || { team_err "category 未映射：$category；config set-task-model $category <model>（override 仍须映射）"; return 1; }
+  TEAM_SELECTED_MODEL="${override:-$policy_model}"; team_config_model_shape_ok "$TEAM_SELECTED_MODEL" || { team_err 'override model 不合法'; return 1; }
+  TEAM_SELECTED_SID="$(team_unique_sid "$agent" "$wt")" || return 1
+  TEAM_SELECTED_ORIGIN=policy; TEAM_LAUNCH_VIA=policy
+  [ -z "$override" ] || { TEAM_SELECTED_ORIGIN=explicit; TEAM_LAUNCH_VIA=explicit; }
+  TEAM_SELECTED_CATEGORY="$category"; TEAM_SELECTED_MODE=fresh
+}
+team_dispatch_identity_refusal() { team_err "$1"; return 1; }
+team_dispatch_prepare_record() {
+  local seat="$1" task="$2" brief="$3" wt="$4" branch="$5" model="$6" origin="$7" via="$8" category="$9"
+  shift 9
+  local sid="$1" nonce="$2" bytes="$3" mode="$4" delivered="$5" field
+  TEAM_ASSIGN_TMP="$TEAM_STATE_DIR/.assignment-$seat-$nonce"
+  {
+    printf 'assignment_version=1\ntask=%s\ntaskfile=%s\ncategory=%s\nbranch=%s\nworktree=%s\nwindow=%s\nseat=%s\nmodel=%s\nselected_via=%s\nlaunch_via=%s\nsid=%s\nlaunch_nonce=%s\nstarted=%s\nsid_bytes=%s\nmode=%s\nidentity_via=%s\n' \
+      "$task" "$brief" "$category" "$branch" "$wt" "$seat" "$seat" "$model" "$origin" "$via" "$sid" "$nonce" "$(team_timestamp)" "$bytes" "$mode" "$delivered"
+  } > "$TEAM_ASSIGN_TMP" || return 1
+  if ! team_assignment_load "$seat" "$TEAM_ASSIGN_TMP"; then
+    team_err "planned assignment rejected: $TEAM_ASSIGN_DIAGNOSTIC"; rm -f "$TEAM_ASSIGN_TMP"; return 1
+  fi
+  if [ -f "$TEAM_STATE_DIR/$seat.pending" ]; then
+    local prior_nonce; prior_nonce="$(awk -F= '$1=="launch_nonce"{print substr($0,14)}' "$TEAM_STATE_DIR/$seat.pending")"
+    [[ "$prior_nonce" =~ ^[A-Za-z0-9._-]+$ ]] || prior_nonce="unknown-$(sha256sum "$TEAM_STATE_DIR/$seat.pending" | cut -c1-16)"
+    cp "$TEAM_STATE_DIR/$seat.pending" "$TEAM_STATE_DIR/dispatch-$seat.interrupted-$prior_nonce" || { rm -f "$TEAM_ASSIGN_TMP"; return 1; }
+  fi
+  cp "$TEAM_ASSIGN_TMP" "$TEAM_STATE_DIR/$seat.pending" || { rm -f "$TEAM_ASSIGN_TMP"; return 1; }
+}
+team_dispatch_attempt_fail() {
+  local seat="$1" nonce="$2" reason="$3"
+  printf '%s nonce=%s failed=%s\n' "$(team_timestamp)" "$nonce" "$reason" >> "$TEAM_STATE_DIR/dispatch-$seat.attempts.log"
+  [ ! -f "$TEAM_STATE_DIR/$seat.pending" ] || mv "$TEAM_STATE_DIR/$seat.pending" "$TEAM_STATE_DIR/dispatch-$seat.failed-$nonce"
+  rm -f "${TEAM_ASSIGN_TMP:-/nonexistent}"
+  team_tmux_kill_window "$TEAM_SESSION:$seat" >/dev/null 2>&1 || true
+}
+team_dispatch_execute() {
   team_require_cmd tmux "agent 在 tmux 窗口里跑，PM 需要能旁观与追问"
   local agent="" id="" taskfile="" model="" branch_flag="" fresh=0 printonly=0 overflow=0 force=0
   while [ $# -gt 0 ]; do
@@ -1100,7 +1207,7 @@ team_cmd_dispatch() {
   # 任务书路径：先按 cwd 解析，再按主工作树解析
   [ -f "$taskfile" ] || taskfile="$TEAM_MAIN_ROOT/$taskfile"
   [ -f "$taskfile" ] || team_die "找不到任务书：$taskfile"
-  taskfile="$(cd "$(dirname "$taskfile")" && pwd)/$(basename "$taskfile")"
+  taskfile="$(readlink -f "$taskfile")"
   # M6.3 F15：任务书必须在项目主工作树里。提示词命令 worker「work only inside <project>」，
   # 却把 /tmp/... 称为 "repo-relative path"（自相矛盾）；而且项目外的文件不归项目管。
   case "$taskfile" in
@@ -1166,11 +1273,24 @@ team_cmd_dispatch() {
   # M14：解析顺序 = --model 显式参数 ＞ 配置（TEAM_AGENT_MODELS 的 per-agent ＞ TEAM_DEFAULT_MODEL）。
   # 名册 state 里的 model 只是「上次用了什么」的展示记录（roster/ps 标注来源用），不再当默认来源 ——
   # 旧行为（state 优先）让配置改了也不生效：名册里的 deepseek 旧记录压过了新配的 k3-256k。
-  local model_src="config"
-  if [ -z "$model" ]; then model="$(team_agent_model "$agent")"; else model_src="explicit"; fi
-  local provider="${model%%/*}"
-  local sid="$TEAM_SESSION-$agent"
-  [ "$fresh" = "1" ] && sid="$sid-$(date +%s)"
+  local identity_ok=1 identity_output=''
+  local TEAM_SELECTED_MODEL='' TEAM_SELECTED_SID='' TEAM_SELECTED_ORIGIN='' TEAM_LAUNCH_VIA='' TEAM_SELECTED_CATEGORY='' TEAM_SELECTED_MODE=''
+  # Execute in this shell so the accepted identity is not lost through a subshell.
+  if ! identity_output="$(team_dispatch_select_identity "$agent" "$id" "$taskfile" "$wt" "${TEAM_CHECKED_BRANCH:-$br_name}" "$model" "$fresh" 2>&1)"; then
+    identity_ok=0; team_df_run_lib team_dispatch_identity_refusal "$identity_output"
+  else
+    team_dispatch_select_identity "$agent" "$id" "$taskfile" "$wt" "${TEAM_CHECKED_BRANCH:-$br_name}" "$model" "$fresh" >/dev/null || return 1
+    model="$TEAM_SELECTED_MODEL"
+  fi
+  local provider="${model%%/*}" sid="$TEAM_SELECTED_SID"
+  local model_src="$TEAM_SELECTED_ORIGIN"
+  # P228/R6（OBS1）：本次启动的模板**实际交付**哪些身份字段（发布不得多于它）。内建 Pi = 三个全交；
+  # 自定义模板 = 模板里已绑定的 selector（角色守卫在预检时已证过）；opaque = 空。发布路径与记录都用它。
+  local identity_via
+  if ! identity_via="$(team_launch_identity_fields worker "${TEAM_AGENT_CMD:-}" "${TEAM_SELECTED_MODE:-fresh}")"; then
+    team_df_run_lib team_dispatch_identity_refusal '无法判定模板交付的身份字段（模板不合法）'
+    identity_ok=0; identity_via=''
+  fi
 
   team_df_run_lib team_dispatch_judge_mem "$agent" "$id" "$taskfile"
   # P144：磁盘/inode 腿 —— 判的是这个 worker 真正要写的两个文件系统（临时根 + 它的工作树，
@@ -1180,12 +1300,13 @@ team_cmd_dispatch() {
   team_df_run_lib team_disk_guard "$disk_tmp" "$wt"
   # 读数是一条「说明」（rc=0 的 finding）：放行时在启动前那一趟里打印；被拒时由拒绝本身带读数。
   if [ "$_TEAM_DF_RUN_RC" -eq 0 ]; then team_df_run_lib team_capacity_line "$disk_tmp" "$wt"; fi
-  team_df_run_lib team_model_guard "$model"
+  [ "$identity_ok" != 1 ] || team_df_run_lib team_model_guard "$model" "$agent"
   # M4.3 A：会话规模 vs 模型窗口（默认拒绝，--fresh / --allow-overflow 是出路）
-  team_df_run_lib team_guard_resume_session "$agent" "$model" "$sid" "$wt" "$fresh" "$overflow" "$id" "$taskfile"
+  [ "$identity_ok" != 1 ] || team_df_run_lib team_guard_resume_session "$agent" "$model" "$sid" "$wt" "$([ "$TEAM_SELECTED_MODE" = fresh ] && printf 1 || printf 0)" "$overflow" "$id" "$taskfile"
   # agent adapter：空配置 = 内置 Pi（老路径，报错文案也不变）；die 被捕获成阻塞项，不带走其他判定
   team_df_run_lib team_agent_check_launch
   if [ "$_TEAM_DF_RUN_RC" -eq 0 ]; then
+    team_df_run_lib team_template_identity_guard launch "${TEAM_AGENT_CMD:-}" "${TEAM_SELECTED_MODE:-fresh}"
     team_df_run team_dispatch_judge_agent_bin "$agent"
   else
     team_df_say "  adapter 配置不合法 → agent 可执行文件判不了（见上面那一项）"
@@ -1199,6 +1320,10 @@ team_cmd_dispatch() {
     return 1
   fi
 
+  [ "${_TEAM_DISPATCH_PREFLIGHT_ONLY:-0}" != 1 ] || return 0
+  if [ "$printonly" != 1 ]; then
+    team_dispatch_final_snapshot "$agent" || return 1
+  fi
   # 报告通过：这时才允许写 state / 打计划 / 开窗
   # 必需依赖体检（D10）：缺依赖**不拒绝**派单（worker 照样能干活），但 PM 必须知道证据/spec 层是缺的。
   # 一行、每次派单只说一次。
@@ -1219,9 +1344,10 @@ team_cmd_dispatch() {
   prompt="$(team_build_prompt "$agent" "$id" "$taskfile" "$wt" "$model" "$sid" "$task_branch" "$task_branch_src")"
   # 提示词落盘：模板里的 {prompt_file} 用它，排查“到底派了什么”也看它（state/ 已 gitignore）
   prompt_file="$(team_agent_prompt_file "$agent" "$id")"
-  mkdir -p "$TEAM_STATE_DIR"
-  printf '%s\n' "$prompt" > "$prompt_file"
-  agent_cmd="$(team_agent_launch_cmd "$agent" "$sid" "$wt" "$prompt_file" "$model")"
+  if [ "$printonly" != 1 ]; then
+    mkdir -p "$TEAM_STATE_DIR"; printf '%s\n' "$prompt" > "$prompt_file"
+  fi
+  agent_cmd="$(team_agent_launch_cmd "$agent" "$sid" "$wt" "$prompt_file" "$model")" || return 1
 
   # notify 模板坏掉时不阻塞派单，但必须说清楚（否则 worker 回合结束没人知道）；
   # 提示词那侧会用同一个判断把通知段换成「写进报告」（F8）。
@@ -1233,6 +1359,15 @@ team_cmd_dispatch() {
   fi
 
   if [ "$printonly" = "1" ]; then
+    # P228/R6（OBS1）：只发布模板真的交付了的身份字段（未交付的不写成已启动身份）；全交付时与旧行逐字节相同。
+    local id_line="identity: category=$TEAM_SELECTED_CATEGORY"
+    team_identity_field_in model "$identity_via" && id_line="$id_line model=$model"
+    id_line="$id_line selected_via=$model_src launch_via=$TEAM_LAUNCH_VIA mode=$TEAM_SELECTED_MODE"
+    team_identity_field_in session_id "$identity_via" && id_line="$id_line sid=$sid"
+    printf '%s\n' "$id_line"
+    local id_undelivered; id_undelivered="$(team_identity_undelivered_text "$identity_via")"
+    [ -z "$id_undelivered" ] || printf 'identity-delivery: 未交付 %s（模板没有绑定这些身份占位符：不当作已启动身份发布）\n' "$id_undelivered"
+    [ "$TEAM_SELECTED_MODE" != fresh ] || printf 'fresh preview SID is a non-reserved candidate; actual launch allocates a new SID\n'
     printf '=== agent 命令（adapter: %s）===\n' "$(team_agent_adapter_label)"
     # M40：身份环境单独一行（真窗口里它在 cd 之前执行；这里不许破 `^cd ` 的行契约）
     printf '身份环境（启动前先执行）：%s\n' "$(team_identity_env_prefix "$wt")"
@@ -1263,6 +1398,9 @@ team_cmd_dispatch() {
   mkdir -p "$TEAM_STATE_DIR"
   while [ "$attempt" -lt 2 ] && [ -z "$pid" ]; do
     attempt=$((attempt + 1))
+    nonce="$(date +%s)-$BASHPID-$RANDOM-$RANDOM-$attempt"
+    team_dispatch_prepare_record "$agent" "$id" "$taskfile" "$wt" "$task_branch" "$model" "$model_src" "$TEAM_LAUNCH_VIA" "$TEAM_SELECTED_CATEGORY" "$sid" "$nonce" "$sid_bytes_at_launch" "$TEAM_SELECTED_MODE" "$identity_via" || return 1
+    printf '%s nonce=%s sid=%s attempt=%s\n' "$(team_timestamp)" "$nonce" "$sid" "$attempt" >> "$TEAM_STATE_DIR/dispatch-$agent.attempts.log"
     if team_agent_window_exists "$agent"; then
       if [ "$attempt" = "1" ]; then
         # P55（遗体复用留证）：窗口还在但 pane 已死 = 上一轮死在里面 —— 先把现场落盘再替换
@@ -1278,7 +1416,6 @@ team_cmd_dispatch() {
       sleep 0.5
     fi
     # 每轮换 nonce：证据必须来自这一轮的启动（上一轮留在盘上的不算数）
-    nonce="$(date +%s)-$$-$RANDOM-$attempt"
     rm -f "$marker" "$exitfile" "$tailfile"
     # 命令里写死绝对路径 + 短暂等待（窗口 shell 可能刚起、PATH/rc 还没就绪）；
     # 拿到可执行文件后先写下 (nonce, pid)，再跑 agent —— 这一行就是「harness 真的执行了」的证据。
@@ -1329,6 +1466,7 @@ team_cmd_dispatch() {
     team_dim "  排查：tmux 里手动跑一次 —— cd $wt 然后跑 dispatch --print 打出的那条命令；看 agent 自己的报错"
     team_dim "  常见原因：可执行文件/模型/provider 不可用；旧会话楔死（换新会话：--fresh）；内存/磁盘不足"
     team_dim "  重派：$TEAM_CLI dispatch $agent $id $taskfile --fresh"
+    team_dispatch_attempt_fail "$agent" "$nonce" 'no nonce proof'
     return 1
   fi
 
@@ -1346,22 +1484,15 @@ team_cmd_dispatch() {
     team_dim "  手工复现：cd $(printf '%q' "$wt") && $agent_cmd"
     team_dim "  常见原因：首词不在窗口（登录 bash）的 PATH 里（现在会被解析成绝对路径，除非 TEAM_AGENT_BIN 指向别的名字）；CLI 参数/认证被拒"
     team_dim "  重派：$TEAM_CLI dispatch $agent $id $taskfile"
+    team_dispatch_attempt_fail "$agent" "$nonce" "custom exit=$exit_code"
     return 1
   fi
 
-  team_state_set "$agent" model "$model"
-  team_state_set "$agent" model_src "$model_src"
-  team_state_set "$agent" window "$agent"
-  team_state_set "$agent" worktree "$wt"
-  team_state_set "$agent" task "$id"
-  team_state_set "$agent" taskfile "$taskfile"
-  [ -n "$task_branch" ] && team_state_set "$agent" branch "$task_branch"
-  team_state_set "$agent" started "$(team_timestamp)"
-  # P140（R6）/ P151（F5）：记下这一轮的会话 id 与**启动时**（worker 能跑之前）的会话文件字节数
-  # —— 下一轮据此判「一个字节没长」。只在派单真的成功之后才落盘。
-  team_state_set "$agent" sid "$sid"
-  team_state_set "$agent" sid_bytes "$sid_bytes_at_launch"
-  team_board_set "$id" wip 2>/dev/null || true
+  if ! mv -f "$TEAM_ASSIGN_TMP" "$TEAM_STATE_DIR/$agent.env"; then
+    team_dispatch_attempt_fail "$agent" "$nonce" 'publication failed'; return 1
+  fi
+  if team_board_set "$id" wip; then rm -f "$TEAM_STATE_DIR/$agent.pending"
+  else team_warn 'assignment 已完整提交；BOARD 更新失败，pending nonce 保留诊断，不撤销启动'; fi
 
   # M9.3：`--force` 接管了另一个没结束的任务 —— 审计里留一条（输出里已经写明，这里落盘）
   if [ -n "${TEAM_DISPATCH_STACK_PREV:-}" ]; then
@@ -1374,7 +1505,7 @@ team_cmd_dispatch() {
     done <<< "$TEAM_DISPATCH_AUDIT_LINES"
     TEAM_DISPATCH_AUDIT_LINES=""
   fi
-  team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；provider=$provider model=${model#*/} session=$sid）"
+  team_ok "dispatched $id → $TEAM_SESSION:$agent（含启动校验：proof=spawn pid=$pid；$(team_dispatch_identity_claim "$identity_via" "$provider" "${model#*/}" "$sid")）"
   # 观察结论也要说出来（不是只报“成功”）：内建 Pi 路径下，agent 是「已经退出」还是「还在跑」，
   # PM 都要拿到**观察到的事实**（退出码来自窗口 harness 写下的事件证据，不是猜的；也不再假设
   # 「窗口一定已经回到 shell」——那正是 M7.5 里被环境 churn 打脸的那句话）。
@@ -1656,6 +1787,27 @@ team_cmd_notify() {
   return "$knock_rc"
 }
 
+team_teardown_seat_locked() {
+  local a="$1" purge="$2" force="$3" register="$4" fp="$5" w wt
+  if [ "$register" = 1 ]; then team_config_write_roster remove "$a" "$fp" 0 || return $?; fi
+  w="$(team_state_get "$a" window "$a")"
+  if team_tmux_has_window "$TEAM_SESSION" "$w"; then
+    tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null || return 1
+    team_ok "kill window $TEAM_SESSION:$w"
+  fi
+  team_state_clear "$a"
+  rm -f "$TEAM_STATE_DIR/$a.pending" "$TEAM_STATE_DIR"/.assignment-"$a"-*
+  if [ "$purge" = 1 ]; then
+    wt="$(team_agent_worktree "$a")"
+    if [ -d "$wt" ]; then
+      if [ "$force" != 1 ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+        team_warn "worktree 有未提交改动，保留：$wt（要强删：--force）"; return 0
+      fi
+      team_git worktree remove --force "$wt" 2>/dev/null && team_ok "remove worktree $wt" || team_warn "worktree 删除失败：$wt"
+      team_scan_invalidate git
+    fi
+  fi
+}
 team_cmd_teardown() {
   local agent="" all=0 purge=0 force=0 register=0 fp=""
   while [ $# -gt 0 ]; do
@@ -1680,29 +1832,9 @@ team_cmd_teardown() {
   fi
   # P99/R2：--register 先缩名册（审计写入器），再走今天的窗口/state/worktree 清理；
   # 名册里没有这个席位就 exit 5、什么都不动。不带旗标时名册逐字节不变（今天的行为是默认）。
-  if [ "$register" = "1" ]; then
-    local rrc=0
-    team_config_write_roster remove "$agent" "$fp" 0 || rrc=$?
-    [ "$rrc" -eq 0 ] || return "$rrc"
-  fi
-  local a w wt
+  local a
   for a in "${targets[@]}"; do
-    w="$(team_state_get "$a" window "$a")"
-    if team_tmux_has_window "$TEAM_SESSION" "$w"; then
-      tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && team_ok "kill window $TEAM_SESSION:$w"
-    fi
-    team_state_clear "$a"
-    if [ "$purge" = "1" ]; then
-      wt="$(team_agent_worktree "$a")"
-      if [ -d "$wt" ]; then
-        if [ "$force" != "1" ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
-          team_warn "worktree 有未提交改动，保留：$wt（要强删：--force）"
-          continue
-        fi
-        team_git worktree remove --force "$wt" 2>/dev/null && team_ok "remove worktree $wt" || team_warn "worktree 删除失败：$wt"
-        team_scan_invalidate git   # M50
-      fi
-    fi
+    team_with_lock "seat:$a" team_with_lock worker-admission team_teardown_seat_locked "$a" "$purge" "$force" "$register" "$fp" || return $?
   done
   [ "$purge" != "1" ] && team_dim "worktree 仍保留（加 --purge 删除）；分支保留，需要时 git branch -d"
   return 0

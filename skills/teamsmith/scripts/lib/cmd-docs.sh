@@ -3,7 +3,7 @@
 
 team_cmd_task() {
   team_require_docs
-  local id="" title="" agent="" deps="-" issue="" slug=""
+  local id="" title="" agent="" deps="-" issue="" slug="" category=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:?}"; shift 2 ;;
@@ -11,11 +11,14 @@ team_cmd_task() {
       --deps)  deps="${2:?}"; shift 2 ;;
       --issue) issue="${2:?}"; shift 2 ;;
       --slug)  slug="${2:?}"; shift 2 ;;
+      --category) category="${2:?}"; shift 2 ;;
       -*) team_usage_die "task: 未知参数 $1" ;;
       *) id="$1"; shift ;;
     esac
   done
   [ -n "$id" ] || team_usage_die "task <ID> --title \"...\" [--agent a] [--deps ...] [--issue N]"
+  team_category_valid "$category" || team_usage_die 'task requires --category <project category>'
+  team_task_policy_model "$category" >/dev/null || team_die "category 未映射：$category；config set-task-model $category <model>"
   [ -n "$title" ] || title="<未命名>"
   agent="${agent:-$(team_agents | head -1)}"
   slug="${slug:-$(team_slug "$title")}"
@@ -32,8 +35,8 @@ team_cmd_task() {
     "ID=$id" "TITLE=$title" "AGENT=$agent" "DEPS=$deps" "ISSUE=$issue" "SLUG=$slug" \
     "PROJECT=$TEAM_PROJECT" "DOCS_DIR=$TEAM_DOCS_DIR" "GATES=${TEAM_GATES:-<未配置：先跟 PM 约定验收命令>}" \
     "DATE=$(date +%F)" \
-    | awk -v br="$branch_name" '
-        !done && /^agent:/ { print; print "branch: " br; done=1; next }
+    | awk -v br="$branch_name" -v cat="$category" '
+        !done && /^agent:/ { print; print "branch: " br; print "category: " cat; done=1; next }
         { print }' > "$file"
   team_ok "write $file"
   team_dim "  分支：$branch_name（dispatch 按它检查工作树；--branch 可显式覆盖）"

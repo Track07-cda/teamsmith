@@ -79,7 +79,9 @@ export SMOKE_TMP_RUN_ID="${SMOKE_TMP_RUN_ID:-routes-$$-$(date +%s 2>/dev/null ||
 
 # shellcheck source=tests/lib/tmp-root.sh
 . "$here/lib/tmp-root.sh"
+. "$here/lib/model-policy.sh"
 tmp="$(tmp_root_create routes)" || { printf 'routes: 临时根建不起来\n' >&2; exit 3; }
+export HOME="$tmp/home"; mkdir -p "$HOME"
 PASS=0
 FIND=0
 SKIP=0
@@ -191,6 +193,7 @@ new_fixture() {
   ( cd "$d" && git init -q -b main && git config user.email routes@teamsmith && git config user.name routes \
       && printf '{"name":"%s","scripts":{"verify":"true"}}\n' "$name" > package.json \
       && git add -A && git commit -qm init ) >/dev/null 2>&1
+  routing_fixture_config "$d/.pi/team/config.sh" "$skill/templates/config.sh.tmpl" "routes-$name" 'dev verify' || return 1
   if ! ( cd "$d" && env PATH="$SHIM:$PATH" TEAM_PI_BIN=/bin/true TEAM_ROUTES_TMUX_LOG="$TMUX_LOG" \
            TEAM_MEETINGS_DIR="$d/.meetings" TEAM_PI_AGENT_DIR="$d/.pi-agent" \
            bash "$team" init --no-skills --session "routes-$name" --agents "dev verify" --vcs local \
@@ -548,10 +551,9 @@ mr_probe_for() { # <KEY> → probe id（空 = 没有声明）
   case "$1" in
     TEAM_PROJECT|TEAM_SESSION|TEAM_PM_WINDOW) printf 'identity\n' ;;
     TEAM_AGENTS)                              printf 'roster\n' ;;
-    TEAM_AGENT_MODELS)                        printf 'seat-model\n' ;;
+    TEAM_TASK_MODELS)                         printf 'task-model\n' ;;
     TEAM_PM_MODEL)                            printf 'pm-model\n' ;;
     TEAM_PULSE_WINDOW)                        printf 'pulse-window\n' ;;
-    TEAM_DEFAULT_MODEL)                       printf 'default-model\n' ;;
     TEAM_BG_STOP_GRACE)                       printf 'bg-stop-grace\n' ;;
     *) printf '\n' ;;
   esac
@@ -600,10 +602,9 @@ mr_walk_b() {
     case "$probe" in
       identity)      mr_promise_identity "$key" || bad=1 ;;
       roster)        mr_promise_roster "$key" || bad=1 ;;
-      seat-model)    mr_promise_seat_model "$key" || bad=1 ;;
+      task-model)    mr_promise_task_model "$key" || bad=1 ;;
       pm-model)      mr_promise_pm_model "$key" || bad=1 ;;
       pulse-window)  mr_promise_pulse_window "$key" || bad=1 ;;
-      default-model) mr_promise_default_model "$key" || bad=1 ;;
       bg-stop-grace) mr_promise_bg_stop_grace "$key" || bad=1 ;;
       *)             finding "promise：$key 的探针 id「$probe」没有实现（覆盖表与实现脱节）"; bad=1 ;;
     esac
@@ -757,9 +758,9 @@ mr_promise_seat_model() { # <KEY>
 mr_promise_pm_model() { # <KEY>
   local key="$1" d
   d="$(new_fixture promise-pm-model)" || return 1
-  mr_run "$d" config set-agent-model pm vendor/pm9
-  [ "$MR_RC" = "0" ] || { finding "promise（$key）：set-agent-model pm 失败（$(first_line "$MR_OUT")）"; return 1; }
-  mr_run "$d" up --print
+  mr_run "$d" config set TEAM_PM_MODEL vendor/pm9 --yes
+  [ "$MR_RC" = "0" ] || { finding "promise（$key）：独立 PM writer 失败（$(first_line "$MR_OUT")）"; return 1; }
+  mr_run "$d" up --fresh-pm --print
   if printf '%s' "$MR_OUT" | grep -q -- '--provider vendor --model pm9'; then
     ok "promise（$key）：team up --print 渲染出的命令带着 --provider vendor --model pm9"
   else
@@ -785,7 +786,7 @@ mr_promise_pulse_window() { # <KEY>
   return 0
 }
 
-mr_promise_default_model() { # <KEY>
+mr_promise_task_model() { # <KEY>
   local key="$1" d br
   d="$(new_fixture promise-default-model)" || return 1
   mkdir -p "$d/docs/team/tasks" "$d/openspec/specs/routes"
@@ -795,6 +796,7 @@ mr_promise_default_model() { # <KEY>
 ```
 task:   T1
 agent:  dev
+category: routine
 change: -
 specs:  routes#The fixture requirement
 phase:  apply
@@ -816,8 +818,11 @@ BRIEF
     finding "promise（$key）：夹具建不出 worktree"; return 1
   fi
   rm -f "$d/.pi/team/state/dev.env"
-  mr_run "$d" config set TEAM_DEFAULT_MODEL vendor/dm9 --yes
-  [ "$MR_RC" = "0" ] || { finding "promise（$key）：设置 TEAM_DEFAULT_MODEL 失败"; return 1; }
+  mr_run "$d" config set-task-model routine vendor/dm9 --yes
+  [ "$MR_RC" = "0" ] || { finding "promise（$key）：类别 upsert 失败"; return 1; }
+  grep -q 'result=ok .*key=TEAM_TASK_MODELS' "$d/.pi/team/state/config.log" || { finding "promise（$key）：类别编辑无审计"; return 1; }
+  mr_run "$d" config list --json
+  printf '%s' "$MR_OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert next(x for x in d["models"]["policy"]["categories"] if x["category"]=="routine")["model"]=="vendor/dm9"; assert "seats" not in d["models"]' || { finding "promise（$key）：JSON 未来策略不一致/伪造实际模型"; return 1; }
   mr_run "$d" dispatch dev T1 docs/team/tasks/T1-anchor.md --print
   if printf '%s' "$MR_OUT" | grep -q -- '--provider vendor --model dm9'; then
     ok "promise（$key）：dispatch --print 渲染出的启动命令带着 --provider vendor --model dm9"
@@ -902,7 +907,8 @@ rc_brief() {
   mkdir -p "$d/docs/team/tasks"
   {
     printf '# %s · fixture\n\n```\n' "$id"
-    printf 'task:   %s\nagent:  %s\nissue:  -\n' "$id" "$agent"
+    local category=routine; case "$phase" in *explore*|*propose*) category=analysis ;; *verify*) category=verify ;; esac
+    printf 'task:   %s\nagent:  %s\ncategory: %s\nissue:  -\n' "$id" "$agent" "$category"
     [ -n "$br" ] && printf 'branch: %s\n' "$br"
     printf 'change: %s\nspecs:  -\nanchor: %s\nphase:  %s\n' "$change" "$anchor" "$phase"
     printf 'deltas: %s\ndeps:   -\nstatus: todo\nbudget: -\n```\n\nbody\n' "$deltas"
@@ -1049,7 +1055,7 @@ mr_refusals() {
   br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
   printf 'wip from OLD\n' > "$d/.worktrees/dev/wip.txt"
   mkdir -p "$d/.pi/team/state"
-  printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" "$br" > "$d/.pi/team/state/dev.env"
+  routing_fixture_record "$d/.pi/team/state" dev OLD "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" deepseek/deepseek-flash "routes-OLD" policy '' routine "$br"
   rc_brief "$d" OLD - "none (infra) — fixture" - >/dev/null
   RC_CMD=(dispatch dev P1 "$b" --print)
   rc_case dirty-stash '有 1 个未提交改动.*属于上一个任务 OLD' '修法：git -C' 'apply:cmd' same clear
@@ -1156,7 +1162,7 @@ mr_refusals() {
   b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
   br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
   mkdir -p "$d/.pi/team/state"
-  printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" "$br" > "$d/.pi/team/state/dev.env"
+  routing_fixture_record "$d/.pi/team/state" dev OLD "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" deepseek/deepseek-flash "routes-OLD" policy '' routine "$br"
   RC_CMD=(dispatch dev P1 "$b" --print)
   rc_case stack-force '还有一个没结束的任务' '修法：team dispatch' 'apply:cmd' route force
 
@@ -1169,7 +1175,7 @@ mr_refusals() {
   b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
   br_old="$(rc_canon "$d" OLD)"; rc_wt "$d" dev "$br_old"
   mkdir -p "$d/.pi/team/state"
-  printf 'task=OLD\nworktree=%s\ntaskfile=%s\nbranch=%s\n' "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" "$br_old" > "$d/.pi/team/state/dev.env"
+  routing_fixture_record "$d/.pi/team/state" dev OLD "$d/.worktrees/dev" "$d/docs/team/tasks/OLD-fixture.md" deepseek/deepseek-flash "routes-OLD" policy '' routine "$br_old"
   RC_CMD=(dispatch dev P1 "$b" --print)
   out="$(rc_team "$d" "${RC_CMD[@]}")" || true
   route="$(rc_route "$out" '修法：team resume') || true"
@@ -1244,8 +1250,11 @@ mr_refusals() {
   enc="$(printf '%s' "$d/.worktrees/dev" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
   mkdir -p "$d/.pi-agent/sessions/--$enc--"
   printf '%s\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" > "$d/.pi-agent/sessions/--$enc--/x_routes-refuse-session-dev.jsonl"
+  routing_fixture_record "$d/.pi/team/state" dev P1 "$d/.worktrees/dev" "$b" deepseek/deepseek-flash routes-refuse-session-dev policy '' routine "$br"
   RC_CMD=(dispatch dev P1 "$b" --print)
   rc_case session-fresh '拒绝复用这个会话' '修法：team dispatch' 'apply:cmd' route proceed
+  # Fresh now commits a different SID; restore overflow's own complete identity for the independent override probe.
+  routing_fixture_record "$d/.pi/team/state" dev P1 "$d/.worktrees/dev" "$b" deepseek/deepseek-flash routes-refuse-session-dev policy '' routine "$br"
   out="$(rc_team "$d" "${RC_CMD[@]}")" || true
   route="$(printf '%s\n' "$out" | grep -aF '修法：team dispatch' | grep -aF -- '--allow-overflow' | head -1 | sed 's/.*修法：//; s/（.*//' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)"
   if [ -z "$route" ]; then
@@ -1386,22 +1395,34 @@ mr_flips() {
   else
     finding "判据卫生：证据里混进了正文的用法行标记（$ev）"
   fi
-  # ① 场地缺陷：help 打印 add-agent --model，解析器拒绝它
+  # ① 场地缺陷：重新印出已退休的 add-agent --model，并让解析器明确拒绝它。
   s="$(mr_scratch_tree flip-model)"
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = 'add-agent <a> [--register] [--create]'
+new = 'add-agent <a> [--register] [--model m] [--create]'
+assert s.count(old) == 1, 'add-agent help route must match exactly once'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PY
   python3 - "$s/skills/teamsmith/scripts/lib/cmd-agents.sh" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-s = s.replace('--model) model="${2:?--model 需要 <provider/model> 或 -}"; has_model=1; shift 2 ;;',
-              '--model) team_usage_die "add-agent: 未知参数 --model" ;;', 1)
-s = s.replace('--model=*) model="${1#*=}"; has_model=1; shift ;;', '', 1)
+old = "--model|--model=*) team_err 'add-agent --model retired；使用 task category 和 config set-task-model'; return 2 ;;"
+new = '--model|--model=*) team_usage_die "add-agent: 未知参数 --model" ;;'
+assert s.count(old) == 1, 'retired model branch must match exactly once'
+s = s.replace(old, new, 1)
 open(p, 'w', encoding='utf-8').write(s)
 PY
-  # 落地证明（P202）：①改了两处，两处都要真的落到副本里
+  # 落地证明（P202）：两种 --model 拼法如今在同一退休分支，仍检查原分支消失、新分支出现与字节变化。
   if mr_flip_require "翻转①" "$s" scripts/lib/cmd-agents.sh \
-       '--model) model="${2:?--model 需要 <provider/model> 或 -}"; has_model=1; shift 2 ;;' \
-       '--model) team_usage_die "add-agent: 未知参数 --model" ;;' \
-     && mr_flip_require "翻转①" "$s" scripts/lib/cmd-agents.sh '--model=*) model="${1#*=}"; has_model=1; shift ;;' -; then
+       "--model|--model=*) team_err 'add-agent --model retired；使用 task category 和 config set-task-model'; return 2 ;;" \
+       '--model|--model=*) team_usage_die "add-agent: 未知参数 --model" ;;' &&
+     mr_flip_require "翻转① help" "$s" scripts/lib/cmd-project.sh \
+       'add-agent <a> [--register] [--create]' \
+       'add-agent <a> [--register] [--model m] [--create]'; then
     mr_flip_run "$s" walk
     if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'add-agent --model'; then
       ok "翻转①：help 打印 --model 而解析器拒绝 → walk 红并点名 add-agent --model"

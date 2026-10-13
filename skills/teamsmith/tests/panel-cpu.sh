@@ -151,7 +151,7 @@ pc_init_clean=(env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_RO
 ( cd "$neut_root" && git init -q -b main && git config user.email panel-cpu@teamsmith && git config user.name panel-cpu ) \
   >/dev/null 2>&1
 ( cd "$neut_root" && "${pc_init_clean[@]}" bash "$tree/skills/teamsmith/scripts/team" init \
-    --session "$sess" --agents "dev verify" --vcs local --gates "true" --docs docs/team ) \
+    --session "$sess" --agents "dev verify" --vcs local --gates "true" --docs docs/team --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) \
   >"$neut_root/init.log" 2>&1 \
   || { printf 'panel-cpu: 中性测量目标的 team init 失败（见 %s/init.log）\n' "$neut_root" >&2; tail -3 "$neut_root/init.log" >&2; exit 3; }
 printf '== measured project root: %s (neutral fixture project — not the caller worktree) ==\n' "$neut_root"

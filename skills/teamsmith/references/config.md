@@ -40,10 +40,10 @@ literals or simple `$VAR`.
 | `TEAM_SESSION` | `$TEAM_PROJECT` | tmux session (shared by the PM and every agent) |
 | `TEAM_PM_WINDOW` | `pm` | the window the PM session lives in; notifications are typed there |
 | `TEAM_AGENTS` | empty (`init` sets `dev verify`) | roster, space separated; grows only through `team add-agent <a> --register` and shrinks only through `team teardown --agent <a> --register` (both audited; a bare `team add-agent <a>` refuses a seat the roster does not carry and names both routes) |
-| `TEAM_AGENT_MODELS` | empty | per-agent model override: `dev=deepseek/deepseek-flash verify=xai/grok-4.6` |
-| `TEAM_DEFAULT_MODEL` | `deepseek/deepseek-flash` | default model (`provider/model`) |
+| `TEAM_TASK_MODELS` | empty (required) | the project's task-category → model map: `routine=provider/light analysis=provider/strong verify=provider/strong`. A **new** dispatch selects the model of the brief's `category:` from it; a complete same-task recovery keeps the model/SID it was already assigned, even after the category leaves the map. One category: `team config set-task-model <category> <model>`; the whole map: `team config set TEAM_TASK_MODELS '<map>' --yes`; breaking migration: `team config upgrade-models` |
+| `TEAM_PM_MODEL` | empty (required) | the **independent PM model** — never a fallback to a task model or a worker default. `team up` guards it (a running PM with a different model needs an explicit `--fresh-pm`) |
 
-Dispatch model resolution order: `--model` > `TEAM_AGENT_MODELS` (per-agent) > `TEAM_DEFAULT_MODEL`. The roster's recorded `model` is display-only ("what ran last time"); `team roster` and `team ps` tag it with its source label (current config / explicit `--model` / stale record whose config changed since — the CLI prints these labels in Chinese). It never feeds resolution, so editing the config takes effect on the very next dispatch. |
+Categories are the project's own vocabulary (`[a-z][a-z0-9-]*`, unique): routine/analysis/verify are the initial example, not an engine list, and `phase:`/seat never selects a model automatically. The initial suggestion is `routine=opencode-go/deepseek-v4.1-flash`, `analysis`/`verify=openai-codex/gpt-6.1-sol:high`, independent PM the same strong model — examples, not defaults or a provider-availability claim. The retired keys TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL are no longer read: a project that still carries them is refused by the loader and by init/bootstrap, and migrates through the explicit `team config upgrade-models --task-models '<map>' --pm-model '<model>'` transaction (preview first, then `--yes`) — never through `team init --force`, bootstrap or an inference.
 | `TEAM_MODEL_LIMITS` | `kimi-coding/k3=2` | concurrency limits, `provider/model=N` space separated; `0` = unlimited |
 | `TEAM_EXTRA_PI_ARGS` | empty | extra arguments passed to pi (space separated, values with spaces are unsupported) |
 
@@ -135,7 +135,6 @@ long-running TUI keep today's tick semantics (one patrol tick per `TEAM_PULSE_IN
 `--no-watchdog`, keeps the panel and stops the ticks). A missing runtime is a loud failure in every mode, never an
 empty panel reported as success.
 
-| `TEAM_PM_MODEL` | empty | the PM's own model; empty = `TEAM_DEFAULT_MODEL` |
 | `TEAM_PM_SESSION_ID` | empty | empty = `pi -c` (continue the previous session in this directory, keeping the PM's history). Explicit session id for a CLI whose session concept you control (`{session_id}` in `TEAM_PM_CMD`); on the built-in Pi path it still becomes `--session-id <id>` |
 | `TEAM_PM_EXTRA_PI_ARGS` | empty | extra pi arguments for the PM (`{extra_args}` in a `TEAM_PM_CMD` template) |
 | `TEAM_PM_CMD` | empty | **launch template for the PM's own CLI** (the PM side of the adapter, M8.1). Placeholders: `{cwd}` `{session_id}` `{model}` `{provider}` `{prompt_file}` `{prompt}` `{skill_dir}` `{extra_args}` `{resume_args}`. Empty = the built-in Pi command, byte-for-byte the pre-M8.1 behaviour; the rules (unknown/malformed placeholder, blank or multi-line template) are shared with `TEAM_AGENT_CMD` and fail loudly. See [agent-adapters.md](agent-adapters.md) §2. A start that fails leaves a diagnosis (window output, the rendered command, the CLI's exit code) in `state/pm-launch-failed.log`, and `team up` exits non-zero |
@@ -340,7 +339,7 @@ second source of truth: the value lives in the contract, the class table lives i
 | class | meaning | examples |
 |---|---|---|
 | `apply` | the next process that reads the contract sees the new value | `TEAM_GATES`, the capacity floors, the review escape hatches, the patrol policy |
-| `restart` | a running process holds the value it started with; the receipt names the target and the command | the pulse (`TEAM_PULSE_INTERVAL`, `TEAM_MONITOR_REFRESH`), a seat's model (`TEAM_AGENT_MODELS`, `TEAM_PM_MODEL` — a running seat keeps its model until its next `dispatch`/`resume`), a live session (`TEAM_INBOX_WATCH_*`) |
+| `restart` | a running process holds the value it started with; the receipt names the target and the command | the pulse (`TEAM_PULSE_INTERVAL`, `TEAM_MONITOR_REFRESH`), the PM's model (`TEAM_PM_MODEL` — a running PM keeps it until an explicit `--fresh-pm` restart), a live session (`TEAM_INBOX_WATCH_*`) |
 | `refuse` | not the console's to change: the project's identity, the roster, the ledger's layout, the branch/forge definitions, the authority guards, the dependency policy and the machine paths Pi's own state is read from — the console may not widen its own authority and may not move the ledger it is reading | `TEAM_PROJECT`, `TEAM_AGENTS` (route: `team add-agent <a> --register` / `team teardown --agent <a> --register`), `TEAM_STATE_DIR`, `TEAM_PROTECTED_BRANCH`, `TEAM_ALLOW_FOREIGN_IDENTITY` … |
 
 A key the schema does not know is listed read-only ("not a known project setting", pointing at this file) and is
@@ -366,7 +365,7 @@ The vocabulary is exactly these twelve tokens; the visible heading is the table 
 | `branch` | branch semantics and forge | `TEAM_BRANCH_MODE`, `TEAM_GITLAB_HOST` |
 | `policy` | permission and dependency policy | `TEAM_ALLOW_FOREIGN_IDENTITY`, `TEAM_REQUIRE_JS` |
 | `roster` | roster, model resolution and adapters | `TEAM_AGENT_CMD`, `TEAM_AGENT_BIN`, `TEAM_MODEL_LIMITS` |
-| `seat-model` | per-seat models | `TEAM_DEFAULT_MODEL`, `TEAM_AGENT_MODELS`, `TEAM_PM_MODEL` |
+| `task-model` | task category policy and the independent PM model | `TEAM_TASK_MODELS`, `TEAM_PM_MODEL` |
 | `workflow` | workflow and gates | `TEAM_GATES`, `TEAM_REVIEW_TIMEOUT` |
 | `delivery` | capacity and delivery notices | `TEAM_MIN_AVAIL_MB`, `TEAM_TMP_MIN_FREE_MB`, `TEAM_DEFER_TTL` |
 | `panel` | pulse and console | `TEAM_PULSE_INTERVAL`, `TEAM_MONITOR_REFRESH` |
@@ -413,17 +412,33 @@ name. Danger never makes an invalid value legal.
 ```sh
 team config list --json
 team config set TEAM_PULSE_NUDGE_GAP 1200 --dry-run
-team config set-agent-model dev deepseek/deepseek-flash --dry-run
+team config set-task-model routine deepseek/deepseek-flash --dry-run
+team config set TEAM_PM_MODEL deepseek/deepseek-flash --dry-run
+team config upgrade-models --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6' --pm-model deepseek/deepseek-flash --dry-run
 team config log 5
 ```
 
 `0` written/valid · `3` fingerprint conflict (nothing written) · `4` invalid value · `5` key not editable ·
 `6` write error (file unchanged) · `7` dangerous (a `--dry-run` reports it too). `team config set … --fingerprint
 <sha256>` is a compare-and-swap: any byte change since the read refuses it, and a write without the flag is the
-caller's explicit "use the file as it is now". `team config set-agent-model <seat> <model|->` writes the pair
-list (`TEAM_AGENT_MODELS`, or `TEAM_PM_MODEL` for the `pm` seat) itself — the caller never composes it — and `-`
-removes the seat's override, leaving `TEAM_DEFAULT_MODEL` in force. `--actor <name>` labels the audit line (the
-console passes `panel`); `--dry-run` performs every check and writes neither the contract nor an audit line.
+caller's explicit "use the file as it is now".
+
+**The three model front doors.** `team config set-task-model <category> <model>` upserts exactly one category in
+TEAM_TASK_MODELS (through the same checked writer, so category values are validated and the rest of the map is
+preserved byte for byte); a new category is legal, an empty map is not, and removing a category is done by setting
+the whole map (`team config set TEAM_TASK_MODELS '<remaining map>' --yes`) — which limits future selection but does
+not invalidate a complete same-task assignment. `team config set TEAM_PM_MODEL <model>` writes the independent PM
+model. `team config upgrade-models --task-models '<map>' --pm-model '<model>'` is the one **breaking migration**
+transaction: it previews with `--dry-run`, writes only with `--yes`, replaces the four model keys (the two retired
+worker keys are removed, the two new keys upserted) and keeps every other byte; its relevant-line grammar
+(top-level unique literal assignments, optional inline comments) refuses export/duplicate/multiline/dynamic shapes
+with the file and line named, and the repair is a hand-normalized literal line. The retired `set-agent-model`
+route exits 5 pointing at these; `team add-agent --model` is retired too (a seat is a name in the roster, not a
+model identity).
+
+`team task --category` is only the **brief generator**: it writes the brief's `category:` header and nothing else —
+it never selects or overrides a dispatch's model, and `team task` takes no model flag. The header is read by
+`team dispatch` (which resolves it through the map), and only `team dispatch --model` overrides one launch.
 
 **The roster's two authorized entries.** `TEAM_AGENTS` keeps class `refuse` — `team config set TEAM_AGENTS …`
 still exits 5 and points at these entries instead. `team add-agent <a> --register` and `team teardown --agent <a>
@@ -433,10 +448,9 @@ still exits 5 and points at these entries instead. `team add-agent <a> --registe
 semantics (documented here, not printed in `team help`); a stale fingerprint exits 3 with one `result=conflict`
 line and nothing written. `--register` on a seat already in the roster is a visible no-op (exit 0, no write, no
 audit line); `team teardown --agent <a>` without the flag leaves the roster byte-identical (today's default).
-`team add-agent <a>` for a seat outside the roster, or `team add-agent <a> --model m` without `--register`,
-exits 5 naming both routes (hand-edit `.pi/team/config.sh`, or add `--register`) and touches nothing else;
-`--register --model <provider/model>|-` writes the roster first and then the seat's model through the same
-pairlist serializer as `set-agent-model` (`-` removes the override). Every attempt that passes argument parsing appends one line to `<state>/config.log`
+`team add-agent <a>` for a seat outside the roster exits 5 naming both routes (hand-edit `.pi/team/config.sh`, or
+add `--register`) and touches nothing else; the retired `--model` flag is refused with a pointer at the task-
+category writers. Every attempt that passes argument parsing appends one line to `<state>/config.log`
 (`<UTC ISO-8601> result=<ok|refused|invalid|conflict|danger-refused|write-error> actor=… key=… old='…' new='…'`,
 plus `expected=`/`actual=` on a conflict); `team config log [N]` and `list --json`'s audit tail read at most the
 file's last 16 KiB and print at most N lines (default 10).

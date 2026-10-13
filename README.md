@@ -116,18 +116,24 @@ No forge dependency: the PM uses `git`/`gh`/`glab` directly, and cross-project c
 ## Quickstart (in a project repo)
 
 1. **Bring the project up** — ask your agent to run the `teamsmith-init` skill. It settles the questions with you
-   (session and roster, models, gates, VCS mode, patrol rhythm), shows the plan, then writes it:
+   (session and roster, the task-category model map and the independent PM model, gates, VCS mode, patrol rhythm),
+   shows the plan, then writes it:
 
    ```bash
    bash <skill>/scripts/team bootstrap --print    # the plan; writes nothing
-   bash <skill>/scripts/team bootstrap            # .pi/team/config.sh + docs/team/** + agent worktrees + pulse
+   bash <skill>/scripts/team bootstrap --agents "dev verify" \
+        --task-models 'routine=vendor/light analysis=vendor/strong verify=vendor/strong' --pm-model 'vendor/strong:high'
    bash <skill>/scripts/team doctor               # self-check: git/tmux/agent CLI/dependencies/gates/capacity
    openspec init --tools pi                       # required dependency: spec root + the generated phase commands
                                                   # (a pin without a `verify` workflow — 1.8.0 has only `core` —
                                                   # does not generate `opsx-verify`; see references/openspec.md §6)
    ```
 
-   `bootstrap` is idempotent and prints the `git worktree add` command for each agent (git stays with the PM).
+   A fresh project must pass `--task-models` and `--pm-model` (there is no default model to guess); a project whose
+   config already carries a valid policy may re-enter without them, and a config still on the retired worker keys is
+   refused before any side effect and migrates through `team config upgrade-models` (see
+   `skills/teamsmith/references/migration.md` §5b). `bootstrap` is idempotent and prints the `git worktree add`
+   command for each agent (git stays with the PM).
 
 2. **Dispatch the first task**:
 

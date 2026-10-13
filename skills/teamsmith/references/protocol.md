@@ -121,8 +121,8 @@ Guards and limitations:
 
 ## 5. Task briefs: written for "a weak model without context"
 
-The default development model is a cheap, fast one (e.g. `deepseek/deepseek-flash`). It **will not correct an
-ambiguous requirement on its own**, so a brief has to be self-contained:
+The `routine` category usually runs a cheap, fast model (e.g. `opencode-go/deepseek-v4.1-flash`). It **will not
+correct an ambiguous requirement on its own**, so a brief has to be self-contained:
 
 - Background: why this is being done, where the relevant docs are (do not paste large chunks of code).
 - Deliverables: file paths plus key signatures/behaviour, item by item.
@@ -180,14 +180,30 @@ exactly how a printed fix turned into `✗ dispatch: 未知参数 --force（…�
 with no override still refuses. A printed route is a promise, not decoration: `tests/routes.sh` applies every
 `修法：`/`改行：` family in a fixture and reddens when a route stops clearing its blocker or is no longer honored.
 
-## 6. Model strategy: cheap models do the work, a different family does the adversarial verification
+## 6. Model strategy: task categories; different families for verification
 
-| Use | Selection principle |
-|---|---|
-| Implementation/tests/docs | a cheap model without concurrency limits; a good brief is enough |
-| Independent verification/adversarial analysis | switch model families (to avoid the same blind spots), e.g. the grok family |
-| Heavy review/hard problems | subscription quota is tight → cap concurrency with `TEAM_MODEL_LIMITS`, run one at a time |
-| Long-context hard problems | slow and concurrency-limited; only when the PM explicitly asks |
+The contract maps **task categories** to models (`TEAM_TASK_MODELS`) and names one independent `TEAM_PM_MODEL`.
+The brief's `category:` selects a new dispatch's model, `team dispatch --model` overrides one launch, and a
+complete same-task recovery keeps the model/SID it was committed to (even if the category later leaves the map).
+The engine never derives a model from a phase or a seat: "verify" is a project category name, not an automatic
+phase→model mapping, so a project with other names says which one means independent review.
+
+| Use | Category | Selection principle |
+|---|---|---|
+| Implementation/tests/docs | `routine` | a cheap model without concurrency limits; a good brief is enough |
+| Complex planning / important architecture judgment | `analysis` | a strong model, with the reasoning recorded on disk (decision log/design), not only in a session |
+| Independent verification/adversarial analysis | `verify` | switch model families (to avoid the same blind spots); a strong author model never waives independent review |
+| Heavy concurrent work | any | the subscription token/quota is shared → cap concurrency with `TEAM_MODEL_LIMITS` and queue the rest; `team ps` shows occupancy |
+
+Changing the policy changes **future** selections only. Redefining or dropping a category does not invalidate a
+committed assignment: recovery uses the recorded model/SID, while a **new** task citing a dropped category is
+refused. A running PM keeps its model until an explicit `team up --fresh-pm`, and a fresh takeover continues from
+the files on disk (brief, report, thread, `state/`), never by replaying a conversation.
+
+Private source verification, protected-branch source landing, this project's configuration/fresh launch and shared
+skill-source adoption are **four separate recorded gates**; each is previewed and authorized per operation. A
+shared skill link reads its target's current bytes, so changing that target can affect other projects without an
+installer.
 
 `team dispatch` checks `TEAM_MODEL_LIMITS` and capacity before dispatching: the rules (from two OOM incidents on CEP,
 one of which hit RAM and zram bottom at the same time):

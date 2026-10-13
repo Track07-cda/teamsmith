@@ -34,7 +34,8 @@ P="$TMP/proj"
 mkdir -p "$P"
 ( cd "$P" && git init -q -b main && git config user.email thm@test && git config user.name thm \
     && git commit -q --allow-empty -m "chore: init" ) || { printf '前置失败：git init\n' >&2; exit 3; }
-( cd "$P" && $TEAM init --session thm --agents "dev verify" --vcs local --gates true --docs docs/team ) >"$TMP/init.log" 2>&1 \
+( cd "$P" && $TEAM init --session thm --agents "dev verify" --vcs local --gates true --docs docs/team \
+    --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) >"$TMP/init.log" 2>&1 \
   || { printf '前置失败：team init\n' >&2; tail -5 "$TMP/init.log" >&2; exit 3; }
 mkdir -p "$P/openspec/specs/panel" "$P/openspec/specs/dispatch"
 cat > "$P/openspec/specs/panel/spec.md" <<'EOF'

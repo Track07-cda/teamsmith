@@ -65,7 +65,7 @@ new_proj() {
       && printf '{"name":"%s","scripts":{"verify":"true"}}\n' "$name" > package.json \
       && git add -A && git commit -qm init ) >/dev/null 2>&1
   if ! ( cd "$p" && bash "$team" init --session "pc-$name" --agents "$agents" --vcs local \
-           --gates "true" --docs docs/team ) >"$tmp/$name-init.log" 2>&1; then
+           --gates "true" --docs docs/team --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) >"$tmp/$name-init.log" 2>&1; then
     printf 'panel-choices: 夹具 %s 的 team init 失败\n' "$name" >&2
     tail -5 "$tmp/$name-init.log" >&2
     return 1
@@ -129,8 +129,10 @@ if want read; then
     '[k for k in d["keys"] if k["name"]=="TEAM_PI_BIN"][0]["choices"]["empty"] is False'
   json_check "$json" "TEAM_GATES（cmd）→ source none、values 空（「打开自由输入并写明原因」的那类）" \
     '[k for k in d["keys"] if k["name"]=="TEAM_GATES"][0]["choices"]=={"source":"none","values":[],"min":"","max":"","empty":True,"note":""}'
-  json_check "$json" "TEAM_DEFAULT_MODEL（model）→ source known，值 = models.known" \
-    '[k for k in d["keys"] if k["name"]=="TEAM_DEFAULT_MODEL"][0]["choices"]["source"]=="known" and [k for k in d["keys"] if k["name"]=="TEAM_DEFAULT_MODEL"][0]["choices"]["values"]==d["models"]["known"]'
+  json_check "$json" "TEAM_PM_MODEL（model）→ source known，值 = models.known" \
+    '[k for k in d["keys"] if k["name"]=="TEAM_PM_MODEL"][0]["choices"]["source"]=="known" and [k for k in d["keys"] if k["name"]=="TEAM_PM_MODEL"][0]["choices"]["values"]==d["models"]["known"]'
+  json_check "$json" "TEAM_TASK_MODELS（task-model-map）→ source known、值 = models.known、不接受空值" \
+    '[k for k in d["keys"] if k["name"]=="TEAM_TASK_MODELS"][0]["choices"]=={"source":"known","values":d["models"]["known"],"min":"","max":"","empty":False,"note":""}'
   json_check "$json" "schema 不认识的键也有 choices（source none、known false）" \
     '[k for k in d["keys"] if k["name"]=="TEAM_HAND_ADDED"][0]["known"] is False and [k for k in d["keys"] if k["name"]=="TEAM_HAND_ADDED"][0]["choices"]["source"]=="none"'
   json_check "$json" "每个记录都带 choices，且旧字段一个不少（只增不改；未知键本来就没有 route）" \
@@ -153,45 +155,46 @@ fi
 
 # ---------------------------------------------------------------- known
 if want known; then
-  section "known · 模型词汇表是本项目的数据（R2：含 pm 席位，记录与解析都在，绝不读机器目录）"
+  section "known · 模型词汇表是本项目的数据（R2：类别策略 + 独立 PM + 已提交记录，绝不读机器目录）"
   p="$(new_proj known)" || exit 3
   cfg="$p/.pi/team/config.sh"
   state="$p/.pi/team/state"
-  python3 - "$cfg" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_AGENT_MODELS=""', 'TEAM_AGENT_MODELS="dev=deepseek/deepseek-flash verify=openrouter/stealth/union-alpha"')
-s = re.sub(r'^TEAM_PM_MODEL=.*$', 'TEAM_PM_MODEL="kimi-coding/k3-256k"', s, count=1, flags=re.M)
-open(p, 'w', encoding='utf-8').write(s)
-PY
+  # P232：新的合法契约由真实事务入口写入（退休键必须真的不在），夹具不再手改退休键。
+  run_in "$p" config upgrade-models \
+    --task-models 'routine=deepseek/deepseek-flash analysis=openrouter/stealth/union-alpha' \
+    --pm-model 'kimi-coding/k3-256k' --yes >/dev/null || exit 3
   mkdir -p "$state"
-  printf 'model=openai-codex/gpt-5.6-terra:xhigh\n' > "$state/dev.env"
+  # 一份**完整**的已提交记录：它的模型不在任何类别映射里（旧席位时代的三段 id 也要逐字活着）。
+  . "$here/lib/model-policy.sh"
+  routing_fixture_record "$state" dev T232 "$p" "$p/docs/team/tasks/T232-x.md" 'openai-codex/gpt-5.6-terra:xhigh' sid-dev-232 policy 2026-10-09T00:00:00Z routine
   json="$(run_in "$p" config list --json)"
-  json_check "$json" "known = 配置 default + 席位记录 + pm 的 TEAM_PM_MODEL（各一次）" \
-    'sorted(d["models"]["known"])==["deepseek/deepseek-flash","kimi-coding/k3-256k","openai-codex/gpt-5.6-terra:xhigh","openrouter/stealth/union-alpha"]'
-  json_check "$json" "三段 id 逐字进 known 与 model/pairlist 的 choices.values" \
-    '"openrouter/stealth/union-alpha" in d["models"]["known"] and "openrouter/stealth/union-alpha" in [k for k in d["keys"] if k["name"]=="TEAM_DEFAULT_MODEL"][0]["choices"]["values"] and "openrouter/stealth/union-alpha" in [k for k in d["keys"] if k["name"]=="TEAM_AGENT_MODELS"][0]["choices"]["values"]'
-  json_check "$json" "三段 id 的席位行也逐字（verify 行）" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="verify"][0]["model"]=="openrouter/stealth/union-alpha"'
-  out="$(run_in "$p" config set-agent-model verify openrouter/stealth/union-alpha --dry-run)"; rc=$?
-  assert_eq "三段 id 被写路径校验器接受（set-agent-model --dry-run → 0）" "$rc" "0"
-  json_check "$json" "pm 的模型恰好出现一次（去重）" 'd["models"]["known"].count("kimi-coding/k3-256k")==1'
-  json_check "$json" "models.seats 的 pm 行 = TEAM_PM_MODEL 且 override=true" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]=="kimi-coding/k3-256k" and [s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["override"] is True'
-  json_check "$json" "TEAM_PM_MODEL 的 choices.values 含 pm 的模型" \
-    '"kimi-coding/k3-256k" in [k for k in d["keys"] if k["name"]=="TEAM_PM_MODEL"][0]["choices"]["values"]'
-  # 去掉 TEAM_PM_MODEL：pm 回退默认，席位记录仍在 known，每个模型仍只出现一次。
-  python3 - "$cfg" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p, encoding='utf-8').read()
-s = re.sub(r'^TEAM_PM_MODEL=.*$', 'TEAM_PM_MODEL=""', s, count=1, flags=re.M)
-open(p, 'w', encoding='utf-8').write(s)
-PY
+  json_check "$json" "known = 类别策略的模型 + 独立 PM 模型 + 已提交记录的模型（各一次）" \
+    'sorted(d["models"]["known"])==["deepseek/deepseek-flash","kimi-coding/k3-256k","openai-codex/gpt-5.6-terra:xhigh","openrouter/stealth/union-alpha"] and d["models"]["known"].count("openai-codex/gpt-5.6-terra:xhigh")==1'
+  json_check "$json" "policy.categories 按映射原序（category/model 逐字）" \
+    'd["models"]["policy"]["categories"]==[{"category":"routine","model":"deepseek/deepseek-flash"},{"category":"analysis","model":"openrouter/stealth/union-alpha"}]'
+  json_check "$json" "policy.pm = TEAM_PM_MODEL（独立 PM，不再是席位行）" \
+    'd["models"]["policy"]["pm"]=="kimi-coding/k3-256k" and "seats" not in d["models"] and "default" not in d["models"]'
+  json_check "$json" "known 里没有退休键的残留行（schema 不认识 → refuse 行，不是模型来源）" \
+    'all(k["known"] is False for k in d["keys"] if k["name"] in ("TEAM_DEFAULT_MODEL","TEAM_AGENT_MODELS"))'
+  json_check "$json" "三段 id 逐字进 known 与 model/task-model-map 的 choices.values" \
+    '"openrouter/stealth/union-alpha" in d["models"]["known"] and "openrouter/stealth/union-alpha" in [k for k in d["keys"] if k["name"]=="TEAM_PM_MODEL"][0]["choices"]["values"] and "openrouter/stealth/union-alpha" in [k for k in d["keys"] if k["name"]=="TEAM_TASK_MODELS"][0]["choices"]["values"]'
+  json_check "$json" "已提交记录逐字：dev 行 assigned/model/category/origin/SID" \
+    '[a for a in d["models"]["assignments"] if a["agent"]=="dev"][0]["assigned"] is True and [a for a in d["models"]["assignments"] if a["agent"]=="dev"][0]["model"]=="openai-codex/gpt-5.6-terra:xhigh" and [a for a in d["models"]["assignments"] if a["agent"]=="dev"][0]["category"]=="routine" and [a for a in d["models"]["assignments"] if a["agent"]=="dev"][0]["sid"]=="sid-dev-232" and [a for a in d["models"]["assignments"] if a["agent"]=="dev"][0]["selected_via"]=="policy" and [a for a in d["models"]["assignments"] if a["agent"]=="dev"][0]["launch_via"]=="assignment"'
+  json_check "$json" "没有记录的席位不借策略模型：model 空 + diagnostic 非空" \
+    '[a for a in d["models"]["assignments"] if a["agent"]=="verify"][0]["assigned"] is False and [a for a in d["models"]["assignments"] if a["agent"]=="verify"][0]["model"]=="" and bool([a for a in d["models"]["assignments"] if a["agent"]=="verify"][0]["diagnostic"])'
+  out="$(run_in "$p" config set-task-model routine openai-codex/gpt-5.6-terra:xhigh --dry-run)"; rc=$?
+  assert_eq "三段 id 被 set-task-model 的 --dry-run 接受（rc=0）" "$rc" "0"
+  # 合法配置删掉一个未来类别：已提交记录的模型/SID 仍在 known/assignments（恢复不看映射成员）。
+  run_in "$p" config set TEAM_TASK_MODELS 'analysis=openrouter/stealth/union-alpha' --yes >/dev/null || exit 3
   json="$(run_in "$p" config list --json)"
-  json_check "$json" "去掉 TEAM_PM_MODEL 后 pm 回退默认，记录席位的模型仍在 known 且各一次" \
-    '[s for s in d["models"]["seats"] if s["agent"]=="pm"][0]["model"]=="deepseek/deepseek-flash" and sorted(d["models"]["known"])==["deepseek/deepseek-flash","openai-codex/gpt-5.6-terra:xhigh","openrouter/stealth/union-alpha"] and d["models"]["known"].count("openai-codex/gpt-5.6-terra:xhigh")==1'
+  json_check "$json" "删除未来类别 routine 后：记录仍在、模型仍在 known、策略只剩 analysis" \
+    '[a for a in d["models"]["assignments"] if a["agent"]=="dev"][0]["model"]=="openai-codex/gpt-5.6-terra:xhigh" and "openai-codex/gpt-5.6-terra:xhigh" in d["models"]["known"] and [c["category"] for c in d["models"]["policy"]["categories"]]==["analysis"]'
+  # PM 启动记录（state/pm-launch.env）在 models.pm_launch 里，字段就是 starter 发布的那份。
+  printf 'metadata_version=1\nproject=%s\nwindow=pm\nmodel=kimi-coding/k3-256k\nnonce=fixture-nonce-232\ntime=2026-10-09T00:00:00Z\nmode=fresh\nidentity_via=provider,model,session_id\nresume_key=default\n' "$p" > "$state/pm-launch.env"
+  json="$(run_in "$p" config list --json)"
+  json_check "$json" "pm_launch 逐字：project/window/model/mode（只读面）" \
+    '{k:v for k,v in d["models"]["pm_launch"].items() if k!="project"}=={"window":"pm","model":"kimi-coding/k3-256k","nonce":"fixture-nonce-232","time":"2026-10-09T00:00:00Z","mode":"fresh","resume_key":"default"} and d["models"]["pm_launch"]["project"].endswith("/known")'
+  json_check "$json" "pm_launch 的模型不重复计进 known（去重）" 'd["models"]["known"].count("kimi-coding/k3-256k")==1'
 fi
 
 # ---------------------------------------------------------------- walk（门禁）
@@ -203,9 +206,11 @@ walk_section() { # <tree> <label>
   local wt="$1" label="$2"
   local wp json out rc
   wp="$(new_proj "walk-$label")" || exit 3
-  # model-id-shape R1：走查的 known 里必须带一个三段 id —— 它进 model/pairlist 的 choices.values，
+  # model-id-shape R1：走查的 known 里必须带一个三段 id —— 它进 model/task-model-map 的 choices.values，
   # 走查作业逐条拿它去 `team config set … --dry-run`（旧校验器会在这里红，这是闸门要抓回归的方向）。
-  run_in "$wp" config set TEAM_DEFAULT_MODEL openrouter/amazon/nova-lite-v1 --yes >/dev/null || exit 3
+  run_in "$wp" config upgrade-models \
+    --task-models 'routine=openrouter/amazon/nova-lite-v1 analysis=xai/grok-4.6' \
+    --pm-model 'openrouter/amazon/nova-lite-v1' --yes >/dev/null || exit 3
   json="$(run_in "$wp" config list --json)"
   printf '%s' "$json" > "$tmp/walk-list.json"
   local sha_before; sha_before="$(sha_of "$wp/.pi/team/config.sh")"
@@ -223,7 +228,6 @@ for line in m.group(1).splitlines():
     f = line.split('|')
     rows[f[0]] = f
 d = json.load(open(tmp + "/walk-list.json", encoding="utf-8"))
-seats = [s["agent"] for s in d["models"]["seats"]]
 jobs, empties, problems = [], [], []
 seen_keys = 0
 for k in d["keys"]:
@@ -258,7 +262,7 @@ for k in d["keys"]:
     elif kind == "bool":
         if ch["values"] != ["1", "0"]:
             problems.append("%s 的 values ≠ [1,0]" % name)
-    elif kind in ("model", "pairlist", "winlist", "pattern"):
+    elif kind in ("model", "task-model-map", "winlist", "pattern"):
         if ch["values"] != d["models"]["known"]:
             problems.append("%s 的 values ≠ models.known" % name)
     if cls == "refuse":
@@ -266,11 +270,9 @@ for k in d["keys"]:
         continue
     empties.append("%s\t%s" % (name, "true" if ch["empty"] else "false"))
     for v in ch["values"]:
-        if kind == "pairlist":
-            if not seats:
-                problems.append("%s 的 pairlist 词表没有席位可用（夹具缺少名册）" % name)
-                continue
-            whole = "%s=%s" % (seats[0], v)
+        if kind == "task-model-map":
+            # 整映射行：读给出的值是该项目的模型词表，写入形状是 category=provider/model（面板绝不组合它）。
+            whole = "routine=%s" % v
         elif kind in ("winlist", "pattern"):
             whole = "%s=1" % v
         else:
@@ -484,6 +486,10 @@ fi
 if want catalogue; then
   section "catalogue · 机器目录不是选项来源（R2：sub2api 那个已下线 provider 不许出现）"
   p="$(new_proj catalogue)" || exit 3
+  # 一份合法的类别策略（= 一个项目自己的模型词汇表）；机器目录里的 provider 绝不进来。
+  run_in "$p" config upgrade-models \
+    --task-models 'routine=deepseek/deepseek-flash analysis=kimi-coding/k3-256k' \
+    --pm-model 'deepseek/deepseek-flash' --yes >/dev/null || exit 3
   home="$tmp/catalogue-home"
   mkdir -p "$home/.pi/agent"
   cat > "$home/.pi/agent/models-store.json" <<'JSON'
@@ -495,37 +501,44 @@ JSON
   json="$(cd "$p" && HOME="$home" bash "$team" config list --json 2>&1)"
   case "$json" in *sub2api*) bad "机器目录里的 sub2api 泄漏进了读（choices/known）" ;; *) ok "读里没有机器目录的 sub2api" ;; esac
   case "$json" in *openrouter*) bad "机器目录里的 openrouter 泄漏进了读" ;; *) ok "读里没有机器目录的 openrouter" ;; esac
-  json_check "$json" "known 只有本项目配置/记录的模型（夹具 default）" \
-    'd["models"]["known"]==["deepseek/deepseek-flash"]'
-  json_check "$json" "model/pairlist/winlist/pattern 四类的 values 都不含目录里的 provider" \
-    'all(all(not v.startswith("sub2api/") and not v.startswith("openrouter/") for v in k["choices"]["values"]) for k in d["keys"] if k["kind"] in ("model","pairlist","winlist","pattern"))'
+  json_check "$json" "known 只有本项目策略/记录的模型（夹具的类别 + PM）" \
+    'sorted(d["models"]["known"])==["deepseek/deepseek-flash","kimi-coding/k3-256k"]'
+  json_check "$json" "model/task-model-map/winlist/pattern 四类的 values 都不含目录里的 provider" \
+    'all(all(not v.startswith("sub2api/") and not v.startswith("openrouter/") for v in k["choices"]["values"]) for k in d["keys"] if k["kind"] in ("model","task-model-map","winlist","pattern"))'
 fi
 
 # ---------------------------------------------------------------- flip-drop-pm（F-A）
 if want flip-drop-pm; then
-  section "flip F-A · 从 known 里去掉 pm 席位 → known 断言必须红且点名 pm；恢复 → 绿"
+  section "flip F-A · 从 known 里去掉独立 PM 模型 → known 断言必须红且点名 pm；恢复 → 绿"
   ft="$tmp/flip-drop-pm"
   mkdir -p "$ft/skills/teamsmith"
   cp -a "$skill/scripts" "$ft/skills/teamsmith/scripts"
   cp -a "$skill/templates" "$skill/references" "$ft/skills/teamsmith/"
-  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PY'
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYPATCH'
 import sys
 p = sys.argv[1]
-s = open(p, encoding="utf-8").read()
-# P47/R4：席位行改成字段安全拆读（team_config_seat_split）——翻转仍锚在「known 走查里的 pm 席位」这一行
-old = '    team_config_seat_split "$(team_config_seat_state "$a")" seat_model _src _override'
-assert old in s, "找不到 pm 席位解析那一行"
-s = s.replace(old, "    [ \"$a\" = \"pm\" ] && continue\n" + old, 1)
-open(p, "w", encoding="utf-8").write(s)
-PY
+# P232：读侧把独立 PM 的模型从 known 里漏掉（策略行还在，词汇表缺了）——「PM 的模型也在 known 里」必须红。
+# 按行改：那一行的尾部是 $'\n' 的赋值，只删中间片段会留下一个跑不起来的空命令，把整段读打断。
+lines = open(p, encoding="utf-8").read().split(chr(10))
+out = []
+hits = 0
+for line in lines:
+    if 'known_models="$known_models$policy_pm"' in line:
+        hits += 1
+        out.append('    policy_pm="$TEAM_PM_MODEL"')
+    else:
+        out.append(line)
+assert hits == 1, "找不到 PM 模型进 known 的那一行（hits=%d）" % hits
+open(p, "w", encoding="utf-8").write(chr(10).join(out))
+PYPATCH
   TEAM_CHOICES_TREE="$ft" bash "$here/panel-choices.sh" known > "$tmp/flip-drop-pm-red.log" 2>&1
   rc_red=$?
   TEAM_CHOICES_TREE="$tree" bash "$here/panel-choices.sh" known > "$tmp/flip-drop-pm-green.log" 2>&1
   rc_green=$?
-  if [ "$rc_red" -ne 0 ] && grep -a '✗' "$tmp/flip-drop-pm-red.log" | grep -q 'pm'; then
-    ok "F-A：去掉 pm 的解析后 known 断言红且点名 pm（rc=$rc_red）"
+  if [ "$rc_red" -ne 0 ] && grep -a '✗' "$tmp/flip-drop-pm-red.log" | grep -qi 'pm'; then
+    ok "F-A：去掉 PM 的 known 解析后断言红且点名 pm（rc=$rc_red）"
   else
-    bad "F-A：去掉 pm 的解析后 known 断言没红/没点名 pm（rc=$rc_red）"
+    bad "F-A：去掉 PM 的 known 解析后断言没红/没点名 pm（rc=$rc_red）"
   fi
   [ "$rc_green" -eq 0 ] && ok "F-A：恢复真树后 known 断言绿" || bad "F-A：真树也红了（rc=$rc_green）"
   printf '    --- 红侧尾部 ---\n'

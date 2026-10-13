@@ -453,7 +453,7 @@ team_cmd_ps() {
   printf '\n%-30s %8s %8s %9s\n' MODEL RUNNING LIMIT WINDOW
   printf '%-30s %8s %8s %9s\n' ----- ------- ----- ---------
   local m limit running seen=" " win
-  for m in $TEAM_DEFAULT_MODEL $TEAM_AGENT_MODELS; do
+  for m in $(team_models_known); do
     case "$m" in *=*) m="${m#*=}" ;; esac
     [ -n "$m" ] || continue
     case "$seen" in *" $m "*) continue ;; esac
@@ -466,7 +466,7 @@ team_cmd_ps() {
   done
   team_dim "  WINDOW = 模型上下文窗口（? = 解析不到：TEAM_MODEL_WINDOWS 或 Pi 的模型目录里没有它）"
   # M4.3 A：每个 agent 的会话大小 vs 它当前模型的窗口（只 stat 字节数，不读内容）
-  # M14：模型带 ·来源标注（配置/显式/历史记录；历史记录 = 名册旧记录，下次派单用新配置）
+  # Committed assignment only; future policy is not the recovery identity.
   printf '\nagent 会话（估算 tok / 模型窗口）：\n'
   local asess any_sess=0 amodel asrc atok awin abytes afile atext a
   for a in $(team_agents); do

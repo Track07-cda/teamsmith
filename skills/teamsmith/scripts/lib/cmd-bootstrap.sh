@@ -21,8 +21,12 @@
 #     换行、`#` 一律拒绝；notify 扩展那 8 个扁平读取器解析的键出现 ' 也拒绝（那个读取器没有转义）。
 #   * 原子写：同目录临时文件 → bash -n 复核 → 保留权限 → mv；任何失败都留下原字节、不留临时文件。
 # 返回 0 = 已写入；非 0 = 拒绝/写失败（原因在 stderr）。
-team_config_set_in_file() { # <file> <KEY> <value>
-  local f="$1" k="$2" v="${3-}"
+team_config_set_in_file() {
+  if [ "${TEAM_CONFIG_LOCKED:-0}" = 1 ]; then team_config_set_in_file_unlocked "$@"
+  else team_with_lock "config:$(readlink -m "$1")" team_config_locked_call team_config_set_in_file_unlocked "$@"; fi
+}
+team_config_set_in_file_unlocked() { # <file> <KEY> <value> [remove]
+  local f="$1" k="$2" v="${3-}" remove="${4:-}"
   [ -n "$f" ] && [ -n "$k" ] || { printf 'config writer: 缺少文件或键名\n' >&2; return 1; }
   case "$k" in
     ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) printf 'config writer: 非法键名 %s\n' "$k" >&2; return 1 ;;
@@ -62,13 +66,17 @@ team_config_set_in_file() { # <file> <KEY> <value>
     if [ "$found" = "0" ] && [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?$k= ]]; then
       found=1
       comment="$(printf '%s' "$line" | team_config_inline_comment_of_line)"
-      newline="${form}${k}='${quoted}'${comment}"
-      out+=("$newline")
+      if [ "$remove" = remove ]; then
+        [ -z "$comment" ] || out+=("$comment")
+      else
+        newline="${form}${k}='${quoted}'${comment}"
+        out+=("$newline")
+      fi
     else
       out+=("$line")
     fi
   done
-  if [ "$found" = "0" ]; then
+  if [ "$found" = "0" ] && [ "$remove" != remove ]; then
     newline="${form}${k}='${quoted}'"
     out+=("$newline")
     had_nl=1
@@ -153,12 +161,20 @@ team_detect_install_cmd() {
 
 team_cmd_bootstrap() {
   local agents="" session="" pmwin="" with_pulse=1 print_only=0
+  local task_models="" pm_model="" task_models_set=0 pm_model_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) agents="${2:?}"; shift 2 ;;
       --create-worktrees) TEAM_CREATE_WORKTREE=1; shift ;;
       --session) session="${2:?}"; shift 2 ;;
       --pm-window) pmwin="${2:?}"; shift 2 ;;
+      --task-models) task_models="${2:?}"; task_models_set=1; shift 2 ;;
+      --pm-model) pm_model="${2:?}"; pm_model_set=1; shift 2 ;;
+      --model|--default-model)
+        team_err "bootstrap: $1 已退休：项目不再有席位/全局默认模型"
+        team_dim "  新项目：$TEAM_CLI bootstrap --agents 'dev verify' --task-models '<category=provider/model …>' --pm-model '<provider/model>'"
+        team_dim "  已有项目升级：$TEAM_CLI config upgrade-models --task-models '<完整映射>' --pm-model '<独立模型>' --dry-run"
+        return 2 ;;
       --no-pulse) with_pulse=0; shift ;;
       --no-watchdog) with_pulse=0; shift ;;   # 旧旗标（别名期保留到 v2.0.0）：与 --no-pulse 同义
       --print) print_only=1; shift ;;
@@ -170,6 +186,44 @@ team_cmd_bootstrap() {
   team_git rev-parse --show-toplevel >/dev/null 2>&1 || team_die "当前目录不在 git 仓库内"
   local project; project="$(basename "$TEAM_MAIN_ROOT")"
   local had_config=0; [ -n "$TEAM_CONFIG" ] && had_config=1
+
+  # ⓪ 模型策略闸门（P235）：退休键/非法策略/缺失输入都在**任何写入**（install/账本/worktree/pulse）
+  #    之前停住；--print 只诊断、不写。已有合法新策略允许不带输入重入（保留策略）。
+  if [ "$had_config" = "1" ]; then
+    local legacy_keys; legacy_keys="$(team_config_legacy_model_keys "$TEAM_CONFIG")"
+    if [ -n "$legacy_keys" ]; then
+      team_err "bootstrap: $TEAM_CONFIG 还在用退休的模型键（$(printf '%s' "$legacy_keys" | tr '\n' ' ')）—— 任何写入之前停住"
+      team_dim "  项目模型策略是破坏式升级：bootstrap 不是迁移路径（init --force 也不是）"
+      team_dim "  升级（先预览）：$TEAM_CLI config upgrade-models --task-models '<category=provider/model …>' --pm-model '<provider/model>' --dry-run"
+      return 1
+    fi
+  fi
+  local _policy _prc=0
+  if [ "$print_only" = "1" ] && [ "$had_config" != "1" ]; then
+    # 新鲜项目的 --print：只预览，模型输入必填这件事写在计划里（真跑才拒，且拒绝在任何写入之前）
+    :
+  else
+    _policy="$(team_init_model_policy_resolve "${TEAM_CONFIG:-}" "$task_models" "$pm_model" "$task_models_set" "$pm_model_set" bootstrap)" || _prc=$?
+    [ "$_prc" -eq 0 ] || return "$_prc"
+    task_models="$(printf '%s\n' "$_policy" | sed -n '1p')"
+    pm_model="$(printf '%s\n' "$_policy" | sed -n '2p')"
+  fi
+  # 已有配置（不带 --force）原样保留：显式输入与现有策略不同就拒绝，不静默忽略。
+  if [ "$had_config" = "1" ] && [ -n "$task_models" ]; then
+    local cur_map cur_pm
+    cur_map="$(team_config_file_value "$TEAM_CONFIG" TEAM_TASK_MODELS 2>/dev/null || true)"
+    cur_pm="$(team_config_file_value "$TEAM_CONFIG" TEAM_PM_MODEL 2>/dev/null || true)"
+    if [ "$task_models_set" = "1" ] && [ "$task_models" != "$cur_map" ]; then
+      team_err "bootstrap: 现有配置会被保留，但 --task-models 与现有映射不同 —— 不静默忽略"
+      team_dim "  改一个类别：$TEAM_CLI config set-task-model <category> <model>；整映射：$TEAM_CLI config set TEAM_TASK_MODELS '<完整映射>' --yes"
+      return 4
+    fi
+    if [ "$pm_model_set" = "1" ] && [ "$pm_model" != "$cur_pm" ]; then
+      team_err "bootstrap: 现有配置会被保留，但 --pm-model 与现有值不同 —— 不静默忽略"
+      team_dim "  改 PM 模型：$TEAM_CLI config set TEAM_PM_MODEL '<provider/model>' --yes"
+      return 4
+    fi
+  fi
 
   # ① 探测 PM 自己所在的 tmux session/窗口
   local det_sess="" det_win="" det_cwd=""
@@ -223,13 +277,20 @@ team_cmd_bootstrap() {
   if [ -n "$rename_note" ]; then printf '      %s\n' "$rename_note"; fi
   if [ -n "$rename_cmd" ]; then printf '      %s\n' "改名：$rename_cmd"; fi
   printf '  名册        %s\n' "$agents"
+  printf '  模型策略    %s ［独立 PM：%s］\n' "${task_models:-<新鲜项目必填：--task-models '<category=provider/model …>'>}" "${pm_model:-<必填：--pm-model '<provider/model>'>}"
   printf '  版本控制    %s ｜ 门禁 %s ｜ 安装 %s\n' "$vcs" "${gates:-<无>}" "${install_cmd:-<无>}"
   printf '  巡检        %s\n' "$([ "$with_pulse" = "1" ] && echo "tmux 窗口 $(team_slug "$session" 2>/dev/null || echo ''):$(team_pulse_window)（同 session）" || echo '跳过')"
 
   if [ "$print_only" = "1" ]; then
     printf '\n（--print：只看计划，什么都没改）\n'
     printf '计划步骤：\n'
-    printf '  1. %s init --session %s --pm-window %s --agents "%s" --vcs %s\n' "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs"
+    local plan_models
+    if [ -n "$task_models" ] && [ -n "$pm_model" ]; then
+      plan_models="--task-models $(printf '%q' "$task_models") --pm-model $(printf '%q' "$pm_model")"
+    else
+      plan_models="--task-models '<category=provider/model …>' --pm-model '<provider/model>'（新鲜项目必填）"
+    fi
+    printf '  1. %s init --session %s --pm-window %s --agents "%s" --vcs %s %s\n' "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs" "$plan_models"
     printf '  1b. 把 skill 装进项目 %s（%s init 的同一实现；已存在则 skip —— 老项目的升级路径）\n' '.pi/skills/' "$TEAM_CLI"
     printf '  2. 把门禁/安装命令写进 .pi/team/config.sh（%s / %s）\n' "${gates:-无}" "${install_cmd:-无}"
     printf '  3. 为每个 agent 建 worktree：%s\n' "$(printf 'add-agent %s; ' $agents)"
@@ -245,7 +306,7 @@ team_cmd_bootstrap() {
     # （cmd-init.sh 的 team_init_install_skills）；冲突会响亮失败，不静默替换。
     team_init_install_skills || return 1
   else
-    team_cmd_init --session "$session" --pm-window "$pmwin" --agents "$agents" --vcs "$vcs" ${gates:+--gates "$gates"}
+    team_cmd_init --session "$session" --pm-window "$pmwin" --agents "$agents" --vcs "$vcs" ${gates:+--gates "$gates"} --task-models "$task_models" --pm-model "$pm_model"
     team_load_config   # 重新加载（init 刚写了配置）
   fi
   team_require_docs
@@ -301,8 +362,8 @@ team_cmd_bootstrap() {
   printf '\n'
   team_hdr "下一步（PM 的活）"
   printf '  1) 填 %s/ROADMAP.md（目标/里程碑/退出标准）与 OWNERSHIP.md（目录归属）\n' "$TEAM_DOCS_DIR"
-  printf '  2) 建第一个任务：%s task T1.1 --title "…" --agent %s\n' "$TEAM_CLI" "$(printf '%s' "$agents" | awk '{print $1}')"
-  printf '     → 编辑任务书（背景/交付物/边界/可复制验收命令）\n'
+  printf '  2) 建第一个任务：%s task T1.1 --title "…" --category <类别> --agent %s\n' "$TEAM_CLI" "$(printf '%s' "$agents" | awk '{print $1}')"
+  printf '     → 编辑任务书（背景/交付物/边界/可复制验收命令）；category 决定派单用哪个模型（%s config set-task-model）\n' "$TEAM_CLI"
   printf '  3) 派单：%s dispatch %s T1.1 %s/tasks/T1.1-*.md\n' "$TEAM_CLI" "$(printf '%s' "$agents" | awk '{print $1}')" "$TEAM_DOCS_DIR"
   printf '  4) 看板：%s digest ｜ 巡检：%s pulse status\n' "$TEAM_CLI" "$TEAM_CLI"
   printf '  5) 建议把脚手架提交：git add -A && git commit -m "chore: teamsmith 初始化"\n'

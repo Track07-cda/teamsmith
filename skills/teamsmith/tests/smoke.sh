@@ -35,6 +35,20 @@ fi
 # P16：初始化指引是兄弟 skill（本仓库 skills/teamsmith-init；安装后 ~/.agents/skills/ 里并排的两条软链）。
 SKILL_INIT_DIR="$(cd -P "$SKILL_DIR/.." && pwd)/teamsmith-init"
 TEAM="bash $SKILL_DIR/scripts/team"
+# P235：新鲜项目的 init/bootstrap 必须给显式的类别映射 + 独立 PM 模型（工具不再猜席位/默认模型）。
+# 夹具一律用这一对；断言要看真实值的用例自己覆盖。
+P235_MODELS=(--task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash')
+# P235/S1：可信续跑要求一份**完整**的 v1 assignment 记录；半条（team_state_set 单键写）或旧形状
+# 会被派单闸门判成 legacy/unknown 直接拒绝。需要「这个席位手上有活」的夹具统一用它写整条记录。
+smoke_assignment() { # <repo> <seat> <task> [category] [branch] [model] [sid] [selected_via] [brief]
+  local repo="$1" seat="$2" task="$3" cat="${4:-routine}" branch="${5:-task/$3-smoke-task}" \
+        model="${6:-deepseek/deepseek-flash}" sid="${7:-$SESSION-$2}" via="${8:-policy}" \
+        brief="${9:-$1/docs/team/tasks/$3-smoke-task.md}"
+  mkdir -p "$repo/.pi/team/state"
+  printf 'assignment_version=1\ntask=%s\ntaskfile=%s\ncategory=%s\nbranch=%s\nworktree=%s\nwindow=%s\nseat=%s\nmodel=%s\nselected_via=%s\nlaunch_via=assignment\nsid=%s\nlaunch_nonce=smoke-nonce\nstarted=2026-01-01T00:00:00Z\nsid_bytes=0\nmode=continued\n' \
+    "$task" "$brief" "$cat" "$branch" "$repo/.worktrees/$seat" "$seat" "$seat" "$model" "$via" "$sid" \
+    > "$repo/.pi/team/state/$seat.env"
+}
 
 # ── 身份隔离（必须最先做）：绝不继承调用者的团队身份 ────────────────────────────
 # 事故背景（v1.11.3 实测）：smoke 从 worker 的 Pi 会话里被调用时继承了 TEAM_ROOT，
@@ -1824,7 +1838,7 @@ assert_has "$TMP/boot-print.log" "计划步骤" "打印了计划步骤"
 assert_has "$TMP/boot-print.log" "add-agent dev" "计划里含建 worktree"
 assert_has "$TMP/boot-print.log" "pulse up" "计划里含起巡检窗口（pulse）"
 [ -f "$BR/.pi/team/config.sh" ] && bad "--print 不该改任何东西" || ok "--print 确实没改东西"
-$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse >"$TMP/boot.log" 2>&1 \
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse "${P235_MODELS[@]}" >"$TMP/boot.log" 2>&1 \
   && ok "bootstrap 退出码 0" || { bad "bootstrap 失败"; cat "$TMP/boot.log"; }
 assert_file "$BR/.pi/team/config.sh" "bootstrap 写了配置"
 assert_has "$BR/.pi/team/config.sh" "TEAM_SESSION=\"$BSESS\"" "把探测/指定的 session 写进配置"
@@ -1833,17 +1847,17 @@ grep -qE '^TEAM_WATCH_INTERVAL=' "$BR/.pi/team/config.sh" && bad "生成的配�
 assert_dir "$BR/docs/team/tasks" "建了文档骨架"
 assert_has "$TMP/boot.log" "worktree add -b agent/dev" "bootstrap 只打印 worktree 命令（git 归 PM）"
 assert_not_file "$BR/.worktrees/dev" "默认不代建 dev worktree"
-$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse --create-worktrees >"$TMP/boot2.log" 2>&1 || true
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse --create-worktrees "${P235_MODELS[@]}" >"$TMP/boot2.log" 2>&1 || true
 assert_dir "$BR/.worktrees/dev" "--create-worktrees 才代建 dev worktree"
 assert_dir "$BR/.worktrees/verify" "--create-worktrees 才代建 verify worktree"
 assert_has "$BR/AGENTS.md" "<!-- teamsmith:begin -->" "注入了协议段"
 assert_has "$BR/AGENTS.md" "Specs (OpenSpec)" "bootstrap 注入的协议段也告诉 agent specs 在哪（M6.3）"
 assert_has "$TMP/boot.log" "下一步" "打印了下一步清单"
-$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse >"$TMP/boot2.log" 2>&1
+$TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse "${P235_MODELS[@]}" >"$TMP/boot2.log" 2>&1
 assert_eq "bootstrap 幂等（协议段只一份）" "$(grep -cF '<!-- teamsmith:begin -->' "$BR/AGENTS.md")" "1"
 # 必需依赖预检（D10）：配置写完后就要体检；缺了不阻塞，但每条都要给出修复/降级办法
 env TEAM_PI_SETTINGS_FILE="$TMP/mc-none/settings.json" TEAM_OPENSPEC_BIN=/nonexistent \
-  $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse >"$TMP/boot-deps.log" 2>&1 \
+  $TEAM bootstrap --agents "dev verify" --session "$BSESS" --no-pulse "${P235_MODELS[@]}" >"$TMP/boot-deps.log" 2>&1 \
   && ok "缺依赖时 bootstrap 仍然退出码 0（不阻塞初始化）" || { bad "缺依赖不该让 bootstrap 失败"; tail -5 "$TMP/boot-deps.log"; }
 assert_has "$TMP/boot-deps.log" "必需依赖还没就绪" "bootstrap 提示必需依赖"
 assert_has "$TMP/boot-deps.log" "@cortexkit/pi-magic-context" "bootstrap 给出 magic-context 的修复办法"
@@ -1901,7 +1915,7 @@ m11_boot() { # <仓库> <session> <当前窗口名> <标记> [额外参数...]
   ( cd "$repo" && PATH="$M11_SHIM:$PATH" TMUX=/m11-fake TMUX_PANE=%1 \
       M11_SHIM_LOG="$TMP/m11-calls-$tag.log" M11_SHIM_WIN="$win" M11_SHIM_SESSION="$sess" \
       M11_SHIM_CWD="$repo" M11_SHIM_WINDOWS="$win" \
-      $TEAM bootstrap --agents dev --session "$sess" --no-pulse "$@" ) >"$TMP/m11-boot-$tag.log" 2>&1
+      $TEAM bootstrap --agents dev --session "$sess" --no-pulse "${P235_MODELS[@]}" "$@" ) >"$TMP/m11-boot-$tag.log" 2>&1
 }
 
 # ① --print 只看计划：不改名、不改文件，计划里的 PM 窗口名已经是约定 pm
@@ -1969,7 +1983,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   tmux new-session -d -s "$M11_SESS" -n pi -c "$M11L" 2>/dev/null || true
   tmux set-window-option -t "$M11_SESS:pi" automatic-rename off 2>/dev/null || true
   tmux respawn-pane -k -t "$M11_SESS:pi" \
-    "cd '$M11L' && bash '$SKILL_DIR/scripts/team' bootstrap --agents dev --session $M11_SESS --no-pulse >'$TMP/m11-live.log' 2>&1; echo \$? >'$TMP/m11-live.rc'; exec sleep 300"
+    "cd '$M11L' && bash '$SKILL_DIR/scripts/team' bootstrap --agents dev --session $M11_SESS --no-pulse --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' >'$TMP/m11-live.log' 2>&1; echo \$? >'$TMP/m11-live.rc'; exec sleep 300"
   for i in $(seq 1 80); do [ -s "$TMP/m11-live.rc" ] && break; sleep 0.25; done
   assert_eq "M11 ⑥（真沙盒）：bootstrap 退出码 0" "$(tr -dc 0-9 < "$TMP/m11-live.rc" 2>/dev/null)" "0"
   assert_has "$M11L/.pi/team/config.sh" 'TEAM_PM_WINDOW="pm"' "M11 ⑥（真沙盒）：配置写约定 pm（不是窗口碰巧的名字）"
@@ -1984,7 +1998,7 @@ cd "$REPO"
 
 # ---------------------------------------------------------------- 2. init
 section "2 · init"
-$TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/init.log" 2>&1 \
+$TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$TMP/init.log" 2>&1 \
   && ok "init 退出码 0" || bad "init 失败（见 $TMP/init.log）"
 assert_file "$REPO/.pi/team/config.sh" "写入配置"
 assert_file "$REPO/docs/team/BOARD.md" "写入 BOARD"
@@ -2073,7 +2087,7 @@ if grep -rqF '{{' "$REPO/docs/team" "$REPO/.pi/team/config.sh" "$REPO/AGENTS.md"
   bad "模板有未渲染的占位符 {{...}}"; grep -rnF '{{' "$REPO/docs/team" "$REPO/AGENTS.md" | head -3
 else ok "模板全部渲染（无 {{ 残留）"; fi
 # 幂等：再 init 一次不应重复追加协议段
-$TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/init-again.log" 2>&1
+$TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$TMP/init-again.log" 2>&1
 assert_eq "AGENTS.md 协议段幂等（只出现一次）" "$(grep -cF '<!-- teamsmith:begin -->' "$REPO/AGENTS.md")" "1"
 # P40：第二次 init 不重装、不覆盖 —— 两个 skill 都报 skip（逐 skill 一行）
 assert_eq "P40 第二次 init 对两个 skill 都报 skip" \
@@ -2125,7 +2139,7 @@ assert_not "$TMP/doctor-help-stderr.log" "版本过旧" "M39：--help 走 stderr
 
 # ---------------------------------------------------------------- 4. task / board
 section "4 · task + board"
-$TEAM task T1.1 --title "Smoke task" --agent dev --deps "-" >"$TMP/task.log" 2>&1 || bad "task 失败"
+$TEAM task T1.1 --title "Smoke task" --category routine --agent dev --deps "-" >"$TMP/task.log" 2>&1 || bad "task 失败"
 TASKFILE="$(ls "$REPO"/docs/team/tasks/T1.1-*.md 2>/dev/null | head -1)"
 # P24（B3）：派单守卫要求「没有 change 的任务书必须声明锚」。模板渲染的 `anchor: -` 是待填空，
 # 夹具在这里补上 infra 锚 —— 否则本节要测的（分支身份/脏树/容量/提示词/adapter）根本走不到守卫之后。
@@ -2261,7 +2275,7 @@ mkdir -p "$M48_TMPREPO"
 ( cd "$M48_TMPREPO" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
   && echo '# m48' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 ( cd "$M48_TMPREPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
-    $TEAM init --session m48-tmpl --agents "dev" --vcs local --gates "true" --docs docs/team ) >"$TMP/m48-tmpl-init.log" 2>&1 \
+    $TEAM init --session m48-tmpl --agents "dev" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m48-tmpl-init.log" 2>&1 \
   && ok "M48：空模板库 init 成功" || { bad "M48：空模板库 init 失败"; tail -3 "$TMP/m48-tmpl-init.log"; }
 ( cd "$M48_TMPREPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
     $TEAM board ls ) >"$TMP/m48-tmpl-ls.log" 2>&1 || true
@@ -2281,7 +2295,7 @@ assert_file "$REPO/.worktrees/dev/README.md" "worktree 内容就绪"
 section "3b · git 归 PM（skill 不执行、也不过度包装 git）"
 # add-agent 默认只打印 git 命令（不代建 worktree）
 AG2="$TMP/gitfree-repo"; mkdir -p "$AG2"; ( cd "$AG2" && git init -q -b main && git config user.email a@b && git config user.name a && echo x > a && git add -A && git commit -qm init )
-( cd "$AG2" && bash "$SKILL_DIR/scripts/team" init --session "teamsmith-smoke-gitfree-$$" --agents nobody >/dev/null 2>&1 ) || true
+( cd "$AG2" && bash "$SKILL_DIR/scripts/team" init --session "teamsmith-smoke-gitfree-$$" --agents nobody "${P235_MODELS[@]}" >/dev/null 2>&1 ) || true
 ( cd "$AG2" && bash "$SKILL_DIR/scripts/team" add-agent nobody >"$TMP/addagent-print.log" 2>&1 ) || true
 assert_has "$TMP/addagent-print.log" "worktree add -b agent/nobody" "add-agent 只打印 git worktree 命令"
 assert_not_file "$AG2/.worktrees/nobody" "默认不代建 worktree"
@@ -2331,7 +2345,7 @@ assert_not "$TMP/dispatch-wrongbranch.log" "dispatched" "F16：没有真的派�
 # 因为 state 里的 task 已经证明这条分支就是这个任务的；但不能借这个口子换任务。
 git -C "$REPO/.worktrees/dev" switch "$T1_BRANCH" >/dev/null 2>&1 || true
 git -C "$REPO/.worktrees/dev" switch -c "task/T1.1-legacy" "$PROTECTED" >/dev/null 2>&1 || git -C "$REPO/.worktrees/dev" switch "task/T1.1-legacy" >/dev/null 2>&1
-( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; team_state_set dev task T1.1' )
+smoke_assignment "$REPO" dev T1.1 routine task/T1.1-legacy
 if $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/dispatch-resume.log" 2>&1; then
   ok "F16：续跑同一个任务时允许旧 slug 的分支"
 else bad "F16：续跑被误拒（见 $TMP/dispatch-resume.log）"; fi
@@ -2356,7 +2370,7 @@ assert_eq "F3：team status 打印的是同一份 roster 行" \
   "$(awk '$1=="dev"{print; exit}' "$TMP/status-branch.log")" "$DEV_ROW"
 assert_has "$TMP/status-branch.log" "任务 T1.1：" "F3：team status 打印该任务的标题行"
 assert_has "$TMP/status-branch.log" "报告" "F3：team status 打印该任务的报告行"
-[ -f "$REPO/.pi/team/state/dev.env" ] && sed -i '/^task=T1.1$/d' "$REPO/.pi/team/state/dev.env" || true
+rm -f "$REPO/.pi/team/state/dev.env"   # P235：整条记录，不能只删 task 行（半条记录同样不可信）
 # ---------------------------------------------------------------- P140（dispatch-friction · R1）分支身份可见可指定
 # 实测摩擦（recon A1）：PM 预先建了 task/P134-p134，dispatch 从标题推导出另一个 slug 直接拒绝 ——
 # 而那条分支**就是本任务的**（同 ID）。旧行为的红侧在 recon.log；这里钉住新行为的三半：
@@ -2694,7 +2708,7 @@ else
   ( cd "$DISK_TICKR" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
       && git commit -q --allow-empty -m init ) >/dev/null 2>&1
   ( cd "$DISK_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
-      -u TEAM_STATE_DIR $TEAM init --session "teamsmith-smoke-disk-$$" --agents dev --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+      -u TEAM_STATE_DIR $TEAM init --session "teamsmith-smoke-disk-$$" --agents dev --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >/dev/null 2>&1
   DISK_TICK_TABLE="$TMP/disk-tick.table"; disk_new "$DISK_TICK_TABLE"
   disk_row "$DISK_TICK_TABLE" "$DISK_TMP"          "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
   disk_row "$DISK_TICK_TABLE" "$DISK_TICKR/.worktrees" "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
@@ -2766,7 +2780,7 @@ $TEAM board set T1.1 wip >/dev/null 2>&1 || true
 assert_has "$REPO/docs/team/BOARD.md" "| wip |" "额外列布局下状态写进状态列"
 $TEAM board ls >"$TMP/board-ls.log" 2>&1 || true
 assert_has "$TMP/board-ls.log" "非标准列布局" "board ls 提示列布局非标准（但不报错）"
-$TEAM task T2.6 --title "third task" --agent dev >/dev/null 2>&1 || true
+$TEAM task T2.6 --title "third task" --category routine --agent dev >/dev/null 2>&1 || true
 assert_has "$REPO/docs/team/BOARD.md" "| T2.6 |" "新行按现有列数对齐写入"
 
 # ③ 里程碑/结项报告不算待复验
@@ -2799,13 +2813,13 @@ section "6e · erp 实测反馈（render & / GitLab 头 / pi PATH / 非任务报
 
 # ③ 模板渲染不能吃掉 &&（bash 5.2+ 的 patsub_replacement 会把 & 变成“命中文本”）
 BRENDER="$TMP/renderer-repo"; mkdir -p "$BRENDER"; ( cd "$BRENDER" && git init -q -b main && git config user.email a@b && git config user.name a && echo x > a && git add -A && git commit -qm init )
-( cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --session "teamsmith-smoke-render-$$" --agents dev --gates "pnpm test && pnpm lint" >/dev/null 2>&1 ) || true
+( cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --session "teamsmith-smoke-render-$$" --agents dev --gates "pnpm test && pnpm lint" "${P235_MODELS[@]}" >/dev/null 2>&1 ) || true
 assert_has "$BRENDER/.pi/team/config.sh" 'TEAM_GATES="pnpm test && pnpm lint"' "init 原样写入含 && 的 TEAM_GATES"
 assert_eq "渲染后没有占位符残留" "$(grep -c '{{GATES}}' "$BRENDER/.pi/team/config.sh" || true)" "0"
 assert_eq "渲染结果可安全 source（值与入参一致）" \
   "$(env TEAM_ROOT=$BRENDER SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; team_load_config; printf "%s" "$TEAM_GATES"')" "pnpm test && pnpm lint"
 assert_eq "含 shell 特殊字符也不会被当代码执行" \
-  "$(cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --force --session "teamsmith-smoke-render-$$" --agents dev --gates 'a && echo PWNED `id` $HOME' >/dev/null 2>&1; env TEAM_ROOT=$BRENDER SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; team_load_config; printf "%s" "$TEAM_GATES"')" 'a && echo PWNED `id` $HOME'
+  "$(cd "$BRENDER" && bash "$SKILL_DIR/scripts/team" init --force --session "teamsmith-smoke-render-$$" --agents dev --gates 'a && echo PWNED `id` $HOME' "${P235_MODELS[@]}" >/dev/null 2>&1; env TEAM_ROOT=$BRENDER SK="$SKILL_DIR" bash -c '. "$SK/scripts/lib/common.sh"; team_load_config; printf "%s" "$TEAM_GATES"')" 'a && echo PWNED `id` $HOME'
 
 # ① forge 透传/包装已移除（token 只作为项目配置，PM 直接用真实工具）
 assert_has "$SKILL_DIR/references/protocol.md" "real tools" "protocol 说明写操作用真实工具"
@@ -2853,15 +2867,17 @@ assert_has "$TMP/print.log" "--session-id $SESSION-dev" "默认命令仍带 --se
 assert_has "$TMP/print.log" "--skill" "默认命令仍带 --skill（Pi 路径不变）"
 
 # ② 自定义模板：渲染成可读的单行命令，不留占位符
-APLACE='myagent run --model {model} --prov {provider} --dir {cwd} --sid {session_id} --prompt {prompt} --file {prompt_file} --skill {skill_dir} {extra_args}'
+# F5：身份占位符必须由对应 selector 消费（--provider/--session-id）；未知 arity 的自定义开关排在
+# 身份组之后才可证明。渲染断言（model/provider/cwd/session/skill/prompt_file/prompt）一条不减。
+APLACE='myagent run --model {model} --provider {provider} --session-id {session_id} {extra_args} --dir {cwd} --prompt {prompt} --file {prompt_file} --skill {skill_dir}'
 env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-custom.log" 2>&1 \
   || { bad "自定义 adapter 的 dispatch --print 失败"; cat "$TMP/print-custom.log"; }
 grep -m1 '^cd ' "$TMP/print-custom.log" > "$TMP/cmdline-custom.log" || true
 assert_file "$TMP/cmdline-custom.log" "--print 给出了完整命令（cd … && <cmd>）"
 assert_has "$TMP/cmdline-custom.log" "myagent run --model deepseek-flash" "{model} 渲染成模型名"
-assert_has "$TMP/cmdline-custom.log" "--prov deepseek" "{provider} 渲染成 provider"
+assert_has "$TMP/cmdline-custom.log" "--provider deepseek" "{provider} 渲染成 provider"
 assert_has "$TMP/cmdline-custom.log" "--dir $REPO/.worktrees/dev" "{cwd} 渲染成 agent worktree"
-assert_has "$TMP/cmdline-custom.log" "--sid $SESSION-dev" "{session_id} 渲染成 teamsmith session id"
+assert_has "$TMP/cmdline-custom.log" "--session-id $SESSION-dev" "{session_id} 渲染成 teamsmith session id"
 assert_has "$TMP/cmdline-custom.log" "--skill $SKILL_DIR" "{skill_dir} 渲染成 skill 目录"
 assert_has "$TMP/cmdline-custom.log" "$REPO/.pi/team/state/prompt-dev-T1.1.md" "{prompt_file} 指向落盘的提示词"
 assert_has "$TMP/cmdline-custom.log" '--prompt "$0"' "{prompt} 展开成窗口 harness 的 argv[0]（提示词不进命令行）"
@@ -3090,13 +3106,16 @@ m32_expect_fail "F6 多行模板"          "myagent {prompt}"$'\n'"touch $M32_MA
 assert_not_file "$M32_MARK" "F6：多行模板的第二行没有机会被窗口 shell 执行"
 assert_has "$TMP/m32-bad-sp.log" "TEAM_AGENT_CMD" "F4 的报错点名配置键"
 assert_has "$TMP/m32-bad-sp.log" "{cwd}" "F4 的报错列出支持的占位符"
-# 合法写法不能被误伤：JSON body / awk 程序 / ${HOME} / 两个占位符相邻
-if env TEAM_AGENT_CMD='myagent {prompt} -d {"a":1}' TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-json.log" 2>&1; then
-  ok "JSON body 里的花括号不被当成占位符"
-else bad "JSON body 被误判成畸形占位符"; cat "$TMP/m32-json.log"; fi
-if env TEAM_AGENT_CMD='myagent {prompt} ${HOME} {cwd}{prompt_file}' TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-env.log" 2>&1; then
-  ok "\${HOME} 与相邻占位符都能通过校验"
-else bad "合法的 \${HOME}/相邻占位符被误判"; cat "$TMP/m32-env.log"; fi
+# 合法写法不能被误伤：quoted 的 JSON body 与相邻占位符照旧接受；未引用的花括号 / shell 展开按已
+# 接受的窄 literal grammar 拒绝（原「一律接受」的断言改成「拒绝并点名规则」+ 合法形式仍接受）。
+if env TEAM_AGENT_CMD="myagent {prompt} -d '{\"a\":1}'" TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-json.log" 2>&1; then
+  ok "quoted JSON body 里的花括号是 literal 数据，不被当成占位符"
+else bad "quoted JSON body 被误判成畸形占位符"; cat "$TMP/m32-json.log"; fi
+m32_expect_fail "F3 未引用的 JSON body" 'myagent {prompt} -d {"a":1}' "$TMP/m32-json-bare.log" "brace expansion"
+if env TEAM_AGENT_CMD='myagent {prompt} {cwd}{prompt_file}' TEAM_AGENT_BIN=bash $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-env.log" 2>&1; then
+  ok "两个占位符相邻也能通过校验"
+else bad "相邻占位符被误判"; cat "$TMP/m32-env.log"; fi
+m32_expect_fail "F3 shell 展开 \${HOME}" 'myagent {prompt} ${HOME}' "$TMP/m32-home.log" "expansion"
 # nit：{extra_args} 的值只插一次，不会被当模板再扫一遍
 env TEAM_EXTRA_PI_ARGS='--x {cwd}' TEAM_AGENT_CMD='myagent {prompt} {extra_args}' TEAM_AGENT_BIN=bash \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m32-extra.log" 2>&1 || true
@@ -3141,7 +3160,8 @@ bash "\$skill/scripts/team" notify pm "$ADAPTER_ID 完成：非 Pi adapter 跑�
 printf 'done\n' > "$ADAPTER_DONE"
 EOF
   chmod +x "$FAKE/fake-agent.sh"
-  ACMD="$FAKE/fake-agent.sh {cwd} {session_id} {prompt_file} {skill_dir}"
+  # F5：裸 {session_id} 不会被当作身份绑定；用 --session-id 消费它（断言仍查真实渲染值）。
+  ACMD="$FAKE/fake-agent.sh --session-id {session_id} {cwd} {prompt_file} {skill_dir}"
   # 任务书必须在项目内（M6.3 F15 的守卫）；放 state/ 而不是 docs/team/tasks/，
   # 这样 T1.2 的报告仍然按「非任务报告」被忽略 —— 不改变本节之外的 pending 计数。
   mkdir -p "$REPO/.pi/team/state"
@@ -3434,19 +3454,31 @@ section "6i · PM adapter（任意 TUI agent 当 PM）：默认不变 / 模板 /
 
 # 在夹具仓库里跑一段 bash（新进程）：TEAM_* 赋值在 source/team_load_config **之前** export，
 # 所以既不污染 smoke 自己的环境，又能覆盖夹具配置（环境变量优先于 config.sh）。
+# cmd-*.sh 一起装进来（和产品自己的 `panel/draft-send.sh` 同一套加载顺序）：模型的合法性验证器
+# 住在 cmd-config.sh，而 team_pm_launch_cmd → team_model_policy_guard 会用它 —— 只装 common.sh
+# 时那个函数不存在，模型预检会把合法策略误报成非法（P235 实测）。
 pm_bash() { # <bash 片段> [VAR=VALUE …]
   local body="$1"; shift
   ( cd "$REPO" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
-      bash -c 'for _a in "$@"; do export "$_a"; done; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_load_config >/dev/null 2>&1; '"$body" _ "$@" )
+      bash -c 'for _a in "$@"; do export "$_a"; done; . "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$body" _ "$@" )
 }
 pm_probe() { pm_bash "$@"; }
 # 渲染 PM 启动命令（默认/模板都走同一个 team_pm_launch_cmd）
 pm_render() { # <prompt_file> [<spawn_file>] [VAR=VALUE …]
   local pf="$1" sp="${2:-/tmp/never.spawn}"; shift 2 2>/dev/null || shift "$#"
+  # P235/S2：身份守卫要求当前 model/resume_key 与已发布的记录一致。渲染前按同一批环境变量发布一份
+  # （续跑档）记录，使断言仍然测的是渲染本身，而不是守卫。
+  pm_bash 'team_pm_metadata_publish smoke-render' 'TEAM_PM_FRESH_LAUNCH=0' "$@" >/dev/null 2>&1
   pm_bash 'team_pm_launch_cmd "'"$pf"'" "'"$sp"'"' "$@"
 }
 PM_PF="$REPO/.pi/team/state/pm-prompt.md"
 PM_SPAWN="$REPO/.pi/team/state/pm.pid.spawn"
+# P235/S2：续跑渲染前必须先有一份 PM 身份记录（model/resume_key），否则 team_pm_identity_guard 会
+# 把合法渲染判成 missing/changed —— 夹具用产品自己的发布函数写一份**续跑档**记录（
+# fresh 档会反过来把默认/续跑渲染全判成 missing/changed），与 routing 测试同一套路。
+pm_bash 'team_pm_metadata_publish smoke-fixture' 'TEAM_PM_FRESH_LAUNCH=0' >/dev/null 2>&1 \
+  && ok "M8.1 夹具：PM 身份记录已写入（续跑渲染的前提）" \
+  || bad "M8.1 夹具：PM 身份记录写入失败（渲染会全红）"
 PM_SUPPORT="$(pm_probe 'team_agent_placeholders pm' "TEAM_PI_BIN=$FAKE/pi" | tr '\n' ' ')"
 PM_SUPPORT="${PM_SUPPORT% }"
 
@@ -3485,12 +3517,14 @@ assert_has_echo "$RESUME_CMD" " --continue " "显式 TEAM_PM_RESUME_ARGS 替换�
 case "$RESUME_CMD" in *' -c '*) bad "显式 resume 参数下仍带 -c";; *) ok "显式 resume 参数下没有多余的 -c";; esac
 
 # ② 模板：同一个占位符引擎（PM 专有 {resume_args}），提示词仍走文件 + argv[0]
-PM_TPL='mycli run --model {model} --prov {provider} --dir {cwd} --pf {prompt_file} --ask {prompt} --skill {skill_dir} {resume_args} {extra_args}'
+# F5：PM 身份占位符同样必须绑到 --provider/--model；未知 arity 的自定义开关排在
+# {resume_args}/{extra_args} 之后（排在它们之前会被守卫按「可能吞掉身份/恢复参数」拒绝）。
+PM_TPL='mycli run --model {model} --provider {provider} {resume_args} {extra_args} --dir {cwd} --pf {prompt_file} --ask {prompt} --skill {skill_dir}'
 TPL_CMD="$(pm_render "$PM_PF" "$PM_SPAWN" "TEAM_PI_BIN=$FAKE/pi" "TEAM_PM_CMD=$PM_TPL" 'TEAM_PM_BIN=bash' 'TEAM_PM_MODEL=demo/demo-model' \
   'TEAM_PM_RESUME_ARGS=--continue' 'TEAM_PM_EXTRA_PI_ARGS=--verbose' 'TEAM_EXTRA_PI_ARGS=--worker-only')"
 assert_has_echo "$TPL_CMD" "mycli run" "模板被展开成一条命令"
 assert_has_echo "$TPL_CMD" "--model demo-model" "{model} 渲染成模型名"
-assert_has_echo "$TPL_CMD" "--prov demo" "{provider} 渲染成 provider"
+assert_has_echo "$TPL_CMD" "--provider demo" "{provider} 渲染成 provider"
 assert_has_echo "$TPL_CMD" "--dir $REPO" "{cwd} 是主工作树（PM 的 cwd）"
 assert_has_echo "$TPL_CMD" "--pf $PM_PF" "{prompt_file} 指向落盘的 PM 提示词"
 assert_has_echo "$TPL_CMD" '--ask "$0"' "{prompt} 展开成窗口 harness 的 argv[0]（提示词不进命令行）"
@@ -3901,19 +3935,19 @@ assert_eq "M8.2 夹具有效：登录 bash 看不到 $M82_BARE_DIR（否则下�
 assert_eq "M8.2 夹具有效：调用者 PATH 看得到它" \
   "$(env PATH="$M82_BARE_DIR:$PATH" bash -c 'command -v worker-bare || echo MISSING')" "$M82_BARE_DIR/worker-bare"
 env PATH="$M82_BARE_DIR:$PATH" TEAM_AGENT_CMD='worker-bare --pf {prompt_file} --ask {prompt}' \
-  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m82-print-bare.log" 2>&1 \
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print --fresh >"$TMP/m82-print-bare.log" 2>&1 \
   || { bad "M8.2：裸名字的 dispatch --print 失败"; cat "$TMP/m82-print-bare.log"; }
 grep -m1 '^cd ' "$TMP/m82-print-bare.log" > "$TMP/m82-cmdline-bare.log" || true
 assert_has "$TMP/m82-cmdline-bare.log" "$M82_BARE_DIR/worker-bare --pf" "M8.2：裸名字被换成调用者 PATH 解析出的绝对路径"
 assert_not "$TMP/m82-cmdline-bare.log" "&& worker-bare " "M8.2：渲染出的命令不再出现裸名字"
 # 已经是绝对路径的首词原样保留（重复替换/加引号都是回归）
 env TEAM_AGENT_CMD="$M82_BARE_DIR/worker-bare --pf {prompt_file}" TEAM_AGENT_BIN="$M82_BARE_DIR/worker-bare" \
-  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m82-print-abs.log" 2>&1 || true
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print --fresh >"$TMP/m82-print-abs.log" 2>&1 || true
 grep -m1 '^cd ' "$TMP/m82-print-abs.log" > "$TMP/m82-cmdline-abs.log" || true
 assert_has "$TMP/m82-cmdline-abs.log" "$M82_BARE_DIR/worker-bare --pf" "M8.2：已经是绝对路径的首词原样保留"
 # 显式 TEAM_AGENT_BIN 指向**另一个**名字时不改模板（与 PM 侧同一守卫；6f ② 的 myagent+bash 同样守着它）
 env TEAM_AGENT_CMD='myagent run --ask {prompt}' TEAM_AGENT_BIN=bash \
-  $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/m82-print-otherbin.log" 2>&1 || true
+  $TEAM dispatch dev T1.1 "$TASKFILE" --print --fresh >"$TMP/m82-print-otherbin.log" 2>&1 || true
 grep -m1 '^cd ' "$TMP/m82-print-otherbin.log" > "$TMP/m82-cmdline-otherbin.log" || true
 assert_has "$TMP/m82-cmdline-otherbin.log" "myagent run --ask" "M8.2：TEAM_AGENT_BIN 指向别的名字时不改模板首词"
 # 文档契约（一两行就够，但必须和行为同一句话）
@@ -3958,7 +3992,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   mkdir -p "$REPO/.pi/team/state"
   M82_TASK="$REPO/.pi/team/state/$M82_ID-m82-brief.md"
   # P24（B3）：change-less 的任务书要有锚（本节测的是启动证据，不是锚规则）
-  printf '# %s · M8.2 adapter 启动证据\n\ntask: %s\nagent: %s\nanchor: none (infra) — smoke fixture\n' \
+  printf '# %s · M8.2 adapter 启动证据\n\ntask: %s\nagent: %s\ncategory: routine\nanchor: none (infra) — smoke fixture\n' \
     "$M82_ID" "$M82_ID" "$M82_AGENT" > "$M82_TASK"
   M82_DIAG="$REPO/.pi/team/state/dispatch-$M82_AGENT-launch-failed.log"
   # (a) 裸名字：CLI 只存在于调用者 PATH（登录 bash 看不到，① 已证）
@@ -4356,7 +4390,7 @@ M31R="$TMP/m31repo"; rm -rf "$M31R"; mkdir -p "$M31R"
     && echo '# m31' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 M31SES="teamsmith-smoke-m31-$$"
 ( cd "$M31R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$M31SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/m31-init.log" 2>&1 \
+    $TEAM init --session "$M31SES" --agents dev --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m31-init.log" 2>&1 \
   && ok "M31 夹具仓库 init 成功" || bad "M31 夹具仓库 init 失败（见 $TMP/m31-init.log）"
 # 身份隔离（M7.2 纪律）：写盘之前先证明 team 认的是这个临时仓库 + 这个临时 session
 ( cd "$M31R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/m31-paths.json" 2>&1 || true
@@ -4743,10 +4777,10 @@ assert_not "$TMP/review-f14c.log" "强复验证据不完整" "F14c 满足时不�
 RF="$TMP/review-fallback-repo"; mkdir -p "$RF"
 ( cd "$RF" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
   && echo x > README.md && git add -A && git commit -qm init \
-  && bash "$SKILL_DIR/scripts/team" init --session "teamsmith-smoke-fb-$$" --agents dev --gates true >/dev/null 2>&1 ) \
+  && bash "$SKILL_DIR/scripts/team" init --session "teamsmith-smoke-fb-$$" --agents dev --gates true "${P235_MODELS[@]}" >/dev/null 2>&1 ) \
   && ok "F14d 现场：第二个临时项目就绪" || bad "F14d 现场初始化失败"
 git -C "$RF" add -A && git -C "$RF" commit -qm "chore: teamsmith init"
-( cd "$RF" && bash "$SKILL_DIR/scripts/team" task T7.7 --title "fallback" --agent dev >/dev/null 2>&1 )
+( cd "$RF" && bash "$SKILL_DIR/scripts/team" task T7.7 --title "fallback" --category routine --agent dev >/dev/null 2>&1 )
 mkdir -p "$RF/docs/team/reports/T7.7-dev/pkg"
 { printf '# T7.7 · fallback report\n\n'
   printf '## Flip evidence\nRed before: guard test failed (see pkg/flip)\nGreen after: guard test passed\n\n'
@@ -4831,7 +4865,7 @@ IFS= read -r line || true
 printf 'control_done=yes\n'
 EOS
     # 另一条 ID（T2.2）→ 独占一份复验记录/日志，不去踩 T1.1 那份
-    ( cd "$REPO" && $TEAM task T2.2 --title "M25 后台进程组" --agent dev ) >/dev/null 2>&1 || true
+    ( cd "$REPO" && $TEAM task T2.2 --title "M25 后台进程组" --category routine --agent dev ) >/dev/null 2>&1 || true
     M25_GATE_LOG="$REPO/docs/team/reviews/T2.2-verify.log"
     # 关键：命令**带 & 敲进交互式 shell** —— 只有交互式 shell 的 & 才给后台作业新建进程组。
     # （脚本内部的 & 不建进程组，读 tty 不会被停住 —— 那样这里就会假绿。）
@@ -6121,7 +6155,7 @@ git -C "$REPO" worktree remove --force "$F4WT" >/dev/null 2>&1 || true
 
 # F6：任务 id 里可以带 '-'（API-2）。老实现用「第一个 '-' 前」当 id，于是 reports/API-2-dev.md 被
 # 当成 id=API 的报告（标题对不上）→ 掉进「忽略的非任务报告」，永远不变成「待复验」。
-$TEAM task API-2 --title "add the api-2 endpoint" --agent dev >"$TMP/f6-task.log" 2>&1 \
+$TEAM task API-2 --title "add the api-2 endpoint" --category routine --agent dev >"$TMP/f6-task.log" 2>&1 \
   && ok "F6 夹具：team task API-2（id 自带 '-'）" || bad "F6 夹具 team task 失败"
 mkdir -p "$REPO/docs/team/reports/API-2-dev"
 printf '%s\n' '# API-2 · add the api-2 endpoint' '' 'agent: dev   status: DONE' '' '## Deliverables' '' '- endpoint' \
@@ -6211,7 +6245,7 @@ section "11i · 信号诚实：报告草稿不指 review、squash 合并不喊 p
 # 里摘录报告，所以那个信号「早于可操作」。
 C43WT="$REPO/.worktrees/m43c"
 C43BR="task/M43C-demo"
-$TEAM task M43C --title "report draft demo" --agent dev >/dev/null 2>&1 || true
+$TEAM task M43C --title "report draft demo" --category routine --agent dev >/dev/null 2>&1 || true
 git -C "$REPO" worktree add -q -b "$C43BR" "$C43WT" main >/dev/null 2>&1 || true
 mkdir -p "$C43WT/docs/team/reports"
 printf '# M43C · report draft demo\n\nagent: dev   status: DONE\n\n## Deliverables\n- draft\n' > "$C43WT/docs/team/reports/M43C-dev.md"
@@ -6326,7 +6360,7 @@ done
 P8E="$TMP/p8-env-repo"; mkdir -p "$P8E"
 ( cd "$P8E" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
   && git commit -q --allow-empty -m init ) >/dev/null 2>&1
-( cd "$P8E" && $TEAM init --session "p8-env-$$" --agents dev ) >"$TMP/p8-env-init.log" 2>&1 \
+( cd "$P8E" && $TEAM init --session "p8-env-$$" --agents dev "${P235_MODELS[@]}" ) >"$TMP/p8-env-init.log" 2>&1 \
   || bad "P8 env 夹具 init 失败（见 $TMP/p8-env-init.log）"
 sed -i '/^TEAM_PULSE_INTERVAL=/d' "$P8E/.pi/team/config.sh"
 ( cd "$P8E" && TEAM_WATCH_INTERVAL=17 $TEAM pulse status ) >"$TMP/p8-e1.log" 2>&1 || true
@@ -6390,7 +6424,7 @@ elif [ "${HAVE_TMUX:-0}" = "1" ]; then
   P8A="$TMP/p8-migA-repo"; mkdir -p "$P8A"
   ( cd "$P8A" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
     && git commit -q --allow-empty -m init ) >/dev/null 2>&1
-  ( cd "$P8A" && $TEAM init --session "p8-migA-$$" --agents dev ) >"$TMP/p8-migA-init.log" 2>&1 \
+  ( cd "$P8A" && $TEAM init --session "p8-migA-$$" --agents dev "${P235_MODELS[@]}" ) >"$TMP/p8-migA-init.log" 2>&1 \
     || bad "P8 迁移夹具 A init 失败（见 $TMP/p8-migA-init.log）"
   sed -i 's/^TEAM_PULSE_WINDOW="pulse"/TEAM_WATCH_WINDOW="watchdog"/' "$P8A/.pi/team/config.sh"
   ( cd "$P8A" && $TEAM pulse up ) >"$TMP/p8-a-up.log" 2>&1 || { bad "夹具 A pulse up 失败"; cat "$TMP/p8-a-up.log"; }
@@ -6408,7 +6442,7 @@ elif [ "${HAVE_TMUX:-0}" = "1" ]; then
   P8B="$TMP/p8-migB-repo"; mkdir -p "$P8B"
   ( cd "$P8B" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
     && git commit -q --allow-empty -m init ) >/dev/null 2>&1
-  ( cd "$P8B" && $TEAM init --session "p8-migB-$$" --agents dev ) >"$TMP/p8-migB-init.log" 2>&1 \
+  ( cd "$P8B" && $TEAM init --session "p8-migB-$$" --agents dev "${P235_MODELS[@]}" ) >"$TMP/p8-migB-init.log" 2>&1 \
     || bad "P8 迁移夹具 B init 失败（见 $TMP/p8-migB-init.log）"
   tmux new-session -d -s "p8-migB-$$" -n pm -x 200 -y 50
   tmux new-window -t "p8-migB-$$" -n watchdog -d -- bash -c 'while :; do sleep 5; done'
@@ -8935,7 +8969,7 @@ MDOC="$SKILL_DIR/references/migration.md"
 M71="$TMP/m71-repo"; rm -rf "$M71"; mkdir -p "$M71"
 ( cd "$M71" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
   && git commit -q --allow-empty -m init )
-( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >"$TMP/m71-init.log" 2>&1 \
+( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m71-init.log" 2>&1 \
   || bad "夹具 init 失败（见 $TMP/m71-init.log）"
 {
   printf 'TEAM_PI_SETTINGS_FILE="%s"\n' "$M51_AGENT/settings.json"
@@ -8956,10 +8990,10 @@ assert_has "$TMP/m71-doctor-legacy.log" "旧名标记" "指引说明的是标记
 assert_eq "指引只打一行" "$(grep -c 'references/migration.md' "$TMP/m71-doctor-legacy.log")" "1"
 
 # ② init 就地改写旧标记（幂等、单块），指引随之消失
-( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >/dev/null 2>&1
 assert_eq "init 改掉了旧标记" "$(grep -cF '<!-- pi-team:begin -->' "$M71/AGENTS.md")" "0"
 assert_eq "改写后协议段只有一块" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
-( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+( cd "$M71" && $TEAM init --session m71-fixture --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >/dev/null 2>&1
 assert_eq "再 init 一次仍然只有一块（幂等）" "$(grep -cF '<!-- teamsmith:begin -->' "$M71/AGENTS.md")" "1"
 ( cd "$M71" && $TEAM doctor ) >"$TMP/m71-doctor-after.log" 2>&1
 assert_not "$TMP/m71-doctor-after.log" "references/migration.md" "标记迁移后指引消失"
@@ -9350,9 +9384,9 @@ P16_TPL_HITS="$(grep -rn 'teamsmith-init' "$SKILL_DIR/templates/config.sh.tmpl" 
 P16_R="$TMP/p16-repo"; rm -rf "$P16_R"; mkdir -p "$P16_R"
 ( cd "$P16_R" && git init -q -b main && git config user.email p16@x && git config user.name p16 \
   && printf '# p16 zero-change fixture\n' > README.md && git add -A && git commit -qm init )
-( cd "$P16_R" && $TEAM init --session "teamsmith-p16-$$" --agents dev --vcs local --gates "true" --docs docs/team ) \
+( cd "$P16_R" && $TEAM init --session "teamsmith-p16-$$" --agents dev --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) \
   >"$TMP/p16-init.log" 2>&1 || bad "P16 夹具 init 失败（见 $TMP/p16-init.log）"
-( cd "$P16_R" && $TEAM task T1.1 --title "p16 zero change" --agent dev ) >"$TMP/p16-task.log" 2>&1 || true
+( cd "$P16_R" && $TEAM task T1.1 --title "p16 zero change" --category routine --agent dev ) >"$TMP/p16-task.log" 2>&1 || true
 # P24（B3）：change-less 的任务书要有锚（本节测的是 init skill 的零改动）
 ( cd "$P16_R" && sed -i 's|^anchor: -.*$|anchor: none (infra) — smoke fixture|' docs/team/tasks/T1.1-*.md ) 2>/dev/null || true
 ( cd "$P16_R" && $TEAM add-agent dev --create --no-install ) >"$TMP/p16-add.log" 2>&1 || true
@@ -10427,7 +10461,7 @@ M98="$TMP/m98repo"; rm -rf "$M98"; mkdir -p "$M98"
     && echo '# m98' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 M98SES="teamsmith-smoke-m98-$$"
 ( cd "$M98" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$M98SES" --agents dev --vcs local --gates "true" --docs docs/team ) >"$TMP/m98-init.log" 2>&1 \
+    $TEAM init --session "$M98SES" --agents dev --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m98-init.log" 2>&1 \
   && ok "M9.8 夹具仓库 init 成功" || bad "M9.8 夹具仓库 init 失败（见 $TMP/m98-init.log）"
 ( cd "$M98" && git add -A && git commit -qm "chore: m98 init" ) >/dev/null 2>&1
 
@@ -10538,7 +10572,7 @@ M98B="$TMP/m98repo2"; rm -rf "$M98B"; mkdir -p "$M98B"
 ( cd "$M98B" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
     && echo '# m98b' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 ( cd "$M98B" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "teamsmith-smoke-m98b-$$" --agents dev --vcs local --gates "true" --docs docs/team ) >"$TMP/m98b-init.log" 2>&1
+    $TEAM init --session "teamsmith-smoke-m98b-$$" --agents dev --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m98b-init.log" 2>&1
 ( cd "$M98B" && git add -A && git commit -qm "chore: m98b init" ) >/dev/null 2>&1
 m98b() { ( cd "$M98B" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
 for i in A B C D E; do
@@ -10686,7 +10720,7 @@ mkdir -p "$P10R"
   && echo "# p10" > README.md && git add -A && git commit -qm init )
 p10() { ( cd "$P10R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
             -u TEAM_PULSE_WINDOW -u TEAM_WATCH_WINDOW -u TEAM_STATE_DIR -u TEAM_JS_BIN -u TEAM_REQUIRE_JS "$@" ); }
-p10 $TEAM init --session "$P10SESS" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/p10-init.log" 2>&1 \
+p10 $TEAM init --session "$P10SESS" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$TMP/p10-init.log" 2>&1 \
   && ok "26 夹具：沙盒 init 退出码 0" || { bad "26 夹具：init 失败"; tail -3 "$TMP/p10-init.log"; }
 mkdir -p "$P10R/openspec"
 
@@ -11308,7 +11342,7 @@ mkdir -p "$P10_TICKR"
 ( cd "$P10_TICKR" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
   && echo "# tick" > README.md && git add -A && git commit -qm init )
 ( cd "$P10_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "teamsmith-smoke-p10t-$$" --agents dev --vcs local --gates "true" --docs docs/team ) >/dev/null 2>&1
+    $TEAM init --session "teamsmith-smoke-p10t-$$" --agents dev --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >/dev/null 2>&1
 p10t() { ( cd "$P10_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
             -u TEAM_STATE_DIR -u TEAM_JS_BIN -u TEAM_REQUIRE_JS -u TEAM_MONITOR_ACTIVITY -u TEAM_MONITOR_UI \
             -u TEAM_AGENT_LOG_GLOB "$@" ); }
@@ -11610,7 +11644,7 @@ mkdir -p "$P27R"
 p27() { ( cd "$P27R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
             -u TEAM_STATE_DIR -u TEAM_JS_BIN -u TEAM_REQUIRE_JS -u TEAM_MONITOR_ACTIVITY -u TEAM_MONITOR_UI \
             -u TEAM_AGENT_LOG_GLOB "$@" ); }
-p27 $TEAM init --session "$P27SESS" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$TMP/p27-init.log" 2>&1 \
+p27 $TEAM init --session "$P27SESS" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$TMP/p27-init.log" 2>&1 \
   && ok "27 夹具：沙盒 init 退出码 0" || { bad "27 夹具：init 失败"; tail -3 "$TMP/p27-init.log"; }
 mkdir -p "$P27R/openspec" "$P27R/.pi/team/state" "$P27R/docs/team/reports" "$P27R/docs/team/reviews"
 printf '2026-01-01T00:00:01Z RAM 可用 4000MB ｜ 磁盘 swap 空闲 3000MB ｜ 估算可再加 5 个 agent\n' \
@@ -12125,7 +12159,7 @@ case ",$P28HD_EMPTY," in
 esac
 
 
-# ---------------------------------------------------------------- 29. 派单模型解析：配置压过名册旧记录（M14）
+# ---------------------------------------------------------------- 29. 派单模型解析：映射管新选择，已提交的记录管续跑（M14）
 # 契约（真实事故：TEAM_AGENT_MODELS 已配 dev=kimi-coding/k3-256k，dispatch 仍按名册 state 里的
 # deepseek 旧记录启动 —— 旧实现 model="${model:-$(state_get model (config))}" 让旧记录赢了配置）：
 #   ① 解析顺序 = --model 显式 ＞ 配置（TEAM_AGENT_MODELS per-agent ＞ TEAM_DEFAULT_MODEL）；
@@ -12820,14 +12854,14 @@ p28k_render "$TMP/p28m-focus.txt" 99 32 "boardFold=todo"
 assert_eq "28-m 聚焦折叠行：光标也在第 1 列（与聚焦卡片同列）、标记第 3 列、恰好一个光标、车道头不动" \
   "$(p28m_align "$TMP/p28m-focus.txt" focus)" "ok"
 
-section "29 · 派单模型解析：配置压过名册旧记录（M14）"
+section "29 · 派单模型解析：映射管新选择，已提交的记录管续跑（M14）"
 
 M14R="$TMP/m14repo"; rm -rf "$M14R"; mkdir -p "$M14R"
 ( cd "$M14R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
     && echo '# m14' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 M14SES="teamsmith-smoke-m14-$$"
 ( cd "$M14R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$M14SES" --agents dev --vcs local --gates "true" --docs docs/team ) >"$TMP/m14-init.log" 2>&1 \
+    $TEAM init --session "$M14SES" --agents dev --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m14-init.log" 2>&1 \
   && ok "M14 夹具仓库 init 成功" || bad "M14 夹具仓库 init 失败（见 $TMP/m14-init.log）"
 ( cd "$M14R" && git add -A && git commit -qm "chore: m14 init" ) >/dev/null 2>&1
 
@@ -12845,7 +12879,7 @@ m14_lib() { # <函数> [参数…]：按 CLI 的方式加载库后调用（展�
 }
 
 # 任务 + 工作树（dispatch --print 的最低现场）
-m14 $TEAM task M14X --title "M14 fixture" --agent dev --deps "-" >"$TMP/m14-task.log" 2>&1 \
+m14 $TEAM task M14X --title "M14 fixture" --category routine --agent dev --deps "-" >"$TMP/m14-task.log" 2>&1 \
   && ok "M14 夹具：task 建好" || bad "M14 夹具：task 失败（见 $TMP/m14-task.log）"
 M14TASK="$(ls "$M14R"/docs/team/tasks/M14X-*.md 2>/dev/null | head -1)"
 # P24（B3）：change-less 的任务书要有锚（本节测的是模型的解析优先级）
@@ -12857,62 +12891,63 @@ M14BR="$(m14_lib team_branch_for_agent dev M14X)"
 git -C "$M14WT" switch -c "$M14BR" main >/dev/null 2>&1 || git -C "$M14WT" switch "$M14BR" >/dev/null 2>&1
 assert_eq "M14 夹具：工作树停在任务分支上" "$(git -C "$M14WT" rev-parse --abbrev-ref HEAD)" "$M14BR"
 
-# 主现场：名册 state 里躺着一条旧记录（换配置之前派的），配置已经指向新模型
-printf 'model=vendor-legacy/model-old\nwindow=dev\nworktree=%s\n' "$M14WT" > "$M14R/.pi/team/state/dev.env"
-sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS="dev=vendor-a/model-a"|' "$M14R/.pi/team/config.sh"
+# 主现场（P235 重指向）：席位手上躺着一条**完整**的旧派单记录（换映射之前派的），映射已指向新模型。
+# 新模型的两半在这里各得其所：同一任务的**续跑**保留已提交的启动身份（映射改不了它）；
+# 没有完整记录的新选择才看映射。（旧写法：半条记录 + TEAM_AGENT_MODELS —— 两者都随席位模型退休）
+smoke_assignment "$M14R" dev M14X routine "$M14BR" vendor-legacy/model-old m14-smoke-dev policy "$M14TASK"
+sed -i 's|^TEAM_TASK_MODELS=.*|TEAM_TASK_MODELS="routine=vendor-a/model-a"|' "$M14R/.pi/team/config.sh"
 
-# ① 配置 dev=A → 渲染出 A；名册旧记录不参与
+# ① 同任务续跑 → 保留记录里的启动身份（不是映射里的 A，也不是名册里的新值）
 m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-a.log" 2>&1 \
-  && ok "M14-①：配置 dev=vendor-a 时 dispatch --print 退出码 0" || bad "M14-①：dispatch --print 失败（见 $TMP/m14-a.log）"
-assert_has "$TMP/m14-a.log" "--provider vendor-a --model model-a" "M14-①：渲染出配置给的模型 A"
-assert_not "$TMP/m14-a.log" "model-old" "M14-①：名册里的旧记录没有参与解析"
+  && ok "M14-①：完整记录的同任务派单退出码 0" || bad "M14-①：dispatch --print 失败（见 $TMP/m14-a.log）"
+assert_has "$TMP/m14-a.log" "--provider vendor-legacy --model model-old" "M14-①：续跑保留已提交的启动身份"
+assert_not "$TMP/m14-a.log" "model-a" "M14-①：映射不改写已提交的分配"
 
-# ② 配置改成 dev=B → 下一次渲染立即出 B（state 原封不动，不需要先清）
-sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS="dev=vendor-b/model-b"|' "$M14R/.pi/team/config.sh"
-m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-b.log" 2>&1 || bad "M14-②：dispatch --print 失败"
-assert_has "$TMP/m14-b.log" "--provider vendor-b --model model-b" "M14-②：配置改动立即影响下一次派单"
-assert_not "$TMP/m14-b.log" "model-old" "M14-②：旧记录仍没有参与"
-assert_not "$TMP/m14-b.log" "model-a" "M14-②：上一个配置值也没有残留"
-
-# ③ --model C 显式传参压过配置与旧记录
-m14 $TEAM dispatch dev M14X "$M14TASK" --print --model vendor-c/model-c >"$TMP/m14-c.log" 2>&1 || bad "M14-③：dispatch --print 失败"
-assert_has "$TMP/m14-c.log" "--provider vendor-c --model model-c" "M14-③：--model 显式传参压过配置"
-assert_not "$TMP/m14-c.log" "model-b" "M14-③：配置值没有赢过显式参数"
-
-# ④ 配置没有 dev 条目 → 落到 TEAM_DEFAULT_MODEL（同样不是名册旧记录）
-sed -i 's|^TEAM_AGENT_MODELS=.*|TEAM_AGENT_MODELS=""|' "$M14R/.pi/team/config.sh"
-M14DEF="$(sed -n 's/^TEAM_DEFAULT_MODEL="\([^"]*\)".*/\1/p' "$M14R/.pi/team/config.sh" | head -1)"
-m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-def.log" 2>&1 || bad "M14-④：dispatch --print 失败"
-assert_has "$TMP/m14-def.log" "--provider ${M14DEF%%/*} --model ${M14DEF##*/}" "M14-④：无 per-agent 条目时落到 TEAM_DEFAULT_MODEL"
-assert_not "$TMP/m14-def.log" "model-old" "M14-④：旧记录仍没有参与"
-
-# ⑤ 展示列的来源标注（名册照写、但要说清是哪来的；此刻 state=vendor-legacy/model-old，配置=默认）
-assert_eq "M14-⑤：旧记录 ≠ 当前配置 → 标「历史记录」" "$(m14_lib team_agent_model_src dev)" "历史记录"
-m14 $TEAM roster >"$TMP/m14-roster-hist.log" 2>&1 && ok "M14-⑤：roster 退出码 0" || bad "M14-⑤：roster 失败"
-assert_has "$TMP/m14-roster-hist.log" "vendor-legacy/model-old·历史记录" "M14-⑤：roster 把旧记录标成「历史记录」（不再冒充当前配置）"
-assert_has "$TMP/m14-roster-hist.log" "下次派单用新配置" "M14-⑤：图例说明「历史记录」的含义"
-# ps 侧同一列（给它一个假会话文件，agent 会话行才会打印；TEAM_PI_AGENT_DIR 钉在 $TMP，绝不碰真 HOME）
-M14PADIR="$TMP/m14-piagent"
-M14SESSDIR="$M14PADIR/sessions/--$(printf '%s' "$M14WT" | sed -e 's|^/||' -e 's|[/\\:]|-|g')--"
-mkdir -p "$M14SESSDIR"
-head -c 4000 /dev/zero | tr '\0' 'x' > "$M14SESSDIR/2026-01-01T00-00-00-000Z_$M14SES-dev.jsonl"
-m14 env TEAM_PI_AGENT_DIR="$M14PADIR" $TEAM ps >"$TMP/m14-ps-hist.log" 2>&1 && ok "M14-⑤：ps 退出码 0" || bad "M14-⑤：ps 失败"
-assert_has "$TMP/m14-ps-hist.log" "vendor-legacy/model-old·历史记录" "M14-⑤：ps 的会话行同样标「历史记录」"
-# 记录与当前配置一致 → 「配置」（老记录没有 model_src 字段也判得对）
-printf 'model=%s\nwindow=dev\nworktree=%s\n' "$M14DEF" "$M14WT" > "$M14R/.pi/team/state/dev.env"
-assert_eq "M14-⑤：记录 == 当前配置 → 标「配置」" "$(m14_lib team_agent_model_src dev)" "配置"
-m14 $TEAM roster >"$TMP/m14-roster-cfg.log" 2>&1
-assert_has "$TMP/m14-roster-cfg.log" "$M14DEF·配置" "M14-⑤：roster 把一致的记录标成「配置」"
-# 上次是 --model 显式派的 → 「显式」（哪怕它与配置不同，来源也要如实说）
-printf 'model=vendor-x/model-x\nmodel_src=explicit\nwindow=dev\nworktree=%s\n' "$M14WT" > "$M14R/.pi/team/state/dev.env"
-assert_eq "M14-⑤：上次 --model 显式 → 标「显式」" "$(m14_lib team_agent_model_src dev)" "显式"
-m14 $TEAM roster >"$TMP/m14-roster-exp.log" 2>&1
-assert_has "$TMP/m14-roster-exp.log" "vendor-x/model-x·显式" "M14-⑤：roster 把显式记录标成「显式」"
-# 没有任何记录 → 展示的就是配置解析 → 「配置」
+# ② 没有完整记录 → 新选择看映射；映射改成 B，下一次立即出 B
+smoke_assignment "$M14R" dev M14X routine "$M14BR" vendor-legacy/model-old m14-smoke-dev policy "$M14TASK"
 rm -f "$M14R/.pi/team/state/dev.env"
-assert_eq "M14-⑤：无记录 → 标「配置」" "$(m14_lib team_agent_model_src dev)" "配置"
+sed -i 's|^TEAM_TASK_MODELS=.*|TEAM_TASK_MODELS="routine=vendor-b/model-b"|' "$M14R/.pi/team/config.sh"
+m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-b.log" 2>&1 || bad "M14-②：dispatch --print 失败"
+assert_has "$TMP/m14-b.log" "--provider vendor-b --model model-b" "M14-②：新选择用映射（改动立即生效）"
+assert_not "$TMP/m14-b.log" "model-old" "M14-②：旧记录不参与新选择"
+assert_not "$TMP/m14-b.log" "model-a" "M14-②：上一个映射值也没有残留"
+
+# ③ --model C 显式传参压过映射
+m14 $TEAM dispatch dev M14X "$M14TASK" --print --model vendor-c/model-c >"$TMP/m14-c.log" 2>&1 || bad "M14-③：dispatch --print 失败"
+assert_has "$TMP/m14-c.log" "--provider vendor-c --model model-c" "M14-③：--model 显式传参压过映射"
+assert_not "$TMP/m14-c.log" "model-b" "M14-③：映射值没有赢过显式参数"
+
+# ④ 类别掉出映射 → 拒绝新选择（旧的 TEAM_DEFAULT_MODEL 兜底已退休），旧记录也不兜底
+sed -i 's|^TEAM_TASK_MODELS=.*|TEAM_TASK_MODELS="analysis=vendor-d/model-d"|' "$M14R/.pi/team/config.sh"
+if m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-def.log" 2>&1; then
+  bad "M14-④：未映射的类别应当拒绝（没有默认模型兜底）"
+else ok "M14-④：未映射的类别 → 拒绝新选择"; fi
+assert_has "$TMP/m14-def.log" "category 未映射：routine" "M14-④：拒绝时点名缺的是哪个类别"
+assert_not "$TMP/m14-def.log" "model-old" "M14-④：旧记录没有变成兜底"
+
+# ⑤ 展示列：席位行显示的是已提交派单的**启动身份**（记录里的模型 + 来源）；半条/无记录就如实说 unavailable
+# （P235：旧的「配置/历史记录/显式」标签与 team_agent_model_src 随席位模型一起退休）
+sed -i 's|^TEAM_TASK_MODELS=.*|TEAM_TASK_MODELS="routine=vendor-a/model-a"|' "$M14R/.pi/team/config.sh"
+smoke_assignment "$M14R" dev M14X routine "$M14BR" vendor-legacy/model-old m14-smoke-dev policy "$M14TASK"
+m14 $TEAM roster >"$TMP/m14-roster-hist.log" 2>&1 && ok "M14-⑤：roster 退出码 0" || bad "M14-⑤：roster 失败"
+assert_has "$TMP/m14-roster-hist.log" "vendor-legacy/model-old·policy/assignment" "M14-⑤：roster 展示记录里的启动身份（模型 + 来源）"
+assert_has "$TMP/m14-roster-hist.log" "M14X" "M14-⑤：roster 同时展示记录里的任务"
+assert_not "$TMP/m14-roster-hist.log" "·配置" "M14-⑤：roster 不再打「配置」这种席位标签（来源只说 assignment/explicit）"
+# 记录与映射一致 → 照旧展示记录里的身份（不再分「配置/历史记录」）
+smoke_assignment "$M14R" dev M14X routine "$M14BR" vendor-a/model-a m14-smoke-dev policy "$M14TASK"
+m14 $TEAM roster >"$TMP/m14-roster-cfg.log" 2>&1
+assert_has "$TMP/m14-roster-cfg.log" "vendor-a/model-a·policy/assignment" "M14-⑤：记录与映射一致时同样展示启动身份"
+# 半条记录不冒充模型来源（展示 unavailable，也进不了派单）
+printf 'model=vendor-a/model-a\nwindow=dev\nworktree=%s\n' "$M14WT" > "$M14R/.pi/team/state/dev.env"
+m14 $TEAM roster >"$TMP/m14-roster-partial.log" 2>&1
+assert_has "$TMP/m14-roster-partial.log" "·unavailable" "M14-⑤：半条记录 → unavailable"
+if m14 $TEAM dispatch dev M14X "$M14TASK" --print >"$TMP/m14-partial.log" 2>&1; then
+  bad "M14-⑤：半条记录应当挡住派单（建议 --fresh）"
+else ok "M14-⑤：半条记录挡住派单"; fi
+# 没有任何记录 → 同样 unavailable
+rm -f "$M14R/.pi/team/state/dev.env"
 m14 $TEAM roster >"$TMP/m14-roster-none.log" 2>&1
-assert_has "$TMP/m14-roster-none.log" "$M14DEF·配置" "M14-⑤：无记录时 roster 直接展示配置解析并标「配置」"
+assert_has "$TMP/m14-roster-none.log" "·unavailable" "M14-⑤：无记录 → unavailable"
 
 # ---------------------------------------------------------------- 30. 代号必须带名字（M16）
 # 契约（用户反馈 2026-09-17：“PM 喜欢只用代号（M2、T1.2）指代事务，但用户不一定记得这些编号”）：
@@ -12930,7 +12965,7 @@ M16R="$TMP/m16repo"; rm -rf "$M16R"; mkdir -p "$M16R"
     && echo '# m16' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 M16SES="teamsmith-smoke-m16-$$"
 ( cd "$M16R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$M16SES" --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >"$TMP/m16-init.log" 2>&1 \
+    $TEAM init --session "$M16SES" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m16-init.log" 2>&1 \
   && ok "M16 夹具仓库 init 成功" || bad "M16 夹具仓库 init 失败（见 $TMP/m16-init.log）"
 
 # 身份隔离（M7.2 纪律）：**写盘之前**先证明 team 认的是这个临时仓库 + 这个临时 session
@@ -14226,7 +14261,7 @@ p24_project() { # <名字> [<agents>] → 打印项目路径（git + team init +
   rm -rf "$p"; mkdir -p "$p"
   ( cd "$p" && git init -q -b main && git config user.email p24@smoke && git config user.name p24 \
       && git commit -q --allow-empty -m "chore: init" ) >/dev/null 2>&1
-  ( cd "$p" && $TEAM init --session "p24-$name" --agents "$agents" --vcs local --gates "true" --docs docs/team ) >"$p/.init.log" 2>&1
+  ( cd "$p" && $TEAM init --session "p24-$name" --agents "$agents" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$p/.init.log" 2>&1
   printf 'TEAM_PI_BIN="/bin/true"\n' >> "$p/.pi/team/config.sh"
   mkdir -p "$p/openspec/specs/panel" "$p/openspec/specs/dispatch"
   printf '### Requirement: The board page is a kanban over the board\x27s states\n' > "$p/openspec/specs/panel/spec.md"
@@ -14929,7 +14964,7 @@ assert_eq "12j P209 归档拷贝全勾 → 0" "$B_TC_RC" "0"
 # ---------------------------------------------------------------- 12k · 模板与文档（B7）
 section "12k · 模板与文档（P24/B7）"
 P24K="$(p24_project 12k)"
-p24_team "$P24K" task T9.9 --title "probe" --agent dev >/dev/null 2>&1
+p24_team "$P24K" task T9.9 --title "probe" --category routine --agent dev >/dev/null 2>&1
 TK="$P24K/docs/team/tasks/T9.9-probe.md"
 assert_file "$TK" "12k 模板渲染出任务书"
 for _k in change specs anchor phase deltas; do
@@ -14997,7 +15032,7 @@ p34() { ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -
             -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
             -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
             "$@" ); }
-p34 $TEAM init --session "smoke-p34-$$" --agents "dev verify" --vcs local --gates "true" --docs docs/team >"$P34D/init.log" 2>&1 \
+p34 $TEAM init --session "smoke-p34-$$" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$P34D/init.log" 2>&1 \
   && ok "34 夹具：沙盒 init 退出码 0" || { bad "34 夹具：init 失败"; tail -3 "$P34D/init.log"; }
 mkdir -p "$P34R/docs/team/reports" "$P34R/docs/team/reviews"
 printf '# T1.1 · 夹具报告\n\nagent: dev\n' > "$P34R/docs/team/reports/T1.1-dev.md"
@@ -15870,7 +15905,7 @@ M50R="$TMP/m50repo"; rm -rf "$M50R"; mkdir -p "$M50R"
     && echo '# m50' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 M50SES="teamsmith-smoke-m50-$$"
 ( cd "$M50R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$M50SES" --agents "dev bob carol" --vcs local --gates "true" --docs docs/team ) >"$TMP/m50-init.log" 2>&1 \
+    $TEAM init --session "$M50SES" --agents "dev bob carol" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/m50-init.log" 2>&1 \
   && ok "M50 夹具仓库 init 成功" || bad "M50 夹具仓库 init 失败（见 $TMP/m50-init.log）"
 ( cd "$M50R" && git add -A && git commit -qm "chore: m50 init" ) >/dev/null 2>&1
 
@@ -17283,7 +17318,7 @@ P76R="$TMP/p76repo"; rm -rf "$P76R"; mkdir -p "$P76R"
     && echo '# p76' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 P76SES="teamsmith-smoke-p76-$$"
 ( cd "$P76R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$P76SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p76-init.log" 2>&1 \
+    $TEAM init --session "$P76SES" --agents dev --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/p76-init.log" 2>&1 \
   && ok "P76 夹具仓库 init 成功" || bad "P76 夹具仓库 init 失败（见 $TMP/p76-init.log）"
 ( cd "$P76R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p76-paths.json" 2>&1 || true
 assert_eq "P76 隔离：team paths 的 main_root 就是 P76 夹具仓库" \
@@ -17541,7 +17576,7 @@ P82R="$TMP/p82repo"; rm -rf "$P82R"; mkdir -p "$P82R"
     && echo '# p82' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
 P82_SES="teamsmith-smoke-p82-$$"
 ( cd "$P82R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$P82_SES" --agents "dev dev2 dev3" --vcs local --gates true --docs docs/team ) >"$TMP/p82-init.log" 2>&1 \
+    $TEAM init --session "$P82_SES" --agents "dev dev2 dev3" --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/p82-init.log" 2>&1 \
   && ok "P82 夹具仓库 init 成功" || bad "P82 夹具仓库 init 失败（见 $TMP/p82-init.log）"
 ( cd "$P82R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p82-paths.json" 2>&1 || true
 assert_eq "P82 隔离：team paths 的 main_root 就是 P82 夹具仓库" \
@@ -17890,7 +17925,7 @@ P91R="$TMP/p91repo"; rm -rf "$P91R"; mkdir -p "$P91R/skills"
     && echo '# p91' > README.md && echo 'v1' > skills/x.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
 P91_SES="teamsmith-smoke-p91-$$"
 ( cd "$P91R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$P91_SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p91-init.log" 2>&1 \
+    $TEAM init --session "$P91_SES" --agents dev --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/p91-init.log" 2>&1 \
   && ok "P91 夹具仓库 init 成功" || bad "P91 夹具仓库 init 失败（见 $TMP/p91-init.log）"
 ( cd "$P91R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p91-paths.json" 2>&1 || true
 assert_eq "P91 隔离：team paths 的 main_root 就是 P91 夹具仓库" \
@@ -18143,7 +18178,7 @@ P95R="$TMP/p95repo"; rm -rf "$P95R"; mkdir -p "$P95R/skills"
     && printf 'base-code\n' > skills/a.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
 P95_SES="teamsmith-smoke-p95-$$"
 ( cd "$P95R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "$P95_SES" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p95-init.log" 2>&1 \
+    $TEAM init --session "$P95_SES" --agents dev --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/p95-init.log" 2>&1 \
   && ok "P95 夹具：init 成功" || bad "P95 夹具：init 失败（见 $TMP/p95-init.log）"
 ( cd "$P95R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION $TEAM paths ) >"$TMP/p95-paths.json" 2>&1 || true
 assert_eq "P95 隔离：team paths 的 main_root 就是 P95 夹具仓库" \
@@ -18241,7 +18276,7 @@ P95R3="$TMP/p95repo-unmerged"; rm -rf "$P95R3"; mkdir -p "$P95R3/skills"
 ( cd "$P95R3" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
     && printf 'base\n' > skills/a.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
 ( cd "$P95R3" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "teamsmith-smoke-p95c-$$" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p95c-init.log" 2>&1 \
+    $TEAM init --session "teamsmith-smoke-p95c-$$" --agents dev --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/p95c-init.log" 2>&1 \
   && ok "P95 夹具 C：init 成功" || bad "P95 夹具 C：init 失败（见 $TMP/p95c-init.log）"
 ( cd "$P95R3" && git add -A >/dev/null 2>&1 \
     && git -c user.email=smoke@teamsmith -c user.name=smoke commit -qm "chore: init scaffold" ) >/dev/null 2>&1
@@ -18264,7 +18299,7 @@ P95R2="$TMP/p95repo-agent"; rm -rf "$P95R2"; mkdir -p "$P95R2/skills"
 ( cd "$P95R2" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
     && printf 'base\n' > skills/a.sh && git add -A && git commit -qm init ) >/dev/null 2>&1
 ( cd "$P95R2" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
-    $TEAM init --session "teamsmith-smoke-p95b-$$" --agents dev --vcs local --gates true --docs docs/team ) >"$TMP/p95b-init.log" 2>&1 \
+    $TEAM init --session "teamsmith-smoke-p95b-$$" --agents dev --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$TMP/p95b-init.log" 2>&1 \
   && ok "P95 夹具 B：init 成功" || bad "P95 夹具 B：init 失败（见 $TMP/p95b-init.log）"
 p95b() { ( cd "$P95R2" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION "$@" ); }
 ( cd "$P95R2" && git add -A >/dev/null 2>&1 \
@@ -18567,7 +18602,7 @@ p140_repo() { # <名字> → 全新 git 项目（team init + pi=/bin/true）
   rm -rf "$p"; mkdir -p "$p"
   ( cd "$p" && git init -q -b main && git config user.email p140@smoke && git config user.name p140 \
       && git commit -q --allow-empty -m init ) >/dev/null 2>&1
-  ( cd "$p" && $TEAM init --session "p140-$n" --agents "dev verify" --vcs local --gates true --docs docs/team ) >"$p/.init.log" 2>&1
+  ( cd "$p" && $TEAM init --session "p140-$n" --agents "dev verify" --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" ) >"$p/.init.log" 2>&1
   printf 'TEAM_PI_BIN="/bin/true"\n' >> "$p/.pi/team/config.sh"
   printf '%s\n' "$p"
 }
@@ -18867,7 +18902,7 @@ p139_repo() { # <名> → 最小夹具仓库 + init（日志落 $P139/init-<名>
     && git config user.email smoke@teamsmith && git config user.name smoke \
     && git commit -q --allow-empty -m init \
     && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_MEETINGS_DIR \
-         $TEAM init --session "$name" --agents dev --vcs local --gates true --docs docs/team \
+         $TEAM init --session "$name" --agents dev --vcs local --gates true --docs docs/team  "${P235_MODELS[@]}"\
     && printf 'TEAM_OPENSPEC_BIN="%s"\n' "$FAKE/openspec" >> .pi/team/config.sh ) >"$P139/init-$name.log" 2>&1
 }
 for _p139r in alpha beta lab-repo third notify ticker opener; do p139_repo "$_p139r" || true; done

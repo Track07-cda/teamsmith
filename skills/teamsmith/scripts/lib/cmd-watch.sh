@@ -142,6 +142,7 @@ team_cmd_up() {
   [ "$pm_fresh" = "1" ] && export TEAM_PM_FRESH_LAUNCH=1
 
   if [ "$show_prompt" = "1" ]; then
+    team_pm_identity_guard || return 1
     team_pm_prompt
     # P36（A）：--print 是「看清这一次启动」的地方 —— 会话判定（fresh:/continued:/lost:）与渲染出的
     # 完整命令都要看得见、能断言（有没有 -c 一眼可见）。不写任何状态、不动 tmux。
@@ -156,6 +157,8 @@ team_cmd_up() {
   team_assert_own_session "team up" || team_die "team up 拒绝在「不属于本项目的 session」上动手（见上）"
   team_hdr "teamsmith up · $TEAM_PROJECT（只负责 PM）"
 
+  # Running/starting PM is never restarted by a policy edit. Otherwise guard BEFORE windows.
+  case "$(team_pm_state)" in running:*|starting:*) ;; *) team_pm_identity_guard || return 1 ;; esac
   # 1) tmux 场地：人跑 up 就是明确要求“把工地建起来”，所以这里允许建 session/窗口
   if ! team_tmux_has_session "$TEAM_SESSION"; then
     team_warn "tmux session '$TEAM_SESSION' 不存在：重建"
@@ -179,7 +182,7 @@ team_cmd_up() {
     idle:*)    team_warn "PM 没在跑（空提示符）：启动 $(team_pm_cli_name)"
                team_pm_same_dir_warn
                if team_pm_start; then
-                 team_ok "PM 已启动（cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
+                 team_ok "PM 已启动（cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，$(team_pm_identity_claim)）"
                else
                  pm_fail=1
                  team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 $(team_pm_bin_path)；诊断见 $(team_pm_launch_failed_log)"
@@ -191,7 +194,7 @@ team_cmd_up() {
                team_warn "PM 窗口里有非 PM 进程（${pm_state#unknown:}，cwd=$_ucwd）：不算存活"
                team_pm_same_dir_warn
                if team_pm_start; then
-                 team_ok "PM 已启动（替换了非 PM 进程；cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，model=${TEAM_PM_MODEL:-$TEAM_DEFAULT_MODEL}）"
+                 team_ok "PM 已启动（替换了非 PM 进程；cli=$(team_pm_cli_name)，proof=$(team_pm_proof || echo '?')，$(team_pm_identity_claim)）"
                else
                  pm_fail=1
                  team_err "PM 启动失败：请手动到 $TEAM_SESSION:$TEAM_PM_WINDOW 里跑 $(team_pm_bin_path)；诊断见 $(team_pm_launch_failed_log)"
@@ -237,7 +240,7 @@ team_cmd_up() {
 # ---------------------------------------------------------------- team resume（PM 的工具）
 # 注意：watchdog 不调用这个。agent 的启停由 PM 决定（PM 开场会 --dry-run 看一眼）。
 team_cmd_resume() {
-  local only="" all=1 dry=0 quiet=0
+  local only="" all=1 dry=0 quiet=0 failed=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --agent) only="${2:?}"; all=0; shift 2 ;;
@@ -257,18 +260,26 @@ team_cmd_resume() {
   for a in $(team_agents); do
     [ -n "$only" ] && [ "$a" != "$only" ] && continue
     task="$(team_state_get "$a" task '')"
-    [ -n "$task" ] || continue
+    if [ -z "$task" ]; then
+      if [ -n "$only" ]; then
+        team_err "$a: no recorded assignment to resume；保留磁盘交接后显式 dispatch <task> <brief> --fresh"
+        failed=1
+      fi
+      continue
+    fi
     if team_agent_live "$a"; then live=$((live + 1)); continue; fi
     taskfile="$(team_state_get "$a" taskfile '')"
     if [ ! -f "$taskfile" ]; then
-      team_warn "$a：任务 $task 的任务书不见了（$taskfile）→ 写 thread，跳过"
+      team_warn "$a：任务 $task 的任务书不见了（$taskfile）→ 跳过"
+      failed=1
+      [ "$dry" != 1 ] || continue
       team_cmd_thread "$a" --re "$task" "pulse 想续跑 $task，但任务书 $taskfile 不存在。请 PM 重新生成或改用 --task 指定。" >/dev/null 2>&1 || true
       team_inbox_append "$a" blocked "pulse: 任务书丢失，无法续跑 $task"
       continue
     fi
     n=$((n + 1))
     if [ "$dry" = "1" ]; then
-      printf '  %s 可续跑：%s → %s\n' "$a" "$task" "$taskfile"
+      team_cmd_dispatch "$a" "$task" "$taskfile" --print || failed=1
     else
       team_info "  续跑 $a · $task"
       # M9.3：resume / `up --agents` 与 dispatch 共用同一扇门，而它们派的**永远是这个 agent 自己
@@ -278,6 +289,7 @@ team_cmd_resume() {
         team_wlog "resume agent=$a task=$task"
       else
         # 常见两类：容量/并发排队（正常），或工作树状态不允许（需要 PM 处理）
+        failed=1
         team_warn "$a 续跑没成功：看上面一行原因（容量/并发属正常排队；工作树脏/分支不对要 PM 处理）"
       fi
     fi
@@ -285,7 +297,7 @@ team_cmd_resume() {
   if [ "$n" -eq 0 ]; then
     [ "$quiet" != "1" ] && team_dim "  没有需要续跑的 agent（在跑 $live 个）"
   fi
-  return 0
+  return "$failed"
 }
 
 # ---------------------------------------------------------------- team watch
@@ -396,6 +408,10 @@ team_watch_once() {
     return 0
   fi
 
+  if ! team_pm_identity_guard; then
+    team_wlog "PM continuity blocked；人工 $TEAM_CLI up --fresh-pm；不计 attempt/restart，不建窗"
+    return 0
+  fi
   # ③c 有待办但 PM 没在跑 → 把它拉起来（除非 tmux 场地不在且不允许重建）
   #     idle（空提示符）与 unknown（本项目里的非 PM 占用者）都算「没有 PM」；foreign 不碰。
   case "$st" in
@@ -823,7 +839,7 @@ team_panel_activity_json() { # <1|0> <events>
   # 本 session 里没有任何窗口 → 不翻别人的会话（也不给 monitor.mjs 传空 --only，那等于「全都要」）
   [ -n "$only" ] || { printf '[]'; return 0; }
   [ -n "${TEAM_AGENT_LOG_GLOB:-}" ] && g=(--log-glob "$TEAM_AGENT_LOG_GLOB")
-  out="$("$runner" "$js" --root "$TEAM_MAIN_ROOT" --only "$only" --events "$events" \
+  out="$("$runner" "$js" --root "$TEAM_MAIN_ROOT" --state-dir "$TEAM_STATE_DIR" --only "$only" --events "$events" \
         ${g[@]+"${g[@]}"} --json 2>/dev/null || true)"
   case "${out:-}" in
     \[*) printf '%s' "$out" ;;

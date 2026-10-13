@@ -9,8 +9,8 @@ The shortest path for a new project (or a PM taking over a repository for the fi
 ## In one line
 
 ```bash
-bash <skill>/scripts/team bootstrap              # idempotent; detects the current tmux session/window
-bash <skill>/scripts/team bootstrap --agents "dev verify api"   # custom roster
+bash <skill>/scripts/team bootstrap --task-models '<category=provider/model …>' --pm-model '<provider/model>'   # fresh project: both model inputs are required
+bash <skill>/scripts/team bootstrap --agents "dev verify api" --task-models 'routine=vendor/light analysis=vendor/strong' --pm-model 'vendor/strong:high'
 bash <skill>/scripts/team bootstrap --print      # print the plan, change nothing
 ```
 
@@ -22,7 +22,8 @@ Or hand the contents of `templates/bootstrap-prompt.md.tmpl` (placeholders subst
 | Step | Result | Idempotence |
 |---|---|---|
 | Detect tmux | adopts the `session:window` the PM itself runs in and writes it into the config (no manual fill-in) | recomputed every run |
-| Write config | `.pi/team/config.sh` (identity/roster/models/gates/install command/forge/guards/pulse) | if it exists it is kept; only missing entries are filled in |
+| Write config | `.pi/team/config.sh` (identity/roster/**task-category model map + independent PM model**/gates/install command/forge/guards/pulse) | if it exists it is kept; only missing entries are filled in |
+| Model policy | fresh runs must pass `--task-models` and `--pm-model` (there is no default model); a valid v2 policy is kept on re-entry; a config still carrying the retired worker keys is refused **before** any install/ledger/worktree/pulse step and migrates only through `team config upgrade-models` | ✔ |
 | Required dependencies | checks magic-context (Pi package `@cortexkit/pi-magic-context`) and OpenSpec (CLI resolvable + the spec dir); a missing one prints its exact fix/downgrade command, and does not block the setup | ✔ |
 | Docs skeleton | `docs/team/{ROADMAP,BOARD,OWNERSHIP,DECISIONS,PROTOCOL}.md`, `tasks/`, `reports/`, `reviews/`, `threads/`, `inbox/` | skipped when present |
 | Team protocol | injects the `<!-- teamsmith:begin --> … end -->` section into `AGENTS.md` (**refreshes** it instead of appending twice) | ✔ |
@@ -37,7 +38,8 @@ Or hand the contents of `templates/bootstrap-prompt.md.tmpl` (placeholders subst
 ```bash
 openspec init --tools none      # required dependency: create the project's spec root (TEAM_SPEC_DIR)
 team pulse status               # pulse window / patrol interval / pending work / PM liveness / capacity
-team task T1.1 --title "…" --agent dev
+team config set-task-model analysis vendor/strong-model   # change one category's model (future dispatches only)
+team task T1.1 --title "…" --agent dev --category routine
 team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 team digest                     # pending work: notifications + reports awaiting verification + board
 ```

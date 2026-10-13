@@ -34,9 +34,10 @@ verified one by one, archived only after the last one landed.
 ## A. Assembling a team in a new project
 
 New-project setup lives in the **`teamsmith-init`** skill: it carries the ordered question checklist (dependencies,
-session/roster/models, gates, VCS mode, install command, the project's ROADMAP/OWNERSHIP/AGENTS.md red lines), the
-`team bootstrap` command and the handoff back here. Read `skills/teamsmith-init/SKILL.md` before running anything;
-the command's own behaviour is in
+session/roster and the task-category map + independent PM model, gates, VCS mode, install command, the project's
+ROADMAP/OWNERSHIP/AGENTS.md red lines), the `team bootstrap` command (fresh projects must pass
+`--task-models` and `--pm-model`; a legacy config is refused and migrates through `team config upgrade-models`) and
+the handoff back here. Read `skills/teamsmith-init/SKILL.md` before running anything; the command's own behaviour is in
 [../../teamsmith-init/references/bootstrap.md](../../teamsmith-init/references/bootstrap.md).
 
 ## B. Dispatching the first task
@@ -56,18 +57,22 @@ bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md
 bash <skill>/scripts/team dispatch dev T1.1 docs/team/tasks/T1.1-*.md --print   # just want to see the prompt
 ```
 
-Dispatch does this: guards (memory, model concurrency, **session size vs the model window**) → builds the prompt
-(scope, red lines, delivery process) → starts an interactive pi in `<session>:dev` (`--session-id <session>-dev`,
-`-e` loading the notify extension, `--skill` loading this skill) → **waits for launch proof**: the pane harness
-writes a per-attempt nonce right before it execs the agent, and only that proof is reported as success (the line
-says the launch was verified). No proof → the window is killed, one retry is made, and the command reports a clear
-failure ("the dispatch was sent but the launch could not be confirmed") with what to check. A dispatch never claims
-success for a command that never ran.
+Dispatch does this: guards (memory, model concurrency, **session size vs the model window**) → resolves the launch
+identity (a **new** task takes the brief's `category:` model from `TEAM_TASK_MODELS`, or `--model` as a one-launch
+override, and gets a fresh SID; a complete same-task recovery keeps the recorded model/SID/category even after the
+category leaves the map) → builds the prompt (scope, red lines, delivery process) → starts an interactive pi in
+`<session>:dev` (`--session-id <session>-dev`, `-e` loading the notify extension, `--skill` loading this skill) →
+**waits for launch proof**: the pane harness writes a per-attempt nonce right before it execs the agent, and only
+that proof is reported as success (the line says the launch was verified). The complete assignment is published
+atomically only after the proof; previews and refusals never write one. No proof → the window is killed, the old
+record stays, and the command reports a clear failure ("the dispatch was sent but the launch could not be
+confirmed") with what to check. A dispatch never claims success for a command that never ran.
 
-Resuming: dispatch the same agent for the same task and the session is reused; `--fresh` starts a new one
-(`<session>-<agent>-<timestamp>`; the old history stays in its own file). Use `--fresh` when the task is new and the
-session carries a long history from an earlier task, when you switch model family/provider, or when the session is
-wedged (the `Context full` / connection-error loop — troubleshooting §4a).
+Resuming: dispatch the same agent for the same task and the recorded session is reused; `--fresh` starts a new one
+(keeping the recorded model/category, only the SID changes) and is required when the model would change (thinking
+suffix included). Use `--fresh` when the task is new and the session carries a long history from an earlier task,
+when you switch model family/provider, or when the session is wedged (the `Context full` / connection-error loop —
+troubleshooting §4a).
 
 **One agent, one unfinished task.** Before launching, dispatch also reads what that agent is already carrying: the
 recorded task (`state/<agent>.env`), its board row and the worktree's checked-out branch. If another task is still

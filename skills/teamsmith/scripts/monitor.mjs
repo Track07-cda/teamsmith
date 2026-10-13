@@ -34,6 +34,9 @@ import {
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const identityLib = fileURLToPath(new URL('./lib/', import.meta.url))
 
 const MAX_TEXT = 150
 const STALE_SECONDS = 3600
@@ -58,6 +61,7 @@ const asJson = arg('json', false) === true
 // 非 Pi 的 agent：显示配置的日志/会话文件的尾部（空 = 不启用，只跟 Pi 会话）
 const logGlob = String(arg('log-glob', process.env.TEAM_AGENT_LOG_GLOB || '') || '')
 const sessionsRoot = join(homedir(), '.pi', 'agent', 'sessions')
+const stateDir = String(arg('state-dir', join(root, '.pi/team/state')))
 
 // ---------------------------------------------------------------- 显示安全：剥掉控制序列
 // 显示文本，不显示控制字节。日志/会话内容都可能是别人写的：
@@ -225,7 +229,7 @@ function sessionDirFor(cwd) {
 function newestSession(dir, match) {
   try {
     const files = readdirSync(dir)
-      .filter(f => f.endsWith('.jsonl') && (!match || f.includes(match)))
+      .filter(f => f.endsWith('.jsonl') && (!match || f.endsWith(match)))
       .map(f => ({ f, m: mtimeMs(join(dir, f)) }))
       .filter(e => e.m !== null)
       .sort((a, b) => b.m - a.m)
@@ -233,6 +237,33 @@ function newestSession(dir, match) {
   } catch {
     return null
   }
+}
+
+function committedSession(seat) {
+  const opened = openRegular(join(stateDir, `${seat}.env`))
+  if (!opened.ok) return null
+  let snapshot
+  try {
+    if (opened.size > 65536) return null
+    const { buf, error } = readRange(opened.fd, 0, opened.size)
+    if (error) return null
+    snapshot = buf
+  } finally { closeSync(opened.fd) }
+  // Use the CLI's one DATA validator on the exact bounded snapshot we opened.
+  // No source/eval of state or project config, no second read/TOCTOU, and no
+  // weaker JS copy of nonce/path/time/model rules. Bash is already required.
+  try {
+    const identity = execFileSync('bash', ['--noprofile', '--norc', '-c', `
+      source "$1/common.sh"; source "$1/cmd-config.sh"
+      data=''; IFS= read -r -d '' -n 65537 data && exit 1
+      team_assignment_parse "$2" "$data" || exit 1
+      printf '%s\\0%s' "\${TEAM_ASSIGN[worktree]}" "\${TEAM_ASSIGN[sid]}"
+    `, '_', identityLib, seat], { input: snapshot, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'] })
+    const [worktree, sid] = identity.split('\0')
+    if (!worktree || !sid) return null
+    // No neighboring B/base fallback, even when recorded A is missing.
+    return newestSession(sessionDirFor(worktree), `_${sid}.jsonl`)
+  } catch { return null }
 }
 
 const icons = { say: '💬', run: '🔧', out: '  ↳', think: '🤔', user: '👤' }
@@ -508,11 +539,11 @@ for (const t of targets()) {
     continue
   }
   const dir = sessionDirFor(t.cwd)
-  const found = newestSession(dir) || newestSession(sessionDirFor(root), `-${t.name}.jsonl`) || null
+  const found = t.name === 'pm (PM)' ? newestSession(dir) : committedSession(t.name)
   if (!found) {
     const hint = logGlob
       ? `（无 pi 会话；TEAM_AGENT_LOG_GLOB 未匹配到文件：${logGlob}）`
-      : '（无 pi 会话）'
+      : '（committed SID unavailable：缺少完整身份或对应会话文件；不回退邻近会话）'
     blocks.push({ ...t, status: '⚫ 无会话', source: 'none', events: [], meta: hint })
     continue
   }

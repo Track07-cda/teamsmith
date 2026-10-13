@@ -539,14 +539,18 @@ async function main(): Promise<void> {
     return { code: res.rc, line }
   }
 
-  /** One `team config set-agent-model <seat> <model|->` invocation (P22/B4). */
-  async function setSeatModel(
-    seat: string,
+  /**
+   * One `team config set-task-model <category> <model>` invocation (P232): a category row edits one
+   * mapping entry through the owning command — the console never composes or writes the pair list
+   * itself. Same dry-run/CAS/actor panel contract as `setSetting`.
+   */
+  async function setTaskModel(
+    category: string,
     model: string,
     o: { dryRun?: boolean; fingerprint?: string | null },
   ): Promise<{ code: number; line: string }> {
     if (!teamCli) return { code: 127, line: s.noTeamCli }
-    const args = [teamCli, '--root', root, 'config', 'set-agent-model', seat, model || '-', '--actor', 'panel']
+    const args = [teamCli, '--root', root, 'config', 'set-task-model', category, model, '--actor', 'panel']
     if (o.dryRun) args.push('--dry-run')
     else args.push('--yes')
     if (o.fingerprint) args.push('--fingerprint', o.fingerprint)
@@ -771,7 +775,7 @@ async function main(): Promise<void> {
     },
     collapse,
     setSetting,
-    setSeatModel,
+    setTaskModel,
     /**
      * The path kind's existence mark (M55): resolved against the project root (`~` honoured), the
      * rule from the command's own note. `not-exec` is only reachable for `exec` — a directory is

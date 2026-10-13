@@ -365,23 +365,67 @@ export interface SettingsChoicePicker {
   index: number
   /** The accepted interval the numeric kinds display (null when the kind names none). */
   interval: { min: string; max: string } | null
+  /**
+   * True when this picker edits a **task category** rather than a contract key (P232): the row it
+   * belongs to is a category row, its entries are the project's known models plus free text, and
+   * the accept writes `team config set-task-model <category> <model>` — never a pair list.
+   */
+  category?: boolean
 }
 
-/** One seat's displayed model and its CLI-computed source (P22/B4). */
-export interface SettingsSeat {
-  agent: string
+/** One future task-category policy row as `team config list --json` reports it (P232). */
+export interface SettingsCategory {
+  category: string
   model: string
-  source: 'config' | 'explicit' | 'record'
-  override: boolean
 }
 
-/** The `settings` block: exactly `team config list --json` (P22/B2). */
+/**
+ * One seat's **committed** launch assignment (P232): the record a dispatch published, read-only.
+ * `assigned=false` means there is no complete record — `diagnostic` then says why, and no model is
+ * invented (the future policy above is never displayed as this seat's actual model).
+ */
+export interface SettingsAssignment {
+  agent: string
+  assigned: boolean
+  task: string
+  category: string
+  model: string
+  selected_via: string
+  launch_via: string
+  sid: string
+  identity_via: string
+  diagnostic: string
+}
+
+/** The PM's last launch metadata (`state/pm-launch.env`), read-only (P232). */
+export interface SettingsPmLaunch {
+  project?: string
+  window?: string
+  model?: string
+  nonce?: string
+  time?: string
+  mode?: string
+  resume_key?: string
+}
+
+/**
+ * The `settings` block: exactly `team config list --json` (P22/B2). `models` separates the future
+ * policy (`policy.categories`/`policy.pm`) from the committed launch records (`assignments`,
+ * `pm_launch`) — the view never presents one as the other — plus the project's known model
+ * vocabulary (`known`) and the policy's migration diagnosis (`diagnostic`).
+ */
 export interface SettingsBlock {
   path: string
   fingerprint: string
   mtime: string
   keys: SettingsKey[]
-  models: { default: string; known: string[]; seats: SettingsSeat[] }
+  models: {
+    policy: { categories: SettingsCategory[]; pm: string }
+    assignments: SettingsAssignment[]
+    pm_launch: SettingsPmLaunch
+    known: string[]
+    diagnostic: string
+  }
   audit: string[]
 }
 
@@ -516,10 +560,6 @@ export type Action =
   | { kind: 'choice-close' }
   /** The settings overlay's navigation row: open the project-settings view. */
   | { kind: 'settings-open-view' }
-  /** The seat picker: choose option `index` (a click on a picker row). */
-  | { kind: 'seat-pick'; index: number }
-  /** The seat picker: move the selection (the ↑/↓ chips). */
-  | { kind: 'seat-move'; delta: number }
 
 export interface PlacedLine {
   line: Line
@@ -645,8 +685,6 @@ export interface ViewState {
   settingsDraft?: { row: number; text: string; cursor: number } | null
   /** The pending write confirmation (the first Enter of a two-step write). */
   settingsConfirm?: { row: number; key: string; old: string; next: string; danger: boolean } | null
-  /** The open seat picker: the seat's agent, its option list and the selection. */
-  seatPicker?: { agent: string; row: number; models: string[]; index: number } | null
-  /** The open choice picker (M55): the row, its schema-derived entries and the selection. */
+  /** The open choice picker (M55/P232): the row, its schema-derived entries and the selection. */
   choicePicker?: SettingsChoicePicker | null
 }

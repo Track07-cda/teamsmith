@@ -402,7 +402,7 @@ pk_mode_observers() {
       && printf '# P174 observers\n' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1 \
     || { bad "observers：建夹具仓库失败"; return; }
   ( cd "$R" && env "${pk_clean_env[@]}" bash "$SKILL_DIR/scripts/team" init \
-      --session "pk-obs-$$" --agents "dev" --vcs local --gates "true" --docs docs/team ) >"$O/init.log" 2>&1 \
+      --session "pk-obs-$$" --agents "dev" --vcs local --gates "true" --docs docs/team --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) >"$O/init.log" 2>&1 \
     || { bad "observers：team init 失败（见 $O/init.log）"; tail -3 "$O/init.log" | sed 's/^/      /'; return; }
 
   # 私有 tmux shim：只读，回答「没有 pm 窗口」

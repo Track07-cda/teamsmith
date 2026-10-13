@@ -48,15 +48,17 @@ import type {
   Impediment,
   Segment,
   SettingsBlock,
+  SettingsAssignment,
+  SettingsCategory,
   SettingsChoiceEntry,
   SettingsKey,
-  SettingsSeat,
+  SettingsPmLaunch,
   SettingsWindow,
   Tone,
   ViewState,
 } from './types.js'
 import { toneSgr, type Palette } from './theme.js'
-import { cell, dispWidth, rule, truncateW, truncateWStart } from './width.js'
+import { cell, charWidth, dispWidth, rule, truncateW, truncateWStart } from './width.js'
 
 export const WIDTH_TWO_WIDE = 160
 export const WIDTH_TWO_COMPACT = 100
@@ -1292,16 +1294,25 @@ function detailBlock(ctx: Ctx): Block | null {
 //
 // The view is a listing of the contract: one row per schema key plus one per key the file carries
 // that the schema does not know, grouped by the functional domain the **command** reports on the
-// row's `group` (P30 — the console owns no second table), then the model seats block. Rows, groups
-// and classes come from the `settings` block's JSON at render time; a key added to the command's
-// schema shows up without rebuilding `panel.js`. The list is windowed against the height the
-// assembly hands over (the bounded-frame rule: more pane means more rows, never more blank).
+// row's `group` (P30 — the console owns no second table). Under the keys the view carries the two
+// halves of the model policy the command reports (P232): the **future** policy's category rows
+// (editable, one `set-task-model` per row) and the **committed** assignments plus the PM launch
+// record (read-only). The two halves are rendered under separate headings and never merged: a
+// future category model is never displayed as a seat's actual model.
+//
+// Rows, groups and classes come from the `settings` block's JSON at render time; a key added to the
+// command's schema shows up without rebuilding `panel.js`. The list is windowed against the height
+// the assembly hands over (the bounded-frame rule: more pane means more rows, never more blank).
 
 // The row's identity column is a **label** (M49), not the key name: the table's labels are human
 // sentences, so the column only has to hold the longest of them (zh is the wide language here;
 // a longer en label is cut by `cell()`, the same rule the key names followed).
 const SETTINGS_LABEL_W = 22
 const SETTINGS_AUDIT_LINES = 3
+/** P232: the policy migration diagnosis is shown above the audit tail; the rest is counted. */
+const SETTINGS_DIAG_LINES = 2
+/** P232: how many frame lines one diagnosis line may wrap to before it is cut with an ellipsis. */
+const SETTINGS_DIAG_WRAP = 2
 // The tail the block draws under its row window: the CLI hint, a blank, the audit heading and up to
 // `SETTINGS_AUDIT_LINES` audit lines (the heading always has one line under it — a dash when the
 // command's log is empty), plus `SETTINGS_COUNT_ROWS`, the pessimistic reservation for the two
@@ -1330,8 +1341,9 @@ const SETTINGS_TAIL_ROWS = SETTINGS_COUNT_ROWS + 1 + 1 + 1 + SETTINGS_AUDIT_LINE
 export type SettingsRow =
   | { kind: 'group'; label: string; tone: Tone }
   | { kind: 'key'; key: SettingsKey }
-  | { kind: 'seat-group'; label: string }
-  | { kind: 'seat'; seat: SettingsSeat }
+  | { kind: 'category'; category: SettingsCategory }
+  | { kind: 'assignment'; assignment: SettingsAssignment }
+  | { kind: 'pm-launch'; launch: SettingsPmLaunch }
 
 export function settingsClassLabel(s: Strings, cls: string): string {
   if (cls === 'restart') return s.settingsBadgeRestart
@@ -1361,23 +1373,37 @@ function groupLabel(s: Strings, token: string): string {
   return typeof label === 'string' && label.length > 0 ? label : token
 }
 
-/** The CLI's own three source labels (the console invents no fourth state). */
+/**
+ * The CLI's own three source labels (the console invents no fourth state).
+ *
+ * The committed record's provenance: `selected_via`/`launch_via` are the CLI's own closed tokens
+ * (`explicit`/`policy`/`assignment`, plus the legacy spellings it still reports). The console only
+ * spells them; it never derives them.
+ */
 export function settingsSourceLabel(s: Strings, source: string): string {
   if (source === 'explicit') return s.seatSourceExplicit
+  if (source === 'policy') return s.seatSourcePolicy
+  if (source === 'assignment') return s.seatSourceAssignment
   if (source === 'record') return s.seatSourceRecord
-  return s.seatSourceConfig
+  return source || s.dash
 }
 
 /**
  * The view's filtered row list: the contract's keys grouped by the **record's** `group` (P30/D1-D3),
- * in the read's own order, then the seats. Pure and exported: the App walks exactly this list when
- * it moves the focus, so the keys can never disagree with what is on screen.
+ * in the read's own order, then the future policy's category rows and the committed assignments.
+ * Pure and exported: the App walks exactly this list when it moves the focus, so the keys can never
+ * disagree with what is on screen.
  *
  * The bundle owns no key→group table and no group list: the walk opens a heading whenever the
  * token changes, so a key (or a whole group) added to the command's schema appears under its
  * reported heading with the committed bundle. Rows whose token is empty — a schema row that
  * declares none, or a key the file carries and the schema does not know — are never dropped: they
- * collect into one visible trailing fallback heading, before the seats block.
+ * collect into one visible trailing fallback heading, before the categories block.
+ *
+ * P232: the categories block (the future policy) comes before the assignments block (the committed
+ * records), each with its own heading, so "what the next task will use" and "what is actually
+ * running" are never read as the same list. A seat with no complete record still gets a row that
+ * says so — it is never filled in from the policy above.
  */
 export function settingsViewRows(block: SettingsBlock | undefined, filter: string, s: Strings): SettingsRow[] {
   const out: SettingsRow[] = []
@@ -1408,14 +1434,31 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
     out.push({ kind: 'group', label: s.settingsGroupUngrouped, tone: 'heading' })
     for (const k of ungrouped) out.push({ kind: 'key', key: k })
   }
-  const seats = (block.models?.seats ?? []).filter((x) =>
-    match(x.agent, x.model, settingsSourceLabel(s, x.source)),
+  const categories = (block.models?.policy?.categories ?? []).filter((c) =>
+    match(fill(s.settingsCategoryRow, { category: c.category }), c.category, c.model),
   )
-  if (seats.length) {
-    out.push({ kind: 'seat-group', label: s.settingsGroupSeats })
-    for (const x of seats) out.push({ kind: 'seat', seat: x })
+  if (categories.length) {
+    out.push({ kind: 'group', label: s.settingsGroupCategories, tone: 'heading' })
+    for (const c of categories) out.push({ kind: 'category', category: c })
+  }
+  const assignments = (block.models?.assignments ?? []).filter((a) =>
+    match(a.agent, a.task, a.category, a.model, a.sid, a.selected_via, a.launch_via, a.diagnostic),
+  )
+  const launch = block.models?.pm_launch ?? {}
+  const launchShown =
+    Object.keys(launch).length > 0 &&
+    match(s.settingsPmLaunchLabel, String(launch.model ?? ''), String(launch.mode ?? ''), String(launch.window ?? ''))
+  if (assignments.length || launchShown) {
+    out.push({ kind: 'group', label: s.settingsGroupAssignments, tone: 'heading' })
+    for (const a of assignments) out.push({ kind: 'assignment', assignment: a })
+    if (launchShown) out.push({ kind: 'pm-launch', launch })
   }
   return out
+}
+
+/** True for the rows the focus walk may stop on (headings are not focusable). */
+export function settingsRowFocusable(row: SettingsRow): row is Exclude<SettingsRow, { kind: 'group' }> {
+  return row.kind !== 'group'
 }
 
 /**
@@ -1452,37 +1495,148 @@ function settingsKeyLine(ctx: Ctx, row: SettingsKey, focused: boolean, innerW: n
   return { line }
 }
 
-function settingsSeatLine(ctx: Ctx, seat: SettingsSeat, focused: boolean, innerW: number): PlacedLine {
+/**
+ * One policy-diagnosis line, wrapped to at most `maxLines` frame lines (P232). The command's lines
+ * are long — the reason, the retired key and the CLI route in one sentence — and a plain tail
+ * truncation cut exactly the route off (measured: `…修法：team config upgrade-mo…` on a 160-column
+ * pane). The text is therefore drawn **verbatim** across lines, and only a line that still does not
+ * fit inside `maxLines` is cut, with a visible ellipsis on its last drawn line.
+ */
+/**
+ * Cut to at most `w` columns **without** the `…` `truncateW` appends: the wrapping primitive below
+ * draws every cell itself and only marks a line that really had to be dropped.
+ */
+function cutW(s: string, w: number): string {
+  let used = 0
+  let out = ''
+  for (const ch of String(s)) {
+    const cw = charWidth(ch)
+    if (used + cw > w) break
+    used += cw
+    out += ch
+  }
+  return out
+}
+
+/**
+ * One policy-diagnosis line, wrapped to at most `maxLines` frame lines (P232). The command's lines
+ * are long — the reason, the retired key and the CLI route in one sentence — and a plain tail
+ * truncation cut exactly the route off (measured: `…修法：team config upgrade-mo…` on a 160-column
+ * pane). The text is therefore drawn **verbatim** across lines, broken at a whitespace when there
+ * is one inside the width (so a command name stays whole instead of splitting mid-word); only text
+ * that still does not fit inside `maxLines` is dropped, marked with a visible `…`.
+ */
+function diagnoseChunks(text: string, width: number, maxLines: number): string[] {
+  const out: string[] = []
+  let rest = text
+  while (rest !== '' && out.length < maxLines) {
+    if (dispWidth(rest) <= width) {
+      out.push(rest)
+      rest = ''
+      break
+    }
+    let chunk = cutW(rest, width)
+    if (chunk === '') break
+    // Mid-word cuts only happen when no whitespace is available inside the width (a long path).
+    if (rest.slice(chunk.length, chunk.length + 1) !== '' && rest.slice(chunk.length, chunk.length + 1) !== ' ') {
+      const space = chunk.lastIndexOf(' ')
+      if (space > 0) chunk = chunk.slice(0, space + 1)
+    }
+    out.push(chunk)
+    rest = rest.slice(chunk.length)
+  }
+  if (rest !== '') {
+    const last = out[out.length - 1] ?? ''
+    out[out.length - 1] = cutW(last, Math.max(1, width - 1)) + '…'
+  }
+  return out
+}
+
+/**
+ * One future-policy category row (P232). The category token is the row's identity (the project
+ * defines it; there is no table entry for a project's own vocabulary), the value is the model the
+ * next new task of that category will get, and the badge says "new tasks" so the row cannot be
+ * read as a running seat. The command line under the list names the one write it offers.
+ */
+function settingsCategoryLine(ctx: Ctx, cat: SettingsCategory, focused: boolean, innerW: number): PlacedLine {
   const { s } = ctx
-  const model = seat.model || s.dash
-  const policy = seat.override ? s.seatOverride : s.seatFallback
   const line = ln(
     seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
-    seg(cell(seat.agent, SETTINGS_LABEL_W), focused ? 'selected' : 'heading'),
-    ...settingsRight(ctx, `${model} · ${settingsSourceLabel(s, seat.source)} · ${policy}`, '', 'dim', innerW).map((x) => x),
+    seg(cell(fill(s.settingsCategoryRow, { category: cat.category }), SETTINGS_LABEL_W), focused ? 'selected' : 'heading'),
+    ...settingsRight(ctx, cat.model || s.dash, s.settingsCategoryBadge, 'text', innerW).map((x) => x),
   )
   return { line }
 }
 
 /**
- * The focused row as the command line names it (M49): the row's label is for reading, the raw key
- * is what the user types — this line is the CLI-alignment half of the pair. A key the command does
- * not know (schema unknown) and a read-only key are said out loud rather than offered as a command
- * that would be refused; a seat gets its own `set-agent-model` route. '' when nothing is focusable.
+ * One read-only committed assignment row (P232): the seat, its actual model, the origin tokens the
+ * CLI recorded and — on the note — the task, category and SID. `assigned=false` shows the command's
+ * own diagnostic instead of inventing a model from the policy above.
+ */
+function settingsAssignmentLine(ctx: Ctx, a: SettingsAssignment, focused: boolean, innerW: number): PlacedLine {
+  const { s } = ctx
+  const line = ln(
+    seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
+    seg(cell(a.agent, SETTINGS_LABEL_W), focused ? 'selected' : 'heading'),
+    ...settingsRight(
+      ctx,
+      a.assigned ? a.model || s.dash : s.dash,
+      s.settingsReadOnlyBadge,
+      'dim',
+      innerW,
+    ).map((x) => x),
+  )
+  const note = a.assigned
+    ? fill(s.settingsAssignmentNote, {
+        task: a.task || s.dash,
+        category: a.category || s.dash,
+        sid: a.sid || s.dash,
+        selected: settingsSourceLabel(s, a.selected_via),
+        launch: settingsSourceLabel(s, a.launch_via),
+      })
+    : fill(s.settingsAssignmentNone, { diagnostic: a.diagnostic || s.dash })
+  line.push(seg(`  ${truncateW(note, Math.max(8, innerW - dispWidth(textOf(line)) - 2))}`, a.assigned ? 'dim' : 'warn'))
+  return { line }
+}
+
+/** The PM's own last launch record, read-only — never a worker seat and never a policy row. */
+function settingsPmLaunchLine(ctx: Ctx, launch: SettingsPmLaunch, focused: boolean, innerW: number): PlacedLine {
+  const { s } = ctx
+  const line = ln(
+    seg(`${focused ? s.settingsCursor : ' '} `, 'accent'),
+    seg(cell(s.settingsPmLaunchLabel, SETTINGS_LABEL_W), focused ? 'selected' : 'heading'),
+    ...settingsRight(ctx, launch.model || s.dash, s.settingsReadOnlyBadge, 'dim', innerW).map((x) => x),
+  )
+  const note = fill(s.settingsPmLaunchNote, {
+    window: launch.window || s.dash,
+    mode: launch.mode || s.dash,
+    time: launch.time || s.dash,
+  })
+  line.push(seg(`  ${truncateW(note, Math.max(8, innerW - dispWidth(textOf(line)) - 2))}`, 'dim'))
+  return { line }
+}
+
+/**
+ * The focused row as the command line names it (M49/P232): the row's label is for reading, the raw
+ * key or the category token is what the user types — this line is the CLI-alignment half of the
+ * pair. A key the command does not know (schema unknown) and a read-only key are said out loud
+ * rather than offered as a command that would be refused; a category names its own `set-task-model`
+ * route, and a committed assignment says it is the dispatch's decision, never a console write.
+ * '' when nothing is focusable.
  */
 function settingsCliHint(s: Strings, rows: SettingsRow[], focus: number): string {
-  const focusable = rows.filter(
-    (r): r is { kind: 'key'; key: SettingsKey } | { kind: 'seat'; seat: SettingsSeat } => r.kind === 'key' || r.kind === 'seat',
-  )
+  const focusable = rows.filter(settingsRowFocusable)
   const row = focusable[focus]
   if (!row) return ''
-  if (row.kind === 'seat') return fill(s.settingsSeatHint, { seat: row.seat.agent })
+  if (row.kind === 'category') return fill(s.settingsCategoryHint, { category: row.category.category })
+  if (row.kind === 'assignment') return s.settingsAssignmentHint
+  if (row.kind === 'pm-launch') return s.settingsPmLaunchHint
   const key = row.key
   if (key.known === false) return fill(s.settingsUnknownHint, { key: key.name })
   if (key.class === 'refuse') return fill(s.settingsRefusedHint, { key: key.name })
-  // The pairlist row is not composed here: its editor is the seats block, and the command line the
-  // requirement names is the per-seat one (M55).
-  if (String(key.kind ?? '') === 'pairlist') return s.settingsPairlistHint
+  // The whole-map row is not composed here: its editor is the categories block, and the command
+  // line the requirement names is the per-category one (P232).
+  if (String(key.kind ?? '') === 'task-model-map') return s.settingsCategoryMapHint
   return fill(s.settingsCliHint, { key: key.name })
 }
 
@@ -1518,7 +1672,7 @@ function settingsBlock(ctx: Ctx): Block | null {
   }
   const rows = settingsViewRows(block, ctx.view.settingsFilter ?? '', s)
   let count = 0
-  for (const r of rows) if (r.kind === 'key' || r.kind === 'seat') count += 1
+  for (const r of rows) if (settingsRowFocusable(r)) count += 1
   // P32: the block's budget is the **lines** it may draw below the card frame — the assembly hands
   // over everything the page's other blocks leave (`budget - fullRows - the frame's two rows`), and
   // the tail is spent out of that same budget, so what the tail does not need goes to real rows
@@ -1529,7 +1683,17 @@ function settingsBlock(ctx: Ctx): Block | null {
   // The tail under the window: the CLI hint, a blank, the audit heading and its tail (the heading
   // always has one line under it — a dash when the command's log is empty).
   const audit = (block.audit ?? []).slice(-SETTINGS_AUDIT_LINES)
-  const tailLines = 1 + 1 + 1 + Math.max(1, audit.length)
+  // P232: the command's own policy diagnosis (missing/retired keys, an unmapped category map) is
+  // part of the view: a legacy contract must say so, with the CLI route the command itself names.
+  const diagnosis = String(block.models?.diagnostic ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+  const diagShown = diagnosis.slice(0, SETTINGS_DIAG_LINES)
+  const diagRest = diagnosis.length - diagShown.length
+  const diagChunks = diagShown.map((d) => diagnoseChunks(d, Math.max(8, width - 3), SETTINGS_DIAG_WRAP))
+  const diagLines = diagChunks.length ? diagChunks.reduce((n, c) => n + c.length, 0) + 1 + (diagRest > 0 ? 1 : 0) : 0
+  const tailLines = 1 + 1 + 1 + Math.max(1, audit.length) + diagLines
   // The row cap: each row costs at least its own line, and the tail is already spoken for.
   const desired = Math.max(1, Math.min(Math.max(1, count), Math.max(1, room - tailLines)))
   const maxOffset = Math.max(0, count - desired)
@@ -1551,7 +1715,7 @@ function settingsBlock(ctx: Ctx): Block | null {
   const units: { heading: number }[] = []
   let pendingHeading = 0
   for (const r of rows) {
-    if (r.kind === 'group' || r.kind === 'seat-group') {
+    if (!settingsRowFocusable(r)) {
       pendingHeading = 1
       continue
     }
@@ -1643,7 +1807,17 @@ function settingsBlock(ctx: Ctx): Block | null {
       }
       return marks.length ? `${base} · ${marks.join(' · ')}` : base
     }
-    put(ln(seg(` ${fill(s.settingsChoiceTitle, { label: keyLabel(s, choice.key), key: choice.key })}`, 'heading')))
+    put(
+      ln(
+        seg(
+          choice.category
+            ? ` ${fill(s.settingsCategoryPickerTitle, { category: choice.key })}`
+            : ` ${fill(s.settingsChoiceTitle, { label: keyLabel(s, choice.key), key: choice.key })}`,
+          'heading',
+        ),
+      ),
+    )
+    if (choice.category) put(ln(seg(` ${s.settingsCategoryPickerHint}`, 'dim')))
     if (choice.interval) {
       put(
         ln(
@@ -1669,38 +1843,11 @@ function settingsBlock(ctx: Ctx): Block | null {
     const entryHiddenBelow = Math.max(0, entries.length - (entryOffset + entryVisible))
     if (entryHiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(entryHiddenBelow) })}`, 'dim')))
     put(ln(seg('')))
-    put(ln(seg(` ${s.settingsChoiceHint}`, 'dim')))
+    put(ln(seg(` ${choice.category ? s.settingsCategoryPickerHint : s.settingsChoiceHint}`, 'dim')))
     // P32: a picker covers the row list, so what its own entries do not use stays inside the card
     // (the fill rule below); a short picker must not leave the pane half blank either.
     while (lines.length < room) put(ln(seg('')))
     return one(lines, { focus: sel, offset: entryOffset, visible: entryVisible, count: entries.length })
-  }
-
-  // The seat picker (P22/B4): the models the command reports as known, then the removal and the
-  // free-text line — the editor opens on whichever is chosen.
-  const picker = ctx.view.seatPicker
-  if (picker) {
-    const options = [...picker.models, '-', '']
-    const sel = Math.max(0, Math.min(options.length - 1, picker.index))
-    const lines: PlacedLine[] = []
-    const put = (line: Line): void => {
-      lines.push({ line: truncLine(line, width) })
-    }
-    put(ln(seg(` ${fill(s.seatPickerTitle, { seat: picker.agent })}`, 'heading')))
-    options.forEach((opt, i) => {
-      const label = opt === '-' ? s.seatPickerRemove : opt === '' ? s.seatPickerFree : opt
-      const row = ln(
-        seg(`${i === sel ? s.settingsCursor : ' '} `, 'accent'),
-        seg(label, i === sel ? 'selected' : opt === '' || opt === '-' ? 'dim' : 'text'),
-      )
-      const action: Action = { kind: 'seat-pick', index: i }
-      const rowW = Math.max(2, Math.min(width, 1 + dispWidth(textOf(row))))
-      lines.push(placedWithHits(row, ctx.view.tui ? [{ start: 1, end: rowW, action }] : undefined, width))
-    })
-    put(ln(seg('')))
-    put(ln(seg(` ${s.seatPickerHint}`, 'dim')))
-    while (lines.length < room) put(ln(seg('')))
-    return one(lines, { focus: sel, offset: 0, visible: options.length, count: options.length })
   }
 
   const lines: PlacedLine[] = []
@@ -1713,11 +1860,18 @@ function settingsBlock(ctx: Ctx): Block | null {
 
   let idx = -1
   for (const r of rows) {
-    if (r.kind === 'key' || r.kind === 'seat') {
+    if (settingsRowFocusable(r)) {
       idx += 1
       if (idx < offset || idx >= offset + visible) continue
       const focused = idx === focus
-      const placed = r.kind === 'key' ? settingsKeyLine(ctx, r.key, focused, width) : settingsSeatLine(ctx, r.seat, focused, width)
+      const placed =
+        r.kind === 'key'
+          ? settingsKeyLine(ctx, r.key, focused, width)
+          : r.kind === 'category'
+            ? settingsCategoryLine(ctx, r.category, focused, width)
+            : r.kind === 'assignment'
+              ? settingsAssignmentLine(ctx, r.assignment, focused, width)
+              : settingsPmLaunchLine(ctx, r.launch, focused, width)
       // The whole row is a target: a click on an unfocused row moves the focus, a second click on
       // the focused row opens it (the kanban's rule).
       const action: Action = focused ? { kind: 'settings-open', index: idx } : { kind: 'settings-focus', index: idx }
@@ -1728,18 +1882,19 @@ function settingsBlock(ctx: Ctx): Block | null {
     // A heading draws only when the next focusable row is inside the window.
     const next = idx + 1
     if (next < offset || next >= offset + visible) continue
-    if (r.kind === 'group' || r.kind === 'seat-group') {
-      // P32 (the user's first report): a heading indented like a row reads as one more row. It is a
-      // **section rule** instead — `── 身份与账本布局 ────…`, the shape the non-framed blocks already
-      // use — so a heading and a key row cannot be confused in a monochrome capture either, and
-      // consecutive groups are separated by their own headings without spending a second line.
-      put(ruleTitle(r.label, width, r.kind === 'group' ? r.tone : 'accent'))
-    }
+    put(ruleTitle(r.label, width, r.tone))
   }
   if (hiddenBelow > 0) put(ln(seg(`  ${fill(s.laneHiddenBelow, { n: String(hiddenBelow) })}`, 'dim')))
 
   // The CLI-alignment line (M49): the row's label is for reading, the raw key is for typing.
   put(ln(seg(` ${settingsCliHint(s, rows, focus)}`, 'dim')))
+
+  // The policy's migration diagnosis (P232): visible, and the CLI route it names is the route.
+  if (diagShown.length) {
+    put(ln(seg(` ${s.settingsDiagnosisHeading}`, 'warn')))
+    for (const chunks of diagChunks) for (const d of chunks) put(ln(seg(`   ${d}`, 'warn')))
+    if (diagRest > 0) put(ln(seg(`   ${fill(s.laneHiddenBelow, { n: String(diagRest) })}`, 'dim')))
+  }
 
   // The audit footer: at most three lines, newest last (the CLI's own tail).
   put(ln(seg('')))
@@ -2033,12 +2188,6 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
           { text: s.keyRows, action: { kind: 'choice-move', delta: 1 } },
           { text: s.keyOpen, action: { kind: 'choice-pick', index: -1 } },
           { text: s.keyDetailClose, action: { kind: 'choice-close' } },
-        ]
-      : ctx.view.seatPicker
-      ? [
-          { text: s.keyRows, action: { kind: 'seat-move', delta: 1 } },
-          { text: s.keySeatPick, action: { kind: 'seat-pick', index: -1 } },
-          { text: s.keyDetailClose, action: { kind: 'settings-close' } },
         ]
       : [
           { text: s.keyRows, action: { kind: 'settings-scroll', delta: 1 } },

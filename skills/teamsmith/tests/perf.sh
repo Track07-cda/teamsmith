@@ -355,7 +355,7 @@ perf_setup_fixture() { # 夹具仓库（装配判定测的是面板装配，不�
       && git config user.name perf && printf '# perf fixture\n' > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1 || return 1
   mkdir -p "$PERF_FIX/openspec" "$PERF_FIX/.pi/team/state" "$PERF_FIX/docs/team/reports" "$PERF_FIX/docs/team/reviews"
   ( cd "$PERF_FIX" && perf_team_env_init bash "$team_bin" init --session "teamsmith-perf-$$" \
-      --agents "dev verify" --vcs local --gates "true" --docs docs/team ) >"$PERF_TMP/init.log" 2>&1 || return 1
+      --agents "dev verify" --vcs local --gates "true" --docs docs/team --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) >"$PERF_TMP/init.log" 2>&1 || return 1
   printf '2026-01-01T00:00:01Z RAM 可用 4000MB ｜ 磁盘 swap 空闲 3000MB ｜ 估算可再加 5 个 agent\n' \
     > "$PERF_FIX/.pi/team/state/capacity.log"
   return 0

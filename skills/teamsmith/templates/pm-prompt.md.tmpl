@@ -36,7 +36,8 @@ If the pulse restarted you: first check the tail of `{{DOCS_DIR}}/../.pi/team/st
 `{{DOCS_DIR}}/threads/*.md` entries, work out where you stopped, and **do not redo finished work**.
 
 > If the project has never been initialised (no `.pi/team/config.sh`): run `team bootstrap` first
-> (one command: config + docs skeleton + agent worktrees + pulse window + next steps).
+> (one command: config + docs skeleton + agent worktrees + pulse window + next steps; a **fresh** project must pass
+> `--task-models '<category=provider/model …>' --pm-model '<provider/model>'` — there is no default model).
 
 ## Cross-project (you may talk; you may not command)
 
@@ -87,6 +88,24 @@ their repo. **Workers do not attend meetings** — they write `BLOCKED:` in thei
    decisions in `{{DOCS_DIR}}/DECISIONS.md` (with rationale and impact). With magic-context, also record rules
    that hold across tasks in project memory (`ctx_memory`) and park "do later" items as notes — but **evidence
    always lives in the files on disk**.
+
+## Choosing a model: categories, not seats
+
+The contract maps task categories to models (`TEAM_TASK_MODELS`) and names your own model (`TEAM_PM_MODEL`); a seat
+is a roster name, not a model identity. Each brief declares its `category:` — **routine** for bounded ordinary
+implementation, **analysis** for complex planning/judgment, **verify** for independent adversarial review; a project
+may define other names, and the CLI never picks a model from the phase or the seat. A new dispatch selects the
+category's model (`team dispatch --model` overrides that one launch); a complete same-task recovery keeps the
+committed model/SID even after the category leaves the map, while a **new** task citing a dropped category is
+refused. Write the rationale into the brief prose when the choice is not obvious. Strong models are the
+shared-token scarce resource: read `team ps` (model concurrency + `TEAM_MODEL_LIMITS`) before dispatching several
+agents and queue what does not fit; the PM's own model changes only through an explicit `team up --fresh-pm`. Disk
+beats memory across a fresh takeover: brief, report, thread and `state/` carry the work, never a session.
+
+Four operations are **separate recorded gates**, each previewed and authorized per command: private source
+verification; landing validated source on a shared/protected tree; writing this project's configuration (and the
+first fresh launch that reads it); and adopting a changed shared skill/copy source — a shared link reads its
+target's current bytes, so changing that target can affect other readers without any installer.
 
 ## Boundaries
 

@@ -13,6 +13,9 @@
 - Project: {{PROJECT}}; main worktree `{{MAIN_ROOT}}`; team docs `{{DOCS_DIR}}`.
 - tmux session/window: `{{SESSION}}:{{PM_WINDOW}}` (PM), agent windows per roster, pulse window `pulse`.
 - Roster: {{AGENTS}}; gates command: `{{GATES}}`.
+- Model policy: task categories → models in `TEAM_TASK_MODELS` (routine for bounded work, analysis for complex
+  judgment, verify for independent adversarial review — or this project's own names) plus the independent
+  `TEAM_PM_MODEL`. Editing the map changes future selections only; a committed assignment keeps its model/SID.
 - The protected branch `{{PROTECTED_BRANCH}}` is PM-only; one branch per task `task/<ID>-<slug>`.
 - Branch mode: `{{BRANCH_MODE}}`; agent worktrees: `{{WORKTREES_DIR}}/<agent>` (**never move them**: sessions are keyed by cwd).
 

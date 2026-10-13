@@ -213,7 +213,7 @@ server_up() { # <name> → fresh project + private tmux session
   tmux -L "$sock" kill-server 2>/dev/null || true
   rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$sock" 2>/dev/null || true
   ( cd "$ROOT" && bash "$skill/scripts/team" init --session "$sess" --agents "dev verify" --vcs local \
-      --gates "true" --docs docs/team ) >"$tmp/$1/init.log" 2>&1 \
+      --gates "true" --docs docs/team --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) >"$tmp/$1/init.log" 2>&1 \
     || { printf 'panel-b3: team init failed\n' >&2; tail -3 "$tmp/$1/init.log" >&2; exit 3; }
   mkdir -p "$ROOT/.pi/team/state" "$ROOT/docs/team"
   tmux -L "$sock" new-session -d -s "$sess" -x 120 -y 32 -n bootstrap -c "$ROOT" 'sleep 900'

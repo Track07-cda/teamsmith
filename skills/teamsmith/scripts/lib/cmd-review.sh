@@ -1306,6 +1306,18 @@ $(printf '%s\n' "$ignored_list" | head -5)
   return 0
 }
 
+# Only close owns this helper. Final identity check and kill/clear share dispatch locks.
+team_close_seat_locked() {
+  local a="$1" id="$2" keep="$3" window
+  [ "$(team_state_get "$a" task '')" = "$id" ] || { team_err "close: $a assignment changed，未杀窗/清记录"; return 1; }
+  window="$(team_state_get "$a" window "$a")"
+  if [ "$keep" != 1 ] && team_tmux_has_window "$TEAM_SESSION" "$window"; then
+    tmux kill-window -t "$TEAM_SESSION:$window" 2>/dev/null || return 1
+    team_ok "kill window $TEAM_SESSION:$window"
+  fi
+  team_state_clear "$a"
+  rm -f "$TEAM_STATE_DIR/$a.pending" "$TEAM_STATE_DIR"/.assignment-"$a"-*
+}
 team_cmd_close() {
   team_require_docs
   local id="" status="done" keep_window=0 force=0 reason=""
@@ -1356,16 +1368,7 @@ team_cmd_close() {
 
   for a in $(team_agents); do
     [ "$(team_state_get "$a" task '')" = "$id" ] || continue
-    w="$(team_state_get "$a" window "$a")"
-    if [ "$keep_window" != "1" ] && team_tmux_has_window "$TEAM_SESSION" "$w"; then
-      tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && team_ok "kill window $TEAM_SESSION:$w"
-    fi
-    team_state_set "$a" task ""
-    # D62-a：任务结束就把 state 里的 branch= 一起清掉 —— 否则下一次派单的分支守卫会读到
-    # 上一个任务的分支名，把「工作树已按规矩切回/准备好」的席位误判成「还停在旧任务分支上」而拒单。
-    # 分支记录只是「这个席位正在跑什么」的一部分，和 task= 同生命周期；工作树实际在哪个分支
-    # 由下面的 `git -C … rev-parse` 现场读，不受这一行影响。
-    team_state_set "$a" branch ""
+    team_with_lock "seat:$a" team_with_lock worker-admission team_close_seat_locked "$a" "$id" "$keep_window" || return 1
     # 分支归 PM：这里只说清楚「现在在哪、复位命令是什么」，不替 PM 切分支（见 openspec board-and-status）
     b="$(git -C "$(team_agent_worktree "$a")" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
     case "$b" in

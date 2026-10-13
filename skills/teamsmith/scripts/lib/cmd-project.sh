@@ -8,10 +8,13 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
 用法： team <command> [args...] [--yes]
 
   ── 第一次使用 ─────────────────────────────────────────────
-  bootstrap [--agents "dev verify"] [--print]   **推荐**：一条命令把项目初始化到可派单状态
-                   （探测当前 tmux session/窗口 → 写配置 + 文档骨架 + AGENTS 段落 → 把 skill 装进项目
-                    .pi/skills/ → 建 agent worktree → 起巡检窗口 → 打印下一步清单）；幂等，可反复跑
+  bootstrap [--agents "dev verify"] [--task-models '<map>'] [--pm-model '<model>'] [--print]
+                   **推荐**：一条命令把项目初始化到可派单状态：写配置 + 文档骨架 + AGENTS 段落 + 把 skill 装进
+                   项目 .pi/skills/ → 建 agent worktree → 起巡检窗口 → 打印下一步清单；幂等，可反复跑
+                   --task-models/--pm-model 是新鲜项目的必填输入（没有默认模型可猜）；已有合法策略重入可省
+                   （退休键的旧项目在任何写入之前拒绝，指向 config upgrade-models；--print 只诊断不写）
   init            只做配置/文档骨架 + 把 skill 装进项目 .pi/skills/（bootstrap 的其中一步）
+                   --task-models '<category=provider/model …>' --pm-model '<provider/model>'（新鲜项目必填）
                    --copy 复制一份（默认软链，跟随包更新）；--no-skills 跳过装 skill；--force 覆盖冲突条目
   doctor          环境自检（git/tmux/pi/门禁/forge/容量/容器）
 
@@ -24,13 +27,13 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   digest          给 PM 的待办摘要：收件箱未处理项 + 待复验报告 + 任务状态
   inbox [agent]   打印收件箱（agent 在回合结束时自动追加）
   paths           打印当前解析出的路径/ session（JSON），排障用
-  config list|set|log|set-agent-model
+  config list|set|log|set-task-model|upgrade-models
                   项目契约（.pi/team/config.sh）的读写面：list 列每个键的效果类（apply/restart/refuse）
                   与默认值；set 是**唯一写入口**（值校验 + sha256 指纹 CAS + 原子写 + 审计）；
-                  log 看审计尾部；set-agent-model 按席位改模型（- 移除覆盖）
+                  log 看审计尾部；set-task-model 按类别改模型；upgrade-models 显式四键升级
 
   ── 文档契约（PM 维护） ─────────────────────────────────────
-  task ID --title ... [--agent a] [--deps ...] [--issue N]
+  task ID --title ... --category <category> [--agent a] [--deps ...] [--issue N]
                   生成任务书 <docs>/tasks/ID-slug.md 并在 BOARD.md 建行
   board add|assign|set|row|ls    BOARD.md 行管理（add [--allow-dup] / assign ID agent / set ID 状态 / row ID / ls）
   change status <id> [--json]
@@ -40,10 +43,10 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   report ID <agent> [--force]  生成报告骨架
 
   ── 派单与协作 ─────────────────────────────────────────────
-  add-agent <a> [--register] [--model m] [--create] [--no-install] [--print]  建长期 worktree（分支 agent/<a>）；
+  add-agent <a> [--register] [--create] [--no-install] [--print]  建长期 worktree（分支 agent/<a>）；
                  名册：--register 走审计写入器（不带旗标的未知席位会被拒，并给出两条真路线）
   dispatch <a> <ID> <task-file> [--model m] [--branch <name>] [--fresh] [--allow-overflow] [--print]
-                  在 tmux 窗口起一个交互式 pi（默认复用会话，可断点续跑）；--branch 声明这次必须用的任务分支
+                  首次按类别/override 分配新 SID，完整同任务恢复保留 model/SID；换模型必须 --fresh；--branch 声明任务分支
   say <a> "<一句话>" [--now]      往 agent 窗口发消息；目标输入框里有草稿就**延后投递**（state/outbox/
                    + 返回 queued）；--now = 故意跳过守卫粘字（记入 outbox/forced.log）
   notify <a> "<一句话>" [--from <发送者>]   agent → PM 一句话（发送者按运行时目录解析；写收件箱 + 唤醒 PM 窗口）
@@ -159,8 +162,66 @@ team_detect_vcs() {
   esac
 }
 
+# ---------------------------------------------------------------- 模型策略（P235 · S3）
+# 退休的席位/全局默认模型键：只要文件里还有真赋值行（注释里提不算），init/bootstrap 就停下并
+# 指向唯一升级事务 —— 这不是「零变化重入」，而是未完成迁移的项目。
+team_config_legacy_model_keys() { # <file> → 每行一个仍在文件里的退休键；没有则空
+  local f="${1:-}" k
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  for k in TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; do
+    grep -vE '^[[:space:]]*#' "$f" 2>/dev/null \
+      | grep -Eq "(^|[^A-Za-z0-9_])$k([[:space:]]*=|[[:space:]])" && printf '%s\n' "$k"
+  done
+  return 0
+}
+
+# init/bootstrap 的模型输入解析：显式输入 > 文件里的合法新策略（重入）。
+# 两个键都是必填；没有可继承的合法值就拒绝，拒绝发生在任何写入之前。
+# 显式值用与唯一 writer 同一个校验器（team_config_validate_value）验，拒绝时给真路线。
+team_init_model_policy_resolve() { # <cfg> <task_models|''> <pm_model|''> <task_models_set 0|1> <pm_model_set 0|1> <cmd 名>
+  local cfg="${1:-}" in_map="${2:-}" in_pm="${3:-}" map_set="${4:-0}" pm_set="${5:-0}" cmd="${6:-init}"
+  local file_map="" file_pm="" file_map_ok=0 file_pm_ok=0 reason=""
+  if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+    file_map="$(team_config_file_value "$cfg" TEAM_TASK_MODELS 2>/dev/null || true)"
+    file_pm="$(team_config_file_value "$cfg" TEAM_PM_MODEL 2>/dev/null || true)"
+    team_task_map_violation "$file_map" >/dev/null 2>&1 && file_map_ok=1
+    team_config_model_shape_ok "$file_pm" && file_pm_ok=1
+  fi
+  if [ "$map_set" = "1" ]; then
+    if ! reason="$(team_config_validate_value TEAM_TASK_MODELS "$in_map")"; then
+      team_err "$cmd: --task-models 不合法：$reason"
+      team_dim "  形如 'routine=provider/light analysis=provider/strong verify=provider/strong'（类别 [a-z][a-z0-9-]*，模型 provider/model，第一个 / 分 provider）" >&2
+      return 4
+    fi
+  elif [ "$file_map_ok" = "1" ]; then
+    in_map="$file_map"
+  else
+    team_err "$cmd: 缺少 --task-models（项目类别映射是必填输入；没有默认模型可猜）"
+    team_dim "  新项目：$TEAM_CLI init --task-models '<category=provider/model …>' --pm-model '<provider/model>'
+  已有项目：$TEAM_CLI config set-task-model <category> <model>（或 config set TEAM_TASK_MODELS '<完整映射>' --yes；破坏式升级走 config upgrade-models）" >&2
+    return 4
+  fi
+  if [ "$pm_set" = "1" ]; then
+    if ! reason="$(team_config_validate_value TEAM_PM_MODEL "$in_pm")"; then
+      team_err "$cmd: --pm-model 不合法：$reason"
+      team_dim "  独立 PM 模型：provider/model（可选 :suffix），例如 provider/strong-model:high" >&2
+      return 4
+    fi
+  elif [ "$file_pm_ok" = "1" ]; then
+    in_pm="$file_pm"
+  else
+    team_err "$cmd: 缺少 --pm-model（独立 PM 模型是必填输入；PM 不再回落到任何 worker/默认模型）"
+    team_dim "  新项目：$TEAM_CLI init --task-models '<category=provider/model …>' --pm-model '<provider/model>'
+  已有项目：$TEAM_CLI config set TEAM_PM_MODEL '<provider/model>' --yes（破坏式升级走 config upgrade-models）" >&2
+    return 4
+  fi
+  printf '%s\n%s\n' "$in_map" "$in_pm"
+  return 0
+}
+
 team_cmd_init() {
-  local session="" agents="" vcs="" gates="" docs="" pmwin="" model="" force=0 install_mode=""
+  local session="" agents="" vcs="" gates="" docs="" pmwin="" force=0 install_mode=""
+  local task_models="" pm_model="" task_models_set=0 pm_model_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --session) session="${2:?}"; shift 2 ;;
@@ -169,7 +230,13 @@ team_cmd_init() {
       --gates) gates="${2:?}"; shift 2 ;;
       --docs) docs="${2:?}"; shift 2 ;;
       --pm-window) pmwin="${2:?}"; shift 2 ;;
-      --model) model="${2:?}"; shift 2 ;;
+      --task-models) task_models="${2:?}"; task_models_set=1; shift 2 ;;
+      --pm-model) pm_model="${2:?}"; pm_model_set=1; shift 2 ;;
+      --model|--default-model)
+        team_err "init: $1 已退休：项目不再有席位/全局默认模型"
+        team_dim "  新项目：$TEAM_CLI init --task-models '<category=provider/model …>' --pm-model '<provider/model>'"
+        team_dim "  已有项目升级：$TEAM_CLI config upgrade-models --task-models '<完整映射>' --pm-model '<独立模型>' --dry-run"
+        return 2 ;;
       --copy) install_mode="--copy"; shift ;;
       --no-skills) install_mode="--no-skills"; shift ;;
       --force) force=1; shift ;;
@@ -183,7 +250,42 @@ team_cmd_init() {
   vcs="${vcs:-$(team_detect_vcs)}"
   docs="${docs:-docs/team}"
   pmwin="${pmwin:-pm}"
-  model="${model:-deepseek/deepseek-flash}"
+  local cfg="$TEAM_MAIN_ROOT/.pi/team/config.sh" had_config=0; [ -f "$cfg" ] && had_config=1
+
+  # 0) 模型策略闸门（P235）：退休键 / 缺输入 / 非法值都在**任何写入之前**停住。
+  #    已有合法新策略允许不带输入重入（保留策略）；退休键则连 --force 都不能当迁移捷径。
+  if [ "$had_config" = "1" ]; then
+    local legacy_keys; legacy_keys="$(team_config_legacy_model_keys "$cfg")"
+    if [ -n "$legacy_keys" ]; then
+      team_err "init: $cfg 还在用退休的模型键（$(printf '%s' "$legacy_keys" | tr '\n' ' ')）—— 任何写入之前停住"
+      team_dim "  项目模型策略是破坏式升级：init / init --force / bootstrap 都不是迁移路径"
+      team_dim "  升级（先预览）：$TEAM_CLI config upgrade-models --task-models '<category=provider/model …>' --pm-model '<provider/model>' --dry-run"
+      return 1
+    fi
+  fi
+  local _policy _rc=0
+  _policy="$(team_init_model_policy_resolve "$cfg" "$task_models" "$pm_model" "$task_models_set" "$pm_model_set" init)" || _rc=$?
+  [ "$_rc" -eq 0 ] || return "$_rc"
+  task_models="$(printf '%s\n' "$_policy" | sed -n '1p')"
+  pm_model="$(printf '%s\n' "$_policy" | sed -n '2p')"
+  # 已有配置（不带 --force）原样保留：显式输入与现有策略不同就拒绝，不静默忽略。
+  if [ "$had_config" = "1" ] && [ "$force" != "1" ]; then
+    local cur_map cur_pm
+    cur_map="$(team_config_file_value "$cfg" TEAM_TASK_MODELS 2>/dev/null || true)"
+    cur_pm="$(team_config_file_value "$cfg" TEAM_PM_MODEL 2>/dev/null || true)"
+    if [ "$task_models_set" = "1" ] && [ "$task_models" != "$cur_map" ]; then
+      team_err "init: 现有配置会被保留（skip），但 --task-models 与现有映射不同 —— 不静默忽略"
+      team_dim "  改一个类别：$TEAM_CLI config set-task-model <category> <model>；整映射：$TEAM_CLI config set TEAM_TASK_MODELS '<完整映射>' --yes"
+      team_dim "  或 --force 重渲染整份契约（其它键会回到模板值）"
+      return 4
+    fi
+    if [ "$pm_model_set" = "1" ] && [ "$pm_model" != "$cur_pm" ]; then
+      team_err "init: 现有配置会被保留（skip），但 --pm-model 与现有值不同 —— 不静默忽略"
+      team_dim "  改 PM 模型：$TEAM_CLI config set TEAM_PM_MODEL '<provider/model>' --yes；或 --force 重渲染"
+      return 4
+    fi
+  fi
+
   # --force = 重渲染整份契约：此时不把**旧契约读回来的** TEAM_GATES 当模板值 —— 它是旧值，
   # 不是这次要渲染的模板值（P99 身份 note 承诺的代价：其它键回到模板值）。真正从环境继承
   # （export 过）的值仍算显式覆盖，照旧优先。
@@ -216,16 +318,28 @@ team_cmd_init() {
 
   # 1) 配置
   TEAM_AGENTS="$agents"; TEAM_DOCS_DIR="$docs"
-  local cfg="$TEAM_MAIN_ROOT/.pi/team/config.sh" tmpl; tmpl="$(team_tmpl_dir)/config.sh.tmpl"
+  local tmpl; tmpl="$(team_tmpl_dir)/config.sh.tmpl"
   if [ -f "$cfg" ] && [ "$force" != "1" ]; then
     team_dim "skip  $cfg（已存在，--force 覆盖）"
   else
     mkdir -p "$(dirname "$cfg")"
-    team_render "$tmpl" \
+    if ! team_render "$tmpl" \
       "PROJECT=$project" "SESSION=$session" "PM_WINDOW=$pmwin" \
       "DOCS_DIR=$docs" "AGENTS=$agents" "GATES=$(team_escape_dq "$gates")" "VCS=$vcs" \
-      "DEFAULT_MODEL=$model" "SKILL_DIR=$TEAM_SKILL_DIR" \
-      "DETECTED_VCS=$(team_detect_vcs)" "TODAY=$(date +%F)" > "$cfg"
+      "SKILL_DIR=$TEAM_SKILL_DIR" \
+      "DETECTED_VCS=$(team_detect_vcs)" "TODAY=$(date +%F)" > "$cfg"; then
+      team_err "init: 渲染配置失败：$tmpl"
+      rm -f "$cfg"
+      return 1
+    fi
+    # 模型两键走同一个加固写入器（值已用同一个校验器验过）：不是模板插值、没有默认值可猜。
+    # 任一步失败就删掉这次的半成品配置，绝不留下缺键的契约。
+    if ! team_config_set_in_file "$cfg" TEAM_TASK_MODELS "$task_models" \
+       || ! team_config_set_in_file "$cfg" TEAM_PM_MODEL "$pm_model"; then
+      team_err "init: 模型策略写入失败，已删除这次的半成品配置"
+      rm -f "$cfg"
+      return 1
+    fi
     team_ok "write $cfg"
   fi
   chmod 0644 "$cfg"
@@ -281,8 +395,9 @@ team_cmd_init() {
   printf '\n'
   team_hdr "下一步"
   printf '  1) %s doctor\n' "$TEAM_CLI"
-  printf '  2) 编辑 %s/.pi/team/config.sh（名册 TEAM_AGENTS、门禁 TEAM_GATES、模型）\n' "$project"
-  printf '  3) %s task T1.1 --title "第一个任务" --agent dev\n' "$TEAM_CLI"
+  printf '  2) 编辑 %s/.pi/team/config.sh（名册 TEAM_AGENTS、门禁 TEAM_GATES、任务类别映射）\n' "$project"
+  printf '     改一个类别：%s config set-task-model <category> <model>；整映射：%s config set TEAM_TASK_MODELS <完整映射> --yes\n' "$TEAM_CLI" "$TEAM_CLI"
+  printf '  3) %s task T1.1 --title "第一个任务" --category <类别> --agent dev\n' "$TEAM_CLI"
   printf '  4) %s dispatch dev T1.1 %s/tasks/T1.1-*.md\n' "$TEAM_CLI" "$docs"
   printf '  5) %s digest   # PM 看板\n' "$TEAM_CLI"
 }

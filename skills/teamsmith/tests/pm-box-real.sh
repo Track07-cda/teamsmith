@@ -151,7 +151,7 @@ fi
 ( cd "$REPO" && git init -q -b main && git config user.email pmbox@teamsmith && git config user.name pmbox \
   && echo "# pmbox" > README.md && git add -A && git commit -qm init )
 ( cd "$REPO" && env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$SOCKDIR" TEAM_SESSION="$SESS" \
-    $TEAM init --session "$SESS" --agents "dev" --vcs local --gates "true" --docs docs/team ) >"$TMP/init.log" 2>&1 \
+    $TEAM init --session "$SESS" --agents "dev" --vcs local --gates "true" --docs docs/team --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' ) >"$TMP/init.log" 2>&1 \
   || { printf '夹具 init 失败\n'; tail -3 "$TMP/init.log"; }
 
 # 真 pi：真 HOME（沿用使用者的 provider/配置）+ 临时 session 目录（不碰真实会话文件）

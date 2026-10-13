@@ -20,6 +20,7 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
 # shellcheck source=tests/lib/tmp-root.sh
 . "$SELF_DIR/lib/tmp-root.sh"
+. "$SELF_DIR/lib/model-policy.sh"
 # P162：破坏性调用（kill-server/kill-session/kill-window）动手前先证明私有 socket 生效
 . "$SELF_DIR/lib/tmux-iso.sh"
 
@@ -40,6 +41,7 @@ for _td_dir in $PATH; do case "$_td_dir" in */scripts/shim) ;; *) _TD_PATH="${_T
 PATH="$_TD_PATH"
 
 TMP="$(tmp_root_create death-cause)" || exit 3
+export HOME="$TMP/home"; mkdir -p "$HOME"
 cleanup() { [ "${BASHPID:-$$}" = "$$" ] || return 0; tmp_root_reap_all; }
 trap cleanup EXIT
 
@@ -72,7 +74,7 @@ export TEAM_ROOT="$T" TEAM_MAIN_ROOT="$T" TEAM_STATE_DIR="$T/state" TEAM_DOCS_AB
        TEAM_AGENTS="dev dev2" TEAM_WORKTREES_DIR="worktrees" TEAM_PI_AGENT_DIR="$T/pi" \
        TEAM_CLI="team" TEAM_PM_WINDOW="pm" TEAM_PM_INBOX="pm" TEAM_PROTECTED_BRANCH="main" \
        TEAM_SKILL_DIR="$SKILL_DIR" TEAM_AGENT_SCENE_LINES="${TEAM_AGENT_SCENE_LINES:-40}" \
-       TEAM_AGENT_MODELS="" TEAM_DEFAULT_MODEL="td/fixture" \
+       TEAM_TASK_MODELS='analysis=td/fixture verify=td/verify' TEAM_PM_MODEL='td/pm' \
        TEAM_P55_STATUS_WRAP=1 TEAM_P55_DIGEST_WRAP=1 TEAM_P55_DOCTOR_WRAP=1
 unset TEAM_DEATH_SCAN_LINES TEAM_DEATH_SESSION_TAIL 2>/dev/null || true
 
@@ -94,7 +96,7 @@ team_agent_live() { case " ${TD_LIVE:-} " in *" $1 "*) return 0 ;; esac; return 
 # ---------------------------------------------------------------- 状态夹具
 td_reset() { rm -rf "$T/state" "$T/pi"; mkdir -p "$T/state" "$T/pi"; }
 td_seat() { # <agent> <task> <started>
-  printf 'task=%s\nwindow=%s\nstarted=%s\n' "$2" "$1" "$3" > "$T/state/$1.env"
+  routing_fixture_record "$T/state" "$1" "$2" "$T/worktrees/$1" "$T/docs/team/tasks/$2.md" td/fixture "$TEAM_SESSION-$1" policy "$3"
 }
 td_spawn() { printf '%s %s\n' "$2" "${3:-99999}" > "$T/state/dispatch-$1.spawn"; }
 td_exit()  { printf '%s %s\n' "$2" "$3" > "$T/state/dispatch-$1.exit"; }
@@ -112,6 +114,7 @@ td_tail() { # <agent> <现场行…>：harness 在 agent 退出时自抓的最�
 }
 td_session() { # <agent> <sid> <timestamp> <errorMessage>
   local a="$1" sid="$2" ts="$3" msg="$4" d
+  team_state_set "$a" sid "$sid"
   d="$(team_pi_session_dir "$T/worktrees/$a")"
   mkdir -p "$d"
   printf '{"type":"message","id":"e1","timestamp":"%s","message":{"role":"assistant","stopReason":"error","errorMessage":"%s"}}\n' \
