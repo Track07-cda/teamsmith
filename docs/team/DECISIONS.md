@@ -1111,3 +1111,15 @@ V23 判定 **PASS**（候选 `2fc9ea5` / base `611f72d4`）：S1/S2 面零命中
 三条分支是同一条链（S2 起于 S1 的 tip，S3 起于 S2 的 tip），所以合并 S3 一支即带入 S1+S2+S3。
 
 **次序硬约束**：0.1.2 的发布对象是 tag `v0.1.2` 那棵树，要求推送时 `main` 的 HEAD 就在 tag 上。因此 **routing 的合并必须排在 `git push public main --tags` 之后**——先推 0.1.2，再合 routing（0.2.0），最后才做 P231 清理与三项目的配置迁移。在 0.1.2 推完之前，routing 一支保持冻结、不动 main。
+
+## D139 · 0.1.2 发布门禁全绿，等用户放行推仓与发布（2026-10-13）
+
+最终门禁（冻结克隆 + 钉死容器，release object = tag `v0.1.2` 指向的 `69692a6`）：`openspec validate --all --strict` **16/16**，smoke **✓4653 ✗0**，`SMOKE-RC=0`，容器退出 0。日志 `/tmp/mile-gate-final.log`（完整落盘）。
+
+与上一次门禁（v0.1.1 的 4571/0）相比多出 82 条断言，全部来自本版合并的长作业车道（A 刀 + P236 归属返工）与发布机器进仓。
+
+release object 之后的 delta 只有两条账本记录（`docs/team/DECISIONS.md`、`docs/team/reviews/V23.md`，共 130 行插入）：按项目自己的选段规则 `docs/*` 属豁免类、不需要任何段落开火（`section-select.sh` 明确输出「没有段落需要运行」），而唯一覆盖账本的检查 `ledger-ban` 在最终 tip 上单独跑过：**hits=0 names=ok（1359 文件）**。tag 会在推送前重打到当时的 HEAD。
+
+发布检查此刻唯一一条红仍是 13 行对端名（P231 的对象，用户已接受不等它）。
+
+不可逆步骤（**等用户逐条点头**）：`git push public main --tags`、`npm publish --access public`（有 2FA 时 npm 打暂存包、用户到网页批准）。推送后按清单第 6 节做发布后验证（新克隆 + 三条安装路径 + `team version --check`），并在推完才合并 routing（0.2.0，D138）。
