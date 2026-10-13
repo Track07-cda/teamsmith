@@ -5,8 +5,31 @@ team_inbox_file() { printf '%s\n' "$(team_inbox_dir)/$1.md"; }
 
 team_inbox_total() { local f; f="$(team_inbox_file "$1")"; [ -f "$f" ] && wc -l < "$f" | tr -d ' ' || printf '0'; }
 
+# ---------------------------------------------------------------- 收件箱的已读基线（P241/B3）
+# 基线是**席位自己的记账**，不是派单身份，所以它住在 sidecar `state/<seat>.inbox`：写进
+# `state/<seat>.env` 会把那份 v1 assignment 记录变成「legacy 记录」，该席位下一次非 fresh 派单
+# 被无故拒掉（V25 的 B3，11 条红）。语义：基线跟**记录**同生命周期 —— `team_state_clear`
+#（close/teardown）删记录时一并删它，收件箱重新从未读展示（宁可重放已读，不可吞掉未读）。
+# 读侧兼容升级前写在 env 里的 `inbox_lines`：sidecar 不在时回落到它，免得升级后一次性重放历史行。
+team_inbox_ack_file() { printf '%s\n' "$TEAM_STATE_DIR/$1.inbox"; }
+
+team_inbox_acked() { # <agent> → 已 ack 的行数基线（sidecar 优先，缺 sidecar 时回落 env 的旧键）
+  local f acked
+  f="$(team_inbox_ack_file "$1")"
+  if [ -f "$f" ]; then acked="$(head -n 1 "$f" 2>/dev/null || true)"
+  else acked="$(team_state_get "$1" inbox_lines 0)"; fi
+  case "$acked" in ''|*[!0-9]*) acked=0 ;; esac
+  printf '%s\n' "$acked"
+}
+
+team_inbox_ack_set() { # <agent> <行数>：只写 sidecar（原子替换），永不碰 assignment 文件
+  local dir tmp; dir="$(team_state_dir)"
+  tmp="$(mktemp "$dir/.inbox-ack.XXXXXX")" || return 1
+  printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$dir/$1.inbox"
+}
+
 team_inbox_new() { # <agent> → 未 ack 的行数
-  local total acked; total="$(team_inbox_total "$1")"; acked="$(team_state_get "$1" inbox_lines 0)"
+  local total acked; total="$(team_inbox_total "$1")"; acked="$(team_inbox_acked "$1")"
   # 文件被截短/重建（acked > total）时 ack 基线失效：把剩下的行当未读重新展示一次。
   # 不这样，一条新消息会因为旧的 ack 计数比文件行数大而**永远看不见**（F26 的 live 现场）。
   case "$acked" in ''|*[!0-9]*) acked=0 ;; esac
@@ -18,7 +41,7 @@ team_inbox_since() { # <agent> → 未 ack 的行
   local f start total
   f="$(team_inbox_file "$1")"
   [ -f "$f" ] || return 0
-  start="$(team_state_get "$1" inbox_lines 0)"
+  start="$(team_inbox_acked "$1")"
   case "$start" in ''|*[!0-9]*) start=0 ;; esac
   total="$(team_inbox_total "$1")"
   [ "$start" -gt "$total" ] && start=0          # 与 team_inbox_new 的失效基线保持一致
@@ -926,7 +949,7 @@ team_cmd_inbox() {
       team_inbox_since "$a" | sed 's/^/  /'
     fi
     if [ "$ack" = "1" ]; then
-      team_state_set "$a" inbox_lines "$(team_inbox_total "$a")"
+      team_inbox_ack_set "$a" "$(team_inbox_total "$a")"
     fi
   done
   [ "$ack" = "1" ] && team_ok "已标记为已读（--ack）"

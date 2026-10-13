@@ -1122,7 +1122,10 @@ team_dispatch_select_identity() {
     complete=1; oldtask="${TEAM_ASSIGN[task]}"; oldmodel="${TEAM_ASSIGN[model]}"; oldsid="${TEAM_ASSIGN[sid]}"; origin="${TEAM_ASSIGN[selected_via]}"
     if [ "$oldtask" = "$id" ] && [ "${TEAM_ASSIGN[taskfile]}" = "$taskfile" ] && [ "${TEAM_ASSIGN[category]}" = "$category" ] &&
        [ "${TEAM_ASSIGN[branch]}" = "$branch" ] && [ "${TEAM_ASSIGN[worktree]}" = "$wt" ]; then matching=1; fi
-  elif [ -f "$TEAM_STATE_DIR/$agent.env" ] && [ "$fresh" != 1 ]; then
+  # P241/B3：只有**自称是 assignment 记录**的文件才在这里被拒（legacy/损坏/半条记录）。
+  # 一份只有无关记账键的文件（旧实现由 `team inbox --ack` 写出来的 `inbox_lines=N`）不是记录，
+  # 按「没有记录」继续派单；否则该席位会被无故要求 --fresh。
+  elif [ "$fresh" != 1 ] && team_assignment_record_present "$agent"; then
     team_err "$agent: $TEAM_ASSIGN_DIAGNOSTIC；保留磁盘交接，dispatch $agent $id $taskfile --fresh"; return 1
   fi
   if [ -f "$TEAM_STATE_DIR/$agent.pending" ]; then

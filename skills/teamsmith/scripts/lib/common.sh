@@ -1297,6 +1297,7 @@ team_agent_known() {
 }
 
 team_models_known() {
+  team_model_shape_require || return 1
   local tok a
   if team_task_map_violation "${TEAM_TASK_MODELS:-}" >/dev/null; then
     for tok in $TEAM_TASK_MODELS; do printf '%s\n' "${tok#*=}"; done
@@ -1325,9 +1326,26 @@ team_require_agent() {
 }
 
 # ---------------------------------------------------------------- Task model policy and committed launch identity (P228)
+# 模型值形状的**一处判定**（change: model-id-shape R1）：provider = 第一个 `/` 之前（非空、不含 `:`），
+# model = 之后全部（先剥第一个 `:` 起的思考档后缀再判：body 非空、每段非空），整体不含空白。
+# 它住在 config 命令模块 `cmd-config.sh`（CLI 的 shape/config 面：model kind、pairlist token、
+# set-agent-model、add-agent --model 全走那一份），本文件有 5 个使用点。P241/B2：只加载了基础库的
+# 调用方（夹具探针、monitor 的校验器）拿不到命令模块，旧实现在这些路径上报
+# `team_config_model_violation: command not found` —— 每个使用点先用这里确保模块已加载：
+# 同一份实现（不长第二份），加载后与全量加载逐字节一致。
+team_model_shape_require() { # P241/B2：确保模型值形状判定已可用（幂等）
+  declare -F team_config_model_violation >/dev/null 2>&1 && return 0
+  local _d; _d="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=lib/cmd-config.sh
+  [ -f "$_d/cmd-config.sh" ] && . "$_d/cmd-config.sh"
+  declare -F team_config_model_violation >/dev/null 2>&1 || {
+    team_err "模型值形状判定不可用：$_d/cmd-config.sh 缺失或加载失败（装坏的 skill？）"; return 1; }
+}
+
 team_category_valid() { [[ "${1:-}" =~ ^[a-z][a-z0-9-]*$ ]]; }
 
 team_task_map_violation() {
+  team_model_shape_require || { printf '模型值形状判定不可用（cmd-config.sh 缺失或加载失败）；修法：重装 skill\n'; return 1; }
   local value="${1:-}" tok cat model seen=' '
   case "$value" in ''|*$'\n'*|*$'\r'*|*'#'*) printf 'task map 必须非空、单行、可表示\n'; return 1 ;; esac
   for tok in $value; do
@@ -1356,6 +1374,8 @@ team_task_policy_model() {
 }
 
 team_model_policy_issues() {
+  # 契约：stdout 每行一个问题。模块缺失本身就是问题 —— 不让「坏装」被守卫读成干净策略。
+  team_model_shape_require || { printf 'TEAM_MODEL_SHAPE: 模型值形状判定不可用（cmd-config.sh 缺失或加载失败）；修法：重装 skill\n'; return 0; }
   local key reason
   for key in TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; do
     if [ -n "${TEAM_CONFIG:-}" ] && grep -vE '^[[:space:]]*#' "$TEAM_CONFIG" | grep -Eq "(^|[^A-Za-z0-9_])$key([[:space:]]*=|[[:space:]])"; then
@@ -1412,6 +1432,25 @@ team_identity_snapshot() { # One bounded DATA snapshot, for worker and PM record
   if IFS= read -r -d '' -n 65537 data < "$f"; then TEAM_IDENTITY_DIAGNOSTIC='NUL/oversized identity'; return 1; fi
   TEAM_IDENTITY_DATA="$data"; TEAM_IDENTITY_DIAGNOSTIC=''
 }
+# P241/B3：哪些键属于「assignment 记录」—— v1 字段 + v0.1.2 的历史字段。判据只回答「这份文件
+# 是不是记录」，不参与值校验；收件箱记账之类的无关键（inbox_lines 等）不在其中。
+team_assignment_field() { # <key> → 0 = 是 assignment 字段
+  case "${1:-}" in
+    assignment_version|task|taskfile|category|branch|worktree|window|seat|model|model_src|selected_via|launch_via|sid|launch_nonce|started|sid_bytes|mode|identity_via) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+team_assignment_record_present() { # <seat> → 0 = state/<seat>.env 自称是一份 assignment 记录
+  local f="$TEAM_STATE_DIR/$1.env" data line
+  [ -f "$f" ] || return 1
+  # 读不了 / 超限 / 含 NUL：当作「有记录」（保守：仍走拒绝路径，不假装文件不存在）
+  team_identity_snapshot "$f" || return 0
+  data="$TEAM_IDENTITY_DATA"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if team_assignment_field "${line%%=*}"; then return 0; fi
+  done < <(printf '%s' "$data")
+  return 1
+}
 team_assignment_load() { # DATA, never source/eval; shared parse also used by monitor.
   local seat="$1" f="${2:-$TEAM_STATE_DIR/$1.env}"
   declare -gA TEAM_ASSIGN=(); TEAM_ASSIGN_DIAGNOSTIC='missing assignment'
@@ -1420,16 +1459,22 @@ team_assignment_load() { # DATA, never source/eval; shared parse also used by mo
   team_assignment_parse "$seat" "$TEAM_IDENTITY_DATA"
 }
 team_assignment_parse() { # seat snapshot; also the monitor's authoritative validator
-  local seat="$1" data="$2" line key val
+  local seat="$1" data="$2" line key val assignment_fields=0
   declare -gA TEAM_ASSIGN=(); TEAM_ASSIGN_DIAGNOSTIC='malformed assignment'
   [ "${#data}" -le 65536 ] || { TEAM_ASSIGN_DIAGNOSTIC='assignment exceeds bounded read'; return 1; }
+  team_model_shape_require || { TEAM_ASSIGN_DIAGNOSTIC='model shape module missing'; return 1; }
   while IFS= read -r line || [ -n "$line" ]; do
     [[ "$line" == *=* ]] || { TEAM_ASSIGN_DIAGNOSTIC='malformed line'; return 1; }
     key="${line%%=*}"; val="${line#*=}"
     [[ "$key" =~ ^[a-z_]+$ ]] || { TEAM_ASSIGN_DIAGNOSTIC='malformed field'; return 1; }
     [ -z "${TEAM_ASSIGN[$key]+x}" ] || { TEAM_ASSIGN_DIAGNOSTIC="duplicate $key"; return 1; }
     TEAM_ASSIGN[$key]="$val"
+    if team_assignment_field "$key"; then assignment_fields=1; fi
   done < <(printf '%s' "$data")
+  # P241/B3：一份**没有任何 assignment 字段**的文件不是记录（旧实现只看 assignment_version，
+  # 于是一份只有无关记账键的文件被判成 legacy 记录，挡住非 fresh 派单）。只有真正带 assignment
+  # 字段（v1 字段或 v0.1.2 的历史字段）却没有版本号的，才是 legacy。
+  [ "$assignment_fields" = 1 ] || { TEAM_ASSIGN_DIAGNOSTIC='not an assignment record'; return 1; }
   [ "${TEAM_ASSIGN[assignment_version]:-}" = 1 ] || { TEAM_ASSIGN_DIAGNOSTIC='legacy/unknown assignment_version'; return 1; }
   for key in task taskfile category branch worktree window seat model selected_via launch_via sid launch_nonce started mode; do
     [ -n "${TEAM_ASSIGN[$key]:-}" ] || { TEAM_ASSIGN_DIAGNOSTIC="incomplete $key"; return 1; }
@@ -1777,6 +1822,9 @@ team_state_clear() {
   rm -f "$TEAM_STATE_DIR/$1.env"
   # M4.3 B：启动证据文件也属于这个 agent 的运行时状态（teardown/close 时一起清）
   rm -f "$TEAM_STATE_DIR/dispatch-$1.spawn"
+  # P241/B3：收件箱的已读基线（cmd-status.sh 的 team_inbox_acked）也是本席位的记账，与 env
+  # 同生命周期地清 —— 记录没了就重新从未读展示，宁可重放已读不可吞掉未读。
+  rm -f "$TEAM_STATE_DIR/$1.inbox"
   team_scan_invalidate "state:$1"   # M50
 }
 
@@ -2510,6 +2558,7 @@ team_pm_resume_key() {
 }
 team_pm_metadata_load() {
   local f="$TEAM_STATE_DIR/pm-launch.env" line key val fields='' field
+  team_model_shape_require || return 1
   declare -A meta=()
   TEAM_PM_SELECTED_MODEL=''; TEAM_PM_RECORDED_RESUME_KEY=''; TEAM_PM_METADATA_JSON='{}'; TEAM_PM_IDENTITY_VIA=''
   team_identity_snapshot "$f" || return 1
