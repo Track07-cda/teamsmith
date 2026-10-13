@@ -384,6 +384,7 @@
 | P235 | Task-model routing S3: init, templates, guidance, gate registration | dev | - | - | wip |
 | P236 | long-job-suspend rework: suspend detection must be scoped to the owning session | dev-bob | - | - | done |
 | V22 | Suspend owner-scope rework: independent verification | verify | - | - | done |
+| V23 | task-model-routing S3: independent verification | verify | - | - | wip |
 
 ## 当前里程碑
 
