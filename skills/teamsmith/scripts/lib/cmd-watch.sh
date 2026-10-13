@@ -279,6 +279,10 @@ team_cmd_resume() {
     fi
     n=$((n + 1))
     if [ "$dry" = "1" ]; then
+      # P240：dry-run 是 PM「一眼看清哪些席位有活可续」的清单入口（workflows.md：the PM looks for itself）。
+      # P228 的合同要求 dry-run 解析与真派单同一套预检/计划（退非 0、不写盘），那条走下面的 --print；
+      # 但清单行本身是既有输出契约（--select 11c / 6k⑥ / M9.3-③ 都钉它），两个都要在：先列清单，再看计划。
+      printf '  %s 可续跑：%s → %s\n' "$a" "$task" "$taskfile"
       team_cmd_dispatch "$a" "$task" "$taskfile" --print || failed=1
     else
       team_info "  续跑 $a · $task"
