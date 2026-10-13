@@ -387,15 +387,15 @@
 | V23 | task-model-routing S3: independent verification | verify | - | - | done |
 | P237 | long-job-suspend B knife: the worker prompt's three-state contract | dev | - | - | done |
 | V24 | long-job-suspend B knife: independent verification | verify | - | - | done |
-| P238 | Routing suite into the gate: per-group self-sufficiency, a gate section, selector attribution | dev-bob | - | - | wip |
+| P238 | Routing suite into the gate: per-group self-sufficiency, a gate section, selector attribution | dev-bob | - | - | done |
 | P239 | Ledger ban must fire on report-only changes (+ template line) | dev3 | - | - | done |
 | P240 | Restore the crashed-agent/resume path broken by the routing merge | dev | - | - | done |
 | V25 | Full red inventory and classification after the routing merge (read-only diagnosis) | verify | - | - | done |
 | V26 | P239: independent verification (ledger claim + report template line) | dev | - | - | done |
 | P241 | Fix the 12 product regressions from the routing merge (inbox bookkeeping, common.sh self-sufficiency) | dev | - | - | done |
-| P242 | Turn the 210 class-A reds green under the new contract (fixtures, not assertions weakened) | dev | - | - | todo |
-| V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | wip |
-| V28 | P238: independent verification (routing suite in the gate, self-sufficiency, selector) | dev3 | - | - | wip |
+| P242 | Turn the 210 class-A reds green under the new contract (fixtures, not assertions weakened) | dev | - | - | wip |
+| V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | blocked |
+| V28 | P238: independent verification (routing suite in the gate, self-sufficiency, selector) | dev3 | - | - | done |
 
 ## 当前里程碑
 
