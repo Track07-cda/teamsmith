@@ -34,3 +34,15 @@ git diff --check && git status --short
 ## 交付
 
 `docs/team/reports/P234-dev.md`（逐条 tasks.md 对照、命令与 rc、渲染帧、未做项）、证据包按 D94 放仓外；不合并、不推送；做完 `team notify pm`，之后由未写过本任务的席位独立复验。
+
+## 返修轮次 1（2026-10-13，独立复验 V27 判 FAIL）
+
+复验记录 `docs/team/reviews/V27.md`（受检 tip `a0107a0`）判 **FAIL**，实体是三条必修；其余逐条为绿（发布路径与五种结局、9 个落点、并发与锁、10 万槽有界 IO、面板第五页真 pty 含坏源与鼠标偏好、45 个快照逐帧审查 UNCLASSIFIED=0、三树回归对照无新红无弱化、bundle 可逐字节重建）。三条请按 V27 §2 的修法建议处理，每条都要**红侧**：
+
+**M1（挂住）**：`index.v1` 或 `bodies/<id>.md` 是 FIFO 时，`reply list`/`show`（含 `--raw`）**永久挂住**（实测 rc 124，`open(2)` 只带了 `O_RDONLY|O_CLOEXEC|O_NOFOLLOW`、缺 `O_NONBLOCK` 与类型判定）。规格 `key-replies`「Traversal and nonregular sources are refused」明文要求**不得读目标、不得阻塞在 FIFO 上**。修法：读路径（索引 fd 与 `readBody()`）加 `O_NONBLOCK` 并复用现成的 `isFile()` 判定后清位。红侧：两条夹具断言「rc≠124 且给出 `not a regular file` 诊断」。
+
+**M2（静默丢游标）**：`team reply list --before <no> --json` 与 `--before=<no> --json` 会**静默返回最新页**（根因：`scripts/lib/cmd-reply.sh` 的 list 分支里 `--json) extra=(--format json) ;;` 是赋值、应为 `extra+=`；文本形态正确）。红侧：把**两种参数顺序**都钉住。
+
+**M3（门禁环境红）**：你登记的那一段在**钉死门禁镜像**里红——`ci/Containerfile` 按 M47 的约定在编译完 tmux 后 purge 掉 `build-essential`，所以镜像里永远没有编译器，IO 计数 shim 编不出来（容器里 `--select bounded` ✓4 ✗1、`--select flip` ✓8 ✗1、走门禁入口 `smoke.sh --select 61` ✓21 ✗1；宿主上同命令全绿）。你的报告里的「§61 ✓1 ✗0」只在宿主成立。**两条路你选一条并给依据**：① 换掉依赖编译器的手段（例如读 `/proc/<子进程>/io` 的 `rchar/syscr`），或 ② 保留 shim 但按项目既有约定让缺工具**可见跳过并点名**（不是静默通过、也不是留在那里让所有人学会忽略的红）。无论哪条，`flip/full_scan` 在 shim 缺席时都必须可见跳过而不是报红；`ci/Containerfile` 若要动，单独提交并在报告里注明那是门禁镜像的契约变化。
+
+验收（都要贴真实输出，容器与宿主各一次）：该 change 自己的三套入口（`key-replies.sh --all`、`-ui.sh --all`、`-pty.sh --all`）+ `smoke.sh --select 61`（容器内）+ 你自造的 M1/M2 红侧 + `section-select.sh --check` + 账本禁令。修后冻结新 tip，由**另一个**席位复验（V29）。
