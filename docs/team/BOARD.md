@@ -392,6 +392,7 @@
 | P240 | Restore the crashed-agent/resume path broken by the routing merge | dev | - | - | done |
 | V25 | Full red inventory and classification after the routing merge (read-only diagnosis) | verify | - | - | wip |
 | V26 | P239: independent verification (ledger claim + report template line) | dev | - | - | done |
+| P241 | Fix the 12 product regressions from the routing merge (inbox bookkeeping, common.sh self-sufficiency) | dev | - | - | wip |
 
 ## 当前里程碑
 
