@@ -389,8 +389,9 @@
 | V24 | long-job-suspend B knife: independent verification | verify | - | - | done |
 | P238 | Routing suite into the gate: per-group self-sufficiency, a gate section, selector attribution | dev-bob | - | - | wip |
 | P239 | Ledger ban must fire on report-only changes (+ template line) | dev3 | - | - | wip |
-| P240 | Restore the crashed-agent/resume path broken by the routing merge | dev | - | - | wip |
+| P240 | Restore the crashed-agent/resume path broken by the routing merge | dev | - | - | done |
 | V25 | Full red inventory and classification after the routing merge (read-only diagnosis) | verify | - | - | wip |
+| V26 | P239: independent verification (ledger claim + report template line) | dev | - | - | wip |
 
 ## 当前里程碑
 
