@@ -25,11 +25,11 @@ docs/team/reports/**/.runtime/
 docs/team/reports/**/.scratch/
 
 # 账本：可读层（任务书、报告与复验的正文、决策、看板、往来）进仓库；
-# 证据包、运行时简报与维护工具不进（见 docs/team/DECISIONS.md 的 D94）。
+# 证据包与运行时简报不进（见 docs/team/DECISIONS.md 的 D94）。
+# 发布工具与发布清单**进**仓库（2026-10-10，P229）：它们是发布面的一部分 —— 放在仓外没人跑，
+# 坏了两周无人知；进仓后就跟着发布检查一起被跑（docs/team/tools/release-check.sh）。
 .pi/
 docs/team/inbox/
-docs/team/tools/
-docs/team/RELEASE-PUBLIC.md
 docs/team/reports/**
 !docs/team/reports/*.md
 docs/team/reviews/**
