@@ -399,8 +399,9 @@
 | P243 | Select the routing section when product-side routing logic changes | dev3 | - | - | todo |
 | P244 | change status must recognise squash merges (archive precondition) | dev3 | - | - | wip |
 | V29 | P242: independent verification (class-A clearance, full gate, no weakened assertions) | verify | - | - | done |
-| P245 | Routing checklist: tick S1 (1-5) and S3 (7) | dev | - | - | wip |
-| P246 | Routing checklist: tick S2 (6) | dev2 | - | - | wip |
+| P245 | Routing checklist: tick S1 (1-5) and S3 (7) | dev | - | - | done |
+| P246 | Routing checklist: tick S2 (6) | dev2 | - | - | done |
+| V30 | P244: independent verification (squash-aware merge check) | verify | - | - | wip |
 
 ## 当前里程碑
 
