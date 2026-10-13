@@ -9,10 +9,16 @@
 #     basis     这条声明依据什么（段内点名的行 / 段驱动的夹具或命令），供复验核对
 #
 # exempt: docs/*
-#   —— 豁免类：团队账本（任务书 / 报告 / 复验记录 / 看板 / 线程）。没有任何行可以声明它；
-#      只给 docs/* 路径时 decision=NONE（门禁不为记账文档开火）。
+#   —— 豁免类：团队账本（任务书 / 报告 / 复验记录 / 看板 / 线程）。patterns 列**没有任何行可以声明它**
+#      （声明即 --check ④ 红）；只给 docs/* 路径且**没有被账本归属覆盖**时 decision=NONE。
+#      例外只有一条（P239）：`docs/team/**` 归下面那行 ledger-scan（账本文本的改动要选中账本禁令段）。
 # prologue: 0 0b 0c 0d
 #   —— 前导段：建 $TMP/$REPO/$FAKE 与静态检查；任何选段都先跑它们。
+# ledger-scan: 60 docs/team/*
+#   —— 账本归属（P239）：`docs/team/**` 的路径归这一段（D94 禁令的承载段）。为什么写在这里而不是
+#      patterns 列：豁免类不许任何行声明，patterns 列的归属会与 ④ 相矛盾；账本归属单独写在表头这一行，
+#      命中它的路径算「有归属」（不再落到 NONE）。删掉这行或它的模式 → 账本路径回到豁免类（NONE），
+#      --check ⑦ 会对「缺头 / 指向未知段 / 没有模式 / 模式没盖住账本样例」逐条判红。
 #
 # 兜底：一条路径被任何行的 patterns 覆盖 → RUN；不在豁免类、又没有行覆盖 → FULL（跑全套，多跑总是安全）。
 0	0 · 临时仓库	README.md	-	段内点名 1 条真实路径 token
@@ -139,4 +145,4 @@
 55	55 · meeting-liveness：未读 / 过期 / 队列 / 标识（P139，纯逻辑）	skills/teamsmith/scripts/lib/* skills/teamsmith/scripts/team skills/teamsmith/extension/* skills/teamsmith/tests/*	-	段内调用 team meeting/status/digest/monitor/notify/init/board；夹具直接 source scripts/lib（会议共享区只写夹具自己的 TEAM_MEETINGS_DIR）
 56	56 · meeting-liveness 真 tmux：敲门 / 排水 / 每方窗口（P139）	skills/teamsmith/scripts/lib/* skills/teamsmith/scripts/team skills/teamsmith/extension/* skills/teamsmith/tests/*	55	段内调用 team meeting/outbox/notify/watch/status；真 tmux 私有 session + tests/fake-tui.py；沿用 54 段的夹具仓库与会议共享区（needs:54）
 59	59 · pulse-nudge-key：叫醒键按类别集合（P174）	skills/teamsmith/tests/pulse-nudge-key.sh skills/teamsmith/scripts/lib/* skills/teamsmith/scripts/team skills/teamsmith/tests/lib/*	-	段内点名 1 条真实路径 token（$SKILL_DIR/tests/pulse-nudge-key.sh）；夹具本体 pulse-nudge-key.sh 自己 source scripts/lib 与 tests/lib/tmp-root.sh，observers 档在私有夹具仓库里跑真 team CLI（monitor/__panel-data），tmux 走私有 shim（只读、不碰共享 server）
-60	60 · 账本禁令：家目录 / 私有网段 / 用户名 / 他项目名（P212 · D94）	skills/teamsmith/tests/ledger-ban.sh skills/teamsmith/tests/lib/tmp-root.sh	-	段内点名 1 条真实路径 token（$SKILL_DIR/tests/ledger-ban.sh）；夹具本体 ledger-ban.sh 自建私有临时根（lib/tmp-root.sh）、自检含五形状 + 四条可证伪 + 影子；真实账本扫描只读检出树，他项目名单从被忽略的 .pi/team/forbidden-names.txt 读
+60	60 · 账本禁令：家目录 / 私有网段 / 用户名 / 他项目名（P212 · D94）	skills/teamsmith/tests/ledger-ban.sh skills/teamsmith/tests/ledger-claim.sh skills/teamsmith/tests/lib/tmp-root.sh	-	段内点名 1 条真实路径 token（$SKILL_DIR/tests/ledger-ban.sh）；夹具本体 ledger-ban.sh 自建私有临时根（lib/tmp-root.sh）、自检含五形状 + 四条可证伪 + 影子；真实账本扫描只读**检出树**（被测分支的工作树），他项目名单从被忽略的 .pi/team/forbidden-names.txt 读；P239：`docs/team/**` 的归属由表头 `# ledger-scan:` 行声明（patterns 列不许声明豁免类）——账本文本（报告/复验/看板/线程）的改动只选中这一段，就地在自己的树上开火；行为面与三条红侧在 tests/ledger-claim.sh

@@ -15,9 +15,15 @@
 #         2 = 用法错误、表畸形、未知 key、路径出界。
 #
 # 决定语义（保守方向永远是「多跑」）：
-#   NONE = 给的路径全在豁免类（docs/*，团队账本）且没有行声明它 → 没有段需要跑
+#   NONE = 给的路径全在豁免类（docs/*，团队账本）且没有被表头 ledger-scan 归属模式覆盖
+#          → 没有段需要跑
 #   RUN  = 给的路径每条都被某些行声明 → 这些 key + 前导段 + needs 闭包，按源序
 #   FULL = 至少一条路径没有任何行声明、也不在豁免类 → 跑全套（兜底不可绕过）
+#
+# 账本（docs/team/**）的归属（P239）：patterns 列**不允许**声明豁免类（--check ④ 守着这条），
+# 所以账本路径的归属写在表头一行 `# ledger-scan: <key> <pattern…>`：命中的路径归那一段。
+# 删掉这行（或它的归属模式）→ 账本路径回到豁免类（NONE）；--check ⑦ 会对「缺头 / 指向未知段 /
+# 没有模式 / 模式没盖住账本样例」逐条判红。
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,6 +96,9 @@ CHECKOUT_SHAPE="$(checkout_shape "$ROOT")"
 #   needs   ：必须先跑的段 key（逗号分隔）；`-` = 无。选段时它们连同自己的 needs 一起进闭包。
 P_EXEMPT=""
 P_PROLOGUE=""
+P_LEDGER_SCAN=""   # 表头 `# ledger-scan: <key> <pattern…>`：账本（docs/team/**）的归属行（P239）
+P_LEDGER_PAT=""    # 上面那行的归属模式（空格分隔，同 patterns 列的 case glob 语义）
+P_LEDGER_LINE=""   # 上面那行的原文载荷（解析用；空 = 表里没有这行）
 T_N=0
 T_KEY=(); T_ID=(); T_PAT=(); T_NEEDS=(); T_BASIS=()
 
@@ -101,6 +110,9 @@ load_table() {
     case "$line" in
       "# exempt:"*)   P_EXEMPT="${line#\# exempt:}"; P_EXEMPT="${P_EXEMPT# }"; P_EXEMPT="${P_EXEMPT% }"; continue ;;
       "# prologue:"*) P_PROLOGUE="${line#\# prologue:}"; P_PROLOGUE="${P_PROLOGUE# }"; P_PROLOGUE="${P_PROLOGUE% }"; continue ;;
+      "# ledger-scan:"*) P_LEDGER_LINE="${line#\# ledger-scan:}"; P_LEDGER_LINE="${P_LEDGER_LINE# }"; P_LEDGER_LINE="${P_LEDGER_LINE% }"
+        P_LEDGER_SCAN="${P_LEDGER_LINE%% *}"; P_LEDGER_PAT="${P_LEDGER_LINE#"$P_LEDGER_SCAN"}"; P_LEDGER_PAT="${P_LEDGER_PAT# }"
+        continue ;;
       "#"*|"") continue ;;
     esac
     IFS=$'\t' read -r -a F <<<"$line"
@@ -420,6 +432,15 @@ do_paths() {
       done
     done
     if [ "$claimed" = "0" ]; then
+      # 账本归属（P239）：patterns 列不许声明豁免类，所以账本路径的归属由表头 ledger-scan 行提供。
+      if [ -n "$P_LEDGER_PAT" ]; then
+        IFS=' ' read -r -a PARR <<<"$P_LEDGER_PAT"
+        for pp in "${PARR[@]}"; do
+          if pat_match "$pp" "$p"; then claimed=1; add_key "$P_LEDGER_SCAN" "$p"; break; fi
+        done
+      fi
+    fi
+    if [ "$claimed" = "0" ]; then
       if pat_match "$P_EXEMPT" "$p"; then exempted+=("$p"); else unclaimed+=("$p"); fi
     fi
   done
@@ -435,7 +456,7 @@ do_paths() {
     printf 'decision=NONE\n'
     printf 'sections=%s\n' "$S_N"
     printf 'keys=0\n'
-    for p in "${exempted[@]}"; do printf 'reason=%s ← 豁免类（%s）：团队账本，门禁不为它开火\n' "$p" "$P_EXEMPT"; done
+    for p in "${exempted[@]}"; do printf 'reason=%s ← 豁免类（%s）且没有被账本归属（ledger-scan）覆盖：门禁不为它开火\n' "$p" "$P_EXEMPT"; done
     printf 'reason=没有段落需要运行（no section needs to run）\n'
     return 0
   fi
@@ -474,11 +495,13 @@ do_list() {
 #   ① 段 ↔ 行一一对应（段没行 / 行没段 / 重复 key）
 #   ② needs 存在且指向**更早**的段
 #   ③ 字面模式（无通配）存在于工作树
-#   ④ 豁免类没有任何行声明
+#   ④ 豁免类没有任何行声明（patterns 列）
 #   ⑤ 前导段的 key 都在（否则选段会少跑前导）
 #   ⑥ 段正文里点名的**真实**路径 token 必须被该行的 patterns 覆盖（token 与行号都点名）；
-#      豁免类（docs/**）的 token 不参与该检查 —— 按 ④ 没有任何行可以声明它们（选择器对它们的
-#      回答是 NONE，不是某一段）
+#      豁免类（docs/**）的 token 不参与该检查 —— 按 ④ 没有任何行可以声明它们（账本路径的归属由
+#      表头 ledger-scan 行担当，不写进 patterns，所以这里也不参与；它有自己的 ⑦）
+#   ⑦ 账本归属（P239）：表头 ledger-scan 行必须在、指向已存在的段、有归属模式，且模式盖住
+#      每一个账本样例（缺一样 = 账本文本的改动不再选中任何段 → 红）
 # 段正文的 normalizer（与 P97 探针同一口径）：$SKILL_DIR→skills/teamsmith、
 #   $SKILL_INIT_DIR→skills/teamsmith-init、$SRC_ROOT/$OS_ROOT/$V94_ROOT→仓库根；
 #   裸前缀 skills/ panel/ extension/ openspec/ ci/；根文件 SCOPE.md/README.md/AGENTS.md/CHANGELOG.md。
@@ -639,6 +662,32 @@ do_check() {
     done
   done < "$SUITE"
   [ "$tok_bad" -eq 0 ] && cok "段正文点名的真实路径 token 都被各自的行覆盖（$tok_n 个 token 检查过；$ex_tok_n 个豁免类 token 不参与）"
+
+  # ⑦ 账本归属（P239）：表头 ledger-scan 行必须在、指向已存在的段、有归属模式，且模式盖住每个账本样例。
+  #    缺一样 = 账本文本的改动不再选中任何段（回到 NONE）；这一条是它的静态牙（行为面在 §60 的夹具里）。
+  local lsc_bad=0 lsc_n=0 lsc_row=""
+  if [ -z "$P_LEDGER_SCAN" ]; then
+    cbad "映射表缺 ledger-scan 头（账本路径没有归属声明处）"; lsc_bad=$((lsc_bad + 1))
+  else
+    lsc_row="$(row_idx "$P_LEDGER_SCAN" || true)"
+    [ -n "$lsc_row" ] || { cbad "ledger-scan 头 [$P_LEDGER_SCAN] 不在映射表里（归属指向未知段）"; lsc_bad=$((lsc_bad + 1)); }
+    [ -n "$P_LEDGER_PAT" ] || { cbad "ledger-scan 头没有归属模式（$P_LEDGER_SCAN）"; lsc_bad=$((lsc_bad + 1)); }
+  fi
+  if [ -n "$lsc_row" ] && [ -n "$P_LEDGER_PAT" ]; then
+    IFS=' ' read -r -a LSPART <<<"$P_LEDGER_PAT"
+    for j in docs/team/BOARD.md docs/team/ROADMAP.md docs/team/reports/X.md docs/team/tasks/X.md \
+             docs/team/threads/dev.md docs/team/inbox/dev.md docs/team/reviews/X.md \
+             docs/team/OWNERSHIP.md docs/team/DECISIONS.md; do
+      covered=0
+      for pp in "${LSPART[@]}"; do pat_match "$pp" "$j" && { covered=1; break; }; done
+      if [ "$covered" = "0" ]; then
+        cbad "ledger-scan 归属模式没有覆盖 $j（改这个路径不会选中它）"; lsc_bad=$((lsc_bad + 1))
+      else
+        lsc_n=$((lsc_n + 1))
+      fi
+    done
+  fi
+  [ "$lsc_bad" -eq 0 ] && cok "账本归属（ledger-scan $P_LEDGER_SCAN）声明有效：$lsc_n/9 个账本样例被它覆盖"
 
   printf '== 选段自检 ==  ok %d  bad %d  SKIP %d\n' "$CHECK_OK" "$CHECK_BAD" "$CHECK_SKIP"
   [ "$CHECK_BAD" -eq 0 ] || return 1

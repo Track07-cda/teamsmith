@@ -15391,6 +15391,7 @@ fi
 # ---------------------------------------------------------------- 36. 选段与分段账本自检（P98 · gate-runtime-budget）
 # 纯逻辑（不起 tmux / 不跑真进程），FAST 与全量都跑。钉四件事：
 #   ① `section-select.sh --check` 绿；四种腐烂（缺行 / 模式变窄 / 未知 needs / 声明豁免类）都红且点名；
+#      P239 起再加两种：账本归属（表头 ledger-scan）缺头 / 归属模式收窄；
 #   ② 三个决定形状（NONE / RUN / FULL）与两种硬错误（未知 key / 路径出界）逐条对照验收表；
 #   ③ 账本：嵌套跑一次小选段，核对「跑了的段数 == 选择器给的 key 数 + 每段一条收口行 + 增量之和 == 结果行
 #      总数 + 最慢段汇总」；用一棵注入 sleep 的变体树证明「慢段照旧绿、秒数真实」；
@@ -15583,6 +15584,11 @@ p98_flip needs-unknown 'needs 指向未知段：no-such-seg' 'BEGIN{OFS="\t"} $1
 p98_flip exempt-claimed '声明了豁免类路径' 'BEGIN{OFS="\t"} $1=="17"{$3=$3" docs/team/*"} {print}'
 p98_flip literal-missing '字面模式在工作树里不存在：skills/teamsmith/tests/p98-no-such-literal.md' \
   'BEGIN{OFS="\t"} $1=="0"{$3=$3" skills/teamsmith/tests/p98-no-such-literal.md"} {print}'
+# P239：账本归属（`# ledger-scan: <key> <pattern…>`）的两种腐烂 —— 缺头（账本改动不再选中任何段）/
+# 归属模式收窄（它没盖到的账本路径回到 NONE）；行为面（--paths 的回答）在 §60 的 tests/ledger-claim.sh。
+p98_flip ledger-scan-missing '映射表缺 ledger-scan 头' '$0 !~ /^# ledger-scan:/'
+p98_flip ledger-scan-narrow 'ledger-scan 归属模式没有覆盖 docs/team/reports/X.md' \
+  '/^# ledger-scan:/{ print "# ledger-scan: 60 docs/team/task*"; next } { print }'
 # 段正文里塞一个没声明的路径 token（scratch 变体树）→ 红且点名 token 与源码行
 P98_TK="$(p98_variant token)"
 P98_TK_ROOT="$(cd -P "$P98_TK/../.." && pwd)"
@@ -15607,9 +15613,13 @@ else
 fi
 
 # ── ② 决定形状与硬错误（纯逻辑，直接问选择器） ────────────────────────────────────────
-P98_DOCS="$(bash "$SEL36" --paths docs/team/BOARD.md docs/team/reports/P97-dev3.md 2>&1)"
-assert_has_echo "$P98_DOCS" "decision=NONE" "36② docs 路径 → NONE"
+P98_DOCS="$(bash "$SEL36" --paths docs/NOTES.md 2>&1)"
+assert_has_echo "$P98_DOCS" "decision=NONE" "36② 非账本 docs 路径 → NONE"
 assert_has_echo "$P98_DOCS" "没有段落需要运行" "36② NONE 明说没有段需要跑"
+# P239：账本路径不再是豁免类 —— 它选中账本禁令段（§60）且只多这一段（归属在表头 ledger-scan 行）
+P98_LEDGER="$(bash "$SEL36" --paths docs/team/BOARD.md docs/team/reports/P97-dev3.md 2>&1)"
+assert_has_echo "$P98_LEDGER" "decision=RUN" "36② P239：账本路径 → RUN（不再是 NONE）"
+assert_has_echo "$P98_LEDGER" "reason=60 ← docs/team/BOARD.md" "36② P239：选中账本禁令段（60）并点名路径"
 P98_RUN="$(bash "$SEL36" --paths skills/teamsmith/scripts/lib/outbox.sh 2>&1)"
 assert_has_echo "$P98_RUN" "decision=RUN" "36② 产品路径 → RUN"
 P98_RUN_KEYS="$(printf '%s\n' "$P98_RUN" | awk -F'\t' 'NF==2{printf "%s ", $1}')"
@@ -15697,8 +15707,8 @@ assert_has "$TMP/p98-knob-on.log" "== 最慢 2 段 ==" "36③ 夹具开关打开
 
 # ── ④ 选段只对「跑了的段」负责 + NONE 什么都不跑 ────────────────────────────────────────
 P98_NONE_RC=0
-P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p98-none.log" --paths docs/team/BOARD.md || P98_NONE_RC=$?
-assert_eq "36④ --paths docs-only 退出 0" "$P98_NONE_RC" "0"
+P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p98-none.log" --paths docs/NOTES.md || P98_NONE_RC=$?
+assert_eq "36④ --paths 非账本 docs 退出 0" "$P98_NONE_RC" "0"
 assert_has "$TMP/p98-none.log" "没有段落需要运行" "36④ NONE 明说没有段需要跑"
 assert_not "$TMP/p98-none.log" "== 结果 ==" "36④ NONE 没有结果行"
 assert_not "$TMP/p98-none.log" "smoke 全绿" "36④ NONE 不喊全绿"
@@ -19803,6 +19813,21 @@ else
       fi
     fi
   fi
+fi
+
+# ⑤ P239：账本改动的选段归属 + 三条红侧（纯逻辑夹具；归属声明在 section-paths.tsv 的表头
+#    `# ledger-scan: 60` 与那一行的 patterns 里）。夹具自己在私有临时根里造植入/假绿对照。
+P239_CLAIM="$SKILL_DIR/tests/ledger-claim.sh"
+if [ -f "$P239_CLAIM" ]; then
+  TEAM_SMOKE_FIXTURE=1 bash "$P239_CLAIM" >"$TMP/p239-claim.log" 2>&1; P239_RC=$?
+  if [ "$P239_RC" = "0" ]; then
+    ok "P239 归属与红侧全绿（$(grep -ac '^  ✓ ' "$TMP/p239-claim.log" || true) 条用例：归属 / 承重 / 开火 / 假绿对照）"
+  else
+    bad "P239 归属与红侧有失败（rc=$P239_RC）"
+    grep -a '✗' "$TMP/p239-claim.log" | head -6 | sed 's/^/      /'
+  fi
+else
+  bad "P239 缺 tests/ledger-claim.sh（归属与红侧夹具）"
 fi
 
 # ---------------------------------------------------------------- 14d. P70 本套自述对账

@@ -18,6 +18,18 @@ $ <command>
 
 - Verdict: <pass / fail / not run>
 - Notes: what was not verified, known risks, TODOs (**be explicit**: if you did not run it, say so)
+- Ledger ban (fixed acceptance line — run it **in your own worktree, on your branch's tree**):
+
+  ```
+  $ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+  ledger-ban: root=… scope=published files=<n> hits=<n> names=ok user=resolved
+  $ echo $?
+  <rc>
+  ```
+
+  Paste the real `hits=` and `rc` from this tree. **Running it in the main checkout cannot see files that exist
+  only on your branch** (a report you just wrote is simply absent there), so a `hits=0` from the main
+  checkout is not evidence that the branch's own ledger is clean.
 
 ## Flip evidence (required for defect-fix tasks)
 
