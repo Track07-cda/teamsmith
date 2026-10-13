@@ -395,6 +395,7 @@
 | P241 | Fix the 12 product regressions from the routing merge (inbox bookkeeping, common.sh self-sufficiency) | dev | - | - | done |
 | P242 | Turn the 210 class-A reds green under the new contract (fixtures, not assertions weakened) | dev | - | - | todo |
 | V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | wip |
+| V28 | P238: independent verification (routing suite in the gate, self-sufficiency, selector) | dev3 | - | - | wip |
 
 ## 当前里程碑
 
