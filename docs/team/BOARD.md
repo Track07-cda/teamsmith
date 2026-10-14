@@ -376,7 +376,7 @@
 | P229 | Release readiness: repair the release tooling and runbook for the post-rewrite shape | dev-bob | - | - | done |
 | P230 | long-job-suspend A knife: lane side (extension + independent entry) | dev2 | - | - | done |
 | V20 | long-job-suspend A knife: independent verification | verify | - | - | done |
-| P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | wip |
+| P231 | Scrub the residual peer name from the tracked tree (13 lines) | dev | - | - | done |
 | P232 | Task-model routing S2: panel category editing (private integration) | dev2 | - | - | done |
 | P233 | Independent verification of the release tooling (P229) | dev3 | - | - | done |
 | P234 | pulse-key-replies apply: CLI publish path, storage, and the fifth panel page | dev | - | - | wip |
@@ -394,7 +394,7 @@
 | V26 | P239: independent verification (ledger claim + report template line) | dev | - | - | done |
 | P241 | Fix the 12 product regressions from the routing merge (inbox bookkeeping, common.sh self-sufficiency) | dev | - | - | done |
 | P242 | Turn the 210 class-A reds green under the new contract (fixtures, not assertions weakened) | dev | - | - | done |
-| V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | wip |
+| V27 | pulse-key-replies: independent verification (tasks 5.1/5.2 evidence) | verify | - | - | done |
 | V28 | P238: independent verification (routing suite in the gate, self-sufficiency, selector) | dev3 | - | - | done |
 | P243 | Select the routing section when product-side routing logic changes | dev3 | - | - | done |
 | P244 | change status must recognise squash merges (archive precondition) | dev3 | - | - | done |
@@ -402,8 +402,9 @@
 | P245 | Routing checklist: tick S1 (1-5) and S3 (7) | dev | - | - | done |
 | P246 | Routing checklist: tick S2 (6) | dev2 | - | - | done |
 | V30 | P244: independent verification (squash-aware merge check) | verify | - | - | done |
-| V31 | P231: independent verification (peer-name scrub + ledger scan coverage) | verify | - | - | wip |
+| V31 | P231: independent verification (peer-name scrub + ledger scan coverage) | verify | - | - | done |
 | P247 | Release check: ancestor-aware tag selection + the post-routing init args | dev | - | - | wip |
+| V32 | Release check: independent verification (tag selection, init route) | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
