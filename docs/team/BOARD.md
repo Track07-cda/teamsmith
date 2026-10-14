@@ -410,6 +410,7 @@
 | P250 | Turn-notice merge (C-1): propose | dev3 | - | - | done |
 | P251 | Turn-notice merge: apply | dev3 | - | - | wip |
 | P252 | CLI help: default English, per-command pages, plain-language concepts | dev | - | - | wip |
+| P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
