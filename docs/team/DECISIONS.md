@@ -1354,3 +1354,16 @@ P248 的 propose 席位（dev2）按类别 `analysis` 解析到 `kimi-coding/k3:
 
 1. **配置**：`team config set-task-model analysis opencode-go/deepseek-v4.1-flash --yes` → 现在四个类别（`code/verify/analysis/infra`）全部指向项目默认模型，**没有任何任务依赖 kimi**。依据是用户 D129 补记（默认模型与 kimi-k3 能力相当、判据不因运行在默认模型上放松）；kimi 仍可作为**显式**选择在需要时使用。
 2. **派单实现细节（值得记）**：改完映射后重派同一任务，记录里仍是 `model=kimi-coding/k3:max`——因为**同一任务（task/branch/category 匹配）会复用记录里的 model**（#2018/#2019 的既有语义：「一个任务固定模型」）。要让已在记录里的任务换模型，必须**显式** `--model <新模型> --fresh`（`selected_via=explicit`）。第三次派单如此执行，页脚实测 `(opencode-go) deepseek-v4.1-flash`。
+
+## D158 · 0.2.0 打包完成并在发布对象上跑门禁（用户授权「可以」，2026-10-14）
+
+用户对三件一并点头（版本号、推仓与 npm 发布授权、长作业变更的归档确认）。执行：
+
+1. **归档 `long-job-suspend`**（14 项里 12 勾；剩 5.2 全量门禁与 5.3 归档本身，归档动作已随本次执行，5.2 的门禁在下面跑）→ `archive/2026-10-14-long-job-suspend`，新增能力 `openspec/specs/background-jobs`（3 条 requirement）。**变更库清空**（`No active changes found`），`openspec validate --all --strict` = **15 项全绿**。
+   Hmm 更正：归档时 5.2/5.3 未勾（它们是「跑门禁」与「本次归档」这两件），它们的勾选与证据在门禁绿后补记——归档目录里的 `tasks.md` 会随后续账本提交补上，如实标注。
+2. **版本落点 0.1.2 → 0.2.0**：六处全部一致（`package.json`、两个 `SKILL.md` 的 front-matter（**带引号**）、`common.sh` 的 `TEAM_VERSION`、README 四处 `@v` pin、CHANGELOG 最新段）；CHANGELOG 写了 v0.2.0 段（含**破坏性变化**与升级命令、两个功能面、长作业提示词侧、门禁与工具面的一批）。
+3. **打 tag `v0.2.0`** 于落点提交 `fcf77b28`；`release-check.sh`（真仓）**30 通过 · 0 失败 · 0 跳过**——发布对象唯一、公开面扫描干净、三条安装路线全过、旧 tag 警告已消失。
+4. **发布门禁**：在**冻结克隆 + 钉死容器**上跑 tag 指向的那棵树（job `release-gate-020`，约 2.3 小时，含 §61b 的 82 分钟变异套件）。**这一轮同时充当两件事**：0.2.0 的发布认证，与 `long-job-suspend` §5.2 的 wrap-up 全量（它覆盖归档动作之后的那棵树，比要求更严）。
+   临时停掉上一轮（job `final-full-gate`，被测树 `9f5c9fe`）：它跑了 90 段、只有那两条已修的预算表红，被 tag 树这一轮取代（这正是「一轮门禁同时服务两件事」的取舍）。
+
+门禁绿后就只剩两步不可逆动作（已获授权，执行前把命令再摆给用户）：`git push public main v0.2.0`（只推本次 tag）与 `npm stage publish`。随后是三个本地项目的迁移（D134/D142 的窗口）。
