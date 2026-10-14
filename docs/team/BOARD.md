@@ -405,6 +405,7 @@
 | V31 | P231: independent verification (peer-name scrub + ledger scan coverage) | verify | - | - | done |
 | P247 | Release check: ancestor-aware tag selection + the post-routing init args | dev | - | - | done |
 | V32 | Release check: independent verification (tag selection, init route) | dev-bob | - | - | done |
+| P248 | Pulse: compose-slot lifecycle + read-only previews (spec/changes/decisions) — propose | dev2 | - | - | wip |
 
 ## 当前里程碑
 
