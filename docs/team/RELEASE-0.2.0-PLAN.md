@@ -55,3 +55,22 @@ bash ~/.agents/skills/teamsmith/scripts/team doctor      # 复核
 1. **版本号**：建议 **0.2.0**（破坏式配置迁移 + 两个新功能面；0.1.x 只做补丁）。
 2. **推公开仓 + npm 发布的授权**（0.1.2 那次已授权，本次是新一轮不可逆动作）。
 3. **长作业变更的归档确认**（门禁跑绿后即可执行；它的清单只剩这一项）。
+
+## 三个本地项目的迁移现状（PM 2026-10-14 只读盘点 + 干跑）
+
+工具入口路径已在 10-13 改好（都指向 `~/.agents/skills/teamsmith/scripts/team`），共享技能软链已指向 npm 包——
+所以 `npm i -g teamsmith@0.2.0` 之后它们立刻拿到 0.2.0，而**旧配置会被拒**。三个项目的现状各不相同：
+
+| 项目 | 现在的模型配置 | 迁移动作 |
+|---|---|---|
+| `agent-base` | 旧式三键：`TEAM_AGENT_MODELS`（按席位 6+ 个，含 `product`）、`TEAM_DEFAULT_MODEL=kimi-coding/kimi-for-coding`、`TEAM_PM_MODEL=kimi-coding/k3` | **真迁移**：`upgrade-models` 移除两个退休键、写入新的类别映射与 PM 模型 |
+| `ai_interview` | 旧式：`TEAM_AGENT_MODELS`（多席位，值多为 `deepseek/deepseek-flash`）、`TEAM_DEFAULT_MODEL="deepseek/deepseek-flash"`、`TEAM_PM_MODEL="kimi-coding/k3"` | **真迁移**（干跑已通过：会移除两个退休键并写入新映射） |
+| `erp` | **已经是新式**：`TEAM_TASK_MODELS=implement=… verify=… docs=… test=…` + `TEAM_PM_MODEL=kimi-coding/k3`（退休键只剩注释） | 基本是空操作：只装新版 + 重启会话；`upgrade-models` 若要跑，也应当**保留它自己的类别词汇**（`implement/docs/test`），不要套用别处的 `code/verify` |
+
+待用户定一处：**新映射里的模型值**。
+- 推荐（A）：把这些项目的类别与 PM 都指向本机已知可用的默认模型 `opencode-go/deepseek-v4.1-flash`
+  （依据：用户 D129 补记「默认模型与 kimi-k3 能力相当」；且 kimi 周额度本周两次用尽，把它们绑在 kimi 上会硬阻塞）。
+- 备选（B）：尽量保留它们原来的值（`deepseek/deepseek-flash`、`kimi-coding/kimi-for-coding`、`kimi-coding/k3`）——
+  代价是这些值是否在本机 Pi 上可用需要它们各自确认，且 PM 模型绑 kimi 的会在额度用尽时起不来。
+
+**执行顺序（同一窗口）**：① `npm i -g teamsmith@0.2.0 --registry https://registry.npmjs.org` → ② `bash "$(npm root -g)/teamsmith/install.sh"`（刷新共享软链）→ ③ 逐项目 `config upgrade-models`（改前把 `config.sh` 备份到仓外，执行后给用户看前后 diff）→ ④ 逐项目 `team doctor` 复核 → ⑤ 重启各项目的 agent 会话（它们才会读到新技能文本与配置语义）。**任何一步都不用 `team init` / `--force`**（#1981/#1982）。
