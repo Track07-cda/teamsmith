@@ -1347,3 +1347,10 @@ comm -23 /tmp/all.txt /tmp/keep.txt | xargs -r git tag -d
 **教训（我的流程失误）**：合并 P234 时我**手挑** `--select 59,60,61,62,63` 做受影响选段，而没让它从**改动路径**算闭包——`--paths skills/teamsmith/tests/section-budgets.tsv` 本来会选中 `§0e`（预算表自述段），于是「改了预算表却不检查预算表」这个洞由全量门禁补上。规矩收紧：**合并/里程碑的受影响选段必须用 `--paths <改动路径>`（它算闭包），不许手挑段号**；手挑只允许用于临时定向复跑，且要在记录里说明没跑哪些段。
 
 **另外两处如实记下**：① `§0e` 不在任何 prologue 里，所以它只在全量或显式选中时跑——这就是缺陷能活到全量门禁的原因（值得后续考虑：改 `section-budgets.tsv` 时让选段必然带上它，现在 `--paths` 已经能做到，无需改工具）；② 本轮全量门禁的被测树是 `9f5c9fe`，之后 main 上多了「预算修正 + 本记录」两笔（都只动 `tests/section-budgets.tsv` 与账本）——本轮结论**不能**直接当最终绿，最终认证将落在 0.2.0 的发布门禁上（那时树里已含修正）。
+
+## D157 · kimi 周额度再次用尽 → 类别映射去掉对它的依赖；改任务模型要显式 --model（2026-10-14）
+
+P248 的 propose 席位（dev2）按类别 `analysis` 解析到 `kimi-coding/k3:max`，开局即 403（`weekly (7-day) usage limit`，这是本周第二次，第一次见 D123）。两次处置：
+
+1. **配置**：`team config set-task-model analysis opencode-go/deepseek-v4.1-flash --yes` → 现在四个类别（`code/verify/analysis/infra`）全部指向项目默认模型，**没有任何任务依赖 kimi**。依据是用户 D129 补记（默认模型与 kimi-k3 能力相当、判据不因运行在默认模型上放松）；kimi 仍可作为**显式**选择在需要时使用。
+2. **派单实现细节（值得记）**：改完映射后重派同一任务，记录里仍是 `model=kimi-coding/k3:max`——因为**同一任务（task/branch/category 匹配）会复用记录里的 model**（#2018/#2019 的既有语义：「一个任务固定模型」）。要让已在记录里的任务换模型，必须**显式** `--model <新模型> --fresh`（`selected_via=explicit`）。第三次派单如此执行，页脚实测 `(opencode-go) deepseek-v4.1-flash`。
