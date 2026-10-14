@@ -61,11 +61,13 @@ bash ~/.agents/skills/teamsmith/scripts/team doctor      # 复核
 工具入口路径已在 10-13 改好（都指向 `~/.agents/skills/teamsmith/scripts/team`），共享技能软链已指向 npm 包——
 所以 `npm i -g teamsmith@0.2.0` 之后它们立刻拿到 0.2.0，而**旧配置会被拒**。三个项目的现状各不相同：
 
-| 项目 | 现在的模型配置 | 迁移动作 |
+| 项目（占位名） | 现在的模型配置 | 迁移动作 |
 |---|---|---|
-| `agent-base` | 旧式三键：`TEAM_AGENT_MODELS`（按席位 6+ 个，含 `product`）、`TEAM_DEFAULT_MODEL=kimi-coding/kimi-for-coding`、`TEAM_PM_MODEL=kimi-coding/k3` | **真迁移**：`upgrade-models` 移除两个退休键、写入新的类别映射与 PM 模型 |
-| `ai_interview` | 旧式：`TEAM_AGENT_MODELS`（多席位，值多为 `deepseek/deepseek-flash`）、`TEAM_DEFAULT_MODEL="deepseek/deepseek-flash"`、`TEAM_PM_MODEL="kimi-coding/k3"` | **真迁移**（干跑已通过：会移除两个退休键并写入新映射） |
-| `erp` | **已经是新式**：`TEAM_TASK_MODELS=implement=… verify=… docs=… test=…` + `TEAM_PM_MODEL=kimi-coding/k3`（退休键只剩注释） | 基本是空操作：只装新版 + 重启会话；`upgrade-models` 若要跑，也应当**保留它自己的类别词汇**（`implement/docs/test`），不要套用别处的 `code/verify` |
+| **甲**（席位最多、含 `product`） | 旧式三键：`TEAM_AGENT_MODELS`（按席位 6+ 个）、`TEAM_DEFAULT_MODEL`、`TEAM_PM_MODEL`（后两者都指 kimi 家族） | **真迁移**：`upgrade-models` 移除两个退休键、写入新的类别映射与 PM 模型 |
+| **乙**（访谈类、多席位） | 旧式：`TEAM_AGENT_MODELS`（值多为 `deepseek/deepseek-flash`）、`TEAM_DEFAULT_MODEL`、`TEAM_PM_MODEL=kimi` | **真迁移**（干跑已通过：会移除两个退休键并写入新映射） |
+| **丙**（合同类） | **已经是新式**：`TEAM_TASK_MODELS=implement=… verify=… docs=… test=…` + `TEAM_PM_MODEL=kimi`（退休键只剩注释） | 基本是空操作：只装新版 + 重启会话；若要跑 `upgrade-models`，应**保留它自己的类别词汇**（`implement/docs/test`），不要套用别处的 `code/verify` |
+
+占位名与真实路径的对应写在**仓外**账本（`pm-skills-ledger/team/reviews/migration-0.2.0/PROJECTS.md`）——账本可读层是公开的，所以对端项目名不进仓库（账本禁令会红，本次就已红过三条、当场改掉）。
 
 待用户定一处：**新映射里的模型值**。
 - 推荐（A）：把这些项目的类别与 PM 都指向本机已知可用的默认模型 `opencode-go/deepseek-v4.1-flash`
