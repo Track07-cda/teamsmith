@@ -423,6 +423,7 @@
 | P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | todo |
 | P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | dropped |
 | P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | todo |
+| V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | wip |
 
 ## 当前里程碑
 
