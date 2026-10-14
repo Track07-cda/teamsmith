@@ -12,7 +12,7 @@ The repository SHALL contain `skills/teamsmith-init/SKILL.md` (at most 100 lines
 (`npm install -g teamsmith`) and run `team init` in the project, which installs the skills into the project's
 `.pi/skills/` (the "team init installs the project skills" requirement below) — and then continues the
 new-project entry point in three beats: an ordered checklist of the questions the PM must settle with the user
-(dependencies, session/roster, per-agent models, gates, VCS mode, install command, ROADMAP/OWNERSHIP/AGENTS.md
+(dependencies, session/roster, project category mapping and independent PM model, gates, VCS mode, install command, ROADMAP/OWNERSHIP/AGENTS.md
 red lines), the instruction to run `bash <teamsmith>/scripts/team bootstrap`, and a closing handoff sentence
 that points day-to-day operation at the `teamsmith` skill. The installation beat SHALL name the npm command and
 `team init` before it names `team bootstrap`, SHALL name the project target `.pi/skills/`, and SHALL keep the
@@ -167,9 +167,7 @@ what a stale session does about it: `references/memory.md`, the skill-version-st
 
 ### Requirement: Existing projects and running sessions see zero change
 
-A project bootstrapped before this change MUST NOT need any edit: no new required key appears in
-`templates/config.sh.tmpl`, the injected `AGENTS.md` protocol section template is unchanged, and rendered PM/agent
-launch commands keep `--skill` pointed at the daily skill directory with no reference to `teamsmith-init`.
+Private non-deployed source development SHALL NOT rewrite existing project configuration, ledger, skill links/copies or running processes. This routing upgrade is explicitly breaking: old worker keys require the dedicated `config upgrade-models` transaction; `init --force` and bootstrap are not model-migration shortcuts. A shared skill link reads its target's current bytes: changing that source can affect the next CLI/skill read without invoking an installer or restarting an already-running process. Guidance SHALL not claim zero shared impact merely from avoiding installers. Before product changes reach a shared source/main, the separately authorized source-isolation or explicitly approved shared-impact adoption gate specified below must be satisfied. Launch commands SHALL still use the daily skill directory and never an init-skill runtime dependency.
 
 #### Scenario: Templates gain no init-skill dependency
 
@@ -195,8 +193,7 @@ NOT mention the four adapter keys (`TEAM_AGENT_CMD`, `TEAM_AGENT_NOTIFY_CMD`, `T
 SHALL keep their behaviour: the `pi` row judges the floor by `--session-id` (a probe whose `--help` goes to
 stderr, as Pi 0.76.0–0.79.0 did, still passes), and the plugin row only reports what is installed — it never
 asks the user to install a third-party plugin and recommends only what teamsmith requires or ships itself.
-Only questionnaire text changes: no rendered template, config key, default or command output moves, and no
-existing project needs an edit.
+The questionnaire SHALL ask for an explicit category mapping and independent PM model; rendering is covered by the task-policy initialization requirement. This does not change the Pi-version/plugin checks or advertise the adapter seam.
 
 #### Scenario: The checklist is Pi-only
 
@@ -217,16 +214,14 @@ existing project needs an edit.
 - **THEN** the first two runs pass the `pi` row, the third fails naming the missing flag, and the plugin row
   lists the installed packages (or says none were detected) without naming any third-party package to install
 - **AND** the existing gate sections §15b (Pi-version probes) and §15c (harness and plugin list: inform only,
-  never recommend) stay green without a test edit
+  never recommend) retain the same floor/stdout/stderr/report-only assertions and adversarial controls; fixtures may adopt valid new model configuration/assignment inputs, but no safety assertion may be weakened, deleted or skipped
 
 #### Scenario: No rendered contract and no existing project moves
 
 - **GIVEN** a fixture project
 - **WHEN** `team bootstrap --print` runs and a rendered `.pi/team/config.sh` is compared with the previous
   revision's rendering
-- **THEN** the plan still lists its five stages, the four `TEAM_AGENT_*` keys are still rendered empty, no new
-  key appears, and the `config-cli.sh` completeness walk (schema ↔ template ↔ `references/config.md`) stays
-  green without a test edit
+- **THEN** the plan still lists its five stages, the four `TEAM_AGENT_*` keys are still rendered empty, the new task mapping and required PM key appear and retired worker keys do not; the updated `config-cli.sh` completeness walk (schema ↔ template ↔ `references/config.md`) stays green
 
 ### Requirement: The project-local install names Pi's trust consequence
 
@@ -243,7 +238,7 @@ SHALL carry the same fact: the triggering resource and the answers.
 #### Scenario: A fresh init prints the consequence, --no-skills stays silent
 
 - **GIVEN** two fresh git repositories with one commit
-- **WHEN** `team init --session <s> --agents "dev" --vcs local --gates true` runs in the first, and the same
+- **WHEN** `team init --session <s> --agents "dev" --vcs local --gates true --task-models 'routine=vendor/light' --pm-model vendor/strong` runs in the first, and the same
   command with `--no-skills` runs in the second
 - **THEN** the first exits 0, its output carries one line containing `.pi/skills/`, `pi --approve` and `/trust`,
   and `.pi/skills/teamsmith` exists; the second exits 0, prints no such line, and has no `.pi/skills/`
@@ -251,7 +246,7 @@ SHALL carry the same fact: the triggering resource and the answers.
 #### Scenario: The rerun and the bootstrap upgrade path say it too
 
 - **GIVEN** the first repository after one init (its entries exist, so the step reports `skip`), and a copy of it
-  whose `.pi/team/config.sh` already exists
+  whose valid new-policy `.pi/team/config.sh` already exists
 - **WHEN** the same `team init` runs a second time, and `team bootstrap --no-pulse --agents "dev"` runs in the copy
 - **THEN** both exit 0 and both outputs carry the line — one implementation and one wording at both call points
 
@@ -286,8 +281,7 @@ says so.
   manual route).
 - **`.gitignore`**: the install directory SHALL be added to the project's teamsmith block, once (an absolute
   symlink must not be committed, and a copy is re-creatable).
-- **`bootstrap`**: `team bootstrap` SHALL perform this same step through the same code path whether or not the
-  project already has `.pi/team/config.sh` — so re-running bootstrap is an existing project's upgrade route —
+- **`bootstrap`**: `team bootstrap` SHALL perform this same step through the same code path for fresh or valid-new-policy projects with or without `.pi/team/config.sh`; legacy model configuration SHALL refuse before this step and name the dedicated model upgrade route, not a bootstrap migration —
   and `bootstrap --print` SHALL name the step in its plan and write nothing. There MUST NOT be a second install
   semantics beside this one.
 - The step SHALL print one line per skill (`link <dest> → <src>` / `copy <dest>` / `skip <dest>`), so the result
@@ -296,7 +290,7 @@ says so.
 #### Scenario: The default install links both skills into the project
 
 - **GIVEN** a fresh git repository with one commit, and a `team` CLI running from this tree
-- **WHEN** `team init --session <s> --agents "dev verify" --vcs local --gates true` runs in it
+- **WHEN** `team init --session <s> --agents "dev verify" --vcs local --gates true --task-models 'routine=vendor/light' --pm-model vendor/strong` runs in it
 - **THEN** it exits 0, `.pi/skills/teamsmith` and `.pi/skills/teamsmith-init` are symlinks whose resolved
   targets are `$TEAM_SKILL_DIR` and its sibling, the output names both with `link`, and `.gitignore` carries
   `.pi/skills/`
@@ -313,7 +307,7 @@ says so.
 
 #### Scenario: --no-skills skips the step; --copy copies the files without the build directory
 
-- **GIVEN** two fresh repositories
+- **GIVEN** two fresh repositories and valid explicit `--task-models 'routine=vendor/light' --pm-model vendor/strong` inputs for each init
 - **WHEN** `team init … --no-skills` runs in the first, and `team init … --copy` runs in the second
 - **THEN** the first has no `.pi/skills/` directory at all and its output says the step was skipped, while the
   second has real directories whose `SKILL.md` bytes equal the source's and whose `scripts/team` exists
@@ -321,7 +315,7 @@ says so.
 
 #### Scenario: A conflicting entry is announced, and --force replaces only what it recognises
 
-- **GIVEN** a fresh repository whose `.pi/skills/teamsmith` is first a directory without a `SKILL.md`, and then
+- **GIVEN** valid explicit task mapping/PM init inputs and a fresh repository whose `.pi/skills/teamsmith` is first a directory without a `SKILL.md`, and then
   (a second fixture) a directory carrying a hand-edited `SKILL.md` that names `teamsmith`
 - **WHEN** `team init …` runs against each, and then each with `--force`
 - **THEN** the runs without `--force` exit non-zero, name the path and the two routes, and leave the directory's
@@ -332,7 +326,7 @@ says so.
 
 #### Scenario: bootstrap runs the install step on an existing project too, and --print writes nothing
 
-- **GIVEN** a repository initialised before this change — `.pi/team/config.sh` present, no `.pi/skills/` — and a
+- **GIVEN** an existing repository with valid new model policy — `.pi/team/config.sh` present, no `.pi/skills/` — and a
   copy of its `.pi` directory's hash taken before the run
 - **WHEN** `team bootstrap --agents dev` runs in it, and then, in a second fixture, `team bootstrap --print` runs
 - **THEN** the first run installs the two entries and exits 0 without rewriting the existing config
@@ -400,4 +394,37 @@ and SHALL NOT by itself make doctor exit non-zero.
 - **THEN** the first run warns naming both paths and the repair, and exits 0
 - **AND** the second run repoints the entry at the running skill directory (the resolved target equals
   `$TEAM_SKILL_DIR`), and the third run warns about nothing
+
+### Requirement: Initialization teaches category policy and breaking upgrades without live adoption
+
+Fresh init/bootstrap SHALL accept `--task-models '<map>' --pm-model '<model>'` and render exactly those validated values; missing explicit model inputs refuse before config/ledger/install/worktree/pulse writes. Existing valid new-policy projects may be re-entered without supplying those inputs again and SHALL keep their policy; any explicit re-render that requires new values SHALL validate explicit inputs before replacement. Retired `--default-model` is removed with a correction. Config templates SHALL declare task map/independent PM, never retired worker keys; init/bootstrap install/protocol/ownership/task/PM/memory guidance SHALL describe task category rather than a permanent seat model. `team task --category` is the brief generator only; it is not a dispatch override. Ownership stays about files/roles, not model strength. The initial two-model example is routine=opencode-go/deepseek-v4.1-flash and analysis/verify=openai-codex/gpt-6.1-sol:high, independent PM=openai-codex/gpt-6.1-sol:high; examples are not engine defaults or a provider availability claim.
+
+PM guidance SHALL recommend routine for bounded ordinary implementation, analysis for complex planning/judgment and verify for independent adversarial review, record category rationale in brief prose and choose configured names in other projects. Tools do not infer difficulty or phase/category equivalence. Worker guidance SHALL preserve scope, reports and disk handover through fresh takeover; independent verification cannot be waived by a strong model. Existing projects SHALL use explicit preview/upgrade, not init --force, bootstrap or auto-inference to migrate; legacy bootstrap refuses before install or other effects. Private source verification, protected-branch source landing, project configuration/fresh-launch activation and shared-source adoption SHALL be distinct recorded gates. S1→S2→S3 dependencies and shared-file handoffs SHALL use a private non-deployed integration tree that is not a target of global/project-live skill links or live CLI source paths; it is not the shared main checkout. Partial implementation SHALL NOT reach shared source/main before a separately approved safe adoption plan. Private review/handoff is not protected-branch delivery and SHALL NOT mark apply tasks done merely because they are integrated privately. Before full validated source reaches shared main, PM SHALL either obtain per-operation user authorization to isolate known shared consumers to preserved stable source and verify that isolation, or obtain explicit approval of the identified shared-source impact, including later reads by unmigrated projects. No automatic scanning/deployment system is required, and unknown consumers cannot be promised unaffected. This change does not execute link changes/installers or other-project adoption. Source changes still SHALL NOT silently rewrite live config, ledgers or running processes; project config migration, fresh launches, shared-source adoption and any other-project work each require their separate existing authorization.
+
+#### Scenario: Fresh initialization has explicit model inputs and no retired keys
+- **WHEN** scratch init and fresh bootstrap run with valid task map and PM model, then with missing/invalid inputs and retired --default-model
+- **THEN** valid rendering carries only new model policy and the existing identity/layout; invalid calls refuse before any skeleton/install/pulse effect and give new input routes
+
+#### Scenario: Legacy bootstrap is not an implicit migration
+- **WHEN** bootstrap runs on legacy config even with force, or bootstrap --print previews it
+- **THEN** it diagnoses upgrade before writes/install/worktree/pulse; print remains read-only; dedicated explicit config upgrade is the named migration route, not init --force
+
+#### Scenario: Templates and guidance change without touching history
+- **WHEN** completeness/guidance fixtures inspect config/task/ownership/PM/protocol/bootstrap/memory templates and both skills/references
+- **THEN** no active worker default/seat policy remains, category/independent PM and original-vs-recovery guidance appear, historical reports/changelog examples are not rewritten and independence/authorization boundaries remain
+
+#### Scenario: Private slice integration leaves shared source unchanged
+- **GIVEN** scratch global/project skill links pointing at a preserved main source, and an unlinked private integration tree
+- **WHEN** S1 is privately integrated and handed off to S2/S3 for tests and independent verification
+- **THEN** shared source/link/consumer configuration hashes remain unchanged, no live installer/restart/other-project action occurs, and handoff evidence records the private commit and released paths while apply tasks remain unfinished until authorized protected-branch delivery
+
+#### Scenario: A source-target change is shared adoption even without an installer
+- **GIVEN** fixture skills linked to a source main, as opposed to an unlinked private clone
+- **WHEN** rollout guidance and ownership/acceptance evidence are checked
+- **THEN** they identify changing that target as affecting later shared reads, prohibit premature partial-main landing, and require either separately authorized and verified stable-source isolation or explicit approval of the identified shared impact before full validated source landing
+- **AND** approval of private source tests or this project's config transaction alone does not authorize that shared-source change, link replacement, installation, process restart or another project's adoption; no zero-impact guarantee is made for unknown consumers
+
+#### Scenario: Model-use guidance is not an engine classifier
+- **WHEN** a project defines maintenance and audit instead of the initial labels
+- **THEN** guidance directs PM to choose configured names and state rationale, the CLI accepts mapped legal names and phase/seat never automatically picks a model
 

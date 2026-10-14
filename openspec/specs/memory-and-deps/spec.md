@@ -73,7 +73,7 @@ cannot be made falsifiable yet MUST be written as prose in `references/` instead
 
 Project memory (magic-context) SHALL only accelerate recall: every decision, piece of evidence and piece of pending
 work MUST be reconstructible from files on disk (BOARD, ROADMAP, DECISIONS, reports, reviews, threads, state) after
-a restart or a compaction, without reading any memory store. The Chinese name the tool and its console use for the
+a restart or a compaction, without reading any memory store. Same-task recovery SHALL read the committed complete launch assignment from disk rather than re-resolve current model policy; legacy, malformed or identity-mismatched records SHALL refuse with a fresh takeover and disk handover route. Historical files SHALL NOT be rewritten to invent category provenance. The Chinese name the tool and its console use for the
 correspondence records in `docs/team/threads/` SHALL be `往来记录` — `线程` reads as an operating-system thread —
 while the directory path, the command `team thread` and the English term `thread` stay unchanged.
 
@@ -99,7 +99,7 @@ while the directory path, the command `team thread` and the English term `thread
 #### Scenario: The rendered threads README carries the new label
 
 - **GIVEN** a scratch project
-- **WHEN** `team init --agents "dev verify" --force` renders the docs skeleton
+- **WHEN** `team init --agents "dev verify" --force --task-models 'routine=vendor/light' --pm-model vendor/strong` renders the docs skeleton
 - **THEN** `docs/team/threads/README.md` contains `往来记录`, contains no `线程`, and its path is unchanged
 
 ### Requirement: A JS runtime is a required dependency
@@ -128,7 +128,7 @@ warning; it does not give the panel a degraded mode of its own — the panel sti
 
 ### Requirement: The project contract has exactly one writer, and it preserves what it does not change
 
-`.pi/team/config.sh` (the project contract) SHALL be written only by `team config set` and the roster's two
+`.pi/team/config.sh` (the project contract) SHALL be written only by `team config set`, `team config set-task-model`, `team config upgrade-models` and the roster's two
 authorized entries (`team add-agent … --register`, `team teardown … --register`), through the one implementation
 shared with `team init`/`team bootstrap` (the hardened `team_config_set_in_file`); the console calls that command
 as a subprocess and MUST NOT open the contract for writing itself. A write SHALL preserve
@@ -181,7 +181,7 @@ byte-identical.
 
 - **GIVEN** a contract and the values `two\nlines` and `a # b`
 - **WHEN** each is set
-- **THEN** both exit non-zero naming the reason, the contract's sha256 is unchanged, and `team init --gates 'a # b'`
+- **THEN** both exit non-zero naming the reason, the contract's sha256 is unchanged, and `team init --gates 'a # b' --task-models 'routine=vendor/light' --pm-model vendor/strong`
   in a scratch project also exits non-zero instead of silently dropping the key
 
 #### Scenario: The write is atomic
@@ -229,10 +229,10 @@ byte-identical.
 ### Requirement: A write is accepted only against the file the writer read
 
 `team config list --json` SHALL report `fingerprint` as the sha256 of the contract's bytes at the moment it read
-them. `team config set … --fingerprint <sha256>` SHALL compare the current sha256 and, when it differs, refuse
+them. `team config set … --fingerprint <sha256>` (and category/upgrade entries with the same flag) SHALL compare the current sha256 and, when it differs, refuse
 with exit 3, one message naming that the file changed since it was read, nothing written and one audit line with
-`result=conflict`; any byte change counts, including a change in a comment elsewhere. A write without
-`--fingerprint` is the caller's explicit "use the file as it is now" and proceeds (documented). `--dry-run` SHALL
+`result=conflict`; any byte change counts, including a change in a comment elsewhere. A single-key write without
+`--fingerprint` is the caller's explicit "use the file as it is now" and proceeds (documented). Read-modify-write category/upgrade entries SHALL also pin their own read fingerprint and compare again under writer serialization immediately before replacement. `--dry-run` SHALL
 perform every check — class, value, fingerprint — and SHALL write neither the contract nor an audit line.
 
 #### Scenario: A stale fingerprint refuses the write
@@ -292,7 +292,7 @@ key MUST NOT make an invalid argument legal.
 
 - **GIVEN** a contract whose sha256 is recorded
 - **WHEN** `TEAM_PULSE_INTERVAL=0`, `TEAM_NOTIFY_TMUX=maybe`, `TEAM_MONITOR_UI=colour` and
-  `TEAM_AGENT_MODELS='dev'` (no `=`) are set
+  `TEAM_TASK_MODELS='routine'` (no `=`) are set
 - **THEN** each exits 4, names the accepted domain, and the sha256 is unchanged
 
 #### Scenario: The danger list warns and needs the explicit flag
@@ -311,9 +311,9 @@ key MUST NOT make an invalid argument legal.
 
 ### Requirement: Every attempt is audited in one line
 
-Every `team config set` attempt that passes argument parsing SHALL append exactly one line to
+Every `team config set`, `set-task-model` or `upgrade-models` attempt that passes argument parsing SHALL append exactly one line to
 `<state>/config.log`: a UTC ISO-8601 timestamp, the result (`ok`, `refused`, `invalid`, `conflict`,
-`danger-refused`, `write-error`), the actor (`--actor`, default `cli`; the console passes `panel`), the key, the
+`danger-refused`, `write-error`), the actor (`--actor`, default `cli`; the console passes `panel`), the key (or upgrade transaction with all changed keys), the
 old and the new value and, for a conflict, the expected and the actual fingerprint. The line SHALL be one line
 whatever the values contain, and a `--dry-run` SHALL NOT write one. `team config log [N]` and
 `team config list --json`'s audit tail SHALL read at most the file's last 16 KiB and print at most the newest N
@@ -345,122 +345,6 @@ warn about the audit failure — a missing audit line MUST NOT be reported as a 
 - **WHEN** `team config log 5` runs, and `team config list --json` reads the audit tail
 - **THEN** both finish promptly, print at most five lines, and the newest line is the log's last one
 
-### Requirement: A seat's model is read and written as a seat, never by composing the pair list in the caller
-
-`team config list --json` SHALL report a `models` block — `{default, known[], seats: [{agent, model, source,
-override}]}` — where `seats` covers every roster seat (`TEAM_AGENTS`) plus `pm`, `model` is the model the CLI
-displays for that seat, `source` is one of `config` / `explicit` / `record` with exactly the semantics of
-`team_agent_model_src` (`common.sh`: no record → `config`; the record's `model_src=explicit` → `explicit`; a record
-differing from the seat's configuration resolution → `record`), and `override` says whether the seat carries a
-token in `TEAM_AGENT_MODELS` (for `pm`: whether `TEAM_PM_MODEL` is set). `known[]` SHALL be the union of the configured
-and the recorded models — every seat's displayed model, the `pm` seat's resolution (`TEAM_PM_MODEL` when set, else
-`TEAM_DEFAULT_MODEL` resolved exactly as the PM's launch resolves it, an empty one falling back to the schema
-default) included — deduplicated in
-first-seen order; the same set is the vocabulary `choices.values` reports for a `model`-kind key. `team config set-agent-model <seat> <model|->` SHALL write the pair list (or
-`TEAM_PM_MODEL` for the `pm` seat) itself — the CLI parses and re-serializes the tokens; the caller never composes
-them — through the same writer, fingerprint CAS, audit and `--dry-run`/`--yes` rules as `team config set`, with two
-added validations: the seat MUST be a roster seat or `pm` (otherwise exit 5 naming the roster) and the model MUST
-have the `provider/model` shape (otherwise exit 4). `-` SHALL remove the seat's override, leaving the fallback
-(`TEAM_DEFAULT_MODEL`) in force. The whole-value validator of `TEAM_AGENT_MODELS` SHALL apply the same seat rule:
-a token naming a seat the roster does not carry is exit 4, and one already in the file SHALL be reported by
-`team config list --json` as a warning naming the token, never silently ignored.
-
-Every seat row SHALL be serialized with a value in every field: `override` is always a JSON boolean (`true` when
-the seat carries a token, `false` when it does not), and an empty model is the JSON string `""`, never a field with
-no value and never `null`. A token whose value is empty (`dev=`) is a **present** override whose model resolution
-falls back exactly like an absent token: the seat's displayed model is the fallback (`TEAM_DEFAULT_MODEL`, or the
-recorded model when the source rules say `record`), and that one resolution is what `team ps`/`team roster`
-display, what the seat's row reports, and what the dispatch renderer uses. A source label (`配置` / `显式` /
-`历史记录`) MUST NOT appear as a `model` or in `known[]`.
-
-#### Scenario: Setting one seat's model touches only that token
-
-- **GIVEN** `TEAM_AGENT_MODELS` carrying `dev=` and `verify=` tokens among comments and other keys
-- **WHEN** `team config set-agent-model dev kimi-coding/k3-256k --yes` runs
-- **THEN** `diff` shows exactly one changed line, which carries `dev=kimi-coding/k3-256k` and still carries
-  `verify=`'s token unchanged, and the audit gained one line with the key and the new whole value
-
-#### Scenario: Removing an override falls back to the default
-
-- **GIVEN** the same contract and a `TEAM_DEFAULT_MODEL`
-- **WHEN** `team config set-agent-model dev - --yes` runs
-- **THEN** the `dev=` token left the line with every other byte unchanged, and `team config list --json`'s
-  `models.seats[dev]` reports `TEAM_DEFAULT_MODEL`'s value with `source=config` and `override=false`
-
-#### Scenario: An unknown seat is refused, in the pair form and in the whole value
-
-- **GIVEN** a contract whose sha256 is recorded
-- **WHEN** `team config set-agent-model dev4 x/y --yes` and `team config set TEAM_AGENT_MODELS 'dev4=x/y' --yes`
-  run
-- **THEN** the first exits 5 and the second exits 4, each naming the roster, and the sha256 is unchanged
-
-#### Scenario: A model without the provider shape is refused
-
-- **GIVEN** the same contract
-- **WHEN** `team config set-agent-model dev deepseek-flash --yes` runs
-- **THEN** it exits 4 naming the accepted `provider/model` shape and nothing was written
-
-#### Scenario: The three sources are the CLI's, not the caller's
-
-- **GIVEN** three fixtures: a seat with no record, a seat whose record was written by an explicit `--model`, and a
-  seat whose record differs from its configuration resolution
-- **WHEN** `team config list --json` runs for each
-- **THEN** the sources are `config`, `explicit` and `record` respectively, and `team ps`'s line for the same seat
-  carries the matching Chinese label (`配置` / `显式` / `历史记录`)
-
-#### Scenario: An unknown seat already in the file is reported
-
-- **GIVEN** a hand-edited `TEAM_AGENT_MODELS` with a `dev4=x/y` token
-- **WHEN** `team config list --json` runs
-- **THEN** the key's record carries a warning naming `dev4`, and `models.seats` carries no `dev4` row
-
-#### Scenario: The PM seat writes TEAM_PM_MODEL
-
-- **GIVEN** a contract with `TEAM_AGENT_MODELS` and `TEAM_PM_MODEL`
-- **WHEN** `team config set-agent-model pm kimi-coding/k3-256k --yes` runs
-- **THEN** `TEAM_PM_MODEL`'s line carries that model, `TEAM_AGENT_MODELS` is byte-identical, and the audit names
-  `TEAM_PM_MODEL`
-
-#### Scenario: The known set carries the PM seat's model
-
-- **GIVEN** a fixture contract whose `TEAM_AGENT_MODELS` does not name the PM's model and whose `TEAM_PM_MODEL` is
-  `kimi-coding/k3-256k`, plus a roster seat whose `state/<seat>.env` records a model differing from its
-  configuration resolution
-- **WHEN** `team config list --json` runs
-- **THEN** `models.known` carries `kimi-coding/k3-256k` exactly once, `models.seats`' `pm` row shows it with
-  `override` true, and `TEAM_PM_MODEL`'s `choices.values` contains it
-- **AND** with `TEAM_PM_MODEL` removed the `pm` row falls back to the default while the roster seat's recorded
-  model stays in `known`, each model appearing once
-
-#### Scenario: An empty token is a present override with the fallback model
-
-- **GIVEN** a contract whose sha256 is recorded, whose `TEAM_AGENT_MODELS` carries `dev=` and whose
-  `TEAM_DEFAULT_MODEL` is `vendor-a/model-a`
-- **WHEN** `team config list --json` and `team ps` run
-- **THEN** `models.seats`' `dev` row reports `model` `vendor-a/model-a`, `source` `config` and `override` true;
-  `team ps`'s line for that seat carries the same model with the `配置` label; `models.known` carries
-  `vendor-a/model-a` and no source label; and the contract's sha256 is unchanged
-
-#### Scenario: The empty token resolves the same way in the dispatch renderer
-
-- **GIVEN** the same contract
-- **WHEN** `team dispatch dev --print` runs
-- **THEN** the rendered launch command carries `vendor-a/model-a` — the empty token does not render an empty model
-
-#### Scenario: An empty default still resolves to the fallback
-
-- **GIVEN** a contract whose `TEAM_DEFAULT_MODEL` is empty and whose `TEAM_AGENT_MODELS` carries `dev=`
-- **WHEN** `team config list --json` runs
-- **THEN** the `dev` row exists with `"model"` equal to the CLI's resolved default (the schema default for
-  `TEAM_DEFAULT_MODEL`) and `"override":true`, and the document parses as JSON
-
-#### Scenario: The PM row resolves exactly like the PM's launch
-
-- **GIVEN** a contract whose `TEAM_DEFAULT_MODEL` and `TEAM_PM_MODEL` are both empty
-- **WHEN** `team config list --json` and the PM launch renderer (`team up --print`) run
-- **THEN** the `pm` row's `model` is the model the rendered command passes as its `--provider`/`--model` pair —
-  the resolved default, never `""` — and its `override` is false
-
 ### Requirement: The machine read reports each key's choice set, and the schema is its only source
 
 `team config list --json` SHALL report, for every key record (a key the file carries but the schema does not
@@ -469,7 +353,7 @@ included), a `choices` field derived from the same `team_config_schema()` row th
 
 - `source` SHALL be `schema` when the vocabulary comes from the row itself (`bool`'s two canonical values, an
   `enum`'s `constraints`, a numeric kind's suggestion column), `known` when it is this project's model vocabulary
-  (the `models` block's `known`, for the `model`, `pairlist`, `winlist` and `pattern` kinds), and `none` when the
+  (the `models` block's `known`, for the `model`, `task-model-map`, `winlist` and `pattern` kinds), and `none` when the
   kind has no vocabulary.
 - `values[]` SHALL be the ordered vocabulary: for `bool`/`enum` the key's **closed** accepted domain, for the
   other kinds the offered vocabulary (free text stays valid), and `[]` when there is none.
@@ -480,9 +364,7 @@ included), a `choices` field derived from the same `team_config_schema()` row th
 - `note` SHALL be the command's optional explanation and empty when there is nothing to say.
 
 The field SHALL be derived from the row the validator uses — the command MUST NOT carry a second option table —
-and every value the read reports (a `values` entry or a suggestion-column entry) SHALL be a value that key's
-validator accepts; a schema row whose offered value its own validator refuses SHALL fail the project's fixture
-gate rather than be filtered silently. The field is additive: `team config list`'s human table, every existing
+and every value the read reports (a `values` entry or a suggestion-column entry) SHALL be accepted by the corresponding value or token route. For structured `task-model-map`, `winlist` and `pattern` kinds, choices are model-token vocabulary, not complete pairlist values: the fixture SHALL validate category choices through `set-task-model` and window/limit tokens after inserting a valid `=number`, not send a naked model to the whole-map validator. A schema row whose offered value its corresponding validator refuses SHALL fail the project's fixture gate rather than be filtered silently. Retired seat/default fields are removed by the task-policy contract; apart from that explicit supersession the field is additive: `team config list`'s human table, every existing
 `--json` record field and `team monitor --print`/`--json` keep their current bytes and columns. The command MUST
 NOT read the machine's Pi model catalogue (`~/.pi/agent/models.json`, `models-store.json`) to build `values`: the
 model vocabulary is project data, so a catalogue entry whose endpoint no longer answers never becomes an offered
@@ -513,9 +395,9 @@ option.
 #### Scenario: The model vocabulary is project data, not the machine's catalogue
 
 - **GIVEN** a fixture `HOME` whose Pi model catalogue names `sub2api/gpt-5.6-luna` and an `openrouter/…` entry,
-  and a project contract naming one default model plus one seat model
+  and a project contract naming one PM model plus one category model
 - **WHEN** `team config list --json` runs with that `HOME`
-- **THEN** `models.known` and every `model`/`pairlist`/`winlist`/`pattern` key's `choices.values` carry only the
+- **THEN** `models.known` and every `model`/`task-model-map`/`winlist`/`pattern` key's `choices.values` carry only the
   project's configured and recorded models, and no catalogue-only provider appears in either
 - **AND** the command's read of the contract is otherwise unchanged (same fingerprint, same records)
 
@@ -584,16 +466,14 @@ file carries and the schema does not know, the empty string.
 - Every schema row SHALL declare a group. A row whose tenth field is missing, or whose token does not match the
   shape above, SHALL fail the project's fixture gate naming the key (and the token where there is one) — the read
   MUST NOT invent a default group, drop the row, or filter the malformed token silently.
-- The read is the only carrier: the human `team config list` table, every existing `--json` record field,
-  `team monitor --print` and `team monitor --json` SHALL keep their current bytes and columns, and no machine
-  exit other than `team config list --json` SHALL carry the field.
+- The read is the only carrier: the human `team config list` table SHALL keep its columns, existing JSON key-record metadata SHALL keep its names/types, and no machine exit other than `team config list --json` SHALL carry the group field. This does not freeze the retired model-policy object or model/SID-linked values: their specified routing/assignment replacement applies; unrelated machine fields and behavior remain unchanged.
 
 #### Scenario: The group is the row's tenth column, per section
 
 - **GIVEN** a fixture project initialised from this tree
 - **WHEN** `team config list --json` runs
-- **THEN** `TEAM_PROJECT` reports `group` `identity`, `TEAM_PULSE_INTERVAL` reports `panel`, `TEAM_DEFAULT_MODEL`
-  reports `seat-model` and `TEAM_GATES` reports `workflow`, and the records' `group` values are exactly the tokens
+- **THEN** `TEAM_PROJECT` reports `group` `identity`, `TEAM_PULSE_INTERVAL` reports `panel`, `TEAM_TASK_MODELS`
+  reports `task-model` and `TEAM_GATES` reports `workflow`, and the records' `group` values are exactly the tokens
   the schema's rows carry, in the schema's own row order
 - **AND** a key the file carries and the schema does not still gets a record, with `group` `""`
 
@@ -619,16 +499,15 @@ file carries and the schema does not know, the empty string.
 
 Every command whose contract is a JSON document — `team config list --json`, `team change status <id> --json`,
 `team paths`, and the console's one-frame `team monitor --json` / `team __panel-data` exits — SHALL emit exactly
-one parseable JSON document for every contract shape the correctness gate exercises, including a seat whose
-override carries an empty value. A field MUST NOT be serialized with no value (`"name":`); a string field with
+one parseable JSON document for every contract shape the correctness gate exercises, including an unassigned seat with empty model/source/SID fields and a legacy configuration diagnostic. A field MUST NOT be serialized with no value (`"name":`); a string field with
 nothing to report SHALL be the JSON string `""`; a boolean field SHALL be `true` or `false`; and `null` SHALL NOT
-stand for "empty". The correctness gate SHALL run those exits against a fixture carrying the empty-override shape
+stand for "empty". The correctness gate SHALL run those exits against a fixture carrying the empty-assignment shape
 and parse each output with the JSON parser its config fixtures already require (`python3 -m json.tool`), and a
 document that does not parse MUST fail the gate naming the command and the parser's reported position.
 
 #### Scenario: The empty-override shape parses on every machine exit
 
-- **GIVEN** a fixture contract with `TEAM_AGENT_MODELS="dev="`
+- **GIVEN** a fixture contract with valid task mapping and no worker assignment
 - **WHEN** `team config list --json`, `team change status <id> --json`, `team paths` and, with a JS runtime
   present, `team monitor --json` run
 - **THEN** each exits 0 and `python3 -m json.tool` parses its output; with no JS runtime the console exit is a
@@ -636,7 +515,7 @@ document that does not parse MUST fail the gate naming the command and the parse
 
 #### Scenario: A valueless field is a gate failure
 
-- **GIVEN** a scratch tree whose `team config list --json` emits a valueless field for a seat (`"override":,`)
+- **GIVEN** a scratch tree whose `team config list --json` emits a valueless field for a seat (`"model":,`)
 - **WHEN** the gate's parse walk runs against that tree
 - **THEN** it exits non-zero naming the command and the parser's error position, and restoring the tree's own
   serializer makes it green — the gate, not a silent tolerance, keeps the exits valid
@@ -677,9 +556,7 @@ status.
 
 ### Requirement: A model id is a single-segment provider plus a model that may contain `/`
 
-Every route that writes a model id SHALL judge one shape through one implementation: `team config set` for a
-`model`-kind key (`TEAM_DEFAULT_MODEL`, `TEAM_PM_MODEL`), the pair list of `TEAM_AGENT_MODELS` (its whole-value
-validator and `team config set-agent-model <seat> <model|->`), and `team add-agent <agent> --model <model>`.
+Every supported route that accepts a model id SHALL judge one shape through one implementation: the required `TEAM_PM_MODEL`, the whole `TEAM_TASK_MODELS` mapping, `team config set-task-model`, `team config upgrade-models`, and dispatch's explicit `--model`. Retired seat/default routes do not write models.
 
 The shape SHALL be: the token contains at least one `/`; the text before the first `/` (the provider) is
 non-empty and carries no `:` (it carries no `/` by construction); the text after the first `/` (the model),
@@ -690,53 +567,41 @@ levels belong to Pi, not to this contract), and the token is written and read ba
 `provider/model`, `provider/model:high`, `provider/vendor/model` and `provider/vendor/model:high` are all
 accepted. A `:` before the first `/` is refused — the suffix attaches to the model segment only.
 
-A refused token SHALL exit 4 (the invalid-value exit code; `team add-agent --model` refuses it with the same
+A refused token SHALL exit 4 (the invalid-value exit code; dispatch's `--model` refuses it with the same
 code before any write) and the message SHALL name the rejected segment — `provider` or `model` — and the
 reason (a missing `/`, an empty segment, whitespace), never the removed "exactly one `/`" wording. Nothing
 SHALL be written and the contract's bytes SHALL be unchanged.
 
-A token the shape accepts SHALL be read back verbatim by `team config list --json` (`models.default`,
-`models.known`, the seat rows) and by `team ps`/`team roster`. Every reader that splits a token into a provider
+A token the shape accepts SHALL be read back verbatim by `team config list --json` (`models.policy`,
+`models.known`, the assignment rows) and by `team ps`/`team roster`. Every reader that splits a token into a provider
 and a model part SHALL take the provider as the text before the first `/` and the model as everything after it:
 the worker launch renderer's `--provider`/`--model` pair, the PM launch renderer's pair, the `{model}` launch
 template placeholder, and Pi-catalogue window resolution.
 
 #### Scenario: A three-segment model is accepted by every write route
 
-- **GIVEN** a fixture contract whose sha256 is recorded
-- **WHEN** `team config set TEAM_DEFAULT_MODEL openrouter/amazon/nova-lite-v1 --yes`, `team config
-  set-agent-model dev openrouter/amazon/nova-lite-v1 --yes`, `team config set TEAM_AGENT_MODELS
-  'dev=openrouter/amazon/nova-lite-v1' --yes` and `team add-agent api --register --model
-  openrouter/amazon/nova-lite-v1 --no-install` run
-- **THEN** each exits 0, each written line carries the token verbatim, and `team config list --json` reports the
-  id in `models.known` and in the `dev` seat row
+- **WHEN** `openrouter/amazon/nova-lite-v1` is submitted through PM set, category set, whole mapping set and explicit upgrade
+- **THEN** each exits 0 on a valid fixture and reads back the whole id; dispatch override also renders that full model
 
 #### Scenario: The thinking suffix is removed before the shape judgement and kept in the value
 
-- **GIVEN** a fixture contract
-- **WHEN** `team config set TEAM_DEFAULT_MODEL kimi-coding/kimi-for-coding:high --yes` and `team config
-  set-agent-model dev openrouter/amazon/nova-lite-v1:high --yes` run
-- **THEN** both exit 0 and each written line carries the token verbatim, `:high` included
+- **WHEN** PM and category models are set to `kimi-coding/kimi-for-coding:high` and `openrouter/amazon/nova-lite-v1:high`
+- **THEN** writes and readback retain `:high` verbatim; the suffix vocabulary is not judged
 
 #### Scenario: The shape stays closed, and the message names the rejected segment
 
-- **GIVEN** a fixture contract whose sha256 is recorded and whose audit log is recorded
-- **WHEN** `a`, `/a`, `a/`, `a//b`, `a/b/`, `a/:high`, `a:q/b` and a value carrying a space are each written
-  through `team config set TEAM_DEFAULT_MODEL ... --yes`, and `/a`, `a/` and `a//b` through `team config
-  set-agent-model dev ... --yes`
-- **THEN** every attempt exits 4, the message names `provider` for the provider faults and `model` for the
-  model faults, the contract's sha256 is unchanged and the audit log gained no `result=ok` line
+- **WHEN** `a`, `/a`, `a/`, `a//b`, `a/b/`, `a/:high`, `a:q/b` and a whitespace-bearing id are tried through PM/category/whole-map/upgrade/dispatch override routes
+- **THEN** every value attempt exits 4 naming provider or model and the reason; no contract or assignment changes and no ok audit appears
 
 #### Scenario: One judgement, not one copy per write route
 
-- **GIVEN** a scratch tree whose single model-shape judgement is widened to accept any token containing `/`
+- **GIVEN** a scratch tree whose shared shape validator is widened to accept any token containing `/`
 - **WHEN** `TEAM_CONFIG_TREE=<scratch> bash skills/teamsmith/tests/config-cli.sh shape` runs
-- **THEN** it exits non-zero and its red lines name `a//b` on the model-kind, pairlist and `set-agent-model`
-  routes, and on the unmodified tree the same command is green
+- **THEN** it exits non-zero naming `a//b` on PM, category, whole-map and upgrade routes; restoring the shared validator makes it green
 
 #### Scenario: The launch renderers split at the first `/`, not the last
 
-- **GIVEN** a fixture contract whose default model is `openrouter/amazon/nova-lite-v1`
+- **GIVEN** a fixture contract whose routine mapping and PM model are `openrouter/amazon/nova-lite-v1`
 - **WHEN** `team dispatch dev <id> <brief> --print` and `team up --print` run, and the `{model}` placeholder is
   expanded for a launch template
 - **THEN** the rendered worker and PM commands carry `--provider openrouter --model amazon/nova-lite-v1`, and
@@ -745,8 +610,8 @@ template placeholder, and Pi-catalogue window resolution.
 #### Scenario: A multi-segment model's window resolves from both sources
 
 - **GIVEN** a fixture `HOME` whose `models.json` lists provider `openrouter` with the model id
-  `stealth/union-alpha` and `contextWindow` `131072`, and a contract whose `TEAM_DEFAULT_MODEL` is
-  `openrouter/stealth/union-alpha`
+  `stealth/union-alpha` and `contextWindow` `131072`, and a contract whose routine category model is
+  `openrouter/stealth/union-alpha`, with a complete current worker assignment to that same model
 - **WHEN** `team ps` runs with `TEAM_MODEL_WINDOWS` empty
 - **THEN** the WINDOW row for that model reads `131k`, not `?`
 - **AND** with `TEAM_MODEL_WINDOWS='openrouter/stealth/union-alpha=300000'` the same row reads `300k` — the
@@ -754,11 +619,79 @@ template placeholder, and Pi-catalogue window resolution.
 
 #### Scenario: The read surfaces and the seat picker carry the whole id
 
-- **GIVEN** a contract whose default model is `openrouter/amazon/nova-lite-v1` and whose `TEAM_AGENT_MODELS`
-  carries `dev=openrouter/stealth/union-alpha`
-- **WHEN** `team config list --json` runs and the panel fixture opens the seat picker for `dev`
-- **THEN** `models.known` and the `TEAM_DEFAULT_MODEL`/`TEAM_AGENT_MODELS` `choices.values` carry both ids
-  verbatim, the picker lists `openrouter/stealth/union-alpha`, and choosing it writes
-  `dev=openrouter/stealth/union-alpha` through `team config set-agent-model` (the receipt names the seat and
-  the contract line carries the full id)
+- **GIVEN** policy models `openrouter/amazon/nova-lite-v1` and `openrouter/stealth/union-alpha`
+- **WHEN** JSON and the replacement category picker are read and the second id chosen
+- **THEN** known/choices and the picker retain both complete ids; the write uses `set-task-model` and reads back the whole id, never a seat override
+
+### Requirement: Project task-model policy replaces seat and worker-default routing
+
+The sole policy file remains `.pi/team/config.sh`. `TEAM_TASK_MODELS` SHALL be a nonempty single-line whitespace-separated mapping of unique lowercase category tokens `[a-z][a-z0-9-]*` to nonempty valid complete provider/model ids. A token has exactly one `=`; duplicate categories, empty values, malformed category/model, linebreaks or non-representable writer values refuse with exit 4. Initial routine/analysis/verify are examples, not mandatory engine categories. `TEAM_PM_MODEL` SHALL be an explicit nonempty valid model and SHALL NOT fall back to any worker value. Retired `TEAM_DEFAULT_MODEL`/`TEAM_AGENT_MODELS` assignments, even empty or mixed with new keys, and retired environment variables SHALL never supply routing semantics. Model-dependent operations (dispatch/resume/up, real init/bootstrap before their effects) refuse legacy/incomplete policy before effects and show exact file/key plus upgrade or unset routes. `--force` is not a routing migration.
+
+Loading config SHALL keep paths, help, doctor, config list/log/set/upgrade usable under retired or invalid model keys. Supported key repairs use the canonical writer without activating legacy routing. `config set` for retired keys exits 5; `set-agent-model` is removed and refuses with replacement routes without writing. `models.default`/editable seat overrides and seat-model group retire; task map is kind `task-model-map`, group `task-model`, class apply (next new task), required PM is model kind in the same group with class restart (new PM startup subject to fresh guard). Limits/windows remain independent. Diagnostics SHALL name migration_required, retired keys, missing/invalid keys and never present invalid policy as runnable.
+
+#### Scenario: Legacy and mixed policy refuse but repair commands remain reachable
+- **WHEN** an old-only, empty-retired, mixed-new/old, invalid-map or empty-PM configuration is used
+- **THEN** launch/bootstrap refuse before prompt/install/ledger/window effects; doctor and list explain all issues, paths/log/help still work, and new-key set or explicit upgrade can repair it
+
+#### Scenario: Category map has one domain rule
+- **WHEN** maintenance=vendor/model is set, then duplicate categories, UpperCase, routine=, routine, extra equals, missing provider/model and newline maps are submitted
+- **THEN** maintenance is accepted; invalid values exit 4 without contract changes; list warnings and write refusals name the same violations
+
+#### Scenario: Old routes cannot recreate seat policy
+- **WHEN** config set targets either retired key or set-agent-model is invoked
+- **THEN** they refuse without contract/state changes, name set-task-model/PM-set/upgrade routes, and help advertises no writable seat override
+
+#### Scenario: PM is independent from task policy
+- **WHEN** worker category mapping changes with a valid PM key and PM preview is rendered
+- **THEN** PM model stays unchanged; empty PM refuses rather than selecting any category or retired default
+
+### Requirement: Category editing and explicit upgrade share the one checked writer
+
+`team config set-task-model <category> <model>` SHALL update or add exactly that category token in the whole mapping through the canonical writer, pinning the read fingerprint and retaining other tokens in order. Whole-map `config set TEAM_TASK_MODELS` uses the same validation. `-`/empty models are invalid, not deletion/fallback. Removing a category is an explicit whole-map edit with resulting nonempty valid mapping; complete assignments, including stopped tasks' recoverable category/model/SID/provenance, are not changed or invalidated by policy edits. New selections must use a currently mapped category, while complete unchanged same-task recovery follows its committed identity under an otherwise valid overall routing configuration. PM uses `config set TEAM_PM_MODEL`. These routes inherit dry-run, quoting, CAS, actor/audit and exit codes (0 success, 3 conflict, 4 invalid, 5 refused, 6 write-error, 7 danger-refused; usage 2).
+
+`team config upgrade-models --task-models '<complete map>' --pm-model '<model>' [--dry-run] [--fingerprint <sha256>] [--actor <actor>] --yes` SHALL explicitly preview all removed/changed keys, never infer mapping or PM from retired values. It SHALL replace both model policy fields and remove retired direct assignments in a single serialized CAS/temporary-file/bash-n/atomic-rename transaction, preserving mode, unrelated bytes and inline comments of surviving fields. Retired inline comments SHALL remain standalone at the same location; new missing fields append on their own lines. It SHALL refuse ambiguous relevant source assignments (duplicates, multiline/dynamic/export/conditional/indirect constructs) with line/path and actionable manual normalization; it is not a general bash parser. No config/assignment/ledger/install/process effect occurs on dry-run, failure or cancellation except the prescribed single real-attempt refusal audit. Every real transaction has exactly one audit line covering all changed keys and before/after fingerprints; an audit failure warns without lying about the actual config replacement. Same-directory temporary files are cleaned on normal failure; abandoned temporary files are never loaded as config. No upgrade clears historical assignments or session files.
+
+#### Scenario: One category write changes only its token
+- **WHEN** routine is updated through set-task-model and maintenance is added
+- **THEN** other tokens/order/comments remain, values are writer-quoted, each real write has one ok audit; dry-run/cancel has none and an invalid '-' leaves bytes intact
+
+#### Scenario: Explicit upgrade preserves unrelated bytes and has no partial result
+- **GIVEN** old direct assignments and unrelated roster/limits/comments/ledger
+- **WHEN** explicit upgrade is previewed then authorized
+- **THEN** preview writes nothing; real result has only new policy and retained standalone old comments, one transaction audit, valid bash syntax, unchanged roster/limits/governance/history and no process/installation calls
+
+#### Scenario: Stale fingerprint and failure injection protect the whole file
+- **WHEN** a comment changes after read, or second-field rendering/bash-n/rename fails during upgrade
+- **THEN** conflict is exit 3 or write error exit 6, original/current-other-writer bytes remain, no half-new policy appears, temp cleanup and one honest audit result are visible
+
+#### Scenario: Ambiguous source is refused with a usable correction
+- **WHEN** relevant keys are duplicate, multiline, dynamically derived, exported or conditionally assigned
+- **THEN** upgrade refuses before replacement naming the lines and direct-literal normalization; after that explicit manual correction the identical upgrade command succeeds without inferring values
+
+#### Scenario: Quoting and concurrent readers do not execute or observe partial policy
+- **WHEN** hostile shell text is passed as a model value and concurrent writers/readers exercise valid upgrades
+- **THEN** invalid models refuse without executing text, every observed config parses and is wholly old or new, and current-file CAS prevents a lost update
+
+### Requirement: Machine reads separate future policy from committed assignments
+
+`config list --json` SHALL expose `models.policy` with ordered categories `{category,model}` and independent PM model, `models.assignments` with one roster row (assigned boolean plus task/category/model/selected_via/launch_via/SID when complete), PM selected launch identity separately, and `models.known` as ordered deduplicated project policy plus committed selected models. Unassigned/malformed rows use assigned false, empty string fields and a diagnostic, never guessed seat defaults or null/valueless fields. Original selection provenance is not re-labelled by current policy equality. A valid complete unchanged assignment remains assigned even when its recorded category was removed from the valid future mapping; no invalid-brief or fresh-required diagnostic may be invented solely from that deletion. Schema/model choices use only this project data, no machine provider catalogue. `ps`, `roster`, status and panel SHALL display last selected assignment and original/current launch source separately from next-new-task policy; records never prove later Pi-internal model changes. Read surfaces SHALL not mutate assignment/config/timestamps.
+
+#### Scenario: Policy edit does not rewrite current provenance
+- **GIVEN** an explicitly launched routine assignment and a later mapping edit
+- **WHEN** config JSON, ps, roster and panel are read
+- **THEN** policy shows the new mapping but assignment retains its original full model, explicit origin and assignment recovery source; no file changes
+
+#### Scenario: Removed future category remains a complete actual assignment
+- **GIVEN** an explicit routine assignment with full model/SID A and unchanged identity, then valid policy containing only analysis/verify
+- **WHEN** config JSON, ps, roster and panel are read
+- **THEN** policy omits routine, assignment retains assigned true plus routine/full model/SID A and original provenance, known models retains the committed model, and the displays distinguish absent future policy from intact recovery without changing files
+
+#### Scenario: Empty and legacy records remain valid JSON without fictitious defaults
+- **WHEN** reads run with missing, legacy and malformed assignments and migration-required config
+- **THEN** every machine exit parses; missing actual model/category/SID are empty strings and assigned false with diagnosis, no writable worker-seat model appears
+
+#### Scenario: Known models are only project-owned model data
+- **GIVEN** fixture HOME with extra catalogue-only models
+- **WHEN** policy, records and choice vocabulary are read
+- **THEN** known/choices contain only configured and committed models once, including PM and complete suffix/multi-slash ids, never a source label or catalogue-only entry
 

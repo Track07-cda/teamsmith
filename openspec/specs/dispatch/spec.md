@@ -8,14 +8,14 @@ guards that stop a dispatch from corrupting another task's work or the machine. 
 ## Requirements
 ### Requirement: A brief is self-contained and names its evidence
 
-`team task <ID> --title <title> --agent <a>` SHALL render `templates/task.md.tmpl` into
-`docs/team/tasks/<ID>-<slug>.md` carrying the task id, the agent, deliverables, explicit boundaries, copy-pasteable
+`team task <ID> --title <title> --agent <a> --category <category>` SHALL render `templates/task.md.tmpl` into
+`docs/team/tasks/<ID>-<slug>.md` carrying the task id, the agent, exactly one `category:` header naming a project-mapped category, deliverables, explicit boundaries, copy-pasteable
 acceptance commands and the report path; `team dispatch` SHALL reference that file in the prompt instead of
-inlining the work.
+inlining the work. The prompt SHALL name category, complete model, original selection source, current launch source, SID and fresh/continued mode. A fresh takeover SHALL point at disk handover materials (goal, branch/code status, evidence and unresolved work), never reconstructed Pi history.
 
 #### Scenario: A generated brief carries the contract
 
-- **WHEN** `team task T1.1 --title "first task" --agent dev` runs in an initialised project
+- **WHEN** `team task T1.1 --title "first task" --agent dev --category routine` runs in an initialised project
 - **THEN** `docs/team/tasks/T1.1-*.md` exists and contains the acceptance section and the report path
   `docs/team/reports/T1.1-dev.md`
 
@@ -163,7 +163,7 @@ pre-launch phase and in `--print`.
 
 `team dispatch` SHALL refuse to start a worker when the number of running agents on the same model has reached the
 limit set in `TEAM_MODEL_LIMITS` (`<provider>/<model>=<n>`, `*` wildcards supported, `0` = unlimited) and MUST name
-the model, the limit and the current count.
+the model, the limit and the current count when judgeable. The input SHALL be the actual resolved launch model, including an explicit override or a recovered assignment. Only proven-live worker seats count; PM, dead/exited/absent panes do not. Replacing the target seat counts it once after replacement, not both the old and new launch. Exact rules precede wildcard rules; wildcard groups count their other matching workers, and the strictest matching positive wildcard limit applies. Unmatched models and 0 remain unlimited. For a target with an applicable positive limit, a proven-live peer in this project whose complete committed model identity is missing, legacy, incomplete or malformed SHALL make admission unjudgeable and refuse, in preview and real calls even with `--force`. Such a peer cannot be excluded from an exact/wildcard group or counted as zero by guessing from a partial model field, future category policy or retired seat presets. The diagnostic SHALL name target model/rule/limit, the unknown peer and record defect, distinguish known occupancy from unknown occupancy, and print a project-local correction route: explicitly fresh-dispatch that peer with a valid brief, or explicitly stop only that named project's worker through the existing lifecycle command before retrying. No automatic cleanup, record fabrication or other-project operation is allowed. A target being replaced is excluded from the old peer set and counted once at its known planned model. A positive clean dead/exited/absent determination excludes a peer regardless of missing model identity; PM never enters this set. If the actual target has no positive limit under the existing exact/wildcard/0 rules, unknown peers do not create a model-budget refusal. No automatic downgrade or cross-model retry is permitted. Final worker admission counts and launch-to-proof publication SHALL be serialized across seats so concurrent accepted previews cannot oversubscribe a limit.
 
 #### Scenario: The limit is reached
 
@@ -176,6 +176,27 @@ the model, the limit and the current count.
 - **GIVEN** `TEAM_MODEL_LIMITS='kimi-coding/k3=0'` and one running agent on that model
 - **WHEN** another dispatch on the same model runs
 - **THEN** the model guard does not refuse the dispatch
+
+#### Scenario: Actual model, wildcard group and replacement determine the count
+- **GIVEN** a category policy different from the assigned/explicit model, an exact rule and overlapping wildcard rules, one proven-live peer, stopped/dead/absent peers and a live PM
+- **WHEN** overrides, assignment recovery and same-seat replacement are checked at their applicable limit
+- **THEN** count/diagnostic use actual model, exact priority or strictest shared wildcard positive limit, count a replaced target only once, exclude stopped peers and PM, and refuse a full group before state changes
+
+#### Scenario: Two seats cannot claim the same final slot
+- **GIVEN** an applicable worker limit of one and two concurrent dispatch attempts on different seats
+- **WHEN** both pass their initial reads with zero live workers
+- **THEN** final admission/proof is serialized; one proven-live launch succeeds, the other reports the new count and refuses without window/assignment/board changes
+
+#### Scenario: A live unknown-model peer blocks limited admission
+- **GIVEN** target strong model limit 1 and another worker proven live by current PID/nonce evidence, but with missing, legacy, incomplete or malformed model assignment in equivalent fixtures
+- **WHEN** exact-rule and positive-wildcard target admission run as preview and real dispatch, with and without force
+- **THEN** each refuses before effects, names that peer and record defect plus target rule/limit, reports model occupancy unjudgeable rather than count 0/pass, gives a concrete project-local fresh takeover or named-worker teardown route, and does not infer a model from partial/retired/future policy
+
+#### Scenario: Unknown peer identity does not make dead workers or PM occupy slots
+- **GIVEN** the preceding fixture, then equivalent fixtures where the peer is positively stopped/dead/exited/absent or is the PM
+- **WHEN** limited admission is checked
+- **THEN** the live unknown worker blocks, while each non-worker/non-live control occupies no slot; an explicitly authorized local stop of the named worker followed by retry clears the unknown-occupancy blocker without deleting its worktree/branch/history or changing other projects
+- **AND** an exact 0 or unmatched unlimited target does not fabricate an occupancy count or acquire a budget blocker merely because a live peer's model is unknown
 
 ### Requirement: One task branch per task
 
@@ -277,7 +298,7 @@ non-zero naming the missing evidence. On the custom-adapter path an agent that e
 `TEAM_DISPATCH_ALIVE_SEC` (default 1 s) SHALL fail the dispatch with the real `exit=<code>` and MUST leave
 `state/dispatch-<agent>-launch-failed.log` holding the rendered command, the resolved binary, the exit code and the
 window tail, without writing a task record; the built-in Pi path keeps its older contract, where a short-lived
-`TEAM_PI_BIN` is reported honestly instead of failing the dispatch. Why each piece is evidence and not inference:
+`TEAM_PI_BIN` is reported honestly instead of failing the dispatch. A successful launch SHALL atomically publish the complete versioned assignment described by this capability; a failed attempt leaves the previous assignment byte-identical and cannot advertise success. Launch evidence and failed diagnostics remain separate from committed assignment state. Why each piece is evidence and not inference:
 `references/agent-adapters.md` §3 and `references/troubleshooting.md`.
 
 #### Scenario: A wedged window is a failure, not a success
@@ -315,14 +336,14 @@ window tail, without writing a task record; the built-in Pi path keeps its older
 ### Requirement: A dispatch refuses a session the model's window cannot hold
 
 When a dispatch would resume an existing session, `team dispatch` SHALL compare the session's estimated size
-(JSONL bytes ÷ 4 — a deliberately coarse estimate) against the selected model's context window and MUST refuse to
+(JSONL bytes ÷ 4 — a deliberately coarse estimate) against the actual resolved launch model's context window and MUST refuse to
 start when the estimate exceeds it, naming the session file, the estimate and the window. `--fresh` (a new,
-timestamped session id) and `--allow-overflow` (an explicit, loud override) SHALL be the two ways through, and the
+uniquely identified session id) and `--allow-overflow` (an explicit, loud override) SHALL be the two ways through, and the
 guard MUST also run for `--print` so no window is planned around a session that cannot fit. The window SHALL be
 resolved from `TEAM_MODEL_WINDOWS` (`<provider>/<model>=<tokens>`, matching either the full name or the bare model
 name) first and from the model catalogue second; when neither resolves it, the guard MUST use the conservative
 threshold `TEAM_SESSION_WARN_TOKENS` (default 200000) and say that the window could not be resolved. `team roster`
-and `team ps` SHALL show the estimate next to the model as `used/window`. Why reuse is the dangerous case (a
+and `team ps` SHALL show the estimate next to the model as `used/window`. The measured file SHALL match the committed assignment SID and worktree, not the seat base SID or latest neighboring session. Displays SHALL stat that file on each read; `sid_bytes` is only a launch snapshot. A known fresh SID with no file yet reads 0; missing/untrusted assignment identity reads unavailable, not a fabricated 0. Model-change restrictions still apply even for a wider window and cannot be bypassed by `--allow-overflow`. Why reuse is the dangerous case (a
 361k-token session under a 272k window wedges while `roster` still shows a running agent): `references/protocol.md`.
 
 #### Scenario: A big session with a small-window model is refused
@@ -336,8 +357,8 @@ and `team ps` SHALL show the estimate next to the model as `used/window`. Why re
 
 #### Scenario: A wider window may reuse the same session
 
-- **GIVEN** the same session and a model whose window is larger than the estimate
-- **WHEN** the dispatch runs for that model
+- **GIVEN** the same session and the committed assignment model whose window is larger than the estimate
+- **WHEN** the dispatch resumes that same assigned model
 - **THEN** it proceeds and reuses the same session id
 
 #### Scenario: An unresolvable window falls back to the conservative threshold, and says so
@@ -351,7 +372,7 @@ and `team ps` SHALL show the estimate next to the model as `used/window`. Why re
 
 - **GIVEN** the over-large session of the first scenario
 - **WHEN** the dispatch runs with `--fresh`
-- **THEN** it proceeds with a new, timestamped session id, so the reused history is not what the agent loads
+- **THEN** it proceeds with a new, uniquely identified session id, so the reused history is not what the agent loads
 - **AND** with `--allow-overflow` it proceeds under a loud warning that the over-large session was explicitly
   allowed, instead of passing silently
 
@@ -706,7 +727,7 @@ not read as one long capability token — and a trailing comma MUST be named as 
 
 ### Requirement: The roster changes only through an explicitly authorized registration
 
-`team add-agent <agent> [--register] [--model <provider/model>|-] [--create|--no-install|--print]` SHALL be the
+`team add-agent <agent> [--register] [--create|--no-install|--print]` SHALL be the
 only CLI route that grows `TEAM_AGENTS`, and `team teardown --agent <agent> --register` the only one that shrinks
 it. Both SHALL write through the project contract's one writer, with the roster key's value rule, its fingerprint
 CAS and its audit (`memory-and-deps`: "The project contract has exactly one writer, and it preserves what it does
@@ -721,15 +742,7 @@ exit 2) and SHALL refuse a seat the roster does not carry (exit 5 naming the ros
 entries SHALL accept `--fingerprint <sha256>` with `team config set`'s semantics, and their own read-modify-write
 SHALL pass the fingerprint of the bytes they read. A seat name the roster's value rule refuses (whitespace, `/`,
 `pm`) SHALL exit 4 **before any write** — the roster byte-identical and no `result=ok` line — never a written
-roster with a later worktree failure. `--model <m>` SHALL be validated before any write and SHALL set
-that seat's configured model through the same writer and the same pairlist serializer
-`team config set-agent-model` uses (`-` removes the override), and SHALL refuse exactly like the roster case when
-the seat is outside the roster and `--register` was not given. Whatever that same command records about the seat's
-model afterwards SHALL be read from the configuration the write just produced, not from the value resolved before
-it — a record that contradicts a configured override is a lie the read surface cannot label away. The roster write SHALL come first (`team add-agent`
-cannot build a worktree for a seat the tool does not know), and the command SHALL state what it wrote and what it
-did not when the second write does not land. `team help`'s `add-agent` line SHALL print `--register`, `--model`,
-`--create`, `--no-install` and `--print`, and `teardown`'s line SHALL print `--register`.
+roster with a later worktree failure. Seat registration SHALL NOT choose a model, pre-write a model/source/SID or overwrite an existing assignment. The retired `add-agent --model` flag SHALL exit 2 with a category-policy editing route before any write, even with `--register`. `team help`'s `add-agent` line SHALL print `--register`, `--create`, `--no-install` and `--print`, not `--model`, and `teardown`'s line SHALL print `--register`.
 
 #### Scenario: `--register` grows the roster as one audited write
 
@@ -772,29 +785,20 @@ did not when the second write does not land. `team help`'s `add-agent` line SHAL
 
 #### Scenario: `--model` is the seat's configured model, not a per-run choice
 
-- **GIVEN** the same contract and a seat `dev` in the roster
-- **WHEN** `team add-agent dev --model vendor/m2 --no-install` runs
-- **THEN** the `TEAM_AGENT_MODELS` line carries `dev=vendor/m2`, exactly one audit line names that key,
-  `team config list --json` reports the seat with that model and `"override":true`, and the state record the
-  command leaves (if any) agrees with the configuration — the pre-change command copied the model resolved before
-  the write into the record, so the row showed an old model while reporting the override
-- **AND** `team config set-agent-model dev vendor/m3` afterwards produces the same line with `vendor/m3` (the two
-  routes are the same write), `team add-agent dev --model -` removes the token, and `team add-agent api
-  --model vendor/m2` without `--register` exits 5 naming `--register` with nothing written
+- **WHEN** the retired `team add-agent dev --model vendor/m2 --no-install` runs
+- **THEN** it exits 2, names `team config set-task-model` as the replacement policy route, writes no model or assignment, and opens no window
 
 #### Scenario: A predictable model error writes nothing, and a retry completes
 
-- **GIVEN** the same contract, whose sha256 is recorded
-- **WHEN** `team add-agent api --register --model deepseek-flash` runs
-- **THEN** it exits 4 naming the accepted `provider/model` shape, the roster still reads `dev verify`, the sha256
-  is unchanged and no audit line was written — the model value is judged before the first write
-- **AND** re-running with `--model vendor/m2` registers `api` first and then writes its model, in that order in
-  `config.log`, and both keys read back as requested
+- **GIVEN** a recorded contract fingerprint and roster `dev verify`
+- **WHEN** `team add-agent api --register --model vendor/m2` runs
+- **THEN** it exits 2 before registration with contract/state/roster unchanged
+- **AND** retrying without `--model` registers api with one roster audit and no model assignment
 
 #### Scenario: The help lines print the register route
 
 - **WHEN** `team help` runs
-- **THEN** the `add-agent` line carries `--register`, `--model`, `--create`, `--no-install` and `--print`, and the
+- **THEN** the `add-agent` line carries `--register`, `--create`, `--no-install` and `--print`, and the
   `teardown` line carries `--register`
 - **AND** the pre-change lines are this check's red side: `add-agent` printed `[--model m]` (a flag the parser
   refused) and neither line mentioned registration at all
@@ -818,9 +822,9 @@ real one:
   promise MUST really happen in the fixture through a declared promise probe; the set of keys needing a probe is
   derived from the schema, not from a hand-kept list, so a note naming a command with no probe fails naming the
   key, and a named command the CLI does not carry fails naming the key and the command. The probes assert
-  effects, not exit codes: the roster's probe changes `TEAM_AGENTS` and writes its audit line, a seat's probe
-  writes the model token, the pulse window's probe makes the backend's recorded window call carry the key's value,
-  and the model keys' probes make the next spawn's rendered command carry the new model.
+  effects, not exit codes: the roster's probe changes `TEAM_AGENTS` and writes its audit line, a category's probe
+  writes the category token, the pulse window's probe makes the backend's recorded window call carry the key's value,
+  and the model keys' probes make the next new task's rendered command carry the new model while same-task recovery keeps its assignment.
 - For every refusal route the CLI prints (`修法：<command>` and `改行：<exact line>`), the walk SHALL apply the
   printed route in a fixture and re-run the command that refused. A clearing route — a `改行：` line, or a command
   that removes the condition (a `git switch`, a `git worktree add`) — MUST make that blocker disappear; an
@@ -848,8 +852,7 @@ route is green.
 
 #### Scenario: The field defect is caught, with the command and the flag named
 
-- **GIVEN** a scratch tree whose `add-agent` help line prints `[--model m]` while the parser refuses it (this
-  change's red side, measured: `✗ add-agent: 未知参数 --model`, exit 2)
+- **GIVEN** a scratch tree whose `add-agent` help line incorrectly prints retired `[--model m]` while its parser refuses it with exit 2
 - **WHEN** the walk runs against it
 - **THEN** it exits non-zero and names `add-agent` and `--model`, and the other usage lines stay green
 
@@ -883,7 +886,7 @@ route is green.
 
 #### Scenario: A schema note naming a command without a promise probe fails
 
-- **GIVEN** a scratch tree whose schema gains a key whose note names `team config set-agent-model` while no probe
+- **GIVEN** a scratch tree whose schema gains a key whose note names `team config set-task-model` while no probe
   entry covers that key
 - **WHEN** the walk runs against it
 - **THEN** it exits non-zero naming the added key as a note that names a command without a promise probe, naming
@@ -945,10 +948,10 @@ decide without side effects in one pass, and it SHALL report **one** refusal lis
 refused dispatch MUST NOT open a window, switch a branch, write state or change any board status.
 
 The set judged this way is the guards that today refuse one after another: the brief's header rules (`change:`
-shape, the change-less anchor, `deltas:` shape and single-writer, verification independence), the task and
+shape, unique legal `category:` with mapping membership required for new selection rather than trusted same-task recovery, the change-less anchor, `deltas:` shape and single-writer, verification independence), the task and
 worktree state (more than one brief for the id, an unfinished previous task, a missing worktree, a dirty worktree,
 the branch identity), and the launch preconditions (the capacity floor, model concurrency, the session-vs-window
-check, the agent executable). A guard that cannot be judged because its precondition is missing SHALL say so in
+check, the agent executable, routing-config validity, assignment identity, required fresh takeover and conflicting extra arguments). Routing and identity blockers are non-overridable; `--force`/`--allow-overflow` never waive them. A proven-live peer with unjudgeable model identity makes positive-limit admission unjudgeable as specified by the concurrency requirement; this is a blocker, not a passed zero-count guard. Resolution-dependent guards SHALL report unjudgeable when category/model/SID cannot resolve, while independent branch/capacity guards still run. A guard that cannot be judged because its precondition is missing SHALL say so in
 the report and MUST NOT be reported as passed.
 
 The refusal opens with the first blocker's own first line (there is no separate banner) and ends with a line
@@ -1058,4 +1061,97 @@ never a guess. The dispatch proceeds to its normal preflight and launch in every
   `sid_bytes`
 - **WHEN** the dispatch runs
 - **THEN** neither warning is printed
+
+### Requirement: A task declares one project category and new dispatch selects its model explicitly
+
+A brief SHALL declare exactly one `category:` header token matching `[a-z][a-z0-9-]*`. For first selection, a new task or a fresh takeover that must reselect from changed/untrusted identity, its category SHALL be present in the current project mapping even with an explicit model. Missing, duplicate (even identical), empty or malformed declarations always refuse before any side effect and in preview as well; an unmapped declaration refuses new selection but does not invalidate trusted unchanged same-task recovery as defined below. Phase and seat SHALL NOT infer category; dispatch has no category override flag. `team task --category <token>` SHALL validate and render that header; omission refuses generation. Initial examples routine/analysis/verify do not close the engine vocabulary.
+
+A new task SHALL resolve a complete model token from explicit `--model` when present, otherwise its mapped category, and SHALL mint a new unique SID even if the previous task used the same model. Explicit model selection does not waive category/configuration validation or other dispatch guards. Model syntax is the shared provider/model shape; thinking suffix is preserved verbatim, not interpreted for compatibility. No classifier, automatic fallback, downgrade or cross-model launch retry is permitted. Preview SHALL display category, policy model, actual complete model, original selection source (`policy` or `explicit`), current launch source and fresh/continued identity.
+
+#### Scenario: Category faults refuse without launching
+- **WHEN** missing, duplicate and malformed category briefs, and new-selection briefs with unmapped categories, are dispatched, with and without `--print --force`
+- **THEN** each names the offending header and accepted mapped category correction, exits non-zero, writes no prompt/assignment/board/window and still reports independent preflight blockers
+
+#### Scenario: Categories are project-defined and not seat-defined
+- **GIVEN** mapping `maintenance=vendor/light analysis=vendor/strong:high` and legal briefs
+- **WHEN** maintenance is dispatched on two different seats and analysis later on either seat
+- **THEN** maintenance selects vendor/light on both seats, analysis selects vendor/strong:high, with new SID per new task and no seat preset lookup
+
+#### Scenario: An override retains category and original provenance
+- **WHEN** a routine brief is dispatched with `--model other/vendor/model:custom`
+- **THEN** captured argv and assignment carry the whole override, category routine, selected_via explicit and launch_via explicit; no thinking vocabulary judgement or compatibility claim occurs
+
+#### Scenario: Generated tasks require a mapped category
+- **WHEN** `team task T1 --title first --agent dev --category maintenance` runs with maintenance mapped, then generation is tried without category and with an unknown one
+- **THEN** the first writes exactly one category header; the others refuse with no new brief/board row
+
+### Requirement: Same-task recovery preserves the full committed launch identity
+
+Same-task dispatch, `resume --agent`, `resume --all` and `up --agents` SHALL use the complete committed assignment's category/model/SID rather than new policy resolution. Required identity SHALL include version, task, canonical brief path and category, actual branch, canonical worktree, seat/window, complete model, original selection source, launch source, SID, current launch nonce/time and launch-time byte snapshot (empty if unreadable). Brief path, category, task, branch and worktree must still match. Description/acceptance edits do not invalidate identity. Original selection source stays distinguishable from launch_via `assignment`. The overall current routing configuration must remain complete and valid, but membership of a recorded category in its future mapping is not a recovery identity check. Changing or removing that category's mapping SHALL leave trusted unchanged same-task recovery's category, complete model, SID and original selection provenance intact. This includes same-assigned-model fresh takeover without a new override (with a new SID); explicit same-model continuation retains model/SID while recording explicit selection as specified below. It does not turn a new task or changed/untrusted identity into a mapped selection. A different explicit model remains subject to fresh and current mapped-declaration validation. Legacy/incomplete/malformed/mismatched records refuse with an actionable same-task `dispatch ... --fresh` handover route; no partial record is upgraded by guessing.
+
+Same-task `--fresh` without `--model` retains assigned model and original selection provenance. An explicit `--model` records explicit provenance even when selecting the same complete token; it may continue that token's SID without fresh, while fresh allocates a new SID. Any complete-model change, thinking suffix included, SHALL require `--fresh`; `--force`/`--allow-overflow` do not waive it. Fresh takeover of a legacy/incomplete/malformed or changed identity revalidates the current brief/config and guards, selects explicit override or current category policy (never guesses from the unusable record), uses a different unique SID and points to disk handover; old history/code/evidence is preserved. No message or reasoning block is replayed or transformed. Plain resume has no model/fresh selection side channel. Dry-run SHALL resolve the same guards/plan as resume without launching or writing even missing-brief notifications.
+
+#### Scenario: Override and fresh survive every recovery entry
+- **GIVEN** an explicit override plus fresh launch, a stopped worker and a subsequently changed category mapping
+- **WHEN** same-task dispatch, resume --agent, resume --all and up --agents are tested in equivalent fixtures
+- **THEN** captured launch argv retains the identical full model and SID, selected_via explicit and launch_via assignment, with a new launch nonce only; a later new task uses the new mapping
+
+#### Scenario: Removing a future category preserves a trusted same-task assignment
+- **GIVEN** a complete routine task assignment selected explicitly as vendor/strong:high with SID A and unchanged task/brief/category/branch/worktree, then a valid nonempty project mapping containing only analysis/verify and a valid independent PM model
+- **WHEN** same-task dispatch, resume --agent, resume --all and up --agents run in equivalent stopped-worker fixtures, with preview counterparts
+- **THEN** recovery uses category routine, vendor/strong:high, SID A and original selected_via explicit with launch_via assignment, no forced fresh/header edit/reselection; current-policy display reports routine unmapped without fabricating a policy model
+- **AND** another new routine task, even with explicit override or force, refuses as unmapped before effects; same-model fresh on the complete original identity retains model/category/origin but allocates a different SID
+
+#### Scenario: Legal category deletion is not a waiver for invalid overall config or changed identity
+- **GIVEN** the complete assignment of the preceding scenario
+- **WHEN** the entire mapping becomes empty/missing/invalid, independent PM policy is missing/invalid or retired routing keys are present
+- **THEN** ordinary recovery and preview refuse before effects; they do not treat malformed configuration as the legal deletion case
+- **AND** changing the original brief category/task/path, branch or worktree still fails identity checks; explicit model/suffix changes require fresh plus a currently mapped declaration rather than old-seat/default inference
+
+#### Scenario: A model or suffix change needs explicit fresh
+- **WHEN** a same-task model/provider change or only a thinking-suffix change is tried without fresh, including with force/allow-overflow
+- **THEN** it refuses before writes/launch; adding fresh succeeds with a different SID and later resume preserves that new identity
+
+#### Scenario: Same-model fresh is unique even within a second
+- **WHEN** two successful same-model fresh takeovers occur within one timestamp second
+- **THEN** their SIDs differ from each other and the old SID; captured prompts name disk handover and do not contain copied session history
+
+#### Scenario: Untrusted identity refuses rather than silently reselecting
+- **WHEN** records are legacy, truncated, unknown-version or mismatch task/brief/category/branch/worktree
+- **THEN** normal recovery refuses with the specific mismatch and concrete correction/fresh route; explicitly correcting the brief and taking fresh permits launch without rewriting old materials
+
+#### Scenario: Dry recovery is genuinely read-only and fails honestly
+- **WHEN** resume --dry-run is run for valid, missing-brief, broken-assignment and changed-model policy fixtures
+- **THEN** output carries the exact recoverable model/SID or refusal, no state/prompt/thread/inbox/config/board timestamps change and a requested blocked recovery exits non-zero
+
+### Requirement: Launch assignments are complete transactions and previews cannot mutate launch state
+
+Dispatch SHALL serialize the target seat's launch decision through proof and assignment publication and serialize final worker admission across seats. It SHALL recheck the pinned assignment and routing fingerprint before any window replacement; a concurrent change refuses or recomputes before launch, never launches a stale plan. After this round's nonce proof and the existing launch-success judgement, the complete assignment SHALL replace its predecessor atomically. A failed proof/launch/publication SHALL exit non-zero without publishing partial identity, leave the old assignment byte-identical, stop any uncommitted new worker and retain diagnostic launch evidence. Interruption before publication leaves no usable new assignment; recovery SHALL detect nonce disagreement or outstanding interrupted-launch evidence and require fresh takeover rather than inherit the old identity. Board wip follows committed identity; a failed board write is reported as committed launch plus board failure, not a fictitious rollback. A complete committed identity remains recoverable after caller interruption.
+
+`dispatch --print`, resume dry-run and refused preflight SHALL NOT create/modify prompt files, assignments, launch markers, board, config/audit or tmux windows. Fresh preview SHALL show an explicitly non-reserved candidate SID and warn that actual launch allocates its own SID; continued preview's SID/model SHALL equal actual recovery argv. Teamsmith-owned model/provider/session/continue arguments in worker or PM extra Pi arguments SHALL be refused, including separate/equals/short forms and bare session paths; arbitrary non-identity extras remain allowed. Frozen custom templates must consume the resolved identity placeholders to claim Pi continuity; a command with unverifiable hard-coded identity SHALL refuse guarded continuation with a template correction, not claim exact recovery.
+
+#### Scenario: Proof and publication failures cannot create half an assignment
+- **GIVEN** a previous complete record
+- **WHEN** proof never arrives, an adapter exits non-zero, or publication fails before replacement
+- **THEN** the command fails, previous bytes remain, no new task/model/SID is advertised, uncommitted worker is stopped and diagnostic evidence names the attempt
+
+#### Scenario: Crash boundaries are distinguishable
+- **WHEN** dispatch is interrupted before proof, after proof before replacement, and after complete replacement in separate fixtures
+- **THEN** the first two cannot be recovered as a successful new assignment and require fresh after detecting interrupted evidence; the last resumes the complete committed model/SID without mixing fields
+
+#### Scenario: Overlapping dispatch cannot overwrite a newer decision
+- **WHEN** two launches target the same seat and another writer changes policy or the assignment while the first waits
+- **THEN** at most one launch decision proceeds at a time, the stale plan does not replace the window, and every visible assignment is one complete version
+
+#### Scenario: Preview and refusal leave all observable state unchanged
+- **WHEN** a valid fresh preview, valid continued preview and a composite refused dispatch run
+- **THEN** hashes and timestamps of state/config/board/prompt/worktree and recording-tmux call counts remain unchanged; preview renders the same model argument resolver used by recorded launches and identifies fresh SID as non-reserved
+
+#### Scenario: Extra identity arguments cannot contradict records
+- **WHEN** worker/PM extra args contain --model, --provider, --session-id, --session, --continue/-c or --resume/-r in supported separate/equals/short forms, or a bare session file
+- **THEN** preview and launch refuse before side effects with the conflicting key/argument and correction; a harmless extra such as --no-tools survives rendering without changing assignment identity
+
+#### Scenario: Board failure does not erase a committed launch
+- **WHEN** assignment commits but the board wip update fails
+- **THEN** output distinguishes the running committed launch from the failed board update, exposes the repair and preserves the complete identity for resume
 

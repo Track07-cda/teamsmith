@@ -178,7 +178,7 @@ The panel SHALL show the activity column by default: `TEAM_MONITOR_ACTIVITY` cha
 and `--activity` / `--no-activity` keep overriding it in both directions. With the column off, `--json` SHALL carry
 an empty `activity` array and the panel SHALL read no session or log file. The data layer's bounds SHALL survive the
 rewrite: the activity covers only the windows of the current session, the tail read stays at the configured window
-(default 64 KiB, hard cap 1 MiB) and the `truncated` / `tail_limit` markers are still reported. The last six lines of
+(default 64 KiB, hard cap 1 MiB) and the `truncated` / `tail_limit` markers are still reported. The built-in Pi source SHALL use the complete current assignment SID/worktree, never the latest neighboring/base session; a missing identity or missing recorded file yields unavailable with a reason. Explicit custom log-glob behavior remains frozen and unchanged. The last six lines of
 the patrol's action log (`watchdog.log`, whose name the `watchdog` capability owns and
 `rename-watchdog-to-pulse` renames) SHALL stay as the recent-actions column.
 
@@ -607,8 +607,8 @@ draft (a `\r` is normalized — E6 §2.2) and SHALL be sent as one message (E6 �
 
 ### Requirement: Settings are panel preferences in `state/panel.conf`, never the project contract
 
-The settings overlay (`,`) SHALL edit exactly five preferences — language (`zh`/`en`), the default page, the
-activity columns, the mouse and the density (`comfortable`/`compact`) — persisted in `state/panel.conf` and
+The settings overlay (`,`) SHALL edit exactly five preferences — language (`zh`/`en`), the default page (`1`–`5`),
+the activity columns, the mouse and the density (`comfortable`/`compact`) — persisted in `state/panel.conf` and
 applied immediately. The overlay SHALL additionally carry one navigation row — the project settings — which
 opens the project-settings view; selecting it changes no preference, writes no file and leaves `panel.conf` alone,
 and it is the only overlay row that is not a preference. A missing or corrupt `panel.conf` SHALL fall back to the
@@ -642,6 +642,12 @@ activity-columns toggle overrides `TEAM_MONITOR_ACTIVITY` for TUI sessions only.
 - **WHEN** the navigation row is selected with `enter`, and `esc` returns to the overlay
 - **THEN** the project-settings view rendered, `panel.conf` is byte-identical afterwards, and neither it nor the
   overlay's own frame carries a `TEAM_*` key of the contract
+
+#### Scenario: Default-page preference includes key replies
+
+- **WHEN** the default-page preference cycles through page 5 and persists it, and a later start has no page file
+- **THEN** page 5 is available in the preference cycle and is restored as the default
+- **AND** an invalid preference still falls back without failing the render
 
 ### Requirement: The layout is a pure function of geometry with four width tiers
 
@@ -859,15 +865,19 @@ declared palette.
 
 ### Requirement: The console composes four pages and remembers the position
 
-The TUI SHALL compose four pages — an overview (the status banner, the project-progress counts, the recent
-deliveries, the agent table, the capacity sparkline and the recent events), a work page (the board rows, the
-active changes with their phases, the spec counts and the recent decisions), a messages-and-logs page (the
-deferred queue, the inbox and threads, the patrol log, the capacity trend and the health block) and a board page
-(the kanban of "The board page is a kanban over the board's states") — plus a settings overlay. A block whose
-source has no data SHALL collapse and yield its space. Tab and the keys `1`–`4` SHALL switch pages, and the
-current page SHALL be written to `state/panel-page` and restored on the next start; a value outside `1`–`4` in
-that file SHALL fall back to the default page, never fail the render. Pages are a TUI-only concept: `--print`
-and `--json` render the overview content.
+The TUI SHALL compose five pages — an overview (the status banner, the project-progress counts, the recent
+deliveries, the agent table, the capacity sparkline, the recent events and the latest key-reply metadata), a work
+page (the board rows, the active changes with their phases, the spec counts and the recent decisions), a
+messages-and-logs page (the deferred queue, the inbox and threads, the patrol log, the capacity trend and the
+health block), a board page (the kanban of "The board page is a kanban over the board's states") and a key-replies
+page — plus a settings overlay. The first four pages MUST retain their existing numbers and meanings; page 5
+SHALL be key replies, never project settings. A block whose source has no data SHALL collapse and yield its
+space, except the key-reply summary and fixed key-replies page SHALL retain explicit empty/unavailable states
+and the key-replies page SHALL retain its page identity. Tab and the
+keys `1`–`5` SHALL switch pages, with Tab wrapping from 5 to 1. The current page SHALL be written to
+`state/panel-page` and restored on the next start; a value outside `1`–`5` in that file SHALL fall back to the
+default page, never fail the render. Pages are a TUI-only concept: `--print` and `--json` render the overview's
+existing machine content, without reading key-reply blocks or exposing key-reply fields.
 
 #### Scenario: Pages switch and the position survives a restart
 
@@ -893,6 +903,17 @@ and `--json` render the overview content.
 - **GIVEN** a fixture project with two queued outbox entries
 - **WHEN** the messages page renders
 - **THEN** both entries are listed with their ages
+
+#### Scenario: Fifth page is fixed and remembered
+
+- **WHEN** `5` selects key replies in an empty fixture, the console restarts, and Tab is pressed
+- **THEN** the empty key-replies page remains identifiable, restart restores page 5, and Tab returns to page 1
+- **AND** keys `1`–`4` still reach their original pages
+
+#### Scenario: Narrow tabs remain reachable
+
+- **WHEN** a 59-column fixture switches pages by `1`–`5`, Tab and mouse in both languages
+- **THEN** the active tab's number and label remain visible and the page band provides reachable targets for all five pages without horizontal overflow
 
 ### Requirement: The board page is a kanban over the board's states
 
@@ -1439,7 +1460,7 @@ the command's schema SHALL have a non-empty label in both tables (a fact the str
 directions — a schema key without a label and a label whose schema key is gone both fail it), and the raw key
 SHALL appear only where the view aligns with the command line: the editor's prompt and its confirmation, and the
 view's own line naming what to run for the focused row — `team config set <KEY> <value>` for a key the command can
-set, the file to hand-edit plus the key for a `refuse` key, the seat's own command for a seat. A key the schema
+set, the file to hand-edit plus the key for a `refuse` key, the category's own command for a category. A key the schema
 does not know has no label and none SHALL be invented for it: its row falls back to the raw key name, which is
 what the file and the command carry. The class vocabulary SHALL be the owning
 command's, closed and rendered from the tables: `apply` (the next read of the file uses it), `restart` (a running
@@ -1457,8 +1478,8 @@ it without closing the view. A `refuse` row SHALL open no editor and its interac
 owning command's refusal, which names the right route (hand-editing the file, `team add-agent`, …). The view's
 own labels SHALL come from the zh/en tables, the key labels included: no visible text is written into the bundle.
 The view is a console-only block: `--print` and `--json` MUST NOT
-read or render it, and the machine exits' bytes are unchanged. The view MUST NOT be a fifth page: the four-page
-composition and `state/panel-page` keep their meaning.
+read or render it or add a project-settings field. Opening/closing the console-only view does not change machine output under identical monitor inputs; the specified model-policy, assignment and SID-reader changes are not frozen to old bytes. The view MUST NOT be a top-level page: the five-page
+composition reserves page 5 for key replies and `state/panel-page` records only top-level pages.
 
 #### Scenario: The rows carry the three classes and the unset key its default
 
@@ -1472,11 +1493,11 @@ composition and `state/panel-page` keep their meaning.
 #### Scenario: The raw key is exactly where the CLI is named
 
 - **GIVEN** the view open with the focus on `TEAM_PULSE_INTERVAL` (an editable `restart` key), then on
-  `TEAM_SESSION` (a `refuse` key) and then on the `dev` seat
+  `TEAM_SESSION` (a `refuse` key) and then on the `routine` category
 - **WHEN** each row is focused
 - **THEN** the view's own command line reads `team config set TEAM_PULSE_INTERVAL <value>` for the first row, names
-  the file to hand-edit together with `TEAM_SESSION` for the second and `team config set-agent-model dev …` for the
-  seat, and the editor the first row opens is titled with the raw key
+  the file to hand-edit together with `TEAM_SESSION` for the second and `team config set-task-model routine …` for the
+  category, and the editor the first row opens is titled with the raw key
 
 #### Scenario: A search by the raw key still finds the row
 
@@ -1541,14 +1562,13 @@ composition and `state/panel-page` keep their meaning.
 
 #### Scenario: The machine exits stay byte-stable
 
-- **GIVEN** a fixture project and two contracts whose values differ
-- **WHEN** `team monitor --print` and `team monitor --json` run under each
-- **THEN** the two prints are identical apart from the timestamp and the two JSON objects carry no
-  project-settings field
+- **GIVEN** a fixture project with identical monitor-visible configuration and committed routing/SID identity before and after its console-only settings view is opened/closed
+- **WHEN** `team monitor --print` and `team monitor --json` run in each state
+- **THEN** prints are identical apart from timestamp, JSON objects carry no project-settings field, and the machine paths do not read the settings overlay; separately specified model/SID changes remain observable
 
 ### Requirement: The console writes a project setting only through `team config set`, after validation and a confirmation
 
-An editable row's `enter` SHALL open the row's editor: the **choice editor** (the requirement that owns it) when
+Category rows use `team config set-task-model` with the same dry-run, fingerprint, actor, confirmation, receipt and background re-read rules; PM uses `team config set TEAM_PM_MODEL`. Model-policy receipts SHALL distinguish next new task from exact same-task recovery and say no live process changed. An editable row's `enter` SHALL open the row's editor: the **choice editor** (the requirement that owns it) when
 the command's read reports a choice set for the key, and otherwise a one-line value editor that is the compose
 line's editor (the insertion point, pi's key map, the windowed draft — the `panel` requirement that owns it)
 holding the file's value, or the schema's default when the key is not in the file. Whichever editor opened, the
@@ -1623,74 +1643,12 @@ the pulse: it runs inside the pulse window and would kill itself; the restart co
 - **THEN** both show the same newest line naming the timestamp, the actor, the key, the old and the new value,
   and the footer shows at most three lines
 
-### Requirement: The console edits a seat's model and shows where the displayed model came from
-
-The project-settings view SHALL carry a **seats** block: one row per roster seat (`TEAM_AGENTS`) plus the PM seat
-(`pm`), each showing the model the console is displaying, its **source** in the CLI's own three states — `配置`
-(the configuration resolution, or no record), `显式` (the last `--model`), `历史记录` (the state record differs
-from the configuration, so the next spawn uses the new configuration) — and whether the seat carries a
-configuration override. The model and its source SHALL come from the owning command's machine read
-(`team config list --json`'s `models` block, computed by the same semantics `team ps` prints, `team_agent_model_src`
-in `common.sh`); the bundle MUST NOT compute a fourth state and MUST NOT render a bare model name. `enter` on a seat
-row SHALL open a picker — the models the command reports as known (the configuration's and the seats' recorded
-models) followed by a free-text line using the compose editor — and its confirmation SHALL write through
-**`team config set-agent-model <seat> <model|->`**, never by composing the pair list in the console; the
-confirmation and the receipt SHALL name the seat, the new model and the rule that the seat's **running window keeps
-its model until it is spawned again** (the next `dispatch`/`resume`; the PM seat needs the PM process rebuilt). `-`
-SHALL remove the seat's override so the fallback (`TEAM_DEFAULT_MODEL`) applies. A seat the roster does not name (a
-typo like `dev4`) and a model without the `provider/model` shape SHALL be refused by the owning command with its
-message shown, and a model whose fallback the seat does not override SHALL be displayed as such. The console MUST
-NOT re-spawn, kill or restart a seat to make a model change take effect: it prints the route
-(`team resume --agent <a>` for a stopped seat; dispatch stays the PM's).
-
-#### Scenario: A running seat keeps its model and the next spawn uses the new one
-
-- **GIVEN** a fixture project with a running `dev` window whose record names `deepseek/deepseek-flash`
-- **WHEN** `TEAM_AGENT_MODELS` is given `kimi-coding/k3-256k` for `dev` through the seats picker and the write
-  settles
-- **THEN** the running window's process arguments and `state/dev.env` still carry the old model, the receipt names
-  the next-spawn rule and prints no restart, and `team dispatch dev <ID> <brief> --print` renders the new model in
-  the command it would run
-
-#### Scenario: The source tri-state matches `team ps`
-
-- **GIVEN** a fixture whose `state/dev.env` records a model that differs from the configuration's resolution for
-  `dev`, and a second seat with no record
-- **WHEN** the seats block renders and `team ps` runs for the same fixture
-- **THEN** the differing seat's row carries `历史记录` and the record's model while `team ps`'s line for that seat
-  carries the same model and `·历史记录`, and the record-less seat's row carries `配置`
-- **AND** when a scripted dispatch writes the record with the current configuration, the row's badge reads `配置`
-
-#### Scenario: The override can be removed
-
-- **GIVEN** `TEAM_AGENT_MODELS` carrying a `dev=…` token
-- **WHEN** `-` is chosen for `dev` and confirmed
-- **THEN** the token left the line (the other seats' tokens and every other byte unchanged), the row shows the
-  fallback model with `配置`, and `team config list --json`'s `models.default` is that model
-
-#### Scenario: A seat's model is edited from its own row, and the seat's source is displayed
-
-- **GIVEN** a fixture project whose `TEAM_AGENT_MODELS` gives `dev` one model while `state/dev.env` records another,
-  and the console in a fixture pane
-- **WHEN** the seats block renders, and then the picker is opened on `dev`, a model is chosen and confirmed
-- **THEN** the `dev` row showed the recorded model with the CLI's `历史记录` badge before the write, the receipt
-  names `dev` and the next-spawn rule, `TEAM_AGENT_MODELS`'s line gained that seat's token with every other byte
-  unchanged, `state/dev.env` is untouched, and the row's badge now reads `配置`
-
-#### Scenario: An unknown seat or a shapeless model is refused
-
-- **GIVEN** the picker's free-text line holding `deepseek-flash` (no provider) and, in a second run, a hand-edited
-  `TEAM_AGENT_MODELS` token naming a seat the roster does not have (`dev4=…`)
-- **WHEN** each is confirmed
-- **THEN** the receipts carry the owning command's refusal naming the accepted shape and the roster, and the
-  contract's sha256 is unchanged in both runs
-
 ### Requirement: The console is read-only except through its owning commands
 
 Every block the console shows SHALL come from read-only reads, and the only state-changing actions the console
 offers SHALL be the ones that invoke the owning command as a subprocess: `m`/Enter → `team draft send`, `f` →
 `team outbox flush` (both `delivery-guard`), `s` → `team standby on|off` (`watchdog`), and the project-settings
-view's confirmed edit → `team config set` (`memory-and-deps`, which owns the contract's write path). The console
+view's confirmed edit → `team config set` or `team config set-task-model` (`memory-and-deps`, which owns the contract's write path). The console
 process itself MUST NOT write patrol, queue, inbox, board, ledger or contract files: the contract is written by
 the command, never by the panel, and the only files the console writes on its own are its three
 (`state/draft.md`, `state/panel.conf`, `state/panel-page`). v1 SHALL NOT grow a fifth action — an in-panel pulse
@@ -1809,9 +1767,9 @@ Per kind:
   not a source for this view.
 - `winlist`/`pattern` SHALL offer the known models as token vocabulary: choosing one opens the free-text editor
   holding the current value with `<model>=` inserted at the insertion point.
-- `pairlist` SHALL NOT be composed in the console: its editor SHALL be the seats block (the requirement that
-  owns per-seat model editing), reachable by `enter` from the row without any free-text composition of the pair
-  list, and the row's command line SHALL name `team config set-agent-model <seat> <model|->`.
+- `task-model-map` SHALL NOT be composed in the console: its editor SHALL be the categories block (the requirement that
+  owns per-category model editing), reachable by `enter` from the row without any free-text composition of the pair
+  list, and the row's command line SHALL name `team config set-task-model <category> <model>`.
 - A key whose `choices.source` is `none` and whose kind carries no action set (`text`, `cmd`, `tpl`, `list`)
   SHALL open the free-text editor with one visible line naming the reason (the schema's kind has no choice set,
   and the command still validates the write). A key the schema does not know stays read-only as it is today.
@@ -1863,10 +1821,10 @@ focus where it was, and the free-text entry opens the compose editor by keyboard
 
 #### Scenario: The model entries are this project's, never the machine's catalogue
 
-- **GIVEN** a fixture project whose contract names `deepseek/deepseek-flash`, whose `TEAM_AGENT_MODELS` carries
-  `dev=kimi-coding/k3-256k`, and whose `state/dev.env` records `openai-codex/gpt-5.6-terra:xhigh`; and a fixture
+- **GIVEN** a fixture project whose PM model is `deepseek/deepseek-flash`, whose `TEAM_TASK_MODELS` carries
+  `routine=kimi-coding/k3-256k`, and whose complete valid `state/dev.env` assignment records `openai-codex/gpt-5.6-terra:xhigh`; and a fixture
   `HOME` whose Pi model catalogue names `sub2api/gpt-5.6-luna`
-- **WHEN** the `TEAM_DEFAULT_MODEL` row's editor opens, and then the seats block's `dev` picker
+- **WHEN** the `TEAM_PM_MODEL` row's editor opens, and then the categories block's `routine` picker
 - **THEN** the entries are those three project models (with the current/default markers) in both editors and no
   `sub2api` entry appears anywhere
 - **AND** the same run's `team config list --json` carries no `sub2api` value in `choices.values` or in
@@ -1916,10 +1874,10 @@ focus where it was, and the free-text entry opens the compose editor by keyboard
 
 #### Scenario: The pairlist row routes to the seats block
 
-- **GIVEN** the view open with more rows than the pane shows and the focus on `TEAM_AGENT_MODELS`
+- **GIVEN** the view open with more rows than the pane shows and the focus on `TEAM_TASK_MODELS`
 - **WHEN** `enter` is pressed
-- **THEN** the seats block becomes the row's editor: the focus moves to it, no compose editor and no option list
-  opens, and the command line names `team config set-agent-model <seat> <model|->`
+- **THEN** the categories block becomes the row's editor: the focus moves to it, no compose editor and no option list
+  opens, and the command line names `team config set-task-model <category> <model>`
 
 #### Scenario: The picker is mouse-complete and writes nothing on cancel
 
@@ -1980,8 +1938,8 @@ No group heading SHALL name an effect class or carry a class's tone.
 
 A key whose `group` is empty — a schema row that declares none, or a key the file carries and the schema does
 not know — SHALL render under one visible trailing fallback heading, labelled from the tables, after the grouped
-keys and before the seats block: it MUST NOT be dropped, merged into a group the command did not report, or
-rendered without its own badge and command line. The seats block SHALL keep its own trailing heading, whose label
+keys and before the categories block: it MUST NOT be dropped, merged into a group the command did not report, or
+rendered without its own badge and command line. The categories block SHALL keep its own trailing heading, whose label
 is distinct from every group heading.
 
 #### Scenario: The headings are functional domains, not effect classes
@@ -1990,7 +1948,7 @@ is distinct from every group heading.
 - **WHEN** the rows render
 - **THEN** the headings are the schema's functional labels in the read's order (身份与账本布局 before 工作流与门禁
   before 跨项目会议), no heading reads `立即生效`, `需要重启` or `只读`, the keys of one group render together in
-  the schema's order, and a walk down the list stops only on key and seat rows — never on a heading
+  the schema's order, and a walk down the list stops only on key and category rows — never on a heading
 
 #### Scenario: A key added to the schema lands in its group, with the committed bundle
 
@@ -2005,7 +1963,7 @@ is distinct from every group heading.
 - **GIVEN** a scratch copy of the CLI whose `TEAM_GATES` row declares no group and a contract carrying a key the
   schema does not know
 - **WHEN** the view renders
-- **THEN** both rows appear under the visible fallback heading after the grouped keys and before the seats block,
+- **THEN** both rows appear under the visible fallback heading after the grouped keys and before the categories block,
   the schema key keeps its label, badge and command line, and the schema-unknown key is still read-only, named by
   its raw key and marked as unknown
 
@@ -2023,8 +1981,8 @@ is distinct from every group heading.
 
 - **GIVEN** a fixture project with a roster and the view open
 - **WHEN** the rows render
-- **THEN** the seat rows appear under the tables' own seats heading, that heading's text differs from the
-  per-seat-model group's heading, and the keys of that group appear under their own functional heading with the
+- **THEN** the category rows appear under the tables' own categories heading, that heading's text differs from the
+  task-model group's heading, and the keys of that group appear under their own functional heading with the
   group's own order
 
 #### Scenario: A heading is a section rule and it separates its own group
@@ -2032,8 +1990,8 @@ is distinct from every group heading.
 - **GIVEN** the view open on a contract whose read reports more than one group, in a pane tall enough to show
   two of them
 - **WHEN** the rows render
-- **THEN** every heading (the functional groups, the fallback group and the seats block alike) is drawn as a
-  section rule — the label between the two `─` runs of a full-width rule line — while key rows and seat rows
+- **THEN** every heading (the functional groups, the fallback group and the categories block alike) is drawn as a
+  section rule — the label between the two `─` runs of a full-width rule line — while key rows and category rows
   carry no section rule, so a heading is distinguishable from a row by shape and not only by tone
 - **AND** a heading sits directly between the previous group's last row and its own group's first row: the
   heading itself is the visible separation between groups and no extra line is spent on one
@@ -2347,4 +2305,125 @@ the row's label column).
 - **THEN** the two thresholds' records carry class `apply`, defaults `1024` and `100000` and group `delivery`, the
   seam's record carries class `refuse`, and each of the three rows' main text is that key's label in the active
   language (no row reads `TEAM_…`), with the seam's row opening no editor
+
+### Requirement: Settings edit task categories and independent PM policy rather than worker seats
+
+Settings SHALL render ordered category rows and an independent PM model row from config JSON, with both languages' labels and owning command route. Category picker uses project known models plus free text and SHALL write `set-task-model`, never compose a mapping; whole-map row routes to category rows and has no pairlist/seat override editor. PM uses `config set TEAM_PM_MODEL`. Missing mapping/retired policy yields a visible migration diagnosis and explicit CLI upgrade route, not an in-panel migration/restart. Existing editor keyboard/mouse, direct-choice/free-text confirmation, dry-run/CAS/actor panel/cancel/conflict/background-refresh behavior remains. Category policy receipts name next new task; they explicitly do not switch a running or resumed assignment. PM receipts name guarded next PM launch and fresh when model changes. Assignments appear read-only with actual task/category/complete model/original and launch source/SID, visually separate from future policy. There is no worker default or per-worker model editor and no process restart action.
+
+#### Scenario: Category and PM writes are CLI-owned in a real pane
+- **GIVEN** real fixture tmux pane, valid config and logging CLI wrapper
+- **WHEN** keyboard and mouse select a category model, free-text edit PM model and confirm
+- **THEN** captures show category/PM labels and honest timing; argv logs carry set-task-model and PM-set dry-run then CAS writes with actor panel; exactly intended config tokens change and no restart occurs
+
+#### Scenario: Policy changes cannot be presented as resumed task models
+- **GIVEN** routine assignment with explicit strong model
+- **WHEN** routine policy is changed in settings
+- **THEN** read-only assignment still shows original model/SID/provenance, category policy shows new value and receipt says new tasks only; same-task preview remains the assignment model
+
+#### Scenario: Cancel invalid input and conflicts preserve bytes
+- **WHEN** picker is cancelled, invalid model entered, or a second writer changes config under the editor
+- **THEN** cancel/invalid write nothing and retain appropriate focus/draft; conflict names exit 3, leaves other writer bytes and refreshes the view; no panel process directly writes config
+
+#### Scenario: Legacy and small multilingual settings remain navigable
+- **WHEN** settings open under legacy config in zh and en, and valid policy in narrow/tall panes
+- **THEN** migration route remains visible without false editable seat defaults; keyboard/mouse scrolling and filtering reach all category/PM/read-only assignment rows, with group headings not focusable
+
+### Requirement: Overview links the latest key reply without reading its body
+The TUI overview SHALL show the latest key-reply number, title, declared publisher and publication time, or an
+explicit empty/unavailable state. Its visible `5` key hint and a mouse target SHALL lead to page 5's newest list;
+opening the entry SHALL use the same body viewer as page 5. Summary reads MUST contain no body. A corrupt latest
+slot MUST be labelled unavailable, not replaced with an older title labelled latest. Every static label SHALL
+come from the zh/en tables.
+
+#### Scenario: Latest answer is discoverable from the fixed entry
+- **WHEN** a reply is published in a fixture and the overview's background summary refresh settles
+- **THEN** its safe title and number appear with declared-publisher/time metadata, `5` and the click target reach the newest key-replies list, and Enter on that entry opens its body
+- **AND** the overview did not read any body before the open operation
+
+#### Scenario: Empty or corrupt latest source remains explicit
+- **WHEN** the summary observes no store or an invalid latest slot
+- **THEN** the overview renders empty or unavailable respectively, and page 5 remains reachable
+
+### Requirement: Key replies page supports paged focus and a complete read-only body
+Page 5 SHALL list `key-replies` metadata newest first, with at most 50 numbered slots per fetched page. `↑`/`↓`
+SHALL move a focus whose row window follows it; the wheel SHALL scroll the list viewport without changing focus
+or fetching hidden history. Visible `Older` / `Newer` controls SHALL fetch adjacent cursor pages using `←` / `→`
+and mouse targets, with no automatic full-history load. Repeated Older operations MUST reach the oldest committed
+slot, including through entirely corrupt pages. Newer SHALL follow the retained page cursor chain; `r` SHALL
+refresh to the newest page and reset that chain. Focus MUST use stable numbers, not array positions; refreshing a
+retained page MUST preserve a still-present focus and clamp only if that number is no longer on it. Enter or a
+second click on the focused row SHALL open that number's complete safely rendered markdown body, showing its
+title, declared publisher, publication time and number. A single click on another row SHALL only focus it.
+`↑`/`↓`, PgUp/PgDn, Home/End and the wheel in the body SHALL scroll the document to all of its visible content;
+`esc` or `q` SHALL return to the same list cursor, focus and viewport, not collapse the console. The viewer MUST
+NOT truncate an accepted body, fetch links/images, execute text or offer edit/approve/read-status actions. A
+missing/corrupt body SHALL show a local unavailable notice and the same return route. In the list, `q` SHALL
+retain its global collapse meaning. Digit page keys and Tab SHALL retain top-level navigation outside composing
+and existing settings modal ownership; leaving the reply viewer SHALL cancel its body request. The existing
+human-to-PM compose entry SHALL remain available from page 5 and MUST NOT become a reply publisher.
+
+#### Scenario: User reaches an old answer beyond the first page
+- **WHEN** 123 replies exist and a user navigates Older twice, focuses number 1 and opens it
+- **THEN** the complete first answer is readable, and `esc` returns to the same oldest page, number and viewport
+- **AND** Newer twice returns to the original newest page while `r` starts a fresh newest cursor chain
+
+#### Scenario: Long body and local errors have real return routes
+- **WHEN** a 131072-byte accepted body with an end marker is opened, scrolled with End/PgUp/PgDn/wheel, and closed with `q`, and then a corrupt body's row is opened
+- **THEN** the end marker is reachable, `q` restores the list rather than collapsing Pulse, and the corrupt viewer gives an unavailable notice with the same return behavior
+
+#### Scenario: Keyboard and mouse use the same row and page actions
+- **WHEN** a mouse-on fixture first clicks a row, clicks it again, scrolls the body and clicks Back, then clicks Older and Newer
+- **THEN** the first click focuses, the second opens, Back restores list context, and paging matches `←`/`→`
+- **AND** with mouse off no mouse-enable bytes or hidden mouse actions are added
+
+#### Scenario: A corrupt page still offers continuation
+- **WHEN** all 50 slots of a page are corrupt and valid older replies remain
+- **THEN** the page displays unavailable numbered rows and an enabled Older route reaching those replies
+
+#### Scenario: Compose and original page keys do not become publication
+- **WHEN** the user opens `m` on page 5 or presses `1`–`4`/Tab outside the editor and settings modal
+- **THEN** compose retains the existing PM draft/send meaning and navigation retains the original pages plus page 5
+- **AND** neither action posts or modifies a key reply
+
+### Requirement: Key reply blocks are async demand reads and absent from machine exits
+The key-reply summary, current list page and selected body SHALL be separate asynchronous blocks over the bounded
+`key-replies` readers. Only the TUI summary SHALL be scheduled outside page 5; list SHALL be wanted only on page
+5, and body only while a reply viewer is open. No rendering or input callback SHALL read files, wait for a writer
+lock, spawn synchronous processes, or await these blocks. Each block SHALL have a child timeout and output cap;
+a failed/slow source SHALL degrade only its block, not delay keys, the clock, other blocks or patrol. Changing
+list cursor/body number or leaving a view SHALL invalidate stale responses; a late response for a previous
+request MUST NOT overwrite the new selection. Completed refreshes SHALL expose new publications without implying
+that the publication receipt refreshed the screen. `--print`, `--json`, piped monitor and compatibility machine
+assembly SHALL not schedule, read, render or export these blocks; publication alone MUST leave their output
+unchanged under otherwise identical inputs. Reply reading and navigation SHALL not call post, repair, delivery
+or patrol operations; the panel's preexisting tick ownership remains unchanged.
+
+#### Scenario: Slow reader does not block input or a newer selection
+- **WHEN** a list/body child is delayed beyond its timeout while the user switches pages or opens another number
+- **THEN** keys and the clock remain responsive, only the affected block degrades, the abandoned child is bounded/cancelled, and its late response cannot replace the current page/body
+
+#### Scenario: View demand closes body reads
+- **WHEN** the TUI parks on overview, enters page 5, opens a reply, returns to its list and leaves page 5
+- **THEN** recorded block argv show summary-only, summary plus one cursor list, an added single-number body, no body after return, and no list/body after leaving
+
+#### Scenario: Machine paths never read key replies
+- **WHEN** otherwise identical fixture monitor inputs are printed/JSON-exported before and after publication, with differing TUI preferences and damaged or blocked reply storage
+- **THEN** prints are identical apart from timestamp and JSON structures are unchanged with no reply fields
+- **AND** recorded reader calls and file accesses show zero reply reads and zero reader writes
+
+### Requirement: Key replies remain legible across pane sizes and languages
+The five-page band, latest summary, reply rows, paging/back controls, body metadata and empty/unavailable notices
+SHALL use the existing zh/en string tables and display sanitization before layout. Status MUST NOT rely on color
+alone. In 160/120/99/59-column bounded panes the layout SHALL retain a visible active-page identity, reachable
+paging/back controls, a footer on the last row and scrolling access to all body content without horizontal
+escape. Resize SHALL preserve the list cursor/focus and clamp document viewport to its new range. Both dark and
+light themes SHALL retain the existing display-safety and contrast contracts.
+
+#### Scenario: Width and language do not hide the return or older route
+- **WHEN** fixtures render summary, empty/list/corrupt/list-continuation and long-body views at 160/120/99/59 columns in both languages and themes, then resize an open viewer
+- **THEN** the page identity, Older/Newer/Back routes and unavailable markers remain legible, no line exceeds pane width, the footer remains last, and scroll access/list context survive
+
+#### Scenario: Hostile strings are sanitized without losing the answer around them
+- **WHEN** title/body/diagnostic inputs include OSC/CSI/BEL/C1/bidi controls and safe text on both sides
+- **THEN** all snapshots and real pane captures contain the safe surrounding text but no executable controls or terminal hyperlinks
 

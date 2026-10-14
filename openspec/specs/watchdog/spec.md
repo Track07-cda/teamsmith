@@ -223,7 +223,7 @@ dimension too, not just a current value.
 
 The pulse SHALL NOT rebuild a missing session or window while `TEAM_PULSE_REBUILD_TMUX=0` (the default) — it
 reports the state instead; it MUST NOT resume stopped agents; and it MUST NOT merge, change the board or spend model
-quota. Those are the PM's calls (`team up`, `team resume`).
+quota. A stopped worker retains its assignment; patrol SHALL NOT reselect category policy or launch a fresh worker. A PM continuity/config refusal SHALL be reported with its explicit correction/fresh route, no PM launch and no consumed restart slot. Those are the PM's calls (`team up`, `team resume`).
 
 #### Scenario: A missing window is reported, not rebuilt
 
@@ -523,7 +523,7 @@ default) and a bounded tail of the pi session file.
 The cause SHALL be derived from two evidence sources, naming the one it read: ① the tmux corpse scene, in
 the recency order the seat's scene block already uses (a retained dead pane's screen read with its
 scrollback, then `state/dispatch-<agent>-pane-dead.txt`, then `state/dispatch-<agent>-tail.txt`), and ②
-the last error of the newest pi session file for the seat's worktree. When both sources yield a cause,
+the last error of the pi session file named by the current complete assignment SID and worktree. When both sources yield a cause,
 the more specific one SHALL win — a category other than `unknown` over `unknown`, then the newer record
 time, then the session source — and the reported source SHALL name which one was read. When neither
 source is readable or no shape matches, the cause SHALL be `unknown`: the surfaces MUST NOT guess a
@@ -575,7 +575,7 @@ Every reported cause SHALL carry an identity of `(seat, category, anchor)`, wher
 current launch nonce when the evidence belongs to that launch, else the dead pane's `pane_dead_time`, else
 its pane id, else a hash of the raw line. Evidence whose record time is older than the seat's recorded
 `started` — or whose exit-evidence nonce is not the current launch's — MUST NOT be attributed to the
-current launch. After a restart (`team dispatch`, `team resume`) the seat SHALL show no cause until a
+current launch. Session evidence SHALL match the committed SID/worktree as well as current launch time; missing assignment/session identity is unavailable, not a reason to choose the base or latest session. After a restart (`team dispatch`, `team resume`) the seat SHALL show no cause until a
 death of the new launch has its own evidence, and a death of the same category after a restart SHALL be a
 new identity (a new record and a new knock).
 
@@ -688,4 +688,22 @@ the existing PM start path still carries the reason.
 - **WHEN** the patrol runs
 - **THEN** the pending summary names it as `unknown`, no dedicated death knock and no `state/deaths.log`
   record are produced for it, and no category is claimed
+
+### Requirement: SID-linked evidence follows the committed launch rather than a neighboring session
+
+Session-side size/activity/death readers SHALL identify the complete current assignment's SID and worktree and retain their existing bounded-read and nonce/time attribution rules. A newer neighboring session, oversized base SID, or another task's error SHALL not be attributed to the current launch. Missing identity/file is unavailable (size may be zero only for a known fresh SID not yet created); pane/recorded evidence remains available under its own rules. Dead/exited/absent workers do not consume running model concurrency, and patrol never chooses another worker model or resumes it. Synthetic fixture HOME/session files are allowed; tests SHALL NOT read real user history.
+
+#### Scenario: Neighboring and base sessions cannot contaminate evidence
+- **GIVEN** current SID A, larger base SID and newer neighboring SID B with quota error, under fixture HOME
+- **WHEN** roster/ps, activity and death surfaces run
+- **THEN** size/activity/errors come only from A; B/base cannot cause an overflow/death claim for A, and all reads stay bounded/read-only
+
+#### Scenario: Live size is not the launch snapshot
+- **GIVEN** fresh SID A with recorded sid_bytes=0
+- **WHEN** A's synthetic file grows after launch and reads run twice
+- **THEN** displayed current byte/token estimate grows, snapshot stays 0 and resume retains A; deleting A yields unavailable rather than choosing B
+
+#### Scenario: Missing metadata and stopped workers stay honest
+- **WHEN** assignment/SID is missing or malformed and a stopped seat retains an unfinished task
+- **THEN** readers state unavailable identity, preserve task/evidence, count no running-model slot and patrol only notifies PM; explicit PM resume uses normal assignment guards
 
