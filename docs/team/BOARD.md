@@ -421,7 +421,7 @@
 | P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | wip |
 | P261 | Startup self-heal: apply (config shape migration, PM identity, version notice) | dev-bob | - | - | wip |
 | P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | todo |
-| P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | todo |
+| P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | dropped |
 
 ## 当前里程碑
 
