@@ -1409,3 +1409,19 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 2. **npm 暂存发布**：`npm stage publish --access public --registry https://registry.npmjs.org`（用 `~/.npm-token` 注入临时 600 权限 npmrc，token 未进 argv、未回显）→ stage-id **`473db928-29d8-4537-8fa1-31744f3eb216`**、tag `latest`、public、259 文件 / 2.4 MB、shasum `68d499cfe443e86afc282716558bb1067dddf0da`——与本地 `npm pack` **逐字节一致**（我验过）；`stage view` 显示 `status: validating`。
 
 **等用户在网页 2FA 批准**（与 0.1.1 同流程）。批准后再做发布后验证（新克隆 + 三条安装路线 + `team version --check`），然后才开始三个项目的迁移（B 方案：保留它们原有的模型值）。
+
+## D162 · 0.2.0 上线并验证；三个项目的配置迁移完成（2026-10-14）
+
+用户网页批准暂存包后：`npm view teamsmith version` = **0.2.0**、暂存列表清空。发布后验证（**都用 registry 上的包做**）：环境里全局装 0.2.0、包内 `install.sh` 把两个共享软链指到**包内**技能（`~/.agents/skills/teamsmith → ~/.local/lib/node_modules/teamsmith/skills/teamsmith`，报 `teamsmith 0.2.0`）；临时前缀里新装 → `team version` 0.2.0、`bin` 软链正确、`version --check` 三处一致；空项目里 `team init --task-models … --pm-model …` 落盘 `.pi/skills/{teamsmith,teamsmith-init}`（与包内逐字节相同）+ `AGENTS.md` + `docs/`，配置里是 **`TEAM_TASK_MODELS`/`TEAM_PM_MODEL`**（无退休键）。
+
+**三个项目的迁移（用户选 B：保留它们原有的模型值）**，逐项目 `config upgrade-models`（动前备份到仓外 `pm-skills-ledger/team/reviews/migration-0.2.0/<项目>.config.sh.pre-0.2.0`，动后 `config list` 复核 rc=0）：
+
+| 项目 | 旧配置 | 新配置 | 变化 |
+|---|---|---|---|
+| 甲 | `TEAM_AGENT_MODELS`（verify/verify2/product/architect/core）＋`TEAM_DEFAULT_MODEL=kimi-for-coding`＋PM=kimi/k3 | `TEAM_TASK_MODELS=verify=…gpt-6.1-sol:high verify2=… product=kimi/k3 architect=kimi/k3:max core=kimi/k3:max code=kimi/kimi-for-coding`＋PM=kimi/k3 | 两个退休键移除，值**一个没改** |
+| 乙 | `TEAM_AGENT_MODELS`（verify/arch/design/infra=deepseek-flash）＋`TEAM_DEFAULT_MODEL=deepseek-flash`＋PM=kimi/k3 | `TEAM_TASK_MODELS=verify/arch/design/infra/code=deepseek/deepseek-flash`＋PM=kimi/k3 | 同上 |
+| 丙 | 已是新式（`implement/verify/docs/test` ＋ PM=kimi/k3） | 不变 | 无需迁移 |
+
+**它们的 PM 仍是 kimi**——kimi 周额度本周两次用尽，若某个 PM 起不来就是这条；换法一行（`TEAM_PM_MODEL`）已在派单消息里给了它们的 PM。**各项目的 agent 会话需重启**才会读到新技能文本与新配置语义；它们的 PM 从此写任务书必须带 `category:`（这是它们自己那套类别词汇，不是我们的 `code/verify`）。
+
+**同时立项**：用户对 `team help` 的三条要求（难懂、要默认英文且多语言、布局乱）已写成变更 `cli-help`，propose 任务 P252 已派（任务书里含「给不懂本项目的人解释概念」这条硬要求与 §51 用法诚实性的约束）。
