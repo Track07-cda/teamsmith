@@ -121,6 +121,7 @@ TEAM_AGENT_MEM_MB|apply|mb|1,|plain|6144|-||2048,4096,6144|delivery
 TEAM_NOTIFY_TMUX|apply|bool||plain|1|-|||delivery
 TEAM_NOTIFY_DEDUP_SEC|apply|seconds|0,|plain|20|-|||delivery
 TEAM_INBOX_MAX_CHARS|apply|int|1,|plain|150|-||100,150,300|delivery
+TEAM_NOTIFY_DETAIL_MAX|apply|int|1,|plain|2048|state/notify.log 的事件上界：越界轮转到 state/notify.log.1（只留一代）||512,2048,8192|delivery
 TEAM_NOTIFY_LOG|apply|path|file,opt|plain|/tmp/teamsmith-notify.log|-|||delivery
 TEAM_DEFER_TTL|apply|seconds|0,|plain|300|0 = 投递队列入队即过期||60,300,900|delivery
 TEAM_OUTBOX_MAX|apply|int|0,|plain|200|0 = 队列不设上限（无界）||50,200,1000|delivery
@@ -256,7 +257,7 @@ team_config_key_form() { # <KEY> → plain|export（未知键 = plain）
 }
 
 # notify 扩展用扁平 KEY="value" 读取器解析的八个键：值里出现 ' 就没有转义可用 → 拒写（设计 §4）。
-TEAM_CONFIG_FLAT_KEYS=" TEAM_SESSION TEAM_PM_WINDOW TEAM_WORKTREES_DIR TEAM_DOCS_DIR TEAM_NOTIFY_TMUX TEAM_NOTIFY_DEDUP_SEC TEAM_INBOX_MAX_CHARS TEAM_NOTIFY_LOG "
+TEAM_CONFIG_FLAT_KEYS=" TEAM_SESSION TEAM_PM_WINDOW TEAM_WORKTREES_DIR TEAM_DOCS_DIR TEAM_NOTIFY_TMUX TEAM_NOTIFY_DEDUP_SEC TEAM_INBOX_MAX_CHARS TEAM_NOTIFY_LOG TEAM_NOTIFY_DETAIL_MAX "
 team_config_flat_key() { # <KEY> → 0 = 扁平读取器的键
   case "$TEAM_CONFIG_FLAT_KEYS" in *" $1 "*) return 0 ;; esac
   return 1

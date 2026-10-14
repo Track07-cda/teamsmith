@@ -1644,11 +1644,250 @@ team_cmd_say() {
 }
 
 team_inbox_append() { # <agent> <tag> <msg> [<sender>]
-  local dir; dir="$(team_inbox_dir)"
-  mkdir -p "$dir"
+  local line
   # P82：第 4 参可选 = **发送者**（notify 传解析出来的发送者，收件人只当文件名）；
   # say/draft/pulse 不传，沿用「owner 标签」（它们另有 --from/标签语义，本次不动）。
-  printf -- '- %s [%s] agent:%s · %s\n' "$(team_timestamp)" "$2" "${4:-$1}" "$3" >> "$dir/$1.md"
+  line="$(printf '%s [%s] agent:%s · %s' "$(team_timestamp)" "$2" "${4:-$1}" "$3")"
+  # turn-notice-merge：与扩展的合并路径共用**同一把锁**（同一收件人）。手工/队列/pulse 行的 tag 不是
+  # auto 类 → 不参与合并、不进明细，但它的追加仍然落在临界区里（不会与合并的截尾重写互相丢写）。
+  team_inbox_write_line "$1" "$line" >/dev/null
+}
+
+# ---------------------------------------------------------------- 收件箱写入口（turn-notice-merge · 写入面）
+# 合同在 openspec/specs/notify-and-inbox（ADDED「raw events stay in a bounded detail file」+ MODIFIED 的
+# 合并键/合并行/叫醒段）。这里的实现要点：
+#   ① 合并在**写入侧**、只认收件箱的**尾行**（截尾重写），锚校验不过一律追加（fail-safe）；
+#   ② 每收件人一把锁（flock；没有 flock 时降级为无锁，行为与历史一致）；
+#   ③ **先明细、后合并判定**：state/notify.log 一行一事件，所以汇总行的 `×N` 永远等于该 run 的
+#      明细记录数；明细写失败 → 本事件不合并、行带 `detail=unavailable`、日志点名，该行也不做锚；
+#   ④ 只有 [auto*] 类行参与合并与明细；[manual]/[draft]/[nudge]/pulse 行原样追加。
+
+# 行 → 合并键（seat|class|task|awaiting）。非 [auto*] 类 / 解析不成立 → rc 1（调用方按「不可合并」处理）。
+# awaiting 是**集合**（去重、排序；缺字段与空集是两个不同的值）；task 取 task= 戳里的 ID，否则取
+# agent 后的第一个 <ID> token；branch/tip/uncommitted 不进键（它们只更新显示值）。
+team_notify_line_key() {
+  local body="$1"
+  case "$body" in '- '*) body="${body#- }" ;; esac
+  local iso rest tag class seat fields aw nrm t
+  iso="${body%% *}"
+  case "$iso" in ''|*[!0-9TZ:.-]*) return 1 ;; esac
+  rest="${body#"$iso" }"
+  [ "$rest" != "$body" ] || return 1
+  # ⚠ 前缀（未提交告警）不是键的一部分：跳过它直到 tag 的 '['
+  case "$rest" in
+    '['*) ;;
+    '⚠'*) rest="[${rest#*\[}" ;;
+    *) return 1 ;;
+  esac
+  rest="${rest#\[}"
+  tag="${rest%%\]*}"
+  rest="${rest#"$tag"\]}"
+  case "$rest" in ' '*) rest="${rest# }" ;; *) return 1 ;; esac
+  case "$tag" in
+    auto) class=delivered ;;
+    'auto·suspended') class=suspended ;;
+    'auto·interrupted') class=interrupted ;;
+    *) return 1 ;;
+  esac
+  case "$rest" in agent:*) ;; *) return 1 ;; esac
+  rest="${rest#agent:}"
+  seat="${rest%% *}"
+  [ -n "$seat" ] || return 1
+  rest="${rest#"$seat"}"
+  case "$rest" in ' '*) rest="${rest# }" ;; *) return 1 ;; esac
+  fields="${body%% :: *}"
+  nrm='-'
+  case "$fields" in
+    *awaiting=*)
+      aw="${fields#*awaiting=}"; aw="${aw%% *}"
+      nrm="A:$(printf '%s' "$aw" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' | LC_ALL=C sort -u | paste -sd, -)" ;;
+  esac
+  if [[ "$fields" =~ task=([A-Za-z0-9._-]+) ]]; then
+    t="${BASH_REMATCH[1]}"
+  else
+    case "$rest" in '· '*) rest="${rest#· }" ;; esac
+    t="${rest%% · *}"
+    t="${t%% *}"
+  fi
+  [ -n "$t" ] || t='?'
+  printf '%s|%s|%s|%s\n' "$seat" "$class" "$t" "$nrm"
+}
+
+# 尾行能不能当锚：带 detail=unavailable 的行不是锚（否则下一次成功的事件会把它抹掉，缺口就不可见了）。
+team_notify_line_anchor_ok() {
+  case "$1" in *'detail=unavailable'*) return 1 ;; esac
+  return 0
+}
+
+team_notify_line_iso() { local body="${1#- }"; printf '%s\n' "${body%% *}"; }
+
+team_notify_line_iso_last() { # <行> → 字段区里 last=<ISO> 的值（没有 → 空）
+  local body="${1#- }" fields v
+  fields="${body%% :: *}"
+  case "$fields" in
+    *'last='*) v="${fields#*last=}"; v="${v%% *}" ;;
+    *) v='' ;;
+  esac
+  printf '%s\n' "$v"
+}
+
+# 行已汇总的事件数（汇总行带 `×N`；单事件行 = 1）。只读字段区（` :: ` 之前）。
+team_notify_line_events() {
+  local body="${1#- }" head n
+  head="${body%% :: *}"
+  case "$head" in
+    *'×'*)
+      n="${head#*×}"; n="${n%% *}"
+      case "$n" in ''|*[!0-9]*) n=1 ;; esac ;;
+    *) n=1 ;;
+  esac
+  printf '%s\n' "$n"
+}
+
+# 汇总行 = **最后一条事件的行** + 首事件时间戳 + 字段区 `×N first= last=`（branch/tip/uncommitted 自动是最后一条的值）。
+team_notify_line_merge() { # <新事件行> <首时间戳> <n> <末时间戳>
+  local c="$1" first="$2" n="$3" last="$4" head tail rest
+  case "$c" in
+    *' :: '*) head="${c%% :: *}"; tail="${c#* :: }" ;;
+    *) head="$c"; tail='' ;;
+  esac
+  rest="${head#* }"
+  head="${first} ${rest} · ×${n} first=${first} last=${last}"
+  if [ "${c%% :: *}" != "$c" ]; then printf '%s :: %s\n' "$head" "$tail"; else printf '%s\n' "$head"; fi
+}
+
+team_notify_line_mark_detail() { # <行> · 字段区带 detail=unavailable（明细写失败的事件，绝不参与合并）
+  local c="$1"
+  case "$c" in
+    *' :: '*) printf '%s · detail=unavailable :: %s\n' "${c%% :: *}" "${c#* :: }" ;;
+    *) printf '%s · detail=unavailable\n' "$c" ;;
+  esac
+}
+
+team_notify_log_line() { # <文本>：写进扩展日志（TEAM_NOTIFY_LOG）
+  local f="${TEAM_NOTIFY_LOG:-/tmp/teamsmith-notify.log}"
+  printf '%s %s\n' "$(team_timestamp)" "$1" >> "$f" 2>/dev/null || true
+}
+
+team_notify_detail_max() {
+  local n="${TEAM_NOTIFY_DETAIL_MAX:-2048}"
+  case "$n" in ''|*[!0-9]*) n=2048 ;; esac
+  [ "$n" -gt 0 ] || n=2048
+  printf '%s\n' "$n"
+}
+
+team_notify_detail_events() { # <明细文件> → 事件行数（轮转头不算）
+  local n=''
+  if [ -f "$1" ]; then n="$(grep -c '^- ' "$1" 2>/dev/null)" || true; fi
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s\n' "$n"
+}
+
+# 先明细：一行一事件（内容 = 该事件单发形状的收件箱行）。越界 → 轮转一代到 <file>.1 + 新代轮转头。
+team_notify_detail_append() { # <事件行> <明细文件> → 0 = 已落盘；1 = 失败（调用方写 detail=unavailable）
+  local content="$1" file="$2" dir max count
+  dir="$(dirname "$file")"
+  mkdir -p "$dir" || return 1
+  max="$(team_notify_detail_max)"
+  count="$(team_notify_detail_events "$file")"
+  if [ "$count" -ge "$max" ]; then
+    mv -f "$file" "$file.1" || return 1
+    printf '%s\n' "# rotation $(team_timestamp) moved=${count} path=${file}.1" > "$file" || return 1
+    team_notify_log_line "notify detail rotated: moved=${count} to=${file}.1"
+  fi
+  printf -- '- %s\n' "$content" >> "$file" 2>/dev/null || return 1
+  return 0
+}
+
+# 截掉尾行、写回汇总行（同一目录的临时文件 + mv，读者不会看到半行）。
+team_inbox_rewrite_last() { # <收件箱文件> <新尾行> → 0 = 已重写；1 = 没动
+  local file="$1" line="$2" dir tmp
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "$dir/.inbox-merge.XXXXXX")" || return 1
+  if ! sed '$d' "$file" > "$tmp" || ! printf -- '- %s\n' "$line" >> "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  [ -f "$file" ] && chmod --reference="$file" "$tmp" 2>/dev/null || true
+  if ! mv -f "$tmp" "$file" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  return 0
+}
+
+# 临界区（调用方持锁）：先明细 → 尾行锚判定 → 截尾重写或追加 → 打印写入结果。
+team_inbox_write_locked() { # <recipient> <行> <文件> <明细> → state=new|extended first=<ISO> key=<键>
+  local recipient="$1" content="$2" file="$3" detail="$4"
+  local key='' detail_failed=0 newcontent="$content" state=new first='' tail_line merged n
+  key="$(team_notify_line_key "$content" || true)"
+  if [ -n "$key" ]; then
+    if ! team_notify_detail_append "$content" "$detail"; then
+      detail_failed=1
+      newcontent="$(team_notify_line_mark_detail "$content")"
+      team_notify_log_line "notify detail write failed: $detail（本事件不合并，行带 detail=unavailable）"
+    fi
+  fi
+  first="$(team_notify_line_iso "$newcontent")"
+  if [ -n "$key" ] && [ "$detail_failed" = 0 ] && [ -s "$file" ]; then
+    tail_line="$(tail -n 1 "$file")"
+    if [ -n "$tail_line" ] && team_notify_line_anchor_ok "$tail_line" \
+       && [ "$(team_notify_line_key "$tail_line" 2>/dev/null || true)" = "$key" ]; then
+      n=$(( $(team_notify_line_events "$tail_line") + 1 ))
+      merged="$(team_notify_line_merge "$newcontent" "$(team_notify_line_iso "$tail_line")" "$n" "$first")"
+      if team_inbox_rewrite_last "$file" "$merged"; then
+        state=extended
+        first="$(team_notify_line_iso "$tail_line")"
+      fi
+    fi
+  fi
+  if [ "$state" = new ]; then
+    printf -- '- %s\n' "$newcontent" >> "$file" || return 1
+  fi
+  # 写入结果协议（单行一段，扩展用 ^first=/^key= 解析）：state=new|extended
+  printf 'state=%s\nfirst=%s\nkey=%s\n' "$state" "$first" "${key:--}"
+  return 0
+}
+
+# 每收件人一把锁的写入口（team_inbox_append 与扩展的 __inbox-write 共用）。
+team_inbox_write_line() { # <recipient> <行> → 打印写入结果（同 team_inbox_write_locked）
+  local recipient="$1" content="$2"
+  local dir file detail lockfd rc=0
+  dir="$(team_inbox_dir)"; file="$dir/$recipient.md"
+  local state; state="$(team_state_dir)"
+  detail="$state/notify.log"
+  mkdir -p "$dir" || return 1
+  if command -v flock >/dev/null 2>&1; then
+    # exec 加**不带命令**的重定向会永久改变当前 shell：`exec {fd}>&- 2>/dev/null` 会把 stderr 永久接到
+    # /dev/null（P251 实测：say 的 team_warn 从此消失）。这里只关 fd，不带任何 stderr 重定向。
+    if ! exec {lockfd}>"$state/inbox-$recipient.lock"; then return 1; fi
+    if flock -w 10 "$lockfd"; then
+      team_inbox_write_locked "$recipient" "$content" "$file" "$detail" || rc=$?
+    else
+      team_notify_log_line "inbox lock timeout: $state/inbox-$recipient.lock"
+      rc=1
+    fi
+    exec {lockfd}>&-
+    return $rc
+  fi
+  team_inbox_write_locked "$recipient" "$content" "$file" "$detail"
+}
+
+# 内部命令（扩展消费写入结果；不进 help）：--agent <席位> --from-file <单行文件>
+team_cmd_inbox_write() {
+  local agent='' src=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --agent) agent="${2:?--agent 需要值}"; shift 2 ;;
+      --agent=*) agent="${1#*=}"; shift ;;
+      --from-file) src="${2:?--from-file 需要文件}"; shift 2 ;;
+      --from-file=*) src="${1#*=}"; shift ;;
+      -*) team_usage_die "__inbox-write: 未知参数 $1" ;;
+      *) team_usage_die "__inbox-write: 多余参数 $1" ;;
+    esac
+  done
+  [ -n "$agent" ] || team_usage_die "__inbox-write: 需要 --agent <席位>"
+  if [ -z "$src" ] || [ ! -f "$src" ]; then team_usage_die "__inbox-write: 需要 --from-file <行文件>"; fi
+  local content; content="$(head -n 1 "$src")"
+  if [ -z "$content" ]; then printf 'state=failed\nfirst=-\nkey=-\n'; return 1; fi
+  team_inbox_write_line "$agent" "$content"
 }
 
 # notify 的去重键：内容 + 长度（同一份通知在 TEAM_NOTIFY_DEDUP_SEC 内只入队/投递一次）。

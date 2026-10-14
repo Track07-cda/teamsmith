@@ -528,14 +528,46 @@ export default function (pi: ExtensionAPI) {
     }
 
     const line = `${new Date().toISOString()} ${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? ` :: ${last}` : ''}`
+    // turn-notice-merge（写入侧合并 + 明细）：判定「扩展末尾的同类 run 还是新起一行」在 CLI 的收件箱
+    // 写入口里（每收件人一把锁 + 先明细后合并），扩展只消费写入结果 —— 只有写下**新行**才入队 knock。
+    const cli = join(skillDir(), 'scripts/team')
+    const lineFile = join(stateDir, `notify-line-${process.pid}-${Date.now()}.txt`)
+    let writeOut = ''
     try {
-      const dir = join(root, cfg.docsDir, 'inbox')
-      mkdirSync(dir, { recursive: true })
-      appendFileSync(join(dir, `${agent}.md`), `- ${line}\n`)
+      writeFileSync(lineFile, line)
+      writeOut = execFileSync(
+        'bash',
+        [cli, '--root', root, '__inbox-write', '--agent', agent, '--from-file', lineFile],
+        { encoding: 'utf8', timeout: 5000 },
+      )
       log(`inbox ${tag} ${summary}`, cfg)
     } catch (error) {
+      writeOut = ''
       log(`inbox write failed: ${String(error)}`, cfg)
+    } finally {
+      try { rmSync(lineFile, { force: true }) } catch { /* ignore */ }
     }
+    const writeState = /^state=([a-z]+)/m.exec(writeOut)?.[1] ?? ''
+    if (writeState !== 'new') {
+      // 扩展既有 run（state=extended）的 settle 不入队、不敲字：计数抖动看得见但不叫醒。
+      // 写盘失败（异常 / state=failed）也不叫醒 —— 与手工路径的「写失败不得授权唤醒」同一条规则。
+      log(`no knock (inbox write state=${writeState || 'failed'})`, cfg)
+      return
+    }
+
+    // 挂起只记录、不叫醒（用户裁定 2026-10-14）：`[auto·suspended]` 是设计好的状态（席位起了长任务并
+    // 正确地结束回合等叫醒），PM 没有可行动的事 —— 行、明细、面板、digest 照旧，但不入队 knock。交付
+    // （要复验/合并）与中断（要诊断）照旧敲门；挂起中的失败面（席位死去、任务永不完）归巡检的
+    // 「任务未完成 + 窗口不在」那一档，不由这条通知兜。
+    if (suspended) {
+      log('no knock (suspended records only)', cfg)
+      return
+    }
+    const firstEvent = /^first=(\S+)/m.exec(writeOut)?.[1] ?? ''
+    const mergeKey = /^key=(\S*)/m.exec(writeOut)?.[1] ?? ''
+    // knock 的去重身份 = **行身份**（席位 + 合并键 + 首事件时间）：两条文本逐字相同但不同的行不会互吞，
+    // 同一 run 的重复 settle 也绝不会二次敲门（此时它连条目都不入队）。席位是 mergeKey 的第一个分量。
+    const lineIdentity = `line|${mergeKey}|${firstEvent}`
 
     if (!cfg.notifyTmux || !window) return
     const target = `${cfg.session}:${cfg.pmWindow}`
@@ -553,17 +585,16 @@ export default function (pi: ExtensionAPI) {
     }
     // 敲门不再自己 send-keys：交给 teamsmith 的投递守卫 + 延后队列（delivery-guard）。
     // 为什么：扩展原来直接 `send-keys -l` + Enter，人正在 PM 输入框里写草稿时会把草稿粘走
-    // （D20 的原始事故）。入队时带上扩展自己的去重键（key），两层抑制不会打架。
+    // （D20 的原始事故）。入队时带上 knock 自己的**行身份**（lineIdentity），两层抑制不会打架。
     // 失败只记日志：绝不回退到打字（那会悄悄重建同一个 bug）。
     const notice = `${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? `\n> ${last}` : ''}`
-    const cli = join(skillDir(), 'scripts/team')
     const tmp = join(stateDir, `knock-${process.pid}-${Date.now()}.txt`)
     try {
       writeFileSync(tmp, notice)
       const out = execFileSync(
         'bash',
         [cli, '--root', root, 'outbox', 'enqueue', '--kind', 'knock', '--target', target,
-         '--from', agent, '--dedup', key, '--from-file', tmp],
+         '--from', agent, '--dedup', lineIdentity, '--from-file', tmp],
         { encoding: 'utf8', timeout: 5000 },
       )
       log(`knock queued (${String(out).trim() || 'entry written'})`, cfg)

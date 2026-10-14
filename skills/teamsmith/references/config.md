@@ -157,6 +157,7 @@ empty panel reported as success.
 | `TEAM_NOTIFY_DEDUP_SEC` | `20` | deduplication window (seconds); `0` = no deduplication |
 | `TEAM_INBOX_MAX_CHARS` | `150` | truncation length of the agent's last message inside a briefing |
 | `TEAM_NOTIFY_LOG` | `/tmp/<project>-teamsmith-notify.log` | extension debug log (look here when notifications misbehave) |
+| `TEAM_NOTIFY_DETAIL_MAX` | `2048` | events a turn-end notification's detail file (`state/notify.log`) may hold before it is rotated to `state/notify.log.1` (one generation kept; a rotation is named in the extension log) |
 | `TEAM_DEFER_TTL` | `300` | delivery guard: seconds a queued message may wait before it is moved to `state/outbox/held/` (holding never types anything; the payload is already in the recipient's inbox). A backstop, not the first symptom: an untrusted geometry holds immediately and three trusted-empty drains with no progress hold as `queue-stalled` |
 | `TEAM_OUTBOX_MAX` | `200` | delivery guard: maximum active queue entries; beyond it the oldest entry is escalated to `held/` |
 
@@ -389,7 +390,8 @@ under its domain with the committed console bundle, and no group list exists any
   never reaches a running process (the measured `TEAM_MONITOR_ACTIVITY` case).
 * A `'` inside the value is written `'\''`. A line break or a `#` is refused (the notify extension's flat reader
   cuts at ` #`). On the eight keys that reader parses — `TEAM_SESSION`, `TEAM_PM_WINDOW`, `TEAM_WORKTREES_DIR`,
-  `TEAM_DOCS_DIR`, `TEAM_NOTIFY_TMUX`, `TEAM_NOTIFY_DEDUP_SEC`, `TEAM_INBOX_MAX_CHARS`, `TEAM_NOTIFY_LOG` — a `'`
+  `TEAM_DOCS_DIR`, `TEAM_NOTIFY_TMUX`, `TEAM_NOTIFY_DEDUP_SEC`, `TEAM_INBOX_MAX_CHARS`, `TEAM_NOTIFY_LOG`,
+  `TEAM_NOTIFY_DETAIL_MAX` — a `'`
   is refused too (that reader has no escape).
 * Every byte the write does not change survives: comments, blank lines, the order of the keys and the changed
   line's own inline comment. A key the file lacks is appended on a line of its own (a missing final newline is

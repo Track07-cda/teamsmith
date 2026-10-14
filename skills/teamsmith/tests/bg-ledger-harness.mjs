@@ -17,7 +17,7 @@
  * 输出：每个用例一行 `BG-CASE PASS|FAIL <name> [:: detail]`；任一 FAIL → 退出码 1。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 // ── 参数与身份隔离 ─────────────────────────────────────────────────────────────
@@ -39,8 +39,8 @@ if (!ROOT || !existsSync(join(ROOT, '.pi/team/config.sh'))) {
   console.error('bg-ledger-harness: --root <夹具仓库> 是必需的（它必须带 .pi/team/config.sh）')
   process.exit(2)
 }
-if ((GROUPS.has('suspend-shape') || GROUPS.has('owner-scope')) && NOTIFY === '-') {
-  console.error('bg-ledger-harness: suspend-shape / owner-scope 需要 --notify <extension/team-notify.ts>')
+if ((GROUPS.has('suspend-shape') || GROUPS.has('owner-scope') || GROUPS.has('merge') || GROUPS.has('detail') || GROUPS.has('wake')) && NOTIFY === '-') {
+  console.error('bg-ledger-harness: suspend-shape / owner-scope / merge / detail / wake 需要 --notify <extension/team-notify.ts>')
   process.exit(2)
 }
 for (const key of Object.keys(process.env)) {
@@ -130,7 +130,7 @@ const makeBase = (name, { ownConfigInWorktree = false, seats = ['dev'] } = {}) =
   mkdirSync(join(base, 'docs/team/inbox'), { recursive: true })
   writeFileSync(join(base, '.pi/team/config.sh'),
     `TEAM_PROJECT="bg-ledger-${name}"\nTEAM_AGENTS="${seats.join(' ')}"\nTEAM_WORKTREES_DIR=".worktrees"\n` +
-    `TEAM_NOTIFY_LOG="${base}/.pi/team/state/notify.log"\n`)
+    `TEAM_NOTIFY_LOG="${base}/.pi/team/state/notify-ext.log"\n`)
   writeFileSync(join(base, 'README.md'), `# bg-ledger fixture ${name}\n`)
   git(['init', '-q', '-b', 'main'], base)
   git(['add', 'README.md'], base)
@@ -668,6 +668,461 @@ const groupOwnerScope = async () => {
   await bgHost.emit('session_shutdown', { reason: 'fixture' }, { cwd: ROOT })
 }
 
+// ── turn-notice-merge（merge / detail / wake）：写入侧合并 + 明细 + 叫醒 ──────────────
+// 夹具驱动**真扩展 + 真 CLI**：扩展调 CLI 的 __inbox-write（per-recipient 锁 + 先明细后合并），
+// harness 读收件箱 / state/notify.log / outbox 断言合同。CLI 路径从 --notify 派生：
+//   <notify 的父目录>/../scripts/team —— 所以变异树（$MUT/<tag>/{extension,scripts}）能同时破坏扩展
+//   与 CLI，而不会因为 skillDir() 找不到 CLI 变成假红。
+const CLI = () => {
+  const explicit = opt('cli')
+  return explicit ? resolve(explicit) : resolve(dirname(NOTIFY), '..', 'scripts', 'team')
+}
+const runCliRaw = (base, args) => execFileSync('bash', [CLI(), '--root', base, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+const runCliRc = (base, args) => {
+  try { return { rc: 0, out: runCliRaw(base, args) } }
+  catch (error) { return { rc: typeof error?.status === 'number' ? error.status : 1, out: `${error?.stdout ?? ''}${error?.stderr ?? ''}` } }
+}
+const inboxAll = (base, agent = 'dev') => {
+  const f = join(base, 'docs/team/inbox', `${agent}.md`)
+  return existsSync(f) && !lstatSync(f).isDirectory() ? readFileSync(f, 'utf8').split('\n').filter(Boolean) : []
+}
+const detailFileOf = base => join(base, '.pi/team/state/notify.log')
+const detailRaw = base => {
+  const f = detailFileOf(base)
+  return existsSync(f) && !lstatSync(f).isDirectory() ? readFileSync(f, 'utf8') : ''
+}
+const detailEventCount = text => text.split('\n').filter(l => l.startsWith('- ')).length
+const detailRecs = base => detailRaw(base).split('\n').filter(l => l.startsWith('- '))
+const configAdd = (base, line) => writeFileSync(join(base, '.pi/team/config.sh'), `${line}\n`, { flag: 'a' })
+const extLogOf = base => {
+  const f = join(base, '.pi/team/state/notify-ext.log')
+  return existsSync(f) && !lstatSync(f).isDirectory() ? readFileSync(f, 'utf8') : ''
+}
+const taskProof = (base, agent, id) => writeFileSync(join(base, '.pi/team/state', `${agent}.env`), `task=${id}\n`)
+const liveRecord = (base, id, cwd) => {
+  const child = spawnSleep(30)
+  writeRecord(join(base, '.pi/team/state', 'bg'), id, { pid: child.pid, pgid: child.pid, start: procStartTime(child.pid), cwd })
+  return child.pid
+}
+const dropRecord = (base, id) => rmSync(join(base, '.pi/team/state', 'bg', `${id}.job`), { force: true })
+const killPid = pid => { try { process.kill(pid, 'SIGKILL') } catch { /* 已经不在了 */ } }
+const tipOfLine = text => /tip=([0-9a-f]+)/.exec(text)?.[1] ?? ''
+const isoOfLine = text => /^- (\S+) /.exec(text)?.[1] ?? ''
+// 敲门的可观察面：① 还在 outbox 里的条目（含 held/）；② delivered.log（投递成功后会移出目录）。
+// 只数 knock 的**行身份**（dedup 以 `line|` 开头）的条目 —— 旧键（摘要指纹）在这里则不会被数到。
+const knockEntries = base => {
+  const dir = join(base, '.pi/team/state/outbox')
+  let n = 0
+  const log = join(dir, 'delivered.log')
+  if (existsSync(log)) for (const line of readFileSync(log, 'utf8').split('\n')) {
+    const f = line.split('\t')
+    if ((f[1] ?? '').startsWith('line|')) n++
+  }
+  const scan = d => {
+    if (!existsSync(d)) return
+    for (const f of readdirSync(d)) {
+      const p = join(d, f)
+      let st
+      try { st = lstatSync(p) } catch { continue }
+      if (st.isDirectory()) { if (f !== 'diagnostics') scan(p); continue }
+      if (!f.endsWith('.msg')) continue
+      try { if (/^dedup: line\|/m.test(readFileSync(p, 'utf8'))) n++ } catch { /* ignore */ }
+    }
+  }
+  scan(dir)
+  return n
+}
+const inboxNewCount = (base, agent = 'dev') => Number(/新 (\d+) 条/.exec(runCliRaw(base, ['inbox', agent]))?.[1] ?? 0)
+
+// ── merge：合并键 / 合并行形状 / 尾行锚 / 既有读者 ─────────────────────────────
+const groupMerge = async () => {
+  const notify = await newNotify()
+
+  // ① 首条事件的行逐字节形状不变；同 run 三条 → 一行 ×3 + 明细三条（首末时间点名首末事件）
+  {
+    const b = makeBase('merge-run')
+    taskProof(b.base, 'dev', 'P230')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'MERGE-RUN first summary')
+    const l1 = inboxAll(b.base)[0] ?? ''
+    const shape = new RegExp('^- \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z (⚠ 未提交 \\d+ 个文件 · )?\\[auto\\] agent:dev · P230 · branch=task/P230-merge-run · uncommitted=\\d+ · unpushed=\\d+(\\(no-upstream\\))? · task=P230 tip=[0-9a-f]{12} :: MERGE-RUN first summary$')
+    check('merge: a single-event line keeps today’s shape',
+      shape.test(l1) && !l1.includes('×') && !l1.includes('first=') && !l1.includes('last='), l1 || '(no inbox line)')
+    await notify.settle(b.wt, 'stop', 'MERGE-RUN second summary')
+    await notify.settle(b.wt, 'stop', 'MERGE-RUN third summary')
+    const ls = inboxAll(b.base)
+    const dl = detailRecs(b.base)
+    const line = ls[0] ?? ''
+    check('merge: a run of same-key notifications is one line with its window',
+      ls.length === 1 && /×3 first=\S+ last=\S+/.test(line) && dl.length === 3 &&
+      isoOfLine(line) === isoOfLine(dl[0]) && /last=(\S+)/.exec(line)?.[1] === isoOfLine(dl[2]),
+      `lines=${ls.length} detail=${dl.length} :: ${line}`)
+    check('merge: the run’s summaries stay readable in the detail file',
+      dl.some(r => r.includes('first summary')) && dl.some(r => r.includes('third summary')) && dl.every(r => !r.includes('×') && r.startsWith('- ')),
+      dl.join(' | ').slice(0, 200))
+  }
+
+  // ② 汇总行取**最后一条**的值（uncommitted/tip/last）；取最大值、平均或第一条的值都在这里变红
+  {
+    const b = makeBase('merge-last')
+    taskProof(b.base, 'dev', 'P230')
+    resetNotify(b.base)
+    for (const f of ['w2.txt', 'w3.txt', 'w4.txt']) writeFileSync(join(b.wt, f), 'x\n')
+    await notify.settle(b.wt, 'stop', 'MERGE-LAST one')
+    const rec1 = detailRecs(b.base).at(-1) ?? ''
+    git(['add', '-A'], b.wt)
+    git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'merge-last one'], b.wt)
+    writeFileSync(join(b.wt, 'w5.txt'), 'x\n')
+    await notify.settle(b.wt, 'stop', 'MERGE-LAST two')
+    rmSync(join(b.wt, 'w5.txt'), { force: true })
+    await notify.settle(b.wt, 'stop', 'MERGE-LAST three')
+    const rec3 = detailRecs(b.base).at(-1) ?? ''
+    const line = inboxAll(b.base)[0] ?? ''
+    const tip1 = tipOfLine(rec1); const tip3 = tipOfLine(rec3)
+    check('merge: the merged line carries the last event’s values',
+      tip1 !== '' && tip3 !== '' && tip1 !== tip3 && /uncommitted=0( |·)/.test(line) && line.includes(`tip=${tip3}`) &&
+      !line.includes(`tip=${tip1}`) && /last=(\S+)/.exec(line)?.[1] === isoOfLine(rec3) && line.includes('×3'),
+      `tip1=${tip1} tip3=${tip3} :: ${line}`)
+  }
+
+  // ③ 状态类变化必然新起一行（两个同 awaiting 的 suspended 不跨过 delivered 合并）
+  {
+    const b = makeBase('merge-class')
+    resetNotify(b.base)
+    const pA = liveRecord(b.base, 'J1', b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-CLASS suspended one')
+    dropRecord(b.base, 'J1'); killPid(pA)
+    await notify.settle(b.wt, 'stop', 'MERGE-CLASS delivered')
+    const pB = liveRecord(b.base, 'J1', b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-CLASS suspended two')
+    const ls = inboxAll(b.base)
+    check('merge: a state-class change starts a new line',
+      ls.length === 3 && ls[0].includes('[auto·suspended]') && ls[0].includes('awaiting=J1') && !ls[0].includes('×') &&
+      ls[1].includes('[auto] ') && !ls[1].includes('awaiting=') && !ls[1].includes('×') &&
+      ls[2].includes('[auto·suspended]') && ls[2].includes('awaiting=J1') && !ls[2].includes('×'),
+      ls.join(' || ').slice(0, 240))
+    // 只有类变、awaiting 集合不变：suspended → interrupted 也必须新起一行（键里的类分量单独可观测）
+    await notify.settle(b.wt, 'aborted', 'MERGE-CLASS interrupted same job')
+    const ls2 = inboxAll(b.base)
+    check('merge: a class change with the same awaiting set starts a new line',
+      ls2.length === 4 && ls2[3].includes('[auto·interrupted]') && ls2[3].includes('awaiting=J1') && !ls2[3].includes('×'),
+      ls2.join(' || ').slice(0, 260))
+    killPid(pB); dropRecord(b.base, 'J1')
+  }
+
+  // ④ 任务 / awaiting 集合任一变化都新起一行
+  {
+    const b = makeBase('merge-key')
+    taskProof(b.base, 'dev', 'P230')
+    resetNotify(b.base)
+    const p1 = liveRecord(b.base, 'X1', b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-KEY awaiting one')
+    dropRecord(b.base, 'X1'); killPid(p1)
+    const p2 = liveRecord(b.base, 'X2', b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-KEY awaiting two')
+    dropRecord(b.base, 'X2'); killPid(p2)
+    const p3 = liveRecord(b.base, 'X3', b.wt)
+    git(['checkout', '-q', '-b', 'task/P231-other'], b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-KEY other task')
+    const ls = inboxAll(b.base)
+    check('merge: a different task or awaiting set starts a new line',
+      ls.length === 3 && ls[0].includes('awaiting=X1') && ls[1].includes('awaiting=X2') && ls[2].includes('awaiting=X3') &&
+      ls.every(l => !l.includes('×')), `lines=${ls.length} :: ${ls.join(' || ').slice(0, 200)}`)
+    killPid(p3); dropRecord(b.base, 'X3')
+  }
+
+  // ⑤ 跨席位：各写各的文件
+  {
+    const b = makeBase('merge-seats', { seats: ['dev', 'dev2'] })
+    resetNotify(b.base, 'dev'); resetNotify(b.base, 'dev2')
+    await notify.settle(b.wt, 'stop', 'MERGE-SEATS dev')
+    await notify.settle(b.wts.dev2, 'stop', 'MERGE-SEATS dev2')
+    const ld = inboxAll(b.base, 'dev'); const l2 = inboxAll(b.base, 'dev2')
+    check('merge: a different seat’s run stays in its own file',
+      ld.length === 1 && l2.length === 1 && ld[0].includes('agent:dev ') && !ld[0].includes('agent:dev2') && l2[0].includes('agent:dev2'),
+      `dev=[${ld.join('||')}] dev2=[${l2.join('||')}]`)
+  }
+
+  // ⑥ awaiting 是集合：夹具预置的反序锚行与扩展的排序结果必须合并
+  {
+    const b = makeBase('merge-order')
+    resetNotify(b.base)
+    const pa = liveRecord(b.base, 'aaa', b.wt); const pz = liveRecord(b.base, 'zzz', b.wt)
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], b.wt)
+    writeFileSync(join(b.base, 'docs/team/inbox/dev.md'),
+      `- 2026-10-14T00:00:00Z [auto·suspended] agent:dev · P230 · branch=${branch} · uncommitted=1 · awaiting=zzz,aaa · unpushed=0\n`)
+    await notify.settle(b.wt, 'stop', 'MERGE-ORDER second settle')
+    const ls = inboxAll(b.base)
+    const line = ls[0] ?? ''
+    check('merge: the awaiting set’s order does not split a run',
+      ls.length === 1 && line.includes('×2') && line.includes('awaiting=aaa,zzz'), line)
+    killPid(pa); killPid(pz); dropRecord(b.base, 'aaa'); dropRecord(b.base, 'zzz')
+  }
+
+  // ⑦ 中间插入的手工通知结束 run，且本人逐字节不变
+  {
+    const b = makeBase('merge-break')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'MERGE-BREAK one')
+    const before = inboxAll(b.base)[0] ?? ''
+    runCliRc(b.base, ['notify', 'dev', 'MERGE-BREAK manual notice'])
+    const manual = inboxAll(b.base).at(-1) ?? ''
+    await notify.settle(b.wt, 'stop', 'MERGE-BREAK two')
+    const ls = inboxAll(b.base)
+    check('merge: a notice appended between two events ends the run untouched',
+      ls.length === 3 && ls[0] === before && ls[1] === manual && ls[1].includes('[manual]') &&
+      ls[1].includes('MERGE-BREAK manual notice') && ls[2].includes('MERGE-BREAK two') && !ls[2].includes('×'),
+      ls.join(' || ').slice(0, 240))
+  }
+
+  // ⑧ 去重窗口内的重复 settle 既不进明细也不推 ×N
+  {
+    const b = makeBase('merge-dedup')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'MERGE-DEDUP same text')
+    await notify.settle(b.wt, 'stop', 'MERGE-DEDUP same text')
+    const ls = inboxAll(b.base); const dl = detailRecs(b.base)
+    check('merge: a settle inside the dedup window neither counts nor records',
+      ls.length === 1 && !ls[0].includes('×') && dl.length === 1, `lines=${ls.length} detail=${dl.length}`)
+  }
+
+  // ⑨ 行计数读者：合并行算一行；被后续事件扩展后仍是已读
+  {
+    const b = makeBase('merge-readers')
+    resetNotify(b.base)
+    for (const t of ['one', 'two', 'three']) await notify.settle(b.wt, 'stop', `MERGE-READERS ${t}`)
+    const before = inboxNewCount(b.base)
+    runCliRc(b.base, ['inbox', 'dev', '--ack'])
+    await notify.settle(b.wt, 'stop', 'MERGE-READERS four')
+    const after = inboxNewCount(b.base)
+    check('merge: line-counting readers count a merged line once',
+      before === 1 && after === 0 && /×4/.test(inboxAll(b.base)[0] ?? ''),
+      `before=${before} after=${after} :: ${inboxAll(b.base)[0] ?? ''}`)
+  }
+
+  // ⑩ 陈旧判据在合并行上读最后一条的 tip（更早的事件从明细里判）
+  {
+    const b = makeBase('merge-stale')
+    taskProof(b.base, 'dev', 'P230')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'MERGE-STALE one')
+    const tip1 = tipOfLine(detailRecs(b.base).at(-1) ?? '')
+    git(['add', '-A'], b.wt)
+    git(['-c', 'user.email=fixture@teamsmith', '-c', 'user.name=fixture', 'commit', '-qm', 'merge-stale one'], b.wt)
+    await notify.settle(b.wt, 'stop', 'MERGE-STALE two')
+    const tip2 = tipOfLine(detailRecs(b.base).at(-1) ?? '')
+    const line = inboxAll(b.base)[0] ?? ''
+    mkdirSync(join(b.base, 'docs/team/reviews'), { recursive: true })
+    writeFileSync(join(b.base, 'docs/team/reviews/P230.md'), `# P230\n\n- HEAD ${tip1}\n`)
+    const reviewed = new RegExp(tip1).test(readFileSync(join(b.base, 'docs/team/reviews/P230.md'), 'utf8'))
+    const judged = t => tip1.startsWith(t) || t.startsWith(tip1)
+    check('merge: a merged line is judged by its last event, not as current state',
+      /×2/.test(line) && tip1 !== tip2 && line.includes(`tip=${tip2}`) && !judged(tip2) && judged(tip1) && reviewed,
+      `tip1=${tip1} tip2=${tip2} :: ${line}`)
+  }
+}
+
+// ── detail：明细文件 / 轮转 / 读面缺口 ────────────────────────────────────────
+const groupDetail = async () => {
+  const notify = await newNotify()
+
+  // ① 计数与记录一致；② 明细不是流量（记录不写收件箱行、不入队 knock）
+  {
+    const b = makeBase('detail-agree')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'DETAIL one')
+    await notify.settle(b.wt, 'stop', 'DETAIL two')
+    await notify.settle(b.wt, 'stop', 'DETAIL three')
+    const dl = detailRecs(b.base)
+    const out = runCliRc(b.base, ['inbox', 'dev', '--detail']).out
+    check('detail: a run’s count and its records agree',
+      /×3/.test(inboxAll(b.base)[0] ?? '') && dl.length === 3 && /记录 3\/3 OK/.test(out),
+      `recs=${dl.length} out=${out.split('\n').slice(0, 3).join(' / ')}`)
+    check('detail: the detail file is not traffic',
+      inboxAll(b.base).length === 1 && knockEntries(b.base) === 0,
+      `lines=${inboxAll(b.base).length} knocks=${knockEntries(b.base)}`)
+  }
+
+  // ③ 轮转：搬走一代 + 新代轮转头（时间 / state/notify.log.1 / 事件数）+ 扩展日志点名
+  {
+    const b = makeBase('detail-rotate')
+    configAdd(b.base, 'TEAM_NOTIFY_DETAIL_MAX=2')
+    resetNotify(b.base)
+    for (const t of ['one', 'two', 'three']) await notify.settle(b.wt, 'stop', `ROTATE ${t}`)
+    const cur = detailRaw(b.base)
+    const rotated = existsSync(`${detailFileOf(b.base)}.1`) ? readFileSync(`${detailFileOf(b.base)}.1`, 'utf8') : ''
+    const log = existsSync(join(b.base, '.pi/team/state/notify-ext.log')) ? readFileSync(join(b.base, '.pi/team/state/notify-ext.log'), 'utf8') : ''
+    check('detail: a rotated generation names where the older events went',
+      /^# rotation \S+ moved=2 /.test(cur) && cur.includes('state/notify.log.1') && detailEventCount(cur) <= 2 && detailEventCount(rotated) === 2 && /rotated/.test(log),
+      `head=${cur.split('\n')[0] ?? ''} curEvents=${detailEventCount(cur)} rotEvents=${detailEventCount(rotated)}`)
+    for (const t of ['four', 'five', 'six', 'seven']) await notify.settle(b.wt, 'stop', `ROTATE ${t}`)
+    const cur2 = detailRaw(b.base)
+    check('detail: the bound holds as the file grows',
+      detailEventCount(cur2) <= 2 && !existsSync(`${detailFileOf(b.base)}.2`),
+      `curEvents=${detailEventCount(cur2)} generations=${existsSync(`${detailFileOf(b.base)}.1`) ? 1 : 0}`)
+  }
+
+  // ④ 缺文件：点名 state/notify.log 与 .1，非零退出，不假装完整
+  {
+    const b = makeBase('detail-missing')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'GAP one')
+    await notify.settle(b.wt, 'stop', 'GAP two')
+    rmSync(detailFileOf(b.base), { force: true })
+    const r = runCliRc(b.base, ['inbox', 'dev', '--detail'])
+    check('detail: a missing record is named, not silent',
+      r.rc !== 0 && r.out.includes('state/notify.log') && r.out.includes('state/notify.log.1') && !/记录 2\/2 OK/.test(r.out),
+      `rc=${r.rc} :: ${r.out.replace(/\n/g, ' | ').slice(0, 220)}`)
+  }
+
+  // ⑤ 轮转后当前代缺记录：点名缺口与 .1，非零退出
+  {
+    const b = makeBase('detail-rotgap')
+    configAdd(b.base, 'TEAM_NOTIFY_DETAIL_MAX=2')
+    resetNotify(b.base)
+    for (const t of ['one', 'two', 'three']) await notify.settle(b.wt, 'stop', `ROTGAP ${t}`)
+    const r = runCliRc(b.base, ['inbox', 'dev', '--detail'])
+    check('detail: a rotated run’s gap is named with the older generation',
+      r.rc !== 0 && /缺口/.test(r.out) && r.out.includes('state/notify.log.1') && /×3/.test(r.out) && /记录 1\/3/.test(r.out),
+      `rc=${r.rc} :: ${r.out.replace(/\n/g, ' | ').slice(0, 240)}`)
+  }
+
+  // ⑥ 只读：不 ack、未读数不变
+  {
+    const b = makeBase('detail-readonly')
+    resetNotify(b.base)
+    await notify.settle(b.wt, 'stop', 'READONLY one')
+    await notify.settle(b.wt, 'stop', 'READONLY two')
+    const before = inboxNewCount(b.base)
+    // --detail 在有缺口时**按契约非零退出**：夹具用 rc 宽容的调用（否则破坏树会把 harness 自身搞崩）
+    runCliRc(b.base, ['inbox', 'dev', '--detail'])
+    const after = inboxNewCount(b.base)
+    check('detail: detail reading does not acknowledge', before === 1 && after === 1, `before=${before} after=${after}`)
+  }
+}
+
+// ── wake：只有写新行才入队 knock（合并的 settle 不叫醒）──────────────────────
+const groupWake = async () => {
+  const notify = await newNotify()
+  const prevPane = process.env.TMUX_PANE
+  // 敲门要「有 PM 窗口」的形状：TMUX_PANE 在进程内设就够（子进程继承）；假 tmux 由 bg-ledger.sh 在
+  // **启动 runner 之前**放进 PATH —— bun 在启动时缓存 PATH，运行中改 process.env.PATH 对子进程查找无效。
+  process.env.TMUX_PANE = 'p251-fixture-pane'
+  try {
+    // ① 交付：每个新行恰好一条 knock，同键合并的 settle 零条目
+    {
+      const b = makeBase('wake-once')
+      configAdd(b.base, 'TEAM_NOTIFY_DEDUP_SEC=0')
+      resetNotify(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-ONCE one')
+      const k1 = knockEntries(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-ONCE two')
+      const k2 = knockEntries(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-ONCE three')
+      const k3 = knockEntries(b.base)
+      check('wake: each new line wakes exactly once', k1 === 1 && k2 === 1 && k3 === 1, `k=${k1},${k2},${k3}`)
+      // 合并的 settle 不敲：既不能新增条目（会被 outbox 自己的去重挡住，所以还要看扩展自己的账本）
+      // 也不能走「入队」那条路径 —— 扩展日志里必须是 no knock（state=extended），零次 knock queued。
+      const log3 = extLogOf(b.base)
+      check('wake: a merged settle does not wake again',
+        k3 === 1 && /×3/.test(inboxAll(b.base)[0] ?? '') && /no knock \(inbox write state=extended\)/.test(log3),
+        `k=${k3} log=${log3.split('\n').filter(Boolean).slice(-3).join(' | ')}`)
+    }
+
+    // ② 挂起只记录、不叫醒（用户裁定 2026-10-14）：行与明细都在、queue 为空；同键合并也不叫醒
+    {
+      const b = makeBase('wake-suspended')
+      configAdd(b.base, 'TEAM_NOTIFY_DEDUP_SEC=0')
+      resetNotify(b.base)
+      const pid = liveRecord(b.base, 'W2', b.wt)
+      await notify.settle(b.wt, 'stop', 'WAKE-SUSPENDED one')
+      const k1 = knockEntries(b.base)
+      const line1 = inboxAll(b.base)[0] ?? ''
+      const rec1 = detailRecs(b.base).length
+      await notify.settle(b.wt, 'stop', 'WAKE-SUSPENDED two')
+      const k2 = knockEntries(b.base)
+      const line2 = inboxAll(b.base)[0] ?? ''
+      const rec2 = detailRecs(b.base).length
+      check('wake: a suspended line never wakes',
+        k1 === 0 && line1.includes('[auto·suspended]') && line1.includes('awaiting=W2') && rec1 === 1,
+        `k=${k1} recs=${rec1} :: ${line1}`)
+      check('wake: a merged suspended run never wakes',
+        k2 === 0 && /×2/.test(line2) && line2.includes('awaiting=W2') && rec2 === 2,
+        `k=${k2} recs=${rec2} :: ${line2}`)
+      killPid(pid); dropRecord(b.base, 'W2')
+    }
+
+    // ③ 状态类变化：挂起不叫醒，随后交付 / 中断各叫醒一次
+    {
+      const b = makeBase('wake-class')
+      configAdd(b.base, 'TEAM_NOTIFY_DEDUP_SEC=0')
+      resetNotify(b.base)
+      const pid = liveRecord(b.base, 'W3', b.wt)
+      await notify.settle(b.wt, 'stop', 'WAKE-CLASS suspended')
+      const k0 = knockEntries(b.base)
+      dropRecord(b.base, 'W3'); killPid(pid)
+      await notify.settle(b.wt, 'stop', 'WAKE-CLASS delivered')
+      const k1 = knockEntries(b.base)
+      const pid2 = liveRecord(b.base, 'W3', b.wt)
+      await notify.settle(b.wt, 'aborted', 'WAKE-CLASS interrupted')
+      const k2 = knockEntries(b.base)
+      check('wake: a class change away from suspended wakes once',
+        k0 === 0 && k1 === 1 && k2 === 2,
+        `k=${k0},${k1},${k2} :: ${inboxAll(b.base).map(l => l.slice(0, 60)).join(' || ')}`)
+      killPid(pid2); dropRecord(b.base, 'W3')
+    }
+
+    // ④ 计数抖动不叫醒：先显式清掉上一条 knock（否则 outbox 自己的去重会替实现挡住这条断言）
+    {
+      const b = makeBase('wake-churn')
+      configAdd(b.base, 'TEAM_NOTIFY_DEDUP_SEC=0')
+      resetNotify(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-CHURN one')
+      const k1 = knockEntries(b.base)
+      runCliRc(b.base, ['outbox', 'drop', 'all'])
+      const k0 = knockEntries(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-CHURN two')
+      await notify.settle(b.wt, 'stop', 'WAKE-CHURN three')
+      const k2 = knockEntries(b.base)
+      check('wake: count churn does not wake',
+        k1 >= 1 && k2 === k0 && /×3/.test(inboxAll(b.base)[0] ?? ''),
+        `afterFirst=${k1} afterDrop=${k0} afterChurn=${k2} lines=${inboxAll(b.base).length}`)
+    }
+
+    // ⑤ 两条文本逐字相同的不同行（手工通知打断 + 夹具去掉 settle 去重簿）：行身份不互吞。
+    // 不去掉 outbox 的去重窗口（默认 20s）：用摘要当键的破坏实现会被它摕下（这正是要红的地方）。
+    // 不去掉 outbox 的去重窗口（默认 20s）：用摘要当键的破坏实现会被它摕下（这正是要红的地方）。
+    {
+      const b = makeBase('wake-identity')
+      resetNotify(b.base)
+      await notify.settle(b.wt, 'stop', 'WAKE-IDENTICAL text')
+      runCliRc(b.base, ['notify', 'dev', 'WAKE-IDENTICAL break'])
+      rmSync(join(b.base, '.pi/team/state/notify-dedup'), { force: true })
+      await notify.settle(b.wt, 'stop', 'WAKE-IDENTICAL text')
+      const ls = inboxAll(b.base)
+      const stripped = l => l.replace(/^- \S+ /, '')
+      check('wake: two text-identical lines are not conflated',
+        ls.length === 3 && knockEntries(b.base) === 2 && ls[0] !== ls[2] && stripped(ls[0]) === stripped(ls[2]),
+        `lines=${ls.length} knocks=${knockEntries(b.base)} :: ${ls.join(' || ').slice(0, 200)}`)
+    }
+
+    // ⑥ 写盘失败不叫醒（收件箱路径是个目录 → 追加必败）
+    {
+      const b = makeBase('wake-writefail')
+      resetNotify(b.base)
+      rmSync(join(b.base, 'docs/team/inbox/dev.md'), { force: true })
+      mkdirSync(join(b.base, 'docs/team/inbox/dev.md'), { recursive: true })
+      await notify.settle(b.wt, 'stop', 'WAKE-WRITEFAIL must not wake')
+      const k = knockEntries(b.base)
+      rmSync(join(b.base, 'docs/team/inbox/dev.md'), { recursive: true, force: true })
+      check('wake: a failed inbox write does not wake', k === 0, `knocks=${k}`)
+    }
+  } finally {
+    if (prevPane === undefined) delete process.env.TMUX_PANE
+    else process.env.TMUX_PANE = prevPane
+  }
+}
+
 // ── 主流程 ────────────────────────────────────────────────────────────────────
 console.log(`bg-ledger-harness · root=${ROOT} · groups=${[...GROUPS].join(',')} · bg=${BG} · notify=${NOTIFY}`)
 try {
@@ -675,6 +1130,9 @@ try {
   if (GROUPS.has('ledger')) await groupLedger()
   if (GROUPS.has('suspend-shape')) await groupSuspendShape()
   if (GROUPS.has('owner-scope')) await groupOwnerScope()
+  if (GROUPS.has('merge')) await groupMerge()
+  if (GROUPS.has('detail')) await groupDetail()
+  if (GROUPS.has('wake')) await groupWake()
 } catch (error) {
   check('harness: no unexpected exception', false, String(error?.stack ?? error).split('\n').slice(0, 3).join(' / '))
 }

@@ -922,20 +922,91 @@ team_cmd_digest() {
   printf '\n'
 }
 
+# ---------------------------------------------------------------- 明细读面：team inbox <agent> --detail
+# turn-notice-merge · 收件箱行是**汇总**，原始事件在 state/notify.log（一行一事件）。这里只读：
+# 不 ack、不改未读数；对每条合并行核对 `×N` 与当前代里该键的记录数，缺文件/被轮转出去 →
+# 点名缺口与 state/notify.log.1 并非零退出（「静默空输出」就是这条要消灭的假绿）。
+team_inbox_detail() { # <agent> → 0 = 当前代记录完整；1 = 有缺口（点名）
+  local agent="$1"
+  local f detail rot_file line r k n count pair rc=0 recs_n=0 merged_n=0 gap_n=0
+  f="$(team_inbox_file "$agent")"
+  detail="$TEAM_STATE_DIR/notify.log"
+  rot_file="${detail}.1"
+  printf '%s=== %s --detail（回合通知的原始明细；只读）%s\n' "$C_BOLD" "$agent" "$C_RESET"
+  if [ -f "$detail" ]; then
+    local gen="当前代" hdr
+    hdr="$(head -n 1 "$detail" 2>/dev/null || true)"
+    case "$hdr" in '# rotation '*) gen="当前代（本轮由轮转开始：${hdr#\# rotation }）" ;; esac
+    printf '  读取：%s（%s）\n' "$detail" "$gen"
+  else
+    printf '  读取：%s（缺失）\n' "$detail"
+  fi
+  [ -f "$rot_file" ] && printf '  上一代：%s\n' "$rot_file"
+  # 当前代里属于这个席位的原始记录（键解析给出席位；非 auto 行/轮转头不算记录）
+  local -a RECS=()
+  if [ -f "$detail" ]; then
+    while IFS= read -r line; do
+      case "$line" in '- '*) ;; *) continue ;; esac
+      k="$(team_notify_line_key "$line" 2>/dev/null || true)"
+      case "$k" in "$agent"'|'*) RECS+=("$line") ;; esac
+    done < "$detail"
+  fi
+  recs_n="${#RECS[@]}"
+  printf '  该席位的原始记录：%s 条\n' "$recs_n"
+  for r in "${RECS[@]:-}"; do [ -n "$r" ] && printf '    %s\n' "$r"; done
+  printf '  合并行核对：\n'
+  if [ -f "$f" ]; then
+    while IFS= read -r line; do
+      local head="${line#- }"
+      head="${head%% :: *}"
+      case "$head" in *'×'*) ;; *) continue ;; esac
+      merged_n=$((merged_n + 1))
+      n="$(team_notify_line_events "$line")"
+      k="$(team_notify_line_key "$line" 2>/dev/null || true)"
+      count=0
+      for r in "${RECS[@]:-}"; do
+        [ -n "$r" ] || continue
+        [ "$(team_notify_line_key "$r" 2>/dev/null || true)" = "$k" ] && count=$((count + 1))
+      done
+      pair="$(team_notify_line_iso "$line")/$(team_notify_line_iso_last "$line")"
+      if [ "$count" -ge "$n" ]; then
+        printf '    ×%s first=%s last=%s → 记录 %s/%s OK\n' "$n" "${pair%%/*}" "${pair#*/}" "$count" "$n"
+      else
+        gap_n=$((gap_n + 1))
+        printf '    ×%s first=%s last=%s → 记录 %s/%s **缺口**：state/notify.log 当前代只有 %s 条；更早的记录在 state/notify.log.1\n' \
+          "$n" "${pair%%/*}" "${pair#*/}" "$count" "$n" "$count"
+        rc=1
+      fi
+    done < "$f"
+  fi
+  [ "$merged_n" -gt 0 ] || printf '    （没有合并行）\n'
+  if [ "$gap_n" -gt 0 ]; then
+    printf '  **缺口汇总**：%s 条合并行的原始记录不完整（找不到的请到 state/notify.log.1 找；未被记录的事件不会出现在任何 ×N 里）\n' "$gap_n"
+    rc=1
+  fi
+  return "$rc"
+}
+
 team_cmd_inbox() {
-  local agent="" ack=0 all=0
+  local agent="" ack=0 all=0 detail=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ack) ack=1; shift ;;
       --all) all=1; shift ;;
+      --detail) detail=1; shift ;;
       -*) team_usage_die "inbox: 未知参数 $1" ;;
       *) agent="$1"; shift ;;
     esac
   done
+  if [ "$detail" = 1 ] && [ "$ack" = 1 ]; then team_usage_die "inbox: --detail 与 --ack 不同用（--detail 只读）"; fi
   local targets=()
   if [ -n "$agent" ]; then targets=("$agent"); else mapfile -t targets < <(team_inbox_recipients); fi
-  local a n f label
+  local a n f label rc=0
   for a in "${targets[@]}"; do
+    if [ "$detail" = 1 ]; then
+      team_inbox_detail "$a" || rc=1
+      continue
+    fi
     f="$(team_inbox_file "$a")"
     n="$(team_inbox_new "$a")"
     label=""; [ "$a" = "pm" ] && label="（PM 自己的收件箱）"
@@ -953,7 +1024,7 @@ team_cmd_inbox() {
     fi
   done
   [ "$ack" = "1" ] && team_ok "已标记为已读（--ack）"
-  return 0
+  return "$rc"
 }
 
 # ---------------------------------------------------------------- P23/B1 · change 视图（只读）

@@ -340,6 +340,7 @@ export const zh = {
   label_TEAM_NOTIFY_DEDUP_SEC: '通知去重窗口',
   label_TEAM_INBOX_MAX_CHARS: '收件箱摘要字数',
   label_TEAM_NOTIFY_LOG: '通知调试日志',
+  label_TEAM_NOTIFY_DETAIL_MAX: '通知明细条数上限',
   label_TEAM_DEFER_TTL: '排队过期时间',
   label_TEAM_OUTBOX_MAX: '发件箱条数上限',
   label_TEAM_PANEL_DETAIL_CAP: '详情文件读取上限',

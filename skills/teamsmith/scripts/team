@@ -89,6 +89,7 @@ case "$CMD" in
   bg)         team_cmd_bg "$@" ;;
   digest)     team_cmd_digest "$@" ;;
   inbox)      team_cmd_inbox "$@" ;;
+  __inbox-write) team_cmd_inbox_write "$@" ;;   # 内部：notify 扩展的收件箱写入口（合并 + 明细；不进 help）
   paths)      team_paths_json ;;
   task)       team_cmd_task "$@" ;;
   board)      team_cmd_board "$@" ;;

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # P230 · long-job-suspend · A 刀夹具（独立入口：extension 侧的合同，不碰 smoke.sh）
 #
-#   bash skills/teamsmith/tests/bg-ledger.sh --select wording,ledger,suspend-shape,owner-scope,flip
-#   bash skills/teamsmith/tests/bg-ledger.sh                    # 默认五组全跑
+#   bash skills/teamsmith/tests/bg-ledger.sh --select wording,ledger,suspend-shape,owner-scope,merge,detail,wake,flip
+#   bash skills/teamsmith/tests/bg-ledger.sh                    # 默认八组全跑
 #   bash skills/teamsmith/tests/bg-ledger.sh --select flip --evidence <dir>   # 把每组原始日志拷进证据目录
 #   bash skills/teamsmith/tests/bg-ledger.sh --keep             # 保留临时根排查
 #
@@ -20,9 +20,17 @@
 #                  cwd 必须解析到本会话自己的工作树/cwd 才算「我的作业」；多席位各有作业时各自只认自己的
 #                  id；空席位（dev2 与 dev3 两个非拥有者）不被别人的作业打成挂起；缺 cwd / 相对 cwd /
 #                  解析不出来的畸形记录不判挂起（fail-closed）；软链与尾斜杠按真实路径归一。
+#   merge         turn-notice-merge 的写入面（P251）：合并键四分量（席位/任务/状态类/awaiting 集合）、
+#                  汇总行的形状（最后一条事件的行 + ×N first= last=）与最后一条的值、尾行锚、跨类/跨任务/
+#                  跨 awaiting 不合并、去重窗口语义、行计数读者（未读 + --ack）与陈旧判据。
+#   detail        明细文件（state/notify.log）：一行一事件、先明细后合并（×N 与记录数一致）、
+#                  TEAM_NOTIFY_DETAIL_MAX 上界与一代轮转（轮转头 + 扩展日志）、`team inbox --detail`
+#                  的读面（缺文件/被轮转出去要点名 state/notify.log.1 并非零退出、只读不 ack）。
+#   wake          P251 的叫醒判据（无限私有 tmux shim）：只有**写新行且行可行动**才入队 knock（行身份去重）、
+#                  交付/中断敲门、**挂起只记录不敲门**（行与明细都在、合并也不敲）、合并的 settle 零条目
+#                  （计数抖动不叫醒）、文本逐字相同的两条不同行不互吞、写盘失败不叫醒。
 #   flip           对 scratch 源码做真实破坏必须变红（措辞回退 / 删 start 行 / waited_s 记作业年龄 /
-#                  去掉身份验证 / 改成读 notify 自己的 root / 删掉归属判据），且同一用例在 pristine
-#                  树上必须 PASS。
+#                  去掉身份验证 / 改成读 notify 自己的 root / 删掉归属判据；P251 的十二个写入面红侧）。
 #
 # 纪律（§13c）：清掉继承的 TEAM_*/SMOKE_*/TMUX*；写盘前断言 `team paths` 指向夹具仓库；跑后扫描真项目
 # state/ 与 inbox 的夹具标记（+ 前后快照）。夹具只写 ${TMPDIR:-/tmp} 下的 owned 根；不碰调用者仓库。
@@ -34,7 +42,7 @@ REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
 # shellcheck source=lib/tmp-root.sh
 . "$SELF_DIR/lib/tmp-root.sh"
 
-SELECT="wording,ledger,suspend-shape,owner-scope,flip"
+SELECT="wording,ledger,suspend-shape,owner-scope,merge,detail,wake,flip"
 KEEP=0
 EVIDENCE=""
 while [ $# -gt 0 ]; do
@@ -50,7 +58,7 @@ while [ $# -gt 0 ]; do
 done
 IFS=',' read -r -a SEL_GROUPS <<<"$SELECT"
 for _g in "${SEL_GROUPS[@]}"; do
-  case "$_g" in wording|ledger|suspend-shape|owner-scope|flip) ;; *) printf 'bg-ledger: 未知组 %s（wording|ledger|suspend-shape|owner-scope|flip）\n' "$_g" >&2; exit 2 ;; esac
+  case "$_g" in wording|ledger|suspend-shape|owner-scope|merge|detail|wake|flip) ;; *) printf 'bg-ledger: 未知组 %s（wording|ledger|suspend-shape|owner-scope|merge|detail|wake|flip）\n' "$_g" >&2; exit 2 ;; esac
 done
 selects() { case ",$SELECT," in *",$1,"*) return 0 ;; esac; return 1; }
 
@@ -100,7 +108,7 @@ cat > "$FIX/.pi/team/config.sh" <<EOF
 TEAM_PROJECT="bg-ledger-fixture"
 TEAM_AGENTS="dev"
 TEAM_WORKTREES_DIR=".worktrees"
-TEAM_NOTIFY_LOG="$FIX/.pi/team/state/notify.log"
+TEAM_NOTIFY_LOG="$FIX/.pi/team/state/notify-ext.log"
 EOF
 printf '# bg-ledger fixture\n' > "$FIX/README.md"
 ( cd "$FIX" && git init -q -b main && git add README.md \
@@ -114,6 +122,21 @@ esac
 
 MAIN_ROOT="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | xargs -r dirname)"
 [ -n "$MAIN_ROOT" ] || MAIN_ROOT="$REPO_ROOT"
+
+# ── 私有 tmux shim（p251 的 wake 组）：假 PM 窗口（window=dev / session=team / 在跑 pi），只会在
+# 启动 runner 前以 PATH 前缀的形式给带 wake 的组（bun 启动时缓存 PATH，运行中改无效）。只写自己的 tmp 根。
+KNOCK_SHIM="$TMP/knock-shim"
+mkdir -p "$KNOCK_SHIM"
+cat > "$KNOCK_SHIM/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *'#{window_name}'*) printf 'dev\n' ;;
+  *'#{session_name}'*) printf 'team\n' ;;
+  *'#{pane_current_command}'*) printf 'pi\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$KNOCK_SHIM/tmux"
 real_snapshot() {
   { for d in "$MAIN_ROOT/.pi/team/state" "$MAIN_ROOT/docs/team/inbox"; do
       if [ -d "$d" ]; then
@@ -142,8 +165,11 @@ real_marker_hits() { # 真项目里含夹具标记的文件。**排除本入口�
 REAL_BEFORE="$(real_snapshot)"
 
 run_harness() { # <tag> <groups> [<bg> <notify>] → rc；stdout+stderr 落 $TMP/h-<tag>.log
-  local tag="$1" groups="$2" bg="${3:-$BG_EXT}" notify="${4:-$NOTIFY_EXT}"
-  "$RUNNER" "$HARNESS" --bg "$bg" --notify "$notify" --root "$FIX" --groups "$groups" --marker "$MARKER" \
+  # P251：带 wake 的组要「有 PM 窗口」的形状 —— 假 tmux 必须在 runner **启动前**进 PATH（bun 缓存在
+  # 启动时读的 PATH，运行中改 process.env.PATH 对子进程查找无效；实测）。只加给带 wake 的组。
+  local tag="$1" groups="$2" bg="${3:-$BG_EXT}" notify="${4:-$NOTIFY_EXT}" path_pre="$PATH"
+  case ",$groups," in *,wake,*) path_pre="$KNOCK_SHIM:$PATH" ;; esac
+  env PATH="$path_pre" "$RUNNER" "$HARNESS" --bg "$bg" --notify "$notify" --root "$FIX" --groups "$groups" --marker "$MARKER" \
     >"$TMP/h-$tag.log" 2>&1
 }
 report_group() { # <tag>
@@ -184,7 +210,7 @@ printf '[bg-ledger-run] %s\n' "$MARKER"   # 本入口自己的输出指纹（反
 
 # ── wording / ledger / suspend-shape ────────────────────────────────────────────────────
 SELECTED_GROUPS=""
-for _g in wording ledger suspend-shape owner-scope; do
+for _g in wording ledger suspend-shape owner-scope merge detail wake; do
   if selects "$_g"; then SELECTED_GROUPS="${SELECTED_GROUPS:+$SELECTED_GROUPS,}$_g"; fi
 done
 if [ -n "$SELECTED_GROUPS" ]; then
@@ -198,6 +224,9 @@ if selects flip; then
   section "flip · pristine 树基线（同一批用例必须全绿）"
   run_harness flip-green "wording,ledger,suspend-shape,owner-scope"
   report_group flip-green
+  section "flip · P251 写入面的 pristine 基线（merge/detail/wake 必须全绿）"
+  run_harness flip-green-notify "merge,detail,wake"
+  report_group flip-green-notify
 
   MUT="$TMP/mut"; mkdir -p "$MUT"
   flip_mut() { # <tag> <src> <sed 表达式>
@@ -264,10 +293,139 @@ if selects flip; then
   expect_red flip-owner-scope "owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)" "$TMP/h-flip-green.log"
   expect_red flip-owner-scope "owner-scope: a job started from the main worktree does not suspend a seat" "$TMP/h-flip-green.log"
 
+  # ── P251 · turn-notice-merge 的写入面红侧（merge/detail/wake）────────────────────────────
+  # 扩展的 skillDir() = 它自己目录的父目录 → CLI 侧的合并/明细代码与扩展侧的叫醒代码必须在**同一棵
+  # scratch 树**里破坏（$MUT/<tag>/{extension,scripts}），否则扩展找不到 scripts/team，knock 断言是假红。
+  TREE_BASE="$TMP/tree-base"
+  rm -rf "$TREE_BASE"; mkdir -p "$TREE_BASE/extension"
+  cp -a "$SKILL_DIR/scripts" "$TREE_BASE/scripts"
+  cp "$NOTIFY_EXT" "$TREE_BASE/extension/team-notify.ts"
+  flip_tree() { # <tag> → 建一棵 scratch 树并打印树里的 team-notify.ts
+    # 注意：`local a="$1" b="$MUT/$a"` 在 bash 5.3 + set -u 下会把 $a 判成 unbound（实测）—— 分开写。
+    local tag="$1"
+    local dst="$MUT/$tag"
+    rm -rf "$dst"; mkdir -p "$dst"
+    cp -a "$TREE_BASE/." "$dst/"
+    printf '%s\n' "$dst/extension/team-notify.ts"
+  }
+  flip_tree_sed() { # <tag> <树内相对路径> <sed 表达式> → 打印变异后的文件
+    local tag="$1" rel="$2" expr="$3"
+    local f="$MUT/$tag/$rel"
+    sed -i "$expr" "$f"
+    printf '%s\n' "$f"
+  }
+
+  # ⑦ 去掉键比较（任何非空键都并进尾行）→ 跨类/跨 awaiting 不再新起一行
+  M7="$(flip_tree merge-nokey)"
+  F7="$(flip_tree_sed merge-nokey scripts/lib/cmd-agents.sh 's#$(team_notify_line_key "$tail_line" 2>/dev/null || true)#$key#')"
+  flip_premise merge-nokey "$F7" '&& [ "$key" = "$key" ]; then' has
+  run_harness flip-merge-nokey merge "$BG_EXT" "$M7"
+  expect_red flip-merge-nokey "merge: a state-class change starts a new line" "$TMP/h-flip-green-notify.log"
+  expect_red flip-merge-nokey "merge: a different task or awaiting set starts a new line" "$TMP/h-flip-green-notify.log"
+
+  # ⑧ 跨类合并（键里的状态类固定成 delivered）→ 只有类变、awaiting 相同的两条不再新起一行
+  #    （用例「同类不同 awaiting」对类分量不敏感：那个用例里 awaiting 也在变，所以只钉住这一类用例）
+  M8="$(flip_tree merge-crossclass)"
+  F8="$(flip_tree_sed merge-crossclass scripts/lib/cmd-agents.sh 's#"$seat" "$class" "$t" "$nrm"#"$seat" delivered "$t" "$nrm"#')"
+  flip_premise merge-crossclass "$F8" '"$seat" delivered "$t" "$nrm"' has
+  run_harness flip-merge-crossclass merge "$BG_EXT" "$M8"
+  expect_red flip-merge-crossclass "merge: a class change with the same awaiting set starts a new line" "$TMP/h-flip-green-notify.log"
+
+  # ⑨ 取第一条的值（汇总行拿旧尾行而不是新事件）→ 最后一条的 uncommitted/tip/last 全错
+  M9="$(flip_tree merge-first)"
+  F9="$(flip_tree_sed merge-first scripts/lib/cmd-agents.sh 's#team_notify_line_merge "$newcontent"#team_notify_line_merge "$tail_line"#')"
+  flip_premise merge-first "$F9" 'team_notify_line_merge "$tail_line"' has
+  run_harness flip-merge-first merge "$BG_EXT" "$M9"
+  expect_red flip-merge-first "merge: the merged line carries the last event’s values" "$TMP/h-flip-green-notify.log"
+
+  # ⑩ 穿行重写（锚不再只认尾行，改成文件里最后一条 auto 行）→ 夹在中间的手工通知被吞掉
+  M10="$(flip_tree merge-scan)"
+  F10="$(flip_tree_sed merge-scan scripts/lib/cmd-agents.sh 's#tail_line="$(tail -n 1 "$file")"#tail_line="$(grep '\''^- .*auto'\'' "$file" | tail -n 1)"#')"
+  flip_premise merge-scan "$F10" 'grep '\''^- .*auto'\'' "$file" | tail -n 1' has
+  run_harness flip-merge-scan merge "$BG_EXT" "$M10"
+  expect_red flip-merge-scan "merge: a notice appended between two events ends the run untouched" "$TMP/h-flip-green-notify.log"
+
+  # ⑪ 删明细落盘（事件不再进 state/notify.log）→ ×N 与记录数不一致
+  M11="$(flip_tree detail-nowrite)"
+  F11="$(flip_tree_sed detail-nowrite scripts/lib/cmd-agents.sh 's#if ! team_notify_detail_append "$content" "$detail"; then#if ! true; then#')"
+  flip_premise detail-nowrite "$F11" 'if ! true; then' has
+  run_harness flip-detail-nowrite detail "$BG_EXT" "$M11"
+  expect_red flip-detail-nowrite "detail: a run’s count and its records agree" "$TMP/h-flip-green-notify.log"
+
+  # ⑫ 越界不轮转 → 轮转头/上一代不再出现，上界断言失败
+  M12="$(flip_tree detail-norotate)"
+  F12="$(flip_tree_sed detail-norotate scripts/lib/cmd-agents.sh 's#\[ "$count" -ge "$max" \]#[ 1 -eq 0 ]#')"
+  flip_premise detail-norotate "$F12" '[ 1 -eq 0 ]' has
+  run_harness flip-detail-norotate detail "$BG_EXT" "$M12"
+  expect_red flip-detail-norotate "detail: a rotated generation names where the older events went" "$TMP/h-flip-green-notify.log"
+
+  # ⑬ `--detail` 静默空输出（读了但不打印、永远退出 0）→ 缺口不再点名
+  #    ⚠ sed 的**替换串**里 `&` = 整个匹配 —— 这个破坏要写 `2>\&1`，否则替换出来的行变成
+  #    `2>team_inbox_detail "$a"`（把工作树里凭空写一个同名空文件、还改了 rc 语义），P251 实测过。
+  M13="$(flip_tree detail-silent)"
+  F13="$(flip_tree_sed detail-silent scripts/lib/cmd-status.sh 's#team_inbox_detail "$a" || rc=1#team_inbox_detail "$a" >/dev/null 2>\&1 || true#')"
+  flip_premise detail-silent "$F13" 'team_inbox_detail "$a" >/dev/null 2>&1 || true' has
+  run_harness flip-detail-silent detail "$BG_EXT" "$M13"
+  expect_red flip-detail-silent "detail: a missing record is named, not silent" "$TMP/h-flip-green-notify.log"
+
+  # ⑭ `--detail` 会 ack（读面变成写面）→ 未读数被默默清掉
+  M14="$(flip_tree detail-acks)"
+  F14="$(flip_tree_sed detail-acks scripts/lib/cmd-status.sh 's#team_inbox_detail "$a" || rc=1#team_inbox_ack_set "$a" "$(team_inbox_total "$a")"; team_inbox_detail "$a" || rc=1#')"
+  flip_premise detail-acks "$F14" 'team_inbox_ack_set "$a" "$(team_inbox_total "$a")"; team_inbox_detail' has
+  run_harness flip-detail-acks detail "$BG_EXT" "$M14"
+  expect_red flip-detail-acks "detail: detail reading does not acknowledge" "$TMP/h-flip-green-notify.log"
+
+  # ⑮ 每 settle 都入队 knock（扩展既有 run 也叫醒）→ 计数抖动不再安静
+  #    钉住它的是「each new line wakes exactly once」（k 在两次合并后必须仍是 1），不是后面的 churn 用例
+  #    —— harness 在首个失败用例就退出，后面的用例不会出现。
+  M15="$(flip_tree wake-persettle)"
+  F15="$(flip_tree_sed wake-persettle extension/team-notify.ts 's#if (writeState !== '\''new'\'') {#if (false) {#')"
+  flip_premise wake-persettle "$F15" 'if (false) {' has
+  run_harness flip-wake-persettle wake "$BG_EXT" "$M15"
+  expect_red flip-wake-persettle "wake: a merged settle does not wake again" "$TMP/h-flip-green-notify.log"
+
+  # ⑯ 用摘要文本当 knock 去重键 → 文本逐字相同的两条不同行互吞
+  M16="$(flip_tree wake-summarykey)"
+  F16="$(flip_tree_sed wake-summarykey extension/team-notify.ts 's#const lineIdentity = .*#const lineIdentity = `line|${agent}|${summary}`#')"
+  flip_premise wake-summarykey "$F16" 'const lineIdentity = `line|${agent}|${summary}`' has
+  run_harness flip-wake-summarykey wake "$BG_EXT" "$M16"
+  expect_red flip-wake-summarykey "wake: two text-identical lines are not conflated" "$TMP/h-flip-green-notify.log"
+
+  # ⑰ 写失败仍叫醒（catch 里伪装成成功）→ 敲门声称有一行、行却不在
+  M17="$(flip_tree wake-writefail)"
+  F17="$(flip_tree_sed wake-writefail extension/team-notify.ts 's#^      writeOut = ..$#      writeOut = "state=new\\nfirst=-\\nkey=-\\n"#')"
+  flip_premise wake-writefail "$F17" 'writeOut = "state=new\nfirst=-\nkey=-\n"' has
+  run_harness flip-wake-writefail wake "$BG_EXT" "$M17"
+  expect_red flip-wake-writefail "wake: a failed inbox write does not wake" "$TMP/h-flip-green-notify.log"
+
+  # ⑱ 把「挂起也敲门」加回去（去掉挂起守卫）→ 挂起不再安静（用户裁定 2026-10-14）
+  #    注意：sed 替换串里的 `&&` 要写成 `\&\&`（裸 `&` 会展开成整个匹配，实测踩过）。
+  M18="$(flip_tree wake-suspended)"
+  F18="$(flip_tree_sed wake-suspended extension/team-notify.ts 's#if (suspended) {#if (suspended \&\& false) {#')"
+  flip_premise wake-suspended "$F18" 'if (suspended && false) {' has
+  run_harness flip-wake-suspended wake "$BG_EXT" "$M18"
+  expect_red flip-wake-suspended "wake: a suspended line never wakes" "$TMP/h-flip-green-notify.log"
+
   # 还原后绿：pristine 树重跑一遍（上面所有破坏都只写 scratch 副本）
   section "flip · 还原后绿（pristine 树重跑）"
   run_harness flip-restored wording
   report_group flip-restored
+  # P251：写入面也要有一个**破坏轮之后**的 pristine 重跑 —— 只有这样才能说「破坏 → 红 → 还原 → 绿」
+  # 四步完整（前面的 flip-green-notify 是破坏**前**的基线，不能替它）。
+  run_harness flip-restored-notify merge,detail,wake
+  report_group flip-restored-notify
+  # 破坏只写 scratch 副本：真实工作树在整轮破坏之后必须仍然干净（误伤源码会在这里现形）。
+  FLIP_REPO_ROOT="$(git -C "$SKILL_DIR/../.." rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -z "$FLIP_REPO_ROOT" ]; then
+    note "flip · 真实工作树检查跳过：$SKILL_DIR 不在 git 工作树里（安装形态）"
+  else
+    FLIP_TREE_DIRTY="$(git -C "$FLIP_REPO_ROOT" status --porcelain --untracked-files=all 2>/dev/null || echo '?')"
+    if [ -z "$FLIP_TREE_DIRTY" ]; then
+      ok "flip · 破坏轮之后真实工作树仍然干净（$FLIP_REPO_ROOT：git status --porcelain -uall 为空）"
+    else
+      bad "flip · 破坏轮把真实工作树弄脏了：$(printf '%s' "$FLIP_TREE_DIRTY" | head -3 | tr '\n' ' ')"
+    fi
+  fi
 fi
 
 # ── 反向守卫：真项目 state/inbox 未动 ────────────────────────────────────────────────────

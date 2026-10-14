@@ -6991,13 +6991,19 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
     if (!lines[0].includes('ALLDONE feature implemented')) { console.error('FAIL: 修订标识吃掉了摘要'); process.exit(31) }
     // F2: the same HEAD under core.abbrev 7 and 12 must stamp a byte-identical 12-wide tip.
     const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text }] } }] } })
+    // turn-notice-merge：同类通知会并入末尾的 run —— 每条用例前插一条手工通知把 run 断开，两条各自
+    // 盖自己的 tip；否则后一条只是扩展同一行，core.abbrev 的对照就消失了。
+    const manualBreak = (tag) => writeFileSync(inbox, `- ${new Date().toISOString()} [manual] agent:dev · ${tag}\n`, { flag: 'a' })
     execSync(`git -C "${wt}" config core.abbrev 7`)
+    manualBreak('P160 separator 7')
     await handler({}, ctxN('P160 abbrev 7'))
+    const line7 = readFileSync(inbox, 'utf8').trim().split('\n').at(-1) ?? ''
     execSync(`git -C "${wt}" config core.abbrev 12`)
+    manualBreak('P160 separator 12')
     await handler({}, ctxN('P160 abbrev 12'))
     execSync(`git -C "${wt}" config --unset core.abbrev`)
-    const all = readFileSync(inbox, 'utf8').trim().split('\n')
-    const t7 = tipOf(all[all.length - 2]), t12 = tipOf(all[all.length - 1])
+    const line12 = readFileSync(inbox, 'utf8').trim().split('\n').at(-1) ?? ''
+    const t7 = tipOf(line7), t12 = tipOf(line12)
     if (t7 !== t12 || t7 !== tip12) {
       console.error(`FAIL: P160 F2 core.abbrev 改变了 tip 拼写（${t7} vs ${t12}，期望 ${tip12}）`); process.exit(34)
     }
@@ -7024,18 +7030,25 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
     console.log(`note: 工作树在 ${br}（非任务分支），P139 修订标识断言按设计不适用`)
   }
 }
-// M6.3 F17：去重键必须能区分「开头 60 字符相同、后半不同」的简报（旧键只取前缀 → 会吞掉）
+// M6.3 F17 + turn-notice-merge：同 run 里「开头相同、后半不同」的三条简报不能被去重吞掉 ——
+// 新合同把同 run 合并成**一行 ×3**，但证据不靠行数：每条原始事件都进 state/notify.log，
+// 而字节相同的重复条仍被去重窗口抑制（不进明细、不推计数）。旧键只取前缀的实现在这里变红。
 {
   rmSync(inbox, { force: true })
   rmSync(join(root, '.pi/team/state/notify-dedup'), { force: true })
+  rmSync(join(root, '.pi/team/state/notify.log'), { force: true })
   const prefix = 'All gates are green. I delivered the parser fix; the remaining work on this branch is'
   const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text }] } }] } })
+  const recs = () => existsSync(join(root, '.pi/team/state/notify.log'))
+    ? readFileSync(join(root, '.pi/team/state/notify.log'), 'utf8').split('\n').filter(l => l.startsWith('- ')).length : 0
   for (const tail of [' the retry path.', ' the cache warm-up.', ' error mapping.']) await handler({}, ctxN(prefix + tail))
-  const n = readFileSync(inbox, 'utf8').trim().split('\n').length
-  if (n !== 3) { console.error(`FAIL: F17 三条不同简报被去重吞掉（期望 3 行，实际 ${n}）`); process.exit(20) }
+  const ls = readFileSync(inbox, 'utf8').trim().split('\n')
+  if (ls.length !== 1 || !ls[0].includes('×3')) { console.error(`FAIL: F17 同 run 的三条简报应当合成一行 ×3（实际 ${ls.length} 行：${ls[0] ?? ''}）`); process.exit(20) }
+  if (recs() !== 3) { console.error(`FAIL: F17 三条简报的原始记录没有全进明细（${recs()} 条）`); process.exit(22) }
   await handler({}, ctxN(prefix + ' the retry path.'))     // 字节相同的一条：仍然要抑制
-  const n2 = readFileSync(inbox, 'utf8').trim().split('\n').length
-  if (n2 !== 3) { console.error(`FAIL: F17 重复的同一条没有被去重（${n2} 行）`); process.exit(21) }
+  const ls2 = readFileSync(inbox, 'utf8').trim().split('\n')
+  if (ls2.length !== 1 || !ls2[0].includes('×3')) { console.error(`FAIL: F17 重复的同一条没有被去重（${ls2.length} 行）`); process.exit(21) }
+  if (recs() !== 3) { console.error(`FAIL: F17 被去重的重复条进了明细（${recs()} 条）`); process.exit(23) }
 }
 // M40：继承来的 TEAM_ROOT 指到**工作树**（agent 工作树里有 config.sh 副本）也不许改变账本落点：回合通知
 // 必须照旧写主工作树的收件箱。旧实现 env 优先 → cwd 被判成「不在 worktrees 之下」→ 整个通知静默不发
@@ -8189,7 +8202,10 @@ else
   : > "$OB_SUBMIT"
   tmux send-keys -t "$SESSION:pm" -l 'PM 又开始写草稿'; sleep 0.4
   printf '%s\n' '- 2026-01-01T00:00:00Z [manual] agent:dev · ob-nudge-new-work' >> "$REPO/docs/team/inbox/pm.md"
-  ob_live env TEAM_PM_BIN="$TMP/fake-pm-bin" TEAM_WATCH_NUDGE_GAP=0 $TEAM watch --once >"$TMP/ob-h-watch2.log" 2>&1 || true
+  # P251：旋钮名是 TEAM_PULSE_NUDGE_GAP（P8 改名 / P174 起提醒按类别集合）—— 旧的 TEAM_WATCH_NUDGE_GAP
+  # 已经退役、没有任何代码读它，所以这一拍实际上被 gap (=900s) 与「同一类别集合」双重重掉，
+  # 「脏框 → 入队」永远不会被走到（在 main 的干净克隆上同样红：本轮修复前的证据见报告）。
+  ob_live env TEAM_PM_BIN="$TMP/fake-pm-bin" TEAM_PULSE_NUDGE_GAP=0 $TEAM watch --once >"$TMP/ob-h-watch2.log" 2>&1 || true
   assert_has "$TMP/ob-h-watch2.log" "已入队" "12b-h ⑥ 脏 PM 框：叫醒语入队而不是粘字"
   assert_eq "12b-h ⑥ 脏 PM 框：nudge 没有提交" "$(ob_submits)" "0"
   assert_has "$REPO/.pi/team/state/nudges.log" "未读通知" "12b-h ⑥ nudges.log 仍然照写（durable 记录不丢：队列只延后投递，不替代记录）"
@@ -8495,7 +8511,7 @@ OBEXT
   fi
   assert_eq "12b-i 扩展自己不敲键盘（零 send-keys / paste-buffer）" "$(grep -c 'send-keys\|paste-buffer' "$TMP/ob-ext-tmux.log" || true)" "0"
   assert_eq "12b-i 扩展把敲门入队一条" "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' 2>/dev/null | wc -l | tr -d ' ')" "1"
-  assert_has "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' | head -1)" "dedup: dev|[auto]|" "12b-i 扩展把自己的去重键带进条目"
+  assert_has "$(find "$REPO/.pi/team/state/outbox" -maxdepth 1 -name '*pm*.msg' | head -1)" "dedup: line|dev|delivered|" "12b-i 扩展把敲门带的行身份（席位 + 合并键 + 首事件时间）带进条目"
   # P139 R2：通知要指认修订 —— 扩展的 knock **载荷**（不只是收件箱行）也要带 task/tip。
   # 工作树在任务分支上才盖（非任务分支按设计不盖，那就如实说）。
   P139_EXT_BR="$(git -C "$REPO/.worktrees/dev" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"

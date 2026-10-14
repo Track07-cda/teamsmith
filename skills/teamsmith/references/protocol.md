@@ -66,8 +66,14 @@ Guards and limitations:
   be concatenated with what the human is typing. On a dirty PM box the entry waits in `state/outbox/`; the extension
   never falls back to `send-keys`, and a failed enqueue is logged while the inbox line stays.
 - The inbox is transient state (gitignored); the durable record is still the report + verification + decision log.
-- The same briefing is sent once per `TEAM_NOTIFY_DEDUP_SEC` seconds: Pi may settle several times inside one stretch
-  of work.
+- **Settles inside one stretch of work become one line, not one line each**: consecutive notices with the same
+  merge key (seat, task, state class, `awaiting=` set) fold into the line at the end of the inbox file, which then
+  carries `×N first=<ISO> last=<ISO>` and the **field values of the last event** (`tip=`, `branch=`, `uncommitted=`).
+  The line is a **window summary**, not the seat's current state: `last=` names the event whose revision it
+  describes, and the run's earlier events are read from the detail file with `team inbox <agent> --detail` (raw
+  records in `state/notify.log`, bounded by `TEAM_NOTIFY_DETAIL_MAX` and rotated once). A different key, a manual
+  notice in between, or a record write that failed starts a new line; a byte-identical briefing inside
+  `TEAM_NOTIFY_DEDUP_SEC` is still suppressed outright.
 - **A notice names the revision it describes** (R2/P139; width and branch proof fixed by P160): the durable inbox
   line and the knock payload carry `task=<ID> tip=<12-hex>` — the **first twelve hex characters of the branch tip,
   truncated by the sender itself** (`git rev-parse HEAD | cut -c1-12`; the extension's `TIP_WIDTH`), never a Git

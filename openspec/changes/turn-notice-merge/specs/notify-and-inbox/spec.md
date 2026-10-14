@@ -32,13 +32,18 @@ The knock goes through the delivery guard: the knock text is typed only while th
 it is held in the same outbox; the inbox line is written either way, and the knock text MUST NOT be appended to a
 draft.
 
-A knock SHALL announce a line, not a settle: exactly one knock is enqueued when a settle writes a new line, and a
-settle that extends an existing run enqueues nothing and types nothing — count churn inside a run stays visible in
-the line and its raw records but MUST NOT wake the PM. A state-class change is a key change and therefore always
-starts a new line and wakes. The knock's dedup identity SHALL be the identity of the line it announces (seat, merge
-key, first event time), so two distinct lines with byte-identical text are not conflated and a re-notified run
-cannot knock a second time. A settle whose durable inbox write failed MUST NOT enqueue a knock that asserts the line
-exists — the same rule `notify-and-inbox#A manual notification is attributed to its sender, not its recipient`
+A knock SHALL announce an **actionable** line, not a settle: exactly one knock is enqueued when a settle writes a
+new line whose tag is `[auto]` or `[auto·interrupted]`, and a settle that extends an existing run enqueues nothing
+and types nothing — count churn inside a run stays visible in the line and its raw records but MUST NOT wake the PM.
+A state-class change is a key change and therefore always starts a new line, but a line tagged `[auto·suspended]`
+SHALL NOT enqueue anything: a suspended turn is a designed state (the seat started long-running jobs and ended its
+turn correctly to wait for their wake-up), so it is recorded — inbox line, raw record, panel and digest — without
+waking the PM, and the failure surface for a seat that dies while suspended (a job that never completes, a lost
+completion wake-up) belongs to the patrol's unfinished-task check rather than to this notice. The knock's dedup
+identity SHALL be the identity of the line it announces (seat, merge key, first event time), so two distinct lines
+with byte-identical text are not conflated and a re-notified run cannot knock a second time. A settle whose durable
+inbox write failed MUST NOT enqueue a knock that asserts the line exists — the same rule
+`notify-and-inbox#A manual notification is attributed to its sender, not its recipient`
 states for a failed manual write.
 
 The notification SHALL name the revision it describes whenever the sender has one: the durable inbox line and the
@@ -158,8 +163,12 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 - **GIVEN** a worktree session whose state directory holds one job record whose `(pid, start-time)` identity
   verifies live, and a completed turn ending with uncommitted files
 - **WHEN** the turn-end notification is delivered
-- **THEN** the inbox line and the knock payload carry `[auto·suspended]` and an `awaiting=<id>` field naming that
-  job, the `uncommitted=<n>` field is present, and the dirty-tree warning flag does not appear
+- **THEN** the inbox line carries `[auto·suspended]` and an `awaiting=<id>` field naming that job, the
+  `uncommitted=<n>` field is present, the dirty-tree warning flag does not appear, and `state/outbox/` gains no entry
+  for the PM window — the turn is recorded and the PM is not woken
+- **AND** the same holds when the suspended line extends a run (`×N` grows and its records land in the detail file):
+  a run that never became actionable wakes nobody, and the wake-up still happens for the delivered or interrupted
+  line the seat writes after it
 
 #### Scenario: A dead or reused pid does not suspend
 
@@ -239,8 +248,8 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 - **GIVEN** a suspended notification for a run, then a delivered notification for the same task with no jobs running,
   then a suspended notification carrying the same `awaiting` set as the first
 - **WHEN** the three settles run
-- **THEN** the inbox holds three lines — the two suspensions are not merged across the delivered line — and each
-  notification after the first added exactly one knock entry
+- **THEN** the inbox holds three lines — the two suspensions are not merged across the delivered line — and exactly
+  one knock entry was added for the PM window: the delivered line's, since neither suspended line knocks
 
 #### Scenario: A different task or awaiting set starts a new line
 
@@ -262,17 +271,26 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 
 #### Scenario: Count churn does not wake
 
-- **GIVEN** a suspended run whose first notification already knocked
+- **GIVEN** a delivered run whose first notification already knocked
 - **WHEN** three more same-key settles extend the line
 - **THEN** the line carries `×4`, `state/outbox/` gains no new entry from those settles, and no text was typed into
   the PM window — an implementation enqueueing one knock per settle is caught here
 
+#### Scenario: A suspended run records without waking
+
+- **GIVEN** a suspended notification for a run with no knock entry enqueued for it
+- **WHEN** two more same-key suspended settles extend that line
+- **THEN** the line carries `×3` with its three records in the detail file and `state/outbox/` holds no entry for any
+  of the three settles — the run is recorded and the PM was never woken
+- **AND** when the seat's next turn ends delivered or interrupted, that new line enqueues exactly one knock entry
+
 #### Scenario: Each new line wakes once
 
 - **GIVEN** an inbox with no unacknowledged lines for the seat
-- **WHEN** a run starts and later changes state class
-- **THEN** the PM's outbox gains exactly one knock entry for the first line and exactly one for the second, and a
-  settle inside either line's dedup window enqueues nothing
+- **WHEN** a delivered run starts, the seat's next turn ends suspended, and the one after it ends interrupted
+- **THEN** the PM's outbox gains exactly one knock entry for the delivered line and exactly one for the interrupted
+  line — the suspended line in between records without enqueueing anything — and a settle inside any line's dedup
+  window enqueues nothing
 
 #### Scenario: A notice appended between two events ends the run without touching the notice
 
