@@ -403,8 +403,8 @@
 | P246 | Routing checklist: tick S2 (6) | dev2 | - | - | done |
 | V30 | P244: independent verification (squash-aware merge check) | verify | - | - | done |
 | V31 | P231: independent verification (peer-name scrub + ledger scan coverage) | verify | - | - | done |
-| P247 | Release check: ancestor-aware tag selection + the post-routing init args | dev | - | - | wip |
-| V32 | Release check: independent verification (tag selection, init route) | dev-bob | - | - | wip |
+| P247 | Release check: ancestor-aware tag selection + the post-routing init args | dev | - | - | done |
+| V32 | Release check: independent verification (tag selection, init route) | dev-bob | - | - | done |
 
 ## 当前里程碑
 
