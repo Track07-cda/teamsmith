@@ -1,0 +1,1 @@
+- 2026-10-14T07:09:00Z · `team board set P256 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/startup-self-heal-proposal.md（判定 ACCEPTED）

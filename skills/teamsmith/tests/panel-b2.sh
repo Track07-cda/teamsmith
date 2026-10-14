@@ -368,6 +368,24 @@ scenario_keys() {
   assert_eq "B2 cursor_x=5（托盘+提示+Z）" "$(cursor_x)" "5"
   assert_eq "B2 没按过 Enter（未提交）" "$(submits)" "0"
 
+  # ①半 ctrl+u（V33 第一轮 OBS-1 的缺测项）：清空到行首 → **持久化为空草稿**，重开/重启都不带回。
+  # 合同：「a draft the human deleted with the compose line's own keys is not resurrected」。
+  keys Escape; sleep 0.4
+  printf '' > "$(draft_file)"
+  keys m; sleep 0.9
+  type_text 'half a thought'; sleep 0.5
+  assert_eq "B2 ctrl+u：清空前正文已落盘" "$(draft)" "half a thought"
+  keys C-u; sleep 0.8
+  assert_eq "B2 ctrl+u：草稿文件 0 字节（清空是持久的）" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
+  cap_to ctrl-u
+  assert_not_has "$tmp/keys/ctrl-u.txt" 'half a thought' "B2 ctrl+u：帧里不再出现被删掉的正文"
+  keys Escape; sleep 0.4
+  start_panel
+  keys m; sleep 0.9
+  cap_to ctrl-u-reopen
+  assert_not_has "$tmp/keys/ctrl-u-reopen.txt" 'half a thought' "B2 ctrl+u：重开（重启后 m）不带回已删正文"
+  assert_eq "B2 ctrl+u：重开后草稿文件仍是 0 字节" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
+
   # ② 逻辑行边界：45 字符行 + second，↑ ctrl+a ctrl+k → \nsecond
   keys Escape; sleep 0.4
   resize_pane 40 30
@@ -1147,12 +1165,97 @@ scenario_readonly() {
   assert_eq "3.2 文档/收件箱零改动" "$(printf '%s\n' "$after" | grep -c '^docs/team')" "$(printf '%s\n' "$before" | grep -c '^docs/team')"
 }
 
+# ---------------------------------------------------------------- 2.7 the draft settle (P249)
+scenario_settle() {
+  section "2.7 · 草稿结算：成功一起清空、error 原地保留、写盘失败不假装清掉"
+  server_up settle
+  local before after
+
+  # ① delivered：输入行与 state/draft.md 一起清空；重启后 m 打开空草稿（无幽灵草稿）
+  start_pm '' ''
+  start_panel
+  keys m; sleep 0.6
+  type_text 'half a thought'; sleep 0.4
+  assert_eq "2.7 delivered 发送前：文件里有原文" "$(draft)" "half a thought"
+  keys Enter; sleep 3
+  cap_to delivered
+  assert_has "$tmp/settle/delivered.txt" 'delivered' "2.7 delivered 回执"
+  assert_eq "2.7 delivered：state/draft.md 0 字节" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
+  start_panel
+  keys m; sleep 0.6
+  cap_to delivered-reopen
+  assert_not_has "$tmp/settle/delivered-reopen.txt" 'half a thought' "2.7 delivered：重启后 m 不带回已发正文"
+
+  # ② queued（PM 框忙）：一样一起清空，PM 的草稿逐字节不变
+  tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
+  start_pm '半句草稿 half a sentence' ''
+  start_panel
+  keys m; sleep 0.6
+  type_text 'queued thought'; sleep 0.4
+  before="$(pm_cap)"
+  keys Enter; sleep 3
+  cap_to queued
+  assert_has "$tmp/settle/queued.txt" 'queued' "2.7 queued 回执"
+  assert_eq "2.7 queued：state/draft.md 0 字节" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
+  after="$(pm_cap)"
+  assert_eq "2.7 queued：PM 的草稿逐字节不变" "$before" "$after"
+
+  # ③ held（unconfirmed，静态页脚）：清空（裁定 D2：结算不是丢失，durable 副本在 outbox/held/）
+  tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
+  rm -rf "$ROOT/.pi/team/state/outbox"
+  start_pm '' 'FAKE_TUI_EAT_ENTER=1 FAKE_TUI_STATIC_FOOTER=1'
+  start_panel
+  keys m; sleep 0.6
+  type_text 'held candidate'; sleep 0.4
+  keys Enter; sleep 9
+  cap_to held
+  assert_has "$tmp/settle/held.txt" 'held' "2.7 held 回执"
+  assert_eq "2.7 held：state/draft.md 0 字节（清空是结算）" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
+  assert_has "$ROOT/.pi/team/state/outbox/HOLDING.log" 'reason=unconfirmed' "2.7 held：副本在 held/ 且记下原因"
+
+  # ④ error（没有投递目标）：文字保留在输入行与文件里，下一次 Enter 从原文重试（compose 不关）
+  tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
+  start_panel
+  keys m; sleep 0.6
+  type_text 'kept words'; sleep 0.4
+  keys Enter; sleep 3
+  cap_to error
+  assert_has "$tmp/settle/error.txt" '未确认' "2.7 error 回执（投递未确认）"
+  assert_has "$tmp/settle/error.txt" 'kept words' "2.7 error：输入行仍留着原文"
+  assert_eq "2.7 error：state/draft.md 保留原文" "$(draft)" "kept words"
+  keys Enter; sleep 3
+  cap_to error-retry
+  assert_has "$tmp/settle/error-retry.txt" 'kept words' "2.7 error：下一次 Enter 从保留的原文重试"
+
+  # ⑤ 写盘失败（settle 已成立但清空写不进去）：不假装清掉——文字与文件都还在、回执点名文件
+  # （先把 ④ 留在闸里的草稿拿掉，让这一段从干净的一页开始）
+  tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
+  rm -f "$(draft_file)"
+  start_pm '' ''
+  start_panel
+  keys m; sleep 0.6
+  type_text 'ghost candidate'; sleep 0.4
+  chmod 444 "$(draft_file)"
+  keys Enter; sleep 3
+  cap_to readonly
+  assert_has "$tmp/settle/readonly.txt" 'draft.md' "2.7 写盘失败：回执点名 state/draft.md"
+  assert_has "$tmp/settle/readonly.txt" 'ghost candidate' "2.7 写盘失败：输入行仍留着原文（不假装清掉）"
+  assert_eq "2.7 写盘失败：文件仍是原文（内存=磁盘）" "$(draft)" "ghost candidate"
+  chmod 644 "$(draft_file)"
+  keys Enter; sleep 3
+  cap_to readonly-retry
+  assert_eq "2.7 清空失败后恢复可写重试：文件清空" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
+  assert_not_has "$tmp/settle/readonly-retry.txt" 'ghost candidate' "2.7 重试成功后输入行也空了"
+}
+
 # ---------------------------------------------------------------- runner
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0 2>/dev/null || exit 0
 fi
-ALL="cursor keys multiline clipboard cjk draft editor receipt pause paste actions readonly"
+ALL="cursor keys multiline clipboard cjk draft editor receipt settle pause paste actions readonly"
 selected="${*:-$ALL}"
+# P249: `--all` is the explicit whole-suite selector the task's acceptance commands use.
+[ "$selected" = "--all" ] && selected="$ALL"
 mkdir -p "$tmp"
 rc=0
 for name in $selected; do
@@ -1166,11 +1269,12 @@ for name in $selected; do
     draft) scenario_draft ;;
     editor) scenario_editor ;;
     receipt) scenario_receipt ;;
+    settle) scenario_settle ;;
     pause) scenario_pause ;;
     paste) scenario_paste ;;
     actions) scenario_actions ;;
     readonly) scenario_readonly ;;
-    *) printf 'panel-b2: unknown scenario %s（known: %s）\n' "$name" "$ALL" >&2; rs=3 ;;
+    *) printf 'panel-b2: unknown scenario %s（known: %s）\n' "$name" "$ALL" >&2; rc=3 ;;
   esac || rc=$?
 done
 

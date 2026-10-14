@@ -12394,25 +12394,66 @@ if grep -aqi 'pageup\|pagedown' "$TMP/p28hd-targets-p2.json"; then
 else
   ok "28-h2 pageUp/pageDown 不在目标表里（第二条键盘专用例外）"
 fi
-# 降级（60x10）：块塌陷成一行 → 没有行、没有行键、没有行目标
+# 降级（60x10）：看板塌成摘要行；预览块的行仍可开（P249 的新语义：可开就不是死项）——登记的行
+# 目标必须都属于预览块，且至少有一行能开；再把预览块也清空，证明没有行时一个行目标都不留。
 "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" --state-dir "$TMP/p28-state" \
   --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 60 --height 10 --page 2 \
   >"$TMP/p28hd-degraded.json" 2>/dev/null
-P28HD_DEG="$(p28_kinds "$TMP/p28hd-degraded.json")"
-case ",$P28HD_DEG," in
-  *",focus,"*|*",open-focused,"*) bad "28-h2 60x10 降级的工作页还有行目标（$P28HD_DEG）" ;;
-  *) ok "28-h2 60x10 降级的工作页没有行目标（$P28HD_DEG）" ;;
+P28HD_DEG_OK="$(python3 - "$TMP/p28hd-degraded.json" <<'PYHD'
+import json, sys
+targets = json.load(open(sys.argv[1]))
+preview = {"changes", "specs", "decisions"}
+# 只数**行目标**（focus 总是带 id+nth）；键位带上的 open-focused chip 不是行。
+rows = [t for t in targets if t["action"]["kind"] == "focus"]
+lanes = {t["action"].get("lane") for t in rows}
+problems = []
+if not rows:
+    problems.append("降级页一行可开的行都没有")
+if not (lanes & preview):
+    problems.append(f"降级看板把预览块的行丢了：{sorted(lanes)}")
+print("ok" if not problems else "；".join(problems))
+PYHD
+)"
+assert_eq "28-h2 60x10 降级的工作页：登记的行目标都是可开的预览行（无死项）" "$P28HD_DEG_OK" "ok"
+B3_STUB_PREVIEWS=empty "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" --state-dir "$TMP/p28-state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 60 --height 10 --page 2 \
+  >"$TMP/p28hd-degraded-empty.json" 2>/dev/null
+P28HD_DEG_EMPTY="$(p28_kinds "$TMP/p28hd-degraded-empty.json")"
+case ",$P28HD_DEG_EMPTY," in
+  *",focus,"*|*",open-focused,"*) bad "28-h2 60x10 降级且预览块清空的工作页还有行目标（$P28HD_DEG_EMPTY）" ;;
+  *) ok "28-h2 60x10 降级且预览块清空的工作页没有行目标（无死项）" ;;
 esac
-# 空看板：没有行、没有行目标（无死项）
+# 空看板：看板行清空、预览块也清空 → 没有行、没有行目标（无死项）
 printf '{"rows": [], "counts": {}, "total": 0, "deliveries": []}\n' >"$TMP/p28hd-empty.json"
-B3_STUB_BOARD_FILE="$TMP/p28hd-empty.json" "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" \
+B3_STUB_BOARD_FILE="$TMP/p28hd-empty.json" B3_STUB_PREVIEWS=empty "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" \
   --state-dir "$TMP/p28-state" --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark \
   --width 120 --height 32 --page 2 >"$TMP/p28hd-empty-targets.json" 2>/dev/null
 P28HD_EMPTY="$(p28_kinds "$TMP/p28hd-empty-targets.json")"
 case ",$P28HD_EMPTY," in
-  *",focus,"*|*",open-focused,"*) bad "28-h2 空看板的工作页还有行目标（$P28HD_EMPTY）" ;;
-  *) ok "28-h2 空看板的工作页没有行目标（$P28HD_EMPTY）" ;;
+  *",focus,"*|*",open-focused,"*) bad "28-h2 空看板且预览块清空的工作页还有行目标（$P28HD_EMPTY）" ;;
+  *) ok "28-h2 空看板且预览块清空的工作页没有行目标（无死项）" ;;
 esac
+# 空看板 + 规格块画出一行（P249 的第三个夹具）：预览行本身是可开的活行，不是死项
+B3_STUB_BOARD_FILE="$TMP/p28hd-empty.json" "$JS_RUNNER" "$P28_PANEL" --snapshot --targets --root "$TMP" \
+  --state-dir "$TMP/p28-state" --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark \
+  --width 120 --height 32 --page 2 >"$TMP/p28hd-empty-preview-targets.json" 2>/dev/null
+P28HD_EMPTY_PREVIEW="$(python3 - "$TMP/p28hd-empty-preview-targets.json" <<'PYHE'
+import json, sys
+targets = json.load(open(sys.argv[1]))
+# 只数**行目标**（focus 总是带 id+nth）；键位带上的 open-focused chip 不是行。
+rows = [t for t in targets if t["action"]["kind"] == "focus"]
+lanes = {t["action"].get("lane") for t in rows}
+problems = []
+if not rows:
+    problems.append("空看板 + 有预览行时一行目标都没有（活行被丢了）")
+if not lanes <= {"changes", "specs", "decisions"}:
+    problems.append(f"空看板时出现了非预览的行目标：{sorted(lanes)}")
+if "specs" not in lanes:
+    problems.append(f"规格块的行没有登记目标：{sorted(lanes)}")
+print("ok" if not problems else "；".join(problems))
+PYHE
+)"
+assert_eq "28-h2 空看板 + 预览行：行目标都是可开的预览行（空看板不是丢掉活行的理由）" "$P28HD_EMPTY_PREVIEW" "ok"
 
 
 # ---------------------------------------------------------------- 29. 派单模型解析：映射管新选择，已提交的记录管续跑（M14）
@@ -12479,6 +12520,479 @@ P28I_OK_RC=$?
 P28I_OK_FILE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["file"])' "$TMP/p28i-ok.json" 2>/dev/null)"
 assert_eq "28-i 读者：合法的 --file 退出 0" "$P28I_OK_RC" "0"
 assert_eq "28-i 读者：合法的 --file 服务的就是那个文件" "$P28I_OK_FILE" "docs/team/reviews/P1-done.md"
+
+# ---- 28-i2 预览 source（change panel-preview-and-compose）：spec/change/decision 三类发现集、拒绝集、
+# 决策切片、上界与消毒、软链拒绝、机器出口与只读扫描。夹具长在 §27 的沙盒仓库里（不会碰真账本）。
+P28I2_SPEC="$P27R/openspec/specs/demo"
+P28I2_CH="$P27R/openspec/changes/demo"
+P28I2_CH2="$P27R/openspec/changes/demo2"
+P28I2_OTHER="$P27R/openspec/changes/other"
+P28I2_ARCH="$P27R/openspec/changes/archive/oldspec"
+P28I2_SYM="$P27R/openspec/changes/demo-sym"
+mkdir -p "$P28I2_SPEC" "$P28I2_CH" "$P28I2_CH2" "$P28I2_OTHER" "$P28I2_ARCH" "$P28I2_SYM"
+printf '# demo spec\n\n### Requirement: One\n\nbody\n\n### Requirement: Two\n\nbody\n' > "$P28I2_SPEC/spec.md"
+printf '# 诱饵 notes\n' > "$P28I2_SPEC/notes.md"
+printf '# demo proposal\n' > "$P28I2_CH/proposal.md"
+printf '# demo design\n' > "$P28I2_CH/design.md"
+printf '# demo tasks\n' > "$P28I2_CH/tasks.md"
+printf '# partial proposal\n' > "$P28I2_CH2/proposal.md"
+printf '# partial tasks\n' > "$P28I2_CH2/tasks.md"
+printf '# other proposal\n' > "$P28I2_OTHER/proposal.md"
+printf '# archived proposal\n' > "$P28I2_ARCH/proposal.md"
+printf '# 软链目标正文（绝不能被读穿）\n' > "$TMP/p28i2-outside.md"
+ln -sfn "$TMP/p28i2-outside.md" "$P28I2_SYM/proposal.md"
+printf '# sym design\n' > "$P28I2_SYM/design.md"
+printf '# sym tasks\n' > "$P28I2_SYM/tasks.md"
+cat > "$P27R/docs/team/DECISIONS.md" <<'P28I2DEC'
+# DECISIONS
+
+## D6 · older
+
+old body
+
+## D7 · the wanted one
+
+D7 body
+
+### D7 补记
+
+deeper addendum
+
+## D8 · next
+
+D8 body
+P28I2DEC
+P28I2_TEAM="$SKILL_DIR/scripts/team"
+P28I2_READ() { p27 bash "$P28I2_TEAM" __panel-data --block detail "$@"; }
+
+# 发现集与顺序：spec 一个 tab；change 三个按序；缺的 artifact 不补；不跨 change、不进 archive
+P28I2_READ --source spec --id demo >"$TMP/p28i2-spec.json" 2>/dev/null; P28I2_SPEC_RC=$?
+P28I2_CHK="$(python3 - "$TMP/p28i2-spec.json" <<'PYS'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+problems = []
+if d["count"] != 1 or [f["tab"] for f in d["files"]] != ["spec"]:
+    problems.append(f"spec 发现集不对：{d['count']} / {[f['tab'] for f in d['files']]}")
+if d["file"] != "openspec/specs/demo/spec.md" or "Requirement: One" not in d["text"]:
+    problems.append(f"spec 服务的文件不对：{d['file']}")
+if any("notes.md" in f["path"] for f in d["files"]):
+    problems.append("spec 的诱饵 notes.md 进了发现集")
+print("ok" if not problems else "；".join(problems))
+PYS
+)"
+assert_eq "28-i2 spec：退出 0" "$P28I2_SPEC_RC" "0"
+assert_eq "28-i2 spec：唯一文件 + 只服务 spec.md（notes.md 不入发现集）" "$P28I2_CHK" "ok"
+P28I2_READ --source change --id demo >"$TMP/p28i2-ch.json" 2>/dev/null; P28I2_CH_RC=$?
+P28I2_CH2_RC=0; P28I2_READ --source change --id demo2 >"$TMP/p28i2-ch2.json" 2>/dev/null || P28I2_CH2_RC=$?
+P28I2_CHK="$(python3 - "$TMP/p28i2-ch.json" "$TMP/p28i2-ch2.json" <<'PYC'
+import json, sys
+full = json.load(open(sys.argv[1], encoding="utf-8"))
+partial = json.load(open(sys.argv[2], encoding="utf-8"))
+problems = []
+if [f["tab"] for f in full["files"]] != ["proposal", "design", "tasks"]:
+    problems.append(f"change tab 次序不对：{[f['tab'] for f in full['files']]}")
+if full["file"] != "openspec/changes/demo/proposal.md":
+    problems.append(f"change 默认文件不对：{full['file']}")
+if [f["tab"] for f in partial["files"]] != ["proposal", "tasks"]:
+    problems.append(f"缺 design 的 change 补了不存在的 tab：{[f['tab'] for f in partial['files']]}")
+if any("archive" in f["path"] or "other" in f["path"] for f in full["files"]):
+    problems.append("change 服务了别的 change / archive 的文件")
+print("ok" if not problems else "；".join(problems))
+PYC
+)"
+assert_eq "28-i2 change：退出 0" "$P28I2_CH_RC" "0"
+assert_eq "28-i2 change：三个 artifact 按序、缺的不补、不跨 change/不碰 archive" "$P28I2_CHK" "ok"
+assert_eq "28-i2 change：缺 design 的 change 退出 0（空位不是错误）" "$P28I2_CH2_RC" "0"
+
+# 拒绝集：越界 id / 跨 source 的 --file / 决策的非法编号 / 未知 source —— 非 0、不打印正文、点名
+P28I2_REFUSE() { # <断言名> <期望 rc> <错误里必须出现的字串> <参数…>
+  local name="$1" want_rc="$2" needle="$3"; shift 3
+  P28I2_READ "$@" >"$TMP/p28i2-refuse.out" 2>"$TMP/p28i2-refuse.err"; local rc=$?
+  if [ "$rc" = "$want_rc" ] && [ ! -s "$TMP/p28i2-refuse.out" ] && grep -qF -- "$needle" "$TMP/p28i2-refuse.err"; then
+    ok "28-i2 拒绝：$name"
+  else
+    bad "28-i2 拒绝：$name（rc=$rc，期望 $want_rc；stderr=$(head -1 "$TMP/p28i2-refuse.err")）"
+  fi
+}
+P28I2_REFUSE "spec --id ../../etc 被拒并点名" 2 "--id" --source spec --id ../../etc
+P28I2_REFUSE "spec --id .. 被拒（不爬出 specs/）" 2 "--id" --source spec --id ..
+P28I2_REFUSE "跨 source 的 --file（spec 选 change 的文件）" 1 "--file" --source spec --id demo --file openspec/changes/demo/proposal.md
+P28I2_REFUSE "跨 source 的 --file（change 选 spec 的文件）" 1 "--file" --source change --id demo --file openspec/specs/demo/spec.md
+P28I2_REFUSE "decision --file 只接受它发现出的账本文件" 1 "--file" --source decision --id D7 --file docs/team/BOARD.md
+P28I2_REFUSE "decision --id 7（缺 D 前缀）被拒" 2 "--id" --source decision --id 7
+P28I2_REFUSE "未知 --source 被拒" 2 "--source" --source bogus --id demo
+P28I2_REFUSE "spec 的诱饵 notes.md 不被 --file 服务" 1 "--file" --source spec --id demo --file openspec/specs/demo/notes.md
+
+# 决策切片：标题到同层或更浅的下一个标题；同 id 的更深补记留在正文里；查无此号给空表 + 原因
+P28I2_READ --source decision --id D7 >"$TMP/p28i2-d7.json" 2>/dev/null; P28I2_D7_RC=$?
+P28I2_READ --source decision --id D8 >"$TMP/p28i2-d8.json" 2>/dev/null
+P28I2_READ --source decision --id D9 >"$TMP/p28i2-d9.json" 2>/dev/null; P28I2_D9_RC=$?
+P28I2_CHK="$(python3 - "$TMP/p28i2-d7.json" "$TMP/p28i2-d8.json" "$TMP/p28i2-d9.json" <<'PYD'
+import json, sys
+d7 = json.load(open(sys.argv[1], encoding="utf-8"))
+d8 = json.load(open(sys.argv[2], encoding="utf-8"))
+d9 = json.load(open(sys.argv[3], encoding="utf-8"))
+problems = []
+body = d7["text"]
+if not body.startswith("## D7"):
+    problems.append("D7 正文不从标题开始")
+if "### D7 补记" not in body or "deeper addendum" not in body:
+    problems.append("D7 的更深补记没有留在正文里")
+if "D8" in body or "D8 body" in body:
+    problems.append("D7 切片越到了 D8")
+if "D7" in d8["text"] or "D8 body" not in d8["text"]:
+    problems.append("D8 切片不对（越界或少了正文）")
+if d9["count"] != 0 or not d9.get("reason"):
+    problems.append(f"D9 应给空表 + 原因：{d9['count']} / {d9.get('reason')!r}")
+if d7["files"][0]["tab"] != "D7" or d7["file"] != "docs/team/DECISIONS.md":
+    problems.append(f"D7 的 tab/文件不对：{d7['files'][0]['tab']} / {d7['file']}")
+print("ok" if not problems else "；".join(problems))
+PYD
+)"
+assert_eq "28-i2 决策：D7/D8 切片与 D9 的空表 + 原因" "$P28I2_CHK" "ok"
+assert_eq "28-i2 决策：D7 退出 0" "$P28I2_D7_RC" "0"
+assert_eq "28-i2 决策：查无此号仍退出 0（不是错误帧）" "$P28I2_D9_RC" "0"
+
+# 上界与消毒：200 KiB 的 spec 截到 128 KiB 带标记；带 ESC[2J 的 change 一个 0x1b 都没有
+mkdir -p "$P27R/openspec/specs/big"
+python3 - "$P27R/openspec/specs/big/spec.md" <<'PYB'
+import sys
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write("# big spec\n")
+    for i in range(4200):
+        fh.write(f"line {i:04d} " + "x" * 40 + "\n")
+PYB
+printf '# demo tasks\n\n```\nBEFORE\033[2JAFTER\n```\n' > "$P28I2_CH/tasks.md"
+P28I2_READ --source spec --id big >"$TMP/p28i2-big.json" 2>/dev/null; P28I2_BIG_RC=$?
+P28I2_CHK="$(python3 - "$TMP/p28i2-big.json" <<'PYE'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+problems = []
+if not d["truncated"] or len(d["text"].encode("utf-8")) != 131072 or not d["files"][0]["truncated"]:
+    problems.append(f"截断不对：{d['truncated']} / {len(d['text'].encode('utf-8'))} / {d['files'][0]['truncated']}")
+print("ok" if not problems else "；".join(problems))
+PYE
+)"
+assert_eq "28-i2 上界：200 KiB 的 spec 截到 128 KiB 并带标记" "$P28I2_CHK" "ok"
+assert_eq "28-i2 上界：大文件退出 0" "$P28I2_BIG_RC" "0"
+P28I2_READ --source change --id demo --file openspec/changes/demo/tasks.md >"$TMP/p28i2-hostile.json" 2>/dev/null
+P28I2_ESC="$(python3 -c 'import sys; print(open(sys.argv[1], "rb").read().count(b"\x1b"))' "$TMP/p28i2-hostile.json")"
+P28I2_VIS="$(python3 - "$TMP/p28i2-hostile.json" <<'PYH'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print("ok" if "BEFORE" in d["text"] and "AFTER" in d["text"] else "no")
+PYH
+)"
+assert_eq "28-i2 消毒：预览读者输出里 0 个 0x1b 字节" "$P28I2_ESC" "0"
+assert_eq "28-i2 消毒：围栏可见文本仍在" "$P28I2_VIS" "ok"
+
+# 软链：拒绝并点名，不读穿；同一个 change 的其余 artifact 照常打开；--file 选不到它
+P28I2_READ --source change --id demo-sym >"$TMP/p28i2-sym.json" 2>/dev/null; P28I2_SYM_RC=$?
+P28I2_CHK="$(python3 - "$TMP/p28i2-sym.json" <<'PYL'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+problems = []
+if [f["tab"] for f in d["files"]] != ["design", "tasks"]:
+    problems.append(f"软链之外的 artifact 没有照常打开：{[f['tab'] for f in d['files']]}")
+if "proposal.md" not in (d.get("reason") or ""):
+    problems.append(f"被拒的软链没有被点名：{d.get('reason')!r}")
+if "绝不能被读穿" in d["text"] or any("proposal.md" in f["path"] for f in d["files"]):
+    problems.append("软链的目标正文被读出来了")
+print("ok" if not problems else "；".join(problems))
+PYL
+)"
+assert_eq "28-i2 软链：拒绝并点名、其余 artifact 照常、目标不读穿" "$P28I2_CHK" "ok"
+assert_eq "28-i2 软链：带软链的 change 仍退出 0" "$P28I2_SYM_RC" "0"
+P28I2_REFUSE "软链路径不能被 --file 选中" 1 "--file" --source change --id demo-sym --file openspec/changes/demo-sym/proposal.md
+
+# 目录软链（F1 返修）：`changes/<id>` / `specs/<cap>` 这一层本身是软链时，正文的路径段就已经越界了 ——
+# 根外目标（读穿 openspec 根）、根内别名（服务别的 change / 另一个 capability）、指向 archive/ 的别名
+# 都必须逐段判掉并点名。叶节点软链的既有语义在上面，不动。
+P28I2_OUTDIR="$TMP/p28i2-outside-dir"; P28I2_OUTSPEC="$TMP/p28i2-outside-spec"
+mkdir -p "$P28I2_OUTDIR" "$P28I2_OUTSPEC"
+printf '# OUTSIDE-DIR-SECRET proposal\n' > "$P28I2_OUTDIR/proposal.md"
+printf '# OUTSIDE-DIR-SECRET design\n' > "$P28I2_OUTDIR/design.md"
+printf '# OUTSIDE-SPEC-DIR-SECRET\n' > "$P28I2_OUTSPEC/spec.md"
+ln -sfn "$P28I2_OUTDIR"  "$P27R/openspec/changes/symdir"       # 指根外
+ln -sfn "$P28I2_CH"      "$P27R/openspec/changes/alias"        # 指根内另一个 change
+ln -sfn "$P28I2_ARCH"    "$P27R/openspec/changes/archalias"    # 指 archive/
+ln -sfn "$P28I2_OUTSPEC" "$P27R/openspec/specs/linkspecdir"    # 指根外
+ln -sfn "$P28I2_SPEC"    "$P27R/openspec/specs/aliasspec"      # 指根内另一个 capability
+P28I2_READ --source change --id symdir >"$TMP/p28i2-symdir.json" 2>/dev/null; P28I2_SYMDIR_RC=$?
+P28I2_READ --source change --id alias >"$TMP/p28i2-alias.json" 2>/dev/null; P28I2_ALIAS_RC=$?
+P28I2_READ --source change --id archalias >"$TMP/p28i2-archalias.json" 2>/dev/null; P28I2_ARCHALIAS_RC=$?
+P28I2_READ --source spec --id linkspecdir >"$TMP/p28i2-linkspec.json" 2>/dev/null; P28I2_LINKSPEC_RC=$?
+P28I2_READ --source spec --id aliasspec >"$TMP/p28i2-aliasspec.json" 2>/dev/null; P28I2_ALIASSPEC_RC=$?
+P28I2_READ --source change --id archive >"$TMP/p28i2-archjson.json" 2>/dev/null; P28I2_ARCH_RC=$?
+P28I2_CHK="$(python3 - "$TMP/p28i2-symdir.json" "$TMP/p28i2-alias.json" "$TMP/p28i2-archalias.json" \
+                     "$TMP/p28i2-linkspec.json" "$TMP/p28i2-aliasspec.json" "$TMP/p28i2-archjson.json" <<'PYM'
+import json, sys
+symdir, alias, archalias, linkspec, aliasspec, arch = [json.load(open(p, encoding="utf-8")) for p in sys.argv[1:7]]
+problems = []
+if symdir["count"] != 0 or symdir["files"] or "OUTSIDE-DIR-SECRET" in symdir["text"] or "symdir" not in (symdir.get("reason") or ""):
+    problems.append(f"changes/symdir 指根外没被拒绝并点名：count={symdir['count']} reason={symdir.get('reason')!r} text={symdir['text'][:40]!r}")
+if alias["count"] != 0 or alias["files"] or "alias" not in (alias.get("reason") or ""):
+    problems.append(f"changes/alias 指根内另一个 change 仍被服务：{alias['files']} reason={alias.get('reason')!r}")
+if archalias["count"] != 0 or archalias["files"] or "archived proposal" in archalias["text"] or "archalias" not in (archalias.get("reason") or ""):
+    problems.append(f"changes/archalias 指 archive/ 仍被服务：{archalias['files']} text={archalias['text'][:40]!r}")
+if linkspec["count"] != 0 or linkspec["files"] or "OUTSIDE-SPEC-DIR-SECRET" in linkspec["text"] or "linkspecdir" not in (linkspec.get("reason") or ""):
+    problems.append(f"specs/linkspecdir 指根外没被拒绝并点名：count={linkspec['count']} reason={linkspec.get('reason')!r}")
+if aliasspec["count"] != 0 or aliasspec["files"] or "Requirement: One" in aliasspec["text"] or "aliasspec" not in (aliasspec.get("reason") or ""):
+    problems.append(f"specs/aliasspec 指根内另一个 capability 仍被服务：{aliasspec['files']} reason={aliasspec.get('reason')!r}")
+if arch["count"] != 0 or arch["files"] or "archived proposal" in arch["text"]:
+    problems.append(f"archive/ 用正常路径被服务了：{arch['files']} text={arch['text'][:40]!r}")
+print("ok" if not problems else "；".join(problems))
+PYM
+)"
+assert_eq "28-i2 目录软链：根外目标、根内别名、archive 别名逐段拒绝并点名（正常路径也到不了 archive）" "$P28I2_CHK" "ok"
+assert_eq "28-i2 目录软链：被拒的目录软链仍退出 0（不是错误帧）" "$P28I2_SYMDIR_RC/$P28I2_ALIAS_RC/$P28I2_ARCHALIAS_RC/$P28I2_LINKSPEC_RC/$P28I2_ALIASSPEC_RC/$P28I2_ARCH_RC" "0/0/0/0/0/0"
+P28I2_REFUSE "目录软链里的文件不能被 --file 选中（change）" 1 "--file" --source change --id symdir --file openspec/changes/symdir/proposal.md
+P28I2_REFUSE "目录软链里的文件不能被 --file 选中（spec）" 1 "--file" --source spec --id linkspecdir --file openspec/specs/linkspecdir/spec.md
+P28I2_REFUSE "archive 里的文件用正常路径也选不到" 1 "--file" --source change --id archive --file openspec/changes/archive/oldspec/proposal.md
+
+# 项目根锚点（F3 返修）：`openspec` 本身、`docs` 本身是软链时，四类预览都拒绝并点名**那一段** —— 只从
+# 源根（`openspec/` 下的变更与规格两棵子树）往下走的判据对项目根与源根之间的段是失明的，夹具就造在这一层上；
+# 列表块也不得把树外条目画成可供 enter 的行（否则真界面上两次按键就能到树外正文）。
+P28I2_RL_OUT="$TMP/p28i2-rootlink-out"
+mkdir -p "$P28I2_RL_OUT/changes/demo" "$P28I2_RL_OUT/specs/demo" "$P28I2_RL_OUT/team/tasks"
+printf '# ROOTLINK-SECRET proposal\n' > "$P28I2_RL_OUT/changes/demo/proposal.md"
+printf '# ROOTLINK-SECRET spec\n' > "$P28I2_RL_OUT/specs/demo/spec.md"
+printf '# ROOTLINK-SECRET ledger\n\n## D7 · outside\n\nROOTLINK-SECRET body\n' > "$P28I2_RL_OUT/team/DECISIONS.md"
+printf '# ROOTLINK-SECRET brief\n' > "$P28I2_RL_OUT/team/tasks/demo-1.md"
+P28I2_RL_CHECK() { # <json 文件> <必须点名的段>：发现集空、正文空、reason 同时有「软链拒绝」与段名
+  python3 - "$1" "$2" <<'PYRL'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+seg = sys.argv[2]
+problems = []
+if d.get("count") or d.get("files"):
+    problems.append(f"发现集非空：{d.get('count')}")
+if d.get("text") or "ROOTLINK-SECRET" in (d.get("text") or ""):
+    problems.append("正文非空/树外正文被服务")
+r = d.get("reason") or ""
+if "软链拒绝" not in r or seg not in r:
+    problems.append(f"reason 没点名 {seg}：{r!r}")
+print("ok" if not problems else "；".join(problems))
+PYRL
+}
+P28I2_RL_REFUSED() { # <标签> <必须点名的段> <参数…>
+  local label="$1" seg="$2"; shift 2
+  P28I2_READ "$@" >"$TMP/p28i2-rootlink.json" 2>/dev/null; local rc=$? res
+  res="$(P28I2_RL_CHECK "$TMP/p28i2-rootlink.json" "$seg")"
+  if [ "$rc" = 0 ] && [ "$res" = ok ]; then ok "28-i2 项目根软链：$label"
+  else bad "28-i2 项目根软链：$label（rc=$rc，$res）"; fi
+}
+# A `openspec` 本身是软链（指树外）：change/spec 拒绝并点名 openspec；两个列表块空
+mv "$P27R/openspec" "$TMP/p28i2-openspec-real"
+ln -sfn "$P28I2_RL_OUT" "$P27R/openspec"
+P28I2_RL_REFUSED "openspec 软链：change 拒绝并点名" openspec --source change --id demo
+P28I2_RL_REFUSED "openspec 软链：spec 拒绝并点名" openspec --source spec --id demo
+P28I2_READ --block changes >"$TMP/p28i2-rl-changes.json" 2>/dev/null
+P28I2_RL_CHK="$(python3 - "$TMP/p28i2-rl-changes.json" <<'PYRC'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print("ok" if not d.get("changes") and not d.get("count") else f"列表非空：{d.get('changes')}")
+PYRC
+)"
+assert_eq "28-i2 项目根软链：openspec 软链时 --block changes 不列树外条目" "$P28I2_RL_CHK" "ok"
+P28I2_READ --block specs >"$TMP/p28i2-rl-specs.json" 2>/dev/null
+P28I2_RL_CHK="$(python3 - "$TMP/p28i2-rl-specs.json" <<'PYRC'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print("ok" if not d.get("specs") and not d.get("count") else f"列表非空：{d.get('specs')}")
+PYRC
+)"
+assert_eq "28-i2 项目根软链：openspec 软链时 --block specs 不列树外条目" "$P28I2_RL_CHK" "ok"
+rm -f "$P27R/openspec"; mv "$TMP/p28i2-openspec-real" "$P27R/openspec"
+# B `docs` 本身是软链（指树外）：decision/entry 拒绝并点名 docs；列表块空
+mv "$P27R/docs" "$TMP/p28i2-docs-real"
+ln -sfn "$P28I2_RL_OUT" "$P27R/docs"
+P28I2_RL_REFUSED "docs 软链：decision 拒绝并点名" docs --source decision --id D7
+P28I2_RL_REFUSED "docs 软链：entry 拒绝并点名" docs --source entry --id demo
+P28I2_READ --block decisions >"$TMP/p28i2-rl-dec.json" 2>/dev/null
+P28I2_RL_CHK="$(python3 - "$TMP/p28i2-rl-dec.json" <<'PYRC'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print("ok" if not d.get("recent") and not d.get("count") else f"列表非空：{d.get('recent')}")
+PYRC
+)"
+assert_eq "28-i2 项目根软链：docs 软链时 --block decisions 不列树外条目" "$P28I2_RL_CHK" "ok"
+rm -f "$P27R/docs"; mv "$TMP/p28i2-docs-real" "$P27R/docs"
+# 控制：还原后四类照常（上面两形状的拒绝不是把读者整个关掉）
+P28I2_READ --source change --id demo >"$TMP/p28i2-rl-ctl-ch.json" 2>/dev/null
+P28I2_READ --source decision --id D7 >"$TMP/p28i2-rl-ctl-dec.json" 2>/dev/null
+P28I2_RL_CTL="$(python3 - "$TMP/p28i2-rl-ctl-ch.json" "$TMP/p28i2-rl-ctl-dec.json" <<'PYRC'
+import json, sys
+ch = json.load(open(sys.argv[1], encoding="utf-8"))
+dec = json.load(open(sys.argv[2], encoding="utf-8"))
+problems = []
+if "demo proposal" not in (ch.get("text") or ""):
+    problems.append("change 没复原")
+if "D7 body" not in (dec.get("text") or ""):
+    problems.append("decision 没复原")
+print("ok" if not problems else "；".join(problems))
+PYRC
+)"
+assert_eq "28-i2 项目根软链：还原后 change/decision 照常服务" "$P28I2_RL_CTL" "ok"
+
+# 读面形状守卫（F2）：detail 的正文只能由 `team_panel_detail_read_nofollow`（open 一次 + fd 身份 + 逐段现查）
+# 产出。承重证据是仓外的对抗 fuzz（V33 的 probe-reader-race.sh：冻结 tip 上 1400 读里 117 次泄漏；
+# 原子读者版 400 读 0 泄漏），这里把形状钉住，防 check-then-read 在无人注意时回来 ——
+# 直接 `head -c "$cap" "$abs"` 读路径就是那个形状（判据与读取是两次独立解析，中间有窗口）。
+P28I2_DETAIL_BODY="$(awk '/^team_panel_detail_json\(\)/,/^}/' "$SKILL_DIR/scripts/lib/cmd-watch.sh")"
+case "$P28I2_DETAIL_BODY" in
+  *'team_panel_detail_read_nofollow "$read_root" "$abs" "$cap"'*) P28I2_ATOMIC=present ;;
+  *) P28I2_ATOMIC=missing ;;
+esac
+assert_eq "28-i2 读面：正文经原子读者产出（open 一次 + fd 身份 + 逐段现查）" "$P28I2_ATOMIC" "present"
+case "$P28I2_DETAIL_BODY" in
+  *'head -c "$cap" "$abs"'*) P28I2_LEGACY=present ;;
+  *) P28I2_LEGACY=absent ;;
+esac
+assert_eq "28-i2 读面：没有直接读路径的旧写法（check-then-read）" "$P28I2_LEGACY" "absent"
+
+# 决策源也是「发现到的路径」（合同把三类 source 的软链都点名了）：账本被换成软链时在发现面就拒绝并
+# 点名，合法正文一个字节都不读；复原账本后后面的决策断言照旧（内容逐字节相同，只换 inode）。
+P28I2_DEC_REAL="$TMP/p28i2-decisions-real.md"
+cp "$P27R/docs/team/DECISIONS.md" "$P28I2_DEC_REAL"
+printf '# DECISIONS\n\n## D7 · outside\n\nDEC-OUTSIDE-SECRET\n' > "$TMP/p28i2-dec-outside.md"
+rm -f "$P27R/docs/team/DECISIONS.md"
+ln -sfn "$TMP/p28i2-dec-outside.md" "$P27R/docs/team/DECISIONS.md"
+P28I2_READ --source decision --id D7 >"$TMP/p28i2-dec-sym.json" 2>/dev/null; P28I2_DECSYM_RC=$?
+rm -f "$P27R/docs/team/DECISIONS.md"
+cp "$P28I2_DEC_REAL" "$P27R/docs/team/DECISIONS.md"
+P28I2_CHK="$(python3 - "$TMP/p28i2-dec-sym.json" <<'PYD'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+problems = []
+if d["count"] != 0 or d["files"]:
+    problems.append(f"软链账本仍进了发现集：count={d['count']} files={[f['path'] for f in d['files']]}")
+if "DEC-OUTSIDE-SECRET" in d["text"] or d["text"]:
+    problems.append(f"树外正文被读了：{d['text'][:60]!r}")
+if "DECISIONS.md" not in (d.get("reason") or ""):
+    problems.append(f"reason 没点名账本：{d.get('reason')!r}")
+print("ok" if not problems else "；".join(problems))
+PYD
+)"
+assert_eq "28-i2 决策：软链账本拒绝并点名、树外正文不读穿" "$P28I2_CHK" "ok"
+assert_eq "28-i2 决策：软链账本仍退出 0（不是错误帧）" "$P28I2_DECSYM_RC" "0"
+
+# 机器出口与只读：读三类预览前后 --print/--json 逐字段不变（除时间戳），沙盒树没有文件被改
+P28I2_HASHES() { find "$P27R/docs" "$P27R/openspec" "$P27R/.pi/team/state" -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null; }
+p27 bash "$P28I2_TEAM" monitor --print >"$TMP/p28i2-mach-a.txt" 2>/dev/null
+p27 bash "$P28I2_TEAM" monitor --json >"$TMP/p28i2-mach-a.json" 2>/dev/null
+P28I2_HASHES >"$TMP/p28i2-hash-a.txt"
+P28I2_READ --source spec --id demo >/dev/null 2>&1
+P28I2_READ --source change --id demo >/dev/null 2>&1
+P28I2_READ --source decision --id D7 >/dev/null 2>&1
+p27 bash "$P28I2_TEAM" monitor --print >"$TMP/p28i2-mach-b.txt" 2>/dev/null
+p27 bash "$P28I2_TEAM" monitor --json >"$TMP/p28i2-mach-b.json" 2>/dev/null
+P28I2_HASHES >"$TMP/p28i2-hash-b.txt"
+# 归一化只在时间戳与机器自身的容量读数上（capacity 每拍都变，与预览无关）：剥掉这两处后必须逐字段一致。
+P28I2_JSON_NORM() {
+  python3 - "$1" <<'PYN'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+p = d.get("panel", {})
+p["timestamp"] = "T"
+if "capacity" in p:
+    p["capacity"] = "C"
+print(json.dumps(d, sort_keys=True, ensure_ascii=False))
+PYN
+}
+P28I2_PRINT_NORM() { sed -E -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}Z?/TS/g' -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/TS/g' -e 's/^RAM .*$/<capacity>/' "$1"; }
+if diff <(P28I2_JSON_NORM "$TMP/p28i2-mach-a.json") <(P28I2_JSON_NORM "$TMP/p28i2-mach-b.json") >/dev/null; then
+  ok "28-i2 机器出口：读三类预览前后 --json 不变（除时间戳）"
+else
+  bad "28-i2 机器出口：预览读改了 --json"; diff <(P28I2_JSON_NORM "$TMP/p28i2-mach-a.json") <(P28I2_JSON_NORM "$TMP/p28i2-mach-b.json") | head -3
+fi
+if diff <(P28I2_PRINT_NORM "$TMP/p28i2-mach-a.txt") <(P28I2_PRINT_NORM "$TMP/p28i2-mach-b.txt") >/dev/null; then
+  ok "28-i2 机器出口：读三类预览前后 --print 不变（除时间戳）"
+else
+  bad "28-i2 机器出口：预览读改了 --print"; diff <(P28I2_PRINT_NORM "$TMP/p28i2-mach-a.txt") <(P28I2_PRINT_NORM "$TMP/p28i2-mach-b.txt") | head -3
+fi
+if grep -q '"files"\|preview' "$TMP/p28i2-mach-b.json"; then
+  bad "28-i2 机器出口：预览字段混进了 --json"
+else
+  ok "28-i2 机器出口：--json 没有预览字段"
+fi
+if diff "$TMP/p28i2-hash-a.txt" "$TMP/p28i2-hash-b.txt" >/dev/null; then
+  ok "28-i2 只读：三类预览读没有改动沙盒树里的任何文件"
+else
+  bad "28-i2 只读：预览读改动了沙盒树"; diff "$TMP/p28i2-hash-a.txt" "$TMP/p28i2-hash-b.txt" | head -4
+fi
+
+# 窄屏与双语（delta 的场景「Preview tabs remain reachable in a narrow pane and both languages」）：
+# 59 列的 fixture pane 里 change 预览的三个 tab 全部可达、没有一行超宽，页签身份与键带行仍在；
+# 80 列下详情自己的导航 chip（Esc/q 返回）也在两种语言里上屏。
+for p28i2_lang in zh en; do
+  for p28i2_w in 59 80; do
+    B3_STUB_PREVIEW_LONG=0 "$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+      --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang "$p28i2_lang" --theme dark --width "$p28i2_w" --height 20 --page 2 \
+      --detail demo --detail-source change >"$TMP/p28i2-narrow-$p28i2_lang-$p28i2_w.txt" 2>/dev/null
+  done
+  P28I2_NARROW="$(python3 - "$TMP/p28i2-narrow-$p28i2_lang-59.txt" "$TMP/p28i2-narrow-$p28i2_lang-80.txt" <<'PYN'
+import re, sys, unicodedata
+def plain_of(path):
+    return [re.sub(r"\x1b\[[0-9;]*m", "", r) for r in open(path, encoding="utf-8").read().splitlines()]
+narrow, wide = plain_of(sys.argv[1]), plain_of(sys.argv[2])
+def width(s):
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in s)
+problems = []
+if not any("[proposal]" in r for r in narrow):
+    problems.append("active tab not named")
+if not all(any(t in r for r in narrow) for t in ("proposal", "design", "tasks")):
+    problems.append("a tab is unreachable")
+if max((width(r) for r in narrow), default=0) > 59:
+    problems.append("a row exceeds the 59-column pane")
+if not any(("[工作]" in r or "[work]" in r) for r in narrow):
+    problems.append("the active-page identity is gone")
+if not any(re.match(r"\s*\(\s*m (写信|compose)", r) for r in narrow):
+    problems.append("the key band row is gone")
+if not any(("Esc/q 返回" in r or "Esc/q back" in r) for r in wide):
+    problems.append("the detail key chips are gone at 80 columns")
+print("ok" if not problems else "；".join(problems))
+PYN
+)"
+  assert_eq "28-i2 窄屏/双语（$p28i2_lang）：三个 tab 可达、无超宽行、页签与键带仍在" "$P28I2_NARROW" "ok"
+done
+
+# 不可用目标：视图说「来源不可用」并点名原因，不把空文档当成功读取
+"$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang zh --theme dark --width 120 --height 20 --page 2 \
+  --detail nope --detail-source spec >"$TMP/p28i2-unavail.txt" 2>/dev/null
+if grep -qF '来源不可用' "$TMP/p28i2-unavail.txt" && grep -qF 'openspec/specs/nope/spec.md 不存在' "$TMP/p28i2-unavail.txt"; then
+  ok "28-i2 不可用：视图说来源不可用并点名缺的目标（不是空文档当成功）"
+else
+  bad "28-i2 不可用：视图没有渲染 unavailable 文案"
+fi
+"$JS_RUNNER" "$P28_PANEL" --snapshot --root "$P28I_FX" --state-dir "$P28I_FX/state" \
+  --team-cli "$P28_TESTS/panel-b3-stub.sh" --lang en --theme dark --width 120 --height 20 --page 2 \
+  --detail nope --detail-source spec >"$TMP/p28i2-unavail-en.txt" 2>/dev/null
+assert_has "$TMP/p28i2-unavail-en.txt" 'source unavailable' "28-i2 不可用：英文表也有这条文案"
+
+# 决策条目的 128 KiB 上界：超过上限的条目按同一个 bound 截断并带标记
+python3 - "$P27R/docs/team/DECISIONS.md" <<'PYBIG'
+import sys
+with open(sys.argv[1], "a", encoding="utf-8") as fh:
+    fh.write("\n## D99 · big\n\n")
+    for i in range(4200):
+        fh.write(f"big line {i:04d} " + "x" * 40 + "\n")
+PYBIG
+P28I2_READ --source decision --id D99 >"$TMP/p28i2-d99.json" 2>/dev/null; P28I2_D99_RC=$?
+P28I2_CHK="$(python3 - "$TMP/p28i2-d99.json" <<'PYE'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+problems = []
+if not d["truncated"] or len(d["text"].encode("utf-8")) != 131072:
+    problems.append(f"decision 上界不对：{d['truncated']} / {len(d['text'].encode('utf-8'))}")
+if d["file"] != "docs/team/DECISIONS.md" or d["files"][0]["tab"] != "D99":
+    problems.append(f"decision 条目不指向账本：{d['file']} / {d['files'][0]['tab']}")
+print("ok" if not problems else "；".join(problems))
+PYE
+)"
+assert_eq "28-i2 决策：超过 128 KiB 的条目按同一上界截断" "$P28I2_CHK" "ok"
+assert_eq "28-i2 决策：长条目退出 0" "$P28I2_D99_RC" "0"
 # 7.3：200 KiB 的报告被截断、退出 0、一秒内
 python3 - "$P27R/docs/team/reports/P2-dev.md" <<'PYB'
 import sys

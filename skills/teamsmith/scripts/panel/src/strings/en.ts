@@ -99,6 +99,7 @@ export const en = {
   // Detail view (read-only)
   detailTitle: 'detail {id}',
   detailNoFiles: '(no associated files for this entry)',
+  detailUnavailable: '(source unavailable: {reason})',
   detailTruncated: '… truncated (first 128 KiB shown)',
   detailLoading: '… loading',
 
@@ -438,6 +439,7 @@ export const en = {
   receiptQueued: '… queued (the PM is typing) · queued',
   receiptHeld: '! held (copy under state/outbox/held/) · held',
   receiptError: '✗ delivery unconfirmed · {detail}',
+  draftNotCleared: '✗ settled, but the draft file could not be emptied: {file} (the text stays in the input line)',
   flushOk: '✓ flush · {detail}',
   flushFail: '✗ flush failed · {detail}',
   standbyOkOn: '✓ standby on (reason: {reason})',

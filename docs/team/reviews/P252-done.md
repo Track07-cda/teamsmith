@@ -1,0 +1,1 @@
+- 2026-10-14T06:59:43Z · `team board set P252 done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/cli-help-proposal.md（判定 ACCEPTED）

@@ -1009,6 +1009,11 @@ team_panel_change_tasks_json() { # <change id> → "tasks": [...], "tasks_more":
 team_panel_changes_json() {
   local spec_dir dir bin listed="" src="dir" out="[" first=1 id done total age phase n_changes=0
   spec_dir="$(team_spec_dir_abs)"; dir="$spec_dir/changes"
+  # F3：`openspec`（或它到项目根之间的段）或 `openspec/changes` 是软链时，本块不列任何条目 ——
+  # 只读预览的合同是「只读 openspec 目录内、不得读穿」，列表跟详情一样按同一条判据拒绝。
+  if team_panel_detail_symlink_hit "$spec_dir" "$dir" >/dev/null; then
+    printf '{"available": false, "source": "none", "changes": [], "count": 0}'; return 0
+  fi
   bin="$(team_openspec_bin_path 2>/dev/null || true)"
   if [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1 && [ -d "$TEAM_MAIN_ROOT" ]; then
     listed="$(cd "$TEAM_MAIN_ROOT" && "$bin" list 2>/dev/null | sed -n 's/^[[:space:]]\{2,\}\([^[:space:]]*\)[[:space:]]\{1,\}\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1\t\2\t\3/p' || true)"
@@ -1048,6 +1053,10 @@ team_panel_changes_json() {
 team_panel_specs_json() {
   local spec_dir bin listed="" src="dir" out="[" first=1 name reqs count=0 total=0 line
   spec_dir="$(team_spec_dir_abs)"
+  # F3：同 changes —— `openspec`（含到项目根之间的段）或 `openspec/specs` 是软链时不列。
+  if team_panel_detail_symlink_hit "$spec_dir" "$spec_dir/specs" >/dev/null; then
+    printf '{"available": false, "count": 0, "requirements": 0, "specs": []}'; return 0
+  fi
   bin="$(team_openspec_bin_path 2>/dev/null || true)"
   if [ -n "$bin" ] && command -v "$bin" >/dev/null 2>&1 && [ -d "$TEAM_MAIN_ROOT" ]; then
     listed="$(cd "$TEAM_MAIN_ROOT" && "$bin" list --specs 2>/dev/null | sed -n 's/^[[:space:]]\{2,\}\([^[:space:]]*\)[[:space:]]\{1,\}requirements[[:space:]]\{1,\}\([0-9][0-9]*\).*/\1\t\2/p' || true)"
@@ -1082,6 +1091,10 @@ team_panel_specs_json() {
 
 team_panel_decisions_json() { # DECISIONS.md：标题数 + 最新三条（新→旧）
   local f="$TEAM_DOCS_ABS/DECISIONS.md" out="[" first=1 line count=0
+  # F3：`docs`（或它到项目根之间的段）是软链时，条目不列（详情面会点名那一段）。
+  if team_panel_detail_symlink_hit "$TEAM_DOCS_ABS" "$f" >/dev/null; then
+    printf '{"count": 0, "recent": []}'; return 0
+  fi
   [ -f "$f" ] || { printf '{"count": 0, "recent": []}'; return 0; }
   count="$(grep -c '^## ' "$f" 2>/dev/null || true)"
   while IFS= read -r line; do
@@ -1181,57 +1194,275 @@ team_panel_settings_json() {
 # `--file` 只服务**发现集里的**路径：任何别的路径都非 0 且不打印内容——面板不会变成任意文件读取器。
 # 正文上限 128 KiB（超出截断并带 truncated 标记），UTF-8 边界用 iconv -c 收尾。
 
-# 发现记录：每行 `<相对路径>\t<tab 名>\t<字节数>`，顺序 = 任务书 → 报告 → 复验。
-team_panel_detail_records() { # <id>
+# 发现记录：每行 `<相对路径>\t<tab 名>\t<字节数>\t<软链 0|1>`，顺序 = 树上/账本上的呈现序。
+# source 缺省 entry（既有语义逐字不变）；spec/change/decision 三类见各自函数。
+# 软链的路径照旧出现在记录里但带 `1` 标记：json 把它排除出发现集（`--file` 选不到它）并在 reason 里点名。
+team_panel_detail_rel() { # <绝对路径> → 相对 main root（不在 root 下时原样）
+  local f="$1"
+  case "$f" in "$TEAM_MAIN_ROOT"/*) printf '%s' "${f#"$TEAM_MAIN_ROOT"/}" ;; *) printf '%s' "$f" ;; esac
+}
+
+# F1 返修：目录段软链与叶软链一视同仁 —— 只挡叶节点时，`changes/<id>` / `specs/<cap>` 这一层是指向
+# 根外（读穿 openspec 根）或根内另一个 change / `archive/`（越权服务）的软链，都会被当成正常路径。
+# F3 返修：锚点从**源根**提到**项目根** —— `openspec` 本身、`docs` 本身也在被读路径上，必须一起判；
+# 只从源根往下走，项目根到源根之间的段是软链时四类预览照样读树外正文。
+# 沿**项目根 → 候选路径**逐段判定：命中软链就打印**那一段**（相对 main root）并退 0；整条路径没有软链退 1。
+# 包含关系仍按调用方给的允许根判（`p` 必须在 `root` 之下）；项目根自己（`p == TEAM_MAIN_ROOT`）不判 ——
+# 项目根本身是软链属于本机布局，不在本合同的拒绝面里（路径前缀由 `read_nofollow` 的物理路径比对处理）。
+team_panel_detail_symlink_hit() { # <允许根 abs> <候选路径 abs>
+  local root="$1" p="$2" rel cur c
+  case "$root" in "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) ;; *) return 1 ;; esac
+  case "$p" in "$root"|"$root"/*) ;; *) return 1 ;; esac
+  rel="${p#"$TEAM_MAIN_ROOT"/}"
+  [ "$rel" != "$p" ] || return 1
+  cur="$TEAM_MAIN_ROOT"
+  local IFS=/
+  for c in $rel; do
+    [ -n "$c" ] || continue
+    cur="$cur/$c"
+    if [ -L "$cur" ]; then team_panel_detail_rel "$cur"; return 0; fi
+  done
+  return 1
+}
+
+team_panel_detail_source_root() { # <source> → 该 source 的允许根（entry/decision 不走软链目录判定）
+  case "$1" in
+    spec)   printf '%s/specs' "$(team_spec_dir_abs)" ;;
+    change) printf '%s/changes' "$(team_spec_dir_abs)" ;;
+  esac
+}
+
+# `设备:inode` 读数：GNU（-c）优先、BSD/macOS（-f）兜底（仓里既有写法，如 common.sh 的 `stat -c … || stat -f …`）。
+# follow = -L（跟到目标，软链给的是目标身份）；nofollow = 不跟（lstat，软链给的是**链接自己**的 inode）。
+team_panel_detail_stat_id() { # <follow|nofollow> <路径>
+  case "$1" in
+    follow)   stat -Lc '%d:%i' -- "$2" 2>/dev/null || stat -Lf '%d:%i' -- "$2" 2>/dev/null ;;
+    nofollow) stat -c '%d:%i' -- "$2" 2>/dev/null || stat -f '%d:%i' -- "$2" 2>/dev/null ;;
+  esac
+}
+
+# F2 返修：把「判」与「读」合成原子 —— 一次 open，之后只从**同一个 fd** 读。
+# 两轮动过的三种窗口都在这一个函数里关掉：
+#   ① fd 打开到的目标（`stat -L`）必须等于 ② 路径此刻的不跟随身份（`stat`）—— 叶节点在 open 前/后被换成
+#      软链、或被换成另一个文件，两者必不相同（第一轮承诺的「发现之后、读之前被换也不读」在这里才成立）；
+#   ③ 路径的每一段（含允许根本身）此刻都不是软链 —— 中间目录在 open 之后被换成软链也会命中（① 对
+#      中间段无能为力：lstat 会跟完前缀，两侧拿到的都是树外那个目标）。
+# 正文只从 ① 里那个 fd 读，所以「判据作用的对象」与「读出的内容」是同一个 inode。
+# rc=0 读到（可能空正文 —— 与今天 `head -c` 打不开同形）；rc=3 被换/命中软链（调用者按「软链拒绝」点名）；
+# rc=4 既没有 /proc/self/fd 也没有 /dev/fd：拿不到 fd 身份就不读（宁可拒，也不拿可能被换过的路径去读）。
+# `<cap>` 写 `-` = 读到 EOF（决策源要拿到整篇才能切片）。
+team_panel_detail_read_nofollow() { # <允许根|-> <abs> <cap>
+  local root="$1" abs="$2" cap="$3" id_fd="" id_path="" p
+  { exec 9<"$abs"; } 2>/dev/null || return 0
+  for p in /proc/self/fd/9 /dev/fd/9; do
+    id_fd="$(team_panel_detail_stat_id follow "$p")"
+    [ -n "$id_fd" ] && break
+  done
+  if [ -z "$id_fd" ]; then exec 9<&-; return 4; fi
+  id_path="$(team_panel_detail_stat_id nofollow "$abs")"
+  if [ -z "$id_path" ] || [ "$id_fd" != "$id_path" ]; then exec 9<&-; return 3; fi
+  # F3/F4 返修：判据作用于**读的那个对象** —— 句柄自己解析出的路径（open 那一刻固定）必须逐字节等于
+  # 「锚点真实路径 + 字面相对路径」。锚点默认是**项目根**，所以 `openspec`/`docs` 本身、中间目录、叶节点
+  # 在 open 时是不是软链，在这一条里一次性可见（F2 的「读前再判一次」是按路径名走的，中间段换回真目录
+  # 就放行）。允许根不在项目树内（例如绝对路径的 TEAM_DOCS_DIR）时退回允许根做锚点：那类布局没有更外层
+  # 的可信锚点，仍按叶/前缀的物理路径比对。拿不到 fd 路径或锚点就拒绝（fail-closed）。
+  local fd_real root_real rel_real anchor="$TEAM_MAIN_ROOT"
+  case "$root" in
+    -|'') anchor="" ;;
+    "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) ;;
+    *) anchor="$root" ;;
+  esac
+  # 判据无条件生效（没有「某条件不满足就跳过」的旁路）：候选路径**必须**落在锚点之下，且句柄解析出的
+  # 路径**必须逐字节等于**「锚点真实路径 + 字面相对路径」。现有调用图里 abs 全部由允许根与发现集拼出，
+  # 前缀不匹配这条分支不可达；把它写成拒绝（而不是跳过）是为了让未来的调用方出错时也 fail-closed。
+  if [ -n "$anchor" ]; then
+    case "$abs" in "$anchor"/*) rel_real="${abs#"$anchor"/}" ;; *) exec 9<&-; return 3 ;; esac
+    fd_real="$(readlink /proc/self/fd/9 2>/dev/null || readlink /dev/fd/9 2>/dev/null)"
+    root_real="$(cd "$anchor" 2>/dev/null && pwd -P)"
+    if [ -z "$fd_real" ] || [ -z "$root_real" ] || [ "$fd_real" != "$root_real/$rel_real" ]; then
+      exec 9<&-; return 3
+    fi
+  fi
+  if [ -n "$root" ] && [ "$root" != - ] && team_panel_detail_symlink_hit "$root" "$abs" >/dev/null; then
+    exec 9<&-; return 3
+  fi
+  if [ "$cap" = - ]; then
+    iconv -c -f UTF-8 -t UTF-8 <&9 2>/dev/null || true
+  else
+    head -c "$cap" <&9 2>/dev/null | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true
+  fi
+  exec 9<&-
+  return 0
+}
+
+team_panel_detail_records_entry() { # <id>
   local LC_ALL=C
-  local id="$1" f name suffix tab size rel first
+  local id="$1" f name suffix tab size rel first=1 refused=0 hit
+  # F3：`docs`（或它到项目根之间的段）是软链时，整条发现集拒绝并点名那一段（与 spec/change 同形）。
+  if hit="$(team_panel_detail_symlink_hit "$TEAM_DOCS_ABS" "$TEAM_DOCS_ABS")"; then
+    printf '%s\t%s\t%s\t%s\n' "$hit" "brief" "0" "1"
+    return 0
+  fi
   [ -d "$TEAM_DOCS_ABS" ] || return 0
-  first=1
   for f in "$TEAM_DOCS_ABS/tasks/$id"-*.md; do
     [ -f "$f" ] || continue
     name="${f##*/}"; suffix="${name#"$id"-}"; suffix="${suffix%.md}"
     tab="brief"; [ "$first" = 1 ] || tab="brief:$suffix"; first=0
     size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
-    rel="${f#"$TEAM_MAIN_ROOT"/}"
-    printf '%s\t%s\t%s\n' "$rel" "$tab" "${size:-0}"
+    rel="$(team_panel_detail_rel "$f")"
+    refused=0; [ -L "$f" ] && refused=1
+    printf '%s\t%s\t%s\t%s\n' "$rel" "$tab" "${size:-0}" "$refused"
   done
   for f in "$TEAM_DOCS_ABS/reports/$id"-*.md; do
     [ -f "$f" ] || continue
     name="${f##*/}"; suffix="${name#"$id"-}"; suffix="${suffix%.md}"
     size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
-    rel="${f#"$TEAM_MAIN_ROOT"/}"
-    printf '%s\t%s\t%s\n' "$rel" "report:$suffix" "${size:-0}"
+    rel="$(team_panel_detail_rel "$f")"
+    refused=0; [ -L "$f" ] && refused=1
+    printf '%s\t%s\t%s\t%s\n' "$rel" "report:$suffix" "${size:-0}" "$refused"
   done
   f="$TEAM_DOCS_ABS/reviews/$id.md"
   if [ -f "$f" ]; then
     size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
-    rel="${f#"$TEAM_MAIN_ROOT"/}"
-    printf '%s\t%s\t%s\n' "$rel" "review" "${size:-0}"
+    rel="$(team_panel_detail_rel "$f")"
+    refused=0; [ -L "$f" ] && refused=1
+    printf '%s\t%s\t%s\t%s\n' "$rel" "review" "${size:-0}" "$refused"
   fi
   for f in "$TEAM_DOCS_ABS/reviews/$id"-*.md; do
     [ -f "$f" ] || continue
     name="${f##*/}"; suffix="${name#"$id"-}"; suffix="${suffix%.md}"
     size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
-    rel="${f#"$TEAM_MAIN_ROOT"/}"
-    printf '%s\t%s\t%s\n' "$rel" "review:$suffix" "${size:-0}"
+    rel="$(team_panel_detail_rel "$f")"
+    refused=0; [ -L "$f" ] && refused=1
+    printf '%s\t%s\t%s\t%s\n' "$rel" "review:$suffix" "${size:-0}" "$refused"
   done
   return 0
 }
 
-# 详情块：文件清单 + 被服务文件的正文（默认第一份；`--file` 指定时必须已在发现集里）。
-team_panel_detail_json() { # <id> [file]
-  local id="${1:-}" want="${2:-}" cap="${TEAM_PANEL_DETAIL_CAP:-131072}"
-  [ -n "$id" ] || { printf 'team: __panel-data --block detail 需要 --id <ID>\n' >&2; return 2; }
-  # id 直接进 glob：只接受字母数字与 . _ -（挡掉通配符与路径穿越；`board` 的 id 就长这样）。
-  case "$id" in
-    *[!A-Za-z0-9._-]*) printf 'team: __panel-data --block detail: 非法的 --id %s\n' "$id" >&2; return 2 ;;
+# source spec：`<spec_dir>/specs/<capability>/spec.md`（唯一的那个文件，tab `spec`）。
+team_panel_detail_records_spec() { # <capability>
+  local id="$1" f size rel refused=0 root hit
+  root="$(team_spec_dir_abs)/specs"
+  f="$root/$id/spec.md"
+  # 目录段软链先判（`-f` 会跟随它）：目标在不在都拒绝并点名，不拿软链之外的正文充数。
+  if hit="$(team_panel_detail_symlink_hit "$root" "$f")"; then
+    printf '%s\t%s\t%s\t%s\n' "$hit" "spec" "0" "1"
+    return 0
+  fi
+  [ -f "$f" ] || return 0
+  size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+  rel="$(team_panel_detail_rel "$f")"
+  [ -L "$f" ] && refused=1
+  printf '%s\t%s\t%s\t%s\n' "$rel" "spec" "${size:-0}" "$refused"
+}
+
+# source change：该 change 自己的 proposal/design/tasks（按此序，缺的不补；archive 到不了）。
+team_panel_detail_records_change() { # <change id>
+  local id="$1" dir f name size rel refused=0 root hit
+  root="$(team_spec_dir_abs)/changes"
+  dir="$root/$id"
+  # 同上：`changes/<id>` 是软链（指根外、指别的 change、指 archive/）时整条拒绝并点名那一段。
+  if hit="$(team_panel_detail_symlink_hit "$root" "$dir")"; then
+    printf '%s\t%s\t%s\t%s\n' "$hit" "change" "0" "1"
+    return 0
+  fi
+  [ -d "$dir" ] || return 0
+  for name in proposal design tasks; do
+    f="$dir/$name.md"
+    [ -f "$f" ] || continue
+    size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+    rel="$(team_panel_detail_rel "$f")"
+    refused=0; [ -L "$f" ] && refused=1
+    printf '%s\t%s\t%s\t%s\n' "$rel" "$name" "${size:-0}" "$refused"
+  done
+}
+
+# 决策切片：条目标题 = `##`/`###` 且 id 后跟非数字；正文到「同层或更浅的下一个标题」为止，
+# 同 id 的更深层补记（`### D7 补记`）留在正文里。查无此号 → 无输出（由 json 给空表 + reason）。
+team_panel_detail_decision_slice() { # <D编号> [文件]（缺省账本；`-` = 从 stdin 读）
+  local id="$1" f="${2:-$TEAM_DOCS_ABS/DECISIONS.md}"
+  [ "$f" = - ] || [ -f "$f" ] || return 0
+  awk -v want="$id" '
+    { lines[NR] = $0 }
+    END {
+      start = 0; level = 0
+      for (i = 1; i <= NR; i++) {
+        lv = 0
+        if (lines[i] ~ /^### /) lv = 3; else if (lines[i] ~ /^## /) lv = 2
+        if (lv == 0) continue
+        h = lines[i]; sub(/^#+[ \t]+/, "", h)
+        if (h ~ ("^" want "([^0-9]|$)")) { start = i; level = lv; break }
+      }
+      if (start == 0) { exit }
+      end = NR
+      for (i = start + 1; i <= NR; i++) {
+        lv = 0
+        if (lines[i] ~ /^### /) lv = 3; else if (lines[i] ~ /^## /) lv = 2
+        if (lv > 0 && lv <= level) { end = i - 1; break }
+      }
+      for (i = start; i <= end; i++) print lines[i]
+    }' "$f"
+}
+
+# source decision：只服务所请求条目的切片（不提供整文件出口）。
+team_panel_detail_records_decision() { # <D编号>
+  local id="$1" f="$TEAM_DOCS_ABS/DECISIONS.md" slice size rel refused=0 hit
+  # F3：`docs`（或它到项目根之间的段）是软链时，账本条目整条拒绝并点名那一段（正文更是一个字节不读）。
+  if hit="$(team_panel_detail_symlink_hit "$TEAM_DOCS_ABS" "$f")"; then
+    printf '%s\t%s\t%s\t%s\n' "$hit" "$id" "0" "1"
+    return 0
+  fi
+  [ -f "$f" ] || return 0
+  slice="$(team_panel_detail_decision_slice "$id")"
+  [ -n "$slice" ] || return 0
+  size="$(printf '%s\n' "$slice" | wc -c | tr -d ' ')"
+  rel="$(team_panel_detail_rel "$f")"
+  [ -L "$f" ] && refused=1
+  printf '%s\t%s\t%s\t%s\n' "$rel" "$id" "${size:-0}" "$refused"
+}
+
+team_panel_detail_records() { # <id> [source]
+  case "${2:-entry}" in
+    entry)    team_panel_detail_records_entry "$1" ;;
+    spec)     team_panel_detail_records_spec "$1" ;;
+    change)   team_panel_detail_records_change "$1" ;;
+    decision) team_panel_detail_records_decision "$1" ;;
   esac
+  return 0
+}
+
+# 详情块：文件清单 + 被服务文件的正文（默认第一份；`--file` 指定时必须已在发现集里）。
+# `--source`（第三参）决定发现集；缺省 entry 与今天逐字一致。目标缺失不是错误：空文件表 + reason。
+team_panel_detail_json() { # <id> [file] [source]
+  local id="${1:-}" want="${2:-}" source="${3:-entry}" cap="${TEAM_PANEL_DETAIL_CAP:-131072}"
+  [ -n "$id" ] || { printf 'team: __panel-data --block detail 需要 --id <ID>\n' >&2; return 2; }
+  case "$source" in
+    ''|entry|spec|change|decision) source="${source:-entry}" ;;
+    *) printf 'team: __panel-data --block detail: 未知的 --source %s\n' "$source" >&2; return 2 ;;
+  esac
+  # id 直接进路径/glob：decision 只接受 `D<数字>`，其余 source 只接受字母数字与 . _ -，
+  # 且明确拒绝 `.`/`..`（前者是 glob 通配符与穿越字符，后者会从 specs/<id>/ 爬上一层）。
+  if [ "$source" = decision ]; then
+    case "$id" in
+      D[0-9]*) ;;
+      *) printf 'team: __panel-data --block detail: 非法的 --id %s（decision 只接受 D<数字>）\n' "$id" >&2; return 2 ;;
+    esac
+    case "${id#D}" in
+      ''|*[!0-9]*) printf 'team: __panel-data --block detail: 非法的 --id %s（decision 只接受 D<数字>）\n' "$id" >&2; return 2 ;;
+    esac
+  else
+    case "$id" in
+      *[!A-Za-z0-9._-]*|.|..) printf 'team: __panel-data --block detail: 非法的 --id %s\n' "$id" >&2; return 2 ;;
+    esac
+  fi
   local -a paths=() tabs=() sizes=()
-  local path tab size
-  while IFS=$'\t' read -r path tab size; do
+  local path tab size flag refused=""
+  while IFS=$'\t' read -r path tab size flag; do
     [ -n "$path" ] || continue
+    # 软链不进发现集（`--file` 选不到、正文永不读穿），但在 reason 里点名。
+    if [ "${flag:-0}" = 1 ]; then refused="${refused:+$refused · }$path"; continue; fi
     paths+=("$path"); tabs+=("$tab"); sizes+=("${size:-0}")
-  done < <(team_panel_detail_records "$id")
+  done < <(team_panel_detail_records "$id" "$source")
   local n="${#paths[@]}" i pick=0
   if [ -n "$want" ]; then
     local found=-1
@@ -1252,15 +1483,68 @@ team_panel_detail_json() { # <id> [file]
     out="$out{\"tab\": $(team_panel_json_str "${tabs[$i]}"), \"name\": $(team_panel_json_str "${paths[$i]##*/}"), \"path\": $(team_panel_json_str "${paths[$i]}"), \"size\": $(team_panel_num "${sizes[$i]}"), \"truncated\": $t}"
   done
   out="$out]"
-  local file="" text="" truncated=false
+  local file="" text="" truncated=false abs read_hit="" read_unchecked="" read_root="-" read_rc=0 decision_rel="" decision_body=""
   if [ "$n" -gt 0 ]; then
     file="${paths[$pick]}"
-    text="$(head -c "$cap" "$TEAM_MAIN_ROOT/$file" 2>/dev/null | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)"
+    case "$file" in /*) abs="$file" ;; *) abs="$TEAM_MAIN_ROOT/$file" ;; esac
+    # 路径级复判（发现与读取两处都判）：发现之后、读之前路径被换成软链也不读 —— 这里顺手点名命中的那一段。
+    # F3：entry/decision 两类也判（锚点是项目根：`docs` 本身是软链时点名 `docs`）。
+    case "$source" in
+      spec|change)
+        if read_hit="$(team_panel_detail_symlink_hit "$(team_panel_detail_source_root "$source")" "$abs")"; then
+          file=""
+        fi ;;
+      entry|decision)
+        if read_hit="$(team_panel_detail_symlink_hit "$TEAM_DOCS_ABS" "$abs")"; then
+          file=""
+        fi ;;
+    esac
+    if [ -n "$read_hit" ]; then
+      : # 命中软链：正文一个字节都不读（下面 reason 里点名）
+    elif [ "$source" = decision ]; then
+      # 决策源也是「发现到的路径」（合同把三类 source 的软链都点名了）：先原子读账本，再从**读到的那份正文**
+      # 切片 —— 账本在发现之后被换成软链，切出来的一样不是树外内容。
+      decision_rel="$(team_panel_detail_rel "$TEAM_DOCS_ABS/DECISIONS.md")"
+      decision_body="$(team_panel_detail_read_nofollow "$TEAM_DOCS_ABS" "$TEAM_DOCS_ABS/DECISIONS.md" -)" || read_rc=$?
+      case "$read_rc" in
+        3) read_hit="$decision_rel"; file="" ;;
+        4) read_unchecked="$decision_rel"; file="" ;;
+        *) text="$(printf '%s\n' "$decision_body" | team_panel_detail_decision_slice "$id" - | head -c "$cap" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)" ;;
+      esac
+    else
+      # 读面原子化（F2）：判据与读取作用于同一个 inode（open 一次 + fd 身份 + 逐段现查）。
+      case "$source" in
+        spec|change) read_root="$(team_panel_detail_source_root "$source")" ;;
+        entry)       read_root="$TEAM_DOCS_ABS" ;;
+      esac
+      text="$(team_panel_detail_read_nofollow "$read_root" "$abs" "$cap")" || read_rc=$?
+      case "$read_rc" in
+        3) read_hit="$file"; file="" ;;
+        4) read_unchecked="$file"; file="" ;;
+      esac
+    fi
     [ "${sizes[$pick]}" -gt "$cap" ] && truncated=true
   fi
-  printf '{"id": %s, "count": %s, "file": %s, "text": %s, "truncated": %s, "files": %s}\n' \
+  # 被拒的软链点名；目标根本不存在时给可读原因（不是错误帧，也不拿邻居的正文充数）。
+  local reason=""
+  if [ -n "$read_hit" ]; then
+    reason="软链拒绝：$read_hit"
+  elif [ -n "$read_unchecked" ]; then
+    reason="读取身份无法确认（没有 /proc/self/fd 也没有 /dev/fd）：$read_unchecked"
+  elif [ -n "$refused" ]; then
+    reason="软链拒绝：$refused"
+  elif [ "$n" -eq 0 ]; then
+    case "$source" in
+      spec)     reason="${TEAM_SPEC_DIR:-openspec}/specs/$id/spec.md 不存在" ;;
+      change)   reason="${TEAM_SPEC_DIR:-openspec}/changes/$id/ 下没有 proposal/design/tasks" ;;
+      decision) reason="DECISIONS.md 里没有 $id" ;;
+    esac
+  fi
+  local reason_json=""
+  [ -n "$reason" ] && reason_json=", \"reason\": $(team_panel_json_str "$reason")"
+  printf '{"id": %s, "count": %s, "file": %s, "text": %s, "truncated": %s, "files": %s%s}\n' \
     "$(team_panel_json_str "$id")" "$(team_panel_num "$n")" "$(team_panel_json_str "$file")" \
-    "$(team_panel_json_str_ml "$text")" "$truncated" "$out"
+    "$(team_panel_json_str_ml "$text")" "$truncated" "$out" "$reason_json"
 }
 
 # ---- 关键回复块（change: pulse-key-replies）：三个 console-only 只读块，直接进 helper。
@@ -1298,7 +1582,7 @@ team_panel_reply_body_json() { # <no>
 
 # 块分发：一个块一个子进程（panel.js 用 --block 起一片），源坏时打印尽力而为的片段并返回非 0，
 # 由渲染层把那一块画成 `—`，其余块照常渲染。
-team_panel_block() { # <块名> <activity 1|0> <events> [id] [file] [before] [no]
+team_panel_block() { # <块名> <activity 1|0> <events> [id] [file] [before] [no] [source]
   case "$1" in
     frame)    team_panel_frame_json ;;
     pm)       team_panel_pm_json ;;
@@ -1315,7 +1599,7 @@ team_panel_block() { # <块名> <activity 1|0> <events> [id] [file] [before] [no
     inbox)    team_panel_inbox_json ;;
     patrol)   team_panel_patrol_json ;;
     health)   team_panel_health_json ;;
-    detail)   team_panel_detail_json "${4:-}" "${5:-}" ;;
+    detail)   team_panel_detail_json "${4:-}" "${5:-}" "${8:-}" ;;
     settings) team_panel_settings_json ;;
     reply_summary) team_panel_reply_summary_json ;;
     reply_list)    team_panel_reply_list_json "${6:-}" ;;
@@ -1328,7 +1612,7 @@ team_panel_block() { # <块名> <activity 1|0> <events> [id] [file] [before] [no
 # 内部命令：给 panel.js 一个 JSON（{panel, activity}）或一个块（--block <名>）。
 # 名字带 __ 前缀 = 不是给人用的命令面。
 team_cmd_panel_data() {
-  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block="" did="" dfile="" rbefore="" rno=""
+  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block="" did="" dfile="" rbefore="" rno="" dsource=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-activity) activity=0; shift ;;
@@ -1337,6 +1621,7 @@ team_cmd_panel_data() {
       --block) block="${2:?__panel-data: --block 需要块名}"; shift 2 ;;
       --id) did="${2:?__panel-data: --id 需要入口 id}"; shift 2 ;;
       --file) dfile="${2:?__panel-data: --file 需要路径}"; shift 2 ;;
+      --source) dsource="${2:?__panel-data: --source 需要取值}"; shift 2 ;;
       --before) rbefore="${2:?__panel-data: --before 需要编号}"; shift 2 ;;
       --no) rno="${2:?__panel-data: --no 需要编号}"; shift 2 ;;
       -*) team_usage_die "__panel-data: 未知参数 $1" ;;
@@ -1354,7 +1639,7 @@ team_cmd_panel_data() {
       pending) team_scan_warm --reports ;;
       *) team_scan_warm ;;
     esac
-    team_panel_block "$block" "$activity" "$events" "$did" "$dfile" "$rbefore" "$rno"
+    team_panel_block "$block" "$activity" "$events" "$did" "$dfile" "$rbefore" "$rno" "$dsource"
     return $?
   fi
   if [ "$activity" = "1" ]; then

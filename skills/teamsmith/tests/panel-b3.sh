@@ -550,46 +550,155 @@ PYW
     bad "B5 第二次点击没有打开详情"
   fi
 
-  # ⑥ 空看板：没有光标、没有行键、没有 focus/open-focused 目标、enter 不开任何东西
+  # ⑥ 空看板 + 预览块也清空：没有光标、没有行键、没有 focus/open-focused 目标、enter 不开任何东西
   python3 - "$tmp/$current/empty.json" <<'PYE'
 import json, sys
 json.dump({"rows": [], "counts": {}, "total": 0, "deliveries": []}, open(sys.argv[1], "w"))
 PYE
   printf '2\n' > "$(page_file)"
-  start_panel "B3_STUB_BOARD_FILE='$tmp/$current/empty.json'"
+  start_panel "B3_STUB_BOARD_FILE='$tmp/$current/empty.json' B3_STUB_PREVIEWS=empty"
   keys Down; sleep 0.5
   keys Enter; sleep 0.8
   wcap empty
-  assert_eq "B5 空看板：没有焦点光标" "$(grep -o '›' "$(wfile empty)" | wc -l | tr -d ' ')" "0"
-  assert_not "$(wfile empty)" "详情" "B5 空看板：enter 不开详情"
-  assert_eq "B5 空看板：panel-page 仍是 2" "$(page_of)" "2"
-  assert_has "$(wfile empty)" "看板为空" "B5 空看板：块显示空态而不是一行空行"
-  B3_STUB_BOARD_FILE="$tmp/$current/empty.json" "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" \
+  assert_eq "B5 空看板 + 空预览块：没有焦点光标" "$(grep -o '›' "$(wfile empty)" | wc -l | tr -d ' ')" "0"
+  assert_not "$(wfile empty)" "详情" "B5 空看板 + 空预览块：enter 不开详情"
+  assert_eq "B5 空看板 + 空预览块：panel-page 仍是 2" "$(page_of)" "2"
+  assert_has "$(wfile empty)" "看板为空" "B5 空看板 + 空预览块：块显示空态而不是一行空行"
+  assert_not "$(wfile empty)" "↑/↓ 行" "B5 空看板 + 空预览块：键位带不发行键"
+  B3_STUB_BOARD_FILE="$tmp/$current/empty.json" B3_STUB_PREVIEWS=empty "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" \
     --team-cli "$stub" --lang zh --theme dark --width 120 --height 32 --page 2 >"$tmp/$current/empty-targets.json" 2>/dev/null
   local kinds
   kinds="$(kinds_of "$tmp/$current/empty-targets.json")"
   case ",$kinds," in
-    *",focus,"*|*",open-focused,"*) bad "B5 空看板的目标表还有 focus/open-focused（$kinds）" ;;
-    *) ok "B5 空看板的目标表没有 focus/open-focused（$kinds）" ;;
+    *",focus,"*|*",open-focused,"*) bad "B5 空看板 + 空预览块的目标表还有 focus/open-focused（$kinds）" ;;
+    *) ok "B5 空看板 + 空预览块的目标表没有 focus/open-focused（$kinds）" ;;
   esac
 
-  # ⑦ 60x10 降级：没有光标、没有行键、没有死项目标
-  start_panel
+  # ⑥b 空看板 + 预览行（P249）：↓ 落在页面行序的第一行（变更块首行），enter 开它的预览，q 原地返回
+  start_panel "B3_STUB_BOARD_FILE='$tmp/$current/empty.json'"
+  keys Down; sleep 0.6
+  wcap empty-preview-focus
+  assert_eq "B5 空看板 + 预览行：↓ 后恰好一个光标" "$(grep -o '›' "$(wfile empty-preview-focus)" | wc -l | tr -d ' ')" "1"
+  if grep -qE '› +pulse-console' "$(wfile empty-preview-focus)"; then
+    ok "B5 空看板 + 预览行：焦点落在变更块第一行（空看板不是丢掉活行的理由）"
+  else
+    bad "B5 空看板 + 预览行：焦点没有落到变更块第一行"
+  fi
+  keys Enter; sleep 1.4
+  wcap empty-preview-detail
+  assert_has "$(wfile empty-preview-detail)" "[proposal]" "B5 空看板 + 预览行：enter 打开变更预览（proposal tab）"
+  assert_has "$(wfile empty-preview-detail)" "the proposal body" "B5 空看板 + 预览行：变更预览渲染正文"
+  assert_not "$(wfile empty-preview-detail)" "任务看板" "B5 变更预览替换了工作页的块"
+  assert_eq "B5 打开预览后仍在第 2 页" "$(page_of)" "2"
+  keys q; sleep 0.8
+  wcap empty-preview-back
+  assert_has "$(wfile empty-preview-back)" "活动变更" "B5 预览 q 回工作页"
+  assert_not "$(wfile empty-preview-back)" "详情" "B5 预览 q 关掉了详情"
+  assert_eq "B5 预览返回后 panel-page 仍是 2" "$(page_of)" "2"
+
+  # ⑥c 空看板 + 只有规格块一行（P249 的第三个夹具）：↓ 落到 specs 行，enter 开 spec 预览
+  start_panel "B3_STUB_BOARD_FILE='$tmp/$current/empty.json' B3_STUB_PREVIEWS=specs-only"
+  keys Down; sleep 0.6
+  wcap specs-focus
+  assert_eq "B5 空看板 + 规格行：↓ 后恰好一个光标" "$(grep -o '›' "$(wfile specs-focus)" | wc -l | tr -d ' ')" "1"
+  if grep -qE '› +panel' "$(wfile specs-focus)"; then
+    ok "B5 空看板 + 规格行：焦点落在规格块的那一行"
+  else
+    bad "B5 空看板 + 规格行：焦点没有落到规格块"
+  fi
+  keys Enter; sleep 1.4
+  wcap specs-detail
+  assert_has "$(wfile specs-detail)" "[spec]" "B5 规格预览：spec tab 默认打开"
+  assert_has "$(wfile specs-detail)" "Requirement: One" "B5 规格预览：渲染 spec 正文"
+  assert_eq "B5 规格预览返回后仍在第 2 页" "$(page_of)" "2"
+  keys q; sleep 0.8
+
+  # ⑦ 60x10 降级 + 预览块清空：没有光标、没有行键、没有死项目标（旧断言的新夹具）
+  start_panel "B3_STUB_PREVIEWS=empty"
   tmux -L "$sock" resize-window -t "$sess:panel" -x 60 -y 10 2>/dev/null || true
   sleep 1.4
   keys Down; sleep 0.5
   keys Enter; sleep 0.8
   wcap degraded
-  assert_eq "B5 60x10 降级：没有焦点光标" "$(grep -o '›' "$(wfile degraded)" | wc -l | tr -d ' ')" "0"
-  assert_not "$(wfile degraded)" "详情" "B5 60x10 降级：enter 不开详情"
-  assert_not "$(wfile degraded)" "↑/↓ 行" "B5 60x10 降级：键位带不发行键"
-  "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+  assert_eq "B5 60x10 降级 + 空预览块：没有焦点光标" "$(grep -o '›' "$(wfile degraded)" | wc -l | tr -d ' ')" "0"
+  assert_not "$(wfile degraded)" "详情" "B5 60x10 降级 + 空预览块：enter 不开详情"
+  assert_not "$(wfile degraded)" "↑/↓ 行" "B5 60x10 降级 + 空预览块：键位带不发行键"
+  B3_STUB_PREVIEWS=empty "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
     --lang zh --theme dark --width 60 --height 10 --page 2 >"$tmp/$current/degraded-targets.json" 2>/dev/null
   kinds="$(kinds_of "$tmp/$current/degraded-targets.json")"
   case ",$kinds," in
-    *",focus,"*|*",open-focused,"*) bad "B5 60x10 降级的目标表还有 focus/open-focused（$kinds）" ;;
-    *) ok "B5 60x10 降级的目标表没有 focus/open-focused（$kinds）" ;;
+    *",focus,"*|*",open-focused,"*) bad "B5 60x10 降级 + 空预览块的目标表还有 focus/open-focused（$kinds）" ;;
+    *) ok "B5 60x10 降级 + 空预览块的目标表没有 focus/open-focused（$kinds）" ;;
   esac
+
+  # ⑦b 60x10 降级 + 预览行：↓ 落到一盏可开的预览行，enter 打开它的预览（不留在板内死路上）
+  start_panel
+  tmux -L "$sock" resize-window -t "$sess:panel" -x 60 -y 10 2>/dev/null || true
+  sleep 1.4
+  keys Down; sleep 0.6
+  wcap degraded-preview-focus
+  assert_eq "B5 60x10 降级 + 预览行：恰好一个光标" "$(grep -o '›' "$(wfile degraded-preview-focus)" | wc -l | tr -d ' ')" "1"
+  keys Enter; sleep 1.4
+  wcap degraded-preview-detail
+  if grep -qE '\[(proposal|spec|D[0-9]+)\]' "$(wfile degraded-preview-detail)"; then
+    ok "B5 60x10 降级：enter 打开的是预览（不是板内死项）"
+  else
+    bad "B5 60x10 降级：enter 没有打开预览"
+  fi
+  assert_eq "B5 60x10 降级预览返回后仍在第 2 页" "$(page_of)" "2"
+  keys q; sleep 0.8
+
+  # ⑧ 一页一行序（delta 的场景：板 2 行 + 规格 1 行）：三↓ 依次落在板首行、板次行、规格块行
+  python3 - "$tmp/$current/two.json" <<'PYW2'
+import json, sys
+json.dump({"rows": [
+    {"id": "P14", "title": "一", "agent": "dev", "branch": "task/P14", "deps": "-", "state": "wip", "phase": "apply"},
+    {"id": "V14", "title": "二", "agent": "verify", "branch": "-", "deps": "P14", "state": "todo", "phase": "verify"},
+], "counts": {"todo": 1, "wip": 1, "review": 0, "done": 0, "blocked": 0, "dropped": 0}, "total": 2, "deliveries": []}, open(sys.argv[1], "w"))
+PYW2
+  start_panel "B3_STUB_BOARD_FILE='$tmp/$current/two.json' B3_STUB_PREVIEWS=specs-only"
+  keys Down; sleep 0.5
+  wcap walk-1
+  assert_eq "B5 一页一行序：第一 ↓ 落在板首行 P14" "$(focused_id "$(wfile walk-1)")" "P14"
+  assert_eq "B5 一页一行序：第一步恰好一个光标" "$(grep -o '›' "$(wfile walk-1)" | wc -l | tr -d ' ')" "1"
+  keys Down; sleep 0.4
+  wcap walk-2
+  assert_eq "B5 一页一行序：第二 ↓ 落在板次行 V14" "$(focused_id "$(wfile walk-2)")" "V14"
+  assert_eq "B5 一页一行序：第二步恰好一个光标" "$(grep -o '›' "$(wfile walk-2)" | wc -l | tr -d ' ')" "1"
+  keys Down; sleep 0.5
+  wcap walk-3
+  if grep -qE '› +panel' "$(wfile walk-3)"; then
+    ok "B5 一页一行序：第三 ↓ 跨块落到规格行"
+  else
+    bad "B5 一页一行序：第三 ↓ 没有跨到规格行（跨块断掉）"
+  fi
+  assert_eq "B5 一页一行序：第三步恰好一个光标" "$(grep -o '›' "$(wfile walk-3)" | wc -l | tr -d ' ')" "1"
+  keys Enter; sleep 1.2
+  wcap walk-open
+  assert_has "$(wfile walk-open)" "[spec]" "B5 一页一行序：规格行 enter 开 spec 预览"
+  assert_eq "B5 一页一行序：预览仍在第 2 页" "$(page_of)" "2"
+  keys q; sleep 0.7
+  wcap walk-back
+  assert_eq "B5 一页一行序：关闭后焦点仍在同一行" "$(grep -cE '› +panel' "$(wfile walk-back)")" "1"
+
+  # ⑨ 变更行与决策行各自开自己的 source（delta 的场景）：默认夹具里走到 D40，enter 开决策预览
+  start_panel
+  wfocused=-1
+  for wi in $(seq 1 30); do
+    if cap | grep -qE '› +D40'; then wfocused=0; break; fi
+    keys Down; sleep 0.25
+  done
+  assert_eq "B5 决策行：↓ 在 30 步内走到决策块第一行 D40" "$wfocused" "0"
+  keys Enter; sleep 1.4
+  wcap decision-detail
+  assert_has "$(wfile decision-detail)" "[D40]" "B5 决策预览：tab 是条目号 D40"
+  assert_has "$(wfile decision-detail)" "D40 body" "B5 决策预览：渲染条目正文"
+  assert_has "$(wfile decision-detail)" "deeper addendum" "B5 决策预览：同号补记留在正文里"
+  assert_eq "B5 决策预览：打开后仍在第 2 页" "$(page_of)" "2"
+  keys q; sleep 0.8
+  wcap decision-back
+  assert_has "$(wfile decision-back)" "最近决策" "B5 决策预览：q 原地回工作页"
+  assert_not "$(wfile decision-back)" "详情" "B5 决策预览：q 关掉了详情"
 }
 
 scn_mouse() {
@@ -1045,6 +1154,53 @@ scn_detail() {
   assert_has "$(dfile back-esc)" "已放弃" "Esc 返回看板页"
   assert_not "$(dfile back-esc)" "详情 V14" "Esc 之后详情视图关闭"
 
+  # P249: a preview's artifacts switch with ←/→, ↑/↓ scrolls the document and q returns to the work
+  # page it was opened from — the same view and the same close contract as an entry's detail.
+  printf '2\n' > "$(page_file)"
+  start_panel "B3_STUB_PREVIEW_LONG=40"
+  local wi wfocused=-1
+  for wi in $(seq 1 16); do
+    keys Down; sleep 0.25
+    if cap | grep -qE '› +pulse-console'; then wfocused=0; break; fi
+  done
+  assert_eq "P249 预览：↓ 在 16 步内走到变更块第一行" "$wfocused" "0"
+  keys Enter; sleep 1.4
+  dcap preview-proposal
+  assert_has "$(dfile preview-proposal)" "[proposal]" "P249 预览：变更的第一 tab 是 proposal"
+  assert_has "$(dfile preview-proposal)" "the proposal body" "P249 预览：proposal 正文上屏"
+  assert_eq "P249 预览：打开后仍在第 2 页" "$(page_of)" "2"
+  keys Right; sleep 0.8
+  dcap preview-design
+  assert_has "$(dfile preview-design)" "[design]" "P249 预览：→ 切到 design tab"
+  assert_has "$(dfile preview-design)" "the design body" "P249 预览：design 正文上屏"
+  keys Right; sleep 0.8
+  dcap preview-tasks
+  assert_has "$(dfile preview-tasks)" "[tasks]" "P249 预览：再 → 切到 tasks tab"
+  assert_has "$(dfile preview-tasks)" "the task body" "P249 预览：tasks 正文上屏"
+  keys q; sleep 0.8
+  dcap preview-back
+  assert_has "$(dfile preview-back)" "活动变更" "P249 预览：q 回工作页"
+  assert_not "$(dfile preview-back)" "详情" "P249 预览：q 关掉了详情"
+  # 规格预览：一个 tab，长正文可滚动；Esc 同样原地返回
+  wfocused=-1
+  for wi in $(seq 1 6); do
+    if cap | grep -qE '› +panel'; then wfocused=0; break; fi
+    keys Down; sleep 0.3
+  done
+  assert_eq "P249 预览：关闭后继续走到规格行" "$wfocused" "0"
+  keys Enter; sleep 1.4
+  dcap preview-spec
+  assert_has "$(dfile preview-spec)" "[spec]" "P249 预览：规格一个 tab"
+  assert_has "$(dfile preview-spec)" "spec line 01" "P249 预览：规格正文第一行"
+  for i in 1 2 3 4 5 6 7 8; do keys Down; sleep 0.08; done
+  sleep 0.6
+  dcap preview-spec-scrolled
+  assert_has "$(dfile preview-spec-scrolled)" "spec line 09" "P249 预览：↓×8 滚动规格正文（第 9 行进入视图）"
+  keys Escape; sleep 0.8
+  dcap preview-spec-back
+  assert_has "$(dfile preview-spec-back)" "任务看板" "P249 预览：Esc 回工作页"
+  assert_not "$(dfile preview-spec-back)" "详情" "P249 预览：Esc 关掉了详情"
+
   # 9.3: read-only — only the console's own three state files may differ after the session.
   local docs_after other_after
   docs_after="$(cd "$ROOT" && find docs -type f | sort | xargs -r md5sum | md5sum)"
@@ -1276,6 +1432,9 @@ PYC
 
 # ---------------------------------------------------------------- run
 want=("$@")
+# P249: `--all` is the explicit whole-suite selector the task's acceptance commands use; with no
+# argument the behaviour is unchanged (every scenario), and an unknown name stays a no-op.
+if [ "${want[0]:-}" = "--all" ]; then want=(); fi
 run_scn() {
   local name="$1"
   if [ ${#want[@]} -gt 0 ]; then

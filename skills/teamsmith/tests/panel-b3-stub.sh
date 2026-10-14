@@ -17,10 +17,12 @@ block=""
 prev=""
 detail_id=""
 detail_file=""
+detail_source=""
 for a in "$@"; do
   [ "$prev" = "--block" ] && block="$a"
   [ "$prev" = "--id" ] && detail_id="$a"
   [ "$prev" = "--file" ] && detail_file="$a"
+  [ "$prev" = "--source" ] && detail_source="$a"
   prev="$a"
 done
 
@@ -81,6 +83,11 @@ recent_json() { # B3_STUB_RECENT lines, deterministic timestamps; unset = the or
 }
 
 board_json() {
+  # B3_STUB_BOARD_EMPTY=1: no rows, so the work page's preview blocks are the only possible rows.
+  if [ "${B3_STUB_BOARD_EMPTY:-0}" = "1" ]; then
+    printf '%s\n' '{"rows": [], "counts": {"todo": 0, "wip": 0, "review": 0, "done": 0, "blocked": 0, "dropped": 0}, "total": 0, "deliveries": []}'
+    return 0
+  fi
   # B3_STUB_BOARD_FILE=<path>: serve that file verbatim — the board-page fixtures rewrite it between
   # refreshes to prove the focus survives a reorder and falls back when the entry leaves the board.
   if [ -n "${B3_STUB_BOARD_FILE:-}" ] && [ -r "${B3_STUB_BOARD_FILE}" ]; then
@@ -126,7 +133,102 @@ JSON
   printf '],\n "counts": {"todo": 1, "wip": 1, "review": 0, "done": %s, "blocked": 1, "dropped": 1},\n "total": %s,\n "deliveries": [\n   {"id": "P14", "agent": "dev", "at": "2026-09-16T09:30:00Z"}\n ]}\n' "$n" "$((n + 4))"
 }
 
-changes_json() { cat <<'JSON'
+# P249: the preview sources' stand-in (`--source spec|change|decision`). One fixed capability
+# `demo`, one fixed change `demo` (its three artifacts) and one fixed decision `D7`; any other id
+# answers the real reader's empty file list + reason, and `--file` must be one of the discovered
+# paths (anything else exits non-zero). `B3_STUB_PREVIEWS=empty` empties the three preview blocks
+# themselves, for the work page's no-dead-item fixture.
+preview_json() { # <source> <id> [file]
+  local source="$1" id="$2" want="${3:-}"
+  local file="" text="" files="" reason=""
+  case "$source" in
+    spec)
+      if [ "$id" = "demo" ] || [ "$id" = "panel" ]; then
+        file="openspec/specs/$id/spec.md"
+        files="$(printf '[{"tab": "spec", "name": "spec.md", "path": "openspec/specs/%s/spec.md", "size": 64, "truncated": false}]' "$id")"
+        if [ "${B3_STUB_PREVIEW_LONG:-0}" -gt 0 ] 2>/dev/null; then
+          local i
+          text="# $id spec
+
+### Requirement: One
+
+body"
+          for ((i = 1; i <= B3_STUB_PREVIEW_LONG; i++)); do printf -v line 'spec line %02d with a few words to read' "$i"; text="$text
+$line"; done
+        else
+          text="# $id spec
+
+### Requirement: One
+
+body"
+        fi
+      else
+        reason="openspec/specs/$id/spec.md 不存在"
+      fi
+      ;;
+    change)
+      if [ "$id" = "demo" ] || [ "$id" = "pulse-console" ]; then
+        files="$(printf '[{"tab": "proposal", "name": "proposal.md", "path": "openspec/changes/%s/proposal.md", "size": 30, "truncated": false}, {"tab": "design", "name": "design.md", "path": "openspec/changes/%s/design.md", "size": 30, "truncated": false}, {"tab": "tasks", "name": "tasks.md", "path": "openspec/changes/%s/tasks.md", "size": 30, "truncated": false}]' "$id" "$id" "$id")"
+        case "$want" in
+          ''|"openspec/changes/$id/proposal.md") file="openspec/changes/$id/proposal.md"; text="# $id proposal
+
+the proposal body" ;;
+          "openspec/changes/$id/design.md") file="$want"; text="# $id design
+
+the design body" ;;
+          "openspec/changes/$id/tasks.md") file="$want"; text="# $id tasks
+
+- [ ] 1.1 the task body" ;;
+          *) printf 'panel-b3-stub: --file not in the discovered set: %s\n' "$want" >&2; return 1 ;;
+        esac
+      else
+        reason="openspec/changes/$id/ 下没有 proposal/design/tasks"
+      fi
+      ;;
+    decision)
+      case "$id" in
+        D40|D39|D38)
+          file="docs/team/DECISIONS.md"
+          files="$(printf '[{"tab": "%s", "name": "DECISIONS.md", "path": "docs/team/DECISIONS.md", "size": 40, "truncated": false}]' "$id")"
+          text="## $id · fixture decision
+
+$id body
+
+### $id 补记
+
+deeper addendum"
+          ;;
+        *) reason="DECISIONS.md 里没有 $id" ;;
+      esac
+      ;;
+    *)
+      printf 'panel-b3-stub: unknown --source %s\n' "$source" >&2
+      return 2
+      ;;
+  esac
+  # The single-file sources serve exactly their discovered path.
+  case "$source" in
+    spec|decision)
+      if [ -n "$want" ] && [ "$want" != "$file" ]; then
+        printf 'panel-b3-stub: --file not in the discovered set: %s\n' "$want" >&2
+        return 1
+      fi
+      ;;
+  esac
+  if [ -z "$file" ]; then
+    printf '{"id": %s, "count": 0, "file": "", "text": "", "truncated": false, "files": [], "reason": %s}\n' \
+      "$(json_str "$id")" "$(json_str "$reason")"
+    return 0
+  fi
+  printf '{"id": %s, "count": 1, "file": %s, "text": %s, "truncated": false, "files": %s}\n' \
+    "$(json_str "$id")" "$(json_str "$file")" "$(json_str_ml "$text")" "$files"
+}
+
+changes_json() {
+  case "${B3_STUB_PREVIEWS:-}" in
+    empty|specs-only) printf '%s\n' '{"available": true, "source": "dir", "count": 0, "changes": []}'; return 0 ;;
+  esac
+  cat <<'JSON'
 {"available": true, "source": "openspec", "count": 2, "changes": [
  {"id": "pulse-console", "done": 8, "total": 28, "age": "44m ago", "phase": "apply"},
  {"id": "rename-watchdog", "done": 12, "total": 12, "age": "2d ago", "phase": "verify"}
@@ -134,7 +236,9 @@ changes_json() { cat <<'JSON'
 JSON
 }
 
-specs_json() { cat <<'JSON'
+specs_json() {
+  if [ "${B3_STUB_PREVIEWS:-}" = "empty" ]; then printf '%s\n' '{"available": true, "count": 0, "requirements": 0, "specs": []}'; return 0; fi
+  cat <<'JSON'
 {"available": true, "count": 12, "requirements": 45, "specs": [
  {"name": "panel", "requirements": 12},
  {"name": "watchdog", "requirements": 10},
@@ -144,7 +248,11 @@ specs_json() { cat <<'JSON'
 JSON
 }
 
-decisions_json() { cat <<'JSON'
+decisions_json() {
+  case "${B3_STUB_PREVIEWS:-}" in
+    empty|specs-only) printf '%s\n' '{"count": 0, "recent": []}'; return 0 ;;
+  esac
+  cat <<'JSON'
 {"count": 40, "recent": ["D40 · 2026-09-16 · 决定 — 控制台分三批", "D39 · 2026-09-16 · 决定 — i18n 进 B3", "D38 · 2026-09-15 · 决定 — q 收起不清巡检"]}
 JSON
 }
@@ -290,7 +398,7 @@ case "$block" in
   outbox_list) outbox_list_json ;;
   inbox)       inbox_json ;;
   patrol)      patrol_json ;;
-  detail)      detail_json "$detail_id" "$detail_file" ;;
+  detail)      if [ -n "$detail_source" ]; then preview_json "$detail_source" "$detail_id" "$detail_file"; else detail_json "$detail_id" "$detail_file"; fi ;;
   # pulse-key-replies：三个回复块也是固定数据（默认「显式空」，B3_STUB_REPLY=1 → 一条 1 号回复，
   # =corrupt → 最新槽位不可用），这样第 5 页与总览的摘要行在快照里逐字节可复现。
   reply_summary) reply_summary_json ;;

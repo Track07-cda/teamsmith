@@ -454,7 +454,20 @@ export interface DetailBlock {
   /** True when the served file was cut at the cap. */
   truncated: boolean
   files: DetailFile[]
+  /**
+   * The reader's one-line reason when the requested target is unavailable: a missing capability,
+   * change or decision, or a discovered symbolic link it refused to read through. Absent on a
+   * served read (change: panel-preview-and-compose).
+   */
+  reason?: string
 }
+
+/**
+ * The read-only preview source a detail view addresses (change: panel-preview-and-compose).
+ * `entry` is the original entry-id discovery (task briefs, reports, reviews); the other three are
+ * the closed set the reader's explicit `--source` accepts.
+ */
+export type DetailSource = 'entry' | 'spec' | 'change' | 'decision'
 
 // ---------------------------------------------------------------- key replies (pulse-key-replies)
 

@@ -678,13 +678,16 @@ export function parseSendResult(stdout: string): { rc: number; outcome: string; 
 
 /** The one-line receipt shown under the frame, in the active language's voice. */
 export function receiptLine(receipt: Receipt, s: Strings): string {
+  // A settled receipt normally shows its canonical one-liner; the App puts a non-empty detail here
+  // for the one settle that could not go through cleanly — a draft file it could not empty — so the
+  // frame names the file instead of claiming the draft is gone (P249).
   switch (receipt.state) {
     case 'delivered':
-      return s.receiptDelivered
+      return receipt.detail || s.receiptDelivered
     case 'queued':
-      return s.receiptQueued
+      return receipt.detail || s.receiptQueued
     case 'held':
-      return s.receiptHeld
+      return receipt.detail || s.receiptHeld
     default:
       return fill(s.receiptError, { detail: receipt.detail || s.sendUnconfirmed })
   }

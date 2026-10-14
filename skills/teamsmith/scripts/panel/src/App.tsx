@@ -12,7 +12,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { writeSync } from 'node:fs'
 import { Box, Text, useApp, useCursor, useInput } from 'ink'
-import { layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows } from './layout.js'
+import { layout, resolveFocus, focusRefOf, focusRow, rowKey, settingsRowFocusable, settingsViewRows, boardFocusRef, rowSourceOf } from './layout.js'
 import type { LayoutInput, SettingsRow } from './layout.js'
 import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
@@ -21,6 +21,7 @@ import type { Settings } from './settings.js'
 import type {
   Action,
   DetailWindow,
+  DetailSource,
   FocusRef,
   FrameInput,
   PageId,
@@ -81,8 +82,10 @@ function composeTrayTop(title: string, width: number): string {
 /** The console's own actions, owned by main.tsx (file I/O, subprocesses, the editor relay). */
 export interface PanelApi {
   readDraft(): string
-  writeDraft(text: string): void
-  clearDraft(): void
+  /** Persist the draft; false when the file could not be written (the settle reads this). */
+  writeDraft(text: string): boolean
+  /** Empty `state/draft.md`; false when the file could not be emptied (P249). */
+  clearDraft(): boolean
   send(text: string): Promise<Receipt>
   flushQueue(): Promise<{ ok: boolean; line: string }>
   setStandby(on: boolean, reason: string): Promise<{ ok: boolean; line: string }>
@@ -115,9 +118,11 @@ export interface PanelApi {
   /**
    * Tell the cache which entry's detail view is open (null = closed). While an id is set the
    * `detail` block joins the wanted set; `file` selects the repo-relative path to serve (the first
-   * discovered file when omitted). Both are cached options, so an unchanged call rebuilds nothing.
+   * discovered file when omitted) and `source` the read-only preview family the id addresses
+   * (P249; absent/`entry` is the original entry-id discovery). All three are cached options, so an
+   * unchanged call rebuilds nothing.
    */
-  setDetail(id: string | null, file?: string | null): void
+  setDetail(id: string | null, file?: string | null, source?: DetailSource | null): void
   /**
    * Page 5's demand reads (pulse-key-replies): the list cursor (`before`, null = the newest page and
    * null also drops the list from the wanted set when the page is parked) and the open viewer's
@@ -288,6 +293,7 @@ export function App({
   // The open detail view's entry id (the board page's Enter / a click on the focused card), its
   // tab and its document scroll. The view is read-only: no key of its own beyond navigation.
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailSource, setDetailSource] = useState<DetailSource>('entry')
   const [detailIndex, setDetailIndex] = useState(0)
   const [detailScroll, setDetailScroll] = useState(0)
   // Page 5 (pulse-key-replies): the cursor chain, the stable-number focus, the open body and the
@@ -425,6 +431,7 @@ export function App({
       }
       setViewEntry(null)
       setDetailId(null)
+      setDetailSource('entry')
       setDetailIndex(0)
       setDetailScroll(0)
       api.savePage(next)
@@ -692,14 +699,24 @@ export function App({
     setBusy(true)
     try {
       const r = await api.send(text)
-      setReceipt(r.state === 'error' ? r : { ...r, detail: '' })
       setStatus(null)
-      if (r.state !== 'error') {
+      if (r.state === 'error') {
+        // The error class keeps every word and stays in the editor: nothing durable holds the text,
+        // so the input line is the retry handle and the next Enter tries again (the receipt rides
+        // the hint row while the compose stays open).
+        setReceipt(r)
+      } else if (api.clearDraft()) {
+        // Settled and the file is empty: the input line may follow it (memory = disk).
         updateDraft('', false)
         setPoint(0)
-        api.clearDraft()
+        setReceipt({ ...r, detail: '' })
+        setComposing(false)
+      } else {
+        // Settled, but `state/draft.md` could not be emptied: the memory copy must not be dropped
+        // (that was the ghost draft), so the words stay in the editor and the receipt names the
+        // file it could not empty.
+        setReceipt({ ...r, detail: fill(stringsRef.current.draftNotCleared, { file: 'state/draft.md' }) })
       }
-      setComposing(false)
     } finally {
       sendingRef.current = false
       setBusy(false)
@@ -931,8 +948,9 @@ export function App({
     const cur = focusRef.current
     let idx = -1
     if (cur) {
-      idx = order.findIndex((r) => r.id === cur.id && (r.nth ?? 0) === (cur.nth ?? 0))
-      if (idx < 0) idx = order.findIndex((r) => r.id === cur.id)
+      // The row is matched by its block scope too: two blocks may draw the same id (P249).
+      idx = order.findIndex((r) => r.lane === cur.lane && r.id === cur.id && (r.nth ?? 0) === (cur.nth ?? 0))
+      if (idx < 0) idx = order.findIndex((r) => r.lane === cur.lane && r.id === cur.id)
     }
     if (idx < 0) {
       setFocus(order[0])
@@ -948,22 +966,27 @@ export function App({
     setLaneOffset((prev) => ({ ...prev, [lane]: Math.max(0, Math.min(max, (prev[lane] ?? (win?.offset ?? 0)) + delta)) }))
   }, [])
 
-  /** Open an entry's detail view: the first tab, from the top (the board page's Enter / a click). */
-  const openDetail = useCallback((id: string) => {
+  /** Open an entry's detail view: the first tab, from the top (the board page's Enter / a click).
+   * The source is fixed by the surface that opened it (P249) and rides every reader request. */
+  const openDetail = useCallback((id: string, source: DetailSource = 'entry') => {
     setDetailIndex(0)
     setDetailScroll(0)
+    setDetailSource(source)
     setDetailId(id)
   }, [])
 
-  /** Enter on the work page: open the focused row (or the first drawn one, when it left the board). */
+  /** Enter on the work page: open the focused row (or the first drawn one, when it left the board).
+   * The page-wide order carries each row's block scope, and the scope picks the reader's source. */
   const openWorkFocused = useCallback(() => {
     const order = boardOrderRef.current
     if (!order.length) return
     const cur = focusRef.current
     const hit = cur
-      ? order.find((r) => r.id === cur.id && (r.nth ?? 0) === (cur.nth ?? 0)) ?? order.find((r) => r.id === cur.id)
+      ? order.find((r) => r.lane === cur.lane && r.id === cur.id && (r.nth ?? 0) === (cur.nth ?? 0)) ??
+        order.find((r) => r.lane === cur.lane && r.id === cur.id)
       : undefined
-    openDetail((hit ?? order[0]).id)
+    const row = hit ?? order[0]
+    openDetail(row.id, rowSourceOf(row.lane))
   }, [openDetail])
 
   // ---- project settings (P22/B2): the view's focus walk, its origin and its row opening.
@@ -1481,8 +1504,8 @@ export function App({
       return
     }
     const files = detailBlockData?.files ?? []
-    api.setDetail(detailId, files[detailIndexRef.current]?.path ?? null)
-  }, [api, detailId, detailIndex, detailBlockData])
+    api.setDetail(detailId, files[detailIndexRef.current]?.path ?? null, detailSource)
+  }, [api, detailId, detailIndex, detailSource, detailBlockData])
 
   /** Page 5's slots as the last snapshot carries them (never a re-read of the store). */
   const replyEntries = useCallback((): ReplyEntry[] => dataRef.current.blocks?.reply_list?.entries ?? [], [])
@@ -1663,7 +1686,11 @@ export function App({
             openWorkFocused()
             return
           }
-          const current = resolveFocus(boardRows(), focusRef.current)
+          // A preview row's ref (lane = a preview block's scope) is not a kanban card: no cursor is
+          // drawn for it and Enter opens nothing; a step re-anchors to the board (P249).
+          const focus = focusRef.current
+          if (focus && !boardFocusRef(focus)) return
+          const current = resolveFocus(boardRows(), focus)
           if (current) openDetail(current.id)
           return
         }
@@ -1763,6 +1790,10 @@ export function App({
           // command's refusal) rides the hint row *above* the input so the input line stays last
           // (the IME cursor anchor rule) while the editor stays open with its draft.
           ...(status && (mode === 'setting' || mode === 'filter') ? [status] : []),
+          // P249: a message send that could not settle cleanly (the error class, or a draft file the
+          // console could not empty) keeps the compose open, so its receipt rides the same row — the
+          // words and the reason are visible together.
+          ...(mode === 'message' && receipt ? [receiptLine(receipt, strings)] : []),
           mode === 'message'
             ? strings.composeHint
             : mode === 'reason'
@@ -2322,7 +2353,10 @@ export function App({
         return
       }
       if (page === 4 && key.return) {
-        const current = resolveFocus(boardRows(), focusRef.current)
+        // Same rule as the click path: a preview row's ref neither draws nor opens on the kanban.
+        const focus = focusRef.current
+        if (focus && !boardFocusRef(focus)) return
+        const current = resolveFocus(boardRows(), focus)
         if (current) openDetail(current.id)
         return
       }

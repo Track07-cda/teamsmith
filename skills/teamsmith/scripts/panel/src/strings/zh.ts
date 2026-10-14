@@ -99,6 +99,7 @@ export const zh = {
   // 详情视图（只读）
   detailTitle: '详情 {id}',
   detailNoFiles: '（这个入口没有关联文件）',
+  detailUnavailable: '（来源不可用：{reason}）',
   detailTruncated: '… 已截断（只显示前 128 KiB）',
   detailLoading: '… 读取中',
 
@@ -436,6 +437,7 @@ export const zh = {
   receiptQueued: '… 已入队（PM 的输入框在忙）· queued',
   receiptHeld: '! 滞留（副本在 state/outbox/held/）· held',
   receiptError: '✗ 投递未确认 · {detail}',
+  draftNotCleared: '✗ 已结算，但草稿文件清不掉：{file}（文字保留在输入行）',
   flushOk: '✓ 冲刷 · {detail}',
   flushFail: '✗ 冲刷失败 · {detail}',
   standbyOkOn: '✓ 待命 on（原因：{reason}）',

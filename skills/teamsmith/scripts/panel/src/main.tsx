@@ -54,7 +54,7 @@ import { fill, stringsFor } from './strings/index.js'
 import { PANEL_CONF_FILE, PANEL_PAGE_FILE, readPage, readSettings, writePage, writeSettings } from './settings.js'
 import type { Settings } from './settings.js'
 import { contrastPairs, PALETTES, resolveTheme } from './theme.js'
-import type { FrameInput, PageId, ViewState } from './types.js'
+import type { FrameInput, PageId, ViewState, DetailSource } from './types.js'
 
 /** The Kitty keyboard protocol's pop/push pair, written around the editor handoff (design §6). */
 const KITTY_POP = '\u001b[<u'
@@ -169,6 +169,14 @@ const langArg = argOf('lang')
 /** `--detail <ID>`: render the read-only detail view in a snapshot (the overlay's sibling exit). */
 const detailArg = argOf('detail') || ''
 /**
+ * `--detail-source entry|spec|change|decision`: the source the snapshot's detail view addresses.
+ * Read-only and snapshot-only — the live console passes its source through `api.setDetail`. An
+ * unrecognised value is ignored (entry), so the argument cannot open a way out of the closed set.
+ */
+const detailSourceRaw = argOf('detail-source') || ''
+const detailSourceArg =
+  detailSourceRaw === 'spec' || detailSourceRaw === 'change' || detailSourceRaw === 'decision' ? detailSourceRaw : 'entry'
+/**
  * Page 5's snapshot/demand knobs (pulse-key-replies). `--reply-no N` opens that number's viewer,
  * `--reply-before N` pins the list cursor and `--reply-focus N` pins the focused slot, so the
  * snapshot matrix can render summary/list/empty/corrupt/continuation/long-body deterministically.
@@ -186,7 +194,7 @@ if (has('help')) {
   out(
     'usage: panel.js [--root DIR] [--state-dir DIR] [--print|--json|--once|--headless|--snapshot|--palette]\n' +
       '                [--width N] [--height N] [--activity|--no-activity] [--events N] [--refresh N]\n' +
-      '                [--no-pulse] [--theme dark|light] [--page 1|2|3|4|5] [--lang zh|en] [--overlay] [--detail ID]\n' +
+      '                [--no-pulse] [--theme dark|light] [--page 1|2|3|4|5] [--lang zh|en] [--overlay] [--detail ID] [--detail-source entry|spec|change|decision]\n' +
       '                [--reply-no N] [--reply-before N] [--reply-focus N] [--version]\n',
   )
   process.exit(0)
@@ -346,6 +354,7 @@ async function main(): Promise<void> {
       activity: rawActivityOn,
       events,
       detailId: detailArg || null,
+      detailSource: detailArg ? detailSourceArg : null,
       replyListOpen: page === 5 && !replyNoArg,
       replyBefore: replyBeforeArg || null,
       replyNo: page === 5 && replyNoArg ? replyNoArg : null,
@@ -491,12 +500,19 @@ async function main(): Promise<void> {
       return ''
     }
   }
-  function writeDraft(text: string): void {
+  /**
+   * Write `state/draft.md`. Returns whether the write landed: the send settle empties the file first
+   * and must know the result before it may drop the in-memory draft (change
+   * panel-preview-and-compose — memory and disk never disagree about the draft).
+   */
+  function writeDraft(text: string): boolean {
     try {
       mkdirSync(stateDir, { recursive: true })
       writeFileSync(draftFile, String(text ?? ''))
+      return true
     } catch {
       /* a state directory the console cannot write must not kill the panel */
+      return false
     }
   }
 
@@ -784,7 +800,7 @@ async function main(): Promise<void> {
   const api: PanelApi = {
     readDraft,
     writeDraft,
-    clearDraft: () => writeDraft(''),
+    clearDraft: (): boolean => writeDraft(''),
     send,
     flushQueue,
     setStandby,
@@ -819,16 +835,24 @@ async function main(): Promise<void> {
       opts.activity = on
       refreshNow()
     },
-    setDetail: (id: string | null, file?: string | null) => {
+    setDetail: (id: string | null, file?: string | null, source?: DetailSource | null) => {
       const nextId = id ?? null
       const nextFile = nextId ? file ?? null : null
-      if ((opts.detailId ?? null) === nextId && (opts.detailFile ?? null) === nextFile) return
+      const nextSource: DetailSource = nextId ? source ?? 'entry' : 'entry'
+      if (
+        (opts.detailId ?? null) === nextId &&
+        (opts.detailFile ?? null) === nextFile &&
+        (opts.detailSource ?? 'entry') === nextSource
+      )
+        return
       opts.detailId = nextId
       opts.detailFile = nextFile
+      opts.detailSource = nextSource
       // The detail block is off the tick path: only the view's own open/tab-switch forces a build.
       if (!nextId) return
       // The cached block already serves this file (the open returns the first file without
-      // `--file`): record the option and rebuild nothing, so the effect can stay idempotent.
+      // `--file`): record the option and rebuild nothing, so the effect can stay idempotent. The
+      // source is part of the identity — the same id from two sources is two different reads.
       const cached = cache.snapshot().blocks?.detail
       if (cached?.id === nextId && nextFile && cached.file === nextFile) return
       void cache.refresh({ force: true, only: ['detail'] }).then(adopt)

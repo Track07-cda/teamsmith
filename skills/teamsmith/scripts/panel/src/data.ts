@@ -22,7 +22,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { sanitizeDeep } from './sanitize.js'
-import type { ActivityBlock, PanelBlocks, PanelData } from './types.js'
+import type { ActivityBlock, DetailSource, PanelBlocks, PanelData } from './types.js'
 
 /**
  * M40 — the panel's identity is its own root (`--root`, else cwd), never an inherited `TEAM_*`.
@@ -120,6 +120,12 @@ export interface DataOptions {
   blocks?: readonly BlockName[]
   /** The detail view's entry id; while set, `detail` joins the wanted set (null/absent = parked). */
   detailId?: string | null
+  /**
+   * The read-only preview source the open detail view addresses (change:
+   * panel-preview-and-compose). Absent/`entry` keeps the original entry-id discovery; the other
+   * three become an explicit `--source` on the reader's argv.
+   */
+  detailSource?: DetailSource | null
   /** True while the project-settings view is open; only then does `settings` join the wanted set. */
   settingsOpen?: boolean
   /** The detail file to serve with `--file` (must be one of the discovered paths). */
@@ -187,14 +193,16 @@ const BLOCK_SPECS: Record<BlockName, BlockSpec> = {
   patrol: { ttlMs: 15000, timeoutMs: 10000 },
   health: { ttlMs: 600000, timeoutMs: 30000 },
   // The detail reader rides the open view: the App forces it on open and on a tab switch, so its TTL
-  // only covers a stale refresh while the view stays open. The `--id`/`--file` arguments come from
-  // the live options; both are cleared when the view closes.
+  // only covers a stale refresh while the view stays open. The `--id`/`--source`/`--file` arguments
+  // come from the live options; all are cleared when the view closes. The `entry` source stays
+  // implicit so an existing caller's argv is byte-identical.
   detail: {
     ttlMs: 15000,
     timeoutMs: 10000,
     extraArgs: (opts) => {
       if (!opts.detailId) return []
       const args = ['--id', String(opts.detailId)]
+      if (opts.detailSource && opts.detailSource !== 'entry') args.push('--source', opts.detailSource)
       if (opts.detailFile) args.push('--file', String(opts.detailFile))
       return args
     },

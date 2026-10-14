@@ -31,6 +31,7 @@ import type {
   ChangeRow,
   Density,
   DetailBlock,
+  DetailSource,
   DetailWindow,
   FocusRef,
   Frame,
@@ -742,8 +743,12 @@ function boardBlock(ctx: Ctx): Block | null {
   // M48: the focus names a **row**, not a bare id — two rows may share one id, and matching by id
   // highlights both at once and freezes the `↑`/`↓` walk on the first of them.
   const ordinals = dupOrdinals(rows)
-  const named = focusRow(rows, ctx.view.focus)
-  const focusedRow = named && rendered.includes(named) ? named : (rendered[0] ?? null)
+  const scoped = boardFocusRef(ctx.view.focus)
+  const named = scoped ? focusRow(rows, scoped) : null
+  // P249: a preview row's ref never lights a board row — the page's one cursor belongs to that
+  // block; the board only draws its default (first rendered row) when nothing is focused at all.
+  const focusedRow =
+    ctx.view.focus && !scoped ? null : named && rendered.includes(named) ? named : (rendered[0] ?? null)
   const order = rendered.map((r) => refFor(r, ordinals))
   for (const r of rendered) {
     const focused = r === focusedRow
@@ -956,6 +961,15 @@ function resolveFocusWith(
     if (card) return refFor(card, ordinals)
   }
   return null
+}
+
+/**
+ * The board-scoped part of a focus ref (P249): a preview row's ref (lane = a preview block's scope) never
+ * names a kanban card, so the board page neither draws a cursor for it nor opens anything from it. A
+ * missing ref keeps the board's own default (the first card of the first non-empty lane).
+ */
+export function boardFocusRef(focus?: FocusRef | null): FocusRef | null {
+  return focus && LANES.includes(focus.lane) ? focus : null
 }
 
 /**
@@ -1178,7 +1192,10 @@ function kanbanBlock(ctx: Ctx): Block | null {
   const rows = board.rows ?? []
   if (!rows.length) return one([{ line: truncLine(ln(seg(` ${s.boardEmpty}`, 'dim')), ctx.width) }])
   const ordinals = dupOrdinals(rows)
-  const focus = resolveFocusWith(rows, ordinals, ctx.view.focus)
+  // P249: only a ref that names one of the six lanes (or no ref at all, which keeps the board's own
+  // default cursor) resolves here; a preview row's ref puts no cursor on the kanban.
+  const focus =
+    ctx.view.focus && !LANES.includes(ctx.view.focus.lane) ? null : resolveFocusWith(rows, ordinals, ctx.view.focus)
   // M48: one row object is the focus; every `card === target` below is O(1) and two rows sharing an
   // id never both light up. The duplicate ordinals are built once per frame and shared by the
   // focus/actions (no per-lane or per-card rescan of the board).
@@ -1278,11 +1295,19 @@ function detailBlock(ctx: Ctx): Block | null {
     return one([{ line: truncLine(ln(seg(` ${s.detailLoading}`, 'dim')), width) }], { index: 0, total: 0, visible: 0, offset: 0 })
   }
   const files = data.files ?? []
-  if (!files.length) return one([{ line: truncLine(ln(seg(` ${s.detailNoFiles}`, 'dim')), width) }])
+  if (!files.length) {
+    // A missing target is not an error: the reader's reason names it, so the view says the source is
+    // unavailable instead of rendering an empty document as a successful read (P249).
+    const line = data.reason ? fill(s.detailUnavailable, { reason: data.reason }) : s.detailNoFiles
+    return one([{ line: truncLine(ln(seg(` ${line}`, 'dim')), width) }])
+  }
   const detail = data as DetailBlock
   const index = Math.max(0, Math.min(files.length - 1, Math.floor(ctx.view.detailIndex ?? 0) || 0))
   const active = files[index]
   const rows: PlacedLine[] = [detailTabs(ctx, files, index, width)]
+  // The reader refused a discovery (a symbolic link): the other files still open, and the reason
+  // names what was refused (P249).
+  if (data.reason) rows.push({ line: truncLine(ln(seg(` ${data.reason}`, 'warn')), width) })
   if (active.truncated) rows.push({ line: truncLine(ln(seg(` ${s.detailTruncated}`, 'warn')), width) })
   if (detail.file !== active.path) {
     // The tab was switched and its text has not arrived yet: the tabs stay live, the body says why.
@@ -2148,6 +2173,91 @@ function changeTasksLine(ch: ChangeRow, width: number): PlacedLine | null {
   return widthOf(line) <= width ? { line } : null
 }
 
+/**
+ * P249 · the work page's preview blocks: the changes/specs/decisions rows are focusable on the same
+ * terms as the board rows (one cursor, a two-stage click, a stop in the page-wide drawn order), and
+ * the source a row hands to the detail view is fixed by the block it was drawn in.
+ */
+
+/** The duplicate ordinal of each focusable key in a preview block (the board's `dupOrdinals` twin). */
+function previewOrdinals(keys: string[]): number[] {
+  const seen = new Map<string, number>()
+  return keys.map((key) => {
+    const nth = seen.get(key) ?? 0
+    seen.set(key, nth + 1)
+    return nth
+  })
+}
+
+/**
+ * The focused key's index: the exact (id, nth) when it names one of this block's rows, the id's first
+ * row when the duplicate it named left, else the first drawn row. A ref scoped to another block (or to
+ * a board lane) never lights a row here — each block only draws its own focus.
+ */
+function previewFocusIndex(ctx: Ctx, scope: string, keys: string[], ordinals: number[]): number {
+  const f = ctx.view.focus
+  if (f && f.lane === scope) {
+    const nth = Math.max(0, f.nth ?? 0)
+    const exact = keys.findIndex((id, i) => id === f.id && ordinals[i] === nth)
+    if (exact >= 0) return exact
+    const first = keys.indexOf(f.id)
+    if (first >= 0) return first
+    return 0
+  }
+  // No focus, or a focus the board owns: this block draws no cursor (the page has exactly one).
+  return -1
+}
+
+/** The detail source a work-page focus lane addresses (P249); a board lane stays the entry source. */
+export function rowSourceOf(lane: string): DetailSource {
+  if (lane === 'changes') return 'change'
+  if (lane === 'specs') return 'spec'
+  if (lane === 'decisions') return 'decision'
+  return 'entry'
+}
+
+/**
+ * One preview block's drawn rows with the P249 focus kit: a row whose `key` is a string is a stop —
+ * drawn with the cursor and the `selected` tone when focused, one `open-focused`/`focus` target, and
+ * one entry in the block's drawn-row order (the assembly concatenates the blocks' orders into the
+ * page order); a row whose key is null is drawn but is not a stop (there is nothing to open).
+ */
+function previewLines(
+  ctx: Ctx,
+  scope: string,
+  drawn: { key: string | null; content: Line }[],
+  width: number,
+): { lines: PlacedLine[]; order: FocusRef[] } {
+  const keys = drawn.filter((d) => d.key !== null).map((d) => d.key as string)
+  const ordinals = previewOrdinals(keys)
+  const focusIdx = keys.length ? previewFocusIndex(ctx, scope, keys, ordinals) : -1
+  const lines: PlacedLine[] = []
+  const order: FocusRef[] = []
+  let k = -1
+  for (const d of drawn) {
+    if (d.key === null) {
+      lines.push({ line: truncLine(d.content, width) })
+      continue
+    }
+    k++
+    const nth = ordinals[k]
+    const focused = k === focusIdx
+    order.push({ lane: scope, id: d.key, nth })
+    const line = ln(focused ? seg(`${FOCUS_CURSOR} `, 'selected') : seg('  '), ...d.content)
+    const action: Action = focused
+      ? { kind: 'open-focused', lane: scope }
+      : { kind: 'focus', lane: scope, id: d.key, nth }
+    lines.push(placedWithHits(line, ctx.view.tui ? [{ start: 0, end: widthOf(line), action }] : undefined, width))
+  }
+  return { lines, order }
+}
+
+/** The `D<n>` a decision heading names; a heading without one is drawn but not openable. */
+function decisionIdOf(title: string): string | null {
+  const m = /^D([0-9]+)(?![0-9])/.exec(String(title).trim())
+  return m ? `D${m[1]}` : null
+}
+
 function changesBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg, width } = ctx
   const c = blocks.changes
@@ -2156,22 +2266,20 @@ function changesBlock(ctx: Ctx): Block | null {
     return { id: 'changes', title: s.changesHeading, right: true, priority: 11, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
   if (!c.changes.length) return null // an empty block collapses and yields its space
-  const lines: PlacedLine[] = []
+  const drawn: { key: string | null; content: Line }[] = []
   for (const ch of c.changes as ChangeRow[]) {
-    lines.push({
-      line: truncLine(
-        ln(
-          seg('  '),
-          seg(cell(ch.id, 18), 'accent'),
-          seg(fill(s.changeLine, { done: ch.done, total: ch.total, phase: changePhaseText(ch.phase, s) })),
-        ),
-        width,
-      ),
+    drawn.push({
+      key: ch.id,
+      content: [
+        seg(cell(ch.id, 18), 'accent'),
+        seg(fill(s.changeLine, { done: ch.done, total: ch.total, phase: changePhaseText(ch.phase, s) })),
+      ],
     })
     const toks = changeTasksLine(ch, width)
-    if (toks) lines.push(toks)
+    if (toks) drawn.push({ key: null, content: toks.line })
   }
-  return { id: 'changes', title: fill(s.changesHeadingCount, { n: c.count }), right: true, priority: 11, lines, summary: { line: truncLine(ln(seg(` ${fill(s.changesHeadingCount, { n: c.count })}`, 'heading')), width) } }
+  const { lines, order } = previewLines(ctx, 'changes', drawn, width)
+  return { id: 'changes', title: fill(s.changesHeadingCount, { n: c.count }), right: true, priority: 11, lines, order, summary: { line: truncLine(ln(seg(` ${fill(s.changesHeadingCount, { n: c.count })}`, 'heading')), width) } }
 }
 
 function specsBlock(ctx: Ctx): Block | null {
@@ -2181,13 +2289,16 @@ function specsBlock(ctx: Ctx): Block | null {
   if (deg.has('specs') || !sp.available) {
     return { id: 'specs', title: s.specsHeading, right: true, priority: 13, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
+  const drawn = (sp.specs ?? []).slice(0, 6).map((row) => ({
+    key: row.name,
+    content: [seg(cell(row.name, Math.max(8, width - 10)), 'text'), seg(` ${row.requirements}`, 'dim')],
+  }))
+  const { lines: rows, order } = previewLines(ctx, 'specs', drawn, width)
   const lines: PlacedLine[] = [
     { line: truncLine(ln(seg(fill(s.specsCount, { specs: sp.count, reqs: sp.requirements }), 'dim')), width) },
+    ...rows,
   ]
-  for (const row of (sp.specs ?? []).slice(0, 6)) {
-    lines.push({ line: truncLine(ln(seg('  '), seg(cell(row.name, Math.max(8, width - 10)), 'text'), seg(` ${row.requirements}`, 'dim')), width) })
-  }
-  return { id: 'specs', title: s.specsHeading, right: true, priority: 13, lines, summary: { line: truncLine(ln(seg(` ${s.specsHeading}`, 'heading')), width) } }
+  return { id: 'specs', title: s.specsHeading, right: true, priority: 13, lines, order, summary: { line: truncLine(ln(seg(` ${s.specsHeading}`, 'heading')), width) } }
 }
 
 function decisionsBlock(ctx: Ctx): Block | null {
@@ -2197,12 +2308,16 @@ function decisionsBlock(ctx: Ctx): Block | null {
   if (deg.has('decisions')) {
     return { id: 'decisions', title: s.decisionsHeading, right: true, priority: 14, lines: [{ line: ln(seg(` ${s.dash}`, 'dim')) }] }
   }
+  const drawn: { key: string | null; content: Line }[] = d.recent
+    .slice(0, 3)
+    .map((r) => ({ key: decisionIdOf(r), content: [seg(r, 'dim')] }))
+  const { lines: rows, order } = previewLines(ctx, 'decisions', drawn, width)
   const lines: PlacedLine[] = [
     { line: truncLine(ln(seg(fill(s.decisionsCountSuffix, { n: d.count }), 'dim')), width) },
   ]
   if (!d.recent.length) lines.push({ line: ln(seg(`  ${s.decisionsEmpty}`, 'dim')) })
-  for (const r of d.recent.slice(0, 3)) lines.push({ line: truncLine(ln(seg(`  ${r}`, 'dim')), width) })
-  return { id: 'decisions', title: s.decisionsHeading, right: true, priority: 14, lines, summary: { line: truncLine(ln(seg(` ${s.decisionsHeading}`, 'heading')), width) } }
+  lines.push(...rows)
+  return { id: 'decisions', title: s.decisionsHeading, right: true, priority: 14, lines, order, summary: { line: truncLine(ln(seg(` ${s.decisionsHeading}`, 'heading')), width) } }
 }
 
 // ------------------------------------------------------------------ body blocks (page 3)
@@ -2737,14 +2852,16 @@ export function layout(input: LayoutInput): Frame {
   const rightBlocks = middle.filter((b) => !b.full && b.right)
 
   const framed = isFramed(ctx)
-  let boardOrder: FocusRef[] | undefined
-  const place = (block: Block, remaining: number, colWidth: number): PlacedLine[] => {
+  // P249: the work page's drawn-row order is **page-wide** — each block that really draws its rows
+  // reports them in the order it drew them and the assembly concatenates the blocks in placement
+  // order (left column top-to-bottom, then the right column). A block degraded to its summary line
+  // draws no row and contributes nothing.
+  let pageOrder: FocusRef[] = []
+  const place = (block: Block, remaining: number, colWidth: number, sink: FocusRef[] | null): PlacedLine[] => {
     const kind = pickChrome(block, remaining, framed)
     if (kind === null) return []
     if (kind === 'summary') return [summaryLine(block, colWidth)]
-    // The order is only reported for a block that really draws its rows: a block degraded to its
-    // summary line has no row to focus (P20/B5).
-    if (block.order) boardOrder = block.order
+    if (block.order && sink) sink.push(...block.order)
     return wrapBlock(block, colWidth, kind)
   }
 
@@ -2778,7 +2895,7 @@ export function layout(input: LayoutInput): Frame {
     if (block.id === 'settings' && block.settings) settingsWindow = block.settings
     if (block.id === 'reply_list' && block.replyList) replyListWindow = block.replyList
     if (block.id === 'reply_viewer' && block.replyDoc) replyDocWindow = block.replyDoc
-    const chunk = place(block, budget - fullRows.length, width)
+    const chunk = place(block, budget - fullRows.length, width, null)
     for (const l of chunk) fullRows.push(l)
   }
   add(fullRows)
@@ -2791,6 +2908,8 @@ export function layout(input: LayoutInput): Frame {
       // One placement pass over the page's body blocks; `cards` is re-derived so pass 2 can carry a
       // board with more history visible.
       const placeColumns = (cards: Block[]): [PlacedLine[], PlacedLine[]] => {
+        // Each pass starts a fresh page order; the final pass is the one whose rows are rendered.
+        pageOrder = []
         const columns: [PlacedLine[], PlacedLine[]] = [[], []]
         const ordered = [
           ...cards.filter((b) => !b.right).map((b) => ({ b, slot: 0 as 0 | 1 })),
@@ -2804,7 +2923,7 @@ export function layout(input: LayoutInput): Frame {
           // had a full column of empty width. `pickChrome` keeps every column within `bodyBudget`, so
           // the flush below still ends both columns on the same row.
           const used = columns[slot].length
-          const chunk = place(b, bodyBudget - used, colW)
+          const chunk = place(b, bodyBudget - used, colW, pageOrder)
           for (const l of chunk) columns[slot].push(l)
         }
         return columns
@@ -2865,9 +2984,10 @@ export function layout(input: LayoutInput): Frame {
     } else {
       const columnW = width
       let used = 0
+      pageOrder = []
       const ordered = [...leftBlocks, ...rightBlocks].sort((x, y) => x.priority - y.priority)
       for (const b of ordered) {
-        const chunk = place(b, bodyBudget - used, columnW)
+        const chunk = place(b, bodyBudget - used, columnW, pageOrder)
         for (const l of chunk) rows.push({ line: truncLine(l.line, columnW), hits: l.hits })
         used += chunk.length
       }
@@ -2886,11 +3006,12 @@ export function layout(input: LayoutInput): Frame {
     }
   }
 
-  // The work page's row chips are rebuilt after placement: they exist only while the board block
-  // really draws rows, so a degraded work page has no clickable row key that cannot open anything
-  // (P20/B5). Both variants are one line, so the budget above is unaffected.
+  // The work page's row chips are rebuilt after placement: they exist only while at least one block
+  // really draws a focusable row, so a degraded work page has no clickable row key that cannot open
+  // anything (P20/B5, generalised to the preview blocks in P249). Both variants are one line, so the
+  // budget above is unaffected.
   const footerShown =
-    ctx.view.page === 2 && !ctx.view.detail && !ctx.view.overlay && !boardOrder ? keyBandBlock(ctx, false) : footer
+    ctx.view.page === 2 && !ctx.view.detail && !ctx.view.overlay && !pageOrder.length ? keyBandBlock(ctx, false) : footer
 
   // The footer is the last row; when the height cannot even hold it, it is the only row kept.
   if (height > 0 && rows.length + footerShown.lines.length > height) {
@@ -2931,7 +3052,7 @@ export function layout(input: LayoutInput): Frame {
     ...(replyListWindow ? { replyList: replyListWindow } : {}),
     ...(replyDocWindow ? { replyDoc: replyDocWindow } : {}),
     ...(settingsWindow ? { settings: settingsWindow } : {}),
-    ...(boardOrder ? { boardOrder } : {}),
+    ...(pageOrder.length ? { boardOrder: pageOrder } : {}),
   }
 }
 
