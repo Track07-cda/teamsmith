@@ -419,6 +419,7 @@
 | P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | todo |
 | P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | todo |
 | P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | wip |
+| P261 | Startup self-heal: apply (config shape migration, PM identity, version notice) | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
