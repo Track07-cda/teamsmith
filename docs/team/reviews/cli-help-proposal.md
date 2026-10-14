@@ -2,6 +2,8 @@
 
 > 说明：本文是第一轮的复核记录，写于作者交回修订**之前**；第二轮判定见文末「第二轮」一节，最终判定以那节为准。
 
+- 判定: **ACCEPTED**（最终结论：第二轮修订稿 `b6672d97` 通过；**第一轮曾判 NEEDS-CHANGES**，其原文与两项必修保留在下方，未改动）
+- 本文件结构：第一部分是第一轮记录（历史），文末「第二轮」是最终判定；机器读的判定以本行为准
 - 复核者：PM（未参与撰写）
 - 输入：分支 `task/P252-cli-help-propose`，冻结 tip 见派单消息；证据 `pm-skills-ledger/team/reviews/P252/`（独立 clone `scratch/`、试归档副本 `trial/`）
 - 我独立跑过：严格校验 **18 passed / 0 failed**；试归档投影成功（`archive cli-help` → `2026-10-14-cli-help`），归档后 **18/0**；逐节读了 proposal / design 十条决策 / tasks 六节 / delta 的 6 条 ADDED requirement。
