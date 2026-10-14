@@ -137,10 +137,12 @@ Guards and limitations:
 
 ## 4b. Key replies: publish the body before you answer
 
-The wake-up loop carries a *pointer* (`inbox/<agent>.md` plus a knock), and the report carries the *process*. Neither
-carries the **body** of a substantive answer, and both are transient or post-hoc: the inbox is gitignored, and a report
-is written after the work. When an answer itself is the durable artefact — a decision, a trade-off, a root cause, a
-finding someone will quote weeks later — publish that body explicitly before you send it:
+Publishing the body of a key conclusion is a **standing duty of the PM**, not a licence for answers that merely look
+memorable: it travels with the tool, so it holds in every project and on every machine. The wake-up loop carries a
+*pointer* (`inbox/<agent>.md` plus a knock) and the report carries the *process*; neither carries the **body**, and
+both are transient or post-hoc — the inbox is gitignored, and a report is written after the work. Before a milestone
+lands, before you issue a ruling, and before you ask the user to decide, publish the **complete conclusion** — the
+whole answer, not a summary — with:
 
 ```
 team reply post --from <seat> --title "<short single line>" --stdin <<'EOF'
@@ -148,7 +150,8 @@ team reply post --from <seat> --title "<short single line>" --stdin <<'EOF'
 EOF
 ```
 
-Then send the answer normally. Publication **never gates the answer**: the same body goes out whether the post
+A batch of conclusions may be one reply, and a reply carries conclusions rather than process narration. Then send the
+answer normally. Publication **never gates the answer**: the same body goes out whether the post
 reported `saved` (0), an input error (2), storage unavailable (4), a busy writer (5, the lock wait is bounded) or
 `unconfirmed` (6, the entry is visible but its durability could not be confirmed — never re-post it automatically).
 Failures are diagnostics on stderr; they must not be concatenated into the answer, and they must not stop it.
@@ -166,8 +169,10 @@ What a receipt does and does not mean:
   (newest first), `team reply show <no>` prints safe display text, `team reply show <no> --raw` exports the original
   bytes to a non-TTY stdout, and the console's page 5 renders the latest reply plus the numbered history. Flags and
   exit codes are in `team reply --help`.
-- **The honest limit**: the fixtures can only prove that both exits carry the same body for a *fixture* agent. No tool
-  can verify that a real agent follows this guidance — so it is written here as a rule, not enforced by the store.
+- **The honest limit**: the gate holds only that this duty is shipped on the instruction surfaces (the injected PM
+  prompt template, this section, the command table) and that the example command printed there is accepted by the real
+  parser. No tool can verify that a live PM follows the duty — which conclusions a PM published, and whether the body
+  matched the answer, stay unprovable from here.
 
 ## 5. Task briefs: written for "a weak model without context"
 

@@ -16,6 +16,7 @@
 #   workflow     指引：fixture Agent 在五种结果后仍发同一正文、回执 body-free、账本不变（4.1）
 #   flip         坏源码→红→还原→绿：九条具名 guard 的独立 scratch 源码 + 哈希（2.4）
 #   skip-path    缺观测器（/proc/<pid>/io）时可见跳过并点名，而不是判红（V27 M3）
+#   guide        指引面：PM 提示词/协议/命令表三处纪律在场 + 示例命令对拍真解析器 + 四变异红侧（change: pm-reply-discipline · P267）
 #
 # 隔离（M7.2 的纪律）：夹具只在临时根里的私有仓库跑真 CLI；进入任何写盘命令前先断言
 # `team paths` 的 main_root 等于夹具仓库（不是真实仓库）；跑完断言真实仓库的 docs/team/inbox
@@ -44,7 +45,7 @@ while [ $# -gt 0 ]; do
     *) printf 'key-replies.sh：未知参数 %s（-h 看用法）\n' "$1" >&2; exit 2 ;;
   esac
 done
-KR_ALL_GROUPS=(input paths original concurrency receipts interrupt paging bounded readonly workflow flip skip-path)
+KR_ALL_GROUPS=(input paths original concurrency receipts interrupt paging bounded readonly workflow flip skip-path guide)
 if [ "$ALL" = "1" ] && [ "${#KR_GROUPS[@]}" -gt 0 ]; then
   printf 'key-replies.sh：--all 与 --select 不同用\n' >&2; exit 2
 fi
@@ -1044,6 +1045,217 @@ kr_group_skip_path() {
   local skips; skips="$(grep -c 'SKIP' "$out" 2>/dev/null || echo 0)"
   if [ "$skips" -ge 3 ]; then ok "skip-path：子进程打印了 $skips 条可见跳过"; else bad "skip-path：可见跳过只有 $skips 条"; fi
   kr_ev_save "$out" "skip-path-bounded-flip.txt"
+}
+
+# ---------------------------------------------------------------- 组：guide（change: pm-reply-discipline · P267）
+# 纪律要随工具走：三处指令面（注入的 PM 提示词 / 协议的 §4b / SKILL 命令表）各自带着同一套**语义锚点**
+# （大小写不敏感；断言的是「义务在场」，不是逐字措辞）。模板里印出来的示例命令必须被**真解析器**接受
+# ——「印出来就能用」是承诺兑现；控制臂（同一 argv 追加未知旗标）必须被拒，否则这个探针是空对空。
+# 四个 $TMP 变异副本必须红并点名被改的面，重新从真树复制后绿。真树与真项目在这一组里只读。
+guide_spec() { # <面名> → 分号分隔的锚点；`row:` 前缀 = 必须落在 SKILL 的 `| Key replies |` 行内
+  case "$1" in
+    "prompt template")    printf '%s' 'conclusion;milestone;ruling;ask the user;--stdin;team reply post' ;;
+    "protocol reference") printf '%s' 'conclusion;milestone;ruling;ask the user;--stdin;team reply post;No tool can verify' ;;
+    "command table")      printf '%s' 'milestone;ruling;ask the user;row:conclusion;row:say;row:notify;row:--stdin;row:team reply post' ;;
+  esac
+}
+
+guide_surface_path() { # <面名> → 该面的真实路径
+  case "$1" in
+    "prompt template")    printf '%s\n' "$SKILL_DIR/templates/pm-prompt.md.tmpl" ;;
+    "protocol reference") printf '%s\n' "$SKILL_DIR/references/protocol.md" ;;
+    "command table")      printf '%s\n' "$SKILL_DIR/SKILL.md" ;;
+  esac
+}
+
+guide_check_surface() { # <面名> <文件>：绿=0；红=1 并点名面 + 缺的锚点（真树与变异副本共用）
+  local name="$1" f="$2" specs row="" miss="" a want
+  local -a arr
+  if [ ! -f "$f" ]; then
+    bad "guide-surfaces：$name 文件缺失（$f）—— 这个面不再承载「关键结论先发布」"
+    return 1
+  fi
+  specs="$(guide_spec "$name")"
+  case "$specs" in *row:*) row="$(grep -m1 '^| Key replies |' "$f" 2>/dev/null)" ;; esac
+  IFS=';' read -r -a arr <<<"$specs"
+  for a in "${arr[@]}"; do
+    case "$a" in
+      row:*)
+        want="${a#row:}"
+        if [ -z "$row" ] || ! printf '%s' "$row" | grep -qiF -- "$want"; then
+          miss="$miss [$want]（Key replies 行内）"
+        fi ;;
+      *)
+        grep -qiF -- "$a" "$f" || miss="$miss [$a]" ;;
+    esac
+  done
+  if [ -z "$miss" ]; then
+    ok "guide-surfaces：$name 带着全部语义锚点（${specs//;/、}，大小写不敏感）"
+  else
+    bad "guide-surfaces：$name 丢了纪律锚点：$miss —— 这个面不再承载「关键结论先发布」"
+    return 1
+  fi
+}
+
+guide_example_cmd() { # <模板> → 唯一示例命令（去反引号）；次数≠1/形状不全 → rc1 + stderr 说明
+  local tmpl="$1" n cmd
+  n="$(grep -c -- 'team reply post' "$tmpl" 2>/dev/null || true)"
+  if [ "${n:-0}" != "1" ]; then
+    printf '模板里 team reply post 出现 %s 次（示例命令必须是唯一一行）' "${n:-0}" >&2
+    return 1
+  fi
+  cmd="$(grep -o 'team reply post[^`]*' "$tmpl" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//')"
+  if ! printf '%s' "$cmd" | grep -q -- '--stdin'; then
+    printf '示例命令里没有 --stdin（取到 [%s]）' "$cmd" >&2
+    return 1
+  fi
+  case "$cmd" in
+    *'< '*) ;;
+    *) printf '示例命令没有用 < <file> 把正文从文件重定向进来（取到 [%s]）' "$cmd" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$cmd"
+}
+
+guide_run_example() { # <夹具项目> <旗标文本（印刷原样，去掉重定向）> <正文文件> —— 行首 team 解析为真 CLI
+  local p="$1" flags="$2" f="$3"
+  ( cd "$p" && env "${KR_CLEAN[@]:1}" bash -c 'eval "bash \"$1\" --root \"$2\" $3 < \"$4\""' _ "$KR_TEAM" "$p" "$flags" "$f" )
+}
+
+guide_check_example() { # <模板> <夹具项目>：绿=0；红=1（文案里点名 example command）
+  local tmpl="$1" p="$2" cmd rest flags body out rc2 rc before after after2 red=0
+  cmd="$(guide_example_cmd "$tmpl" 2>"$TMP/guide-example.err")"
+  if [ -z "$cmd" ]; then
+    bad "guide-example：example command 在 $tmpl 里取不到可执行的样例（$(head -c 160 "$TMP/guide-example.err" 2>/dev/null)）"
+    return 1
+  fi
+  rest="${cmd#team }"; flags="${rest%% < *}"                     # 在重定向前的 ` < ` 处截断（题目的 `<short title>` 里没有这个分隔）
+  if [ "$flags" = "$rest" ] || ! printf '%s' "$flags" | grep -q -- '--stdin'; then
+    bad "guide-example：example command 的旗标部分取不到（取到 [$(printf '%s' "$flags" | head -c 120)]）"
+    return 1
+  fi
+  flags="${flags%"${flags##*[![:space:]]}"}"                 # 去掉换行/尾随空格，保留印刷原样的词序列
+  body="$TMP/guide-example-body.txt"
+  printf '引导面探针正文：完整的一份答复（不是摘要）。\n' >"$body"
+  before="$(kr_cli "$p" reply list --json 2>/dev/null | jget /dev/stdin 'd["total_slots"]')"
+  out="$(guide_run_example "$p" "$flags" "$body" 2>&1)"; rc=$?
+  after="$(kr_cli "$p" reply list --json 2>/dev/null | jget /dev/stdin 'd["total_slots"]')"
+  if [ "$rc" = "0" ]; then
+    ok "guide-example：示例命令被真解析器接受（rc=0，$cmd）"
+  else
+    bad "guide-example：example command 被真解析器拒绝（rc=$rc，输出 [$(printf '%s' "$out" | head -c 160)]）"; red=1
+  fi
+  if jok "$out" 'd["outcome"]=="saved"'; then
+    ok "guide-example：示例命令的回执 outcome=saved（no=$(jget "$out" 'd.get("no")')）"
+  else
+    bad "guide-example：example command 的回执不是 saved（rc=$rc，输出 [$(printf '%s' "$out" | head -c 160)]）"; red=1
+  fi
+  if [ "${after:-x}" = "$(( ${before:-0} + 1 ))" ]; then
+    ok "guide-example：示例命令真的发布了一条（槽位 ${before:-?} → ${after:-?}）"
+  else
+    bad "guide-example：example command 发布后槽位不是 +1（${before:-?} → ${after:-?}）"; red=1
+  fi
+  out="$(guide_run_example "$p" "$flags --frobnicate-probe" "$body" 2>&1)"; rc2=$?
+  after2="$(kr_cli "$p" reply list --json 2>/dev/null | jget /dev/stdin 'd["total_slots"]')"
+  if [ "$rc2" = "2" ]; then
+    ok "guide-example：控制臂（同一 argv + 未知旗标）被真解析器拒绝（rc=2）"
+  else
+    bad "guide-example：example command 的控制臂没有拒绝未知旗标（rc=$rc2）—— 探针可能把旗标吞掉了"; red=1
+  fi
+  if printf '%s' "$out" | grep -qF -- '未知参数'; then
+    ok "guide-example：控制臂诊断点名「未知参数」"
+  else
+    bad "guide-example：example command 的控制臂诊断没有点名「未知参数」（[$(printf '%s' "$out" | head -c 160)]）"; red=1
+  fi
+  if [ "${after2:-x}" = "${after:-y}" ]; then
+    ok "guide-example：控制臂没有新槽位（拒绝发生在发布之前，槽位仍 ${after2:-?}）"
+  else
+    bad "guide-example：example command 的控制臂留下了新槽位（${after:-?} → ${after2:-?}）"; red=1
+  fi
+  return "$red"
+}
+
+kr_group_guide() {
+  section "guide · 三处表面的纪律 + 示例命令对拍 + 四变异（change: pm-reply-discipline · P267）"
+  local TMPL PROTO SKILLMD pex mut MUTD out rc
+  TMPL="$(guide_surface_path "prompt template")"
+  PROTO="$(guide_surface_path "protocol reference")"
+  SKILLMD="$(guide_surface_path "command table")"
+
+  # ---- guide-surfaces：真树的三处表面各自带着自己的锚点（缺哪个点名哪个面）
+  guide_check_surface "prompt template" "$TMPL"
+  guide_check_surface "protocol reference" "$PROTO"
+  guide_check_surface "command table" "$SKILLMD"
+
+  # ---- guide-example：印出来的示例命令必须被真解析器接受（真 CLI、私有夹具、重定向指向夹具正文）
+  pex="$(kr_new_proj "guide-example")"
+  guide_check_example "$TMPL" "$pex"
+
+  # ---- guide-flip：四个 $TMP 变异副本，每次必须红并点名被改的面；还原（重新从真树复制）后绿
+  MUTD="$TMP/guide-mut"; rm -rf "$MUTD"; mkdir -p "$MUTD"
+
+  guide_flip_red() { # <标签> <期望点名的面> <rc> <断言文本>
+    local label="$1" expect="$2" rc="$3" text="$4" first
+    if [ -n "$KR_EV" ]; then
+      printf '%s\n' "$text" >"$TMP/guide-flip.out"
+      kr_ev_save "$TMP/guide-flip.out" "guide-flip-$(printf '%s' "$expect" | tr ' ' '-')-red.txt"
+    fi
+    if [ "$rc" != "0" ] && printf '%s' "$text" | grep -q '✗' && printf '%s' "$text" | grep -qF -- "$expect"; then
+      first="$(printf '%s' "$text" | grep -m1 '✗' | sed 's/^[[:space:]]*//; s/ —— .*$//')"
+      ok "guide-flip/$label：变异 → 红并点名 [$expect]（${first:0:200}）"
+    else
+      bad "guide-flip/$label：变异后没有红/没有点名 [$expect]（rc=$rc，输出 [$(printf '%s' "$text" | tr '\n' '|' | cut -c1-220)]）"
+    fi
+  }
+
+  guide_flip_ev() { # <名字> <断言文本（还原后的绿）>：TEAM_REPLY_EVIDENCE 时留证
+    [ -n "$KR_EV" ] || return 0
+    printf '%s\n' "$2" >"$TMP/guide-flip.out"
+    kr_ev_save "$TMP/guide-flip.out" "$1"
+  }
+
+  # ① 模板：删掉持有 `Key conclusions` 锚点的整段 → 红并点名 prompt template
+  mut="$MUTD/pm-prompt.md.tmpl"; cp -f "$TMPL" "$mut"
+  awk 'BEGIN{RS="";ORS="\n\n"} !index($0,"Key conclusions") {print}' "$mut" >"$mut.tmp" && mv "$mut.tmp" "$mut"
+  if grep -qF -- 'Key conclusions' "$mut"; then bad "guide-flip/①：变异没应用上（Key conclusions 段还在）"; fi
+  out="$(guide_check_surface "prompt template" "$mut" 2>&1)"; rc=$?
+  guide_flip_red "①" "prompt template" "$rc" "$out"
+  cp -f "$TMPL" "$mut"
+  out="$(guide_check_surface "prompt template" "$mut" 2>&1)"; rc=$?
+  if [ "$rc" = "0" ]; then ok "guide-flip/①：还原（重新从真树复制）后绿"; else bad "guide-flip/①：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
+  guide_flip_ev "guide-flip-1-restore-green.txt" "$out"
+
+  # ② 协议：删掉 §4b 的常设义务段 → 红并点名 protocol reference
+  mut="$MUTD/protocol.md"; cp -f "$PROTO" "$mut"
+  awk 'BEGIN{RS="";ORS="\n\n"} !index($0,"standing duty of the PM") {print}' "$mut" >"$mut.tmp" && mv "$mut.tmp" "$mut"
+  if grep -qF -- 'standing duty of the PM' "$mut"; then bad "guide-flip/②：变异没应用上（常设义务段还在）"; fi
+  out="$(guide_check_surface "protocol reference" "$mut" 2>&1)"; rc=$?
+  guide_flip_red "②" "protocol reference" "$rc" "$out"
+  cp -f "$PROTO" "$mut"
+  out="$(guide_check_surface "protocol reference" "$mut" 2>&1)"; rc=$?
+  if [ "$rc" = "0" ]; then ok "guide-flip/②：还原（重新从真树复制）后绿"; else bad "guide-flip/②：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
+  guide_flip_ev "guide-flip-2-restore-green.txt" "$out"
+
+  # ③ SKILL：把 `| Key replies |` 行换成不含锚点的行 → 红并点名 command table
+  mut="$MUTD/SKILL.md"; cp -f "$SKILLMD" "$mut"
+  awk 'index($0, "| Key replies |") == 1 && !done { print "| Key replies | See `references/protocol.md` §4b. |"; done=1; next } { print }' "$mut" >"$mut.tmp" && mv "$mut.tmp" "$mut"
+  if grep -qF -- 'The outlet for key conclusions' "$mut"; then bad "guide-flip/③：变异没应用上（旧行还在）"; fi
+  out="$(guide_check_surface "command table" "$mut" 2>&1)"; rc=$?
+  guide_flip_red "③" "command table" "$rc" "$out"
+  cp -f "$SKILLMD" "$mut"
+  out="$(guide_check_surface "command table" "$mut" 2>&1)"; rc=$?
+  if [ "$rc" = "0" ]; then ok "guide-flip/③：还原（重新从真树复制）后绿"; else bad "guide-flip/③：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
+  guide_flip_ev "guide-flip-3-restore-green.txt" "$out"
+
+  # ④ 模板：示例行的 `--stdin` 改成 `--stdinX` → 真解析器拒绝 → 红并点名 example command
+  mut="$MUTD/pm-prompt.md.tmpl"; cp -f "$TMPL" "$mut"
+  perl -pi -e 's/--stdin\b/--stdinX/ if /team reply post/' "$mut"
+  if ! grep -qF -- '--stdinX' "$mut"; then bad "guide-flip/④：变异没应用上（示例行没有 --stdinX）"; fi
+  out="$(guide_check_example "$mut" "$pex" 2>&1)"; rc=$?
+  guide_flip_red "④" "example command" "$rc" "$out"
+  cp -f "$TMPL" "$mut"
+  out="$(guide_check_example "$mut" "$pex" 2>&1)"; rc=$?
+  if [ "$rc" = "0" ]; then ok "guide-flip/④：还原（重新从真树复制）后绿"; else bad "guide-flip/④：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
+  guide_flip_ev "guide-flip-4-restore-green.txt" "$out"
 }
 
 # ---------------------------------------------------------------- 驱动

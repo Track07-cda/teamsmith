@@ -51,7 +51,7 @@ everything below is the daily loop, which starts once the project is up.
 | Init / self-check | `team init [--session s] [--agents "a b"] [--vcs local\|remote] --task-models '<category=provider/model …>' --pm-model '<provider/model>' [--copy\|--no-skills]` (fresh projects must pass both model inputs; installs both skills into the project's `.pi/skills/`), `team doctor` (reports that install, warns on drift) |
 | Observe | `team roster` (windows/branch/dirty/ahead), `team status [ID]`, `team ps` (capacity + model limits + PM/pulse liveness), `team digest` (PM's pending work) |
 | Inbox | `team inbox [agent] [--ack] [--all]` |
-| Key replies | `team reply post --from <seat> --title "<short>" --stdin` (publish the body you are about to send; a saved receipt means project-local durable publication only — never user delivery, approval, read status or a refreshed console), `team reply list [--before <no>] [--json]`, `team reply show <no> [--json\|--raw]` (readers are observation-only: no mkdir, no writes, no lock; `--raw` exports the original bytes and refuses a TTY). The console's page 5 shows the latest reply plus the numbered history. See `references/protocol.md` §4b |
+| Key replies | **The outlet for key conclusions to the user** (a landed milestone, a ruling, a decision you ask the user for): publish the complete answer — not a summary — with `team reply post --from <seat> --title "<short>" --stdin`, then send that same body; a batch of conclusions may be one reply. Distinct from the internal channels: `say`/`notify` carry one-line coordination to a seat or the PM, not the conclusion itself. A saved receipt means project-local durable publication only — never user delivery, approval, read status or a refreshed console. `team reply list [--before <no>] [--json]`, `team reply show <no> [--json\|--raw]` (readers are observation-only: no mkdir, no writes, no lock; `--raw` exports the original bytes and refuses a TTY). The console's page 5 shows the latest reply plus the numbered history. See `references/protocol.md` §4b |
 | Document contracts | `team task <ID> --title ... --agent a`, `team board add\|assign\|set\|ls`, `team change status <id> [--json]` (readiness view: tasks/evidence, declared vs touched delta files, blockers; exit 0 iff every mapped task is finished), `team thread <a> "..." --from pm --re <ID>`, `team report <ID> <a>` |
 | Dispatch | `team add-agent <a> [--register] [--create] [--no-install] [--print]`, `team dispatch <a> <ID> <taskfile> [--model m] [--branch <name>] [--fresh] [--allow-overflow] [--force] [--print]` (a new dispatch selects the brief's `category:` model from `TEAM_TASK_MODELS` unless `--model` overrides; same-task recovery keeps the committed model/SID; all pre-launch guards are judged in **one pass**: one refusal lists every blocker, each with a paste-able `修法：<command>` or `改行：<exact line>` and a final count line; `--force` overrides only the guards that carry an override, printed as a warning and logged after a real launch) |
 | Collaborate | `team say <a> "<one-line message>" [--no-verify]` (verifies delivery; falls back to the inbox when the agent is not running), `team notify <a> "<one line>" [--from <sender>]` (agent → PM; the sender comes from the runtime directory — an unresolved sender is refused, never recorded as `pm`) |
@@ -246,11 +246,13 @@ about them). They stay writable so the seam can be maintained and diagnosed; to 
 ## Non-negotiable rules (verified during review)
 - **Never claim something passed without having run it.** Reports must include commands and output tails; the PM
   re-runs independently.
-- **Publish the body before you answer.** Before sending a substantive answer, publish that same body with
-  `team reply post --from <seat> --title "<short>" --stdin`, then send the answer normally — saved, input error,
+- **Publish the body before you answer — it is a standing duty.** Before a milestone lands, before you issue a
+  ruling, and before you ask the user to decide, publish the complete answer (not a summary) with
+  `team reply post --from <seat> --title "<short>" --stdin`, then send that same body normally — saved, input error,
   storage error, busy or unconfirmed never changes what you send (the failure notice goes to stderr, never into the
-  answer). A saved receipt means project-local durable publication only: not user delivery, not approval, not read
-  status, not a refreshed console, and it creates no pending work, no outbox/inbox entry and no wake-up. See
+  answer). A batch of conclusions may be one reply; a reply carries conclusions, not process narration. A saved
+  receipt means project-local durable publication only: not user delivery, not approval, not read status, not a
+  refreshed console, and it creates no pending work, no outbox/inbox entry and no wake-up. See
   `references/protocol.md` §4b.
 - Agents only touch directories they own (`OWNERSHIP.md`); cross-directory needs → write `BLOCKED:` in the report.
 - Agents must not push the protected branch, force-push, merge PR/MRs, or rebase/delete other people's branches.
