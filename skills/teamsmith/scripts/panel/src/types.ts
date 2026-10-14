@@ -10,8 +10,8 @@
 export type PmState = 'running' | 'starting' | 'absent' | 'foreign' | 'unknown'
 export type AgentState = 'running' | 'exited' | 'absent'
 
-/** The four console pages (TUI-only; `--print`/`--json` render the overview). */
-export type PageId = 1 | 2 | 3 | 4
+/** The five console pages (TUI-only; `--print`/`--json` render the overview). */
+export type PageId = 1 | 2 | 3 | 4 | 5
 
 /**
  * The board's six lanes in the fixed order BOARD.md's header legend declares (P123). Both the layout
@@ -456,6 +456,88 @@ export interface DetailBlock {
   files: DetailFile[]
 }
 
+// ---------------------------------------------------------------- key replies (pulse-key-replies)
+
+/** One numbered slot as the readers report it: metadata only, or a numbered unavailable row. */
+export type ReplyEntry =
+  | {
+      no: number
+      available: true
+      /** Safe display text (the metadata's own sanitization already ran in the reader). */
+      title: string
+      /** The declared (self-declared, never verified) publisher label. */
+      from: string
+      /** UTC ISO publication time. */
+      at: string
+      bytes: number
+      sha256: string
+    }
+  | { no: number; available: false; reason: string }
+
+/** One index-level warning (`partial-tail`): a reader continues and says the tail is incomplete. */
+export interface ReplyWarning {
+  kind: string
+  bytes?: number
+}
+
+/** The latest-reply summary block (`__panel-data --block reply_summary`). Body-free by contract. */
+export interface ReplySummaryBlock {
+  available: boolean
+  /** ok | empty | unavailable */
+  state: string
+  total_slots: number
+  warnings: ReplyWarning[]
+  entry?: ReplyEntry
+  reason?: string
+}
+
+/** One list page: at most 50 slots, newest first, `next_before` when older slots exist. */
+export interface ReplyListBlock {
+  available: boolean
+  state: string
+  total_slots: number
+  entries: ReplyEntry[]
+  next_before: number | null
+  warnings: ReplyWarning[]
+}
+
+/** One committed body as safe display text (`--format json`); `--raw` is the byte-exact exit. */
+export interface ReplyBodyBlock {
+  no: number
+  available: boolean
+  title: string
+  from: string
+  at: string
+  bytes: number
+  sha256: string
+  text_kind: string
+  display_text: string
+}
+
+/** The open viewer's document window as the frame rendered it (the App's scroll clamps on it). */
+export interface ReplyDocWindow {
+  /** The number the document belongs to. */
+  no: number
+  /** Document rows at the rendered width. */
+  total: number
+  /** Rows the window shows. */
+  visible: number
+  /** The first visible row (clamped by the layout). */
+  offset: number
+}
+
+/** The key-replies page's list window as the frame rendered it (the App's arrows clamp on it). */
+export interface ReplyWindow {
+  /** The focused row's number (0 when the page has no committed row to focus). */
+  focus: number
+  /** The first visible row's index in the drawn list. */
+  offset: number
+  /** Rows the window shows. */
+  visible: number
+  /** Rows the page currently holds. */
+  count: number
+}
+
 /** The console-only readers, keyed by their block name; absent = that source failed. */
 export interface PanelBlocks {
   board?: BoardBlock
@@ -470,6 +552,12 @@ export interface PanelBlocks {
   settings?: SettingsBlock
   /** Built only while the detail view is open (design §8); never spawned on a parked page. */
   detail?: DetailBlock
+  /** The overview's latest-reply summary (scheduled on every page; body-free). */
+  reply_summary?: ReplySummaryBlock
+  /** Page 5's current list page: wanted only on page 5 (and only for the cursor in view). */
+  reply_list?: ReplyListBlock
+  /** The open viewer's one body: wanted only while the reply viewer is open. */
+  reply_body?: ReplyBodyBlock
 }
 
 // ------------------------------------------------------------------ layout
@@ -560,6 +648,22 @@ export type Action =
   | { kind: 'choice-close' }
   /** The settings overlay's navigation row: open the project-settings view. */
   | { kind: 'settings-open-view' }
+  /** Key-replies page: a click on a row (focus when it was not focused, open when it was). */
+  | { kind: 'reply-click'; index: number }
+  /** Key-replies page: move the row focus (↑/↓ and the wheel rows). */
+  | { kind: 'reply-move'; delta: number }
+  /** Key-replies page: fetch the adjacent cursor page (←/→ and the Older/Newer chips). */
+  | { kind: 'reply-page'; dir: -1 | 1 }
+  /** Key-replies page: `r` — drop the cursor chain and fetch the newest page. */
+  | { kind: 'reply-reset' }
+  /** Key-replies page: open the focused row's body (Enter / the second click). */
+  | { kind: 'reply-open'; index?: number }
+  /** Key-replies viewer: scroll the document (↑/↓, PgUp/PgDn, Home/End, the wheel). */
+  | { kind: 'reply-scroll'; delta: number }
+  /** Key-replies viewer: leave it (Esc/q) back to the same list cursor, focus and viewport. */
+  | { kind: 'reply-close' }
+  /** The overview's latest-reply entry: page 5 plus that entry's viewer. */
+  | { kind: 'reply-open-latest'; no?: number }
 
 export interface PlacedLine {
   line: Line
@@ -620,6 +724,10 @@ export interface Frame {
   detail?: DetailWindow
   /** The project-settings view's row window (absent while the view is closed). */
   settings?: SettingsWindow
+  /** Page 5's list window (absent off page 5). */
+  replyList?: ReplyWindow
+  /** The open reply viewer's document window (absent while the viewer is closed). */
+  replyDoc?: ReplyDocWindow
   /** The work page's board rows in the order they were drawn (the App's `↑`/`↓` walk this). */
   boardOrder?: FocusRef[]
 }
@@ -635,7 +743,8 @@ export interface FrameInput {
   width: number
   height: number
   /** Whether the activity column is on for this frame. */
-  activity: boolean
+  activity: boolean  /** Why the reply-body reader is degraded, when it is a failure and not a pending read. */
+  replyBodyFailed?: boolean
 }
 
 /** The console's UI state (TUI-only; the machine exits use the defaults). */
@@ -668,6 +777,21 @@ export interface ViewState {
   detail?: string | null
   /** The open detail view's file tab (clamped by the layout; 0 = the first file). */
   detailIndex?: number
+  /** Page 5's focused number (a stable `no`, never an array position); null = the newest row. */
+  replyFocus?: number | null
+  /** Page 5's fetched cursor: null/absent = the newest page; a number = `--before` that number. */
+  replyCursor?: number | null
+  /** The cursors already fetched, newest first (the Newer chain walks back through this). */
+  replyStack?: number[]
+  /** The open viewer's number (null/absent = the list is showing). */
+  replyBody?: number | null
+  /** The viewer document's first visible row. */
+  replyScroll?: number
+  /** Page 5's list window offset (`undefined` = follow the focus; a number = the wheel's offset). */
+  replyOffset?: number | null
+  /** True when the viewer's body read failed (the frame carries the block's error): the viewer then
+   * says "unavailable" instead of spinning forever. */
+  replyBodyFailed?: boolean
   /** The detail document's first visible row. */
   detailScroll?: number
   /** True while the project-settings view replaces the page's blocks (P22/B2). */

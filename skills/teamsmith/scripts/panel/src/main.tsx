@@ -33,7 +33,17 @@ import { clockOf } from './format.js'
 import { dispWidth } from './width.js'
 import type { Palette } from './theme.js'
 import type { Segment } from './types.js'
-import { BLOCK_NAMES, MACHINE_BLOCKS, cleanIdentityEnv, createPanelCache, findTeamCli, loadPanelData, panelDirOf, runTick } from './data.js'
+import {
+  BLOCK_NAMES,
+  MACHINE_BLOCKS,
+  cleanIdentityEnv,
+  createPanelCache,
+  findTeamCli,
+  loadPanelData,
+  panelDirOf,
+  runTick,
+  type BlockName,
+} from './data.js'
 import type { DataOptions, DataResult, PanelCache } from './data.js'
 import { normalizeNewlines, parseSendResult, mapReceipt, DRAFT_FILE } from './compose.js'
 import type { Receipt } from './compose.js'
@@ -99,12 +109,35 @@ function argOf(name: string): string | undefined {
 
 const has = (name: string): boolean => process.argv.includes(`--${name}`)
 
+/**
+ * Write every byte to a raw fd. Node puts fd 1 (and 2) in non-blocking mode when it is a pipe, so a
+ * single `writeSync` of a whole frame may return a **short count** — the tail is then simply lost.
+ * Measured on this pinned stack: a 160-column `--snapshot` piped through `sed` dropped its last 462
+ * bytes roughly one run in five (a frame cut mid-character). A full-write loop is the fix; `EAGAIN`
+ * means the pipe's buffer is full, so wait a millisecond and continue instead of dropping the tail.
+ */
+function writeAll(fd: number, text: string): void {
+  const buf = Buffer.from(text, 'utf8')
+  let off = 0
+  let spins = 0
+  while (off < buf.length) {
+    try {
+      off += writeSync(fd, buf, off, buf.length - off)
+      spins = 0
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== 'EAGAIN') throw e
+      if (++spins > 10000) throw e // ~10s of a full pipe: fail loudly instead of spinning forever
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1)
+    }
+  }
+}
+
 /** Machine-readable output must not be lost to an async pipe write. */
 function out(text: string): void {
-  writeSync(1, text)
+  writeAll(1, text)
 }
 function fail(message: string): never {
-  writeSync(2, `✗ ${message}\n`)
+  writeAll(2, `✗ ${message}\n`)
   process.exit(1)
 }
 
@@ -135,6 +168,15 @@ const pageArg = argOf('page')
 const langArg = argOf('lang')
 /** `--detail <ID>`: render the read-only detail view in a snapshot (the overlay's sibling exit). */
 const detailArg = argOf('detail') || ''
+/**
+ * Page 5's snapshot/demand knobs (pulse-key-replies). `--reply-no N` opens that number's viewer,
+ * `--reply-before N` pins the list cursor and `--reply-focus N` pins the focused slot, so the
+ * snapshot matrix can render summary/list/empty/corrupt/continuation/long-body deterministically.
+ * They are read options only: nothing here writes to the store.
+ */
+const replyNoArg = Number(argOf('reply-no') ?? 0) || 0
+const replyBeforeArg = Number(argOf('reply-before') ?? 0) || 0
+const replyFocusArg = Number(argOf('reply-focus') ?? 0) || 0
 
 if (has('version')) {
   out(`teamsmith panel ${PANEL_VERSION} · ink ${PIN_INK} · react ${PIN_REACT}\nbuilt by: ${BUILD_CMD}\n`)
@@ -144,7 +186,8 @@ if (has('help')) {
   out(
     'usage: panel.js [--root DIR] [--state-dir DIR] [--print|--json|--once|--headless|--snapshot|--palette]\n' +
       '                [--width N] [--height N] [--activity|--no-activity] [--events N] [--refresh N]\n' +
-      '                [--no-pulse] [--theme dark|light] [--page 1|2|3|4] [--lang zh|en] [--overlay] [--detail ID] [--version]\n',
+      '                [--no-pulse] [--theme dark|light] [--page 1|2|3|4|5] [--lang zh|en] [--overlay] [--detail ID]\n' +
+      '                [--reply-no N] [--reply-before N] [--reply-focus N] [--version]\n',
   )
   process.exit(0)
 }
@@ -242,6 +285,7 @@ function frameOf(res: DataResult, activity: boolean, scroll?: number): FrameInpu
     activityBlocks: activity ? res.activity ?? [] : [],
     blocks: res.blocks ?? {},
     degraded: res.degraded ?? [],
+    replyBodyFailed: Boolean(res.errors?.reply_body),
     width: widthArg || stdoutColumns || 100,
     height: heightArg || stdoutRows || 0,
     activity,
@@ -290,14 +334,30 @@ async function main(): Promise<void> {
     const settings = readSettings(confFile)
     const themeName = themeArg === 'dark' || themeArg === 'light' ? themeArg : resolveTheme(settings.theme)
     const lang = langArg === 'en' || langArg === 'zh' ? langArg : settings.lang
-    const page = pageArg === '1' || pageArg === '2' || pageArg === '3' || pageArg === '4' ? (Number(pageArg) as PageId) : settings.defaultPage
-    const res = await loadPanelData({ root, teamCli, activity: rawActivityOn, events, detailId: detailArg || null })
+    const page =
+      pageArg === '1' || pageArg === '2' || pageArg === '3' || pageArg === '4' || pageArg === '5'
+        ? (Number(pageArg) as PageId)
+        : settings.defaultPage
+    // Page 5's demand reads are handed to the assembly exactly as the App hands them over: the list
+    // only for the cursor in view, the body only while the viewer is open.
+    const res = await loadPanelData({
+      root,
+      teamCli,
+      activity: rawActivityOn,
+      events,
+      detailId: detailArg || null,
+      replyListOpen: page === 5 && !replyNoArg,
+      replyBefore: replyBeforeArg || null,
+      replyNo: page === 5 && replyNoArg ? replyNoArg : null,
+    })
     const frame = frameOrFail(res, rawActivityOn)
     const view: ViewState = {
       ...defaultView(lang, page),
       tui: true,
       mouseOn: settings.mouse,
       density: settings.density,
+      replyFocus: replyFocusArg || null,
+      replyBody: replyNoArg || null,
       overlay: wantOverlay,
       detail: detailArg || null,
       // P123: the snapshot is the TUI's own render path, so it reads the fold keys (the machine exits
@@ -335,7 +395,7 @@ async function main(): Promise<void> {
     // `--page` is honoured here too (P123's machine-frame identity fixture renders page 4); absent,
     // the machine frame stays the overview it always was.
     const machinePage: PageId =
-      pageArg === '1' || pageArg === '2' || pageArg === '3' || pageArg === '4' ? (Number(pageArg) as PageId) : 1
+      pageArg === '1' || pageArg === '2' || pageArg === '3' || pageArg === '4' || pageArg === '5' ? (Number(pageArg) as PageId) : 1
     if (once || wantPrint) {
       // One frame; `--once` then keeps today's tick semantics, `--print` (the observer) never ticks.
       const frame = frameOrFail(await loadPanelData({ root, teamCli, activity: rawActivityOn, events, blocks: MACHINE_BLOCKS }), rawActivityOn, MACHINE_BLOCKS)
@@ -772,6 +832,27 @@ async function main(): Promise<void> {
       const cached = cache.snapshot().blocks?.detail
       if (cached?.id === nextId && nextFile && cached.file === nextFile) return
       void cache.refresh({ force: true, only: ['detail'] }).then(adopt)
+    },
+    /**
+     * Page 5's demand reads: record the cursor/number as cache options and force exactly the block
+     * that changed. An unchanged pair (a re-render, the same page) rebuilds nothing — the effect in
+     * the App may run freely. Clearing both drops the blocks from the wanted set, so a parked page
+     * spawns no list/body child at all.
+     */
+    setReply: ({ list, before, no }: { list: boolean; before: number | null; no: number | null }) => {
+      const nextBefore = before ?? null
+      const nextNo = no ?? null
+      const listChanged = Boolean(opts.replyListOpen) !== Boolean(list) || (opts.replyBefore ?? null) !== nextBefore
+      const noChanged = (opts.replyNo ?? null) !== nextNo
+      if (!listChanged && !noChanged) return
+      opts.replyListOpen = Boolean(list)
+      opts.replyBefore = nextBefore
+      opts.replyNo = nextNo
+      const only: BlockName[] = []
+      if (listChanged && list) only.push('reply_list')
+      if (noChanged && nextNo != null) only.push('reply_body')
+      if (!only.length) return
+      void cache.refresh({ force: true, only }).then(adopt)
     },
     collapse,
     setSetting,

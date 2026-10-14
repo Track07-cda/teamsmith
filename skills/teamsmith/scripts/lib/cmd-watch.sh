@@ -1263,9 +1263,42 @@ team_panel_detail_json() { # <id> [file]
     "$(team_panel_json_str_ml "$text")" "$truncated" "$out"
 }
 
+# ---- 关键回复块（change: pulse-key-replies）：三个 console-only 只读块，直接进 helper。
+# 这三块**不参与** team_scan_warm：回复读路径的 IO 边界必须在自己的 helper 里被证明，
+# 不能被既有 board/report 的全量扫描掩盖（design §4）。helper 自己不 mkdir、不写盘、不等 writer 锁。
+team_panel_reply_helper() { # <helper 子命令> [args...]
+  local helper="$TEAM_SKILL_DIR/scripts/replies.mjs"
+  if [ ! -f "$helper" ]; then
+    printf 'team: __panel-data: 缺存储 helper（%s）\n' "$helper" >&2
+    return 4
+  fi
+  local runner; runner="$(team_js_runner)"
+  if [ -z "$runner" ]; then
+    printf 'team: __panel-data: 缺 JS 运行时（node/bun/tsx）\n' >&2
+    return 4
+  fi
+  local state_dir="${TEAM_STATE_DIR:-$TEAM_MAIN_ROOT/.pi/team/state}"
+  "$runner" "$helper" "$@" --main-root "$TEAM_MAIN_ROOT" --state-dir "$state_dir"
+}
+
+team_panel_reply_summary_json() { team_panel_reply_helper summary; }
+
+team_panel_reply_list_json() { # [--before <no>]
+  if [ -n "${1:-}" ] && [ "${1:-}" != "-" ]; then
+    team_panel_reply_helper list --before "$1" --format json
+  else
+    team_panel_reply_helper list --format json
+  fi
+}
+
+team_panel_reply_body_json() { # <no>
+  [ -n "${1:-}" ] || { printf 'team: __panel-data --block reply_body 需要 --no <编号>\n' >&2; return 2; }
+  team_panel_reply_helper show --no "$1" --format json
+}
+
 # 块分发：一个块一个子进程（panel.js 用 --block 起一片），源坏时打印尽力而为的片段并返回非 0，
 # 由渲染层把那一块画成 `—`，其余块照常渲染。
-team_panel_block() { # <块名> <activity 1|0> <events> [id] [file]
+team_panel_block() { # <块名> <activity 1|0> <events> [id] [file] [before] [no]
   case "$1" in
     frame)    team_panel_frame_json ;;
     pm)       team_panel_pm_json ;;
@@ -1284,6 +1317,9 @@ team_panel_block() { # <块名> <activity 1|0> <events> [id] [file]
     health)   team_panel_health_json ;;
     detail)   team_panel_detail_json "${4:-}" "${5:-}" ;;
     settings) team_panel_settings_json ;;
+    reply_summary) team_panel_reply_summary_json ;;
+    reply_list)    team_panel_reply_list_json "${6:-}" ;;
+    reply_body)    team_panel_reply_body_json "${7:-}" ;;
     activity) team_panel_activity_json "${2:-1}" "${3:-4}" ;;
     *) team_usage_die "__panel-data: 未知块名 $1" ;;
   esac
@@ -1292,7 +1328,7 @@ team_panel_block() { # <块名> <activity 1|0> <events> [id] [file]
 # 内部命令：给 panel.js 一个 JSON（{panel, activity}）或一个块（--block <名>）。
 # 名字带 __ 前缀 = 不是给人用的命令面。
 team_cmd_panel_data() {
-  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block="" did="" dfile=""
+  local activity=1 events="${TEAM_MONITOR_EVENTS:-4}" block="" did="" dfile="" rbefore="" rno=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-activity) activity=0; shift ;;
@@ -1301,6 +1337,8 @@ team_cmd_panel_data() {
       --block) block="${2:?__panel-data: --block 需要块名}"; shift 2 ;;
       --id) did="${2:?__panel-data: --id 需要入口 id}"; shift 2 ;;
       --file) dfile="${2:?__panel-data: --file 需要路径}"; shift 2 ;;
+      --before) rbefore="${2:?__panel-data: --before 需要编号}"; shift 2 ;;
+      --no) rno="${2:?__panel-data: --no 需要编号}"; shift 2 ;;
       -*) team_usage_die "__panel-data: 未知参数 $1" ;;
       *) team_usage_die "__panel-data: 多余参数 $1" ;;
     esac
@@ -1310,9 +1348,13 @@ team_cmd_panel_data() {
   # 进程替换起一个后台产者，末尾再收；输出键序与字节与串行完全一致。
   local _act_fd _act_out='[]'
   if [ -n "$block" ]; then
-    # M50：pending 块逐份迭代报告 → 全量档；其余块（pm/frame/capacity/agents/…）不碰 candidates → 宽度档
-    case "$block" in pending) team_scan_warm --reports ;; *) team_scan_warm ;; esac
-    team_panel_block "$block" "$activity" "$events" "$did" "$dfile"
+    # 关键回复三块直接进只读 helper（不预热扫描）；其余块照旧共享扫描缓存。
+    case "$block" in
+      reply_summary|reply_list|reply_body) ;;
+      pending) team_scan_warm --reports ;;
+      *) team_scan_warm ;;
+    esac
+    team_panel_block "$block" "$activity" "$events" "$did" "$dfile" "$rbefore" "$rno"
     return $?
   fi
   if [ "$activity" = "1" ]; then

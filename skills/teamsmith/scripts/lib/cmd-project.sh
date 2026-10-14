@@ -52,6 +52,8 @@ teamsmith — 用 Pi Agent 组建一个可复用的多 Agent 团队（PM 编排 
   notify <a> "<一句话>" [--from <发送者>]   agent → PM 一句话（发送者按运行时目录解析；写收件箱 + 唤醒 PM 窗口）
   draft [pm]                  人的草稿入口：开/复用 draft 窗口跑 $EDITOR，保存退出后自动入队（不抢焦点）
   draft send [<文件>] [--now] 无头形式：把草稿文件整段投递（守卫路径）
+  reply post --from <自称> --title <标题> --stdin  关键回复：显式发布一份要保留的正文（只从 stdin
+                  取原文；随后照常把同一份答复发给人；保存失败不阻止答复）。reply list/show 只读
   outbox [list]               延后队列：待投递条目（活动 + held，编号供 drop）
   outbox flush [--now]        立刻排水（--now = 跳过守卫直投，留审计）
   outbox drop <n|all>        人显式丢弃队列条目

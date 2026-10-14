@@ -578,6 +578,8 @@ team_identity_observe_only() { # <cmd> [args...] → 0=纯观察/建项目
     init|bootstrap) return 0 ;;                                  # 在空目录建项目：按目录走不会误伤别人
     board)   case "${1:-}" in row|ls|"") return 0 ;; esac ;;
     outbox)  case "${1:-}" in list|"") return 0 ;; esac ;;
+    # reply 的只读面（list/show）是纯观察；post 是修改入口，照旧按「动」判定。
+    reply)   case "${1:-}" in list|show|"") return 0 ;; esac ;;
     pulse)   case "${1:-}" in status|logs) return 0 ;; esac ;;
     standby) case "${1:-}" in status) return 0 ;; esac ;;
     meeting) case "${1:-}" in read|inbox|list|"") return 0 ;; esac ;;

@@ -240,6 +240,28 @@ closed" ;;
     "$(json_str "$id")" "$(json_str "$file")" "$(json_str_ml "$text")" "$files"
 }
 
+# pulse-key-replies 的固定回复块（stub 面；见上面的三条 case）。
+reply_entry_json() {
+  printf '{"no": 1, "available": true, "title": "固定关键回复", "from": "dev2", "at": "2026-09-16T09:59:00Z", "bytes": 24, "sha256": "%s"}' "$(printf 'a%.0s' {1..64})"
+}
+reply_summary_json() {
+  case "${B3_STUB_REPLY:-empty}" in
+    empty)   printf '%s\n' '{"available": true, "state": "empty", "total_slots": 0, "warnings": []}' ;;
+    corrupt) printf '%s\n' '{"available": true, "state": "unavailable", "total_slots": 1, "warnings": [], "reason": "checksum mismatch"}' ;;
+    *)       printf '{"available": true, "state": "ok", "total_slots": 1, "warnings": [], "entry": %s}\n' "$(reply_entry_json)" ;;
+  esac
+}
+reply_list_json() {
+  case "${B3_STUB_REPLY:-empty}" in
+    empty)   printf '%s\n' '{"available": true, "state": "empty", "total_slots": 0, "entries": [], "next_before": null, "warnings": []}' ;;
+    corrupt) printf '%s\n' '{"available": true, "state": "ok", "total_slots": 1, "entries": [{"no": 1, "available": false, "reason": "checksum mismatch"}], "next_before": null, "warnings": []}' ;;
+    *)       printf '{"available": true, "state": "ok", "total_slots": 1, "entries": [%s], "next_before": null, "warnings": []}\n' "$(reply_entry_json)" ;;
+  esac
+}
+reply_body_json() {
+  printf '%s\n' '{"no": 1, "available": true, "title": "固定关键回复", "from": "dev2", "at": "2026-09-16T09:59:00Z", "bytes": 24, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text_kind": "safe-display", "display_text": "固定回复正文\n第二行\n"}'
+}
+
 case "$block" in
   frame)
     printf '%s\n' '{"project": "fixture", "timestamp": "2026-09-16T10:00:00Z", "interval": 900, "standby": {"on": false, "reason": ""}, "activity_source": ""}'
@@ -269,6 +291,11 @@ case "$block" in
   inbox)       inbox_json ;;
   patrol)      patrol_json ;;
   detail)      detail_json "$detail_id" "$detail_file" ;;
+  # pulse-key-replies：三个回复块也是固定数据（默认「显式空」，B3_STUB_REPLY=1 → 一条 1 号回复，
+  # =corrupt → 最新槽位不可用），这样第 5 页与总览的摘要行在快照里逐字节可复现。
+  reply_summary) reply_summary_json ;;
+  reply_list)    reply_list_json ;;
+  reply_body)    reply_body_json ;;
   health)
     printf '%s\n' '{"version": "1.38.0", "doc_version": "1.38.0", "doctor": "ok", "gates": "—"}'
     ;;

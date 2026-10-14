@@ -36,6 +36,7 @@ import type {
   Frame,
   FrameInput,
   Hit,
+  Impediment,
   LaneWindow,
   Line,
   PageId,
@@ -45,10 +46,12 @@ import type {
   PlacedLine,
   PrefName,
   QueueEntry,
-  Impediment,
+  ReplyDocWindow,
+  ReplyEntry,
+  ReplyWindow,
   Segment,
-  SettingsBlock,
   SettingsAssignment,
+  SettingsBlock,
   SettingsCategory,
   SettingsChoiceEntry,
   SettingsKey,
@@ -247,6 +250,10 @@ interface Block {
   detail?: DetailWindow
   /** The project-settings view's row window as rendered (P22/B2). */
   settings?: SettingsWindow
+  /** Page 5's list window as rendered (the App's arrows/wheel clamp against it). */
+  replyList?: ReplyWindow
+  /** The open reply viewer's document window as rendered. */
+  replyDoc?: ReplyDocWindow
   /** The work page's board rows in the order it drew them (P20/B5: the App's `↑`/`↓` walk this). */
   order?: FocusRef[]
 }
@@ -286,6 +293,10 @@ interface Ctx {
    * assembly's real budget: the view spends it on the row window, its tail and blank fill, so the
    * card fills the pane — P32). */
   settingsRows?: number
+  /** Rows page 5's reply list may draw (the assembly's budget: more pane = more rows). */
+  replyRows?: number
+  /** Document rows the open reply viewer may draw. */
+  replyDocRows?: number
 }
 
 export interface LayoutInput extends FrameInput {
@@ -1290,6 +1301,213 @@ function detailBlock(ctx: Ctx): Block | null {
   return one(rows, { index, total: doc.length, visible: Math.min(available, Math.max(0, doc.length - offset)), offset })
 }
 
+
+// ------------------------------------------------------------------ key replies (pulse-key-replies)
+//
+// Page 5 reads the bounded `key-replies` store through three console-only blocks. The list is a
+// page of numbered slots (metadata only); the viewer renders one committed body through the same
+// markdown renderer and width plan the detail view uses. Focus is a **stable number**, the window
+// follows it, and the older chain is an explicit list of cursors — nothing here ever loads the
+// whole history, and nothing here writes (the readers are observation-only).
+
+const REPLY_LIST_ROWS_DEFAULT = 12
+const REPLY_DOC_ROWS_DEFAULT = 16
+
+/** The `#no title` cell of one list row. */
+function replyRowLabel(e: ReplyEntry): string {
+  return e.available ? `#${e.no} ${e.title}` : ''
+}
+
+/** The nav row of page 5: Older / Newer / `r` (the same actions `←`/`→` and `r` fire). */
+function replyNavLine(ctx: Ctx, innerW: number): PlacedLine {
+  const { s } = ctx
+  const line: Line = [seg(' ')]
+  const hits: Hit[] = []
+  let x = 1
+  const chip = (text: string, action: Action): void => {
+    const start = x
+    line.push(seg(text, 'accent'))
+    x += dispWidth(text)
+    hits.push({ start, end: x, action })
+    line.push(seg(' '))
+    x += 1
+  }
+  chip(`\u2039 ${s.replyOlder}`, { kind: 'reply-page', dir: -1 })
+  chip(`${s.replyNewer} \u203a`, { kind: 'reply-page', dir: 1 })
+  chip(s.keyReplyReset, { kind: 'reply-reset' })
+  return placedWithHits(line, hits, innerW)
+}
+
+/**
+ * Page 5's list block. It draws the nav row, the slot count (never a claim about readable replies),
+ * the tail warning when the reader reported one, and the windowed rows. The returned window is what
+ * the App clamps `↑`/`↓` against; `focus` is the focused slot's number.
+ */
+function replyListBlock(ctx: Ctx): Block | null {
+  const { s, blocks, deg, view } = ctx
+  const innerW = blockInnerW(ctx)
+  const data = blocks.reply_list
+  const budget = Math.max(2, ctx.replyRows ?? REPLY_LIST_ROWS_DEFAULT)
+  const build = (lines: PlacedLine[], win?: ReplyWindow): Block => ({
+    id: 'reply_list',
+    full: true,
+    priority: 1,
+    separator: 'none',
+    title: data ? fill(s.replyHeadingCount, { n: data.total_slots }) : s.replyHeading,
+    lines,
+    replyList: win,
+    summary: { line: truncLine(ln(seg(` ${s.replyHeading}`, 'heading')), ctx.width) },
+  })
+  const lines: PlacedLine[] = [replyNavLine(ctx, innerW)]
+  if (!data || deg.has('reply_list')) {
+    lines.push({ line: truncLine(ln(seg(` ${data ? s.dash : s.replyLoading}`, 'dim')), innerW) })
+    return build(lines, { focus: 0, offset: 0, visible: 0, count: 0 })
+  }
+  // An empty store says so in one line: the slot count would only repeat "0" (and it is never a
+  // claim about readable replies when the store does have slots).
+  if (data.state !== 'empty') {
+    lines.push({ line: truncLine(ln(seg(` ${fill(s.replyTotalSlots, { n: data.total_slots })}`, 'dim')), innerW) })
+  }
+  if ((data.warnings ?? []).some((w) => w.kind === 'partial-tail')) {
+    lines.push({ line: truncLine(ln(seg(` ${s.replyTailWarning}`, 'warn')), innerW) })
+  }
+  const entries = Array.isArray(data.entries) ? data.entries : []
+  if (!entries.length) {
+    lines.push({ line: truncLine(ln(seg(` ${s.replyEmpty}`, 'dim')), innerW) })
+    return build(lines, { focus: 0, offset: 0, visible: 0, count: 0 })
+  }
+  const room = Math.max(1, budget - lines.length)
+  const wanted = view.replyFocus ?? 0
+  let focus = entries.findIndex((e) => e.no === wanted)
+  if (focus < 0) focus = 0
+  const follow = Math.max(0, focus - room + 1)
+  const offset = Math.max(0, Math.min(Math.max(0, entries.length - room), Math.floor(view.replyOffset ?? follow) || 0))
+  for (let i = offset; i < Math.min(entries.length, offset + room); i++) {
+    const e = entries[i]
+    const active = i === focus
+    const cursor = active ? s.settingsCursor : ' '
+    const head = `  ${cursor} `
+    const bodyLine: Line = e.available
+      ? ln(
+          seg(head, 'accent'),
+          seg(replyRowLabel(e), active ? 'selected' : 'text'),
+          seg(` · ${e.from}`, 'dim'),
+        )
+      : ln(
+          seg(head, 'accent'),
+          seg(fill(s.replySlotUnavailable, { no: e.no }), 'warn'),
+          seg(`（${e.reason}）`, 'dim'),
+        )
+    lines.push({
+      line: truncLine(bodyLine, innerW),
+      hits: ctx.view.tui ? [{ start: 1, end: Math.min(innerW, widthOf(bodyLine) + 1), action: { kind: 'reply-click', index: i } }] : undefined,
+    })
+  }
+  return build(lines, {
+    focus: entries[focus].no,
+    offset,
+    visible: Math.min(room, entries.length - offset),
+    count: entries.length,
+  })
+}
+
+/**
+ * The open reply viewer: the committed body rendered as markdown, its declared metadata above it,
+ * and a local unavailable notice when the body is missing or corrupt (the same return route either
+ * way). It never fetches links, executes text or offers an editing action.
+ */
+function replyViewerBlock(ctx: Ctx): Block | null {
+  const no = ctx.view.replyBody
+  if (!no) return null
+  const { s, blocks, deg } = ctx
+  const innerW = blockInnerW(ctx)
+  const budget = Math.max(2, ctx.replyDocRows ?? REPLY_DOC_ROWS_DEFAULT)
+  const data = blocks.reply_body
+  const build = (lines: PlacedLine[], doc?: ReplyDocWindow): Block => ({
+    id: 'reply_viewer',
+    full: true,
+    priority: 1,
+    separator: 'none',
+    title: `#${no} ${s.replyHeading}`,
+    lines,
+    replyDoc: doc,
+    summary: { line: truncLine(ln(seg(` ${s.replyHeading} #${no}`, 'heading')), ctx.width) },
+  })
+  const nav = replyNavLine(ctx, innerW)
+  const back: Line = ln(seg(`  ${s.replyBack}`, 'accent'), seg(` · ${s.keyDetailClose}`, 'dim'))
+  const backLine: PlacedLine = {
+    line: truncLine(back, innerW),
+    hits: ctx.view.tui ? [{ start: 1, end: 1 + dispWidth(s.replyBack) + 2, action: { kind: 'reply-close' } }] : undefined,
+  }
+  if (!data || data.no !== no) {
+    // A failed read says so and keeps its return route; only a read that is still in flight spins.
+    const failed = ctx.view.replyBodyFailed === true || deg.has('reply_body')
+    const notice = failed ? seg(` ${s.replyBodyMissing}`, 'warn') : seg(` ${s.replyLoading}`, 'dim')
+    return build([nav, { line: truncLine(ln(notice), innerW) }, backLine], { no, total: 0, visible: 0, offset: 0 })
+  }
+  if (data.available === false) {
+    return build([nav, { line: truncLine(ln(seg(` ${s.replyBodyMissing}`, 'warn')), innerW) }, backLine], { no, total: 0, visible: 0, offset: 0 })
+  }
+  const meta: PlacedLine[] = [
+    { line: truncLine(ln(seg(` ${data.title}`, 'heading')), innerW) },
+    { line: truncLine(ln(seg(` ${fill(s.replyDeclared, { from: data.from, at: data.at })}`, 'dim')), innerW) },
+    { line: truncLine(ln(seg(` ${s.replyBodyHint} · ${data.bytes} B`, 'dim')), innerW) },
+  ]
+  const doc = markdownMemo(`reply:${no}`, data.display_text ?? '', innerW)
+  const available = Math.max(1, budget - nav0Length(meta))
+  const maxStart = Math.max(0, doc.length - available)
+  const offset = Math.max(0, Math.min(maxStart, Math.floor(ctx.view.replyScroll ?? 0) || 0))
+  const lines: PlacedLine[] = [nav, ...meta]
+  for (let i = offset; i < Math.min(doc.length, offset + available); i++) lines.push(doc[i])
+  lines.push(backLine)
+  return build(lines, { no, total: doc.length, visible: Math.min(available, Math.max(0, doc.length - offset)), offset })
+}
+
+/** The rows the viewer spends before its document (meta + nav + the back row). */
+function nav0Length(meta: PlacedLine[]): number {
+  return meta.length + 2
+}
+
+/** The overview's latest-reply entry: number, safe title and declared publisher, or empty/unavailable. */
+function replySummaryBlock(ctx: Ctx): Block | null {
+  if (!ctx.view.tui) return null // console-only: `--print`/`--json` render the overview without it
+  const { s, blocks, deg, width } = ctx
+  const d = blocks.reply_summary
+  const hint = ` ${s.replyLatest} `
+  const line: Line = [seg(hint, 'heading')]
+  const hits: Hit[] = []
+  let x = dispWidth(hint)
+  hits.push({ start: 1, end: x, action: { kind: 'page', page: 5 } })
+  const entry = d && d.available && d.state === 'ok' ? d.entry : undefined
+  if (!d || deg.has('reply_summary')) {
+    line.push(seg(s.dash, 'dim'))
+  } else if (entry && entry.available) {
+    const text = `#${entry.no} ${entry.title} · ${entry.from}`
+    line.push(seg(text, 'text'))
+    hits.push({ start: x, end: x + dispWidth(text), action: { kind: 'reply-open-latest', no: entry.no } })
+    x += dispWidth(text)
+    const at = ` · ${entry.at}`
+    line.push(seg(at, 'dim'))
+    x += dispWidth(at)
+  } else if (d.state === 'empty') {
+    line.push(seg(s.replyEmpty, 'dim'))
+  } else {
+    line.push(seg(s.replyUnavailable, 'warn'))
+    const reason = d.reason ? `（${d.reason}）` : ''
+    if (reason) line.push(seg(reason, 'dim'))
+  }
+  const chip = ` [5] `
+  hits.push({ start: x + 1, end: x + 1 + dispWidth(chip), action: { kind: 'page', page: 5 } })
+  line.push(seg(chip, 'accent'))
+  return {
+    id: 'reply_summary',
+    title: s.replyLatest,
+    priority: 9,
+    lines: [placedWithHits(line, hits, width)],
+    summary: { line: truncLine(ln(seg(` ${s.replyLatest}`, 'heading')), width) },
+  }
+}
+
 // ------------------------------------------------------------------ project settings (P22/B2)
 //
 // The view is a listing of the contract: one row per schema key plus one per key the file carries
@@ -2209,6 +2427,20 @@ function keyBandBlock(ctx: Ctx, rowsAvailable = true): Block {
           { text: s.keyPages, action: { kind: 'page-cycle' } },
           { text: s.keyQuit, action: { kind: 'quit' } },
         ]
+      : ctx.view.page === 5
+      ? ctx.view.replyBody
+        ? [
+            { text: s.keyDetailScroll, action: { kind: 'reply-scroll', delta: 1 } },
+            { text: s.keyDetailClose, action: { kind: 'reply-close' } },
+            { text: s.keyPages, action: { kind: 'page-cycle' } },
+          ]
+        : [
+            { text: s.keyReplies, action: { kind: 'reply-page', dir: -1 } },
+            { text: s.keyOpen, action: { kind: 'reply-open' } },
+            { text: s.keyReplyReset, action: { kind: 'reply-reset' } },
+            { text: s.keyPages, action: { kind: 'page-cycle' } },
+            { text: s.keyQuit, action: { kind: 'quit' } },
+          ]
       : ctx.view.page === 4
       ? [
           { text: s.keyLanes, action: { kind: 'lane-move', delta: 1 } },
@@ -2285,20 +2517,27 @@ function pageTabsBlock(ctx: Ctx): Block | null {
   const line: Line = []
   const hits: Hit[] = []
   let x = 1
-  const tabs: { page: PageId; text: string }[] = [
-    { page: 1, text: s.pageOverview },
-    { page: 2, text: s.pageWork },
-    { page: 3, text: s.pageMessages },
-    { page: 4, text: s.pageBoard },
+  const tabs: { page: PageId; text: string; short: string }[] = [
+    { page: 1, text: s.pageOverview, short: s.pageOverviewShort },
+    { page: 2, text: s.pageWork, short: s.pageWorkShort },
+    { page: 3, text: s.pageMessages, short: s.pageMessagesShort },
+    { page: 4, text: s.pageBoard, short: s.pageBoardShort },
+    { page: 5, text: s.pageReplies, short: s.pageRepliesShort },
   ]
   const boxed = isFramed(ctx)
+  // 59-column tiers: the five full labels do not fit, so the band falls back to `<n><short label>`
+  // for every page (the active one keeps its number *and* its visible label, and all five stay
+  // reachable without horizontal overflow — the narrow-tabs requirement).
+  const full = tabs.map((t) => fill(s.pageTab, { name: t.text })).join(' ')
+  const narrow = dispWidth(full) > ctx.width
   for (const tab of tabs) {
     const active = ctx.view.page === tab.page
+    const label = narrow ? `${tab.page}${tab.short}` : tab.text
     const text = active
       ? boxed
-        ? `[${tab.text}]`
-        : fill(s.pageTabActive, { name: tab.text })
-      : fill(s.pageTab, { name: tab.text })
+        ? `[${label}]`
+        : fill(s.pageTabActive, { name: label })
+      : fill(s.pageTab, { name: label })
     const start = x
     line.push(seg(text, active ? 'accent' : 'dim'))
     x += dispWidth(text)
@@ -2325,7 +2564,15 @@ function overlayPrefs(ctx: Ctx): { pref: string; label: string; value: string }[
 }
 
 function pageName(page: PageId, s: Strings): string {
-  return page === 1 ? s.pageOverview : page === 2 ? s.pageWork : page === 3 ? s.pageMessages : s.pageBoard
+  return page === 1
+    ? s.pageOverview
+    : page === 2
+      ? s.pageWork
+      : page === 3
+        ? s.pageMessages
+        : page === 4
+          ? s.pageBoard
+          : s.pageReplies
 }
 
 /** The overlay's cursor column (`  › ` / `    `) and the separator that keeps the two columns apart. */
@@ -2403,6 +2650,7 @@ function pageDefinitions(ctx: Ctx): Block[] {
         statusBlock(ctx),
         capacityBlock(ctx),
         progressBlock(ctx),
+        replySummaryBlock(ctx),
         deliveriesBlock(ctx),
         agentsBlock(left()),
         eventsBlock(right()),
@@ -2422,6 +2670,10 @@ function pageDefinitions(ctx: Ctx): Block[] {
     case 4:
       // The detail view replaces the kanban's blocks (the title band, tabs and key band stay).
       blocks.push(ctx.view.detail ? detailBlock(ctx) : kanbanBlock(ctx))
+      break
+    case 5:
+      // The reply viewer replaces the list exactly the way the detail view replaces the kanban.
+      blocks.push(ctx.view.replyBody ? replyViewerBlock(ctx) : replyListBlock(ctx))
       break
     default:
       blocks.push(queueBlock(left()), inboxBlock(right()), patrolBlock(right()), trendBlock(right()), healthBlock(right()))
@@ -2500,6 +2752,8 @@ export function layout(input: LayoutInput): Frame {
   let laneWindows: LaneWindow[] | undefined
   let detailWindow: DetailWindow | undefined
   let settingsWindow: SettingsWindow | undefined
+  let replyListWindow: ReplyWindow | undefined
+  let replyDocWindow: ReplyDocWindow | undefined
   for (const b of fullBlocks) {
     // The board page's lanes are told how many rows they may use (the frame is bounded): the lane
     // windows then grow with the pane instead of showing blank card space (the bounded-frame rule).
@@ -2514,10 +2768,16 @@ export function layout(input: LayoutInput): Frame {
           ? (detailBlock({ ...ctx, detailRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
           : height > 0 && b.id === 'settings'
           ? (settingsBlock({ ...ctx, settingsRows: Math.max(3, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
+          : height > 0 && b.id === 'reply_list'
+          ? (replyListBlock({ ...ctx, replyRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
+          : height > 0 && b.id === 'reply_viewer'
+          ? (replyViewerBlock({ ...ctx, replyDocRows: Math.max(2, budget - fullRows.length - (framed ? 2 : 0)) }) ?? b)
           : b
     if (block.id === 'kanban' && block.lanes) laneWindows = block.lanes
     if (block.id === 'detail' && block.detail) detailWindow = block.detail
     if (block.id === 'settings' && block.settings) settingsWindow = block.settings
+    if (block.id === 'reply_list' && block.replyList) replyListWindow = block.replyList
+    if (block.id === 'reply_viewer' && block.replyDoc) replyDocWindow = block.replyDoc
     const chunk = place(block, budget - fullRows.length, width)
     for (const l of chunk) fullRows.push(l)
   }
@@ -2668,6 +2928,8 @@ export function layout(input: LayoutInput): Frame {
     targets,
     ...(laneWindows ? { lanes: laneWindows } : {}),
     ...(detailWindow ? { detail: detailWindow } : {}),
+    ...(replyListWindow ? { replyList: replyListWindow } : {}),
+    ...(replyDocWindow ? { replyDoc: replyDocWindow } : {}),
     ...(settingsWindow ? { settings: settingsWindow } : {}),
     ...(boardOrder ? { boardOrder } : {}),
   }

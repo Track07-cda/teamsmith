@@ -77,6 +77,13 @@ export const BLOCK_NAMES = [
   // P22/B2: the project-settings view's on-demand reader (`team config list --json`). Same rule:
   // never wanted unless the view is open.
   'settings',
+  // pulse-key-replies: the three console-only reply readers over the bounded helper. The summary is
+  // the one scheduled everywhere (the overview renders it); the list is wanted only on page 5 and
+  // the body only while the reply viewer is open (`opts.replyBefore` / `opts.replyNo`), so a parked
+  // console spawns no list/body child at all.
+  'reply_summary',
+  'reply_list',
+  'reply_body',
 ] as const
 export type BlockName = (typeof BLOCK_NAMES)[number]
 
@@ -117,6 +124,12 @@ export interface DataOptions {
   settingsOpen?: boolean
   /** The detail file to serve with `--file` (must be one of the discovered paths). */
   detailFile?: string | null
+  /** True while page 5's list is the surface in view (the demand flag, beside the cursor). */
+  replyListOpen?: boolean
+  /** Page 5's list cursor (`--before <no>`); null/absent = the newest page. */
+  replyBefore?: number | null
+  /** The open reply viewer's number (`--no <no>`); null/absent = the viewer is closed. */
+  replyNo?: number | null
 }
 
 export interface DataResult {
@@ -188,6 +201,22 @@ const BLOCK_SPECS: Record<BlockName, BlockSpec> = {
   },
   // The project-settings reader rides the open view exactly like `detail` (P22/B2).
   settings: { ttlMs: 15000, timeoutMs: 10000 },
+  // Key replies (pulse-key-replies). The summary refreshes on the background cadence; the list is
+  // a demand read whose TTL only covers a re-render (its request key changes with the cursor and
+  // clears the cached value); the body is requested once per open number and only while the viewer
+  // is up. Budgets (design §4): summary 16 KiB / list 512 KiB / body 1 MiB of child stdout — the
+  // output cap below is the 32 MiB frame-wide backstop, the readers' own caps are the real bound.
+  reply_summary: { ttlMs: 15000, timeoutMs: 10000 },
+  reply_list: {
+    ttlMs: 15000,
+    timeoutMs: 10000,
+    extraArgs: (opts) => (opts.replyBefore ? ['--before', String(opts.replyBefore)] : []),
+  },
+  reply_body: {
+    ttlMs: 15000,
+    timeoutMs: 10000,
+    extraArgs: (opts) => (opts.replyNo ? ['--no', String(opts.replyNo)] : []),
+  },
 }
 
 
@@ -221,6 +250,7 @@ function runBlock(
   opts: DataOptions,
   cli: string,
   children?: Set<ReturnType<typeof spawn>>,
+  onChild?: (child: ReturnType<typeof spawn>) => void,
 ): Promise<BlockOutcome> {
   const timeoutMs = opts.timeoutMs ?? spec.timeoutMs
   const extra = spec.extraArgs ? spec.extraArgs(opts) : []
@@ -230,6 +260,7 @@ function runBlock(
     try {
       child = spawn('bash', args, { cwd: opts.root, env: cleanIdentityEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
       children?.add(child)
+      onChild?.(child)
     } catch (e) {
       resolve({ ok: false, error: (e as Error).message })
       return
@@ -344,6 +375,8 @@ interface BlockState {
   /** Epoch ms of the last successful build (0 = never). */
   at: number
   error?: string
+  /** The request key the cached value was built for (`reply_list` cursor / `reply_body` number). */
+  key?: string
 }
 
 const PANEL_BLOCK_NAMES: readonly BlockName[] = [
@@ -357,6 +390,9 @@ const PANEL_BLOCK_NAMES: readonly BlockName[] = [
   'health',
   'detail',
   'settings',
+  'reply_summary',
+  'reply_list',
+  'reply_body',
 ]
 
 function isPanelBlock(name: BlockName): boolean {
@@ -388,8 +424,29 @@ export function createPanelCache(opts: DataOptions): PanelCache {
     const live = new Set<BlockName>()
     if (opts.detailId) live.add('detail')
     if (opts.settingsOpen) live.add('settings')
-    return BLOCK_NAMES.filter((name) => (name === 'detail' || name === 'settings' ? live.has(name) : true))
+    if (opts.replyListOpen) live.add('reply_list')
+    if (opts.replyNo) live.add('reply_body')
+    const demand = new Set<BlockName>(['detail', 'settings', 'reply_list', 'reply_body'])
+    return BLOCK_NAMES.filter((name) => (demand.has(name) ? live.has(name) : true))
   }
+
+  /**
+   * The **request key** of one block (`reply_list` = its cursor, `reply_body` = its number).
+   * Changing it clears the cached value and the error, cancels the child still in flight and makes
+   * any late response for the old key a no-op: a late page or body must never replace the selection
+   * the user is looking at (design §4).
+   */
+  const requestKey = (name: BlockName): string => {
+    switch (name) {
+      case 'reply_list':
+        return `open:${opts.replyListOpen ? 1 : 0}:before:${opts.replyBefore ?? 'newest'}`
+      case 'reply_body':
+        return `no:${opts.replyNo ?? 'none'}`
+      default:
+        return ''
+    }
+  }
+  const blockChildren: Partial<Record<BlockName, ReturnType<typeof spawn>>> = {}
   const state: Record<string, BlockState> = {}
   for (const name of BLOCK_NAMES) state[name] = { at: 0 }
   let inFlight: Partial<Record<BlockName, Promise<void>>> = {}
@@ -427,9 +484,12 @@ export function createPanelCache(opts: DataOptions): PanelCache {
     return { ok: true, data, activity, blocks, degraded, errors }
   }
 
-  function build(name: BlockName): Promise<void> {
-    return runBlock(BLOCK_SPECS[name], name, opts, cli as string, children).then((outcome) => {
+  function build(name: BlockName, key: string): Promise<void> {
+    return runBlock(BLOCK_SPECS[name], name, opts, cli as string, children, (child) => {
+      blockChildren[name] = child
+    }).then((outcome) => {
       const s = state[name]
+      if (requestKey(name) !== key) return // a late response for a superseded request is dropped
       if (outcome.ok) {
         s.value = outcome.value
         s.at = Date.now()
@@ -451,11 +511,31 @@ export function createPanelCache(opts: DataOptions): PanelCache {
       if (!wanted.includes(name)) continue
       if (only && !only.has(name)) continue
       const s = state[name]
+      const key = requestKey(name)
+      if (key !== s.key) {
+        // The request key changed (page 5's cursor, the viewer's number): the cached value belongs
+        // to the old key, the child that is still running does too — kill it, drop the cache and
+        // rebuild against the new selection.
+        const old = blockChildren[name]
+        if (old) {
+          try {
+            old.kill('SIGKILL')
+          } catch {
+            /* already gone */
+          }
+          delete blockChildren[name]
+        }
+        s.key = key
+        s.value = undefined
+        s.at = 0
+        s.error = undefined
+      }
       const due = refreshOpts.force || s.at === 0 || now - s.at >= BLOCK_SPECS[name].ttlMs
       if (!due) continue
       if (inFlight[name]) continue
-      inFlight[name] = build(name).finally(() => {
+      inFlight[name] = build(name, key).finally(() => {
         delete inFlight[name]
+        delete blockChildren[name]
       })
     }
     // Already-running builds count as this refresh's work: the caller wants a settled snapshot.

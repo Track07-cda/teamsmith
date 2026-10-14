@@ -18,7 +18,25 @@ import { clockOf } from './format.js'
 import { fill, stringsFor, type Strings } from './strings/index.js'
 import { composeKey, cpLength, cursorView, insertAt, intake, killSpan, moveCursor, popUndo, pushKill, pushUndo, receiptLine, resetKillDirection, ringEntry, type ComposeMode, type ComposeView, type KillRing, type Receipt, type UndoSnapshot } from './compose.js'
 import type { Settings } from './settings.js'
-import type { Action, DetailWindow, FocusRef, FrameInput, PageId, PrefName, Segment, SettingsBlock, SettingsCategory, SettingsChoiceEntry, SettingsChoicePicker, SettingsKey, SettingsWindow, ViewState } from './types.js'
+import type {
+  Action,
+  DetailWindow,
+  FocusRef,
+  FrameInput,
+  PageId,
+  PrefName,
+  ReplyDocWindow,
+  ReplyEntry,
+  ReplyWindow,
+  Segment,
+  SettingsBlock,
+  SettingsCategory,
+  SettingsChoiceEntry,
+  SettingsChoicePicker,
+  SettingsKey,
+  SettingsWindow,
+  ViewState,
+} from './types.js'
 import type { Palette } from './theme.js'
 import { dispWidth } from './width.js'
 
@@ -100,6 +118,13 @@ export interface PanelApi {
    * discovered file when omitted). Both are cached options, so an unchanged call rebuilds nothing.
    */
   setDetail(id: string | null, file?: string | null): void
+  /**
+   * Page 5's demand reads (pulse-key-replies): the list cursor (`before`, null = the newest page and
+   * null also drops the list from the wanted set when the page is parked) and the open viewer's
+   * number (`no`, null = closed). Both are request keys: changing one clears the cached block, kills
+   * the child still in flight and makes a late response for the old key a no-op.
+   */
+  setReply(opts: { list: boolean; before: number | null; no: number | null }): void
   /** Rebuild the patrol window as the headless tick loop (`team pulse collapse`). */
   collapse(): Promise<{ ok: boolean; line: string }>
   /** Represents one `team config set` result: the exit code (the machine contract) + one line. */
@@ -265,6 +290,14 @@ export function App({
   const [detailId, setDetailId] = useState<string | null>(null)
   const [detailIndex, setDetailIndex] = useState(0)
   const [detailScroll, setDetailScroll] = useState(0)
+  // Page 5 (pulse-key-replies): the cursor chain, the stable-number focus, the open body and the
+  // document's scroll. `replyStack` is the chain `Newer` walks back through — no full-history load.
+  const [replyFocus, setReplyFocus] = useState<number | null>(null)
+  const [replyCursor, setReplyCursor] = useState<number | null>(null)
+  const [replyStack, setReplyStack] = useState<number[]>([])
+  const [replyBody, setReplyBody] = useState<number | null>(null)
+  const [replyScroll, setReplyScroll] = useState(0)
+  const [replyOffset, setReplyOffset] = useState<number | null>(null)
   // P22/B2: the project-settings view (opened from the overlay's navigation row), its window and
   // its filter. The view is a view, not a page: the four-page composition and `state/panel-page`
   // keep their meaning, and `esc` lands back on the overlay row it was opened from.
@@ -301,6 +334,17 @@ export function App({
   const pasteOpenRef = useRef(false)
   const settingsRef = useRef(settings)
   const pageRef = useRef(page)
+  const replyFocusRef = useRef(replyFocus)
+  replyFocusRef.current = replyFocus
+  const replyCursorRef = useRef(replyCursor)
+  replyCursorRef.current = replyCursor
+  const replyStackRef = useRef(replyStack)
+  replyStackRef.current = replyStack
+  const replyBodyRef = useRef(replyBody)
+  replyBodyRef.current = replyBody
+  /** Page 5's list window / the viewer's document window as the last frame rendered them. */
+  const replyListRef = useRef<ReplyWindow | null>(null)
+  const replyDocRef = useRef<ReplyDocWindow | null>(null)
   const targetsRef = useRef<{ row: number; hit: { start: number; end: number; action: Action } }[]>([])
   const overlayIndexRef = useRef(0)
   const focusRef = useRef<FocusRef | null>(null)
@@ -364,8 +408,21 @@ export function App({
 
   const goPage = useCallback(
     (next: PageId) => {
+      const previous = pageRef.current
       pageRef.current = next
       setPage(next)
+      // Page 5's demand reads follow the page: entering it starts a fresh newest chain, leaving it
+      // closes the viewer — which is what drops the `reply_body` request (design §4: no body read
+      // after leaving page 5).
+      if (next === 5 && previous !== 5) {
+        setReplyCursor(null)
+        setReplyStack([])
+        setReplyFocus(null)
+        setReplyOffset(null)
+        setReplyBody(null)
+      } else if (next !== 5) {
+        setReplyBody(null)
+      }
       setViewEntry(null)
       setDetailId(null)
       setDetailIndex(0)
@@ -748,9 +805,10 @@ export function App({
           next.lang = cur.lang === 'zh' ? 'en' : 'zh'
           break
         case 'defaultPage':
-          // Four pages since P18/B2: the cycle covers 1–4 and wraps (the old three-page test let 4
-          // fall through to 5, which the next launch rejects as out of range — a silent reset).
-          next.defaultPage = cur.defaultPage === 4 ? 1 : ((cur.defaultPage + 1) as PageId)
+          // Five pages since pulse-key-replies: the cycle covers 1–5 and wraps (a cycle that still
+          // stopped at 4 would leave 5 unreachable as a remembered default and reset it on the next
+          // launch — the silent reset this branch exists to avoid).
+          next.defaultPage = cur.defaultPage === 5 ? 1 : ((cur.defaultPage + 1) as PageId)
           goPage(next.defaultPage)
           break
         case 'activity':
@@ -1426,6 +1484,94 @@ export function App({
     api.setDetail(detailId, files[detailIndexRef.current]?.path ?? null)
   }, [api, detailId, detailIndex, detailBlockData])
 
+  /** Page 5's slots as the last snapshot carries them (never a re-read of the store). */
+  const replyEntries = useCallback((): ReplyEntry[] => dataRef.current.blocks?.reply_list?.entries ?? [], [])
+
+  /** Page 5's `↑`/`↓`: the focus walks the drawn rows; the window follows it (offset = null). */
+  const moveReplyFocus = useCallback(
+    (delta: number) => {
+      const entries = replyEntries()
+      if (!entries.length) return
+      const at = entries.findIndex((e) => e.no === replyFocusRef.current)
+      const next = Math.max(0, Math.min(entries.length - 1, (at < 0 ? 0 : at) + delta))
+      setReplyFocus(entries[next].no)
+      setReplyOffset(null)
+    },
+    [replyEntries],
+  )
+
+  /**
+   * Page 5's `Older`/`Newer`. Older fetches the page's own `next_before` and pushes the cursor the
+   * current page was fetched with onto the chain; Newer pops it — the retained chain is what lets
+   * the user walk back without a full-history load, and `0` in the chain means "the newest page".
+   */
+  const replyPage = useCallback(
+    (dir: -1 | 1) => {
+      const list = dataRef.current.blocks?.reply_list
+      if (!list) return
+      if (dir === 1) {
+        const stack = replyStackRef.current
+        if (!stack.length) return
+        const back = stack[stack.length - 1]
+        setReplyStack(stack.slice(0, -1))
+        setReplyCursor(back === 0 ? null : back)
+      } else {
+        const older = list.next_before
+        if (!older) return
+        setReplyStack([...replyStackRef.current, replyCursorRef.current ?? 0])
+        setReplyCursor(older)
+      }
+      setReplyFocus(null)
+      setReplyOffset(null)
+    },
+    [],
+  )
+
+  /** `r` on page 5: drop the chain and fetch the newest page again. */
+  const replyReset = useCallback(() => {
+    setReplyCursor(null)
+    setReplyStack([])
+    setReplyFocus(null)
+    setReplyOffset(null)
+  }, [])
+
+  /** Open a numbered body (a click on the focused row, or Enter on it). */
+  const openReply = useCallback(
+    (index?: number) => {
+      const entries = replyEntries()
+      const entry = index != null ? entries[index] : (entries.find((e) => e.no === replyFocusRef.current) ?? entries[0])
+      if (!entry || !entry.available) return
+      setReplyBody(entry.no)
+      setReplyScroll(0)
+    },
+    [replyEntries],
+  )
+
+  /** The viewer document's scroll, clamped against the window the last frame reported. */
+  const scrollReply = useCallback((delta: number) => {
+    const win = replyDocRef.current
+    const max = win ? Math.max(0, win.total - win.visible) : 0
+    setReplyScroll((v) => Math.max(0, Math.min(max, v + delta)))
+  }, [])
+
+  /**
+   * Page 5's demand reads (design §4): the list is wanted only on page 5 — and only for the cursor
+   * in view — while the body is wanted only while the viewer is open. Leaving the page clears both,
+   * so a parked console spawns neither child. `setReply` is idempotent for an unchanged pair, so
+   * this effect (and a re-render) never forces a rebuild of what is already on screen.
+   */
+  const replyListData = data.blocks?.reply_list
+  const replyBodyData = data.blocks?.reply_body
+  useEffect(() => {
+    api.setReply({ list: page === 5 && replyBody == null, before: replyCursor, no: replyBody })
+  }, [api, page, replyCursor, replyBody])
+
+  // A body that left the store between the click and the read: keep the list usable rather than
+  // pinning the viewer on a number the readers refuse (the viewer itself renders the notice).
+  useEffect(() => {
+    if (replyBody != null && replyBodyData == null) return
+  }, [replyBody, replyBodyData])
+
   const dispatch = useCallback(
     (action: Action) => {
       switch (action.kind) {
@@ -1446,7 +1592,7 @@ export function App({
           goPage(action.page)
           return
         case 'page-cycle':
-          goPage(pageRef.current === 3 ? 1 : ((pageRef.current + 1) as PageId))
+          goPage(pageRef.current === 5 ? 1 : ((pageRef.current + 1) as PageId))
           return
         case 'scroll':
           updateScroll((v) => v + action.delta)
@@ -1468,6 +1614,47 @@ export function App({
           return
         case 'focus':
           setFocus({ lane: action.lane, id: action.id, nth: action.nth ?? 0 })
+          return
+        case 'reply-click': {
+          // One action, two behaviours (the kanban's rule): a click on an unfocused row focuses it,
+          // a click on the already focused row opens its body.
+          const entries = replyEntries()
+          const entry = entries[action.index]
+          if (!entry) return
+          if (replyFocusRef.current === entry.no) openReply(action.index)
+          else {
+            setReplyFocus(entry.no)
+            setReplyOffset(null)
+          }
+          return
+        }
+        case 'reply-move':
+          moveReplyFocus(action.delta)
+          return
+        case 'reply-page':
+          replyPage(action.dir)
+          return
+        case 'reply-reset':
+          replyReset()
+          return
+        case 'reply-open':
+          openReply(action.index)
+          return
+        case 'reply-scroll':
+          scrollReply(action.delta)
+          return
+        case 'reply-close':
+          // Back to the list with its cursor, focus and viewport untouched.
+          setReplyBody(null)
+          return
+        case 'reply-open-latest':
+          replyReset()
+          goPage(5)
+          if (action.no) {
+            setReplyFocus(action.no)
+            setReplyBody(action.no)
+            setReplyScroll(0)
+          }
           return
         case 'open-focused': {
           // One action kind, two pages: the kanban resolves its lane/card focus, the work page the
@@ -1611,6 +1798,12 @@ export function App({
       settingsFilter,
       settingsOffset,
       choicePicker,
+      replyFocus,
+      replyCursor,
+      replyBody,
+      replyScroll,
+      replyOffset,
+      replyBodyFailed: Boolean(data.replyBodyFailed) && replyBodyData == null,
     }
     // The geometry comes from the live terminal, not from the frame's snapshot of it: a resize must
     // re-lay out the next frame (the spec's "A resize re-lays out live"), and `data.width` is frozen
@@ -1631,6 +1824,8 @@ export function App({
     boardOrderRef.current = themed.boardOrder ?? []
     detailRef.current = themed.detail ?? null
     settingsWindowRef.current = themed.settings ?? null
+    replyListRef.current = themed.replyList ?? null
+    replyDocRef.current = themed.replyDoc ?? null
     return { frame: themed, input, hint, bottom, pad, boxed, inputView }
   }, [
     data,
@@ -1656,6 +1851,11 @@ export function App({
     settingsFilter,
     settingsOffset,
     choicePicker,
+    replyFocus,
+    replyCursor,
+    replyBody,
+    replyScroll,
+    replyOffset,
     size,
     composing,
     mode,
@@ -1765,6 +1965,22 @@ export function App({
           }
           if ((pageRef.current === 4 || pageRef.current === 2) && detailIdRef.current) {
             scrollDetail(delta)
+            return
+          }
+          if (pageRef.current === 5 && replyBodyRef.current != null) {
+            // The reply viewer's document is the one scrollable region on page 5.
+            scrollReply(delta)
+            return
+          }
+          if (pageRef.current === 5) {
+            // Page 5's list: the wheel moves the *viewport*, never the focus (the documented rule),
+            // and never fetches hidden history.
+            const win = replyListRef.current
+            setReplyOffset((v) => {
+              const base = v ?? win?.offset ?? 0
+              const max = win ? Math.max(0, win.count - win.visible) : 0
+              return Math.max(0, Math.min(max, base + delta))
+            })
             return
           }
           // On the board page the wheel scrolls the lane under the cursor (a card hit carries its
@@ -1997,16 +2213,51 @@ export function App({
         }
         // Enter adds no action here (no write operation), and the page keys stay live below.
       }
+      // The reply viewer (page 5) is read-only and full-page: Esc or `q` backs out to the same list
+      // cursor, focus and viewport — never collapses. `↑`/`↓`, PgUp/PgDn, Home/End and the wheel
+      // scroll the whole document; the page keys stay live below (they replace the viewer's page).
+      if (page === 5 && replyBodyRef.current != null) {
+        if (key.escape || (input === 'q' && !key.ctrl)) {
+          setReplyBody(null)
+          return
+        }
+        const step = Math.max(1, (size.rows || 10) - 4)
+        if (key.upArrow) {
+          scrollReply(-1)
+          return
+        }
+        if (key.downArrow) {
+          scrollReply(1)
+          return
+        }
+        if (key.pageUp) {
+          scrollReply(-step)
+          return
+        }
+        if (key.pageDown) {
+          scrollReply(step)
+          return
+        }
+        if (key.home) {
+          setReplyScroll(0)
+          return
+        }
+        if (key.end) {
+          const win = replyDocRef.current
+          setReplyScroll(win ? Math.max(0, win.total - win.visible) : 0)
+          return
+        }
+      }
       if (input === 'q' || (key.ctrl && input === 'c')) {
         void collapse()
         return
       }
       if (busy) return
       if (key.tab) {
-        goPage(pageRef.current === 4 ? 1 : ((pageRef.current + 1) as PageId))
+        goPage(pageRef.current === 5 ? 1 : ((pageRef.current + 1) as PageId))
         return
       }
-      if (input === '1' || input === '2' || input === '3' || input === '4') {
+      if (input === '1' || input === '2' || input === '3' || input === '4' || input === '5') {
         goPage(Number(input) as PageId)
         return
       }
@@ -2028,10 +2279,27 @@ export function App({
         return
       }
       if (input === 'r') {
-        // `r` is the human asking for it: rebuild every block now, not "when its TTL is up".
+        // `r` is the human asking for it: rebuild every block now, not "when its TTL is up". On
+        // page 5 it is the documented "back to the newest page" key instead (design §5).
+        if (page === 5) {
+          replyReset()
+          return
+        }
         setReceipt(null)
         setStatus(null)
         api.refreshNow()
+        return
+      }
+      if (page === 5 && (key.leftArrow || key.rightArrow)) {
+        replyPage(key.leftArrow ? -1 : 1)
+        return
+      }
+      if (page === 5 && (key.upArrow || key.downArrow)) {
+        moveReplyFocus(key.upArrow ? -1 : 1)
+        return
+      }
+      if (page === 5 && key.return) {
+        openReply()
         return
       }
       if (page === 4 && input === 'c' && !detailId) {

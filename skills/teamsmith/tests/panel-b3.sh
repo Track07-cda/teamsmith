@@ -404,17 +404,17 @@ scn_settings() {
   start_panel
   cap_has "progress" relaunch.txt
   assert_match "$(conf)" '^lang=en$' "重启后语言偏好仍在"
-  # defaultPage cycles over the four pages and wraps (P18/B2 left the cycle over three: 4 fell
-  # through to 5 and the next launch reset the page silently — fixed and pinned in B3).
+  # defaultPage cycles over the five pages and wraps (P18/B2 left the cycle over three; B3 pinned
+  # four; pulse-key-replies made page 5 a real page and pins five).
   keys ,
   sleep 0.6
   keys Down
   sleep 0.3
   local cyc
-  for cyc in 2 3 4 1; do
+  for cyc in 2 3 4 5 1; do
     keys Enter
     wait_file_has "$(conf)" "page=$cyc" "defaultPage 循环到 $cyc" || bad "defaultPage 没有在预算内循环到 $cyc"
-    assert_eq "defaultPage 循环到 $cyc（四页 + 回绕）" "$(sed -n 's/^page=//p' "$(conf)" | tr -d '\n')" "$cyc"
+    assert_eq "defaultPage 循环到 $cyc（五页 + 回绕）" "$(sed -n 's/^page=//p' "$(conf)" | tr -d '\n')" "$cyc"
   done
   keys Escape
   sleep 0.4
@@ -675,8 +675,12 @@ scn_resize() {
   tmux -L "$sock" resize-window -t "$sess:panel" -x 160 -y 32 2>/dev/null || true
   sleep 1.2
   cap_to wide
-  if grep -qE '代理.*活动（仅本 session' "$tmp/$current/wide.txt"; then
-    ok "160 列：重排成双列（表头与右栏同一行）"
+  # Two columns sharing a row: the left column, the interior gap and the right column's own content
+  # on one line. (Not "both headers on one line": the columns are packed by priority and the
+  # overview's new latest-reply card legitimately offsets their headers — the layout's contract is
+  # side-by-side columns, not header pairing.)
+  if grep -qE '│ +│ +[^│]' "$tmp/$current/wide.txt"; then
+    ok "160 列：重排成双列（同一行里两列并排）"
   else
     bad "160 列：没有重排成双列"; sed -n '1,3p' "$tmp/$current/wide.txt"
   fi
@@ -690,13 +694,13 @@ scn_resize() {
       continue
     fi
     if [ "$w" = "160" ] || [ "$w" = "100" ]; then
-      if grep -qE '代理.*活动（仅本 session' "$tmp/$current/w$w.txt"; then
-        ok "$w 列：双列（表头与右栏同一行）"
+      if grep -qE '│ +│ +[^│]' "$tmp/$current/w$w.txt"; then
+        ok "$w 列：双列（同一行里两列并排）"
       else
         bad "$w 列：应为双列"
       fi
     elif [ "$w" = "99" ] || [ "$w" = "60" ]; then
-      if grep -qE '代理.*活动（仅本 session' "$tmp/$current/w$w.txt"; then
+      if grep -qE '│ +│ +[^│]' "$tmp/$current/w$w.txt"; then
         bad "$w 列：不该是双列"
       else
         ok "$w 列：单列"

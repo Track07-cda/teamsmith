@@ -129,6 +129,40 @@ Guards and limitations:
     call appends one line to `state/signal-calls.log` (`TEAM_SIGNAL_CALLS_LOG`), and a refusal is also copied byte
     for byte into `<log>.forensics` so it outlives the call log's rotation.
 
+## 4b. Key replies: publish the body before you answer
+
+The wake-up loop carries a *pointer* (`inbox/<agent>.md` plus a knock), and the report carries the *process*. Neither
+carries the **body** of a substantive answer, and both are transient or post-hoc: the inbox is gitignored, and a report
+is written after the work. When an answer itself is the durable artefact — a decision, a trade-off, a root cause, a
+finding someone will quote weeks later — publish that body explicitly before you send it:
+
+```
+team reply post --from <seat> --title "<short single line>" --stdin <<'EOF'
+… the exact body you are about to send …
+EOF
+```
+
+Then send the answer normally. Publication **never gates the answer**: the same body goes out whether the post
+reported `saved` (0), an input error (2), storage unavailable (4), a busy writer (5, the lock wait is bounded) or
+`unconfirmed` (6, the entry is visible but its durability could not be confirmed — never re-post it automatically).
+Failures are diagnostics on stderr; they must not be concatenated into the answer, and they must not stop it.
+
+What a receipt does and does not mean:
+- **A saved receipt is project-local durable publication only.** It is not user delivery, not approval, not read
+  status, and not a refreshed console. Nothing else changes state: publishing creates no pending work, no BOARD row,
+  no outbox/inbox entry, no patrol wake-up, and no confirmation/reminder/approval lifecycle.
+- **No new configuration key.** The capability is part of the tool, not a project setting.
+- **Storage is project state, outside the published tree**: `<main_root>/.pi/team/state/key-replies/` holds a
+  fixed-size commit index plus the immutable originals (`team paths` resolves the root; the store never lands in
+  `docs/team/` or in a checkout). `list` / `show` / the console's summary are **observation-only**: they never
+  create, repair or lock anything, and a missing store stays missing.
+- **Read it back with the tool, not by hand**: `team reply list [--before <no>] [--json]` pages the numbered slots
+  (newest first), `team reply show <no>` prints safe display text, `team reply show <no> --raw` exports the original
+  bytes to a non-TTY stdout, and the console's page 5 renders the latest reply plus the numbered history. Flags and
+  exit codes are in `team reply --help`.
+- **The honest limit**: the fixtures can only prove that both exits carry the same body for a *fixture* agent. No tool
+  can verify that a real agent follows this guidance — so it is written here as a rule, not enforced by the store.
+
 ## 5. Task briefs: written for "a weak model without context"
 
 The `routine` category usually runs a cheap, fast model (e.g. `opencode-go/deepseek-v4.1-flash`). It **will not
