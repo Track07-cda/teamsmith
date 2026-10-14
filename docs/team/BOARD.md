@@ -411,6 +411,7 @@
 | P251 | Turn-notice merge: apply | dev3 | - | - | wip |
 | P252 | CLI help: default English, per-command pages, plain-language concepts | dev | - | - | wip |
 | P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | wip |
+| P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | todo |
 
 ## 当前里程碑
 
