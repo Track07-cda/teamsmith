@@ -409,6 +409,7 @@
 | P249 | Pulse compose slot + read-only previews: apply | dev2 | - | - | wip |
 | P250 | Turn-notice merge (C-1): propose | dev3 | - | - | done |
 | P251 | Turn-notice merge: apply | dev3 | - | - | wip |
+| P252 | CLI help: default English, per-command pages, plain-language concepts | dev | - | - | wip |
 
 ## 当前里程碑
 
