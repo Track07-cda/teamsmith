@@ -409,7 +409,7 @@
 | P249 | Pulse compose slot + read-only previews: apply | dev2 | - | - | wip |
 | P250 | Turn-notice merge (C-1): propose | dev3 | - | - | done |
 | P251 | Turn-notice merge: apply | dev3 | - | - | wip |
-| P252 | CLI help: default English, per-command pages, plain-language concepts | dev | - | - | wip |
+| P252 | CLI help: default English, per-command pages, plain-language concepts | dev | - | - | done |
 | P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | wip |
 | P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | todo |
 | V33 | Pulse compose/previews: independent verification | verify | - | - | wip |
@@ -418,6 +418,7 @@
 | P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev | - | - | todo |
 | P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | todo |
 | P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | todo |
+| P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | wip |
 
 ## 当前里程碑
 
