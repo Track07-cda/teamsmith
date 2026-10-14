@@ -413,6 +413,7 @@
 | P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | wip |
 | P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | todo |
 | V33 | Pulse compose/previews: independent verification | verify | - | - | wip |
+| P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev | - | - | todo |
 
 ## 当前里程碑
 
