@@ -1283,3 +1283,18 @@ V32 另留五条**不改判定**的观察（登记为后续候选，不在本次
 **两处如实记下**：① 真实回复 store 里有一条 `no=1`（标题「t」、57 字节、来自 `agent`、2026-10-13 11:31）——是作者手工试发留下的（夹具本身有「解析出的 main_root 必须是夹具仓库」的守卫，不是夹具泄漏）；design 明文规定回滚**不删正文**，故保留、不清。② 关键回复的**归档**排在其后的 routing 之后（该变更自己的顺序要求），而 routing 归档仍等用户那句确认。
 
 **仍等用户**：routing 归档确认；29 个旧 tag 删不删。
+
+## D153 · 两条变更归档完成（用户确认，2026-10-14）
+
+用户确认归档。按变更自身要求的顺序执行：**先 `task-model-routing`、后 `pulse-key-replies`**（顺序在 key-replies 的 §5.3 与 design 里写明；两者对 `panel/dispatch` 同标题 MODIFIED requirement 的投影语义只有正序才正确）。
+
+```
+openspec archive -y task-model-routing   → archive/2026-10-14-task-model-routing（+11 / ~32 / -2，其中 panel 与 memory-and-deps 各含声明的 REMOVED）
+openspec archive -y pulse-key-replies    → archive/2026-10-14-pulse-key-replies（+14 / ~3；新能力 key-replies 规格落地，10 条 requirement）
+```
+
+归档前置逐条满足：代码已并入 main（routing 三刀 + P234）、独立复验记录在 `docs/team/reviews/`（V19/V21/V23、V27 两轮）、清单勾齐（routing 26/27 的最后一勾即归档动作本身，key-replies 17/17）、`team change status` 无 blocker。归档后 `openspec validate --all --strict` = **15 项全绿（14 份规格 + 1 个在飞变更）**；`spec-refs.sh --check` = 104 引用 / 0 未声明 / 0 已退役。
+
+**受影响选段在冻结克隆 + 钉死容器里复跑**（归档提交 `8f638fc4`）：`18c,20,28,33` 等 8 段 **`✓461 ✗0` rc=0**——含公开契约自洽（18c）、done 证据阶段感知（20）、面板三组与配置读写面（33）。
+
+**变更库现状**：只剩 `long-job-suspend`（12/14 任务），它等 B 刀与 A 刀的**归档前置**——B 刀已并入 main 且 V24 PASS，它的清单还剩作者未勾的项与 PM 的 §5 项，PM 下一步处理。
