@@ -54,3 +54,16 @@ git diff --check && git status --short
 ## 交付
 
 `docs/team/reports/P261-dev-bob.md`（逐条 tasks 对照、命令与 rc、红侧前后证据、P253 两笔提交的去向与调整说明、未做项）；证据包按 D94 放仓外；之后由**未写过本任务**的席位独立复验。
+
+## 返修轮次 1（2026-10-14，独立复验 V35 判 FAIL：任务书 1–7 条全绿，两个阻塞都在 init/bootstrap 的拒绝建议面）
+
+复验记录 `docs/team/reviews/V35.md`（受检 tip 见报告）。核心面（迁移值一个不改、失败关闭、身份登记、版本提示、端到端）全绿；两个阻塞：
+
+- **F1**：旧配置上 `bootstrap` 的拒绝只点名手工事务（`config upgrade-models`），**没有**点名启动事务 `team up`（`cmd-bootstrap.sh:195-198` 与 v0.2.0 逐字节相同——P261 改了 `init` 的文案、**漏了 `bootstrap`**）。delta 要求「init and bootstrap … naming the startup route next to the manual one」。
+- **F2**：`init`/`bootstrap` 的拒绝建议是**占位符**（`--task-models '<category=provider/model …>'`），不是**从项目自身配置推导**的可粘贴命令——而同一文件上 `dispatch --print` 输出的正是逐字节对应的推导映射，推导明确可用。delta 场景「The legacy refusal carries a command derived from the project's own configuration」把 `team init` 明列为必须给推导命令的写路径。
+
+**修法**：拒绝信息从**同一张推导表**（与自动迁移共用）生成——`init`、`bootstrap`、以及派单侧的旧配置拒绝，三处都打印**一条可粘贴**的 `team config upgrade-models --task-models '<推导映射>' --pm-model '<值>'`（类别对恰好等于退休键的推导对，含兜底），并**点名两条路线**（`team up` 启动事务 + 手工事务）。红侧：端到端——复制它打印的命令、`--dry-run` 通过、`--yes` 落地、`config list` rc=0；且把推导换成占位符必红。
+
+**附带裁定（O1，我裁决）**：`team config set` 在旧配置上不拒绝、直接写盘（与 v0.2.0 相同，非本变更引入）——**但 delta 把它列进了「拒绝的写路径」名单**。我裁定为**要改**：`config set` 在退休配置上应拒绝并指向升级（一致性，且直接写会留下半迁移状态）。这也要从推导表给出可粘贴命令。
+
+修后冻结新 tip；由 **V35 第二轮**复检。
