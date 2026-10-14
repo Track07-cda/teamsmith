@@ -415,7 +415,7 @@
 | V33 | Pulse compose/previews: independent verification | verify | - | - | done |
 | P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev | - | - | todo |
 | P256 | Startup self-heal: team up migrates a stale project automatically | dev2 | - | - | done |
-| P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev | - | - | todo |
+| P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev2 | - | - | done |
 | P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | dropped |
 | P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | dropped |
 | P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | wip |
@@ -426,8 +426,9 @@
 | V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | todo |
 | P266 | Panel plain language: apply | dev3 | - | - | wip |
-| V35 | startup self-heal: independent verification | verify | - | - | wip |
+| V35 | startup self-heal: independent verification | verify | - | - | blocked |
 | V36 | panel plain language: independent verification | dev-bob | - | - | wip |
+| P267 | Reply discipline into the skill: apply | dev2 | - | - | wip |
 
 ## 当前里程碑
 
