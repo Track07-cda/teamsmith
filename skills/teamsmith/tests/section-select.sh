@@ -24,6 +24,8 @@
 # 所以账本路径的归属写在表头一行 `# ledger-scan: <key> <pattern…>`：命中的路径归那一段。
 # 删掉这行（或它的归属模式）→ 账本路径回到豁免类（NONE）；--check ⑦ 会对「缺头 / 指向未知段 /
 # 没有模式 / 模式没盖住账本样例」逐条判红。
+# P231：这行还必须**唯一**，且指向**承载账本禁令的那一段**（patterns 列声明了 $LSC_CARRIER）——
+# 两份表头（旧行为：最后一行赢）或指向别的段都不再放行，**装载时就报错点名**（die，rc=2）。
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -99,19 +101,23 @@ P_PROLOGUE=""
 P_LEDGER_SCAN=""   # 表头 `# ledger-scan: <key> <pattern…>`：账本（docs/team/**）的归属行（P239）
 P_LEDGER_PAT=""    # 上面那行的归属模式（空格分隔，同 patterns 列的 case glob 语义）
 P_LEDGER_LINE=""   # 上面那行的原文载荷（解析用；空 = 表里没有这行）
+P_LEDGER_LNS=()    # 上面那行在表里的行号（P231：>1 行 = 重复声明，装载即拒绝）
+LSC_CARRIER="skills/teamsmith/tests/ledger-ban.sh"   # 承载账本禁令的段：patterns 列里必须有它（P231）
 T_N=0
 T_KEY=(); T_ID=(); T_PAT=(); T_NEEDS=(); T_BASIS=()
 
 load_table() {
   [ -r "$TSV" ] || die "读不到映射表 $TSV"
-  local line nf
+  local line nf ln=0
   T_N=0
   while IFS= read -r line || [ -n "$line" ]; do
+    ln=$((ln + 1))
     case "$line" in
       "# exempt:"*)   P_EXEMPT="${line#\# exempt:}"; P_EXEMPT="${P_EXEMPT# }"; P_EXEMPT="${P_EXEMPT% }"; continue ;;
       "# prologue:"*) P_PROLOGUE="${line#\# prologue:}"; P_PROLOGUE="${P_PROLOGUE# }"; P_PROLOGUE="${P_PROLOGUE% }"; continue ;;
       "# ledger-scan:"*) P_LEDGER_LINE="${line#\# ledger-scan:}"; P_LEDGER_LINE="${P_LEDGER_LINE# }"; P_LEDGER_LINE="${P_LEDGER_LINE% }"
         P_LEDGER_SCAN="${P_LEDGER_LINE%% *}"; P_LEDGER_PAT="${P_LEDGER_LINE#"$P_LEDGER_SCAN"}"; P_LEDGER_PAT="${P_LEDGER_PAT# }"
+        P_LEDGER_LNS+=("$ln")
         continue ;;
       "#"*|"") continue ;;
     esac
@@ -126,6 +132,25 @@ load_table() {
   [ "$T_N" -gt 0 ] || die "映射表是空的：$TSV"
   [ -n "$P_EXEMPT" ] || die "映射表缺 exempt 头（豁免类声明）"
   [ -n "$P_PROLOGUE" ] || die "映射表缺 prologue 头（前导段声明）"
+  load_table_check_ledger_head
+}
+
+# P231：ledger-scan 头的两条装载期铁律 —— 必须是**唯一**一行，且指向**承载账本禁令的那一段**
+# （那一段的 patterns 列声明了 $LSC_CARRIER）。两种违反过去都能过：两份表头是最后一行赢，指向
+# 别的段只看「段在不在」。现在都在装载时报错点名（文件 + 行号），不静默选一边。
+load_table_check_ledger_head() {
+  local row
+  if [ "${#P_LEDGER_LNS[@]}" -gt 1 ]; then
+    die "映射表有 ${#P_LEDGER_LNS[@]} 行 ledger-scan 头（$TSV:$(printf '%s' "${P_LEDGER_LNS[*]}" | tr ' ' ',')）—— 归属只许声明一处（旧行为是最后一行赢，已拒绝）"
+  fi
+  [ -n "$P_LEDGER_SCAN" ] || return 0   # 缺头不是装载错：--check ⑦ 判红（账本路径回到 NONE）
+  if ! row="$(row_idx "$P_LEDGER_SCAN")"; then
+    die "ledger-scan 头（$TSV:${P_LEDGER_LNS[0]}）指向未知段 [$P_LEDGER_SCAN] —— 归属必须落在承载账本禁令的那一段（patterns 里有 $LSC_CARRIER）"
+  fi
+  case " ${T_PAT[row]} " in
+    *" $LSC_CARRIER "*) ;;
+    *) die "ledger-scan 头（$TSV:${P_LEDGER_LNS[0]}）指向 [$P_LEDGER_SCAN]，但那一行的 patterns 列没有 $LSC_CARRIER —— 归属必须落在承载账本禁令的那一段" ;;
+  esac
 }
 
 # ── 门禁源码里的段（顺序 = 源序）──────────────────────────────────────────────────────────
@@ -501,7 +526,9 @@ do_list() {
 #      豁免类（docs/**）的 token 不参与该检查 —— 按 ④ 没有任何行可以声明它们（账本路径的归属由
 #      表头 ledger-scan 行担当，不写进 patterns，所以这里也不参与；它有自己的 ⑦）
 #   ⑦ 账本归属（P239）：表头 ledger-scan 行必须在、指向已存在的段、有归属模式，且模式盖住
-#      每一个账本样例（缺一样 = 账本文本的改动不再选中任何段 → 红）
+#      每一个账本样例（缺一样 = 账本文本的改动不再选中任何段 → 红）。
+#      P231：「唯一 + 指向承载禁令的段」这两条在装载期就 die（load_table_check_ledger_head），
+#      走到这里时它们已经成立 —— 下面「指向未知段」那一支只是防御，不是第一道门。
 # 段正文的 normalizer（与 P97 探针同一口径）：$SKILL_DIR→skills/teamsmith、
 #   $SKILL_INIT_DIR→skills/teamsmith-init、$SRC_ROOT/$OS_ROOT/$V94_ROOT→仓库根；
 #   裸前缀 skills/ panel/ extension/ openspec/ ci/；根文件 SCOPE.md/README.md/AGENTS.md/CHANGELOG.md。

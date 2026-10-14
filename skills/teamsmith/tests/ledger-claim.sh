@@ -15,6 +15,12 @@
 #      同一检查」的机制（那棵树没有本分支的新文件，0 不是「本分支干净」的证据），
 #      也正是固定验收行要求「在自己的 worktree / 自己的分支树上跑」的原因。
 #
+# P231 补的两组（同样每组各带红侧）：
+#   ④⑤ 装载期铁律：ledger-scan 头指向别的段 / 指向未知段 / 出现**两行** → 装载就报错点名（rc=2）。
+#      这三样过去都能过：指向别的段只看「段在不在」，两行表头是**最后一行赢**（V26 OBS2/OBS3）。
+#   ⑥ 账本面覆盖**非 .md** 文件：植入 docs/team/ledger/*.tsv 里的名字 → 红并点名；把面退回
+#      「只扫 *.md」的同款副本在同一棵树上 hits=0（假绿对照）—— ledger/*.tsv 正是 P231 前的盲区。
+#
 # 纯逻辑：只读真树；写入只落在自己的临时根（lib/tmp-root.sh）。不起 tmux/pi/门禁进程。
 # 注意：植入用的家目录字面量在**运行时拼出来**（源码里不留 /home/<名> 形状）——本文件是被
 #       publish-public.sh 扫描的产品面，夹具自己不能带一家目录字面量。
@@ -163,6 +169,78 @@ if printf '%s\n' "$OUT_B" | grep -qF 'hits=1' && printf '%s\n' "$OUT_M" | grep -
   printf '      对照行：%s\n' "$(printf '%s\n' "$OUT_M" | grep -a '^ledger-ban: root=' | tail -1)"
 else
   case_bad "③ 假绿对照没成立：branch=[$(printf '%s' "$OUT_B" | grep -a 'hits=' | tail -1)] mainlike=[$(printf '%s' "$OUT_M" | grep -a 'hits=' | tail -1)]"
+fi
+
+# ── ④⑤ 装载期铁律（P231）：归属必须唯一，且落在承载账本禁令的那一段 ───────────────────
+BAN_CARRIER="skills/teamsmith/tests/ledger-ban.sh"
+OTHER_KEY="$(awk -F'\t' -v carrier="$BAN_CARRIER" '!/^#/ && NF == 5 && $1 != "" && index($3, carrier) == 0 { print $1; exit }' "$TABLE")"
+if [ -n "$OTHER_KEY" ] && [ -n "$BAN_KEY" ]; then
+  # ④ 指向另一个**已存在**的段（它的 patterns 列里没有承载禁令的脚本）——旧行为：--check 仍 ok
+  awk -v other="$OTHER_KEY" '/^# ledger-scan:/{ print "# ledger-scan: " other " docs/team/*"; next } { print }' \
+    "$TABLE" >"$TMP/table-other-target.tsv"
+  OUT="$(bash "$SEL" --check --table "$TMP/table-other-target.tsv" 2>&1)"; RC=$?
+  if [ "$RC" = "2" ] && printf '%s\n' "$OUT" | grep -qF "指向 [$OTHER_KEY]" \
+     && printf '%s\n' "$OUT" | grep -qF '承载账本禁令的那一段'; then
+    case_ok "④ 装载：归属指向别的段（$OTHER_KEY，patterns 里没有 ledger-ban.sh）→ 报错点名（rc=2）"
+  else
+    case_bad "④ 装载：指向别的段没有报错点名（rc=$RC）：$(one_line "$OUT")"
+  fi
+  # ④b 指向**未知段**：同一道装载期门（过去是 --check 的一条红）
+  awk '/^# ledger-scan:/{ print "# ledger-scan: 999 docs/team/*"; next } { print }' \
+    "$TABLE" >"$TMP/table-unknown-target.tsv"
+  OUT="$(bash "$SEL" --check --table "$TMP/table-unknown-target.tsv" 2>&1)"; RC=$?
+  if [ "$RC" = "2" ] && printf '%s\n' "$OUT" | grep -qF '指向未知段 [999]'; then
+    case_ok "④b 装载：归属指向未知段 [999] → 报错点名（rc=2）"
+  else
+    case_bad "④b 装载：指向未知段没有报错点名（rc=$RC）：$(one_line "$OUT")"
+  fi
+  # ⑤ 两行表头：别的段在前、真归属在后 —— 「最后一行赢」的旧行为会拿到真归属、照旧通过
+  { printf '# ledger-scan: %s docs/team/*\n' "$OTHER_KEY"; cat "$TABLE"; } >"$TMP/table-two-heads.tsv"
+  OUT="$(bash "$SEL" --check --table "$TMP/table-two-heads.tsv" 2>&1)"; RC=$?
+  if [ "$RC" = "2" ] && printf '%s\n' "$OUT" | grep -qF '2 行 ledger-scan 头' \
+     && printf '%s\n' "$OUT" | grep -qF "$TMP/table-two-heads.tsv:1," \
+     && printf '%s\n' "$OUT" | grep -qF '只许声明一处'; then
+    case_ok "⑤ 装载：两行 ledger-scan 头 → 报错点名（表路径 + 两个行号），不是最后一行赢"
+  else
+    case_bad "⑤ 装载：两行表头没有报错点名（rc=$RC）：$(one_line "$OUT")"
+  fi
+else
+  case_bad "④⑤ 夹具失效：表里找不到不承载账本禁令的段（OTHER_KEY 为空）"
+fi
+
+# ── ⑥ 账本面覆盖**非 .md** 文件（P231）：同一棵树 —— 新面红并点名 .tsv；旧面（只扫 *.md）假绿 ────
+FACE="$TMP/non-md-face"; mkdir -p "$FACE/docs/team/ledger" "$FACE/.pi/team"
+printf '# 他项目名单（夹具）\nfixture-peer\n' >"$FACE/.pi/team/forbidden-names.txt"
+printf '# 干净账本（夹具）\n\n- 他项目占位：<peer>\n' >"$FACE/docs/team/board.md"
+printf 'branch\ttip\tdate\nfixture-peer-branch\tabc123\t2026-01-01\n' >"$FACE/docs/team/ledger/planted.tsv"
+OUT="$(bash "$BAN" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
+if [ "$RC" = "1" ] && printf '%s\n' "$OUT" | grep -qF 'docs/team/ledger/planted.tsv:2: [names]' \
+   && printf '%s\n' "$OUT" | grep -qF 'hits=1'; then
+  case_ok "⑥ 账本面覆盖非 .md：ledger/*.tsv 里的名字 → 红并点名 planted.tsv:2（同一棵树里的 .md 是干净的）"
+else
+  case_bad "⑥ 非 .md 账本没有红（rc=$RC）：$(one_line "$OUT")"
+fi
+# 假绿对照：同一棵树上把账本面退回 P231 之前的样子（只扫 *.md）—— 同一个植入 hits=0
+OLDFACE="$TMP/old-face"; mkdir -p "$OLDFACE/lib"
+cp "$BAN" "$OLDFACE/ledger-ban.sh"; cp "$SKILL_DIR/tests/lib/tmp-root.sh" "$OLDFACE/lib/tmp-root.sh"
+OLD_PAT='-type f 2>/dev/null | LC_ALL=C sort'
+OLD_NEW="-type f -name '*.md' 2>/dev/null | LC_ALL=C sort"
+if [ "$(grep -cF -- "$OLD_PAT" "$OLDFACE/ledger-ban.sh")" = "1" ]; then
+  awk -v pat="$OLD_PAT" -v rep="$OLD_NEW" '{ i = index($0, pat); if (i > 0) $0 = substr($0, 1, i - 1) rep substr($0, i + length(pat)); print }' \
+    "$OLDFACE/ledger-ban.sh" >"$OLDFACE/new" && mv "$OLDFACE/new" "$OLDFACE/ledger-ban.sh"
+  if [ "$(grep -cF -- "$OLD_NEW" "$OLDFACE/ledger-ban.sh")" = "1" ]; then
+    OUT="$(bash "$OLDFACE/ledger-ban.sh" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
+    if [ "$RC" = "0" ] && printf '%s\n' "$OUT" | grep -qF 'hits=0' \
+       && ! printf '%s\n' "$OUT" | grep -qF 'planted.tsv'; then
+      case_ok "⑥ 假绿对照：账本面退回「只扫 *.md」→ 同一棵树、同一个植入 hits=0（假绿就是这么来的）"
+    else
+      case_bad "⑥ 假绿对照没复现（rc=$RC）：$(one_line "$OUT")"
+    fi
+  else
+    case_bad "⑥ 夹具失效：旧面副本没有加上 *.md 过滤（锚点在源码里不是恰好一处？）"
+  fi
+else
+  case_bad "⑥ 夹具失效：--all 的 find 锚点在源码里不是恰好一处（源码形态变了？）"
 fi
 
 printf '== ledger-claim == ✓ %d ✗ %d\n' "$OKN" "$BADN"

@@ -482,7 +482,7 @@ unresolved `merge --squash` is caught by the next gate instead of reaching `main
 A trap: an add/add conflict is often git's rename detection pairing two different paths (e.g. `reviews/<ID>.md` and
 `reports/<ID>-<agent>.md`). Retry with `git -c merge.renames=false merge --squash <branch>` and it goes away.
 
-## 8f. Template rendering and dispatch traps (measured on erp)
+## 8f. Template rendering and dispatch traps (measured on an external project)
 
 - **Rendering must not go through sed**: `&` inside the replacement string means "the matched text", so
   `TEAM_GATES="pnpm test && pnpm lint"` was written out as `pnpm test {{GATES}}{{GATES}} pnpm lint`. `team_render` now
@@ -491,7 +491,7 @@ A trap: an add/add conflict is often git's rename detection pairing two differen
   `init` also escapes gate values containing `$ \` \ "` before writing them into the config, so sourcing it back
   yields the same value as the input (and is never executed).
 - **Dispatch writes absolute paths**: the window shell's PATH/rc may not be ready yet, so exec'ing `pi` directly ends
-  in `command not found` (reproduced twice on erp). Dispatch now resolves pi's absolute path first, writes it into the
+  in `command not found` (reproduced twice on an external project). Dispatch now resolves pi's absolute path first, writes it into the
   window command, and checks that it exists before dispatching (a missing binary fails immediately instead of being
   discovered inside the window).
 - **GitLab API headers and bodies must match**: if `--data-urlencode` is the form body, then
@@ -654,7 +654,10 @@ turns into a red a fixture cannot explain.
 Since 2026-10-04 the readable ledger — board, decisions, roadmap, ownership, briefs, the text of reports and
 verification records, threads — is committed to the repository (D94). A brief or a report is therefore public the
 moment it is written, and the one mechanical redaction pass that produced the first batch has no net behind it.
-So the ban is a check in the gate: suite section `60` runs `tests/ledger-ban.sh`, which scans `docs/team/**/*.md`
+So the ban is a check in the gate: suite section `60` runs `tests/ledger-ban.sh`, which scans every file under
+`docs/team` that would be committed (`git ls-files -c -o --exclude-standard`; P231 widened this from `**/*.md`,
+because the `.tsv` ledgers — precisely where branch and project names get written — were a blind spot: a planted
+leak there came back green)
 and fails, naming file and line, on
 
 - a home directory (`/home/<name>…` or `/Users/<name>…`; the ellipsis placeholders `/home/.../` and `/home/…/` pass);
@@ -682,7 +685,12 @@ itself failed. Falsifiability lives in the fixture self-test (`bash tests/ledger
 path and a planted forbidden name must come back red with file:line, a missing list must show the visible skip, a
 shadow scanner whose hit counter is broken must make the two red cases fail, and a second shadow whose masking is
 turned off must make the “no raw text in the output” cases fail — a mixed line, twenty-five occurrences on one line,
-a placeholder standing before the hit (the offset must survive the blanking), and an over-long line.
+a placeholder standing before the hit (the offset must survive the blanking), and an over-long line. P231 extends
+both ends: the face itself is pinned by the ownership fixture (`tests/ledger-claim.sh`) — a planted name in a
+`docs/team/ledger/*.tsv` must come back red naming that file and line, while a copy of the scanner whose face is
+narrowed back to `*.md` must return `hits=0` on the same tree (the false green, reproduced) — and the header rules
+(`# ledger-scan:` must be a single line and must point at the section that carries this check) are refused at load
+time instead of at check time.
 
 ## 9c. Strong verification (adversarial package + finding flips, for milestones)
 

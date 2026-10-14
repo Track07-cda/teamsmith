@@ -147,7 +147,7 @@ task/P134-propose	28fd39e60c66f1407add7284521ff2470abcb5b3	2026-09-30	merged	0
 task/P135-infra-tidy-close-iproute2-fa	82ecd62e33db5f902cb696aad98952249c859da0	2026-09-30	merged	0
 task/P136-propose	49013c43ffea97106ed23541eabb0538c7fff499	2026-09-30	merged	0
 task/P137-references	acd484b7ff4f813d61fc58603e928ad413f82a6a	2026-09-30	merged	0
-task/P138-cep-team-say	ef4d50397a1181ed68769caf93873ac73726b5c1	2026-09-29	merged	0
+task/P138-<peer>-team-say	ef4d50397a1181ed68769caf93873ac73726b5c1	2026-09-29	merged	0
 task/P139-meeting-liveness-apply	fe4ca3bd128c29a1fac1b934c131024f464aa0b6	2026-10-01	merged	1
 task/P14-apply-pulse-console-b3-i18n-	0d8f568dea0a149c5de51b9cbb6912aeb14f36ac	2026-09-17	REVIEW	1
 task/P140-dispatch-friction-apply	e631afef0c9a0a609679a9118b1d7179947d016a	2026-10-01	merged	0

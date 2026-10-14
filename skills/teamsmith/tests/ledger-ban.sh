@@ -7,7 +7,8 @@
 #
 # 为什么有它：D94（2026-10-04）把可读账本（BOARD / DECISIONS / tasks / reports / reviews / threads）
 # 放进了仓库 —— 任务书与复验记录从此「写下去即公开」。进仓库前的那次遮蔽是一次机械 pass，没有发布前的
-# 网兜着；这条检查就是那张常驻的网：每次门禁扫一遍 docs/team 的 .md。
+# 网兜着；这条检查就是那张常驻的网：每次门禁扫一遍 docs/team 下**会被提交**的每一个文件（P231 起不再
+# 限定 .md —— ledger/*.tsv 这类恰恰爱写分支名/项目名的账本从前是盲区，植入泄漏只会得到假绿）。
 #
 # 形状（命中即红，点名 file:line；输出里的敏感 token 一律换成占位符，日志可以安全地贴到任何地方）：
 #   [home]  绝对家目录：/home/<名>… 与 /Users/<名>…（<名> 以字母/数字/下划线开头；省略号占位不算）
@@ -27,7 +28,7 @@
 #     网段的两侧边界由代码逐字符判（正则边界组会把分隔字符一起吃掉 —— `<internal<internal` 的根因）。
 #   - 行太长时**先遮蔽、后截断**，截断处打显式标记 `…(截断)`（BAN_LINE_MAX 字节）—— 绝不留原文。
 #   - 退出码语义不变：0 干净 / 3 有子项跳过 / 1 有命中 / 2 用法错 / 4 内部错。
-# 范围：<root>/docs/team/**/*.md 里**会被提交**的那些（git ls-files -c -o --exclude-standard）；
+# 范围：<root>/docs/team 下**会被提交**的每一个文件（git ls-files -c -o --exclude-standard）；
 #       被忽略的证据层（reports/<ID>-<agent>/…）不进公开面，不扫。--all 退回目录 glob（诊断/夹具）。
 #
 # 退出码：0 = 全部形状都查过且干净 · 3 = 干净但有子项被跳过（名单缺失/为空、用户名解析不出；**不是通过**）
@@ -94,7 +95,6 @@ ban_list_files() { # <root> <published|all> <out>
     top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"
     if [ -n "$top" ] && [ "$top" = "$root" ]; then
       while IFS= read -r f; do
-        case "$f" in *.md) ;; *) continue ;; esac
         [ -f "$root/$f" ] || continue
         printf '%s\n' "$f" >>"$out"; n=$((n + 1))
       done < <(git -C "$root" ls-files -z -c -o --exclude-standard -- "$BAN_DOCS_REL" 2>/dev/null | tr '\0' '\n')
@@ -106,7 +106,7 @@ ban_list_files() { # <root> <published|all> <out>
     while IFS= read -r f; do
       f="${f#"$root"/}"
       printf '%s\n' "$f" >>"$out"; n=$((n + 1))
-    done < <(find "$root/$BAN_DOCS_REL" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
+    done < <(find "$root/$BAN_DOCS_REL" -type f 2>/dev/null | LC_ALL=C sort)
   fi
   printf '%s' "$n"
 }

@@ -62,7 +62,7 @@ and `.pi/team/config.sh` (10) as this project's live copies.
 
 ### 1.5 History — never renamed
 
-`CHANGELOG.md` version entries, `docs/team/DECISIONS.md`, `docs/alignment-cep-reply.md`, `docs/team/reports/**`
+`CHANGELOG.md` version entries, `docs/team/DECISIONS.md`, `docs/alignment-<peer>-reply.md`, `docs/team/reports/**`
 and `docs/team/reviews/**` keep the old name: they record what shipped when. The CHANGELOG entry for this change
 says "watchdog 改名为 pulse" in its own words and never rewrites older entries.
 

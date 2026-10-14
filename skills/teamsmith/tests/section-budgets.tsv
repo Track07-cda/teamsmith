@@ -46,7 +46,7 @@
 6b · 容量守卫矩阵（zram / 磁盘 swap 分账）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 6c · 模型并发限额（含通配）	0.07	60	0.07	10.6/?/14.0/10.5	0.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 6d · CEP 实测反馈（board 额外列 / merge 冲突列表 / 待复验启发式 / 翻转证据）	3.00	60	1.08	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
-6e · erp 实测反馈（render & / GitLab 头 / pi PATH / 非任务报告）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
+6e · 外部项目实测反馈（render & / GitLab 头 / pi PATH / 非任务报告）	2.00	60	2.00	10.6/?/14.0/10.5	2.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 6f · agent adapter（任意 TUI agent）：渲染 / 占位符 / 文档契约 / 降级	19.00	76	19.00	10.6/?/14.0/10.5	18.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 6g · 非 Pi agent 端到端（假 agent，完全没有 Pi）	3.00	60	2.13	10.6/?/14.0/10.5	3.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 6h · 派单：会话规模 vs 模型窗口（M4.3 A）+ 启动证据（M4.3 B）	18.00	72	18.00	10.6/?/14.0/10.5	17.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60

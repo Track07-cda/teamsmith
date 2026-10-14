@@ -5077,7 +5077,7 @@ team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
 team_render() { # <template-file> [KEY=VALUE ...]
   # 替换用 bash 参数展开（不经过 sed —— sed 替换串里 & = 命中文本）。
   # 但 bash 5.2+ 默认打开 patsub_replacement，替换串里的 & 同样会变成"命中文本"：
-  # 于是 TEAM_GATES="a && b" 会渲染成 "a {{GATES}}{{GATES}} b"（erp 实测踩过）。
+  # 于是 TEAM_GATES="a && b" 会渲染成 "a {{GATES}}{{GATES}} b"（外部项目实测踩过）。
   # 所以这里显式关掉它，替换完再恢复。
   local tmpl="$1"; shift
   local out kv k v had_pr=0
@@ -5234,7 +5234,7 @@ team__board_status() { # <id> → _R = 状态列（M50 进程内变体）
   return 0
 }
 
-# ---------------------------------------------------------------- pi 可执行文件（窗口 PATH 就绪竞态，erp 实测）
+# ---------------------------------------------------------------- pi 可执行文件（窗口 PATH 就绪竞态，外部项目实测）
 # dispatch/resume 在窗口 shell 加载完 PATH 前就 exec pi → "pi: command not found"。
 # 对策：解析成绝对路径写进窗口命令 + 派单前先校验存在。
 # 注：team_pi_bin_path 定义在本节末尾（agent adapter 的兜底分支会调用它）。

@@ -2830,8 +2830,8 @@ assert_has "$SKILL_DIR/templates/task.md.tmpl" "Flip evidence" "task template re
 assert_has "$SKILL_DIR/templates/report.md.tmpl" "Flip evidence" "report template has the flip-evidence section"
 assert_has "$TMP/print.log" "flip evidence" "dispatch prompt requires flip evidence"
 
-# ---------------------------------------------------------------- 6e. erp 实测反馈（4 条）
-section "6e · erp 实测反馈（render & / GitLab 头 / pi PATH / 非任务报告）"
+# ---------------------------------------------------------------- 6e. 外部项目实测反馈（4 条）
+section "6e · 外部项目实测反馈（render & / GitLab 头 / pi PATH / 非任务报告）"
 
 # ③ 模板渲染不能吃掉 &&（bash 5.2+ 的 patsub_replacement 会把 & 变成“命中文本”）
 BRENDER="$TMP/renderer-repo"; mkdir -p "$BRENDER"; ( cd "$BRENDER" && git init -q -b main && git config user.email a@b && git config user.name a && echo x > a && git add -A && git commit -qm init )
@@ -2855,7 +2855,7 @@ assert_has "$TMP/pi-missing.log" "找不到 pi 可执行文件" "报错说明了
 assert_has "$TMP/pi-missing.log" "绝对路径" "给出了「设成绝对路径」的建议"
 assert_match "$TMP/print.log" "^cd .* && (export [^;]*; )*/| pi_bin" "派单命令里用的是解析后的路径（M36 起 && 后先带闸门 exports 前缀，再到绝对路径；见下方 dispatch 断言）"
 
-# ④ 非任务交付物不算待复验（erp: requirements-gap-2026-09-11.md）
+# ④ 非任务交付物不算待复验（外部项目：requirements-gap-2026-09-11.md）
 printf '# 需求差距报告\n\n非任务交付物。\n' > "$REPO/docs/team/reports/requirements-gap-2026-09-11.md"
 $TEAM digest >"$TMP/digest-nontask.log" 2>&1 || true
 assert_not "$TMP/digest-nontask.log" "team review requirements" "非任务交付物不再被当成待复验任务"
@@ -20038,7 +20038,8 @@ fi
 
 # ---------------------------------------------------------------- 60. 账本禁令（P212 · D94 的机制）
 # D94（2026-10-04）把可读账本（BOARD / DECISIONS / tasks / reports / reviews / threads）放进了仓库 ——
-# 任务书与复验记录从此「写下去即公开」。这次检查是那次决定的兜底：每次门禁扫一遍 docs/team 的 .md，
+# 任务书与复验记录从此「写下去即公开」。这次检查是那次决定的兜底：每次门禁扫一遍 docs/team 下**会被提交的
+# 每一个文件**（P231 起不再限定 .md —— ledger/*.tsv 那类账本从前是盲区，植入泄漏只会得到假绿），
 # 家目录 / 私有网段 / 本机用户名 / 他项目名 命中即红并点名 file:line，**命中行遮蔽后才进日志**
 # （P216：一行里四类形状 × 每一处出现全部换掉、掩码不自我重扫、超长先遮蔽后截断打显式标记）；
 # 他项目名单从**被忽略**的配置读（.pi/team/forbidden-names.txt，一行一个），名单没配 → 可见 SKIP（不算通过）。
