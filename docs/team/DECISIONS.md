@@ -1298,3 +1298,23 @@ openspec archive -y pulse-key-replies    → archive/2026-10-14-pulse-key-replie
 **受影响选段在冻结克隆 + 钉死容器里复跑**（归档提交 `8f638fc4`）：`18c,20,28,33` 等 8 段 **`✓461 ✗0` rc=0**——含公开契约自洽（18c）、done 证据阶段感知（20）、面板三组与配置读写面（33）。
 
 **变更库现状**：只剩 `long-job-suspend`（12/14 任务），它等 B 刀与 A 刀的**归档前置**——B 刀已并入 main 且 V24 PASS，它的清单还剩作者未勾的项与 PM 的 §5 项，PM 下一步处理。
+
+## D154 · 旧 tag 处置的推荐与准备（等用户一句放行，2026-10-14）
+
+用户问「你推荐怎么做」。PM 的推荐：**删掉那 29 个改写前的旧 tag，保留三个发布 tag**。理由不是整洁，是**把这个危险的脚枪从源头拆掉**：
+
+- 那 29 个 tag 指向 **filter-repo 之前**的历史——那段历史里有当时的完整内部账本（`docs/team/**` 的报告与证据）。只要有人（包括未来的我）敲一次 `git push public main --tags`，这段历史就进了公开仓，且**不可撤销**。今天的护栏全是「提醒式」的：清单一句话、`release-check.sh` 一条警告——都挡不住手快。
+- 删掉之后这条路径**机械地不存在**：`--tags` 推不出旧历史，`git describe`/`tag --sort` 也不再被 1.42.0 之类的幻影 tag 带偏。三个发布 tag（`v0.1.0/1/2`）全部可达、保留。
+
+**可回滚性已核实**（动手前的准备，按既有规则 #1975）：完整清单（tag → sha → 创建日 → 是否可达 → 是否在镜像里）导出到仓外 `pm-skills-ledger/team/reviews/stale-tags-export-20261014.tsv`（32 行，**29 个 stale 全部** present in mirror）；两处独立备份：镜像仓 `pm-skills-backup-20261004-1458.git`（29/29）与内部远端 `origin`（31 个 `v1.*` tag）。恢复方式：`git fetch --tags <backup>`。
+
+**待用户放行的一条命令**（不可逆但可回滚，且**只影响本地 tag**，不推任何远端）：
+
+```bash
+# 删前先看一眼要删哪些（应恰好 29 个，且都是 !reachable 的）
+git tag --merged HEAD | sort > /tmp/keep.txt && git tag | sort > /tmp/all.txt && comm -23 /tmp/all.txt /tmp/keep.txt
+# 确认列表无误后删除它们（保留 HEAD 可达的三个发布 tag）
+comm -23 /tmp/all.txt /tmp/keep.txt | xargs -r git tag -d
+```
+
+用户答「删」我就执行并复跑 `release-check.sh`（期望：旧 tag 警告消失、唯一红仍是 HEAD 领先最新 tag）；答「不删」我就把 D150 的警告式护栏当最终状态，并在清单里再加一句「发布命令只写 `main` 与单个 tag，不用 `--tags`」（已写）。
