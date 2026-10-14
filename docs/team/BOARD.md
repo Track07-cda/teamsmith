@@ -427,9 +427,9 @@
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | todo |
 | P266 | Panel plain language: apply | dev3 | - | - | wip |
 | V35 | startup self-heal: independent verification | verify | - | - | blocked |
-| V36 | panel plain language: independent verification | dev-bob | - | - | wip |
-| P267 | Reply discipline into the skill: apply | dev2 | - | - | wip |
-| V37 | Reply discipline: independent verification | verify | - | - | wip |
+| V36 | panel plain language: independent verification | dev2 | - | - | wip |
+| P267 | Reply discipline into the skill: apply | dev2 | - | - | done |
+| V37 | Reply discipline: independent verification | verify | - | - | done |
 
 ## 当前里程碑
 
