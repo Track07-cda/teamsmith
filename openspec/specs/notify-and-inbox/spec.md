@@ -40,6 +40,27 @@ in the sender's `state/<agent>.env` (`task=<ID>`), on the board, or as a task br
 a protected-branch or detached worktree, an unproven ID and a worktree-less manual `team notify` SHALL stamp
 nothing — an identifier MUST NOT be invented from a branch name or a seat name.
 
+A completed turn that ends while background jobs its own session started are still running SHALL be told apart
+from both a delivery and an interruption: the inbox line and the knock payload SHALL carry the tag
+`[auto·suspended]` and an `awaiting=<id>[,<id>…]` field naming the running jobs, and the dirty-tree warning flag
+SHALL be omitted for a suspension (the `uncommitted=<n>` field stays) — a suspension is not a delivery claim and
+MUST NOT wear the alarm shape of one. The running set SHALL be read from the same `state/bg/` directory the lane
+writes its records to, located by the lane's own rule — an explicit `TEAM_STATE_DIR` first, else the lane's
+project-root rule (a session whose working tree carries the project's config resolves to that working tree, one
+without it to the main worktree) — and the notify extension MUST NOT substitute its own project root for
+that directory. Only a job the settling session itself started SHALL count: a record belongs to the
+session when its recorded `cwd` — the working directory the job was started in, which is the owning
+seat's working tree — resolves, through symlinks and trailing slashes, to the session's own working
+tree or working directory. A record with a missing, relative or unresolvable `cwd`, or one resolving
+to another session's directory, SHALL NOT make the turn suspended — the ownership check fails closed
+rather than guessing. A record SHALL count as running only while
+its recorded `(pid, start-time)` identity verifies live, the same identity rule
+`boundary#\`team bg\` stops a job by the pid it recorded, and prints what it signalled` applies: a dead pid, a
+reused pid and an unreadable or malformed record MUST NOT make a turn "suspended", and a failure in the check
+itself MUST fall back to the non-suspended shapes. An interrupted turn keeps the `[auto·interrupted]` tag and
+SHALL carry the same `awaiting=` field while jobs are running, so a real interruption and its still-running jobs
+stay visible as what they are; a completed turn with nothing running is byte-identical to what it is today.
+
 #### Scenario: One summary, one line
 
 - **WHEN** the notify extension runs once with the summary `T1.1 done: parser shipped`
@@ -96,6 +117,70 @@ nothing — an identifier MUST NOT be invented from a branch name or a seat name
 - **WHEN** the turn-end notification is delivered
 - **THEN** the inbox line and the knock payload each contain no `task=` identifier, and the summary text is
   unchanged — a seat name is not a task
+
+#### Scenario: A suspended turn is tagged, not alarmed
+
+- **GIVEN** a worktree session whose state directory holds one job record whose `(pid, start-time)` identity
+  verifies live, and a completed turn ending with uncommitted files
+- **WHEN** the turn-end notification is delivered
+- **THEN** the inbox line and the knock payload carry `[auto·suspended]` and an `awaiting=<id>` field naming that
+  job, the `uncommitted=<n>` field is present, and the dirty-tree warning flag does not appear
+
+#### Scenario: A dead or reused pid does not suspend
+
+- **GIVEN** a worktree session whose state directory holds one job record whose recorded pid is dead, and a second
+  record whose pid is alive but whose start-time fingerprint does not match (a reused pid)
+- **WHEN** a completed turn ends
+- **THEN** the notification carries `[auto]` (and the dirty-tree warning flag when the tree is dirty), with no
+  `awaiting=` field — the same shape as without any records
+
+#### Scenario: An interruption with running jobs names them
+
+- **GIVEN** a worktree session with one live-verified job record and a turn that ends without completing
+- **WHEN** the turn-end notification is delivered
+- **THEN** the line keeps the `[auto·interrupted]` tag and carries the `awaiting=<id>` field
+
+#### Scenario: A worktree carrying its own config uses its own lane records
+
+- **GIVEN** the worktree-with-config shape (a linked worktree that carries `.pi/team/config.sh`), whose lane
+  state directory holds one live-verified record, while the main worktree's state directory holds a different
+  live-verified decoy record
+- **WHEN** a completed turn ends
+- **THEN** the notification is suspended on the worktree's own record and does not name the decoy — and the
+  fixture's red side (an implementation resolving the main worktree's state directory, the way the notify
+  extension's own project root does) fails this scenario
+
+#### Scenario: Seats, one job each
+
+- **GIVEN** three linked worktrees whose seat sessions share one lane state directory, each holding one
+  live-verified record whose `cwd` names its own worktree
+- **WHEN** each session ends a completed turn
+- **THEN** each line carries `awaiting=` with only the job its own session started — the other seats' jobs
+  are neither named nor counted, so each seat's turn reports exactly its own parked work
+
+#### Scenario: An idle seat is not suspended by another seat's job
+
+- **GIVEN** a live-verified record whose `cwd` names the `dev` worktree while two other seat sessions
+  (`dev2` and `dev3`) share the same lane state directory and hold no record of their own
+- **WHEN** each of the two idle sessions ends a completed turn
+- **THEN** each notification keeps the `[auto]` shape with no `awaiting=` field
+
+#### Scenario: A record with no owning directory does not suspend
+
+- **GIVEN** live-verified records whose `cwd` is absent, relative, or a path that no longer resolves, in a
+  session whose own worktree is known
+- **WHEN** a completed turn ends
+- **THEN** the notification keeps the `[auto]` shape with no `awaiting=` field — the ownership check fails
+  closed instead of guessing
+
+#### Scenario: An explicit state directory is the lane's directory
+
+- **GIVEN** a session whose `TEAM_STATE_DIR` points at a fixture directory holding one live-verified record,
+  while the notify extension's own project root holds a different live-verified decoy record
+- **WHEN** a completed turn ends
+- **THEN** the notification is suspended on the record in `TEAM_STATE_DIR` and does not name the decoy — the
+  directory the lane wrote is the only source for this verdict, and the fixture's red side (an implementation
+  reading a directory of its own choosing) fails this scenario
 
 ### Requirement: `--from-file` delivers the summary byte for byte
 
