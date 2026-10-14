@@ -414,6 +414,7 @@
 | P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | todo |
 | V33 | Pulse compose/previews: independent verification | verify | - | - | wip |
 | P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev | - | - | todo |
+| P256 | Startup self-heal: team up migrates a stale project automatically | dev2 | - | - | wip |
 
 ## 当前里程碑
 
