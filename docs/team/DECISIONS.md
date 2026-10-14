@@ -1367,3 +1367,19 @@ P248 的 propose 席位（dev2）按类别 `analysis` 解析到 `kimi-coding/k3:
    临时停掉上一轮（job `final-full-gate`，被测树 `9f5c9fe`）：它跑了 90 段、只有那两条已修的预算表红，被 tag 树这一轮取代（这正是「一轮门禁同时服务两件事」的取舍）。
 
 门禁绿后就只剩两步不可逆动作（已获授权，执行前把命令再摆给用户）：`git push public main v0.2.0`（只推本次 tag）与 `npm stage publish`。随后是三个本地项目的迁移（D134/D142 的窗口）。
+
+## D159 · 提案交付物必须先落 main 再派 apply（PM 的流程漏项，2026-10-14）
+
+P249（面板 compose/preview 的 apply）派单时，我把任务书与复核记录提交到了 main，却**忘了把提案本身的交付物**
+（`openspec/changes/panel-preview-and-compose/**` + 作者报告 `docs/team/reports/P248-dev2.md`）从 propose 分支并入
+main。后果：apply 席位从 main 起手时**看不到被接受的提案**——它自行把 P248 的冻结分支带进工作树才继续（判断正确，
+是可用的救法）。
+
+处置：立刻把该分支 `git merge --squash` 并入 main（821 行、只含 change 目录与报告），并核过两边这几个文件**逐字节
+相同**，再通知席位「不用改，交付时 merge main 一次即可」。
+
+**机制化**：propose → apply 的交接包含一件**必须**做的动作——把 propose 分支（或至少 change 目录与报告）并入 main，
+**在写 apply 任务书之前**。这条以后写进 apply 派单的清单（与「apply 分支从 main 起手」并列）；propose 分支本身
+可以在 apply 合并时一并收口（本项目的既有做法：任务分支不合，交付时由 PM squash 合并），但**change 目录不能只活
+在未合并的分支上**——否则 `openspec/changes/<id>` 在 main 上不存在，`change status`、归档前置与任何以 main 为基准的
+读者都会看错。
