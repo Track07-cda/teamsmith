@@ -415,6 +415,7 @@
 | V33 | Pulse compose/previews: independent verification | verify | - | - | wip |
 | P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev | - | - | todo |
 | P256 | Startup self-heal: team up migrates a stale project automatically | dev2 | - | - | wip |
+| P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev | - | - | todo |
 
 ## 当前里程碑
 
