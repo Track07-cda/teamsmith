@@ -407,7 +407,8 @@
 | V32 | Release check: independent verification (tag selection, init route) | dev-bob | - | - | done |
 | P248 | Pulse: compose-slot lifecycle + read-only previews (spec/changes/decisions) — propose | dev2 | - | - | done |
 | P249 | Pulse compose slot + read-only previews: apply | dev2 | - | - | wip |
-| P250 | Turn-notice merge (C-1): propose | dev3 | - | - | wip |
+| P250 | Turn-notice merge (C-1): propose | dev3 | - | - | done |
+| P251 | Turn-notice merge: apply | dev3 | - | - | wip |
 
 ## 当前里程碑
 
