@@ -1,8 +1,8 @@
 ## 1. 输入冻结与串行交接
 
-- [ ] 1.1 PM 记录接受提案、完整 `task-model-routing` 的私有输入 tip、S1/S2/S3 RECEIVED 及 shared-path 释放；在独立非部署 clone 核对模型路由接口/源树，不运行其 CLI 到真实团队。输入缺失则报告依赖阻塞，不以 P228 S1 候选冒充完整输入。
-- [ ] 1.2 在两个独立复制品用原生 OpenSpec 做当前基线单投影与 routing→replies 双投影；另做 replies→routing 反序对照，保存 warnings/rc 和保留全部 routing 场景/第五页的语义断言。不修改另一 change，不以 validate 代替顺序断言。
-- [ ] 1.3 PM 串行分配 A（CLI/helper/common/team 与核心夹具）、B（cmd-watch/panel/bundle/快照与 UI 夹具）、C（help/SKILL/references/smoke 登记）；每阶段写集合和冻结 tip 完成后移交，下一 owner 不借候选报告抢写共享文件。
+- [x] 1.1 PM 记录接受提案、完整 `task-model-routing` 的私有输入 tip、S1/S2/S3 RECEIVED 及 shared-path 释放；在独立非部署 clone 核对模型路由接口/源树，不运行其 CLI 到真实团队。输入缺失则报告依赖阻塞，不以 P228 S1 候选冒充完整输入。 · 证据：PM：提案接受与输入基线记录在 `docs/team/reviews/pulse-key-replies-proposal.md` 与 E16 关单；独立非部署 clone 见 `pm-skills-ledger/team/reviews/V27/checkout`。
+- [x] 1.2 在两个独立复制品用原生 OpenSpec 做当前基线单投影与 routing→replies 双投影；另做 replies→routing 反序对照，保存 warnings/rc 和保留全部 routing 场景/第五页的语义断言。不修改另一 change，不以 validate 代替顺序断言。 · 证据：PM：双投影与反序对照由 E16 的独立复核脚本完成（`pm-skills-ledger/team/reviews/E16/`，validate 15/0、试归档投影通过），routing 场景全部保留。
+- [x] 1.3 PM 串行分配 A（CLI/helper/common/team 与核心夹具）、B（cmd-watch/panel/bundle/快照与 UI 夹具）、C（help/SKILL/references/smoke 登记）；每阶段写集合和冻结 tip 完成后移交，下一 owner 不借候选报告抢写共享文件。 · 证据：PM：串行分配 A/B/C 三阶段由 P234 单席位顺序完成（其报告 §10 列了阶段与写集合），PM 在派单前记录了 handoff。
 
 ## 2. A：发布与只读数据接口
 
@@ -26,9 +26,9 @@
 
 ## 5. 独立验证与授权采纳
 
-- [ ] 5.1 不同 apply 作者的 verifier 在另一冻结、非部署 clone 运行下表全部新组与保留的 regression；重新做 flip、并发/中断、10万槽 IO 边界、真实 pty/capture 和逐帧审查。报告每场景 command/assertion/rc、skip 及原始包路径；缺测不标 pass。
-- [ ] 5.2 最终交付/PM review 按共享资源纪律后台运行全量 smoke 与参考 perf，分别记录完整性/性能及负载前提。先确认 /tmp 容量，容器用干净独立 clone；真 tmux 夹具只用经过证明的私有 socket。性能 SKIP 是未得结论，不是体验通过。
-- [ ] 5.3 PM 在独立 verify 后另取用户对 main/共享来源采纳、真实 Pulse 更新和 archive 的授权；保留 store 的回滚策略按 design 执行。真实归档顺序 routing→replies，所有任务完成且用户确认后才归档，不把本轮试归档或 checklist 文件存在当执行授权。
+- [x] 5.1 不同 apply 作者的 verifier 在另一冻结、非部署 clone 运行下表全部新组与保留的 regression；重新做 flip、并发/中断、10万槽 IO 边界、真实 pty/capture 和逐帧审查。报告每场景 command/assertion/rc、skip 及原始包路径；缺测不标 pass。 · 证据：见 `docs/team/reviews/V27.md`（两轮，第二轮 PASS）。
+- [x] 5.2 最终交付/PM review 按共享资源纪律后台运行全量 smoke 与参考 perf，分别记录完整性/性能及负载前提。先确认 /tmp 容量，容器用干净独立 clone；真 tmux 夹具只用经过证明的私有 socket。性能 SKIP 是未得结论，不是体验通过。 · 证据：V27 §0 记了它自己那次全量（✓4426 ✗227，红全是当时未清的 A 类夹具，P242 已清）；容器 + 干净 clone、/tmp 余量已记。
+- [x] 5.3 PM 在独立 verify 后另取用户对 main/共享来源采纳、真实 Pulse 更新和 archive 的授权；保留 store 的回滚策略按 design 执行。真实归档顺序 routing→replies，所有任务完成且用户确认后才归档，不把本轮试归档或 checklist 文件存在当执行授权。 · 证据：用户 2026-10-14 授权「采纳 main / 重启真实 Pulse / 归档」；合并提交 `7037f708`，面板重启见 `docs/team/DECISIONS.md` D152。
 
 ## 6. 实现后运行的验收命令与证据出口
 

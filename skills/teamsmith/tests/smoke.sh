@@ -20190,7 +20190,7 @@ fi
 # ---------------------------------------------------------------- 14d. P70 本套自述对账
 # 本段之前每一段都必须：一条开跑行（#N 严格递增、带预算与 ISO 时间）、一条结束行（P98 的统一收口行：
 # 用时 + ✓/✗/SKIP 增量 + ticks）、sections.tsv 一行。
-# ---------------------------------------------------------------- 61. 关键回复（change: pulse-key-replies · P234）
+# ---------------------------------------------------------------- 62. 关键回复（change: pulse-key-replies · P234）
 # CLI/存储面：scripts/replies.mjs（固定 4096 字节提交槽位 + 不可变原文 + 锁/持久提交点）与
 # scripts/lib/cmd-reply.sh（post/list/show 的身份分类与退出码）。夹具 key-replies.sh 十二组：
 # 输入边界 / 路径与自称数据（含 FIFO 不挂住）/ 原文逐字节 / 并发编号 / 回执 / 中断恢复 / cursor 分页
@@ -20198,25 +20198,25 @@ fi
 # 只读不改 / 发布不阻断答复 / 九条具名 guard 的变异→红→还原→绿 / 缺观测器时的可见跳过。
 # 无编译器依赖：门禁镜像按 M47 purge 掉 build-essential，所以读量证据走内核自述（V27 M3）。
 # 默认全组跑：整段约 1.8 分钟（真进程、真锁、真 fsync）。
-section "61 · 关键回复存储与 CLI（change: pulse-key-replies · P234）"
+section "62 · 关键回复存储与 CLI（change: pulse-key-replies · P234）"
 if [ -f "$SKILL_DIR/tests/key-replies.sh" ]; then
   P234_RC=0
   bash "$SKILL_DIR/tests/key-replies.sh" --all >"$TMP/p234-key-replies.log" 2>&1 || P234_RC=$?
   if [ "$P234_RC" -eq 0 ]; then
-    ok "61 key-replies 十二组全绿（$(grep -ac '✓' "$TMP/p234-key-replies.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/p234-key-replies.log" || true) 条可见跳过）"
+    ok "62 key-replies 十二组全绿（$(grep -ac '✓' "$TMP/p234-key-replies.log" || true) 条断言，$(grep -ac 'SKIP' "$TMP/p234-key-replies.log" || true) 条可见跳过）"
     grep -a 'flip/' "$TMP/p234-key-replies.log" | sed 's/^/      /'
   else
-    bad "61 key-replies 有失败（rc=$P234_RC）"
+    bad "62 key-replies 有失败（rc=$P234_RC）"
     grep -a '✗' "$TMP/p234-key-replies.log" | head -12 | sed 's/^/      /'
   fi
 else
-  bad "61 缺 tests/key-replies.sh（P234 的聚焦夹具）"
+  bad "62 缺 tests/key-replies.sh（P234 的聚焦夹具）"
 fi
 
-# ---------------------------------------------------------------- 62. 关键回复的面板页（change: pulse-key-replies · P234）
+# ---------------------------------------------------------------- 63. 关键回复的面板页（change: pulse-key-replies · P234）
 # 真 tmux 面板 + 快照矩阵：第 5 页列表/正文视窗/返回/重启/坏 store 不阻断、三个块的按需读
 # （记录 argv 的真 CLI shim）、机器出口不受发布影响、四档宽度 × 双主题 × 双语快照。
-section "62 · 关键回复面板第 5 页（change: pulse-key-replies · P234）"
+section "63 · 关键回复面板第 5 页（change: pulse-key-replies · P234）"
 # 读数面（不需要 tmux）与真 pty/tmux 面分成两个入口：块装配契约/机器出口/快照矩阵走
 # key-replies-ui.sh，第 5 页真实导航/长正文/鼠标/resize/慢读者走 key-replies-pty.sh。
 # 段内只跑读数面的**快组**（blocks/machine/snapshots）：routing-regression 组里的既有前门
