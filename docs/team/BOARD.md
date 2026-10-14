@@ -416,10 +416,11 @@
 | P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev | - | - | todo |
 | P256 | Startup self-heal: team up migrates a stale project automatically | dev2 | - | - | done |
 | P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev | - | - | todo |
-| P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | todo |
-| P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | todo |
+| P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | dropped |
+| P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | dropped |
 | P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | wip |
 | P261 | Startup self-heal: apply (config shape migration, PM identity, version notice) | dev-bob | - | - | wip |
+| P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | wip |
 
 ## 当前里程碑
 
