@@ -408,7 +408,7 @@
 | P248 | Pulse: compose-slot lifecycle + read-only previews (spec/changes/decisions) — propose | dev2 | - | - | done |
 | P249 | Pulse compose slot + read-only previews: apply | dev2 | - | - | wip |
 | P250 | Turn-notice merge (C-1): propose | dev3 | - | - | done |
-| P251 | Turn-notice merge: apply | dev3 | - | - | wip |
+| P251 | Turn-notice merge: apply | dev3 | - | - | done |
 | P252 | CLI help: default English, per-command pages, plain-language concepts | dev | - | - | done |
 | P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | dropped |
 | P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | dropped |
@@ -420,10 +420,11 @@
 | P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | dropped |
 | P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | wip |
 | P261 | Startup self-heal: apply (config shape migration, PM identity, version notice) | dev-bob | - | - | wip |
-| P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | todo |
+| P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | wip |
 | P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | dropped |
 | P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | todo |
-| V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | wip |
+| V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
+| P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | todo |
 
 ## 当前里程碑
 
