@@ -427,6 +427,7 @@
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | todo |
 | P266 | Panel plain language: apply | dev3 | - | - | wip |
 | V35 | startup self-heal: independent verification | dev | - | - | todo |
+| V36 | panel plain language: independent verification | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
