@@ -410,11 +410,11 @@
 | P250 | Turn-notice merge (C-1): propose | dev3 | - | - | done |
 | P251 | Turn-notice merge: apply | dev3 | - | - | wip |
 | P252 | CLI help: default English, per-command pages, plain-language concepts | dev | - | - | done |
-| P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | wip |
-| P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | todo |
+| P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | dropped |
+| P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | dropped |
 | V33 | Pulse compose/previews: independent verification | verify | - | - | wip |
 | P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev | - | - | todo |
-| P256 | Startup self-heal: team up migrates a stale project automatically | dev2 | - | - | wip |
+| P256 | Startup self-heal: team up migrates a stale project automatically | dev2 | - | - | done |
 | P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev | - | - | todo |
 | P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | todo |
 | P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | todo |
