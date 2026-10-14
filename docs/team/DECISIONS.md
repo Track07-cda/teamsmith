@@ -1441,4 +1441,4 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 - **P256（`startup-self-heal` 提案）已派给 dev2**，`category=analysis`、`model=opencode-go/deepseek-v4.1-flash`、新会话。派单用了 `--force`（`+ 一行审计`）：dev2 上还挂着 P249 未收尾（它在等 V33 的独立复验），这是既有的「叠任务」守卫，按纪律显式覆盖并记录。
   顺带修正一条：先前那条提交的 message 写了「dispatch the startup self-heal proposal」，而当时派单其实**失败**了（工作树脏 + 叠任务两项阻塞）；现在才真正派出去——同一事实以本条为准。
 - **V33 的受检 tip 前移**：`4decbe8` → `b5ed56b7`（作者按我的要求把「已 merge main」那两笔报告追加提交了）。PM 核对：`git diff --name-only` 只有 `docs/team/reports/P249-dev2.md`，`skills/teamsmith/scripts` 与 `tests` **逐字节相同** → 复验者的产品/测试结论继续有效；冻结 clone 与收据已更新，并已通知 verify 在报告里注明「产品树与 b5ed56b7 一致」。
-- 另一条自查：我们自己的配置有一处陈旧（`TEAM_PI_BIN=pi` 相对路径，新代码要求绝对路径），已用带审计的写入器改成 `/home/yikdata/.bun/bin/pi`——这正是 P256 要收掉的那类「升级后残留旧形状」。
+- 另一条自查：我们自己的配置有一处陈旧（`TEAM_PI_BIN=pi` 相对路径，新代码要求绝对路径），已用带审计的写入器改成绝对路径（`$HOME/.bun/bin/pi`）——这正是 P256 要收掉的那类「升级后残留旧形状」。
