@@ -1398,3 +1398,14 @@ main。后果：apply 席位从 main 起手时**看不到被接受的提案**—
 RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败**（容器 rc=0、SMOKE-RC=0 都在日志里）。
 
 **下一步（用户已授权「按」）**：把 tag 重打到最终 HEAD（tag 之后只多了账本记录与一个未归档的 change 目录，选段器给出的受影响段是 `0/0b/0c/0d + 18c + 60`，先在容器里补跑这几段）→ `git push public main v0.2.0`（只推本次 tag）→ `npm stage publish`（用户网页批准）。
+
+## D161 · 0.2.0 已推送公开仓，npm 暂存包等网页批准（2026-10-14）
+
+用户授权「按」，执行两步不可逆动作：
+
+1. **推公开仓**：先在最终 HEAD（`7e2fa494`）重打 tag `v0.2.0`（tag 之后只多了账本记录与一个未归档的 change 目录——受影响段 `0/0b/0c/0d + 18c` 已在冻结克隆 + 容器里补跑：**✓64 ✗0 rc=0**；发布检查在最终树上 30/0 全绿），随后
+   `git push public main v0.2.0` → `ca7c1761..7e2fa494  main -> main`、`[new tag] v0.2.0`；
+   `release-check.sh --remote` = **31 通过 / 0 失败**，公开远端与本地 main 同点。
+2. **npm 暂存发布**：`npm stage publish --access public --registry https://registry.npmjs.org`（用 `~/.npm-token` 注入临时 600 权限 npmrc，token 未进 argv、未回显）→ stage-id **`473db928-29d8-4537-8fa1-31744f3eb216`**、tag `latest`、public、259 文件 / 2.4 MB、shasum `68d499cfe443e86afc282716558bb1067dddf0da`——与本地 `npm pack` **逐字节一致**（我验过）；`stage view` 显示 `status: validating`。
+
+**等用户在网页 2FA 批准**（与 0.1.1 同流程）。批准后再做发布后验证（新克隆 + 三条安装路线 + `team version --check`），然后才开始三个项目的迁移（B 方案：保留它们原有的模型值）。
