@@ -8,7 +8,7 @@
 ## 0. 发布模型（一句话）
 
 本仓的 `main` **就是**公开仓的 `main`。发布 = **六处版本落点 → 提交 → 打 tag → 推 `public` 远端
-（`main --tags`）→ npm 发布 → 发布后验证**。没有"白名单导出一棵快照树"这一步：`git push public main`
+（`main` 与**本次那一个 tag**）→ npm 发布 → 发布后验证**。没有"白名单导出一棵快照树"这一步：`git push public main`
 推的就是本仓的历史本身。
 
 | 面 | 内容 | 进不进公开仓 |
@@ -67,7 +67,12 @@ bash docs/team/tools/release-check.sh --self-test   # 期望：4/4
 ## 4. 推公开远端（⚠️ 不可逆；需用户点头）
 
 ```bash
-git push public main --tags          # public 远端：见 `git remote -v`（规范写法也在 README / package.json）
+V=v0.2.0                              # ← 本次发布的 tag（写成变量，别用 --tags）
+git push public main "$V"             # public 远端：见 `git remote -v`
+# ⚠️ 不要用 `git push public main --tags`：本仓还留着 29 个**改写前**的旧 tag（v1.31.0…v1.42.0），
+#    它们指向的历史**不在**现在的 main 上；`--tags` 会把它们连同那段旧历史（含当时的账本）一起推到
+#    公开仓——实测 `git push --dry-run public main --tags` 会列出这 29 个 `[new tag]`。只推本次的 tag。
+#    验证：`git push --dry-run public main "$V"` 只应出现 `main -> main` 与 `$V -> $V`。
 bash docs/team/tools/release-check.sh --remote
 # 期望：公开远端与本地 main 同点（落后 N 个提交 → 红，先查是不是推错远端/推漏了）
 ```
@@ -111,5 +116,5 @@ rm -rf /tmp/rel-proj && mkdir -p /tmp/rel-proj && cd /tmp/rel-proj && git init -
 - 不把真实项目名 / 家目录 / 内网地址 / 凭据写进仓内任何文件（含本清单）：需要举例就用 `<peer>` / `<home>` /
   `<user>` / `<internal>` 占位符。`skills/teamsmith/tests/ledger-ban.sh` 每次门禁扫 `docs/team/**/*.md`，
   `docs/team/tools/publish-public.sh` 扫整棵被跟踪的树（含产品面）。
-- 不 force-push、不改写历史、不删 tag、不打"发布后再补"的补丁。
+- 不 force-push、不改写历史、不删 tag、不打"发布后再补"的补丁；**不用 `--tags`**（见第 4 节的警告：旧 tag 会把改写前的历史带进公开仓）。
 - 不在产品提交里混账本改动，也不把两类提交塞进同一次 push（D97）。
