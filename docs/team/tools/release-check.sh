@@ -13,7 +13,8 @@
 #   1. **版本六处落点**一致：package.json · README 的 @vX.Y.Z pin · skills/teamsmith/SKILL.md ·
 #      skills/teamsmith/CHANGELOG.md（最新段）· skills/teamsmith-init/SKILL.md ·
 #      skills/teamsmith/scripts/lib/common.sh 的 TEAM_VERSION
-#   2. **最新 tag = 那个版本，且 HEAD 就在它上面**（发布对象唯一；未打 tag 的提交不算发布）
+#   2. **HEAD 可达的最新 tag = 那个版本，且 HEAD 就在它上面**（发布对象唯一；未打 tag 的提交不算发布）
+#      不在 HEAD 历史上的 tag 另发一条异常提示（不是红）：不要 git push --tags
 #   3. **公开面泄漏扫描**：产品/工具面查全部形状，账本面（docs/team/**/*.md）查凭据形状
 #      （四类内容形状另有 ledger-ban.sh 一条，见 3b）；名单缺失 → 可见跳过（**不是通过**）
 #   3b. **账本面禁令**（ledger-ban.sh）：绝对路径 / 私有网段 / 本机用户名 / 他项目名
@@ -53,6 +54,7 @@ PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS + 1)); printf '  ✓ %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf '  ✗ %s\n' "$1"; }
 skip() { SKIP=$((SKIP + 1)); printf '  ! %s（跳过，不算通过）\n' "$1"; }
+note() { printf '  ⚠ %s\n' "$1"; }   # 异常提示：不是红，也不进 通过/失败/跳过 计数
 hdr()  { printf '\n== %s ==\n' "$1"; }
 
 PUB_TOOL="$TOOLS_DIR/publish-public.sh"
@@ -99,9 +101,56 @@ if [ "$SELFTEST" = 1 ]; then
   sed -i 's/"version": "[0-9.]*"/"version": "9.9.9"/' "$ST/m4/package.json"
   st_case "④版本错配" "$ST/m4" "不一致" --skip-install
 
-  printf '\n== 自测结果 ==\n  抓住 %s · 漏掉 %s\n' "$SPASS" "$SFAIL"
-  [ "$SFAIL" = 0 ] || { printf '✗ 自测失败：有检查拦不住变异\n'; exit 3; }
-  printf '✓ 自测通过：四条变异全部被抓住\n'; exit 0
+  # ── B（P247）：tag 判据的红侧 —— 真 git 仓里的两条 ──────────────────────────────────
+  # B1：版本更高、但不在 HEAD 历史上的 tag 不许把「最新 tag」带偏（不假红）；
+  # B2：HEAD 与可达的最新 tag 错位一个提交 → 那一条必须按原意变红。
+  printf '\n== 自测 B：tag 判据（只认 HEAD 可达的最新 tag）==\n'
+  TPASS=0; TFAIL=0
+  t_ok()  { TPASS=$((TPASS + 1)); printf '  ✓ %s\n' "$1"; }
+  t_bad() { TFAIL=$((TFAIL + 1)); printf '  ✗ %s\n' "$1"; }
+  TB="$ST/tag"; mkdir -p "$TB"
+  TVER="$(sed -n 's/.*"version": *"\([0-9][0-9.]*\)".*/\1/p' "$ROOT/package.json" | head -1)"
+  if [ -z "$TVER" ] || ! git -C "$ROOT" archive HEAD | tar -x -C "$TB"; then
+    t_bad "tag 夹具：导不出 HEAD 的树（$TB）"
+  elif ! (
+      cd "$TB" && git init -q -b main . && git add -A \
+        && git -c user.email=a@b -c user.name=a commit -q -m base \
+        && git -c user.email=a@b -c user.name=a tag -a "v$TVER" -m "v$TVER" \
+        && STALE_SHA="$(git commit-tree 'HEAD^{tree}' -m 'stale pre-rewrite history')" \
+        && git -c user.email=a@b -c user.name=a tag -a v9.9.9 -m v9.9.9 "$STALE_SHA"
+    ) >/dev/null 2>&1; then
+    t_bad "tag 夹具：scratch 仓（含不可达的 v9.9.9）没造出来"
+  else
+    OUT1="$ST/B1.log"; rc1=0
+    bash "$SELF_DIR/release-check.sh" --root "$TB" --skip-install >"$OUT1" 2>&1 || rc1=$?
+    if grep -qF "✓ 最新 tag v$TVER = package.json" "$OUT1" \
+       && grep -qF "✓ tag v$TVER 是 HEAD 的祖先" "$OUT1" \
+       && grep -qF "✓ HEAD 就在 v$TVER 上" "$OUT1"; then
+      t_ok "B1：可达的最新 tag v$TVER 被选中（rc=$rc1；不可达的 v9.9.9 没把判据带偏）"
+    else
+      t_bad "B1：最新 tag 判据仍被不可达 tag 带偏"; sed -n '/^== 2\./,/^== 3\./p' "$OUT1" | sed 's/^/      /'
+    fi
+    S2R1="$(sed -n '/^== 2\./,/^== 3\./p' "$OUT1" | grep -c '✗' || true)"
+    [ "$S2R1" = 0 ] && t_ok "B1：第 2 节零红（不可达 tag 不产生假红）" \
+      || t_bad "B1：第 2 节有 $S2R1 条红"
+    grep -qF "旧 tag 异常：1 个 tag 不在 HEAD 的历史上（前几个：v9.9.9）" "$OUT1" \
+      && t_ok "B1：异常提示点名 v9.9.9（计数 1），且不改判定" \
+      || t_bad "B1：旧 tag 异常提示缺失或没点名 v9.9.9"
+    ( cd "$TB" && git -c user.email=a@b -c user.name=a commit -q --allow-empty -m ahead ) >/dev/null 2>&1
+    OUT2="$ST/B2.log"; rc2=0
+    bash "$SELF_DIR/release-check.sh" --root "$TB" --skip-install >"$OUT2" 2>&1 || rc2=$?
+    S2R2="$(sed -n '/^== 2\./,/^== 3\./p' "$OUT2" | grep -c '✗' || true)"
+    if [ "$S2R2" = 1 ] && [ "$rc2" != 0 ] && grep -qF "✗ HEAD 领先最新 tag v$TVER 1 个提交" "$OUT2"; then
+      t_ok "B2：HEAD 与可达最新 tag 错位 1 个提交 → 恰好红这一条（rc=$rc2）"
+    else
+      t_bad "B2：错位一提交没有恰好红这一条（第 2 节红 $S2R2 条，rc=$rc2）"; sed -n '/^== 2\./,/^== 3\./p' "$OUT2" | sed 's/^/      /'
+    fi
+  fi
+
+  printf '\n== 自测结果 ==\n  A 四条变异  抓住 %s · 漏掉 %s\n  B tag 判据  %s/%s\n' \
+    "$SPASS" "$SFAIL" "$TPASS" "$((TPASS + TFAIL))"
+  [ "$SFAIL" = 0 ] && [ "$TFAIL" = 0 ] || { printf '✗ 自测失败：有检查拦不住变异\n'; exit 3; }
+  printf '✓ 自测通过：四条变异全部被抓住（tag 判据红侧 %s/%s）\n' "$TPASS" "$((TPASS + TFAIL))"; exit 0
 fi
 
 printf '== 0. 检查对象 ==\n'
@@ -146,25 +195,45 @@ else
 fi
 
 # ══ 2. tag 与 HEAD ═══════════════════════════════════════════════════════════════════════
+# P247：「最新 tag」只从 **HEAD 可达** 的 tag 里取（`tag --merged HEAD`，annotated tag 会被剥到
+# commit 再判可达性）。改写前的旧 tag 不在 HEAD 的历史上、版本序却更大，旧写法 `tag --sort` 于是
+# 恒取旧 tag —— 在改写后的仓里那三条恒假。不可达的 tag 另发一条**异常提示**（不是红、不进计数）。
 hdr "2. 最新 tag 与 HEAD"
 if [ "$HAVE_GIT" != 1 ]; then
   skip "tag/HEAD 关系（不是 git 工作树）"
 elif [ -z "$(git -C "$ROOT" tag --list | head -1)" ]; then
   bad "仓库里一个 tag 都没有（发布对象无从指认）"
 else
-  TAGVER="$(git -C "$ROOT" tag --sort=-v:refname | head -1 | sed 's/^v//')"
-  TAGREF="v$TAGVER"; HEADSHA="$(git -C "$ROOT" rev-parse HEAD)"
-  TAGSHA="$(git -C "$ROOT" rev-parse "$TAGREF^{commit}" 2>/dev/null || echo -)"
-  [ "$TAGVER" = "$V_PKG" ] && ok "最新 tag $TAGREF = package.json（$V_PKG）" \
-    || bad "最新 tag（$TAGREF）≠ package.json（$V_PKG）—— 版本号与标签指的不是一回事"
-  if [ "$TAGSHA" = "-" ]; then bad "tag $TAGREF 解析不到 commit"
-  elif git -C "$ROOT" merge-base --is-ancestor "$TAGSHA" "$HEADSHA" 2>/dev/null; then
-    ok "tag $TAGREF 是 HEAD 的祖先（历史没被改写错位）"
-  else bad "tag $TAGREF 不是 HEAD 的祖先（版本号指向别的历史）"; fi
-  if [ "$TAGSHA" = "$HEADSHA" ]; then
-    ok "HEAD 就在 $TAGREF 上（发布对象唯一）"
+  HEADSHA="$(git -C "$ROOT" rev-parse HEAD)"
+  ALL_TAGS="$(git -C "$ROOT" tag --list --sort=-v:refname)"; STALE_N=0; STALE_SAMPLE=""
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    git -C "$ROOT" merge-base --is-ancestor "$t^{commit}" "$HEADSHA" 2>/dev/null && continue
+    STALE_N=$((STALE_N + 1))
+    [ "$STALE_N" -le 5 ] && STALE_SAMPLE="${STALE_SAMPLE}${STALE_SAMPLE:+ }$t"
+  done <<< "$ALL_TAGS"
+  if [ "$STALE_N" != 0 ]; then
+    [ "$STALE_N" -gt 5 ] && STALE_SAMPLE="$STALE_SAMPLE …"
+    note "旧 tag 异常：$STALE_N 个 tag 不在 HEAD 的历史上（前几个：$STALE_SAMPLE）"
+    note "  它们指向改写前的旧历史：不要 git push --tags（会把旧历史推进公开仓）；删不删由发布者决定"
+  fi
+  TAGREF="$(git -C "$ROOT" tag --merged HEAD --sort=-v:refname | head -1)"
+  if [ -z "$TAGREF" ]; then
+    bad "仓库里的 $STALE_N 个 tag 没有一个是 HEAD 的祖先（发布对象无从指认）"
   else
-    bad "HEAD 领先最新 tag $TAGREF $(git -C "$ROOT" rev-list --count "$TAGSHA..$HEADSHA") 个提交 —— 发布前先做版本落点 + 打 tag（清单见 docs/team/RELEASE-PUBLIC.md）"
+    TAGVER="${TAGREF#v}"
+    TAGSHA="$(git -C "$ROOT" rev-parse "$TAGREF^{commit}" 2>/dev/null || echo -)"
+    [ "$TAGVER" = "$V_PKG" ] && ok "最新 tag $TAGREF = package.json（$V_PKG）" \
+      || bad "最新 tag（$TAGREF）≠ package.json（$V_PKG）—— 版本号与标签指的不是一回事"
+    if [ "$TAGSHA" = "-" ]; then bad "tag $TAGREF 解析不到 commit"
+    elif git -C "$ROOT" merge-base --is-ancestor "$TAGSHA" "$HEADSHA" 2>/dev/null; then
+      ok "tag $TAGREF 是 HEAD 的祖先（历史没被改写错位）"
+    else bad "tag $TAGREF 不是 HEAD 的祖先（版本号指向别的历史）"; fi
+    if [ "$TAGSHA" = "$HEADSHA" ]; then
+      ok "HEAD 就在 $TAGREF 上（发布对象唯一）"
+    else
+      bad "HEAD 领先最新 tag $TAGREF $(git -C "$ROOT" rev-list --count "$TAGSHA..$HEADSHA") 个提交 —— 发布前先做版本落点 + 打 tag（清单见 docs/team/RELEASE-PUBLIC.md）"
+    fi
   fi
 fi
 
@@ -271,7 +340,13 @@ else
   else bad "install.sh 失败"; fi
   PROJ="$INST/proj"; mkdir -p "$PROJ"
   (cd "$PROJ" && git init -q -b main . && git -c user.email=a@b -c user.name=a commit -q --allow-empty -m init)
-  if [ -x "$INST/prefix/bin/team" ] && (cd "$PROJ" && "$INST/prefix/bin/team" init >/dev/null 2>&1); then
+  # P247：routing 之后 init 没有可猜的默认模型，新合同必带 --task-models/--pm-model（不带就按设计拒绝）。
+  # 用**发布包里**的 team；环境里的 TEAM_* 先清掉，这条路线只写进 $PROJ，不碰任何真实项目。
+  INIT_MAP='infra=opencode-go/deepseek-v4.1-flash'
+  INIT_PM='opencode-go/deepseek-v4.1-flash'
+  if [ -x "$INST/prefix/bin/team" ] \
+     && (cd "$PROJ" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+           "$INST/prefix/bin/team" init --task-models "$INIT_MAP" --pm-model "$INIT_PM" >/dev/null 2>&1); then
     for sk in teamsmith teamsmith-init; do
       l="$PROJ/.pi/skills/$sk"
       if [ -e "$l/SKILL.md" ] && cmp -s "$l/SKILL.md" "$ROOT/skills/$sk/SKILL.md"; then
@@ -280,7 +355,17 @@ else
     done
     (cd "$PROJ" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION "$INST/prefix/bin/team" help >/dev/null 2>&1) \
       && ok "项目内 'team help' 退出 0" || bad "项目内 'team help' 失败"
-  else bad "team init 失败"; fi
+    CFG="$PROJ/.pi/team/config.sh"
+    cfg_map="$(sed -n "s/^TEAM_TASK_MODELS='\(.*\)'$/\1/p" "$CFG" 2>/dev/null | head -1)"
+    cfg_pm="$(sed -n "s/^TEAM_PM_MODEL='\(.*\)'$/\1/p" "$CFG" 2>/dev/null | head -1)"
+    [ "$cfg_map" = "$INIT_MAP" ] && ok "team init：TEAM_TASK_MODELS 落盘且等于传入映射" \
+      || bad "team init：TEAM_TASK_MODELS 没落盘或与传入映射不同（[$cfg_map]）"
+    [ "$cfg_pm" = "$INIT_PM" ] && ok "team init：TEAM_PM_MODEL 落盘且等于传入模型" \
+      || bad "team init：TEAM_PM_MODEL 没落盘或与传入模型不同（[$cfg_pm]）"
+    if grep -qE '^TEAM_(DEFAULT_MODEL|AGENT_MODELS)=' "$CFG" 2>/dev/null; then
+      bad "team init：契约里出现退休键（TEAM_DEFAULT_MODEL/TEAM_AGENT_MODELS）"
+    else ok "team init：契约用的是 TEAM_TASK_MODELS/TEAM_PM_MODEL，不是退休键"; fi
+  else bad "team init 失败（新合同：init 需要 --task-models 与 --pm-model，不带参数按设计拒绝）"; fi
   rm -rf "$INST"
 fi
 
