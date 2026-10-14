@@ -426,6 +426,7 @@
 | V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | todo |
 | P266 | Panel plain language: apply | dev3 | - | - | wip |
+| V35 | startup self-heal: independent verification | dev | - | - | todo |
 
 ## 当前里程碑
 
