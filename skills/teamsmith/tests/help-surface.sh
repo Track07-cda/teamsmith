@@ -15,7 +15,11 @@
 #               LC_ALL=C and LC_ALL=C.UTF-8; every run is valid UTF-8; no line exceeds the width the
 #               surface wraps to (the fixture's own locale-independent counter, not the renderer's)
 #   claims      the declared effect / authorization / reversibility values: closed vocabularies,
-#               one probe per value, and each probe run against a real fixture asserting the effect
+#               one probe per value, and each probe run against a real fixture asserting the effect.
+#               For `idempotent` the probe turns a *named* recorded-time field into a canary
+#               (IDEMPOTENT_TIME_FIELDS) so its verdict cannot depend on the wall clock (P290),
+#               requires the second run's exit code to equal the first run's, and exercises the
+#               record-without-that-field shape: a missing timestamp is not an error (V46 F1)
 #   invariants  command names, flag names and the literals other specs name: unchanged; the
 #               pre-change (command, flag) set is still printed; the retired --model is not
 #   route       the three levels, byte-identical entries, unknown tokens exit 2 and are named, the
@@ -305,6 +309,59 @@ fp_face() { # <dir> <face> → a fingerprint of that face
 fp_all() { # <dir> → every face's fingerprint
   local f
   for f in state docs config worktree skills meetings; do printf '%s %s\n' "$f" "$(fp_face "$1" "$f")"; done
+}
+
+# ---------------------------------------------------------------- recorded-time fields (P290)
+# A command whose manifest row declares `idempotent` must leave the state byte-identical after a
+# second identical run. One field shape is legitimately *about* time: the record of when the command
+# ran (`AT=` in `.pi/team/state/pm-loaded.env`). It is not exempt from the assertion — it is *named* here, and
+# the probe turns it into a canary: after the first run the fixture overwrites the named field with a
+# sentinel value no clock produces, runs the command again, and requires every byte (sentinel
+# included) to survive. Without the sentinel the verdict would depend on the wall clock — a rewrite
+# inside the same second is invisible — and that is the host-green/container-red flake this table
+# exists to remove (P290). A second run that rewrites a clock field is a defect for *every* command
+# that declares `idempotent`, so a field must be named here rather than silently excused; a line
+# naming a field the first run did not write is itself a finding, so a stale entry cannot sit here.
+# An exclusion-only comparison was rejected on purpose: it would make this probe blind to exactly
+# the rewrite the declaration forbids.
+declare -A IDEMPOTENT_TIME_FIELDS=(
+  [mark-loaded]=".pi/team/state/pm-loaded.env:AT"
+)
+IDEMPOTENT_SENTINEL="sentinel-not-a-clock"
+
+idem_fields() { # <cmd> → one `relpath:field` per line (nothing when the command declares none)
+  case "${IDEMPOTENT_TIME_FIELDS[$1]+x}" in x) printf '%s\n' ${IDEMPOTENT_TIME_FIELDS[$1]} ;; esac
+  return 0
+}
+
+idem_stamp() { # <cmd> <dir> <outfile> — overwrite each declared recorded-time field with the sentinel
+  local cmd="$1" d="$2" out="$3" spec rel field f
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    rel="${spec%%:*}"; field="${spec#*:}"
+    f="$d/$rel"
+    if [ ! -f "$f" ] || ! grep -q "^$field=" "$f" 2>/dev/null; then
+      finding "claims: $cmd 声明的记录时间字段 $field 不在 $rel 里（声明过期：不静默通过，见 IDEMPOTENT_TIME_FIELDS）"
+      continue
+    fi
+    if awk -v k="$field" -v v="$IDEMPOTENT_SENTINEL" 'index($0, k"=") == 1 { print k"="v; next } { print }' "$f" > "$f.p290"; then
+      mv "$f.p290" "$f"
+      printf '%s\n' "$spec" >> "$out"
+    else
+      rm -f "$f.p290"
+      finding "claims: $cmd 声明的记录时间字段 $field 没盖上哨兵（夹具写入失败）"
+    fi
+  done < <(idem_fields "$cmd")
+  return 0
+}
+
+idem_names() { # <stamped-file> → ` AT（.pi/team/state/pm-loaded.env）` — names the fields in the result line
+  local s out=""
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    out="$out ${s#*:}（${s%%:*}）"
+  done < "$1"
+  printf '%s' "$out"
 }
 
 new_repo() { # <name> → a fresh git repository
@@ -1038,11 +1095,70 @@ run_probe() { # <cmd> → ok/finding
   # undo
   case "${MG_UNDO[$cmd]}" in
     idempotent)
-      local mid; mid="$(fp_all "$d")"
+      # the declared recorded-time fields (IDEMPOTENT_TIME_FIELDS) get the sentinel before the second
+      # run: the field is named, not excused, and the verdict cannot depend on the wall clock
+      local base again stamped n_stamped lost="" s rc2 rc_missing wrote f field
+      stamped="$tmp/logs/p-$cmd.stamped"; : > "$stamped"; n_stamped=0
+      if [ -n "$(idem_fields "$cmd")" ]; then
+        idem_stamp "$cmd" "$d" "$stamped"
+        n_stamped="$(grep -c . "$stamped" 2>/dev/null || true)"
+      fi
+      base="$(fp_all "$d")"
+      # The sentinel above covers the fields somebody *declared*. A clock-derived value nobody declared
+      # is still invisible inside one second: run 1 and run 2 write the same bytes. Sleeping past a
+      # second boundary makes the probe judge "a later run changed nothing" instead of "a run inside
+      # the same second changed nothing" — the verdict stops depending on how fast the machine is,
+      # which is exactly the clock the P290 flake hid behind (host green, container red). Cost: ~1.1s
+      # per idempotent command, and only in the full gate (FAST does not run `claims`).
+      sleep 1.1
       env_run "$d" $argv >/dev/null 2>&1
-      local again; again="$(fp_all "$d")"
-      [ "$mid" = "$again" ] && ok "claims: $cmd 幂等（第二次跑逐字节不变）" \
-        || finding "claims: $cmd 声明幂等，但第二次跑改了状态" ;;
+      rc2="$HS_RC"
+      again="$(fp_all "$d")"
+      # O1（V46）：第二次跑的退出码也要判——「第二次失败、不写盘」若只看字节会被当成幂等（假绿）。
+      # 判据是「与第一次一致」而不是「必须为 0」：夹具里 gh/gl/pr 这类命令在没有远端时本来就以非零
+      # 退出（只读拒绝），要求全部为 0 会把它们判红。rc 打进输出，红时点名两次的数。
+      printf '  \033[2m·\033[0m 幂等 %-11s rc=%s → %s\n' "$cmd" "$rc" "$rc2"
+      if [ "$rc2" = "$rc" ]; then
+        ok "claims: $cmd 幂等：第二次跑退出码与第一次一致（rc $rc → $rc2）"
+      else
+        finding "claims: $cmd 声明幂等，但两次跑的退出码不同（rc $rc → $rc2）：第二次跑失败不算「什么都没变」"
+      fi
+      if [ "$base" = "$again" ]; then
+        if [ "$n_stamped" = "0" ]; then
+          ok "claims: $cmd 幂等（第二次跑逐字节不变）"
+        else
+          ok "claims: $cmd 幂等（第二次跑逐字节不变；指名的记录时间字段$(idem_names "$stamped") 经哨兵验证未被重写）"
+        fi
+      else
+        while IFS= read -r s; do
+          [ -n "$s" ] || continue
+          grep -q "^${s#*:}=$IDEMPOTENT_SENTINEL$" "$d/${s%%:*}" 2>/dev/null || lost="$lost ${s#*:}（${s%%:*}）"
+        done < "$stamped"
+        if [ -n "$lost" ]; then
+          finding "claims: $cmd 声明幂等，但第二次跑重写了指名的记录时间字段$lost：哨兵值被覆盖"
+        else
+          finding "claims: $cmd 声明幂等，但第二次跑改了状态"
+        fi
+      fi
+      # F1（V46 返修轮次 1）：记录在、但没有指名的记录时间字段时，「没有可保留的时间」等于
+      # 「没有记录」——命令必须照旧把字段补全并 rc=0。守卫若用裸赋值接一个没命中的 grep，在
+      # set -e 下会把整个 CLI 带走（rc=1、一字不写）：既有的 smoke §17 用的就是这个形状。
+      if [ "$n_stamped" != "0" ]; then
+        while IFS= read -r s; do
+          [ -n "$s" ] || continue
+          f="$d/${s%%:*}"; field="${s#*:}"
+          grep -v "^$field=" "$f" > "$f.p290m" 2>/dev/null || true
+          mv "$f.p290m" "$f"
+          env_run "$d" $argv >/dev/null 2>&1
+          rc_missing="$HS_RC"; wrote=no
+          grep -q "^$field=" "$f" 2>/dev/null && wrote=yes
+          if [ "$rc_missing" = "0" ] && [ "$wrote" = "yes" ]; then
+            ok "claims: $cmd 记录里缺指名的记录时间字段 $field 时补全并 rc=0（缺时间戳不是错误）"
+          else
+            finding "claims: $cmd 记录里缺指名的记录时间字段 $field 时 rc=$rc_missing、字段写回=$wrote（静默失败与不补全都算缺陷）"
+          fi
+        done < "$stamped"
+      fi ;;
     undo-by-*)
       local undo_cmd="${MG_UNDO[$cmd]#undo-by-}"
       HS_ENV=""; HS_STDIN=/dev/null
@@ -1055,7 +1171,7 @@ run_probe() { # <cmd> → ok/finding
 }
 
 check_claims() {
-  section "claims · 封闭词表 + 逐命令探针（断言效应，不看退出码）"
+  section "claims · 封闭词表 + 逐命令探针（断言效应；幂等臂另判两次退出码一致）"
   check_vocabulary
   local c
   if [ -n "${TEAM_HELP_SURFACE_ONLY:-}" ]; then
@@ -1241,7 +1357,7 @@ flip_run() { # <label> <copy> <select> <expected substring> [only-command]
     [ -n "$ev" ] || ev="$(printf '%s' "$out" | grep '✗' | grep -v '== 结果 ==' | head -1)"
     ok "翻转 $label：$(printf '%s' "$ev" | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-90)"
   fi
-  rm -rf "$copy"
+  if [ "$keep" = "1" ]; then printf '\n保留翻转副本：%s\n' "$copy"; else rm -rf "$copy"; fi
 }
 
 flip_edit() { # <file> <python-expression on the text> — rewrites a file in place; must change it
@@ -1258,12 +1374,17 @@ open(p, "w", encoding="utf-8").write(ns["s"])
 ' "$file" "$code"
 }
 
+flip_wanted() { # <id> — does this red side belong to the requested --flip-only subset?
+  [ -z "${TEAM_HELP_SURFACE_FLIP_ONLY:-}" ] && return 0
+  case " $TEAM_HELP_SURFACE_FLIP_ONLY " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
 # flip_case <id> <label> <file-relative-to-the-copy> <python> <select> <expected> [only-command]
 # One red side end to end: copy the tree, mutate (asserted), run the check, judge the finding.
 flip_case() {
   local id="$1" label="$2" rel="$3" code="$4" sel="$5" expect="$6" only="${7:-}"
-  [ -z "${TEAM_HELP_SURFACE_FLIP_ONLY:-}" ] || case " $TEAM_HELP_SURFACE_FLIP_ONLY " in
-    *" $id "*) ;; *) return 0 ;; esac
+  flip_wanted "$id" || return 0
   local c s
   c="$(flip_copy "flip-$id")"
   s="$c/skills/teamsmith/$rel"
@@ -1362,6 +1483,54 @@ if [ "$_TEAM_HELP_REQ" = "1" ]; then""", 1)' \
   flip_case "placeholder-check-gone" "⑭去掉未声明占位符的检查" "scripts/lib/cmd-help.sh" \
     's = s.replace("""  [ "$_bad" = "0" ] || return 1""", """  [ "$_bad" = "0" ] || :""", 1)' \
     coverage "{undeclared}"
+
+  # ── P290 · 幂等探针的红侧（声明与行为不一致的三种形状） ──────────────────
+  # ①a command that really writes on every run while its row declares `idempotent`
+  flip_case "idem-writes" "⑮幂等命令第二次跑仍然写状态" "scripts/lib/cmd-status.sh" \
+    's = s.replace("""team_cmd_status() {\n  team_require_docs""", """team_cmd_status() {\n  team_require_docs\n  mkdir -p \"$TEAM_STATE_DIR\"; printf \x27%s\\n\x27 \"$(wc -l < \"$TEAM_STATE_DIR/probe-idem.txt\" 2>/dev/null || true)\" >> \"$TEAM_STATE_DIR/probe-idem.txt\"""", 1)' \
+    claims "声明幂等，但第二次跑改了状态" status
+
+  # ②the recorded-time field is rewritten on every run again — the P290 flake's exact shape; the
+  #   sentinel makes this red no matter how fast the two runs are (no clock, no sleep)
+  flip_case "mark-loaded-rewrites" "⑯去掉「无变化不重写」的守卫（P290 的时钟缺陷回退）" "scripts/lib/cmd-update.sh" \
+    's = s.replace("""  if [ -n "$stored_at" ] && [ "$stored_core" = "$core" ]; then""", "  if false; then", 1)' \
+    claims "重写了指名的记录时间字段" mark-loaded
+
+  # ③the declared field is no longer written at all: the table's entry must be a finding, not a
+  #   silently passing no-op
+  flip_case "time-field-gone" "⑰声明的记录时间字段不再被写（声明过期必红）" "scripts/lib/cmd-update.sh" \
+    's = s.replace("""    printf \x27AT=%s\\n\x27 \"$(team_timestamp)\"\n""", "", 1)' \
+    claims "声明过期" mark-loaded
+
+  # ⑱ a clock field nobody declared, with the declaration table emptied for mark-loaded: the sentinel
+  #   cannot see that pair, so the only thing that makes the rewrite visible is the 1.1s gap — this is
+  #   the red side that shows the gap is load-bearing rather than decoration, and it is the exact shape
+  #   of the P290 defect (an undeclared clock field, invisible on a fast same-second host)
+  if flip_wanted "clock-undeclared"; then
+    local c18
+    c18="$(flip_copy "flip-clock-undeclared")"
+    if flip_edit "$c18/skills/teamsmith/scripts/lib/cmd-update.sh" \
+         's = s.replace("""  if [ -n "$stored_at" ] && [ "$stored_core" = "$core" ]; then""", "  if false; then", 1)' 2>"$tmp/flip-18a.err" \
+       && flip_edit "$c18/skills/teamsmith/tests/help-surface.sh" \
+         's = s.replace("  [mark-loaded]=\".pi/team/state/pm-loaded.env:AT\"\n", "", 1)' 2>"$tmp/flip-18b.err"; then
+      flip_run "⑱未指名的时钟字段（只有 1.1s 间隔抓得住）" "$c18" claims "第二次跑改了状态" mark-loaded
+    else
+      finding "翻转 ⑱：变异没落地（夹具缺陷）—— $(head -1 "$tmp/flip-18b.err" 2>/dev/null || head -1 "$tmp/flip-18a.err")"
+      rm -rf "$c18"
+    fi
+  fi
+
+  # ── P290 · 返修轮次 1（V46 的 F1 与 O1）─────────────────────────────────────
+  # ⑲ F1 的形状回退：守卫改回裸赋值接一个没命中的 grep，set -e 把 CLI 带走。记录里没有指名的
+  #    时间字段时必须补全并 rc=0——这条红侧证明夹具里那条新臂是承重的（V46 F1 的真实形状）。
+  flip_case "missing-time-field" "⑲记录缺 AT= 行时静默失败（V46 F1 的回退）" "scripts/lib/cmd-update.sh" \
+    's = s.replace("""    stored_at="$(grep -s -m1 \x27^AT=\x27 "$f" 2>/dev/null || true)"\n  fi""", """    stored_at="$(grep -s \x27^AT=\x27 "$f" | head -1)"\n  fi""", 1)' \
+    claims "记录里缺指名的记录时间字段 AT" mark-loaded
+
+  # ⑳ O1：第二次跑以非零退出、且不写盘（V46 的 m3）——只看字节会判绿，退出码断言是唯一抓手。
+  flip_case "second-run-fails" "⑳第二次跑失败但不写盘（退出码盲区）" "scripts/lib/cmd-update.sh" \
+    's = s.replace("""    team_ok "本会话 skill 版本未变化：$ver（指纹 $hash；保留 $(basename "$f") 里记录的时间）"\n    return 0""", """    team_ok "本会话 skill 版本未变化：$ver（指纹 $hash；保留 $(basename "$f") 里记录的时间）"\n    return 1""", 1)' \
+    claims "两次跑的退出码不同" mark-loaded
 
   return 0
 }

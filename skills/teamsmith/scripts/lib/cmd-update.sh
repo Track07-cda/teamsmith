@@ -39,6 +39,21 @@ team_skill_hash() { # SKILL.md + extension/**（notify + bg）的内容指纹（
 
 team_loaded_env() { printf '%s/pm-loaded.env\n' "$TEAM_STATE_DIR"; }
 
+team_loaded_fields() { # <ver> → 记录里记录时间之前的字段（保持文件原来的字段顺序）
+  printf 'VERSION=%s\n' "$1"
+  printf 'DOC_VERSION=%s\n' "$(team_skill_doc_version)"
+  printf 'HASH=%s\n' "$(team_skill_hash)"
+  printf 'SKILL_DIR=%s\n' "$TEAM_SKILL_DIR"
+  printf 'INSTALL=%s\n' "$(team_skill_install_kind)"
+  return 0
+}
+
+team_loaded_core() { # <ver> <sid> → 记录里除记录时间之外的全部内容（P290：判断"要不要重写"的口径）
+  team_loaded_fields "$1"
+  if [ -n "$2" ]; then printf 'SESSION_ID=%s\n' "$2"; fi
+  return 0
+}
+
 team_loaded_version() { # 本会话启动时记录的版本（未记录则空）
   local f; f="$(team_loaded_env)"
   [ -f "$f" ] && grep -s '^VERSION=' "$f" | head -1 | cut -d= -f2- || true
@@ -70,16 +85,30 @@ team_cmd_mark_loaded() { # [--version X] [--session-id S]
   team_require_docs
   [ -n "$ver" ] || ver="$TEAM_VERSION"
   mkdir -p "$TEAM_STATE_DIR"
+  local f core hash stored_core="" stored_at=""
+  f="$(team_loaded_env)"
+  hash="$(team_skill_hash)"
+  core="$(team_loaded_core "$ver" "$sid")"
+  if [ -f "$f" ]; then
+    stored_core="$(grep -v '^AT=' "$f" 2>/dev/null || true)"
+    # V46 F1：裸赋值接一个「没命中就返回 1」的 grep，在 set -e 下会把整个 CLI 带走——记录在、
+    # 但没有 AT= 行时 rc=1、一字不写（既有的 smoke §17 用的就是这个形状）。语义上「没有可保留的
+    # 时间」等于「没有记录」：走写盘分支把记录补全，不是错误。写法与上一行对称。
+    stored_at="$(grep -s -m1 '^AT=' "$f" 2>/dev/null || true)"
+  fi
+  # P290：记录时间（AT）是这份记录自己的元数据，不是"该不该重写"的理由。版本号、skill 指纹、
+  # 安装方式、会话 id 都没变时**不重写**——否则每次调用都盖一个新时间，"再跑一次不会有任何变化"
+  # 这句话（mark-loaded 声明的 idempotent）就只在同一秒里碰巧成立：夹具在宿主上绿、在慢一档的容器里红。
+  if [ -n "$stored_at" ] && [ "$stored_core" = "$core" ]; then
+    team_ok "本会话 skill 版本未变化：$ver（指纹 $hash；保留 $(basename "$f") 里记录的时间）"
+    return 0
+  fi
   {
-    printf 'VERSION=%s\n' "$ver"
-    printf 'DOC_VERSION=%s\n' "$(team_skill_doc_version)"
-    printf 'HASH=%s\n' "$(team_skill_hash)"
-    printf 'SKILL_DIR=%s\n' "$TEAM_SKILL_DIR"
-    printf 'INSTALL=%s\n' "$(team_skill_install_kind)"
+    team_loaded_fields "$ver"
     printf 'AT=%s\n' "$(team_timestamp)"
     [ -n "$sid" ] && printf 'SESSION_ID=%s\n' "$sid"
-  } > "$(team_loaded_env)"
-  team_ok "已记录本会话 skill 版本：$ver（指纹 $(team_skill_hash)）"
+  } > "$f"
+  team_ok "已记录本会话 skill 版本：$ver（指纹 $hash）"
   team_dim "  之后 team version --check / digest 就能判断是不是该刷新"
 }
 
