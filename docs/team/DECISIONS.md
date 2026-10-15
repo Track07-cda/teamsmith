@@ -1704,3 +1704,12 @@ identity: category=docs model=cline/deepseek/deepseek-v4.1-flash:max selected_vi
 2. **`team dispatch … --model X`**——但守卫按合同要求**换模型必须 `--fresh`**（`cmd-agents.sh:1141-1142`，来自 `task-model-routing` 的接受合同：换模型↔新会话来保证推理状态不串）。**用户这条裁定意味着：换「同一个模型」时可以不走这条路**；若将来要让工具支持「同名模型换 provider/route 而保留会话」，需要一个显式的、带审计的开关（形状照 `--allow-overflow`），并同步改规格——**本次没做**。
 
 **一条后果（用户切完要处理，否则会被回退）**：每个在跑任务的**记录**（`.pi/team/state/<seat>.env` 的 `model=`）仍钉着旧模型，而「一个任务固定一个模型」的语义是**以记录为准**——所以下一次派同一个任务时，工具会把席位按**旧模型**重新拉起。要让切换持久，需要把五个席位的 `model=` 同步成新值（PM 可以逐个改，一行一个字段，带审计）；或者用户切完告诉我，我来同步。**不同步 = 下次派单静默回到旧模型**（这正是 D120 记的「记录里的模型 ≠ 会话实际在跑的模型」那一族）。
+
+### D183 收尾：用户切完在跑的会话，PM 把记录同步（2026-10-15）
+
+用户回「切完了」。PM 核对并同步了工具侧的记录（**活会话由用户手工切，PM 不动窗口**）：
+
+- **五个席位**（dev/dev2/dev3/dev-bob/verify）页脚现在都是 `deepseek deepseek-flash • max`；它们的 `state/<seat>.env` 里 `model=` 逐个改成 `deepseek/deepseek-flash:max`（**每个文件只有这一行变化**，逐文件前后 sha256 记在 shell 日志里，`.bak-modelsync` 备份留在同目录）。`team ps` 现在五席都显示新模型。**这一步不做的话，下一次派同一个任务会按旧模型把席位重新拉起**（「一个任务固定一个模型」以记录为准）。
+- **PM 自己**：会话文件里最后一次请求的模型已是 `deepseek-flash`（用户把我也切了）。所以：`TEAM_PM_MODEL` 写成 `deepseek/deepseek-flash:max`（带审计），并把启动身份记录 `state/pm-launch.env` 的 `model=` 同步成同一值（**只改这一行**，旧值 `opencode-go/deepseek-v4.1-flash` 记在这里）。**验证**：`team up --print` 现在报「身份预告：记录与当前解析一致（model=deepseek/deepseek-flash:max resume_key=default）」——下次 PM 重启会干净地续同一个会话，而不是被身份守卫拦下。
+
+**边界**：改的是**运行时状态文件**（`.pi/team/state/`，不进 git），不是产品代码；改动只动了 `model=` 一行，其余字段逐字节未变（用 `diff` 排除该行后为 0 行差异证明）。
