@@ -1,0 +1,1 @@
+- 2026-10-15T15:58:45Z · `team close P284 --status done` · OK：复验记录 docs/team/reviews/P284.md（判定 PASS）
