@@ -432,7 +432,7 @@
 | V37 | Reply discipline: independent verification | verify | - | - | done |
 | V38 | cli-help surface: independent verification | dev2 | - | - | done |
 | P268 | Do not leak this project's identity into tmux's global environment | dev2 | - | - | done |
-| P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev | - | - | todo |
+| P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev3 | - | - | wip |
 | P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | done |
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | dev | - | - | todo |

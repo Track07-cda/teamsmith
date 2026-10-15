@@ -1,14 +1,18 @@
 # P269 · 检测并报告「孤儿席位进程」（tmux 死了但 Pi 还活着，白占内存）
 
 task: P269
-agent: -
+agent: dev3
 phase: propose
 category: analysis
-change: -
-anchor: none (infra) — 运行环境的可见性与容量；不改产品行为
+change: orphan-visibility
+specs: -
 deltas: -
-branch: task/P269-orphan-seat-detection
+branch: task/P269-orphan-visibility-propose
 deps: 2026-10-15 的 OOM 事故（PM 实测，见下）
+
+## 交付物
+
+一个 OpenSpec change（新能力，名字你定，例如 `seat-visibility`）：`openspec/changes/orphan-visibility/{proposal.md,design.md,tasks.md}` + 新能力的 `spec.md`。本阶段**只写方案**，不实现。
 
 ## 现象（PM 2026-10-15 实测）
 
