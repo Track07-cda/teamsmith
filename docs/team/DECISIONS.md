@@ -1521,3 +1521,13 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 **这不是工具缺陷，是运行环境的性质**：只要 tmux 服务活在 GNOME 会话里，图形会话崩溃就会带走整队。两点结论写进长期记忆与恢复配方：
 - 恢复 = `team pulse up` → `team resume --dry-run` → **按未交付的活**续跑（已交付/已提交返修的不重起）；本次实践有效。
 - 交付物必须落磁盘这条纪律是这种中断下唯一可靠的恢复依据（提交在、报告在、state 在，恢复不靠猜）。
+
+## D174 · 本项目默认模型切到 cline-pass（含「:max 在这个模型上等于最高档」的实测）（2026-10-15）
+
+用户要求把本项目的默认模型切到 `cline-pass/deepseek-v4.1-flash:max`。四个任务类别（`code`/`verify`/`analysis`/`infra`）**一次写入**（`team config set TEAM_TASK_MODELS '…' --yes`，带审计行）；`TEAM_PM_MODEL` 是**另一个键**，本次未动（仍是 `opencode-go/deepseek-v4.1-flash`）。
+
+**关于 `:max` 档位的实测与结论**（用户问「不能调整为或者添加个 max 吗？」）：
+- 该 provider 的模型定义里 `thinkingLevelMap` 是 `off→none / minimal,low,medium→null / high→high / xhigh→high`，**没有 `max` 键**；包内注释写明上游「只有一档 `high`」（外加关闭）。
+- Pi 的规则是「先 clamp 不支持的档位」；PM 用**真实调用**验证过：`pi --print --model 'cline-pass/deepseek-v4.1-flash:max' …` 与 `:xhigh` 都正常返回。所以 **`:max` 今天就能用**（Pi 把它 clamp 到该模型最高档），无需改 Pi 的模型配置。
+- 因此配置里写 `:max` 的含义是「要最高档」：现在等价于 `:xhigh`（同一个上游档），**若上游将来多出一档，这个写法会自动吃到**——这是选 `:max` 而不是 `:xhigh` 的理由。代价要如实记：**此刻它的实际能力与 `:xhigh` 相同**，不是「比 xhigh 更强」。
+- 另选（未做，属 Pi 的配置面且那个文件同时存放 provider 凭据）：在 Pi 的模型配置里加一条 `modelOverrides`（`max: "high"`）让该档成为一等公民。PM 不读也不改那个文件（凭据面），需要的话把片段交给用户自己粘。
