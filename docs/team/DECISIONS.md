@@ -1586,3 +1586,15 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 - 恢复动作照 D173 的配方：`pulse up` → `team resume --dry-run` → **按未交付的活**续跑 → 逐个说明「会话死过、保留未提交改动、重跑丢失的作业」。本次续跑四个（verify/V35 第二轮、dev2/V38、dev3/P266 报告、dev/P265 提案）；dev-bob 的活已提交、等复验，**不续跑**。
 - 清扫 `/tmp` 回收 849 MB（陈旧夹具根 9 个，用安全配方 `--age 60`）。
 - **新发现**：OOM 之后**别的项目**留下一批**孤儿 Pi 进程**（tmux 窗口已死、进程还活着，7 个共约 4 GB；本项目这次没有孤儿）。它们对使用者不可见（判活按窗口算），却白占内存、加剧下一次 OOM——而 OOM 会连带杀掉所有项目的团队。已立 **P269**（`team up`/`status`/`ps` 报告孤儿 + 本项目的显式清理入口；**跨项目只报总量、不点名、不动手**）。PM 不越界去杀别的项目的进程，这条报告给用户与相关 PM。
+
+## D176 · 我配错模型串把两个席位打死；正确的写法与两条验证教训（2026-10-15）
+
+**事故**：用户要求把项目默认模型切到 cline-pass 后，我写入 `TEAM_TASK_MODELS='…=cline-pass/deepseek-v4.1-flash:max'`。新派单的席位**启动即死**（exit 1）：`Error: Unknown provider "cline-pass"`。
+
+**根因**：teamsmith 把模型串按**第一个 `/`** 切成 provider 与 model，再以 `pi --provider <p> --model <m>` 启动。而 Pi 的 provider 名是 **`clinepass`**（无连字符），该 provider 下的**模型 id 本身含斜杠**（`cline-pass/deepseek-v4.1-flash`）。所以正确的串是三段式：**`clinepass/cline-pass/deepseek-v4.1-flash:max`**（provider=`clinepass`、model=`cline-pass/deepseek-v4.1-flash`）。已改正并逐个席位验证（`roster` 里 dev 与 dev-bob 的模型列 + 派单回执里的 `provider=clinepass model=cline-pass/deepseek-v4.1-flash:max`）。
+
+**两条验证教训（都是我的）**：
+1. **用 `pi --print --model '<串>'` 验证模型配置是无效的**：`--model` 是 Pi 自己解析的 pattern，它**不经过** teamsmith 的 provider/model 切分——所以我那次「探针通过」给了假信心。**正确的验证是一次真派单，并读派单回执里的 `provider=` 与 `model=`。**
+2. **同任务的记录会盖住配置改动**：我先前跑 `dispatch --print` 看解析结果时，那个任务记录里已经是旧模型，于是预览显示旧值（`#2328` 的语义），进一步掩盖了问题。改配置后要验证，必须用**新任务**或显式 `--model`。
+
+**处置**：两个席位（P270 `/team` 实现、P271 清单勾选）已用显式 `--model 'clinepass/cline-pass/deepseek-v4.1-flash:max' --fresh` 重新拉起，均在跑；配置里的四个类别已改成正确的三段式串，后续新任务无需 `--model`。
