@@ -452,7 +452,7 @@
 | V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | dev3 | - | - | todo |
 | P284 | Tick the orphan-visibility checklist by evidence (archive prerequisite) | dev-bob | - | - | done |
 | P285 | Close the three orphan-visibility gaps (census reading, flip arm, docs) | dev-bob | - | - | done |
-| V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev | - | - | todo |
+| V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev3 | - | - | wip |
 | P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | wip |
 | P287 | Gate tmp/lock must survive another project's pattern cleanup | dev | - | - | todo |
 
