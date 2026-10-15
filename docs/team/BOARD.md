@@ -459,7 +459,7 @@
 | P289 | Tick the help-robustness checklist by evidence | dev-bob | - | - | wip |
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev | - | - | todo |
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | wip |
-| V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev | - | - | todo |
+| V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev-bob | - | - | wip |
 | V47 | Verify writing-discipline and build the human-read blind package | dev | - | - | todo |
 
 ## 当前里程碑
