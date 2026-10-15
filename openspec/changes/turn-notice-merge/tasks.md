@@ -8,7 +8,7 @@
 
 - [x] 0.1 读 PM 的提案评审 `docs/team/reviews/turn-notice-merge-proposal.md`，确认三个裁定点（尾行锚 / 一代轮转
   + 2048 / `--detail` 非零退出）按提案推荐或按裁定改写判定与场景；结论摘进报告。 · 证据：`docs/team/reviews/turn-notice-merge-proposal.md`（ACCEPTED，含两条 PM 注记；三个裁定点都落成了合同：尾行锚 + 每收件人一把锁的截尾重写、上界 2048 只留一代、`--detail` 缺文件/记录不全点名并非零退出）+ P251-dev3.md 的 Deliverables 表与 Decisions + V34.md §2.1/§2.3（独立复核这三条）。实际做法：报告没有单列「三个裁定点」小节，三条分别落在 Deliverables 表与 V34 的对应小节。
-- [x] 0.2 独立树投影自证：`cp -a openspec /tmp/<x> && (cd /tmp/<x> && openspec archive -y turn-notice-merge && ｜ PM 补证据：PM 复核时做过独立树投影自证：`docs/team/reviews/turn-notice-merge-proposal.md`（独立 clone + 试归档副本，投影后校验通过）
+- [x] 0.2 独立树投影自证：`cp -a openspec /tmp/<x> && (cd /tmp/<x> && openspec archive -y turn-notice-merge && ｜ PM 补证据（2026-10-15 重跑）：PM 在**收窄后**的 delta 上重跑投影（G2 的补做）：干净克隆里 `openspec validate --all --strict` 22/0 → `openspec archive -y turn-notice-merge` 成功（`2026-10-15-turn-notice-merge`）→ 归档后校验 22/0
   openspec validate --all --strict)` 必须绿；逐条 MODIFIED 与基线逐场景对照（丢一条基线场景 = 返工），并确认
   没有第二个未归档 change 动 `notify-and-inbox`。 · 证据（**留空**，见报告「缺口」一节）：记录里没有 apply 阶段（范围追加后的 delta）的投影命令与输出尾——本仓 `docs/team/` 全量 grep `archive -y turn-notice-merge` **0 命中**；提案复核 `docs/team/reviews/turn-notice-merge-proposal.md` 记过一次试归档（`archive` → `+1 ~1 -0`、归档后 16/0），但那是**范围追加（挂起只记录）之前**的稿子；P251-dev3.md 的验收七条与 V34.md §5 都没有跑 `archive -y turn-notice-merge`。第二半「没有第二个未归档 change 动 `notify-and-inbox`」本轮复核**成立**；逐条 MODIFIED 与基线 16 条场景的对照由 V34.md §5 机械复核（`missing from delta: []`）。
 
