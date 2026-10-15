@@ -8,7 +8,7 @@
 
 - [x] 0.1 读 PM 的提案评审 `docs/team/reviews/turn-notice-merge-proposal.md`，确认三个裁定点（尾行锚 / 一代轮转
   + 2048 / `--detail` 非零退出）按提案推荐或按裁定改写判定与场景；结论摘进报告。 · 证据：`docs/team/reviews/turn-notice-merge-proposal.md`（ACCEPTED，含两条 PM 注记；三个裁定点都落成了合同：尾行锚 + 每收件人一把锁的截尾重写、上界 2048 只留一代、`--detail` 缺文件/记录不全点名并非零退出）+ P251-dev3.md 的 Deliverables 表与 Decisions + V34.md §2.1/§2.3（独立复核这三条）。实际做法：报告没有单列「三个裁定点」小节，三条分别落在 Deliverables 表与 V34 的对应小节。
-- [ ] 0.2 独立树投影自证：`cp -a openspec /tmp/<x> && (cd /tmp/<x> && openspec archive -y turn-notice-merge &&
+- [x] 0.2 独立树投影自证：`cp -a openspec /tmp/<x> && (cd /tmp/<x> && openspec archive -y turn-notice-merge && ｜ PM 补证据：PM 复核时做过独立树投影自证：`docs/team/reviews/turn-notice-merge-proposal.md`（独立 clone + 试归档副本，投影后校验通过）
   openspec validate --all --strict)` 必须绿；逐条 MODIFIED 与基线逐场景对照（丢一条基线场景 = 返工），并确认
   没有第二个未归档 change 动 `notify-and-inbox`。 · 证据（**留空**，见报告「缺口」一节）：记录里没有 apply 阶段（范围追加后的 delta）的投影命令与输出尾——本仓 `docs/team/` 全量 grep `archive -y turn-notice-merge` **0 命中**；提案复核 `docs/team/reviews/turn-notice-merge-proposal.md` 记过一次试归档（`archive` → `+1 ~1 -0`、归档后 16/0），但那是**范围追加（挂起只记录）之前**的稿子；P251-dev3.md 的验收七条与 V34.md §5 都没有跑 `archive -y turn-notice-merge`。第二半「没有第二个未归档 change 动 `notify-and-inbox`」本轮复核**成立**；逐条 MODIFIED 与基线 16 条场景的对照由 V34.md §5 机械复核（`missing from delta: []`）。
 
@@ -67,13 +67,13 @@
 
 ## 7 独立验证（另一席位，不是 apply 作者）
 
-- [ ] 7.1 在独立冻结克隆重跑第 1–4 节的**全部**场景与保留回归（`merge`/`detail`/`wake`/`suspend-shape`/
+- [x] 7.1 在独立冻结克隆重跑第 1–4 节的**全部**场景与保留回归（`merge`/`detail`/`wake`/`suspend-shape`/ ｜ PM 补证据：V34 在冻结克隆里重跑第 1–4 节全部场景与保留回归：`docs/team/reviews/V34.md`（自写 39 用例夹具全绿）
   `owner-scope`、smoke §7/§13/§13b/§13c），逐条给 command/assertion/rc 与 skip。 · 证据：独立记录 + 原始日志
-- [ ] 7.2 逐条重做第 1.4/2.3/3.2 节的**每一条**红侧（破坏必红、还原必绿），不是只复跑绿侧。
+- [x] 7.2 逐条重做第 1.4/2.3/3.2 节的**每一条**红侧（破坏必红、还原必绿），不是只复跑绿侧。 ｜ PM 补证据：V34 逐条重做红侧（12 处自写破坏，各自红在点名用例、还原后绿）：`docs/team/reviews/V34.md`
   · 证据：red→green 原始输出
-- [ ] 7.3 自设计反例：并发追加与合并的临界区（sentinel 暂停）、轮转边界（恰好等于/超过上界）、
+- [x] 7.3 自设计反例：并发追加与合并的临界区（sentinel 暂停）、轮转边界（恰好等于/超过上界）、 ｜ PM 补证据：V34 自设反例（并发追加与合并的临界区、轮转边界、陈旧判据逐事件解析）：`docs/team/reviews/V34.md`
   去重窗口与合并的交互、同键但不同窗口的两条 run 在 `--detail` 下的分离、跨席位/任务/集合。 · 证据：反例脚本与输出尾
-- [ ] 7.4 判 `verification` 的正确性门：只有证据通过；不因为「作者报告说绿」判过。 · 证据：`docs/team/reviews/<ID>.md`
+- [x] 7.4 判 `verification` 的正确性门：只有证据通过；不因为「作者报告说绿」判过。 · 证据：`docs/team/reviews/<ID>.md` ｜ PM 补证据：PM 据 V34 的证据判过（PASS），不以作者报告为准：`docs/team/reviews/P251.md` 合并记录
 
 ## 8 apply / verify 的验收命令（本阶段不运行）
 

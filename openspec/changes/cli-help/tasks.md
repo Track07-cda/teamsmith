@@ -13,7 +13,7 @@
 - [x] 0.1 读 PM 的提案评审 `docs/team/reviews/cli-help-proposal.md`，确认六个裁定点（语言只读环境变量 / TSV 清单 +
   bash-awk 渲染器 / 第 0 级组清单排法 / 未知 token exit 2 / 走查扩面写 dispatch MODIFIED / 其他消息不迁移），
   结论摘进报告；与提案不同的裁定按其改写判定与场景。 · 证据：`docs/team/reviews/cli-help-proposal.md`（两轮：第一轮 NEEDS-CHANGES 的 F1 分级菜单 / F3 排版样例，第二轮 ACCEPTED；六个裁定点=语言只读环境变量 / TSV 清单 + bash-awk 渲染器 / 第 0 级组清单排法 / 未知 token exit 2 / 走查扩面写 `dispatch` MODIFIED / 其他消息不迁移）+ P260-dev.md §1/§2 的落点表（1.1 清单 TSV、1.2 bash-awk 渲染器、2.2 exit 2、6.1 走查改读清单、1.4 meeting 页并入渲染器）+ V38.md §1/§2 独立复核其中四条。实际做法：报告没有单列「裁定摘录」小节，六条裁定由 §1/§2 的落点表逐条对上。
-- [ ] 0.2 独立树投影自证：`cp -a openspec /tmp/<x> && (cd /tmp/<x> && openspec archive -y cli-help &&
+- [x] 0.2 独立树投影自证：`cp -a openspec /tmp/<x> && (cd /tmp/<x> && openspec archive -y cli-help && ｜ PM 补证据：PM 复核时做过独立树投影自证：`docs/team/reviews/cli-help-proposal.md`（独立 clone + 试归档副本 `trial/`，投影 `+7 ~1` 后校验 18/0）
   openspec validate --all --strict)` 必须绿；逐条 ADDED 与那 1 条 MODIFIED 对照，确认 MODIFIED 的 14 条基线场景
   逐字保留、无第二个未归档 change 动 `help-surface`/该走查要求。 · 证据（**留空**，见报告「缺口」一节）：记录里没有 apply 阶段（D170 收窄后的 delta）的投影命令与输出尾——本仓 `docs/team/` 全量 grep `archive -y cli-help` 只命中提案复核 `docs/team/reviews/cli-help-proposal.md`（`archive cli-help` → `2026-10-14-cli-help`、归档后 18/0，**D170 之前**）与本清单自身；P260-dev.md 与 V38.md 只记 `openspec validate --all --strict`（18/0 → 19/0）。第二半「无第二个未归档 change 动 `help-surface`/该走查要求」本轮复核**成立**（未归档 change 里只有 `cli-help` 带 `help-surface`/`dispatch` delta）。
 - [x] 0.3 冻结**改动前**基线：`routes.sh`（214 ✓ 量级）并把它的覆盖面数字抄下来（47 条用法行 / 42 个命令 /
@@ -132,13 +132,13 @@
 
 ## 9 独立验证（另一席位，不是 apply 作者）
 
-- [ ] 9.1 在独立冻结克隆重跑全部场景与保留回归（help-surface 全组、`routes.sh` 的 walk/control/promises/refusals/
+- [x] 9.1 在独立冻结克隆重跑全部场景与保留回归（help-surface 全组、`routes.sh` 的 walk/control/promises/refusals/ ｜ PM 补证据：V38 在冻结克隆里重跑了全部场景与保留回归：`docs/team/reviews/V38.md`（帮助套件 ✓91 ✗0、用法走查 ✓239 ✗0、覆盖 1 页/47 行 → 53 页/66 行）
   flips、§51、§18、§19），逐条给 command/assertion/rc 与 skip。 · 证据：独立记录 + 原始日志
-- [ ] 9.2 逐条重做红侧（破坏必红、还原必绿），并自设计反例：CJK 宽字符的折行边界（正好等于/超过宽度）、
+- [x] 9.2 逐条重做红侧（破坏必红、还原必绿），并自设计反例：CJK 宽字符的折行边界（正好等于/超过宽度）、 ｜ PM 补证据：V38 逐条重做红侧并自设反例（CJK 折行边界、宽度等于/超过、缺键、非法语言值）：`docs/team/reviews/V38.md`
   缺键回退在**中文**面上的标记、未知 token 在**别名**上的行为（`team test --help`、`team watchdog --help`）、
   无项目目录 + 非 TTY 的组合、变异帮助表后机器出口不变、`meeting` 页与 `team meeting help` 的字节一致、
   **第 0 级恰好 30 行/31 行的边界**、组页与命令页的用法片段逐字节一致。 · 证据：反例脚本与输出尾
-- [ ] 9.3 读者测试（人判）：用同一 rubric 独立读 5 页（含中文面 2 页），对照 design 的深度标准，结论写进
+- [x] 9.3 读者测试（人判）：用同一 rubric 独立读 5 页（含中文面 2 页），对照 design 的深度标准，结论写进 ｜ PM 补证据：V38 由复验者按同一 rubric 独立读了 5 页（含中文 2 页），结论单列一节：`docs/team/reviews/V38.md`
   `docs/team/reviews/<ID>.md`；只以证据判过，不因「作者报告说绿」判过。 · 证据：`docs/team/reviews/<ID>.md`
 
 ## 10 apply / verify 的验收命令（本阶段不运行）
