@@ -1666,3 +1666,13 @@ identity: category=docs model=cline/deepseek/deepseek-v4.1-flash:max selected_vi
 依据：这些文档类判断**不影响用户可见的产品行为**，而且证据都在磁盘上、可复核、可回滚（git 里都能查）；把它们拿去打断用户，代价高于收益。
 
 **据此本批已执行**：归档四条（`cli-help`、`panel-preview-and-compose`、`pm-reply-discipline`、`turn-notice-merge`，各自规格投影成功、归档后校验 22/21/20/19 项全过）。变更库只剩三条**在实现中**的：`orphan-visibility`、`slash-team`、`tmux-identity-scope`。
+
+### D181 · `openspec archive` 只改工作树、不提交——PM 必须自己 `git add openspec` 并提交（2026-10-15，我自己踩的）
+
+**事实**：`openspec archive -y <id>` 会把 change 目录移进 `archive/`、把 delta 投影进 `specs/`，但**不产生任何提交**。我在归档 `cli-help`/`panel-preview-and-compose`/`pm-reply-discipline`/`turn-notice-merge` 四条之后只提交了 `docs/team/DECISIONS.md`，于是那 30 条改动（四个 change 目录被删、四份规格被改、四个 archive 目录与新建的 `help-surface` 能力未跟踪）**在工作树里躺了十几分钟没进 main**。
+
+**后果（差点）**：紧接着从 main 起的 `P272`（帮助面收尾）分支因此**基于归档前的布局**——它写的 delta 指向一个在它 base 里不存在的 `help-surface` 能力；我在复核它时才发现（克隆里 `openspec/specs/help-surface/` 不存在）。
+
+**规矩**：归档动作的最后一步**必须**是 `git add openspec && git commit`（提交信息写明「提交这批归档」）；归档后立刻 `git status --short` 应干净、`openspec validate --all --strict` 应全过。**"归档后校验全过" 只对工作树成立，不等于已提交。**
+
+**处置**：已补提交（四个 archive 目录 + 投影 + `help-surface`）；`P272` 的分支要 `git merge main` 后再交付，届时它的 MODIFIED 目标才存在。
