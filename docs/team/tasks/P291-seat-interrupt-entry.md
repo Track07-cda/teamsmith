@@ -4,7 +4,7 @@ task: P291
 agent: -
 phase: propose
 category: analysis
-change: -
+change: seat-interrupt-entry
 anchor: none (infra) — 席位生命周期的可见性与可控性
 deltas: -
 branch: task/P291-seat-interrupt-entry
