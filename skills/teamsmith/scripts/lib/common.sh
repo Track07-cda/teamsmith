@@ -2565,6 +2565,241 @@ team_agent_alive_in_pane() { # <session:window>
   team_cwd_in_project "$cwd"
 }
 
+# ---------------------------------------------------------------- 孤儿席位进程普查（P276 · change: orphan-visibility）
+# 事故（2026-10-15，PM 实测）：机器 OOM 之后本项目的席位进程全没了，同机**其他项目**留下一批孤儿 Pi
+# 进程——tmux 窗口已死（`tmux list-panes` 找不到），进程还活着、各自占 0.2–0.6 GB，合计约 4 GB。它们
+# 对使用者是**不可见**的：窗口没了、`team status`/`team resume` 也看不到（存活判据 `team_agent_alive_in_pane`
+# 是**按窗口**的：没有窗口 = 看不到 = 不计数），但内存被占着，直接加剧下一次 OOM。
+#
+# 这一节补一条**从主机侧**看的读数（合同：openspec/changes/orphan-visibility/specs/seat-visibility/spec.md）：
+#   · 不经过 tmux 枚举，直接读 `/proc`；身份从进程**自己**的 environ 读（TEAM_MAIN_ROOT/TEAM_ROOT），
+#     形状复用 team_agent_bin_path / team_pm_bin_path —— 「普查说它是席位」与「存活判据说它在跑」用的
+#     是**同一个**定义（各写一份就是下一个假告警的温床）。
+#   · 孤儿 = **没有活着的 pane**，且按进程**自己那个** tmux server 判（pane id 每 server 唯一：拿默认
+#     server 的 pane 表比对别的 socket，会把活着的席位判成孤儿）；server 查询不到 → **未判定**，绝不猜。
+#   · 只读：不发信号、**不写任何文件**（因此这里不调 team_state_dir——那个函数会 mkdir）。
+#   · 有界：一次 ps 先把绝大多数进程筛掉，读不到的条目一律跳过，绝不让调用命令失败。
+team_orphan_proc_root() { printf '%s\n' "${TEAM_ORPHAN_PROC_ROOT:-/proc}"; }
+
+team_orphan_proc_dir() { printf '%s\n' "$(team_orphan_proc_root)/${1:-}"; }
+
+team_orphan_norm_path() { # <path> → 物理路径（解析不到就原样）
+  local p="${1:-}"
+  [ -n "$p" ] || return 1
+  readlink -f -- "$p" 2>/dev/null || printf '%s\n' "$p"
+}
+
+# 命令行快照（空格连接）。这也是夹具接缝的一环：夹具根里的进程不是真进程，`ps -p` 读不到它们，
+# 所以普查**自己**读 argv，再把快照传给 team_proc_cmdline_is_bin（同 M39 的既有做法）。
+team_orphan_read_cmdline() { # <pid> → args；读不到/空命令行 → 非 0
+  local f raw
+  f="$(team_orphan_proc_dir "${1:-}")/cmdline"
+  [ -r "$f" ] || return 1
+  raw="$(tr '\0' ' ' < "$f" 2>/dev/null)" || return 1
+  raw="${raw% }"
+  [ -n "$raw" ] || return 1
+  printf '%s\n' "$raw"
+}
+
+# 环境快照（每行一个 KEY=VAL；bash 存不了 NUL，所以先 tr）。
+# 「读不到」（权限拒绝 / 条目中途消失 / 悬空软链）→ 非 0：调用方**跳过**，绝不猜它的身份。
+# 「空环境」（读得到但一个键都没有）→ 空文本、rc 0：它是**身份为空**的同形状进程，只计数、不点名。
+team_orphan_read_environ() { # <pid> → 环境文本；读不到 → 非 0
+  local f
+  f="$(team_orphan_proc_dir "${1:-}")/environ"
+  [ -r "$f" ] || return 1
+  tr '\0' '\n' < "$f" 2>/dev/null || return 1
+  return 0
+}
+
+# 进程自己的启动时刻（epoch 秒）= /proc/<pid>/stat 的第 22 字段（starttime，tick）+ 内核 btime。
+# 读不到（或字段不是数）→ 非 0：读数里**不写**启动时间，绝不填 0/占位。
+team_orphan_start_epoch() { # <pid> → epoch 秒；读不到 → 非 0
+  local dir stat rest start btime statf clk
+  dir="$(team_orphan_proc_dir "${1:-}")"
+  [ -r "$dir/stat" ] || return 1
+  stat="$(cat "$dir/stat" 2>/dev/null)" || return 1
+  # comm 字段可能含空格与括号 → 从**最后一个** `) ` 之后切（字段 3 起），starttime 就是第 20 个
+  case "$stat" in *') '*) ;; *) return 1 ;; esac
+  rest="${stat##*) }"
+  start="$(printf '%s\n' "$rest" | awk '{print $20}')"
+  case "$start" in ''|*[!0-9]*) return 1 ;; esac
+  statf="$(team_orphan_proc_root)/stat"
+  btime="$(awk '/^btime /{print $2; exit}' "$statf" 2>/dev/null || true)"
+  [ -n "$btime" ] || btime="$(awk '/^btime /{print $2; exit}' /proc/stat 2>/dev/null || true)"
+  case "$btime" in ''|*[!0-9]*) return 1 ;; esac
+  clk="$(getconf CLK_TCK 2>/dev/null || true)"
+  case "$clk" in ''|*[!0-9]*) clk=100 ;; esac
+  [ "$clk" -gt 0 ] || clk=100
+  printf '%s\n' "$(( btime + start / clk ))"
+}
+
+# 常驻内存 VmRSS（MB，整数）。读不到 → 非 0（读数里写 `-`，不编造）。
+team_orphan_rss_mb() { # <pid> → MB；读不到 → 非 0
+  local f kb
+  f="$(team_orphan_proc_dir "${1:-}")/status"
+  [ -r "$f" ] || return 1
+  kb="$(awk '/^VmRSS:/{print $2; exit}' "$f" 2>/dev/null || true)"
+  case "$kb" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$(( kb / 1024 ))"
+}
+
+# 席位名：由进程自己的 TEAM_ROOT 相对**该项目**的工作树目录推出（PM 在主检出里 → PM 窗口名）。
+team_orphan_seat_name() { # <项目 main root> <进程 TEAM_ROOT>
+  local mr="${1:-}" r="${2:-}" wt
+  [ -n "$mr" ] && [ -n "$r" ] || { printf '%s\n' '-'; return 0; }
+  wt="$mr/${TEAM_WORKTREES_DIR:-.worktrees}"
+  case "$r" in
+    "$wt"/*) r="${r#"$wt"/}"; printf '%s\n' "${r%%/*}" ;;
+    "$mr")   printf '%s\n' "${TEAM_PM_WINDOW:-pm}" ;;
+    *)       printf '%s\n' "$(basename -- "$r")" ;;
+  esac
+}
+
+# 本项目的**已提交派单记录**里的任务（state/<seat>.env）。这是「记录里的任务」，不是「它现在在干什么」——
+# 记录可能比进程新（席位被重派过），所以读数必须标明来源。身份不明/别的项目没有记录可读 → 空。
+# **直接读，不调 team_state_dir**（那个函数会 mkdir：普查是只读的）。
+team_orphan_record_task() { # <seat> → task 值（读不到 → 空）
+  local f v
+  [ -n "${TEAM_STATE_DIR:-}" ] && [ -n "${1:-}" ] || return 0
+  f="$TEAM_STATE_DIR/$1.env"
+  [ -f "$f" ] || return 0
+  v="$(grep -s '^task=' "$f" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  printf '%s\n' "$v"
+}
+
+# 进程自己那个 tmux server 的 pane 集合（`TMUX` 的第一段就是 socket 路径）。
+# 查询不到（socket 没了 / tmux 不在 / 查询失败）→ 非 0：调用方判「未判定」，**绝不**当成孤儿。
+team_orphan_server_panes() { # <socket> → pane id（每行一个）；查询不到 → 非 0
+  local sock="${1:-}" out
+  [ -n "$sock" ] || return 1
+  command -v tmux >/dev/null 2>&1 || return 1
+  out="$(tmux -S "$sock" list-panes -a -F '#{pane_id}' 2>/dev/null)" || return 1
+  printf '%s\n' "$out"
+}
+
+# 孤儿判据（合同 §2）：TMUX_PANE 为空 → 孤儿；否则拿它比对**它自己那个 socket** 的 pane 集合。
+# 三条禁令：不许问「是不是当前窗口的 pane」、不许问「是不是本项目的窗口」、不许拿别的 server 的
+# pane 表比对（pane id 每 server 唯一）。
+team_orphan_judge() { # <TMUX> <TMUX_PANE> → orphan|live|unjudged
+  local tmx="${1:-}" pane="${2:-}" sock panes
+  if [ -z "$pane" ]; then printf 'orphan\n'; return 0; fi
+  [ -n "$tmx" ] || { printf 'unjudged\n'; return 0; }
+  # TMUX = <socket>,<server pid>,<session index> → 第一段就是那个 server 的 socket
+  sock="${tmx%%,*}"
+  if ! panes="$(team_orphan_server_panes "$sock")"; then printf 'unjudged\n'; return 0; fi
+  case $'\n'"$panes"$'\n' in *$'\n'"$pane"$'\n'*) printf 'live\n' ;; *) printf 'orphan\n' ;; esac
+}
+
+# 候选进程（pid + argv 快照）：真 /proc 用**一次** `ps -eo pid=,args=` 先筛，夹具根直接枚举条目
+# （夹具里的进程不是真进程，ps 看不到它们）。这里只按 basename 做**粗筛**（子串，不要求两侧有空格：
+# 席位进程的 argv[0] 常常是**全路径**，` pi ` 那种写法会把它们全漏掉）——精确判据在
+# team_orphan_record_for 里用 team_proc_cmdline_is_bin 做。粗筛多留几个没关系（多一次便宜的比较），
+# 漏掉一个就是一次真实的不可见（本任务要修的就是这个）。
+team_orphan_candidates() { # 每行 pid<TAB>args
+  local root base_a base_p p args d
+  root="$(team_orphan_proc_root)"
+  base_a="$(basename -- "$(team_agent_bin_path 2>/dev/null || true)")"
+  base_p="$(basename -- "$(team_pm_bin_path 2>/dev/null || true)")"
+  [ -n "$base_a" ] || base_a='pi'
+  [ -n "$base_p" ] || base_p="$base_a"
+  if [ "$root" = "/proc" ]; then
+    ps -ww -eo pid=,args= 2>/dev/null | while read -r p args; do
+      [ -n "$p" ] || continue
+      case "$args" in *"$base_a"*|*"$base_p"*) ;; *) continue ;; esac
+      printf '%s\t%s\n' "$p" "$args"
+    done
+    return 0
+  fi
+  for d in "$root"/*/; do
+    [ -d "$d" ] || continue
+    p="$(basename -- "${d%/}")"
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    args="$(team_orphan_read_cmdline "$p" 2>/dev/null || true)"
+    [ -n "$args" ] || continue
+    case "$args" in *"$base_a"*|*"$base_p"*) ;; *) continue ;; esac
+    printf '%s\t%s\n' "$p" "$args"
+  done
+}
+
+# 一次解析普查要用的常量（agent/PM 可执行文件 + 本项目 main root）。census 与 reap 共用，
+# 所以「普查说它是席位」与「清理前复验说它是席位」用的是同一个定义。
+team_orphan_ctx_init() {
+  TEAM_ORPHAN_AGENT_BIN="$(team_agent_bin_path 2>/dev/null || true)"
+  TEAM_ORPHAN_PM_BIN="$(team_pm_bin_path 2>/dev/null || true)"
+  TEAM_ORPHAN_SELF_MAIN="$(team_orphan_norm_path "${TEAM_MAIN_ROOT:-}" 2>/dev/null || printf '%s' "${TEAM_MAIN_ROOT:-}")"
+}
+
+# 形状判据：命令行命中本项目的 agent 或 PM 可执行文件（与 team_proc_is_agent_bin / team_proc_is_pm_bin
+# **同一套**定义，不新造第二套）。两处排除必须带上，否则派单/启动 harness 会被算成席位（P103 的旧形状）：
+#   · pm.pid.spawn / dispatch-*.spawn —— 「还没 exec 出 agent 的那个壳」（team_proc_cmdline_is_bin 与
+#     team_proc_is_agent_bin 各自的既有排除，这里用同一份 args 快照一次做全）。
+team_orphan_shape_match() { # <pid> <args 快照>
+  local pid="${1:-}" args="${2:-}"
+  case "$args" in *pm.pid.spawn*|*dispatch-*.spawn*) return 1 ;; esac
+  team_proc_cmdline_is_bin "$pid" "$TEAM_ORPHAN_AGENT_BIN" "$args" && return 0
+  team_proc_cmdline_is_bin "$pid" "$TEAM_ORPHAN_PM_BIN" "$args"
+}
+
+# 判定**一个**进程并输出**一条**记录：pid<TAB>kind<TAB>seat<TAB>task<TAB>start<TAB>rss<TAB>judge
+#   kind  own    = 进程自己的 TEAM_MAIN_ROOT 就是本项目（可点名、可清理）
+#         foreign= 身份属于别的项目（只计数：pid/项目名/席位名/路径**一律不打印**）
+#         anon   = 同形状但没有身份（只计数）
+#   judge orphan = 没有活着的 pane（孤儿）；live = pane 还活着；unjudged = server 查询不到（不猜）
+#   start/rss 读不到写 `-`（绝不填 0）；task 为空写 `-`（它是**记录里**的任务，来源见 team_orphan_record_task）。
+# 非 0 = **不是席位形状**或**身份读不到**（调用方跳过：不猜、不计数——未知不是空）。
+team_orphan_record_for() { # <pid> <argv 快照>
+  local pid="${1:-}" args="${2:-}" envtext line mr r tmx tpane kind seat task start rss judge nmr nr
+  [ -n "$pid" ] && [ -n "$args" ] || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "${TEAM_ORPHAN_AGENT_BIN+x}" ] || team_orphan_ctx_init
+  # 身份只能从进程自己的 environ 读；读不到 → 跳过（既不点名也不计数：它的身份是**未知**，不是空）
+  envtext="$(team_orphan_read_environ "$pid")" || return 1
+  mr=''; r=''; tmx=''; tpane=''
+  while IFS= read -r line; do
+    case "$line" in
+      TEAM_MAIN_ROOT=*) mr="${line#TEAM_MAIN_ROOT=}" ;;
+      TEAM_ROOT=*)      r="${line#TEAM_ROOT=}" ;;
+      TMUX=*)           tmx="${line#TMUX=}" ;;
+      TMUX_PANE=*)      tpane="${line#TMUX_PANE=}" ;;
+    esac
+  done <<< "$envtext"
+  # 形状：命令行命中本项目配置的 agent 或 PM 可执行文件（复用既有解析，不新造第二套）
+  team_orphan_shape_match "$pid" "$args" || return 1
+  judge="$(team_orphan_judge "$tmx" "$tpane")"
+  start="$(team_orphan_start_epoch "$pid" 2>/dev/null || true)"; [ -n "$start" ] || start='-'
+  rss="$(team_orphan_rss_mb "$pid" 2>/dev/null || true)";       [ -n "$rss" ] || rss='-'
+  seat='-'; task='-'
+  if [ -n "$mr" ] && [ -n "$r" ]; then
+    nmr="$(team_orphan_norm_path "$mr" 2>/dev/null || printf '%s' "$mr")"
+    if [ -n "$TEAM_ORPHAN_SELF_MAIN" ] && [ "$nmr" = "$TEAM_ORPHAN_SELF_MAIN" ]; then
+      kind='own'
+      nr="$(team_orphan_norm_path "$r" 2>/dev/null || printf '%s' "$r")"
+      seat="$(team_orphan_seat_name "$TEAM_ORPHAN_SELF_MAIN" "$nr")"
+      task="$(team_orphan_record_task "$seat")";        [ -n "$task" ] || task='-'
+    else
+      kind='foreign'
+    fi
+  else
+    kind='anon'
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$kind" "$seat" "$task" "$start" "$rss" "$judge"
+}
+
+# 普查本体（只读、有界）：枚举候选 → 逐个判定。
+team_orphan_census() {
+  [ "${TEAM_ORPHAN_SCAN:-1}" = "1" ] || return 0
+  local root pid args
+  root="$(team_orphan_proc_root)"
+  [ -d "$root" ] || return 0
+  team_orphan_ctx_init
+  while IFS=$'\t' read -r pid args; do
+    [ -n "$pid" ] || continue
+    team_orphan_record_for "$pid" "$args" || true
+  done < <(team_orphan_candidates)
+  return 0
+}
+
 team_agent_window_exists() { # <agent> → 0/1：只看窗口存在（与存活区分：窗口在但 agent 退了）
   local w; w="$(team_state_get "$1" window "$1")"
   team_tmux_has_window "$TEAM_SESSION" "$w"

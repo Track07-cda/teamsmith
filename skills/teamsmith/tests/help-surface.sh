@@ -334,6 +334,7 @@ probe_recipe() {
     status)       printf 'proj|status\n' ;;
     ps)           printf 'proj|ps\n' ;;
     bg)           printf 'proj|bg list\n' ;;
+    reap)         printf 'proj|reap --orphans --yes\n' ;;
     digest)       printf 'proj|digest\n' ;;
     inbox)        printf 'proj|inbox\n' ;;
     paths)        printf 'proj|paths\n' ;;
@@ -673,6 +674,8 @@ check_vocabulary() {
 probe_env_of() { # <cmd> → extra env assignments for this probe
   case "$1" in
     close) printf 'TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON=probe\n' ;;
+    # P276：普查读的是主机 /proc；探针把它指到一个空夹具根 —— 确定性、且绝不碰真机器上的进程。
+    reap)  printf 'TEAM_ORPHAN_PROC_ROOT=%s/empty-proc\n' "$tmp" ;;
   esac
 }
 
@@ -704,6 +707,7 @@ probe_prepare() { # <cmd> <dir> <setup>
   local cmd="$1" d="$2" setup="$3"
   case "$cmd" in
     draft) printf '# note\n' > "$d/draft.md" ;;
+    reap)  mkdir -p "$tmp/empty-proc" ;;
     resume) # a seat with unfinished work whose window is gone
       grep -v "^p-$cmd:dev$" "$tmp/windows.reg" > "$tmp/windows.reg.tmp" 2>/dev/null || true
       mv "$tmp/windows.reg.tmp" "$tmp/windows.reg" 2>/dev/null || true ;;

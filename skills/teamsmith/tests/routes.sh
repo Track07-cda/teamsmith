@@ -679,6 +679,7 @@ mr_probe_for() { # <KEY> → probe id（空 = 没有声明）
     TEAM_PM_MODEL)                            printf 'pm-model\n' ;;
     TEAM_PULSE_WINDOW)                        printf 'pulse-window\n' ;;
     TEAM_BG_STOP_GRACE)                       printf 'bg-stop-grace\n' ;;
+    TEAM_ORPHAN_SCAN)                         printf 'orphan-scan\n' ;;
     *) printf '\n' ;;
   esac
 }
@@ -730,6 +731,7 @@ mr_walk_b() {
       pm-model)      mr_promise_pm_model "$key" || bad=1 ;;
       pulse-window)  mr_promise_pulse_window "$key" || bad=1 ;;
       bg-stop-grace) mr_promise_bg_stop_grace "$key" || bad=1 ;;
+      orphan-scan)   mr_promise_orphan_scan "$key" || bad=1 ;;
       *)             finding "promise：$key 的探针 id「$probe」没有实现（覆盖表与实现脱节）"; bad=1 ;;
     esac
   done < "$rows"
@@ -907,6 +909,46 @@ mr_promise_pulse_window() { # <KEY>
     finding "promise（$key）：pulse up 没有按新窗口名建窗（记录：$(grep -c . "$TMUX_LOG" 2>/dev/null || echo 0) 条 tmux 调用）"
     return 1
   fi
+  return 0
+}
+
+# P276：孤儿普查开关的探针。schema 注释点名了 `team reap`（「0 = 完全不扫 /proc（读数只剩一行点名的跳过；
+# team reap --orphans 也随之不可用）」），所以那条句子要在真夹具里真的发生。判的是**效果**：
+#   ① 开关开着时 `team reap --orphans` 正常给出计划/空计划（不是拒绝）—— 非空洞对照；
+#   ② 关掉后同一个命令**拒绝**并点名那个键；③ 读数只剩一行点名的跳过（没有 pid、没有清理命令）。
+mr_promise_orphan_scan() { # <KEY>
+  local key="$1" d line n_pid
+  d="$(new_fixture promise-orphan-scan)" || return 1
+  # ① 对照：开关开着 → 同一命令不拒绝（否则下面的「拒绝」什么也证明不了）
+  mr_run "$d" reap --orphans
+  case "$MR_OUT" in
+    *TEAM_ORPHAN_SCAN*) finding "promise（$key）：开关开着时 reap --orphans 就已经拿开关当理由拒绝了（$(first_line "$MR_OUT")）"; return 1 ;;
+    *没有本项目孤儿*) : ;;
+    *) finding "promise（$key）：开关开着时 reap --orphans 没有给出计划（$(first_line "$MR_OUT")）"; return 1 ;;
+  esac
+  ok "promise（$key）：开关开着 → reap --orphans 给出计划（rc=$MR_RC，不看退出码）"
+  # ② 用真路由关掉它（顺便验证这个键在 config 路由上真的可写）
+  mr_run "$d" config set TEAM_ORPHAN_SCAN 0 --yes
+  [ "$MR_RC" = "0" ] || { finding "promise（$key）：config set TEAM_ORPHAN_SCAN 0 失败（$(first_line "$MR_OUT")）"; return 1; }
+  mr_run "$d" reap --orphans
+  case "$MR_OUT" in
+    *TEAM_ORPHAN_SCAN*) ok "promise（$key）：关掉之后 reap --orphans 拒绝并点名该键（rc=$MR_RC）" ;;
+    *) finding "promise（$key）：关掉之后 reap --orphans 照样列孤儿（$(first_line "$MR_OUT")）"; return 1 ;;
+  esac
+  # ③ 读数只剩一行点名的跳过，且不含 pid / 清理命令
+  mr_run "$d" ps
+  line="$(printf '%s\n' "$MR_OUT" | grep '^孤儿席位进程' | tail -1)"
+  case "$line" in
+    *TEAM_ORPHAN_SCAN*) : ;;
+    *) finding "promise（$key）：关掉之后 ps 的读数不是一行点名的跳过（$line）"; return 1 ;;
+  esac
+  if [ "$(printf '%s\n' "$MR_OUT" | grep -c '^孤儿席位进程')" != "1" ]; then
+    finding "promise（$key）：关掉之后 ps 的读数不止一行"; return 1
+  fi
+  case "$line" in
+    *reap*) finding "promise（$key）：跳过行里还带着清理命令（$line）"; return 1 ;;
+  esac
+  ok "promise（$key）：关掉之后 ps 的读数恰好一行、点名该键、无 pid 无清理命令"
   return 0
 }
 

@@ -452,6 +452,101 @@ team_cmd_roster() {
   return 0
 }
 
+# ---------------------------------------------------------------- 孤儿席位进程读数（P276 · change: orphan-visibility）
+# 普查本体在 common.sh（team_orphan_census，只读、有界、不写盘）；这里是**呈现**：ps/status 的读数块、
+# up 的一行、digest 容量行的行尾提示。三者共用同一份普查与同一个判定，不各写一份。
+team_orphan_rss_text() { case "${1:-}" in ''|-) printf '%s' '-' ;; *) printf '%sMB' "$1" ;; esac; }
+
+team_orphan_ts() { # <epoch|-> → ISO 时间（解析不到就原样）
+  case "${1:-}" in ''|-) printf '%s' '-' ; return 0 ;; esac
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$1"
+}
+
+# 一次普查 → 全局汇总（每行一条记录：pid kind seat task start rss judge，见 team_orphan_census）
+#   own 的**孤儿**逐条进 TEAM_ORPHAN_OWN_LINES（可点名、可清理）；别的项目/身份为空只累计；
+#   unjudged 单独计数（server 查询不到 → 不猜、不当孤儿）。
+team_orphan_scan() {
+  TEAM_ORPHAN_OWN_LINES=()
+  TEAM_ORPHAN_OWN_N=0; TEAM_ORPHAN_OWN_MB=0
+  TEAM_ORPHAN_OTHER_N=0; TEAM_ORPHAN_OTHER_MB=0
+  TEAM_ORPHAN_OTHER_LINES=()
+  TEAM_ORPHAN_UNJUDGED_N=0
+  local pid kind seat task start rss judge
+  while IFS=$'\t' read -r pid kind seat task start rss judge; do
+    [ -n "$pid" ] || continue
+    case "$judge" in
+      unjudged) TEAM_ORPHAN_UNJUDGED_N=$((TEAM_ORPHAN_UNJUDGED_N + 1)); continue ;;
+      orphan)   ;;
+      *)        continue ;;
+    esac
+    case "$kind" in
+      own)
+        TEAM_ORPHAN_OWN_N=$((TEAM_ORPHAN_OWN_N + 1))
+        case "$rss" in ''|-) ;; *) TEAM_ORPHAN_OWN_MB=$((TEAM_ORPHAN_OWN_MB + rss)) ;; esac
+        TEAM_ORPHAN_OWN_LINES+=("$pid"$'\t'"$rss"$'\t'"$seat"$'\t'"$task"$'\t'"$start") ;;
+      *)
+        TEAM_ORPHAN_OTHER_N=$((TEAM_ORPHAN_OTHER_N + 1))
+        case "$rss" in ''|-) ;; *) TEAM_ORPHAN_OTHER_MB=$((TEAM_ORPHAN_OTHER_MB + rss)) ;; esac
+        TEAM_ORPHAN_OTHER_LINES+=("$pid"$'\t'"$rss"$'\t'"$seat"$'\t'"$task"$'\t'"$start") ;;
+    esac
+  done < <(team_orphan_census)
+  return 0
+}
+
+# ps/status 追加的读数块。只**增行**（既有的每一行逐字节不变）；一个信号都不发、一个文件都不写。
+# 没有本项目孤儿时恰好一行、零命令（合同 §3）；别的项目/身份为空只给计数与**下限**合计（≥）。
+team_orphan_reading() {
+  if [ "${TEAM_ORPHAN_SCAN:-1}" != "1" ]; then
+    printf '孤儿席位进程：普查已关闭（TEAM_ORPHAN_SCAN=0）\n'
+    return 0
+  fi
+  team_orphan_scan
+  if [ "$TEAM_ORPHAN_OWN_N" -eq 0 ]; then
+    if [ "$TEAM_ORPHAN_OTHER_N" -eq 0 ] && [ "$TEAM_ORPHAN_UNJUDGED_N" -eq 0 ]; then
+      printf '孤儿席位进程：无\n'
+    else
+      printf '孤儿席位进程：无本项目孤儿（别的项目/身份不明 %s 个，合计 ≥ %sMB；未判定 %s 个）\n' \
+        "$TEAM_ORPHAN_OTHER_N" "$TEAM_ORPHAN_OTHER_MB" "$TEAM_ORPHAN_UNJUDGED_N"
+    fi
+    return 0
+  fi
+  printf '孤儿席位进程（主机侧 /proc 普查；记录任务=state/<席位>.env 里的任务，可能比进程新）：\n'
+  local rec pid rss seat task start
+  for rec in "${TEAM_ORPHAN_OWN_LINES[@]}"; do
+    IFS=$'\t' read -r pid rss seat task start <<< "$rec"
+    printf '  %s  %s  席位=%s  记录任务=%s  启动=%s  → %s reap %s --yes\n' \
+      "$pid" "$(team_orphan_rss_text "$rss")" "$seat" "$task" "$(team_orphan_ts "$start")" "${TEAM_CLI:-team}" "$pid"
+  done
+  [ "$TEAM_ORPHAN_OTHER_N" -gt 0 ] && printf '  别的项目/身份不明：%s 个，合计 ≥ %sMB（下限：形状判据只认得本项目配置的 agent 形状）\n' \
+    "$TEAM_ORPHAN_OTHER_N" "$TEAM_ORPHAN_OTHER_MB"
+  [ "$TEAM_ORPHAN_UNJUDGED_N" -gt 0 ] && printf '  未判定：%s 个（它自己那个 tmux server 查询不到；不当作孤儿）\n' "$TEAM_ORPHAN_UNJUDGED_N"
+  return 0
+}
+
+# team up 的读数：一行（有孤儿 → 计数 + 合计 + 可复制命令；没有 → 一行「无」）。
+team_orphan_up_line() {
+  if [ "${TEAM_ORPHAN_SCAN:-1}" != "1" ]; then
+    printf '孤儿席位进程：普查已关闭（TEAM_ORPHAN_SCAN=0）\n'
+    return 0
+  fi
+  team_orphan_scan
+  if [ "$TEAM_ORPHAN_OWN_N" -eq 0 ]; then printf '孤儿席位进程：无\n'; return 0; fi
+  printf '孤儿席位进程：%s 个本项目孤儿（合计 %sMB）→ %s reap --orphans --yes\n' \
+    "$TEAM_ORPHAN_OWN_N" "$TEAM_ORPHAN_OWN_MB" "${TEAM_CLI:-team}"
+}
+
+# digest 容量行**行尾**的提示：主机侧孤儿合计 ≥ TEAM_ORPHAN_WARN_MB 时才有（不是红、不改退出码、
+# 不新开行——它落在既有实时字段那一行里，闸门的 digest 归一化一个字都不用改）。
+team_orphan_digest_hint() {
+  [ "${TEAM_ORPHAN_SCAN:-1}" = "1" ] || return 0
+  team_orphan_scan
+  local total=$(( TEAM_ORPHAN_OWN_MB + TEAM_ORPHAN_OTHER_MB )) warn="${TEAM_ORPHAN_WARN_MB:-1024}"
+  case "$warn" in ''|*[!0-9]*) warn=1024 ;; esac
+  [ "$total" -ge "$warn" ] || return 0
+  printf '  ｜ 孤儿席位进程合计 ≥ %sMB（本项目 %sMB）→ %s reap --orphans --yes' \
+    "$total" "$TEAM_ORPHAN_OWN_MB" "${TEAM_CLI:-team}"
+}
+
 team_cmd_ps() {
   team_hdr "容量 · $TEAM_PROJECT"
   printf '  %s\n' "$(team_capacity_line)"
@@ -508,6 +603,9 @@ team_cmd_ps() {
   [ "$any_sess" -eq 0 ] && team_dim "  （无：还没有 agent 会话文件）"
   printf '\n活跃窗口（%s）：\n' "$TEAM_SESSION"
   team_tmux_windows "$TEAM_SESSION" 2>/dev/null | sed 's/^/  - /' || team_dim "  session 不存在"
+  # P276：孤儿席位进程读数（只增行；只读、不发信号）
+  printf '\n'
+  team_orphan_reading
   return 0
 }
 
@@ -568,6 +666,9 @@ team_cmd_status() {
     printf 'BOARD：\n'
     grep -E '^\|' "$TEAM_DOCS_ABS/BOARD.md" 2>/dev/null | tail -n +3 | sed 's/^/  /' || true
   fi
+  # P276：孤儿席位进程读数（只增行；ps 与 status 共用同一个函数 → 两处逐字一致）
+  printf '\n'
+  team_orphan_reading
   return 0
 }
 
@@ -736,7 +837,7 @@ team_cmd_digest() {
     foreign:*) printf '  PM ○ 窗口被别的项目占着（不覆盖）' ;;
     *)         printf '  PM ○ 窗口缺失 → team up' ;;
   esac
-  printf ' ｜ pulse %s\n' "$(team_pulse_state_text)"
+  printf ' ｜ pulse %s%s\n' "$(team_pulse_state_text)" "$(team_orphan_digest_hint)"
   # 延后投递：队列非空才打印（delivery-guard：排队/held 必须看得见；空队列一个字都不加）
   team_outbox_status_line "  " || true
   # M46：投递通道降级（PM 的一行视角；`team_pm_state` 已经在手，复用同一次读取）

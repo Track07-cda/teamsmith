@@ -347,6 +347,9 @@ export const zh = {
   label_TEAM_DEFER_TTL: '排队过期时间',
   label_TEAM_OUTBOX_MAX: '发件箱条数上限',
   label_TEAM_PANEL_DETAIL_CAP: '详情文件读取上限',
+  label_TEAM_ORPHAN_WARN_MB: '孤儿内存提示阈值',
+  label_TEAM_ORPHAN_SCAN: '扫描孤儿席位进程',
+  label_TEAM_ORPHAN_PROC_ROOT: '普查 /proc 接缝',
   // —— 巡检与面板（需重启）
   label_TEAM_PULSE_INTERVAL: '巡检周期',
   label_TEAM_MONITOR_REFRESH: '面板刷新周期',

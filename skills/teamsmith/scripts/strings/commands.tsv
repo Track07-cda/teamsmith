@@ -44,6 +44,7 @@ cmd	roster	observe	roster	-	-	-	seat worktree	-	read-only	none	idempotent	-	rost
 cmd	status	observe	status [<ID>]	-	-	-	brief ledger	state	writes-state	none	idempotent	-	status	team status
 cmd	ps	observe	ps	-	-	-	seat	-	read-only	none	idempotent	-	ps	team ps
 cmd	bg	observe	bg list ;; bg stop <id>	-	list stop	-	-	state	writes-state	none	idempotent	-	bg	team bg list
+cmd	reap	observe	reap --orphans [--yes] ;; reap <pid> [--yes]	--orphans --yes	-	-	seat	state	writes-state	none	not-reversible:the process is gone; the plan and --yes are the only guard	-	reap	team reap --orphans --yes
 cmd	digest	observe	digest	-	-	-	ledger pulse	state	writes-state	none	idempotent	-	digest	team digest
 cmd	inbox	observe	inbox [<agent>]	-	-	-	ledger	-	read-only	none	idempotent	-	inbox	team inbox
 cmd	paths	observe	paths	-	-	-	ledger	-	read-only	none	idempotent	-	paths	team paths

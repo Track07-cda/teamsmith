@@ -349,6 +349,9 @@ export const en = {
   label_TEAM_DEFER_TTL: 'Queued delivery TTL',
   label_TEAM_OUTBOX_MAX: 'Outbox cap',
   label_TEAM_PANEL_DETAIL_CAP: 'Detail read cap',
+  label_TEAM_ORPHAN_WARN_MB: 'Orphan memory hint',
+  label_TEAM_ORPHAN_SCAN: 'Scan orphan seats',
+  label_TEAM_ORPHAN_PROC_ROOT: 'Census proc root',
   // -- pulse and panel (needs a restart)
   label_TEAM_PULSE_INTERVAL: 'Patrol interval',
   label_TEAM_MONITOR_REFRESH: 'Panel refresh period',

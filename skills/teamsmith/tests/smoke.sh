@@ -16749,11 +16749,36 @@ fi
 # ── ③ status / __panel-data 同一层缓存：开/关输出一致（滤实时字段）
 m50 $TEAM status >"$TMP/m50-st-on.out" 2>&1
 m50 env TEAM_SCAN_CACHE=0 $TEAM status >"$TMP/m50-st-off.out" 2>&1
-if diff <(grep -v 'RAM 可用' "$TMP/m50-st-on.out") <(grep -v 'RAM 可用' "$TMP/m50-st-off.out") >"$TMP/m50-st.diff" 2>&1; then
-  ok "M50-③ status cache 开/关输出逐字节一致（滤容量行）"
+# P276（change: orphan-visibility · board-and-status delta）：status 的输出末尾多了一段**主机侧孤儿
+# 席位普查**（seat-visibility#The reading is additive, bounded and read-only）。合同把它列为**实时字段**：
+# 闸门只滤时间戳、容量行与这段普查块；而且它必须**直接读**、绝不进 scan 缓存 —— 下面拿
+# TEAM_ORPHAN_PROC_ROOT 的夹具根当包装：两次运行换一个哨兵 pid，第二次必须读到**新的**那个
+# （缓存过就会读到旧的），而过滤掉普查块之后两份输出必须逐字节相同。
+m50_census_root() { # <根> <pid>：一条本项目的孤儿（假 /proc 条目；形状判据用 TEAM_PI_BIN=/bin/true）
+  local root="$1" pid="$2" d
+  rm -rf "$root"; mkdir -p "$root"; printf 'btime 1700000000\n' > "$root/stat"
+  d="$root/$pid"; mkdir -p "$d"
+  printf 'true\0--model\0x\0' > "$d/cmdline"
+  printf 'TEAM_MAIN_ROOT=%s\0TEAM_ROOT=%s\0' "$M50R" "$M50R" > "$d/environ"
+  printf '%s (pi) S 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 12345 1 1\n' "$pid" > "$d/stat"
+  printf 'Name:\tpi\nVmRSS:\t  2048 kB\n' > "$d/status"
+}
+m50_st_norm() { grep -v 'RAM 可用' "$1" | sed '/^孤儿席位进程/,$d'; }
+M50C="$TMP/m50-census"
+m50_census_root "$M50C" 9001
+m50 env TEAM_PI_BIN=/bin/true TEAM_ORPHAN_PROC_ROOT="$M50C" $TEAM status >"$TMP/m50-st-on.out" 2>&1
+m50_census_root "$M50C" 9002
+m50 env TEAM_PI_BIN=/bin/true TEAM_ORPHAN_PROC_ROOT="$M50C" TEAM_SCAN_CACHE=0 $TEAM status >"$TMP/m50-st-off.out" 2>&1
+if diff <(m50_st_norm "$TMP/m50-st-on.out") <(m50_st_norm "$TMP/m50-st-off.out") >"$TMP/m50-st.diff" 2>&1; then
+  ok "M50-③ status cache 开/关输出逐字节一致（滤容量行与普查块）"
 else
   bad "M50-③ status cache 开/关输出不一致"; head -10 "$TMP/m50-st.diff" | sed 's/^/      /'
 fi
+# 普查是主机读数、不是缓存视图：两次运行各读各的（哨兵 9001 / 9002）
+assert_has "$TMP/m50-st-on.out" "9001" "M50-③c cache-on 那次真的读了夹具根（点名哨兵 9001）"
+assert_not "$TMP/m50-st-on.out" "9002" "M50-③c cache-on 那次没有读到后写的哨兵（不是缓存视图）"
+assert_has "$TMP/m50-st-off.out" "9002" "M50-③c cache-off 那次读到新的哨兵 9002（两次都直接读 /proc）"
+assert_not "$TMP/m50-st-off.out" "9001" "M50-③c cache-off 那次没有残留上一次的哨兵"
 m50 $TEAM __panel-data --no-activity >"$TMP/m50-pd-on.out" 2>&1
 m50 env TEAM_SCAN_CACHE=0 $TEAM __panel-data --no-activity >"$TMP/m50-pd-off.out" 2>&1
 m50_pd_norm() { sed -e 's/"timestamp": "[^"]*"/"timestamp":"T"/' -e 's/"capacity": {[^}]*}/"capacity":"C"/' "$1"; }
@@ -19176,6 +19201,47 @@ if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
   fi
 else
   bad "51 缺 tests/config-cli.sh"
+fi
+
+# ═════════════════════════════════════════════════════════════════════
+# 51b · 孤儿席位进程普查（P276 · change: orphan-visibility）
+#
+# 夹具本体是 tests/seat-visibility.sh：①假 /proc（TEAM_ORPHAN_PROC_ROOT 接缝）下的纯逻辑组——
+# 身份/形状/孤儿判据/点名与计数/只增只读/阈值提示/四种读不到的边界；②reap 组（真进程、真 pid、
+# 计划态 → 授权执行 → 审计、复验的 TOCTOU 现场、拒绝集合）；③逐条红侧（破坏 → 指定用例必红）。
+# FAST 档只跑 ①（不启真进程）；②③只在完整门禁里跑（可见的 SKIP，不许静默）。
+section "51b · 孤儿席位进程普查（P276 · change: orphan-visibility）"
+if [ -f "$SKILL_DIR/tests/seat-visibility.sh" ]; then
+  OC_RC=0
+  OC_SELECT="--select census,judge,naming,reading,hint,seams"
+  case "${TEAM_SMOKE_FAST:-0}" in
+    1|y|Y|yes|YES|true|TRUE|on|ON) : ;;                 # FAST：只跑纯逻辑组
+    *) OC_SELECT="" ;;                                  # 完整：全部组 + 逐条红侧
+  esac
+  if [ -n "$OC_SELECT" ]; then
+    bash "$SKILL_DIR/tests/seat-visibility.sh" $OC_SELECT >"$TMP/seat-visibility.log" 2>&1 || OC_RC=$?
+    if [ "$OC_RC" -eq 0 ]; then
+      ok "51b 孤儿席位普查夹具（FAST 静态组）全绿（$(grep -ac '✓' "$TMP/seat-visibility.log" || true) 条断言）"
+      grep -aE '^== ' "$TMP/seat-visibility.log" | sed 's/^/      /'
+    else
+      bad "51b 孤儿席位普查夹具有失败（rc=$OC_RC）"
+      grep -a '✗' "$TMP/seat-visibility.log" | head -10 | sed 's/^/      /'
+    fi
+    skip "51b reap 组与逐条红侧（FAST 档不跑真进程与变异树）"
+  else
+    bash "$SKILL_DIR/tests/seat-visibility.sh" >"$TMP/seat-visibility.log" 2>&1 || OC_RC=$?
+    bash "$SKILL_DIR/tests/seat-visibility.sh" --flip >"$TMP/seat-visibility-flip.log" 2>&1 || OC_RC=$?
+    if [ "$OC_RC" -eq 0 ]; then
+      ok "51b 孤儿席位普查夹具全绿（$(grep -ac '✓' "$TMP/seat-visibility.log" || true) 条断言）"
+      ok "51b 孤儿席位普查逐条红侧全绿（$(grep -ac '✓' "$TMP/seat-visibility-flip.log" || true) 条）"
+      grep -aE '^== ' "$TMP/seat-visibility.log" | sed 's/^/      /'
+    else
+      bad "51b 孤儿席位普查夹具有失败（rc=$OC_RC）"
+      grep -a '✗' "$TMP/seat-visibility.log" "$TMP/seat-visibility-flip.log" | head -10 | sed 's/^/      /'
+    fi
+  fi
+else
+  bad "51b 缺 tests/seat-visibility.sh"
 fi
 
 # ═════════════════════════════════════════════════════════════════════

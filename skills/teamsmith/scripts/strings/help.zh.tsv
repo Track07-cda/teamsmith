@@ -139,6 +139,17 @@ cmd.bg.example	team bg list
 cmd.bg.read	状态目录下的后台作业记录
 cmd.bg.write	后台作业记录
 cmd.bg.see	`team ps`、`team monitor`
+cmd.reap.title	按 pid、经授权地清掉本项目的孤儿席位进程
+cmd.reap.what	列出本项目「tmux 窗口没了、进程还活着」的席位进程，并清掉你点名的那些。不带 `--yes` 时它只打印计划、一个信号都不发；带 `--yes` 时每个目标在发信号前都会**再验一遍**——仍是本项目的席位、仍没有活着的 pane、进程启动时刻与计划时一致——然后才发 SIGTERM，有界等待五秒，仍活着再发 SIGKILL。别的项目的进程既不会出现在点名里，也永远不会被发信号。
+cmd.reap.when	`team ps` 或 `team status` 的读数点到一条孤儿之后用它；或者机器内存吃紧、你想知道谁还占着时用它。
+cmd.reap.example	team reap --orphans
+cmd.reap.read	进程表、本项目的席位记录
+cmd.reap.write	每个信号一行审计，写在 `state/reap.log`
+cmd.reap.see	`team ps`、`team status`、`team bg`
+cmd.reap.arg.--orphans	计划：普查找到的每一条本项目孤儿。
+cmd.reap.arg.--yes	唯一授权；没有它就只是一份计划，一个信号都不发。
+cmd.reap.auth	`--yes` 是这条命令唯一的授权：配置键、环境变量、继承值都不能让一个信号默认发出。
+cmd.reap.undo	信号收不回来；计划、发信号前的复验与那一行审计就是它的护栏。
 cmd.digest.title	一屏说完什么在等 PM
 cmd.digest.what	把没处理的收件箱条目、等复验的报告、被阻塞的席位和任务状态收成一张短清单。它是 PM 的待办列表，不是状态报告。
 cmd.digest.when	PM 开局时用它，或者巡检把你叫醒、你想知道为什么时用它。

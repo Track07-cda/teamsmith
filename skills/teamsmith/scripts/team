@@ -18,6 +18,9 @@ set -euo pipefail
 # server 环境复制进每个 pane」）。例外只能由人在 argv 上给：`--teamsmith-allow-destructive`。
 
 TEAM_CLI="$(basename "$0")"
+# P276：`--yes` **在这次 argv 上出现过**（与继承的 TEAM_ASSUME_YES 分开）。
+# `team reap` 的授权必须是「人在命令行上显式给的」——配置键/环境变量/继承值都不能让一个信号默认发出。
+TEAM_YES_ARGV=0
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 . "$SELF_DIR/lib/common.sh"
@@ -32,7 +35,7 @@ while [ $# -gt 0 ]; do
     --root=*) _TEAM_ROOT_ARG="${1#*=}"; shift ;;
     --config) TEAM_CONFIG_FILE="${2:?--config 需要文件}"; shift 2 ;;
     --config=*) TEAM_CONFIG_FILE="${1#*=}"; shift ;;
-    --yes|-y) TEAM_ASSUME_YES=1; shift ;;
+    --yes|-y) TEAM_ASSUME_YES=1; TEAM_YES_ARGV=1; shift ;;
     -h|--help) _TEAM_HELP_REQ=1; shift ;;   # cli-help：`team <cmd> --help` 打印那个命令自己的页
     --) shift; ARGS+=("$@"); break ;;
     *) ARGS+=("$1"); shift ;;
@@ -94,6 +97,7 @@ case "$CMD" in
   status)     team_cmd_status "$@" ;;
   ps)         team_cmd_ps "$@" ;;
   bg)         team_cmd_bg "$@" ;;
+  reap)       team_cmd_reap "$@" ;;
   digest)     team_cmd_digest "$@" ;;
   inbox)      team_cmd_inbox "$@" ;;
   __inbox-write) team_cmd_inbox_write "$@" ;;   # 内部：notify 扩展的收件箱写入口（合并 + 明细；不进 help）

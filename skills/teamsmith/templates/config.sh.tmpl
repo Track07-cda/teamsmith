@@ -84,6 +84,12 @@ TEAM_MIN_AVAIL_MB=1024                # hard floor for MemAvailable (one machine
 TEAM_WARN_AVAIL_MB=4096               # below this MemAvailable: warn only (slowness is acceptable)
 TEAM_ZRAM_WARN_PCT=85                 # warn above this zram usage (zram pages live in RAM)
 TEAM_AGENT_MEM_MB=6144                # empirical memory per agent, used by `team ps` estimates
+# Orphan seat processes (P276 · change: orphan-visibility): `team ps`/`status`/`up` report the host-side
+# census of seat processes whose tmux window is gone. The census only reads /proc (no signal, no file
+# written); `team reap` is the separate, explicitly authorized cleanup entry.
+TEAM_ORPHAN_WARN_MB=1024              # at or above this many MB of orphan RSS the digest capacity line carries one hint (0 = never)
+TEAM_ORPHAN_SCAN=1                    # 1 = scan for orphan seat processes; 0 = no /proc read at all, one named skip line
+TEAM_ORPHAN_PROC_ROOT="/proc"         # fixture-only: the proc root the census reads (tests only)
 TEAM_NOTIFY_TMUX=1                    # 0 = write the inbox only, never knock on the PM window
 TEAM_NOTIFY_DEDUP_SEC=20              # dedup window for identical briefings (Pi may settle repeatedly)
 TEAM_INBOX_MAX_CHARS=150

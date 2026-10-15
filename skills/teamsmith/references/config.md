@@ -163,6 +163,30 @@ empty panel reported as success.
 | `TEAM_DEFER_TTL` | `300` | delivery guard: seconds a queued message may wait before it is moved to `state/outbox/held/` (holding never types anything; the payload is already in the recipient's inbox). A backstop, not the first symptom: an untrusted geometry holds immediately and three trusted-empty drains with no progress hold as `queue-stalled` |
 | `TEAM_OUTBOX_MAX` | `200` | delivery guard: maximum active queue entries; beyond it the oldest entry is escalated to `held/` |
 
+### Orphan seat processes (`seat-visibility`)
+
+A seat's liveness is judged **by its window**: a process whose tmux window is gone is invisible to `team status`
+and `team resume` while still holding memory (one host had seven such processes summing to ~4 GB). `team ps`,
+`team status` and `team up` therefore append a **host-side census** read from `/proc` — a process is a seat when
+its own environment carries teamsmith's identity (`TEAM_MAIN_ROOT`/`TEAM_ROOT`) and its command line names the
+project's configured agent or PM executable. A seat is an orphan exactly when it has **no live pane**, judged on
+the tmux server the process itself names; when that server cannot be queried the process is left **unjudged** and
+is never called an orphan. Only this project's orphans are named (each with a copy-pasteable `team reap <pid>
+--yes`); another project's orphans and identity-less processes are reported as a count and a **floor** (`≥`) only,
+because the reading is meant to be copied into the ledger. The census writes nothing and signals nothing.
+
+| Key | Default | Purpose |
+|---|---|---|
+| `TEAM_ORPHAN_WARN_MB` | `1024` | when the host-wide orphan total is at or above this many MB, `team digest`'s capacity line carries one hint (total, this project's share, the cleanup command). `0` = never hint (needs `--allow-danger`). It never changes the exit code |
+| `TEAM_ORPHAN_SCAN` | `1` | `0` = read no process's environment at all: the reading is one named skip line and `team reap --orphans` refuses (use an explicit pid) |
+| `TEAM_ORPHAN_PROC_ROOT` | `/proc` | fixture-only: the proc root the census reads, so the unreadable / vanished / empty-environment / missing-field edges can be built deterministically. Not writable from the console |
+
+Cleanup is never automatic: `team reap --orphans` prints the plan and signals nothing, and `team reap --orphans
+--yes` (or `team reap <pid> --yes`) re-verifies every target immediately before signalling it — still this
+project's seat, still without a live pane, and the same process start time the plan recorded — then sends
+`SIGTERM`, waits a bounded 5 s and only then `SIGKILL`. Every signal appends one line to `state/reap.log`.
+`--yes` is the only authorization: no configuration key, environment variable or inherited value turns it on.
+
 ### Deferred delivery (`delivery-guard`)
 
 Automatic senders never type into an input box that already holds a draft: the message is queued in

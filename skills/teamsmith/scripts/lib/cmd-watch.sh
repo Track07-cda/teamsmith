@@ -454,6 +454,8 @@ team_cmd_up() {
 
   team_info ""
   team_capacity_line
+  # P276：孤儿席位进程读数（启动决策**之后**的一行；只读、不发信号）
+  team_orphan_up_line
   team_dim "  旁观：tmux attach -t $TEAM_SESSION ｜ 待办：$TEAM_CLI digest"
   # P261 ③（design §8）：版本提示在启动决策**之后**，任何失败都不改 rc、不启动/停止任何东西。
   team_update_check_notice || true

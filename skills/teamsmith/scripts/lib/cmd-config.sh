@@ -131,6 +131,10 @@ TEAM_NOTIFY_LOG|apply|path|file,opt|plain|/tmp/teamsmith-notify.log|-|||delivery
 TEAM_DEFER_TTL|apply|seconds|0,|plain|300|0 = 投递队列入队即过期||60,300,900|delivery
 TEAM_OUTBOX_MAX|apply|int|0,|plain|200|0 = 队列不设上限（无界）||50,200,1000|delivery
 TEAM_PANEL_DETAIL_CAP|apply|bytes|1024,|plain|131072|-||65536,131072,262144|delivery
+# P276（change: orphan-visibility）：孤儿席位进程的阈值提示、普查开关与夹具接缝。
+TEAM_ORPHAN_WARN_MB|apply|mb|0,|plain|1024|0 = 没有阈值提示（digest 的容量行不再追加孤儿提示）||512,1024,2048|delivery
+TEAM_ORPHAN_SCAN|apply|bool||plain|1|0 = 完全不扫 /proc（读数只剩一行点名的跳过；team reap --orphans 也随之不可用）|||delivery
+TEAM_ORPHAN_PROC_ROOT|refuse|path|dir|plain|/proc|-|fixture-only: 只在测试套件里用（普查的 /proc 接缝：确定性地造「读不到 / 中途消失 / 空环境 / 缺字段」四种边界）||delivery
 # ---- 巡检与面板（restart：运行中的 pulse/面板拿着启动时的值）----
 TEAM_PULSE_INTERVAL|restart|seconds|60,|plain|900|低于 60 秒 = 巡检转成忙等||300,900,1800,3600|panel
 TEAM_MONITOR_REFRESH|restart|seconds|1,|plain|3|-||2,3,5|panel

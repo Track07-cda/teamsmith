@@ -151,6 +151,17 @@ cmd.bg.example	team bg list
 cmd.bg.read	the background job records under the state directory
 cmd.bg.write	the background job records
 cmd.bg.see	`team ps`, `team monitor`
+cmd.reap.title	remove this project's orphan seat processes, by pid and on purpose
+cmd.reap.what	Lists the seat processes of this project whose tmux window is gone while the process is still alive, and removes the ones you name. Without `--yes` it only prints the plan and signals nothing. With `--yes` every target is re-verified immediately before it is signalled — still a seat of this project, still without a live pane, and the same process start time the plan recorded — and only then does it send SIGTERM, wait a bounded five seconds and, if the target is still alive, SIGKILL. Another project's processes are never named and never signalled.
+cmd.reap.when	Use it after the reading in `team ps` or `team status` names an orphan, or when the machine is short of memory and you want to know what still holds it.
+cmd.reap.example	team reap --orphans
+cmd.reap.read	the process table and this project's seat records
+cmd.reap.write	one audit line per signal, in `state/reap.log`
+cmd.reap.see	`team ps`, `team status`, `team bg`
+cmd.reap.arg.--orphans	the plan: every orphan of this project the census finds.
+cmd.reap.arg.--yes	the only authorization to signal anything; without it the command is a plan that signals nothing.
+cmd.reap.auth	`--yes` on this command is the only authorization: no configuration key, environment variable or inherited value turns a signal on.
+cmd.reap.undo	the signal cannot be undone; the plan, the re-verification before each signal and the audit line are the guard.
 cmd.digest.title	one screen of what needs the PM
 cmd.digest.what	Collects the unhandled inbox items, the reports waiting for verification, the blocked seats and the task states into one short list. It is the PM's worklist rather than a status report.
 cmd.digest.when	Use it at the start of a PM turn, or when the patrol woke you and you want to know why.
