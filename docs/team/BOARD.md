@@ -443,6 +443,8 @@
 | P276 | Orphan-process visibility: apply (census, reap by pid, no pattern) | dev3 | - | - | wip |
 | P277 | Tick the four merged changes' checklists by evidence (archive prerequisite) | verify | - | - | done |
 | P278 | Help surface robustness: locale-independent width, entry list, reachability, placeholder red | verify | - | - | wip |
+| V40 | Migration recipe: independent verification (walk it from zero) | dev | - | - | todo |
+| P280 | Gate lock hygiene: a nested fixture run must not starve the team | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
