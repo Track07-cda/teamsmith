@@ -1624,3 +1624,9 @@ identity: category=docs model=cline/deepseek/deepseek-v4.1-flash:max selected_vi
 **根因**：`§26-m` 看的是**默认 tmux server 里的真 pane**，而门禁容器用 `--pid=host` 跑、与宿主共用那个 server（socket 在 `/tmp/tmux-<uid>/`）。我在那轮门禁运行期间执行了 `team pulse down` + `team pulse up`（重启真实面板），把它的 pane 杀掉重建 → 断言全部落空。
 
 **规矩**：**容器门禁在跑时不要重启真实面板**（`pulse down/up`）；要重启就等门禁跑完（或让 `§26-m` 也走私有 socket——那是它的夹具改进，不是本次范围）。这条与「跑长门禁前先看 `/tmp` 余量」「容器跑动期间不要往被测树写东西」同族：**门禁的现场是共享的，动现场就会把绿变成红**。
+
+### D178 · 归档顺序的核对方法（2026-10-15）
+
+在飞变更之间**改到同一个 capability** 是常态（本批有 `init-skill`、`key-replies`、`panel`、`pm-lifecycle` 四处）。同一标题的 MODIFIED 在归档时按**整块替换**（D/记忆 2130 的教训），所以「两条变更改同一个 requirement」时归档顺序会决定结果。核对方法：按 capability 汇总每条在飞变更 delta 里的 `### Requirement:` 标题，取跨变更的同名标题。
+
+**本批结果：零重叠**（`init-skill` 由 startup-self-heal 与 slash-team 各改不同条目；`panel` 由 panel-plain-language 与 panel-preview 各改不同条目；`key-replies` 由 panel-plain-language 与 pm-reply-discipline 各改不同条目；`pm-lifecycle` 由 startup-self-heal 与 tmux-identity-scope 各改不同条目）。因此本批归档**顺序无关**；今后新增变更时按同一方法先核一遍，再决定顺序。
