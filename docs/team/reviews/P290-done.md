@@ -1,0 +1,4 @@
+- 2026-10-15T23:24:06Z · `team close P290 --status done` · FORCED：PM 显式覆盖（理由：P290 的返修已并入 main（V46 第二轮 PASS 的候选 0d9b5127），复验记录 docs/team/reviews/V46.md 已在 main；本行先前已在同一批提交里置为 done，因此这里用显式覆盖完成关单（内容与证据都已落地））
+  -   - ① 复验记录 docs/team/reviews/P290.md：不存在
+  -   - ② 分支是否已并入 main：task/P290-claims-idempotence-flake（0d9b51277）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
