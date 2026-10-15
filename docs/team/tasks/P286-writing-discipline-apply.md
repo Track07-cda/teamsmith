@@ -34,3 +34,19 @@ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-f
 git diff --stat -- skills/teamsmith/ | grep -vE 'templates/(AGENTS\.section|pm-prompt)\.md\.tmpl|references/(protocol|workflows)\.md'   # 必须为空
 git diff --check && git status --short
 ```
+
+## 返修轮次 1（2026-10-15，独立复验 V47 判 FAIL：一条阻断，**我自己读过并确认**）
+
+复验记录 `docs/team/reviews/V47.md`（受检 `f74f20d9`）。
+
+**F1（必修）**：PM 提示词模板的规则段末尾多了一句
+
+> When in doubt, delete: a short answer that answers the question beats a defensive one.
+
+而规格 R1 的第二个场景明写：这段文字要陈述**支持判据**，且「**不得带有让人更自信、更强势的指示，也不得声称「更短」或「更有力」就是目标**」。这句话把「短」摆到胜出的一侧，**与规格直接冲突**（你同一批文字里已经正确写了「这不是让你更自信/更强势/更短的指令」，这句自相矛盾）。
+
+**改法**：把那句换成**支持判据**的表述，例如「一句没有点名任何可核查之物的话被删掉；留下的，是读者能核实的东西」——也就是把「删」的依据绑在**证据**上，而不是绑在**篇幅**上。三处表面都要核一遍有没有同类句子（worker 模板、PM 模板、协议 §11b），**只改真正违反 R1 场景 2 的**，别顺手改风格。
+
+**红侧**：① 把「短/更强势」这类词放回规则文本 → 必须红并点名（V47 的 R1 逐句核那一节就是判据，作者自测里要有等价的一条）；② 删掉支持判据那一句 → 必须红。
+
+**另外**：V47 的**两臂对照跑的是改前的文本**，所以改动落定后要**重跑两臂**（同一任务、同一条规则的新版文本、去掉标识、随机顺序）并把盲包重新生成——人读那一步等新包。
