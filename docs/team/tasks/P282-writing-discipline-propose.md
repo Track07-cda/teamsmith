@@ -4,7 +4,7 @@ task: P282
 agent: -
 phase: propose
 category: analysis
-change: -
+change: writing-discipline
 anchor: none (infra) — 提示词与评审口径；不改产品行为
 deltas: -
 branch: task/P282-writing-discipline-propose
