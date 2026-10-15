@@ -1,14 +1,14 @@
 # P272 · 帮助面的三条收尾（V38 的观察 O1 / O2 / O6）
 
 task: P272
-agent: dev
-phase: apply
+agent: verify
+phase: propose
 category: code
 change: help-robustness
 specs: help-surface
 deltas: help-surface
-branch: task/P272-help-robustness
-deps: P260（已并入 main）、**cli-help 已归档**（新变更要修改的 `help-surface` 能力得先落到规格库里；本任务排在它归档之后）；独立复验 V38 的观察表（`docs/team/reviews/V38.md` §0）
+branch: task/P272-help-robustness-propose
+deps: P260（已并入 main）、**cli-help 已归档**（`openspec/changes/archive/2026-10-15-cli-help/` 已在）（新变更要修改的 `help-surface` 能力得先落到规格库里；本任务排在它归档之后）；独立复验 V38 的观察表（`docs/team/reviews/V38.md` §0）
 
 ## 为什么单开一个变更（PM 2026-10-15）
 
@@ -45,3 +45,7 @@ git diff --check && git status --short
 
 - **G4（缺断言）**：`cli-help` 的 1.4 要求「未知占位符判红」，但**没有任何断言**盯着它（渲染器确实只解析已声明的占位符，行为在，红侧不在）。本任务补：在帮助面夹具里加一条「模板/清单里出现未声明的占位符 → 渲染器判红并点名」，配「破坏 → 红 → 还原 → 绿」。
 - **G3（缺 rc 记录）**：`cli-help` 8.1 点名的 `spec-refs.sh --check` 在作者报告与复验记录里都**没有 rc**。本任务交付时把它连同 `openspec validate --all --strict` 一起跑一遍并贴 rc（这是本任务的验收行，不是补历史记录）。
+
+## 本阶段只写方案（PM 2026-10-15 追加）
+
+`cli-help` 已归档，`help-surface` 现在在 `openspec/specs/help-surface/spec.md`。本任务**先写方案**：产出 `openspec/changes/help-robustness/{proposal.md,design.md,tasks.md}` + 对 `help-surface` 的 MODIFIED delta（三条观察 + G3/G4 两条）。**PM 复核方案通过后再派 apply**（协议硬规矩：提案未复核不得进实现）。方案里要写清：三条观察各自的行为合同与红侧、以及「措辞/排版不设门禁断言」这条（D170）在本次不变量里怎么体现。
