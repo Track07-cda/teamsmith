@@ -1568,3 +1568,13 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 ```
 
 **验证配方**（PM 可跑，读会话记录不读凭据文件）：`pi --print --model 'cline-pass/deepseek-v4.1-flash:max' '…'` 之后，看最新会话 JSONL 里的 `{"type":"thinking_level_change",…,"thinkingLevel":"max"}`——覆盖生效前它记录的是被 clamp 的档位。本项目配置**已经**是 `:max`（四个类别），所以覆盖一生效即为真；PM 无需再改本项目配置。
+
+### D175 执行与更正：覆盖已写入；但**我先前给的验证配方不成立**（2026-10-15）
+
+**已执行**（用户「请你直接改」）：在 `~/.pi/agent/models.json` 的 `providers.clinepass` 里**增补** `modelOverrides["cline-pass/deepseek-v4.1-flash"].thinkingLevelMap`（`off:none / low:low / high:high / max:"max"`，`minimal/medium/xhigh:null`）。做法是**内容盲改**：先字节备份（`models.json.bak-pm-20261015-022357`，6131 字节）→ 脚本定点插入（**不重新格式化**）→ 写入前用 `json.loads` 验证并核对原 `apiKey` 未被改动（**值从不打印**）→ 写入后 `diff --new-line-format` 只打印**新增的 5 行**（229→234 行、6131→6356 字节，其余字节未动）→ `pi --list-models cline-pass` 仍正常列出模型。
+
+**更正（重要）**：我先前告诉用户「跑一次 `:max`，会话记录里的 `thinkingLevel` 会显示被 clamp 的档位，可作为覆盖是否生效的证据」——**这是错的**。负对照证明：`cline-pass/deepseek-v4-pro`（**没有**覆盖、映射里也**没有** max）同样传 `:max`，会话 JSONL 里记录的仍是 `"thinkingLevel":"max"`。也就是说**会话记录存的是「请求的档位」，不是「实际生效的档位」**，这条配方不具鉴别力。我在这条上「先给配方、后做对照」，属于顺序错误，记下。
+
+**因此当前能诚实声称的边界**：覆盖**已就位**且 Pi 接受该配置；Pi 文档写明 `modelOverrides` 会合并到扩展提供的模型元数据，而「档位 → 上游取值」的换算使用该映射——所以按机制 `:max` 应当以 `max` 发往上游，**但我没有观测到出网请求体**（pi 无 payload 日志开关，扩展也没有 payload 钩子），所以这仍是**机制推断**而非观测。要硬证据只有两条：抓包/本地代理记录请求体，或请插件作者确认。
+
+**附带发现**：该插件对**所有** clinepass 模型都省略了 `max`（v4-pro / glm-5.3 / kimi-k3 / mimo / minimax / qwen3.7 / qwen3.8 等 11 个），上游则支持 low/high/max。用户若在别的模型上也要 max，同样一行覆盖即可（PM 可代加）。给插件提 issue 的文本也已备好。
