@@ -426,11 +426,12 @@
 | V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | todo |
 | P266 | Panel plain language: apply | dev3 | - | - | wip |
-| V35 | startup self-heal: independent verification | verify | - | - | blocked |
+| V35 | startup self-heal: independent verification | verify | - | - | wip |
 | V36 | panel plain language: independent verification | dev2 | - | - | blocked |
 | P267 | Reply discipline into the skill: apply | dev2 | - | - | done |
 | V37 | Reply discipline: independent verification | verify | - | - | done |
 | V38 | cli-help surface: independent verification | dev2 | - | - | wip |
+| P268 | Do not leak this project's identity into tmux's global environment | dev | - | - | todo |
 
 ## 当前里程碑
 
