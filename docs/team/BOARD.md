@@ -449,7 +449,7 @@
 | P282 | Writing discipline: answer the reader first, hedge only with evidence | dev | - | - | todo |
 | V41 | Help surface robustness: independent verification | - | - | - | todo |
 | V42 | Orphan visibility: independent verification (fake orphan + four false-positive families) | - | - | - | todo |
-| V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | dev3 | - | - | wip |
+| V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | dev3 | - | - | blocked |
 
 ## 当前里程碑
 
