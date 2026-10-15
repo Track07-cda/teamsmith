@@ -290,3 +290,14 @@ P228 换席位模型：kimi-coding/k3 撞 5 小时额度上限（403），原会
 
 ### 2026-10-10T08:19:00Z · from: pm · re: P228
 V19 第五轮结论 FAIL：F5 参数角色修复通过（冻结探针 1/20→21/0、你的 206/0、复验者 58/0、18 臂 111/0、13 切片全 0、源树稳定），但抓到两条真缺陷：F6（team_task_map_violation 把 analysis/verify 硬编码成必备类别，与 memory-and-deps「examples, not mandatory」和 design「映射为空才非法」直接冲突，项目自定义词汇整映射写不进也读不了）；OBS1（只绑部分身份占位符的模板，argv 未交付 provider/SID，派单却发布完整身份——违反 tasks 3.5 的 no falsely published identity）。任务书已按这两条重写，按它修。F1–F5 不许回退。
+
+## PM · 2026-10-15 19:5x · P270 的 e2e 卡点：根因是夹具里的 `env -i`
+
+**我复现了，根因不在你的扩展、也不在产品**：
+
+1. `env -i PATH="$PATH" HOME=$T/agentdir PI_CODING_AGENT_DIR=… pi --list-models` → 立即失败：`$HOME/.local/bin/node: 5: exec: /usr/bin/distrobox: not found`。本机是 distrobox 容器（`container=podman`、`DISTROBOX_PATH=/usr/bin/distrobox`），而 `~/.local/bin/node` 这个包装器在那个分支上需要它 → **真 pi 根本没起来**，于是 `realcli-out.jsonl` 是空的、三条断言必然拿不到输出。你夹具第 237 行就是这种写法。
+2. 对照：**只清身份变量**（`env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION pi --list-models`）正常列出模型。
+3. 建议改法：把 `env -i …` 换成「继承调用者环境 + 只 unset 身份/策略变量」（`TEAM_ROOT`/`TEAM_MAIN_ROOT`/`TEAM_PROJECT`/`TEAM_SESSION`/`TEAM_CONFIG_FILE`/`TEAM_ASSUME_YES`/`TEAM_UPGRADE_CONFIRMED`/`TEAM_ALLOW_FOREIGN_SESSION`），或把 `DISTROBOX_PATH` 显式加进白名单。隔离目标照样达到。
+4. `/team` 斜杠命令是**本地处理**的（不调模型），所以隔离的 `agentdir` 空着也能跑通——**先别去造 models.json**，把那两行环境换掉再看那三条断言。
+
+**时间盒（我的决定，避免继续打转）**：拿到这条之后 **45 分钟内**三条断言能绿就正常交付；若不能（真 pi 在隔离环境里还有别的硬依赖），**如实交付**——三条改成**具名可见的跳过**并在夹具里写明确切原因，报告单列「本轮没验到的产品行为」一节，我据此另立一条任务把这段做成可复现的。**不要为了绿放宽断言**；也不要再重复跑同一组合。
