@@ -145,7 +145,8 @@ model): a project that still carries them is refused by `team dispatch`/`team up
 `team bootstrap` — before any install, ledger, worktree or pulse work. Two routes apply the same transaction: the
 **startup transaction** (the next `team up` derives the pairs from the old keys, prints every pair before → after
 with the backup path and the restore command, writes through the checked writer and re-enters itself) or the
-**explicit transaction**:
+**explicit transaction**. The full sequence — upgrading the tool itself, backing up the configuration and rolling
+back — is §6.
 
 ```bash
 team config upgrade-models --task-models 'routine=<model> analysis=<model> verify=<model>' --pm-model '<model>'        # preview: prints the diff, writes nothing
@@ -158,7 +159,8 @@ Shapes it cannot locate unambiguously (export/multiline/variable expansion/dupli
 file and line plus the manual-normalization route. `team up --print` writes nothing (it prints the same
 prediction, with the backup path it would use) and `team up --no-migrate` refuses instead of writing, naming the
 manual command. `team init --force`, `bootstrap` and inference are **not** migration routes; a fresh project
-passes `--task-models`/`--pm-model` to `init`/`bootstrap` instead.
+passes `--task-models`/`--pm-model` to `init`/`bootstrap` instead. For the step-by-step upgrade of an existing
+project, including the npm install, the configuration backup and the rollback, see §6.
 
 **How the shape is detected.** Detection is a version table with **one row per migration** — the shape it matches
 (`from`), the shape it produces (`to`), the transform it applies and the tool version that introduced it — applied
@@ -185,56 +187,181 @@ promise is made for unknown consumers.
 
 ## 6. Upgrade recipe
 
-Replace `<skill checkout>` with the git checkout the installed skill points at (`team paths` prints it).
+This moves a project set up with teamsmith 0.1.x onto 0.2.0 or later. §1 still holds — `docs/team/**`,
+`.pi/team/state/**` and your own files keep their format, so there is no data conversion. What does move is the
+**tool installation** (step 1), this project's **model policy** (step 2), the PM's **launch identity** (step 3),
+the **sessions** (step 4), and the way you **prove** (step 5) and **roll back** (step 6) the result.
+
+Run every command from the project's main checkout, and replace `<v>` with the version you are moving to (for
+example `0.2.0`).
+
+### Step 1 — upgrade the tool itself (npm, not a checkout)
+
+Since 0.2.0 the installed skill is a copy of the npm package `teamsmith`: `~/.agents/skills/teamsmith` is a
+symlink into `$(npm root -g)/teamsmith/skills/teamsmith`. There is no checkout to `git pull`; the upgrade is the
+package plus the installer that refreshes the shared links:
 
 ```bash
-# 1) get the new skill (a copy install updates by re-running ./install.sh instead)
-git -C <skill checkout> pull --ff-only         # refuses when the checkout has diverged (local commits) — deliberate
-
-# 2) is this session still the old version?
-team version --check
-#    expect two version numbers (loaded vs disk) and a hint to run /reload;
-#    identical versions print "consistent" instead. Exit code stays 0 either way.
-
-# 3) environment self-check — fix every ✗ before going on
-team doctor
-
-# 4) re-render this project's contracts (idempotent: config is kept, the AGENTS.md
-#    section is refreshed in place, and a legacy marker is rewritten to the new one).
-#    A config still carrying the retired model keys is REFUSED here — migrate first with
-#    the startup transaction (`team up`) or explicitly:
-#    team config upgrade-models --task-models '…' --pm-model '…' [--yes]
-team init
-
-# 5) the spec layer, only when openspec/ is missing
-openspec init --tools none
-
-# 6) put the spec gate into TEAM_GATES in .pi/team/config.sh
-#    TEAM_GATES="openspec validate --all --strict && <old gates>"
-
-# 7) rebuild the pulse window and look at it (renamed from `watchdog` in v1.36.0 — §2b:
-#    the old commands/window/variables still work; a running `watchdog` window is adopted
-#    and `team pulse restart` swaps it for a `pulse` one)
-team pulse up
-team pulse status
-
-# 8) prove the tooling end to end in a throwaway repository (never touches this project)
-bash skills/teamsmith/tests/smoke.sh                        # full suite (tens of seconds idle, minutes on a loaded box)
-TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh      # logic-only subset; each skipped section prints SKIP
+npm i -g teamsmith@<v> --registry https://registry.npmjs.org
+bash "$(npm root -g)/teamsmith/install.sh"     # idempotent: refresh the shared skill links
+team version                                   # the version the CLI reports now
+readlink -f ~/.agents/skills/teamsmith         # must resolve under $(npm root -g)/teamsmith/skills/teamsmith
 ```
 
-Expected output, in order:
+`install.sh` is safe to re-run and installs the canonical directories only. If `readlink -f` still points at an
+old checkout, this machine has a second skill source — fix that link (or re-run `install.sh` into the target you
+want) before going on, or later reads will mix two versions.
 
-| Step | What you should see |
+### Step 2 — per project: back up the configuration, then let the first `team up` migrate it
+
+**Back up the configuration first.** The migration keeps its own backup, but this one is yours:
+
+```bash
+cp .pi/team/config.sh ".pi/team/config.sh.pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+Look before you write:
+
+```bash
+team up --print
+```
+
+On a 0.1.x-shaped configuration this writes nothing and prints, in order: the migration row it matched (which
+migration, from which shape to which), a **per-key before → after table**, the backup path it would use, the `cp`
+command that restores it, and why the keys move. `team up --no-migrate` is the same promise from the other side:
+it refuses, writes nothing, and prints the manual transaction in whichever of the two command forms below fits
+your configuration — the derived command when the derivation is unambiguous, the placeholder route when it is not.
+
+Then run the real thing:
+
+```bash
+team up
+```
+
+`team up` now begins with a **startup transaction**. It prints the same before → after table, writes a backup
+under `.pi/team/state/config-backups/config.sh.pre-<shape>-<timestamp>`, rewrites only the model keys through the
+checked writer (temp file → `bash -n` → fingerprint compare-and-swap → atomic rename → one audit line in
+`.pi/team/state/config.log`), prints the restore command, and re-enters itself to read the new configuration and
+start the PM.
+
+In 0.1.x terms the transaction does this:
+
+| 0.1.x key | becomes |
 |---|---|
-| `version --check` | the disk version, the `SKILL.md` version and the loaded version, then either a "consistent" line or the "this session is old" line with the `/reload` hint |
-| `/reload` in Pi | the skill list is rebuilt; the extension sends a follow-up that makes the PM read `SKILL.md` again (text already in the conversation history does **not** change by itself) |
-| `doctor` | every line prefixed with a check mark; each `✗` line carries its own fix (`pi install …`, `openspec init --tools none`, `TEAM_*_BIN`, …); the summary line counts failures and warnings |
-| `init` | a write/refresh line per generated file — the `AGENTS.md` protocol section appears exactly once (check with `grep -c '<!-- teamsmith:begin -->' AGENTS.md`) |
-| `smoke` | an all-green summary (or the failure count), and in fast mode a line listing the skipped process sections |
+| `TEAM_AGENT_MODELS='dev=<model> verify=<model>'` | one `TEAM_TASK_MODELS` pair per seat, with the seat name as the category |
+| `TEAM_DEFAULT_MODEL='<model>'` | a `default=<model>` pair in `TEAM_TASK_MODELS` |
+| `TEAM_PM_MODEL='<model>'` | the same value, re-written through the checked writer so the write is audited |
+| — | `TEAM_CONFIG_VERSION='2'`, the shape number every later migration is measured against |
 
-Do the upgrade **before** dispatching new work, and note the version in `DECISIONS.md`: a worker dispatched after the
-upgrade gets the new prompt template, one dispatched before does not.
+If it **refuses**, it names the obstacle and prints the manual transaction in one of **two command forms**. Which
+one you get is a fact about *your* configuration, not a style: the tool never prints a command it cannot support.
+
+- **A shape it can derive from** — every retired key is a top-level single-line literal, every value is a valid
+  `provider/model`, and no two seat names normalize onto one category. The command is **derived from your own
+  configuration**, with the map and the PM model already filled in
+  (`--task-models 'dev=vendor/light verify=vendor/strong:high default=vendor/base' --pm-model 'vendor/pm:high'`).
+  `team up --no-migrate` on such a configuration prints this form.
+- **A shape the derivation stops on** — a value built by variable expansion or written as a multi-line literal, a
+  seat name that normalizes onto the fallback `default` (the fallback name collides), or a value that is not a
+  valid model. Here it prints the **placeholder route** instead: the command arrives with an *unfilled*
+  `--task-models` and `--pm-model`, each holding a bracketed placeholder written in the CLI's own language, and
+  *you* write the map. The refusal line above it names what stopped the derivation (for that first shape, the
+  file and line that is not a plain literal). A derivation that resolved some pairs before stopping still prints
+  them, with the bracketed placeholder standing in for the offending one — a partly filled map therefore means
+  "fix that one pair", not "start from scratch".
+
+The same conditional holds wherever a refusal offers the manual transaction (a refused `team config set` or
+`team dispatch` prints these two forms under its two routes). The two are distinguishable at a glance: in a
+**derived** command every `--task-models` value was read from *your* file, while a **placeholder-route** command
+leaves a bracketed placeholder somewhere among its arguments.
+
+The manual route is the same transaction, run by hand:
+
+```bash
+team config upgrade-models --task-models '<the map it printed>' --pm-model '<the model it printed>' --dry-run
+team config upgrade-models --task-models '…' --pm-model '…' --yes
+```
+
+`--dry-run` prints the diff and writes nothing; `--yes` is the one write. `team init --force`, `team bootstrap`
+and inference are **not** migration routes (§5b). Confirm the new shape before going on:
+
+```bash
+team config list        # exit code 0, and no `migration_required` line at the end
+```
+
+### Step 3 — the PM launch identity (`state/pm-launch.env`)
+
+`.pi/team/state/pm-launch.env` is a flat record of the identity the PM was last started with: the project and
+window, the resolved model, the resume key (which Pi session it continues), the launch mode (`fresh` or
+`continued`) and a nonce. It is what lets a later `team up` prove it is resuming the *same* conversation on the
+*same* model, and it is deliberately not project data (§1).
+
+A project upgraded from 0.1.x has no such record — the file did not exist then. The first `team up` after the
+migration handles that for you: a missing record is read as "no claim about the past", this launch is
+**registered**, and the run prints one line saying so. That line carries `model=<model>`, `resume_key=<key>` and
+`mode=continued`, and reminds you that changing the PM model requires `--fresh-pm`.
+
+Two exits exist, and they differ in what they keep:
+
+- **Let it register (the default).** The PM continues the conversation `team_pm_continuity` resolves — `pi -c`, the
+  previous session for this directory, unless `TEAM_PM_SESSION_ID` or `TEAM_PM_RESUME_ARGS` say otherwise — and the
+  record is written from the successful launch.
+- **`team up --fresh-pm`.** This one launch starts a **new** conversation: the resume arguments are dropped, the
+  old Pi session file is left untouched in the history, and the record is written with `mode=fresh`. Disk is the
+  handover — `docs/team/**` and `team digest` carry the work.
+
+When a record **exists and disagrees** with what the configuration resolves now, `team up` refuses instead of
+guessing. The refusal names `PM launch identity changed` plus the field that moved (`model`, `resume_key` or the
+window), and prints two exits:
+
+- **`team up --fresh-pm`** — start a new conversation. The Pi history is not touched.
+- **`team up --adopt-pm-identity --yes`** — declare that this continued run really is the recorded identity: it
+  writes the record plus one audit line, and is refused while the PM is running.
+
+**Why a changed model cannot continue the old conversation.** One conversation is pinned to one model: Pi's
+session history is bound to the provider/model that produced it, so resuming that session under a different model
+is not the same conversation. `--fresh-pm` is therefore the only honest way to change the PM's model;
+`--adopt-pm-identity --yes` exists for the case where the *record* is stale but the resolved identity really is
+what you are resuming. `team up --print` predicts all of this without writing: it prints the registration line it
+would write, or the two exits when it would refuse.
+
+### Step 4 — sessions: bring the PM and the seats back up
+
+```bash
+team up                 # the PM window in the project's own tmux session
+team up --agents        # also resume the seats that have unfinished tasks
+team resume --dry-run   # what --agents would do, without doing it
+```
+
+Text already read into a running session does not change under it: restart each project's own agent sessions (or
+`/reload` the PM in Pi) so they read the new `SKILL.md` and `references/**`. `team up` starts the PM and nothing
+else; the patrol window is created by `team pulse up`, and `team pulse status` shows its state.
+
+### Step 5 — prove it
+
+```bash
+team doctor                                  # fix every ✗ before going on; each line carries its own fix
+team config list                             # the new keys, exit code 0
+team dispatch --print <agent> <ID> <brief>   # the brief's `category:` line resolves to the mapped model
+```
+
+The `dispatch --print` line is the one that proves the policy is live: it must print
+`category=<the brief's category> model=<the mapped model>`. A brief with no `category:` line is refused.
+
+### Step 6 — roll back
+
+```bash
+cp "<the backup path the migration printed>" .pi/team/config.sh    # the configuration, byte for byte
+```
+
+Restoring the backup puts the old shape back (and `team config list` says `migration_required` again), which is
+what you want if the new policy is wrong. `--fresh-pm` needs no rollback: it never touched the Pi session
+history, so the old conversation is still there to `team up` into after you restore the configuration. Nothing
+else moved — `docs/team/**` and the rest of `.pi/team/state/**` were never rewritten. §7 covers pinning an older
+tool version, which is the other half of a rollback.
+
+Do the upgrade **before** dispatching new work, and note the version in `DECISIONS.md`: a worker dispatched after
+the upgrade gets the new prompt template, one dispatched before does not.
 
 ## 7. Rolling back
 

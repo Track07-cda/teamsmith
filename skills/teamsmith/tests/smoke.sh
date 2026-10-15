@@ -20624,6 +20624,35 @@ else
   bad "62 缺 tests/key-replies-pty.sh（P234 的真 pty 夹具）"
 fi
 
+# ---------------------------------------------------------------- 64. 升级配方（P255 · upgrade-recipe）
+# references/migration.md §6 是「0.1.x 项目怎么升到 0.2.0」的唯一承诺面，而它当初写的第一条
+# （`git pull` 一个 checkout）就与 0.2.0 的 npm 来源不符 —— 文档承诺的东西必须有人守。
+# 夹具 tests/upgrade-recipe.sh 做三件事：§6 每一步的文档面覆盖（删一步就红）、每个承诺的工具面
+# 兑现（文档里的字面 + 工具真的打印的串），以及在一个 0.1.x 形状的临时项目里真走一遍配方（真 CLI、
+# 私有 tmux + 假 PM，绝不碰共享 server）。FAST 档只跑纯文本的两组（doc/selftest，不到 1s），
+# 真 up 的走查（walk/identity/rollback）在完整门禁里跑。
+section "64 · 升级配方：§6 每一步都可证伪（P255 · upgrade-recipe）"
+P255_SUITE="${P255_SUITE:-$SKILL_DIR/tests/upgrade-recipe.sh}"
+if [ ! -f "$P255_SUITE" ]; then
+  bad "64 缺 tests/upgrade-recipe.sh（references/migration.md §6 的前门夹具）"
+else
+  if [ "$FAST" = "1" ]; then
+    P255_GROUPS='doc,selftest'; P255_TIER=FAST
+    fast_skip "64·真 up 走查（walk/identity/rollback）" "真 tmux + 假 PM 的启动事务走查要几秒到几分钟（机器忙时放大）；FAST 只跑 doc/selftest，完整门禁里跑"
+  else
+    live_mark; P255_GROUPS='doc,walk,identity,rollback,selftest'; P255_TIER=全量
+  fi
+  P255_RC=0
+  bash "$P255_SUITE" --select "$P255_GROUPS" >"$TMP/p255-recipe-$P255_TIER.log" 2>&1 || P255_RC=$?
+  P255_SUM="$(grep -a '^RESULT ' "$TMP/p255-recipe-$P255_TIER.log" | tail -1)"
+  if [ "$P255_RC" -eq 0 ]; then
+    ok "64 升级配方（$P255_TIER · 组 $P255_GROUPS）全绿（$P255_SUM）"
+  else
+    bad "64 升级配方有失败（rc=$P255_RC；$P255_SUM）"
+    grep -a '^FAIL ' "$TMP/p255-recipe-$P255_TIER.log" | head -12 | sed 's/^/      /'
+  fi
+fi
+
 section "14d · P70 本套自述对账（段落账目 + 无误判）"
 P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
 P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+ · 预算 [0-9]+s' "$SG_LOG" 2>/dev/null || true)"
