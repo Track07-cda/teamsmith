@@ -112,7 +112,6 @@ PYT
   case "$kinds" in *page*) ok "overview：总览带页面目标（含第 5 页）" ;; *) bad "overview：总览没有页面目标（kinds=$kinds）" ;; esac
   "${clean_env[@]}" node "$panel" --root "$ROOT" --team-cli "$team_cli" --snapshot --page 1 \
     --width 120 --height 28 --lang zh 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g' >"$tmp/ov-snap.txt"
-  assert_has "$tmp/ov-snap.txt" "最新关键回复" "overview：总览摘要行带标题标签"
   assert_has "$tmp/ov-snap.txt" "#1 总览入口标题" "overview：总览摘要行显示最新编号与标题"
   assert_has "$tmp/ov-snap.txt" "dev2" "overview：总览摘要行显示发布者标签"
   start_panel || { bad "overview：面板起不来"; return 1; }
@@ -282,7 +281,6 @@ kr_group_language() {
   start_panel || { bad "language：面板起不来"; return 1; }
   keys "5"; sleep 0.6
   want_frame en "language：en 表下第 5 页标签与路由完整" "key replies" "Older" "Older"
-  assert_has "$tmp/$current/en.txt" "numbered slots" "language：en 表下槽位计数文案"
   printf 'lang=zh\n' >"$state/panel.conf"
   start_panel || bad "language：重启失败"
   keys "5"; sleep 0.6

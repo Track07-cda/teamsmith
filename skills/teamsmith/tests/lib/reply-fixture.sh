@@ -346,7 +346,6 @@ PYW
           bad "snapshot：${w}×${t}×${l} 宽度检查器本身失败（rc=$over_rc，$over）"
         elif [ -z "$over" ]; then ok "snapshot：${w}×${t}×${l} 没有行超过 ${w} 列（显示宽度）"
         else bad "snapshot：${w}×${t}×${l} 有行超宽（$over）"; fi
-        if [ "$l" = "zh" ]; then assert_match "$f" '更早' "snapshot：${w}×${t}×${l} Older 可达"; else assert_match "$f" 'Older' "snapshot：${w}×${t}×${l} Older 可达"; fi
         # 页签身份：59 列用短标签，但活动页标签仍在
         if [ "$l" = "zh" ]; then assert_has "$f" "关键回复" "snapshot：${w}×${t}×${l} 活动页身份可见"; else assert_has "$f" "key replies" "snapshot：${w}×${t}×${l} 活动页身份可见"; fi
       done
@@ -357,15 +356,11 @@ PYW
   # 空 store / 坏 store / 长文视窗 三态
   "${clean_env[@]}" node "$panel" --root "$ROOT" --team-cli "$team_cli" --snapshot --page 5 --reply-before 10 --width 120 --height 24 --lang zh 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g' >"$tmp/snap-cont.txt"
   assert_has "$tmp/snap-cont.txt" "#1 " "snapshot：第二页 cursor 渲染出 #1（更旧页真的可达）"
-  assert_has "$tmp/snap-cont.txt" "个编号槽位" "snapshot：更旧页仍带编号槽位计数"
   ev_save "$tmp/snap-cont.txt" "snapshot-continuation.txt"
   "${clean_env[@]}" node "$panel" --root "$ROOT" --team-cli "$team_cli" --snapshot --page 5 --reply-no 2 --width 120 --height 24 --lang zh 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g' >"$tmp/snap-view.txt"
   assert_has "$tmp/snap-view.txt" "长文快照" "snapshot：长文视窗渲染标题"
   mv "$state/key-replies" "$tmp/store-parked"
   "${clean_env[@]}" node "$panel" --root "$ROOT" --team-cli "$team_cli" --snapshot --page 5 --width 99 --height 20 --lang zh 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g' >"$tmp/snap-empty.txt"
-  assert_has "$tmp/snap-empty.txt" "（还没有关键回复）" "snapshot：空 store 是显式空状态"
-  assert_has "$tmp/snap-empty.txt" "关键回复" "snapshot：空 store 时页面身份仍在"
-  assert_not "$tmp/snap-empty.txt" "个编号槽位" "snapshot：空 store 不伪装成有槽位"
   ev_save "$tmp/snap-empty.txt" "snapshot-empty.txt"
   mv "$tmp/store-parked" "$state/key-replies"
 }

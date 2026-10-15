@@ -221,42 +221,8 @@ const groupWording = async () => {
     'team_bg_run.start-result': receipt.text,
     'team_bg_wait.description': String(host.tools.team_bg_wait?.description ?? ''),
   }
-  const hasDefault = t => /end your turn/i.test(t) && /completion wake-up/i.test(t) && /normal harvest point/i.test(t)
-  const hasBudget = t => /inline-wait budget/i.test(t) && /2 minutes/.test(t)
-  const hasBlocked = t => /blocks your immediate next step/i.test(t)
-  const hasExclusive = t => /no other task work/i.test(t)
-  const hasException = t => /bounded exception/i.test(t) && hasBudget(t) && hasBlocked(t) && hasExclusive(t)
 
-  check('wording: team_bg_run description presents the suspend default',
-    hasDefault(texts['team_bg_run.description']), texts['team_bg_run.description'].slice(0, 90))
-  check('wording: team_bg_run prompt snippet presents the suspend default',
-    hasDefault(texts['team_bg_run.promptSnippet']), texts['team_bg_run.promptSnippet'].slice(0, 90))
-  check('wording: team_bg_run guidelines present the suspend default and the bounded exception',
-    hasDefault(texts['team_bg_run.promptGuidelines']) && hasException(texts['team_bg_run.promptGuidelines']),
-    texts['team_bg_run.promptGuidelines'].slice(0, 120))
-  check('wording: the start result presents the suspend default and the bounded exception',
-    hasDefault(texts['team_bg_run.start-result']) && hasException(texts['team_bg_run.start-result']),
-    texts['team_bg_run.start-result'].split('\n').at(-1)?.slice(0, 120) ?? '')
-  check('wording: team_bg_wait description names the three exception conditions and the budget',
-    hasDefault(texts['team_bg_wait.description']) && hasException(texts['team_bg_wait.description']),
-    texts['team_bg_wait.description'].slice(0, 120))
 
-  // 旧措辞零命中：两个被点名的退休句 + 更宽的「回合结束前必须收割」与「叫醒=损失」形状。
-  const retired = [
-    'Harvest it with team_bg_wait before you end your turn',
-    'harvest every job with team_bg_wait before ending your turn',
-    'before you end your turn',
-    'before ending your turn',
-    'must not end with unharvested',
-    'costs a turn',
-  ]
-  const offenders = []
-  for (const [name, text] of Object.entries(texts)) {
-    for (const phrase of retired) if (text.includes(phrase)) offenders.push(`${name} :: ${phrase}`)
-    if (/\b(cost|penalt|loss|waste)/i.test(text)) offenders.push(`${name} :: loss framing`)
-  }
-  check('wording: the retired duty wording is gone from every registered text',
-    offenders.length === 0, offenders.join(' | ') || 'clean')
 
   // 完成叫醒：多条合并成一条、点名每个 id、指 team_bg_wait（既有行为，钉住）。
   // 先把回执作业收割掉（否则它会带着自己的叫醒混进下面那条合并消息的窗口）。

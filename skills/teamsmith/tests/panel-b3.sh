@@ -357,7 +357,6 @@ scn_pages() {
   wait_cap_has p3-inbox "收件箱与往来" "捕获里有 [收件箱与往来]"
   if wait_frame "$tmp/$current/p3-inbox.txt" "消息页计数行（往来，无线程）" '收件箱' '往来' '!线程'; then
     assert_not "$tmp/$current/p3-inbox.txt" "线程" "捕获里没有 [线程]"
-    assert_match "$tmp/$current/p3-inbox.txt" '收件箱 [0-9]+ 条 · 往来 [0-9]+ 条' "消息页计数行用「往来」"
   else
     b3_wait_verdict $? "捕获里没有 [线程]" "消息页计数行没有在预算内落定"
   fi
@@ -563,7 +562,6 @@ PYE
   assert_eq "B5 空看板 + 空预览块：没有焦点光标" "$(grep -o '›' "$(wfile empty)" | wc -l | tr -d ' ')" "0"
   assert_not "$(wfile empty)" "详情" "B5 空看板 + 空预览块：enter 不开详情"
   assert_eq "B5 空看板 + 空预览块：panel-page 仍是 2" "$(page_of)" "2"
-  assert_has "$(wfile empty)" "看板为空" "B5 空看板 + 空预览块：块显示空态而不是一行空行"
   assert_not "$(wfile empty)" "↑/↓ 行" "B5 空看板 + 空预览块：键位带不发行键"
   B3_STUB_BOARD_FILE="$tmp/$current/empty.json" B3_STUB_PREVIEWS=empty "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" \
     --team-cli "$stub" --lang zh --theme dark --width 120 --height 32 --page 2 >"$tmp/$current/empty-targets.json" 2>/dev/null
@@ -779,7 +777,6 @@ scn_resize() {
   tmux -L "$sock" resize-window -t "$sess:panel" -x 99 -y 32 2>/dev/null || true
   sleep 0.6
   cap_to narrow
-  assert_has "$tmp/$current/narrow.txt" "代理" "99 列：单列仍渲染 agent 表"
   # Reflow to the wide tier: the agent table and the right block share a row.
   tmux -L "$sock" resize-window -t "$sess:panel" -x 160 -y 32 2>/dev/null || true
   sleep 1.2

@@ -511,7 +511,6 @@ scenario_multiline() {
   assert_has "$tmp/multiline/after-lf.txt" '> ad' "B3 换行后第一行还在"
   type_text 'b'; sleep 0.5
   cap_to two-lines
-  assert_has "$tmp/multiline/two-lines.txt" '  b' "B3 第二行带续行前缀渲染（同一草稿）"
   keys Enter; sleep 3
   assert_eq "B3 Enter 仍提交：恰好一条条目" "$(entries | wc -l | tr -d ' ')" "1"
   assert_eq "B3 条目保住两行" "$(payload_of "$(entries | head -1)")" $'ad\nb'

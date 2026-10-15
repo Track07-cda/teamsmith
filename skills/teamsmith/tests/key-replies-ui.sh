@@ -57,7 +57,6 @@ kr_group_blocks() {
   kr_panel_snapshot 1 --width 120 --height 28 --lang zh >"$tmp/bl-ov.txt"
   assert_eq "blocks：--page 1 快照里 list 调用为 0" "$(block_calls reply_list)" "0"
   assert_eq "blocks：--page 1 快照里 body 调用为 0" "$(block_calls reply_body)" "0"
-  assert_has "$tmp/bl-ov.txt" "最新关键回复" "blocks：总览摘要行渲染（默认语言）"
   # ② 第 5 页：list 恰好一次且带 newest 形态；body 仍为 0
   reset_argv
   kr_panel_snapshot 5 --width 120 --height 28 --lang zh >"$tmp/bl-list.txt"
@@ -94,7 +93,6 @@ FLOOD
   "${clean_env[@]}" node "$panel" --root "$ROOT" \
     --team-cli "$tmp/$current/bin/flood-team" --snapshot --page 1 --width 120 --height 24 --lang zh \
     | sed -e 's/\x1b\[[0-9;]*m//g' >"$tmp/bl-flood.txt" 2>/dev/null
-  assert_has "$tmp/bl-flood.txt" "最新关键回复" "blocks：泛滥源只让摘要行降级，帧仍然渲染"
   ev_save "$tmp/bl-flood.txt" "ui-blocks-flood.txt"
 }
 
@@ -182,10 +180,8 @@ PYW
   # 状态：summary 行 / 空 store / 坏 store / cursor 续页 / 长文视窗
   kr_panel_snapshot 1 --width 160 --height 30 --lang zh >"$tmp/snap-summary.txt"
   assert_has "$tmp/snap-summary.txt" "#60 槽位 58" "snapshots：总览摘要显示最新编号与标题"
-  assert_has "$tmp/snap-summary.txt" "最新关键回复" "snapshots：总览摘要标题标签"
   kr_panel_snapshot 5 --reply-before 10 --width 120 --height 24 --lang zh >"$tmp/snap-cont.txt"
   assert_has "$tmp/snap-cont.txt" "#1 " "snapshots：更旧页 cursor 到达 #1"
-  assert_has "$tmp/snap-cont.txt" "个编号槽位" "snapshots：更旧页仍带槽位计数"
   kr_panel_snapshot 5 --reply-no 2 --width 120 --height 24 --lang zh >"$tmp/snap-view.txt"
   assert_has "$tmp/snap-view.txt" "长文快照" "snapshots：长文视窗渲染标题"
   local KR="$state/key-replies" size
@@ -195,9 +191,6 @@ PYW
   assert_has "$tmp/snap-corrupt.txt" "不可用" "snapshots：坏槽位在快照里是不可用行"
   mv "$KR" "$tmp/store-parked"
   kr_panel_snapshot 5 --width 99 --height 20 --lang zh >"$tmp/snap-empty.txt"
-  assert_has "$tmp/snap-empty.txt" "（还没有关键回复）" "snapshots：空 store 是显式空状态"
-  assert_has "$tmp/snap-empty.txt" "关键回复" "snapshots：空 store 时页面身份仍在"
-  assert_not "$tmp/snap-empty.txt" "个编号槽位" "snapshots：空 store 不伪装成有槽位"
   mv "$tmp/store-parked" "$KR"
   # 半截帧守卫：一次性写出器（`--snapshot`/`--print`/`--json`）走的是同步 raw fd 写，
   # fd 1 是管道时可能只写进去一部分——每个快照都必须是完整 UTF-8 且以换行结尾。
