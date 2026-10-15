@@ -422,7 +422,7 @@
 | P261 | Startup self-heal: apply (config shape migration, PM identity, version notice) | dev-bob | - | - | done |
 | P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | done |
 | P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | dropped |
-| P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | wip |
+| P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | done |
 | V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | done |
 | P266 | Panel plain language: apply | dev3 | - | - | done |
@@ -439,8 +439,9 @@
 | P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev3 | - | - | done |
 | P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | wip |
 | P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | done |
-| V39 | Gate slimming: independent verification of the deletion round | verify | - | - | wip |
+| V39 | Gate slimming: independent verification of the deletion round | verify | - | - | done |
 | P276 | Orphan-process visibility: apply (census, reap by pid, no pattern) | dev3 | - | - | wip |
+| P277 | Tick the four merged changes' checklists by evidence (archive prerequisite) | verify | - | - | wip |
 
 ## 当前里程碑
 
