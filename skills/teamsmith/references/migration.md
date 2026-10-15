@@ -139,11 +139,13 @@ one-line reaction.
 
 ## 5b. The breaking model-policy upgrade (task categories)
 
-This is the one upgrade that needs an explicit transaction instead of a re-render. The retired keys
+This is the one upgrade a re-render cannot do: it needs the four-key migration transaction. The retired keys
 TEAM_AGENT_MODELS and TEAM_DEFAULT_MODEL are no longer read (an old seat model is **not** reinterpreted as a task
 model): a project that still carries them is refused by `team dispatch`/`team up` and by `team init`/
-`team bootstrap` — before any install, ledger, worktree or pulse work — and the repair is the dedicated
-four-key transaction:
+`team bootstrap` — before any install, ledger, worktree or pulse work. Two routes apply the same transaction: the
+**startup transaction** (the next `team up` derives the pairs from the old keys, prints every pair before → after
+with the backup path and the restore command, writes through the checked writer and re-enters itself) or the
+**explicit transaction**:
 
 ```bash
 team config upgrade-models --task-models 'routine=<model> analysis=<model> verify=<model>' --pm-model '<model>'        # preview: prints the diff, writes nothing
@@ -153,8 +155,18 @@ team config upgrade-models --task-models '…' --pm-model '<model>' --yes       
 It rewrites only those keys through the checked writer (temp file → `bash -n` → fingerprint CAS → atomic rename →
 one audit line), turns a removed line's inline comment into a standalone one and leaves every other byte alone.
 Shapes it cannot locate unambiguously (export/multiline/variable expansion/duplicate keys) are refused with the
-file and line plus the manual-normalization route. `team init --force`, `bootstrap` and inference are **not**
-migration routes; a fresh project passes `--task-models`/`--pm-model` to `init`/`bootstrap` instead.
+file and line plus the manual-normalization route. `team up --print` writes nothing (it prints the same
+prediction, with the backup path it would use) and `team up --no-migrate` refuses instead of writing, naming the
+manual command. `team init --force`, `bootstrap` and inference are **not** migration routes; a fresh project
+passes `--task-models`/`--pm-model` to `init`/`bootstrap` instead.
+
+**How the shape is detected.** Detection is a version table with **one row per migration** — the shape it matches
+(`from`), the shape it produces (`to`), the transform it applies and the tool version that introduced it — applied
+in order and idempotently; adding a migration is one table row plus one transform plus one fixture group. A
+project's shape number is `TEAM_CONFIG_VERSION` (written by `init`/`bootstrap` and by every migration; a `refuse`
+key — the console never writes it); a configuration **without** that key is classified by its keys (a retired key
+⇒ the pre-policy shape, otherwise the current one). A shape number **higher** than this tool's newest known one is
+**refused** rather than migrated with an older row, and so is a shape the table has no row for.
 
 After the policy is in place: a **new** dispatch takes the brief's `category:` model (routine for bounded ordinary
 implementation, analysis for complex planning/judgment, verify for independent adversarial review — or the
@@ -189,8 +201,9 @@ team doctor
 
 # 4) re-render this project's contracts (idempotent: config is kept, the AGENTS.md
 #    section is refreshed in place, and a legacy marker is rewritten to the new one).
-#    A config still carrying the retired model keys is REFUSED here — run the explicit
-#    migration first: team config upgrade-models --task-models '…' --pm-model '…' [--yes]
+#    A config still carrying the retired model keys is REFUSED here — migrate first with
+#    the startup transaction (`team up`) or explicitly:
+#    team config upgrade-models --task-models '…' --pm-model '…' [--yes]
 team init
 
 # 5) the spec layer, only when openspec/ is missing

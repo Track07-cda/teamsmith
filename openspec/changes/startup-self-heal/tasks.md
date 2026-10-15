@@ -71,11 +71,15 @@
 
 - [x] 5.1 `config upgrade-models` 语义与报错不变（手工入口）；只有自动迁移这一条新调用点带附加键与 actor。
   · 证据：P261-dev-bob.md 5.1 行：`tests/task-model-routing.sh --select upgrade,transaction,preview` 回归；V35.md §7.1 独立复跑 `pass=145 fail=0`；只有自动迁移这条新调用点带附加键与 `actor=up-migration`
-- [ ] 5.2 文档只说真话的最小修正：`skills/teamsmith-init/SKILL.md`、`skills/teamsmith-init/references/bootstrap.md`、
+- [x] 5.2 文档只说真话的最小修正：`skills/teamsmith-init/SKILL.md`、`skills/teamsmith-init/references/bootstrap.md`、
   `references/config.md`、`references/workflows.md` 四处「只能走 `team config upgrade-models`」的句子改成
   「启动事务（`team up`）或手工事务」；`references/migration.md` 的 §5b 与升级步骤同步（形状表结构写清楚）；
-  **完整重写留给 P255**。 · 证据：`grep -rn 'upgrade-models' skills/teamsmith*/` 无残留旧话 +
-  smoke §17 输出尾 + 文档 diff
+  **完整重写留给 P255**。 · 证据：P275-dev-bob.md 5.2 行：判据 `grep -rn 'upgrade-models' skills/teamsmith*/`
+  无「只能走手工事务」类残句；四条路径 before→after 逐条贴出（三条由 P261 的合并提交 `23f42b04` 落地，
+  `config.md` 表格行由 P275 补全成两条路线）；`references/migration.md` §5b 改成「启动事务或手工事务」+ 新增
+  「How the shape is detected」（一行一条 `from`/`to`/transform/引入版本、`TEAM_CONFIG_VERSION` 语义、高于已知
+  形状号直接拒绝），§6 步骤 4 同步；`smoke --select 17` `✓189 ✗0`（`#10 17 · 迁移指南 · 用时 11s · ✓34 ✗0`）；
+  文档 diff 全文见报告
 - [x] 5.3 新夹具与改动文件的段落归属登记（`tests/section-paths.tsv`，必要时 `section-budgets.tsv`）；
   反向守卫（真项目 `state/`+`inbox/` 前后快照、夹具零命中）保持绿。
   · 证据：P261-dev-bob.md 5.3 行：`tests/section-paths.tsv` §61 patterns 新增 `cmd-project.sh` 与 `templates/config.sh.tmpl`（basis 写明理由）、`tests/section-budgets.tsv` §61 预算按实测 525s；`section-select.sh --paths …` → `decision=RUN sections=129`；`section-select.sh --check` → `ok 8 bad 0 SKIP 1`；`section-guard.sh --budget-check` 全过。实际做法：除 `section-paths.tsv` 外确实动了 `section-budgets.tsv`（§61 按实测抬到 525s）。
