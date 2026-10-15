@@ -1,0 +1,1 @@
+- 2026-10-15T19:28:57Z · `team close P287 --status done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/gate-lock-external-deletion-proposal.md（判定 ACCEPTED）
