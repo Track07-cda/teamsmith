@@ -445,17 +445,17 @@
 | P278 | Help surface robustness: locale-independent width, entry list, reachability, placeholder red | verify | - | - | done |
 | V40 | Migration recipe: independent verification (walk it from zero) | verify | - | - | done |
 | P280 | Gate lock hygiene: a nested fixture run must not starve the team | dev-bob | - | - | done |
-| P281 | Gate lock hygiene: apply (nested runs skip the machine lock, holder records) | dev-bob | - | - | wip |
+| P281 | Gate lock hygiene: apply (nested runs skip the machine lock, holder records) | dev-bob | - | - | done |
 | P282 | Writing discipline: answer the reader first, hedge only with evidence | dev-bob | - | - | done |
 | V41 | Help surface robustness: independent verification | verify | - | - | done |
 | V42 | Orphan visibility: independent verification (fake orphan + four false-positive families) | dev-bob | - | - | done |
-| V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | verify | - | - | wip |
+| V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | verify | - | - | done |
 | P284 | Tick the orphan-visibility checklist by evidence (archive prerequisite) | dev-bob | - | - | done |
 | P285 | Close the three orphan-visibility gaps (census reading, flip arm, docs) | dev-bob | - | - | done |
 | V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev3 | - | - | done |
 | P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | wip |
 | P287 | Gate tmp/lock must survive another project's pattern cleanup | dev3 | - | - | done |
-| P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev3 | - | - | blocked |
+| P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev3 | - | - | todo |
 | P289 | Tick the help-robustness checklist by evidence | dev-bob | - | - | done |
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev-bob | - | - | done |
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | done |
