@@ -556,6 +556,22 @@ machine-readable outcome and exit code, never parsed from human prose. A `geomet
 pause refreshing and every other block SHALL keep refreshing; multi-line input, pasted or typed, SHALL stay one
 draft (a `\r` is normalized — E6 §2.2) and SHALL be sent as one message (E6 §2.1).
 
+The draft SHALL settle with the receipt of the send that consumed it, and the input line and `state/draft.md` SHALL
+never disagree about it. A settled receipt — `delivered`, `queued` or `held`, the three classes the receipt maps
+from a machine verdict — SHALL empty the input line and `state/draft.md` together, so the next `m` opens an empty
+draft and a relaunch after the send shows no ghost draft. A `held` receipt is a settle, not a loss: the entry is
+durable under `state/outbox/held/` and the receipt names its reason, and for an `unconfirmed` hold the payload may
+already sit in the PM's box — the console MUST NOT keep the draft as a retry handle, because re-sending it would
+paste a message that may already have arrived and the guarded send's draft path carries no deduplication. A receipt
+in the `error` class — no state the console can settle on: the bridge could not run or printed no verdict line, or
+the guarded send exited non-zero, whatever durable copy its own reason names — SHALL keep the draft: the input line
+and `state/draft.md` SHALL both still hold exactly the text that was sent, so the human's words survive the failure
+and the next Enter retries from them. When the console cannot empty `state/draft.md` after a settled send it MUST
+NOT report the draft as gone: the input line SHALL keep the draft and the receipt SHALL name the file it could not
+empty, so memory and disk still agree and no ghost draft can surface on the next start. The existing entries keep
+their meanings: Esc still keeps the draft between sends, an empty compose stays empty, and a draft the human deleted
+with the compose line's own keys is not resurrected by a later receipt or a refresh.
+
 #### Scenario: Geometry and stalled outcomes retain their machine reason
 
 - **GIVEN** a compose send or flush subprocess returning a machine-readable held outcome with reason `geometry-untrusted` or `queue-stalled` and non-zero exit
@@ -604,6 +620,37 @@ draft (a `\r` is normalized — E6 §2.2) and SHALL be sent as one message (E6 �
   `tmux display -p '#{cursor_x}'` is 6 — the key moved to the line's end
 - **AND** a following `C-o` runs the script exactly once, the appended line appears in the draft, and the frame is
   intact afterwards
+
+#### Scenario: A settled send empties the box and the file together
+
+- **GIVEN** a fixture project with a fake TUI in the PM pane and the console composing `half a thought`
+- **WHEN** Enter is pressed and the send settles as `delivered` (an empty PM box), and in a second run as `queued`
+  (the PM's box holds someone else's draft)
+- **THEN** in both runs the input line is empty, `state/draft.md` is 0 bytes, and a relaunch followed by `m` opens
+  an empty compose rather than the sent text
+
+#### Scenario: A held send is a settle, not a retry handle
+
+- **GIVEN** the static-footer fixture PM pane (the send holds with reason `unconfirmed`) and the console composing
+  `half a thought`
+- **WHEN** Enter is pressed and the receipt settles as `held`
+- **THEN** the input line and `state/draft.md` are empty, the receipt names the durable copy under
+  `state/outbox/held/` and its reason, and the console offers no kept retry of the sent text
+
+#### Scenario: A failed send keeps the human's words
+
+- **GIVEN** a fixture whose draft bridge exits non-zero without a machine verdict, and a second run whose guarded
+  send reports the target offline with no durable entry, with the console composing `half a thought`
+- **WHEN** Enter is pressed and the receipt is the `error` class
+- **THEN** the input line still reads `half a thought`, `state/draft.md` holds exactly that text, and a following
+  Enter retries from it — the words exist nowhere else and are not lost
+
+#### Scenario: A draft the console cannot empty is not reported as gone
+
+- **GIVEN** the console composing `half a thought` and `state/draft.md` made read-only after the text was typed
+- **WHEN** Enter is pressed and the send settles
+- **THEN** the input line still reads `half a thought` and the receipt names `state/draft.md` as a file it could not
+  empty, so memory and disk agree instead of a ghost draft surviving the send
 
 ### Requirement: Settings are panel preferences in `state/panel.conf`, never the project contract
 
@@ -1029,6 +1076,32 @@ board page from a card, the work page from a board row — and SHALL NOT collaps
 exception to the global `q`, in force only while the detail view is open. The reader
 MUST NOT serve a path outside the discovered set: a `--file` argument naming any other path SHALL fail.
 
+The reader SHALL serve the console's read-only previews through that same block and that same contract — the same
+file-list-plus-one-body shape, the same 128 KiB bound, the same off-input-path assembly and the same sanitizer —
+addressed by an explicit source. `--source spec --id <capability>` SHALL serve `openspec/specs/<capability>/spec.md`
+as one tab; `--source change --id <change-id>` SHALL serve that change's own `proposal.md`, `design.md` and
+`tasks.md`, in that order and one tab each, MUST NOT invent a file the change does not have, and MUST NOT serve a
+file of any other change or of `openspec/changes/archive/`; `--source decision --id <D-number>` SHALL serve the body
+of that decision entry out of `docs/team/DECISIONS.md` as one tab. A reader that is given no source keeps its
+present meaning (the entry-id families above), so an existing caller behaves exactly as it does today. The sources'
+roots are the reader's own project root: the spec and change sources read only under the openspec directory the
+panel's other readers already resolve, the decision source only the ledger's `docs/team/DECISIONS.md`, and the entry
+source only the three ledger directories above. A request whose source is outside that closed set, whose id leaves
+its source's grammar (`[A-Za-z0-9._-]` for a capability or change id, `D<digits>` for a decision), or whose `--file`
+is not one of the paths the requested source discovered SHALL fail with a non-zero exit and one line naming what was
+refused, printing no file content; a discovered path that is a symbolic link SHALL be refused and named, never read
+through. The decision source serves exactly one entry and offers no whole-file exit: its `--file` selects the ledger
+file it discovered, and the body is always the requested entry's slice. A target that does not exist is not an
+error: the block SHALL answer with an empty file list and a human-readable reason, the detail view SHALL say that
+the source is unavailable rather than render an empty document as a successful read, and no mode SHALL crash. The
+decision entry SHALL be located by its id heading (`##` or `###`, the id followed by a non-digit) and its body SHALL
+run to the next heading at that level or higher — a same-id addendum one level deeper stays inside the body — cut by
+the same 128 KiB bound when the entry is longer. The previews SHALL be console-only: `--print` and `--json` MUST NOT
+read them or add a field, opening and closing one SHALL leave the machine frame byte-identical apart from the
+timestamp, and reading one SHALL write nothing outside the console's own three files. The previews inherit the
+display contracts of the detail view they extend — sanitize before layout, the width tiers, the themes and the zh/en
+tables — and add no action key of their own.
+
 #### Scenario: The three families are discovered and the id boundary holds
 
 - **GIVEN** a fixture entry `P1` with `docs/team/tasks/P1-a.md`, `docs/team/reports/P1-dev.md`,
@@ -1076,6 +1149,74 @@ MUST NOT serve a path outside the discovered set: a `--file` argument naming any
 - **WHEN** the detail view is opened, its tabs switched, its document scrolled and the view closed
 - **THEN** no file outside the console's own three (`state/draft.md`, `state/panel.conf`, `state/panel-page`)
   changed
+
+#### Scenario: A capability's spec opens as one tab
+
+- **GIVEN** a fixture project whose `openspec/specs/demo/spec.md` holds two requirements and a decoy
+  `openspec/specs/demo/notes.md`
+- **WHEN** `team __panel-data --block detail --source spec --id demo` runs and the detail view opens on it
+- **THEN** the file list is exactly that one spec.md with one tab, the body is that file's text, and no decoy is
+  listed or served
+
+#### Scenario: A change's three artifacts are its tabs, in order
+
+- **GIVEN** a fixture change holding `proposal.md`, `design.md` and `tasks.md`, and a second fixture change whose
+  `design.md` is absent
+- **WHEN** each is read through `--source change` and opened in the detail view
+- **THEN** the first serves three tabs in the order proposal, design, tasks and the second serves exactly its two
+  existing artifacts — no tab is invented for the missing file, and neither read serves a file of the other change
+  or of `openspec/changes/archive/`
+
+#### Scenario: A decision opens at its number and ends at the next heading
+
+- **GIVEN** a fixture `DECISIONS.md` whose `D7` entry sits at `##` between `D6` and `D8`, carries a deeper
+  `### D7 补记` addendum inside it, and whose `D8` follows at `##`
+- **WHEN** `--source decision --id D7` and `--source decision --id D8` are read, and then a number the file does not
+  carry
+- **THEN** the `D7` body starts at its heading, includes the deeper addendum and stops before `D8`; the `D8` body
+  stops at the next `##` heading; and the missing number answers with an empty file list and an unavailable reason
+  rather than a neighbouring entry's text
+
+#### Scenario: Every preview source refuses what is outside it
+
+- **GIVEN** the fixture spec, change and decision above
+- **WHEN** `--source spec --id ../../etc` runs, then `--source spec --id demo --file
+  openspec/changes/other/proposal.md`, then `--source change --id demo --file openspec/specs/demo/spec.md`, then
+  `--source decision --id D7 --file docs/team/BOARD.md`, then `--source decision --id 7`, then `--source bogus
+  --id demo`
+- **THEN** every one of them exits non-zero and prints no file content, and each line names the source, the id or
+  the path it refused
+
+#### Scenario: A symlinked entry is refused, never read through
+
+- **GIVEN** a fixture whose `openspec/changes/demo/proposal.md` is a symbolic link to a file outside the change
+- **WHEN** `--source change --id demo` runs and the detail view opens on it
+- **THEN** the symlinked path is refused and named, the link's target text is not printed, and the change's other
+  two artifacts still open
+
+#### Scenario: A preview body is bounded and sanitized
+
+- **GIVEN** a fixture capability whose `spec.md` is 200 KiB and a fixture change whose `tasks.md` carries
+  `ESC [2J` inside a fenced block
+- **WHEN** each is read through its source in the detail view and the pane is captured
+- **THEN** the long body carries the truncation marker and the read exits 0 within the reader's bound, and the
+  capture holds the fence's visible text with no `0x1b` byte
+
+#### Scenario: The previews stay off the machine exits and out of the write sweep
+
+- **GIVEN** a fixture project with the hashes of `docs/`, `openspec/` and `state/` recorded and a stored
+  `team monitor --print` / `team monitor --json` pair
+- **WHEN** a spec, a change and a decision preview are opened, their tabs switched, their bodies scrolled and the
+  view closed
+- **THEN** both stored machine outputs are unchanged apart from the timestamp and carry no preview field, and no
+  file outside the console's own three changed
+
+#### Scenario: Preview tabs remain reachable in a narrow pane and both languages
+
+- **GIVEN** a fixture change with three artifacts, a 59-column fixture pane, and the zh and en tables in turn
+- **WHEN** its preview opens and its tabs are switched by keyboard and by click
+- **THEN** the tab row still names the open tab, every tab remains reachable without horizontal overflow, the
+  active-page identity and the key band stay visible, and no preview row is wider than the pane
 
 ### Requirement: A bounded frame fills the pane: the footer is the last row and the content absorbs the spare height
 
@@ -1405,6 +1546,20 @@ today). A block that is empty (no board row) or degraded to its summary line SHA
 row keys, and SHALL register no focus target — there SHALL be no focusable item on the work page that cannot be
 opened.
 
+Every row the work page draws for an entry the detail view can open SHALL be focusable on the same terms, and the
+page SHALL report one drawn-row order across its blocks: the blocks in the order the layout placed them (today the
+board block, then the changes, the specs and the decisions block), and inside a block the order the block drew its
+rows — so `↑`/`↓` cross from a block's last drawn row to the next block's first drawn row, exactly one row carries
+the cursor glyph at every step, and the first press with no focus yet focuses the first row of that order. A block
+that is empty, degraded to its summary line, or absent from the frame SHALL contribute no row to that order, no
+cursor and no focus target. A row's source is fixed by the block it was drawn in — the board block's rows are
+`entry`, the other three are `change`, `spec` and `decision` — and it is that source together with the row's id (the
+change id, the capability name, `D<digits>` for a decision) that `enter`, or a click on the already focused row,
+hands to the detail view; a row's display title is never its id, and `--file` is never composed by the console from
+a title. The preview a preview row opens behaves exactly as a board row's detail does: it renders on the page it was
+opened from, `esc`/`q` returns to that page without collapsing the console, and while any work-page row is focused
+the key band names the row keys.
+
 #### Scenario: `↓` focuses a row and `enter` opens its detail without leaving the page
 
 - **GIVEN** a fixture project with three board rows whose first row is a task brief with a report, and the console
@@ -1432,11 +1587,14 @@ opened.
 
 #### Scenario: An empty or degraded board has no dead item
 
-- **GIVEN** a fixture project whose BOARD.md has no rows, the console on the work page in a 120x30 pane, and then a
-  second fixture with rows in a 60x10 pane where the block degrades to its summary line
+- **GIVEN** a fixture project whose BOARD.md has no rows and whose changes, specs and decisions blocks draw no row
+  either, the console on the work page in a 120x30 pane, and then a second fixture with rows in a 60x10 pane where
+  the blocks degrade to their summary lines
 - **WHEN** `↓` and `enter` are pressed in each
 - **THEN** neither capture carries a focus cursor and no detail view opens, and each frame's click-target map holds
   no `focus` and no `open-focused` action on the work page
+- **AND** a third fixture whose board is empty but whose specs block draws one row focuses that row on the first
+  press and opens its preview — an empty board is not a reason to drop a live row
 
 #### Scenario: Duplicate rows are two stops on the work page too
 
@@ -1446,23 +1604,68 @@ opened.
 - **THEN** exactly one row carries the cursor at each step, both `M39` rows are separate stops that the walk
   reaches in drawn order (the second does not restart or freeze on the first), and the next press reaches `M48`
 
+#### Scenario: A spec row opens its preview without leaving the work page
+
+- **GIVEN** a fixture project whose specs block draws the row `demo` and the console on the work page in a 120x30
+  fixture pane (`state/panel-page` holds `2`)
+- **WHEN** the walk is moved onto that row and `enter` is pressed, and then `esc` closes the view
+- **THEN** the detail view shows the `demo` capability's spec with its one tab, the close returns to the work page,
+  and `state/panel-page` still holds `2`
+
+#### Scenario: A change row and a decision row open their own sources
+
+- **GIVEN** the same fixture whose changes block draws the change `demo` and whose decisions block draws `D7`
+- **WHEN** each row is opened with `enter`
+- **THEN** the change's view carries its artifact tabs and the decision's view carries the `D7` body, neither view
+  can be reached from the other row, and each close returns to the work page it was opened from
+
+#### Scenario: One cursor walks the page's drawn rows across the blocks
+
+- **GIVEN** a fixture work page whose board block draws two rows and whose specs block draws one row, in a pane
+  where both blocks draw their rows
+- **WHEN** `↓` is pressed from no focus and then twice more
+- **THEN** the first press focuses the board's first row, the second its second row, the third crosses to the spec
+  row — all three in the frame's drawn order — and exactly one row carries the cursor glyph at every step
+
+#### Scenario: A preview row's click focuses it, the second click opens it
+
+- **GIVEN** the console on the work page in a fixture pane with the mouse preference on
+- **WHEN** a click lands on a spec row and a second click lands on the same row
+- **THEN** the first click moves the cursor onto that row and the second opens its preview, exactly as a board
+  row's clicks do
+
 ### Requirement: The console shows the project contract with its effect class, and refuses what it must not change
 
 The settings overlay's navigation row SHALL open a **project-settings view** that replaces the page's blocks — the
 title band, the page tabs and the key band stay, exactly as with the overlay itself, and the view is closed with
 `esc` back to the overlay it was opened from without collapsing the console. The view SHALL list the project
 contract (`.pi/team/config.sh`, `memory-and-deps`'s single-writer file): one row per key of the owning command's
-schema plus one row per key the file itself carries that the schema does not know, and per row the key's **human
+schema plus one row per key the file itself carries that the schema does not know, **except** a key the read
+reports as fixture-only — the schema row's own note carries the declared `fixture-only: ` marker (`memory-and-deps`
+owns the marker): the read still reports it, `team config list` still lists it and `team config set` still refuses
+it, but the view MUST NOT render a row for it, MUST NOT open a heading for it, and MUST NOT let `/` match it (a
+key the fixture never meant to show must not be reachable through the filter either). A key the read does not mark
+that way is never hidden, whatever its class, group or value. Per row the view renders the key's **human
 label** — from the console's zh/en tables, looked up by the key name the command reported — the current value
 (the file's value, else the schema's default marked as unset), the key's **class** from the schema and the key's
 own trailing inline comment when its line has one. The bare key name MUST NOT be the row's main text: every key of
 the command's schema SHALL have a non-empty label in both tables (a fact the string-table gate asserts in both
 directions — a schema key without a label and a label whose schema key is gone both fail it), and the raw key
-SHALL appear only where the view aligns with the command line: the editor's prompt and its confirmation, and the
-view's own line naming what to run for the focused row — `team config set <KEY> <value>` for a key the command can
-set, the file to hand-edit plus the key for a `refuse` key, the category's own command for a category. A key the schema
+SHALL appear only where the view aligns with the command line: the editor's prompt and its confirmation, the
+view's own line naming what to do for the focused row — `team config set <KEY> <value>` for a key the command can
+set, the category's own command (`team config set-task-model <category> <model>`) for a category row, and for a
+`refuse` key the plain route sentence **「这个值要改项目配置文件 `.pi/team/config.sh`，界面不能改」**
+(the path is a fact and stays; the sentence replaces the private shorthand) or the route the schema's own note
+names when that route is a command (`team add-agent`, `team config upgrade-models`, …) — and the migration
+diagnosis lines the owning command prints (a CLI route, rendered verbatim; the `memory-and-deps` capability owns
+its words). Every other string the view renders SHALL be plain user-facing language: the panel's own words come
+from the zh/en tables and the facts (label, value, class, group, comment, warning) from the read. The prose the
+view renders verbatim — the schema's note column (`memory-and-deps` owns it) — SHALL be written for that reader;
+whether a phrase is plain enough is judged by design and review, not by a gate (D170), so no wording assertion
+belongs in the fixtures. A key the schema
 does not know has no label and none SHALL be invented for it: its row falls back to the raw key name, which is
-what the file and the command carry. The class vocabulary SHALL be the owning
+what the file and the command carry; its route line says in plain language that the tool does not know the setting
+and that the panel cannot change it. The class vocabulary SHALL be the owning
 command's, closed and rendered from the tables: `apply` (the next read of the file uses it), `restart` (a running
 process holds the old value until it is restarted — the badge names the target: the pulse, the PM or a live
 session) and `refuse` (the console must not change it). The row set and the classes MUST come from the owning
@@ -1475,7 +1678,9 @@ focus a row and a click on the focused row SHALL open its editor, the kanban's r
 that narrows the list to the rows whose **label, raw key or value** contains the filter text (case-insensitively) —
 so the user who reads the labels and the user who knows the CLI's keyword both find the row — and `esc` SHALL clear
 it without closing the view. A `refuse` row SHALL open no editor and its interaction SHALL surface the
-owning command's refusal, which names the right route (hand-editing the file, `team add-agent`, …). The view's
+owning command's route in plain language — the file sentence above for a value that only the file carries, the
+command the schema's note names for the roster, and the command's own refusal line for anything else (the line the
+command prints, never a rewritten copy of it). The view's
 own labels SHALL come from the zh/en tables, the key labels included: no visible text is written into the bundle.
 The view is a console-only block: `--print` and `--json` MUST NOT
 read or render it or add a project-settings field. Opening/closing the console-only view does not change machine output under identical monitor inputs; the specified model-policy, assignment and SID-reader changes are not frozen to old bytes. The view MUST NOT be a top-level page: the five-page
@@ -1490,13 +1695,26 @@ composition reserves page 5 for key replies and `state/panel-page` records only 
   the schema's default and the unset marker, every rendered label exists in both tables, and each row's main text
   is that key's label in the active language (no row reads `TEAM_…`)
 
+#### Scenario: A fixture-only key is in the read and never in the view
+
+- **GIVEN** a fixture project whose contract carries the four fixture-only keys, and a scratch copy of the CLI
+  whose schema carries one more key whose note begins with the `fixture-only: ` marker
+- **WHEN** `team config list --json` runs and the settings view renders (with and without a `/` filter that
+  matches the fixture keys' labels and raw names)
+- **THEN** the read reports every one of those keys, `team config list` still lists them and `team config set`
+  still refuses them with exit 5, while the rendered frame carries no row, no heading and no filter hit for any of
+  them
+- **AND** a scratch tree whose row has lost the marker renders that key's row again (the same fixture's red side),
+  so the hiding follows the read's data and not a name baked into the bundle
+
 #### Scenario: The raw key is exactly where the CLI is named
 
 - **GIVEN** the view open with the focus on `TEAM_PULSE_INTERVAL` (an editable `restart` key), then on
   `TEAM_SESSION` (a `refuse` key) and then on the `routine` category
 - **WHEN** each row is focused
-- **THEN** the view's own command line reads `team config set TEAM_PULSE_INTERVAL <value>` for the first row, names
-  the file to hand-edit together with `TEAM_SESSION` for the second and `team config set-task-model routine …` for the
+- **THEN** the view's own command line reads `team config set TEAM_PULSE_INTERVAL <value>` for the first row,
+  carries the plain file sentence for the second (the project config path `.pi/team/config.sh` is part of it and
+  the sentence names no private shorthand), and names `team config set-task-model routine …` for the
   category, and the editor the first row opens is titled with the raw key
 
 #### Scenario: A search by the raw key still finds the row
@@ -1520,6 +1738,7 @@ composition reserves page 5 for key replies and `state/panel-page` records only 
 - **THEN** it exits non-zero naming the key when one schema key has no label in either table, and equally when a
   label is left behind for a key the schema no longer carries; restoring the label (or the schema row) makes it
   pass
+- **AND** the fixture-only keys are covered like every other key — their row is hidden, their label is not
 
 #### Scenario: The row set and the classes come from the command, not from the bundle
 
@@ -1534,8 +1753,9 @@ composition reserves page 5 for key replies and `state/panel-page` records only 
 - **GIVEN** the view open with the focus on `TEAM_SESSION`, and then on `TEAM_AGENTS`, the roster key, with the
   contract's sha256 recorded
 - **WHEN** `enter` is pressed on each and `x` is typed
-- **THEN** neither opens an editor, each receipt names the route (`team add-agent` / `team teardown` for the
-  roster, hand-editing the file for an identity key), and the contract's sha256 is unchanged after both
+- **THEN** neither opens an editor, each receipt names the route in plain language (`team add-agent` / `team
+  teardown` for the roster, the project config file for an identity key), and the contract's sha256 is unchanged
+  after both
 
 #### Scenario: The filter narrows and clears
 
@@ -1586,8 +1806,11 @@ confirmation line SHALL carry the warning and require one more `enter`. The rece
 mapped from the command's exit code — written (with the class's timing), refused as read-only, rejected as invalid
 (naming the accepted domain), refused because the file changed under the editor, or a write error that says the
 file was left unchanged — and MUST NOT be parsed from human prose. On a conflict the view SHALL reload the
-contract and display the other writer's value; on any settle the list and the audit tail SHALL be re-read in the
-background, and that re-read MUST NOT hold the receipt frame. The console MUST NOT open the
+contract and display the other writer's value; on any settle the list SHALL be re-read in the
+background, and that re-read MUST NOT hold the receipt frame. The audit SHALL stay readable where it already
+lives — `state/config.log`, `team config list`'s own footer and `team config log` — and the console SHALL NOT be
+one of its readers: the tail this view draws under its rows carries the focused row's command line and nothing
+from the log. The console MUST NOT open the
 contract for writing itself: every byte of `.pi/team/config.sh` changes through the owning command (the wrapper's
 argv log is the evidence), and a `restart`-class write SHALL NOT claim it took effect — the running console keeps
 the old value until it is restarted, and the receipt says so. The panel MUST NOT offer an action that restarts
@@ -1639,9 +1862,12 @@ the pulse: it runs inside the pulse window and would kill itself; the restart co
 #### Scenario: The audit is readable from the view and from the CLI
 
 - **GIVEN** a value written with the panel as the actor
-- **WHEN** the view renders its audit footer and `team config log 5` runs
-- **THEN** both show the same newest line naming the timestamp, the actor, the key, the old and the new value,
-  and the footer shows at most three lines
+- **WHEN** the contract's own human read (`team config list`, whose footer is the audit tail) and `team config log 5` run
+- **THEN** both show the same newest line naming the timestamp, the actor, the key, the old and the new value — the
+  audit stays readable from the contract's own reads, exactly as it was before this change, and `state/config.log`
+  still grew exactly one line for the write
+- **AND** the console's settings view is deliberately not one of its readers: the rendered frame carries no audit
+  heading and no audit line, and drawing that tail again in a scratch copy of the view turns the fixture red
 
 ### Requirement: The console is read-only except through its owning commands
 
@@ -1927,9 +2153,13 @@ from the zh/en tables, looked up by the token (`group_<token>`), so no group wor
 token with no label SHALL render as the raw token — the same visible fallback the key labels use for a key the
 schema does not know — and the string-table gate SHALL assert the tokens the schema's rows carry and the group
 labels in both tables match in **both** directions (a token without a label and a label no row uses both fail
-it). The bundle MUST NOT carry a key→group table or a group list of its own: a group or a key added to the
+it). The heading phrases themselves SHALL be plain user-facing language — the panel's own word for a functional
+domain, never a private shorthand or an effect class — and whether a phrase is plain enough SHALL be judged by
+design and review, not by a gate (D170), like every other visible string. The bundle MUST NOT carry a key→group table or a group list of its own: a group or a key added to the
 command's schema SHALL appear under the reported heading with the committed `panel.js`, and a row the read
-reports under a different token SHALL move.
+reports under a different token SHALL move. A key the read marks fixture-only (the requirement that owns the row
+set) SHALL NOT open a heading: once every row of a token is hidden by that rule the group produces no heading,
+and a group whose remaining rows are visible keeps exactly one.
 
 The **effect class** SHALL be carried on the row, not by the grouping: every key row SHALL render its class as a
 text badge (`apply`, `restart`, `refuse`, plus the unknown-key badge) with that class's tone, and the tone SHALL
@@ -1966,6 +2196,14 @@ is distinct from every group heading.
 - **THEN** both rows appear under the visible fallback heading after the grouped keys and before the categories block,
   the schema key keeps its label, badge and command line, and the schema-unknown key is still read-only, named by
   its raw key and marked as unknown
+
+#### Scenario: A group whose rows are all fixture-only opens no heading
+
+- **GIVEN** a scratch copy of the CLI whose schema carries two fixture-marked rows under a token no other row
+  uses, and the view open
+- **WHEN** the rows render
+- **THEN** the frame carries no heading for that token (the hidden rows do not leave an empty heading behind) and
+  the visible tokens keep exactly one heading each in the read's order
 
 #### Scenario: The class is a word on the row and its tone is redundant
 
@@ -2005,8 +2243,8 @@ one line per row, plus the line of a group heading when that heading's first row
 row's note never costs a second line. The two hidden-row count lines SHALL be a ceiling rather than a fixed
 cost: a count line is spent only when the window really hides rows at that edge, and the line the counts do not
 use SHALL go to the window instead of the page's blank space. The rows the window draws plus its `↑n` and `↓n`
-counts SHALL equal the number of focusable rows the view holds. The space the rows do not use SHALL stay inside
-the card (the detail view's own fill rule), so the key band remains the frame's last row. This SHALL hold in
+counts SHALL equal the number of focusable rows the view holds (a row hidden as fixture-only is not a focusable
+row and is not counted). The space the rows do not use SHALL stay inside the card (the detail view's own fill rule), so the key band remains the frame's last row. This SHALL hold in
 every view state the block can render — the row list, the choice picker and the seat picker. It sharpens, and
 MUST NOT weaken, the frame-level promise that a bounded frame fills the pane: there the spare height is spent
 *inside the content area*, and this view's share of it is rows.
@@ -2016,15 +2254,15 @@ MUST NOT weaken, the frame-level promise that a bounded frame fills the pane: th
 - **GIVEN** a fixture contract with more rows than any measured pane and the view open at the top of the list
 - **WHEN** the pane is 45, 33, 30 and 25 rows tall
 - **THEN** at every height the card's last drawn row is at most one blank row above the key band, the rows drawn
-  plus `↑n` plus `↓n` equal the view's focusable row count (the command's keys plus its seats), and the 45-row
-  pane draws at least eight more rows than the 30-row pane
+  plus `↑n` plus `↓n` equal the view's focusable row count (the command's keys minus the fixture-only ones, plus
+  its seats), and the 45-row pane draws at least eight more rows than the 30-row pane
 
 #### Scenario: A short list keeps its blank space inside the card
 
 - **GIVEN** the view open with a filter that matches a single key
 - **WHEN** the frame renders in a tall pane
 - **THEN** the card still ends at most one blank row above the key band, the blank space is inside the card, and
-  the row, its heading, the command line and the audit footer are all still drawn
+  the row, its heading and the command line are all still drawn
 
 ### Requirement: The project-settings pty fixture judges under a machine premise
 
@@ -2291,24 +2529,40 @@ and `--print`/`--json` MUST NOT read these keys: a machine frame renders the def
 
 The capacity floor's two thresholds SHALL be rows of the project contract's schema — `TEAM_TMP_MIN_FREE_MB`
 (kind `mb`, default `1024`) and `TEAM_TMP_MIN_FREE_INODES` (kind `int`, default `100000`), both class `apply` and
-group `delivery` — and the disk fixtures' seam `TEAM_DISK_STATS_FILE` SHALL be a `refuse` test-knob row, so the
-settings view carries all three without a code change: the two thresholds as editable `apply` rows rendering their
-zh/en label and, while the file is silent, the schema's default, and the seam as a `refuse` row that opens no
-editor. `team config list --json` SHALL report the same classes, defaults and group, and both tables SHALL carry a
+group `delivery` — and the disk fixtures' seam `TEAM_DISK_STATS_FILE` SHALL be a `refuse` schema row whose note
+carries the fixture-only marker, so the read carries it for the suites and the settings view does not render it
+(the row-set rule above): the two thresholds render as editable `apply` rows with their zh/en label and, while the
+file is silent, the schema's default; the seam reaches the machine read and never the view.
+`team config list --json` SHALL report the same classes, defaults and group, and both tables SHALL carry a
 non-empty `label_<KEY>` for each of the three (the string-table gate checks those in both directions and within
-the row's label column).
+the row's label column); the seam's label stays in the tables even though its row is hidden, because the gate
+covers the schema, not the view.
 
 #### Scenario: The three keys reach the view and the machine read
 
 - **GIVEN** a fixture project whose contract does not carry the three keys and a JS runtime
 - **WHEN** `team config list --json` runs and the settings view renders in a fixture pane
-- **THEN** the two thresholds' records carry class `apply`, defaults `1024` and `100000` and group `delivery`, the
-  seam's record carries class `refuse`, and each of the three rows' main text is that key's label in the active
-  language (no row reads `TEAM_…`), with the seam's row opening no editor
+- **THEN** the three keys each reach the machine read: the two thresholds' records carry class `apply`, defaults
+  `1024` and `100000` and group `delivery`, and the seam's record carries class `refuse` and a note that begins
+  with the fixture-only marker, while the human `team config list` still lists all three
+- **AND** only the two thresholds reach the view (each row's main text is that key's label in the active language,
+  no row reads `TEAM_…`); the seam is the deliberate exception the row-set rule owns — the rendered frame carries
+  no row, heading or filter hit for it — and removing its marker in a scratch tree brings the row back
 
 ### Requirement: Settings edit task categories and independent PM policy rather than worker seats
 
-Settings SHALL render ordered category rows and an independent PM model row from config JSON, with both languages' labels and owning command route. Category picker uses project known models plus free text and SHALL write `set-task-model`, never compose a mapping; whole-map row routes to category rows and has no pairlist/seat override editor. PM uses `config set TEAM_PM_MODEL`. Missing mapping/retired policy yields a visible migration diagnosis and explicit CLI upgrade route, not an in-panel migration/restart. Existing editor keyboard/mouse, direct-choice/free-text confirmation, dry-run/CAS/actor panel/cancel/conflict/background-refresh behavior remains. Category policy receipts name next new task; they explicitly do not switch a running or resumed assignment. PM receipts name guarded next PM launch and fresh when model changes. Assignments appear read-only with actual task/category/complete model/original and launch source/SID, visually separate from future policy. There is no worker default or per-worker model editor and no process restart action.
+Settings SHALL render ordered category rows and an independent PM model row from config JSON, with both languages' labels and owning command route. Category picker uses project known models plus free text and SHALL write `set-task-model`, never compose a mapping; whole-map row routes to category rows and has no pairlist/seat override editor. PM uses `config set TEAM_PM_MODEL`. Missing mapping/retired policy yields a visible migration diagnosis and explicit CLI upgrade route, not an in-panel migration/restart: the diagnosis lines are the owning command's own text (a CLI route, rendered verbatim under a heading from the zh/en tables) and the heading is a plain user-facing phrase. Existing editor keyboard/mouse, direct-choice/free-text confirmation, dry-run/CAS/actor panel/cancel/conflict/background-refresh behavior remains. Category policy receipts name next new task; they explicitly do not switch a running or resumed assignment. PM receipts name guarded next PM launch and fresh when model changes. Assignments appear read-only with actual task/category/complete model/original and launch source/SID, visually separate from future policy. There is no worker default or per-worker model editor and no process restart action.
+
+The two halves SHALL be told apart in plain user-facing language, not in the project's private shorthand: the
+future-policy block's heading says that these are the models the **next** dispatch will use (「下一次派任务会用的模型」)
+and the committed block's heading says that these are the models **running** tasks actually use (「正在运行的任务
+实际使用的模型」), with a sentence that says why they can differ — a task keeps the model it was dispatched with,
+so changing the future setting never changes a task already running. A seat whose record is not complete SHALL
+show a plain-language reason chosen from the facts the read reports, never the command's diagnostic string: the
+file carries no record at all → 「这个席位还没有派过任务」; a record exists but cannot be read → a sentence saying
+so (the panel does not invent a model and does not claim the seat was never used). The `SID` the row carries
+SHALL be labelled as a session id in plain words, and the origin tokens SHALL read as plain phrases rather than
+schema field names.
 
 #### Scenario: Category and PM writes are CLI-owned in a real pane
 - **GIVEN** real fixture tmux pane, valid config and logging CLI wrapper
@@ -2319,6 +2573,23 @@ Settings SHALL render ordered category rows and an independent PM model row from
 - **GIVEN** routine assignment with explicit strong model
 - **WHEN** routine policy is changed in settings
 - **THEN** read-only assignment still shows original model/SID/provenance, category policy shows new value and receipt says new tasks only; same-task preview remains the assignment model
+
+#### Scenario: The two halves are named in plain language and keep their own model
+- **GIVEN** a fixture with a committed `routine` assignment and a later category-policy change
+- **WHEN** the settings view renders both blocks
+- **THEN** the future-policy heading says the next dispatch will use these models and the committed heading says
+  these are the models running tasks use, a sentence says a dispatched task keeps the model it was given, and the
+  committed row still shows the assignment's own model while the category row shows the new policy value
+
+#### Scenario: A seat's missing record is a plain reason, not the command's diagnostic
+- **GIVEN** a fixture project whose `verify` seat has no record file and whose `dev` seat carries an unreadable
+  record (no assignment-shaped field, or a version this tool does not read)
+- **WHEN** the settings view renders the committed block
+- **THEN** the `verify` row carries 「这个席位还没有派过任务」 and the `dev` row carries a sentence saying its record
+  could not be read, neither row renders the command's diagnostic string (`legacy/unknown assignment_version`,
+  `malformed …`, missing-file prose, …) and neither row shows a model
+- **AND** a scratch copy of the read that reports both seats as record-less turns the fixture red — the two
+  reasons are chosen from the read's facts, not from the wording
 
 #### Scenario: Cancel invalid input and conflicts preserve bytes
 - **WHEN** picker is cancelled, invalid model entered, or a second writer changes config under the editor

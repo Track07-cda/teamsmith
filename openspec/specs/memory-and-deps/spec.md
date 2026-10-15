@@ -158,10 +158,17 @@ same rule is what
 the write side and the read side MUST NOT grow two rules.
 
 A schema note that names a maintenance route SHALL name only a route that works on a project that already carries
-a contract: the identity keys' note SHALL name hand-editing `.pi/team/config.sh`, and when it names `team init` it
+a contract: the identity keys' note SHALL name editing `.pi/team/config.sh` directly, and when it names `team init` it
 SHALL name `team init --force` together with its cost (`--force` re-renders the whole file and overwrites every
 other key with the template's value), because a bare `team init` prints `skip` and leaves the contract
-byte-identical.
+byte-identical. The schema's free-text column is the note the console renders under the row, so its prose SHALL
+be written for the reader who sees it there: plain user-facing words, no private shorthand and no internal
+record ids; whether a phrase is plain enough is judged by design and review, not by a gate (D170). A key that
+exists only to drive fixtures and the test suite SHALL carry the declared marker `fixture-only: ` at the start of
+that note. The marker is data: `team config list --json` reports the note verbatim, the key keeps its `class`,
+`kind`, `default` and its record in the read, the human `team config list` table and the writer (validation,
+quoting, CAS, audit, danger and refusal rules) do not change, and the console hides such a row (`panel` owns the
+hiding rule).
 
 #### Scenario: One changed line, everything else byte-identical
 
@@ -220,11 +227,21 @@ byte-identical.
 - **GIVEN** a fixture project with a rendered contract whose `TEAM_GATES` is set to `bash my-own-gate.sh`
 - **WHEN** the schema notes of `TEAM_PROJECT`, `TEAM_SESSION` and `TEAM_PM_WINDOW` are read, and the routes they
   name are exercised
-- **THEN** the notes name hand-editing `.pi/team/config.sh`, and the `team init` they name (if any) is
-  `team init --force` with its re-render cost stated
+- **THEN** the notes name editing `.pi/team/config.sh` directly in plain words, and the `team init` they name
+  (if any) is `team init --force` with its re-render cost stated
 - **AND** a hand edit of `TEAM_PROJECT` changes what `team paths` prints, a bare `team init` re-run leaves the
   contract's sha256 unchanged (the measured pre-change note promised exactly this no-op as a route), and
   `team init --force` does change it by restoring the template's `TEAM_GATES` value — the cost the note names
+
+#### Scenario: The fixture marker is data, and the key stays a contract key
+
+- **GIVEN** a fixture project whose contract and schema carry the fixture-only keys
+- **WHEN** `team config list --json`, `team config list` and `team config set <key> <value> --yes` run
+- **THEN** each key's record still carries its `name`, `class`, `kind`, `default` and a `route` whose text begins
+  with the `fixture-only: ` marker, the human table still lists every one of them, and the write still refuses
+  with exit 5 and the same note as its reason
+- **AND** a scratch tree whose fixture row lost the marker makes the console render that key's row again (the
+  `panel` fixture's cross-check) while the read, the human table and the writer are unchanged by the flip
 
 ### Requirement: A write is accepted only against the file the writer read
 
@@ -419,7 +436,11 @@ possible future non-Pi adapter, **no compatibility promise**, and not asked in t
 The marking SHALL live in the schema row's free-text column so `team config list --json` reports it verbatim
 on each of the four records (the console shows it under the row, the same place a `refuse` key's route is
 shown), and the schema's own header comment SHALL document the free-text column as the same route/note field
-for `apply` keys. The human table (`KEY CLASS KIND VALUE`), the writer's validation, quoting, CAS, audit and
+for `apply` keys. Because that note is what the console renders to a user, it SHALL say the same thing in plain
+words — these four keys are reserved for a possible future non-Pi adapter, they are not a supported extension
+point and carry no compatibility promise, and a new project is not asked about them — without the shorthand
+`内部接缝` / `seam` / `frozen` the requirement's own name uses; `references/config.md` may keep the seam name
+(it is not the console's surface). The human table (`KEY CLASS KIND VALUE`), the writer's validation, quoting, CAS, audit and
 danger rules, the four keys' validated domains and the value of the keys' `class` SHALL be unchanged; the
 questionnaire's silence is the `init-skill` capability's promise, this requirement owns the schema and
 documentation marking.
@@ -429,8 +450,9 @@ documentation marking.
 - **GIVEN** a fixture project initialised from this tree
 - **WHEN** `team config list --json` runs
 - **THEN** each of the four records reports `"class":"apply"`, its existing `kind`/`form`/`default` fields
-  unchanged, and a `"route"` naming the frozen seam (`内部接缝（frozen）`) together with the no-compatibility
-  promise, while `team config list`'s human header is still `KEY CLASS KIND VALUE`
+  unchanged, and a `"route"` that says, in plain user-facing words, that the key is reserved for a possible
+  future non-Pi adapter and carries no compatibility promise (the wording itself is judged by design and review),
+  while `team config list`'s human header is still `KEY CLASS KIND VALUE`
 - **AND** the fixture's red side — a scratch tree via `TEAM_CONFIG_TREE` whose `TEAM_AGENT_CMD` row lost its
   marking — makes the config section exit non-zero and name `TEAM_AGENT_CMD`; restoring the marking is green
 
@@ -674,7 +696,7 @@ Loading config SHALL keep paths, help, doctor, config list/log/set/upgrade usabl
 
 ### Requirement: Machine reads separate future policy from committed assignments
 
-`config list --json` SHALL expose `models.policy` with ordered categories `{category,model}` and independent PM model, `models.assignments` with one roster row (assigned boolean plus task/category/model/selected_via/launch_via/SID when complete), PM selected launch identity separately, and `models.known` as ordered deduplicated project policy plus committed selected models. Unassigned/malformed rows use assigned false, empty string fields and a diagnostic, never guessed seat defaults or null/valueless fields. Original selection provenance is not re-labelled by current policy equality. A valid complete unchanged assignment remains assigned even when its recorded category was removed from the valid future mapping; no invalid-brief or fresh-required diagnostic may be invented solely from that deletion. Schema/model choices use only this project data, no machine provider catalogue. `ps`, `roster`, status and panel SHALL display last selected assignment and original/current launch source separately from next-new-task policy; records never prove later Pi-internal model changes. Read surfaces SHALL not mutate assignment/config/timestamps.
+`config list --json` SHALL expose `models.policy` with ordered categories `{category,model}` and independent PM model, `models.assignments` with one roster row (assigned boolean plus task/category/model/selected_via/launch_via/SID when complete), PM selected launch identity separately, and `models.known` as ordered deduplicated project policy plus committed selected models. Unassigned/malformed rows use assigned false, empty string fields and a diagnostic, never guessed seat defaults or null/valueless fields; each row also carries `record_present`, a boolean that answers the one question a reader cannot get from the diagnostic string — **does a record file exist for this seat at all** (true when the seat's state record exists, even if it is unreadable or carries no assignment field, false when there is none) — so a display can say plainly whether the seat was never dispatched or its record could not be read, without parsing the diagnostic. Original selection provenance is not re-labelled by current policy equality. A valid complete unchanged assignment remains assigned even when its recorded category was removed from the valid future mapping; no invalid-brief or fresh-required diagnostic may be invented solely from that deletion. Schema/model choices use only this project data, no machine provider catalogue. `ps`, `roster`, status and panel SHALL display last selected assignment and original/current launch source separately from next-new-task policy; records never prove later Pi-internal model changes. Read surfaces SHALL not mutate assignment/config/timestamps.
 
 #### Scenario: Policy edit does not rewrite current provenance
 - **GIVEN** an explicitly launched routine assignment and a later mapping edit
@@ -689,6 +711,7 @@ Loading config SHALL keep paths, help, doctor, config list/log/set/upgrade usabl
 #### Scenario: Empty and legacy records remain valid JSON without fictitious defaults
 - **WHEN** reads run with missing, legacy and malformed assignments and migration-required config
 - **THEN** every machine exit parses; missing actual model/category/SID are empty strings and assigned false with diagnosis, no writable worker-seat model appears
+- **AND** the missing-record row reports `record_present` false while a row whose record exists but cannot be read (legacy version, unreadable bytes, foreign content) reports true — the two are told apart without inspecting the diagnostic text
 
 #### Scenario: Known models are only project-owned model data
 - **GIVEN** fixture HOME with extra catalogue-only models

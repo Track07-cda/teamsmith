@@ -809,12 +809,21 @@ The project's correctness gate SHALL carry a route-sincerity walk (`bash skills/
 the correctness gate's `smoke.sh` and runnable standalone) that judges the CLI's printed surface against the CLI's
 real one:
 
-- For every usage line of `team help`, every `--flag` the line prints MUST be accepted by that command's own
+- For every usage line of the help surface — the level-0 menu (`team help`), every level-1 group page and every
+  level-2 command page (`help-surface#The help surface is a level-0 menu, a page per group and a page per command`
+  defines the levels) — every `--flag` the line prints MUST be accepted by that command's own
   parser: the walk runs the command with that flag in a fixture project and fails, naming the command and the
   flag, when the parser answers with the tool's unknown-parameter refusal (for a command that only execs another
   program, the walk reads that program's own argument table instead — declared with the file and the reason). A
   flag only a sibling command accepts MUST NOT satisfy the line. A usage line the walk cannot attribute to a
   command and its flags MUST fail naming the line — an unparsable line is never skipped.
+- The walk's working set SHALL come from the same command manifest the renderer reads (the single source
+  `help-surface#The help surface is a level-0 menu, a page per group and a page per command` names), not from
+  whatever text a rendered page happens to yield: for every command the manifest carries, every usage line it
+  declares MUST be printed on that command's page and probed, and a command the CLI accepts while the manifest
+  omits it MUST fail naming that command. Coverage is therefore "every command × every usage line it prints",
+  and the walk SHALL print the number of commands and usage lines it judged. The pre-change walk read one prose
+  block (`team help`) and judged 42 of the CLI's commands; a page's own usage line was not judged at all.
 - For every command whose line prints at least one flag, an unknown flag (`--frobnicate-probe`) MUST be refused:
   a command that swallows unknown arguments fails naming the command. This is the walk's non-vacuity control —
   without it, a printed flag that is quietly ignored reads as accepted.
@@ -841,7 +850,8 @@ The walk MUST NOT touch anything outside its own scratch fixtures: every command
 repository under `$TMPDIR` with a recording `tmux` shim first on `PATH`, `TEAM_MEETINGS_DIR` inside that fixture,
 `stdin` from `/dev/null` and a hard timeout; it removes every directory it creates; it prints one line per usage
 line, per probe and per refusal route (never a silent skip) and exits 0 only when every line, control, probe and
-route is green.
+route is green. It prints one line per level and per page it judged, so a level that was never read is visible
+as a missing group of lines rather than as silence.
 
 #### Scenario: The committed tree is green
 
@@ -940,6 +950,26 @@ route is green.
 - **GIVEN** a scratch tree whose refusal prints a `修法：` route for a family the walk has no entry for
 - **WHEN** the walk runs against it
 - **THEN** it exits non-zero naming that family instead of skipping it
+
+#### Scenario: A level-2 page's bad usage line is caught
+
+- **GIVEN** a scratch tree whose level-2 `dispatch` page prints `--ghost-probe` (a flag `dispatch` refuses)
+  while the menu's own `dispatch` line is clean
+- **WHEN** the walk runs against it
+- **THEN** it exits non-zero naming that page and `--ghost-probe` — the pre-change walk read only `team help` and
+  stayed green here
+
+#### Scenario: A command the manifest omits fails the coverage arm
+
+- **GIVEN** a scratch tree whose command manifest drops `bg` while the CLI still accepts it
+- **WHEN** the walk runs against it
+- **THEN** it exits non-zero naming `bg`, and the other commands' lines stay green
+
+#### Scenario: Every level is judged, not just the menu
+
+- **WHEN** the walk runs on the committed tree
+- **THEN** it prints an `ok` line for the menu, for each group page and for each command page it judged, its
+  summary carries the number of commands and usage lines it judged, and the level-0 menu's own scale check runs
 
 ### Requirement: A refused dispatch hands over every blocker, once, with a fix that runs
 
