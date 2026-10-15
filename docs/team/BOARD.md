@@ -424,7 +424,7 @@
 | P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | dropped |
 | P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | todo |
 | V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
-| P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | todo |
+| P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | wip |
 | P266 | Panel plain language: apply | dev3 | - | - | wip |
 | V35 | startup self-heal: independent verification | verify | - | - | wip |
 | V36 | panel plain language: independent verification | dev2 | - | - | blocked |
