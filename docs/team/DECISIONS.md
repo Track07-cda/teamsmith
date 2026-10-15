@@ -1630,3 +1630,13 @@ identity: category=docs model=cline/deepseek/deepseek-v4.1-flash:max selected_vi
 在飞变更之间**改到同一个 capability** 是常态（本批有 `init-skill`、`key-replies`、`panel`、`pm-lifecycle` 四处）。同一标题的 MODIFIED 在归档时按**整块替换**（D/记忆 2130 的教训），所以「两条变更改同一个 requirement」时归档顺序会决定结果。核对方法：按 capability 汇总每条在飞变更 delta 里的 `### Requirement:` 标题，取跨变更的同名标题。
 
 **本批结果：零重叠**（`init-skill` 由 startup-self-heal 与 slash-team 各改不同条目；`panel` 由 panel-plain-language 与 panel-preview 各改不同条目；`key-replies` 由 panel-plain-language 与 pm-reply-discipline 各改不同条目；`pm-lifecycle` 由 startup-self-heal 与 tmux-identity-scope 各改不同条目）。因此本批归档**顺序无关**；今后新增变更时按同一方法先核一遍，再决定顺序。
+
+### D175 更正（2026-10-15，用户指出插件已卸载）：`:max` 现在是真档位，且显式档位优先于「记住的档位」
+
+用户指出「不是卸载了 clinepass 插件吗」。核实结果（三条都是读配置/源码，不涉及凭据值）：
+
+1. **插件确实已卸载**：`~/.pi/agent/npm/node_modules/pi-clinepass-provider` 目录不存在，`settings.json` 的 `packages` 里也没有它。所以 D175 里「插件缺 `max` 键 → 被静默降级」**只适用于插件时代**，现在该模型的定义来自用户**直接写在 models.json 里**的条目。
+2. **直接配置里 `max` 是真的**：`providers.clinepass.models[cline-pass/deepseek-v4.1-flash].thinkingLevelMap = {off:low, minimal:low, low:low, medium:high, high:high, xhigh:high, **max:max**}`（另有 `samplingParamsByThinkingLevel`）。也就是说 `:max` 按映射就是上游的 `max`，**没有降级路径**。我先前写入的 `modelOverrides` 已不在文件里（直接配置替换了该条目）——**不需要它**，因为模型定义自己带了 `max`。
+3. **显式档位优先**：`pi` 的 `model-resolver.js` 第 492–500 行，`--model <p>/<m>:<level>` 这条路径的档位取值顺序是 `显式档位 ?? 记住的档位（settings.json 的 modelThinkingLevels）?? 默认档位`。所以 `TEAM_TASK_MODELS` 里带的 `:max` **赢过** `settings.json` 里记着的 `xhigh`（那个值只在**不指定**档位时生效）。
+
+**仍然没有观测到的**：出网请求体（pi 没有 payload 日志开关），所以「请求里确实带着 max」仍是**机制链**（模型映射 + 解析器优先级）而非抓包证据。这条边界照旧如实保留。
