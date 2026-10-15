@@ -458,7 +458,7 @@
 | P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev3 | - | - | blocked |
 | P289 | Tick the help-robustness checklist by evidence | dev-bob | - | - | done |
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev-bob | - | - | done |
-| P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | wip |
+| P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | done |
 | V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev-bob | - | - | done |
 | V47 | Verify writing-discipline and build the human-read blind package | dev3 | - | - | wip |
 | P291 | A formal way for the PM to end a seat's runaway turn (with audit and a reason it can read) | dev | - | - | todo |
