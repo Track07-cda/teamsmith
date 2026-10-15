@@ -456,7 +456,7 @@
 | P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | wip |
 | P287 | Gate tmp/lock must survive another project's pattern cleanup | dev3 | - | - | done |
 | P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev3 | - | - | blocked |
-| P289 | Tick the help-robustness checklist by evidence | dev | - | - | todo |
+| P289 | Tick the help-robustness checklist by evidence | dev-bob | - | - | wip |
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev | - | - | todo |
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | wip |
 | V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev | - | - | todo |
