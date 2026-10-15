@@ -4,7 +4,7 @@ task: P287
 agent: -
 phase: propose
 category: analysis
-change: -
+change: gate-lock-external-deletion
 anchor: none (infra) — 共享机器资源的归属与可见性
 deltas: -
 branch: task/P287-gate-lock-external-deletion
