@@ -1,14 +1,18 @@
 # P272 · 帮助面的三条收尾（V38 的观察 O1 / O2 / O6）
 
 task: P272
-agent: dev2
+agent: dev
 phase: apply
 category: code
-change: cli-help
+change: help-robustness
 specs: help-surface
 deltas: help-surface
 branch: task/P272-help-robustness
-deps: P260（已并入 main）；独立复验 V38 的观察表（`docs/team/reviews/V38.md` §0）
+deps: P260（已并入 main）、**cli-help 已归档**（新变更要修改的 `help-surface` 能力得先落到规格库里；本任务排在它归档之后）；独立复验 V38 的观察表（`docs/team/reviews/V38.md` §0）
+
+## 为什么单开一个变更（PM 2026-10-15）
+
+这三条是 V38 复验里**新发现**的收尾项（非阻塞观察），不是 `cli-help` 原范围的一部分：原来把它挂在 `change: cli-help` 上，会让那个变更永远关不掉（它已经交付并复验通过）。所以新开 `help-robustness`：它 **MODIFY** 已归档的 `help-surface` 能力。派单前先确认 `openspec/changes/archive/2026-10-15-cli-help/` 已在，否则先报我。
 
 ## 三条（都来自 V38 的观察表，按优先级）
 
