@@ -1598,3 +1598,21 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 2. **同任务的记录会盖住配置改动**：我先前跑 `dispatch --print` 看解析结果时，那个任务记录里已经是旧模型，于是预览显示旧值（`#2328` 的语义），进一步掩盖了问题。改配置后要验证，必须用**新任务**或显式 `--model`。
 
 **处置**：两个席位（P270 `/team` 实现、P271 清单勾选）已用显式 `--model 'clinepass/cline-pass/deepseek-v4.1-flash:max' --fresh` 重新拉起，均在跑；配置里的四个类别已改成正确的三段式串，后续新任务无需 `--model`。
+
+### D176 追加：用户改用直接配置 → 本项目全部类别与 PM 模型改为 `cline/deepseek/deepseek-v4.1-flash:max`（2026-10-15）
+
+用户卸载了 clinepass 插件、改为在 Pi 的 models 配置里**直接配置** provider `cline`（模型 id `deepseek/deepseek-v4.1-flash`），并要求本项目「agent 模型配置都使用 `cline/deepseek/deepseek-v4.1-flash:max`」。已写：
+
+- `TEAM_TASK_MODELS='code=… verify=… analysis=… infra=… docs=… = cline/deepseek/deepseek-v4.1-flash:max'`（补了 `docs` 类别——P255 的 brief 用它，之前没映射，派单被守卫正确拒绝）；
+- `TEAM_PM_MODEL='cline/deepseek/deepseek-v4.1-flash:max'`（**PM 自身**也是这个；PM 换模型要在下次重启时生效，那是另一个门）。
+
+**这次按 D176 的教训做了真证据**（新增任务、`--print`，不启动不写状态）：
+
+```
+identity: category=docs model=cline/deepseek/deepseek-v4.1-flash:max selected_via=policy launch_via=policy mode=fresh
+启动命令：pi --provider cline --model deepseek/deepseek-v4.1-flash:max
+```
+
+（两道守卫按设计拦了我一次：P255 的 `docs` 类别未映射 → 拒绝；verify 工作树停在别的分支 → 拒绝并要求先切分支。都是对的。）
+
+**在飞任务的模型不会自动跟随**（「一个任务固定模型」的既有合同）：dev/P270 与 dev-bob/P271 记录里是 `clinepass/cline-pass/…`（同一 provider 的另一条目，插件卸载前写入的），dev2/V38 与 dev3/P266 是 `opencode-go/…`。要让它们改用新串必须 `--model … --fresh`（换新会话、丢当前对话上下文）——**当前四个席位都在跑，我不擅自在它们中途重启**；等各自这一轮交回后，下一次派单/复验自然用新配置。用户若要立刻统一，说一声我就逐个 restart。
