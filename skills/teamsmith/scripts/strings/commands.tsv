@@ -26,7 +26,9 @@
 #
 # The prose for every command lives in help.en.tsv (source) and help.zh.tsv (translation); a key the
 # selected table lacks is printed with a marker naming it and falls back to the other table's value.
-# Declared placeholders in prose values: {project} {meeting_ttl} {effect} {faces} {undo_cmd}
+# Placeholders the values may carry — the closed set is declared in scripts/lib/cmd-help.sh
+# (TEAM_HELP_PLACEHOLDERS); any other braced token fails the render: {project} {meeting_ttl}
+# {token} {sub} {cmd} {undo_cmd}
 group	start
 group	observe
 group	ledger

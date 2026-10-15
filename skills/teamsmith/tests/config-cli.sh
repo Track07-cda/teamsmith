@@ -363,8 +363,14 @@ if want validate; then
   assert_eq "所有被拒的尝试都没改契约" "$(sha_of "$cfg")" "$sha_b"
   err="$(run_in "$p" config set TEAM_MONITOR_UI colour --yes)"
   case "$err" in *auto*tui*text*) ok "枚举报错点名接受域（auto|tui|text）" ;; *) bad "枚举报错没点名接受域（$err）" ;; esac
-  err="$(run_in "$p" config set TEAM_PROJECT x --yes)"
-  case "$err" in *"只读"*) ok "refuse 的报错点名只读" ;; *) bad "refuse 的报错没说清（$err）" ;; esac
+  # P278/O7：拒绝语是行为合同（退出码 + 文件路线 + 契约不动），不是「只读键」这类行话
+  err="$(run_in "$p" config set TEAM_PROJECT x --yes)"; rc=$?
+  assert_eq "refuse：TEAM_PROJECT 的退出码是 5" "$rc" "5"
+  case "$err" in *".pi/team/config.sh"*) ok "refuse 的报错点名项目配置文件 .pi/team/config.sh" ;;
+    *) bad "refuse 的报错没给文件路线（$err）" ;; esac
+  case "$err" in *"只读"*|*"控制台"*) bad "refuse 的报错还在用行话（$err）" ;;
+    *) ok "refuse 的报错不含「只读/控制台」行话" ;; esac
+  assert_eq "refuse 被拒之后契约逐字节未变" "$(sha_of "$cfg")" "$sha_b"
   # danger 的显式旗标真的能写
   run_in "$p" config set TEAM_MIN_FREE_SWAP_MB 0 --yes --allow-danger >/dev/null; rc=$?
   assert_eq "danger + --allow-danger → 0 并写入" "$rc" "0"
@@ -383,6 +389,53 @@ if want validate; then
   out="$(run_in "$none" config set TEAM_GATES x --yes)"; rc=$?
   [ "$rc" -ne 0 ] && ok "无契约时 set 非 0（rc=$rc）" || bad "无契约时 set 居然成功"
   case "$out" in *"team init"*) ok "无契约时 set 的报错点名 team init" ;; *) bad "报错没点名 team init（$out）" ;; esac
+  # P278/O7 红侧：scratch 树里把 refuse 分支改成放行 → validate 段红并点名 TEAM_PROJECT；还原 → 绿
+  if [ -n "$_tree_arg" ]; then
+    skip "P278 红侧：本次已是 scratch 树再入运行（TEAM_CONFIG_TREE 已设），不重复嵌套"
+  else
+    rtree="$tmp/refuse-tree"; mkdir -p "$rtree/skills/teamsmith"
+    cp -a "$skill/scripts" "$skill/templates" "$skill/references" "$rtree/skills/teamsmith/"
+    rcc="$rtree/skills/teamsmith/scripts/lib/cmd-config.sh"
+    set +e
+    TEAM_CONFIG_TREE="$rtree" bash "$here/config-cli.sh" validate > "$tmp/refuse-flip-green0.log" 2>&1
+    r_rc0=$?
+    [ "$r_rc0" -eq 0 ] && ok "P278 红侧前置：scratch 树原状 validate 段绿（rc=0）" \
+      || { bad "P278 红侧前置：scratch 树原状就红了（rc=$r_rc0，翻转无效）"; grep -a '✗' "$tmp/refuse-flip-green0.log" | head -3 | sed 's/^/      /'; }
+    python3 - "$rcc" <<'MUTPY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+old = """  if [ "$class" = "refuse" ]; then
+    team_err "$key 不能由命令改"
+    team_dim "  $(team_config_field "$row" 8)" >&2
+    [ "$dry" = "1" ] || team_config_audit_write refused "$actor" "$key" "$old" "$val" || true
+    return "$TEAM_CONFIG_EXIT_REFUSE"
+  fi"""
+assert old in s, "the refuse branch was not found"
+open(p, "w", encoding="utf-8").write(s.replace(old, "  # MUTANT: the refuse class is let through", 1))
+MUTPY
+    if grep -q 'MUTANT: the refuse class is let through' "$rcc"; then
+      ok "P278 mutant：refuse 分支被删掉（放行）"
+    else
+      bad "P278 mutant 没打中（refuse 分支还在）"
+    fi
+    TEAM_CONFIG_TREE="$rtree" bash "$here/config-cli.sh" validate > "$tmp/refuse-flip-red.log" 2>&1
+    r_rc_red=$?
+    if [ "$r_rc_red" -ne 0 ] && grep -q '✗.*TEAM_PROJECT' "$tmp/refuse-flip-red.log"; then
+      ok "P278 红侧：refuse 放行 → validate 段非 0（rc=$r_rc_red）并点名 TEAM_PROJECT"
+    else
+      bad "P278 红侧：放行后没有点名 TEAM_PROJECT（rc=$r_rc_red）"
+      grep -a '✗' "$tmp/refuse-flip-red.log" | head -3 | sed 's/^/      /'
+    fi
+    printf '    --- P278 红侧尾部 ---\n'
+    { grep -aE '✗.*TEAM_PROJECT|== 结果' "$tmp/refuse-flip-red.log" || true; } | tail -4 | sed 's/^/    /'
+    cp -a "$cmd_config" "$rcc"
+    TEAM_CONFIG_TREE="$rtree" bash "$here/config-cli.sh" validate > "$tmp/refuse-flip-restored.log" 2>&1
+    r_rc_rest=$?
+    [ "$r_rc_rest" -eq 0 ] && ok "P278 还原：refuse 分支回来 → validate 段重新绿（rc=0）" \
+      || { bad "还原后没有变绿（rc=$r_rc_rest）"; grep -a '✗' "$tmp/refuse-flip-restored.log" | head -3 | sed 's/^/      /'; }
+    set +e
+  fi
 fi
 
 # ---------------------------------------------------------------- seam（P266 · panel-plain-language）

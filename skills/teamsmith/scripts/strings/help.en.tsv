@@ -9,7 +9,9 @@
 #   part.<id>.title     a labelled part of a command page
 #   claim.<x>           the sentence a declared effect/authorization/undo value renders as
 #
-# Placeholders allowed in values: {project} {meeting_ttl} {effect} {faces} {undo_cmd}
+# Placeholders the values may carry — the closed set is declared in scripts/lib/cmd-help.sh
+# (TEAM_HELP_PLACEHOLDERS); any other braced token fails the render: {project} {meeting_ttl}
+# {token} {sub} {cmd} {undo_cmd}
 # Values must not contain tabs or newlines; a value in another table is the fallback for a missing key.
 menu.lead	teamsmith turns one git repository into a small team: a PM agent that plans, writes briefs and verifies work, and worker agents that implement in their own worktrees. Every promise it prints is checked by its own gate.
 menu.groups	Groups

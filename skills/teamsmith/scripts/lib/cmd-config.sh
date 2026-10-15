@@ -97,7 +97,7 @@ TEAM_JS_BIN|apply|path|exec,opt|plain||-|||roster
 TEAM_TASK_MODELS|apply|task-model-map|req|plain||-|新任务用哪个模型：用 team config set-task-model <类别> <模型> 改；已经派出去的任务保留它当时的模型||task-model
 TEAM_PM_MODEL|restart|model|req|plain||-|PM 用哪个模型：下次 team up 启动时生效，换模型要用 --fresh-pm；旧记录缺失或不一致时按 pm-lifecycle 合同处理||task-model
 # ---- 工具自身（配置形状号与版本提示；P261 · startup-self-heal）----
-TEAM_CONFIG_VERSION|refuse|int|1,|plain|2|-|配置形状号（工具写、控制台不写）：新项目由 init/bootstrap 写，旧项目由启动事务（见 references/migration.md）迁移时写；高于本工具已知最新的形状号直接拒绝。行为证据：tests/task-model-routing.sh 的 heal 组||task-model
+TEAM_CONFIG_VERSION|refuse|int|1,|plain|2|-|配置形状号（工具写、命令不写）：新项目由 init/bootstrap 写，旧项目由启动事务（见 references/migration.md）迁移时写；高于本工具已知最新的形状号直接拒绝。行为证据：tests/task-model-routing.sh 的 heal 组||task-model
 TEAM_UPDATE_CHECK|apply|bool||plain|1|-|启动路径上的 npm 版本提示：0 = 连查询都不发生（不读不写缓存）；只有本地落后时打一行，工具从不自己安装。行为证据：tests/task-model-routing.sh 的 updatecheck 组||workflow
 # ---- 工作流与门禁（apply）----
 TEAM_GATES|apply|cmd||plain||-|||workflow
@@ -338,13 +338,13 @@ team_config_validate_value() {
   local key="$1" val="${2-}" row class kind spec form
   row="$(team_config_row "$key" 2>/dev/null || true)"
   if [ -z "$row" ]; then
-    printf '不是已知的项目设置键（references/config.md 是清单）；自定义键请手改 .pi/team/config.sh\n'
+    printf '不是已知的项目设置键（references/config.md 是清单）；自定义键写在 .pi/team/config.sh 里\n'
     return 1
   fi
   class="$(team_config_field "$row" 2)"; kind="$(team_config_field "$row" 3)"
   spec="$(team_config_field "$row" 4)"; form="$(team_config_field "$row" 5)"
   if [ "$class" = "refuse" ]; then
-    printf '只读键（%s）\n' "$(team_config_field "$row" 8)"
+    printf '不能由命令改（%s）\n' "$(team_config_field "$row" 8)"
     return 1
   fi
   case "$val" in
@@ -924,13 +924,13 @@ team_config_write_checked_unlocked() { # <KEY> <value> <actor> <dry> <fp> <allow
     team_err "$key 不是已知的项目设置键"
     case "$key" in TEAM_DEFAULT_MODEL|TEAM_AGENT_MODELS)
       team_dim "  retired: $TEAM_CLI config set-task-model <category> <model>；config set TEAM_PM_MODEL <model>；config upgrade-models" >&2 ;;
-      *) team_dim "  已知键：$TEAM_CLI config list；自定义键请手改 $path" >&2 ;; esac
+      *) team_dim "  已知键：$TEAM_CLI config list；自定义键写在 $path 里" >&2 ;; esac
     [ "$dry" = "1" ] || team_config_audit_write refused "$actor" "$key" "$old" "$val" || true
     return "$TEAM_CONFIG_EXIT_REFUSE"
   fi
   local class kind; class="$(team_config_field "$row" 2)"; kind="$(team_config_field "$row" 3)"
   if [ "$class" = "refuse" ]; then
-    team_err "$key 是只读键，控制台不改它"
+    team_err "$key 不能由命令改"
     team_dim "  $(team_config_field "$row" 8)" >&2
     [ "$dry" = "1" ] || team_config_audit_write refused "$actor" "$key" "$old" "$val" || true
     return "$TEAM_CONFIG_EXIT_REFUSE"
@@ -1136,7 +1136,7 @@ team_cmd_config_set_agent_model() {
   [ "$seat" = "pm" ] && audit_key="TEAM_PM_MODEL"
   if ! team_config_seat_known "$seat"; then
     team_err "未知席位 $seat：名册是（$(team_config_roster_text)）加 pm"
-    team_dim "  名册的键是 TEAM_AGENTS（只读）：$TEAM_CLI add-agent $seat --register（或 team teardown --agent $seat --register）" >&2
+    team_dim "  名册的键是 TEAM_AGENTS（不能由命令改）：$TEAM_CLI add-agent $seat --register（或 team teardown --agent $seat --register）" >&2
     [ "$dry" = "1" ] || team_config_audit_write refused "$actor" "$audit_key" "$seat" "$model" || true
     return "$TEAM_CONFIG_EXIT_REFUSE"
   fi
@@ -1581,7 +1581,7 @@ team_cmd_config() {
                      [--fingerprint <sha256>] [--actor <name>] 显式四键事务升级
   $TEAM_CLI config log [N]                           审计尾部（默认 10 行）
 
-退出码： 0 写入/校验通过 ｜ 3 指纹冲突 ｜ 4 值不合法 ｜ 5 键只读 ｜ 6 写失败 ｜ 7 危险值需 --allow-danger
+退出码： 0 写入/校验通过 ｜ 3 指纹冲突 ｜ 4 值不合法 ｜ 5 这个键不能由命令改 ｜ 6 写失败 ｜ 7 危险值需 --allow-danger
 EOF
       ;;
     *) team_usage_die "config: 未知子命令 $sub（list|set|log|set-task-model|upgrade-models）" ;;

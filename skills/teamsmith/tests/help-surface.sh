@@ -11,6 +11,9 @@
 #   lang        the language *mechanism*: English by default, TEAM_LANG=zh switches, an invalid
 #               value prints one visible warning and falls back, a missing key renders a visible
 #               marker (never blank, never a crash), and no machine exit moves with the language
+#   locale      one tree, one TEAM_LANG and one TEAM_HELP_WIDTH render the same bytes under
+#               LC_ALL=C and LC_ALL=C.UTF-8; every run is valid UTF-8; no line exceeds the width the
+#               surface wraps to (the fixture's own locale-independent counter, not the renderer's)
 #   claims      the declared effect / authorization / reversibility values: closed vocabularies,
 #               one probe per value, and each probe run against a real fixture asserting the effect
 #   invariants  command names, flag names and the literals other specs name: unchanged; the
@@ -57,7 +60,7 @@ keep="$_keep_arg"
 
 # render mode: this file re-invokes itself to render one page in parallel with its siblings
 if [ "${1:-}" = "--render-one" ]; then
-  _lang="$2"; _spec="$3"; _dir="$4"
+  _lang="$2"; _spec="$3"; _dir="$4"; _loc="${5:-}"; _w="${6:-}"
   _kind="${_spec%%:*}"; _label="${_spec#*:}"
   [ "$_label" = "-" ] && _label="menu"
   case "$_kind" in
@@ -66,19 +69,28 @@ if [ "${1:-}" = "--render-one" ]; then
     command) _argv=(help "$_label") ;;
     *) exit 3 ;;
   esac
+  # _loc / _w are empty for every pre-existing caller: those renders keep inheriting the caller's
+  # locale and width exactly as before (the locale group is the only caller that pins them).
+  _env=()
+  [ -n "$_loc" ] && _env=(LC_ALL="$_loc")
   _rtmp="${TMPDIR:-/tmp}/teamsmith-help-surface-render.$$"
   mkdir -p "$_rtmp" "$_dir"
-  ( cd "$_rtmp" && TEAM_LANG="$_lang" bash "$team" "${_argv[@]}" ) > "$_dir/$_kind--$_label.txt" 2>/dev/null
+  ( cd "$_rtmp" && env "${_env[@]}" TEAM_LANG="$_lang" ${_w:+TEAM_HELP_WIDTH="$_w"} \
+      bash "$team" "${_argv[@]}" ) > "$_dir/$_kind--$_label.txt" 2>/dev/null
   _rrc=$?
   rm -rf "$_rtmp"
   exit $_rrc
 fi
 
+# the selectable groups: a name outside this list used to print "command not found" and still exit 0
+# (a misspelled or retired group name was a silent green), so the selector now refuses it by name
+KNOWN_SECTIONS="coverage locale lang claims invariants route"
+
 SECTIONS=()
 FLIP=0
 for a in "$@"; do
   case "$a" in
-    --all) SECTIONS=(coverage lang claims invariants route) ;;
+    --all) SECTIONS=($KNOWN_SECTIONS) ;;
     --flip) FLIP=1 ;;
     --select) : ;;
     --select=*) IFS=',' read -r -a SECTIONS <<< "${a#*=}" ;;
@@ -86,7 +98,15 @@ for a in "$@"; do
     *) IFS=',' read -r -a SECTIONS <<< "$a" ;;
   esac
 done
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(coverage lang claims invariants route)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=($KNOWN_SECTIONS)
+_bad_sel=""
+for _s in "${SECTIONS[@]}"; do
+  case " $KNOWN_SECTIONS " in *" $_s "*) ;; *) _bad_sel="$_bad_sel $_s" ;; esac
+done
+if [ -n "$_bad_sel" ]; then
+  printf 'help-surface: 未知的选段%s（可用：%s）\n' "$_bad_sel" "${KNOWN_SECTIONS// /, }" >&2
+  exit 2
+fi
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 [ -f "$team" ] || { printf 'help-surface: 没有 CLI：%s\n' "$team" >&2; exit 3; }
@@ -225,6 +245,29 @@ page() {
 
 # cells <text> — display cells (mirrors the renderer's rule; a CJK-wide character counts two)
 cells() { printf '%s' "$1" | python3 -c 'import sys,unicodedata; s=sys.stdin.read(); print(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s))'; }
+
+# has_cjk <text> → 0 when the text carries a CJK code point. Not `grep '[一-龥]'`: under LC_ALL=C that
+# bracket expression is a byte range that matches almost any byte, so the very same menu came out
+# "Chinese" in one locale and English in the other. A verdict that moves with the caller's locale is
+# the defect this change removes from the surface — the checker must not reintroduce it.
+has_cjk() {
+  python3 -c '
+import sys
+data = sys.stdin.buffer.read().decode("utf-8", "replace")
+sys.exit(0 if any("\u3400" <= c <= "\u9fff" or "\uf900" <= c <= "\ufaff" for c in data) else 1)
+'
+}
+
+# the dispatcher's internal labels: the case arms of scripts/team whose name begins with `__`
+team_internal_labels() {
+  awk '
+    /^case "\$CMD" in/ { inb=1; next }
+    inb && /^esac/ { inb=0 }
+    inb && /^[[:space:]]+__[A-Za-z0-9_'"'"'|.-]*\)/ {
+      line=$0; sub(/^[[:space:]]+/,"",line); sub(/\).*/,"",line)
+      n=split(line,a,"|"); for (i=1;i<=n;i++){ if (a[i] !~ /^__/) continue; gsub(/[^a-z0-9_-]/,"",a[i]); if(a[i]!="") printf "%s\n", a[i] }
+    }' "$skill/scripts/team" | sort -u
+}
 
 # the dispatcher's own labels (the case arms of scripts/team), minus the internal data path
 team_labels() {
@@ -412,18 +455,31 @@ manifest_group_commands() {
 
 # ---------------------------------------------------------------- pages (rendered once, checked many times)
 pages_tsv="$tmp/pages.tsv"; : > "$pages_tsv"
+# page_list → the pages this fixture renders: the menu, every group page and every command page
+page_list() {
+  local g c
+  if [ -n "${TEAM_HELP_SURFACE_ONLY:-}" ]; then
+    for c in ${TEAM_HELP_SURFACE_ONLY}; do printf 'command\t%s\n' "$c"; done
+    return 0
+  fi
+  printf 'menu\t-\n'
+  for g in "${MG_GROUPS[@]}"; do printf 'group\t%s\n' "$g"; done
+  for c in "${MG_ORDER[@]}"; do printf 'command\t%s\n' "$c"; done
+}
+
+# render_into <dir> <lang> [<locale>] [<width>] — renders the whole page list into <dir>
+render_into() {
+  local dir="$1" lang="$2" loc="${3:-}" w="${4:-}"
+  mkdir -p "$dir"
+  page_list | awk -F'\t' '{printf "%s:%s\n", $1, $2}' \
+    | xargs -P 6 -I@ bash "$0" --render-one "$lang" @ "$dir" "$loc" "$w" >/dev/null 2>&1
+}
+
 render_pages() { # <lang>
   local lang="$1" dir jobs
   dir="$tmp/pages/$lang"; jobs="$tmp/jobs-$lang.txt"
   mkdir -p "$dir"; : > "$jobs"
-  local g c
-  if [ -n "${TEAM_HELP_SURFACE_ONLY:-}" ]; then
-    for c in ${TEAM_HELP_SURFACE_ONLY}; do printf 'command\t%s\n' "$c" >> "$jobs"; done
-  else
-    printf 'menu\t-\n' >> "$jobs"
-    for g in "${MG_GROUPS[@]}"; do printf 'group\t%s\n' "$g" >> "$jobs"; done
-    for c in "${MG_ORDER[@]}"; do printf 'command\t%s\n' "$c" >> "$jobs"; done
-  fi
+  page_list > "$jobs"
   awk -F'\t' '{printf "%s:%s\n", $1, $2}' "$jobs" \
     | xargs -P 6 -I@ bash "$0" --render-one "$lang" @ "$dir" >/dev/null 2>&1
   while IFS=$'\t' read -r kind label; do
@@ -434,6 +490,93 @@ render_pages() { # <lang>
 
 # page_text <lang> <kind> <label> → the rendered page
 page_text() { cat "$tmp/pages/$1/$2--$3.txt"; }
+
+# ---------------------------------------------------------------- locale and width
+# This group's oracle is the fixture's own locale-independent counter (python3's unicodedata) and
+# never the renderer's functions: the point is that an independent reader disagrees with a renderer
+# that takes its display widths from the locale.
+locale_diff() { # <a> <b> <tag> → one line naming the first differing line
+  python3 - "$1" "$2" "$3" <<'PYEOF'
+import sys
+a = open(sys.argv[1], 'rb').read().split(b'\n')
+b = open(sys.argv[2], 'rb').read().split(b'\n')
+for i, (x, y) in enumerate(zip(a, b), 1):
+    if x != y:
+        print("%s: line %d differs" % (sys.argv[3], i))
+        break
+else:
+    if len(a) != len(b):
+        print("%s: line count %d vs %d" % (sys.argv[3], len(a), len(b)))
+PYEOF
+}
+
+locale_violations() { # <width> <tag-prefix> <file…> → one line per over-wide line or invalid byte
+  python3 - "$@" <<'PYEOF'
+import sys, unicodedata
+width = int(sys.argv[1]); prefix = sys.argv[2]
+for path in sys.argv[3:]:
+    name = path.rsplit('/', 1)[-1][:-4]
+    data = open(path, 'rb').read()
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError as exc:
+        print("%s%s: not valid UTF-8 (%s)" % (prefix, name, exc))
+        continue
+    for i, line in enumerate(text.split('\n'), 1):
+        w = sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in line)
+        if w > width:
+            print("%s%s: line %d is %d cells, over %d (%s)" % (prefix, name, i, w, width, line.strip()[:40]))
+PYEOF
+}
+
+check_locale() {
+  section "locale · 同一输入在任何 locale 下同一份字节、每行不超过 TEAM_HELP_WIDTH、输出合法 UTF-8"
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip "locale: 没有 python3（本组用它自己的 unicodedata 计数，不调用渲染器）"
+    return 0
+  fi
+  local dw=100 aw=64 lang page run w n bad first
+  local -a pages=() langs=(en zh)
+  while IFS=$'\t' read -r _k _l; do
+    [ "$_l" = "-" ] && _l=menu
+    pages+=("$_k--$_l")
+  done < <(page_list)
+  if [ "${#pages[@]}" = "0" ]; then finding "locale: 页面清单是空的"; return 0; fi
+  for lang in "${langs[@]}"; do
+    render_into "$tmp/locale/$lang/C/$dw"       "$lang" C       "$dw"
+    render_into "$tmp/locale/$lang/C.UTF-8/$dw" "$lang" C.UTF-8 "$dw"
+    render_into "$tmp/locale/$lang/C.UTF-8/$aw" "$lang" C.UTF-8 "$aw"
+  done
+  for lang in "${langs[@]}"; do
+    # ① one tree, one TEAM_LANG, one TEAM_HELP_WIDTH → the same bytes under LC_ALL=C and C.UTF-8
+    n=0; bad=""
+    for page in "${pages[@]}"; do
+      cmp -s "$tmp/locale/$lang/C/$dw/$page.txt" "$tmp/locale/$lang/C.UTF-8/$dw/$page.txt" && continue
+      n=$((n + 1))
+      if [ "$n" -le 3 ]; then
+        bad="$bad $page[$(locale_diff "$tmp/locale/$lang/C/$dw/$page.txt" \
+          "$tmp/locale/$lang/C.UTF-8/$dw/$page.txt" x | sed 's/^x: //')]"
+      fi
+    done
+    if [ "$n" = "0" ]; then ok "locale($lang): ${#pages[@]} 个页面在 LC_ALL=C 与 LC_ALL=C.UTF-8 下逐字节相同"
+    else finding "locale($lang): $n 个页面随 locale 变：$bad"; fi
+    # ② every run is valid UTF-8 and every line fits the width it was rendered with
+    for run in "C/$dw" "C.UTF-8/$dw" "C.UTF-8/$aw"; do
+      case "$run" in */"$aw") w="$aw" ;; *) w="$dw" ;; esac
+      local -a files=()
+      for page in "${pages[@]}"; do files+=("$tmp/locale/$lang/$run/$page.txt"); done
+      n=0; bad=""
+      while IFS= read -r first; do
+        [ -n "$first" ] || continue
+        n=$((n + 1))
+        [ "$n" -le 3 ] && bad="$bad $first"
+      done < <(locale_violations "$w" "" "${files[@]}")
+      if [ "$n" = "0" ]; then ok "locale($lang, $run): ${#pages[@]} 个页面都是合法 UTF-8 且每行 ≤ $w 格"
+      else finding "locale($lang, $run): $n 个页面越界或不是合法 UTF-8：$bad"; fi
+    done
+  done
+  return 0
+}
 
 # ---------------------------------------------------------------- coverage
 check_coverage() {
@@ -550,6 +693,94 @@ check_coverage() {
     done
   done
   [ "$aw" = "0" ] && ok "每个别名都打印主命令的页并点名该别名"
+
+  # O2 · the dispatcher's internal entries are a closed set, declared in one place (here)
+  local internal="__inbox-write __panel-data"
+  local found want nm extra="" miss="" n
+  found="$(team_internal_labels)"
+  want="$(printf '%s\n' $internal | sort -u)"
+  for n in $found; do printf '%s\n' $want | grep -qx "$n" || extra="$extra $n"; done
+  for n in $want; do printf '%s\n' $found | grep -qx "$n" || miss="$miss $n"; done
+  if [ -n "$extra" ]; then finding "内部入口清单：dispatcher 的 __ 标签$extra 不在声明清单里"; fi
+  if [ -n "$miss" ]; then finding "内部入口清单：声明清单里的$miss 已经不是 dispatcher 的 __ 标签"; fi
+  if [ -z "$extra" ] && [ -z "$miss" ]; then
+    ok "内部入口清单与 dispatcher 的 __ 标签双向相等（$(printf '%s\n' $want | grep -c . ) 个）"
+  fi
+  local leak=0 d hits
+  for d in "$tmp/pages/en" "$tmp/pages/zh"; do
+    [ -d "$d" ] || continue
+    for n in $internal; do
+      hits="$(grep -rl -e "$n" "$d" 2>/dev/null | head -3 | while read -r f; do basename "$f"; done | paste -sd ' ' -)"
+      [ -n "$hits" ] && { finding "页面打印了内部入口 $n：$hits"; leak=1; }
+    done
+  done
+  [ "$leak" = "0" ] && ok "没有任何页面打印内部入口的名字（菜单/组页/命令页，两种语言）"
+  local pre=0
+  for n in "${MG_ORDER[@]}"; do
+    case "$n" in __*) finding "清单里的命令名 $n 以 __ 开头（内部入口不许进清单）"; pre=1 ;; esac
+  done
+  [ "$pre" = "0" ] && ok "清单里没有以 __ 开头的命令名"
+
+  # O6 · reachability is judged from the manifest: the menu names every declared group and no other,
+  # and every command is listed by a group page whose group the menu has an entry point for
+  local declared named g c unreach rg=0
+  declared="$(printf '%s\n' "${MG_GROUPS[@]}" | sort -u)"
+  named="$(awk '/^──/{exit} /^  [^ ]/{print $1}' "$tmp/pages/en/menu--menu.txt" 2>/dev/null | sort -u)"
+  for g in $declared; do
+    printf '%s\n' "$named" | grep -qx "$g" && continue
+    unreach="$(manifest_group_commands "$g" | paste -sd ' ' -)"
+    finding "分组 $g 在菜单里没有入口，它下面的命令${unreach:-（无）}变成不可达"
+    rg=1
+  done
+  for g in $named; do
+    printf '%s\n' "$declared" | grep -qx "$g" || { finding "菜单点名了清单没有声明的分组 $g"; rg=1; }
+  done
+  [ "$rg" = "0" ] && ok "菜单的分组入口与清单的分组表双向相等（${#MG_GROUPS[@]} 个组）"
+  local reach=0
+  for c in "${MG_ORDER[@]}"; do
+    g="${MG_GROUP[$c]}"
+    if ! printf '%s\n' "$declared" | grep -qx "$g"; then
+      finding "命令 $c 不可达：它的分组 $g 没有声明，没有组页会列它"; reach=1; continue
+    fi
+    if ! printf '%s\n' "$named" | grep -qx "$g"; then
+      finding "命令 $c 不可达：它的分组 $g 在菜单里没有入口"; reach=1; continue
+    fi
+    grep -q "^  $c\( \|$\)" "$tmp/pages/en/group--$g.txt" 2>/dev/null \
+      || { finding "命令 $c 不可达：组页 $g 没有列出它"; reach=1; }
+  done
+  [ "$reach" = "0" ] && ok "每个命令都能从菜单经组页在三级内到达（${#MG_ORDER[@]} 个命令）"
+
+  # G4 · an undeclared `{…}` token must fail the render instead of being printed (scratch copy)
+  local g4="$tmp/g4-guard"
+  rm -rf "$g4"; mkdir -p "$g4/skills"
+  cp -a "$skill" "$g4/skills/teamsmith"
+  if python3 - "$g4/skills/teamsmith/scripts/strings/help.en.tsv" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+key = "cmd.dispatch.what\t"
+i = s.index(key) + len(key)
+j = s.index("\n", i)
+open(p, "w", encoding="utf-8").write(s[:j] + " {undeclared}" + s[j:])
+PYEOF
+  then
+    local g4out g4rc
+    g4out="$( cd "$tmp" && TEAM_LANG=en bash "$g4/skills/teamsmith/scripts/team" help dispatch 2>&1 )"; g4rc=$?
+    if [ "$g4rc" = "0" ]; then
+      finding "G4：表里出现未声明的 {undeclared} 时渲染仍 exit 0（那一页会把它原样打出来）"
+    elif ! printf '%s' "$g4out" | grep -qF '{undeclared}'; then
+      finding "G4：渲染非零退出（rc=$g4rc）但没有点名 {undeclared}"
+    elif ! printf '%s' "$g4out" | grep -qF 'help.en.tsv'; then
+      finding "G4：点名了 token 却没说它来自哪张表（$(printf '%s' "$g4out" | head -1 | cut -c1-60)）"
+    elif printf '%s' "$g4out" | grep -q 'Usage'; then
+      finding "G4：渲染失败却仍打印了那一页"
+    else
+      ok "G4：未声明的 {undeclared} 让渲染非零退出（rc=$g4rc）、点名 token 与来源表、且不打印那一页"
+    fi
+  else
+    finding "G4：夹具没能把 {undeclared} 写进 scratch 副本"
+  fi
+  rm -rf "$g4"
   return 0
 }
 
@@ -558,8 +789,8 @@ check_lang() {
   section "lang · 默认英文、TEAM_LANG 的机制（切中文 / 非法值告警回退 / 缺键可见）、机器出口"
   local en zh
   en="$(page en help)"; zh="$(page zh help)"
-  if printf '%s' "$en" | grep -q '[一-龥]'; then finding "缺省语言不是英文（菜单里有 CJK 字符）"; else ok "缺省语言是英文"; fi
-  if printf '%s' "$zh" | grep -q '[一-龥]'; then ok "TEAM_LANG=zh 切到中文"; else finding "TEAM_LANG=zh 没有切到中文"; fi
+  if printf '%s' "$en" | has_cjk; then finding "缺省语言不是英文（菜单里有 CJK 字符）"; else ok "缺省语言是英文"; fi
+  if printf '%s' "$zh" | has_cjk; then ok "TEAM_LANG=zh 切到中文"; else finding "TEAM_LANG=zh 没有切到中文"; fi
   # the structure is byte-identical between the languages: the usage lines must be
   local same=1
   for c in "${MG_ORDER[@]}"; do
@@ -569,14 +800,14 @@ check_lang() {
   [ "$same" = "1" ] && ok "命令路径、旗标与用法片段在两种语言下逐字节相同"
   # invalid value: one warning naming it, English surface, status unchanged
   local warn out rc
-  out="$( cd "$tmp" && TEAM_LANG=fr bash "$team" help 2>/tmp/hs-warn.txt )"; rc=$?
-  warn="$(cat /tmp/hs-warn.txt)"
+  out="$( cd "$tmp" && TEAM_LANG=fr bash "$team" help 2>"$tmp/hs-warn.txt" )"; rc=$?
+  warn="$(cat "$tmp/hs-warn.txt")"
   if [ "$rc" = "0" ] && printf '%s' "$warn" | grep -q 'TEAM_LANG=fr' && [ "$(printf '%s\n' "$warn" | grep -c .)" = "1" ]; then
     ok "非法 TEAM_LANG 打印一行点名告警、状态不变（rc=0）"
   else
     finding "非法 TEAM_LANG 没有可见告警或状态变了（rc=$rc）：$warn"
   fi
-  printf '%s' "$out" | grep -q '[一-龥]' && finding "非法 TEAM_LANG 没有回退英文"
+  printf '%s' "$out" | has_cjk && finding "非法 TEAM_LANG 没有回退英文"
   # a missing key is visible: in a scratch copy whose Chinese table lacks one key, the page names
   # that key in a marker and prints the other language's value (never blank, never a crash)
   local mut2="$tmp/mut-lang"; rm -rf "$mut2"; mkdir -p "$mut2"
@@ -992,9 +1223,13 @@ flip_copy() { # <name> → a scratch tree with its own copy of the skill
 
 flip_run() { # <label> <copy> <select> <expected substring> [only-command]
   local label="$1" copy="$2" sel="$3" expect="$4" only="${5:-}"
-  local out rc
+  local out rc fx="$0"
+  # A mutation inside the fixture itself (the declared internal-entry list) only takes effect if the
+  # copy's own checker runs; every other mutation is in the product, and the copy's fixture is
+  # byte-identical to this one, so running it is the same check either way.
+  [ -f "$copy/skills/teamsmith/tests/help-surface.sh" ] && fx="$copy/skills/teamsmith/tests/help-surface.sh"
   out="$(TEAM_HELP_SURFACE_TREE="$copy" TEAM_HELP_SURFACE_ONLY="$only" \
-          bash "$0" --select "$sel" 2>&1)"; rc=$?
+          bash "$fx" --select "$sel" 2>&1)"; rc=$?
   if [ "$rc" = "0" ]; then
     finding "翻转 $label 没有红（检查看不见这个破坏）"
   elif ! printf '%s' "$out" | grep -qF -e "$expect"; then
@@ -1089,7 +1324,44 @@ if [ "$_TEAM_HELP_REQ" = "1" ]; then""", 1)' \
   # ⑰b a declared flag with no prose key → the page prints a missing-key marker
   flip_case "arg-key-missing" "⑧声明的旗标没有散文键" "scripts/strings/help.en.tsv" \
     's = "\n".join(l for l in s.split("\n") if not l.startswith("cmd.dispatch.arg.--fresh\t"))' \
-    layout,coverage "missing key" 
+    coverage "missing key" 
+
+  # ── help-robustness (P278) ────────────────────────────────────────────────────────────────────
+  # O1: the width classification reads the locale again — the old `$'\uXXXX'` brace ranges made one
+  # CJK character three cells under LC_ALL=C, so the same page wrapped differently in the two locales
+  flip_case "locale-dependent-width" "⑨宽度计算退回 locale 依赖" "scripts/lib/cmd-help.sh" \
+    's = s.replace("""    if [ "$cp" -ge "${r%-*}" ] && [ "$cp" -le "${r#*-}" ]; then _TH_CELLS=2; return 0; fi""", """    if [ "$cp" -ge "${r%-*}" ] && [ "$cp" -le "${r#*-}" ]; then
+      case "${LC_ALL:-${LANG:-}}" in *UTF-8*|*utf8*) _TH_CELLS=2 ;; *) _TH_CELLS=3 ;; esac
+      return 0
+    fi""", 1)' \
+    locale "随 locale 变" dispatch
+
+  # O2a: one more `__`-prefixed dispatcher label than the declared internal set names
+  flip_case "internal-undeclared" "⑩dispatcher 多一个 __ 标签" "scripts/team" \
+    's = s.replace("""  __panel-data) team_cmd_panel_data "$@" ;;""", """  __probe-x) exit 0 ;;
+  __panel-data) team_cmd_panel_data "$@" ;;""", 1)' \
+    coverage "__probe-x"
+
+  # O2b: the declared internal set names one entry that is no longer a dispatcher label
+  flip_case "internal-list-short" "⑪声明清单里删一个内部名" "tests/help-surface.sh" \
+    's = s.replace("__inbox-write __panel-data", "__panel-data", 1)' \
+    coverage "__inbox-write"
+
+  # O6a: a declared group disappears from the manifest while its commands still name it
+  flip_case "group-row-deleted" "⑫清单删一条分组记录（命令仍声明它）" "scripts/strings/commands.tsv" \
+    's = "\n".join(l for l in s.split("\n") if l != "group\tversions")' \
+    coverage "versions"
+
+  # O6b: the menu renderer skips one declared group (the group page still lists its commands)
+  flip_case "menu-skips-group" "⑬菜单渲染器跳过一个已声明的分组" "scripts/lib/cmd-help.sh" \
+    's = s.replace("    local title purpose cells pad line", """    local title purpose cells pad line
+    [ $g = versions ] && continue""", 1)' \
+    coverage "versions"
+
+  # G4: the placeholder check disappears → the guard's scratch copy prints the token literally
+  flip_case "placeholder-check-gone" "⑭去掉未声明占位符的检查" "scripts/lib/cmd-help.sh" \
+    's = s.replace("""  [ "$_bad" = "0" ] || return 1""", """  [ "$_bad" = "0" ] || :""", 1)' \
+    coverage "{undeclared}"
 
   return 0
 }
@@ -1103,9 +1375,8 @@ if [ "$_need_pages" = "1" ]; then
   render_pages en
   [ -n "${TEAM_HELP_SURFACE_ONLY:-}" ] || render_pages zh
 fi
-if want scale;    then check_scale;    fi
 if want coverage; then check_coverage; fi
-if want layout;   then check_layout;   fi
+if want locale;   then check_locale;   fi
 if want lang;     then check_lang;     fi
 if want claims;   then check_claims;   fi
 if want invariants; then check_invariants; fi

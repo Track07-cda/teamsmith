@@ -19177,12 +19177,12 @@ if [ -f "$SKILL_DIR/tests/help-surface.sh" ]; then
   HS_RC=0
   HS_SELECT=""
   case "${TEAM_SMOKE_FAST:-0}" in
-    1|y|Y|yes|YES|true|TRUE|on|ON) HS_SELECT="--select coverage,lang,invariants,route" ;;
+    1|y|Y|yes|YES|true|TRUE|on|ON) HS_SELECT="--select coverage,locale,lang,invariants,route" ;;
   esac
   bash "$SKILL_DIR/tests/help-surface.sh" $HS_SELECT >"$TMP/help-surface.log" 2>&1 || HS_RC=$?
   if [ "$HS_RC" -eq 0 ]; then
     ok "51 帮助面夹具（help-surface.sh${HS_SELECT:+ · FAST 静态组}）全绿（$(grep -ac '✓' "$TMP/help-surface.log" || true) 条断言）"
-    { grep -aE '== (coverage|lang|claims|invariants|route) ==' "$TMP/help-surface.log" || true; } | sed 's/^/      /'
+    { grep -aE '== (coverage|locale|lang|claims|invariants|route) ==' "$TMP/help-surface.log" || true; } | sed 's/^/      /'
   else
     bad "51 帮助面夹具有失败（rc=$HS_RC）——覆盖/语言机制/声明与探针/不变量/路由与帮助面不一致"
     grep -a '✗' "$TMP/help-surface.log" | head -10 | sed 's/^/      /'

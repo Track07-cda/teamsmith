@@ -30,25 +30,127 @@ TEAM_HELP_TERM_COL=28
 # The condition token a `needs-yes:<condition>` authorization may carry (closed set).
 TEAM_HELP_AUTH_CONDITIONS="TEAM_CONFIRM_WRITES"
 
+# The closed placeholder set: interpolation into the prose goes through these and nothing else.
+# Every member has a substitution site in this file — {project} and {meeting_ttl} in team_help_subst,
+# {token}/{sub}/{cmd} in team_help_refuse and in the alias line, {undo_cmd} in team_help_undo_text.
+# `{effect}` and `{faces}` are deliberately NOT here: the claim sentence is composed in bash
+# (team_help_effect_text + team_help_face_list), no code path substitutes them, and declaring a
+# placeholder nothing resolves would let a value print it literally and still pass the check below.
+# A `{…}` token outside this set would be printed literally, so a table carrying one is a defect
+# rather than a rendering — and the set must not drift the other way either: a placeholder no table
+# mentions is a claim the surface does not keep. Both directions are checked in team_help_load.
+TEAM_HELP_PLACEHOLDERS="{project} {meeting_ttl} {token} {sub} {cmd} {undo_cmd}"
+
 # ---------------------------------------------------------------- display width
-# Decodes UTF-8 by hand: the tables carry CJK, and awk's byte classes cannot count cells.
-team_help_char_width() { # <one character> → 0, 1 or 2 display cells
-  case "$1" in
-    [$'\u0300'-$'\u036f']|[$'\u0483'-$'\u0489']|[$'\u1160'-$'\u11ff']|[$'\u200b'-$'\u200f']|[$'\ufe00'-$'\ufe0f']) printf 0 ;;
-    [$'\u1100'-$'\u115f']|[$'\u2e80'-$'\u303e']|[$'\u3041'-$'\u33ff']|[$'\u3400'-$'\u4dbf']|[$'\u4e00'-$'\u9fff'] \
-      |[$'\ua000'-$'\ua4cf']|[$'\uac00'-$'\ud7a3']|[$'\uf900'-$'\ufaff']|[$'\ufe30'-$'\ufe6f']|[$'\uff00'-$'\uff60'] \
-      |[$'\uffe0'-$'\uffe6']|[$'\U0001f300'-$'\U0001f64f']|[$'\U0001f900'-$'\U0001f9ff'] \
-      |[$'\U00020000'-$'\U0003fffd']) printf 2 ;;
-    *) printf 1 ;;
-  esac
+# Locale-independent by construction: one read pinned to LC_ALL=C gives the raw bytes, and the
+# UTF-8 decoding plus the 0/1/2-cell decision are integer arithmetic on code points. Nothing here
+# may consult the caller's locale: the previous brace ranges written as $'\uXXXX' degraded to
+# literal bytes outside a UTF-8 locale (they swallowed ASCII) and ${s:i:1} sliced bytes, so one CJK
+# character counted three cells, a page wrapped differently, and a page could be cut in the middle
+# of a character (the zh surface printed invalid UTF-8 under LC_ALL=C).
+#
+# Cost note: the wrap used to fork once per word (a subshell for the cell count, plus the counter
+# itself), which made a single page cost seconds. Both walks below take the bytes once and stay in
+# the shell, so a page's wrapping costs one walk per block instead of one subprocess per word.
+team_help_byte_values() { # <text> → space-separated byte values (one locale-pinned read)
+  LC_ALL=C printf '%s' "$1" | LC_ALL=C od -An -tu1 -v | tr -s ' \n' ' '
+}
+
+team_help_byte_len() { # <text> → its length in bytes
+  local LC_ALL=C
+  printf '%s' "${#1}"
+}
+
+team_help_slice_bytes() { # <text> <byte-offset> <byte-count> → those bytes
+  local LC_ALL=C
+  printf '%s' "${1:$2:$3}"
+}
+
+# team_help_cp_cells <code point> → sets _TH_CELLS to 0, 1 or 2. A setter, not a printer: this is
+# the hot loop and a subshell per code point is exactly the cost that has to stay out of it.
+_TH_CELLS=1
+team_help_cp_cells() {
+  local cp="$1" r
+  case "$cp" in ''|*[!0-9]*) _TH_CELLS=1; return 0 ;; esac
+  for r in 768-879 1155-1161 4448-4607 8203-8207 65024-65039; do
+    if [ "$cp" -ge "${r%-*}" ] && [ "$cp" -le "${r#*-}" ]; then _TH_CELLS=0; return 0; fi
+  done
+  for r in 4352-4447 11904-12350 12353-13311 13312-19903 19968-40959 40960-42191 \
+           44032-55203 63744-64255 65072-65103 65280-65312 65504-65510 \
+           127744-128591 129280-129535 131072-262141; do
+    if [ "$cp" -ge "${r%-*}" ] && [ "$cp" -le "${r#*-}" ]; then _TH_CELLS=2; return 0; fi
+  done
+  _TH_CELLS=1
+}
+
+team_help_char_width() { # <one code point> → 0, 1 or 2 display cells
+  team_help_cp_cells "$1"
+  printf '%s' "$_TH_CELLS"
+}
+
+# team_help_decode <b1> <b2> <b3> <b4> → sets _TH_CP and _TH_STEP (1..4) for one code point.
+# A malformed byte is its own code point and counts one cell, so a broken table can never make the
+# counter lose bytes.
+_TH_CP=0; _TH_STEP=1
+team_help_decode() {
+  local b1="$1" b2="$2" b3="$3" b4="$4"
+  _TH_CP="$b1"; _TH_STEP=1
+  if [ "$b1" -ge 194 ] && [ "$b1" -le 223 ] && [ "$b2" -ge 128 ] && [ "$b2" -le 191 ]; then
+    _TH_CP=$((((b1 & 31) << 6) | (b2 & 63))); _TH_STEP=2
+  elif [ "$b1" -ge 224 ] && [ "$b1" -le 239 ] && [ "$b2" -ge 128 ] && [ "$b2" -le 191 ] \
+    && [ "$b3" -ge 128 ] && [ "$b3" -le 191 ]; then
+    _TH_CP=$((((b1 & 15) << 12) | ((b2 & 63) << 6) | (b3 & 63))); _TH_STEP=3
+  elif [ "$b1" -ge 240 ] && [ "$b1" -le 244 ] && [ "$b2" -ge 128 ] && [ "$b2" -le 191 ] \
+    && [ "$b3" -ge 128 ] && [ "$b3" -le 191 ] && [ "$b4" -ge 128 ] && [ "$b4" -le 191 ]; then
+    _TH_CP=$((((b1 & 7) << 18) | ((b2 & 63) << 12) | ((b3 & 63) << 6) | (b4 & 63))); _TH_STEP=4
+  fi
+}
+
+# team_help_cps <text> → one line per code point: "<byte-offset> <cells>"
+team_help_cps() {
+  local i=0 n
+  local -a b=()
+  read -r -a b <<< "$(team_help_byte_values "$1")"
+  n=${#b[@]}
+  while [ "$i" -lt "$n" ]; do
+    team_help_decode "${b[$i]}" "${b[$((i + 1))]:-0}" "${b[$((i + 2))]:-0}" "${b[$((i + 3))]:-0}"
+    team_help_cp_cells "$_TH_CP"
+    printf '%s %s\n' "$i" "$_TH_CELLS"
+    i=$((i + _TH_STEP))
+  done
+}
+
+# team_help_words <text> → one line per whitespace-separated word: "<byte-offset> <byte-count>
+# <cells> <word>". The split is the one `read -r -a` does (space, tab and newline), and the word
+# travels with its own bytes so the caller needs no second pass.
+team_help_words() {
+  local LC_ALL=C    # the slices below are byte slices, so the word keeps its own bytes
+  local i=0 n cells=0 wstart=-1
+  local -a b=()
+  read -r -a b <<< "$(team_help_byte_values "$1")"
+  n=${#b[@]}
+  while [ "$i" -lt "$n" ]; do
+    team_help_decode "${b[$i]}" "${b[$((i + 1))]:-0}" "${b[$((i + 2))]:-0}" "${b[$((i + 3))]:-0}"
+    if [ "$_TH_CP" = 32 ] || [ "$_TH_CP" = 9 ] || [ "$_TH_CP" = 10 ]; then
+      if [ "$wstart" -ge 0 ]; then
+        printf '%s %s %s %s\n' "$wstart" "$((i - wstart))" "$cells" "${1:$wstart:$((i - wstart))}"
+        wstart=-1; cells=0
+      fi
+    else
+      team_help_cp_cells "$_TH_CP"
+      [ "$wstart" -ge 0 ] || { wstart=$i; cells=0; }
+      cells=$((cells + _TH_CELLS))
+    fi
+    i=$((i + _TH_STEP))
+  done
+  if [ "$wstart" -ge 0 ]; then
+    printf '%s %s %s %s\n' "$wstart" "$((n - wstart))" "$cells" "${1:$wstart:$((n - wstart))}"
+  fi
 }
 
 team_help_cells() { # <text> → display cells (a CJK-wide character counts two)
-  local s="$1" i=0 n=${#1} total=0
-  while [ "$i" -lt "$n" ]; do
-    total=$((total + $(team_help_char_width "${s:i:1}")))
-    i=$((i + 1))
-  done
+  local off cells total=0
+  while read -r off cells; do total=$((total + cells)); done < <(team_help_cps "$1")
   printf '%s\n' "$total"
 }
 
@@ -88,6 +190,37 @@ declare -a _TH_GROUPS=() _TH_BEGIN=()
 declare -A _TH_IDX=() _TH_EN=() _TH_ZH=()
 _TH_LOADED=0
 
+# team_help_tokens_of <file> <kind> <label> → "<line>\t<source>\t<token>" for every `{…}` token in
+# the file. The tables are read whole: a token in a value is what could be printed literally, and a
+# token in the file's own header is the declaration that file makes about the set it may use — both
+# are the table's text, and the two directions below are judged over the same text.
+team_help_tokens_of() {
+  awk -F'\t' -v kind="$2" -v label="$3" '
+    NF == 0 { next }
+    {
+      comment = ($0 ~ /^#/)
+      for (i = 1; i <= NF; i++) {
+        f = $i
+        while (match(f, /\{[^{}]*\}/)) {
+          tok = substr(f, RSTART, RLENGTH)
+          if (comment) {
+            printf "%d\t%s header comment\t%s\n", NR, label, tok
+          } else if (kind == "manifest") {
+            name = (i == 2) ? "name" : (i == 3) ? "group" : (i == 4) ? "usage" : (i == 5) ? "flags" \
+                 : (i == 6) ? "subs" : (i == 7) ? "aliases" : (i == 8) ? "terms" : (i == 9) ? "faces" \
+                 : (i == 10) ? "effect" : (i == 11) ? "auth" : (i == 12) ? "undo" : (i == 13) ? "claims" \
+                 : (i == 14) ? "probe" : (i == 15) ? "example" : ("col" i)
+            printf "%d\t%s %s %s\t%s\n", NR, label, name, $2, tok
+          } else {
+            printf "%d\t%s %s\t%s\n", NR, label, $1, tok
+          }
+          f = substr(f, RSTART + RLENGTH)
+        }
+      }
+    }
+  ' "$1"
+}
+
 team_help_load() {
   [ "${_TH_LOADED:-0}" = "1" ] && return 0
   local dir file line i=0
@@ -124,6 +257,28 @@ team_help_load() {
       if [ "$lang" = "en" ]; then _TH_EN["$key"]="$val"; else _TH_ZH["$key"]="$val"; fi
     done < "$file"
   done
+  # G4 · the declared set and the tokens in the tree must be equal in both directions
+  local _line _src _tok _bad=0 _p
+  local -A _seen=()
+  while IFS=$'\t' read -r _line _src _tok; do
+    [ -n "$_tok" ] || continue
+    _seen["$_tok"]=1
+    case " $TEAM_HELP_PLACEHOLDERS " in
+      *" $_tok "*) ;;
+      *) printf 'teamsmith: the help tables carry an undeclared placeholder %s (%s, line %s)\n' \
+           "$_tok" "$_src" "$_line" >&2
+         _bad=1 ;;
+    esac
+  done < <( { team_help_tokens_of "$dir/commands.tsv" manifest commands.tsv
+             team_help_tokens_of "$dir/help.en.tsv" prose help.en.tsv
+             team_help_tokens_of "$dir/help.zh.tsv" prose help.zh.tsv; } )
+  for _p in $TEAM_HELP_PLACEHOLDERS; do
+    [ -n "${_seen[$_p]+x}" ] || {
+      printf 'teamsmith: the declared placeholder %s appears in none of the help tables\n' "$_p" >&2
+      _bad=1
+    }
+  done
+  [ "$_bad" = "0" ] || return 1
   _TH_LOADED=1
   return 0
 }
@@ -214,30 +369,27 @@ team_help_puts() { # <indent> <text…> — one already-built line
 team_help_wrap() {
   local avail="$1" next="$2"; shift 2
   [ $# -gt 0 ] || return 0
-  local text="$*" line cells cw wrd
-  local -a words=()
-  read -r -a words <<< "$text"
+  local text="$*" line cells off len cw wrd
   line=""; cells=0
-  for wrd in "${words[@]}"; do
+  while read -r off len cw wrd; do
     [ -n "$wrd" ] || continue
-    cw="$(team_help_cells "$wrd")"
     if [ -n "$line" ] && [ $((cells + 1 + cw)) -le "$avail" ]; then
       line="$line $wrd"; cells=$((cells + 1 + cw)); continue
     fi
     if [ -n "$line" ]; then printf '%s\n' "$line"; line=""; cells=0; avail="$next"; fi
     if [ "$cw" -le "$avail" ]; then line="$wrd"; cells=$cw; continue; fi
-    # a word longer than the line (CJK prose has no spaces): break it at character boundaries
-    local chunk="" chunkc=0 k=0 ln=${#wrd} ch chw
-    while [ "$k" -lt "$ln" ]; do
-      ch="${wrd:k:1}"; k=$((k + 1))
-      chw="$(team_help_char_width "$ch")"
-      if [ $((chunkc + chw)) -gt "$avail" ] && [ -n "$chunk" ]; then
-        printf '%s\n' "$chunk"; avail="$next"; chunk=""; chunkc=0
+    # a word longer than the line (CJK prose has no spaces): break it at code-point boundaries
+    local soff scw seg=0 chunkc=0
+    while read -r soff scw; do
+      if [ $((chunkc + scw)) -gt "$avail" ] && [ "$soff" -gt "$seg" ]; then
+        printf '%s\n' "$(team_help_slice_bytes "$wrd" "$seg" "$((soff - seg))")"
+        avail="$next"; seg="$soff"; chunkc=0
       fi
-      chunk="$chunk$ch"; chunkc=$((chunkc + chw))
-    done
-    line="$chunk"; cells="$chunkc"
-  done
+      chunkc=$((chunkc + scw))
+    done < <(team_help_cps "$wrd")
+    line="$(team_help_slice_bytes "$wrd" "$seg" "$(( $(team_help_byte_len "$wrd") - seg ))")"
+    cells="$chunkc"
+  done < <(team_help_words "$text")
   [ -n "$line" ] && printf '%s\n' "$line"
   return 0
 }
@@ -379,7 +531,7 @@ team_help_group_page() { # <group id>
   local g="$1" title purpose
   title="$(team_help_txt "group.$g.title")"
   purpose="$(team_help_subst "$(team_help_txt "group.$g.purpose")")"
-  printf 'teamsmith · %s — %s\n' "$title" "$purpose"
+  team_help_flow 0 0 "teamsmith · $title — $purpose"
   team_help_blank
   team_help_rule "$title"
   local i name
@@ -400,7 +552,7 @@ team_help_command_page() { # <name> [<asked token>]
   local name="$1" asked="${2:-}" i
   i="$(team_help_cmd_i "$name")" || return 1
   local title; title="$(team_help_txt "cmd.$name.title")"
-  printf 'teamsmith · %s — %s\n' "$name" "$title"
+  team_help_flow 0 0 "teamsmith · $name — $title"
   team_help_blank
   team_help_rule "$(team_help_txt part.usage.title)"
   local plain="${_TH_USAGE[$i]// ;; /;;;}"
