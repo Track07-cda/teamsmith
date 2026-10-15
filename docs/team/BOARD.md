@@ -449,7 +449,7 @@
 | P282 | Writing discipline: answer the reader first, hedge only with evidence | dev-bob | - | - | done |
 | V41 | Help surface robustness: independent verification | verify | - | - | wip |
 | V42 | Orphan visibility: independent verification (fake orphan + four false-positive families) | dev-bob | - | - | done |
-| V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | dev3 | - | - | blocked |
+| V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | dev3 | - | - | todo |
 | P284 | Tick the orphan-visibility checklist by evidence (archive prerequisite) | dev-bob | - | - | done |
 | P285 | Close the three orphan-visibility gaps (census reading, flip arm, docs) | dev-bob | - | - | done |
 | V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev | - | - | todo |
