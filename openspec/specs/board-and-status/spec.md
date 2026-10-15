@@ -214,8 +214,11 @@ per-worktree record scan's `git status` calls are part of that count, and the sc
 budget. These budgets are asserted as call counts, not as a wall-clock threshold.
 
 A cached or derived read MUST be a view over the same data, never a second source of truth: with the cache on and
-off, `digest`, `status` and `__panel-data` MUST produce byte-identical output apart from live fields (timestamps
-and capacity), and the gate SHALL assert that equality. Any future derived index MUST keep both properties — the
+off, `digest`, `status` and `__panel-data` MUST produce byte-identical output apart from live fields — the
+timestamps, the capacity line and the orphan seat-process census that
+`seat-visibility#The reading is additive, bounded and read-only` defines — and the gate SHALL assert that
+equality by filtering exactly those fields. The census is a host reading, never a cached view: it is read
+directly in both runs and MUST NOT enter the scan cache. Any future derived index MUST keep both properties — the
 call budget and the equality with the direct parse.
 
 #### Scenario: Board row makes at most one git call and really reads the row
@@ -236,6 +239,14 @@ call budget and the equality with the direct parse.
 - **WHEN** `team digest`, `team status` and `team __panel-data --no-activity` run with the cache and with
   `TEAM_SCAN_CACHE=0`
 - **THEN** each pair's outputs are identical after filtering their live fields (timestamp, capacity)
+
+#### Scenario: The census is filtered as a live field, and is never cached
+
+- **GIVEN** a `team status` run whose output carries the orphan seat-process census, and a counting wrapper around
+  the census's `/proc` reads
+- **WHEN** the same command runs with the cache and with `TEAM_SCAN_CACHE=0`
+- **THEN** the two outputs are identical once the timestamps, the capacity line and the census block are filtered,
+  and both runs read the census directly (the census did not come from, and did not write to, the scan cache)
 
 ### Requirement: `team change status <id>` reports a change's readiness
 
