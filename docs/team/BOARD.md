@@ -422,7 +422,7 @@
 | P261 | Startup self-heal: apply (config shape migration, PM identity, version notice) | dev-bob | - | - | done |
 | P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | done |
 | P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | dropped |
-| P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | todo |
+| P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | wip |
 | V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | done |
 | P266 | Panel plain language: apply | dev3 | - | - | wip |
