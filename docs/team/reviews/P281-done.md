@@ -1,0 +1,1 @@
+- 2026-10-15T23:40:22Z · `team close P281 --status done` · OK：复验记录 docs/team/reviews/P281.md（判定 PASS）
