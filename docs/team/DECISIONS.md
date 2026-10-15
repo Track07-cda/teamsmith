@@ -1548,3 +1548,23 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 **结论**：`cline-pass/deepseek-v4.1-flash:max` 会被 Pi **静默 clamp 到 high**——这是**第三方插件的映射缺失**，不是上游不支持，也不是 Pi 的错（Pi 的 clamp 行为是文档化的，且 pi 自己也有一个同类 issue：`earendil-works/pi#3787`，openrouter 路径上 `xhigh` 被静默降级）。
 
 **三条出路**（等用户选）：① 立即要真 max → 本项目改用 `opencode-go/deepseek-v4.1-flash:max`（一行配置，PM 的域）；② 留在 cline-pass → 在 Pi 的 models 配置里用 `providers.clinepass.modelOverrides["cline-pass/deepseek-v4.1-flash"].thinkingLevelMap` 补 `max:"max"`（schema 支持该键；**那份文件同时存放 provider 凭据，PM 不读不写，片段交给用户自己粘**）；③ 根治 → 给插件提 issue/PR（一行映射）。**当前本项目配置写的是 `:max`，实际跑的是 high**——这条如实记下，不宣称「比 xhigh 强」。
+
+### D175 追加：用户选 ②（2026-10-15）
+
+用户在三条出路里选 **② 留在 cline-pass，用 Pi 的 `modelOverrides` 补上 max**。PM 已机器核过要用的三处事实（不是肉眼读）：
+
+- provider 名 = **`clinepass`**（`pi auth check --provider clinepass --json` 的权威输出）；
+- 模型 id = **`cline-pass/deepseek-v4.1-flash`**；
+- 插件当前的映射（正则解析 `pi-clinepass-provider/src/models.ts` 得出）= `off:"none" / minimal:null / low:null / medium:null / high:"high" / xhigh:"high"`，**无 `max` 键**；
+- schema 允许的覆盖路径 = `providers.<provider>.modelOverrides.<modelId>.thinkingLevelMap`，且 `ThinkingLevelMap` 的 `max` 键合法（string|null）。
+
+**给用户的片段**（粘进 `~/.pi/agent/models.json`；若已有 `clinepass` 条目则**合并** `modelOverrides`、不要替换该条目）：
+
+```json
+{ "providers": { "clinepass": { "modelOverrides": {
+  "cline-pass/deepseek-v4.1-flash": { "thinkingLevelMap": {
+    "off": "none", "minimal": null, "low": "low", "medium": null,
+    "high": "high", "xhigh": null, "max": "max" } } } } } }
+```
+
+**验证配方**（PM 可跑，读会话记录不读凭据文件）：`pi --print --model 'cline-pass/deepseek-v4.1-flash:max' '…'` 之后，看最新会话 JSONL 里的 `{"type":"thinking_level_change",…,"thinkingLevel":"max"}`——覆盖生效前它记录的是被 clamp 的档位。本项目配置**已经**是 `:max`（四个类别），所以覆盖一生效即为真；PM 无需再改本项目配置。
