@@ -20,7 +20,7 @@
   --all --strict` 会点名 `omits scenario(s)`），并确认没有第二个未归档 change 动同一批要求
   （`grep -rn 'Requirement:' openspec/changes/*/specs/ | grep -E 'audit|disk floor|category' …`）。
   · 证据：本轮补跑（P266 交付时未留投影日志）：`cp -a openspec /tmp/p273-proj2/ && (cd /tmp/p273-proj2 && "$HOME/.bun/bin/bun" "$HOME/.bun/bin/openspec" archive -y panel-plain-language)` → rc=0（`~ 10 modified`：panel 6 / key-replies 1 / memory-and-deps 3），随后 `openspec validate --all --strict` → `Totals: 22 passed, 0 failed` rc=0（丢基线场景会被点名 `omits scenario(s)`；提案复核另记「零丢失」）。实际做法/发现：「没有第二个未归档 change 动同一批要求」不成立——此刻 `panel-preview-and-compose`（panel）与 `pm-reply-discipline`（key-replies）仍未归档且动同批 capability；投影后的 validate 仍 22/0，兼容性成立，归档顺序归 PM（见报告「给 PM 的观察」）。
-- [ ] 0.3 冻结**改动前**基线：`openspec validate --all --strict`（本 change 之前 20 项全绿）、
+- [x] 0.3 冻结**改动前**基线：`openspec validate --all --strict`（本 change 之前 20 项全绿）、 · 证据（PM 回溯补跑）：PM 回溯执行（2026-07-15）：在改动前的 merge-base `8aa525aa` 上，冻结克隆 + 钉死容器里跑 `openspec validate --all --strict`（rc=0）、`key-replies.sh --all`（rc=0）、`smoke.sh --select 26,27,28,33,38,59,61,62,63`：结果 **`§38` ✓21 ✗1**、`§28-a`/`§28-a2`/`§38-e` 三条红（原文均为 `panel-strings failed`，即**两个新契约键缺 zh/en 标签**）。**这条基线证明了三件事**：① 那批红在本变更之前就存在（由 startup-self-heal 合并引入），本变更是**修掉**它们而不是引入；② 合并后的同一批选段是 `§38` ✓22 ✗0（`docs/team/reviews/P266.md`、job `p266-merge-sections`），一红未留；③ 基线与合并后用的是同一条命令、同一批段，因此红→绿的差可以逐段归因。注：本项原为 apply 的真实缺口（P266 未在改动前冻结），由 PM 事后在旧 tip 上补齐——**结论不受影响，因为基线是可复算的**（git 里那棵树还在）
   `spec-refs.sh --check`、`panel-strings.mjs`（当前键集与 label 数）、`panel-p21.sh settings categories groups wheel`
   的 ✓/✗ 量级，以及 `team config list --json` 里 45 行 schema 注释的当前原文（抄成一张对照表，供收尾逐行核对）。
   · 证据：基线日志 + 注释对照表
