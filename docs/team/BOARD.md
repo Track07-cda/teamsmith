@@ -432,14 +432,15 @@
 | V37 | Reply discipline: independent verification | verify | - | - | done |
 | V38 | cli-help surface: independent verification | dev2 | - | - | done |
 | P268 | Do not leak this project's identity into tmux's global environment | dev2 | - | - | done |
-| P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev3 | - | - | wip |
+| P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev3 | - | - | done |
 | P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | done |
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | dev | - | - | todo |
-| P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev3 | - | - | wip |
+| P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev3 | - | - | done |
 | P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | wip |
 | P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | done |
 | V39 | Gate slimming: independent verification of the deletion round | verify | - | - | wip |
+| P276 | Orphan-process visibility: apply (census, reap by pid, no pattern) | dev3 | - | - | wip |
 
 ## 当前里程碑
 
