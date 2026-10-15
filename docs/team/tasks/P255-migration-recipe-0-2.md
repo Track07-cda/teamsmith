@@ -59,3 +59,27 @@ git diff --check && git status --short
 5. **回滚**：配置回 `cp` 备份；`--fresh-pm` 不动 Pi 历史。
 
 判据仍按你任务书原样（夹具 + 每一步可证伪 + 真项目形状的现场）。
+
+## 返修轮次 1（2026-10-15，独立复验 V40 判 FAIL：两项必修，**都是文档说错、不是工具错**）
+
+复验记录 `docs/team/reviews/V40.md`（受检 `91b40ab`）。我按复验者的清单**逐条复现**过，并把它判成「文档 vs 工具」哪一侧错——**板子打在文档上，工具与规格一致**：
+
+**F1 · §6 Step 2（原第 255–256 行）说「拒绝时会打印一条从你自己配置推导的可粘贴命令」——不成立。**
+
+我的复现（临时项目，只跑 `--print`，不写盘）：
+
+| 形状 | 工具实际打印 |
+|---|---|
+| `shape-not-locatable`（值里带变量展开 / 多行字面量） | 点名障碍 + **占位符路线** `--task-models '<完整映射>' --pm-model '<独立模型>'` |
+| `fallback-name-collision`（席位名 `default` 与兜底撞名） | 同上（占位符） |
+| `invalid-model-value`（`not-a-model`） | 同上（占位符 + 点名哪个席位的值不合法） |
+| **可定位**形状 + `up --print --no-migrate` | **推导命令**：`team config upgrade-models --task-models 'dev=… verify=… default=…' --pm-model 'kimi-coding/k3' --dry-run` |
+| **可定位**形状 + `config set` | **推导命令**（路线 ①）＋两条路线都点名 |
+
+**合同在哪**：`openspec/specs/init-skill/spec.md` 的迁移一节写得很清楚——拒绝必须点名文件与**确切障碍**；**「当推导本身无歧义时」才打印一条可粘贴的 `upgrade-models` 命令，「有歧义时不打印」**；场景「The legacy refusal carries a command derived from the project's own configuration」还有一行 **AND**：「a shape the derivation cannot locate **falls back to the placeholder route** and names the obstacle」。所以：**工具是对的，文档把条件句写丢了**。
+
+**改法（F1）**：把那句话改成符合合同的写法（保留条件句与「有歧义时只点名障碍、给占位符路线」），并把两条路线的**触发条件**写清楚（可定位 → 推导命令；不可定位/撞名/值非法 → 占位符）。改完请按你新写的句子**逐条对照上表**自证（哪一句对应哪一行输出）。
+
+**F2 · §6 Step 4（原第 315–316 行）说「`team up` 重建巡检窗口」——不成立。** `team up` 只起 PM；**建/重建巡检窗口的是 `team pulse up`**。复验者在私有 tmux 里逐窗口名取证（跑完 `team up` 只有 `pm`，没有 `pulse`）。改法：那句话改成「（PM 与席位都需要重启才会读到新技能文本；**巡检窗口由 `team pulse up` 建立**，`team pulse status` 看它的状态）」。
+
+**交付要求**：改完跑一遍 `upgrade-recipe.sh`（并确认夹具**没有**把这两处错误文本钉住——若有 needle 钉着旧句子，一并同步），更新 `docs/team/reports/P255-dev-bob.md`（返修轮次一节：两处 diff、你的对照自证、夹具结果），然后 notify pm。我随后派 **V40 第二轮**定点复检（同一验证席位，换会话）。
