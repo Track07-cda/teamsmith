@@ -17,6 +17,10 @@ for k,v in values.items(): s=s.replace('{{'+k+'}}',v)
 # P235: the template carries empty model-policy keys; the fixture fills both.
 s=re.sub(r'^TEAM_TASK_MODELS=.*$', 'TEAM_TASK_MODELS="routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k"', s, flags=re.M)
 s=re.sub(r'^TEAM_PM_MODEL=.*$', 'TEAM_PM_MODEL="deepseek/deepseek-flash"', s, flags=re.M)
+# P261: the template's shape number is a render placeholder too; the fixture declares the shape it builds
+# (same style as the two model keys above), otherwise the literal '{{CONFIG_VERSION}}' would read as a
+# non-integer shape marker and the startup transaction would refuse the fixture.
+s=re.sub(r'^TEAM_CONFIG_VERSION=.*$', 'TEAM_CONFIG_VERSION="2"', s, flags=re.M)
 pathlib.Path(out).write_text(s)
 PY
 }

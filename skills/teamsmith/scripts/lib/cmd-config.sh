@@ -93,7 +93,10 @@ TEAM_OPENSPEC_BIN|apply|path|exec|plain|openspec|-|||roster
 TEAM_JS_BIN|apply|path|exec,opt|plain||-|||roster
 # ---- Future policy, separate from committed assignments ----
 TEAM_TASK_MODELS|apply|task-model-map|req|plain||-|新任务类别：team config set-task-model <category> <model>；恢复保留已派身份||task-model
-TEAM_PM_MODEL|restart|model|req|plain||-|独立 PM 模型：team up 启动受 fresh-pm 守卫||task-model
+TEAM_PM_MODEL|restart|model|req|plain||-|独立 PM 模型：team up 启动受 fresh-pm 守卫；team up 缺失/不一致的就身记录按 pm-lifecycle 合同处理||task-model
+# ---- 工具自身（配置形状号与版本提示；P261 · startup-self-heal）----
+TEAM_CONFIG_VERSION|refuse|int|1,|plain|2|-|配置形状号（工具写、控制台不写）：新项目由 init/bootstrap 写，旧项目由启动事务（见 references/migration.md）迁移时写；高于本工具已知最新的形状号直接拒绝。行为证据：tests/task-model-routing.sh 的 heal 组||task-model
+TEAM_UPDATE_CHECK|apply|bool||plain|1|-|启动路径上的 npm 版本提示：0 = 连查询都不发生（不读不写缓存）；只有本地落后时打一行，工具从不自己安装。行为证据：tests/task-model-routing.sh 的 updatecheck 组||workflow
 # ---- 工作流与门禁（apply）----
 TEAM_GATES|apply|cmd||plain||-|||workflow
 TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow
@@ -894,6 +897,18 @@ team_config_write_checked_unlocked() { # <KEY> <value> <actor> <dry> <fp> <allow
   local row; row="$(team_config_row "$key" 2>/dev/null || true)"
   local old; old="$(team_config_file_value "$path" "$key" 2>/dev/null || true)"
 
+  # P261（返修 O1）· 退休配置上的 config 写路径：任何字节之前拒绝并指向升级。写下去会留下半迁移状态
+  # （退休键还在、新键也写了，而新引擎只读新键）；建议命令与自动迁移共用同一张推导表（design §3），
+  # 所以这里没有第二份文案。拒绝不发审计行：这不是对某个值的拒绝，是这个项目还没迁移（前扪 init/bootstrap
+  # 的「任何写入之前停住」同一口径）。
+  local legacy_keys; legacy_keys="$(team_config_retired_keys_in_file "$path")"
+  if [ -n "$legacy_keys" ]; then
+    team_err "$key：$path 还在用退休的模型键（$(printf '%s' "$legacy_keys" | tr '\n' ' ')）—— 写盘之前停住"
+    team_dim "  项目模型策略是破坏式升级：config set 不是迁移路径" >&2
+    team_legacy_model_route_lines "$path" >&2
+    return "$TEAM_CONFIG_EXIT_REFUSE"
+  fi
+
   if [ -z "$row" ]; then
     team_err "$key 不是已知的项目设置键"
     case "$key" in TEAM_DEFAULT_MODEL|TEAM_AGENT_MODELS)
@@ -1221,6 +1236,237 @@ team_config_model_source_shape() {
     fi
   done < "$path"
 }
+# ---------------------------------------------------------------- 迁移决策（唯一推导表；P261 · startup-self-heal）
+# 纯决策层：读文件、算计划、给拒绝理由 —— 一个字节都不写。编排（打印/备份/写入/exec）在 cmd-watch.sh 的
+# team_cmd_up，拒绝建议在 common.sh 的 team_model_policy_issues —— 三处**共用**本节的推导表，不许长第二份。
+# 形状判定顺序（design §2）：标记（TEAM_CONFIG_VERSION）→ 键（有退休键 = 1）→ 表；标记高于已知最新 → 拒绝。
+TEAM_CONFIG_SHAPE_RETIRED=1
+TEAM_CONFIG_SHAPE_CURRENT=2
+team_config_migration_table() { # 一行一条迁移：id|from|to|introduced；加一条迁移 = 加一行 + 一个 transform + 一组夹具
+  cat <<'EOF'
+m1|1|2|0.2.0
+EOF
+}
+team_config_migration_introduced() { # <from> → 引入该行的工具版本（备份名与 --print 预告用）
+  local id from to introduced
+  while IFS='|' read -r id from to introduced; do
+    case "$id" in ''|'#'*) continue ;; esac
+    [ "$1" = "$from" ] && { printf '%s\n' "$introduced"; return 0; }
+  done < <(team_config_migration_table)
+  printf '%s\n' '0.0.0'
+}
+# 文件里有没有某个键的赋值行（注释行不算）；与 team_model_policy_issues 的旧判据同一形状。
+team_config_file_key_present() { # <path> <KEY> → 0 = 在文件里有赋值行
+  grep -vE '^[[:space:]]*#' "$1" 2>/dev/null | grep -Eq "(^|[^A-Za-z0-9_])$2([[:space:]]*=|[[:space:]])"
+}
+team_config_retired_keys_in_file() { # <path> → 每行一个文件里的退休键（TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL）
+  local key
+  for key in TEAM_AGENT_MODELS TEAM_DEFAULT_MODEL; do
+    team_config_file_key_present "$1" "$key" && printf '%s\n' "$key"
+  done
+  return 0
+}
+team_config_shape_read() { # <path> → 0/5；形状号在 TEAM_CONFIG_SHAPE，原因在 TEAM_CONFIG_SHAPE_WHY
+  local path="$1" marker
+  TEAM_CONFIG_SHAPE=''; TEAM_CONFIG_SHAPE_WHY=''
+  marker="$(team_config_file_value "$path" TEAM_CONFIG_VERSION 2>/dev/null || true)"
+  if [ -n "$marker" ]; then
+    case "$marker" in
+      *[!0-9]*) TEAM_CONFIG_SHAPE_WHY="TEAM_CONFIG_VERSION 不是整数：$marker"; return 5 ;;
+    esac
+    if [ "$marker" -gt "$TEAM_CONFIG_SHAPE_CURRENT" ]; then
+      TEAM_CONFIG_SHAPE_WHY="这个项目的配置形状号是 $marker，本工具只知道到 $TEAM_CONFIG_SHAPE_CURRENT（不拿旧行去套新形状）"
+      return 5
+    fi
+    TEAM_CONFIG_SHAPE="$marker"; return 0
+  fi
+  if [ -n "$(team_config_retired_keys_in_file "$path")" ]; then
+    TEAM_CONFIG_SHAPE="$TEAM_CONFIG_SHAPE_RETIRED"; return 0
+  fi
+  TEAM_CONFIG_SHAPE="$TEAM_CONFIG_SHAPE_CURRENT"
+}
+# 类别名规范化（design §3 的唯一规则）：小写、其它字符折成 `-`、折叠并修剪 `-`；结果必须匹配
+# `^[a-z][a-z0-9-]*$`，否则**拒绝**（不偷偷加前缀 —— 静默改值就是另一条口径）。
+team_config_category_normalize() { # <旧席位名> → stdout 规范化结果（调用方再用 team_category_valid 判）
+  printf '%s' "${1-}" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//'
+}
+# 迁移决策：action=none（已是当前形状）/ action=apply（有可套用的迁移行）/ 非 0 = 拒绝。
+# 拒绝时 TEAM_MIGRATION_WHY 是点名障碍的人话，TEAM_MIGRATION_SHAPE 是分类名（design §4 八类）。
+team_config_migration_decide() { # <path>
+  local path="$1" shape=''
+  TEAM_MIGRATION_ACTION=''; TEAM_MIGRATION_WHY=''; TEAM_MIGRATION_SHAPE=''
+  if [ -n "${TEAM_MODEL_RETIRED_ENV:-}" ]; then
+    TEAM_MIGRATION_SHAPE='retired-key-in-env'
+    TEAM_MIGRATION_WHY="退休键在**环境**里（$(printf '%s' "$TEAM_MODEL_RETIRED_ENV" | paste -sd'、' -)），文件里改不掉；修法：unset $TEAM_MODEL_RETIRED_ENV"
+    return 1
+  fi
+  if ! team_config_shape_read "$path"; then
+    TEAM_MIGRATION_SHAPE='unknown-shape'; TEAM_MIGRATION_WHY="${TEAM_CONFIG_SHAPE_WHY:-配置形状读不出来}"; return 1
+  fi
+  shape="$TEAM_CONFIG_SHAPE"
+  if [ "$shape" = "$TEAM_CONFIG_SHAPE_CURRENT" ]; then
+    if [ -n "$(team_config_retired_keys_in_file "$path")" ]; then
+      TEAM_MIGRATION_SHAPE='contradictory-shape'
+      TEAM_MIGRATION_WHY="文件里带着形状号 $TEAM_CONFIG_SHAPE_CURRENT 却还有退休键 $(team_config_retired_keys_in_file "$path" | paste -sd'、' -)：先手工决定留哪一套"
+      return 1
+    fi
+    TEAM_MIGRATION_ACTION='none'; return 0
+  fi
+  # shape < 当前：按表找 from 匹配的行；缺行 / 更高都拒绝（绝不猜）。
+  local id from to introduced matched=''
+  while IFS='|' read -r id from to introduced; do
+    case "$id" in ''|'#'*) continue ;; esac
+    if [ "$shape" = "$from" ]; then matched="$id|$from|$to|$introduced"; break; fi
+    if [ "$shape" -lt "$from" ]; then
+      TEAM_MIGRATION_SHAPE='missing-migration-row'
+      TEAM_MIGRATION_WHY="形状 $shape 在迁移表里没有对应的行（表的下一行从 $from 起）：本工具不知道该怎么补中间这一步"
+      return 1
+    fi
+  done < <(team_config_migration_table)
+  if [ -z "$matched" ]; then
+    TEAM_MIGRATION_SHAPE='missing-migration-row'
+    TEAM_MIGRATION_WHY="形状 $shape 在迁移表里没有对应的行"
+    return 1
+  fi
+  TEAM_MIGRATION_ACTION='apply'
+  TEAM_MIGRATION_ROW="${matched%%|*}"; local rest="${matched#*|}"
+  TEAM_MIGRATION_FROM="${rest%%|*}"; rest="${rest#*|}"
+  TEAM_MIGRATION_TO="${rest%%|*}"; TEAM_MIGRATION_INTRODUCED="${rest#*|}"
+  return 0
+}
+# 拒绝建议里的「其余对仍然给出」（design §4）：已通过校验的对原样保留，非法的那一对用占位符补位。
+team_migration_partial_map() { # <已推导出的对…>
+  local pairs="${1:-}"
+  if [ -n "$pairs" ]; then printf '%s <非法那一对用占位符>' "$pairs"; else printf '<完整映射>'; fi
+}
+# 推导表（design §3）：旧键 → 新键。值一个都不改；每条规范化改过名字的、兜底取默认值的都进 notes。
+# 成功 → 0：TEAM_MIGRATION_MAP / PM / NOTES / ROWS（old_key|old_value|new_key|new_value|note）就绪。
+# 失败 → 1：TEAM_MIGRATION_WHY 点名障碍，TEAM_MIGRATION_SHAPE 是分类名；TEAM_MIGRATION_ROWS 为空。
+team_config_migration_plan() { # <path>
+  local path="$1" nl=$'\n'
+  TEAM_MIGRATION_MAP=''; TEAM_MIGRATION_PM=''; TEAM_MIGRATION_NOTES=''; TEAM_MIGRATION_ROWS=''
+  TEAM_MIGRATION_WHY=''; TEAM_MIGRATION_SHAPE=''; TEAM_MIGRATION_PARTIAL_MAP=''
+  team_config_migration_decide "$path" || return 1
+  [ "$TEAM_MIGRATION_ACTION" = 'apply' ] || return 0
+  local shape_err
+  if ! shape_err="$(C_RED='' C_RESET='' team_config_model_source_shape "$path" 2>&1)"; then
+    shape_err="$(printf '%s' "$shape_err" | head -1)"; shape_err="${shape_err#✗ }"
+    TEAM_MIGRATION_SHAPE='shape-not-locatable'
+    TEAM_MIGRATION_WHY="旧键的形状 upgrade-models 定位不了（${shape_err:-不是顶层单行字面量}）；先手工规范那一行，本工具一个字节都不写"
+    return 1
+  fi
+  local seats='' default='' pm='' pm_from_default=0
+  seats="$(team_config_file_value "$path" TEAM_AGENT_MODELS 2>/dev/null || true)"
+  default="$(team_config_file_value "$path" TEAM_DEFAULT_MODEL 2>/dev/null || true)"
+  pm="$(team_config_file_value "$path" TEAM_PM_MODEL 2>/dev/null || true)"
+  # 新旧值同时存在且矛盾：文件里既有退休键，又有**非空的新映射键** TEAM_TASK_MODELS —— 迁移会覆盖它，
+  # 所以先手工决定留哪一套。（TEAM_PM_MODEL 不矛盾：design §3 的规则就是原样带过去，存在即沿用。）
+  local newmap; newmap="$(team_config_file_value "$path" TEAM_TASK_MODELS 2>/dev/null || true)"
+  if [ -n "$newmap" ]; then
+    TEAM_MIGRATION_SHAPE='contradictory-values'
+    TEAM_MIGRATION_WHY="文件里既有退休键 $(team_config_retired_keys_in_file "$path" | paste -sd'、' -)，又有非空的新键 TEAM_TASK_MODELS='$newmap'：先手工决定留哪一套"
+    return 1
+  fi
+  local tok seat model category note taken=' ' map='' notes='' rows='' reason
+  for tok in $seats; do
+    case "$tok" in
+      *=*) seat="${tok%%=*}"; model="${tok#*=}" ;;
+      *) TEAM_MIGRATION_SHAPE='unparsable-seat-token'
+         TEAM_MIGRATION_WHY="旧 TEAM_AGENT_MODELS 里有一个解不开的 token：$tok"; return 1 ;;
+    esac
+    if [ -z "$seat" ] || [ -z "$model" ]; then
+      TEAM_MIGRATION_SHAPE='unparsable-seat-token'
+      TEAM_MIGRATION_WHY="旧 TEAM_AGENT_MODELS 的 token 缺席位名或模型：$tok"; return 1
+    fi
+    if ! reason="$(team_config_model_violation "$model")"; then
+      TEAM_MIGRATION_SHAPE='invalid-model-value'
+      TEAM_MIGRATION_PARTIAL_MAP="$(team_migration_partial_map "$map")"
+      TEAM_MIGRATION_WHY="席位 $seat 的旧模型值不合法（$reason）：$model"
+      return 1
+    fi
+    category="$(team_config_category_normalize "$seat")"
+    if ! team_category_valid "$category"; then
+      TEAM_MIGRATION_SHAPE='category-not-normalizable'
+      TEAM_MIGRATION_WHY="席位名 $seat 规范化成 '$category'，不是合法类别名（^[a-z][a-z0-9-]*$）：先手工选一个类别名"
+      return 1
+    fi
+    note=''
+    [ "$category" = "$seat" ] || note="席位 $seat 规范化成类别 $category"
+    case "$taken" in
+      *" $category "*)
+        TEAM_MIGRATION_SHAPE='category-collision'
+        TEAM_MIGRATION_WHY="两个席位规范化后都叫类别 $category：先手工选名字（本工具不偷偷加后缀）"
+        return 1 ;;
+    esac
+    taken="$taken$category "
+    map="${map:+$map }$category=$model"
+    rows="${rows:+$rows$nl}TEAM_AGENT_MODELS|$seat=$model|TEAM_TASK_MODELS|$category=$model|$note"
+    [ -z "$note" ] || notes="${notes:+$notes；}$note"
+  done
+  if [ -n "$default" ]; then
+    if ! reason="$(team_config_model_violation "$default")"; then
+      TEAM_MIGRATION_SHAPE='invalid-model-value'
+      TEAM_MIGRATION_PARTIAL_MAP="$(team_migration_partial_map "$map")"
+      TEAM_MIGRATION_WHY="旧 TEAM_DEFAULT_MODEL 不合法（$reason）：$default"; return 1
+    fi
+    case "$taken" in
+      *' default '*)
+        TEAM_MIGRATION_SHAPE='fallback-name-collision'
+        TEAM_MIGRATION_WHY='席位派生的类别里已经有一个叫 default：兜底名与它撞名，先手工给旧默认值选一个类别名'; return 1 ;;
+    esac
+    taken="$taken default "
+    map="${map:+$map }default=$default"
+    rows="${rows:+$rows$nl}TEAM_DEFAULT_MODEL|$default|TEAM_TASK_MODELS|default=$default|"
+  fi
+  if [ -z "$pm" ]; then
+    if [ -n "$default" ]; then
+      pm="$default"; pm_from_default=1
+      notes="${notes:+$notes；}TEAM_PM_MODEL 缺失或为空 → 取旧 TEAM_DEFAULT_MODEL 的值"
+    else
+      TEAM_MIGRATION_SHAPE='pm-model-underivable'
+      TEAM_MIGRATION_WHY='推不出 PM 模型：TEAM_PM_MODEL 为空，且没有 TEAM_DEFAULT_MODEL 可兜底'; return 1
+    fi
+  fi
+  if ! reason="$(team_config_model_violation "$pm")"; then
+    TEAM_MIGRATION_SHAPE='invalid-model-value'
+    TEAM_MIGRATION_WHY="PM 模型不合法（$reason）：$pm"; return 1
+  fi
+  if [ -z "$seats" ] && [ -z "$default" ]; then
+    TEAM_MIGRATION_SHAPE='nothing-to-derive'
+    TEAM_MIGRATION_WHY='退休键里没有可推导的值（TEAM_AGENT_MODELS 与 TEAM_DEFAULT_MODEL 都是空的）'; return 1
+  fi
+  if ! reason="$(team_task_map_violation "$map")"; then
+    TEAM_MIGRATION_SHAPE='invalid-derived-map'
+    TEAM_MIGRATION_WHY="推导出的类别映射过不了既有校验器（$reason）：$map"; return 1
+  fi
+  if [ "$pm_from_default" = 1 ]; then
+    rows="${rows:+$rows$nl}TEAM_PM_MODEL|（缺失）|TEAM_PM_MODEL|$pm|取旧 TEAM_DEFAULT_MODEL 的值"
+  else
+    rows="${rows:+$rows$nl}TEAM_PM_MODEL|$pm|TEAM_PM_MODEL|$pm|"
+  fi
+  rows="${rows:+$rows$nl}（迁移）|-|TEAM_CONFIG_VERSION|$TEAM_CONFIG_SHAPE_CURRENT|删除两个退休键，并记下新形状号"
+  TEAM_MIGRATION_MAP="$map"; TEAM_MIGRATION_PM="$pm"; TEAM_MIGRATION_NOTES="$notes"; TEAM_MIGRATION_ROWS="$rows"
+  return 0
+}
+# 备份路径：$TEAM_STATE_DIR/config-backups/config.sh.pre-<引入版本>-<UTC 时间戳>（design §5）。
+team_config_backup_dir() { printf '%s\n' "${TEAM_STATE_DIR:-.pi/team/state}/config-backups"; }
+team_config_backup_name() { # <path> <时间戳> → 备份文件名
+  printf 'config.sh.pre-%s-%s\n' "$(team_config_migration_introduced "$TEAM_MIGRATION_FROM")" "$2"
+}
+# 写一份带时间戳的备份，保留最新 5 份（备份是恢复手段不是档案）。
+team_config_backup_write() { # <path> <时间戳> → stdout 备份的绝对路径
+  local path="$1" ts="$2" dir name
+  dir="$(team_config_backup_dir)"; name="$(team_config_backup_name "$path" "$ts")"
+  mkdir -p "$dir" || return 1
+  cp -p "$path" "$dir/$name" || return 1
+  local keep=5 n f
+  n="$(find "$dir" -maxdepth 1 -type f -name 'config.sh.pre-*' | wc -l | tr -d ' ')"
+  if [ "$n" -gt "$keep" ]; then
+    find "$dir" -maxdepth 1 -type f -name 'config.sh.pre-*' -printf '%f\n' | sort | head -n "$((n - keep))" \
+      | while IFS= read -r f; do [ -n "$f" ] && rm -f "$dir/$f"; done
+  fi
+  printf '%s\n' "$dir/$name"
+}
 team_cmd_config_upgrade_models() {
   local map='' pm='' dry=1 yes="${TEAM_UPGRADE_CONFIRMED:-0}" fp='' actor="${TEAM_ACTOR:-cli}"
   [ "$yes" != 1 ] || dry=0
@@ -1237,8 +1483,11 @@ team_cmd_config_upgrade_models() {
   if [ "$dry" = 1 ]; then team_config_upgrade_transaction "$path" "$map" "$pm" "$dry" "$fp" "$actor"
   else team_with_lock "config:$path" team_config_locked_call team_config_upgrade_transaction "$path" "$map" "$pm" "$dry" "$fp" "$actor"; fi
 }
+# <path> <map> <pm> <dry> <fp> <actor> [KEY=VALUE…（附加键，默认空；手工入口不受影响）]
 team_config_upgrade_transaction() {
   local path="$1" map="$2" pm="$3" dry="$4" fp="$5" actor="$6" before after tmp rc=0
+  shift 6 || true
+  local extra_key=; local extra_keys=("$@")
   before="$(team_config_fingerprint "$path")"
   if ! team_task_map_violation "$map" || ! team_config_model_violation "$pm"; then
     [ "$dry" = 1 ] || team_config_audit_write invalid "$actor" model-upgrade "$before" '' || true
@@ -1252,7 +1501,8 @@ team_config_upgrade_transaction() {
     [ "$dry" = 1 ] || team_config_audit_write refused "$actor" model-upgrade "$before" '' || true
     return 5
   fi
-  printf 'upgrade-models: remove TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; TEAM_TASK_MODELS=%s; TEAM_PM_MODEL=%s; before=%s\n' "$map" "$pm" "$before"
+  # 启动迁移（actor=up-migration）自己打印逐键表，这里不再重复同一条；手工入口照旧打印这一行。
+  [ "$actor" = 'up-migration' ] || printf 'upgrade-models: remove TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; TEAM_TASK_MODELS=%s; TEAM_PM_MODEL=%s; before=%s\n' "$map" "$pm" "$before"
   [ "$dry" != 1 ] || { printf 'dry-run: no config/audit mutation; --yes to commit\n'; return 0; }
   tmp="$(mktemp "$(dirname "$path")/.model-upgrade.XXXXXX")" || {
     team_config_audit_write write-error "$actor" model-upgrade "$before" '' || true; return 6;
@@ -1260,10 +1510,27 @@ team_config_upgrade_transaction() {
   cp -p "$path" "$tmp" || {
     rm -f "$tmp"; team_config_audit_write write-error "$actor" model-upgrade "$before" '' || true; return 6;
   }
+  local wrote=0
   team_config_set_in_file "$tmp" TEAM_DEFAULT_MODEL '' remove &&
     team_config_set_in_file "$tmp" TEAM_AGENT_MODELS '' remove &&
     team_config_set_in_file "$tmp" TEAM_TASK_MODELS "$map" &&
-    team_config_set_in_file "$tmp" TEAM_PM_MODEL "$pm" && bash -n "$tmp" || rc=6
+    team_config_set_in_file "$tmp" TEAM_PM_MODEL "$pm" || rc=6
+  if [ "$rc" = 0 ]; then
+    # 附加键（自动迁移写形状号）：**逐个显式校验**后才写，写失败整体失败（不做半套迁移）。
+    local pair
+    for pair in "${extra_keys[@]}"; do
+      [ -n "$pair" ] || continue
+      extra_key="${pair%%=*}"
+      # 只允许形状号（refuse 类键由**工具**写；控制台的写路径仍然拒绝它）—— 别的键一律写失败。
+      case "$extra_key" in
+        TEAM_CONFIG_VERSION) case "${pair#*=}" in ''|*[!0-9]*) rc=6; break ;; esac ;;
+        *) rc=6; break ;;
+      esac
+      team_config_set_in_file "$tmp" "$extra_key" "${pair#*=}" || { rc=6; break; }
+      wrote=1
+    done
+  fi
+  [ "$rc" != 0 ] || bash -n "$tmp" || rc=6
   if [ "$rc" = 0 ] && [ "$(team_config_fingerprint "$path")" != "$before" ]; then rc=3; fi
   if [ "$rc" = 0 ]; then mv -f "$tmp" "$path" || rc=6; fi
   rm -f "$tmp"
@@ -1273,7 +1540,9 @@ team_config_upgrade_transaction() {
     return "$rc"
   fi
   after="$(team_config_fingerprint "$path")"
-  team_config_audit_write ok "$actor" 'TEAM_DEFAULT_MODEL,TEAM_AGENT_MODELS,TEAM_TASK_MODELS,TEAM_PM_MODEL' "$before" "$after" "$before" "$after" || true
+  local audit_keys='TEAM_DEFAULT_MODEL,TEAM_AGENT_MODELS,TEAM_TASK_MODELS,TEAM_PM_MODEL' pair
+  for pair in "${extra_keys[@]}"; do [ -n "$pair" ] && audit_keys="$audit_keys,${pair%%=*}"; done
+  team_config_audit_write ok "$actor" "$audit_keys" "$before" "$after" "$before" "$after" || true
   printf 'committed: before=%s after=%s\n' "$before" "$after"
 }
 

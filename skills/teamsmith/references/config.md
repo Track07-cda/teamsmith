@@ -42,8 +42,9 @@ literals or simple `$VAR`.
 | `TEAM_AGENTS` | empty (`init` sets `dev verify`) | roster, space separated; grows only through `team add-agent <a> --register` and shrinks only through `team teardown --agent <a> --register` (both audited; a bare `team add-agent <a>` refuses a seat the roster does not carry and names both routes) |
 | `TEAM_TASK_MODELS` | empty (required) | the project's task-category → model map: `routine=provider/light analysis=provider/strong verify=provider/strong`. A **new** dispatch selects the model of the brief's `category:` from it; a complete same-task recovery keeps the model/SID it was already assigned, even after the category leaves the map. One category: `team config set-task-model <category> <model>`; the whole map: `team config set TEAM_TASK_MODELS '<map>' --yes`; breaking migration: `team config upgrade-models` |
 | `TEAM_PM_MODEL` | empty (required) | the **independent PM model** — never a fallback to a task model or a worker default. `team up` guards it (a running PM with a different model needs an explicit `--fresh-pm`) |
+| `TEAM_CONFIG_VERSION` | the current shape (written by the tool) | the configuration **shape number** (`refuse` class — the console never writes it). A project without the key is classified by its keys; a number higher than this tool's newest known shape is refused instead of migrated. `init`/`bootstrap` write the current number and the startup transaction writes it when it migrates an old shape |
 
-Categories are the project's own vocabulary (`[a-z][a-z0-9-]*`, unique): routine/analysis/verify are the initial example, not an engine list, and `phase:`/seat never selects a model automatically. The initial suggestion is `routine=opencode-go/deepseek-v4.1-flash`, `analysis`/`verify=openai-codex/gpt-6.1-sol:high`, independent PM the same strong model — examples, not defaults or a provider-availability claim. The retired keys TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL are no longer read: a project that still carries them is refused by the loader and by init/bootstrap, and migrates through the explicit `team config upgrade-models --task-models '<map>' --pm-model '<model>'` transaction (preview first, then `--yes`) — never through `team init --force`, bootstrap or an inference.
+Categories are the project's own vocabulary (`[a-z][a-z0-9-]*`, unique): routine/analysis/verify are the initial example, not an engine list, and `phase:`/seat never selects a model automatically. The initial suggestion is `routine=opencode-go/deepseek-v4.1-flash`, `analysis`/`verify=openai-codex/gpt-6.1-sol:high`, independent PM the same strong model — examples, not defaults or a provider-availability claim. The retired keys TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL are no longer read: a project that still carries them is refused by the loader and by init/bootstrap, and migrates on the next `team up` (the startup transaction derives the pairs from the old keys, prints them before → after, backs the file up and writes through the same checked writer) or through the explicit `team config upgrade-models --task-models '<map>' --pm-model '<model>'` transaction (preview first, then `--yes`) — never through `team init --force`, bootstrap or an inference. The refusal advice carries one paste-ready `team config upgrade-models …` command derived from that project's own configuration, or names the obstacle when the derivation is not unambiguous.
 | `TEAM_MODEL_LIMITS` | `kimi-coding/k3=2` | concurrency limits, `provider/model=N` space separated; `0` = unlimited |
 | `TEAM_EXTRA_PI_ARGS` | empty | extra arguments passed to pi (space separated, values with spaces are unsupported) |
 
@@ -64,6 +65,7 @@ Categories are the project's own vocabulary (`[a-z][a-z0-9-]*`, unique): routine
 | `TEAM_DISPATCH_VERIFY_SEC` | `8` | how long a dispatch waits for the pane's launch proof before it kills the window and retries |
 | `TEAM_DISPATCH_ALIVE_SEC` | `1` | after the launch proof, how long to observe whether the agent is still in the window (built-in Pi only; `0` = skip the observation). A subsequent exit is reported as a warning, never as a failed dispatch |
 | `TEAM_SQUASH_LOOKBACK` | `200` | how many commits on the protected branch are scanned when deciding "this branch was already squash-merged" (one tree comparison per agent row; a heuristic, see workflows.md) |
+| `TEAM_UPDATE_CHECK` | `1` | `0` = `team up` makes no npm version lookup at all (no query, no cache read or write). `1` = at most one bounded (≤2 s) lookup per 24 h, cached in `<state>/update-check.env`; every outcome except "local is older than the published version" prints nothing and never changes `team up`'s exit code. The tool never installs itself |
 
 ### agent adapter (the internal seam (frozen); leave all four empty for the built-in Pi behaviour)
 
@@ -434,7 +436,11 @@ model. `team config upgrade-models --task-models '<map>' --pm-model '<model>'` i
 transaction: it previews with `--dry-run`, writes only with `--yes`, replaces the four model keys (the two retired
 worker keys are removed, the two new keys upserted) and keeps every other byte; its relevant-line grammar
 (top-level unique literal assignments, optional inline comments) refuses export/duplicate/multiline/dynamic shapes
-with the file and line named, and the repair is a hand-normalized literal line. The retired `set-agent-model`
+with the file and line named, and the repair is a hand-normalized literal line. The startup path calls the same
+transaction (`team up`, actor `up-migration`): it derives the pairs from the old keys with the same table the
+refusals use, writes `TEAM_CONFIG_VERSION`, prints every pair before → after with the backup path and the restore
+command, and re-enters itself so later steps read the new bytes; `team up --print` writes nothing and `team up
+--no-migrate` refuses instead of writing. The retired `set-agent-model`
 route exits 5 pointing at these; `team add-agent --model` is retired too (a seat is a name in the roster, not a
 model identity).
 

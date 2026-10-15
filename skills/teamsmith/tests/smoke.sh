@@ -20660,20 +20660,23 @@ else
 fi
 
 # ---------------------------------------------------------------- 61. 任务类别模型路由：分组前门（P238 · task-model-routing）
-# 夹具本体是 tests/task-model-routing.sh（13 组）+ 它 source 的 tests/lib/model-routing-{boundary,expansion,roles}.sh
+# 夹具本体是 tests/task-model-routing.sh（16 组）+ 它 source 的 tests/lib/model-routing-{boundary,expansion,roles}.sh
 # 与 tests/lib/model-policy.sh；`--flip` 的变异器是 tests/lib/model-routing-flips.py。S1–S3 那三轮复验
-# 跑的都是默认 13 组全量，但**没有任何门禁段**在跑它（P238 坑 2 实测：smoke.sh 与选段表都不含这些文件）——
+# 跑的都是默认组全量，但**没有任何门禁段**在跑它（P238 坑 2 实测：smoke.sh 与选段表都不含这些文件）——
 # 于是改坏路由代码只能靠人手工跑才被发现。这一段把它登记进闸门。
 # 分档（判据 = 全量门禁能咬住路由回归 · FAST 的成本不失控；两档的实测时长写在报告里、寓意写进
 # section-budgets.tsv 的 provenance）：
-#   * FAST：除 boundary（真 tmux window 家族，占了整套时长的大头）之外的 12 组；
-#   * 全量：13 组全跑。`--flip` 变异套件在 §61b（同属前门，但它证的是「夹具有没有牙齿」）。
+#   * FAST：除 boundary 与 P261 的 heal/adopt/updatecheck（真 tmux 会话 + 拉起假 PM 进程，与 boundary 同族）
+#     之外的 12 组；
+#   * 全量：16 组全跑。`--flip` 变异套件在 §61b（同属前门，但它证的是「夹具有没有牙齿」）。
+#   P261 的三组只进全量档：它们要真 tmux 会话与假 PM 进程（§14c 的 FAST 前提「不起真进程」保持不变；
+#   实测三组 9.5s，所以全量档的成本只是零头）。
 # 隔离：夹具自带私有 tmux socket（lib/tmux-iso.sh 的硬停守卫）、记录桩 pi 与私有临时根；
 # FAST 档不起真 pi、不碰共享 tmux server（与 §59 同一形状），§14b 的 FAST 自检照旧成立。
 section "61 · 任务类别模型路由：分组前门（P228 · task-model-routing）"
 P238_SUITE="${P238_SUITE:-$SKILL_DIR/tests/task-model-routing.sh}"
 P238_GROUPS_FAST='policy,machine,init,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm'
-P238_GROUPS_ALL="$P238_GROUPS_FAST,boundary"
+P238_GROUPS_ALL="$P238_GROUPS_FAST,heal,adopt,updatecheck,boundary"
 if [ ! -f "$P238_SUITE" ]; then
   bad "61 缺 tests/task-model-routing.sh（S1–S3 的路由前门夹具）"
 else

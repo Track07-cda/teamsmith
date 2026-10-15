@@ -23,7 +23,7 @@ Or hand the contents of `templates/bootstrap-prompt.md.tmpl` (placeholders subst
 |---|---|---|
 | Detect tmux | adopts the `session:window` the PM itself runs in and writes it into the config (no manual fill-in) | recomputed every run |
 | Write config | `.pi/team/config.sh` (identity/roster/**task-category model map + independent PM model**/gates/install command/forge/guards/pulse) | if it exists it is kept; only missing entries are filled in |
-| Model policy | fresh runs must pass `--task-models` and `--pm-model` (there is no default model); a valid v2 policy is kept on re-entry; a config still carrying the retired worker keys is refused **before** any install/ledger/worktree/pulse step and migrates only through `team config upgrade-models` | ✔ |
+| Model policy | fresh runs must pass `--task-models` and `--pm-model` (there is no default model); a valid v2 policy is kept on re-entry; a config still carrying the retired worker keys is refused **before** any install/ledger/worktree/pulse step and migrates on the next `team up` (the startup transaction) or through the explicit `team config upgrade-models` transaction | ✔ |
 | Required dependencies | checks magic-context (Pi package `@cortexkit/pi-magic-context`) and OpenSpec (CLI resolvable + the spec dir); a missing one prints its exact fix/downgrade command, and does not block the setup | ✔ |
 | Docs skeleton | `docs/team/{ROADMAP,BOARD,OWNERSHIP,DECISIONS,PROTOCOL}.md`, `tasks/`, `reports/`, `reviews/`, `threads/`, `inbox/` | skipped when present |
 | Team protocol | injects the `<!-- teamsmith:begin --> … end -->` section into `AGENTS.md` (**refreshes** it instead of appending twice) | ✔ |

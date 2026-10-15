@@ -131,6 +131,57 @@ elif name == 'monitor-record-drift':
     replace(root / 'skills/teamsmith/scripts/monitor.mjs',
             '      team_assignment_parse "$2" "$data" || exit 1',
             '      data="$(printf "%s" "$data" | sed "s/malformed nonce/fixture-nonce/")" # P228_FLIP_monitor-record-drift\n      team_assignment_parse "$2" "$data" || exit 1')
+elif name == 'migration-row-removed':
+    # P261 red side: the derivation table loses its only migration row -> the legacy project must be refused
+    # (missing-migration-row named), not silently passed through with the old keys.
+    replace(lib / 'cmd-config.sh', 'm1|1|2|0.2.0', '# P228_FLIP_migration-row-removed')
+elif name == 'no-backup':
+    # P261 red side: write no timestamped backup but still report one.
+    replace(lib / 'cmd-config.sh',
+            'cp -p "$path" "$dir/$name" || return 1',
+            ': # P228_FLIP_no-backup')
+elif name == 'no-shape-number':
+    # P261 red side: init/bootstrap stop writing the configuration shape number.
+    replace(root / 'skills/teamsmith/scripts/lib/cmd-project.sh',
+            '      "CONFIG_VERSION=$TEAM_CONFIG_SHAPE_CURRENT" > "$cfg"; then',
+            '      > "$cfg"; then # P228_FLIP_no-shape-number')
+elif name == 'missing-record-refused':
+    # P261 red side: restore the old single refusal for "no metadata at all".
+    replace(lib / 'common.sh',
+            '  if [ ! -f "$TEAM_STATE_DIR/pm-launch.env" ]; then\n    TEAM_PM_IDENTITY_REGISTER=1',
+            '  if [ ! -f "$TEAM_STATE_DIR/pm-launch.env" ]; then\n    team_err "PM launch identity missing"; return 1 # P228_FLIP_missing-record-refused\n    TEAM_PM_IDENTITY_REGISTER=1')
+elif name == 'adopt-ignores-yes':
+    # P261 red side: --adopt-pm-identity writes a differing record without the explicit --yes.
+    replace(lib / 'common.sh',
+            """    if [ "$yes" != "1" ]; then
+      team_err "--adopt-pm-identity 需要 --yes：这是把现在的解析声明成这次续跑的身份"
+      team_dim "  记录 model=$TEAM_PM_SELECTED_MODEL（suffix 显式）／现在 model=$want_model；记录 resume_key=$TEAM_PM_RECORDED_RESUME_KEY／现在 resume_key=$want_resume" >&2
+      team_dim "  要新开一场对话而不是认领：$TEAM_CLI up --fresh-pm" >&2
+      return 1
+    fi""",
+            '    : # P228_FLIP_adopt-ignores-yes')
+elif name == 'legacy-route-placeholder':
+    # P261 返修（V35 F2/O1）红侧：拒绝建议退回占位符（不读项目自己的配置也不走推导表）
+    # → init / bootstrap / config 写路径的「推导命令逐字节」与粘贴现场必红。
+    function(lib / 'common.sh', 'team_legacy_model_route_lines',
+             "  local cfg=\"${1:-${TEAM_CONFIG:-}}\"\n"
+             "  team_dim \"  路线 ① 手工事务（先预览）：$TEAM_CLI config upgrade-models --task-models '<category=provider/model …>' --pm-model '<provider/model>' --dry-run\"\n"
+             "  team_dim \"  路线 ② 启动事务（机械形状由它迁移）：$TEAM_CLI up（--print 只预告，--no-migrate 只报告）\"")
+elif name == 'updatecheck-equal-prints':
+    # P261 red side: an equal published version is reported as newer.
+    replace(lib / 'cmd-watch.sh',
+            '    [ "$b" -gt "$a" ] && return 0',
+            '    [ "$b" -ge "$a" ] && return 0 # P228_FLIP_updatecheck-equal-prints')
+elif name == 'updatecheck-ignores-off':
+    # P261 red side: TEAM_UPDATE_CHECK=0 no longer suppresses the lookup.
+    replace(lib / 'cmd-watch.sh',
+            '  [ "${TEAM_UPDATE_CHECK:-1}" = "0" ] && return 0',
+            ': # P228_FLIP_updatecheck-ignores-off')
+elif name == 'updatecheck-print-writes-cache':
+    # P261 red side: the preview performs the lookup and writes the cache.
+    replace(lib / 'cmd-watch.sh',
+            "    printf '（本可检查 npm 上的新版本：--print 下不联网、不写缓存）\\n'\n    return 0\n  fi",
+            "    team_update_check_notice # P228_FLIP_updatecheck-print-writes-cache\n    printf '（本可检查 npm 上的新版本：--print 下不联网、不写缓存）\\n'\n    return 0\n  fi")
 else:
     raise SystemExit('unknown mutation: ' + name)
 print(json.dumps(dict(mutation=name, changes=changes), ensure_ascii=False))

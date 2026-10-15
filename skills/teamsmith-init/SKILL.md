@@ -68,8 +68,10 @@ into `~/.agents/skills`). Everything after setup (dispatch, the pulse, review, m
 
    Fresh projects must pass both model inputs (`--task-models`, `--pm-model`); a valid v2 policy is kept on
    re-entry. A **legacy** config (retired TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL) is refused before any
-   install/ledger/worktree/pulse work and migrates only through `team config upgrade-models --task-models '<map>'
-   --pm-model '<model>'`; `bootstrap`, `init --force` and inference are not migration routes.
+   install/ledger/worktree/pulse work and migrates on the next `team up` (the startup transaction derives the
+   category pairs from the old keys, prints them, backs the file up and re-enters itself) or through the explicit
+   `team config upgrade-models --task-models '<map>' --pm-model '<model>'` transaction; `bootstrap`, `init --force`
+   and inference are not migration routes.
 
    `bootstrap` is idempotent (a rerun fills in what is missing and leaves the rest alone, including the project's
    `.pi/skills/` install — that is the upgrade route for a project set up before this skill version) and it

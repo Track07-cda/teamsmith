@@ -18,10 +18,18 @@ TEAM_AGENTS="{{AGENTS}}"
 # A new dispatch picks its model from the brief's `category:` line; a same-task recovery keeps the model/SID it was
 # already assigned, even if the map later drops that category. One category: team config set-task-model <category> <model>;
 # the whole map: team config set TEAM_TASK_MODELS '<map>' --yes. The old TEAM_AGENT_MODELS / TEAM_DEFAULT_MODEL keys are
-# retired: an existing project upgrades explicitly with `team config upgrade-models --task-models '<map>' --pm-model '<model>'`.
+# retired: an existing project migrates on the next `team up` (the startup transaction derives the pairs, prints them,
+# backs the file up and writes through the same checked writer) or explicitly with
+# `team config upgrade-models --task-models '<map>' --pm-model '<model>'`.
 TEAM_TASK_MODELS=""
 # Independent PM model (required; the PM never falls back to a worker/task model). `team up` guards it with --fresh-pm.
 TEAM_PM_MODEL=""
+# Configuration shape number (written by the tool; do not edit): init/bootstrap write the current one and the
+# startup transaction writes it when it migrates an old shape. A number higher than the tool's newest is refused.
+TEAM_CONFIG_VERSION="{{CONFIG_VERSION}}"
+# team up version notice: 0 = no npm lookup at all (and no cache read/write); every outcome except
+# "local is older" is silent and never changes the exit code. The tool never installs itself.
+TEAM_UPDATE_CHECK=1
 # Concurrency caps ("provider/model=N"): important when a provider quota is small,
 # e.g. "kimi-coding/k3=2 openai-codex/gpt-5.6-sol=1" (wildcards allowed)
 TEAM_MODEL_LIMITS="kimi-coding/k3=2 openai-codex/*=1"

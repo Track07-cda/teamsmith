@@ -261,7 +261,7 @@ team_cmd_init() {
     if [ -n "$legacy_keys" ]; then
       team_err "init: $cfg 还在用退休的模型键（$(printf '%s' "$legacy_keys" | tr '\n' ' ')）—— 任何写入之前停住"
       team_dim "  项目模型策略是破坏式升级：init / init --force / bootstrap 都不是迁移路径"
-      team_dim "  升级（先预览）：$TEAM_CLI config upgrade-models --task-models '<category=provider/model …>' --pm-model '<provider/model>' --dry-run"
+      team_legacy_model_route_lines "$cfg"
       return 1
     fi
   fi
@@ -329,7 +329,8 @@ team_cmd_init() {
       "PROJECT=$project" "SESSION=$session" "PM_WINDOW=$pmwin" \
       "DOCS_DIR=$docs" "AGENTS=$agents" "GATES=$(team_escape_dq "$gates")" "VCS=$vcs" \
       "SKILL_DIR=$TEAM_SKILL_DIR" \
-      "DETECTED_VCS=$(team_detect_vcs)" "TODAY=$(date +%F)" > "$cfg"; then
+      "DETECTED_VCS=$(team_detect_vcs)" "TODAY=$(date +%F)" \
+      "CONFIG_VERSION=$TEAM_CONFIG_SHAPE_CURRENT" > "$cfg"; then
       team_err "init: 渲染配置失败：$tmpl"
       rm -f "$cfg"
       return 1

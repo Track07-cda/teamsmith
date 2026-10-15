@@ -1183,6 +1183,19 @@ team_dispatch_attempt_fail() {
   rm -f "${TEAM_ASSIGN_TMP:-/nonexistent}"
   team_tmux_kill_window "$TEAM_SESSION:$seat" >/dev/null 2>&1 || true
 }
+# P261（吸收 P253）：退休键的迁移建议是一个**先出现**的块 —— 退休键没迁完，后面的派单前提（模型/身份）
+# 都无从谈。它在报告里占第一个位置（P140 的一次拒绝：谁先判谁先印），并把 TEAM_MODEL_POLICY_REPORTED
+# 置位 —— 身份步骤的 team_model_policy_guard 据此不再重印同一段文字（仍然拒绝，判据不变）。
+team_dispatch_judge_model_policy() {
+  local issues
+  TEAM_MODEL_POLICY_REPORTED=0
+  issues="$(team_model_policy_issues)"
+  [ -n "$issues" ] || return 0
+  team_df_lines_err "$issues"
+  TEAM_MODEL_POLICY_REPORTED=1
+  return 1
+}
+
 team_dispatch_execute() {
   team_require_cmd tmux "agent 在 tmux 窗口里跑，PM 需要能旁观与追问"
   local agent="" id="" taskfile="" model="" branch_flag="" fresh=0 printonly=0 overflow=0 force=0
@@ -1238,6 +1251,10 @@ team_dispatch_execute() {
   TEAM_DISPATCH_AUDIT_LINES=""
   TEAM_DISPATCH_STACK_PREV=""
 
+  # ⓪ P261（吸收 P253）：旧配置（退休键）是**本次派单的前提** —— 它的迁移建议先判、先印，占据这份
+  # 拒绝的第一段；同一件事不再在下面的身份步骤里重印（team_model_policy_guard 认这个标记，仍然拒绝）。
+  team_df_run team_dispatch_judge_model_policy
+
   # ① 任务书歧义
   team_df_run team_dispatch_judge_briefs "$id" "$briefs" "$nbrief" "$taskfile"
 
@@ -1285,7 +1302,9 @@ team_dispatch_execute() {
   local TEAM_SELECTED_MODEL='' TEAM_SELECTED_SID='' TEAM_SELECTED_ORIGIN='' TEAM_LAUNCH_VIA='' TEAM_SELECTED_CATEGORY='' TEAM_SELECTED_MODE=''
   # Execute in this shell so the accepted identity is not lost through a subshell.
   if ! identity_output="$(team_dispatch_select_identity "$agent" "$id" "$taskfile" "$wt" "${TEAM_CHECKED_BRANCH:-$br_name}" "$model" "$fresh" 2>&1)"; then
-    identity_ok=0; team_df_run_lib team_dispatch_identity_refusal "$identity_output"
+    # P261：空输出不冒充一条阻塞项（迁移块已在最前面报过时，身份步骤只静默地拒绝）。
+    identity_ok=0
+    if [ -n "$identity_output" ]; then team_df_run_lib team_dispatch_identity_refusal "$identity_output"; fi
   else
     team_dispatch_select_identity "$agent" "$id" "$taskfile" "$wt" "${TEAM_CHECKED_BRANCH:-$br_name}" "$model" "$fresh" >/dev/null || return 1
     model="$TEAM_SELECTED_MODEL"

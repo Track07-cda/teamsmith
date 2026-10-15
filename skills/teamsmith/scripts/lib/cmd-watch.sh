@@ -123,16 +123,187 @@ team_pm_same_dir_warn() {
   team_dim "  建议：先退出它；或者在干净的新会话里跑 $TEAM_CLI up --fresh-pm（本次新开一场对话）"
 }
 
+
+# ---------------------------------------------------------------- 启动自愈（P261 · startup-self-heal）
+# 落点分工（design §1）：纯决策在 cmd-config.sh（team_config_migration_*），这里只做编排：打印、备份、
+# 复用同一个写入器、exec 自己、身份预告、版本提示。一个字节都不写的承诺由纯决策层保证。
+team_up_migration_rows_text() { # 逐键 before → after（值可见）
+  local row old_key old_val new_key new_val note
+  while IFS='|' read -r old_key old_val new_key new_val note; do
+    [ -n "$old_key" ] || continue
+    printf '  %s %s → %s %s%s\n' "$old_key" "$old_val" "$new_key" "$new_val" "${note:+（$note）}"
+  done <<< "${TEAM_MIGRATION_ROWS:-}"
+}
+team_up_migration_backup_line() { # 备份与还原命令（同一份文本给成功路径与失败路径）
+  local backup="$1" cfg="$2"
+  printf '  备份：%s\n  还原：cp %q %q\n' "$backup" "$backup" "$cfg"
+}
+# 迁移可用（action=apply）时的逐键表 + 备份路径 + 为什么。
+team_up_migration_preview() { # <cfg> <备份路径> → stdout 预告块
+  printf 'i 检测到旧形状配置（迁移 %s：形状 %s → %s，%s 引入）；值一个都不改：\n' \
+    "${TEAM_MIGRATION_ROW:-m1}" "${TEAM_MIGRATION_FROM:-1}" "${TEAM_MIGRATION_TO:-2}" "${TEAM_MIGRATION_INTRODUCED:-0.2.0}"
+  team_up_migration_rows_text
+  team_up_migration_backup_line "$2" "$1"
+  [ -z "$TEAM_MIGRATION_NOTES" ] || printf '  推导说明：%s\n' "$TEAM_MIGRATION_NOTES"
+  printf '  为什么：0.2.0 起派单按任务类别选模型（brief 的 category: 行）；这两个退休键不再被读取。\n'
+}
+# 迁移决策与编排（design §1 的 1/1a/1b/1c）。0 = 继续；1 = 拒绝（已打印）；10 = 已在 print 下预告了迁移
+team_up_migration_step() { # <print|no-migrate|real> <argv…>
+  local mode="$1"; shift
+  local cfg; cfg="$(team_config_contract_path)" || return 1
+  if ! team_config_migration_plan "$cfg"; then
+    team_err "启动迁移拒绝（${TEAM_MIGRATION_SHAPE:-unknown}）：${TEAM_MIGRATION_WHY}"
+    team_dim "  一个字节都没写（不写配置、不建备份、不写审计）" >&2
+    if [ -n "${TEAM_MIGRATION_PARTIAL_MAP:-}" ]; then
+      printf '  其余已推导出的对可以先手工提交（非法那一对用占位符）：\n    %s config upgrade-models \\\n      --task-models '"'"'%s'"'"' \\\n      --pm-model '"'"'<独立模型>'"'"' --dry-run\n' \
+        "$TEAM_CLI" "$TEAM_MIGRATION_PARTIAL_MAP"
+    fi
+    team_dim "  手工路线：$TEAM_CLI config upgrade-models --task-models '<完整映射>' --pm-model '<独立模型>' --dry-run" >&2
+    return 1
+  fi
+  [ "$TEAM_MIGRATION_ACTION" = 'apply' ] || return 0
+  local ts; ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  local backup="$TEAM_MIGRATION_BACKUP_HINT"
+  [ -n "$backup" ] || backup="$(team_config_backup_dir)/$(team_config_backup_name "$cfg" "$ts")"
+  if [ "$mode" = 'print' ]; then
+    team_up_migration_preview "$cfg" "$backup"
+    return 10
+  fi
+  if [ "$mode" = 'no-migrate' ]; then
+    team_err "--no-migrate：不写盘，也不启动（旧形状配置还在）"
+    printf '  修法（建议·按你现在的配置推导，类别名可以改）：\n    %s config upgrade-models \\\n      --task-models '"'"'%s'"'"' \\\n      --pm-model '"'"'%s'"'"' --dry-run\n' \
+      "$TEAM_CLI" "$TEAM_MIGRATION_MAP" "$TEAM_MIGRATION_PM"
+    [ -z "$TEAM_MIGRATION_NOTES" ] || printf '  （推导说明：%s）\n' "$TEAM_MIGRATION_NOTES"
+    team_dim "  手工事务路线（去掉 --no-migrate 就是自动）：$TEAM_CLI config upgrade-models --task-models '<完整映射>' --pm-model '<独立模型>' --yes" >&2
+    return 1
+  fi
+  # 真实迁移：计划 → 备份 → 同一个写入器（actor=up-migration，附形状号）→ 结果/还原 → exec 自己
+  team_up_migration_preview "$cfg" "$backup"
+  mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || true
+  local fp; fp="$(team_config_fingerprint "$cfg")"
+  if ! backup="$(team_config_backup_write "$cfg" "$ts")"; then
+    team_err "迁移中止：备份写不出来（$backup）—— 配置一个字节都没动"
+    return 1
+  fi
+  local rc=0
+  team_with_lock "config:$cfg" team_config_locked_call team_config_upgrade_transaction \
+    "$cfg" "$TEAM_MIGRATION_MAP" "$TEAM_MIGRATION_PM" 0 "$fp" 'up-migration' \
+    "TEAM_CONFIG_VERSION=$TEAM_CONFIG_SHAPE_CURRENT" || rc=$?
+  if [ "$rc" != 0 ]; then
+    team_err "迁移写入失败（rc=$rc）：配置保持原样（或已由事务回滚）"
+    team_up_migration_backup_line "$backup" "$cfg" >&2
+    return 1
+  fi
+  team_up_migration_backup_line "$backup" "$cfg"
+  team_ok "迁移完成（审计已写）：重新执行 up 读取新配置"
+  export TEAM_MIGRATION_BACKUP="$backup"
+  exec bash "$TEAM_SKILL_DIR/scripts/team" up "$@"
+}
+# 迁移之后仍失败：信息里带上本次迁移的备份与还原命令（design §5；--print 不设置该变量）。
+team_up_backup_note() {
+  [ -n "${TEAM_MIGRATION_BACKUP:-}" ] || return 0
+  team_dim "  本次迁移的还原命令：cp $(printf '%q' "$TEAM_MIGRATION_BACKUP") $(printf '%q' "$TEAM_CONFIG")" >&2
+}
+# --print 的身份预告（design §7）：不写盘；缺记录 → 打印将要登记的那一行；不一致 → 两边值 + 拒绝。
+team_pm_identity_preview() { # → 0 = 一致/将登记；1 = 不一致（已打印两边值）
+  local want_model want_resume
+  want_model="$(team_pm_model_resolve)"; want_resume="$(team_pm_resume_key)"
+  if [ ! -f "$TEAM_STATE_DIR/pm-launch.env" ]; then
+    printf 'i 身份预告：此前没有启动记录；这次启动会登记 model=%s resume_key=%s mode=%s（要换 PM 模型必须 --fresh-pm）\n' \
+      "$want_model" "$want_resume" "$(case "$(team_pm_continuity)" in continued:*) printf continued ;; *) printf fresh ;; esac)"
+    return 0
+  fi
+  if ! team_pm_metadata_load; then
+    team_err "身份预告：已有记录不可读/不属于本项目本窗口/是旧版本（${TEAM_IDENTITY_DIAGNOSTIC:-unreadable}）→ 启动时会拒绝"
+    return 1
+  fi
+  if [ "$TEAM_PM_SELECTED_MODEL" != "$want_model" ] || [ "$TEAM_PM_RECORDED_RESUME_KEY" != "$want_resume" ]; then
+    team_err "身份预告：recorded model=$TEAM_PM_SELECTED_MODEL（suffix 显式）≠ 现在 model=$want_model；recorded resume_key=$TEAM_PM_RECORDED_RESUME_KEY ≠ 现在 resume_key=$want_resume → 启动时会拒绝（--fresh-pm 或 --adopt-pm-identity --yes）"
+    return 1
+  fi
+  printf 'i 身份预告：记录与当前解析一致（model=%s resume_key=%s）\n' "$want_model" "$want_resume"
+  return 0
+}
+
+# 版本提示（design §8）：只在 team up 真实运行时触发；有界 ≤2s、缓存 24h、除「本地落后」外一律静默、不改 rc。
+team_version_newer() { # <local> <published> → 0 = published 的数字段严格更大
+  local -a ls ps; local i a b
+  IFS=. read -r -a ls <<< "${1%%[-+]*}"
+  IFS=. read -r -a ps <<< "${2%%[-+]*}"
+  for i in 0 1 2; do
+    a="${ls[$i]:-0}"; b="${ps[$i]:-0}"
+    case "$a$b" in *[!0-9]*) return 1 ;; esac
+    [ "$b" -gt "$a" ] && return 0
+    [ "$b" -lt "$a" ] && return 1
+  done
+  return 1
+}
+team_update_lookup() { # → stdout npm 上的最新版本（严格 ^[0-9]+.[0-9]+.[0-9]+$）；查不到 → 空
+  command -v npm >/dev/null 2>&1 || return 0
+  local tmp rc=0 pid i=0 out
+  tmp="$(mktemp "${TMPDIR:-/tmp}/teamsmith-npm.XXXXXX" 2>/dev/null)" || return 0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 2 npm view teamsmith version --registry https://registry.npmjs.org >"$tmp" 2>/dev/null || rc=$?
+  else
+    npm view teamsmith version --registry https://registry.npmjs.org >"$tmp" 2>/dev/null &
+    pid=$!
+    while [ "$i" -lt 20 ]; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; i=$((i+1)); done
+    if kill -0 "$pid" 2>/dev/null; then kill -TERM "$pid" 2>/dev/null || true; rc=124; fi
+    wait "$pid" 2>/dev/null || { [ "$rc" != 0 ] || rc=1; }
+  fi
+  out="$(tr -d '[:space:]' < "$tmp" 2>/dev/null || true)"
+  rm -f "$tmp"
+  [ "$rc" = 0 ] || return 0
+  case "$out" in
+    [0-9]*.[0-9]*.[0-9]*) case "$out" in *[!0-9.]*) return 0 ;; esac; printf '%s\n' "$out" ;;
+    *) return 0 ;;
+  esac
+}
+team_update_cache_write() { # <epoch> <latest|-> <local>（原子写；失败也不影响启动）
+  local f="$TEAM_STATE_DIR/update-check.env" tmp
+  mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || return 0
+  tmp="$f.tmp.$$"
+  if printf 'CHECKED_AT=%s\nLATEST=%s\nLOCAL=%s\n' "$1" "$2" "$3" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+  return 0
+}
+team_update_check_notice() { # 真实 up 的版本提示：打一行或什么都不打；任何失败都不改 rc
+  [ "${TEAM_UPDATE_CHECK:-1}" = "0" ] && return 0
+  local cache="$TEAM_STATE_DIR/update-check.env" now checked='' latest='' local_v="${TEAM_VERSION:-0.0.0}"
+  now="$(date +%s)"
+  if [ -f "$cache" ]; then
+    checked="$(sed -n 's/^CHECKED_AT=//p' "$cache" 2>/dev/null | head -1)"
+    latest="$(sed -n 's/^LATEST=//p' "$cache" 2>/dev/null | head -1)"
+  fi
+  case "$checked" in ''|*[!0-9]*) checked=0 ;; esac
+  if [ "$checked" = 0 ] || [ $((now - checked)) -ge 86400 ] || [ -z "$latest" ]; then
+    latest="$(team_update_lookup)"
+    [ -n "$latest" ] || latest='-'
+    team_update_cache_write "$now" "$latest" "$local_v"
+  fi
+  [ "$latest" = '-' ] && return 0
+  team_version_newer "$local_v" "$latest" || return 0
+  printf 'i 本地 teamsmith %s，npm 上已有 %s（工具从不自己安装）：npm i -g teamsmith@%s --registry https://registry.npmjs.org && bash "$(npm root -g)/teamsmith/install.sh"\n' \
+    "$local_v" "$latest" "$latest"
+  return 0
+}
+
 # ---------------------------------------------------------------- team up
 # 人来跑的工具：把 PM 恢复起来。
 # agent 归 PM 管，所以默认不动 agent；要顺手把停了的 agent 也续起来就加 --agents。
 team_cmd_up() {
-  local with_agents=0 show_prompt=0 pm_fail=0 pm_fresh=0
+  local with_agents=0 show_prompt=0 pm_fail=0 pm_fresh=0 no_migrate=0 adopt_pm=0 register=0
+  local -a up_argv=("$@")
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) with_agents=1; shift ;;
       --fresh-pm) pm_fresh=1; shift ;;
       --print) show_prompt=1; shift ;;
+      --no-migrate) no_migrate=1; shift ;;
+      --adopt-pm-identity) adopt_pm=1; shift ;;
       -*) team_usage_die "up: 未知参数 $1" ;;
       *) team_usage_die "up: 多余参数 $1" ;;
     esac
@@ -141,14 +312,40 @@ team_cmd_up() {
   # 导出给同一次启动里的 team_pm_pi_args / team_pm_launch_cmd / team_pm_continuity。
   [ "$pm_fresh" = "1" ] && export TEAM_PM_FRESH_LAUNCH=1
 
+  # P261 ①（design §1）：迁移决策在所有其它步骤**之前**（身份守卫之前、建场地之前、拉起 PM 之前）。
+  local up_mode=real mig=0
+  [ "$show_prompt" = "1" ] && up_mode=print
+  [ "$no_migrate" = "1" ] && up_mode=no-migrate
+  # 建议命令里打印的是**将要使用的**备份路径（真跑时才创建）；plan 已就绪时先算出来。
+  TEAM_MIGRATION_BACKUP_HINT=''
+  team_up_migration_step "$up_mode" "${up_argv[@]}" || mig=$?
+  if [ "$mig" = 1 ]; then
+    team_up_backup_note
+    return 1
+  fi
+
   if [ "$show_prompt" = "1" ]; then
-    team_pm_identity_guard || return 1
+    if [ "$mig" = 10 ]; then
+      # 旧配置的 --print：只预告（逐键表 + 备份路径 + 身份预告），不打印基于**未迁移**值的启动命令，
+      # 也不为预览开 guard 投影通道（design §6 裁定点 7）；迁移可用时退 0。
+      team_pm_identity_preview || true
+      printf '\n（迁移后重跑 %s up --print 才有完整启动预览；迁移可用时 --print 退 0）\n' "$TEAM_CLI"
+      printf '（本可检查 npm 上的新版本：--print 下不联网、不写缓存）\n'
+      return 0
+    fi
+    if ! team_pm_identity_guard; then
+      # --print 不写盘（design §6/§7）：adopt 的写入只发生在真实启动路径上。
+      [ "$adopt_pm" != 1 ] || team_dim "  --print 不写盘：--adopt-pm-identity 的写入只发生在真实启动时（去掉 --print 重跑）" >&2
+      team_up_backup_note; return 1
+    fi
+    team_pm_identity_preview || true
     team_pm_prompt
     # P36（A）：--print 是「看清这一次启动」的地方 —— 会话判定（fresh:/continued:/lost:）与渲染出的
     # 完整命令都要看得见、能断言（有没有 -c 一眼可见）。不写任何状态、不动 tmux。
     printf '\n—— 本次启动 ——\n会话判定：%s\n完整命令：%s\n' \
       "$(team_pm_continuity)" \
       "$(team_pm_launch_cmd "$(team_pm_prompt_file)" "$(team_pm_spawn_file)")"
+    printf '（本可检查 npm 上的新版本：--print 下不联网、不写缓存）\n'
     return 0
   fi
 
@@ -158,7 +355,22 @@ team_cmd_up() {
   team_hdr "teamsmith up · $TEAM_PROJECT（只负责 PM）"
 
   # Running/starting PM is never restarted by a policy edit. Otherwise guard BEFORE windows.
-  case "$(team_pm_state)" in running:*|starting:*) ;; *) team_pm_identity_guard || return 1 ;; esac
+  case "$(team_pm_state)" in
+    running:*|starting:*)
+      # P261：adopt 声明的是**这次续跑**的身份，而运行中的 PM 的身份就是记录里那一个（政策改变不重启它）。
+      # 这时写记录会把它改成「没有在跑的那个模型」，下一次续跑就接着一份对不上的会话 —— 拒绝，并给两条路。
+      if [ "$adopt_pm" = "1" ]; then
+        team_err "--adopt-pm-identity：PM 正在运行/正在起（$(team_pm_state)），它的身份是记录里那一个；这次不写记录"
+        team_dim "  要换续跑身份：等 PM 停了再 $TEAM_CLI up --adopt-pm-identity [--yes]；要换 PM 模型：$TEAM_CLI up --fresh-pm" >&2
+        return 1
+      fi ;;
+    *)
+      if [ "$adopt_pm" = "1" ]; then
+        team_pm_identity_adopt "${TEAM_ASSUME_YES:-0}" || { team_up_backup_note; return 1; }
+      fi
+      team_pm_identity_guard || { team_up_backup_note; return 1; }
+      register=0; [ "${TEAM_PM_IDENTITY_REGISTER:-0}" = 1 ] && register=1 ;;
+  esac
   # 1) tmux 场地：人跑 up 就是明确要求“把工地建起来”，所以这里允许建 session/窗口
   if ! team_tmux_has_session "$TEAM_SESSION"; then
     team_warn "tmux session '$TEAM_SESSION' 不存在：重建"
@@ -225,6 +437,17 @@ team_cmd_up() {
     team_dim "  agent 不归 pulse/up 管：需要续跑时跑 $TEAM_CLI resume [--dry-run]"
   fi
 
+  # P261 ②（design §7）：缺记录时登记本次启动身份并说明（写入由成功启动后的 publish 完成）；
+  # --adopt-pm-identity 的声明行由 team_pm_identity_adopt 打印（那一刻就写完了）。
+  if [ "$register" = 1 ] && [ "$pm_fail" != 1 ]; then
+    if team_pm_metadata_load 2>/dev/null; then
+      printf 'i 此前没有启动记录；已登记本次启动身份：model=%s resume_key=%s mode=%s（要换 PM 模型必须 --fresh-pm）\n' \
+        "$TEAM_PM_SELECTED_MODEL" "$TEAM_PM_RECORDED_RESUME_KEY" "$TEAM_PM_RECORDED_MODE"
+    else
+      printf 'i 此前没有启动记录；本次启动的身份登记未确认（记录读不回来）\n'
+    fi
+  fi
+
   if team_in_standby; then
     team_warn "注意：当前 standby on（原因：$(team_standby_reason || echo -)）。pulse 不会自动叫醒 PM；处理好后跑 $TEAM_CLI standby off"
   fi
@@ -232,6 +455,9 @@ team_cmd_up() {
   team_info ""
   team_capacity_line
   team_dim "  旁观：tmux attach -t $TEAM_SESSION ｜ 待办：$TEAM_CLI digest"
+  # P261 ③（design §8）：版本提示在启动决策**之后**，任何失败都不改 rc、不启动/停止任何东西。
+  team_update_check_notice || true
+  team_up_backup_note
   # 状态就是承诺：PM 没起来就不许退 0（否则脚本里的 `team up && …` 会把失败当成功）
   [ "$pm_fail" = "1" ] && return 1
   return 0

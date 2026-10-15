@@ -1378,21 +1378,65 @@ team_task_policy_model() {
 }
 
 team_model_policy_issues() {
-  # 契约：stdout 每行一个问题。模块缺失本身就是问题 —— 不让「坏装」被守卫读成干净策略。
+  # 契约：stdout 每段一个问题（一段可多行：迁移建议按 shell 续行写）。模块缺失本身就是问题 ——
+  # 不让「坏装」被守卫读成干净策略。
   team_model_shape_require || { printf 'TEAM_MODEL_SHAPE: 模型值形状判定不可用（cmd-config.sh 缺失或加载失败）；修法：重装 skill\n'; return 0; }
-  local key reason
+  local key reason file_keys='' env_keys=''
   for key in TEAM_DEFAULT_MODEL TEAM_AGENT_MODELS; do
-    if [ -n "${TEAM_CONFIG:-}" ] && grep -vE '^[[:space:]]*#' "$TEAM_CONFIG" | grep -Eq "(^|[^A-Za-z0-9_])$key([[:space:]]*=|[[:space:]])"; then
-      printf 'migration_required: %s 含退休键 %s；修法：%s config upgrade-models --task-models <完整映射> --pm-model <独立模型> --dry-run\n' "$TEAM_CONFIG" "$key" "$TEAM_CLI"
+    if [ -n "${TEAM_CONFIG:-}" ] && team_config_file_key_present "$TEAM_CONFIG" "$key"; then
+      file_keys="${file_keys:+$file_keys、}$key"
     fi
-    case " ${TEAM_MODEL_RETIRED_ENV:-} " in *" $key "*) printf 'migration_required: 环境退休键 %s；修法：unset %s\n' "$key" "$key" ;; esac
+    case " ${TEAM_MODEL_RETIRED_ENV:-} " in *" $key "*) env_keys="${env_keys:+$env_keys }$key" ;; esac
   done
+  if [ -n "$file_keys" ]; then
+    # P261：两条退休键同属一次迁移事务 —— 一条建议，不是每条键一行；命令从**同一张**推导表来（design §3）。
+    # 提示块本体由 team_legacy_model_route_lines 渲染 —— init / bootstrap / config 写路径用的是同一个（返修 F1/F2/O1）。
+    printf 'migration_required: %s 含退休键 %s；项目模型策略是破坏式升级，这条写路径不是迁移路径；修法（建议·按你现在的配置推导，类别名可以改）：\n' "$TEAM_CONFIG" "$file_keys"
+    team_legacy_model_route_lines "$TEAM_CONFIG"
+  fi
+  for key in $env_keys; do
+    printf 'migration_required: 环境退休键 %s；修法：unset %s\n' "$key" "$key"
+  done
+  # 文件里还带着退休键时，空的新键**是这次迁移的后果，不是另一个问题** —— 同一件事只报一次
+  # （P261 实测：旧项目的派单拒绝里会多出一行「TEAM_TASK_MODELS: task map 必须非空」，修法还指向
+  # 另一条路线）。迁移块本身已经把该做的说清楚了；迁移之后这两条检查照常生效。
+  [ -n "$file_keys" ] && return 0
   if ! reason="$(team_task_map_violation "${TEAM_TASK_MODELS:-}")"; then printf 'TEAM_TASK_MODELS: %s；修法：%s config set TEAM_TASK_MODELS <完整映射> --yes\n' "$reason" "$TEAM_CLI"; fi
   if ! reason="$(team_config_model_violation "${TEAM_PM_MODEL:-}")"; then printf 'TEAM_PM_MODEL: %s；修法：%s config set TEAM_PM_MODEL <独立模型> --yes\n' "$reason" "$TEAM_CLI"; fi
+}
+# P261 · 拒绝建议与自动迁移**共用**一张推导表（cmd-config.sh 的 team_config_migration_plan）：
+# 成功 → TEAM_MIGRATION_MAP / PM / NOTES 就绪；失败 → TEAM_MIGRATION_ADVICE_WHY 点名障碍（绝不打印可能错的命令）。
+# 路径可给（init 用的是它自己解析出来的契约路径），默认 $TEAM_CONFIG。
+team_model_migration_advice() { # [<cfg 路径>]
+  team_model_shape_require || { TEAM_MIGRATION_ADVICE_WHY='模型值形状判定不可用'; return 1; }
+  TEAM_MIGRATION_ADVICE_WHY=''
+  local f="${1:-${TEAM_CONFIG:-}}"
+  if [ -z "$f" ] || [ ! -f "$f" ]; then TEAM_MIGRATION_ADVICE_WHY='配置文件的路径读不到'; return 1; fi
+  team_config_migration_plan "$f" || { TEAM_MIGRATION_ADVICE_WHY="${TEAM_MIGRATION_WHY:-推导不出来}"; return 1; }
+  [ "$TEAM_MIGRATION_ACTION" = 'apply' ] || { TEAM_MIGRATION_ADVICE_WHY='文件里没有可迁移的退休键'; return 1; }
+  return 0
+}
+# P261（返修 F1/F2/O1）· 旧配置拒绝建议的**唯一**渲染器：一条从推导表来的可粘贴命令 + 两条路线
+# （手工事务 / 启动事务）。init / bootstrap / config 写路径 / 派单拒绝共用它 —— 谁都不许再抄第二份文案
+# （design §3）。推导失败 → 占位符 + 点名障碍，绝不打印可能错的命令。
+team_legacy_model_route_lines() { # [<cfg 路径>]
+  local cfg="${1:-${TEAM_CONFIG:-}}"
+  if team_model_migration_advice "$cfg"; then
+    team_dim "  路线 ① 手工事务（先预览）：$TEAM_CLI config upgrade-models --task-models '$TEAM_MIGRATION_MAP' --pm-model '$TEAM_MIGRATION_PM' --dry-run"
+    team_dim "  路线 ② 启动事务（机械形状由它迁移）：$TEAM_CLI up（--print 只预告，--no-migrate 只报告）"
+    [ -z "$TEAM_MIGRATION_NOTES" ] || team_dim "  （推导说明：$TEAM_MIGRATION_NOTES）"
+  else
+    team_dim "  路线 ① 手工事务（先预览）：$TEAM_CLI config upgrade-models --task-models '<category=provider/model …>' --pm-model '<provider/model>' --dry-run"
+    team_dim "  （推导不出建议映射：${TEAM_MIGRATION_ADVICE_WHY:-推导不出来}；请手工把退休键的值翻成类别映射 category=provider/model）"
+    team_dim "  路线 ② 启动事务（机械形状由它迁移）：$TEAM_CLI up（--print 只预告，--no-migrate 只报告）"
+  fi
 }
 team_model_policy_guard() {
   local issues; issues="$(team_model_policy_issues)"
   [ -z "$issues" ] && return 0
+  # P261：派单驱动已经把这个块印在报告最前面（TEAM_MODEL_POLICY_REPORTED=1）——这里仍然拒绝，
+  # 但不重复同一段文字（一次拒绝里同一件事只出现一次）。
+  [ "${TEAM_MODEL_POLICY_REPORTED:-0}" = 1 ] && return 1
   team_err "$issues"; return 1
 }
 
@@ -2564,7 +2608,7 @@ team_pm_metadata_load() {
   local f="$TEAM_STATE_DIR/pm-launch.env" line key val fields='' field
   team_model_shape_require || return 1
   declare -A meta=()
-  TEAM_PM_SELECTED_MODEL=''; TEAM_PM_RECORDED_RESUME_KEY=''; TEAM_PM_METADATA_JSON='{}'; TEAM_PM_IDENTITY_VIA=''
+  TEAM_PM_SELECTED_MODEL=''; TEAM_PM_RECORDED_RESUME_KEY=''; TEAM_PM_METADATA_JSON='{}'; TEAM_PM_IDENTITY_VIA=''; TEAM_PM_RECORDED_MODE=''
   team_identity_snapshot "$f" || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     [[ "$line" == *=* ]] || return 1
@@ -2585,7 +2629,7 @@ team_pm_metadata_load() {
   for field in project window model nonce time mode resume_key; do
     team_config_json_escape_set "${meta[$field]}"; fields="${fields:+$fields,}\"$field\":\"$CFG_ESC\""
   done
-  TEAM_PM_SELECTED_MODEL="${meta[model]}"; TEAM_PM_METADATA_JSON="{$fields}"
+  TEAM_PM_SELECTED_MODEL="${meta[model]}"; TEAM_PM_RECORDED_MODE="${meta[mode]}"; TEAM_PM_METADATA_JSON="{$fields}"
 }
 team_pm_resume_args_guard() {
   team_literal_argv "${TEAM_PM_RESUME_ARGS:-}" && team_argv_roles_guard 0 || return 1
@@ -2620,10 +2664,73 @@ team_pm_identity_guard() {
   local continuity; continuity="$(team_pm_continuity)"
   local mode=fresh; case "$continuity" in continued:*) mode=continued ;; esac
   team_template_identity_guard pm "${TEAM_PM_CMD:-}" "$mode" || return 1
+  TEAM_PM_IDENTITY_REGISTER=0
   case "$continuity" in fresh:*|lost:*) return 0 ;; esac
-  if ! team_pm_metadata_load || [ "$TEAM_PM_SELECTED_MODEL" != "$(team_pm_model_resolve)" ] || [ "$TEAM_PM_RECORDED_RESUME_KEY" != "$(team_pm_resume_key)" ]; then
-    team_err "PM launch identity missing/changed（含 suffix）；先保留 BOARD/threads/reports 磁盘交接，再 $TEAM_CLI up --fresh-pm；不改 Pi 历史"; return 1
+  # P261（design §7）：**缺记录 ≠ 记录不一致**。文件根本不存在时工具对过去没有主张 —— 放行并记下
+  # 「本次要登记」；真正的写入仍由成功启动后的 team_pm_metadata_publish 完成（不在 guard 里预写）。
+  if [ ! -f "$TEAM_STATE_DIR/pm-launch.env" ]; then
+    TEAM_PM_IDENTITY_REGISTER=1
+    TEAM_PM_IDENTITY_WANT_MODEL="$(team_pm_model_resolve)"
+    TEAM_PM_IDENTITY_WANT_RESUME_KEY="$(team_pm_resume_key)"
+    TEAM_PM_IDENTITY_WANT_MODE="$mode"
+    return 0
   fi
+  if ! team_pm_metadata_load; then
+    # 存在但不可读/异项目/异窗口/老版本：这份记录不能证明是同项目同窗口的同一个模型 → 仍拒绝。
+    team_err "PM launch identity 不可读/不属于本项目本窗口/是旧版本记录（${TEAM_IDENTITY_DIAGNOSTIC:-unreadable}）：不能接着续跑"
+    team_dim "  记录：$TEAM_STATE_DIR/pm-launch.env（现在解析 model=$(team_pm_model_resolve)，resume_key=$(team_pm_resume_key)）" >&2
+    team_dim "  出路 ① $TEAM_CLI up --fresh-pm：新开一场对话；磁盘账本是交接，Pi 历史不动" >&2
+    team_dim "  出路 ② $TEAM_CLI up --adopt-pm-identity --yes：声明按当前解析续跑（写记录 + 一行审计）" >&2
+    return 1
+  fi
+  local want_model want_resume changed=''
+  want_model="$(team_pm_model_resolve)"; want_resume="$(team_pm_resume_key)"
+  [ "$TEAM_PM_SELECTED_MODEL" = "$want_model" ] || changed="model（记录 $TEAM_PM_SELECTED_MODEL → 现在 $want_model）"
+  [ "$TEAM_PM_RECORDED_RESUME_KEY" = "$want_resume" ] \
+    || changed="${changed:+$changed、}resume_key（记录 $TEAM_PM_RECORDED_RESUME_KEY → 现在 $want_resume）"
+  [ -n "$changed" ] || return 0
+  team_err "PM launch identity changed：$changed"
+  team_dim "  记录 model=$TEAM_PM_SELECTED_MODEL（suffix 显式）／现在 model=$want_model；记录 resume_key=$TEAM_PM_RECORDED_RESUME_KEY／现在 resume_key=$want_resume" >&2
+  team_dim "  出路 ① $TEAM_CLI up --fresh-pm：新开一场对话（磁盘账本是交接，Pi 历史不动）" >&2
+  team_dim "  出路 ② $TEAM_CLI up --adopt-pm-identity --yes：声明这次续跑的身份是 model=$want_model resume_key=$want_resume（写记录 + 一行审计）" >&2
+  return 1
+}
+# P261（design §7）：--adopt-pm-identity 是**唯一**显式、有审计的认领入口。
+# 缺记录 → 直接写；已存在且不一致 → 不给 --yes 拒绝并点名旗标，给了则写记录 + config.log 一行审计 + 声明行。
+# 存在但不可读/异项目/异窗口/旧版本 → **仍拒绝**（这个旗标声明的是值，不是认领别人的记录）。
+team_pm_identity_adopt() { # <assume_yes 0|1> → 0 = 记录已就绪；1 = 拒绝（已打印原因）
+  team_pm_check_launch || return 1
+  local yes="${1:-0}" want_model want_resume mode nonce
+  want_model="$(team_pm_model_resolve)"; want_resume="$(team_pm_resume_key)"
+  mode=fresh; case "$(team_pm_continuity)" in continued:*) mode=continued ;; esac
+  TEAM_PM_IDENTITY_ADOPTED=0
+  if [ -f "$TEAM_STATE_DIR/pm-launch.env" ]; then
+    if ! team_pm_metadata_load; then
+      team_err "--adopt-pm-identity 拒绝：这份记录不可读/不属于本项目本窗口/是旧版本记录（${TEAM_IDENTITY_DIAGNOSTIC:-unreadable}）"
+      team_dim "  它不能证明是同项目同窗口的同一个模型；这个旗标只声明**现在的值**，不认领别人的记录" >&2
+      team_dim "  出路：$TEAM_CLI up --fresh-pm（新开一场对话，磁盘账本照旧交接）" >&2
+      return 1
+    fi
+    if [ "$TEAM_PM_SELECTED_MODEL" = "$want_model" ] && [ "$TEAM_PM_RECORDED_RESUME_KEY" = "$want_resume" ]; then
+      return 0
+    fi
+    if [ "$yes" != "1" ]; then
+      team_err "--adopt-pm-identity 需要 --yes：这是把现在的解析声明成这次续跑的身份"
+      team_dim "  记录 model=$TEAM_PM_SELECTED_MODEL（suffix 显式）／现在 model=$want_model；记录 resume_key=$TEAM_PM_RECORDED_RESUME_KEY／现在 resume_key=$want_resume" >&2
+      team_dim "  要新开一场对话而不是认领：$TEAM_CLI up --fresh-pm" >&2
+      return 1
+    fi
+    mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || true
+    team_config_audit_write ok 'adopt-pm-identity' pm-launch-identity \
+      "model=$TEAM_PM_SELECTED_MODEL resume_key=$TEAM_PM_RECORDED_RESUME_KEY" \
+      "model=$want_model resume_key=$want_resume" || true
+  fi
+  mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || true
+  nonce="adopt-$(date +%s)-$BASHPID"
+  team_pm_metadata_publish "$nonce" || { team_err 'adopt：写 PM 启动身份记录失败'; return 1; }
+  TEAM_PM_IDENTITY_ADOPTED=1
+  team_info "我声明这次续跑的身份是 model=$want_model resume_key=$want_resume mode=$mode（已写记录 + 一行审计）"
+  return 0
 }
 team_pm_metadata_publish() {
   local nonce="$1" tmp="$TEAM_STATE_DIR/.pm-launch-$1" mode=continued identity_via

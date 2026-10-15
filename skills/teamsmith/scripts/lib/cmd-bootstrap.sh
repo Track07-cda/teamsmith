@@ -194,7 +194,7 @@ team_cmd_bootstrap() {
     if [ -n "$legacy_keys" ]; then
       team_err "bootstrap: $TEAM_CONFIG 还在用退休的模型键（$(printf '%s' "$legacy_keys" | tr '\n' ' ')）—— 任何写入之前停住"
       team_dim "  项目模型策略是破坏式升级：bootstrap 不是迁移路径（init --force 也不是）"
-      team_dim "  升级（先预览）：$TEAM_CLI config upgrade-models --task-models '<category=provider/model …>' --pm-model '<provider/model>' --dry-run"
+      team_legacy_model_route_lines "$TEAM_CONFIG"
       return 1
     fi
   fi
