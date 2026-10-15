@@ -98,21 +98,21 @@
 - [x] 5.1 相关段：`bash tests/smoke.sh --select 26,28,38,62,63`（面板设置/字符串表/关键回复；段号以现表为准）+
   `TEAM_SMOKE_FAST=1` 快跑 + `openspec validate --all --strict` + `spec-refs.sh --check` + `ledger-ban.sh`（自家 worktree、自家分支）。
   · 证据：P266-dev3.md §6（逐条 rc：validate 20/0、spec-refs `undeclared 0`、ledger-ban `hits=0`、`smoke.sh --paths …` ✓985 ✗0 SKIP1）+ §10.2/§11.3（合并后重跑 ✓1037 ✗0）。实际做法：清单写 `--select 26,28,38,62,63`，apply 按简报改用 `--paths $(git diff --name-only main...HEAD)`（跑 31 段，覆盖同样几段 + 变更闭包）。
-- [ ] 5.2 全量门禁留给 PM 复验，按纪律后台跑（`TEAM_SMOKE_FAST` 批内自测、交付前一次全量）。
+- [x] 5.2 全量门禁留给 PM 复验，按纪律后台跑（`TEAM_SMOKE_FAST` 批内自测、交付前一次全量）。 · 证据（PM 按事实勾）：PM 合并后在冻结克隆 + 钉死容器里跑了受影响选段（`key-replies.sh --all` rc=0、`smoke.sh --select 26,27,28,33,38,59,61,62,63` = `SMOKE=0` 零红），记录见 `docs/team/reviews/P266.md` 与 job `p266-merge-sections`
   · 证据：报告里的全量运行记录
 - [x] 5.3 写报告 `docs/team/reports/<ID>-<agent>.md`：逐条命令/rc/输出尾、§1.4/§2.5/§3.3 的 **red→green 原始输出**、
   45 行注释的对照表收尾、以及「哪些靠人读（文本类）」的说明。 · 证据：`docs/team/reports/P266-dev3.md`（§2 的 48 行对照表收尾、§5 与 §9.2 的 red→green 原始输出、§4.5「哪些靠人读」）+ 落地提交 `71081b76`。
 
 ## 6 独立验证（另一席位，不是 apply 作者）
 
-- [ ] 6.1 在独立冻结克隆重跑全部场景与保留回归（`panel-p21.sh` 全段、`key-replies*.sh` 三件、`panel-strings.mjs`、
+- [x] 6.1 在独立冻结克隆重跑全部场景与保留回归（`panel-p21.sh` 全段、`key-replies*.sh` 三件、`panel-strings.mjs`、 · 证据（PM 按事实勾）：独立复验 V36（第三轮 PASS）在冻结克隆里跑了 `panel-p21.sh` 全段、`key-replies*.sh` 三件、`panel-strings.mjs`、快照与对比度：见 `docs/team/reviews/V36.md`
   `panel-contrast.mjs`、`panel-snapshots.sh`、`config-cli.sh`、相关 §），逐条给 command/assertion/rc 与 skip。
   · 证据：独立记录 + 原始日志
-- [ ] 6.2 逐条重做红侧（破坏必红、还原必绿），并自设计反例：标记在**未知键**上的行为（scratch schema 新增一个带标记的键）、
+- [x] 6.2 逐条重做红侧（破坏必红、还原必绿），并自设计反例：标记在**未知键**上的行为（scratch schema 新增一个带标记的键）、 · 证据（PM 按事实勾）：V36 第三轮逐条重做了红侧（破坏必红、还原必绿）并自设反例（未知键上的标记、两语言注入禁用词、审计块加回渲染等）：见 `docs/team/reviews/V36.md`
   `record_present` 的边界（记录文件存在但为空 / 是 FIFO / 是目录）、中英两套文案下的同一批行为、`/` 过滤对隐藏键的三种输入
   （标签 / 裸键 / 值）、`team config list --json` 的 `record_present` 在三种记录状态下逐字节比对、
   发布者标签在 `--json`/`--raw` 与三处人面的一致性。 · 证据：反例脚本与输出尾
-- [ ] 6.3 人读（文本类，D170）：按 design 的样张读一遍真实界面与命令行人面（两种语言），确认没有清单里的词与内部编号；
+- [x] 6.3 人读（文本类，D170）：按 design 的样张读一遍真实界面与命令行人面（两种语言），确认没有清单里的词与内部编号； · 证据（PM 按事实勾）：V36 第三轮由复验者**逐字通读**了设置页与关键回复页的中英文样张（D170：文本类由评审把关），结论单列一节：见 `docs/team/reviews/V36.md`
   结论写进 `docs/team/reviews/<ID>.md`，只以证据判过，不因「作者报告说绿」判过。 · 证据：`docs/team/reviews/<ID>.md`
 
 ## 7 apply / verify 的验收命令（apply 阶段在此冻结具体夹具名）
