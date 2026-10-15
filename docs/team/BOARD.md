@@ -455,7 +455,7 @@
 | V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev3 | - | - | done |
 | P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | wip |
 | P287 | Gate tmp/lock must survive another project's pattern cleanup | dev3 | - | - | done |
-| P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev3 | - | - | todo |
+| P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev-bob | - | - | wip |
 | P289 | Tick the help-robustness checklist by evidence | dev-bob | - | - | done |
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev-bob | - | - | done |
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | done |
