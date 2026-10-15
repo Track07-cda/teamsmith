@@ -71,10 +71,11 @@ a protected-branch or detached worktree, an unproven ID and a worktree-less manu
 nothing — an identifier MUST NOT be invented from a branch name or a seat name.
 
 A completed turn that ends while background jobs its own session started are still running SHALL be told apart
-from both a delivery and an interruption: the inbox line and the knock payload SHALL carry the tag
+from both a delivery and an interruption: the inbox line SHALL carry the tag
 `[auto·suspended]` and an `awaiting=<id>[,<id>…]` field naming the running jobs, and the dirty-tree warning flag
 SHALL be omitted for a suspension (the `uncommitted=<n>` field stays) — a suspension is not a delivery claim and
-MUST NOT wear the alarm shape of one. The running set SHALL be read from the same `state/bg/` directory the lane
+MUST NOT wear the alarm shape of one, and (per the scope addition of 2026-10-15) **a suspension SHALL NOT knock**:
+the tag and its fields reach the inbox and the detail record, while the wake-up path carries nothing for it. The running set SHALL be read from the same `state/bg/` directory the lane
 writes its records to, located by the lane's own rule — an explicit `TEAM_STATE_DIR` first, else the lane's
 project-root rule (a session whose working tree carries the project's config resolves to that working tree, one
 without it to the main worktree) — and the notify extension MUST NOT substitute its own project root for
