@@ -436,7 +436,7 @@
 | P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | done |
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | dev | - | - | todo |
-| P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev | - | - | todo |
+| P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev3 | - | - | wip |
 | P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | wip |
 | P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | done |
 | V39 | Gate slimming: independent verification of the deletion round | verify | - | - | wip |
