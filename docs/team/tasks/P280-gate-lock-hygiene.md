@@ -4,7 +4,7 @@ task: P280
 agent: dev-bob
 phase: propose
 category: analysis
-change: -
+change: gate-lock-hygiene
 anchor: none (infra) — 门禁资源纪律；不改产品行为
 deltas: -
 branch: task/P280-gate-lock-hygiene
