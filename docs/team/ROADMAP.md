@@ -11,8 +11,9 @@
 
 - **产品**：`teamsmith@0.2.0` 已发到 npm（`latest`），公开仓 `Track07-cda/teamsmith` 的 `main` 与本仓 `main` 同点；**本仓就是公开仓的真源**（发布 = 版本落点 + 提交 + 打 tag + 推 `public` + npm 发布）。
 - **规格**：`openspec/specs/` 下 **15 个能力**；归档变更在 `openspec/changes/archive/`。**2026-10-15 这一天归档了六条**：`task-model-routing`、`pulse-key-replies`、`long-job-suspend`（前三条 10-14）、`startup-self-heal`、`panel-plain-language`、`cli-help`、`panel-preview-and-compose`、`pm-reply-discipline`、`turn-notice-merge`。
-- **在飞（三条，均在实现中）**：`slash-team`（Pi 里的 `/team` 斜杠命令）、`tmux-identity-scope`（共享 tmux 的全局环境泄漏）、`orphan-visibility`（孤儿进程可见性与按 pid 清理）；另有一条刚立、在写方案：`help-robustness`（帮助面三条收尾）。
-- **排队**：升级指南重写（P255，在做）。
+- **在飞（六条）**：`help-robustness`（帮助面收尾：locale 无关宽度 / 入口闭集 / 未声明占位符判红 / 选段器拒未知名；代码已合并，差 flake 修复的第二轮复检与第三方定点补验）、`gate-lock-hygiene`（门禁锁卫生：嵌套运行不排队但受祖辈预算约束、持有者记录可归因；第二轮回检在跑）、`gate-lock-external-deletion`（门禁锁抗外部删除：伴生锁 + 兼容声明 + 入场检查；方案已通过，实现等前者落地）、`slash-team`（Pi 里的 `/team` 斜杠命令）、`tmux-identity-scope`（共享 tmux 全局环境泄漏）、`writing-discipline`（写作纪律：谨慎必须带证据；已实现，独立复验排队）。
+- **排队**：门禁抗外部删除的实现（等门禁锁卫生落地）、帮助面的第三方定点补验。
+- **已并入 main、差归档前置**：孤儿进程可见性（已归档 2026-10-15）、帮助面收尾（差两件复验）。
 - **运行环境的三条约束**（都是实测踩出来的，见 DECISIONS）：① tmux 服务活在**图形会话**里，GNOME 崩溃会带走整队；② 机器 **OOM** 也会带走整队，且会在别的项目留下**孤儿 Pi 进程**白占内存；③ 容器夹具根落在 `/tmp`，跑长门禁前先看余量（有安全清扫配方）。恢复配方见 `docs/team/DECISIONS.md` D173。
 
 ## 里程碑（历史：M0–M3 的原始定义与达成记录，状态列已过时）
