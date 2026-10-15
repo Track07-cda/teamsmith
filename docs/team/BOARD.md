@@ -431,7 +431,7 @@
 | P267 | Reply discipline into the skill: apply | dev2 | - | - | done |
 | V37 | Reply discipline: independent verification | verify | - | - | done |
 | V38 | cli-help surface: independent verification | dev2 | - | - | done |
-| P268 | Do not leak this project's identity into tmux's global environment | dev | - | - | todo |
+| P268 | Do not leak this project's identity into tmux's global environment | dev2 | - | - | wip |
 | P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev | - | - | todo |
 | P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | wip |
