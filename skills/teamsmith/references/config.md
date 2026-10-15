@@ -178,7 +178,7 @@ because the reading is meant to be copied into the ledger. The census writes not
 | Key | Default | Purpose |
 |---|---|---|
 | `TEAM_ORPHAN_WARN_MB` | `1024` | when the host-wide orphan total is at or above this many MB, `team digest`'s capacity line carries one hint (total, this project's share, the cleanup command). `0` = never hint (needs `--allow-danger`). It never changes the exit code |
-| `TEAM_ORPHAN_SCAN` | `1` | `0` = read no process's environment at all: the reading is one named skip line and `team reap --orphans` refuses (use an explicit pid) |
+| `TEAM_ORPHAN_SCAN` | `1` | whether the host-side census runs at all. `0` = read no process's environment: `team ps`, `team status` and `team up` print one named skip line instead of the reading, `team digest` adds no hint, and `team reap --orphans` refuses (exit 2) — cleanup then needs an explicit pid (`team reap <pid> --yes`). It exists for hosts where reading another process's environment is refused; the reading — and the cleanup plan it feeds — needs the default `1` |
 | `TEAM_ORPHAN_PROC_ROOT` | `/proc` | fixture-only: the proc root the census reads, so the unreadable / vanished / empty-environment / missing-field edges can be built deterministically. Not writable from the console |
 
 Cleanup is never automatic: `team reap --orphans` prints the plan and signals nothing, and `team reap --orphans

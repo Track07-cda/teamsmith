@@ -60,6 +60,8 @@ mkdir -p "$T/.pi/team/state" "$T/worktrees/dev" "$T/worktrees/dev2" "$T/docs/tea
 printf 'btime 1700000000\n' > "$PROC/stat"
 printf 'btime 1700000000\n' > "$PROC2/stat"
 printf '#!/bin/sh\nexit 0\n' > "$BIN/pi"; chmod +x "$BIN/pi"
+# 真 ps 的路径：必须在 $BIN/ps 垫片出现**之前**解析（否则解析到垫片自己，垫片再 exec 自己 → 无限递归）。
+OC_PS_REAL="$(command -v ps)"
 
 # 桩 tmux：只回答 `list-panes -a -F '#{pane_id}'`，pane 集合来自 $OC_PANES_DIR/<socket 转写>；
 # 其余动词一律失败（夹具不碰任何真 server）。socket 没有对应文件 → 退出 1 → 「查询不到」。
@@ -85,7 +87,7 @@ oc_panes() { # <socket> <pane-id…>（socket 为 "-" = 默认 server）
 oc_panes - '%1' '%2'                       # 默认 server：%1 %2
 
 export PATH="$BIN:$PATH" OC_PANES_DIR="$PANES"
-export SKILL_DIR T PROC PROC2 BIN PANES TMP T2
+export SKILL_DIR T PROC PROC2 BIN PANES TMP T2 OC_PS_REAL
 export TEAM_ROOT="$T" TEAM_MAIN_ROOT="$T" TEAM_STATE_DIR="$T/.pi/team/state" \
        TEAM_DOCS_ABS="$T/docs/team" TEAM_DOCS_DIR="docs/team" TEAM_SESSION="oc-fixture" TEAM_PROJECT="oc" \
        TEAM_AGENTS="dev dev2" TEAM_WORKTREES_DIR="worktrees" TEAM_PI_AGENT_DIR="$T/pi" TEAM_CLI="team" \
@@ -119,6 +121,24 @@ oc_env_own2() { # $T2（真项目）的席位身份：TEAM_MAIN_ROOT 必须是 C
 oc_field() { # <pid> <列号>
   team_orphan_census | awk -F'\t' -v p="$1" -v n="$2" '$1==p{print $n}'
 }
+
+# 1.1 的 fork 读数：`ps` 垫片 —— 只记一次调用（一行一次），然后交给真 ps。装/卸都由夹具自己做，
+# 别的组不装它（垫片会给每次 ps 多一个 fork）。
+oc_mk_ps_shim() {
+  cat > "$BIN/ps" <<SHIM
+#!/usr/bin/env bash
+[ -n "\${OC_PS_LOG:-}" ] && printf '%s\n' "\$*" >>"\$OC_PS_LOG"
+exec "$OC_PS_REAL" "\$@"
+SHIM
+  chmod +x "$BIN/ps"
+}
+oc_rm_ps_shim() { rm -f "$BIN/ps"; }
+
+# 4.2 的归一化（夹具与逐条红侧共用同一份，免得两边判据漂）：
+#   ① 取读数块**之前**的既有行 —— 这同时钉住「读数整块在最后」（插进中间/开头会把既有块截掉）；
+#   ② 抹平容量行里每轮都变的实时数字（RAM 可用 / 临时根 / inode）。
+oc42_before() { printf '%s\n' "$1" | sed '/^孤儿席位进程/,$d'; }
+oc42_nums()   { sed -E 's/[0-9]+/N/g'; }
 oc_record() { team_orphan_census | grep -P "^$1\t" || true; }
 oc_mkfifo_proc() { # <root> <pid> <environ|stat> <payload1> <payload2>
   local root="$1" pid="$2" which="$3" p1="$4" p2="$5" d
@@ -184,7 +204,7 @@ oc_cli_skill() { # <skill 目录> <项目目录> <argv…>
 }
 oc_cli() { local d="$1"; shift; oc_cli_skill "$SKILL_DIR" "$d" "$@"; }
 
-export -f oc_panes oc_mkproc oc_env_own oc_env_own2 oc_env_foreign oc_field oc_record oc_mkfifo_proc oc_cli oc_cli_skill oc_spawn_orphan oc_project2_setup
+export -f oc_panes oc_mkproc oc_env_own oc_env_own2 oc_env_foreign oc_field oc_record oc_mkfifo_proc oc_cli oc_cli_skill oc_spawn_orphan oc_project2_setup oc_mk_ps_shim oc_rm_ps_shim oc42_before oc42_nums
 
 # ================================================================ census
 if want census; then
@@ -232,6 +252,24 @@ oc_mkproc 1008 "$BIN/pi --provider oc --model fast" "$(oc_env_own dev2)" 100 102
 td_eq "argv[0] 是全路径的 agent → 仍是席位" own "$(oc_field 1008 2)"
 oc_mkproc 1009 "$BIN/pi -c" "$(printf 'TEAM_MAIN_ROOT=%s\nTEAM_ROOT=%s\n' "$T" "$T")" 100 1024
 td_eq "PM（TEAM_ROOT = 主检出）→ 席位名是 PM 窗口名" pm "$(oc_field 1009 3)"
+
+# 1.1 第三段：一次普查的 fork 与耗时读数（**真 /proc** 路径 —— 夹具根不走 ps，那次机器级粗筛只在这里发生）。
+# 判据可证伪：候选粗筛只许 fork 一次 ps（机器级快照），不是每个 pid 一次；反例见 --flip 的 p276-flip-one-ps。
+oc_mk_ps_shim
+export OC_PS_LOG="$TMP/ps-calls.log"; : > "$OC_PS_LOG"
+npid="$(ls -1 /proc 2>/dev/null | grep -cE '^[0-9]+$' || true)"; npid="${npid:-0}"
+rc=0; t0="$(date +%s%N)"
+TEAM_ORPHAN_PROC_ROOT=/proc team_orphan_census >"$TMP/census-real.log" 2>/dev/null || rc=$?
+t1="$(date +%s%N)"
+calls="$(grep -c . "$OC_PS_LOG" 2>/dev/null || true)"; calls="${calls:-0}"
+cands="$(TEAM_ORPHAN_PROC_ROOT=/proc team_orphan_candidates 2>/dev/null | grep -c . || true)"; cands="${cands:-0}"
+recs="$(grep -c . "$TMP/census-real.log" 2>/dev/null || true)"; recs="${recs:-0}"
+ms=$(( (t1 - t0) / 1000000 ))
+unset OC_PS_LOG; oc_rm_ps_shim
+td_eq "1.1 一次普查（真 /proc）退出 0" 0 "$rc"
+td_eq "1.1 一次普查只 fork 一次 ps（机器级粗筛，不是每个 pid 一次）" 1 "$calls"
+td_has "1.1 那次 ps 的形态是候选粗筛（-eo pid=,args=）" "$(head -1 "$TMP/ps-calls.log")" "-eo pid=,args="
+ok "1.1 一次普查的读数：/proc 下 ${npid} 个 pid → 粗筛候选 ${cands} 个 → 记录 ${recs} 条；ps 调用 ${calls} 次；耗时 ${ms}ms"
 fi
 
 # ================================================================ judge
@@ -333,18 +371,29 @@ off="$(TEAM_ORPHAN_SCAN=0 team_orphan_up_line)"
 td_has "up 的跳过行也点名" "$off" "TEAM_ORPHAN_SCAN=0"
 td_eq "TEAM_ORPHAN_SCAN=0 时 digest 不加提示" "" "$(TEAM_ORPHAN_SCAN=0 team_orphan_digest_hint)"
 
-# 4.2 只增不改：ps 的既有每一行在普查开/关下逐字节相同（读数整块追加在最后）
+# 4.2 只增不改：**既有的每一个块**都必须在读数之前且逐字节不变。两处归一化（先拆 / 后数字）：
+#   ① 从读数标记行起截断 —— 这同时钉住「读数整块在最后」（插到开头/中间就会把既有块一起截掉）；
+#   ② 抹平容量行里每轮都变的实时数字（RAM 可用 / 临时根 / inode）。
+# 既有两组分别给块名哨兵：光比两边相等不够 —— 「插到开头」会把两边都截成空、照样相等（P284 的假阴性）。
 oc_project2_setup || bad "夹具项目 2 建不起来：$(tail -1 "$TMP/init2.log")"
 ocr() { OC_PROC_ROOT="$PROC" oc_cli "$T2" "$@"; }
 # 让假根里的「本项目」就是 $T2（CLI 的 TEAM_MAIN_ROOT 是 $T2 的物理路径）
 rm -f "$PROC"/1201
 oc_mkproc 1201 "pi" "$(printf 'TEAM_MAIN_ROOT=%s\nTEAM_ROOT=%s\n' "$(cd "$T2" && pwd -P)" "$(cd "$T2" && pwd -P)/.worktrees/dev2")" 500 2048
-ps_on="$(ocr ps | sed '/^孤儿席位进程/,$d' | grep -v 'RAM 可用')"
-ps_off="$(OC_PROC_ROOT="$PROC" OC_ENV="TEAM_ORPHAN_SCAN=0" oc_cli "$T2" ps | sed '/^孤儿席位进程/,$d' | grep -v 'RAM 可用')"
-td_eq "4.2 ps 的既有每一行逐字节不变（开/关普查）" "$ps_on" "$ps_off"
-st_on="$(ocr status | sed '/^孤儿席位进程/,$d' | grep -v 'RAM 可用')"
-st_off="$(OC_PROC_ROOT="$PROC" OC_ENV="TEAM_ORPHAN_SCAN=0" oc_cli "$T2" status | sed '/^孤儿席位进程/,$d' | grep -v 'RAM 可用')"
-td_eq "4.2 status 的既有每一行逐字节不变（开/关普查）" "$st_on" "$st_off"
+ps_on_raw="$(oc42_before "$(ocr ps)")"
+ps_off_raw="$(oc42_before "$(OC_PROC_ROOT="$PROC" OC_ENV="TEAM_ORPHAN_SCAN=0" oc_cli "$T2" ps)")"
+td_eq "4.2 ps 的既有每一行逐字节不变（开/关普查；容量行在内的全部既有块）" \
+      "$(printf '%s\n' "$ps_on_raw" | oc42_nums)" "$(printf '%s\n' "$ps_off_raw" | oc42_nums)"
+for _blk in 'RAM 可用' '存活：' 'MODEL' 'agent 会话' '活跃窗口'; do
+  td_has "4.2 ps 既有块【$_blk】在读数之前（读数整块在最后）" "$ps_on_raw" "$_blk"
+done
+st_on_raw="$(oc42_before "$(ocr status)")"
+st_off_raw="$(oc42_before "$(OC_PROC_ROOT="$PROC" OC_ENV="TEAM_ORPHAN_SCAN=0" oc_cli "$T2" status)")"
+td_eq "4.2 status 的既有每一行逐字节不变（开/关普查）" \
+      "$(printf '%s\n' "$st_on_raw" | oc42_nums)" "$(printf '%s\n' "$st_off_raw" | oc42_nums)"
+for _blk in 'AGENT' 'session: OC2' 'BOARD：'; do
+  td_has "4.2 status 既有块【$_blk】在读数之前" "$st_on_raw" "$_blk"
+done
 td_has "4.1 ps 追加了读数块" "$(ocr ps)" "孤儿席位进程"
 td_has "4.1 status 追加了读数块" "$(ocr status)" "孤儿席位进程"
 blk_ps="$(ocr ps | sed -n '/^孤儿席位进程/,$p')"
@@ -600,6 +649,20 @@ flip_case p276-flip-hint-line \
   'oc_mkproc 1301 "pi" "$(oc_env_own dev2)" 500 1048576; h="$(team_orphan_digest_hint)"; case "$h" in $'"'"'\n'"'"'*) printf RED ;; *) printf GREEN ;; esac' \
   'oc_mkproc 1301 "pi" "$(oc_env_own dev2)" 500 1048576; h="$(team_orphan_digest_hint)"; case "$h" in $'"'"'\n'"'"'*) printf RED ;; *) printf GREEN ;; esac' \
   'team_orphan_digest_hint() { printf "\n  ｜ 孤儿席位进程合计（独立一行：M50 的归一化会漏掉它）"; }'
+
+# 4.2 的红侧：把读数**插进容量行**（不再整块在最后）→ 「既有块都在读数之前」必须红。
+# 变异形态 = 原实现包一层：每打完一行，碰到容量行就把读数插进去（管道的子壳继承所有函数定义）。
+flip_case p276-flip-into-capacity \
+  'oc_project2_setup >/dev/null 2>&1; on="$(OC_PROC_ROOT="$PROC" oc_cli_skill "$OC_MUT" "$T2" ps 2>/dev/null)"; off="$(OC_PROC_ROOT="$PROC" OC_ENV="TEAM_ORPHAN_SCAN=0" oc_cli_skill "$OC_MUT" "$T2" ps 2>/dev/null)"; v=0; [ "$(oc42_before "$on" | oc42_nums)" = "$(oc42_before "$off" | oc42_nums)" ] || v=1; for w in "RAM 可用" "存活：" "MODEL" "agent 会话" "活跃窗口"; do case "$(oc42_before "$on")" in *"$w"*) ;; *) v=1 ;; esac; done; [ "$v" = 0 ] && printf GREEN || printf RED' \
+  'oc_project2_setup >/dev/null 2>&1; on="$(OC_PROC_ROOT="$PROC" oc_cli_skill "$OC_MUT" "$T2" ps 2>/dev/null)"; off="$(OC_PROC_ROOT="$PROC" OC_ENV="TEAM_ORPHAN_SCAN=0" oc_cli_skill "$OC_MUT" "$T2" ps 2>/dev/null)"; v=0; [ "$(oc42_before "$on" | oc42_nums)" = "$(oc42_before "$off" | oc42_nums)" ] || v=1; for w in "RAM 可用" "存活：" "MODEL" "agent 会话" "活跃窗口"; do case "$(oc42_before "$on")" in *"$w"*) ;; *) v=1 ;; esac; done; [ "$v" = 0 ] && printf GREEN || printf RED' \
+  'eval "team_cmd_ps__p276() $(declare -f team_cmd_ps | tail -n +2)"' \
+  'team_cmd_ps() { team_cmd_ps__p276 "$@" | while IFS= read -r l; do printf "%s\n" "$l"; case "$l" in *"RAM 可用"*) team_orphan_reading ;; esac; done; }'
+
+# 1.1 的红侧：把实现改成「每个 pid 调一次 ps」（丢掉机器级粗筛）→ 「一次普查只 fork 一次 ps」必须红。
+flip_case p276-flip-one-ps \
+  'oc_mk_ps_shim; l="$TMP/flip-ps.log"; : > "$l"; export OC_PS_LOG="$l"; TEAM_ORPHAN_PROC_ROOT=/proc team_orphan_census >/dev/null 2>&1; n="$(grep -c . "$l" 2>/dev/null || true)"; n="${n:-0}"; unset OC_PS_LOG; oc_rm_ps_shim; [ "$n" = 1 ] && printf GREEN || printf RED' \
+  'oc_mk_ps_shim; l="$TMP/flip-ps.log"; : > "$l"; export OC_PS_LOG="$l"; TEAM_ORPHAN_PROC_ROOT=/proc team_orphan_census >/dev/null 2>&1; n="$(grep -c . "$l" 2>/dev/null || true)"; n="${n:-0}"; unset OC_PS_LOG; oc_rm_ps_shim; [ "$n" = 1 ] && printf GREEN || printf RED' \
+  'team_orphan_candidates() { local root base_a base_p p args d; root="$(team_orphan_proc_root)"; base_a="$(basename -- "$(team_agent_bin_path 2>/dev/null || true)")"; [ -n "$base_a" ] || base_a=pi; base_p="$(basename -- "$(team_pm_bin_path 2>/dev/null || true)")"; [ -n "$base_p" ] || base_p="$base_a"; for d in "$root"/*/; do [ -d "$d" ] || continue; p="$(basename -- "${d%/}")"; case "$p" in ""|*[!0-9]*) continue ;; esac; args="$(ps -o args= -p "$p" 2>/dev/null | head -1)"; [ -n "$args" ] || continue; case "$args" in *"$base_a"*|*"$base_p"*) ;; *) continue ;; esac; printf "%s\t%s\n" "$p" "$args"; done; }'
 
 flip_case p276-flip-verify \
   'oc_mkproc 1501 "pi" "$(oc_env_own dev2)" 12345 1024; team_reap_verify 1501 99999 >/dev/null 2>&1 && printf RED || printf GREEN' \

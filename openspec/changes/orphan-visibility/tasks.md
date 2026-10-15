@@ -36,12 +36,16 @@
 
 ## 1 普查与身份判据（规格：`seat-visibility#A seat process is identified from its own environment and executable`）
 
-- [ ] 1.1 `team_orphan_census`（名字以 apply 冻结为准）在 `common.sh` 里：枚举 `TEAM_ORPHAN_PROC_ROOT`
+- [x] 1.1 `team_orphan_census`（名字以 apply 冻结为准）在 `common.sh` 里：枚举 `TEAM_ORPHAN_PROC_ROOT`
   下的 pid，读每个进程的 `environ` 取 `TEAM_MAIN_ROOT`/`TEAM_ROOT`/`TMUX`/`TMUX_PANE`，形状判据复用
   `team_proc_cmdline_is_bin` + `team_agent_bin_path`/`team_pm_bin_path`（**不新造第二套**）；输出每行
   一条记录（pid / rss / seat / 来源记录 / start）。**先一次 `ps -eo pid=,args=` 筛候选再读 `/proc`**
   （同 `team_pm_other_sessions_in_dir` 的既有做法），避免每个 pid 都 fork。 · 证据：夹具 `census` 组
-  逐字段断言 + 真进程现场 + 一次普查的 fork/耗时读数
+  逐字段断言 + 真进程现场 + 一次普查的 fork/耗时读数 · 依据（P285 补齐）：夹具 census 组逐字段断言（本树
+  ✓22 ✗0，含新增的三条读数断言：退出 0 / ps 恰好一次 / 形态 `-eo pid=,args=`）+ 真进程现场（P276-dev3.md
+  §2.8、V42.md §1）+ **一次普查的 fork/耗时读数**（夹具新增：`ps` 垫片计数 + 计时，本树实跑打出
+  「/proc 下 277 个 pid → 粗筛候选 36 个 → 记录 12 条；ps 调用 1 次；耗时 733ms」）+ 反例臂
+  `p276-flip-one-ps`（把实现改成每个 pid 调一次 `ps` → 必红；本树 `--flip` ✓20 ✗0）
 - [x] 1.2 项目归属按进程自己的 `TEAM_MAIN_ROOT`（物理路径规范化）判定，席位名由 `TEAM_ROOT` 相对该项目
   工作树目录推出；调用者的身份**不参与**判定。 · 证据：夹具里「从项目 B 调用、进程属于项目 A」的用例 · 依据（P284 按证据核对）：P276-dev3.md「Requirement 对照」seat-visibility 第 1 行；夹具 census 组 1006（进程属于别的项目→foreign）+ 从别的项目调用仍按进程自己的 TEAM_MAIN_ROOT 归类；V42.md §3 反方向（从 projB 看 projA 也算 foreign）
 - [x] 1.3 任务取 `state/<seat>.env` 的 `task` 并**标明来源**；启动时间取 `/proc/<pid>/stat` 第 22 字段 +
@@ -73,8 +77,13 @@
 - [x] 4.1 `team ps` 与 `team status` 追加同一块读数（同一个函数，两处逐字一致）；`team up` 在启动决策之后打
   一行（有孤儿：计数 + 合计 + 命令；没有：一行「无孤儿席位进程」）；三处都不发任何信号。
   · 证据：夹具对比 `ps`/`status` 的读数块逐字节相同 + 真进程现场 · 依据（P284 按证据核对）：夹具 reading 组（`ps`/`status` 读数块逐字节一致、`up` 恰好一行、点名 + 可复制命令）；V42.md §4（`up --print` 前后树哈希一致）；`team up` 的读数行在启动决策之后（cmd-watch.sh 里 `team_orphan_up_line`，本树读码）
-- [ ] 4.2 只增不改：`TEAM_ORPHAN_SCAN=0` 与开启两次 `team ps` 的**既有每一行**逐字节相同（容量行/存活块/
+- [x] 4.2 只增不改：`TEAM_ORPHAN_SCAN=0` 与开启两次 `team ps` 的**既有每一行**逐字节相同（容量行/存活块/
   模型表/会话块/窗口列表）。 · 证据：夹具的 diff 断言（`--flip` 臂：让读数插进容量行 → 必红）
+  · 依据（P285 补齐）：夹具 reading 组「4.2 ps 的既有每一行逐字节不变（开/关普查；容量行在内的全部既有
+  块）」+ 五个 ps 块名哨兵（`RAM 可用`/`存活：`/`MODEL`/`agent 会话`/`活跃窗口`）与三个 status 哨兵
+  （`AGENT`/`session: OC2`/`BOARD：`）都必须落在读数**之前**——哨兵是必需的：只比两边相等时，「读数插到
+  开头」会把两份都截成空、照样相等（P284 的假阴性）；本树 ✓25 ✗0。反例臂 `p276-flip-into-capacity`
+  （读数插进容量行 → 哨兵必红；本树 `--flip` ✓20 ✗0）
 - [x] 4.3 有界与竞态安全：读不到 / 中途消失 / 缺字段一律跳过；`ps`/`status`/`up` 的退出码不因普查改变；
   普查不写任何文件（前后 `state/` 快照相同）。 · 证据：夹具的四种边界（`TEAM_ORPHAN_PROC_ROOT`）+ 快照断言 · 依据（P284 按证据核对）：夹具 reading 组（`TEAM_STATE_DIR` 指向不存在目录也不创建 + 树指纹前后一致）+ seams 组四种边界（权限拒绝 / 中途消失 / 空环境 / 缺字段 / cmdline 读不到）；P276-dev3.md「Requirement 对照」第 4 行
 - [x] 4.4 面板数据面不变：`team __panel-data --no-activity` 前后逐字节相同（除既有实时字段），开/关普查
@@ -122,9 +131,12 @@
   `panel-strings.mjs`、`bash build.sh` 后 `panel.js` 的 sandbox 逐字节比对 · 依据（P284 按证据核对）：`cmd-config.sh` 三行 schema（组 `delivery`、`TEAM_ORPHAN_PROC_ROOT` 的 route 以 `fixture-only: ` 开头）+ `config.sh.tmpl` 三行 + `references/config.md` 三行 + 面板 `label_TEAM_ORPHAN_*`（zh/en）；本树复跑 `panel-strings.mjs` ok（122 键双向）与 `config-cli.sh` ✓343 ✗0；V42.md §6c 段 26（沙盒重建 `panel.js` 逐字节一致）
 - [x] 7.4 夹具与路径归属：新 `tests/orphan-census.sh` 的 `--select` 分组与 `--flip` 臂进 `tests/section-paths.tsv`
   （必要时 `section-budgets.tsv`）；`section-select.sh --check` 绿。 · 证据：命令 + rc · 依据（P284 按证据核对）：`section-paths.tsv` 第 140 行（段 51b）与 `section-budgets.tsv` 第 143 行；本树复跑 `section-select.sh --check` ✓8 ✗0。实际做法：夹具名是 `tests/seat-visibility.sh`（不是任务书预计的 `tests/orphan-census.sh`），组名 census/judge/naming/reading/hint/seams/reap
-- [ ] 7.5 文档：`references/config.md` 的键说明 + `references/troubleshooting.md` 一段「孤儿是什么、怎么清、
+- [x] 7.5 文档：`references/config.md` 的键说明 + `references/troubleshooting.md` 一段「孤儿是什么、怎么清、
   为什么默认不清」（若既有章节已覆盖则不新增章节）；**不重写** `team help` 的既有页面。
-  · 证据：diff 全文
+  · 证据：diff 全文 · 依据（P285 补齐）：`references/config.md` 的 `TEAM_ORPHAN_SCAN` 行补上默认值与
+  「关掉它会发生什么」（三个读数面各打一行点名跳过行、digest 不加提示、`team reap --orphans` 退 2、
+  显式 pid 仍可用）；`references/troubleshooting.md` 新增 §28「Orphan seat processes」（是什么 / 怎么判 /
+  怎么清 / 为什么默认不清三条理由，并与 §25 的孤儿 tmux server 划清）；`team help` 的既有页面零改动
 
 ## 8 独立验证（另一席位，不是 apply 作者）
 

@@ -1382,3 +1382,52 @@ record that `team board set <ID> done` and the merge step read. The details that
 - A container run cannot mount a `git worktree` — its `.git` is a pointer file to the main checkout, so every
   git-dependent fixture fails. Check the branch out with `git clone -b <task-branch> <root> /tmp/review-<ID>`
   instead and pass that clone's root to `--dir` (see the note at the end of §26; give the run `--pid=host`).
+
+## 28. Orphan seat processes: the agent still runs, its pane is gone
+
+**Symptom**: `team ps` and `team status` end with a block that starts `孤儿席位进程（主机侧 /proc 普查；…）` and
+names pids, each with a `team reap <pid> --yes` command; `team digest`'s capacity line carries a
+`｜ 孤儿席位进程合计 ≥ …` hint once the host-wide total reaches `TEAM_ORPHAN_WARN_MB`; `team up` prints one line
+`孤儿席位进程：N 个本项目孤儿（合计 XMB）→ team reap --orphans --yes`.
+
+**What it is**: a process whose command line names this project's configured agent (or PM) executable *and* whose own
+environment carries this project's identity (`TEAM_MAIN_ROOT` / `TEAM_ROOT`), but whose pane is gone. It appears when
+the tmux server — or just that window — died while the agent process kept running: a tmux crash, a killed session, or
+a corpse window whose pane died under a live process (§11b). The process keeps holding its memory and its model
+session, which is why it is worth cleaning up.
+
+The judgement is made on the process's **own** tmux server (the socket named in its `TMUX`) — never on the default
+server, never on "is this the current window": no `TMUX_PANE` means orphan, and a pane id that is absent from that
+server's pane list means orphan. If that server cannot be queried the process is **unjudged**: counted, never called
+an orphan, never reaped.
+
+**How to clean it** — plan first, then execute:
+
+```bash
+team reap --orphans            # the plan: names every target and the signal it would send, sends nothing (exit 0)
+team reap --orphans --yes      # execute; or one pid at a time: team reap <pid> --yes
+```
+
+Each target is re-verified immediately before its signal — still this project's seat, still no live pane, the same
+process start time the plan recorded (a pid the kernel reused in between is refused) — then `SIGTERM`, a bounded 5 s
+wait, and only then `SIGKILL`. Every signal appends one line to `state/reap.log`; a target that is not clean makes the
+command exit non-zero. `--yes` is the only authorization: no configuration key, environment variable or inherited
+value turns it on.
+
+**Why nothing is cleaned up automatically** — three reasons, and each of them has bitten:
+
+- The reading is **read-only**: it is appended to `team ps`/`team status`, and nobody expects those to signal
+  anything.
+- Another project's orphans and identity-less same-shaped processes are only **counted**, never named — the reading
+  is meant to be pasted into the ledger, so printing their pids, seats or paths would leak another project's state;
+  and a sweep acting on that count would kill another project's seats.
+- An unqueryable tmux server leaves a process **unjudged**: "I cannot tell" must never become "kill it".
+
+So the decision stays with a human (or the PM) in front of a named list. `TEAM_ORPHAN_SCAN=0` turns the whole reading
+off — `team ps`/`team status`/`team up` then print one named skip line, `team digest` adds no hint, and
+`team reap --orphans` refuses (cleanup still works with an explicit pid) — for hosts where reading another process's
+environment is refused.
+
+**Not to be confused with**: the orphan tmux **server** of §25 — a private server whose socket is gone and whose temp
+root never got swept. That is temp-root hygiene (`bash <skill>/tests/tmp-hygiene.sh --status`, then `--sweep`), not a
+seat process.
