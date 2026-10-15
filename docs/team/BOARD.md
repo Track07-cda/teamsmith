@@ -432,6 +432,7 @@
 | V37 | Reply discipline: independent verification | verify | - | - | done |
 | V38 | cli-help surface: independent verification | dev2 | - | - | wip |
 | P268 | Do not leak this project's identity into tmux's global environment | dev | - | - | todo |
+| P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev | - | - | todo |
 
 ## 当前里程碑
 
