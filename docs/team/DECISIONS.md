@@ -1765,3 +1765,13 @@ identity: category=docs model=cline/deepseek/deepseek-v4.1-flash:max selected_vi
 **处置（PM 的动作，已记录）**：手动结束该席位的进程并 `team resume` 它——会话继续（`pi -c`），磁盘上未提交的改动保留，我的两条消息此时才被读到。**这是绕过 CLI 的动作**，所以写进账本：哪天有了正式入口（例如 `team interrupt <seat>`），这条就退役。
 
 **教训**：派单时说的「不落盘就别硬撑、给时间盒」对**卡在回合内**的席位无效；PM 需要一条能打断回合的路。已记成候选（下一批立项）。
+
+### D189 · 容器里指定 `TMPDIR` 必须**先建目录**（我自己的调用错误，2026-10-15）
+
+**现象**：`smoke.sh --select …` 在容器里立刻以 rc=2 结束，原文：`section-select.sh: line 390: /var/tmp/p281g/teamsmith-select.<pid>.sh: No such file or directory` → 「写副本失败 → 选段被拒 → 什么都没跑」。
+
+**根因**：我在 `podman run` 里传了 `TMPDIR=/var/tmp/p281g`，但**没有先建这个目录**；选段器要先在 `TMPDIR` 下写一个运行副本，父目录不存在就直接拒跑（**这是正确的 fail-closed**：宁可不跑也不跑一半）。我先前几次 `TMPDIR=/var/tmp/p29Xg` 之所以成功，是因为**那些目录已经被更早的一次运行创建过**——属于「碰巧」，不是「对」。
+
+**规矩**：容器里改用非默认 `TMPDIR` 时，**同一条命令里先 `mkdir -p`**（例如 `mkdir -p /var/tmp/p281g; TMPDIR=/var/tmp/p281g bash …`）；另外注意 `-e HOME=/tmp` **不会**把宿主 `/tmp` 带进容器（没有对应 bind），所以宿主 `/tmp` 紧张时容器里用默认 `/tmp` 往往就够了。
+
+**报错质量**：这次的原文把「写副本失败」与「父目录」摆在第一行，**一眼能定位**——比「选段为空」那种含糊说法好得多，值得当作「响亮失败」的样本。
