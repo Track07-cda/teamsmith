@@ -454,7 +454,7 @@
 | P285 | Close the three orphan-visibility gaps (census reading, flip arm, docs) | dev-bob | - | - | done |
 | V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev3 | - | - | done |
 | P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | wip |
-| P287 | Gate tmp/lock must survive another project's pattern cleanup | dev | - | - | todo |
+| P287 | Gate tmp/lock must survive another project's pattern cleanup | dev3 | - | - | wip |
 
 ## 当前里程碑
 
