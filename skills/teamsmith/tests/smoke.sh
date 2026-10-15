@@ -2961,13 +2961,16 @@ m32_prompt_from_print "$TMP/print-notify-pi.log" "$M32_PF"
 # F7：内置 Pi 有自己的通知扩展 → 不把「回合结束跑这条」塞给 worker（也不谎称「不是 Pi」）
 assert_has "$TMP/print-notify-pi.log" "TEAM_AGENT_CMD 为空" "并解释这段配置在 Pi 路径下不生效（F7）"
 # ③e F8：坏 notify 模板 → 只警告 + 提示词整段换成「写进报告」
-env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm {bogus}' \
+# 坏模板里带一个唯一标记（F8MARK）：断言它**没有被渲染进提示词**。原先这里断言的是「提示词里不出现
+# `scripts/team notify pm`」——那是个粗代理，2026-10-15 与「hard-blocked 示例点名通知 PM」相撞而误红：
+# 三态那段里的阻塞示例本来就该写 `team notify pm "<one line>"`（它与 notify 模板无关，是 worker 手打的命令）。
+env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='bash {skill_dir}/scripts/team notify pm F8MARK {bogus}' \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-bad.log" 2>&1 \
   && ok "notify 模板不可用时不阻断派单（只警告）" || bad "坏 notify 模板不应让 dispatch 失败"
 assert_has "$TMP/print-notify-bad.log" "TEAM_AGENT_NOTIFY_CMD 看起来不可用" "警告点名了坏模板"
 m32_prompt_from_print "$TMP/print-notify-bad.log" "$M32_PF"
 assert_has "$M32_PF" "into the report" "并告诉 worker 把摘要写进报告（F8）"
-assert_not "$M32_PF" "scripts/team notify pm" "坏模板下不给半截 notify 命令（F8）"
+assert_not "$M32_PF" "F8MARK" "坏模板下不给半截 notify 命令（F8：坏模板的文本没有被渲染进提示词）"
 env TEAM_AGENT_CMD="$APLACE" TEAM_AGENT_BIN=bash TEAM_AGENT_NOTIFY_CMD='nosuchcli notify {summary}' \
   $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$TMP/print-notify-nocli.log" 2>&1 \
   && ok "notify 模板首词不可执行时不阻断派单（只警告）" || bad "首词不可执行的 notify 模板不应让 dispatch 失败"
