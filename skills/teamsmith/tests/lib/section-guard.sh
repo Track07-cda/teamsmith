@@ -58,8 +58,27 @@ SG_BUDGET_OVERRIDE=""
 SG_FAST="${TEAM_SMOKE_FAST:-0}"
 SG_LOCK_NOTE=""
 SG_CLOSE_COUNTS=""   # P98 账本：本段收口行里的 ✓/✗/SKIP 增量（关段前注入；空 → 行里打 `-`）
+SG_NESTED=0          # P281：本 run 是不是**证明得了祖辈持锁**的嵌套运行（只有嵌套运行才对齐祖辈期限）
+SG_ANCESTOR_HEARTBEAT=""   # P281：祖辈公布的心跳文件（读它拿到 armed_epoch + budget）
 
 _sg_now() { date +%s; }
+
+# P281：心跳文件的路径**只在这里拼一次**（门禁锁的记录要公布它，嵌套运行要靠它找祖辈的武装段）
+section_guard_heartbeat_path() { # [<owner pid>] → <TMPDIR>/.teamsmith-smoke-heartbeat.<pid>
+  printf '%s\n' "${TMPDIR:-/tmp}/.teamsmith-smoke-heartbeat.${1:-$$}"
+}
+
+# P281：祖辈当前武装段的到期时刻（armed_epoch + budget）；读不到/未武装 → 空
+_sg_ancestor_deadline() {
+  local hb="${SG_ANCESTOR_HEARTBEAT:-}" line no armed budget
+  [ -n "$hb" ] && [ -r "$hb" ] || return 1
+  line="$(head -1 "$hb" 2>/dev/null || true)"
+  case "$line" in ''|disarm*) return 1 ;; esac
+  IFS='|' read -r no armed budget _ _ _ <<<"$line"
+  case "${armed:-}" in ''|*[!0-9]*) return 1 ;; esac
+  case "${budget:-}" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$(( armed + budget ))"
+}
 
 _sg_proc_start() { # /proc/<pid>/stat 的 starttime：pid 复用安全的判据
   local st; st="$(LC_ALL=C cat "/proc/$1/stat" 2>/dev/null)" || return 1
@@ -78,6 +97,14 @@ _sg_pid_alive() { # <pid> [<starttime>] → 0 活着且（给了 starttime 时�
     [ "$st" = "$want" ] || return 1
   fi
   return 0
+}
+
+# P281：僵尸（Z）已经跑完了（只等被 wait 收尸）—— 收尾等待时不能把它当「还活着」（否则白等满宽限）
+_sg_pid_running() { # <pid> → 0 = 存在且不是僵尸
+  local pid="${1:-}" st
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  st="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)"
+  [ -n "$st" ] && [ "$st" != "Z" ]
 }
 
 # ---------------------------------------------------------------- 初始化
@@ -100,7 +127,7 @@ section_guard_init() {
   SG_FIXTURE="${TEAM_SMOKE_FIXTURE:-0}"
   SG_OWNER_PID="${BASHPID:-$$}"
   SG_OWNER_START="$(_sg_proc_start "$SG_OWNER_PID" 2>/dev/null || true)"
-  SG_HEARTBEAT="$SG_BASE/.teamsmith-smoke-heartbeat.$SG_OWNER_PID"
+  SG_HEARTBEAT="$(section_guard_heartbeat_path "$SG_OWNER_PID")"
   SG_MARKER="$SG_BASE/.teamsmith-smoke-trip.$SG_OWNER_PID"
   SG_SCENE="$SG_BASE/.teamsmith-smoke-scene.$SG_OWNER_PID"
   SG_STOP="$SG_BASE/.teamsmith-smoke-guard-stop.$SG_OWNER_PID"
@@ -257,8 +284,13 @@ section_guard_on_term() { # 看门狗对我们的 TERM：trip → exit 2；否�
 _sg_start_line() {
   local src=""
   case "$SG_BUDGET_SOURCE" in
-    default) src="（默认：预算表没有这段）" ;;
-    fixture) src="（夹具覆盖）" ;;
+    default)  src="（默认：预算表没有这段）" ;;
+    fixture)  src="（夹具覆盖）" ;;
+    ancestor) src="（嵌套运行：对齐祖辈剩余预算）" ;;
+    # 返修轮次 1 · F1：读不到祖辈公布的 heartbeat → 退回自己的表预算。退回必须**可见**，
+    # 不许无声占着（V43 的 F1：旧实现只把环境变量当来源，环境一清就静默退回）。
+    nested-fallback)         src="（嵌套运行：没有可读的祖辈心跳 → 按本段预算）" ;;
+    fixture-nested-fallback) src="（夹具覆盖；嵌套运行：没有可读的祖辈心跳 → 按本段预算）" ;;
   esac
   printf '== #%s %s == %s · 预算 %ss%s' "$SG_SEC_NO" "$SG_SEC_ID" "$SG_SEC_START" "$SG_BUDGET" "$src"
 }
@@ -294,6 +326,8 @@ _sg_close_current() {
     printf '  \033[33m⚠\033[0m #%s 用时 %ss，超过实测带 %ss（这是记录，不是判定）\n' \
       "$SG_SEC_NO" "$elapsed" "$SG_BAND"
   fi
+  # P281：本段收口后，本夹具登记过的嵌套运行还不许活着（只对自己登记过的 pid 发信号，D37）
+  section_guard_check_orphans "${SG_LOCK_NOTE:-}"
   SG_ARMED=0
   SG_SEC_ID=""
   printf 'disarm\n' > "$SG_HEARTBEAT" 2>/dev/null || true
@@ -318,6 +352,23 @@ section_guard_begin() { # <id>：收上一段 → 开这一段（含夹具注入
   SG_ARMED_SECONDS="$SECONDS"
   SG_TICKS=0
   section_guard_budget_for "$id"
+  # P281：嵌套运行的期限 = min(自己的表预算, 祖辈武装段的剩余)。到点走**既有** trip 路径
+  # （点名段号 + 预算 + 实际、写现场、停跑）——不许无声占着（EXP2 那次 1h16m 的形状）。
+  if [ "${SG_NESTED:-0}" = "1" ]; then
+    local adl rem
+    adl="$(_sg_ancestor_deadline 2>/dev/null || true)"
+    if [ -n "$adl" ]; then
+      rem=$(( adl - $(_sg_now) ))
+      [ "$rem" -lt 0 ] && rem=0
+      if [ "$rem" -lt "$SG_BUDGET" ]; then SG_BUDGET="$rem"; SG_BUDGET_SOURCE="ancestor"; fi
+    else
+      # F1：祖辈心跳读不到 → 退回**自己的**表预算，但必须可见（开跑行的来源里说清楚）。
+      case "${SG_BUDGET_SOURCE:-default}" in
+        fixture) SG_BUDGET_SOURCE="fixture-nested-fallback" ;;
+        *)       SG_BUDGET_SOURCE="nested-fallback" ;;
+      esac
+    fi
+  fi
   SG_ARMED=1
   section_guard_write_heartbeat
   line="$(_sg_start_line)"
@@ -494,6 +545,36 @@ _sg_stop_children() { # <no>：只停这个套件进程树里的子孙（不含�
       printf '  \033[31m✗\033[0m 看门狗：段落 #%s 的 grace 用尽（仍有子孙存活）→ 已发 KILL（归因以现场为准；现场 %s）\n' "$no" "$SG_SCENE"
     fi
   fi
+  return 0
+}
+
+# P281（change: gate-lock-hygiene）：本夹具登记过的嵌套运行在**生它的那一段收口后**还不许活着。
+# 只对记录里 `ancestor=<本 run 的 pid>` 且 pid 仍活着的条目动手；只对**那个 pid** 发信号（D37：
+# 不按名字、不按进程组）。没有锁路径 / 没有 gate-lock.sh / 没有记录 → 静默不动。
+section_guard_check_orphans() { # <lock>
+  local lock="${1:-}" f pid st pids="" n=0 p i alive
+  [ -n "$lock" ] || return 0
+  command -v gate_lock_record_get >/dev/null 2>&1 || return 0
+  for f in "$lock.runs"/*.run; do
+    [ -f "$f" ] || continue
+    [ "$(gate_lock_record_get "$f" ancestor)" = "$SG_OWNER_PID" ] || continue
+    pid="$(gate_lock_record_get "$f" pid)"; st="$(gate_lock_record_get "$f" start)"
+    case "$st" in ''|'-') st="" ;; esac
+    _sg_pid_alive "$pid" "$st" || continue
+    _sg_pid_running "$pid" || continue
+    printf '  \033[31m✗\033[0m 嵌套运行在生它的那一段收口后仍活着：pid=%s %s → 只对这个登记过的 pid 发信号收尾\n' \
+      "$pid" "$(gate_lock_describe_one "$f")"
+    pids="$pids $pid"; n=$((n + 1))
+  done
+  [ "$n" -eq 0 ] && return 0
+  for p in $pids; do kill -TERM "$p" 2>/dev/null || true; done
+  for i in $(seq 1 25); do
+    alive=0
+    for p in $pids; do _sg_pid_running "$p" && alive=1; done
+    [ "$alive" -eq 0 ] && break
+    sleep 0.2
+  done
+  for p in $pids; do kill -KILL "$p" 2>/dev/null || true; done
   return 0
 }
 

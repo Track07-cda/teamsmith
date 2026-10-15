@@ -92,6 +92,9 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 # P70（change: gate-section-accounting）：每段自述 + 硬预算 + 现场。
 # shellcheck source=tests/lib/section-guard.sh
 . "$SKILL_DIR/tests/lib/section-guard.sh"
+# P281（change: gate-lock-hygiene）：门禁共享锁的记录格式与读写（与 cmd-review.sh 共用同一份实现）。
+# shellcheck source=scripts/lib/gate-lock.sh
+. "$SKILL_DIR/scripts/lib/gate-lock.sh"
 # shellcheck source=tests/lib/tmux-cap.sh
 . "$SKILL_DIR/tests/lib/tmux-cap.sh"
 # P162（change: - · infra）：破坏性 tmux 调用的隔离前置（证明 → 才动手；头注见 lib/tmux-iso.sh）
@@ -320,8 +323,65 @@ smoke_ledger_selfcheck() { # 段落增量之和 vs 结果行总数：不一致�
 #   TEAM_SMOKE_LOCK_WAIT=<秒>   排队上限，默认 1800（超时大声失败：点名持有者 + exit 2，不静默降级 ——
 #                               原来的 `exec flock -w` 形态做不到这一点，见下面 P66 那段）
 #   TEAM_SMOKE_LOCK=<path>      锁文件，默认 ${TMPDIR:-/tmp}/teamsmith-smoke.lock
-SMOKE_LOCK_HELD=0
-if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK_WRAPPED:-0}" != "1" ]; then
+#
+# P281（change: gate-lock-hygiene）—— 这一块的三件事改成：
+#   ① 「本进程是不是 flock 的持有者」由 **marker 里的 pid** 证明，不再由会被子孙继承的环境标记证明
+#      （EXP1：带 SMOKE_LOCK_WRAPPED 的嵌套运行覆写并删掉了真持有者的记录）；
+#   ② 「祖辈持有锁」由**进程树 + starttime** 证明（记录里活着的 pid 在我的 ppid 链上）；证不出就按
+#      顶层排队（fail closed）；嵌套运行**不排队**，只登记自己的一条 `<lock>.runs/<pid>.run`；
+#   ③ 持有者记录自述 kind/席位/工作树/已跑/上限；等待者按 expected 算上限并打印算式。
+# 记录格式与读写只在 `scripts/lib/gate-lock.sh` 里实现一次（`cmd-review.sh` 共用同一份）。
+SMOKE_LOCK_HELD=0; SMOKE_LOCK_KIND=""; SMOKE_LOCK_NESTED=0; SMOKE_LOCK_NO_LOCK=0
+SMOKE_LOCK_SELF_HOLDER=0; SMOKE_LOCK_ANCESTOR=""; SMOKE_LOCK_RECORD=0; SMOKE_LOCK_NEEDS_QUEUE=0
+SMOKE_LOCK_WAIT="${TEAM_SMOKE_LOCK_WAIT:-1800}"
+case "$SMOKE_LOCK_WAIT" in ''|*[!0-9]*) SMOKE_LOCK_WAIT=1800 ;; esac
+# FAST 的私有锁路径必须在解析 SMOKE_LOCK 之前定下来（否则 no_lock 分支会把 FAST 的临时目录说成机器锁）
+if [ "$FAST" = "1" ] && [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
+  TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/teamsmith-smoke-fast-$$.lock"; export TEAM_SMOKE_LOCK
+fi
+# TEAM_SMOKE_LOCK 优先于继承来的 SMOKE_LOCK：夹具用 TEAM_SMOKE_LOCK 指定私有锁时，不能让外层导出的
+# SMOKE_LOCK（机器锁）把它顶掉 —— 那会让夹具的门禁排队到**真机器锁**上。
+SMOKE_LOCK="${TEAM_SMOKE_LOCK:-${SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}}"
+export SMOKE_LOCK
+if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ] && [ -n "${SMOKE_LOCK_MARKER:-}" ] \
+   && [ -s "${SMOKE_LOCK_MARKER:-/nonexistent}" ] \
+   && [ "$(gate_lock_marker_pid "$SMOKE_LOCK_MARKER")" = "$$" ]; then
+  SMOKE_LOCK_SELF_HOLDER=1
+  # 防御纵深（返修轮次 1 · F4）：用完之后不再把 marker 路径留在环境里让子孙继承 —— 真正的判据是
+  # 写入前那次 gate_lock_holder_claimable（记录里活着的 pid 不是继承得来的），这一行只是把门关小。
+  unset SMOKE_LOCK_MARKER
+fi
+if [ "$FAST" = "1" ] || [ "${TEAM_SMOKE_NO_LOCK:-0}" = "1" ]; then
+  SMOKE_LOCK_NO_LOCK=1
+  SMOKE_LOCK_REASON="FAST 模式（按契约不跑真进程段、不参与机器锁）"
+  [ "${TEAM_SMOKE_NO_LOCK:-0}" = "1" ] && SMOKE_LOCK_REASON="TEAM_SMOKE_NO_LOCK=1（自担并发风险）"
+  printf '  \033[2m·\033[0m 全量门禁互斥：no_lock=1（%s；残余窗口见 references/protocol.md §9b）\n' "$SMOKE_LOCK_REASON"
+elif [ "$SMOKE_LOCK_SELF_HOLDER" = "1" ]; then
+  SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=top
+  printf '  \033[2m·\033[0m 全量门禁互斥：持有 %s（kind=top pid=%s agent=%s worktree=%s；同机第二套会排队；TEAM_SMOKE_NO_LOCK=1 可跳过）\n' \
+    "$SMOKE_LOCK" "$$" "$(gate_lock_seat_of_dir "$PWD")" "$(gate_lock_worktree_of_dir "$PWD")"
+elif ! command -v flock >/dev/null 2>&1; then
+  SMOKE_LOCK_NO_LOCK=1
+  SMOKE_LOCK_REASON="本机没有 flock → 不做排队"
+  printf '  \033[2m·\033[0m 全量门禁互斥：no_lock=1（本机没有 flock → 不做排队；同机并发两套时可能互相干扰，见 M23）\n'
+elif ! mkdir -p "$(dirname "$SMOKE_LOCK")" 2>/dev/null || ! : >>"$SMOKE_LOCK" 2>/dev/null; then
+  SMOKE_LOCK_NO_LOCK=1
+  SMOKE_LOCK_REASON="锁文件 $SMOKE_LOCK 建不了 → 不做排队"
+  printf '  \033[2m·\033[0m 全量门禁互斥：no_lock=1（锁文件 %s 建不了 → 不做排队；同机并发两套时可能互相干扰，见 M23）\n' "$SMOKE_LOCK"
+else
+  # 嵌套证明：只有**证明得了**才不排队（进程树 + starttime；见 gate-lock.sh 的 gate_lock_prove_ancestor）
+  SMOKE_LOCK_ANCESTOR="$(gate_lock_prove_ancestor "$SMOKE_LOCK" 2>/dev/null || true)"
+  if [ -n "$SMOKE_LOCK_ANCESTOR" ]; then
+    SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=nested; SMOKE_LOCK_NESTED=1
+    printf '  \033[2m·\033[0m 全量门禁互斥：嵌套运行（祖辈 pid=%s 持有 %s）→ 不排队，登记 %s.runs/%s.run\n' \
+      "$SMOKE_LOCK_ANCESTOR" "$SMOKE_LOCK" "$SMOKE_LOCK" "$$"
+  else
+    gate_lock_proc_tree_available \
+      || printf '注意：没有 /proc → 无法证明祖辈持有锁 → 本套按**顶层**处理（fail closed：宁可多排队，不可少串行）\n'
+    SMOKE_LOCK_NEEDS_QUEUE=1
+  fi
+fi
+if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
   if command -v flock >/dev/null 2>&1; then
     SMOKE_LOCK="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
     SMOKE_LOCK_WAIT="${TEAM_SMOKE_LOCK_WAIT:-1800}"
@@ -332,9 +392,16 @@ if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK
     else
       SMOKE_LOCK_PROBE=0
       flock -n "$SMOKE_LOCK" true 2>/dev/null || SMOKE_LOCK_PROBE=$?
+      # P281：上限按持有者公布的 expected 算（D3）：cap = clamp(remaining + 60, W, 4W)；记录里没有
+      # expected（旧写入者 / 读不到）→ 退回今天的 W（一字不改）。等待者必须打印算式与三个数。
+      SMOKE_LOCK_CAP="$SMOKE_LOCK_WAIT"; SMOKE_LOCK_REMAINING="-"; SMOKE_LOCK_EXPECTED="-"
       if [ "$SMOKE_LOCK_PROBE" -eq 1 ]; then
-        printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
-          "$(cat "$SMOKE_LOCK.holder" 2>/dev/null || printf '持有者未知')" "$SMOKE_LOCK_WAIT"
+        IFS=$'\t' read -r SMOKE_LOCK_CAP SMOKE_LOCK_REMAINING SMOKE_LOCK_EXPECTED _ \
+          < <(gate_lock_cap "$SMOKE_LOCK" "$SMOKE_LOCK_WAIT")
+        case "$SMOKE_LOCK_CAP" in ''|*[!0-9]*) SMOKE_LOCK_CAP="$SMOKE_LOCK_WAIT" ;; esac
+        printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（算式：remaining=%ss + 60s → cap=%ss，下限 TEAM_SMOKE_LOCK_WAIT=%ss，上限 4×=%ss；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
+          "$(gate_lock_describe "$SMOKE_LOCK")" "$SMOKE_LOCK_CAP" \
+          "$SMOKE_LOCK_REMAINING" "$SMOKE_LOCK_CAP" "$SMOKE_LOCK_WAIT" "$(( SMOKE_LOCK_WAIT * 4 ))"
         SMOKE_LOCK_QUEUED=1
       elif [ "$SMOKE_LOCK_PROBE" -gt 1 ]; then
         printf '注意：flock 探锁失败（rc=%s）→ 仍按排队路径走（拿不到锁时会报排队超限）\n' "$SMOKE_LOCK_PROBE"
@@ -355,6 +422,7 @@ if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK
       SMOKE_LOCK_MARKER="$(mktemp "${TMPDIR:-/tmp}/teamsmith-smoke-queue.XXXXXX" 2>/dev/null \
         || printf '%s' "$SMOKE_LOCK.queued.$$")"
       export SMOKE_LOCK_WRAPPED=1
+      export SMOKE_LOCK_MARKER
       [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && export SMOKE_LOCK_QUEUED=1
       SMOKE_LOCK_T0="$(date +%s)"
       SMOKE_LOCK_RC=0
@@ -364,14 +432,15 @@ if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK
       if [ "$SMOKE_SEL_IS_CHILD" = "1" ] && [ -n "$SMOKE_SEL_COPY_PATH" ]; then
         # 用 `env` 把标记作为**命令行前缀**带进去：`exec` 自己不认 `VAR=value` 前缀（实测 rc=127，
         # `exec: SMOKE_SEL_CHILD=1: not found`）——这正是 §36 覆盖不到的组合（嵌套跑带 NO_LOCK）。
-        flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash -c \
-          'marker="$1"; shift; date +%s > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
+        # P281：marker 记 `<epoch> <pid>`（pid = 被 exec 起来的那次运行的 pid，见 gate-lock.sh）。
+        flock --close -w "$SMOKE_LOCK_CAP" "$SMOKE_LOCK" bash -c \
+          'marker="$1"; shift; printf "%s %s\n" "$(date +%s)" "$$" > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
           env SMOKE_SEL_CHILD=1 SMOKE_SEL_SKILL_DIR="$SMOKE_SEL_CHILD_DIR" \
           SMOKE_SEL_DECISION="$SMOKE_SEL_CHILD_DECISION" SMOKE_SEL_COPY="$SMOKE_SEL_COPY_PATH" \
           bash "$SMOKE_SEL_COPY_PATH" "$@" || SMOKE_LOCK_RC=$?
       else
-        flock --close -w "$SMOKE_LOCK_WAIT" "$SMOKE_LOCK" bash -c \
-          'marker="$1"; shift; date +%s > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
+        flock --close -w "$SMOKE_LOCK_CAP" "$SMOKE_LOCK" bash -c \
+          'marker="$1"; shift; printf "%s %s\n" "$(date +%s)" "$$" > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
           bash "$SKILL_DIR/tests/smoke.sh" "$@" || SMOKE_LOCK_RC=$?
       fi
       if [ ! -s "$SMOKE_LOCK_MARKER" ]; then
@@ -379,7 +448,7 @@ if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK
         if [ "$SMOKE_LOCK_RC" -eq 1 ]; then
           printf '排队超限：等满 %ss 仍拿不到门禁锁 %s（持锁者：%s）→ 本套**没有运行**（这不是对代码的判定；等持锁者结束，或抬高 TEAM_SMOKE_LOCK_WAIT 后重跑；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
             "$(( $(date +%s) - SMOKE_LOCK_T0 ))" "$SMOKE_LOCK" \
-            "$(cat "$SMOKE_LOCK.holder" 2>/dev/null || printf '持有者未知')" >&2
+            "$(gate_lock_describe "$SMOKE_LOCK")" >&2
         else
           printf '排队/加锁失败：flock 没能把本套跑起来（%s，rc=%s；既不是排队超限，也没有脚本自己的退出码）\n' \
             "$SMOKE_LOCK" "$SMOKE_LOCK_RC" >&2
@@ -393,11 +462,44 @@ if [ "$FAST" = "0" ] && [ "${TEAM_SMOKE_NO_LOCK:-0}" != "1" ] && [ "${SMOKE_LOCK
     printf '注意：本机没有 flock → 全量 smoke 不做排队（同机并发两套时可能互相干扰；见 M23）\n'
   fi
 fi
-if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
-  SMOKE_LOCK_HELD=1
-  SMOKE_LOCK="${SMOKE_LOCK:-${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}}"
+if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
+  # P281：持有者记录只由**真的持有 flock 的那个进程**写、也只有它删（嵌套运行不得覆写、不得删）；
+  # 每个参与的运行登记自己的一条 <lock>.runs/<pid>.run，退出时删自己那条。**opt-out 的运行也登记**
+  # （返修轮次 1 · F2）：no_lock=1 让「残余窗口」在记录里可观测，而不是只在 stdout 上一行字。
+  SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
+  SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
+  IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
+    < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" "$SKILL_DIR/tests/section-budgets.tsv")
+  SMOKE_LOCK_STARTED="$(date +%s)"
+  SMOKE_LOCK_KIND="${SMOKE_LOCK_KIND:-top}"
+  # 嵌套运行的期限对齐到**生它的那一段**。返修轮次 1 · F1：祖辈的 deadline 从**祖辈记录里公布的
+  # heartbeat** 读（证明成功时手里就有那个 pid）——环境变量只是旧写入者的兜底；套件自己的夹具会清掉
+  # 环境变量，旧实现于是**无声**退回自己的表预算（可能远晚于生它的那一段）。
+  if [ "$SMOKE_LOCK_NESTED" = "1" ]; then
+    SG_NESTED=1
+    SG_ANCESTOR_HEARTBEAT="$(gate_lock_heartbeat_of_pid "$SMOKE_LOCK" "$SMOKE_LOCK_ANCESTOR" 2>/dev/null || true)"
+    [ -n "$SG_ANCESTOR_HEARTBEAT" ] || SG_ANCESTOR_HEARTBEAT="${SMOKE_ANCESTOR_HEARTBEAT:-}"
+  fi
+  # 对外只公布**本次运行自己**的心跳路径（给它的子孙；它自己的记录里公布同一条）
+  SMOKE_ANCESTOR_HEARTBEAT="$(section_guard_heartbeat_path "$$")"; export SMOKE_ANCESTOR_HEARTBEAT
+  if [ "$SMOKE_LOCK_SELF_HOLDER" = "1" ]; then
+    if gate_lock_holder_claimable "$SMOKE_LOCK" "$$"; then
+      gate_lock_write_holder "$SMOKE_LOCK" "$$" top smoke.sh "$SMOKE_LOCK_SEAT" "$SMOKE_LOCK_WT" \
+        "$SMOKE_LOCK_STARTED" "$SMOKE_LOCK_EXP" "$SMOKE_LOCK_BND" "$SMOKE_LOCK_SECS" 0 - \
+        "$(section_guard_heartbeat_path "$$")"
+      SMOKE_LOCK_HOLDER_WRITTEN=1
+    else
+      # F4：继承来的 marker 不是「我是持有者」的证明 —— 记录里活着的那个 pid 才是（不许覆写、不许删）。
+      printf '\033[33m注意\033[0m：本进程自述是持有者（marker pid=%s），但 %s 里的持有记录是**另一个活着的进程**（%s）→ 不覆写、不删除\n' \
+        "$$" "$(gate_lock_holder_file "$SMOKE_LOCK")" "$(gate_lock_describe_one "$(gate_lock_holder_file "$SMOKE_LOCK")")"
+      SMOKE_LOCK_SELF_HOLDER=0
+    fi
+  fi
+  gate_lock_register_run "$SMOKE_LOCK" "$$" "$SMOKE_LOCK_KIND" smoke.sh "$SMOKE_LOCK_SEAT" "$SMOKE_LOCK_WT" \
+    "$SMOKE_LOCK_STARTED" "$SMOKE_LOCK_EXP" "$SMOKE_LOCK_BND" "$SMOKE_LOCK_SECS" "${SMOKE_LOCK_NO_LOCK:-0}" \
+    "${SMOKE_LOCK_ANCESTOR:--}" "$(section_guard_heartbeat_path "$$")"
+  SMOKE_LOCK_RECORD=1
   [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && printf '轮到本套了（排过队）\n'
-  printf '%s pid=%s cmd=smoke.sh\n' "$(date -Is)" "$$" > "$SMOKE_LOCK.holder" 2>/dev/null || true
   # P66 自检出口：排队守卫的自检需要一个**真的排到队、然后按给定退出码结束**的子进程 —— 否则它
   # 只能跑完整套门禁（递归，而且每次门禁多跑几分钟）。只在已经是队列子进程（wrapped）且显式给了
   # 非负整数时生效，而且**大声打印**：正常运行（环境里没有这个变量）的语义一个字不变。
@@ -878,7 +980,13 @@ cleanup() {
           --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
     env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$REAL_TMUX" kill-server 2>/dev/null || true
   fi
-  [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && rm -f "${SMOKE_LOCK:-/nonexistent}.holder" 2>/dev/null || true
+  # P281：只删**自己写的那一条**；持有者记录只有真的持有 flock 的那个进程才删（嵌套运行不得删别人的；
+  # F4：自述持有者但没写成的那一个也不许删）。
+  if [ "${SMOKE_LOCK_RECORD:-0}" = "1" ]; then
+    gate_lock_remove_run "${SMOKE_LOCK:-/nonexistent}" "$$"
+    [ "${SMOKE_LOCK_HOLDER_WRITTEN:-0}" = "1" ] && gate_lock_remove_holder "${SMOKE_LOCK:-/nonexistent}"
+    rmdir "${SMOKE_LOCK:-/nonexistent}.runs" 2>/dev/null || true
+  fi
   # P53：结束用量行（早退也打）→ 助手回收（KEEP 时打印保留路径）→ 诊断文件收尾
   if [ -n "${TMP:-}" ]; then
     [ "${SMOKE_TMP_USAGE_ENDED:-0}" = "1" ] || smoke_tmp_usage end
@@ -930,8 +1038,13 @@ fi
 printf 'teamsmith smoke · skill=%s · tmp=%s\n' "$SKILL_DIR" "$TMP"
 [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && printf '  \033[2m·\033[0m %s\n' \
   "tmux 私有 socket：$SMOKE_TMUX_SOCK（夹具与产品调用都走它；调用者的默认 server 不参与）"
-[ "${SMOKE_LOCK_HELD:-0}" = "1" ] && printf '  \033[2m·\033[0m %s\n' \
-  "全量门禁互斥：持有 $SMOKE_LOCK（同机第二套会排队；TEAM_SMOKE_NO_LOCK=1 可跳过）"
+if [ "${SMOKE_LOCK_RECORD:-0}" = "1" ]; then
+  SMOKE_LOCK_WHAT="no_lock=1（${SMOKE_LOCK_REASON:-未排队}）"
+  [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && SMOKE_LOCK_WHAT="持有 $SMOKE_LOCK"
+  [ "${SMOKE_LOCK_NESTED:-0}" = "1" ] && SMOKE_LOCK_WHAT="嵌套运行（祖辈 pid=${SMOKE_LOCK_ANCESTOR:-?}）→ 不排队"
+  printf '  \033[2m·\033[0m %s\n' \
+    "全量门禁互斥：${SMOKE_LOCK_WHAT}（记录：$(gate_lock_describe "${SMOKE_LOCK:-/nonexistent}")）"
+fi
 
 # 假 meminfo：让内存/swap 守卫可测（Linux /proc/meminfo 格式）
 mkfile_meminfo() { # <name> <avail_mb> <swap_free_mb> [swap_total_mb]
@@ -15798,6 +15911,14 @@ assert_eq "34② 排队超上限 → 非 0" "$P34_RC" "1"
 assert_has "$(p34_record)" '判定: **FAIL**' "34② 判定是 FAIL"
 assert_has "$(p34_record)" '门禁没有运行' "34② 记录写明门禁没有运行"
 assert_has "$(p34_record)" 'cmd=p34-holder' "34② 记录点名持锁者（夹具的 holder 记录）"
+# P281：旧形状的持有者记录没有 expected → 上限退回 TEAM_SMOKE_LOCK_WAIT（行为判据：实测排队秒数）
+P34_Q2="$(p34_field '.*queued=\([0-9]*\)s.*')"
+if [ -n "$P34_Q2" ] && [ "$P34_Q2" -le 3 ]; then
+  ok "34② 没有 expected 的旧持有者仍按 TEAM_SMOKE_LOCK_WAIT 判（W=2s，实测排队 ${P34_Q2}s）"
+else
+  bad "34② 旧持有者的上限不是 TEAM_SMOKE_LOCK_WAIT（queued=${P34_Q2:-无}）"
+fi
+assert_has "$(p34_record)" 'expected=?' "34② 旧记录缺的字段写 ?（不编数字）"
 assert_eq "34② 排队超限不产生 TIMEOUT 判定" "$(grep -c '判定: \*\*TIMEOUT\*\*' "$(p34_record)" || true)" "0"
 assert_eq "34② team_review_verdict 仍解析出 FAIL" "$(p34_verdict)" "FAIL"
 
@@ -15845,6 +15966,50 @@ assert_eq "34⑥ tmux 被 shim 顶掉也照样跑通（rc=0）" "$P34_RC" "0"
 assert_eq "34⑥ 排队阶段一次 tmux 都没调（shim 日志为空）" "$(grep -c . "$P34_TMUX_LOG" 2>/dev/null || printf 0)" "0"
 assert_eq "34⑥ 看板一个字节没动" "$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)" "$P34_BOARD_BEFORE"
 p34_release
+
+# ⑦ P281（change: gate-lock-hygiene）：上限按持有者**公布的 expected** 算（D3）
+#    cap = clamp(remaining + 60s, TEAM_SMOKE_LOCK_WAIT, 4 × TEAM_SMOKE_LOCK_WAIT)
+#    现场：持有者记录是**新格式**（expected=400、started=10s 前）；W=200 → cap=clamp(450,200,800)。
+#    返修轮次 1 · F3：期望值**运行时算** —— 旧写法把断言建在「remaining=39Xs」这条 1 秒宽的窗口上
+#    （候选树 3 跑 2 红）。现在 remaining 的区间由「记录里的 started」与夹住那一次 review 的 [T0,T1]
+#    两向夹出来，而且 cap 必须等于**同一个 remaining** 的 clamp（算式对算式，不是字面对字面）。
+p34_hold2() { # <秒> <expected> <started 前多少秒>：写新格式的持有者记录；P34_STARTED = 写进记录的那一刻
+  : >>"$P34_LOCK"; rm -f "$P34_LOCK.holder"
+  flock --close -x "$P34_LOCK" sleep "$1" & P34_HOLDER=$!
+  sleep 0.4
+  . "$SKILL_DIR/scripts/lib/gate-lock.sh"
+  P34_STARTED="$(( $(date +%s) - $3 ))"
+  gate_lock_record_write "$P34_LOCK.holder" "$P34_HOLDER" top "p34-holder2" dev "$P34D" \
+    "$P34_STARTED" "$2" 2400 3 0 - -
+}
+p34_hold2 3 400 10
+P34_T0="$(date +%s)"
+P34_RC=0; p34_review "$P34D/g.log" 30 200 'sleep 1' || P34_RC=$?
+P34_T1="$(date +%s)"
+p34_release
+assert_eq "34⑦ 持有者公布了 expected → 排到队后照常判 PASS（rc）" "$P34_RC" "0"
+assert_has "$P34D/g.log" "TEAM_SMOKE_LOCK_WAIT=200s" "34⑦ 等待者打印下限（TEAM_SMOKE_LOCK_WAIT）"
+P34_REM="$(sed -n 's/.*remaining=\([0-9][0-9]*\)s.*/\1/p' "$P34D/g.log" | head -1)"
+P34_CAP="$(sed -n 's/.*cap=\([0-9][0-9]*\)s.*/\1/p' "$P34D/g.log" | head -1)"
+if [ -n "$P34_REM" ] && [ -n "$P34_CAP" ]; then
+  # 期望值运行时算：打印落在 [T0,T1] 之间 ⇒ remaining ∈ [400−(T1−started), 400−(T0−started)]
+  P34_REM_HI=$(( 400 - (P34_T0 - P34_STARTED) ))
+  P34_REM_LO=$(( 400 - (P34_T1 - P34_STARTED) ))
+  P34_CAP_WANT=$(( P34_REM + 60 ))
+  [ "$P34_CAP_WANT" -lt 200 ] && P34_CAP_WANT=200
+  [ "$P34_CAP_WANT" -gt 800 ] && P34_CAP_WANT=800
+  if [ "$P34_REM" -ge "$P34_REM_LO" ] && [ "$P34_REM" -le "$P34_REM_HI" ]; then
+    ok "34⑦ remaining 按记录里的 started 算（实测 ${P34_REM}s ∈ [${P34_REM_LO},${P34_REM_HI}]，expected=400）"
+  else
+    bad "34⑦ remaining 与记录里的 started 对不上（实测 ${P34_REM}s，期望落在 [${P34_REM_LO},${P34_REM_HI}]）—— 队列行：$(grep -a '门禁锁正被持有' "$P34D/g.log" | head -1)"
+  fi
+  assert_eq "34⑦ cap = clamp(remaining+60, W, 4W)，同一 remaining 算出来的（期望 ${P34_CAP_WANT}s）" "$P34_CAP" "$P34_CAP_WANT"
+else
+  bad "34⑦ 队列行没打印算式里的 remaining/cap（实测 remaining=${P34_REM:-无} cap=${P34_CAP:-无}）"
+fi
+assert_has "$(p34_record)" 'cmd=p34-holder2' "34⑦ 排队行点名新格式的持有者记录"
+assert_has "$(p34_record)" 'agent=dev' "34⑦ 记录带席位"
+assert_eq "34⑦ team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
 
 section "34b · 门禁锁排队守卫：超上限要大声失败并点名持有者（P66）"
 # 事故（2026-09-22 PM 归档前门禁实测）：排队路径原来是 `exec flock --close -w … bash smoke.sh` ——
@@ -15903,6 +16068,18 @@ P66_RC=0; p66_run "$P66D/green.log" 5 0 || P66_RC=$?
 assert_eq "34b② 无竞争 → 子进程的退出码原样透传（0）" "$P66_RC" "0"
 assert_has "$P66D/green.log" "自检出口" "34b② 子进程真的作为队列子进程跑起来了"
 assert_has "$P66_LOCK.holder" "cmd=smoke.sh" "34b② 它把 holder 写成了自己（真的拿到了锁）"
+# P281：持有者记录自述 kind/席位/工作树/开始/已跑/上限；每个顶层运行也在 <lock>.runs/ 登记一条
+assert_has "$P66_LOCK.holder" "kind=top" "34b② 持有者记录自述 kind=top（顶层运行）"
+assert_match "$P66_LOCK.holder" 'expected=[0-9]+' "34b② 持有者记录带 expected（Σband_s）"
+assert_match "$P66_LOCK.holder" 'bound=[0-9]+' "34b② 持有者记录带 bound（Σbudget_s）"
+assert_match "$P66_LOCK.holder" 'worktree=[^[:space:]]+' "34b② 持有者记录带工作树字段（解析不出就写 ?，不猜）"
+P66_RUNREC="$(ls "$P66_LOCK.runs"/*.run 2>/dev/null | head -1 || true)"
+if [ -n "$P66_RUNREC" ]; then
+  assert_has "$P66_RUNREC" "kind=top" "34b② 顶层运行也在 <lock>.runs/ 登记自己那条（kind=top）"
+  assert_has "$P66_RUNREC" "ancestor=-" "34b② 顶层运行的 ancestor 是 -"
+else
+  bad "34b② 顶层运行没有登记 <lock>.runs/<pid>.run"
+fi
 assert_not "$P66D/green.log" "排队超限" "34b② 无竞争时没有排队失败的噪音"
 assert_not "$P66D/green.log" "另一套全量 smoke 正在跑" "34b② 空闲锁不进排队路径"
 
@@ -15937,6 +16114,420 @@ assert_eq "34b⑤ premise：旧形状超限时一个字都不打印（现场就�
 assert_eq "34b⑥ 队列 marker 没有残留" \
   "$(find "$P66D" -maxdepth 1 -name 'teamsmith-smoke-queue.*' 2>/dev/null | wc -l | tr -d ' ')" "0"
 rm -f "$P66_LOCK.holder" 2>/dev/null || true
+
+# ── ⑦ P281 红侧 ①：嵌套运行持有锁 → 等待者点名它是嵌套、属于谁、已跑多久、上限多少 ──────────
+# 现场（design §6①）：一个真的 `flock --close` 持有者进程，它的**进程树里**有一个活着的「嵌套运行」
+# 登记（kind=nested、ancestor=<持有者 pid>、席位/工作树/started/expected 都是夹具给的）。
+# 断言：等待者的**排队行**与**撞上限行**都要点名这些字段，且绝不打印「持有者未知」。
+# 红侧：删掉那条嵌套登记 → 同一行丢字段（夹具点名缺了哪个）→ 绿侧那条断言会红；还原后绿。
+P281D="$TMP/p281"; P281_LOCK="$P281D/lock"; rm -rf "$P281D"; mkdir -p "$P281D"
+P281_HOLDER=""; P281_DECOY=""; P281_FPID=""
+. "$SKILL_DIR/scripts/lib/gate-lock.sh"
+p281_clean() {
+  [ -n "$P281_DECOY" ] && kill "$P281_DECOY" 2>/dev/null || true
+  [ -n "$P281_HOLDER" ] && kill "$P281_HOLDER" 2>/dev/null || true
+  wait 2>/dev/null || true
+  P281_DECOY=""; P281_HOLDER=""
+}
+p281_scene() { # 造现场：真 flock 持有者（它的进程树里有活的嵌套登记）
+  p281_clean
+  : > "$P281_LOCK"; rm -f "$P281_LOCK.holder"; rm -rf "$P281_LOCK.runs"
+  rm -f "$P281D/pids"
+  # 持有者：`flock --close` 里 fork 出「嵌套运行」的诱饵进程 —— 它真的在持有者的进程树里
+  flock --close -x "$P281_LOCK" bash -c 'sleep 120 & printf "%s %s\n" "$PPID" "$!" > "$1"; wait' _ "$P281D/pids" &
+  P281_HOLDER=$!
+  local i
+  for i in $(seq 1 50); do [ -s "$P281D/pids" ] && break; sleep 0.1; done
+  read -r P281_FPID P281_DECOY < "$P281D/pids"
+  gate_lock_write_holder "$P281_LOCK" "$P281_FPID" top "p281-flock" dev "$P281D" \
+    "$(( $(date +%s) - 700 ))" 600 2400 3 0 - -
+  gate_lock_register_run "$P281_LOCK" "$P281_DECOY" nested "p281-nested" dev "$P281D" \
+    "$(( $(date +%s) - 30 ))" 300 1200 2 0 "$P281_FPID" -
+}
+p281_waiter() { # <日志> <上限秒>：真入口，私有锁 / 私有 TMPDIR
+  ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_LOCK_MARKER -u SMOKE_LOCK \
+      TEAM_SMOKE_LOCK="$P281_LOCK" TEAM_SMOKE_LOCK_WAIT="$2" TMPDIR="$P281D" \
+      bash "$SKILL_DIR/tests/smoke.sh" --select 0b ) >"$1" 2>&1
+}
+p281_missing() { # <一行> → 缺的字段（空格分隔；空 = 齐了）
+  local line="$1" out="" f
+  for f in 'kind=nested' 'agent=dev' "worktree=$P281D" 'expected=300' 'bound=1200'; do
+    case "$line" in *"$f"*) ;; *) out="${out}${out:+ }$f" ;; esac
+  done
+  printf '%s\n' "$out"
+}
+p281_scene
+P281_RC=0; p281_waiter "$P281D/w-green.log" 1 || P281_RC=$?
+assert_eq "34b⑦ 等待者撞上限 → exit 2（约定的那个）" "$P281_RC" "2"
+P281_QLINE="$(grep -a '另一套全量 smoke 正在跑' "$P281D/w-green.log" | head -1)"
+P281_CLINE="$(grep -a '排队超限' "$P281D/w-green.log" | head -1)"
+assert_eq "34b⑦ 排队行点名 kind=nested + 席位 + 工作树 + expected + bound" "$(p281_missing "$P281_QLINE")" ""
+assert_eq "34b⑦ 撞上限行也点名同一批字段" "$(p281_missing "$P281_CLINE")" ""
+assert_match "$P281D/w-green.log" '已跑 3[0-9]s' "34b⑦ 两行都按 started 算「已跑 Ns」（30s 前登记 → 3Xs）"
+assert_not "$P281D/w-green.log" "持有者未知" "34b⑦ 真持有者活着 → 绝不打印「持有者未知」"
+assert_not "$P281D/w-green.log" "陈旧记录" "34b⑦ 活着的登记不算陈旧"
+# 红侧：删掉嵌套登记
+rm -f "$P281_LOCK.runs/$P281_DECOY.run"
+P281_RC=0; p281_waiter "$P281D/w-red.log" 1 || P281_RC=$?
+P281_MR="$(p281_missing "$(grep -a '排队超限' "$P281D/w-red.log" | head -1)")"
+if [ -n "$P281_MR" ]; then
+  ok "34b⑦ 红侧：删掉嵌套登记 → 那一行丢字段（缺：$P281_MR）→ 绿侧那条断言会红"
+else
+  bad "34b⑦ 红侧：删掉嵌套登记后那一行仍完整 —— 守卫没被证到（夹具失效）"
+fi
+assert_has "$P281D/w-red.log" "kind=top" "34b⑦ 红侧：只剩持有者的 kind=top（嵌套那一层确实没了）"
+# 还原 → 绿
+gate_lock_register_run "$P281_LOCK" "$P281_DECOY" nested "p281-nested" dev "$P281D" \
+  "$(( $(date +%s) - 30 ))" 300 1200 2 0 "$P281_FPID" -
+P281_RC=0; p281_waiter "$P281D/w-green2.log" 1 || P281_RC=$?
+assert_eq "34b⑦ 还原登记 → 字段齐了（绿）" \
+  "$(p281_missing "$(grep -a '排队超限' "$P281D/w-green2.log" | head -1)")" ""
+p281_clean
+
+# ── ⑧ P281 红侧 ②：嵌套运行超预算 → 一行点名 + 现场 + exit 2 + 登记消失 + 锁可再取 ──────────
+# 现场：`flock --close` 的持有者进程 fork 出一个**真入口**嵌套运行（所以它真在持有者进程树里，
+# 且 `$PPID` 就是持有者 pid）；该运行的 §0c 段永不返回，期限 3s。到点由它自己的看门狗点名 + 停跑。
+# 红侧：去掉期限（表里 §0c 是 60s）→ 8s 内无声占着：三条断言（点名行 / 登记消失 / 锁可再取）全红。
+P281N="$TMP/p281-nested"; P281_NLOCK="$P281N/lock"; rm -rf "$P281N"; mkdir -p "$P281N"
+cat > "$P281N/nested-run.sh" <<P281NEOF
+#!/usr/bin/env bash
+# 现场构造：本脚本由 flock 的持有者进程 fork 出来（\$PPID 就是持有者 pid）→ 真·嵌套运行。
+. "$SKILL_DIR/scripts/lib/gate-lock.sh"
+# 返修轮次 1 · F1：祖辈的 heartbeat 公布在**记录里**（环境变量这条路径在调用处被 -u 清掉 —— 正是 V43 的形状：
+# 套件自己的夹具就惯于清它，旧实现于是无声退回自己的表预算）。\${P281_ANCESTOR_HB:--} = 记录里公布的心跳文件。
+gate_lock_record_write "$P281_NLOCK.holder" "\$PPID" top "p281-flock" dev "$P281N" "\$(date +%s)" 600 2400 3 0 - "\${P281_ANCESTOR_HB:--}"
+exec bash "$SKILL_DIR/tests/smoke.sh" --select 0c
+P281NEOF
+p281n_run() { # <日志> <段预算秒|-> [<祖辈心跳文件|->] [record|env]（默认 record：公布在记录里）
+  local -a be=() he=() re=()
+  local out="$1" bud="$2" hb="${3:-}" via="${4:-record}"
+  [ "$bud" != "-" ] && be=(TEAM_SMOKE_SECTION_BUDGET="$bud")
+  if [ -n "$hb" ] && [ "$hb" != "-" ]; then
+    if [ "$via" = "env" ]; then he=(SMOKE_ANCESTOR_HEARTBEAT="$hb"); else re=(P281_ANCESTOR_HB="$hb"); fi
+  fi
+  ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT \
+      -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_BUDGET -u TEAM_SMOKE_GUARD_POLL \
+      -u TEAM_SMOKE_PROGRESS_INTERVAL -u TEAM_SMOKE_FIXTURE -u SMOKE_ANCESTOR_HEARTBEAT \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_LOCK_MARKER -u SMOKE_LOCK \
+      TEAM_SMOKE_LOCK="$P281_NLOCK" TEAM_SMOKE_LOCK_WAIT=5 TMPDIR="$P281N" \
+      TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_GUARD_POLL=0.2 TEAM_SMOKE_PROGRESS_INTERVAL=1 \
+      ${be[@]+"${be[@]}"} ${he[@]+"${he[@]}"} ${re[@]+"${re[@]}"} \
+      flock --close -x "$P281_NLOCK" bash "$P281N/nested-run.sh" ) >"$out" 2>&1
+}
+P281N_RC=0; p281n_run "$P281N/green.log" 3 || P281N_RC=$?
+assert_eq "34b⑧ 嵌套运行超预算 → exit 2（安全点路径）" "$P281N_RC" "2"
+assert_match "$P281N/green.log" '段落 #3（0c · 静态检查（函数结尾的 set -e 陷阱））超时：预算 3s' "34b⑧ 一行点名段号 + id + 预算"
+assert_match "$P281N/green.log" '超时：预算 3s，实际 [0-9]+s' "34b⑧ 一行点名实际用时"
+assert_has "$P281N/green.log" "全量门禁互斥：嵌套运行（祖辈 pid=" "34b⑧ 它自述是嵌套运行（不排队、只登记）"
+assert_eq "34b⑧ 登记随它退出消失" "$(ls -A "$P281_NLOCK.runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
+P281N_SCENE="$(ls -d "$P281N"/.teamsmith-smoke-scene.* 2>/dev/null | head -1 || true)"
+if [ -n "$P281N_SCENE" ] && [ -s "$P281N_SCENE/summary.txt" ]; then
+  ok "34b⑧ 现场存在（${P281N_SCENE#$TMP/}）"
+else
+  bad "34b⑧ 超预算的嵌套运行没有留现场"
+fi
+if flock -n "$P281_NLOCK" true 2>/dev/null; then
+  ok "34b⑧ 嵌套结束后私有锁可被立刻取到（「释放」的可观测判据）"
+else
+  bad "34b⑧ 嵌套结束后私有锁仍被占着"
+fi
+# 期限对齐祖辈（task 2.2）：祖辈公布的武装段剩余预算 → min(自己的表预算, 祖辈剩余)
+# 表里 §0c 是 60s；心跳说「刚武装、还剩 5s」→ 期限应当是 5s 而不是 60s（且开跑行注明来源）
+# 返修轮次 1 · F1：这个心跳**只在记录里公布**（调用处的 env 白名单继续 -u SMOKE_ANCESTOR_HEARTBEAT）。
+P281_HB="$P281N/hb"
+printf '3|%s|5|0|0|0c · 静态检查\n' "$(date +%s)" > "$P281_HB"
+P281N_RC=0; p281n_run "$P281N/hb.log" - "$P281_HB" || P281N_RC=$?
+assert_eq "34b⑧ 期限来自祖辈**记录里公布的**心跳 → exit 2（安全点路径）" "$P281N_RC" "2"
+assert_has "$P281N/hb.log" "（嵌套运行：对齐祖辈剩余预算）" "34b⑧ 开跑行注明预算来自祖辈剩余"
+assert_match "$P281N/hb.log" '超时：预算 [1-5]s' "34b⑧ 预算取自祖辈剩余（≤5s），不是自己的表预算"
+assert_not "$P281N/hb.log" "预算 60s" "34b⑧ 表里的 60s 预算没有被用（对齐真的生效）"
+assert_eq "34b⑧ 登记随它退出消失（对齐那一轮）" "$(ls -A "$P281_NLOCK.runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
+# 对照（旧通道）：记录里没有心跳（-）但环境变量带了 → 仍然对齐（旧写入者兼容）
+P281N_RC=0; p281n_run "$P281N/hb-env.log" - "$P281_HB" env || P281N_RC=$?
+assert_has "$P281N/hb-env.log" "（嵌套运行：对齐祖辈剩余预算）" "34b⑧ 旧通道（环境变量）仍被接受（只作兜底）"
+# 红侧（F1）：记录里没有可读的祖辈心跳 → 退回**自己的**表预算，但必须可见（一行点名）
+P281N_RC=0; p281n_run "$P281N/hb-missing.log" 3 - || P281N_RC=$?
+assert_eq "34b⑧ 红侧：读不到祖辈心跳 → 仍按时结束（exit 2）" "$P281N_RC" "2"
+assert_has "$P281N/hb-missing.log" "没有可读的祖辈心跳" "34b⑧ 红侧：开跑行点名「没有可读的祖辈心跳」（不无声）"
+assert_match "$P281N/hb-missing.log" '超时：预算 3s' "34b⑧ 红侧：退回自己的表预算（夹具覆盖 3s）而不是对齐"
+assert_not "$P281N/hb-missing.log" "对齐祖辈剩余预算" "34b⑧ 红侧：没有可读心跳时不许声称对齐"
+# 红侧：不给期限 → 无声占着
+p281n_run "$P281N/red.log" - & P281N_RED=$!
+sleep 8
+if grep -aq '超时：预算' "$P281N/red.log"; then
+  bad "34b⑧ 红侧：去掉期限后居然点名了（守卫没被证到）"
+else
+  ok "34b⑧ 红侧：去掉期限 → 8s 内一行点名都没有（无声占着）"
+fi
+assert_eq "34b⑧ 红侧：登记还在（没有人收尾）" "$(ls -A "$P281_NLOCK.runs" 2>/dev/null | wc -l | tr -d ' ')" "1"
+if flock -n "$P281_NLOCK" true 2>/dev/null; then
+  bad "34b⑧ 红侧：锁居然可再取（说明嵌套已经结束）"
+else
+  ok "34b⑧ 红侧：锁仍被占着（「释放」判据分得出两者）"
+fi
+# 收尾：只对**我们自己登记/启动的 pid** 发信号（D37：不按名字、不按进程组）
+for _f in "$P281_NLOCK.runs"/*.run; do
+  [ -f "$_f" ] && kill -TERM "$(gate_lock_record_get "$_f" pid)" 2>/dev/null || true
+done
+kill -TERM "$(gate_lock_record_get "$P281_NLOCK.holder" pid)" 2>/dev/null || true
+wait "$P281N_RED" 2>/dev/null || true
+P281N_OK=0
+for _i in $(seq 1 30); do
+  if flock -n "$P281_NLOCK" true 2>/dev/null; then P281N_OK=1; break; fi
+  sleep 0.2
+done
+unset _i _f
+[ "$P281N_OK" = "1" ] && ok "34b⑧ 收尾：红侧现场已收干净（锁可再取）" \
+                     || bad "34b⑧ 收尾：红侧现场没收干净（锁仍被占）—— 后面的段会受影响"
+rm -rf "$P281N" 2>/dev/null || true
+
+# ── ⑨ P281 红侧 ③：单层运行的排队语义不变 + 上限算式（钉住唯一实现）──────────────────────
+# 既有 §34 ①–⑥ / §34b ①–⑤ 的判定一条没改（逐条对照 diff 的结论在报告里）；这里只加**新增对照**：
+# 旧写入者（记录里没有 expected）仍按 TEAM_SMOKE_LOCK_WAIT 判；新写入者按 clamp(remaining+60, W, 4W) 判。
+: > "$P281_LOCK"; rm -rf "$P281_LOCK.runs"
+printf '%s pid=%s cmd=legacy-holder\n' "$(date -Is)" "$$" > "$P281_LOCK.holder"
+assert_eq "34b⑨ 旧持有者（没有 expected）→ 上限仍是 TEAM_SMOKE_LOCK_WAIT" \
+  "$(gate_lock_cap "$P281_LOCK" 1800 | cut -f1)" "1800"
+P281_STARTED="$(( $(date +%s) - 10 ))"
+gate_lock_write_holder "$P281_LOCK" "$$" top smoke.sh dev "$P281D" "$P281_STARTED" 400 2400 3 0 - -
+P281_T0="$(date +%s)"
+IFS=$'\t' read -r P281_CAP P281_REM _ _ < <(gate_lock_cap "$P281_LOCK" 200)
+P281_T1="$(date +%s)"
+P281_LO=$(( 400 - (P281_T1 - P281_STARTED) )); P281_HI=$(( 400 - (P281_T0 - P281_STARTED) ))
+P281_CAP_WANT=$(( P281_REM + 60 ))
+[ "$P281_CAP_WANT" -lt 200 ] && P281_CAP_WANT=200
+[ "$P281_CAP_WANT" -gt 800 ] && P281_CAP_WANT=800
+assert_eq "34b⑨ cap = clamp(remaining+60, W, 4W)（remaining=${P281_REM}s → 期望 ${P281_CAP_WANT}s）" \
+  "$P281_CAP" "$P281_CAP_WANT"
+assert_eq "34b⑨ remaining 由记录里的 started 算出（落点 ∈ [${P281_LO},${P281_HI}]）" \
+  "$(( P281_REM >= P281_LO && P281_REM <= P281_HI ? 1 : 0 ))" "1"
+assert_eq "34b⑨ W 抬到 1000 → cap 落回下限（1000）" "$(gate_lock_cap "$P281_LOCK" 1000 | cut -f1)" "1000"
+assert_eq "34b⑨ W 只有 10 → cap 落回上限 4×W（40）" "$(gate_lock_cap "$P281_LOCK" 10 | cut -f1)" "40"
+rm -f "$P281_LOCK.holder" 2>/dev/null || true
+# 席位 / 工作树按**运行时目录**解析（team notify 发送者的同一条规则），不取窗口名
+P281_SEAT_DIR="$TMP/p281-seat/.worktrees/dev"
+mkdir -p "$TMP/p281-seat"
+( cd "$TMP/p281-seat" && git init -q -b main && git config user.email smoke@teamsmith \
+  && git config user.name smoke && : > x && git add -A && git commit -qm init \
+  && git worktree add -q "$P281_SEAT_DIR" -b wt-dev ) >/dev/null 2>&1
+assert_eq "34b⑨ 席位按运行时目录解析（.worktrees/<名字> → 那个名字）" \
+  "$(gate_lock_seat_of_dir "$P281_SEAT_DIR")" "dev"
+assert_eq "34b⑨ 名册里有同名席位 → 用名册拼写" \
+  "$(gate_lock_seat_of_dir "$P281_SEAT_DIR" "verify dev")" "dev"
+assert_eq "34b⑨ 主检出 → pm" "$(gate_lock_seat_of_dir "$TMP/p281-seat")" "pm"
+assert_eq "34b⑨ 不是 git 树 → ?（不猜）" "$(gate_lock_seat_of_dir "$TMP")" "?"
+# 反向对照：窗口名故意报成别的席位（cwd 仍是本工作树）→ 记录里仍是 cwd 的那个席位
+mkdir -p "$TMP/p281-shim"
+printf '#!/bin/sh\nprintf "%%s\\n" "verify"\n' > "$TMP/p281-shim/tmux"; chmod +x "$TMP/p281-shim/tmux"
+P281_SEAT2="$(cd "$P281_SEAT_DIR" && PATH="$TMP/p281-shim:$PATH" TMUX=/tmp/fake TMUX_PANE=%1 \
+  bash -c ". '$SKILL_DIR/scripts/lib/gate-lock.sh'; gate_lock_seat_of_dir \"\$PWD\"")"
+assert_eq "34b⑨ 反向对照：窗口名报 verify，记录里仍是 cwd 的席位" "$P281_SEAT2" "dev"
+assert_eq "34b⑨ 工作树字段是 cwd 的 toplevel" \
+  "$(gate_lock_worktree_of_dir "$P281_SEAT_DIR")" "$(cd "$P281_SEAT_DIR" && pwd -P)"
+# 2.1 反向：锁被一个**活着但不是祖辈**的进程持有 → 证明不成立 → 照旧排队（fail closed）
+: > "$P281_LOCK"; rm -rf "$P281_LOCK.runs"; rm -f "$P281_LOCK.holder"
+sleep 30 & P281_NOTANC=$!
+flock --close -x "$P281_LOCK" sleep 5 & P281_REALHOLD=$!
+sleep 0.4
+gate_lock_write_holder "$P281_LOCK" "$P281_NOTANC" top smoke.sh dev "$P281D" \
+  "$(( $(date +%s) - 100 ))" 10 600 1 0 - -
+P281_RC=0; p281_waiter "$P281D/w-notanc.log" 1 || P281_RC=$?
+assert_eq "34b⑨ 锁被活着但不是祖辈的进程持有 → 证明不成立 → 照旧排队（exit 2）" "$P281_RC" "2"
+assert_not "$P281D/w-notanc.log" "嵌套运行（祖辈" "34b⑨ 证明不成立时不放行（不打印嵌套行）"
+assert_has "$P281D/w-notanc.log" "排队超限" "34b⑨ 它照旧排队并撞上限"
+kill "$P281_NOTANC" "$P281_REALHOLD" 2>/dev/null || true
+wait 2>/dev/null || true
+rm -f "$P281_LOCK.holder" 2>/dev/null || true
+
+# ── ⑪ P281（task 2.3）：生它的那一段收口后仍活着的嵌套运行 → 一行点名，且只杀**登记过的** pid ────
+# (a) 直接调门禁在收口时调的那个函数（真场景：一条 kind=nested 的活登记 + 两个**没登记**的诱饵，
+#     其中一个故意把 argv[0] 叫成 smoke.sh —— 证明不按名字、不按进程组，D37）。
+# (b) 留一个**真实**的嵌套运行给 §35 开段时的那次收口检查：验收日志里应当出现同一行（端到端证据）。
+P281O="$TMP/p281-orphan"; P281_OLOCK="$P281O/lock"; rm -rf "$P281O"; mkdir -p "$P281O"
+: > "$P281_OLOCK"
+sleep 90 & P281_O_REG=$!
+bash -c 'exec -a smoke.sh sleep 90' & P281_O_D1=$!
+sleep 90 & P281_O_D2=$!
+gate_lock_register_run "$P281_OLOCK" "$P281_O_REG" nested smoke.sh dev "$P281O" \
+  "$(( $(date +%s) - 20 ))" 300 1200 2 0 "$$" -
+P281_O_OUT="$(section_guard_check_orphans "$P281_OLOCK" 2>&1 || true)"
+assert_has_echo "$P281_O_OUT" "嵌套运行在生它的那一段收口后仍活着：pid=$P281_O_REG" \
+  "34b⑪(a) 一行点名活着的已登记嵌套运行（含 pid）"
+assert_has_echo "$P281_O_OUT" "kind=nested" "34b⑪(a) 那一行带它的记录字段（kind=nested）"
+assert_has_echo "$P281_O_OUT" "已跑 2" "34b⑪(a) 那一行带已跑时长（按 started 算）"
+assert_eq "34b⑪(a) 只对**登记过的** pid 发信号：登记的那条已经结束" \
+  "$(_sg_pid_running "$P281_O_REG" && printf alive || printf dead)" "dead"
+assert_eq "34b⑪(a) 没登记的同名诱饵（argv[0]=smoke.sh）仍活着：不按名字" \
+  "$(_sg_pid_running "$P281_O_D1" && printf alive || printf dead)" "alive"
+assert_eq "34b⑪(a) 没登记的另一个诱饵也活着：不按进程组" \
+  "$(_sg_pid_running "$P281_O_D2" && printf alive || printf dead)" "alive"
+kill "$P281_O_D1" "$P281_O_D2" 2>/dev/null || true
+wait 2>/dev/null || true
+rm -rf "$P281O" 2>/dev/null || true
+# (b) 真实场景：§34b 的收口发生在 §35 开段时（这里**故意不收**，让那次真实检查处理它）
+P281O2="$TMP/p281-orphan2"; rm -rf "$P281O2"; mkdir -p "$P281O2"
+( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+    -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+    -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+    -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_BUDGET \
+    -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_LOCK_MARKER \
+    TEAM_SMOKE_LOCK="$SMOKE_LOCK" TEAM_SMOKE_LOCK_WAIT=5 TMPDIR="$P281O2" \
+    TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=90 \
+    TEAM_SMOKE_GUARD_POLL=0.2 TEAM_SMOKE_PROGRESS_INTERVAL=1 \
+    bash "$SKILL_DIR/tests/smoke.sh" --select 0c ) >"$P281O2/out.log" 2>&1 &
+P281_O2_JOB=$!
+P281_O2_REC=""
+for _i in $(seq 1 80); do
+  P281_O2_REC="$(grep -l "ancestor=$$" "$SMOKE_LOCK.runs"/*.run 2>/dev/null | head -1 || true)"
+  [ -n "$P281_O2_REC" ] && break
+  sleep 0.1
+done
+unset _i
+if [ -n "$P281_O2_REC" ]; then
+  ok "34b⑪(b) 真实嵌套运行已登记（${P281_O2_REC##*/}，ancestor=$$）—— §35 开段时的收口检查应当点名它"
+  assert_has "$P281_O2_REC" "kind=nested" "34b⑪(b) 那条登记自述 kind=nested"
+else
+  bad "34b⑪(b) 真实嵌套运行 8s 内没登记（后面的收口证据不成立）"
+fi
+
+# ── ⑫ P281 返修轮次 1 · F2：opt-out（TEAM_SMOKE_NO_LOCK=1）的运行也落一条记录（no_lock=1）───────
+# 规格：残余窗口要**可观测**。旧实现只写 stdout；现在每个参与运行都登记 <lock>.runs/<pid>.run，
+# opt-out 的那条带 no_lock=1（waiters 的 describe 行也会把它标出来）。
+P281NL="$TMP/p281-nolock"; P281_NLLOCK="$P281NL/lock"; rm -rf "$P281NL"; mkdir -p "$P281NL"
+P281NL_REC=""
+( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+    -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+    -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+    -u TEAM_SMOKE_FAST -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_BUDGET \
+    -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_LOCK_MARKER -u SMOKE_LOCK \
+    TEAM_SMOKE_NO_LOCK=1 TEAM_SMOKE_LOCK="$P281_NLLOCK" TMPDIR="$P281NL" \
+    TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=90 \
+    TEAM_SMOKE_GUARD_POLL=0.2 TEAM_SMOKE_PROGRESS_INTERVAL=2 \
+    bash "$SKILL_DIR/tests/smoke.sh" --select 0c ) >"$P281NL/out.log" 2>&1 &
+P281NL_JOB=$!
+for _i in $(seq 1 60); do
+  P281NL_REC="$(grep -l 'no_lock=1' "$P281_NLLOCK.runs"/*.run 2>/dev/null | head -1 || true)"
+  [ -n "$P281NL_REC" ] && break
+  sleep 0.2
+done
+unset _i
+if [ -n "$P281NL_REC" ]; then
+  ok "34b⑫ opt-out 运行也登记了 <lock>.runs/<pid>.run（${P281NL_REC##*/}）"
+  assert_has "$P281NL_REC" "no_lock=1" "34b⑫ 那条记录带 no_lock=1（残余窗口可观测）"
+  assert_has "$P281NL_REC" "kind=top" "34b⑫ opt-out 的运行不声称嵌套（没做过祖辈证明）"
+  assert_match "$P281NL_REC" 'started=[0-9]+' "34b⑫ 记录带 started（等待者能算已跑时长）"
+  assert_has "$P281NL/out.log" "全量门禁互斥：no_lock=1" "34b⑫ 运行时自述 no_lock=1（既有行为）"
+  # 「等待者能看见」用**等待者打印的那份描述**直接钉（describe 就是队列行里的那一段）：
+  # 不依赖运行自己有没有跑到打印那一行（那一条时序上就与「先看见记录再收尾」相竞）。
+  gate_lock_describe "$P281_NLLOCK" > "$P281NL/describe.txt" 2>&1
+  assert_has "$P281NL/describe.txt" "no_lock=1" "34b⑫ 等待者读到的描述行里也标了 no_lock=1（残余窗口可见）"
+else
+  bad "34b⑫ TEAM_SMOKE_NO_LOCK=1 的运行没有登记记录（no_lock 只写了 stdout）—— 残余窗口不可观测"
+fi
+# 收尾：只对**记录里登记的**那个 pid 发信号（D37），并确认登记随它退出消失
+if [ -n "$P281NL_REC" ]; then
+  kill -TERM "$(gate_lock_record_get "$P281NL_REC" pid)" 2>/dev/null || true
+fi
+wait "$P281NL_JOB" 2>/dev/null || true
+P281NL_GONE=0
+for _i in $(seq 1 40); do
+  [ -z "$(ls -A "$P281_NLLOCK.runs"/*.run 2>/dev/null || true)" ] && { P281NL_GONE=1; break; }
+  sleep 0.2
+done
+unset _i
+assert_eq "34b⑫ 收尾：登记随它退出消失（只删自己那条）" "$P281NL_GONE" "1"
+rm -rf "$P281NL" 2>/dev/null || true
+
+# ── ⑬ P281 返修轮次 1 · F4：继承 marker 的后代不许改写/删除真持有者的记录（含破环红侧）──────
+# 攻击面：marker 路径在环境里、marker 文件可写 —— 后代把它改写成自己的 pid（exec 保住 pid）就能
+# 「自述是持有者」。判据不是自述，是**写之前**问一句：记录里活着的那个 pid 是不是我（不可继承）。
+# 红侧用一棵**最小可跑树**（真入口 smoke.sh + 它 source 的库）把那句证明拆掉：同一现场必须变红。
+P281F="$TMP/p281-forge"; P281_FLOCK="$P281F/lock"; rm -rf "$P281F"; mkdir -p "$P281F"
+p281f_tree() { # <名字> [guard|broken] → 建一棵最小可跑树（不碰真树）
+  local root="$P281F/$1"
+  rm -rf "$root"; mkdir -p "$root/tests/lib" "$root/scripts/lib"
+  cp "$SKILL_DIR/tests/smoke.sh" "$root/tests/smoke.sh"
+  cp "$SKILL_DIR/tests/lib/tmp-root.sh" "$SKILL_DIR/tests/lib/section-guard.sh" \
+     "$SKILL_DIR/tests/lib/tmux-cap.sh" "$SKILL_DIR/tests/lib/tmux-iso.sh" \
+     "$SKILL_DIR/tests/lib/checkout-shape.sh" "$root/tests/lib/"
+  cp "$SKILL_DIR/scripts/lib/gate-lock.sh" "$SKILL_DIR/scripts/lib/tmux-argv.sh" "$root/scripts/lib/"
+  [ "${2:-guard}" = "broken" ] && printf '\n# BROKEN：写权证明改成永远放行（红侧）\ngate_lock_holder_claimable() { return 0; }\n' \
+    >> "$root/scripts/lib/gate-lock.sh"
+  printf '%s\n' "$root"
+}
+p281f_scene() { # 造现场：真 flock 持有者 + 它的记录（pid = 持有者那个进程）
+  : > "$P281_FLOCK"; rm -f "$P281_FLOCK.holder"; rm -rf "$P281_FLOCK.runs" "$P281F/pids" "$P281F/marker"
+  flock --close -x "$P281_FLOCK" bash -c 'sleep 60 & printf "%s %s\n" "$PPID" "$!" > "$1"; wait' _ "$P281F/pids" &
+  P281F_HOLDER=$!
+  local i; for i in $(seq 1 50); do [ -s "$P281F/pids" ] && break; sleep 0.1; done
+  unset i
+  P281F_FPID="$(awk 'NR==1{print $1}' "$P281F/pids")"
+  P281F_DECOY="$(awk 'NR==1{print $2}' "$P281F/pids")"
+  gate_lock_write_holder "$P281_FLOCK" "$P281F_FPID" top "p281-flock" dev "$P281F" \
+    "$(date +%s)" 600 2400 3 0 - -
+}
+p281f_release() { # 只 wait **自己那两个** pid：裸 wait 会等到别人留的长命后台作业（P281 实测）
+  if [ -n "${P281F_DECOY:-}" ]; then kill "$P281F_DECOY" 2>/dev/null; wait "$P281F_DECOY" 2>/dev/null; fi
+  if [ -n "${P281F_HOLDER:-}" ]; then kill "$P281F_HOLDER" 2>/dev/null; wait "$P281F_HOLDER" 2>/dev/null; fi
+  P281F_DECOY=""; P281F_HOLDER=""
+}
+p281f_forge() { # <树根> <日志>：继承 marker 路径 → 改写成自己的 pid（exec 保住 pid）→ 跑真入口的锁块
+  local root="$1" out="$2"
+  cat > "$P281F/forge.sh" <<P281FEOF
+#!/usr/bin/env bash
+printf '%s %s\n' "\$(date +%s)" "\$\$" > "$P281F/marker"
+exec env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \\
+  -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \\
+  -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \\
+  -u SMOKE_LOCK_MARKER \\
+  TEAM_SMOKE_LOCK="$P281_FLOCK" TEAM_SMOKE_LOCK_WAIT=2 TMPDIR="$P281F" \\
+  TEAM_SMOKE_FIXTURE=1 SMOKE_LOCK_SELFTEST_CHILD=0 \\
+  SMOKE_LOCK_WRAPPED=1 SMOKE_LOCK_MARKER="$P281F/marker" \\
+  bash "$root/tests/smoke.sh"
+P281FEOF
+  bash "$P281F/forge.sh" >"$out" 2>&1
+}
+P281F_REAL="$(p281f_tree real)"; P281F_BROKEN="$(p281f_tree broken broken)"
+p281f_scene
+P281F_BEFORE="$(cat "$P281_FLOCK.holder" 2>/dev/null || true)"
+p281f_forge "$P281F_REAL" "$P281F/guarded.log"
+assert_eq "34b⑬ 继承 marker 的后代不许改写真持有者的记录（pid 还是它）" \
+  "$(gate_lock_record_get "$P281_FLOCK.holder" pid)" "$P281F_FPID"
+assert_eq "34b⑬ 记录一个字节没动（也没被删）" \
+  "$(cat "$P281_FLOCK.holder" 2>/dev/null || printf '<MISSING>')" "$P281F_BEFORE"
+assert_has "$P281F/guarded.log" "不覆写、不删除" "34b⑬ 它把这次拒绝打了出来（可见，不静默）"
+assert_has "$P281F/guarded.log" "另一个活着的进程" "34b⑬ 拒绝的理由是「记录里另有一个活着的进程」"
+# 红侧：同一现场，只把写权证明拆掉（最小可跑树的副本）→ 记录必须被改写（夹具分得出两者）
+p281f_forge "$P281F_BROKEN" "$P281F/broken.log"
+P281F_AFTER_BAD="$(gate_lock_record_get "$P281_FLOCK.holder" pid)"
+if [ "$P281F_AFTER_BAD" != "$P281F_FPID" ]; then
+  ok "34b⑬ 红侧：拆掉写权证明 → 真持有者的记录被改写（改为 ${P281F_AFTER_BAD:-<无>}）—— 这一条断言分得出两者"
+else
+  bad "34b⑬ 红侧：拆掉写权证明后记录居然没被改写 —— 夹具失效（绿侧那条断言没被证到）"
+fi
+assert_not "$P281F/broken.log" "不覆写、不删除" "34b⑬ 红侧：拆掉后没有那条拒绝行"
+# 正对照：记录陈旧（那个进程已经跑完）→ 允许接管 —— 判据不是「一律拒绝」，是「记录里活着的不是我」
+rm -f "$P281_FLOCK.holder" 2>/dev/null || true; rm -rf "$P281_FLOCK.runs" 2>/dev/null || true
+sleep 0.3 & P281F_STALE_PID=$!
+wait "$P281F_STALE_PID" 2>/dev/null || true
+if kill -0 "$P281F_STALE_PID" 2>/dev/null; then
+  bad "34b⑬ 正对照没搭起来（刚回收的 pid=$P281F_STALE_PID 立刻被复用了）"
+else
+  gate_lock_write_holder "$P281_FLOCK" "$P281F_STALE_PID" top "p281-stale" dev "$P281F" \
+    "$(( $(date +%s) - 500 ))" 600 2400 3 0 - -
+  P281F_STALE=0; gate_lock_holder_claimable "$P281_FLOCK" "$$" && P281F_STALE=1
+  assert_eq "34b⑬ 正对照：陈旧记录（进程已跑完）→ 允许接管（不是一律拒绝）" "$P281F_STALE" "1"
+fi
+p281f_release
+rm -f "$P281_FLOCK.holder" 2>/dev/null || true
+rm -rf "$P281F" 2>/dev/null || true
 
 section "35 · 门禁只判正确性：性能判定守卫 + 旋钮完整性（M58 · perf-suite-split）"
 # 用户决定 D33：性能判定与正确性门禁分开（规格：openspec/changes/perf-suite-split）。本段是**纯逻辑**，
@@ -20666,19 +21257,24 @@ assert_eq "P70 对账：#N 从 1 起严格递增无缺口" \
   "$P70_S_STARTS"
 assert_not_file "$SG_MARKER" "P70 对账：本套没有触发过超时"
 [ -d "$SG_SCENE" ] && bad "P70 对账：干净跑留下了现场" || ok "P70 对账：没有现场目录（干净跑不该建）"
-# 进度自述只在超过间隔的段出现（段内跑完却打进度行 = 自述成了判决 → 红）
+# 进度自述只在超过间隔的段出现（段内跑完却打进度行 = 自述成了判决 → 红）。
+# P281 返修轮次 1：这条断言背后有**两把钟** —— 进度行里的「已运行 Ns」是看门狗进程读的钟，
+# 段账本里的用时是跑段的那一端在收口时读的钟。看门狗在负载高时会被调度推迟（本机实测 ~3s），
+# 于是它可能在段**已经收口之后**才打印那一行（行里说 60s、账本里 57s —— §34b 长到 ~57s 之后就撞上了）。
+# 允许一个小的调度偏差；偏差之外的早打印照旧红（自述成判决的形状：段跑了十几秒却打了 60s 的行）。
+P70_PROG_SLACK=5
 P70_PROG_BAD=0
 while IFS= read -r P70_N; do
   [ -n "$P70_N" ] || continue
   P70_E="$(awk -F'\t' -v n="$P70_N" 'NR>1 && $1 == n { print $4; exit }' "$SG_TIMING")"
   [ -n "$P70_E" ] || continue
   case "$P70_E" in *[!0-9]*) continue ;; esac
-  if [ "$P70_E" -lt "$SG_PROGRESS_INTERVAL" ]; then
-    bad "P70 对账：段落 #$P70_N 用时 ${P70_E}s < 间隔 ${SG_PROGRESS_INTERVAL}s，却有进度行"
+  if [ "$P70_E" -lt "$(( SG_PROGRESS_INTERVAL - P70_PROG_SLACK ))" ]; then
+    bad "P70 对账：段落 #$P70_N 用时 ${P70_E}s < 间隔 ${SG_PROGRESS_INTERVAL}s（容忍 ${P70_PROG_SLACK}s 调度偏差），却有进度行"
     P70_PROG_BAD=1
   fi
 done < <(grep -oE '^… 段落 #[0-9]+' "$SG_LOG" 2>/dev/null | grep -oE '[0-9]+$' | sort -u)
-[ "$P70_PROG_BAD" = "0" ] && ok "P70 对账：没有「段内完成却打进度行」的段"
+[ "$P70_PROG_BAD" = "0" ] && ok "P70 对账：没有「段内完成却打进度行」的段（间隔 ${SG_PROGRESS_INTERVAL}s ± ${P70_PROG_SLACK}s 调度偏差）"
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

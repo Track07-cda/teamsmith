@@ -634,6 +634,46 @@ created (or `flock` is absent) the suite prints `注意：锁文件 … 建不�
 *queue overrun* is loud (a one-line `排队超限` naming the holder in `<lock>.holder`, exit 2), and a genuine
 red is exit 1 with no queue wording (P66/P100's F1).
 
+**A nested run does not queue on the gate lock, and it must prove its ancestor.** The lock serialises
+**top-level** runs only. A run started inside a run that holds the lock — *proved* by walking the process
+ancestry to the pid recorded in `<lock>.holder` / `<lock>.runs/<pid>.run` and matching that process's start
+time, never by the inherited `SMOKE_LOCK_WRAPPED` marker (a fixture can clear it, and a nested run carrying it
+used to overwrite and delete the real holder's record) — does not queue: queueing there hands the machine's one
+shared resource to a fixture and deadlocks the run against its own ancestor. It registers itself in
+`<lock>.runs/<pid>.run` instead, so a waiter can attribute what it is waiting for. A run that cannot prove a
+live ancestor holding the lock (including on a host without `/proc`) is treated as top-level and queues exactly
+as before, so skipping the queue is never unconditional. The holder record names its kind (`top`/`nested`), its
+seat and its worktree (derived from the runtime directory by the same rule as `team notify`'s sender, never from
+a tmux window name; unresolvable fields are written `?`, not guessed), its start time, its expected duration and
+its bound (the section table's Σband / Σbudget over the sections that run will execute), and the waiter prints
+that record when it starts queueing and again when it hits its cap. Only the process that really holds the lock
+writes and removes the holder record — and it writes only when that record is absent, stale (its process is gone)
+or already names that same pid: the inherited `SMOKE_LOCK_MARKER` file is a hint, not a proof, so a descendant
+that rewrites the marker with its own pid still cannot overwrite or delete a record naming another **live**
+process. A record whose process is gone is printed as stale and ignored, and no run removes a record it did not
+write. A nested run must finish inside the section that spawned it: its section
+guard is armed with a deadline taken from the ancestor's currently armed section (the record publishes the
+section guard's heartbeat path; the nested run reads `armed_epoch + budget` and takes the smaller of that and
+its own table budget), so it trips at the suite's own safe point, names the section and the bound, stops and
+leaves its scene; a fixture that leaves a registered nested run alive after its spawning section closed gets one
+visible line naming it, and only the pids the fixture itself registered are signalled.
+
+**The residual window is the explicit opt-out.** `TEAM_SMOKE_NO_LOCK=1`, a host without `flock` or the fast mode
+(which runs no real-process section) leave the suite unserialised, so two seats' nested runs can overlap there.
+The suite prints `no_lock=1` with the reason **and registers that run** in `<lock>.runs/<pid>.run` with
+`no_lock=1` when that happens: the window is *observable* in the record, not just on stdout, and it is not
+asserted away. The gate can prove that the record carries these fields, that a waiter prints them, and that a nested run
+past its bound is named and stopped — it **cannot** prove that a live seat read the line and acted on it, nor
+that two seats' nested runs never overlap. Those two are outside what the gate can show.
+
+**The queue cap follows the holder's published expected duration.** When the holder record publishes `started`
+and `expected`, the waiter's cap is `clamp(remaining + 60 s, TEAM_SMOKE_LOCK_WAIT, 4 × TEAM_SMOKE_LOCK_WAIT)`
+with `remaining = expected − (now − started)`, and the waiter prints that arithmetic together with the three
+numbers; when the record publishes no `expected` (an older writer, or an unreadable record) the cap stays
+`TEAM_SMOKE_LOCK_WAIT` exactly as before. The verdict token set (`PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN`), the
+`queued Ns / ran Ns / limit Ns` accounting and the rule that a queue overrun is `FAIL` (never `TIMEOUT`) with
+the holder named are all unchanged.
+
 **The gate fingerprints the tree it judges (P158).** Once the run's own root exists it records `HEAD` and the
 sha256 of `git status --porcelain --untracked-files=all` (untracked files included) into the run's scene file
 (`<run tmp>/run-fingerprint.txt`, next to `sections.tsv`), and compares that fingerprint again after the last

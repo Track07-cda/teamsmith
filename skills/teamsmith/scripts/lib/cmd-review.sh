@@ -3,6 +3,15 @@
 #
 # 设计要点（来自 CEP 的教训）：agent 的自述不算证据，PM 必须在**独立 worktree** 上
 # checkout 该分支、跑门禁、看 diff，并把结论写成 <docs>/reviews/<ID>.md。
+#
+# P281（change: gate-lock-hygiene）：门禁共享锁的记录格式与读写是 `lib/gate-lock.sh` 里的**唯一**
+# 实现（`tests/smoke.sh` 共用同一份）。它不叫 `cmd-*.sh`（不是一条命令），所以不在 `scripts/team`
+# 的 `lib/cmd-*.sh` 装载循环里 —— 这里显式装。
+REVIEW_LIB_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || printf '%s' "$SELF_DIR/lib")"
+if [ -z "${GATE_LOCK_LIB:-}" ]; then
+  # shellcheck source=lib/gate-lock.sh
+  . "$REVIEW_LIB_DIR/gate-lock.sh"
+fi
 
 # 解析分支：--branch > 任务在跑的 agent 的当前分支 > 唯一的 task/<ID>-* 分支
 team__resolve_branch() { # <ID> → _R；rc：0=唯一命中 1=找不到 2=歧义。M50 进程内变体（永不 team_die）
@@ -1065,11 +1074,16 @@ $(printf '%s\n' "$ignored_list" | head -5)
     # 其它用具：TEAM_SMOKE_LOCK（路径，默认同 smoke）、TEAM_SMOKE_LOCK_WAIT（上限，默认 1800s）。
     local lock="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
     local queue_started gate_end marker_epoch
+    # P281：排队上限不再是「一律 W」——持有者公布了 expected 就按
+    #   cap = clamp(remaining + 60s, W, 4×W)   （remaining = expected − (now − started)）
+    # 算，并打印算式与三个数；记录里没有 expected（旧写入者 / 读不到）→ 退回 W（一字不改）。
+    local lock_wait cap_remaining cap_expected cap_started
     lock_cap="${TEAM_SMOKE_LOCK_WAIT:-1800}"
     case "$lock_cap" in ''|*[!0-9]*) lock_cap=1800 ;; esac
+    lock_wait="$lock_cap"
     queue_started="$(date +%s)"
     queue_marker="$(mktemp "${TMPDIR:-/tmp}/teamsmith-review-queue.XXXXXX" 2>/dev/null || true)"
-    queue_holder="$(cat "$lock.holder" 2>/dev/null || printf '持有者未知')"
+    queue_holder="$(gate_lock_describe "$lock")"
     if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
       queue_state="held"
       team_info "门禁锁：已由祖先持有（SMOKE_LOCK_WRAPPED=1）→ 本次不排队"
@@ -1086,7 +1100,10 @@ $(printf '%s\n' "$ignored_list" | head -5)
       local lock_probe=0
       flock -n "$lock" true 2>/dev/null || lock_probe=$?
       if [ "$lock_probe" -eq 1 ]; then
-        team_info "门禁锁正被持有（${queue_holder}）；排队，最多等 ${lock_cap}s（TEAM_SMOKE_LOCK_WAIT 可调）"
+        IFS=$'\t' read -r lock_cap cap_remaining cap_expected cap_started \
+          < <(gate_lock_cap "$lock" "$lock_wait")
+        case "$lock_cap" in ''|*[!0-9]*) lock_cap="$lock_wait" ;; esac
+        team_info "门禁锁正被持有（${queue_holder}）；排队，最多等 ${lock_cap}s（算式：remaining=${cap_remaining}s + 60s → cap=${lock_cap}s，下限 TEAM_SMOKE_LOCK_WAIT=${lock_wait}s，上限 4×=$(( lock_wait * 4 ))s；TEAM_SMOKE_LOCK_WAIT 可调）"
       elif [ "$lock_probe" -gt 1 ]; then
         team_warn "flock 探锁失败（rc=${lock_probe}）→ 仍按排队路径走（拿不到锁时会报排队超限）"
       fi
@@ -1096,12 +1113,21 @@ $(printf '%s\n' "$ignored_list" | head -5)
       export SMOKE_LOCK_WRAPPED=1
       export TEAM_SMOKE_LOCK="$lock"
       used_lock="$lock"
+      # P281：持有者记录由**真的拿到锁的那个进程**写（就是下面那个 bash -c，拿到锁之后、跑门禁之前），
+      # 字段与 smoke.sh 同形。行格式只在 gate-lock.sh 里定义一次：包装器 . 上那个库、调同一个写函数
+      # （`start=` 是**它自己**的 starttime，所以必须在包装器里算，不能在 review 进程里预算）。
+      export GATE_KIND=top GATE_CMD="team review $id" GATE_NOLOCK=0 GATE_ANCESTOR=-
+      export GATE_AGENT="$(gate_lock_seat_of_dir "${TEAM_CWD:-$PWD}")" GATE_WT="$(gate_lock_worktree_of_dir "${TEAM_CWD:-$PWD}")"
+      export GATE_STARTED="$(date +%s)" GATE_HB=-
+      IFS=$'\t' read -r GATE_EXP GATE_BND GATE_SECS \
+        < <(gate_lock_expected "${TEAM_SKILL_DIR:-$SELF_DIR/..}/tests/smoke.sh" "${TEAM_SKILL_DIR:-$SELF_DIR/..}/tests/section-budgets.tsv")
+      export GATE_EXP GATE_BND GATE_SECS
     fi
     local gate_rc=0 gate_started grace deadline_min
-    local QUEUE_WRAP='marker="$1"; holder="$2"; id="$3"; shift 3; date +%s > "$marker"; printf "%s pid=%s cmd=team review %s\n" "$(date -Is)" "$$" "$id" > "$holder" 2>/dev/null || true; exec "$@"'
+    local QUEUE_WRAP='marker="$1"; holder="$2"; lib="$3"; shift 3; printf "%s %s\n" "$(date +%s)" "$$" > "$marker"; . "$lib"; gate_lock_record_write "$holder" "$$" "$GATE_KIND" "$GATE_CMD" "$GATE_AGENT" "$GATE_WT" "$GATE_STARTED" "$GATE_EXP" "$GATE_BND" "$GATE_SECS" "$GATE_NOLOCK" "$GATE_ANCESTOR" "$GATE_HB"; unset GATE_KIND GATE_CMD GATE_AGENT GATE_WT GATE_STARTED GATE_EXP GATE_BND GATE_SECS GATE_NOLOCK GATE_ANCESTOR GATE_HB; exec "$@"'
     local -a gate_cmd=()
     if [ "$queue_state" = "queued" ]; then
-      gate_cmd=(flock --close -w "$lock_cap" "$lock" bash -c "$QUEUE_WRAP" _ "$queue_marker" "$lock.holder" "$id")
+      gate_cmd=(flock --close -w "$lock_cap" "$lock" bash -c "$QUEUE_WRAP" _ "$queue_marker" "$lock.holder" "$REVIEW_LIB_DIR/gate-lock.sh")
     fi
     gate_cmd+=(${runner[@]+"${runner[@]}"} env ${gate_env[@]+"${gate_env[@]}"} bash -c "$TEAM_GATES")
     # M25-②：门禁的 stdin 必须是 /dev/null，**不能**是调用者的 tty。实测（tests/smoke.sh 6i-b）：
@@ -1111,6 +1137,8 @@ $(printf '%s\n' "$ignored_list" | head -5)
     gate_end="$(date +%s)"
     if [ -n "$queue_marker" ] && [ -s "$queue_marker" ]; then
       marker_epoch="$(cat "$queue_marker" 2>/dev/null)"
+      # P281：marker 现在是 `<epoch> <pid>`（与 smoke.sh 同一约定）—— 只取第一个字段当时刻
+      marker_epoch="${marker_epoch%% *}"
       case "$marker_epoch" in ''|*[!0-9]*) marker_epoch="$(date +%s)" ;; esac
       queued_elapsed=$(( marker_epoch - queue_started ))
       [ "$queued_elapsed" -lt 0 ] && queued_elapsed=0
@@ -1125,6 +1153,7 @@ $(printf '%s\n' "$ignored_list" | head -5)
       gates_marker="queuecap"
       queued_elapsed=$(( gate_end - queue_started ))
       [ "$queued_elapsed" -lt 0 ] && queued_elapsed=0
+      queue_holder="$(gate_lock_describe "$lock")"   # 撞上限时**重读**：等的这段时间持有者可能换了
       gates_out="（门禁锁排队超过上限 ${lock_cap}s：**门禁没有运行**。持锁者：${queue_holder}。这不是对代码的判定 —— 等持锁者结束，或抬 TEAM_SMOKE_LOCK_WAIT 后重跑。）"
       gate_elapsed=""
       used_timeout=0
