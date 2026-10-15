@@ -193,14 +193,14 @@ kr_group_pane() {
 
   # ① 第 5 页：列表帧（两行 + 页签身份）
   keys "5"; sleep 0.6
-  want_frame list5 "pane：第 5 页列表帧（编号 + 标题 + 自称发布者）" "#3 长正文" "#2 第二份回复" "#1 完整结论与取舍" "关键回复"
+  want_frame list5 "pane：第 5 页列表帧（编号 + 标题 + 发布者标签）" "#3 长正文" "#2 第二份回复" "#1 完整结论与取舍" "关键回复"
   assert_has "$tmp/$current/list5.txt" "关键回复" "pane：页签显示第 5 页身份"
   assert_has "$tmp/$current/list5.txt" "个编号槽位" "pane：列表带编号槽位计数（不冒充可读回复数）"
   ev_save "$tmp/$current/list5.txt" "pane-list5.txt"
   # ② Enter 打开焦点（最新号）→ 正文视窗；End 滚到最后一行，END-MARKER 可达
   keys Enter; sleep 0.6
-  want_frame viewer "pane：Enter 打开焦点号的完整正文" "长正文" "自称来自 dev2"
-  assert_has "$tmp/$current/viewer.txt" "只读 · 发布者自称，未经核验" "pane：正文视窗写明自称且只读"
+  want_frame viewer "pane：Enter 打开焦点号的完整正文" "长正文" "来自 dev2"
+  assert_has "$tmp/$current/viewer.txt" "只读 · 按发布的原文显示" "pane：正文视窗只读且按发布的原文显示（没有限定词）"
   assert_not "$tmp/$current/viewer.txt" "END-MARKER-P234" "pane：视窗打开时停在文首（长文没有被一次性铺满）"
   keys End; sleep 0.6
   want_frame viewer_end "pane：End 滚到长正文结尾，END-MARKER 可达" "END-MARKER-P234"
@@ -255,7 +255,7 @@ kr_group_demand() {
   # ③ 打开某号：多一个 reply_body --no <no>
   reset_argv
   keys Down; sleep 0.3; keys Enter; sleep 1.5
-  want_frame body "demand：打开某号后正文视窗渲染" "只读 · 发布者自称"
+  want_frame body "demand：打开某号后正文视窗渲染" "只读 · 按发布的原文显示"
   assert_eq "demand：打开正文时没有 list 的新调用" "$(block_calls reply_list)" "0"
   if [ "$(block_calls reply_body)" -ge 1 ]; then ok "demand：打开正文后 body 被调度（$(block_calls reply_body) 次）"; else bad "demand：打开正文后没有 body 调用"; fi
   assert_match "$(kr_argv)" 'reply_body.*--no [0-9]+' "demand：body 调用带上了要读的编号（argv 可查）"

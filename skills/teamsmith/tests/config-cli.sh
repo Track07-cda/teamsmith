@@ -6,7 +6,7 @@
 #   TEAM_CONFIG_KEEP=1 bash ...                              # keep the fixture directory
 #   TEAM_CONFIG_TREE=<tree> bash ...                         # run against another checkout (used by flip)
 #
-# Sections: list groups writer inject cas validate audit models shape flip-shape model-window flip-model-window seats completeness docs callers flip groups-flip json
+# Sections: list groups writer inject cas validate seam audit models shape flip-shape model-window flip-model-window seats completeness docs callers flip groups-flip json
 # Exit: 0 every selected section green, 1 at least one assertion failed, 3 setup failure.
 #
 # Nothing here touches the caller's project: every fixture is a fresh git repo under $TMPDIR, the
@@ -109,7 +109,7 @@ need_python() { command -v python3 >/dev/null 2>&1; }
 need_python || { printf 'config-cli: 需要 python3（JSON 断言）\n' >&2; exit 3; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate audit roster models shape flip-shape model-window flip-model-window seats completeness docs callers flip groups-flip json)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(list groups writer inject cas validate seam audit roster models shape flip-shape model-window flip-model-window seats completeness docs callers flip groups-flip json)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- list
@@ -383,6 +383,94 @@ if want validate; then
   out="$(run_in "$none" config set TEAM_GATES x --yes)"; rc=$?
   [ "$rc" -ne 0 ] && ok "无契约时 set 非 0（rc=$rc）" || bad "无契约时 set 居然成功"
   case "$out" in *"team init"*) ok "无契约时 set 的报错点名 team init" ;; *) bad "报错没点名 team init（$out）" ;; esac
+fi
+
+# ---------------------------------------------------------------- seam（P266 · panel-plain-language）
+# 两个由 schema 自由文本列携带的**声明**（判的是标记在不在，属逻辑；D170）：
+#   ① 只给夹具用的四个键以 `fixture-only: ` 开头 —— 读面照旧报告，面板据此隐藏那一行（panel 夹具对照）。
+#   ② 四个 agent 适配器键（内部预留接缝）的备注非空 —— 面板把它画在行下，位置就是这一列。
+# 红侧：scratch 树里把 TEAM_AGENT_CMD 的备注拿掉（标记丢了）→ 本段非 0 并点名该键；还原 → 绿。
+if want seam; then
+  section "seam · fixture-only 声明标记 / 适配器备注的位置（P266）"
+  p="$(new_proj seam)" || exit 3
+  cfg="$p/.pi/team/config.sh"
+  json="$(run_in "$p" config list --json)"
+  # ① 声明标记：四条记录的 route 原样带前缀，class 不变（kind/default 不在标记的范围内动）
+  missing="$(printf '%s' "$json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+by = {k["name"]: k for k in d["keys"]}
+need = [n for n in ("TEAM_DISK_STATS_FILE", "TEAM_SMOKE_FAST", "TEAM_INBOX_WATCH_FORCE_FAIL", "TEAM_IW_REQUIRE_WATCH") if not str(by.get(n, {}).get("route", "")).startswith("fixture-only: ") or by.get(n, {}).get("class") != "refuse"]
+print(",".join(need))
+')"
+  [ -z "$missing" ] && ok "四个夹具键都是 refuse 且 route 以 fixture-only: 开头（声明标记是数据）" \
+    || bad "P266：夹具键丢了声明标记或改了类：[ $missing ]"
+  # ② 适配器键的备注位置：仍是 apply、备注非空
+  missing="$(printf '%s' "$json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+by = {k["name"]: k for k in d["keys"]}
+need = [n for n in ("TEAM_AGENT_CMD", "TEAM_AGENT_NOTIFY_CMD", "TEAM_AGENT_LOG_GLOB", "TEAM_AGENT_BIN") if by.get(n, {}).get("class") != "apply" or not str(by.get(n, {}).get("route", "")).strip()]
+print(",".join(need))
+')"
+  [ -z "$missing" ] && ok "四个适配器键仍是 apply 且备注非空（标记住在自由文本列里）" \
+    || bad "P266：适配器键的标记丢了：[ $missing ]"
+  # 读面 / 人读表 / 写面一字不变（加法不碰这三处）
+  human="$(run_in "$p" config list)"
+  case "$human" in *"KEY"*"CLASS"*"KIND"*"VALUE"*) ok "人读表表头仍是 KEY CLASS KIND VALUE" ;; *) bad "人读表表头变了" ;; esac
+  case "$human" in *TEAM_DISK_STATS_FILE*) ok "人读表仍列出夹具键" ;; *) bad "人读表漏了夹具键" ;; esac
+  case "$human" in *TEAM_AGENT_CMD*) ok "人读表仍列出适配器键" ;; *) bad "人读表漏了适配器键" ;; esac
+  sha0="$(sha_of "$cfg")"
+  run_in "$p" config set TEAM_DISK_STATS_FILE /tmp/x --yes >/dev/null 2>&1; rc=$?
+  assert_eq "夹具键仍是 refuse（exit 5）" "$rc" "5"
+  assert_eq "refuse 写不动契约" "$(sha_of "$cfg")" "$sha0"
+  run_in "$p" config set TEAM_AGENT_CMD 'myagent {prompt}' --yes >/dev/null 2>&1; rc=$?
+  assert_eq "适配器键仍可写（exit 0，类没有变成 refuse）" "$rc" "0"
+  # 红侧：scratch 树里把 TEAM_AGENT_CMD 的备注拿掉（标记丢了）→ 段红并点名；还原 → 绿
+  if [ -n "$_tree_arg" ]; then
+    skip "P266 红侧：本次已是 scratch 树再入运行（TEAM_CONFIG_TREE 已设），不重复嵌套"
+  else
+    stree="$tmp/seam-tree"; mkdir -p "$stree/skills/teamsmith"
+    cp -a "$skill/scripts" "$skill/templates" "$skill/references" "$stree/skills/teamsmith/"
+    scc="$stree/skills/teamsmith/scripts/lib/cmd-config.sh"
+    set +e
+    TEAM_CONFIG_TREE="$stree" bash "$here/config-cli.sh" seam > "$tmp/seam-flip-green0.log" 2>&1
+    s_rc0=$?
+    [ "$s_rc0" -eq 0 ] && ok "P266 红侧前置：scratch 树原状 seam 段绿（rc=0，红不是因为缺文件）" \
+      || { bad "P266 红侧前置：scratch 树原状就红了（rc=$s_rc0，翻转无效）"; grep -a '✗' "$tmp/seam-flip-green0.log" | head -3 | sed 's/^/      /'; }
+    python3 - "$scc" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+rows = [l for l in s.split('\n') if l.startswith('TEAM_AGENT_CMD|')]
+assert len(rows) == 1, 'TEAM_AGENT_CMD schema row not found'
+note = '|预留：为以后可能更换的 agent 适配器保留，不是受支持的扩展方式，也不承诺兼容；新项目初始化时不问'
+assert note in rows[0], 'TEAM_AGENT_CMD row carries no reservation note'
+s = s.replace(rows[0], rows[0].replace(note, '|'), 1)
+open(p, 'w', encoding='utf-8').write(s)
+PY
+    if grep -q '^TEAM_AGENT_CMD|apply|tpl|launch|plain||-|||roster$' "$scc"; then
+      ok "P266 mutant：TEAM_AGENT_CMD 的预留说明被拿掉（标记丢了）"
+    else
+      bad "P266 mutant 没打中（备注原样）"
+    fi
+    TEAM_CONFIG_TREE="$stree" bash "$here/config-cli.sh" seam > "$tmp/seam-flip-red.log" 2>&1
+    s_rc_red=$?
+    if [ "$s_rc_red" -ne 0 ] && grep -q '✗.*TEAM_AGENT_CMD' "$tmp/seam-flip-red.log"; then
+      ok "P266 红侧：丢掉标记 → seam 段非 0（rc=$s_rc_red）并点名 TEAM_AGENT_CMD"
+    else
+      bad "P266 红侧：丢掉标记后没有点名 TEAM_AGENT_CMD（rc=$s_rc_red）"
+      grep -a '✗' "$tmp/seam-flip-red.log" | head -3 | sed 's/^/      /'
+    fi
+    printf '    --- P266 红侧尾部 ---\n'
+    { grep -aE '✗.*TEAM_AGENT_CMD|== 结果' "$tmp/seam-flip-red.log" || true; } | tail -4 | sed 's/^/    /'
+    cp -a "$cmd_config" "$scc"
+    TEAM_CONFIG_TREE="$stree" bash "$here/config-cli.sh" seam > "$tmp/seam-flip-restored.log" 2>&1
+    s_rc_rest=$?
+    [ "$s_rc_rest" -eq 0 ] && ok "P266 还原：标记加回 → seam 段重新绿（rc=0）" \
+      || { bad "还原后没有变绿（rc=$s_rc_rest）"; grep -a '✗' "$tmp/seam-flip-restored.log" | head -3 | sed 's/^/      /'; }
+    set +e
+  fi
 fi
 
 # ---------------------------------------------------------------- audit

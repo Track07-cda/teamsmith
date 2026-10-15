@@ -15,6 +15,11 @@
 //   5. the contract-group labels (P30): the same schema rows' tenth column (`group`) is a closed
 //      ASCII token, and every token one of them uses has a non-empty `group_<token>` in **both**
 //      tables while no `group_` label names a token no row uses (both directions).
+//   6. the fixture marker is data (P266): the schema rows that carry the declared `fixture-only: `
+//      marker in their free-text column are read here (the fixture side may read the schema, the
+//      panel body must not) and the panel sources outside `src/strings/**` must name none of those
+//      keys and must not mention the owning command's schema at all — the view learns what to hide
+//      from the read's own `route` payload and never from a baked-in key list (§4.3).
 //
 // The tables are plain ESM, so they are copied to a temp dir as `.mjs` and imported with the plain
 // JS runtime this script runs on; no TypeScript loader (or bundler) is involved.
@@ -182,6 +187,33 @@ try {
       }
     }
     if (rows.length) console.log(`ok: contract-group labels — ${tokens.size} schema group tokens covered in zh and en`)
+
+    // 6. P266 (panel-plain-language, tasks.md §4.3): the fixture marker is data. This script reads
+    // the schema (the fixture side may); the panel body — everything but the label tables — must
+    // not, and must name no marked key: the hiding rule reads the marker off the read's payload.
+    // Falsifiable by the mutation "hiding is a hardcoded name list" (a name shows up here) or by
+    // pointing the view at the schema.
+    const MARKER = 'fixture-only: '
+    const fixtureKeys = rows.filter((row) => String(row.fields[6] ?? '').startsWith(MARKER)).map((row) => row.key)
+    if (!fixtureKeys.length) {
+      fail(`no schema row carries the declared marker ${JSON.stringify(MARKER)} in its route column (memory-and-deps owns it)`)
+    }
+    if (!fixtureKeys.length) {
+      // nothing to cross-check
+    } else {
+      const bodyText = walk(srcDir)
+        .map((file) => stripComments(readFileSync(file, 'utf8')))
+        .join('\n')
+      const tokens = ['cmd-config.sh', 'team_config_schema', ...fixtureKeys]
+      const named = tokens.filter((token) => bodyText.includes(token))
+      if (named.length) {
+        fail(
+          `the panel body names [ ${named.join(', ')} ] — it must read fixture-only keys from the read's \`route\`, not from the schema or a key list`,
+        )
+      } else {
+        console.log(`ok: fixture marker is data — ${fixtureKeys.length} marked key(s), none named in the panel body`)
+      }
+    }
   }
 } finally {
   rmSync(tmp, { recursive: true, force: true })

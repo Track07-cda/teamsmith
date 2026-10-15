@@ -1422,7 +1422,10 @@ export function App({
       const key = row.key
       if (key.class === 'refuse') {
         setReceipt(null)
-        setStatus(`${key.name} · ${key.route || key.warning || stringsRef.current.settingsRefusedRoute}`)
+        // P266: the route speaks in plain language; the raw key only leads when the row has no other
+        // name for itself (a key the schema does not know — its row's own text is that raw name).
+        const named = key.known === false ? `${key.name} · ` : ''
+        setStatus(`${named}${key.route || key.warning || stringsRef.current.settingsRefusedRoute}`)
         return
       }
       // The whole-map row's editor is the categories block, never a composed pair list (P232).

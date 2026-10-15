@@ -507,7 +507,7 @@ assert_no_class_heading() { # <capture file> [label]
   local f="$1" label="${2:-视图没有类分组标题（分组是功能域）}"
   # M59/P127: `{ … || true; } | grep -q` — the capture file can outgrow the pipe buffer; grep -q
   # exits on the first hit and sed would take SIGPIPE (rc=141 → a class heading falsely "absent").
-  if { sed 's/[│|]//g' "$f" || true; } | grep -qE '^ *(立即生效|需要重启|只读|Takes effect now|Needs a restart|Read-only) *$'; then
+  if { sed 's/[│|]//g' "$f" || true; } | grep -qE '^ *(立即生效|需重启|不可改|apply|restart|change in file) *$'; then
     bad "$label（捕获里出现了只有类词的行）"
   else
     ok "$label"
@@ -582,12 +582,44 @@ PYFIX
   assert_eq "导航行打开视图没有写 panel.conf" "$(sha "$state/panel.conf" 2>/dev/null || echo none)" "$conf_before"
   cap_to view
   # P30/D2：分组 = schema 第 10 列的功能域。视图开屏在只读骨架（identity），标题就是功能域名；
-  # 旧的三条类分组标题（立即生效 / 需要重启 / 只读）不再是标题（徽章词仍在，见类徽章段）。
+  # 旧的三条类分组标题（立即生效 / 需重启 / 不可改）不再是标题（徽章词仍在，见类徽章段）。
   assert_has "$tmp/$current/view.txt" "身份与账本布局" "功能域分组标题（identity，开屏即见）"
   assert_no_class_heading "$tmp/$current/view.txt"
   # 行文本是人话标签（不是裸键），开屏聚焦行是 identity 的第一条 schema 键。
-  assert_match "$tmp/$current/view.txt" '› 项目名 +.*只读' "开屏聚焦行是 identity 第一条（标签 + 只读 徽章）"
+  assert_match "$tmp/$current/view.txt" '› 项目名 +.*不可改' "开屏聚焦行是 identity 第一条（标签 + 不可改 徽章）"
   assert_not "$tmp/$current/view.txt" "TEAM_GATES" "行里不再出现裸键 TEAM_GATES"
+  # P266：审计整块离开视图（标题与行都不画）——审计仍可用 `team config list` 自己的尾部和 `team config log` 读。
+  assert_not "$tmp/$current/view.txt" "审计（最近）" "P266：视图里没有审计标题"
+  assert_not "$tmp/$current/view.txt" "result=" "P266：视图里没有 state/config.log 的审计行"
+  assert_no_match "$tmp/$current/view.txt" '^(│ )? *(Audit|审计)' "P266：没有任何一行是审计标题"
+  # P266：夹具键是数据驱动的隐藏：行不在视图里，按标签与裸键过滤都搜不到，而同组其它行还在。
+  local p266_k p266_cfg_before p266_json p266_route p266_human p266_rc
+  for p266_k in TEAM_DISK_STATS_FILE TEAM_SMOKE_FAST TEAM_INBOX_WATCH_FORCE_FAIL TEAM_IW_REQUIRE_WATCH; do
+    filter_to "$p266_k"
+    cap_to "p266-hidden-$p266_k"
+    assert_not "$tmp/$current/p266-hidden-$p266_k.txt" "$p266_k" "P266：$p266_k 不在视图里（按裸键搜不到）"
+  done
+  assert_not "$tmp/$current/p266-hidden-TEAM_DISK_STATS_FILE.txt" "磁盘读数夹具" "P266：隐藏的夹具键连人话标签也搜不到"
+  filter_to 磁盘读数夹具
+  cap_to p266-hidden-label
+  assert_not "$tmp/$current/p266-hidden-label.txt" "磁盘读数夹具" "P266：按标签过滤也搜不到夹具键"
+  # 同一组（policy）里还有可见键：标题因为别的行还在，不因隐藏而空。
+  filter_to TEAM_MEMINFO_FILE
+  cap_to p266-group-alive
+  assert_has "$tmp/$current/p266-group-alive.txt" "权限与依赖" "P266：同组其它行还在（隐藏的只是夹具键，标题没跟着消失）"
+  assert_not "$tmp/$current/p266-group-alive.txt" "TEAM_MEMINFO_FILE" "P266：那一帧里仍然只有人话标签，没有裸键"
+  filter_clear
+  # 读面与命令面一字不变：人读表仍列出、--json 仍带声明标记、set 仍 refuse。
+  p266_cfg_before="$(sha "$(cfg)")"
+  p266_human="$( ( cd "$ROOT" && bash "$skill/scripts/team" config list ) 2>&1 )"
+  case "$p266_human" in *TEAM_DISK_STATS_FILE*) ok "P266：人类可读表仍列出夹具键" ;; *) bad "P266：人类可读表不再列出夹具键" ;; esac
+  p266_json="$( ( cd "$ROOT" && bash "$skill/scripts/team" config list --json ) 2>&1 )"
+  p266_route="$(printf '%s' "$p266_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print([k["route"] for k in d["keys"] if k["name"]=="TEAM_DISK_STATS_FILE"][0])')"
+  case "$p266_route" in "fixture-only: "*) ok "P266：--json 的 route 原样带 fixture-only: 前缀" ;; *) bad "P266：--json 的 route 丢了声明标记（$p266_route）" ;; esac
+  ( cd "$ROOT" && bash "$skill/scripts/team" config set TEAM_DISK_STATS_FILE /tmp/x --yes ) >/dev/null 2>&1
+  p266_rc=$?
+  assert_eq "P266：config set 夹具键仍 refuse（exit 5）" "$p266_rc" "5"
+  assert_eq "P266：refuse 没有动契约" "$(sha "$(cfg)")" "$p266_cfg_before"
   # 组内保持 schema 顺序（项目名 在 会话名 之前）。
   local n_first n_second
   n_first="$(grep -n '项目名' "$tmp/$current/view.txt" | head -1 | cut -d: -f1)"
@@ -609,8 +641,10 @@ PYFIX
   assert_has "$tmp/$current/restart.txt" "命令行：team config set TEAM_PULSE_INTERVAL <新值>" "CLI 提示行点名原始键（照敲命令用）"
   filter_to TEAM_PROJECT
   cap_to refuse
-  assert_match "$tmp/$current/refuse.txt" '项目名 +root · 只读' "refuse 行的标签 + 只读 徽章"
-  assert_has "$tmp/$current/refuse.txt" "手改 .pi/team/config.sh 里的 TEAM_PROJECT" "refuse 提示行点名原始键与手改路线"
+  assert_match "$tmp/$current/refuse.txt" '项目名 +root · 不可改' "refuse 行的标签 + 不可改 徽章"
+  assert_has "$tmp/$current/refuse.txt" "这个值要改项目配置文件 .pi/team/config.sh，界面不能改" "refuse 提示行是那句普通的文件路线"
+  assert_not "$tmp/$current/refuse.txt" "手改" "P266：refuse 提示行里没有「手改」"
+  assert_not "$tmp/$current/refuse.txt" "只读" "P266：refuse 行的徽章不再写「只读」"
   # P32：短列表（一条过滤结果）也把卡片填满 —— 空白留在卡片**里面**，卡片下边框仍紧贴键栏。
   cap_visible_to filter-fill
   fstats="$(settings_window_stats "$tmp/$current/filter-fill.txt")"
@@ -626,11 +660,11 @@ PYFIX
   filter_to TEAM_PULSE_NUDGE_GAP
   cap_to comment
   assert_match "$tmp/$current/comment.txt" '重复提醒间隔 +900 · 立即生效 +# 15min' "行内注释原样渲染"
-  # M49 回退：schema 不认识的键没有标签 → 行的主文本就是原始键（未知键徽章 + 未知键提示）。
+  # M49 回退：schema 不认识的键没有标签 → 行的主文本就是原始键（「不认识」徽章 + 提示行）。
   filter_to TEAM_HAND_ADDED
   cap_to unknown
-  assert_match "$tmp/$current/unknown.txt" 'TEAM_HAND_ADDED +hand · 未知键' "schema 不认识的键回退显示原始键"
-  assert_has "$tmp/$current/unknown.txt" "未知键：TEAM_HAND_ADDED" "未知键的提示行说清楚为什么没有标签"
+  assert_match "$tmp/$current/unknown.txt" 'TEAM_HAND_ADDED +hand · 不认识' "schema 不认识的键回退显示原始键"
+  assert_has "$tmp/$current/unknown.txt" "TEAM_HAND_ADDED：这个设置在文件里，工具不认识它" "未知键的提示行说清楚为什么没有标签"
   # The filter matches the label (M49), key or value; esc clears it without closing the view.
   filter_to 巡检周期
   cap_to filter-label
@@ -703,15 +737,15 @@ PYFIX
   local before; before="$(sha "$(cfg)")"
   filter_to TEAM_SESSION
   sleep 0.3
-  if focus_row '会话名 +.*只读'; then
+  if focus_row '会话名 +.*不可改'; then
     keys Enter
   else
     bad "没能把焦点移到 refuse 行"
   fi
-  if wait_cap refuse-route "手改"; then ok "refuse 行的回执点名路线"; else bad "refuse 行的回执没出现"; fi
+  if wait_cap refuse-route "只能改项目配置文件"; then ok "refuse 行的回执点名普通路线（不是命令行黑话）"; else bad "refuse 行的回执没出现"; fi
   assert_eq "refuse 行没有写契约" "$(sha "$(cfg)")" "$before"
-  # P144：磁盘底线的两行 + 夹具缝一行 —— 行主文本是标签（不是裸键），类徽章照旧；缝是 refuse：
-  # 回车只给路线，不开编辑器、不写契约。
+  # P144：磁盘底线的两行 —— 行主文本是标签（不是裸键），类徽章照旧。P266：夹具缝行已经**不在视图里**
+  # （上面刚证过），它的读面与命令面由那里的断言守住。
   filter_to 临时根空间底线
   cap_to p144-mb
   assert_match "$tmp/$current/p144-mb.txt" '› 临时根空间底线 +未设 · 默认 1024 · 立即生效' \
@@ -722,14 +756,6 @@ PYFIX
   cap_to p144-ino
   assert_match "$tmp/$current/p144-ino.txt" '› 临时根 inode 底线 +未设 · 默认 100000 · 立即生效' \
     "P144：临时根 inode 底线 行是人话标签 + apply 徽章"
-  local p144_before; p144_before="$(sha "$(cfg)")"
-  filter_to 磁盘读数夹具
-  cap_to p144-seam
-  assert_match "$tmp/$current/p144-seam.txt" '› 磁盘读数夹具 +.*只读' \
-    "P144：磁盘读数夹具 行是人话标签 + refuse 徽章"
-  if focus_row '磁盘读数夹具 +.*只读'; then keys Enter; else bad "P144：没能把焦点移到夹具缝行"; fi
-  if wait_cap p144-seam-route "手改"; then ok "P144：缝行的回执点名手改路线（不开编辑器）"; else bad "P144：缝行的回执没出现"; fi
-  assert_eq "P144：缝行没有写契约" "$(sha "$(cfg)")" "$p144_before"
   # M59: the navigation esc is state-checked too — it fires only while the settings view is on a
   # settled frame, so a drifted scene gets a named red instead of a blind key.
   pty_key_when "esc 回浮层" '╭─ 项目设置' Escape || bad "esc 前设置视图已经不在屏幕上"
@@ -758,10 +784,10 @@ PYFIX
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-s = s.replace('TEAM_GATES|apply|cmd||plain||-|', 'TEAM_GATES|refuse|cmd||plain||-|改门禁请手改（scratch 夹具）')
+s = s.replace('TEAM_GATES|apply|cmd||plain||-|', 'TEAM_GATES|refuse|cmd||plain||-|改门禁要改项目配置文件（scratch 夹具）')
 anchor = 'TEAM_INSTALL_CMD|apply|cmd||plain||-|||workflow'
 assert anchor in s, '找不到 TEAM_INSTALL_CMD 的 schema 行'
-s = s.replace(anchor, 'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\n' + anchor, 1)
+s = s.replace(anchor, 'TEAM_ZZZ_TEST|apply|text||plain|zzz-default|-|||workflow\nTEAM_ZZZ_FIXTURE|refuse|path|file,opt|plain||-|fixture-only: 只在 scratch 夹具里用||policy\n' + anchor, 1)
 open(p, 'w', encoding='utf-8').write(s)
 PYFIX
   cat > "$tmp/$current-scratch-wrapper.sh" <<EOF2
@@ -778,11 +804,47 @@ EOF2
   wait_row scratch-key "scratch 视图里的 TEAM_ZZZ_TEST 行" 'TEAM_ZZZ_TEST' '未设 · 默认 zzz-default' \
     || bad "scratch CLI 新增的键行没有在预算内出现"
   assert_match "$tmp/$current/scratch-key.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "scratch CLI 新增的键出现在视图里（不重建 panel.js；无标签→回退裸键）"
+  # P266（设计表 248）：同一张 scratch schema 里再添一行**带标记**的新键 → 它不进渲染（隐藏规则读标记，
+  # 不是 bundle 里写死的四个键名；这一行是 fixture 里从没出现过的名字）。
+  filter_to TEAM_ZZZ_FIXTURE
+  cap_to scratch-marked
+  assert_not "$tmp/$current/scratch-marked.txt" "TEAM_ZZZ_FIXTURE" "P266：带 fixture-only 标记的新键被隐藏（规则是数据，不是名单）"
+  filter_clear
   filter_to TEAM_GATES
-  wait_row scratch-class "scratch 视图里的 TEAM_GATES 行（类改成只读）" '门禁命令' 'true · 只读' \
+  wait_row scratch-class "scratch 视图里的 TEAM_GATES 行（类改成不可改）" '门禁命令' 'true · 不可改' \
     || bad "scratch CLI 改过的类行没有在预算内出现"
-  assert_match "$tmp/$current/scratch-class.txt" '门禁命令 +true · 只读' "scratch CLI 改过的类跟着变（bundle 没有第二张键表）"
-  assert_has "$tmp/$current/scratch-class.txt" "手改 .pi/team/config.sh 里的 TEAM_GATES" "scratch CLI 的拒统路线也点名原始键"
+  assert_match "$tmp/$current/scratch-class.txt" '门禁命令 +true · 不可改' "scratch CLI 改过的类跟着变（bundle 没有第二张键表）"
+  assert_has "$tmp/$current/scratch-class.txt" "这个值要改项目配置文件 .pi/team/config.sh" "scratch CLI 的 refuse 提示行仍是那句普通路线"
+  if focus_row '门禁命令 +true · 不可改'; then keys Enter; else bad "P266：没能把焦点移到 scratch 的 refuse 行"; fi
+  if wait_cap scratch-route "改门禁要改项目配置文件（scratch 夹具）"; then
+    ok "P266：scratch CLI 自己写的备注原样上屏（路线不是写死的）"
+  else
+    bad "P266：scratch CLI 的备注没有上屏"
+  fi
+  # P266 红侧（数据驱动）：把 scratch 树里夹具键的声明标记删掉 → 那一行回到视图；还原 → 又消失。
+  local marker_red_cfg
+  marker_red_cfg="$scratch/skills/teamsmith/scripts/lib/cmd-config.sh"
+  python3 - "$marker_red_cfg" <<'PYFIX'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+mark = 'fixture-only: 只在测试套件里用（磁盘读数夹具）'
+assert mark in s, '找不到夹具键的声明标记'
+s = s.replace('|' + mark + '||policy', '|||policy', 1)
+open(p, 'w', encoding='utf-8').write(s)
+PYFIX
+  P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
+  open_view
+  filter_to 磁盘读数夹具
+  wait_row p266-marker-red "标记删掉后夹具键回到视图" '磁盘读数夹具' '不可改' \
+    || bad "P266 红侧：删掉声明标记后那一行没有回到视图"
+  assert_match "$tmp/$current/p266-marker-red.txt" '磁盘读数夹具 +.*不可改' "P266 红侧：行回来了（隐藏跟着读侧的数据走）"
+  cp -a "$skill/scripts/lib/cmd-config.sh" "$marker_red_cfg"
+  P21_CLI="$tmp/$current-scratch-wrapper.sh" start_panel
+  open_view
+  filter_to 磁盘读数夹具
+  cap_to p266-marker-green
+  assert_not "$tmp/$current/p266-marker-green.txt" "磁盘读数夹具" "P266 还原：标记加回后那一行再次消失"
   # M49：另一种语言的人话标签（同一张表切换，标签不是渲染时的硬编码）。
   conf_set "lang=en" "page=1" "activity=1" "mouse=1" "density=comfortable" "theme=auto"
   start_panel
@@ -791,6 +853,13 @@ EOF2
   cap_to en
   assert_match "$tmp/$current/en.txt" '› Patrol interval' "en 行的人话标签（行不是裸键）"
   assert_has "$tmp/$current/en.txt" "CLI: team config set TEAM_PULSE_INTERVAL <value>" "en 的 CLI 提示行同样点名原始键"
+  # P266：两种语言的样张都要能给评审直接读（报告里贴的就是这些帧）：走到尾部，两个块标题 + 席位原因。
+  filter_clear
+  sleep 0.4
+  walk_to_tail en-tail
+  assert_has "$tmp/$current/en-tail.txt" "The model the next task will use" "en 的类别块标题（下一次派任务会用的模型）"
+  assert_has "$tmp/$current/en-tail.txt" "The model running tasks actually use" "en 的席位块标题（正在运行的任务实际使用的模型）"
+  assert_has "$tmp/$current/en-tail.txt" "this seat has not been given a task yet" "en 的「这个席位还没有派过任务」（席位没有记录）"
 
   # ── P32：视图用满窗口高度（用户实测 45 行里 16 行空白）+ 行数记账诚实 ──
   # 同一条契约、同一个面板，只改 pane 行高：① 内容结尾（卡片下边框）到键栏的空白 ≤1 行；
@@ -802,8 +871,9 @@ EOF2
   start_panel
   open_view
   local want_count
+  # P266：视图里的行 = schema 键（减去被声明为 fixture-only 的键）+ 类别 + 席位 + PM 启动记录。
   want_count="$( (cd "$ROOT" && bash "$skill/scripts/team" config list --json) \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); m=d.get("models",{}); print(len(d["keys"]) + len(m.get("policy",{}).get("categories",[])) + len(m.get("assignments",[])) + (1 if m.get("pm_launch") else 0))' )"
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); m=d.get("models",{}); keys=[k for k in d["keys"] if not str(k.get("route","")).startswith("fixture-only: ")]; print(len(keys) + len(m.get("policy",{}).get("categories",[])) + len(m.get("assignments",[])) + (1 if m.get("pm_launch") else 0))' )"
   [ "${want_count:-0}" -gt 0 ] || bad "读数拿不到键数（前提不成立）"
   local h s rows up down gap prev_rows=""
   for h in 45 33 30 25; do
@@ -1486,7 +1556,7 @@ scn_policy() {
   open_view
   # ① 类别行：未来策略 + 「新任务」徽章 + 命令行点名 set-task-model
   filter_to 类别
-  wait_row policy-cat "类别 routine 行（策略模型 + 新任务徽章）" '任务类别（未来策略）' '类别 routine' 'kimi-coding/k3-256k' \
+  wait_row policy-cat "类别 routine 行（策略模型 + 新任务徽章）" '下一次派任务会用的模型' '类别 routine' 'kimi-coding/k3-256k' \
     || bad "类别行没有在预算内出现"
   # 视图的快照行、命令行提示行都跟着**焦点**走：先把光标移到类别行，再看这一行的两半（M49）。
   if focus_row '› 类别 routine'; then :; else bad "没能把焦点移到类别 routine 行"; fi
@@ -1495,19 +1565,35 @@ scn_policy() {
   assert_has "$tmp/$current/policy-cat.txt" "team config set-task-model routine <model>" "命令行点名 set-task-model（唯一写者）"
   # ② 策略 ≠ 实际：dev 的只读行显示**记录**里的模型，行里不出现策略模型
   filter_to dev
-  wait_row policy-dev "dev 的只读派单行" '实际派单记录（只读）' 'xai/grok-4.6' \
+  wait_row policy-dev "dev 的只读派单行" '正在运行的任务实际使用的模型' 'xai/grok-4.6' \
     || bad "dev 的派单行没有在预算内出现"
   if focus_row '› dev '; then :; else bad "没能把焦点移到 dev 的派单行"; fi
   cap_to policy-dev
-  assert_match "$tmp/$current/policy-dev.txt" 'dev +xai/grok-4.6 · 只读' "记录模型逐字显示（不是策略模型）"
+  assert_match "$tmp/$current/policy-dev.txt" 'dev +xai/grok-4.6 · 不可改' "记录模型逐字显示（不是策略模型）"
   assert_not "$tmp/$current/policy-dev.txt" "kimi-coding/k3-256k" "派单行里不出现未来策略的模型"
-  assert_has "$tmp/$current/policy-dev.txt" "SID sid-dev-232" "派单行带已提交的 SID"
-  assert_has "$tmp/$current/policy-dev.txt" "只读：实际模型来自已提交的派单记录" "命令行说明这是派单决定的只读面"
+  assert_has "$tmp/$current/policy-dev.txt" "会话 sid-dev-232" "派单行带已提交的会话号"
+  assert_has "$tmp/$current/policy-dev.txt" "任务派出去以后就固定用它当时的模型" "命令行说明这一行是派单决定的只读面"
   # ③ 没有记录的席位：不借策略模型
   filter_to verify
-  wait_row policy-verify "verify 的「没有完整派单记录」行" 'verify' '没有完整派单记录' \
+  wait_row policy-verify "verify 的「还没有派过任务」行" 'verify' '这个席位还没有派过任务' \
     || bad "无记录席位行没有在预算内出现"
   assert_not "$tmp/$current/policy-verify.txt" "kimi-coding/k3-256k" "无记录席位行不借未来策略的模型"
+  # ③b P266（设计表的红侧第二格）：同一个席位换成一份「存在、但读不出来」的记录（旧格式：版本不是 1）
+  # → 说法换成另一句。面板从读侧的 record_present 事实选措辞（无文件 = 没派过；有文件 = 读不出来），
+  # 不解析诊断字符串。
+  printf 'assignment_version=0\nseat=verify\nmodel=vendor/legacy\n' > "$state/verify.env"
+  reopen_view
+  filter_to verify
+  wait_row policy-unreadable "record_present=true：有记录但读不出来" 'verify' '这个席位派过任务，但它的记录读不出来' \
+    || bad "「读不出来」的席位行没有在预算内出现"
+  assert_not "$tmp/$current/policy-unreadable.txt" "还没有派过任务" "P266：有记录但读不出来时不说「还没派过任务」（两个原因分得开）"
+  assert_not "$tmp/$current/policy-unreadable.txt" "legacy/unknown assignment_version" "P266：命令的诊断字符串不上屏"
+  local pol_json_verify
+  pol_json_verify="$( ( cd "$ROOT" && bash "$skill/scripts/team" config list --json ) \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); r=[a for a in d["models"]["assignments"] if a["agent"]=="verify"][0]; print("assigned=%s record_present=%s diagnostic=%s" % (r["assigned"], r.get("record_present"), r.get("diagnostic")))' )"
+  assert_eq "P266：读侧把这一行报成 assigned=false 且 record_present=true（诊断只留给机器）" \
+    "$pol_json_verify" "assigned=False record_present=True diagnostic=legacy/unknown assignment_version"
+  rm -f "$state/verify.env"
   # ④ 一次类别直写：picker 用项目自己的词表，写走 set-task-model 的 dry-run → --yes
   filter_to 类别
   sleep 0.5
@@ -1534,7 +1620,7 @@ scn_policy() {
   fi
   cap_to policy-written
   assert_not "$tmp/$current/policy-written.txt" "确认：" "值条目直写没有确认帧"
-  assert_has "$tmp/$current/policy-written.txt" "只影响新任务" "回执说明只影响新任务"
+  assert_has "$tmp/$current/policy-written.txt" "只影响以后派的新任务" "回执说明只影响以后派的新任务"
   assert_has "$tmp/$current/policy-written.txt" "没有重启任何进程" "回执说明没有进程被重启"
   argv_since "$pol_argv" "$tmp/$current/policy-argv.log"
   assert_match "$tmp/$current/policy-argv.log" 'config set-task-model routine xai/grok-4.6 --actor panel --dry-run --fingerprint [0-9a-f]{64}' "argv 记录 set-task-model --dry-run"
@@ -1624,15 +1710,15 @@ scn_categories() {
     || bad "整映射删除 routine 失败"
   reopen_view
   filter_to dev
-  wait_row cat-kept "删类别后 dev 的派单行仍在" 'xai/grok-4.6' 'SID sid-dev-232' \
+  wait_row cat-kept "删类别后 dev 的派单行仍在" 'xai/grok-4.6' '会话 sid-dev-232' \
     || bad "删类别后派单行没有在预算内出现"
-  assert_match "$tmp/$current/cat-kept.txt" 'dev +xai/grok-4.6 · 只读' "删类别后记录模型仍是记录里的值"
-  assert_has "$tmp/$current/cat-kept.txt" "SID sid-dev-232" "删类别后 SID 原样"
+  assert_match "$tmp/$current/cat-kept.txt" 'dev +xai/grok-4.6 · 不可改' "删类别后记录模型仍是记录里的值"
+  assert_has "$tmp/$current/cat-kept.txt" "会话 sid-dev-232" "删类别后会话号原样"
   filter_to 类别
   cap_to cat-deleted
   assert_not "$tmp/$current/cat-deleted.txt" "类别 routine" "被删的类别不再有策略行"
   assert_match "$tmp/$current/cat-deleted.txt" '类别 (analysis|verify)' "其余类别照旧在策略块里"
-  assert_match "$tmp/$current/cat-deleted.txt" '^│ ── 任务类别（未来策略） ─+' "类别块本身还在（只删了 routine）"
+  assert_match "$tmp/$current/cat-deleted.txt" '^│ ── 下一次派任务会用的模型 ─+' "类别块本身还在（只删了 routine）"
   # ⑥ 无 spawn/重启：整段没有任何 dispatch/resume/restart，窗口集合不变
   argv_since "$scn_argv" "$tmp/$current/categories-argv.log"
   assert_not "$tmp/$current/categories-argv.log" "dispatch" "整个场景没有 dispatch"
@@ -1647,21 +1733,21 @@ scn_categories() {
   open_view
   # 诊断行按 头…尾 换行（不截断路线）：命令原文可能跨两行，所以断言的是路线的**词**都在屏幕上
   # （升级命令名 + 它的参数），而不是一整串连续子串。
-  wait_row legacy-diagnosis "遗留配置的迁移诊断" '策略迁移诊断' '含退休键' 'upgrade-models' \
+  wait_row legacy-diagnosis "遗留配置的迁移诊断" '旧设置需要升级' '含退休键' 'upgrade-models' \
     || bad "遗留配置的迁移诊断没有在预算内出现"
   assert_has "$tmp/$current/legacy-diagnosis.txt" "upgrade-models" "诊断给出 CLI 升级命令（命令名可见）"
   assert_has "$tmp/$current/legacy-diagnosis.txt" "--task-models" "诊断给出升级命令的参数（不被截掉）"
   assert_has "$tmp/$current/legacy-diagnosis.txt" "--dry-run" "诊断给出升级命令的预览步骤（不被截掉）"
   assert_has "$tmp/$current/legacy-diagnosis.txt" "TEAM_DEFAULT_MODEL" "诊断点名退休键"
   local legacy_cat_heading
-  legacy_cat_heading="$(cap_line_heading "$tmp/$current/legacy-diagnosis.txt" '任务类别（未来策略）')"
+  legacy_cat_heading="$(cap_line_heading "$tmp/$current/legacy-diagnosis.txt" '下一次派任务会用的模型')"
   assert_eq "遗留配置没有可编辑的类别块（没有假的可编辑策略）" "$legacy_cat_heading" "0"
   filter_to TEAM_DEFAULT_MODEL
   # 筛选也匹配行内注释（M49 的既有口径），而 TEAM_PM_MODEL 的初始化注释里就写着 TEAM_DEFAULT_MODEL ——
   # 所以这里必须先把光标走到退休键那一行，否则回车打到的是 PM 行（第一遍就是这么红的）。
   if focus_row '› TEAM_DEFAULT_MODEL'; then :; else bad "没能把焦点移到退休键行"; fi
   cap_to legacy-key
-  assert_match "$tmp/$current/legacy-key.txt" 'TEAM_DEFAULT_MODEL +.*未知键' "退休键变成只读的未知键行（没有席位默认编辑器）"
+  assert_match "$tmp/$current/legacy-key.txt" 'TEAM_DEFAULT_MODEL +.*不认识' "退休键变成只读的未知键行（没有席位默认编辑器）"
   keys Enter
   if wait_cap legacy-route "不是已知的项目设置"; then ok "退休键的回执点名它不在 schema 里（不给编辑）"; else bad "退休键的回执没有出现"; fi
   cap_to legacy-route
@@ -1843,11 +1929,18 @@ foot = next((i for i, l in enumerate(lines) if i > bot and ('\u5199\u4fe1' in l 
 if top < 0 or bot < 0 or foot < 0:
     print('-1 -1 -1 -1'); sys.exit(0)
 interior = lines[top + 1:bot]
-audit = next((i for i, l in enumerate(interior) if '\u5ba1\u8ba1\uff08\u6700\u8fd1\uff09' in l or 'Audit' in l), -1)
-if audit < 3:
+# P266：尾部只剩聚焦行的 CLI 提示行（有迁移诊断时还有它那一块）——不再有审计块。内容的最后一条
+# 非空行就是提示行（或诊断的最后一行）；诊断存在时，尾部从诊断标题那一行开始（提示行在它上面，也
+# 属于尾部）。
+content = [i for i, l in enumerate(interior) if l.strip('\u2502 ').rstrip()]
+if not content:
     print('-1 -1 -1 -1'); sys.exit(0)
-# 尾部固定占位：CLI 提示行、空行、审计标题（audit-2 起），所以行只可能在 audit-2 之前。
-tail_start = audit - 2
+diag = next((i for i, l in enumerate(interior) if '\u65e7\u8bbe\u7f6e\u9700\u8981\u5347\u7ea7' in l or 'need an upgrade' in l), -1)
+if diag >= 0:
+    above = [i for i in content if i < diag]
+    tail_start = above[-1] if above else diag
+else:
+    tail_start = content[-1]
 rows = up = down = 0
 for i, l in enumerate(interior):
     b = l.strip('\u2502 ').rstrip()
@@ -1953,7 +2046,9 @@ walk_to_tail() { # <capture name>
     for i in $(seq 1 140); do keys Down; sleep 0.01; done
     for i in $(seq 1 12); do
       cap_to "$name"
-      if grep -q '任务类别' "$tmp/$current/$name.txt" && grep -q '›' "$tmp/$current/$name.txt"; then hit=1; break; fi
+      # P266：类别块的标题改成普通话（两种语言各一条）——尾部的“到了”判据跟着标题走。
+      if { grep -q '下一次派任务会用的模型' "$tmp/$current/$name.txt" || grep -q 'The model the next task will use' "$tmp/$current/$name.txt"; } \
+         && grep -q '›' "$tmp/$current/$name.txt"; then hit=1; break; fi
       sleep 0.4   # 块被 TTL 重读换成摘要行（已知现象）→ 等它回来，必要时再走一轮
     done
     [ "$hit" = 1 ] && break
@@ -2017,17 +2112,17 @@ scn_groups() {
   assert_match "$tmp/$current/tone-restart.txt" '巡检周期 +.*需重启' "restart 行的徽章词仍在"
   assert_badge_tone "$tmp/$current/tone-restart-e.txt" '巡检周期' '需重启' 'warn' "restart 徽章 = warn tone"
   filter_to TEAM_PROJECT
-  wait_row tone-refuse "refuse 徽章行" '项目名' 'root · 只读' \
+  wait_row tone-refuse "refuse 徽章行" '项目名' 'root · 不可改' \
     || bad "refuse 行没有在预算内出现"
   cap_e_to tone-refuse-e
-  assert_match "$tmp/$current/tone-refuse.txt" '项目名 +root · 只读' "refuse 行的徽章词仍在"
-  assert_badge_tone "$tmp/$current/tone-refuse-e.txt" '项目名' '只读' 'dim' "refuse 徽章 = dim tone"
+  assert_match "$tmp/$current/tone-refuse.txt" '项目名 +root · 不可改' "refuse 行的徽章词仍在"
+  assert_badge_tone "$tmp/$current/tone-refuse-e.txt" '项目名' '不可改' 'dim' "refuse 徽章 = dim tone"
   # ④ 可见降级：schema 不认识的键落在「未分组」，且「未分组」在席位块之前（走到列表末尾看）。
   filter_to TEAM_HAND_ADDED
-  wait_row hand-added "未分组里的手加未知键行" 'TEAM_HAND_ADDED' 'hand · 未知键' \
+  wait_row hand-added "未分组里的手加未知键行" 'TEAM_HAND_ADDED' 'hand · 不认识' \
     || bad "未知键的行没有在预算内出现"
-  assert_match "$tmp/$current/hand-added.txt" 'TEAM_HAND_ADDED +hand · 未知键' "未知键的行仍在（没有消失）"
-  assert_has "$tmp/$current/hand-added.txt" "未知键：TEAM_HAND_ADDED" "未知键仍按原始键点名"
+  assert_match "$tmp/$current/hand-added.txt" 'TEAM_HAND_ADDED +hand · 不认识' "未知键的行仍在（没有消失）"
+  assert_has "$tmp/$current/hand-added.txt" "TEAM_HAND_ADDED：这个设置在文件里" "未知键仍按原始键点名"
   [ "$(cap_line_heading "$tmp/$current/hand-added.txt" '未分组')" -gt 0 ] \
     && ok "未知键落在可见的「未分组」标题下" || bad "未知键没有落在「未分组」标题下"
   assert_match "$tmp/$current/hand-added.txt" '^│ ── 未分组 ─+' "降级组标题也是同一种分节线（标题体系一致）"
@@ -2036,13 +2131,13 @@ scn_groups() {
   walk_to_tail tail
   local n_ungrouped n_categories
   n_ungrouped="$(cap_line_heading "$tmp/$current/tail.txt" '未分组')"
-  n_categories="$(cap_line_heading "$tmp/$current/tail.txt" '任务类别')"
+  n_categories="$(cap_line_heading "$tmp/$current/tail.txt" '下一次派任务会用的模型')"
   if [ "$n_ungrouped" -gt 0 ] && [ "$n_categories" -gt 0 ] && [ "$n_ungrouped" -lt "$n_categories" ]; then
     ok "「未分组」在类别块之前（未分组=$n_ungrouped < 任务类别=$n_categories）"
   else
     bad "尾部顺序不对（未分组=$n_ungrouped 任务类别=$n_categories）"
   fi
-  assert_match "$tmp/$current/tail.txt" '^│ ── 任务类别（未来策略） ─+' "类别块标题也是同一种分节线（标题体系一致）"
+  assert_match "$tmp/$current/tail.txt" '^│ ── 下一次派任务会用的模型 ─+' "类别块标题也是同一种分节线（标题体系一致）"
   # ⑤ 无键→域表：scratch CLI 让 TEAM_ZZZ_TEST 带 workflow、把 TEAM_GATES 移到 meeting；
   #    提交的那份 bundle 必须跟着两个标题走（bundle 里没有第二张键表/组表）。
   local scratch="$tmp/$current/scratch"
@@ -2110,7 +2205,7 @@ PY
   assert_has "$tmp/$current/tail-scratch.txt" "门禁命令" "降级组里畸形行同屏（schema 行可见）"
   local n_u n_s
   n_u="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '未分组')"
-  n_s="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '任务类别')"
+  n_s="$(cap_line_heading "$tmp/$current/tail-scratch.txt" '下一次派任务会用的模型')"
   if [ "$n_u" -gt 0 ] && [ "$n_s" -gt 0 ] && [ "$n_u" -lt "$n_s" ]; then
     ok "scratch 尾部：「未分组」仍在类别块之前（$n_u < $n_s）"
   else
@@ -2144,7 +2239,7 @@ PY
   # ② 视图里的滚轮：一格一行、焦点不动、顶部计数行跟随（先下滚 3 格，再上滚回顶部）。
   open_view
   cap_to wheel-before
-  assert_match "$tmp/$current/wheel-before.txt" '› 项目名 +.*只读' "视图开屏焦点在第一行（identity 第一条）"
+  assert_match "$tmp/$current/wheel-before.txt" '› 项目名 +.*不可改' "视图开屏焦点在第一行（identity 第一条）"
   wheel_at down 20 10 3
   local i
   for i in $(seq 1 20); do
@@ -2155,7 +2250,8 @@ PY
   assert_match "$tmp/$current/wheel-down.txt" '↑3' "下滚 3 格：顶部计数行读出 ↑3（窗口正好移 3 行）"
   assert_not "$tmp/$current/wheel-down.txt" "项目名" "下滚 3 格：原本第一行（项目名）已出窗"
   assert_has "$tmp/$current/wheel-down.txt" "名册" "下滚 3 格：后面的行进窗（窗口第一行 = 第 4 条）"
-  assert_has "$tmp/$current/wheel-down.txt" "只读：手改 .pi/team/config.sh 里的 TEAM_PROJECT" "下滚 3 格：焦点没动（命令行仍点名 TEAM_PROJECT）"
+  assert_no_match "$tmp/$current/wheel-down.txt" '›' "下滚 3 格：焦点没动（光标落在已出窗的项目名上，窗口里没有光标行）"
+  assert_has "$tmp/$current/wheel-down.txt" "这个值要改项目配置文件 .pi/team/config.sh，界面不能改" "下滚 3 格：命令行提示仍在"
   wheel_at up 20 10 3
   for i in $(seq 1 20); do
     cap_to wheel-up
@@ -2177,7 +2273,7 @@ PY
     || bad "↓ 之后窗口没有被推到聚焦行上"
   assert_match "$tmp/$current/wheel-push.txt" '↑1' "↓ 之后窗口被推到聚焦行上（顶部计数行 = ↑1）"
   assert_match "$tmp/$current/wheel-push.txt" '› 会话名' "光标落在下一条（会话名）"
-  assert_has "$tmp/$current/wheel-push.txt" "只读：手改 .pi/team/config.sh 里的 TEAM_SESSION" "命令行与光标同一行（焦点在会话名上）"
+  assert_has "$tmp/$current/wheel-push.txt" "这个值要改项目配置文件 .pi/team/config.sh，界面不能改" "命令行提示与光标同一屏（焦点在会话名上）"
   keys Up
   # `↑` 计数行消失（字面 needle：`!↑1` = 刚才那条 ↑1 不再在屏幕上；pty-wait 是 grep -F，不吃正则，
   # 所以不能用原断言的 `↑[0-9]+`；下面的 assert_no_match 仍守住正则面）。
@@ -2186,8 +2282,8 @@ PY
   assert_match "$tmp/$current/wheel-push-back.txt" '› 项目名' "↑ 之后光标回到第一条"
   assert_no_match "$tmp/$current/wheel-push-back.txt" '↑[0-9]+' "窗口跟着回到顶部（计数行消失）"
   keys Enter
-  if wait_cap wheel-enter "只读：手改 .pi/team/config.sh 里的 TEAM_PROJECT"; then
-    ok "enter 打开的行 = 命令行点名的行（TEAM_PROJECT 的只读路线）"
+  if wait_cap wheel-enter "只能改项目配置文件 .pi/team/config.sh 里的这一行"; then
+    ok "enter 打开的行 = 回执点名的那一行（项目名的只读路线）"
   else
     bad "enter 之后没有出现聚焦行的路线回执"
   fi

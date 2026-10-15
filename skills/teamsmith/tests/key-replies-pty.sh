@@ -61,7 +61,7 @@ kr_group_pages() {
   fixture_up pages "dev2|完整结论与取舍|$b1" "verify|第二份回复|$b2"
   start_panel || { bad "pages：面板起不来"; return 1; }
   keys "5"; sleep 0.6
-  want_frame list5 "pages：第 5 页列表帧（编号/标题/自称发布者）" "#2 第二份回复" "#1 完整结论与取舍" "关键回复"
+  want_frame list5 "pages：第 5 页列表帧（编号/标题/发布者标签）" "#2 第二份回复" "#1 完整结论与取舍" "关键回复"
   assert_has "$tmp/$current/list5.txt" "个编号槽位" "pages：列表带编号槽位计数"
   assert_has "$tmp/$current/list5.txt" "更早" "pages：Older 控件可见"
   ev_save "$tmp/$current/list5.txt" "pty-pages-list5.txt"
@@ -114,13 +114,13 @@ PYT
     --width 120 --height 28 --lang zh 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g' >"$tmp/ov-snap.txt"
   assert_has "$tmp/ov-snap.txt" "最新关键回复" "overview：总览摘要行带标题标签"
   assert_has "$tmp/ov-snap.txt" "#1 总览入口标题" "overview：总览摘要行显示最新编号与标题"
-  assert_has "$tmp/ov-snap.txt" "dev2" "overview：总览摘要行显示自称发布者"
+  assert_has "$tmp/ov-snap.txt" "dev2" "overview：总览摘要行显示发布者标签"
   start_panel || { bad "overview：面板起不来"; return 1; }
   want_frame ov_pane "overview：面板总览上的摘要行" "#1 总览入口标题" "最新关键回复"
   keys "5"; sleep 0.6
   want_frame ov_page5 "overview：按 5 到第 5 页最新列表" "#1 总览入口标题" "个编号槽位"
   keys Enter; sleep 0.6
-  want_frame ov_body "overview：列表上 Enter 用同一正文视窗打开" "总览入口回复" "只读 · 发布者自称，未经核验"
+  want_frame ov_body "overview：列表上 Enter 用同一正文视窗打开" "总览入口回复" "只读 · 按发布的原文显示"
   ev_save "$tmp/$current/ov_pane.txt" "pty-overview-summary.txt"
 }
 
@@ -145,7 +145,7 @@ kr_group_list() {
   sleep 0.4
   want_frame focus_last "list：连续 ↓ 把焦点移到最旧的 #1（末端夹住，光标在 #1 行）" "› #1 第 1 号"
   keys Enter; sleep 0.8
-  want_frame first_body "list：打开最旧的 #1，全文可读" "#1 关键回复" "批量回复正文" "只读 · 发布者自称"
+  want_frame first_body "list：打开最旧的 #1，全文可读" "#1 关键回复" "批量回复正文" "只读 · 按发布的原文显示"
   keys "q"; sleep 0.6
   want_frame back_ctx "list：q 返回列表且仍是同一页与同一焦点" "› #1 第 1 号"
   keys Right; sleep 1.2
@@ -163,7 +163,7 @@ kr_group_body() {
   fixture_up body "dev2|长正文|$long"
   start_panel || { bad "body：面板起不来"; return 1; }
   keys "5"; sleep 0.6; keys Enter; sleep 0.8
-  want_frame top "body：视窗打开在文首" "长正文" "自称来自 dev2"
+  want_frame top "body：视窗打开在文首" "长正文" "来自 dev2"
   assert_not "$tmp/$current/top.txt" "END-MARKER-P234" "body：打开时不在结尾（长文不是一次铺满）"
   keys End; sleep 0.6
   want_frame end "body：End 到结尾，END-MARKER 可见" "END-MARKER-P234"
@@ -217,7 +217,7 @@ kr_group_mouse() {
     --hint "#38 鼠标 38 号" --out "$tmp/m-open.bin" >"$tmp/m-open.log" 2>&1
   rc=$?
   if [ "$rc" = "0" ]; then ok "mouse：第二点注入成功"; else bad "mouse：第二点注入失败（rc=$rc）"; fi
-  want_frame m_open "mouse：再点同一行打开该号正文（第二次点击才是打开）" "鼠标夹具正文" "只读 · 发布者自称" "#38 关键回复"
+  want_frame m_open "mouse：再点同一行打开该号正文（第二次点击才是打开）" "鼠标夹具正文" "只读 · 按发布的原文显示" "#38 关键回复"
   # Back 芯片：单击返回
   python3 "$SELF_DIR/panel-b3-pty-tmux-mouse.py" --sock "$sock" --session "$sess" --pane "$sess:panel" \
     --hint "返回" --out "$tmp/m-back.bin" >"$tmp/m-back.log" 2>&1
@@ -312,7 +312,7 @@ kr_group_async() {
   # ③ 打开正文 → 一个带编号的 body 调用
   reset_argv
   keys Enter; sleep 1.2
-  want_frame body "async：正文视窗渲染" "只读 · 发布者自称"
+  want_frame body "async：正文视窗渲染" "只读 · 按发布的原文显示"
   assert_match "$(kr_argv)" 'reply_body.*--no [0-9]+' "async：body 调用带要读的编号"
   # ④ 返回 → 不再请求 body；离开第 5 页 → list/body 都不再请求
   reset_argv

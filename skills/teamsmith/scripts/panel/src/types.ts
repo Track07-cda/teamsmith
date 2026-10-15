@@ -304,7 +304,10 @@ export interface SettingsKey {
   comment: string
   /** A command-side warning (an unknown seat token in TEAM_AGENT_MODELS, …). */
   warning: string
-  /** The refusal's route for a read-only key (`team add-agent`, hand-edit the file, …). */
+  /**
+   * The read's own note for the row (`memory-and-deps` owns its words): a `refuse` key's route, an
+   * `apply` key's remark or the declared `fixture-only: ` marker the view refuses to render.
+   */
   route?: string
   /**
    * The key's schema-derived choice set (M55), verbatim from `team config list --json`. The
@@ -381,12 +384,18 @@ export interface SettingsCategory {
 
 /**
  * One seat's **committed** launch assignment (P232): the record a dispatch published, read-only.
- * `assigned=false` means there is no complete record — `diagnostic` then says why, and no model is
- * invented (the future policy above is never displayed as this seat's actual model).
+ * `assigned=false` means there is no complete record, and no model is invented (the future policy
+ * above is never displayed as this seat's actual model). The plain reason the view shows is chosen
+ * from `record_present` (P266) — never from the command's `diagnostic`, which is forbidden on screen.
  */
 export interface SettingsAssignment {
   agent: string
   assigned: boolean
+  /**
+   * P266 (`memory-and-deps` owns the fact): does a record file exist for this seat at all — true even
+   * when the file cannot be read, false when there is none. Absent against an older command.
+   */
+  record_present?: boolean
   task: string
   category: string
   model: string

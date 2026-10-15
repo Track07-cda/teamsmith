@@ -799,7 +799,10 @@ function cmdShow(args) {
     }
     process.stdout.write(`#${meta.no} ${sanitize(meta.title)}\n`)
     process.stdout.write(
-      `来自 ${sanitize(meta.from)}（自称）· ${meta.at} · ${meta.bytes} 字节 · sha256 ${meta.sha256.slice(0, 16)}…\n\n`,
+      // P266: the human header shows the label exactly as the record carries it, with no qualifier
+      // beside it. "The tool authenticates nothing" belongs in the docs and the key-replies
+      // requirement, not in a suffix on every display (machine outputs keep the label verbatim).
+      `来自 ${sanitize(meta.from)} · ${meta.at} · ${meta.bytes} 字节 · sha256 ${meta.sha256.slice(0, 16)}…\n\n`,
     )
     process.stdout.write(sanitize(display))
     if (!display.endsWith('\n')) process.stdout.write('\n')

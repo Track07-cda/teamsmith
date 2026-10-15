@@ -30,70 +30,72 @@
 #   spec：int/seconds/mb/pct/bytes 是「min,max」（空 = 无边）；enum 是逗号分隔的值域；
 #         path 是 file|dir|exec|any 加「,opt」（空值有意义）；tpl 是 launch|notify|pm
 #   danger：'-' 或一行理由（命中即需要 --allow-danger）
-#   route：自由文本说明列 —— refuse 类的用法指引，以及 apply 类（frozen 接缝）的备注（面板把它原样展示）
+#   route：自由文本说明列 —— 给用户看的说明，面板把它原样画在行下（与命令行的对齐位置见 panel 规格）。
+#          两类标记是数据、不是措辞：只给夹具用的键以 `fixture-only: ` 开头（面板据此隐藏整行），
+#          四个 agent 适配器键的备注说明它们是预留接缝（语义见 memory-and-deps 规格）。
 #   suggest：**可选的第 9 列**，数值类键的建议值（逗号分隔的整值；仍是 schema 数据，不是选项表）；
 #         没有建议的行保持 8 列（读者两形状都认）。读侧（team_config_choices）与写入校验的一致性
 #         由 tests/panel-choices.sh 的走查夹具钉住：读给出的每个值都必须被 team config set 接受。
 team_config_schema() {
   cat <<'EOF'
-# ---- 身份与账本布局（refuse：控制台不得改身份、不得搬走它正在读的账本）----
-TEAM_PROJECT|refuse|text||plain||-|身份：手改 .pi/team/config.sh（team init 不改它）；team init --force 会重渲染整份契约||identity
-TEAM_SESSION|refuse|text||plain||-|身份：手改 .pi/team/config.sh（team init 不改它）；team init --force 会重渲染整份契约||identity
-TEAM_PM_WINDOW|refuse|text||plain|pm|-|身份：手改 .pi/team/config.sh（team init 不改它）；team init --force 会重渲染整份契约||identity
-TEAM_AGENTS|refuse|list||plain||-|名册：team add-agent <a> --register / team teardown --agent <a> --register（都走审计写入器）||identity
-TEAM_DOCS_DIR|refuse|path|dir,opt|plain|docs/team|-|账本布局：手改 .pi/team/config.sh||identity
-TEAM_WORKTREES_DIR|refuse|text||plain|.worktrees|-|账本布局：手改 .pi/team/config.sh||identity
-TEAM_STATE_DIR|refuse|path|dir,opt|plain|.pi/team/state|-|账本布局：手改 .pi/team/config.sh||identity
-TEAM_MEETINGS_DIR|refuse|path|dir,opt|plain|~/.pi/team/meetings|-|账本布局：手改 .pi/team/config.sh||identity
-TEAM_SPEC_DIR|refuse|path|dir,opt|plain|openspec|-|账本布局：手改 .pi/team/config.sh||identity
-TEAM_ROOT|refuse|path|dir,opt|plain||-|环境定位：用 --root 或手改 .pi/team/config.sh||identity
-TEAM_MAIN_ROOT|refuse|path|dir,opt|plain||-|环境定位：用 --root 或手改 .pi/team/config.sh||identity
-TEAM_CONFIG_FILE|refuse|path|file,opt|plain||-|环境定位：用 --config 或手改 .pi/team/config.sh||identity
+# ---- 身份与账本（refuse：控制台不得改身份、不得搬走它正在读的账本）----
+TEAM_PROJECT|refuse|text||plain||-|项目身份：只能改项目配置文件 .pi/team/config.sh 里的这一行；team init 不会改它，team init --force 会重写整份文件||identity
+TEAM_SESSION|refuse|text||plain||-|项目身份：只能改项目配置文件 .pi/team/config.sh 里的这一行；team init 不会改它，team init --force 会重写整份文件||identity
+TEAM_PM_WINDOW|refuse|text||plain|pm|-|项目身份：只能改项目配置文件 .pi/team/config.sh 里的这一行；team init 不会改它，team init --force 会重写整份文件||identity
+TEAM_AGENTS|refuse|list||plain||-|席位名单：用 team add-agent <名> --register 添加，team teardown --agent <名> --register 移除||identity
+TEAM_DOCS_DIR|refuse|path|dir,opt|plain|docs/team|-|账本位置：只能改项目配置文件 .pi/team/config.sh||identity
+TEAM_WORKTREES_DIR|refuse|text||plain|.worktrees|-|账本位置：只能改项目配置文件 .pi/team/config.sh||identity
+TEAM_STATE_DIR|refuse|path|dir,opt|plain|.pi/team/state|-|账本位置：只能改项目配置文件 .pi/team/config.sh||identity
+TEAM_MEETINGS_DIR|refuse|path|dir,opt|plain|~/.pi/team/meetings|-|账本位置：只能改项目配置文件 .pi/team/config.sh||identity
+TEAM_SPEC_DIR|refuse|path|dir,opt|plain|openspec|-|账本位置：只能改项目配置文件 .pi/team/config.sh||identity
+TEAM_ROOT|refuse|path|dir,opt|plain||-|位置：启动时用 --root 指定，或改项目配置文件 .pi/team/config.sh||identity
+TEAM_MAIN_ROOT|refuse|path|dir,opt|plain||-|位置：启动时用 --root 指定，或改项目配置文件 .pi/team/config.sh||identity
+TEAM_CONFIG_FILE|refuse|path|file,opt|plain||-|位置：启动时用 --config 指定，或改项目配置文件 .pi/team/config.sh||identity
 # ---- 分支与 forge（refuse：它们定义「已落地」与凭据位置）----
-TEAM_BRANCH_MODE|refuse|enum|task,agent|plain|task|-|分支语义（定义「已落地」）：手改 .pi/team/config.sh||branch
-TEAM_TASK_BRANCH_PREFIX|refuse|text||plain|task|-|分支语义：手改 .pi/team/config.sh||branch
-TEAM_AGENT_BRANCH_PREFIX|refuse|text||plain|agent|-|分支语义：手改 .pi/team/config.sh||branch
-TEAM_PROTECTED_BRANCH|refuse|text||plain|main|-|分支语义：手改 .pi/team/config.sh||branch
-TEAM_REMOTE|refuse|text||plain|origin|-|分支语义：手改 .pi/team/config.sh||branch
-TEAM_VCS|refuse|enum|local,github,gitlab,other|plain|local|-|分支语义/forge：手改 .pi/team/config.sh||branch
-TEAM_TOKEN_FILE|refuse|path|file,opt|plain|.gh-pat|-|凭据位置：手改 .pi/team/config.sh||branch
-TEAM_GITLAB_HOST|refuse|text||plain||-|凭据位置：手改 .pi/team/config.sh||branch
-TEAM_GITLAB_PROJECT|refuse|text||plain||-|凭据位置：手改 .pi/team/config.sh||branch
-TEAM_GITLAB_TOKEN_FILE|refuse|path|file,opt|plain||-|凭据位置：手改 .pi/team/config.sh||branch
+TEAM_BRANCH_MODE|refuse|enum|task,agent|plain|task|-|分支与落地判定：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_TASK_BRANCH_PREFIX|refuse|text||plain|task|-|分支与落地判定：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_AGENT_BRANCH_PREFIX|refuse|text||plain|agent|-|分支与落地判定：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_PROTECTED_BRANCH|refuse|text||plain|main|-|分支与落地判定：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_REMOTE|refuse|text||plain|origin|-|分支与落地判定：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_VCS|refuse|enum|local,github,gitlab,other|plain|local|-|托管平台：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_TOKEN_FILE|refuse|path|file,opt|plain|.gh-pat|-|凭据文件位置：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_GITLAB_HOST|refuse|text||plain||-|凭据文件位置：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_GITLAB_PROJECT|refuse|text||plain||-|凭据文件位置：只能改项目配置文件 .pi/team/config.sh||branch
+TEAM_GITLAB_TOKEN_FILE|refuse|path|file,opt|plain||-|凭据文件位置：只能改项目配置文件 .pi/team/config.sh||branch
 TEAM_MERGE_PREFER_THEIRS|apply|text||plain||-|||branch
-# ---- 权限与依赖策略（refuse：控制台不得给自己扩权）----
-TEAM_CONFIRM_WRITES|refuse|bool||plain|1|-|权限守卫：控制台不给自己扩权；手改 .pi/team/config.sh||policy
-TEAM_ALLOW_FOREIGN_IDENTITY|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
-TEAM_ALLOW_FOREIGN_SESSION|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
-TEAM_GUARD_FOREIGN_TARGET|refuse|bool||plain|1|-|权限守卫：手改 .pi/team/config.sh||policy
-TEAM_REPLACE_FOREIGN_PM|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
-TEAM_ALLOW_DESTRUCTIVE_TMUX|refuse|bool||plain|0|-|权限守卫（M67 退役）：不再授权任何操作（判定按目标）；保留为不接受写入的只读墓碑，手改 .pi/team/config.sh||policy
-TEAM_ASSUME_YES|refuse|bool||plain|0|-|权限守卫：手改 .pi/team/config.sh||policy
-TEAM_REQUIRE_JS|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh||policy
-TEAM_REQUIRE_OPENSPEC|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh||policy
-TEAM_REQUIRE_MAGIC_CONTEXT|refuse|bool||plain|1|-|依赖策略：手改 .pi/team/config.sh||policy
-TEAM_PI_AGENT_DIR|refuse|path|dir,opt|plain||-|机器路径：手改 .pi/team/config.sh||policy
-TEAM_PI_SETTINGS_FILE|refuse|path|file,opt|plain|$HOME/.pi/agent/settings.json|-|机器路径：手改 .pi/team/config.sh||policy
-TEAM_MEMINFO_FILE|refuse|path|file,opt|plain||-|机器路径：手改 .pi/team/config.sh||policy
-TEAM_DISK_STATS_FILE|refuse|path|file,opt|plain||-|测试旋钮：磁盘读数夹具（TEAM_MEMINFO_FILE 同族）；只在夹具里用||policy
-TEAM_SMOKE_FAST|refuse|bool||plain|0|-|测试旋钮：环境变量或手改 .pi/team/config.sh||policy
-TEAM_INBOX_WATCH_FORCE_FAIL|refuse|text||plain||-|测试旋钮（M53）：强制 watcher 注册失败路径，记录标 forced=1；只在夹具里用||policy
-TEAM_IW_REQUIRE_WATCH|refuse|bool||plain|0|-|测试旋钮（M53）：inbox-watch 门禁严格模式——不可用的前提判红而不是可见 SKIP||policy
+# ---- 权限与依赖（refuse：控制台不得给自己扩权）----
+TEAM_CONFIRM_WRITES|refuse|bool||plain|1|-|权限：只能改项目配置文件 .pi/team/config.sh（面板不给自己扩权）||policy
+TEAM_ALLOW_FOREIGN_IDENTITY|refuse|bool||plain|0|-|权限：只能改项目配置文件 .pi/team/config.sh（面板不给自己扩权）||policy
+TEAM_ALLOW_FOREIGN_SESSION|refuse|bool||plain|0|-|权限：只能改项目配置文件 .pi/team/config.sh（面板不给自己扩权）||policy
+TEAM_GUARD_FOREIGN_TARGET|refuse|bool||plain|1|-|权限：只能改项目配置文件 .pi/team/config.sh（面板不给自己扩权）||policy
+TEAM_REPLACE_FOREIGN_PM|refuse|bool||plain|0|-|权限：只能改项目配置文件 .pi/team/config.sh（面板不给自己扩权）||policy
+TEAM_ALLOW_DESTRUCTIVE_TMUX|refuse|bool||plain|0|-|已退役：不再授权任何操作，只保留为不可写的记录行，只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_ASSUME_YES|refuse|bool||plain|0|-|权限：只能改项目配置文件 .pi/team/config.sh（面板不给自己扩权）||policy
+TEAM_REQUIRE_JS|refuse|bool||plain|1|-|依赖要求：只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_REQUIRE_OPENSPEC|refuse|bool||plain|1|-|依赖要求：只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_REQUIRE_MAGIC_CONTEXT|refuse|bool||plain|1|-|依赖要求：只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_PI_AGENT_DIR|refuse|path|dir,opt|plain||-|这台机器上的路径：只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_PI_SETTINGS_FILE|refuse|path|file,opt|plain|$HOME/.pi/agent/settings.json|-|这台机器上的路径：只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_MEMINFO_FILE|refuse|path|file,opt|plain||-|这台机器上的路径：只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_DISK_STATS_FILE|refuse|path|file,opt|plain||-|fixture-only: 只在测试套件里用（磁盘读数夹具）||policy
+TEAM_SMOKE_FAST|refuse|bool||plain|0|-|fixture-only: 只在测试套件里用（冒烟快模式）||policy
+TEAM_INBOX_WATCH_FORCE_FAIL|refuse|text||plain||-|fixture-only: 只在测试套件里用（强制 watcher 注册失败）||policy
+TEAM_IW_REQUIRE_WATCH|refuse|bool||plain|0|-|fixture-only: 只在测试套件里用（记录严格模式）||policy
 # ---- 名册、模型解析与适配器（apply：下一个读契约的进程就生效）----
 TEAM_MODEL_LIMITS|apply|pattern||plain|kimi-coding/k3=2 openai-codex/*=1|-|||roster
 TEAM_MODEL_WINDOWS|apply|winlist||plain||-|||roster
 TEAM_SESSION_WARN_TOKENS|apply|int|0,|plain|200000|-||100000,200000,400000|roster
 TEAM_EXTRA_PI_ARGS|apply|cmd||plain||-|||roster
-TEAM_AGENT_CMD|apply|tpl|launch|plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
-TEAM_AGENT_NOTIFY_CMD|apply|tpl|notify|plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
-TEAM_AGENT_LOG_GLOB|apply|text||plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
+TEAM_AGENT_CMD|apply|tpl|launch|plain||-|预留：为以后可能更换的 agent 适配器保留，不是受支持的扩展方式，也不承诺兼容；新项目初始化时不问||roster
+TEAM_AGENT_NOTIFY_CMD|apply|tpl|notify|plain||-|预留：为以后可能更换的 agent 适配器保留，不是受支持的扩展方式，也不承诺兼容；新项目初始化时不问||roster
+TEAM_AGENT_LOG_GLOB|apply|text||plain||-|预留：为以后可能更换的 agent 适配器保留，不是受支持的扩展方式，也不承诺兼容；新项目初始化时不问||roster
 TEAM_PI_BIN|apply|path|exec|plain|pi|-|||roster
-TEAM_AGENT_BIN|apply|path|exec,opt|plain||-|内部接缝（frozen）：为将来非 Pi 适配预留，不承诺兼容；不在 init 问卷里问||roster
+TEAM_AGENT_BIN|apply|path|exec,opt|plain||-|预留：为以后可能更换的 agent 适配器保留，不是受支持的扩展方式，也不承诺兼容；新项目初始化时不问||roster
 TEAM_OPENSPEC_BIN|apply|path|exec|plain|openspec|-|||roster
 TEAM_JS_BIN|apply|path|exec,opt|plain||-|||roster
-# ---- Future policy, separate from committed assignments ----
-TEAM_TASK_MODELS|apply|task-model-map|req|plain||-|新任务类别：team config set-task-model <category> <model>；恢复保留已派身份||task-model
-TEAM_PM_MODEL|restart|model|req|plain||-|独立 PM 模型：team up 启动受 fresh-pm 守卫；team up 缺失/不一致的就身记录按 pm-lifecycle 合同处理||task-model
+# ---- 未来策略与已派记录分开 ----
+TEAM_TASK_MODELS|apply|task-model-map|req|plain||-|新任务用哪个模型：用 team config set-task-model <类别> <模型> 改；已经派出去的任务保留它当时的模型||task-model
+TEAM_PM_MODEL|restart|model|req|plain||-|PM 用哪个模型：下次 team up 启动时生效，换模型要用 --fresh-pm；旧记录缺失或不一致时按 pm-lifecycle 合同处理||task-model
 # ---- 工具自身（配置形状号与版本提示；P261 · startup-self-heal）----
 TEAM_CONFIG_VERSION|refuse|int|1,|plain|2|-|配置形状号（工具写、控制台不写）：新项目由 init/bootstrap 写，旧项目由启动事务（见 references/migration.md）迁移时写；高于本工具已知最新的形状号直接拒绝。行为证据：tests/task-model-routing.sh 的 heal 组||task-model
 TEAM_UPDATE_CHECK|apply|bool||plain|1|-|启动路径上的 npm 版本提示：0 = 连查询都不发生（不读不写缓存）；只有本地落后时打一行，工具从不自己安装。行为证据：tests/task-model-routing.sh 的 updatecheck 组||workflow
@@ -137,7 +139,7 @@ TEAM_MONITOR_UI|restart|enum|auto,tui,text|plain|auto|-|||panel
 TEAM_MONITOR_ACTIVITY|restart|bool||export|1|-|||panel
 TEAM_AGENT_LOG_TAIL_BYTES|restart|bytes|0,1048576|export||-|||panel
 TEAM_PULSE_WINDOW|restart|text||plain|pulse|改的是运行中后端的窗口名：team pulse down（旧名）→ 改 → team pulse up|||panel
-# ---- 巡检策略（apply：一拍一个 team watch --once 子进程）----
+# ---- 巡检（apply：一拍一个 team watch --once 子进程）----
 TEAM_PULSE_NUDGE_GAP|apply|seconds|0,|plain|900|-||300,900,1800|patrol
 TEAM_PULSE_PENDING_BOARD|apply|bool||plain|0|-|||patrol
 TEAM_PULSE_REBUILD_TMUX|apply|bool||plain|0|-|||patrol
@@ -160,10 +162,10 @@ TEAM_INBOX_WATCH_POLL_MS|restart|int|100,|export|5000|-|||session
 TEAM_INBOX_WATCH_HEARTBEAT_MS|restart|int|100,|export|5000|-|||session
 TEAM_INBOX_WATCH_TARGET|restart|text||export||-|||session
 TEAM_BG_LOG_MAX_BYTES|restart|bytes|1024,|export|524288|-|||session
-# ---- 信号纪律（P159 · refuse：闸门接缝与宽限由手改契约控制）----
-TEAM_SIGNAL_CALLS_LOG|refuse|path|file,opt|plain||-|P159 信号闸门：每次调用一行（拒绝另存 <log>.forensics，熬得过轮转）；窗口启动时由闸门前缀钉值，要改就手改 .pi/team/config.sh||policy
-TEAM_SIGNAL_REAL|refuse|path|exec,opt|plain||-|P159 信号闸门的真身路径（夹具钉桩用；拒绝不依赖它能否解析）；手改 .pi/team/config.sh||policy
-TEAM_BG_STOP_GRACE|refuse|seconds|0,|plain|5|-|P159 team bg stop 的宽限：组 TERM 之后等这么多秒再 KILL（0 = 不等待，立刻升级）；手改 .pi/team/config.sh||policy
+# ---- 信号纪律（refuse：闸门与宽限只能改契约文件）----
+TEAM_SIGNAL_CALLS_LOG|refuse|path|file,opt|plain||-|信号调用记录：每次调用写一行（拒绝另存 <log>.forensics，熬得过轮转）；窗口启动时由闸门前缀钉值，只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_SIGNAL_REAL|refuse|path|exec,opt|plain||-|信号程序的位置（测试钉桩用，拒绝不依赖它能否解析）：只能改项目配置文件 .pi/team/config.sh||policy
+TEAM_BG_STOP_GRACE|refuse|seconds|0,|plain|5|-|停止后台作业前的等待秒数：组 TERM 之后等这么多秒再 KILL（0 = 不等待，立刻升级）；只能改项目配置文件 .pi/team/config.sh||policy
 # ---- 跨项目会议（apply）----
 TEAM_MEETING_TTL_HOURS|apply|int|1,|plain|72|-||24,72,168|meeting
 TEAM_MEETING_MAX_TURNS|apply|int|1,|plain|20|-||5,20,50|meeting
@@ -733,7 +735,12 @@ team_config_list_json() {
     policy_pm="$TEAM_PM_MODEL"; known_models="$known_models$policy_pm"$'\n'
   fi
   for a in $(team_agents); do
-    local assigned=false diagnostic='' fields='' field val
+    local assigned=false diagnostic='' fields='' field val present=false
+    # memory-and-deps 的 `record_present` 回答的是「这个席位到底有没有一份记录文件」：文件在、即使读不
+    # 出来或不带 assignment 字段也算有（否则面板会对着一个真用过的席位说「还没派过任务」）。
+    # 现成的 `team_assignment_record_present` 回答的是另一个问题（「文件自称是一份 assignment 记录」——
+    # 没有 assignment 字段的历史/无关文件它报 false），所以这里的判据是文件本身在不在。
+    [ -f "$TEAM_STATE_DIR/$a.env" ] && present=true
     if team_assignment_load "$a"; then
       assigned=true
       # P228/R6（OBS1）：未交付的模型不进「已知模型」，也不当成该席位的模型
@@ -749,7 +756,7 @@ team_config_list_json() {
     team_config_json_escape_set "$val"; fields="$fields,\"identity_via\":\"$CFG_ESC\""
     team_config_json_escape_set "$diagnostic"; local ed="$CFG_ESC"
     team_config_json_escape_set "$a"
-    assignments="${assignments:+$assignments,}{\"agent\":\"$CFG_ESC\",\"assigned\":$assigned$fields,\"diagnostic\":\"$ed\"}"
+    assignments="${assignments:+$assignments,}{\"agent\":\"$CFG_ESC\",\"assigned\":$assigned,\"record_present\":$present$fields,\"diagnostic\":\"$ed\"}"
   done
   if team_pm_metadata_load; then
     pm_launch="$TEAM_PM_METADATA_JSON"; known_models="$known_models$TEAM_PM_SELECTED_MODEL"$'\n'
@@ -812,7 +819,7 @@ team_config_list_json() {
     team_config_json_escape_set "$v"; local u_val="$CFG_ESC"
     team_config_json_escape_set "$c"; local u_com="$CFG_ESC"
     team_config_choices_set ""
-    out="$out,{\"name\":\"$u_key\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$u_val\",\"default\":\"\",\"set\":true,\"comment\":\"$u_com\",\"warning\":\"不是已知的项目设置（见 references/config.md）；手改 .pi/team/config.sh\",\"choices\":$CFG_CHOICES_JSON,\"group\":\"\",\"known\":false}"
+    out="$out,{\"name\":\"$u_key\",\"class\":\"refuse\",\"kind\":\"text\",\"form\":\"plain\",\"value\":\"$u_val\",\"default\":\"\",\"set\":true,\"comment\":\"$u_com\",\"warning\":\"不是已知的项目设置（见 references/config.md）；只能改项目配置文件 .pi/team/config.sh\",\"choices\":$CFG_CHOICES_JSON,\"group\":\"\",\"known\":false}"
   done <<< "$CFG_SCAN_ORDER"
 
 

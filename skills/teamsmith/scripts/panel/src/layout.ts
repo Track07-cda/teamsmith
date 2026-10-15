@@ -1551,18 +1551,18 @@ function replySummaryBlock(ctx: Ctx): Block | null {
 // sentences, so the column only has to hold the longest of them (zh is the wide language here;
 // a longer en label is cut by `cell()`, the same rule the key names followed).
 const SETTINGS_LABEL_W = 22
-const SETTINGS_AUDIT_LINES = 3
 /** P232: the policy migration diagnosis is shown above the audit tail; the rest is counted. */
 const SETTINGS_DIAG_LINES = 2
 /** P232: how many frame lines one diagnosis line may wrap to before it is cut with an ellipsis. */
 const SETTINGS_DIAG_WRAP = 2
-// The tail the block draws under its row window: the CLI hint, a blank, the audit heading and up to
-// `SETTINGS_AUDIT_LINES` audit lines (the heading always has one line under it — a dash when the
-// command's log is empty), plus `SETTINGS_COUNT_ROWS`, the pessimistic reservation for the two
-// hidden-row counts (`↑n`/`↓n`). Reserving **both** counts is what keeps the block inside the frame
-// once the list is longer than the window: with only the tail reserved, a full window plus a full
-// audit tail overflowed and the whole view degraded to its one-line summary (measured in M55's
-// pairlist route: the seats block the route had just focused disappeared from the frame).
+// The tail the block draws under its row window: the focused row's CLI hint and, when the command
+// reports one, the policy migration diagnosis (P266: the audit tail is no longer drawn here — the
+// log stays readable through `team config list`'s own footer and `team config log`, and the console
+// is deliberately not one of its readers), plus `SETTINGS_COUNT_ROWS`, the pessimistic reservation
+// for the two hidden-row counts (`↑n`/`↓n`). Reserving **both** counts is what keeps the block inside
+// the frame once the list is longer than the window: with only the tail reserved, a full window
+// plus a full tail overflowed and the whole view degraded to its one-line summary (measured in
+// M55's pairlist route: the seats block the route had just focused disappeared from the frame).
 //
 // P32 (the user's second report, 2026-09-22): the reservation is a *ceiling*, not a fixed cost. The
 // window spends what the tail does not need (a count line is only drawn when the window really
@@ -1571,14 +1571,13 @@ const SETTINGS_DIAG_WRAP = 2
 const SETTINGS_COUNT_ROWS = 2
 
 /**
- * The sum M55 calibrated: the two count lines, the CLI hint, a blank, the audit heading and the audit
- * tail. The row list treats it as a ceiling and hands back what it does not draw (P32); the two pickers
- * keep it as the bound of their own *paged* list (title + interval + the two hidden-count lines + blank
- * + hint, then the entries) — a long vocabulary shows a `↑n`/`↓n` window that scrolls instead of
- * flooding the pane, which is what the archived `choices` fixture calibrates its twenty-eight model
- * records against. Their cards still fill (the pad below), so the key band stays the frame's last row.
+ * The two pickers' *paged* list bound (M55's calibrated value, kept: a picker covers the row list, so
+ * this reservation is its own chrome — title + interval + the two hidden-count lines + blank + hint).
+ * A long vocabulary shows a `↑n`/`↓n` window that scrolls instead of flooding the pane, which is what
+ * the archived `choices` fixture calibrates its twenty-eight model records against. Their cards still
+ * fill (the pad below), so the key band stays the frame's last row.
  */
-const SETTINGS_TAIL_ROWS = SETTINGS_COUNT_ROWS + 1 + 1 + 1 + SETTINGS_AUDIT_LINES
+const SETTINGS_TAIL_ROWS = SETTINGS_COUNT_ROWS + 6
 
 /** One drawn row of the project-settings view (group headings are not focusable). */
 export type SettingsRow =
@@ -1600,6 +1599,18 @@ export function settingsClassLabel(s: Strings, cls: string): string {
  * shout in green while the user's question is "does this need a restart?". Colour is never the only
  * channel: the badge's word always carries the class (the panel's standing rule).
  */
+/**
+ * The declared marker the owning command puts at the start of a fixture-only key's note
+ * (`memory-and-deps` owns the marker). The hiding rule reads the read's data and nothing else: no
+ * key list is baked into the bundle, so a fixture key added to the schema stays hidden and one whose
+ * marker is removed comes back without rebuilding `panel.js`.
+ */
+const SETTINGS_FIXTURE_ONLY_MARKER = 'fixture-only: '
+
+function settingsKeyHidden(k: SettingsKey): boolean {
+  return String(k.route ?? '').startsWith(SETTINGS_FIXTURE_ONLY_MARKER)
+}
+
 function settingsClassTone(cls: string): Tone {
   if (cls === 'restart') return 'warn'
   if (cls === 'refuse') return 'dim'
@@ -1656,8 +1667,12 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
     needle === '' || parts.some((p) => String(p ?? '').toLowerCase().includes(needle))
   // The label first (what the row shows), then the raw key and the value — the three inputs a
   // user may type into `/` (the label's words, `TEAM_…`, or the value on screen).
-  const shown = block.keys.filter((k) =>
-    match(keyLabel(s, k.name), k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
+  // P266: a key the read marks fixture-only is not a row at all — no row, no heading of its own and
+  // no `/` hit (it is dropped before the match, so not even its label or raw name can reach it).
+  const shown = block.keys.filter(
+    (k) =>
+      !settingsKeyHidden(k) &&
+      match(keyLabel(s, k.name), k.name, k.value, k.default, k.comment, k.warning, k.route ?? ''),
   )
   const ungrouped: SettingsKey[] = []
   let openToken: string | null = null
@@ -1684,8 +1699,10 @@ export function settingsViewRows(block: SettingsBlock | undefined, filter: strin
     out.push({ kind: 'group', label: s.settingsGroupCategories, tone: 'heading' })
     for (const c of categories) out.push({ kind: 'category', category: c })
   }
+  // P266: the command's diagnostic is deliberately not searchable here — it never reaches the
+  // screen, so `/` must not find a row for a string the user cannot see anywhere.
   const assignments = (block.models?.assignments ?? []).filter((a) =>
-    match(a.agent, a.task, a.category, a.model, a.sid, a.selected_via, a.launch_via, a.diagnostic),
+    match(a.agent, a.task, a.category, a.model, a.sid, a.selected_via, a.launch_via),
   )
   const launch = block.models?.pm_launch ?? {}
   const launchShown =
@@ -1829,6 +1846,9 @@ function settingsAssignmentLine(ctx: Ctx, a: SettingsAssignment, focused: boolea
       innerW,
     ).map((x) => x),
   )
+  // P266: the command's diagnostic string never reaches the screen. The two plain reasons are chosen
+  // from the read's own fact (`record_present`): no record file at all vs. a record that exists but
+  // cannot be read — a seat that was used is never told it never was.
   const note = a.assigned
     ? fill(s.settingsAssignmentNote, {
         task: a.task || s.dash,
@@ -1837,7 +1857,9 @@ function settingsAssignmentLine(ctx: Ctx, a: SettingsAssignment, focused: boolea
         selected: settingsSourceLabel(s, a.selected_via),
         launch: settingsSourceLabel(s, a.launch_via),
       })
-    : fill(s.settingsAssignmentNone, { diagnostic: a.diagnostic || s.dash })
+    : a.record_present === false
+      ? s.settingsAssignmentNone
+      : s.settingsAssignmentUnreadable
   line.push(seg(`  ${truncateW(note, Math.max(8, innerW - dispWidth(textOf(line)) - 2))}`, a.assigned ? 'dim' : 'warn'))
   return { line }
 }
@@ -1876,7 +1898,7 @@ function settingsCliHint(s: Strings, rows: SettingsRow[], focus: number): string
   if (row.kind === 'pm-launch') return s.settingsPmLaunchHint
   const key = row.key
   if (key.known === false) return fill(s.settingsUnknownHint, { key: key.name })
-  if (key.class === 'refuse') return fill(s.settingsRefusedHint, { key: key.name })
+  if (key.class === 'refuse') return s.settingsRefusedHint
   // The whole-map row is not composed here: its editor is the categories block, and the command
   // line the requirement names is the per-category one (P232).
   if (String(key.kind ?? '') === 'task-model-map') return s.settingsCategoryMapHint
@@ -1923,9 +1945,6 @@ function settingsBlock(ctx: Ctx): Block | null {
   const room = Math.max(3, ctx.settingsRows ?? 12)
   const focus = Math.max(0, Math.min(Math.max(0, count - 1), ctx.view.settingsFocus ?? 0))
   const explicitOffset = ctx.view.settingsOffset
-  // The tail under the window: the CLI hint, a blank, the audit heading and its tail (the heading
-  // always has one line under it — a dash when the command's log is empty).
-  const audit = (block.audit ?? []).slice(-SETTINGS_AUDIT_LINES)
   // P232: the command's own policy diagnosis (missing/retired keys, an unmapped category map) is
   // part of the view: a legacy contract must say so, with the CLI route the command itself names.
   const diagnosis = String(block.models?.diagnostic ?? '')
@@ -1936,7 +1955,9 @@ function settingsBlock(ctx: Ctx): Block | null {
   const diagRest = diagnosis.length - diagShown.length
   const diagChunks = diagShown.map((d) => diagnoseChunks(d, Math.max(8, width - 3), SETTINGS_DIAG_WRAP))
   const diagLines = diagChunks.length ? diagChunks.reduce((n, c) => n + c.length, 0) + 1 + (diagRest > 0 ? 1 : 0) : 0
-  const tailLines = 1 + 1 + 1 + Math.max(1, audit.length) + diagLines
+  // P266: the tail is the focused row's CLI hint plus the diagnosis when there is one; the audit
+  // tail that used to sit here is no longer drawn (and no longer reads the log).
+  const tailLines = 1 + diagLines
   // The row cap: each row costs at least its own line, and the tail is already spoken for.
   const desired = Math.max(1, Math.min(Math.max(1, count), Math.max(1, room - tailLines)))
   const maxOffset = Math.max(0, count - desired)
@@ -2138,12 +2159,6 @@ function settingsBlock(ctx: Ctx): Block | null {
     for (const chunks of diagChunks) for (const d of chunks) put(ln(seg(`   ${d}`, 'warn')))
     if (diagRest > 0) put(ln(seg(`   ${fill(s.laneHiddenBelow, { n: String(diagRest) })}`, 'dim')))
   }
-
-  // The audit footer: at most three lines, newest last (the CLI's own tail).
-  put(ln(seg('')))
-  put(ln(seg(` ${s.settingsAuditHeading}`, 'heading')))
-  if (!audit.length) put(ln(seg(`   ${s.dash}`, 'dim')))
-  for (const a of audit) put(ln(seg(`   ${a}`, 'dim')))
 
   // P32 (the bounded-frame rule's last resort, the detail view's own): the space the rows did not
   // use stays **inside** the card, so the card fills the pane it was handed and the key band stays
