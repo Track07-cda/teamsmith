@@ -460,7 +460,7 @@
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev-bob | - | - | done |
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | done |
 | V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev-bob | - | - | done |
-| V47 | Verify writing-discipline and build the human-read blind package | dev3 | - | - | wip |
+| V47 | Verify writing-discipline and build the human-read blind package | verify | - | - | wip |
 | P291 | A formal way for the PM to end a seat's runaway turn (with audit and a reason it can read) | dev-bob | - | - | done |
 | P292 | Seat turn interrupt: apply (proof chain, audit, reason delivery) | dev3 | - | - | wip |
 
