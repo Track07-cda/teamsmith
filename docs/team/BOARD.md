@@ -456,6 +456,8 @@
 | P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | wip |
 | P287 | Gate tmp/lock must survive another project's pattern cleanup | dev3 | - | - | done |
 | P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev3 | - | - | wip |
+| P289 | Tick the help-robustness checklist by evidence | dev | - | - | todo |
+| V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev | - | - | todo |
 
 ## 当前里程碑
 
