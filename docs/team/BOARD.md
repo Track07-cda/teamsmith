@@ -439,6 +439,7 @@
 | P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev | - | - | todo |
 | P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | wip |
 | P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | done |
+| V39 | Gate slimming: independent verification of the deletion round | verify | - | - | wip |
 
 ## 当前里程碑
 
