@@ -47,3 +47,15 @@ bash skills/teamsmith/tests/section-select.sh --check
 bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
 git diff --check && git status --short
 ```
+
+## 范围更新（2026-10-15，启动自愈已并入 main 之后）
+
+`startup-self-heal` 已落地：**`team up` 现在会自己完成机械迁移**（写前打印计划、留备份、逐键打印 before→after、写一行审计），`--print` 只预测不写、`--no-migrate` 拒绝并点名手工命令，缺 PM 身份记录时会自动登记并打印一行。所以 §6 的配方要**以自动路线为主**：
+
+1. 升级工具（npm + `install.sh`）；
+2. 逐项目：**先备份 `config.sh`** → 直接 `team up`（它会自己迁移并打印每一处改动）→ 若它拒绝（形状定位不了 / 兜底名撞车 / 值不合法），按它给的**可粘贴命令**走手工路线（`team config upgrade-models … --dry-run` → `--yes`）；把两条路线都写清，并说明「拒绝时它会给一条从你项目自己的配置推导出来的命令」；
+3. **PM 启动身份**：讲清 `state/pm-launch.env` 是什么、0.1.x 升上来的项目为什么会缺、两条出路（自动登记 / `--fresh-pm`）及后果；
+4. 会话与收尾验证（`--agents`、重启各项目自己的 agent 会话、`team doctor`、`team config list`、一次 `dispatch --print` 证明 `category:` 与模型解析生效）；
+5. **回滚**：配置回 `cp` 备份；`--fresh-pm` 不动 Pi 历史。
+
+判据仍按你任务书原样（夹具 + 每一步可证伪 + 真项目形状的现场）。

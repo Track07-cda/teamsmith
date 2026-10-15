@@ -413,7 +413,7 @@
 | P253 | Old-config refusal must print a derived, paste-able migration command | dev-bob | - | - | dropped |
 | P254 | Refusals in plain language: team up identity + the scope header | dev | - | - | dropped |
 | V33 | Pulse compose/previews: independent verification | verify | - | - | done |
-| P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev | - | - | todo |
+| P255 | Upgrade guide for 0.2.0 (npm route, config migration, PM identity) | dev-bob | - | - | wip |
 | P256 | Startup self-heal: team up migrates a stale project automatically | dev2 | - | - | done |
 | P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev2 | - | - | done |
 | P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | dropped |
@@ -434,11 +434,11 @@
 | P268 | Do not leak this project's identity into tmux's global environment | dev2 | - | - | done |
 | P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev | - | - | todo |
 | P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
-| P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | wip |
+| P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | done |
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | dev | - | - | todo |
 | P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev | - | - | todo |
 | P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | wip |
-| P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | wip |
+| P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | done |
 
 ## 当前里程碑
 
