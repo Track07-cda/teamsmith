@@ -34,3 +34,5 @@ LC_ALL=C bash skills/teamsmith/tests/help-surface.sh --select layout   # 与 UTF
 bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
 git diff --check && git status --short
 ```
+
+4. **O7（V36 的观察，同类）CLI 拒绝语里还剩黑话**：`team config set` 在只读键上的拒绝语写「`TEAM_X` 是只读键，控制台不改它」（`cmd-config.sh:929` 一带）——「只读键」正是用户点名的词。**要求**：改成普通话（例如「这个键只能改项目配置文件 `.pi/team/config.sh`，控制台不能改」），并**同批检查同一族的其他拒绝语**（`refuse` 类键的提示）；判据是**行为**（拒绝仍发生、退出码不变、提示里含配置文件路径），措辞由评审把关。

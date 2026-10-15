@@ -425,9 +425,9 @@
 | P264 | Gate slimming: classify and remove text-class assertions | dev | - | - | wip |
 | V34 | turn-notice-merge: independent verification (merge + suspend-no-knock) | dev2 | - | - | done |
 | P265 | Slash /team in Pi (user commands + status reads) | dev | - | - | done |
-| P266 | Panel plain language: apply | dev3 | - | - | wip |
+| P266 | Panel plain language: apply | dev3 | - | - | done |
 | V35 | startup self-heal: independent verification | verify | - | - | done |
-| V36 | panel plain language: independent verification | verify | - | - | wip |
+| V36 | panel plain language: independent verification | verify | - | - | done |
 | P267 | Reply discipline into the skill: apply | dev2 | - | - | done |
 | V37 | Reply discipline: independent verification | verify | - | - | done |
 | V38 | cli-help surface: independent verification | dev2 | - | - | done |
@@ -436,6 +436,7 @@
 | P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | wip |
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | dev | - | - | todo |
+| P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev | - | - | todo |
 
 ## 当前里程碑
 
