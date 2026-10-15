@@ -418,7 +418,7 @@
 | P257 | PM reply discipline: put the rule into the skill (prompt + protocol + gate) | dev2 | - | - | done |
 | P258 | Panel settings in plain language (no jargon, no audit, no test knobs) | dev | - | - | dropped |
 | P259 | Key replies: trust the publisher label (drop "self-declared") | dev | - | - | dropped |
-| P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | wip |
+| P260 | CLI help: apply (tiered menu, language layer, manifest-driven renderer) | dev | - | - | done |
 | P261 | Startup self-heal: apply (config shape migration, PM identity, version notice) | dev-bob | - | - | done |
 | P262 | Panel plain language: no jargon, no audit/test knobs, trusted publisher labels | dev2 | - | - | done |
 | P263 | Gate: refuse suspicious new paths (whitespace / shell metacharacters) in a delivery | dev | - | - | dropped |
@@ -430,11 +430,12 @@
 | V36 | panel plain language: independent verification | verify | - | - | wip |
 | P267 | Reply discipline into the skill: apply | dev2 | - | - | done |
 | V37 | Reply discipline: independent verification | verify | - | - | done |
-| V38 | cli-help surface: independent verification | dev2 | - | - | wip |
+| V38 | cli-help surface: independent verification | dev2 | - | - | done |
 | P268 | Do not leak this project's identity into tmux's global environment | dev | - | - | todo |
 | P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev | - | - | todo |
 | P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | wip |
+| P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | dev | - | - | todo |
 
 ## 当前里程碑
 
