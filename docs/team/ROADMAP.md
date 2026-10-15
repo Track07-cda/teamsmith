@@ -10,9 +10,9 @@
 ## 现状（2026-10-15；**接手先读这一节**，下面那张 M0–M3 表是历史记录）
 
 - **产品**：`teamsmith@0.2.0` 已发到 npm（`latest`），公开仓 `Track07-cda/teamsmith` 的 `main` 与本仓 `main` 同点；**本仓就是公开仓的真源**（发布 = 版本落点 + 提交 + 打 tag + 推 `public` + npm 发布）。
-- **规格**：`openspec/specs/` 下 **15 个能力**；归档变更在 `openspec/changes/archive/`。最近三件已归档：`task-model-routing`（任务类别模型路由）、`pulse-key-replies`（关键回复页）、`long-job-suspend`（长作业车道：起完结束回合、挂起只记录不叫醒）。
-- **在飞**：`cli-help`（帮助面三级菜单 + 默认英文）、`panel-preview-and-compose`（面板写信与只读预览，已合并，等面板重启）、`slash-team`（Pi 里的 `/team` 斜杠命令）、`startup-self-heal`（`team up` 自动完成老项目的机械升级）、`panel-plain-language`（设置页去黑话 + 标签默认信任）。
-- **排队**：升级指南重写（P255）、门禁瘦身（P264，把文本类断言移出门禁）、tmux 全局身份泄漏（P268）、孤儿进程可见性（P269）。
+- **规格**：`openspec/specs/` 下 **15 个能力**；归档变更在 `openspec/changes/archive/`。**2026-10-15 这一天归档了六条**：`task-model-routing`、`pulse-key-replies`、`long-job-suspend`（前三条 10-14）、`startup-self-heal`、`panel-plain-language`、`cli-help`、`panel-preview-and-compose`、`pm-reply-discipline`、`turn-notice-merge`。
+- **在飞（三条，均在实现中）**：`slash-team`（Pi 里的 `/team` 斜杠命令）、`tmux-identity-scope`（共享 tmux 的全局环境泄漏）、`orphan-visibility`（孤儿进程可见性与按 pid 清理）；另有一条刚立、在写方案：`help-robustness`（帮助面三条收尾）。
+- **排队**：升级指南重写（P255，在做）。
 - **运行环境的三条约束**（都是实测踩出来的，见 DECISIONS）：① tmux 服务活在**图形会话**里，GNOME 崩溃会带走整队；② 机器 **OOM** 也会带走整队，且会在别的项目留下**孤儿 Pi 进程**白占内存；③ 容器夹具根落在 `/tmp`，跑长门禁前先看余量（有安全清扫配方）。恢复配方见 `docs/team/DECISIONS.md` D173。
 
 ## 里程碑（历史：M0–M3 的原始定义与达成记录，状态列已过时）
