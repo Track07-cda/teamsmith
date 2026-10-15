@@ -461,6 +461,7 @@
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | wip |
 | V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev-bob | - | - | wip |
 | V47 | Verify writing-discipline and build the human-read blind package | dev | - | - | todo |
+| P291 | A formal way for the PM to end a seat's runaway turn (with audit and a reason it can read) | dev | - | - | todo |
 
 ## 当前里程碑
 
