@@ -459,3 +459,30 @@ bash <skill>/scripts/team teardown --all                   # close every window 
 - Archive periodically: finished reports and verification records can move to `docs/team/archive/`; threads stay
   (append-only).
 - Worktrees left around eat disk: check with `git worktree list` and clean unused ones with `teardown --purge`.
+
+## K. Reading the help surface
+
+The CLI's help is three levels deep, and it never dumps every command at once:
+
+```bash
+bash <skill>/scripts/team                  # level 0: what teamsmith is, the groups, a beginner set
+bash <skill>/scripts/team help seats       # level 1: the commands of one group
+bash <skill>/scripts/team help dispatch    # level 2: one command's own page
+bash <skill>/scripts/team dispatch --help  # the same page (byte-identical to `help dispatch`)
+```
+
+A command page answers the questions a reader who does not know teamsmith would ask: what it does, when to use it,
+what it reads and writes, which side effects it has, whether it needs `--yes`, and how it can be undone. The pages
+are rendered from one command manifest (`scripts/strings/commands.tsv`) and two parallel prose tables
+(`scripts/strings/help.en.tsv`, `help.zh.tsv`); `tests/help-surface.sh` checks the surface's own promises (menu
+size, coverage, layout, language, the declared effects and their probes) and `tests/routes.sh` probes every printed
+flag against the real parser.
+
+Two environment knobs, read from the environment only (the help paths never load the project contract, so they work
+in a directory that is not a project yet):
+
+- `TEAM_LANG=en|zh` — the prose language. Unset or empty means English; another value prints one warning and keeps
+  English. It selects prose only: command paths, flags and usage lines are byte-identical in both languages, and no
+  `--json`/`--print` output changes.
+- `TEAM_HELP_WIDTH=<positive integer>` — the width the surface wraps to, in display cells (a CJK-wide character
+  counts two). The default is 100; an invalid value prints one warning and falls back to 100.

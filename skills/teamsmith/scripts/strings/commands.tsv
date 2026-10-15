@@ -1,0 +1,82 @@
+# teamsmith · command manifest — the language-neutral single source of the help surface.
+#
+# Read by scripts/lib/cmd-help.sh (the renderer), by tests/help-surface.sh (the surface's own checks)
+# and by tests/routes.sh (Walk A's working set). One row per command the dispatcher accepts, plus the
+# group table; the menu, the group pages and the command pages are all rendered from this file.
+#
+# Columns are tab-separated. `-` means "empty"; list fields are space separated.
+#
+#   group  <id>
+#   cmd    <name> <group> <usage> <flags> <subs> <aliases> <terms> <faces> <effect> <auth> <undo> <claims> <probe> <example>
+#
+#     name      the token the dispatcher accepts (a `case "$CMD" in` label of scripts/team)
+#     group     the group id this command is listed under (level 1: `team help <group>`)
+#     usage     one or more usage fragments, separated by ` ;; ` — every one is printed on the page
+#     flags     the flags the usage fragments print (`-` = none); each needs an `cmd.<name>.arg.<flag>` prose key
+#     subs      subcommands the usage fragments print
+#     aliases   other labels the dispatcher accepts for this command (documented on this page)
+#     terms     concept ids this page uses; the page repeats their definitions verbatim
+#     faces     the faces this command touches, from the closed list: state docs config worktree skills meetings
+#     effect    read-only | writes-<face> | starts-process   (the headline effect; `faces` carries the rest)
+#     auth      none | needs-yes | needs-yes:<condition>
+#     undo      idempotent | undo-by-<cmd> | not-reversible:<reason>
+#     claims    extra declared facts `key=value` that prose may name (registry in tests/help-surface.sh)
+#     probe     the probe recipe id that makes the declared effect happen in a scratch fixture
+#     example   one example command line printed under `Example`
+#
+# The prose for every command lives in help.en.tsv (source) and help.zh.tsv (translation); a key the
+# selected table lacks is printed with a marker naming it and falls back to the other table's value.
+# Declared placeholders in prose values: {project} {meeting_ttl} {effect} {faces} {undo_cmd}
+group	start
+group	observe
+group	ledger
+group	seats
+group	patrol
+group	peers
+group	finish
+group	versions
+begin	bootstrap	status	dispatch	review
+cmd	help	start	help [<group>] [<command>]	-	group command	-	-	-	read-only	none	idempotent	levels=3	help	team help dispatch
+cmd	bootstrap	start	bootstrap [--agents <names>] [--task-models <map>] [--pm-model <model>] [--print]	--agents --task-models --pm-model --print	-	-	pm seat worktree brief change gate ledger pulse yes	config docs skills	starts-process	none	not-reversible:the skeleton, the skill copy and the worktrees it writes have no single undo	-	bootstrap	team bootstrap --agents "dev verify" --task-models "code=provider/model"
+cmd	init	start	init [--copy] [--no-skills] [--force] [--agents <names>] [--task-models <map>] [--pm-model <model>]	--copy --no-skills --force --agents --task-models --pm-model	-	-	pm seat ledger gate	config docs skills	writes-config	none	not-reversible:the written contract and document skeleton have no undo	-	init	team init --no-skills --agents "dev verify" --task-models "code=provider/model"
+cmd	doctor	start	doctor	-	-	-	gate	-	read-only	none	idempotent	-	doctor	team doctor
+cmd	roster	observe	roster	-	-	-	seat worktree	-	read-only	none	idempotent	-	roster	team roster
+cmd	status	observe	status [<ID>]	-	-	-	brief ledger	state	writes-state	none	idempotent	-	status	team status
+cmd	ps	observe	ps	-	-	-	seat	-	read-only	none	idempotent	-	ps	team ps
+cmd	bg	observe	bg list ;; bg stop <id>	-	list stop	-	-	state	writes-state	none	idempotent	-	bg	team bg list
+cmd	digest	observe	digest	-	-	-	ledger pulse	state	writes-state	none	idempotent	-	digest	team digest
+cmd	inbox	observe	inbox [<agent>]	-	-	-	ledger	-	read-only	none	idempotent	-	inbox	team inbox
+cmd	paths	observe	paths	-	-	-	ledger	-	read-only	none	idempotent	-	paths	team paths
+cmd	config	observe	config list ;; config log ;; config set <key> <value> ;; config set-task-model <category> <model> ;; config upgrade-models [--task-models <map>] [--pm-model <model>]	--task-models --pm-model	list log set set-task-model upgrade-models help	-	pm seat change	config	writes-config	none	not-reversible:the audit log keeps every write	-	config	team config list
+cmd	task	ledger	task <ID> --title <title> --category <category> [--agent <a>] [--deps <ids>] [--issue <N>]	--title --category --agent --deps --issue	-	-	brief category change ledger	docs	writes-docs	none	not-reversible:no command removes a brief or its board row	-	task	team task P1 --title "First task" --category code
+cmd	board	ledger	board add <ID> [--allow-dup] ;; board assign <ID> <agent> ;; board set <ID> <status> ;; board row <ID> ;; board ls	--allow-dup	add assign set row ls	-	ledger	docs	writes-docs	none	not-reversible:no command removes a board row	-	board	team board ls
+cmd	change	ledger	change status <id> [--json]	--json	status	-	change spec ledger	-	read-only	none	idempotent	-	change	team change status cli-help
+cmd	thread	ledger	thread <agent> [<message>] [--from <sender>] [--re <n>]	--from --re	-	-	ledger	docs	writes-docs	none	not-reversible:the thread is append-only	-	thread	team thread dev "a decision with its reason"
+cmd	report	ledger	report <ID> <agent> [--force]	--force	-	-	ledger gate	docs	writes-docs	none	not-reversible:the report file stays	-	report	team report P1 dev
+cmd	add-agent	seats	add-agent <a> [--register] [--create] [--no-install] [--print]	--register --create --no-install --print	-	-	seat worktree	worktree	writes-worktree	none	not-reversible:the branch and the worktree stay until you remove them	-	add-agent	team add-agent dev
+cmd	dispatch	seats	dispatch <a> <ID> <task-file> [--model <model>] [--branch <name>] [--fresh] [--allow-overflow] [--print]	--model --branch --fresh --allow-overflow --print	-	-	seat brief worktree task-branch gate	docs state	starts-process	none	not-reversible:the seat's session and its branch are its own history	-	dispatch	team dispatch dev P1 docs/team/tasks/P1-first-task.md --branch task/P1-first-task
+cmd	say	seats	say <a> <message> [--now]	--now	-	-	seat knock	docs	writes-docs	none	not-reversible:the queue keeps what was already delivered	-	say	team say dev "the gate is green, please open the PR"
+cmd	notify	seats	notify <a> <message> [--from <sender>]	--from	-	-	seat pulse	docs	writes-docs	none	not-reversible:the inbox line stays	-	notify	team notify pm "P1 delivered, please review"
+cmd	draft	seats	draft [pm] ;; draft send <file> [--now]	--now	send	-	seat	state	writes-state	none	not-reversible:the delivered text is in the queue	-	draft	team draft send /tmp/note.md
+cmd	outbox	seats	outbox [list] ;; outbox flush [--now] ;; outbox drop <n|all>	--now	list flush drop	-	knock	state	writes-state	none	idempotent	-	outbox	team outbox list
+cmd	reply	seats	reply list ;; reply show <slug> ;; reply post --from <sender> --title <title> [--stdin]	--from --title --stdin	list show post	-	ledger	state	writes-state	none	not-reversible:the reply body is kept	-	reply	team reply post --from pm --title "decision"
+cmd	pulse	patrol	pulse up|down|restart|status|logs [--print]	--print	up down restart status logs	watchdog watchdog-status install-watchdog uninstall-watchdog	pm pulse knock	-	starts-process	none	not-reversible:the window that was started is gone once it stops	-	pulse	team pulse status
+cmd	monitor	patrol	monitor [--once] [--print|--json] [--width <N>] [--height <N>] [--interval <N>] [--events <K>] [--no-pulse]	--once --print --json --width --height --interval --events --no-pulse	-	-	pulse	state	writes-state	none	not-reversible:every run appends its own bookkeeping line	-	monitor	team monitor --print --once
+cmd	watch	patrol	watch [--once] [--interval <N>] [--ui]	--once --interval --ui	-	-	pulse	state	writes-state	none	not-reversible:every tick appends to the patrol log	-	watch	team watch --once
+cmd	standby	patrol	standby on [--reason <text>] ;; standby off ;; standby status	--reason	on off status	-	pm pulse	state	writes-state	none	not-reversible:the state it writes is a record of when it was set	-	standby	team standby on --reason "waiting for the user"
+cmd	up	patrol	up [--agents] [--fresh-pm] [--print]	--agents --fresh-pm --print	-	-	pm seat	state	starts-process	none	not-reversible:the PM session it starts keeps its own history	-	up	team up
+cmd	resume	patrol	resume [--agent <a>] [--all] [--dry-run]	--agent --all --dry-run	-	-	seat pm	state	starts-process	none	not-reversible:a resumed seat continues in its own session	-	resume	team resume --all
+cmd	meeting	peers	meeting open <slug> --with <peer> --topic <text> [--ttl <hours>] [--yes] ;; meeting say <slug> --intent <intent> <message> [--knock] ;; meeting read <slug> [--since <n>] [--peek] ;; meeting list [--all] ;; meeting inbox ;; meeting agree <slug> <option> [--note <text>] ;; meeting close <slug>	--with --topic --ttl --yes --intent --knock --since --peek --all --note	open say read list inbox agree close propose peer knock help	-	pm	meetings	writes-meetings	needs-yes:TEAM_CONFIRM_WRITES	not-reversible:the shared transcript is the record of what was said	-	meeting	team meeting open rename --with other:pm --topic "rename the interface"
+cmd	review	finish	review <ID> --dir <checkout> [--no-gates] [--strong] [--allow-unresolved-branch]	--dir --no-gates --strong --allow-unresolved-branch	-	-	gate ledger worktree	docs	writes-docs	none	not-reversible:the review record stays	-	review	team review P1 --dir /tmp/P1-checkout
+cmd	close	finish	close <ID>	-	-	-	ledger seat	docs	writes-docs	none	not-reversible:the board row keeps the final status	-	close	team close P1
+cmd	teardown	finish	teardown [--agent <a>] [--all] [--purge] [--force] [--register]	--agent --all --purge --force --register	-	-	seat worktree	worktree	writes-worktree	none	not-reversible:the worktree is gone; the branch stays	-	teardown	team teardown --agent dev
+cmd	smoke	finish	smoke [--select <sections>]	--select	-	test	gate	-	read-only	none	idempotent	-	smoke	team smoke --select 51
+cmd	perf	finish	perf [--host]	--host	-	-	gate	-	read-only	none	idempotent	-	perf	team perf --host
+cmd	merge	finish	merge	-	-	-	ledger	-	read-only	none	idempotent	-	merge	team merge
+cmd	pr	finish	pr	-	-	-	ledger	-	read-only	none	idempotent	-	pr	team pr
+cmd	gh	finish	gh	-	-	-	ledger	-	read-only	none	idempotent	-	gh	team gh
+cmd	gl	finish	gl	-	-	-	ledger	-	read-only	none	idempotent	-	gl	team gl
+cmd	mark-loaded	versions	mark-loaded [--version <X>]	--version	-	-	gate	state	writes-state	none	idempotent	-	mark-loaded	team mark-loaded --version 0.2.0
+cmd	version	versions	version [--check]	--check	-	-	gate	-	read-only	none	idempotent	-	version	team version --check
+cmd	changelog	versions	changelog [--since <X>]	--since	-	-	-	-	read-only	none	idempotent	-	changelog	team changelog
+cmd	reload	versions	reload [--done]	--done	-	-	gate	state	writes-state	none	not-reversible:every request leaves its own record	-	reload	team reload

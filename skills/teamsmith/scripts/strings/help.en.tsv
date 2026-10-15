@@ -1,0 +1,478 @@
+# teamsmith · help prose (English) — the source language.
+#
+# Key scheme (one row per key, tab separated):
+#   menu.<x>            the level-0 menu's own lines
+#   group.<id>.<x>      a group's title and its one-sentence purpose
+#   cmd.<name>.<x>      a command page's prose: title, what, when, example, read, write, see,
+#                       the optional effect/auth/undo extra sentences, and arg.<flag> per argument
+#   term.<id>.def       a concept definition (the menu and every page repeat these verbatim)
+#   part.<id>.title     a labelled part of a command page
+#   claim.<x>           the sentence a declared effect/authorization/undo value renders as
+#
+# Placeholders allowed in values: {project} {meeting_ttl} {effect} {faces} {undo_cmd}
+# Values must not contain tabs or newlines; a value in another table is the fallback for a missing key.
+menu.lead	teamsmith turns one git repository into a small team: a PM agent that plans, writes briefs and verifies work, and worker agents that implement in their own worktrees. Every promise it prints is checked by its own gate.
+menu.groups	Groups
+menu.deeper	`team help <group>` lists a group's commands; `team help <command>` prints one command's own page.
+group.start.title	First run
+group.start.purpose	Set a project up and check that the ground can carry it.
+group.observe.title	Looking around
+group.observe.purpose	Seats, capacity, the ledger view and the machine-readable paths.
+group.ledger.title	The ledger
+group.ledger.purpose	The written record the team works from.
+group.seats.title	Handing out work
+group.seats.purpose	Give one brief to one seat, and talk to that seat.
+group.patrol.title	The patrol
+group.patrol.purpose	The metronome that wakes the PM, and the windows it runs in.
+group.peers.title	Other projects
+group.peers.purpose	Peer talks with another project's PM.
+group.finish.title	Verification and wrap-up
+group.finish.purpose	Verify a delivery, wrap up, and run the tool's own suites.
+group.versions.title	Versions
+group.versions.purpose	Which skill version is loaded, and what changed.
+part.usage.title	Usage
+part.what.title	What it does
+part.when.title	When to use it
+part.arguments.title	Arguments
+part.example.title	Example
+part.read.title	Reads
+part.write.title	Writes
+part.aliases.alias	this is an older name of `{cmd}`
+refuse.unknown	`{token}` is not a command or a group
+refuse.hint	run `team help` for the menu, `team help <group>` for a group's commands and `team help <command>` for one command
+refuse.sub	`{sub}` is not a subcommand of `{cmd}`
+part.side-effects.title	Side effects
+part.authorization.title	Authorization
+part.undo.title	Undo
+part.concepts.title	Concepts
+part.arguments.none	this command takes no flags
+part.concepts.none	this command needs none of the listed terms
+part.see.title	See also
+part.sep	: 
+claim.list-sep	, 
+claim.extra-sep	, 
+claim.undo.reason-prefix	because 
+part.aliases.title	Aliases
+part.aliases.note	older names of this command
+part.start.title	Start here
+claim.effect.read-only	it only reads; nothing outside your terminal changes
+claim.effect.starts-process	it starts a process
+claim.effect.writes	it writes 
+claim.effect.and-writes	and it writes 
+claim.auth.none	no extra authorization is needed
+claim.auth.needs-yes	it needs --yes
+claim.auth.when	only when the project sets
+claim.undo.idempotent	running it again changes nothing
+claim.undo.undo-by	`team {undo_cmd}` puts it back
+claim.undo.not-reversible	not reversible
+claim.undo.reason	because
+face.state	the state directory
+face.docs	the team ledger
+face.config	the project contract
+face.worktree	worktrees and branches
+face.skills	the skill copy under .pi/skills
+face.meetings	the shared meeting area
+term.pm.def	A PM is the agent that owns the project: it writes the briefs, dispatches the seats, verifies what comes back and merges it. There is exactly one PM per project.
+term.seat.def	A seat is one worker agent. It has its own tmux window, its own git worktree and its own session, so two seats never edit the same files.
+term.worktree.def	A worktree is a second checkout of the same repository on its own branch, so a seat can write files while the PM keeps working in the main checkout.
+term.task-branch.def	A task branch is the branch a seat's worktree is on. It is named after the task, and it is the evidence of which work belongs to which task.
+term.brief.def	A brief is the task file under the team's tasks directory. It is the single source of scope and acceptance commands for one task.
+term.category.def	The category of a brief is the word after `category:` in its header. The project maps each category to a model, so the category decides which model the seat gets.
+term.change.def	A change is a proposal under the project's spec directory that groups the specs a piece of work touches, with its own tasks and its own verification.
+term.spec.def	A spec is the written contract of one capability: what must hold, as requirements with scenarios. The gate validates the specs, so a spec that does not hold is red.
+term.gate.def	A gate is the project's own check suite. Green means the checks really ran on this tree; it is evidence only because the same gate fails when the work is broken.
+term.ledger.def	The ledger is the team's written record: the board, the briefs, the threads, the reports and the review records. Agents append to it; the PM owns it.
+term.pulse.def	The pulse is the patrol that wakes the PM on an interval, but only when there is pending work. It runs as a window in the same session.
+term.knock.def	A knock is the short notification that tells a window there is something to read. It never carries the work itself; the work is in a file.
+term.yes.def	`--yes` is the explicit authorization a command needs before it changes shared or remote state. Without it the command refuses and writes nothing.
+cmd.help.title	print the menu, a group page or one command's page
+cmd.help.what	Prints the help surface: the entry menu, a group's list of commands, or one command's own page. The text comes from one machine-readable command manifest, so the menu, the group pages and the command pages can never drift apart.
+cmd.help.when	Use it when you know the name of a group or a command and want to read what it does, what it reads and writes, and whether it needs authorization. The same page answers when you ask that command for help.
+cmd.help.example	team help dispatch
+cmd.help.read	the command manifest and the two language tables
+cmd.help.write	nothing
+cmd.help.see	`team version`, `team changelog`
+cmd.bootstrap.title	set up a whole project in one command
+cmd.bootstrap.what	Initialises the project and everything that makes it dispatchable: the contract, the document skeleton, the protocol section in the agents file, the skill copy under `.pi/skills`, one worktree per seat and the patrol window. It is idempotent, so running it again repairs what is missing instead of starting over.
+cmd.bootstrap.when	Use it once on a fresh checkout, before the first dispatch. Come back to it after a version upgrade, or when a seat's worktree, the protocol section or the patrol window went missing.
+cmd.bootstrap.example	team bootstrap --agents "dev verify" --task-models "code=provider/model" --pm-model "provider/strong"
+cmd.bootstrap.read	the repository, the template skill
+cmd.bootstrap.write	the contract, the document skeleton, the protocol section, the skill copy, the worktrees and the state directory
+cmd.bootstrap.see	`team init`, `team doctor`
+cmd.bootstrap.arg.--agents	the seats to register, as one space separated list.
+cmd.bootstrap.arg.--task-models	the category to model map; a fresh project has no model to guess from, so it is required.
+cmd.bootstrap.arg.--pm-model	the model the PM itself runs on; the PM never borrows a worker model.
+cmd.bootstrap.arg.--print	diagnose and print the plan without writing anything.
+cmd.init.title	write the contract and the document skeleton
+cmd.init.what	Writes the project contract and the document skeleton, and copies the skill into the project (under `.pi/skills`) so the project keeps working when the machine's skill is upgraded. It is the step of `team bootstrap` that does not touch worktrees or windows.
+cmd.init.when	Use it when you want a project that is initialised but has no seats running yet, or when you are repairing only the contract and the skeleton.
+cmd.init.example	team init --no-skills --agents "dev verify" --task-models "code=provider/model"
+cmd.init.read	the templates that ship with the skill
+cmd.init.write	the contract and the document skeleton
+cmd.init.see	`team bootstrap`, `team doctor`
+cmd.init.arg.--copy	copy the skill instead of linking it, so the project does not follow skill updates.
+cmd.init.arg.--no-skills	write the contract and the skeleton but leave the skill copy alone.
+cmd.init.arg.--force	overwrite entries that already exist instead of reporting the conflict.
+cmd.init.arg.--agents	the seats to register, as one space separated list.
+cmd.init.arg.--task-models	the category to model map; required for a fresh project.
+cmd.init.arg.--pm-model	the model the PM itself runs on.
+cmd.doctor.title	check that the machine and the project can carry the team
+cmd.doctor.what	Checks the things every dispatch depends on: git, tmux, the agent launcher, the gate, the forge and the free capacity, and then the project's own contract and skeleton. It reports what is missing and what to run next.
+cmd.doctor.when	Use it after installing the skill, after a machine change, and whenever a dispatch refuses for a reason that does not look like the task's own.
+cmd.doctor.example	team doctor
+cmd.doctor.read	the project contract, the document skeleton and the machine
+cmd.doctor.write	nothing
+cmd.doctor.see	`team paths`, `team ps`
+cmd.roster.title	list the seats and what they are doing
+cmd.roster.what	Lists every seat with its window state, its branch, its dirty files and how far it is ahead of the protected branch. It answers whether a seat is running, and on which branch.
+cmd.roster.when	Use it before dispatching, when a message does not seem to arrive, or when you want to know which worktree is on which branch.
+cmd.roster.example	team roster
+cmd.roster.read	the contract, the seat records and git
+cmd.roster.write	nothing
+cmd.roster.see	`team status`, `team ps`
+cmd.status.title	the roster plus the task and report state
+cmd.status.what	Shows the seats together with the state of each task: which stage it is in, which agent owns it and whether a report or a review record exists. Given an id it shows that task alone.
+cmd.status.when	Use it at the start of a session and whenever you want one screen that answers what the team is doing and what is waiting for the PM.
+cmd.status.example	team status P1
+cmd.status.read	the board, the briefs, the reports and the seat records
+cmd.status.write	its own bookkeeping under the state directory
+cmd.status.see	`team digest`, `team roster`
+cmd.ps.title	capacity: whether the machine can carry one more seat
+cmd.ps.what	Reports memory, swap and the model concurrency limits with the seats that currently occupy them. It answers whether one more dispatch fits before the machine starts swapping.
+cmd.ps.when	Use it before dispatching a seat, and when a dispatch is refused for capacity.
+cmd.ps.example	team ps
+cmd.ps.read	the machine and the contract's concurrency limits
+cmd.ps.write	nothing
+cmd.ps.see	`team doctor`, `team dispatch`
+cmd.bg.title	list or stop the background jobs this project recorded
+cmd.bg.what	Lists the long jobs the project started in the background, with their process id, their start fingerprint and their command, and stops one of them by its record. A job is stopped only when the recorded process id and start time still match, so a recycled process id is not killed by mistake.
+cmd.bg.when	Use it when a background job is still running and you want to see it or take it out of the way.
+cmd.bg.example	team bg list
+cmd.bg.read	the background job records under the state directory
+cmd.bg.write	the background job records
+cmd.bg.see	`team ps`, `team monitor`
+cmd.digest.title	one screen of what needs the PM
+cmd.digest.what	Collects the unhandled inbox items, the reports waiting for verification, the blocked seats and the task states into one short list. It is the PM's worklist rather than a status report.
+cmd.digest.when	Use it at the start of a PM turn, or when the patrol woke you and you want to know why.
+cmd.digest.example	team digest
+cmd.digest.read	the inbox, the board, the reports and the seat records
+cmd.digest.write	its own bookkeeping under the state directory
+cmd.digest.see	`team inbox`, `team status`
+cmd.inbox.title	read what the seats sent the PM
+cmd.inbox.what	Prints the inbox: the short lines seats leave when they finish a turn, each pointing at the report or the file that carries the work. Given a seat it prints only that seat's lines.
+cmd.inbox.when	Use it when the patrol knocked, or when you want to see what arrived since you last looked.
+cmd.inbox.example	team inbox dev
+cmd.inbox.read	the inbox files
+cmd.inbox.write	nothing
+cmd.inbox.see	`team digest`, `team thread`
+cmd.paths.title	print the resolved paths and session as data
+cmd.paths.what	Prints the paths and identities this invocation resolved: the project root, the main root, the document directory, the session, the agent windows and the state directory, as JSON.
+cmd.paths.when	Use it when you need to hand a path to another tool, or when a command resolved a different project than you expected.
+cmd.paths.example	team paths
+cmd.paths.read	the contract and the environment
+cmd.paths.write	nothing
+cmd.paths.see	`team doctor`, `team config list`
+cmd.config.title	read and write the project contract
+cmd.config.what	Reads and writes the project contract with validation, a fingerprint check and an audit line, and upgrades a contract written by an older version. `set` is the only writer, so a value never changes without a record of who changed it.
+cmd.config.when	Use `list` to see every knob and its default, `set` to change one knob, and `upgrade-models` when an older project still carries the retired model keys.
+cmd.config.example	team config list
+cmd.config.read	the contract and the audit log
+cmd.config.write	the contract and the audit log
+cmd.config.see	`team doctor`, `team bootstrap`
+cmd.config.arg.--task-models	the whole category to model map, used by the model upgrade.
+cmd.config.arg.--pm-model	the model the PM itself runs on, used by the model upgrade.
+cmd.task.title	write a task brief and put it on the board
+cmd.task.what	Creates the brief for one task from the template and adds its row to the board. The brief carries the header the dispatch reads: its id, its title, the branch, the category and the anchor that names the spec this work belongs to.
+cmd.task.when	Use it as the first step of every task, before the dispatch, so the seat has a scope and a set of acceptance commands to work from.
+cmd.task.example	team task P1 --title "First task" --category code --agent dev
+cmd.task.read	the board and the templates
+cmd.task.write	the brief and the board row
+cmd.task.see	`team board`, `team dispatch`
+cmd.task.arg.--title	the task's title; the brief's file name is derived from it.
+cmd.task.arg.--category	which category of work this is; the category decides the model the seat gets.
+cmd.task.arg.--agent	the seat the brief is meant for; without it the first seat in the roster is used.
+cmd.task.arg.--deps	the ids this task depends on, space separated.
+cmd.task.arg.--issue	the forge issue number this task came from, when there is one.
+cmd.board.title	read and write the board rows
+cmd.board.what	Manages the board: add a row, assign it to a seat, set its status, print one row, or list the whole board. The board is the PM's summary of where every task stands.
+cmd.board.when	Use it when a task moves between stages, when you want to see the whole board at once, or when a row needs correcting.
+cmd.board.example	team board set P1 wip
+cmd.board.read	the board
+cmd.board.write	the board
+cmd.board.see	`team task`, `team close`
+cmd.board.arg.--allow-dup	allow a row whose id already exists, for the rare case where two rows really are wanted.
+cmd.change.title	a change's readiness view
+cmd.change.what	Reads the change directory and the board and reports what is still missing before the change can be archived: its tasks, their stages, the seats assigned, the delta writers and the open blockers. It exits with success only when every task mapped to the change is finished.
+cmd.change.when	Use it when you want to know whether a change can be archived, and which task is still standing in the way.
+cmd.change.example	team change status cli-help
+cmd.change.read	the change directory, the briefs and the board
+cmd.change.write	nothing
+cmd.change.see	`team board`, `team review`
+cmd.change.arg.--json	print the same view as one JSON object, for another program to read.
+cmd.thread.title	append to a seat's thread
+cmd.thread.what	Appends a message to the thread of one seat and prints it back. The thread is append-only: it is where a decision and its reason are recorded so the next session can read them.
+cmd.thread.when	Use it whenever you send a seat a correction or a decision that the seat's next session must still be able to find.
+cmd.thread.example	team thread dev "the second half is out of scope; do the layout first"
+cmd.thread.read	the thread file
+cmd.thread.write	the thread file
+cmd.thread.see	`team say`, `team report`
+cmd.thread.arg.--from	who the message is from, when the writer is not the PM.
+cmd.thread.arg.--re	the title of the message this one answers.
+cmd.report.title	write a report skeleton for a task
+cmd.report.what	Creates the report file a seat fills in when it delivers: its sections follow the delivery protocol, and a report already in the branch is protected unless you force the rewrite.
+cmd.report.when	Use it at the start of a delivery, so the seat writes its evidence into a file that the PM and the independent verification can both read.
+cmd.report.example	team report P1 dev
+cmd.report.read	the templates and the existing report
+cmd.report.write	the report file
+cmd.report.see	`team review`, `team close`
+cmd.report.arg.--force	overwrite a report that already exists.
+cmd.add-agent.title	create or register a seat
+cmd.add-agent.what	Creates a seat's long-lived worktree and branch and, when asked, records it in the roster. It prints the git command it would run rather than running it, so the PM keeps ownership of every git operation.
+cmd.add-agent.when	Use it when a new seat joins the project, or when a seat's worktree was lost and has to be created again.
+cmd.add-agent.example	team add-agent dev
+cmd.add-agent.read	the contract, the roster and git
+cmd.add-agent.write	the worktree, the branch and the seat record
+cmd.add-agent.see	`team roster`, `team teardown`
+cmd.add-agent.arg.--register	also record the seat in the roster, through the audited writer.
+cmd.add-agent.arg.--create	create the worktree as well, instead of only printing the plan.
+cmd.add-agent.arg.--no-install	skip the step that installs the skill into the new worktree.
+cmd.add-agent.arg.--print	print what would happen without doing it.
+cmd.dispatch.title	hand one brief to one seat
+cmd.dispatch.what	Creates the seat's task branch, records the assignment and starts or resumes that seat's session in its own worktree. A first dispatch picks the model from the brief's category; dispatching the same task again reopens the recorded model and session instead of choosing new ones.
+cmd.dispatch.when	Use it once the brief exists and the seat is chosen. Run it again with the same id to continue an unfinished task, and with a new model and the fresh flag when the model must change.
+cmd.dispatch.example	team dispatch dev P1 docs/team/tasks/P1-first-task.md --branch task/P1-first-task
+cmd.dispatch.read	the brief, the contract, the board and the roster
+cmd.dispatch.write	the board row, the seat record and the worktree
+cmd.dispatch.see	`team resume`, `team review`, `team task`
+cmd.dispatch.arg.--model	use this model instead of the one the brief's category maps to.
+cmd.dispatch.arg.--branch	declare the task branch this dispatch expects; the worktree must be on it.
+cmd.dispatch.arg.--fresh	start a new session instead of reopening the recorded one; required whenever the model changes.
+cmd.dispatch.arg.--allow-overflow	dispatch even when the model's concurrency limit is already reached.
+cmd.dispatch.arg.--print	print the launch command without starting anything.
+cmd.say.title	send a seat one line
+cmd.say.what	Puts one line in front of a seat. If the seat's input box already holds a draft, the message is queued and delivered when the box is clear, so a person's half-written line is never overwritten.
+cmd.say.when	Use it for a short instruction or a status note. For a decision the seat's next session must still find, write it in the thread as well.
+cmd.say.example	team say dev "the gate is green, please open the pull request"
+cmd.say.read	the seat's window and the outbox
+cmd.say.write	the seat's inbox and the outbox
+cmd.say.see	`team notify`, `team outbox`, `team thread`
+cmd.say.arg.--now	deliver immediately, skipping the draft guard; the skip is recorded.
+cmd.notify.title	one line from a seat to the PM
+cmd.notify.what	Writes one line into the PM's inbox and knocks on the PM's window. The sender is resolved from the directory the command runs in, so a seat cannot claim to be the PM by typing a name.
+cmd.notify.when	Use it at the end of a turn to say that something is ready or that something is blocked.
+cmd.notify.example	team notify pm "P1 delivered, please review"
+cmd.notify.read	the seat records and the inbox
+cmd.notify.write	the PM's inbox and the patrol's knock record
+cmd.notify.see	`team say`, `team inbox`, `team digest`
+cmd.notify.arg.--from	the sender's name, for the rare case where the directory does not say it.
+cmd.draft.title	put a person's text into the queue
+cmd.draft.what	Opens a scratch window to write a message in, or sends the contents of a file, and queues the text for delivery. Queued text is delivered when the target's input box is clear, so nothing is typed over a draft someone is writing.
+cmd.draft.when	Use it when the text comes from you rather than from an agent, and when it is long enough that a single line would lose it.
+cmd.draft.example	team draft send /tmp/note.md
+cmd.draft.read	the draft file and the queue
+cmd.draft.write	the queue
+cmd.draft.see	`team outbox`, `team say`
+cmd.draft.arg.--now	deliver immediately instead of waiting for a clear input box.
+cmd.outbox.title	the delayed-delivery queue
+cmd.outbox.what	Lists what is waiting to be delivered, flushes it early, or drops entries. An entry appears here when a message could not be typed into a busy window, so nothing is lost and nothing is typed over a person's draft.
+cmd.outbox.when	Use it when a message seems not to have arrived, or when you want to look at the queue before it is delivered.
+cmd.outbox.example	team outbox list
+cmd.outbox.read	the queue
+cmd.outbox.write	the queue
+cmd.outbox.see	`team say`, `team draft`
+cmd.outbox.arg.--now	flush the queue by typing at once, skipping the input-box guard.
+cmd.reply.title	publish and read key replies
+cmd.reply.what	Publishes a reply body as its own file before it is sent, and lists or shows the replies already published. The body is taken from standard input, so the published text is the text that was sent.
+cmd.reply.when	Use it for a decision or an answer that should stay readable after the line that carried it has scrolled away.
+cmd.reply.example	team reply post --from pm --title "the interface is frozen"
+cmd.reply.read	the reply files
+cmd.reply.write	the reply file, the inbox and the queue
+cmd.reply.see	`team thread`, `team inbox`
+cmd.reply.arg.--from	who the reply is from.
+cmd.reply.arg.--title	the title the published reply is filed under.
+cmd.reply.arg.--stdin	take the body from standard input instead of the command line.
+cmd.pulse.title	the patrol that wakes the PM
+cmd.pulse.what	Runs the patrol: on an interval it asks whether any work is waiting for the PM and wakes it only when the answer is yes. It runs as a window in the same session, and it can be started, stopped, restarted, inspected and read.
+cmd.pulse.when	Use it at the start of a session, so the PM is woken by work rather than by memory. Check it when the PM was not woken although work was waiting.
+cmd.pulse.example	team pulse status
+cmd.pulse.read	the state directory, the board and the inboxes
+cmd.pulse.write	the state directory and the session's windows
+cmd.pulse.see	`team watch`, `team monitor`, `team standby`
+cmd.pulse.arg.--print	print the plan and the command instead of starting or stopping anything.
+cmd.monitor.title	the status panel
+cmd.monitor.what	Draws the team's status screen: what every seat is doing, what needs the PM and what the machine still has room for. In a terminal it is an interactive screen; when its output is a pipe it prints text, and it can print a machine-readable object instead.
+cmd.monitor.when	Use it to watch a running team, and to see the same view the patrol uses when it decides whether to wake the PM.
+cmd.monitor.example	team monitor --print --once
+cmd.monitor.read	the state directory, the board and the seat records
+cmd.monitor.write	its own bookkeeping under the state directory
+cmd.monitor.see	`team pulse`, `team watch`, `team status`
+cmd.monitor.arg.--once	draw the screen once and exit, instead of refreshing it.
+cmd.monitor.arg.--print	print plain text instead of the interactive screen.
+cmd.monitor.arg.--json	print one machine-readable object.
+cmd.monitor.arg.--width	pretend the terminal is this many columns wide.
+cmd.monitor.arg.--height	pretend the terminal is this many rows tall.
+cmd.monitor.arg.--interval	refresh every this many seconds.
+cmd.monitor.arg.--events	keep this many recent activity lines in the panel.
+cmd.monitor.arg.--no-pulse	look only; do not run the patrol on the way.
+cmd.watch.title	run one patrol tick in the foreground
+cmd.watch.what	Runs the patrol once, in the foreground, and prints what it decided: whether there is pending work, and whether the PM was woken. It is the same decision the patrol window makes on its own interval.
+cmd.watch.when	Use it when you want to see the patrol's reasoning right now, without waiting for the next tick.
+cmd.watch.example	team watch --once
+cmd.watch.read	the state directory, the board and the inboxes
+cmd.watch.write	the state directory, the patrol log and the session's windows
+cmd.watch.see	`team pulse`, `team monitor`
+cmd.watch.arg.--once	run a single tick and exit.
+cmd.watch.arg.--interval	repeat every this many seconds instead of running once.
+cmd.watch.arg.--ui	show the interactive panel instead of the text output.
+cmd.standby.title	tell the patrol that no one is needed
+cmd.standby.what	Records that the PM stands down: the patrol stops waking it, while everything that arrives is still written to the patrol log. A human turns it back on, so an agent cannot silently wake itself up again.
+cmd.standby.when	Use it when the work is blocked on a person, or when the backlog should wait for a human rather than for the PM.
+cmd.standby.example	team standby on --reason "waiting for the user to pick an interface"
+cmd.standby.read	the state directory and the patrol log
+cmd.standby.write	the state directory
+cmd.standby.see	`team pulse`, `team digest`
+cmd.standby.arg.--reason	why the PM is standing down; it is written down so the next session knows.
+cmd.up.title	build the stage and start the PM
+cmd.up.what	Creates the project's session and windows if they are missing and starts the PM in its own window, continuing the project's previous conversation unless a fresh one is asked for. It starts the PM only; the seats are not touched.
+cmd.up.when	Use it after a restart, or when the session was lost and the team should keep working in the same project.
+cmd.up.example	team up
+cmd.up.read	the contract, the state directory and the session
+cmd.up.write	the session's windows and the state directory
+cmd.up.see	`team resume`, `team pulse`, `team doctor`
+cmd.up.arg.--agents	also resume the seats that have work but no window.
+cmd.up.arg.--fresh-pm	start a new PM conversation instead of continuing the previous one; the old record stays on disk.
+cmd.up.arg.--print	print the launch decision and the command without starting anything.
+cmd.resume.title	bring stopped seats back
+cmd.resume.what	Finds the seats that have an unfinished task but no live window and starts them again, with the same brief, the same branch and the same model and session they were dispatched with.
+cmd.resume.when	Use it after a restart or a crash, when a seat stopped in the middle of its task.
+cmd.resume.example	team resume --all
+cmd.resume.read	the seat records, the board and the briefs
+cmd.resume.write	the seat records and the session's windows
+cmd.resume.see	`team dispatch`, `team pulse`
+cmd.resume.arg.--agent	resume this one seat instead of every stopped seat.
+cmd.resume.arg.--all	resume every seat with unfinished work.
+cmd.resume.arg.--dry-run	print what would be resumed, without starting anything.
+cmd.meeting.title	talk to another project's PM
+cmd.meeting.what	Runs a meeting between this project and another: each side speaks into one shared transcript, and a proposal is only settled when both sides agree to it themselves. It never writes into the other project's repository, and it has no way to give an order: a human is the only one who can carry a decision across projects.
+cmd.meeting.when	Use it for an interface between two projects, for advice with evidence, or to report a problem that the other side has to know about. It is not a channel for commanding another team.
+cmd.meeting.auth	the project asks for confirmation on writes to shared state (`TEAM_CONFIRM_WRITES`), so without it the refusal is the tool own
+cmd.meeting.example	team meeting open rename --with other:pm --topic "rename the interface"
+cmd.meeting.read	the shared meeting area and this project's session
+cmd.meeting.write	the shared meeting area
+cmd.meeting.see	`team thread`, `team say`
+cmd.meeting.arg.--with	the other project, optionally as project:session, this meeting is with.
+cmd.meeting.arg.--topic	one line saying what the meeting is about.
+cmd.meeting.arg.--ttl	how many hours the meeting stays open; the default is {meeting_ttl} hours, and an expired meeting can still be read.
+cmd.meeting.arg.--yes	the explicit authorization this write to shared state needs.
+cmd.meeting.arg.--intent	what kind of speech this is: information, a question, a report, a proposal or a request.
+cmd.meeting.arg.--knock	also knock on the other side's window.
+cmd.meeting.arg.--since	read only what was said after this number.
+cmd.meeting.arg.--peek	read without marking the transcript as read.
+cmd.meeting.arg.--all	include the meetings that are already closed.
+cmd.meeting.arg.--note	one line recording what your side does with the agreement.
+cmd.review.title	verify a delivery on an independent checkout
+cmd.review.what	Checks the delivery out into its own detached worktree, runs the project's gate there and writes the record of what was run and what came out. It refuses a dirty tree, so the record always points at a commit.
+cmd.review.when	Use it after a seat delivers and before the branch is merged, so the decision rests on a run that did not happen in the author's own worktree.
+cmd.review.example	team review P1 --dir /tmp/P1-checkout
+cmd.review.read	the branch, the gate and the delivery report
+cmd.review.write	the review record and the independent worktree
+cmd.review.see	`team close`, `team report`
+cmd.review.arg.--dir	the independent checkout the branch is verified in.
+cmd.review.arg.--no-gates	skip the gate run and record only the checks that do not need it.
+cmd.review.arg.--strong	run the stricter gate as well.
+cmd.review.arg.--allow-unresolved-branch	proceed even though the branch name could not be resolved on the remote.
+cmd.close.title	close a task
+cmd.close.what	Finishes a task: it checks that the evidence is really there, updates the board and closes the seat's window, while the worktree and the branch stay where they are. The work itself is merged by a person or by the PM with git, not by this command.
+cmd.close.when	Use it after the verification passed and the branch is in the protected branch.
+cmd.close.example	team close P1
+cmd.close.read	the board, the review record and the branches
+cmd.close.write	the board, the state directory and the session's windows
+cmd.close.see	`team review`, `team teardown`
+cmd.teardown.title	take a seat's window and worktree away
+cmd.teardown.what	Closes a seat's window and, when asked, removes its worktree. The branch is kept unless the purge is asked for, so the work a seat did can still be found and merged afterwards.
+cmd.teardown.when	Use it when a seat is done with a project, when the roster shrinks, or when a worktree is corrupt and has to be built again.
+cmd.teardown.example	team teardown --agent dev
+cmd.teardown.read	the roster, the seat records and git
+cmd.teardown.write	the worktree, the seat record and the session's windows
+cmd.teardown.see	`team add-agent`, `team roster`
+cmd.teardown.arg.--agent	the seat to tear down.
+cmd.teardown.arg.--all	tear down every seat in the roster.
+cmd.teardown.arg.--purge	remove the worktree as well, not only the window.
+cmd.teardown.arg.--force	go ahead even when something about the seat looks unexpected.
+cmd.teardown.arg.--register	remove the seat from the roster as well, through the audited writer.
+cmd.smoke.title	run the tool's own correctness suite
+cmd.smoke.what	Runs the project's correctness suite for teamsmith itself, in throwaway repositories under the temporary directory: the suite never touches the project it is called from.
+cmd.smoke.when	Use it after changing the tool, and when a gate result needs to be reproduced by hand.
+cmd.smoke.example	team smoke --select 51
+cmd.smoke.read	the tool's own tests
+cmd.smoke.write	only throwaway directories under the temporary directory
+cmd.smoke.see	`team perf`, `team doctor`
+cmd.smoke.arg.--select	run only the named sections, as a comma separated list of section keys.
+cmd.perf.title	run the performance decision
+cmd.perf.what	Runs the performance suite and decides whether the interactive panel still meets its budgets. It prefers the pinned reference environment and says so plainly when it is measuring the host instead.
+cmd.perf.when	Use it before a release, and after a change that could slow the panel down.
+cmd.perf.example	team perf --host
+cmd.perf.read	the tool's own tests and the machine
+cmd.perf.write	only throwaway directories under the temporary directory
+cmd.perf.see	`team smoke`, `team monitor`
+cmd.perf.arg.--host	measure the host and mark the result as not coming from the reference environment.
+cmd.merge.title	the removed merge shortcut
+cmd.merge.what	This name used to wrap a git merge and a pull request. It is now refused with the real commands to run instead, because owning the merge means a person and the PM run git themselves.
+cmd.merge.when	Run it only to read the route it prints: which git command merges a branch, and in which order a pull request and the local branch are handled.
+cmd.merge.example	team merge
+cmd.merge.read	nothing
+cmd.merge.write	nothing
+cmd.merge.see	`team close`, `team pr`
+cmd.pr.title	the removed pull-request shortcut
+cmd.pr.what	This name used to open and merge a pull request. It is now refused with the real commands to run instead, so the forge is driven by its own tool rather than wrapped by the skill.
+cmd.pr.when	Run it only to read the route it prints.
+cmd.pr.example	team pr
+cmd.pr.read	nothing
+cmd.pr.write	nothing
+cmd.pr.see	`team merge`, `team gh`
+cmd.gh.title	the removed GitHub passthrough
+cmd.gh.what	This name used to pass arguments straight to the GitHub command line tool. It is now refused with the route to the real tool and to the token file the project uses.
+cmd.gh.when	Run it only to read the route it prints.
+cmd.gh.example	team gh
+cmd.gh.read	nothing
+cmd.gh.write	nothing
+cmd.gh.see	`team gl`, `team pr`
+cmd.gl.title	the removed GitLab passthrough
+cmd.gl.what	This name used to pass arguments straight to the GitLab command line tool. It is now refused with the route to the real tool and to the token file the project uses.
+cmd.gl.when	Run it only to read the route it prints.
+cmd.gl.example	team gl
+cmd.gl.read	nothing
+cmd.gl.write	nothing
+cmd.gl.see	`team gh`, `team pr`
+cmd.mark-loaded.title	record which skill version this session loaded
+cmd.mark-loaded.what	Writes down the skill version this session is working with, so the tool can tell a stale session from a fresh one.
+cmd.mark-loaded.when	Use it once at the start of a session, and after a reload.
+cmd.mark-loaded.example	team mark-loaded --version 0.2.0
+cmd.mark-loaded.read	the installed skill
+cmd.mark-loaded.write	the loaded-version record
+cmd.mark-loaded.see	`team version`, `team reload`
+cmd.mark-loaded.arg.--version	record this version instead of the one found on disk.
+cmd.version.title	which version is on disk, in the skill and in this session
+cmd.version.what	Prints the version of the installed skill, the version written in the skill file, the changelog's head and the version this session loaded. With the check argument it gives a verdict instead of a list.
+cmd.version.when	Use it when a command behaves differently from what this session's skill describes, or at the start of a long session.
+cmd.version.example	team version --check
+cmd.version.read	the installed skill, the changelog and the session record
+cmd.version.write	nothing
+cmd.version.see	`team changelog`, `team reload`, `team mark-loaded`
+cmd.version.arg.--check	answer whether this session's skill is current instead of printing every version.
+cmd.changelog.title	what changed in the skill
+cmd.changelog.what	Prints the skill's change history, newest first, optionally only what came after a given version.
+cmd.changelog.when	Use it after an upgrade, to see what behaviour changed since the version you know.
+cmd.changelog.example	team changelog
+cmd.changelog.read	the installed skill's changelog
+cmd.changelog.write	nothing
+cmd.changelog.see	`team version`, `team reload`
+cmd.changelog.arg.--since	print only the entries newer than this version.
+cmd.reload.title	ask the agent to reload the skill
+cmd.reload.what	Leaves a request that the running agent reloads this skill, so a long session stops using the files it read at its start. The reload itself happens in the agent, not here.
+cmd.reload.when	Use it after the skill was upgraded, when you want the current session to see the new files.
+cmd.reload.example	team reload
+cmd.reload.read	the reload request record
+cmd.reload.write	the reload request record
+cmd.reload.see	`team version`, `team mark-loaded`
+cmd.reload.arg.--done	mark the request as handled, after the reload really happened.

@@ -231,7 +231,7 @@ mr_known_tables() {
     inb && /^esac/ { inb=0 }
     inb && /^[[:space:]]+[A-Za-z0-9_'"'"'|.-]+\)/ {
       line=$0; sub(/^[[:space:]]+/,"",line); sub(/\).*/,"",line)
-      n=split(line,a,"|"); for (i=1;i<=n;i++){ gsub(/[^a-z0-9-]/,"",a[i]); if(a[i]!="") printf "%s ", a[i] }
+      n=split(line,a,"|"); for (i=1;i<=n;i++){ if (a[i] ~ /^__/) continue; gsub(/[^a-z0-9-]/,"",a[i]); if(a[i]!="") printf "%s ", a[i] }
     }' "$src")"
   MRI_SUBS=""
   for f in "$skill"/scripts/lib/cmd-*.sh; do
@@ -445,81 +445,205 @@ mr_probe_claim() {
   return 0
 }
 
+# ── Walk A: the manifest's usage lines, rendered on every level and probed ─────────────────────────
+# The working set comes from the command manifest (the same file the renderer reads), never from
+# whatever text a page happens to yield: for every command the manifest carries, every usage line it
+# declares must be printed on that command's page and probed, and a command the CLI accepts while the
+# manifest omits it is a finding naming that command. Coverage is "every command × every usage line".
+mr_manifest() { printf '%s\n' "$skill/scripts/strings/commands.tsv"; }
+mr_cmds()     { awk -F'\t' '$1=="cmd"{print $2}' "$(mr_manifest)"; }
+mr_groups()   { awk -F'\t' '$1=="group"{print $2}' "$(mr_manifest)"; }
+mr_field()    { awk -F'\t' -v n="$1" -v f="$2" '$1=="cmd" && $2==n {print $f}' "$(mr_manifest)"; }
+mr_begin()    { awk -F'\t' '$1=="begin"{for(i=2;i<=NF;i++) printf "%s ", $i}' "$(mr_manifest)"; }
+mr_is_alias() { awk -F'\t' -v a="$1" '$1=="cmd"{n=split($7,x," "); for(i=1;i<=n;i++) if(x[i]==a) f=1} END{exit !f}' "$(mr_manifest)"; }
+mr_is_cmd()   { awk -F'\t' -v a="$1" '$1=="cmd" && $2==a {f=1} END{exit !f}' "$(mr_manifest)"; }
+
+# mr_fragments → every declared usage fragment, one per line (with the command it belongs to)
+mr_fragments() {
+  awk -F'\t' '$1=="cmd"{n=split($4,f," ;; "); for(i=1;i<=n;i++) print $2 "\t" f[i]}' "$(mr_manifest)"
+}
+
+# mr_pages → render the menu, every group page and every command page; prints "<kind>\t<label>"
+mr_pages() {
+  local pages="$tmp/pages" spec kind label
+  mkdir -p "$pages"
+  local -a jobs=()
+  local g n
+  jobs+=("menu:")
+  for g in $(mr_groups); do jobs+=("group:$g"); done
+  for n in $(mr_cmds); do jobs+=("command:$n"); done
+  local running=0
+  for spec in "${jobs[@]}"; do
+    kind="${spec%%:*}"; label="${spec#*:}"
+    ( cd "$tmp" && env -u TMUX -u TMUX_PANE bash "$team" help $label > "$pages/$kind--$label.txt" 2>/dev/null ) &
+    running=$((running + 1))
+    if [ "$running" -ge 6 ]; then wait -n 2>/dev/null || true; running=$((running - 1)); fi
+  done
+  wait 2>/dev/null || true
+  printf '%s\n' "${jobs[@]}"
+}
+
+# mr_page_usage <page-file> → the usage entries of a page, one per line (continuations joined)
+mr_page_usage() {
+  awk '
+    function indent(l) { m=match(l, /[^ ]/); return m-1 }
+    { l=$0
+      if (l ~ /^[ \t]*$/) next
+      ind=indent(l)
+      if (l ~ /^──/) { inblock=1; lastindent=-1; cur=""; next }
+      if (!inblock) next
+      if (ind == 0) { if (cur!="") { print cur; cur="" }; inblock=0; next }
+      if (lastindent >= 0 && ind > lastindent && ind < 6) { if (cur != "") cur = cur " " substr(l, ind+1); next }
+      if (lastindent >= 0 && ind > lastindent) { next }   # the description block: not part of the usage line
+      if (cur != "") print cur
+      cur=substr(l, ind+1); lastindent=ind
+    }
+    END { if (cur != "") print cur }
+  ' "$1"
+}
+
+# mr_manifest_claims → $tmp/walk-a.tsv: the manifest's usage lines, judged by the same parser.
+# The walk and its non-vacuity control both take their working set from here, so neither can drift
+# from the command manifest the renderer reads.
+mr_manifest_claims() {
+  mr_known_tables
+  mr_write_parser
+  { printf '── manifest ──\n'
+    while IFS=$'\t' read -r c frag; do printf '  %s\n' "$frag"; done < <(mr_fragments)
+  } > "$tmp/manifest-page.txt"
+  awk -v tops="$MRI_TOPS" -v subs="$MRI_SUBS" -f "$tmp/walk-a.awk" "$tmp/manifest-page.txt" \
+    > "$tmp/walk-a.tsv" 2>"$tmp/manifest-claims.err"
+  [ -s "$tmp/manifest-claims.err" ] && return 1
+  return 0
+}
+
 mr_walk_a() {
-  section "walk · team help 的每条用法行 ↔ 解析器（打印的每个 --flag 都要被自己的解析器接受）"
-  local help_out
-  help_out="$( cd "$tmp" && env PATH="$SHIM:$PATH" bash "$team" help 2>&1 )"
-  if ! printf '%s\n' "$help_out" | grep -q '用法：'; then
-    finding "team help 没有打印用法头部（不可解析）"
+  section "walk · 帮助面每一级（菜单 / 组页 / 命令页）↔ 命令清单 ↔ 真解析器"
+  local manifest; manifest="$(mr_manifest)"
+  if [ ! -f "$manifest" ]; then
+    finding "walk: 没有命令清单（$manifest）—— 帮助面没有单一真源"
     return 1
   fi
   mr_known_tables
   mr_write_parser
-  printf '%s\n' "$help_out" > "$tmp/help.txt"
-  # 全角 ｜／ → \x1f（bash 的字面替换按字节序列匹配，安全；awk 的字符类不行）。
-  local prepped="" hline
-  while IFS= read -r hline; do
-    hline="${hline//｜/$'\x1f'}"
-    prepped="$prepped${hline//／/$'\x1f'}"$'\n'
-  done <<< "$help_out"
-  printf '%s' "$prepped" | awk -v tops="$MRI_TOPS" -v subs="$MRI_SUBS" -f "$tmp/walk-a.awk" > "$tmp/walk-a.tsv" 2>"$tmp/walk-a.err"
-  if [ -s "$tmp/walk-a.err" ]; then
-    finding "Walk A 解析器报错：$(head -2 "$tmp/walk-a.err" | tr '\n' ' ')"
-    return 1
-  fi
-
-  local n_entry n_claim
-  n_entry="$(grep -ac '^ENTRY' "$tmp/walk-a.tsv" || true)"
-  n_claim="$(grep -ac '^CLAIM' "$tmp/walk-a.tsv" || true)"
-  if [ "${n_entry:-0}" -lt 5 ] || [ "${n_claim:-0}" -lt 10 ]; then
-    finding "Walk A 解析出的条目/断言太少（entry=$n_entry claim=$n_claim）—— 解析器或 help 形状变了"
-    grep -a '^FAIL' "$tmp/walk-a.tsv" | head -5 | sed 's/^/      /'
-    return 1
-  fi
-  local ln line
-  while IFS=$'\t' read -r _ ln; do
-    line="$(sed -n "${ln}p" "$tmp/help.txt" | sed 's/^[[:space:]]*//' | cut -c1-60)"
-    ok "用法行 L$ln：$line"
-  done < <(grep -a '^ENTRY' "$tmp/walk-a.tsv")
   local failed=0
+
+  # ① 覆盖度：dispatcher 接受的每个名字都要有记录或别名声明；清单里每个命令都要真的被接受
+  local n missing=0
+  for n in $MRI_TOPS; do
+    [ "$n" = "panel-data" ] && continue
+    mr_is_cmd "$n" && continue
+    mr_is_alias "$n" || { finding "walk: dispatcher 接受的 $n 在命令清单里没有记录（也没有别名声明）"; missing=1; }
+  done
+  [ "$missing" = "0" ] && ok "清单盖住 dispatcher 接受的每个名字（$(printf '%s\n' $MRI_TOPS | grep -c . || true) 个标签，内部标签 __* 不算命令名）"
+  local orphan=0
+  for n in $(mr_cmds); do
+    printf '%s\n' $MRI_TOPS | grep -qx "$n" || { finding "walk: 清单里的 $n 不是 dispatcher 接受的命令"; orphan=1; }
+  done
+  [ "$orphan" = "0" ] && ok "清单里每个命令都被 dispatcher 接受（$(mr_cmds | grep -c . || true) 个命令）"
+
+  # ② 工作集来自清单：把清单的每个用法片段喂同一个解析器
+  if ! mr_manifest_claims; then
+    finding "walk: 清单解析器报错：$(head -2 "$tmp/manifest-claims.err" | tr '\n' ' ')"
+    return 1
+  fi
   while IFS=$'\t' read -r _ ln rest; do
-    finding "L$ln 无法归属（解析器拒绝静默跳过）：$rest"
+    finding "walk: 清单里有无法归属的用法行（解析器拒绝静默跳过）：$rest"
     failed=1
   done < <(grep -a '^FAIL' "$tmp/walk-a.tsv")
-  [ "$failed" = "1" ] && return 1
+  local n_manifest_claims n_manifest_entries
+  n_manifest_claims="$(grep -ac '^CLAIM' "$tmp/walk-a.tsv" || true)"
+  n_manifest_entries="$(grep -ac '^ENTRY' "$tmp/walk-a.tsv" || true)"
+  if [ "${n_manifest_entries:-0}" -lt 5 ] || [ "${n_manifest_claims:-0}" -lt 10 ]; then
+    finding "walk: 清单解析出的条目/断言太少（entry=$n_manifest_entries claim=$n_manifest_claims）"
+    return 1
+  fi
 
+  # ③ 逐级渲染：每一页都必须真的打印清单声明的那几行，且每一页都要能被同一个解析器读
+  local list; list="$(mr_pages)"
+  local spec kind label page n_pages=0 n_entries=0 n_claims=0 level_fail=0
+  local -A LEVEL_OK=()
+  while IFS=':' read -r kind label; do
+    page="$tmp/pages/$kind--$label.txt"
+    [ -s "$page" ] || { finding "walk: 帮助面缺一页（$kind $label）"; level_fail=1; continue; }
+    n_pages=$((n_pages + 1))
+    if [ "$kind" = "command" ]; then
+      # the page's own usage header must be there (a deleted header is a defect, never a skip)
+      grep -qE '^── (Usage|用法)' "$page" || { finding "walk: $label 的页没有用法头部（Usage:/用法：）"; level_fail=1; }
+      local declared printed
+      declared="$(awk -F'\t' -v c="$label" '$1==c {print $2}' < <(mr_fragments) | sort)"
+      printed="$(mr_page_usage "$page" | sort)"
+      if [ "$declared" != "$printed" ]; then
+        local extra; extra="$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$printed") | head -3 | paste -sd ' ' -)"
+        local gone; gone="$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$printed") | head -3 | paste -sd ' ' -)"
+        finding "walk: $label 的页与清单不一致（页上多出：${extra:-无}；页上缺少：${gone:-无}）"
+        level_fail=1
+      fi
+      if printf '%s\n' "$printed" | grep -q -- '--ghost-probe\|--frobnicate-probe'; then
+        finding "walk: $label 的页打印了清单没有的旗标（$(printf '%s\n' "$printed" | grep -- '--ghost-probe\|--frobnicate-probe' | head -1)）"
+        level_fail=1
+      fi
+      LEVEL_OK[command]=1
+    elif [ "$kind" = "group" ]; then
+      local want got
+      want="$(awk -F'\t' -v g="$label" '$1=="cmd" && $3==g {n=split($4,f," ;; "); print f[1]}' "$manifest" | sort)"
+      got="$(mr_page_usage "$page" | sort)"
+      if [ "$want" != "$got" ]; then
+        finding "walk: 组页 $label 与清单不一致（$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | grep '^[<>]' | head -2 | tr '\n' ' ')）"
+        level_fail=1
+      fi
+      LEVEL_OK[group]=1
+    else
+      local want got
+      want="$(mr_begin | tr ' ' '\n' | grep -v '^$' | sort)"
+      got="$(mr_page_usage "$page" | awk '{print $1}' | sort)"
+      if [ "$want" != "$got" ]; then
+        finding "walk: 菜单的上手命令与清单的 begin 行不一致（$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | grep '^[<>]' | head -2 | tr '\n' ' ')）"
+        level_fail=1
+      fi
+      LEVEL_OK[menu]=1
+    fi
+    # the same parser reads every level (block rules unchanged)
+    awk -v tops="$MRI_TOPS" -v subs="$MRI_SUBS" -f "$tmp/walk-a.awk" "$page" > "$tmp/page-claims.tsv" 2>/dev/null
+    local ln rest
+    while IFS=$'\t' read -r _ ln rest; do
+      finding "walk: $kind $label 的第 $ln 行无法归属（解析器拒绝静默跳过）：$rest"
+      level_fail=1
+    done < <(grep -a '^FAIL' "$tmp/page-claims.tsv")
+    n_entries=$((n_entries + $(grep -ac '^ENTRY' "$tmp/page-claims.tsv" || true)))
+    n_claims=$((n_claims + $(grep -ac '^CLAIM' "$tmp/page-claims.tsv" || true)))
+    ok "walk: $kind $label 判过（$(grep -ac '^ENTRY' "$tmp/page-claims.tsv" || true) 条用法行，$(grep -ac '^CLAIM' "$tmp/page-claims.tsv" || true) 条断言）"
+  done <<< "$list"
+  [ "$level_fail" = "1" ] && failed=1
+  local lv
+  for lv in menu group command; do
+    [ -n "${LEVEL_OK[$lv]:-}" ] || { finding "walk: $lv 这一级一条都没被判到（静默漏读）"; failed=1; }
+  done
+
+  # ④ 每条 (命令, 旗标) 断言喂真解析器；探针结果按 (命令,旗标) 去重
   local fixture
   fixture="$(new_fixture walk-a)" || return 1
-  local path flag note
+  local path flag note n_probed=0
   while IFS=$'\t' read -r _ ln path flag; do
     if mr_probe_claim "$fixture" "$path" "$flag"; then
       note="$(first_line "$MR_OUT")"
-      ok "断言 L$ln：$path $flag → rc=$MR_RC ${note:+｜ $note}"
+      ok "断言：$path $flag → rc=$MR_RC ${note:+｜ $note}"
+      n_probed=$((n_probed + 1))
     else
-      finding "断言 L$ln：$path $flag 被自己的解析器拒绝（原文：$(first_line "$MR_OUT")）"
+      finding "断言：$path $flag 被自己的解析器拒绝（原文：$(first_line "$MR_OUT")）"
       failed=1
     fi
   done < <(grep -a '^CLAIM' "$tmp/walk-a.tsv")
   [ "$failed" = "1" ] && return 1
+  printf '  \033[2m·\033[0m walk 覆盖面：%d 个页面（1 菜单 + %d 组页 + %d 命令页）、%d 条用法行、%d 条 (命令,旗标) 断言，逐条喂过真解析器\n' \
+    "$n_pages" "$(mr_groups | grep -c . || true)" "$(mr_cmds | grep -c . || true)" "$n_manifest_entries" "$n_probed"
   return 0
 }
 
 # ── control: an unknown flag must be refused by every flag-printing path ────────────────────────────
 mr_control() {
   section "control · 非空洞臂：打印旗标的每条路径都必须拒绝未知参数（--frobnicate-probe）"
-  [ -f "$tmp/walk-a.tsv" ] || {
-    local help_out prepped hline
-    help_out="$( cd "$tmp" && env PATH="$SHIM:$PATH" bash "$team" help 2>&1 )"
-    mr_known_tables
-    mr_write_parser
-    printf '%s\n' "$help_out" > "$tmp/help.txt"
-    prepped=""
-    while IFS= read -r hline; do
-      hline="${hline//｜/$'\x1f'}"
-      prepped="$prepped${hline//／/$'\x1f'}"$'\n'
-    done <<< "$help_out"
-    printf '%s' "$prepped" | awk -v tops="$MRI_TOPS" -v subs="$MRI_SUBS" -f "$tmp/walk-a.awk" > "$tmp/walk-a.tsv" 2>/dev/null
-  }
+  [ -f "$tmp/walk-a.tsv" ] || mr_manifest_claims
   local fixture; fixture="$(new_fixture control)" || return 1
   local p n=0 bad=0
   while IFS= read -r p; do
@@ -1282,14 +1406,16 @@ mr_refusals() {
 }
 
 # ── flips: scratch trees that MUST redden the walk ──────────────────────────────────────────────────
-mr_scratch_tree() { # <name> → 打印 scratch 树（skills/teamsmith + skills/teamsmith-init 的最小副本）
+mr_scratch_tree() { # <name> → 打印 scratch 树（skills/teamsmith 的完整副本 + 同级 teamsmith-init）
   local name="$1"
   local s="$tmp/$name"
-  rm -rf "$s"; mkdir -p "$s/skills/teamsmith"
-  cp -a "$skill/scripts" "$skill/references" "$skill/templates" "$s/skills/teamsmith/" 2>/dev/null || true
-  # perf.sh 是 source 模式的声明文件（walk 要读它），scratch 树也得有。
-  mkdir -p "$s/skills/teamsmith/tests"
-  cp -a "$skill/tests/perf.sh" "$s/skills/teamsmith/tests/perf.sh" 2>/dev/null || true
+  rm -rf "$s"; mkdir -p "$s/skills"
+  # 整棵副本（不再挑目录）：控制臂扫的是清单声明的**每条路径**，其中包括会走到 tests/ 的命令
+  # （`smoke`）——最小副本会让它们在嵌套 run 里以「环境缺件」的形状红，而那与「吞掉未知旗标」
+  # 无关（P260 实测：同一段嵌套 walk control 在整棵副本上 ✓179/✗0，在最小副本上红一条）。
+  cp -a "$skill" "$s/skills/teamsmith" 2>/dev/null || true
+  local init="$skill/../teamsmith-init"
+  [ -d "$init" ] && cp -a "$init" "$s/skills/teamsmith-init" 2>/dev/null || true
   printf '%s\n' "$s"
 }
 
@@ -1397,16 +1523,16 @@ mr_flips() {
   fi
   # ① 场地缺陷：重新印出已退休的 add-agent --model，并让解析器明确拒绝它。
   s="$(mr_scratch_tree flip-model)"
-  python3 - "$s/skills/teamsmith/scripts/lib/cmd-project.sh" <<'PY'
+  python3 - "$s/skills/teamsmith/scripts/strings/commands.tsv" <<'MUT'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 old = 'add-agent <a> [--register] [--create]'
-new = 'add-agent <a> [--register] [--model m] [--create]'
-assert s.count(old) == 1, 'add-agent help route must match exactly once'
+new = 'add-agent <a> [--register] [--model <m>] [--create]'
+assert s.count(old) == 1, 'add-agent usage route must match exactly once'
 open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
-PY
-  python3 - "$s/skills/teamsmith/scripts/lib/cmd-agents.sh" <<'PY'
+MUT
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-agents.sh" <<'MUT'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
@@ -1415,25 +1541,25 @@ new = '--model|--model=*) team_usage_die "add-agent: 未知参数 --model" ;;'
 assert s.count(old) == 1, 'retired model branch must match exactly once'
 s = s.replace(old, new, 1)
 open(p, 'w', encoding='utf-8').write(s)
-PY
+MUT
   # 落地证明（P202）：两种 --model 拼法如今在同一退休分支，仍检查原分支消失、新分支出现与字节变化。
   if mr_flip_require "翻转①" "$s" scripts/lib/cmd-agents.sh \
        "--model|--model=*) team_err 'add-agent --model retired；使用 task category 和 config set-task-model'; return 2 ;;" \
        '--model|--model=*) team_usage_die "add-agent: 未知参数 --model" ;;' &&
-     mr_flip_require "翻转① help" "$s" scripts/lib/cmd-project.sh \
+     mr_flip_require "翻转① help" "$s" scripts/strings/commands.tsv \
        'add-agent <a> [--register] [--create]' \
-       'add-agent <a> [--register] [--model m] [--create]'; then
+       'add-agent <a> [--register] [--model <m>] [--create]'; then
     mr_flip_run "$s" walk
     if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'add-agent --model'; then
-      ok "翻转①：help 打印 --model 而解析器拒绝 → walk 红并点名 add-agent --model"
+      ok "翻转①：清单打印 --model 而解析器拒绝 → walk 红并点名 add-agent --model"
     else
       finding "翻转①没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
     fi
   fi
   # ② 兄弟旗标：--fresh 是 dispatch 的，add-agent 不接受
   s="$(mr_scratch_tree flip-sibling)"
-  sed -i 's/add-agent <a> \[--register\]/add-agent <a> [--fresh]/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
-  if mr_flip_require "翻转②" "$s" scripts/lib/cmd-project.sh 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
+  sed -i 's/^cmd\tadd-agent\tseats\tadd-agent <a> \[--register\]/cmd\tadd-agent\tseats\tadd-agent <a> [--fresh]/' "$s/skills/teamsmith/scripts/strings/commands.tsv"
+  if mr_flip_require "翻转②" "$s" scripts/strings/commands.tsv 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
     mr_flip_run "$s" walk
     if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'add-agent --fresh'; then
       ok "翻转②：add-agent 行印上兄弟命令的 --fresh → walk 红并点名 add-agent --fresh"
@@ -1445,15 +1571,15 @@ PY
   #   a) 陈旧模式：sed 的搜索端在文件里根本不存在 → 谁都没改 → 必须报「变异没落地」；
   #   b) 只插不删：新文本出现了、旧文本还在 → 判据的另一侧必须红（证明 gone 一侧承重）。
   s="$(mr_scratch_tree flip-stale-pattern)"
-  sed -i 's/add-agent <a> \[--frosh\]/add-agent <a> [--fresh]/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
-  if mr_flip_landed "落地判据红侧 a" "$s" scripts/lib/cmd-project.sh 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
+  sed -i 's/add-agent <a> \[--frosh\]/add-agent <a> [--fresh]/' "$s/skills/teamsmith/scripts/strings/commands.tsv"
+  if mr_flip_landed "落地判据红侧 a" "$s" scripts/strings/commands.tsv 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
     finding "落地判据红侧 a：陈旧 sed 什么也没改，判据却放行了（判据是橡皮章）"
   else
     ok "落地判据红侧 a：陈旧 sed（搜索端不存在）→ 判据报「变异没落地」：$MR_FLIP_WHY"
   fi
   s="$(mr_scratch_tree flip-half-landed)"
-  sed -i 's/^  add-agent <a> \[--register\]/  add-agent <a> [--register] [--fresh]/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
-  if mr_flip_landed "落地判据红侧 b" "$s" scripts/lib/cmd-project.sh 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
+  sed -i 's/add-agent <a> \[--register\]/add-agent <a> [--register] [--fresh]/' "$s/skills/teamsmith/scripts/strings/commands.tsv"
+  if mr_flip_landed "落地判据红侧 b" "$s" scripts/strings/commands.tsv 'add-agent <a> [--register]' 'add-agent <a> [--fresh]'; then
     finding "落地判据红侧 b：旧文本还在（只插不删），判据却放行了"
   else
     ok "落地判据红侧 b：只插不删 → 判据报「变异没落地」：$MR_FLIP_WHY"
@@ -1473,9 +1599,17 @@ open(p, 'w', encoding='utf-8').write(s)
 PY
   # ps 在 help 里不打印旗标 —— 控制臂按设计只覆盖「打印旗标的路径」；这里把 ps 的用法行改印一个旗标，
   # 让这段翻转的能量落在「吞旗标必须红」上（形状与今天实测的 version/meeting list 同类）。
-  sed -i 's/^  ps              容量：/  ps [--frobnicate-probe] 容量：/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
+  python3 - "$s/skills/teamsmith/scripts/strings/commands.tsv" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = 'cmd\tps\tobserve\tps\t-'
+new = 'cmd\tps\tobserve\tps [--frobnicate-probe]\t--frobnicate-probe'
+assert s.count(old) == 1, 'the ps row must match exactly once'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+MUT
   if mr_flip_require "翻转③" "$s" scripts/lib/cmd-status.sh - '-*) shift ;;' \
-     && mr_flip_require "翻转③" "$s" scripts/lib/cmd-project.sh '  ps              容量：' '  ps [--frobnicate-probe] 容量：'; then
+     && mr_flip_require "翻转③" "$s" scripts/strings/commands.tsv "$(printf 'cmd\tps\tobserve\tps\t-')" "$(printf 'cmd\tps\tobserve\tps [--frobnicate-probe]')"; then
     mr_flip_run "$s" walk control
     if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '控制：ps'; then
       ok "翻转③：ps 吞掉未知旗标 → 控制臂红并点名 ps"
@@ -1483,12 +1617,18 @@ PY
       finding "翻转③没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
     fi
   fi
-  # ④ 无法归属的行：命令块里列 0 的行（修复前的 board 形状）
+  # ④ 无法归属的行：命令块里列 0 的行（把一条用法行渲染到列 0）
   s="$(mr_scratch_tree flip-unattributable)"
-  sed -i 's/^  board add|assign|set|row|ls/board add|assign|set|row|ls/' "$s/skills/teamsmith/scripts/lib/cmd-project.sh"
-  # 落地证明只查 gone 一侧：这步只动行首两个空格，去空格后的行**仍包含**原来那段文本，所以「0→1」
-  # 用子串表达不出来；而「带两个空格的形式由 1 变 0」＋ cmp 的字节差就是确证（只有 sed 能改出这个形状）。
-  if mr_flip_require "翻转④" "$s" scripts/lib/cmd-project.sh '  board add|assign|set|row|ls' -; then
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-help.sh" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  local plain="${_TH_USAGE[$i]// ;; /;;;}"'
+new = old + '\n  [ "$name" != "board" ] || team_help_flow 0 4 "board add <ID> [--allow-dup]"'
+assert s.count(old) == 1, 'the usage renderer must match exactly once'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+MUT
+  if mr_flip_require "翻转④" "$s" scripts/lib/cmd-help.sh - 'team_help_flow 0 4 "board add <ID> [--allow-dup]"'; then
     mr_flip_run "$s" walk
     if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '列 0 的行'; then
       ok "翻转④：命令块里的列 0 行 → walk 红并点名该行（修复前的 board 形状）"
@@ -1619,6 +1759,44 @@ PY
       ok "翻转⑩对照：同一棵修坏的树上 Walk A/控制臂照旧绿（只红拒绝路线那一族）"
     else
       finding "翻转⑩对照：修坏的树上 Walk A/控制臂不该变红（rc=$MR_FLIP_RC）"
+    fi
+  fi
+  # ⑪ 第 2 级页面打印一条清单没有声明的用法行（旧走查看不到这里）
+  s="$(mr_scratch_tree flip-page-ghost)"
+  python3 - "$s/skills/teamsmith/scripts/lib/cmd-help.sh" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  local plain="${_TH_USAGE[$i]// ;; /;;;}"'
+new = old + '\n  [ "$name" != "dispatch" ] || team_help_flow 2 4 "dispatch --ghost-probe"'
+assert s.count(old) == 1, 'the usage renderer must match exactly once'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+MUT
+  if mr_flip_require "翻转⑪" "$s" scripts/lib/cmd-help.sh - 'team_help_flow 2 4 "dispatch --ghost-probe"'; then
+    mr_flip_run "$s" walk
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has 'dispatch' && mr_flip_log_has 'ghost-probe'; then
+      ok "翻转⑪：第 2 级页面多出一条清单没有的用法行 → walk 红并点名该页与旗标"
+    else
+      finding "翻转⑪没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
+    fi
+  fi
+  # ⑫ 清单漏掉一个 CLI 仍然接受的命令 —— 与帮助面夹具的 coverage 红侧同形（那条更便宜），
+  #    这里不重复跑一遍 Walk A。
+  # ⑬ 一级没有被判到（组表空了 → 一个组页都渲染不出来）
+  s="$(mr_scratch_tree flip-level-unread)"
+  python3 - "$s/skills/teamsmith/scripts/strings/commands.tsv" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+s = "\n".join(l for l in s.split("\n") if not l.startswith("group\t"))
+open(p, 'w', encoding='utf-8').write(s)
+MUT
+  if mr_flip_require "翻转⑬" "$s" scripts/strings/commands.tsv "$(printf 'group\tstart')" -; then
+    mr_flip_run "$s" walk
+    if [ "$MR_FLIP_RC" != "0" ] && mr_flip_log_has '这一级一条都没被判到'; then
+      ok "翻转⑬：一级一条都没被判到 → walk 红并点名该级"
+    else
+      finding "翻转⑬没有兑现（rc=$MR_FLIP_RC）：$(mr_flip_evidence)"
     fi
   fi
   # 收尾：flips 自己的 scratch 树与嵌套 run 的根都不留下。

@@ -1,0 +1,466 @@
+# teamsmith · 帮助文案（中文）—— help.en.tsv 的译文；键集必须与英文表相等，缺键会被点名。
+menu.lead	teamsmith 把一个 git 仓库变成一支小团队：一个 PM 负责规划、写任务书、独立复验并合并，若干 worker 席位在各自的工作树里实现。它打印出的每一条承诺都由它自己的门禁检查。
+menu.groups	分组
+menu.deeper	`team help <组>` 列出一个组的命令；`team help <命令>` 打印那个命令自己的整页。
+group.start.title	第一次使用
+group.start.purpose	把项目装起来，并确认环境撑得住。
+group.observe.title	四处看看
+group.observe.purpose	席位、容量、账本视图与机读路径。
+group.ledger.title	账本
+group.ledger.purpose	团队据以工作的书面记录。
+group.seats.title	派活
+group.seats.purpose	把一份任务书交给一个席位，并跟它说话。
+group.patrol.title	巡检
+group.patrol.purpose	叫醒 PM 的节拍器，以及它所在的窗口。
+group.peers.title	跨项目
+group.peers.purpose	与另一个项目的 PM 对等交流。
+group.finish.title	复验与收尾
+group.finish.purpose	复验交付、收尾，并跑这套工具自己的套件。
+group.versions.title	版本
+group.versions.purpose	加载的是哪个版本，以及改了什么。
+part.usage.title	用法
+part.what.title	它做什么
+part.when.title	什么时候用它
+part.arguments.title	参数
+part.example.title	例子
+part.read.title	读什么
+part.write.title	写什么
+part.aliases.alias	这是 `{cmd}` 的旧名
+refuse.unknown	`{token}` 既不是命令也不是分组
+refuse.hint	看菜单用 `team help`，看某个组用 `team help <组>`，看某个命令用 `team help <命令>`
+refuse.sub	`{sub}` 不是 `{cmd}` 的子命令
+part.side-effects.title	副作用
+part.authorization.title	授权
+part.undo.title	能不能撤
+part.concepts.title	概念
+part.arguments.none	这个命令没有旗标
+part.concepts.none	这个命令用不到清单里的术语
+part.see.title	相关命令
+part.sep	：
+claim.list-sep	、
+claim.extra-sep	；
+claim.undo.reason-prefix	原因：
+part.aliases.title	别名
+part.aliases.note	是这个命令的旧名
+part.start.title	从这里开始
+claim.effect.read-only	只读；终端之外的东西不会有任何变化
+claim.effect.starts-process	会起一个进程
+claim.effect.writes	会写入
+claim.effect.and-writes	并写入
+claim.auth.none	不需要额外授权
+claim.auth.needs-yes	需要 --yes
+claim.auth.when	仅当项目设了
+claim.undo.idempotent	再跑一次不会有任何变化
+claim.undo.undo-by	`team {undo_cmd}` 能把它放回去
+claim.undo.not-reversible	不可撤销
+claim.undo.reason	原因
+face.state	状态目录
+face.docs	团队账本
+face.config	项目契约
+face.worktree	工作树与分支
+face.skills	`.pi/skills` 下的 skill 副本
+face.meetings	共享会议区
+term.pm.def	PM 是拥有这个项目的 agent：它写任务书、派单、复验交回来的东西并合并。一个项目只有一个 PM。
+term.seat.def	席位就是一个 worker agent。它有自己的 tmux 窗口、自己的 git 工作树和自己的会话，所以两个席位不会改到同一批文件。
+term.worktree.def	工作树是同一个仓库在另一个分支上的第二份检出，席位在里面写文件时，PM 还在主检出里干活。
+term.task-branch.def	任务分支是席位工作树所在的分支。它以任务命名，也是"哪些改动属于哪个任务"的证据。
+term.brief.def	任务书是团队任务目录下的那份文件。它是一个任务的范围与验收命令的唯一出处。
+term.category.def	任务书的类别是它头部 `category:` 后面的那个词。项目把每个类别映射到一个模型，所以类别决定这个席位用哪个模型。
+term.change.def	change 是项目规格目录下的一份提案，把一件事涉及的规格归在一起，带自己的任务和自己的复验。
+term.spec.def	规格是一个能力的书面合同：哪些事必须成立，写成带场景的要求。门禁会校验规格，所以规格不成立就是红的。
+term.gate.def	门禁是项目自己的检查套件。绿表示这些检查真的在这棵树上跑过；它之所以算证据，是因为同一套门禁在东西坏掉时会红。
+term.ledger.def	账本是团队的书面记录：看板、任务书、往来记录、报告与复验记录。agent 往里追加，PM 拥有它。
+term.pulse.def	巡检是每隔一段时间叫醒 PM 的巡逻，而且只在确实有待办时叫醒。它跑在同一个 session 里的一个窗口中。
+term.knock.def	敲门是告诉某个窗口"有东西要看"的短提示。它从不携带工作本身；工作在文件里。
+term.yes.def	`--yes` 是命令改变共享状态或远端状态之前需要的显式授权。没有它，命令会拒绝，而且一个字都不写。
+cmd.help.title	打印菜单、组页或某个命令的整页
+cmd.help.what	打印帮助面：入口菜单、某个组的命令列表，或某个命令自己的整页。文本来自一份机读的命令清单，所以菜单、组页与命令页不会各自漂移。
+cmd.help.when	当你知道一个组或一个命令的名字、想读它做什么、读写什么、要不要授权时用它。问那个命令要帮助时打印的也是同一页。
+cmd.help.example	team help dispatch
+cmd.help.read	命令清单与两张语言表
+cmd.help.write	不写任何东西
+cmd.help.see	`team version`、`team changelog`
+cmd.bootstrap.title	一条命令把整个项目准备好
+cmd.bootstrap.what	把项目初始化到可派单的状态：契约、文档骨架、协议段落、`.pi/skills` 下的 skill 副本、每个席位一份工作树，以及巡检窗口。它是幂等的，再跑一次是补齐缺失的东西，而不是从头再来。
+cmd.bootstrap.when	在一个新检出的仓库上跑一次，赶在第一次派单之前。版本升级之后、或者某个席位的工作树、协议段落、巡检窗口丢了的时候，也回到它这里。
+cmd.bootstrap.example	team bootstrap --agents "dev verify" --task-models "code=provider/model" --pm-model "provider/strong"
+cmd.bootstrap.read	仓库本身与模板中的 skill
+cmd.bootstrap.write	契约、文档骨架、协议段落、skill 副本、工作树与状态目录
+cmd.bootstrap.see	`team init`、`team doctor`
+cmd.bootstrap.arg.--agents	要登记的席位，一个空格分隔的列表。
+cmd.bootstrap.arg.--task-models	类别到模型的映射；新项目没有默认模型可猜，所以它是必填的。
+cmd.bootstrap.arg.--pm-model	PM 自己用的模型；PM 从不借用 worker 的模型。
+cmd.bootstrap.arg.--print	只诊断并打印计划，什么都不写。
+cmd.init.title	写契约与文档骨架
+cmd.init.what	写项目契约和文档骨架，并把 skill 复制进项目（放在 `.pi/skills`），这样机器上的 skill 升级时项目照旧能用。它是 `team bootstrap` 里不碰工作树、不碰窗口的那一步。
+cmd.init.when	当你想要一个已初始化、但还没有席位在跑的项目时用它；只修契约和骨架时也用它。
+cmd.init.example	team init --no-skills --agents "dev verify" --task-models "code=provider/model"
+cmd.init.read	随 skill 一起发布的模板
+cmd.init.write	契约与文档骨架
+cmd.init.see	`team bootstrap`、`team doctor`
+cmd.init.arg.--copy	复制一份 skill 而不是软链，项目从此不跟随 skill 更新。
+cmd.init.arg.--no-skills	只写契约和骨架，不动 skill 副本。
+cmd.init.arg.--force	覆盖已经存在的条目，而不是报告冲突。
+cmd.init.arg.--agents	要登记的席位，一个空格分隔的列表。
+cmd.init.arg.--task-models	类别到模型的映射；新项目必填。
+cmd.init.arg.--pm-model	PM 自己用的模型。
+cmd.doctor.title	检查机器和项目撑不撑得住这支团队
+cmd.doctor.what	检查每次派单都依赖的东西：git、tmux、agent 启动器、门禁、forge 与剩余容量，然后检查项目自己的契约与骨架。它报告缺什么、下一步该跑什么。
+cmd.doctor.when	装完 skill 之后、机器有变动之后，以及派单因为不像任务本身的原因被拒时用它。
+cmd.doctor.example	team doctor
+cmd.doctor.read	项目契约、文档骨架与本机环境
+cmd.doctor.write	不写任何东西
+cmd.doctor.see	`team paths`、`team ps`
+cmd.roster.title	列出席位和它们在做的事
+cmd.roster.what	列出每个席位：窗口状态、所在分支、脏文件，以及领先受保护分支多远。它回答一个席位在不在跑、在哪个分支上。
+cmd.roster.when	派单之前、消息像是不投递时，或者想知道哪个工作树在哪个分支上时用它。
+cmd.roster.example	team roster
+cmd.roster.read	契约、席位记录与 git
+cmd.roster.write	不写任何东西
+cmd.roster.see	`team status`、`team ps`
+cmd.status.title	名册加上任务与报告的状态
+cmd.status.what	把席位与每个任务的状态放在一起看：处在哪个阶段、哪个 agent 拥有它、有没有报告或复验记录。给一个 id 就只看那个任务。
+cmd.status.when	开会话时看一次，以及任何时候想要一屏就回答"团队在做什么、什么在等 PM"时用它。
+cmd.status.example	team status P1
+cmd.status.read	看板、任务书、报告与席位记录
+cmd.status.write	它在状态目录下自己的记账
+cmd.status.see	`team digest`、`team roster`
+cmd.ps.title	容量：这台机器还撑得住一个席位吗
+cmd.ps.what	报告内存、swap 与模型并发限额，以及当前占用它们的席位。它回答"再派一个还放得下吗"，免得机器开始换页。
+cmd.ps.when	派单之前用它，以及派单因容量被拒时用它。
+cmd.ps.example	team ps
+cmd.ps.read	本机环境与契约里的并发限额
+cmd.ps.write	不写任何东西
+cmd.ps.see	`team doctor`、`team dispatch`
+cmd.bg.title	列出或停掉本项目记录的后台作业
+cmd.bg.what	列出项目在后台起的长作业：进程 id、启动指纹和命令，并按记录停掉其中一个。只有记录的进程 id 与启动时间仍然吻合时才会去停，所以回收再用的进程 id 不会被误杀。
+cmd.bg.when	后台作业还在跑、你想看看它或把它挪开时用它。
+cmd.bg.example	team bg list
+cmd.bg.read	状态目录下的后台作业记录
+cmd.bg.write	后台作业记录
+cmd.bg.see	`team ps`、`team monitor`
+cmd.digest.title	一屏说完什么在等 PM
+cmd.digest.what	把没处理的收件箱条目、等复验的报告、被阻塞的席位和任务状态收成一张短清单。它是 PM 的待办列表，不是状态报告。
+cmd.digest.when	PM 开局时用它，或者巡检把你叫醒、你想知道为什么时用它。
+cmd.digest.example	team digest
+cmd.digest.read	收件箱、看板、报告与席位记录
+cmd.digest.write	它在状态目录下自己的记账
+cmd.digest.see	`team inbox`、`team status`
+cmd.inbox.title	读席位发给 PM 的东西
+cmd.inbox.what	打印收件箱：席位在回合结束时留下的短句，每句都指向承载那份工作的报告或文件。给一个席位就只打印那个席位的行。
+cmd.inbox.when	巡检敲过门之后用它，或者想知道上次看之后又来了什么时用它。
+cmd.inbox.example	team inbox dev
+cmd.inbox.read	收件箱文件
+cmd.inbox.write	不写任何东西
+cmd.inbox.see	`team digest`、`team thread`
+cmd.paths.title	把解析出来的路径与会话打印成数据
+cmd.paths.what	打印这次调用解析出的路径与身份：项目根、主仓根、文档目录、session、各 agent 窗口与状态目录，输出是 JSON。
+cmd.paths.when	当你要把路径交给另一个工具时用它，或者当某个命令解析出的项目跟你以为的不一样时用它。
+cmd.paths.example	team paths
+cmd.paths.read	契约与环境变量
+cmd.paths.write	不写任何东西
+cmd.paths.see	`team doctor`、`team config list`
+cmd.config.title	读和写项目契约
+cmd.config.what	读写项目契约：带校验、指纹 CAS 与审计行；旧版本写下的契约也能显式升级。`set` 是唯一的写入口，所以一个值不会在没有"谁改的"记录的情况下改变。
+cmd.config.when	用 `list` 看每个旋钮和它的默认值，用 `set` 改一个旋钮，老项目还带着退休的模型键时用 `upgrade-models`。
+cmd.config.example	team config list
+cmd.config.read	契约与审计日志
+cmd.config.write	契约与审计日志
+cmd.config.see	`team doctor`、`team bootstrap`
+cmd.config.arg.--task-models	整个类别到模型的映射，模型升级时用。
+cmd.config.arg.--pm-model	PM 自己用的模型，模型升级时用。
+cmd.task.title	写一份任务书并放进看板
+cmd.task.what	从模板生成一个任务的任务书，并在看板上建立它的行。任务书带着派单要读的头部：id、标题、分支、类别，以及指明这项工作属于哪条规格的锚。
+cmd.task.when	每个任务的第一步都用它，赶在派单之前，让席位有明确的范围和一套验收命令。
+cmd.task.example	team task P1 --title "第一个任务" --category code --agent dev
+cmd.task.read	看板与模板
+cmd.task.write	任务书与看板行
+cmd.task.see	`team board`、`team dispatch`
+cmd.task.arg.--title	任务标题；任务书的文件名由它推导。
+cmd.task.arg.--category	这属于哪一类工作；类别决定席位拿到哪个模型。
+cmd.task.arg.--agent	这份任务书给哪个席位；不写就用名册里的第一个。
+cmd.task.arg.--deps	这个任务依赖的 id，空格分隔。
+cmd.task.arg.--issue	这个任务对应的 forge issue 号（如果有）。
+cmd.board.title	读和写看板的行
+cmd.board.what	管理看板：加一行、指派给某个席位、改状态、打印一行，或列出整个看板。看板是 PM 对"每个任务在哪一步"的汇总。
+cmd.board.when	任务在阶段之间移动时用它，想一眼看完整块看板时用它，某一行要更正时也用它。
+cmd.board.example	team board set P1 wip
+cmd.board.read	看板
+cmd.board.write	看板
+cmd.board.see	`team task`、`team close`
+cmd.board.arg.--allow-dup	允许加一行 id 已存在的行，只在确实想留两行时用。
+cmd.change.title	看一个 change 离就绪还差什么
+cmd.change.what	读 change 目录与看板，报告归档前还缺什么：它的任务、各任务所处阶段、指派的席位、delta 的写者与仍开着的阻塞项。只有映射到这个 change 的任务全部结束时才以成功退出。
+cmd.change.when	想知道一个 change 能不能归档、以及哪个任务还挡在路上时用它。
+cmd.change.example	team change status cli-help
+cmd.change.read	change 目录、任务书与看板
+cmd.change.write	不写任何东西
+cmd.change.see	`team board`、`team review`
+cmd.change.arg.--json	把同一个视图打印成一个 JSON 对象，给别的程序读。
+cmd.thread.title	往某个席位的往来记录里追加一条
+cmd.thread.what	往一个席位的往来记录末尾追加一条消息并回显。往来记录只追加：一个决定和它的理由写在这里，下一个会话还读得到。
+cmd.thread.when	当你给席位发一条更正或一个决定、而它下一个会话必须还能找到时用它。
+cmd.thread.example	team thread dev "后半段超出范围，先把版式做完"
+cmd.thread.read	往来记录文件
+cmd.thread.write	往来记录文件
+cmd.thread.see	`team say`、`team report`
+cmd.thread.arg.--from	这条消息的发送者，写字的人不是 PM 时用。
+cmd.thread.arg.--re	这条消息回应的那条消息的标题。
+cmd.report.title	为一个任务写报告骨架
+cmd.report.what	生成席位交活时要填的报告文件：它的分节跟随交付协议，而且分支里已有的报告不会被改写，除非你显式强制。
+cmd.report.when	交活开始时用它，让席位把证据写进一个 PM 与独立复验都能读到的文件。
+cmd.report.example	team report P1 dev
+cmd.report.read	模板与已有报告
+cmd.report.write	报告文件
+cmd.report.see	`team review`、`team close`
+cmd.report.arg.--force	覆盖已经存在的报告。
+cmd.add-agent.title	建一个席位，或把它登记进名册
+cmd.add-agent.what	建立席位的长期工作树与分支，需要时把它登记进名册。它把要跑的 git 命令打印出来而不是自己跑，所以每一次 git 操作仍然归 PM。
+cmd.add-agent.when	新席位加入项目时用它，席位的工作树丢了要重建时也用它。
+cmd.add-agent.example	team add-agent dev
+cmd.add-agent.read	契约、名册与 git
+cmd.add-agent.write	工作树、分支与席位记录
+cmd.add-agent.see	`team roster`、`team teardown`
+cmd.add-agent.arg.--register	同时把席位登记进名册，走带审计的写入口。
+cmd.add-agent.arg.--create	连工作树一起建出来，而不只是打印计划。
+cmd.add-agent.arg.--no-install	跳过"把 skill 装进新工作树"这一步。
+cmd.add-agent.arg.--print	只打印会做什么，不做。
+cmd.dispatch.title	把一份任务书交给一个席位
+cmd.dispatch.what	建立席位的任务分支、写下这次派单，并在它自己的工作树里启动或恢复这个席位的会话。第一次派单按任务书的类别挑模型；同一个任务再派一次会复用记录里的模型与会话，而不是另选一套。
+cmd.dispatch.when	任务书写好、席位定了之后用它。同一个 id 再跑一次是接着做没做完的任务；要换模型时必须带换新会话的旗标。
+cmd.dispatch.example	team dispatch dev P1 docs/team/tasks/P1-first-task.md --branch task/P1-first-task
+cmd.dispatch.read	任务书、契约、看板与名册
+cmd.dispatch.write	看板行、席位记录与工作树
+cmd.dispatch.see	`team resume`、`team review`、`team task`
+cmd.dispatch.arg.--model	用这个模型，而不是任务书类别映射出来的那个。
+cmd.dispatch.arg.--branch	声明这次派单期望的任务分支；工作树必须就在这个分支上。
+cmd.dispatch.arg.--fresh	新开一个会话，而不是复用记录里的那个；换模型时必须带上它。
+cmd.dispatch.arg.--allow-overflow	即使该模型的并发限额已经满了也照派。
+cmd.dispatch.arg.--print	只打印启动命令，不启动任何东西。
+cmd.say.title	给一个席位发一句话
+cmd.say.what	把一句话放到席位眼前。如果席位的输入框里已经有草稿，这句话会先排队、等输入框空了再投递，所以人写了一半的那行不会被覆盖。
+cmd.say.when	一句短指令或一句状态说明时用它。席位下一个会话还要找得到的决定，另外写进往来记录。
+cmd.say.example	team say dev "门禁绿了，请开 PR"
+cmd.say.read	席位的窗口与延后队列
+cmd.say.write	席位的收件箱与延后队列
+cmd.say.see	`team notify`、`team outbox`、`team thread`
+cmd.say.arg.--now	立刻投递，跳过草稿守卫；这次跳过会留痕。
+cmd.notify.title	席位发给 PM 的一句话
+cmd.notify.what	把一句话写进 PM 的收件箱，并敲一下 PM 的窗口。发送者按命令运行时所在的目录解析，所以席位不能靠自称来冒充 PM。
+cmd.notify.when	回合结束时用它，说某件事成了、或者某件事卡住了。
+cmd.notify.example	team notify pm "P1 已交付，请复验"
+cmd.notify.read	席位记录与收件箱
+cmd.notify.write	PM 的收件箱与巡检的敲门记录
+cmd.notify.see	`team say`、`team inbox`、`team digest`
+cmd.notify.arg.--from	发送者的名字，目录说不上来的时候用。
+cmd.draft.title	把人写的文本放进队列
+cmd.draft.what	开一个草稿窗口来写消息，或者把某个文件的内容整段放进队列。排队的文本等目标的输入框空了再投递，所以不会盖掉谁正在写的草稿。
+cmd.draft.when	文本来自你而不是来自 agent 时用它，长到一行装不下时也用它。
+cmd.draft.example	team draft send /tmp/note.md
+cmd.draft.read	草稿文件与队列
+cmd.draft.write	队列
+cmd.draft.see	`team outbox`、`team say`
+cmd.draft.arg.--now	立刻投递，不等输入框变空。
+cmd.outbox.title	延后投递队列
+cmd.outbox.what	列出在等投递的东西、提前排水，或者丢弃条目。消息没法打进一个忙着的窗口时，条目会出现在这里：所以既不会丢，也不会盖掉别人正在写的草稿。
+cmd.outbox.when	消息像没送到时用它，或者想在投递之前看一眼队列时用它。
+cmd.outbox.example	team outbox list
+cmd.outbox.read	队列
+cmd.outbox.write	队列
+cmd.outbox.see	`team say`、`team draft`
+cmd.outbox.arg.--now	立刻把队列打出去，跳过输入框守卫。
+cmd.reply.title	发布并读取关键回复
+cmd.reply.what	把一份回复正文先发布成自己的文件，再照常发送，并列出或显示已经发布的回复。正文从标准输入读，所以发布出来的就是发出去的那份文本。
+cmd.reply.when	某条决定或答复要在承载它的那行滚走之后仍然读得到时用它。
+cmd.reply.example	team reply post --from pm --title "接口冻结"
+cmd.reply.read	回复文件
+cmd.reply.write	回复文件、收件箱与队列
+cmd.reply.see	`team thread`、`team inbox`
+cmd.reply.arg.--from	这份回复是谁发的。
+cmd.reply.arg.--title	发布的回复归档在哪个标题下。
+cmd.reply.arg.--stdin	正文从标准输入读，而不是从命令行读。
+cmd.pulse.title	叫醒 PM 的巡检
+cmd.pulse.what	跑巡检：每隔一段时间问一次"有没有工作等着 PM"，只有答案是"有"时才叫醒它。它跑在同一个 session 的一个窗口里，可以启动、停止、重启、查看状态和读日志。
+cmd.pulse.when	开会话时起它，让 PM 被工作叫醒而不是被记忆叫醒。明明有活在等、PM 却没被叫醒时，来查它。
+cmd.pulse.example	team pulse status
+cmd.pulse.read	状态目录、看板与各个收件箱
+cmd.pulse.write	状态目录与这个 session 的窗口
+cmd.pulse.see	`team watch`、`team monitor`、`team standby`
+cmd.pulse.arg.--print	打印计划与命令，不真的启动或停止任何东西。
+cmd.monitor.title	状态面板
+cmd.monitor.what	画出团队的状态屏：每个席位在做什么、什么在等 PM、机器还剩多少余地。在终端里它是可交互的一屏；输出是管道时它打印文本，也可以打印机读对象。
+cmd.monitor.when	看一支正在跑的团队时用它，想看巡检据以决定叫不叫醒 PM 的同一个视图时也用它。
+cmd.monitor.example	team monitor --print --once
+cmd.monitor.read	状态目录、看板与席位记录
+cmd.monitor.write	它在状态目录下自己的记账
+cmd.monitor.see	`team pulse`、`team watch`、`team status`
+cmd.monitor.arg.--once	只画一屏就退出，不刷新。
+cmd.monitor.arg.--print	打印纯文本，而不是可交互的一屏。
+cmd.monitor.arg.--json	打印一个机读对象。
+cmd.monitor.arg.--width	假装终端有这么宽。
+cmd.monitor.arg.--height	假装终端有这么高。
+cmd.monitor.arg.--interval	每隔这么多秒刷新一次。
+cmd.monitor.arg.--events	面板里保留这么多条最近的活动。
+cmd.monitor.arg.--no-pulse	只看，不顺路跑巡检。
+cmd.watch.title	在前台跑一拍巡检
+cmd.watch.what	在前台跑一次巡检，并打印它的判断：有没有待办、PM 被没被叫醒。它就是巡检窗口按自己的间隔做的那个判断。
+cmd.watch.when	想立刻看到巡检的推理、不想等下一拍时用它。
+cmd.watch.example	team watch --once
+cmd.watch.read	状态目录、看板与各个收件箱
+cmd.watch.write	状态目录、巡检日志与这个 session 的窗口
+cmd.watch.see	`team pulse`、`team monitor`
+cmd.watch.arg.--once	只跑一拍就退出。
+cmd.watch.arg.--interval	每隔这么多秒跑一次，而不是只跑一次。
+cmd.watch.arg.--ui	显示可交互面板，而不是文本输出。
+cmd.standby.title	告诉巡检"暂时不需要人"
+cmd.standby.what	记下"PM 停工"这件事：巡检不再叫醒它，期间到达的一切照旧写进巡检日志。只有人能把它关掉，所以 agent 不能自己悄悄醒来。
+cmd.standby.when	工作卡在一个人身上时用它，或者你希望积压等一个人而不是等 PM 时用它。
+cmd.standby.example	team standby on --reason "等用户定接口"
+cmd.standby.read	状态目录与巡检日志
+cmd.standby.write	状态目录
+cmd.standby.see	`team pulse`、`team digest`
+cmd.standby.arg.--reason	PM 为什么停工；写下来，下一个会话才知道。
+cmd.up.title	搭好台子并把 PM 拉起来
+cmd.up.what	缺什么就建什么：项目的 session 与窗口，然后在它自己的窗口里启动 PM，默认接着这个项目上一场会话，除非你要一场新的。它只负责 PM，不动席位。
+cmd.up.when	重启之后用它，或者在 session 丢了、团队该在同一个项目里继续干活时用它。
+cmd.up.example	team up
+cmd.up.read	契约、状态目录与 session
+cmd.up.write	这个 session 的窗口与状态目录
+cmd.up.see	`team resume`、`team pulse`、`team doctor`
+cmd.up.arg.--agents	顺便把"有活但没窗口"的席位也续起来。
+cmd.up.arg.--fresh-pm	新开一场 PM 对话，不接上一场；旧记录原样留在磁盘上。
+cmd.up.arg.--print	只打印启动判定与命令，不启动任何东西。
+cmd.resume.title	把停掉的席位拉回来
+cmd.resume.what	找出"有没做完的任务、但窗口已经不在了"的席位，把它们重新拉起来：同一份任务书、同一个分支，以及当初派单用的模型与会话。
+cmd.resume.when	重启或崩溃之后用它，席位做到一半停了的时候也用它。
+cmd.resume.example	team resume --all
+cmd.resume.read	席位记录、看板与任务书
+cmd.resume.write	席位记录与这个 session 的窗口
+cmd.resume.see	`team dispatch`、`team pulse`
+cmd.resume.arg.--agent	只续这一个席位，而不是所有停掉的席位。
+cmd.resume.arg.--all	续起所有还有没做完工作的席位。
+cmd.resume.arg.--dry-run	只打印会续起谁，不启动任何东西。
+cmd.meeting.title	跟另一个项目的 PM 谈事
+cmd.meeting.what	开一场这个项目与另一个项目之间的会议：双方往同一份共享记录里发言，一份提议只有双方各自点头才算数。它从不写进对方仓库，也没有"下令"这个动作——只有人能跨项目传达决定。
+cmd.meeting.when	两个项目之间的接口、带证据的请教、以及对方必须知道的问题通报，用这个。它不是指挥另一支团队的通道。
+cmd.meeting.auth	项目对共享状态的写入要求确认（`TEAM_CONFIRM_WRITES`），没开时不会拦你
+cmd.meeting.example	team meeting open rename --with other:pm --topic "接口改名"
+cmd.meeting.read	共享会议区与本项目的 session
+cmd.meeting.write	共享会议区
+cmd.meeting.see	`team thread`、`team say`
+cmd.meeting.arg.--with	这场会议跟谁开，写成 项目 或 项目:session。
+cmd.meeting.arg.--topic	一句话说明这场会谈什么。
+cmd.meeting.arg.--ttl	会议保持开放多少小时；默认 {meeting_ttl} 小时，过期的会议仍然可以读。
+cmd.meeting.arg.--yes	这次写共享状态需要的显式授权。
+cmd.meeting.arg.--intent	这次发言是哪一类：信息、提问、报告、提议还是请求。
+cmd.meeting.arg.--knock	顺便敲一下对方的窗口。
+cmd.meeting.arg.--since	只读这个编号之后的发言。
+cmd.meeting.arg.--peek	读完不把记录标记成已读。
+cmd.meeting.arg.--all	连已经关闭的会议一起列出。
+cmd.meeting.arg.--note	一行记下你这边打算怎么落实这份共识。
+cmd.review.title	在独立检出上复验一份交付
+cmd.review.what	把交付检出到它自己的游离工作树里，在那里跑项目的门禁，并写下"跑了什么、结果是什么"的记录。它拒绝脏树，所以记录永远指向一个提交。
+cmd.review.when	席位交了活、分支还没合并时用它，让这个判断建立在一次不发生在作者自己工作树里的运行上。
+cmd.review.example	team review P1 --dir /tmp/P1-checkout
+cmd.review.read	分支、门禁与交付报告
+cmd.review.write	复验记录与那份独立工作树
+cmd.review.see	`team close`、`team report`
+cmd.review.arg.--dir	复验这个分支所用的独立检出。
+cmd.review.arg.--no-gates	跳过门禁运行，只记下不需要门禁的那些检查。
+cmd.review.arg.--strong	连更严格的那套门禁也一起跑。
+cmd.review.arg.--allow-unresolved-branch	分支名在远端解析不出来时也继续。
+cmd.close.title	关掉一个任务
+cmd.close.what	收尾一个任务：先核对证据真的在，再更新看板、关掉席位的窗口，工作树与分支留在原地。工作本身由人或 PM 用 git 合并，不由这个命令做。
+cmd.close.when	复验通过、分支已经进了受保护分支之后用它。
+cmd.close.example	team close P1
+cmd.close.read	看板、复验记录与分支
+cmd.close.write	看板、状态目录与这个 session 的窗口
+cmd.close.see	`team review`、`team teardown`
+cmd.teardown.title	把席位的窗口和工作树拿走
+cmd.teardown.what	关掉席位的窗口，需要时删掉它的工作树。分支默认保留（除非你要整棵清掉），所以席位做过的活之后还找得到、合并得回来。
+cmd.teardown.when	一个席位跟项目告别时用它，名册缩编时用它，工作树坏了要重建时也用它。
+cmd.teardown.example	team teardown --agent dev
+cmd.teardown.read	名册、席位记录与 git
+cmd.teardown.write	工作树、席位记录与这个 session 的窗口
+cmd.teardown.see	`team add-agent`、`team roster`
+cmd.teardown.arg.--agent	要拆掉的席位。
+cmd.teardown.arg.--all	把名册里的席位全部拆掉。
+cmd.teardown.arg.--purge	连工作树一起删，而不是只关窗口。
+cmd.teardown.arg.--force	席位看起来有什么不对劲时也照做。
+cmd.teardown.arg.--register	同时把席位从名册里移除，走带审计的写入口。
+cmd.smoke.title	跑这套工具自己的正确性套件
+cmd.smoke.what	在临时目录里的一次性仓库中跑 teamsmith 自己的正确性套件：套件从不碰调用它的那个项目。
+cmd.smoke.when	改完工具之后用它，以及需要手工复现一次门禁结果时用它。
+cmd.smoke.example	team smoke --select 51
+cmd.smoke.read	工具自己的测试
+cmd.smoke.write	只在临时目录下写一次性目录
+cmd.smoke.see	`team perf`、`team doctor`
+cmd.smoke.arg.--select	只跑点名的段，逗号分隔的段 key 列表。
+cmd.perf.title	跑性能判定
+cmd.perf.what	跑性能套件并判定可交互面板还满不满足它的预算。它优先用钉死的参考环境，退到宿主机测量时会明说。
+cmd.perf.when	发布之前用它，改了可能让面板变慢的东西之后也用它。
+cmd.perf.example	team perf --host
+cmd.perf.read	工具自己的测试与本机环境
+cmd.perf.write	只在临时目录下写一次性目录
+cmd.perf.see	`team smoke`、`team monitor`
+cmd.perf.arg.--host	测宿主机，并把结果标注成不来自参考环境。
+cmd.merge.title	已经移除的合并捷径
+cmd.merge.what	这个旧名字以前包装 git 合并与 PR。现在它被拒绝，并给出该跑的真实命令：合并这件事归人和 PM 自己用 git 做。
+cmd.merge.when	只在想读它打印的路线时跑它：哪条 git 命令合并分支、PR 与本地分支先后怎么处理。
+cmd.merge.example	team merge
+cmd.merge.read	不读任何东西
+cmd.merge.write	不写任何东西
+cmd.merge.see	`team close`、`team pr`
+cmd.pr.title	已经移除的 PR 捷径
+cmd.pr.what	这个旧名字以前用来开 PR 和合并 PR。现在它被拒绝，并给出该跑的真实命令：forge 由它自己的工具驱动，而不是被 skill 包一层。
+cmd.pr.when	只在想读它打印的路线时跑它。
+cmd.pr.example	team pr
+cmd.pr.read	不读任何东西
+cmd.pr.write	不写任何东西
+cmd.pr.see	`team merge`、`team gh`
+cmd.gh.title	已经移除的 GitHub 透传
+cmd.gh.what	这个旧名字以前把参数直接转给 GitHub 的命令行工具。现在它被拒绝，并给出真实工具与该项目的 token 文件的路线。
+cmd.gh.when	只在想读它打印的路线时跑它。
+cmd.gh.example	team gh
+cmd.gh.read	不读任何东西
+cmd.gh.write	不写任何东西
+cmd.gh.see	`team gl`、`team pr`
+cmd.gl.title	已经移除的 GitLab 透传
+cmd.gl.what	这个旧名字以前把参数直接转给 GitLab 的命令行工具。现在它被拒绝，并给出真实工具与该项目的 token 文件的路线。
+cmd.gl.when	只在想读它打印的路线时跑它。
+cmd.gl.example	team gl
+cmd.gl.read	不读任何东西
+cmd.gl.write	不写任何东西
+cmd.gl.see	`team gh`、`team pr`
+cmd.mark-loaded.title	记下这个会话加载的是哪个版本
+cmd.mark-loaded.what	把本会话使用的 skill 版本写下来，工具据此区分"会话是旧的"还是"会话是新的"。
+cmd.mark-loaded.when	会话开头跑一次，重载之后再跑一次。
+cmd.mark-loaded.example	team mark-loaded --version 0.2.0
+cmd.mark-loaded.read	装在机器上的 skill
+cmd.mark-loaded.write	已加载版本的记录
+cmd.mark-loaded.see	`team version`、`team reload`
+cmd.mark-loaded.arg.--version	记这个版本，而不是磁盘上找到的那个。
+cmd.version.title	磁盘上、skill 里和本会话各是什么版本
+cmd.version.what	打印装在机器上的 skill 版本、skill 文件里写的版本、变更史的开头，以及本会话加载的版本。带 check 参数时它给结论，而不是列清单。
+cmd.version.when	某个命令的行为跟本会话 skill 描述的不一样时用它，长会话开头也用它。
+cmd.version.example	team version --check
+cmd.version.read	装在机器上的 skill、变更史与会话记录
+cmd.version.write	不写任何东西
+cmd.version.see	`team changelog`、`team reload`、`team mark-loaded`
+cmd.version.arg.--check	只回答"本会话的 skill 是不是最新的"，而不是把每个版本都打出来。
+cmd.changelog.title	skill 改了什么
+cmd.changelog.what	打印 skill 的变更史，最新的在前；可以只看某个版本之后的部分。
+cmd.changelog.when	升级之后用它，看看从你熟悉的那个版本起有哪些行为变了。
+cmd.changelog.example	team changelog
+cmd.changelog.read	装在机器上的 skill 的变更史
+cmd.changelog.write	不写任何东西
+cmd.changelog.see	`team version`、`team reload`
+cmd.changelog.arg.--since	只打印比这个版本更新的条目。
+cmd.reload.title	请 agent 重新加载 skill
+cmd.reload.what	留下一个"请重新加载这个 skill"的请求，让长会话别再继续用它在开头读到的那些文件。重载本身发生在 agent 里，不在这里。
+cmd.reload.when	skill 升级之后、想让当前会话看到新文件时用它。
+cmd.reload.example	team reload
+cmd.reload.read	重载请求的记录
+cmd.reload.write	重载请求的记录
+cmd.reload.see	`team version`、`team mark-loaded`
+cmd.reload.arg.--done	重载真的发生之后，把这个请求标记成已处理。

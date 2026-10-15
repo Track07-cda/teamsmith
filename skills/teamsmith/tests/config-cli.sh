@@ -481,17 +481,22 @@ if want roster; then
     || bad "③ 工作树步骤不一致（register=[$w1] flagless=[$w2]）"
   sha_r="$(sha_of "$cfg")"; n_r="$(grep -c 'result=' "$log" || true)"
 
-  # help 的两行（R2 的打印面）：--register 必须出现在 add-agent/teardown 的用法行上
-  help_out="$(run_in "$p" help)"
-  case "$help_out" in
-    *'add-agent <a> [--register] [--create] [--no-install] [--print]'*)
-      ok "③ help 的 add-agent 行打印 --register/--create/--no-install/--print（--model 已退休）" ;;
-    *) bad "③ help 的 add-agent 行没打印齐旗标" ;;
+  # help 的两行（R2 的打印面）：--register 必须出现在 add-agent/teardown 的用法行上。
+  # 帮助面自 P260 起分三级（入口菜单只列新手上手的几条）：这两行去各自的命令页读，判定的是
+  # 「该命令的用法行上有这些旗标」，与占位符写法（`<a>` / `a`）无关。
+  help_add="$(run_in "$p" help add-agent)"
+  help_td="$(run_in "$p" help teardown)"
+  line_add="$(printf '%s\n' "$help_add" | grep -m1 '^  add-agent ' || true)"
+  line_td="$(printf '%s\n' "$help_td" | grep -m1 '^  teardown ' || true)"
+  case "$line_add" in
+    *'--register'*'--create'*'--no-install'*'--print'*)
+      ok "③ help add-agent 页的用法行打印 --register/--create/--no-install/--print（--model 已退休）" ;;
+    *) bad "③ help add-agent 页的用法行没打印齐旗标（$line_add）" ;;
   esac
-  case "$help_out" in
-    *'teardown [--agent a] [--all] [--purge] [--force] [--register]'*)
-      ok "③ help 的 teardown 行打印 --register" ;;
-    *) bad "③ help 的 teardown 行没打印 --register" ;;
+  case "$line_td" in
+    *'teardown'*'--register'*)
+      ok "③ help teardown 页的用法行打印 --register" ;;
+    *) bad "③ help teardown 页的用法行没打印 --register（$line_td）" ;;
   esac
 
   # ④ 已在名册 + --register：可见 no-op（0、不写、不审计）

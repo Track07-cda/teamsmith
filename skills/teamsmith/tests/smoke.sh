@@ -6415,10 +6415,10 @@ section "11j · pulse 改名与别名期兼容（D22）"
 #           ③ 迁移夹具（旧配置 / 旧窗口名）升级后新旧两条路都工作；④ state 文件名不动。
 P8_DEP='[deprecated] team watchdog 已改名 team pulse（别名保留到 v2.0.0）'
 
-# help：主表面是 pulse，旧名带弃用标注
-$TEAM help >"$TMP/p8-help.log" 2>&1 || bad "team help 失败"
+# help：主表面是 pulse，旧名带弃用标注（P260 起帮助面分三级：这两样在 pulse 自己的命令页上）
+$TEAM help pulse >"$TMP/p8-help.log" 2>&1 || bad "team help pulse 失败"
 assert_has "$TMP/p8-help.log" "pulse up|down|restart|status|logs" "help 的主表面是 pulse"
-assert_has "$TMP/p8-help.log" "弃用" "help 标注旧命令名已弃用"
+assert_has "$TMP/p8-help.log" "watchdog" "help 页点名旧命令名 watchdog（别名行）"
 
 # ① 别名：首行弃用提示；pulse 自身不印；其余输出 = pulse 实现
 $TEAM pulse status >"$TMP/p8-new-status.log" 2>&1 && ok "pulse status 退出码 0" || bad "pulse status 失败"
@@ -15935,7 +15935,7 @@ assert_has "$OPENSPEC_MD" "8. **Granularity**" "7.2 existing point 8 unchanged"
 assert_eq "7.2 checklist now has exactly ten points" "$(grep -cE '^[0-9]+\. \*\*' "$OPENSPEC_MD" || true)" "10"
 assert_has "$OPENSPEC_MD" "1 change : N tasks" "7.2 §2 states the model"
 # 7.3 help / SKILL / protocol：四条拒绝类
-assert_has_echo "$($TEAM help 2>&1)" "change status" "7.3 team help lists change status"
+assert_has_echo "$($TEAM help change 2>&1)" "change status" "7.3 team help change lists change status"
 assert_has "$SKILL_DIR/SKILL.md" "team change status <id> [--json]" "7.3 SKILL command table carries it"
 for _frag in "One change id" "declares its anchor" "One delta file, one writer" "The verifier is not an author"; do
   assert_has "$SKILL_DIR/references/protocol.md" "$_frag" "7.3 protocol names the refusal class: $_frag"
@@ -19386,6 +19386,26 @@ if [ -f "$SKILL_DIR/tests/routes.sh" ]; then
   { grep -aE '翻转[①②③④⑤⑥⑦⑧⑨⑩]' "$TMP/routes.log" || true; } | head -12 | sed 's/^/      /'
 else
   bad "51 缺 tests/routes.sh（P99 的用法诚实性走查）"
+fi
+# cli-help（P260）：帮助面自己的夹具 —— 覆盖 / 语言机制 / 声明与探针 / 不变量 / 路由。
+# 用户裁定 D170：门禁只管逻辑，措辞、排版、页面深度、语言表齐全度由设计与评审把关（见任务书「范围修订」）。
+# FAST 档只跑静态组（渲染 53 页）；逐命令探针与翻转只在完整门禁里跑（可见的 SKIP，不许静默）。
+if [ -f "$SKILL_DIR/tests/help-surface.sh" ]; then
+  HS_RC=0
+  HS_SELECT=""
+  case "${TEAM_SMOKE_FAST:-0}" in
+    1|y|Y|yes|YES|true|TRUE|on|ON) HS_SELECT="--select coverage,lang,invariants,route" ;;
+  esac
+  bash "$SKILL_DIR/tests/help-surface.sh" $HS_SELECT >"$TMP/help-surface.log" 2>&1 || HS_RC=$?
+  if [ "$HS_RC" -eq 0 ]; then
+    ok "51 帮助面夹具（help-surface.sh${HS_SELECT:+ · FAST 静态组}）全绿（$(grep -ac '✓' "$TMP/help-surface.log" || true) 条断言）"
+    { grep -aE '== (coverage|lang|claims|invariants|route) ==' "$TMP/help-surface.log" || true; } | sed 's/^/      /'
+  else
+    bad "51 帮助面夹具有失败（rc=$HS_RC）——覆盖/语言机制/声明与探针/不变量/路由与帮助面不一致"
+    grep -a '✗' "$TMP/help-surface.log" | head -10 | sed 's/^/      /'
+  fi
+else
+  bad "51 缺 tests/help-surface.sh（cli-help 的帮助面夹具）"
 fi
 if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then
   P99_ROSTER_RC=0

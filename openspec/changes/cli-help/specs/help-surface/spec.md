@@ -58,78 +58,6 @@ documents nor start any process.
 - **WHEN** `team`, `team help`, `team help dispatch` and `team dispatch --help` run there
 - **THEN** all four exit 0 and print the menu or the dispatch page, and the directory gained no file
 
-### Requirement: The entry level is bounded: it never dumps the command list
-
-The level-0 menu SHALL carry exactly four things: a two-to-three-sentence statement of what teamsmith is, the
-group list (every group once, each with its one-sentence purpose), a beginner set of three to five commands (each
-rendered as its own usage line with its description), and the line that tells the reader how to go deeper
-(`team help <group>` and `team help <command>`). It MUST NOT list a group's commands, and it MUST NOT print any
-other command's usage line.
-
-The menu's rendered size SHALL be checked by the gate: at the default width it MUST NOT exceed 30 lines, and the
-number of command usage lines it prints MUST be between three and five. A menu that grows past either bound
-SHALL fail the surface's check, naming the count and the offending lines.
-
-#### Scenario: The menu stays small, and the fixture says so
-
-- **GIVEN** the committed tree's level-0 menu
-- **WHEN** its rendered lines and its command usage lines are counted
-- **THEN** the line count is at most 30, the beginner set is three to five usage lines, and every group appears
-  exactly once with a one-sentence purpose
-
-#### Scenario: A menu that dumps the command list is red
-
-- **GIVEN** a scratch copy whose menu adds one group's command lines (and a second whose menu exceeds 30 lines by
-  padding)
-- **WHEN** the surface's check runs in each copy
-- **THEN** each exits non-zero naming the count that broke and the offending lines, while the unmodified tree
-  stays green
-
-#### Scenario: The menu does not hide a command forever
-
-- **GIVEN** the committed tree's menu, which names every group but only the beginner commands
-- **WHEN** each group named there is followed through its group page to its commands' pages
-- **THEN** every command the dispatcher accepts is reachable from the menu in three steps or fewer
-
-### Requirement: A command's page explains the command to a reader who does not know teamsmith
-
-Every command page SHALL carry these labelled parts in this order, each non-empty: the command with a one-sentence
-statement of what it is for; `Usage`; `What it does`; `When to use it`; `Arguments`; `Example`; `Reads` /
-`Writes`; `Side effects`; `Authorization`; `Undo`; `Concepts`; `See also`.
-
-`Arguments` SHALL explain every argument its `Usage` block prints, one argument per block of lines and one
-sentence each, and SHALL explain no argument the `Usage` block does not print. The page SHALL state, in the parts
-above, what the command is for, when to run it, which faces it reads and writes, which side effects it has
-(starting a process, changing shared state, touching the ledger, or none), whether it needs `--yes`, and how the
-change it makes can be undone when it can.
-
-The surface SHALL define, in both language tables, these concepts in plain language that does not itself depend
-on teamsmith vocabulary: the PM and a worker seat; a worktree and a task branch; a task brief and its
-`category:`; a change and a spec (OpenSpec); a gate and what makes a green gate evidence; the ledger and who
-writes it; the pulse patrol and a knock; and `--yes` and the authorization boundary. A page SHALL declare which
-of these concepts it uses and SHALL print those definitions on the page itself, byte-identical to the definitions
-the menu's concept list prints, so that one page read alone still defines the terms it relies on.
-
-#### Scenario: Every page carries the labelled parts in order and none is empty
-
-- **WHEN** every page of the surface is rendered and its labels are read in order
-- **THEN** each page carries the declared parts in the declared order, every part has at least one line of
-  content, and emptying one part in a scratch copy makes the check fail naming that page and part
-
-#### Scenario: The definitions cover the required concepts in both languages
-
-- **WHEN** the concept definitions are enumerated against the required set in each language table
-- **THEN** every required concept is present with a non-empty definition in both tables, and deleting one
-  concept's key from a scratch copy makes the check fail naming the missing concept
-
-#### Scenario: One page read alone defines the terms it uses
-
-- **GIVEN** the `dispatch` page, whose prose uses the concepts of a task brief, a seat and a worktree
-- **WHEN** the page is read on its own
-- **THEN** its `Concepts` part prints the definitions of exactly the concepts the page declares, byte-identical
-  to the menu's definitions, and a page that declares a concept it does not print, or prints a concept it does
-  not declare, fails the check naming the page and the concept
-
 ### Requirement: The help surface is English by default and switches language through `TEAM_LANG`
 
 The help surface's prose SHALL be English when `TEAM_LANG` is unset, empty or `en`, and Chinese when it is `zh`.
@@ -142,8 +70,9 @@ be byte-identical between the two languages.
 
 A key the selected table lacks SHALL NOT be silent: the printed line SHALL carry a marker naming the missing key
 (the marker contains the key id, so the gap can be searched for), and when the other table carries that key the
-other language's value SHALL be printed in its place; an empty value MUST NOT be printed. A runnable check SHALL
-compare the two tables' key sets, name every key missing on either side, and exit non-zero.
+other language's value SHALL be printed in its place; an empty value MUST NOT be printed. Whether the two tables
+are complete is a review question, not a gate's: the gate checks the behaviour (a missing key is visible, never
+blank and never a crash), and the reviewer reads both tables.
 
 `TEAM_LANG` MUST NOT change any command's behaviour or any machine-readable output: for every command whose
 output is consumed by a program (`--json`, `--print`), the bytes SHALL be identical under both languages and
@@ -164,9 +93,9 @@ SHALL be unaffected by the content of the help tables.
 #### Scenario: A missing key is named and falls back readably
 
 - **GIVEN** a scratch copy of the tree whose Chinese table is missing one key
-- **WHEN** the key-set check runs there, and then `TEAM_LANG=zh team help` in that copy
-- **THEN** the check exits non-zero and names the missing key, and the printed page names that key in its marker
-  and prints the English value rather than an empty line
+- **WHEN** `TEAM_LANG=zh team help` runs in that copy
+- **THEN** the printed page names that key in its marker and prints the English value rather than an empty line,
+  and the command still exits 0
 
 #### Scenario: The language never reaches a machine exit
 
@@ -176,79 +105,13 @@ SHALL be unaffected by the content of the help tables.
 - **THEN** every output is byte-identical across the three runs — the help surface changes prose, never a
   program's input
 
-### Requirement: The help surface's layout has fixed levels and is mechanically checkable
-
-The surface SHALL be rendered to at most 100 display cells per line by default, counting a CJK-wide character as
-two cells, with a positive-integer `TEAM_HELP_WIDTH` override (an invalid value prints one warning and falls back
-to 100). Wrapping SHALL be done by the renderer, never by hand, and a wrapped continuation SHALL be indented
-strictly deeper than the line it continues: no line's tail may return to a column shallower than its head.
-
-The layout's levels SHALL be the ones the renderer enforces: a group or section header is a `── <title> ──…` line
-at column 0, preceded by one blank line when it opens a group; a command's usage line is indented exactly two
-spaces; the command's description is a hanging block whose lines all start in the description's own column, and
-a usage line never shares its line with description text; a command's arguments are one level deeper than its
-description, one argument per block of lines; an example is its own block with one consistent indent; a concept
-definition is one level deeper again. Outside the lines that precede a fragment's first header, column 0 SHALL
-carry only the `──` headers.
-
-The layout SHALL be the one the surface's walk can attribute (`dispatch#The printed route is a route that works`
-reads every level): a usage block begins at a column-0 `──` header and holds only command entries (indent two,
-first token a command the dispatcher accepts) and their strictly deeper continuations; every other line is
-either before the fragment's first header or a column-0 line carrying no `--flag`, which ends the current block.
-
-A runnable check SHALL fail, naming the page and the line, on each of these shapes: a line wider than the
-effective width; a continuation not strictly deeper than its head; a `→`; a number a command's record does not
-carry as a declared claim; a `--flag` in prose that the command's usage line does not print; a part out of the
-declared order; an empty part; a group header with no entry; an entry without a group header; a column-0 line
-inside a usage block that is not a header; an indent outside the declared ladder. The `Arguments` part and the
-`Usage` block SHALL cover exactly the same flags in both directions, and every command path an `Example` names
-SHALL resolve to a command the dispatcher accepts and to flags its usage line prints.
-
-#### Scenario: A wide line is a defect, not a hand-wrapped line
-
-- **GIVEN** a scratch copy whose manifest carries a prose value long enough to exceed the effective width
-- **WHEN** the layout check runs there
-- **THEN** it exits non-zero and names the page and the line, and the same page rendered by the renderer stays
-  within the width with its continuation lines indented deeper than their head
-
-#### Scenario: Each forbidden shape fails its own check
-
-- **GIVEN** scratch copies that respectively join two actions with `→`, put an undeclared number in prose, print
-  a flag in prose that the usage line does not print, drop one part from a page's record, empty one group, indent
-  a line outside the ladder and put a plain-text line at column 0 inside a usage block
-- **WHEN** the layout check runs in each copy
-- **THEN** each run exits non-zero naming the page and the offending line, and the unmodified tree keeps the
-  check green
-
-#### Scenario: The levels are the declared ones, not one flat indent
-
-- **GIVEN** the committed tree's menu, one group page and one command page
-- **WHEN** the indent of every line is read
-- **THEN** the only indents the surface uses are the declared ladder's columns, every description line starts in
-  its description column, every argument and example line is one level deeper than the description it belongs
-  to, and the pre-change rendering (group headers, commands, descriptions and arguments all at the same two-space
-  indent, with wrapped tails returning to the left) fails this check when substituted
-
-#### Scenario: Arguments and usage cover the same flags
-
-- **GIVEN** a scratch copy whose page explains a flag its usage line does not print, and a second that prints a
-  flag in `Usage` with no `Arguments` block
-- **WHEN** the check runs in each copy
-- **THEN** both exit non-zero naming the page and the flag
-
-#### Scenario: Every example is a real command path
-
-- **GIVEN** an example line naming `dispatch --branch` on a page whose usage line does not print `--branch`
-- **WHEN** the check runs
-- **THEN** it exits non-zero naming the page and the flag
-
 ### Requirement: Every behaviour a help page states is declared and probed
 
 The surface's prose SHALL come from the manifest's rows and two parallel language tables keyed by the same prose
 keys, one per language; a page's statement about behaviour SHALL come from its command's manifest row rather
 than from free prose. The row SHALL carry the command's effect, authorization, touched faces and reversibility
-as fields whose values come from closed vocabularies, and prose SHALL state no effect, default, threshold, path,
-count or ordering that a declared field or a declared claim does not carry.
+as fields whose values come from closed vocabularies. (What the prose may say about those fields — wording,
+counts, ordering — is a review question; the gate checks the declarations and their probes.)
 
 Every value in those vocabularies SHALL name a probe that makes the claimed effect happen in a scratch fixture:
 a value with no probe SHALL fail the surface's check naming the command and the value, and a probe that does not

@@ -259,31 +259,8 @@ team_cmd_meeting() {
   esac
 }
 
-team_meeting_help() {
-  cat <<HELP
-team meeting —— 跨项目会议（peer 交流，不是指挥通道）
-
-  open <slug> --with <项目>[:<session>] --topic "…" [--ttl 72] [--force] [--yes]
-      开会（需要 --yes：这是写共享状态）。发起方 = 当前项目（$TEAM_PROJECT）。
-      --ttl 是正整数小时（默认 $(team_meeting_ttl_default)，>8760 按 8760 计；非法值直接拒绝）；到期后只读。
-  say <slug> --intent <info|question|report|proposal|request> "…" [--knock]
-      发言：先写共享区 transcript（唯一真相），--knock 才提醒对方 PM 窗口（需 TEAM_MEETING_KNOCK=1）。
-      **没有 command/order 这类 intent** —— 机制上不提供"下令"动作。
-  read <slug> [--since N] [--peek]    读发言（默认读到哪标记到哪；--peek 不标记）
-  inbox                                哪些会议在等我回应
-  list [--all]                         我在参与的会议
-  peer <slug> <项目>:<session> [--window <名>] [--repo <仓库名>]
-      登记一方的 session/PM 窗口/仓库名（各管各的行；敲门按对方那一行解析目标窗口）
-  knock <slug>                         重敲最后一条发言（载荷带 [meeting:<slug>#<N>]）
-  propose <slug> "接口契约…" [--sides "我方:X / 对方:Y"]   提议一条共识
-  agree <slug> <A1> [--note "我方落地：T4.2"]              对方确认（不能自己确认自己提的）
-  close <slug> [--summary "结论与遗留"]   关闭（唯一收尾动作；过期后仍可用它收尾）
-  close --stale                            关闭本项目所有“已过期未关闭”的会议；一个都没有时非 0 且不写任何东西
-
-规则：只写共享区（$(team_meetings_dir)），不动对方仓库；共识由双方各自 agree；
-用户是唯一能跨项目下指令的人（人类终端可 team meeting say --as-user）。
-HELP
-  return 0
+team_meeting_help() { # cli-help：meeting 的整页与 `team help meeting` 是同一个渲染出口
+  team_help_command_page meeting
 }
 
 team_meeting_open() {

@@ -25,6 +25,7 @@ SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ---------------------------------------------------------------- 全局参数
 ARGS=()
 _TEAM_ROOT_ARG=""
+_TEAM_HELP_REQ=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --root) _TEAM_ROOT_ARG="${2:?--root 需要目录}"; shift 2 ;;
@@ -32,7 +33,7 @@ while [ $# -gt 0 ]; do
     --config) TEAM_CONFIG_FILE="${2:?--config 需要文件}"; shift 2 ;;
     --config=*) TEAM_CONFIG_FILE="${1#*=}"; shift ;;
     --yes|-y) TEAM_ASSUME_YES=1; shift ;;
-    -h|--help) ARGS=(help); break ;;
+    -h|--help) _TEAM_HELP_REQ=1; shift ;;   # cli-help：`team <cmd> --help` 打印那个命令自己的页
     --) shift; ARGS+=("$@"); break ;;
     *) ARGS+=("$1"); shift ;;
   esac
@@ -49,7 +50,7 @@ if [ "${#ARGS[@]}" -gt 0 ]; then set -- "${ARGS[@]:1}"; else set --; fi
 # help/version 不需要配置或 git 仓库
 case "$CMD" in
   # `team version`（无参）走快路径；`version --check` 需要项目上下文，交给下面的分发
-  version) if [ $# -eq 0 ]; then printf 'teamsmith %s\n' "$TEAM_VERSION"; exit 0; fi ;;
+  version) if [ $# -eq 0 ] && [ "$_TEAM_HELP_REQ" = "0" ]; then printf 'teamsmith %s\n' "$TEAM_VERSION"; exit 0; fi ;;
 esac
 
 TEAM_SKILL_DIR="$(team_skill_dir)"
@@ -59,9 +60,15 @@ for f in "$SELF_DIR"/lib/cmd-*.sh; do
   . "$f"
 done
 
-if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
-  team_help
-  exit 0
+# cli-help · 三级路由（菜单 / 组页 / 命令页）在 `team_load_config` **之前**：帮助面是「什么都还没配好」
+# 时唯一能用的面，它在任何目录都能用，也不执行被帮助的那条命令。
+if [ "$_TEAM_HELP_REQ" = "1" ]; then
+  team_help_route 1 "${ARGS[@]}"
+  exit $?
+fi
+if [ "$CMD" = "help" ]; then
+  team_help_route 0 "${ARGS[@]}"
+  exit $?
 fi
 
 # 其余命令都需要配置 + git 仓库

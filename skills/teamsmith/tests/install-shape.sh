@@ -419,14 +419,14 @@ if want surfaces; then
   grep -qF 'pi install' "$init_skill" && grep -qF 'install.sh' "$init_skill" \
     && ok "init SKILL 同时保留两条替代路线（pi install / install.sh）" \
     || bad "init SKILL 少了替代路线"
-  help_out="$(bash "$team_cli" help 2>&1)"
-  help_init="$(printf '%s\n' "$help_out" | grep -A2 '^  init ')"
-  case "$help_init" in *'.pi/skills'*'--copy'*'--no-skills'*)
-      ok "team help 的 init 行点名 .pi/skills / --copy / --no-skills" ;;
-    *) bad "team help 的 init 行没说全（$(printf '%s' "$help_init" | tr '\n' ' ')）" ;;
+  # P260 起帮助面分三级：init / bootstrap 的用法行与说明在各自的命令页上（读整页，不再截三行窗口）
+  help_out="$(bash "$team_cli" help init 2>&1)"
+  case "$help_out" in *'.pi/skills'*'--copy'*'--no-skills'*)
+      ok "team help init 页点名 .pi/skills / --copy / --no-skills" ;;
+    *) bad "team help init 页没说全（$(printf '%s' "$help_out" | tr '\n' ' ' | cut -c1-200)）" ;;
   esac
-  printf '%s\n' "$help_out" | grep -A2 '^  bootstrap ' | grep -qF '.pi/skills' \
-    && ok "team help 的 bootstrap 行点名装 skill 一步" || bad "team help 的 bootstrap 行没点名装 skill"
+  printf '%s\n' "$(bash "$team_cli" help bootstrap 2>&1)" | grep -qF '.pi/skills' \
+    && ok "team help bootstrap 页点名装 skill 一步" || bad "team help bootstrap 页没点名装 skill"
   grep -F '| Init / self-check |' "$daily_skill" | grep -qF '.pi/skills/' \
     && ok "日常 skill 的命令表 init 行点名项目 skill 安装" || bad "日常 skill 的命令表 init 行没点名安装"
   n_r_npm="$(grep -nF 'npm install -g teamsmith' "$tree/README.md" | head -1 | cut -d: -f1)"
