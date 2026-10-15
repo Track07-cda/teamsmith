@@ -1531,3 +1531,20 @@ RC=141 是作业收尾那条 `sed | rg` 管道的 SIGPIPE，**不是门禁失败
 - Pi 的规则是「先 clamp 不支持的档位」；PM 用**真实调用**验证过：`pi --print --model 'cline-pass/deepseek-v4.1-flash:max' …` 与 `:xhigh` 都正常返回。所以 **`:max` 今天就能用**（Pi 把它 clamp 到该模型最高档），无需改 Pi 的模型配置。
 - 因此配置里写 `:max` 的含义是「要最高档」：现在等价于 `:xhigh`（同一个上游档），**若上游将来多出一档，这个写法会自动吃到**——这是选 `:max` 而不是 `:xhigh` 的理由。代价要如实记：**此刻它的实际能力与 `:xhigh` 相同**，不是「比 xhigh 更强」。
 - 另选（未做，属 Pi 的配置面且那个文件同时存放 provider 凭据）：在 Pi 的模型配置里加一条 `modelOverrides`（`max: "high"`）让该档成为一等公民。PM 不读也不改那个文件（凭据面），需要的话把片段交给用户自己粘。
+
+## D175 · 「:max 被静默降级」的归属：**cline-pass 的 Pi 插件**，不是上游（2026-10-15）
+
+用户指出「deepseek-v4.1-flash 在 opencode-go 与官方渠道都有 max 档」。PM 查证后确认，并把归属钉死：
+
+| 来源 | 该模型 `deepseek-v4.1-flash` 的档位映射 |
+|---|---|
+| **上游官方**（DeepSeek Change Log） | 思考模式支持 **low / high / max** 三档 |
+| `opencode-go` / `opencode` | `low:low, high:high, max:"max"`（有 max） |
+| `openrouter` | `off:none, low:low, high:high, max:"max"`（有 max） |
+| **`pi-clinepass-provider` v1.6.0**（jellydn/pi-clinepass-provider） | `off:none, high:high, **xhigh:high**`，**没有 max 键**；包内注释还写着「只有一档 high」（过时） |
+
+证据来自本机 `~/.pi/agent/models-store.json`（目录缓存，非凭据文件）与插件包的 `src/models.ts`。
+
+**结论**：`cline-pass/deepseek-v4.1-flash:max` 会被 Pi **静默 clamp 到 high**——这是**第三方插件的映射缺失**，不是上游不支持，也不是 Pi 的错（Pi 的 clamp 行为是文档化的，且 pi 自己也有一个同类 issue：`earendil-works/pi#3787`，openrouter 路径上 `xhigh` 被静默降级）。
+
+**三条出路**（等用户选）：① 立即要真 max → 本项目改用 `opencode-go/deepseek-v4.1-flash:max`（一行配置，PM 的域）；② 留在 cline-pass → 在 Pi 的 models 配置里用 `providers.clinepass.modelOverrides["cline-pass/deepseek-v4.1-flash"].thinkingLevelMap` 补 `max:"max"`（schema 支持该键；**那份文件同时存放 provider 凭据，PM 不读不写，片段交给用户自己粘**）；③ 根治 → 给插件提 issue/PR（一行映射）。**当前本项目配置写的是 `:max`，实际跑的是 high**——这条如实记下，不宣称「比 xhigh 强」。
