@@ -159,7 +159,7 @@ advice, problem reports); workers do not attend**. Only decisions that need the 
 (a) **delivered**: every acceptance command in the brief has been run + the report is written + the branch is pushed + the PR/MR is
     open (or, in local mode, the branch state is settled);
 (b) **hard-blocked** (missing dependency, missing permission, someone else's bug): notify the PM with
-    \`$cli notify $agent "<one line>"\`, state \`BLOCKED:\` clearly in the report, then end the turn;
+    \`$cli notify pm "<one line>"\`, state \`BLOCKED:\` clearly in the report, then end the turn;
 (c) **suspended on background jobs**: jobs this session started are still running and every step that does not depend
     on their results is done. A suspension is neither a delivery nor a blockage -- do not write the report's final
     verdict and do not notify \`BLOCKED:\` for it; end the turn with its **last line** naming every job you are

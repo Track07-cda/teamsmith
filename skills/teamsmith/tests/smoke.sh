@@ -7237,6 +7237,8 @@ assert_has "$TMP/print.log" "waiting on: <id>" "The built-in Pi prompt carries t
 assert_has "$TMP/print.log" "end your turn" "The built-in Pi prompt carries the three states：起完默认结束回合"
 assert_has "$TMP/print.log" "$P237_LANE" "The built-in Pi prompt carries the three states：完成叫醒是正常收割点"
 assert_has "$TMP/print.log" "$P237_BUDGET" "The built-in Pi prompt carries the three states：例外三条带内联预算数字"
+# 阻塞那条的示例必须点名通知 PM，不能是席位自己（否则按它照做的工人会通知自己、PM 静默收不到）
+assert_has "$TMP/print.log" 'notify pm "<one line>"' "The built-in Pi prompt carries the three states：hard-blocked 示例点名通知 PM"
 
 # 场景 4（续跑指引指向盘上证据）：这句话在共用的续跑行里，与车道段注入无关
 assert_has "$TMP/print.log" "state/bg.log" "The resume guidance points at the on-disk evidence：点名 state/bg.log"
