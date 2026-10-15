@@ -83,3 +83,17 @@ git diff --check && git status --short
 **F2 · §6 Step 4（原第 315–316 行）说「`team up` 重建巡检窗口」——不成立。** `team up` 只起 PM；**建/重建巡检窗口的是 `team pulse up`**。复验者在私有 tmux 里逐窗口名取证（跑完 `team up` 只有 `pm`，没有 `pulse`）。改法：那句话改成「（PM 与席位都需要重启才会读到新技能文本；**巡检窗口由 `team pulse up` 建立**，`team pulse status` 看它的状态）」。
 
 **交付要求**：改完跑一遍 `upgrade-recipe.sh`（并确认夹具**没有**把这两处错误文本钉住——若有 needle 钉着旧句子，一并同步），更新 `docs/team/reports/P255-dev-bob.md`（返修轮次一节：两处 diff、你的对照自证、夹具结果），然后 notify pm。我随后派 **V40 第二轮**定点复检（同一验证席位，换会话）。
+
+## 返修轮次 2（2026-10-15，V40 第二轮判 FAIL：**一项，一句话**）
+
+第二轮复检结论（`docs/team/reviews/V40.md` 文末「第二轮复检」一节）：**F1、F2 判为真修好**，新守卫**确实有牙**，第一轮绿面**一条未回退**；唯一必修是 **F3**。
+
+**F3（文档内部不一致，不改产品行为）**：`references/migration.md` 第 231–232 行（`--no-migrate` 那一句）仍写着**无条件**承诺：
+
+> `team up --no-migrate` is the same promise from the other side: it refuses, writes nothing, and prints the **manual command derived from *your* configuration**.
+
+而同一次改写新写的 255–262 行已经把这层条件讲清了（「两份形态，取决于你的配置」）。复验者造了**六种推导停住的形状**（`shape-not-locatable`、`fallback-name-collision`、`invalid-model-value`、`category-not-normalizable`、`contradictory-values`、`unknown-shape`），这六种下 `--no-migrate` 打印的都是**占位符路线**，不是推导命令。
+
+**修法（一句话，二选一都行，你定）**：把 232 行改成两形态表述（例如「… prints the manual transaction in whichever of the two forms your configuration supports — the derived command when the derivation is unambiguous, the placeholder route when it is not」），或直接指向下面那一节（「… prints the manual transaction in one of the two forms described below」）。**不要动产品行为**、不要改 255–262 已写好的那节。
+
+**交付**：改这一句 → 跑 `upgrade-recipe.sh`（若它钉了这句，同步）→ 报告里写一行 → notify pm。我随后让验证席位用**它自己的两套脚本只跑文档面与 §64** 做定点复检（它已这么提议）。
