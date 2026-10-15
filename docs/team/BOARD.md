@@ -446,7 +446,7 @@
 | V40 | Migration recipe: independent verification (walk it from zero) | verify | - | - | wip |
 | P280 | Gate lock hygiene: a nested fixture run must not starve the team | dev-bob | - | - | done |
 | P281 | Gate lock hygiene: apply (nested runs skip the machine lock, holder records) | dev-bob | - | - | wip |
-| P282 | Writing discipline: answer the reader first, hedge only with evidence | dev-bob | - | - | wip |
+| P282 | Writing discipline: answer the reader first, hedge only with evidence | dev-bob | - | - | done |
 | V41 | Help surface robustness: independent verification | - | - | - | todo |
 | V42 | Orphan visibility: independent verification (fake orphan + four false-positive families) | dev-bob | - | - | done |
 | V43 | Gate lock hygiene: independent verification (nested holder, forged marker, budget) | dev3 | - | - | blocked |
