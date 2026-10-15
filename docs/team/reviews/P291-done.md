@@ -1,0 +1,1 @@
+- 2026-10-15T23:38:44Z · `team close P291 --status done` · OK：阶段 propose 的交付证据：提案审查记录 docs/team/reviews/seat-interrupt-entry-proposal.md（判定 ACCEPTED）
