@@ -1,0 +1,1 @@
+- 2026-10-15T07:54:11Z · `team close P273 --status done` · OK：复验记录 docs/team/reviews/P273.md（判定 PASS）

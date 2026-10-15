@@ -1,0 +1,4 @@
+- 2026-10-15T05:55:52Z · `team close P271 --status done` · FORCED：PM 显式覆盖（理由：P271 的 26 个勾与报告已并入 main（内容核对：分支改的 2 条路径里 tasks.md 后来被我补了 7.1–7.3 的勾选，分支版本已完全包含）；唯一缺口 5.2 已立 P275 跟踪；复验记录 docs/team/reviews/P271.md 已写）
+  -   - ① 复验记录 docs/team/reviews/P271.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：task/P271-self-heal-checklist（46a68d602）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

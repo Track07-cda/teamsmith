@@ -62,7 +62,7 @@
   四条变异的红文案 + 还原后的绿
 - [x] 3.4 隔离与可单跑：`guide` 组只用 `$TMP` 私有根与 `kr_paths_check`；`--select guide` 单独可跑且
   末行打印本组 ✓/✗。 · 证据：隔离断言输出
-- [ ] 3.5 （**仅当 PM 按裁定点 5 裁「补声明」**）`tests/section-paths.tsv` 段 62 行的 patterns 加
+- [x] 3.5 （**仅当 PM 按裁定点 5 裁「补声明」**）`tests/section-paths.tsv` 段 62 行的 patterns 加 ｜ PM 补证据：**不适用**：PM 在提案复核时裁定 5 明确「§62 的行不补声明、本 change 不动 `section-paths.tsv`」（`docs/team/reviews/pm-reply-discipline-proposal.md`），故本项按 N/A 勾
   `skills/teamsmith/templates/pm-prompt.md.tmpl skills/teamsmith/references/protocol.md
   skills/teamsmith/SKILL.md`，basis 写明依据，跑 `section-select.sh --check` 必须绿。 · 证据：改后的
   行原文 + `--check` 输出尾
@@ -79,11 +79,11 @@
 
 ## 5 独立验证（另一席位，不是 apply 作者）
 
-- [ ] 5.1 在独立克隆上重跑 `bash tests/key-replies.sh --all` 与 `smoke.sh --select 62`（或任务书指定的
+- [x] 5.1 在独立克隆上重跑 `bash tests/key-replies.sh --all` 与 `smoke.sh --select 62`（或任务书指定的 ｜ PM 补证据：V37 在独立克隆上重跑 `key-replies.sh --all` 与 `smoke.sh --select 62`：`docs/team/reviews/V37.md`
   容器命令），确认十二组回归 + `guide` 全绿。 · 证据：独立日志
-- [ ] 5.2 逐条重做第 3.3 节的四条变异与还原（不是只复跑绿侧），并在真树上手工做一次「删段 → 红 →
+- [x] 5.2 逐条重做第 3.3 节的四条变异与还原（不是只复跑绿侧），并在真树上手工做一次「删段 → 红 → ｜ PM 补证据：V37 逐条重做四条变异与还原（并在真树上手工做「删段 → 红 → 还原 → 绿」）：`docs/team/reviews/V37.md`
   还原 → 绿」。 · 证据：复验记录
-- [ ] 5.3 自设计反例：把锚点词移到同文件的**段落外**（例如附录）时守卫是否仍按面判定；示例行出现第二
+- [x] 5.3 自设计反例：把锚点词移到同文件的**段落外**（例如附录）时守卫是否仍按面判定；示例行出现第二 ｜ PM 补证据：V37 自设反例（锚点移到段落外、示例行出现第二个命令）：`docs/team/reviews/V37.md`
   次时探针取哪一行；`--frobnicate-probe` 控制臂在 CLI 吞旗标时是否真的红。 · 证据：反例输出
-- [ ] 5.4 判 `verification` 的正确性门：只有证据通过；不因为「apply 报告说绿」判过。 · 证据：
+- [x] 5.4 判 `verification` 的正确性门：只有证据通过；不因为「apply 报告说绿」判过。 · 证据： ｜ PM 补证据：PM 据 V37 的证据判过（PASS），不以 apply 报告为准：`docs/team/reviews/P267.md` 合并记录
   `docs/team/reviews/<ID>.md`
