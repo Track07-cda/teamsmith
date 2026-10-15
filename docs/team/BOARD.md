@@ -438,6 +438,7 @@
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | dev | - | - | todo |
 | P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev | - | - | todo |
 | P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | wip |
+| P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
