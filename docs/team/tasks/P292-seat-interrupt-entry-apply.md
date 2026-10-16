@@ -38,3 +38,25 @@ git diff --check && git status --short
 ## 交付
 
 `docs/team/reports/P292-dev3.md`（逐条 scenario 对照、命令与 rc、八条红侧前后证据、未做项）；不合并、不推送；做完 `team notify pm`；随后由**没写过本变更**的席位独立复验（要自己造一个真在跑的长回合替身）。
+
+## 收尾轮次（2026-10-16，P295 交叉勾选翻出**三条真缺口**，其中一条是**主分支上的活红**）
+
+复验（V49）与合并都过了，但清单里 3.1–3.4 这**一整套交付面**没做；交叉勾选的席位把它如实留空并翻出后果。**我独立复现了那条活红**：
+
+```
+bash skills/teamsmith/tests/help-surface.sh --select claims
+  ✗ claims: interrupt 的探针 id interrupt 没有配方
+  ✗ claims: interrupt 没有探针配方
+== 结果 ==  ✓ 82  ✗ 2
+```
+
+也就是说 `commands.tsv` 里的 `interrupt` 行（第 50 行）声明了 `faces=state`，但 `help-surface.sh` 的 **claims 探针表**里没有它的配方 → **「帮助面里每条承诺都要被真跑一遍」这条不变量在 interrupt 上是空的**，且非 FAST 的全量段 51 因此红。**这是我的合并检查漏项造成的**：我合并 P292 时只跑了 `validate` 与账本禁令，没跑受影响选段（D-口径：合并后**必须**真跑受影响选段并读结果）。
+
+## 要做（3.1–3.4 + 一条补丁）
+
+1. **探针配方**（3.2）：给 `interrupt` 写 claims 探针——浅 fixture：**私有 socket** 上起一个 stub 席位（带身份 + 窗口 + 记录）→ `team interrupt … --print`（计划态零信号）→ 断言 `faces=state`（写出的审计/收件箱）与「拒绝路径不写任何东西」。配方要能被 `--select claims` 跑到且**全绿**。
+2. **文档**（3.3）：`references/troubleshooting.md` 加一节「席位卡在一个长回合里」——先读什么证据（`session_last`/`uncommitted`）、命令怎么用、**已知边界**（只对一个 pid、窗口留下的是活 shell、后台作业不受影响、死因显示 unknown）、以及 `--force` 的语义。
+3. **静态纪律**（3.4）：`perl skills/teamsmith/tests/signal-lint.pl --legacy /dev/null` 干净；`kill -TERM "$pid"` 的形态符合既有 lint。
+4. **3.1** 若 `commands.tsv` 行已写对，就在报告里给出证据（行号与 `--select claims` 的结果）；若还缺字段（例如 `caps`/`flags` 与实现不一致）一并改对。
+5. **验收**：`bash skills/teamsmith/tests/help-surface.sh --select claims` **必须 ✓ 全绿**；`smoke.sh --select <闭包>` 贴结果；**跑前跑后 `/tmp` 根数**（夹具收尾清理）。
+6. 改完 notify pm；由**没写过本变更**的席位做定点复检（换人）。
