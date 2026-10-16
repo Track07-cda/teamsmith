@@ -468,7 +468,7 @@
 | P294 | Rewrite the gate lock record when a new holder takes over | dev3 | - | - | done |
 | V49 | Verify the seat-interrupt entry with an own runaway-turn stand-in | verify | - | - | done |
 | P295 | Tick the seat-interrupt-entry checklist by evidence | dev2 | - | - | done |
-| V50 | Verify the /team slash command (whitelist, env stripping, install, three-layer flips) | verify | - | - | wip |
+| V50 | Verify the /team slash command (whitelist, env stripping, install, three-layer flips) | verify | - | - | done |
 | P297 | The production-path probes pin Pi 0.87.0 frames while the box runs 1.2.0 | dev | - | - | todo |
 
 ## 当前里程碑
