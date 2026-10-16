@@ -455,7 +455,7 @@
 | V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev3 | - | - | done |
 | P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | done |
 | P287 | Gate tmp/lock must survive another project's pattern cleanup | dev3 | - | - | done |
-| P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev-bob | - | - | wip |
+| P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev-bob | - | - | done |
 | P289 | Tick the help-robustness checklist by evidence | dev-bob | - | - | done |
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev-bob | - | - | done |
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | done |
@@ -479,6 +479,7 @@
 | V53 | Verify the gate lock against an outside rm -rf (own deletion scene) | verify | - | - | done |
 | V54 | Verify the audience-based publishing rule (three surfaces, page line, two gate classes) | dev3 | - | - | done |
 | P302 | Tick the audience-rule checklist (author side) | dev | - | - | wip |
+| P303 | Tick the gate-lock-external-deletion checklist (author side) | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
