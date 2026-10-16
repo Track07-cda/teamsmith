@@ -463,6 +463,7 @@
 | V47 | Verify writing-discipline and build the human-read blind package | verify | - | - | done |
 | P291 | A formal way for the PM to end a seat's runaway turn (with audit and a reason it can read) | dev-bob | - | - | done |
 | P292 | Seat turn interrupt: apply (proof chain, audit, reason delivery) | dev3 | - | - | wip |
+| P293 | Tick the writing-discipline checklist by evidence | verify | - | - | wip |
 
 ## 当前里程碑
 
