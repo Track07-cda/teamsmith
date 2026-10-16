@@ -280,10 +280,11 @@ chk_bootstrap_installs() { # <tree> <已初始化但删掉 .pi/skills 的仓库>
   if [ "$(readlink -f "$p/.pi/skills/teamsmith")" != "$t/skills/teamsmith" ]; then printf '软链目标不对\n'; return 1; fi
   h2="$(file_hash "$p/.pi/team/config.sh")"
   if [ "$h1" != "$h2" ]; then printf 'config.sh 被改了\n'; return 1; fi
-  if ! printf '%s\n' "$out" | grep -qF -- 'pi --approve'; then
-    printf 'bootstrap 升级路径没打信任提示行\n'; return 1
+  if ! chk_trust_hint "$out" >/dev/null; then
+    printf 'bootstrap 升级路径的信任提示行不达标：[%s]\n' "$(printf '%s\n' "$out" | grep -F -- 'pi --approve' | head -1)"
+    return 1
   fi
-  printf '已存在配置也装了 skill，config.sh 未动，信任提示行也在\n'
+  printf '已存在配置也装了 skill，config.sh 未动，信任提示行也在（同一行契约）\n'
   return 0
 }
 
@@ -382,17 +383,21 @@ chk_ext_no_install_silent() { # <tree> <没有项目本地安装的仓库>
   return 0
 }
 
-# P59：安装步的信任提示行 —— 同一行必须点名触发资源（.pi/skills/）与三条出路
-# （pi --approve / /trust / team init --no-skills），而且只能出现一次。
+# P59 + P299：安装步的信任提示行 —— 同一行必须点名**两处**触发资源（.pi/skills/ 与 .pi/extensions/）
+# 与三条出路（pi --approve / /trust / team init --no-skills），而且只能出现一次。
 chk_trust_hint() { # <init 捕获输出>
-  local line n
+  local line n t miss=""
   line="$(printf '%s\n' "$1" | grep -F -- 'pi --approve' | head -1)"
   if [ -z "$line" ]; then
-    printf '输出里没有信任提示行（要一行点名 .pi/skills/ + pi --approve + /trust + team init --no-skills）\n'
+    printf '输出里没有信任提示行（要一行点名 .pi/skills/ + .pi/extensions/ + pi --approve + /trust + team init --no-skills）\n'
     return 1
   fi
-  case "$line" in *'.pi/skills/'*'pi --approve'*'/trust'*'team init --no-skills'*) ;; *)
-    printf '提示行缺要点：[%s]\n' "$line"; return 1 ;; esac
+  for t in '.pi/skills/' '.pi/extensions/' 'pi --approve' '/trust' 'team init --no-skills'; do
+    case "$line" in *"$t"*) ;; *) miss="$miss [$t]" ;; esac
+  done
+  if [ -n "$miss" ]; then
+    printf '提示行缺要点：%s —— 行原文：[%s]\n' "$miss" "$line"; return 1
+  fi
   n="$(printf '%s' "$1" | grep -cF -- 'pi --approve' || true)"
   if [ "$n" != "1" ]; then printf '提示行不是恰好一行（%s 行）\n' "$n"; return 1; fi
   printf '信任提示行打了一次：[%s]\n' "$(printf '%s' "$line" | LC_ALL=C sed 's/^[[:space:]]*//' | cut -c1-56)"
@@ -410,6 +415,20 @@ chk_no_skills_silent() { # <tree> <repo>：--no-skills 下不许出现这一行
   [ "$rc" -eq 0 ] || { printf -- '--no-skills init rc=%s\n' "$rc"; return 1; }
   if printf '%s\n' "$out" | grep -qF -- 'pi --approve'; then printf -- '--no-skills 下打了信任提示行\n'; return 1; fi
   printf -- '--no-skills 安静（没打信任提示行）\n'
+  return 0
+}
+
+# P299（init-skill 场景 3 的红侧面）：两处 init 文档必须**同页**点名「触发资源 + 三条答案」——
+# 判据用稳定 token（不是整句），删掉任一个 token 必红。五个 token = 两处触发资源 + 三条出路。
+chk_init_docs_fact() { # <tree>
+  local d t miss=""
+  for d in skills/teamsmith-init/SKILL.md skills/teamsmith-init/references/bootstrap.md; do
+    for t in '.pi/skills/' '.pi/extensions/' 'pi --approve' '/trust' 'team init --no-skills'; do
+      grep -qF -- "$t" "$1/$d" || miss="$miss $d[$t]"
+    done
+  done
+  if [ -n "$miss" ]; then printf 'init 文档没同页点名触发资源/答案：%s\n' "$miss"; return 1; fi
+  printf '两处 init 文档都同页点名 .pi/skills/ + .pi/extensions/ + pi --approve + /trust + team init --no-skills\n'
   return 0
 }
 
@@ -511,6 +530,8 @@ if want surfaces; then
     bad "init SKILL 行序不对：npm=[$n_npm] init=[$n_init] bootstrap=[$n_boot]"
   fi
   grep -qF '.pi/skills/' "$init_skill" && ok "init SKILL 点名项目目标 .pi/skills/" || bad "init SKILL 没点名 .pi/skills/"
+  # P299：两处 init 文档都要同页带「触发资源 + 三条答案」的稳定 token（红侧在 flip ⑨）
+  check_holds "P299 两处 init 文档同页点名触发资源与答案" chk_init_docs_fact "$tree"
   grep -qF 'pi install' "$init_skill" && grep -qF 'install.sh' "$init_skill" \
     && ok "init SKILL 同时保留两条替代路线（pi install / install.sh）" \
     || bad "init SKILL 少了替代路线"
@@ -887,13 +908,51 @@ s = open(p, encoding='utf-8').read()
 old = "    printf '  skip  %s 与 %s（--no-skills：只做配置/文档，没装项目本地 skill/扩展）\\n' \\\n      \"$target\" \"$(team_project_extension_target)\"\n    return 0"
 if old not in s:
     print("没找到 --no-skills 分支"); sys.exit(1)
-new = old.replace('    return 0', '    team_dim "  提示：.pi/skills/ pi --approve /trust team init --no-skills"\n    return 0')
+new = old.replace('    return 0', '    team_dim "  提示：.pi/skills/ 与 .pi/extensions/ pi --approve /trust team init --no-skills"\n    return 0')
 open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
 PYTRUST2
   pg2="$tmp/f-trust-noskills-green"; git_new "$pg2"
   pf2="$tmp/f-trust-noskills-red"; git_new "$pf2"
   check_holds "⑦b 对照：真实树 --no-skills 安静" chk_no_skills_silent "$tree" "$pg2"
   check_breaks "⑦b 翻转：提示行也打进 --no-skills 分支" chk_no_skills_silent "$ft2" "$pf2"
+  # ⑦c P299：只删输出行里的 `.pi/extensions/`（其余原样）→ 判据必须红并点名那一行
+  ft="$tmp/f-trust-extline"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-init.sh" <<'PYTRUSTEXT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '  team_dim "  提示：.pi/skills/ 与 .pi/extensions/'
+new = '  team_dim "  提示：.pi/skills/ 与 '
+if old not in s:
+    print("没找到信任提示行"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYTRUSTEXT
+  pg3="$tmp/f-trust-extline-green"; git_new "$pg3"
+  pf3="$tmp/f-trust-extline-red"; git_new "$pf3"
+  check_holds "⑦c 对照：真实树信任行点名两处资源" chk_trust_hint_case "$tree" "$pg3"
+  check_breaks "⑦c 翻转：信任行删掉 .pi/extensions/" chk_trust_hint_case "$ft" "$pf3"
+  # ⑨ P299：两处 init 文档的稳定 token（场景 3 的红侧：删掉 token → 同一判据红）
+  ft="$tmp/f-docs-skill"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith-init/SKILL.md" <<'PYDOCSKILL'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if '.pi/extensions/' not in s:
+    print("SKILL.md 里找不到 .pi/extensions/"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace('.pi/extensions/', '', 1))
+PYDOCSKILL
+  check_holds "⑨a 对照：两处 init 文档的 token 都在" chk_init_docs_fact "$tree"
+  check_breaks "⑨a 翻转：SKILL.md 删掉 .pi/extensions/ token" chk_init_docs_fact "$ft"
+  ft2="$tmp/f-docs-boot"; scratch_tree "$ft2"
+  python3 - "$ft2/skills/teamsmith-init/references/bootstrap.md" <<'PYDOCBOOT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if '/trust' not in s:
+    print("bootstrap.md 里找不到 /trust"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace('/trust', '', 1))
+PYDOCBOOT
+  check_breaks "⑨b 翻转：bootstrap.md 删掉 /trust token" chk_init_docs_fact "$ft2"
   # ⑧ P270：扩展红线（不带标记的普通文件连 --force 都不删）与 /team 的 doctor 行
   ft="$tmp/f-ext-refuse"; scratch_tree "$ft"
   python3 - "$ft/skills/teamsmith/scripts/lib/cmd-init.sh" <<'PYEXT'
