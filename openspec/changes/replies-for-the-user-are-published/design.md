@@ -78,8 +78,10 @@ token、只靠评审）与用户「标记使用情况不理想」的诉求相悖
 
 ### 5. 面板那一行：位置、文案、只读与诚实边界
 
-- **键与文案**：`zh.ts` / `en.ts` 各加 `replyPageNote`；推荐 zh `PM 发布的关键回复：写给用户的回答、汇报与结论`、
-  en `key replies the PM publishes: replies written for the user`。文案是文本类（不进断言），PM 在提案评审里可以直接改。
+- **键与文案**：`zh.ts` / `en.ts` 各加 `replyPageNote`；**PM 复核要求这一行带上规则的自测题**，所以推荐
+  zh `「这条回复是写给谁的？」——PM 写给用户的回复都在这里`、
+  en `"who is this reply written for?" — replies the PM wrote for the user`（问题放句首：59 列截断时问题与「谁发布」
+  都还看得见；它的尾巴被截掉属于正常 `truncLine` 行为）。文案是文本类（不进断言），PM 在提案评审里可以直接改。
 - **位置**：`layout.ts:1386` 之后紧跟一行 dim（`truncLine(ln(seg(... 'dim')), innerW)`），即在导航行之后、槽位计数之前
   ——空 store 与降级读数走早退分支时也带着它。代价：列表可视行数少 1（`room = Math.max(1, budget - lines.length)`），
   四档宽度下仍 ≥1 行；既有断言没有一条数行数，snapshot 组判的是「渲染得出来 + 无超宽 + 非半截帧」。
@@ -98,9 +100,11 @@ token、只靠评审）与用户「标记使用情况不理想」的诉求相悖
 - `key-replies` 的另八条要求一字不动；`extension-slash` / `boundary` / `writing-discipline` 与本题无关。
 - 「答读者的问题优先」（`templates/pm-prompt.md.tmpl:22`，writing-discipline 的写作纪律）与本题**不冲突也不重复**：
   那条讲**怎么写**（先答后述、只留带证据的句子），本题讲**发不发**（写给用户的回复要发布到关键回复页）。
-- **与本要求自己的一条旧句冲突，本变更把它改掉**：原文是「a reply carries conclusions rather than process narration」
-  （只发结论、不发过程）。按读者判的话，**写给用户的进度汇报也算**，所以那句在新判据下不成立，替换为「读的人决定
-  什么该进」——这是有意的取代，不是遗漏；新旧两版都在 delta 的 diff 里看得见。
+- **与本要求自己的一条旧句的关系，本变更按 PM 的复核裁法处理**：原文是「a reply carries conclusions rather than
+  process narration」（只发结论、不发过程）。按读者判的话**不能**用它排除「写给用户的汇报」，所以本变更把它收成一则
+  **内容要求**并写死反向句：「a reply written for the user is never held back because of what kind of reply it is …
+  no reply becomes unpublishable by reading like process rather than like a conclusion」（页面收的是实质正文，不是
+  流水账）。这是有意的改写，不是遗漏；旧句与新句都在 delta 的 diff 里看得见。
 - 面板那条 ADDED 与「跨宽度与语言可读」不重复：后者是渲染/本地化，前者是页面**语义**（这一页是什么、谁发布）。
 
 ## Risks / Known limitations

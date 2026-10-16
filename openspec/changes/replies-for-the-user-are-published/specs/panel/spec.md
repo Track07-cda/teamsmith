@@ -4,7 +4,8 @@
 
 Page 5 of the console SHALL carry one line describing the page itself: that it holds the replies the PM wrote for
 the user — the answers, conclusions, rulings, reports and decision requests the PM sends to the conversation — and
-that the PM is the one who publishes them. The line SHALL come from the zh/en string tables like every other static
+that the PM is the one who publishes them. The line SHALL also carry the criterion's own question — who is this
+reply written for? — so that whoever reads the page sees, on the page itself, how a reply is judged. The line SHALL come from the zh/en string tables like every other static
 label, SHALL be sanitized and truncated to the pane width, and SHALL stay readable in all four width tiers and in
 both languages; it SHALL be drawn whenever the page's list renders, including an empty store and a degraded or
 unavailable read. The line is a statement, not a control: it SHALL carry no mouse target and no action, and the

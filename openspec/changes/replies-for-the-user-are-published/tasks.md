@@ -37,8 +37,9 @@
 - [ ] 1.3 `SKILL.md`：command table 的 `| Key replies |` 行（`:54`）与 `:250` 的 Non-negotiable bullet 同步改成同一判据
   （两处不许一个有一个没有）。 · 证据：两处原文 + `grep -iF` 输出
 - [ ] 1.4 三处共享 token 命中（大小写不敏感），且 command table 的 token **落在行内**：`grep -iF` 三份输出。 · 证据：三份输出
-- [ ] 1.5 与旧句的取代关系落到位：新三处不再出现「只发结论、不发过程」这类与按读者判据冲突的说法（`grep -i` 三种旧说法应为 0）
-  ——这是**有意的取代**，在报告里点名。 · 证据：grep 输出
+- [ ] 1.5 与旧句「只发结论、不发过程」的关系按 PM 的裁法落到位：三处保留「正文是实质内容而不是流水账」的内容要求，
+  但**不得**保留任何把「只记录流程」当作不发布理由的句子（写给用户的汇报必须发布）。在报告里逐处点名改前/改后原文。
+  · 证据：三处 diff 片段（人读判定，文本类不进断言）
 
 ## 2 门禁面（规格 `key-replies#The key-conclusion duty …` 的两条新场景）
 
@@ -56,14 +57,17 @@
 
 ## 3 Pulse 第 5 页那一行（规格 `panel#The key replies page states what it is and who publishes into it`）
 
-- [ ] 3.1 `src/strings/zh.ts` 与 `en.ts` 各加一个键（建议 `replyPageNote`），文案按提案裁定点 3（PM 可改词）；
-  `node skills/teamsmith/tests/panel-strings.mjs .` 必须绿（键集相等 + 占位符一致 + 表外无 CJK）。 · 证据：两表行原文 + 检查输出
+- [ ] 3.1 `src/strings/zh.ts` 与 `en.ts` 各加一个键（建议 `replyPageNote`），文案按提案裁定点 3（PM 可改词），
+  **并且带判据的自测题**（`who is this reply written for?` /「这条回复是写给谁的？」，问题放句首，59 列截断时它与
+  「谁发布」都还在）；`node skills/teamsmith/tests/panel-strings.mjs .` 必须绿（键集相等 + 占位符一致 + 表外无 CJK）。
+  · 证据：两表行原文 + 检查输出
 - [ ] 3.2 `src/layout.ts` 在 `:1386`（`const lines: PlacedLine[] = [replyNavLine(ctx, innerW)]`）之后紧跟一行 dim，
   用 `truncLine(ln(seg(... 'dim')), innerW)`；无 hit 目标、无动作；空 store 与降级读数也带它。 · 证据：改后片段
 - [ ] 3.3 重建提交产物：`( cd skills/teamsmith/scripts/panel && bun install --frozen-lockfile && bash build.sh )`，
   再在沙盒里重建一次并逐字节比对（`smoke.sh` §26-a 的同一判据），报告给出字节数。 · 证据：build 输出尾 + `cmp` 结论
-- [ ] 3.4 `tests/key-replies-pty.sh`：`pages` 组（zh）加一条 `assert_has` 断言行在窗格里；`language` 组把它并进 en 的
-  `want_frame`。不新增组、不加新机制。 · 证据：`--select pages,language` 的输出尾 + 两条断言原文
+- [ ] 3.4 `tests/key-replies-pty.sh`：`pages` 组（zh）加一条 `assert_has` 断言那一行在窗格里（断言串用**冻结文案里
+  问题那一段**，这样删整行与只删自测题都会红）；`language` 组把它并进 en 的 `want_frame`。不新增组、不加新机制。
+  · 证据：`--select pages,language` 的输出尾 + 两条断言原文
 - [ ] 3.5 只读与诚实边界未被削弱：`--select pages,language` 全绿，且 `key-replies-ui.sh --select machine,blocks` 仍绿
   （机器出口不读回复、记录到的读者调用仍只有有界块）。 · 证据：两条命令的输出尾
 

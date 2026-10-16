@@ -3,7 +3,7 @@
 agent: dev   status: delivered   time: 2026-10-16
 branch: `task/P300-answer-must-be-posted-propose`   PR/MR: -（local 模式：分支留本地，PM 复验后本地合并）
 phase: propose   change: `replies-for-the-user-are-published`（2 条 MODIFIED `key-replies` + 1 条 ADDED `panel`）
-修订：第 2 轮（用户的第二条判据；第一轮见文末「修订记录」）
+修订：第 3 轮（PM 的提案复核：内容要求的反向句 + 面板那一行的自测题；第 1、2 轮见文末）
 
 ## 结论（先给答案）
 
@@ -34,9 +34,10 @@ table 用 `row:` 前缀，必须落在 `| Key replies |` 行内），任一处�
 **不进断言**（没有它规则仍然成立；它属文本类，由评审把关）。
 
 **Pulse 那一行**：第 5 页列表在导航行之后、槽位计数之前加一行来自 zh/en 表的说明（键 `replyPageNote`，推荐
-`PM 发布的关键回复：写给用户的回答、汇报与结论` / `key replies the PM publishes: replies written for the user`）；
-它是陈述不是控件，页面只读不变；**诚实边界**写进规格与 design——面板不读聊天/会话/历史，无法自动检测用户刚问了什么、
-刚收到了什么，不承诺自动标记。
+`「这条回复是写给谁的？」——PM 写给用户的回复都在这里` / `"who is this reply written for?" — replies the PM wrote
+for the user`）——**PM 复核要求这一行带上判据的自测题**，问题放句首（59 列截断时问题与「谁发布」都还在）；它是陈述
+不是控件，页面只读不变；**诚实边界**写进规格与 design——面板不读聊天/会话/历史，无法自动检测用户刚问了什么、刚收到
+了什么，不承诺自动标记。
 
 ## Deliverables
 
@@ -58,9 +59,11 @@ table 用 `row:` 前缀，必须落在 `| Key replies |` 行内），任一处�
 - **门禁已有牙且过了 D170 分类**：`tests/key-replies.sh:1055` 的 `guide_spec()` + `guide_check_surface()` 逐条点名 +
   `kr_group_guide` 的四条变异 + `guide-example` 的真 CLI 对拍。今天实测 `--select guide` → **✓18 ✗0**。P264（已 done）
   的裁定「没有机器面、而那串字是某个要紧行为的唯一证据 → 留一条稳定 token」正是本变更新增锚点的归类。
-- **旧句与新判据冲突，且是本变更要取代的**：三处原有一句「publish conclusions, not process narration」（只发结论、不发
-  过程）；按读者判的话，**写给用户的进度汇报也算**，所以 delta 把它替换为「读的人决定什么该进」。这是有意取代，不是
-  遗漏（design 决策 7 与 tasks 1.5 都点名）。
+- **旧句「只发结论、不发过程」按 PM 复核的裁法处理**：三处原有一句「publish conclusions, not process narration」。按
+  读者判的话**不能**用它排除「写给用户的汇报」，但 PM 允许它作为**内容要求**保留；所以 delta 把它收成一则内容要求并
+  写死反向句（「a reply written for the user is never held back because of what kind of reply it is … no reply
+  becomes unpublishable by reading like process rather than like a conclusion」）。三处文本同口径改，design 决策 7
+  与 tasks 1.5 都点名，改前/改后在 diff 里看得见。
 - **基线**：`openspec validate --all --strict` → **22 passed / 0 failed**；`section-select.sh --paths <三处表面>` →
   `sections=133 / keys=26`（**不含 62**，见裁定点 6）。
 
@@ -96,7 +99,7 @@ Totals: 22 passed, 0 failed (22 items)
 ```bash
 $ bash skills/teamsmith/tests/spec-refs.sh --check ; echo rc=$?
 undeclared openspec/specs/extension-slash/spec.md:47 docs/team/tasks/P1.md
-spec-refs: judged 112 reference(s) (50 distinct) in 12663 effective line(s); retired 0; undeclared 1; id families used [D,E,F,M,P,V] named [D,E,F,M,P,V]
+spec-refs: judged 112 reference(s) (50 distinct) in 12668 effective line(s); retired 0; undeclared 1; id families used [D,E,F,M,P,V] named [D,E,F,M,P,V]
 rc=1
 ```
 
@@ -134,9 +137,9 @@ rc=0
 $ git diff --check ; echo rc=$?          # rc=0，无空白错误
 $ git status --short                     # 无输出（报告提交前）
 $ git log --oneline -3
+1fd12375 docs(openspec): P300 review round — the content norm keeps its teeth, and the page carries the criterion's question
 14474c41 docs(openspec): P300 rework — the reader criterion, and the change renamed to replies-for-the-user-are-published
-1fd263b0 docs(team): P300 proposal delivery report (three surfaces, the boundary, the Pulse line, the gate)
-d635620a docs(openspec): P300 propose — proposal, design and tasks for answer-must-be-posted
+f0a7ca65 docs(team): P300 report reworked for the reader criterion (change renamed)
 ```
 
 ## Decisions and deviations
@@ -144,8 +147,9 @@ d635620a docs(openspec): P300 propose — proposal, design and tasks for answer-
 - **判据换成按读者，而不是叠加**：用户第二条澄清说的是「总之就是不希望用户漏掉的回复…都要添加」，PM 也写明「以这条
   为准」，所以第一轮的「回答用户的问题」不再是独立触发，而是**写给用户的回复**的一个例子。三处的推荐文本按此重写；
   `answering a question the user asked` 这类旧说法如果留着，会让读者以为判据还是话题。
-- **旧句「只发结论、不发过程」被取代**（上面「现状复核」最后一条）：这是本变更唯一一处**删掉既有义务文本**的地方，
-  design 决策 7 与 tasks 1.5 都点名，delta 的 diff 里看得见，免得复验者以为是我漏抄。
+- **旧句「只发结论、不发过程」收成一则内容要求**（上面「现状复核」最后一条）：PM 复核裁定它可以作为内容要求保留、
+  但**不许**拿它排除写给用户的汇报；delta 因此保留了它的内容面并写死反向句，三处文本同口径，diff 里看得见，
+  免得复验者以为是我漏抄。
 - **token 选 `written for the user`**：它是用户那句「写给用户的」的英文说法，三处都能自然嵌进去，今天三处 0 命中
   所以非空洞。代价明写在 design 决策 3：改词（例如换成 `the reader is the user`）就红，改 token 属于改合同。
 - **「写给巡检/席位/别的项目 PM 不算」不设断言**：没有这一极规则仍然成立（判据是读者），它的缺失不会让规则反向；
@@ -179,9 +183,10 @@ d635620a docs(openspec): P300 propose — proposal, design and tasks for answer-
 | 轮次 | 触发 | 事实 |
 |---|---|---|
 | 第 1 轮（tip `1fd263b0`） | 用户第一条口径「对于用户的问题的直接回答必须标记关键回答」 | change `answer-must-be-posted`：触发 = 「回复的主要目的是回答用户的问题」，token `the user's question`，面板那行写「对你提问的回答与关键结论」 |
-| 第 2 轮（本轮） | 用户第二条口径「希望用户能够看到的回复都要添加；回复 Pulse 的、其他 agent 的不需要算」，PM 明示「以任务书新增的判据一节为准」 | 判据改成**按读者**（写给用户的都要发布；写给巡检/席位/别的项目 PM 的与工具回执不算；判不准按写给用户），token 换成 `written for the user`，面板那行改成「写给用户的回答、汇报与结论」，change 改名 |
+| 第 2 轮（tip `14474c41`→`f0a7ca65`） | 用户第二条口径「希望用户能够看到的回复都要添加；回复 Pulse 的、其他 agent 的不需要算」，PM 明示「以任务书新增的判据一节为准」 | 判据改成**按读者**（写给用户的都要发布；写给巡检/席位/别的项目 PM 的与工具回执不算；判不准按写给用户），token 换成 `written for the user`，面板那行改成「写给用户的回答、汇报与结论」，change 改名 |
+| 第 3 轮（本轮，tip `1fd12375`） | PM 的提案复核（`06:26:25Z`）：结构检查全过，退回一处「判据比用户口径窄」+ 要求把自测题写进面板那一行 | 退回的那一条第 2 轮已经满足（PM 当时看的是第 2 轮之前的稿）；本轮补上 ① 把「只发结论、不发过程」收成内容要求并写死反向句，② 面板那一行带上判据的自测题 `who is this reply written for?` |
 
-两轮之间**没有**产品文件改动；第 1 轮的产物只存在于 git 历史里（`1fd263b0` / `14474c41` 的父提交），旧名目录已
+三轮之间**没有**产品文件改动；第 1、2 轮的产物只存在于 git 历史里（`1fd263b0`→`14474c41`→`f0a7ca65`），旧名目录已
 `git mv` 掉。
 
 ## Suggested next steps

@@ -11,7 +11,11 @@ written for the user, and so is any other reply whose reader is the user: length
 the size of the topic. A reply that is not written for the user is not published: coordination with the patrol,
 with another seat or with another project's PM stays in its own channel, and a tool-generated receipt is not a
 reply at all. The boundary is one question — who is this reply written for? — and a reply whose reader cannot be
-settled is treated as written for the user. A batch of user-facing replies MAY be one reply. The Agent workflow
+settled is treated as written for the user. A reply written for the user is never held back because of what kind of
+reply it is: a status or progress report, a delivery summary and a decision request are published exactly as a
+conclusion is, and no reply becomes unpublishable by reading like process rather than like a conclusion. What the
+page carries is the reply's substance — the body the user needs to read — rather than a play-by-play of the work. A
+batch of user-facing replies MAY be one reply. The Agent workflow
 SHALL attempt explicit publication of the reply it chose, then send the same reply normally whether publication
 succeeds, fails, is busy or remains unconfirmed. A saved receipt SHALL mean only project-local durable
 publication, not user delivery, approval, read status or a refreshed Pulse screen. Key replies MUST NOT increment
