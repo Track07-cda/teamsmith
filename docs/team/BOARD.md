@@ -466,7 +466,7 @@
 | P293 | Tick the writing-discipline checklist by evidence | verify | - | - | done |
 | V48 | Verify the tmux identity write side (own leak scene, both sides) | verify | - | - | done |
 | P294 | Rewrite the gate lock record when a new holder takes over | dev3 | - | - | done |
-| V49 | Verify the seat-interrupt entry with an own runaway-turn stand-in | verify | - | - | wip |
+| V49 | Verify the seat-interrupt entry with an own runaway-turn stand-in | verify | - | - | done |
 
 ## 当前里程碑
 
