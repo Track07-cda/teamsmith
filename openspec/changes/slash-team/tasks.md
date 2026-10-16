@@ -95,13 +95,13 @@ ACCEPTED 之后开始**——本清单是 apply 席位的执行面，写它的�
 
 ## 6 独立验证（另一席位，不是 apply 作者）
 
-- [ ] 6.1 在独立冻结克隆上重跑 4.1–4.5 的全部组与保留回归（`install-shape.sh` 全组、相关门禁段）；逐条给
+- [x] 6.1 在独立冻结克隆上重跑 4.1–4.5 的全部组与保留回归（`install-shape.sh` 全组、相关门禁段）；逐条给 · 证据（PM 按事实勾）：V50 在独立克隆（`reviews/V50/checkout`，受检 `753d787e`）上重跑了第 1–5 节的全场景与保留回归：`docs/team/reviews/V50.md`（8 项全绿）
   command/assertion/rc 与 skip，缺测不标 pass。 · 证据：独立记录 + 原始日志
-- [ ] 6.2 逐条重做 4.6 的红侧（不是复跑绿侧），并**独立**造两格：把表里一行改成 CLI 不认的命令（4.4 的方向）与
+- [x] 6.2 逐条重做 4.6 的红侧（不是复跑绿侧），并**独立**造两格：把表里一行改成 CLI 不认的命令（4.4 的方向）与 · 证据（PM 按事实勾）：V50 自造三段红侧（白名单外命令、变量剥离、安装三路径）各自破坏→红点名→还原→绿：`docs/team/reviews/V50.md`
   一个会话里 `TEAM_ASSUME_YES=1` 的真 CLI 预览（配置字节不变）。 · 证据：red→green 原始输出
-- [ ] 6.3 反面证据：`/team up`、`/team --fresh-pm`、表外命令、读行多余 token、未闭合引号 —— 每条都要
+- [x] 6.3 反面证据：`/team up`、`/team --fresh-pm`、表外命令、读行多余 token、未闭合引号 —— 每条都要 · 证据（PM 按事实勾）：V50 逐条重做作者的三层翻转证据并自设至少一条相邻反例（含「对话里提到 /team 不执行任何东西」的探针）：`docs/team/reviews/V50.md`
   「零子进程」的证据（桩日志为空），不是只看文案。 · 证据：桩日志与命令行
-- [ ] 6.4 判 `verification` 的 correctness 门：只有证据通过；不因为「作者报告说绿」判过。 · 证据：
+- [x] 6.4 判 `verification` 的 correctness 门：只有证据通过；不因为「作者报告说绿」判过。 · 证据： · 证据（PM 按事实勾）：PM 据 V50 的证据判过门（PASS，见本清单下方注记与 `docs/team/reviews/P298.md`）；判定不以 apply 报告为依据
   `docs/team/reviews/<ID>.md`
 
 ## 7 apply / verify 的验收命令（本阶段不运行）
