@@ -453,14 +453,14 @@
 | P284 | Tick the orphan-visibility checklist by evidence (archive prerequisite) | dev-bob | - | - | done |
 | P285 | Close the three orphan-visibility gaps (census reading, flip arm, docs) | dev-bob | - | - | done |
 | V44 | Orphan visibility: verify the three closed gaps (own ps shim, own byte-equality mutation, docs vs behaviour) | dev3 | - | - | done |
-| P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | wip |
+| P286 | Writing discipline: apply (three surfaces, review reading, AGENTS re-render) | dev-bob | - | - | done |
 | P287 | Gate tmp/lock must survive another project's pattern cleanup | dev3 | - | - | done |
 | P288 | Gate lock vs outside deletion: apply (companion lock, ownership, entry check) | dev-bob | - | - | wip |
 | P289 | Tick the help-robustness checklist by evidence | dev-bob | - | - | done |
 | V45 | Third-party targeted re-verification (seat-identity defect remedy) | dev-bob | - | - | done |
 | P290 | De-flake the claims idempotence probe (clock-dependent) and make the mark-loaded claim true | dev3 | - | - | done |
 | V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev-bob | - | - | done |
-| V47 | Verify writing-discipline and build the human-read blind package | verify | - | - | wip |
+| V47 | Verify writing-discipline and build the human-read blind package | verify | - | - | done |
 | P291 | A formal way for the PM to end a seat's runaway turn (with audit and a reason it can read) | dev-bob | - | - | done |
 | P292 | Seat turn interrupt: apply (proof chain, audit, reason delivery) | dev3 | - | - | wip |
 
