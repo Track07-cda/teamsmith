@@ -473,6 +473,7 @@
 | P298 | Tick the slash-team checklist by evidence | dev2 | - | - | done |
 | P299 | Falsifiers for the init trust-line contracts (slash-team 3.3) | dev | - | - | wip |
 | V51 | Spot-check the init trust-line falsifiers | verify | - | - | wip |
+| V52 | Spot-check the seat-interrupt finish-up (probe teeth, declaration, docs) | dev2 | - | - | wip |
 
 ## 当前里程碑
 
