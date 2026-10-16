@@ -433,7 +433,7 @@
 | V38 | cli-help surface: independent verification | dev2 | - | - | done |
 | P268 | Do not leak this project's identity into tmux's global environment | dev2 | - | - | done |
 | P269 | Detect and report orphaned seat processes (dead window, live Pi, wasted memory) | dev3 | - | - | done |
-| P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | wip |
+| P270 | Slash /team: apply (extension, whitelist table, install surface) | dev | - | - | done |
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | done |
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | verify | - | - | done |
 | P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev3 | - | - | done |
@@ -470,6 +470,7 @@
 | P295 | Tick the seat-interrupt-entry checklist by evidence | dev2 | - | - | done |
 | V50 | Verify the /team slash command (whitelist, env stripping, install, three-layer flips) | verify | - | - | done |
 | P297 | The production-path probes pin Pi 0.87.0 frames while the box runs 1.2.0 | dev | - | - | todo |
+| P298 | Tick the slash-team checklist by evidence | dev2 | - | - | wip |
 
 ## 当前里程碑
 
