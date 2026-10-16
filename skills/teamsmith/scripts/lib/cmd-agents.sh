@@ -499,7 +499,7 @@ team_agent_pane_tail() { # <agent> [<重试次数>] → stdout
   team_agent_window_exists "$agent" || return 0
   t="$TEAM_SESSION:$agent"
   while :; do
-    out="$(tmux capture-pane -p -t "$t" -S -200 2>/dev/null || true)"
+    out="$(team_tmux capture-pane -p -t "$t" -S -200 2>/dev/null || true)"
     team_text_has_content "$out" && break
     [ "$i" -ge "$tries" ] && break
     i=$((i + 1)); sleep 0.1
@@ -560,7 +560,7 @@ team_dispatch_launch_diag() { # <agent> <ID> <渲染出的命令> <解析到的�
 team_pane_dead_fields() { # <session:window> → "dead|status|signal|time"；目标不在/读不到 → 非 0、无输出
   local t="${1:-}" out
   [ -n "$t" ] || return 1
-  out="$(tmux list-panes -t "$t" -F '#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}|#{pane_dead_time}' 2>/dev/null | head -1)"
+  out="$(team_tmux list-panes -t "$t" -F '#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}|#{pane_dead_time}' 2>/dev/null | head -1)"
   [ -n "$out" ] || return 1
   printf '%s\n' "$out"
 }
@@ -615,7 +615,7 @@ team_agent_pane_evidence() { # <agent> → 死 pane 的退出证据（"signal=9"
 team_agent_corpse_scene() { # <session:window> → 最后 N 行画面（抓不到 → 空）
   local t="${1:-}"
   [ -n "$t" ] || return 1
-  tmux capture-pane -p -S - -t "$t" 2>/dev/null \
+  team_tmux capture-pane -p -S - -t "$t" 2>/dev/null \
     | sed -e 's/[[:space:]]*$//' -e '/^Pane is dead (/d' \
     | awk '{ if (NF) last=NR; line[NR]=$0 } END { for (i=1; i<=last; i++) print line[i] }' \
     | tail -n "$(team_agent_scene_lines)"
@@ -1455,12 +1455,12 @@ team_dispatch_execute() {
     # P55（remain-on-exit 的时机是红线）：占位命令先持窗 → 设选项并读回 → 才把 pane 交给 harness。
     # 顺序不能反：harness 先跑时它若秒退，窗口在设选项之前就没了（探针 P1/P3 = 2026-09-22 事故形状）。
     # respawn-pane 用 argv 形式（不经 shell 解析）：harness 原样保留「bash -lc $inner $prompt-as-$0」。
-    tmux new-window -t "$TEAM_SESSION" -n "$agent" -d 'sleep 30' >/dev/null 2>&1 || true
+    team_tmux new-window -t "$TEAM_SESSION" -n "$agent" -d 'sleep 30' >/dev/null 2>&1 || true
     if team_agent_window_exists "$agent"; then
-      tmux set-window-option -t "$TEAM_SESSION:$agent" remain-on-exit on >/dev/null 2>&1 || true
-      local roe; roe="$(tmux show-options -w -v -t "$TEAM_SESSION:$agent" remain-on-exit 2>/dev/null || true)"
+      team_tmux set-window-option -t "$TEAM_SESSION:$agent" remain-on-exit on >/dev/null 2>&1 || true
+      local roe; roe="$(team_tmux show-options -w -v -t "$TEAM_SESSION:$agent" remain-on-exit 2>/dev/null || true)"
       if [ "$roe" = "on" ]; then
-        tmux respawn-pane -k -t "$TEAM_SESSION:$agent" bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
+        team_tmux respawn-pane -k -t "$TEAM_SESSION:$agent" bash -lc "$inner" "$prompt" >/dev/null 2>&1 || true
       else
         # 读回失败 = 这一轮的启动作废：窗口留给下一轮的重用分支杀（没有下一轮则由失败路径杀），
         # 绝不 return —— 否则「重试一次 + 失败诊断」的既有契约会被这条新守卫短路。
@@ -1553,7 +1553,7 @@ team_dispatch_execute() {
 
 team_pane_snapshot() { # <target> → pane 内容指纹（用于确认投递真的落到 TUI）
   team_tmux_target_required "capture-pane" "${1:-}" || return 1
-  tmux capture-pane -p -t "$1" 2>/dev/null | tail -c 400 | cksum | tr -d ' \n'
+  team_tmux capture-pane -p -t "$1" 2>/dev/null | tail -c 400 | cksum | tr -d ' \n'
 }
 
 # agent 没在跑时：消息仍然要落到收件箱（durable），但绝不打字（空提示符会当命令执行）
@@ -2058,7 +2058,7 @@ team_teardown_seat_locked() {
   if [ "$register" = 1 ]; then team_config_write_roster remove "$a" "$fp" 0 || return $?; fi
   w="$(team_state_get "$a" window "$a")"
   if team_tmux_has_window "$TEAM_SESSION" "$w"; then
-    tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null || return 1
+    team_tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null || return 1
     team_ok "kill window $TEAM_SESSION:$w"
   fi
   team_state_clear "$a"

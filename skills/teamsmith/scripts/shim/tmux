@@ -325,6 +325,24 @@ _bounded_append() { # <file>
   return 0
 }
 
+# ── 日志目标解析（P274 · 裁定点 C/A1）─────────────────────────────────────────────────
+# $TEAM_TMUX_CALLS_LOG 在 → 用它（逐字节不变）。缺席时（工具的建对象调用会摘掉整个 TEAM_*
+# 命名空间，见 common.sh 的 team_tmux）按 **cwd 所属项目**解析：向上找 `.pi/team`，落它自己的
+# state/tmux-calls.log —— 审计因此无洞，且共享 server 上**别的项目**的 pane 里的调用记到**它自己**
+# 项目的日志，不再污染本项目的 forensics 文件。两边都解析不出来 → 不写（可见的例外，不是静默丢）。
+# 只做几个 `[ -d ]` 测试，不启子进程（闸门在每次 tmux 调用的热路径上）。
+_shim_resolve_log() { # <起始目录>
+  local d="${1:-}"
+  [ -n "$d" ] || return 1
+  while :; do
+    [ -d "$d/.pi/team" ] && { printf '%s/.pi/team/state/tmux-calls.log' "$d"; return 0; }
+    [ "$d" = "/" ] && return 1
+    d="${d%/*}"; [ -n "$d" ] || d="/"
+  done
+}
+if [ -z "${TEAM_TMUX_CALLS_LOG:-}" ]; then
+  TEAM_TMUX_CALLS_LOG="$(_shim_resolve_log "$_shim_cwd" || true)"
+fi
 if [ -n "${TEAM_TMUX_CALLS_LOG:-}" ] && [ ! -p "${TEAM_TMUX_CALLS_LOG}" ]; then
   _log="${TEAM_TMUX_CALLS_LOG}"
   _ld="$(dirname "$_log")"

@@ -49,7 +49,7 @@ team_draft_open() { # [pm]
     "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$TEAM_MAIN_ROOT" "$wrapper" "$cli" "$TEAM_MAIN_ROOT" "$file" "$(team_draft_target)" "$editor")"
   if team_draft_window_exists; then
     # 复用一个已经退出的草稿窗口（remain-on-exit 让回执留在 pane 里）
-    if tmux respawn-pane -k -t "$TEAM_SESSION:draft" "$cmd" 2>/dev/null; then
+    if team_tmux respawn-pane -k -t "$TEAM_SESSION:draft" "$cmd" 2>/dev/null; then
       team_ok "draft：复用 $TEAM_SESSION:draft（$editor $file）"
       return 0
     fi
@@ -58,9 +58,9 @@ team_draft_open() { # [pm]
   fi
   # 先用一个占位命令把窗口建出来，再开 remain-on-exit，最后才换成真 harness：
   # 否则当编辑器秒退（脚本/CI）时 harness 会在 set-window-option 之前结束，窗口连同回执一起消失。
-  tmux new-window -d -t "$TEAM_SESSION" -n draft 'sleep 5' 2>/dev/null || team_die "draft：建窗口失败（$TEAM_SESSION）"
-  tmux set-window-option -t "$TEAM_SESSION:draft" remain-on-exit on 2>/dev/null || true
-  tmux respawn-pane -k -t "$TEAM_SESSION:draft" "$cmd" 2>/dev/null || team_die "draft：pane 启动失败（$TEAM_SESSION:draft）"
+  team_tmux new-window -d -t "$TEAM_SESSION" -n draft 'sleep 5' 2>/dev/null || team_die "draft：建窗口失败（$TEAM_SESSION）"
+  team_tmux set-window-option -t "$TEAM_SESSION:draft" remain-on-exit on 2>/dev/null || true
+  team_tmux respawn-pane -k -t "$TEAM_SESSION:draft" "$cmd" 2>/dev/null || team_die "draft：pane 启动失败（$TEAM_SESSION:draft）"
   team_ok "draft：已开 $TEAM_SESSION:draft（不抢焦点；$editor $file）"
   team_dim "  保存并退出编辑器 → 内容自动入队（回执打印在该窗口里）；任何自动化消息都不会打进这个窗口"
   return 0

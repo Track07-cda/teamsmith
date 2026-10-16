@@ -701,8 +701,8 @@ team_sender_is_main_checkout() { # 运行时目录是不是主检出（与 team_
 team_sender_seat_clues() { # → stdout: "<来源>\t<名字>" 每行一个；无线索 → 空
   local a w s pane="${TMUX_PANE:-}"
   if [ -n "$pane" ] && [ -n "${TMUX:-}" ] && team_have_cmd tmux; then
-    w="$(tmux display-message -p -t "$pane" '#{window_name}' 2>/dev/null || true)"
-    s="$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null || true)"
+    w="$(team_tmux display-message -p -t "$pane" '#{window_name}' 2>/dev/null || true)"
+    s="$(team_tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null || true)"
     w="$(team_trim "$w")"; s="$(team_trim "$s")"
     if [ -n "$w" ] && [ -n "$s" ] && [ "$s" = "${TEAM_SESSION:-}" ] && team_agent_known "$w"; then
       printf '窗口名\t%s\n' "$w"
@@ -1877,18 +1877,80 @@ team_state_clear() {
 }
 
 # ---------------------------------------------------------------- tmux
+# tmux 调用包装（change: tmux-identity-scope · apply-1 · design §1）
+# 根因（提案实测）：tmux server 在**启动那一刻**把启动它的那个客户端的环境复制进 server 的**全局环境**；
+# 此后新建的 session/window/pane 只继承全局环境，**不继承发起那次调用的客户端环境**。所以「谁启动了
+# server」= 谁把本项目的 TEAM_* 命名空间泄漏给同一 server 上**所有**项目的新窗口。能启动 server 的只有
+# 建对象的动词（new-session/new-window/split-window/respawn-*）；其余动词在没有 server 时 rc≠0 且不留
+# socket。于是：
+#   · 建对象/起 server 的动词（`new*`/`split*`/`respawn*`/`start*`，含别名与无歧义缩写）→ 子进程环境里
+#     摘掉**整个** `TEAM_*` 命名空间；
+#   · 其余动词（kill 类、只读类、set-option 类）→ **保留**环境：M67 闸门的 `allowed-owned` 判定绑在
+#     `TEAM_SESSION`/`TEAM_ROOT` 与 cwd 的关系上，而它们**不可能**启动 server（无 server 时 tmux 直接
+#     报错退出、不留 socket —— 夹具 ①f 钉住这条事实），所以「保留」既不泄漏也不削弱闸门；这也是 §31c
+#     ⑪/⑫ 的既有契约（CLI 的 tmux 子进程看得见身份，否则窗口清理退化成 no-identity）。
+#     （P274 实测：最初按「只保留 kill 类」统一，只读动词也摘 → §31c ⑪/⑫ 四条红：桩收不到
+#     `TEAM_SESSION`/`TEAM_ROOT`，且 `has_window` 的只读调用丢了 `TEAM_TMUX_REAL`，teardown 根本没
+#     走到 `kill-window`。design §1 把这一条写作「无所谓」的简化，实际是必须保留的契约；摘身份的集合
+#     按规范原文只取「可能启动 server」的那一族。）
+# 身份怎么到达窗口：沿用 M40 的窗口启动命令显式 export（team_identity_env_prefix），以及建 session 时的
+# 会话作用域 -e（裁定点 B）—— 两者都不写 server 的全局环境。产品面新增的 tmux 调用必须走这个包装。
+team_tmux_verb() { # <argv…> → 第一个动词（跳过全局选项与其值）；判不出 → 非 0
+  local a
+  while [ $# -gt 0 ]; do
+    a="$1"; shift
+    case "$a" in
+      -S|-L|-f|-c|-T) [ $# -gt 0 ] && shift ;;
+      -*) ;;
+      *) printf '%s\n' "$a"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+team_tmux_strip_identity() { # 摘掉当前 shell 里整个 TEAM_* 命名空间（调用方负责放进子 shell）
+  local v
+  for v in $(compgen -v TEAM_ 2>/dev/null || true); do
+    unset "$v" 2>/dev/null || true
+  done
+}
+
+team_tmux_starts_server() { # <verb> → 0 = 这个动词能启动 server（建对象/显式 start）
+  case "$1" in
+    new*|split*|respawn*|start*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+team_tmux() { # <tmux argv…>：产品面唯一的 tmux 出口
+  local verb
+  verb="$(team_tmux_verb "$@" 2>/dev/null || true)"
+  if team_tmux_starts_server "$verb"; then
+    ( team_tmux_strip_identity; command tmux "$@" )   # 可能起 server：摘掉整个命名空间
+  else
+    command tmux "$@"                                 # 不可能起 server：保留环境（闸门要绑身份）
+  fi
+}
+
 team_tmux_enabled() { [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ]; }
 
-team_tmux_has_session() { tmux has-session -t "$1" 2>/dev/null; }
+team_tmux_has_session() { team_tmux has-session -t "$1" 2>/dev/null; }
 
-team_tmux_windows() { tmux list-windows -t "$1" -F '#{window_name}' 2>/dev/null; }
+team_tmux_windows() { team_tmux list-windows -t "$1" -F '#{window_name}' 2>/dev/null; }
 
 team_tmux_has_window() { team_tmux_windows "$1" | grep -qx "$2"; }
 
 team_tmux_ensure_session() {
   team_assert_own_session "建 tmux session" || return 1
   team_tmux_has_session "$TEAM_SESSION" && return 0
-  tmux new-session -d -s "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" 2>/dev/null || true
+  # 裁定点 B：身份写进**会话作用域**（-e），不写 server 全局环境 —— 于是本项目会话里人手新开的窗口
+  # 照旧带本项目身份（M67 闸门对人手 kill-* 的 allowed-owned 判定与今天一致）。
+  local -a idenv=()
+  [ -n "${TEAM_ROOT:-}" ]      && idenv+=(-e "TEAM_ROOT=$TEAM_ROOT")
+  [ -n "${TEAM_MAIN_ROOT:-}" ] && idenv+=(-e "TEAM_MAIN_ROOT=$TEAM_MAIN_ROOT")
+  [ -n "${TEAM_PROJECT:-}" ]   && idenv+=(-e "TEAM_PROJECT=$TEAM_PROJECT")
+  [ -n "${TEAM_SESSION:-}" ]   && idenv+=(-e "TEAM_SESSION=$TEAM_SESSION")
+  team_tmux new-session -d -s "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" ${idenv[@]+"${idenv[@]}"} 2>/dev/null || true
 }
 
 # 破坏性 tmux 操作前调用：只允许操作「本项目自己的 session」，且目标必须非空。
@@ -1948,22 +2010,22 @@ team_tmux_target_required() { # <操作名> <target>
 team_tmux_kill_window() { # <session:window>
   local t="${1:-}"
   team_tmux_target_required "kill-window" "$t" || return 1
-  tmux kill-window -t "$t" 2>/dev/null
+  team_tmux kill-window -t "$t" 2>/dev/null
 }
 team_tmux_kill_session() { # <session>
   local t="${1:-}"
   team_tmux_target_required "kill-session" "$t" || return 1
-  tmux kill-session -t "$t" 2>/dev/null
+  team_tmux kill-session -t "$t" 2>/dev/null
 }
 team_tmux_new_window() { # <session> <name>
   local t="${1:-}" n="${2:-}"
   team_tmux_target_required "new-window" "$t" || return 1
-  tmux new-window -t "$t" -n "$n" -d 2>/dev/null
+  team_tmux new-window -t "$t" -n "$n" -d 2>/dev/null
 }
 team_tmux_respawn_pane() { # <pane-or-target> <cmd>
   local t="${1:-}" cmd="${2:-}"
   team_tmux_target_required "respawn-pane" "$t" || return 1
-  tmux respawn-pane -k -t "$t" "$cmd" 2>/dev/null
+  team_tmux respawn-pane -k -t "$t" "$cmd" 2>/dev/null
 }
 
 team_target_session() { # <session:window> → session 名
@@ -2003,8 +2065,8 @@ team_rule() { # 一条水平线（面板/阅读器用）
 team_tmux_send_text() { # <session:window> <text> [meeting-slug]
   team_tmux_target_required "send-text" "${1:-}" || return 1
   team_foreign_target_ok "$1" "${3:-}" || return 1
-  tmux send-keys -t "$1" -l "$2" 2>/dev/null || return 1
-  tmux send-keys -t "$1" Enter 2>/dev/null || return 1
+  team_tmux send-keys -t "$1" -l "$2" 2>/dev/null || return 1
+  team_tmux send-keys -t "$1" Enter 2>/dev/null || return 1
 }
 
 # 只有目标窗口在跑 agent CLI 时才敢打字：往停在提示符的 shell 里 send-keys 等于把那串文本
@@ -2019,7 +2081,7 @@ team_tmux_send_to_pi() { # <session:window> <text>
 
 team_pane_cmd() { # <session:window> → 前台命令名
   team_tmux_target_required "pane_current_command" "${1:-}" || { printf '%s\n' ""; return 1; }
-  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
+  team_tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
 }
 
 # P210：本窗口 pane 的三件事**一次读全**（pid / 是否遗体 / 前台命令）。为什么必须一次读：同一拍里
@@ -2031,8 +2093,8 @@ team_pane_cmd() { # <session:window> → 前台命令名
 team_pane_facts() { # <session:window> → "<pane_pid> <pane_dead> <pane_current_command>"
   local target="${1:-}" fmt='#{pane_active} #{pane_pid} #{pane_dead} #{pane_current_command}' line
   team_tmux_target_required "pane_facts" "$target" || return 1
-  line="$(tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | awk '$1 == "1" { print $2, $3, $4; exit }')"
-  [ -n "$line" ] || line="$(tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | head -1 | awk '{ print $2, $3, $4 }')"
+  line="$(team_tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | awk '$1 == "1" { print $2, $3, $4; exit }')"
+  [ -n "$line" ] || line="$(team_tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | head -1 | awk '{ print $2, $3, $4 }')"
   [ -n "$line" ] || return 1
   printf '%s\n' "$line"
 }
@@ -2091,7 +2153,7 @@ team_pane_busy() { # <session:window> → 0 = 里面有东西在跑（不是空�
   cmd="$(team_pane_cmd "$target")"
   [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg] busy? %s cmd=%s\n' "$target" "$cmd" >&2
   team_is_shell_cmd "$cmd" || return 0            # 前台不是 shell（pi/node…）→ 在跑
-  pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null)"
+  pid="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null)"
   [ -n "$pid" ] || return 1
   args="$(ps -o args= -p "$pid" 2>/dev/null | head -1)"
   first="${args%% *}"
@@ -2137,7 +2199,7 @@ team_proc_cwd() { # <pid> → 该进程的 cwd（Linux /proc；macOS 退 lsof）
 team_pane_proc_pid() { # <session:window>
   local target="${1:-}" pid cmd child
   team_tmux_target_required "pane_pid" "$target" || return 1
-  pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
+  pid="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
   [ -n "$pid" ] || return 1
   cmd="$(team_pane_cmd "$target")"
   if [ -n "$cmd" ] && ! team_is_shell_cmd "$cmd"; then printf '%s\n' "$pid"; return 0; fi
@@ -2368,8 +2430,8 @@ team_pane_proc_tree_pid() { # <session:window> <谓词函数> [all|children]
   # list-panes 而不是 display-message：窗口名写错/窗口已消失时 display-message 会**静默回退到当前窗口**
   # （实测 `-t teamsmith:nope-window` 返回当前窗口的 pane_pid 且 rc=0），探活会拿到别的窗口的进程 ——
   # 「证明」不能带这种回声。list-panes 找不到窗口就报错、没有输出 → 失败关闭（非 0）。
-  pane="$(tmux list-panes -t "$target" -F '#{pane_active} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }')"
-  [ -n "$pane" ] || pane="$(tmux list-panes -t "$target" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  pane="$(team_tmux list-panes -t "$target" -F '#{pane_active} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }')"
+  [ -n "$pane" ] || pane="$(team_tmux list-panes -t "$target" -F '#{pane_pid}' 2>/dev/null | head -1)"
   [ -n "$pane" ] || return 1
   if [ "$scope" != "children" ]; then
     "$pred" "$pane" && { printf '%s\n' "$pane"; return 0; }
@@ -2395,7 +2457,7 @@ team_pm_state() {
   local target cmd pane pid cwd apid
   target="$(team_pm_target)"
   cmd="$(team_pane_cmd "$target")"
-  pane="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
+  pane="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
   pid="$(team_pane_proc_pid "$target" 2>/dev/null || true)"
   # ① 归属：占用者不在本项目里 → foreign（先判，绝不给别的项目的进程发「PM 在运行」的证书）
   for pid in ${pid:-} ${pane:-}; do
@@ -3149,7 +3211,7 @@ team_pm_pane_tail() { # [<重试次数>] → stdout = 窗口输出（归一化�
   local tries="${1:-12}" i=0 out=""
   team_pm_window_exists || return 0
   while :; do
-    out="$(tmux capture-pane -p -t "$(team_pm_target)" -S -200 2>/dev/null || true)"
+    out="$(team_tmux capture-pane -p -t "$(team_pm_target)" -S -200 2>/dev/null || true)"
     team_text_has_content "$out" && break
     [ "$i" -ge "$tries" ] && break
     i=$((i + 1)); sleep 0.1

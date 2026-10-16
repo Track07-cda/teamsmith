@@ -91,7 +91,7 @@ team_watch_reexec_if_stale() { # <启动指纹> <子命令> [子命令参数…]
 # 窗口里的巡检进程是什么时候起来的（watchdog-status 用它报「代码快照过旧」）。
 team_watch_process_start_epoch() { # <tmux 目标> → 进程启动的 epoch 秒（判不出 → 空）
   local pid et
-  pid="$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null | head -1 || true)"
+  pid="$(team_tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null | head -1 || true)"
   case "${pid:-}" in ''|*[!0-9]*) return 0 ;; esac
   et="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
   case "${et:-}" in ''|*[!0-9]*) return 0 ;; esac
@@ -375,7 +375,7 @@ team_cmd_up() {
   if ! team_tmux_has_session "$TEAM_SESSION"; then
     team_warn "tmux session '$TEAM_SESSION' 不存在：重建"
     team_tmux_ensure_session
-    tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
+    team_tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
   fi
   if ! team_pm_window_exists; then
     team_tmux_new_window "$TEAM_SESSION" "$TEAM_PM_WINDOW" || true
@@ -658,7 +658,7 @@ team_watch_once() {
         if ! team_tmux_has_session "$TEAM_SESSION"; then
           team_wlog "tmux session 丢失，重建（TEAM_PULSE_REBUILD_TMUX=1）"
           team_tmux_ensure_session
-          tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
+          team_tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
         fi
         if ! team_pm_window_exists; then
           team_wlog "PM 窗口丢失，重建（TEAM_PULSE_REBUILD_TMUX=1）"
@@ -2022,7 +2022,7 @@ team_pulse_shape() { # console | headless | unknown
   local w pane args
   w="$(team_pulse_backend_window)"
   team_tmux_has_window "$TEAM_SESSION" "$w" || { printf 'unknown'; return 0; }
-  pane="$(tmux list-panes -t "$TEAM_SESSION:$w" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  pane="$(team_tmux list-panes -t "$TEAM_SESSION:$w" -F '#{pane_pid}' 2>/dev/null | head -1)"
   case "${pane:-}" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   args="$(ps -o args= -p "$pane" 2>/dev/null || true)"
   case "$args" in
@@ -2052,13 +2052,13 @@ team_pulse_tmux_up() {
   # （那样的窗口会被 pulse status 当成「在跑」，是 D19 明确要避免的假绿）
   team_require_js_runtime "team pulse up"
   team_tmux_ensure_session
-  tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
+  team_tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
   local w st lw shape; w="$(team_pulse_window)"; st="$(team_pulse_window_state)"
   if [ "$st" = "running" ]; then
     # 无界面形态（q 收起过）→ 同一窗口原地恢复控制台，不开第二个窗口。
     shape="$(team_pulse_shape)"
     if [ "$shape" = "headless" ]; then
-      tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash -c "$(team_pulse_window_cmd)"
+      team_tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash -c "$(team_pulse_window_cmd)"
       sleep 1.5
       if [ "$(team_pulse_window_state)" = "running" ] && [ "$(team_pulse_shape)" = "console" ]; then
         team_ok "已把无界面巡检恢复成控制台（$TEAM_SESSION:$w）"
@@ -2075,8 +2075,8 @@ team_pulse_tmux_up() {
     team_warn "旧窗口 $TEAM_SESSION:$lw 仍在跑 → $TEAM_CLI pulse restart 换成 $TEAM_SESSION:$w（up 不开第二个巡检）"
     return 0
   fi
-  [ "$st" = "idle" ] && { team_warn "窗口 $w 停在空提示符：重开"; tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null || true; }
-  tmux new-window -t "$TEAM_SESSION" -n "$w" -d -- bash -c "$(team_pulse_window_cmd)"
+  [ "$st" = "idle" ] && { team_warn "窗口 $w 停在空提示符：重开"; team_tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null || true; }
+  team_tmux new-window -t "$TEAM_SESSION" -n "$w" -d -- bash -c "$(team_pulse_window_cmd)"
   sleep 1.5
   st="$(team_pulse_window_state)"
   if [ "$st" = "running" ]; then
@@ -2090,11 +2090,11 @@ team_pulse_tmux_up() {
 team_pulse_tmux_down() {
   local w found=0; w="$(team_pulse_window)"
   if team_tmux_has_window "$TEAM_SESSION" "$w"; then
-    tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && { team_ok "已关掉巡检窗口：$TEAM_SESSION:$w"; found=1; } || team_warn "关窗口失败"
+    team_tmux kill-window -t "$TEAM_SESSION:$w" 2>/dev/null && { team_ok "已关掉巡检窗口：$TEAM_SESSION:$w"; found=1; } || team_warn "关窗口失败"
   fi
   # 别名期：结束巡检 = 两个名字都结束（旧窗口里可能是升级前的进程）
   if [ "$w" != "watchdog" ] && team_tmux_has_window "$TEAM_SESSION" watchdog; then
-    tmux kill-window -t "$TEAM_SESSION:watchdog" 2>/dev/null && { team_ok "已关掉旧名巡检窗口：$TEAM_SESSION:watchdog"; found=1; } || team_warn "关旧名窗口失败"
+    team_tmux kill-window -t "$TEAM_SESSION:watchdog" 2>/dev/null && { team_ok "已关掉旧名巡检窗口：$TEAM_SESSION:watchdog"; found=1; } || team_warn "关旧名窗口失败"
   fi
   [ "$found" = "0" ] && team_dim "没有巡检窗口（$TEAM_SESSION:$w）"
   return 0
@@ -2103,7 +2103,7 @@ team_pulse_tmux_down() {
 team_pulse_tmux_logs() { # 打印面板最近若干行（pane 快照；旧名窗口也是后端，迁移前照样能看）
   local w; w="$(team_pulse_backend_window)"
   team_tmux_has_window "$TEAM_SESSION" "$w" || { team_err "没有巡检窗口（$TEAM_SESSION:$w）；$TEAM_CLI pulse up 起一个"; return 1; }
-  tmux capture-pane -p -t "$TEAM_SESSION:$w" -S -60 2>/dev/null | sed '/^$/d' | tail -60
+  team_tmux capture-pane -p -t "$TEAM_SESSION:$w" -S -60 2>/dev/null | sed '/^$/d' | tail -60
 }
 
 # `q` 收起控制台：同一个窗口原地 respawn 成无界面循环。窗口在、形态是 console 才动手。
@@ -2119,7 +2119,7 @@ team_pulse_tmux_collapse() {
     team_dim "巡检窗口已经是无界面形态（$shape）：不需要收起"
     return 0
   fi
-  tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash -c "$(team_pulse_window_cmd --headless)"
+  team_tmux respawn-window -k -t "$TEAM_SESSION:$w" -- bash -c "$(team_pulse_window_cmd --headless)"
   team_ok "已收起控制台：$TEAM_SESSION:$w 改为无界面巡检（tick 继续，$TEAM_CLI pulse up 恢复）"
 }
 
