@@ -471,7 +471,7 @@
 | V50 | Verify the /team slash command (whitelist, env stripping, install, three-layer flips) | verify | - | - | done |
 | P297 | The production-path probes pin Pi 0.87.0 frames while the box runs 1.2.0 | dev | - | - | todo |
 | P298 | Tick the slash-team checklist by evidence | dev2 | - | - | done |
-| P299 | Falsifiers for the init trust-line contracts (slash-team 3.3) | dev | - | - | wip |
+| P299 | Falsifiers for the init trust-line contracts (slash-team 3.3) | dev | - | - | done |
 | V51 | Spot-check the init trust-line falsifiers | verify | - | - | done |
 | V52 | Spot-check the seat-interrupt finish-up (probe teeth, declaration, docs) | dev2 | - | - | wip |
 
