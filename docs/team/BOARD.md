@@ -465,7 +465,7 @@
 | P292 | Seat turn interrupt: apply (proof chain, audit, reason delivery) | dev3 | - | - | wip |
 | P293 | Tick the writing-discipline checklist by evidence | verify | - | - | done |
 | V48 | Verify the tmux identity write side (own leak scene, both sides) | verify | - | - | done |
-| P294 | Rewrite the gate lock record when a new holder takes over | dev3 | - | - | todo |
+| P294 | Rewrite the gate lock record when a new holder takes over | dev3 | - | - | done |
 
 ## 当前里程碑
 
