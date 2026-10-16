@@ -50,3 +50,23 @@ bash skills/teamsmith/tests/section-select.sh --paths $(git diff --name-only mai
 bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
 git diff --check && git status --short
 ```
+
+## 返修轮次 1（2026-10-16，独立复验 V48 判 FAIL：唯一阻挡项在**夹具**、不在产品）
+
+复验记录 `docs/team/reviews/V48.md`（受检 `cb6d9344`）。复验者报的是：`tmux-identity-leak.sh` 把调用者的 PATH 写死成 `/usr/bin:/bin`，而**门禁镜像里 tmux 在 `/usr/local/bin`**，于是摘掉 `TEAM_TMUX_REAL` pin 后闸门失败。
+
+**我独立复现了**（宿主与镜像各查一次）：
+
+```
+宿主：  /usr/bin/tmux            （夹具写死 PATH 在这里是对的）
+镜像：  /usr/local/bin/tmux      （/usr/bin 下没有 → 夹具在镜像里找不到 tmux）
+夹具里写死的三处：SHIM_PATH="$PROD/scripts/shim:/usr/bin:/bin"、
+                 KILL_PATH="$PROD/scripts/shim:$FAKEBIN:/usr/bin:/bin"、
+                 一处窗口命令 env PATH=/usr/bin:/bin …
+```
+
+**改法（夹具，不是产品）**：夹具启动时**解析真实的 tmux 位置**（`command -v tmux` 或 `readlink -f "$(command -v tmux)"`），把它**所在目录**接进 PATH（形态如 `SHIM_PATH="$PROD/scripts/shim:$(dirname "$(command -v tmux)"):/usr/bin:/bin"`），三处写死的地方**一处都不留**；若解析不到 tmux 就**具名跳过**（不是静默通过）。
+
+**红侧**：① **在门禁镜像里**跑一遍夹具（那里 tmux 在 `/usr/local/bin`）→ 必须绿；② 把修复退回写死 `/usr/bin:/bin` → **在镜像里**必须红并点名（宿主上它照样绿，这正说明「证据必须在门禁环境里取」）；③ 造一个「PATH 里没有 tmux」的环境 → 必须**具名跳过**而不是通过。
+
+**这条与今天的另外两起同族**（`env -i` 丢掉 `DISTROBOX_PATH`、我自己传 `TMPDIR` 没先建目录）：**夹具不许假设环境的布局**，判据要按**门禁镜像**取。
