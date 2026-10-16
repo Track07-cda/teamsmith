@@ -152,18 +152,18 @@ change 的席位**在独立检出上逐场景 + 逐红侧重跑（写的人不�
 
 ## 3 命令页与文档面
 
-- [ ] 3.1 `scripts/strings/commands.tsv` 加一行（`cmd interrupt seats …`：usage/flags/faces=`state docs`/
+- [x] 3.1 `scripts/strings/commands.tsv` 加一行（`cmd interrupt seats …`：usage/flags/faces=`state docs`/ · 证据（PM 按事实勾）：P292 收尾轮：`commands.tsv` 的 `interrupt` 行改成实现真正触碰的面与授权语义（提交 `8d126f5d`）；V52 复检核过声明与实现逐项对齐（`docs/team/reviews/V52.md`）
   effect=`writes-state`/auth=`needs-yes`/undo=`not-reversible:…`/probe id），`help.en.tsv` 与 `help.zh.tsv` 加该
   命令的文案键（`title/what/when/example/read/write/see` + 每个 flag 的 `arg.*` + `auth`/`undo`）；
   `bash skills/teamsmith/tests/help-surface.sh --select coverage` 绿，既有命令页逐字节不变。
-- [ ] 3.2 `tests/help-surface.sh` 加该命令的**探针**（浅 fixture：私有 socket 上起 stub agent 席位 →
+- [x] 3.2 `tests/help-surface.sh` 加该命令的**探针**（浅 fixture：私有 socket 上起 stub agent 席位 → · 证据（PM 按事实勾）：P292 收尾轮新增 `interrupt` 的 claims 探针配方 + **反向判据**（`changed ⊆ declared`）与工作树内容指纹（`8d126f5d`/`2201dd36`）；V52 第二轮用三个原反例证明它必须红并点名
   `interrupt … --yes` → 声明效果真的发生：审计多一行、进程消失），并让 45 → 46 条命令的双向走查仍绿。
   · 证据：命令 + rc + 走查判过的命令数。
-- [ ] 3.3 文档：`references/troubleshooting.md` 加一节「席位卡在一个长回合里」（先读什么证据、命令怎么用、
+- [x] 3.3 文档：`references/troubleshooting.md` 加一节「席位卡在一个长回合里」（先读什么证据、命令怎么用、 · 证据（PM 按事实勾）：P292 收尾轮：`references/troubleshooting.md` 新增「席位卡在长回合里」一节、`references/protocol.md` 对应小节（V52 第二轮把文档里每条命令逐条对拍真行为）
   拒绝是什么意思、之后怎么回同一会话、以及它**不**改什么）；`references/protocol.md` 加一段「两条信号入口各管
   什么」（`reap` = 孤儿进程、`interrupt` = 活席位的回合；`resume` 只管回来的路）。 · 证据：diff 全文 + 两处
   指回的既有小节没被改写。
-- [ ] 3.4 静态纪律与回归：`perl skills/teamsmith/tests/signal-lint.pl --legacy /dev/null` 干净（`kill -TERM "$pid"`
+- [x] 3.4 静态纪律与回归：`perl skills/teamsmith/tests/signal-lint.pl --legacy /dev/null` 干净（`kill -TERM "$pid"` · 证据（PM 按事实勾）：P292 收尾轮跑了 `perl skills/teamsmith/tests/signal-lint.pl --legacy /dev/null`（干净，报告 §验收）
   的 pid 精确形态）；`bash skills/teamsmith/tests/config-cli.sh` 的 completeness 仍绿（**本变更不新增契约键**，
   所以 `references/config.md` 里不得出现 `TEAM_INTERRUPT_FRESH_SEC`）；smoke 既有段（`51`/`51b`/`33`/`37`）回归。
   · 证据：命令 + rc + 尾部。
