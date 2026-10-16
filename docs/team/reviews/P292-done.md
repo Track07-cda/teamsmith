@@ -1,0 +1,4 @@
+- 2026-10-16T03:30:01Z · `team close P292 --status done` · FORCED：PM 显式覆盖（理由：证据已并入 main（V49 PASS 的候选 d3b3e23 + 记录 docs/team/reviews/V49.md）；squash 合并不会让分支 tip 成为祖先，故显式覆盖（P244 已知限制））
+  -   - ① 复验记录 docs/team/reviews/P292.md：不存在
+  -   - ② 分支是否已并入 main：task/P292-seat-interrupt-entry-apply（d3b3e23ed）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
