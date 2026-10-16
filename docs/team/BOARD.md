@@ -476,7 +476,7 @@
 | V52 | Spot-check the seat-interrupt finish-up (probe teeth, declaration, docs) | dev2 | - | - | blocked |
 | P300 | Proposal: answering the user must be published as a key reply | dev | - | - | done |
 | P301 | Apply the audience-based publishing rule (three surfaces + page legend + two gate classes) | dev | - | - | wip |
-| V53 | Verify the gate lock against an outside rm -rf (own deletion scene) | verify | - | - | wip |
+| V53 | Verify the gate lock against an outside rm -rf (own deletion scene) | verify | - | - | blocked |
 
 ## 当前里程碑
 
