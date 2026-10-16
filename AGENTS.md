@@ -12,7 +12,7 @@ Tooling: `bash skills/teamsmith/scripts/team help`.
 | PM | Briefs / roadmap / decision log, dispatch, independent verification, merging, wrap-up | Treat "the agent says it passed" as evidence |
 | agent:<name> | Exactly the brief, tests and reports, opening PR/MRs | push `main`, force-push, merge PR/MRs, touch other people's directories |
 
-Roster: dev verify dev2 dev3 (editable in `.pi/team/config.sh`).
+Roster: dev verify dev2 dev3 dev-bob (editable in `.pi/team/config.sh`).
 
 ### Reading order (before any agent starts)
 
@@ -50,12 +50,31 @@ last three take `--force` + one audited line). `team change status <id>` shows t
 
 - **Only change directories you own** (`docs/team/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
   the report and hand it back to the PM.
-- **Never stop mid-task to ask for confirmation**: either deliver (gates run + report + push + PR/MR) or be
-  hard-blocked (notify the PM + PARTIAL report).
+- **Never stop mid-task to ask for confirmation**: end the turn in exactly three states -- **delivered** (gates run
+  + report written + branch settled), **hard-blocked** (notify the PM + `BLOCKED:` in the report), or
+  **suspended on background jobs** (this session's jobs still running, every step independent of them done; its
+  last line names every awaited job id). The lane rule is the suspend default: `team_bg_run` starts a long job and
+  the turn ends -- the completion wake-up is the normal harvest point -- while in-turn waiting is the bounded
+  exception, only inside the inline-wait budget (about 2 minutes), when the result blocks the next step and nothing
+  else can advance.
 - **Never claim tests passed without having run them.** The PM re-runs in an independent worktree; a false report
   fails the task.
 - Never write tokens/secrets into code, config, logs or commit messages; never read credential files
   (e.g. `~/.pi/agent/auth.json`).
+- **A brief declares one task category; models belong to the project, not to your seat.** The `category:` line
+  selects the model the PM dispatches with (`routine` for bounded ordinary work, `analysis` for complex
+  planning/judgment, `verify` for independent adversarial review — or the project's own names). A same-task
+  recovery keeps its committed model/SID: do not re-select, and never treat model strength as a substitute for a
+  self-contained brief. **Independent verification cannot be waived by a strong model.**
+- **Scope, report and disk handover survive a fresh takeover**: keep exactly the brief's scope, commit in small
+  steps, write `docs/team/reports/<ID>-<agent>.md`, and leave the next step and evidence on disk — a new session
+  (or a verifier) must be able to continue from the files alone, never from your conversation.
+- **A report is read for its answer first, and every sentence carries its evidence**: state what the brief's
+  question resolves to before the account of how you got there. A caution, a limitation or a boundary earns its
+  place by what it cites — a measurement, a counterexample, a gap in the reasoning, or a boundary you did not
+  observe — and a sentence that names none is deleted; one that carries its evidence stays. Every finding states
+  what it changed: the implementation, the next step, the conclusion, or nothing; an observation that changed
+  nothing stays out of the body. See `skills/teamsmith/references/protocol.md` §11b.
 - Never push `main`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
 - Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
 

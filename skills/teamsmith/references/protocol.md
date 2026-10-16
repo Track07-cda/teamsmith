@@ -829,3 +829,24 @@ The mechanism backs this up wherever the ledger already knows the name: `team di
 board-skipped line, wrap-up, suggestions), `team status` and `team roster` print the name next to the code, resolving
 it from the BOARD's task column first, then the task brief's H1, then the task's report H1. When no name is known the
 code is printed alone — never a made-up name, and never a hidden code: the code is the key to the ledger.
+
+### 11b. A caution earns its place by what it cites; a finding earns its place by what it changes
+
+The rule in this section is about **support**, not tone. A sentence that hedges, qualifies, warns or sets a boundary
+stays only when it names something the reader can check — a measurement, a counterexample, a gap in the reasoning,
+or a boundary that was not observed; a sentence that names none is deleted, not kept as evidence of care. When the
+evidence no longer supports a claim, say what the evidence does support instead of narrowing the claim, and never
+delete a boundary statement that carries its evidence: it names exactly what this rule asks for. A finding,
+likewise, states what it changed — the implementation, the next step, the conclusion, or nothing; an observation
+that changes nothing does not stand between the reader and the answer. This is not an instruction to sound more
+confident, more assertive or shorter (the measurements are in *Defensive Writing in GPT Models*, arXiv:2610.11355);
+the vocabulary rule of §11 stands unchanged.
+
+The reason is who rewards which text. In that study's comparison an AI reviewer scores a reviewer-oriented rewrite
+higher (+1.22 on a ten-point scale) while the human readers find it harder to read (−0.70 on a seven-point scale)
+with comprehension unchanged: a caution written for an imagined reviewer is paid for by the reader, so it has to
+carry its evidence to earn its place.
+
+**No tool verifies that a live author follows this rule.** The gate asserts nothing about wording — it can stay
+green over a document that hedges everywhere — so whether a sentence earns its place is decided by the review that
+reads the diff, and a surface that later loses the rule is caught there, by the reviewer naming the surface.

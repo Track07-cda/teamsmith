@@ -14,7 +14,7 @@ each** — the reasoning, owners and gates are in [openspec.md](openspec.md):
 | # | Phase | Owner | Gate before the next phase |
 |---|---|---|---|
 | 1 | `opsx-explore` | an explorer worker (never the eventual implementer) | the PM accepts the approach, records it in `DECISIONS.md`, writes the propose brief |
-| 2 | `opsx-propose` | the explorer, same agent (planning only — no code) | the PM's **proposal review is ACCEPTED** in `reviews/<change>-proposal.md`: `openspec validate --all --strict` green + the eight-point checklist |
+| 2 | `opsx-propose` | the explorer, same agent (planning only — no code) | the PM's **proposal review is ACCEPTED** in `reviews/<change>-proposal.md`: `openspec validate --all --strict` green + the ten-point checklist |
 | 3 | `opsx-apply` | a dev worker | independent verification is dispatched to a different agent |
 | 4 | `opsx-verify` | an **independent** verify agent | the PM re-runs the gate on the merged tree and sets `done` |
 | 5 | `opsx-archive` | the PM | the user confirms (the PM may act as the user's proxy only when it says so and records why) |
@@ -164,6 +164,12 @@ matches the brief".
 on Pi (§E2); `team doctor` reports the harness and the plugins this project carries (`harness` /
 `已装插件 packages` — information, never a recommendation); the background-tmux-window fallback plus the four delivery
 rules are in [references/troubleshooting.md](troubleshooting.md) §17.
+
+**Read for what each finding changes.** While you read the report and the review record, check that every finding
+states what it changed — the implementation, the next step, the conclusion, or nothing. A caution that names no
+fact, counterexample, reasoning gap or unobserved boundary is a finding to delete, not evidence of thoroughness,
+and a longer or more defensive report is not stronger evidence. This is a reading rule, not a gate: no section
+checks the wording (see [references/protocol.md](protocol.md) §11b).
 
 ### E2. The PM's background gate (the team's own lane, no extra window)
 

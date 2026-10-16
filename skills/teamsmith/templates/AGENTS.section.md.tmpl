@@ -69,6 +69,12 @@ last three take `--force` + one audited line). `team change status <id>` shows t
 - **Scope, report and disk handover survive a fresh takeover**: keep exactly the brief's scope, commit in small
   steps, write `{{DOCS_DIR}}/reports/<ID>-<agent>.md`, and leave the next step and evidence on disk — a new session
   (or a verifier) must be able to continue from the files alone, never from your conversation.
+- **A report is read for its answer first, and every sentence carries its evidence**: state what the brief's
+  question resolves to before the account of how you got there. A caution, a limitation or a boundary earns its
+  place by what it cites — a measurement, a counterexample, a gap in the reasoning, or a boundary you did not
+  observe — and a sentence that names none is deleted; one that carries its evidence stays. Every finding states
+  what it changed: the implementation, the next step, the conclusion, or nothing; an observation that changed
+  nothing stays out of the body. See `{{SKILL_DIR}}/references/protocol.md` §11b.
 - Never push `{{PROTECTED_BRANCH}}`, never `git push --force`, never merge PR/MRs or rebase/delete other branches.
 - Commit in small steps: every verifiable step gets a commit (Conventional Commits + task ID + `Agent: <name>` trailer).
 
