@@ -1,0 +1,4 @@
+- 2026-10-16T10:28:10Z · `team close P303 --status done` · FORCED：PM 显式覆盖（理由：勾选已并入 main；8 项留空定性为真缺口并立 P305，故变更归档推迟）
+  -   - ① 复验记录 docs/team/reviews/P303.md：不存在
+  -   - ② 分支是否已并入 main：task/P303-gate-lock-checklist（ccb7b0427）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
