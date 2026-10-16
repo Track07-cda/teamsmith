@@ -473,7 +473,7 @@
 | P298 | Tick the slash-team checklist by evidence | dev2 | - | - | done |
 | P299 | Falsifiers for the init trust-line contracts (slash-team 3.3) | dev | - | - | done |
 | V51 | Spot-check the init trust-line falsifiers | verify | - | - | done |
-| V52 | Spot-check the seat-interrupt finish-up (probe teeth, declaration, docs) | dev2 | - | - | blocked |
+| V52 | Spot-check the seat-interrupt finish-up (probe teeth, declaration, docs) | dev2 | - | - | wip |
 | P300 | Proposal: answering the user must be published as a key reply | dev | - | - | done |
 | P301 | Apply the audience-based publishing rule (three surfaces + page legend + two gate classes) | dev | - | - | wip |
 | V53 | Verify the gate lock against an outside rm -rf (own deletion scene) | verify | - | - | blocked |
