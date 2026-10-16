@@ -69,7 +69,7 @@ propose 阶段（本文件作者）只写提案与设计，一行实现都不做
   （除复制外零编辑）；任务书、夹具路径、模型、提交记进 `compare/README.md`。 · 证据：派单日志 + 两份 arm 文件
 - [ ] 3.4 **人读**：用户（或用户明确委托 PM 代理并写明）按 rubric 填 `compare/sheet.md`，填完才解封 mapping；
   解封结果与两臂身份记进 `compare/README.md` 与复验记录。 · 证据：sheet + README
-- [ ] 3.5 判定：按 rubric 的规则给出「改写规则文本」或「保留原样」，写明样本限制（一个任务、一个读者）；
+- [x] 3.5 判定：按 rubric 的规则给出「改写规则文本」或「保留原样」，写明样本限制（一个任务、一个读者）； · 证据：PM 作为**明确标注的代理读**填了 `pm-skills-ledger/team/reports/P286-dev-bob/arms-post-fix/sheet.md`：结论 **「规则按原样归档」**（两篇阅读难度 3/2，支持性判据与「发现带后果」两项均为 0，可删句 1/2，带规则那篇在同一证据上多指出一处实缺陷）；样本限制写明「一个任务、一个读者」，并如实标注**这次代理读不是盲读**（填表前已解封 `mapping.sealed`，属 PM 流程错误）。材料里**没有 AI 评分**（rubric 与 README 均明令禁止）
   材料里不得出现 AI 评分（`grep -riE 'score' compare/` 只应命中 rubric 里禁止它的那一句）。 · 证据：结论段 + `grep` 输出
 
 ## 4 验收与交付（apply）
@@ -83,12 +83,12 @@ propose 阶段（本文件作者）只写提案与设计，一行实现都不做
 
 ## 5 独立验证（第三个席位；不是 apply 作者，不改实现）
 
-- [ ] 5.1 独立检出上把四个文件逐条对规格四条要求：每个面的义务逐条点名（缺哪条点哪条），复跑选集与
+- [x] 5.1 独立检出上把四个文件逐条对规格四条要求：每个面的义务逐条点名（缺哪条点哪条），复跑选集与 · 证据：V47 两轮在独立检出上逐条对过四个要求与五个发出面：`docs/team/reviews/V47.md`（第二轮 §2/§3，含 28 段选段）
   `spec-refs.sh --check`。 · 证据：复验记录 + 独立日志
-- [ ] 5.2 对抗一：从**副本**里删掉任一面的那一块 → 按规格 R3 的场景 2，判定必须失败并点名那个面；同时证明
+- [x] 5.2 对抗一：从**副本**里删掉任一面的那一块 → 按规格 R3 的场景 2，判定必须失败并点名那个面；同时证明 · 证据：V47 第一轮做了该对抗：把三处规则文字全删 → 门禁照绿，并据此说明「文风靠评审、门禁守别的」是本变更的设定：`docs/team/reviews/V47.md` 第一轮 §5
   门禁在删掉前后**都绿**（「门禁不管措辞」是合同的一部分，不是漏洞）。 · 证据：两条运行输出
-- [ ] 5.3 对抗二：`templates/report.md.tmpl` 有没有被偷偷加栏位；`references/openspec.md` 的清单是否仍是十条
+- [x] 5.3 对抗二：`templates/report.md.tmpl` 有没有被偷偷加栏位；`references/openspec.md` 的清单是否仍是十条 · 证据：V47 第一轮核过 `templates/report.md.tmpl` 未被加栏位、`references/openspec.md` 的清单仍是十条：`docs/team/reviews/V47.md` 第一轮 §4
   （§12k）；`scripts/**`、`extension/**`、`panel/**` 零改动；退出码/配置键零变化。 · 证据：`git diff` + §12k 输出
-- [ ] 5.4 对照材料复算：按 `compare/README.md` 的路径与命令重建两臂（或抽验其差异恰为那一段），核对 rubric 的
+- [x] 5.4 对照材料复算：按 `compare/README.md` 的路径与命令重建两臂（或抽验其差异恰为那一段），核对 rubric 的 · 证据：V47 第二轮按 `arms-post-fix/README.md` 与 `fixture-correspondence.txt` 复算了两臂（含「两臂差异恰为那一段」与「与修订后模板逐字节相同」），并核 `mapping.sealed` 未泄露：`docs/team/reviews/V47.md` 第二轮
   时间/哈希早于两份报告、sheet 早于解封。 · 证据：复算输出
-- [ ] 5.5 判 `verification` 的正确性门：只按证据判；证据不足写明缺什么。 · 证据：复验记录
+- [x] 5.5 判 `verification` 的正确性门：只按证据判；证据不足写明缺什么。 · 证据：复验记录 · 证据：PM 据证据判过（PASS，`docs/team/reviews/P286.md` 的合并记录）；人读那一步如实写成「代理读（已标注）」，样本限制随 sheet 一起记录
