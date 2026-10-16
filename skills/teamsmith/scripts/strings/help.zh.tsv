@@ -150,6 +150,18 @@ cmd.reap.arg.--orphans	计划：普查找到的每一条本项目孤儿。
 cmd.reap.arg.--yes	唯一授权；没有它就只是一份计划，一个信号都不发。
 cmd.reap.auth	`--yes` 是这条命令唯一的授权：配置键、环境变量、继承值都不能让一个信号默认发出。
 cmd.reap.undo	信号收不回来；计划、发信号前的复验与那一行审计就是它的护栏。
+cmd.interrupt.title	结束一个席位正在跑的回合：一句话理由 + 一行审计
+cmd.interrupt.what	结束某个席位**此刻**正在跑的那个回合：向它自己那个 agent 进程（pid 由该席位的派单记录 → 窗口 → pane → 进程自己的身份与启动时刻一路证明出来）发 SIGTERM，有界等待五秒，仍活着再发 SIGKILL。磁盘状态保留：未提交的改动、会话文件与派单记录一个字节不动，`team resume --agent <席位>` 回到记录里那个会话。理由在任何信号之前就写进该席位自己的线程与收件箱——它续跑时阅读顺序的第二步就是自己的线程，所以一定读得到。不带 `--yes` 只打印计划；最新磁盘证据比新鲜窗口更新的席位会被拒绝，`--force` 才能越过，而这条越权会记进那一行审计。
+cmd.interrupt.when	某个席位卡在一个非常长的回合里、迟迟不结束时用它：投递给席位的消息要等回合结束才进它的上下文，光发消息到不了它那里。先用 `team ps` 或 `team status` 看一眼——窗口没了、进程还在的席位归 `team reap`；根本没有进程的席位归 `team resume`。
+cmd.interrupt.example	team interrupt dev --reason "18h 没有提交；根因在线程里"
+cmd.interrupt.read	该席位的派单记录、它的窗口、进程自己的身份与启动时刻、它那次会话的会话文件与工作树的 git 状态
+cmd.interrupt.write	该席位线程一条、收件箱一行，以及 `state/interrupt.log` 里恰好一行审计
+cmd.interrupt.see	`team reap`、`team resume`、`team ps`、`team status`
+cmd.interrupt.arg.--reason	席位续跑时一定会读到的那一句话：为什么结束它的回合。必填；换行与控制字符会折叠成这一行。
+cmd.interrupt.arg.--force	只越过「席位正在写盘」这一条拒绝：你在写盘也仍要结束它。越权会记进审计行。
+cmd.interrupt.arg.--yes	唯一授权；没有它就只是一份计划，一个信号都不发、一个字都不写。
+cmd.interrupt.auth	`--yes` 是这条命令唯一的授权：配置键、环境变量、继承值都不能让一个信号默认发出。正在写盘的席位是被拒绝而不是被发信号，除非同一条命令行上给了 `--force`。
+cmd.interrupt.undo	这条命令不把结束掉的回合放回来；记录是线程那条、收件箱那行与审计那行，回来的路是 `team resume --agent <席位>`（同一个会话）。
 cmd.digest.title	一屏说完什么在等 PM
 cmd.digest.what	把没处理的收件箱条目、等复验的报告、被阻塞的席位和任务状态收成一张短清单。它是 PM 的待办列表，不是状态报告。
 cmd.digest.when	PM 开局时用它，或者巡检把你叫醒、你想知道为什么时用它。

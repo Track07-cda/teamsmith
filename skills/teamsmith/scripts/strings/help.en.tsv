@@ -164,6 +164,18 @@ cmd.reap.arg.--orphans	the plan: every orphan of this project the census finds.
 cmd.reap.arg.--yes	the only authorization to signal anything; without it the command is a plan that signals nothing.
 cmd.reap.auth	`--yes` on this command is the only authorization: no configuration key, environment variable or inherited value turns a signal on.
 cmd.reap.undo	the signal cannot be undone; the plan, the re-verification before each signal and the audit line are the guard.
+cmd.interrupt.title	end one seat's running turn, with a reason and an audit line
+cmd.interrupt.what	Ends the turn a seat is running right now: it sends SIGTERM to that seat's own agent process — the pid proved from the seat's assignment record, its window, the pane and the process's own identity and start time — waits a bounded five seconds and sends SIGKILL only if the process is still alive. The disk state stays: the uncommitted files, the session file and the assignment record are untouched, and `team resume --agent <seat>` re-enters the recorded session. The reason is written into the seat's own thread and inbox before any signal, so the seat meets it at the step of its reading order that already names its thread. Without `--yes` it only prints the plan; a seat whose newest disk evidence is younger than the freshness window is refused unless `--force` says otherwise, and that override is recorded in the audit line.
+cmd.interrupt.when	Use it when a seat sits in one very long turn that never ends: a message to a seat is read at a turn boundary, so a message alone cannot reach it. Read `team ps` or `team status` first — a seat whose window is gone while the process lives belongs to `team reap`, and a seat with no process at all belongs to `team resume`.
+cmd.interrupt.example	team interrupt dev --reason "18h without a commit; the root cause is in the thread"
+cmd.interrupt.read	the seat's assignment record, its window, the process's own identity and start time, its session file and its worktree status
+cmd.interrupt.write	one entry in the seat's thread, one line in its inbox, and exactly one audit line in `state/interrupt.log`
+cmd.interrupt.see	`team reap`, `team resume`, `team ps`, `team status`
+cmd.interrupt.arg.--reason	the one line the seat must find: why its turn is being ended. Required; newlines and control characters are folded into that single line.
+cmd.interrupt.arg.--force	override the freshness refusal only: the seat is writing and you still want the turn ended. The audit line records the override.
+cmd.interrupt.arg.--yes	the only authorization to signal anything; without it the command is a plan that signals nothing and writes nothing.
+cmd.interrupt.auth	`--yes` on this command is the only authorization: no configuration key, environment variable or inherited value turns a signal on. A seat that is writing is refused rather than signalled, unless `--force` stands on the same command line.
+cmd.interrupt.undo	this command does not put the ended turn back; the thread entry, the inbox line and the audit line are the record, and `team resume --agent <seat>` is the way back into the same session.
 cmd.digest.title	one screen of what needs the PM
 cmd.digest.what	Collects the unhandled inbox items, the reports waiting for verification, the blocked seats and the task states into one short list. It is the PM's worklist rather than a status report.
 cmd.digest.when	Use it at the start of a PM turn, or when the patrol woke you and you want to know why.

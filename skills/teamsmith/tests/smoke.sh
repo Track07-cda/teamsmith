@@ -19836,6 +19836,45 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════
+# 51c · 席位长回合的打断（P292 · change: seat-interrupt-entry）
+#
+# 夹具本体是 tests/seat-interrupt.sh：①桩 tmux + 真进程的证明链 / 计划态 / 执行态 / 审计 /
+# 拒绝集合 / 理由投递 / 新鲜窗口 / 磁盘幸存 / 读命令；②真私有 tmux server 上的端到端回合
+# （没有 tmux 时可见 SKIP）；③逐条红侧（破坏 → 指定用例必红）。FAST 档不启真 server、不建
+# 变异树（可见的 SKIP，不许静默）。
+section "51c · 席位长回合的打断（P292 · change: seat-interrupt-entry）"
+if [ -f "$SKILL_DIR/tests/seat-interrupt.sh" ]; then
+  SI_RC=0
+  case "${TEAM_SMOKE_FAST:-0}" in
+    1|y|Y|yes|YES|true|TRUE|on|ON) SI_SELECT="--select plan,target,execute,audit,refuse,reason,guard,survive,read,route,hygiene" ;;
+    *) SI_SELECT="" ;;
+  esac
+  if [ -n "$SI_SELECT" ]; then
+    bash "$SKILL_DIR/tests/seat-interrupt.sh" $SI_SELECT >"$TMP/seat-interrupt.log" 2>&1 || SI_RC=$?
+    if [ "$SI_RC" -eq 0 ]; then
+      ok "51c 打断入口夹具（FAST 档：桩 tmux + 真进程）全绿（$(grep -ac '✓' "$TMP/seat-interrupt.log" || true) 条断言）"
+    else
+      bad "51c 打断入口夹具有失败（rc=$SI_RC）"
+      grep -a '✗' "$TMP/seat-interrupt.log" | head -10 | sed 's/^/      /'
+    fi
+    skip "51c live 组（真 tmux server）与逐条红侧（FAST 档不跑）"
+  else
+    bash "$SKILL_DIR/tests/seat-interrupt.sh" >"$TMP/seat-interrupt.log" 2>&1 || SI_RC=$?
+    bash "$SKILL_DIR/tests/seat-interrupt.sh" --flip >"$TMP/seat-interrupt-flip.log" 2>&1 || SI_RC=$?
+    if [ "$SI_RC" -eq 0 ]; then
+      ok "51c 打断入口夹具全绿（$(grep -ac '✓' "$TMP/seat-interrupt.log" || true) 条断言）"
+      ok "51c 打断入口逐条红侧全绿（$(grep -ac '✓' "$TMP/seat-interrupt-flip.log" || true) 条）"
+      grep -aE '^== ' "$TMP/seat-interrupt.log" | sed 's/^/      /'
+    else
+      bad "51c 打断入口夹具有失败（rc=$SI_RC）"
+      grep -a '✗' "$TMP/seat-interrupt.log" "$TMP/seat-interrupt-flip.log" | head -10 | sed 's/^/      /'
+    fi
+  fi
+else
+  bad "51c 缺 tests/seat-interrupt.sh"
+fi
+
+# ═════════════════════════════════════════════════════════════════════
 # 52 · 席位死因（P113 · agent-death-reason / R1–R6）
 #
 # 夹具本体是 tests/death-cause.sh：①纯逻辑矩阵（闭集五分类、两条反例、403 无额度词 → auth、

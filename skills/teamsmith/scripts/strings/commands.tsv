@@ -47,6 +47,7 @@ cmd	status	observe	status [<ID>]	-	-	-	brief ledger	state	writes-state	none	idem
 cmd	ps	observe	ps	-	-	-	seat	-	read-only	none	idempotent	-	ps	team ps
 cmd	bg	observe	bg list ;; bg stop <id>	-	list stop	-	-	state	writes-state	none	idempotent	-	bg	team bg list
 cmd	reap	observe	reap --orphans [--yes] ;; reap <pid> [--yes]	--orphans --yes	-	-	seat	state	writes-state	none	not-reversible:the process is gone; the plan and --yes are the only guard	-	reap	team reap --orphans --yes
+cmd	interrupt	observe	interrupt <seat> --reason <line> [--force] [--yes]	--reason --force --yes	-	-	seat	state	writes-state	none	not-reversible:this command does not put the ended turn back; the thread entry, the inbox line and the audit line are the record and `team resume --agent <seat>` is the way back	-	interrupt	team interrupt dev --reason "18h without a commit"
 cmd	digest	observe	digest	-	-	-	ledger pulse	state	writes-state	none	idempotent	-	digest	team digest
 cmd	inbox	observe	inbox [<agent>]	-	-	-	ledger	-	read-only	none	idempotent	-	inbox	team inbox
 cmd	paths	observe	paths	-	-	-	ledger	-	read-only	none	idempotent	-	paths	team paths

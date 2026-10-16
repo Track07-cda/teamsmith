@@ -98,6 +98,7 @@ case "$CMD" in
   ps)         team_cmd_ps "$@" ;;
   bg)         team_cmd_bg "$@" ;;
   reap)       team_cmd_reap "$@" ;;
+  interrupt)  team_cmd_interrupt "$@" ;;   # P292：结束一个**在跑的**席位回合（理由先投递、恰好一行审计）
   digest)     team_cmd_digest "$@" ;;
   inbox)      team_cmd_inbox "$@" ;;
   __inbox-write) team_cmd_inbox_write "$@" ;;   # 内部：notify 扩展的收件箱写入口（合并 + 明细；不进 help）
