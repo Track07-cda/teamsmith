@@ -46,7 +46,7 @@ ACCEPTED 之后开始**——本清单是 apply 席位的执行面，写它的�
   `--force` 都不删**（红线）。 · 证据：`tests/install-shape.sh` 的扩展组（4.3） · **P298 按证据勾**：提交 `52373d0d`；V50 §6 三条路径真跑 + §8 的 `ext-skip` 变异；我复跑 `install-shape.sh` = `✓136 ✗0 SKIP0`，含 `⑧a` 对照（拒绝未标记文件）→ 翻转（改成 `rm -f` 必红）
 - [x] 3.2 `team_gitignore_add` 加 `.pi/extensions/`；安装输出每个条目一行（`link/copy/skip`），扩展那一行与技能同格式。 ·
   证据：夹具输出尾 · **P298 按证据勾**：我核 `cmd-init.sh:293-294`（`.pi/skills/` 与 `.pi/extensions/` 各一条、装完一次）；夹具断言「.gitignore 有 `.pi/extensions/` 且只一条」「`--no-skills` 没被塞进」；V50 §6 贴了真跑输出的 `link  <repo>/.pi/extensions/team.ts → …` 一行
-- [ ] 3.3 信任提示行同时点名 `.pi/skills/` 与 `.pi/extensions/`（答案不变、仍一行、`--no-skills` 不打）；同步
+- [x] 3.3 信任提示行同时点名 `.pi/skills/` 与 `.pi/extensions/`（答案不变、仍一行、`--no-skills` 不打）；同步 · 证据（PM 按事实勾）：P299/V51：**falsifier 已具备**——`install-shape.sh` 断言那行必须**一行**同时点名 `.pi/skills/` + `.pi/extensions/` + 三条出路（`pi --approve` / `/trust` / `team init --no-skills`）且**只出现一次**，`--no-skills` 时安静；两处 init 文档各带稳定 token 断言；V51 自造三条红侧（删 `.pi/extensions/`、那行出现两次、删文档 token）各自红并点名（`docs/team/reviews/V51.md`）
   `skills/teamsmith-init/SKILL.md` 的安装节与 `skills/teamsmith-init/references/bootstrap.md` 的项目技能行一句。 ·
   证据：两个文件里 `.pi/extensions/` 与 `/trust` 同页出现（`init-skill` 的场景 3 红侧：删掉再搜必红） · 证据（**留空**，见报告缺口 G1）：产品侧成立（`cmd-init.sh:298` 那一行确实点名两个目录，夹具运行输出原文为证；两个文档也都带 `.pi/extensions/` 与 `/trust`）——但夹具对「信任行含 `.pi/extensions/`」没有断言（`install-shape.sh:386-398` 的 `case` 只要求 `.pi/skills/` + `pi --approve` + `/trust` + `init --no-skills`），场景 3 的「两文档搜四个串 + 删掉再搜必红」在 `skills/teamsmith/tests/` 里没有任何实现。断的是这半条新增契约的 falsifier，不是产品
 - [x] 3.4 `scripts/lib/cmd-project.sh` 的 doctor 加一行 `/team` 扩展：有项目本地安装时——软链指向本源或副本字节等于
