@@ -60,3 +60,16 @@ bash skills/teamsmith/tests/help-surface.sh --select claims
 4. **3.1** 若 `commands.tsv` 行已写对，就在报告里给出证据（行号与 `--select claims` 的结果）；若还缺字段（例如 `caps`/`flags` 与实现不一致）一并改对。
 5. **验收**：`bash skills/teamsmith/tests/help-surface.sh --select claims` **必须 ✓ 全绿**；`smoke.sh --select <闭包>` 贴结果；**跑前跑后 `/tmp` 根数**（夹具收尾清理）。
 6. 改完 notify pm；由**没写过本变更**的席位做定点复检（换人）。
+
+## 返修轮次 1（2026-10-16，换人定点复检 V52 判 FAIL：两条，PM 都判「修」）
+
+复验记录 `docs/team/reviews/V52.md`。
+
+**F1（必修：我们刚加的那把门禁缺反向判据）**：`help-surface.sh` 的 claims 探针只检查「**声明的面都动了**」，没有反向检查「**动了的面必须在声明里**」。复验者造的三例证明它不能证伪声明漂移：① 从声明里删掉 `docs` → 仍 ✓3 ✗0；② 实现多写**未声明**的 `config` 面 → 仍 ✓（探针甚至把 `config` 打印在 `变化=` 里）；③ 实现往**工作树**里写文件 → 仍 ✓（`worktree` 面的指纹只覆盖 `git worktree list` 与分支 refs，**不含工作树内容**）。**当前 `interrupt` 行的声明本身是对的**（复验者逐项核过）——所以这是**缺一把反向 falsifier**，不是声明写错。
+**改法**：给 `run_probe` 补上 `changed ⊆ declared` 的反向判据（未声明的面出现 → 红并点名那个面）；并把 `worktree` 面的指纹扩到**包含工作树内容**（`git status --porcelain` 的摘要或全树哈希，取其一并写明）。**红侧**：三例各造一次（少声明 / 多写未声明面 / 写工作树），必须各自红并点名。
+
+**F2（我判修实现，不改文档）**：`references/protocol.md:155` 写「每个拒绝都要点名另一个入口」，而 **`reap` 侧不成立**：活席位上调 `team reap <pid> --yes` 拒绝得**正确**（rc=2、一个信号都不发、pane 还活着），但**从不提 `team interrupt`**（`cmd-reap.sh` 全文件 `grep -c interrupt` = **0**）。
+**改法**：在 `reap` 的「它是活着的席位」这条拒绝里**补一句指向 `team interrupt`**（与 `interrupt` 侧已经指向 `team reap --orphans` 对称）——**不**把文档收窄：对用户来说，「你该用哪条命令」正是这条拒绝的价值。
+**红侧**：活席位上 `reap` 的拒绝必须含那个指向；把该指向删掉 → 必须红并点名。
+
+**交付**：改完跑 `help-surface.sh --select claims`（✓ 全绿）、`seat-interrupt.sh --all/--flip`、`smoke.sh --select <闭包>`，贴结果；报告写「返修轮次 1」一节；然后 notify pm——**由 V52 第二轮定点复检定论**（同一席位、换会话）。
