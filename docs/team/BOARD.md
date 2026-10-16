@@ -462,11 +462,12 @@
 | V46 | Verify the claims probe de-flaking and the mark-loaded idempotence fix | dev-bob | - | - | done |
 | V47 | Verify writing-discipline and build the human-read blind package | verify | - | - | done |
 | P291 | A formal way for the PM to end a seat's runaway turn (with audit and a reason it can read) | dev-bob | - | - | done |
-| P292 | Seat turn interrupt: apply (proof chain, audit, reason delivery) | dev3 | - | - | wip |
+| P292 | Seat turn interrupt: apply (proof chain, audit, reason delivery) | dev3 | - | - | done |
 | P293 | Tick the writing-discipline checklist by evidence | verify | - | - | done |
 | V48 | Verify the tmux identity write side (own leak scene, both sides) | verify | - | - | done |
 | P294 | Rewrite the gate lock record when a new holder takes over | dev3 | - | - | done |
 | V49 | Verify the seat-interrupt entry with an own runaway-turn stand-in | verify | - | - | done |
+| P295 | Tick the seat-interrupt-entry checklist by evidence | dev2 | - | - | wip |
 
 ## 当前里程碑
 
