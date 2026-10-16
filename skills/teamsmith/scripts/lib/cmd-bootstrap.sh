@@ -291,7 +291,7 @@ team_cmd_bootstrap() {
       plan_models="--task-models '<category=provider/model …>' --pm-model '<provider/model>'（新鲜项目必填）"
     fi
     printf '  1. %s init --session %s --pm-window %s --agents "%s" --vcs %s %s\n' "$TEAM_CLI" "$session" "$pmwin" "$agents" "$vcs" "$plan_models"
-    printf '  1b. 把 skill 装进项目 %s（%s init 的同一实现；已存在则 skip —— 老项目的升级路径）\n' '.pi/skills/' "$TEAM_CLI"
+    printf '  1b. 把 skill 与 /team 扩展装进项目 %s 与 %s（%s init 的同一实现；已存在则 skip —— 老项目的升级路径）\n' '.pi/skills/' '.pi/extensions/' "$TEAM_CLI"
     printf '  2. 把门禁/安装命令写进 .pi/team/config.sh（%s / %s）\n' "${gates:-无}" "${install_cmd:-无}"
     printf '  3. 为每个 agent 建 worktree：%s\n' "$(printf 'add-agent %s; ' $agents)"
     printf '  4. %s pulse up（巡检窗口：同 session 的 %s 窗口跑 monitor + 定时巡检）\n' "$TEAM_CLI" "$(team_pulse_window)"

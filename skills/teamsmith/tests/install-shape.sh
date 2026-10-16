@@ -6,7 +6,7 @@
 #   TEAM_INSTALL_KEEP=1 bash ...                                   # keep the fixture directory
 #   TEAM_INSTALL_TREE=<tree> bash ...                              # run against another checkout (the flip section builds scratch trees)
 #
-# Sections: surfaces install conflict shell pack doctor flip
+# Sections: surfaces install conflict shell pack doctor extension flip
 # Exit: 0 every selected section green, 1 at least one assertion failed, 3 setup failure.
 #
 # Nothing here touches the caller's project: every fixture is a fresh git repo under $TMPDIR, the caller's
@@ -62,7 +62,7 @@ assert_link_to() { [ -L "$1" ] && [ "$(readlink -f "$1" 2>/dev/null)" = "$2" ] &
   || bad "$3（$1 → $(readlink -f "$1" 2>/dev/null || echo '不是软链')，期望 $2）"; }
 
 SECTIONS=("$@")
-[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(surfaces install conflict shell pack doctor flip)
+[ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(surfaces install conflict shell pack doctor extension flip)
 want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; done; return 1; }
 
 # ---------------------------------------------------------------- helpers
@@ -287,6 +287,101 @@ chk_bootstrap_installs() { # <tree> <已初始化但删掉 .pi/skills 的仓库>
   return 0
 }
 
+# ---------------------------------------------------------------- P270 · `/team` 扩展安装面（同一张冲突表，单文件形状）
+chk_ext_installed_link() { # <tree> <repo>：装成指向运行树的软链
+  local t="$1" p="$2"
+  local dest="$p/.pi/extensions/team.ts"
+  [ -L "$dest" ] || { printf '没有把 /team 扩展装成软链（%s）\n' "$dest"; return 1; }
+  [ "$(readlink -f "$dest")" = "$t/skills/teamsmith/extension/team.ts" ] \
+    || { printf '软链目标不对：%s\n' "$(readlink -f "$dest")"; return 1; }
+  printf '扩展软链指向运行树\n'
+  return 0
+}
+chk_ext_unmarked_survives() { # <tree> <repo（.pi/extensions/team.ts 是不带标记的普通文件）>
+  local t="$1" p="$2"
+  local dest="$p/.pi/extensions/team.ts" before after out rc
+  before="$(file_hash "$dest")"
+  out="$(init_proj "$t" "$p")"; rc=$?
+  [ "$rc" -ne 0 ] || { printf '未标记的扩展文件居然 rc=0\n'; return 1; }
+  case "$out" in *红线*|*不认识的条目*) ;; *) printf '没说明红线：[%s]\n' "$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1 ;; esac
+  after="$(file_hash "$dest")"
+  [ "$before" = "$after" ] || { printf '拒绝时把字节改了\n'; return 1; }
+  out="$(init_proj "$t" "$p" --force)"; rc=$?
+  [ "$rc" -ne 0 ] || { printf '--force 下未标记的扩展文件居然 rc=0\n'; return 1; }
+  after="$(file_hash "$dest")"
+  [ "$before" = "$after" ] || { printf '--force 把未标记的扩展文件动了\n'; return 1; }
+  printf '拒绝且连 --force 都不删（rc=%s）\n' "$rc"
+  return 0
+}
+chk_ext_marked_copy_force() { # <tree> <repo（扩展是带标记、改坏了一行的副本）>
+  local t="$1" p="$2"
+  local dest="$p/.pi/extensions/team.ts" before out rc
+  before="$(file_hash "$dest")"
+  out="$(init_proj "$t" "$p")"; rc=$?
+  [ "$rc" -ne 0 ] || { printf '带标记的漂移副本居然 rc=0\n'; return 1; }
+  [ "$(file_hash "$dest")" = "$before" ] || { printf '拒绝时把漂移副本改了\n'; return 1; }
+  init_proj "$t" "$p" --force >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { printf '--force 退出 %s\n' "$rc"; return 1; }
+  cmp -s "$t/skills/teamsmith/extension/team.ts" "$dest" || { printf '--force 后字节与源不同\n'; return 1; }
+  printf '带标记的漂移副本：默认拒绝、--force 换成源\n'
+  return 0
+}
+chk_ext_foreign_link_force() { # <tree> <repo（扩展软链指向 $tmp/foreign-ext.ts）>
+  local t="$1" p="$2"
+  local dest="$p/.pi/extensions/team.ts" out rc
+  out="$(init_proj "$t" "$p")"; rc=$?
+  [ "$rc" -ne 0 ] || { printf '别源软链居然 rc=0\n'; return 1; }
+  [ "$(readlink "$dest")" = "$tmp/foreign-ext.ts" ] || { printf '拒绝时被重指了\n'; return 1; }
+  init_proj "$t" "$p" --force >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { printf '--force 退出 %s\n' "$rc"; return 1; }
+  [ "$(readlink -f "$dest")" = "$t/skills/teamsmith/extension/team.ts" ] || { printf '--force 没重指到运行树\n'; return 1; }
+  printf '别源软链：默认拒绝、--force 重指\n'
+  return 0
+}
+chk_bootstrap_installs_ext() { # <tree> <已初始化但删掉 .pi/extensions 的仓库>
+  local t="$1" p="$2" h1 h2 out rc dest
+  dest="$p/.pi/extensions/team.ts"
+  h1="$(file_hash "$p/.pi/team/config.sh")"
+  out="$(run_tree "$t" "$p" bootstrap --no-pulse --agents dev)"; rc=$?
+  [ "$rc" -eq 0 ] || { printf 'bootstrap rc=%s：[%s]\n' "$rc" "$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  [ -L "$dest" ] || { printf 'bootstrap 没装回扩展\n'; return 1; }
+  [ "$(readlink -f "$dest")" = "$t/skills/teamsmith/extension/team.ts" ] || { printf '软链目标不对\n'; return 1; }
+  h2="$(file_hash "$p/.pi/team/config.sh")"
+  [ "$h1" = "$h2" ] || { printf 'config.sh 被改了\n'; return 1; }
+  printf '已存在配置也装了扩展，config.sh 未动\n'
+  return 0
+}
+ext_doctor_row() { # <captured 输出> → `/team 扩展安装` 行（没有则空）
+  printf '%s\n' "$1" | grep -F '/team 扩展安装' | head -1
+}
+chk_ext_doctor_missing() { # <tree> <repo（扩展被删掉）>
+  local out rc row
+  out="$(run_doctor "$1" "$2")"; rc=$?
+  [ "$rc" -eq 0 ] || { printf 'doctor 因 install 行以外的东西非 0（rc=%s）\n' "$rc"; return 1; }
+  row="$(ext_doctor_row "$out")"
+  case "$row" in *'!'*'.pi/extensions/team.ts'*'team init'*) ;; *) printf '缺失行的形状不对：[%s]\n' "$row"; return 1 ;; esac
+  case "$row" in *'--force'*) printf '缺失不该给 --force：[%s]\n' "$row"; return 1 ;; esac
+  printf '缺失：warn 点名路径与修法 team init\n'
+  return 0
+}
+chk_ext_doctor_drift() { # <tree> <repo（扩展副本改坏一行）>
+  local out rc row
+  out="$(run_doctor "$1" "$2")"; rc=$?
+  [ "$rc" -eq 0 ] || { printf 'doctor 因 install 行以外的东西非 0（rc=%s）\n' "$rc"; return 1; }
+  row="$(ext_doctor_row "$out")"
+  case "$row" in *'!'*'.pi/extensions/team.ts'*'team init --force'*) ;; *) printf '漂移行的形状不对：[%s]\n' "$row"; return 1 ;; esac
+  printf '漂移：warn 点名路径与修法 team init --force\n'
+  return 0
+}
+chk_ext_no_install_silent() { # <tree> <没有项目本地安装的仓库>
+  local out rc
+  out="$(run_doctor "$1" "$2")"; rc=$?
+  [ "$rc" -eq 0 ] || { printf 'doctor 因 install 行以外的东西非 0（rc=%s）\n' "$rc"; return 1; }
+  if printf '%s\n' "$out" | grep -qF '/team 扩展安装'; then printf '没有项目本地安装却刷了 /team 行\n'; return 1; fi
+  printf '没有项目本地安装：一行都不打\n'
+  return 0
+}
+
 # P59：安装步的信任提示行 —— 同一行必须点名触发资源（.pi/skills/）与三条出路
 # （pi --approve / /trust / team init --no-skills），而且只能出现一次。
 chk_trust_hint() { # <init 捕获输出>
@@ -476,7 +571,9 @@ if want install; then
   case "$out" in *'--no-skills'*) ok "--no-skills 明说跳过了这一步" ;; *) bad "--no-skills 没有说明" ;; esac
   check_holds "P59 --no-skills 不打信任提示行" chk_no_skills_silent "$tree" "$p"
   assert_not_file "$p/.pi/skills" "--no-skills 没建 .pi/skills/"
+  assert_not_file "$p/.pi/extensions" "--no-skills 也没建 .pi/extensions/"
   assert_eq ".gitignore 没被塞进 .pi/skills/" "$(grep -cxF '.pi/skills/' "$p/.gitignore" || true)" "0"
+  assert_eq ".gitignore 没被塞进 .pi/extensions/" "$(grep -cxF '.pi/extensions/' "$p/.gitignore" || true)" "0"
 
   # ③ --copy：真目录、字节相等、不带 node_modules/.git
   p="$tmp/p-copy"; git_new "$p"; assert_isolated "$tree" "$p"
@@ -498,6 +595,7 @@ if want install; then
   assert_eq "worktree 里 init 退出码 0" "$rc" "0"
   assert_link_to "$p/.pi/skills/teamsmith" "$tree/skills/teamsmith" "安装落在主工作树的 .pi/skills/"
   assert_not_file "$p/.worktrees/wt/.pi/skills" "worktree 侧没有安装条目"
+  assert_not_file "$p/.worktrees/wt/.pi/extensions" "worktree 侧也没有 /team 扩展（席位不需要斜杠命令）"
 
   # ⑤ bootstrap 升级路径（配置已存在、.pi/skills 缺席）
   p="$tmp/p-boot"; git_new "$p"; assert_isolated "$tree" "$p"
@@ -511,6 +609,7 @@ if want install; then
   out="$(run_tree "$tree" "$p" bootstrap --no-pulse --print)"; rc=$?
   assert_eq "bootstrap --print 退出码 0" "$rc" "0"
   case "$out" in *'.pi/skills/'*) ok "--print 的计划点名装 skill 一步" ;; *) bad "--print 没点名装 skill 一步" ;; esac
+  case "$out" in *'.pi/extensions/'*) ok "--print 的计划同时点名 /team 扩展一步" ;; *) bad "--print 没点名 /team 扩展一步" ;; esac
   assert_not_file "$p/.pi/skills" "--print 没写 .pi/skills/"
   assert_not_file "$p/.pi/team/config.sh" "--print 没写配置"
   assert_eq "--print 没动仓库（.git 指纹不变）" "$(files_hash "$p/.git")" "$before"
@@ -610,6 +709,80 @@ if want doctor; then
   assert_eq "别源软链：warn 不改退出码（doctor 0）" "$DOC_RC" "0"
   init_proj "$tree" "$p" --force >/dev/null 2>&1
   assert_link_to "$p/.pi/skills/teamsmith" "$tree/skills/teamsmith" "别源软链：--force 修复到运行树"
+  # ⑤ P270：扩展 link → pass 行点名路径与源；不 warn
+  p="$tmp/d-ext-link"; git_new "$p"; init_proj "$tree" "$p" >/dev/null 2>&1
+  doctor_capture "$tree" "$p"; row="$(ext_doctor_row "$DOC_OUT")"
+  case "$row" in *'✓'*"$p/.pi/extensions/team.ts"*"$tree/skills/teamsmith/extension/team.ts"*)
+      ok "/team 扩展 link：pass 行点名入口与源" ;; *) bad "/team 扩展 link：行不对（$row）" ;; esac
+  case "$row" in *'!'*) bad "/team 扩展 link：居然 warn" ;; *) ok "/team 扩展 link：不 warn" ;; esac
+  assert_eq "/team 扩展 link：doctor 退出 0" "$DOC_RC" "0"
+  # ⑥ 扩展缺失 → warn 点名路径与修法 team init；修复后回到 pass
+  p="$tmp/d-ext-missing"; git_new "$p"; init_proj "$tree" "$p" >/dev/null 2>&1; rm -f "$p/.pi/extensions/team.ts"
+  check_holds "扩展缺失：warn 点名路径与修法 team init" chk_ext_doctor_missing "$tree" "$p"
+  init_proj "$tree" "$p" >/dev/null 2>&1
+  doctor_capture "$tree" "$p"; row="$(ext_doctor_row "$DOC_OUT")"
+  case "$row" in *'✓'*) ok "扩展缺失修复：team init 后回到 pass" ;; *) bad "扩展缺失修复后行不对（$row）" ;; esac
+  # ⑦ 副本漂移 → warn 点名路径与修法 team init --force；--force 之后回到 pass
+  p="$tmp/d-ext-drift"; git_new "$p"; init_proj "$tree" "$p" --copy >/dev/null 2>&1
+  printf '\n// drift\n' >> "$p/.pi/extensions/team.ts"
+  check_holds "扩展漂移：warn 点名路径与修法 team init --force" chk_ext_doctor_drift "$tree" "$p"
+  init_proj "$tree" "$p" --force >/dev/null 2>&1
+  doctor_capture "$tree" "$p"; row="$(ext_doctor_row "$DOC_OUT")"
+  case "$row" in *'✓'*"$tree/skills/teamsmith/extension/team.ts"*) ok "扩展漂移修复：--force 后回到 pass" ;; *) bad "扩展漂移修复后行不对（$row）" ;; esac
+  # ⑧ 没有项目本地安装 → 一行都不打
+  p="$tmp/d-ext-absent"; git_new "$p"; init_proj "$tree" "$p" --no-skills >/dev/null 2>&1
+  check_holds "没有项目本地安装：/team 行一行都不打" chk_ext_no_install_silent "$tree" "$p"
+fi
+
+# ---------------------------------------------------------------- extension · P270
+if want extension; then
+  section "extension · /team 扩展安装面（link/copy/冲突表/--no-skills/bootstrap）"
+  # ① 默认 link：逐条一行 + .gitignore + 目标指向运行树
+  p="$tmp/x-link"; git_new "$p"; assert_isolated "$tree" "$p"
+  out="$(init_proj "$tree" "$p")"; rc=$?
+  assert_eq "init 退出码 0" "$rc" "0"
+  case "$out" in *"link  $p/.pi/extensions/team.ts → $tree/skills/teamsmith/extension/team.ts"*)
+      ok "输出逐条一行：扩展 link 行（含目标与源）" ;;
+    *) bad "扩展 link 行形状不对：$(printf '%s' "$out" | grep extensions | tr '\n' ' ')" ;; esac
+  check_holds "扩展装成指向运行树的软链" chk_ext_installed_link "$tree" "$p"
+  assert_eq ".gitignore 有 .pi/extensions/ 且只一条" "$(grep -cxF '.pi/extensions/' "$p/.gitignore" || true)" "1"
+  # ② 幂等：第二次 init 报 skip；--copy 对着已有软链也 skip，目标不变
+  x1="$(readlink -f "$p/.pi/extensions/team.ts")"
+  out2="$(init_proj "$tree" "$p")"; rc2=$?
+  assert_eq "第二次 init 退出码 0" "$rc2" "0"
+  case "$out2" in *"skip  $p/.pi/extensions/team.ts（"*) ok "第二次 init 报扩展 skip" ;; *) bad "第二次 init 没有扩展 skip 行" ;; esac
+  assert_eq "第二次 init 后扩展目标不变" "$(readlink -f "$p/.pi/extensions/team.ts")" "$x1"
+  out3="$(init_proj "$tree" "$p" --copy)"; rc3=$?
+  assert_eq "--copy 对着已有扩展软链退出 0（skip，不覆盖）" "$rc3" "0"
+  assert_eq "--copy 后仍是同一软链目标" "$(readlink -f "$p/.pi/extensions/team.ts")" "$x1"
+  # ③ --copy：真文件、字节相等
+  p="$tmp/x-copy"; git_new "$p"; init_proj "$tree" "$p" --copy >/dev/null 2>&1
+  [ -f "$p/.pi/extensions/team.ts" ] && [ ! -L "$p/.pi/extensions/team.ts" ] \
+    && ok "--copy 装的是真文件（不是软链）" || bad "--copy 装的扩展不是文件"
+  assert_eq "--copy 的扩展与源逐字节相等" \
+    "$(cmp -s "$tree/skills/teamsmith/extension/team.ts" "$p/.pi/extensions/team.ts" && echo same || echo differ)" "same"
+  # ④ --no-skills：两个目录都不建
+  p="$tmp/x-noskills"; git_new "$p"; init_proj "$tree" "$p" --no-skills >/dev/null 2>&1
+  assert_not_file "$p/.pi/skills" "--no-skills 没建 .pi/skills/"
+  assert_not_file "$p/.pi/extensions" "--no-skills 也没建 .pi/extensions/"
+  assert_eq ".gitignore 没被塞进 .pi/extensions/" "$(grep -cxF '.pi/extensions/' "$p/.gitignore" || true)" "0"
+  # ⑤ 冲突表：不带标记的普通文件 —— 拒绝且连 --force 都不删（红线）
+  p="$tmp/x-unmarked"; git_new "$p"; init_proj "$tree" "$p" --no-skills >/dev/null 2>&1
+  mkdir -p "$p/.pi/extensions"; printf 'not the extension\n' > "$p/.pi/extensions/team.ts"
+  check_holds "未标记的普通文件：拒绝且连 --force 都不删" chk_ext_unmarked_survives "$tree" "$p"
+  # ⑥ 带标记的漂移副本：默认拒绝、--force 换源
+  p="$tmp/x-marked"; git_new "$p"; init_proj "$tree" "$p" --copy >/dev/null 2>&1
+  printf '\n// drift\n' >> "$p/.pi/extensions/team.ts"
+  check_holds "带标记的漂移副本：默认拒绝、--force 换源" chk_ext_marked_copy_force "$tree" "$p"
+  # ⑦ 别源软链：默认拒绝、--force 重指
+  p="$tmp/x-foreign"; git_new "$p"; init_proj "$tree" "$p" --no-skills >/dev/null 2>&1
+  mkdir -p "$p/.pi/extensions"
+  printf '// teamsmith /team extension\n' > "$tmp/foreign-ext.ts"
+  ln -s "$tmp/foreign-ext.ts" "$p/.pi/extensions/team.ts"
+  check_holds "别源软链：默认拒绝、--force 重指" chk_ext_foreign_link_force "$tree" "$p"
+  # ⑧ bootstrap 升级路径（配置已存在、扩展缺席）
+  p="$tmp/x-boot"; git_new "$p"; init_proj "$tree" "$p" >/dev/null 2>&1; rm -rf "$p/.pi/extensions"
+  check_holds "bootstrap 对已存在的项目装回扩展" chk_bootstrap_installs_ext "$tree" "$p"
 fi
 
 # ---------------------------------------------------------------- flip
@@ -711,7 +884,7 @@ PYTRUST
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-old = "    printf '  skip  %s（--no-skills：只做配置/文档，没装项目本地 skill）\\n' \"$target\"\n    return 0"
+old = "    printf '  skip  %s 与 %s（--no-skills：只做配置/文档，没装项目本地 skill/扩展）\\n' \\\n      \"$target\" \"$(team_project_extension_target)\"\n    return 0"
 if old not in s:
     print("没找到 --no-skills 分支"); sys.exit(1)
 new = old.replace('    return 0', '    team_dim "  提示：.pi/skills/ pi --approve /trust team init --no-skills"\n    return 0')
@@ -721,6 +894,33 @@ PYTRUST2
   pf2="$tmp/f-trust-noskills-red"; git_new "$pf2"
   check_holds "⑦b 对照：真实树 --no-skills 安静" chk_no_skills_silent "$tree" "$pg2"
   check_breaks "⑦b 翻转：提示行也打进 --no-skills 分支" chk_no_skills_silent "$ft2" "$pf2"
+  # ⑧ P270：扩展红线（不带标记的普通文件连 --force 都不删）与 /team 的 doctor 行
+  ft="$tmp/f-ext-refuse"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-init.sh" <<'PYEXT'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = ('team_extension_install_refuse_unknown() { # <dest>：普通文件/目录但没有源的标记行 —— 红线：--force 也不删\n'
+       '  local dest="$1"\n')
+new = ('team_extension_install_refuse_unknown() { # <dest>：普通文件/目录但没有源的标记行 —— 红线：--force 也不删\n'
+       '  local dest="$1"\n  rm -f "$dest"\n')
+if old not in s:
+    print("没找到扩展红线函数"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYEXT
+  pg="$tmp/f-ext-refuse-green"; git_new "$pg"; init_proj "$tree" "$pg" --no-skills >/dev/null 2>&1
+  mkdir -p "$pg/.pi/extensions"; printf 'not the extension\n' > "$pg/.pi/extensions/team.ts"
+  pf="$tmp/f-ext-refuse-red"; git_new "$pf"; init_proj "$ft" "$pf" --no-skills >/dev/null 2>&1
+  mkdir -p "$pf/.pi/extensions"; printf 'not the extension\n' > "$pf/.pi/extensions/team.ts"
+  check_holds "⑧a 对照：真实树拒绝未标记的扩展文件" chk_ext_unmarked_survives "$tree" "$pg"
+  check_breaks "⑧a 翻转：红线函数改成 rm -f（未标记的文件被删）" chk_ext_unmarked_survives "$ft" "$pf"
+  ft="$tmp/f-ext-doctor"; scratch_tree "$ft"
+  printf '\n# FLIP：把 /team 扩展的 doctor 行静默掉\nteam_project_extension_install_row() { return 0; }\n' \
+    >> "$ft/skills/teamsmith/scripts/lib/cmd-init.sh"
+  pg="$tmp/f-ext-doctor-green"; git_new "$pg"; init_proj "$tree" "$pg" >/dev/null 2>&1; rm -f "$pg/.pi/extensions/team.ts"
+  pf="$tmp/f-ext-doctor-red"; git_new "$pf"; init_proj "$ft" "$pf" >/dev/null 2>&1; rm -f "$pf/.pi/extensions/team.ts"
+  check_holds "⑧b 对照：真实树报扩展缺失" chk_ext_doctor_missing "$tree" "$pg"
+  check_breaks "⑧b 翻转：/team 的 doctor 行被静默" chk_ext_doctor_missing "$ft" "$pf"
   # ⑥ 真实树没被夹具动过：git status 指纹前后一致
   porcelain_after="$(cd "$tree" && git status --porcelain | sha256sum)"
   assert_eq "⑥ 夹具没碰真实树（git status 指纹不变）" "$porcelain_after" "$porcelain_before"

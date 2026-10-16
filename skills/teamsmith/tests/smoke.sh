@@ -21283,6 +21283,47 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- 65. `/team` 斜杠命令（change: slash-team · P270）
+# 纯逻辑层（bun 假 pi 驱动扩展处理器：argv 逐字 / 白名单形状 / 菜单与补全同源 / 拒绝零副作用 /
+# 输出落点与退出码 / 环境剥离 / 项目根与 CLI 解析 + 表↔CLI 探针）与端到端层（真 pi RPC + 记录 argv/cwd/env
+# 的 `team` 桩）。`--flip` 在 scratch 副本上把实现逐条改坏，要求**具名断言**变红、真实源保持绿。
+# 端到端层是真进程段落：FAST 里显式 SKIP 并点名（全量档跑）。
+section "65 · /team 斜杠命令（change: slash-team · P270）"
+if [ -f "$SKILL_DIR/tests/slash-team.sh" ]; then
+  P270_RC=0
+  bash "$SKILL_DIR/tests/slash-team.sh" --all --flip >"$TMP/p270-slash-team.log" 2>&1 || P270_RC=$?
+  if [ "$P270_RC" -eq 0 ]; then
+    ok "65 /team 纯逻辑层 + 翻转变异全绿（$(grep -ac '✓' "$TMP/p270-slash-team.log" || true) 条断言，$(grep -ac 'flip ' "$TMP/p270-slash-team.log" || true) 条翻转臂）"
+  else
+    bad "65 /team 纯逻辑层有失败（rc=$P270_RC）"
+    grep -a '✗' "$TMP/p270-slash-team.log" | head -12 | sed 's/^/      /'
+  fi
+else
+  bad "65 缺 tests/slash-team.sh"
+fi
+if [ -f "$SKILL_DIR/tests/slash-team-e2e.sh" ]; then
+  if [ "$FAST" = "1" ]; then
+    fast_skip "65·/team 端到端（真 pi RPC）" "真进程段落进全量档（纯逻辑层已在上面跑过；完整门禁里跑）"
+  else
+    live_mark
+    P270E_RC=0
+    bash "$SKILL_DIR/tests/slash-team-e2e.sh" --flip >"$TMP/p270-slash-team-e2e.log" 2>&1 || P270E_RC=$?
+    # 绿了还必须**真跑过翻转臂**：argv 一丢，--flip 的那一轮会静默少跑两条断言而整段照样绿
+    # （P270 apply 实测踩过：守卫 re-exec 传了被 shift 消耗掉的 "$@"）。夹具自身也自守（flip 组多不多断言），
+    # 这里再从门禁侧钉一遍「日志里必须有 flip 组」。
+    if [ "$P270E_RC" -eq 0 ] && grep -aq 'e2e · flip' "$TMP/p270-slash-team-e2e.log"; then
+      ok "65 /team 端到端（真 pi RPC + 记录桩 + 翻转臂）全绿（$(grep -ac '✓' "$TMP/p270-slash-team-e2e.log" || true) 条断言）"
+    elif [ "$P270E_RC" -eq 0 ]; then
+      bad "65 /team 端到端绿了但没有跑翻转臂（--flip 那一轮日志里没有 flip 组）"
+    else
+      bad "65 /team 端到端有失败（rc=$P270E_RC）"
+      grep -a '✗' "$TMP/p270-slash-team-e2e.log" | head -12 | sed 's/^/      /'
+    fi
+  fi
+else
+  bad "65 缺 tests/slash-team-e2e.sh"
+fi
+
 section "14d · P70 本套自述对账（段落账目 + 无误判）"
 P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
 P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+ · 预算 [0-9]+s' "$SG_LOG" 2>/dev/null || true)"

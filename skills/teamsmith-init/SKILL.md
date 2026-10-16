@@ -14,17 +14,15 @@ with the user, run one command, then hand day-to-day operation to the **`teamsmi
 
 ```bash
 npm install -g teamsmith     # the `team` CLI (one npm bin entry; it checks bash >= 5 and prints the fix)
-team init                    # in this project: config + docs skeleton + the skills into .pi/skills/
+team init                    # in this project: config + docs skeleton + the skills and the /team extension
 ```
 
-`team init` installs both skills into the project's **`.pi/skills/`** (Pi's project-level search path), so this
-project's own sessions find `teamsmith`/`teamsmith-init` without a machine-global install; the default is a symlink
-to the package (updates are live), `--copy` copies instead, `--no-skills` skips the step. Because `.pi/skills/` is
-one of the project resources Pi asks about, the **first interactive `pi` run in this project shows a project-trust
-prompt** — the install step prints a line naming the three answers: `pi --approve` (trust for that one run),
-`/trust` inside Pi (save the decision), and `team init --no-skills` (skip the install). Two alternatives when npm
-is not your route: `pi install …` at a released tag (no global CLI) and `./install.sh` from a checkout (writes
-into `~/.agents/skills`). Everything after setup (dispatch, the pulse, review, merge) belongs to the daily skill.
+`team init` installs both skills into the project's **`.pi/skills/`** (Pi's project-level search path) and the
+`/team` extension into **`.pi/extensions/`**; the default is a symlink to the package, `--copy` copies, `--no-skills`
+skips both. Because both are project resources Pi asks about, the **first interactive `pi` run shows a
+project-trust prompt** — one line names the answers: `pi --approve`, `/trust` in Pi, `team init --no-skills`.
+Alternatives to npm: `pi install …` at a released tag, `./install.sh` from a checkout. Everything after setup
+(dispatch, the pulse, review, merge) belongs to the daily skill.
 
 ## 1. Settle these with the user, in this order
 

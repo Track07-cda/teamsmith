@@ -640,6 +640,16 @@ team_cmd_doctor() {
     esac
   fi
 
+  # P270：项目本地的 `/team` 扩展（同一条 warn-don't-fail 线，同一个「没装就不刷行」的口径）。
+  local ext_row; ext_row="$(team_project_extension_install_row)"
+  if [ -n "$ext_row" ]; then
+    check "/team 扩展安装"
+    case "$ext_row" in
+      pass\ *) pass "${ext_row#pass }" ;;
+      warn\ *) warn "${ext_row#warn }" ;;
+    esac
+  fi
+
   check "陈旧 state"; local stale=0 a w
     for a in $(team_agents); do
       w="$(team_state_get "$a" window "$a")"

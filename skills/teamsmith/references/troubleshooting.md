@@ -646,6 +646,10 @@ seat's last screen and tmux's exit evidence survive the death. Reading such a se
 - A long task with no progress: have the agent drop a status line into the report every 30 minutes, or ask for
   progress with `team say`.
 - Strong models are slow and quota-limited: run one at a time (`TEAM_MODEL_LIMITS`), and do not dispatch two at once.
+- **The `/team` slash command does not appear** (the project-local `/team` extension): run `team doctor` and read its
+  `/team 扩展安装` row — `team init` repairs a missing entry, `team init --force` a drifted one (a symlink to another
+  source, or a copy whose bytes differ) — then type `/reload` in Pi. It is installed in the main worktree only, so a
+  worker worktree legitimately has no `/team`; `--no-skills` also leaves it out on purpose.
 
 ## 13. team doctor fails on a required dependency
 
