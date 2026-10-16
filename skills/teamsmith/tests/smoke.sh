@@ -17042,6 +17042,36 @@ if [ -n "$P287N_NS_MAIN" ] && [ -n "$P287N_NS_REPO2" ] && [ "$P287N_NS_MAIN" != 
 else
   bad "34c 第二个仓库的 ns 与第一个相同（[$P287N_NS_MAIN] vs [$P287N_NS_REPO2]）"
 fi
+# 1.1 第三向（P303 的留空项）：非 git 检出 / PATH 无 git —— `team_project_ns` 不许报错。
+# 前两向（同项目两个 worktree 一致 / 第二个仓库不同）在上面；这一向以前只有手工探针，没有断言。
+# 判据：rc=0、stderr 干净、输出仍是 `<slug>-<hash8>`。
+P287NG="$P287N/nogit"; rm -rf "$P287NG"; mkdir -p "$P287NG/skills/teamsmith"
+cp -a "$SKILL_DIR/scripts" "$P287NG/skills/teamsmith/scripts"
+p287ng_ns() { # <PATH> → 在那个 PATH 下算 ns（env -u TEAM_PROJECT：slug 取检出目录名）
+  local path="$1"
+  ( cd "$P287NG" && env -u TEAM_PROJECT PATH="$path" bash -c \
+      'p="$1"; . "$p/skills/teamsmith/scripts/lib/common.sh" >/dev/null 2>&1; team_project_ns' _ "$P287NG" ) \
+    2>"$P287NG/stderr.txt"
+}
+P287NG_NS1="$(p287ng_ns "$PATH")"; P287NG_RC1=$?
+assert_eq "34c 1.1 非 git 检出：team_project_ns 不报错（rc=0）" "$P287NG_RC1" "0"
+assert_eq "34c 1.1 非 git 检出：stderr 干净" "$(cat "$P287NG/stderr.txt" 2>/dev/null || true)" ""
+case "$P287NG_NS1" in
+  nogit-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+    ok "34c 1.1 非 git 检出 → ns=$P287NG_NS1（slug 取目录名，hash 取 realpath）" ;;
+  *) bad "34c 1.1 非 git 检出的 ns 形状不对：[$P287NG_NS1]" ;;
+esac
+# PATH 里连 git 与 sha256 工具都没有 → 退到 skill 自己所在的目录，仍然不报错（hash 退 00000000）
+P287NG_BIN="$P287N/nogit-bin"; rm -rf "$P287NG_BIN"; mkdir -p "$P287NG_BIN"
+for _c in bash basename dirname tr cut; do
+  _p="$(command -v "$_c" 2>/dev/null || true)"; [ -n "$_p" ] && ln -sf "$_p" "$P287NG_BIN/$_c"
+done
+unset _c _p
+P287NG_NS2="$(p287ng_ns "$P287NG_BIN")"; P287NG_RC2=$?
+assert_eq "34c 1.1 PATH 无 git：team_project_ns 不报错（rc=0）" "$P287NG_RC2" "0"
+assert_eq "34c 1.1 PATH 无 git：stderr 干净" "$(cat "$P287NG/stderr.txt" 2>/dev/null || true)" ""
+assert_eq "34c 1.1 PATH 无 git + 无 sha256 工具 → ns 退 <slug>-00000000（仍不报错）" \
+  "$P287NG_NS2" "nogit-00000000"
 # 两个仓库各建一个根（各自的台账落在同一个私有临时根里）→ 标记带各自的 ns；--status 把第二个仓库归为外来
 rm -f "$P287N/r1.txt" "$P287N/r2.txt"
 p287n_root_live "$P287N_REPO" "$P287N/r1.txt" "nsprobe-a-$$"
@@ -17104,6 +17134,25 @@ else
 #   ⑤ 等待者：第二套在等，外部删/换它等的那把 → 印两个身份 + 「已经变了」再继续等；旧版本记录打
 #      version=legacy + 缺的字段写 `?`（绝不「持有者未知」）。
 P287D="$TMP/p287-id"; rm -rf "$P287D"; mkdir -p "$P287D"
+# 2.1 纯函数单测（P303 的留空项）：伴生锁路径推导 —— 同行同目录、basename + `.machine`、点开头。
+# 两种输入：默认路径（未设 TEAM_SMOKE_LOCK）与私有 TEAM_SMOKE_LOCK —— 断言推导结果本身，不依赖真运行。
+P287D_DEF="${TMPDIR:-/tmp}/teamsmith-smoke.lock"
+if [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
+  assert_eq "34d 2.1 默认路径（未设 TEAM_SMOKE_LOCK）" "$(gate_lock_default_path)" "$P287D_DEF"
+else
+  ok "34d 2.1 默认路径那一条：外层设了 TEAM_SMOKE_LOCK=$TEAM_SMOKE_LOCK → 按同一规矩换输入（避免误判）"
+fi
+assert_eq "34d 2.1 默认路径 → 伴生锁（同行同目录、basename + .machine）" \
+  "$(gate_lock_companion_path "$P287D_DEF")" "${TMPDIR:-/tmp}/.teamsmith-smoke.lock.machine"
+P287D_PRIV="$P287D/priv.lock"
+P287D_PRIV_DEF="$(TEAM_SMOKE_LOCK="$P287D_PRIV"; export TEAM_SMOKE_LOCK; gate_lock_default_path)"
+assert_eq "34d 2.1 私有 TEAM_SMOKE_LOCK 形状 → 默认路径取它" "$P287D_PRIV_DEF" "$P287D_PRIV"
+assert_eq "34d 2.1 私有 TEAM_SMOKE_LOCK 形状 → 伴生锁推导" \
+  "$(gate_lock_companion_path "$P287D_PRIV")" "$P287D/.priv.lock.machine"
+case "$(gate_lock_companion_path "/x/y.lock")" in
+  /*/.*.machine) ok "34d 2.1 伴生锁名点开头（事故那条平铺 glob 够不着）" ;;
+  *) bad "34d 2.1 伴生锁名不是点开头：$(gate_lock_companion_path "/x/y.lock")" ;;
+esac
 # 每个场景一个**短**私有 TMPDIR（临时根顶层）：嵌套运行要绑 tmux 私有 socket，路径有 AF_UNIX 上限
 p287d_td() { printf '%s/.teamsmith-p287d-%s-%s' "${TMPDIR:-/tmp}" "$1" "$$"; }
 p287d_run() { # <tmpdir> <日志> <选段> [<break 阶段>] [<wait>]
@@ -17319,6 +17368,11 @@ rm -rf "$P287PB" 2>/dev/null || true
 # 子套件凭**父进程 /proc 里的锁描述符**认祖辈。
 P287P="$(p287d_td pair)"; rm -rf "$P287P"; mkdir -p "$P287P"
 P287P_CMP="$(p287d_companion "$P287P")"
+# 2.4（P303 的留空项）：取锁时刷伴生锁 mtime（按 age 的清理器不该删活锁）——
+# 先把伴生锁的 mtime 拨到 2 小时前，取锁后断言 `mtime >= claimed`（前后各一次 stat -c %Y）。
+: > "$P287P_CMP"; touch -d '2 hours ago' "$P287P_CMP"
+P287P_MTIME0="$(stat -c %Y "$P287P_CMP" 2>/dev/null || printf '?')"
+P287P_CLAIMED="$(date +%s)"
 p287d_run "$P287P" "$P287D/pair.log" 3 "" & P287P_PID=$!
 P287P_SEEN=0
 for _i in $(seq 1 200); do
@@ -17328,9 +17382,15 @@ done
 unset _i
 if [ "$P287P_SEEN" = "1" ]; then
   cp "$P287P_CMP.holder" "$P287D/pair-holder.txt" 2>/dev/null || true
+  P287P_MTIME1="$(stat -c %Y "$P287P_CMP" 2>/dev/null || printf '?')"
 fi
 wait "$P287P_PID"; P287P_RC=$?
 assert_eq "34d⑥ 正常嵌套运行退出码 0" "$P287P_RC" "0"
+if [ -n "${P287P_MTIME1:-}" ] && [ "$P287P_MTIME1" != "?" ] && [ "$P287P_MTIME1" -ge "$P287P_CLAIMED" ]; then
+  ok "34d 2.4 取锁时刷了伴生锁 mtime（改动前 $P287P_MTIME0 → 取锁后 $P287P_MTIME1 ≥ claimed=$P287P_CLAIMED）"
+else
+  bad "34d 2.4 伴生锁 mtime 没被刷（改动前 $P287P_MTIME0 → 取锁后 ${P287P_MTIME1:-没读到}，claimed=$P287P_CLAIMED）"
+fi
 assert_has "$P287D/pair.log" "全量门禁互斥：持有 $P287P/teamsmith-smoke.lock（互斥在伴生锁 $P287P_CMP）" \
   "34d⑥ 自述两把锁的角色（发布路径 = 兼容声明，互斥在伴生锁）"
 assert_has "$P287D/pair.log" "本套是它跑的那一套，不再排队" "34d⑥ 子套件凭父进程的锁描述符认祖辈（不排队）"

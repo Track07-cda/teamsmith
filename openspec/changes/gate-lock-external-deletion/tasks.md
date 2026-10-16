@@ -44,11 +44,11 @@
 
 ## 1 命名与归属（规格 #A fixture's temp root resolves TMPDIR, carries an owned name, and is reclaimed）
 
-- [ ] 1.1 `scripts/lib/common.sh`：加 `team_project_ns()` —— 纯函数、不读配置、不依赖检出形状：
+- [x] 1.1 `scripts/lib/common.sh`：加 `team_project_ns()` —— 纯函数、不读配置、不依赖检出形状：
   `ns = <slug>-<hash8>`，slug 取 `TEAM_PROJECT`（有则用）否则主检出目录名，只保留 `[A-Za-z0-9_]`、截断 24；
   hash8 = 主检出 realpath 的 sha256 前 8 位；主检出优先 `git rev-parse --path-format=absolute --git-common-dir` 的父目录，
   git 不可用时退到 skill 自己的仓库根。断言三向：同项目两个 worktree 一致、第二个仓库不同、无 git 的检出不报错。
-  · 证据：（待填：三向输出）
+  · 证据（P305 按事实勾）：`34c` 新增**第三向**断言 —— 非 git 检出（slug 取目录名，`ns=nogit-<hash8>`）与 PATH 无 git（连 sha256 工具也没有 → 退 `nogit-00000000`）都 rc=0、stderr 干净、形状仍是 `<slug>-<hash8>`；与既有两向（同项目两 worktree 同 ns / 第二仓库不同 ns）同批跑绿。牙：同一探针指向一份让 `team_project_ns` 失败的暂存副本 → `rc=1 boom`。详见 P305 报告 §4.1 与 `smoke.sh` §34c
 - [x] 1.2 `tests/lib/tmp-root.sh`：根模板改 `"$base/${TMP_ROOT_FAMILY_PREFIX}${kind}-${ns}.XXXXXX"`；owner 标记与
   run 台账头各加 `ns=`；`tmp_root_path_ok` 与 `--self-test` 同步；自检加两条红侧（`--break=flat-name` 回到平铺名、
   `--break=no-ns` 丢 ns）——两条都必须让守门断言变红。 · 证据：P303 按事实勾：模板 `teamsmith-<kind>-<ns>.XXXXXX`（tmp-root.sh:178）、owner 标记与台账头带 `ns=`（:190 / :140）、`tmp_root_path_ok` 认 ns（:115）；P303 复跑 `lib/tmp-root.sh --self-test` ✓19 ✗0 rc=0，`--break=flat-name` ✓17 ✗2 rc=1（根名两条红）、`--break=no-ns` ✓17 ✗2 rc=1（标记/台账两条红）
@@ -68,15 +68,15 @@
 
 ## 2 伴生锁与兼容声明（规格 #The gate's lock is identified, and losing it stops the run loudly）
 
-- [ ] 2.1 `scripts/lib/gate-lock.sh`：加伴生路径推导（同行同目录、basename + `.machine`、**点开头**）与一个纯函数单测；
-  断言默认路径与私有 `TEAM_SMOKE_LOCK` 两种输入下的推导结果。 · 证据：（待填：两个输入的输出）
+- [x] 2.1 `scripts/lib/gate-lock.sh`：加伴生路径推导（同行同目录、basename + `.machine`、**点开头**）与一个纯函数单测；
+  断言默认路径与私有 `TEAM_SMOKE_LOCK` 两种输入下的推导结果。 · 证据（P305 按事实勾）：`34d` 2.1 五条断言 —— 默认路径 → `<TMPDIR>/.teamsmith-smoke.lock.machine`、私有 `TEAM_SMOKE_LOCK` 的两种推导、伴生名点开头；`--select 34,34b,34c,34d,0e` 全绿（✓314 ✗0）。详见 P305 报告 §4.2
 - [x] 2.2 `tests/smoke.sh`：取锁顺序固定为**发布路径 → 伴生锁**；发布路径不存在则创建（旧写入者也是这么建的）；
   写清并实现 **no-unlink**：持有者绝不删除或改名自己持有的锁文件（收尾只删自己的**记录**）。
   反侧断言：正常跑完两把锁文件都还在、件内 inode 未变。 · 证据：P303 按事实勾：顺序 = 发布路径（fd 8）→ 伴生锁（fd 9）（gate-lock.sh:141–159 `gate_lock_acquire_pair`，smoke.sh:480 起）；no-unlink：收尾只删自己的 `<companion>.holder` / `<companion>.runs/$$.run`（smoke.sh:1286–1298），两把锁文件不删；反侧断言 34d④（伴生锁 inode 前后相同 + 发布路径仍在）与 34d⑥（跑完两把锁文件都在）；P303 复跑 34d ✓101 ✗0
 - [x] 2.3 `cmd-review.sh` 的取锁/等待改走同一实现（顺序、兼容声明、记录位置全部一致）。
   · 证据：P303 按事实勾：cmd-review.sh:1075–1100 起走同一套（`gate_lock_companion_path`、记录位置、同一顺序、`lock_identity/lock_dev_ino`、入场检查、跑完复核）；34d⑦ 真跑一次 `team review`（门禁运行中删锁 → rc≠0、判定 FAIL、`gate mutex broken` 旗标、排队三键与 `team_review_verdict` 不变）；flip-p287-lock leg3 把复核改成 `if false` → 同现场判 PASS（红侧），P303 复跑该腿三条断言 ✓
-- [ ] 2.4 取锁时刷伴生锁 mtime（按 age 的临时清理器不该删活锁）；断言 `mtime >= claimed`。
-  · 证据：（待填：前后 `stat -c %Y` 输出）
+- [x] 2.4 取锁时刷伴生锁 mtime（按 age 的临时清理器不该删活锁）；断言 `mtime >= claimed`。
+  · 证据（P305 按事实勾）：`34d` 2.4 断言 `mtime >= claimed` —— 实测 `改动前 1792144628 → 取锁后 1792151830 ≥ claimed=1792151828`；两层牙：① 真变异（删掉 `touch "$SMOKE_LOCK" "$SMOKE_LOCK_COMPANION"` 一行）→ `--select 34d` rc=1、2.4 断言红；② 合成输入演示 `假 → 真`。详见 P305 报告 §4.3
 - [x] 2.5 发布路径丢失的处置（只点名 + 记录、**不停跑**）与其文案（与伴生锁的两条文案可区分）；夹具：只删发布路径 →
   运行继续、有结果行、证据里有那一节；反向：删伴生锁 → 停跑。 · 证据：P303 按事实勾：两条文案可区分 —— 发布路径 `发布锁路径（兼容声明）丢失 …（互斥仍在伴生锁上，只记录不停跑）`（smoke.sh:1176）与伴生锁 `已不在 / 已被替换`（:1146–1149）；34d⑤b（只删发布路径 → rc=0、有结果行、证据文件里有那一节）与 34d①（删伴生锁 → exit 2、无结果行），P303 复跑 34d ✓101 ✗0
 
@@ -98,9 +98,9 @@
 
 ## 4 等待者与入场检查
 
-- [ ] 4.1 等待者改**有界轮询**（短 `flock -n`），每轮重新解析路径；发现「我等的那把变了」就印一行（两个身份）再继续等；
+- [x] 4.1 等待者改**有界轮询**（短 `flock -n`），每轮重新解析路径；发现「我等的那把变了」就印一行（两个身份）再继续等；
   P281 的上限算式、marker 语义（P66）、超限/加锁失败的文案与退出码**一字不改**（逐字对照 diff）。
-  · 证据：（待填：diff + 等待者日志原文）
+  · 证据（P305 按事实勾）：**冻结集合逐字对照** —— `gate_lock_cap` 与 `team_review_verdict` 函数体 diff **为空**；排队行/超限行两条 `printf` 逐字相同（只差行首缩进）；整份 `smoke.sh` 的 exit 码集合逐字相同（`0 1 2 3 5 7 64 90 124 130`）、锁/排队路径上 `{1,2}` 相同；P66 的 marker 语义由 `34b①` 四条断言持续钉住（本轮 ✓）。V53 §2.2 的例外（旧 `flock --close` 包装器两条文案随包装器消失，`grep` 命中 0/0）与**现行为**现场（外部占锁 → 超限 rc=2 + 一行点名；锁文件建不了 → `no_lock=1` 可见降级 rc=0）逐字记在 P305 报告 §3
 - [x] 4.2 入场检查：拿到锁后读 `<companion>.runs/*`，活的 `top` 登记记着**另一个身份** ⇒ 点名那个运行 + 席位 + 工作树 +
   两个身份 + 「互斥已断」+ **不跑套件**（无结果行、marker 不在、退出码 2）；`--break=no-entry-check` → 第二套照跑 → 断言红。
   · 证据：P303 按事实勾：入场检查 `gate_lock_entry_conflict`（gate-lock.sh:211–231）读 `<companion>.holder` + `<companion>.runs/*`，活 top 登记身份不同 ⇒ 点名运行/席位/工作树 + 两个身份 + 「互斥已断」+ 不跑套件 + exit 2（smoke.sh:576–590；marker 由构造保证不在 —— 它写在入场检查**之后**）；34d③ 绿侧 + `--break=no-entry-check` shadow（第二套照跑 rc=0）；P303 复跑 34d ✓101 ✗0
@@ -114,12 +114,12 @@
   作用域扩到**夹具与产品自己的临时模板**（跳过扫描器自身与 `$TMP/…` 嵌套根）；finding 仍 `<file>:<line>`、退出码 1；
   红侧两份副本：一份写死 `/tmp`（既有形状），一份保留家族前缀但丢 ns；还原后绿（并打印检查了多少个模板）。
   · 证据：P303 按事实勾：规则 = 直接落在解析后临时根上的每个 mktemp 模板「点开头或带 ns」、根还要在 owned 家族里（tmp-hygiene.sh:616–697），作用域整棵 skill 树、跳过自身与嵌套根；P303 复跑 `--lint` → 检查了 32 个模板、rc=0；`--self-test` ⑦ 三条红侧（写死 /tmp、家族前缀在但丢 ns、平铺每运行模板）各 rc=1 并点名 `file:line`；两份素材在 tests/fixtures/p287/{lint-hardcoded,lint-no-ns}.sh.in
-- [ ] 5.2 `tmp-hygiene.sh`：`--status` 加 ns 列、把**锁对**按角色报出（运行互斥 / 兼容声明 / 运行注册）、
+- [x] 5.2 `tmp-hygiene.sh`：`--status` 加 ns 列、把**锁对**按角色报出（运行互斥 / 兼容声明 / 运行注册）、
   历史平铺根标 `legacy`；`--sweep` 对这三样一个都不碰（夹具：三样 + 一个陈旧平铺根，收完只剩根被回收）。
-  · 证据：（待填：`--status`/`--sweep --age 0` 输出尾 + 收完后 `ls`）
-- [ ] 5.3 `references/protocol.md` §9b-2：两把锁的角色与顺序、no-unlink 纪律、**安全清理入口**
+  · 证据（P305 按事实勾）：`--status` 把锁对按角色报出（`[machine 运行互斥]` / `[published 兼容声明]` / `[records 运行注册]`），并对**历史平铺根**在归属行追加 `legacy（P287 之前的平铺名，没有 ns）`；现场：陈旧平铺根 + 锁对三样 + 两个 `.holder` → `--sweep --age 0` 的清单只有那一项 `[reclaim]`，收完 `ls -a` 里锁对三样全在、平铺根没了。守卫：自检 ① 两条断言（平铺根必须带 / 带 ns 的根不许带）+ ⑥ 扩成「三样 + 一个陈旧平铺根，收完只剩根被回收」，`--break=lock` 红侧会让 ⑥ 变红。详见 P305 报告 §5
+- [x] 5.3 `references/protocol.md` §9b-2：两把锁的角色与顺序、no-unlink 纪律、**安全清理入口**
   （`tmp-hygiene.sh --sweep`，或只删自己项目的 `teamsmith-<kind>-<ns>.*`；绝不写针对共享前缀的 `rm -rf`）、
-  过渡期口径（旧写入者只经发布路径串行；它被删时只印不停）。 · 证据：（待填：段落原文）
+  过渡期口径（旧写入者只经发布路径串行；它被删时只印不停）。 · 证据（P305 按事实勾）：`references/protocol.md` §9b-2 三处 —— ① 根模板改 `teamsmith-<kind>-<ns>.XXXXXX`（含 ns 推导、标记/台账/`--status`、`legacy` 标注）；② 安全清理入口写全（`tmp-hygiene.sh --status` → `--sweep`，或只删自己项目的 `teamsmith-<kind>-<ns>.*`；**绝不**对共享前缀写 `rm -rf`，并点名 2026-10-15 事故的形状）；③ perf 锁的记录位置改 `<companion>.holder`（落地如此，原文写 `<lock>.holder`）。段落原文见提交 diff 与 P305 报告 §5
 
 ## 6 红侧与回归、段账
 
@@ -133,11 +133,12 @@
 
 ## 7 验收与交付
 
-- [ ] 7.1 跑齐 proposal「Acceptance」的全部命令（含投影自证），报告贴真实命令、rc 与输出尾。
-  · 证据：（待填）
-- [ ] 7.2 写报告 `docs/team/reports/<ID>-<agent>.md`：逐条命令/rc/输出尾；第 6.1 节的红/绿原始输出就是翻转证据；
+- [x] 7.1 跑齐 proposal「Acceptance」的全部命令（含投影自证），报告贴真实命令、rc 与输出尾。
+  · 证据（P305 按事实勾）：P305 报告 §6 的表（命令 / rc / 输出尾）—— 全绿项：flip-p287-lock 绿侧、flip-p287-name、`--select 34,34b,34c,34d,0e`（✓314 ✗0）、`tmp-hygiene.sh --self-test`/`--lint`、`section-select.sh --check`、`openspec validate --all --strict`（21/0）、`ledger-ban`（hits=0）、投影自证（archive + validate → 20/0）；按预期非零项：三条夹具红侧 rc=1、外部占锁超限 rc=2；`spec-refs.sh --check` rc=1 是**既有**（改动前基线 `238c4c6a` 与分支基点 `3029115d` 同一条、独立克隆复现）。**全量**另跑一次（`bash skills/teamsmith/tests/smoke.sh`，rc=2）：`0i` 与 `10 · review` 两个红灯，都在**改动前的基线** `238c4c6a`（独立克隆）上同形同因复现 —— 与本任务无关（细节见报告 §6.4）；本任务改动的段在选段与全量里都跑到且全绿。
+- [x] 7.2 写报告 `docs/team/reports/<ID>-<agent>.md`：逐条命令/rc/输出尾；第 6.1 节的红/绿原始输出就是翻转证据；
   写明未测项与「诚实边界」（design §10：无不可删的锁、`source=path` 的窗口、升级过渡期、`TMPDIR` 覆盖的残留、
   守卫不能证明是谁换的/有人读过那行、容器临时根、无 git 检出的 ns 各自为政、历史 111 个平铺残留不清理）。
+  · 证据（P305 按事实勾）：`docs/team/reports/P305-dev-bob.md` —— 结论先行；§6 逐条命令/rc/输出尾；§2 的红/绿原始输出即翻转证据；§8 逐条对 design §10 的**八条**诚实边界；§6.2 点名未跑的 126 段。
 - [x] 7.3 小步提交（Conventional Commits + task ID + `Agent:` trailer）；本仓库 local 模式：分支留本地，
   `team notify pm` 一行交付说明。
  · 证据：P303 按事实勾：分支提交走 Conventional Commits（`feat(P288)` / `fix(P288)` / `docs(P288)`）+ `Agent: dev-bob` trailer（03fe46d7、2115b230、18e971d0、ad928a70）；local 模式不留远端，分支留在本地（`task/P288-gate-lock-external-deletion-apply` 仍在），PM 复验后 squash 落地 6f1ed69d；交付通知的可见后果 = PM 冻结并派 V53（d3806d1e）→ V53 两轮记录

@@ -2,7 +2,9 @@
 # flip-p287-lock.sh — P287「身份面」的翻转夹具（change: gate-lock-external-deletion）
 #
 #   bash skills/teamsmith/tests/flip-p287-lock.sh [--keep]
-#   TEAM_FLIP_PRE287=<rev> bash skills/teamsmith/tests/flip-p287-lock.sh   # 指定「改动前」的 revision
+#   TEAM_FLIP_PRE287=<rev> bash skills/teamsmith/tests/flip-p287-lock.sh   # 直接指定「改动前」的 revision
+#   TEAM_FLIP_PRE287_LANDED=<rev> …   # 改「记录在案的落地提交」（默认 6f1ed69d = P288 的落地提交）
+#   TEAM_FLIP_BREAK=pipefail-probe|main-baseline bash … --self-test    # leg2 的两条红侧（见下）
 #
 # 三条腿（全部用**私有 `TEAM_SMOKE_LOCK` + 私有 `TMPDIR` + TEAM_SMOKE_FIXTURE=1`**，绝不碰机器锁）：
 #   leg0 green ：持有者（真入口）在跑，从外面 `rm` 伴生锁 → 有界时间内**一行**点名「已不在」+ 证据文件
@@ -10,8 +12,14 @@
 #   leg1 shadow：同一条腿换成被测树自己的翻转开关 `TEAM_SMOKE_BREAK=no-lock-guard`（只在
 #                TEAM_SMOKE_FIXTURE=1 下生效）→ 同一场景**不点名、不停跑**（有结果行、退出码 0）
 #                —— 这正是「改动前形状」，证明 leg0 的绿不是橡皮章。
-#   leg2 pre   ：改动前的树（自动找 `main` 上第一个没有 `gate_lock_companion_path` 的提交）上做同一件事
-#                → 同样不点名、不停跑（那时互斥在发布路径上，删伴生锁无从谈起）。
+#   leg2 pre   ：改动前的树（从**记录在案的落地提交** 6f1ed69d 往回找第一个没有 `gate_lock_companion_path`
+#                的提交 —— 不是从 `main` 的移动 tip）上做同一件事 → 同样不点名、不停跑（那时互斥在
+#                发布路径上，删伴生锁无从谈起）。选中之后还要断言那棵树**确实**是改动前。
+#   leg2 红侧：① `TEAM_FLIP_BREAK=old-probe` —— 旧写法（`git show … | grep -q` 在 `set -o pipefail` 下
+#                命中即退 → git 吃 SIGPIPE → 管道非 0 ⇒ 被当成「不含伴生锁」）的**判定**：把第一个候选
+#                当成改动前。这条红侧同时**测量**旧写法那一步的管道 rc（它是竞态：见下面的说明）；
+#                ② `TEAM_FLIP_BREAK=main-baseline` —— 基线指回 `main` 的 tip 直接当结论（旧形状不回溯；
+#                合并前它恰好「真空通过」）。两条都必须让这条腿红。
 #
 # 判绿规则：三条腿都按预期。全绿 exit 0；任何一条没按预期 → exit 1。只写自己的临时根。
 set -uo pipefail
@@ -186,23 +194,98 @@ if [ "$RC1" = "0" ]; then line_ok "leg1：shadow 退出码 0"; else line_bad "le
 assert_grep "$ROOT/leg1.log" '夹具红侧.*no-lock-guard' "leg1：大声说明守卫被关掉（夹具开关不静默）"
 
 note "== leg2 pre：改动前的树上做同一件事（那时没有伴生锁）→ 同样不点名、不停跑 =="
+# 探针（P303 的 F1）：**绝不**写成 `git show … | grep -q` —— 本脚本 `set -o pipefail`，grep 命中即退
+# → git 吃 SIGPIPE（141）→ 管道整体非 0 → `!` 取反后把**含**变更的树当成「不含」。同族的坑写在
+# flip-m33.sh:106；这里的写法是先把 blob 落盘、再 grep 文件（读完整流，不早退）。
+p287l_blob_of() { # <rev> → 打印落到 $ROOT 里的 blob 路径；1 = 取不到；2 = 那棵树里没这个文件
+  local rev="$1" blob="$ROOT/.leg2-probe.blob"
+  [ -n "$REPO_ROOT" ] || return 1
+  git -C "$REPO_ROOT" rev-parse --verify -q "$rev" >/dev/null 2>&1 || return 1
+  git -C "$REPO_ROOT" cat-file -e "$rev:skills/teamsmith/scripts/lib/gate-lock.sh" 2>/dev/null || return 2
+  git -C "$REPO_ROOT" show "$rev:skills/teamsmith/scripts/lib/gate-lock.sh" >"$blob" 2>/dev/null || return 1
+  printf '%s\n' "$blob"
+}
+p287l_has_companion() { # <rev> → 0 = 那棵树**有**伴生锁实现
+  local b; b="$(p287l_blob_of "$1")" || return 1
+  grep -q 'gate_lock_companion_path' "$b"
+}
+p287l_lacks_companion() { # <rev> → 0 = 那棵树没有伴生锁实现（文件根本不存在也算）
+  local b; b="$(p287l_blob_of "$1")" || { [ "$?" = 2 ] && return 0; return 1; }
+  if grep -q 'gate_lock_companion_path' "$b"; then return 1; fi
+  return 0
+}
+p287l_old_shape_rc() { # <rev> → 旧写法那一步的管道 rc（`git show … | grep -q`，本脚本 set -o pipefail）
+  local rev="$1" rc=0
+  git -C "$REPO_ROOT" show "$rev:skills/teamsmith/scripts/lib/gate-lock.sh" 2>/dev/null | grep -q 'gate_lock_companion_path'; rc=$?
+  printf '%s\n' "$rc"
+}
+# 红侧①：旧写法的**判定**。旧代码把管道非 0 一律当成「不含伴生锁」；而早退的管道在**命中**时也会
+# 因为 SIGPIPE 非 0 —— 于是它常常在**第一个候选**上就停住（P303 的 F1）。那一步是竞态（同一个表达式
+# 独立测量 60/60 次非 0，而在夹具里跑的那一次是 0：谁先被调度决定 git 有没有把 blob 写完），所以这条
+# 红侧复刻的是**判定语义**（非 0 ⇒ 当成改动前 ⇒ 取第一个候选），并把实测到的 rc 打出来当证据。
+p287l_old_shape_verdict() { # <rev>
+  P287L_OLD_RC="$(p287l_old_shape_rc "$1")"
+  return 0
+}
 PRE="${TEAM_FLIP_PRE287:-}"
+# 改动前的落点不是「main 的移动 tip」，而是一个**记录在案**的基线：本 change 的落地提交（P288 = 6f1ed69d，
+# tasks.md §0.1 与 P303 报告都记着它）。从它逐级往回，第一个不含伴生锁实现的树就是改动前 —— 合并前
+# 「main 恰好不含变更」那种真空通过不再可能：合并后 main 的 tip 含变更，只有真的回溯才能找到那棵树。
+P287L_LANDED="${TEAM_FLIP_PRE287_LANDED:-6f1ed69d}"
 if [ -z "$PRE" ] && [ -n "$REPO_ROOT" ]; then
-  for i in $(seq 0 25); do
-    rev="main$( [ "$i" = 0 ] || printf '~%s' "$i" )"
-    git -C "$REPO_ROOT" rev-parse --verify -q "$rev" >/dev/null 2>&1 || break
-    if ! git -C "$REPO_ROOT" show "$rev:skills/teamsmith/scripts/lib/gate-lock.sh" 2>/dev/null | grep -q 'gate_lock_companion_path'; then
-      PRE="$rev"; break
+  base=""; use_probe=p287l_lacks_companion; no_walk=0
+  if git -C "$REPO_ROOT" rev-parse --verify -q "$P287L_LANDED" >/dev/null 2>&1; then
+    base="$P287L_LANDED"
+  elif git -C "$REPO_ROOT" rev-parse --verify -q main >/dev/null 2>&1; then
+    base="main"
+    note "  · leg2：落地提交 $P287L_LANDED 不在这个仓库里（历史改写/浅克隆？）→ 退回从 main 往回找"
+  fi
+  case "${TEAM_FLIP_BREAK:-}" in
+    old-probe)
+      use_probe=p287l_old_shape_verdict
+      P287L_RACE_N=0
+      for _t in $(seq 1 20); do [ "$(p287l_old_shape_rc "$base")" != "0" ] && P287L_RACE_N=$((P287L_RACE_N + 1)); done
+      note "  · leg2 红侧①：旧写法（git show … | grep -q + pipefail）的判定 = 管道非 0 ⇒ 当成改动前；量 20 次，$P287L_RACE_N 次非 0（竞态：SIGPIPE）" ;;
+    main-baseline)
+      base="main"; no_walk=1
+      note "  · leg2 红侧②：基线指回 main（旧形状：起点 tip 直接当结论，不回溯）" ;;
+  esac
+  if [ -n "$base" ]; then
+    if [ "$no_walk" = "1" ]; then
+      PRE="$base"
+    else
+      for i in $(seq 0 40); do
+        rev="$base$( [ "$i" = 0 ] || printf '~%s' "$i" )"
+        "$use_probe" "$rev" || continue   # 红侧①恒真：非 0 的判定 ⇒ 第一个候选即结论
+        PRE="$rev"
+        [ "$use_probe" = "p287l_old_shape_verdict" ] && note "  · leg2 红侧①：旧写法那一步在 $rev 上的管道 rc=${P287L_OLD_RC:-?}（非 0 ⇒ 旧写法把它当成改动前）"
+        break
+      done
     fi
-  done
+  fi
+fi
+# 选中的那棵树必须**确实**是改动前（这条断言就是上面两条红侧能变红的原因）
+if [ -n "$PRE" ] && p287l_has_companion "$PRE"; then
+  line_bad "leg2：选中的树 $PRE 里**有**伴生锁实现 —— 它不是改动前的树（基线/探测指错了）"
+  PRE=""
 fi
 if [ -z "$PRE" ]; then
-  note "  · leg2 SKIP（找不到「改动前」的 revision —— 用 TEAM_FLIP_PRE287=<rev> 指定；这条腿不参与判绿）"
+  note "  · leg2 停止（没有可用的「改动前」revision —— 用 TEAM_FLIP_PRE287=<rev> 指定；上面若有红，就是它）"
 else
   PRESKILL="$ROOT/pre-tree"
   mkdir -p "$PRESKILL"
   if git -C "$REPO_ROOT" archive "$PRE" skills/teamsmith | tar -x -C "$PRESKILL" 2>/dev/null; then
     line_ok "leg2：改动前的树取自 $PRE（$(git -C "$REPO_ROOT" log -1 --format=%h' '%s "$PRE" | cut -c1-60)）"
+    if ! p287l_has_companion "$PRE"; then
+      line_ok "leg2：那棵树（$PRE）里确实没有 gate_lock_companion_path —— 记录在案的落地提交是 $P287L_LANDED"
+    else
+      line_bad "leg2：选中树的后置核对失败（$PRE 含伴生锁实现）"
+    fi
+    if grep -q 'gate_lock_companion_path' "$PRESKILL/skills/teamsmith/scripts/lib/gate-lock.sh" 2>/dev/null; then
+      line_bad "leg2：取出的树里**有**伴生锁实现 —— 取错了树（$PRESKILL）"
+    else
+      line_ok "leg2：取出的树的 gate-lock.sh 里没有伴生锁实现（改动前的形状）"
+    fi
     p287l_run "$PRESKILL/skills/teamsmith" "$(p287l_scene 2)" "$ROOT/leg2.log" rm "" "$ROOT/leg2.rc"
     RC2="$(cat "$ROOT/leg2.rc")"
     if grep -aq '伴生锁（运行互斥）' "$ROOT/leg2.log"; then

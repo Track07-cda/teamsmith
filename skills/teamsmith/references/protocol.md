@@ -783,7 +783,8 @@ one core), the premise factors (`0.75` for the five-sample assembly median, `0.2
 and the sampled pane CPU, `TEAM_PANEL_CPU_PREMISE_FACTOR`) and the median-of-three/five rules are unchanged, every
 sample is printed, and above the premise the judgement **skips visibly** (exit `4` for a skip, `2` for a red, `0`
 only when every judgement ran green) rather than reporting a red the machine owes. The suite takes its **own** lock
-(`TEAM_PERF_LOCK`, `TEAM_PERF_LOCK_WAIT`, holder in `<lock>.holder`) and **never** takes `TEAM_SMOKE_LOCK`: it does
+(`TEAM_PERF_LOCK`, `TEAM_PERF_LOCK_WAIT`, holder in `<companion>.holder`, where `<companion>` is
+`<same dir>/.<basename>.machine` — the same pair the gate uses, so a perf lock survives the same incident) and **never** takes `TEAM_SMOKE_LOCK`: it does
 one read-only non-blocking probe of the gate lock and prints the holder when the correctness gate is running, but
 it never queues behind it. The gate's lock accounting (`limit=Ns queued=Ns ran=Ns`), the fixture-knob rule (those
 `TEAM_*` knobs only work under `TEAM_SMOKE_FIXTURE=1`, and in the real path they are ignored and printed) and the
@@ -795,11 +796,18 @@ review verdict. The contracts live in the specs (`verification#The correctness g
 
 The gate also reports **its own temp-root usage**: one line at the start and one with the result summary (also on
 failure) name the run's root, its size and its file count, and the run asserts that every root it created is gone
-unless it declared one kept. Fixtures get their root from `${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX` through the
+unless it declared one kept. Fixtures get their root from `${TMPDIR:-/tmp}/teamsmith-<kind>-<ns>.XXXXXX`
+(`ns = <slug>-<hash8>`, derived from the main checkout, so every worktree of one project shares it and two projects
+cannot collide; the helper records it in the root's marker and the run ledger, `tmp-hygiene.sh --status` shows it,
+and roots that predate the namespace are listed as `legacy`) through the
 single owner helper `tests/lib/tmp-root.sh` (owner marker inside, run ledger outside, reclaim on `EXIT`/`INT`/`TERM`,
 `TEAM_TMP_KEEP=1` to keep); residual roots are reclaimed by an **operator** action,
 `bash skills/teamsmith/tests/tmp-hygiene.sh --status` then `--sweep` (it proves a root is unoccupied before
-deleting, and refuses with nothing deleted when it cannot). The gate never sweeps: a fixture another agent started
+deleting, and refuses with nothing deleted when it cannot), or by deleting only this project's own
+`teamsmith-<kind>-<ns>.*` entries. A pattern against the shared prefix — `rm -rf ${TMPDIR:-/tmp}/teamsmith-*` — is
+forbidden: that shape is what deleted another project's running gate's lock on 2026-10-15, and a shared prefix is
+not ownership. Everything a run creates directly under the temp root is either dot-prefixed (ledger, pid, evidence)
+or carries the ns (root, queue marker, filter copy). The gate never sweeps: a fixture another agent started
 by hand is not in the gate lock, so pattern-deleting in the shared temp filesystem is the D37 family. `team doctor`
 prints the temp root's headroom (free/total bytes and inodes, warning only) so a full tmpfs is visible before it
 turns into a red a fixture cannot explain.

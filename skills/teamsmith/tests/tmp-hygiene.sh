@@ -513,6 +513,9 @@ cmd_status() {
 
   local roots=0 reclaimable=0 occupied=0 unowned=0
   local e b kb files age occ
+  # P287：历史平铺根（名字里没有本项目的 ns）—— P287 之前创建的根一律长这样；只标出来（一行细节），
+  # 不改候选判据，也不新增清扫规则。ns 只问一次（它要问 git），不是每个根一次。
+  local hy_self_ns; hy_self_ns="$(_hy_ns)"
   printf '\n根（%s 下的 owned 家族；只有这些是 --sweep 候选）：\n' "$BASE"
   for e in "$BASE"/*/; do
     [ -d "$e" ] || continue
@@ -526,10 +529,13 @@ cmd_status() {
     esac
     roots=$((roots + 1))
     kb="$(_dir_kb "$e")"; files="$(_dir_files "$e")"; age="$(_age_minutes "$e" 2>/dev/null || printf '?')"
-    local pid start kind run owner occ_state ns
+    local pid start kind run owner occ_state ns legacy=""
     pid="$(_marker_get "$e" pid || true)"; start="$(_marker_get "$e" start || true)"
     kind="$(_marker_get "$e" kind || true)"; run="$(_marker_get "$e" run || true)"
     ns="$(_marker_get "$e" ns || true)"
+    case "$b" in
+      teamsmith-*) case "$b" in *"-$hy_self_ns."*) ;; *) legacy=" legacy（P287 之前的平铺名，没有 ns）" ;; esac ;;
+    esac
     if [ -n "$pid" ]; then
       if _proc_alive "$pid" "$start"; then owner="pid=$pid 存活"; else owner="pid=$pid 已退出"; fi
       owner="$owner${kind:+ kind=$kind}${ns:+ ns=$ns}"
@@ -537,6 +543,7 @@ cmd_status() {
     else
       owner="无 owner 标记（不是经助手创建的根）"
     fi
+    owner="$owner$legacy"
     if [ "$mech" = "none" ]; then occ="无法证明（既无 /proc 也无 lsof）"
     else
       occ="$(_occupants_of "$e")"
@@ -1026,6 +1033,24 @@ _hy_selftest() {
   assert_out "$out" "[machine     运行互斥]" "status 按角色报出伴生锁（运行互斥）"
   assert_out "$out" "[published   兼容声明]" "status 按角色报出发布路径（兼容声明）"
   assert_out "$out" "[records     运行注册]" "status 按角色报出运行注册目录"
+  # P287：历史平铺根（名字里没有 ns）标 legacy；带 ns 的根不标（一行细节，不改候选判据）
+  # 注意（第一版没牙，被变异测试抓到）：fixture 目录名里**不能**出现 legacy 这个词，断言也不能只 grep
+  # `legacy` —— 否则命中的是**路径本身**，把标注去掉后断言仍然绿。所以目录叫 oldflat，断言只认标注文本。
+  local lgc="$D/teamsmith-oldflat.L1" curn="$D/teamsmith-selftest-$(_hy_ns).L2"
+  local lg_label='legacy（P287 之前的平铺名，没有 ns）'
+  mkdir -p "$lgc" "$curn"; touch -d '2 hours ago' "$lgc" "$curn"
+  local o_legacy; o_legacy="$(TMPDIR="$D" _hy "" --status 2>&1)"
+  if printf '%s\n' "$o_legacy" | grep -A1 -F "  $lgc" | grep -qF "$lg_label"; then
+    ok "P287 status：历史平铺根标 legacy"
+  else
+    bad "P287 status：历史平铺根没有 legacy 标注（$(printf '%s' "$o_legacy" | grep -A1 -F "$lgc" | tr '\n' '|')）"
+  fi
+  if printf '%s\n' "$o_legacy" | grep -A1 -F "  $curn" | grep -qF "$lg_label"; then
+    bad "P287 status：带 ns 的根也被标了 legacy（不许）"
+  else
+    ok "P287 status：带 ns 的根不标 legacy"
+  fi
+  rm -rf -- "$lgc" "$curn"
   assert_out "$o_status" "$D/.teamsmith-smoke-diag.A1.log" "status 列出本项目的点开头诊断（不是根）"
   case "$o_status" in *"$D/.foreign-dot.hm"*) bad "status 列了别家的点文件（不是我们的家族，不该列）" ;; *) ok "status 不列别家的点文件（.foreign-dot.hm 不在输出里）" ;; esac
 
@@ -1070,16 +1095,25 @@ _hy_selftest() {
     || bad "外来名字被动了（候选规则失效）"
   rm -rf -- "$fc" "$fm" "$fdot"
 
-  # ── ⑥ lock：门禁锁文件与 .holder 只列不删；同名的陈旧目录照收
+  # ── ⑥ lock：**锁对三样**（发布路径 + 伴生锁 + 运行注册）与两边的 .holder 只列不删；
+  #    同名的陈旧平铺根照收（tick 5.2 的夹具：三样 + 一个陈旧平铺根，收完只剩根被回收）。
   local lockd="$D/teamsmith-smoke.G8"; mkdir -p "$lockd"; touch -d '2 hours ago' "$lockd"
   printf '' >"$D/teamsmith-smoke.lock"; printf 'holder' >"$D/teamsmith-smoke.lock.holder"
+  printf '' >"$D/.teamsmith-smoke.lock.machine"
+  printf 'holder' >"$D/.teamsmith-smoke.lock.machine.holder"
+  mkdir -p "$D/.teamsmith-smoke.lock.machine.runs"
+  printf 'x' >"$D/.teamsmith-smoke.lock.machine.runs/1.run"
   out="$(TMPDIR="$D" _hy "$(_hyflip lock)" --sweep --age 0 2>&1)"
-  if [ -f "$D/teamsmith-smoke.lock" ] && [ -f "$D/teamsmith-smoke.lock.holder" ] && [ ! -d "$lockd" ]; then
-    ok "锁文件与 .holder 存活，只有陈旧目录被回收"
+  if [ -f "$D/teamsmith-smoke.lock" ] && [ -f "$D/teamsmith-smoke.lock.holder" ] \
+     && [ -f "$D/.teamsmith-smoke.lock.machine" ] && [ -f "$D/.teamsmith-smoke.lock.machine.holder" ] \
+     && [ -f "$D/.teamsmith-smoke.lock.machine.runs/1.run" ] && [ ! -d "$lockd" ]; then
+    ok "锁对三样（发布路径 / 伴生锁 / 运行注册）与两个 .holder 全存活，只有陈旧平铺根被回收"
   else
-    bad "锁保护失效（lock=$([ -f "$D/teamsmith-smoke.lock" ] && echo 在 || echo 没了) dir=$([ -d "$lockd" ] && echo 在 || echo 没了)）"
+    bad "锁保护失效（pub=$([ -f "$D/teamsmith-smoke.lock" ] && echo 在 || echo 没了) comp=$([ -f "$D/.teamsmith-smoke.lock.machine" ] && echo 在 || echo 没了) runs=$([ -f "$D/.teamsmith-smoke.lock.machine.runs/1.run" ] && echo 在 || echo 没了) dir=$([ -d "$lockd" ] && echo 在 || echo 没了)）"
   fi
-  rm -f "$D/teamsmith-smoke.lock" "$D/teamsmith-smoke.lock.holder"
+  rm -f "$D/teamsmith-smoke.lock" "$D/teamsmith-smoke.lock.holder" \
+        "$D/.teamsmith-smoke.lock.machine" "$D/.teamsmith-smoke.lock.machine.holder"
+  rm -rf "$D/.teamsmith-smoke.lock.machine.runs"
 
   # ── ⑦ lint：绿侧干净 / 三条红侧各点名 file:line（写死 /tmp、丢 ns、既非点开头也非 ns）
   local ld="$D/lint-src"; mkdir -p "$ld"
