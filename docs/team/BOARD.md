@@ -437,7 +437,7 @@
 | P271 | Tick the startup-self-heal checklist by fact (archive prerequisite) | dev-bob | - | - | done |
 | P272 | Help surface: locale-independent layout, accurate contract text, reachability assertion | verify | - | - | done |
 | P273 | Tick the panel-plain-language checklist by fact (archive prerequisite) | dev3 | - | - | done |
-| P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | wip |
+| P274 | tmux identity scope: apply-1 (write side + audit) | dev2 | - | - | done |
 | P275 | Startup self-heal: the docs stop claiming the manual route is the only one | dev-bob | - | - | done |
 | V39 | Gate slimming: independent verification of the deletion round | verify | - | - | done |
 | P276 | Orphan-process visibility: apply (census, reap by pid, no pattern) | dev3 | - | - | done |
@@ -464,7 +464,7 @@
 | P291 | A formal way for the PM to end a seat's runaway turn (with audit and a reason it can read) | dev-bob | - | - | done |
 | P292 | Seat turn interrupt: apply (proof chain, audit, reason delivery) | dev3 | - | - | wip |
 | P293 | Tick the writing-discipline checklist by evidence | verify | - | - | done |
-| V48 | Verify the tmux identity write side (own leak scene, both sides) | verify | - | - | wip |
+| V48 | Verify the tmux identity write side (own leak scene, both sides) | verify | - | - | done |
 
 ## 当前里程碑
 
