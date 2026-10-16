@@ -25,3 +25,11 @@ P292 收尾加的四样：① `help-surface.sh` 里 `interrupt` 的**claims 探�
 ## 交付
 
 `docs/team/reviews/V52.md`（抬头含 `判定: **PASS**` / `判定: **FAIL**`；逐条命令 + rc；你自己造的红侧原始输出；文档对拍结论单列一节；写明运行模型与 loadavg）；不改候选、不合并、不推送；结论通知 PM。
+
+## 第二轮定点复检（2026-10-16，两条 F 返修之后）
+
+受检 tip 见**冻结收据** `reviews/V52/freeze-receipt-round2.txt`（别照聊天里的哈希）。返修（作者报告见 `docs/team/reports/P292-dev3.md` 的返修轮次一节）：
+- **F1**：`help-surface.sh` 的 claims 探针补上**反向判据**（`changed ⊆ declared`：动了的面必须在声明里）+ `worktree` 面指纹扩到**含工作树内容**；
+- **F2**：`cmd-reap.sh` 的「它是活着的席位」拒绝**补一句指向 `team interrupt`**（与 `interrupt` 侧的 `team reap --orphans` 对称）。
+
+**请重点复检**：① 你上一轮那三个反例（删 `docs` 声明 / 多写未声明的 `config` 面 / 往工作树里写文件）现在**必须各自红并点名**；② `reap` 的活席位拒绝里**必须含那个指向**，把指向删掉必须红；③ 文档那句承诺（协议「每个拒绝都点名另一个入口」）现在**两侧都成立**——自己再去两个拒绝现场各跑一次；④ 不回退：`help-surface.sh --select claims` ✓ 全绿、`seat-interrupt.sh --all/--flip`、`smoke.sh --select 51c` 各跑一次贴结果；⑤ 计时类按 D192、容器里先 `mkdir -p` 再设 `TMPDIR`（D189）、`/tmp` 根数前后对比。
