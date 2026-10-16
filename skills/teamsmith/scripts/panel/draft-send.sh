@@ -33,7 +33,7 @@ if [ -z "$file" ] || [ ! -f "$file" ]; then
   exit 2
 fi
 
-log="$(mktemp "${TMPDIR:-/tmp}/panel-draft-send.XXXXXX")"
+log="$(mktemp "${TMPDIR:-/tmp}/.teamsmith-panel-draft-send.XXXXXX")"
 trap 'rm -f "$log"' EXIT
 
 TEAM_SKILL_DIR="${TEAM_SKILL_DIR:-$skill}"; export TEAM_SKILL_DIR

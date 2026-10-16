@@ -20,6 +20,14 @@
 
 SG_SECTION_GUARD_LIB=1
 
+# P287：ns（临时根名字里的项目命名空间）的唯一实现在 scripts/lib/common.sh —— 本库被 smoke 前导段
+# source（tmp-root.sh 已经带进来了），独立跑 --self-test 时自己补一次。
+if ! declare -F team_project_ns >/dev/null 2>&1; then
+  _sg_ns_lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/scripts/lib/common.sh"
+  [ -f "$_sg_ns_lib" ] && . "$_sg_ns_lib"
+  unset _sg_ns_lib
+fi
+
 # ---------------------------------------------------------------- 状态（全部有默认值：smoke 是 set -u）
 SG_ENABLED=0
 SG_ARMED=0
@@ -871,7 +879,7 @@ _sg_selftest() {
   st_ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
   st_bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
   local ST_ROOT
-  ST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-sg-selftest.XXXXXX" 2>/dev/null)" || {
+  ST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-sg-selftest-$(team_project_ns).XXXXXX" 2>/dev/null)" || {
     printf 'section-guard 自检：建不出临时根\n' >&2; return 3; }
   local pgid_before pgid_after
   pgid_before="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"

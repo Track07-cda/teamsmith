@@ -101,7 +101,8 @@ tmux_iso_argv_parse() { # <argv…>
 
 
 tmux_iso_log() { # 审计行落点（只影响落点，不影响判定）
-  printf '%s' "${TEAM_TMUX_ISO_LOG:-${TMPDIR:-/tmp}/teamsmith-tmux-iso-guard.$$.log}"
+  # P287：直接落在解析后临时根上的审计日志点开头（不是别人的前缀 glob 的猎物）
+  printf '%s' "${TEAM_TMUX_ISO_LOG:-${TMPDIR:-/tmp}/.teamsmith-tmux-iso-guard.$$.log}"
 }
 
 tmux_iso_audit() { # <段> <用途> <不成立> <细节> <期望 socket> <实际 socket>

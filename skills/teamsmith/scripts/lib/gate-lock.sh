@@ -17,6 +17,7 @@
 #   <ISO-8601>  pid=<pid>  start=<进程 starttime>  cmd=<命令名>  kind=<top|nested>
 #   agent=<席位>  worktree=<绝对路径>  started=<epoch>  expected=<Σband_s>  bound=<Σbudget_s>
 #   sections=<段数>  no_lock=<0|1>  ancestor=<pid|->  heartbeat=<section-guard 心跳路径|->
+#   lock_identity=<fd|path|->  lock_dev_ino=<dev:ino|->   （P287：持有者记下自己握的那把锁的身份）
 # 旧形状（`<ISO> pid=<pid> cmd=<...>`，空格分隔）照旧可读：缺的字段按「不知道」处理（打印 `?`，
 # 不编）。`start` 是进程 starttime —— pid 复用安全的判据（`pid` 活着且 starttime 仍是那一次才算它）。
 #
@@ -73,6 +74,180 @@ gate_lock_default_path() { # 默认锁路径（与 smoke.sh / cmd-review.sh 改�
   printf '%s\n' "${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
 }
 
+# ---------------------------------------------------------------- 伴生锁与身份（P287 · D1–D3）
+# 两把锁、一个顺序（合同文本在 openspec/specs/verification：*The gate's lock is identified, and losing
+# it stops the run loudly*）：
+#   ① **发布路径** `<pub>`（默认 `${TMPDIR:-/tmp}/teamsmith-smoke.lock`）—— **兼容声明**：P287 之前的
+#      写入者只认这一把。先取它、后取伴生锁；文件不存在就建（旧写入者也是这么建的），**永不 unlink**。
+#   ② **伴生锁** `<pub 同目录>/.<pub basename>.machine` —— **运行互斥**：本变更之后互斥**实际落在**它
+#      上面。点开头，于是别人的 `rm -rf /tmp/teamsmith-smoke.*` 前缀 glob 够不着它（D184 的事故形状）。
+# 身份：持锁进程**自己的**描述符身份（`stat -L /proc/<持有者>/fd/<n>` 的 `dev:ino`）——只有持有那个 fd
+# 的进程（或读得到它 /proc 的同 uid 进程）读得到；读不到时退回「解析路径」的身份，并**如实写**是哪一种
+# （`lock_identity=fd|path`）。design §4 D3：首选「取锁的那个进程自己握着 fd」，取锁瞬间的替换窗口
+# （flock 开文件与 stat 之间）因此关掉。
+gate_lock_companion_path() { # <发布路径> → 伴生锁路径（同行同目录、basename + `.machine`、点开头）
+  local pub="$1" dir base
+  dir="$(dirname "$pub")"; base="$(basename "$pub")"
+  printf '%s/.%s.machine\n' "$dir" "$base"
+}
+
+GATE_LOCK_PUB_FD=8            # 发布路径（兼容声明）的 fd
+GATE_LOCK_FD=9                # 伴生锁（运行互斥）的 fd
+
+# <路径> → dev:ino（读不到 → 非 0）。GNU stat 优先，BSD/macOS 兜底（仓里既有写法）。
+gate_lock_path_identity() {
+  stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null
+}
+
+# <pid> <路径> → "<fd>\t<link>"：该进程第一个指向 <路径>（或 "<路径> (deleted)"）的描述符
+gate_lock_fd_of_pid() {
+  local pid="${1:-}" p="$2" f l
+  [ -n "$pid" ] || return 1
+  [ -d "/proc/$pid/fd" ] || return 1
+  for f in "/proc/$pid"/fd/*; do
+    [ -L "$f" ] || [ -e "$f" ] || continue
+    l="$(readlink "$f" 2>/dev/null || true)"
+    case "$l" in "$p"|"$p (deleted)") printf '%s\t%s\n' "${f##*/}" "$l"; return 0 ;; esac
+  done
+  return 1
+}
+
+# <pid> <路径> <期望 dev:ino> → 0 = 那个进程确实握着一个指向该路径、且身份等于期望值的描述符。
+# 判据是**它的 /proc 里真有那个 fd**（不是「它自称」——环境变量里的 pid/身份单独不作数）。
+gate_lock_pid_holds_path() {
+  local pid="${1:-}" p="$2" want="${3:-}" l fd now
+  [ -n "$pid" ] && [ -n "$want" ] || return 1
+  l="$(gate_lock_fd_of_pid "$pid" "$p" 2>/dev/null)" || return 1
+  fd="${l%%$'\t'*}"
+  now="$(gate_lock_fd_identity "$pid" "$fd")"
+  # 结尾必须显式 return（不能以 `&&` 链收尾：set -e 的调用方会静默退出；§0c 静态检查会红）
+  if [ -n "$now" ] && [ "$now" = "$want" ]; then return 0; fi
+  return 1
+}
+
+# <pid> <fd> → 那个描述符指向的 inode 的 dev:ino（文件被 unlink 也读得到）
+gate_lock_fd_identity() {
+  stat -Lc '%d:%i' "/proc/${1:-}/fd/${2:-}" 2>/dev/null || printf -- '-'
+}
+
+# 取两把锁（**在本进程里**开 fd、加锁；顺序固定：发布路径 → 伴生锁）。GATE_LOCK_COMPANION 设好。
+#   0 = 两把都拿到（fd 8 = 发布路径，fd 9 = 伴生锁）
+#   1 = 发布路径被别人持有（旧的写入者，或另一个本版本运行）
+#   3 = 伴生锁被别人持有
+#   2 = 建不出来 / 没有 flock
+# 为什么不用 `flock --close` 包一层：本进程自己握着 fd，才能从**持有者**的描述符读到真身份；而跑套件
+# 的是本进程的**子进程**，用 `8>&- 9>&-` 把这两个 fd 关掉 —— 子孙（夹具留下的后台进程）不会继承锁
+# fd，运行退出即释放（M23 的「漏锁」教训在这里是构造性关掉的）。
+gate_lock_acquire_pair() {
+  local pub="$1" comp
+  comp="$(gate_lock_companion_path "$pub")"
+  # 注意：`exec … 2>/dev/null` 会把**本 shell 的 stderr** 永久改成 /dev/null（exec 的重定向作用于
+  # shell 本身）—— 实测过一次：静默吃掉后面所有的诊断与点名行。要静默就用**花括号组**（临时重定向）。
+  mkdir -p "$(dirname "$pub")" 2>/dev/null || return 2
+  : >>"$pub" 2>/dev/null || true
+  { exec 8>>"$pub"; } 2>/dev/null || return 2
+  if ! flock -n 8 2>/dev/null; then { exec 8>&-; } 2>/dev/null || true; return 1; fi
+  mkdir -p "$(dirname "$comp")" 2>/dev/null || { { exec 8>&-; } 2>/dev/null || true; return 2; }
+  { exec 9>>"$comp"; } 2>/dev/null || { { exec 8>&-; } 2>/dev/null || true; return 2; }
+  if ! flock -n 9 2>/dev/null; then
+    { exec 9>&-; } 2>/dev/null || true; { exec 8>&-; } 2>/dev/null || true; return 3
+  fi
+  GATE_LOCK_COMPANION="$comp"
+  return 0
+}
+
+# 上面那把锁的**身份**：打印 "<fd|path>\t<dev:ino>"。读得到持有者（本进程）的描述符就用 `fd`+那个
+# inode；读不到（没有 /proc / 描述符已经不在）就用解析路径的身份。两个值都读不到 → "-\t-"。
+gate_lock_claim_identity() { # <伴生锁> [<pid>]
+  local comp="$1" pid="${2:-$$}" ids
+  ids="$(gate_lock_fd_identity "$pid" "$GATE_LOCK_FD")"
+  if [ -n "$ids" ] && [ "$ids" != "-" ] && gate_lock_fd_of_pid "$pid" "$comp" >/dev/null 2>&1; then
+    printf 'fd\t%s\n' "$ids"; return 0
+  fi
+  ids="$(gate_lock_path_identity "$comp" 2>/dev/null || true)"
+  printf 'path\t%s\n' "${ids:--}"
+}
+
+# 守卫探针：<路径> <身份种类> <dev:ino> <持有者 pid> → "ok" ｜ "gone<TAB>为什么" ｜ "replaced<TAB>期望<TAB>实测"
+# 判定（design §4/§5 + 合同的两条文案）：
+#   * 先从**持有它的那个进程**读描述符（那才是「我持有的那个文件」）；描述符被 unlink 时读出来的
+#     dev:ino 仍是那个孤儿 inode，readlink 带 ` (deleted)`；
+#   * 再看路径现在是谁：
+#       路径存在且 == 持有者的 inode            → ok（互斥完好）
+#       路径存在但 != 持有者的 inode            → replaced（**删了又建**与 **mv 覆盖**都落在这条；
+#                                                 期望 = 我持有的，实测 = 路径上的）
+#       路径不存在且描述符已 deleted            → gone（被外部删除，没有重建）
+#       读不到描述符（身份是 path / 持有者已退）→ 只看路径：不存在 → gone；inode 不同 → replaced
+gate_lock_snapshot() {
+  local p="$1" ident="${2:-fd}" want="${3:-}" hpid="${4:-}" l fd now path_ino= path_ok=0
+  if [ -e "$p" ] || [ -L "$p" ]; then
+    path_ok=1; path_ino="$(gate_lock_path_identity "$p" 2>/dev/null || true)"
+  fi
+  if [ -n "$hpid" ] && [ "$ident" = "fd" ]; then
+    if l="$(gate_lock_fd_of_pid "$hpid" "$p" 2>/dev/null)"; then
+      fd="${l%%$'\t'*}"; now="$(gate_lock_fd_identity "$hpid" "$fd")"
+      if [ "$path_ok" = "1" ] && [ -n "$path_ino" ] && [ "$path_ino" = "$now" ]; then return 0; fi
+      if [ "$path_ok" = "1" ]; then
+        printf 'replaced\t%s\t%s\n' "${now:--}" "${path_ino:--}"; return 0
+      fi
+      case "${l#*$'\t'}" in
+        "$p (deleted)") printf 'gone\t%s\n' "持有者（pid=$hpid）握着的 inode 已被外部 unlink，路径上没有重建"; return 0 ;;
+      esac
+      printf 'gone\t%s\n' "锁文件已不在（持有者 pid=$hpid 的描述符也没了）"; return 0
+    fi
+    if ! kill -0 "$hpid" 2>/dev/null; then
+      printf 'gone\t%s\n' "持有者进程 pid=$hpid 已退出（锁随之释放）"; return 0
+    fi
+  fi
+  if [ "$path_ok" != "1" ]; then printf 'gone\t%s\n' "路径上的文件已不在"; return 0; fi
+  if [ -n "$want" ] && [ "$path_ino" = "$want" ]; then return 0; fi
+  printf 'replaced\t%s\t%s\n' "${want:--}" "${path_ino:--}"
+  return 0
+}
+
+# 入场检查（design §6）：拿到锁之后、跑套件之前 —— 读伴生锁边上的**活登记**，若有一条 top 登记记着
+# **另一个身份**，说明互斥已经断了（旧持有者还活着，但路径上已经是另一个 inode）。打印一行；空 = 干净。
+#   <comp> <我的 dev:ino> <我自己的 pid> <我的祖先 pid 名单（空格分隔）>
+gate_lock_entry_conflict() {
+  local comp="$1" mine="$2" me="${3:-$$}" chain=" ${4:-} " f pid st got who
+  for f in "$(gate_lock_holder_file "$comp")" "$(gate_lock_runs_dir "$comp")"/*.run; do
+    [ -f "$f" ] || continue
+    gate_lock_record_live "$f" || continue
+    pid="$(gate_lock_record_get "$f" pid)"
+    [ -n "$pid" ] || continue
+    [ "$pid" = "$me" ] && continue
+    case "$chain" in *" $pid "*) continue ;; esac          # 我的祖辈（同一套运行的持有者）
+    case "$(gate_lock_record_get "$f" kind)" in top|'') ;; *) continue ;; esac
+    got="$(gate_lock_record_get "$f" lock_dev_ino)"
+    case "$got" in ''|'-') continue ;; esac                # 没记身份的老记录不参与判定
+    [ "$got" = "$mine" ] && continue
+    who="$(gate_lock_describe_one "$f")"
+    printf '另一个活着的运行登记着**另一个身份**（%s）：它的 dev:ino=%s，路径上现在是 %s —— 互斥已断\n' \
+      "$who" "$got" "${mine:--}"
+    return 1
+  done
+  return 0
+}
+
+# 伙伴记录：读锁记录时优先**伴生锁**边上那份（本版本写的），退回这条路径自己的（P287 之前的写入者
+# 写在 <published>.holder）。返回实际用的路径；空 = 两边都没有可用记录。
+gate_lock_record_source() { # <发布路径> → 打印 "<记录路径>\t<current|legacy|->"
+  local pub="$1" comp ch ph comp_any=0 pub_any=0
+  comp="$(gate_lock_companion_path "$pub")"
+  ch="$(gate_lock_holder_file "$comp")"; ph="$(gate_lock_holder_file "$pub")"
+  if [ -s "$ch" ] || compgen -G "$(gate_lock_runs_dir "$comp")/*.run" >/dev/null 2>&1; then comp_any=1; fi
+  if [ -s "$ph" ] || compgen -G "$(gate_lock_runs_dir "$pub")/*.run" >/dev/null 2>&1; then pub_any=1; fi
+  # ① **活着的**持有者记录优先（本版本写在伴生锁边上；P287 之前的写入者写在发布路径边上）——
+  #    不然一条陈旧记录会遮住正在挡着你的那个持有者（实测：34② 的上限与 34⑦ 的点名都被带偏）。
+  if [ -s "$ch" ] && gate_lock_record_live "$ch"; then printf '%s\tcurrent\n' "$comp"; return 0; fi
+  if [ -s "$ph" ] && gate_lock_record_live "$ph"; then printf '%s\tlegacy\n' "$pub"; return 0; fi
+  # ② 没有活记录：谁有东西就报谁（陈旧记录仍会被打印成「陈旧记录」并忽略），发布路径那条优先
+  #    —— 它是旧写入者（与 P281 时代的夹具）写的地方。
+  if [ "$pub_any" = "1" ]; then printf '%s\tlegacy\n' "$pub"; return 0; fi
+  if [ "$comp_any" = "1" ]; then printf '%s\tcurrent\n' "$comp"; return 0; fi
+  printf '\t-\n'
+}
+
 # ---------------------------------------------------------------- marker（「我真的是持有者」的证据）
 # `flock` 的包装进程在**拿到锁之后**写一行 `<epoch> <pid>`：pid 就是被 exec 起来的那次运行的 pid。
 # 这是「本进程就是 flock 的持有者」的唯一证据 —— 环境标记（SMOKE_LOCK_WRAPPED）会被子孙继承，
@@ -90,16 +265,21 @@ gate_lock_marker_epoch() { # <marker> → 记的 epoch（读不到 → 空）
 }
 
 # ---------------------------------------------------------------- 记录：写
-gate_lock_record_write() { # <file> <pid> <kind> <cmd> <agent> <worktree> <started> <expected> <bound> <sections> <no_lock> <ancestor> <heartbeat>
+gate_lock_record_write() { # <file> <pid> <kind> <cmd> <agent> <worktree> <started> <expected> <bound> <sections> <no_lock> <ancestor> <heartbeat> [<identity> <dev:ino>]
   local f="$1" pid="$2" kind="$3" cmd="$4" agent="$5" wt="$6" started="$7" \
-        expected="$8" bound="$9" sections="${10}" no_lock="${11}" ancestor="${12}" hb="${13}"
+        expected="$8" bound="$9" sections="${10}" no_lock="${11}" ancestor="${12}" hb="${13}" \
+        ident="${14:--}" dino="${15:--}"
   local st tmp; st="$(gate_lock_proc_start "$pid" 2>/dev/null || true)"; [ -n "$st" ] || st="-"
+  case "$ident" in ''|fd|path) ;; *) ident="-" ;; esac
+  case "$dino" in ''|*[!0-9:]*) dino="-" ;; esac
   mkdir -p "$(dirname "$f")" 2>/dev/null || true
   tmp="$f.$$.tmp"
   # 原子写：读的人要么看到旧的一条完整的，要么看到新的一条完整的，不会看到半行
-  if printf '%s\tpid=%s\tstart=%s\tcmd=%s\tkind=%s\tagent=%s\tworktree=%s\tstarted=%s\texpected=%s\tbound=%s\tsections=%s\tno_lock=%s\tancestor=%s\theartbeat=%s\n' \
+  # P287：末两个字段 = 我持有的那把锁的身份（`lock_identity=fd|path` + `lock_dev_ino=<dev:ino>`）；
+  # 不持有锁的运行（嵌套 / no_lock）**如实写 `-`**（合同：记不下来就不许编）。
+  if printf '%s\tpid=%s\tstart=%s\tcmd=%s\tkind=%s\tagent=%s\tworktree=%s\tstarted=%s\texpected=%s\tbound=%s\tsections=%s\tno_lock=%s\tancestor=%s\theartbeat=%s\tlock_identity=%s\tlock_dev_ino=%s\n' \
       "$(date -Is)" "$pid" "$st" "$cmd" "$kind" "$agent" "$wt" "$started" \
-      "$expected" "$bound" "$sections" "$no_lock" "$ancestor" "$hb" > "$tmp" 2>/dev/null; then
+      "$expected" "$bound" "$sections" "$no_lock" "$ancestor" "$hb" "$ident" "$dino" > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
   else
     rm -f "$tmp" 2>/dev/null || true
@@ -193,8 +373,28 @@ gate_lock_describe_one() { # <file> → 一个内联片段（缺的字段打 `?`
   # 残余窗口（TEAM_SMOKE_NO_LOCK / 没有 flock / FAST）在记录里是 no_lock=1，等待者要能看见它 ——
   # 只在**它是 1** 时打出来（0 的运行不加噪音，行里的字段照旧可逐项断言）。
   [ "$(gate_lock_record_get "$f" no_lock)" = "1" ] && nolock=" no_lock=1"
-  printf 'kind=%s pid=%s cmd=%s agent=%s worktree=%s 已跑 %ss expected=%s bound=%s%s' \
-    "${kind:-?}" "${pid:-?}" "${cmd:-?}" "${agent:-?}" "${wt:-?}" "$age" "${expected:-?}" "${bound:-?}" "$nolock"
+  # P287：P287 之前的写入者只写 `<ISO> pid=… cmd=…`（没有 kind/席位/上限/身份）—— 有多少字段打多少，
+  # 缺的写 `?`，并**标出来**是旧版本的记录（绝不印「持有者未知」）。
+  local ver=""
+  [ -z "$kind" ] && ver=" version=legacy"    # 旧写入者的记录没有 kind —— 有多少字段打多少，并标出来
+  printf 'kind=%s pid=%s cmd=%s agent=%s worktree=%s 已跑 %ss expected=%s bound=%s%s%s' \
+    "${kind:-?}" "${pid:-?}" "${cmd:-?}" "${agent:-?}" "${wt:-?}" "$age" "${expected:-?}" "${bound:-?}" "$nolock" "$ver"
+}
+
+# <发布路径> → 一行：优先伴生锁边上的记录（本版本）；没有就退回发布路径自己的（旧写入者，标 legacy）
+gate_lock_describe_pair() {
+  local pub="$1" src kind
+  IFS=$'\t' read -r src kind < <(gate_lock_record_source "$pub")
+  if [ -z "$src" ]; then printf '持有者未知\n'; return 0; fi
+  gate_lock_describe "$src"
+}
+
+# <发布路径> <wait> → gate_lock_cap 的同一行，但记录优先读伴生锁边上的那份（旧写入者的退回发布路径）
+gate_lock_cap_pair() {
+  local pub="$1" src kind
+  IFS=$'\t' read -r src kind < <(gate_lock_record_source "$pub")
+  [ -n "$src" ] || src="$pub"
+  gate_lock_cap "$src" "$2"
 }
 
 gate_lock_describe() { # <lock> → 一行：活着的记录逐个列出；陈旧条目标 `stale` 并忽略
@@ -243,6 +443,21 @@ gate_lock_prove_ancestor() { # <lock> → 最近的「记录里活着且 startti
     done
   done
   return 1
+}
+
+# <发布路径>：祖辈证明与心跳都按**记录实际所在的那一侧**读（伴生锁优先，退回发布路径）
+gate_lock_prove_ancestor_pair() {
+  local pub="$1" src kind
+  IFS=$'\t' read -r src kind < <(gate_lock_record_source "$pub")
+  [ -n "$src" ] || return 1
+  gate_lock_prove_ancestor "$src"
+}
+
+gate_lock_heartbeat_of_pid_pair() { # <发布路径> <祖辈 pid>
+  local pub="$1" src kind
+  IFS=$'\t' read -r src kind < <(gate_lock_record_source "$pub")
+  [ -n "$src" ] || return 1
+  gate_lock_heartbeat_of_pid "$src" "$2"
 }
 
 # ---------------------------------------------------------------- 上限算式（D3）

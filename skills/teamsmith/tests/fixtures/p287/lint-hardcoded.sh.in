@@ -1,0 +1,3 @@
+# P287 · --lint 的**红侧素材**（不是可执行脚本；`.sh.in` 后缀让它不在 `--lint`/门禁的扫描面里）
+# 模板写死了一个别的绝对目录 —— --lint 必须判红并点名 file:line
+T="$(mktemp -d /tmp/teamsmith-thing.XXXXXX)"

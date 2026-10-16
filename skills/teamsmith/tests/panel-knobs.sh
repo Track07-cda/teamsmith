@@ -18,6 +18,11 @@ set -uo pipefail
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tree="${TEAM_PANEL_CPU_TREE:-$(cd -P "$here/../../.." && pwd)}"
 cpu="$here/panel-cpu.sh"
+
+# P287：临时根名字里的项目命名空间（ns）的唯一实现在 scripts/lib/common.sh。
+if ! declare -F team_project_ns >/dev/null 2>&1; then
+  [ -f "$here/../scripts/lib/common.sh" ] && . "$here/../scripts/lib/common.sh"
+fi
 PASS=0; FAIL=0
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
@@ -31,7 +36,7 @@ real_load="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?')"
 real_cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
 case "$real_cores" in ''|*[!0-9]*) real_cores=0 ;; esac
 
-out="$(mktemp "${TMPDIR:-/tmp}/panel-knobs.XXXXXX")"
+out="$(mktemp "${TMPDIR:-/tmp}/teamsmith-panel-knobs.$(team_project_ns 2>/dev/null || printf 'nosig-00000000').XXXXXX")"
 trap 'rm -f "$out"' EXIT
 # 夹具开关**显式清掉**（继承来的 TEAM_SMOKE_FIXTURE=1 会让注入被采信，那样这条检查就假绿）；
 # 三个旋钮全部注入，正是 d-realpath 的形状。

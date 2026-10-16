@@ -1544,7 +1544,8 @@ mr_nested_leftovers() { # [<base>]
   {
     tmp_root_ledger_survivors 2>/dev/null | awk -F'\t' -v me="$$" -v base="$base" \
       '$2 != me && $3 == "routes" && index($1, base "/") == 1 { print $1 }'
-    find "$base" -maxdepth 1 -name 'teamsmith-routes.*' -newer "$tmp" 2>/dev/null | grep -v "^$tmp\$" || true
+    # P287：根名带 ns（`teamsmith-routes-<ns>.<rand>`）—— 两种形状都认（[.-] 覆盖平铺与带 ns）
+    find "$base" -maxdepth 1 -name 'teamsmith-routes[.-]*' -newer "$tmp" 2>/dev/null | grep -v "^$tmp\$" || true
   } | sed '/^$/d' | sort -u
 }
 
@@ -1736,7 +1737,7 @@ PY
   local lkdir="$tmp/flip-tail-leak-tmp"
   mkdir -p "$lkdir"
   #    变异（这个旋钮）的落地证明：helper 里**有**这个分支（在真树里数得着），且这次 run 真的没回收 ——
-  #    私有 TMPDIR 里直接看得见一个 teamsmith-routes.* 根。它与收尾扫描互为对照（后者走台账+find）：
+  #    私有 TMPDIR 里直接看得见一个 teamsmith-routes* 根。它与收尾扫描互为对照（后者走台账+find）：
   #    根在、扫描看不见 = 扫描瞎了；根不在 = 旋钮没生效。
   s="$(mr_scratch_tree flip-tail-leak)"
   local lkdir="$tmp/flip-tail-leak-tmp"
@@ -1746,7 +1747,7 @@ PY
   env -u TMUX -u TMUX_PANE TEAM_ROUTES_NESTED=1 TEAM_ROUTES_TREE="$s" TMPDIR="$lkdir" TMP_ROOT_BREAK=noreap \
     bash "$here/routes.sh" walk >"$tmp/flip-tail-leak.log" 2>&1 || true
   grep -a '^保留临时根：' "$tmp/flip-tail-leak.log" 2>/dev/null >>"$tmp/kept-roots.log" || true
-  left_fs="$(find "$lkdir" -maxdepth 1 -name 'teamsmith-routes.*' -type d 2>/dev/null | head -1)"
+  left_fs="$(find "$lkdir" -maxdepth 1 -name 'teamsmith-routes[.-]*' -type d 2>/dev/null | head -1)"
   if [ "${knob:-0}" -lt 1 ] || [ -z "$left_fs" ]; then
     finding "翻转⑧：变异没落地（夹具缺陷）—— helper 里的 noreap 分支 ${knob:-0} 处；私有 TMPDIR 里没留下根（旋钮没生效）"
   elif [ -n "$(mr_nested_leftovers "$lkdir")" ]; then

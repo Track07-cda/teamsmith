@@ -16,11 +16,19 @@
 # shellcheck source=tmux-iso.sh
 . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tmux-iso.sh"
 
+# P287：ns（临时根名字里的项目命名空间）的唯一实现在 scripts/lib/common.sh —— 本库被 smoke 前导段
+# source（tmp-root.sh 已经带进来了），独立 source 时自己补一次。
+if ! declare -F team_project_ns >/dev/null 2>&1; then
+  _tmux_cap_lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/scripts/lib/common.sh"
+  [ -f "$_tmux_cap_lib" ] && . "$_tmux_cap_lib"
+  unset _tmux_cap_lib
+fi
+
 # M47：`#{bracket_paste_flag}` 是 tmux **3.7 起**才有的格式（同族的旧 tmux 上产品保守地走「多行落文件
 # + 一行指针」，那不是缺陷，是无从探测）。
 tmux_has_bracket_paste_format() {
   local s="bpf-$$" d v rc=1
-  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-tmux-cap.XXXXXX" 2>/dev/null)" || return 1
+  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-tmux-cap-$(team_project_ns).XXXXXX" 2>/dev/null)" || return 1
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$d" tmux new-session -d -s "$s" -x 80 -y 24 'sleep 5' 2>/dev/null; then
     v="$(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$d" tmux display-message -p -t "$s" '#{bracket_paste_flag}' 2>/dev/null)"
     [ -n "$v" ] && rc=0

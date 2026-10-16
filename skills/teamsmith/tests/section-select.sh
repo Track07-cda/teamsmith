@@ -31,6 +31,12 @@ set -uo pipefail
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SEL_DIR="$here"
 
+# P287：临时根名字里的项目命名空间（ns）的唯一实现在 scripts/lib/common.sh —— 独立跑本脚本时补一次。
+if ! declare -F team_project_ns >/dev/null 2>&1; then
+  [ -f "$here/../scripts/lib/common.sh" ] && . "$here/../scripts/lib/common.sh"
+fi
+section_select_ns() { team_project_ns 2>/dev/null || printf 'nosig-00000000\n'; }
+
 ROOT=""
 MODE=""
 COPY_OUT=""
@@ -422,7 +428,7 @@ emit_copy() { # <out>
 do_verify_copies() {
   build_groups
   local d out k n=0 bad=0 i
-  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-select-copies.XXXXXX")" || die "建不了临时目录（TMPDIR=${TMPDIR:-/tmp}）"
+  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-select-copies-$(section_select_ns).XXXXXX")" || die "建不了临时目录（TMPDIR=${TMPDIR:-/tmp}）"
   trap 'rm -rf "${d:-}"' EXIT
   printf '== 段副本 bash -n 全键扫描 ==\n'
   for ((i = 0; i < T_N; i++)); do

@@ -99,7 +99,8 @@ fail → team say <agent> "..." with the concrete failure evidence
 - Gates: `{{GATES}}` (a brief may require stricter commands; the brief wins).
 - One gate at a time: the full suite is the machine's shared resource — `TEAM_SMOKE_FAST=1` inside a batch, the
   full suite before delivery and review. `team review` queues on the gate lock (`TEAM_SMOKE_LOCK`,
-  `TEAM_SMOKE_LOCK_WAIT`, the holder in `<lock>.holder`) before its hard timeout starts, so the record shows
+  `TEAM_SMOKE_LOCK_WAIT`, holder in `<companion>.holder` — the pair is published path + dot-prefixed companion,
+  never unlinked) before its hard timeout starts, so the record shows
   `queued` and `ran` separately; a queue past the cap is a loud `FAIL` naming the holder, not a `TIMEOUT`. On a
   busy machine the panel timing lines (2000 ms frame, 1 % CPU — medians of three printed samples) print the
   measured values and the load and **skip visibly** instead of reporting a red the machine owes; the premise is

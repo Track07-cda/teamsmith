@@ -378,7 +378,7 @@ team_review_postmerge_merge3() { # <base> <branch> <path> → stdout 三路合�
   # 两边都动过、blob 历史又都判不出来时，用 git 自己的合并引擎当裁判（不用自己的行集合启发式：
   # 结果 == main = main 已含分支的改动；== 分支 = 分支更新；冲突/第三个结果 = 不确定。
   local base="$1" branch="$2" path="$3" root="$TEAM_MAIN_ROOT" d rc=0
-  d="$(mktemp -d "${TMPDIR:-/tmp}/p91-merge3.XXXXXX")" || return 1
+  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p91-merge3-$(team_project_ns).XXXXXX")" || return 1
   git -C "$root" show "$TEAM_PROTECTED_BRANCH:$path" > "$d/main" 2>/dev/null || : > "$d/main"
   git -C "$root" show "$base:$path" > "$d/base" 2>/dev/null || : > "$d/base"
   git -C "$root" show "$branch:$path" > "$d/branch" 2>/dev/null || : > "$d/branch"
@@ -1072,7 +1072,18 @@ $(printf '%s\n' "$ignored_list" | head -5)
     #              （否则每一层 team review 都会和自己的祖先死锁）。
     #   noqueue —— 没有 flock：打印降级，照跑（**不是**静默跳过；见 references/protocol.md §9b）。
     # 其它用具：TEAM_SMOKE_LOCK（路径，默认同 smoke）、TEAM_SMOKE_LOCK_WAIT（上限，默认 1800s）。
+    # P287（change: gate-lock-external-deletion）：与 smoke.sh **同一套**锁机器 ——
+    #   ① 取两把锁、顺序固定（发布路径 = 兼容声明 → 伴生锁 = 运行互斥；同行同目录、`.machine`、点开头）；
+    #   ② 记录写在**伴生锁**边上（`<companion>.holder`），由**取锁的那个进程**（本 shell）写，含
+    #      `lock_identity=fd` 与 `lock_dev_ino=<dev:ino>`；取锁时刷两把锁的 mtime；
+    #   ③ 有界轮询（每轮短 `flock -n`、每轮重新解析路径、每轮重算上限）—— 我再等的那把被换掉会印一行；
+    #   ④ 入场检查：拿到锁后读 `<companion>.runs/*`，活的 `top` 登记记着另一个身份 ⇒ 互斥已断 ⇒
+    #      **不跑门禁**、判定 FAIL（`gates_marker=mutexbroken`，与 `queuecap` 同形：门禁没有运行）。
+    #   ⑤ 门禁跑完后复核身份：运行期间互斥被破坏 ⇒ 这次判定不可信 ⇒ FAIL（同样点名）。
+    # 上限算式、marker 语义（P66）、超限与降级的文案/退出码**一字不改**。
     local lock="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
+    local lock_comp; lock_comp="$(gate_lock_companion_path "$lock")"
+    local lock_dev_ino="" lock_cap_hit=0 lock_broken="" gate_rc=0
     local queue_started gate_end marker_epoch
     # P281：排队上限不再是「一律 W」——持有者公布了 expected 就按
     #   cap = clamp(remaining + 60s, W, 4×W)   （remaining = expected − (now − started)）
@@ -1082,8 +1093,9 @@ $(printf '%s\n' "$ignored_list" | head -5)
     case "$lock_cap" in ''|*[!0-9]*) lock_cap=1800 ;; esac
     lock_wait="$lock_cap"
     queue_started="$(date +%s)"
-    queue_marker="$(mktemp "${TMPDIR:-/tmp}/teamsmith-review-queue.XXXXXX" 2>/dev/null || true)"
-    queue_holder="$(gate_lock_describe "$lock")"
+    local lock_record_written=0
+    queue_marker="$(mktemp "${TMPDIR:-/tmp}/teamsmith-review-queue.$(team_project_ns).XXXXXX" 2>/dev/null || true)"
+    queue_holder="$(gate_lock_describe_pair "$lock")"
     if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
       queue_state="held"
       team_info "门禁锁：已由祖先持有（SMOKE_LOCK_WRAPPED=1）→ 本次不排队"
@@ -1095,24 +1107,80 @@ $(printf '%s\n' "$ignored_list" | head -5)
       team_warn "锁文件 $lock 建不了 → 门禁排队未启用（并发两套门禁时可能互相干扰）"
     else
       queue_state="queued"
-      # `flock -n` 返回 1 = 锁被别人持有（expected，不是错误）——CLI 是 `set -euo pipefail`，
-      # 裸跑一条会返回 1 的命令会当场把整个 review 打断（实测：改完第一版 review 在零秒里静默退出）。
-      local lock_probe=0
-      flock -n "$lock" true 2>/dev/null || lock_probe=$?
-      if [ "$lock_probe" -eq 1 ]; then
+      # 有界轮询取**两把**锁（P287）。marker 文件在排队**之前**就存在、但**只在真的拿到锁时才写入**
+      # （与 flock 包装器同形）：没写 = 这套没跑起来（排队被上限掐掉 / 取锁起不来）。
+      local lock_probe=0 lock_reported=0 lock_waited_path="" lock_waited_id="" lock_probe_id=""
+      local lock_role=""
+      while :; do
+        lock_probe=0
+        gate_lock_acquire_pair "$lock" || lock_probe=$?
+        [ "$lock_probe" = "0" ] && break
+        if [ "$lock_probe" = "2" ]; then
+          queue_state="noqueue"
+          team_warn "锁文件 $lock 建不了 → 门禁排队未启用（并发两套门禁时可能互相干扰）"
+          break
+        fi
+        # 我上一轮等的那把还在吗？换过就印一行（两个身份），再按路径重新解析（P287）
+        if [ -n "$lock_waited_path" ]; then
+          lock_probe_id="$(gate_lock_path_identity "$lock_waited_path" 2>/dev/null || true)"
+          if [ "$lock_probe_id" != "$lock_waited_id" ]; then
+            team_warn "我等的那把锁（$lock_waited_path）已经变了 —— 旧身份 ${lock_waited_id:-（已不在）}，现在 ${lock_probe_id:-（已不在）}；按路径重新解析后继续等"
+          fi
+          lock_waited_id="$lock_probe_id"
+        fi
+        # 上限按持有者公布的 expected 算（P281 的算式与文案一字不改）；拿到锁的那一轮也要重算过
         IFS=$'\t' read -r lock_cap cap_remaining cap_expected cap_started \
-          < <(gate_lock_cap "$lock" "$lock_wait")
+          < <(gate_lock_cap_pair "$lock" "$lock_wait")
         case "$lock_cap" in ''|*[!0-9]*) lock_cap="$lock_wait" ;; esac
-        team_info "门禁锁正被持有（${queue_holder}）；排队，最多等 ${lock_cap}s（算式：remaining=${cap_remaining}s + 60s → cap=${lock_cap}s，下限 TEAM_SMOKE_LOCK_WAIT=${lock_wait}s，上限 4×=$(( lock_wait * 4 ))s；TEAM_SMOKE_LOCK_WAIT 可调）"
-      elif [ "$lock_probe" -gt 1 ]; then
-        team_warn "flock 探锁失败（rc=${lock_probe}）→ 仍按排队路径走（拿不到锁时会报排队超限）"
+        if [ "$lock_reported" = "0" ]; then
+          lock_reported=1
+          lock_role="$([ "$lock_probe" = "1" ] && printf '发布路径（兼容声明）' || printf '伴生锁（运行互斥）')"
+          queue_holder="$(gate_lock_describe_pair "$lock")"
+          team_info "门禁锁正被持有（${queue_holder}）；排队，最多等 ${lock_cap}s（算式：remaining=${cap_remaining}s + 60s → cap=${lock_cap}s，下限 TEAM_SMOKE_LOCK_WAIT=${lock_wait}s，上限 4×=$(( lock_wait * 4 ))s；TEAM_SMOKE_LOCK_WAIT 可调）"
+        fi
+        if [ "$lock_probe" = "1" ]; then lock_waited_path="$lock"; else lock_waited_path="$lock_comp"; fi
+        [ -n "$lock_waited_id" ] || lock_waited_id="$(gate_lock_path_identity "$lock_waited_path" 2>/dev/null || true)"
+        if [ "$(( $(date +%s) - queue_started ))" -ge "$lock_cap" ]; then
+          lock_cap_hit=1; gate_rc=1
+          break
+        fi
+        sleep 1
+      done
+      if [ "$lock_cap_hit" = "0" ] && [ "$queue_state" = "queued" ]; then
+        export SMOKE_LOCK_WRAPPED=1
+        export TEAM_SMOKE_LOCK="$lock"
+        used_lock="$lock"
+        # 记录由**取锁的进程**（本 shell）写：字段与 smoke.sh 同形 + 身份（P287 §3.1）
+        touch "$lock" "$lock_comp" 2>/dev/null || true      # P255 §1.6：按 age 的清理器不该删活锁
+        IFS=$'\t' read -r lock_identity lock_dev_ino < <(gate_lock_claim_identity "$lock_comp")
+        export GATE_KIND=top GATE_CMD="team review $id" GATE_NOLOCK=0 GATE_ANCESTOR=-
+        export GATE_AGENT="$(gate_lock_seat_of_dir "${TEAM_CWD:-$PWD}")" GATE_WT="$(gate_lock_worktree_of_dir "${TEAM_CWD:-$PWD}")"
+        export GATE_STARTED="$(date +%s)" GATE_HB=-
+        IFS=$'\t' read -r GATE_EXP GATE_BND GATE_SECS \
+          < <(gate_lock_expected "${TEAM_SKILL_DIR:-$SELF_DIR/..}/tests/smoke.sh" "${TEAM_SKILL_DIR:-$SELF_DIR/..}/tests/section-budgets.tsv")
+        export GATE_EXP GATE_BND GATE_SECS
+        if gate_lock_holder_claimable "$lock_comp" "$$"; then
+          # `write_holder` 会写 <lock>.holder —— 记录**绝不**写进锁文件本身（锁文件的内容永远不被写：
+          # 它是 flock 的对象、身份由 inode 认；写它 = 换 inode = 自己把自己的互斥判成「已替换」）
+          gate_lock_write_holder "$lock_comp" "$$" top "team review $id" "$GATE_AGENT" "$GATE_WT" \
+            "$GATE_STARTED" "$GATE_EXP" "$GATE_BND" "$GATE_SECS" 0 - - "$lock_identity" "$lock_dev_ino" \
+            && lock_record_written=1
+        else
+          team_warn "拿到锁了，但 $(gate_lock_holder_file "$lock_comp") 里的持有记录是**另一个活着的进程**（$(gate_lock_describe_one "$(gate_lock_holder_file "$lock_comp")")）→ 不覆写它"
+        fi
+        # marker：真的拿到锁、接下来跑门禁（P66 语义；`<epoch> <pid>` 与 smoke.sh 同形）
+        printf '%s %s\n' "$(date +%s)" "$$" > "$queue_marker" 2>/dev/null || true
+        # 入场检查（P287 §4.2）：活的 top 登记记着另一个身份 ⇒ 互斥已断 ⇒ 不跑门禁
+        local entry_chain entry_msg
+        entry_chain="$(gate_lock_ancestry_chain "$$" | tr '\n' ' ')"
+        entry_msg="$(gate_lock_entry_conflict "$lock_comp" "$lock_dev_ino" "$$" "$entry_chain")"
+        if [ -n "$entry_msg" ]; then
+          lock_broken="入场检查：$entry_msg"
+          team_err "入场检查：$entry_msg → 本次**不跑门禁**（互斥已经断了；这不是对代码的判定）"
+          : > "$queue_marker" 2>/dev/null || true      # marker 清空 = 这套没有跑起来（与排队超限同形）
+          gate_rc=2
+        fi
       fi
-      # 用 flock --close 包住「写 marker + 写持有者 + 跑门禁」整段：--close 让门禁的子孙拿不到锁 fd
-      # （M23 的漏锁教训：夹具留下的后台进程继承 fd，脚本退出后锁还挂着）。marker 是「真的拿到锁」
-      # 的唯一证据 —— 没有它就只有两种情况：排队被上限掐掉，或 flock 起不来。
-      export SMOKE_LOCK_WRAPPED=1
-      export TEAM_SMOKE_LOCK="$lock"
-      used_lock="$lock"
       # P281：持有者记录由**真的拿到锁的那个进程**写（就是下面那个 bash -c，拿到锁之后、跑门禁之前），
       # 字段与 smoke.sh 同形。行格式只在 gate-lock.sh 里定义一次：包装器 . 上那个库、调同一个写函数
       # （`start=` 是**它自己**的 starttime，所以必须在包装器里算，不能在 review 进程里预算）。
@@ -1123,17 +1191,28 @@ $(printf '%s\n' "$ignored_list" | head -5)
         < <(gate_lock_expected "${TEAM_SKILL_DIR:-$SELF_DIR/..}/tests/smoke.sh" "${TEAM_SKILL_DIR:-$SELF_DIR/..}/tests/section-budgets.tsv")
       export GATE_EXP GATE_BND GATE_SECS
     fi
-    local gate_rc=0 gate_started grace deadline_min
-    local QUEUE_WRAP='marker="$1"; holder="$2"; lib="$3"; shift 3; printf "%s %s\n" "$(date +%s)" "$$" > "$marker"; . "$lib"; gate_lock_record_write "$holder" "$$" "$GATE_KIND" "$GATE_CMD" "$GATE_AGENT" "$GATE_WT" "$GATE_STARTED" "$GATE_EXP" "$GATE_BND" "$GATE_SECS" "$GATE_NOLOCK" "$GATE_ANCESTOR" "$GATE_HB"; unset GATE_KIND GATE_CMD GATE_AGENT GATE_WT GATE_STARTED GATE_EXP GATE_BND GATE_SECS GATE_NOLOCK GATE_ANCESTOR GATE_HB; exec "$@"'
+    local gate_started grace deadline_min
     local -a gate_cmd=()
-    if [ "$queue_state" = "queued" ]; then
-      gate_cmd=(flock --close -w "$lock_cap" "$lock" bash -c "$QUEUE_WRAP" _ "$queue_marker" "$lock.holder" "$REVIEW_LIB_DIR/gate-lock.sh")
-    fi
+    # P287：锁由本 shell 自己握着（fd 8/9）—— 门禁**及其子孙**用 `8>&- 9>&-` 把这两个 fd 关掉，
+    # 等价于原来 `flock --close` 的那条保证（M23 的漏锁教训：夹具留下的后台进程继承 fd，脚本退出后
+    # 锁还挂着）。入场检查已经拒绝时（lock_broken 非空）不跑门禁。
     gate_cmd+=(${runner[@]+"${runner[@]}"} env ${gate_env[@]+"${gate_env[@]}"} bash -c "$TEAM_GATES")
     # M25-②：门禁的 stdin 必须是 /dev/null，**不能**是调用者的 tty。实测（tests/smoke.sh 6i-b）：
     # 后台进程组里的子进程一读 tty 就吃 SIGTTIN 被**停住**（STAT=TN，0% CPU，看着像挂死；
     # 登录 profile 里的 host-spawn 就会碰 tty）。复验常在后台窗口里跑，门禁不能依赖 tty。
-    ( cd "$revdir" && "${gate_cmd[@]}" ) > "$log" 2>&1 < /dev/null || gate_rc=$?
+    if [ -n "$lock_broken" ] || [ "$lock_cap_hit" = "1" ]; then
+      # 入场检查拒绝（互斥已断）或排队撞上限：**门禁不跑**（判定与记账在各分支里）
+      : > "$log"
+      [ -n "$lock_broken" ] && queue_state="broken"
+    else
+      ( cd "$revdir" && "${gate_cmd[@]}" 8>&- 9>&- ) > "$log" 2>&1 < /dev/null || gate_rc=$?
+    fi
+    # P287：收尾只删**自己**写的持有者记录（锁文件永不 unlink；别人的活记录绝不碰）——
+    # 留下一条陈旧记录会把后来者的排队上限与点名带偏（34②/34⑦ 实测过）。
+    if [ "$lock_record_written" = "1" ] && gate_lock_holder_claimable "$lock_comp" "$$"; then
+      gate_lock_remove_holder "$lock_comp"
+      rmdir "$lock_comp.runs" 2>/dev/null || true
+    fi
     gate_end="$(date +%s)"
     if [ -n "$queue_marker" ] && [ -s "$queue_marker" ]; then
       marker_epoch="$(cat "$queue_marker" 2>/dev/null)"
@@ -1148,12 +1227,20 @@ $(printf '%s\n' "$ignored_list" | head -5)
     fi
     # 排队超上限：flock 没拿到锁（没有 marker）→ 门禁**没有运行**。判定 FAIL 而不是 TIMEOUT：
     # 「没跑」和「跑了被杀」必须能分开（记录里点名持锁者与上限）。
-    if [ "$queue_state" = "queued" ] && [ -z "$(cat "$queue_marker" 2>/dev/null)" ]; then
+    if [ "$queue_state" = "broken" ]; then
+      verdict="FAIL"
+      gates_marker="mutexbroken"
+      queue_holder="$(gate_lock_describe_pair "$lock")"
+      gates_out="（互斥已断：**门禁没有运行**。${lock_broken}。实际持有者（读伴生锁边上的记录）：${queue_holder}。这不是对代码的判定 —— 等那个运行结束后重跑。）"
+      gate_elapsed=""
+      used_timeout=0
+      used_lock="$lock"
+    elif [ "$queue_state" = "queued" ] && [ -z "$(cat "$queue_marker" 2>/dev/null)" ]; then
       verdict="FAIL"
       gates_marker="queuecap"
       queued_elapsed=$(( gate_end - queue_started ))
       [ "$queued_elapsed" -lt 0 ] && queued_elapsed=0
-      queue_holder="$(gate_lock_describe "$lock")"   # 撞上限时**重读**：等的这段时间持有者可能换了
+      queue_holder="$(gate_lock_describe_pair "$lock")"   # 撞上限时**重读**：等的这段时间持有者可能换了
       gates_out="（门禁锁排队超过上限 ${lock_cap}s：**门禁没有运行**。持锁者：${queue_holder}。这不是对代码的判定 —— 等持锁者结束，或抬 TEAM_SMOKE_LOCK_WAIT 后重跑。）"
       gate_elapsed=""
       used_timeout=0
@@ -1189,7 +1276,22 @@ $(printf '%s\n' "$ignored_list" | head -5)
         esac
       fi
     fi
+    # P287 §3.2 的等价物（review 侧）：门禁跑完后复核「我还握着入场时那个 inode 吗」——
+    # 运行期间锁被外部删/换 ⇒ 这次判定不可信（与哨兵同一判据、同一措辞）；正常时一行不加。
+    if [ "$queue_state" = "queued" ] && [ -n "$lock_dev_ino" ]; then
+      local lock_now
+      lock_now="$(gate_lock_snapshot "$lock_comp" "$lock_identity" "$lock_dev_ino" "$$")"
+      case "$lock_now" in
+        ok|'') ;;    # 完好；或读不出来（/proc 不在等）—— 不误报
+        *) lock_broken="$(printf '%s' "$lock_now" | cut -s -f1) 现场：$(printf '%s' "$lock_now" | cut -s -f2-)"
+           team_err "门禁运行期间互斥被破坏（$(printf '%s' "$lock_now" | tr '\t' ' ')）→ 这次判定不可信，判 FAIL"
+           verdict="FAIL"; gates_marker="mutexbroken" ;;
+      esac
+    fi
     gates_out="$(tail -25 "$log")"
+    if [ -n "$lock_broken" ] && [ "$queue_state" = "queued" ]; then
+      gates_out="（互斥在运行期间被破坏，这次判定不可信；判 FAIL。现场：${lock_broken}）$(printf '\n')${gates_out}"
+    fi
     team_ok "门禁输出：${log#"$TEAM_MAIN_ROOT"/}（${verdict}，${gate_elapsed}s）"
   fi
 
@@ -1226,6 +1328,9 @@ $(printf '%s\n' "$ignored_list" | head -5)
   [ "$unresolved_override" = "1" ] && head_flags="$head_flags · branch-unresolved (override)"
   [ "$gates_marker" = "none" ] && head_flags="$head_flags · gates: none"
   [ "$gates_marker" = "queuecap" ] && head_flags="$head_flags · gate queue cap exceeded（门禁没跑）"
+  # P287：互斥被破坏（入场检查拒绝 → 门禁没跑；或跑完复核发现锁没了 → 判定不可信）。抬头里点名，
+  # 与 `queuecap` 同形 —— 这条也必须是机器可读的。
+  [ "$gates_marker" = "mutexbroken" ] && head_flags="$head_flags · gate mutex broken（互斥被破坏：判定不可信）"
   # 被信号终止（不是超时）：把信号名写进抬头，别拿「超时」顶替「被杀」（M6.5 / F15）
   [ -n "$gate_signal" ] && head_flags="$head_flags · gate killed: $gate_signal"
   {

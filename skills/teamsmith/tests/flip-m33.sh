@@ -124,8 +124,10 @@ pre_detect() {
 }
 
 # ── 外部收割机：等本轮新场景 + 26-i 锚点 → 删/移走 $TMP（bg6 的形状）────────────────────────────
-# 只在 /tmp/teamsmith-smoke.* 里认「开始前一秒不存在、之后出现」的那一个（并发别的 smoke 不误伤）。
-scene_snapshot() { printf ' %s ' "$(ls -d /tmp/teamsmith-smoke.* 2>/dev/null | tr '\n' ' ')"; }
+# 只在「本轮的场景根」里认「开始前一秒不存在、之后出现」的那一个（并发别的 smoke 不误伤）。
+# P287：根名从平铺 `teamsmith-smoke.<rand>` 变成 `teamsmith-smoke-<ns>.<rand>` —— 两种形状都要认
+# （`--pre-skill` 那侧跑的是改动前的树，根仍是平铺名）。
+scene_snapshot() { printf ' %s ' "$(ls -d /tmp/teamsmith-smoke[.-]* 2>/dev/null | tr '\n' ' ')"; }
 reap_once() { # <场景目录> <第几次>
   case "$REAP_VIA" in
     mv)
@@ -139,7 +141,7 @@ reap_once() { # <场景目录> <第几次>
 reaper() { # <log> <smoke-pid>；失败时把原因写进 <log> 并返回 1
   local log="$1" pid="$2" d="" i c n=0
   for i in $(seq 1 2400); do                     # ≤120s 等新场景出现
-    for c in /tmp/teamsmith-smoke.*; do
+    for c in /tmp/teamsmith-smoke[.-]*; do
       [ -d "$c" ] || continue
       case "$BEFORE_DIRS" in *" $c "*) continue ;; esac
       d="$c"; break

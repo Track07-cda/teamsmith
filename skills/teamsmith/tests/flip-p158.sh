@@ -135,7 +135,8 @@ run_case() { # <名字> <在变体树里执行的变异命令>
   pid=$!
   fp=""; i=0
   while [ "$i" -lt 500 ] && [ -z "$fp" ]; do
-    fp="$(ls "$ctmp"/teamsmith-smoke.*/"$marker" 2>/dev/null | head -1)"
+    # P287：根名带 ns（`teamsmith-smoke-<ns>.<rand>`）；--base 的旧树是平铺名 —— 两种都认
+    fp="$(ls "$ctmp"/teamsmith-smoke[.-]*/"$marker" 2>/dev/null | head -1)"
     [ -n "$fp" ] || { sleep 0.02; i=$((i + 1)); }
   done
   [ "$marker" = "sections.tsv" ] && sleep 0.5    # 老实现：再给它一点时间把树真正读过一遍

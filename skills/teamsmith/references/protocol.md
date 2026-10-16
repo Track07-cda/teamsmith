@@ -654,25 +654,53 @@ carries an illegal token, so the read side and the write side can never disagree
 
 The full gate — `openspec validate … && bash skills/teamsmith/tests/smoke.sh` — spends the machine's tmux servers,
 node/bun processes and login shells, so it is serialised on **one gate lock**
-(`${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}`, holder recorded in `<lock>.holder`, wait capped by
-`TEAM_SMOKE_LOCK_WAIT`, default 1800 s). Use `TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections
-only; measured in the low minutes on a loaded 32-core box, not the seconds it once was - P100's F6) and the
-**full** suite for delivery and review.
+(`${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}`, wait capped by `TEAM_SMOKE_LOCK_WAIT`, default
+1800 s). Use `TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections only; measured in the low minutes
+on a loaded 32-core box, not the seconds it once was - P100's F6) and the **full** suite for delivery and review.
+
+**The gate lock is a pair: a published path (compatibility) and a companion (the mutex).** The published path is
+what a writer of an earlier release — which knows only that name — takes, so a run takes it **first** and then the
+companion `<same dir>/.<basename>.machine`, where the mutex actually lives and where the run keeps its records
+(`<companion>.holder`, `<companion>.runs/<pid>.run`). The companion is dot-prefixed on purpose: a shared temp root
+collects other projects' cleanups, and a `rm -rf ${TMPDIR}/teamsmith-smoke.*` from one of them must not be able to
+reach this project's lock (that incident deleted a running gate's lock and work root; a shared `teamsmith-` prefix
+is not ownership). **Neither file is ever unlinked** — removing a lock file that waiters are blocked on is exactly
+the silent split the pair exists to remove — and only the holder's own record and run entry are removed at the end
+of the run. The run takes both locks **in its own process** (fds 8/9) and hands the suite to a child with those
+descriptors closed (`8>&- 9>&-`), so a fixture's background process cannot inherit the lock and hold it past the
+run. The holder record carries the locking process's own descriptor identity (`lock_identity=fd|path`,
+`lock_dev_ino=<dev:ino>`) — the identity of the file the holder really holds, readable only through that process's
+`/proc`; when that cannot be read the record says `path` and the path's identity instead, rather than guessing.
+
+**Losing the lock while running is loud and stops the run.** The 0.2 s tripwire watches the companion as well:
+when the lock is no longer the file the holder holds — *gone* (unlinked, not rebuilt) or *replaced* (the path now
+names a different inode; `rm`+recreate and `mv`-over both land here) — it prints one line saying which of the two
+happened, with the inode the holder holds and the one now on the path, appends the evidence (identity, the
+published path's state, the last section reached) next to the run's `$TMP` — outside it, so deleting the scene
+does not take it — and stops at the next safe point with exit 2 and **no result line**: a verdict computed after
+the mutex broke is not honest, and a plain red would bury *when* the lock went. Losing the **published** path alone
+is printed once and does not stop the run (the mutex is on the companion; what is lost is serialisation against
+older writers). A run that takes a lock whose live `top` record attests **another** identity refuses in the same
+way *before* running the suite — that record is the observable form of a mutex that is already broken.
 
 **A lock that cannot be taken is a visible degradation, not a hard failure.** If the lock file cannot be
 created (or `flock` is absent) the suite prints `注意：锁文件 … 建不了 → 不做排队` and runs anyway; only a
-*queue overrun* is loud (a one-line `排队超限` naming the holder in `<lock>.holder`, exit 2), and a genuine
+*queue overrun* is loud (a one-line `排队超限` naming the holder in `<companion>.holder`, exit 2), and a genuine
 red is exit 1 with no queue wording (P66/P100's F1).
 
 **A nested run does not queue on the gate lock, and it must prove its ancestor.** The lock serialises
 **top-level** runs only. A run started inside a run that holds the lock — *proved* by walking the process
-ancestry to the pid recorded in `<lock>.holder` / `<lock>.runs/<pid>.run` and matching that process's start
-time, never by the inherited `SMOKE_LOCK_WRAPPED` marker (a fixture can clear it, and a nested run carrying it
-used to overwrite and delete the real holder's record) — does not queue: queueing there hands the machine's one
+ancestry to a pid recorded in `<companion>.holder` / `<companion>.runs/<pid>.run` and matching that process's
+start time, never by the inherited `SMOKE_LOCK_WRAPPED` marker (a fixture can clear it, and a nested run carrying
+it used to overwrite and delete the real holder's record) — does not queue: queueing there hands the machine's one
 shared resource to a fixture and deadlocks the run against its own ancestor. It registers itself in
-`<lock>.runs/<pid>.run` instead, so a waiter can attribute what it is waiting for. A run that cannot prove a
+`<companion>.runs/<pid>.run` instead, so a waiter can attribute what it is waiting for. A run that cannot prove a
 live ancestor holding the lock (including on a host without `/proc`) is treated as top-level and queues exactly
-as before, so skipping the queue is never unconditional. The holder record names its kind (`top`/`nested`), its
+as before, so skipping the queue is never unconditional. The claim that a run is "the one that holds the lock"
+must be backed by the locking process's own `/proc` — its descriptor pointing at the companion, with the identity
+the run was handed — or by a live record naming it: environment variables alone name nobody. The claimant must
+also be a **strict** ancestor of the claiming suite (a section-selected run adds one more process layer, so the
+locker is the grandparent there and the parent in the direct case, and both are covered). The holder record names its kind (`top`/`nested`), its
 seat and its worktree (derived from the runtime directory by the same rule as `team notify`'s sender, never from
 a tmux window name; unresolvable fields are written `?`, not guessed), its start time, its expected duration and
 its bound (the section table's Σband / Σbudget over the sections that run will execute), and the waiter prints
@@ -690,11 +718,17 @@ visible line naming it, and only the pids the fixture itself registered are sign
 
 **The residual window is the explicit opt-out.** `TEAM_SMOKE_NO_LOCK=1`, a host without `flock` or the fast mode
 (which runs no real-process section) leave the suite unserialised, so two seats' nested runs can overlap there.
-The suite prints `no_lock=1` with the reason **and registers that run** in `<lock>.runs/<pid>.run` with
+The suite prints `no_lock=1` with the reason **and registers that run** in `<companion>.runs/<pid>.run` with
 `no_lock=1` when that happens: the window is *observable* in the record, not just on stdout, and it is not
 asserted away. The gate can prove that the record carries these fields, that a waiter prints them, and that a nested run
 past its bound is named and stopped — it **cannot** prove that a live seat read the line and acted on it, nor
 that two seats' nested runs never overlap. Those two are outside what the gate can show.
+
+**A waiter re-resolves the path it is waiting on.** The wait is a bounded poll (one short non-blocking
+`flock` per second, cap recomputed each round), not a single blocking `flock`: when the lock the waiter is
+blocked on is unlinked and rebuilt while it waits, it prints one line with both identities (what it was waiting
+on, what is on the path now) and goes on waiting on the path — never silently on a dead inode, which is how a
+waiter ends up "holding" a lock nobody else can see.
 
 **The queue cap follows the holder's published expected duration.** When the holder record publishes `started`
 and `expected`, the waiter's cap is `clamp(remaining + 60 s, TEAM_SMOKE_LOCK_WAIT, 4 × TEAM_SMOKE_LOCK_WAIT)`
@@ -702,7 +736,13 @@ with `remaining = expected − (now − started)`, and the waiter prints that ar
 numbers; when the record publishes no `expected` (an older writer, or an unreadable record) the cap stays
 `TEAM_SMOKE_LOCK_WAIT` exactly as before. The verdict token set (`PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN`), the
 `queued Ns / ran Ns / limit Ns` accounting and the rule that a queue overrun is `FAIL` (never `TIMEOUT`) with
-the holder named are all unchanged.
+the holder named are all unchanged. `team review` takes the same pair, in the same order, in its own process,
+and runs the project's gate with the lock descriptors closed: its gate record still separates `queued` from
+`ran`, and a broken mutex makes the verdict `FAIL` with its own marker (internal `mutexbroken`; rendered as
+`gate mutex broken（互斥被破坏：判定不可信）` in the record's flags, alongside `queuecap`) — either before the
+gate runs (a live `top` record attesting another identity: the gate did **not** run, and the record says so,
+exactly as the `queuecap` shape does) or after it (the gate ran, the record says the verdict is not trustworthy,
+and it does not claim the gate never ran).
 
 **The gate fingerprints the tree it judges (P158).** Once the run's own root exists it records `HEAD` and the
 sha256 of `git status --porcelain --untracked-files=all` (untracked files included) into the run's scene file

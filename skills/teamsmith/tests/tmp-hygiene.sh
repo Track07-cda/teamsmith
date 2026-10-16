@@ -31,6 +31,12 @@
 #     与**陈旧 socket**（非 default、`ss -xl` 无监听、年龄下限）的计数；`--sweep` 默认只报不动，
 #     `--tmux-sockets` 才清；**default 永不触碰**（socket 与 server 都是）。
 #   - 台账里还活着的根（门禁的泄漏断言用）由 tests/lib/tmp-root.sh 写；本脚本不碰它。
+#   - **命名空间与锁对**（P287）：活运行**为自己**直接落在临时根上的东西，要么点开头（台账 / pid /
+#     诊断），要么带本项目的 ns（`<slug>-<hash8>`）；根是 `teamsmith-<kind>-<ns>.XXXXXX`。`--sweep` 的
+#     候选谓词不动（根仍是家族目录 + 台账归因），`--status` 多一列 ns，并把**锁对**按角色报出来
+#     （发布路径 = 兼容声明 / 伴生锁 = 运行互斥 / `<companion>.runs/` = 运行注册）。`--lint` 的规则
+#     从「`mktemp -d` 根模板在前缀家族里」扩成「直接落在解析后临时根上的每一个模板：点开头或带 ns；
+#     根还要在家族里」，作用域从 tests/** 扩到整棵 skill 树（夹具 **与** 产品自己的临时模板）。
 #
 # 内部旋钮（夹具自检/门禁红侧用，生产路径不设）：
 #   TEAM_TMP_SWEEP_AGE   默认 30（分钟）；`--age` 覆盖
@@ -50,6 +56,24 @@ BASE_ABS="$(cd "$BASE" 2>/dev/null && pwd || printf '%s' "$BASE")"
 [ -n "$BASE_ABS" ] && BASE="$BASE_ABS"
 FAMILY_RE='^(teamsmith-|review-)'
 
+# P287：ns（项目命名空间）与伴生锁路径的**唯一实现**在 scripts/lib/ 下那两处 —— 本脚本只调它们。
+if ! declare -F team_project_ns >/dev/null 2>&1 && [ -f "$SKILL_DIR/scripts/lib/common.sh" ]; then
+  # shellcheck source=../scripts/lib/common.sh
+  . "$SKILL_DIR/scripts/lib/common.sh"
+fi
+if [ -z "${GATE_LOCK_LIB:-}" ] && [ -f "$SKILL_DIR/scripts/lib/gate-lock.sh" ]; then
+  # shellcheck source=../scripts/lib/gate-lock.sh
+  . "$SKILL_DIR/scripts/lib/gate-lock.sh"
+fi
+_hy_ns() { team_project_ns 2>/dev/null || printf 'nosig-00000000'; }
+_hy_companion() { # <发布路径> → 伴生锁（机器锁）路径；库不在时按公式退一步
+  if declare -F gate_lock_companion_path >/dev/null 2>&1; then
+    gate_lock_companion_path "$1"
+  else
+    printf '%s/.%s.machine\n' "$(dirname "$1")" "$(basename "$1")"
+  fi
+}
+
 FLIP=""
 [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ] && FLIP="${TEAM_TMP_HYGIENE_FLIP:-}"
 
@@ -61,7 +85,8 @@ _usage() {
   cat <<'EOF'
 用法：bash tests/tmp-hygiene.sh <verb> [选项]
   --status                 只读清单（根 / 归属未证·别家（逐条点名） / 不是根 / 占用 / 余量 / 工具身份）；永远 exit 0
-  --lint [--dir D]         静态检查 tests/** 的 mktemp -d 根模板；有 finding → exit 1
+  --lint [--dir D]         静态检查 mktemp 模板（默认整棵 skill 树）：直接落在解析后临时根上的模板
+                           必须点开头或带本项目的 ns，根还要在 owned 家族里；有 finding → exit 1
   --sweep [--dry-run] [--age N] [--tmux-sockets]
                            回收陈旧、无占用的根（默认 30 分钟 / TEAM_TMP_SWEEP_AGE）；
                            别家 / 归属不明的目录逐条点名、永不碰；
@@ -306,6 +331,7 @@ _root_ledger_repo_verdict() {
   line="$(head -1 "$ledger" 2>/dev/null || true)"
   [ "${line##* repo=}" != "$line" ] || { printf 'unknown\t旧台账没有 repo= 字段\n'; return 0; }
   repo="${line##* repo=}"
+  repo="${repo%% *}"                    # 表头行 `repo=` 之后还可能有别的键（P287 的 ns=）
   { [ -n "$repo" ] && [ "$repo" != "unknown" ]; } || { printf 'unknown\t台账没有可比的仓库身份\n'; return 0; }
   mine="$(_main_root 2>/dev/null || true)"
   if [ -n "$mine" ] && [ "$repo" = "$mine" ]; then
@@ -500,12 +526,13 @@ cmd_status() {
     esac
     roots=$((roots + 1))
     kb="$(_dir_kb "$e")"; files="$(_dir_files "$e")"; age="$(_age_minutes "$e" 2>/dev/null || printf '?')"
-    local pid start kind run owner occ_state
+    local pid start kind run owner occ_state ns
     pid="$(_marker_get "$e" pid || true)"; start="$(_marker_get "$e" start || true)"
     kind="$(_marker_get "$e" kind || true)"; run="$(_marker_get "$e" run || true)"
+    ns="$(_marker_get "$e" ns || true)"
     if [ -n "$pid" ]; then
       if _proc_alive "$pid" "$start"; then owner="pid=$pid 存活"; else owner="pid=$pid 已退出"; fi
-      owner="$owner${kind:+ kind=$kind}"
+      owner="$owner${kind:+ kind=$kind}${ns:+ ns=$ns}"
       grep -q '^detached=1$' "$e/.teamsmith-tmp" 2>/dev/null && owner="$owner · detached（生命周期归调用方）"
     else
       owner="无 owner 标记（不是经助手创建的根）"
@@ -551,6 +578,19 @@ cmd_status() {
   done
   [ "$listed" -eq 0 ] && printf '  （没有这类条目）\n'
 
+  # P287：锁对 —— 文件永远不是 --sweep 的候选（候选只认家族**目录**），但运维在共享临时根里读到这
+  # 三样时要能一眼分清「运行互斥」「兼容声明」「运行注册」。
+  local hy_pub hy_comp hy_runs_n
+  hy_pub="${TEAM_SMOKE_LOCK:-$BASE/teamsmith-smoke.lock}"
+  hy_comp="$(_hy_companion "$hy_pub")"
+  hy_runs_n="$([ -d "$hy_comp.runs" ] && find "$hy_comp.runs" -maxdepth 1 -name '*.run' 2>/dev/null | wc -l | tr -d ' ' || printf 0)"
+  printf '\n不是根 · 锁对（P287：互斥在伴生锁上；发布路径只是兼容声明；三样都不是 --sweep 的候选）：\n'
+  printf '  [machine     运行互斥] %s（%s）\n' "$hy_comp" \
+    "$([ -e "$hy_comp" ] && printf '存在' || printf '不存在（下一次取锁按需创建）')"
+  printf '  [published   兼容声明] %s（%s）\n' "$hy_pub" \
+    "$([ -e "$hy_pub" ] && printf '存在；P287 之前的写入者只取这一把' || printf '不存在（下一次取锁按需创建）')"
+  printf '  [records     运行注册] %s（%s 条）\n' "$hy_comp.runs" "${hy_runs_n:-0}"
+
   local stale
   stale="$(_stale_worktree_registrations | wc -l | tr -d ' ')"
   if [ "${stale:-0}" -gt 0 ] 2>/dev/null; then
@@ -574,9 +614,20 @@ cmd_status() {
 }
 
 # ---------------------------------------------------------------- --lint
-_lint_template() { # <“mktemp -d” 之后的文本> → 第一个参数（保留引号）
-  local s="${1#*mktemp -d}"
+# P287 的规则（作用域 = 整棵 skill 树：夹具 **与** 产品自己的临时模板；跳过扫描器自己的源码与嵌套根
+# `$TMP/…`）：
+#   * 直接落在解析后临时根（`${TMPDIR:-/tmp}`）上的每一个 `mktemp` 模板：要么点开头（台账 / pid /
+#     诊断），要么带本项目的 ns（`<slug>-<hash8>`）；
+#   * `mktemp -d` 的**根**还必须在 owned 家族里（`teamsmith-<kind>-<ns>.XXXXXX`）；
+#   * 写死一个别的绝对目录（不是解析后的临时根）或相对模板 → finding。
+# finding 仍是 `<file>:<line>`、退出码 1。裸 `mktemp`（没有模板参数）没有模板可判 —— 静态闸不猜。
+_lint_first_arg() { # <“mktemp” 之后的文本> → 第一个参数（保留引号）；空 = 没有模板
+  local s="$1"
   s="${s#"${s%%[![:space:]]*}"}"        # 去前导空白
+  # 选项：本树的 mktemp 只用 -d（其余形状按「没有模板」处理，不猜）
+  case "$s" in -d) printf '\n'; return 0 ;; esac
+  case "$s" in -d*) s="${s#-d}"; s="${s#"${s%%[![:space:]]*}"}" ;; esac
+  s="${s#"${s%%[![:space:]]*}"}"
   [ -n "$s" ] || { printf '\n'; return 0; }
   local q="${s:0:1}" out="" i ch
   if [ "$q" = '"' ] || [ "$q" = "'" ]; then
@@ -600,36 +651,52 @@ _lint_template() { # <“mktemp -d” 之后的文本> → 第一个参数（保
   done
   printf '%s\n' "$out"
 }
-_lint_judge() { # <file> <line> <template> → 0 合规 / 1 finding（打印到 stdout）
-  local f="$1" ln="$2" t="$3" u first
+_lint_judge() { # <file> <line> <template> <is_root> → 0 合规 / 1 finding（打印到 stdout）
+  local f="$1" ln="$2" t="$3" is_root="$4" u first ns
   if [ -z "$t" ]; then
-    printf '%s:%s: 无模板（裸 mktemp -d 的名字不在 owned 家族）\n' "$f" "$ln"; return 1
+    if [ "$is_root" = "1" ]; then
+      printf '%s:%s: 无模板（裸 mktemp -d 的名字不在 owned 家族、也没有本项目的 ns）\n' "$f" "$ln"; return 1
+    fi
+    return 0                          # 裸 mktemp（文件）：没有模板，静态闸不猜
   fi
   u="$t"
   case "$u" in \"*\") u="${u#\"}"; u="${u%\"}" ;; \'*\') u="${u#\'}"; u="${u%\'}" ;; esac
-  if [ "$FLIP" = "lint" ]; then
-    # 红侧：把「不许写死绝对路径」这条规则关掉
-    return 0
-  fi
   case "$u" in
     /*)
+      # 红侧：只把「不许写死绝对路径」这一条规则关掉（ns / 家族两条照判）
+      [ "$FLIP" = "lint" ] && return 0
       printf '%s:%s: 写死绝对路径（%s）—— 必须建在 ${TMPDIR:-/tmp} 下\n' "$f" "$ln" "$u"; return 1 ;;
-    '${TMPDIR:-/tmp}/'*)
-      first="${u#'${TMPDIR:-/tmp}/'}"; first="${first%%/*}" ;;
-    '$TMPDIR/'*)
-      first="${u#'$TMPDIR/'}"; first="${first%%/*}" ;;
+    '${TMPDIR:-/tmp}/'*) first="${u#'${TMPDIR:-/tmp}/'}"; first="${first%%/*}" ;;
+    '$TMPDIR/'*)         first="${u#'$TMPDIR/'}"; first="${first%%/*}" ;;
     ''|'$'*|'${'*)
-      return 0 ;;                       # 嵌套根（$TMP/…）等变量模板：豁免
+      return 0 ;;                     # 变量模板（嵌套根 / 变量前缀）：静态判不了，豁免
     *)
       printf '%s:%s: 相对/非临时根的模板（%s）\n' "$f" "$ln" "$u"; return 1 ;;
   esac
+  # first = 直接落在解析后临时根上的那一段名字模板
   case "$first" in
-    teamsmith-*) return 0 ;;
-    *) printf '%s:%s: 名字不在 owned 家族（%s）—— 必须是 teamsmith-<kind>.XXXXXX\n' "$f" "$ln" "$u"; return 1 ;;
+    .*) return 0 ;;                   # 点开头：天然不是别人的前缀 glob 的猎物
   esac
+  case "$first" in
+    teamsmith-*|review-*) ;;
+    *) printf '%s:%s: 名字不在 owned 家族（%s）—— 必须是 teamsmith-<kind>-<ns>.XXXXXX，或点开头\n' \
+         "$f" "$ln" "$u"; return 1 ;;
+  esac
+  case "$first" in
+    *'$'*) return 0 ;;                # 参数化名字：ns 由运行时的展开给（模板里写着变量）
+  esac
+  ns="$(_hy_ns)"
+  case "$first" in *"$ns"*) return 0 ;; esac
+  if [ "$is_root" = "1" ]; then
+    printf '%s:%s: 根模板没有带本项目的命名空间（%s）—— 必须是 teamsmith-<kind>-<ns>.XXXXXX\n' \
+      "$f" "$ln" "$u"
+  else
+    printf '%s:%s: 每运行模板既不是点开头、也没有本项目的命名空间（%s）\n' "$f" "$ln" "$u"
+  fi
+  return 1
 }
 cmd_lint() {
-  local dir="$SELF_DIR"
+  local dir="$SKILL_DIR"                # P287：默认扫整棵 skill 树（夹具 + 产品自己的临时模板）
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir) dir="${2:-$dir}"; shift ;;
@@ -640,17 +707,24 @@ cmd_lint() {
   local checked=0 findings=0 f ln logical
   local self_file="$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
   while IFS= read -r f; do
-    # 扫描器自己的源码里有 `mktemp -d` 的**文字**（注释/格式串）—— 它不是夹具，跳过
-    [ "$f" = "$self_file" ] && continue
+    # 扫描器自己的源码里有 `mktemp` 的**文字**（注释/格式串/自检夹具）—— 它不是产品面，跳过
+    # （`-ef`：同一个文件的相对/绝对路径都要认出来）
+    [ "$f" -ef "$self_file" ] && continue
     while IFS=$'\t' read -r ln logical; do
-      case "$logical" in *"mktemp -d"*) ;; *) continue ;; esac
-      local rest="$logical"
+      # 整行注释里的 `mktemp` 是文字，不是模板
+      case "${logical#"${logical%%[![:space:]]*}"}" in '#'*) continue ;; esac
+      case "$logical" in *mktemp*) ;; *) continue ;; esac
+      local rest="$logical" occ_word tmpl is_root
       while :; do
-        case "$rest" in *"mktemp -d"*) ;; *) break ;; esac
-        rest="${rest#*mktemp -d}"
-        local tmpl; tmpl="$(_lint_template "$rest")"
+        case "$rest" in *mktemp*) ;; *) break ;; esac
+        rest="${rest#*mktemp}"
+        # 函数定义 `mktemp() { … }`（task-model-routing.sh 的桩）不是一次调用
+        case "${rest#"${rest%%[![:space:]]*}"}" in '('*) continue ;; esac
+        is_root=0
+        case "${rest#"${rest%%[![:space:]]*}"}" in -d*) is_root=1 ;; esac
+        tmpl="$(_lint_first_arg "$rest")"
         checked=$((checked + 1))
-        _lint_judge "$f" "$ln" "$tmpl" || findings=$((findings + 1))
+        _lint_judge "$f" "$ln" "$tmpl" "$is_root" || findings=$((findings + 1))
       done
     done < <(awk '{
         buf = buf $0; if (start==0) start=NR
@@ -659,12 +733,13 @@ cmd_lint() {
         buf=""; start=0
       } END { if (buf != "") print start "\t" buf }' "$f")
   done < <(find "$dir" -type f -name '*.sh' 2>/dev/null | sort)
-  printf '\n检查了 %s 个 mktemp -d 根模板（%s）\n' "$checked" "$dir"
+  printf '\n检查了 %s 个 mktemp 模板（%s；规则：点开头或带 ns「%s」，根还要在 owned 家族里）\n' \
+    "$checked" "$dir" "$(_hy_ns)"
   if [ "$findings" -gt 0 ]; then
     printf '\033[31m%s 个 finding\033[0m\n' "$findings"
     return 1
   fi
-  printf '\033[32mowned 家族 / TMPDIR 口径全部合规\033[0m\n'
+  printf '\033[32mowned 家族 / TMPDIR / 命名空间口径全部合规\033[0m\n'
   return 0
 }
 
@@ -943,6 +1018,14 @@ _hy_selftest() {
   assert_out "$o_status" "$live" "status 列出存活的根"
   assert_out "$o_status" "$live_holder(cwd)" "status 把存活根的占用者（pid）报出来"
   assert_out "$o_status" "$D/teamsmith-inotify-probe.A1.js" "status 列出家族里的文件（不是根）"
+  # P287：根的 ns 列 + 锁对按角色报出
+  printf 'kind=selftest\npid=999999\nstart=0\nrun=t\nns=%s\n' "$(_hy_ns)" >"$stale/.teamsmith-tmp"
+  out="$(TMPDIR="$D" _hy "" --status 2>&1)"
+  assert_out "$out" "ns=$(_hy_ns)" "status 在根的归属行里报出 ns"
+  printf 'kind=selftest\npid=999999\nstart=0\nrun=t\n' >"$stale/.teamsmith-tmp"
+  assert_out "$out" "[machine     运行互斥]" "status 按角色报出伴生锁（运行互斥）"
+  assert_out "$out" "[published   兼容声明]" "status 按角色报出发布路径（兼容声明）"
+  assert_out "$out" "[records     运行注册]" "status 按角色报出运行注册目录"
   assert_out "$o_status" "$D/.teamsmith-smoke-diag.A1.log" "status 列出本项目的点开头诊断（不是根）"
   case "$o_status" in *"$D/.foreign-dot.hm"*) bad "status 列了别家的点文件（不是我们的家族，不该列）" ;; *) ok "status 不列别家的点文件（.foreign-dot.hm 不在输出里）" ;; esac
 
@@ -998,15 +1081,17 @@ _hy_selftest() {
   fi
   rm -f "$D/teamsmith-smoke.lock" "$D/teamsmith-smoke.lock.holder"
 
-  # ── ⑦ lint：绿侧干净 / 红侧（写死 /tmp）必须点名 file:line
+  # ── ⑦ lint：绿侧干净 / 三条红侧各点名 file:line（写死 /tmp、丢 ns、既非点开头也非 ns）
   local ld="$D/lint-src"; mkdir -p "$ld"
   cat >"$ld/ok.sh" <<'EOS'
 #!/usr/bin/env bash
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-ok.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-ok-$(team_project_ns).XXXXXX")"
+FILE="$(mktemp "${TMPDIR:-/tmp}/teamsmith-probe.$(team_project_ns).XXXXXX")"
 NEST="$(mktemp -d "$TMP/login-home.XXXXXX")"
+DOT="$(mktemp "${TMPDIR:-/tmp}/.teamsmith-dot.XXXXXX")"
 EOS
   out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
-  [ "$rc" = 0 ] && ok "lint 对合规模板退出 0" || bad "lint 对合规模板退出 $rc（$(printf '%s' "$out" | head -2 | tr '\n' '|')）"
+  [ "$rc" = 0 ] && ok "lint 对合规模板（根带 ns / 文件带 ns / 嵌套 / 点开头）退出 0" || bad "lint 对合规模板退出 $rc（$(printf '%s' "$out" | head -2 | tr '\n' '|')）"
   cat >"$ld/bad.sh" <<'EOS'
 #!/usr/bin/env bash
 TMP="$(mktemp -d /tmp/whatever.XXXXXX)"
@@ -1014,8 +1099,28 @@ EOS
   out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
   [ "$rc" = 1 ] && ok "lint 对写死 /tmp 退出 1" || bad "lint 对写死 /tmp 退出 $rc（期望 1）"
   assert_out "$out" "$ld/bad.sh:2" "lint finding 点名 file:line"
-  # 红侧：break=lint 时同一条 finding 必须消失（守门断言被证伪）
+  # P287 红侧 ①：保留家族前缀但丢 ns（根）
+  cat >"$ld/nons.sh" <<'EOS'
+#!/usr/bin/env bash
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-nons.XXXXXX")"
+EOS
+  out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && ok "lint 对「家族前缀但丢 ns」的根模板退出 1" || bad "lint 对丢 ns 的根模板退出 $rc（期望 1）"
+  assert_out "$out" "$ld/nons.sh:2" "丢 ns 的根 finding 点名 file:line"
+  assert_out "$out" "命名空间" "丢 ns 的 finding 说明是命名空间问题"
+  # P287 红侧 ②：每运行模板既不是点开头、也没有 ns
+  cat >"$ld/flat.sh" <<'EOS'
+#!/usr/bin/env bash
+TMP="$(mktemp "${TMPDIR:-/tmp}/teamsmith-flat.XXXXXX")"
+EOS
+  out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && ok "lint 对「既非点开头也无 ns」的每运行模板退出 1" || bad "lint 对平铺每运行模板退出 $rc（期望 1）"
+  assert_out "$out" "$ld/flat.sh:2" "平铺每运行模板 finding 点名 file:line"
+  # 红侧：break=lint 只关掉「不许写死绝对路径」这一条（ns 两条照判）
   rm -f "$ld/bad.sh"
+  out="$(TMPDIR="$D" _hy lint --lint --dir "$ld" 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && ok "break=lint 只关写死 /tmp 那条：ns 两条仍然红（rc=1）" || bad "break=lint 把 ns 规则也关掉了（rc=$rc，期望 1）"
+  rm -f "$ld/nons.sh" "$ld/flat.sh"
   out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
   [ "$rc" = 0 ] && ok "删掉违规模板后 lint 回到 0" || bad "lint 没有回到 0（rc=$rc）"
 

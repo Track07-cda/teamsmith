@@ -77,7 +77,7 @@ if [ "${1:-}" = "--render-one" ]; then
   # locale and width exactly as before (the locale group is the only caller that pins them).
   _env=()
   [ -n "$_loc" ] && _env=(LC_ALL="$_loc")
-  _rtmp="${TMPDIR:-/tmp}/teamsmith-help-surface-render.$$"
+  _rtmp="${TMPDIR:-/tmp}/.teamsmith-help-surface-render.$$"
   mkdir -p "$_rtmp" "$_dir"
   ( cd "$_rtmp" && env "${_env[@]}" TEAM_LANG="$_lang" ${_w:+TEAM_HELP_WIDTH="$_w"} \
       bash "$team" "${_argv[@]}" ) > "$_dir/$_kind--$_label.txt" 2>/dev/null
@@ -125,7 +125,7 @@ finding() { printf '  \033[31m✗\033[0m %s\n' "$1"; FIND=$((FIND + 1)); }
 skip()    { printf '  \033[33mSKIP\033[0m %s\n' "$1"; SKIP=$((SKIP + 1)); }
 
 # ---------------------------------------------------------------- owned scratch root
-tmp="${TMPDIR:-/tmp}/teamsmith-help-surface.$$"
+tmp="${TMPDIR:-/tmp}/.teamsmith-help-surface.$$"
 rm -rf "$tmp"; mkdir -p "$tmp/logs" "$tmp/fx"
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0

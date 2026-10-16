@@ -241,7 +241,7 @@ team_version_newer() { # <local> <published> → 0 = published 的数字段严�
 team_update_lookup() { # → stdout npm 上的最新版本（严格 ^[0-9]+.[0-9]+.[0-9]+$）；查不到 → 空
   command -v npm >/dev/null 2>&1 || return 0
   local tmp rc=0 pid i=0 out
-  tmp="$(mktemp "${TMPDIR:-/tmp}/teamsmith-npm.XXXXXX" 2>/dev/null)" || return 0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/teamsmith-npm.$(team_project_ns).XXXXXX" 2>/dev/null)" || return 0
   if command -v timeout >/dev/null 2>&1; then
     timeout 2 npm view teamsmith version --registry https://registry.npmjs.org >"$tmp" 2>/dev/null || rc=$?
   else

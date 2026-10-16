@@ -120,6 +120,8 @@
 12k · 模板与文档（P24/B7）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 34 · 门禁锁：排队/运行分开记账（P26/G1：verification#The hard timeout covers the gate run, not the queue）	52.00	208	52.00	10.6/?/14.0/10.5/16.6	47.00	12.9	-	P281 apply 实测（2026-10-15，本 worktree，私有外层锁，loadavg1 16.6/32 核）：host=[P281a=52s,P281b=52s] 取最差；旧值 48.00 保留在 container 列（47.00）· ×4 · floor 60
 34b · 门禁锁排队守卫：超上限要大声失败并点名持有者（P66）	59.00	236	59.00	10.6/?/14.0/10.5/16.6	5.00	12.9	-	P281 apply + 返修轮次 1 实测（2026-10-15，本 worktree，私有锁）：host=[apply P281a=30s,P281b=39s,P281c=41s；返修 iter1=59s,iter2=58s] 取最差 59.00（返修新增红侧 ⑫/⑬ 与 ⑧ 的三向对齐）；旧值 5.00 保留在 container 列 · ×4=236 · floor 60
+34c · 命名面：运行条目点开头或带 ns，平铺家族够不着（P287 · verification#A fixture's temp root…）	30.00	120	30.00	10.6/?/14.0/10.5/16.6	-	-	-	P288 apply 实测（2026-10-16，本 worktree，私有外层锁）：host=[34c=25s] 取最差；· ×4 · floor 60（预算只判 liveness）
+34d · 身份面：锁被删/被换 → 一行点名 + 证据 + 停跑；入场检查；等待者（P287 · verification#The gate's lock…）	240.00	960	240.00	10.6/?/14.0/10.5/16.6	-	-	-	P288 apply 实测（2026-10-16，本 worktree，私有外层锁）：host=[34d=156s] 取最差；· ×4 · floor 60（预算只判 liveness）
 35 · 门禁只判正确性：性能判定守卫 + 旋钮完整性（M58 · perf-suite-split）	1.00	60	1.00	10.6/?/14.0/10.5	1.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 37 · 读路径性能：根一次解析 + 单进程扫描（M50）	17.00	68	17.00	10.6/?/14.0/10.5	17.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60
 38 · 设置选项（M55：choices 读 / 一致性走查 / 选择器夹具）	312.00	1248	312.00	10.6/?/14.0/10.5	309.00	12.9	-	P70 实测：host=[P56fast,P56full,FAST2,full1] container=[ctr1] 取最差 · ×4 · floor 60

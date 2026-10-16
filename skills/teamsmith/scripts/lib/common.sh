@@ -56,6 +56,49 @@ team_main_root() {
   printf '%s\n' "$root"
 }
 
+# ---------------------------------------------------------------- 项目命名空间（ns）
+# P287（change: gate-lock-external-deletion）：运行**自己的**东西必须能证明「是本项目的」。
+# 事故（D184，2026-10-15）：另一个项目的清理命令里带了一条 `rm -rf /tmp/teamsmith-smoke.*`，
+# 删掉了当时**正在跑**的门禁的工作根与锁文件 —— 只靠共享前缀（teamsmith-）区分不了归属，
+# 而任何装了 teamsmith 的项目都会很自然地写这条命令。
+#   ns = <slug>-<hash8>：slug 取 TEAM_PROJECT（有则用）否则**主检出**目录名，只保留 [A-Za-z0-9_]、
+#   截断 24；hash8 = 主检出 realpath 的 sha256 前 8 位。
+# 主检出 = dirname(`git rev-parse --path-format=absolute --git-common-dir`)，在**本文件所在的仓库**里
+# 解析 —— 与 tmp-root 台账头的 repo= 是同一条（所有 worktree 因此共用一个 ns，两个项目装在同一台
+# 机器上不会撞）。git 不可用（无 git 的检出）→ 退到 skill 自己的仓库根。
+# 纯函数：不读配置、不创建任何东西、没有 git / 没有 sha256 工具也不报错。
+team_hash8() { # <字符串> → sha256 前 8 位十六进制（三种工具都缺 → 00000000）
+  local sum=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | sha256sum 2>/dev/null | cut -c1-8)"
+  elif command -v shasum >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | shasum -a 256 2>/dev/null | cut -c1-8)"
+  elif command -v openssl >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}' | cut -c1-8)"
+  fi
+  case "$sum" in ''|*[!0-9a-f]*) sum=00000000 ;; esac
+  printf '%s\n' "$sum"
+}
+
+team_project_ns() {
+  local lib g main slug
+  lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  g=""
+  [ -n "$lib" ] && g="$(git -C "$lib" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$g" ]; then
+    main="$(dirname "$g")"
+  elif [ -n "$lib" ]; then
+    main="$(cd -P "$lib/../../../.." 2>/dev/null && pwd || printf '%s' "$lib")"
+  else
+    main="unknown"
+  fi
+  slug="${TEAM_PROJECT:-$(basename "$main")}"
+  slug="$(printf '%s' "$slug" | tr -c 'A-Za-z0-9_' '_')"
+  slug="${slug:0:24}"
+  [ -n "$slug" ] || slug=project
+  printf '%s-%s\n' "$slug" "$(team_hash8 "$main")"
+}
+
 # ---------------------------------------------------------------- M50 · 读路径扫描缓存（进程内，判定不变）
 # 实测现场（M50 任务书）：`team digest` 一次 1646 次 git 调用 / 85 秒 —— 不是 markdown 慢，是
 # 每次辅助调用都重新解析仓库根（5 次 rev-parse）、每份报告都重新 fork 一次 `git rev-parse`
@@ -1192,14 +1235,16 @@ team_inotify_used_watches() {
 # 判据是「这个用户此刻能不能注册」（不是「计数大不大」——计数在容器里可能是局部视图）。
 # 输出：ok | errno=<E> | unavailable（解析不到运行时 / 探针起不来）。TEAM_INOTIFY_PROBE_TIMEOUT 秒。
 team_inotify_probe() {
-  local runner script out
+  local runner script out ns
   runner="$(team_js_runner 2>/dev/null || true)"
   [ -n "$runner" ] || { printf 'unavailable\n'; return 0; }
-  script="$(mktemp "${TMPDIR:-/tmp}/teamsmith-inotify-probe.XXXXXX.js" 2>/dev/null || true)"
+  ns="$(team_project_ns)"
+  # P287：直接落在解析后临时根上的东西要么点开头要么带 ns（探针脚本与探针目录都是如此）
+  script="$(mktemp "${TMPDIR:-/tmp}/teamsmith-inotify-probe.${ns}.XXXXXX.js" 2>/dev/null || true)"
   [ -n "$script" ] || { printf 'unavailable\n'; return 0; }
   cat > "$script" <<'TEAM_INOTIFY_PROBE_JS' || { rm -f "$script"; printf 'unavailable\n'; return 0; }
 const fs = require('fs'), os = require('os'), path = require('path')
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamsmith-inotify-probe-'))
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamsmith-inotify-probe.' + (process.env.TEAM_INOTIFY_NS || 'nosig-00000000') + '-'))
 let verdict = 'ok'
 try {
   const w = fs.watch(dir, () => {})
@@ -1212,9 +1257,9 @@ try {
 process.stdout.write(verdict + '\n')
 TEAM_INOTIFY_PROBE_JS
   if command -v timeout >/dev/null 2>&1; then
-    out="$(timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
   else
-    out="$("$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"
   fi
   rm -f "$script"
   case "$out" in

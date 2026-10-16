@@ -53,6 +53,12 @@ PERF_SAMPLES=5
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # P53：临时根的唯一创建者（${TMPDIR:-/tmp} + owned 家族 + 回收）
 . "$here/lib/tmp-root.sh"
+# P287：门禁锁的伴生锁路径与「记录读哪一份」只在 scripts/lib/gate-lock.sh 里实现一次 ——
+# 只读探活要按新位置读（互斥在伴生锁上，发布路径是兼容声明；旧写入者的记录仍在发布路径边上）
+if [ -f "$here/../scripts/lib/gate-lock.sh" ]; then
+  # shellcheck source=../scripts/lib/gate-lock.sh
+  . "$here/../scripts/lib/gate-lock.sh"
+fi
 self="$here/perf.sh"
 ORIG_ARGS=("$@")
 tree=""
@@ -164,10 +170,19 @@ perf_require_pinned_container() {
 
 # ── 锁：自己一把（TEAM_PERF_LOCK），绝不拿门禁锁 ─────────────────────────────────────────────
 # 两次性能运行必须串行（夹具量的是真 pane / CPU 份额，互相测量会让数字失去意义）。
-# 用与 smoke 同形的 `flock --close` 包住整个脚本（重新 exec 自己）：锁挂在 flock 那个父进程上，
-# 套件与它的子孙都不继承 fd —— 夹具留下的后台进程也就不会漏锁。
+# P287（D4 裁定「性能套件那把锁一并」）：与正确性门禁**同一套锁机器** ——
+#   ① 两把锁、顺序固定（发布路径 = 兼容声明 → 伴生锁 = 运行互斥；同行同目录、`.machine`、点开头）；
+#      性能锁没有外部旧写入者，但同一套纪律买的是同一件事：别人的清理命令够不着互斥。
+#   ② 取锁的进程自己握 fd，套件跑在它的**子进程**里、两个锁 fd 关掉（`8>&- 9>&-`）——
+#      M23 的漏锁教训在这里同样是构造性关掉的；收尾只删**自己的记录**，锁文件永不 unlink。
+#   ③ 记录写在伴生锁边上（`<companion>.holder`），带 `lock_identity=fd|path` 与 `lock_dev_ino`。
+#   ④ 运行期间互斥被破坏（伴生锁被删/被换）⇒ 读数不可信：打印一行 + 判红（exit 2）。
+perf_lock_companion() { printf '%s\n' "$(gate_lock_companion_path "${1:-${TEAM_PERF_LOCK:-${TMPDIR:-/tmp}/teamsmith-perf.lock}}")"; }
 perf_lock_or_continue() {
-  [ "${TEAM_PERF_LOCK_WRAPPED:-0}" = "1" ] && return 0
+  [ "${PERF_LOCK_TAKEN:-0}" = "1" ] && return 0     # 子进程（真正跑套件的那个）：锁由父进程取到了
+  # 容器里的那一层由**宿主这一层**持锁（引擎是 P0 的子进程，锁 fd 已被 8>&- 9>&- 关掉）：
+  # 不再取锁、也不认领（认领判据在宿主那层已经判过）。
+  [ "${TEAM_PERF_LOCK_HELD_BY_RUNNER:-0}" = "1" ] && { note "性能锁由调用方（宿主运行）持有 → 容器内不再取锁"; return 0; }
   [ "${TEAM_PERF_NO_LOCK:-0}" = "1" ] && { note "TEAM_PERF_NO_LOCK=1 → 不与别的性能运行串行（自担并发干扰）"; return 0; }
   if ! command -v flock >/dev/null 2>&1; then
     note "本机没有 flock → 不与别的性能运行串行（自担并发干扰）"
@@ -175,40 +190,109 @@ perf_lock_or_continue() {
   fi
   local lock="${TEAM_PERF_LOCK:-${TMPDIR:-/tmp}/teamsmith-perf.lock}" wait_s="${TEAM_PERF_LOCK_WAIT:-1800}"
   case "$wait_s" in ''|*[!0-9]*) wait_s=1800 ;; esac
+  local comp; comp="$(perf_lock_companion "$lock")"
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
   : >>"$lock" 2>/dev/null || { note "锁文件 $lock 建不了 → 不串行"; return 0; }
-  if ! flock -n "$lock" true 2>/dev/null; then
-    say "另一个性能运行正在跑（$(cat "$lock.holder" 2>/dev/null || printf '持有者未知')）；本次排队，最多等 ${wait_s}s"
-  fi
-  export TEAM_PERF_LOCK_WRAPPED=1
-  # 用 flock 包住**重新执行的自己**（--close：子进程不继承 fd，夹具留下的后台进程不会漏锁）。
-  # 不用 exec：等待上限到了要留一句可读的话（exec 之后脚本已经不在了）。性能套件自己的退出码是
-  # 0/2/3/4，所以 flock 的 1 只可能是「等锁超时」。
-  local rc=0
-  flock --close -w "$wait_s" "$lock" bash "$self" "${ORIG_ARGS[@]}" || rc=$?
-  if [ "$rc" = "1" ]; then
-    # 套件自己的退出码只有 0/2/3/4 —— 1 只可能是「等锁超时」（无并发测量，视作没结论）→ exit 3。
-    printf 'perf: 等待 %ss 仍拿不到性能锁（持有者：%s）—— 另一个性能运行还没结束；不并发测量（exit 3）\n' \
-      "$wait_s" "$(cat "$lock.holder" 2>/dev/null || printf '未知')" >&2
-    exit 3
-  fi
-  exit "$rc"
+  # 有界轮询取两把锁（每轮重算上限：持有者公布的 expected 优先，缺则 wait_s）——
+  # 上限到点留下可读的一句（性能套件的退出码是 0/2/3/4，拿不到锁 = 没结论 → exit 3）。
+  local rc=0 t0 queued=0 cap wait_used=0
+  t0="$(date +%s)"
+  while :; do
+    rc=0; gate_lock_acquire_pair "$lock" || rc=$?
+    [ "$rc" = "0" ] && break
+    if [ "$rc" = "2" ]; then
+      note "锁文件 $lock 建不了 → 不串行"; return 0
+    fi
+    IFS=$'\t' read -r cap _ _ _ < <(gate_lock_cap_pair "$lock" "$wait_s")
+    case "$cap" in ''|*[!0-9]*) cap="$wait_s" ;; esac
+    if [ "$queued" = "0" ]; then
+      queued=1
+      say "另一个性能运行正在跑（$(gate_lock_describe_pair "$lock")）；本次排队，最多等 ${cap}s"
+    fi
+    wait_used=$(( $(date +%s) - t0 ))
+    if [ "$wait_used" -ge "$cap" ]; then
+      printf 'perf: 等待 %ss 仍拿不到性能锁（持有者：%s）—— 另一个性能运行还没结束；不并发测量（exit 3）\n' \
+        "$wait_used" "$(gate_lock_describe_pair "$lock")" >&2
+      exit 3
+    fi
+    sleep 1
+  done
+  # 记录由**取锁的进程**（本 shell）写；两把锁的 mtime 刷一次（按 age 的清理器不该删活锁）
+  touch "$lock" "$comp" 2>/dev/null || true
+  local ident ino
+  IFS=$'\t' read -r ident ino < <(gate_lock_claim_identity "$comp")
+  gate_lock_write_holder "$comp" "$$" top "perf.sh" "perf" "$PWD" "$(date +%s)" - - - 0 - - "$ident" "$ino" || true
+  export PERF_LOCK_TAKEN=1 PERF_LOCK_CLAIMER_PID="$$" PERF_LOCK_CLAIMER_IDENTITY="$ident" PERF_LOCK_CLAIMER_DEV_INO="$ino"
+  export PERF_LOCK="$lock" PERF_LOCK_COMPANION="$comp"
+  local rc2=0
+  bash "$self" "${ORIG_ARGS[@]}" 8>&- 9>&- || rc2=$?
+  # 收尾：只删自己的记录；两把锁文件都留着（unlink 一个还有等待者阻塞在它 inode 上的锁，正是要消灭的静默分裂）
+  if gate_lock_holder_claimable "$comp" "$$"; then gate_lock_remove_holder "$comp"; fi
+  rmdir "$comp.runs" 2>/dev/null || true
+  exit "$rc2"
 }
+# 子进程认领：两条独立证据（记录里活着的是它 / 它的 /proc 里真有一个身份相符的锁描述符），
+# 环境变量单独不作数；认领人还必须是**我的严格祖辈**（子套件那一层）。
+perf_lock_claim_from_parent() {
+  [ "${PERF_LOCK_TAKEN:-0}" = "1" ] || return 0
+  [ -n "${PERF_LOCK_CLAIMER_PID:-}" ] || return 0
+  PERF_LOCK="${PERF_LOCK:-${TEAM_PERF_LOCK:-${TMPDIR:-/tmp}/teamsmith-perf.lock}}"
+  PERF_LOCK_COMPANION="$(perf_lock_companion "$PERF_LOCK")"
+  local p q ok=0
+  for q in $(gate_lock_ancestry_chain "$$"); do [ "$q" = "$PERF_LOCK_CLAIMER_PID" ] && ok=1 && break; done
+  [ "$ok" = "1" ] || { printf 'perf: 锁认领人 pid=%s 不在我的进程链上 → 按未持锁处理\n' "$PERF_LOCK_CLAIMER_PID" >&2; PERF_LOCK_TAKEN=0; return 0; }
+  if [ -s "$(gate_lock_holder_file "$PERF_LOCK_COMPANION")" ] \
+     && [ "$(gate_lock_record_get "$(gate_lock_holder_file "$PERF_LOCK_COMPANION")" pid)" = "$PERF_LOCK_CLAIMER_PID" ] \
+     && gate_lock_record_live "$(gate_lock_holder_file "$PERF_LOCK_COMPANION")"; then
+    PERF_LOCK_DEV_INO="$(gate_lock_record_get "$(gate_lock_holder_file "$PERF_LOCK_COMPANION")" lock_dev_ino)"
+    PERF_LOCK_IDENTITY="$(gate_lock_record_get "$(gate_lock_holder_file "$PERF_LOCK_COMPANION")" lock_identity)"
+  elif [ -n "${PERF_LOCK_CLAIMER_DEV_INO:-}" ] \
+       && gate_lock_pid_holds_path "$PERF_LOCK_CLAIMER_PID" "$PERF_LOCK_COMPANION" "$PERF_LOCK_CLAIMER_DEV_INO"; then
+    PERF_LOCK_DEV_INO="$PERF_LOCK_CLAIMER_DEV_INO"; PERF_LOCK_IDENTITY="${PERF_LOCK_CLAIMER_IDENTITY:-fd}"
+  else
+    printf 'perf: 自述持锁（pid=%s）但记录与 /proc 都对不上 → 按未持锁处理（不并发测量）\n' "$PERF_LOCK_CLAIMER_PID" >&2
+    PERF_LOCK_TAKEN=0
+  fi
+}
+# 运行期间互斥被破坏 ⇒ 读数不可信（判红，exit 2）
+perf_lock_identity_check() {
+  [ "${PERF_LOCK_TAKEN:-0}" = "1" ] && [ -n "${PERF_LOCK_DEV_INO:-}" ] || return 0
+  local r; r="$(gate_lock_snapshot "$PERF_LOCK_COMPANION" "${PERF_LOCK_IDENTITY:-fd}" "$PERF_LOCK_DEV_INO" "$PERF_LOCK_CLAIMER_PID")"
+  case "$r" in
+    ok|'') return 0 ;;
+    *) printf '\n  \033[31m✗\033[0m perf：运行期间性能锁的互斥被破坏（%s）—— 本次读数不可信（exit 2）\n' "$(printf '%s' "$r" | tr '\t' ' ')"
+       return 2 ;;
+  esac
+}
+if [ "${PERF_LOCK_TAKEN:-0}" = "1" ]; then perf_lock_claim_from_parent; fi
 # --in-container 先验身份信号：缺了在这里就 exit 3，锁、临时目录、测量一样不沾。
 if [ "$IN_CONTAINER" = "1" ]; then perf_require_pinned_container; fi
 perf_lock_or_continue
-if [ "${TEAM_PERF_LOCK_WRAPPED:-0}" = "1" ]; then
-  PERF_LOCK="${TEAM_PERF_LOCK:-${TMPDIR:-/tmp}/teamsmith-perf.lock}"
-  printf '%s pid=%s cmd=perf.sh\n' "$(date -Is)" "$$" > "$PERF_LOCK.holder" 2>/dev/null || true
+if [ "${PERF_LOCK_TAKEN:-0}" = "1" ]; then
+  printf '  · 性能锁：互斥在伴生锁 %s（发布路径 %s 是兼容声明；两把都永不 unlink）\n' \
+    "$PERF_LOCK_COMPANION" "$PERF_LOCK"
 fi
 
 # 只读探活门禁锁：门禁在跑时性能读数会被它影响，打印持有者；**不排队等它**（性能锁独立）。
 perf_smoke_lock_probe() {
-  local lock="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
-  [ -e "$lock" ] || return 0
-  if command -v flock >/dev/null 2>&1 && ! flock -n "$lock" true 2>/dev/null; then
-    note "正确性门禁正在跑（$(cat "$lock.holder" 2>/dev/null || printf '持有者未知')）—— 本次性能读数可能受它影响（性能锁独立，不等它）"
+  local lock="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}" comp probe busy=0
+  comp="$lock"
+  if declare -F gate_lock_companion_path >/dev/null 2>&1; then comp="$(gate_lock_companion_path "$lock")"; fi
+  if ! command -v flock >/dev/null 2>&1; then return 0; fi
+  # P287：互斥在**伴生锁**上（发布路径是兼容声明，P287 之前的写入者只认它）—— 两把都只读探一次，
+  # 任一把被持有就算「门禁在跑」；记录按 pair 读（伴生锁边上优先，退回发布路径那条并标 version=legacy）。
+  for probe in "$comp" "$lock"; do
+    [ -e "$probe" ] || continue
+    flock -n "$probe" true 2>/dev/null || { busy=1; break; }
+  done
+  [ "$busy" = "1" ] || return 0
+  local who
+  if declare -F gate_lock_describe_pair >/dev/null 2>&1; then
+    who="$(gate_lock_describe_pair "$lock")"
+  else
+    who="$(cat "$lock.holder" 2>/dev/null || printf '持有者未知')"
   fi
+  note "正确性门禁正在跑（$who）—— 本次性能读数可能受它影响（性能锁独立，不等它）"
 }
 
 # ── 夹具旋钮（只在 TEAM_PERF_FIXTURE=1 时生效；真路径忽略且打印）────────────────────────────
@@ -328,8 +412,10 @@ perf_run_in_container() {
   eng_env=(-e HOME=/tmp -e TEAM_PERF_MODE=container -e "TEAM_PERF_REV=$(git -C "$tree" rev-parse --short HEAD 2>/dev/null || printf 'unknown')")
   # 夹具旋钮与锁身份透传进容器（A1 的注入翻转就在容器里跑）。
   local k
+  # 锁的身份**不**透传：容器那一层不取锁（宿主持有），只带一句「锁由调用方持有」。
+  TEAM_PERF_LOCK_HELD_BY_RUNNER=1
   for k in TEAM_PERF_FIXTURE TEAM_PERF_LOADAVG TEAM_PERF_CORES TEAM_PERF_FRAME_DELAY_MS \
-           TEAM_PERF_LOCK_WRAPPED TEAM_PERF_NO_LOCK TEAM_PANEL_CPU_SECS; do
+           TEAM_PERF_NO_LOCK TEAM_PANEL_CPU_SECS TEAM_PERF_LOCK_HELD_BY_RUNNER; do
     [ -n "${!k:-}" ] && eng_env+=(-e "$k=${!k}")
   done
   say "参考环境：镜像 $PERF_IMAGE（引擎 ${PERF_ENGINE[*]}）"
@@ -575,7 +661,7 @@ perf_self_tests() {
   st "挂载判定：mounts 表读不到 → 这一条判不了，不据此拒绝" 1 "$st_rc"
   local wir_rc wir_log="$PERF_TMP/m66-wiring.log"
   wir_rc=0
-  timeout 10 env -u TEAM_PERF_PINNED_CONTAINER -u TEAM_PERF_LOCK_WRAPPED -u TEAM_PERF_NO_LOCK \
+  timeout 10 env -u TEAM_PERF_PINNED_CONTAINER -u TEAM_PERF_LOCK_HELD_BY_RUNNER -u PERF_LOCK_TAKEN -u TEAM_PERF_NO_LOCK \
     bash "$self" --in-container >"$wir_log" 2>&1 || wir_rc=$?
   st "入口接线：缺信号 → 真 CLI 可见拒绝 exit 3" 3 "$wir_rc"
   if [ "$wir_rc" = "3" ] && grep -q 'TEAM_PERF_PINNED_CONTAINER' "$wir_log" && grep -q -- '--host' "$wir_log"; then
@@ -585,14 +671,14 @@ perf_self_tests() {
     SELFTEST_FAIL=$((SELFTEST_FAIL + 1))
   fi
   wir_rc=0
-  timeout 10 env -u TEAM_PERF_LOCK_WRAPPED -u TEAM_PERF_NO_LOCK TEAM_PERF_PINNED_CONTAINER=0 \
+  timeout 10 env -u TEAM_PERF_LOCK_HELD_BY_RUNNER -u PERF_LOCK_TAKEN -u TEAM_PERF_NO_LOCK TEAM_PERF_PINNED_CONTAINER=0 \
     bash "$self" --in-container >"$wir_log" 2>&1 || wir_rc=$?
   st "入口接线：错信号（=0）→ 真 CLI 可见拒绝 exit 3" 3 "$wir_rc"
   # M69 接线：ENV 信号齐全但标识文件缺失/不符（= M64 F2 的宿主伪造形状）也必须瞬时拒绝。
   # 在真镜像里文件本就在 —— 换成钉「镜像里的文件逐字节等于 token」（镜像构建错了在这里红）。
   if [ ! -e "$PERF_IMAGE_IDENTITY_FILE" ]; then
     wir_rc=0
-    timeout 10 env -u TEAM_PERF_LOCK_WRAPPED -u TEAM_PERF_NO_LOCK TEAM_PERF_PINNED_CONTAINER=1 \
+    timeout 10 env -u TEAM_PERF_LOCK_HELD_BY_RUNNER -u PERF_LOCK_TAKEN -u TEAM_PERF_NO_LOCK TEAM_PERF_PINNED_CONTAINER=1 \
       bash "$self" --in-container >"$wir_log" 2>&1 || wir_rc=$?
     st "入口接线：有 ENV 信号但缺标识文件（宿主伪造形状）→ 真 CLI 可见拒绝 exit 3" 3 "$wir_rc"
     if [ "$wir_rc" = "3" ] && grep -q 'teamsmith-gate-image' "$wir_log"; then
@@ -709,7 +795,12 @@ perf_run_suite() { # <mode-label> <reference yes|no> [unavailable]
   perf_judge_assembly
   perf_judge_panel
   perf_self_tests
+  # 运行期间互斥被破坏 ⇒ 读数不可信：判红（exit 2），不再输出一份看起来正常的结论
+  if ! perf_lock_identity_check; then
+    perf_lock_broken=1
+  fi
   perf_summary
+  [ "${perf_lock_broken:-0}" = "1" ] && return 2
 }
 
 # ── 入口 ────────────────────────────────────────────────────────────────────────────────────

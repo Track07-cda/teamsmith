@@ -9,8 +9,9 @@
 #
 # 为什么要有它（design.md §D1–D3、§D8）：
 #   ① 根一律建在**解析后的**临时根 `${TMPDIR:-/tmp}`（写死 `/tmp` 的模板会被 --lint 判红）；
-#      名字进一个 owned 家族 `teamsmith-<kind>.XXXXXX`（sweep 只认这个前缀，别的前缀不碰）；
-#   ② 根里写 owner 标记 `.teamsmith-tmp`（kind / 创建 pid / 该进程启动时间 / boot id / run id），
+#      名字进一个 owned 家族 **并带本项目的命名空间** `teamsmith-<kind>-<ns>.XXXXXX`（P287；
+#      sweep 只认这个前缀，别的前缀不碰；ns 让「另一个项目的清理命令」认不出这是它的东西）；
+#   ② 根里写 owner 标记 `.teamsmith-tmp`（kind / 创建 pid / 该进程启动时间 / boot id / run id / ns），
 #      于是 killed run 的残留**可归因**，且「owner 已死」判定对 pid 复用安全；
 #   ③ 每次创建追加一条 run 台账（`$TEAM_TMP_LEDGER`，默认临时根下的点开头文件；台账头从 P122 起带
 #      `repo=<主仓库>` 仓库身份）—— 门禁据此断言「本轮创建的根一个都不许留下」，而不是去猜文件系统，
@@ -38,10 +39,31 @@
 TMP_ROOT_LIB=1
 TMP_ROOT_FAMILY_PREFIX="teamsmith-"
 
+# P287（change: gate-lock-external-deletion）：项目命名空间 ns 的**唯一实现**在
+# `scripts/lib/common.sh`（team_project_ns）—— 本文件只调它，不复制第二份。没有那份库时
+# （极端手工拷贝）退到一个诚实的无签名值，绝不报错。
+TMP_ROOT_SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd || true)"
+if [ -n "$TMP_ROOT_SKILL_DIR" ] && [ -f "$TMP_ROOT_SKILL_DIR/scripts/lib/common.sh" ]; then
+  # shellcheck source=../../scripts/lib/common.sh
+  . "$TMP_ROOT_SKILL_DIR/scripts/lib/common.sh"
+fi
+
 _tmp_root_err() { printf 'tmp-root: %s\n' "$*" >&2; }
 
 # ---------------------------------------------------------------- 基础事实
 tmp_root_base() { printf '%s\n' "${TMPDIR:-/tmp}"; }
+
+# 本项目的命名空间（`<slug>-<hash8>`，一处实现在 common.sh）。
+tmp_root_ns() {
+  if [ -z "${TMP_ROOT_NS:-}" ]; then
+    TMP_ROOT_NS=""
+    if declare -F team_project_ns >/dev/null 2>&1; then
+      TMP_ROOT_NS="$(team_project_ns 2>/dev/null || true)"
+    fi
+    [ -n "$TMP_ROOT_NS" ] || TMP_ROOT_NS="nosig-00000000"
+  fi
+  printf '%s\n' "$TMP_ROOT_NS"
+}
 
 # run id：优先 TEAM_TMP_RUN_ID；嵌套夹具会清掉 TEAM_*（身份清理），所以门禁同时给非 TEAM_ 的
 # SMOKE_TMP_RUN_ID（它不属于身份，清不掉的传播位）。都没有 → 本进程自己算一个（跨子 shell 稳定）。
@@ -88,11 +110,17 @@ _tmp_root_proc_alive() {
   return 0
 }
 
-# 路径是不是「解析后的临时根下的 owned 家族」——--lint/自检用；`--break=notmpdir` 模拟写死 /tmp 混过关。
+# 路径是不是「解析后的临时根下的 owned 家族，且名字带本项目的 ns」——--lint/自检用；
+# `--break=notmpdir` 模拟写死 /tmp 混过关。
 tmp_root_path_ok() {
   if [ "${TMP_ROOT_BREAK:-}" = "notmpdir" ]; then return 0; fi
+  local rest
   case "${1:-}" in
-    "$(tmp_root_base)"/"$TMP_ROOT_FAMILY_PREFIX"*) return 0 ;;
+    "$(tmp_root_base)"/"$TMP_ROOT_FAMILY_PREFIX"*) rest="${1#"$(tmp_root_base)"/}" ;;
+    *) return 1 ;;
+  esac
+  case "$rest" in
+    "$TMP_ROOT_FAMILY_PREFIX"*"-$(tmp_root_ns)".*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -106,11 +134,11 @@ _tmp_root_repo_id() {
   g="$(git -C "$lib" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   if [ -n "$g" ]; then dirname "$g"; else printf 'unknown\n'; fi
 }
-_tmp_root_ledger_append() { # <path> <pid> <start> <kind> <created>
+_tmp_root_ledger_append() { # <path> <pid> <start> <kind> <created> <ns>
   local f; f="$(tmp_root_ledger)"
   if [ ! -f "$f" ]; then
-    printf '# teamsmith temp ledger run=%s owner=%s started=%s repo=%s\n' \
-      "$(tmp_root_run_id)" "$$" "$(date +%s 2>/dev/null || printf 0)" "$(_tmp_root_repo_id)" >"$f" 2>/dev/null || return 1
+    printf '# teamsmith temp ledger run=%s owner=%s started=%s repo=%s ns=%s\n' \
+      "$(tmp_root_run_id)" "$$" "$(date +%s 2>/dev/null || printf 0)" "$(_tmp_root_repo_id)" "${6:-?}" >"$f" 2>/dev/null || return 1
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$(tmp_root_run_id)" >>"$f" 2>/dev/null || return 1
   return 0
@@ -144,21 +172,28 @@ tmp_root_create() {
     _tmp_root_err "临时根 $base 不存在（TMPDIR 指向不存在的目录？）"
     return 3
   fi
+  local ns; ns="$(tmp_root_ns)"
+  # P287：根的名字带项目 ns（`teamsmith-<kind>-<ns>.XXXXXX`）；自检红侧 flat-name 回到改动前的
+  # 平铺名（名字里没有 ns），no-ns 保留名字但让标记/台账丢掉 ns。
+  local tmpl="$base/$TMP_ROOT_FAMILY_PREFIX$kind-$ns.XXXXXX"
+  [ "${TMP_ROOT_BREAK:-}" = "flat-name" ] && tmpl="$base/$TMP_ROOT_FAMILY_PREFIX$kind.XXXXXX"
   local root
-  root="$(mktemp -d "$base/$TMP_ROOT_FAMILY_PREFIX$kind.XXXXXX" 2>/dev/null)" || {
+  root="$(mktemp -d "$tmpl" 2>/dev/null)" || {
     _tmp_root_err "在 $base 下建不出根（空间/inode/权限？）"; return 3; }
-  local pid=$$ start boot created run
+  local pid=$$ start boot created run marker_ns
   start="$(_tmp_root_proc_start "$pid" 2>/dev/null || true)"
   boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown')"
   created="$(date +%s 2>/dev/null || printf 0)"
   run="$(tmp_root_run_id)"
-  if ! { printf 'kind=%s\npid=%s\nstart=%s\nboot=%s\nrun=%s\ncreated=%s\n' \
-           "$kind" "$pid" "${start:-unknown}" "$boot" "$run" "$created" >"$root/.teamsmith-tmp"; }; then
+  marker_ns="$ns"
+  [ "${TMP_ROOT_BREAK:-}" = "no-ns" ] && marker_ns="-"
+  if ! { printf 'kind=%s\npid=%s\nstart=%s\nboot=%s\nrun=%s\ncreated=%s\nns=%s\n' \
+           "$kind" "$pid" "${start:-unknown}" "$boot" "$run" "$created" "$marker_ns" >"$root/.teamsmith-tmp"; }; then
     _tmp_root_err "写不了 owner 标记 $root/.teamsmith-tmp"
     rm -rf -- "$root" 2>/dev/null || true
     return 3
   fi
-  _tmp_root_ledger_append "$root" "$pid" "${start:-unknown}" "$kind" "$created" || true
+  _tmp_root_ledger_append "$root" "$pid" "${start:-unknown}" "$kind" "$created" "$marker_ns" || true
   printf '%s\n' "$root"
   return 0
 }
@@ -316,7 +351,7 @@ _tmp_root_selftest() {
     case "$a" in
       --break=*) break_stage="${a#--break=}" ;;
       -h|--help)
-        printf '用法：bash %s --self-test [--break=nokill|nokeeep|notmpdir|noreap]\n' "${BASH_SOURCE[0]}"
+        printf '用法：bash %s --self-test [--break=nokill|nokeeep|notmpdir|noreap|flat-name|no-ns]\n' "${BASH_SOURCE[0]}"
         return 0 ;;
       *) _tmp_root_err "不认识的自检参数 [$a]"; return 2 ;;
     esac
@@ -329,22 +364,33 @@ _tmp_root_selftest() {
   local self_path
   self_path="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   local st_dir
-  st_dir="$(mktemp -d "$(tmp_root_base)/teamsmith-libselftest.XXXXXX" 2>/dev/null)" || {
+  st_dir="$(mktemp -d "$(tmp_root_base)/teamsmith-libselftest-$(tmp_root_ns).XXXXXX" 2>/dev/null)" || {
     _tmp_root_err "自检建不出临时目录"; return 3; }
   trap "rm -rf -- '$st_dir'" EXIT    # 路径要内嵌：trap 在函数返回后执行，local 变量那时已经不在了
 
   printf '\n\033[1m== tmp-root.sh 自检 ==\033[0m（break=%s）\n' "${break_stage:-none}"
 
-  # ① 创建：路径、家族名、标记、台账
+  # ① 创建：路径、家族名、命名空间、标记、台账
   export TMPDIR="$st_dir"
-  local r; r="$(tmp_root_create selftest)"
-  case "$r" in "$st_dir"/teamsmith-selftest.*) st_ok "根建在 \${TMPDIR} 下并且名字在 owned 家族（$r）" ;;
-               *) st_bad "根的路径/名字不对（[$r]，期望 $st_dir/teamsmith-selftest.*）" ;; esac
+  local r my_ns; my_ns="$(tmp_root_ns)"; r="$(tmp_root_create selftest)"
+  case "$r" in "$st_dir"/teamsmith-selftest-*) st_ok "根建在 \${TMPDIR} 下并且名字在 owned 家族（$r）" ;;
+               *) st_bad "根的路径/名字不对（[$r]，期望 $st_dir/teamsmith-selftest-<ns>.*）" ;; esac
+  # P287：名字必须带本项目的 ns（flat-name 红侧会在这里变红）
+  if case "$r" in "$st_dir"/teamsmith-selftest-"$my_ns".*) true ;; *) false ;; esac; then
+    st_ok "根的名字带项目命名空间（ns=$my_ns）"
+  else
+    st_bad "根的名字没有带项目命名空间（[$r]，期望 $st_dir/teamsmith-selftest-$my_ns.*）"
+  fi
   if [ -f "$r/.teamsmith-tmp" ] && grep -q "^kind=selftest$" "$r/.teamsmith-tmp" \
      && grep -q "^pid=$$$" "$r/.teamsmith-tmp" && grep -q '^run=' "$r/.teamsmith-tmp"; then
-    st_ok "owner 标记写全（kind / pid / start / boot / run / created）"
+    st_ok "owner 标记写全（kind / pid / start / boot / run / created / ns）"
   else
     st_bad "owner 标记缺字段：$(tr '\n' ' ' <"$r/.teamsmith-tmp" 2>/dev/null)"
+  fi
+  if grep -q "^ns=$my_ns$" "$r/.teamsmith-tmp" 2>/dev/null; then
+    st_ok "owner 标记带 ns=$my_ns（no-ns 红侧会在这里变红）"
+  else
+    st_bad "owner 标记没带 ns（期望 ns=$my_ns，实际 $(sed -n 's/^ns=//p' "$r/.teamsmith-tmp" 2>/dev/null)）"
   fi
   if [ -f "$(tmp_root_ledger)" ] && grep -qF "$r	$$" "$(tmp_root_ledger)"; then
     st_ok "run 台账里有这一条（$(tmp_root_ledger)）"
@@ -352,9 +398,14 @@ _tmp_root_selftest() {
     st_bad "run 台账里没有这条根"
   fi
   if head -1 "$(tmp_root_ledger)" 2>/dev/null | grep -Eq ' repo=[^ ]'; then
-    st_ok "run 台账头记了仓库身份（$(head -1 "$(tmp_root_ledger)" | sed -n 's/.* repo=//p')）"
+    st_ok "run 台账头记了仓库身份（$(head -1 "$(tmp_root_ledger)" | sed -n 's/.* repo=\([^ ]*\).*/\1/p')）"
   else
     st_bad "run 台账头没有 repo= 仓库身份"
+  fi
+  if head -1 "$(tmp_root_ledger)" 2>/dev/null | grep -q " ns=$my_ns"; then
+    st_ok "run 台账头带 ns=$my_ns"
+  else
+    st_bad "run 台账头没有 ns=（no-ns 红侧会在这里变红）"
   fi
 
   # ② notmpdir：写死 /tmp 的路径不许被当成合规根
@@ -363,10 +414,16 @@ _tmp_root_selftest() {
   else
     st_ok "写死 /tmp 的路径被拒（tmp_root_path_ok 非 0）"
   fi
-  if tmp_root_path_ok "$st_dir/teamsmith-x.1234"; then
-    st_ok "\${TMPDIR} 下的家族路径被接受"
+  if tmp_root_path_ok "$st_dir/teamsmith-x-$(tmp_root_ns).1234"; then
+    st_ok "\${TMPDIR} 下带 ns 的家族路径被接受"
   else
-    st_bad "\${TMPDIR} 下的家族路径被误拒"
+    st_bad "\${TMPDIR} 下带 ns 的家族路径被误拒"
+  fi
+  # P287：家族名在但不带 ns 的路径照样不合规（no-ns 的形状）
+  if tmp_root_path_ok "$st_dir/teamsmith-x.1234"; then
+    st_bad "\${TMPDIR} 下不带 ns 的家族路径被接受（命名空间规则失效）"
+  else
+    st_ok "\${TMPDIR} 下不带 ns 的家族路径被拒（tmp_root_path_ok 非 0）"
   fi
 
   # ③ 正常回收：子进程创建 → 退出 → 根消失

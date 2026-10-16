@@ -36,7 +36,7 @@ CINV="$SKILL_DIR/tests/coverage-inventory.sh"
 # shellcheck source=tests/lib/checkout-shape.sh
 . "$SKILL_DIR/tests/lib/checkout-shape.sh"
 
-T="${TMPDIR:-/tmp}/p148-shape-probe.$$"
+T="${TMPDIR:-/tmp}/.teamsmith-p148-shape-probe.$$"
 rm -rf "$T"; mkdir -p "$T"
 trap '[ "${P148_SHAPE_KEEP:-0}" = "1" ] || rm -rf "$T"' EXIT
 

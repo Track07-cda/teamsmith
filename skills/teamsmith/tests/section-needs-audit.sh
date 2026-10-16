@@ -35,6 +35,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# P287：临时根名字里的项目命名空间（ns）的唯一实现在 scripts/lib/common.sh —— 独立跑时补一次。
+if ! declare -F team_project_ns >/dev/null 2>&1; then
+  [ -f "$here/../scripts/lib/common.sh" ] && . "$here/../scripts/lib/common.sh"
+fi
+section_needs_ns() { team_project_ns 2>/dev/null || printf 'nosig-00000000\n'; }
+
 ROOT="$(cd -P "$ROOT" 2>/dev/null && pwd)" || { printf 'section-needs-audit: --root 目录不存在\n' >&2; exit 2; }
 SUITE="$ROOT/skills/teamsmith/tests/smoke.sh"
 SEL="$ROOT/skills/teamsmith/tests/section-select.sh"
@@ -45,7 +51,7 @@ SEL="$ROOT/skills/teamsmith/tests/section-select.sh"
 
 # owned 家族口径（section 40 的 lint）：根建在 ${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX 下；
 # 长度仍然够短 —— 嵌套 run 的私有 tmux socket = len($TMP)+22，本例约 90 < 107（AF_UNIX 上限）。
-TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-needs-audit.XXXXXX")" || { printf 'section-needs-audit: 建不了临时根\n' >&2; exit 2; }
+TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-needs-audit-$(section_needs_ns).XXXXXX")" || { printf 'section-needs-audit: 建不了临时根\n' >&2; exit 2; }
 if [ "$KEEP" = 1 ]; then
   printf 'section-needs-audit: 日志留在 %s\n' "$TMPROOT"
 else

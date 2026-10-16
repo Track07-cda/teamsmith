@@ -125,6 +125,11 @@ SELECT_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep) KEEP=1; shift ;;
+    --break)
+      [ $# -ge 2 ] || { printf 'smoke: --break 需要阶段名（no-lock-guard|no-entry-check；只有 TEAM_SMOKE_FIXTURE=1 时生效）\n' >&2; exit 2; }
+      TEAM_SMOKE_BREAK="$2"; export TEAM_SMOKE_BREAK; shift 2 ;;
+    --break=*)
+      TEAM_SMOKE_BREAK="${1#--break=}"; export TEAM_SMOKE_BREAK; shift ;;
     --paths)
       [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "paths" ] \
         || { printf 'smoke: --paths 与 --%s 不同用\n' "$SELECT_MODE_REQ" >&2; exit 2; }
@@ -137,7 +142,7 @@ while [ $# -gt 0 ]; do
       SELECT_MODE_REQ="select"; shift
       [ $# -gt 0 ] || { printf 'smoke: --select 需要 key\n' >&2; exit 2; }
       SELECT_ARGS+=("$1"); shift ;;
-    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--paths <路径>… | --select <key>[,<key>…]]）\n' "$1" >&2; exit 2 ;;
+    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--break=<阶段>] [--paths <路径>… | --select <key>[,<key>…]]）\n' "$1" >&2; exit 2 ;;
   esac
 done
 
@@ -208,7 +213,7 @@ elif [ -n "$SELECT_MODE_REQ" ]; then
   [ -f "$SELECT_BIN" ] || { printf 'smoke: 选段需要 %s（缺它就不能用 --paths/--select）\n' "$SELECT_BIN" >&2; exit 2; }
   # 过滤副本由选择器一次生成（唯一剪贴实现）：它写进 --out 前先 bash -n 校验，不能解析就在
   # **跑任何段之前**拒绝并点名（段 key + 源码行）——smoke 不再自己剪文本（P117/V1）。
-  SELECT_COPY="${TMPDIR:-/tmp}/teamsmith-select.$$.sh"
+  SELECT_COPY="${TMPDIR:-/tmp}/teamsmith-select.$(team_project_ns).$$.sh"
   rm -f "$SELECT_COPY"
   if ! SELECT_OUT="$(bash "$SELECT_BIN" --"$SELECT_MODE_REQ" "${SELECT_ARGS[@]}" --out "$SELECT_COPY" </dev/null 2>&1)"; then
     printf '%s\n' "$SELECT_OUT" >&2
@@ -313,7 +318,7 @@ smoke_ledger_selfcheck() { # 段落增量之和 vs 结果行总数：不一致�
   return 0
 }
 
-# ── 全量门禁互斥（M23）────────────────────────────────────────────────────────────
+# ── 全量门禁互斥（M23 / P287 伴生锁）────────────────────────────────────────────────────────
 # 事故（2026-09-17）：`team review` 的两轮门禁（M21、V16）与另一套 smoke 并发时，两次都在 6i 段
 # 卡到 1800s 硬超时（TERM 被忽略、KILL 才杀掉）；同一棵树在无人并发时 ~200s 就跑完。两套**全量**
 # smoke 会真起 tmux 夹具与真进程，争的是同一台机器（同一个 tmux server、同一批 node/bun/登录 shell）。
@@ -322,44 +327,128 @@ smoke_ledger_selfcheck() { # 段落增量之和 vs 结果行总数：不一致�
 #   TEAM_SMOKE_NO_LOCK=1        不排队（自担并发风险；对照实验用）
 #   TEAM_SMOKE_LOCK_WAIT=<秒>   排队上限，默认 1800（超时大声失败：点名持有者 + exit 2，不静默降级 ——
 #                               原来的 `exec flock -w` 形态做不到这一点，见下面 P66 那段）
-#   TEAM_SMOKE_LOCK=<path>      锁文件，默认 ${TMPDIR:-/tmp}/teamsmith-smoke.lock
+#   TEAM_SMOKE_LOCK=<path>      锁文件（**发布路径**），默认 ${TMPDIR:-/tmp}/teamsmith-smoke.lock
 #
-# P281（change: gate-lock-hygiene）—— 这一块的三件事改成：
-#   ① 「本进程是不是 flock 的持有者」由 **marker 里的 pid** 证明，不再由会被子孙继承的环境标记证明
-#      （EXP1：带 SMOKE_LOCK_WRAPPED 的嵌套运行覆写并删掉了真持有者的记录）；
-#   ② 「祖辈持有锁」由**进程树 + starttime** 证明（记录里活着的 pid 在我的 ppid 链上）；证不出就按
-#      顶层排队（fail closed）；嵌套运行**不排队**，只登记自己的一条 `<lock>.runs/<pid>.run`；
+# P281（change: gate-lock-hygiene）冻结的三件事不变：
+#   ① 「谁持有」由**记录里活着的 pid + 它的 starttime** 证明（不靠会被子孙继承的环境标记）；
+#   ② 「祖辈持有锁」由进程树 + starttime 证明（证不出就按顶层排队，fail closed）；嵌套运行不排队，
+#      只登记自己的一条 `<lock>.runs/<pid>.run`；
 #   ③ 持有者记录自述 kind/席位/工作树/已跑/上限；等待者按 expected 算上限并打印算式。
-# 记录格式与读写只在 `scripts/lib/gate-lock.sh` 里实现一次（`cmd-review.sh` 共用同一份）。
+# 记录格式与读写只在 `scripts/lib/gate-lock.sh` 里实现一次（`cmd-review.sh` 与性能套件共用同一份；
+# 这里**不写它的文件名**：gate-guard 的 ① 要求门禁本体不点名测量夹具，拼开写也会被它当点名）。
+#
+# P287（change: gate-lock-external-deletion）在此基础上改四件事：
+#   ① **两把锁、一个顺序**：先取**发布路径**（兼容声明：P287 之前的写入者只认它），再取**伴生锁**
+#      （运行互斥：同目录、basename + `.machine`、点开头 —— 别人的 `rm -rf …/teamsmith-smoke.*`
+#      前缀 glob 够不着它，D184 的事故形状）。互斥实际落在伴生锁上；发布路径被删只丢「与旧写入者
+#      串行」，守卫**只印不停**。两把锁都**永不 unlink**（删掉一个还有等待者阻塞在它 inode 上的锁
+#      文件，正是要消灭的静默分裂）。
+#   ② **身份**：取锁的是**本进程**（自己开 fd 8/9、加锁、从自己的描述符读 `dev:ino`）——于是身份是
+#      真的持有者身份；跑套件的是它的**子进程**，用 `8>&- 9>&-` 把两个锁 fd 关掉：夹具留下的后台
+#      进程不会继承锁 fd（M23 的漏锁教训在这里是构造性关掉的），运行退出即释放。
+#   ③ **守卫**：0.2s 哨兵多看一条前提「伴生锁还是我持有的那个文件」——「已不在」/「已被替换（两个
+#      身份）」都变成一条点名行 + 证据 + 退出码 2（安全点，且**不**给对代码的判定）。
+#   ④ **入场检查**：拿到锁之后、跑套件之前读活登记，若有一个 `top` 登记记着**另一个身份** ⇒ 互斥已断
+#      ⇒ 点名 + 不跑套件 + exit 2。
+# 两个夹具开关（只有 TEAM_SMOKE_FIXTURE=1 时生效，红侧用；--break= 与 TEAM_SMOKE_BREAK 同义）：
+#   no-lock-guard   关掉守卫（锁被删/被换都不再点名与停跑）
+#   no-entry-check  关掉入场检查（互斥断了也照跑）
 SMOKE_LOCK_HELD=0; SMOKE_LOCK_KIND=""; SMOKE_LOCK_NESTED=0; SMOKE_LOCK_NO_LOCK=0
 SMOKE_LOCK_SELF_HOLDER=0; SMOKE_LOCK_ANCESTOR=""; SMOKE_LOCK_RECORD=0; SMOKE_LOCK_NEEDS_QUEUE=0
+SMOKE_LOCK_TOP_CHILD=0; SMOKE_LOCK_CLAIMED=0; SMOKE_LOCK_QUEUED=0; SMOKE_LOCK_LEGACY_HOLDER=0
+SMOKE_LOCK_HOLDER_PID=""; SMOKE_LOCK_IDENTITY=""; SMOKE_LOCK_DEV_INO=""
 SMOKE_LOCK_WAIT="${TEAM_SMOKE_LOCK_WAIT:-1800}"
 case "$SMOKE_LOCK_WAIT" in ''|*[!0-9]*) SMOKE_LOCK_WAIT=1800 ;; esac
 # FAST 的私有锁路径必须在解析 SMOKE_LOCK 之前定下来（否则 no_lock 分支会把 FAST 的临时目录说成机器锁）
+# P287：点开头 —— 它直接落在解析后的临时根上，名字形态要躲开别人的前缀 glob。
 if [ "$FAST" = "1" ] && [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
-  TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/teamsmith-smoke-fast-$$.lock"; export TEAM_SMOKE_LOCK
+  TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/.teamsmith-smoke-fast-$$.lock"; export TEAM_SMOKE_LOCK
 fi
 # TEAM_SMOKE_LOCK 优先于继承来的 SMOKE_LOCK：夹具用 TEAM_SMOKE_LOCK 指定私有锁时，不能让外层导出的
 # SMOKE_LOCK（机器锁）把它顶掉 —— 那会让夹具的门禁排队到**真机器锁**上。
 SMOKE_LOCK="${TEAM_SMOKE_LOCK:-${SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}}"
 export SMOKE_LOCK
+SMOKE_LOCK_COMPANION="$(gate_lock_companion_path "$SMOKE_LOCK")"
+# 夹具红侧开关：只有 TEAM_SMOKE_FIXTURE=1 时生效，而且**大声**打印（真路径忽略并说明）
+SMOKE_BREAK=""
+case "${TEAM_SMOKE_BREAK:-}" in
+  '') ;;
+  no-lock-guard|no-entry-check)
+    if [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; then
+      SMOKE_BREAK="${TEAM_SMOKE_BREAK}"
+      printf '\033[33m夹具红侧\033[0m：TEAM_SMOKE_BREAK=%s（只在 TEAM_SMOKE_FIXTURE=1 下生效）\n' "$SMOKE_BREAK"
+    else
+      printf '注意：TEAM_SMOKE_BREAK=%s 只在 TEAM_SMOKE_FIXTURE=1 下生效 —— 真路径忽略它\n' "$TEAM_SMOKE_BREAK"
+    fi ;;
+  *) printf '注意：TEAM_SMOKE_BREAK=%s 不认识（只认 no-lock-guard|no-entry-check）—— 忽略\n' "$TEAM_SMOKE_BREAK" ;;
+esac
+
+# ⓪ 旧式持有者标记（P281 的 marker 路径）：`SMOKE_LOCK_WRAPPED=1` + marker 里记的 pid **就是本进程**
+#    ⇒ 本进程是那个 flock 的持有者（P287 之后产品里不再有这样一条路径，但外部调用者与 §34b⑬ 的写权
+#    测试仍然走它）。它已经持有锁，**绝不排队**（排队就是等自己）；记录写在**发布路径**边上（它认的
+#    就是那一把），身份如实记 `path`。
 if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ] && [ -n "${SMOKE_LOCK_MARKER:-}" ] \
    && [ -s "${SMOKE_LOCK_MARKER:-/nonexistent}" ] \
    && [ "$(gate_lock_marker_pid "$SMOKE_LOCK_MARKER")" = "$$" ]; then
   SMOKE_LOCK_SELF_HOLDER=1
-  # 防御纵深（返修轮次 1 · F4）：用完之后不再把 marker 路径留在环境里让子孙继承 —— 真正的判据是
+  # 防御纵深（P281 返修轮次 1 · F4）：用完之后不再把 marker 路径留在环境里让子孙继承 —— 真正的判据是
   # 写入前那次 gate_lock_holder_claimable（记录里活着的 pid 不是继承得来的），这一行只是把门关小。
   unset SMOKE_LOCK_MARKER
+  unset SMOKE_LOCK_WRAPPED SMOKE_LOCK_CLAIMER_PID SMOKE_LOCK_CLAIMER_IDENTITY SMOKE_LOCK_CLAIMER_DEV_INO
 fi
-if [ "$FAST" = "1" ] || [ "${TEAM_SMOKE_NO_LOCK:-0}" = "1" ]; then
+
+# ① 我是不是「本轮持有者跑的那套」：P0 拿到两把锁之后起子套件，同时给出 SMOKE_LOCK_CLAIMER_PID；
+#    子套件必须**两头核对**（父进程就是它 + 伴生锁记录里活着的 pid 就是它）才认，绝不只信环境变量。
+# 两条**独立**证据（任一成立即认，两条都用 /proc 里真有的东西核对，绝不只信环境变量）：
+#   ① 伴生锁记录里活着的 pid 就是它（P281 的原判据）；
+#   ② 它的 /proc 里真有一个指向伴生锁、身份等于它交给我的 dev:ino 的描述符（P287 的身份机器；
+#      伪造 pid 在 /proc 上就穿帮）。这条是给「记录被另一个活着的进程占着」（P281 F4：不许覆写）
+#      时用的：那种情况下记录里没有我的父进程，但它的锁 fd 是真的。
+# 认领人必须是**我的严格祖辈**（不含我自己：`gate_lock_ancestry_chain` 从父进程起算）——环境变量能
+# 点名任何一个 pid，但那个 pid 得真的在我的进程链上，而且证据还得来自它的 /proc / 记录（下面两条）。
+# 为什么不是「父进程」：选段运行会**再起一层副本进程**（smoke → smoke 副本），父进程于是是中间那层，
+# 而真正的取锁者是祖父。祖辈判据对「直接子套件」与「选段副本」两种形状都成立。
+smoke_lock_claim_is_ancestor() { # <pid> → 0 = 严格祖辈
+  local p="${1:-}" q
+  [ -n "$p" ] || return 1
+  for q in $(gate_lock_ancestry_chain "$$"); do [ "$q" = "$p" ] && return 0; done
+  return 1
+}
+if smoke_lock_claim_is_ancestor "${SMOKE_LOCK_CLAIMER_PID:-}"; then
+  if [ -s "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")" ] \
+     && [ "$(gate_lock_record_get "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")" pid)" = "$SMOKE_LOCK_CLAIMER_PID" ] \
+     && gate_lock_record_live "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")"; then
+    SMOKE_LOCK_TOP_CHILD=1
+    SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=top
+    SMOKE_LOCK_HOLDER_PID="$SMOKE_LOCK_CLAIMER_PID"
+    SMOKE_LOCK_IDENTITY="$(gate_lock_record_get "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")" lock_identity)"
+    SMOKE_LOCK_DEV_INO="$(gate_lock_record_get "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")" lock_dev_ino)"
+  elif [ -n "${SMOKE_LOCK_CLAIMER_DEV_INO:-}" ] \
+       && gate_lock_pid_holds_path "$SMOKE_LOCK_CLAIMER_PID" "$SMOKE_LOCK_COMPANION" "$SMOKE_LOCK_CLAIMER_DEV_INO"; then
+    SMOKE_LOCK_TOP_CHILD=1
+    SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=top
+    SMOKE_LOCK_HOLDER_PID="$SMOKE_LOCK_CLAIMER_PID"
+    SMOKE_LOCK_IDENTITY="${SMOKE_LOCK_CLAIMER_IDENTITY:-fd}"
+    SMOKE_LOCK_DEV_INO="$SMOKE_LOCK_CLAIMER_DEV_INO"
+    SMOKE_LOCK_VIA_FD=1
+  fi
+  # 认领凭据是**用完就扔**的：子孙（夹具起的嵌套运行、门禁命令里的第二次调用）不许继承它们 ——
+  # 否则它们会自以为「我就是取锁进程跑的那一套」，跳过登记与排队（实测：34b⑪(b) 的嵌套运行因此
+  # 一条 `.runs/*.run` 都不落，收口检查与 8s 轮询都点名不到它）。判据不会因此变弱：真正取锁的
+  # 那个进程的 /proc 里那个描述符才是证据，而这条只是不让**下一代**误认。
+  unset SMOKE_LOCK_CLAIMER_PID SMOKE_LOCK_CLAIMER_IDENTITY SMOKE_LOCK_CLAIMER_DEV_INO SMOKE_LOCK_WRAPPED
+fi
+
+# ② 档位判定
+if [ "$SMOKE_LOCK_TOP_CHILD" = "1" ]; then
+  printf '  \033[2m·\033[0m 全量门禁互斥：本轮由 pid=%s 持有 %s（伴生锁；本套是它跑的那一套，不再排队%s）\n' \
+    "$SMOKE_LOCK_HOLDER_PID" "$SMOKE_LOCK_COMPANION" \
+    "$([ "${SMOKE_LOCK_VIA_FD:-0}" = "1" ] && printf '；凭据=它 /proc 里的锁描述符（不是环境变量自述）' || true)"
+elif [ "$FAST" = "1" ] || [ "${TEAM_SMOKE_NO_LOCK:-0}" = "1" ]; then
   SMOKE_LOCK_NO_LOCK=1
   SMOKE_LOCK_REASON="FAST 模式（按契约不跑真进程段、不参与机器锁）"
   [ "${TEAM_SMOKE_NO_LOCK:-0}" = "1" ] && SMOKE_LOCK_REASON="TEAM_SMOKE_NO_LOCK=1（自担并发风险）"
   printf '  \033[2m·\033[0m 全量门禁互斥：no_lock=1（%s；残余窗口见 references/protocol.md §9b）\n' "$SMOKE_LOCK_REASON"
-elif [ "$SMOKE_LOCK_SELF_HOLDER" = "1" ]; then
-  SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=top
-  printf '  \033[2m·\033[0m 全量门禁互斥：持有 %s（kind=top pid=%s agent=%s worktree=%s；同机第二套会排队；TEAM_SMOKE_NO_LOCK=1 可跳过）\n' \
-    "$SMOKE_LOCK" "$$" "$(gate_lock_seat_of_dir "$PWD")" "$(gate_lock_worktree_of_dir "$PWD")"
 elif ! command -v flock >/dev/null 2>&1; then
   SMOKE_LOCK_NO_LOCK=1
   SMOKE_LOCK_REASON="本机没有 flock → 不做排队"
@@ -368,98 +457,171 @@ elif ! mkdir -p "$(dirname "$SMOKE_LOCK")" 2>/dev/null || ! : >>"$SMOKE_LOCK" 2>
   SMOKE_LOCK_NO_LOCK=1
   SMOKE_LOCK_REASON="锁文件 $SMOKE_LOCK 建不了 → 不做排队"
   printf '  \033[2m·\033[0m 全量门禁互斥：no_lock=1（锁文件 %s 建不了 → 不做排队；同机并发两套时可能互相干扰，见 M23）\n' "$SMOKE_LOCK"
+elif [ "$SMOKE_LOCK_SELF_HOLDER" = "1" ]; then
+  SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=top; SMOKE_LOCK_LEGACY_HOLDER=1
+  SMOKE_LOCK_IDENTITY="path"
+  SMOKE_LOCK_DEV_INO="$(gate_lock_path_identity "$SMOKE_LOCK" 2>/dev/null || true)"
+  printf '  \033[2m·\033[0m 全量门禁互斥：持有 %s（旧式持有者标记：marker pid=%s；记录写发布路径那条，不排队）\n' \
+    "$SMOKE_LOCK" "$$"
 else
   # 嵌套证明：只有**证明得了**才不排队（进程树 + starttime；见 gate-lock.sh 的 gate_lock_prove_ancestor）
-  SMOKE_LOCK_ANCESTOR="$(gate_lock_prove_ancestor "$SMOKE_LOCK" 2>/dev/null || true)"
+  SMOKE_LOCK_ANCESTOR="$(gate_lock_prove_ancestor_pair "$SMOKE_LOCK" 2>/dev/null || true)"
   if [ -n "$SMOKE_LOCK_ANCESTOR" ]; then
     SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=nested; SMOKE_LOCK_NESTED=1
     printf '  \033[2m·\033[0m 全量门禁互斥：嵌套运行（祖辈 pid=%s 持有 %s）→ 不排队，登记 %s.runs/%s.run\n' \
-      "$SMOKE_LOCK_ANCESTOR" "$SMOKE_LOCK" "$SMOKE_LOCK" "$$"
+      "$SMOKE_LOCK_ANCESTOR" "$SMOKE_LOCK" "$SMOKE_LOCK_COMPANION" "$$"
   else
     gate_lock_proc_tree_available \
       || printf '注意：没有 /proc → 无法证明祖辈持有锁 → 本套按**顶层**处理（fail closed：宁可多排队，不可少串行）\n'
     SMOKE_LOCK_NEEDS_QUEUE=1
   fi
 fi
+
+# ③ 顶层：有界轮询取两把锁 → 写记录 + 刷 mtime → 入场检查 → 起子套件（锁 fd 关掉）
+_smoke_lock_release_claim() { # 收尾：只删**自己**写的持有者记录与队列标记（锁文件永不 unlink）
+  rm -f "${SMOKE_LOCK_MARKER:-/nonexistent}" 2>/dev/null || true
+  [ "${SMOKE_LOCK_CLAIMED:-0}" = "1" ] || return 0
+  # 自检出口（夹具路径）：记录刻意留下供 §34b②/③ 读格式 —— 收尾的 EXIT trap 也要认这个决定
+  [ "${SMOKE_LOCK_KEEP_RECORD:-0}" = "1" ] && return 0
+  if gate_lock_holder_claimable "$SMOKE_LOCK_COMPANION" "$$"; then
+    gate_lock_remove_holder "$SMOKE_LOCK_COMPANION"
+    rmdir "$(gate_lock_runs_dir "$SMOKE_LOCK_COMPANION")" 2>/dev/null || true
+  fi
+  SMOKE_LOCK_CLAIMED=0
+  return 0
+}
 if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
-  if command -v flock >/dev/null 2>&1; then
-    SMOKE_LOCK="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
-    SMOKE_LOCK_WAIT="${TEAM_SMOKE_LOCK_WAIT:-1800}"
-    case "$SMOKE_LOCK_WAIT" in ''|*[!0-9]*) SMOKE_LOCK_WAIT=1800 ;; esac
-    mkdir -p "$(dirname "$SMOKE_LOCK")" 2>/dev/null || true
-    if ! : >>"$SMOKE_LOCK" 2>/dev/null; then
+  # 安全：本进程只碰**这台运行的**锁路径（TEAM_SMOKE_LOCK / 它的伴生锁）；两把锁都永不 unlink。
+  trap '_smoke_lock_release_claim' EXIT
+  trap '_smoke_lock_release_claim; exit 130' INT
+  SMOKE_LOCK_T0="$(date +%s)"
+  SMOKE_LOCK_ACQ=0
+  SMOKE_LOCK_WAITED_PATH=""; SMOKE_LOCK_WAITED_ID=""
+  while :; do
+    SMOKE_LOCK_ACQ=0
+    gate_lock_acquire_pair "$SMOKE_LOCK" || SMOKE_LOCK_ACQ=$?
+    # P287：我上一轮等的那把锁还在吗？**拿到锁的那一轮也判**（换过就要说出来 —— 拿到的其实是
+    # 新文件，而不是当初让我排队的那一个）。判据：路径现在的身份 vs 我记住的身份。
+    if [ -n "$SMOKE_LOCK_WAITED_PATH" ]; then
+      SMOKE_WAIT_ID_NOW="$(gate_lock_path_identity "$SMOKE_LOCK_WAITED_PATH" 2>/dev/null || true)"
+      if [ "$SMOKE_WAIT_ID_NOW" != "$SMOKE_LOCK_WAITED_ID" ]; then
+        printf '注意：我等的那把锁（%s）已经变了 —— 旧身份 %s，现在 %s；按路径重新解析（继续等或按新身份取锁）\n' \
+          "$SMOKE_LOCK_WAITED_PATH" "${SMOKE_LOCK_WAITED_ID:-（已不在）}" "${SMOKE_WAIT_ID_NOW:-（已不在）}"
+      fi
+      SMOKE_LOCK_WAITED_ID="$SMOKE_WAIT_ID_NOW"
+    fi
+    [ "$SMOKE_LOCK_ACQ" = "0" ] && break
+    if [ "$SMOKE_LOCK_ACQ" = "2" ]; then
       printf '注意：锁文件 %s 建不了 → 不做排队（同机并发两套时可能互相干扰；见 M23）\n' "$SMOKE_LOCK"
+      SMOKE_LOCK_NO_LOCK=1; SMOKE_LOCK_NEEDS_QUEUE=0; SMOKE_LOCK_REASON="锁文件建不了 → 不做排队"
+      printf '  \033[2m·\033[0m 全量门禁互斥：no_lock=1（%s）\n' "$SMOKE_LOCK_REASON"
+      break
+    fi
+    # 谁挡着：1 = 发布路径（旧的写入者，或另一个本版本运行）；3 = 伴生锁
+    if [ "$SMOKE_LOCK_ACQ" = "1" ]; then
+      SMOKE_LOCK_WAIT_PATH="$SMOKE_LOCK"; SMOKE_LOCK_WAIT_ROLE="发布路径（兼容声明）"
     else
-      SMOKE_LOCK_PROBE=0
-      flock -n "$SMOKE_LOCK" true 2>/dev/null || SMOKE_LOCK_PROBE=$?
-      # P281：上限按持有者公布的 expected 算（D3）：cap = clamp(remaining + 60, W, 4W)；记录里没有
-      # expected（旧写入者 / 读不到）→ 退回今天的 W（一字不改）。等待者必须打印算式与三个数。
-      SMOKE_LOCK_CAP="$SMOKE_LOCK_WAIT"; SMOKE_LOCK_REMAINING="-"; SMOKE_LOCK_EXPECTED="-"
-      if [ "$SMOKE_LOCK_PROBE" -eq 1 ]; then
-        IFS=$'\t' read -r SMOKE_LOCK_CAP SMOKE_LOCK_REMAINING SMOKE_LOCK_EXPECTED _ \
-          < <(gate_lock_cap "$SMOKE_LOCK" "$SMOKE_LOCK_WAIT")
-        case "$SMOKE_LOCK_CAP" in ''|*[!0-9]*) SMOKE_LOCK_CAP="$SMOKE_LOCK_WAIT" ;; esac
-        printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（算式：remaining=%ss + 60s → cap=%ss，下限 TEAM_SMOKE_LOCK_WAIT=%ss，上限 4×=%ss；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
-          "$(gate_lock_describe "$SMOKE_LOCK")" "$SMOKE_LOCK_CAP" \
-          "$SMOKE_LOCK_REMAINING" "$SMOKE_LOCK_CAP" "$SMOKE_LOCK_WAIT" "$(( SMOKE_LOCK_WAIT * 4 ))"
-        SMOKE_LOCK_QUEUED=1
-      elif [ "$SMOKE_LOCK_PROBE" -gt 1 ]; then
-        printf '注意：flock 探锁失败（rc=%s）→ 仍按排队路径走（拿不到锁时会报排队超限）\n' "$SMOKE_LOCK_PROBE"
-      fi
-      # 用 `flock --close` 把**整个脚本**包起来（重新跑一遍自己）：锁挂在 flock 那个父进程上，
-      # 脚本与它的子孙都不持有这个 fd。第一版是 `exec 9>>file` + `flock -n 9`，实测**会漏锁**：
-      # smoke 的夹具会留下后台子进程（这次是夹具仓库里的占位 `sleep 3600`），它继承了 fd 9 ——
-      # 脚本退出后锁还挂着，后续每一套门禁都在门口排队（M23 自测复现，见报告）。
-      # `--close` 让被执行的命令拿不到那个 fd，于是「漏锁」这一类被构造性关掉。
-      #
-      # P66（2026-09-22 PM 归档前实测）：这里**不再用 `exec`**。`flock -w` 超时只返回 1，而 `exec`
-      # 之后的那行永远执行不到 → 排队超上限时**静默 exit 1**（既没有点名持有者的一行，也没有约定
-      # 的 exit 2），看日志的人只会以为门禁自己红了；更糟的是 smoke 自己失败**也是** 1，只看返回码
-      # 会把「门禁真红」误报成「排队超限」。所以：
-      #   * marker 文件是「真的拿到锁、本套真的跑起来了」的唯一证据（与 cmd-review.sh 的 queue_marker 同形）；
-      #   * 没 marker + rc=1 → 排队超限：一行点名 `<lock>.holder` 里的持有者 + 等了多少秒 → exit 2；
-      #   * 有 marker         → 本套跑过了：子进程的退出码原样透传（含它自己的 1）。
-      SMOKE_LOCK_MARKER="$(mktemp "${TMPDIR:-/tmp}/teamsmith-smoke-queue.XXXXXX" 2>/dev/null \
-        || printf '%s' "$SMOKE_LOCK.queued.$$")"
-      export SMOKE_LOCK_WRAPPED=1
-      export SMOKE_LOCK_MARKER
-      [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && export SMOKE_LOCK_QUEUED=1
-      SMOKE_LOCK_T0="$(date +%s)"
-      SMOKE_LOCK_RC=0
-      # P98：选段子进程跑的是过滤副本（$SMOKE_SEL_COPY_PATH）——排队后要跑的还是**同一份**脚本，
-      # 否则排队一圈回来就变成“标记说选段、内容却是全套”。标记用命令行前缀带回去（不回写环境，
-      # 否则又会被它的子孙继承）；没标记时（正常的全量门禁）与 P66 的解法一模一样。
-      if [ "$SMOKE_SEL_IS_CHILD" = "1" ] && [ -n "$SMOKE_SEL_COPY_PATH" ]; then
-        # 用 `env` 把标记作为**命令行前缀**带进去：`exec` 自己不认 `VAR=value` 前缀（实测 rc=127，
-        # `exec: SMOKE_SEL_CHILD=1: not found`）——这正是 §36 覆盖不到的组合（嵌套跑带 NO_LOCK）。
-        # P281：marker 记 `<epoch> <pid>`（pid = 被 exec 起来的那次运行的 pid，见 gate-lock.sh）。
-        flock --close -w "$SMOKE_LOCK_CAP" "$SMOKE_LOCK" bash -c \
-          'marker="$1"; shift; printf "%s %s\n" "$(date +%s)" "$$" > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
-          env SMOKE_SEL_CHILD=1 SMOKE_SEL_SKILL_DIR="$SMOKE_SEL_CHILD_DIR" \
-          SMOKE_SEL_DECISION="$SMOKE_SEL_CHILD_DECISION" SMOKE_SEL_COPY="$SMOKE_SEL_COPY_PATH" \
-          bash "$SMOKE_SEL_COPY_PATH" "$@" || SMOKE_LOCK_RC=$?
-      else
-        flock --close -w "$SMOKE_LOCK_CAP" "$SMOKE_LOCK" bash -c \
-          'marker="$1"; shift; printf "%s %s\n" "$(date +%s)" "$$" > "$marker"; exec "$@"' _ "$SMOKE_LOCK_MARKER" \
-          bash "$SKILL_DIR/tests/smoke.sh" "$@" || SMOKE_LOCK_RC=$?
-      fi
-      if [ ! -s "$SMOKE_LOCK_MARKER" ]; then
-        rm -f "$SMOKE_LOCK_MARKER" 2>/dev/null || true
-        if [ "$SMOKE_LOCK_RC" -eq 1 ]; then
-          printf '排队超限：等满 %ss 仍拿不到门禁锁 %s（持锁者：%s）→ 本套**没有运行**（这不是对代码的判定；等持锁者结束，或抬高 TEAM_SMOKE_LOCK_WAIT 后重跑；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
-            "$(( $(date +%s) - SMOKE_LOCK_T0 ))" "$SMOKE_LOCK" \
-            "$(gate_lock_describe "$SMOKE_LOCK")" >&2
-        else
-          printf '排队/加锁失败：flock 没能把本套跑起来（%s，rc=%s；既不是排队超限，也没有脚本自己的退出码）\n' \
-            "$SMOKE_LOCK" "$SMOKE_LOCK_RC" >&2
-        fi
+      SMOKE_LOCK_WAIT_PATH="$SMOKE_LOCK_COMPANION"; SMOKE_LOCK_WAIT_ROLE="伴生锁（运行互斥）"
+    fi
+    # P281：上限按持有者公布的 expected 算（D3）：cap = clamp(remaining + 60, W, 4W)；记录里没有
+    # expected（旧写入者 / 读不到）→ 退回今天的 W（一字不改）。等待者必须打印算式与三个数。
+    IFS=$'\t' read -r SMOKE_LOCK_CAP SMOKE_LOCK_REMAINING SMOKE_LOCK_EXPECTED _ \
+      < <(gate_lock_cap_pair "$SMOKE_LOCK" "$SMOKE_LOCK_WAIT")
+    case "$SMOKE_LOCK_CAP" in ''|*[!0-9]*) SMOKE_LOCK_CAP="$SMOKE_LOCK_WAIT" ;; esac
+    if [ "$SMOKE_LOCK_QUEUED" = "0" ]; then
+      SMOKE_LOCK_QUEUED=1
+      printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（算式：remaining=%ss + 60s → cap=%ss，下限 TEAM_SMOKE_LOCK_WAIT=%ss，上限 4×=%ss；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
+        "$(gate_lock_describe_pair "$SMOKE_LOCK")" "$SMOKE_LOCK_CAP" \
+        "$SMOKE_LOCK_REMAINING" "$SMOKE_LOCK_CAP" "$SMOKE_LOCK_WAIT" "$(( SMOKE_LOCK_WAIT * 4 ))"
+    fi
+    # 换了一把等在别的路径上：重新记起点（身份在下一轮开头判）
+    if [ "$SMOKE_LOCK_WAIT_PATH" != "$SMOKE_LOCK_WAITED_PATH" ]; then
+      SMOKE_LOCK_WAITED_PATH="$SMOKE_LOCK_WAIT_PATH"
+      SMOKE_LOCK_WAITED_ID="$(gate_lock_path_identity "$SMOKE_LOCK_WAITED_PATH" 2>/dev/null || true)"
+    fi
+    SMOKE_LOCK_ELAPSED=$(( $(date +%s) - SMOKE_LOCK_T0 ))
+    if [ "$SMOKE_LOCK_ELAPSED" -ge "$SMOKE_LOCK_CAP" ]; then
+      # P66：没有运行 = FAIL 的语义一字不改（一行点名持有者 + 「本套没有运行」+ exit 2）
+      printf '排队超限：等满 %ss 仍拿不到门禁锁 %s（持锁者：%s）→ 本套**没有运行**（这不是对代码的判定；等持锁者结束，或抬高 TEAM_SMOKE_LOCK_WAIT 后重跑；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
+        "$SMOKE_LOCK_ELAPSED" "$SMOKE_LOCK_WAIT_PATH" "$(gate_lock_describe_pair "$SMOKE_LOCK")" >&2
+      exit 2
+    fi
+    sleep 1
+  done
+  if [ "$SMOKE_LOCK_ACQ" = "0" ]; then
+    SMOKE_LOCK_HELD=1; SMOKE_LOCK_KIND=top; SMOKE_LOCK_CLAIMED=1
+    SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
+    SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
+    IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
+      < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" "$SKILL_DIR/tests/section-budgets.tsv")
+    SMOKE_LOCK_STARTED="$(date +%s)"
+    # 记录只在**持有者**手里写（P281 的 F4：不许覆写另一个活着进程的记录）。真被拒（同一把锁上有
+    # 另一个活着的持有者记录）本身就是「互斥断了」的形状 —— 交给下面的入场检查点名并停跑。
+    if gate_lock_holder_claimable "$SMOKE_LOCK_COMPANION" "$$"; then
+      SMOKE_LOCK_CLAIM_LINE="$(gate_lock_claim_identity "$SMOKE_LOCK_COMPANION")"
+      SMOKE_LOCK_IDENTITY="${SMOKE_LOCK_CLAIM_LINE%%$'\t'*}"
+      SMOKE_LOCK_DEV_INO="${SMOKE_LOCK_CLAIM_LINE#*$'\t'}"
+      # 按 age 的清理器不该删活锁：取锁时把两把锁的 mtime 刷一次（P255 §1.6）
+      touch "$SMOKE_LOCK" "$SMOKE_LOCK_COMPANION" 2>/dev/null || true
+      gate_lock_write_holder "$SMOKE_LOCK_COMPANION" "$$" top smoke.sh "$SMOKE_LOCK_SEAT" "$SMOKE_LOCK_WT" \
+        "$SMOKE_LOCK_STARTED" "$SMOKE_LOCK_EXP" "$SMOKE_LOCK_BND" "$SMOKE_LOCK_SECS" 0 - \
+        "$(section_guard_heartbeat_path "$$")" "$SMOKE_LOCK_IDENTITY" "$SMOKE_LOCK_DEV_INO"
+      SMOKE_LOCK_HOLDER_WRITTEN=1
+    else
+      printf '\033[33m注意\033[0m：拿到锁了，但 %s 里的持有记录是**另一个活着的进程**（%s）→ 不覆写它\n' \
+        "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")" \
+        "$(gate_lock_describe_one "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")")"
+      SMOKE_LOCK_IDENTITY=""; SMOKE_LOCK_DEV_INO=""
+      SMOKE_LOCK_CLAIM_LINE="$(gate_lock_claim_identity "$SMOKE_LOCK_COMPANION")"
+      SMOKE_LOCK_IDENTITY="${SMOKE_LOCK_CLAIM_LINE%%$'\t'*}"
+      SMOKE_LOCK_DEV_INO="${SMOKE_LOCK_CLAIM_LINE#*$'\t'}"
+    fi
+    SMOKE_LOCK_HOLDER_PID="$$"
+    # 入场检查（design §6）：活登记里有一个 top 记着**另一个身份** ⇒ 互斥已断 ⇒ 不跑套件
+    if [ "$SMOKE_BREAK" != "no-entry-check" ]; then
+      SMOKE_ENTRY_CHAIN="$(gate_lock_ancestry_chain "$$" | tr '\n' ' ')"
+      SMOKE_ENTRY_MSG="$(gate_lock_entry_conflict "$SMOKE_LOCK_COMPANION" "$SMOKE_LOCK_DEV_INO" "$$" "$SMOKE_ENTRY_CHAIN")"
+      if [ -n "$SMOKE_ENTRY_MSG" ]; then
+        printf '\033[31m入场检查\033[0m：%s\n' "$SMOKE_ENTRY_MSG"
+        printf '入场检查：本套**没有运行**（互斥已经断了；这不是对代码的判定 —— 等那个运行结束后重跑）\n' >&2
         exit 2
       fi
-      rm -f "$SMOKE_LOCK_MARKER" 2>/dev/null || true
-      exit "$SMOKE_LOCK_RC"
+    else
+      printf '\033[33m夹具红侧\033[0m：--break=no-entry-check（入场检查关掉 —— 互斥断了也照跑）\n'
     fi
-  else
-    printf '注意：本机没有 flock → 全量 smoke 不做排队（同机并发两套时可能互相干扰；见 M23）\n'
+    [ "$SMOKE_LOCK_QUEUED" = "1" ] && printf '轮到本套了（排过队）—— 共等了 %ss\n' "$(( $(date +%s) - SMOKE_LOCK_T0 ))"
+    # 队列标记：队列子进程**真的起来了**的证据（P66 的语义）。P287 起它就是交接凭证：写它 = 锁拿到
+    # 了、记录写了、入场检查过了，接下来起子套件。收尾删掉（正常路径与中断路径都删）。
+    SMOKE_LOCK_MARKER="$(mktemp "${TMPDIR:-/tmp}/teamsmith-smoke-queue.$(team_project_ns).XXXXXX" 2>/dev/null \
+      || printf '%s' "${SMOKE_LOCK%/*}/.teamsmith-smoke-queue.$$")"
+    printf '%s %s\n' "$(date +%s)" "$$" > "$SMOKE_LOCK_MARKER" 2>/dev/null || true
+    export SMOKE_LOCK_WRAPPED=1
+    export SMOKE_LOCK_CLAIMER_PID="$$"
+    # 第二条证据要用的通道：子套件不重置这两个（它自己那两个 SMOKE_LOCK_IDENTITY/DEV_INO 会重置）
+    export SMOKE_LOCK_CLAIMER_IDENTITY="${SMOKE_LOCK_IDENTITY:-}" SMOKE_LOCK_CLAIMER_DEV_INO="${SMOKE_LOCK_DEV_INO:-}"
+    export TEAM_SMOKE_LOCK="$SMOKE_LOCK"
+    export SMOKE_LOCK_IDENTITY SMOKE_LOCK_DEV_INO
+    SMOKE_LOCK_RC=0
+    # 子套件：**同一个入口**再跑一次，args 原样（选段副本/选段标记照旧由环境带回去）；`8>&- 9>&-`
+    # 把两个锁 fd 关掉 —— 子进程与它的子孙都拿不到锁 fd（等价于原来 `flock --close` 的那条保证）。
+    if [ "$SMOKE_SEL_IS_CHILD" = "1" ] && [ -n "$SMOKE_SEL_COPY_PATH" ]; then
+      env SMOKE_SEL_CHILD=1 SMOKE_SEL_SKILL_DIR="$SMOKE_SEL_CHILD_DIR" \
+        SMOKE_SEL_DECISION="$SMOKE_SEL_CHILD_DECISION" SMOKE_SEL_COPY="$SMOKE_SEL_COPY_PATH" \
+        bash "$SMOKE_SEL_COPY_PATH" "$@" 8>&- 9>&- || SMOKE_LOCK_RC=$?
+    else
+      bash "$SKILL_DIR/tests/smoke.sh" "$@" 8>&- 9>&- || SMOKE_LOCK_RC=$?
+    fi
+    if [ -n "${SMOKE_LOCK_SELFTEST_CHILD:-}" ] && [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; then
+      # 排队守卫自检的子进程立刻退出，来不及被观察：保留它的持有者记录与登记（与 P281 时代 wrapper
+      # 写、跑套件的进程不删是同一个可观测形状），供 §34b②/③ 读记录格式。队列标记照旧删（⑥ 判它）。
+      SMOKE_LOCK_KEEP_RECORD=1
+      rm -f "$SMOKE_LOCK_MARKER" 2>/dev/null || true
+      printf '自检出口：保留持有者记录 %s（队列守卫自检要读它的格式）；真实路径收尾必删\n' \
+        "$(gate_lock_holder_file "$SMOKE_LOCK_COMPANION")"
+    else
+      _smoke_lock_release_claim
+    fi
+    exit "$SMOKE_LOCK_RC"
   fi
 fi
 if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
@@ -477,16 +639,20 @@ if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
   # 环境变量，旧实现于是**无声**退回自己的表预算（可能远晚于生它的那一段）。
   if [ "$SMOKE_LOCK_NESTED" = "1" ]; then
     SG_NESTED=1
-    SG_ANCESTOR_HEARTBEAT="$(gate_lock_heartbeat_of_pid "$SMOKE_LOCK" "$SMOKE_LOCK_ANCESTOR" 2>/dev/null || true)"
+    SG_ANCESTOR_HEARTBEAT="$(gate_lock_heartbeat_of_pid_pair "$SMOKE_LOCK" "$SMOKE_LOCK_ANCESTOR" 2>/dev/null || true)"
     [ -n "$SG_ANCESTOR_HEARTBEAT" ] || SG_ANCESTOR_HEARTBEAT="${SMOKE_ANCESTOR_HEARTBEAT:-}"
   fi
   # 对外只公布**本次运行自己**的心跳路径（给它的子孙；它自己的记录里公布同一条）
   SMOKE_ANCESTOR_HEARTBEAT="$(section_guard_heartbeat_path "$$")"; export SMOKE_ANCESTOR_HEARTBEAT
+  # 顶层运行：持有者是**取锁的那个进程**（P0），它已经写过记录了（含身份）—— 本套只登记自己那条，
+  # 并把身份**照抄**下来（守卫与入场检查比对的就是它）。旧式持有者标记那条路没有 P0，记录由本进程写。
+  SMOKE_LOCK_RECORD_TARGET="$SMOKE_LOCK_COMPANION"
   if [ "$SMOKE_LOCK_SELF_HOLDER" = "1" ]; then
+    SMOKE_LOCK_RECORD_TARGET="$SMOKE_LOCK"
     if gate_lock_holder_claimable "$SMOKE_LOCK" "$$"; then
       gate_lock_write_holder "$SMOKE_LOCK" "$$" top smoke.sh "$SMOKE_LOCK_SEAT" "$SMOKE_LOCK_WT" \
         "$SMOKE_LOCK_STARTED" "$SMOKE_LOCK_EXP" "$SMOKE_LOCK_BND" "$SMOKE_LOCK_SECS" 0 - \
-        "$(section_guard_heartbeat_path "$$")"
+        "$(section_guard_heartbeat_path "$$")" "${SMOKE_LOCK_IDENTITY:--}" "${SMOKE_LOCK_DEV_INO:--}"
       SMOKE_LOCK_HOLDER_WRITTEN=1
     else
       # F4：继承来的 marker 不是「我是持有者」的证明 —— 记录里活着的那个 pid 才是（不许覆写、不许删）。
@@ -494,10 +660,14 @@ if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
         "$$" "$(gate_lock_holder_file "$SMOKE_LOCK")" "$(gate_lock_describe_one "$(gate_lock_holder_file "$SMOKE_LOCK")")"
       SMOKE_LOCK_SELF_HOLDER=0
     fi
+  elif [ "$SMOKE_LOCK_TOP_CHILD" = "1" ]; then
+    # 身份从持有者记录里读（P0 写的）——不存在「自述持有者」的问题：P0 真的握着 fd 8/9。
+    :
   fi
-  gate_lock_register_run "$SMOKE_LOCK" "$$" "$SMOKE_LOCK_KIND" smoke.sh "$SMOKE_LOCK_SEAT" "$SMOKE_LOCK_WT" \
+  gate_lock_register_run "$SMOKE_LOCK_RECORD_TARGET" "$$" "$SMOKE_LOCK_KIND" smoke.sh "$SMOKE_LOCK_SEAT" "$SMOKE_LOCK_WT" \
     "$SMOKE_LOCK_STARTED" "$SMOKE_LOCK_EXP" "$SMOKE_LOCK_BND" "$SMOKE_LOCK_SECS" "${SMOKE_LOCK_NO_LOCK:-0}" \
-    "${SMOKE_LOCK_ANCESTOR:--}" "$(section_guard_heartbeat_path "$$")"
+    "${SMOKE_LOCK_ANCESTOR:--}" "$(section_guard_heartbeat_path "$$")" \
+    "${SMOKE_LOCK_IDENTITY:--}" "${SMOKE_LOCK_DEV_INO:--}"
   SMOKE_LOCK_RECORD=1
   [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && printf '轮到本套了（排过队）\n'
   # P66 自检出口：排队守卫的自检需要一个**真的排到队、然后按给定退出码结束**的子进程 —— 否则它
@@ -525,7 +695,7 @@ fi
 # 真实门禁路径（不带 TEAM_SMOKE_FAST）不受影响：全量依旧持真锁，没有锁的人依旧排队。
 if [ "$FAST" = "1" ]; then
   if [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
-    TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/teamsmith-smoke-fast-$$.lock"
+    TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/.teamsmith-smoke-fast-$$.lock"
     export TEAM_SMOKE_LOCK
   fi
   export SMOKE_LOCK_WRAPPED=1
@@ -584,6 +754,7 @@ smoke_prereq_absent() {
 PASS=0; FAIL=0
 section() {
   [ -z "${SMOKE_TMP_CANARY:-}" ] || smoke_tmp_guard "段落 $1 开始时"
+  smoke_lock_guard "段落 $1 开始时"
   smoke_section_close            # P98 账本 × P70 看门狗：上一段在这里收口（一条统一收口行）
   SMOKE_SEC_N=$((SMOKE_SEC_N + 1))
   SMOKE_SEC_OPEN_KEY="${1%% · *}"; SMOKE_SEC_OPEN_ID="$1"
@@ -930,9 +1101,129 @@ smoke_tmp_guard() { # <位置>：段落边界/结果行前的检查；活着时�
 assert_tmp_alive() { # <说明>：显式哨兵断言（活着时印 ✓，让「这一拍真的检查过」进证据）
   if tmp_alive; then ok "$1（$SMOKE_TMP_PATH）"; else smoke_tmp_fire "断言「$1」"; fi
 }
+
+# ── P287 · 伴生锁（运行互斥）的现场与守卫 ──────────────────────────────────────────────────
+# 与 $TMP 哨兵**同一个进程、同一条停跑路径**（design §5：不建第二个看守）：既有的 0.2s 轮询多看一条
+# 前提「伴生锁还是我持有的那个文件」。判据（design §4/§5）：
+#   路径 == 持有者描述符里的 inode      → 互斥完好（不打印）
+#   路径存在但 != 持有的 inode          → 「已被替换」（印两个身份：我持有的 + 路径上现在的）
+#   路径不存在且描述符已被 unlink        → 「已不在」
+# 发布路径（兼容声明）单独一条：它的丢失**只印一行 + 记证据、不停跑**（互斥在伴生锁上）。
+SMOKE_LOCK_GUARD_ON=0
+SMOKE_LOCK_LOST_KIND=""; SMOKE_LOCK_LOST_DETAIL=""; SMOKE_LOCK_LOST_WANT=""; SMOKE_LOCK_LOST_GOT=""
+SMOKE_LOCK_FLAG="${SMOKE_TMP_DIAG%.log}.locknamed"          # 只由 smoke_lock_fire 写：一条点名红只印一次
+SMOKE_LOCK_SEEN="${SMOKE_TMP_DIAG%.log}.lock-seen-at"        # 后台哨兵第一次发现的时刻
+SMOKE_LOCK_PUB_FLAG="${SMOKE_TMP_DIAG%.log}.pubnamed"        # 发布路径丢失：也只印一行
+if [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && [ "${SMOKE_LOCK_KIND:-}" = "top" ] \
+   && [ -n "${SMOKE_LOCK_HOLDER_PID:-}" ] && [ "${SMOKE_LOCK_LEGACY_HOLDER:-0}" != "1" ]; then
+  if [ "${SMOKE_BREAK:-}" = "no-lock-guard" ]; then
+    printf '夹具红侧：--break=no-lock-guard（守卫关掉 —— 伴生锁被删/被换都不再点名与停跑）\n'
+  else
+    SMOKE_LOCK_GUARD_ON=1
+  fi
+fi
+smoke_lock_probe() { # → "ok" | "gone<TAB>原因" | "replaced<TAB>期望<TAB>实测"
+  [ "${SMOKE_LOCK_GUARD_ON:-0}" = "1" ] || { printf 'ok\n'; return 0; }
+  gate_lock_snapshot "$SMOKE_LOCK_COMPANION" "${SMOKE_LOCK_IDENTITY:-fd}" "${SMOKE_LOCK_DEV_INO:-}" "$SMOKE_LOCK_HOLDER_PID"
+}
+smoke_lock_lost_now() { # 0 = 正常；1 = 丢了/被换（文案进 SMOKE_LOCK_LOST_*）
+  local r
+  r="$(smoke_lock_probe)"
+  case "$r" in
+    ok|'') return 0 ;;
+    gone*) SMOKE_LOCK_LOST_KIND=gone; SMOKE_LOCK_LOST_DETAIL="${r#*$'\t'}"; return 1 ;;
+    replaced*)
+      SMOKE_LOCK_LOST_KIND=replaced
+      SMOKE_LOCK_LOST_WANT="${r#*$'\t'}"; SMOKE_LOCK_LOST_WANT="${SMOKE_LOCK_LOST_WANT%%$'\t'*}"
+      SMOKE_LOCK_LOST_GOT="${r##*$'\t'}"
+      SMOKE_LOCK_LOST_DETAIL="我持有 ${SMOKE_LOCK_LOST_WANT:-?}，路径上现在是 ${SMOKE_LOCK_LOST_GOT:-?}"
+      return 1 ;;
+  esac
+  return 0
+}
+smoke_lock_lost_line() { # 一条点名行（「已不在」/「已被替换」两种文案可区分；替换带两个身份）
+  if [ "${SMOKE_LOCK_LOST_KIND:-}" = "replaced" ]; then
+    printf '伴生锁（运行互斥）已被替换 —— %s（我持有 %s，路径上现在是 %s）' \
+      "$SMOKE_LOCK_COMPANION" "${SMOKE_LOCK_LOST_WANT:--}" "${SMOKE_LOCK_LOST_GOT:--}"
+  else
+    printf '伴生锁（运行互斥）已不在 —— %s（期望身份 %s；%s）' \
+      "$SMOKE_LOCK_COMPANION" "${SMOKE_LOCK_DEV_INO:--}" "${SMOKE_LOCK_LOST_DETAIL:--}"
+  fi
+}
+smoke_lock_pub_state() { # 发布路径（兼容声明）的一行状态
+  local r
+  [ "${SMOKE_LOCK_GUARD_ON:-0}" = "1" ] || { printf '（本套不持锁，不适用）'; return 0; }
+  r="$(gate_lock_snapshot "$SMOKE_LOCK" fd "" "$SMOKE_LOCK_HOLDER_PID")"
+  case "$r" in
+    ok|'') printf '在（就是我持有的那个 inode）' ;;
+    gone*) printf '已不在（%s）' "${r#*$'\t'}" ;;
+    replaced*) printf '已被替换（我持有 %s，路径上现在是 %s）' "$(printf '%s' "${r#*$'\t'}" | cut -f1)" "$(printf '%s' "${r#*$'\t'}" | cut -f2)" ;;
+  esac
+}
+smoke_lock_pub_check() { # 发布路径丢失：**只印一行 + 记证据**（互斥在伴生锁上，不停跑）
+  [ "${SMOKE_LOCK_GUARD_ON:-0}" = "1" ] || return 0
+  local r
+  r="$(gate_lock_snapshot "$SMOKE_LOCK" fd "" "$SMOKE_LOCK_HOLDER_PID")"
+  case "$r" in ok|'') return 0 ;; esac
+  [ -e "$SMOKE_LOCK_PUB_FLAG" ] && return 0
+  : > "$SMOKE_LOCK_PUB_FLAG" 2>/dev/null || true
+  {
+    printf '== %s · 发布锁路径（兼容声明）丢失 · 只记录不停跑 ==\n' "$(date -Is)"
+    printf '发布路径：%s\n状态：%s\n' "$SMOKE_LOCK" "$(smoke_lock_pub_state)"
+    printf '影响：与 P287 之前的写入者不再串行（互斥仍在伴生锁 %s 上，运行继续）\n' "$SMOKE_LOCK_COMPANION"
+    printf '-- 现场结束 --\n'
+  } >>"$SMOKE_TMP_DIAG" 2>/dev/null || true
+  printf '  \033[33m!\033[0m 哨兵：发布锁路径（兼容声明）丢失 —— %s %s（互斥仍在伴生锁上，只记录不停跑）\n' \
+    "$SMOKE_LOCK" "$(smoke_lock_pub_state)"
+  return 0
+}
+smoke_lock_diag() { # <来源>：锁现场追加进 $TMP 之外的诊断文件（几点、期望/实测身份、最后段落、持有者）
+  local where="$1"
+  [ -n "$SMOKE_TMP_DIAG" ] || return 0
+  {
+    printf '== %s · %s · %s ==\n' "$(date -Is)" "$(smoke_lock_lost_line)" "$where"
+    printf '伴生锁（运行互斥）：%s\n' "$SMOKE_LOCK_COMPANION"
+    printf '期望身份：lock_identity=%s lock_dev_ino=%s（持有者 pid=%s）\n' \
+      "${SMOKE_LOCK_IDENTITY:-?}" "${SMOKE_LOCK_DEV_INO:-?}" "${SMOKE_LOCK_HOLDER_PID:-?}"
+    printf '实测：%s\n' "$(smoke_lock_probe)"
+    printf '发布路径（兼容声明）：%s %s\n' "$SMOKE_LOCK" "$(smoke_lock_pub_state)"
+    printf '锁路径上的实测持有者：%s\n' "$(gate_lock_describe_pair "$SMOKE_LOCK")"
+    printf '本套：pid=%s ns=%s 工作树=%s 席位=%s\n最后经过的段落：%s\n' \
+      "$$" "$(team_project_ns 2>/dev/null || printf '?')" "${SMOKE_LOCK_WT:-?}" "${SMOKE_LOCK_SEAT:-?}" "$SMOKE_LAST_SECTION"
+    printf -- '-- 现场结束 --\n'
+  } >>"$SMOKE_TMP_DIAG" 2>/dev/null || true
+}
+smoke_lock_fire() { # <位置>：一条点名红 + 现场证据 + 安全点停跑（exit 2）；只点名一次
+  local where="$1" first=0
+  smoke_lock_diag "$where"
+  if [ -n "$SMOKE_LOCK_FLAG" ] && [ ! -e "$SMOKE_LOCK_FLAG" ]; then
+    : > "$SMOKE_LOCK_FLAG" 2>/dev/null || true
+    first=1
+  fi
+  KEEP=1    # 现场留下（诊断 + 还没被删光的临时内容）
+  if [ "$first" = "1" ]; then
+    FAIL=$((FAIL + 1))
+    printf '\n  \033[31m✗\033[0m 哨兵：%s%s\n' "$(smoke_lock_lost_line)" \
+      "$([ -s "$SMOKE_LOCK_SEEN" ] && printf '（后台哨兵 %s 第一次发现）' "$(cat "$SMOKE_LOCK_SEEN" 2>/dev/null)")"
+    printf '       互斥是这套运行的**全部依据**：丢掉它之后的判定不可信（这不是断言失败，也不是对代码的判定）\n'
+    printf '       证据（在 $TMP 之外，删 TMP 也带不走）：%s\n' "$SMOKE_TMP_DIAG"
+    printf '       停跑（exit 2）：不让下游假绿/假红把「锁什么时候没的」淹掉\n'
+  else
+    printf '  \033[2m（哨兵：已在上面点名过；这里停跑）\033[0m\n'
+  fi
+  exit 2
+}
+smoke_lock_guard() { # <位置>：段落边界/结果行前的检查；正常时静默
+  [ "${SMOKE_LOCK_GUARD_ON:-0}" = "1" ] || return 0
+  smoke_lock_lost_now || smoke_lock_fire "$1"
+  smoke_lock_pub_check
+  return 0
+}
+
 smoke_tmp_tripwire() { # 后台哨兵本体：0.2s 轮询；发现即写证据 + 点名，然后自己退出
   # 记自己的 pid（$BASHPID：子 shell 里的 $$ 还是主 shell 的 pid），诊断里可以点名它
   printf '%s\n' "$BASHPID" > "$SMOKE_TMP_PIDFILE" 2>/dev/null || true
+  local lock_seen=0
   while [ ! -e "$SMOKE_TMP_STOP" ]; do
     kill -0 "$SMOKE_OWNER_PID" 2>/dev/null || break      # 主 shell 没了（没走 cleanup）→ 不留孤儿
     if ! tmp_alive; then
@@ -942,6 +1233,15 @@ smoke_tmp_tripwire() { # 后台哨兵本体：0.2s 轮询；发现即写证据 +
         "$(date -Is)" "$SMOKE_LAST_SECTION" "$SMOKE_TMP_DIAG"
       break
     fi
+    # P287：同一条节奏、同一个进程，多看一条前提 —— 伴生锁还是我持有的那个文件吗？
+    if [ "$lock_seen" = "0" ] && [ "${SMOKE_LOCK_GUARD_ON:-0}" = "1" ] && ! smoke_lock_lost_now; then
+      lock_seen=1
+      smoke_lock_diag "后台哨兵（0.2s 轮询）第一次发现"
+      date -Is > "$SMOKE_LOCK_SEEN" 2>/dev/null || true
+      printf '\n  \033[31m!\033[0m 哨兵：%s（后台 0.2s 轮询第一次发现；最后经过的段落：%s；证据 %s）\n' \
+        "$(smoke_lock_lost_line)" "$SMOKE_LAST_SECTION" "$SMOKE_TMP_DIAG"
+    fi
+    [ "$lock_seen" = "0" ] && smoke_lock_pub_check
     sleep 0.2
   done
   : > "$SMOKE_TMP_ACK" 2>/dev/null || true
@@ -955,7 +1255,8 @@ smoke_tmp_tripwire_stop() { # 收哨兵：置停止位再等它自己退（≤1s
 smoke_tmp_sweep() { # 收尾：**干净跑**（没出过事）就把哨兵的兄弟文件收掉，别在 /tmp 里攺一堆
   # 出过事（诊断文件在）就全部留着：那是现场证据，KEEP=1 也留。
   [ -f "$SMOKE_TMP_DIAG" ] && return 0
-  rm -f "$SMOKE_TMP_STOP" "$SMOKE_TMP_ACK" "$SMOKE_TMP_PIDFILE" "$SMOKE_TMP_FLAG" "$SMOKE_TMP_SEEN" 2>/dev/null || true
+  rm -f "$SMOKE_TMP_STOP" "$SMOKE_TMP_ACK" "$SMOKE_TMP_PIDFILE" "$SMOKE_TMP_FLAG" "$SMOKE_TMP_SEEN" \
+        "$SMOKE_LOCK_FLAG" "$SMOKE_LOCK_SEEN" "$SMOKE_LOCK_PUB_FLAG" 2>/dev/null || true
   return 0
 }
 # 双重 fork：哨兵**不进主 shell 的作业表**。否则门禁里任何裸 `wait` 都会等它等到天荒地老
@@ -983,8 +1284,14 @@ cleanup() {
   # P281：只删**自己写的那一条**；持有者记录只有真的持有 flock 的那个进程才删（嵌套运行不得删别人的；
   # F4：自述持有者但没写成的那一个也不许删）。
   if [ "${SMOKE_LOCK_RECORD:-0}" = "1" ]; then
-    gate_lock_remove_run "${SMOKE_LOCK:-/nonexistent}" "$$"
-    [ "${SMOKE_LOCK_HOLDER_WRITTEN:-0}" = "1" ] && gate_lock_remove_holder "${SMOKE_LOCK:-/nonexistent}"
+    local _lrt="${SMOKE_LOCK_RECORD_TARGET:-${SMOKE_LOCK:-/nonexistent}}"
+    # 只删**自己 pid 的那条**（记录里别人的登记绝不碰）——两处都试：记录主场（伴生锁边上）与
+    # 发布路径边上。收尾这一下必须无条件生效：被杀/中断的子孙如果只清了其中一处，留下的那条会
+    # 让「登记随运行退出消失」的判据变假（实测：选段副本被 TERM 时漏过一条）。
+    gate_lock_remove_run "$_lrt" "$$"
+    if [ "$_lrt" != "${SMOKE_LOCK:-}" ]; then gate_lock_remove_run "${SMOKE_LOCK:-/nonexistent}" "$$"; fi
+    [ "${SMOKE_LOCK_HOLDER_WRITTEN:-0}" = "1" ] && gate_lock_remove_holder "$_lrt"
+    rmdir "$_lrt.runs" 2>/dev/null || true
     rmdir "${SMOKE_LOCK:-/nonexistent}.runs" 2>/dev/null || true
   fi
   # P53：结束用量行（早退也打）→ 助手回收（KEEP 时打印保留路径）→ 诊断文件收尾
@@ -1040,10 +1347,11 @@ printf 'teamsmith smoke · skill=%s · tmp=%s\n' "$SKILL_DIR" "$TMP"
   "tmux 私有 socket：$SMOKE_TMUX_SOCK（夹具与产品调用都走它；调用者的默认 server 不参与）"
 if [ "${SMOKE_LOCK_RECORD:-0}" = "1" ]; then
   SMOKE_LOCK_WHAT="no_lock=1（${SMOKE_LOCK_REASON:-未排队}）"
-  [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && SMOKE_LOCK_WHAT="持有 $SMOKE_LOCK"
+  # P287：互斥在**伴生锁**上，发布路径只是兼容声明 —— 这行两样都说清楚，记录读伴生锁那条。
+  [ "${SMOKE_LOCK_HELD:-0}" = "1" ] && SMOKE_LOCK_WHAT="持有 $SMOKE_LOCK（互斥在伴生锁 ${SMOKE_LOCK_COMPANION:-?}）"
   [ "${SMOKE_LOCK_NESTED:-0}" = "1" ] && SMOKE_LOCK_WHAT="嵌套运行（祖辈 pid=${SMOKE_LOCK_ANCESTOR:-?}）→ 不排队"
   printf '  \033[2m·\033[0m %s\n' \
-    "全量门禁互斥：${SMOKE_LOCK_WHAT}（记录：$(gate_lock_describe "${SMOKE_LOCK:-/nonexistent}")）"
+    "全量门禁互斥：${SMOKE_LOCK_WHAT}（记录：$(gate_lock_describe_pair "${SMOKE_LOCK:-/nonexistent}")）"
 fi
 
 # 假 meminfo：让内存/swap 守卫可测（Linux /proc/meminfo 格式）
@@ -1429,7 +1737,7 @@ else
       *) bad "P70 现场：路径不在 TMPDIR 下或不是点开头（$P70_STUCK_SCENE）" ;;
     esac
     case "$P70_STUCK_SCENE" in
-      "$P70_STUCK_ROOT"/teamsmith-smoke.*/*) bad "P70 现场：落在 run 自己的临时根里" ;;
+      "$P70_STUCK_ROOT"/teamsmith-smoke[.-]*/*) bad "P70 现场：落在 run 自己的临时根里" ;;
       *) ok "P70 现场：在 run 自己的临时根之外（清理带不走）" ;;
     esac
     assert_has "$P70_STUCK_SCENE/summary.txt" "id: 0c · 静态检查" "P70 现场：点名段落 id"
@@ -1444,7 +1752,7 @@ else
     bad "P70 超时：没有现场目录"
   fi
   assert_eq "P70 超时：嵌套 run 的临时根已回收（只剩现场）" \
-    "$(ls -d "$P70_STUCK_ROOT"/teamsmith-smoke.* 2>/dev/null | wc -l | tr -d ' ')" "0"
+    "$(ls -d "$P70_STUCK_ROOT"/teamsmith-smoke[.-]* 2>/dev/null | wc -l | tr -d ' ')" "0"
 fi
 
 # ---------------------------------------------------------------- 0g. P70 等待有界：到顶归因 + ticks
@@ -16025,6 +16333,8 @@ section "34b · 门禁锁排队守卫：超上限要大声失败并点名持有�
 # 内层 smoke 是**真入口**（同一条排队守卫），但用 SMOKE_LOCK_SELFTEST_CHILD 在拿到锁后立刻退出：
 # 本段绝不递归跑整套门禁。身份清洗与 §34 同形。
 P66D="$TMP/p66"; P66_LOCK="$P66D/lock"; P66_RSH=""
+# P287：记录（持有者 + 每个运行的登记）在**伴生锁**边上；发布路径只是兼容声明（夹具写的旧式记录仍在它边上）。
+P66_CMP="$(gate_lock_companion_path "$P66_LOCK")"
 rm -rf "$P66D"; mkdir -p "$P66D"
 # 持锁助手：`--close` 让**只有** flock 持有 fd —— kill 掉它就立刻释放（§34 那版不带 --close，
 # 被 kill 的 flock 的子进程还捏着 fd，锁要到 sleep 自己走完才放，夹具会白等）。
@@ -16067,18 +16377,26 @@ rm -f "$P66_LOCK.holder"
 P66_RC=0; p66_run "$P66D/green.log" 5 0 || P66_RC=$?
 assert_eq "34b② 无竞争 → 子进程的退出码原样透传（0）" "$P66_RC" "0"
 assert_has "$P66D/green.log" "自检出口" "34b② 子进程真的作为队列子进程跑起来了"
-assert_has "$P66_LOCK.holder" "cmd=smoke.sh" "34b② 它把 holder 写成了自己（真的拿到了锁）"
+assert_has "$P66_CMP.holder" "cmd=smoke.sh" "34b② 它把 holder 写成了自己（真的拿到了锁；记录在伴生锁边上）"
+if [ ! -e "$P66_LOCK.holder" ]; then
+  ok "34b② 发布路径边上没有被我们创建记录（兼容声明只读、只建文件本身）"
+else
+  bad "34b② 发布路径边上出现了记录 —— 记录位置与契约不符（应在伴生锁边上）"
+fi
 # P281：持有者记录自述 kind/席位/工作树/开始/已跑/上限；每个顶层运行也在 <lock>.runs/ 登记一条
-assert_has "$P66_LOCK.holder" "kind=top" "34b② 持有者记录自述 kind=top（顶层运行）"
-assert_match "$P66_LOCK.holder" 'expected=[0-9]+' "34b② 持有者记录带 expected（Σband_s）"
-assert_match "$P66_LOCK.holder" 'bound=[0-9]+' "34b② 持有者记录带 bound（Σbudget_s）"
-assert_match "$P66_LOCK.holder" 'worktree=[^[:space:]]+' "34b② 持有者记录带工作树字段（解析不出就写 ?，不猜）"
-P66_RUNREC="$(ls "$P66_LOCK.runs"/*.run 2>/dev/null | head -1 || true)"
+assert_has "$P66_CMP.holder" "kind=top" "34b② 持有者记录自述 kind=top（顶层运行）"
+assert_match "$P66_CMP.holder" 'expected=[0-9]+' "34b② 持有者记录带 expected（Σband_s）"
+assert_match "$P66_CMP.holder" 'bound=[0-9]+' "34b② 持有者记录带 bound（Σbudget_s）"
+assert_match "$P66_CMP.holder" 'worktree=[^[:space:]]+' "34b② 持有者记录带工作树字段（解析不出就写 ?，不猜）"
+# P287：身份也在记录里 —— 记的是**持有者描述符**里的 dev:ino，并如实写是哪一种
+assert_match "$P66_CMP.holder" 'lock_identity=(fd|path)' "34b② 持有者记录带 lock_identity（fd 或 path，如实写）"
+assert_match "$P66_CMP.holder" 'lock_dev_ino=[0-9]+:[0-9]+' "34b② 持有者记录带 lock_dev_ino（dev:ino）"
+P66_RUNREC="$(ls "$P66_CMP.runs"/*.run 2>/dev/null | head -1 || true)"
 if [ -n "$P66_RUNREC" ]; then
-  assert_has "$P66_RUNREC" "kind=top" "34b② 顶层运行也在 <lock>.runs/ 登记自己那条（kind=top）"
+  assert_has "$P66_RUNREC" "kind=top" "34b② 顶层运行也在 <companion>.runs/ 登记自己那条（kind=top）"
   assert_has "$P66_RUNREC" "ancestor=-" "34b② 顶层运行的 ancestor 是 -"
 else
-  bad "34b② 顶层运行没有登记 <lock>.runs/<pid>.run"
+  bad "34b② 顶层运行没有登记 <companion>.runs/<pid>.run"
 fi
 assert_not "$P66D/green.log" "排队超限" "34b② 无竞争时没有排队失败的噪音"
 assert_not "$P66D/green.log" "另一套全量 smoke 正在跑" "34b② 空闲锁不进排队路径"
@@ -16092,7 +16410,7 @@ assert_eq "34b③ 排到了 → 子进程的退出码（0）" "$P66_RC" "0"
 assert_has "$P66D/queued.log" "另一套全量 smoke 正在跑" "34b③ 排队时打印持有者"
 assert_has "$P66D/queued.log" "轮到本套了（排过队）" "34b③ 轮到时照旧打印「轮到本套了（排过队）」"
 assert_not "$P66D/queued.log" "排队超限" "34b③ 排到了就不是超限"
-assert_has "$P66_LOCK.holder" "cmd=smoke.sh" "34b③ 拿到锁后 holder 换成自己"
+assert_has "$P66_CMP.holder" "cmd=smoke.sh" "34b③ 拿到锁后 holder 换成自己（伴生锁边上）"
 
 # ④ 反例：子进程自己 exit 1（真红的门禁）→ 原样透传，不许报成排队超限
 rm -f "$P66_LOCK.holder"
@@ -16227,6 +16545,8 @@ assert_match "$P281N/green.log" '段落 #3（0c · 静态检查（函数结尾�
 assert_match "$P281N/green.log" '超时：预算 3s，实际 [0-9]+s' "34b⑧ 一行点名实际用时"
 assert_has "$P281N/green.log" "全量门禁互斥：嵌套运行（祖辈 pid=" "34b⑧ 它自述是嵌套运行（不排队、只登记）"
 assert_eq "34b⑧ 登记随它退出消失" "$(ls -A "$P281_NLOCK.runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_eq "34b⑧ 登记随它退出消失（伴生锁边上那条也是）" \
+  "$(ls -A "$(gate_lock_companion_path "$P281_NLOCK").runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
 P281N_SCENE="$(ls -d "$P281N"/.teamsmith-smoke-scene.* 2>/dev/null | head -1 || true)"
 if [ -n "$P281N_SCENE" ] && [ -s "$P281N_SCENE/summary.txt" ]; then
   ok "34b⑧ 现场存在（${P281N_SCENE#$TMP/}）"
@@ -16248,7 +16568,8 @@ assert_eq "34b⑧ 期限来自祖辈**记录里公布的**心跳 → exit 2（�
 assert_has "$P281N/hb.log" "（嵌套运行：对齐祖辈剩余预算）" "34b⑧ 开跑行注明预算来自祖辈剩余"
 assert_match "$P281N/hb.log" '超时：预算 [1-5]s' "34b⑧ 预算取自祖辈剩余（≤5s），不是自己的表预算"
 assert_not "$P281N/hb.log" "预算 60s" "34b⑧ 表里的 60s 预算没有被用（对齐真的生效）"
-assert_eq "34b⑧ 登记随它退出消失（对齐那一轮）" "$(ls -A "$P281_NLOCK.runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_eq "34b⑧ 登记随它退出消失（对齐那一轮）" \
+  "$(ls -A "$(gate_lock_companion_path "$P281_NLOCK").runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
 # 对照（旧通道）：记录里没有心跳（-）但环境变量带了 → 仍然对齐（旧写入者兼容）
 P281N_RC=0; p281n_run "$P281N/hb-env.log" - "$P281_HB" env || P281N_RC=$?
 assert_has "$P281N/hb-env.log" "（嵌套运行：对齐祖辈剩余预算）" "34b⑧ 旧通道（环境变量）仍被接受（只作兜底）"
@@ -16266,14 +16587,15 @@ if grep -aq '超时：预算' "$P281N/red.log"; then
 else
   ok "34b⑧ 红侧：去掉期限 → 8s 内一行点名都没有（无声占着）"
 fi
-assert_eq "34b⑧ 红侧：登记还在（没有人收尾）" "$(ls -A "$P281_NLOCK.runs" 2>/dev/null | wc -l | tr -d ' ')" "1"
+assert_eq "34b⑧ 红侧：登记还在（没有人收尾）" \
+  "$(ls -A "$(gate_lock_companion_path "$P281_NLOCK").runs" 2>/dev/null | wc -l | tr -d ' ')" "1"
 if flock -n "$P281_NLOCK" true 2>/dev/null; then
   bad "34b⑧ 红侧：锁居然可再取（说明嵌套已经结束）"
 else
   ok "34b⑧ 红侧：锁仍被占着（「释放」判据分得出两者）"
 fi
 # 收尾：只对**我们自己登记/启动的 pid** 发信号（D37：不按名字、不按进程组）
-for _f in "$P281_NLOCK.runs"/*.run; do
+for _f in "$(gate_lock_companion_path "$P281_NLOCK").runs"/*.run; do
   [ -f "$_f" ] && kill -TERM "$(gate_lock_record_get "$_f" pid)" 2>/dev/null || true
 done
 kill -TERM "$(gate_lock_record_get "$P281_NLOCK.holder" pid)" 2>/dev/null || true
@@ -16385,7 +16707,7 @@ P281O2="$TMP/p281-orphan2"; rm -rf "$P281O2"; mkdir -p "$P281O2"
 P281_O2_JOB=$!
 P281_O2_REC=""
 for _i in $(seq 1 80); do
-  P281_O2_REC="$(grep -l "ancestor=$$" "$SMOKE_LOCK.runs"/*.run 2>/dev/null | head -1 || true)"
+  P281_O2_REC="$(grep -l "ancestor=$$" "$SMOKE_LOCK_COMPANION.runs"/*.run 2>/dev/null | head -1 || true)"
   [ -n "$P281_O2_REC" ] && break
   sleep 0.1
 done
@@ -16413,20 +16735,20 @@ P281NL_REC=""
     bash "$SKILL_DIR/tests/smoke.sh" --select 0c ) >"$P281NL/out.log" 2>&1 &
 P281NL_JOB=$!
 for _i in $(seq 1 60); do
-  P281NL_REC="$(grep -l 'no_lock=1' "$P281_NLLOCK.runs"/*.run 2>/dev/null | head -1 || true)"
+  P281NL_REC="$(grep -l 'no_lock=1' "$(gate_lock_companion_path "$P281_NLLOCK").runs"/*.run 2>/dev/null | head -1 || true)"
   [ -n "$P281NL_REC" ] && break
   sleep 0.2
 done
 unset _i
 if [ -n "$P281NL_REC" ]; then
-  ok "34b⑫ opt-out 运行也登记了 <lock>.runs/<pid>.run（${P281NL_REC##*/}）"
+  ok "34b⑫ opt-out 运行也登记了 <companion>.runs/<pid>.run（${P281NL_REC##*/}）"
   assert_has "$P281NL_REC" "no_lock=1" "34b⑫ 那条记录带 no_lock=1（残余窗口可观测）"
   assert_has "$P281NL_REC" "kind=top" "34b⑫ opt-out 的运行不声称嵌套（没做过祖辈证明）"
   assert_match "$P281NL_REC" 'started=[0-9]+' "34b⑫ 记录带 started（等待者能算已跑时长）"
   assert_has "$P281NL/out.log" "全量门禁互斥：no_lock=1" "34b⑫ 运行时自述 no_lock=1（既有行为）"
   # 「等待者能看见」用**等待者打印的那份描述**直接钉（describe 就是队列行里的那一段）：
   # 不依赖运行自己有没有跑到打印那一行（那一条时序上就与「先看见记录再收尾」相竞）。
-  gate_lock_describe "$P281_NLLOCK" > "$P281NL/describe.txt" 2>&1
+  gate_lock_describe_pair "$P281_NLLOCK" > "$P281NL/describe.txt" 2>&1
   assert_has "$P281NL/describe.txt" "no_lock=1" "34b⑫ 等待者读到的描述行里也标了 no_lock=1（残余窗口可见）"
 else
   bad "34b⑫ TEAM_SMOKE_NO_LOCK=1 的运行没有登记记录（no_lock 只写了 stdout）—— 残余窗口不可观测"
@@ -16438,7 +16760,7 @@ fi
 wait "$P281NL_JOB" 2>/dev/null || true
 P281NL_GONE=0
 for _i in $(seq 1 40); do
-  [ -z "$(ls -A "$P281_NLLOCK.runs"/*.run 2>/dev/null || true)" ] && { P281NL_GONE=1; break; }
+  [ -z "$(ls -A "$(gate_lock_companion_path "$P281_NLLOCK").runs"/*.run 2>/dev/null || true)" ] && { P281NL_GONE=1; break; }
   sleep 0.2
 done
 unset _i
@@ -16528,6 +16850,595 @@ fi
 p281f_release
 rm -f "$P281_FLOCK.holder" 2>/dev/null || true
 rm -rf "$P281F" 2>/dev/null || true
+
+section "34c · 命名面：运行条目点开头或带 ns，平铺家族够不着（P287 · verification#A fixture's temp root…）"
+if [ "$FAST" = "1" ]; then
+  # 本段起**嵌套的真入口运行**（真 tmux / 真进程 / 真锁）—— FAST 不起真进程，按惯例跳过并打印
+  fast_skip "34c·命名面（P287）" "起真入口的嵌套运行（真锁、真 tmux）；FAST 不跑真进程段"
+else
+# 事件（D184）：另一个项目的 `rm -rf /tmp/teamsmith-smoke.*` 删掉了**正在跑**的门禁的工作根与锁。
+# 判据（design §1.2/§1.4/§9 ⑥）：一套运行**为自己**直接落在临时根里的每一样，要么点开头，要么带本项目的
+# ns；契约点名的那一族**平铺形状**（`<临时根>/teamsmith-smoke.*`，正是那条命令的射程）必须**零命中** ——
+# 唯一的例外是**发布锁路径**（`teamsmith-smoke.lock`，兼容声明，§2 的要求管它），这里显式排除并点名。
+# 红侧：`--break=flat-name`（tmp-root 的夹具开关）把根改回平铺名 → ns/点开头那条断与平铺命中那条断言
+# 都必须变红；还原后绿 —— 证明这条检查判的是**命名规则**，不是一个写死的串。
+P287C="$TMP/p287-name"
+# 私有 TMPDIR 放在**临时根顶层**（短路径）：嵌套运行会起 tmux 私有 server，socket 路径有 AF_UNIX 上限
+# （107 字节）—— 套在 $TMP 里面会超（实测 131 字节 → 夹具自己拒绝执行）。
+P287C_TMP="${TMPDIR:-/tmp}/.teamsmith-p287c-$$"
+rm -rf "$P287C" "$P287C_TMP"; mkdir -p "$P287C" "$P287C_TMP"
+P287C_NS="$(team_project_ns)"
+# 契约点名的平铺形状：那段 glob 的射程（前缀 + 点，`teamsmith-smoke.*`）
+p287c_flat_hit() { # <条目名> → 0 = 命中那条平铺形状
+  case "$1" in
+    teamsmith-smoke.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# 命名规则：点开头，或带本项目 ns
+p287c_named_ok() { # <条目名> → 0 = 合规
+  case "$1" in
+    .*) return 0 ;;
+    *"$P287C_NS"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# 起一套**嵌套**运行（私有 TMPDIR + 私有 TMPDIR 里的默认锁路径），边跑边把临时根里的条目收进 watch 文件：
+# 队列标记与选段副本是**瞬时**的，只有轮询才看得见（契约点名的两样正是它们）。
+# 红侧用 tmp-root 自己的翻转开关 `TMP_ROOT_BREAK=flat-name`（design §9 ⑥；它是那一层的自检开关）。
+p287c_run() { # <日志> [<break 阶段>]
+  local out="$1" brk="${2:-}"
+  local watch="$P287C/watch-$(basename "${out%.log}").txt"
+  : > "$watch"
+  local -a be=()
+  [ -n "$brk" ] && be=(TMP_ROOT_BREAK="$brk")
+  ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT -u TEAM_SMOKE_BREAK \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_MARKER -u SMOKE_LOCK -u TMP_ROOT_BREAK \
+      TMPDIR="$P287C_TMP" TEAM_SMOKE_FIXTURE=1 \
+      ${be[@]+"${be[@]}"} \
+      bash "$SKILL_DIR/tests/smoke.sh" --select 0b,0c ) >"$out" 2>&1 &
+  local pid=$! i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 600 ]; do
+    for e in "$P287C_TMP"/* "$P287C_TMP"/.[!.]* "$P287C_TMP"/..?*; do
+      [ -e "$e" ] || [ -L "$e" ] || continue
+      printf '%s\n' "${e##*/}" >>"$watch"
+      # 台账头与根标记（都带 ns=）在**主人活着时**抓一次：干净收尾会把它们一起收走
+      case "${e##*/}" in
+        .teamsmith-tmp-ledger.*)
+          [ -s "$P287C/ledger-head.txt" ] || head -1 "$e" >"$P287C/ledger-head.txt" 2>/dev/null || true ;;
+        teamsmith-*-"$(tmp_root_ns)".*)
+          [ -s "$P287C/root-marker.txt" ] || cp "$e/.teamsmith-tmp" "$P287C/root-marker.txt" 2>/dev/null || true ;;
+      esac
+    done
+    sort -u -o "$watch" "$watch" 2>/dev/null || true
+    sleep 0.05; i=$((i + 1))
+  done
+  wait "$pid" 2>/dev/null
+  return $?
+}
+P287C_RC=0; p287c_run "$P287C/run.log" || P287C_RC=$?
+# 收尾后再列一次（发布路径这类**留着**的东西只有这时才稳定），与 watch 的并集就是「本套为自己创建的条目」
+for e in "$P287C_TMP"/* "$P287C_TMP"/.[!.]* "$P287C_TMP"/..?*; do
+  [ -e "$e" ] || [ -L "$e" ] || continue
+  printf '%s\n' "${e##*/}" >>"$P287C/watch-run.txt"
+done
+sort -u -o "$P287C/watch-run.txt" "$P287C/watch-run.txt" 2>/dev/null || true
+P287C_ENTRIES="$(cat "$P287C/watch-run.txt" 2>/dev/null | sed '/^$/d')"
+assert_eq "34c 嵌套运行正常跑完（私有 TMPDIR + 默认锁路径）" "$P287C_RC" "0"
+assert_has "$P287C/run.log" "== #" "34c 嵌套运行真的跑到了段落（不是白捡的绿）"
+if [ -z "$P287C_ENTRIES" ]; then
+  bad "34c 私有临时根里一个条目都没收到（夹具失效：watch 挂了？）"
+else
+  ok "34c 私有临时根里收到 $(printf '%s\n' "$P287C_ENTRIES" | grep -c .) 个条目"
+fi
+# ① 命名规则：每一个条目点开头或带 ns（发布锁路径是契约点名的例外，显式排除）
+P287C_BADNAME=""; P287C_FLAT=""; P287C_PUB=0; P287C_N=0
+while IFS= read -r _e; do
+  [ -n "$_e" ] || continue
+  P287C_N=$((P287C_N + 1))
+  case "$_e" in
+    teamsmith-smoke.lock) P287C_PUB=$((P287C_PUB + 1)); continue ;;   # 发布锁路径：§2 的例外
+  esac
+  p287c_named_ok "$_e" || P287C_BADNAME="${P287C_BADNAME}${P287C_BADNAME:+ }$_e"
+  p287c_flat_hit "$_e" && P287C_FLAT="${P287C_FLAT}${P287C_FLAT:+ }$_e"
+done <<<"$P287C_ENTRIES"
+unset _e
+assert_eq "34c 命名规则：除发布锁路径外，每个条目点开头或带 ns=$P287C_NS" "$P287C_BADNAME" ""
+assert_eq "34c 平铺家族模式（teamsmith-smoke.*）零命中（唯一的例外 $P287C_PUB 个：发布锁路径，§2 管它）" \
+  "$P287C_FLAT" ""
+assert_eq "34c 发布锁路径确实在场（兼容声明要建出来）" "$P287C_PUB" "1"
+# 根与它的 ns 列：台账（点开头）里那一行必须带 ns=（§1.5 的 marker/台账要求）
+P287C_ROOT="$(printf '%s\n' "$P287C_ENTRIES" | sed -n "s/^\(teamsmith-[A-Za-z0-9_-]*-$P287C_NS\.[A-Za-z0-9]*\)$/\1/p" | head -1)"
+if [ -n "$P287C_ROOT" ] && grep -q "^ns=$P287C_NS$" "$P287C/root-marker.txt" 2>/dev/null; then
+  ok "34c 根的名字带 ns（$P287C_ROOT；标记在主人活着时抓的，带 ns=$P287C_NS）"
+else
+  bad "34c 没抓到带 ns 的根与它的标记（收到：$(printf '%s' "$P287C_ENTRIES" | tr '\n' ' ')）"
+fi
+if [ "$(sed -n 's/.* ns=//p' "$P287C/ledger-head.txt" 2>/dev/null)" = "$P287C_NS" ]; then
+  ok "34c 台账头带 ns=$P287C_NS（主人活着时抓的那一份）"
+else
+  bad "34c 台账头没有 ns=（抓到：$(cat "$P287C/ledger-head.txt" 2>/dev/null || printf '（没抓到）')）"
+fi
+# ② 三个「每运行条目」的**具体**形状（契约点名：根 / 队列标记 / 选段副本）
+for _shape in "teamsmith-smoke-$P287C_NS." "teamsmith-smoke-queue.$P287C_NS." "teamsmith-select.$P287C_NS."; do
+  if printf '%s\n' "$P287C_ENTRIES" | grep -qF "$_shape"; then
+    ok "34c 条目形状：${_shape}* 在场"
+  else
+    bad "34c 条目形状：${_shape}* 没收到（瞬时条目要轮询才看得见）"
+  fi
+done
+unset _shape
+# ③ 红侧：--break=flat-name → 根回到平铺名 → 命名规则断与平铺命中断都必须变红
+P287C_RED_RC=0; p287c_run "$P287C/red.log" flat-name || P287C_RED_RC=$?
+P287C_RED_ENTRIES="$(cat "$P287C/watch-red.txt" 2>/dev/null | sed '/^$/d')"
+sort -u -o "$P287C/watch-red.txt" "$P287C_RED_ENTRIES" 2>/dev/null || true
+# 把红侧条目喂给同一对判据：这一次「必须命中」
+P287C_RED_FLAT=""; P287C_RED_BAD=""
+while IFS= read -r _e; do
+  [ -n "$_e" ] || continue
+  case "$_e" in teamsmith-smoke.lock) continue ;; esac
+  p287c_flat_hit "$_e" && P287C_RED_FLAT="${P287C_RED_FLAT}${P287C_RED_FLAT:+ }$_e"
+  p287c_named_ok "$_e" || P287C_RED_BAD="${P287C_RED_BAD}${P287C_RED_BAD:+ }$_e"
+done <<<"$P287C_RED_ENTRIES"
+unset _e
+if [ "$P287C_RED_RC" = "0" ] && [ -n "$P287C_RED_FLAT" ]; then
+  ok "34c 红侧：--break=flat-name → 平铺家族命中 $P287C_RED_FLAT → 上面那两条断言必红（判的是命名规则）"
+else
+  bad "34c 红侧没兑现（rc=$P287C_RED_RC，命中=[$P287C_RED_FLAT]）—— 夹具失效"
+fi
+if [ -n "$P287C_RED_BAD" ]; then
+  ok "34c 红侧：同一批条目里 $P287C_RED_BAD 不再满足「点开头或带 ns」"
+else
+  bad "34c 红侧：丢 ns 之后命名规则居然仍然成立 —— 那一对判据没打到病根"
+fi
+rm -rf "$P287C" "$P287C_TMP" 2>/dev/null || true
+
+# ④ 同项目两个 worktree 共享 ns、第二个仓库不同 ns，且外来仓库的根不被当候选（tasks §1.6）
+P287N="$TMP/p287-ns"; P287N_REPO="$P287N/repo"; P287N_WT="$P287N/wt2"; P287N_REPO2="$P287N/repo2"
+P287N_TMP="$P287N/tmp"
+rm -rf "$P287N"; mkdir -p "$P287N_REPO" "$P287N_REPO2" "$P287N_TMP"
+p287n_skill() { # <仓库根> → 把 skill 的 scripts/ 与 tmp-root 库拷进去（ns 只依赖 main checkout 的 realpath）
+  local root="$1"
+  mkdir -p "$root/skills/teamsmith/tests/lib"
+  cp -a "$SKILL_DIR/scripts" "$root/skills/teamsmith/scripts"
+  cp -a "$SKILL_DIR/tests/lib/tmp-root.sh" "$root/skills/teamsmith/tests/lib/tmp-root.sh"
+  printf '%s\n' "$root"
+}
+p287n_init() { # <仓库根>
+  ( cd "$1" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && : > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+}
+p287n_init "$P287N_REPO"
+p287n_skill "$P287N_REPO" >/dev/null
+( cd "$P287N_REPO" && git add -A && git commit -qm skill ) >/dev/null 2>&1
+( cd "$P287N_REPO" && git worktree add -q "$P287N_WT" -b wt2 ) >/dev/null 2>&1
+p287n_init "$P287N_REPO2"
+p287n_skill "$P287N_REPO2" >/dev/null
+p287n_ns() { # <检出> → 在**那个检出**里算 ns（env -u TEAM_PROJECT：slug 取主检出目录名）
+  ( cd "$1" && env -u TEAM_PROJECT bash -c \
+      'p="$1"; . "$p/skills/teamsmith/scripts/lib/common.sh" >/dev/null 2>&1; team_project_ns' _ "$1" ) 2>/dev/null
+}
+# 根的生命周期属于创建它的进程（tmp_root_create 装 EXIT trap，进程一退就被回收）——断言要在主人活着时做。
+# 每个探针给一个**自己的 run id**：台账按 run 归因（`repo=` 读的是那一行），继承外层门禁的 run id 会把
+# 两个仓库都算成「本仓库的」（那正是归因要分出来的东西）。
+p287n_root_live() { # <检出> <输出文件> <run 标签>：活着的进程建根 → 记「路径<TAB>标记里的 ns」→ 保持存活
+  env -u TEAM_PROJECT TMPDIR="$P287N_TMP" TEAM_TMP_RUN_ID="$3" bash -c '
+    p="$1"; out="$2"
+    . "$p/skills/teamsmith/tests/lib/tmp-root.sh" >/dev/null 2>&1
+    r=$(tmp_root_create nsprobe) || exit 3
+    printf "%s\t%s\n" "$r" "$(sed -n "s/^ns=//p" "$r/.teamsmith-tmp")" > "$out"
+    while [ ! -e "$out.stop" ]; do sleep 0.2; done
+  ' _ "$1" "$2" &
+}
+P287N_NS_MAIN="$(p287n_ns "$P287N_REPO")"
+P287N_NS_WT="$(p287n_ns "$P287N_WT")"
+P287N_NS_REPO2="$(p287n_ns "$P287N_REPO2")"
+assert_eq "34c 同项目两个 worktree → 同一个 ns" "$P287N_NS_WT" "$P287N_NS_MAIN"
+if [ -n "$P287N_NS_MAIN" ] && [ -n "$P287N_NS_REPO2" ] && [ "$P287N_NS_MAIN" != "$P287N_NS_REPO2" ]; then
+  ok "34c 第二个仓库 → 不同的 ns（$P287N_NS_MAIN vs $P287N_NS_REPO2）"
+else
+  bad "34c 第二个仓库的 ns 与第一个相同（[$P287N_NS_MAIN] vs [$P287N_NS_REPO2]）"
+fi
+# 两个仓库各建一个根（各自的台账落在同一个私有临时根里）→ 标记带各自的 ns；--status 把第二个仓库归为外来
+rm -f "$P287N/r1.txt" "$P287N/r2.txt"
+p287n_root_live "$P287N_REPO" "$P287N/r1.txt" "nsprobe-a-$$"
+p287n_root_live "$P287N_REPO2" "$P287N/r2.txt" "nsprobe-b-$$"
+# 两个台账按各自的 run id 落盘（归因读它）——等它们出现
+for _i in $(seq 1 60); do
+  [ -f "$P287N_TMP/.teamsmith-tmp-ledger.nsprobe-a-$$" ] && [ -f "$P287N_TMP/.teamsmith-tmp-ledger.nsprobe-b-$$" ] && break
+  sleep 0.1
+done
+unset _i
+for _i in $(seq 1 60); do
+  [ -s "$P287N/r1.txt" ] && [ -s "$P287N/r2.txt" ] && break
+  sleep 0.1
+done
+unset _i
+P287N_ROOT1="$(cut -f1 "$P287N/r1.txt" 2>/dev/null)"; P287N_NS1="$(cut -f2 "$P287N/r1.txt" 2>/dev/null)"
+P287N_ROOT2="$(cut -f1 "$P287N/r2.txt" 2>/dev/null)"; P287N_NS2="$(cut -f2 "$P287N/r2.txt" 2>/dev/null)"
+assert_eq "34c 第一仓库的根标记带 ns=$P287N_NS_MAIN" "$P287N_NS1" "$P287N_NS_MAIN"
+assert_eq "34c 第二仓库的根标记带 ns=$P287N_NS_REPO2" "$P287N_NS2" "$P287N_NS_REPO2"
+P287N_STATUS="$(TMPDIR="$P287N_TMP" TEAM_TMP_HYGIENE_REPO="$P287N_REPO" \
+  bash "$SKILL_DIR/tests/tmp-hygiene.sh" --status 2>&1)"
+if printf '%s\n' "$P287N_STATUS" | grep -qF "[foreign] $P287N_ROOT2"; then
+  ok "34c --status 把第二仓库的根归为外来（逐条点名，不当候选）"
+else
+  bad "34c --status 没有把第二仓库的根点名为外来（R2=$P287N_ROOT2；输出：$(printf '%s' "$P287N_STATUS" | tr '\n' '|')）"
+fi
+if printf '%s\n' "$P287N_STATUS" | grep -qxF "  $P287N_ROOT1"; then
+  ok "34c --status 把本仓库的根列进候选"
+else
+  bad "34c --status 没把本仓库的根列成候选"
+fi
+# 收尾：让两个主人退场（它们的 EXIT trap 会回收各自的根）
+: > "$P287N/r1.txt.stop"; : > "$P287N/r2.txt.stop"
+for _i in $(seq 1 40); do
+  [ ! -d "$P287N_ROOT1" ] && [ ! -d "$P287N_ROOT2" ] && break
+  sleep 0.1
+done
+unset _i
+if [ ! -d "$P287N_ROOT1" ] && [ ! -d "$P287N_ROOT2" ]; then
+  ok "34c 主人退场 → 两个根都被回收（生命周期归创建者）"
+else
+  bad "34c 主人退场后根还在（回收没生效？）"
+fi
+rm -rf "$P287N" 2>/dev/null || true
+
+fi
+
+section "34d · 身份面：锁被删/被换 → 一行点名 + 证据 + 停跑；入场检查；等待者（P287 · verification#The gate's lock…）"
+if [ "$FAST" = "1" ]; then
+  fast_skip "34d·身份面（P287）" "四个场景都要起真入口的嵌套运行（真锁、真 tmux、真停跑）；FAST 不跑真进程段"
+else
+# 六条场景里的五条落在这里（第 ⑥ 条命名面在 34c）。判据（design §5/§6/§9 ①②③④⑤）：
+#   ① 删伴生锁 → 有界时间内一行点名「已不在」+ $TMP 之外的证据 + 安全点停跑（exit 2）+ **没有结果行**；
+#      shadow（--break=no-lock-guard）→ 同场景不点名也不停（断言必须红）。
+#   ② 换伴生锁（unlink+新建 / mv 覆盖）→ 点名「已被替换」并印**两个身份**，与 ① 的文案可区分；同 shadow。
+#   ③ 入场检查：活登记记着另一个身份 → 第二套印一行（点名那个运行 + 两个身份）+ **不跑套件** + exit 2；
+#      shadow（--break=no-entry-check）→ 第二套照跑。
+#   ④ 反向对照：正常两套（先跑完再跑）→ 都没有锁身份行、都有正常结果/自检出口行；伴生锁 inode 不变；
+#      发布路径仍在。
+#   ⑤ 等待者：第二套在等，外部删/换它等的那把 → 印两个身份 + 「已经变了」再继续等；旧版本记录打
+#      version=legacy + 缺的字段写 `?`（绝不「持有者未知」）。
+P287D="$TMP/p287-id"; rm -rf "$P287D"; mkdir -p "$P287D"
+# 每个场景一个**短**私有 TMPDIR（临时根顶层）：嵌套运行要绑 tmux 私有 socket，路径有 AF_UNIX 上限
+p287d_td() { printf '%s/.teamsmith-p287d-%s-%s' "${TMPDIR:-/tmp}" "$1" "$$"; }
+p287d_run() { # <tmpdir> <日志> <选段> [<break 阶段>] [<wait>]
+  local td="$1" out="$2" sel="$3" brk="${4:-}" w="${5:-}"
+  local -a be=() we=()
+  [ -n "$brk" ] && be=(TEAM_SMOKE_BREAK="$brk")
+  [ -n "$w" ] && we=(TEAM_SMOKE_LOCK_WAIT="$w")
+  ( cd "$td" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT -u TEAM_SMOKE_BREAK \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_MARKER -u SMOKE_LOCK \
+      TMPDIR="$td" TEAM_SMOKE_FIXTURE=1 \
+      ${be[@]+"${be[@]}"} ${we[@]+"${we[@]}"} \
+      bash "$SKILL_DIR/tests/smoke.sh" --select "$sel" ) >"$out" 2>&1
+}
+p287d_companion() { printf '%s/.teamsmith-smoke.lock.machine\n' "$1"; }
+# 等一条点名行出现（有界轮询；上限 5s —— 守卫节奏 0.2s + 安全点，判据是有界而不是即时）
+p287d_wait_line() { # <文件> <模式> [<秒>]
+  local f="$1" pat="$2" lim="${3:-5}" i=0 n
+  n=$(( lim * 20 ))
+  while [ "$i" -lt "$n" ]; do
+    grep -aqE "$pat" "$f" 2>/dev/null && return 0
+    sleep 0.05; i=$((i + 1))
+  done
+  return 1
+}
+# ── ① 删伴生锁：绿侧（点名 + 停跑）与 shadow（不停）────────────────────────────────────────────
+p287d_del() { # <标签> <break 阶段> <日志>
+  local tag="$1" brk="$2" log="$3" td; td="$(p287d_td "$tag")"
+  rm -rf "$td"; mkdir -p "$td"
+  p287d_run "$td" "$log" 3 "$brk" & local pid=$!
+  # 等持有者真起来（伴生锁记录出现 = 两把锁都拿到了）+ 段落 #3 开跑（现场是「运行中」而不是「开跑前」）
+  local i=0
+  while [ "$i" -lt 200 ]; do
+    if [ -s "$(p287d_companion "$td").holder" ] && grep -aq '== #3' "$log" 2>/dev/null; then break; fi
+    sleep 0.05; i=$((i + 1))
+  done
+  [ -s "$(p287d_companion "$td").holder" ] || { wait "$pid" 2>/dev/null; return 9; }
+  rm -f "$(p287d_companion "$td")"
+  wait "$pid"
+}
+P287D_RC=0; p287d_del g "" "$P287D/del-green.log" || P287D_RC=$?
+assert_eq "34d① 删伴生锁 → exit 2（约定的安全点退出码）" "$P287D_RC" "2"
+assert_has "$P287D/del-green.log" "伴生锁（运行互斥）已不在" "34d① 一行点名「锁已不在」"
+assert_match "$P287D/del-green.log" "伴生锁（运行互斥）已不在 —— [^ ]+（期望身份 [0-9]+:[0-9]+" \
+  "34d① 那一行点名锁路径与期望身份"
+assert_not "$P287D/del-green.log" "== 选段结果 ==" "34d① 停跑：没有结果行（不给对代码的判定）"
+assert_has "$P287D/del-green.log" "== #3" "34d① 删除发生在运行中（段落 #3 已经开跑）"
+assert_not "$P287D/del-green.log" "== #6" "34d① 停跑发生在下一个段落边界：后面没有别段开跑"
+P287D_DIAG="$(sed -n 's/.*证据（在 \$TMP 之外[^）]*）：\([^ ]*\)$/\1/p' "$P287D/del-green.log" | head -1)"
+if [ -n "$P287D_DIAG" ] && [ -f "$P287D_DIAG" ]; then
+  ok "34d① 证据文件在 \$TMP 之外（$P287D_DIAG）"
+  assert_has "$P287D_DIAG" "伴生锁（运行互斥）" "34d① 证据里点名是哪把锁"
+  assert_match "$P287D_DIAG" "期望身份：lock_identity=(fd|path) lock_dev_ino=[0-9]+:[0-9]+" "34d① 证据带期望身份"
+  assert_has "$P287D_DIAG" "实测：" "34d① 证据带实测"
+  assert_has "$P287D_DIAG" "最后经过的段落：" "34d① 证据带最后经过的段落"
+  assert_has "$P287D_DIAG" "锁路径上的实测持有者：" "34d① 证据带锁路径上的实测持有者"
+  rm -f "$P287D_DIAG" 2>/dev/null || true
+else
+  bad "34d① 证据文件路径没打出来（或文件不在）：[$P287D_DIAG]"
+fi
+P287D_RC=0; p287d_del gs no-lock-guard "$P287D/del-shadow.log" || P287D_RC=$?
+assert_eq "34d① shadow：--break=no-lock-guard → 同场景不再停跑（rc=0）" "$P287D_RC" "0"
+assert_not "$P287D/del-shadow.log" "伴生锁（运行互斥）已不在" "34d① shadow：不点名「锁已不在」（那条断言红）"
+assert_has "$P287D/del-shadow.log" "== 选段结果 ==" "34d① shadow：照常跑到结果行（它就是在跑，不停）"
+assert_has "$P287D/del-shadow.log" "TEAM_SMOKE_BREAK=no-lock-guard（只在 TEAM_SMOKE_FIXTURE=1 下生效）" \
+  "34d① shadow：大声说明守卫被关掉"
+# ── ② 换伴生锁：unlink+新建 / mv 覆盖 → 「已被替换」+ 两个身份 ────────────────────────────────
+p287d_swap() { # <标签> <形状 rm|mv> <break 阶段> <日志>
+  local tag="$1" shape="$2" brk="$3" log="$4" td; td="$(p287d_td "$tag")"
+  rm -rf "$td"; mkdir -p "$td"
+  p287d_run "$td" "$log" 3 "$brk" & local pid=$!
+  local i=0 comp; comp="$(p287d_companion "$td")"
+  while [ "$i" -lt 200 ]; do
+    if [ -s "$comp.holder" ] && grep -aq '== #3' "$log" 2>/dev/null; then break; fi
+    sleep 0.05; i=$((i + 1))
+  done
+  [ -s "$comp.holder" ] || { wait "$pid" 2>/dev/null; return 9; }
+  case "$shape" in
+    rm) rm -f "$comp"; : > "$comp" ;;
+    mv) : > "$td/.fresh"; mv -f "$td/.fresh" "$comp" ;;
+  esac
+  wait "$pid"
+}
+for _shape in rm mv; do
+  P287D_TAG="$([ "$_shape" = rm ] && printf s1 || printf s2)"
+  P287D_RC=0; p287d_swap "$P287D_TAG" "$_shape" "" "$P287D/swap-$_shape.log" || P287D_RC=$?
+  assert_eq "34d② 换锁（$_shape）→ exit 2" "$P287D_RC" "2"
+  assert_has "$P287D/swap-$_shape.log" "伴生锁（运行互斥）已被替换" "34d② 一行点名「已被替换」（$_shape）"
+  assert_match "$P287D/swap-$_shape.log" "已被替换 —— [^ ]+（我持有 [0-9]+:[0-9]+，路径上现在是 [0-9]+:[0-9]+）" \
+    "34d② 那一行印出**两个身份**（$_shape）"
+  assert_not "$P287D/swap-$_shape.log" "已不在" "34d② 与「已不在」的文案可区分（$_shape）"
+  assert_not "$P287D/swap-$_shape.log" "== 选段结果 ==" "34d② 停跑：没有结果行（$_shape）"
+  assert_not "$P287D/swap-$_shape.log" "== #6" "34d② 停跑发生在下一个段落边界（$_shape）"
+  P287D_TAG="$([ "$_shape" = rm ] && printf s3 || printf s4)"
+  P287D_RC=0; p287d_swap "$P287D_TAG" "$_shape" no-lock-guard "$P287D/swap-shadow-$_shape.log" || P287D_RC=$?
+  assert_eq "34d② shadow（$_shape）：关掉守卫 → 不停跑（rc=0）" "$P287D_RC" "0"
+  assert_not "$P287D/swap-shadow-$_shape.log" "已被替换" "34d② shadow（$_shape）：不点名替换"
+done
+unset _shape
+# ── ③ 入场检查：活登记记着另一个身份 → 第二套点名 + 不跑套件 ──────────────────────────────────
+p287d_entry() { # <标签> <break 阶段> <日志> [<wait 秒>]
+  local tag="$1" brk="$2" log="$3" w="${4:-5}" td; td="$(p287d_td "$tag")"
+  rm -rf "$td"; mkdir -p "$td"
+  local comp; comp="$(p287d_companion "$td")"
+  : > "$comp"                      # 锁是**自由**的（互斥已断：记录说 A，路径上是 B）
+  sleep 30 & local live=$!
+  # 一个**活着**的 top 登记，记着另一个身份（dev:ino 9999:9999 与路径上的实际 inode 不同）
+  gate_lock_write_holder "$comp" "$live" top "p287-other-run" verify "$td" "$(date +%s)" 600 2400 3 0 - - fd 9999:9999
+  local rc=0
+  p287d_run "$td" "$log" 0c "$brk" "$w" || rc=$?
+  kill "$live" 2>/dev/null; wait "$live" 2>/dev/null || true
+  return "$rc"
+}
+P287D_RC=0; p287d_entry e1 "" "$P287D/entry-green.log" || P287D_RC=$?
+assert_eq "34d③ 互斥已断 → 第二套 exit 2（约定码）" "$P287D_RC" "2"
+assert_has "$P287D/entry-green.log" "入场检查" "34d③ 一行点名入场检查"
+assert_has "$P287D/entry-green.log" "另一个活着的运行登记着**另一个身份**" "34d③ 点名那条活登记"
+assert_has "$P287D/entry-green.log" "cmd=p287-other-run" "34d③ 点名那个运行"
+assert_has "$P287D/entry-green.log" "agent=verify" "34d③ 点名它的席位"
+assert_has "$P287D/entry-green.log" "worktree=" "34d③ 点名它的工作树"
+assert_match "$P287D/entry-green.log" "它的 dev:ino=9999:9999，路径上现在是 [0-9]+:[0-9]+" "34d③ 印出两个身份"
+assert_has "$P287D/entry-green.log" "互斥已断" "34d③ 说明互斥已经断了"
+assert_not "$P287D/entry-green.log" "== #" "34d③ 不跑套件（一个段落都没开跑）"
+assert_not "$P287D/entry-green.log" "== 选段结果 ==" "34d③ 也没有结果行"
+assert_match "$P287D/entry-green.log" "入场检查：本套\*\*没有运行\*\*" "34d③ 明说本套没有运行"
+P287D_RC=0; p287d_entry e2 no-entry-check "$P287D/entry-shadow.log" || P287D_RC=$?
+assert_eq "34d③ shadow：--break=no-entry-check → 第二套照跑（rc=0）" "$P287D_RC" "0"
+assert_has "$P287D/entry-shadow.log" "== #" "34d③ shadow：套件真的跑起来了（那条断言红）"
+assert_has "$P287D/entry-shadow.log" "TEAM_SMOKE_BREAK=no-entry-check（只在 TEAM_SMOKE_FIXTURE=1 下生效）" \
+  "34d③ shadow：大声说明入场检查被关掉"
+assert_not "$P287D/entry-shadow.log" "互斥已断" "34d③ shadow：不再点名互斥已断"
+# ── ④ 反向对照：正常两套 → 没有锁身份行、结果照旧、伴生锁 inode 不变、发布路径仍在 ────────────
+P287D_CLEAN="$(p287d_td clean)"; rm -rf "$P287D_CLEAN"; mkdir -p "$P287D_CLEAN"
+printf '' >>"$P287D_CLEAN/.teamsmith-smoke.lock.machine"      # 预算：先把两把锁都建出来（inode 基线）
+: > "$P287D_CLEAN/teamsmith-smoke.lock"
+P287D_CMP_INO0="$(stat -c '%d:%i' "$(p287d_companion "$P287D_CLEAN")")"
+P287D_PUB_INO0="$(stat -c '%d:%i' "$P287D_CLEAN/teamsmith-smoke.lock")"
+P287D_RC1=0; p287d_run "$P287D_CLEAN" "$P287D/clean-1.log" 0c || P287D_RC1=$?
+P287D_RC2=0; p287d_run "$P287D_CLEAN" "$P287D/clean-2.log" 0c || P287D_RC2=$?
+assert_eq "34d④ 第一套正常退出码" "$P287D_RC1" "0"
+assert_eq "34d④ 第二套（第一套退出后）正常退出码" "$P287D_RC2" "0"
+for _n in 1 2; do
+  assert_has "$P287D/clean-$_n.log" "== #" "34d④ 第$_n 套跑到段落（正常路径）"
+  assert_not "$P287D/clean-$_n.log" "伴生锁（运行互斥）" "34d④ 第$_n 套没有任何锁身份行（不许误报）"
+  assert_not "$P287D/clean-$_n.log" "排队超限" "34d④ 第$_n 套不排队"
+done
+unset _n
+assert_eq "34d④ 伴生锁 inode 前后不变（持有者没删/没改名自己持有的锁）" \
+  "$(stat -c '%d:%i' "$(p287d_companion "$P287D_CLEAN")")" "$P287D_CMP_INO0"
+assert_eq "34d④ 发布路径仍在（兼容声明留给 P287 之前的写入者）" \
+  "$(stat -c '%d:%i' "$P287D_CLEAN/teamsmith-smoke.lock")" "$P287D_PUB_INO0"
+# ── ⑤ 等待者：我等的那把变了 → 两个身份 + 继续等；旧版本记录 → version=legacy + `?` ───────────
+P287W="$(p287d_td wait)"; rm -rf "$P287W"; mkdir -p "$P287W"
+P287W_CMP="$(p287d_companion "$P287W")"
+: > "$P287W_CMP"
+# 持有者：只持**伴生锁**（发布路径空着）→ 第二套会取到发布路径、在伴生锁上排队
+flock --close -x "$P287W_CMP" sleep 30 & P287W_HOLD=$!
+sleep 0.4
+# 旧版本写入者的记录：`<ISO> pid=… cmd=…`（没有 kind/席位/上限）—— 排在**发布路径**边上
+printf '%s pid=%s cmd=legacy-holder\n' "$(date -Is)" "$P287W_HOLD" > "$P287W/teamsmith-smoke.lock.holder"
+P287W_RC=0
+( p287d_run "$P287W" "$P287D/wait.log" 0b "" 5 ) & P287W_RUN=$!
+p287d_wait_line "$P287D/wait.log" "另一套全量 smoke 正在跑" 5 \
+  && ok "34d⑤ 等待者打印了排队行" || bad "34d⑤ 等待者没有打印排队行"
+assert_has "$P287D/wait.log" "cmd=legacy-holder" "34d⑤ 排队行点名旧版本写入者的记录"
+assert_has "$P287D/wait.log" "version=legacy" "34d⑤ 旧版本记录标 version=legacy"
+assert_match "$P287D/wait.log" "kind=\? pid=[0-9]+ cmd=legacy-holder agent=\? worktree=\? 已跑 \?s expected=\? bound=\?" \
+  "34d⑤ 旧版本记录缺的字段写 ?（有多少打多少）"
+assert_not "$P287D/wait.log" "持有者未知" "34d⑤ 绝不打印「持有者未知」（记录是有的，只是旧）"
+# 外部换掉它等的那把（unlink + 新建），并且**新那把也被人持有** —— 它只能继续等到上限
+rm -f "$P287W_CMP"; : > "$P287W_CMP"
+flock --close -x "$P287W_CMP" sleep 30 & P287W_HOLD2=$!
+p287d_wait_line "$P287D/wait.log" "已经变了" 5 \
+  && ok "34d⑤ 等待者发现「我等的那把变了」并说出来" || bad "34d⑤ 等待者没发现锁被换（还在等死 inode）"
+assert_match "$P287D/wait.log" "已经变了 —— 旧身份 [0-9]+:[0-9]+，现在 [0-9]+:[0-9]+" \
+  "34d⑤ 那一行印出旧/新两个身份"
+assert_has "$P287D/wait.log" "按路径重新解析" "34d⑤ 它继续等（不是当场放弃）"
+wait "$P287W_RUN" 2>/dev/null; P287W_RC=$?
+assert_eq "34d⑤ 等待者在同一个上限内结束（没有套件跑起来）" "$P287W_RC" "2"
+assert_has "$P287D/wait.log" "排队超限" "34d⑤ 到上限才结束（有界）"
+kill "$P287W_HOLD" "$P287W_HOLD2" 2>/dev/null; wait "$P287W_HOLD" "$P287W_HOLD2" 2>/dev/null || true
+assert_not "$P287D/wait.log" "== #" "34d⑤ 等待者一次都没跑套件"
+# ── ⑤b 只删**发布路径**（兼容声明）：只印一行 + 证据，运行**继续**（不停跑）─────────────────────
+# 与 ① 的对照：互斥在伴生锁上，所以丢发布路径只是「与 P287 之前的写入者不再串行」，不是停跑理由。
+P287PB="$(p287d_td pub)"; rm -rf "$P287PB"; mkdir -p "$P287PB"
+p287d_run "$P287PB" "$P287D/pub.log" 3 "" & P287PB_PID=$!
+P287PB_SEEN=0
+for _i in $(seq 1 200); do
+  if [ -s "$(p287d_companion "$P287PB").holder" ] && grep -aq '== #3' "$P287D/pub.log" 2>/dev/null; then P287PB_SEEN=1; break; fi
+  sleep 0.05
+done
+unset _i
+if [ "$P287PB_SEEN" = "1" ]; then rm -f "$P287PB/teamsmith-smoke.lock"; fi
+wait "$P287PB_PID"; P287PB_RC=$?
+assert_eq "34d⑤b 只删发布路径：运行继续到底（退出码 0）" "$P287PB_RC" "0"
+assert_has "$P287D/pub.log" "发布锁路径（兼容声明）丢失" "34d⑤b 只印一行（点名发布路径丢失）"
+assert_has "$P287D/pub.log" "互斥仍在伴生锁上，只记录不停跑" "34d⑤b 明说互斥仍在伴生锁上、不停跑"
+assert_has "$P287D/pub.log" "== 选段结果 ==" "34d⑤b 有结果行（那次判定照常给出）"
+assert_not "$P287D/pub.log" "伴生锁（运行互斥）" "34d⑤b 伴生锁没被牵连（那一条判据没触发）"
+P287PB_DIAG="$(ls -t "$P287PB"/.teamsmith-smoke-diag.*.log 2>/dev/null | head -1 || true)"
+if [ -n "$P287PB_DIAG" ] && grep -q '发布锁路径（兼容声明）丢失' "$P287PB_DIAG"; then
+  ok "34d⑤b 证据文件里也有那一节（$(basename "$P287PB_DIAG")）"
+else
+  bad "34d⑤b 证据文件里没有发布路径丢失那一节"
+fi
+rm -rf "$P287PB" 2>/dev/null || true
+
+# ── ⑥ 两把锁与身份本身：取锁的进程自己握 fd、子套件认祖辈（不排队）、记录带身份、收尾不动锁文件 ──
+# 这一条既是 P287 的合同面（`lock_identity=fd|path` + `lock_dev_ino`、两个锁文件永不 unlink），也是
+# 「review → 内层门禁」那条真实路径的缩小版：取锁的进程（P0）与跑套件的进程（子套件）不是同一个，
+# 子套件凭**父进程 /proc 里的锁描述符**认祖辈。
+P287P="$(p287d_td pair)"; rm -rf "$P287P"; mkdir -p "$P287P"
+P287P_CMP="$(p287d_companion "$P287P")"
+p287d_run "$P287P" "$P287D/pair.log" 3 "" & P287P_PID=$!
+P287P_SEEN=0
+for _i in $(seq 1 200); do
+  if [ -s "$P287P_CMP.holder" ] && grep -aq '== #3' "$P287D/pair.log" 2>/dev/null; then P287P_SEEN=1; break; fi
+  sleep 0.05
+done
+unset _i
+if [ "$P287P_SEEN" = "1" ]; then
+  cp "$P287P_CMP.holder" "$P287D/pair-holder.txt" 2>/dev/null || true
+fi
+wait "$P287P_PID"; P287P_RC=$?
+assert_eq "34d⑥ 正常嵌套运行退出码 0" "$P287P_RC" "0"
+assert_has "$P287D/pair.log" "全量门禁互斥：持有 $P287P/teamsmith-smoke.lock（互斥在伴生锁 $P287P_CMP）" \
+  "34d⑥ 自述两把锁的角色（发布路径 = 兼容声明，互斥在伴生锁）"
+assert_has "$P287D/pair.log" "本套是它跑的那一套，不再排队" "34d⑥ 子套件凭父进程的锁描述符认祖辈（不排队）"
+assert_not "$P287D/pair.log" "排队超限" "34d⑥ 没有排队（嵌套证明生效）"
+assert_eq "34d⑥ 两把锁文件跑完都还在（永不 unlink）" \
+  "$([ -e "$P287P/teamsmith-smoke.lock" ] && [ -e "$P287P_CMP" ] && printf yes || printf no)" "yes"
+if [ -s "$P287D/pair-holder.txt" ]; then
+  assert_match "$P287D/pair-holder.txt" 'lock_identity=fd' "34d⑥ 记录如实写 lock_identity=fd（自己握的描述符）"
+  assert_match "$P287D/pair-holder.txt" 'lock_dev_ino=[0-9]+:[0-9]+' "34d⑥ 记录带 lock_dev_ino（dev:ino）"
+  assert_has "$P287D/pair-holder.txt" "kind=top" "34d⑥ 取锁的那个进程写的是 kind=top 的持有者记录"
+  P287P_WANT="$(sed -n 's/.*lock_dev_ino=//p' "$P287D/pair-holder.txt" | head -1)"
+  if [ "$P287P_WANT" = "$(stat -c '%d:%i' "$P287P_CMP" 2>/dev/null || true)" ]; then
+    ok "34d⑥ 记录里的身份就是伴生锁路径现在的身份（$P287P_WANT）"
+  else
+    bad "34d⑥ 记录里的身份与路径上的身份不一致（$P287P_WANT vs $(stat -c '%d:%i' "$P287P_CMP" 2>/dev/null)）"
+  fi
+else
+  bad "34d⑥ 没在运行中读到持有者记录（$P287P_CMP.holder）"
+fi
+assert_eq "34d⑥ 收尾删掉了自己的持有者记录（锁文件不动）" \
+  "$([ -e "$P287P_CMP.holder" ] && printf still-there || printf gone)" "gone"
+# ⑥b/⑥c 「环境变量单独不作数」：让一个**真的握着伴生锁 fd** 的进程当父进程，只给它环境变量、不给它记录。
+#   ⑥b 身份对 → 子套件照跑（不排队）；⑥c 身份错 → 排队到上限（fail closed，绝不凭自称放行）。
+p287d_fd_proof() { # <标签> <self|dev:ino> <日志> <wait> <退出码文件>
+  local tag="$1" want="$2" log="$3" w="$4" rcf="$5" td inner rc=0
+  td="$(p287d_td "$tag")"; rm -rf "$td"; mkdir -p "$td"
+  # 取锁进程：**真的**取两把锁、**刻意不写记录** —— 只把 pid/身份/dev:ino 交给子套件（环境变量单证）。
+  # `self` 用它自己读到的真身份；给别的值就是「自称的身份」（伪造）。
+  inner="$td/hold.sh"
+  cat > "$inner" <<EOF
+#!/usr/bin/env bash
+set -u
+. "$SKILL_DIR/scripts/lib/gate-lock.sh"
+gate_lock_acquire_pair "$td/teamsmith-smoke.lock" || exit 3
+IFS=\$'\t' read -r id mine < <(gate_lock_claim_identity "$td/.teamsmith-smoke.lock.machine")
+if [ "$want" = "self" ]; then dino="\$mine"; else dino="$want"; fi
+env SMOKE_LOCK_CLAIMER_PID="\$\$" SMOKE_LOCK_CLAIMER_IDENTITY="\$id" SMOKE_LOCK_CLAIMER_DEV_INO="\$dino" \\
+    SMOKE_LOCK_WRAPPED=0 TMPDIR="$td" TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_LOCK_WAIT="$w" \\
+    bash "$SKILL_DIR/tests/smoke.sh" --select 0b 8>&- 9>&-
+exit \$?
+EOF
+  ( cd "$td" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_PROJECT -u TEAM_SESSION \
+      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT -u TEAM_SMOKE_BREAK -u SMOKE_LOCK \
+      TMPDIR="$td" bash "$inner" ) >"$log" 2>&1 || rc=$?
+  printf '%s\n' "$rc" >"$rcf"
+}
+p287d_fd_proof pf-ok self "$P287D/fd-ok.log" 5 "$P287D/fd-ok.rc"
+assert_eq "34d⑥ 身份对：子套件凭父进程 /proc 里的描述符照跑（rc=0）" "$(cat "$P287D/fd-ok.rc")" "0"
+assert_has "$P287D/fd-ok.log" "凭据=它 /proc 里的锁描述符" "34d⑥ 身份对：自述凭据是描述符（不是环境变量）"
+assert_not "$P287D/fd-ok.log" "排队超限" "34d⑥ 身份对：不排队"
+p287d_fd_proof pf-bad 9999:9999 "$P287D/fd-bad.log" 3 "$P287D/fd-bad.rc"
+assert_eq "34d⑥ 身份错：子套件排队到上限（exit 2，绝不凭自称放行）" "$(cat "$P287D/fd-bad.rc")" "2"
+assert_has "$P287D/fd-bad.log" "排队超限" "34d⑥ 身份错：一条点名持有者的超限行（门禁没有运行）"
+rm -rf "$(p287d_td pair)" "$(p287d_td pf-ok)" "$(p287d_td pf-bad)" "$(p287d_td pub)" 2>/dev/null || true
+
+# ── ⑦ 调用者侧：`team review` 的门禁跑着的时候锁没了 → 判定不许 PASS（合同：A review whose gate
+#    loses its lock does not pass；与 ①–⑥ 的分工 —— 那六条钉的是**套件自己**的守卫，这条钉**
+#    review 跑完的复核**）。用私有锁 + 私有沙盒仓（照 §34 的夹具形状）；门禁跑 6s，好让外部来得及删。
+P287R="$(p287d_td rev)"; rm -rf "$P287R"; mkdir -p "$P287R/repo"
+( cd "$P287R/repo" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+  && echo "# p287r" > README.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+p287r() { ( cd "$P287R/repo" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+             -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+             -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+             -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_MARKER -u SMOKE_LOCK \
+             -u SMOKE_LOCK_CLAIMER_PID -u SMOKE_LOCK_CLAIMER_IDENTITY -u SMOKE_LOCK_CLAIMER_DEV_INO "$@" ); }
+p287r $TEAM init --session "smoke-p287r-$$" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$P287R/init.log" 2>&1 \
+  && ok "34d⑦ 沙盒 init 退出码 0" || { bad "34d⑦ 沙盒 init 失败"; tail -3 "$P287R/init.log"; }
+mkdir -p "$P287R/repo/docs/team/reports" "$P287R/repo/docs/team/reviews"
+printf '# T7 · 夹具报告\n\nagent: dev\n' > "$P287R/repo/docs/team/reports/T7-dev.md"
+P287R_LOCK="$P287R/lock"
+# 伴生锁要从**锁路径**推（p287d_companion 吃的是场景目录 + 固定的 teamsmith-smoke.lock）；
+# 这里锁叫 `lock`，照场景目录推会推到一个根本不会被创建的路径上（实测：武装轮询永远等不到）。
+P287R_CMP="$(gate_lock_companion_path "$P287R_LOCK")"
+p287r TEAM_SMOKE_LOCK="$P287R_LOCK" TEAM_SMOKE_LOCK_WAIT=5 TEAM_GATES='sleep 10' TEAM_REVIEW_TIMEOUT=60 \
+      TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 \
+      bash "$SKILL_DIR/scripts/team" review T7 --dir "$P287R/repo" --branch main >"$P287D/rev.log" 2>&1 &
+P287R_JOB=$!
+P287R_ARMED=0
+for _i in $(seq 1 600); do
+  if [ -s "$P287R_CMP.holder" ]; then P287R_ARMED=1; break; fi   # 记录出现 = 两把锁都拿到了、门禁要起了
+  sleep 0.1
+done
+unset _i
+assert_eq "34d⑦ 武装：持有者记录在界内出现（记录出现=两把锁都到手、门禁要起了）" "$P287R_ARMED" "1"
+if [ "$P287R_ARMED" = "1" ]; then
+  sleep 0.5                    # 让门禁真的跑起来（删除发生在**运行期间**，不是入场前）
+  rm -f "$P287R_CMP"
+fi
+wait "$P287R_JOB"; P287R_RC=$?
+assert_eq "34d⑦ 外部删掉伴生锁：review 非 0" "$([ "$P287R_RC" -ne 0 ] && printf 1 || printf 0)" "1"
+P287R_REC="$P287R/repo/docs/team/reviews/T7.md"
+assert_has "$P287R_REC" '判定: **FAIL**' "34d⑦ 判定不是 PASS（是 FAIL）"
+assert_has "$P287R_REC" 'gate mutex broken' "34d⑦ 抬头里有机器可读的标记（gate mutex broken，与 queuecap 同形）"
+assert_eq "34d⑦ 抬头里没有把这次说成「门禁没跑」（门禁跑了，只是判定不可信）" \
+  "$(grep -c 'gate queue cap exceeded' "$P287R_REC" || true)" "0"
+assert_has "$P287R_REC" '互斥在运行期间被破坏' "34d⑦ 记录说清了是「运行期间被破坏，这次判定不可信」"
+assert_match "$P287R_REC" 'queued=[0-9]+s' "34d⑦ 排队记账键 queued= 仍在"
+assert_match "$P287R_REC" 'ran=[0-9]+s' "34d⑦ 排队记账键 ran= 仍在"
+assert_match "$P287R_REC" 'limit=[0-9]+s' "34d⑦ 排队记账键 limit= 仍在"
+assert_eq "34d⑦ team_review_verdict 解析出 FAIL（判定 token 集合没变）" \
+  "$(p287r TEAM_DOCS_ABS="$P287R/repo/docs/team" bash -c "source '$SKILL_DIR/scripts/lib/common.sh' >/dev/null 2>&1; team_review_verdict T7" 2>/dev/null)" "FAIL"
+assert_has "$P287D/rev.log" '门禁运行期间互斥被破坏' "34d⑦ 运行日志里也点名了（不是只写进记录）"
+rm -rf "$P287R" 2>/dev/null || true
+
+rm -rf "$(p287d_td g)" "$(p287d_td gs)" "$(p287d_td s1)" "$(p287d_td s2)" "$(p287d_td s3)" "$(p287d_td s4)" \
+      "$(p287d_td e1)" "$(p287d_td e2)" "$(p287d_td clean)" "$(p287d_td wait)" 2>/dev/null || true
+fi
 
 section "35 · 门禁只判正确性：性能判定守卫 + 旋钮完整性（M58 · perf-suite-split）"
 # 用户决定 D33：性能判定与正确性门禁分开（规格：openspec/changes/perf-suite-split）。本段是**纯逻辑**，
@@ -17808,17 +18719,17 @@ if [ "$P223_RC" = "0" ] || [ "$P223_RC" = "1" ]; then
 else
   bad "P223 --keep 探针：子套件没跑起来（rc=$P223_RC；0/1 才是套件自己的判定）—— 下面两条不作数"
 fi
-P223_KEPT="$(find "$P223D/keep-base" -maxdepth 1 -type d -name 'teamsmith-smoke.*' 2>/dev/null | head -1)"
+P223_KEPT="$(find "$P223D/keep-base" -maxdepth 1 -type d -name 'teamsmith-smoke[.-]*' 2>/dev/null | head -1)"
 if [ -n "$P223_KEPT" ]; then
   ok "P223 --keep 穿过 re-exec：根留在原处（${P223_KEPT##*/}）"
 else
-  bad "P223 --keep 没有穿过 re-exec：跑完根被收走了（$P223D/keep-base 里没有 teamsmith-smoke.*）"
+  bad "P223 --keep 没有穿过 re-exec：跑完根被收走了（$P223D/keep-base 里没有 teamsmith-smoke*）"
 fi
 assert_has "$P223D/keep.log" "保留临时根：" "P223 --keep：收尾行点名保留路径（现场真的留下了）"
 # 反向对照：同一条路去掉 `--keep`，根必须被收走（否则上面的绿说明不了任何事）
 P223_RC2=0; p223_keep_probe nokeep "$P223D/nokeep-base" "$P223D/nokeep.log" || P223_RC2=$?
 assert_has "$P223D/nokeep.log" "全量门禁互斥：持有" "P223 反向对照也走了同一条 re-exec"
-P223_LEFT="$(find "$P223D/nokeep-base" -maxdepth 1 -type d -name 'teamsmith-smoke.*' 2>/dev/null | head -1)"
+P223_LEFT="$(find "$P223D/nokeep-base" -maxdepth 1 -type d -name 'teamsmith-smoke[.-]*' 2>/dev/null | head -1)"
 if [ -z "$P223_LEFT" ]; then
   ok "P223 反向对照：不带 --keep 时根被收走（判据分得出两者）"
 else
@@ -21361,6 +22272,7 @@ printf '   （全流程已在 0–14 节覆盖）\n'
 
 # __SMOKE_TAIL__（P98 选段：本行起是收尾；--select 的过滤副本从这里原样保留到底，别再插段）
 smoke_tmp_guard "结果行之前（跑完就不再回头检查了）"
+smoke_lock_guard "结果行之前（跑完就不再回头检查了）"
 smoke_section_close          # 最后一段也必须有收口行（统一行），且在结果行之前
 section_guard_finish         # P70：关看门狗（最后一段已收口；干净跑不留哨兵文件）
 smoke_slowest_summary        # 最慢 N 段（纯记录：不判定、不改退出码）

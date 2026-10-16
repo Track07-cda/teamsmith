@@ -328,7 +328,7 @@ ban_run() { # <root> <published|all> <名单源文件|-> <用户名|->
 
 # ── 自检：五形状 + 不误伤 + 混合/超量/截断 + 可证伪（含遮蔽影子）──────────────────────────
 ban_selftest() {
-  local base="${TMPDIR:-/tmp}/teamsmith-ledger-ban-selftest.$$"
+  local base="${TMPDIR:-/tmp}/.teamsmith-ledger-ban-selftest.$$"
   local okn=0 badn=0 case_rc=0 out="" rc=0
   rm -rf "$base"
   mkdir -p "$base" || { ban_note "自检：建不出 $base"; return 1; }

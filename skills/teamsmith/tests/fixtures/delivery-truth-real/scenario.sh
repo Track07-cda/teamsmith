@@ -27,7 +27,12 @@ printf '%s\n' "$MARK" > "$L/dev-events.jsonl"
 printf '%s\n' "$MARK" > "$L/pm-events.jsonl"
 printf '%s\n' "$MARK" > "$L/requests.jsonl"
 printf 'P163 case=%s run=%s mode=%s runtime=%s\n' "$CASE" "$RUN_ID" "${P163_MODE:-unknown}" "${P163_PI_VERSION:-unknown}" > "$L/run-start.txt"
-R=$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p163-real.XXXXXX"); mkdir -p "$R/sock" "$R/home" "$R/agentdir" "$R/bin"
+P138_SKILL_DIR="${P138_SKILL:-/src/skills/teamsmith}"
+# P287：ns（临时根名字里的项目命名空间）的唯一实现在被测树的 scripts/lib/common.sh
+if ! declare -F team_project_ns >/dev/null 2>&1; then
+  [ -f "$P138_SKILL_DIR/scripts/lib/common.sh" ] && . "$P138_SKILL_DIR/scripts/lib/common.sh"
+fi
+R=$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p163-real-$(team_project_ns 2>/dev/null || printf 'nosig-00000000').XXXXXX"); mkdir -p "$R/sock" "$R/home" "$R/agentdir" "$R/bin"
 export HOME="$R/home" PI_CODING_AGENT_DIR="$R/agentdir" TMUX_TMPDIR="$R/sock" TERM=xterm-256color
 unset TMUX TMUX_PANE
 for k in ${!TEAM_@}; do unset "$k"; done
