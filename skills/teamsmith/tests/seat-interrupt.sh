@@ -93,6 +93,16 @@ mkdir -p "$T2" "$BIN" "$PANES" "$PI_AGENT_DIR" "$TMP/home" "$TMP/tmux" "$TMP/mee
 # tmux 桩：**只**回答只读查询（夹具绝不碰任何真 server）。窗口表 = $OC_WINDOWS；pane 表 = $OC_PANES_DIR/<窗口名>。
 cat > "$BIN/tmux" <<'STUB'
 #!/usr/bin/env bash
+# 全局选项（`-S <socket>` / `-L <name>` / `-f <file>` / `-2` / `-u`）可以排在动词前面：先跳过它们，
+# `verb` 才是动词 —— `team_orphan_server_panes` 发的是 `tmux -S <sock> list-panes -a -F …`，
+# 不认这一点的话它每次都落到 *) exit 1（孤儿判据变成 unjudged，而不是 live/orphan）。
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -S|-L|-f) shift; [ $# -gt 0 ] && shift ;;
+    -2|-u|-q|-N) shift ;;
+    *) break ;;
+  esac
+done
 verb="${1:-}"
 [ -n "${OC_CALL_LOG:-}" ] && printf '%s\n' "$verb" >> "$OC_CALL_LOG"
 case "$verb" in
@@ -117,7 +127,15 @@ case "$verb" in
         *) shift ;;
       esac
     done
-    [ "$all" = 1 ] && exit 1
+    if [ "$all" = 1 ]; then
+      # 孤儿普查（team reap / team ps 的判据）问的是「这个 server 上有哪些 pane」：夹具的 pane 表
+      # （OC_PANES_DIR 的每个文件）就是答案 —— pane id 取窗口名的 `%名字` 形状。
+      for f in "${OC_PANES_DIR:-/nonexistent}"/*; do
+        [ -f "$f" ] || continue
+        printf '%%%s\n' "$(basename "$f")"
+      done
+      exit 0
+    fi
     key="${target##*:}"
     f="${OC_PANES_DIR:-/nonexistent}/$key"
     [ -f "$f" ] || exit 1
@@ -226,6 +244,7 @@ oc_session_write() { # <sid> <epoch> → 会话文件（内容已知，mtime 就
 }
 oc_level() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 oc_log_n() { if [ -f "$LOG" ]; then wc -l < "$LOG" | tr -d ' '; else printf '0'; fi; }
+oc_reap_n() { if [ -f "$ST/reap.log" ]; then wc -l < "$ST/reap.log" | tr -d ' '; else printf '0'; fi; }
 oc_fp() { if [ -e "$1" ]; then sha256sum "$1" | cut -d' ' -f1; else printf 'absent\n'; fi; }
 oc_wt_fp() { ( cd "$WT" && find . -printf '%P %s\n' 2>/dev/null | sort | sha256sum | cut -d' ' -f1 ); }
 oc_wt_reset() { git -C "$WT" checkout -q -- . 2>/dev/null || true; git -C "$WT" clean -qfdx 2>/dev/null || true; }
@@ -312,7 +331,7 @@ oc_cli_mut() { # <变异树> <argv…>：用同一套夹具现场跑那棵树里
 }
 
 export -f oc_win_set oc_pane_set oc_pane_del oc_run_cli oc_cli oc_cli_real oc_session_file_for \
-  oc_session_write oc_level oc_log_n oc_fp oc_wt_fp oc_wt_reset oc_th_n oc_in_n oc_setup_project \
+  oc_session_write oc_level oc_log_n oc_reap_n oc_fp oc_wt_fp oc_wt_reset oc_th_n oc_in_n oc_setup_project \
   oc_seat_track oc_spawn_seat oc_spawn_identity_seat oc_foreign_seat oc_mutant oc_sh \
   oc_cli_mut
 
@@ -576,6 +595,24 @@ o="$(cat "$TMP/self.log" 2>/dev/null)"
 td_has "调用者的祖先 → 拒绝并点名「祖先」" "$o" "祖先"
 td_eq "祖先那一条：审计未增长" "$n1" "$(oc_log_n)"
 kill -KILL "$a" 2>/dev/null || true
+oc_pane_del dev2
+# ⑥ 活席位上调 reap → 拒发，并点名**另一条入口**（protocol §4a「每个拒绝都点名另一个入口」；V52 的 F2）。
+#    现场：真进程（身份在它自己的 environ 里）+ 真 pane 表；TMUX/TMUX_PANE 让孤儿判据答 live（不是 unjudged）。
+oc_session_write "$SID" 1700000000 >/dev/null
+s="$(oc_spawn_identity_seat "TEAM_MAIN_ROOT=$T2
+TEAM_ROOT=$WT
+TMUX=fixture-sock,1,0
+TMUX_PANE=%dev2")"
+oc_seat_track "$s"
+oc_win_set dev2; oc_pane_set dev2 "$s" 0 bash
+sleep 0.3
+r0="$(oc_reap_n)"
+o="$(oc_cli "$T2" reap "$s" --yes 2>&1)"; rc=$?
+td_ne "活席位上 reap → 拒绝" 0 "$rc"
+td_has "reap 的拒绝点名 team interrupt" "$o" "team interrupt"
+td_alive "reap 拒绝时一个信号都没发" "$s"
+td_eq "reap 的拒绝不写审计" "$r0" "$(oc_reap_n)"
+kill -KILL "$s" 2>/dev/null || true
 oc_pane_del dev2
 fi
 
@@ -930,6 +967,26 @@ flip_case p292-flip-yes-inherited \
    kill -0 "$p" 2>/dev/null && printf GREEN || printf RED' \
   'eval "team_cmd_interrupt__p292y() $(declare -f team_cmd_interrupt | tail -n +2)"
    team_cmd_interrupt() { local _a=("$@") _i _has=0; for _i in "${_a[@]}"; do [ "$_i" = "--yes" ] && _has=1; done; [ "$_has" = 1 ] || _a+=("--yes"); team_cmd_interrupt__p292y "${_a[@]}"; }'
+
+# ⑩ 活席位拒绝必须点名另一条入口：变异 = 把产品里那句指向删掉（同一断言在两棵树上跑）。
+#    cmd-watch.sh 是**最后**被 source 的文件，但 sed 改的是它之前就加载好的 cmd-reap.sh ——
+#    只改文件不重载，当前进程里的函数仍是旧的那份，变异不会生效（所以片段里多一句 `.`）。
+flip_case p292-flip-reap-pointer \
+  'oc_wt_reset; oc_session_write "$SID" 1700000000 >/dev/null
+   s="$(oc_spawn_identity_seat "TEAM_MAIN_ROOT=$T2
+TEAM_ROOT=$WT
+TMUX=fixture-sock,1,0
+TMUX_PANE=%dev2")"
+   oc_seat_track "$s"; oc_win_set dev2; oc_pane_set dev2 "$s" 0 bash; sleep 0.3
+   o="$(oc_cli_mut "$OC_MUT" reap "$s" --yes 2>&1)"; rc=$?
+   kill -KILL "$s" 2>/dev/null || true
+   oc_pane_del dev2
+   [ "$rc" != 0 ] || { printf RED; exit 0; }          # 拒绝本身必须还在（不然红的是别的东西）
+   case "$o" in *"team interrupt"*) printf GREEN ;; *) printf RED ;; esac' \
+  '# 变异：活席位拒绝里的那句指向删掉（只落在变异树里），再把改过的文件重新加载一次
+   _oc_reap_src="$(dirname "${BASH_SOURCE[0]}")/cmd-reap.sh"
+   sed -i "s/ team interrupt [^ ]* --reason//" "$_oc_reap_src"
+   . "$_oc_reap_src"'
 fi
 
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %s  ✗ %s  SKIP %s\n' "$PASS" "$FAIL" "$SKIP"

@@ -135,6 +135,27 @@ Guards and limitations:
     call appends one line to `state/signal-calls.log` (`TEAM_SIGNAL_CALLS_LOG`), and a refusal is also copied byte
     for byte into `<log>.forensics` so it outlives the call log's rotation.
 
+## 4a. Two signal entries: `reap` the orphan, `interrupt` the turn
+
+The tool has exactly two entries that end a *process*, and they answer different questions. `team reap` ends an
+**orphan**: the process is alive but its pane is gone, so no turn is running and nothing is waiting for it
+(troubleshooting §28). `team interrupt <seat>` ends the **turn of a live seat** — the window is alive, the agent
+process is the one its assignment record names, and the seat is stuck inside one long tool call, which is exactly
+why a queued message never reaches it: the wake-up loop delivers at turn end (§4). `team resume` is neither: it is
+the way **back** into the same session, the step after either entry, never a third way to signal anything.
+
+What the two entries share is the discipline, not the target: both pick the process from a **recorded pid**
+(`reap`: the host census; `interrupt`: the seat's own window → pane → pid → identity and start time), both
+re-verify immediately before the signal, both send `SIGTERM` → bounded wait → `SIGKILL`, both take `--yes` on the
+same command line as the only authorization, and both append one audit line per authorized signal. `interrupt`
+additionally requires `--reason` and writes it into the seat's thread and inbox **before** the signal: an
+interrupted seat has to learn why it was stopped, and that entry is part of its reading order on resume.
+
+Never swap them — an interrupt aimed at an orphan's pid is refused (no window), and a reap aimed at a live seat is
+refused (its pane is alive; `reap` only judges orphans); each refusal names the other entry. Both are turn/process
+entries only: `interrupt` leaves the window as a live shell, leaves the worktree, the session file and the
+assignment record untouched, and does not touch the seat's detached background jobs (§4's `team-bg` lane).
+
 ## 4b. Key replies: publish the body before you answer
 
 Publishing the body of a key conclusion is a **standing duty of the PM**, not a licence for answers that merely look

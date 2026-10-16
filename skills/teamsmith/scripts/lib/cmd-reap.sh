@@ -207,7 +207,13 @@ team_cmd_reap() {
     fi
     if [ "$judge" != "orphan" ]; then
       case "$judge" in
-        live)     team_err "reap: pid $pid 不是孤儿（它的 pane 还活着）——一个信号都不发" ;;
+        live)
+          # F2（V52 返修轮次 1）：这句拒绝必须**点名另一条入口** —— protocol §4a 的合约是「每个拒绝都
+          # 点名另一个入口」（interrupt 侧早已指向 `team reap --orphans`），而 reap 侧此前全文件
+          # `grep -c interrupt` = 0：一个活着的席位上被拒，用户拿着一个正确的拒绝却不知道该换哪条命令。
+          # 席位名读得到就给具体的（`team interrupt dev --reason …`），读不到（`-`）给占位。
+          local who="$seat"; [ "$who" != "-" ] || who="<seat>"
+          team_err "reap: pid $pid 不是孤儿（它的 pane 还活着）——它在跑一个回合，要结束它走 team interrupt $who --reason <一句话>；一个信号都不发" ;;
         unjudged) team_err "reap: pid $pid 判不了（它自己那个 tmux server 查询不到）——不猜、不发" ;;
         *)        team_err "reap: pid $pid 的孤儿判据给不出结论（$judge）——不发" ;;
       esac

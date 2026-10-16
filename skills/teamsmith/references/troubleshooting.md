@@ -1435,3 +1435,57 @@ environment is refused.
 **Not to be confused with**: the orphan tmux **server** of §25 — a private server whose socket is gone and whose temp
 root never got swept. That is temp-root hygiene (`bash <skill>/tests/tmp-hygiene.sh --status`, then `--sweep`), not a
 seat process.
+
+## 29. A seat is stuck in one very long turn (its message is never read)
+
+**Symptom**: a message handed to a seat (`team say`, `notify`, a reply to its question) is never read. Its window
+shows `Working` with a growing `Elapsed`; its own session file and its worktree stop changing; `team ps` still calls
+it running. The wake-up loop delivers at **turn end**, so a turn that never ends swallows every message — this is
+the shape behind D188 (two seats stuck 18 h and 16 h with two unread messages).
+
+**First read the evidence** — the plan prints it, and it is the evidence the decision rests on. `team interrupt
+<seat> --reason <one line>` reads (and prints) the seat's last session-file write `session_last`, the number of
+uncommitted files in its worktree `uncommitted`, and the **newer** of the two as the newest disk evidence with its
+age. Fresh evidence (newer than the freshness window, default 3600 s) means the seat **is writing**: the interrupt
+refuses and names the file and its age, because ending a seat mid-write is how a half-written file happens.
+`TEAM_INTERRUPT_FRESH_SEC` is the knob for that bounded default (non-numeric falls back to it).
+
+**How to use it**:
+
+```bash
+team interrupt dev --reason "18h without a commit; the queued root cause is unread"  # plan: zero signals, zero writes, exit 0
+team interrupt dev --reason "…" --yes                                               # execute
+team resume --agent dev                                                             # the way back into the same session
+```
+
+`--yes` is the only authorization: it is read from this command line alone, and no configuration key, environment
+variable or inherited value turns a signal on. The reason is required, and it is written into the seat's thread (the
+second step of its reading order on resume) and its inbox **before** the signal; if either cannot be written the
+interrupt is refused and nothing is signalled. An authorized interrupt appends exactly one line to
+`state/interrupt.log` carrying the readings taken *before* the signal (`session_last`, `uncommitted`, `guard`,
+`signal`, `outcome`).
+
+**What a refusal means**: nothing was signalled and nothing was written — plan mode and every refusal leave the
+seat's worktree, thread, inbox and audit byte-identical. The message names the reason (window gone, the pane no
+longer holds that pid, the start time changed, identity gone, not in the roster, another project, yourself or an
+ancestor, or fresh evidence) and the route for it (`team resume --agent <seat>`, or `team reap --orphans` when the
+pane is gone but the process lives). A refusal is **not** a verdict on the seat's work.
+
+**Known boundaries**:
+
+- Only the one **proven pid** is signalled — never by name, pattern, process tree or process group. The proof chain
+  is the assignment record's window → that window's pane → this project's identity and the recorded start time, and
+  the same facts are re-verified immediately before the signal; any change refuses.
+- The window is left as a **live shell**: nothing is respawned, no session is created, and nothing but the seat
+  process is signalled. The seat's **background jobs are detached and survive** — that is `long-job-suspend`'s lane;
+  run `team bg list` before resuming.
+- The worktree, the session file and the assignment record are untouched, so an interrupted turn loses no state.
+- The panel's death-reason reading may say `unknown` afterwards: this entry is not a death-cause word. `team resume
+  --agent <seat>` continues the same session (`mode=continued`).
+- `--force` crosses exactly **one** refusal — the freshness window — and the audit line records `guard=forced`. It
+  never crosses identity, liveness, the roster, cross-project refusal, or "this is yourself/an ancestor".
+- `--reason` and the refusal wording are not gated (D170); the behaviour is (fixture `tests/seat-interrupt.sh`,
+  gate section `51c`).
+
+**Not to be confused with**: §28 (`reap` = the pane is gone and the process is an orphan), a seat that has
+*stopped* (that is `team resume`), and `team teardown` (which removes the window, the state and the worktree).

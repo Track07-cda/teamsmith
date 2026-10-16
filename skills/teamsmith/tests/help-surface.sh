@@ -187,7 +187,14 @@ case "$sub" in
     fi
     exit 0 ;;
   kill-window) unreg "${t:-?}"; exit 0 ;;
-  list-panes) printf '0\n'; exit 0 ;;
+  list-panes)
+    # P292：interrupt 探针把「pane 里的 agent 进程」指到一个**真** stub（私有 pid 文件，见 probe_env_of）。
+    # 不设这个变量的探针读到的东西与从前逐字节相同（'0'）。
+    if [ -n "${HS_PANE_PID_FILE:-}" ] && [ -r "$HS_PANE_PID_FILE" ]; then
+      _p="$(head -1 "$HS_PANE_PID_FILE" 2>/dev/null)"
+      case "$_p" in ''|*[!0-9]*) ;; *) printf '1 %s\n' "$_p"; exit 0 ;; esac
+    fi
+    printf '0\n'; exit 0 ;;
   display-message)
     case "$*" in
       *pane_current_command*) case "$t" in *pulse*) printf 'node\n' ;; esac ;;
@@ -202,6 +209,15 @@ chmod +x "$SHIM/tmux"
 # the fake agent: records its own invocation and exits at once
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "${HS_LAUNCH_LOG:-/dev/null}"\nexit 0\n' > "$SHIM/fakeagent"
 chmod +x "$SHIM/fakeagent"
+# P292：interrupt 探针的「席位」——一个**真**的长回合进程（身份写在它自己的 environ 里，argv[0] 的
+# basename 命中探针配置的 TEAM_AGENT_BIN）；TERM = 回合结束（退出 0）。它由探针现场起，收尾由 cleanup
+# 按 pane-pids 台账兜底。
+cat > "$SHIM/interrupt-agent" <<'STUB'
+#!/usr/bin/env bash
+trap 'exit 0' TERM
+while :; do sleep 0.2; done
+STUB
+chmod +x "$SHIM/interrupt-agent"
 printf '#!/usr/bin/env bash\nexec bash %q "$@"\n' "$team" > "$SHIM/team"
 chmod +x "$SHIM/team"
 : > "$tmp/tmux-calls.log"; : > "$tmp/windows.reg"; : > "$tmp/launch.log"
@@ -300,7 +316,24 @@ fp_face() { # <dir> <face> → a fingerprint of that face
     docs)     fp_dir "$d/docs" ;;
     config)   fp_dir "$d/.pi/team/config.sh" ;;
     worktree)
-      { git -C "$d" worktree list --porcelain 2>/dev/null; git -C "$d" for-each-ref --format='%(refname)' refs/heads 2>/dev/null; } | sha256sum | cut -c1-16 ;;
+      # F1（V52 返修轮次 1）：旧指纹只摘**结构**（`worktree list` + 本地分支 ref），看不见「往席位
+      # 工作树里写一个文件」这种漂移 —— 而 interrupt 的规格明写工作树逐字节不变，claims 探针却对
+      # 它一直瞎。现在取结构 **加内容**，内容取两处并集：
+      #   ① `.worktrees/` 约定目录（浅现场里席位工作树就在这里，未必登记进 git）；
+      #   ② `git worktree list` 登记的每个**非主检出**工作树（worktree 放到仓外时也看得见）。
+      # 主检出本身不整体哈希：它的内容按面拆开（state / docs / config / skills 各有一份指纹），
+      # 否则任何命令写任意一个面都会同时把 worktree 点亮，反向判据就分不出是哪个面了。
+      {
+        git -C "$d" worktree list --porcelain 2>/dev/null
+        git -C "$d" for-each-ref --format='%(refname)' refs/heads 2>/dev/null
+        fp_dir "$d/.worktrees"
+        local _main _wt
+        _main="$(cd -P "$d" 2>/dev/null && pwd)"
+        while IFS= read -r _wt; do
+          case "$_wt" in ''|"$_main") continue ;; esac
+          fp_dir "$_wt"
+        done < <(git -C "$d" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')
+      } | sha256sum | cut -c1-16 ;;
     skills)   fp_dir "$d/.pi/skills" ;;
     meetings) fp_dir "${TEAM_MEETINGS_DIR:-$tmp/meetings}" ;;
     *) printf 'unknown\n' ;;
@@ -390,13 +423,30 @@ setup_fixture() { # <setup-id> <dir>
   local id="$1" d="$2" sess="$3"
   case "$id" in
     repo) : ;;
-    proj|task|wt|live)
+    proj|task|wt|live|seat)
       env_run "$d" init --no-skills --session "$sess" --agents "dev verify" --vcs local --gates true \
         --docs docs/team --task-models 'code=provider/model-fast' --pm-model 'provider/model-strong' \
         --pm-window pm > "$tmp/logs/$sess-init.log" 2>&1 || {
         printf 'init failed for %s:\n%s\n' "$sess" "$(tail -3 "$tmp/logs/$sess-init.log")" >&2; return 1; }
       ;;
     *) printf 'unknown setup %s\n' "$id" >&2; return 1 ;;
+  esac
+  case "$id" in
+    seat)
+      # P292 · interrupt 探针的浅现场：“一条席位”的派单记录（窗口 / 工作树 / sid）+ 窗口表里的一行 +
+      # 一个**真**的 stub agent 进程（argv[0] 命中探针的 TEAM_AGENT_BIN，身份在它自己的 environ 里）。
+      # pane 由记录器 shim 回答（HS_PANE_PID_FILE，见 probe_env_of）；进程是真的，所以证明链读到的
+      # 是内核里的 /proc（cmdline / environ / stat），不是夹具编的。
+      local wt="$d/.worktrees/dev"
+      mkdir -p "$wt" "$d/.pi/team/state" "$d/docs/team/threads" "$d/docs/team/inbox" "$d/docs/team/tasks"
+      grep -qxF "$sess:dev" "$tmp/windows.reg" 2>/dev/null || printf '%s\n' "$sess:dev" >> "$tmp/windows.reg"
+      printf 'assignment_version=1\ntask=T1\ntaskfile=%s\ncategory=code\nbranch=task/T1-first-task\nworktree=%s\nwindow=dev\nseat=dev\nmodel=provider/model-fast\nselected_via=policy\nlaunch_via=policy\nsid=p-interrupt-sid\nlaunch_nonce=probe-nonce\nstarted=2026-01-01T00:00:00Z\nsid_bytes=0\nmode=continued\nidentity_via=provider,model,session_id\n' \
+        "$d/docs/team/tasks/T1-first-task.md" "$wt" > "$d/.pi/team/state/dev.env" || {
+        printf 'interrupt 现场：写不进派单记录（%s）\n' "$d/.pi/team/state/dev.env" >&2; return 1; }
+      setsid env TEAM_MAIN_ROOT="$d" TEAM_ROOT="$wt" "$SHIM/interrupt-agent" </dev/null >/dev/null 2>&1 &
+      printf '%s\n' "$!" > "$tmp/pane-pids/interrupt"
+      return 0
+      ;;
   esac
   case "$id" in
     task|wt|live)
@@ -435,6 +485,7 @@ probe_recipe() {
     ps)           printf 'proj|ps\n' ;;
     bg)           printf 'proj|bg list\n' ;;
     reap)         printf 'proj|reap --orphans --yes\n' ;;
+    interrupt)    printf 'seat|interrupt dev --reason probe --yes\n' ;;
     digest)       printf 'proj|digest\n' ;;
     inbox)        printf 'proj|inbox\n' ;;
     paths)        printf 'proj|paths\n' ;;
@@ -964,6 +1015,9 @@ probe_env_of() { # <cmd> → extra env assignments for this probe
     close) printf 'TEAM_BOARD_DONE_FORCE=1 TEAM_BOARD_DONE_REASON=probe\n' ;;
     # P276：普查读的是主机 /proc；探针把它指到一个空夹具根 —— 确定性、且绝不碰真机器上的进程。
     reap)  printf 'TEAM_ORPHAN_PROC_ROOT=%s/empty-proc\n' "$tmp" ;;
+    # P292：interrupt 探针的对象是一个真的 stub 席位进程（TEAM_AGENT_BIN 指到它，argv[0] 的 basename
+    # 因此命中）与窗口表里的一行；pane_pid 由 shim 从这个 pid 文件回答。
+    interrupt) printf 'TEAM_AGENT_BIN=%s/interrupt-agent HS_PANE_PID_FILE=%s/pane-pids/interrupt\n' "$SHIM" "$tmp" ;;
   esac
 }
 
@@ -1051,14 +1105,26 @@ run_probe() { # <cmd> → ok/finding
 
   if [ "${MG_AUTH[$cmd]}" = "needs-yes" ]; then
     env_run "$d" $(printf '%s' "$argv" | sed 's/--yes//') >/dev/null 2>&1
-    local rc_ny="$HS_RC" out_ny="$HS_OUT"
-    case "$MG_AUTH[$cmd]" in needs-yes:*) ;; esac
-    if [ "$rc_ny" != "0" ] && printf '%s' "$out_ny" | grep -q -- '--yes'; then
-      after="$(fp_all "$d")"
-      if [ "$before" = "$after" ]; then ok "claims: $cmd 没有 --yes 时拒绝、点名 --yes 且一个字不写"
-      else finding "claims: $cmd 拒绝时仍然写了东西"; fi
+    local rc_ny="$HS_RC" out_ny="$HS_OUT" face
+    after="$(fp_all "$d")"
+    changed=""
+    while read -r face _; do
+      [ "$(printf '%s\n' "$before" | grep "^$face ")" = "$(printf '%s\n' "$after" | grep "^$face ")" ] || changed="$changed $face"
+    done <<< "$after"
+    changed="${changed# }"
+    # 「没有 --yes 就不动手」有两种诚实形状：① 拒绝（rc≠0；既有：meeting 的条件授权）；② **计划态**
+    # （rc=0；interrupt 的边界规格明文写着「计划态退 0、零写盘」）。共同的不变量是「一个字都不写」
+    # 加上「点名 --yes」：声明了 needs-yes 却照样动手（面有变化）或对 --yes 只字不提，都还是红。
+    # （旧臂只认 ①，而且它的 case 词写成了 `$MG_AUTH[$cmd]`（没有花括号）—— 一个从不执行的死行：
+    #   bare needs-yes 第一次被真用到时它就以 `MG_AUTH: unbound variable` 崩掉，本段替掉它。）
+    if [ -n "$changed" ]; then
+      finding "claims: $cmd 声明 needs-yes，但没有 --yes 时照样动手（改了：$changed）"
+    elif ! printf '%s' "$out_ny" | grep -q -- '--yes'; then
+      finding "claims: $cmd 声明 needs-yes，但没有 --yes 时既不拒绝、也不点名 --yes（rc=$rc_ny）"
+    elif [ "$rc_ny" = "0" ]; then
+      ok "claims: $cmd 没有 --yes 时只给计划：一个字不写、点名 --yes（rc=0；计划态不是执行）"
     else
-      finding "claims: $cmd 声明 needs-yes，但没有 --yes 时照旧执行（rc=$rc_ny）"
+      ok "claims: $cmd 没有 --yes 时拒绝（rc=$rc_ny）、点名 --yes 且一个字不写"
     fi
     argv="$argv --yes"
   fi
@@ -1092,6 +1158,17 @@ run_probe() { # <cmd> → ok/finding
     [ "$face" = "-" ] && continue
     case " $changed " in *" $face "*) ;; *) finding "claims: $cmd 声明触碰 $face，但该面没有变化";; esac
   done
+  # F1（V52 返修轮次 1）：反向判据 —— **动了的面必须都在声明里**。没有这一条，无论声明里删掉一个面
+  # （`state docs` → `state`），还是实现多写一个未声明的面（真去写 `config`），探针都照样全绿：
+  # 它只能证伪「声明了却没动」，不能证伪「动了却没声明」。声明的集合 = `faces` 列 ∪ `writes-<face>`
+  # 效应点名的那个面；`read-only` 的「居然改了」由上面的分支判定，不在这里重复报一遍。
+  if [ "$eff" != "read-only" ]; then
+    for face in $changed; do
+      case " $faces " in *" $face "*) continue ;; esac
+      [ "$eff" = "writes-$face" ] && continue
+      finding "claims: $cmd 动了没有声明的面 $face"
+    done
+  fi
   # undo
   case "${MG_UNDO[$cmd]}" in
     idempotent)
@@ -1531,6 +1608,27 @@ if [ "$_TEAM_HELP_REQ" = "1" ]; then""", 1)' \
   flip_case "second-run-fails" "⑳第二次跑失败但不写盘（退出码盲区）" "scripts/lib/cmd-update.sh" \
     's = s.replace("""    team_ok "本会话 skill 版本未变化：$ver（指纹 $hash；保留 $(basename "$f") 里记录的时间）"\n    return 0""", """    team_ok "本会话 skill 版本未变化：$ver（指纹 $hash；保留 $(basename "$f") 里记录的时间）"\n    return 1""", 1)' \
     claims "两次跑的退出码不同" mark-loaded
+
+  # ── P292 · 返修轮次 1（V52 的 F1）────────────────────────────────────────────────────────────
+  # ㉑ 少声明：interrupt 的 `faces` 删掉 docs。旧探针只判「声明的面都动了」，这一改照样全绿（V52 §2.5）；
+  #    反向判据必须红并点名那个没被声明的面。
+  flip_case "interrupt-face-unlisted" "㉑命令页少写一个已触碰的面" "scripts/strings/commands.tsv" \
+    's = s.replace("\tseat\tstate docs\twrites-state\t", "\tseat\tstate\twrites-state\t", 1)' \
+    claims "动了没有声明的面 docs" interrupt
+
+  # ㉒ 多写未声明面：实现真去写 `config`（V52 §2.6 的同一形状）—— 反向判据必须红并点名 config。
+  #    声明侧一个字没动：红只能来自「变了的面没在声明里」，不能来自探针变瞎。
+  flip_case "interrupt-writes-undeclared" "㉒实现多写一个没有声明的面" "scripts/lib/cmd-interrupt.sh" \
+    's = s.replace("""    "${7:--}" "${8:--}" "${9:--}" >> "$f" || return 1""", """    "${7:--}" "${8:--}" "${9:--}" >> "$f" || return 1
+  printf \x27# probe mutation\n\x27 >> .pi/team/config.sh""", 1)' \
+    claims "动了没有声明的面 config" interrupt
+
+  # ㉓ 写工作树：实现往席位工作树里写一个文件（`interrupt` 的规格明写工作树逐字节不变）。旧指纹只有
+  #    `worktree list` + 分支 ref，对内容和写盘是盲的（V52 §2.6 尾）；现在 worktree 面含内容 → 必须红。
+  flip_case "interrupt-writes-worktree" "㉓实现往席位工作树里写文件" "scripts/lib/cmd-interrupt.sh" \
+    's = s.replace("""    "${7:--}" "${8:--}" "${9:--}" >> "$f" || return 1""", """    "${7:--}" "${8:--}" "${9:--}" >> "$f" || return 1
+  printf \x27# probe mutation\n\x27 > .worktrees/dev/probe-mut.txt""", 1)' \
+    claims "动了没有声明的面 worktree" interrupt
 
   return 0
 }
