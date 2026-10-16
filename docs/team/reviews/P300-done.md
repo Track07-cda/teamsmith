@@ -1,0 +1,4 @@
+- 2026-10-16T06:28:43Z · `team close P300 --status done` · FORCED：PM 显式覆盖（理由：提案已复核通过并并入 main（tip f0a7ca6、改名后无残影）；squash 合并不会让分支 tip 成为祖先，故显式覆盖）
+  -   - ① 复验记录 docs/team/reviews/P300.md：不存在
+  -   - ② 分支是否已并入 main：task/P300-answer-must-be-posted-propose（82e50f5b2）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：任务书没有 change: 行 —— 提案审查记录按它命名（PM 补上 change id）
