@@ -475,9 +475,10 @@
 | V51 | Spot-check the init trust-line falsifiers | verify | - | - | done |
 | V52 | Spot-check the seat-interrupt finish-up (probe teeth, declaration, docs) | dev2 | - | - | done |
 | P300 | Proposal: answering the user must be published as a key reply | dev | - | - | done |
-| P301 | Apply the audience-based publishing rule (three surfaces + page legend + two gate classes) | dev | - | - | wip |
+| P301 | Apply the audience-based publishing rule (three surfaces + page legend + two gate classes) | dev | - | - | done |
 | V53 | Verify the gate lock against an outside rm -rf (own deletion scene) | verify | - | - | wip |
 | V54 | Verify the audience-based publishing rule (three surfaces, page line, two gate classes) | dev3 | - | - | done |
+| P302 | Tick the audience-rule checklist (author side) | dev | - | - | wip |
 
 ## 当前里程碑
 
