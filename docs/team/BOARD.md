@@ -474,6 +474,7 @@
 | P299 | Falsifiers for the init trust-line contracts (slash-team 3.3) | dev | - | - | done |
 | V51 | Spot-check the init trust-line falsifiers | verify | - | - | done |
 | V52 | Spot-check the seat-interrupt finish-up (probe teeth, declaration, docs) | dev2 | - | - | blocked |
+| P300 | Proposal: answering the user must be published as a key reply | dev | - | - | wip |
 
 ## 当前里程碑
 
