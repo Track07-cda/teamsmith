@@ -479,8 +479,9 @@
 | V53 | Verify the gate lock against an outside rm -rf (own deletion scene) | verify | - | - | done |
 | V54 | Verify the audience-based publishing rule (three surfaces, page line, two gate classes) | dev3 | - | - | done |
 | P302 | Tick the audience-rule checklist (author side) | dev | - | - | done |
-| P303 | Tick the gate-lock-external-deletion checklist (author side) | dev-bob | - | - | wip |
+| P303 | Tick the gate-lock-external-deletion checklist (author side) | dev-bob | - | - | done |
 | P304 | tmux identity scope: apply-2 (reader attribution and self-heal) | dev2 | - | - | wip |
+| P305 | Close the 8 gate-lock gaps and fix the vacuous pre-change leg | dev-bob | - | - | wip |
 
 ## 当前里程碑
 
