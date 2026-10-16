@@ -39,3 +39,9 @@ git diff --check && git status --short
 ## 交付
 
 `docs/team/reports/P288-dev3.md`（逐条 scenario 对照、命令与 rc、六条红侧前后证据、未做项）；不合并、不推送；做完 `team notify pm`；随后由**没写过本变更**的席位独立复验。
+
+## 交付后补一步（PM 2026-10-16 07:1x 核过）
+
+你交付的 tip `178e946f` 上，**`main` 不是它的祖先**（`git merge-base --is-ancestor main HEAD` → 否；分支上只有两次较早的 `Merge branch 'main'`）。按纪律「交付前 `git merge main`」，请补一次：`git merge main` → 冲突按双方保留、**语义冲突停下来报我** → 重跑你的验收（闭包选段）→ notify pm。
+
+**为什么必须做**：我最终用 `merge --squash` 落地；若分支的树里缺 main 近期的改动，那次 squash 会把**别人的成果一起回退**（今天已经踩过一次：面板目录滞后导致已验过的预览功能被回退）。所以「分支是否含最新 main」是交付的一部分，不是可选项。
