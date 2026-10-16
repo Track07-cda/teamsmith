@@ -482,7 +482,7 @@
 | P303 | Tick the gate-lock-external-deletion checklist (author side) | dev-bob | - | - | done |
 | P304 | tmux identity scope: apply-2 (reader attribution and self-heal) | dev2 | - | - | wip |
 | P305 | Close the 8 gate-lock gaps and fix the vacuous pre-change leg | dev-bob | - | - | wip |
-| V55 | Verify the gate-lock gap closures, especially that the pre-change leg is not vacuous | dev3 | - | - | wip |
+| V55 | Verify the gate-lock gap closures, especially that the pre-change leg is not vacuous | verify | - | - | wip |
 
 ## 当前里程碑
 
