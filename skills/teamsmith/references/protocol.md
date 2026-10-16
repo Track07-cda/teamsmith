@@ -161,9 +161,11 @@ assignment record untouched, and does not touch the seat's detached background j
 Publishing the body of a key conclusion is a **standing duty of the PM**, not a licence for answers that merely look
 memorable: it travels with the tool, so it holds in every project and on every machine. The wake-up loop carries a
 *pointer* (`inbox/<agent>.md` plus a knock) and the report carries the *process*; neither carries the **body**, and
-both are transient or post-hoc — the inbox is gitignored, and a report is written after the work. Before a milestone
-lands, before you issue a ruling, and before you ask the user to decide, publish the **complete conclusion** — the
-whole answer, not a summary — with:
+both are transient or post-hoc — the inbox is gitignored, and a report is written after the work. **The reader
+decides what is published**: whenever the reply is written for the user — a landed milestone, an answer to a
+question, a status or progress report, a conclusion or a ruling, a decision you ask the user for, a delivery or
+verification summary, however short — publish the **complete reply** — the substance the user needs to read, not a
+play-by-play of the work — with:
 
 ```
 team reply post --from <seat> --title "<short single line>" --stdin <<'EOF'
@@ -171,8 +173,15 @@ team reply post --from <seat> --title "<short single line>" --stdin <<'EOF'
 EOF
 ```
 
-A batch of conclusions may be one reply, and a reply carries conclusions rather than process narration. Then send the
-answer normally. Publication **never gates the answer**: the same body goes out whether the post
+**The reader decides, so ask "who is this reply written for?"** A reply meant for the patrol or the watchdog, for
+another seat, or for another project's PM stays in its own channel, and a receipt a tool generated is not a reply at
+all. Length never decides: a one-line answer or a short progress report meant for the user is published in full.
+A reply is never held back because of its kind: a status or progress report, a delivery summary and a decision
+request are published exactly as a conclusion is, and reading like process never makes a reply unpublishable.
+When the reader cannot be settled, treat the reply as meant for the user rather than risk the user missing it.
+
+A batch of user-facing replies may be one reply. Then send the answer normally. Publication **never gates the
+answer**: the same body goes out whether the post
 reported `saved` (0), an input error (2), storage unavailable (4), a busy writer (5, the lock wait is bounded) or
 `unconfirmed` (6, the entry is visible but its durability could not be confirmed — never re-post it automatically).
 Failures are diagnostics on stderr; they must not be concatenated into the answer, and they must not stop it.
@@ -192,8 +201,8 @@ What a receipt does and does not mean:
   exit codes are in `team reply --help`.
 - **The honest limit**: the gate holds only that this duty is shipped on the instruction surfaces (the injected PM
   prompt template, this section, the command table) and that the example command printed there is accepted by the real
-  parser. No tool can verify that a live PM follows the duty — which conclusions a PM published, and whether the body
-  matched the answer, stay unprovable from here.
+  parser. No tool can verify that a live PM follows the duty — whether a given reply was meant for the user, which
+  conclusions a PM published, and whether the body matched the answer, stay unprovable from here.
 
 ## 5. Task briefs: written for "a weak model without context"
 

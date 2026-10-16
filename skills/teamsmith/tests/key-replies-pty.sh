@@ -62,6 +62,7 @@ kr_group_pages() {
   start_panel || { bad "pages：面板起不来"; return 1; }
   keys "5"; sleep 0.6
   want_frame list5 "pages：第 5 页列表帧（编号/标题/发布者标签）" "#2 第二份回复" "#1 完整结论与取舍" "关键回复"
+  assert_has "$tmp/$current/list5.txt" "「这条回复是写给谁的？」" "pages：第 5 页说明行带着判据的自测题（删整行或只删自测题都会红）"
   assert_has "$tmp/$current/list5.txt" "个编号槽位" "pages：列表带编号槽位计数"
   assert_has "$tmp/$current/list5.txt" "更早" "pages：Older 控件可见"
   ev_save "$tmp/$current/list5.txt" "pty-pages-list5.txt"
@@ -280,7 +281,7 @@ kr_group_language() {
   printf 'lang=en\n' >"$state/panel.conf"
   start_panel || { bad "language：面板起不来"; return 1; }
   keys "5"; sleep 0.6
-  want_frame en "language：en 表下第 5 页标签与路由完整" "key replies" "Older" "Older"
+  want_frame en "language：en 表下第 5 页标签与路由完整（含说明行的自测题）" "key replies" "Older" "Older" '"who is this reply written for?"'
   printf 'lang=zh\n' >"$state/panel.conf"
   start_panel || bad "language：重启失败"
   keys "5"; sleep 0.6

@@ -414,6 +414,7 @@ export const en = {
   replyScrollHint: '↑/↓ PgUp/PgDn Home/End scroll',
   replyTotalSlots: '{n} numbered slots',
   replyTailWarning: 'the index tail is incomplete (the last append did not finish)',
+  replyPageNote: '"who is this reply written for?" — replies the PM wrote for the user',
 
   // Global keys (footer)
   keyCompose: 'm compose',

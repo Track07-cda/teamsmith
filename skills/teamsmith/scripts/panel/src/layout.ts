@@ -1364,9 +1364,10 @@ function replyNavLine(ctx: Ctx, innerW: number): PlacedLine {
 }
 
 /**
- * Page 5's list block. It draws the nav row, the slot count (never a claim about readable replies),
- * the tail warning when the reader reported one, and the windowed rows. The returned window is what
- * the App clamps `↑`/`↓` against; `focus` is the focused slot's number.
+ * Page 5's list block. It draws the nav row, the page's one-line self-description (what this page
+ * holds and who publishes into it), the slot count (never a claim about readable replies), the tail
+ * warning when the reader reported one, and the windowed rows. The returned window is what the App
+ * clamps `↑`/`↓` against; `focus` is the focused slot's number.
  */
 function replyListBlock(ctx: Ctx): Block | null {
   const { s, blocks, deg, view } = ctx
@@ -1383,7 +1384,10 @@ function replyListBlock(ctx: Ctx): Block | null {
     replyList: win,
     summary: { line: truncLine(ln(seg(` ${s.replyHeading}`, 'heading')), ctx.width) },
   })
-  const lines: PlacedLine[] = [replyNavLine(ctx, innerW)]
+  const lines: PlacedLine[] = [
+    replyNavLine(ctx, innerW),
+    { line: truncLine(ln(seg(` ${s.replyPageNote}`, 'dim')), innerW) },
+  ]
   if (!data || deg.has('reply_list')) {
     lines.push({ line: truncLine(ln(seg(` ${data ? s.dash : s.replyLoading}`, 'dim')), innerW) })
     return build(lines, { focus: 0, offset: 0, visible: 0, count: 0 })

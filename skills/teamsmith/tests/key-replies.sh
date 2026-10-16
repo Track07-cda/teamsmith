@@ -1047,16 +1047,19 @@ kr_group_skip_path() {
   kr_ev_save "$out" "skip-path-bounded-flip.txt"
 }
 
-# ---------------------------------------------------------------- 组：guide（change: pm-reply-discipline · P267）
+# ---------------------------------------------------------------- 组：guide（change: pm-reply-discipline · P267；判据面 P301）
 # 纪律要随工具走：三处指令面（注入的 PM 提示词 / 协议的 §4b / SKILL 命令表）各自带着同一套**语义锚点**
-# （大小写不敏感；断言的是「义务在场」，不是逐字措辞）。模板里印出来的示例命令必须被**真解析器**接受
+# （大小写不敏感；断言的是「义务在场」，不是逐字措辞），并且各自带着同一条**判据** `written for the user`
+# ——写给用户的回复（回答/汇报/结论/裁定/请示/交付摘要）必须发布，写给巡检/席位/别的项目 PM 的与工具回执不算。
+# 模板里印出来的示例命令必须被**真解析器**接受
 # ——「印出来就能用」是承诺兑现；控制臂（同一 argv 追加未知旗标）必须被拒，否则这个探针是空对空。
-# 四个 $TMP 变异副本必须红并点名被改的面，重新从真树复制后绿。真树与真项目在这一组里只读。
+# 五个 $TMP 变异副本必须红并点名被改的面（①②③⑤ 还要点名缺失的判据 token），重新从真树复制后绿。
+# 真树与真项目在这一组里只读。
 guide_spec() { # <面名> → 分号分隔的锚点；`row:` 前缀 = 必须落在 SKILL 的 `| Key replies |` 行内
   case "$1" in
-    "prompt template")    printf '%s' 'conclusion;milestone;ruling;ask the user;--stdin;team reply post' ;;
-    "protocol reference") printf '%s' 'conclusion;milestone;ruling;ask the user;--stdin;team reply post;No tool can verify' ;;
-    "command table")      printf '%s' 'milestone;ruling;ask the user;row:conclusion;row:say;row:notify;row:--stdin;row:team reply post' ;;
+    "prompt template")    printf '%s' 'conclusion;milestone;ruling;ask the user;--stdin;team reply post;written for the user' ;;
+    "protocol reference") printf '%s' 'conclusion;milestone;ruling;ask the user;--stdin;team reply post;No tool can verify;written for the user' ;;
+    "command table")      printf '%s' 'milestone;ruling;ask the user;row:conclusion;row:say;row:notify;row:--stdin;row:team reply post;row:written for the user' ;;
   esac
 }
 
@@ -1092,7 +1095,7 @@ guide_check_surface() { # <面名> <文件>：绿=0；红=1 并点名面 + 缺�
   if [ -z "$miss" ]; then
     ok "guide-surfaces：$name 带着全部语义锚点（${specs//;/、}，大小写不敏感）"
   else
-    bad "guide-surfaces：$name 丢了纪律锚点：$miss —— 这个面不再承载「关键结论先发布」"
+    bad "guide-surfaces：$name 丢了纪律判据：$miss —— 这里判的是这个面缺了什么，不是要求某个措辞；这个面不再承载「关键结论先发布」"
     return 1
   fi
 }
@@ -1175,7 +1178,7 @@ guide_check_example() { # <模板> <夹具项目>：绿=0；红=1（文案里点
 }
 
 kr_group_guide() {
-  section "guide · 三处表面的纪律 + 示例命令对拍 + 四变异（change: pm-reply-discipline · P267）"
+  section "guide · 三处表面的纪律 + 按读者判据 + 示例命令对拍 + 五变异（change: pm-reply-discipline · P267 / P301）"
   local TMPL PROTO SKILLMD pex mut MUTD out rc
   TMPL="$(guide_surface_path "prompt template")"
   PROTO="$(guide_surface_path "protocol reference")"
@@ -1207,6 +1210,15 @@ kr_group_guide() {
     fi
   }
 
+  guide_flip_names_criterion() { # <标签> <断言文本>：红文案里必须出现被摘掉的那条判据（缺了什么，不是措辞要求）
+    local label="$1" text="$2"
+    if printf '%s' "$text" | grep -qF -- '[written for the user]'; then
+      ok "guide-flip/$label：红文案点名缺失的判据 [written for the user]"
+    else
+      bad "guide-flip/$label：红文案没有点名缺失的判据 [written for the user]（[$(printf '%s' "$text" | tr '\n' '|' | cut -c1-220)]）"
+    fi
+  }
+
   guide_flip_ev() { # <名字> <断言文本（还原后的绿）>：TEAM_REPLY_EVIDENCE 时留证
     [ -n "$KR_EV" ] || return 0
     printf '%s\n' "$2" >"$TMP/guide-flip.out"
@@ -1219,6 +1231,7 @@ kr_group_guide() {
   if grep -qF -- 'Key conclusions' "$mut"; then bad "guide-flip/①：变异没应用上（Key conclusions 段还在）"; fi
   out="$(guide_check_surface "prompt template" "$mut" 2>&1)"; rc=$?
   guide_flip_red "①" "prompt template" "$rc" "$out"
+  guide_flip_names_criterion "①" "$out"
   cp -f "$TMPL" "$mut"
   out="$(guide_check_surface "prompt template" "$mut" 2>&1)"; rc=$?
   if [ "$rc" = "0" ]; then ok "guide-flip/①：还原（重新从真树复制）后绿"; else bad "guide-flip/①：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
@@ -1230,6 +1243,7 @@ kr_group_guide() {
   if grep -qF -- 'standing duty of the PM' "$mut"; then bad "guide-flip/②：变异没应用上（常设义务段还在）"; fi
   out="$(guide_check_surface "protocol reference" "$mut" 2>&1)"; rc=$?
   guide_flip_red "②" "protocol reference" "$rc" "$out"
+  guide_flip_names_criterion "②" "$out"
   cp -f "$PROTO" "$mut"
   out="$(guide_check_surface "protocol reference" "$mut" 2>&1)"; rc=$?
   if [ "$rc" = "0" ]; then ok "guide-flip/②：还原（重新从真树复制）后绿"; else bad "guide-flip/②：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
@@ -1241,6 +1255,7 @@ kr_group_guide() {
   if grep -qF -- 'The outlet for key conclusions' "$mut"; then bad "guide-flip/③：变异没应用上（旧行还在）"; fi
   out="$(guide_check_surface "command table" "$mut" 2>&1)"; rc=$?
   guide_flip_red "③" "command table" "$rc" "$out"
+  guide_flip_names_criterion "③" "$out"
   cp -f "$SKILLMD" "$mut"
   out="$(guide_check_surface "command table" "$mut" 2>&1)"; rc=$?
   if [ "$rc" = "0" ]; then ok "guide-flip/③：还原（重新从真树复制）后绿"; else bad "guide-flip/③：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
@@ -1256,6 +1271,18 @@ kr_group_guide() {
   out="$(guide_check_example "$mut" "$pex" 2>&1)"; rc=$?
   if [ "$rc" = "0" ]; then ok "guide-flip/④：还原（重新从真树复制）后绿"; else bad "guide-flip/④：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
   guide_flip_ev "guide-flip-4-restore-green.txt" "$out"
+
+  # ⑤ 模板：只把判据 token 换成另一种说法（句子仍通顺）→ 红并点名 prompt template 与缺失的判据
+  mut="$MUTD/pm-prompt.md.tmpl"; cp -f "$TMPL" "$mut"
+  perl -pi -e 's/written for the user/written for a person/g' "$mut"
+  if grep -qiF -- 'written for the user' "$mut"; then bad "guide-flip/⑤：变异没应用上（判据 token 还在）"; fi
+  out="$(guide_check_surface "prompt template" "$mut" 2>&1)"; rc=$?
+  guide_flip_red "⑤" "prompt template" "$rc" "$out"
+  guide_flip_names_criterion "⑤" "$out"
+  cp -f "$TMPL" "$mut"
+  out="$(guide_check_surface "prompt template" "$mut" 2>&1)"; rc=$?
+  if [ "$rc" = "0" ]; then ok "guide-flip/⑤：还原（重新从真树复制）后绿"; else bad "guide-flip/⑤：还原后仍红（[$(printf '%s' "$out" | tr '\n' '|' | cut -c1-200)]）"; fi
+  guide_flip_ev "guide-flip-5-restore-green.txt" "$out"
 }
 
 # ---------------------------------------------------------------- 驱动
