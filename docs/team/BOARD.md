@@ -469,7 +469,7 @@
 | V49 | Verify the seat-interrupt entry with an own runaway-turn stand-in | verify | - | - | done |
 | P295 | Tick the seat-interrupt-entry checklist by evidence | dev2 | - | - | done |
 | V50 | Verify the /team slash command (whitelist, env stripping, install, three-layer flips) | verify | - | - | done |
-| P297 | The production-path probes pin Pi 0.87.0 frames while the box runs 1.2.0 | dev3 | - | - | wip |
+| P297 | The production-path probes pin Pi 0.87.0 frames while the box runs 1.2.0 | dev3 | - | - | done |
 | P298 | Tick the slash-team checklist by evidence | dev2 | - | - | done |
 | P299 | Falsifiers for the init trust-line contracts (slash-team 3.3) | dev | - | - | done |
 | V51 | Spot-check the init trust-line falsifiers | verify | - | - | done |
@@ -488,6 +488,7 @@
 | P307 | Tick the tmux-identity-scope checklist (author side) | dev2 | - | - | done |
 | P308 | Fix the skip-is-not-pass hole in the leak fixture; wire §32 after P297 | dev2 | - | - | done |
 | P309 | Apply the disk temp-root default (one resolver, floor bound, rollback) | dev2 | - | - | wip |
+| P310 | Two gate regressions from the lock change (socket length, nested review queueing) | dev3 | - | - | wip |
 
 ## 当前里程碑
 
