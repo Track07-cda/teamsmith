@@ -72,8 +72,8 @@
 - [x] 3.1 夹具只写私有 socket 与私有 fixture 根；跑完断言真实仓库 `docs/team/inbox/**`、
   `.pi/team/state/**`（含 `tmux-calls.log`）未被改动（前后 hash 对比），任一变化即 fail 并打印差异。
   · 证据：隔离断言输出 + 前后 hash · P307 按事实勾：夹具 `:138–148` 的 `ledger_manifest`（逐文件 sha256）与 `:717–731` 的收口断言（不等就打印 diff 并 fail）；2026-10-17 `--all` 输出「隔离：真实仓库账本面未被改动」「隔离：本轮的临时根已回收（跑前 1 个同族根 → 跑后 1 个）」。边界：本 worktree 没有 `docs/team/inbox` 与 `.pi/team/state`，该断言在这里比对的是 0 个文件的空集（有牙的形态见 V56 在独立树上的复核）
-- [ ] 3.2 `perl tests/tmux-lint.pl --selftest` 与 `perl tests/tmux-lint.pl` 绿（新夹具的 tmux 调用全部
-  私有 socket、无绝对路径）。 · 证据：两条命令的输出尾
+- [x] 3.2 `perl tests/tmux-lint.pl --selftest` 与 `perl tests/tmux-lint.pl` 绿（新夹具的 tmux 调用全部
+  私有 socket、无绝对路径）。 · 证据：两条命令的输出尾 · P308 按事实勾：2026-10-17 两条都真跑且 rc=0 —— `--selftest` → `✓ tmux-lint --selftest：37 个夹具 + 历史豁免机制全部符合预期（该红的红、该净的净）`；真树扫描 → `tmux-lint：干净（扫描 94 个脚本，234 条变更命令全部有隔离证据）`。真树这一条原先红在 **16 条过期豁免**（全部指向当前历史里已不存在的 `docs/team/reports/*/pkg/*.sh`），按清单自身的规则「删文件就同时删豁免行」清空，前后计数 **16 → 0**（原因与证据见 `docs/team/reports/P308-dev2.md`）
 - [x] 3.3 `bash tests/tmux-identity-leak.sh --select <组名>` 可单跑并打印本组 ✓/✗。
   · 证据：单跑输出 · P307 按事实勾：`bash skills/teamsmith/tests/tmux-identity-leak.sh --select residue` 2026-10-17 = 本组 `✓ 15 ✗ 0` rc=0，只打印该组；组键白名单在 `:85–86`（未知键 rc=2）
 
@@ -108,3 +108,8 @@
 - **1.6 门禁接入**：没落地。`grep -n 'tmux-identity-leak' skills/teamsmith/tests/smoke.sh skills/teamsmith/tests/section-paths.tsv skills/teamsmith/tests/section-budgets.tsv` 三份文件零命中 —— §32 仍是旧段（`身份 = 运行时目录（M40）`），新夹具只被 `loop-inventory.tsv` 盯着（3 行循环登记）。P274 与 P304 两轮都记录了这条未做（写集串行：`smoke.sh` 与两张 tsv 当时有在飞写者），P304 的「没验的」第 4 条并指出「跑 `--all` 的只有人」。按裁定点 D，这条不接就等于合同在增量跑里没有牙，是真缺口而不是记账遗漏；接之前必须先修 1 号观察（见 P307 报告）。
 - **3.2 真树 lint**：`perl skills/teamsmith/tests/tmux-lint.pl --selftest` 绿（37 个夹具，rc=0，本轮复跑），但 `perl skills/teamsmith/tests/tmux-lint.pl`（不带 `--selftest` 的真树扫描）**rc=1**：`豁免清单过期（16 个问题；扫描 93 个脚本）`，16 条全部指向已从仓库删掉的 `docs/team/reports/*/pkg/*.sh`。这条红在 main 上一样存在（`git cat-file -e main:docs/team/reports/V4.0/pkg/run.sh` → rc=128，且 `git diff main -- skills/teamsmith/tests/tmux-lint-legacy.txt` 为空），与本次改动无关；但清单第 3.2 条要求的是**两条都绿**，所以按事实留空，不拿「既有红」当绿。
 - **5.1–5.4 独立验证**：apply 作者不验自己，留给 PM 勾（引用 V48/V56）。
+
+## 后续修订（P308）
+
+- **3.2 已勾**（2026-10-17）：`--selftest` 与真树扫描两条 rc=0；16 条过期豁免按清单自身规则删掉（16 → 0）。
+- **1.6 仍然留空，但它的前置条件已经修好**：V48 的 F1′（「跳过不是通过」没兑现）已由 P308 修掉 —— 收口判据从 `PASS==0 && FAIL==0` 改成**按段数**判（需要 tmux 的段一段都没跑 → rc=77），现场复现见 `docs/team/reports/P308-dev2.md` 的翻转证据。§32 的三处接线（`smoke.sh` / `section-budgets.tsv` / `section-paths.tsv`）本轮**没动**：P297 正在改 `smoke.sh`，按单写者纪律串行（任务书第一部分明写不碰这三份文件）。

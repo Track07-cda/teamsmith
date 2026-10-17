@@ -56,6 +56,12 @@
 # 环境的布局**不许假设**（P274 返修轮次 1，V48）：真 tmux 的位置在文件头用 `command -v tmux` 解析，解析
 # 到的**目录**接进三处 PATH（shim 目录仍按场景显式加）；解析不到 → **具名跳过（exit 77，不是通过）**；
 # 解析到但不可用（`tmux -V` 失败）→ 逐段可见跳过 + 收口行写明跳过（同样 rc=77 —— 跳过不是通过）。
+#
+# 收口判据（P308 · F1′）：**按段数判，不按 PASS 判** —— 「需要 tmux 的段一段都没跑起来」→ rc=77。
+# 隔离断言在任何现场都会给 2 个 ✓，所以 `PASS==0 && FAIL==0` 的旧判据在「tmux 坏了、全跳过」的现场
+# 永远是假绿（V48 实测 rc=0）。④（审计，stub 就够）不需要 tmux，它跑过**不代表** tmux 身份契约被测过；
+# 反过来 `--select audit` 这种合法单跑也不能被误判成跳过。翻转夹具：
+#   bash skills/teamsmith/tests/flip-p308-skip-not-pass.sh
 set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -131,6 +137,15 @@ assert_env_same() { # <标签> <跑之前的 show-environment -g 输出>
   bad "$1（全局环境变了：$nd 行差异，现在 TEAM_ 行 $(printf '%s\n' "$now" | grep -c '^TEAM_' || true) 条）"
 }
 selects() { case ",$SELECT," in *",$1,"*) return 0 ;; esac; return 1; }
+
+# ── 段数账（P308 · F1′）：收口靠它判「跳过 vs 跑过」，不靠 PASS ─────────────────────────────────
+# TMUX_SEL = 本轮**选中**的、需要 tmux 的段数；TMUX_RAN = 其中真正执行了断言的段数。
+# ⓪ 是前提探针（不是被测的段），④ 不需要 tmux（stub 就够）—— 两者都不进这两个计数。
+TMUX_SEL=0; TMUX_RAN=0
+for _k in write-side session-scope kill-identity residue guard-kept doctor; do
+  selects "$_k" && TMUX_SEL=$((TMUX_SEL + 1))
+done
+seg_ran() { TMUX_RAN=$((TMUX_RAN + 1)); }
 
 # ── 反向守卫（只看夹具 cwd）：真项目 state 里不许出现带本夹具根的日志行 ─────────────────────────
 REAL_LOG="$REPO_ROOT/.pi/team/state/tmux-calls.log"
@@ -246,7 +261,8 @@ team() { ( cd "$1" && shift && env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$ISL" PATH=
     TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$TMP/stub-pm.sh" TEAM_PM_BIN="$TMP/stub-pm.sh" \
     timeout 90 bash "$PROD/scripts/team" "$@" ); }
 HAVE_TMUX=0; TMUX_WHY="没有 tmux"
-if timeout 5 "$REAL_TMUX" -V >/dev/null 2>&1; then HAVE_TMUX=1; fi
+if timeout 5 "$REAL_TMUX" -V >/dev/null 2>&1; then HAVE_TMUX=1
+else TMUX_WHY="tmux 解析到了但不可用（$REAL_TMUX -V 失败）"; fi
 # P304 · 环境前提（与产品的 tmux-iso-guard 同一条判据）：私有 socket 岛的路要装得进 AF_UNIX 的
 # sun_path（Linux：108 字节含结尾 NUL → 上限 107）。TMPDIR 太深时 tmux 绑不上 socket，各腿会变成一堆
 # 看不懂的红 —— 那是环境欠的账，不是缺陷（D192 的口径）：前提不成立就**可见地跳过**并报出长度。
@@ -375,6 +391,7 @@ if selects write-side; then
   if [ "$HAVE_TMUX" != "1" ]; then
     cond_skip "① 写侧" "$TMUX_WHY"
   else
+    seg_ran
     ensure_stage; stage_rc=$?
     assert_eq "①a 夹具项目 init 成功" "$stage_rc" "0"
     assert_eq "①b 泄漏形状下 team up 跑完" "$(cat "$TMP/up.rc" 2>/dev/null)" "0"
@@ -412,6 +429,7 @@ if selects session-scope; then
   if [ "$HAVE_TMUX" != "1" ]; then
     cond_skip "② 会话作用域" "$TMUX_WHY"
   else
+    seg_ran
     ensure_stage || bad "② 舞台没搭起来（init 失败）"
     sess_n="$(lt show-environment -t "$SESS" 2>/dev/null | grep -c '^TEAM_')"
     assert_eq "②a 本项目会话作用域里的 TEAM_* 条数" "$sess_n" "4"
@@ -453,6 +471,7 @@ if selects kill-identity; then
   if [ "$HAVE_TMUX" != "1" ]; then
     cond_skip "③ 不许削弱" "$TMUX_WHY"
   else
+    seg_ran
     ensure_stage || bad "③ 舞台没搭起来（init 失败）"
     printf 'window=ghost\n' > "$A/.pi/team/state/ghost.env"
     : > "$TMP/stub-kill.log"
@@ -537,6 +556,7 @@ if selects residue; then
   if [ "$HAVE_TMUX" != "1" ]; then
     cond_skip "⑤ 读侧自愈" "$TMUX_WHY"
   else
+    seg_ran
     ensure_stage || bad "⑤ 舞台 A 没搭起来（init 失败）"
     _b_rc=0; ensure_stage_b || _b_rc=$?
     assert_eq "⑤a 夹具项目 B init 成功" "$_b_rc" "0"
@@ -578,6 +598,7 @@ if selects guard-kept; then
   if [ "$HAVE_TMUX" != "1" ]; then
     cond_skip "⑥ 守卫保留" "$TMUX_WHY"
   else
+    seg_ran
     ensure_stage || bad "⑥ 舞台 A 没搭起来（init 失败）"
     _b_rc=0; ensure_stage_b || _b_rc=$?
     assert_eq "⑥a 夹具项目 B init 成功" "$_b_rc" "0"
@@ -632,6 +653,7 @@ if selects doctor; then
   if [ "$HAVE_TMUX" != "1" ]; then
     cond_skip "⑦ doctor 残留行" "$TMUX_WHY"
   else
+    seg_ran
     ensure_stage || bad "⑦ 舞台 A 没搭起来（init 失败）"
     _b_rc=0; ensure_stage_b || _b_rc=$?
     assert_eq "⑦a 夹具项目 B init 成功" "$_b_rc" "0"
@@ -734,9 +756,13 @@ fi
 printf '\n\033[1m== tmux-identity-leak 结果 ==\033[0m  ✓ %d  ✗ %d' "$PASS" "$FAIL"
 [ "$SKIP_N" -gt 0 ] && printf ' · 跳过 %d 段' "$SKIP_N"
 printf '\n'
-if [ "$PASS" -eq 0 ] && [ "$FAIL" -eq 0 ]; then
-  printf '\033[33m跳过不是通过\033[0m：tmux 解析到了但不可用（%s -V 失败），本机没有可测的现场（rc=77）\n' "$REAL_TMUX"
+# >>> P308 close-out predicate（flip-p308-skip-not-pass.sh 按这两个标记把它换回旧判据）>>>
+# 判的是「有没有段真跑过」，不是「有没有 ✓」：隔离断言的两条 ✓ 不算测过身份契约。
+if [ "$TMUX_RAN" -eq 0 ] && [ "$TMUX_SEL" -gt 0 ]; then
+  printf '\033[33m跳过不是通过\033[0m：需要 tmux 的 %d 段一段都没跑起来（跳过 %d 段；%s），本机没有可测的现场（rc=77）\n' \
+    "$TMUX_SEL" "$SKIP_N" "$TMUX_WHY"
   exit 77
 fi
+# <<< P308 close-out predicate <<<
 [ "$FAIL" -eq 0 ] && exit 0
 exit 1
