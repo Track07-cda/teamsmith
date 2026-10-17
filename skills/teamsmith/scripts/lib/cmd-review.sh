@@ -1068,8 +1068,13 @@ $(printf '%s\n' "$ignored_list" | head -5)
     # （smoke.sh 的 M23 互斥）—— 那一轮排了 930s、跑 870s，硬超时在 28-i 段掐断的是**运行**，
     # 记录却写成 TIMEOUT，而同一个 HEAD 在机器安静后是 PASS 的。硬超时只该量运行：排队是 review
     # 自己的、有上限、可记账的阶段。
-    #   held    —— 环境里已经有 SMOKE_LOCK_WRAPPED=1（祖先持有锁）：子树已被串行化，不再二次排队
-    #              （否则每一层 team review 都会和自己的祖先死锁）。
+    #   held    —— **证明得出**「某个祖辈正握着这把锁」：沿进程树 + starttime 逐层核对记录（P281 的
+    #              gate_lock_prove_ancestor_pair），子树已被串行化，不再二次排队（否则每一层 team review
+    #              都会和自己的祖先死锁）。
+    #              P310（回归）：这里以前看 `SMOKE_LOCK_WRAPPED` 这个**可继承的环境标记**，而 P288
+    #              （6f1ed69d，F4 的正确修法）让套件拿到锁后 unset 了它 —— 于是嵌套 review 认不出
+    #              「祖辈正握着锁」，反向排到祖先前头（等满上限 / 段预算超时）。判断改成**读证明**，
+    #              不把标记恢复成可继承（写权仍只认记录里活着的 pid，F4 不放宽）。
     #   noqueue —— 没有 flock：打印降级，照跑（**不是**静默跳过；见 references/protocol.md §9b）。
     # 其它用具：TEAM_SMOKE_LOCK（路径，默认同 smoke）、TEAM_SMOKE_LOCK_WAIT（上限，默认 1800s）。
     # P287（change: gate-lock-external-deletion）：与 smoke.sh **同一套**锁机器 ——
@@ -1096,9 +1101,12 @@ $(printf '%s\n' "$ignored_list" | head -5)
     local lock_record_written=0
     queue_marker="$(mktemp "${TMPDIR:-/tmp}/teamsmith-review-queue.$(team_project_ns).XXXXXX" 2>/dev/null || true)"
     queue_holder="$(gate_lock_describe_pair "$lock")"
-    if [ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ]; then
+    # P310：祖先持锁的判据 = **进程树 + starttime 的证明**（不是环境里一个可继承的标记）
+    local lock_ancestor=""
+    lock_ancestor="$(gate_lock_prove_ancestor_pair "$lock" 2>/dev/null || true)"
+    if [ -n "$lock_ancestor" ]; then
       queue_state="held"
-      team_info "门禁锁：已由祖先持有（SMOKE_LOCK_WRAPPED=1）→ 本次不排队"
+      team_info "门禁锁：已由祖辈 pid=${lock_ancestor} 持有（进程树 + starttime 证明）→ 本次不排队"
     elif ! command -v flock >/dev/null 2>&1; then
       queue_state="noqueue"
       team_warn "本机没有 flock → 门禁排队未启用（并发两套门禁时可能互相干扰；见 references/protocol.md §9b）"
@@ -1353,7 +1361,7 @@ $(printf '%s\n' "$ignored_list" | head -5)
                  else
                    printf -- '- 门禁锁：`%s`；本次排队 %ss（上限 %ss，持有者：%s）\n' "${used_lock:-$lock}" "$q_acc" "$lock_cap" "${queue_holder:-未知}"
                  fi ;;
-        held)    printf -- '- 门禁锁：`%s`；**已由祖先持有**（SMOKE_LOCK_WRAPPED=1）→ 本次不排队（queued=0s；避免与自己祖先死锁）\n' "${used_lock:-$lock}" ;;
+        held)    printf -- '- 门禁锁：`%s`；**已由祖先持有**（进程树 + starttime 证明：祖辈 pid=%s）→ 本次不排队（queued=0s；避免与自己祖先死锁）\n' "${used_lock:-$lock}" "${lock_ancestor:--}" ;;
         noqueue) printf -- '- 门禁锁：**排队未启用**（本机无 flock 或锁文件建不了）→ 并发两套门禁时可能互相干扰\n' ;;
         *)       ;;
       esac

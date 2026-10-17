@@ -1005,9 +1005,36 @@ if [ -n "$REAL_TMUX" ]; then
 fi
 SMOKE_PRIVATE_TMUX=0
 if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
-  SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
+  # P310 · socket 目录**不挂临时根下**。回归现场（P288 之后）：§0i 的夹具给嵌套门禁套一层
+  # `TMPDIR=$TMP/case-*`，临时根名里的项目 ns + 6 位随机把 socket 顶到 **126 字节 > AF_UNIX 的 107**
+  # → §0c 的隔离前置硬停（exit 2），嵌套门禁一条结论都拿不到（✓2 ✗3）。判据：socket 路径的长度
+  # 不许跟着临时根走。取一个**固定短前缀 + mktemp 唯一后缀**的目录（先试调用者的 $TMPDIR，同一块盘；
+  # 太长再退 /tmp），并把它交给隔离前置当第二个 --own-root（它仍是本轮自建、且只装本轮的 socket）。
+  # 红侧：TEAM_SMOKE_TMUX_UNDER_TMP=1 把目录放回临时根下 —— 只认 TEAM_SMOKE_FIXTURE=1，
+  # 由 tests/flip-p310-socket.sh 证明「socket 长度 ≤ 107」那条断言是承重的。
+  if [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ] && [ "${TEAM_SMOKE_TMUX_UNDER_TMP:-0}" = "1" ]; then
+    SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
+    printf '\033[33m夹具红侧\033[0m：TEAM_SMOKE_TMUX_UNDER_TMP=1 → 私有 socket 放回临时根下（P310 的回归形状）\n'
+  else
+    SMOKE_TMUX_TMPDIR=""
+    _tm_uid="$(id -u)"
+    _tm_room=$(( 107 - 6 - ${#_tm_uid} - 8 ))     # socket = <dir> + "/tmux-<uid>" + "/default"
+    for _tm_base in "${TMPDIR:-/tmp}" /tmp; do
+      [ -d "$_tm_base" ] || continue
+      _tm_dir="$(mktemp -d "$_tm_base/.tm-${_tm_uid}.XXXXXX" 2>/dev/null || true)"
+      [ -n "$_tm_dir" ] || continue
+      if [ "${#_tm_dir}" -le "$_tm_room" ]; then SMOKE_TMUX_TMPDIR="$_tm_dir"; break; fi
+      rmdir "$_tm_dir" 2>/dev/null || true      # 这一层放不下：收掉再试下一个基址
+    done
+    if [ -z "$SMOKE_TMUX_TMPDIR" ]; then
+      # 极端：连 /tmp 都放不下（uid 极长？）—— 退回临时根下，让 §0c 的前置按长度硬停并点名（不静默）
+      SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
+      printf '注意：找不到 ≤107 字节的 socket 目录（$TMPDIR 与 /tmp 都不行）→ 退回临时根下；§0c 会按长度拒绝\n'
+    fi
+  fi
   TMUX_TMPDIR="$SMOKE_TMUX_TMPDIR"; export TMUX_TMPDIR
   SMOKE_TMUX_SOCK="${SMOKE_TMUX_TMPDIR}/tmux-$(id -u)/default"
+  SMOKE_TMUX_OWN_ROOT="$SMOKE_TMUX_TMPDIR"     # 隔离前置的第二个自有目录（P310）
   SMOKE_PRIVATE_TMUX=1
   # 调用者本来就在 tmux 里 → 给本轮一个**私有** server 上的等价身份（anchor session + TMUX/TMUX_PANE）：
   # ① 「在 tmux 里」是某些断言的判定前提（探测守卫：不认别的项目的 session），不能因为整理环境而静默降级；
@@ -1290,16 +1317,31 @@ cleanup() {
   # P162：收尾的 kill 也要先证明隔离；不成立就**拒绝执行**（soft：响亮 + 审计，但不在这里 exit）。
   # 第二个 kill 前的那次探测用的是「server 不在也要读得出解析路径」的形态：kill-session 可能刚把
   # 最后一个 session 收掉、server 随之消失 —— 证明的仍是「tmux 会连哪条路径」，打不到 server 时放行。
+  # P310：私有 socket 目录在临时根之外 → 它自己就是第二个自有目录（--own-root）。
   if [ -n "${REAL_TMUX:-}" ] \
      && tmux_iso_guard_soft cleanup "收尾：kill-session（本轮 session）" \
-          --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
+          --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --own-root "${SMOKE_TMUX_OWN_ROOT:-}" \
+          --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
     env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$REAL_TMUX" kill-session -t "$SESSION" 2>/dev/null || true
   fi
   # 私有 socket：连本轮的 server 一起收掉（调用者的默认 server 原样不动）
   if [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] \
      && tmux_iso_guard_soft cleanup "收尾：kill-server（本轮私有 server）" \
-          --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
+          --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" --own-root "${SMOKE_TMUX_OWN_ROOT:-}" \
+          --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
     env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$REAL_TMUX" kill-server 2>/dev/null || true
+  fi
+  # P310：socket 目录不在临时根里（临时根回收带不走它）—— 只收**本轮那一个**（名字带 mktemp 后缀），
+  # KEEP 时保留并点名（现场证据）。前缀 glob 一律不碰。
+  if [ -n "${SMOKE_TMUX_TMPDIR:-}" ]; then
+    case "$(basename "$SMOKE_TMUX_TMPDIR")" in
+      .tm-*)
+        if [ "${KEEP:-0}" = "1" ] || [ "${TEAM_TMP_KEEP:-0}" = "1" ]; then
+          printf '  \033[2m·\033[0m 私有 socket 目录（保留）：%s\n' "$SMOKE_TMUX_TMPDIR"
+        else
+          rm -rf -- "$SMOKE_TMUX_TMPDIR" 2>/dev/null || true
+        fi ;;
+    esac
   fi
   # P281：只删**自己写的那一条**；持有者记录只有真的持有 flock 的那个进程才删（嵌套运行不得删别人的；
   # F4：自述持有者但没写成的那一个也不许删）。
@@ -1364,7 +1406,7 @@ fi
 
 printf 'teamsmith smoke · skill=%s · tmp=%s\n' "$SKILL_DIR" "$TMP"
 [ "${SMOKE_PRIVATE_TMUX:-0}" = "1" ] && printf '  \033[2m·\033[0m %s\n' \
-  "tmux 私有 socket：$SMOKE_TMUX_SOCK（夹具与产品调用都走它；调用者的默认 server 不参与）"
+  "tmux 私有 socket：$SMOKE_TMUX_SOCK（夹具与产品调用都走它；调用者的默认 server 不参与；${#SMOKE_TMUX_SOCK} 字节 ≤ AF_UNIX 上限 107；目录在临时根之外：$SMOKE_TMUX_TMPDIR）"
 if [ "${SMOKE_LOCK_RECORD:-0}" = "1" ]; then
   SMOKE_LOCK_WHAT="no_lock=1（${SMOKE_LOCK_REASON:-未排队}）"
   # P287：互斥在**伴生锁**上，发布路径只是兼容声明 —— 这行两样都说清楚，记录读伴生锁那条。
@@ -1468,8 +1510,19 @@ if [ "${HAVE_TMUX:-0}" = "1" ]; then
     SMOKE_SOCK_PROBE="teamsmith-smoke-socketprobe-$$"
     tmux new-session -d -s "$SMOKE_SOCK_PROBE" sleep 30 2>/dev/null || true
     # P162：隔离自检从「断言」升级成「前置」——不成立就硬停（后面任何破坏性调用都不许跑）
+    # P310：自有目录有两个 —— 临时根，与临时根之外那个短 socket 目录（同一个 tmux_iso_prove 判定）
     tmux_iso_require "0c · 静态检查（函数结尾的 set -e 陷阱）" "M23 隔离自检：本轮私有 socket 必须已生效" \
-      --tmpdir "$SMOKE_TMUX_TMPDIR" --own-root "$TMP" --caller-tmpdir "$SMOKE_CALLER_TMUX_TMPDIR"
+      --tmpdir "$SMOKE_TMUX_TMPDIR" --own-root "$TMP" --own-root "$SMOKE_TMUX_OWN_ROOT" \
+      --caller-tmpdir "$SMOKE_CALLER_TMUX_TMPDIR"
+    # P310：判据的承重点 —— socket 路径的长度**不随临时根变长**（AF_UNIX 的 sun_path 只有 108 字节，
+    # 可用 107）。它必须点名实测字节数；红侧（放回临时根下）由 tests/flip-p310-socket.sh 跑出来。
+    P310_SOCK_LEN="${#SMOKE_TMUX_SOCK}"
+    assert_eq "0c 私有 socket 路径 ${P310_SOCK_LEN} 字节 ≤ AF_UNIX 上限 107（P310）" \
+      "$([ "$P310_SOCK_LEN" -le 107 ] && echo yes || echo no)" "yes"
+    case "$SMOKE_TMUX_TMPDIR" in
+      "$TMP"/*) bad "0c 私有 socket 目录挂在临时根下（$SMOKE_TMUX_TMPDIR）—— 嵌套夹具再套一层就会顶过 107（P310 的回归形状）" ;;
+      *) ok "0c 私有 socket 目录在临时根之外（$SMOKE_TMUX_TMPDIR）——不随临时根变长" ;;
+    esac
     if [ -S "$SMOKE_TMUX_SOCK" ] \
        && [ "${TMUX_TMPDIR:-}" = "$SMOKE_TMUX_TMPDIR" ] \
        && tmux has-session -t "$SMOKE_SOCK_PROBE" 2>/dev/null; then
@@ -2261,6 +2314,21 @@ if git -C "$SKILL_DIR" rev-parse --show-toplevel >/dev/null 2>&1; then
   assert_has "$TMP/p158-flip-break.log" "本包确实在读实现" "0i 牙齿：砸掉实现后本条不再判无效（本包确实读实现，不是空跑）"
 else
   cond_skip "0i 红侧（树在跑动中被改 → 本次运行无效）" "这棵树不是 git 检出（建不出变体树）—— 指纹腿本身照旧打印可见提示「不可用」且不判无效；本段判不了，不报红"
+fi
+# P310 ①：本段还钉住「私有 socket 的路径长度不随临时根变长」——§0i 的 ✓2 ✗3 就是这个（P288 之后嵌套
+# 夹具的深 TMPDIR 把 socket 顶到 126 字节 → §0c 隔离前置硬停 exit 2）。夹具跑两条腿：深 TMPDIR 下照
+# 常跑（socket ≤107）/ 把 socket 目录放回临时根下（改动前的形状）→ 必须硬停并**点名长度**。
+if [ "${HAVE_TMUX:-0}" = "1" ]; then
+  P310S_RC=0
+  bash "$SKILL_DIR/tests/flip-p310-socket.sh" >"$TMP/p310-socket-flip.log" 2>&1 || P310S_RC=$?
+  assert_eq "0i P310：深嵌套 TMPDIR 下照常跑；socket 放回临时根下 → 硬停并点名长度" "$P310S_RC" "0"
+  [ "$P310S_RC" -eq 0 ] || tail -8 "$TMP/p310-socket-flip.log" | sed 's/^/      /'
+  assert_has "$TMP/p310-socket-flip.log" "flip-p310-socket：两条腿都对上了" "0i P310 夹具自报两条腿都对上"
+  P310S_LEN="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p310-socket-flip.log" | sed -n 's/.*leg green：rc=0 · socket 路径 \([0-9]\+\) 字节.*/\1/p' | head -1)"
+  assert_eq "0i P310：嵌套门禁的 socket 路径 ${P310S_LEN:-?} 字节 ≤ 107" \
+    "$([ -n "$P310S_LEN" ] && [ "$P310S_LEN" -le 107 ] && echo yes || echo no)" "yes"
+else
+  cond_skip "0i P310 私有 socket 长度腿" "没有 tmux（私有 socket 这条腿判不了）"
 fi
 # ---------------------------------------------------------------- 1. doctor 负例
 section "1 · doctor（未初始化应失败）"
@@ -5096,6 +5164,21 @@ assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **FAIL**" "复验记录标
 sed -i 's/^TEAM_GATES="false"/TEAM_GATES="true"/' "$REPO/.pi/team/config.sh"
 $TEAM review T1.1 --dir "$REV_WT" >/dev/null 2>&1
 assert_has "$REPO/docs/team/reviews/T1.1.md" "判定: **PASS**" "恢复门禁后复验 PASS"
+
+# ---------------------------------------------------------------- 10 · P310 嵌套 review 的排队判定
+# P288（6f1ed69d，修 F4「写权不可继承」）让套件拿到锁就 unset 了 SMOKE_LOCK_WRAPPED，而 review 的
+# 「祖先持锁 → 不排队」仍看这个**可继承的环境标记** → 嵌套 review 认不出祖辈正握着锁，反向排到自己
+# 祖先前头（等满上限 / 段预算超时，本段的 TIMEOUT 形状）。P310 改成读 P281 已有的「沿进程树 +
+# starttime 证明祖辈持有锁」。夹具在**私有锁**上跑三条腿（不碰机器锁）：
+#   真祖辈持锁 → 不排队 ／ 判据回退成看标记 → 必须排队撞上限 ／ 祖先没持锁（持锁者是兄弟）→ 照常排队。
+P310L_RC=0
+bash "$SKILL_DIR/tests/flip-p310-lock.sh" >"$TMP/p310-lock-flip.log" 2>&1 || P310L_RC=$?
+assert_eq "10 P310：祖辈证明 / 判据回退 / 非祖辈三条腿都按预期" "$P310L_RC" "0"
+[ "$P310L_RC" -eq 0 ] || tail -12 "$TMP/p310-lock-flip.log" | sed 's/^/      /'
+assert_has "$TMP/p310-lock-flip.log" "leg green：rc=0 · queued=0s" "10 P310 leg green：真祖辈持锁 → 不排队（进程树证明）"
+assert_has "$TMP/p310-lock-flip.log" "leg red：rc=1 · 排队" "10 P310 leg red：判据回退成看标记 → 排队撞上限（回归复现）"
+assert_has "$TMP/p310-lock-flip.log" "leg control：rc=1 · 排队" "10 P310 leg control：祖先没持锁 → 照常排队（证明不过宽）"
+assert_has "$TMP/p310-lock-flip.log" "flip-p310-lock：三条腿都对上了" "10 P310 夹具自报三条腿都对上"
 
 # ---------------------------------------------------------------- 10b. 复验证据完整性（M6.2 / V4.0 F7–F14 · F3）
 section "10b · 复验证据完整性（记录必须描述真的验过什么）"
@@ -16231,6 +16314,37 @@ p34_review() { # <out> <timeout> <lock_wait> <gates> [extra env assignments…]
       TEAM_REVIEW_TIMEOUT="$tlim" TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 "$@" \
       $TEAM review T1.1 --dir "$P34R" --branch main ) >"$out" 2>&1
 }
+# P310：**真祖辈**持锁的现场 —— 包装器取两把锁、按产品的同一套字段写自己的记录（kind=top），
+# 再把 review 当**子进程**跑。它是 review 的祖先，所以「祖辈持有锁」这条判据只认 /proc 里的
+# 进程树 + starttime，不认环境里一个可以被继承的标记。
+P34_ANC="$P34D/ancestor.sh"
+cat > "$P34_ANC" <<'P34ANCEOF'
+#!/usr/bin/env bash
+# <skill-dir> <lock> <log> <cmd…>
+set -uo pipefail
+skill="$1"; lock="$2"; log="$3"; shift 3
+. "$skill/scripts/lib/gate-lock.sh"
+gate_lock_acquire_pair "$lock" || { printf 'p34-ancestor: 取锁失败 %s\n' "$?" >&2; exit 9; }
+comp="$(gate_lock_companion_path "$lock")"
+IFS=$'\t' read -r ident ino < <(gate_lock_claim_identity "$comp")
+gate_lock_write_holder "$comp" "$$" top "p34-ancestor" dev "$PWD" "$(date +%s)" 60 240 3 0 - - "$ident" "$ino"
+"$@" >"$log" 2>&1
+rc=$?
+gate_lock_remove_holder "$comp"
+exit "$rc"
+P34ANCEOF
+chmod +x "$P34_ANC"
+p34_ancestor_review() { # <out> <timeout> <lock_wait> <gates>
+  local out="$1" tlim="$2" cap="$3" gates="$4"
+  ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED \
+      TEAM_SMOKE_LOCK="$P34_LOCK" TEAM_SMOKE_LOCK_WAIT="$cap" TEAM_GATES="$gates" \
+      TEAM_REVIEW_TIMEOUT="$tlim" TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 \
+      bash "$P34_ANC" "$SKILL_DIR" "$P34_LOCK" "$out.body" \
+        bash "$SKILL_DIR/scripts/team" review T1.1 --dir "$P34R" --branch main ) >"$out" 2>&1
+}
 p34_record() { printf '%s' "$P34R/docs/team/reviews/T1.1.md"; }
 p34_verdict() { # 用 CLI 自己的解析器（common.sh 的 team_review_verdict），不是本段自己写正则
   ( cd "$P34R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
@@ -16284,16 +16398,26 @@ assert_has "$(p34_record)" '判定: **TIMEOUT**' "34③ 判定是 TIMEOUT（语�
 assert_match "$(p34_record)" 'ran=[0-9]+s' "34③ TIMEOUT 记录带 ran=Ns"
 assert_eq "34③ team_review_verdict 仍解析出 TIMEOUT" "$(p34_verdict)" "TIMEOUT"
 
-# ④ 祖先已持锁：不再二次排队（queued=0s，且不等满）
-p34_hold 10
+# ④ 祖辈已持锁：不再二次排队（queued=0s，且不等满）。P310：判据是**进程树 + starttime 的证明**
+#    （见 p34_ancestor_review），不是可继承的环境标记 —— P288（F4 的正确修法）让套件拿到锁就 unset
+#    了那个标记，旧判据于是把嵌套 review 排到自己祖先**前头**（等满上限 / 段预算超时）。这条腿必须
+#    真的是祖辈：包装器取两把锁、写自己的记录，再把 review 当子进程跑。
 P34_T0=$(date +%s)
-P34_RC=0; p34_review "$P34D/d.log" 20 60 'sleep 1' SMOKE_LOCK_WRAPPED=1 || P34_RC=$?
+P34_RC=0; p34_ancestor_review "$P34D/d.log" 20 5 'sleep 1' || P34_RC=$?
 P34_T1=$(date +%s)
-p34_release
-assert_eq "34④ 祖先持锁 → rc=0" "$P34_RC" "0"
+assert_eq "34④ 祖辈持锁 → rc=0" "$P34_RC" "0"
 assert_has "$(p34_record)" '已由祖先持有' "34④ 记录写明已由祖先持有（不二次排队）"
-assert_eq "34④ 不排队：锁被占的 10s 内就返回（实测 $((P34_T1 - P34_T0))s）" "$([ $((P34_T1 - P34_T0)) -lt 8 ] && echo yes || echo no)" "yes"
+assert_has "$(p34_record)" '进程树 + starttime 证明：祖辈 pid=' "34④ 记录点名被证明的祖辈 pid（不是环境标记）"
+assert_not "$(p34_record)" 'SMOKE_LOCK_WRAPPED' "34④ 记录不再拿可继承的环境标记当判据"
+assert_eq "34④ 不排队：锁被祖辈占着也立刻返回（实测 $((P34_T1 - P34_T0))s）" "$([ $((P34_T1 - P34_T0)) -lt 8 ] && echo yes || echo no)" "yes"
 assert_eq "34④ team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
+# ④b P310 的对照：**祖先存在但没持锁**（持锁者是兄弟）→ 必须照常排队。不许因为「有祖先」就跳过排队。
+p34_hold 20
+P34_RC=0; p34_review "$P34D/d2.log" 20 2 'sleep 1' || P34_RC=$?
+p34_release
+assert_eq "34④b 祖先没持锁（持锁者是兄弟）→ 照常排队撞上限（rc=1）" "$P34_RC" "1"
+assert_has "$(p34_record)" '排队等满上限' "34④b 记录写明排队撞上限"
+assert_not "$(p34_record)" '已由祖先持有' "34④b 没有把非祖辈的持锁者当成祖先（证明不过宽）"
 
 # ⑤ 没有 flock：打印降级（不是静默）+ 照跑门禁
 P34_NOFL="$P34D/noflock"; rm -rf "$P34_NOFL"; mkdir -p "$P34_NOFL"

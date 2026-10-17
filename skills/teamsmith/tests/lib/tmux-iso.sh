@@ -21,7 +21,9 @@
 #   硬停）。唯一的旋钮 TEAM_TMUX_ISO_LOG 只决定审计行写哪（不改判定；自检 0h 正面钉住）。
 #
 #   入口：
-#     tmux_iso_prove       [--tmpdir D] [--sock-name N] [--own-root R] [--caller-tmpdir C] [--argv <tmux argv…>]  → 0/1（判定）
+#     tmux_iso_prove       [--tmpdir D] [--sock-name N] [--own-root R]… [--caller-tmpdir C] [--argv <tmux argv…>]  → 0/1（判定）
+#                          （--own-root 可重复：目标 socket 落在**任一个**本轮自有目录之下即可；P310 起套件
+#                           同时给临时根与私有 socket 目录 —— 后者在临时根之外，见 smoke.sh 的 P310 注释）
 #     tmux_iso_require     <段> <用途> [同上]      → 证明通过则静默返回；不通过则硬停（exit 2）
 #     tmux_iso_guard_soft  <段> <用途> [同上]      → 不通过则「响亮拒绝但不 exit」（收尾路径用）
 #     tmux_iso_argv_parse  <argv…>                 → 解析动词/显式目标（只吃逐词 argv，产出见下）
@@ -150,13 +152,15 @@ tmux_iso_prove() { # [--tmpdir D] [--sock-name N] [--own-root R] [--caller-tmpdi
   TMUX_ISO_EFFECTIVE_TMPDIR=""
   local dir="" name="default" own="" caller=""
   TMUX_ISO_CALL_ARGV=()
+  # P310：--own-root 可重复（多个本轮自有目录，命中任一即可）
+  local -a owns=()
   # 值类选项缺值时**立刻**以 bad-option 退出（M36 的教训：`shift 2` 在 $#<2 上失败会让 while
   # 原地打转 → 挂死；这里每条路径都 shift ≥1 或 break）。
   while [ $# -gt 0 ]; do
     case "$1" in
       --tmpdir)        [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--tmpdir 缺值"; return 1; }; dir="${2-}"; shift 2 ;;
       --sock-name)     [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--sock-name 缺值"; return 1; }; name="${2-}"; [ -n "$name" ] || name="default"; shift 2 ;;
-      --own-root)      [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--own-root 缺值"; return 1; }; own="${2-}"; shift 2 ;;
+      --own-root)      [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--own-root 缺值"; return 1; }; owns+=("${2-}"); shift 2 ;;
       --caller-tmpdir) [ $# -ge 2 ] || { TMUX_ISO_REASON="bad-option"; TMUX_ISO_DETAIL="--caller-tmpdir 缺值"; return 1; }; caller="${2-}"; shift 2 ;;
       --argv)          shift; TMUX_ISO_CALL_ARGV=("$@"); break ;;
       *) TMUX_ISO_REASON="bad-option"
@@ -203,13 +207,20 @@ tmux_iso_prove() { # [--tmpdir D] [--sock-name N] [--own-root R] [--caller-tmpdi
     TMUX_ISO_DETAIL="socket 路径 ${#expected} 字节 > AF_UNIX 上限 $TMUX_ISO_AF_UNIX_MAX（私有 server 绑不上）"
     return 1
   fi
-  if [ -n "$own" ]; then
+  # P310：多个自有目录（临时根 + 临时根之外的私有 socket 目录），**任一个**盖住目标即可。
+  # 空值不算数（空 own-root 会被规范化成空串，`""/*` 会匹配任何绝对路径 —— 那是假的放行）。
+  local _own_ok=0 _own_norm _own_list=""
+  for own in ${owns[@]+"${owns[@]}"}; do
+    [ -n "$own" ] || continue
+    _own_list="${_own_list:+$_own_list、}$own"
     case "$(tmux_iso_norm "$expected")" in
-      "$(tmux_iso_norm "$own")"/*) ;;
-      *) TMUX_ISO_REASON="outside-own-root"
-         TMUX_ISO_DETAIL="目标 socket 不在本轮自有目录 $own 之下（$expected）"
-         return 1 ;;
+      "$(tmux_iso_norm "$own")"/*) _own_ok=1 ;;
     esac
+  done
+  if [ -n "$_own_list" ] && [ "$_own_ok" != "1" ]; then
+    TMUX_ISO_REASON="outside-own-root"
+    TMUX_ISO_DETAIL="目标 socket 不在本轮自有目录 ${_own_list} 之下（$expected）"
+    return 1
   fi
   # ③ 不许是共享默认 socket（或调用者原来那份默认 socket）
   if [ "$(tmux_iso_norm "$expected")" = "$(tmux_iso_norm "$default_sock")" ]; then
@@ -311,13 +322,14 @@ tmux_iso_guard_soft() { # <段> <用途> [证明参数…]：通过 → 0；不�
 # ── P180/P188 · 套件的壳函数（tmux / command tmux / builtin command tmux）：同一条入口 ──────────
 # 非破坏性调用原样透传（PATH 解析与改动前一致）；破坏性调用先过前置（不成立 → 硬停），再按 M23 的
 # 形态执行（env -u TMUX -u TMUX_PANE + 本轮私有 TMUX_TMPDIR）—— 那也是 tmux-lint 认的隔离证据形态。
-tmux_iso_suite_call() { # <段> [--tmpdir D --own-root R --caller-tmpdir C] -- <argv…>
+tmux_iso_suite_call() { # <段> [--tmpdir D --own-root R… --caller-tmpdir C] -- <argv…>
   local label="${1:-?}"; shift || true
-  local dir="" own="" caller=""
+  local dir="" caller=""
+  local -a own_args=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --tmpdir)        [ $# -ge 2 ] || break; dir="${2-}"; shift 2 ;;
-      --own-root)      [ $# -ge 2 ] || break; own="${2-}"; shift 2 ;;
+      --own-root)      [ $# -ge 2 ] || break; own_args+=(--own-root "${2-}"); shift 2 ;;
       --caller-tmpdir) [ $# -ge 2 ] || break; caller="${2-}"; shift 2 ;;
       --) shift; break ;;
       *) break ;;
@@ -325,7 +337,7 @@ tmux_iso_suite_call() { # <段> [--tmpdir D --own-root R --caller-tmpdir C] -- <
   done
   tmux_iso_argv_parse "$@"
   if [ "$TMUX_ISO_ARGV_DESTRUCTIVE" = "1" ]; then
-    tmux_iso_require "$label" "tmux $*" --tmpdir "$dir" --own-root "$own" \
+    tmux_iso_require "$label" "tmux $*" --tmpdir "$dir" ${own_args[@]+"${own_args[@]}"} \
       --caller-tmpdir "$caller" --argv "$@" || return 1
     env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$dir" "${TMUX_ISO_REAL_TMUX:-tmux}" "$@"
   else
@@ -346,7 +358,10 @@ tmux_iso_suite_call() { # <段> [--tmpdir D --own-root R --caller-tmpdir C] -- <
 tmux_iso_install_suite_guards() { # <真 tmux 路径>
   TMUX_ISO_REAL_TMUX="${1:-}"
   tmux() {
-    tmux_iso_suite_call "${SMOKE_SEC_OPEN_ID:-?}" --tmpdir "${TMUX_TMPDIR:-}" --own-root "${TMP:-}" \
+    # P310：两个本轮自有目录 —— 临时根，与**临时根之外**的私有 socket 目录（后者太短不进临时根，见 smoke.sh）
+    local -a _iso_own=(--own-root "${TMP:-}")
+    [ -n "${SMOKE_TMUX_OWN_ROOT:-}" ] && _iso_own+=(--own-root "$SMOKE_TMUX_OWN_ROOT")
+    tmux_iso_suite_call "${SMOKE_SEC_OPEN_ID:-?}" --tmpdir "${TMUX_TMPDIR:-}" ${_iso_own[@]+"${_iso_own[@]}"} \
       --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}" -- "$@"
   }
   command() {
