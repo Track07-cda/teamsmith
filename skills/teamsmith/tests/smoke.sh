@@ -15204,6 +15204,33 @@ EOF
   assert_eq "32⑧c 收尾：夹具窗口清干净" "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -cx m40w || true)" "0"
 fi
 
+# ⑨ 写侧/读侧的身份作用域（change: tmux-identity-scope · 裁定点 D —— P311 接线）
+#    前八块钉的是「身份按 cwd 解析」；这一块接上独立夹具，把「建对象的动词不许把身份写进共享 server 的
+#    全局环境」「-e 只写会话作用域」「审计日志的 A1 落点」「读侧归因 / doctor 只读」逐条钉在真 tmux 上。
+#    夹具的收口是**按段数**判的（P308）：tmux 不可用 → rc=77（跳过不是通过）。§32 本段就需要 tmux，
+#    所以这里把 77 判红 —— 机器没有 tmux 时这一节本来也不该绿，跳过绝不算通过。
+#    FAST 跳过：夹具要真 tmux server 与真窗口，装不进 <60s 的快模式（可见 SKIP，见收尾行）。
+P311_LEAK="$SKILL_DIR/tests/tmux-identity-leak.sh"
+if [ "$FAST" = "1" ]; then
+  fast_skip "32⑨·身份作用域夹具（真 tmux）" "要真 tmux server 与真窗口（全量门禁跑）"
+elif [ ! -f "$P311_LEAK" ]; then
+  bad "32⑨ 缺 tests/tmux-identity-leak.sh（tmux-identity-scope 的身份作用域夹具）"
+else
+  P311_RC=0
+  bash "$P311_LEAK" --all >"$TMP/p311-identity-leak.log" 2>&1 || P311_RC=$?
+  P311_LINE="$(sed -e 's/\x1b\[[0-9;]*m//g' "$TMP/p311-identity-leak.log" 2>/dev/null | grep -a '== tmux-identity-leak 结果 ==' | tail -1)"
+  P311_TAIL="$(printf '%s' "$P311_LINE" | sed -e 's/.*结果 == *//')"
+  if [ "$P311_RC" -eq 0 ] && [ -n "$P311_LINE" ]; then
+    ok "32⑨ 身份作用域夹具全绿（$P311_TAIL）"
+  elif [ "$P311_RC" -eq 77 ]; then
+    bad "32⑨ 身份作用域夹具跳过（rc=77）—— 跳过不是通过：$(grep -a '跳过不是通过' "$TMP/p311-identity-leak.log" | tail -1)"
+    grep -a '^  ·\|SKIP' "$TMP/p311-identity-leak.log" | head -5 | sed 's/^/      /'
+  else
+    bad "32⑨ 身份作用域夹具红（rc=$P311_RC）${P311_TAIL:+：$P311_TAIL}"
+    grep -a '✗' "$TMP/p311-identity-leak.log" | head -8 | sed 's/^/      /'
+  fi
+fi
+
 section "33 · 项目契约的读写面（P22/B1：team config 单一写入口 + schema）"
 # P22/B1：headless 夹具（tests/config-cli.sh）——不依赖 tmux/真进程，FAST 模式照跑。
 if [ -f "$SKILL_DIR/tests/config-cli.sh" ]; then

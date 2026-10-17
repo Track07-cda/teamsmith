@@ -20,11 +20,11 @@
   "$HOME/.bun/bin/bun" "$HOME/.bun/bin/openspec" validate --all --strict)` 必须绿（拷贝要嵌在
   `<x>/openspec` 下）。归档后逐条核对两条 ADDED 与那条 MODIFIED：MODIFIED 的既有八条场景与三段正文
   逐字保留、没有第二个未归档 change 动 `pm-lifecycle`/`boundary`。 · 证据：投影命令与输出尾 · P307 按事实勾：P307 2026-10-17 复跑投影（`/tmp/p307-proj`）：`archive -y` rc=0（`archived as '2026-10-17-tmux-identity-scope'`），随后 `validate --all --strict` 19 passed 0 failed rc=0；逐条核对：`boundary` 79 → 80 个 `#### Scenario`（diff 的 `-` 行只有被 MODIFIED 取代的那段旧正文，无场景丢失），`pm-lifecycle` 16 → 23 且新增的两个 `### Requirement` 正是两条 ADDED；未归档 change 的 specs 里 `grep -rln` 只命中本 change
-- [ ] 0.3 冻结**改动前**基线并抄进报告（私有 socket、私有 fixture 项目，不许碰真实 server）：
+- [x] 0.3 冻结**改动前**基线并抄进报告（私有 socket、私有 fixture 项目，不许碰真实 server）：
   ① 机制探针：`new-session` 把启动者环境写进全局环境、`-e` 只写会话环境、`kill-*`/`list-*` 不建 socket；
   ② 真 CLI：`team up`（stub PM 命令）后 `tmux show-environment -g | grep -c '^TEAM_'`（本 worktree 实测
   **12**）、同一项目会话环境 **0**；③ 项目 B 的 pane 继承值 + 在 B 目录跑 `team up` 的
-  **rc=1 + `身份冲突被拒`**；④ `smoke.sh --select 32` 改动前的 ✓/✗ 计数。 · 证据：基线日志
+  **rc=1 + `身份冲突被拒`**；④ `smoke.sh --select 32` 改动前的 ✓/✗ 计数。 · 证据：基线日志 · **P311 按事实勾（2026-10-17）**：改动前那棵树点名 `637b7ae0`（= `a1a53292^`，`v0.2.0` 是它的祖先），`git archive` 到私有临时根后单独 `git init`。① 机制：`TEAM_PROJECT=leaky` 起 server 后全局 1 条、第二个客户端（`=second`）新建 session 后全局仍是 `leaky`、`-e TEAM_PROJECT=scoped` 不动全局（仍 1 条）而会话作用域 1 条、空岛上 `list-sessions`/`kill-server` rc=1 且 **0 个 socket 文件**；② 真 CLI：`team up`（stub PM）rc=0 → 全局 **11** 条本项目 `TEAM_*`（逐条列出）、会话作用域 **0** 条（提案第 2 条的 12 是同一机制、另一个 pin 集合：它还钉了 signal 两条，本探针钉的是 `TEAM_PI_BIN`）；③ 项目 B 的新 pane 继承同样 11 条，在 B 目录跑 `team up` → rc=1 + `身份冲突被拒` 并逐条点出继承值与目录推导值，会话集合逐行未变；④ `smoke.sh --select 32` = `#6 32 … 用时 10s · ✓72 ✗0`、`== 选段结果 == ✓131 ✗0`、wall 14.48s。夹具在旧树上不存在（`--all` → `No such file or directory` rc=127）；把今天的夹具放进同一棵树（新夹具 × 旧产品）→ `✓ 40 ✗ 24` rc=1，①c/①d「期望 [0]，实际 [11]」逐条点名 11 个泄漏变量。私有 socket/私有 fixture：默认 socket 的读数跑前跑后逐字节相同（两行 session 列表一致）。原始输出 `docs/team/reports/P311-dev-bob/logs/baseline-0.3.log`、`baseline-fixture.log`（证据层，不入库）
 
 ## 1 apply-1 · 写侧与审计（规格 `pm-lifecycle#Starting this project's tmux objects never writes its identity into the shared server's environment`、`boundary#The gate's actions are logged, and no window carries a destructive-call grant`）
 
@@ -44,10 +44,10 @@
   cwd 所属项目日志恰好 +1 行、非项目目录不写）。 · 证据：`--all` 输出尾 + 两条红侧的原始输出 · P307 按事实勾：`bash skills/teamsmith/tests/tmux-identity-leak.sh --all` 2026-10-17 = `✓ 66  ✗ 0` rc=0（末行计数、私有 socket 岛）；红侧 1 的原始输出见 1.5 段（`--break=strip`：①c/①d「期望 [0] 实际 [11]」并列出泄漏变量），红侧 4 见 1.3 段（`--break=log`：④a）
 - [x] 1.5 红侧 1/4 的**翻转**：把建对象调用改回「带环境」（一行变异）→ 红侧 1 必须红并点名全局环境里的
   变量；去掉 A1 的 fallback → 红侧 4 必须红；各自还原后绿。 · 证据：两次变异的原始输出 + 还原后的绿 · P307 按事实勾：2026-10-17 复跑两条变异（改的是夹具私有根里的产品源码副本，本树逐字节不变）：`--select write-side --break=strip` → `✓ 7 ✗ 2` rc=1，①c/①d「期望 [0] 实际 [11]」并逐条点名 11 个泄漏变量；`--select audit --break=log` → `✓ 6 ✗ 1` rc=1，④a「期望 [1] 实际 [0]」；还原后 `--all` ✓66 ✗0、`--select write-side` ✓9 ✗0；P274 报告「红侧证据」表是同一组红侧的原始记录
-- [ ] 1.6 门禁接入（裁定点 D）：`smoke.sh` §32 调用新夹具；`section-budgets.tsv` 的 §32 行按**实测**
+- [x] 1.6 门禁接入（裁定点 D）：`smoke.sh` §32 调用新夹具；`section-budgets.tsv` 的 §32 行按**实测**
   max(host/container/ci) 重填；`section-paths.tsv` 的 §32 patterns 补
   `skills/teamsmith/scripts/lib/common.sh`。`section-guard.sh --budget-check` 必须绿。
-  · 证据：三处 diff + `--budget-check` 输出尾
+  · 证据：三处 diff + `--budget-check` 输出尾 · **P311 按事实勾（2026-10-17，tip 见交付报告）**：`smoke.sh` §32 新增 ⑨ 块，全量模式跑 `bash tests/tmux-identity-leak.sh --all`；`rc=77`（跳过不是通过）、夹具缺失、夹具没打出结果行三种形状都判红，FAST 下 `fast_skip` 可见跳过。实测 `--select 32` = `✓ 32⑨ 身份作用域夹具全绿（✓ 66 ✗ 0）`、`#6 32 … 用时 35s · ✓73 ✗0`、`== 选段结果 == ✓132 ✗0`（改动前同一命令 ✓72 ✗0）；容器（teamsmith-gate:local 1d723525ee58）27s、✓73 ✗0。`section-paths.tsv` §32 行补 `common.sh` **与**夹具路径（⑨ 块点名夹具，`--check` 的 token 方向要求补它）；`section-budgets.tsv` 按实测重填 host 35.00 / container 27.00 / band 35.00 / budget 140 / ci `-`（规则不变：×4）。`section-guard.sh --budget-check` = 135/135 全过，`--loop-check` 86/86 配平。红侧四条（变体树/变异表，真树零改动）：删 §32 → `--select 32` rc=2「未知 key：32」且无夹具结果行 + `--check` 点名「表里有 key 在源码里找不到：32」；夹具文件不在 → `--select 32` rc=1「32⑨ 缺 tests/tmux-identity-leak.sh」+ `--check` 点名缺的字面模式；patterns 去掉 `common.sh` → 改它不再选中 32（其余段照常）；夹具 `exit 77` → §32 红并打出「跳过不是通过」。原始输出 `docs/team/reports/P311-dev-bob/logs/red-sides.log`
 
 ## 2 apply-2 · 读侧归因与自愈（规格 `pm-lifecycle#Identity inherited from the shared server's global environment resolves by the working directory`）
 
@@ -113,3 +113,11 @@
 
 - **3.2 已勾**（2026-10-17）：`--selftest` 与真树扫描两条 rc=0；16 条过期豁免按清单自身规则删掉（16 → 0）。
 - **1.6 仍然留空，但它的前置条件已经修好**：V48 的 F1′（「跳过不是通过」没兑现）已由 P308 修掉 —— 收口判据从 `PASS==0 && FAIL==0` 改成**按段数**判（需要 tmux 的段一段都没跑 → rc=77），现场复现见 `docs/team/reports/P308-dev2.md` 的翻转证据。§32 的三处接线（`smoke.sh` / `section-budgets.tsv` / `section-paths.tsv`）本轮**没动**：P297 正在改 `smoke.sh`，按单写者纪律串行（任务书第一部分明写不碰这三份文件）。
+
+## 后续修订（P311）
+
+- **0.3 已勾**（2026-10-17）：改动前基线冻结在 `637b7ae0`（= `a1a53292^`）上，原始输出抄进
+  `docs/team/reports/P311-dev-bob.md` 的 0.3 段；`smoke.sh --select 32` 改动前 = ✓72 ✗0 / 10s。
+- **1.6 已勾**（2026-10-17）：§32 ⑨ 接上 `tests/tmux-identity-leak.sh --all`，`section-paths.tsv` / `section-budgets.tsv` 同步
+  （35.00 / 140）；`--budget-check` 135/135。上两段里「留空」的理由（0.3 没有 apply 侧冻基线、1.6 的单写者串行）到此为止，
+  保留原文作为记录。
