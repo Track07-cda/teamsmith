@@ -1,0 +1,4 @@
+- 2026-10-17T07:05:24Z · `team close P308 --status done` · FORCED：PM 显式覆盖（理由：F1′ 修复已并入 main（我自己在两棵树上复现了 0 → 77 的对照）；§32 接线另立、等 P297 落地）
+  -   - ① 复验记录 docs/team/reviews/P308.md：不存在
+  -   - ② 分支是否已并入 main：task/P308-tmux-identity-gaps（00ba3a47c）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
