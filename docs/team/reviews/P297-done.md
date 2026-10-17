@@ -1,0 +1,4 @@
+- 2026-10-17T07:27:12Z · `team close P297 --status done` · FORCED：PM 显式覆盖（理由：修复并入 main（closure 补齐，--select 42 198/0）；两条门禁回归另立 P310）
+  -   - ① 复验记录 docs/team/reviews/P297.md：不存在
+  -   - ② 分支是否已并入 main：task/P297-pi-version-drift（9876a55b5）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
