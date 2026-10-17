@@ -480,10 +480,10 @@
 | V54 | Verify the audience-based publishing rule (three surfaces, page line, two gate classes) | dev3 | - | - | done |
 | P302 | Tick the audience-rule checklist (author side) | dev | - | - | done |
 | P303 | Tick the gate-lock-external-deletion checklist (author side) | dev-bob | - | - | done |
-| P304 | tmux identity scope: apply-2 (reader attribution and self-heal) | dev2 | - | - | wip |
+| P304 | tmux identity scope: apply-2 (reader attribution and self-heal) | dev2 | - | - | done |
 | P305 | Close the 8 gate-lock gaps and fix the vacuous pre-change leg | dev-bob | - | - | done |
 | V55 | Verify the gate-lock gap closures, especially that the pre-change leg is not vacuous | verify | - | - | done |
-| V56 | Verify the tmux identity read side (own leak scene, three red sides, doctor read-only) | dev3 | - | - | wip |
+| V56 | Verify the tmux identity read side (own leak scene, three red sides, doctor read-only) | dev3 | - | - | done |
 | P306 | Temp root default: move off the RAM-backed /tmp to a per-project disk root | dev | - | - | todo |
 
 ## 当前里程碑
