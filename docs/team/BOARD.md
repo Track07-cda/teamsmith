@@ -485,7 +485,7 @@
 | V55 | Verify the gate-lock gap closures, especially that the pre-change leg is not vacuous | verify | - | - | done |
 | V56 | Verify the tmux identity read side (own leak scene, three red sides, doctor read-only) | dev3 | - | - | done |
 | P306 | Temp root default: move off the RAM-backed /tmp to a per-project disk root | dev | - | - | todo |
-| P307 | Tick the tmux-identity-scope checklist (author side) | dev2 | - | - | wip |
+| P307 | Tick the tmux-identity-scope checklist (author side) | dev2 | - | - | done |
 
 ## 当前里程碑
 
