@@ -484,6 +484,7 @@
 | P305 | Close the 8 gate-lock gaps and fix the vacuous pre-change leg | dev-bob | - | - | done |
 | V55 | Verify the gate-lock gap closures, especially that the pre-change leg is not vacuous | verify | - | - | done |
 | V56 | Verify the tmux identity read side (own leak scene, three red sides, doctor read-only) | dev3 | - | - | wip |
+| P306 | Temp root default: move off the RAM-backed /tmp to a per-project disk root | dev | - | - | todo |
 
 ## 当前里程碑
 
