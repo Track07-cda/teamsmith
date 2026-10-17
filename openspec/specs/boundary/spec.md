@@ -168,15 +168,18 @@ prefixes — SHALL be decided by the object the call resolves to:
 
 ### Requirement: The gate's actions are logged, and no window carries a destructive-call grant
 
-Each gated call SHALL append exactly one line to `$TEAM_TMUX_CALLS_LOG` carrying the ISO-8601 timestamp, the
-resolved socket, `TMUX`, `TMUX_TMPDIR`, the full argv, the pid and ppid, the cwd, and an action that is exactly one
-of `pass`, `refused`, `allowed-owned` or `explicit-flag`. Every call whose action is not `pass` is additionally
-copied into the gate's long-retention record (`boundary#A destructive call's record outlives the call log's
-rotation`); when that copy does not happen, this same line carries `retention=failed` and the gate prints that
-requirement's diagnostic — the log still appends exactly one line per call. The log records the caller's traffic —
-its content is the caller's own argv and resolved socket — so it MUST NOT be read as project ledger state: the
-gate's fixture-trace scan excludes those exact paths
-(`verification#The fixture-trace scan reads ledger state, not traffic records`).
+Each gated call SHALL append exactly one line to the gate's call log — `$TEAM_TMUX_CALLS_LOG` when the caller's
+environment names one, otherwise the call log of the project the gate's working directory belongs to
+(`<project>/.pi/team/state/tmux-calls.log`), and nothing when neither resolves, so a call deliberately run without
+the gate's pins (the tool's own server-starting calls, which must not carry this project's `TEAM_*` namespace into
+a server they start) is still recorded exactly once — carrying the ISO-8601 timestamp, the resolved socket, `TMUX`,
+`TMUX_TMPDIR`, the full argv, the pid and ppid, the cwd, and an action that is exactly one of `pass`, `refused`,
+`allowed-owned` or `explicit-flag`. Every call whose action is not `pass` is additionally copied into the gate's
+long-retention record (`boundary#A destructive call's record outlives the call log's rotation`); when that copy
+does not happen, this same line carries `retention=failed` and the gate prints that requirement's diagnostic — the
+log still appends exactly one line per call. The log records the caller's traffic — its content is the caller's own
+argv and resolved socket — so it MUST NOT be read as project ledger state: the gate's fixture-trace scan excludes
+those exact paths (`verification#The fixture-trace scan reads ledger state, not traffic records`).
 
 The log SHALL stay bounded: past 2000 call lines the oldest go and the newest 1000 stay, a target that cannot be
 written MUST NOT block the call, and a log that never crossed the bound carries no rotation marker. When the bound
@@ -207,6 +210,15 @@ global environment still carries it, naming the server-restart remedy.
 - **THEN** each new line carries the timestamp, `sock=`, `TMUX=`, `TMUX_TMPDIR=`, `argv=`, `pid=`, `ppid=` and
   `cwd=`, the action is one of the four defined values, the file holds one marker plus exactly 1000 call lines
   whose last line is the newest call, and a FIFO log target does not block the call
+
+#### Scenario: A call without the gate's pins is still logged where it stands
+
+- **GIVEN** a project whose state directory is writable, and a gated call whose environment carries no
+  `TEAM_TMUX_CALLS_LOG`, run from a directory inside that project
+- **WHEN** the call runs, and then the same call runs from a directory belonging to no project
+- **THEN** exactly one line is appended to that project's `state/tmux-calls.log` with the same fields and the same
+  closed action vocabulary as a pinned call, the pinned variable is still absent from the caller's environment,
+  and the call from no project appends nothing anywhere
 
 #### Scenario: A truncated log says so
 
