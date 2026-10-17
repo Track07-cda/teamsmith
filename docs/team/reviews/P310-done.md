@@ -1,0 +1,4 @@
+- 2026-10-17T07:54:54Z · `team close P310 --status done` · FORCED：PM 显式覆盖（理由：两处修复已并入 main；我在合并后的树上复跑 0i ✓31 ✗0、10 ✓174 ✗0（此前 ✗3 与超时））
+  -   - ① 复验记录 docs/team/reviews/P310.md：不存在
+  -   - ② 分支是否已并入 main：task/P310-gate-regressions（47b731a68）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据

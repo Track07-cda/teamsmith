@@ -488,7 +488,7 @@
 | P307 | Tick the tmux-identity-scope checklist (author side) | dev2 | - | - | done |
 | P308 | Fix the skip-is-not-pass hole in the leak fixture; wire §32 after P297 | dev2 | - | - | done |
 | P309 | Apply the disk temp-root default (one resolver, floor bound, rollback) | dev2 | - | - | wip |
-| P310 | Two gate regressions from the lock change (socket length, nested review queueing) | dev3 | - | - | wip |
+| P310 | Two gate regressions from the lock change (socket length, nested review queueing) | dev3 | - | - | done |
 | P311 | Finish tmux-identity-scope: baseline plus the section-32 wiring | dev-bob | - | - | done |
 
 ## 当前里程碑
