@@ -1,0 +1,4 @@
+- 2026-10-17T07:13:46Z · `team close P306 --status done` · FORCED：PM 显式覆盖（理由：提案已复核通过并入 main（32b6301，场景零丢失、试归档成功））
+  -   - ① 复验记录 docs/team/reviews/P306.md：不存在
+  -   - ② 分支是否已并入 main：task/P306-tmp-root-default（32b63011f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：任务书没有 change: 行 —— 提案审查记录按它命名（PM 补上 change id）
