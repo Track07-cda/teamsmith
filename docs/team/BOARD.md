@@ -490,6 +490,7 @@
 | P309 | Apply the disk temp-root default (one resolver, floor bound, rollback) | dev2 | - | - | wip |
 | P310 | Two gate regressions from the lock change (socket length, nested review queueing) | dev3 | - | - | done |
 | P311 | Finish tmux-identity-scope: baseline plus the section-32 wiring | dev-bob | - | - | done |
+| V57 | Verify the disk temp-root default (three scenes, three red sides, socket decoupling) | dev3 | - | - | wip |
 
 ## 当前里程碑
 
