@@ -7,10 +7,13 @@
 #   为什么要逐键：`--paths` 的结论是若干键的并集，一个键缺前提会被别的键的绿遮住；
 #   逐键跑才能把「这条 needs 够不够」钉在数据上（P112 §5.2：3b 缺 5、6 缺 5、10 缺 4b/5/9、28 缺 26）。
 #
-#   用法：section-needs-audit.sh [--keys <k1,k2,…>] [--root <树>] [--keep]
+#   用法：section-needs-audit.sh [--keys <k1,k2,…>] [--root <树>] [--keep] [--live]
 #     --keys   只审计这几个键（默认：表里的全部键）
 #     --root   在另一棵树上跑（默认本脚本所在的仓库；夹具/复验用）
 #     --keep   保留日志与临时根（打印路径），便于诊断
+#     --live   这遍不设 TEAM_SMOKE_FAST（真进程半段照跑）。默认的 FAST 会把 `fast_skip` 的真 pane
+#              半段整段跳过，于是「选段缺席 → 真 pane 前提不在 → 级联假红」这类 needs 缺口**看不见**
+#              （P297 实测：--select 42 在 FAST 下绿、在真跑下 ✓150 ✗9）。慢；验真进程前提时用它。
 #   退出码：0 = 被判定的键全部绿；1 = 有键红 / 没跑；2 = 用法或环境错误。
 #
 #   纪律：**顺序执行**。夹具会在树内注入→还原；并发跑同一棵树会互相掀桌子
@@ -21,8 +24,9 @@ here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${TEAM_NEEDS_AUDIT_ROOT:-$(cd -P "$here/../../.." && pwd)}"
 KEYS=""
 KEEP=0
+LIVE=0
 
-usage() { sed -n '2,21p' "$0"; }
+usage() { sed -n '2,20p' "$0"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --keys)   shift; [ $# -gt 0 ] || { printf 'section-needs-audit: --keys 需要值\n' >&2; exit 2; }; KEYS="$1"; shift ;;
@@ -30,6 +34,7 @@ while [ $# -gt 0 ]; do
     --root)   shift; [ $# -gt 0 ] || { printf 'section-needs-audit: --root 需要目录\n' >&2; exit 2; }; ROOT="$1"; shift ;;
     --root=*) ROOT="${1#*=}"; shift ;;
     --keep)   KEEP=1; shift ;;
+    --live)   LIVE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'section-needs-audit: 未知参数 %s（用法见 --help）\n' "$1" >&2; exit 2 ;;
   esac
@@ -68,18 +73,24 @@ own_fail() {
 }
 
 N=0; NPASS=0; NBAD=0
-printf '== needs 逐键审计 ==\n'
+printf '== needs 逐键审计（%s） ==\n' "$([ "$LIVE" = 1 ] && printf '真跑' || printf 'FAST')"
 printf '树：%s\n' "$ROOT"
 for k in $(printf '%s' "$KEYS" | tr ',' ' '); do
   [ -n "$k" ] || continue
   N=$((N + 1))
-  d="$TMPROOT/$k"; log="$TMPROOT/$k.log"
+  log="$TMPROOT/$k.log"
+  # 每个键的日志留在 $TMPROOT（按 key 命名）；**子门禁的 TMPDIR 交回调用者**，不再套一层 $TMPROOT/<key>：
+  # 本项目的 ns 较长，套一层后门禁自己的私有 socket（${TMPDIR}/teamsmith-smoke-<ns>.XXXXXX/tmux/
+  # tmux-<uid>/default）会到 120 字节 > AF_UNIX 上限 107 → §0c 前置硬停 exit 2，**每个键都报
+  # 「没有收口行」**（P297 实测：修前 --keys 0d/42 全 bad，而门禁本身是绿的）。子门禁自己会在
+  # ${TMPDIR}/teamsmith-smoke-<ns>.XXXXXX 建根并在收尾收干净，不需要借用审计的根。
+  d="${TMPDIR:-/tmp}"
   mkdir -p "$d"
   ( cd "$ROOT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT_MODEL \
       -u TEAM_SKILL_DIR -u TEAM_DOCS_DIR -u TEAM_AGENT -u SMOKE_TMP_RUN_ID -u SMOKE_TMP_LEDGER \
       -u TEAM_SMOKE_KEEP -u TEAM_TMP_KEEP -u SMOKE_SEL_CHILD -u SMOKE_SEL_SKILL_DIR \
       -u SMOKE_SEL_DECISION -u SMOKE_SEL_COPY -u TEAM_SMOKE_LOCK_WAIT \
-      TMPDIR="$d" TEAM_SMOKE_FAST=1 TEAM_SMOKE_NO_LOCK=1 \
+      TMPDIR="$d" TEAM_SMOKE_FAST="$([ "$LIVE" = 1 ] && printf 0 || printf 1)" TEAM_SMOKE_NO_LOCK=1 \
       bash "$SUITE" --select "$k" ) >"$log" 2>&1
   rc=$?
   line="$(own_line "$log" "$k")"; f="$(own_fail "$line")"

@@ -752,6 +752,26 @@ smoke_prereq_absent() {
 }
 
 PASS=0; FAIL=0
+# ── P297 · 42/44 的「生产路径」半段共用同一个夹具前提：12b 的夹具会话（$SESSION + $REPO 名册）──
+# 那半段把 dev 窗口换成**帧回放假 pi**（python 画的静止帧），让生产守卫在真 pane 上走一遍。全量跑时
+# 会话由 §12b-h 的现场（建在 12b-h0c 的身体里）留下；**选段跑时它不在闭包里** —— 映射表给 42 的
+# needs 只有 12b-h0d（纯帧段，不建 tmux），于是 dev 窗口建不出来，`team_input_box_state` 读成
+# UNKNOWN、`team_delivery_verdict` 读成 NOPANE，9 条断言级联成**假红**（P297 实测：同一棵树
+# `--select 42` = ✓150 ✗9，补上会话后同一段 ✓55 ✗0）。
+# 规则：会话不在就自己建（$REPO 是前导夹具，恒定存在）；建不出来就**具名**红一条再照常跑 ——
+# 后面的红在第一行已经说清是夹具前提不成立，不是对产品判定的否定。
+# 注意：这个函数必须住在**前导段**里（选段副本只整段保留前导 + 选中段；写在两段之间会被前一段吃进
+# 去，--select 42 就看不到它）。
+smoke_live_session_ensure() { # <段标签>
+  tmux has-session -t "$SESSION" 2>/dev/null && return 0
+  tmux new-session -d -s "$SESSION" -n pm -x 120 -y 30 -c "$REPO" 2>/dev/null || true
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    ok "$1：夹具会话原本不在（选段运行没带上 §12b-h）→ 本节自建 $SESSION（真 pane 断言照跑）"
+    return 0
+  fi
+  bad "$1：夹具会话 $SESSION 建不出来 —— 真 pane 断言的前提不成立（不是产品判定；查 tmux 环境）"
+  return 1
+}
 section() {
   [ -z "${SMOKE_TMP_CANARY:-}" ] || smoke_tmp_guard "段落 $1 开始时"
   smoke_lock_guard "段落 $1 开始时"
@@ -19331,6 +19351,7 @@ EOS
   # (ii) 生产路径：复用 12b 的夹具项目/会话（dev 在名册里），把 dev 窗口换成帧回放假 pi
   P67_KEYS_SAY="$P67_DIR/keys-say.log"; rm -f "$P67_KEYS_SAY"
   rm -rf "$REPO/.pi/team/state/outbox"
+  smoke_live_session_ensure "42·P67"      # P297：选段跑不带 §12b-h → 自己建（否则 9 条假红）
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
   P67_LIVE_CMD="$(printf 'V67_FRAME=%q V67_CURSOR=26 V67_KEYLOG=%q python3 %q' \
     "$P67_ONE" "$P67_KEYS_SAY" "$P67_DIR/frame-replay-pi.py")"
@@ -19558,6 +19579,7 @@ EOS
   # (ii) 生产路径：复用 12b 的夹具项目/会话（dev 在名册里），把 dev 窗口换成帧回放假 pi
   P80_KEYS_SAY="$P80_DIR/keys-say.log"; rm -f "$P80_KEYS_SAY"
   rm -rf "$REPO/.pi/team/state/outbox"
+  smoke_live_session_ensure "44·P80"      # P297：与 §42 同一条前提（选段跑自己建会话）
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
   P80_LIVE_CMD="$(printf 'V80_FRAME=%q V80_CURSOR=%s V80_KEYLOG=%q python3 %q' \
     "$P80_ATTACK_FRAME" "$P80_ATTACK_CY" "$P80_KEYS_SAY" "$P80_DIR/frame-replay-pi.py")"
