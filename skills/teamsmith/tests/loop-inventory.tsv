@@ -88,5 +88,6 @@ lib/tmp-root.sh	478	cap="$_i" -lt 50	while [ "$_i" -lt 50 ]; do
 lib/tmp-root.sh	488	cap="$_i" -lt 25	while [ "$_i" -lt 25 ] && kill -0 "$fg_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
 flip-p158.sh	109	cap="$i" -lt 500	while [ "$i" -lt 500 ] && [ -z "$fp" ]; do
 perf.sh	200	bound=持有者公布的排队上限 cap（缺则 TEAM_PERF_LOCK_WAIT），到点 exit 3（没结论）	  while :; do
-tmux-identity-leak.sh	288	cap="$_i" -lt 80	    _i=0; while [ "$_i" -lt 80 ] && [ ! -f "$TMP/win-env.log.done" ]; do sleep 0.1; _i=$((_i + 1)); done
-tmux-identity-leak.sh	327	cap="$_i" -lt 120	    _i=0; while [ "$_i" -lt 120 ] && [ ! -f "$TMP/win-kill.done" ]; do sleep 0.1; _i=$((_i + 1)); done
+tmux-identity-leak.sh	368	cap="$i" -lt 300	  while [ "$i" -lt 300 ] && [ ! -f "$TMP/$name.done" ]; do sleep 0.1; i=$((i + 1)); done
+tmux-identity-leak.sh	436	cap="$_i" -lt 80	    _i=0; while [ "$_i" -lt 80 ] && [ ! -f "$TMP/win-env.log.done" ]; do sleep 0.1; _i=$((_i + 1)); done
+tmux-identity-leak.sh	475	cap="$_i" -lt 120	    _i=0; while [ "$_i" -lt 120 ] && [ ! -f "$TMP/win-kill.done" ]; do sleep 0.1; _i=$((_i + 1)); done

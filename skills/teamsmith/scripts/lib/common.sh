@@ -611,6 +611,96 @@ team_identity_refuse() { # <命令名>
   return 1
 }
 
+# P304 · 读侧**来源归因**（规格 pm-lifecycle#Identity inherited from the shared server's global
+# environment resolves by the working directory）：运行中的 tmux server 在它自己的**全局环境**里持有的
+# 该变量的值（`VAR=value` → 打印值；`unknown variable` / 没有 server → 非 0）。
+# 只读：不建 server（show-environment 不会启动 server）、不写全局环境；也**不**碰调用者的环境。
+team_identity_server_global_value() { # <VAR>
+  local var="${1:-}" line
+  [ -n "$var" ] || return 1
+  line="$(team_tmux show-environment -g "$var" 2>/dev/null || true)"
+  case "$line" in
+    "$var="*) printf '%s\n' "${line#*=}"; return 0 ;;
+    -"$var") return 1 ;;      # `-VAR` 是「标记移除」，不是值
+    *) return 1 ;;
+  esac
+}
+
+# 可归因 ⇔ 冲突里**每一个**变量的继承值都恰好等于运行中 server 全局环境里的值。三条边界
+# （任一条不成立 = 不可归因，调用方照旧拒绝）：
+#   · 调用发生在 tmux 里（TMUX 非空）—— 不在 tmux 里就没有「运行中的 server」可归因；
+#   · **每一个**冲突变量都要能归因（半可归因 = 不可归因）；
+#   · 不做「值相同就归因」的放宽（那会把夹具/门禁里**显式继承**的外来环境也放行 —— 那正是
+#     §32③/§32⑧a 要求继续拒绝的形状，等于把守卫关掉）。
+team_identity_server_residue() { # → 0 = 冲突可归因于运行中 server 的全局环境
+  local pairs var inh
+  [ -n "${TMUX:-}" ] || return 1
+  pairs="$(team_identity_conflict_pairs)"
+  [ -n "$pairs" ] || return 1
+  while IFS=$'\t' read -r var inh _; do
+    [ -n "$var" ] || continue
+    [ "$inh" = "$(team_identity_server_global_value "$var")" ] || return 1
+  done <<< "$pairs"
+  return 0
+}
+
+team_identity_residue_route() { # <VAR…> → 能直接粘的 tmux 命令链（清这些变量的全局环境残留）
+  local v out=""
+  for v in "$@"; do
+    [ -n "$v" ] || continue
+    out="${out}${out:+ \\; }set-environment -gu $v"
+  done
+  [ -n "$out" ] && printf 'tmux %s\n' "$out"
+  return 0
+}
+
+# 可归因路径的**一行说明**（stderr；机读 stdout 不受影响）：点名来源（运行中的 tmux server 的
+# 全局环境）与清除它的那条命令。**只读** —— 不清、不重写共享 server 的任何东西（跨项目状态属用户
+# 的管辖），也不改调用者的环境：命令照 cwd 解析后继续。
+team_identity_residue_note() {
+  local pairs var inh final vars="" route
+  pairs="$(team_identity_conflict_pairs)"
+  while IFS=$'\t' read -r var inh final; do
+    [ -n "$var" ] || continue
+    vars="${vars:+$vars }$var"
+  done <<< "$pairs"
+  route="$(team_identity_residue_route $vars)"
+  # 规格要的是**一行**把来源与清除路径都说清楚；tmux 的 set-environment 一次只收一个名字
+  # （实测 3.7b：多名字报 too many arguments），所以命令链用 `\;` 链接，人能直接粘。
+  team_warn "TEAM_IDENTITY_RESIDUE：继承的身份来自运行中的 tmux server 的全局环境（共享残留，不是调用者的意图）—— 按目录 '$TEAM_PROJECT'（$TEAM_MAIN_ROOT）执行；清掉它（改共享 server，时机由你定）：$route"
+  return 0
+}
+
+# doctor 的只读探测（P304 裁定点 E）：运行中 server 的全局环境里**属于本项目**的身份变量，
+# 每行 `VAR=value`；「属于本项目」= 值指回本项目（TEAM_ROOT/TEAM_MAIN_ROOT 规范化后是本项目的
+# 工作树/主工作树；TEAM_PROJECT/TEAM_SESSION 字面相等）。没有 server / 没有本项目的值 → 空。
+# 只读：不写全局环境、不建 server（show-environment 不会启动 server）。
+team_identity_value_is_ours() { # <VAR> <value> → 0 = 这个值指回本项目
+  local var="${1:-}" val="${2:-}" _wt _main
+  [ -n "$val" ] || return 1
+  case "$var" in
+    TEAM_PROJECT)   [ "$val" = "${TEAM_PROJECT:-}" ] ;;
+    TEAM_SESSION)   [ "$val" = "${TEAM_SESSION:-}" ] ;;
+    TEAM_MAIN_ROOT) [ "$(team_identity_norm_dir "$val")" = "$(team_identity_norm_dir "${TEAM_MAIN_ROOT:-}")" ] ;;
+    TEAM_ROOT)
+      [ "$(team_identity_norm_dir "$val")" = "$(team_identity_norm_dir "${TEAM_ROOT:-}")" ] && return 0
+      IFS=$'\t' read -r _wt _main <<< "$(team_dir_roots "$val")"
+      [ -n "$_main" ] && [ "$(team_identity_norm_dir "$_main")" = "$(team_identity_norm_dir "${TEAM_MAIN_ROOT:-}")" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+team_identity_server_residue_vars() { # → 每行 VAR=value（没有 → 无输出）
+  local var val out=""
+  for var in TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION; do
+    val="$(team_identity_server_global_value "$var")" || continue
+    team_identity_value_is_ours "$var" "$val" || continue
+    out="${out}${out:+$'\n'}$var=$val"
+  done
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 # 纯观察/建项目形式：冲突时按目录放行（只告警）——「看可以，动不行」。
 # 判断只看「这条命令会不会改本项目共享状态 / 起进程」，与身份无关；拿不准的一律算「会动」。
 team_identity_observe_only() { # <cmd> [args...] → 0=纯观察/建项目
@@ -640,6 +730,13 @@ team_identity_observe_only() { # <cmd> [args...] → 0=纯观察/建项目
 team_identity_gate() { # <cmd> [args...]
   local pairs; pairs="$(team_identity_conflict_pairs)"
   [ -n "$pairs" ] || return 0
+  # P304：先问**来源** —— 冲突的每一个变量都恰好是运行中 server 全局环境里的值时，这是共享 server
+  # 的残留，不是调用者的意图：按 cwd 解析（身份早已按目录解析）、stderr 一行说明、**不拒绝**；
+  # 不清、不重写共享 server 的任何东西。其余一切分歧照旧走下面的拒绝/授权路径。
+  if team_identity_server_residue; then
+    team_identity_residue_note
+    return 0
+  fi
   if [ "${TEAM_ALLOW_FOREIGN_IDENTITY:-0}" = "1" ]; then
     team_identity_report
     if [ -n "${TEAM_STATE_DIR:-}" ]; then

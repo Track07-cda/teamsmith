@@ -2,12 +2,15 @@
 # P274 · tmux 身份作用域（change: tmux-identity-scope · apply-1）—— 写侧 / 会话作用域 / 不许削弱 / 审计
 #
 #   bash skills/teamsmith/tests/tmux-identity-leak.sh --all
-#   bash skills/teamsmith/tests/tmux-identity-leak.sh --select write-side,session-scope,kill-identity,audit
+#   bash skills/teamsmith/tests/tmux-identity-leak.sh --select write-side,residue,guard-kept,doctor
 #   bash skills/teamsmith/tests/tmux-identity-leak.sh --select write-side   --break=strip   # 红侧 1
 #   bash skills/teamsmith/tests/tmux-identity-leak.sh --select audit        --break=log     # 红侧 2
 #   bash skills/teamsmith/tests/tmux-identity-leak.sh --select kill-identity --break=kill   # 红侧 3
 #   bash skills/teamsmith/tests/tmux-identity-leak.sh --select session-scope --break=e      # 红侧 4
 #   bash skills/teamsmith/tests/tmux-identity-leak.sh --all --break=path     # 红侧 5（现场在门禁镜像里）
+#   bash skills/teamsmith/tests/tmux-identity-leak.sh --select residue     --break=attrib-any  # 红侧 6（读侧）
+#   bash skills/teamsmith/tests/tmux-identity-leak.sh --select residue     --break=refuse      # 红侧 7（读侧）
+#   bash skills/teamsmith/tests/tmux-identity-leak.sh --select doctor      --break=doctor-write # 红侧 8（只读）
 #
 # 证明什么（每条对着 design §1/§3 与任务书的红侧清单）：
 #   ① 写侧：私有 socket 上没有 server 时，带**身份 + 闸门钉桩**的 shell 跑 `team up` → server 的**全局
@@ -23,6 +26,18 @@
 #      （kill 类保留身份）。§31c/§6i 是这条的权威断言，本段是「身份来自会话作用域」形态的独立实例。
 #   ④ C/A1（审计）：pin 缺席时，从项目目录过闸门的一次调用 → 该项目 `state/tmux-calls.log` **恰好 +1 行**；
 #      从非项目目录（向上没有 .pi/team）→ 哪里都不写（可见的例外，不是静默丢）。
+#   ⑤ 读侧自愈（P304 · `pm-lifecycle#Identity inherited from the shared server's global environment
+#      resolves by the working directory`）：把**运行中 server 的全局环境**污染成 A 的身份（沿用设计里的
+#      `set-environment -g` 形状），再在 **B 的目录**里带着**恰好那些继承值**（新 session/pane 从全局环境
+#      继承，就是这个形状）跑 `team up` → rc=0、stderr 一行点名「运行中的 tmux server 的全局环境」+ 清除
+#      命令、建出的是 **B 的对象**（会话作用域里是 B 的四件套）、A 的会话一个窗口都没变、server 全局环境
+#      **逐字节未变**（不清共享状态）、调用的继承环境也原样（不改调用者）。
+#   ⑥ 守卫保留：同一判据在**不可归因**的现场必须照旧拒绝 —— 全局环境干净时显式继承的外来环境
+#      （§32③/§32⑧a 的形状）rc=1 + `身份冲突被拒` + 什么都不建、什么都不清；**半可归因**（三个变量在全局
+#      环境里、第四个不在）同样拒绝；真嵌套（继承身份就是 cwd 项目自己的）不打印说明行、不写全局环境。
+#   ⑦ doctor 只读残留行（P304 裁定点 E）：运行中 server 全局环境里本项目身份的残留 → 输出点名变量 +
+#      清除命令，随后全局环境逐字节未变、项目 `state/` 里一个文件都没多/没变；全局环境干净、或残留是
+#      别的项目的 → 不打这一行（不冒充、不误报）。
 #
 # 红侧（`--break=`）一律用**产品源码的副本**改写，绝不改本树；每条只让对应的规则失效：
 #   strip  摘身份的规则失效（strip 变空操作）→ ① 红（全局环境与 B 的 pane 都拿到身份）
@@ -31,6 +46,9 @@
 #   e      去掉会话作用域的 -e               → ② 红（人手窗口里 0 个身份）
 #   path   把「真 tmux 的位置按调用环境解析」退回写死 /usr/bin:/bin → ⓪ 红（门禁镜像里 tmux 在
 #          /usr/local/bin；宿主上 tmux 就在 /usr/bin，所以宿主上它照样绿 —— 证据必须在门禁环境里取）
+#   attrib-any   归因不看**来源**（只要存在冲突就放行）→ ⑥ 红（显式外来环境被放行、半可归因也被放行）
+#   refuse       可归因路径退回「直接拒绝」→ ⑤ 红（自愈不成立，rc=1）
+#   doctor-write doctor 那行不再是只读（写共享 server 全局环境 + 写项目 state）→ ⑦ 红（只读断言）
 #
 # 纪律：先做身份隔离（清掉继承的 TEAM_*/TMUX*），一切产物落 tmp_root_create 的私有根；**私有 socket**，
 # 真 server 只用 stub 替身接触（TEAM_TMUX_REAL）；反向守卫只看「有没有带本夹具 cwd 的行写进真项目的
@@ -49,7 +67,7 @@ REPO_ROOT="$(cd -P "$SKILL_DIR/../.." && pwd)"
 SELECT=""; BREAK=""; KEEP=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --all)      SELECT="write-side,session-scope,kill-identity,audit"; shift ;;
+    --all)      SELECT="write-side,session-scope,kill-identity,audit,residue,guard-kept,doctor"; shift ;;
     --select)   [ $# -ge 2 ] || { printf 'tmux-identity-leak: --select 需要键\n' >&2; exit 2; }; SELECT="$2"; shift 2 ;;
     --select=*) SELECT="${1#*=}"; shift ;;
     --break=*)  BREAK="${1#*=}"; shift ;;
@@ -60,12 +78,12 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SELECT" ] || { printf 'tmux-identity-leak: 需要 --all 或 --select <keys>\n' >&2; exit 2; }
 case "$BREAK" in
-  ''|strip|log|kill|e|path) ;;
-  *) printf 'tmux-identity-leak: --break 只认 strip|log|kill|e|path（收到 %s）\n' "$BREAK" >&2; exit 2 ;;
+  ''|strip|log|kill|e|path|attrib-any|refuse|doctor-write) ;;
+  *) printf 'tmux-identity-leak: --break 只认 strip|log|kill|e|path|attrib-any|refuse|doctor-write（收到 %s）\n' "$BREAK" >&2; exit 2 ;;
 esac
 case ",$SELECT," in
-  *,write-side,*|*,session-scope,*|*,kill-identity,*|*,audit,*) ;;
-  *) printf 'tmux-identity-leak: --select 只认 write-side|session-scope|kill-identity|audit（收到 %s）\n' "$SELECT" >&2; exit 2 ;;
+  *,write-side,*|*,session-scope,*|*,kill-identity,*|*,audit,*|*,residue,*|*,guard-kept,*|*,doctor,*) ;;
+  *) printf 'tmux-identity-leak: --select 只认 write-side|session-scope|kill-identity|audit|residue|guard-kept|doctor（收到 %s）\n' "$SELECT" >&2; exit 2 ;;
 esac
 [ "$KEEP" = "1" ] && export TEAM_TMP_KEEP=1
 
@@ -104,10 +122,36 @@ hdr() { printf '\n== %s ==\n' "$1"; }
 assert_eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]）"; }
 assert_has() { grep -qF -- "$3" "$2" 2>/dev/null && ok "$1" || bad "$1（$2 里找不到 [$3]）"; }
 assert_not() { grep -qF -- "$3" "$2" 2>/dev/null && bad "$1（不该出现 [$3]）" || ok "$1"; }
+# 全局环境的「逐字节未变」断言：失败时只印差异行数与 TEAM_ 条数（整个 environ 有几十行，
+# 直接 assert_eq 会把它整份抖进日志 —— 红侧的证据应该指名到点，不是把屏幕淹掉）。
+assert_env_same() { # <标签> <跑之前的 show-environment -g 输出>
+  local now; now="$(lt show-environment -g 2>/dev/null)"
+  if [ "$now" = "$2" ]; then ok "$1"; return 0; fi
+  local nd; nd="$(diff <(printf '%s\n' "$2") <(printf '%s\n' "$now") 2>/dev/null | grep -c '^[<>]' || true)"
+  bad "$1（全局环境变了：$nd 行差异，现在 TEAM_ 行 $(printf '%s\n' "$now" | grep -c '^TEAM_' || true) 条）"
+}
 selects() { case ",$SELECT," in *",$1,"*) return 0 ;; esac; return 1; }
 
 # ── 反向守卫（只看夹具 cwd）：真项目 state 里不许出现带本夹具根的日志行 ─────────────────────────
 REAL_LOG="$REPO_ROOT/.pi/team/state/tmux-calls.log"
+
+# ── 隔离断言（任务书 3.1）：真实仓库的账本面（inbox / state）跑前跑后逐文件 sha256 对比 ──────
+# 位置在这一行之前：任何夹具动作都不许在这些面上留痕；泄漏（新建/修改/删除）必红。
+# （夹具只在自己的检出里跑 —— 活团队的主检出里 PM/pulse 自己就在写这些文件，那是另一条车道；
+#   本 worktree 连 .pi/team/ 都没有时，这条退化成「仍然不存在」，报告里如实写明。）
+REAL_INBOX="$REPO_ROOT/docs/team/inbox"; REAL_STATE="$REPO_ROOT/.pi/team/state"
+ledger_manifest() { # <目录…> → 每行 "<相对路径>\t<sha256>"；目录不存在 → 无输出
+  local d f
+  for d in "$@"; do
+    [ -d "$d" ] || continue
+    while IFS= read -r -d '' f; do
+      printf '%s\t%s\n' "${f#"$REPO_ROOT"/}" "$(sha256sum "$f" 2>/dev/null | awk '{print $1}')"
+    done < <(find "$d" -type f -print0 2>/dev/null | LC_ALL=C sort -z)
+  done
+}
+LEDGER_BEFORE="$(ledger_manifest "$REAL_INBOX" "$REAL_STATE")"
+LEDGER_N=$(printf '%s' "$LEDGER_BEFORE" | grep -c . || true)
+ROOTS_BEFORE="$(ls -d "$(tmp_root_base)"/teamsmith-tmux-identity-leak-* 2>/dev/null | wc -l | tr -d ' ')"
 
 # ── 产品源码副本（只有 --break 时才存在；红侧绝不改本树）─────────────────────────────────────
 PROD="$SKILL_DIR"
@@ -128,6 +172,28 @@ team_tmux_ensure_session() {
 BREAKEOF
       ;;
     log)   sed -i 's|^  TEAM_TMUX_CALLS_LOG="\$(_shim_resolve_log.*|  :|' "$PROD/scripts/shim/tmux" ;;
+    # P304 读侧三条红侧：每条只让一条规则失效（产品源码副本上追加覆盖定义，本树不动）。
+    attrib-any) printf '\nteam_identity_server_residue() { local p; p="$(team_identity_conflict_pairs)"; [ -n "$p" ]; }\n' >> "$PROD/scripts/lib/common.sh" ;;
+    refuse)     printf '\nteam_identity_server_residue() { return 1; }\n' >> "$PROD/scripts/lib/common.sh" ;;
+    doctor-write) cat >> "$PROD/scripts/lib/common.sh" <<'BREAKEOF'
+
+team_identity_server_residue_vars() {
+  # 红侧 8（翻转）：报告**照旧打印**（读数与正式实现同源），但这一行不再是只读 —— 写盘 + 清共享 server
+  # 全局环境。⑦b（全局环境逐字节未变）与 ⑦c（state 里不多文件）必须因此变红。
+  local var val out=""
+  for var in TEAM_ROOT TEAM_MAIN_ROOT TEAM_PROJECT TEAM_SESSION; do
+    val="$(team_identity_server_global_value "$var")" || continue
+    team_identity_value_is_ours "$var" "$val" || continue
+    out="${out}${out:+$'\n'}$var=$val"
+  done
+  [ -n "$out" ] && printf '%s\n' "$out"
+  mkdir -p "${TEAM_STATE_DIR:-/dev/null}" 2>/dev/null || true
+  printf '%s\n' "$(date -Is) residue" >> "${TEAM_STATE_DIR:-/dev/null}/tmux-identity-residue.break" 2>/dev/null || true
+  team_tmux set-environment -gu TEAM_ROOT \; set-environment -gu TEAM_MAIN_ROOT \; set-environment -gu TEAM_PROJECT \; set-environment -gu TEAM_SESSION 2>/dev/null || true
+  return 0
+}
+BREAKEOF
+      ;;
   esac
 fi
 # --break=path（红侧 5）：把返修点退回写死 /usr/bin:/bin —— 宿主上 tmux 就在 /usr/bin（照样绿），门禁
@@ -144,6 +210,8 @@ for d in "$A" "$B"; do
       && printf 'fixture\n' > README.md && git add -A && git commit -qm init ) || { printf 'tmux-identity-leak: 建夹具项目失败\n' >&2; exit 3; }
 done
 SESS="leak-$BASHPID"
+SESS_B="leakB-$BASHPID"
+SESS_C="leakC-$BASHPID"
 STUB="$TMP/stub-tmux"
 cat > "$STUB" <<'STUBEOF'
 #!/usr/bin/env bash
@@ -177,8 +245,22 @@ team() { ( cd "$1" && shift && env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$ISL" PATH=
     TEAM_TMUX_CALLS_LOG="$A/.pi/team/state/tmux-calls.log" \
     TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD="$TMP/stub-pm.sh" TEAM_PM_BIN="$TMP/stub-pm.sh" \
     timeout 90 bash "$PROD/scripts/team" "$@" ); }
-HAVE_TMUX=0
+HAVE_TMUX=0; TMUX_WHY="没有 tmux"
 if timeout 5 "$REAL_TMUX" -V >/dev/null 2>&1; then HAVE_TMUX=1; fi
+# P304 · 环境前提（与产品的 tmux-iso-guard 同一条判据）：私有 socket 岛的路要装得进 AF_UNIX 的
+# sun_path（Linux：108 字节含结尾 NUL → 上限 107）。TMPDIR 太深时 tmux 绑不上 socket，各腿会变成一堆
+# 看不懂的红 —— 那是环境欠的账，不是缺陷（D192 的口径）：前提不成立就**可见地跳过**并报出长度。
+if [ "$HAVE_TMUX" = "1" ]; then
+  SOCK_EG="$ISL/tmux-$(id -u)/default"
+  SOCK_LEN="$(printf '%s' "$SOCK_EG" | wc -c | tr -d ' ')"
+  if [ "$SOCK_LEN" -gt 107 ]; then
+    HAVE_TMUX=0
+    TMUX_WHY="私有 socket 路 $SOCK_LEN 字节 > AF_UNIX 上限 107（TMPDIR 太深：$TMP）—— 把 TMPDIR 换浅一点再跑"
+    printf '  \033[2m·\033[0m %s\n' "$TMUX_WHY"
+  else
+    printf '  \033[2m·\033[0m 隔离前提：私有 socket 路 $SOCK_LEN 字节 ≤ 107（能绑）\n'
+  fi
+fi
 SKIP_N=0
 cond_skip() { SKIP_N=$((SKIP_N + 1)); printf '  \033[2m·\033[0m %s（%s）\n' "$1" "$2"; }
 
@@ -221,11 +303,77 @@ PMEOF
   return 0
 }
 
+# B 项目（读侧的「受害者」）：只 init（不起窗口），会话名与 A 不同 —— 残留现场要证明「建出来的是 B 的对象」。
+STAGE_B_READY=0
+ensure_stage_b() { # → 1 = 没有 tmux；2 = init 失败
+  [ "$HAVE_TMUX" = "1" ] || return 1
+  [ "$STAGE_B_READY" = "1" ] && return 0
+  ( cd "$B" && env PATH="$SHIM_PATH" bash "$PROD/scripts/team" init --session "$SESS_B" --agents "dev verify" \
+      --vcs local --gates "true" --docs docs/team \
+      --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' \
+      --pm-model 'deepseek/deepseek-flash' >"$TMP/initB.log" 2>&1 ) || return 2
+  STAGE_B_READY=1
+  return 0
+}
+
+# 污染模拟（设计 §2「读侧」的红侧形状）：把**运行中 server 的全局环境**设成给定的身份。改的是夹具自己的
+# 私有 server（admin 操作，不经过产品）——「本项目的身份当初是怎么进全局环境的」不由本夹具负责。
+# 写（set）与清（unset）都是夹具自己的场地操作，不是产品行为。
+res_glob_set() { local kv; for kv in "$@"; do lt set-environment -g "${kv%%=*}" "${kv#*=}" >/dev/null 2>&1 || true; done; }
+# tmux 的 set-environment 一次只收一个名字（实测 3.7b：多名字 = too many arguments），所以用 `\;` 命令链
+# ——产品给用户渲染的清除命令也是这个形状（人能直接粘）。
+res_glob_clear() { lt set-environment -gu TEAM_ROOT \; set-environment -gu TEAM_MAIN_ROOT \; set-environment -gu TEAM_PROJECT \; set-environment -gu TEAM_SESSION >/dev/null 2>&1 || true; }
+
+# 两份清单（"<路径> <大小>"）之间变化的路径（只取第一列，去重）。
+changed_paths() { # <before> <after>
+  diff <(printf '%s\n' "$1") <(printf '%s\n' "$2") 2>/dev/null \
+    | sed -n 's/^[<>][[:space:]]*//p' | awk '{print $1}' | sed '/^$/d' | sort -u
+}
+
+# 读侧的 payload：写一段脚本，让它在私有 server 的 pane 里跑 —— **新 session/window 的环境恰好来自
+# server 的全局环境**（用户报的就是这个形状：别的项目新开的窗口继承了泄漏值）。脚本把「跑之前的继承环境、
+# rc、stdout/stderr、跑之后的环境」分开落盘，pane 里的输出与调用者环境互不干扰。
+pane_payload() { # <name> <cwd> <跑 team 时的 PATH> <额外的 export 语句（可空）> <team 子命令…>
+  local name="$1" dir="$2" tpath="$3" prefix="$4"; shift 4
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cd %q || exit 1\n' "$dir"
+    [ -n "$prefix" ] && printf '%s\n' "$prefix"
+    printf 'export TEAM_PI_BIN=/definitely-not-pi TEAM_PM_CMD=%q TEAM_PM_BIN=%q\n' "$TMP/stub-pm.sh" "$TMP/stub-pm.sh"
+    printf 'env | grep "^TEAM_" | sort > %q\n' "$TMP/$name.inherit"
+    printf 'PATH=%q TEAM_TMUX_REAL=%q bash %q' "$tpath" "$REAL_TMUX" "$PROD/scripts/team"
+    printf ' %q' "$@"
+    printf ' >%q 2>%q\n' "$TMP/$name.out" "$TMP/$name.err"
+    printf 'printf "rc=%%s\\n" "$?" > %q\n' "$TMP/$name.rc"
+    printf 'env | grep "^TEAM_" | sort > %q\n' "$TMP/$name.env"
+    printf 'printf "done\\n" > %q\n' "$TMP/$name.done"
+  } > "$TMP/$name.sh"
+  chmod +x "$TMP/$name.sh"
+}
+
+# 在私有 server 上的一只 pane 里跑 payload：session 不存在就先开一个新 session（先立一个长驻窗口把
+# session 撑住 —— payload 结束不把 session 带走，后面的腿才能在同一个 server 上接着跑）。新 session/window
+# 的环境都来自 server 的**全局环境**，这就是要证的那个形状。等的是**完成标记**，不等输出文件
+# （重定向目标由 shell 立即创建，等它就等于没等—— P274 实测）。
+ensure_pane_session() { # <session>：立一个长驻窗口把 payload session 撑住（payload 结束不把 session 带走）
+  lt has-session -t "$1" 2>/dev/null && return 0
+  lt new-session -d -s "$1" -n hold 'sleep 600' >/dev/null 2>&1
+}
+
+pane_run() { # <目标 session> <name> → 0 = 脚本跑完
+  local sess="$1" name="$2" i=0
+  rm -f "$TMP/$name.done"
+  ensure_pane_session "$sess" || return 1
+  lt new-window -t "$sess" -n "$name" -- bash "$TMP/$name.sh" >/dev/null 2>&1 || return 1
+  while [ "$i" -lt 300 ] && [ ! -f "$TMP/$name.done" ]; do sleep 0.1; i=$((i + 1)); done
+  [ -f "$TMP/$name.done" ]
+}
+
 # ── ① 写侧 ────────────────────────────────────────────────────────────────────────────────────
 if selects write-side; then
   hdr "① 写侧：建对象调用不许把 TEAM_* 写进 server 全局环境"
   if [ "$HAVE_TMUX" != "1" ]; then
-    cond_skip "① 写侧" "没有 tmux"
+    cond_skip "① 写侧" "$TMUX_WHY"
   else
     ensure_stage; stage_rc=$?
     assert_eq "①a 夹具项目 init 成功" "$stage_rc" "0"
@@ -262,7 +410,7 @@ fi
 if selects session-scope; then
   hdr "② 会话作用域：new-session -e 让本项目会话里的人手窗口带身份，而全局环境仍然干净"
   if [ "$HAVE_TMUX" != "1" ]; then
-    cond_skip "② 会话作用域" "没有 tmux"
+    cond_skip "② 会话作用域" "$TMUX_WHY"
   else
     ensure_stage || bad "② 舞台没搭起来（init 失败）"
     sess_n="$(lt show-environment -t "$SESS" 2>/dev/null | grep -c '^TEAM_')"
@@ -303,7 +451,7 @@ fi
 if selects kill-identity; then
   hdr "③ 不许削弱：窗口里走产品破坏性路径 → act=allowed-owned，且被 exec 的真身看得见身份"
   if [ "$HAVE_TMUX" != "1" ]; then
-    cond_skip "③ 不许削弱" "没有 tmux"
+    cond_skip "③ 不许削弱" "$TMUX_WHY"
   else
     ensure_stage || bad "③ 舞台没搭起来（init 失败）"
     printf 'window=ghost\n' > "$A/.pi/team/state/ghost.env"
@@ -383,6 +531,174 @@ if selects audit; then
   assert_has "④c 真身照旧被调用（不写日志不等于不执行）" "$TMP/stub-audit2.log" "argv=list-windows -t audit-probe"
 fi
 
+# ── ⑤ 读侧自愈（P304）────────────────────────────────────────────────────────────────────────────────
+if selects residue; then
+  hdr "⑤ 读侧自愈：运行中 server 全局环境里的身份残留 → 按 cwd 解析 + stderr 一行 + 不清共享状态"
+  if [ "$HAVE_TMUX" != "1" ]; then
+    cond_skip "⑤ 读侧自愈" "$TMUX_WHY"
+  else
+    ensure_stage || bad "⑤ 舞台 A 没搭起来（init 失败）"
+    _b_rc=0; ensure_stage_b || _b_rc=$?
+    assert_eq "⑤a 夹具项目 B init 成功" "$_b_rc" "0"
+    if [ "$_b_rc" = "0" ]; then
+      # 残留现场：运行中 server 的全局环境 = A 的身份（A 的会话名也在内）
+      res_glob_set "TEAM_ROOT=$A" "TEAM_MAIN_ROOT=$A" "TEAM_PROJECT=leakA" "TEAM_SESSION=$SESS"
+      g_before="$(lt show-environment -g 2>/dev/null)"
+      a_win_before="$(lt list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null | sort)"
+      b_sess_before="$(lt has-session -t "$SESS_B" 2>/dev/null && echo yes || echo no)"
+      pane_payload resup "$B" "$SHIM_PATH" "" up
+      if pane_run "$SESS_C" resup; then
+        assert_has "⑤b pane 继承的就是全局环境里那几个值（残留形状成立）" "$TMP/resup.inherit" "TEAM_ROOT=$A"
+        assert_eq "⑤c 残留形状下 team up 退出码 0（自愈：不再拒绝）" "$(sed -n 's/^rc=//p' "$TMP/resup.rc")" "0"
+        if [ "$b_sess_before" = "no" ]; then
+          assert_eq "⑤d 建出来的是 B 的对象（B 的会话出现在同一 server 上）" \
+            "$(lt has-session -t "$SESS_B" 2>/dev/null && echo yes || echo no)" "yes"
+        fi
+        assert_eq "⑤d B 的会话作用域里恰好是四个身份变量" \
+          "$(lt show-environment -t "$SESS_B" 2>/dev/null | grep -c '^TEAM_')" "4"
+        assert_has "⑤d 会话作用域里的身份就是 B 的" <(lt show-environment -t "$SESS_B" 2>/dev/null) "TEAM_ROOT=$B"
+        assert_has "⑤e stderr 一行点名来源：运行中的 tmux server 的全局环境" "$TMP/resup.err" "运行中的 tmux server 的全局环境"
+        assert_has "⑤e 这一行给出清除命令（不清，只给路）" "$TMP/resup.err" "set-environment -gu TEAM_ROOT"
+        assert_not "⑤e 说明行不进 stdout（机读出口不被弄坏）" "$TMP/resup.out" "运行中的 tmux server 的全局环境"
+        assert_eq "⑤f A 的会话一个窗口都没变" \
+          "$(lt list-windows -t "$SESS" -F '#{window_name}' 2>/dev/null | sort)" "$a_win_before"
+        assert_env_same "⑤g server 全局环境逐字节未变（不清共享状态、也不写它）" "$g_before"
+        assert_has "⑤h 调用者的继承环境也原样（没被清）" "$TMP/resup.env" "TEAM_ROOT=$A"
+      else
+        bad "⑤ 残留现场的 payload 没跑完（窗口没起来或被 kill）"
+      fi
+      res_glob_clear
+    fi
+  fi
+fi
+
+# ── ⑥ 守卫保留（P304 红侧 3）：不可归因的不许被放行 ─────────────────────────────────────────────
+if selects guard-kept; then
+  hdr "⑥ 守卫保留：显式外来环境 / 半可归因照旧拒绝；真嵌套不误清"
+  if [ "$HAVE_TMUX" != "1" ]; then
+    cond_skip "⑥ 守卫保留" "$TMUX_WHY"
+  else
+    ensure_stage || bad "⑥ 舞台 A 没搭起来（init 失败）"
+    _b_rc=0; ensure_stage_b || _b_rc=$?
+    assert_eq "⑥a 夹具项目 B init 成功" "$_b_rc" "0"
+    if [ "$_b_rc" = "0" ]; then
+      res_glob_clear
+      ensure_pane_session "$SESS_C" || true
+      g_clean="$(lt show-environment -g 2>/dev/null)"
+      sess_before="$(lt list-sessions -F '#{session_name}' 2>/dev/null | sort)"
+      # ⑥a 显式继承的外来环境，而全局环境里没有这些值 —— §32③/§32⑧a 的形状（TMUX 非空也不许归因）
+      pane_payload foreign "$B" "$SHIM_PATH" \
+        "$(printf 'export TEAM_ROOT=%q TEAM_MAIN_ROOT=%q TEAM_PROJECT=leakA TEAM_SESSION=%q' "$A" "$A" "$SESS")" up
+      if pane_run "$SESS_C" foreign; then
+        assert_eq "⑥a 显式外来环境仍被拒（rc=1）" "$(sed -n 's/^rc=//p' "$TMP/foreign.rc")" "1"
+        assert_has "⑥a 拒绝措辞与今天同一句" "$TMP/foreign.err" "身份冲突被拒"
+        assert_not "⑥a 不可归因就不许自愈（没有残留说明行）" "$TMP/foreign.err" "运行中的 tmux server 的全局环境"
+        assert_eq "⑥a 什么都没建（server 会话表未变）" "$(lt list-sessions -F '#{session_name}' 2>/dev/null | sort)" "$sess_before"
+        assert_env_same "⑥a 什么都没清（全局环境逐字节未变）" "$g_clean"
+        assert_has "⑥a 调用者的继承环境也原样" "$TMP/foreign.env" "TEAM_ROOT=$A"
+      else
+        bad "⑥a payload 没跑完"
+      fi
+      # ⑥b 半可归因：三个变量在全局环境里、第四个不在 → 仍然拒绝（「每一个都归因才放行」）
+      res_glob_set "TEAM_ROOT=$A" "TEAM_MAIN_ROOT=$A" "TEAM_PROJECT=leakA" "TEAM_SESSION=other-$BASHPID"
+      g_half="$(lt show-environment -g 2>/dev/null)"
+      pane_payload half "$B" "$SHIM_PATH" "$(printf 'export TEAM_SESSION=%q' "$SESS")" up
+      if pane_run "$SESS_C" half; then
+        assert_eq "⑥b 半可归因仍被拒（rc=1）" "$(sed -n 's/^rc=//p' "$TMP/half.rc")" "1"
+        assert_not "⑥b 没有残留说明行" "$TMP/half.err" "运行中的 tmux server 的全局环境"
+        assert_env_same "⑥b 全局环境未变（没清）" "$g_half"
+      else
+        bad "⑥b payload 没跑完"
+      fi
+      res_glob_clear
+      # ⑥c 真嵌套：继承身份就是 cwd 项目自己的 → 没有分歧、不打印说明行、不写全局环境
+      g_nest="$(lt show-environment -g 2>/dev/null)"
+      pane_payload nest "$A" "$SHIM_PATH" \
+        "$(printf 'export TEAM_ROOT=%q TEAM_MAIN_ROOT=%q TEAM_PROJECT=leakA TEAM_SESSION=%q' "$A" "$A" "$SESS")" up
+      if pane_run "$SESS_C" nest; then
+        assert_eq "⑥c 真嵌套照常跑（rc=0）" "$(sed -n 's/^rc=//p' "$TMP/nest.rc")" "0"
+        assert_not "⑥c 没有分歧就没有说明行" "$TMP/nest.err" "运行中的 tmux server 的全局环境"
+        assert_env_same "⑥c 也不写全局环境" "$g_nest"
+      else
+        bad "⑥c payload 没跑完"
+      fi
+    fi
+  fi
+fi
+
+# ── ⑦ doctor 只读残留行（P304 裁定点 E）──────────────────────────────────────────────────────
+if selects doctor; then
+  hdr "⑦ doctor 只读残留行：点名本项目在 server 全局环境里的残留 + 清除命令，不写盘、不改它"
+  if [ "$HAVE_TMUX" != "1" ]; then
+    cond_skip "⑦ doctor 残留行" "$TMUX_WHY"
+  else
+    ensure_stage || bad "⑦ 舞台 A 没搭起来（init 失败）"
+    _b_rc=0; ensure_stage_b || _b_rc=$?
+    assert_eq "⑦a 夹具项目 B init 成功" "$_b_rc" "0"
+    if [ "$_b_rc" = "0" ]; then
+      # 夹具项目没有本机的 pi/magic-context/openspec —— 把 doctor 的「硬失败」降成「警告」，
+      # 于是 rc 只反映它自己跑得成不成（残留行是 warn，不是 fail），判据不被环境噪声绑架。
+      doc_env="export TEAM_AGENT_CMD=/bin/true TEAM_REQUIRE_MAGIC_CONTEXT=0 TEAM_REQUIRE_OPENSPEC=0 TEAM_REQUIRE_JS=0"
+      st_dir="$B/.pi/team/state"
+      st_manifest() { find "$st_dir" -type f -printf '%P %s\n' 2>/dev/null | sort; }
+      # ⑦a-c 本项目的残留：点名 + 清除命令 + 全局环境逐字节不变 + 项目 state 不写盘
+      # 先把 state 目录立起来（存在且可写的真实目标）：产品要是写了，断言必须看得见 —— 目录不存在时
+      # 写入会直接失败，那样就成了「因为写不进去所以看不到」的假绿。
+      mkdir -p "$st_dir"
+      res_glob_set "TEAM_ROOT=$B" "TEAM_MAIN_ROOT=$B" "TEAM_PROJECT=leakB" "TEAM_SESSION=$SESS_B"
+      g_before="$(lt show-environment -g 2>/dev/null)"
+      st_before="$(st_manifest)"
+      # 无闸门的 PATH（人的普通终端形状）：这里的「不写盘」是**产品自己的**行为 —— 闸门不在场，
+      # 就没有它的审计行混进来（有闸门的形状是下一腿 ⑦c2）。
+      pane_payload doc "$B" "$BASE_PATH" "$doc_env" doctor
+      if pane_run "$SESS_C" doc; then
+        assert_eq "⑦a doctor 跑得成（rc=0）" "$(sed -n 's/^rc=//p' "$TMP/doc.rc")" "0"
+        assert_has "⑦b 点名残留变量 TEAM_ROOT" "$TMP/doc.out" "TEAM_ROOT=$B"
+        assert_has "⑦b 也点名会话身份" "$TMP/doc.out" "TEAM_SESSION=$SESS_B"
+        assert_has "⑦b 清除命令落在这一行里（set-environment -gu）" "$TMP/doc.out" "set-environment -gu TEAM_ROOT"
+        assert_env_same "⑦c 跑完全局环境逐字节未变（只读，不代改）" "$g_before"
+        assert_eq "⑦c 项目 state 里一个文件都没多/没变（产品自己不写盘）" "$(st_manifest)" "$st_before"
+      else
+        bad "⑦a payload 没跑完"
+      fi
+      # ⑦c2 有闸门的 PATH（窗口的真实现场）：全局环境仍然逐字节未变；state 里如果有变化，只容许
+      # **闸门自己的审计行**（tmux-calls.log —— 闸门的规格规定每次过闸门的调用恰好一行，那不是 doctor 写的）。
+      st_before2="$(st_manifest)"
+      pane_payload doc_gate "$B" "$SHIM_PATH" "$doc_env" doctor
+      if pane_run "$SESS_C" doc_gate; then
+        assert_env_same "⑦c2 有闸门的形状下全局环境仍逐字节未变" "$g_before"
+        changed="$(changed_paths "$st_before2" "$(st_manifest)")"
+        if [ -z "$changed" ]; then
+          ok "⑦c2 有闸门的形状下 state 也没有任何变化"
+        elif [ "$(printf '%s\n' "$changed" | grep -cv '^tmux-calls\.log$' || true)" = "0" ]; then
+          ok "⑦c2 有闸门的形状下 state 的唯一变化是闸门自己的审计行（tmux-calls.log），不是 doctor 写的"
+        else
+          bad "⑦c2 有闸门的形状下 state 里出现了不属于闸门审计的变化：$(printf '%s' "$changed" | tr '\n' ' ')"
+        fi
+      else
+        bad "⑦c2 payload 没跑完"
+      fi
+      # ⑦d 干净时沉默（干净项目不刷行）
+      res_glob_clear
+      pane_payload doc_clean "$B" "$BASE_PATH" "$doc_env" doctor
+      if pane_run "$SESS_C" doc_clean; then
+        assert_not "⑦d 全局环境干净时没有残留行" "$TMP/doc_clean.out" "身份残留"
+      else
+        bad "⑦d payload 没跑完"
+      fi
+      # ⑦e 残留是**别的项目**的值 → 不是「本项目的身份变量」，不冒充、不误报
+      res_glob_set "TEAM_ROOT=$A" "TEAM_MAIN_ROOT=$A" "TEAM_PROJECT=leakA" "TEAM_SESSION=$SESS"
+      pane_payload doc_other "$B" "$BASE_PATH" "$doc_env" doctor
+      if pane_run "$SESS_C" doc_other; then
+        assert_not "⑦e 别的项目的残留不冒充本项目的" "$TMP/doc_other.out" "本项目的身份残留"
+      else
+        bad "⑦e payload 没跑完"
+      fi
+      res_glob_clear
+    fi
+  fi
+fi
+
 # ── 反向守卫 + 收尾 ──────────────────────────────────────────────────────────────────────────
 if [ -n "$FAILED" ]; then printf '\n  失败项：%s\n' "$FAILED"; fi
 if [ -f "$REAL_LOG" ] && grep -qF "cwd=$TMP" "$REAL_LOG" 2>/dev/null; then
@@ -397,6 +713,23 @@ if [ "$HAVE_TMUX" = "1" ]; then
   timeout 15 env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$ISL_RO" "$REAL_TMUX" kill-server 2>/dev/null || true
 fi
 tmp_root_reap_all 2>/dev/null || true
+
+# ── 隔离断言（任务书 3.1）：真实仓库账本面 hash + 本轮临时根 ─────────────────────────────────
+LEDGER_AFTER="$(ledger_manifest "$REAL_INBOX" "$REAL_STATE")"
+if [ "$LEDGER_BEFORE" = "$LEDGER_AFTER" ]; then
+  ok "隔离：真实仓库账本面未被改动（docs/team/inbox + .pi/team/state，$LEDGER_N 个文件逐一 sha256 相同）"
+else
+  bad "隔离：真实仓库账本面被改动（夹具漏钉了目标？）—— 差异："
+  diff <(printf '%s\n' "$LEDGER_BEFORE") <(printf '%s\n' "$LEDGER_AFTER") 2>/dev/null | sed 's/^/       /' || true
+fi
+ROOTS_AFTER="$(ls -d "$(tmp_root_base)"/teamsmith-tmux-identity-leak-* 2>/dev/null | wc -l | tr -d ' ')"
+if [ "${TEAM_TMP_KEEP:-0}" = "1" ]; then
+  ok "隔离：TEAM_TMP_KEEP=1 —— 本轮临时根按约定保留（$TMP）"
+elif [ ! -e "$TMP" ]; then
+  ok "隔离：本轮的临时根已回收（跑前 ${ROOTS_BEFORE} 个同族根 → 跑后 ${ROOTS_AFTER} 个）"
+else
+  bad "隔离：本轮的临时根还在（$TMP）—— 跑完不留下"
+fi
 
 printf '\n\033[1m== tmux-identity-leak 结果 ==\033[0m  ✓ %d  ✗ %d' "$PASS" "$FAIL"
 [ "$SKIP_N" -gt 0 ] && printf ' · 跳过 %d 段' "$SKIP_N"

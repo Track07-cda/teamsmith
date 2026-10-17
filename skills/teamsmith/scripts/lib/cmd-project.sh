@@ -402,6 +402,21 @@ team_cmd_doctor() {
     check "tmux 闸门退役键"; printf '%s\n' "SKIP：没有 tmux，无法探测 server 全局环境"
   fi
 
+  # P304 · 本项目身份在运行中 server 全局环境里的残留（**只读**报告，绝不代改）：残留会让同一 server 上
+  # **别的项目**新开的窗口继承本项目的身份（用户 2026-10-15 报的形状：server 死了重开，在别的项目里
+  # 被自己的身份守卫拒掉）。本 change 落地后产品路径不再新增它；这份只读行是「人自己决定清不清」的
+  # 出口（清它 = 改共享 server 的全局环境，属用户的管辖）。判据与读侧归因同源。
+  if team_have_cmd tmux; then
+    local id_residue="" id_vars="" id_route=""
+    id_residue="$(team_identity_server_residue_vars)"
+    if [ -n "$id_residue" ]; then
+      id_vars="$(printf '%s\n' "$id_residue" | awk -F= 'NF { printf "%s%s", (NR > 1 ? " " : ""), $1 }')"
+      id_route="$(team_identity_residue_route $id_vars)"
+      check "tmux 身份残留"
+      warn "运行中的 tmux server 全局环境里还有本项目的身份残留（$(printf '%s' "$id_residue" | tr '\n' ' ')）——它会让同一 server 上别的项目新开的窗口继承本项目的身份；只报告不代改，清掉（改共享 server，时机由你定）：$id_route"
+    fi
+  fi
+
   check "pi"; if [ -n "${TEAM_AGENT_CMD:-}" ]; then
       pass "本项目用自定义 agent adapter：不需要 pi"
     elif team_have_cmd pi; then
