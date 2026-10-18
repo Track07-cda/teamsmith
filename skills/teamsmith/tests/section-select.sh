@@ -428,7 +428,8 @@ emit_copy() { # <out>
 do_verify_copies() {
   build_groups
   local d out k n=0 bad=0 i
-  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-select-copies-$(section_select_ns).XXXXXX")" || die "建不了临时目录（TMPDIR=${TMPDIR:-/tmp}）"
+  team_tmp_root_prepare >/dev/null 2>&1 || true
+  d="$(mktemp -d "$(team_tmp_root)/teamsmith-select-copies-$(section_select_ns).XXXXXX")" || die "建不了临时目录（TMPDIR=$(team_tmp_root)）"
   trap 'rm -rf "${d:-}"' EXIT
   printf '== 段副本 bash -n 全键扫描 ==\n'
   for ((i = 0; i < T_N; i++)); do

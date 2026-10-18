@@ -213,7 +213,9 @@ elif [ -n "$SELECT_MODE_REQ" ]; then
   [ -f "$SELECT_BIN" ] || { printf 'smoke: 选段需要 %s（缺它就不能用 --paths/--select）\n' "$SELECT_BIN" >&2; exit 2; }
   # 过滤副本由选择器一次生成（唯一剪贴实现）：它写进 --out 前先 bash -n 校验，不能解析就在
   # **跑任何段之前**拒绝并点名（段 key + 源码行）——smoke 不再自己剪文本（P117/V1）。
-  SELECT_COPY="${TMPDIR:-/tmp}/teamsmith-select.$(team_project_ns).$$.sh"
+  # P309：选段副本是本进程的**第一次写盘**，临时根得先准备好（默认腿按需建；显式根不可用就具名失败）
+  team_tmp_root_prepare >/dev/null 2>&1 || { printf 'smoke: 临时根不可用（%s）—— 选段副本写不出来\n' "$(team_tmp_root 2>/dev/null || printf '?')" >&2; exit 2; }
+  SELECT_COPY="$(team_tmp_root)/teamsmith-select.$(team_project_ns).$$.sh"
   rm -f "$SELECT_COPY"
   if ! SELECT_OUT="$(bash "$SELECT_BIN" --"$SELECT_MODE_REQ" "${SELECT_ARGS[@]}" --out "$SELECT_COPY" </dev/null 2>&1)"; then
     printf '%s\n' "$SELECT_OUT" >&2
@@ -362,11 +364,12 @@ case "$SMOKE_LOCK_WAIT" in ''|*[!0-9]*) SMOKE_LOCK_WAIT=1800 ;; esac
 # FAST 的私有锁路径必须在解析 SMOKE_LOCK 之前定下来（否则 no_lock 分支会把 FAST 的临时目录说成机器锁）
 # P287：点开头 —— 它直接落在解析后的临时根上，名字形态要躲开别人的前缀 glob。
 if [ "$FAST" = "1" ] && [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
-  TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/.teamsmith-smoke-fast-$$.lock"; export TEAM_SMOKE_LOCK
+  TEAM_SMOKE_LOCK="$(team_tmp_root)/.teamsmith-smoke-fast-$$.lock"; export TEAM_SMOKE_LOCK
 fi
 # TEAM_SMOKE_LOCK 优先于继承来的 SMOKE_LOCK：夹具用 TEAM_SMOKE_LOCK 指定私有锁时，不能让外层导出的
 # SMOKE_LOCK（机器锁）把它顶掉 —— 那会让夹具的门禁排队到**真机器锁**上。
-SMOKE_LOCK="${TEAM_SMOKE_LOCK:-${SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}}"
+# P309：锁的发布路径**不搬**（P287 的跨版本串行）—— 它的唯一实现在 gate-lock.sh，这里只读。
+SMOKE_LOCK="${TEAM_SMOKE_LOCK:-${SMOKE_LOCK:-$(gate_lock_default_path)}}"
 export SMOKE_LOCK
 SMOKE_LOCK_COMPANION="$(gate_lock_companion_path "$SMOKE_LOCK")"
 # 夹具红侧开关：只有 TEAM_SMOKE_FIXTURE=1 时生效，而且**大声**打印（真路径忽略并说明）
@@ -592,7 +595,7 @@ if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
     [ "$SMOKE_LOCK_QUEUED" = "1" ] && printf '轮到本套了（排过队）—— 共等了 %ss\n' "$(( $(date +%s) - SMOKE_LOCK_T0 ))"
     # 队列标记：队列子进程**真的起来了**的证据（P66 的语义）。P287 起它就是交接凭证：写它 = 锁拿到
     # 了、记录写了、入场检查过了，接下来起子套件。收尾删掉（正常路径与中断路径都删）。
-    SMOKE_LOCK_MARKER="$(mktemp "${TMPDIR:-/tmp}/teamsmith-smoke-queue.$(team_project_ns).XXXXXX" 2>/dev/null \
+    SMOKE_LOCK_MARKER="$(mktemp "$(team_tmp_root)/teamsmith-smoke-queue.$(team_project_ns).XXXXXX" 2>/dev/null \
       || printf '%s' "${SMOKE_LOCK%/*}/.teamsmith-smoke-queue.$$")"
     printf '%s %s\n' "$(date +%s)" "$$" > "$SMOKE_LOCK_MARKER" 2>/dev/null || true
     export SMOKE_LOCK_WRAPPED=1
@@ -695,7 +698,7 @@ fi
 # 真实门禁路径（不带 TEAM_SMOKE_FAST）不受影响：全量依旧持真锁，没有锁的人依旧排队。
 if [ "$FAST" = "1" ]; then
   if [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
-    TEAM_SMOKE_LOCK="${TMPDIR:-/tmp}/.teamsmith-smoke-fast-$$.lock"
+    TEAM_SMOKE_LOCK="$(team_tmp_root)/.teamsmith-smoke-fast-$$.lock"
     export TEAM_SMOKE_LOCK
   fi
   export SMOKE_LOCK_WRAPPED=1
@@ -872,7 +875,7 @@ smoke_tmp_usage() { # start|end
 
 # KEEP → TEAM_TMP_KEEP 的映射在**参数解析之后、拿机器锁之前**就做过了（见那一段的 P223 注）：
 # 锁的 re-exec 换一个进程跑套件，值必须那时就在环境里，晚了就只影响本进程、救不了真正建根的子进程。
-TMP="$(tmp_root_create smoke)" || { printf 'smoke: 建不出临时根（TMPDIR=%s）\n' "${TMPDIR:-/tmp}" >&2; exit 3; }
+TMP="$(tmp_root_create smoke)" || { printf 'smoke: 建不出临时根（TMPDIR=%s）\n' "$(team_tmp_root)" >&2; exit 3; }
 smoke_tmp_usage start
 SESSION="teamsmith-smoke-$$"
 PROTECTED="main"   # 与 TEAM_PROTECTED_BRANCH 默认值一致
@@ -1008,7 +1011,7 @@ if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
   # P310 · socket 目录**不挂临时根下**。回归现场（P288 之后）：§0i 的夹具给嵌套门禁套一层
   # `TMPDIR=$TMP/case-*`，临时根名里的项目 ns + 6 位随机把 socket 顶到 **126 字节 > AF_UNIX 的 107**
   # → §0c 的隔离前置硬停（exit 2），嵌套门禁一条结论都拿不到（✓2 ✗3）。判据：socket 路径的长度
-  # 不许跟着临时根走。取一个**固定短前缀 + mktemp 唯一后缀**的目录（先试调用者的 $TMPDIR，同一块盘；
+  # 不许跟着临时根走。取一个**固定短前缀 + mktemp 唯一后缀**的目录（先试解析出的临时根 —— 与夹具同一块盘；
   # 太长再退 /tmp），并把它交给隔离前置当第二个 --own-root（它仍是本轮自建、且只装本轮的 socket）。
   # 红侧：TEAM_SMOKE_TMUX_UNDER_TMP=1 把目录放回临时根下 —— 只认 TEAM_SMOKE_FIXTURE=1，
   # 由 tests/flip-p310-socket.sh 证明「socket 长度 ≤ 107」那条断言是承重的。
@@ -1016,20 +1019,11 @@ if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
     SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
     printf '\033[33m夹具红侧\033[0m：TEAM_SMOKE_TMUX_UNDER_TMP=1 → 私有 socket 放回临时根下（P310 的回归形状）\n'
   else
-    SMOKE_TMUX_TMPDIR=""
-    _tm_uid="$(id -u)"
-    _tm_room=$(( 107 - 6 - ${#_tm_uid} - 8 ))     # socket = <dir> + "/tmux-<uid>" + "/default"
-    for _tm_base in "${TMPDIR:-/tmp}" /tmp; do
-      [ -d "$_tm_base" ] || continue
-      _tm_dir="$(mktemp -d "$_tm_base/.tm-${_tm_uid}.XXXXXX" 2>/dev/null || true)"
-      [ -n "$_tm_dir" ] || continue
-      if [ "${#_tm_dir}" -le "$_tm_room" ]; then SMOKE_TMUX_TMPDIR="$_tm_dir"; break; fi
-      rmdir "$_tm_dir" 2>/dev/null || true      # 这一层放不下：收掉再试下一个基址
-    done
+    SMOKE_TMUX_TMPDIR="$(tmp_root_socket_dir tmux "tmux-$(id -u)/default")" || SMOKE_TMUX_TMPDIR=""
     if [ -z "$SMOKE_TMUX_TMPDIR" ]; then
       # 极端：连 /tmp 都放不下（uid 极长？）—— 退回临时根下，让 §0c 的前置按长度硬停并点名（不静默）
       SMOKE_TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$SMOKE_TMUX_TMPDIR"
-      printf '注意：找不到 ≤107 字节的 socket 目录（$TMPDIR 与 /tmp 都不行）→ 退回临时根下；§0c 会按长度拒绝\n'
+      printf '注意：找不到 ≤107 字节的 socket 目录（解析出的临时根与 /tmp 都不行）→ 退回临时根下；§0c 会按长度拒绝\n'
     fi
   fi
   TMUX_TMPDIR="$SMOKE_TMUX_TMPDIR"; export TMUX_TMPDIR
@@ -1079,7 +1073,7 @@ SMOKE_TMP_PATH="$TMP"
 SMOKE_TMP_CANARY="$TMP/.smoke-alive"
 # 诊断与标记放在 $TMP **之外**，且以点开头：删 TMP 的人若用的是 `rm -rf /tmp/teamsmith-smoke*` 这种
 # 前缀 glob，诊断不会被顺手带走（点开头不匹配）。
-SMOKE_TMP_DIAG="${TEAM_SMOKE_DIAG:-${TMPDIR:-/tmp}/.teamsmith-smoke-diag.$$.log}"
+SMOKE_TMP_DIAG="${TEAM_SMOKE_DIAG:-$(team_tmp_root)/.teamsmith-smoke-diag.$$.log}"
 SMOKE_TMP_FLAG="${SMOKE_TMP_DIAG%.log}.named"      # 只由 smoke_tmp_fire 写：保证「一条点名红」只印一次
 SMOKE_TMP_SEEN="${SMOKE_TMP_DIAG%.log}.seen-at"    # 后台哨兵第一次发现的时刻（fire 把它写进点名行）
 SMOKE_TMP_STOP="${SMOKE_TMP_DIAG%.log}.stop"       # 收哨兵的停止位
@@ -2019,8 +2013,12 @@ for _case in alone broken; do
 done
 # ⑧ 端到端：嵌套 smoke + 超深 TMPDIR → 0c 的前置在真套件里硬停，0c 在账本里记 SKIP（不是假绿）
 #    （深路径上私有 server 根本绑不上；FAST 不拿机器锁，也不会有任何破坏性调用落地）
+#    P309 附注：P310 起 socket 目录不再默认挂在临时根下（太长就退 /tmp），所以「深 TMPDIR」本身不再
+#    保证超长 —— 这里显式用 P310 自己的红侧旋钮把 socket 放回临时根下，前提才成立、断言才是确定的
+#    （main 在本段是红的：没有这两行时嵌套 smoke 会整轮跑下去，60s 预算到点被停）。
 P162_DEEP_ROOT="$TMP/p162-deeproot/$(printf 'd%.0s' $(seq 1 60))"; mkdir -p "$P162_DEEP_ROOT"
 env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_TMUX_ISO_LOG \
+  TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_TMUX_UNDER_TMP=1 \
   TMPDIR="$P162_DEEP_ROOT" TEAM_SMOKE_FAST=1 bash "$SKILL_DIR/tests/smoke.sh" </dev/null >"$TMP/p162-deep-smoke.log" 2>&1
 P162_RC=$?
 assert_eq "P162 端到端：超深 TMPDIR 的嵌套 smoke → 0c 前置硬停（exit 2）" "$P162_RC" "2"
@@ -2035,7 +2033,11 @@ assert_not "$TMP/p162-deep-smoke.log" "== 结果 ==" "P162 端到端：没有结
 #    场景：own = 本轮私有目录（已 mkdir -p）｜broken = 不存在的目录（#1250 回退形状）｜unset = 没设。
 P180_PROBE="$SKILL_DIR/tests/lib/tmux-iso-call-probe.sh"
 assert_file "$P180_PROBE" "P180 探针在（lib/tmux-iso-call-probe.sh）"
-P180_ROOT="$TMP/p180"; P180_OWN="$P180_ROOT/own/tmux"; mkdir -p "$P180_OWN"
+# P309：探针的目录整棵树要短 —— 临时根现在在 /var/tmp/teamsmith-<ns> 下，P180 的私有 socket
+# `<root>/own/tmux/tmux-<uid>/default` 挂在 $TMP 里会越过 AF_UNIX 的 107 字节，于是守卫先报
+# sock-path-too-long（或 outside-own-root），P180 想验的「靶子分类」永远轮不到。放到本轮私有 tmux
+# 基址下（同一块盘、仍由本轮自建、仍然是探针的 own root）。
+P180_ROOT="${SMOKE_TMUX_TMPDIR:-$TMP/p180-root}/p180"; P180_OWN="$P180_ROOT/own/tmux"; mkdir -p "$P180_OWN"
 P180_BROKEN="$P180_ROOT/nope/sock"               # 不 mkdir -p（#1250 回退形状）
 P180_STUBDIR="$P180_ROOT/stub"
 P180_REC="$P180_ROOT/record.log"
@@ -3050,7 +3052,10 @@ else ok "RAM+swap 双低 → 拒绝派单"; fi
 # 夹具表 = path<TAB>total<TAB>avail<TAB>itotal<TAB>ifree（最长前缀匹配）；路径用**真**临时根与这个
 # 夹具仓库的工作树，于是断言与机器无关。三条纪律各有一个夹具：读不到 → 不判不说；不报 inode 表 →
 # 只判字节；同一个文件系统只判一次（夹具表里同一行 = 同一个文件系统）。
-DISK_TMP="${TMPDIR:-/tmp}"
+# P309：判的是**解析出的**临时根，而夹具里被派单的进程是在沙箱仓库（ns=`repo`）里解析的 —— 两边各算
+# 就会得出两个不同的路径（断言在比较两个字符串，而不是在比较判据）。所以把 TMPDIR 钉在一个**本轮自建的
+# 已存在目录**上：夹具与派单进程解析出同一个根，断言才是在验判据本身。
+DISK_TMP="$TMP/diskroot"; mkdir -p "$DISK_TMP"
 DISK_WTROOT="$REPO/.worktrees"
 DISK_WTDEV="$REPO/.worktrees/dev"
 DISK_PLENTY_KB=5242880
@@ -3061,7 +3066,7 @@ disk_row() { # <文件> <路径> <avail_kb> <itotal> <ifree>（avail_kb = "-" �
 disk_new() { : > "$1"; }
 disk_dispatch() { # <夹具表> <日志> [额外 env...] → dispatch --print（内存/swap 也走夹具，只看磁盘腿）
   local table="$1" log="$2"; shift 2
-  env "$MEMENV-plenty" "$SWAPENV" "TEAM_DISK_STATS_FILE=$table" "$@" \
+  env "$MEMENV-plenty" "$SWAPENV" "TEAM_DISK_STATS_FILE=$table" "TMPDIR=$DISK_TMP" "$@" \
     $TEAM dispatch dev T1.1 "$TASKFILE" --print >"$log" 2>&1
 }
 DISK_FULL="$TMP/disk-full.table";        disk_new "$DISK_FULL"
@@ -3136,24 +3141,24 @@ assert_not "$TMP/disk-lowwt.log" "工作树 $DISK_WTROOT 磁盘不足" "共享 w
 # ⑧ 同一个文件系统只判一次（夹具表里同一行 = 同一个文件系统）
 DISK_SAME="$TMP/disk-same.table"; disk_new "$DISK_SAME"
 disk_row "$DISK_SAME" "$DISK_TMP" 122880 3811434 40000
-disk_same_out="$(env "TEAM_DISK_STATS_FILE=$DISK_SAME" bash -c '
+disk_same_out="$(env "TEAM_DISK_STATS_FILE=$DISK_SAME" "TMPDIR=$DISK_TMP" bash -c '
   . "$1/scripts/lib/common.sh"
   team_disk_guard "$2" "$2/sub" 2>&1; printf "rc=%s\n" "$?"' _ "$SKILL_DIR" "$DISK_TMP" 2>&1)"
 assert_eq "同一个文件系统只判一次（拒绝只出现一次）" "$(printf '%s\n' "$disk_same_out" | grep -c '磁盘不足')" "1"
 
 # ⑨ 读数面：capacity line（team ps）与 doctor 行读同一个测量、同一对阈值
-env "$MEMENV-plenty" "$SWAPENV" "TEAM_DISK_STATS_FILE=$DISK_PLENTY" $TEAM ps >"$TMP/disk-ps.log" 2>&1
+env "$MEMENV-plenty" "$SWAPENV" "TEAM_DISK_STATS_FILE=$DISK_PLENTY" "TMPDIR=$DISK_TMP" $TEAM ps >"$TMP/disk-ps.log" 2>&1
 assert_has "$TMP/disk-ps.log" "临时根 $DISK_TMP 可用 5.0 GB（inode $DISK_PLENTY_INO）" "team ps 的容量行带临时根读数"
 assert_has "$TMP/disk-ps.log" "工作树 $DISK_WTROOT 可用 5.0 GB（inode $DISK_PLENTY_INO）" "team ps 的容量行带工作树根读数"
-env "TEAM_DISK_STATS_FILE=$DISK_FULL" $TEAM doctor >"$TMP/disk-doctor.log" 2>&1; DISK_DRC=$?
+env "TEAM_DISK_STATS_FILE=$DISK_FULL" "TMPDIR=$DISK_TMP" $TEAM doctor >"$TMP/disk-doctor.log" 2>&1; DISK_DRC=$?
 assert_eq "磁盘低的 doctor 仍然退出 0（宿主资源行不改退出码）" "$DISK_DRC" "0"
 assert_has "$TMP/disk-doctor.log" "临时根余量" "doctor 有临时根余量行"
 assert_has "$TMP/disk-doctor.log" "工作树余量" "doctor 有工作树余量行"
 assert_has "$TMP/disk-doctor.log" "现在派单会被拒绝" "doctor 的警告说清楚下一次派单会被拒"
 assert_match "$TMP/disk-doctor.log" "临时根余量 +! $DISK_TMP：可用 120\.0 MB / 总 14\.5 GB 低于底线 1024MB" "doctor 点名路径/读数/阈值"
-env "TEAM_DISK_STATS_FILE=$DISK_NONE" $TEAM doctor >"$TMP/disk-doctor-none.log" 2>&1
+env "TEAM_DISK_STATS_FILE=$DISK_NONE" "TMPDIR=$DISK_TMP" $TEAM doctor >"$TMP/disk-doctor-none.log" 2>&1
 assert_match "$TMP/disk-doctor-none.log" "临时根余量 +! $DISK_TMP 的余量读不出来" "读不到 → warn（绝不报 ok）"
-env "TEAM_DISK_STATS_FILE=$DISK_NOINO_PLENTY" $TEAM doctor >"$TMP/disk-doctor-noino.log" 2>&1
+env "TEAM_DISK_STATS_FILE=$DISK_NOINO_PLENTY" "TMPDIR=$DISK_TMP" $TEAM doctor >"$TMP/disk-doctor-noino.log" 2>&1
 assert_has "$TMP/disk-doctor-noino.log" "inode 不适用（这个文件系统不报 inode 表）" "不报 inode 表 → 说出来，不印数字"
 
 # ⑩ 逃生口令经审计写入器（R1 的验收面）：字节腿关掉、inode 腿照旧判。
@@ -3232,9 +3237,9 @@ else
   disk_row "$DISK_TICK_TABLE" "$DISK_TMP"          "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
   disk_row "$DISK_TICK_TABLE" "$DISK_TICKR/.worktrees" "$DISK_PLENTY_KB" 3811434 "$DISK_PLENTY_INO"
   ( cd "$DISK_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
-      -u TEAM_STATE_DIR "TEAM_DISK_STATS_FILE=$DISK_TICK_TABLE" $TEAM watch --once ) >"$TMP/disk-tick1.log" 2>&1 || true
+      -u TEAM_STATE_DIR "TEAM_DISK_STATS_FILE=$DISK_TICK_TABLE" "TMPDIR=$DISK_TMP" $TEAM watch --once ) >"$TMP/disk-tick1.log" 2>&1 || true
   ( cd "$DISK_TICKR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION \
-      -u TEAM_STATE_DIR "TEAM_DISK_STATS_FILE=$DISK_TICK_TABLE" $TEAM watch --once ) >"$TMP/disk-tick2.log" 2>&1 || true
+      -u TEAM_STATE_DIR "TEAM_DISK_STATS_FILE=$DISK_TICK_TABLE" "TMPDIR=$DISK_TMP" $TEAM watch --once ) >"$TMP/disk-tick2.log" 2>&1 || true
   DISK_TICK_LOG="$DISK_TICKR/.pi/team/state/capacity.log"
   assert_eq "两拍 watch --once 给 capacity.log 添了两行" "$(wc -l < "$DISK_TICK_LOG" 2>/dev/null | tr -d ' ' || echo 0)" "2"
   tail -2 "$DISK_TICK_LOG" >"$TMP/disk-tick-tail.log" 2>/dev/null || true
@@ -5404,7 +5409,10 @@ if [ "$FAST" = "1" ]; then
 elif [ "$HAVE_TMUX" != "1" ]; then
   printf '  (跳过 10c-②：本机没有 tmux)\n'
 else
-  M25_SOCK="$TMP/m25-tty-sock"; mkdir -p "$M25_SOCK"
+  # P309：私有 socket 的目录必须短到 AF_UNIX 放得下（临时根名带项目 ns 之后，$TMP 下再套一层就超了）。
+  # 同时它必须在本轮**自有目录**里（隔离前置只放行 $TMP 与本轮私有 tmux 基址）—— 所以挂在后者下面：
+  # 那里本来就短，而且已经是 own root（P180/31c 同一条处置）。
+  M25_SOCK="${SMOKE_TMUX_TMPDIR:-$TMP/tmux}/m25"; mkdir -p "$M25_SOCK"
   m25_tm() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M25_SOCK" tmux "$@"; }
   M25_SESS="teamsmith-m25-$$"
   m25_tm new-session -d -s "$M25_SESS" -x 100 -y 24 -c "$REPO" 2>/dev/null || true
@@ -5461,7 +5469,10 @@ EOS
       bad "M25-② 夹具有效性：对照组没有被停住（$M25_CDIAG）—— 本环境测不出这个机制，断言会假绿"
     fi
     # 对照组已确认停住，现在才把门禁敲进**同一个** pane（原来靠 sleep 1.5 赌它起没起来）
-    m25_tm send-keys -t "$M25_PANE" "cd $REPO && env TEAM_REVIEW_ANY_DIR=1 TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 TEAM_GATES='bash $TMP/m25-gate-tty.sh' $TEAM review T2.2 --dir $REV_WT --branch $T1_BRANCH > $TMP/m25-tty-review.log 2>&1 &" \
+    # P309：夹具里的 review 是**夹具门禁**，不该替套件去争机器锁 —— pane 里的进程没有祖辈可以证明
+    # 「外层正握着锁」（P310 的判据只认进程树），不指私有锁它就会排到外层门禁后面、等到段预算超时
+    # （main 上同样如此：`--select 10c` 持锁跑必超时）。给子树一层自己的锁（与 FAST 分支同一做法）。
+    m25_tm send-keys -t "$M25_PANE" "cd $REPO && env TEAM_SMOKE_LOCK='$(team_tmp_root)/.teamsmith-smoke-m25-$$.lock' TEAM_REVIEW_ANY_DIR=1 TEAM_REVIEW_ALLOW_DIRTY=1 TEAM_REVIEW_ALLOW_IGNORED=1 TEAM_GATES='bash $TMP/m25-gate-tty.sh' $TEAM review T2.2 --dir $REV_WT --branch $T1_BRANCH > $TMP/m25-tty-review.log 2>&1 &" \
       && m25_tm send-keys -t "$M25_PANE" Enter
     # 等门禁把最后一行写出来（最多 60s；被停住时它永远写不出来）；高负载下给足余量
     M25_WAIT=0
@@ -5486,8 +5497,10 @@ EOS
     assert_has "$M25_GATE_LOG" "gate_read_done=yes" "M25-② 门禁在后台进程组里读到 EOF 并跑完（stdin=/dev/null，没被 SIGTTIN 停住）"
     assert_has "$M25_GATE_LOG" "gate_stdin=/dev/null" "M25-② 门禁 stdin 确实是 /dev/null"
     # P162：M25 自己的私有 server 收尾也要先证明（--tmpdir 指它自己的目录）
+    # P309：私有 socket 目录本轮挂在 ``$SMOKE_TMUX_TMPDIR`` 下（临时根名变长后 $TMP 下放不下了），
+    # 它同时也是本轮的自有目录 —— 两个 own root 都交出去（与 31c/P180 同一条处置）。
     tmux_iso_require "10c-②·后台进程组里的门禁（M25）" "M25 私有 server 收尾（kill-server）" \
-      --tmpdir "$M25_SOCK" --own-root "$TMP"
+      --tmpdir "$M25_SOCK" --own-root "$TMP" --own-root "${SMOKE_TMUX_OWN_ROOT:-$M25_SOCK}"
     m25_tm kill-server 2>/dev/null || true
   fi
 fi
@@ -6576,7 +6589,14 @@ CODE_V="$(grep -m1 '^TEAM_VERSION=' "$SKILL_DIR/scripts/lib/common.sh" | cut -d'
 DOC_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKILL_DIR/SKILL.md" | head -1)"
 # P16：拆分后版本仍是单一来源（common.sh），两个 SKILL.md 都跟随；init skill 没有自己的 CHANGELOG。
 INIT_V="$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$SKILL_INIT_DIR/SKILL.md" | head -1)"
-LOG_V="$(sed -n 's/^##[[:space:]]*\[*v\?\([0-9.]*\)\]*.*/\1/p' "$SKILL_DIR/CHANGELOG.md" | head -1)"
+# P309：第一个**版本标题**才是版本落点。未发布段（`## 未发布…`）排在最上面是合法形状，但它不许伪装成
+# 版本行 —— 所以下面的取法要求版本以数字开头，并额外断言「第一个 `##` 标题要么是版本、要么正是未发布标记」。
+LOG_V="$(sed -n 's/^##[[:space:]]*\[*v\?\([0-9][0-9.]*\)\]*.*/\1/p' "$SKILL_DIR/CHANGELOG.md" | head -1)"
+LOG_FIRST_H="$(sed -n 's/^##[[:space:]]*\(.*\)$/\1/p' "$SKILL_DIR/CHANGELOG.md" | head -1)"
+case "$LOG_FIRST_H" in
+  未发布*|v[0-9]*|[0-9]*) : ;;
+  *) bad "CHANGELOG 第一个二级标题既不是版本号也不是未发布标记（[$LOG_FIRST_H]）" ;;
+esac
 # M38：根 package.json（pi 清单）也是版本落点之一——发行时的第五处。
 PKG_V="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$(dirname "$SKILL_DIR")/../package.json" 2>/dev/null | head -1)"
 assert_eq "版本号五处一致（common/两个 SKILL/CHANGELOG/package.json）" "$CODE_V|$DOC_V|$INIT_V|$LOG_V|$PKG_V" "$CODE_V|$CODE_V|$CODE_V|$CODE_V|$CODE_V"
@@ -12462,7 +12482,7 @@ assert_match "$SKILL_DIR/references/config.md" '^\| `TEAM_MONITOR_REFRESH` \| `3
 p28cap=(TEAM_MEMINFO_FILE="$TMP/meminfo-plenty" TEAM_SWAPFILE_PATH="$TMP/swaps" TEAM_DISK_STATS_FILE="$TMP/p28-disk.table")
 # P144：磁盘读数也会动（inode 计数随文件创建变），所以机读出口的比较也给它一个夹具表
 printf '%s\t15245736\t5242880\t3811434\t2978499\n%s/.worktrees\t975437824\t303232680\t3811434\t2978499\n' \
-  "${TMPDIR:-/tmp}" "$P27R" >"$TMP/p28-disk.table"
+  "$(team_tmp_root)" "$P27R" >"$TMP/p28-disk.table"
 printf 'lang=en\npage=3\nactivity=0\nmouse=0\ndensity=compact\ntheme=light\n' >"$P27R/.pi/team/state/panel.conf"
 p27 env "${p28cap[@]}" $TEAM monitor --json >"$TMP/p28-conf-a.json" 2>/dev/null
 p27 env "${p28cap[@]}" $TEAM monitor --print >"$TMP/p28-conf-a.txt" 2>/dev/null
@@ -14828,7 +14848,10 @@ elif [ "$HAVE_TMUX" != "1" ]; then
   cond_skip "31c·真私有 server 生死" "没有 tmux"
 else
   live_mark
-  M36_PRIV="$M36_D/priv-tmpdir"; mkdir -p "$M36_PRIV"
+  # P309：真 tmux 的 socket 目录要短（AF_UNIX 上限 107 字节）。临时根现在在 /var/tmp/teamsmith-<ns>
+  # 下，`$TMP/m36/priv-tmpdir/tmux-<uid>/default` 已经从 83 字节涨到 113 字节，私有 server 直接绑不上。
+  # 夹具的 socket 端点放在本轮私有 tmux 基址下（同一个短前缀、仍由本轮自建、与数据目录分开）。
+  M36_PRIV="${SMOKE_TMUX_TMPDIR:-$TMP/tmux}/m36-priv"; mkdir -p "$M36_PRIV"
   M36_LIVE_PATH="$M36_SHIM_DIR:$(dirname "$REAL_TMUX"):/usr/bin:/bin"
   m36_priv() { # [VAR=val …] <tmux argv…>：私有 TMPDIR + shim 在最前（下游是真 tmux）
     env -u TMUX -u TMUX_PANE -u TEAM_TMUX_REAL TMUX_TMPDIR="$M36_PRIV" \
@@ -14840,7 +14863,7 @@ else
     ok "私有 server 起起来了（m36victim 在）"
   else bad "私有 server 没起起来"; fi
   tmux_iso_require "31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）" "真私有 server 收尾（m36victim）" \
-    --tmpdir "$M36_PRIV" --own-root "$TMP"
+    --tmpdir "$M36_PRIV" --own-root "$TMP" --own-root "$SMOKE_TMUX_OWN_ROOT"
   m36_priv tmux kill-server >/dev/null 2>&1; M36_RC=$?
   assert_eq "私有 socket 的 kill-server 放行（exit 0）" "$M36_RC" "0"
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" "$REAL_TMUX" ls >/dev/null 2>&1; then
@@ -14851,7 +14874,7 @@ else
   # 退役键在私有 socket 上也不改变动作（照样 pass；不许出现 override）
   m36_priv tmux new-session -d -s m36victim2 >/dev/null 2>&1
   tmux_iso_require "31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）" "真私有 server 收尾（m36victim2）" \
-    --tmpdir "$M36_PRIV" --own-root "$TMP"
+    --tmpdir "$M36_PRIV" --own-root "$TMP" --own-root "$SMOKE_TMUX_OWN_ROOT"
   m36_priv TEAM_ALLOW_DESTRUCTIVE_TMUX=1 tmux kill-server >/dev/null 2>&1; M36_RC=$?
   assert_eq "退役键=1 + 私有 server：照常放行（exit 0，退役键零影响）" "$M36_RC" "0"
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$M36_PRIV" "$REAL_TMUX" ls >/dev/null 2>&1; then
@@ -14861,7 +14884,7 @@ else
   # token 在私有 socket 上照记 explicit-flag（token 是调用者的授权，任何 socket 都执行）
   m36_priv tmux new-session -d -s m36victim3 >/dev/null 2>&1
   tmux_iso_require "31c · tmux 运行时闸门：按目标判定 + argv token + 注入（M36/M67）" "真私有 server 收尾（m36victim3）" \
-    --tmpdir "$M36_PRIV" --own-root "$TMP"
+    --tmpdir "$M36_PRIV" --own-root "$TMP" --own-root "$SMOKE_TMUX_OWN_ROOT"
   m36_priv tmux --teamsmith-allow-destructive kill-server >/dev/null 2>&1; M36_RC=$?
   assert_eq "token + 私有 server：执行（exit 0）" "$M36_RC" "0"
   assert_has "$M36_LOG" "act=explicit-flag" "token 在私有 socket 上记 act=explicit-flag"
@@ -17036,7 +17059,7 @@ else
 P287C="$TMP/p287-name"
 # 私有 TMPDIR 放在**临时根顶层**（短路径）：嵌套运行会起 tmux 私有 server，socket 路径有 AF_UNIX 上限
 # （107 字节）—— 套在 $TMP 里面会超（实测 131 字节 → 夹具自己拒绝执行）。
-P287C_TMP="${TMPDIR:-/tmp}/.teamsmith-p287c-$$"
+P287C_TMP="$(team_tmp_root)/.teamsmith-p287c-$$"
 rm -rf "$P287C" "$P287C_TMP"; mkdir -p "$P287C" "$P287C_TMP"
 P287C_NS="$(team_project_ns)"
 # 契约点名的平铺形状：那段 glob 的射程（前缀 + 点，`teamsmith-smoke.*`）
@@ -17307,14 +17330,16 @@ else
 P287D="$TMP/p287-id"; rm -rf "$P287D"; mkdir -p "$P287D"
 # 2.1 纯函数单测（P303 的留空项）：伴生锁路径推导 —— 同行同目录、basename + `.machine`、点开头。
 # 两种输入：默认路径（未设 TEAM_SMOKE_LOCK）与私有 TEAM_SMOKE_LOCK —— 断言推导结果本身，不依赖真运行。
-P287D_DEF="${TMPDIR:-/tmp}/teamsmith-smoke.lock"
+P287D_DEF="$(gate_lock_default_path)"
 if [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
   assert_eq "34d 2.1 默认路径（未设 TEAM_SMOKE_LOCK）" "$(gate_lock_default_path)" "$P287D_DEF"
 else
   ok "34d 2.1 默认路径那一条：外层设了 TEAM_SMOKE_LOCK=$TEAM_SMOKE_LOCK → 按同一规矩换输入（避免误判）"
 fi
+# P309：锁的发布路径**不跟着临时根搬**（跨版本串行：新旧两版必须取同一把锁），所以这里对着锁自己的
+# 目录算伴生路径 —— 断言说的是「同行同目录、basename + .machine」，不是「在临时根下」。
 assert_eq "34d 2.1 默认路径 → 伴生锁（同行同目录、basename + .machine）" \
-  "$(gate_lock_companion_path "$P287D_DEF")" "${TMPDIR:-/tmp}/.teamsmith-smoke.lock.machine"
+  "$(gate_lock_companion_path "$P287D_DEF")" "$(dirname "$P287D_DEF")/.teamsmith-smoke.lock.machine"
 P287D_PRIV="$P287D/priv.lock"
 P287D_PRIV_DEF="$(TEAM_SMOKE_LOCK="$P287D_PRIV"; export TEAM_SMOKE_LOCK; gate_lock_default_path)"
 assert_eq "34d 2.1 私有 TEAM_SMOKE_LOCK 形状 → 默认路径取它" "$P287D_PRIV_DEF" "$P287D_PRIV"
@@ -17325,7 +17350,7 @@ case "$(gate_lock_companion_path "/x/y.lock")" in
   *) bad "34d 2.1 伴生锁名不是点开头：$(gate_lock_companion_path "/x/y.lock")" ;;
 esac
 # 每个场景一个**短**私有 TMPDIR（临时根顶层）：嵌套运行要绑 tmux 私有 socket，路径有 AF_UNIX 上限
-p287d_td() { printf '%s/.teamsmith-p287d-%s-%s' "${TMPDIR:-/tmp}" "$1" "$$"; }
+p287d_td() { printf '%s/.teamsmith-p287d-%s-%s' "$(team_tmp_root)" "$1" "$$"; }
 p287d_run() { # <tmpdir> <日志> <选段> [<break 阶段>] [<wait>]
   local td="$1" out="$2" sel="$3" brk="${4:-}" w="${5:-}"
   local -a be=() we=()
@@ -18144,10 +18169,13 @@ p98_state_has() { # <日志> <rc> <期望判类> <期望归因字样（- = 不�
   assert_eq "$pre 判类" "$st" "$want"
   [ "$evwant" = "-" ] || assert_has_echo "$ev" "$evwant" "$pre 归因点名 [$evwant]"
 }
-# 环境侧（不假红）：嵌套 TMPDIR 足够深 → 嵌套 socket 路径必定超 AF_UNIX 上限 107 字节 → 判 env。
+# 环境侧（不假红）：嵌套 socket 路径超 AF_UNIX 上限 107 字节 → 判 env。
+# P309 附注：P310 起 socket 目录不再默认挂在临时根下（太长就退 /tmp），所以「深 TMPDIR」本身不再保证
+# 超长；这里显式用 P310 自己的红侧旋钮把 socket 放回临时根下，前提才成立（与 §0h 的深路径夹具同一条）。
 P98_DEEP_TMP="$TMP/p115-deep/aaaaaaaa/bbbbbbbb/cccccccc/dddddddd"
 mkdir -p "$P98_DEEP_TMP"
-P98_NEST_TMPDIR="$P98_DEEP_TMP" P98_NEST_ENV="" p98_nest "$SKILL_DIR" "$TMP/p115-env.log" --select 0b
+P98_NEST_TMPDIR="$P98_DEEP_TMP" P98_NEST_ENV="TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_TMUX_UNDER_TMP=1" \
+  p98_nest "$SKILL_DIR" "$TMP/p115-env.log" --select 0b
 P98_ENV_RC=$?
 p98_state_has "$TMP/p115-env.log" "$P98_ENV_RC" "env" "AF_UNIX 上限" "36⑥ 环境侧（深 TMPDIR）"
 P98_ENV_SL="$(p98_nest_sock_len "$TMP/p115-env.log" || true)"
@@ -18825,7 +18853,11 @@ fi
 # ③ P122 返工：归属读 git 痕迹（真 ID + 别仓库 → 拒并点名 + 记录同名也不行）/ 拒绝不阻塞
 #    （做事了→0；合格的真被删）/ tmux 残留可见。现场形状：/tmp/review-M8.2 是 别的项目 的
 #    worktree，而本项目恰好也有 M8.2 记录 —— 记录同名不是证据。
-P122D="$TMP/p122-fixture"; P122_REPO="$TMP/p122-repo"; P122_TMDS="$P122D/tmux-sock"
+# P309：socket 目录要短到 AF_UNIX 放得下（107 字节）—— 临时根名带项目 ns 之后，
+# `$P122D/tmux-sock/stale-a` 到 109 字节，bind 直接失败，`touch` 于是造出一个**普通文件**，
+# 夹具验的就不是「陈旧 socket」了。短的 socket 目录由 tmp-root.sh 一处给出。
+P122D="$TMP/p122-fixture"; P122_REPO="$TMP/p122-repo"
+P122_TMDS="$(tmp_root_socket_dir p122 "s-99999")" || P122_TMDS="$P122D/tmux-sock"
 rm -rf "$P122D"; mkdir -p "$P122D" "$P122_REPO/docs/team/reviews" "$P122_TMDS"
 ( cd "$P122_REPO" && git init -q -b main && git config user.email t@t && git config user.name t \
     && printf '# board\n' >docs/team/BOARD.md && printf 'r1\n' >docs/team/reviews/M8.2.md \
@@ -22213,7 +22245,9 @@ P212_CT='BAN_HITS=$((BAN_HITS'; P212_CT="${P212_CT} + 1))"
 if [ "$(grep -cF "$P212_CT" "$P212_BRK/ledger-ban.sh")" = "1" ]; then
   awk -v pat="$P212_CT" '{ if (index($0, pat) > 0) print ": # 门禁影子：永远不记命中"; else print }' \
     "$P212_BRK/ledger-ban.sh" >"$P212_BRK/new" && mv "$P212_BRK/new" "$P212_BRK/ledger-ban.sh"
-  TEAM_SMOKE_FIXTURE=1 bash "$P212_BRK/ledger-ban.sh" --self-test >"$TMP/p212-shadow.log" 2>&1; P212_RC=$?
+  # 影子只拷了 ledger-ban.sh + lib/tmp-root.sh → 指回真库（P309：解析器必须在，否则创建者具名失败、
+  # 影子红的会是「找不到解析器」而不是要验的那条）
+  TEAM_SMOKE_FIXTURE=1 TEAM_TMP_SKILL_DIR="$SKILL_DIR" bash "$P212_BRK/ledger-ban.sh" --self-test >"$TMP/p212-shadow.log" 2>&1; P212_RC=$?
   assert_eq "P212 影子（命中计数被砸掉 = 永远通过）：自检必须红" "$P212_RC" "1"
   assert_has "$TMP/p212-shadow.log" "✗ ①" "P212 影子红了并点名 ①（家目录）"
   assert_has "$TMP/p212-shadow.log" "✗ ②" "P212 影子红了并点名 ②（他项目名）"

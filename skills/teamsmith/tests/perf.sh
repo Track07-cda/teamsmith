@@ -177,7 +177,7 @@ perf_require_pinned_container() {
 #      M23 的漏锁教训在这里同样是构造性关掉的；收尾只删**自己的记录**，锁文件永不 unlink。
 #   ③ 记录写在伴生锁边上（`<companion>.holder`），带 `lock_identity=fd|path` 与 `lock_dev_ino`。
 #   ④ 运行期间互斥被破坏（伴生锁被删/被换）⇒ 读数不可信：打印一行 + 判红（exit 2）。
-perf_lock_companion() { printf '%s\n' "$(gate_lock_companion_path "${1:-${TEAM_PERF_LOCK:-${TMPDIR:-/tmp}/teamsmith-perf.lock}}")"; }
+perf_lock_companion() { printf '%s\n' "$(gate_lock_companion_path "${1:-${TEAM_PERF_LOCK:-$(team_tmp_root)/teamsmith-perf.lock}}")"; }
 perf_lock_or_continue() {
   [ "${PERF_LOCK_TAKEN:-0}" = "1" ] && return 0     # 子进程（真正跑套件的那个）：锁由父进程取到了
   # 容器里的那一层由**宿主这一层**持锁（引擎是 P0 的子进程，锁 fd 已被 8>&- 9>&- 关掉）：
@@ -188,7 +188,7 @@ perf_lock_or_continue() {
     note "本机没有 flock → 不与别的性能运行串行（自担并发干扰）"
     return 0
   fi
-  local lock="${TEAM_PERF_LOCK:-${TMPDIR:-/tmp}/teamsmith-perf.lock}" wait_s="${TEAM_PERF_LOCK_WAIT:-1800}"
+  local lock="${TEAM_PERF_LOCK:-$(team_tmp_root)/teamsmith-perf.lock}" wait_s="${TEAM_PERF_LOCK_WAIT:-1800}"
   case "$wait_s" in ''|*[!0-9]*) wait_s=1800 ;; esac
   local comp; comp="$(perf_lock_companion "$lock")"
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
@@ -236,7 +236,7 @@ perf_lock_or_continue() {
 perf_lock_claim_from_parent() {
   [ "${PERF_LOCK_TAKEN:-0}" = "1" ] || return 0
   [ -n "${PERF_LOCK_CLAIMER_PID:-}" ] || return 0
-  PERF_LOCK="${PERF_LOCK:-${TEAM_PERF_LOCK:-${TMPDIR:-/tmp}/teamsmith-perf.lock}}"
+  PERF_LOCK="${PERF_LOCK:-${TEAM_PERF_LOCK:-$(team_tmp_root)/teamsmith-perf.lock}}"
   PERF_LOCK_COMPANION="$(perf_lock_companion "$PERF_LOCK")"
   local p q ok=0
   for q in $(gate_lock_ancestry_chain "$$"); do [ "$q" = "$PERF_LOCK_CLAIMER_PID" ] && ok=1 && break; done
@@ -275,7 +275,7 @@ fi
 
 # 只读探活门禁锁：门禁在跑时性能读数会被它影响，打印持有者；**不排队等它**（性能锁独立）。
 perf_smoke_lock_probe() {
-  local lock="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}" comp probe busy=0
+  local lock="${TEAM_SMOKE_LOCK:-$(team_tmp_root)/teamsmith-smoke.lock}" comp probe busy=0
   comp="$lock"
   if declare -F gate_lock_companion_path >/dev/null 2>&1; then comp="$(gate_lock_companion_path "$lock")"; fi
   if ! command -v flock >/dev/null 2>&1; then return 0; fi

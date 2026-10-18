@@ -22,10 +22,15 @@ SG_SECTION_GUARD_LIB=1
 
 # P287：ns（临时根名字里的项目命名空间）的唯一实现在 scripts/lib/common.sh —— 本库被 smoke 前导段
 # source（tmp-root.sh 已经带进来了），独立跑 --self-test 时自己补一次。
+# P309：库位置可以显式给（`TEAM_SG_SKILL_DIR`）—— 自检的**变异副本**被复制到临时根下运行，它自己
+# 数不出 skill 树在哪；不显式给就会找不到解析器，红侧因此「红错原因」。给了之后仍然只有一处解析实现。
 if ! declare -F team_project_ns >/dev/null 2>&1; then
-  _sg_ns_lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/scripts/lib/common.sh"
+  _sg_ns_lib="${TEAM_SG_SKILL_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)}/scripts/lib/common.sh"
   [ -f "$_sg_ns_lib" ] && . "$_sg_ns_lib"
   unset _sg_ns_lib
+fi
+if ! declare -F team_tmp_root >/dev/null 2>&1; then
+  printf 'section-guard: 缺少解析器 team_tmp_root（scripts/lib/common.sh 没被 source 进来，可给 TEAM_SG_SKILL_DIR）\n' >&2
 fi
 
 # ---------------------------------------------------------------- 状态（全部有默认值：smoke 是 set -u）
@@ -44,7 +49,7 @@ SG_TICKS=0
 SG_ELAPSED=0
 SG_OWNER_PID="$$"
 SG_OWNER_START=""
-SG_BASE="${TMPDIR:-/tmp}"
+SG_BASE="$(team_tmp_root)"
 SG_RUN_TMP=""
 SG_BUDGETS=""
 SG_TIMING=""
@@ -73,7 +78,7 @@ _sg_now() { date +%s; }
 
 # P281：心跳文件的路径**只在这里拼一次**（门禁锁的记录要公布它，嵌套运行要靠它找祖辈的武装段）
 section_guard_heartbeat_path() { # [<owner pid>] → <TMPDIR>/.teamsmith-smoke-heartbeat.<pid>
-  printf '%s\n' "${TMPDIR:-/tmp}/.teamsmith-smoke-heartbeat.${1:-$$}"
+  printf '%s\n' "$(team_tmp_root)/.teamsmith-smoke-heartbeat.${1:-$$}"
 }
 
 # P281：祖辈当前武装段的到期时刻（armed_epoch + budget）；读不到/未武装 → 空
@@ -131,7 +136,7 @@ section_guard_init() {
       *) printf 'section-guard: 不认识的参数 %s\n' "$1" >&2; return 2 ;;
     esac
   done
-  SG_BASE="${TMPDIR:-/tmp}"
+  SG_BASE="$(team_tmp_root)"
   SG_FIXTURE="${TEAM_SMOKE_FIXTURE:-0}"
   SG_OWNER_PID="${BASHPID:-$$}"
   SG_OWNER_START="$(_sg_proc_start "$SG_OWNER_PID" 2>/dev/null || true)"
@@ -803,6 +808,11 @@ _sg_selftest_f1() {
 
 # 红侧翻转：把实现变异回旧形状（f2 = 整数守卫；f1 = 「子孙忽略 TERM」措辞）。
 # 这是「破坏实现 → 守卫测试必须红」的前半：变异后的副本由 _sg_selftest_flips 跑。
+_sg_skill_dir() { # 本库所属的 skill 树（变异副本靠它拿到真正的解析器）
+  if [ -n "${TEAM_SG_SKILL_DIR:-}" ]; then printf '%s' "$TEAM_SG_SKILL_DIR"; return 0; fi
+  ( cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd )
+}
+
 _sg_selftest_mutate() { # <src> <dst> <f2|f1> → 0 = 变异落地
   local src="$1" dst="$2" kind="$3"
   case "$kind" in
@@ -838,7 +848,7 @@ _sg_selftest_flips() {
   # --- F2 ---
   mut="$dir/f2-legacy-guard.sh"; out="$dir/f2-mutated.log"
   if _sg_selftest_mutate "$self" "$mut" f2; then
-    TMPDIR="$dir/f2-tmp" bash "$mut" --self-test decimal >"$out" 2>&1; rc=$?
+    TEAM_SG_SKILL_DIR="$(_sg_skill_dir)" TMPDIR="$dir/f2-tmp" bash "$mut" --self-test decimal >"$out" 2>&1; rc=$?
     [ "$rc" -ne 0 ] && st_ok "F2 红侧：还原成整数守卫 → decimal 夹具红（rc=$rc）" \
                     || st_bad "F2 红侧：还原成整数守卫后 decimal 夹具仍绿（守卫没被证到）"
     grep -qF '超过实测带' "$out" && st_bad "F2 红侧：整数守卫下居然打了「超过实测带」行" \
@@ -852,7 +862,7 @@ _sg_selftest_flips() {
   # --- F1 ---
   mut="$dir/f1-legacy-wording.sh"; out="$dir/f1-mutated.log"
   if _sg_selftest_mutate "$self" "$mut" f1; then
-    TMPDIR="$dir/f1-tmp" bash "$mut" --self-test f1 >"$out" 2>&1; rc=$?
+    TEAM_SG_SKILL_DIR="$(_sg_skill_dir)" TMPDIR="$dir/f1-tmp" bash "$mut" --self-test f1 >"$out" 2>&1; rc=$?
     [ "$rc" -ne 0 ] && st_ok "F1 红侧：还原成「子孙忽略 TERM」措辞 → f1 夹具红（rc=$rc）" \
                     || st_bad "F1 红侧：还原措辞后 f1 夹具仍绿（归因守卫没被证到）"
     grep -qF '归因仍声称' "$out" \
@@ -879,7 +889,8 @@ _sg_selftest() {
   st_ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
   st_bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
   local ST_ROOT
-  ST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-sg-selftest-$(team_project_ns).XXXXXX" 2>/dev/null)" || {
+  team_tmp_root_prepare >/dev/null 2>&1 || true
+  ST_ROOT="$(mktemp -d "$(team_tmp_root)/teamsmith-sg-selftest-$(team_project_ns).XXXXXX" 2>/dev/null)" || {
     printf 'section-guard 自检：建不出临时根\n' >&2; return 3; }
   local pgid_before pgid_after
   pgid_before="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"

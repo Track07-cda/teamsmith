@@ -241,7 +241,9 @@ team_version_newer() { # <local> <published> → 0 = published 的数字段严�
 team_update_lookup() { # → stdout npm 上的最新版本（严格 ^[0-9]+.[0-9]+.[0-9]+$）；查不到 → 空
   command -v npm >/dev/null 2>&1 || return 0
   local tmp rc=0 pid i=0 out
-  tmp="$(mktemp "${TMPDIR:-/tmp}/teamsmith-npm.$(team_project_ns).XXXXXX" 2>/dev/null)" || return 0
+  team_tmp_root_prepare >/dev/null 2>&1 || true
+  team_tmp_root_prepare >/dev/null 2>&1 || true
+  tmp="$(mktemp "$(team_tmp_root)/teamsmith-npm.$(team_project_ns).XXXXXX" 2>/dev/null)" || return 0
   if command -v timeout >/dev/null 2>&1; then
     timeout 2 npm view teamsmith version --registry https://registry.npmjs.org >"$tmp" 2>/dev/null || rc=$?
   else
@@ -845,7 +847,8 @@ team_panel_capacity_json() {
   fi
   [ -n "${ram:-}" ] || ram=0
   local p t a it iff id seen=" " entries="" avail_json ino_json readable
-  for p in "${TMPDIR:-/tmp}" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}"; do
+  local temp_root; temp_root="$(team_tmp_root 2>/dev/null || true)"
+  for p in "$temp_root" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}"; do
     [ -n "$p" ] || continue
     team__disk_stats "$p"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
     if [ -n "$id" ]; then
@@ -859,9 +862,11 @@ team_panel_capacity_json() {
     fi
     entries="$entries${entries:+, }{\"path\": $(team_panel_json_str "$p"), \"avail_mb\": $avail_json, \"free_inodes\": $ino_json, \"readable\": $readable}"
   done
-  printf '{"ram_avail_mb": %s, "swap_free_mb": %s, "agents": %s, "disk": [%s], "spark": %s}\n' \
+  printf '{"ram_avail_mb": %s, "swap_free_mb": %s, "agents": %s, "temp_root": %s, "temp_root_source": %s, "disk": [%s], "spark": %s}\n' \
     "$(team_panel_num "$ram")" "$(team_panel_num "$diskfree")" \
-    "$(team_panel_num "$(team_agent_capacity)")" "$entries" "$spark"
+    "$(team_panel_num "$(team_agent_capacity)")" \
+    "$(team_panel_json_str "${temp_root:-}")" "$(team_panel_json_str "$(team_tmp_root_source 2>/dev/null || printf 'default')")" \
+    "$entries" "$spark"
   [ "$degraded" = "0" ]
 }
 

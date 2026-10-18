@@ -67,7 +67,7 @@ p287n_ns_path() { TEAM_PROJECT= team_project_ns 2>/dev/null || printf 'nosig-000
 # 同一个实现、指定项目名（leg3 的 ②③ 两臂用：只换 slug，不复制 ns 的形状假设）
 p287n_ns_slug() { TEAM_PROJECT="$1" team_project_ns 2>/dev/null || printf 'nosig-00000000'; }
 NS="$(p287n_ns_path)"
-BASE="${TMPDIR:-/tmp}"
+BASE="$(team_tmp_root)"
 OUT="$(mktemp -d "$BASE/.teamsmith-p287flip-name-$NS.XXXXXX")" || exit 2
 FLIP_RC=0
 note()      { printf '%s\n' "$*"; }

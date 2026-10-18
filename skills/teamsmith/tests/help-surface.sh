@@ -54,6 +54,9 @@ export TEAM_HELP_SURFACE_FLIP_DRY="$_flipdry_arg"
 export TEAM_HELP_SURFACE_FLIP_ONLY="$_fliponly_arg"
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# P309：临时根只有一处解析（product 的 team_tmp_root）。这份夹具以前自己写 ${TMPDIR:-/tmp}，
+# 现在必须把解析器 source 进来 —— 否则 team_tmp_root 不存在、拼出来的路径是空根（`/.teamsmith-…`）。
+. "$here/lib/tmp-root.sh"
 tree="${_tree_arg:-$(cd -P "$here/../../.." && pwd)}"
 skill="$tree/skills/teamsmith"
 team="$skill/scripts/team"
@@ -77,7 +80,7 @@ if [ "${1:-}" = "--render-one" ]; then
   # locale and width exactly as before (the locale group is the only caller that pins them).
   _env=()
   [ -n "$_loc" ] && _env=(LC_ALL="$_loc")
-  _rtmp="${TMPDIR:-/tmp}/.teamsmith-help-surface-render.$$"
+  _rtmp="$(team_tmp_root)/.teamsmith-help-surface-render.$$"
   mkdir -p "$_rtmp" "$_dir"
   ( cd "$_rtmp" && env "${_env[@]}" TEAM_LANG="$_lang" ${_w:+TEAM_HELP_WIDTH="$_w"} \
       bash "$team" "${_argv[@]}" ) > "$_dir/$_kind--$_label.txt" 2>/dev/null
@@ -125,7 +128,7 @@ finding() { printf '  \033[31m✗\033[0m %s\n' "$1"; FIND=$((FIND + 1)); }
 skip()    { printf '  \033[33mSKIP\033[0m %s\n' "$1"; SKIP=$((SKIP + 1)); }
 
 # ---------------------------------------------------------------- owned scratch root
-tmp="${TMPDIR:-/tmp}/.teamsmith-help-surface.$$"
+tmp="$(team_tmp_root)/.teamsmith-help-surface.$$"
 rm -rf "$tmp"; mkdir -p "$tmp/logs" "$tmp/fx"
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0

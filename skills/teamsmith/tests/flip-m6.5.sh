@@ -39,7 +39,10 @@ SESS="teamsmith-flip-m65-$$"
 # M28：夹具自己的 tmux 调用要有隔离证据（裸 tmux 按 $TMUX 打到调用者 server —— M23 事故形状）。
 # unset TMUX + 私有 TMUX_TMPDIR；工具在私有 server 的窗口里跑，继承同一套环境。口径见 tests/tmux-lint.pl。
 unset TMUX TMUX_PANE 2>/dev/null || true
-TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
+# P309：socket 目录不挂临时根下（临时根名带项目 ns 后，<run>/tmux/tmux-<uid>/... 会越过 AF_UNIX 的
+# 107 字节，隔离前置直接硬停）。基址取短的：先试解析出的临时根，放不下退平台默认（tmp-root.sh 一处实现）。
+TMUX_TMPDIR="$(tmp_root_socket_dir tmux "tmux-$(id -u)/default")" || TMUX_TMPDIR="$TMP/tmux"
+mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
 cleanup() { # P162：收尾先证明私有 socket 生效（不成立就拒绝；cleanup 里不许 exit）
   tmux_iso_guard_soft "flip-m6.5" "收尾：私有 session" --tmpdir "${TMUX_TMPDIR:-}" --own-root "$TMP" \
     && tmux kill-session -t "$SESS" 2>/dev/null || true

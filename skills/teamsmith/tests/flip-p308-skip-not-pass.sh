@@ -33,7 +33,7 @@ grep -qF '# >>> P308 close-out predicate' "$FIX" \
 . "$FLIP_SKILL/scripts/lib/common.sh" 2>/dev/null \
   || { printf 'flip-p308-skip-not-pass: 找不到 %s/scripts/lib/common.sh（skill 树不全）\n' "$FLIP_SKILL" >&2; exit 2; }
 NS="$(team_project_ns 2>/dev/null || printf 'nosig-00000000')"
-BASE="${TMPDIR:-/tmp}"
+BASE="$(team_tmp_root)"
 ROOT="$(mktemp -d "$BASE/.teamsmith-p308flip-$NS.XXXXXX")" || exit 2
 
 FLIP_RC=0; SKIPPED=0

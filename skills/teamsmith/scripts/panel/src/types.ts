@@ -87,6 +87,9 @@ export interface PanelCapacity {
   ram_avail_mb: number
   swap_free_mb: number
   agents: number
+  /** P309: the resolved temp root (`team_tmp_root`) and how it was resolved. */
+  temp_root?: string
+  temp_root_source?: string
   /** P144: one entry per judged filesystem (temp root + worktrees root). */
   disk?: PanelDiskEntry[]
   spark: number[]

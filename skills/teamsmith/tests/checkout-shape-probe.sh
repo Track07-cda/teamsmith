@@ -35,8 +35,10 @@ SEL="$SKILL_DIR/tests/section-select.sh"
 CINV="$SKILL_DIR/tests/coverage-inventory.sh"
 # shellcheck source=tests/lib/checkout-shape.sh
 . "$SKILL_DIR/tests/lib/checkout-shape.sh"
+# P309：临时根走 product 的解析器（唯一实现），不自己写 ${TMPDIR:-/tmp}
+. "$SKILL_DIR/tests/lib/tmp-root.sh"
 
-T="${TMPDIR:-/tmp}/.teamsmith-p148-shape-probe.$$"
+T="$(team_tmp_root)/.teamsmith-p148-shape-probe.$$"
 rm -rf "$T"; mkdir -p "$T"
 trap '[ "${P148_SHAPE_KEEP:-0}" = "1" ] || rm -rf "$T"' EXIT
 

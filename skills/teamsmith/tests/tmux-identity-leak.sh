@@ -218,7 +218,12 @@ SHIM_PATH="$PROD/scripts/shim:$BASE_PATH"
 
 # ── 夹具骨架：A/B 两个 git 项目、一个没有 .pi/team 的目录、私有 socket 岛、stub 真身 ─────────────
 A="$TMP/leakA"; B="$TMP/leakB"; NOTPROJ="$TMP/notproj"
-ISL="$TMP/island"; ISL_REF="$TMP/island-ref"; ISL_RO="$TMP/island-ro"
+# P309：三条私有岛是 tmux 的 TMUX_TMPDIR（socket = <岛>/tmux-<uid>/<server>）。临时根搬到
+# `/var/tmp/teamsmith-<ns>` 后，挂在 $TMP 下的岛会越过 AF_UNIX 的 107 字节 —— 岛的位置改由
+# `tmp_root_socket_dir` 给（先试解析出的根、放不下退系统临时目录），仍然是本轮自建、只装本轮 socket。
+# 岛**不是**本段的「自有根」判据对象（那是 $TMP）；这里只用它的 socket。
+ISL_BASE="$(tmp_root_socket_dir tml-island "tmux-$(id -u)/default")" || ISL_BASE="$TMP"
+ISL="$ISL_BASE/island"; ISL_REF="$ISL_BASE/island-ref"; ISL_RO="$ISL_BASE/island-ro"
 mkdir -p "$A" "$B" "$NOTPROJ" "$ISL" "$ISL_REF" "$ISL_RO"
 for d in "$A" "$B"; do
   ( cd "$d" && git init -q -b main . && git config user.email fixture@example.invalid && git config user.name fixture \
@@ -271,7 +276,7 @@ if [ "$HAVE_TMUX" = "1" ]; then
   SOCK_LEN="$(printf '%s' "$SOCK_EG" | wc -c | tr -d ' ')"
   if [ "$SOCK_LEN" -gt 107 ]; then
     HAVE_TMUX=0
-    TMUX_WHY="私有 socket 路 $SOCK_LEN 字节 > AF_UNIX 上限 107（TMPDIR 太深：$TMP）—— 把 TMPDIR 换浅一点再跑"
+    TMUX_WHY="私有 socket 路 $SOCK_LEN 字节 > AF_UNIX 上限 107（TMPDIR 太深：$ISL）—— 把 TMPDIR 换浅一点再跑"
     printf '  \033[2m·\033[0m %s\n' "$TMUX_WHY"
   else
     printf '  \033[2m·\033[0m 隔离前提：私有 socket 路 $SOCK_LEN 字节 ≤ 107（能绑）\n'

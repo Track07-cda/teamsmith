@@ -40,6 +40,7 @@ set -uo pipefail
 
 BAN_SELF="${BASH_SOURCE[0]}"
 BAN_DIR="$(cd -P "$(dirname "$BAN_SELF")" && pwd)"
+BAN_SKILL_DIR="$(cd -P "$BAN_DIR/.." && pwd)"   # skill 根（影子副本要指回真库，见 tmp-root.sh 的 TEAM_TMP_SKILL_DIR）
 BAN_REPO_ROOT="$(cd -P "$BAN_DIR/../../.." && pwd)"   # tests/ → teamsmith/ → skills/ → 仓库根
 BAN_DOCS_REL="docs/team"
 BAN_NAMES_REL=".pi/team/forbidden-names.txt"
@@ -328,7 +329,7 @@ ban_run() { # <root> <published|all> <名单源文件|-> <用户名|->
 
 # ── 自检：五形状 + 不误伤 + 混合/超量/截断 + 可证伪（含遮蔽影子）──────────────────────────
 ban_selftest() {
-  local base="${TMPDIR:-/tmp}/.teamsmith-ledger-ban-selftest.$$"
+  local base="$(team_tmp_root)/.teamsmith-ledger-ban-selftest.$$"
   local okn=0 badn=0 case_rc=0 out="" rc=0
   rm -rf "$base"
   mkdir -p "$base" || { ban_note "自检：建不出 $base"; return 1; }
@@ -425,7 +426,7 @@ EOF
       awk -v pat="$ban_ct" '{ if (index($0, pat) > 0) print ": # 影子：永远不记命中"; else print }' \
         "$sh/ledger-ban.sh" >"$sh/ledger-ban.new" && mv "$sh/ledger-ban.new" "$sh/ledger-ban.sh"
       if [ "$(grep -cF "$ban_ct" "$sh/ledger-ban.sh")" = "0" ]; then
-        out="$(LEDGER_BAN_SHADOW_CHILD=1 bash "$sh/ledger-ban.sh" --self-test 2>&1)"; rc=$?
+        out="$(LEDGER_BAN_SHADOW_CHILD=1 TEAM_TMP_SKILL_DIR="$BAN_SKILL_DIR" bash "$sh/ledger-ban.sh" --self-test 2>&1)"; rc=$?
         if [ "$rc" = "1" ] && ban_case_has "✗ ①" && ban_case_has "✗ ②"; then
           ban_case_ok "④" "影子：把扫描改成永远通过 → ①②红（自检有牙）"
         else
@@ -556,7 +557,7 @@ EOF
       awk -v pat="$ban_mk" '{ if (index($0, pat) > 0) sub(/i <= n_spans/, "i <= 0"); print }' \
         "$sh2/ledger-ban.sh" >"$sh2/ledger-ban.new" && mv "$sh2/ledger-ban.new" "$sh2/ledger-ban.sh"
       if [ "$(grep -cF "$ban_mk" "$sh2/ledger-ban.sh")" = "0" ]; then
-        out="$(LEDGER_BAN_SHADOW_CHILD=1 bash "$sh2/ledger-ban.sh" --self-test 2>&1)"; rc=$?
+        out="$(LEDGER_BAN_SHADOW_CHILD=1 TEAM_TMP_SKILL_DIR="$BAN_SKILL_DIR" bash "$sh2/ledger-ban.sh" --self-test 2>&1)"; rc=$?
         if [ "$rc" = "1" ] && ban_case_has "✗ ⑦" && ban_case_has "✗ ⑧"; then
           ban_case_ok "④b" "影子（遮蔽关掉）：⑦⑧ 的「输出无原文」断言红（断言有牙）"
         else
@@ -607,6 +608,6 @@ fi
 if [ "$BAN_SCOPE" = "published" ] && [ ! -e "$BAN_ROOT/$BAN_DOCS_REL" ]; then
   ban_note "注意：$BAN_DOCS_REL 不存在（产品面检出？）—— 没有账本文本可扫"
 fi
-BAN_TMP="$(tmp_root_create ledger-ban)" || ban_die "建不出临时根（TMPDIR=${TMPDIR:-/tmp}）"
+BAN_TMP="$(tmp_root_create ledger-ban)" || ban_die "建不出临时根（TMPDIR=$(team_tmp_root)）"
 ban_run "$BAN_ROOT" "$BAN_SCOPE" "$BAN_NAMES" "$BAN_USER"
 exit $?

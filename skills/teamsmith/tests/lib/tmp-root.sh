@@ -42,7 +42,10 @@ TMP_ROOT_FAMILY_PREFIX="teamsmith-"
 # P287（change: gate-lock-external-deletion）：项目命名空间 ns 的**唯一实现**在
 # `scripts/lib/common.sh`（team_project_ns）—— 本文件只调它，不复制第二份。没有那份库时
 # （极端手工拷贝）退到一个诚实的无签名值，绝不报错。
-TMP_ROOT_SKILL_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd || true)"
+# P309：产品库的位置。默认按本文件的相对位置推；**部分拷贝的夹具**（自我变异副本只拷了
+# `lib/tmp-root.sh`）显式给出 `TEAM_TMP_SKILL_DIR` 指回真库 —— 否则解析器不在，创建者会具名失败
+# （这是刻意的：宁可具名失败也不猜一个默认根）。仍然只有**一处**实现（common.sh）。
+TMP_ROOT_SKILL_DIR="${TEAM_TMP_SKILL_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd || true)}"
 if [ -n "$TMP_ROOT_SKILL_DIR" ] && [ -f "$TMP_ROOT_SKILL_DIR/scripts/lib/common.sh" ]; then
   # shellcheck source=../../scripts/lib/common.sh
   . "$TMP_ROOT_SKILL_DIR/scripts/lib/common.sh"
@@ -51,7 +54,39 @@ fi
 _tmp_root_err() { printf 'tmp-root: %s\n' "$*" >&2; }
 
 # ---------------------------------------------------------------- 基础事实
-tmp_root_base() { printf '%s\n' "${TMPDIR:-/tmp}"; }
+# P309：基准 = product 库里**唯一**的解析器 `team_tmp_root`（TMPDIR → TEAM_TMP_ROOT → 磁盘默认
+# `/var/tmp/teamsmith-<ns>`）。创建者不自己算这个根：两处各算 = 两个答案 = 清扫器与门禁对不上基准。
+# 库没 source 进来 → 具名失败（绝不猜一个默认值接着跑）。
+tmp_root_base() {
+  if ! declare -F team_tmp_root >/dev/null 2>&1; then
+    _tmp_root_err "缺少解析器 team_tmp_root（scripts/lib/common.sh 没被 source 进来）—— 不猜默认值"
+    return 3
+  fi
+  team_tmp_root
+}
+
+# 私有 tmux socket 的**短基址**（P310 的判据、P309 起由这里统一实现）：`<dir>/tmux-<uid>/<名字>` 必须
+# ≤ AF_UNIX 的 107 字节，而 socket 路径的**长度不许跟着临时根变长**（临时根名带 ns + 6 位随机，嵌套一层
+# 就把 83 顶到 129）。先试解析出的临时根（与夹具同一块盘），放不下再退 OS 默认临时目录；两处都不行 →
+# 返回 1，由调用者决定硬停还是退回临时根下（不静默）。
+# 这里是**唯一**允许直接写平台默认临时目录的地方（--lint 对本文件豁免；别处一律调 team_tmp_root）。
+# 回退基址是**系统**临时目录（不是 `$TMPDIR`）：判据就是「无论临时根被指到多深，socket 都放得下」，
+# 回退到 `$TMPDIR` 再深一次等于没回退（flip-p158 的 case 目录 120 字节就是这样把 cleanup 顶到 158 的）。
+TMP_ROOT_SOCKET_FALLBACK="${TMP_ROOT_SOCKET_FALLBACK:-/tmp}"
+tmp_root_socket_dir() { # <kind> <socket 名（含 tmux-<uid>/ 前缀，取上界）> → 打印目录
+  local kind="${1:-tmux}" name="${2:-default}" base dir
+  for base in "$(tmp_root_base 2>/dev/null || true)" "$TMP_ROOT_SOCKET_FALLBACK"; do
+    [ -n "$base" ] && [ -d "$base" ] || continue
+    dir="$(mktemp -d "$base/.${kind:0:1}-$(id -u).XXXXXX" 2>/dev/null || true)"
+    [ -n "$dir" ] || continue
+    if [ $(( ${#dir} + 1 + ${#name} )) -le 107 ]; then printf '%s\n' "$dir"; return 0; fi
+    rmdir "$dir" 2>/dev/null || true
+  done
+  return 1
+}
+
+# 解析来源（tmpdir | config | default）；库不在 → 空
+tmp_root_source() { declare -F team_tmp_root_source >/dev/null 2>&1 && team_tmp_root_source; }
 
 # 本项目的命名空间（`<slug>-<hash8>`，一处实现在 common.sh）。
 tmp_root_ns() {
@@ -167,10 +202,30 @@ tmp_root_create() {
   case "$kind" in
     ''|*[!A-Za-z0-9._-]*) _tmp_root_err "非法 kind [${kind}]（只允许 A-Za-z0-9._-）"; return 2 ;;
   esac
-  local base; base="$(tmp_root_base)"
-  if [ ! -d "$base" ]; then
-    _tmp_root_err "临时根 $base 不存在（TMPDIR 指向不存在的目录？）"
-    return 3
+  local base src; base="$(tmp_root_base)" || return 3
+  src="$(tmp_root_source)"
+  [ -n "$src" ] || src="default"
+  # P309：默认腿的目录由**创建者**按需建（0700，本变更里唯一被自动创建的目录）；显式选定的根
+  # （TMPDIR / 契约的 TEAM_TMP_ROOT）必须已经存在且可写 —— 具名失败，**绝不**静默回落到 /tmp。
+  if [ "$src" = "default" ] && [ ! -d "$base" ]; then
+    if mkdir -p -m 700 -- "$base" 2>/dev/null; then
+      _tmp_root_err "临时根目录已创建：$base（source=default，0700）"
+    fi
+  fi
+  if ! team_tmp_root_usable "$base" 2>/dev/null; then
+    if [ "${TMP_ROOT_BREAK:-}" = "fallback" ]; then
+      # 自检红侧：把「静默回落」这个缺陷形状放回来（守门断言必须因此变红）
+      _tmp_root_err "FLIP(fallback)：$base 不可用 → 静默改用 /tmp"
+      base="/tmp"
+    else
+      local why="不存在"
+      if [ -e "$base" ]; then
+        if [ ! -d "$base" ]; then why="不是目录"; elif [ ! -w "$base" ]; then why="不可写"; fi
+      fi
+      _tmp_root_err "临时根不可用：$base（source=$src）$why"
+      _tmp_root_err "  修法：mkdir -p '$base' 并确保可写；或把 $([ "$src" = "tmpdir" ] && printf 'TMPDIR' || printf 'TEAM_TMP_ROOT') 改到已存在的可写目录"
+      return 3
+    fi
   fi
   local ns; ns="$(tmp_root_ns)"
   # P287：根的名字带项目 ns（`teamsmith-<kind>-<ns>.XXXXXX`）；自检红侧 flat-name 回到改动前的
@@ -373,7 +428,7 @@ _tmp_root_selftest() {
   # ① 创建：路径、家族名、命名空间、标记、台账
   export TMPDIR="$st_dir"
   local r my_ns; my_ns="$(tmp_root_ns)"; r="$(tmp_root_create selftest)"
-  case "$r" in "$st_dir"/teamsmith-selftest-*) st_ok "根建在 \${TMPDIR} 下并且名字在 owned 家族（$r）" ;;
+  case "$r" in "$st_dir"/teamsmith-selftest-*) st_ok "根建在解析出的临时根下并且名字在 owned 家族（$r）" ;;
                *) st_bad "根的路径/名字不对（[$r]，期望 $st_dir/teamsmith-selftest-<ns>.*）" ;; esac
   # P287：名字必须带本项目的 ns（flat-name 红侧会在这里变红）
   if case "$r" in "$st_dir"/teamsmith-selftest-"$my_ns".*) true ;; *) false ;; esac; then
@@ -415,15 +470,15 @@ _tmp_root_selftest() {
     st_ok "写死 /tmp 的路径被拒（tmp_root_path_ok 非 0）"
   fi
   if tmp_root_path_ok "$st_dir/teamsmith-x-$(tmp_root_ns).1234"; then
-    st_ok "\${TMPDIR} 下带 ns 的家族路径被接受"
+    st_ok "解析出的临时根下带 ns 的家族路径被接受"
   else
-    st_bad "\${TMPDIR} 下带 ns 的家族路径被误拒"
+    st_bad "解析出的临时根下带 ns 的家族路径被误拒"
   fi
   # P287：家族名在但不带 ns 的路径照样不合规（no-ns 的形状）
   if tmp_root_path_ok "$st_dir/teamsmith-x.1234"; then
-    st_bad "\${TMPDIR} 下不带 ns 的家族路径被接受（命名空间规则失效）"
+    st_bad "解析出的临时根下不带 ns 的家族路径被接受（命名空间规则失效）"
   else
-    st_ok "\${TMPDIR} 下不带 ns 的家族路径被拒（tmp_root_path_ok 非 0）"
+    st_ok "解析出的临时根下不带 ns 的家族路径被拒（tmp_root_path_ok 非 0）"
   fi
 
   # ③ 正常回收：子进程创建 → 退出 → 根消失

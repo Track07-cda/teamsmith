@@ -269,6 +269,7 @@ export const zh = {
   label_TEAM_SPEC_DIR: '规格目录',
   label_TEAM_ROOT: '项目根',
   label_TEAM_MAIN_ROOT: '主检出根',
+  label_TEAM_TMP_ROOT: '临时根目录',
   label_TEAM_CONFIG_FILE: '契约文件',
   // —— 分支与托管平台（只读）
   label_TEAM_BRANCH_MODE: '分支命名模式',

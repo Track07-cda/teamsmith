@@ -39,7 +39,10 @@ mkdir -p "$TMP/red" "$TMP/shim"
 # 下面仍旧保留 PATH shim（工具的调用走 -L）；这里补的是**本脚本自己**的顶层白名单：
 # unset TMUX + 私有 TMUX_TMPDIR，shim 洗掉也不会回落默认 socket。口径见 tests/tmux-lint.pl。
 unset TMUX TMUX_PANE 2>/dev/null || true
-TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
+# P309：socket 目录不挂临时根下（临时根名带项目 ns 后，<run>/tmux/tmux-<uid>/... 会越过 AF_UNIX 的
+# 107 字节，隔离前置直接硬停）。基址取短的：先试解析出的临时根，放不下退平台默认（tmp-root.sh 一处实现）。
+TMUX_TMPDIR="$(tmp_root_socket_dir tmux "tmux-$(id -u)/default")" || TMUX_TMPDIR="$TMP/tmux"
+mkdir -p "$TMUX_TMPDIR"; export TMUX_TMPDIR
 git -C "$REPO_ROOT" archive "$BASE" skills/teamsmith | tar -x -C "$TMP/red" || exit 2
 RED_SKILL="$TMP/red/skills/teamsmith"
 GREEN_SKILL="$SKILL_DIR"

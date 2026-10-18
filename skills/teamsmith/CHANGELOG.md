@@ -5,6 +5,34 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## 未发布（下个版本候选）
+
+### ⚠️ 默认变化：临时根落到磁盘（tmp-root-on-disk）
+
+夹具、门禁、评审与清扫用的临时根，默认从 `/tmp` 搬到**磁盘**上的 `/var/tmp/teamsmith-<项目 ns>`
+（`/var/tmp` 不可写时退回 `/tmp`）。理由：本机 `/tmp` 是 tmpfs —— 夹具写盘吃的是 RAM，与 OOM killer
+读同一个池（现场读数见 `openspec/changes/tmp-root-on-disk/design.md`）。
+
+- **一个解析函数**：`team_tmp_root`（`TMPDIR` → `TEAM_TMP_ROOT` → 平台默认）是唯一实现；清扫器、门禁、
+  派单地板、doctor、面板与夹具都调它。谁怎么解析的会被打印出来：`team status`、派单的余量行、
+  `tmp-hygiene --status` 都在根旁边写 `source=tmpdir|config|default`；环境里的 `TMPDIR` 盖过项目钉的
+  `TEAM_TMP_ROOT` 时，输出**点名**这件事。
+- **升级须知**（老项目不用做任何事，但有三件事会变）：
+  1. 第一次写盘时创建 `/var/tmp/teamsmith-<ns>`（0700）；显式指定的根（`TMPDIR` / `TEAM_TMP_ROOT`）**不会**
+     被代建 —— 不可用就具名失败（点名路径 + 修法）并拒绝派单，绝不静默换一个根。
+  2. 旧默认根 `/tmp` 里的残留不会自己搬家：`tmp-hygiene --status` 会报旧根下的家族目录数量，并给出
+     `TMPDIR=/tmp … --sweep` 这一条（同一条清扫命令，把旧基准显式选出来）；清扫器一次只作用于一个基准
+     （混着判会把新根里的东西判成「别家」）。
+  3. `tmp-hygiene --lint` 多一条规则：任何自己算临时根的地方（`${TMPDIR:-/tmp}`、`${TMPDIR}`、面板源码里的
+     `process.env.TMPDIR` / 无参 `tmpdir()`）都是 finding。豁免只有两处：解析函数自己、以及**冻结的**门禁锁
+     发布路径 `/tmp/teamsmith-smoke.lock`（P287：搬它会在升级窗口里新开一条静默并发窗口）。
+- **回滚**：在项目配置 `.pi/team/config.sh` 里写 `TEAM_TMP_ROOT="/tmp"`（旧行为；`team config set` 按
+  `refuse` 类拒绝改它 —— 搬家是操作者动作）。门禁锁的位置不受这个键影响，它仍是 `/tmp/teamsmith-smoke.lock`。
+- **锁不搬**：项目锁与门禁锁的位置仍按环境里的 `TMPDIR`（未设则 `/tmp`），**不**跟着临时根走 ——
+  锁是跨版本串行用的共享状态，跟着搬会在升级窗口里让新旧两版各取各的锁（与 P287 冻结门禁锁发布路径同一条纪律）。
+- **地板**：派单的字节/inode 余量判的是**选定的**那个根（不再硬编码 `/tmp`），拒绝文案点名它；
+  doctor 多一行「锁文件系统」只警告行 —— 锁所在的文件系统可能没被别的行覆盖，但它不拒绝派单。
+
 ## v0.2.0 · 2026-10-14
 
 功能版：**按任务类别分配模型**（含破坏式配置迁移）、**Pulse 关键回复页**，以及长作业车道的提示词侧。

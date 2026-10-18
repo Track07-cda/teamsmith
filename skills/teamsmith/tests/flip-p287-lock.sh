@@ -46,7 +46,7 @@ NS="$(team_project_ns 2>/dev/null || printf 'nosig-00000000')"
 # shellcheck source=../scripts/lib/gate-lock.sh
 . "$FLIP_SKILL/scripts/lib/gate-lock.sh" 2>/dev/null \
   || { printf 'flip-p287-lock: 找不到 %s/scripts/lib/gate-lock.sh\n' "$FLIP_SKILL" >&2; exit 2; }
-BASE="${TMPDIR:-/tmp}"
+BASE="$(team_tmp_root)"
 ROOT="$(mktemp -d "$BASE/.teamsmith-p287flip-lock-$NS.XXXXXX")" || exit 2
 FLIP_RC=0
 note()     { printf '%s\n' "$*"; }
@@ -56,7 +56,7 @@ line_bad() { note "  ✗ $*"; FLIP_RC=1; }
 WAIT_SECS=5   # 「有界」的上限：守卫节奏 0.2s + 安全点；夹具轮询到上限再判红（不固定 sleep）
 # 场景目录（也就是嵌套运行的 $TMPDIR）放**临时根顶层**的短名字：tmux 私有 socket 有 AF_UNIX 上限，
 # 套在证据目录（$ROOT）里会超 —— 那时 0c 的隔离前置会拒绝执行（exit 2），红的是环境不是产品。
-p287l_scene() { printf '%s/.teamsmith-p287l-%s-%s' "${TMPDIR:-/tmp}" "$1" "$$"; }
+p287l_scene() { printf '%s/.teamsmith-p287l-%s-%s' "$(team_tmp_root)" "$1" "$$"; }
 
 # 一套夹具运行：私有 TMPDIR + 私有锁；可选删除伴生锁 / 翻转开关
 p287l_run() { # <技能树> <场景目录> <日志> <rm|none> <break 值> <退出码文件>

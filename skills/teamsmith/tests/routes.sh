@@ -1027,6 +1027,7 @@ RC_CLAIMS=(
   'session-fresh|修法：$TEAM_CLI dispatch $agent $id $taskfile --fresh'
   'session-overflow|修法：$TEAM_CLI dispatch $agent $id $taskfile --allow-overflow'
   'capacity-override|修法：$(team_dispatch_mem_fix_cmd'
+  'tmp-root-mkdir|修法：mkdir -p '
 )
 RC_EXTRA=()
 RC_PI_BIN=""
@@ -1445,6 +1446,16 @@ mr_refusals() {
   RC_CMD=(dispatch dev P1 "$b" --print)
   rc_case capacity-override 'MemAvailable 只剩' '修法：TEAM_MIN_AVAIL_MB=0' 'apply:cmd' route proceed "dispatched P1"
   RC_EXTRA=()
+
+  # ⑲ P309：显式选定的临时根不存在 → 修法：mkdir -p <根>（兑现：建完就放行；不许换用别的根）
+  d="$(new_fixture refuse-tmp-root)"; RC_DIR="$d"
+  rc_board "$d" P1 "P1 fixture"
+  b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
+  br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
+  RC_EXTRA=("TEAM_TMP_ROOT=$d/explicit-root")
+  RC_CMD=(dispatch dev P1 "$b" --print)
+  rc_case tmp-root-mkdir '临时根不可用' '修法：mkdir -p ' 'apply:cmd' same clear
+  RC_EXTRA=()
 }
 
 # ── flips: scratch trees that MUST redden the walk ──────────────────────────────────────────────────
@@ -1540,7 +1551,7 @@ mr_flip_require() {
 # 根都在册，与 mtime 无关）；find 是次要来源（原始形状，保留不放松）。
 # <base> 可换：翻转⑧在私有 TMPDIR 里造「不回收」形状，不让刻意的残留落进共享临时目录。
 mr_nested_leftovers() { # [<base>]
-  local base="${1:-${TMPDIR:-/tmp}}"
+  local base="${1:-$(team_tmp_root)}"
   {
     tmp_root_ledger_survivors 2>/dev/null | awk -F'\t' -v me="$$" -v base="$base" \
       '$2 != me && $3 == "routes" && index($1, base "/") == 1 { print $1 }'

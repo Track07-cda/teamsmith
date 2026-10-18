@@ -378,7 +378,8 @@ team_review_postmerge_merge3() { # <base> <branch> <path> → stdout 三路合�
   # 两边都动过、blob 历史又都判不出来时，用 git 自己的合并引擎当裁判（不用自己的行集合启发式：
   # 结果 == main = main 已含分支的改动；== 分支 = 分支更新；冲突/第三个结果 = 不确定。
   local base="$1" branch="$2" path="$3" root="$TEAM_MAIN_ROOT" d rc=0
-  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p91-merge3-$(team_project_ns).XXXXXX")" || return 1
+  team_tmp_root_prepare >/dev/null 2>&1 || true
+  d="$(mktemp -d "$(team_tmp_root)/teamsmith-p91-merge3-$(team_project_ns).XXXXXX")" || return 1
   git -C "$root" show "$TEAM_PROTECTED_BRANCH:$path" > "$d/main" 2>/dev/null || : > "$d/main"
   git -C "$root" show "$base:$path" > "$d/base" 2>/dev/null || : > "$d/base"
   git -C "$root" show "$branch:$path" > "$d/branch" 2>/dev/null || : > "$d/branch"
@@ -1086,7 +1087,8 @@ $(printf '%s\n' "$ignored_list" | head -5)
     #      **不跑门禁**、判定 FAIL（`gates_marker=mutexbroken`，与 `queuecap` 同形：门禁没有运行）。
     #   ⑤ 门禁跑完后复核身份：运行期间互斥被破坏 ⇒ 这次判定不可信 ⇒ FAIL（同样点名）。
     # 上限算式、marker 语义（P66）、超限与降级的文案/退出码**一字不改**。
-    local lock="${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}"
+    # P309：锁的发布路径**不搬**（P287 的跨版本串行）—— 只从它的唯一实现处读。
+    local lock; lock="$(gate_lock_default_path)"
     local lock_comp; lock_comp="$(gate_lock_companion_path "$lock")"
     local lock_dev_ino="" lock_cap_hit=0 lock_broken="" gate_rc=0
     local queue_started gate_end marker_epoch
@@ -1099,7 +1101,8 @@ $(printf '%s\n' "$ignored_list" | head -5)
     lock_wait="$lock_cap"
     queue_started="$(date +%s)"
     local lock_record_written=0
-    queue_marker="$(mktemp "${TMPDIR:-/tmp}/teamsmith-review-queue.$(team_project_ns).XXXXXX" 2>/dev/null || true)"
+    team_tmp_root_prepare >/dev/null 2>&1 || true
+    queue_marker="$(mktemp "$(team_tmp_root)/teamsmith-review-queue.$(team_project_ns).XXXXXX" 2>/dev/null || true)"
     queue_holder="$(gate_lock_describe_pair "$lock")"
     # P310：祖先持锁的判据 = **进程树 + starttime 的证明**（不是环境里一个可继承的标记）
     local lock_ancestor=""

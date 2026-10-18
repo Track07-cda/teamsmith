@@ -1,3 +1,3 @@
 # P287 · --lint 的**红侧素材**（家族前缀在、但丢了本项目的 ns）
 # 模板在解析后的临时根下，名字也在 owned 家族里 —— 但没有 `-<ns>.`，别人的前缀 glob 照样够得着
-T="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-thing.XXXXXX)"
+T="$(mktemp -d "$(team_tmp_root)/teamsmith-thing.XXXXXX)"

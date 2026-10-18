@@ -1290,9 +1290,10 @@ team_cmd_change() {
 # 因为它是面板的文本入口：spawn/诊断不需要知道 bundle 的位置。
 team_panel() { team_panel_text "$@"; }
 
-# ---------------------------------------------------------------- P53 / P144：磁盘余量（doctor 行）
-# 临时根 `${TMPDIR:-/tmp}` 是共享 tmpfs：它满了会报出与代码无关的假红（2026-09-22 的 ENOSPC 现场，
-# 见 openspec/changes/archive 前的 test-tmp-hygiene/design.md；D67 又死过一次席位）。
+# ---------------------------------------------------------------- P53 / P144 / P309：磁盘余量（doctor 行）
+# 临时根是**解析出的**那个根（`team_tmp_root`：TMPDIR → TEAM_TMP_ROOT → 磁盘默认 `/var/tmp/teamsmith-<ns>`），
+# 不是这里再算一遍的默认值（P309）。它今天不再默认落内存盘；但工作树与它共盘时仍会报出与代码无关的
+# 假红（2026-09-22 的 ENOSPC 现场）。
 # P144 把这一行从「只报临时根」扩成「每个被判的文件系统一行」：临时根 + 工作树根（同一个文件系统
 # 只印一行），读的是派单腿的**同一个** team_disk_stats、**同一对**阈值 —— 于是 doctor 警告 ⟺
 # 下一次派单会被拒绝（design D1）。与 inotify 余量行同型：全局资源、只读、只警告、给操作者的修法，
@@ -1307,19 +1308,24 @@ team_disk_headroom_lines() { # [path...] → 每个被判文件系统一行 "ok|
   case "$min_mb" in ''|*[!0-9]*) min_mb=1024 ;; esac
   case "$min_ino" in ''|*[!0-9]*) min_ino=100000 ;; esac
   local -a paths=("$@")
-  [ "${#paths[@]}" -gt 0 ] || paths=("${TMPDIR:-/tmp}" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")
-  local p t a it iff id seen=" " label crossed ino_note
+  [ "${#paths[@]}" -gt 0 ] || paths=("$(team_tmp_root 2>/dev/null || true)" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")
+  local p t a it iff id seen=" " label crossed ino_note measure note srcnote
   for p in "${paths[@]}"; do
     [ -n "$p" ] || continue
-    team__disk_stats "$p"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
+    # P309：未创建的默认根按最近的存在祖先判（不创建、不编数字）；显式根不可用时如实报
+    measure="$(team_tmp_root_stat_path "$p" 2>/dev/null || printf '%s' "$p")"
+    note="$(team_tmp_root_ancestor_note "$p")"
+    team__disk_stats "$measure"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
     if [ -n "$id" ]; then                          # 同一个文件系统只印一行
       case "$seen" in *" $id "*) continue ;; esac
       seen="$seen$id "
     fi
     label="$(team_disk_label "$p")余量"
+    srcnote=""
+    [ "$label" = "临时根余量" ] && srcnote=" · $(team_tmp_root_note)"
     if [ -z "$a" ]; then
-      printf 'warn\t%s\t%s 的余量读不出来（df 失败、缺列或路径不可访问）—— 绝不当作充足；修法：%s\n' \
-        "$label" "$p" "$(team_disk_remedy "$p")"
+      printf 'warn\t%s\t%s%s 的余量读不出来（df 失败、缺列或路径不可访问）—— 绝不当作充足；修法：%s%s\n' \
+        "$label" "$p" "$note" "$(team_disk_remedy "$p")" "$srcnote"
       continue
     fi
     crossed=""
@@ -1330,16 +1336,39 @@ team_disk_headroom_lines() { # [path...] → 每个被判文件系统一行 "ok|
       crossed="${crossed:+$crossed、}inode 可用 ${iff} / 总 ${it} 低于底线 ${min_ino}"
     fi
     if [ -n "$crossed" ]; then
-      printf 'warn\t%s\t%s：%s —— 现在派单会被拒绝；修法：%s\n' \
-        "$label" "$p" "$crossed" "$(team_disk_remedy "$p")"
+      printf 'warn\t%s\t%s%s：%s —— 现在派单会被拒绝；修法：%s%s\n' \
+        "$label" "$p" "$note" "$crossed" "$(team_disk_remedy "$p")" "$srcnote"
       continue
     fi
     if [ -z "$it" ]; then ino_note="inode 不适用（这个文件系统不报 inode 表）"
     elif [ -z "$iff" ]; then ino_note="inode 读数读不出来"
     else ino_note="inode 可用 ${iff} / 总 ${it}"; fi
-    printf 'ok\t%s\t%s：可用 %s / 总 %s · %s\n' \
-      "$label" "$p" "$(team_disk_human_kb "$a")" "$(team_disk_human_kb "$t")" "$ino_note"
+    printf 'ok\t%s\t%s%s：可用 %s / 总 %s · %s%s\n' \
+      "$label" "$p" "$note" "$(team_disk_human_kb "$a")" "$(team_disk_human_kb "$t")" "$ino_note" "$srcnote"
   done
+}
+
+# 锁文件系统的一条**只警告**行（P309 · D6）：门禁锁的发布路径仍是冻结的那一条（P287 的跨版本串行），
+# 它可能落在没有别的行覆盖的文件系统上。`/tmp` 满会挡住取锁（锁守卫会响亮地停），但它**不拒绝派单**，
+# 所以这条行永远是 warn，且只在没有别的行已经覆盖那个文件系统时出现。
+team_disk_lock_row() { # → 0 或一行 "warn\t<行名>\t<人话>"
+  local lock p id t a it iff label
+  if declare -F gate_lock_default_path >/dev/null 2>&1; then lock="$(gate_lock_default_path)"
+  else lock="${TEAM_SMOKE_LOCK:-/tmp/teamsmith-smoke.lock}"; fi
+  [ -n "$lock" ] || return 0
+  local -a judged=("$(team_tmp_root 2>/dev/null || true)" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")
+  team__disk_stats "$lock"; id="$_D_ID"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"
+  [ -n "$id" ] || return 0                    # 读不到 → 不判、也不编一行
+  for p in "${judged[@]}"; do
+    [ -n "$p" ] || continue
+    team__disk_stats "$(team_tmp_root_stat_path "$p" 2>/dev/null || printf '%s' "$p")"
+    [ "$_D_ID" = "$id" ] && return 0         # 已被别的行覆盖
+  done
+  label="锁文件系统"
+  printf 'warn\t%s\t%s 所在的文件系统：可用 %s / 总 %s · %s —— 它不拒绝派单，但满了会让门禁取不到锁；修法：%s\n' \
+    "$label" "$lock" "$(team_disk_human_kb "${a:-0}")" "$(team_disk_human_kb "${t:-0}")" \
+    "$( [ -z "$it" ] && printf 'inode 不适用' || printf 'inode 可用 %s' "${iff:-?}")" \
+    "腾空这个文件系统：$(dirname "$lock")"
 }
 
 # doctor 的这几行：调用方是 team_cmd_doctor，借它的 check/pass/warn（同一 shell 里可见）。
@@ -1350,7 +1379,7 @@ team_disk_doctor_rows() {
     IFS=$'\t' read -r st label text <<<"$line"
     check "$label"
     if [ "$st" = "ok" ]; then pass "$text"; else warn "$text"; fi
-  done < <(team_disk_headroom_lines)
+  done < <(team_disk_headroom_lines; team_disk_lock_row)
 }
 
 # ================================================================ P55 · 席位四态（死 pane 是座位状况）

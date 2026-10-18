@@ -229,7 +229,8 @@ if [ "$(grep -cF -- "$OLD_PAT" "$OLDFACE/ledger-ban.sh")" = "1" ]; then
   awk -v pat="$OLD_PAT" -v rep="$OLD_NEW" '{ i = index($0, pat); if (i > 0) $0 = substr($0, 1, i - 1) rep substr($0, i + length(pat)); print }' \
     "$OLDFACE/ledger-ban.sh" >"$OLDFACE/new" && mv "$OLDFACE/new" "$OLDFACE/ledger-ban.sh"
   if [ "$(grep -cF -- "$OLD_NEW" "$OLDFACE/ledger-ban.sh")" = "1" ]; then
-    OUT="$(bash "$OLDFACE/ledger-ban.sh" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
+    # 旧面副本只拷了 ledger-ban.sh + lib/tmp-root.sh → 指回真库（P309：解析器不在，创建者会具名失败）
+    OUT="$(TEAM_TMP_SKILL_DIR="$SKILL_DIR" bash "$OLDFACE/ledger-ban.sh" --all --root "$FACE" --names-file "$FACE/.pi/team/forbidden-names.txt" 2>&1)"; RC=$?
     if [ "$RC" = "0" ] && printf '%s\n' "$OUT" | grep -qF 'hits=0' \
        && ! printf '%s\n' "$OUT" | grep -qF 'planted.tsv'; then
       case_ok "⑥ 假绿对照：账本面退回「只扫 *.md」→ 同一棵树、同一个植入 hits=0（假绿就是这么来的）"

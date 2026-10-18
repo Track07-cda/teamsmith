@@ -36,7 +36,8 @@ real_load="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?')"
 real_cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
 case "$real_cores" in ''|*[!0-9]*) real_cores=0 ;; esac
 
-out="$(mktemp "${TMPDIR:-/tmp}/teamsmith-panel-knobs.$(team_project_ns 2>/dev/null || printf 'nosig-00000000').XXXXXX")"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+out="$(mktemp "$(team_tmp_root)/teamsmith-panel-knobs.$(team_project_ns 2>/dev/null || printf 'nosig-00000000').XXXXXX")"
 trap 'rm -f "$out"' EXIT
 # 夹具开关**显式清掉**（继承来的 TEAM_SMOKE_FIXTURE=1 会让注入被采信，那样这条检查就假绿）；
 # 三个旋钮全部注入，正是 d-realpath 的形状。

@@ -22,6 +22,9 @@ set -uo pipefail
 
 self="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 skill="$(cd -P "$self/../.." && pwd)"
+# P309: the temp root comes from the one resolver (no second `${TMPDIR:-/tmp}` here)
+# shellcheck source=../lib/common.sh
+. "$skill/scripts/lib/common.sh"
 file="${1:-}"
 if [ -n "$file" ]; then shift || true; fi
 
@@ -33,7 +36,14 @@ if [ -z "$file" ] || [ ! -f "$file" ]; then
   exit 2
 fi
 
-log="$(mktemp "${TMPDIR:-/tmp}/.teamsmith-panel-draft-send.XXXXXX")"
+# P309: the resolved root is only *ours* to create on the default leg; an explicit root that is
+# unusable fails loudly instead of sending through some other directory.
+if ! team_tmp_root_prepare >/dev/null 2>&1; then
+  printf 'draft-send: 临时根不可用（%s）\n' "$(team_tmp_root 2>/dev/null || printf '?')" >&2
+  emit 2
+  exit 2
+fi
+log="$(mktemp "$(team_tmp_root)/.teamsmith-panel-draft-send.XXXXXX")"
 trap 'rm -f "$log"' EXIT
 
 TEAM_SKILL_DIR="${TEAM_SKILL_DIR:-$skill}"; export TEAM_SKILL_DIR

@@ -28,7 +28,8 @@ fi
 # + 一行指针」，那不是缺陷，是无从探测）。
 tmux_has_bracket_paste_format() {
   local s="bpf-$$" d v rc=1
-  d="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-tmux-cap-$(team_project_ns).XXXXXX" 2>/dev/null)" || return 1
+  team_tmp_root_prepare >/dev/null 2>&1 || true
+  d="$(mktemp -d "$(team_tmp_root)/teamsmith-tmux-cap-$(team_project_ns).XXXXXX" 2>/dev/null)" || return 1
   if env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$d" tmux new-session -d -s "$s" -x 80 -y 24 'sleep 5' 2>/dev/null; then
     v="$(env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$d" tmux display-message -p -t "$s" '#{bracket_paste_flag}' 2>/dev/null)"
     [ -n "$v" ] && rc=0

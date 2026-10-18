@@ -813,7 +813,8 @@ async function main(): Promise<void> {
       const read = await readClipboard(clipRunner)
       if (!read) return { kind: 'none' as const, value: '' }
       if (read.kind === 'text') return { kind: 'text' as const, value: read.text }
-      const file = writePasteFile(read.bytes, read.mime)
+      // P309: the paste path uses the resolved temp root the data layer reports (no second resolution).
+      const file = writePasteFile(read.bytes, read.mime, cache.snapshot().data?.capacity?.temp_root)
       if (!file) return { kind: 'none' as const, value: '' }
       return { kind: 'path' as const, value: file }
     },

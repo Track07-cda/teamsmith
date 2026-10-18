@@ -50,6 +50,7 @@ TEAM_MEETINGS_DIR|refuse|path|dir,opt|plain|~/.pi/team/meetings|-|账本位置�
 TEAM_SPEC_DIR|refuse|path|dir,opt|plain|openspec|-|账本位置：只能改项目配置文件 .pi/team/config.sh||identity
 TEAM_ROOT|refuse|path|dir,opt|plain||-|位置：启动时用 --root 指定，或改项目配置文件 .pi/team/config.sh||identity
 TEAM_MAIN_ROOT|refuse|path|dir,opt|plain||-|位置：启动时用 --root 指定，或改项目配置文件 .pi/team/config.sh||identity
+TEAM_TMP_ROOT|refuse|path|dir,opt|plain||-|位置：临时根目录（空 = 按 TMPDIR → 平台默认 /var/tmp/teamsmith-<ns> 解析）；只能改项目配置文件 .pi/team/config.sh；环境里的 TMPDIR 会盖过它||identity
 TEAM_CONFIG_FILE|refuse|path|file,opt|plain||-|位置：启动时用 --config 指定，或改项目配置文件 .pi/team/config.sh||identity
 # ---- 分支与 forge（refuse：它们定义「已落地」与凭据位置）----
 TEAM_BRANCH_MODE|refuse|enum|task,agent|plain|task|-|分支与落地判定：只能改项目配置文件 .pi/team/config.sh||branch

@@ -61,6 +61,8 @@ if ! . "$TMUX_ISO_SHARED_DIR/tmux-argv.sh" 2>/dev/null || ! declare -F tmux_cls_
   exit 127
 fi
 
+# P309：审计日志的默认位置在解析出的临时根下 —— 解析器只有一处，这里把它 source 进来（幂等：纯定义）。
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tmp-root.sh"
 TMUX_ISO_AF_UNIX_MAX="${TMUX_ISO_AF_UNIX_MAX:-107}"   # Linux sun_path 全 108 字节（含 NUL）→ 可用 107
 TMUX_ISO_STOP_CODE="${TMUX_ISO_STOP_CODE:-2}"
 
@@ -104,7 +106,7 @@ tmux_iso_argv_parse() { # <argv…>
 
 tmux_iso_log() { # 审计行落点（只影响落点，不影响判定）
   # P287：直接落在解析后临时根上的审计日志点开头（不是别人的前缀 glob 的猎物）
-  printf '%s' "${TEAM_TMUX_ISO_LOG:-${TMPDIR:-/tmp}/.teamsmith-tmux-iso-guard.$$.log}"
+  printf '%s' "${TEAM_TMUX_ISO_LOG:-$(team_tmp_root)/.teamsmith-tmux-iso-guard.$$.log}"
 }
 
 tmux_iso_audit() { # <段> <用途> <不成立> <细节> <期望 socket> <实际 socket>

@@ -32,7 +32,8 @@ P138_SKILL_DIR="${P138_SKILL:-/src/skills/teamsmith}"
 if ! declare -F team_project_ns >/dev/null 2>&1; then
   [ -f "$P138_SKILL_DIR/scripts/lib/common.sh" ] && . "$P138_SKILL_DIR/scripts/lib/common.sh"
 fi
-R=$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p163-real-$(team_project_ns 2>/dev/null || printf 'nosig-00000000').XXXXXX"); mkdir -p "$R/sock" "$R/home" "$R/agentdir" "$R/bin"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+R=$(mktemp -d "$(team_tmp_root)/teamsmith-p163-real-$(team_project_ns 2>/dev/null || printf 'nosig-00000000').XXXXXX"); mkdir -p "$R/sock" "$R/home" "$R/agentdir" "$R/bin"
 export HOME="$R/home" PI_CODING_AGENT_DIR="$R/agentdir" TMUX_TMPDIR="$R/sock" TERM=xterm-256color
 unset TMUX TMUX_PANE
 for k in ${!TEAM_@}; do unset "$k"; done

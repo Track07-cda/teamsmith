@@ -50,17 +50,30 @@ set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -P "$SELF_DIR/.." && pwd)"
-BASE="${TMPDIR:-/tmp}"
+
+# P287：ns（项目命名空间）与伴生锁路径的**唯一实现**在 scripts/lib/ 下那两处 —— 本脚本只调它们。
+if ! declare -F team_tmp_root >/dev/null 2>&1 && [ -f "$SKILL_DIR/scripts/lib/common.sh" ]; then
+  # shellcheck source=../scripts/lib/common.sh
+  . "$SKILL_DIR/scripts/lib/common.sh"
+fi
+
+# P309：基准 = 产品的**唯一**解析器（TMPDIR → TEAM_TMP_ROOT → 磁盘默认 /var/tmp/teamsmith-<ns>）。
+# 清扫器不自己算这个根：两处各算 = 两个答案 = 清扫器与门禁对不上基准（--lint 的第二条规则钉住它）。
+# 自检红侧 `TEAM_TMP_HYGIENE_BASE_SELF=1` 把「自己算基准」这个缺陷形状放回来（断言必须因此变红）。
+if [ "${TEAM_TMP_HYGIENE_BASE_SELF:-0}" = "1" ]; then
+  BASE="${TMPDIR:-/tmp}"; BASE_SRC="self"
+else
+  BASE="$(team_tmp_root)" || { printf '✗ 临时根解析失败（--status 需要可用的解析器）\n' >&2; exit 3; }
+  BASE_SRC="$(team_tmp_root_source 2>/dev/null || printf 'default')"
+fi
 # BASE 归一化成绝对路径（worktree 列表、/proc 链接都是绝对路径；相对 TMPDIR 会让比对全错）
 BASE_ABS="$(cd "$BASE" 2>/dev/null && pwd || printf '%s' "$BASE")"
 [ -n "$BASE_ABS" ] && BASE="$BASE_ABS"
 FAMILY_RE='^(teamsmith-|review-)'
-
-# P287：ns（项目命名空间）与伴生锁路径的**唯一实现**在 scripts/lib/ 下那两处 —— 本脚本只调它们。
-if ! declare -F team_project_ns >/dev/null 2>&1 && [ -f "$SKILL_DIR/scripts/lib/common.sh" ]; then
-  # shellcheck source=../scripts/lib/common.sh
-  . "$SKILL_DIR/scripts/lib/common.sh"
-fi
+_hy_base_note() { # 一行「它是怎么解析出来的」（含 TMPDIR 盖过项目钉的值时的分歧）
+  if [ "$BASE_SRC" = "self" ]; then printf 'source=self（自算：缺陷形状）'; return 0; fi
+  team_tmp_root_note 2>/dev/null || printf 'source=%s' "$BASE_SRC"
+}
 if [ -z "${GATE_LOCK_LIB:-}" ] && [ -f "$SKILL_DIR/scripts/lib/gate-lock.sh" ]; then
   # shellcheck source=../scripts/lib/gate-lock.sh
   . "$SKILL_DIR/scripts/lib/gate-lock.sh"
@@ -488,7 +501,11 @@ _candidate_dirs() {
 
 # ---------------------------------------------------------------- --status
 cmd_status() {
-  printf '\033[1m临时根：%s\033[0m\n' "$BASE"
+  local base_note missing_note
+  base_note="$(_hy_base_note)"
+  missing_note="$(team_tmp_root_ancestor_note "$BASE" 2>/dev/null || true)"
+  printf '\033[1m临时根：%s（%s）\033[0m\n' "$BASE" "$base_note"
+  [ -n "$missing_note" ] && printf '  %s\n' "$missing_note"; :
   printf '  工具：%s\n' "$(_tool_identity)"
   printf '  归属基准仓库：%s\n' "$(_main_root 2>/dev/null || printf '?')"
   if [ -d "$BASE" ]; then
@@ -503,6 +520,25 @@ cmd_status() {
     fi
   else
     printf '  \033[33m!\033[0m %s 不存在\n' "$BASE"
+  fi
+
+  # P309：默认值搬到磁盘后，旧默认根里的残留不会自己搬家。这里只**数**一下并给**一条**命令：
+  # 一次 `--sweep` 只作用于一个基准，所以回收旧根 = 同一条命令把旧基准显式选出来（候选谓词、
+  # 归属证明、占用证明、年龄判据一个都不变）。只读：不删、不改任何东西。
+  local legacy_base legacy_n=0 le lb
+  legacy_base="${TMPDIR:-/tmp}"
+  legacy_base="$(cd "$legacy_base" 2>/dev/null && pwd || printf '%s' "$legacy_base")"
+  if [ "$BASE" != "$legacy_base" ] && [ -d "$legacy_base" ]; then
+    for le in "$legacy_base"/*/; do
+      [ -d "$le" ] || continue
+      lb="${le%/}"; lb="${lb##*/}"
+      _family_name "$lb" || continue
+      legacy_n=$((legacy_n + 1))
+    done
+    printf '\n旧默认根（%s）下的家族目录：%s 个（只读计数，不是本次的基准）\n' "$legacy_base" "$legacy_n"
+    printf '  回收它们（同一条命令，把旧基准显式选出来）：\n'
+    printf '    TMPDIR=%s bash %s --sweep --dry-run   # 先看清单\n' "$legacy_base" "$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
+    printf '    TMPDIR=%s bash %s --sweep\n' "$legacy_base" "$SELF_DIR/$(basename "${BASH_SOURCE[0]}")"
   fi
 
   local mech="none"
@@ -658,6 +694,52 @@ _lint_first_arg() { # <“mktemp” 之后的文本> → 第一个参数（保�
   done
   printf '%s\n' "$out"
 }
+# P309 · 第二条规则：**任何自己算临时根的地方都是 finding**（`${TMPDIR:-/tmp}`、`${TMPDIR}`、JS 侧的同类
+# 回落、写死 `/tmp/…` 的 mktemp 模板）。理由：两处各算 = 两个答案 = 清扫器与门禁对不上基准。
+# 豁免只有两处：
+#   ① 解析器自己的定义（`scripts/lib/common.sh` 里 team_tmp_root* —— 它的行里没有这两个 token）；
+#   ② 冻结的门禁锁发布路径（P287：`${TMPDIR:-/tmp}/teamsmith-smoke.lock` **不许搬**，搬走会在升级窗口里
+#      新开一条静默并发窗口；它留在 gate-lock.sh 的那一行，别处只调 gate_lock_default_path）。
+_lint_self_computed() { # <file> <line> <logical line> → 0 = finding（已打印）/ 1 = ok
+  local f="$1" ln="$2" line="$3" tok=""
+  # 冻结的锁发布路径：门禁锁（P287）与项目锁（P309 同一条纪律，跨版本串行）。
+  case "$line" in
+    *teamsmith-lock-*|*teamsmith-smoke.lock*|*teamsmith-perf.lock*) return 1 ;;
+  esac
+  # 解析器自己（含 tmp_root_socket_dir 的「放不下就退平台默认」那一步）：唯一实现，别处只能调它。
+  case "$f" in
+    */scripts/lib/common.sh|*/tests/lib/tmp-root.sh) return 1 ;;
+  esac
+  case "$line" in
+    *'${TMPDIR:-/tmp}'*) tok='${TMPDIR:-/tmp}' ;;
+    *'${TMPDIR}'*)       tok='${TMPDIR}' ;;
+    *'process.env.TMPDIR'*) tok='process.env.TMPDIR' ;;
+    *'tmpdir()'*)        tok='tmpdir()' ;;
+    *) return 1 ;;
+  esac
+  printf '%s:%s: 自己算临时根（%s）—— 必须调唯一的解析器 team_tmp_root（TMPDIR → TEAM_TMP_ROOT → 平台默认）\n' \
+    "$f" "$ln" "$tok"
+  return 0
+}
+
+# P309 · 第三条规则：夹具里的 tmux socket 目录要留得下 AF_UNIX 的 107 字节。临时根搬到
+# `/var/tmp/teamsmith-<ns>` 之后，凡是把 `TMUX_TMPDIR` 挂在 `$TMP` 下的夹具都长了 ~20 字节：
+# `$TMP/m36/priv-tmpdir/tmux-<uid>/default` 从 83 涨到 113，私有 server 直接绑不上（31c 就是这样红的）。
+# 这里按最长 uid（10 位）与本次的实际运行根名算，超了就点名（真跑起来才发现的坑，静态就拦掉）。
+_lint_socket_room() { # <file> <line> <logical> → 0 = finding（已打印）/ 1 = ok
+  local f="$1" ln="$2" line="$3" frag base worst
+  case "$line" in
+    *'TMUX_TMPDIR="$TMP'*) frag="${line#*TMUX_TMPDIR=\"\$TMP}"; frag="${frag%%\"*}" ;;
+    *) return 1 ;;
+  esac
+  base="$(team_tmp_root)/teamsmith-smoke-$(_hy_ns).XXXXXX"
+  worst=$(( ${#base} + ${#frag} + 18 ))
+  [ "$worst" -le 107 ] && return 1
+  printf '%s:%s: tmux socket 目录太长（最长 %s 字节 > AF_UNIX 上限 107）—— 夹具的 socket 端点别挂在临时根下，放到本轮私有 tmux 基址（SMOKE_TMUX_TMPDIR）下\n' \
+    "$f" "$ln" "$worst"
+  return 0
+}
+
 _lint_judge() { # <file> <line> <template> <is_root> → 0 合规 / 1 finding（打印到 stdout）
   local f="$1" ln="$2" t="$3" is_root="$4" u first ns
   if [ -z "$t" ]; then
@@ -673,6 +755,8 @@ _lint_judge() { # <file> <line> <template> <is_root> → 0 合规 / 1 finding（
       # 红侧：只把「不许写死绝对路径」这一条规则关掉（ns / 家族两条照判）
       [ "$FLIP" = "lint" ] && return 0
       printf '%s:%s: 写死绝对路径（%s）—— 必须建在 ${TMPDIR:-/tmp} 下\n' "$f" "$ln" "$u"; return 1 ;;
+    '$(team_tmp_root)/'*) first="${u#'$(team_tmp_root)/'}"; first="${first%%/*}" ;;
+    '$(tmp_root_base)/'*) first="${u#'$(tmp_root_base)/'}"; first="${first%%/*}" ;;
     '${TMPDIR:-/tmp}/'*) first="${u#'${TMPDIR:-/tmp}/'}"; first="${first%%/*}" ;;
     '$TMPDIR/'*)         first="${u#'$TMPDIR/'}"; first="${first%%/*}" ;;
     ''|'$'*|'${'*)
@@ -720,6 +804,9 @@ cmd_lint() {
     while IFS=$'\t' read -r ln logical; do
       # 整行注释里的 `mktemp` 是文字，不是模板
       case "${logical#"${logical%%[![:space:]]*}"}" in '#'*) continue ;; esac
+      # P309 · 第二、三条规则先判（自己算根 / socket 目录太长）；命中了就不再按模板判同一条行
+      if _lint_self_computed "$f" "$ln" "$logical"; then findings=$((findings + 1)); continue; fi
+      if _lint_socket_room "$f" "$ln" "$logical"; then findings=$((findings + 1)); continue; fi
       case "$logical" in *mktemp*) ;; *) continue ;; esac
       local rest="$logical" occ_word tmpl is_root
       while :; do
@@ -740,8 +827,22 @@ cmd_lint() {
         buf=""; start=0
       } END { if (buf != "") print start "\t" buf }' "$f")
   done < <(find "$dir" -type f -name '*.sh' 2>/dev/null | sort)
-  printf '\n检查了 %s 个 mktemp 模板（%s；规则：点开头或带 ns「%s」，根还要在 owned 家族里）\n' \
+  # P309 · JS 侧：产品面板源码里“自己算临时根”的同类回落（`process.env.TMPDIR` / 无参 `tmpdir()`）。
+  # 范围 = `scripts/panel/src/**`（产品面；测试夹具的 JS 临时目录从 shell 继承 TMPDIR，不是第二份解析）。
+  local jsf jsln jstext
+  while IFS= read -r jsf; do
+    [ -n "$jsf" ] || continue
+    jsln=0
+    while IFS= read -r jstext; do
+      jsln=$((jsln + 1))
+      case "${jstext#"${jstext%%[![:space:]]*}"}" in '#'*|'//'*|'*'*) continue ;; esac
+      checked=$((checked + 1))
+      if _lint_self_computed "$jsf" "$jsln" "$jstext"; then findings=$((findings + 1)); fi
+    done < "$jsf"
+  done < <(find "$dir/scripts/panel/src" -type f -name '*.ts' 2>/dev/null | sort)
+  printf '\n检查了 %s 个 mktemp 模板与面板源码行（%s；规则：点开头或带 ns「%s」，根还要在 owned 家族里；' \
     "$checked" "$dir" "$(_hy_ns)"
+  printf '自己算临时根 = finding，豁免只有解析器定义与冻结的锁发布路径）\n'
   if [ "$findings" -gt 0 ]; then
     printf '\033[31m%s 个 finding\033[0m\n' "$findings"
     return 1
@@ -982,7 +1083,8 @@ _hy_selftest() {
     esac
   done
   case "$break_stage" in
-    ''|occupied|orphan|unknown|foreign|lock|worktree|record|lint|reviewproof|ledgerrepo|blockskip|tmuxtouch) ;;
+    ''|occupied|orphan|unknown|foreign|lock|worktree|record|lint|reviewproof|ledgerrepo|blockskip|tmuxtouch|\
+    inline-root|fixed-floor|missing-root) ;;
     *) printf 'tmp-hygiene: 不认识的 break 阶段 [%s]\n' "$break_stage" >&2; return 2 ;;
   esac
   # 每个子进程带**自己**的 flip：一个 break 只该让它的那一段变红（不污染别的段）
@@ -998,6 +1100,7 @@ _hy_selftest() {
   }
 
   local D
+  team_tmp_root_prepare >/dev/null 2>&1 || true    # 默认腿按需建（0700）；显式根只校验
   D="$(mktemp -d "$BASE/teamsmith-hygiene-selftest.XXXXXX")" || { printf '自检建不出临时目录\n' >&2; return 3; }
   trap "rm -rf -- '$D'" EXIT
   # 自检永远不会扫真实的 tmux socket 目录（否则断言会依赖机器状态、清扫也碰不到真东西）
@@ -1119,10 +1222,10 @@ _hy_selftest() {
   local ld="$D/lint-src"; mkdir -p "$ld"
   cat >"$ld/ok.sh" <<'EOS'
 #!/usr/bin/env bash
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-ok-$(team_project_ns).XXXXXX")"
-FILE="$(mktemp "${TMPDIR:-/tmp}/teamsmith-probe.$(team_project_ns).XXXXXX")"
+TMP="$(mktemp -d "$(team_tmp_root)/teamsmith-ok-$(team_project_ns).XXXXXX")"
+FILE="$(mktemp "$(team_tmp_root)/teamsmith-probe.$(team_project_ns).XXXXXX")"
 NEST="$(mktemp -d "$TMP/login-home.XXXXXX")"
-DOT="$(mktemp "${TMPDIR:-/tmp}/.teamsmith-dot.XXXXXX")"
+DOT="$(mktemp "$(team_tmp_root)/.teamsmith-dot.XXXXXX")"
 EOS
   out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
   [ "$rc" = 0 ] && ok "lint 对合规模板（根带 ns / 文件带 ns / 嵌套 / 点开头）退出 0" || bad "lint 对合规模板退出 $rc（$(printf '%s' "$out" | head -2 | tr '\n' '|')）"
@@ -1136,7 +1239,7 @@ EOS
   # P287 红侧 ①：保留家族前缀但丢 ns（根）
   cat >"$ld/nons.sh" <<'EOS'
 #!/usr/bin/env bash
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-nons.XXXXXX")"
+TMP="$(mktemp -d "$(team_tmp_root)/teamsmith-nons.XXXXXX")"
 EOS
   out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
   [ "$rc" = 1 ] && ok "lint 对「家族前缀但丢 ns」的根模板退出 1" || bad "lint 对丢 ns 的根模板退出 $rc（期望 1）"
@@ -1145,7 +1248,7 @@ EOS
   # P287 红侧 ②：每运行模板既不是点开头、也没有 ns
   cat >"$ld/flat.sh" <<'EOS'
 #!/usr/bin/env bash
-TMP="$(mktemp "${TMPDIR:-/tmp}/teamsmith-flat.XXXXXX")"
+TMP="$(mktemp "$(team_tmp_root)/teamsmith-flat.XXXXXX")"
 EOS
   out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
   [ "$rc" = 1 ] && ok "lint 对「既非点开头也无 ns」的每运行模板退出 1" || bad "lint 对平铺每运行模板退出 $rc（期望 1）"
@@ -1157,6 +1260,110 @@ EOS
   rm -f "$ld/nons.sh" "$ld/flat.sh"
   out="$(TMPDIR="$D" _hy "$(_hyflip lint)" --lint --dir "$ld" 2>&1)"; rc=$?
   [ "$rc" = 0 ] && ok "删掉违规模板后 lint 回到 0" || bad "lint 没有回到 0（rc=$rc）"
+
+  # ── ⑦b P309 · 第二条规则：自己算临时根 = finding（`${TMPDIR:-/tmp}` / `${TMPDIR}` / JS 侧同类回落）
+  local scd="$D/selfcomputed"; mkdir -p "$scd/scripts/lib" "$scd/scripts/panel/src"
+  cat >"$scd/scripts/lib/selfbase.sh" <<'EOS'
+#!/usr/bin/env bash
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-selfbase-$(team_project_ns).XXXXXX")"
+EOS
+  cat >"$scd/scripts/panel/src/clip.ts" <<'EOS'
+const dir = process.env.TMPDIR || tmpdir()
+EOS
+  out="$(TMPDIR="$D" _hy "" --lint --dir "$scd" 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && ok "P309 lint：自己算临时根 → 退出 1" || bad "P309 lint：自己算临时根没有判红（rc=$rc）"
+  assert_out "$out" "selfbase.sh:2: 自己算临时根" "P309 lint finding 点名 file:line（shell 侧）"
+  assert_out "$out" "clip.ts:1: 自己算临时根" "P309 lint finding 点名 file:line（JS 侧）"
+  rm -rf -- "$scd"
+
+  # ── ⑦c P309 · 解析：一处实现、来源打印、分歧不静默、只读面按祖先判
+  local r1 r2 src_out
+  r1="$(TMPDIR="$D" bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_tmp_root')"
+  [ "$r1" = "$D" ] && ok "P309 解析：TMPDIR 赢（root=\$TMPDIR）" || bad "P309 解析：TMPDIR 没赢（[$r1]）"
+  r2="$(env -u TMPDIR -u TEAM_TMP_ROOT bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_tmp_root')"
+  case "$r2" in
+    /var/tmp/teamsmith-*) ok "P309 解析：两块都不设 → 磁盘默认（$r2）" ;;
+    *) bad "P309 解析：默认腿不在磁盘上（[$r2]）" ;;
+  esac
+  r2="$(env -u TMPDIR TEAM_TMP_ROOT="$D" bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_tmp_root')"
+  local r2src
+  r2src="$(env -u TMPDIR TEAM_TMP_ROOT="$D" bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_tmp_root_source')"
+  [ "$r2" = "$D" ] && [ "$r2src" = "config" ] \
+    && ok "P309 解析：TMPDIR 不设时契约键生效（source=config）" \
+    || bad "P309 解析：契约键没生效（[$r2] source=[$r2src]）"
+  src_out="$(env TEAM_TMP_ROOT="$D/other" TMPDIR="$D" bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_tmp_root_note')"
+  assert_out "$src_out" "source=tmpdir" "P309 分歧行说 TMPDIR 赢了"
+  assert_out "$src_out" "TEAM_TMP_ROOT=$D/other 未生效" "P309 分歧行点名没生效的契约值（不静默）"
+  # 默认根不存在时：只读面按最近的存在祖先判，且**不创建**任何东西
+  local ghost="$D/ghost-root/nested"
+  mkdir -p "$D/ghost-root"
+  src_out="$(TMPDIR="$ghost" _hy "" --status 2>&1)"; rc=$?
+  assert_out "$src_out" "$ghost" "P309 只读面点名解析出的根（即使它还不存在）"
+  assert_out "$src_out" "尚未创建，按 $D/ghost-root 的文件系统判" "P309 只读面按最近的存在祖先判"
+  [ -e "$ghost" ] && bad "P309 只读面把不存在的根创建出来了" || ok "P309 只读面没有创建任何东西"
+  # 动态红侧①：清扫器自己算基准（break=inline-root）
+  if [ "$break_stage" = "inline-root" ]; then
+    out="$(env -u TEAM_TMP_ROOT TEAM_TMP_HYGIENE_BASE_SELF=1 bash "$me" --status 2>&1 | head -1)"
+    assert_out "$out" "/var/tmp/teamsmith-" "P309 红侧①：清扫器自己算基准时必须点名磁盘默认（这条在 break=inline-root 下应红）"
+  else
+    out="$(env -u TEAM_TMP_ROOT TMPDIR= bash "$me" --status 2>&1 | head -1)"
+    local defroot
+    defroot="$(env -u TMPDIR -u TEAM_TMP_ROOT bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_tmp_root')"
+    assert_out "$out" "$defroot" "P309 status 表头点名解析出的根"
+  fi
+
+  # ── ⑦d P309 · 地板绑选定根：选定的根很空、旧默认 /tmp 很满时不许拒绝
+  local ftem="$D/floor.table"
+  : >"$ftem"
+  printf '%s\t15245736\t5242880\t3811434\t2978499\n' "$BASE" >>"$ftem"
+  [ "$BASE" = "/tmp" ] || printf '/tmp\t15245736\t122880\t3811434\t40000\n' >>"$ftem"
+  local fout frc=0 judged="$BASE"
+  # 红侧②（break=fixed-floor）：把地板**指回固定 /tmp**（缺陷形状）—— 下面的守门断言必须因此变红
+  [ "${break_stage}" = "fixed-floor" ] && judged="/tmp"
+  [ "${break_stage}" = "inline-root" ] && judged="/tmp"
+  fout="$(env -u TEAM_TMP_ROOT TMPDIR="$BASE" TEAM_DISK_STATS_FILE="$ftem" \
+    bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_disk_guard "$1"' _ "$judged" 2>&1)" || frc=$?
+  if [ "$frc" = 0 ]; then ok "P309 地板：选定的根很空 → 放行（不看 /tmp）"
+  else bad "P309 地板：判的是 $judged 而不是选定的根（$fout）"; fi
+  case "$fout" in
+    *"/tmp "*) bad "P309 地板：拒绝/读数里出现了 /tmp（判的不是选定的根）" ;;
+    *) ok "P309 地板：读数只提选定的根" ;;
+  esac
+  # 同一份夹具指向 /tmp 时**必须**拒绝并点名它 —— 证明上面那条放行真的看了「选定的根」这一行
+  frc=0
+  fout="$(env -u TEAM_TMP_ROOT TEAM_DISK_STATS_FILE="$ftem" \
+    bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; team_disk_guard /tmp' 2>&1)" || frc=$?
+  [ "$frc" = 1 ] && assert_out "$fout" "/tmp 磁盘不足" "P309 红侧②对照：同一份夹具指向 /tmp 就拒绝并点名它" \
+    || bad "P309 红侧②对照：指向 /tmp 却没拒绝（rc=$frc）"
+
+  # ── ⑦e P309 · 创建者：显式根不可用 = 具名失败 + 修法，绝不回落 /tmp
+  local crc=0 cout before_tmp after_tmp
+  before_tmp="$(ls -A /tmp 2>/dev/null | wc -l | tr -d ' ')"
+  local crbreak=""; [ "$break_stage" = "missing-root" ] && crbreak="fallback"
+  cout="$(env TMPDIR= TEAM_TMP_ROOT="$D/does-not-exist" TMP_ROOT_BREAK="$crbreak" \
+    bash -c '. "'"$SKILL_DIR"'/tests/lib/tmp-root.sh"; tmp_root_create selftest' 2>&1)" || crc=$?
+  after_tmp="$(ls -A /tmp 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$break_stage" = "missing-root" ]; then
+    # 翻转预期：回落形状下创建会“成功”，守门断言因此红
+    [ "$crc" = 0 ] && bad "P309 红侧③：break=missing-root 下创建者静默回落了（守门断言应当红 —— 翻转预期）"
+  else
+    [ "$crc" = 3 ] && ok "P309 创建者：显式根不存在 → 退出 3" || bad "P309 创建者：显式根不存在退出 $crc（期望 3）"
+    assert_out "$cout" "$D/does-not-exist" "P309 创建者：失败点名那个路径"
+    assert_out "$cout" "修法：" "P309 创建者：失败给修法"
+    [ "$before_tmp" = "$after_tmp" ] && ok "P309 创建者：失败后 /tmp 下没有新条目" || bad "P309 创建者：失败时在 /tmp 下留下了东西"
+  fi
+  # 不是目录 / 不可写：两种形状都具名失败
+  : >"$D/afile"
+  crc=0; cout="$(env TMPDIR= TEAM_TMP_ROOT="$D/afile" bash -c '. "'"$SKILL_DIR"'/tests/lib/tmp-root.sh"; tmp_root_create selftest' 2>&1)" || crc=$?
+  [ "$crc" = 3 ] && assert_out "$cout" "不是目录" "P309 创建者：不是目录 → 具名失败" || bad "P309 创建者：不是目录退出 $crc（期望 3）"
+  mkdir -p "$D/ro"; chmod 500 "$D/ro"
+  if [ ! -w "$D/ro" ]; then
+    crc=0; cout="$(env TMPDIR= TEAM_TMP_ROOT="$D/ro" bash -c '. "'"$SKILL_DIR"'/tests/lib/tmp-root.sh"; tmp_root_create selftest' 2>&1)" || crc=$?
+    [ "$crc" = 3 ] && assert_out "$cout" "不可写" "P309 创建者：不可写 → 具名失败" || bad "P309 创建者：不可写退出 $crc（期望 3）"
+  else
+    printf '  \033[2m(skip)\033[0m P309 创建者：root 绕过权限位（不可写形状跑不出来）\n'
+  fi
+  chmod 700 "$D/ro" 2>/dev/null || true
 
   # ── ⑧ worktree / record：注册的 worktree 只打印命令；没有已提交记录的检出被拒
   local repo="$D/repo" wt="$D/review-T1.1"

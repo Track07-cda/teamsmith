@@ -64,7 +64,7 @@ PASS=0; FAIL=0; LIVE_SOCKET=''
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
   if [ -n "$LIVE_SOCKET" ] && tmux_iso_guard_soft recipe cleanup \
-       --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$LIVE_SOCKET" --own-root "$TMP"; then
+       --tmpdir "${TMUX_TMPDIR:-}" --sock-name "$LIVE_SOCKET" --own-root "$TMP" --own-root "$TMUX_TMPDIR"; then
     tmux -L "$LIVE_SOCKET" kill-server 2>/dev/null || true
   fi
   tmp_root_reap_all
@@ -344,12 +344,14 @@ if has walk; then
   check backup-copy eq "$(sha "$R/.pi/team/config.sh.pre-upgrade")" "$ORIG_SHA"
   if command -v tmux >/dev/null 2>&1; then
     LIVE_SOCKET="recipe-${BASHPID}-${RANDOM}"
-    export TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"
+    # P309：socket 基址要短（见 tmp-root.sh 的 tmp_root_socket_dir）；放不下才退回临时根下
+    TMUX_TMPDIR="$(tmp_root_socket_dir tmux "tmux-$(id -u)/default")" || TMUX_TMPDIR="$TMP/tmux"
+    export TMUX_TMPDIR; mkdir -p "$TMUX_TMPDIR"
     REAL_TMUX="$(command -v tmux)"
     printf '#!/usr/bin/env bash\nexec %q -L %q "$@"\n' "$REAL_TMUX" "$LIVE_SOCKET" > "$BIN/tmux"
     chmod +x "$BIN/tmux"
     export PATH="$BIN:$PATH"
-    tmux_iso_require recipe launch --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP"
+    tmux_iso_require recipe launch --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP" --own-root "$TMUX_TMPDIR"
     run "$R" -- up
     UP_REAL="$TMP/up-real.log"; capture "$UP_REAL"
     check auto-migrate-rc eq "$RC" 0

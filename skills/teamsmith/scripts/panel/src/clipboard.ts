@@ -9,7 +9,6 @@
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 /** One bounded subprocess: rc plus the stdout bytes; `null` = the executable does not exist. */
@@ -86,10 +85,17 @@ export async function readClipboard(run: ClipboardRunner): Promise<ClipboardRead
   return null
 }
 
-/** The temporary path the paste writes: `${TMPDIR:-/tmp}/teamsmith-paste-<uuid>.<ext>`. */
-export function pasteFilePath(mime: string, dir = process.env.TMPDIR || tmpdir(), uuid?: string): string | null {
+/**
+ * The temporary path the paste writes: `<resolved temp root>/teamsmith-paste-<uuid>.<ext>`.
+ *
+ * P309: the directory is **given** by the caller — the same `team_tmp_root` answer the rest of the
+ * tool prints (`capacity.temp_root` in the panel data). Deriving it here again would be a second
+ * implementation of the resolution order (`process.env.TMPDIR || tmpdir()` was exactly that), and
+ * two answers is how the paste file ends up outside the root `--status`/`--sweep` judge.
+ */
+export function pasteFilePath(mime: string, dir: string | undefined, uuid?: string): string | null {
   const ext = imageExt(mime)
-  if (!ext) return null
+  if (!ext || !dir) return null
   return join(dir, `teamsmith-paste-${uuid ?? randomUUID()}.${ext}`)
 }
 
@@ -97,7 +103,7 @@ export function pasteFilePath(mime: string, dir = process.env.TMPDIR || tmpdir()
  * Write the clipboard image bytes to the temporary path and return it. The panel never deletes the
  * file (the requirement) and the path is the whole edit the console makes.
  */
-export function writePasteFile(bytes: Buffer, mime: string, dir?: string, uuid?: string): string | null {
+export function writePasteFile(bytes: Buffer, mime: string, dir: string | undefined, uuid?: string): string | null {
   const file = pasteFilePath(mime, dir, uuid)
   if (!file) return null
   writeFileSync(file, bytes)

@@ -158,7 +158,8 @@ printf '== measured project root: %s (neutral fixture project — not the caller
 printf '== console bundle under test: %s (tree under test %s) ==\n' "$panel" "$tree"
 
 hz="$(getconf CLK_TCK 2>/dev/null || echo 100)"
-time_out="$(mktemp "${TMPDIR:-/tmp}/teamsmith-p12cpu.$(tmp_root_ns).XXXXXX")"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+time_out="$(mktemp "$(team_tmp_root)/teamsmith-p12cpu.$(tmp_root_ns).XXXXXX")"
 # TEAM_PANEL_CPU_PAGE=<1|2|3|4> parks the measured console on that page (the board page's kanban is
 # the heaviest layout, so the red line is checked there too — P18/B2 item 6.4).
 page_flag=""

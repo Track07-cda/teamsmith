@@ -1016,8 +1016,7 @@ team_dispatch_mem_fix_cmd() { # <agent> <ID> <任务书> <守卫输出> → 覆�
   printf '%s %s dispatch %s %s %s\n' "${knobs# }" "$TEAM_CLI" "$agent" "$id" "$(printf '%q' "$taskfile")"
 }
 
-team_dispatch_judge_mem() { # <agent> <ID> <任务书>（team_df_run_lib 守卫：透传 team_mem_guard 的判定）
-  local agent="$1" id="$2" taskfile="$3" out rc=0
+team_dispatch_judge_mem() { # <agent> <ID> <任务书>（team_df_run_lib 守卫：透传 team_mem_guard 的判定）  local agent="$1" id="$2" taskfile="$3" out rc=0
   out="$(team_mem_guard 2>&1)" || rc=$?
   [ -n "$out" ] && printf '%s\n' "$out"
   [ "$rc" -eq 0 ] && return 0
@@ -1026,6 +1025,33 @@ team_dispatch_judge_mem() { # <agent> <ID> <任务书>（team_df_run_lib 守卫�
   override_note="        （显式降低底线：拿机器稳定性冒险；确认余量真的够再用）"
   printf '%s\n' "  等一个席位结束后再重派（$TEAM_CLI ps 看谁在跑；这行不是可粘路线，只是建议）" \
                  "$override_line" "$override_note"
+  return 1
+}
+
+# P309 · 临时根：显式选定的根不可用 = **阻塞项**（今天这种情况会走「读不到 → 不判」的沉默分支）。
+# 默认腿未创建**不是**拒绝（读侧按最近祖先判）；显式根（TMPDIR / 契约的 TEAM_TMP_ROOT）不存在 /
+# 不是目录 / 不可写 → 点名路径、来源、原因与修法，且**绝不**换用另一个根。
+team_dispatch_judge_tmp_root() { # → 0 = 可用或默认腿；1 = 阻塞项（输出已打印）
+  local raw src why
+  src="$(team_tmp_root_source 2>/dev/null || printf 'default')"
+  if ! raw="$(team_tmp_root 2>/dev/null)"; then
+    # 解析器自己已经打印了具名失败（相对路径 / 空串）。这里只给一句话的方向，**不打印一条
+    # 看起来能粘贴的路线**（那条路线得把值改成什么，只有操作者知道；夹具的 C1 会拒收未兑现的路线）。
+    printf '  方向：给它一个绝对路径（TEAM_TMP_ROOT=/var/tmp/… 或 TMPDIR=/abs/dir），或清掉它走平台默认\n'
+    return 1
+  fi
+  [ "$src" = "default" ] && return 0            # 默认腿：未创建不是拒绝（地板按祖先判）
+  team_tmp_root_usable "$raw" && return 0
+  why="不存在"
+  if [ -e "$raw" ]; then
+    if [ ! -d "$raw" ]; then why="不是目录";
+    elif [ ! -w "$raw" ]; then why="不可写"; fi
+  fi
+  printf '临时根不可用：%s（source=%s）%s —— 不可用，且不得换用别的根\n' "$raw" "$src" "$why"
+  # 路线行 = 一整条**能直接跑**的命令（P151：命令与说明分行）；说明留到下一行。
+  printf '  修法：mkdir -p %q\n' "$raw"
+  printf '  建好之后确认它可写；或者把 %s 指到另一个已存在的可写目录（references/config.md 的 TEAM_TMP_ROOT）\n' \
+    "$([ "$src" = "tmpdir" ] && printf 'TMPDIR' || printf 'TEAM_TMP_ROOT')"
   return 1
 }
 
@@ -1320,13 +1346,22 @@ team_dispatch_execute() {
   fi
 
   team_df_run_lib team_dispatch_judge_mem "$agent" "$id" "$taskfile"
-  # P144：磁盘/inode 腿 —— 判的是这个 worker 真正要写的两个文件系统（临时根 + 它的工作树，
-  # 不是共享的 worktrees 根），在**任何开窗动作之前**（--print 也在内），并且是 P140 的启动前
-  # 那一趟里的一个 finding（拒绝时和别的阻塞项一起交底，不抢自己的单独出口）。
-  local disk_tmp="${TMPDIR:-/tmp}"
-  team_df_run_lib team_disk_guard "$disk_tmp" "$wt"
-  # 读数是一条「说明」（rc=0 的 finding）：放行时在启动前那一趟里打印；被拒时由拒绝本身带读数。
-  if [ "$_TEAM_DF_RUN_RC" -eq 0 ]; then team_df_run_lib team_capacity_line "$disk_tmp" "$wt"; fi
+  # P309：临时根的**可用性**先判（显式选定的根不可用 = 阻塞项）；地板再判它的字节/inode。
+  team_df_run_lib team_dispatch_judge_tmp_root
+  local tmp_ok="$_TEAM_DF_RUN_RC"
+  # P144：磁盘/inode 腿 —— 判的是解析出的临时根 + 这个 worker 的工作树（不是共享的 worktrees 根），
+  # 在**任何开窗动作之前**（--print 也在内）。P309：不在这里再算一遍默认值。
+  local disk_tmp=""
+  disk_tmp="$(team_tmp_root 2>/dev/null || true)"
+  # 夹具红侧（只在 TEAM_SMOKE_FIXTURE=1 下生效）：把地板指回固定的 /tmp —— 守门断言必须因此变红。
+  if [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ] && [ "${TEAM_DISPATCH_FLOOR_BREAK:-}" = "fixed" ]; then disk_tmp="/tmp"; fi
+  if [ "$tmp_ok" = "0" ] && [ -n "$disk_tmp" ]; then
+    team_df_run_lib team_disk_guard "$disk_tmp" "$wt"
+    # 读数是一条「说明」（rc=0 的 finding）：放行时在启动前那一趟里打印；被拒时由拒绝本身带读数。
+    if [ "$_TEAM_DF_RUN_RC" -eq 0 ]; then team_df_run_lib team_capacity_line "$disk_tmp" "$wt"; fi
+  else
+    team_df_say "  临时根不可用（见上面那个阻塞项）→ 磁盘余量没有可判的根，本次不判"
+  fi
   [ "$identity_ok" != 1 ] || team_df_run_lib team_model_guard "$model" "$agent"
   # M4.3 A：会话规模 vs 模型窗口（默认拒绝，--fresh / --allow-overflow 是出路）
   [ "$identity_ok" != 1 ] || team_df_run_lib team_guard_resume_session "$agent" "$model" "$sid" "$wt" "$([ "$TEAM_SELECTED_MODE" = fresh ] && printf 1 || printf 0)" "$overflow" "$id" "$taskfile"
@@ -1348,6 +1383,8 @@ team_dispatch_execute() {
   fi
 
   [ "${_TEAM_DISPATCH_PREFLIGHT_ONLY:-0}" != 1 ] || return 0
+  # P309：写盘前把解析出的根准备好（默认腿按需 mkdir 0700；显式根只校验，绝不代建）。--print 不创建。
+  team_tmp_root_prepare >/dev/null || return 1
   if [ "$printonly" != 1 ]; then
     team_dispatch_final_snapshot "$agent" || return 1
   fi

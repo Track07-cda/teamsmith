@@ -65,7 +65,7 @@ cleanup() {
   # 不是「小事」：一次 1.6 GB，残留还会让 --sweep 的「占用」判据与磁盘预算失真。
   if [ -e "$TMP" ]; then
     printf '\n\033[31m✗ 收尾：临时根没有回收（%s）\033[0m\n' "$TMP" >&2
-    printf '   契约：tests/lib/tmp-root.sh 的 tmp_root_reap_all（台账基 = 创建时的 ${TMPDIR:-/tmp}）\n' >&2
+    printf '   契约：tests/lib/tmp-root.sh 的 tmp_root_reap_all（台账基 = 创建时的 $(team_tmp_root)）\n' >&2
     exit 1
   fi
   return 0
@@ -199,7 +199,10 @@ export SKILL_DIR T2 TMP BIN PANES PI_AGENT_DIR REAL_PATH OC_CHILD_TMPDIR
 OC_CHILD_TMPDIR="$TMP/tmp"; mkdir -p "$OC_CHILD_TMPDIR"
 # 夹具自己的 tmux 调用必须落在**私有** server 上（M28/#1250）：顶层 unset TMUX + 私有 TMUX_TMPDIR。
 unset TMUX TMUX_PANE 2>/dev/null || true
-TMUX_TMPDIR="$TMP/tmux"; export TMUX_TMPDIR
+# P309：socket 目录不挂临时根下（临时根名带项目 ns 后，<run>/tmux/tmux-<uid>/... 会越过 AF_UNIX 的
+# 107 字节，隔离前置直接硬停）。基址取短的：先试解析出的临时根，放不下退平台默认（tmp-root.sh 一处实现）。
+TMUX_TMPDIR="$(tmp_root_socket_dir tmux "tmux-$(id -u)/default")" || TMUX_TMPDIR="$TMP/tmux"
+export TMUX_TMPDIR
 OC_ENV=""; export OC_ENV
 
 oc_win_set() { printf '%s\n' "$@" > "$TMP/windows"; }

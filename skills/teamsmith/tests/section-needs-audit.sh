@@ -56,7 +56,7 @@ SEL="$ROOT/skills/teamsmith/tests/section-select.sh"
 
 # owned 家族口径（section 40 的 lint）：根建在 ${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX 下；
 # 长度仍然够短 —— 嵌套 run 的私有 tmux socket = len($TMP)+22，本例约 90 < 107（AF_UNIX 上限）。
-TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-needs-audit-$(section_needs_ns).XXXXXX")" || { printf 'section-needs-audit: 建不了临时根\n' >&2; exit 2; }
+TMPROOT="$(mktemp -d "$(team_tmp_root)/teamsmith-needs-audit-$(section_needs_ns).XXXXXX")" || { printf 'section-needs-audit: 建不了临时根\n' >&2; exit 2; }
 if [ "$KEEP" = 1 ]; then
   printf 'section-needs-audit: 日志留在 %s\n' "$TMPROOT"
 else
@@ -83,9 +83,9 @@ for k in $(printf '%s' "$KEYS" | tr ',' ' '); do
   # 本项目的 ns 较长，套一层后门禁自己的私有 socket（${TMPDIR}/teamsmith-smoke-<ns>.XXXXXX/tmux/
   # tmux-<uid>/default）会到 120 字节 > AF_UNIX 上限 107 → §0c 前置硬停 exit 2，**每个键都报
   # 「没有收口行」**（P297 实测：修前 --keys 0d/42 全 bad，而门禁本身是绿的）。子门禁自己会在
-  # ${TMPDIR}/teamsmith-smoke-<ns>.XXXXXX 建根并在收尾收干净，不需要借用审计的根。
-  d="${TMPDIR:-/tmp}"
-  mkdir -p "$d"
+  # <解析出的临时根>/teamsmith-smoke-<ns>.XXXXXX 建根并在收尾收干净，不需要借用审计的根。
+  d="$(team_tmp_root)"
+  team_tmp_root_prepare >/dev/null 2>&1 || true
   ( cd "$ROOT" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_AGENT_MODEL \
       -u TEAM_SKILL_DIR -u TEAM_DOCS_DIR -u TEAM_AGENT -u SMOKE_TMP_RUN_ID -u SMOKE_TMP_LEDGER \
       -u TEAM_SMOKE_KEEP -u TEAM_TMP_KEEP -u SMOKE_SEL_CHILD -u SMOKE_SEL_SKILL_DIR \

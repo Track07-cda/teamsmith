@@ -28,7 +28,7 @@ export HOME="$TMP/home"; mkdir -p "$HOME"
 PASS=0 FAIL=0; LIVE_SOCKET=''
 cleanup() {
   [ "${BASHPID:-$$}" = "$$" ] || return 0
-  if [ -n "$LIVE_SOCKET" ] && tmux_iso_guard_soft routing cleanup --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP"; then
+  if [ -n "$LIVE_SOCKET" ] && tmux_iso_guard_soft routing cleanup --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP" --own-root "$TMUX_TMPDIR"; then
     tmux -L "$LIVE_SOCKET" kill-server 2>/dev/null || true
   fi
   if [ -n "$EVIDENCE" ]; then
@@ -314,11 +314,16 @@ printf '| ID | 任务 | Agent | 分支 | 依赖 | 状态 |\n|---|---|---|---|---
 if has preview || has dispatch || has resume || has transaction || has limits || has boundary; then
   # Private socket bound shim; cleanup never reaches the shared server.
   LIVE_SOCKET="routing-${BASHPID}-${RANDOM}"
-  export TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR" "$TMP/bin"
+  # P309：socket 目录**不能**挂在本轮的临时根下 —— 临时根名带项目 ns（`/var/tmp/teamsmith-<ns>`）之后，
+  # `<TMP>/tmux/tmux-<uid>/routing-…` 已经 129 字节 > AF_UNIX 的 107，隔离前置直接硬停（routing 组整组判不了）。
+  # 基址要短：tmp_root_socket_dir 先试解析出的临时根、放不下就退 OS 默认临时目录。
+  TMUX_TMPDIR="$(tmp_root_socket_dir routing "tmux-$(id -u)/routing-999999-99999")" \
+    || TMUX_TMPDIR="$TMP/tmux"
+  export TMUX_TMPDIR; mkdir -p "$TMUX_TMPDIR" "$TMP/bin"
   REAL_TMUX="$(type -P tmux)"
   printf '#!/usr/bin/env bash\nexec %q -L %q "$@"\n' "$REAL_TMUX" "$LIVE_SOCKET" > "$TMP/bin/tmux"; chmod +x "$TMP/bin/tmux"
   export PATH="$TMP/bin:$PATH"
-  tmux_iso_require routing launch --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP"
+  tmux_iso_require routing launch --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP" --own-root "$TMUX_TMPDIR"
   before="$(sha "$STATE/dev.env")"; board="$(sha "$REPO/docs/team/BOARD.md")"
   run dispatch dev T1 docs/team/tasks/T1-fixture.md --print
   check preview-success eq "$RC" 0; check preview-no-assignment eq "$(sha "$STATE/dev.env")" "$before"; check preview-no-board eq "$(sha "$REPO/docs/team/BOARD.md")" "$board"
@@ -400,7 +405,7 @@ if has preview || has dispatch || has resume || has transaction || has limits ||
     check suffix-change-requires-fresh eq "$RC" 1
     run dispatch dev T1 docs/team/tasks/T1-fixture.md --fresh --print
     check fresh-keeps-stored-model eq "$RC" 0; check fresh-model contains "$OUT" 'vendor/strong:high'
-    tmux_iso_require routing stop-fixture --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP"
+    tmux_iso_require routing stop-fixture --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP" --own-root "$TMUX_TMPDIR"
     (cd "$REPO" && tmux kill-window -t routing-fixture:dev)
     run resume --agent dev --dry-run
     check resume-stored-identity eq "$RC" 0; check resume-sid contains "$OUT" "$SID_A"
@@ -997,12 +1002,14 @@ if has heal || has adopt || has updatecheck; then
   else
     STARTUP_TMUX_OWN=1; STARTUP_PATH0="$PATH"
     LIVE_SOCKET="routing-${BASHPID}-${RANDOM}"
-    export TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR" "$TMP/bin"
+    TMUX_TMPDIR="$(tmp_root_socket_dir routing "tmux-$(id -u)/routing-999999-99999")" \
+      || TMUX_TMPDIR="$TMP/tmux"
+    export TMUX_TMPDIR; mkdir -p "$TMUX_TMPDIR" "$TMP/bin"
     REAL_TMUX="$(routing_real_tmux)" || { printf 'routing: 找不到真 tmux\n' >&2; exit 3; }
     printf '#!/usr/bin/env bash\nexec %q -L %q "$@"\n' "$REAL_TMUX" "$LIVE_SOCKET" > "$TMP/bin/tmux"; chmod +x "$TMP/bin/tmux"
     export PATH="$TMP/bin:$PATH"
   fi
-  tmux_iso_require routing launch --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP"
+  tmux_iso_require routing launch --tmpdir "$TMUX_TMPDIR" --sock-name "$LIVE_SOCKET" --own-root "$TMP" --own-root "$TMUX_TMPDIR"
 fi
 startup_clean=(env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
   -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_PM_WINDOW -u TEAM_AGENTS -u TEAM_DOCS_DIR \

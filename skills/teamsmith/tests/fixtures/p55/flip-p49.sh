@@ -26,7 +26,8 @@ line_red() { note "  ✗ $*"; }
 
 # M28 隔离（lint 规则 D 的诚实满足，与 smoke.sh:241 同款）：本文件的全部 tmux 调用都打私有
 # socket 目录 —— 顶层 unset TMUX/TMUX_PANE + 顶层把 TMUX_TMPDIR 指到本进程私有目录（已建）；此后不导回 TMUX。
-FLIP_SOCK="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p55-flip-sock-$(team_project_ns).XXXXXX")"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+FLIP_SOCK="$(mktemp -d "$(team_tmp_root)/teamsmith-p55-flip-sock-$(team_project_ns).XXXXXX")"
 TMUX_TMPDIR="$FLIP_SOCK"; export TMUX_TMPDIR
 unset TMUX TMUX_PANE
 # P162：破坏性调用（kill-session）动手前先证明私有 socket 生效；skill 树不全（缺库）就响亮失败，
@@ -45,7 +46,8 @@ fi
 # 用法：p55_leg <leg名> <skill_dir>；结果写入 $LEG_RESULTS（"OK|RED <id> <desc>" 一行一条）
 p55_leg() { # <leg> <skill_dir>
   local leg="$1" SK="$2"
-  LEG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p55-flip-$(team_project_ns).XXXXXX")"
+  team_tmp_root_prepare >/dev/null 2>&1 || true
+  LEG_ROOT="$(mktemp -d "$(team_tmp_root)/teamsmith-p55-flip-$(team_project_ns).XXXXXX")"
   local T="$LEG_ROOT" REPO SESS
   REPO="$T/repo"; SESS="p55flip-$leg-$$"
   # 隔离：私有 socket 目录（已 mkdir；不写 TMUX_TMPDIR 指向不存在的目录 —— 那两个回退陷阱的教训）、
@@ -183,7 +185,8 @@ PY
 }
 
 # ---------------------------------------------------------------- 四条腿
-OUT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p55-flip-out-$(team_project_ns).XXXXXX")"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+OUT="$(mktemp -d "$(team_tmp_root)/teamsmith-p55-flip-out-$(team_project_ns).XXXXXX")"
 note "P55 flip-p49（§40 翻转夹具）· 输出目录 $OUT"
 note "被测 skill：$FLIP_SKILL"
 
@@ -205,7 +208,8 @@ else line_red "leg0：未改就有 $green_red 条红 —— 夹具或实现有�
 cp "$LEG_RESULTS" "$OUT/leg0-green.results"; [ "$KEEP" = "1" ] || rm -rf "$LEG_ROOT"
 
 note "== leg1 变异：删掉留存（建窗回到旧一行）→ 期望 B1 红 =="
-MUT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p55-flip-mut-$(team_project_ns).XXXXXX")"; cp -a "$FLIP_SKILL" "$MUT/skill"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+MUT="$(mktemp -d "$(team_tmp_root)/teamsmith-p55-flip-mut-$(team_project_ns).XXXXXX")"; cp -a "$FLIP_SKILL" "$MUT/skill"
 mut_no_retain "$MUT/skill"
 p55_leg no-retain "$MUT/skill"
 if judge no-retain B1 "$LEG_RESULTS"; then line_ok "leg1：锚点 B1 如预期转红（kill 后窗口消失，遗体断言抓到）"
@@ -213,7 +217,8 @@ else line_red "leg1：锚点 B1 没有红 —— §40 的留存断言拦不住�
 cp "$LEG_RESULTS" "$OUT/leg1-no-retain.results"; [ "$KEEP" = "1" ] || { rm -rf "$LEG_ROOT"; rm -rf "$MUT"; }
 
 note "== leg2 变异：say 对死 pane 按键（删掉换道分支）→ 期望 C2 红 =="
-MUT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p55-flip-mut-$(team_project_ns).XXXXXX")"; cp -a "$FLIP_SKILL" "$MUT/skill"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+MUT="$(mktemp -d "$(team_tmp_root)/teamsmith-p55-flip-mut-$(team_project_ns).XXXXXX")"; cp -a "$FLIP_SKILL" "$MUT/skill"
 mut_say_dead "$MUT/skill"
 p55_leg say-dead "$MUT/skill"
 if judge say-dead C2 "$LEG_RESULTS"; then line_ok "leg2：锚点 C2 如预期转红（输出不再点名座位已死）"
@@ -221,7 +226,8 @@ else line_red "leg2：锚点 C2 没有红 —— §40 的投递断言拦不住�
 cp "$LEG_RESULTS" "$OUT/leg2-say-dead.results"; [ "$KEEP" = "1" ] || { rm -rf "$LEG_ROOT"; rm -rf "$MUT"; }
 
 note "== leg3 变异：roster 把遗体显示成「在跑」→ 期望 E1 红 =="
-MUT="$(mktemp -d "${TMPDIR:-/tmp}/teamsmith-p55-flip-mut-$(team_project_ns).XXXXXX")"; cp -a "$FLIP_SKILL" "$MUT/skill"
+team_tmp_root_prepare >/dev/null 2>&1 || true
+MUT="$(mktemp -d "$(team_tmp_root)/teamsmith-p55-flip-mut-$(team_project_ns).XXXXXX")"; cp -a "$FLIP_SKILL" "$MUT/skill"
 mut_roster_run "$MUT/skill"
 p55_leg roster-run "$MUT/skill"
 if judge roster-run E1 "$LEG_RESULTS"; then line_ok "leg3：锚点 E1 如预期转红（roster 死 pane 行没了 ▲+证据）"

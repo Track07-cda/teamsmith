@@ -60,6 +60,11 @@ TEAM_PI_BIN="pi"                      # agent CLI binary (use an absolute path i
 TEAM_INSTALL_CMD=""                   # dependency install after creating a worktree, e.g. "pnpm install --frozen-lockfile"
 TEAM_DOCS_DIR="{{DOCS_DIR}}"          # where briefs/reports/threads/inbox live
 TEAM_WORKTREES_DIR=".worktrees"
+# Temp root for fixtures/gates (empty = resolve TMPDIR -> this pin -> /var/tmp/teamsmith-<ns>).
+# A TMPDIR in the environment wins over this pin; the divergence is printed, never silent.
+# Only the project file can set it (`team config set` refuses it): moving a location is an operator action.
+# Rollback to the previous default: TEAM_TMP_ROOT="/tmp".
+TEAM_TMP_ROOT=""
 # Branch model: task (default; one branch per task -- the unit of verification/merge/rollback) | agent (one long-lived branch per agent)
 TEAM_BRANCH_MODE="task"
 TEAM_TASK_BRANCH_PREFIX="task"

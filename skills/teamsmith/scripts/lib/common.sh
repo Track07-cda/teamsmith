@@ -1336,12 +1336,18 @@ team_inotify_probe() {
   runner="$(team_js_runner 2>/dev/null || true)"
   [ -n "$runner" ] || { printf 'unavailable\n'; return 0; }
   ns="$(team_project_ns)"
+  team_tmp_root_prepare >/dev/null 2>&1 || true
   # P287：直接落在解析后临时根上的东西要么点开头要么带 ns（探针脚本与探针目录都是如此）
-  script="$(mktemp "${TMPDIR:-/tmp}/teamsmith-inotify-probe.${ns}.XXXXXX.js" 2>/dev/null || true)"
+  # P309：探针目录也跟随**同一个**解析出的根（JS 侧不再自己回落到 os.tmpdir()）
+  local root; root="$(team_tmp_root 2>/dev/null || true)"
+  [ -n "$root" ] || { printf 'unavailable\n'; return 0; }
+  script="$(mktemp "$root/teamsmith-inotify-probe.${ns}.XXXXXX.js" 2>/dev/null || true)"
   [ -n "$script" ] || { printf 'unavailable\n'; return 0; }
   cat > "$script" <<'TEAM_INOTIFY_PROBE_JS' || { rm -f "$script"; printf 'unavailable\n'; return 0; }
-const fs = require('fs'), os = require('os'), path = require('path')
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamsmith-inotify-probe.' + (process.env.TEAM_INOTIFY_NS || 'nosig-00000000') + '-'))
+const fs = require('fs'), path = require('path')
+const root = process.env.TEAM_INOTIFY_ROOT || ''
+if (!root) { process.stdout.write('errno=noroot\n'); process.exit(0) }
+const dir = fs.mkdtempSync(path.join(root, 'teamsmith-inotify-probe.' + (process.env.TEAM_INOTIFY_NS || 'nosig-00000000') + '-'))
 let verdict = 'ok'
 try {
   const w = fs.watch(dir, () => {})
@@ -1354,9 +1360,9 @@ try {
 process.stdout.write(verdict + '\n')
 TEAM_INOTIFY_PROBE_JS
   if command -v timeout >/dev/null 2>&1; then
-    out="$(TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_ROOT="$root" TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
   else
-    out="$(TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_ROOT="$root" TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"
   fi
   rm -f "$script"
   case "$out" in
@@ -1588,6 +1594,9 @@ team_proc_start_identity() { [ -r "/proc/$1/stat" ] && awk '{print $22}' "/proc/
 team_lock_path() {
   local identity="${TEAM_MAIN_ROOT:-$PWD}|$1" sum
   sum="$(printf '%s' "$identity" | sha256sum | cut -d' ' -f1)"
+  # P309：**锁不跟着临时根搬**（与门禁锁的发布路径同一条纪律，P287）。锁是跨版本串行用的共享状态：
+  # 旧版本（`/tmp/…`）与新版本（`/var/tmp/…`）会各取各的锁 = 升级窗口里多出一条静默并发写。
+  # 夹具的临时目录是本变更搬的对象；锁的位置是环境里的 TMPDIR（未设则 /tmp），两件事别混。
   printf '%s/teamsmith-lock-%s\n' "${TMPDIR:-/tmp}" "$sum"
 }
 team_with_lock() ( # <resource> <command> [args...]
@@ -3989,6 +3998,127 @@ team_mem_guard() {
   return 0
 }
 
+# ---------------------------------------------------------------- 临时根解析器（tmp-root-on-disk · P309）
+# 解析顺序的**唯一实现**（规格 verification#One resolution decides every temp path, and it says how it
+# decided）：
+#   TMPDIR（调用进程自己设了、非空） → TEAM_TMP_ROOT（项目契约） → 平台默认
+# 为什么 TMPDIR 在前：它是本仓 84 处嵌套夹具做隔离的机制（规格里 12 处场景直接写成 `TMPDIR=D`）；
+# 把它排到契约键之后，任何钉了 TEAM_TMP_ROOT 的项目，门禁的隔离断言会集体变红。代价是「环境里一个
+# TMPDIR 会盖过项目钉的值」—— 那件事不许静默，由 team_tmp_root_note 打印出来。
+# 平台默认是**磁盘**上的 /var/tmp/teamsmith-<ns>（本机 /tmp 是 15 GB tmpfs：夹具写盘 = 吃 RAM，与
+# OOM killer 读同一个池；见 change tmp-root-on-disk 的 design.md 与 reports/P306-dev2.md 的读数）；
+# /var/tmp 不可写时退回 /tmp。
+# 纪律：纯函数，不创建任何东西；相对路径 / 空串 = 具名失败（不猜 CWD 相对的意思），绝不静默回落。
+team_tmp_root_default() {
+  local base="${TEAM_TMP_DEFAULT_BASE:-/var/tmp}" ns
+  if [ -d "$base" ] && [ -w "$base" ]; then
+    ns="$(team_project_ns 2>/dev/null || true)"
+    [ -n "$ns" ] || ns="nosig-00000000"
+    printf '%s/teamsmith-%s\n' "${base%/}" "$ns"
+  else
+    printf '/tmp\n'
+  fi
+}
+
+team_tmp_root_source() { # → tmpdir | config | default（顺序只在这里实现）
+  if [ -n "${TMPDIR:-}" ]; then printf 'tmpdir\n'
+  elif [ -n "${TEAM_TMP_ROOT:-}" ]; then printf 'config\n'
+  else printf 'default\n'; fi
+}
+
+team_tmp_root_raw() { # 解析出的路径（未归一化、未校验；诊断与比较用）
+  case "$(team_tmp_root_source)" in
+    tmpdir) printf '%s\n' "${TMPDIR:-}" ;;
+    config) printf '%s\n' "${TEAM_TMP_ROOT:-}" ;;
+    *) team_tmp_root_default ;;
+  esac
+}
+
+team_tmp_root__norm() { # <path> → 去掉尾随 /（根 "/" 保持）
+  local p="${1:-}"
+  while [ "${#p}" -gt 1 ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+  printf '%s\n' "$p"
+}
+
+team_tmp_root() { # → 绝对路径；相对/空 = 具名失败（rc=1，stdout 不印路径）
+  local p src
+  src="$(team_tmp_root_source)"; p="$(team_tmp_root_raw)"
+  case "$p" in
+    /*) team_tmp_root__norm "$p"; return 0 ;;
+    '') team_err "临时根解析失败：来源 $src 给的是空路径"
+        team_err "  修法：给绝对路径（TEAM_TMP_ROOT=/var/tmp/... 或 TMPDIR=/abs/dir），或清掉它走平台默认"
+        return 1 ;;
+    *)  team_err "临时根解析失败：来源 $src 给的 [$p] 不是绝对路径（相对路径不猜 CWD）"
+        team_err "  修法：给绝对路径（TEAM_TMP_ROOT=/var/tmp/... 或 TMPDIR=/abs/dir），或清掉它走平台默认"
+        return 1 ;;
+  esac
+}
+
+team_tmp_root_source_text() { printf 'source=%s\n' "$(team_tmp_root_source)"; }
+
+# 一行「它是怎么解析出来的」；TMPDIR 盖过项目钉的值时**必须**说出来（静默不允许）。
+team_tmp_root_note() {
+  local src
+  src="$(team_tmp_root_source)"
+  case "$src" in
+    tmpdir)
+      if [ -n "${TEAM_TMP_ROOT:-}" ] \
+         && [ "$(team_tmp_root__norm "$TEAM_TMP_ROOT")" != "$(team_tmp_root__norm "${TMPDIR:-}")" ]; then
+        printf 'source=tmpdir（项目配置 TEAM_TMP_ROOT=%s 未生效：环境里的 TMPDIR 赢了）' "$TEAM_TMP_ROOT"
+        return 0
+      fi
+      printf 'source=tmpdir' ;;
+    config) printf 'source=config' ;;
+    *) printf 'source=default' ;;
+  esac
+}
+
+team_tmp_root_usable() { # <path> → 0 = 存在、是目录、可写
+  local p="${1:-}"
+  if [ -n "$p" ] && [ -d "$p" ] && [ -w "$p" ]; then return 0; fi
+  return 1
+}
+team_tmp_root_stat_path() { # <path> → 存在就是它；否则最近的存在祖先（只读面判余量用；不创建）
+  local p="${1:-}" d
+  [ -n "$p" ] || return 1
+  d="$p"
+  while [ "$d" != "/" ] && [ ! -e "$d" ]; do d="$(dirname "$d")"; done
+  printf '%s\n' "$d"
+}
+
+team_tmp_root_ancestor_note() { # <path> → "" 或「（尚未创建，按 <祖先> 的文件系统判）」
+  local p="${1:-}" a
+  [ -n "$p" ] || return 0
+  [ -e "$p" ] && return 0
+  a="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"
+  [ -n "$a" ] || return 0
+  printf '（尚未创建，按 %s 的文件系统判）' "$a"
+}
+
+# 写盘前的准备：**默认腿**的目录按需建（0700，本变更里唯一被自动创建的目录）；显式选定的根
+# （TMPDIR / TEAM_TMP_ROOT）必须已经存在且可写 —— 绝不代建、绝不回落。
+team_tmp_root_prepare() {
+  local p src
+  src="$(team_tmp_root_source)"
+  p="$(team_tmp_root)" || return 1
+  if [ "$src" = "default" ]; then
+    [ -d "$p" ] && { [ -w "$p" ] && return 0; }
+    if mkdir -p -m 700 -- "$p" 2>/dev/null && [ -w "$p" ]; then
+      printf '临时根目录已创建：%s（source=default，0700）\n' "$p" >&2
+      return 0
+    fi
+    team_err "临时根不可用：$p 建不出来（只读 / ENOSPC / 权限）"
+    team_err "  修法：mkdir -p -m 700 '$p'（或把 TEAM_TMP_ROOT 指到已存在的可写目录）"
+    return 1
+  fi
+  team_tmp_root_usable "$p" && return 0
+  local why="不存在"
+  [ -e "$p" ] && { [ -d "$p" ] || why="不是目录"; [ -d "$p" ] && [ ! -w "$p" ] && why="不可写"; }
+  team_err "临时根不可用：$p（source=$src）$why"
+  team_err "  修法：mkdir -p '$p' 并确保可写；或把 $([ "$src" = "tmpdir" ] && printf 'TMPDIR' || printf 'TEAM_TMP_ROOT') 改到已存在的可写目录"
+  return 1
+}
+
 # ---------------------------------------------------------------- 磁盘/inode 腿（P144 · capacity-floor-disk）
 # 一次真实事故（D67）：`/tmp` 是共享 tmpfs，被门禁夹具填满后 pi 以 ENOSPC 死在回合中间（报告与证据全丢）。
 # 旧的内存腿只看 RAM/swap，于是 worker 是在文件系统已经贴墙时被拉起来的 —— 这里补上磁盘/inode 读数，
@@ -4042,8 +4172,15 @@ team_disk_stats() { # <path> → "total_kb<TAB>avail_kb<TAB>itotal<TAB>ifree<TAB
     team__disk_norm "$bt" "$ba" "$bi" "$bf" "$bid"
     return 0
   fi
-  local k i t a it iff mnt
-  k="$(df -P -k "$p" 2>/dev/null)" || { printf -- '-\t-\t-\t-\t-\n'; return 0; }
+  local k i t a it iff mnt ap
+  k="$(df -P -k "$p" 2>/dev/null)" || k=""
+  if [ -z "$k" ]; then
+    # P309：未创建的路径（默认腿的根第一次用之前）按**最近的存在祖先**读 —— 同一个文件系统、只读、不创建。
+    # 夹具表那条腿不走这里：表按**给定的路径**做最长前缀匹配（夹具断言的就是它写的那一行）。
+    ap="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"
+    [ -n "$ap" ] && [ "$ap" != "$p" ] && k="$(df -P -k "$ap" 2>/dev/null)" || k=""
+  fi
+  [ -n "$k" ] || { printf -- '-\t-\t-\t-\t-\n'; return 0; }
   i="$(df -P -i "$p" 2>/dev/null)" || i=""
   t="$(printf '%s\n' "$k" | awk 'NR==2{print $2}')"
   a="$(printf '%s\n' "$k" | awk 'NR==2{print $4}')"
@@ -4085,16 +4222,18 @@ team_disk_reading_text() { # <total_kb> <avail_kb> <itotal> <ifree>
   printf '可用 %s（inode %s）' "$(team_disk_human_kb "$a")" "$ino"
 }
 
-# 这条路径在读数里的身份（派单腿只判这两类路径；其余按工作树处理）
+# 这条路径在读数里的身份（派单腿只判这两类路径；其余按工作树处理）。P309 起比较的是**解析出的**根。
 team_disk_label() { # <path> → 临时根 / 工作树
-  local p="$1" tmp="${TMPDIR:-/tmp}"
-  if [ "$p" = "$tmp" ] || [ "$p" = "${tmp%/}" ]; then printf '临时根'; else printf '工作树'; fi
+  local p="$1" tmp
+  tmp="$(team_tmp_root 2>/dev/null || true)"
+  if [ -n "$tmp" ] && [ "$p" = "$tmp" ]; then printf '临时根'; else printf '工作树'; fi
 }
 
 # 拒绝时的修法（D6：归属有据的回收才是修法 —— 临时根走 tmp-hygiene 的归属证明，工作树只腾自己的路径）
 team_disk_remedy() { # <path> → 一行修法
-  local p="$1" tmp="${TMPDIR:-/tmp}" skill_dir="${TEAM_SKILL_DIR:-skills/teamsmith}"
-  if [ "$p" = "$tmp" ] || [ "$p" = "${tmp%/}" ]; then
+  local p="$1" tmp skill_dir="${TEAM_SKILL_DIR:-skills/teamsmith}"
+  tmp="$(team_tmp_root 2>/dev/null || true)"
+  if [ -n "$tmp" ] && [ "$p" = "$tmp" ]; then
     printf 'bash %s/tests/tmp-hygiene.sh --status 看清单，再 --sweep 回收（只回收归属可证的根）' "$skill_dir"
   else
     printf '腾空这个文件系统：%s（清掉占用它的产物；本工具不代删）' "$p"
@@ -4107,9 +4246,12 @@ team_disk_guard() { # <path...>
   local min_mb="${TEAM_TMP_MIN_FREE_MB:-1024}" min_ino="${TEAM_TMP_MIN_FREE_INODES:-100000}"
   case "$min_mb" in ''|*[!0-9]*) min_mb=1024 ;; esac
   case "$min_ino" in ''|*[!0-9]*) min_ino=100000 ;; esac
-  local p t a it iff id seen_ids=" " seen_paths=" " crossed rc=0
+  local p t a it iff id seen_ids=" " seen_paths=" " crossed rc=0 measure note
   for p in "$@"; do
     [ -n "$p" ] || continue
+    # P309：读的是解析出的那个根（不是这里再算的默认）；未创建时按最近的存在祖先读（只读、不创建，
+    # 见 team_disk_stats）。夹具表仍按给定的路径匹配。
+    note="$(team_tmp_root_ancestor_note "$p")"
     team__disk_stats "$p"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
     [ -n "$a" ] || continue                       # 读不到 → 不判、不说（绝不猜一个数字来拒绝）
     if [ -n "$id" ]; then                          # 同一个文件系统只判一次（真实 df 用挂载点；夹具用命中的行）
@@ -4128,8 +4270,9 @@ team_disk_guard() { # <path...>
     fi
     [ -n "$crossed" ] || continue
     rc=1
-    team_err "$(team_disk_label "$p") $p 磁盘不足（$crossed）：拒绝派单"
+    team_err "$(team_disk_label "$p") $p$note 磁盘不足（$crossed）：拒绝派单"
     team_err "  读数：$(team_disk_reading_text "$t" "$a" "$it" "$iff")（总 $(team_disk_human_kb "${t:-0}")）"
+    [ "$(team_disk_label "$p")" = "临时根" ] && team_err "  来源：$(team_tmp_root_note)"
     team_err "  修法：$(team_disk_remedy "$p")"
     team_err "  或显式冒险：TEAM_TMP_MIN_FREE_MB=0（关字节腿）/ TEAM_TMP_MIN_FREE_INODES=0（关 inode 腿）team dispatch …"
   done
@@ -4159,16 +4302,19 @@ team_capacity_line() {
   local zram_note=""
   [ "$zram_pct" -gt 0 ] && zram_note="，zram 用 ${zram_pct}%${zram_phys:+/物理 ${zram_phys}MB}"
   local -a paths=("$@")
-  [ "${#paths[@]}" -gt 0 ] || paths=("${TMPDIR:-/tmp}" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")
-  local disk="" p t a it iff id seen=" "
+  [ "${#paths[@]}" -gt 0 ] || paths=("$(team_tmp_root 2>/dev/null || true)" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")
+  local disk="" p t a it iff id seen=" " srcnote note
   for p in "${paths[@]}"; do
     [ -n "$p" ] || continue
+    note="$(team_tmp_root_ancestor_note "$p")"
     team__disk_stats "$p"; t="$_D_T"; a="$_D_A"; it="$_D_IT"; iff="$_D_IFF"; id="$_D_ID"
     if [ -n "$id" ]; then
       case "$seen" in *" $id "*) continue ;; esac
       seen="$seen$id "
     fi
-    disk="$disk$(team_disk_label "$p") $p $(team_disk_reading_text "$t" "$a" "$it" "$iff") ｜ "
+    srcnote=""
+    [ "$(team_disk_label "$p")" = "临时根" ] && srcnote="· $(team_tmp_root_note) "
+    disk="$disk$(team_disk_label "$p") $p$note $(team_disk_reading_text "$t" "$a" "$it" "$iff")${srcnote:+ $srcnote}｜ "
   done
   printf 'RAM 可用 %sMB%s ｜ 磁盘 swap 空闲 %sMB%s ｜ %s估算可再加 %s 个 agent\n' \
     "$avail" "" "${diskfree}" "$zram_note" "$disk" "$(team_agent_capacity)"

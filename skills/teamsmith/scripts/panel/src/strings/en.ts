@@ -271,6 +271,7 @@ export const en = {
   label_TEAM_SPEC_DIR: 'Spec dir',
   label_TEAM_ROOT: 'Project root',
   label_TEAM_MAIN_ROOT: 'Main checkout root',
+  label_TEAM_TMP_ROOT: 'Temp root',
   label_TEAM_CONFIG_FILE: 'Contract file',
   // -- branch and forge (read-only)
   label_TEAM_BRANCH_MODE: 'Branch naming mode',
