@@ -34,3 +34,18 @@ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-f
 git diff --check && git status --short
 ```
 做完把清单里 **3.4 / 5.4 / 6.1 / 6.2 / 6.3** 五格勾上（带证据），notify pm；**复验换人**。
+
+## 返修轮次 1（2026-10-18，V59 的唯一致命项：**「谁建它」那句话带 `source=default` 条件**）
+
+复验记录 `docs/team/reviews/V59.md` §1.4（同一棵树、同一条命令的原文对照）：
+
+| 腿 | 余量行尾部 |
+|---|---|
+| `TEAM_TMP_ROOT=<不存在>` | `…（尚未创建，按 <祖先> 的文件系统判）：可用 … · source=config` |
+| 默认根 | 同一句 **+「默认根本命令不建：由夹具/门禁在运行时按需创建（0700）」** |
+
+`cmd-status.sh` 里那半句被 `[ "$(team_tmp_root_source)" = "default" ]` 条件挡住了——于是**配置来的根**只说了「还没有」，**没说「不会被创建」**，读者会以为它会自己出现。
+
+**改法**：把「**不会被创建**」这层意思对**所有来源**都说清楚（措辞可不同：`default` → 运行时按需创建；`config`/`tmpdir` → **不会**自动创建，请 `mkdir -p` 或改配置，并给出可复制的命令）。**红侧**：① 把该子句再按 `source` 挡住 → 复检必须红并点名 `source=config` 那条腿；② 两个来源的输出都要能区分「谁负责创建」。
+
+其余（`§40` 的 band、开跑行 `source=`、文档面、全量）V59 已判**成立**，不必重做。改完 notify pm；由 V59 第二轮定点复检（同一席位、换会话）。
