@@ -492,6 +492,7 @@
 | P311 | Finish tmux-identity-scope: baseline plus the section-32 wiring | dev-bob | - | - | done |
 | V57 | Verify the disk temp-root default (three scenes, three red sides, socket decoupling) | dev3 | - | - | done |
 | P312 | Tick the temp-root checklist (author side) | dev2 | - | - | wip |
+| P313 | The heartbeat loop never exits (12 GB of RAM-disk held by deleted files) | dev3 | - | - | wip |
 
 ## 当前里程碑
 
