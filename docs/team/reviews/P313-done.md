@@ -1,0 +1,4 @@
+- 2026-10-18T18:15:14Z · `team close P313 --status done` · FORCED：PM 显式覆盖（理由：证据已并入 main（V58 第二轮 PASS + docs/team/reviews/V58.md））
+  -   - ① 复验记录 docs/team/reviews/P313.md：不存在
+  -   - ② 分支是否已并入 main：task/P313-heartbeat-orphans（1561abe9e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
