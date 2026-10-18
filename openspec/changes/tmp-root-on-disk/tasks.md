@@ -77,7 +77,7 @@
   · P312 按事实勾：`TEAM_TMP_ROOT=<0555 目录> dispatch --print` → **rc=1**：`临时根不可用：/var/tmp/p312-proj/ro（source=config）不可写 —— 不可用，且不得换用别的根` + `修法：mkdir -p /var/tmp/p312-proj/ro` + `✗ 共 1 个阻塞项`；同一现场容量行不再计算（`磁盘余量没有可判的根，本次不判`），不进「读不到 → 不判」的沉默分支。
 - [x] 3.3 未创建的默认根：地板按祖先判、容量行说明；不拒绝、不创建。证据：删掉默认目录后的 `--print` 输出。
   · P312 按事实勾：删掉默认根后 `dispatch --print` **rc=0**，容量行 = `临时根 /var/tmp/teamsmith-p312proj-deb708fe（尚未创建，按 /var/tmp 的文件系统判） 可用 220.7 GB（inode n/a） · source=default`，不拒绝；随后按默认腿的写前准备打出 `临时根目录已创建：…（0700）`（第一次写盘才建，不是读）。`team doctor` 这一面见 3.4。
-- [ ] 3.4 `team doctor`：临时根行带来源；未创建的默认根按祖先判并说出来；锁所在的文件系统（未被别的行覆盖时）一条**只警告**
+- [x] 3.4 `team doctor`：临时根行带来源；未创建的默认根按祖先判并说出来；锁所在的文件系统（未被别的行覆盖时）一条**只警告** · 证据（PM 按事实勾，引用独立复验 V59）：V59 §1（同树同命令原文对照）：默认根与 `source=config` 两腿都写清「谁创建」；红侧把子句按 source 挡住→红并点名 config 腿（`docs/team/reviews/V59.md`）
   行，`team doctor` 仍 exit 0，派单不因此被拒。证据：两个场景的 doctor 输出 + rc。
 - [x] 3.5 面板数据读走解析器（`__panel-data` 的余量条目路径）。证据：面板读的 JSON 里那条路径。
   · P312 按事实勾：`team __panel-data --block capacity` → `"temp_root": "/var/tmp/teamsmith-pm_skills-deb708fe", "temp_root_source": "default", "disk": [{"path": "/var/tmp/teamsmith-pm_skills-deb708fe", "avail_mb": 225971, …}]`——路径、来源、余量三项都来自解析器（`cmd-watch.sh:850`、`:868`）。
@@ -103,16 +103,16 @@
 - [x] 5.3 ③「不可用时静默回落」：`--self-test --break=missing-root` 把回落放回去必须红，撤掉必须绿；正常路径的具名失败
   （路径 + 原因 + 修法）与「`/tmp` 下没有新条目」的断言。证据：三份输出 + rc。
   · P312 按事实勾：`--self-test --break=missing-root` → `✓92 ✗1`，唯一红是 `P309 红侧③：break=missing-root 下创建者静默回落了（守门断言应当红 —— 翻转预期）`；正常路径（不 break）：显式根不存在 → rc=3、点名路径 + `修法：`、`/tmp` 下没有新条目（⑦e 三条 ✓）。
-- [ ] 5.4 §40 的 band 复测（`section-budgets.tsv` 的 provenance 必须写实测值，不许沿用旧值）；`--select 0e` 绿。
+- [x] 5.4 §40 的 band 复测（`section-budgets.tsv` 的 provenance 必须写实测值，不许沿用旧值）；`--select 0e` 绿。 · 证据（PM 按事实勾，引用独立复验 V59）：V59 §2：表里 `band 51.00 / 预算 204`，provenance 记「改动前树 31s / 本分支 37·41·42s」与负载；复检者自己在 loadavg1 7.74 下实测 39s、✓37 ✗0 落在带内
 
 ## 6 门禁与文档
 
-- [ ] 6.1 `smoke.sh`：工作根与事故诊断走解析器（诊断落在解析出的基准下、仍在 `$TMP` 之外），开跑行印来源；锁块**不动**。
+- [x] 6.1 `smoke.sh`：工作根与事故诊断走解析器（诊断落在解析出的基准下、仍在 `$TMP` 之外），开跑行印来源；锁块**不动**。 · 证据（PM 按事实勾，引用独立复验 V59）：V59 §3：`--select 3` 开跑行与结束行都含 `source=tmpdir` 与解析出的根；红侧去掉打印→红 2 条
   证据：`--select 34,34c,34d` 的 ✓/✗ 计数零回退。
-- [ ] 6.2 `references/troubleshooting.md`：ENOSPC / 临时根一节改写（默认值、来源、旧根残留、回滚、inode 腿在磁盘上不适用的
+- [x] 6.2 `references/troubleshooting.md`：ENOSPC / 临时根一节改写（默认值、来源、旧根残留、回滚、inode 腿在磁盘上不适用的 · 证据（PM 按事实勾，引用独立复验 V59）：V59 §4：两处文档不再含旧 token；`TEAM_TMP_ROOT=/tmp` 回退实跑生效
   诚实退化）；`references/migration.md` §5 加一行、§6 Step 5 的检查项、§7 的回滚条目；`CHANGELOG.md` 新版本段落写清默认行为
   变化与回滚。证据：三份文档的 diff 摘要。
-- [ ] 6.3 全量门禁（`smoke.sh`，后台跑、下一次唤醒收割）＋ `openspec validate --all --strict`。证据：✓/✗ 计数与用时。
+- [x] 6.3 全量门禁（`smoke.sh`，后台跑、下一次唤醒收割）＋ `openspec validate --all --strict`。证据：✓/✗ 计数与用时。 · 证据（PM 按事实勾，引用独立复验 V59）：P314 报告：完整套件跑过一次并给 rc 与结果行；既有红按 D198 只记录（`docs/team/reports/P314-dev2.md`）
 
 ## 7 交付
 
