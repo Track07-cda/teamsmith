@@ -495,7 +495,7 @@
 | P313 | The heartbeat loop never exits (12 GB of RAM-disk held by deleted files) | dev3 | - | - | wip |
 | P314 | Close the four temp-root gaps (doctor side effect, stale band, missing source line, stale docs) | dev2 | - | - | wip |
 | V58 | Verify the heartbeat lifecycle and the deleted-but-open visibility | dev-bob | - | - | wip |
-| V59 | Spot-check the four temp-root gaps (doctor must be read-only) | dev3 | - | - | blocked |
+| V59 | Spot-check the four temp-root gaps (doctor must be read-only) | dev3 | - | - | wip |
 
 ## 当前里程碑
 
