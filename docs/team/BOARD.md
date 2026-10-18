@@ -491,8 +491,9 @@
 | P310 | Two gate regressions from the lock change (socket length, nested review queueing) | dev3 | - | - | done |
 | P311 | Finish tmux-identity-scope: baseline plus the section-32 wiring | dev-bob | - | - | done |
 | V57 | Verify the disk temp-root default (three scenes, three red sides, socket decoupling) | dev3 | - | - | done |
-| P312 | Tick the temp-root checklist (author side) | dev2 | - | - | wip |
+| P312 | Tick the temp-root checklist (author side) | dev2 | - | - | done |
 | P313 | The heartbeat loop never exits (12 GB of RAM-disk held by deleted files) | dev3 | - | - | wip |
+| P314 | Close the four temp-root gaps (doctor side effect, stale band, missing source line, stale docs) | dev2 | - | - | wip |
 
 ## 当前里程碑
 
