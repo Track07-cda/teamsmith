@@ -1,0 +1,4 @@
+- 2026-10-18T08:05:59Z · `team close P312 --status done` · FORCED：PM 显式覆盖（理由：勾选并入 main；4 项留空定性为真缺口并立 P314，故归档推迟）
+  -   - ① 复验记录 docs/team/reviews/P312.md：不存在
+  -   - ② 分支是否已并入 main：task/P312-tmp-root-checklist（33532429e）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
