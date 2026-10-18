@@ -3,6 +3,7 @@
 #
 #   bash skills/teamsmith/tests/tmp-hygiene.sh --status              # 只读清单（永远 exit 0）
 #   bash skills/teamsmith/tests/tmp-hygiene.sh --lint [--dir D]      # 静态检查：有 finding → exit 1
+#   bash skills/teamsmith/tests/tmp-hygiene.sh --docs-check [--dir D]  # 文档面一致性（P314）→ exit 1
 #   bash skills/teamsmith/tests/tmp-hygiene.sh --sweep [--dry-run] [--age N] [--tmux-sockets]
 #   bash skills/teamsmith/tests/tmp-hygiene.sh --self-test [--break=<stage>]
 #
@@ -100,6 +101,9 @@ _usage() {
   --status                 只读清单（根 / 归属未证·别家（逐条点名） / 不是根 / 占用 / 余量 / 工具身份）；永远 exit 0
   --lint [--dir D]         静态检查 mktemp 模板（默认整棵 skill 树）：直接落在解析后临时根上的模板
                            必须点开头或带本项目的 ns，根还要在 owned 家族里；有 finding → exit 1
+  --docs-check [--dir D]   文档面一致性（默认整棵 skill 树）：默认根 / 解析来源 / 回滚口令必须写清，
+                           老行为的稳定 token（${TMPDIR:-/tmp}、旧根名、tmpfs 旧读数）不许残留；
+                           有残留或缺 token → exit 1
   --sweep [--dry-run] [--age N] [--tmux-sockets]
                            回收陈旧、无占用的根（默认 30 分钟 / TEAM_TMP_SWEEP_AGE）；
                            别家 / 归属不明的目录逐条点名、永不碰；
@@ -786,6 +790,70 @@ _lint_judge() { # <file> <line> <template> <is_root> → 0 合规 / 1 finding（
   fi
   return 1
 }
+# ---------------------------------------------------------------- --docs-check
+# P314 · 文档面一致性（change: tmp-root-on-disk）。默认根从 `${TMPDIR:-/tmp}` 搬到**磁盘**上的
+# `/var/tmp/teamsmith-<ns>`，解析来源（`source=`）成了必须写出来的事实。文档里若还在教老行为，
+# 下一个照着文档操作的人就会被引回内存盘。这里只用**稳定 token**（路径形状 / 键名 / 单位），不锚整句：
+# 措辞可以改，事实不能退回去。
+#   must    : 这棵树里必须出现的 token（漏了 = 文档没跟着改）
+#   mustnot : 老行为的指纹（出现 = 残留）
+# `${TMPDIR:-/tmp}` 在 protocol.md 里**有**合法位置（冻结的门禁锁发布路径与危险 glob 的反例），
+# 所以只在 troubleshooting.md / config.md 里当作残留；protocol.md 只按旧根名判。
+_DOC_RULES=(
+  'references/troubleshooting.md|must|var/tmp/teamsmith-|默认根在磁盘上（不再是内存盘）'
+  'references/troubleshooting.md|must|source=|解析来源必须写出来（谁怎么解析的）'
+  'references/troubleshooting.md|must|TEAM_TMP_ROOT=/tmp|回滚口令要写清'
+  'references/troubleshooting.md|mustnot|15 GB tmpfs|旧读数（tmpfs 大小）已不是现在的默认根'
+  'references/troubleshooting.md|mustnot|${TMPDIR:-/tmp}|旧基准写法（默认根不再是它）'
+  'references/troubleshooting.md|mustnot|teamsmith-<kind>.XXXXXX|旧根名（P287 之后带 -<ns>）'
+  'references/migration.md|must|TEAM_TMP_ROOT|升级与回滚的入口要写清'
+  'references/migration.md|must|var/tmp/teamsmith-|新默认根'
+  'references/config.md|must|var/tmp/teamsmith-|新默认根'
+  'references/config.md|mustnot|${TMPDIR:-/tmp}|旧基准写法（默认根不再是它）'
+  'references/protocol.md|must|var/tmp/teamsmith-|新默认根'
+  'references/protocol.md|mustnot|teamsmith-<kind>.XXXXXX|旧根名（P287 之后带 -<ns>）'
+)
+cmd_docs_check() {
+  local root="$SKILL_DIR" rule f mode tok why path line n=0 rc=0 seen=" "
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dir) root="${2:?--dir 需要目录}"; shift 2 ;;
+      --dir=*) root="${1#*=}"; shift ;;
+      *) printf 'tmp-hygiene: --docs-check 不认识的参数 [%s]\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  for rule in "${_DOC_RULES[@]}"; do
+    IFS='|' read -r f mode tok why <<<"$rule"
+    path="$root/$f"
+    n=$((n + 1))
+    case "$seen" in *" $f "*) ;; *) seen="$seen$f " ;; esac
+    if [ ! -f "$path" ]; then
+      printf '\033[31m✗\033[0m %s：文件不在（%s 缺它）\n' "$f" "$root"
+      rc=1; continue
+    fi
+    case "$mode" in
+      must)
+        LC_ALL=C grep -qF -- "$tok" "$path" 2>/dev/null && continue
+        printf '\033[31m✗\033[0m %s：缺 token [%s] —— %s\n' "$f" "$tok" "$why"
+        rc=1 ;;
+      mustnot)
+        while IFS=: read -r line _; do
+          [ -n "$line" ] || continue
+          printf '\033[31m✗\033[0m %s:%s：残留 token [%s] —— %s\n' "$f" "$line" "$tok" "$why"
+          rc=1
+        done < <(LC_ALL=C grep -nF -- "$tok" "$path" 2>/dev/null)
+        ;;
+    esac
+  done
+  local nf; nf="$(printf '%s' "$seen" | wc -w | tr -d ' ')"
+  if [ "$rc" -eq 0 ]; then
+    printf '  \033[32m✓\033[0m 文档面与解析后的临时根一致（%s 个文件 · %s 条规则）\n' "$nf" "$n"
+  else
+    printf '\033[31m文档面不一致（%s 个文件 · %s 条规则）\033[0m\n' "$nf" "$n"
+  fi
+  return "$rc"
+}
+
 cmd_lint() {
   local dir="$SKILL_DIR"                # P287：默认扫整棵 skill 树（夹具 + 产品自己的临时模板）
   while [ $# -gt 0 ]; do
@@ -1529,6 +1597,7 @@ assert_out() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3（输出里找不到 [
 case "${1:-}" in
   --status)  shift; cmd_status "$@" ;;
   --lint)    shift; cmd_lint "$@" ;;
+  --docs-check) shift; cmd_docs_check "$@" ;;
   --sweep)   shift; cmd_sweep "$@" ;;
   --self-test) shift; _hy_selftest "$@" ;;
   -h|--help|"") _usage ;;

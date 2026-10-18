@@ -795,8 +795,11 @@ review verdict. The contracts live in the specs (`verification#The correctness g
 `panel#Frame assembly is asynchronous, cached and never blocks input`); this section is the operational rule.
 
 The gate also reports **its own temp-root usage**: one line at the start and one with the result summary (also on
-failure) name the run's root, its size and its file count, and the run asserts that every root it created is gone
-unless it declared one kept. Fixtures get their root from `${TMPDIR:-/tmp}/teamsmith-<kind>-<ns>.XXXXXX`
+failure) name the run's root, its size, its file count and **how the root was resolved** (`source=tmpdir|config|
+default`, plus the `TEAM_TMP_ROOT` value that lost when `TMPDIR` overrode it); the run also asserts that every root
+it created is gone unless it declared one kept. Fixtures get their root from the
+resolved temp root (`TMPDIR` → `TEAM_TMP_ROOT` → `/var/tmp/teamsmith-<ns>`, one resolver, never re-implemented):
+`<that root>/teamsmith-<kind>-<ns>.XXXXXX`
 (`ns = <slug>-<hash8>`, derived from the main checkout, so every worktree of one project shares it and two projects
 cannot collide; the helper records it in the root's marker and the run ledger, `tmp-hygiene.sh --status` shows it,
 and roots that predate the namespace are listed as `legacy`) through the
@@ -804,12 +807,12 @@ single owner helper `tests/lib/tmp-root.sh` (owner marker inside, run ledger out
 `TEAM_TMP_KEEP=1` to keep); residual roots are reclaimed by an **operator** action,
 `bash skills/teamsmith/tests/tmp-hygiene.sh --status` then `--sweep` (it proves a root is unoccupied before
 deleting, and refuses with nothing deleted when it cannot), or by deleting only this project's own
-`teamsmith-<kind>-<ns>.*` entries. A pattern against the shared prefix — `rm -rf ${TMPDIR:-/tmp}/teamsmith-*` — is
+`teamsmith-<kind>-<ns>.*` entries. A pattern against the shared prefix — `rm -rf "$(team_tmp_root)/teamsmith-*"` — is
 forbidden: that shape is what deleted another project's running gate's lock on 2026-10-15, and a shared prefix is
 not ownership. Everything a run creates directly under the temp root is either dot-prefixed (ledger, pid, evidence)
 or carries the ns (root, queue marker, filter copy). The gate never sweeps: a fixture another agent started
 by hand is not in the gate lock, so pattern-deleting in the shared temp filesystem is the D37 family. `team doctor`
-prints the temp root's headroom (free/total bytes and inodes, warning only) so a full tmpfs is visible before it
+prints the temp root's headroom (free/total bytes and inodes, warning only) so a full filesystem is visible before it
 turns into a red a fixture cannot explain.
 
 ### 9b-3. The ledger is public, so the ban is a gate check (D94)

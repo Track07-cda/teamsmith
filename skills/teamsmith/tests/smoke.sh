@@ -864,11 +864,16 @@ smoke_human_kb() {
 }
 SMOKE_TMP_USAGE_ENDED=0
 smoke_tmp_usage() { # start|end
-  local kb files
+  local kb files src
   kb="$(du -sk "$TMP" 2>/dev/null | awk '{print $1}')"
   files="$(find "$TMP" 2>/dev/null | wc -l | tr -d ' ')"
-  printf '  \033[2m·\033[0m 临时根%s：%s（%s · %s 文件）\n' \
-    "$([ "${1:-start}" = "end" ] && printf '（结束）' || true)" "$TMP" "$(smoke_human_kb "${kb:-0}")" "${files:-0}"
+  # P314：开跑行要说出「这个根是怎么解析出来的」—— 与 tmp-hygiene 表头同一个函数、同一种写法
+  # （`source=tmpdir|config|default`，TMPDIR 盖过项目钉的值时点名这件事）。没有它，一次跑到
+  # 内存盘上的门禁从日志里看不出来。
+  src="$(team_tmp_root_note 2>/dev/null || true)"
+  printf '  \033[2m·\033[0m 临时根%s：%s（%s · %s 文件%s）\n' \
+    "$([ "${1:-start}" = "end" ] && printf '（结束）' || true)" "$TMP" "$(smoke_human_kb "${kb:-0}")" "${files:-0}" \
+    "${src:+ · $src}"
   [ "${1:-start}" = "end" ] && SMOKE_TMP_USAGE_ENDED=1
   return 0
 }
@@ -1702,6 +1707,24 @@ if [ -n "$P70_LOW_ID" ]; then
   assert_eq "P70 翻转（预算）还原：绿" "$P70_RC" "0"
 else
   bad "P70 翻转（预算）：找不到有实测带的段落（表坏了？）"
+fi
+# 翻转①b（P314）：band 掉到**已记录的实测**以下 → 必须红并点名该段与实测值。
+#   现实缺陷形状：§40 的带停在 P223 的 20.00s，而本机实测 31–51s —— 每次跑都打「超带」，却没人被拦。
+#   守卫是 `--budget-check` 的 `band_s == max(host,container,ci)`：表里的带不许落后于自己的实测列。
+P314_BID="40 · 临时根纪律（P53：TMPDIR / owned 家族 / 泄漏断言 / lint）"
+P314_MAX="$(awk -F'\t' -v id="$P314_BID" '!/^#/ && $1 == id { m = 0; for (i = 4; i <= 8; i += 2) { if ($i ~ /^[0-9.]+$/ && $i + 0 > m) m = $i + 0 } printf "%.2f", m; exit }' "$P70_CK/section-budgets.tsv")"
+if [ -n "$P314_MAX" ]; then
+  awk -F'\t' -v id="$P314_BID" 'BEGIN{FS="\t";OFS="\t"} /^#/ { print; next } $1 == id { $2 = "20.00" } { print }' \
+    "$P70_CK/section-budgets.tsv" > "$P70_CK/b.new" && mv "$P70_CK/b.new" "$P70_CK/section-budgets.tsv"
+  bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p314-budget-stale.log" 2>&1; P70_RC=$?
+  assert_eq "P314 翻转（band 过期）：§40 的 band 改回 20.00 → 红" "$P70_RC" "1"
+  assert_has "$TMP/p314-budget-stale.log" "$P314_BID" "P314 翻转（band 过期）：点名 §40"
+  assert_has "$TMP/p314-budget-stale.log" "band_s=20.00 ≠ max(host/container/ci)=$P314_MAX" "P314 翻转（band 过期）：点名实测值 $P314_MAX"
+  cp "$SKILL_DIR/tests/section-budgets.tsv" "$P70_CK/section-budgets.tsv"
+  bash "$P70_CK/section-guard.sh" --budget-check >/dev/null 2>&1; P70_RC=$?
+  assert_eq "P314 翻转（band 过期）还原：绿" "$P70_RC" "0"
+else
+  bad "P314 翻转（band 过期）：预算表里找不到 §40 的行"
 fi
 # 翻转②：删掉一条 section 行（未登记的段落不得默默无界）→ 必须点名并红
 P70_MISS_ID="$(awk -F'\t' '!/^#/ && NF { print $1; exit }' "$P70_CK/section-budgets.tsv")"
@@ -18850,6 +18873,188 @@ if [ "$P53_FLIP" != "lint" ]; then
   fi
 fi
 
+# ③ P314 · 文档面一致性：真的文档面绿 + 两个方向的敏感性（放回残留串 / 拿掉必须 token）
+#    规格 tmp-root-on-disk 改了默认根与来源语义；文档里还在教老行为 = 下一个照文档操作的人被引回内存盘。
+#    判据只用**稳定 token**（路径形状 / 键名 / 单位），不锚整句 —— 措辞可以改，事实不能退回去。
+bash "$SKILL_DIR/tests/tmp-hygiene.sh" --docs-check >"$TMP/p314-docs.log" 2>&1
+P314_DOCS_RC=$?
+if [ "$P314_DOCS_RC" = "0" ]; then
+  ok "40 docs：$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p314-docs.log" | grep -a '文档面' | tail -1 | sed 's/^[[:space:]]*//')"
+else
+  bad "40 docs：真树的文档面不一致（rc=$P314_DOCS_RC）：$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p314-docs.log" | grep -a '✗' | head -3 | tr '\n' ' ')"
+fi
+P314_DFLIP="$TMP/p314-docs-flip"; rm -rf "$P314_DFLIP"; mkdir -p "$P314_DFLIP/references"
+cp "$SKILL_DIR"/references/troubleshooting.md "$SKILL_DIR"/references/migration.md \
+   "$SKILL_DIR"/references/config.md "$SKILL_DIR"/references/protocol.md "$P314_DFLIP/references/"
+# 红侧①：把**残留串**放回去（稳定 token：旧基准写法）→ 必须红并点名 file:line
+# （token 拼开写：自己算临时根的 lint 会把字面量当 finding —— 这行说的是**文档里的旧写法**）
+P314_OLDTMP='${TMPDIR'":-"'/tmp}'
+printf '\nThe temp root is `%s`, the old default.\n' "$P314_OLDTMP" >> "$P314_DFLIP/references/troubleshooting.md"
+P314_DRC=0; bash "$SKILL_DIR/tests/tmp-hygiene.sh" --docs-check --dir "$P314_DFLIP" >"$TMP/p314-docs-residue.log" 2>&1 || P314_DRC=$?
+if [ "$P314_DRC" = "1" ] && grep -qF -- "[$P314_OLDTMP]" "$TMP/p314-docs-residue.log" \
+   && grep -qE 'troubleshooting\.md:[0-9]+：残留 token' "$TMP/p314-docs-residue.log"; then
+  ok "40 docs 红侧①：把旧基准写法放回文档 → 红并点名 $(grep -oE 'troubleshooting\.md:[0-9]+' "$TMP/p314-docs-residue.log" | head -1)"
+else
+  bad "40 docs 红侧①：放回残留串后文档面仍然绿（判据是橡皮章；rc=$P314_DRC）"
+fi
+# 红侧②：拿掉**必须 token**（升级/回滚入口）→ 必须红并点名缺什么
+sed -i 's/TEAM_TMP_ROOT/（拿掉）/g' "$P314_DFLIP/references/migration.md"
+P314_DRC2=0; bash "$SKILL_DIR/tests/tmp-hygiene.sh" --docs-check --dir "$P314_DFLIP" >"$TMP/p314-docs-missing.log" 2>&1 || P314_DRC2=$?
+if [ "$P314_DRC2" = "1" ] && grep -qF 'migration.md：缺 token [TEAM_TMP_ROOT]' "$TMP/p314-docs-missing.log"; then
+  ok "40 docs 红侧②：拿掉升级/回滚入口的 token → 红并点名缺什么"
+else
+  bad "40 docs 红侧②：拿掉必须 token 后文档面仍然绿（rc=$P314_DRC2）"
+fi
+rm -rf "$P314_DFLIP"
+
+# ④ P314 · team doctor 是**只读面**：默认根不存在时不许把它建出来，也不许动 .pi/team/state/
+#    （delta verification：`A not-yet-created default is judged through its ancestor and never created by a
+#    read-only surface`。旧实现对 doctor 不成立：inotify 探针先调 team_tmp_root_prepare，跑一次 doctor
+#    就把根建出来了，而且「临时根余量」行永远看不到「尚未创建」。）
+#    判据：跑 doctor **前后**对默认根的存在性与 state/ 全树哈希（路径 + 大小 + mtime + 内容）做对照。
+P314_DJ="$TMP/p314-doctor"; rm -rf "$P314_DJ"
+mkdir -p "$P314_DJ/proj/.pi/team/state" "$P314_DJ/proj/docs/team" "$P314_DJ/base"
+printf 'TEAM_DOCS_DIR="docs/team"\n' > "$P314_DJ/proj/.pi/team/config.sh"
+printf 'sentinel\n' > "$P314_DJ/proj/.pi/team/state/probe.txt"
+( cd "$P314_DJ/proj" && git init -q -b main && git config user.email t@t && git config user.name t \
+    && printf '# board\n' > docs/team/BOARD.md && git add -A && git commit -qm init ) >/dev/null 2>&1
+# 夹具项目的身份=`scripts/team` 从 cwd 解出的那个（basename）；显式给它，下面的预期路径才与 doctor 同一个 ns
+P314_TP="$(basename "$P314_DJ/proj")"
+p314_state_hash() { # <dir> → 全树哈希（路径 + 大小 + mtime + 内容）
+  ( cd "$1" || return 1
+    find . -printf '%p\t%s\t%T@\n' | LC_ALL=C sort
+    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum ) | sha256sum | awk '{print $1}'
+}
+P314_ROOT="$(env -u TMPDIR -u TEAM_TMP_ROOT TEAM_PROJECT="$P314_TP" TEAM_TMP_DEFAULT_BASE="$P314_DJ/base" \
+  bash -c '. "$1/scripts/lib/common.sh"; team_tmp_root' _ "$SKILL_DIR" 2>/dev/null || true)"
+if [ -n "$P314_ROOT" ]; then
+  P314_H0="$(p314_state_hash "$P314_DJ/proj/.pi/team/state")"
+  ( cd "$P314_DJ/proj" && env -u TMPDIR -u TEAM_TMP_ROOT TEAM_TMP_DEFAULT_BASE="$P314_DJ/base" \
+      bash "$SKILL_DIR/scripts/team" doctor ) >"$TMP/p314-doctor.log" 2>&1
+  P314_H1="$(p314_state_hash "$P314_DJ/proj/.pi/team/state")"
+  if [ -e "$P314_ROOT" ]; then
+    bad "40 P314 doctor 把默认根建出来了（$P314_ROOT）—— 只读面不许写盘"
+  elif [ -n "$(find "$P314_DJ/base" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]; then
+    bad "40 P314 doctor 在默认基准下留下了东西（$(find "$P314_DJ/base" -mindepth 1 -maxdepth 1 | head -3 | tr '\n' ' ')）"
+  else
+    ok "40 P314 doctor 没有创建默认根（$P314_ROOT 跑完仍然不存在；基准下也一个条目没多）"
+  fi
+  if [ "$P314_H0" = "$P314_H1" ]; then
+    ok "40 P314 doctor 前后 .pi/team/state/ 全树哈希不变（${P314_H0:0:12}）"
+  else
+    bad "40 P314 doctor 改了 .pi/team/state/（哈希 $P314_H0 → $P314_H1）"
+  fi
+  assert_has "$TMP/p314-doctor.log" "临时根余量" "40 P314 doctor 有临时根余量行"
+  assert_has "$TMP/p314-doctor.log" "$P314_ROOT" "40 P314 doctor 点名的根与 resolver 同一个（$P314_ROOT）"
+  assert_has "$TMP/p314-doctor.log" "尚未创建，按 $P314_DJ/base 的文件系统判" "40 P314 余量行写清「尚未创建」并按祖先判"
+  assert_has "$TMP/p314-doctor.log" "由夹具/门禁在运行时按需创建" "40 P314 余量行说清谁会建它（不是本命令）"
+  assert_has "$TMP/p314-doctor.log" "source=default" "40 P314 余量行印出来源"
+  assert_has "$TMP/p314-doctor.log" "注册探针" "40 P314 inotify 行照旧有探针结论（根不存在时也不退化）"
+  # 正对照：根存在时同一行不再说「尚未创建」，state/ 仍然一个字节不动（只看临时根那一行 ——
+  # 工作树根的 `.worktrees/` 在夹具里本来就不存在，它自己的祖先注记是另一行的事）
+  mkdir -p "$P314_ROOT" && chmod 700 "$P314_ROOT"
+  ( cd "$P314_DJ/proj" && env -u TMPDIR -u TEAM_TMP_ROOT TEAM_TMP_DEFAULT_BASE="$P314_DJ/base" \
+      bash "$SKILL_DIR/scripts/team" doctor ) >"$TMP/p314-doctor-exists.log" 2>&1
+  P314_EX_LINE="$(grep -a '临时根余量' "$TMP/p314-doctor-exists.log" | head -1)"
+  case "$P314_EX_LINE" in
+    *尚未创建*) bad "40 P314 正对照：根存在时那一行仍在说「尚未创建」（$(printf '%s' "$P314_EX_LINE" | cut -c1-160)）" ;;
+    *source=default*) ok "40 P314 正对照：根存在时不再说「尚未创建」，仍印出来源" ;;
+    *) bad "40 P314 正对照：那一行没有印出来源（$(printf '%s' "$P314_EX_LINE" | cut -c1-160)）" ;;
+  esac
+  P314_H2="$(p314_state_hash "$P314_DJ/proj/.pi/team/state")"
+  [ "$P314_H0" = "$P314_H2" ] && ok "40 P314 正对照：第二次 doctor 也没有动 state/" \
+    || bad "40 P314 正对照：第二次 doctor 改了 state/（$P314_H0 → $P314_H2）"
+else
+  bad "40 P314 doctor 夹具：解析不出默认根（TEAM_TMP_DEFAULT_BASE 没生效？）"
+fi
+# 红侧：把旧缺陷形状放回探针（先 team_tmp_root_prepare）→ 同一个「根必须仍然不存在」判据必须判成「建出来了」
+P314_MUT="$TMP/p314-common-prepare.sh"
+awk '/^team_inotify_probe\(\) \{/ { print; print "  team_tmp_root_prepare >/dev/null 2>&1 || true   # P314 红侧：把缺陷形状放回来"; next } { print }' \
+  "$SKILL_DIR/scripts/lib/common.sh" > "$P314_MUT"
+rm -rf "$P314_DJ/base2"; mkdir -p "$P314_DJ/base2"
+P314_ROOT2="$(env -u TMPDIR -u TEAM_TMP_ROOT TEAM_PROJECT="$P314_TP" TEAM_TMP_DEFAULT_BASE="$P314_DJ/base2" \
+  bash -c '. "$1/scripts/lib/common.sh"; team_tmp_root' _ "$SKILL_DIR" 2>/dev/null || true)"
+if bash -n "$P314_MUT" 2>/dev/null && ! cmp -s "$SKILL_DIR/scripts/lib/common.sh" "$P314_MUT"; then
+  # 判据与上面同一句：只读调用后，默认基准下**多了东西**。变异副本住在 $TMP 下，它的 ns 与真树
+  # 不同（`team_project_ns` 按脚本位置推仓库），所以这里按「基准目录多了一个根」判，而不是按名字判。
+  P314_BEFORE="$(find "$P314_DJ/base2" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+  env -u TMPDIR -u TEAM_TMP_ROOT TEAM_PROJECT="$P314_TP" TEAM_TMP_DEFAULT_BASE="$P314_DJ/base2" \
+    bash -c '. "$1"; team_inotify_probe >/dev/null 2>&1; exit 0' _ "$P314_MUT"
+  P314_AFTER="$(find "$P314_DJ/base2" -mindepth 1 -maxdepth 1 -type d -name 'teamsmith-*' | wc -l | tr -d ' ')"
+  if [ "$P314_BEFORE" = "0" ] && [ "$P314_AFTER" -ge 1 ]; then
+    ok "40 P314 红侧：把 prepare 放回探针 → 同一个判据判成「建出来了」（$(find "$P314_DJ/base2" -mindepth 1 -maxdepth 1 -type d -name 'teamsmith-*' | head -1 | xargs -r basename)）"
+  else
+    bad "40 P314 红侧：把 prepare 放回探针后默认基准下仍然没有新根（before=$P314_BEFORE after=$P314_AFTER；变异没落地）"
+  fi
+else
+  bad "40 P314 红侧：变异副本没生成（夹具失效）"
+fi
+# ④ P314 返工轮次 1（V59 §1.4）：**每个来源**都要说清「谁负责建这个还不存在的根」。旧形状把那半句
+#    按 `source=default` 挡住 → 配置来的根只剩「尚未创建」，读者会以为它会自己出现。三条腿的要求
+#    互不相同：default = 运行时按需建；config/tmpdir = **任何命令都不代建** + 可复制的 mkdir。
+#    同一个判据函数既验真树（三条腿），也验红侧（把子句再按 source 挡住 → source=config 腿必须红）。
+p314_creation_note_check() { # <log> <source> <ghost> → 0 = 该腿说清了；否则 1 + 一句话（点名哪条腿）
+  local log="$1" src="$2" ghost="$3" line
+  line="$(grep -a '临时根余量' "$log" 2>/dev/null | head -1)"
+  [ -n "$line" ] || { printf 'source=%s 腿：日志里没有「临时根余量」行' "$src"; return 1; }
+  case "$line" in *"source=$src"*) ;; *) printf 'source=%s 腿：行里没印出来源（%s）' "$src" "$(printf '%s' "$line" | cut -c1-160)"; return 1 ;; esac
+  case "$line" in *尚未创建*) ;; *) printf 'source=%s 腿：没说「尚未创建」' "$src"; return 1 ;; esac
+  case "$line" in *"mkdir -p -m 700 '$ghost'"*) ;; \
+    *) printf 'source=%s 腿：没给可复制的 mkdir（缺 mkdir -p -m 700 %s）' "$src" "$ghost"; return 1 ;; esac
+  case "$line" in *不会被自动创建*) ;; *) printf 'source=%s 腿：没说「不会被自动创建」（读者会以为它会自己出现）' "$src"; return 1 ;; esac
+  case "$line" in *由夹具/门禁在运行时按需创建*) \
+    printf 'source=%s 腿：把默认腿的「运行时按需创建」也说给了显式根（两条腿混成一句）' "$src"; return 1 ;; esac
+  return 0
+}
+p314_doctor_leg() { # <source> <ghost> <log> [<team-binary>]：在夹具项目里跑一次 doctor
+  local src="$1" ghost="$2" log="$3" teambin="${4:-$SKILL_DIR/scripts/team}"
+  if [ "$src" = "config" ]; then
+    ( cd "$P314_DJ/proj" && env -u TMPDIR TEAM_TMP_ROOT="$ghost" TEAM_TMP_DEFAULT_BASE="$P314_DJ/base" \
+        bash "$teambin" doctor ) >"$log" 2>&1
+  else
+    ( cd "$P314_DJ/proj" && env -u TEAM_TMP_ROOT TMPDIR="$ghost" TEAM_TMP_DEFAULT_BASE="$P314_DJ/base" \
+        bash "$teambin" doctor ) >"$log" 2>&1
+  fi
+}
+P314_LEGS="$TMP/p314-doctor-legs"; rm -rf "$P314_LEGS"; mkdir -p "$P314_LEGS"
+for p314_leg in config tmpdir; do
+  p314_ghost="$P314_LEGS/ghost-$p314_leg"
+  p314_doctor_leg "$p314_leg" "$p314_ghost" "$TMP/p314-doctor-$p314_leg.log"
+  if p314_why="$(p314_creation_note_check "$TMP/p314-doctor-$p314_leg.log" "$p314_leg" "$p314_ghost")"; then
+    ok "40 P314 source=$p314_leg 腿说清「不会被自动创建」+ 可复制的 mkdir（不混用默认腿的话）"
+  else
+    bad "40 P314 $p314_why"
+  fi
+  if [ -e "$p314_ghost" ]; then
+    bad "40 P314 source=$p314_leg 腿：doctor 把显式给的根建出来了（$p314_ghost）—— 只读面不许写盘"
+  else
+    ok "40 P314 source=$p314_leg 腿：跑完 doctor 根仍然不存在"
+  fi
+done
+# 红侧①（V59 的返工形状）：把那半句再按 `source=default` 挡住 → 同一个判据必须对 source=config 腿红
+#    并点名是哪条腿。变异落在脚本树的副本里（`team` 只依赖 scripts/team + scripts/lib，不碰真树）。
+P314_MT="$TMP/p314-mut-tree"; rm -rf "$P314_MT"; mkdir -p "$P314_MT"
+cp -a "$SKILL_DIR/scripts/team" "$P314_MT/team"
+cp -a "$SKILL_DIR/scripts/lib" "$P314_MT/lib"
+awk '/team_tmp_root_creation_note "\$p"/ { print "      [ \"$(team_tmp_root_source)\" = \"default\" ] && srcnote=\"$srcnote · $(team_tmp_root_creation_note \"$p\")\""; next } { print }' \
+  "$SKILL_DIR/scripts/lib/cmd-status.sh" > "$P314_MT/lib/cmd-status.sh"
+if bash -n "$P314_MT/lib/cmd-status.sh" 2>/dev/null && ! cmp -s "$SKILL_DIR/scripts/lib/cmd-status.sh" "$P314_MT/lib/cmd-status.sh"; then
+  p314_doctor_leg config "$P314_LEGS/ghost-config" "$TMP/p314-doctor-mut.log" "$P314_MT/team"
+  if ! grep -aq '临时根余量' "$TMP/p314-doctor-mut.log"; then
+    bad "40 P314 红侧①：变异树里的 doctor 没跑出「临时根余量」行（变异树跑不起来；$(head -2 "$TMP/p314-doctor-mut.log" | tr '\n' ' ' | cut -c1-160)）"
+  elif p314_mut_why="$(p314_creation_note_check "$TMP/p314-doctor-mut.log" config "$P314_LEGS/ghost-config")"; then
+    bad "40 P314 红侧①：把子句按 source 挡住后 source=config 腿仍然通过（判据是橡皮章；尾部：$(grep -a '临时根余量' "$TMP/p314-doctor-mut.log" | head -1 | cut -c1-200)）"
+  else
+    case "$p314_mut_why" in
+      *source=config*) ok "40 P314 红侧①：按 source 挡住子句 → source=config 腿红并点名（$p314_mut_why）" ;;
+      *) bad "40 P314 红侧①：红是红了，但没点名哪条腿（$p314_mut_why）" ;;
+    esac
+  fi
+else
+  bad "40 P314 红侧①：变异副本没生成（夹具失效）"
+fi
+rm -rf "$P314_MT" "$P314_LEGS" "$P314_DJ" "$P314_MUT"
+
 # ③ P122 返工：归属读 git 痕迹（真 ID + 别仓库 → 拒并点名 + 记录同名也不行）/ 拒绝不阻塞
 #    （做事了→0；合格的真被删）/ tmux 残留可见。现场形状：/tmp/review-M8.2 是 别的项目 的
 #    worktree，而本项目恰好也有 M8.2 记录 —— 记录同名不是证据。
@@ -18961,8 +19166,8 @@ fi
 #    两次都断言日志里有「持有」行（锁那条路真的走到了），并各自用**私有** base 目录（互不干扰，
 #    也不碰机器锁、不碰真项目）；身份清洗与 §34b 同形。
 P223D="$TMP/p223-keep"; rm -rf "$P223D"; mkdir -p "$P223D/keep-base" "$P223D/nokeep-base"
-p223_keep_probe() { # <keep|nokeep> <私有 base> <日志>：真入口 + 私有锁 / 私有 TMPDIR
-  local mode="$1" base="$2" out="$3"
+p223_keep_probe() { # <keep|nokeep> <私有 base> <日志> [smoke 路径]：真入口 + 私有锁 / 私有 TMPDIR
+  local mode="$1" base="$2" out="$3" smoke="${4:-$SKILL_DIR/tests/smoke.sh}"
   local -a keep=()
   [ "$mode" = "keep" ] && keep=(--keep)
   ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
@@ -18973,10 +19178,18 @@ p223_keep_probe() { # <keep|nokeep> <私有 base> <日志>：真入口 + 私有�
       -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_TMP_RUN_ID -u SMOKE_TMP_LEDGER -u TEAM_TMP_RUN_ID \
       -u TEAM_TMP_LEDGER \
       TMPDIR="$base" TEAM_SMOKE_LOCK="$base/probe.lock" \
-      bash "$SKILL_DIR/tests/smoke.sh" "${keep[@]}" --select 15 </dev/null ) >"$out" 2>&1
+      bash "$smoke" "${keep[@]}" --select 15 </dev/null ) >"$out" 2>&1
 }
 P223_RC=0; p223_keep_probe keep "$P223D/keep-base" "$P223D/keep.log" || P223_RC=$?
 assert_has "$P223D/keep.log" "全量门禁互斥：持有" "P223 --keep 探针真走了机器锁的 re-exec（不是白捡的绿）"
+# P314 · 开跑行必须印出「根是怎么解析出来的」（source=…，与 tmp-hygiene 表头同一种写法）：这个探针把
+# TMPDIR 钉成私有 base，所以它必须说 source=tmpdir —— 只印路径的话，跑到内存盘上的门禁从日志里看不出来。
+P314_SRC_LINE="$(sed 's/\x1b\[[0-9;]*m//g' "$P223D/keep.log" 2>/dev/null | grep -am1 '临时根：' || true)"
+P314_SRC_TOK="$(printf '%s' "$P314_SRC_LINE" | grep -oE 'source=[a-z]+' | head -1)"
+case "$P314_SRC_LINE" in
+  *source=tmpdir*) ok "40 P314 开跑行印出解析来源（$P314_SRC_TOK）" ;;
+  *) bad "40 P314 开跑行没有 source=（$(printf '%s' "$P314_SRC_LINE" | cut -c1-120)）" ;;
+esac
 if [ "$P223_RC" = "0" ] || [ "$P223_RC" = "1" ]; then
   ok "P223 --keep 探针：选段子套件真跑完（rc=$P223_RC）"
 else
@@ -19000,6 +19213,40 @@ else
 fi
 assert_not "$P223D/nokeep.log" "保留临时根：" "P223 反向对照：日志里也没有「保留临时根：」"
 rm -rf "$P223D" 2>/dev/null || true
+
+# ⑤ P314 · 开跑行印来源的红侧：变体树（其余全软链，只有 smoke.sh 是副本），把「印 source」那一行
+#    改成空占位 → 同一条判据必须不再匹配。变体只改 smoke.sh 一个字节面，跑的还是真入口。
+p314_variant_smoke() { # <名字> → 打印变体树里的 smoke.sh 路径
+  local base="$TMP/p314-tree-$1"
+  local d="$base/skills/teamsmith" r x b
+  r="$(cd -P "$(dirname "$(dirname "$SKILL_DIR")")" && pwd)"
+  rm -rf "$base"; mkdir -p "$d/tests" "$base/skills"
+  for x in "$r"/*; do
+    b="$(basename "$x")"; [ "$b" = "skills" ] && continue; ln -s "$x" "$base/$b"
+  done
+  for x in "$SKILL_DIR"/*; do
+    b="$(basename "$x")"; [ "$b" = "tests" ] && continue; ln -s "$x" "$d/$b"
+  done
+  for x in "$SKILL_DIR"/tests/*; do ln -s "$x" "$d/tests/$(basename "$x")"; done
+  rm -f "$d/tests/smoke.sh"
+  cp "$SKILL_DIR/tests/smoke.sh" "$d/tests/smoke.sh"
+  printf '%s\n' "$d/tests/smoke.sh"
+}
+P314_VSMOKE="$(p314_variant_smoke nosrc)"
+sed -i 's|"\${src:+ · \$src}"|""|' "$P314_VSMOKE"
+if [ -s "$P314_VSMOKE" ] && ! cmp -s "$SKILL_DIR/tests/smoke.sh" "$P314_VSMOKE" && bash -n "$P314_VSMOKE" 2>/dev/null; then
+  mkdir -p "$TMP/p314-nosrc-base"
+  P314_NR=0; p223_keep_probe nokeep "$TMP/p314-nosrc-base" "$TMP/p314-nosrc.log" "$P314_VSMOKE" || P314_NR=$?
+  P314_NOSRC_LINE="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p314-nosrc.log" 2>/dev/null | grep -am1 '临时根：' || true)"
+  case "$P314_NOSRC_LINE" in
+    *source=*) bad "40 P314 红侧：去掉打印后开跑行仍然带 source=（变异没落地）" ;;
+    *临时根：*) ok "40 P314 红侧：把「印来源」改成空占位 → 同一个判据不再匹配（$P314_NR/rc、开跑行只剩路径与用量）" ;;
+    *) bad "40 P314 红侧：变异副本没打出开跑行（夹具失效）" ;;
+  esac
+  rm -rf "$TMP/p314-nosrc-base" "$TMP/p314-tree-nosrc"
+else
+  bad "40 P314 红侧：变体 smoke.sh 没生成/没变（夹具失效）"
+fi
 
 # ③ 结束用量行 + 泄漏断言：台账里本轮创建的根必须都没了（本进程自己的根除外 —— 它由 EXIT
 #    trap 的 cleanup 在断言之后回收，p53 的「一个都不留」正是冲着嵌套夹具泄漏去的）。

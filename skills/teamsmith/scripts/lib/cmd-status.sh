@@ -1322,7 +1322,15 @@ team_disk_headroom_lines() { # [path...] → 每个被判文件系统一行 "ok|
     fi
     label="$(team_disk_label "$p")余量"
     srcnote=""
-    [ "$label" = "临时根余量" ] && srcnote=" · $(team_tmp_root_note)"
+    if [ "$label" = "临时根余量" ]; then
+      srcnote=" · $(team_tmp_root_note)"
+      # P314 / V59：doctor 是只读面 —— 根还不存在时，这一行是操作者唯一的提示，所以**每个来源**都要
+      # 说清「谁负责建它」（clause 由 team_tmp_root_creation_note 一处给出：默认腿 = 运行时按需建；
+      # config/tmpdir 腿 = 任何命令都不代建，给可复制的 mkdir）。按 source 挡住 = 配置来的根只剩
+      # 「还没有」，读者会以为它会自己出现 —— 这条子句不再有条件。
+      srcnote="$srcnote · $(team_tmp_root_creation_note "$p")"
+      srcnote="${srcnote% · }"   # 根已存在时助手返回空串，别留下悬空的「 · 」
+    fi
     if [ -z "$a" ]; then
       printf 'warn\t%s\t%s%s 的余量读不出来（df 失败、缺列或路径不可访问）—— 绝不当作充足；修法：%s%s\n' \
         "$label" "$p" "$note" "$(team_disk_remedy "$p")" "$srcnote"

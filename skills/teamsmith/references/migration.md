@@ -136,6 +136,7 @@ one-line reaction.
 | reports that are not committed yet no longer point at a review, and a squash-merged branch reports "already merged (squash, same content) — no push needed" | v1.22.0 | read the wording before acting: both lines exist to stop a PM from reviewing or pushing something that is already done |
 | the PM's own CLI is configurable (`TEAM_PM_CMD` / `TEAM_PM_BIN` / `TEAM_PM_RESUME_ARGS`) | M8.1 | nothing to do — all three keys are empty by default and the built-in Pi command is byte-for-byte unchanged. They belong to the internal seam (frozen): reserved for a possible future non-Pi adapter, no compatibility promise — the PM side runs Pi (`references/agent-adapters.md` §2) |
 | the console brings three state files and one changed default: `TEAM_MONITOR_REFRESH` drops `5` → `3` | v1.38.0 (pulse-console B3) | the TUI keeps its own preferences in `state/panel.conf` (`lang`, `page`, `activity`, `mouse`, `density` and an optional `theme`), remembers the last page in `state/panel-page`, and holds the PM's compose draft in `state/draft.md`. All three are runtime state: deleting them is safe and `--print`/`--json` never read them. Set `TEAM_MONITOR_REFRESH=5` to keep the old cadence (`references/config.md` lists the key) |
+| the fixtures' and gates' temp root defaults to **disk** instead of the memory-backed `/tmp`: `/var/tmp/teamsmith-<ns>`, resolved by `team_tmp_root` (`TMPDIR` → `TEAM_TMP_ROOT` → default) and printed as `source=tmpdir|config|default` | v0.3.0 (tmp-root-on-disk) | nothing to migrate — the first write creates the new root (0700) and old `/tmp` residue stays where it is; `tmp-hygiene.sh --status` names the resolved root, its `source=` and the old root's leftovers, and `TMPDIR=/tmp bash skills/teamsmith/tests/tmp-hygiene.sh --sweep --dry-run` selects the old base explicitly. An explicit root (`TMPDIR` / `TEAM_TMP_ROOT`) must already exist and be writable — it is never created for you. Rollback: `TEAM_TMP_ROOT=/tmp` |
 
 ## 5b. The breaking model-policy upgrade (task categories)
 
@@ -341,9 +342,15 @@ else; the patrol window is created by `team pulse up`, and `team pulse status` s
 
 ```bash
 team doctor                                  # fix every ✗ before going on; each line carries its own fix
+bash skills/teamsmith/tests/tmp-hygiene.sh --status   # the resolved temp root, its `source=` and any old /tmp residue
 team config list                             # the new keys, exit code 0
 team dispatch --print <agent> <ID> <brief>   # the brief's `category:` line resolves to the mapped model
 ```
+
+The status line also settles the one on-disk change since 0.3.0: fixture roots resolve to `/var/tmp/teamsmith-<ns>`
+on disk unless `TMPDIR` or `TEAM_TMP_ROOT` says otherwise, the line prints which of the three won, and the old `/tmp`
+roots are **not** migrated (`TMPDIR=/tmp bash skills/teamsmith/tests/tmp-hygiene.sh --sweep --dry-run` shows them).
+`TEAM_TMP_ROOT=/tmp` is the rollback to the old behaviour.
 
 The `dispatch --print` line is the one that proves the policy is live: it must print
 `category=<the brief's category> model=<the mapped model>`. A brief with no `category:` line is refused.
@@ -384,6 +391,9 @@ team mark-loaded                               # re-record what this session sho
   git again. Pin at v1.11.0 or later unless that is exactly what you want.
 - Rollback and re-upgrade can be repeated freely; the only state the skill keeps about versions is
   `.pi/team/state/pm-loaded.env`.
+- Since 0.3.0 the fixture/gate temp root lives on disk (`/var/tmp/teamsmith-<ns>`). Pinning an older tool sends it
+  back to `/tmp` on its own; with the new tool, `TEAM_TMP_ROOT=/tmp` restores the old behaviour. Nothing under
+  `/var/tmp/teamsmith-<ns>` is project data — those roots are disposable and the sweep reclaims them.
 
 ## 8. What is deliberately not supported
 

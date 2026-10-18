@@ -1163,8 +1163,15 @@ never recorded under the reference name.
 
 ## 25. The gate goes red for a reason that is not the code: the temp root is full
 
-The fixtures' temp root is a **shared** filesystem — `${TMPDIR:-/tmp}`, a 15 GB tmpfs on this host, used by every
-agent's gate run. On 2026-09-22 09:50 it was 100 % full (0 bytes free **and** the inode table full), and
+The fixtures' or gates' temp root is a **shared** directory per project, and it is a *resolved* one: exactly one
+resolver decides it (`team_tmp_root`: a non-empty `TMPDIR`, else the project's `TEAM_TMP_ROOT`, else the platform
+default `/var/tmp/teamsmith-<project-ns>`), and every surface that names a root also prints how it decided —
+`source=tmpdir|config|default`, plus the value that lost when `TMPDIR` overrode it (`team status`, the dispatch
+capacity line, the gate's start line and `tmp-hygiene.sh --status` all read the same resolver). The default is on
+**disk**, not on the memory-backed `/tmp`, so a fixture's writes do not compete with the OOM killer for RAM;
+`/var/tmp` not being writable falls back to `/tmp`, and `TEAM_TMP_ROOT=/tmp` is the working rollback to the old
+behaviour. On 2026-09-22 09:50 the old default (`/tmp`, a memory-backed tmpfs on this host) was 100 % full (0 bytes
+free **and** the inode table full), and
 `tests/panel-p21.sh choices` produced an ENOSPC red whose verdict was about the code while the cause was the
 filesystem. Measure before believing a red whose failure text mentions "No space left on device",
 `mktemp: failed to create directory`, or a fixture dying while writing its own scene.
@@ -1189,13 +1196,16 @@ verification record is missing or uncommitted) while reclaiming the rest, and pr
 first deletion (exit 0 when something was done — skips are listed; exit 3 when every candidate was blocked and
 nothing was done). `--status` also counts tmux-side residue — orphan private servers whose socket is gone and stale
 non-`default` sockets with no listener older than the age threshold; `--sweep --tmux-sockets` clears them, the
-default never touches them, and `default` is never a candidate. `team doctor` carries the same headroom as one row per judged filesystem (the temp root and the worktrees root — one row when they share a filesystem; free/total bytes and inodes, warning only, thresholds `TEAM_TMP_MIN_FREE_MB` / `TEAM_TMP_MIN_FREE_INODES`), so a filling tmpfs is visible *before* it turns into a red. The same floor is a **dispatch refusal** (P144): the refusal names the path, the figures, the threshold, the `tmp-hygiene.sh` remedy and the explicit override, and `TEAM_TMP_MIN_FREE_MB=0` / `TEAM_TMP_MIN_FREE_INODES=0` (or the audited `team config set <KEY> 0 --allow-danger --yes`) turn that leg off while the other keeps judging.
+default never touches them, and `default` is never a candidate. `team doctor` carries the same headroom as one row per judged filesystem (the temp root and the worktrees root — one row when they share a filesystem; free/total bytes and inodes, warning only, thresholds `TEAM_TMP_MIN_FREE_MB` / `TEAM_TMP_MIN_FREE_INODES`), so a filling filesystem is visible *before* it turns into a red. The same floor is a **dispatch refusal** (P144): the refusal names the path, the figures, the threshold, the `tmp-hygiene.sh` remedy and the explicit override, and `TEAM_TMP_MIN_FREE_MB=0` / `TEAM_TMP_MIN_FREE_INODES=0` (or the audited `team config set <KEY> 0 --allow-danger --yes`) turn that leg off while the other keeps judging.
 
 **Why the roots exist at all**: every fixture creates its temp root through the single owner helper
-`tests/lib/tmp-root.sh` (`${TMPDIR:-/tmp}/teamsmith-<kind>.XXXXXX`), which writes an owner marker inside and a run
-ledger outside, reclaims on normal exit **and** `INT`/`TERM`, and keeps only when asked (`TEAM_TMP_KEEP=1`, which
-prints the path). Pointing a fixture elsewhere is `TMPDIR=/var/tmp bash tests/config-cli.sh`; a fixture template
-that hardcodes `/tmp` is a gate finding (`tests/tmp-hygiene.sh --lint` runs inside the gate), and the gate itself
+`tests/lib/tmp-root.sh` (`<the resolved root>/teamsmith-<kind>-<ns>.XXXXXX`; the resolver is called, never
+re-implemented), which writes an owner marker inside and a run ledger outside, reclaims on normal exit **and**
+`INT`/`TERM`, and keeps only when asked (`TEAM_TMP_KEEP=1`, which prints the path). Pointing a fixture elsewhere is
+`TMPDIR=/var/tmp bash tests/config-cli.sh` (an explicit root must already exist and be writable — it is never
+created for you; only the default leg is created, 0700, on the first write); a fixture template
+that hardcodes `/tmp` is a gate finding (`tests/tmp-hygiene.sh --lint` runs inside the gate), the docs that still
+teach the old default are a gate finding too (`tests/tmp-hygiene.sh --docs-check`), and the gate itself
 asserts that no root its run created survives it.
 
 **What to do when a gate dies mid-run** (`SIGKILL` cannot be caught, so a root survives): run the sweep above; the

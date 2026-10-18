@@ -152,7 +152,7 @@ empty panel reported as success.
 |---|---|---|
 | `TEAM_MIN_FREE_SWAP_MB` | `1024` | **floor**: below this much free swap the dispatch is refused (a full swap gets processes killed by the OOM killer) |
 | `TEAM_MIN_TOTAL_MB` | `512` | the absolute RAM+swap floor |
-| `TEAM_TMP_MIN_FREE_MB` | `1024` | **floor**: below this much free space the dispatch is refused — judged on the filesystems a worker writes to (the temp root `${TMPDIR:-/tmp}` **and** the worktree filesystem). Derivation: one gate round's root measured 95 MB / 11,797 files, a killed `config-cli` root 99 MB / 10,954 files, so 1 GiB leaves ~10 gate rounds of headroom |
+| `TEAM_TMP_MIN_FREE_MB` | `1024` | **floor**: below this much free space the dispatch is refused — judged on the filesystems a worker writes to (the **resolved** temp root — `TMPDIR` → `TEAM_TMP_ROOT` → `/var/tmp/teamsmith-<ns>`, named with its `source=` — **and** the worktree filesystem). Derivation: one gate round's root measured 95 MB / 11,797 files, a killed `config-cli` root 99 MB / 10,954 files, so 1 GiB leaves ~10 gate rounds of headroom |
 | `TEAM_TMP_MIN_FREE_INODES` | `100000` | **floor**: the same filesystems' free inodes (judged only where the filesystem reports an inode table). Derivation: the same 10,954-file roots → ~9 roots of headroom; the tmpfs died with 4,645 of 3,811,434 inodes free |
 | `TEAM_WARN_AVAIL_MB` | `2048` | below this much available RAM: warn only (slowness is acceptable), never refuse |
 | `TEAM_AGENT_MEM_MB` | `6144` | empirical footprint of one agent, used by `team ps` for its "how many more fit" estimate |
@@ -341,7 +341,7 @@ see it.
 | `TEAM_MIN_FREE_SWAP_MB` | temporarily override the disk swap floor |
 | `TEAM_MEMINFO_FILE` | point at another meminfo file (for containers/tests without `/proc/meminfo`) |
 | `TEAM_DISK_STATS_FILE` | the disk-reading fixture (`TEAM_MEMINFO_FILE`'s sibling): rows `path<TAB>total_kb<TAB>avail_kb<TAB>itotal<TAB>ifree`, longest matching path prefix wins; a path with no row reads as unreadable — tests only |
-| `TMPDIR` | the temp root every fixture's root resolves to (`${TMPDIR:-/tmp}`); `TMPDIR=D bash tests/config-cli.sh` is the shape of the temp-root flip, and no fixture template may hardcode `/tmp` |
+| `TMPDIR` | the **first** source of the temp root (`team_tmp_root`): a non-empty value wins over `TEAM_TMP_ROOT` and the disk default `/var/tmp/teamsmith-<ns>`; `TMPDIR=D bash tests/config-cli.sh` is the shape of the temp-root flip, the override is printed as `source=tmpdir`, and no fixture template may hardcode `/tmp` |
 
 Environment-only temp-root knobs are deliberately **not** part of the config surface (no schema row, not writable into
 `.pi/team/config.sh`): they live in `references/protocol.md` §9b-2 and `references/troubleshooting.md` §25 —

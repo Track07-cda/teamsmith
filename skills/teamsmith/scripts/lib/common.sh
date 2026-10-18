@@ -1332,16 +1332,24 @@ team_inotify_used_watches() {
 # 判据是「这个用户此刻能不能注册」（不是「计数大不大」——计数在容器里可能是局部视图）。
 # 输出：ok | errno=<E> | unavailable（解析不到运行时 / 探针起不来）。TEAM_INOTIFY_PROBE_TIMEOUT 秒。
 team_inotify_probe() {
-  local runner script out ns
+  local runner script out ns root probe_base
   runner="$(team_js_runner 2>/dev/null || true)"
   [ -n "$runner" ] || { printf 'unavailable\n'; return 0; }
   ns="$(team_project_ns)"
-  team_tmp_root_prepare >/dev/null 2>&1 || true
   # P287：直接落在解析后临时根上的东西要么点开头要么带 ns（探针脚本与探针目录都是如此）
   # P309：探针目录也跟随**同一个**解析出的根（JS 侧不再自己回落到 os.tmpdir()）
-  local root; root="$(team_tmp_root 2>/dev/null || true)"
+  # P314：这个探针是 **doctor（只读面）** 的一部分 —— 它**不建**默认根（旧实现先调
+  # team_tmp_root_prepare，于是跑一次 doctor 就把尚未创建的默认根建出来了，与规格
+  # `never created by a read-only surface` 相反）。根还不存在时，探针落在最近的存在祖先上：
+  # 与「余量行按祖先判」同一个判据，同一个文件系统，注册能力也相同。
+  root="$(team_tmp_root 2>/dev/null || true)"
   [ -n "$root" ] || { printf 'unavailable\n'; return 0; }
-  script="$(mktemp "$root/teamsmith-inotify-probe.${ns}.XXXXXX.js" 2>/dev/null || true)"
+  probe_base="$root"
+  if [ ! -d "$root" ]; then
+    probe_base="$(team_tmp_root_stat_path "$root" 2>/dev/null || true)"
+    [ -n "$probe_base" ] && [ -d "$probe_base" ] || { printf 'unavailable\n'; return 0; }
+  fi
+  script="$(mktemp "$probe_base/teamsmith-inotify-probe.${ns}.XXXXXX.js" 2>/dev/null || true)"
   [ -n "$script" ] || { printf 'unavailable\n'; return 0; }
   cat > "$script" <<'TEAM_INOTIFY_PROBE_JS' || { rm -f "$script"; printf 'unavailable\n'; return 0; }
 const fs = require('fs'), path = require('path')
@@ -1360,9 +1368,9 @@ try {
 process.stdout.write(verdict + '\n')
 TEAM_INOTIFY_PROBE_JS
   if command -v timeout >/dev/null 2>&1; then
-    out="$(TEAM_INOTIFY_ROOT="$root" TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
   else
-    out="$(TEAM_INOTIFY_ROOT="$root" TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"
   fi
   rm -f "$script"
   case "$out" in
@@ -4093,6 +4101,29 @@ team_tmp_root_ancestor_note() { # <path> → "" 或「（尚未创建，按 <祖
   a="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"
   [ -n "$a" ] || return 0
   printf '（尚未创建，按 %s 的文件系统判）' "$a"
+}
+
+# 「谁负责建这个还不存在的根」——只对**不存在**的根说话（存在时返回空串）。三条腿三种答案，
+# 绝不用一句话糊过去（V59 §1.4：把「不会被创建」这层意思按 source 挡住，配置来的根就只剩「还没有」，
+# 读者会以为它会自己出现）：
+#   default        → 本命令（只读面）不建，第一个写盘命令在运行时按需建（0700）；
+#   config/tmpdir  → **任何命令都不代建**（team_tmp_root_prepare 只对默认腿 mkdir），要操作者自己建，
+#                    所以给出可复制的 mkdir 命令 + 「换个已存在的可写目录」两个出口。
+team_tmp_root_creation_note() { # <path> → "" 或「谁建它」的人话
+  local p="${1:-}" src
+  [ -n "$p" ] || return 0
+  [ -e "$p" ] && return 0
+  src="$(team_tmp_root_source)"
+  case "$src" in
+    default)
+      printf '默认根本命令不建：由夹具/门禁在运行时按需创建（0700）' ;;
+    config)
+      printf "这个根不会被自动创建（任何命令都不代建）：先 mkdir -p -m 700 '%s'，或把 TEAM_TMP_ROOT 改到已存在的可写目录" "$p" ;;
+    tmpdir)
+      printf "这个根不会被自动创建（任何命令都不代建）：先 mkdir -p -m 700 '%s'，或把 TMPDIR 改到已存在的可写目录" "$p" ;;
+    *)
+      printf "这个根不会被自动创建（任何命令都不代建）：先 mkdir -p -m 700 '%s'" "$p" ;;
+  esac
 }
 
 # 写盘前的准备：**默认腿**的目录按需建（0700，本变更里唯一被自动创建的目录）；显式选定的根
