@@ -785,7 +785,9 @@ never come from a scan that stopped scanning.
 ### Requirement: A fixture's temp root resolves TMPDIR, carries an owned name, and is reclaimed
 
 Every fixture under `skills/teamsmith/tests/**` that creates a temp root SHALL create it as a directory directly
-under the resolved temp root — `${TMPDIR:-/tmp}`, with no fixture hardcoding `/tmp` in the template — and SHALL
+under **the one resolved temp root** — the path the product library's single resolver returns (see
+`One resolution decides every temp path, and it says how it decided`), with no fixture and no product call site
+computing a base of its own — and SHALL
 name it inside the one owned family **and** carry the project it belongs to: `teamsmith-<kind>-<ns>.XXXXXX` for a
 fixture's own root, `review-<ID>` for the PM's independent checkout. The namespace token SHALL be derived from the
 repository the skill lives in, resolved to its **main** checkout, so that every worktree of one project shares one
@@ -802,6 +804,18 @@ SHALL survive only when the caller asked for it (`TEAM_TMP_KEEP=1`, which prints
 process outliving its own step (an anchor tmux session, a `sleep`) SHALL record that pid at spawn time and, in
 cleanup, signal only recorded pids — never a process matched by name or command line (why:
 `references/protocol.md` on the safety model, and D37 in `docs/team/DECISIONS.md`).
+
+The resolved root's own directory in the resolver's default leg belongs to the project: the creator makes it
+(mode `0700`) when it is absent, and it is the only directory the creator MAY make. A root selected explicitly
+(`TEAM_TMP_ROOT` in the project contract, or `TMPDIR` in the environment) MUST already exist and be a writable
+directory; when it does not, the failure SHALL name that path, the reason it is unusable and the `修法：` line that
+fixes it, and MUST NOT fall back to any other root — a silent fall back to the platform default is the failure this
+requirement forbids, not the failure it tolerates.
+
+Every surface that prints the resolved root SHALL print how it was resolved (`source=tmpdir`, `source=config`,
+`source=default`), and when both `TMPDIR` and `TEAM_TMP_ROOT` are set to different paths it SHALL say once which one
+won and that the other was not used: a divergence between a project's pin and the invoking process's own choice is
+allowed, being silent about it is not.
 
 #### Scenario: The root resolves TMPDIR and is gone after the run
 
@@ -851,11 +865,39 @@ cleanup, signal only recorded pids — never a process matched by name or comman
   marker carries the namespace it was created with, and `--status` attributes the second repository's root to a
   foreign repository rather than to this project's candidates
 
+#### Scenario: With nothing set, the default root is on disk and not on the memory-backed filesystem
+
+- **GIVEN** a host whose `/tmp` is memory-backed and whose `/var/tmp` is a writable directory on disk, and an
+  environment and a contract that set neither `TMPDIR` nor `TEAM_TMP_ROOT`
+- **WHEN** a fixture creates its root and its cleanup runs
+- **THEN** the root lay under `/var/tmp/teamsmith-<ns>` while it ran, it is gone afterwards, and every surface that
+  printed it said `source=default`
+- **AND** nothing of the run was created under `/tmp`
+
+#### Scenario: The process's own TMPDIR wins, and the pin's loss is printed rather than silent
+
+- **GIVEN** a contract carrying `TEAM_TMP_ROOT=P` and an environment carrying `TMPDIR=D` with `P` and `D` two
+  different directories
+- **WHEN** a fixture creates its root and the surface prints the resolution
+- **THEN** the root is under `D` and the line says `source=tmpdir` while naming `P` as configured but not used
+- **AND** with `TMPDIR` unset, the same contract puts the root under `P` with `source=config`
+
+#### Scenario: An unusable selected root fails by name, and nothing falls back
+
+- **GIVEN** `TEAM_TMP_ROOT` naming a path that does not exist, and then a path that exists but is not writable
+- **WHEN** a fixture creates its root
+- **THEN** each run fails naming that path, the reason it is unusable and a `修法：` line, nothing was created under
+  `/tmp` or under the platform default, and no line claims the run used a different root
+
 ### Requirement: Killed-run residue is identifiable and reclaimable through one entry
 
 `bash skills/teamsmith/tests/tmp-hygiene.sh` SHALL be the fixtures' single temp-root entry: `--status` (a read-only
-inventory: per root the path, size, file count, age, recorded owner and occupancy, plus the resolved temp root's
-free and total bytes and inodes), `--lint` (the static ownership check of the fixtures' sources) and `--sweep`
+inventory: the resolved root **with its resolution source**, per root the path, size, file count, age, recorded
+owner and occupancy, plus the resolved root's
+free and total bytes and inodes, or a statement that a figure cannot be read, plus — when the resolved root is not
+the previous default `${TMPDIR:-/tmp}` — how many family directories remain directly under that previous default and
+the one command that reclaims them, printed and never executed), `--lint` (the static ownership check of the
+fixtures' sources) and `--sweep`
 (the reclaim). `--status` SHALL also list the owned family's entries that are not directories — the product's own
 `teamsmith-inotify-probe.*` and `teamsmith-review-queue.*` leftovers, and the gate's dot-prefixed incident
 diagnostics — as *not a root*, so no entry in the family is invisible; none of them is ever a `--sweep` candidate.
@@ -866,6 +908,9 @@ in the owned family, and a root created through the shared helper carries the ow
 inventory and delete nothing. Exit status: `0` — every candidate reclaimed or skipped by a printed rule; `3` —
 refused, nothing deleted, because a safety precondition could not be established. Dot-prefixed diagnostics (the
 smoke's incident files) are evidence: `--status` lists them with their age and `--sweep` never deletes them.
+One invocation of `--sweep` SHALL work on exactly one base — the resolved root it prints — so reclaiming the
+residue of a previous default is that same command with the previous default selected explicitly, never a second
+candidate rule and never a second sweep implementation.
 
 #### Scenario: A SIGKILLed run's residue is listed and reclaimed
 
@@ -892,6 +937,15 @@ smoke's incident files) are evidence: `--status` lists them with their age and `
 - **WHEN** `--status` and then `--sweep --age 0` run
 - **THEN** `--status` lists all four, naming the three files as not a root, the sweep removes only the stale
   directory, and the three files are still there afterwards
+
+#### Scenario: Residue under the previous default is visible and one command away
+
+- **GIVEN** a stale `teamsmith-smoke.*` directory directly under `${TMPDIR:-/tmp}` while the resolved root is the
+  disk-backed default, so the sweep's base is not that directory's base
+- **WHEN** `--status` runs, and then `--sweep --age 0` runs against the resolved base
+- **THEN** `--status` counts that directory, names the previous default and prints the exact command that reclaims it
+  (`TMPDIR=/tmp bash skills/teamsmith/tests/tmp-hygiene.sh --sweep …`), the sweep against the resolved base does
+  not touch it, and the printed command reclaims it when run
 
 ### Requirement: The sweep proves occupancy and touches this project's own roots only
 
@@ -976,16 +1030,23 @@ its own cleanup, and the gate MUST then report that root as a failure — the sa
 ### Requirement: The fixtures' temp-root ownership rule is enforced by a static check
 
 `bash skills/teamsmith/tests/tmp-hygiene.sh --lint` SHALL check every temp-root template under `skills/teamsmith/**`
-that resolves directly under the resolved temp root (`${TMPDIR:-/tmp}`) and exit `1` naming `<file>:<line>` when a
+that resolves directly under the resolved temp root (the path the one resolver returns) and exit `1` naming
+`<file>:<line>` when a
 template hardcodes an absolute directory other than the resolved temp root, when a root template names its root
 outside the owned family or without this project's namespace, or when a per-run template creates an entry directly
-under the resolved temp root whose name is neither dot-prefixed nor namespaced. The rule the check enforces is the
+under the resolved temp root whose name is neither dot-prefixed nor namespaced. It SHALL also exit `1`, naming
+`<file>:<line>`, when a template or a path expression derives the temp root itself instead of calling the one
+resolver — `${TMPDIR:-/tmp}`, `${TMPDIR}`, a JS runtime's equivalent of the same fallback, or a `mktemp` template
+built from a literal `/tmp/…` — because a second derivation is a second answer, and two answers is how a cleaner and
+a gate come to disagree about the base. The resolver's own definition and the creator's delegation to it are the
+only exemptions; the check SHALL skip its own source and any nested root
+created inside an existing root (`$TMP/…`). The rule the check enforces is the
 one that keeps a foreign project's cleanup from matching a live run, so it covers the fixtures **and** the
-product's own temp templates, not only the fixtures; the check SHALL skip its own source and any nested root
-created inside an existing root (`$TMP/…`). The check SHALL run inside the correctness gate, and the gate SHALL go
-red when a hardcoded, foreign-named or namespace-free template reappears: the red side is a fixture-mode copy of a
-source with one template rewritten to a literal `/tmp/…` path, and a second copy whose template keeps the family
-name but drops the namespace.
+product's own temp templates, not only the fixtures; the check SHALL run inside the correctness gate, and the gate
+SHALL go red when a hardcoded, foreign-named, namespace-free or self-computed template reappears: the red sides are
+a fixture-mode copy of a
+source with one template rewritten to a literal `/tmp/…` path, a second copy whose template keeps the family
+name but drops the namespace, and a third copy that computes the base inline beside the resolver.
 
 #### Scenario: A hardcoded root is a finding, at its line
 
@@ -1001,6 +1062,14 @@ name but drops the namespace.
 - **WHEN** `--lint` runs against each copy
 - **THEN** both exit 1, and each finding names the file and the line and says whether the name is outside the
   family or not attributable to a project
+
+#### Scenario: A second derivation of the base is a finding
+
+- **GIVEN** a copy of the tree in which one product call site resolves its own base with `${TMPDIR:-/tmp}` while the
+  resolver answers the disk-backed default
+- **WHEN** `--lint` runs against that copy
+- **THEN** it exits 1 and the finding names that file and line as a self-computed temp root, and the untouched tree
+  exits 0
 
 #### Scenario: The migrated tree is clean
 
@@ -1612,4 +1681,44 @@ whose gate run loses its lock SHALL record that the gate did not complete and MU
 - **WHEN** the run ends
 - **THEN** its record states that the gate did not complete, naming the lost lock, the verdict is not `PASS`, and
   the queue accounting keys and the closed verdict token set are unchanged
+
+### Requirement: One resolution decides every temp path, and it says how it decided
+
+The order that decides the temp root SHALL be implemented once, in the product library
+(`skills/teamsmith/scripts/lib/common.sh`), and every surface that needs the root SHALL call it: the fixtures'
+creator, the gate's own work root and its incident diagnostics, the cleaner's base, the dispatch floor's judged path
+and that path's label and remedy line, `team doctor`'s headroom row, the console's data read, and every per-run
+template that lands directly under the root. The order SHALL be: `TMPDIR` when the invoking process sets it to a
+non-empty value, else `TEAM_TMP_ROOT` when the project's contract sets one, else the platform's persistent default —
+`/var/tmp/teamsmith-<ns>` where `/var/tmp` is a writable directory, `/tmp` otherwise — and no second implementation
+of that order MAY exist. The platform default SHALL be a directory on a filesystem that survives the run's memory
+pressure: on the maintainer host `/tmp` is a 15 GB memory-backed filesystem (78 % full: 3.3 GB and the inode table
+itself were what ran out during the incident behind the `test-tmp-hygiene` change) while `/var/tmp` sits on the disk
+with 228 GB free, so a fixture writing under `/tmp` spends the same pool the OOM killer reads. A surface that prints
+the root SHALL print its source, and a read-only surface that meets a not-yet-created default SHALL judge the
+nearest existing ancestor, name it, and create nothing; the creator and the dispatch floor, which write, SHALL
+refuse by name instead (why: `skills/teamsmith/references/troubleshooting.md`, and the `test-tmp-hygiene` change's
+`design.md` for the measured incident).
+
+#### Scenario: Every surface reports the same base and the same source
+
+- **GIVEN** one contract and environment, and a run that creates a root
+- **WHEN** the creator, the cleaner's `--status`, the gate's start line and `team doctor` each report the root
+- **THEN** all four name the same path and the same source, and the run ledger, pid file, queue marker,
+  section-filter copy and incident diagnostics all lie directly under that path
+
+#### Scenario: A surface that composed its own base is caught by the disagreement
+
+- **GIVEN** the fixture-mode shadow in which one of those surfaces derives `${TMPDIR:-/tmp}` itself while the
+  resolver answers the disk-backed default
+- **WHEN** the check compares the reported bases
+- **THEN** it fails naming both paths and the surface that disagreed, and with the shadow reverted it passes — so the
+  check judges agreement between surfaces, not a hardcoded path
+
+#### Scenario: A not-yet-created default is judged through its ancestor and never created by a read
+
+- **GIVEN** a resolved default root that does not exist yet
+- **WHEN** `team doctor`, `--status` and the console's data read report it
+- **THEN** each names the resolved path, says the directory does not exist yet and which existing ancestor's
+  filesystem was judged, invents no figure, creates nothing, and no dispatch is refused for it
 

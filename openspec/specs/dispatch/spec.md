@@ -76,15 +76,27 @@ blockers exist they are items of the same one refusal rather than a second round
 (its pages live in RAM); zram occupancy above `TEAM_ZRAM_WARN_PCT` (default 85) is a warning only.
 
 The disk/inode leg SHALL judge, before any window is opened and for `--print` as well, the free bytes and the free
-inodes of the filesystems the worker will write to: the temp root (`${TMPDIR:-/tmp}`) and the worktree filesystem
+inodes of the filesystems the worker will write to: the temp root — **the path the one resolver returns**, not a
+default computed here (`verification`'s requirement `One resolution decides every temp path, and it says how it
+decided`) — and the worktree filesystem
 (the agent's worktree for a dispatch; the worktrees root `TEAM_WORKTREES_DIR` where no target is resolved). It
 SHALL refuse when the free bytes are below `TEAM_TMP_MIN_FREE_MB` (default 1024) or — only when the filesystem
 reports an inode table — when the free inodes are below `TEAM_TMP_MIN_FREE_INODES` (default 100000); a
 non-numeric threshold falls back to its default, and `0` disables that leg, the same escape shape as
-`TEAM_MIN_AVAIL_MB=0`. The refusal MUST name the path, the measured figures, the threshold crossed and a
+`TEAM_MIN_AVAIL_MB=0`. The refusal MUST name the path, the resolution source the resolver reported for it, the
+measured figures, the threshold crossed and a
 `修法：<command>` line — for the temp root the ownership-proven
 `bash skills/teamsmith/tests/tmp-hygiene.sh --status`, then `--sweep`; for the worktree filesystem, freeing that
 path — and MUST print the explicit override (`TEAM_TMP_MIN_FREE_MB=0` / `TEAM_TMP_MIN_FREE_INODES=0`).
+
+Before the headroom is judged, the leg SHALL refuse a dispatch whose temp root cannot be used: an explicitly
+selected root (`TEAM_TMP_ROOT` from the contract, or `TMPDIR`) that does not exist, is not a directory, or is not
+writable is a blocking finding that names that path, its source and the `修法：` line (create the directory, fix its
+mode, or select a usable root) — the dispatch MUST NOT proceed and MUST NOT silently use another root. A resolved
+**default** root that does not exist yet is not a refusal: the leg SHALL judge its nearest existing ancestor, and
+the capacity line SHALL name both the resolved path and the ancestor it measured. The lock's filesystem is
+deliberately not judged here: a full `/tmp` can stop a gate from taking its lock, but it MUST NOT refuse a
+dispatch, so that leg is a warning on `team doctor`, not a dispatch floor.
 
 A figure that cannot be read (`df` fails, a column is missing or non-numeric) and a filesystem that does not
 report an inode table SHALL NOT refuse and SHALL NOT warn: that leg is not judged, no number is invented for it,
@@ -102,7 +114,8 @@ reachable through the audited writer — `team config set <KEY> 0 --allow-danger
 has today (that leg off, the other still judged).
 
 When the floor passes, `team dispatch` SHALL print one capacity line carrying the measured readings — the RAM/swap
-figures it judges plus, for each judged filesystem, its path and its available bytes and free inodes — in the
+figures it judges plus, for each judged filesystem, its path, its resolution source where it is the temp root, and
+its available bytes and free inodes — in the
 pre-launch phase and in `--print`.
 
 #### Scenario: Low free disk swap refuses the dispatch
@@ -158,6 +171,31 @@ pre-launch phase and in `--print`.
 - **THEN** the first dispatch exits non-zero for the free-bytes floor, the write exits 0 and leaves the contract
   parseable with exactly one `result=ok` line in the config audit log, and the second dispatch exits 0 with that
   leg off while the inode leg is still judged
+
+#### Scenario: The floor judges the resolved root, never a path it computed itself
+
+- **GIVEN** a resolved temp root on a roomy filesystem and a `TEAM_DISK_STATS_FILE` whose row for the platform's
+  `/tmp` is far below the floor
+- **WHEN** `team dispatch dev T1.1 <brief> --print` runs
+- **THEN** it exits 0, the capacity line names the resolved root and its source, and no refusal names `/tmp`
+- **AND** with the fixture-mode shadow that points the floor back at the fixed `/tmp`, the same input refuses and
+  names `/tmp` — so the check judges which path the floor read
+
+#### Scenario: An unusable selected root is refused by name
+
+- **GIVEN** a contract whose `TEAM_TMP_ROOT` names a path that does not exist, and then one that exists without
+  write permission
+- **WHEN** `team dispatch dev T1.1 <brief> --print` runs
+- **THEN** it exits non-zero, names that path and its source, says why it is unusable and prints the `修法：` line,
+  and it did not substitute the platform default
+
+#### Scenario: A default root that does not exist yet is judged through its ancestor
+
+- **GIVEN** the resolver's disk-backed default, with the directory absent and its parent's filesystem above the
+  floors
+- **WHEN** `team dispatch dev T1.1 <brief> --print` runs
+- **THEN** it exits 0, the capacity line names the resolved default path, says it does not exist yet, and names the
+  ancestor whose filesystem was measured
 
 ### Requirement: Model concurrency limits are enforced before dispatch
 
