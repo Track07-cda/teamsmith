@@ -215,11 +215,16 @@ chmod +x "$SHIM/fakeagent"
 # P292：interrupt 探针的「席位」——一个**真**的长回合进程（身份写在它自己的 environ 里，argv[0] 的
 # basename 命中探针配置的 TEAM_AGENT_BIN）；TERM = 回合结束（退出 0）。它由探针现场起，收尾由 cleanup
 # 按 pane-pids 台账兜底。
-cat > "$SHIM/interrupt-agent" <<'STUB'
-#!/usr/bin/env bash
-trap 'exit 0' TERM
-while :; do sleep 0.2; done
+# P313：长回合 stub 由 lib/bounded-spin.sh 一处实现三条边界（TERM 就退 / 父没了就退 / 硬上限）——
+# 「永远不退出的 while :」是被打断的夹具运行会永久泄漏的那种形状（现场：78 个孤儿 / 11.98 GB）。
+# 父 pid 显式给：stub 经 setsid 拉起、要比拉起它的子 shell 活得久。
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '. %q\n' "$skill/tests/lib/bounded-spin.sh"
+  cat <<'STUB'
+bounded_spin 0.2 1800 - - "${HS_STUB_PARENT:-$PPID}"
 STUB
+} > "$SHIM/interrupt-agent"
 chmod +x "$SHIM/interrupt-agent"
 printf '#!/usr/bin/env bash\nexec bash %q "$@"\n' "$team" > "$SHIM/team"
 chmod +x "$SHIM/team"
@@ -446,7 +451,8 @@ setup_fixture() { # <setup-id> <dir>
       printf 'assignment_version=1\ntask=T1\ntaskfile=%s\ncategory=code\nbranch=task/T1-first-task\nworktree=%s\nwindow=dev\nseat=dev\nmodel=provider/model-fast\nselected_via=policy\nlaunch_via=policy\nsid=p-interrupt-sid\nlaunch_nonce=probe-nonce\nstarted=2026-01-01T00:00:00Z\nsid_bytes=0\nmode=continued\nidentity_via=provider,model,session_id\n' \
         "$d/docs/team/tasks/T1-first-task.md" "$wt" > "$d/.pi/team/state/dev.env" || {
         printf 'interrupt 现场：写不进派单记录（%s）\n' "$d/.pi/team/state/dev.env" >&2; return 1; }
-      setsid env TEAM_MAIN_ROOT="$d" TEAM_ROOT="$wt" "$SHIM/interrupt-agent" </dev/null >/dev/null 2>&1 &
+      setsid env TEAM_MAIN_ROOT="$d" TEAM_ROOT="$wt" HS_STUB_PARENT="$$" \
+        "$SHIM/interrupt-agent" </dev/null >/dev/null 2>&1 &
       printf '%s\n' "$!" > "$tmp/pane-pids/interrupt"
       return 0
       ;;

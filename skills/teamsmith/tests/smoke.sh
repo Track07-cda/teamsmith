@@ -1685,10 +1685,13 @@ else
   bad "P70 破环翻转：sed 没改到 _sg_check_trip（夹具失效）"
 fi
 
-# ③ 预算表 + 循环清单：干净树绿 + 三个翻转红（全在 scratch 副本里动，真实树不碰）
+# ③ 预算表 + 循环清单：干净树绿 + 四个翻转红（全在 scratch 副本里动，真实树不碰）
 P70_CK="$TMP/p70-check"; rm -rf "$P70_CK"; mkdir -p "$P70_CK/lib"
-cp "$SKILL_DIR/tests/section-guard.sh" "$SKILL_DIR/tests/smoke.sh" \
-   "$SKILL_DIR/tests/section-budgets.tsv" "$SKILL_DIR/tests/loop-inventory.tsv" "$P70_CK/"
+# P313 · V58 F2-b：拷贝面 = `--loop-check` 的**完整扫描面**（`tests/*.sh` + `tests/lib/*.sh`），
+# 不是「够这几条断言用」的那几份。以前只拷 section-guard/smoke/lib/*，tmp-hygiene.sh 不在副本里 →
+# 它的循环从不在门禁里核对：真树 rc=1（1748/1755 未登记）而门禁恒绿。现在少拷一个文件也会红
+# （清单里的文件不在扫描面 = bad），所以下面那一条「往 tmp-hygiene.sh 里塞未登记的循环」才是真的。
+cp "$SKILL_DIR"/tests/*.sh "$SKILL_DIR"/tests/section-budgets.tsv "$SKILL_DIR"/tests/loop-inventory.tsv "$P70_CK/"
 cp "$SKILL_DIR"/tests/lib/*.sh "$SKILL_DIR"/tests/lib/loop-scan.awk "$P70_CK/lib/"
 bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p70-budget-green.log" 2>&1; P70_RC=$?
 assert_eq "P70 预算检查：干净树绿（$(sed -n 's/^ok: 预算表覆盖 \(.*\) 个 section.*/\1/p' "$TMP/p70-budget-green.log") 个 section）" "$P70_RC" "0"
@@ -1742,6 +1745,16 @@ assert_has "$TMP/p70-loop-evil.log" "evil-fixture.sh:3" "P70 翻转（循环）�
 rm -f "$P70_CK/evil-fixture.sh"
 bash "$P70_CK/section-guard.sh" --loop-check >/dev/null 2>&1; P70_RC=$?
 assert_eq "P70 翻转（循环）还原：绿" "$P70_RC" "0"
+# 翻转③b（P313 · V58 F2-b）：往扫描面里的 tmp-hygiene.sh 塞一个未登记的 while+sleep → 必须红并点名。
+# 这条只在「副本真的包含 tmp-hygiene.sh」时才有意义：拷贝面缩回旧样子时，同样这行会往不存在的文件里写
+# （红），而清单里的 tmp-hygiene.sh 也会因不在扫描面而红 —— 两个方向都拦得住。
+printf '\n# p313-flip：未登记的循环\nwhile :; do sleep 1; done\n' >> "$P70_CK/tmp-hygiene.sh"
+bash "$P70_CK/section-guard.sh" --loop-check >"$TMP/p313-loop-held.log" 2>&1; P70_RC=$?
+assert_eq "P313 翻转（盲区）：tmp-hygiene.sh 里塞未登记的 while+sleep → 红" "$P70_RC" "1"
+assert_has "$TMP/p313-loop-held.log" "tmp-hygiene.sh:" "P313 翻转（盲区）：点名 tmp-hygiene.sh 的 file:line"
+cp "$SKILL_DIR/tests/tmp-hygiene.sh" "$P70_CK/tmp-hygiene.sh"
+bash "$P70_CK/section-guard.sh" --loop-check >/dev/null 2>&1; P70_RC=$?
+assert_eq "P313 翻转（盲区）还原：绿" "$P70_RC" "0"
 
 # ④ gate-guard 的第四向：时长比较只许在段落守卫里（D33 的边界；翻了必须红）
 #   夹具自己要把两个“标记字面量”（测量套件的点名、时长比较）写进 scratch smoke.sh —— 拼开写，
@@ -1834,7 +1847,10 @@ else
     assert_has "$P70_STUCK_SCENE/summary.txt" "budget: 3s" "P70 现场：点名预算"
     assert_match "$P70_STUCK_SCENE/summary.txt" "last progress: [0-9]+s" "P70 现场：带最后一次进度读数"
     assert_has "$P70_STUCK_SCENE/summary.txt" "sleep 0.2" "P70 现场：子孙树里有挂住的子进程"
-    assert_has "$P70_STUCK_SCENE/summary.txt" "escalation" "P70 现场：记录了 KILL 升级（子进程忽略 TERM）"
+    # P313：注入的心跳**响应** TERM，所以宽限内它就退了，现场不需要升级。这条反向断言是「有人把
+    # `trap "" TERM` 放回夹具」的守卫（放宽限 → 现场必然记 escalation → 这里变红）；真要升级时现场
+    # 照写的那一面由自检的 F1 夹具（P110）负责。
+    assert_not "$P70_STUCK_SCENE/summary.txt" "escalation" "P70 现场：心跳响应 TERM → 现场不记升级（记了就是它又开始扛 TERM）"
     assert_has "$P70_STUCK_SCENE/logs/tails.txt" "fixture-stuck" "P70 现场：带本段的夹具日志尾巴"
     assert_eq "P70 现场：部分计时记录有前两段的行" \
       "$(awk 'NR>1' "$P70_STUCK_SCENE/sections.tsv.partial" 2>/dev/null | wc -l | tr -d ' ')" "2"

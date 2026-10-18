@@ -13,6 +13,8 @@
 #   --loop-check：`*/​*.sh` + `lib/*.sh` 里的每个 `while`+`sleep` 循环，按**文件内出现顺序**
 #     与 `loop-inventory.tsv` 的行一一对应（锚点必须是 while 原文的子串；`cap=` 行还要求
 #     循环体里能找到那个上限字面量）。新循环、丢上限、顺序变化都会点名 file:line 变红。
+#     清单里的文件不在扫描面（`--tree` 给的是一份缺文件的副本 / 文件被删 / 已经没有循环）也算
+#     红 —— 否则「副本里看不见那个文件」就会静默地让清单与真树的不同步永远看不见（P313 · V58）。
 set -uo pipefail
 
 here="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -206,7 +208,10 @@ loop_check() {
         total_det++
       }
       for (i = 1; i <= nf; i++) { curfile = order[i]; flush_file() }
-      for (ff in inv_files) if (!(ff in det_files)) printf "note: 清单里的 %s 不在扫描面（过期行？）\n", ff
+      for (ff in inv_files) if (!(ff in det_files)) {
+        printf "bad: 清单里的 %s 不在扫描面（文件被删 / 没被拷进 --tree / 已经没有 while+sleep 循环）—— 过期行，或者这是一份看不见它的副本\n", ff
+        problems++
+      }
       printf "ok: 扫描 %d 行清单 / %d 个 while+sleep 循环，配平 %d 个\n", total_inv, total_det, total_matched
       exit(problems > 0 ? 1 : 0)
     }

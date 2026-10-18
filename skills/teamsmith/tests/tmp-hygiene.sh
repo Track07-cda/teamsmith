@@ -32,6 +32,12 @@
 #     与**陈旧 socket**（非 default、`ss -xl` 无监听、年龄下限）的计数；`--sweep` 默认只报不动，
 #     `--tmux-sockets` 才清；**default 永不触碰**（socket 与 server 都是）。
 #   - 台账里还活着的根（门禁的泄漏断言用）由 tests/lib/tmp-root.sh 写；本脚本不碰它。
+#   - **已删除但仍被持有**的文件（P313）：`--status` 报合计字节 + 持有进程数（只报总量，别家的 pid 不
+#     点名），并把「可归属本项目」（删除目标的路径带本项目 ns）里**父进程已不在**的那部分单独报出来。
+#     `--sweep` 只对**可归属 + 父进程已不在**的持有者给出「建议结束」的计划 —— 父链还在的持有者是某个
+#     正在跑的夹具在用，建议结束它等于建议打断别人的运行（2026-10-18 交付时现场就有一个：ppid=1、
+#     已跑 50 分钟、持着 2 个已删 fd）；仍要求显式 pid —— 本脚本绝不发信号。
+#     现场：78 个孤儿心跳进程持有 11.98 GB 已删除文件。
 #   - **命名空间与锁对**（P287）：活运行**为自己**直接落在临时根上的东西，要么点开头（台账 / pid /
 #     诊断），要么带本项目的 ns（`<slug>-<hash8>`）；根是 `teamsmith-<kind>-<ns>.XXXXXX`。`--sweep` 的
 #     候选谓词不动（根仍是家族目录 + 台账归因），`--status` 多一列 ns，并把**锁对**按角色报出来
@@ -44,8 +50,10 @@
 #   TEAM_TMP_HYGIENE_REPO  自检用：指定「主仓库」（默认本脚本所在仓库）——worktree/记录/归属判定的基准
 #   TEAM_TMP_HYGIENE_TMUX_DIR  自检用：指定要扫的 tmux socket 目录（默认按 $TMUX/TMUX_TMPDIR 解析）
 #   TEAM_TMP_HYGIENE_TMUX_FAKE_SERVERS  自检用：用夹具文件（pid<TAB>socket）代替 /proc 找孤儿私有 server
+#   TEAM_TMP_HYGIENE_HELD_ROOTS   自检用：限制「已删除但仍被持有」扫描的根（默认 = 解析出的临时根 +
+#                                 旧默认根；P309 之前所有运行都写在旧默认根，P313 的泄漏就在 /tmp 里）
 #   TEAM_TMP_HYGIENE_FLIP  只在 TEAM_SMOKE_FIXTURE=1 时生效：noproc/occupied/orphan/foreign/lock/
-#                          worktree/record/lint/reviewproof/ledgerrepo/blockskip/tmuxtouch
+#                          worktree/record/lint/reviewproof/ledgerrepo/blockskip/tmuxtouch/held/heldpath
 #                          （把对应规则变回有缺陷的旧行为，供翻转）
 set -uo pipefail
 
@@ -98,7 +106,8 @@ bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
 _usage() {
   cat <<'EOF'
 用法：bash tests/tmp-hygiene.sh <verb> [选项]
-  --status                 只读清单（根 / 归属未证·别家（逐条点名） / 不是根 / 占用 / 余量 / 工具身份）；永远 exit 0
+  --status                 只读清单（根 / 归属未证·别家（逐条点名） / 不是根 / 占用 / 余量 / 工具身份 /
+                           已删除但仍被持有的文件（P313：合计字节 + 进程数，只报总量））；永远 exit 0
   --lint [--dir D]         静态检查 mktemp 模板（默认整棵 skill 树）：直接落在解析后临时根上的模板
                            必须点开头或带本项目的 ns，根还要在 owned 家族里；有 finding → exit 1
   --docs-check [--dir D]   文档面一致性（默认整棵 skill 树）：默认根 / 解析来源 / 回滚口令必须写清，
@@ -106,10 +115,13 @@ _usage() {
                            有残留或缺 token → exit 1
   --sweep [--dry-run] [--age N] [--tmux-sockets]
                            回收陈旧、无占用的根（默认 30 分钟 / TEAM_TMP_SWEEP_AGE）；
+                           已删除但仍被持有的文件：对**可归属本项目、且父进程已不在**的持有者
+                           只给「建议结束」的计划（活着的运行在用它们 → 不建议；仍要显式 pid
+                           —— 本脚本绝不发信号）；
                            别家 / 归属不明的目录逐条点名、永不碰；
                            --tmux-sockets 连 tmux 侧残留一起清（默认只报不动；default 永不触碰）
   --self-test [--break=…]  红侧自检（noproc/occupied/orphan/foreign/lock/worktree/record/lint/
-                           reviewproof/ledgerrepo/blockskip/tmuxtouch）
+                           reviewproof/ledgerrepo/blockskip/tmuxtouch/held）
 exit: 0 做了事（有跳过也照常回收其余；逐条列名） · 1 lint 有 finding · 3 一个都没做（全被挡下 / 别家 / 不明）
 EOF
 }
@@ -221,6 +233,218 @@ _occupants_of() { # <root> → "pid(what), pid(what)"；非空即占用；"无�
     fi
   done
   printf '%s\n' "$out"
+}
+
+# ---------------------------------------------------------------- 已删除但仍被持有（P313）
+# 「根」的扫描只看得到还在磁盘上的东西：被删掉的日志 / 临时文件只要还有进程开着 fd，块就归还不了 ——
+# `df` 与 `du` 的差额正是这里。现场（2026-10-18）：78 个孤儿心跳进程合计持有 **11.98 GB** 已删除文件，
+# 而它们写入的目标（夹具的临时根）早就被清理了。
+# 口径：只统计**删除目标的路径在临时根下**、且读得到的 fd（同用户）；字节按 inode 去重（同一个文件被
+# 多个 fd 打开只算一次），进程按 pid 去重。归属只按路径：删除目标所在的路径里，**某一层目录名**是本
+# 项目的运行根（`teamsmith-*-<ns>.*`，P287）才算「可归属本项目」—— 别家的持有者只进合计，**不点名
+# pid**。`--sweep` 对可归属者只给「建议结束」的计划，**计划行点名被持有的目标路径**（扫描时就有，不拿
+# argv 的前 140 字节顶替 —— argv 里常常一个路径字符都没有），绝不自己发信号（动手要显式 pid）。
+_HO_OK=0
+_HO_PROCS=0; _HO_FILES=0; _HO_BYTES=0; _HO_OWN_PROCS=0; _HO_OWN_BYTES=0
+_HO_ORPH_PROCS=0; _HO_ORPH_BYTES=0
+_HO_PIDS=(); _HO_PID_BYTES=(); _HO_PID_FILES=(); _HO_PID_OWN=(); _HO_PID_ARGV=(); _HO_PID_ORPH=()
+_HO_PID_PATHS=()   # 每个 pid 持有的已删目标路径（换行分隔，按 inode 去重；计划行点名它）
+# 父进程还在吗？僵尸按「不在」算（与 lib/bounded-spin.sh 同一口径）。
+# 「父进程已不在」是这个泄漏的**签名**：被打断的运行把心跳孤儿留在 init 名下（ppid=1），
+# 而它的写目标早已被清理。活着的运行（父链还在）不该被建议结束 —— 那正是夹具在用的东西。
+_ho_parent_alive() { # <ppid>
+  local pid="${1:-}" st
+  case "$pid" in ''|0|*[!0-9]*) return 1 ;; esac
+  [ -d /proc/1 ] || { kill -0 "$pid" 2>/dev/null; return; }
+  [ -r "/proc/$pid/stat" ] || return 1
+  st="$(awk '{ sub(/^.*\) /, ""); print $1 }' "/proc/$pid/stat" 2>/dev/null || true)"
+  [ "$st" = "Z" ] && return 1
+  return 0
+}
+_ho_human_bytes() { # <bytes> → 人话（1024 进制，与 human_kb 同口径）
+  awk -v b="${1:-0}" 'BEGIN {
+    if (b >= 1073741824) printf "%.1f GB", b / 1073741824
+    else if (b >= 1048576) printf "%.1f MB", b / 1048576
+    else if (b >= 1024) printf "%.1f KB", b / 1024
+    else printf "%d B", b
+  }'
+}
+_HO_ROOTS=()
+_ho_roots() { # 扫哪些根：解析出的临时根 + $TMPDIR + 旧默认根 /tmp（P313 的泄漏就在 /tmp）
+  if [ -n "${TEAM_TMP_HYGIENE_HELD_ROOTS:-}" ]; then
+    local r
+    for r in $TEAM_TMP_HYGIENE_HELD_ROOTS; do [ -n "$r" ] && printf '%s\n' "$r"; done
+    return 0
+  fi
+  local r legacy
+  {
+    # 解析出的根本身，以及它的**基**（P309 默认 /var/tmp）：验证者的副本（/var/tmp/<run>/teamsmith-…）、
+    # 旧默认根 /tmp、显式 TMPDIR —— 泄漏可能在任何一个里，而 df 与 du 的差额是全盘的事。
+    printf '%s\n' "$BASE"
+    printf '%s\n' "$(dirname "$BASE")"
+    for r in "${TMPDIR:-}" /tmp; do
+      [ -n "$r" ] || continue
+      legacy="$(cd "$r" 2>/dev/null && pwd || printf '%s' "$r")"
+      [ "$legacy" = "$BASE" ] && continue
+      printf '%s\n' "$legacy"
+    done
+  } | awk '!seen[$0]++' | awk 'length($0) > 1'
+  return 0
+}
+_ho_path_ours() { # <删除目标的路径> → 0 = 路径里**任何一层**是本项目的运行根（根名带本项目 ns）
+  local p="$1" root rest comp
+  for root in "${_HO_ROOTS[@]}"; do
+    [ "${p#"$root"/}" != "$p" ] || continue
+    rest="${p#"$root"/}"
+    # 逐层看：规范根下第一层就是运行根；而在基（/var/tmp、/tmp）下，运行根可能被套在验证者的副本目录
+    # 里（/var/tmp/<副本>/teamsmith-smoke-<ns>.XXXX），所以不能只看第一层。
+    while [ -n "$rest" ]; do
+      comp="${rest%%/*}"
+      case "$comp" in teamsmith-*-"$(_hy_ns)".*) return 0 ;; esac
+      [ "$comp" = "$rest" ] && break
+      rest="${rest#*/}"
+    done
+  done
+  return 1
+}
+_scan_held_deleted() { # 0 = 扫过（读数可信）；1 = 读不到（≠ 没有）
+  _HO_OK=0
+  _HO_PROCS=0; _HO_FILES=0; _HO_BYTES=0; _HO_OWN_PROCS=0; _HO_OWN_BYTES=0
+  _HO_ORPH_PROCS=0; _HO_ORPH_BYTES=0
+  _HO_PIDS=(); _HO_PID_BYTES=(); _HO_PID_FILES=(); _HO_PID_OWN=(); _HO_PID_ARGV=(); _HO_PID_ORPH=()
+  _HO_PID_PATHS=()
+  [ -d /proc/1 ] || return 1
+  if [ "$FLIP" = "held" ]; then _HO_OK=1; return 0; fi   # 红侧：旧形状 —— 这条读数根本不存在
+  local pid id f link di size dilist pbytes pfiles owns argv root hit ppid orphan
+  local -A fbytes=() fpath=()
+  _HO_ROOTS=()
+  while IFS= read -r root; do [ -n "$root" ] && _HO_ROOTS+=("$root"); done < <(_ho_roots)
+  [ "${#_HO_ROOTS[@]}" -gt 0 ] || return 1
+  for pid in /proc/[0-9]*; do
+    id="${pid#/proc/}"
+    dilist=""
+    for f in "$pid"/fd/*; do
+      link="$(readlink "$f" 2>/dev/null || true)"
+      case "$link" in *' (deleted)') ;; *) continue ;; esac
+      link="${link% (deleted)}"
+      hit=0
+      for root in "${_HO_ROOTS[@]}"; do
+        [ "${link#"$root"/}" != "$link" ] && { hit=1; break; }
+      done
+      [ "$hit" = "1" ] || continue
+      di="$(stat -c '%d:%i' -L "$f" 2>/dev/null || true)"
+      [ -n "$di" ] || continue
+      if [ -z "${fbytes[$di]+x}" ]; then
+        size="$(stat -c %s -L "$f" 2>/dev/null || printf 0)"
+        case "$size" in ''|*[!0-9]*) size=0 ;; esac
+        fbytes[$di]="$size"; fpath[$di]="$link"
+      fi
+      case " $dilist " in *" $di "*) ;; *) dilist="$dilist $di" ;; esac
+    done
+    [ -n "$dilist" ] || continue
+    pbytes=0; pfiles=0; owns=0; ppaths=""
+    for di in $dilist; do
+      pbytes=$((pbytes + ${fbytes[$di]:-0})); pfiles=$((pfiles + 1))
+      # 目标路径（扫描时已在 fpath[] 里）：计划行要印它，所以按 pid 记下来 —— 不靠 argv 反推。
+      if [ -n "$ppaths" ]; then ppaths="$ppaths"$'\n'"${fpath[$di]:-}"; else ppaths="${fpath[$di]:-}"; fi
+      if _ho_path_ours "${fpath[$di]:-}"; then owns=1; fi
+    done
+    _HO_PIDS+=("$id"); _HO_PID_BYTES+=("$pbytes"); _HO_PID_FILES+=("$pfiles")
+    _HO_PID_PATHS+=("$ppaths")
+    argv="$(tr '\0' ' ' < "/proc/$id/cmdline" 2>/dev/null | cut -c1-140 || true)"
+    _HO_PID_ARGV+=("$argv")
+    ppid="$(awk '{ sub(/^.*\) /, ""); print $2 }' "/proc/$id/stat" 2>/dev/null || true)"
+    orphan=0
+    _ho_parent_alive "${ppid:-}" || orphan=1
+    [ "${ppid:-}" = "1" ] && orphan=1
+    _HO_PID_ORPH+=("$orphan")
+    if [ "$owns" = "1" ]; then
+      _HO_PID_OWN+=("1")
+      _HO_OWN_PROCS=$((_HO_OWN_PROCS + 1)); _HO_OWN_BYTES=$((_HO_OWN_BYTES + pbytes))
+      if [ "$orphan" = "1" ]; then
+        _HO_ORPH_PROCS=$((_HO_ORPH_PROCS + 1)); _HO_ORPH_BYTES=$((_HO_ORPH_BYTES + pbytes))
+      fi
+    else
+      _HO_PID_OWN+=("0")
+    fi
+  done
+  if [ "${#fbytes[@]}" -gt 0 ]; then
+    for di in "${!fbytes[@]}"; do
+      _HO_BYTES=$((_HO_BYTES + fbytes[$di])); _HO_FILES=$((_HO_FILES + 1))
+    done
+  fi
+  _HO_PROCS="${#_HO_PIDS[@]}"
+  _HO_OK=1
+  return 0
+}
+_ho_status_block() { # --status 的一段：只报总量（别家的 pid 不点名）
+  printf '\n已删除但仍被持有（P313；df 与 du 的差额就在这里）：\n'
+  if ! _scan_held_deleted; then
+    printf '  合计：无法判定（/proc 不可用 —— 读不到不等于没有）\n'
+    return 0
+  fi
+  printf '  合计：%s 个进程 · %s（%s B）· %s 个已删文件\n' \
+    "$_HO_PROCS" "$(_ho_human_bytes "$_HO_BYTES")" "$_HO_BYTES" "$_HO_FILES"
+  if [ "${#_HO_ROOTS[@]}" -gt 1 ]; then
+    printf '  扫描的根：%s（旧默认根也算 —— P309 之前的运行都写在那里）\n' "$(printf '%s · ' "${_HO_ROOTS[@]}" | sed 's/ · $//')"
+  fi
+  if [ "$_HO_PROCS" -gt 0 ]; then
+    printf '  可归属本项目（删除目标所在路径里有一层是本项目的运行根 teamsmith-*-%s.*）：%s 个进程 · %s（%s B）\n' \
+      "$(_hy_ns)" "$_HO_OWN_PROCS" "$(_ho_human_bytes "$_HO_OWN_BYTES")" "$_HO_OWN_BYTES"
+    printf '    其中父进程已不在（被打断的运行留下的孤儿）：%s 个进程 · %s（%s B）\n' \
+      "$_HO_ORPH_PROCS" "$(_ho_human_bytes "$_HO_ORPH_BYTES")" "$_HO_ORPH_BYTES"
+    printf '  只报总量（别家的 pid 不点名）；结束它们要显式 pid —— --sweep 只给计划，绝不动手\n'
+  else
+    printf '  没有这种持有（0 就是 0，不是「读不到」）\n'
+  fi
+  return 0
+}
+_ho_sweep_block() { # --sweep 的一段：可归属者只给「建议结束」的计划，绝不发信号
+  printf '\n已删除但仍被持有（P313）：'
+  if ! _scan_held_deleted; then
+    printf '无法判定（/proc 不可用）—— 不碰\n'
+    return 0
+  fi
+  printf '合计 %s 个进程 · %s（%s B）· %s 个已删文件\n' \
+    "$_HO_PROCS" "$(_ho_human_bytes "$_HO_BYTES")" "$_HO_BYTES" "$_HO_FILES"
+  if [ "$_HO_PROCS" -eq 0 ]; then
+    printf '  没有这种持有。\n'
+    return 0
+  fi
+  if [ "$_HO_OWN_PROCS" -eq 0 ]; then
+    printf '  可归属本项目的持有者：0 个（别家的只进合计、不点名 pid；要它们停下请找各自的运行）\n'
+    return 0
+  fi
+  if [ "$_HO_ORPH_PROCS" -eq 0 ]; then
+    printf '  可归属本项目的 %s 个持有者都还有活着的父进程（= 还在跑的运行在用它们）→ 不建议结束\n' \
+      "$_HO_OWN_PROCS"
+    return 0
+  fi
+  printf '  建议结束（只给计划：本脚本绝不发信号；要动手请显式给 pid）：\n'
+  local i nl=$'\n' first ln
+  for ((i = 0; i < ${#_HO_PIDS[@]}; i++)); do
+    [ "${_HO_PID_OWN[$i]}" = "1" ] || continue
+    [ "${_HO_PID_ORPH[$i]}" = "1" ] || continue
+    if [ "$FLIP" = "heldpath" ]; then   # 红侧：旧形状 —— 计划行只有 argv（常没有路径，还会被 140 字节截断）
+      printf '    [suggest-kill] pid=%s · %s（%s B）· %s 个已删文件 · 父进程已不在 · %s\n' \
+        "${_HO_PIDS[$i]}" "$(_ho_human_bytes "${_HO_PID_BYTES[$i]}")" "${_HO_PID_BYTES[$i]}" \
+        "${_HO_PID_FILES[$i]}" "${_HO_PID_ARGV[$i]:-（argv 读不到）}"
+      continue
+    fi
+    # 计划行的第一栏就是**被持有的目标路径**（扫描时读到的 fpath[]，按 inode 去重）：argv 里没有路径
+    # 的持有者（`exec sleep` + fd）与长路径都要点全，不截断。argv 另起一行，只作形状识别用。
+    first="${_HO_PID_PATHS[$i]%%"$nl"*}"
+    printf '    [suggest-kill] pid=%s · %s（%s B）· %s 个已删文件 · 父进程已不在 · 目标：%s\n' \
+      "${_HO_PIDS[$i]}" "$(_ho_human_bytes "${_HO_PID_BYTES[$i]}")" "${_HO_PID_BYTES[$i]}" \
+      "${_HO_PID_FILES[$i]}" "${first:-（路径读不到）}"
+    while IFS= read -r ln; do
+      [ -n "$ln" ] || continue
+      [ "$ln" = "$first" ] && continue
+      printf '      目标：%s\n' "$ln"
+    done <<<"${_HO_PID_PATHS[$i]}"
+    printf '      argv：%s\n' "${_HO_PID_ARGV[$i]:-（argv 读不到）}"
+  done
+  return 0
 }
 
 # ---------------------------------------------------------------- 仓库 / worktree / 记录
@@ -525,6 +749,7 @@ cmd_status() {
   else
     printf '  \033[33m!\033[0m %s 不存在\n' "$BASE"
   fi
+  _ho_status_block
 
   # P309：默认值搬到磁盘后，旧默认根里的残留不会自己搬家。这里只**数**一下并给**一条**命令：
   # 一次 `--sweep` 只作用于一个基准，所以回收旧根 = 同一条命令把旧基准显式选出来（候选谓词、
@@ -1045,6 +1270,8 @@ cmd_sweep() {
       "$reclaim_n" "$(human_kb "$reclaim_kb")" "$reclaim_files"
   fi
 
+  _ho_sweep_block
+
   local stale
   stale="$(_stale_worktree_registrations | wc -l | tr -d ' ')"
   [ "${stale:-0}" -gt 0 ] 2>/dev/null && printf '另有 %s 个注册目录已不在的 worktree —— 修法：git -C %s worktree prune\n' "$stale" "$(_main_root 2>/dev/null || printf '?')"
@@ -1152,7 +1379,7 @@ _hy_selftest() {
   done
   case "$break_stage" in
     ''|occupied|orphan|unknown|foreign|lock|worktree|record|lint|reviewproof|ledgerrepo|blockskip|tmuxtouch|\
-    inline-root|fixed-floor|missing-root) ;;
+    held|heldpath|inline-root|fixed-floor|missing-root) ;;
     *) printf 'tmp-hygiene: 不认识的 break 阶段 [%s]\n' "$break_stage" >&2; return 2 ;;
   esac
   # 每个子进程带**自己**的 flip：一个 break 只该让它的那一段变红（不污染别的段）
@@ -1585,6 +1812,101 @@ PY
   out="$(TMPDIR="$D" _hy "$(_hyflip ledgerrepo)" --sweep --age 0 2>&1)"; rc=$?
   [ -d "$froot" ] && ok "P122 台账 repo= 指向别家 → sweep 不碰" || bad "P122 台账别家的根被删了"
   rm -rf -- "$froot" "$D/.teamsmith-tmp-ledger.$frun"
+
+  # ── ⑭ P313：已删除但仍被持有的文件（df 与 du 的差额）
+  #    两个方向都要：有人持有已删文件 → 读数必须 >0（归属本项目的那一个进 --sweep 的计划）；
+  #    没人持有 → 读数必须恰好 0（「0 就是 0，不是读不到」）。红侧 break=held：这条读数回到
+  #    旧形状（不存在）→ 正方向断言必须红，而 0 方向仍绿。红侧 break=heldpath：计划行退回
+  #    「只印 argv」的旧形状 → 「计划行点名目标路径」那条断言必须红（V58 F1）。
+  local hd="$D/p313-held" hpid_own hpid_for hpid_live hwait hout hn np nb nf
+  hd="$D/p313-held"; mkdir -p "$hd" "$hd/teamsmith-heldforeign.Z9"
+  # ① 的目标文件套在一串长目录名下：计划行要印**完整**路径（V58 实测 argv 里 171 字符的路径被
+  #    截在 140 字节），而持有者自己的 argv（`exec sleep 60`）里一个路径字符都没有。
+  local hown="$hd/teamsmith-held-$(_hy_ns).H1/run-tmp-a-very-long-dir-name-for-the-v58-path-clause/fixture-stuck-1.log"
+  mkdir -p "$(dirname "$hown")" "$hd/teamsmith-held-$(_hy_ns).H1"
+  printf '%02048d\n' 0 >"$hown"
+  printf '%01024d\n' 0 >"$hd/teamsmith-heldforeign.Z9/x.log"
+  printf '%03072d\n' 0 >"$hd/teamsmith-held-$(_hy_ns).H1/live.log"
+  # 三个持有者，形状就是现场那三种：
+  #   ① 孤儿（= 被打断的运行留下的）：中间短命 shell 起心跳后立刻退 → 心跳被 init 收养，父进程已不在；
+  #   ② 活着的（= 某个正在跑的夹具在用）：父链就是本脚本 → **不许**进建议；
+  #   ③ 别家的（根名不带本项目 ns）：只进合计。
+  # 等它们的外壳退场，好让 ① 真的变成孤儿（ppid=1），再开始断言。
+  ( hwait=""; bash -c 'exec 3<"$1"; rm -f "$1"; exec sleep 60' _ "$hown" &
+    hwait=$!; printf '%s\n' "$hwait" >"$hd/own.pid" ) &
+  ( bash -c 'exec 3<"$1"; rm -f "$1"; exec sleep 60' _ "$hd/teamsmith-heldforeign.Z9/x.log" &
+    printf '%s\n' "$!" >"$hd/for.pid" ) &
+  ( exec 3<"$hd/teamsmith-held-$(_hy_ns).H1/live.log"; rm -f "$hd/teamsmith-held-$(_hy_ns).H1/live.log"; exec sleep 60 ) &
+  hpid_live=$!
+  local _w=0
+  while [ "$_w" -lt 40 ]; do
+    [ -s "$hd/own.pid" ] && [ -s "$hd/for.pid" ] && break
+    sleep 0.05; _w=$((_w + 1))
+  done
+  hpid_own="$(cat "$hd/own.pid" 2>/dev/null || true)"
+  hpid_for="$(cat "$hd/for.pid" 2>/dev/null || true)"
+  _w=0
+  while [ "$_w" -lt 40 ]; do
+    [ "$(awk '{ sub(/^.*\) /, ""); print $2 }' "/proc/${hpid_own:-0}/stat" 2>/dev/null || true)" = "1" ] && break
+    sleep 0.05; _w=$((_w + 1))
+  done
+  sleep 0.2
+  # 旧默认根也在扫描面里（P309 之前的运行都写在 /tmp —— P313 的泄漏就在那里）。这一条只读根清单，
+  # 不往 /tmp 里写任何东西；机器上真实的持有者会让计数变化，但不会让这条断言失准。
+  hout="$(TMPDIR="$hd" _hy "" --status 2>&1)"
+  case "$hout" in
+    # 夹具的根在 run 临时根里，所以「它的基」是 run 根（真实运行时是 /var/tmp —— 验证者的副本就套在那里）。
+    # 断言三件：解析出的根在最前、基在中间、旧默认根 /tmp 在最后。
+    *"扫描的根：$hd · "*" · /tmp"*)
+      ok "P313 status：扫描面 = 解析出的根 + 它的基（/var/tmp 那一层，验证者副本在那里）+ 旧默认根（/tmp）" ;;
+    *) bad "P313 status：扫描面没有点名基与旧默认根（$(printf '%s' "$hout" | grep -F '扫描的根' | head -1)）" ;;
+  esac
+  # 下面的计数断言把扫描的根限定在夹具里（机器上的 /tmp 不能影响两个方向的判定）
+  hout="$(TMPDIR="$hd" TEAM_TMP_HYGIENE_HELD_ROOTS="$hd" _hy "$(_hyflip held)" --status 2>&1)"
+  hn="$(printf '%s\n' "$hout" | sed -n 's/^  合计：\([0-9][0-9]*\) 个进程 · .*（\([0-9][0-9]*\) B）· \([0-9][0-9]*\) 个已删文件$/\1 \2 \3/p' | head -1)"
+  np=""; nb=""; nf=""
+  [ -n "$hn" ] && read -r np nb nf <<<"$hn"
+  if [ "${np:-0}" -ge 3 ] 2>/dev/null && [ "${nb:-0}" -ge 6144 ] 2>/dev/null; then
+    ok "P313 status：有人持有已删文件时读数 >0（${np} 个进程 · ${nb} B · ${nf} 个文件）"
+  else
+    bad "P313 status：持有已删文件时读数是 [$hn]（期望 ≥3 个进程 / ≥6144 B）—— 这一项就是 df 与 du 的差额"
+  fi
+  assert_out "$hout" "可归属本项目（删除目标所在路径里有一层是本项目的运行根" "P313 status：把「可归属本项目」的持有者数单独报出来"
+  assert_out "$hout" "其中父进程已不在（被打断的运行留下的孤儿）：1 个进程" "P313 status：把「父进程已不在」的那部分单独报出来（孤儿才是泄漏）"
+  case "$hout" in
+    *"[suggest-kill]"*) bad "P313 status：点了建议结束的 pid（status 只报总量）" ;;
+    *) ok "P313 status：只报总量，不点名 pid（别家的 pid 不进这一面）" ;;
+  esac
+  hout="$(TMPDIR="$hd" TEAM_TMP_HYGIENE_HELD_ROOTS="$hd" _hy "$(_hyflip held heldpath)" --sweep --age 0 2>&1)"
+  assert_out "$hout" "[suggest-kill] pid=$hpid_own" "P313 sweep：可归属本项目 + 父进程已不在的持有者进「建议结束」的计划（点名 pid）"
+  # F1 / V58：「计划行要点名目标路径」—— 这个持有者的 argv 里没有路径（`exec sleep` + fd），
+  # 路径只能来自扫描时的 fpath[]；长路径要完整印。
+  case "$(tr '\0' ' ' <"/proc/$hpid_own/cmdline" 2>/dev/null || true)" in
+    *"$hown"*) bad "P313 sweep：夹具失效 —— 持有者的 argv 里带了路径（红侧测不到「argv 里没有路径」）" ;;
+    *) ok "P313 sweep：红侧持有者的 argv 里没有路径（exec sleep + fd 持有已删文件）" ;;
+  esac
+  assert_out "$hout" "目标：$hown" "P313 sweep：计划行点名被持有的目标路径（长路径完整印，不从 argv 顶替）"
+  case "$hout" in
+    *"[suggest-kill] pid=$hpid_for"*) bad "P313 sweep：点了别家的持有者 pid（只许合计里计数）" ;;
+    *) ok "P313 sweep：别家的持有者只进合计，不点名 pid" ;;
+  esac
+  case "$hout" in
+    *"pid=$hpid_live"*) bad "P313 sweep：把一个父链还在的持有者列为建议结束（那是别人正在跑的夹具）" ;;
+    *) ok "P313 sweep：父链还在的持有者不进建议（活着的运行在用它们）" ;;
+  esac
+  kill -0 "$hpid_own" 2>/dev/null && kill -0 "$hpid_for" 2>/dev/null && kill -0 "$hpid_live" 2>/dev/null \
+    && ok "P313 sweep：计划就是计划（三个持有者都还活着，脚本没发信号）" \
+    || bad "P313 sweep：sweep 对持有者动了手（只许给计划）"
+  kill -KILL "$hpid_own" "$hpid_for" "$hpid_live" 2>/dev/null || true
+  wait "$hpid_own" "$hpid_for" "$hpid_live" 2>/dev/null || true
+  hout="$(TMPDIR="$hd" TEAM_TMP_HYGIENE_HELD_ROOTS="$hd" _hy "" --status 2>&1)"
+  hn="$(printf '%s\n' "$hout" | sed -n 's/^  合计：\([0-9][0-9]*\) 个进程 · .*（\([0-9][0-9]*\) B）· \([0-9][0-9]*\) 个已删文件$/\1 \2 \3/p' | head -1)"
+  if [ "$hn" = "0 0 0" ]; then
+    ok "P313 status：没有持有时读数恰好 0（0 个进程 · 0 B · 0 个文件）"
+  else
+    bad "P313 status：没有持有时读数是 [$hn]（期望「0 0 0」）"
+  fi
+  rm -rf -- "$hd"
 
   printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$PASS" "$FAIL"
   [ "$FAIL" -eq 0 ] && { printf '\033[32mtmp-hygiene.sh 自检全绿\033[0m\n'; return 0; }

@@ -70,8 +70,11 @@ smoke.sh	18744	cap="$P55_W" -lt 30	  while [ "$P55_W" -lt 30 ]; do
 smoke.sh	18788	cap="$P55_W" -lt 20	  while [ "$P55_W" -lt 20 ]; do
 smoke.sh	18925	cap="$P55_W" -lt 20	  while [ "$P55_W" -lt 20 ]; do
 smoke.sh	18970	cap="$P55_W" -lt 25	  while [ "$P55_W" -lt 25 ]; do
-tmp-hygiene.sh	691	cap="$_i" -lt 50	while [ "$_i" -lt 50 ] && ! grep -q '^ROOT=' "$kr_out" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
-tmp-hygiene.sh	1149	cap="$_j" -lt 50	while [ "$_j" -lt 50 ] && kill -0 "$orphan" 2>/dev/null; do sleep 0.1; _j=$((_j + 1)); done
+tmp-hygiene.sh	1696	cap="$_i" -lt 50	while [ "$_i" -lt 50 ] && ! grep -q '^ROOT=' "$kr_out" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
+tmp-hygiene.sh	1790	cap="$_j" -lt 50	while [ "$_j" -lt 50 ] && kill -0 "$orphan" 2>/dev/null; do sleep 0.1; _j=$((_j + 1)); done
+tmp-hygiene.sh	1842	cap="$_w" -lt 40	while [ "$_w" -lt 40 ]; do
+tmp-hygiene.sh	1849	cap="$_w" -lt 40	while [ "$_w" -lt 40 ]; do
+lib/bounded-spin.sh	75	cap="$cap_s"	while _bs_parent_alive "$parent"; do
 lib/pty-wait.sh	229	cap="$i" -lt "$ceiling"	while [ "$i" -lt "$ceiling" ]; do
 lib/pty-wait.sh	360	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do
 lib/pty-wait.sh	384	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do

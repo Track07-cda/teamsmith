@@ -174,19 +174,24 @@ STUB
 chmod +x "$BIN/tmux"
 
 # stub agent：argv[0] 的 basename 是 `pi`（形状命中本项目配置的 agent 可执行文件），行为按 argv[1]。
-cat > "$BIN/pi" <<'STUB'
-#!/usr/bin/env bash
+# P313：循环由 lib/bounded-spin.sh 一处实现三条边界（TERM 就退 / 父没了就退 / 硬上限 1800s）。
+# `stubborn` 那一档**故意**忽略 TERM（它就是「TERM 不生效 → 升级 KILL」的被测对象），但仍受
+# 父进程与硬上限约束 —— 被 KILL 掉的夹具运行不会再留下一个永久自旋的席位进程。
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '. %q\n' "$SKILL_DIR/tests/lib/bounded-spin.sh"
+  cat <<'STUB'
 mode="${1:-term}"
 case "$mode" in
-  term)     trap 'exit 0' TERM; while :; do sleep 0.2; done ;;
-  stubborn) trap '' TERM;       while :; do sleep 0.2; done ;;
-  touch)    trap 'touch "$OC_SESSION_FILE" 2>/dev/null; exit 0' TERM; while :; do sleep 0.2; done ;;
-  order)    trap 'if [ -n "$OC_REASON" ] && [ -f "$OC_THREAD" ] && grep -qF -- "$OC_REASON" "$OC_THREAD" 2>/dev/null; then printf "ordered\n" > "$OC_ORDER_FILE"; else printf "unordered\n" > "$OC_ORDER_FILE"; fi; exit 0' TERM
-            while :; do sleep 0.2; done ;;
+  stubborn) BOUNDED_SPIN_IGNORE_TERM=1 ;;       # 被测对象：忽略 TERM（TERM→KILL 升级那一档）
+  touch)    BOUNDED_SPIN_TERM='touch "$OC_SESSION_FILE" 2>/dev/null' ;;
+  order)    BOUNDED_SPIN_TERM='if [ -n "$OC_REASON" ] && [ -f "$OC_THREAD" ] && grep -qF -- "$OC_REASON" "$OC_THREAD" 2>/dev/null; then printf "ordered\n" > "$OC_ORDER_FILE"; else printf "unordered\n" > "$OC_ORDER_FILE"; fi' ;;
   hold)     shift; "$OC_TEAM_CLI" "$@"; exit $? ;;   # 让 CLI 成为**本进程的子进程**（「调用者的祖先」那一条）
-  *)        while :; do sleep 0.2; done ;;
 esac
+export BOUNDED_SPIN_IGNORE_TERM BOUNDED_SPIN_TERM
+bounded_spin 0.2 1800 - - "${OC_STUB_PARENT:-$PPID}"
 STUB
+} > "$BIN/pi"
 chmod +x "$BIN/pi"
 
 REAL_PATH="$PATH"                  # 真 PATH 先留一份（live 组要绕开桩）
@@ -289,7 +294,7 @@ oc_spawn_seat() { # <mode> [额外 argv…] → pid（真进程；身份写在�
       TMPDIR="$OC_CHILD_TMPDIR" \
       OC_REASON="${OC_REASON:-}" OC_THREAD="$TH" OC_ORDER_FILE="$TMP/order" \
       OC_SESSION_FILE="$(oc_session_file_for "$SID")" OC_TEAM_CLI="$SKILL_DIR/scripts/team" \
-      "$BIN/pi" "$mode" "$@" ) >/dev/null 2>&1 &
+      OC_STUB_PARENT="$$" "$BIN/pi" "$mode" "$@" ) >/dev/null 2>&1 &
   printf '%s\n' "$!"
 }
 oc_spawn_identity_seat() { # <environ 文本> → pid（身份可以被故意写错，用来造「不是记录里那个工作树」）

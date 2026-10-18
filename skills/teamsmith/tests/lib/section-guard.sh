@@ -392,7 +392,19 @@ section_guard_begin() { # <id>：收上一段 → 开这一段（含夹具注入
     printf '  \033[35m[fixture]\033[0m 注入永不返回的段落（%s，预算 %ss）\n' "$id" "$SG_BUDGET"
     local stuck_log="$SG_RUN_TMP/fixture-stuck-$SG_SEC_NO.log"
     printf 'fixture 注入：段落 #%s（%s）永不返回（预算 %ss）\n' "$SG_SEC_NO" "$id" "$SG_BUDGET" > "$stuck_log" 2>/dev/null || true
-    bash -c 'log="$1"; trap "" TERM; while :; do date +%s >> "$log"; sleep 0.2; done' _ "$stuck_log" &
+    # P313：这个「永不返回」是**夹具造的现场**，不是永不退出的进程。旧形状
+    #   `bash -c 'trap "" TERM; while :; do date +%s >> $log; sleep 0.2; done'`
+    # 在被打断的运行里会永久泄漏（现场：78 个孤儿合计持有 11.98 GB 已删除文件）。现在由
+    # lib/bounded-spin.sh 一处实现三条边界：父进程没了就退、到点（段落预算 + 120s 宽限）就退
+    # 并留一行、写目标被删就退。cap 永远大于段落预算 → 合法运行不会被它截断。
+    # 它**响应** TERM（P313 的硬要求：看门/轮询进程不再 `trap "" TERM`）。因此段落 0f 的现场
+    # 不会记 `escalation:` —— 段 0f 反过来断言「没有升级」，那条断言就是「有人把忽略 TERM 放回来」
+    # 的守卫；「真要升级时现场照写」由自检的 F1 夹具（P110）负责。
+    local _sg_spin_lib; _sg_spin_lib="$(_sg_spin_lib_path)"
+    local _sg_spin_cap=$(( SG_BUDGET + 120 ))
+    [ -f "$_sg_spin_lib" ] || printf '  \033[31m✗\033[0m 夹具：缺 %s（心跳循环起不来）\n' "$_sg_spin_lib"
+    bash -c 'lib="$1"; shift; . "$lib"; bounded_spin "$@"' _ "$_sg_spin_lib" \
+      0.2 "$_sg_spin_cap" "$(( _sg_spin_cap * 64 + 65536 ))" "$stuck_log" "$BASHPID" &
     local child=$!
     command -v tmp_root_track_pid >/dev/null 2>&1 && tmp_root_track_pid "$child" "section-guard-stuck" || true
     wait "$child" 2>/dev/null || true
@@ -806,6 +818,102 @@ _sg_selftest_f1() {
   return 0
 }
 
+# ---------------------------------------------------------------- P313：心跳循环的三条边界
+# 用**真**父进程造现场（不真留两天）：
+#   ① 父进程被 KILL -9（来不及通知任何人）→ 心跳必须在 ~3s 内自己退；
+#   ② 对心跳直接发 TERM → 必须有界退出；
+#   ③ 硬上限：cap=2s、父还活着、没人发 TERM → 到点自己退，日志尾部留一行说明；
+#   ④ 写目标被删（夹具的临时根被清理）→ 不再往已删除的文件里写，立即退。
+# 四条都是这个函数自己收尾（变异副本让某条失效时，剩下的进程由这里 KILL —— 夹具自己也不许泄漏）。
+_sg_selftest_orphan() {
+  local lib dir log pid n i gone parent hp cp
+  lib="$(_sg_spin_lib_path)"
+  dir="$ST_ROOT/spin"; mkdir -p "$dir"
+  if [ ! -f "$lib" ]; then st_bad "P313：心跳循环的实现不在（$lib）"; return 0; fi
+
+  # ① 父进程没了就退：中间的 bash 起心跳（父 = 它自己）后自旋；我们对它 KILL -9
+  log="$dir/parent.log"; : > "$log"
+  bash -c '. "$1"; shift; bounded_spin 0.2 30 - "$1" "$$" & echo "$!" > "$2"; sleep 120' _ \
+    "$lib" "$log" "$dir/parent.pid" 2>"$dir/parent.err" &
+  parent=$!
+  for n in $(seq 1 50); do [ -s "$dir/parent.pid" ] && break; sleep 0.1; done
+  pid="$(cat "$dir/parent.pid" 2>/dev/null || true)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    st_ok "P313①：心跳先起来了（pid=$pid）"
+    [ "$(grep -c '^[0-9]\{10\}$' "$log" 2>/dev/null || true)" -ge 1 ] \
+      && st_ok "P313①：心跳真的在写（日志里有时间戳）" \
+      || st_bad "P313①：心跳没有写日志（夹具失效）"
+    kill -KILL "$parent" 2>/dev/null || true; wait "$parent" 2>/dev/null || true
+    gone=0
+    for i in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+    if [ "$gone" = "1" ]; then
+      st_ok "P313①：父进程被 KILL 后心跳自己退了（≤3s）"
+    else
+      st_bad "P313①：心跳活过了父进程（去掉父进程检查就是这个形状）"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    grep -qF '父进程' "$log" 2>/dev/null && st_ok "P313①：日志里有一行说明原因（父进程已不在）" \
+                                          || st_bad "P313①：日志里没有说明为什么退"
+  else
+    st_bad "P313①：心跳没起来（夹具失效）"
+    kill -KILL "$parent" 2>/dev/null || true; wait "$parent" 2>/dev/null || true
+  fi
+
+  # ② TERM 就让路：父（本 shell）还活着，直接给心跳发 TERM
+  log="$dir/term.log"; : > "$log"
+  bash -c '. "$1"; shift; bounded_spin 0.2 30 - "$1" "$2"' _ "$lib" "$log" "$$" 2>"$dir/term.err" &
+  hp=$!
+  sleep 0.5
+  if kill -0 "$hp" 2>/dev/null; then
+    kill -TERM "$hp" 2>/dev/null || true
+    gone=0
+    for i in $(seq 1 30); do kill -0 "$hp" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+    if [ "$gone" = "1" ]; then
+      st_ok "P313②：TERM 让心跳退出（≤3s）"
+    else
+      st_bad "P313②：心跳扛住了 TERM（trap \"\" TERM 就是这个形状）"
+      kill -KILL "$hp" 2>/dev/null || true
+    fi
+    grep -qF '收到 TERM' "$log" 2>/dev/null && st_ok "P313②：日志里有一行点名收到 TERM" \
+                                            || st_bad "P313②：日志里没有点名 TERM"
+  else
+    st_bad "P313②：心跳没起来（夹具失效）"
+  fi
+  wait "$hp" 2>/dev/null || true
+
+  # ③ 硬上限：2s 到点自己退（父一直活着、没人发信号）
+  log="$dir/cap.log"; : > "$log"
+  bash -c '. "$1"; shift; bounded_spin 0.2 2 - "$1" "$2"' _ "$lib" "$log" "$$" 2>"$dir/cap.err" &
+  cp=$!
+  gone=0
+  for i in $(seq 1 80); do kill -0 "$cp" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+  if [ "$gone" = "1" ]; then
+    st_ok "P313③：到点（2s 上限）自己退"
+  else
+    st_bad "P313③：到了上限还在跑（硬上限被拿走就是这个形状）"
+    kill -KILL "$cp" 2>/dev/null || true
+  fi
+  grep -qF '到点（最大运行 2s）' "$log" 2>/dev/null && st_ok "P313③：日志里有一行点名上限" \
+                                                      || st_bad "P313③：日志里没有提到点退出"
+  wait "$cp" 2>/dev/null || true
+
+  # ④ 写目标被删：夹具的临时根被清理后不许再往已删除的文件里写
+  log="$dir/gone.log"; : > "$log"
+  bash -c '. "$1"; shift; bounded_spin 0.2 30 - "$1" "$2"' _ "$lib" "$log" "$$" 2>"$dir/gone.err" &
+  cp=$!
+  sleep 0.4; rm -f -- "$log"
+  gone=0
+  for i in $(seq 1 30); do kill -0 "$cp" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+  if [ "$gone" = "1" ]; then
+    st_ok "P313④：写目标被删后心跳自己退（不再往已删除的文件里写）"
+  else
+    st_bad "P313④：写目标已删，心跳还在写（11.98 GB 那个形状）"
+    kill -KILL "$cp" 2>/dev/null || true
+  fi
+  wait "$cp" 2>/dev/null || true
+  return 0
+}
+
 # 红侧翻转：把实现变异回旧形状（f2 = 整数守卫；f1 = 「子孙忽略 TERM」措辞）。
 # 这是「破坏实现 → 守卫测试必须红」的前半：变异后的副本由 _sg_selftest_flips 跑。
 _sg_skill_dir() { # 本库所属的 skill 树（变异副本靠它拿到真正的解析器）
@@ -813,7 +921,13 @@ _sg_skill_dir() { # 本库所属的 skill 树（变异副本靠它拿到真正�
   ( cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd )
 }
 
-_sg_selftest_mutate() { # <src> <dst> <f2|f1> → 0 = 变异落地
+# P313：心跳循环的唯一实现（红侧变异副本靠 SG_SPIN_LIB 指到别处；默认是本 skill 树里的那一份）
+_sg_spin_lib_path() {
+  if [ -n "${SG_SPIN_LIB:-}" ]; then printf '%s' "$SG_SPIN_LIB"; return 0; fi
+  printf '%s' "$(_sg_skill_dir)/tests/lib/bounded-spin.sh"
+}
+
+_sg_selftest_mutate() { # <src> <dst> <f2|f1|f3|f4|f5> → 0 = 变异落地
   local src="$1" dst="$2" kind="$3"
   case "$kind" in
     f2) awk '
@@ -828,6 +942,10 @@ _sg_selftest_mutate() { # <src> <dst> <f2|f1> → 0 = 变异落地
       { print }
     ' "$src" > "$dst" ;;
     f1) sed 's/的 grace 用尽（仍有子孙存活）→ 已/的子孙忽略 TERM → 已/g' "$src" > "$dst" ;;
+    # P313：心跳循环的三条边界。变异的是 lib/bounded-spin.sh（一个文件、三条各自可辨的行）。
+    f3) sed 's|^  while _bs_parent_alive "\$parent"; do$|  while :; do   # P313-F3 红侧：父进程检查被拿掉|' "$src" > "$dst" ;;
+    f4) sed "s|^    trap '_bs_on_term' TERM$|    trap '' TERM   # P313-F4 红侧：忽略 TERM|" "$src" > "$dst" ;;
+    f5) sed 's|^    if \[ "\$(( SECONDS - t0 ))" -ge "\$cap_s" \]; then _bs_exit "到点（最大运行 \${cap_s}s）"; fi$|    : # P313-F5 红侧：硬上限被拿掉|' "$src" > "$dst" ;;
     *) return 1 ;;
   esac
   # 变异必须真的改变文件（拿标记 grep 会被变异代码自身的存在骗过），且副本仍然可解析。
@@ -871,6 +989,32 @@ _sg_selftest_flips() {
   else
     st_bad "F1 红侧：变异没落到归因措辞（夹具失效）"
   fi
+  # --- P313①/②/③：心跳循环的父进程检查 / TERM / 硬上限 ---
+  local spin_src mutant
+  spin_src="$(_sg_spin_lib_path)"
+  if [ -f "$spin_src" ]; then
+    local -a _p313_kinds=(f3 f4 f5)
+    local -a _p313_want=("P313①：心跳活过了父进程" "P313②：心跳扛住了 TERM" "P313③：到了上限还在跑")
+    local _k _want _j
+    for _j in 0 1 2; do
+      _k="${_p313_kinds[$_j]}"; _want="${_p313_want[$_j]}"
+      mkdir -p "$dir/$_k-tmp"
+      mutant="$dir/$_k-bounded-spin.sh"; out="$dir/$_k-mutated.log"
+      if _sg_selftest_mutate "$spin_src" "$mutant" "$_k"; then
+        TEAM_SG_SKILL_DIR="$(_sg_skill_dir)" SG_SPIN_LIB="$mutant" TMPDIR="$dir/$_k-tmp" \
+          bash "$self" --self-test orphan >"$out" 2>&1; rc=$?
+        [ "$rc" -ne 0 ] && st_ok "P313 $_k 红侧：变异后心跳边界自检红（rc=$rc）" \
+                        || st_bad "P313 $_k 红侧：变异后心跳边界自检仍绿（守卫没被证到）"
+        grep -qF "$_want" "$out" \
+          && st_ok "P313 $_k 红侧：红的是那条边界断言本身（$_want）" \
+          || st_bad "P313 $_k 红侧：红的原因不是「$_want」"
+      else
+        st_bad "P313 $_k 红侧：变异没落到 bounded-spin.sh（夹具失效）"
+      fi
+    done
+  else
+    st_bad "P313 红侧：找不到心跳循环实现（$spin_src）"
+  fi
   rm -rf -- "$dir" 2>/dev/null || true
   return 0
 }
@@ -880,7 +1024,7 @@ _sg_selftest() {
   local only=()
   for arg in "$@"; do
     case "$arg" in
-      --help|-h) printf '用法：bash %s --self-test [形状…]\n        形状：clean stuck stubborn spin deadspin decimal f1（不带形状 = 全部 + 红侧翻转）\n' "${BASH_SOURCE[0]}"; return 0 ;;
+      --help|-h) printf '用法：bash %s --self-test [形状…]\n        形状：clean stuck stubborn spin deadspin decimal orphan f1（不带形状 = 全部 + 红侧翻转）\n' "${BASH_SOURCE[0]}"; return 0 ;;
       -*) printf 'section-guard: 自检不认识的参数 %s\n' "$arg" >&2; return 2 ;;
       *) only+=("$arg"); want_all=0 ;;
     esac
@@ -898,7 +1042,7 @@ _sg_selftest() {
   SG_FIXTURE=1
   TEAM_SMOKE_FIXTURE=1
   if [ "$want_all" = "1" ]; then
-    shapes="clean stuck stubborn spin deadspin decimal"
+    shapes="clean stuck stubborn spin deadspin decimal orphan"
   else
     shapes="${only[*]}"
   fi
@@ -910,8 +1054,9 @@ _sg_selftest() {
       spin)     _sg_selftest_case spin      spin      2  1 ;;
       deadspin) _sg_selftest_case deadspin  deadspin  '!0' 1 ;;
       decimal)  _sg_selftest_case decimal   decimal   0  0 ;;
+      orphan)   _sg_selftest_orphan ;;
       f1)       _sg_selftest_f1 ;;
-      *)        st_bad "自检：不认识的形状「$shape」（可用：clean stuck stubborn spin deadspin decimal f1）"; break ;;
+      *)        st_bad "自检：不认识的形状「$shape」（可用：clean stuck stubborn spin deadspin decimal orphan f1）"; break ;;
     esac
   done
   # 现场尾巴的收集顺序 = mtime 降序，不是 find 的目录顺序（容器实测：目录顺序把挂住的夹具日志
