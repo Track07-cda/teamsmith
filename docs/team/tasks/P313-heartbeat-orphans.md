@@ -44,3 +44,28 @@ bash skills/teamsmith/tests/smoke.sh --select <闭包>
 bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
 git diff --check && git status --short
 ```
+
+## 返修轮次 1（2026-10-18，V58 判 FAIL：两条都是任务书明写的判据）
+
+复验记录 `docs/team/reviews/V58.md`。**成立的部分不用重做**（父进程死亡自退 ~0.1s、TERM 自退、两条红侧、清扫器两向读数、不许按名字动手）。
+
+**F1 · 计划行必须点名目标路径**：`[suggest-kill]` 行有 pid/字节/已删文件数/「父进程已不在」，**没有目标路径**；它印的是 argv 前 140 字符，而持有者（`exec sleep 400` + fd 持有已删文件）的 argv 里**一个路径字符都没有**，长路径还会被截。**扫描时路径已在 `fpath[]` 里**，只是没记进 `_HO_PID_*` —— 补**一个字段**并印出来（长路径完整印，不要 140 截断）。
+**红侧**：用一个 argv 里没有路径的持有者（`exec sleep` + fd）→ 计划行必须仍点名目标路径。
+
+**F2 · 同族清单不完整 + 自检的盲区**：
+- 全树可执行 `while :` 实测 **19 处**（你写了 18），漏 **`scripts/shim/tmux:337`**（`_shim_resolve_log` 的目录上溯）；
+- 你引的 `section-guard.sh --loop-check`「87/87 全过」在受检 tip 上 **rc=1**：`tests/tmp-hygiene.sh` 有 4 个 while+sleep 而清单只登记 2 个，P313 自检新增的两处未登记；
+- **根因是门禁盲区**：段 `0e` 把 `section-guard.sh`/`smoke.sh`/`lib/*` 拷进 scratch 再跑 `--loop-check`，而 `tmp-hygiene.sh` **不在那份副本里** → 这条红**只在真树上出现**。
+**改法**：① 补登记缺的循环（含 `shim/tmux:337` 与 `tmp-hygiene.sh` 的 4 个）；② **修盲区**——`0e` 的 `--loop-check` 必须在**能覆盖全部被检查文件的树**上跑（要么在真树上跑，要么把被检查面完整拷入），并加一条红侧：往 `tmp-hygiene.sh` 里加一个未登记的 `while :`，`--select 0e` 必须**红并点名**。
+
+## 验收
+
+```bash
+bash skills/teamsmith/tests/section-guard.sh --loop-check
+bash skills/teamsmith/tests/smoke.sh --select 0e
+bash skills/teamsmith/tests/tmp-hygiene.sh --self-test
+"$HOME/.bun/bin/bun" "$HOME/.bun/bin/openspec" validate --all --strict
+bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+git diff --check && git status --short
+```
+改完 notify pm；由 **V58 第二轮**（同一复验者、换会话）定点复检这两条。
