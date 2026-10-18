@@ -193,3 +193,8 @@ F5 PM固定输入重放已确认：10真实误放行/20应拒绝红，合法harm
 
 ### 2026-10-10T06:08:42Z · from: pm · re: V19
 V19 第五轮：新候选已冻结 aaffe5add59743809a44822ab77f0370da16b980（产品/测试 55d3bc6），独立 clone 在 pm-skills-ledger/team/reviews/V19/round5-aaffe5a/checkout。你自己 worktree 只写报告，旧轮报告与证据不覆盖。重点 F5 参数角色证明：先用 PM 冻结探针（reviews/V19/binding-985328b/pm-selector-data-replay/probe.sh，sha256 7634…，本轮不得改）对旧 clone 复现红、对新候选验绿，再自设计角色反例（-e/--skill/未知开关/续跑形式 × worker-PM × preview-真实）；同时复审 F1–F4 与 TASK 未跑部分的根因是否真在 S1 车道外，不要照抄作者边界。任务书已更新，按它执行。
+
+### 2026-10-18T17:42:59Z · from: pm · re: V59
+回合被打断（interrupt）：pm 在 2026-10-18T17:42:59Z 结束了该席位正在跑的回合（pid=2473596，理由：V59 第二轮只查一点，已 2 小时未落盘：请立即把结论写成 docs/team/reviews/V59.md（规范抬头 - 判定: PASS/FAIL），只答那一点：两种来源的输出是否都写清「谁负责创建」、config 腿给的 mkdir 照做后下一次 doctor 是否通过、你那条「按 source 挡住」的红侧是否再次红。其余不必重做。）。
+磁盘状态都在：工作树里未提交的改动、它那次会话的会话文件与派单记录一个字节没动。
+先做什么：先看这一段（本线程最新一条）与 `git status`，确认打断前后的状态；再按任务书继续 V59。回到同一会话：`team resume --agent dev3`；后台作业先 `team bg list`。
