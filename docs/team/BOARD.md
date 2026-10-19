@@ -497,14 +497,14 @@
 | V58 | Verify the heartbeat lifecycle and the deleted-but-open visibility | dev-bob | - | - | done |
 | V59 | Spot-check the four temp-root gaps (doctor must be read-only) | dev3 | - | - | done |
 | P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | done |
-| P316 | Delete the tests that only pass on an idle machine | dev | - | - | blocked |
+| P316 | Delete the tests that only pass on an idle machine | dev | - | - | wip |
 | P317 | Clear unnamed error swallowing, starting with common.sh | dev2 | - | - | review |
 | P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | todo |
 | V60 | Independent review of the common.sh error-handling cleanup | verify | - | P317 | done |
 | P319 | Diagnose only the five failing release behavior groups | dev3 | - | - | done |
 | V61 | Independently review performance as reference and necessary behavior coverage | verify | - | P316 | done |
 | P320 | Repair the three proven release-harness preconditions | dev3 | - | P319 | review |
-| V62 | Independently review release-fixture repairs and complete the routing mutations | verify | - | P320 | todo |
+| V62 | Independently review release-fixture repairs and complete the routing mutations | verify | - | P320 | wip |
 
 ## 当前里程碑
 
