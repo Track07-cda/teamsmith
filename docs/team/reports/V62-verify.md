@@ -1,12 +1,24 @@
 # V62 · 复核最小发布修复，补齐未执行的路由变异（verify）
 
-agent: verify   status: delivered   time: 2026-10-19T14:40Z
+agent: verify   status: delivered   time: 2026-10-19T14:36Z（含 §7 第二轮定点补验）
 branch: `task/V62-release-fixture-review`   PR/MR: -（local 模式）
-受检分支：`task/P320-release-fixture-repair`（源码冻结 `b4317dfd5354`，报告提交 `c5c85855`，作者 dev3）
+受检分支：`task/P320-release-fixture-repair`
+- 第一轮：源码冻结 `b4317dfd5354`，报告提交 `c5c85855`
+- 第二轮：最终 tip `cf8b507f5e8195f0fe5a4880729ea60781d103cd`（源码提交 `99b99471`，树 `5c4a32f7`），作者 dev3
 
 ## 结论
 
-**PARTIAL：三处修复成立，补齐的那条验收跑完了但没有全绿——唯一的红是既有夹具缺陷，不是本次改动，也不是产品。**
+**第二轮（最终）PASS —— P320 的唯一增量成立，六条受影响的变异臂全部按原具名目标变红并逐字节还原，`init`+`heal` 的基线与还原都是 ✓139 ✗0。第一轮那条外层红的原因已消除，它的具名断言现在命中。**
+
+但按任务书**没有**重跑整套 `--flip`，所以本报告**不提供**「一次原样 `--flip` 全绿」的读数：外层那一条是合记出来的
+（200 条来自第一轮实测，最后 1 条来自本轮实测），不是一次独立测得的整套绿。第一轮的 PARTIAL 记录原样保留在下面。
+
+第二轮做了什么：只审 `c5c85855..cf8b507f` 这一个增量（复制清单 `extensions`→`extension`，5 行含注释），
+然后按源码界定的实际消费者复盘 6 条臂（init 三条 + heal 三条）与两组基线和还原。实测该增量改变的行为**恰好**是
+三条 init 断言（两条臂上是「缺扩展造成的假红」消失，一条臂上是原本要测的拒绝终于变红），三条 heal 臂的断言集合
+逐行不变 —— 也就是说「只影响会走到安装扩展的那两条分组」这句话是量出来的，不是推断的。
+
+### 第一轮（历史结论：PARTIAL，四项按下述顺序读）
 
 1. **代码差异成立（PASS）。** 改动只落在三个测试文件（`+49/−37`），是原有断言的同位替换与两处调用顺序调整：
    没有新增/删除断言、没有改产品/规格/发布工具/预算表；三处的前提也都真实——会话 helper 判据一字未改而调用点
@@ -18,6 +30,7 @@ branch: `task/V62-release-fixture-review`   PR/MR: -（local 模式）
    31 条变异臂全部「靶向命中 → 按名变红 → 源码逐字节还原」（31/31 的 `source_before == source_restored`）、
    还原臂 `pass=3141 fail=0` 且 `flip-restored-all-green` 绿。
 4. **但外层仍是 `RESULT pass=200 fail=1 selected=flip`，唯一红是 `flip-init-legacy-proceeds-bootstrap`。**
+   （这一条已在第二轮关闭：见 §7。）
    归因定量完成：**既有夹具缺陷**，与 P320 无关——同一变异在基线树 `9c58e03e` 与受检树 `b4317dfd` 上给出
    **逐字节相同的 20 行 init-legacy 读数**（`RESULT pass=29 fail=39 selected=init` 两边一致）；根因是翻转变异
    复制变异树时列了 `extensions`（复数，仓里从来没有这个目录），而产品装的是 `extension/`（单数），于是该臂的
@@ -25,9 +38,9 @@ branch: `task/V62-release-fixture-review`   PR/MR: -（local 模式）
    永远不会变红。把 `extension` 一并复制后，该臂期望的三条 `-refused` 全部按预期变红（实测，见 §4.4），
    即这条红是臂的**复制清单**问题，一行级别，但它属于 tests 面，本任务书禁止我改。
 
-所以：**「三处修复是否保持原行为断言与真实前提」= 成立；「补齐的路由变异是否有牙齿」= 31/31 有牙齿且可还原；
-「发布门禁是否全绿」= 否，卡在一条与本改动无关的既有夹具缺陷上。** 发布检查表要不要因它放行、以及那条一行修复
-派给谁，是 PM 的裁定。
+第一轮的合记判断（原文保留）：「三处修复是否保持原行为断言与真实前提」= 成立；「补齐的路由变异是否有牙齿」
+= 31/31 有牙齿且可还原；「发布门禁是否全绿」= 否，卡在那条与本改动无关的既有夹具缺陷上。第二轮把这个卡点按
+任务书授权的一行增量关掉了（§7），仍未测的是「一次原样 `--flip` 全绿」这件事本身。
 
 ## 1 · 受检对象与范围
 
@@ -321,3 +334,116 @@ i 本地 teamsmith 0.3.0，npm 上已有 9.9.9（工具从不自己安装）：n
   （`$HOME/.cache/p320-clone`）、P319/P320 的任何既有证据目录或主检出。
 - 原始日志：`$HOME/.cache/v62/logs/smoke-select.log`、`$HOME/.cache/v62/logs/flip.log`；翻转跑的外层现场（含每条臂
   自己的内层日志）由它自己导出到 `$HOME/.cache/v62/tmp-flip/evidence-outer/…`。
+
+## 7 · 第二轮：P320 定点增量（复制清单 `extensions` → `extension`）
+
+### 7.1 增量身份与范围
+
+```
+受检 tip   cf8b507f5e8195f0fe5a4880729ea60781d103cd
+树         5c4a32f702ae4b41336dfeb5865f4dad9c0f6845
+源码提交   99b99471（test(gate)）
+$ git diff --stat c5c85855 cf8b507f
+ docs/team/reports/P320-dev3.md               | 53 ++++++++++++++++++++++++++--
+ skills/teamsmith/tests/task-model-routing.sh |  5 ++-
+$ git diff c5c85855 cf8b507f -- skills/teamsmith/tests/task-model-routing.sh
+-      for source_dir in scripts references templates extensions; do
++      # P320/V62：拷贝源目录叫 extension（单数），产品 init 从 $TEAM_SKILL_DIR/extension/team.ts 装扩展；
++      # 之前写成 extensions，既有 `[ ! -d ]` 判据就把它们跳过，变异体缺扩展、bootstrap 先报“找不到可安装的扩展源”，
++      # 抢在目标拒绝之前失败。只纠正目录名，不加兜底。
++      for source_dir in scripts references templates extension; do
+$ git diff --name-status b4317dfd cf8b507f        # 相对第一轮冻结源的全树差量
+A	docs/team/reports/P320-dev3.md
+M	skills/teamsmith/tests/task-model-routing.sh
+$ git diff --name-only b4317dfd cf8b507f -- skills/teamsmith/scripts openspec docs/team/tools | wc -l
+0
+```
+
+核对结论：增量只有那一行清单元组 + 三行注释，`[ ! -d "$SKILL/$source_dir" ] || cp -a …` 原样保留（没有顺手改成
+`mkdir`/兜底/存在性守卫），没有新增断言、筛选开关、变异臂或夹具；产品、规格、发布工具零命中。作者报告的 §7 与
+这一个 hunk 一致（它如实写明自己**没有**跑任何 `--flip` 臂）。
+
+### 7.2 运行方式
+
+与第一轮同一固定镜像（`podman image inspect` 实测 `1d723525ee58a8b177862746bc92cde2307a7d5f8a76045f5641703d8ac1a50b`）、
+同一套方法，但用**新的独立 clone**（`$HOME/.cache/v62/clone-r2`，`HEAD=cf8b507f`，`git status --porcelain
+--untracked-files=all` 0 行；第一轮那份 clone 留在 `b4317dfd` 不动），`TMPDIR=/vr2` 挂宿主磁盘
+（`$HOME/.cache/v62/tmp-r2`）。复演脚本放在仓外（`$HOME/.cache/v62/run-r2.sh`），逐臂照抄 `--flip` 的搭法：
+按**新清单**复制 `scripts references templates extension` → `python3 tests/lib/model-routing-flips.py <scratch> <臂>` →
+`TEAM_ROUTING_TREE=<scratch> bash tests/task-model-routing.sh --select <该臂分组>` → 把真树 `scripts/` 拷回并比哈希。
+没有用段预算旋钮（本套件不吃那两个键），没有改预算表、没有等待低负载。
+
+### 7.3 读数（一次运行，64 s）
+
+```
+HEAD=cf8b507f5e8195f0fe5a4880729ea60781d103cd  tree=5c4a32f702ae4b41336dfeb5865f4dad9c0f6845
+status_before=0  version=0.3.0  copy_list=[scripts references templates extension]
+baseline groups=init,heal rc=0  RESULT pass=139 fail=0 selected=init,heal   FAIL_lines=0
+restored groups=init,heal rc=0  RESULT pass=139 fail=0 selected=init,heal   FAIL_lines=0
+HEAD_after=cf8b507f5e8195f0fe5a4880729ea60781d103cd  status_after=0
+```
+
+| 臂 | 分组 | 变异器 | 形状 | 变异跑 | 声明的具名断言 | 源码还原 |
+|---|---|---|---|---|---|---|
+| `init-legacy-proceeds` | init | rc=0 | ok | rc=1 · `pass=28 fail=40` | 3/3 命中（`init-legacy-{plain,force,bootstrap}-refused`） | 逐字节相同 |
+| `template-retired-key` | init | rc=0 | ok | rc=1 · `pass=65 fail=3` | 1/1 命中（`init-fresh-no-retired-key`） | 逐字节相同 |
+| `legacy-route-placeholder` | init | rc=0 | ok | rc=1 · `pass=55 fail=13` | 4/4 命中（`init-legacy-{plain,bootstrap,config-set}-derived`、`init-paste-derived-exact`） | 逐字节相同 |
+| `migration-row-removed` | heal | rc=0 | ok | rc=1 · `pass=38 fail=35` | 1/1 命中（`heal-print-rc`） | 逐字节相同 |
+| `no-backup` | heal | rc=0 | ok | rc=1 · `pass=68 fail=5` | 1/1 命中（`heal-backup-exists`） | 逐字节相同 |
+| `no-shape-number` | heal | rc=0 | ok | rc=1 · `pass=71 fail=2` | 2/2 命中（`heal-init-shape-number`、`heal-bootstrap-shape-number`） | 逐字节相同 |
+
+「形状」= 变异树 `scripts/lib/*.sh` 逐个 `bash -n` + `node --check scripts/monitor.mjs` 全通过；「逐字节相同」=
+还原后 `scripts/` 的 sha256 汇总与变异前相同（六条臂逐条打印 `source_before == source_restored`）。
+
+第一轮那条外层红之所以红，是因为它的第三条期望 `^FAIL init-legacy-bootstrap-refused$` 在变异跑里不存在；本轮
+这条断言**命中了**（同一行的读数从 `PASS init-legacy-bootstrap-refused` 变成 `FAIL`）。
+
+### 7.4 这个增量究竟改变了什么（量出来的）
+
+同一臂、同一分组，第一轮（缺 `extension/`）与本轮（有 `extension/`）的内层断言集合逐行对比：
+
+| 臂 | 第一轮 | 本轮 | 变动的断言行 |
+|---|---|---|---|
+| `init-legacy-proceeds` | `pass=29 fail=39` | `pass=28 fail=40` | `init-bootstrap-fresh-rc` FAIL→PASS；`init-legacy-bootstrap-refused` PASS→FAIL（**就是臂要测的那条**）；`init-bootstrap-missing-refused` PASS→FAIL |
+| `template-retired-key` | `pass=64 fail=4` | `pass=65 fail=3` | 只有 `init-bootstrap-fresh-rc` FAIL→PASS |
+| `legacy-route-placeholder` | `pass=54 fail=14` | `pass=55 fail=13` | 只有 `init-bootstrap-fresh-rc` FAIL→PASS |
+| `migration-row-removed` | `pass=38 fail=35` | 同 | **断言集合逐行相同** |
+| `no-backup` | `pass=68 fail=5` | 同 | **断言集合逐行相同** |
+| `no-shape-number` | `pass=71 fail=2` | 同 | **断言集合逐行相同** |
+
+读法：
+
+- 三条 init 臂都少了同一条假红 `init-bootstrap-fresh-rc` —— 它红的原因只是变异树缺扩展源（安装步骤失败），
+  与臂要测的东西无关；补上 `extension/` 后它回到绿。这正是「补这两条臂是必要的」的证据：它们此前的红里有
+  一条是夹具造成的。
+- `init-legacy-proceeds` 的 bootstrap 腿现在真的走到「闸门被拆掉 → 拒绝消失」那一步：臂要测的
+  `init-legacy-bootstrap-refused` 变红；连带 `init-bootstrap-missing-refused` 也变红（该变异把策略解析器短路成
+  「总能给出合法策略」，于是「缺模型输入必须拒绝」这条也按预期失效）——这是变异本身的作用面，不是新缺陷。
+- 三条 heal 臂一条断言都没变 —— 它们虽然也会走 `bootstrap`（`task-model-routing.sh:1182` 不带 `--no-skills`），
+  但 heal 组的断言不依赖那次安装的结果。本轮仍按 PM 的授权把它们跑了一遍，用读数而不是推断确认「不受影响」。
+
+### 7.5 为什么只补这六条（消费者界定）
+
+- 产品的扩展安装源是 `$TEAM_SKILL_DIR/extension/team.ts`（`cmd-init.sh:117`，失败文案在 `:163`，另一处在 `:338`），
+  由 `team_init_install_skills` 调用；它的调用方只有 `bootstrap`（`cmd-bootstrap.sh:307`，**配置已存在时也会装**，
+  我用变异树实测过）与 init 路径（`cmd-project.sh:297`，而测试里所有 `init` 都带 `--no-skills`）。
+- 测试里不带 `--no-skills` 的 `bootstrap` 只出现在两处分组：init 组（`task-model-routing.sh:776/828/833/877/882`）
+  与 heal 组（`:1182`）。其余分组（dispatch / resume / boundary / pm / limits / sid-readers / updatecheck /
+  adopt / transaction / preview / config / policy / upgrade / machine）都不调用安装路径。
+- 除复制清单那一行外，`task-model-routing.sh` 里没有任何断言提到 `extension`（`grep -n extension` 只有清单那处），
+  所以拼进启动 argv 的 `-e …/extension/team-bg.ts` 一类字符串不构成断言面的消费者。
+
+因此受影响的臂集合 = init 组的 3 条 + heal 组的 3 条，全部在本轮实测覆盖；其余 25 条臂沿用第一轮的完整运行，
+没有重跑（任务书：不默认重跑 31 臂/CORE/smoke）。
+
+### 7.6 合记与残留
+
+- **实测**：第一轮 31/31 臂逐条变红并逐字节还原、CORE 基线 3141/0 与还原 3141/0、smoke 选段 495/0；本轮 6 条受影响臂
+  逐条命中其具名目标并逐字节还原、`init,heal` 基线与还原 139/0。
+- **合记**：第一轮外层 `pass=200 fail=1` 里那 1 条的唯一缺失断言，本轮实测出现（7.3）。按定义这会让外层变成 201/0。
+- **残留（如实）**：**没有**「一次原样 `--flip` 全绿」的读数 —— 任务书明确不要求、我也没重跑整套 `--flip`。上一行是
+  由两次实测合记推出的，不是一次测得的整套结果；引用本报告时不要把它写成「整套 flip 已绿」。
+- 本轮第一次尝试是我的运行器缺陷（每腿的 `TMPDIR` 目录没先建，套件按设计 `exit 3` 且零输出），与受检树无关；已修正
+  并重跑，那次日志单独留在 `$HOME/.cache/v62/logs/r2-first-attempt.log`（仓外），不与本轮读数混记。
+- 原始日志：`$HOME/.cache/v62/logs/r2.log`、每臂内层日志 `$HOME/.cache/v62/tmp-r2/arm-<臂>.log`、
+  基线与还原 `$HOME/.cache/v62/tmp-r2/{baseline,restored}.log`。
