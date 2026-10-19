@@ -44,7 +44,7 @@ the set of accepted invocations.
 #### Scenario: A command outside the table is refused by name, and nothing runs
 
 - **GIVEN** an initialised project, a recording stand-in CLI and a Pi session in it
-- **WHEN** the user submits `/team dispatch dev P1 docs/team/tasks/P1.md`, and then `/team config set TEAM_AGENTS "x"`
+- **WHEN** the user submits `/team dispatch dev <id> docs/team/tasks/<id>.md`, and then `/team config set TEAM_AGENTS "x"`
 - **THEN** both are refused, each refusal names the refused command (`dispatch`, `config set`) and states that it is
   a PM or seat command to be run in a terminal, and the recorder logged no argv — no child process was started
 
