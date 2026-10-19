@@ -35,3 +35,13 @@ branch: task/V62-release-fixture-review
 不跑全量 smoke/FAST，不跑 routes flips，不重跑通过的原样 103 段。若失败，保存第一次原始错误和确切臂名，区分产品错误、夹具错误、未完成；不擅自修复、不用反复全组重跑取绿。
 
 报告给 PASS / FAIL / PARTIAL、独立运行的实际读数、31 臂是否逐条执行并恢复、源码与范围核对、明确未跑部分；报告提交前账本禁令和 `git diff --check`。完成后冻结交付并通知 PM。
+
+## 目录名修正后的定点补验（同一任务，最终输入）
+
+第一批完整运行已完成并记录 PARTIAL：smoke 495/0、CORE 基线/还原3141/0、31变异均执行还原，但外层 init-legacy bootstrap 子检查1红。不得重跑整批。
+
+最终候选 `cf8b507f5e8195f0fe5a4880729ea60781d103cd`，源码提交 `99b99471`；相对先前 c5c85855，只有 task-model-routing.sh 复制集合的 extensions→extension 与三行注释，以及作者报告。PM 已审此 diff 并确认树干净。先核实新 tip 与实际字节，报告区分原完整批和本轮补验。
+
+你的消费者分析已具名定位 init 与 heal（bootstrap 安装扩展）。只补这六条现有变异：init-legacy-proceeds、template-retired-key、legacy-route-placeholder、migration-row-removed、no-backup、no-shape-number。用原有私有复演方法，不改交付源码、原断言/判据或永久开关；核对各臂具名目标红与源码还原，正常基线/还原覆盖 init、heal 即可，不重跑 CORE。其它25臂和smoke复用第一批原始证据；若发现新的真实消费者先具名说明，不泛化全量。
+
+固定容器、磁盘TMPDIR、独立完整clone等边界不变，长命令走后台。不要把这次补验包装成“一次原样--flip退出0”，最终以完整旧批加明确范围的补验给结论，不新设守卫或验收轮次。

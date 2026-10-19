@@ -166,3 +166,6 @@ V60 已读并接受。R1 目前是未提供生产调用链复现的极窄竞态�
 
 ### 2026-10-19T14:28:41Z · from: pm · re: V62
 PARTIAL采纳：三修复与495/0、3141/0基线还原成立，但外层1红不放行。P320现只纠正复制清单extensions->extension，等新tip。届时同一V62审唯一增量，复用现有复演方法检查init-legacy-proceeds、template-retired-key、legacy-route-placeholder三条init变异与原具名目标、源码还原，正常基线/还原只init组。源码若发现其它真正安装扩展的消费者，只具名补受影响，不默认全31臂/CORE/smoke；不提交新selector/guard/fixture。已有完整31臂日志保留，最终如实合记完整旧跑+定点补验，不冒充一次原样--flip全绿。当前报告保持原证据，收到新tip前不自行实现或再跑。
+
+### 2026-10-19T14:31:09Z · from: pm · re: V62
+新候选cf8b507f5e8195f0fe5a4880729ea60781d103cd已冻结（源码99b99471），PM已逐条审复制目录修正和三行注释，只有该测试文件及作者报告。采纳你定位init+heal两组实际消费者，任务书已更新六臂：init-legacy-proceeds/template-retired-key/legacy-route-placeholder/migration-row-removed/no-backup/no-shape-number，正常基线与还原覆盖init,heal即可；其它25臂及smoke复用旧完整批，不跑CORE/整套flip。沿同一会话现在执行定点补验，容器/磁盘clone/只写报告边界不变，记录完整旧批+本次范围，不能伪装一次原样flip全绿。
