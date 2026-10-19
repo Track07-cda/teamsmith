@@ -506,7 +506,7 @@
 | P320 | Repair the three proven release-harness preconditions | dev3 | - | P319 | review |
 | V62 | Independently review release-fixture repairs and complete the routing mutations | verify | - | P320 | wip |
 | V63 | Recheck the performance-reference repairs without restoring load-sensitive thresholds | dev-bob | - | P316 | done |
-| V64 | Recheck only the latest grace-coverage and progress-baseline repair | dev-bob | - | P316 | wip |
+| V64 | Recheck only the latest grace-coverage and progress-baseline repair | dev-bob | - | P316 | done |
 
 ## 当前里程碑
 
