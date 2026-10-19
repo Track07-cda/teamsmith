@@ -58,6 +58,22 @@ last three take `--force` + one audited line). `team change status <id>` shows t
   that guards a restatement of the code rather than a behaviour, is deleted rather than tuned.
 - The scale is visible: 74.7k lines of tests against 105k of product, and 23.7k `|| true` in the product.
 
+### Complexity discipline: this is a control plane, not a system to manage the control plane
+
+An outside review named the real risk in one line: *"it is building a complex software system to manage
+agents."* Measured the same day: 105k lines of product against 75k of tests, 164 gate sections, 23.7k `|| true`,
+and 20 archived changes of which most are **guards about our own process** rather than product behaviour.
+
+Two rules, both checkable:
+
+- **Net-zero for guards.** A new guard (a check, a gate section, a fixture, a refusal) must **replace or retire an
+  existing one in the same change**, or the brief says in one sentence why the product cannot carry that behaviour
+  itself. "Add a guard" alone is not a complete task.
+- **One task in ten minutes.** A newcomer must be able to install, create a project and land one task by following
+  the shortest path, without reading the incident history. If a change lengthens that path, it needs a ruling.
+
+The rule is subtractive on purpose: the failure mode is not "too few guards", it is a tool that needs its own team.
+
 ### Non-negotiable discipline
 
 - **Only change directories you own** (`docs/team/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
