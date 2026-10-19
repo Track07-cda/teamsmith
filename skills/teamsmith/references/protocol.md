@@ -44,6 +44,10 @@ the implementation of that chain.
   harder; a long-lived worktree lets the agent keep its memory.
 - The main worktree (main) belongs to the PM alone: merges, verification and documentation happen there, so nobody
   fights an agent over the workspace.
+- **A merged branch is deleted at once.** Landing is `merge --squash` + commit + push, then `close`, then
+  `git branch -D <branch>`: the commit on `main` is the deliverable and the branch is only the vehicle. Nothing of
+  value lives only on a branch, and keeping them turns the branch list into an archeology site (134 branches removed
+  in one pass on 2026-10-18, none of them an ancestor of `main` because squash merges leave no ancestry).
 
 ## 4. The wake-up loop: an asynchronous agent must be able to wake the PM by itself
 
