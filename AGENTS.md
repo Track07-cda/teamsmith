@@ -90,7 +90,8 @@ agent implements in its worktree → small commits → runs gates → writes rep
 PM reads the inbox → team review <ID> (independent worktree, runs gates)
       ▼
 pass → the PM runs git itself (`merge --squash` + commit + push; with a PR, merge the PR first then
-  `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>`
+  `fetch && merge --ff-only`) → `team board set <ID> done` → `team close <ID>` → **`git branch -D <branch>`**
+  (a merged branch is deleted at once; the deliverable is the commit on `main`, the branch is only a vehicle)
 fail → team say <agent> "..." with the concrete failure evidence
 ```
 
