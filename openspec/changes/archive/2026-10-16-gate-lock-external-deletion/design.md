@@ -112,7 +112,7 @@ flock -n "$D2/.teamsmith-smoke.lock.machine" true && echo "  第二把「锁」�
 ```bash
 findmnt -no FSTYPE,OPTIONS /tmp     # tmpfs rw,nosuid,nodev,relatime,inode64
 grep -rhn '^[dD] /tmp' /usr/lib/tmpfiles.d/*.conf /etc/tmpfiles.d/*.conf   # （无输出）
-ls -d /run/user/$(id -u)            # drwx------ yikdata yikdata …（可写）
+ls -d /run/user/$(id -u)            # drwx------ <user> <group> …（可写）
 ls -d /tmp/teamsmith-* | wc -l      # 111
 ls -d /tmp/teamsmith-perf.lock*     # /tmp/teamsmith-perf.lock /tmp/teamsmith-perf.lock.holder
 ```
