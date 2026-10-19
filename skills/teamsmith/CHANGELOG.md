@@ -5,7 +5,7 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
-## 未发布（下个版本候选）
+## 0.3.0（2026-10-18）
 
 ### ⚠️ 默认变化：临时根落到磁盘（tmp-root-on-disk）
 
