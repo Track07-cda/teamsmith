@@ -500,6 +500,7 @@
 | P316 | Delete the tests that only pass on an idle machine | dev | - | - | wip |
 | P317 | Clear unnamed error swallowing, starting with common.sh | dev2 | - | - | wip |
 | P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | todo |
+| V60 | Independent review of the common.sh error-handling cleanup | verify | - | P317 | wip |
 
 ## 当前里程碑
 
