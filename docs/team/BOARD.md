@@ -498,6 +498,8 @@
 | V59 | Spot-check the four temp-root gaps (doctor must be read-only) | dev3 | - | - | done |
 | P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | done |
 | P316 | Delete the tests that only pass on an idle machine | dev | - | - | wip |
+| P317 | Clear unnamed error swallowing, starting with common.sh | dev2 | - | - | wip |
+| P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | todo |
 
 ## 当前里程碑
 
