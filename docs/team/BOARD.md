@@ -503,6 +503,7 @@
 | V60 | Independent review of the common.sh error-handling cleanup | verify | - | P317 | done |
 | P319 | Diagnose only the five failing release behavior groups | dev3 | - | - | wip |
 | V61 | Independently review performance as reference and necessary behavior coverage | verify | - | P316 | wip |
+| P320 | Repair the three proven release-harness preconditions | dev3 | - | P319 | todo |
 
 ## 当前里程碑
 
