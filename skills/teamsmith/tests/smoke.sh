@@ -755,26 +755,6 @@ smoke_prereq_absent() {
 }
 
 PASS=0; FAIL=0
-# ── P297 · 42/44 的「生产路径」半段共用同一个夹具前提：12b 的夹具会话（$SESSION + $REPO 名册）──
-# 那半段把 dev 窗口换成**帧回放假 pi**（python 画的静止帧），让生产守卫在真 pane 上走一遍。全量跑时
-# 会话由 §12b-h 的现场（建在 12b-h0c 的身体里）留下；**选段跑时它不在闭包里** —— 映射表给 42 的
-# needs 只有 12b-h0d（纯帧段，不建 tmux），于是 dev 窗口建不出来，`team_input_box_state` 读成
-# UNKNOWN、`team_delivery_verdict` 读成 NOPANE，9 条断言级联成**假红**（P297 实测：同一棵树
-# `--select 42` = ✓150 ✗9，补上会话后同一段 ✓55 ✗0）。
-# 规则：会话不在就自己建（$REPO 是前导夹具，恒定存在）；建不出来就**具名**红一条再照常跑 ——
-# 后面的红在第一行已经说清是夹具前提不成立，不是对产品判定的否定。
-# 注意：这个函数必须住在**前导段**里（选段副本只整段保留前导 + 选中段；写在两段之间会被前一段吃进
-# 去，--select 42 就看不到它）。
-smoke_live_session_ensure() { # <段标签>
-  tmux has-session -t "$SESSION" 2>/dev/null && return 0
-  tmux new-session -d -s "$SESSION" -n pm -x 120 -y 30 -c "$REPO" 2>/dev/null || true
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    ok "$1：夹具会话原本不在（选段运行没带上 §12b-h）→ 本节自建 $SESSION（真 pane 断言照跑）"
-    return 0
-  fi
-  bad "$1：夹具会话 $SESSION 建不出来 —— 真 pane 断言的前提不成立（不是产品判定；查 tmux 环境）"
-  return 1
-}
 section() {
   [ -z "${SMOKE_TMP_CANARY:-}" ] || smoke_tmp_guard "段落 $1 开始时"
   smoke_lock_guard "段落 $1 开始时"
@@ -1053,6 +1033,30 @@ if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
     fi
   fi
 fi
+
+# ── P297 · 42/44 的「生产路径」半段共用同一个夹具前提：12b 的夹具会话（$SESSION + $REPO 名册）──
+# 那半段把 dev 窗口换成**帧回放假 pi**（python 画的静止帧），让生产守卫在真 pane 上走一遍。全量跑时
+# 会话由 §12b-h 的现场（建在 12b-h0c 的身体里）留下；**选段跑时它不在闭包里** —— 映射表给 42 的
+# needs 只有 12b-h0d（纯帧段，不建 tmux），于是 dev 窗口建不出来，`team_input_box_state` 读成
+# UNKNOWN、`team_delivery_verdict` 读成 NOPANE，9 条断言级联成**假红**（P297 实测：同一棵树
+# `--select 42` = ✓150 ✗9，补上会话后同一段 ✓55 ✗0）。
+# 规则：会话不在就自己建（$REPO 是前导夹具，恒定存在）；建不出来就**具名**红一条再照常跑 ——
+# 后面的红在第一行已经说清是夹具前提不成立，不是对产品判定的否定。
+# 位置（P315）：必须住在**前导段**里（选段副本只整段保留前导 + 选中段；写在两段之间会被前一段吃进
+# 去，--select 42 就看不到它），且必须排在**上面这段私有 TMUX_TMPDIR 确立之后** —— 函数体里那次
+# `tmux new-session` 是变更命令，M28 的文件级隔离证据只认「私有 TMUX_TMPDIR 出现在使用之前」；
+# 写在前面时 lint 判它没有隔离证据（P315 归因：`smoke.sh:769 缺 -L/-S + 私有 TMUX_TMPDIR`），
+# 产品面检出探针因此 10 条红。挪到这里两条约束同时满足，调用点（§42/§44）一个字没动。
+smoke_live_session_ensure() { # <段标签>
+  tmux has-session -t "$SESSION" 2>/dev/null && return 0
+  tmux new-session -d -s "$SESSION" -n pm -x 120 -y 30 -c "$REPO" 2>/dev/null || true
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    ok "$1：夹具会话原本不在（选段运行没带上 §12b-h）→ 本节自建 $SESSION（真 pane 断言照跑）"
+    return 0
+  fi
+  bad "$1：夹具会话 $SESSION 建不出来 —— 真 pane 断言的前提不成立（不是产品判定；查 tmux 环境）"
+  return 1
+}
 
 # 环境兜底：PATH 里没有 pi 时把下面的假 pi 放进 PATH（见"假 pi"那段），
 # 这样缺 pi 只是少跑真进程相关的断言，而不是级联 14 条红（V1.1 实测）。

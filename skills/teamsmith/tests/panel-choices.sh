@@ -509,11 +509,13 @@ fi
 
 # ---------------------------------------------------------------- flip-drop-pm（F-A）
 if want flip-drop-pm; then
-  section "flip F-A · 从 known 里去掉独立 PM 模型 → known 断言必须红且点名 pm；恢复 → 绿"
+  section "flip F-A · 从 known 里去掉独立 PM 模型 → known 断言必须红且点名独立 PM；恢复 → 绿"
   ft="$tmp/flip-drop-pm"
   mkdir -p "$ft/skills/teamsmith"
   cp -a "$skill/scripts" "$ft/skills/teamsmith/scripts"
-  cp -a "$skill/templates" "$skill/references" "$ft/skills/teamsmith/"
+  # P315：`team init` 现在要装 `/team` 扩展（源 = <skill>/extension/team.ts），夹具的拷贝集合要跟上；
+  # 少拷一层时 `new_proj` 里的 init 直接退出、走查拿不到结论，红侧就是假红。
+  cp -a "$skill/templates" "$skill/references" "$skill/extension" "$ft/skills/teamsmith/"
   python3 - "$ft/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYPATCH'
 import sys
 p = sys.argv[1]
@@ -535,10 +537,12 @@ PYPATCH
   rc_red=$?
   TEAM_CHOICES_TREE="$tree" bash "$here/panel-choices.sh" known > "$tmp/flip-drop-pm-green.log" 2>&1
   rc_green=$?
-  if [ "$rc_red" -ne 0 ] && grep -a '✗' "$tmp/flip-drop-pm-red.log" | grep -qi 'pm'; then
-    ok "F-A：去掉 PM 的 known 解析后断言红且点名 pm（rc=$rc_red）"
+  # P315：匹配口径收窄到正文里的「独立 PM」——原来是 `grep -qi 'pm'`，而红日志里的临时路径就叫
+  # `teamsmith-panel-choice-pm_skills-…`，于是 `team init` 在夹具里当场失败也能把这条判成 ok（假绿）。
+  if [ "$rc_red" -ne 0 ] && grep -a '✗' "$tmp/flip-drop-pm-red.log" | grep -qF '独立 PM'; then
+    ok "F-A：去掉 PM 的 known 解析后断言红且点名独立 PM（rc=$rc_red）"
   else
-    bad "F-A：去掉 PM 的 known 解析后断言没红/没点名 pm（rc=$rc_red）"
+    bad "F-A：去掉 PM 的 known 解析后断言没红/没点名独立 PM（rc=$rc_red）"
   fi
   [ "$rc_green" -eq 0 ] && ok "F-A：恢复真树后 known 断言绿" || bad "F-A：真树也红了（rc=$rc_green）"
   printf '    --- 红侧尾部 ---\n'
@@ -551,7 +555,8 @@ if want flip-suggest; then
   ft="$tmp/flip-suggest"
   mkdir -p "$ft/skills/teamsmith"
   cp -a "$skill/scripts" "$ft/skills/teamsmith/scripts"
-  cp -a "$skill/templates" "$skill/references" "$ft/skills/teamsmith/"
+  # P315：与 F-A 同理 —— `team init` 要 extension/team.ts 才能装完，少拷一层就是夹具坏掉（走查 rc=3）。
+  cp -a "$skill/templates" "$skill/references" "$skill/extension" "$ft/skills/teamsmith/"
   flip_cfg="$ft/skills/teamsmith/scripts/lib/cmd-config.sh"
   cp -a "$cmd_config" "$flip_cfg"
   python3 - "$flip_cfg" <<'PY'
