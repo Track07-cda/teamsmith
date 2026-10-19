@@ -46,6 +46,18 @@ change writing the same delta file, and a `verify` task whose agent authored an 
 last three take `--force` + one audited line). `team change status <id>` shows the tasks/deltas/blockers and exits
 0 only when every mapped task is finished; an `archive` task cannot be set `done` while a sibling is unfinished.
 
+### Code discipline: no non-stick code (user rule, 2026-10-19)
+
+- **Fixtures live in `tests/`.** Product code does not carry test scaffolding, self-checks or "just in case"
+  branches for its own tests.
+- **Do not swallow an error you cannot name.** `|| true`, `2>/dev/null` and `if fail then :` are allowed only where
+  the failure is *expected and named in a comment*; everywhere else they are deleted — a silent failure is what makes
+  the next debugging session expensive.
+- **A test must be behavioural and falsifiable**: it asserts what the product does, and breaking the product turns it
+  red. Performance numbers are **reference only** (printed, never blocking). A test that needs a quiet machine, or
+  that guards a restatement of the code rather than a behaviour, is deleted rather than tuned.
+- The scale is visible: 74.7k lines of tests against 105k of product, and 23.7k `|| true` in the product.
+
 ### Non-negotiable discipline
 
 - **Only change directories you own** (`docs/team/OWNERSHIP.md`); for cross-directory work write `BLOCKED:` in
