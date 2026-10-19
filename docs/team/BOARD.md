@@ -501,7 +501,7 @@
 | P317 | Clear unnamed error swallowing, starting with common.sh | dev2 | - | - | review |
 | P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | todo |
 | V60 | Independent review of the common.sh error-handling cleanup | verify | - | P317 | done |
-| P319 | Diagnose only the five failing release behavior groups | dev3 | - | - | wip |
+| P319 | Diagnose only the five failing release behavior groups | dev3 | - | - | done |
 | V61 | Independently review performance as reference and necessary behavior coverage | verify | - | P316 | wip |
 | P320 | Repair the three proven release-harness preconditions | dev3 | - | P319 | todo |
 

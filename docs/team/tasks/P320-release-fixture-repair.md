@@ -1,7 +1,7 @@
 # P320 · 修复发布验收的三种失效前提，不改产品行为
 
 agent: dev3
-category: routine
+category: code
 phase: apply
 change: -
 specs: -
