@@ -113,8 +113,10 @@ want() { local s; for s in "${SECTIONS[@]}"; do [ "$s" = "$1" ] && return 0; don
 
 # ── containment: the recording tmux shim (never calls the real tmux) ────────────────────────────────
 # P140 扩展：除了记账，它还替窗口 harness 签证 —— 窗口注册表（new-window/kill-window/list-windows）
-# 让“窗口存在”这件事自洽；TEAM_ROUTES_FAKE_LAUNCH=1 时，respawn-pane 把 harness 命令里的
+# 让“窗口存在”这件事自洽；SMOKE_ROUTES_FAKE_LAUNCH=1 时，respawn-pane 把 harness 命令里的
 # (nonce, marker) 解析出来写下启动/退出证据（假窗口但真证据，不碰真 server）。
+# 载体（TMUX_LOG/WINDOWS/FAKE_LAUNCH）故意用非 TEAM_ 的 SMOKE_ROUTES_* 前缀（P320）：产品的
+# team_tmux 对可能起 server 的动词会剥掉整个 TEAM_* 命名空间（M67/P274），载体落在里面就收不到。
 SHIM="$tmp/shim"
 TMUX_LOG="$tmp/tmux-calls.log"
 WINREG="$tmp/windows.reg"
@@ -124,8 +126,8 @@ cat > "$SHIM/tmux" <<'SHIM'
 # Recording tmux: session queries answer "absent", windows live in a registry file, everything is
 # recorded and exits 0. It never invokes the real tmux, so no call this process makes can reach a
 # live server.
-printf '%s\n' "$*" >> "${TEAM_ROUTES_TMUX_LOG:-/dev/null}" 2>/dev/null || true
-win="${TEAM_ROUTES_WINDOWS:-/dev/null}"
+printf '%s\n' "$*" >> "${SMOKE_ROUTES_TMUX_LOG:-/dev/null}" 2>/dev/null || true
+win="${SMOKE_ROUTES_WINDOWS:-/dev/null}"
 sub="" t="" name=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -154,9 +156,9 @@ case "$sub" in
   new-window) reg "${t:-?}:$name"; exit 0 ;;
   kill-window) unreg "${t:-?}"; exit 0 ;;
   respawn-pane)
-    # P140：TEAM_ROUTES_FAKE_LAUNCH=1 时替窗口 harness 写下本轮 (nonce, pid) 启动证据与 (nonce, 0)
+    # P140：SMOKE_ROUTES_FAKE_LAUNCH=1 时替窗口 harness 写下本轮 (nonce, pid) 启动证据与 (nonce, 0)
     # 退出证据 —— 内容从 harness 命令行里解析，不是猜的；默认关着（只有最终拒绝路线真拉起时用）。
-    if [ "${TEAM_ROUTES_FAKE_LAUNCH:-0}" = "1" ]; then
+    if [ "${SMOKE_ROUTES_FAKE_LAUNCH:-0}" = "1" ]; then
       inner="" prev=""
       for a in "${rest[@]}"; do [ "$prev" = "-lc" ] && inner="$a"; prev="$a"; done
       if [ -n "$inner" ]; then
@@ -194,7 +196,7 @@ new_fixture() {
       && printf '{"name":"%s","scripts":{"verify":"true"}}\n' "$name" > package.json \
       && git add -A && git commit -qm init ) >/dev/null 2>&1
   routing_fixture_config "$d/.pi/team/config.sh" "$skill/templates/config.sh.tmpl" "routes-$name" 'dev verify' || return 1
-  if ! ( cd "$d" && env PATH="$SHIM:$PATH" TEAM_PI_BIN=/bin/true TEAM_ROUTES_TMUX_LOG="$TMUX_LOG" \
+  if ! ( cd "$d" && env PATH="$SHIM:$PATH" TEAM_PI_BIN=/bin/true SMOKE_ROUTES_TMUX_LOG="$TMUX_LOG" \
            TEAM_MEETINGS_DIR="$d/.meetings" TEAM_PI_AGENT_DIR="$d/.pi-agent" \
            bash "$team" init --no-skills --session "routes-$name" --agents "dev verify" --vcs local \
              --gates true --docs docs/team ) >"$tmp/$name-init.log" 2>&1; then
@@ -210,7 +212,7 @@ mr_run() {
   local d="$1"; shift
   local out rc
   out="$( cd "$d" && env -u TMUX -u TMUX_PANE \
-            PATH="$SHIM:$PATH" TEAM_PI_BIN=/bin/true TEAM_ROUTES_TMUX_LOG="$TMUX_LOG" \
+            PATH="$SHIM:$PATH" TEAM_PI_BIN=/bin/true SMOKE_ROUTES_TMUX_LOG="$TMUX_LOG" \
             TEAM_MEETINGS_DIR="$d/.meetings" TEAM_PI_AGENT_DIR="$d/.pi-agent" \
             ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$timeout_sec"} bash "$team" "$@" </dev/null 2>&1 )"
   rc=$?
@@ -1037,10 +1039,10 @@ RC_FAKE_LAUNCH=0
 # rc_team <dir> <team 参数…> → 组合输出；rc = 被测 CLI 的 rc
 rc_team() {
   local d="$1"; shift
-  local -a e=(env -u TMUX -u TMUX_PANE "PATH=$SHIM:$PATH" "TEAM_ROUTES_WINDOWS=$WINREG"
-              "TEAM_ROUTES_TMUX_LOG=$TMUX_LOG" "TEAM_MEETINGS_DIR=$d/.meetings" "TEAM_PI_AGENT_DIR=$d/.pi-agent")
+  local -a e=(env -u TMUX -u TMUX_PANE "PATH=$SHIM:$PATH" "SMOKE_ROUTES_WINDOWS=$WINREG"
+              "SMOKE_ROUTES_TMUX_LOG=$TMUX_LOG" "TEAM_MEETINGS_DIR=$d/.meetings" "TEAM_PI_AGENT_DIR=$d/.pi-agent")
   [ "$RC_OMIT_PI_BIN" = "1" ] || e+=("TEAM_PI_BIN=${RC_PI_BIN:-/bin/true}")
-  [ "$RC_FAKE_LAUNCH" = "1" ] && e+=("TEAM_ROUTES_FAKE_LAUNCH=1" "TEAM_DISPATCH_VERIFY_SEC=2" "TEAM_DISPATCH_ALIVE_SEC=0")
+  [ "$RC_FAKE_LAUNCH" = "1" ] && e+=("SMOKE_ROUTES_FAKE_LAUNCH=1" "TEAM_DISPATCH_VERIFY_SEC=2" "TEAM_DISPATCH_ALIVE_SEC=0")
   [ "${#RC_EXTRA[@]}" -gt 0 ] && e+=("${RC_EXTRA[@]}")
   ( cd "$d" && ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$timeout_sec"} "${e[@]}" bash "$team" "$@" </dev/null 2>&1 )
 }
@@ -1048,9 +1050,9 @@ rc_team() {
 # rc_sh <dir> <命令字符串> → 把打印出来的路线原样当命令跑（fake launch 开着）
 rc_sh() {
   local d="$1" cmd="$2"
-  local -a e=(env -u TMUX -u TMUX_PANE "PATH=$SHIM:$PATH" "TEAM_ROUTES_WINDOWS=$WINREG"
-              "TEAM_ROUTES_TMUX_LOG=$TMUX_LOG" "TEAM_MEETINGS_DIR=$d/.meetings" "TEAM_PI_AGENT_DIR=$d/.pi-agent"
-              "TEAM_ROUTES_FAKE_LAUNCH=1" "TEAM_DISPATCH_VERIFY_SEC=2" "TEAM_DISPATCH_ALIVE_SEC=0")
+  local -a e=(env -u TMUX -u TMUX_PANE "PATH=$SHIM:$PATH" "SMOKE_ROUTES_WINDOWS=$WINREG"
+              "SMOKE_ROUTES_TMUX_LOG=$TMUX_LOG" "TEAM_MEETINGS_DIR=$d/.meetings" "TEAM_PI_AGENT_DIR=$d/.pi-agent"
+              "SMOKE_ROUTES_FAKE_LAUNCH=1" "TEAM_DISPATCH_VERIFY_SEC=2" "TEAM_DISPATCH_ALIVE_SEC=0")
   [ "$RC_OMIT_PI_BIN" = "1" ] || e+=("TEAM_PI_BIN=${RC_PI_BIN:-/bin/true}")
   [ "${#RC_EXTRA[@]}" -gt 0 ] && e+=("${RC_EXTRA[@]}")
   ( cd "$d" && ${TIMEOUT_BIN:+"$TIMEOUT_BIN" "$timeout_sec"} "${e[@]}" bash -c "$cmd" </dev/null 2>&1 )

@@ -19801,8 +19801,10 @@ EOS
   # (ii) 生产路径：复用 12b 的夹具项目/会话（dev 在名册里），把 dev 窗口换成帧回放假 pi
   P67_KEYS_SAY="$P67_DIR/keys-say.log"; rm -f "$P67_KEYS_SAY"
   rm -rf "$REPO/.pi/team/state/outbox"
-  smoke_live_session_ensure "42·P67"      # P297：选段跑不带 §12b-h → 自己建（否则 9 条假红）
+  # P320：先杀 dev 窗口、再确保会话 —— 杀掉**最后一个**窗口会把会话一起带走，紧接着的 new-window
+  # 就没有落点（P319 §1 实测：--select 4,6,6i,42 里 §42 九条假红）。helper 的判据不变，只换顺序。
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
+  smoke_live_session_ensure "42·P67"
   P67_LIVE_CMD="$(printf 'V67_FRAME=%q V67_CURSOR=26 V67_KEYLOG=%q python3 %q' \
     "$P67_ONE" "$P67_KEYS_SAY" "$P67_DIR/frame-replay-pi.py")"
   tmux new-window -d -t "$SESSION" -n dev -c "$REPO" "$P67_LIVE_CMD" 2>/dev/null || true
@@ -20029,8 +20031,9 @@ EOS
   # (ii) 生产路径：复用 12b 的夹具项目/会话（dev 在名册里），把 dev 窗口换成帧回放假 pi
   P80_KEYS_SAY="$P80_DIR/keys-say.log"; rm -f "$P80_KEYS_SAY"
   rm -rf "$REPO/.pi/team/state/outbox"
-  smoke_live_session_ensure "44·P80"      # P297：与 §42 同一条前提（选段跑自己建会话）
+  # P320：与 §42 同一条前提 —— 先杀窗口再确保会话（选段跑时 helper 自己建，杀掉最后窗口时它补建）。
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
+  smoke_live_session_ensure "44·P80"
   P80_LIVE_CMD="$(printf 'V80_FRAME=%q V80_CURSOR=%s V80_KEYLOG=%q python3 %q' \
     "$P80_ATTACK_FRAME" "$P80_ATTACK_CY" "$P80_KEYS_SAY" "$P80_DIR/frame-replay-pi.py")"
   tmux new-window -d -t "$SESSION" -n dev -c "$REPO" "$P80_LIVE_CMD" 2>/dev/null || true
@@ -21406,9 +21409,10 @@ P140_WINREG="$P140_ROOT/windows.reg"
 mkdir -p "$P140_SHIM"
 cat > "$P140_SHIM/tmux" <<'P140SHIM'
 #!/usr/bin/env bash
-# 录制 tmux：窗口注册表；TEAM_ROUTES_FAKE_LAUNCH=1 时替窗口 harness 写启动/退出证据。不碰真 tmux。
-printf '%s\n' "$*" >> "${TEAM_ROUTES_TMUX_LOG:-/dev/null}" 2>/dev/null || true
-win="${TEAM_ROUTES_WINDOWS:-/dev/null}"
+# 录制 tmux：窗口注册表；SMOKE_ROUTES_FAKE_LAUNCH=1 时替窗口 harness 写启动/退出证据。不碰真 tmux。
+# 载体用非 TEAM_ 的 SMOKE_ROUTES_* 前缀（P320）：team_tmux 对可能起 server 的动词会剥掉全部 TEAM_*。
+printf '%s\n' "$*" >> "${SMOKE_ROUTES_TMUX_LOG:-/dev/null}" 2>/dev/null || true
+win="${SMOKE_ROUTES_WINDOWS:-/dev/null}"
 sub="" t="" name=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -21436,7 +21440,7 @@ case "$sub" in
   new-window) reg "${t:-?}:$name"; exit 0 ;;
   kill-window) unreg "${t:-?}"; exit 0 ;;
   respawn-pane)
-    if [ "${TEAM_ROUTES_FAKE_LAUNCH:-0}" = "1" ]; then
+    if [ "${SMOKE_ROUTES_FAKE_LAUNCH:-0}" = "1" ]; then
       inner="" prev=""
       for a in "${rest[@]}"; do [ "$prev" = "-lc" ] && inner="$a"; prev="$a"; done
       if [ -n "$inner" ]; then
@@ -21447,8 +21451,8 @@ case "$sub" in
         [ -n "$exitf" ] && [ -n "$nonce" ] && printf '%s %s\n' "$nonce" 0 > "$exitf"
         # P151/F5：仿真「agent 一开跑就往自己的会话文件里写」——只有显式准备好的那条路径才追加，
         # 其它夹具的 shim 行为逐字节不变。
-        if [ -n "${TEAM_ROUTES_SESSION_FILE:-}" ] && [ -f "$TEAM_ROUTES_SESSION_FILE" ]; then
-          printf 'roundout' >> "$TEAM_ROUTES_SESSION_FILE"
+        if [ -n "${SMOKE_ROUTES_SESSION_FILE:-}" ] && [ -f "$SMOKE_ROUTES_SESSION_FILE" ]; then
+          printf 'roundout' >> "$SMOKE_ROUTES_SESSION_FILE"
         fi
       fi
     fi
@@ -21508,15 +21512,15 @@ p140_state() { # <repo> <task> [<sid>] [<sid_bytes>] [<started>]：dev 的在飞
 }
 p140_run() { # <repo> <team 参数…> → 组合输出；rc = CLI 的 rc（录制 shim + 假启动证据）
   local p="$1"; shift
-  ( cd "$p" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" TEAM_ROUTES_WINDOWS="$P140_WINREG" \
-      TEAM_ROUTES_TMUX_LOG="$P140_CALLS" TEAM_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
+  ( cd "$p" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" SMOKE_ROUTES_WINDOWS="$P140_WINREG" \
+      SMOKE_ROUTES_TMUX_LOG="$P140_CALLS" SMOKE_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
       TEAM_PI_AGENT_DIR="$p/.pi-agent" TEAM_MEETINGS_DIR="$p/.meetings" $TEAM "$@" </dev/null ) 2>&1
 }
 p140_windows() { grep -cE 'new-window|respawn-pane' "$P140_CALLS" 2>/dev/null || true; }
 p140_sh() { # <repo> <命令字符串> → 把打印出来的路线**原样**当命令跑（同 p140_run 的环境）
   local p="$1" cmd="$2"
-  ( cd "$p" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" TEAM_ROUTES_WINDOWS="$P140_WINREG" \
-      TEAM_ROUTES_TMUX_LOG="$P140_CALLS" TEAM_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
+  ( cd "$p" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" SMOKE_ROUTES_WINDOWS="$P140_WINREG" \
+      SMOKE_ROUTES_TMUX_LOG="$P140_CALLS" SMOKE_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
       TEAM_PI_AGENT_DIR="$p/.pi-agent" TEAM_MEETINGS_DIR="$p/.meetings" bash -c "$cmd" </dev/null ) 2>&1
 }
 
@@ -21690,8 +21694,8 @@ p140_wt "$P151C" dev "$(p140_branch "$P151C" dev P1)"
 printf 'MemTotal:       32768000 kB\nMemFree:        1024000 kB\nMemAvailable:    102400 kB\nSwapTotal:     16777216 kB\nSwapFree:       8388608 kB\n' > "$P151C/meminfo-low"
 printf 'Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n/var/swapfile                           file\t\t67108860\t1048576\t\t-1\n' > "$P151C/swaps-plenty"
 p151c_run() { # <命令字符串> → 仍带着低内存环境跑（证明修法真的打开了那条硬线，而不是换了机器）
-  ( cd "$P151C" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" TEAM_ROUTES_WINDOWS="$P140_WINREG" \
-      TEAM_ROUTES_TMUX_LOG="$P140_CALLS" TEAM_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
+  ( cd "$P151C" && env -u TMUX -u TMUX_PANE PATH="$P140_SHIM:$PATH" SMOKE_ROUTES_WINDOWS="$P140_WINREG" \
+      SMOKE_ROUTES_TMUX_LOG="$P140_CALLS" SMOKE_ROUTES_FAKE_LAUNCH=1 TEAM_DISPATCH_VERIFY_SEC=2 TEAM_DISPATCH_ALIVE_SEC=0 \
       TEAM_MEMINFO_FILE="$P151C/meminfo-low" TEAM_SWAPFILE_PATH="$P151C/swaps-plenty" TEAM_MIN_AVAIL_MB=1024 \
       TEAM_PI_AGENT_DIR="$P151C/.pi-agent" TEAM_MEETINGS_DIR="$P151C/.meetings" bash -c "$1" </dev/null ) 2>&1
 }
@@ -21740,9 +21744,9 @@ P151E_SID="p140-seat-bytes-dev"
 P151E_ENC="$(printf '%s' "$P151E/.worktrees/dev" | sed -e 's|^/||' -e 's|[/\\:]|-|g')"
 P151E_FILE="$P151E/.pi-agent/sessions/--$P151E_ENC--/x_$P151E_SID.jsonl"
 mkdir -p "$(dirname "$P151E_FILE")"; : > "$P151E_FILE"
-export TEAM_ROUTES_SESSION_FILE="$P151E_FILE"   # shim 在「启动」时追加 8 字节 = 本轮产出
+export SMOKE_ROUTES_SESSION_FILE="$P151E_FILE"   # shim 在「启动」时追加 8 字节 = 本轮产出
 P151E_REAL="$(p140_run "$P151E" dispatch dev P300 docs/team/tasks/P300-fixture.md)"; P151E_RC=$?
-unset TEAM_ROUTES_SESSION_FILE
+unset SMOKE_ROUTES_SESSION_FILE
 assert_eq "P151/F5：首轮派单成功（假启动）" "$P151E_RC" "0"
 assert_eq "P151/F5：shim 在启动时写了 8 字节（本轮产出）" "$(wc -c < "$P151E_FILE" | tr -d ' ')" "8"
 assert_eq "P151/F5：sid_bytes 记的是**启动前**的字节数（旧实现会记成启动后的 8）" \

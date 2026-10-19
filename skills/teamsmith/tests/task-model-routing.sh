@@ -1278,6 +1278,12 @@ fi
 
 if has updatecheck; then
   U="$TMP/updatecheck"; s_new_repo "$U"
+  # 本地版本从**被测树**取（产品的 local_v 与缓存里的 LOCAL= 都取 scripts/lib/common.sh 的
+  # TEAM_VERSION）；写死字面量会在发布落点时变成「与另一个版本比较」（P319 §4：0.2.0 → 0.3.0）。
+  U_LOCAL="$(sed -n 's/^TEAM_VERSION=//p' "$SKILL/scripts/lib/common.sh" | head -1 | tr -d "\"'")"
+  [ -n "$U_LOCAL" ] || U_LOCAL="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$TREE/package.json" | head -1)"
+  # 更旧的那个必须**严格小于**本地版本：同主版本、次版本减一（0.3.0 → 0.2.0）；次版本为 0 时退主版本。
+  U_OLDER="$(printf '%s\n' "$U_LOCAL" | awk -F. '{ if ($2+0 > 0) printf "%d.%d.0\n", $1, $2-1; else printf "%d.0.0\n", ($1+0 > 0 ? $1-1 : 0) }')"
   cat > "$U/.pi/team/config.sh" <<EOF
 TEAM_PROJECT='updatecheck-fixture'
 TEAM_SESSION='routing-update'
@@ -1314,11 +1320,11 @@ EOF
   s_run "$U" -- up
   check updatecheck-start-rc eq "$RC" 0
   check updatecheck-start-decision contains "$OUT" 'PM 已启动'
-  check updatecheck-newer-line bash -c '[[ "$1" == *"本地 teamsmith 0.2.0，npm 上已有 9.9.9"* ]]' _ "$OUT"
+  check updatecheck-newer-line contains "$OUT" "本地 teamsmith $U_LOCAL，npm 上已有 9.9.9"
   check updatecheck-upgrade-command contains "$OUT" "npm i -g teamsmith@9.9.9 --registry https://registry.npmjs.org"
   check updatecheck-never-installs contains "$OUT" '工具从不自己安装'
   check updatecheck-first-call eq "$(npm_calls)" 1
-  check updatecheck-cache-written bash -c 'grep -q "^LATEST=9.9.9\$" "$1" && grep -q "^LOCAL=0.2.0\$" "$1" && grep -q "^CHECKED_AT=[0-9]*\$" "$1"' _ "$U/.pi/team/state/update-check.env"
+  check updatecheck-cache-written bash -c 'grep -q "^LATEST=9.9.9\$" "$1" && grep -q "^LOCAL=$2\$" "$1" && grep -q "^CHECKED_AT=[0-9]*\$" "$1"' _ "$U/.pi/team/state/update-check.env" "$U_LOCAL"
   # 新鲜缓存：再跑两次，零调用（TTL 24h 内不重复联网），但仍打同一行（缓存里的结论）
   fresh0="$(npm_calls)"
   s_run "$U" -- up; check updatecheck-fresh-rc eq "$RC" 0
@@ -1329,7 +1335,7 @@ EOF
   # 其余四种回答：过期缓存 → 各查一次、一声不响（相同/更旧/报错/解析不出）
   u_arm() { # <答案|FAIL> <名称> [env…]
     local answer="$1" name="$2"; shift 2
-    printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=0.2.0\n' > "$U/.pi/team/state/update-check.env"
+    printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=%s\n' "$U_LOCAL" > "$U/.pi/team/state/update-check.env"
     npm_stub "$answer"
     local n0; n0="$(npm_calls)"
     s_run "$U" "$@" -- up
@@ -1338,13 +1344,13 @@ EOF
     check "updatecheck-$name-decision" contains "$UOUT" 'PM 在运行'
     check "updatecheck-$name-silent" bash -c '! [[ "$1" == *"npm 上已有"* ]]' _ "$UOUT"
   }
-  u_arm 0.2.0 same;       check updatecheck-same-one-call eq "$UCALLS" 1
-  u_arm 0.1.0 older;      check updatecheck-older-one-call eq "$UCALLS" 1
+  u_arm "$U_LOCAL" same; check updatecheck-same-one-call eq "$UCALLS" 1
+  u_arm "$U_OLDER" older; check updatecheck-older-one-call eq "$UCALLS" 1
   u_arm FAIL failing;     check updatecheck-failing-one-call eq "$UCALLS" 1
   check updatecheck-failing-cache bash -c 'grep -q "^LATEST=-\$" "$1"' _ "$U/.pi/team/state/update-check.env"
   u_arm not-a-version unparsable; check updatecheck-unparsable-one-call eq "$UCALLS" 1
   # TEAM_UPDATE_CHECK=0：连查询都不发生，缓存一个字节都不动
-  printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=0.2.0\n' > "$U/.pi/team/state/update-check.env"
+  printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=%s\n' "$U_LOCAL" > "$U/.pi/team/state/update-check.env"
   cache0="$(sha "$U/.pi/team/state/update-check.env")"; dis0="$(npm_calls)"
   npm_stub 9.9.9
   s_run "$U" TEAM_UPDATE_CHECK=0 -- up
@@ -1355,7 +1361,7 @@ EOF
   check updatecheck-disabled-silent bash -c '! [[ "$1" == *"npm 上已有"* ]]' _ "$OUT"
   # 有界：桩 npm 挂住 30s → 查询必须在 2s 上限内被放弃（静默、rc 与启动决策不变）
   printf '#!/usr/bin/env bash\nprintf "call\\n" >> "%s"\nsleep 30\n' "$TMP/npm-calls" > "$TMP/bin/npm"; chmod +x "$TMP/bin/npm"
-  printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=0.2.0\n' > "$U/.pi/team/state/update-check.env"
+  printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=%s\n' "$U_LOCAL" > "$U/.pi/team/state/update-check.env"
   uc0="$(npm_calls)"; ut0="$(date +%s)"
   s_run "$U" -- up
   ut1="$(date +%s)"
@@ -1365,7 +1371,7 @@ EOF
   check updatecheck-bounded-called eq "$(( $(npm_calls) - uc0 ))" 1
   check updatecheck-bounded-seconds bash -c '[ "$1" -le 4 ]' _ "$((ut1 - ut0))"
   # --print：不联网、不写缓存，并说明跳过了检查
-  printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=0.2.0\n' > "$U/.pi/team/state/update-check.env"
+  printf 'CHECKED_AT=1\nLATEST=9.9.9\nLOCAL=%s\n' "$U_LOCAL" > "$U/.pi/team/state/update-check.env"
   cache0="$(sha "$U/.pi/team/state/update-check.env")"; pr0="$(npm_calls)"
   npm_stub 9.9.9
   s_run "$U" -- up --print
@@ -1417,7 +1423,10 @@ if has flip; then
         legacy-route-placeholder) groups=init ;;
       esac
       scratch="$TMP/mutants/$mutation"; mkdir -p "$scratch/skills/teamsmith"; touch "$scratch/.routing-mutant"
-      for source_dir in scripts references templates extensions; do
+      # P320/V62：拷贝源目录叫 extension（单数），产品 init 从 $TEAM_SKILL_DIR/extension/team.ts 装扩展；
+      # 之前写成 extensions，既有 `[ ! -d ]` 判据就把它们跳过，变异体缺扩展、bootstrap 先报“找不到可安装的扩展源”，
+      # 抢在目标拒绝之前失败。只纠正目录名，不加兜底。
+      for source_dir in scripts references templates extension; do
         [ ! -d "$SKILL/$source_dir" ] || cp -a "$SKILL/$source_dir" "$scratch/skills/teamsmith/"
       done
       before="$(find "$scratch/skills/teamsmith/scripts" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
