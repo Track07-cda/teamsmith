@@ -497,6 +497,7 @@
 | V58 | Verify the heartbeat lifecycle and the deleted-but-open visibility | dev-bob | - | - | done |
 | V59 | Spot-check the four temp-root gaps (doctor must be read-only) | dev3 | - | - | done |
 | P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | done |
+| P316 | Delete the tests that only pass on an idle machine | dev | - | - | wip |
 
 ## 当前里程碑
 
