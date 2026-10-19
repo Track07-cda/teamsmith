@@ -496,7 +496,7 @@
 | P314 | Close the four temp-root gaps (doctor side effect, stale band, missing source line, stale docs) | dev2 | - | - | done |
 | V58 | Verify the heartbeat lifecycle and the deleted-but-open visibility | dev-bob | - | - | done |
 | V59 | Spot-check the four temp-root gaps (doctor must be read-only) | dev3 | - | - | done |
-| P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | wip |
+| P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | done |
 
 ## 当前里程碑
 
