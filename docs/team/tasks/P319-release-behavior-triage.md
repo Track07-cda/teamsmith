@@ -1,12 +1,12 @@
 # P319 · 只诊断 0.3.0 补跑的五处失败，不扩大发布范围
 
-- agent: dev3
-- category: analysis
-- phase: explore
-- change: -
-- specs: -
-- anchor: none (infra) — 对冻结发布候选的现有验收失败作只读诊断，不改产品、测试或规格
-- branch: task/P319-release-behavior-triage
+agent: dev3
+category: analysis
+phase: explore
+change: -
+specs: -
+anchor: none (infra) — 对冻结发布候选的现有验收失败作只读诊断，不改产品、测试或规格
+branch: task/P319-release-behavior-triage
 
 ## 问题与范围
 
