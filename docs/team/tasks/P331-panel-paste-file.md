@@ -5,7 +5,7 @@ agent: dev2
 phase: apply
 category: code
 change: -
-specs: panel#C-v pastes a clipboard image as a temporary file path
+specs: panel#`C-v` pastes a clipboard image as a temporary file path
 deltas: -
 branch: task/P331-panel-paste-file
 
