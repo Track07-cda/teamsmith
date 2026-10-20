@@ -1,0 +1,6 @@
+- 2026-10-20T05:46:29Z · `team board set P328 done` · FORCED：PM 显式覆盖（理由：只读清点：报告已并入 main（e6e98d74 内容），判定由 PM 在报告末节逐条给出，无产品/测试改动）
+  -   - ① 复验记录 docs/team/reviews/P328.md：不存在
+  -   - ② 分支是否已并入 main：task/P328-guard-inventory（e6e98d74f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+- 2026-10-20T05:46:37Z · `team close P328 --status done` · FORCED：PM 显式覆盖（理由：只读清点：报告已并入 main，判定在报告末节（PM 落笔），无产品/测试改动）
+  -   - ① 复验记录 docs/team/reviews/P328.md：不存在
+  -   - ② 分支是否已并入 main：task/P328-guard-inventory（e6e98d74f）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
