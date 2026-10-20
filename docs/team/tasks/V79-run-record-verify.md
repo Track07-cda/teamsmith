@@ -1,7 +1,7 @@
 # V79 · P339 的独立验收：登记的生命周期从它可见那一刻起算
 
 task: V79
-agent: dev2
+agent: verify
 phase: verify
 category: verify
 change: -
@@ -32,4 +32,4 @@ branch: task/V79-run-record-verify
 
 ## 边界与交付
 
-只读代码、只写 `docs/team/reports/V79-dev2.md` 与自己的线程；不改实现、不合并、不 push。结论先写 PASS/PARTIAL/FAIL。local 模式。
+只读代码、只写 `docs/team/reports/V79-verify.md` 与自己的线程；不改实现、不合并、不 push。结论先写 PASS/PARTIAL/FAIL。local 模式。
