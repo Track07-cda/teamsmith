@@ -5,7 +5,7 @@ agent: dev2
 phase: apply
 category: code
 change: -
-anchor: openspec/specs/panel/spec.md#A pasted image becomes a file path in the draft
+specs: panel#C-v pastes a clipboard image as a temporary file path
 deltas: -
 branch: task/P331-panel-paste-file
 
@@ -22,6 +22,11 @@ branch: task/P331-panel-paste-file
 三次 `wl-paste` 探测成功、路径「插进草稿」也成功，但**没有任何文件落地**，所以「路径插在插入点」那条是空洞绿（插进去的是空路径）。纯模型夹具 9/9 全绿，说明 `pasteFilePath` 的纯逻辑没问题。
 
 这条之所以这么久没人看见：`panel-b2.sh` **不在任何门禁段里**（P318 已实测），所以它红着也没人知道。
+
+> **这条有规格**：`openspec/specs/panel/spec.md` 的 `C-v pastes a clipboard image as a temporary file path`
+> 明写「图像字节写进 `${TMPDIR:-/tmp}/teamsmith-paste-<uuid>.<ext>`，路径插在插入点」，两个 scenario 断言的就是
+> 那三条红里的内容（TMPDIR 里恰好一个文件、内容是 8 字节、X11 回退同形）。所以这不是「没承诺的角落」，
+> 而是**一条被承诺的行为，它的载体从不运行**。
 
 P318 给了一个**假说、不是结论**：控制台从 `cache.snapshot().data?.capacity?.temp_root` 取临时根（`scripts/panel/src/main.tsx:817`），而 `capacity` 块在 `team_panel_capacity_json`（`scripts/lib/cmd-watch.sh:834-871`）里降级时会打印 JSON 但返回非 0，条件是需要 `capacity.log` 里有 `RAM 可用 NMB` 行；夹具是全新 `team init` 项目，没有那份日志。
 
