@@ -23,7 +23,8 @@
 #
 # 读取：glob + pid/starttime 过滤。已死但没清掉的条目打印 `stale` 并**忽略**（等待者不去删别人的
 # 文件：一处误判就可能删掉别人正在跑的东西）。席位/工作树按 `team notify` 发送者的同一条规则
-# （运行时目录，名册拼写优先，**不取窗口名**）；解析不出来就写 `?`——如实说不知道。
+# （运行时目录，名册拼写优先，**不取窗口名**；推导本体是 common.sh 的 team_seat_from_paths，只此
+# 一份 —— 本库只供给 git 上下文）；解析不出来就写 `?`——如实说不知道（记录必须写成功）。
 #
 # `/proc` 只用于 pid 复用安全与祖辈证明：没有 `/proc` → 证明不成立 → fail closed（一律按顶层）。
 
@@ -486,9 +487,12 @@ gate_lock_worktree_of_dir() { # <dir> → 绝对路径（解析不出 → `?`）
   printf '%s\n' "$top"
 }
 
-gate_lock_seat_of_dir() { # <dir> [<roster>] [<worktrees 相对/绝对>] [<main root>] → 席位（`?` = 解析不出）
+gate_lock_seat_of_dir() { # <dir> [<名册>] [<worktrees 相对/绝对>] [<main root>] → 席位（`?` = 解析不出）
+  # 推导本体只有一份：common.sh 的 team_seat_from_paths（与 `team notify` 的发送者同一个函数）。
+  # 本函数只负责给它上下文（dir → git toplevel、主检出），并把「解析不出」收成 `?` —— 记录必须写
+  # 成功，它是诊断证据（P329）。
   local dir="$1" roster="${2:-${TEAM_AGENTS:-}}" wtr="${3:-${TEAM_WORKTREES_DIR:-.worktrees}}" main="${4:-}"
-  local top common n a
+  local top common n
   top="$(cd "$dir" 2>/dev/null && git rev-parse --path-format=absolute --show-toplevel 2>/dev/null || true)"
   [ -n "$top" ] || { printf '?\n'; return 0; }
   if [ -z "$main" ]; then
@@ -498,14 +502,8 @@ gate_lock_seat_of_dir() { # <dir> [<roster>] [<worktrees 相对/绝对>] [<main 
   [ -n "$main" ] || { printf '?\n'; return 0; }
   top="$(cd "$top" 2>/dev/null && pwd -P || printf '%s' "$top")"
   main="$(cd "$main" 2>/dev/null && pwd -P || printf '%s' "$main")"
-  case "$wtr" in /*) ;; *) wtr="$main/$wtr" ;; esac
-  [ "$top" = "$main" ] && { printf 'pm\n'; return 0; }
-  case "$top" in
-    "$wtr"/*) n="${top#"$wtr"/}"; n="${n%%/*}" ;;
-    *) printf '?\n'; return 0 ;;
-  esac
+  n="$(team_seat_from_paths "$top" "$main" "$wtr" "$roster")"
   [ -n "$n" ] || { printf '?\n'; return 0; }
-  for a in $roster; do [ "$n" = "$a" ] && { printf '%s\n' "$a"; return 0; }; done
   printf '%s\n' "$n"
 }
 

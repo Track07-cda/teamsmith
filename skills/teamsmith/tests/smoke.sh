@@ -564,7 +564,7 @@ if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
     SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
     SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
     IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
-      < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316：预算表退役；expected/bound 为 0/0
+      < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316 之后没有生产者 → expected=0，cap 退回 W
     SMOKE_LOCK_STARTED="$(date +%s)"
     # 记录只在**持有者**手里写（P281 的 F4：不许覆写另一个活着进程的记录）。真被拒（同一把锁上有
     # 另一个活着的持有者记录）本身就是「互斥断了」的形状 —— 交给下面的入场检查点名并停跑。
@@ -642,7 +642,7 @@ if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
   SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
   SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
   IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
-    < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316：预算表退役；expected/bound 为 0/0
+    < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316 之后没有生产者 → expected=0，cap 退回 W
   SMOKE_LOCK_STARTED="$(date +%s)"
   SMOKE_LOCK_KIND="${SMOKE_LOCK_KIND:-top}"
   # 嵌套运行的期限对齐到**生它的那一段**。返修轮次 1 · F1：祖辈的 deadline 从**祖辈记录里公布的
@@ -16519,12 +16519,10 @@ assert_eq "34⑥ 排队阶段一次 tmux 都没调（shim 日志为空）" "$(gr
 assert_eq "34⑥ 看板一个字节没动" "$(md5sum "$P34R/docs/team/BOARD.md" 2>/dev/null | cut -d' ' -f1)" "$P34_BOARD_BEFORE"
 p34_release
 
-# ⑦ P281（change: gate-lock-hygiene）：上限按持有者**公布的 expected** 算（D3）
-#    cap = clamp(remaining + 60s, TEAM_SMOKE_LOCK_WAIT, 4 × TEAM_SMOKE_LOCK_WAIT)
-#    现场：持有者记录是**新格式**（expected=400、started=10s 前）；W=200 → cap=clamp(450,200,800)。
-#    返修轮次 1 · F3：期望值**运行时算** —— 旧写法把断言建在「remaining=39Xs」这条 1 秒宽的窗口上
-#    （候选树 3 跑 2 红）。现在 remaining 的区间由「记录里的 started」与夹住那一次 review 的 [T0,T1]
-#    两向夹出来，而且 cap 必须等于**同一个 remaining** 的 clamp（算式对算式，不是字面对字面）。
+# ⑦ P281（change: gate-lock-hygiene）：持有者记录了**新格式**（带 expected/席位）时，等待者照旧排队、
+#    排到就照常判 PASS，队列行点名新格式的那条记录。上限算式本身在这里**不再判**（P329：`expected` 今天
+#    没有生产者，为自造的 400 建断言就是守一个不存在的数）；算式剩下的一条**真**行为（读不到 expected
+#    → 退回 W）在 §34b⑨。
 p34_hold2() { # <秒> <expected> <started 前多少秒>：写新格式的持有者记录；P34_STARTED = 写进记录的那一刻
   : >>"$P34_LOCK"; rm -f "$P34_LOCK.holder"
   flock --close -x "$P34_LOCK" sleep "$1" & P34_HOLDER=$!
@@ -16539,17 +16537,6 @@ P34_RC=0; p34_review "$P34D/g.log" 30 200 'sleep 1' || P34_RC=$?
 p34_release
 assert_eq "34⑦ 持有者公布了 expected → 排到队后照常判 PASS（rc）" "$P34_RC" "0"
 assert_has "$P34D/g.log" "TEAM_SMOKE_LOCK_WAIT=200s" "34⑦ 等待者打印下限（TEAM_SMOKE_LOCK_WAIT）"
-P34_REM="$(sed -n 's/.*remaining=\([0-9][0-9]*\)s.*/\1/p' "$P34D/g.log" | head -1)"
-P34_CAP="$(sed -n 's/.*cap=\([0-9][0-9]*\)s.*/\1/p' "$P34D/g.log" | head -1)"
-if [ -n "$P34_REM" ] && [ -n "$P34_CAP" ]; then
-  # P316：只用**同一次打印**的 remaining 做算式对账（不夹时间窗，不判排队快慢）。
-  P34_CAP_WANT=$(( P34_REM + 60 ))
-  [ "$P34_CAP_WANT" -lt 200 ] && P34_CAP_WANT=200
-  [ "$P34_CAP_WANT" -gt 800 ] && P34_CAP_WANT=800
-  assert_eq "34⑦ cap = clamp(remaining+60, W, 4W)，同一 remaining 算出来的（期望 ${P34_CAP_WANT}s）" "$P34_CAP" "$P34_CAP_WANT"
-else
-  bad "34⑦ 队列行没打印算式里的 remaining/cap（实测 remaining=${P34_REM:-无} cap=${P34_CAP:-无}）"
-fi
 assert_has "$(p34_record)" 'cmd=p34-holder2' "34⑦ 排队行点名新格式的持有者记录"
 assert_has "$(p34_record)" 'agent=dev' "34⑦ 记录带席位"
 assert_eq "34⑦ team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
@@ -16743,47 +16730,38 @@ p281_clean
 
 # ── ⑧ P281 红侧 ②（P316 退役）：嵌套运行与祖辈的**预算对齐**随每段预算表一起删除。
 #    它守的「嵌套运行不排队、只登记」「登记随退出消失」「锁可再取」三条行为由 §34④ 的祖辈持锁证明、
-#    §34b⑨ 的 cap/席位检查与 §34c/§34d 的锁身份检查继续守。
-# ── ⑨ P281 红侧 ③：单层运行的排队语义不变 + 上限算式（钉住唯一实现）──────────────────────
-# 既有 §34 ①–⑥ / §34b ①–⑤ 的判定一条没改（逐条对照 diff 的结论在报告里）；这里只加**新增对照**：
-# 旧写入者（记录里没有 expected）仍按 TEAM_SMOKE_LOCK_WAIT 判；新写入者按 clamp(remaining+60, W, 4W) 判。
+#    §34b⑨ 的席位检查与 §34c/§34d 的锁身份检查继续守。
+# ── ⑨ P281 红侧 ③：单层运行的排队语义不变 + 席位推导只有一份──────────────
+# 既有 §34 ①–⑥ / §34b ①–⑤ 的判定一条没改；这里只加**新增对照**：旧写入者（记录里没有 expected）
+# 仍按 TEAM_SMOKE_LOCK_WAIT 判（上限算式今天剩下的唯一一条**真**行为）。
 : > "$P281_LOCK"; rm -rf "$P281_LOCK.runs"
 printf '%s pid=%s cmd=legacy-holder\n' "$(date -Is)" "$$" > "$P281_LOCK.holder"
 assert_eq "34b⑨ 旧持有者（没有 expected）→ 上限仍是 TEAM_SMOKE_LOCK_WAIT" \
   "$(gate_lock_cap "$P281_LOCK" 1800 | cut -f1)" "1800"
-P281_STARTED="$(( $(date +%s) - 10 ))"
-gate_lock_write_holder "$P281_LOCK" "$$" top smoke.sh dev "$P281D" "$P281_STARTED" 400 2400 3 0 - -
-P281_T0="$(date +%s)"
-IFS=$'\t' read -r P281_CAP P281_REM _ _ < <(gate_lock_cap "$P281_LOCK" 200)
-P281_T1="$(date +%s)"
-P281_LO=$(( 400 - (P281_T1 - P281_STARTED) )); P281_HI=$(( 400 - (P281_T0 - P281_STARTED) ))
-P281_CAP_WANT=$(( P281_REM + 60 ))
-[ "$P281_CAP_WANT" -lt 200 ] && P281_CAP_WANT=200
-[ "$P281_CAP_WANT" -gt 800 ] && P281_CAP_WANT=800
-assert_eq "34b⑨ cap = clamp(remaining+60, W, 4W)（remaining=${P281_REM}s → 期望 ${P281_CAP_WANT}s）" \
-  "$P281_CAP" "$P281_CAP_WANT"
-assert_eq "34b⑨ remaining 由记录里的 started 算出（落点 ∈ [${P281_LO},${P281_HI}]）" \
-  "$(( P281_REM >= P281_LO && P281_REM <= P281_HI ? 1 : 0 ))" "1"
-assert_eq "34b⑨ W 抬到 1000 → cap 落回下限（1000）" "$(gate_lock_cap "$P281_LOCK" 1000 | cut -f1)" "1000"
-assert_eq "34b⑨ W 只有 10 → cap 落回上限 4×W（40）" "$(gate_lock_cap "$P281_LOCK" 10 | cut -f1)" "40"
 rm -f "$P281_LOCK.holder" 2>/dev/null || true
-# 席位 / 工作树按**运行时目录**解析（team notify 发送者的同一条规则），不取窗口名
+# 席位按**运行时目录**解析，不取窗口名。推导只有一份（common.sh 的 team_seat_from_paths）：这里断言的
+# 是「锁记录与 team notify 调的是**同一个函数**」—— 同一组目录两边给出同一个结果；解析不出时各自的
+# 语义照旧不同（锁记录写 `?`：它是诊断证据、必须写成功；notify 给空、由调用方拒绝，见 §47 1.4）。
 P281_SEAT_DIR="$TMP/p281-seat/.worktrees/dev"
 mkdir -p "$TMP/p281-seat"
 ( cd "$TMP/p281-seat" && git init -q -b main && git config user.email smoke@teamsmith \
   && git config user.name smoke && : > x && git add -A && git commit -qm init \
   && git worktree add -q "$P281_SEAT_DIR" -b wt-dev ) >/dev/null 2>&1
-assert_eq "34b⑨ 席位按运行时目录解析（.worktrees/<名字> → 那个名字）" \
-  "$(gate_lock_seat_of_dir "$P281_SEAT_DIR")" "dev"
-assert_eq "34b⑨ 名册里有同名席位 → 用名册拼写" \
-  "$(gate_lock_seat_of_dir "$P281_SEAT_DIR" "verify dev")" "dev"
-assert_eq "34b⑨ 主检出 → pm" "$(gate_lock_seat_of_dir "$TMP/p281-seat")" "pm"
-assert_eq "34b⑨ 不是 git 树 → ?（不猜）" "$(gate_lock_seat_of_dir "$TMP")" "?"
+p281_notify_seat() { # <目录>：team notify 侧的发送者解析（同一个推导，喂同一组参数）
+  TEAM_ROOT="$1" TEAM_MAIN_ROOT="$TMP/p281-seat" TEAM_WORKTREES_DIR=.worktrees TEAM_AGENTS="verify dev" \
+    bash -c ". '$SKILL_DIR/scripts/lib/common.sh'; team_sender_from_dir"
+}
+assert_eq "34b⑨ 同一推导：<worktree> 上锁记录与 notify 侧给出同一个结果（dev）" \
+  "$(gate_lock_seat_of_dir "$P281_SEAT_DIR" "verify dev")|$(p281_notify_seat "$P281_SEAT_DIR")" "dev|dev"
+assert_eq "34b⑨ 同一推导：主检出上两边都是 pm" \
+  "$(gate_lock_seat_of_dir "$TMP/p281-seat" "verify dev")|$(p281_notify_seat "$TMP/p281-seat")" "pm|pm"
+assert_eq "34b⑨ 解析不出：锁记录写 ?（诊断证据必须写成功）" "$(gate_lock_seat_of_dir "$TMP")" "?"
+assert_eq "34b⑨ 解析不出：notify 侧给空（由调用方拒绝，见 §47 1.4）" "$(p281_notify_seat "$TMP")" ""
 # 反向对照：窗口名故意报成别的席位（cwd 仍是本工作树）→ 记录里仍是 cwd 的那个席位
 mkdir -p "$TMP/p281-shim"
 printf '#!/bin/sh\nprintf "%%s\\n" "verify"\n' > "$TMP/p281-shim/tmux"; chmod +x "$TMP/p281-shim/tmux"
 P281_SEAT2="$(cd "$P281_SEAT_DIR" && PATH="$TMP/p281-shim:$PATH" TMUX=/tmp/fake TMUX_PANE=%1 \
-  bash -c ". '$SKILL_DIR/scripts/lib/gate-lock.sh'; gate_lock_seat_of_dir \"\$PWD\"")"
+  bash -c ". '$SKILL_DIR/scripts/lib/common.sh'; . '$SKILL_DIR/scripts/lib/gate-lock.sh'; gate_lock_seat_of_dir \"\$PWD\"")"
 assert_eq "34b⑨ 反向对照：窗口名报 verify，记录里仍是 cwd 的席位" "$P281_SEAT2" "dev"
 assert_eq "34b⑨ 工作树字段是 cwd 的 toplevel" \
   "$(gate_lock_worktree_of_dir "$P281_SEAT_DIR")" "$(cd "$P281_SEAT_DIR" && pwd -P)"
@@ -22251,20 +22229,16 @@ else
   else
     bad "58 lint --selftest 有夹具不符合预期（见 $P159_LOG）"
   fi
-  # 门禁级翻转：干净 → 种一条 pkill -f 必须红并点名 → 换成 kill "$pid" 转绿
+  # 门禁级翻转：种一条 pkill -f 必须红并点名。分工（P329）：`--selftest` 的夹具表判红/净（29 例，
+  # clean 类里有 `kill_term_pid` 等对应形状），**不判位置**；本条判位置 —— 全树只有它守
+  # `p159-lint-flip/x.sh:2` 这个 file:line。
   P159_SB="$TMP/p159-lint-flip"; rm -rf "$P159_SB"; mkdir -p "$P159_SB"
-  printf '#!/usr/bin/env bash\ntrue\n' > "$P159_SB/x.sh"
-  if perl "$P159_LINT" --root "$P159_SB" --quiet >/dev/null 2>&1; then ok "58 翻转①：干净文件不报红"
-  else bad "58 翻转①：干净文件被误报"; fi
   printf '#!/usr/bin/env bash\npkill -f p159-planted-marker\n' > "$P159_SB/x.sh"
   if perl "$P159_LINT" --root "$P159_SB" >"$TMP/p159-lint-red.log" 2>&1; then
     bad "58 翻转②：种下的 pkill -f 没被抓到（检查器太弱）"
   else
     assert_has "$TMP/p159-lint-red.log" "p159-lint-flip/x.sh:2" "58 翻转②：种下的 pkill -f 被判红并按 file:line 点名"
   fi
-  printf '#!/usr/bin/env bash\nkill -TERM "$pid"\n' > "$P159_SB/x.sh"
-  if perl "$P159_LINT" --root "$P159_SB" --quiet >/dev/null 2>&1; then ok "58 翻转③：kill \"\$pid\" 形态不报红（反向不误报）"
-  else bad "58 翻转③：pid 精确形态被误报"; fi
   rm -rf "$P159_SB"
 fi
 # ② 运行时闸门：夹具自钉 argv 记录桩，拒绝路径不执行任何东西（不起 tmux、不碰真 pkill）

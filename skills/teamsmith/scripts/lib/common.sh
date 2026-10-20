@@ -786,36 +786,51 @@ team_identity_env_prefix() { # [<目标目录>]
 # 事故（P72 的提案实测）：`team notify pm --from-file <worker 摘要>` 在 worker 工作树里跑，durable 收件箱行、
 # knock 文本、outbox 条目的 from: 三处都写 `agent:pm` —— 收件人冒充发送者（PM 的收件箱里 55 行
 # `[manual] agent:pm` 的作者对不上 docs/team/reports/**）。假绿比没有更糟（references/philosophy.md），
-# 所以：解析不出来**拒绝**，绝不静默退回 `pm`。规则只在这两个函数里实现一处：
+# 所以：解析不出来**拒绝**，绝不静默退回 `pm`。规则只在这两个函数里实现一处（推导本体在
+# team_seat_from_paths，与门禁锁记录共用）：
 #   --from <名字>（显式声明，原样记录）＞ 运行时目录（M40 身份；主工作树 → pm，
 #   <main>/<worktrees>/<name> → <name>，在它的子目录里跑也算）＞ 未解析（调用方负责拒绝）。
 # P201：主工作树那一格不再是「无条件 pm」——主检出里出现本名册的席位线索时**拒绝**（见下面
 # team_sender_seat_clues 的头注）；只有无线索的主检出才是 PM 自己。
 # 收件人**永远只是收件人**（收件箱文件名 + 敲门目标）。
 
-# 运行时目录 → 座位名；推不出来 → 空（stdout）。
-team_sender_from_dir() { # → stdout: <座位名> | 空
-  local main="${TEAM_MAIN_ROOT:-}" root="${TEAM_ROOT:-}" wt="${TEAM_WORKTREES_DIR:-.worktrees}"
-  local nroot nmain nprefix rest n a
-  [ -n "$main" ] && [ -n "$root" ] || return 0
-  # 物理路径比较：软链/尾斜杠/相对路径都不许把「同一个工作树」判成两个
-  nroot="$(team_identity_norm_dir "$root")"
-  nmain="$(team_identity_norm_dir "$main")"
-  [ -n "$nroot" ] || return 0
+# 运行时目录 → 座位名的**唯一一份推导**（P329：锁记录的 gate_lock_seat_of_dir 也走这里）。
+# 失败语义**不在这里**：推不出来就返回空，由调用方各自收尾 —— 锁记录写 `?`（诊断证据，必须写成功），
+# `team notify` 拒绝（发给谁都不知道）。
+#   <top>      运行时目录的 git toplevel（物理路径）
+#   <main>     主检出（物理路径）
+#   <wt>       worktrees 目录（相对主检出或绝对）
+#   <名册>     名册拼写（空格分隔）
+team_seat_from_paths() { # <top> <main> <wt> <名册> → stdout: <座位名> | 空
+  local top="$1" main="$2" wt="${3:-.worktrees}" roster="${4:-}" rest n a
+  [ -n "$top" ] && [ -n "$main" ] || return 0
   # 主工作树 = PM 自己（M40：身份就是运行时目录，不是继承来的 TEAM_*）
-  [ "$nroot" = "$nmain" ] && { printf 'pm\n'; return 0; }
-  case "$wt" in /*) nprefix="$(team_identity_norm_dir "$wt")" ;; *) nprefix="$(team_identity_norm_dir "$nmain/$wt")" ;; esac
-  case "$nroot" in
-    "$nprefix"/*) rest="${nroot#"$nprefix"/}" ;;
+  [ "$top" = "$main" ] && { printf 'pm\n'; return 0; }
+  case "$wt" in /*) ;; *) wt="$main/$wt" ;; esac
+  wt="$(team_identity_norm_dir "$wt")"   # worktrees 目录也按物理路径比（它可以是软链）
+  case "$top" in
+    "$wt"/*) rest="${top#"$wt"/}" ;;
     *) return 0 ;;                 # 本项目的其它工作树（worktree add 到别处）→ 未解析
   esac
   n="${rest%%/*}"                  # worktrees 目录下的一级目录名（review-<ID> 这类非席位目录也算名字）
   [ -n "$n" ] || return 0
   # 名册优先：名字与席位一致时用名册里的拼写（大小写/别名以名册为准；不等则照目录名记）
-  for a in $(team_agents); do
+  for a in $roster; do
     [ "$n" = "$a" ] && { printf '%s\n' "$a"; return 0; }
   done
   printf '%s\n' "$n"
+}
+
+# 运行时目录 → 座位名；推不出来 → 空（stdout）。只负责把它身处的三个环境量与名册喂给推导。
+team_sender_from_dir() { # → stdout: <座位名> | 空
+  local main="${TEAM_MAIN_ROOT:-}" root="${TEAM_ROOT:-}" wt="${TEAM_WORKTREES_DIR:-.worktrees}"
+  local nroot nmain
+  [ -n "$main" ] && [ -n "$root" ] || return 0
+  # 物理路径比较：软链/尾斜杠/相对路径都不许把「同一个工作树」判成两个
+  nroot="$(team_identity_norm_dir "$root")"
+  nmain="$(team_identity_norm_dir "$main")"
+  [ -n "$nroot" ] || return 0
+  team_seat_from_paths "$nroot" "$nmain" "$wt" "$(team_agents)"
 }
 
 # P201 · 主检出的**席位线索**：只许**否决**目录的 `pm` 声明，绝不自行成为发送者。
