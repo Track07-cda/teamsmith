@@ -16959,6 +16959,8 @@ p287c_named_ok() { # <条目名> → 0 = 合规
 # 起一套**嵌套**运行（私有 TMPDIR + 私有 TMPDIR 里的默认锁路径），边跑边把临时根里的条目收进 watch 文件：
 # 队列标记与选段副本是**瞬时**的，只有轮询才看得见（契约点名的两样正是它们）。
 # 红侧用 tmp-root 自己的翻转开关 `TMP_ROOT_BREAK=flat-name`（design §9 ⑥；它是那一层的自检开关）。
+# P324：嵌套运行不继承外层的 `--keep`（`TEAM_TMP_KEEP`/`TEAM_SMOKE_KEEP` 在下面被 `-u`）：保留开关属于
+# 发起它的那一层，而 CI 的 gate 步永远带 `--keep` —— 继承下去会让嵌套运行自己的「不泄漏」断言在 CI 里被跳过。
 p287c_run() { # <日志> [<break 阶段>]
   local out="$1" brk="${2:-}"
   local watch="$P287C/watch-$(basename "${out%.log}").txt"
@@ -16970,6 +16972,7 @@ p287c_run() { # <日志> [<break 阶段>]
       -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
       -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT -u TEAM_SMOKE_BREAK \
       -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_MARKER -u SMOKE_LOCK -u TMP_ROOT_BREAK \
+      -u TEAM_TMP_KEEP -u TEAM_SMOKE_KEEP \
       TMPDIR="$P287C_TMP" TEAM_SMOKE_FIXTURE=1 \
       ${be[@]+"${be[@]}"} \
       bash "$SKILL_DIR/tests/smoke.sh" --select 0b,0c ) >"$out" 2>&1 &
@@ -17098,7 +17101,10 @@ p287n_ns() { # <检出> → 在**那个检出**里算 ns（env -u TEAM_PROJECT�
 # 每个探针给一个**自己的 run id**：台账按 run 归因（`repo=` 读的是那一行），继承外层门禁的 run id 会把
 # 两个仓库都算成「本仓库的」（那正是归因要分出来的东西）。
 p287n_root_live() { # <检出> <输出文件> <run 标签>：活着的进程建根 → 记「路径<TAB>标记里的 ns」→ 保持存活
-  env -u TEAM_PROJECT TMPDIR="$P287N_TMP" TEAM_TMP_RUN_ID="$3" bash -c '
+  # P324：探针自己的回收不跟随外层的 `--keep`（同 §0f §40 的嵌套夹具：保留开关只属于发起它的那一层）。
+  # 不清就会让「主人退场 → 根被回收」这条断言在 `--keep` 下必红 —— 而 CI 的 gate 步永远带 `--keep`。
+  env -u TEAM_PROJECT -u TEAM_TMP_KEEP -u TEAM_SMOKE_KEEP \
+      TMPDIR="$P287N_TMP" TEAM_TMP_RUN_ID="$3" bash -c '
     p="$1"; out="$2"
     . "$p/skills/teamsmith/tests/lib/tmp-root.sh" >/dev/null 2>&1
     r=$(tmp_root_create nsprobe) || exit 3
