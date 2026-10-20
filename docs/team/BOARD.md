@@ -511,7 +511,7 @@
 | P322 | Explore behavior-focused CI without repeated nested gates | dev-bob | - | - | done |
 | P323 | Diagnose CI cleanup and missing failure scene from existing evidence | verify | - | - | done |
 | P324 | Repair keep-mode reclaim probe and collect actual CI scenes | dev2 | - | P323 | wip |
-| P325 | Propose smaller CI execution without losing behavior coverage | dev-bob | - | P322 | todo |
+| P325 | Propose smaller CI execution without losing behavior coverage | dev-bob | - | P322 | wip |
 | V65 | Independently verify packaged npm entries and selector contract | verify | - | P321 | wip |
 
 ## 当前里程碑
