@@ -517,8 +517,9 @@
 | P326 | Apply behavior-focused-ci: floor declaration, NUL path chain, probe de-duplication, docs and spec alignment | dev | - | P325 | wip |
 | P327 | Make panel-b2 real: replace fixed sleeps with bounded waits, wire it into a gate section | dev3 | - | P318 | todo |
 | P328 | Guard inventory (read-only): classify archived changes and name <=5 retirements | dev-bob | - | - | done |
-| P330 | Delete the never-invoked fixtures (P328 action 3), four hard constraints | dev-bob | - | P328 | todo |
+| P330 | Delete the never-invoked fixtures (P328 action 3), four hard constraints | dev-bob | - | P328 | wip |
 | P329 | Waiter patience follows the holder heartbeat, not a budget projection (P328 action 2 + 1 + 4) | dev-bob | - | P330 | todo |
+| V67 | Independently re-scan whether every fixture P330 deleted is truly unreachable | verify | - | P330 | todo |
 
 ## 当前里程碑
 
