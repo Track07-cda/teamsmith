@@ -106,6 +106,46 @@ fi
 [ -f "$panel" ] || { printf 'panel-b2: no bundle at %s\n' "$panel" >&2; exit 3; }
 [ -f "$fake_tui" ] || { printf 'panel-b2: no fake TUI at %s\n' "$fake_tui" >&2; exit 3; }
 
+# ── P336：等待用既有的 lib/pty-wait.sh（等「那件事为真」，不再靠固定 sleep 猜时间）───────────
+# 引擎的契约是「caller 提供 pty_cap，它等到条件成立 **且** 帧静止」；耗尽时它打一行「没等到 …」+ 现场
+# 并返回 1 —— 这里**不让它致命**：紧随其后的断言照旧执行，于是缺陷的样子是「没等到什么」加上那条 ✗，
+# 而不是一个被提前放行掩盖的绿。capture 用**可见区**（不带 scrollback）：上一轮留在回滚区里的旧画面
+# 不能把这一轮的等待提前放行。
+#
+# 两样断言要读、却不在帧文本里的状态（插入点在这是终端光标，草稿是文件）由夹具**附在 capture 末尾**
+# 交给同一个引擎 —— 不是第二套等待逻辑，仍是 pty_wait_frame 的「条件 + 静止」，只是条件里多一行。
+# 行尾的 ` @@` 是收尾符：`@@draft ad @@` 不会命中 `@@draft ad\nb @@` 这种前缀。
+. "$here/lib/pty-wait.sh"
+b2_wait_pane=""
+b2_wait_state=""
+_b2_esc() { local s="${1//\\/\\\\}"; printf '%s' "${s//$'\n'/\\n}"; }
+pty_cap() {
+  tmux -L "$sock" capture-pane -p -t "${b2_wait_pane:-$sess:panel}" 2>/dev/null
+  case "$b2_wait_state" in
+    cursor) printf '@@cursor %s %s @@\n' "$(cursor_x)" "$(cursor_y)" ;;
+    draft)  printf '@@draft %s @@\n' "$(_b2_esc "$(draft)")" ;;
+  esac
+}
+pty_pane_state() { tmux -L "$sock" display -p -t "${b2_wait_pane:-$sess:panel}" '#{pane_dead}:#{pane_dead_status}' 2>/dev/null; }
+# wait_frame <label> <needle…>：等到这些串落在面板的静止帧上（`!text` = 必须不在）。返回引擎的判定（0 等到 / 1 耗尽）。
+wait_frame() { local label="$1"; shift; pty_wait_frame - "$label" "$@" || return 1; }
+# wait_state <cursor|draft> <label> <needle…>：同上，capture 末尾多一行夹具状态。
+wait_state() {
+  local kind="$1" label="$2" prev="$b2_wait_state"; shift 2
+  b2_wait_state="$kind"
+  pty_wait_frame - "$label" "$@" || true
+  b2_wait_state="$prev"
+}
+# wait_cursor <label> <x> [y]：等插入点落到这个格子（不给 y 就只看列）。
+wait_cursor() {
+  local label="$1" x="$2" y="${3:-}"
+  if [ -n "$y" ]; then wait_state cursor "$label" "@@cursor $x $y @@"; else wait_state cursor "$label" "@@cursor $x "; fi
+}
+# wait_draft <label> <期望正文>：等草稿文件逐字节变成这段（换行按 capture 的转义写法比）。
+wait_draft() { local label="$1"; shift; wait_state draft "$label" "@@draft $(_b2_esc "$1") @@"; }
+# 标题条那条 ─ 是整幅宽的：41 个连着的 ─ 在不在，就是「帧是不是按新宽度画的」。
+B2_RULE41="$(printf '─%.0s' $(seq 1 41))"
+
 # ---------------------------------------------------------------- fixture plumbing
 server_up() { # <name> → fresh project + private tmux session
   current="$1"
@@ -133,7 +173,8 @@ start_pm() { # <draft> [extra env string]
   tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
   tmux -L "$sock" new-window -d -t "$sess" -n pm -c "$ROOT" \
     "FAKE_TUI_DRAFT=$(printf '%q' "$draft") FAKE_TUI_COLS=100 FAKE_TUI_SUBMIT_LOG=$(printf '%q' "$tmp/$current/submit.log") $extra python3 '$fake_tui'"
-  sleep 1
+  # 假 TUI 把输入框画出来才算起来了（面板的忙/闲判定读的就是这个窗格）。
+  b2_wait_pane="$sess:pm"; pty_wait_frame - "pm 窗格起来" 'fixture TUI' || true; b2_wait_pane=""
 }
 
 start_panel() { # [extra env string] [panel args...]
@@ -145,17 +186,10 @@ start_panel() { # [extra env string] [panel args...]
   wait_panel
 }
 
-wait_panel() { # the first frame is on screen
-  local i
-  for i in $(seq 1 40); do
-    if tmux -L "$sock" capture-pane -p -t "$sess:panel" 2>/dev/null | grep -qF 'teamsmith pulse'; then
-      sleep 0.4
-      return 0
-    fi
-    sleep 0.25
-  done
+wait_panel() { # the first frame is on screen and settled (not a half paint)
+  pty_wait_frame - "控制台首帧" 'teamsmith pulse' && return 0
   printf 'panel-b2: the console pane never rendered (%s)\n' "$current" >&2
-  tmux -L "$sock" capture-pane -p -t "$sess:panel" 2>/dev/null | tail -5 >&2
+  pty_cap | tail -5 >&2
   return 1
 }
 
@@ -164,8 +198,28 @@ cap_to() { cap > "$tmp/$current/${1:-cap}.txt"; }
 cap_has() { local f="$tmp/$current/${2:-cap}.txt"; cap >"$f"; assert_has "$f" "$1" "捕获里有 [$1]"; }
 cap_not_has() { local f="$tmp/$current/${2:-cap}.txt"; cap >"$f"; assert_not_has "$f" "$1" "捕获里没有 [$1]"; }
 pm_cap() { tmux -L "$sock" capture-pane -p -t "$sess:pm" -S -1000 2>/dev/null; }
-keys() { tmux -L "$sock" send-keys -t "$sess:panel" "$@" 2>/dev/null; }
-type_text() { tmux -L "$sock" send-keys -l -t "$sess:panel" "$1" 2>/dev/null; }
+# 两次发送之间至少留这个间隔（秒，小数）：**不是**在等某个状态，而是让两次输入落进两次 stdin 读。
+# Ink 的 `useInput` 对每个 stdin 数据块只解析一次，多字符块按「粘贴」整串交给调用方 —— 两个背靠背的
+# `send-keys` 挨得太近就合成一次输入，`C-w`/`M-b`/`C-k` 这类控制键随之消失（V75 在不带 tmux shim 的
+# PATH 里实测：main 的连发 0 处、本夹具 20 处；带 shim 时每次调用多 ~16 ms，所以那种绿是环境依赖的）。
+# 很多键的效果要一串按完才可见（`C-a` 本来就在行首、`C-d` 在行尾……），挨个等状态等不到，所以这一处
+# 只能是最短的固定间隔；它只在上一次发送同样近时才起作用 —— 中间有 `wait_*`/`cap` 时一秒也不花。
+B2_KEY_GAP_US=200000
+_b2_send() { # <send-keys argv…>
+  local now us rem
+  now="${EPOCHREALTIME//[!0-9]/}"
+  if [ -n "${_b2_last_send:-}" ]; then
+    us=$(( now - _b2_last_send ))
+    rem=$(( B2_KEY_GAP_US - us ))
+    if [ "$rem" -gt 0 ]; then
+      sleep "$((rem / 1000000)).$(printf '%06d' $((rem % 1000000)))"
+    fi
+  fi
+  tmux -L "$sock" send-keys -t "$sess:panel" "$@" 2>/dev/null
+  _b2_last_send="${EPOCHREALTIME//[!0-9]/}"
+}
+keys() { _b2_send "$@"; }
+type_text() { _b2_send -l "$1"; }
 cursor_x() { tmux -L "$sock" display -p -t "$sess:panel" '#{cursor_x}' 2>/dev/null | tr -d ' '; }
 cursor_y() { tmux -L "$sock" display -p -t "$sess:panel" '#{cursor_y}' 2>/dev/null | tr -d ' '; }
 # The visible pane only (no scrollback): tmux's `#{cursor_y}` is 0-based over exactly these rows.
@@ -176,7 +230,13 @@ vis_row() { cap_visible | grep -nF -- "$1" | head -1 | cut -d: -f1 | awk '{print
 draft_rows() { cap_visible | grep -cE '^│ (>|  )'; }
 # The number the hidden-rows marker counts, or 0 when the window hides nothing above.
 marker_n() { cap_visible | sed -n 's/.*↑\([0-9][0-9]*\) 行.*/\1/p' | head -1; }
-resize_pane() { tmux -L "$sock" resize-window -t "$sess:panel" -x "$1" -y "$2" 2>/dev/null || true; sleep 1.4; }
+# 改尺寸后等到面板**按新宽度重画**（整幅宽的 ─ 是宽度的直接证据：≥60 列的布局有 41 连 ─，40 列的
+# 布局一行都装不下 41 个），再叠上引擎的「帧静止」。
+resize_pane() {
+  tmux -L "$sock" resize-window -t "$sess:panel" -x "$1" -y "$2" 2>/dev/null || true
+  if [ "$1" -ge 60 ]; then wait_frame "尺寸 ${1}x$2" "$B2_RULE41"
+  else wait_frame "尺寸 ${1}x$2" "!$B2_RULE41"; fi
+}
 draft_lines_count() { grep -c '' "$(draft_file)" 2>/dev/null || printf '0'; }
 stamp() { cap | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -1; }
 draft_file() { printf '%s\n' "$ROOT/.pi/team/state/draft.md"; }
@@ -220,66 +280,66 @@ scenario_cursor() {
   start_pm '' ''
   start_panel
   # ① `ad` → ← → 中文 → ← → Backspace：编辑发生在插入点，宽字形是一步、整字删除
-  keys m; sleep 0.8
-  type_text 'ad'; sleep 0.5
-  keys Left; sleep 0.4
-  type_text '中文'; sleep 0.5
-  keys Left; sleep 0.4
-  keys BSpace; sleep 0.6
+  keys m; wait_frame "B1 写信托盘" 'Enter 发送'
+  type_text 'ad'
+  keys Left
+  type_text '中文'
+  keys Left; keys BSpace
+  wait_frame "B1 插入点退格" '> a文d'
   cap_to after-bs
   assert_has "$tmp/cursor/after-bs.txt" '> a文d' "B1 插入点 Backspace：草稿 a文d"
   assert_eq "B1 草稿文件 a文d" "$(draft)" "a文d"
 
-  keys Right; sleep 0.5
+  keys Right; wait_cursor "B1 跨宽字形一步" 7
   assert_eq "B1 跨宽字形一步 → cursor_x=7" "$(cursor_x)" "7"
-  keys BSpace; sleep 0.6
+  keys BSpace; wait_frame "B1 宽字形整字删除" '> ad'
   cap_to after-wide-bs
   assert_has "$tmp/cursor/after-wide-bs.txt" '> ad' "B1 宽字形整字删除（不剩半个）"
   assert_eq "B1 草稿回到 ad" "$(draft)" "ad"
 
   # ② 40 列 pane：40 个 x 的草稿，插入点在软换行的第二行；Home + Z 落回第一行
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B1 写信收起" '!Enter 发送'
   python3 -c 'import sys; sys.stdout.write("x"*40)' > "$(draft_file)"
   resize_pane 40 30
-  keys m; sleep 0.9
+  keys m; wait_frame "B1 40 列写信托盘" 'Enter 发送'
 
-  keys Home; sleep 0.5
-  type_text 'Z'; sleep 0.6
+  keys Home
+  type_text 'Z'; wait_frame "B1 软换行首插入" '> Zxxxx'
   cap_to wrap
 
   assert_eq "B1 cursor_y 指向绘制 Z 的软换行第一行" "$(cursor_y)" "$(vis_row '> Zxxxx')"
   assert_eq "B1 草稿 = Z + 40 个 x（插入在插入点，不在末尾）" "$(draft)" "Z$(python3 -c 'import sys; sys.stdout.write("x"*40)')"
 
   # ③ 同一 40 列 pane：ab\nXXXXXXXX，↑ 钳到较短行
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B1 写信收起" '!Enter 发送'
   printf 'ab\nXXXXXXXX' > "$(draft_file)"
-  keys m; sleep 0.9
+  keys m; wait_cursor "B1 换行草稿的插入点" 12
   assert_eq "B1 换行草稿：插入点在第二行 cursor_x=12" "$(cursor_x)" "12"
-  keys Up; sleep 0.6
+  keys Up; wait_cursor "B1 ↑ 钳到较短行" 6
   cap_to clamp
   assert_eq "B1 ↑ 钳到较短行 cursor_x=6" "$(cursor_x)" "6"
   assert_eq "B1 cursor_y 指向 ab 行" "$(cursor_y)" "$(vis_row '> ab')"
   assert_has "$tmp/cursor/clamp.txt" 'XXXXXXXX' "B1 另一行原样还在"
 
   # ④ 120x30：alpha\nbeta，Home/End/↑/X
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B1 写信收起" '!Enter 发送'
   resize_pane 120 30
   printf 'alpha\nbeta' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys Home; sleep 0.4
-  keys End; sleep 0.4
-  keys Up; sleep 0.5
-  type_text 'X'; sleep 0.6
+  keys m; wait_frame "B1 两行草稿的托盘" '> alpha'
+  keys Home
+  keys End
+  keys Up
+  type_text 'X'; wait_draft "B1 X 落在 alpha 行" "$(printf 'alphXa\nbeta')"
   cap_to rows
   assert_eq "B1 Home+End+↑+X → alphXa\\nbeta" "$(draft)" "$(printf 'alphXa\nbeta')"
 
   assert_eq "B1 cursor_y 指向 alpha 行" "$(cursor_y)" "$(vis_row '> alphXa')"
 
   # ⑤ 120x20 + 30 行草稿：窗口 ≤ 10 行、含插入点行、顶沿计数隐藏行
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B1 写信收起" '!Enter 发送'
   resize_pane 120 20
   python3 -c 'import sys; sys.stdout.write("\n".join("L%02d" % i for i in range(1, 31)))' > "$(draft_file)"
-  keys m; sleep 0.9
+  keys m; wait_frame "B1 30 行草稿的窗口" 'L30'
   cap_to window
   local rows_n marker1
   rows_n="$(draft_rows)"
@@ -299,8 +359,8 @@ scenario_cursor() {
 
   # ⑥ 窗口跟随插入点：↑ 12 次到 L18，标记计数变小
   local i
-  for i in $(seq 1 12); do keys Up; sleep 0.15; done
-  sleep 0.6
+  for i in $(seq 1 12); do keys Up; done
+  wait_frame "B1 窗口跟随插入点" 'L18'
   cap_to window-follow
   local marker2
   assert_has "$tmp/cursor/window-follow.txt" 'L18' "B1 窗口跟随：插入点行 L18 可见"
@@ -314,14 +374,14 @@ scenario_cursor() {
   # ①半（P318：原 `2.1 CJK` 场景并入这里 —— 它测的宽字形列宽与整字删除已被上面 ① 的
   # 「跨宽字形一步 / 整字删除」覆盖，只留它独有的三条：托盘把宽字符画出来、星平面字符按
   # **一个码点**删除（UTF-16 下两个码元）、文件与画面同步）。
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B1 写信收起" '!Enter 发送'
   printf '中文' > "$(draft_file)"
   resize_pane 120 30
-  keys m; sleep 0.9
+  keys m; wait_frame "B1 宽字符草稿的托盘" '│ > 中文'
   cap_to cjk-tray
   assert_has "$tmp/cursor/cjk-tray.txt" '│ > 中文' "B1 托盘把宽字符草稿画出来（│ > + 草稿）"
-  type_text '🙂'; sleep 0.6
-  keys BSpace; sleep 0.6
+  type_text '🙂'; wait_frame "B1 emoji 进草稿" '│ > 中文🙂'
+  keys BSpace; wait_frame "B1 emoji 整码点删除" '│ > 中文' '!🙂'
   cap_to cjk-emoji
   assert_has "$tmp/cursor/cjk-emoji.txt" '│ > 中文' "B1 星平面字符（emoji）退格整个码点删掉（不留半个代理对）"
   assert_eq "B1 草稿文件与画面同步（中文）" "$(draft)" "中文"
@@ -334,14 +394,14 @@ scenario_keys() {
   start_pm '' ''
   start_panel
   # ① 词/行/前向删除：alpha beta gamma → ctrl+w alt+b ctrl+d ctrl+k ctrl+a Z
-  keys m; sleep 0.8
-  type_text 'alpha beta gamma'; sleep 0.5
-  keys C-w; sleep 0.4        # 切 ` gamma`
-  keys M-b; sleep 0.4        # 词左移到 beta 开头
-  keys C-d; sleep 0.4        # 删前向一个码点（b）
-  keys C-k; sleep 0.4        # 删到逻辑行尾
-  keys C-a; sleep 0.4        # 逻辑行首
-  type_text 'Z'; sleep 0.6
+  keys m; wait_frame "B2 写信托盘" 'Enter 发送'
+  type_text 'alpha beta gamma'
+  keys C-w                  # 切 ` gamma`
+  keys M-b                  # 词左移到 beta 开头
+  keys C-d                  # 删前向一个码点（b）
+  keys C-k                  # 删到逻辑行尾
+  keys C-a                  # 逻辑行首
+  type_text 'Z'; wait_draft "B2 词/行/前向删除" 'Zalpha '
   cap_to words
   assert_eq "B2 词/行/前向删除 → Zalpha " "$(draft)" "Zalpha "
 
@@ -349,30 +409,30 @@ scenario_keys() {
 
   # ①半 ctrl+u（V33 第一轮 OBS-1 的缺测项）：清空到行首 → **持久化为空草稿**，重开/重启都不带回。
   # 合同：「a draft the human deleted with the compose line's own keys is not resurrected」。
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   printf '' > "$(draft_file)"
-  keys m; sleep 0.9
-  type_text 'half a thought'; sleep 0.5
+  keys m; wait_frame "B2 空草稿的托盘" 'Enter 发送'
+  type_text 'half a thought'; wait_draft "B2 正文已落盘" 'half a thought'
   assert_eq "B2 ctrl+u：清空前正文已落盘" "$(draft)" "half a thought"
-  keys C-u; sleep 0.8
+  keys C-u; wait_draft "B2 ctrl+u 清空草稿" ''
   assert_eq "B2 ctrl+u：草稿文件 0 字节（清空是持久的）" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
   cap_to ctrl-u
   assert_not_has "$tmp/keys/ctrl-u.txt" 'half a thought' "B2 ctrl+u：帧里不再出现被删掉的正文"
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   start_panel
-  keys m; sleep 0.9
+  keys m; wait_frame "B2 重开后的托盘" 'Enter 发送'
   cap_to ctrl-u-reopen
   assert_not_has "$tmp/keys/ctrl-u-reopen.txt" 'half a thought' "B2 ctrl+u：重开（重启后 m）不带回已删正文"
   assert_eq "B2 ctrl+u：重开后草稿文件仍是 0 字节" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
 
   # ② 逻辑行边界：45 字符行 + second，↑ ctrl+a ctrl+k → \nsecond
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   resize_pane 40 30
   python3 -c 'import sys; sys.stdout.write("x"*45 + "\nsecond")' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys Up; sleep 0.4
-  keys C-a; sleep 0.4
-  keys C-k; sleep 0.5
+  keys m; wait_frame "B2 长行草稿的托盘" 'second'
+  keys Up
+  keys C-a
+  keys C-k; wait_draft "B2 ctrl+k 删整逻辑行" "$(printf '\nsecond')"
   cap_to line
   assert_eq "B2 ctrl+k 删的是逻辑行（整行 45 字符），不是绘制行" "$(draft)" "$(printf '\nsecond')"
 
@@ -380,87 +440,88 @@ scenario_keys() {
   # ③ Kitty 编码：ctrl+b ×3 + alt+b 与 legacy 字节落在同一插入点
   # （spec 原写 cursor_x 12；实测/算术都是 10 —— alpha beta 末尾 3×← 到 index 7、再一词到 6，
   #  `│ > alpha ` 共 10 列。两种编码必须一致，这条断言是硬约束，数值随实测修正。）
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   resize_pane 120 30
   printf 'alpha beta' > "$(draft_file)"
-  keys m; sleep 0.9
-  type_text $'\x1b[98;5u\x1b[98;5u\x1b[98;5u'; sleep 0.5
-  type_text $'\x1b[98;3u'; sleep 0.6
+  keys m; wait_frame "B2 单行草稿的托盘" '> alpha beta'
+  type_text $'\x1b[98;5u\x1b[98;5u\x1b[98;5u'
+  type_text $'\x1b[98;3u'; wait_cursor "B2 Kitty ctrl+b×3+alt+b" 10
   local kitty_x
   kitty_x="$(cursor_x)"
   assert_eq "B2 Kitty ctrl+b×3 + alt+b 后 cursor_x=10（alpha |beta）" "$kitty_x" "10"
   assert_eq "B2 Kitty 编码移动不改草稿" "$(draft)" "alpha beta"
   # 同一条序列的 legacy 字节（ctrl+b = 0x02 单独发；alt+b = ESC b）必须落在同一处。
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   printf 'alpha beta' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys C-b; sleep 0.25; keys C-b; sleep 0.25; keys C-b; sleep 0.25
-  keys M-b; sleep 0.5
+  keys m; wait_frame "B2 单行草稿的托盘" '> alpha beta'
+  keys C-b; keys C-b; keys C-b
+  keys M-b; wait_cursor "B2 legacy 字节复跑同一条序列" "$kitty_x"
   assert_eq "B2 legacy 字节复跑同一条序列落点与 Kitty 相同" "$(cursor_x)" "$kitty_x"
 
   # ④ kill ring：ctrl+w ctrl+a ctrl+k ctrl+y alt+y → ` gamma`
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   printf 'alpha beta gamma' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys C-w; sleep 0.4
-  keys C-a; sleep 0.4
-  keys C-k; sleep 0.4
-  keys C-y; sleep 0.4
-  keys M-y; sleep 0.6
+  keys m; wait_frame "B2 三词草稿的托盘" '> alpha beta gamma'
+  keys C-w
+  keys C-a
+  keys C-k
+  keys C-y
+  keys M-y; wait_draft "B2 ring：alt+y 换回旧的" ' gamma'
   cap_to ring
   assert_eq "B2 ring：ctrl+y 放回新的，alt+y 换成旧的 → 空格+gamma" "$(draft)" " gamma"
 
   # ⑦ 词边界用平台的 word segmenter（标点在 pi 里是停点）：alt+b/alt+d 不能把 alpha-beta 当一个词
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   printf 'alpha-beta gamma' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys C-w; sleep 0.4        # 切 ` gamma`
-  keys M-b; sleep 0.4        # 词左移：pi 停在 beta 开头（不是 alpha-beta 的开头）
-  keys M-d; sleep 0.5        # 删 beta（alpha- 后停，不跨过标点）
+  keys m; wait_frame "B2 带标点草稿的托盘" '> alpha-beta gamma'
+  keys C-w                  # 切 ` gamma`
+  keys M-b                  # 词左移：pi 停在 beta 开头（不是 alpha-beta 的开头）
+  keys M-d; wait_draft "B2 标点是词停点" 'alpha-'
   cap_to punctuation
   assert_eq "B2 标点是词停点：alpha-beta gamma → alpha-" "$(draft)" "alpha-"
 
 
   # ⑦半 word segmenter 对 CJK 真的分词（pi 用 Intl.Segmenter；「白空格规则」会把整串当一个词）
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   printf '中文中文' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys M-b; sleep 0.4        # 词左移：pi 切出两个「中文」，回到后一个的开头
-  type_text 'X'; sleep 0.5
+  keys m; wait_frame "B2 中文草稿的托盘" '│ > 中文中文'
+  keys M-b                  # 词左移：pi 切出两个「中文」，回到后一个的开头
+  type_text 'X'; wait_draft "B2 CJK 词边界" '中文X中文'
   cap_to cjk-word
   assert_eq "B2 CJK 词边界：alt+b 只回上一个词（中文X中文）" "$(draft)" "中文X中文"
 
 
   # ⑧ kill ring 累积：同方向连续切合并成一条（ctrl+w ×2 → ` beta gamma`）
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   printf 'alpha beta gamma' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys C-w; sleep 0.3; keys C-w; sleep 0.4
+  keys m; wait_frame "B2 三词草稿的托盘" '> alpha beta gamma'
+  keys C-w; keys C-w; wait_draft "B2 两次 ctrl+w" 'alpha'
   assert_eq "B2 两次 ctrl+w 后只剩 alpha" "$(draft)" "alpha"
-  keys C-a; sleep 0.3
-  keys C-k; sleep 0.4
-  keys C-y; sleep 0.4
-  keys M-y; sleep 0.6
+  keys C-a
+  keys C-k
+  keys C-y
+  keys M-y; wait_draft "B2 ring 累积" ' beta gamma'
   cap_to ring-accum
   assert_eq "B2 ring 累积：alt+y 换回合并的一条（空格+beta+空格+gamma）" "$(draft)" " beta gamma"
 
   # ⑤ undo：Z 之后 Kitty ctrl+- 恢复草稿与插入点，再按一次不变
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B2 写信收起" '!Enter 发送'
   printf 'ad' > "$(draft_file)"
-  keys m; sleep 0.9
-  keys Left; sleep 0.4
-  type_text 'Z'; sleep 0.5
-  type_text $'\x1b[45;5u'; sleep 0.6
+  keys m; wait_frame "B2 两字草稿的托盘" '> ad'
+  keys Left
+  type_text 'Z'; wait_draft "B2 undo 之前：草稿 aZd" 'aZd'
+  type_text $'\x1b[45;5u'; wait_draft "B2 ctrl+- 恢复草稿" 'ad'; wait_cursor "B2 ctrl+- 恢复插入点" 5
   cap_to undo
   assert_eq "B2 ctrl+- 恢复草稿 ad" "$(draft)" "ad"
   assert_eq "B2 ctrl+- 同时恢复插入点 cursor_x=5" "$(cursor_x)" "5"
+  # 保留（P336）：第二次 ctrl+- 是幂等空操作（历史已空）—— 帧与文件都不变，没有状态可等。
   type_text $'\x1b[45;5u'; sleep 0.6
   cap_to undo-empty
   assert_eq "B2 历史空了再按 ctrl+- 不变" "$(draft)" "ad"
   assert_has "$tmp/keys/undo-empty.txt" '> ad' "B2 undo 后帧仍完好"
 
   # ⑥ 未绑定的修饰键不插字母、不收控制台（P20 新断言：ctrl+c）
-  keys C-c; sleep 0.6
+  keys C-c; wait_frame "B2 ctrl+c 之后面板还在" 'Enter 发送'
   cap_to ctrlc
   assert_eq "B2 ctrl+c 不把 c 插进草稿" "$(draft)" "ad"
   assert_has "$tmp/keys/ctrlc.txt" 'teamsmith pulse' "B2 ctrl+c 没有收起控制台"
@@ -482,41 +543,42 @@ scenario_multiline() {
   start_panel
 
   # ① legacy `\n`（= ctrl+j）插换行；Enter 仍提交，一条两行的消息
-  keys m; sleep 0.7
-  type_text 'ad'; sleep 0.4
-  type_text $'\n'; sleep 0.5
+  keys m; wait_frame "B3 写信托盘" 'Enter 发送'
+  type_text 'ad'; wait_cursor "B3 ad 已进草稿" 6
+  # 换行落地：光标从 ad 后的 x=6 落到新一行提示符后的 x=4（草稿文件尾的 \n 会被 $() 吃掉，看不到）
+  type_text $'\n'; wait_cursor "B3 legacy \\n 插换行" 4
   cap_to after-lf
   assert_eq "B3 legacy \\n 插入换行而不是提交（草稿 ad+LF）" "$(draft)" "$(printf 'ad\n')"
   assert_has "$tmp/multiline/after-lf.txt" '> ad' "B3 换行后第一行还在"
-  type_text 'b'; sleep 0.5
+  type_text 'b'; wait_draft "B3 第二行的 b" "$(printf 'ad\nb')"
   cap_to two-lines
-  keys Enter; sleep 3
+  keys Enter; wait_frame "B3 Enter 提交拿到回执" '· queued'
   assert_eq "B3 Enter 仍提交：恰好一条条目" "$(entries | wc -l | tr -d ' ')" "1"
   assert_eq "B3 条目保住两行" "$(payload_of "$(entries | head -1)")" $'ad\nb'
   assert_eq "B3 换行键没有直接提交（忙框下一次都没到 PM 框）" "$(submits)" "0"
 
   # ② Kitty ctrl+j（CSI 106;5u）与 shift+enter（CSI 13;2u）都插换行、都不提交
   printf 'ad' > "$(draft_file)"
-  keys m; sleep 0.7
-  type_text $'\x1b[106;5u'; sleep 0.4
-  type_text 'b'; sleep 0.3
-  type_text $'\x1b[13;2u'; sleep 0.4
-  type_text 'c'; sleep 0.5
+  keys m; wait_frame "B3 重开写信托盘" '> ad'
+  type_text $'\x1b[106;5u'
+  type_text 'b'
+  type_text $'\x1b[13;2u'
+  type_text 'c'; wait_draft "B3 Kitty 两个换行键进草稿" "$(printf 'ad\nb\nc')"
   cap_to kitty
   assert_eq "B3 Kitty ctrl+j + shift+enter → ad\\nb\\nc" "$(draft)" "$(printf 'ad\nb\nc')"
   assert_eq "B3 Kitty 两个换行键都没有提交" "$(submits)" "0"
 
   # ③ 粘贴三行仍是"一条草稿、一条消息"
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B3 写信收起" '!Enter 发送'
   printf '' > "$(draft_file)"
-  keys m; sleep 0.7
-  type_text $'p-one\np-two\np-three'; sleep 0.6
-  keys Enter; sleep 3
+  keys m; wait_frame "B3 重开写信托盘" 'Enter 发送'
+  type_text $'p-one\np-two\np-three'; wait_draft "B3 三行粘贴进草稿" $'p-one\np-two\np-three'
+  keys Enter; wait_frame "B3 第三条的回执" '· queued'
   assert_eq "B3 粘贴三行 → 新增恰好一条条目" "$(entries | wc -l | tr -d ' ')" "2"
   assert_eq "B3 粘贴条目保住三行" "$(payload_of "$(entries | tail -1)")" $'p-one\np-two\np-three'
 
   # ④ standby 理由单行化：三行粘贴 → 一个空格分隔的参数；消息草稿不被动
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B3 写信收起" '!Enter 发送'
   printf 'half a thought' > "$(draft_file)"
   local wrapper="$tmp/multiline/team-wrap.sh"
   cat > "$wrapper" <<EOS
@@ -530,14 +592,14 @@ EOS
   tmux -L "$sock" new-window -d -t "$sess" -n panel -c "$ROOT" \
     "TEAM_JS_BIN=$(printf '%q' "$js") exec '$js' '$panel' --root '$ROOT' --team-cli '$wrapper' --state-dir '$ROOT/.pi/team/state' --no-pulse --interval 1"
   wait_panel
-  keys s; sleep 0.9
+  keys s; wait_frame "B3 理由输入行" 'Enter 进入待命'
   cap_to reason-open
   assert_has "$tmp/multiline/reason-open.txt" '待命原因' "B3 s 打开理由输入行"
-  type_text $'one\ntwo\nthree'; sleep 0.6
+  type_text $'one\ntwo\nthree'; wait_frame "B3 理由折成一行" 'one two three'
   cap_to reason-typed
   assert_has "$tmp/multiline/reason-typed.txt" 'one two three' "B3 三行粘贴在理由里变成一行（空格分隔）"
   assert_not_has "$tmp/multiline/reason-typed.txt" '  two' "B3 理由区没有出现第二绘制行"
-  keys Enter; sleep 3
+  keys Enter; wait_frame "B3 待命已开" '待命 on'
   cap_to reason-sent
   # P318：`待命 on` 的帧回执由 scenario_actions（同一个 s 键，同样的理由行）断言 —— 这里只留
   # 多行→单行这条**本场景独有**的行为。
@@ -626,9 +688,9 @@ EOXC
   reset_clip
   start_pm '' ''
   start_panel "$(clip_env image image)"
-  keys m; sleep 0.8
-  keys Left; sleep 0.4
-  keys C-v; sleep 1.5
+  keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys Left
+  keys C-v; wait_frame "B4 图片落成临时文件路径" 'teamsmith-paste-'
   cap_to image
   local file
   file="$(pasted_file)"
@@ -640,17 +702,17 @@ EOXC
 
   assert_match "$fx/calls.log" '^wl-paste --list-types$' "B4 探测先问 wl-paste"
   if grep -q '^xclip' "$fx/calls.log"; then bad "B4 Wayland 命中时不该调用 xclip"; else ok "B4 Wayland 命中时 xclip 没有被调用"; fi
-  type_text 'Z'; sleep 0.5
+  type_text 'Z'; wait_draft "B4 粘贴后继续打字落到草稿" "a${file}Zd"
   assert_eq "B4 粘贴后继续打字落到草稿（插入点之后）" "$(draft)" "a${file}Zd"
 
   # ② Wayland 失败 → X11：仍成图，调用日志里 wl-paste 在 xclip 之前
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
   printf 'ad' > "$(draft_file)"
   reset_clip
   start_panel "$(clip_env fail image)"
-  keys m; sleep 0.8
-  keys Left; sleep 0.4
-  keys C-v; sleep 1.5
+  keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys Left
+  keys C-v; wait_frame "B4 Wayland 失败后 X11 回退成图" 'teamsmith-paste-'
   cap_to x11
   file="$(pasted_file)"
   assert_eq "B4 X11 回退：文件内容 XCLIPDATA" "$(cat "$file" 2>/dev/null)" "XCLIPDATA"
@@ -665,53 +727,56 @@ EOXC
   fi
 
   # ③ 无图片 → 文本回退，且不调用 xclip
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
   printf 'ad' > "$(draft_file)"
   reset_clip
   start_panel "$(clip_env text image)"
-  keys m; sleep 0.8
-  keys Left; sleep 0.4
-  keys C-v; sleep 1.5
+  keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys Left
+  keys C-v; wait_frame "B4 文本回退进草稿" '> afrom the clipboardd'
   cap_to text-fallback
   assert_eq "B4 文本回退：afrom the clipboardd" "$(draft)" "afrom the clipboardd"
   assert_eq "B4 文本回退不写临时文件" "$(paste_count)" "0"
   if grep -q '^xclip' "$fx/calls.log"; then bad "B4 文本回退不该调用 xclip"; else ok "B4 文本回退不调用 xclip"; fi
 
   # ④ 两个工具都不给东西：什么都不变；挂死的工具在界内被放弃
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
   printf 'half a thought' > "$(draft_file)"
   reset_clip
   start_panel "$(clip_env fail fail)"
-  keys m; sleep 0.8
-  keys C-v; sleep 1.5
+  keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys C-v; wait_draft "B4 无工具：探测什么都不改" 'half a thought'
   cap_to no-tool
   assert_eq "B4 无工具：草稿不变" "$(draft)" "half a thought"
   assert_eq "B4 无工具：没有文件" "$(paste_count)" "0"
   assert_has "$tmp/clipboard/no-tool.txt" '> half a thought' "B4 无工具：帧照常、没有错误行"
-  type_text 'Z'; sleep 0.5
+  type_text 'Z'; wait_draft "B4 无工具后仍能打字" 'half a thoughtZ'
   assert_eq "B4 无工具后仍能打字" "$(draft)" "half a thoughtZ"
 
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
   printf 'half a thought' > "$(draft_file)"
   reset_clip
   start_panel "$(clip_env hang fail)"
-  keys m; sleep 0.8
+  keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  # 保留（P336）：挂死的工具下探测的结果是「什么都不发生」——没有回执行、没有文件、没有忙行，
+  # 它的“结束”无处可观测；而这条要证明的正是「工具企着的时候面板照旧可输入」，所以 Z 必须落在
+  # 工具还在挂的时候，这段空闲窗口不是等一个状态。
   keys C-v; sleep 5
   cap_to hang
   assert_eq "B4 挂死工具 5s 内：草稿不变" "$(draft)" "half a thought"
   assert_eq "B4 挂死工具：没有文件" "$(paste_count)" "0"
-  type_text 'Z'; sleep 0.5
+  type_text 'Z'; wait_draft "B4 挂死工具期间仍能打字" 'half a thoughtZ'
   assert_eq "B4 挂死工具期间仍能打字" "$(draft)" "half a thoughtZ"
-  keys Escape; sleep 0.5
+  keys Escape; wait_frame "B4 Esc 收起写信" '!Enter 发送'
   assert_eq "B4 Esc 仍关掉输入行并保留草稿" "$(draft)" "half a thoughtZ"
 
   # ⑤ 理由模式：路径进理由行，消息草稿不动
   printf 'half a thought' > "$(draft_file)"
   reset_clip
   start_panel "$(clip_env image image)"
-  keys s; sleep 0.9
-  type_text 'why'; sleep 0.4
-  keys C-v; sleep 1.5
+  keys s; wait_frame "B4 待命理由输入行" 'Enter 进入待命'
+  type_text 'why'
+  keys C-v; wait_frame "B4 理由行里出现图片路径" 'teamsmith-paste-'
   cap_to reason
   file="$(pasted_file)"
   # 理由行里要有**整条**路径 —— 但路径比一行宽时产品会折行画出（P309 起临时根就比 120 列面板宽：夹具这条
@@ -740,7 +805,7 @@ printf '%s\n' "\$*" >> "$fx/team.log"
 exec "$skill/scripts/team" "\$@"
 EOS
   chmod +x "$fx/teamwrap.sh"
-  keys Escape; sleep 0.4
+  keys Escape; wait_frame "B4 写信收起" '!Enter 发送'
   printf 'ad' > "$(draft_file)"
   reset_clip
   : > "$fx/team.log"
@@ -748,21 +813,26 @@ EOS
   tmux -L "$sock" new-window -d -t "$sess" -n panel -c "$ROOT" \
     "TEAM_JS_BIN=$(printf '%q' "$js") $(clip_env image image) exec '$js' '$panel' --root '$ROOT' --team-cli '$fx/teamwrap.sh' --state-dir '$ROOT/.pi/team/state' --no-pulse --interval 1"
   wait_panel
-  keys m; sleep 0.8
-  keys Left; sleep 0.4
+  keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  keys Left
   : > "$fx/team.log"
-  keys C-v; sleep 1.5
+  # 这里的 ___panel-data 桩**什么都不返回**（它只负责证明没有 team 动作），产品没有 temp_root 可写 →
+  # 粘贴是一次「什么都不变」的空操作（P331 的同一条件）。等的状态是草稿仍是 ad。
+  keys C-v; wait_draft "B4 只读：C-v 之后草稿仍是 ad" 'ad'
   assert_eq "B4 只读：C-v 没有触发任何 team 动作" "$(wc -l < "$fx/team.log" 2>/dev/null | tr -d ' ')" "0"
 
 
   # ⑦ 不按 C-v 就绝不起剪贴板工具：5s 空闲（写信关着、开着各一段）调用日志为空
+  # 保留（P336）：这是「一段窗口里什么都没发生」的否定观察，没有状态可等（可等的那个状态就是
+  # 「窗口过去了」自己）；两段 5s 就是被测的长度。
   reset_clip
   : > "$fx/calls.log"
   start_panel "$(clip_env image image)"
   sleep 5
   local idle_idle idle_compose
   idle_idle="$(wc -l < "$fx/calls.log" | tr -d ' ')"
-  keys m; sleep 5
+  keys m; wait_frame "B4 写信托盘" 'Enter 发送'
+  sleep 5
   idle_compose="$(wc -l < "$fx/calls.log" | tr -d ' ')"
   # P318：两个状态（写信关着 / 开着）是同一条「不按 C-v 就不起工具」的两半 → 一条断言数出两处
   # （两段各 5s 的观察都保留，少的是重复的断言而不是观察）。
@@ -775,31 +845,24 @@ scenario_draft() {
   server_up draft
   start_pm '' ''
   start_panel
-  keys m
-  sleep 0.6
-  type_text 'half a thought'
-  sleep 0.5
-  keys Escape
-  sleep 0.6
+  keys m; wait_frame "2.2 写信托盘" 'Enter 发送'
+  type_text 'half a thought'; wait_draft "2.2 草稿落盘" 'half a thought'
+  keys Escape; wait_frame "2.2 写信收起" '!Enter 发送'
   assert_eq "2.2 Esc 后 state/draft.md 保留草稿" "$(draft)" "half a thought"
   keys q
-  sleep 1.2
   start_panel
-  keys m
-  sleep 0.8
+  keys m; wait_frame "2.2 重启后带出草稿" '> half a thought'
   cap_to restored
   assert_has "$tmp/draft/restored.txt" "> half a thought" "2.2 重启后 m 带出草稿"
   # \r 归一：用带 CR 的粘贴进草稿（bracketed paste 里的 CR 是换行，不是提交）
   keys Escape
-  sleep 0.4
+  wait_frame "2.2 写信收起" '!Enter 发送'
   keys q
-  sleep 1.2
   rm -f "$(draft_file)"
   start_panel
-  keys m
-  sleep 0.6
+  keys m; wait_frame "2.2 空草稿的托盘" 'Enter 发送'
   type_text $'\x1b[200~cr-one\rcr-two\rcr-three\x1b[201~'
-  sleep 0.8
+  wait_draft "2.2 CR 归一为换行" $'cr-one\ncr-two\ncr-three'
   cap_to cr
   assert_eq "2.2 CR 归一为换行（三行草稿）" "$(draft)" $'cr-one\ncr-two\ncr-three'
   if printf '%s' "$(draft)" | grep -q $'\r'; then
@@ -829,13 +892,10 @@ EOS
   printf 'ad' > "$(draft_file)"
   start_pm 'PM draft' ''
   start_panel "EDITOR=$tmp/editor.sh TEAM_B2_EDITOR_HOLD=4 TEAM_B2_EDITOR_MARKER=$tmp/editor/marker"
-  keys m
-  sleep 0.7
-  keys Left
-  sleep 0.4
+  keys m; wait_frame "B3 写信托盘" '> ad'
+  keys Left; wait_cursor "B3 插入点在 ad 中间" 5
   assert_eq "B3 夹具：插入点在 ad 中间（cursor_x=5）" "$(cursor_x)" "5"
-  keys C-e
-  sleep 0.7
+  keys C-e; wait_cursor "B3 C-e 到行尾" 6
   assert_eq "B3 C-e 到行尾（cursor_x=6），不是编辑器" "$(cursor_x)" "6"
   assert_eq "B3 C-e 后草稿仍是 ad" "$(draft)" "ad"
   if [ -f "$tmp/editor/marker" ]; then
@@ -846,7 +906,7 @@ EOS
   cap_to c-e-line-end
   assert_not_has "$tmp/editor/c-e-line-end.txt" 'EDITOR-ACTIVE' "B3 C-e 没有把终端交给编辑器"
   keys Escape
-  sleep 0.4
+  wait_frame "B3 写信收起" '!Enter 发送'
 
   # The handoff's raw bytes (design §6): `tmux pipe-pane` records everything the pane writes.
   rm -f "$tmp/editor/pane-bytes.log"
@@ -854,19 +914,16 @@ EOS
 
   # ── 接力本体：C-o 跑一次脚本，挂起期间不重绘，回来无损。
   printf '' > "$(draft_file)"
-  keys m
-  sleep 0.6
-  type_text 'raw1'
-  sleep 0.5
+  keys m; wait_frame "B3 重开写信托盘" 'Enter 发送'
+  type_text 'raw1'; wait_draft "B3 raw1 落盘" 'raw1'
   keys C-o
   local saw_editor=1 i
-  for i in $(seq 1 25); do
-    if { cap || true; } | grep -q 'EDITOR-ACTIVE'; then saw_editor=0; break; fi
-    sleep 0.2
-  done
+  if wait_frame "B3 C-o 把终端交给编辑器" 'EDITOR-ACTIVE'; then saw_editor=0; fi
   cap_to during-editor
   assert_eq "B3 C-o 把终端交给了编辑器" "$saw_editor" "0"
   local c1 c2
+  # 保留（P336）：这条断言本身就是「一段窗口里画面没变」——「不会重绘」没有事件可等，
+  # 而 1.3s 就是被测的那段窗口（编辑器还要挂 TEAM_B2_EDITOR_HOLD=4s）。
   c1="$(cap)"
   sleep 1.3
   c2="$(cap)"
@@ -876,11 +933,7 @@ EOS
     bad "B3 挂起期间仍在重绘（挂起门控没生效）"
   fi
   assert_not_has "$tmp/editor/during-editor.txt" 'EDITOR-DONE' "B3 编辑器还在跑"
-  for i in $(seq 1 25); do
-    { cap || true; } | grep -q 'EDITOR-DONE' && break
-    sleep 0.4
-  done
-  sleep 1
+  wait_frame "B3 接力回来前面板帧完好" 'teamsmith pulse' '> raw1'
   cap_to after-editor
   assert_has "$tmp/editor/after-editor.txt" 'teamsmith pulse' "B3 接力回来后面板帧完好"
   assert_has "$tmp/editor/after-editor.txt" '> raw1' "B3 输入行保留 raw1"
@@ -894,8 +947,7 @@ EOS
   else
     bad "B3 Kitty 关/开字节缺失（pane-bytes.log $(wc -c < "$tmp/editor/pane-bytes.log" 2>/dev/null | tr -d ' ') 字节）"
   fi
-  keys Enter
-  sleep 3
+  keys Enter; wait_frame "B3 忙框回执 queued" '· queued'
   cap_to after-send
   assert_has "$tmp/editor/after-send.txt" 'queued' "B3 忙框回执 queued"
   local n e payload
@@ -910,32 +962,24 @@ EOS
   # 夹具用 `vi -n`（无 swap 文件），只在 vi 存在时跑。
   if command -v vi >/dev/null 2>&1; then
     start_panel "EDITOR='vi -n'"
-    keys m
-    sleep 0.6
-    type_text 'vi draft'
-    sleep 0.4
-    keys C-o
-    sleep 1.6
+    keys m; wait_frame "B3 真 vi：写信托盘" 'Enter 发送'
+    type_text 'vi draft'; wait_draft "B3 真 vi：草稿落盘" 'vi draft'
+    keys C-o; wait_frame "B3 真 vi：终端已交给 vi" '!Enter 发送'
     cap_to vi-open
     assert_has "$tmp/editor/vi-open.txt" 'vi draft' "B3 真 vi：草稿真的进了编辑器"
     keys G
-    sleep 0.3
     keys o
-    sleep 0.3
     type_text 'vi second line'
-    sleep 0.3
     keys Escape
-    sleep 0.3
+    sleep 0.3          # 保留（P336）：vi 的 ESC 消歧超时（ESC 紧接 `:` 前得先真正离开插入模式）
     type_text ':wq'
-    sleep 0.2
     keys Enter
-    sleep 2.5
+    wait_frame "B3 真 vi：退出后面板帧正常" 'teamsmith pulse' 'vi second line'
     cap_to vi-back
     assert_has "$tmp/editor/vi-back.txt" 'teamsmith pulse' "B3 真 vi：退出后面板帧正常"
     assert_has "$tmp/editor/vi-back.txt" '> vi draft' "B3 真 vi：第一行无损"
     assert_has "$tmp/editor/vi-back.txt" 'vi second line' "B3 真 vi：新增的第二行无损带回"
-    keys Enter
-    sleep 3
+    keys Enter; wait_frame "B3 真 vi：忙框回执 queued" '· queued'
     cap_to vi-sent
     assert_has "$tmp/editor/vi-sent.txt" 'queued' "B3 真 vi：忙框回执 queued"
     local newest
@@ -955,12 +999,9 @@ scenario_receipt() {
   start_panel
   local before after
   before="$(pm_cap)"
-  keys m
-  sleep 0.6
-  type_text 'hello'
-  sleep 0.4
-  keys Enter
-  sleep 3
+  keys m; wait_frame "2.4 写信托盘" 'Enter 发送'
+  type_text 'hello'; wait_draft "2.4 草稿落盘" 'hello'
+  keys Enter; wait_frame "2.4 忙框回执" '· queued'
   cap_to busy
   assert_has "$tmp/receipt/busy.txt" 'queued' "2.4 忙框回执 queued"
   assert_eq "2.4 忙框：恰好一条队列条目" "$(entries | wc -l | tr -d ' ')" "1"
@@ -973,12 +1014,9 @@ scenario_receipt() {
   tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
   rm -rf "$ROOT/.pi/team/state/outbox"
   start_pm '' ''
-  keys m
-  sleep 0.6
-  type_text 'hello2'
-  sleep 0.4
-  keys Enter
-  sleep 3
+  keys m; wait_frame "2.4 写信托盘" 'Enter 发送'
+  type_text 'hello2'; wait_draft "2.4 草稿落盘" 'hello2'
+  keys Enter; wait_frame "2.4 空框交付回执" '· delivered'
   cap_to delivered
   # P318：`delivered` 回执由 2.7（settle ①）断言 —— 同一条回执契约，不按场景重复。
   assert_eq "2.4 空框：恰好一次提交" "$(submits)" "1"
@@ -989,12 +1027,9 @@ scenario_receipt() {
   tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
   rm -rf "$ROOT/.pi/team/state/outbox"
   start_pm '' 'FAKE_TUI_EAT_ENTER=1 FAKE_TUI_STATIC_FOOTER=1'
-  keys m
-  sleep 0.6
-  type_text 'held candidate'
-  sleep 0.4
-  keys Enter
-  sleep 9
+  keys m; wait_frame "2.4 写信托盘" 'Enter 发送'
+  type_text 'held candidate'; wait_draft "2.4 草稿落盘" 'held candidate'
+  keys Enter; wait_frame "2.4 吞掉 Enter 的滞留回执" '· held'
   cap_to held
   # P318：`held` 回执与 HOLDING.log 由 2.7（settle ③）断言 —— 这里只留 2.7 没测的那一条
   # （活动队列为空）。
@@ -1013,12 +1048,12 @@ scenario_pause() {
   tmux -L "$sock" new-window -d -t "$sess" -n panel -c "$ROOT" \
     "TEAM_JS_BIN=$(printf '%q' "$js") TEAM_B2_REAL_CLI=$(printf '%q' "$skill/scripts/team") TEAM_B2_SLOW_SLEEP=4 exec '$js' '$panel' --root '$ROOT' --team-cli '$stub' --state-dir '$ROOT/.pi/team/state' --no-pulse --refresh 1"
   wait_panel || return 1
-  keys m
-  sleep 0.6
-  type_text 'before'
-  sleep 0.6
+  keys m; wait_frame "2.5 写信托盘" 'Enter 发送'
+  type_text 'before'; wait_draft "2.5 草稿落盘" 'before'
   local ts1 ts2
   ts1="$(stamp)"
+  # 保留（P336）：这里等的是一个**节流间隔**本身（桩每次读数据要 TEAM_B2_SLOW_SLEEP=4s，6s 是
+  # 它的一轮加余量）；「又刷了一轮」没有事件可等。
   sleep 6
   ts2="$(stamp)"
   if [ -n "$ts1" ] && [ "$ts2" != "$ts1" ]; then
@@ -1026,13 +1061,11 @@ scenario_pause() {
   else
     bad "2.5 写信期间没有刷新（$ts1 → $ts2）"
   fi
-  type_text 'after'
-  sleep 0.6
+  type_text 'after'; wait_draft "2.5 草稿跨刷新存活" 'beforeafter'
   cap_to pause
   assert_has "$tmp/pause/pause.txt" '> beforeafter' "2.5 草稿跨刷新存活（beforeafter）"
   assert_eq "2.5 草稿文件也是 beforeafter" "$(draft)" "beforeafter"
-  keys Enter
-  sleep 3
+  keys Enter; wait_frame "2.5 忙框回执 queued" '· queued'
   assert_eq "2.5 跨刷新后的草稿仍作为一条消息入队" "$(payload_of "$(entries | head -1)")" "beforeafter"
 }
 
@@ -1043,25 +1076,19 @@ scenario_paste() {
   start_pm 'PM draft' ''
   start_panel
   # ① plain paste：一行 write 里带 LF
-  keys m
-  sleep 0.6
-  type_text $'line one\nline two\nline three'
-  sleep 0.6
+  keys m; wait_frame "2.6 写信托盘" 'Enter 发送'
+  type_text $'line one\nline two\nline three'; wait_draft "2.6 plain 三行进草稿" $'line one\nline two\nline three'
   cap_to plain
   assert_has "$tmp/paste/plain.txt" '  line three' "2.6 plain 粘贴三行都在草稿里"
-  keys Enter
-  sleep 3
+  keys Enter; wait_frame "2.6 plain 的忙框回执" '· queued'
   assert_eq "2.6 plain：恰好一条条目" "$(entries | wc -l | tr -d ' ')" "1"
   assert_eq "2.6 plain：条目保住三行" "$(payload_of "$(entries | head -1)")" $'line one\nline two\nline three'
   # ② bracketed paste：DECSET 标记包裹，里面是 CR
-  keys m
-  sleep 0.6
-  type_text $'\x1b[200~b-one\rb-two\rb-three\x1b[201~'
-  sleep 0.6
+  keys m; wait_frame "2.6 重开写信托盘" 'Enter 发送'
+  type_text $'\x1b[200~b-one\rb-two\rb-three\x1b[201~'; wait_draft "2.6 bracketed 三行进草稿" $'b-one\nb-two\nb-three'
   cap_to bracket
   assert_has "$tmp/paste/bracket.txt" '  b-three' "2.6 bracketed 粘贴三行都在草稿里"
-  keys Enter
-  sleep 3
+  keys Enter; wait_frame "2.6 bracketed 的忙框回执" '· queued'
   assert_eq "2.6 bracketed：两条条目（每次粘贴一条）" "$(entries | wc -l | tr -d ' ')" "2"
   assert_eq "2.6 bracketed：条目保住三行" "$(payload_of "$(entries | tail -1)")" $'b-one\nb-two\nb-three'
   assert_eq "2.6 两次粘贴都没有产生提交（忙框守卫）" "$(submits)" "0"
@@ -1074,39 +1101,35 @@ scenario_actions() {
   start_pm '' ''
   start_panel
   # 先留一份消息草稿，证明「理由」不会覆盖它
-  keys m
-  sleep 0.6
-  type_text 'draft kept'
-  sleep 0.4
-  keys Escape
-  sleep 0.5
+  keys m; wait_frame "3.1 写信托盘" 'Enter 发送'
+  type_text 'draft kept'; wait_draft "3.1 草稿落盘" 'draft kept'
+  keys Escape; wait_frame "3.1 写信收起" '!Enter 发送'
   # 队列里放两条（目标窗口就是 fixture 的 PM，空框 → flush 可投）
   ( cd "$ROOT" && bash "$skill/scripts/team" outbox enqueue --kind say --target "$sess:pm" --from pm --payload 'q one' >/dev/null 2>&1
     bash "$skill/scripts/team" outbox enqueue --kind say --target "$sess:pm" --from pm --payload 'q two' >/dev/null 2>&1 )
   assert_eq "3.1 夹具：队列里两条" "$(entries | wc -l | tr -d ' ')" "2"
-  keys f
-  sleep 5
+  keys f; wait_frame "3.1 f 的回执（flush 自己的日志行）" 'outbox'
   cap_to flush
   assert_has "$tmp/actions/flush.txt" 'outbox' "3.1 f 的回执带 flush 自己的日志行"
   assert_eq "3.1 f 之后队列空了（flush 真跑了）" "$(entries | wc -l | tr -d ' ')" "0"
   assert_eq "3.1 flush 投了两条" "$(submits)" "2"
   # s：关 → 开（要理由）
-  keys s
-  sleep 0.8
+  keys s; wait_frame "3.1 理由输入行" 'Enter 进入待命'
   cap_to reason-input
   assert_has "$tmp/actions/reason-input.txt" '>' "3.1 s 打开理由输入行"
   type_text 'lunch'
-  sleep 0.4
-  keys Enter
-  sleep 3
+  keys Enter; wait_frame "3.1 待命 on 的回执" '待命 on'
   cap_to standby-on
   assert_has "$tmp/actions/standby-on.txt" '待命 on' "3.1 s 之后回执显示待命 on"
   ( cd "$ROOT" && bash "$skill/scripts/team" standby status ) > "$tmp/actions/status-on.txt" 2>&1 || true
   assert_has "$tmp/actions/status-on.txt" 'standby: on' "3.1 CLI 报告 standby on"
   assert_has "$tmp/actions/status-on.txt" 'lunch' "3.1 CLI 记下理由 lunch"
   assert_eq "3.1 理由没有覆盖消息草稿" "$(draft)" "draft kept"
-  keys s
-  sleep 3
+  # s 的开关判定读的是面板帧里的 standby.on。提交返回「✓ 待命 on」、CLI 也已是 on，并不代表帧已经带上它：
+  # 那次读数走 team __panel-data 子进程（frame 块超时 10s），机器忙时旧值会留很久 —— 本机实测过 20s 仍读到
+  # 旧值。所以等旗标带里真的写着 on，再按第二下。
+  wait_frame "3.1 面板缓存看到待命 on" '· 待命 on'
+  keys s; wait_frame "3.1 待命 off 的回执" '待命 off'
   cap_to standby-off
   assert_has "$tmp/actions/standby-off.txt" '待命 off' "3.1 再按 s 回执显示待命 off"
   ( cd "$ROOT" && bash "$skill/scripts/team" standby status ) > "$tmp/actions/status-off.txt" 2>&1 || true
@@ -1123,15 +1146,15 @@ scenario_settle() {
   # ① delivered：输入行与 state/draft.md 一起清空；重启后 m 打开空草稿（无幽灵草稿）
   start_pm '' ''
   start_panel
-  keys m; sleep 0.6
-  type_text 'half a thought'; sleep 0.4
+  keys m; wait_frame "2.7 写信托盘" 'Enter 发送'
+  type_text 'half a thought'; wait_draft "2.7 草稿落盘" 'half a thought'
   assert_eq "2.7 delivered 发送前：文件里有原文" "$(draft)" "half a thought"
-  keys Enter; sleep 3
+  keys Enter; wait_frame "2.7 delivered 回执" '· delivered'
   cap_to delivered
   assert_has "$tmp/settle/delivered.txt" 'delivered' "2.7 delivered 回执"
   assert_eq "2.7 delivered：state/draft.md 0 字节" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
   start_panel
-  keys m; sleep 0.6
+  keys m; wait_frame "2.7 重启后的空草稿" 'Enter 发送'
   cap_to delivered-reopen
   assert_not_has "$tmp/settle/delivered-reopen.txt" 'half a thought' "2.7 delivered：重启后 m 不带回已发正文"
 
@@ -1139,10 +1162,10 @@ scenario_settle() {
   tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
   start_pm '半句草稿 half a sentence' ''
   start_panel
-  keys m; sleep 0.6
-  type_text 'queued thought'; sleep 0.4
+  keys m; wait_frame "2.7 写信托盘" 'Enter 发送'
+  type_text 'queued thought'; wait_draft "2.7 草稿落盘" 'queued thought'
   before="$(pm_cap)"
-  keys Enter; sleep 3
+  keys Enter; wait_frame "2.7 queued 回执" '· queued'
   cap_to queued
   assert_has "$tmp/settle/queued.txt" 'queued' "2.7 queued 回执"
   assert_eq "2.7 queued：state/draft.md 0 字节" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
@@ -1154,9 +1177,9 @@ scenario_settle() {
   rm -rf "$ROOT/.pi/team/state/outbox"
   start_pm '' 'FAKE_TUI_EAT_ENTER=1 FAKE_TUI_STATIC_FOOTER=1'
   start_panel
-  keys m; sleep 0.6
-  type_text 'held candidate'; sleep 0.4
-  keys Enter; sleep 9
+  keys m; wait_frame "2.7 写信托盘" 'Enter 发送'
+  type_text 'held candidate'; wait_draft "2.7 草稿落盘" 'held candidate'
+  keys Enter; wait_frame "2.7 held 回执" '· held'
   cap_to held
   assert_has "$tmp/settle/held.txt" 'held' "2.7 held 回执"
   assert_eq "2.7 held：state/draft.md 0 字节（清空是结算）" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
@@ -1165,13 +1188,15 @@ scenario_settle() {
   # ④ error（没有投递目标）：文字保留在输入行与文件里，下一次 Enter 从原文重试（compose 不关）
   tmux -L "$sock" kill-window -t "$sess:pm" 2>/dev/null || true
   start_panel
-  keys m; sleep 0.6
-  type_text 'kept words'; sleep 0.4
-  keys Enter; sleep 3
+  keys m; wait_frame "2.7 写信托盘" 'Enter 发送'
+  type_text 'kept words'; wait_draft "2.7 草稿落盘" 'kept words'
+  keys Enter; wait_frame "2.7 error 回执" '未确认'
   cap_to error
   assert_has "$tmp/settle/error.txt" '未确认' "2.7 error 回执（投递未确认）"
   assert_has "$tmp/settle/error.txt" 'kept words' "2.7 error：输入行仍留着原文"
   assert_eq "2.7 error：state/draft.md 保留原文" "$(draft)" "kept words"
+  # 保留（P336）：重试拿到的是同一条回执（compose 不关、文字不变），帧上没有新状态可等 ——
+  # 这两句要证明的是「上一次的保留没有自己消失」，本身就是一段无变化的窗口。
   keys Enter; sleep 3
   cap_to error-retry
   assert_has "$tmp/settle/error-retry.txt" 'kept words' "2.7 error：下一次 Enter 从保留的原文重试"
@@ -1182,16 +1207,16 @@ scenario_settle() {
   rm -f "$(draft_file)"
   start_pm '' ''
   start_panel
-  keys m; sleep 0.6
-  type_text 'ghost candidate'; sleep 0.4
+  keys m; wait_frame "2.7 写信托盘" 'Enter 发送'
+  type_text 'ghost candidate'; wait_draft "2.7 草稿落盘" 'ghost candidate'
   chmod 444 "$(draft_file)"
-  keys Enter; sleep 3
+  keys Enter; wait_frame "2.7 写盘失败的回执点名文件" 'draft.md'
   cap_to readonly
   assert_has "$tmp/settle/readonly.txt" 'draft.md' "2.7 写盘失败：回执点名 state/draft.md"
   assert_has "$tmp/settle/readonly.txt" 'ghost candidate' "2.7 写盘失败：输入行仍留着原文（不假装清掉）"
   assert_eq "2.7 写盘失败：文件仍是原文（内存=磁盘）" "$(draft)" "ghost candidate"
   chmod 644 "$(draft_file)"
-  keys Enter; sleep 3
+  keys Enter; wait_draft "2.7 重试成功后草稿清空" ''
   cap_to readonly-retry
   assert_eq "2.7 清空失败后恢复可写重试：文件清空" "$(wc -c < "$(draft_file)" | tr -d ' ')" "0"
   assert_not_has "$tmp/settle/readonly-retry.txt" 'ghost candidate' "2.7 重试成功后输入行也空了"
