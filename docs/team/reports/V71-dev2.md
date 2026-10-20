@@ -3,12 +3,113 @@
 task: V71   agent: dev2   phase: verify   change: `behavior-focused-ci`
 specs: `verification#A changed-path list selects the sections to run, or the full suite`
 branch: `task/V71-ci-repair-increment-review`（local 模式；本分支只放这份报告与我的线程）
-status: delivered —— 增量判定 **PARTIAL**：两个入口与轻量检查在本轮**真实跑过且全绿**，另有一处承接缺口与一处报告事实错误交 PM
-time: 2026-10-20T08:35:40Z
-受检固定对象：`f14be42b`（**独立 clone** `/var/tmp/v71-dev2/clone`，不是 worktree，`.git` 是真目录）；作者报告 `4760f7a1`，现行 `71a3be19`
-只读边界：`git diff --name-only f14be42b 71a3be19 -- skills/ openspec/ .github/ ci/` **为空**（后一笔只动报告），所以产品/测试面读数对两个 ref 是同一份。
+status: delivered —— **第二轮：增量 PASS**（两处必修都关闭，36⑨ 在同一次 `--select 36` 里真执行）；整体验收仍未完成
+time: 2026-10-20T09:31:00Z（第二轮）；第一轮 2026-10-20T08:35:40Z
 
-## 判定（先给答案）
+两轮的受检对象都在同一个**独立 clone** `/var/tmp/v71-dev2/clone`（不是 worktree，`.git` 是真目录）：
+第一轮 `f14be42b`（作者报告 `4760f7a1`，再往后 `71a3be19` 只动报告，`skills/ openspec/ .github/ ci/` 逐字节未变）；
+第二轮 `295e966a`（作者报告 `4068e287`，`b1924577` 只把 `tip:` 行改回实现提交）。
+
+## 第二轮结论（先读这一节 · 2026-10-20T09:31:00Z）
+
+增量判定 **PASS**：PM 裁回的两处必修都已关闭，且 36⑨ 这次**真的执行**（不是 SKIP）。整体（容器、floor 整体、C4、发布）仍未验收，本轮不冒充。
+
+| 必修 | 关闭依据 | 读数 |
+|---|---|---|
+| ① 36⑨ 在门禁里从不执行 | 调用条件与 `--tree` 都改成 `$CHECKOUT_REPO_ROOT`；代码差异只有这 9 行 | `--select 36` 一次：`✓ 36⑨ CI 入口：workflow-entry 三条行为全绿（ok 7 bad 0 skip 0）`，整段 `✓121 ✗0 SKIP3`、`✓144 ✗0`、rc=0 |
+| ② 报告把 M35 豁免归因给 P330 | 三处都改成「注册时即无对象 + P330 的 `a62ab6bb` 只删 `skills/teamsmith/tests/**`」 | 报告 §7.3b / 未观测边界两处正文已改，退役本身保留 |
+
+同段 36⑦ / 36⑧ 没有因此变红：`36⑦ 全键副本 bash -n 扫描：ok 135 / bad 0`（含三条红侧）、`✓ 36⑧ 产品面检出探针全绿（ok 144 bad 0 skip 0）`。
+3 条 SKIP 全是既有形状：`36① --check` 三个副本都因 `.pi/skills`（机器生成面）不在检出里而如实跳过。
+
+### 2.1 · 静态：差异只有这两处
+
+```
+$ git diff --stat f14be42b 295e966a
+ docs/team/reports/P326-dev.md | 165 ++++++++++++++++++++++++-------   （其余是 BOARD/DECISIONS/tasks/threads/reviews 等账本）
+ skills/teamsmith/tests/smoke.sh |   9 +-
+
+$ git diff f14be42b 295e966a -- skills/ .github/ openspec/ ci/
+（全文只有 smoke.sh 的那一个 hunk）
+-if [ -f "$SKILL_DIR/tests/workflow-entry.sh" ] && [ -f "$REPO/.github/workflows/gates.yml" ]; then
+-  if bash "$SKILL_DIR/tests/workflow-entry.sh" --tree "$REPO" >"$TMP/p326-workflow-entry.log" 2>&1; then
++# 看的是**产品面检出的那棵树**（`$CHECKOUT_REPO_ROOT`）…（三行说明）
++if [ -f "$SKILL_DIR/tests/workflow-entry.sh" ] && [ -f "$CHECKOUT_REPO_ROOT/.github/workflows/gates.yml" ]; then
++  if bash "$SKILL_DIR/tests/workflow-entry.sh" --tree "$CHECKOUT_REPO_ROOT" >"$TMP/p326-workflow-entry.log" 2>&1; then
+```
+
+PM 给的那对 ref 方向反了（只影响查法，不影响结论）：`b1924577` 是 `295e966a` 的**后代**（`295e966a → 4068e287 → b1924577`），所以
+`git diff b1924577 295e966a` 只会显示报告被倒回去；要看新增应当用 `git diff f14be42b 295e966a`（就是上面那 9 行 + 账本）。
+
+一处**作者报告里的事实**（不影响代码结论，但下一轮别按那个标签读日志）：报告说「第一次（`0b7e1ffe`）36⑨ 已经真跑起来了」，
+而 `0b7e1ffe` 提交里的第 18286 行仍是 `if [ -f "$REPO/.github/workflows/gates.yml" ]`；它记录的那条红是
+`token AGENTS.md（源码行 18286）`，而 `0b7e1ffe:18286` 是 `if` 行、不含任何 `AGENTS.md` token —— 说明那次跑的是**未提交的在改树**（注释里点了 `AGENTS.md`），
+不是 `0b7e1ffe` 这个提交。最终提交的树我另外直接跑过（§2.2），结论不受影响。
+
+### 2.2 · 一次 `--select 36`：36⑨ 真执行
+
+```
+$ cd /var/tmp/v71-dev2/clone && git fetch -q --all && git checkout -q 295e966a
+HEAD=295e966a1b9763b45456642d2f044b79119ee1f5        status-lines=0
+$ env -u TMUX -u TMUX_PANE -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SESSION -u TEAM_PROJECT \
+    -u TEAM_SIGNAL_CALLS_LOG -u TEAM_SIGNAL_REAL -u TEAM_TMUX_CALLS_LOG -u TEAM_TMUX_REAL \
+    TMPDIR=/var/tmp/v71-dev2/tmp TEAM_SMOKE_LOCK=/var/tmp/v71-dev2/lock/smoke-36.lock \
+    bash skills/teamsmith/tests/smoke.sh --select 36
+rc=0
+== 选段 == decision=RUN · 运行 5/135 段 · 未跑 130 段
+== #5 36 · 选段与分段账本自检（P98 · gate-runtime-budget） == 2026-10-20T09:15:00+00:00
+  SKIP（条件不满足） 36① --check（真树/表副本/变体树）：行 19 的字面模式在检出里不存在（…机器生成面）：.pi/skills   ×3
+  ✓ 36③ 结果行用 == 选段结果 ==
+  ✓ 36⑦ 全键副本 bash -n 扫描：ok 135 / bad 0
+  ✓ 36⑦ 红侧（旧剪贴器=按段头一刀切）：全键扫描红了并点名 14/14c
+  ✓ 36⑦ 坏副本在跑任何段之前被拒（rc=2、点名、零段头）
+  ✓ 36⑧ 产品面检出探针全绿（ok 144 bad 0 skip 0）
+  ✓ 36⑨ CI 入口：workflow-entry 三条行为全绿（ok 7 bad 0 skip 0）
+#5 36 · … · 参考 用时 844s · ✓121 ✗0 SKIP3 · ticks 124
+账本自查： 5 段收口 · 增量 ✓144 ✗0 SKIP3 ｜ 结果行 ✓144 ✗0 —— 一致
+```
+
+判据（brief 的两条）都成立：`36⑨` 这一行是 **✓ 且带 `ok 7 bad 0 skip 0`**（脚本自己打的收口行）——如果还走旧的 `$REPO` 条件，这里只会出现一条
+`SKIP（条件不满足） 36⑨ …`；同段的 36⑦ 与 36⑧ 也在，且都是绿的，没有因为改条件而变红。
+844 s 只是**参考值**（作者同段 773 s）；本轮不拿它当判据。树在跑动中没被改：验后同一 HEAD、`status-lines=0`，而套件在指纹不一致时会打印「本次运行无效」并以 4 退出（本轮 rc=0）。
+
+同一次作业里又跑了一次独立入口：
+
+```
+$ bash skills/teamsmith/tests/workflow-entry.sh --tree /var/tmp/v71-dev2/clone
+  ✓ workflow-entry ①：有效基点时这一步退出 0
+  ✓ workflow-entry ①：容器命令带 `--floor` 与 `--paths "$@"`（不是全套、也不会丢路径）
+  ✓ workflow-entry ①：3 条特殊文件名（换行 / 空格 / 引号+反斜杠）逐字节到达容器参数（cmp 一致）
+  ✓ workflow-entry ②：基点不可解析（空 / 0000…0 / no-such-sha-1693097）→ ::warning:: + 正向确认执行完整入口（…）  ×3
+  ✓ workflow-entry ③：容器执行失败（stub rc=5）→ 这一步非 0（rc=5），失败没被吞
+== workflow-entry == ok 7 bad 0 skip 0        rc=0
+```
+
+### 2.3 · PM 的算术：两个数**同口径**，但都还不是 floor 的墙钟
+
+只按日志核（`$HOME/.cache/p326-c4/c4.log`，不新跑任何测量）：
+
+| 量 | 我从日志核到的值 | 怎么来的 |
+|---|---|---|
+| 段账本行数与合计 | **96 行，合计 2601 s（43.4 分）** | `grep -oE '参考 用时 [0-9]+s'` 求和 —— 与作者报告的 2601 s 一致 |
+| 墙钟 | 报告 2699 s（44:59）；日志首段 06:49:36 → 报告记的收口 07:34:18 = 2682 s | 差值是 2699 与 2682 的口径细节（2699 从套件开跑算，2682 从第一个段头算），**不含**任何未闭段的整段用时；96 段之外的余额 ≈ 81–98 s 是前导、段间开销与第 97 段（`34d`）被杀时的残段 |
+| 11c | 段账本 `#42 11c … 用时 1018s`，现场行 `有界轮询 986s 内 roster 没看到「pi 已退出」` | 986 ⊂ 1018 ⊂ 2699 —— **11c 是 96 个已闭段之一**，所以那 986 s 确实在 2699 s 之内 |
+| 选择 | `decision=RUN · 运行 133/135 段`，未选只有 `0g 61b`；实跑 96 段后被 45 分钟预算停掉，**§36 从未开跑** | 决策行 + 报告列的 37 个未跑段（含 36/58/61/38） |
+
+**结论一（同一口径，你的减法成立）**：`2699 − 986 = 1713 s`，`×133/96 = 2373 s ≈ 39.6 分钟` —— 与作者的 62 分钟（`2699 × 133/96 = 3739 s`）是**同一个算式**，只是去掉了已查明属于 11c 的空转。
+换成同一单位（用段账本而不是墙钟）：`2601 − 986 = 1615 s`，`×133/96 = 2238 s ≈ 37.3 分钟`，再加那 81–98 s 开销 ≈ 39 分钟 —— 与 40 分钟差不到一分钟。所以「约 40 分钟」不是另一个口径算出来的，它就是同一外推的更正。
+
+**结论二（但这仍然不是 floor 墙钟，请别用它给 45 分钟背书）**：这条外推的隐含前提是「每段平均 27 s」，而 37 个未测段里**单个**就打破它 ——
+§36 在**修好之后**的树上，我这台机器量到 **844 s**（作者 773 s），是那个平均值（27 s）的 31 倍。只把 §36 一项加回已测基座：
+`(1615 + 844) × 133/97 = 3372 s ≈ 56 分钟`（按作者的 773 s 则 ≈ 53 分钟）。也就是说：
+
+- 62 → 40 的更正**方向对**（986 s 确实是被这次修掉的空转）；
+- 但「40 分钟 < 45 分钟」这个结论**还不成立**，因为未测段里已知有一个约 14 分钟的 §36；
+- 另外 133 段 ≠ floor 128 段（多出 `0e 0f 0h 0i 36` 五个自检段，其中 36 就是那个 844 s），C4 那棵树还落后 main 50 个提交、容器挂载坏了 git、机器 loadavg 11.75 / 32 核 —— 都不是 runner 读数。
+
+建议的措辞（供你在 DECISIONS 里改一句）：保留 ①「不缩地板」与 ③「以修好之后一次干净容器运行作准」；把 ② 的「约 40 分钟，落在 45 以内」改成「已测得 96 段 2601 s（含 986 s 空转，已修掉）；剩余 37 段的成本没有任何测量，其中 §36 单段 844 s，所以 133 段/floor 的墙钟仍未测出」。我没有改任何账本，只报这个读数。
+
+## 第一轮判定（先给答案 · 2026-10-20T08:35:40Z，历史记录）
 
 | 项 | 结论 | 一句话依据 |
 |---|---|---|
@@ -260,6 +361,8 @@ P318 的 §58 修复在树上（`signal-lint` 干净就是它的读数，候选�
 
 ## 六、必修项 / 交 PM 裁（一处实现、一处报告）
 
+> **第二轮已关闭**：这两条都写在 `295e966a`（报告 `4068e287`）里，已在 §第二轮 用一次 `--select 36` 直接验过。本节保留第一轮的原始说法作为比对基准。
+
 ### 必修 1 · 36⑨ 在门禁里从不执行（承接缺口）
 
 `smoke.sh:18286` 的调用条件是
@@ -310,3 +413,14 @@ $ git status --short        # 只有本报告（提交后为空）
 ```
 
 local 模式：分支留在本地，未 push、未开 MR、未归档；没有触发远程 CI。
+
+## 九、第二轮交付检查（2026-10-20T09:34Z）
+
+```
+$ bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+ledger-ban: root=…/.worktrees/dev2 scope=published files=1874 hits=0 names=ok user=resolved   rc=0
+$ git diff --check     → rc=0（无输出）
+$ git status --short   → 只有 M docs/team/reports/V71-dev2.md（提交后为空）
+```
+
+第二轮只改这份报告与自己的线程；clone 停在同一 HEAD，`status-lines=0`；未碰任何源码，未跑容器/floor/probe/矩阵/11c。
