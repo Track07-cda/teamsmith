@@ -522,7 +522,7 @@
 | V67 | Independently re-scan whether every fixture P330 deleted is truly unreachable | verify | - | P330 | done |
 | P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | review |
 | V68 | Independent static review of waiter-heartbeat proposal and minimal verification plan | verify | - | P332 | wip |
-| V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | todo |
+| V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | wip |
 
 ## 当前里程碑
 
