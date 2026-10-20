@@ -1,0 +1,4 @@
+- 2026-10-20T22:00:41Z · `team close P345 --status done` · FORCED：PM 显式覆盖（理由：plan-only 提案：报告已由 PM 提交进 main（538fc267 的内容见于 main 的 docs/team/reports/P345-dev2.md），路线已裁定并记进 DECISIONS，实现另立 P346 排队。本任务无产品写集，不需要复验。）
+  -   - ① 复验记录 docs/team/reviews/P345.md：不存在
+  -   - ② 分支是否已并入 main：task/P345-ci-time-proposal（538fc2676）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 propose 的交付证据：任务书没有 change: 行 —— 提案审查记录按它命名（PM 补上 change id）
