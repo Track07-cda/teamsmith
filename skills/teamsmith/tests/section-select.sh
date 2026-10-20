@@ -2,6 +2,7 @@
 # teamsmith · 选段选择器（change: gate-runtime-budget · verification#A changed-path list selects…）
 #
 #   section-select.sh --paths <路径>…            路径 → decision=FULL|NONE|RUN
+#   section-select.sh --floor [--paths <路径>…]  产品地板 ∪ 路径选集（一次回答「基线 + 这次改动」）
 #   section-select.sh --select <key>[,<key>…]   显式选段（+ 前导 + needs 闭包），可重复
 #   section-select.sh --check                   自检映射表与门禁源码（表腐烂 / 段读了没声明的路径 → 红）
 #   section-select.sh --list                    列出映射表（key<TAB>id<TAB>patterns<TAB>needs<TAB>basis）
@@ -12,13 +13,19 @@
 #
 # 纯逻辑：不调 git、不起 tmux/pi/门禁进程；只读映射表与 smoke.sh（--verify-copies 只写临时副本）。
 # 退出码：0 = 有决定 / 自检全绿；1 = --check 有不成立项 / --verify-copies 有副本不能解析；
-#         2 = 用法错误、表畸形、未知 key、路径出界。
+#         2 = 用法错误、表畸形、未知 key、路径出界、空地板。
 #
 # 决定语义（保守方向永远是「多跑」）：
 #   NONE = 给的路径全在豁免类（docs/*，团队账本）且没有被表头 ledger-scan 归属模式覆盖
 #          → 没有段需要跑
 #   RUN  = 给的路径每条都被某些行声明 → 这些 key + 前导段 + needs 闭包，按源序
 #   FULL = 至少一条路径没有任何行声明、也不在豁免类 → 跑全套（兜底不可绕过）
+#
+# 地板（P326 · change: behavior-focused-ci）：表头 `# gate-self-check: <key…>` 点名「主体是门禁自己的机制」
+# 的段，**没被点名的段就是产品基线**（默认方向 = 在基线里）。`--floor` 的 key 集合 = 前导段 ∪ 产品基线段
+# ∪ 它们的 needs 闭包，给了 `--paths` 时再并进路径选集（未声明路径照旧 FULL）。地板为空（表头把每个段都
+# 点名了，或这行在却一个 key 都没有）→ die 并点名「空地板」：绝不静默退化成「只跑前导段」。
+# `--floor` 与 `--select` 互斥（显式选集与基线是两种决定）；`--paths` 单独用时节义逐字不变。
 #
 # 账本（docs/team/**）的归属（P239）：patterns 列**不允许**声明豁免类（--check ④ 守着这条），
 # 所以账本路径的归属写在表头一行 `# ledger-scan: <key> <pattern…>`：命中的路径归那一段。
@@ -43,15 +50,18 @@ COPY_OUT=""
 PATHS=()
 SEL_KEYS=()
 die() { printf 'section-select: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,21p' "$0"; }
+usage() { sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d'; }
 
 # ── 参数 ────────────────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
+    --floor)
+      [ -z "$MODE" ] || [ "$MODE" = "paths" ] || [ "$MODE" = "floor" ] || die "--floor 与 --$MODE 不同用"
+      MODE="floor"; shift ;;
     --paths)
       shift; [ $# -gt 0 ] || die "--paths 需要至少一条路径"
-      [ -z "$MODE" ] || [ "$MODE" = "paths" ] || die "--paths 与 --$MODE 不同用"
-      MODE="paths"
+      [ -z "$MODE" ] || [ "$MODE" = "paths" ] || [ "$MODE" = "floor" ] || die "--paths 与 --$MODE 不同用"
+      [ "$MODE" = "floor" ] || MODE="paths"
       while [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; do PATHS+=("$1"); shift; done ;;
     --select)
       shift; [ $# -gt 0 ] || die "--select 需要至少一个 key"
@@ -75,8 +85,8 @@ done
 [ -n "$MODE" ] || { usage >&2; exit 2; }
 if [ -n "$COPY_OUT" ]; then
   case "$MODE" in
-    paths|select) ;;
-    *) die "--out 只与 --paths/--select 同用（当前是 --$MODE）" ;;
+    paths|select|floor) ;;
+    *) die "--out 只与 --paths/--select/--floor 同用（当前是 --$MODE）" ;;
   esac
 fi
 
@@ -108,6 +118,9 @@ P_LEDGER_SCAN=""   # 表头 `# ledger-scan: <key> <pattern…>`：账本（docs/
 P_LEDGER_PAT=""    # 上面那行的归属模式（空格分隔，同 patterns 列的 case glob 语义）
 P_LEDGER_LINE=""   # 上面那行的原文载荷（解析用；空 = 表里没有这行）
 P_LEDGER_LNS=()    # 上面那行在表里的行号（P231：>1 行 = 重复声明，装载即拒绝）
+P_SELF_DECLARED=0  # 表头 `# gate-self-check: <key…>` 在不在（P326）：行在 = 1
+P_SELF_KEYS=""     # 上面那行点名的段 key（空格分隔）；空串 = 行在但没点名任何段
+P_SELF_LNS=()      # 上面那行在表里的行号
 LSC_CARRIER="skills/teamsmith/tests/ledger-ban.sh"   # 承载账本禁令的段：patterns 列里必须有它（P231）
 T_N=0
 T_KEY=(); T_ID=(); T_PAT=(); T_NEEDS=(); T_BASIS=()
@@ -124,6 +137,9 @@ load_table() {
       "# ledger-scan:"*) P_LEDGER_LINE="${line#\# ledger-scan:}"; P_LEDGER_LINE="${P_LEDGER_LINE# }"; P_LEDGER_LINE="${P_LEDGER_LINE% }"
         P_LEDGER_SCAN="${P_LEDGER_LINE%% *}"; P_LEDGER_PAT="${P_LEDGER_LINE#"$P_LEDGER_SCAN"}"; P_LEDGER_PAT="${P_LEDGER_PAT# }"
         P_LEDGER_LNS+=("$ln")
+        continue ;;
+      "# gate-self-check:"*) P_SELF_KEYS="${line#\# gate-self-check:}"; P_SELF_KEYS="${P_SELF_KEYS# }"; P_SELF_KEYS="${P_SELF_KEYS% }"
+        P_SELF_DECLARED=1; P_SELF_LNS+=("$ln")
         continue ;;
       "#"*|"") continue ;;
     esac
@@ -445,9 +461,13 @@ do_verify_copies() {
   return 0
 }
 
-# ── --paths ─────────────────────────────────────────────────────────────────────────────
-do_paths() {
-  local p i claimed pp unclaimed=() exempted=() PARR=()
+# ── --paths / --floor 共用：路径 → 归属（RUN_*）─────────────────────────────────────────
+# 结果：命中的行 key 进 RUN_*；没命中的分两堆：CL_EXEMPTED（豁免类）/ CL_UNCLAIMED（谁也不同意）。
+# 返回 1 = 有未声明路径（调用方照旧打印 FULL 兜底）。
+CL_UNCLAIMED=(); CL_EXEMPTED=()
+claim_paths() {
+  local p i claimed pp PARR=()
+  CL_UNCLAIMED=(); CL_EXEMPTED=()
   for p in "${PATHS[@]}"; do
     normalize_path "$p" || die "路径出界：$p（只接受仓库根相对路径，不允许绝对路径 / .. / ~）"
     p="$NORM_P"
@@ -473,25 +493,56 @@ do_paths() {
       fi
     fi
     if [ "$claimed" = "0" ]; then
-      if pat_match "$P_EXEMPT" "$p"; then exempted+=("$p"); else unclaimed+=("$p"); fi
+      if pat_match "$P_EXEMPT" "$p"; then CL_EXEMPTED+=("$p"); else CL_UNCLAIMED+=("$p"); fi
     fi
   done
-  if [ "${#unclaimed[@]}" -gt 0 ]; then
-    printf 'decision=FULL\n'
-    printf 'sections=%s\n' "$S_N"
-    printf 'keys=0\n'
-    for p in "${unclaimed[@]}"; do printf 'reason=%s ← 没有任何行声明它（也不在豁免类）\n' "$p"; done
-    printf 'reason=兜底：跑全套（多跑总是安全，少跑不是）\n'
-    return 0
-  fi
+  [ "${#CL_UNCLAIMED[@]}" -eq 0 ]
+}
+print_full() {
+  local p
+  printf 'decision=FULL\n'
+  printf 'sections=%s\n' "$S_N"
+  printf 'keys=0\n'
+  for p in "${CL_UNCLAIMED[@]}"; do printf 'reason=%s ← 没有任何行声明它（也不在豁免类）\n' "$p"; done
+  printf 'reason=兜底：跑全套（多跑总是安全，少跑不是）\n'
+}
+
+# ── --paths ─────────────────────────────────────────────────────────────────────────────
+do_paths() {
+  local p
+  claim_paths || { print_full; return 0; }
   if [ "$RUN_N" -eq 0 ]; then
     printf 'decision=NONE\n'
     printf 'sections=%s\n' "$S_N"
     printf 'keys=0\n'
-    for p in "${exempted[@]}"; do printf 'reason=%s ← 豁免类（%s）且没有被账本归属（ledger-scan）覆盖：门禁不为它开火\n' "$p" "$P_EXEMPT"; done
+    for p in "${CL_EXEMPTED[@]}"; do printf 'reason=%s ← 豁免类（%s）且没有被账本归属（ledger-scan）覆盖：门禁不为它开火\n' "$p" "$P_EXEMPT"; done
     printf 'reason=没有段落需要运行（no section needs to run）\n'
     return 0
   fi
+  add_prologue
+  add_coupled
+  sort_run_by_source
+  print_run
+  return 0
+}
+
+# ── --floor ────────────────────────────────────────────────────────────────────────────
+# 地板 = 表里**没被 `# gate-self-check:` 点名的每一个段**（默认方向：新段自动在基线里）。
+# 行不在 → 每个段都在地板里（安全方向）；行在却一个 key 都没有 / 每个段都被点名 → 空地板 → die。
+do_floor() {
+  local i k FLOOR=()
+  if [ "$P_SELF_DECLARED" = 1 ] && [ -z "$P_SELF_KEYS" ]; then
+    die "--floor：空地板 —— gate-self-check 行（$TSV:${P_SELF_LNS[*]}）在但没点名任何段；空行不许退化成「只跑前导段」"
+  fi
+  for ((i = 0; i < T_N; i++)); do
+    case " $P_SELF_KEYS " in
+      *" ${T_KEY[i]} "*) ;;
+      *) FLOOR+=("${T_KEY[i]}") ;;
+    esac
+  done
+  [ "${#FLOOR[@]}" -gt 0 ] || die "--floor：空地板 —— $T_N 个段全被 gate-self-check 行点名，没有产品基线段可跑"
+  if [ "${#PATHS[@]}" -gt 0 ]; then claim_paths || { print_full; return 0; }; fi
+  for k in "${FLOOR[@]}"; do add_key "$k" "floor"; done
   add_prologue
   add_coupled
   sort_run_by_source
@@ -536,6 +587,8 @@ do_list() {
 #      每一个账本样例（缺一样 = 账本文本的改动不再选中任何段 → 红）。
 #      P231：「唯一 + 指向承载禁令的段」这两条在装载期就 die（load_table_check_ledger_head），
 #      走到这里时它们已经成立 —— 下面「指向未知段」那一支只是防御，不是第一道门。
+#   ⑧ 地板声明（P326）：表头 `# gate-self-check:` 行里每个 key 命中恰好一行、不重复、不点名前导段。
+#      行不在 = 每个段都在地板里（安全方向，不判红）；行在但为空 = 空声明，判红。
 # 段正文的 normalizer（与 P97 探针同一口径）：$SKILL_DIR→skills/teamsmith、
 #   $SKILL_INIT_DIR→skills/teamsmith-init、$SRC_ROOT/$OS_ROOT/$V94_ROOT→仓库根；
 #   裸前缀 skills/ panel/ extension/ openspec/ ci/；根文件 SCOPE.md/README.md/AGENTS.md/CHANGELOG.md。
@@ -723,6 +776,36 @@ do_check() {
   fi
   [ "$lsc_bad" -eq 0 ] && cok "账本归属（ledger-scan $P_LEDGER_SCAN）声明有效：$lsc_n/9 个账本样例被它覆盖"
 
+  # ⑧ gate-self-check 行（P326）：每个 key 命中恰好一行、不重复、不点名前导段。
+  #    这一行是「哪些段不进普通入口」的唯一声明处（没点名 = 在地板里），所以一个拼错/陈旧的 key 会
+  #    静静地把它指向的段换出普通的 CI —— 这一条就是它的静态牙。行不在不判红（整行删 = 每个段都在地板里，
+  #    安全方向）；行在却一个 key 都没有则是空声明（--floor 会 die，这里点名）。
+  local sc_bad=0 sc_n=0 sc_k sc_seen="" SCARR=()
+  if [ "$P_SELF_DECLARED" != 1 ]; then
+    cok "gate-self-check 行不在：每个段都在地板里（默认方向 = 多跑）"
+  elif [ -z "$P_SELF_KEYS" ]; then
+    cbad "gate-self-check 行在但没有点名任何段（空声明，$TSV:${P_SELF_LNS[*]}）—— --floor 会拒绝空地板"
+    sc_bad=$((sc_bad + 1))
+  else
+    IFS=' ' read -r -a SCARR <<<"$P_SELF_KEYS"
+    for sc_k in "${SCARR[@]}"; do
+      [ -n "$sc_k" ] || continue
+      sc_n=$((sc_n + 1))
+      case " $sc_seen " in
+        *" $sc_k "*) cbad "gate-self-check 行重复点名：$sc_k"; sc_bad=$((sc_bad + 1)); continue ;;
+      esac
+      sc_seen="${sc_seen}${sc_seen:+ }$sc_k"
+      case " $P_PROLOGUE " in
+        *" $sc_k "*) cbad "gate-self-check 行点名了前导段：$sc_k（前导段永远跑，不是可声明的自检段）"; sc_bad=$((sc_bad + 1)); continue ;;
+      esac
+      if [ -z "$(row_idx "$sc_k" || true)" ]; then
+        cbad "gate-self-check 行点名了不存在的段：$sc_k（拼错/陈旧的 key 会静静地换掉普通入口）"
+        sc_bad=$((sc_bad + 1))
+      fi
+    done
+    [ "$sc_bad" -eq 0 ] && cok "gate-self-check 行有效（$sc_n 个 key：各自命中一行、无重复、不含前导段）"
+  fi
+
   printf '== 选段自检 ==  ok %d  bad %d  SKIP %d\n' "$CHECK_OK" "$CHECK_BAD" "$CHECK_SKIP"
   [ "$CHECK_BAD" -eq 0 ] || return 1
   return 0
@@ -731,6 +814,7 @@ do_check() {
 # ── main ────────────────────────────────────────────────────────────────────────────────
 case "$MODE" in
   paths)          load_table; load_suite; do_paths ;;
+  floor)          load_table; load_suite; do_floor ;;
   select)         load_table; load_suite; do_select ;;
   list)           load_table; do_list ;;
   check)          load_table; load_suite; do_check ;;

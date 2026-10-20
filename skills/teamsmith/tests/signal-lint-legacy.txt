@@ -10,5 +10,8 @@
 # （与 tmux-lint.pl 同源）跳过 logs/ 目录，它们根本不在判定面内，因此不需要（也不该）冻结在这里
 # —— 写进来会因「记 2 条、实际 0 条」判 baseline 过期。
 #
+#
+# P326（PM 明授）：这里曾经有 1 条记录 —— docs/team/reports/M35-dev2/pkg/lib.sh（按 sha256 冻结的
+# M35-dev2 证据包）。那份证据文件在 main 上已不存在，记录的对象没了，于是只删这条记录、让清单回到空
+# （lint 的规则、条数核对、每轮打印、--no-legacy 全红都不变）。清单为空时 lint 照旧逐文件判整个扫描面。
 # 格式：<sha256>  <命中条数>  <仓库相对路径>  # 理由
-60ed8d86d57df08a655cea11aeb7ee9d2da0aa4e7768cb9b7fba39a3749b0637  2  docs/team/reports/M35-dev2/pkg/lib.sh  # M35-dev2 证据包（P159 之前：M25 对照组的 pkill -f 清理）

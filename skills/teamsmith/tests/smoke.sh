@@ -118,7 +118,7 @@ export SMOKE_CALLER_HAD_TMUX
 unset TMUX TMUX_PANE 2>/dev/null || true
 SMOKE_CALLER_TMUX_TMPDIR="${TMUX_TMPDIR:-/tmp}"   # 调用者原本的 socket 目录（自检里当「默认 server」用）
 KEEP="${TEAM_SMOKE_KEEP:-0}"
-# P98：参数 = --keep / --paths <路径>… / --select <key>[,<key>…]；不认识的参数**拒绝**（不静默忽略：
+# P98：参数 = --keep / --paths <路径>… / --select <key>[,<key>…] / --floor [--paths <路径>…]；不认识的参数**拒绝**（不静默忽略：
 # 「以为传了选段、其实跑了全套或什么都没跑」是同一种危险）。选择决定在拿机器锁之前算（见下）。
 SELECT_MODE_REQ=""
 SELECT_ARGS=()
@@ -130,10 +130,15 @@ while [ $# -gt 0 ]; do
       TEAM_SMOKE_BREAK="$2"; export TEAM_SMOKE_BREAK; shift 2 ;;
     --break=*)
       TEAM_SMOKE_BREAK="${1#--break=}"; export TEAM_SMOKE_BREAK; shift ;;
+    --floor)
+      [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "floor" ] || [ "$SELECT_MODE_REQ" = "paths" ] \
+        || { printf 'smoke: --floor 与 --%s 不同用\n' "$SELECT_MODE_REQ" >&2; exit 2; }
+      SELECT_MODE_REQ="floor"; shift ;;
     --paths)
-      [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "paths" ] \
+      [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "paths" ] || [ "$SELECT_MODE_REQ" = "floor" ] \
         || { printf 'smoke: --paths 与 --%s 不同用\n' "$SELECT_MODE_REQ" >&2; exit 2; }
-      SELECT_MODE_REQ="paths"; shift
+      [ "$SELECT_MODE_REQ" = "floor" ] || SELECT_MODE_REQ="paths"
+      shift
       while [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; do SELECT_ARGS+=("$1"); shift; done
       [ "${#SELECT_ARGS[@]}" -gt 0 ] || { printf 'smoke: --paths 需要至少一条路径\n' >&2; exit 2; } ;;
     --select)
@@ -142,7 +147,7 @@ while [ $# -gt 0 ]; do
       SELECT_MODE_REQ="select"; shift
       [ $# -gt 0 ] || { printf 'smoke: --select 需要 key\n' >&2; exit 2; }
       SELECT_ARGS+=("$1"); shift ;;
-    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--break=<阶段>] [--paths <路径>… | --select <key>[,<key>…]]）\n' "$1" >&2; exit 2 ;;
+    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--break=<阶段>] [--paths <路径>… | --select <key>[,<key>…] | --floor [--paths <路径>…]]）\n' "$1" >&2; exit 2 ;;
   esac
 done
 
@@ -210,14 +215,17 @@ if [ "$SMOKE_SEL_IS_CHILD" = "1" ]; then
   SELECT_MODE=1; SELECT_DECISION="${SMOKE_SEL_CHILD_DECISION:-RUN}"
 elif [ -n "$SELECT_MODE_REQ" ]; then
   SELECT_BIN="$SKILL_DIR/tests/section-select.sh"
-  [ -f "$SELECT_BIN" ] || { printf 'smoke: 选段需要 %s（缺它就不能用 --paths/--select）\n' "$SELECT_BIN" >&2; exit 2; }
+  [ -f "$SELECT_BIN" ] || { printf 'smoke: 选段需要 %s（缺它就不能用 --paths/--select/--floor）\n' "$SELECT_BIN" >&2; exit 2; }
   # 过滤副本由选择器一次生成（唯一剪贴实现）：它写进 --out 前先 bash -n 校验，不能解析就在
   # **跑任何段之前**拒绝并点名（段 key + 源码行）——smoke 不再自己剪文本（P117/V1）。
   # P309：选段副本是本进程的**第一次写盘**，临时根得先准备好（默认腿按需建；显式根不可用就具名失败）
   team_tmp_root_prepare >/dev/null 2>&1 || { printf 'smoke: 临时根不可用（%s）—— 选段副本写不出来\n' "$(team_tmp_root 2>/dev/null || printf '?')" >&2; exit 2; }
   SELECT_COPY="$(team_tmp_root)/teamsmith-select.$(team_project_ns).$$.sh"
   rm -f "$SELECT_COPY"
-  if ! SELECT_OUT="$(bash "$SELECT_BIN" --"$SELECT_MODE_REQ" "${SELECT_ARGS[@]}" --out "$SELECT_COPY" </dev/null 2>&1)"; then
+  # P326：--floor 自己不吃参数（路径仍走既有的 --paths），所以只有「有路径」时才补一个 --paths。
+  SELECT_INVOKE=("--$SELECT_MODE_REQ")
+  [ "$SELECT_MODE_REQ" = "floor" ] && [ "${#SELECT_ARGS[@]}" -gt 0 ] && SELECT_INVOKE+=(--paths)
+  if ! SELECT_OUT="$(bash "$SELECT_BIN" "${SELECT_INVOKE[@]}" "${SELECT_ARGS[@]}" --out "$SELECT_COPY" </dev/null 2>&1)"; then
     printf '%s\n' "$SELECT_OUT" >&2
     printf 'smoke: 选段被拒（副本不能解析 / 表或源码结构问题）—— 什么都没跑\n' >&2
     exit 2
@@ -6359,14 +6367,29 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   $TEAM dispatch dev T1.1 "$TASKFILE" >/dev/null 2>&1
   # M7.5：不再固定 sleep 1.5 赌 roster 已经看准 —— agent 退出后「窗口回 shell」不是瞬时事件
   # （本容器：交互 bash → ~/.bashrc 的 exec /usr/bin/zsh -l → 登录 zsh 启动 churn），
-  # 而 roster 的存活判定是采样式的。有界轮询 roster 本身（最多 5s），超时就把最后看到的现场打出来。
-  R_WAIT=0
+  # 而 roster 的存活判定是采样式的。有界轮询 roster 本身，界是**轮数**（R_MAX 轮 × 0.2s）。
+  # P326：不把生产者接给 `grep -q`。命中即关管会让写端吃 SIGPIPE，而套件是 `set -o pipefail`，
+  # 于是「读端命中了」也能被整条管道读成非 0、再被 `!` 翻成「没等到」—— 判定不可靠，与轮数无关。
+  # 现在先把一整份输出落到变量（它自己的退出码也就原样留下来了），再用 bash 自己的匹配判定。
+  R_WAIT=0; R_MAX=1500; R_OUT=""; R_RC=0; R_HIT=0
   R_T0="$(date +%s)"
-  while [ "$R_WAIT" -lt 1500 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
-  [ "$R_WAIT" -ge 20 ] && printf '    现场（有界轮询 %ss 内 roster 没看到「pi 已退出」）：窗口=[%s] pane=[%s]\n' \
-    "$(( $(date +%s) - R_T0 ))" \
-    "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr '\n' ',')" \
-    "$(tmux display-message -p -t "$SESSION:dev" '#{pane_current_command}' 2>/dev/null)"
+  while [ "$R_WAIT" -lt "$R_MAX" ]; do
+    R_OUT="$($TEAM roster 2>/dev/null)"; R_RC=$?
+    # 命中要有两个条件：这一次调用**自己退出 0**，而且输出里有那句话。退出码非零时哪怕串出现了也不算命中
+    # —— 否则「CLI 崩了但打了半句」会被当成「读到了」。
+    if [ "$R_RC" -eq 0 ]; then
+      case "$R_OUT" in *"pi 已退出"*) R_HIT=1; break ;; esac
+    fi
+    sleep 0.2; R_WAIT=$((R_WAIT + 1))
+  done
+  # 耗尽不许静默：它不是「慢」，是「这次没读到」，要有自己的一条红（产品断言照旧另算）。
+  if [ "$R_HIT" != 1 ]; then
+    printf '    现场（有界轮询 %ss / %s 轮用尽（roster 末次退出码 %s），输出里没有「pi 已退出」）：窗口=[%s] pane=[%s]\n' \
+      "$(( $(date +%s) - R_T0 ))" "$R_WAIT" "$R_RC" \
+      "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr '\n' ',')" \
+      "$(tmux display-message -p -t "$SESSION:dev" '#{pane_current_command}' 2>/dev/null)"
+    bad "§11c 夹具前提：$R_MAX 轮内 roster 没报出「pi 已退出」（末次退出码 $R_RC）—— 后面的崩溃态断言因此没有前提"
+  fi
   $TEAM roster >"$TMP/roster-dead.log" 2>&1
   assert_has "$TMP/roster-dead.log" "pi 已退出" "roster 能区分「窗口在但 pi 已退出」（有界轮询，不是赌一次 sleep）"
   if $TEAM say dev "ping" >"$TMP/say-idle.log" 2>&1; then ok "agent 没在跑时 say 落收件箱并返回 0"; else bad "say 不应硬失败（应落收件箱）"; fi
@@ -6401,6 +6424,28 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 人工一条命令也能顺手把 agent 带上（up --agents）。
   # 注：本段的假 pi（$FAKE/pi）写完参数就 exit 0，PM 根本起不来 —— `team up` 现在会如实退非 0
   # （状态就是承诺：以前它报完“启动失败”还会退 0）。这里验的是 --agents 那段把 agent 续起来。
+  #
+  # P326（PM 裁定）：最后那条「PM 启动失败」的前提是**这一次 up 真的走进了启动分支**。
+  # `team up` 只在 idle/unknown 两支里尝试启动（cmd-watch.sh 的 idle/unknown 分支），而 §11b 用
+  # pi-sleep（`sleep 600`）把 PM 拉起来之后会留一个**活进程**：那时 up 走 running: 分支、打的是
+  # 「PM 在运行」，那句「启动失败」本来就不该出现 —— 旧读数（C4）之所以是 ✓，只是因为那一段跑了 1018s，
+  # 600s 的 sleep 早就到期了。也就是说这条断言以前是**靠段落慢**才绿的（实测：快跑时前提断言直接点出
+  # `running:<pid>`）。
+  # 所以先按 fixtures 自己的口径把窗口还原成**确定性空 shell**：`make_pm_idle`（§11b 定义）等的是
+  # team_pm_state 真的报 idle:*，不是赌一次 sleep；随后把「此刻确实是 idle」断成自己的前提断言 ——
+  # 前提不成立就红在前提上并点名状态，产品断言一个字不放宽、也不靠加长 sleep。
+  if declare -F make_pm_idle >/dev/null 2>&1; then
+    make_pm_idle
+  else
+    bad "§11c 前提：make_pm_idle 不可用（§11b 没先跑？见 section-paths.tsv 的 needs）—— 最终启动前提没法准备"
+  fi
+  P11C_STATE="$(pm_state_now 2>/dev/null || true)"
+  case "$P11C_STATE" in
+    idle:*)
+      ok "§11c 前提：up --agents 之前 PM 是 idle（窗口是空 shell、无在飞标记 → up 会真的尝试启动）" ;;
+    *)
+      bad "§11c 前提：up --agents 之前 PM 状态是「${P11C_STATE:-<空>}」—— 不是 idle，最后那条启动失败断言没有前提" ;;
+  esac
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
   $TEAM up --agents >"$TMP/up-agents.log" 2>&1 || true
   assert_has "$TMP/up-agents.log" "续跑 dev" "up --agents 才会续跑 agent"
@@ -18232,6 +18277,29 @@ if bash "$P148_PROBE" >"$TMP/p148-shape-probe.log" 2>&1; then
 else
   bad "36⑧ 产品面检出探针有失败（$(grep -c '^bad:' "$TMP/p148-shape-probe.log" 2>/dev/null || printf '?' ) 条）"
   grep '^bad:' "$TMP/p148-shape-probe.log" 2>/dev/null | head -8 | sed 's/^/      /'
+fi
+
+# ⑨ CI 入口（P326 返修）：`gates.yml` 这条路径原先既没有段读它、也没有行声明它 —— 改一次 CI 入口就是
+# decision=FULL（整套，含 §61b 的 4946 s）。现在它由本段承接：`skills/teamsmith/tests/workflow-entry.sh`
+# 执行工作流**自己的** run 块（真实跑过的形状，不是对 YAML 的再解释），只验三条已成立的行为。
+# 看的是**产品面检出的那棵树**（`$CHECKOUT_REPO_ROOT`），不是本段自建的夹具项目 `$REPO` —— 后者是个空项目
+# （顶层只有项目骨架与状态目录，没有 CI 源码），拿它作条件会让这条检查每次都退化成 skip（V71 指出的承接缺口）。
+# `workflow-entry.sh` 自己会把 CI 定义拷进它的临时仓库，所以不需要往夹具项目里再放一份。
+# 产品面检出确实不含 CI 源码时仍按既有缺前提语义如实跳过（不计通过），不伪造通过。
+if [ -f "$SKILL_DIR/tests/workflow-entry.sh" ] && [ -f "$CHECKOUT_REPO_ROOT/.github/workflows/gates.yml" ]; then
+  if bash "$SKILL_DIR/tests/workflow-entry.sh" --tree "$CHECKOUT_REPO_ROOT" >"$TMP/p326-workflow-entry.log" 2>&1; then
+    ok "36⑨ CI 入口：workflow-entry 三条行为全绿（$(sed -n 's/^== workflow-entry == //p' "$TMP/p326-workflow-entry.log" | tail -1)）"
+  else
+    _wf_rc=$?
+    if [ "$_wf_rc" -eq 2 ]; then
+      cond_skip "36⑨ CI 入口（workflow-entry）：缺前提，没跑" "$(grep -m1 'SKIP（条件不满足）' "$TMP/p326-workflow-entry.log" | sed 's/.*SKIP（条件不满足）[^ ]* //')"
+    else
+      bad "36⑨ CI 入口：workflow-entry 有失败（rc=$_wf_rc）"
+      grep -E '^  .✗' "$TMP/p326-workflow-entry.log" | sed 's/^/      /' | head -6
+    fi
+  fi
+else
+  cond_skip "36⑨ CI 入口（workflow-entry）：检出里没有 CI 源码或脚本" "product-only 形状不含 .github/workflows"
 fi
 
 # ---------------------------------------------------------------- 37. 读路径：根一次解析 + 单进程扫描（M50）

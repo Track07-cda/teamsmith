@@ -67,14 +67,15 @@ everything below is the daily loop, which starts once the project is up.
 | Cross-project meetings | `team meeting open/say/read/list/inbox/propose/agree/close` (PM-to-PM peer exchange: interface work, advice, problem reports; **not a command channel** — consensus needs both sides) |
 | Updates | `team mark-loaded` (record the version at session start), `team version --check` (should I reload?), `team changelog [--since X]`, `team reload` |
 | Diagnostics | `team paths` (resolved paths/session), `team smoke` (end-to-end self-test; `TEAM_SMOKE_FAST=1 team smoke` = **fast mode**, pure-logic sections only, ~10s, skipped process sections print `SKIP (FAST mode)`; the **full** run is for delivery/review and queues on the gate lock — `TEAM_SMOKE_LOCK` / `TEAM_SMOKE_LOCK_WAIT`, the mutex is a pair (published `<lock>` + dot-prefixed companion `<lock>.machine`, the holder recorded in `<companion>.holder`; neither file is ever unlinked, and losing the companion mid-run stops the run loudly), and `team review` takes the same pair before its timeout so the record's `queued`/`ran` are separate; the gate judges **correctness only** — its panel section keeps the time-independent knob check), `team version` |
-| Performance | `team perf [--host \| --container]` (**separate from correctness**: the wall-clock/CPU red lines — interactive first frame, frame assembly, steady-state pane CPU — with the unchanged thresholds (2000 ms / 2000 ms / < 1 %), premise factors (`0.75` / `0.25`), medians, visible `SKIP` and exit codes `0`/`2`/`4`/`3`; its own lock `TEAM_PERF_LOCK`, never the gate lock; default = the pinned `ci/Containerfile` image, `--host` is labelled **not the reference**) |
+| Performance | `team perf [--host \| --container]` (**separate from correctness**: it only measures and prints reference readings — interactive first frame, frame assembly, steady-state pane CPU — and names the environment it measured in; the exit codes are `0` (a reading was taken) and `3` (setup failed, or the perf lock was unavailable), with no thresholds, no premise factor and no `2`/`4`; its own lock `TEAM_PERF_LOCK`, never the gate lock; default = the pinned `ci/Containerfile` image, `--host` is labelled **not the reference**) |
 
 The two gates answer different questions and are run at different times. **Correctness, on every change:**
 `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null` (the pair `team review` runs;
 `team smoke` is the suite's front door). **Performance, separately and before a release:**
 `bash skills/teamsmith/tests/perf.sh` (front door `team perf`; the reference environment is the pinned
-`ci/Containerfile` image, `team perf --host` is explicitly *not* the reference). A red performance run never
-changes a review verdict and never blocks a merge.
+`ci/Containerfile` image, `team perf --host` is explicitly *not* the reference). Its numbers are reference-only
+and it has no verdict to give (exit `0` = a reading was taken, `3` = it could not measure), so a performance run
+never changes a review verdict and never blocks a merge.
 
 ## Read the creed first, then the process
 The PM's judgement standard lives in [references/philosophy.md](references/philosophy.md) (8 principles, each with
@@ -301,7 +302,7 @@ about them). They stay writable so the seam can be maintained and diagnosed; to 
 | `references/troubleshooting.md` | Notifications not arriving, lost sessions, worktree conflicts, forge 403, dishonest reports |
 | `templates/` | Copy when you need to hand-write a brief/report/board |
 | `scripts/team`, `scripts/lib/*.sh` | When changing behaviour (use `team <cmd> --print` to see what it generates) |
-| `tests/smoke.sh`, `tests/perf.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, the non-Pi agent end-to-end segment, window/close behaviour, the pulse waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release. The full run is the machine's **one** shared gate resource: it queues on `TEAM_SMOKE_LOCK` up to `TEAM_SMOKE_LOCK_WAIT`, and `team review` takes the same lock *before* its hard timeout (so the record's `queued`/`ran` are separate and a long queue is a loud `FAIL`, never a `TIMEOUT`). The **performance** red lines live in `tests/perf.sh` (`team perf`), not in the correctness gate: correctness on every change, performance separately and before a release |
+| `tests/smoke.sh`, `tests/perf.sh`, `tests/skill-load.mjs` | To confirm the tooling works here: `team smoke` (end-to-end in a temp repo, never touches this project). **Fast mode**: `TEAM_SMOKE_FAST=1 team smoke` runs only sections that need no real tmux stage or agent process — good for day-to-day gates before dispatch/verification; it **does not cover** dispatch actually launching an agent, the non-Pi agent end-to-end segment, window/close behaviour, the pulse waking the PM, standby/monitor, real agent resume, cross-session guards, offline `say` delivery, or knock probing (those print `SKIP (FAST mode)`); run the full suite before changing those paths or cutting a release. The full run is the machine's **one** shared gate resource: it queues on `TEAM_SMOKE_LOCK` up to `TEAM_SMOKE_LOCK_WAIT`, and `team review` takes the same lock *before* its hard timeout (so the record's `queued`/`ran` are separate and a long queue is a loud `FAIL`, never a `TIMEOUT`). The **performance** readings live in `tests/perf.sh` (`team perf`), not in the correctness gate (there are no performance red lines left to run there — the suite prints reference readings, names the environment it measured in, and cannot fail a run): correctness on every change, one performance reading before a release |
 
 ## Requirements
 
@@ -326,5 +327,4 @@ about them). They stay writable so the seam can be maintained and diagnosed; to 
 - Optional helpers: `timeout` (hard timeout for gates; degrades with a warning), `lsof` (needed only where
   `/proc` is unavailable), `/usr/bin/time` (GNU time, not bash's `time` keyword: `tests/panel-cpu.sh` wraps the
   console with it to read the tree CPU figure — the gate image pins it, and where it is missing that fixture
-  prints why and reports a visible SKIP (its own exit status) instead of judging, as does the `panel-cpu-premise`
-  segment that drives it).
+  prints that the reading was not taken (exit `0`) instead of judging).

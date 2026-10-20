@@ -21,8 +21,12 @@ scenarios can no longer be exercised, and a `MODIFIED` block cannot drop a scena
 **Migration**: the promise is carried by `The correctness gate judges correctness only, and a duration is a reading` (added by this change): no duration decides green or red, an
 exhausted wait is a failure that names the wait and the state, and the one clock left is a per-section hang cap
 that trips on the absence of progress. What each retired scenario promised and what replaced it: the frame-budget
-scenario became the guard's planted-comparison and slow-but-correct scenarios; the three premise-`SKIP` scenarios
-retired with the premise; the knob-integrity scenario now pins the section-guard knobs the gate still has.
+scenario became the guard's planted-comparison and slow-but-correct scenarios; the **four** premise-`SKIP`
+scenarios (over-premise skips visibly, the premise is not an escape from a real regression, a skipped fixture is
+never reported as a passing one, the premise readings stay real on the real path) retired with the premise — the
+third of them, "a skipped fixture is never reported as a passing one", is carried on by
+`verification#A gate that cannot judge says so`, which is where that promise lives now; the knob-integrity
+scenario now pins the section-guard knobs the gate still has.
 
 ### Requirement: The performance suite is separate, self-describing and non-blocking
 

@@ -28,6 +28,14 @@
     bash -c 'git config --global --add safe.directory "*"; openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null'
   # 期望：validate 全过；== 结果 == ✓ N ✗ 0；smoke 全绿
   ```
+- [ ] 发布前在**钉死镜像**里跑一次参考读数（只参考：没有阈值，不阻塞合并），把打印的数字（含它自述的环境）
+      贴进当次发布记录 `docs/team/reviews/release-<version>.md`（就是 `release-0.3.0.md` 那种文件，发布时新建/追加）：
+  ```bash
+  distrobox-host-exec podman run --rm --pid=host --cgroups=enabled --userns=keep-id -e HOME=/tmp \
+    -v "$PWD:/work:ro" -w /work localhost/teamsmith-gate:local \
+    bash -c 'bash skills/teamsmith/tests/perf.sh --in-container --tree /work'
+  # 退出码：0 = 读到了 / 3 = 建立失败或拿不到性能锁（没结论）；没有判定码
+  ```
 - [ ] `bash docs/team/tools/release-check.sh` —— 只该剩**一条诚实失败**：`HEAD 领先最新 tag v<上一版> N 个提交`；
       其余全绿。名单那条如果显示"跳过"，把原因写进发布记录（名单是仓外文件，检出里通常没有）。
 - [ ] `bash docs/team/tools/release-check.sh --self-test` —— **4/4**（四条变异都被抓住）。

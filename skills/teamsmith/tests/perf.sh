@@ -168,7 +168,7 @@ perf_lock_or_continue() {
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
   : >>"$lock" 2>/dev/null || { note "锁文件 $lock 建不了 → 不串行"; return 0; }
   # 有界轮询取两把锁（每轮重算上限：持有者公布的 expected 优先，缺则 wait_s）——
-  # 上限到点留下可读的一句（性能套件的退出码是 0/2/3/4，拿不到锁 = 没结论 → exit 3）。
+  # 上限到点留下可读的一句（性能套件的退出码是 0/3：读到了 / 建立失败或拿不到锁 = 没结论（P316 起没有判定码 2/4））。
   local rc=0 t0 queued=0 cap wait_used=0
   t0="$(date +%s)"
   while :; do

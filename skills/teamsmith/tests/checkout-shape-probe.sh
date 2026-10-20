@@ -14,6 +14,8 @@
 #      → rc 1 点名；拼错的前提（openspec/changes/typo-planning-file.md）→ rc 1（不是前缀豁免）
 #   ④ 产品面 scratch 树里跑 --select 18,19 → rc 0，11 条内部前提各自 SKIP、零红
 #   ⑤ 内部部分树：删 SCOPE.md → --select 18 红并点名；删 opsx-apply.md → --select 19 红并点名（不许跳过）
+#   P326：嵌套 run 29 → 24 —— 同一棵树、同一个状态的几条选段合成一次（hy 的 19/31/58、hyteeth 的
+#      31/58、in2+证据层的 31/58、mix 的 18/19）；每条断言仍读自己那段的行，用例一条不删。
 #   ⑤c 反向：机器生成面在位且十个相位文件齐全 → §19 的十条照旧判定（十个 ✓、零 SKIP）
 #   ⑤d 空面不算缺席（P226）：机器生成面在位但是**空目录** → §19 的十条相位检查照旧判定并判红（§19 的
 #      账本 ✓16 ✗10 SKIP0，不是 SKIP10）；同一棵树删掉这两个空面 → 回到 10 条 SKIP、绿（差别只在空目录）
@@ -331,12 +333,18 @@ done
 for p in openspec-explore openspec-propose openspec-apply-change openspec-verify-change openspec-archive-change; do
   mkdir -p "$P_MIX/.pi/skills/$p"; printf '# %s\n' "$p" > "$P_MIX/.pi/skills/$p/SKILL.md"
 done
-nest "$P_MIX" "$T/nest-rev19.log" --select 19 && P_REV19_RC=0 || P_REV19_RC=$?
-peq "⑤c 机器生成面在位且文件齐全 → --select 19 退出 0" "$P_REV19_RC" "0"
+# P326：这一次 run 同时喂两个用例 —— ⑤c（§19 在生成面齐全时照旧判定）与 ⑨（同一棵树的空内部目录让 §18 红）。
+# 同一棵树、同一个状态、一次 --select 18,19；退出码是这一次的，每段仍按自己的行判。
+lm="$T/nest-mix-18-19.log"
+nest "$P_MIX" "$lm" --select 18,19 && P_MIX_RC=0 || P_MIX_RC=$?
+peq "⑤c 机器生成面在位且文件齐全 → --select 18,19 退出非 0（这一次的红来自 §18 的缺失 SCOPE.md）" \
+  "$([ "$P_MIX_RC" -ne 0 ] && printf red || printf green)" "red"
+peq "⑤c §19 自己那一段的收口行是 ✗0（相位检查没有因为合跑变红）" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lm" | grep -E '^#[0-9]+ 19 · ' | grep -c '✗0 ' || true)" "1"
 peq "⑤c 十条相位前提全部照旧判定（十条 ✓）" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-rev19.log" | grep -c '^  ✓ \(本仓库为 Pi 生成了相位命令\|相位 skill \)' || true)" "10"
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lm" | grep -c '^  ✓ \(本仓库为 Pi 生成了相位命令\|相位 skill \)' || true)" "10"
 peq "⑤c 一条机器生成面前提 SKIP 都没有" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-rev19.log" | grep -c '^  SKIP（条件不满足）.*机器生成面' || true)" "0"
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lm" | grep -c '^  SKIP（条件不满足）.*机器生成面' || true)" "0"
 
 # ── ⑤d 空面不算缺席（P226 固化 P225 的实测）：机器生成面**在位但是空目录**时，「整棵面不在」这个跳过
 #      前提不成立 —— 人在本机装了生成器却一个相位文件都没有，那是真问题：§19 的十条照旧判定并判红
@@ -386,50 +394,47 @@ peq "⑤b 旧规则下十条相位检查都判红（零 SKIP）" \
 peq "⑤b 旧规则下一条机器生成面前提 SKIP 都没有" \
   "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy-oldrule.log" | grep -c '^  SKIP（条件不满足）.*机器生成面' || true)" "0"
 
-# ② §19：十条各自 SKIP、点名缺的文件、零红；不许出现「照旧判定」的 ✓ 行
-nest "$P_HY" "$T/nest-hy19.log" --select 19 && P_HY19_RC=0 || P_HY19_RC=$?
-peq "⑤b 混合形状 --select 19 退出 0" "$P_HY19_RC" "0"
+# ② §19 + §31 + §58：同一棵树、同一个状态，一次选段（P326：三条嵌套 run 合成一次）。
+#     **一次真实 run 只留一条整体退出码断言**（P326 返修，按 V70 的审阅 + PM 裁定）：同一个 `$?` 不再被当成
+#     §19/§31/§58 三段各自的结果；三段自己的判定继续读各自那几行，整次 run 的失败仍由下面这一条兜住。
+lo="$T/nest-hy-19-31-58.log"
+nest "$P_HY" "$lo" --select 19,31,58 && P_HY_RC=0 || P_HY_RC=$?
+peq "⑤b 混合形状：这一次 --select 19,31,58 的整次 run 退出 0" "$P_HY_RC" "0"
 peq "⑤b 豁免清单判据：真实清单的路径都不在这棵检出里 → 可跳过（0）" \
   "$(checkout_registered_paths_absent "$P_HY" "$P_HY/skills/teamsmith/tests/tmux-lint-legacy.txt" && printf yes || printf no)" "yes"
 peq "⑤b 混合形状 --select 19：十条断言变成前提 SKIP" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy19.log" | grep -c '^  SKIP（条件不满足）.*（跳过不是通过）')" "10"
-peq "⑤b 混合形状 --select 19：一条红都没有" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy19.log" | grep -c '^  ✗ ' || true)" "0"
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lo" | grep -c '^  SKIP（条件不满足）.*机器生成面')" "10"
+peq "⑤b 混合形状 --select 19：§19 自己一条红都没有" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lo" | grep -c '^  ✗ \(本仓库为 Pi 生成了相位命令\|相位 skill \)' || true)" "0"
 for p in opsx-apply.md opsx-verify.md; do
-  phas "⑤b 前提 SKIP 点名 .pi/prompts/$p" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy19.log")" ".pi/prompts/$p"
+  phas "⑤b 前提 SKIP 点名 .pi/prompts/$p" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" ".pi/prompts/$p"
 done
 for p in openspec-apply-change openspec-verify-change; do
-  phas "⑤b 前提 SKIP 点名 .pi/skills/$p/SKILL.md" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy19.log")" ".pi/skills/$p/SKILL.md"
+  phas "⑤b 前提 SKIP 点名 .pi/skills/$p/SKILL.md" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" ".pi/skills/$p/SKILL.md"
 done
-phas "⑤b SKIP 文案点名这是机器生成面" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy19.log")" "机器生成面（由工具在本机生成、不进仓库）"
-pnot "⑤b 相位文件没有被判成在位" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy19.log")" "✓ 本仓库为 Pi 生成了相位命令 opsx-apply"
+phas "⑤b SKIP 文案点名这是机器生成面" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" "机器生成面（由工具在本机生成、不进仓库）"
+pnot "⑤b 相位文件没有被判成在位" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" "✓ 本仓库为 Pi 生成了相位命令 opsx-apply"
 
 # ② §31/§58：豁免清单按「证据层缺席」跳过并点名，空清单下 lint 的判定照旧（green）
-nest "$P_HY" "$T/nest-hy31.log" --select 31 && P_HY31_RC=0 || P_HY31_RC=$?
-peq "⑤b 混合形状 --select 31 退出 0" "$P_HY31_RC" "0"
-phas "⑤b 混合形状：§31 的豁免清单按前提跳过" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy31.log")" "SKIP（条件不满足） M28 真树"
-phas "⑤b 混合形状：跳过点名豁免清单的证据层 docs/team/reports/*/pkg/**" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy31.log")" "豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在"
-phas "⑤b 混合形状：M28 判定照旧执行（空清单，lint 的牙全在）" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy31.log")" "✓ M28 真树：变更类 tmux 调用全部有隔离证据"
-nest "$P_HY" "$T/nest-hy58.log" --select 58 && P_HY58_RC=0 || P_HY58_RC=$?
-peq "⑤b 混合形状 --select 58 退出 0" "$P_HY58_RC" "0"
-phas "⑤b 混合形状：§58 的豁免清单按前提跳过并点名证据层" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy58.log")" "豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在"
-phas "⑤b 混合形状：signal-lint 判定照旧执行" "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-hy58.log")" "✓ 58 lint 真树：仓库脚本/夹具没有按名字或模式选进程"
+phas "⑤b 混合形状：§31 的豁免清单按前提跳过" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" "SKIP（条件不满足） M28 真树"
+phas "⑤b 混合形状：跳过点名豁免清单的证据层 docs/team/reports/*/pkg/**" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" "豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在"
+phas "⑤b 混合形状：M28 判定照旧执行（空清单，lint 的牙全在）" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" "✓ M28 真树：变更类 tmux 调用全部有隔离证据"
+phas "⑤b 混合形状：§58 的豁免清单按前提跳过并点名证据层" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" "豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在"
+phas "⑤b 混合形状：signal-lint 判定照旧执行" "$(sed 's/\x1b\[[0-9;]*m//g' "$lo")" "✓ 58 lint 真树：仓库脚本/夹具没有按名字或模式选进程"
 
 # ③ 牙齿：混合形状里往**产品面**文件植入真问题 → §31/§58 照旧红并点名（豁免清单的跳过只免那一册账）
 P_HY_TEETH="$(scratch_tree hyteeth mixed)"
 printf '\ntmux kill-server\n' >> "$P_HY_TEETH/skills/teamsmith/tests/tmp-hygiene.sh"
 printf '\npkill -f p222-hybrid-planted\n' >> "$P_HY_TEETH/skills/teamsmith/tests/tmp-hygiene.sh"
-if nest "$P_HY_TEETH" "$T/nest-hyteeth31.log" --select 31; then
-  pbad "⑤b 混合形状：产品文件里的裸 tmux 调用被吞（§31 仍绿）"
-else
-  phas "⑤b 混合形状：产品文件里的裸 tmux 调用照旧判红并点名" "$(cat "$T/nest-hyteeth31.log")" "tmp-hygiene.sh"
-  phas "⑤b 混合形状：那条红是 M28 判红（不是整条检查被跳过）" "$(cat "$T/nest-hyteeth31.log")" "M28 真树有未隔离的 tmux 变更命令"
+# P326：两条植入在同一次选段里跑（同一棵树、同一个状态）；退出码是这一次 run 的，每条红仍按自己的行判。
+lt="$T/nest-hyteeth-31-58.log"
+nest "$P_HY_TEETH" "$lt" --select 31,58 && P_HY_TEETH_RC=0 || P_HY_TEETH_RC=$?
+if [ "$P_HY_TEETH_RC" -eq 0 ]; then
+  pbad "⑤b 混合形状：产品文件里的裸 tmux 调用 / pkill -f 被吞（--select 31,58 仍绿）"
 fi
-if nest "$P_HY_TEETH" "$T/nest-hyteeth58.log" --select 58; then
-  pbad "⑤b 混合形状：产品文件里的 pkill -f 被吞（§58 仍绿）"
-else
-  phas "⑤b 混合形状：产品文件里的 pkill -f 照旧判红并点名 file:line" "$(cat "$T/nest-hyteeth58.log")" "tmp-hygiene.sh:"
-fi
+phas "⑤b 混合形状：产品文件里的裸 tmux 调用照旧判红并点名" "$(cat "$lt")" "tmp-hygiene.sh"
+phas "⑤b 混合形状：那条红是 M28 判红（不是整条检查被跳过）" "$(cat "$lt")" "M28 真树有未隔离的 tmux 变更命令"
+phas "⑤b 混合形状：产品文件里的 pkill -f 照旧判红并点名 file:line" "$(cat "$lt")" "tmp-hygiene.sh:"
 
 # ── ⑥ 覆盖守门：旧断言被换成前提跳过 → 比对点名；还原后绿 ────────────────────────────────
 P_C1="$(scratch_tree c1 internal)"
@@ -577,14 +582,20 @@ peq "⑨ 证据层只有用例自己声明的那一条注册文件（树自洽�
 { sed '/^[^#]/d' "$P_IN2_LEG"
   printf '%s  1  docs/team/reports/P222-fixture/pkg/legacy.sh  # P222 反向控制：证据层在位，这一册账照旧核对\n' "$_EV_SHA"; } \
   > "$P_IN2_LEG"
-nest "$P_IN2" "$T/nest-inev31.log" --select 31 && P_IN_EV31_RC=0 || P_IN_EV31_RC=$?
-peq "⑨ 内部树 + 清单文件都在 → --select 31 退出 0（照旧判定）" "$P_IN_EV31_RC" "0"
+# P326：§58 的 signal 清单也按同一条合成证据文件重写（⑩ 的断言读同一次 run）—— 两册账都在位，
+# 同一棵树、同一个状态，一次 --select 31,58 把两段的逐条核对都跑到。
+{ sed '/^[^#]/d' "$P_IN2/skills/teamsmith/tests/signal-lint-legacy.txt"
+  printf '%s  1  docs/team/reports/P222-fixture/pkg/legacy.sh  # P222 反向控制：证据层在位，这一册账照旧核对\n' "$_EV_SHA"; } \
+  > "$P_IN2/skills/teamsmith/tests/signal-lint-legacy.txt"
+lin="$T/nest-in2-ev-31-58.log"
+nest "$P_IN2" "$lin" --select 31,58 && P_IN_EV_RC=0 || P_IN_EV_RC=$?
+peq "⑨ 内部树 + 清单文件都在 → 这一次 --select 31,58 的整次 run 退出 0（照旧判定）" "$P_IN_EV_RC" "0"
 peq "⑨ 豁免清单判据：有一条文件在位 → 不可跳过（1）" \
   "$(checkout_registered_paths_absent "$P_IN2" "$P_IN2_LEG" && printf yes || printf no)" "no"
 peq "⑨ 内部树 + 清单文件都在 → 不以「证据层缺席」为由跳过" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-inev31.log" | grep -c '^  SKIP（条件不满足） M28 真树' || true)" "0"
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lin" | grep -c '^  SKIP（条件不满足） M28 真树' || true)" "0"
 phas "⑨ 内部树 + 清单文件都在 → M28 照旧带清单跑（1 个历史豁免文件）" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-inev31.log")" "另有 1 个历史豁免文件"
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lin")" "另有 1 个历史豁免文件"
 
 # ⑨c 影子（P222）：把「生成面**整棵不在**」改成恒真（=永远跳过）。用 ⑤ 已经建好的那棵内部树（`.pi/prompts`
 # 在位、`opsx-apply.md` 已删）—— 影子打上后，同一条被删的文件从「红」变「跳过」，证明 ⑤ 的反向控制
@@ -602,11 +613,13 @@ else
 fi
 
 # 假内部面（空目录 docs/team）不能让缺失的必需文件变成「跳过」或「通过」：§18 在混入树里照旧红。
-if nest "$P_MIX" "$T/nest-mix.log" --select 18; then
+# 假内部面（空目录 docs/team）不能让缺失的必需文件变成「跳过」或「通过」：§18 在混入树里照旧红。
+# P326：与 ⑤c 共用那一次 --select 18,19（同树同状态），这里只读 §18 自己的行。
+if [ "$P_MIX_RC" -eq 0 ]; then
   pbad "⑨ 混入一个空内部目录（docs/team）后 §18 仍绿（缺失文件被当成了免判）"
 else
-  phas "⑨ 空内部目录：§18 照旧红并点名 SCOPE.md" "$(cat "$T/nest-mix.log")" "SCOPE.md"
-  pnot "⑨ 空内部目录：不是前提跳过" "$(cat "$T/nest-mix.log")" "内部开发面前提 SCOPE.md 在检出里不存在"
+  phas "⑨ 空内部目录：§18 照旧红并点名 SCOPE.md" "$(cat "$lm")" "SCOPE.md"
+  pnot "⑨ 空内部目录：不是前提跳过" "$(cat "$lm")" "内部开发面前提 SCOPE.md 在检出里不存在"
 fi
 
 # 继承身份（TEAM_ROOT/TEAM_MAIN_ROOT 指向内部树）不改变**门禁**的分类：同样的 11 条前提跳过。
@@ -739,17 +752,14 @@ phas "⑩ 产品面：lint 照跑（不是把 58 整条记成跳过）" \
 peq "⑩ 产品面：--select 58 的红数为 0" \
   "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log" | grep -c '^  ✗ ' || true)" "0"
 
-# ⑩ 内部树 + 清单里的文件都在（同一棵合成证据树，signal 清单也按它重写）→ §58 照旧逐条核对、打印
-# LEGACY，**不**按证据层缺席跳过（P222 的反向控制；产品面的跳过分支在上面）。
-{ sed '/^[^#]/d' "$P_IN2/skills/teamsmith/tests/signal-lint-legacy.txt"
-  printf '%s  1  docs/team/reports/P222-fixture/pkg/legacy.sh  # P222 反向控制：证据层在位，这一册账照旧核对\n' "$_EV_SHA"; } \
-  > "$P_IN2/skills/teamsmith/tests/signal-lint-legacy.txt"
-nest "$P_IN2" "$T/nest-inev58.log" --select 58 && P_IN_EV58_RC=0 || P_IN_EV58_RC=$?
-peq "⑩ 内部树 + 清单文件都在 → --select 58 退出 0（照旧判定）" "$P_IN_EV58_RC" "0"
+# ⑩ 内部树 + 清单里的文件都在（运行在 ⑨b：同一棵合成证据树、两册清单都按同一条文件重写）→ §58 照旧逐条
+# 核对、打印 LEGACY，**不**按证据层缺席跳过（P222 的反向控制；产品面的跳过分支在上面）。P326：这一次
+# run 与 §31 共用（`--select 31,58`），断言仍读 §58 自己的行。
+# ⑩ 与 ⑨ 是同一次 run：整体退出码只在 ⑨ 那一行断言一次，这里不再重复（P326 返修）。
 peq "⑩ 内部树 + 清单文件都在 → 不以「证据层缺席」为由跳过" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-inev58.log" | grep -c '^  SKIP（条件不满足） 58 lint' || true)" "0"
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lin" | grep -c '^  SKIP（条件不满足） 58 lint' || true)" "0"
 phas "⑩ 内部树 + 清单文件都在 → signal-lint 照旧逐条核对（LEGACY 打印）" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-inev58.log")" "LEGACY  docs/team/reports/P222-fixture/pkg/legacy.sh"
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$lin")" "LEGACY  docs/team/reports/P222-fixture/pkg/legacy.sh"
 
 # 牙齿（P176）：清单里指向**产品面**的文件缺失（这里故意指向不存在的 skills/ 路径）→ 必须红并点名 ——
 # 这是产品文件的问题，不是内部开发面前提；跳过只许发生在清单**每一条都落在内部面**上时。

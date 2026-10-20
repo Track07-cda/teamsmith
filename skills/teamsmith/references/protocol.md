@@ -654,7 +654,7 @@ carries an illegal token, so the read side and the write side can never disagree
 - Acceptance commands in a brief should carry their own timeout as well; destructive experiment scripts must restore
   the scene with `trap 'git checkout -- …' EXIT`.
 
-### 9b-2. The gate is the machine's one shared resource (queue, and the measurement premise)
+### 9b-2. The gate is the machine's one shared resource (queue)
 
 The full gate — `openspec validate … && bash skills/teamsmith/tests/smoke.sh` — spends the machine's tmux servers,
 node/bun processes and login shells, so it is serialised on **one gate lock**
@@ -782,19 +782,21 @@ The gate judges **correctness only**: it contains no wall-clock or CPU-share red
 gate's own sources (`tests/gate-guard.sh`) fails when a frame-budget/CPU-share marker reappears in it or when the
 performance suite loses its markers. The three panel numbers — the interactive first frame, the uncached frame
 assembly and the steady-state pane CPU — belong to the **performance suite**
-(`bash skills/teamsmith/tests/perf.sh`, front door `team perf`): the thresholds (`2000 ms` / `2000 ms` / `< 1 %` of
-one core), the premise factors (`0.75` for the five-sample assembly median, `0.25` for the cold-start first frame
-and the sampled pane CPU, `TEAM_PANEL_CPU_PREMISE_FACTOR`) and the median-of-three/five rules are unchanged, every
-sample is printed, and above the premise the judgement **skips visibly** (exit `4` for a skip, `2` for a red, `0`
-only when every judgement ran green) rather than reporting a red the machine owes. The suite takes its **own** lock
+(`bash skills/teamsmith/tests/perf.sh`, front door `team perf`) and are **readings**: every sample is printed
+together with the environment it was taken in, there is no threshold and no premise factor, and no number it prints
+can fail a run. The suite takes its **own** lock
 (`TEAM_PERF_LOCK`, `TEAM_PERF_LOCK_WAIT`, holder in `<companion>.holder`, where `<companion>` is
 `<same dir>/.<basename>.machine` — the same pair the gate uses, so a perf lock survives the same incident) and **never** takes `TEAM_SMOKE_LOCK`: it does
 one read-only non-blocking probe of the gate lock and prints the holder when the correctness gate is running, but
-it never queues behind it. The gate's lock accounting (`limit=Ns queued=Ns ran=Ns`), the fixture-knob rule (those
-`TEAM_*` knobs only work under `TEAM_SMOKE_FIXTURE=1`, and in the real path they are ignored and printed) and the
-gate's time-independent half of that check (`tests/panel-knobs.sh`) are unchanged; a red performance run changes no
-review verdict. The contracts live in the specs (`verification#The correctness gate judges correctness only`,
-`verification#The performance suite is separate, self-describing and non-blocking`,
+it never queues behind it. Its exit codes are `0` (a reading was taken) and `3` (setup failed, or the perf lock
+was unavailable): there is no judgement, so there is no `2`/`4`. The gate's lock accounting (`limit=Ns queued=Ns
+ran=Ns`), the fixture-knob rule (those `TEAM_*` knobs only work under `TEAM_SMOKE_FIXTURE=1`, and in the real path
+they are ignored and printed) and the gate's time-independent half of that check (`tests/panel-knobs.sh`) are
+unchanged; a performance run changes no review verdict. Its readings are taken once before a release, in the
+pinned image, and pasted into that release's record (`docs/team/reviews/release-<version>.md`); the release
+checklist names the command. The contracts live in the specs
+(`verification#The correctness gate judges correctness only, and a duration is a reading`,
+`verification#The performance suite is separate, self-describing, and its numbers are reference-only`,
 `verification#The hard timeout covers the gate run, not the queue`,
 `panel#Frame assembly is asynchronous, cached and never blocks input`); this section is the operational rule.
 
