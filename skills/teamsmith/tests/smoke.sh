@@ -16587,6 +16587,34 @@ p66_hold() { # <秒>
   printf '%s pid=%s cmd=p66-holder\n' "$(date -Is)" "$P66_RSH" > "$P66_LOCK.holder"
 }
 p66_release() { [ -n "$P66_RSH" ] && { kill "$P66_RSH" 2>/dev/null; wait "$P66_RSH" 2>/dev/null; }; P66_RSH=""; }
+# 持锁到**放行文件出现**为止（不是持一个猜出来的秒数）。确定证据与 §34b⑨ 同一手法（P340）：
+# `--close` 下锁 fd 不进子进程，所以 `: > "$2"`（子进程的第一句）只在 flock 父进程**拿到锁之后**
+# 才可能执行 —— 它出现 = 锁已被持有。持有者不参与任何计时，等待者多慢都不会被「窗口到期」盖过去。
+# 1200×0.1=120s 只防死等（本段自己没走到写放行那一行时），没有任何断言读它。
+p66_hold_until_released() { # <目录>：设置 P66_READY / P66_RELEASE / P66_HPID
+  P66_READY="$1/hold-ready"; P66_RELEASE="$1/hold-release"
+  rm -f "$P66_READY" "$P66_RELEASE"
+  : >>"$P66_LOCK"
+  flock --close -x "$P66_LOCK" bash -c ': > "$2"; for i in $(seq 1 1200); do [ -e "$1" ] && break; sleep 0.1; done' \
+    _ "$P66_RELEASE" "$P66_READY" & P66_HPID=$!
+  local i
+  for i in $(seq 1 600); do [ -e "$P66_READY" ] && break; sleep 0.05; done
+  if [ ! -e "$P66_READY" ]; then
+    bad "34b③ 没等到持有者拿到 $P66_LOCK（30s 上限）→ 下面的读数无效（这是「挂住」，不是「慢」）"
+  fi
+  printf '%s pid=%s cmd=p66-holder\n' "$(date -Is)" "$P66_HPID" > "$P66_LOCK.holder"
+}
+# 等「排队」这个**行为事实**：等待者的日志里出现排队行 = 它确实撞上了持有者、开始排队。出现了才放行 ——
+# 前导多慢只把放行整体后移；这不是「在 N 秒内到达」那种窗口。上界只防死等，耗尽时报「没等到 X」。
+p66_wait_queued() { # <日志> <上界秒>
+  local out="$1" cap="$2" i
+  for i in $(seq 1 "$(( cap * 20 ))"); do
+    grep -aq '另一套全量 smoke 正在跑' "$out" 2>/dev/null && return 0
+    sleep 0.05
+  done
+  bad "34b③ 没等到等待者排队（${cap}s 上限）→ 下面的读数无效（这是「挂住」，不是「慢」）"
+  return 0
+}
 p66_run() { # <out> <wait> <child-rc>：真入口 + 私有锁 / 私有 TMPDIR（marker 也不落 /tmp）
   local out="$1" w="$2" crc="$3"
   ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
@@ -16644,10 +16672,16 @@ assert_not "$P66D/green.log" "排队超限" "34b② 无竞争时没有排队失�
 assert_not "$P66D/green.log" "另一套全量 smoke 正在跑" "34b② 空闲锁不进排队路径"
 
 # ③ 有竞争但排到了：既有行为照旧（排队行 + 「轮到本套了（排过队）」）
+# 旧写法 `p66_hold 2` 是一条 2 秒窗口：它要盖住的是**等待者自己的前导**（实测 1.8s，余量 0.2s），
+# 前导一慢窗口就先到期 —— 等待者自己拿到锁、rc=0，本节两条断言假红（V80 §7 在 +5s 慢前导下实测）。
+# 判据换成确定性的行为事实：持有者持到**等待者已经排队**为止，那一刻才放行。
 rm -f "$P66_LOCK.holder"
-p66_hold 2
-P66_RC=0; p66_run "$P66D/queued.log" 20 0 || P66_RC=$?
-p66_release
+p66_hold_until_released "$P66D"
+p66_run "$P66D/queued.log" 20 0 & P66_WPID=$!
+p66_wait_queued "$P66D/queued.log" 120
+: > "$P66_RELEASE"                # 等待者已经在排队：现在才放行持有者
+wait "$P66_HPID" 2>/dev/null || true
+P66_RC=0; wait "$P66_WPID" || P66_RC=$?
 assert_eq "34b③ 排到了 → 子进程的退出码（0）" "$P66_RC" "0"
 assert_has "$P66D/queued.log" "另一套全量 smoke 正在跑" "34b③ 排队时打印持有者"
 assert_has "$P66D/queued.log" "轮到本套了（排过队）" "34b③ 轮到时照旧打印「轮到本套了（排过队）」"
@@ -16701,8 +16735,12 @@ p281_scene() { # 造现场：真 flock 持有者（它的进程树里有活的�
   read -r P281_FPID P281_DECOY < "$P281D/pids"
   gate_lock_write_holder "$P281_LOCK" "$P281_FPID" top "p281-flock" dev "$P281D" \
     "$(( $(date +%s) - 700 ))" 600 2400 3 0 - -
+  p281_register_nested
+}
+p281_register_nested() { # 嵌套登记：started 写在 30 s 之前（⑦ 的「已跑 Ns」判据拿这个数当参照）
+  P281_NESTED_STARTED=$(( $(date +%s) - 30 ))
   gate_lock_register_run "$P281_LOCK" "$P281_DECOY" nested "p281-nested" dev "$P281D" \
-    "$(( $(date +%s) - 30 ))" 300 1200 2 0 "$P281_FPID" -
+    "$P281_NESTED_STARTED" 300 1200 2 0 "$P281_FPID" -
 }
 p281_waiter() { # <日志> <上限秒>：真入口，私有锁 / 私有 TMPDIR
   ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
@@ -16720,14 +16758,35 @@ p281_missing() { # <一行> → 缺的字段（空格分隔；空 = 齐了）
   done
   printf '%s\n' "$out"
 }
+# 「已跑 Ns」不再是「落在某个 10 秒带里」——那条带的两端等于把夹具的起跑时刻当常数：前导 +5 s 就滑出 3Xs
+# （V80 §7 实测）。判据换成**记录字段之间的关系**：N = 描述那一刻 − 记录里的 started，于是
+#   [登记之后最早可能的时刻 − started, 本段读回这一行之后 − started] 这两个端点都由夹具自己的 started
+# 与实测时刻现算；前导多慢只把整条区间后移，不会翻面。端点不参与「快慢」判定：它只认出「已跑」没按
+# 记录里的 started 算（算错基准 / 加了偏移 / 读不到），也就是一条行为判据。
+p281_elapsed_of() { # <一行> → 嵌套那一条（`；` 分段）里的「已跑 Ns」的 N（读不到 → 空）
+  printf '%s' "$1" | sed 's/；/\n/g' | grep -a 'kind=nested' | head -1 \
+    | grep -o '已跑 [0-9]\{1,\}s' | head -1 | sed 's/^已跑 //; s/s$//'
+}
+p281_elapsed_verdict() { # <一行>：P281_T0 / P281_T1 / P281_NESTED_STARTED → ok / 不自洽的说明
+  local v lo hi
+  v="$(p281_elapsed_of "$1")"
+  case "$v" in ''|*[!0-9]*) printf '读不到嵌套那一条的「已跑 Ns」（读到「%s」）\n' "$v"; return 0 ;; esac
+  lo=$(( P281_T0 - P281_NESTED_STARTED )); hi=$(( P281_T1 - P281_NESTED_STARTED ))
+  if [ "$v" -lt "$lo" ]; then printf '小：%s 早于登记之后最早可能的 %s\n' "$v" "$lo"
+  elif [ "$v" -gt "$hi" ]; then printf '大：%s 晚于本段读回这一行之后的 %s\n' "$v" "$hi"
+  else printf 'ok\n'; fi
+}
 p281_scene
+P281_T0="$(date +%s)"          # 排队行/超限行都是这之后写的：两个端点从这里起算
 P281_RC=0; p281_waiter "$P281D/w-green.log" 1 || P281_RC=$?
+P281_T1="$(date +%s)"
 assert_eq "34b⑦ 等待者撞上限 → exit 2（约定的那个）" "$P281_RC" "2"
 P281_QLINE="$(grep -a '另一套全量 smoke 正在跑' "$P281D/w-green.log" | head -1)"
 P281_CLINE="$(grep -a '排队超限' "$P281D/w-green.log" | head -1)"
 assert_eq "34b⑦ 排队行点名 kind=nested + 席位 + 工作树 + expected + bound" "$(p281_missing "$P281_QLINE")" ""
 assert_eq "34b⑦ 撞上限行也点名同一批字段" "$(p281_missing "$P281_CLINE")" ""
-assert_match "$P281D/w-green.log" '已跑 3[0-9]s' "34b⑦ 两行都按 started 算「已跑 Ns」（30s 前登记 → 3Xs）"
+assert_eq "34b⑦ 两行的「已跑 Ns」都按记录里的 started 现算（各自落在自己 started 决定的区间里，不是某个 10 秒带）" \
+  "$(p281_elapsed_verdict "$P281_QLINE")/$(p281_elapsed_verdict "$P281_CLINE")" "ok/ok"
 assert_not "$P281D/w-green.log" "持有者未知" "34b⑦ 真持有者活着 → 绝不打印「持有者未知」"
 assert_not "$P281D/w-green.log" "陈旧记录" "34b⑦ 活着的登记不算陈旧"
 # 红侧：删掉嵌套登记
@@ -16742,7 +16801,7 @@ fi
 assert_has "$P281D/w-red.log" "kind=top" "34b⑦ 红侧：只剩持有者的 kind=top（嵌套那一层确实没了）"
 # 还原 → 绿
 gate_lock_register_run "$P281_LOCK" "$P281_DECOY" nested "p281-nested" dev "$P281D" \
-  "$(( $(date +%s) - 30 ))" 300 1200 2 0 "$P281_FPID" -
+  "$P281_NESTED_STARTED" 300 1200 2 0 "$P281_FPID" -
 P281_RC=0; p281_waiter "$P281D/w-green2.log" 1 || P281_RC=$?
 assert_eq "34b⑦ 还原登记 → 字段齐了（绿）" \
   "$(p281_missing "$(grep -a '排队超限' "$P281D/w-green2.log" | head -1)")" ""
