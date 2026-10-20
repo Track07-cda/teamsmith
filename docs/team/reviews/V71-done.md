@@ -1,0 +1,1 @@
+- 2026-10-20T09:31:44Z · `team board set V71 done` · OK：复验记录 docs/team/reviews/V71.md（判定 PASS）
