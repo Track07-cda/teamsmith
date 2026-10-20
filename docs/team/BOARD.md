@@ -510,10 +510,11 @@
 | P321 | Repair npm command entries and restore existing signal contract | dev3 | - | - | done |
 | P322 | Explore behavior-focused CI without repeated nested gates | dev-bob | - | - | done |
 | P323 | Diagnose CI cleanup and missing failure scene from existing evidence | verify | - | - | done |
-| P324 | Repair keep-mode reclaim probe and collect actual CI scenes | dev2 | - | P323 | review |
-| P325 | Propose smaller CI execution without losing behavior coverage | dev-bob | - | P322 | wip |
-| V65 | Independently verify packaged npm entries and selector contract | verify | - | P321 | wip |
-| V66 | Independently verify keep reclaim and actual container scene collection | dev | - | P324 | wip |
+| P324 | Repair keep-mode reclaim probe and collect actual CI scenes | dev2 | - | P323 | done |
+| P325 | Propose smaller CI execution without losing behavior coverage | dev-bob | - | P322 | done |
+| V65 | Independently verify packaged npm entries and selector contract | verify | - | P321 | done |
+| V66 | Independently verify keep reclaim and actual container scene collection | dev | - | P324 | done |
+| P326 | Apply behavior-focused-ci: floor declaration, NUL path chain, probe de-duplication, docs and spec alignment | dev | - | P325 | todo |
 
 ## 当前里程碑
 

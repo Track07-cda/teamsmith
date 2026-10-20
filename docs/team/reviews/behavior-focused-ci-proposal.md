@@ -1,5 +1,40 @@
 # behavior-focused-ci · PM proposal review
 
+time: 2026-10-20T05:40Z · reviewer: pm · verdict: **ACCEPTED**（rev 2，`90a1be402610`）
+status（历史）: NEEDS-CHANGES（rev 1，`748172b07bfb`，2026-10-20T04:15:03Z）—— 原文保留在文末。
+
+## 结论（rev 2）
+
+rev 2 关掉了 R1–R4 的四处，且方向是**减法**：普通 CI 入口不再无条件付 1431 秒门禁自检与 4946 秒变异矩阵，探针嵌套从 29 次降到 24 次，四块已被代码取消的承诺按工具实测报错整块退场。据此授权实现（apply），但落单时附六条我写死的条件（见下），并由另一个席位独立复验。
+
+## rev 2 对 R1–R4 的关闭（我逐条核过）
+
+- **R1 · 61b 不再是基线。** 它进了表头 `# gate-self-check:` 行，普通入口（地板 ∪ 改动）不含它；§61（路由产品行为）仍在地板。我核了 patterns：`61b` 只有 `tests/task-model-routing.sh` 与 `tests/lib/model-routing-flips.py`，而 `61` 含 `common.sh` / `cmd-*.sh` / `templates/config.sh.tmpl` 等产品面 —— 所以「改产品路由跑行为、改夹具才跑变异」在表上是成立的。4946 秒仍是表内登记值，本轮没有重测（符合我「不许再跑 82 分钟来证明它慢」的要求）。
+- **R2 · 验收不再是逐场景配额。** `tasks.md` 里 44 条场景的逐条翻转全没了；C1（58 行的行为反例对：无闭包仍绿、去掉 §15b 的真依赖必红）、C2（`--floor` 纯逻辑）、C3（容器里一次 CI 入口 + 植入产品失败）、C4（最终一次整体运行）四件取代它。未声明路径的 FULL 也用纯逻辑回答，不起容器。
+- **R3 · 路径走原始字节。** `--paths-from` 只剩「为什么不用它」的说明；整链是 `git diff --name-only -z` → `read -r -d ''` → bash 数组 → 容器命令的 argv。规格里多了一条场景：含换行、引号、反斜杠的文件名必须逐字节到达。
+- **R4 · 规格与生效文档同轮对齐。** 四块按 `openspec` 的实测报错（MODIFIED 不许丢基线场景）改成「整块退场 + 保留词干的新标题」，每块 `**Reason**` / `**Migration**` 逐条点名接手者；负载实验室整块退场（`grep -c 'A load experiment'` = 1，那一处正是退场声明）；`${TMPDIR:-/tmp}`、`docker cp …:/tmp/.`、`docs/team/PUBLISH.md` 只出现在「已被删除」的叙述里；`SKILL.md` 与 `references/protocol.md` 的旧红线进了最小写集。
+
+## 我独立执行过的检查
+
+- 该工作树 `openspec validate --all --strict`：**20 passed / 0 failed**；`spec-refs.sh --check`：judged 111 / undeclared **0**。
+- 结构：`REMOVED 4 / ADDED 3 / MODIFIED 6`，与提案自述一致；MODIFIED 块保留原场景（工具强制，非自述）。
+- 现有选择器在 main 上的行为：`--paths section-paths.tsv` = `RUN keys=7`、`--paths section-select.sh` = `RUN keys=7`、`--paths openspec/specs/verification/spec.md` = `RUN keys=11`。**改表、改选择器、改规格今天都会把自检段选回来**，新地板不能把这条弄丢（见条件 2）。
+
+## 授权实现的条件（六条，写死在任务书里）
+
+1. **墙钟上限**：C4 在钉死镜像里若超过 **45 分钟**，停手写 `BLOCKED:` 并给出分段读数；**不许**抬高 60 分钟上限，**不许**删断言换绿。
+2. **反向判据**（比 C2 更强）：`# gate-self-check:` 行里**每一个** key，用它自己的 patterns 造一次路径输入，必须把该段选回来；从行里删掉一个 key，那段必须回到地板（`61b` 也要试）；写不存在的 key、重复 key、点名前导段，`--check` 必须红并点名是哪一条。
+3. **缺行与空行语义**：整行被删 → 地板 = 全套（安全方向），用一次纯逻辑证据钉住；**不许**出现「行在但为空 → 只跑前导段」这种静默变窄（设计写了 `die`，实现要保持）。
+4. **守卫净零**：这次是减法（退场 4 条要求、CI 不再无条件跑 1431 秒自检与 4946 秒矩阵），因此本 change **不许**顺手新增别的检查器、预算表、调度器或第二个非阻塞步；perf 仍独立、`exit 0/3`、只参考。
+5. **不改断言**：C1/C3 的红侧只能来自产品/夹具的真实破坏，不许放松或删除既有行级断言；`smoke.sh` 的披露行（`decision=` / 未跑列表 / `== 选段结果 ==` / 不写「全绿」）不动。
+6. **独立复验**：由没写过本 change 的席位自造现场，至少四条红侧（删一个地板键 → 那段进地板；未知键 → `--check` 红；含换行/引号/反斜杠的路径逐字节到达；植入产品失败 → CI 入口非零），并自己跑一次容器内的 C3，不复用作者日志。
+
+## 授权边界
+
+`docs/team/RELEASE-PUBLIC.md` 里「发布前性能读数的去处」那一条，我明授给本任务（其余 `docs/**` 仍归 PM）；`tasks.md` 的勾选按事实。P325 保持未完成直到 apply + 独立复验 + 归档。
+
+## —— 以下为 rev 1 记录，原文保留 ——
+
 time: 2026-10-20T04:15:03Z · reviewer: pm · verdict: **NEEDS-CHANGES**
 任务: P325 · reviewed: `748172b07bfb` · phase: propose（不得进入 apply）
 
