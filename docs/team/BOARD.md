@@ -523,7 +523,7 @@
 | P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | done |
 | V68 | Independent static review of waiter-heartbeat proposal and minimal verification plan | verify | - | P332 | done |
 | V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | done |
-| V70 | CI减重复的独立静态审阅与已有失败归因 | dev2 | - | - | todo |
+| V70 | CI减重复的独立静态审阅与已有失败归因 | dev2 | - | - | wip |
 
 ## 当前里程碑
 
