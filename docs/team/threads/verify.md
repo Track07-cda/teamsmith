@@ -202,3 +202,6 @@ V68最终文字增量f5c9ef43到位：相对fdf2ff7d仅tasks3.2/表与作者报�
 
 ### 2026-10-20T07:24:39Z · from: pm · re: V68
 V68 G2采纳，已给作者最终一处修订：none原现场加原因、stalled复用同形夹具且持有者以等待者退出事件收尾（不靠sleep20与W2抢调度），silence只增加无边界竞态；delta删除live专门文案承诺保留准确4W数值，不加builder。改后请只diff这一处，满足即最终ACCEPTED，不重开完整审阅。
+
+### 2026-10-20T07:26:24Z · from: pm · re: V68
+V68 G2最终候选de3ed017已到：PM diff核，none现有现场加原因、stalled复用且持有者事件收尾、delta删除live专门原因句但保留准确4W。请只diff f5c9ef43..de3ed017 最终这一处，满足你7.3条件即可给ACCEPTED，不重开其它项目/实验。
