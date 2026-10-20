@@ -1027,9 +1027,19 @@ if [ -n "$REAL_TMUX" ] && [ "${TEAM_SMOKE_NO_PRIVATE_TMUX:-0}" != "1" ]; then
   # ① 「在 tmux 里」是某些断言的判定前提（探测守卫：不认别的项目的 session），不能因为整理环境而静默降级；
   # ② $TMUX 会被 tmux server 传进每个 pane —— 窗口 harness 的登录 shell 把 PATH 重建掉也照样有效。
   # 调用者不在 tmux 里（CI / nohup）→ TMUX 保持未设，语义与改动前完全一致。
+  # P334：锚点的寿命**跟着本轮走**，不跟着 cleanup 的 EXIT 陷阱走。trap 只在正常退出 / 可捕获信号时跑；
+  # 门禁在这里恰恰是被**外部**掐死的（超时预算、长作业车道都这样终止它），kill -9 跑不到陷阱 →
+  # 锚点 server 与 pane 里那条 sleep 一起变成孤儿（ppid=1）长期占着（PM 2026-10-20 08:38Z 一次复现，
+  # 当时盘上还有 4 个更老的同一族）。这里补的是不可捕获的那一半：pane 的命令不是 `sleep 100000`，而是一个**只看本进程树**
+  # 的轮询 —— 本轮还在就等，本轮没了就退；最后一个 session 一走，私有 server 自己就散（exit-empty）。
+  # 纯 bash + sleep：不引新脚本、不引守护进程、不改 kill-server 那条收尾。
+  # pid 取 `$$`（**外层 shell** = 本轮跑套件的那个 smoke 主进程），不是某个短命子 shell 的 `$BASHPID`：
+  # 判据是「这一轮没了才收」，不是「某条命令跑完了就收」。名字里也带上它，收尾可按名字具名核对。
   if [ "${SMOKE_CALLER_HAD_TMUX:-0}" = "1" ]; then
-    SMOKE_TMUX_ANCHOR="teamsmith-smoke-anchor-$$"
-    tmux new-session -d -s "$SMOKE_TMUX_ANCHOR" -n anchor "sleep 100000" 2>/dev/null || true
+    SMOKE_TMUX_ANCHOR_PID="$$"
+    SMOKE_TMUX_ANCHOR="teamsmith-smoke-anchor-$SMOKE_TMUX_ANCHOR_PID"
+    tmux new-session -d -s "$SMOKE_TMUX_ANCHOR" -n anchor \
+      "while kill -0 $SMOKE_TMUX_ANCHOR_PID 2>/dev/null; do sleep 2; done" 2>/dev/null || true
     _srv_pid="$(tmux display-message -p -t "$SMOKE_TMUX_ANCHOR:anchor" '#{pid}' 2>/dev/null || true)"
     _sess_id="$(tmux display-message -p -t "$SMOKE_TMUX_ANCHOR:anchor" '#{session_id}' 2>/dev/null || true)"
     _pane_id="$(tmux display-message -p -t "$SMOKE_TMUX_ANCHOR:anchor" '#{pane_id}' 2>/dev/null || true)"
@@ -1342,11 +1352,17 @@ cleanup() {
           --caller-tmpdir "${SMOKE_CALLER_TMUX_TMPDIR:-}"; then
     env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$REAL_TMUX" kill-server 2>/dev/null || true
   fi
-  # P310：socket 目录不在临时根里（临时根回收带不走它）—— 只收**本轮那一个**（名字带 mktemp 后缀），
-  # KEEP 时保留并点名（现场证据）。前缀 glob 一律不碰。
+  # P310：socket 目录不在临时根里（临时根回收带不走它）—— 只收**本轮那一个**，KEEP 时保留并点名（现场证据）。
+  # P334：原来这里认的是前缀 `.tm-*`，而目录**早已不是那个形状**：P310 当时用内联的
+  # `mktemp -d …/.tm-<uid>.XXXXXX` 建它，之后创建搬进 tests/lib/tmp-root.sh 的 `tmp_root_socket_dir`，
+  # 模板换成 `.${kind:0:1}-<uid>.XXXXXX`，本套传 kind=tmux → 实际是 `.t-<uid>.<6 位 [A-Za-z0-9]>`
+  # （本机核实：`SMOKE_TMUX_TMPDIR=…/.t-1000.SUnevw` 这一类）。旧前缀从此永不命中 → 每跑一轮留一个目录
+  # （本机 /tmp 上已积 1233 个 `.t-1000.*`）。改成按**实际形状**逐字匹配（uid + 恰好 6 位 mktemp 后缀），
+  # 不再用前缀通配：只可能收到本套自己 mktemp 出来的那一个 —— 本脚本只有两处给 SMOKE_TMUX_TMPDIR 赋值，
+  # 另一处是夹具 / 兜底的 `$TMP/tmux`（basename 是 `tmux`，不匹配这个形状，归临时根回收管）。
   if [ -n "${SMOKE_TMUX_TMPDIR:-}" ]; then
     case "$(basename "$SMOKE_TMUX_TMPDIR")" in
-      .tm-*)
+      .t-"$(id -u)".[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9])
         if [ "${KEEP:-0}" = "1" ] || [ "${TEAM_TMP_KEEP:-0}" = "1" ]; then
           printf '  \033[2m·\033[0m 私有 socket 目录（保留）：%s\n' "$SMOKE_TMUX_TMPDIR"
         else
