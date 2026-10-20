@@ -5,7 +5,7 @@ agent: dev-bob
 phase: apply
 category: code
 change: -
-anchor: openspec/specs/pm-lifecycle/spec.md#A failed PM launch leaves a diagnostic that explains why
+anchor: pm-lifecycle#A PM that is starting is a state, not a missing PM
 deltas: -
 branch: task/P335-launch-diag-tail
 
