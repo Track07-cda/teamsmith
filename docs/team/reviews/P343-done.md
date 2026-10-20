@@ -1,0 +1,4 @@
+- 2026-10-20T21:51:23Z · `team close P343 --status done` · FORCED：PM 显式覆盖（理由：只读归因任务（analysis）：报告已由 PM 提交进 main（b526e40e 的文件内容见于 main 的 docs/team/reports/P343-dev3.md），修复已另立 P344；本任务无产品写集，不需要复验。）
+  -   - ① 复验记录 docs/team/reviews/P343.md：不存在
+  -   - ② 分支是否已并入 main：task/P343-floor-reds-attribution（b526e40e6）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
