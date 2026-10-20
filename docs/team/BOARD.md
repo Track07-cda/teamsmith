@@ -507,9 +507,9 @@
 | V62 | Independently review release-fixture repairs and complete the routing mutations | verify | - | P320 | done |
 | V63 | Recheck the performance-reference repairs without restoring load-sensitive thresholds | dev-bob | - | P316 | done |
 | V64 | Recheck only the latest grace-coverage and progress-baseline repair | dev-bob | - | P316 | done |
-| P321 | Repair npm command entries and restore existing signal contract | dev3 | - | - | todo |
-| P322 | Explore behavior-focused CI without repeated nested gates | dev-bob | - | - | todo |
-| P323 | Diagnose CI cleanup and missing failure scene from existing evidence | verify | - | - | todo |
+| P321 | Repair npm command entries and restore existing signal contract | dev3 | - | - | wip |
+| P322 | Explore behavior-focused CI without repeated nested gates | dev-bob | - | - | wip |
+| P323 | Diagnose CI cleanup and missing failure scene from existing evidence | verify | - | - | wip |
 
 ## 当前里程碑
 
