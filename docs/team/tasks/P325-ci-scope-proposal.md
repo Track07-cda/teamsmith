@@ -5,7 +5,7 @@ agent: dev-bob
 phase: propose
 category: analysis
 change: behavior-focused-ci
-deltas: openspec/changes/behavior-focused-ci/specs/verification/spec.md
+deltas: verification
 branch: task/P325-ci-scope-proposal
 deps: P322
 
