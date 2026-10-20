@@ -5,8 +5,9 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
-| `skills/teamsmith/tests/signal-gate.sh`、`skills/teamsmith/tests/install-shape.sh` | agent:dev3 | P321 临时借用，仅修现有信号与真实 npm 安装断言；交付冻结后归还 dev，P316 不再追加改动 |
-| `package.json` | agent:dev3 | P321 临时、仅必要的打包文件清单；不改版本/依赖/生命周期脚本，交付后归还 PM |
+| `skills/teamsmith/tests/signal-gate.sh`、`skills/teamsmith/tests/install-shape.sh` | agent:dev3 | P321 已冻结待独立复核，其他席位不改；返修仍归 dev3，合入后归还 dev |
+| `skills/teamsmith/tests/smoke.sh` | agent:dev2 | P324 临时独占文件，仅改两个回收探针的环境前缀，其余内容冻结；交付后归还 dev |
+| `.github/workflows/gates.yml`、`ci/collect-scene.sh` | agent:dev2 | P324 临时借用，只修临时根接线与现场收集；冻结交付后归还 PM，P325 只有提案写权 |
 | `skills/teamsmith/tests/**`（除上面临时借用项） | agent:dev | 测试与门禁脚本 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |

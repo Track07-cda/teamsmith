@@ -497,7 +497,7 @@
 | V58 | Verify the heartbeat lifecycle and the deleted-but-open visibility | dev-bob | - | - | done |
 | V59 | Spot-check the four temp-root gaps (doctor must be read-only) | dev3 | - | - | done |
 | P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | done |
-| P316 | Delete the tests that only pass on an idle machine | dev | - | - | review |
+| P316 | Delete the tests that only pass on an idle machine | dev | - | - | done |
 | P317 | Clear unnamed error swallowing, starting with common.sh | dev2 | - | - | done |
 | P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | todo |
 | V60 | Independent review of the common.sh error-handling cleanup | verify | - | P317 | done |
@@ -508,8 +508,11 @@
 | V63 | Recheck the performance-reference repairs without restoring load-sensitive thresholds | dev-bob | - | P316 | done |
 | V64 | Recheck only the latest grace-coverage and progress-baseline repair | dev-bob | - | P316 | done |
 | P321 | Repair npm command entries and restore existing signal contract | dev3 | - | - | wip |
-| P322 | Explore behavior-focused CI without repeated nested gates | dev-bob | - | - | wip |
-| P323 | Diagnose CI cleanup and missing failure scene from existing evidence | verify | - | - | wip |
+| P322 | Explore behavior-focused CI without repeated nested gates | dev-bob | - | - | done |
+| P323 | Diagnose CI cleanup and missing failure scene from existing evidence | verify | - | - | done |
+| P324 | Repair keep-mode reclaim probe and collect actual CI scenes | dev2 | - | P323 | todo |
+| P325 | Propose smaller CI execution without losing behavior coverage | dev-bob | - | P322 | todo |
+| V65 | Independently verify packaged npm entries and selector contract | verify | - | P321 | todo |
 
 ## 当前里程碑
 
