@@ -5,7 +5,7 @@ agent: dev3
 phase: apply
 category: code
 change: -
-anchor: openspec/specs/boundary/spec.md#Signals go to a recorded pid, never to a name or a pattern
+specs: boundary#Signals go to a recorded pid, never to a name or a pattern
 deltas: -
 branch: task/P321-npm-command-entry-repair
 deps: -

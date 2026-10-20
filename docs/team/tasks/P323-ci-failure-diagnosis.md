@@ -5,7 +5,7 @@ agent: verify
 phase: explore
 category: analysis
 change: -
-anchor: openspec/specs/verification/spec.md#A fixture's temp root resolves TMPDIR, carries an owned name, and is reclaimed
+specs: verification#A fixture's temp root resolves TMPDIR, carries an owned name, and is reclaimed
 deltas: -
 branch: task/P323-ci-failure-diagnosis
 deps: -
