@@ -205,14 +205,19 @@ write_record "$JOB" "$JPID" "$JPGID" "$JSTART" "sleep 300"
 SPAWNED+=("${JCHILD:-0}")
 
 LIST="$(bg list)"
-assert_has "list 里作业行标 identity=holds" "$LIST" "identity=holds"
-assert_has "list 行带 pid 与 cmd" "$LIST" "pid=$JPID"
+# P318：同一行（同一份记录）的两个切面 → 一条断言（pid 与 identity 缺一样就红）。
+ROW="$(list_row "$LIST" "$JOB")"
+case "$ROW" in
+  *"pid=$JPID"*identity=holds*) ok "list 的作业行同时带 pid 与 identity=holds（$ROW）" ;;
+  *) bad "list 的作业行没有同时给出 pid=$JPID 与 identity=holds（[$ROW]）" ;;
+esac
 BEFORE_LOG_LINES="$(wc -l < "$STATE/bg.log" 2>/dev/null | tr -dc '0-9' || true)"
 BEFORE_LOG_LINES="${BEFORE_LOG_LINES:-0}"
 OUT="$(bg stop "$JOB")"; RC=$?
 assert_eq "team bg stop job1 退出 0" "$RC" "0"
-assert_has "输出点名 job/signal/result" "$OUT" "signal=TERM"
-assert_has "输出说 result=stopped" "$OUT" "result=stopped"
+# P318：signal 与 result 是同一条回执行的两半 → 一条（两样都要在同一行）。
+assert_eq "输出一行里点名 signal=TERM 与 result=stopped" \
+  "$(printf '%s\n' "$OUT" | grep -c 'signal=TERM .*result=stopped' || true)" "1"
 assert_has "输出点名被停的命令" "$OUT" "cmd: sleep 300"
 assert_gone "作业 leader 已被停掉" "$JPID"
 assert_alive "没有记录的邻居仍然活着（只停了记录里的那个）" "$NPID"
@@ -285,7 +290,8 @@ sleep 0.3
 write_record "$FLAT_JOB" "$FPID" "$FPID" "$(now_start "$FPID")" "sleep 300"
 OUT="$(bg stop "$FLAT_JOB")"; RC=$?
 assert_eq "③ 平坦名字（含 . 与 -）的正规记录照常收作业 → 0" "$RC" "0"
-assert_has "③ 输出说 result=stopped" "$OUT" "result=stopped"
+# P318 删除：`③ 输出说 result=stopped`（两处）已由本文件 RA3 快乐路径那条合并断言
+# 「输出一行里点名 signal=TERM 与 result=stopped」覆盖 —— 同一份回执契约，不按场景重复。
 assert_gone "③ 作业被停掉" "$FPID"
 
 hdr "F2 · 畸形记录一致 fail-closed：pgid=0 与 FIFO 都拒、有界"
@@ -367,15 +373,16 @@ rm -rf "$BGD"; ln -s "$OTHER_BGD" "$BGD"
 assert_eq "夹具前提：state/bg 现在是指向兄弟 bg 目录的软链" "$(readlink "$BGD")" "$OTHER_BGD"
 assert_alive "夹具前提：兄弟记录里的进程活着" "$SYM_PID"
 SYM_LOG_BEFORE="$(wc -l < "$STATE/bg.log" 2>/dev/null | tr -dc '0-9' || true)"; SYM_LOG_BEFORE="${SYM_LOG_BEFORE:-0}"
-OUT="$(bg stop symdir)"; RC=$?
+OUT_STOP="$(bg stop symdir)"; RC=$?
 assert_eq "① 软链 bg 目录里的记录 → 4（目录自身越界）" "$RC" "4"
-assert_has "① 诊断点名 state/bg 的解析目标" "$OUT" "$OTHER_BGD"
 assert_alive "① 兄弟项目的真进程仍然活着（目录越界 → 什么都没发）" "$SYM_PID"
 SYM_LOG_AFTER="$(wc -l < "$STATE/bg.log" 2>/dev/null | tr -dc '0-9' || true)"; SYM_LOG_AFTER="${SYM_LOG_AFTER:-0}"
 assert_eq "① 拒绝没有写账本（没有 stop 行）" "$SYM_LOG_AFTER" "$SYM_LOG_BEFORE"
 OUT="$(bg list)"; RC=$?
 assert_eq "② bg list 同一收口 → 4（不列软链目录里的记录）" "$RC" "4"
-assert_has "② list 的诊断同样点名解析目标" "$OUT" "$OTHER_BGD"
+# P318：两条命令各自点名**同一个**解析目标（读写两侧是同一处收口）→ 一条断言数出两处。
+assert_eq "① stop 与 ② list 都点名 state/bg 的解析目标（同一处收口）" \
+  "$(printf '%s\n' "$OUT_STOP" "$OUT" | grep -cF -- "$OTHER_BGD" || true)" "2"
 case "$OUT" in *symdir*) bad "② list 列出了软链目录里的兄弟记录" ;; *) ok "② list 不列软链目录里的记录" ;; esac
 # 反向：恢复真目录 → 照常收作业（新检查不许误伤正常形态）
 rm -f "$BGD"; mkdir -p "$BGD"
@@ -385,7 +392,8 @@ sleep 0.3
 write_record "$REV_JOB" "$RPID" "$RPID" "$(now_start "$RPID")" "sleep 300"
 OUT="$(bg stop "$REV_JOB")"; RC=$?
 assert_eq "③ 反向：真目录（非软链）照常收作业 → 0" "$RC" "0"
-assert_has "③ 输出说 result=stopped" "$OUT" "result=stopped"
+# P318 删除：`③ 输出说 result=stopped`（两处）已由本文件 RA3 快乐路径那条合并断言
+# 「输出一行里点名 signal=TERM 与 result=stopped」覆盖 —— 同一份回执契约，不按场景重复。
 assert_gone "③ 作业被停掉" "$RPID"
 
 hdr "RA3 · 已结束的 leader：rc=0，不追猎活着的子孙"

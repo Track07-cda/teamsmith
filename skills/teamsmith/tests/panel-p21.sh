@@ -44,6 +44,13 @@ _js_arg="${TEAM_P21_JS:-}"
 _js_panel="${TEAM_P21_PANEL:-}"
 # 诊断旋钮在身份清洗之前保存（清洗会把所有 TEAM_* 一起 unset）。
 _trace_arg="${TEAM_P21_TRACE:-}"
+# P318（D-3）：未绑定键扫描的红侧旋钮（把一个未绑定键换成会写盘的键）。照夹具旋钮的规矩：
+# 只在 TEAM_SMOKE_FIXTURE=1 下生效，否则打印忽略行 —— 环境不能悄悄拆掉判据的方向。
+_fixture_arg="${TEAM_SMOKE_FIXTURE:-0}"
+_sweep_write_arg="${TEAM_P21_SWEEP_WRITE:-0}"
+if [ "$_sweep_write_arg" = "1" ] && [ "$_fixture_arg" != "1" ]; then
+  printf 'panel-p21: TEAM_P21_SWEEP_WRITE=1 被忽略（夹具旋钮只在 TEAM_SMOKE_FIXTURE=1 下生效）\n' >&2
+fi
 while IFS='=' read -r _v _; do
   case "$_v" in TEAM_*) unset "$_v" 2>/dev/null || true ;; esac
 done < <(env)
@@ -229,6 +236,35 @@ audit_log() { printf '%s/config.log' "$state"; }
 audit_lines() { [ -f "$(audit_log)" ] && wc -l < "$(audit_log)" || echo 0; }
 sha() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 tree_hash() { ( cd "$ROOT" && find "$@" -type f 2>/dev/null | sort | while IFS= read -r f; do printf '%s ' "$f"; sha "$f"; done ) | sha256sum | awk '{print $1}'; }
+# ── P318（D-3）：未绑定键扫描（从 tests/panel-b2.sh 的 `readonly` 场景搬来，原场景已删）──────────
+# 那一份**没有任何门禁或 CI 执行它**；这一份跟着 §38 段跑。判据：控制台只允许写**自己的**文件 ——
+# 扫过一遍未绑定键与导航键之后，state / docs / 契约里其余内容必须逐字节不变。允许集逐条从代码列：
+#   ① state/draft.md         写信草稿（2.2 / 2.7 的结算面）
+#   ② state/panel.conf       设置视图写下的契约覆盖
+#   ③ state/panel-page       当前页（导航键的结果）
+#   ④ state/panel.log        控制台自己的运行日志：scripts/panel/src/main.tsx:229 的 appendFileSync
+#   ⑤ state/tmux-calls.log   它 spawn 的每个 `team` 调用的 tmux 闸门记录：scripts/lib/common.sh:3489
+#                            把 TEAM_TMUX_CALLS_LOG 钉成 $TEAM_STATE_DIR/tmux-calls.log
+#   ⑥ state/signal-calls.log 同一族的信号闸门记录（窗口里被 gated 的工具）
+# 除这六个之外**任何**写入都算「只读面被破了」（红侧 TEAM_P21_SWEEP_WRITE：s 键写出 state/standby
+# 与 watchdog.log 两处，必须红）。
+sweep_manifest() { # → 一行一文件「<相对路径> <sha256>」（红的时候直接点名是谁被改了）
+  ( cd "$ROOT" && find .pi/team/state docs/team .pi/team/config.sh -type f 2>/dev/null \
+      | grep -vF -e '.pi/team/state/draft.md' -e '.pi/team/state/panel.conf' -e '.pi/team/state/panel-page' \
+                 -e '.pi/team/state/panel.log' -e '.pi/team/state/tmux-calls.log' -e '.pi/team/state/signal-calls.log' \
+      | sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(sha "$f")"; done )
+}
+# 键表：panel-b2 原表的未绑定键 + 只允许动「控制台自己的文件」的导航/刷新键。
+# 红侧（TEAM_SMOKE_FIXTURE=1 TEAM_P21_SWEEP_WRITE=1）：把一次未绑定键换成**会写盘的键**
+# （s → 一行理由 → Enter → 写 state/standby）→ 同一条断言必须变红。
+sweep_keys() {
+  local k
+  for k in x z '?' '!' '~' 'w' '%' '&'; do type_text "$k"; done
+  keys r; keys Tab; keys Up; keys Down
+  if [ "$_fixture_arg" = "1" ] && [ "$_sweep_write_arg" = "1" ]; then
+    keys s; sleep 0.5; type_text 'sweep write'; sleep 0.3; keys Enter
+  fi
+}
 conf_set() { mkdir -p "$state"; printf '%s\n' "$@" > "$state/panel.conf"; }
 # P232：把 fixture 契约换成新的类别策略 + 独立 PM（走真实事务入口 upgrade-models）——退休键真的
 # 离开文件，视图才在「当前契约」这一档上跑；老契约的档由 scn_categories 的 legacy 段专门覆盖。
@@ -1679,6 +1715,29 @@ scn_readonly() {
   fi
   # The only `team` invocations the wrapper logged are reads (the block readers).
   assert_not "$(argv_log)" "config set" "wrapper 里没有 config set（这一轮没有写动作）"
+
+  # ── P318（D-3）：未绑定键扫一遍 ───────────────────────────────────────────────────────────────
+  # 键打完之后**除控制台自己的三个文件之外**零写入；再加一条正向对照，证明这个签名不是恒真。
+  local sweep_before sweep_after
+  sweep_before="$(sweep_manifest)"
+  sweep_keys
+  sleep 0.6
+  sweep_after="$(sweep_manifest)"
+  if [ "$sweep_after" = "$sweep_before" ]; then
+    ok "未绑定键扫一遍：除控制台自己的三个文件外，state / docs / 契约零改动"
+  else
+    bad "未绑定键扫一遍：控制台动了别人的文件：$(diff <(printf '%s\n' "$sweep_before") <(printf '%s\n' "$sweep_after") | sed -n 's/^[<>] //p' | awk '{print $1}' | sort -u | tr '\n' ' ')"
+  fi
+  # 正向对照（与 D-2 同一口径：仪器不许静默瞎掉）：在允许集之外造一次写入，同一个 sweep_manifest 必须看见。
+  : > "$state/zz-p318-probe"
+  assert_eq "正向对照：sweep_manifest 看得见允许集之外的写入" \
+    "$([ "$(sweep_manifest)" = "$sweep_before" ] && echo blind || echo sees)" "sees"
+  rm -f "$state/zz-p318-probe"
+  if pty_wait_frame "$tmp/$current/readonly-sweep.txt" "未绑定键之后控制台还在" 'teamsmith pulse'; then
+    ok "未绑定键扫一遍之后控制台仍是活的（帧还在画）"
+  else
+    bad "未绑定键扫一遍之后控制台不在了（某个键被当成了动作）"
+  fi
 }
 
 # ---------------------------------------------------------------- P30（settings-view-groups）

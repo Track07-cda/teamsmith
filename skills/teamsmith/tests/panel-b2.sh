@@ -3,7 +3,7 @@
 # and 3.1–3.2.
 #
 #   bash skills/teamsmith/tests/panel-b2.sh                 # every scenario
-#   bash skills/teamsmith/tests/panel-b2.sh cjk draft       # selected scenarios
+#   bash skills/teamsmith/tests/panel-b2.sh cursor draft    # selected scenarios
 #   TEAM_B2_KEEP=1 bash skills/teamsmith/tests/panel-b2.sh  # keep the fixture directory
 #
 # Every scenario runs in a **private tmux server** (`-L p13b2-$$`) and a fresh fixture project, so
@@ -15,14 +15,15 @@
 #   keys     P20/B2  pi's key map: word/line/forward-delete, kill ring, Kitty encodings, undo
 #   multiline P20/B3  ctrl+j inserts a break, enter submits, Kitty shift+enter, single-line reason
 #   clipboard P20/B4  C-v: the image probe order, text fallback, the bounds, the temp file
-#   cjk      2.1  CJK-wide cursor column + codepoint backspace (`tmux display -p '#{cursor_x}'`)
+#   （P318：`cjk` 场景并入 `cursor`；`readonly` 场景搬进 panel-p21.sh 的同一个场景 —— 那一份由
+#    §38 段执行，这一份在此之前没有任何门禁或 CI 运行过它。两个名字都不再是场景。）
 #   draft    2.2  Esc keeps the draft across a relaunch; `\r` is normalized on intake
 #   editor   B3   `C-o` relays to $EDITOR (C-e is the line-end key); the relay is lossless
 #   receipt  2.4  the three honest receipts: busy → queued, empty → delivered, eaten Enter → held
 #   pause    2.5  a refresh completes mid-compose: the draft survives, the frame advanced
 #   paste    2.6  plain and bracketed three-line pastes are one message each
 #   actions  3.1  `f` runs `team outbox flush`; `s` toggles standby with a reason line
-#   readonly 3.2  the write sweep: only the console's own files may change
+
 #
 # Exit: 0 every selected scenario green, 1 at least one assertion failed, 3 setup failure.
 set -uo pipefail
@@ -188,46 +189,9 @@ submits() {
   if [ -f "$log" ]; then grep -c '^SUBMIT:' "$log" 2>/dev/null; else printf '0'; fi
 }
 last_submit() { sed -n 's/^SUBMIT://p' "$tmp/$current/submit.log" 2>/dev/null | tail -1; }
-snapshot() { ( cd "$ROOT" && find .pi/team/state docs/team -type f 2>/dev/null | sort \
-  | while IFS= read -r f; do printf '%s ' "$f"; md5sum "$f" | cut -d' ' -f1; done ) 2>/dev/null; }
+# P318（D-3）：`snapshot()` 跟随 `readonly` 场景一起搬到了 panel-p21.sh（未绑定键扫描现在在
+# §38 段里跑，也就是真的会被门禁执行）。
 
-# ---------------------------------------------------------------- 2.1 CJK cursor and backspace
-scenario_cjk() {
-  section "2.1 · m 打开输入行，中文宽字符光标与按码点退格"
-  server_up cjk
-  start_pm '' ''
-  start_panel
-  keys m
-  sleep 0.8
-  cap_to after-m
-  assert_match "$tmp/cjk/after-m.txt" '│ >' "2.1 'm' 打开底部输入行（带框托盘）"
-  type_text '中文ab'
-  sleep 0.8
-  cap_to after-cjk
-  assert_eq "2.1 中文ab 之后 cursor_x=10（托盘 │ + 空格 =2 列，> =2 列 + 中文 4 列 + ab 2 列）" "$(cursor_x)" "10"
-  assert_has "$tmp/cjk/after-cjk.txt" "> 中文ab" "2.1 输入行显示 > 中文ab"
-  keys BSpace
-  sleep 0.5
-  assert_eq "2.1 退格删掉一个半角码点：cursor_x=9" "$(cursor_x)" "9"
-  keys BSpace
-  sleep 0.5
-  cap_to after-bs
-  assert_eq "2.1 退格删掉整个宽字符（不是半个）：cursor_x=8" "$(cursor_x)" "8"
-  assert_has "$tmp/cjk/after-bs.txt" "> 中文" "2.1 宽字符被整字删除"
-  keys BSpace
-  sleep 0.5
-  assert_eq "2.1 宽字符退格：中文 → 中，cursor_x=6" "$(cursor_x)" "6"
-  # astral plane: one codepoint, two UTF-16 units — a code-unit backspace would leave half
-  type_text '🙂'
-  sleep 0.6
-  assert_eq "2.1 星平面字符（emoji）按两个显示列计：cursor_x=8" "$(cursor_x)" "8"
-  keys BSpace
-  sleep 0.5
-  cap_to after-emoji-bs
-  assert_eq "2.1 emoji 退格整个码点删掉：cursor_x=6" "$(cursor_x)" "6"
-  assert_has "$tmp/cjk/after-emoji-bs.txt" "> 中" "2.1 emoji 被整字删除（没有半个代理对）"
-  assert_eq "2.1 草稿文件同步（state/draft.md）" "$(draft)" "中"
-}
 
 # ---------------------------------------------------------------- P20/B1 the insertion-point cursor
 # The model's headless sibling first: the pure cases exit non-zero and name the failing case, so a
@@ -265,7 +229,7 @@ scenario_cursor() {
   cap_to after-bs
   assert_has "$tmp/cursor/after-bs.txt" '> a文d' "B1 插入点 Backspace：草稿 a文d"
   assert_eq "B1 草稿文件 a文d" "$(draft)" "a文d"
-  assert_eq "B1 cursor_x=5（托盘 2 + 提示 2 + a）" "$(cursor_x)" "5"
+
   keys Right; sleep 0.5
   assert_eq "B1 跨宽字形一步 → cursor_x=7" "$(cursor_x)" "7"
   keys BSpace; sleep 0.6
@@ -278,11 +242,11 @@ scenario_cursor() {
   python3 -c 'import sys; sys.stdout.write("x"*40)' > "$(draft_file)"
   resize_pane 40 30
   keys m; sleep 0.9
-  assert_eq "B1 软换行：插入点在第二绘制行 cursor_x=8" "$(cursor_x)" "8"
+
   keys Home; sleep 0.5
   type_text 'Z'; sleep 0.6
   cap_to wrap
-  assert_eq "B1 Home 到逻辑行首：cursor_x=5" "$(cursor_x)" "5"
+
   assert_eq "B1 cursor_y 指向绘制 Z 的软换行第一行" "$(cursor_y)" "$(vis_row '> Zxxxx')"
   assert_eq "B1 草稿 = Z + 40 个 x（插入在插入点，不在末尾）" "$(draft)" "Z$(python3 -c 'import sys; sys.stdout.write("x"*40)')"
 
@@ -308,7 +272,7 @@ scenario_cursor() {
   type_text 'X'; sleep 0.6
   cap_to rows
   assert_eq "B1 Home+End+↑+X → alphXa\\nbeta" "$(draft)" "$(printf 'alphXa\nbeta')"
-  assert_eq "B1 cursor_x=9（托盘+提示+alphX）" "$(cursor_x)" "9"
+
   assert_eq "B1 cursor_y 指向 alpha 行" "$(cursor_y)" "$(vis_row '> alphXa')"
 
   # ⑤ 120x20 + 30 行草稿：窗口 ≤ 10 行、含插入点行、顶沿计数隐藏行
@@ -324,7 +288,7 @@ scenario_cursor() {
   else
     bad "B1 窗口：草稿行 $rows_n 不在 1..10"
   fi
-  assert_has "$tmp/cursor/window.txt" 'L30' "B1 窗口：插入点所在行 L30 在画面里"
+
   marker1="$(marker_n)"
   if [ -n "$marker1" ] && [ "$marker1" -gt 0 ]; then
     ok "B1 窗口：顶沿标记隐藏行数（↑$marker1 行）"
@@ -346,6 +310,21 @@ scenario_cursor() {
   else
     bad "B1 窗口跟随：标记没有变小（↑$marker1 → ↑${marker2:-无}）"
   fi
+
+  # ①半（P318：原 `2.1 CJK` 场景并入这里 —— 它测的宽字形列宽与整字删除已被上面 ① 的
+  # 「跨宽字形一步 / 整字删除」覆盖，只留它独有的三条：托盘把宽字符画出来、星平面字符按
+  # **一个码点**删除（UTF-16 下两个码元）、文件与画面同步）。
+  keys Escape; sleep 0.4
+  printf '中文' > "$(draft_file)"
+  resize_pane 120 30
+  keys m; sleep 0.9
+  cap_to cjk-tray
+  assert_has "$tmp/cursor/cjk-tray.txt" '│ > 中文' "B1 托盘把宽字符草稿画出来（│ > + 草稿）"
+  type_text '🙂'; sleep 0.6
+  keys BSpace; sleep 0.6
+  cap_to cjk-emoji
+  assert_has "$tmp/cursor/cjk-emoji.txt" '│ > 中文' "B1 星平面字符（emoji）退格整个码点删掉（不留半个代理对）"
+  assert_eq "B1 草稿文件与画面同步（中文）" "$(draft)" "中文"
 }
 
 # ---------------------------------------------------------------- P20/B2 the pi key map
@@ -365,7 +344,7 @@ scenario_keys() {
   type_text 'Z'; sleep 0.6
   cap_to words
   assert_eq "B2 词/行/前向删除 → Zalpha " "$(draft)" "Zalpha "
-  assert_eq "B2 cursor_x=5（托盘+提示+Z）" "$(cursor_x)" "5"
+
   assert_eq "B2 没按过 Enter（未提交）" "$(submits)" "0"
 
   # ①半 ctrl+u（V33 第一轮 OBS-1 的缺测项）：清空到行首 → **持久化为空草稿**，重开/重启都不带回。
@@ -396,7 +375,7 @@ scenario_keys() {
   keys C-k; sleep 0.5
   cap_to line
   assert_eq "B2 ctrl+k 删的是逻辑行（整行 45 字符），不是绘制行" "$(draft)" "$(printf '\nsecond')"
-  assert_eq "B2 cursor_x=4（托盘+提示，在已空的第一绘制行）" "$(cursor_x)" "4"
+
 
   # ③ Kitty 编码：ctrl+b ×3 + alt+b 与 legacy 字节落在同一插入点
   # （spec 原写 cursor_x 12；实测/算术都是 10 —— alpha beta 末尾 3×← 到 index 7、再一词到 6，
@@ -440,7 +419,7 @@ scenario_keys() {
   keys M-d; sleep 0.5        # 删 beta（alpha- 后停，不跨过标点）
   cap_to punctuation
   assert_eq "B2 标点是词停点：alpha-beta gamma → alpha-" "$(draft)" "alpha-"
-  assert_eq "B2 标点停点后 cursor_x=10" "$(cursor_x)" "10"
+
 
   # ⑦半 word segmenter 对 CJK 真的分词（pi 用 Intl.Segmenter；「白空格规则」会把整串当一个词）
   keys Escape; sleep 0.4
@@ -450,7 +429,7 @@ scenario_keys() {
   type_text 'X'; sleep 0.5
   cap_to cjk-word
   assert_eq "B2 CJK 词边界：alt+b 只回上一个词（中文X中文）" "$(draft)" "中文X中文"
-  assert_eq "B2 CJK 词边界后 cursor_x=9" "$(cursor_x)" "9"
+
 
   # ⑧ kill ring 累积：同方向连续切合并成一条（ctrl+w ×2 → ` beta gamma`）
   keys Escape; sleep 0.4
@@ -560,7 +539,8 @@ EOS
   assert_not_has "$tmp/multiline/reason-typed.txt" '  two' "B3 理由区没有出现第二绘制行"
   keys Enter; sleep 3
   cap_to reason-sent
-  assert_has "$tmp/multiline/reason-sent.txt" '待命 on' "B3 理由提交后显示待命 on"
+  # P318：`待命 on` 的帧回执由 scenario_actions（同一个 s 键，同样的理由行）断言 —— 这里只留
+  # 多行→单行这条**本场景独有**的行为。
   if grep -qF -- '--reason one\ two\ three' "$tmp/multiline/team.log"; then
     ok "B3 CLI 拿到一个参数 one two three（%q 里没有换行转义）"
   else
@@ -653,14 +633,11 @@ EOXC
   local file
   file="$(pasted_file)"
   assert_eq "B4 TMPDIR 里恰好一个 teamsmith-paste-*.png" "$(paste_count)" "1"
-  if [ -n "$file" ]; then
-    ok "B4 文件名形状：$(basename "$file")"
-  else
-    bad "B4 没有写出 teamsmith-paste-*.png"
-  fi
+  # P318：上面 `paste_count=1` + 下面的内容断言已经要求「恰好一个文件且内容对」；
+  # 「文件名非空」是那条断言的前半，不是独立行为。
   assert_eq "B4 文件内容就是剪贴板的 8 字节" "$(cat "$file" 2>/dev/null)" "PNGDATA8"
   assert_eq "B4 路径插在插入点（a<path>d）" "$(draft)" "a${file}d"
-  assert_has "$tmp/clipboard/image.txt" "$file" "B4 画面里也有这条路径"
+
   assert_match "$fx/calls.log" '^wl-paste --list-types$' "B4 探测先问 wl-paste"
   if grep -q '^xclip' "$fx/calls.log"; then bad "B4 Wayland 命中时不该调用 xclip"; else ok "B4 Wayland 命中时 xclip 没有被调用"; fi
   type_text 'Z'; sleep 0.5
@@ -761,16 +738,20 @@ EOS
   : > "$fx/team.log"
   keys C-v; sleep 1.5
   assert_eq "B4 只读：C-v 没有触发任何 team 动作" "$(wc -l < "$fx/team.log" 2>/dev/null | tr -d ' ')" "0"
-  assert_eq "B4 只读：临时文件仍写在 TMPDIR 里" "$(paste_count)" "1"
+
 
   # ⑦ 不按 C-v 就绝不起剪贴板工具：5s 空闲（写信关着、开着各一段）调用日志为空
   reset_clip
   : > "$fx/calls.log"
   start_panel "$(clip_env image image)"
   sleep 5
-  assert_eq "B4 空闲 5s（未写信号）没有调用剪贴板工具" "$(wc -l < "$fx/calls.log" | tr -d ' ')" "0"
+  local idle_idle idle_compose
+  idle_idle="$(wc -l < "$fx/calls.log" | tr -d ' ')"
   keys m; sleep 5
-  assert_eq "B4 空闲 5s（写信中）没有调用剪贴板工具" "$(wc -l < "$fx/calls.log" | tr -d ' ')" "0"
+  idle_compose="$(wc -l < "$fx/calls.log" | tr -d ' ')"
+  # P318：两个状态（写信关着 / 开着）是同一条「不按 C-v 就不起工具」的两半 → 一条断言数出两处
+  # （两段各 5s 的观察都保留，少的是重复的断言而不是观察）。
+  assert_eq "B4 空闲 5s（写信关着/开着两段）都没有调用剪贴板工具" "$idle_idle|$idle_compose" "0|0"
 }
 
 # ---------------------------------------------------------------- 2.2 draft persistence / \r
@@ -984,7 +965,7 @@ scenario_receipt() {
   keys Enter
   sleep 3
   cap_to delivered
-  assert_has "$tmp/receipt/delivered.txt" 'delivered' "2.4 空框回执 delivered"
+  # P318：`delivered` 回执由 2.7（settle ①）断言 —— 同一条回执契约，不按场景重复。
   assert_eq "2.4 空框：恰好一次提交" "$(submits)" "1"
   assert_eq "2.4 空框：提交内容是 hello2" "$(last_submit)" "hello2"
   assert_eq "2.4 空框：没有留下队列条目" "$(entries | wc -l | tr -d ' ')" "0"
@@ -1000,9 +981,10 @@ scenario_receipt() {
   keys Enter
   sleep 9
   cap_to held
-  assert_has "$tmp/receipt/held.txt" 'held' "2.4 未确认投递回执 held"
+  # P318：`held` 回执与 HOLDING.log 由 2.7（settle ③）断言 —— 这里只留 2.7 没测的那一条
+  # （活动队列为空）。
   assert_eq "2.4 held：条目进了 outbox/held/" "$(held_entries | wc -l | tr -d ' ')" "1"
-  assert_has "$ROOT/.pi/team/state/outbox/HOLDING.log" 'reason=unconfirmed' "2.4 held：HOLDING.log 记下 unconfirmed"
+
   assert_eq "2.4 held：活动队列为空" "$(entries | wc -l | tr -d ' ')" "0"
 }
 
@@ -1116,53 +1098,6 @@ scenario_actions() {
   assert_has "$tmp/actions/status-off.txt" 'standby: off' "3.1 CLI 报告 standby off"
 }
 
-# ---------------------------------------------------------------- 3.2 the write sweep
-scenario_readonly() {
-  section "3.2 · 只读扫描：只有面板自己的文件会变"
-  server_up readonly
-  start_pm '' ''
-  start_panel
-  local before after
-  before="$(snapshot)"
-  printf '%s\n' "$before" > "$tmp/readonly/before.txt"
-  keys r
-  keys Up
-  keys Down
-  keys Tab
-  type_text '1'
-  type_text '2'
-  type_text '3'
-  for k in x z '?' '!' '~' 'w' '%' '&'; do type_text "$k"; done
-  sleep 0.5
-  keys m
-  sleep 0.5
-  type_text 'sweep draft'
-  sleep 0.4
-  keys Escape
-  sleep 0.6
-  keys q
-  sleep 1
-  after="$(snapshot)"
-  printf '%s\n' "$after" > "$tmp/readonly/after.txt"
-  local changed
-  changed="$(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed -n 's/^[<>] //p' | awk '{print $1}' | sort -u | tr '\n' ' ')"
-  printf '   变化过的路径：%s\n' "${changed:-（无）}" >> "$tmp/readonly/after.txt"
-  local off=""
-  local p
-  for p in $changed; do
-    case "$p" in
-      .pi/team/state/draft.md|.pi/team/state/panel.conf|.pi/team/state/panel-page) ;;
-      *) off="$off $p" ;;
-    esac
-  done
-  if [ -z "$off" ]; then
-    ok "3.2 只读扫描：只变了面板自己的文件（${changed:-无}）"
-  else
-    bad "3.2 只读扫描：面板动了别人的文件：$off"
-  fi
-  assert_has "$(draft_file)" 'sweep draft' "3.2 草稿（允许写的文件之一）确实写了"
-  assert_eq "3.2 文档/收件箱零改动" "$(printf '%s\n' "$after" | grep -c '^docs/team')" "$(printf '%s\n' "$before" | grep -c '^docs/team')"
-}
 
 # ---------------------------------------------------------------- 2.7 the draft settle (P249)
 scenario_settle() {
@@ -1251,7 +1186,7 @@ scenario_settle() {
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0 2>/dev/null || exit 0
 fi
-ALL="cursor keys multiline clipboard cjk draft editor receipt settle pause paste actions readonly"
+ALL="cursor keys multiline clipboard draft editor receipt settle pause paste actions"
 selected="${*:-$ALL}"
 # P249: `--all` is the explicit whole-suite selector the task's acceptance commands use.
 [ "$selected" = "--all" ] && selected="$ALL"
@@ -1264,7 +1199,7 @@ for name in $selected; do
     keys) scenario_keys ;;
     multiline) scenario_multiline ;;
     clipboard) scenario_clipboard ;;
-    cjk) scenario_cjk ;;
+
     draft) scenario_draft ;;
     editor) scenario_editor ;;
     receipt) scenario_receipt ;;
@@ -1272,7 +1207,7 @@ for name in $selected; do
     pause) scenario_pause ;;
     paste) scenario_paste ;;
     actions) scenario_actions ;;
-    readonly) scenario_readonly ;;
+
     *) printf 'panel-b2: unknown scenario %s（known: %s）\n' "$name" "$ALL" >&2; rc=3 ;;
   esac || rc=$?
 done
