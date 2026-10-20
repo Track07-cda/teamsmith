@@ -499,7 +499,7 @@
 | P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | done |
 | P316 | Delete the tests that only pass on an idle machine | dev | - | - | done |
 | P317 | Clear unnamed error swallowing, starting with common.sh | dev2 | - | - | done |
-| P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | todo |
+| P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | wip |
 | V60 | Independent review of the common.sh error-handling cleanup | verify | - | P317 | done |
 | P319 | Diagnose only the five failing release behavior groups | dev3 | - | - | done |
 | V61 | Independently review performance as reference and necessary behavior coverage | verify | - | P316 | done |
@@ -514,7 +514,7 @@
 | P325 | Propose smaller CI execution without losing behavior coverage | dev-bob | - | P322 | done |
 | V65 | Independently verify packaged npm entries and selector contract | verify | - | P321 | done |
 | V66 | Independently verify keep reclaim and actual container scene collection | dev | - | P324 | done |
-| P326 | Apply behavior-focused-ci: floor declaration, NUL path chain, probe de-duplication, docs and spec alignment | dev | - | P325 | todo |
+| P326 | Apply behavior-focused-ci: floor declaration, NUL path chain, probe de-duplication, docs and spec alignment | dev | - | P325 | wip |
 
 ## 当前里程碑
 
