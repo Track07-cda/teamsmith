@@ -1,25 +1,29 @@
 # V68 · 独立审阅「等待者的耐心跟随心跳」提案：机制成立，文本与验证计划要收
 
-task: V68   status: delivered   time: 2026-10-20T07:05Z   phase: verify
+task: V68   status: delivered（第 2 轮：增量审阅 rev2）   time: 2026-10-20T07:13Z   phase: verify
+（头部时间补正：第 1 轮原写 `07:05Z` 晚于提交时钟，实际提交 `ff4cb09e` 是 `07:02:01Z`；本轮时间取写入时刻。）
 branch: `task/V68-waiter-proposal-review`（本分支只放报告，不改提案/规格/产品/测试）
-受检原件：`openspec/changes/gate-waiter-patience/{proposal,design,tasks}.md` + `specs/verification/spec.md`
-与 `docs/team/reports/P332-dev3.md` @ `6be339045201`；实现现状读本分支
+受检原件：**rev2 `0eb3f57c`**（相对第 1 轮受检的 `6be339045201` 只动 change 文件夹与作者报告）；
+`openspec/changes/gate-waiter-patience/{proposal,design,tasks}.md` + `specs/verification/spec.md`、
+`docs/team/reports/P332-dev3.md`；实现现状读本分支
 `skills/teamsmith/scripts/lib/gate-lock.sh`、`skills/teamsmith/tests/lib/section-guard.sh`、
 `skills/teamsmith/scripts/lib/cmd-review.sh`。
-方式：**纯静态审阅**，只做只读 grep 与 `section-select.sh --paths/--select/--list` 的纯表查询；
-没有跑选段、全量、容器、探针或计时实验，因此本报告不报任何「测试通过」。
+方式：**纯静态审阅**，只做只读 `git show`/`grep`；没有跑选段、全量、容器、探针或计时实验，
+因此本报告不报任何「测试通过」。
 
-## 判定：PARTIAL —— 机制可实施，提案原件要收 7 处文本/计划
+## 判定：PARTIAL（第 2 轮 · rev2）
 
-一句话：用「活登记的段心跳」替掉「没有生产者的 `expected` 投影」这个方向与落点都成立（心跳确实在顶层
-与 `team review` 两种真实形状里被写，且不是「进程活着」的同义词），但提案文本现在有**三处自相矛盾**、
-**一处论证不成立**、**一处动机数据在 P316 之后已经不成立**，验证计划又把产品语义写成了负载敏感的墙钟带、
-并把五条手跑场景重复了三遍。七处全部落在 change 文件夹与 `tasks.md` 的措辞/步骤上：不要求新协议、新守卫、
-新夹具，也不改任何产品行为。
+一句话：机制可实施，规划原件已按七项裁定回到正轨（**七项收掉 5 项半**）；剩下的 F1–F7 里 4 条阻塞全是
+**命令与判据的写法**——会把查表当执行、会让边界靠随机秒差、会让一条断言随机红——没有一项要求改产品设计、
+新增守卫或新增夹具。**阻塞项与最小改法以 §六 6.2 的 F1–F7 为准**，改完即可进 apply 授权。
 
-没有 FAIL 级缺陷：没有一条会让 apply 把产品行为做错。
+本节以下的「B1–B5 / P1–P3」是第 1 轮（`6be339045201`）的问题清单：rev2 已收口 B1–B4 与边界措辞，
+裁定已取代 P1、P3 的替代（§6.1、§6.3）。保留作证据链，**不要再照它返工**。
 
-## 阻塞项与最小改法（apply 前逐条收）
+（第 1 轮判定：机制成立，但提案文本有三处自相矛盾、一处论证不成立、一处动机数据已不成立；验证计划把产品
+语义写成负载敏感的墙钟带，并把五条手跑场景重复了三遍。）
+
+## 第 1 轮阻塞项与最小改法（B1–B5、P1–P3：已收口或已被裁定取代，保留作证据链）
 
 | | 位置 | 现在写的 | 与什么冲突 | 最小改法 |
 |---|---|---|---|---|
@@ -191,9 +195,88 @@ decision=RUN   sections=135   keys=8      # 0 0b 0c 0d 前导 + 34 34b 34d 36
   `grep -c 'CAP_WANT' smoke.sh` = 9 ≠ 0），tasks 0.1 的硬前置当前按设计不成立；这不是缺陷，只是 apply
   开工时会被它拦下。前置本身的判据见 P3。
 
-## 六 · 落地记录
+## 六 · 增量审阅 rev2（`0eb3f57c`，相对 `6be339045201` 只动 change 文件夹与作者报告）
 
-只读查询（本报告引用的全部实测）：
+判定：**PARTIAL**。七项裁定里 5 项半已落地，前一轮的 B1–B4 与边界措辞全部收口；剩下的四项阻塞都是
+**命令与判据写错**（会把查表当执行、会把随机秒差当边界、会让一条断言随机红），没有一项要求改产品设计、
+新增守卫或新增夹具。本轮只读 `git show`/`grep`，没有重跑 `section-select`、没有跑段或计时实验。
+
+### 6.1 已收（逐条核到原件）
+
+| 裁定 | 落在哪（rev2 原文要核的点） | 我看到的 |
+|---|---|---|
+| 1 · W/4W 统一 | delta 第 1 段 | `… (default 1800 s), extended to 4 × that while the live run's heartbeat keeps moving (below)` ✓ |
+| 1 · 边界 | delta 第 3 段 + design §2 表 | 「usable 仅当 `silent_for < W`；`silent_for >= W` 归 not-usable…every value of the silence is classified」✓ 两侧不再重叠 |
+| 1 · 无心跳的说法 | 旧记录场景 THEN | `does not claim a moving or stalled heartbeat — “no heartbeat was ever published” is an observable fact` ✓ |
+| 1 · 退场顶着旧名 | 同一场景正文 | `the cap no longer follows the published remaining time — the scenario name records the field that is still printed` ✓ |
+| 2 · 双红论证 | design §2 判据 1、§2.1 | 论证已删，改写成「只有一个时钟」，并写明残余（同秒双红、旋钮不等时更早）✓ |
+| 3 · 82 分钟动机 | proposal「Why」、design §2/§7 | 动机换成「持续有进展、总时长超 `W`」；§61b 统一成「无 tick 的长段、今天被自己的挂住上限停掉」✓（措辞另见 F5）|
+| 4 · 有界放宽 | design §3 末尾、proposal「What Changes」 | 明写不校验 `ancestor=`/`lock_dev_ino`、遗留活登记最坏把上限顶到 `4W`、接受且不加认证 ✓ |
+| 5 · 去重/去墙钟/去 FAST | tasks §3 分支表、§5、§6.3、§7.2 | 手跑五条收成一张表；`[7,10]`、「2 s 左右」、「等了 3 s 以上」已无；反向对照只留一条；FAST 全量删除 ✓ |
+| 5 · 不用文案替代时间含义 | tasks §1.5、§3 | 方向对了（改成纯函数腿），但两处仍靠真实秒推进 → **F2**、一处现场会随机红 → **F3** |
+| 6 · 撤回 `timeout 4` 判据 | tasks §5.3、delta | 已撤回；`timeout` 只作兜底，断言只读 `rc`/失败行/`等满 Ns` ✓（`W=1` 那处见 F3）|
+| 7 · P329 前置与定点 | tasks §0.1、§6.2、§3.7 | 定点段号与理由、断言账按 `diff` 都对；前置仍以整文件计数为判据 → **F4**；§6.2/§7.1 的命令写错工具 → **F1** |
+
+### 6.2 最终修订清单（一次给全，按 F1→F7 改完即可进 apply 授权）
+
+**F1（阻塞）· 定点命令把查表当执行。** tasks §6.2 与 §7.1 写的是
+`bash skills/teamsmith/tests/section-select.sh --select 34,34b,34d,36` —— 它打印 `decision=RUN`/`keys=N` 后
+就退出，一段都不跑；把它当验收等于「表绿 = 块绿」。改成
+`bash skills/teamsmith/tests/smoke.sh --select 34,34b,34d,36`（`smoke.sh:139-146` 的解析就是单 token 逗号形式）。
+§6.2 里解释为什么按段号而不用 `--paths` 的那几句保留。
+
+**F2（阻塞）· 边界与 `silent_for` 靠真实秒推进。** §1.5 ⑤ 用 `touch -d '-10 seconds'` 之后断言
+`silent_for=10`：从 touch 到函数里取 `now` 之间跨一秒就变成 11 → 红。⑥ 更糟：`touch -d '-2 seconds'` + `W=2`
+跨秒后 `silent_for=3`，仍然是 `stalled` → **边界根本没被检验**（假绿），而它正是这条腿存在的理由。
+§3.1 的边界腿同形。改法全部是既有手段，不新建框架、不加产品钩子：
+
+- tasks §1.2–1.4 明写「`now` 一律取 `gate_lock_now`」（`gate-lock.sh:33` 既有函数，`gate_lock_cap` 本来就是这么写的）；
+- 测试子 shell 里覆写它钉住当前时刻：`gate_lock_now() { printf '%s\n' "$PIN"; }`；
+- mtime 用**绝对**值写入：`touch -d "@$(( PIN - W ))"`（`seat-interrupt.sh:250` 已是这套写法）→
+  边界腿断言 `state=stalled`、`ceiling=W`、`silent_for` **等于** `W`；`@$(( PIN - W + 1 ))` 断言 `live`、`4×W`；
+  `@$(( PIN - 10 ))` 断言 `silent_for=10`。
+
+这样「`== W` 属于 not-usable」是等号断言，不是「大约 2 秒」。
+
+**F3（阻塞，本轮新发现）· 硬顶现场的 `W=1` 会随机落回 `W`。** §3.4 用 `W=1` + 心跳一直动（每 0.5 s 重写）。
+`silent_for` 是整数秒差，0.5 s 重写时它取 0 或 1，而 `1 >= W=1` 正是 `stalled` → 现场会间歇落回 `W=1`、失败行
+变成 `心跳已停`，`硬顶` 那条断言随机红。改成 `W=2`（ceiling 8）、持有者 `sleep 20`、`timeout 30`（≥3× ceiling，
+只作兜底）、断言 `rc=2` + `硬顶` + 产品打印的 `等满 Ns >= 8`；今天（`started` 120 s 前、cap=2）在 2 s 失败且
+没有 `硬顶` → 红。§3.5 的 `W=1` 不必改（心跳 stale 5 s，`silent_for` 不可能回到 1 以下）。
+
+**F4（阻塞）· 前置仍在数整文件里的字符串。** §0.1 以 `grep -c 'CAP_WANT' smoke.sh` = 0 当判据。前置要回答的是
+「P329 那批断言退了没有」，不是「全文件有没有这个变量名」。改成：前置 = **P329 的落地记录**（提交在位 +
+看板 `done`），退役确认写成对**该片段**的核对（§34⑦/§34b⑨ 里不再有从 `expected` 重算上限的算式），整文件计数
+降级成报告里的一行附注。（这也是对我上一轮 P3 的再收紧：P3 提的就是整文件计数。）
+
+**F5（措辞）· 「它每一段都在 tick」不成立。** proposal「Why」与作者报告第 2 轮表第 3 行都这么写，但一个段内部
+若有超过 `W` 的单次子进程（§61b 就是），那一段本身不 tick —— 它恰好是本 change 明说不改变的形状。改成
+「它由许多段组成，段边界与段内断言都在推进心跳；单段内超过 `W` 的无 tick 子进程就是 §61b 那种例外（今天已被
+自己的挂住上限停掉）」。
+
+**F6（措辞）· §4.2 的 grep 模式包含新口径本身。** `'remaining\|clamp(remaining\|4 ×'` 里的 `4 ×` 正是 §4.1
+要求写进 `protocol.md` 的新措辞 → 这条检查永远不可能干净。模式只留 `remaining=` 与 `clamp(remaining`。
+
+**F7（形状）· 「`team review` 形状」的登记类型写错，且打印契约没有断言。** §3.2 写 `kind=top`：review 的门禁
+子套件经 `gate_lock_prove_ancestor_pair` 证明后是 `kind=nested` + `ancestor=<review pid>`（`smoke.sh:471-476`），
+持有者记录写在**伴生锁**边上（`cmd-review.sh:1176-1179`，`heartbeat=-`）。改成 `kind=nested`、
+`ancestor=<holder pid>`、记录写 `$(gate_lock_companion_path "$LOCK")`；同一断言里补一条「排队行打印了心跳状态」
+（delta 的 `print both bounds together with the heartbeat's state` 目前没有任何断言守着）。另把 §5.2 的
+「`started` 放到 120 s 之前」在 §3 的表头重述一句：`started=现在` 时今天的 cap 也落在 `4W`，§3.2 会**今天也通过**，
+红不起来。
+
+### 6.3 我上一轮的两条建议已撤回（别照旧清单返工）
+
+- **P1**：`timeout` 夹在 `W`/`4W` 之间当判据 —— 按裁定 6 撤回（仍依赖窄墙钟窗口）。
+- **P3 的替代**：整文件 `CAP_WANT` 计数 —— 按裁定 7 再收一步，见 F4。
+
+## 七 · 落地记录
+
+第 2 轮（rev2 增量审阅）：只读 `git show 0eb3f57c`、`git diff 6be339045201 0eb3f57c`、
+`docs/team/reviews/gate-waiter-patience-proposal.md` 与对 `gate-lock.sh` / `section-guard.sh` /
+`cmd-review.sh` / `smoke.sh` 的 grep；没有重跑 `section-select`、没有跑段/整套/探针/计时实验。
+
+第 1 轮的只读查询（本报告 §一–§五 引用的全部实测）：
 
 ```
 $ git log --oneline -1 6be339045201                       # 6be33904 docs(team): P332 proposal report [skip ci]

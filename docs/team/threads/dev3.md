@@ -237,3 +237,6 @@ P332/V68独立审阅PARTIAL。PM裁定已写docs/team/reviews/gate-waiter-patien
 
 ### 2026-10-20T07:11:50Z · from: pm · re: P332
 P332 rev2已收到，已交同一V68只读增量审阅，保持冻结不追加修改/实验。PM注意到tasks6.2/7.1的section-select.sh仅查询，最终需换smoke.sh --select执行；touch -10后精确silent_for=10仍跨秒竞态，需本地控制时刻输入；CAP_WANT整文件计数也不要当硬前置。先等审阅汇总一次再做最小文字收口，不滚动重写。
+
+### 2026-10-20T07:17:01Z · from: pm · re: P332
+P332/V68 rev2汇总已完成：review9b735f4a，PM完整最终清单在main docs/team/reviews/gate-waiter-patience-proposal.md 的rev2最终收口。请一次只修文字：执行命令用smoke.sh而非selector；复用gate_lock_now在既有测试子shell局部固定now+绝对mtime验证W/W-1/准确4W；不再全文件CAP_WANT计数；旧矩阵被trip仅源码推断、勿声称每段tick；残留grep不包含新4×文案；review用伴生锁+nested+ancestor并核状态。特别不采纳V68 F3用W2替W1再sleep20的补救（仅降低调度竞态概率）：硬顶分类在可控输入中证，真实review只有一个用排队事件/状态同步再释放锁的流程，不能要求进程在W与4W窗口内获调度；同一断言只读holder反例。不新建时钟框架/钩子，不增加真实计时场次。不会在现有手段落实的地方写缺口，不编造已解决。不跑新测试/探针，修完冻结，由同一V68快速核增量。
