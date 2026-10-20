@@ -531,4 +531,4 @@
 | # | 事项 | 影响 | 处理 |
 |---|---|---|---|
 | — | — | — | — |
-| P332 | A legitimate long gate run must not make waiters fail: `expected` has been 0 since P316 (needs a verification delta) | - | - | P326 | todo |
+| P332 | A legitimate long gate run must not make waiters fail: waiter patience follows the holder heartbeat (propose) | dev3 | - | P326 | wip |
