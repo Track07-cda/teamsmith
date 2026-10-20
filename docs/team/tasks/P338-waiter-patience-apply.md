@@ -1,6 +1,6 @@
-# P332 · apply：等待者的耐心跟随持有者心跳（不再有一个没人生产的上限）
+# P338 · apply：等待者的耐心跟随持有者心跳（不再有一个没人生产的上限）
 
-task: P332
+task: P338
 agent: dev-bob
 phase: apply
 category: code
@@ -8,12 +8,12 @@ change: gate-waiter-patience
 specs: verification#A waiter's patience follows the holder's heartbeat, not a budget nobody publishes
 anchor: none (infra) — change 自己带 delta
 deltas: verification
-branch: task/P332-waiter-patience-apply
+branch: task/P338-waiter-patience-apply
 deps: P329 已并入 main（`6d6b87db`；§34⑦ 里那五条自造 `expected=400` 的算式断言已删）
 
 ## 上下文（必须知道的两件事）
 
-1. 提案已通过独立审阅（`docs/team/reviews/gate-waiter-patience-proposal.md`，审阅记录 `reviews/V68`）。**照提案实现，不要重新设计方案**；下面只是把裁决口径与验证方式钉死。
+1. 提案（P332）已通过独立审阅（`docs/team/reviews/gate-waiter-patience-proposal.md`，审阅记录 `reviews/V68`）。本任务是它的 apply，单独一个 ID（与 P325→P326 同一个规矩）。**照提案实现，不要重新设计方案**；下面只是把裁决口径与验证方式钉死。
 2. **今天那条规格 SHALL 没有任何断言**：`openspec/specs/verification/spec.md` 里 `clamp(remaining+60, W, 4W)` 的 `expected` 生产者在 P316 退役，P329 删掉了它唯一的执行证据（V76 的 F1 记录了这个窗口）。**这次变更就是来收这个窗口的**：你的 delta 要把那条 SHALL 换成心跳耐心规则，并附上钉住新规则的断言。
 
 ## 行为（提案里的定义，照抄不改）
@@ -44,4 +44,4 @@ deps: P329 已并入 main（`6d6b87db`；§34⑦ 里那五条自造 `expected=40
 
 ## 交付
 
-报告 `docs/team/reports/P332-dev-bob.md`：先给结论（新规则的四条喂值断言各自成立与否），再给命令与原始尾部；**明确写出旧记录（无心跳）行为与今天逐字相同**的证据。不要跑整套门禁、不要跑容器、不要抢机器级门禁锁（你只需要 §34/§34b）。
+报告 `docs/team/reports/P338-dev-bob.md`：先给结论（新规则的四条喂值断言各自成立与否），再给命令与原始尾部；**明确写出旧记录（无心跳）行为与今天逐字相同**的证据。不要跑整套门禁、不要跑容器、不要抢机器级门禁锁（你只需要 §34/§34b）。
