@@ -44,12 +44,12 @@ team_git_main() { command git -C "$TEAM_MAIN_ROOT" "$@"; }
 team_is_git_repo() { team_git rev-parse --show-toplevel >/dev/null 2>&1; }
 
 # 当前工作树顶层（在 linked worktree 里就是那个 worktree）
-team_worktree_top() { team_git rev-parse --show-toplevel 2>/dev/null; }
+team_worktree_top() { team_git rev-parse --show-toplevel 2>/dev/null; }   # 留：查不到=空答案（不是故障）
 
 # 主工作树顶层（worktree 的 `.git` 文件指向主仓库的 .git 目录）
 team_main_root() {
   local common d root
-  common="$(team_git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  common="$(team_git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1   # 留：查不到=空答案（不是故障）
   [ -n "$common" ] || return 1
   d="$(dirname "$common")"
   root="$(cd "$d" && pwd)" || return 1
@@ -70,11 +70,11 @@ team_main_root() {
 team_hash8() { # <字符串> → sha256 前 8 位十六进制（三种工具都缺 → 00000000）
   local sum=""
   if command -v sha256sum >/dev/null 2>&1; then
-    sum="$(printf '%s' "$1" | sha256sum 2>/dev/null | cut -c1-8)"
+    sum="$(printf '%s' "$1" | sha256sum 2>/dev/null | cut -c1-8)"   # 留：本机可能没这项能力，按回退走
   elif command -v shasum >/dev/null 2>&1; then
-    sum="$(printf '%s' "$1" | shasum -a 256 2>/dev/null | cut -c1-8)"
+    sum="$(printf '%s' "$1" | shasum -a 256 2>/dev/null | cut -c1-8)"   # 留：本机可能没这项能力，按回退走
   elif command -v openssl >/dev/null 2>&1; then
-    sum="$(printf '%s' "$1" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}' | cut -c1-8)"
+    sum="$(printf '%s' "$1" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}' | cut -c1-8)"   # 留：本机可能没这项能力，按回退走
   fi
   case "$sum" in ''|*[!0-9a-f]*) sum=00000000 ;; esac
   printf '%s\n' "$sum"
@@ -82,13 +82,13 @@ team_hash8() { # <字符串> → sha256 前 8 位十六进制（三种工具都�
 
 team_project_ns() {
   local lib g main slug
-  lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  lib="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   g=""
-  [ -n "$lib" ] && g="$(git -C "$lib" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [ -n "$lib" ] && g="$(git -C "$lib" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   if [ -n "$g" ]; then
     main="$(dirname "$g")"
   elif [ -n "$lib" ]; then
-    main="$(cd -P "$lib/../../../.." 2>/dev/null && pwd || printf '%s' "$lib")"
+    main="$(cd -P "$lib/../../../.." 2>/dev/null && pwd || printf '%s' "$lib")"   # 留：查不到=空答案（不是故障）
   else
     main="unknown"
   fi
@@ -118,7 +118,7 @@ team_project_ns() {
 
 team_scan_cache_on() { # 关联数组可用（bash≥4）且没被显式关掉
   [ "${TEAM_SCAN_CACHE:-1}" = "0" ] && return 1
-  [ "${BASH_VERSINFO[0]:-0}" -ge 4 ] 2>/dev/null || return 1
+  [ "${BASH_VERSINFO[0]:-0}" -ge 4 ] || return 1
   return 0
 }
 
@@ -191,9 +191,9 @@ _team_board_cache_load() { # 纪元内幂等；无 BOARD → _TEAM_BOARD_EXISTS=
     return 0
   fi
   _TEAM_BOARD_EXISTS=1
-  _TEAM_BOARD_COLS="$(team_board_cols_direct || true)"
-  _TEAM_BOARD_IDS_OUT="$(team_board_ids_direct || true)"
-  _TEAM_BOARD_COUNTS_OUT="$(team_board_counts_direct || true)"
+  _TEAM_BOARD_COLS="$(team_board_cols_direct || true)"   # 留：loader 不许弄死进程（纪律见 452 行）
+  _TEAM_BOARD_IDS_OUT="$(team_board_ids_direct || true)"   # 留：loader 不许弄死进程（纪律见 452 行）
+  _TEAM_BOARD_COUNTS_OUT="$(team_board_counts_direct || true)"   # 留：loader 不许弄死进程（纪律见 452 行）
   local idcol stcol k v
   idcol="$(team_board_col id)"; stcol="$(team_board_col status)"
   # 行文本里可能含制表符，分隔符用不可能出现在 markdown 里的 \x1f。
@@ -234,7 +234,7 @@ _team_wt_cache_load() {
         # 目录可能已不在：不缓存，调用方落回直读（与旧的 rev-parse 失败路径逐字节一致）
         [ -n "$wt" ] && _TEAM_WT_SEEN[$wt]=0 ;;
     esac
-  done < <(git -C "$TEAM_MAIN_ROOT" worktree list --porcelain 2>/dev/null || true)
+  done < <(git -C "$TEAM_MAIN_ROOT" worktree list --porcelain 2>/dev/null || true)   # 留：loader 不许弄死进程（纪律见 452 行）
   # 路径写法别名：worktree list 打的是 git 的路径写法，调用方拿的是 TEAM_MAIN_ROOT 拼出来的
   # 写法（可能穿符号链接）。两种写法都注册进表；仍然 miss 的永远可以落回直读，绝不允许给错答案。
   local extra=""
@@ -259,13 +259,13 @@ team__worktree_branch() { # <worktree> → _R = 分支短名（M50 进程内变�
   if team_scan_cache_on; then
     _team_wt_cache_load
     if [ "${_TEAM_WT_SEEN[$wt]:-}" = "1" ]; then _R="${_TEAM_WT_BRANCH[$wt]:-}"; return 0; fi
-    b="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    b="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
     # 同一纪元内 git 会给同一个答案（含「判不出」的空串）—— 负结果也 memo
     _TEAM_WT_BRANCH[$wt]="$b"; _TEAM_WT_SEEN[$wt]=1; _TEAM_WT_KEYS_NL="${_TEAM_WT_KEYS_NL}${wt}"$'\n'
     _R="$b"
     return 0
   fi
-  _R="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  _R="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
 }
 
 team_worktree_of() { # <绝对路径> → 它所在的工作树（已知工作树的最长前缀命中；都不含 → 空）
@@ -295,7 +295,7 @@ _team_ref_cache_load() {
     _TEAM_REF_TIP[$ref]="$sha"
     # for-each-ref 的输出本来就按 refname 排序：任务分支清单按到达顺序拼接，次序与旧实现一致
     case "$ref" in "${TEAM_TASK_BRANCH_PREFIX:-task}/"*) _TEAM_REFS_TASK="${_TEAM_REFS_TASK}${ref}"$'\n' ;; esac
-  done < <(git -C "$TEAM_MAIN_ROOT" for-each-ref --format='%(refname:short) %(objectname)' refs/heads/ 2>/dev/null || true)
+  done < <(git -C "$TEAM_MAIN_ROOT" for-each-ref --format='%(refname:short) %(objectname)' refs/heads/ 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   return 0
 }
 
@@ -318,7 +318,7 @@ team__branch_tip() { # <分支短名/rev> → _R = tip sha（解析不到 → �
     if [ -n "${_TEAM_REF_TIP[$b]:-}" ]; then _R="${_TEAM_REF_TIP[$b]}"; return 0; fi
     # 缓存未命中：tag/sha/HEAD/远端 ref 或「不存在」—— 落回同一个 git 问法（答案逐字节一致）
   fi
-  _R="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || true)"
+  _R="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
 }
 
 team_ref_tip() { # <分支短名> → commit sha（不存在 → 空）。`rev-parse --verify --quiet <b>^{commit}` 的缓存版
@@ -329,7 +329,7 @@ team_ref_tip() { # <分支短名> → commit sha（不存在 → 空）。`rev-p
     [ -n "${_TEAM_REF_TIP[$b]:-}" ] && printf '%s\n' "${_TEAM_REF_TIP[$b]}"
     return 0
   fi
-  git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0
+  git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$b^{commit}" 2>/dev/null || return 0   # 留：查不到=空答案（不是故障）
 }
 
 # ---- 复验记录抬头（判定 / 被验 HEAD / 被验分支）：一个纪元三场批量扫描（grep -Z/-H 或 awk 一次过
@@ -354,22 +354,22 @@ _team_rev_cache_load() {
     f="${f##*/}"; f="${f%.md}"
     m="${m//\*/}"; m="${m#判定: }"
     _TEAM_REV_VERDICT[$f]="$m"
-  done < <(grep -ZHm1 -oE '判定: \*\*[A-Z]+\*\*' "$d"/*.md 2>/dev/null || true)
+  done < <(grep -ZHm1 -oE '判定: \*\*[A-Z]+\*\*' "$d"/*.md 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   while IFS= read -r -d '' f && IFS= read -r m; do
     f="${f##*/}"; f="${f%.md}"
     m="${m//\*/}"; m="${m#判定: }"
     _TEAM_REV_VERDICT_ANY[$f]="$m"
-  done < <(grep -ZHm1 -oE '判定: \*\*[A-Za-z]+\*\*' "$d"/*.md 2>/dev/null || true)
+  done < <(grep -ZHm1 -oE '判定: \*\*[A-Za-z]+\*\*' "$d"/*.md 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   while IFS= read -r -d '' f && IFS= read -r m; do
     f="${f##*/}"; f="${f%.md}"
     m="${m#HEAD: \`}"; m="${m%\`}"
     _TEAM_REV_HEAD[$f]="$m"
-  done < <(grep -ZHm1 -oE 'HEAD: `[0-9a-f]{7,40}`' "$d"/*.md 2>/dev/null || true)
+  done < <(grep -ZHm1 -oE 'HEAD: `[0-9a-f]{7,40}`' "$d"/*.md 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   # 原实现：awk 每个文件第一条 /^时间: / 且含「分支: `」的行，取反引号前段
   while IFS=$'\x1f' read -r f m; do
     f="${f##*/}"; f="${f%.md}"
     _TEAM_REV_BRANCH[$f]="$m"
-  done < <(awk -F'分支: `' 'FNR==1{done=0} !done && /^时间: / && NF>1 { split($2,a,"`"); print FILENAME "\x1f" a[1]; done=1 }' "$d"/*.md 2>/dev/null || true)
+  done < <(awk -F'分支: `' 'FNR==1{done=0} !done && /^时间: / && NF>1 { split($2,a,"`"); print FILENAME "\x1f" a[1]; done=1 }' "$d"/*.md 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   return 0
 }
 
@@ -378,7 +378,7 @@ _team_prot_trees_load() {
   [ "${_TEAM_PROT_EPOCH:-}" = "$_TEAM_SCAN_EPOCH" ] && return 0
   _TEAM_PROT_EPOCH="$_TEAM_SCAN_EPOCH"; _TEAM_PROT_TREES=""
   [ -n "${TEAM_MAIN_ROOT:-}" ] || return 0
-  _TEAM_PROT_TREES="$(git -C "$TEAM_MAIN_ROOT" log --format=%T --max-count="${TEAM_SQUASH_LOOKBACK:-200}" "$TEAM_PROTECTED_BRANCH" 2>/dev/null || true)"
+  _TEAM_PROT_TREES="$(git -C "$TEAM_MAIN_ROOT" log --format=%T --max-count="${TEAM_SQUASH_LOOKBACK:-200}" "$TEAM_PROTECTED_BRANCH" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   return 0
 }
 
@@ -390,8 +390,8 @@ _team_wtrep_load() { # <wt>
   _TEAM_WTREP_LOADED[$wt]="$_TEAM_SCAN_EPOCH"
   while IFS= read -r p; do
     [ -n "$p" ] && _TEAM_WTREP_TRACKED["$wt|$p"]=1
-  done < <(git -C "$wt" ls-files -- "${TEAM_DOCS_DIR:-docs/team}/reports" 2>/dev/null || true)
-  if p="$(git -C "$wt" diff --name-only HEAD -- "${TEAM_DOCS_DIR:-docs/team}/reports" 2>/dev/null)"; then
+  done < <(git -C "$wt" ls-files -- "${TEAM_DOCS_DIR:-docs/team}/reports" 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
+  if p="$(git -C "$wt" diff --name-only HEAD -- "${TEAM_DOCS_DIR:-docs/team}/reports" 2>/dev/null)"; then   # 留：查不到=空答案（不是故障）
     local _one
     while IFS= read -r _one; do
       [ -n "$_one" ] && _TEAM_WTREP_DIRTY["$wt|$_one"]=1
@@ -470,9 +470,9 @@ team_scan_warm() { # [--reports]：两档预热，按命令的真实读取面付
 # memo 在本进程里（目录的 git 归属在进程生命周期内不变）。形状异常（bare 仓库等）落回旧的分两次问法。
 team_dir_roots_load() { # <目录>：计算并装进 _TEAM_DIR_ROOTS_MEMO（父进程上下文调用才留得下）
   local d="${1:-$PWD}" wt="" common="" main="" out l1 l2
-  d="$(cd "$d" 2>/dev/null && pwd -P || true)"
+  d="$(cd "$d" 2>/dev/null && pwd -P || true)"   # 留：查不到=空答案（不是故障）
   if [ -n "$d" ]; then
-    if out="$(command git -C "$d" rev-parse --path-format=absolute --show-toplevel --git-common-dir 2>/dev/null)"; then
+    if out="$(command git -C "$d" rev-parse --path-format=absolute --show-toplevel --git-common-dir 2>/dev/null)"; then   # 留：查不到=空答案（不是故障）
       l1="${out%%$'\n'*}"
       case "$out" in *$'\n'*) l2="${out#*$'\n'}" ;; *) l2="" ;; esac
       case "$l2" in *$'\n'*) l2="" ;; esac   # 多于两行 = 异常形状，落回旧问法
@@ -480,10 +480,10 @@ team_dir_roots_load() { # <目录>：计算并装进 _TEAM_DIR_ROOTS_MEMO（父�
     fi
     if [ -z "$common" ]; then
       # 旧问法（两次 rev-parse）：bare 仓库等 --show-toplevel 会失败的形状必须和原来一样
-      wt="$(command git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"
-      common="$(command git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+      wt="$(command git -C "$d" rev-parse --show-toplevel 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
+      common="$(command git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
     fi
-    if [ -n "$common" ]; then main="$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)"; fi
+    if [ -n "$common" ]; then main="$(cd "$(dirname "$common")" 2>/dev/null && pwd -P || true)"; fi   # 留：查不到=空答案（不是故障）
   fi
   if team_scan_cache_on && [ -n "$d" ]; then _TEAM_DIR_ROOTS_MEMO[$d]="$wt"$'\t'"$main"; fi
   printf '%s\t%s\n' "$wt" "$main"
@@ -491,7 +491,7 @@ team_dir_roots_load() { # <目录>：计算并装进 _TEAM_DIR_ROOTS_MEMO（父�
 
 team_dir_roots() { # <目录> → "<worktree>\t<main>"（不是 git 仓库 → 两列皆空）
   local d="${1:-$PWD}"
-  d="$(cd "$d" 2>/dev/null && pwd -P || true)"
+  d="$(cd "$d" 2>/dev/null && pwd -P || true)"   # 留：查不到=空答案（不是故障）
   if team_scan_cache_on && [ -n "$d" ] && [ -n "${_TEAM_DIR_ROOTS_MEMO[$d]+x}" ]; then
     printf '%s\n' "${_TEAM_DIR_ROOTS_MEMO[$d]}"
     return 0
@@ -539,7 +539,7 @@ team_identity_lock_env() {
 }
 
 # 目录的物理路径（比对用；不存在/不可读 → 原样返回，绝不因为一个坏值就崩）
-team_identity_norm_dir() { ( cd "${1:-}" 2>/dev/null && pwd -P ) || printf '%s' "${1:-}"; }
+team_identity_norm_dir() { ( cd "${1:-}" 2>/dev/null && pwd -P ) || printf '%s' "${1:-}"; }   # 留：查不到=空答案（不是故障）
 
 # 冲突对：每行 "<VAR>\t<继承值>\t<最终值>"（无冲突 → 无输出）。最终值 = 载入配置后的身份。
 # 判据是「同一个项目吗」，不是「同一个路径吗」——
@@ -618,7 +618,7 @@ team_identity_refuse() { # <命令名>
 team_identity_server_global_value() { # <VAR>
   local var="${1:-}" line
   [ -n "$var" ] || return 1
-  line="$(team_tmux show-environment -g "$var" 2>/dev/null || true)"
+  line="$(team_tmux show-environment -g "$var" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   case "$line" in
     "$var="*) printf '%s\n' "${line#*=}"; return 0 ;;
     -"$var") return 1 ;;      # `-VAR` 是「标记移除」，不是值
@@ -704,7 +704,7 @@ team_identity_server_residue_vars() { # → 每行 VAR=value（没有 → 无输
 # 纯观察/建项目形式：冲突时按目录放行（只告警）——「看可以，动不行」。
 # 判断只看「这条命令会不会改本项目共享状态 / 起进程」，与身份无关；拿不准的一律算「会动」。
 team_identity_observe_only() { # <cmd> [args...] → 0=纯观察/建项目
-  local cmd="${1:-}"; shift 2>/dev/null || true
+  local cmd="${1:-}"; if [ "$#" -gt 0 ]; then shift; fi
   case "$cmd" in
     paths|help|version|changelog|roster|status|ps|digest|inbox|doctor|change) return 0 ;;
     __panel-data) return 0 ;;                                # 面板的数据读器（只读；panel 每个块一个子进程）
@@ -740,10 +740,10 @@ team_identity_gate() { # <cmd> [args...]
   if [ "${TEAM_ALLOW_FOREIGN_IDENTITY:-0}" = "1" ]; then
     team_identity_report
     if [ -n "${TEAM_STATE_DIR:-}" ]; then
-      mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || true
+      mkdir -p "$TEAM_STATE_DIR" || team_warn "身份审计：建不出 state 目录 $TEAM_STATE_DIR（这条 audit 没落盘）"
       printf '%s %s\n' "$(team_timestamp)" \
         "TEAM_IDENTITY_ALLOW（TEAM_ALLOW_FOREIGN_IDENTITY=1）：按目录 '$TEAM_PROJECT'（$TEAM_MAIN_ROOT）执行 ${1:-}；忽略的继承值：$(printf '%s' "$pairs" | awk -F'\t' '{printf "%s=%s→目录值%s ", $1, $2, $3}')" \
-        >> "$TEAM_STATE_DIR/watchdog.log" 2>/dev/null || true
+        >> "$TEAM_STATE_DIR/watchdog.log" || team_warn "身份审计：写不进 $TEAM_STATE_DIR/watchdog.log（这条 audit 没落盘）"
     fi
     return 0
   fi
@@ -841,8 +841,8 @@ team_sender_is_main_checkout() { # 运行时目录是不是主检出（与 team_
 team_sender_seat_clues() { # → stdout: "<来源>\t<名字>" 每行一个；无线索 → 空
   local a w s pane="${TMUX_PANE:-}"
   if [ -n "$pane" ] && [ -n "${TMUX:-}" ] && team_have_cmd tmux; then
-    w="$(team_tmux display-message -p -t "$pane" '#{window_name}' 2>/dev/null || true)"
-    s="$(team_tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null || true)"
+    w="$(team_tmux display-message -p -t "$pane" '#{window_name}' 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+    s="$(team_tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     w="$(team_trim "$w")"; s="$(team_trim "$s")"
     if [ -n "$w" ] && [ -n "$s" ] && [ "$s" = "${TEAM_SESSION:-}" ] && team_agent_known "$w"; then
       printf '窗口名\t%s\n' "$w"
@@ -906,7 +906,7 @@ team_find_config() {
   fi
   # 锁定模式：从**目录推导出的根**找配置（继承的 TEAM_ROOT 已经不算身份）
   local d="${TEAM_IDENTITY_ROOT:-${TEAM_ROOT:-$PWD}}"
-  d="$(cd "$d" 2>/dev/null && pwd)" || return 1
+  d="$(cd "$d" && pwd)" || return 1
   while :; do
     [ -f "$d/.pi/team/config.sh" ] && { printf '%s\n' "$d/.pi/team/config.sh"; return 0; }
     [ "$d" = "/" ] && break
@@ -963,7 +963,7 @@ team_load_config() {
     [ -z "${!_retired+x}" ] || TEAM_MODEL_RETIRED_ENV="${TEAM_MODEL_RETIRED_ENV:+$TEAM_MODEL_RETIRED_ENV }$_retired"
   done
   TEAM_UPGRADE_CONFIRMED="${TEAM_ASSUME_YES:-0}"
-  TEAM_CONFIG="$(team_find_config || true)"
+  TEAM_CONFIG="$(team_find_config)" || TEAM_CONFIG=""
   # Migration must refuse dynamic relevant shapes before sourcing them. Normal config remains trusted Bash.
   if [ -n "$TEAM_CONFIG" ] && [ "${CMD:-}" = config ] && [ "${ARGS[1]:-}" = upgrade-models ]; then
     team_config_model_source_shape "$TEAM_CONFIG" || return $?
@@ -1180,7 +1180,7 @@ team_branch_slug() { # <文本> → 分支名用的 slug（非 ASCII 直接退�
 
 team_task_branch_for_id() { # <ID> [title] → task/<ID>-<slug>
   local id="$1" title="${2:-}" slug
-  [ -n "$title" ] || title="$(team_task_title "$id" 2>/dev/null || true)"
+  [ -n "$title" ] || title="$(team_task_title "$id" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   slug="$(team_branch_slug "$title")"
   [ -n "$slug" ] || slug="$(team_branch_slug "$id")"
   printf '%s/%s-%s\n' "$TEAM_TASK_BRANCH_PREFIX" "$id" "${slug:-task}"
@@ -1221,14 +1221,14 @@ team_js_runner() { # → 解析出的运行时绝对路径；解析不到（含 
     return 0
   fi
   for p in node bun tsx; do
-    if p="$(command -v "$p" 2>/dev/null)" && [ -n "$p" ]; then printf '%s\n' "$p"; return 0; fi
+    if p="$(command -v "$p")" && [ -n "$p" ]; then printf '%s\n' "$p"; return 0; fi
   done
   return 0
 }
 
 team_js_version() { # <可执行路径> → 版本字符串（v24.19.0 / 1.3.14）；判不出 → 空
   local v
-  v="$("$1" --version 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+  v="$("$1" --version 2>/dev/null | head -1 | tr -d '[:space:]' || true)"   # 留：本机可能没这项能力，按回退走
   case "$v" in ''|*[!0-9A-Za-z.+-]*) v="" ;; esac
   printf '%s\n' "$v"
 }
@@ -1256,7 +1256,7 @@ team_js_check() {
     *bun*)
       IFS=. read -r maj min _ <<< "${ver#v}"
       case "${maj:-}" in ''|*[!0-9]*) printf 'unknown\t%s\t%s\t版本判不出\n' "$path" "$ver"; return 0 ;; esac
-      if [ "$maj" -gt 1 ] || { [ "$maj" -eq 1 ] && [ "${min:-0}" -ge 3 ] 2>/dev/null; }; then
+      if [ "$maj" -gt 1 ] || { [ "$maj" -eq 1 ] && [ "${min:-0}" -ge 3 ]; }; then
         printf 'ok\t%s\t%s\t\n' "$path" "$ver"
       else
         printf 'old\t%s\t%s\t需要 bun ≥ %s\n' "$path" "$ver" "$TEAM_JS_MIN_BUN_MINOR"
@@ -1299,7 +1299,7 @@ team_js_runner_text() { # → doctor/日志用的一行："<路径> (<版本>)"�
 # `/proc/sys/fs/inotify/max_user_watches`；读不到/非法 → unknown。
 team_inotify_max_watches() {
   local v
-  v="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || true)"
+  v="$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   case "$v" in ''|*[!0-9]*) printf 'unknown\n' ;; *) printf '%s\n' "$v" ;; esac
 }
 
@@ -1309,19 +1309,19 @@ team_inotify_max_watches() {
 # 就是假绿。同 UID 进程的 fd/fdinfo 有一个读不到 → 同样 unknown，绝不报部分量。
 team_inotify_used_watches() {
   local nspid uid pid fd link n total=0
-  nspid="$(LC_ALL=C awk '/^NSpid:/{print NF-1; exit}' /proc/self/status 2>/dev/null || true)"
+  nspid="$(LC_ALL=C awk '/^NSpid:/{print NF-1; exit}' /proc/self/status 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ "${nspid:-}" = "1" ] || { printf 'unknown\n'; return 0; }
-  uid="$(id -u 2>/dev/null || true)"
+  uid="$(id -u 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   case "$uid" in ''|*[!0-9]*) printf 'unknown\n'; return 0 ;; esac
   for pid in /proc/[0-9]*; do
     [ -d "$pid" ] || continue
-    [ "$(stat -c %u "$pid" 2>/dev/null || true)" = "$uid" ] || continue
+    [ "$(stat -c %u "$pid" 2>/dev/null || true)" = "$uid" ] || continue   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     [ -r "$pid/fd" ] || { printf 'unknown\n'; return 0; }
     for fd in "$pid"/fd/*; do
-      link="$(readlink "$fd" 2>/dev/null || true)"
+      link="$(readlink "$fd" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
       [ "$link" = "anon_inode:inotify" ] || continue
       [ -r "$pid/fdinfo/${fd##*/}" ] || { printf 'unknown\n'; return 0; }
-      n="$(LC_ALL=C awk '/^inotify wd:/{print $2}' "$pid/fdinfo/${fd##*/}" 2>/dev/null | LC_ALL=C sort -u | wc -l)"
+      n="$(LC_ALL=C awk '/^inotify wd:/{print $2}' "$pid/fdinfo/${fd##*/}" 2>/dev/null | LC_ALL=C sort -u | wc -l)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
       total=$((total + n))
     done
   done
@@ -1333,7 +1333,7 @@ team_inotify_used_watches() {
 # 输出：ok | errno=<E> | unavailable（解析不到运行时 / 探针起不来）。TEAM_INOTIFY_PROBE_TIMEOUT 秒。
 team_inotify_probe() {
   local runner script out ns root probe_base
-  runner="$(team_js_runner 2>/dev/null || true)"
+  runner="$(team_js_runner)"
   [ -n "$runner" ] || { printf 'unavailable\n'; return 0; }
   ns="$(team_project_ns)"
   # P287：直接落在解析后临时根上的东西要么点开头要么带 ns（探针脚本与探针目录都是如此）
@@ -1342,14 +1342,14 @@ team_inotify_probe() {
   # team_tmp_root_prepare，于是跑一次 doctor 就把尚未创建的默认根建出来了，与规格
   # `never created by a read-only surface` 相反）。根还不存在时，探针落在最近的存在祖先上：
   # 与「余量行按祖先判」同一个判据，同一个文件系统，注册能力也相同。
-  root="$(team_tmp_root 2>/dev/null || true)"
+  root="$(team_tmp_root)" || root=""
   [ -n "$root" ] || { printf 'unavailable\n'; return 0; }
   probe_base="$root"
   if [ ! -d "$root" ]; then
-    probe_base="$(team_tmp_root_stat_path "$root" 2>/dev/null || true)"
+    probe_base="$(team_tmp_root_stat_path "$root")" || probe_base=""
     [ -n "$probe_base" ] && [ -d "$probe_base" ] || { printf 'unavailable\n'; return 0; }
   fi
-  script="$(mktemp "$probe_base/teamsmith-inotify-probe.${ns}.XXXXXX.js" 2>/dev/null || true)"
+  if ! script="$(mktemp "$probe_base/teamsmith-inotify-probe.${ns}.XXXXXX.js")"; then printf 'unavailable\n'; return 0; fi
   [ -n "$script" ] || { printf 'unavailable\n'; return 0; }
   cat > "$script" <<'TEAM_INOTIFY_PROBE_JS' || { rm -f "$script"; printf 'unavailable\n'; return 0; }
 const fs = require('fs'), path = require('path')
@@ -1368,9 +1368,9 @@ try {
 process.stdout.write(verdict + '\n')
 TEAM_INOTIFY_PROBE_JS
   if command -v timeout >/dev/null 2>&1; then
-    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" timeout "${TEAM_INOTIFY_PROBE_TIMEOUT:-10}" "$runner" "$script" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   else
-    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"
+    out="$(TEAM_INOTIFY_ROOT="$probe_base" TEAM_INOTIFY_NS="$ns" "$runner" "$script" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   fi
   rm -f "$script"
   case "$out" in
@@ -1611,18 +1611,18 @@ team_with_lock() ( # <resource> <command> [args...]
   local resource="$1"; shift
   local lock owner start attempt i=0 max="${TEAM_LOCK_WAIT_TICKS:-100}" mine="$BASHPID"
   lock="$(team_lock_path "$resource")"
-  while ! mkdir -m 700 "$lock" 2>/dev/null; do
-    owner=''; start=''; read -r owner start attempt < "$lock/owner" 2>/dev/null || true
+  while ! mkdir -m 700 "$lock" 2>/dev/null; do   # 留：锁/记录可能还没写（竞态），调用方按空值处理
+    owner=''; start=''; read -r owner start attempt < "$lock/owner" 2>/dev/null || true   # 留：锁/记录可能还没写（竞态），调用方按空值处理
     if [[ "$owner" =~ ^[0-9]+$ ]] && [ -n "$start" ] && { [ ! -d "/proc/$owner" ] || [ "$(team_proc_start_identity "$owner")" != "$start" ]; }; then
       # Preserve stale ownership evidence before reclaiming. Pending launch remains authoritative.
       local stale="$lock.stale.$mine.$RANDOM"
-      mv "$lock" "$stale" 2>/dev/null && continue
+      mv "$lock" "$stale" 2>/dev/null && continue   # 留：锁/记录可能还没写（竞态），调用方按空值处理
     fi
     i=$((i + 1)); [ "$i" -le "$max" ] || { team_err "锁等待失败：$resource owner=${owner:-unknown}（不强抢）"; return 1; }
     sleep 0.1
   done
   printf '%s %s %s\n' "$mine" "$(team_proc_start_identity "$mine")" "${TEAM_LAUNCH_NONCE:-none}" > "$lock/owner"
-  trap 'rm -f "$lock/owner"; rmdir "$lock" 2>/dev/null || true' EXIT
+  trap 'rm -f "$lock/owner"; rmdir "$lock" 2>/dev/null || true' EXIT   # 留：锁/记录可能还没写（竞态），调用方按空值处理
   trap 'exit 130' INT
   trap 'exit 143' TERM
   "$@"
@@ -1720,7 +1720,7 @@ team_launch_path_valid() { # canonical absolute data path; no GNU readlink -m de
     [ -n "$probe" ] || probe=/
   done
   [ ! -L "$probe" ] || return 1
-  canonical="$(cd "$probe" 2>/dev/null && pwd -P)" || return 1
+  canonical="$(cd "$probe" 2>/dev/null && pwd -P)" || return 1   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   if [ "$canonical" = / ] && [ -n "$suffix" ]; then canonical=''; fi
   [ "$canonical$suffix" = "$path" ]
 }
@@ -1974,8 +1974,8 @@ team_unique_sid() {
   local seat="$1" wt="$2" sid i
   for ((i=0; i<40; i++)); do
     sid="$(team_sid_candidate "$seat")"
-    grep -qsFx "sid=$sid" "$TEAM_STATE_DIR"/*.env "$TEAM_STATE_DIR"/*.pending "$TEAM_STATE_DIR"/.assignment-* 2>/dev/null && continue
-    [ -z "$(team_session_file "$sid" "$wt" 2>/dev/null || true)" ] || continue
+    grep -qsFx "sid=$sid" "$TEAM_STATE_DIR"/*.env "$TEAM_STATE_DIR"/*.pending "$TEAM_STATE_DIR"/.assignment-* && continue
+    [ -z "$(team_session_file "$sid" "$wt" 2>/dev/null || true)" ] || continue   # 留：查不到=空答案（不是故障）
     printf '%s\n' "$sid"; return 0
   done
   team_err '无法分配无冲突 SID'; return 1
@@ -1988,7 +1988,7 @@ team_state_set() { # <agent> <key> <value>
   local dir; dir="$(team_state_dir)"
   local k esc
   esc="$(printf '%s' "$3" | sed -e 's/[&\\|]/\\&/g')"
-  k="$(grep -s "^$2=" "$dir/$1.env" 2>/dev/null | head -1 | cut -d= -f1 || true)"
+  k="$(grep -s "^$2=" "$dir/$1.env" | head -1 | cut -d= -f1 || true)"   # 留：没有这个键=空答案（grep 的 1 不是故障）
   if [ -n "$k" ]; then
     sed -i "s|^$2=.*|$2=$esc|" "$dir/$1.env"
   else
@@ -2000,7 +2000,7 @@ team_state_set() { # <agent> <key> <value>
 team_state_get_direct() { # <agent> <key> [default]（直读实现；TEAM_SCAN_CACHE=0 时全体落回这里）
   local f="$TEAM_STATE_DIR/$1.env" v=""
   if [ -f "$f" ]; then
-    v="$(grep -s "^$2=" "$f" | head -1 | cut -d= -f2- || true)"
+    v="$(grep -s "^$2=" "$f" | head -1 | cut -d= -f2- || true)"   # 留：没有这个键=空答案（grep 的 1 不是故障）
   fi
   if [ -n "$v" ]; then printf '%s\n' "$v"
   elif [ $# -ge 3 ]; then printf '%s\n' "$3"
@@ -2069,8 +2069,8 @@ team_tmux_verb() { # <argv…> → 第一个动词（跳过全局选项与其值
 
 team_tmux_strip_identity() { # 摘掉当前 shell 里整个 TEAM_* 命名空间（调用方负责放进子 shell）
   local v
-  for v in $(compgen -v TEAM_ 2>/dev/null || true); do
-    unset "$v" 2>/dev/null || true
+  for v in $(compgen -v TEAM_); do
+    unset "$v" 2>/dev/null || true   # 留：本机可能没这项能力，按回退走
   done
 }
 
@@ -2083,7 +2083,7 @@ team_tmux_starts_server() { # <verb> → 0 = 这个动词能启动 server（建�
 
 team_tmux() { # <tmux argv…>：产品面唯一的 tmux 出口
   local verb
-  verb="$(team_tmux_verb "$@" 2>/dev/null || true)"
+  verb="$(team_tmux_verb "$@" || true)"   # 留：动词判不出=空（下面按「不起 server」处理）
   if team_tmux_starts_server "$verb"; then
     ( team_tmux_strip_identity; command tmux "$@" )   # 可能起 server：摘掉整个命名空间
   else
@@ -2093,9 +2093,9 @@ team_tmux() { # <tmux argv…>：产品面唯一的 tmux 出口
 
 team_tmux_enabled() { [ "$TEAM_NOTIFY_TMUX" = "1" ] && team_have_cmd tmux && [ -n "${TMUX:-}" ]; }
 
-team_tmux_has_session() { team_tmux has-session -t "$1" 2>/dev/null; }
+team_tmux_has_session() { team_tmux has-session -t "$1" 2>/dev/null; }   # 留：目标可能还没起/已经没了，rc 就是答案
 
-team_tmux_windows() { team_tmux list-windows -t "$1" -F '#{window_name}' 2>/dev/null; }
+team_tmux_windows() { team_tmux list-windows -t "$1" -F '#{window_name}' 2>/dev/null; }   # 留：目标可能还没起/已经没了，rc 就是答案
 
 team_tmux_has_window() { team_tmux_windows "$1" | grep -qx "$2"; }
 
@@ -2109,7 +2109,7 @@ team_tmux_ensure_session() {
   [ -n "${TEAM_MAIN_ROOT:-}" ] && idenv+=(-e "TEAM_MAIN_ROOT=$TEAM_MAIN_ROOT")
   [ -n "${TEAM_PROJECT:-}" ]   && idenv+=(-e "TEAM_PROJECT=$TEAM_PROJECT")
   [ -n "${TEAM_SESSION:-}" ]   && idenv+=(-e "TEAM_SESSION=$TEAM_SESSION")
-  team_tmux new-session -d -s "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" ${idenv[@]+"${idenv[@]}"} 2>/dev/null || true
+  team_tmux new-session -d -s "$TEAM_SESSION" -n "$TEAM_PM_WINDOW" ${idenv[@]+"${idenv[@]}"} || team_err "建不出 tmux session $TEAM_SESSION（tmux 起不来？后面的窗口操作都会失败）"
 }
 
 # 破坏性 tmux 操作前调用：只允许操作「本项目自己的 session」，且目标必须非空。
@@ -2122,13 +2122,13 @@ team_assert_own_session() { # <操作名>
   fi
   # 「运行在本项目里」：cwd 的仓库必须就是 TEAM_ROOT —— 防止在别的项目里嵌套调用时误伤
   local _cwd_root _root_real
-  _cwd_root="$(team_git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  [ -n "$_cwd_root" ] && _cwd_root="$(cd "$(dirname "$_cwd_root")" 2>/dev/null && pwd -P || echo "")"
-  _root_real="$(cd "${TEAM_ROOT:-}" 2>/dev/null && pwd -P || echo "${TEAM_ROOT:-}")"
+  _cwd_root="$(team_git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
+  [ -n "$_cwd_root" ] && _cwd_root="$(cd "$(dirname "$_cwd_root")" 2>/dev/null && pwd -P || echo "")"   # 留：查不到=空答案（不是故障）
+  _root_real="$(cd "${TEAM_ROOT:-}" 2>/dev/null && pwd -P || echo "${TEAM_ROOT:-}")"   # 留：查不到=空答案（不是故障）
   local _root_common=""
   if [ -n "$_root_real" ]; then
-    _root_common="$(team_git -C "$_root_real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-    [ -n "$_root_common" ] && _root_common="$(cd "$(dirname "$_root_common")" 2>/dev/null && pwd -P || echo "")"
+    _root_common="$(team_git -C "$_root_real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
+    [ -n "$_root_common" ] && _root_common="$(cd "$(dirname "$_root_common")" 2>/dev/null && pwd -P || echo "")"   # 留：查不到=空答案（不是故障）
   fi
   # 「同一个仓库」判定用 git common dir：这样在 worktree 里调用也算本项目的操作
   if [ -n "$_cwd_root" ] && [ -n "$_root_common" ] && [ "$_cwd_root" != "$_root_common" ] \
@@ -2138,7 +2138,7 @@ team_assert_own_session() { # <操作名>
     team_dim "  确认要操作它：TEAM_ALLOW_FOREIGN_SESSION=1 …（或 --yes）" >&2
     return 1
   fi
-  if [ "$(team_session_from 2>/dev/null || echo default)" != "explicit" ] \
+  if [ "$(team_session_from)" != "explicit" ] \
      && [ "$TEAM_SESSION" != "$TEAM_PROJECT" ] \
      && [ "${TEAM_ASSUME_YES:-0}" != "1" ] && [ "${TEAM_ALLOW_FOREIGN_SESSION:-0}" != "1" ]; then
     team_err "$op 被拒：session '$TEAM_SESSION' 既不是配置/环境显式指定的，也不等于项目名 '$TEAM_PROJECT'"
@@ -2169,22 +2169,22 @@ team_tmux_target_required() { # <操作名> <target>
 team_tmux_kill_window() { # <session:window>
   local t="${1:-}"
   team_tmux_target_required "kill-window" "$t" || return 1
-  team_tmux kill-window -t "$t" 2>/dev/null
+  team_tmux kill-window -t "$t"
 }
 team_tmux_kill_session() { # <session>
   local t="${1:-}"
   team_tmux_target_required "kill-session" "$t" || return 1
-  team_tmux kill-session -t "$t" 2>/dev/null
+  team_tmux kill-session -t "$t"
 }
 team_tmux_new_window() { # <session> <name>
   local t="${1:-}" n="${2:-}"
   team_tmux_target_required "new-window" "$t" || return 1
-  team_tmux new-window -t "$t" -n "$n" -d 2>/dev/null
+  team_tmux new-window -t "$t" -n "$n" -d
 }
 team_tmux_respawn_pane() { # <pane-or-target> <cmd>
   local t="${1:-}" cmd="${2:-}"
   team_tmux_target_required "respawn-pane" "$t" || return 1
-  team_tmux respawn-pane -k -t "$t" "$cmd" 2>/dev/null
+  team_tmux respawn-pane -k -t "$t" "$cmd"
 }
 
 team_target_session() { # <session:window> → session 名
@@ -2202,7 +2202,7 @@ team_foreign_target_ok() { # <session:window> [meeting-slug] → 0=允许
   # 例外：**已登记的会议参与方** —— 只用于会议通知（敲门），不是聊天通道
   if [ -n "${2:-}" ] && [ -n "${TEAM_MEETINGS_DIR:-$HOME/.pi/team/meetings}" ]; then
     local map kv
-    map="$(grep -s '^PEER_SESSIONS=' "$(team_meetings_dir 2>/dev/null)/$2/state.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+    map="$(grep -s '^PEER_SESSIONS=' "$(team_meetings_dir 2>/dev/null)/$2/state.env" | head -1 | cut -d= -f2- || true)"   # 留：没登记=空（grep 的 1 不是故障）
     for kv in $(printf '%s' "$map" | tr ';' ' '); do
       case "$kv" in
         "=$sess"|*=*) [ "${kv#*=}" = "$sess" ] && return 0 ;;
@@ -2224,8 +2224,8 @@ team_rule() { # 一条水平线（面板/阅读器用）
 team_tmux_send_text() { # <session:window> <text> [meeting-slug]
   team_tmux_target_required "send-text" "${1:-}" || return 1
   team_foreign_target_ok "$1" "${3:-}" || return 1
-  team_tmux send-keys -t "$1" -l "$2" 2>/dev/null || return 1
-  team_tmux send-keys -t "$1" Enter 2>/dev/null || return 1
+  team_tmux send-keys -t "$1" -l "$2" || return 1
+  team_tmux send-keys -t "$1" Enter || return 1
 }
 
 # 只有目标窗口在跑 agent CLI 时才敢打字：往停在提示符的 shell 里 send-keys 等于把那串文本
@@ -2240,7 +2240,7 @@ team_tmux_send_to_pi() { # <session:window> <text>
 
 team_pane_cmd() { # <session:window> → 前台命令名
   team_tmux_target_required "pane_current_command" "${1:-}" || { printf '%s\n' ""; return 1; }
-  team_tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
+  team_tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
 }
 
 # P210：本窗口 pane 的三件事**一次读全**（pid / 是否遗体 / 前台命令）。为什么必须一次读：同一拍里
@@ -2252,8 +2252,8 @@ team_pane_cmd() { # <session:window> → 前台命令名
 team_pane_facts() { # <session:window> → "<pane_pid> <pane_dead> <pane_current_command>"
   local target="${1:-}" fmt='#{pane_active} #{pane_pid} #{pane_dead} #{pane_current_command}' line
   team_tmux_target_required "pane_facts" "$target" || return 1
-  line="$(team_tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | awk '$1 == "1" { print $2, $3, $4; exit }')"
-  [ -n "$line" ] || line="$(team_tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | head -1 | awk '{ print $2, $3, $4 }')"
+  line="$(team_tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | awk '$1 == "1" { print $2, $3, $4; exit }')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+  [ -n "$line" ] || line="$(team_tmux list-panes -t "$target" -F "$fmt" 2>/dev/null | head -1 | awk '{ print $2, $3, $4 }')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$line" ] || return 1
   printf '%s\n' "$line"
 }
@@ -2274,7 +2274,7 @@ team_is_shell_cmd() { # 空/常见 shell → 窗口可能停在提示符，也�
 #   3) 前台进程组不是 pane_pid 自己（job control：子命令被放到新进程组）→ 在跑
 team_shell_running_command() { # <pid> → 0 表示这个 shell 进程在跑脚本/子命令
   local args toks=() tok
-  args="$(ps -o args= -p "$1" 2>/dev/null | head -1)"
+  args="$(ps -o args= -p "$1" 2>/dev/null | head -1)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$args" ] || return 1
   [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg]     shell_running? pid=%s args=[%s]\n' "$1" "$args" >&2
   # 窗口刚建好的一瞬间，pane_pid 可能还是 tmux 自己（args 里有 -s/-n 这类参数会被误判成"在跑命令"）
@@ -2298,10 +2298,10 @@ team_pgroup_has_process() { # <pgid> → 0 表示这个进程组里还有活进�
   local g="${1:-}"
   [ -n "$g" ] || return 1
   if team_have_cmd ps; then
-    [ -n "$(ps -eo pgid=,pid= 2>/dev/null | awk -v g="$g" '$1==g {print $2; exit}')" ] && return 0
+    [ -n "$(ps -eo pgid=,pid= 2>/dev/null | awk -v g="$g" '$1==g {print $2; exit}')" ] && return 0   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   fi
   if team_have_cmd pgrep; then
-    [ -n "$(pgrep -g "$g" 2>/dev/null | head -1)" ] && return 0
+    [ -n "$(pgrep -g "$g" 2>/dev/null | head -1)" ] && return 0   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   fi
   return 1
 }
@@ -2312,15 +2312,15 @@ team_pane_busy() { # <session:window> → 0 = 里面有东西在跑（不是空�
   cmd="$(team_pane_cmd "$target")"
   [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg] busy? %s cmd=%s\n' "$target" "$cmd" >&2
   team_is_shell_cmd "$cmd" || return 0            # 前台不是 shell（pi/node…）→ 在跑
-  pid="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null)"
+  pid="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$pid" ] || return 1
-  args="$(ps -o args= -p "$pid" 2>/dev/null | head -1)"
+  args="$(ps -o args= -p "$pid" 2>/dev/null | head -1)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   first="${args%% *}"
   [ "${TEAM_DEBUG:-0}" = "1" ] && printf '[dbg]   pid=%s args=[%s]\n' "$pid" "$args" >&2
   # 只有 pane_pid 真的是个 shell 才继续判；
   # 刚建窗口的一瞬间 pane_pid 可能是 tmux 自己（args 形如 "[tmux: server]"）或空，
   # 这时当成"没在跑"——否则会把刚建的窗口误判成"忙"，PM 就永远拉不起来。
-  case "$(basename "${first:-}" 2>/dev/null || printf '%s' "${first:-}")" in
+  case "${first##*/}" in
     bash|sh|zsh|fish|dash|ash|ksh|nu|elvish) ;;
     *) return 1 ;;
   esac
@@ -2328,7 +2328,7 @@ team_pane_busy() { # <session:window> → 0 = 里面有东西在跑（不是空�
   team_shell_running_command "$pid" && return 0
   # job control：前台进程组不是这个 shell 自己 → 有前台命令
   local tpgid
-  tpgid="$(ps -o tpgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  tpgid="$(ps -o tpgid= -p "$pid" 2>/dev/null | tr -d ' ')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   if [ -n "$tpgid" ] && [ "$tpgid" != "$pid" ]; then return 0; fi
   return 1
 }
@@ -2345,10 +2345,10 @@ team_pm_window_exists() { team_tmux_has_window "$TEAM_SESSION" "$TEAM_PM_WINDOW"
 team_proc_cwd() { # <pid> → 该进程的 cwd（Linux /proc；macOS 退 lsof）
   [ -n "${1:-}" ] || return 1
   if [ -e "/proc/$1/cwd" ]; then
-    readlink -f "/proc/$1/cwd" 2>/dev/null && return 0
+    readlink -f "/proc/$1/cwd" 2>/dev/null && return 0   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   fi
   if team_have_cmd lsof; then
-    local out; out="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    local out; out="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
   fi
   return 1
@@ -2358,11 +2358,11 @@ team_proc_cwd() { # <pid> → 该进程的 cwd（Linux /proc；macOS 退 lsof）
 team_pane_proc_pid() { # <session:window>
   local target="${1:-}" pid cmd child
   team_tmux_target_required "pane_pid" "$target" || return 1
-  pid="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
+  pid="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$pid" ] || return 1
   cmd="$(team_pane_cmd "$target")"
   if [ -n "$cmd" ] && ! team_is_shell_cmd "$cmd"; then printf '%s\n' "$pid"; return 0; fi
-  child="$(ps -o pid= --ppid "$pid" 2>/dev/null | head -1 | tr -d ' ')"
+  child="$(ps -o pid= --ppid "$pid" 2>/dev/null | head -1 | tr -d ' ')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$child" ] && printf '%s\n' "$child" || printf '%s\n' "$pid"
 }
 
@@ -2378,9 +2378,9 @@ team_cwd_in_project() { # <cwd> → 0=属于本项目（含它的 worktree）
   case "$c" in
     "$TEAM_MAIN_ROOT"|"$TEAM_MAIN_ROOT"/*) return 0 ;;
   esac
-  common="$(team_git -C "$c" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  common="$(team_git -C "$c" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   [ -n "$common" ] || return 1
-  if [ "$(cd "$(dirname "$common")" 2>/dev/null && pwd -P)" = "$TEAM_MAIN_ROOT" ]; then
+  if [ "$(cd "$(dirname "$common")" && pwd -P)" = "$TEAM_MAIN_ROOT" ]; then
     return 0
   fi
   return 1
@@ -2423,7 +2423,7 @@ team_pm_proof_record() { # argv|spawn
   printf '%s\n' "$1" > "$(team_pm_proof_file)"
 }
 
-team_pm_proof() { head -1 "$(team_pm_proof_file)" 2>/dev/null || true; }
+team_pm_proof() { head -1 "$(team_pm_proof_file)" 2>/dev/null || true; }   # 留：查不到=空答案（不是故障）
 
 team_pm_proof_suffix() { local p; p="$(team_pm_proof)"; [ -n "$p" ] && printf '，proof=%s' "$p"; }
 
@@ -2435,10 +2435,10 @@ team_pm_spawn_pid() {
   local f p cwd
   f="$(team_pm_spawn_file)"
   [ -f "$f" ] || return 1
-  p="$(head -1 "$f" 2>/dev/null | tr -dc '0-9')"
+  p="$(head -1 "$f" | tr -dc '0-9')"
   [ -n "$p" ] || return 1
-  kill -0 "$p" 2>/dev/null || return 1
-  cwd="$(team_proc_cwd "$p" 2>/dev/null || true)"
+  kill -0 "$p" 2>/dev/null || return 1   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+  cwd="$(team_proc_cwd "$p" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$cwd" ] || return 1
   team_cwd_in_project "$cwd" || return 1
   printf '%s\n' "$p"
@@ -2448,7 +2448,7 @@ team_pm_recorded_pid() { # → 记录的 pid（没有/不合法 → 非 0）
   local f p
   f="$(team_pm_pid_file)"
   [ -f "$f" ] || return 1
-  p="$(head -1 "$f" 2>/dev/null | tr -dc '0-9')"
+  p="$(head -1 "$f" | tr -dc '0-9')"
   [ -n "$p" ] || return 1
   printf '%s\n' "$p"
 }
@@ -2458,8 +2458,8 @@ team_pm_recorded_pid() { # → 记录的 pid（没有/不合法 → 非 0）
 team_pm_pid_live() {
   local pid cwd
   pid="$(team_pm_recorded_pid)" || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
-  cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
+  kill -0 "$pid" 2>/dev/null || return 1   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+  cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$cwd" ] || return 1
   team_cwd_in_project "$cwd"
 }
@@ -2481,7 +2481,7 @@ team_proc_cmdline_is_bin() { # <pid> <可执行文件路径或名字> [已读到
   [ -n "$base" ] || return 1
   # M39：调用方（team_proc_is_agent_bin）已经读过一次命令行时就把快照传进来 —— 一次判定里读两次会让
   # `execve` 落在两次读之间时误判（第一次读还没看到排除标记、第二次读已经看到 agent 路径）。
-  args="${preraw:-$(ps -o args= -p "$pid" 2>/dev/null | head -1)}"
+  args="${preraw:-$(ps -o args= -p "$pid" 2>/dev/null | head -1)}"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$args" ] || return 1
   # M8.1：**我们自己的启动命令不算证据** —— harness 的命令行里就写着 spawn 文件路径
   # （`( printf "%s\n" "$BASHPID" > <state>/pm.pid.spawn`）：出现它就说明这个进程是那个
@@ -2515,7 +2515,7 @@ team_proc_executing_bin() { # <pid> <可执行文件路径或名字> [已读到�
     *)  base="$want" ;;
   esac
   [ -n "$base" ] || return 1
-  args="${preraw:-$(ps -o args= -p "$pid" 2>/dev/null | head -1)}"
+  args="${preraw:-$(ps -o args= -p "$pid" 2>/dev/null | head -1)}"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$args" ] || return 1
   # M7.2/M8.1 同款排除：启动壳与派单 harness 的命令行里也写着 agent 路径，但它们还没在跑它
   # （整串判断，理由同 team_proc_cmdline_is_bin 里那条注释）。
@@ -2533,7 +2533,7 @@ team_proc_executing_bin() { # <pid> <可执行文件路径或名字> [已读到�
 # TEAM_AGENT_BIN/CMD —— 于是「worker 用 codex、PM 还是 pi」这种组合下，人工启动的 Pi PM 也认得出来，
 # 而且 PM 的 CLI 不叫 pi 也算数（wrapper 脚本在 exec 掉自己之前也带着配置的名字；exec 之后靠 spawn 证据）。
 team_proc_is_pm_bin() { # <pid>
-  team_proc_cmdline_is_bin "${1:-}" "$(team_pm_bin_path 2>/dev/null || true)"
+  team_proc_cmdline_is_bin "${1:-}" "$(team_pm_bin_path 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
 }
 
 # ---------------------------------------------------------------- PM 启动在飞行中（M7.2）
@@ -2558,7 +2558,7 @@ team_pm_starting_age() { # → 标记存在了多少秒（没有/不可解析 �
   local f started
   f="$(team_pm_starting_file)"
   [ -f "$f" ] || return 1
-  started="$(awk 'NR==1{print $1}' "$f" 2>/dev/null | tr -dc '0-9')"
+  started="$(awk 'NR==1{print $1}' "$f" | tr -dc '0-9')"
   [ -n "$started" ] || return 1
   printf '%s\n' "$(( $(date +%s) - started ))"
 }
@@ -2568,7 +2568,7 @@ team_pm_starting() {
   local f want age limit
   f="$(team_pm_starting_file)"
   [ -f "$f" ] || return 1
-  want="$(awk 'NR==1{print $3}' "$f" 2>/dev/null)"
+  want="$(awk 'NR==1{print $3}' "$f")"
   [ -z "$want" ] || [ "$want" = "$(team_pm_target)" ] || return 1
   age="$(team_pm_starting_age)" || return 1
   limit=$(( ${TEAM_PM_START_WAIT:-6} + 5 ))
@@ -2589,13 +2589,13 @@ team_pane_proc_tree_pid() { # <session:window> <谓词函数> [all|children]
   # list-panes 而不是 display-message：窗口名写错/窗口已消失时 display-message 会**静默回退到当前窗口**
   # （实测 `-t teamsmith:nope-window` 返回当前窗口的 pane_pid 且 rc=0），探活会拿到别的窗口的进程 ——
   # 「证明」不能带这种回声。list-panes 找不到窗口就报错、没有输出 → 失败关闭（非 0）。
-  pane="$(team_tmux list-panes -t "$target" -F '#{pane_active} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }')"
-  [ -n "$pane" ] || pane="$(team_tmux list-panes -t "$target" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  pane="$(team_tmux list-panes -t "$target" -F '#{pane_active} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+  [ -n "$pane" ] || pane="$(team_tmux list-panes -t "$target" -F '#{pane_pid}' 2>/dev/null | head -1)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$pane" ] || return 1
   if [ "$scope" != "children" ]; then
     "$pred" "$pane" && { printf '%s\n' "$pane"; return 0; }
   fi
-  for p in $(ps -o pid= --ppid "$pane" 2>/dev/null | tr -d ' '); do
+  for p in $(ps -o pid= --ppid "$pane" 2>/dev/null | tr -d ' '); do   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     "$pred" "$p" && { printf '%s\n' "$p"; return 0; }
   done
   return 1
@@ -2616,12 +2616,12 @@ team_pm_state() {
   local target cmd pane pid cwd apid
   target="$(team_pm_target)"
   cmd="$(team_pane_cmd "$target")"
-  pane="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"
-  pid="$(team_pane_proc_pid "$target" 2>/dev/null || true)"
+  pane="$(team_tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null | head -1)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+  pid="$(team_pane_proc_pid "$target" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   # ① 归属：占用者不在本项目里 → foreign（先判，绝不给别的项目的进程发「PM 在运行」的证书）
   for pid in ${pid:-} ${pane:-}; do
     [ -n "$pid" ] || continue
-    cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
+    cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     if [ -n "$cwd" ] && ! team_cwd_in_project "$cwd"; then
       printf 'foreign:%s' "${cmd:-unknown}"; return 0
     fi
@@ -2633,9 +2633,9 @@ team_pm_state() {
   #      放在空提示符之前：启动中的 pane 也不能被当成空提示符）
   if team_pm_starting; then printf 'starting:%ss' "$(team_pm_starting_age)"; return 0; fi
   # ④ 人工启动的 PM：窗口里的进程就是配置的 agent 可执行文件（cwd 已在上面的归属校验里过）
-  apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
+  apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   if [ -n "$apid" ]; then
-    cwd="$(team_proc_cwd "$apid" 2>/dev/null || true)"
+    cwd="$(team_proc_cwd "$apid" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     [ -n "$cwd" ] && team_cwd_in_project "$cwd" && { printf 'running:%s' "${cmd:-agent}"; return 0; }
   fi
   # ⑤ 空提示符：可以安全地替换成 PM
@@ -2662,15 +2662,15 @@ team_pm_evidence() { # [state]
       fi ;;
     starting:*)
       f="$(team_pm_starting_file)"
-      want="$(awk 'NR==1{print $3}' "$f" 2>/dev/null || true)"
+      want="$(awk 'NR==1{print $3}' "$f" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
       age="$(team_pm_starting_age || echo '?')"
       printf 'state/pm.pid.starting（%ss 前由 pid %s 发起，target=%s）' \
-        "$age" "$(awk 'NR==1{print $2}' "$f" 2>/dev/null || echo '?')" "${want:-?}" ;;
+        "$age" "$(awk 'NR==1{print $2}' "$f" 2>/dev/null || echo '?')" "${want:-?}" ;;   # 留：查不到=空答案（不是故障）
     idle:*)    printf 'PM 窗口是空提示符（cmd=%s）' "${st#idle:}" ;;
     unknown:*) printf 'PM 窗口里是项目内非 agent 进程（cmd=%s，cwd=%s）' \
-                 "${st#unknown:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
+                 "${st#unknown:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     foreign:*) printf 'PM 窗口被不属于本项目的进程占用（cmd=%s，cwd=%s）' \
-                 "${st#foreign:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;
+                 "${st#foreign:}" "$(team_pane_cwd "$(team_pm_target)" 2>/dev/null || echo '?')" ;;   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     *)         printf 'PM 窗口不存在' ;;
   esac
 }
@@ -2710,10 +2710,10 @@ team_proc_is_agent_bin() { # <pid>
   local args
   # 我们自己的派单 harness（M4.3 B / M8.2）命令行里就写着 agent 可执行文件，但它还没 exec 出 agent：
   # 不算证据（PM 侧的对应物是 team_proc_cmdline_is_bin 里的 pm.pid.spawn 排除）。
-  args="$(ps -o args= -p "${1:-}" 2>/dev/null | head -1)"
+  args="$(ps -o args= -p "${1:-}" 2>/dev/null | head -1)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   case "$args" in *dispatch-*.spawn*) return 1 ;; esac
   # M39：把同一次读到的快照传下去（同一次判定只读一次命令行）。
-  team_proc_cmdline_is_bin "${1:-}" "$(team_agent_bin_path 2>/dev/null || true)" "$args"
+  team_proc_cmdline_is_bin "${1:-}" "$(team_agent_bin_path 2>/dev/null || true)" "$args"   # 留：本机可能没这项能力，按回退走
 }
 
 # 窗口里跑着配置的 agent CLI 的那个 pid（pane_pid 本身，或它的直接子进程；都没命中 → 非 0）
@@ -2729,17 +2729,17 @@ team_pane_agent_pid() { # <session:window>
 team_pm_other_sessions_in_dir() { # <dir> → 该目录里活着的 PM CLI 进程 pid（每行一个）
   local dir="${1:-}" want bin base p args cwd
   [ -n "$dir" ] || return 0
-  want="$(cd "$dir" 2>/dev/null && pwd -P)" || want="$dir"
-  bin="$(team_pm_bin_path 2>/dev/null || true)"
+  want="$(cd "$dir" 2>/dev/null && pwd -P)" || want="$dir"   # 留：查不到=空答案（不是故障）
+  bin="$(team_pm_bin_path 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   [ -n "$bin" ] || return 0
   base="$(basename "$bin")"
   # 一次 ps 先把绝大多数进程筛掉，只对命令行里出现该 basename 的 pid 读 /proc（否则每个 pid 都要 fork）。
   # args 快照从这一次读传给 team_proc_cmdline_is_bin（M39：一次判定只读一次命令行，闭竞态）。
-  ps -ww -eo pid=,args= 2>/dev/null | while read -r p args; do
+  ps -ww -eo pid=,args= 2>/dev/null | while read -r p args; do   # 留：本机可能没这项能力，按回退走
     [ -n "$p" ] || continue
     case " $args " in *"$base"*) ;; *) continue ;; esac
     team_proc_cmdline_is_bin "$p" "$bin" "$args" || continue
-    cwd="$(team_proc_cwd "$p" 2>/dev/null || true)"
+    cwd="$(team_proc_cwd "$p" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     [ -n "$cwd" ] && [ "$cwd" = "$want" ] && printf '%s\n' "$p"
   done
   return 0
@@ -2765,23 +2765,23 @@ team_pm_other_sessions_in_dir() { # <dir> → 该目录里活着的 PM CLI 进�
 team_agent_alive_in_pane() { # <session:window>
   local target="${1:-}" facts pane dead cmd pid cwd
   [ -n "$target" ] || return 1
-  facts="$(team_pane_facts "$target" 2>/dev/null || true)"
+  facts="$(team_pane_facts "$target" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   read -r pane dead cmd <<< "$facts"
   [ -n "$pane" ] || return 1
   [ "$dead" = "1" ] && return 1
   if team_is_shell_cmd "$cmd"; then
     # P217：前台是 shell 时，pane_pid **自己**可能就在执行 agent（`bash <agent>`，argv[1] 是它）。
     # 先问这一条（逐词相等，不是「整串里提到」），不成立才退回「只看直接子进程」。
-    if team_proc_executing_bin "$pane" "$(team_agent_bin_path 2>/dev/null || true)"; then
+    if team_proc_executing_bin "$pane" "$(team_agent_bin_path 2>/dev/null || true)"; then   # 留：本机可能没这项能力，按回退走
       pid="$pane"
     else
-      pid="$(team_pane_proc_tree_pid "$target" team_proc_is_agent_bin children 2>/dev/null || true)"
+      pid="$(team_pane_proc_tree_pid "$target" team_proc_is_agent_bin children 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     fi
   else
-    pid="$(team_pane_agent_pid "$target" 2>/dev/null || true)"
+    pid="$(team_pane_agent_pid "$target" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   fi
   [ -n "$pid" ] || return 1
-  cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"
+  cwd="$(team_proc_cwd "$pid" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   [ -n "$cwd" ] || return 1
   team_cwd_in_project "$cwd"
 }
@@ -2807,7 +2807,7 @@ team_orphan_proc_dir() { printf '%s\n' "$(team_orphan_proc_root)/${1:-}"; }
 team_orphan_norm_path() { # <path> → 物理路径（解析不到就原样）
   local p="${1:-}"
   [ -n "$p" ] || return 1
-  readlink -f -- "$p" 2>/dev/null || printf '%s\n' "$p"
+  readlink -f -- "$p" 2>/dev/null || printf '%s\n' "$p"   # 留：查不到=空答案（不是故障）
 }
 
 # 命令行快照（空格连接）。这也是夹具接缝的一环：夹具根里的进程不是真进程，`ps -p` 读不到它们，
@@ -2816,7 +2816,7 @@ team_orphan_read_cmdline() { # <pid> → args；读不到/空命令行 → 非 0
   local f raw
   f="$(team_orphan_proc_dir "${1:-}")/cmdline"
   [ -r "$f" ] || return 1
-  raw="$(tr '\0' ' ' < "$f" 2>/dev/null)" || return 1
+  raw="$(tr '\0' ' ' < "$f")" || return 1
   raw="${raw% }"
   [ -n "$raw" ] || return 1
   printf '%s\n' "$raw"
@@ -2829,7 +2829,7 @@ team_orphan_read_environ() { # <pid> → 环境文本；读不到 → 非 0
   local f
   f="$(team_orphan_proc_dir "${1:-}")/environ"
   [ -r "$f" ] || return 1
-  tr '\0' '\n' < "$f" 2>/dev/null || return 1
+  tr '\0' '\n' < "$f" || return 1
   return 0
 }
 
@@ -2839,17 +2839,17 @@ team_orphan_start_epoch() { # <pid> → epoch 秒；读不到 → 非 0
   local dir stat rest start btime statf clk
   dir="$(team_orphan_proc_dir "${1:-}")"
   [ -r "$dir/stat" ] || return 1
-  stat="$(cat "$dir/stat" 2>/dev/null)" || return 1
+  stat="$(cat "$dir/stat")" || return 1
   # comm 字段可能含空格与括号 → 从**最后一个** `) ` 之后切（字段 3 起），starttime 就是第 20 个
   case "$stat" in *') '*) ;; *) return 1 ;; esac
   rest="${stat##*) }"
   start="$(printf '%s\n' "$rest" | awk '{print $20}')"
   case "$start" in ''|*[!0-9]*) return 1 ;; esac
   statf="$(team_orphan_proc_root)/stat"
-  btime="$(awk '/^btime /{print $2; exit}' "$statf" 2>/dev/null || true)"
-  [ -n "$btime" ] || btime="$(awk '/^btime /{print $2; exit}' /proc/stat 2>/dev/null || true)"
+  btime="$(awk '/^btime /{print $2; exit}' "$statf" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
+  [ -n "$btime" ] || btime="$(awk '/^btime /{print $2; exit}' /proc/stat 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   case "$btime" in ''|*[!0-9]*) return 1 ;; esac
-  clk="$(getconf CLK_TCK 2>/dev/null || true)"
+  clk="$(getconf CLK_TCK 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   case "$clk" in ''|*[!0-9]*) clk=100 ;; esac
   [ "$clk" -gt 0 ] || clk=100
   printf '%s\n' "$(( btime + start / clk ))"
@@ -2860,7 +2860,7 @@ team_orphan_rss_mb() { # <pid> → MB；读不到 → 非 0
   local f kb
   f="$(team_orphan_proc_dir "${1:-}")/status"
   [ -r "$f" ] || return 1
-  kb="$(awk '/^VmRSS:/{print $2; exit}' "$f" 2>/dev/null || true)"
+  kb="$(awk '/^VmRSS:/{print $2; exit}' "$f")"
   case "$kb" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s\n' "$(( kb / 1024 ))"
 }
@@ -2885,7 +2885,7 @@ team_orphan_record_task() { # <seat> → task 值（读不到 → 空）
   [ -n "${TEAM_STATE_DIR:-}" ] && [ -n "${1:-}" ] || return 0
   f="$TEAM_STATE_DIR/$1.env"
   [ -f "$f" ] || return 0
-  v="$(grep -s '^task=' "$f" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  v="$(grep -s '^task=' "$f" | head -1 | cut -d= -f2- || true)"   # 留：没有这个键=空答案（grep 的 1 不是故障）
   printf '%s\n' "$v"
 }
 
@@ -2895,7 +2895,7 @@ team_orphan_server_panes() { # <socket> → pane id（每行一个）；查询�
   local sock="${1:-}" out
   [ -n "$sock" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
-  out="$(tmux -S "$sock" list-panes -a -F '#{pane_id}' 2>/dev/null)" || return 1
+  out="$(tmux -S "$sock" list-panes -a -F '#{pane_id}' 2>/dev/null)" || return 1   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   printf '%s\n' "$out"
 }
 
@@ -2920,12 +2920,12 @@ team_orphan_judge() { # <TMUX> <TMUX_PANE> → orphan|live|unjudged
 team_orphan_candidates() { # 每行 pid<TAB>args
   local root base_a base_p p args d
   root="$(team_orphan_proc_root)"
-  base_a="$(basename -- "$(team_agent_bin_path 2>/dev/null || true)")"
-  base_p="$(basename -- "$(team_pm_bin_path 2>/dev/null || true)")"
+  base_a="$(basename -- "$(team_agent_bin_path 2>/dev/null || true)")"   # 留：本机可能没这项能力，按回退走
+  base_p="$(basename -- "$(team_pm_bin_path 2>/dev/null || true)")"   # 留：本机可能没这项能力，按回退走
   [ -n "$base_a" ] || base_a='pi'
   [ -n "$base_p" ] || base_p="$base_a"
   if [ "$root" = "/proc" ]; then
-    ps -ww -eo pid=,args= 2>/dev/null | while read -r p args; do
+    ps -ww -eo pid=,args= 2>/dev/null | while read -r p args; do   # 留：本机可能没这项能力，按回退走
       [ -n "$p" ] || continue
       case "$args" in *"$base_a"*|*"$base_p"*) ;; *) continue ;; esac
       printf '%s\t%s\n' "$p" "$args"
@@ -2936,7 +2936,7 @@ team_orphan_candidates() { # 每行 pid<TAB>args
     [ -d "$d" ] || continue
     p="$(basename -- "${d%/}")"
     case "$p" in ''|*[!0-9]*) continue ;; esac
-    args="$(team_orphan_read_cmdline "$p" 2>/dev/null || true)"
+    args="$(team_orphan_read_cmdline "$p" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     [ -n "$args" ] || continue
     case "$args" in *"$base_a"*|*"$base_p"*) ;; *) continue ;; esac
     printf '%s\t%s\n' "$p" "$args"
@@ -2946,9 +2946,9 @@ team_orphan_candidates() { # 每行 pid<TAB>args
 # 一次解析普查要用的常量（agent/PM 可执行文件 + 本项目 main root）。census 与 reap 共用，
 # 所以「普查说它是席位」与「清理前复验说它是席位」用的是同一个定义。
 team_orphan_ctx_init() {
-  TEAM_ORPHAN_AGENT_BIN="$(team_agent_bin_path 2>/dev/null || true)"
-  TEAM_ORPHAN_PM_BIN="$(team_pm_bin_path 2>/dev/null || true)"
-  TEAM_ORPHAN_SELF_MAIN="$(team_orphan_norm_path "${TEAM_MAIN_ROOT:-}" 2>/dev/null || printf '%s' "${TEAM_MAIN_ROOT:-}")"
+  TEAM_ORPHAN_AGENT_BIN="$(team_agent_bin_path 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
+  TEAM_ORPHAN_PM_BIN="$(team_pm_bin_path 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
+  TEAM_ORPHAN_SELF_MAIN="$(team_orphan_norm_path "${TEAM_MAIN_ROOT:-}" 2>/dev/null || printf '%s' "${TEAM_MAIN_ROOT:-}")"   # 留：查不到=空答案（不是故障）
 }
 
 # 形状判据：命令行命中本项目的 agent 或 PM 可执行文件（与 team_proc_is_agent_bin / team_proc_is_pm_bin
@@ -2988,14 +2988,14 @@ team_orphan_record_for() { # <pid> <argv 快照>
   # 形状：命令行命中本项目配置的 agent 或 PM 可执行文件（复用既有解析，不新造第二套）
   team_orphan_shape_match "$pid" "$args" || return 1
   judge="$(team_orphan_judge "$tmx" "$tpane")"
-  start="$(team_orphan_start_epoch "$pid" 2>/dev/null || true)"; [ -n "$start" ] || start='-'
-  rss="$(team_orphan_rss_mb "$pid" 2>/dev/null || true)";       [ -n "$rss" ] || rss='-'
+  start="$(team_orphan_start_epoch "$pid" 2>/dev/null || true)"; [ -n "$start" ] || start='-'   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+  rss="$(team_orphan_rss_mb "$pid" 2>/dev/null || true)";       [ -n "$rss" ] || rss='-'   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   seat='-'; task='-'
   if [ -n "$mr" ] && [ -n "$r" ]; then
-    nmr="$(team_orphan_norm_path "$mr" 2>/dev/null || printf '%s' "$mr")"
+    nmr="$(team_orphan_norm_path "$mr" 2>/dev/null || printf '%s' "$mr")"   # 留：查不到=空答案（不是故障）
     if [ -n "$TEAM_ORPHAN_SELF_MAIN" ] && [ "$nmr" = "$TEAM_ORPHAN_SELF_MAIN" ]; then
       kind='own'
-      nr="$(team_orphan_norm_path "$r" 2>/dev/null || printf '%s' "$r")"
+      nr="$(team_orphan_norm_path "$r" 2>/dev/null || printf '%s' "$r")"   # 留：查不到=空答案（不是故障）
       seat="$(team_orphan_seat_name "$TEAM_ORPHAN_SELF_MAIN" "$nr")"
       task="$(team_orphan_record_task "$seat")";        [ -n "$task" ] || task='-'
     else
@@ -3016,7 +3016,7 @@ team_orphan_census() {
   team_orphan_ctx_init
   while IFS=$'\t' read -r pid args; do
     [ -n "$pid" ] || continue
-    team_orphan_record_for "$pid" "$args" || true
+    team_orphan_record_for "$pid" "$args" || true   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   done < <(team_orphan_candidates)
   return 0
 }
@@ -3176,12 +3176,12 @@ team_pm_identity_adopt() { # <assume_yes 0|1> → 0 = 记录已就绪；1 = 拒�
       team_dim "  要新开一场对话而不是认领：$TEAM_CLI up --fresh-pm" >&2
       return 1
     fi
-    mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || true
+    mkdir -p "$TEAM_STATE_DIR" || team_warn "adopt：建不出 state 目录 $TEAM_STATE_DIR（adopt 审计字段没落盘）"
     team_config_audit_write ok 'adopt-pm-identity' pm-launch-identity \
       "model=$TEAM_PM_SELECTED_MODEL resume_key=$TEAM_PM_RECORDED_RESUME_KEY" \
-      "model=$want_model resume_key=$want_resume" || true
+      "model=$want_model resume_key=$want_resume" || team_warn "adopt：审计行写不进 $TEAM_STATE_DIR（adopt 审计字段没落盘）"
   fi
-  mkdir -p "$TEAM_STATE_DIR" 2>/dev/null || true
+  mkdir -p "$TEAM_STATE_DIR" || team_warn "adopt：建不出 state 目录 $TEAM_STATE_DIR（后续记录可能写不进）"
   nonce="adopt-$(date +%s)-$BASHPID"
   team_pm_metadata_publish "$nonce" || { team_err 'adopt：写 PM 启动身份记录失败'; return 1; }
   TEAM_PM_IDENTITY_ADOPTED=1
@@ -3196,7 +3196,7 @@ team_pm_metadata_publish() {
   # 模板**不可证明**（selector-as-data 之类，真实启动会被 team_pm_identity_guard 拒在前头）时不报错：
   # 看作「什么都没证明交付」的空集（仍是诚实的 under-claim），因为这条 record 只服务于发布；
   # 真实启动路径根本走不到这里。
-  identity_via="$(team_launch_identity_fields pm "${TEAM_PM_CMD:-}" "$mode" 2>/dev/null)" || identity_via=''
+  identity_via="$(team_launch_identity_fields pm "${TEAM_PM_CMD:-}" "$mode")" || identity_via=''
   printf 'metadata_version=1\nproject=%s\nwindow=%s\nmodel=%s\nnonce=%s\ntime=%s\nmode=%s\nresume_key=%s\nidentity_via=%s\n' \
     "$TEAM_MAIN_ROOT" "$TEAM_PM_WINDOW" "$(team_pm_model_resolve)" "$nonce" "$(team_timestamp)" "$mode" "$(team_pm_resume_key)" "$identity_via" > "$tmp" && mv -f "$tmp" "$TEAM_STATE_DIR/pm-launch.env" || {
     team_err 'PM proof obtained but metadata publication failed；保留诊断，后续需 fresh-pm'; rm -f "$tmp"; return 1;
@@ -3204,7 +3204,7 @@ team_pm_metadata_publish() {
 }
 team_pm_identity_claim() { # P228/R6：PM 成功行的身份声明（只发布刚发布的记录里真交付了的字段）
   local delivered='' loaded=0 model="${TEAM_PM_MODEL:-}"
-  if team_pm_metadata_load 2>/dev/null; then loaded=1; delivered="${TEAM_PM_IDENTITY_VIA:-}"; model="${TEAM_PM_SELECTED_MODEL:-$model}"; fi
+  if team_pm_metadata_load 2>/dev/null; then loaded=1; delivered="${TEAM_PM_IDENTITY_VIA:-}"; model="${TEAM_PM_SELECTED_MODEL:-$model}"; fi   # 留：查不到=空答案（不是故障）
   [ "$loaded" = 1 ] || delivered='provider,model,session_id'   # 读不到记录：回退到内建 Pi 的完整交付（旧行为）
   if team_identity_field_in model "$delivered"; then printf 'model=%s\n' "$model"
   else printf 'model 未由模板交付（不当作已启动身份发布）\n'; fi
@@ -3276,7 +3276,7 @@ team_pm_bin_path() {
   if [ -z "$bin" ] && [ -n "$cmd" ]; then bin="$(team_agent_cmd_first_word pm "$cmd" pm)"; fi
   if [ -z "$bin" ]; then team_pi_bin_path; return 0; fi
   case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
-  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  p="$(command -v "$bin" | head -1)"
   if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
 }
 
@@ -3342,7 +3342,7 @@ team_pm_launch_exit_code() { # → harness 记下的 CLI 退出码（没有/不�
   local f; f="$(team_pm_launch_exit_file)"
   [ -f "$f" ] || return 0
   # 文件是 `<epoch> <code>`；只有一个字段时也认（旧的/手写的）
-  awk 'NR==1{print (NF>1 ? $2 : $1)}' "$f" 2>/dev/null | tr -dc '0-9'
+  awk 'NR==1{print (NF>1 ? $2 : $1)}' "$f" | tr -dc '0-9'
 }
 
 # 「窗口里有没有值得写进诊断的东西」：pane 是**渲染后**的屏幕，pty 输出到 tmux 屏幕之间有极短的竞态——
@@ -3370,7 +3370,7 @@ team_pm_pane_tail() { # [<重试次数>] → stdout = 窗口输出（归一化�
   local tries="${1:-12}" i=0 out=""
   team_pm_window_exists || return 0
   while :; do
-    out="$(team_tmux capture-pane -p -t "$(team_pm_target)" -S -200 2>/dev/null || true)"
+    out="$(team_tmux capture-pane -p -t "$(team_pm_target)" -S -200 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     team_text_has_content "$out" && break
     [ "$i" -ge "$tries" ] && break
     i=$((i + 1)); sleep 0.1
@@ -3388,9 +3388,9 @@ team_pm_launch_diag() { # <原因> [<渲染出的命令>] → 诊断文件路径
     printf '==== %s · PM 启动失败 ====\n' "$(team_timestamp)"
     printf 'reason : %s\n' "$reason"
     printf 'target : %s\n' "$(team_pm_target)"
-    printf 'state  : %s\n' "$(team_pm_state 2>/dev/null || echo '?')"
+    printf 'state  : %s\n' "$(team_pm_state 2>/dev/null || echo '?')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     printf 'cmd    : TEAM_PM_CMD=%s\n' "$(printf '%q' "${TEAM_PM_CMD:-}")"
-    printf 'bin    : %s\n' "$(team_pm_bin_path 2>/dev/null || echo '?')"
+    printf 'bin    : %s\n' "$(team_pm_bin_path 2>/dev/null || echo '?')"   # 留：本机可能没这项能力，按回退走
     [ -n "$rc" ] && printf 'exit   : %s（harness 记录的 CLI 退出码）\n' "$rc"
     [ -n "$cmd" ] && printf 'render : %s\n' "$cmd"
     # 窗口输出：优先用 harness **在 CLI 退出那一刻** 自己抓的那份（pm-launch-tail.txt）——
@@ -3398,8 +3398,8 @@ team_pm_launch_diag() { # <原因> [<渲染出的命令>] → 诊断文件路径
     # 「只有空白」不算抓到了（见 team_pane_tail_normalize 的注释）：这时从外面重抓（带同样的有界重试）。
     local tailf pane src
     tailf="$(team_pm_launch_tail_file)"; pane=""; src=""
-    printf 'pane   : %s（%s 字节）\n' "$tailf" "$(wc -c < "$tailf" 2>/dev/null | tr -dc '0-9' || echo 0)"
-    if [ -s "$tailf" ] && grep -q '[^[:space:]]' "$tailf" 2>/dev/null; then
+    printf 'pane   : %s（%s 字节）\n' "$tailf" "$(wc -c < "$tailf" 2>/dev/null | tr -dc '0-9' || echo 0)"   # 留：查不到=空答案（不是故障）
+    if [ -s "$tailf" ] && grep -q '[^[:space:]]' "$tailf"; then
       src="CLI 退出那一刻，harness 自抓"
       pane="$(team_pane_tail_normalize < "$tailf")"
     elif team_pm_window_exists; then
@@ -3437,9 +3437,9 @@ team_tmux_shim_dir() { printf '%s\n' "$TEAM_SKILL_DIR/scripts/shim"; }
 # 直接 command -v tmux 会解析成 shim，渲染进窗口就成递归）。找不到 → 空（不导出 TEAM_TMUX_REAL）。
 team_tmux_real_bin() {
   local self="" d c cd
-  self="$(cd -P "$(team_tmux_shim_dir)" 2>/dev/null && pwd)" || self=""
+  self="$(cd -P "$(team_tmux_shim_dir)" 2>/dev/null && pwd)" || self=""   # 留：本机可能没这项能力，按回退走
   if [ -n "${TEAM_TMUX_REAL:-}" ] && [ -x "${TEAM_TMUX_REAL:-}" ]; then
-    cd="$(cd -P "$(dirname "${TEAM_TMUX_REAL}")" 2>/dev/null && pwd)"
+    cd="$(cd -P "$(dirname "${TEAM_TMUX_REAL}")" && pwd)"
     if [ -z "$self" ] || [ "$cd" != "$self" ]; then printf '%s\n' "$TEAM_TMUX_REAL"; return 0; fi
   fi
   local IFS=':'
@@ -3447,7 +3447,7 @@ team_tmux_real_bin() {
     [ -n "$d" ] || continue
     c="$d/tmux"
     [ -x "$c" ] || continue
-    cd="$(cd -P "$d" 2>/dev/null && pwd)"
+    cd="$(cd -P "$d" && pwd)"
     if [ -n "$self" ] && [ "$cd" = "$self" ]; then continue; fi
     printf '%s\n' "$c"; return 0
   done
@@ -3459,9 +3459,9 @@ team_tmux_real_bin() {
 # 直接 `command -v pkill` 会解析成闸门入口，渲染进窗口就成递归）。找不到 → 空。
 team_signal_real_bin() {
   local self="" d c cd name
-  self="$(cd -P "$(team_tmux_shim_dir)" 2>/dev/null && pwd)" || self=""
+  self="$(cd -P "$(team_tmux_shim_dir)" 2>/dev/null && pwd)" || self=""   # 留：本机可能没这项能力，按回退走
   if [ -n "${TEAM_SIGNAL_REAL:-}" ] && [ -x "${TEAM_SIGNAL_REAL:-}" ]; then
-    cd="$(cd -P "$(dirname "${TEAM_SIGNAL_REAL}")" 2>/dev/null && pwd)"
+    cd="$(cd -P "$(dirname "${TEAM_SIGNAL_REAL}")" && pwd)"
     if [ -z "$self" ] || [ "$cd" != "$self" ]; then printf '%s\n' "$TEAM_SIGNAL_REAL"; return 0; fi
   fi
   local IFS=':'
@@ -3470,7 +3470,7 @@ team_signal_real_bin() {
       [ -n "$d" ] || continue
       c="$d/$name"
       [ -x "$c" ] || continue
-      cd="$(cd -P "$d" 2>/dev/null && pwd)"
+      cd="$(cd -P "$d" && pwd)"
       if [ -n "$self" ] && [ "$cd" = "$self" ]; then continue; fi
       printf '%s\n' "$c"; return 0
     done
@@ -3530,6 +3530,7 @@ team_pm_launch_cmd() { # <prompt_file> <spawn_file> → respawn-pane 的 shell-c
   tailfile="$(team_pm_launch_tail_file)"
   # 尾屏抓取带**有界重试**：pty 输出 → tmux 屏幕是异步的（初次 capture 可能还是一片空屏，
   # 而空白也是「有内容」的字节），所以抓到非空白才停（最多 ~1s，然后照抓一份，供诊断说明情况）。
+  # 生成脚本里的 `capture-pane … 2>/dev/null` 是有意的：pane 可能刚消失/窗口刚关（竞态），抓不到就留空。
   inner="$(printf '%s%scd %s\n( printf "%%s\\n" "$BASHPID" > %s\nexec %s )\nrc=$?\nprintf "%%s %%s\\n" "$(date +%%s)" "$rc" > %s\nif [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then _n=0; while [ "$_n" -lt 10 ]; do tmux capture-pane -p -t "$TMUX_PANE" -S -200 > %s 2>/dev/null; grep -q "[^[:space:]]" %s && break; _n=$((_n + 1)); sleep 0.1; done; fi\nexec bash' \
     "$(team_identity_env_prefix "$TEAM_MAIN_ROOT")" "$(team_tmux_shim_exports)" "$(team_squote "$TEAM_MAIN_ROOT")" "$(team_squote "$spawnfile")" "$expanded" \
     "$(team_squote "$exitfile")" "$(team_squote "$tailfile")" "$(team_squote "$tailfile")")"
@@ -3603,11 +3604,11 @@ team_pm_start() {
     running:*) team_dim "  PM 已在运行（${state#running:}）"; return 0 ;;
     idle:*)    ;;
     unknown:*)
-      local ucwd; ucwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"
+      local ucwd; ucwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
       team_warn "PM 窗口 $target 里的进程不是 PM（${state#unknown:}，cwd=$ucwd）：按 up 的语义替换它"
       team_dim "  那是你手动在跑的东西？先退出或挪到别的窗口；不想被替换就别跑 up" >&2 ;;
     foreign:*)
-      local fcwd; fcwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"
+      local fcwd; fcwd="$(team_pane_cwd "$target" 2>/dev/null || echo '?')"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
       team_err "PM 窗口 $target 被**不属于本项目**的进程占用（cwd=$fcwd）：不覆盖它"
       team_dim "  （实测踩过：smoke 残留的 dummy PM 挂着，工具却把它当本项目的 PM）" >&2
       team_dim "  处理：关掉那个窗口/改窗口名，或用 TEAM_REPLACE_FOREIGN_PM=1 显式覆盖（会杀掉它）" >&2
@@ -3645,7 +3646,7 @@ team_pm_start() {
   i=0
   while [ "$i" -lt "$wait" ]; do
     [ "${i}" -gt 0 ] && sleep 1
-    apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"
+    apid="$(team_pm_pane_agent_pid "$target" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record argv
       team_pm_metadata_publish "$pm_nonce" || {
@@ -3656,7 +3657,7 @@ team_pm_start() {
       team_pm_continuity_note   # 延续了就说怎么延续；没延续就明说 + 指出靠 docs/team/** 与 inbox 接手
       return 0
     fi
-    apid="$(team_pm_spawn_pid 2>/dev/null || true)"
+    apid="$(team_pm_spawn_pid 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     if [ -n "$apid" ]; then
       team_pm_pid_record "$apid"; team_pm_proof_record spawn
       team_pm_metadata_publish "$pm_nonce" || {
@@ -3673,7 +3674,7 @@ team_pm_start() {
   # 失败必须留下证据（M8.1 退回点 2）：先把窗口最后几行 + 渲染出的命令 + CLI 退出码写进 state/pm-launch-failed.log，
   # 再停止未提交窗口并报错；诊断在杀窗前保存，下一次启动不能把遗留进程当成功证明。
   local diag why ec
-  ec="$(team_pm_launch_exit_code 2>/dev/null || true)"
+  ec="$(team_pm_launch_exit_code 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
   if [ -n "$ec" ]; then why="窗口里的 $(team_pm_cli_name) 立刻退出了（exit code $ec）"
   else why="${wait}s 内既没看到配置的 PM 进程，也没等到我们 spawn 的 pid 写盘"; fi
   diag="$(team_pm_launch_diag "$why" "$cmd")"
@@ -3731,7 +3732,7 @@ team_pm_attempt_record() { # <evidence>
   mkdir -p "$TEAM_STATE_DIR"
   f="$(team_pm_attempts_file)"
   printf '%s %s %s\n' "$(date +%s)" "$(team_timestamp)" "${1:--}" >> "$f"
-  if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 500 ]; then
+  if [ "$(wc -l < "$f" || echo 0)" -gt 500 ]; then
     tail -n 500 "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   fi
   return 0
@@ -3755,7 +3756,7 @@ team_pi_session_dir() { # <worktree> → Pi 给这个 cwd 用的会话目录（c
 
 team_file_bytes() { # <file> → 字节数（stat；不支持时退回 wc -c）
   local f="$1" n
-  n="$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null || true)"
+  n="$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
   case "$n" in ''|*[!0-9]*) printf '0\n' ;; *) printf '%s\n' "$n" ;; esac
 }
 
@@ -3780,7 +3781,7 @@ team_session_file() { # <session-id> <worktree> → 最大的那份（没有 →
 }
 
 team_session_bytes() { # <session-id> <worktree> → 字节数（0 = 没有会话文件）
-  local f; f="$(team_session_file "${1:-}" "${2:-}" 2>/dev/null || true)"
+  local f; f="$(team_session_file "${1:-}" "${2:-}" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   if [ -n "$f" ]; then team_file_bytes "$f"; else printf '0\n'; fi
 }
 
@@ -3877,7 +3878,7 @@ team_model_window_from_pi() { # <provider/model>
           n = numof($0)
           if (n != "" && id == want_model && (want_prov == "" || prov == want_prov)) { print n; exit }
         }
-      }' "$f" 2>/dev/null || true)"
+      }' "$f" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
     if [ -n "$got" ]; then printf '%s\n' "$got"; return 0; fi
   done
   return 0
@@ -3890,7 +3891,7 @@ team_agent_session_cols() { # <agent>
   wt="${TEAM_ASSIGN[worktree]}"; model="${TEAM_ASSIGN[model]}"; sid="${TEAM_ASSIGN[sid]}"
   # P228/R6（OBS1）：模型列只发布模板真的交付了的模型（未交付 → 标出来，不当成在跑的模型）
   team_identity_delivered model || model="$model（未交付）"
-  f="$(team_session_file "$sid" "$wt" 2>/dev/null || true)"
+  f="$(team_session_file "$sid" "$wt" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   b=""; [ -n "$f" ] && b="$(team_file_bytes "$f")"
   [ -n "$b" ] || [ "${TEAM_ASSIGN[mode]}" != fresh ] || b=0
   printf '%s\t%s\t%s\t%s\t%s\n' "$model" "$([ -z "$b" ] || team_session_tokens_est "$b")" "$(team_model_window "${TEAM_ASSIGN[model]}")" "$b" "${f:-}"
@@ -3915,15 +3916,15 @@ team_session_size_text() { # <tokens> <window>
 # 输出 "avail_mb swap_free_mb swap_total_mb"
 team_mem_stats() {
   local f="${TEAM_MEMINFO_FILE:-/proc/meminfo}"
-  if [ -r "$f" ] && grep -q '^MemTotal' "$f" 2>/dev/null; then
+  if [ -r "$f" ] && grep -q '^MemTotal' "$f"; then
     awk '/^MemAvailable/{a=$2} /^MemFree/{if(a=="")a=$2} /^SwapFree/{s=$2} /^SwapTotal/{t=$2}
          END{printf "%d %d %d\n", a/1024, s/1024, t/1024}' "$f"
     return 0
   fi
   if team_have_cmd sysctl; then   # macOS
     local avail swap
-    avail="$(vm_stat 2>/dev/null | awk '/page size/ {ps=$8} /Pages free/ {gsub(/\./,"",$3); printf "%d", $3*ps/1048576}')"
-    swap="$(sysctl -n vm.swapusage 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="free"){gsub(/M/,"",$(i+2)); print $(i+2)}}')"
+    avail="$(vm_stat 2>/dev/null | awk '/page size/ {ps=$8} /Pages free/ {gsub(/\./,"",$3); printf "%d", $3*ps/1048576}')"   # 留：本机可能没这项能力，按回退走
+    swap="$(sysctl -n vm.swapusage 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="free"){gsub(/M/,"",$(i+2)); print $(i+2)}}')"   # 留：本机可能没这项能力，按回退走
     [ -n "$avail" ] && { printf '%s %s 0\n' "$avail" "${swap:-0}"; return 0; }
   fi
   if team_have_cmd free; then
@@ -3959,11 +3960,11 @@ team_swap_breakdown() {
   local d mm
   for d in /sys/block/zram*/mm_stat; do
     [ -r "$d" ] || continue
-    mm="$(awk '{for(i=1;i<=NF;i++) if ($i ~ /^mem_used/) {print $(i+1); exit}}' "$d" 2>/dev/null || true)"
-    if [ -n "$mm" ] && [ "$mm" -gt 0 ] 2>/dev/null; then zram_phys=$((zram_phys + mm / 1048576))
+    mm="$(awk '{for(i=1;i<=NF;i++) if ($i ~ /^mem_used/) {print $(i+1); exit}}' "$d")"
+    if [ -n "$mm" ] && [ "$mm" -gt 0 ]; then zram_phys=$((zram_phys + mm / 1048576))
     else
-      mm="$(awk '{print $3}' "$d" 2>/dev/null || true)"
-      [ -n "$mm" ] && [ "$mm" -gt 0 ] 2>/dev/null && zram_phys=$((zram_phys + mm / 1048576))
+      mm="$(awk '{print $3}' "$d")"
+      [ -n "$mm" ] && [ "$mm" -gt 0 ] && zram_phys=$((zram_phys + mm / 1048576))
     fi
   done
   printf '%s %s %s %s\n' "$disk_free" "$disk_total" "$zram_pct" "$zram_phys"
@@ -4020,7 +4021,7 @@ team_mem_guard() {
 team_tmp_root_default() {
   local base="${TEAM_TMP_DEFAULT_BASE:-/var/tmp}" ns
   if [ -d "$base" ] && [ -w "$base" ]; then
-    ns="$(team_project_ns 2>/dev/null || true)"
+    ns="$(team_project_ns)"
     [ -n "$ns" ] || ns="nosig-00000000"
     printf '%s/teamsmith-%s\n' "${base%/}" "$ns"
   else
@@ -4098,7 +4099,7 @@ team_tmp_root_ancestor_note() { # <path> → "" 或「（尚未创建，按 <祖
   local p="${1:-}" a
   [ -n "$p" ] || return 0
   [ -e "$p" ] && return 0
-  a="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"
+  a="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   [ -n "$a" ] || return 0
   printf '（尚未创建，按 %s 的文件系统判）' "$a"
 }
@@ -4134,7 +4135,7 @@ team_tmp_root_prepare() {
   p="$(team_tmp_root)" || return 1
   if [ "$src" = "default" ]; then
     [ -d "$p" ] && { [ -w "$p" ] && return 0; }
-    if mkdir -p -m 700 -- "$p" 2>/dev/null && [ -w "$p" ]; then
+    if mkdir -p -m 700 -- "$p" 2>/dev/null && [ -w "$p" ]; then   # 留：失败由紧随其后的 team_err 具名报告（这里只免掉重复噪音）
       printf '临时根目录已创建：%s（source=default，0700）\n' "$p" >&2
       return 0
     fi
@@ -4204,15 +4205,15 @@ team_disk_stats() { # <path> → "total_kb<TAB>avail_kb<TAB>itotal<TAB>ifree<TAB
     return 0
   fi
   local k i t a it iff mnt ap
-  k="$(df -P -k "$p" 2>/dev/null)" || k=""
+  k="$(df -P -k "$p" 2>/dev/null)" || k=""   # 留：查不到=空答案（不是故障）
   if [ -z "$k" ]; then
     # P309：未创建的路径（默认腿的根第一次用之前）按**最近的存在祖先**读 —— 同一个文件系统、只读、不创建。
     # 夹具表那条腿不走这里：表按**给定的路径**做最长前缀匹配（夹具断言的就是它写的那一行）。
-    ap="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"
-    [ -n "$ap" ] && [ "$ap" != "$p" ] && k="$(df -P -k "$ap" 2>/dev/null)" || k=""
+    ap="$(team_tmp_root_stat_path "$p" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
+    [ -n "$ap" ] && [ "$ap" != "$p" ] && k="$(df -P -k "$ap" 2>/dev/null)" || k=""   # 留：查不到=空答案（不是故障）
   fi
   [ -n "$k" ] || { printf -- '-\t-\t-\t-\t-\n'; return 0; }
-  i="$(df -P -i "$p" 2>/dev/null)" || i=""
+  i="$(df -P -i "$p" 2>/dev/null)" || i=""   # 留：查不到=空答案（不是故障）
   t="$(printf '%s\n' "$k" | awk 'NR==2{print $2}')"
   a="$(printf '%s\n' "$k" | awk 'NR==2{print $4}')"
   mnt="$(printf '%s\n' "$k" | awk 'NR==2{print $6}')"
@@ -4256,14 +4257,14 @@ team_disk_reading_text() { # <total_kb> <avail_kb> <itotal> <ifree>
 # 这条路径在读数里的身份（派单腿只判这两类路径；其余按工作树处理）。P309 起比较的是**解析出的**根。
 team_disk_label() { # <path> → 临时根 / 工作树
   local p="$1" tmp
-  tmp="$(team_tmp_root 2>/dev/null || true)"
+  tmp="$(team_tmp_root 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   if [ -n "$tmp" ] && [ "$p" = "$tmp" ]; then printf '临时根'; else printf '工作树'; fi
 }
 
 # 拒绝时的修法（D6：归属有据的回收才是修法 —— 临时根走 tmp-hygiene 的归属证明，工作树只腾自己的路径）
 team_disk_remedy() { # <path> → 一行修法
   local p="$1" tmp skill_dir="${TEAM_SKILL_DIR:-skills/teamsmith}"
-  tmp="$(team_tmp_root 2>/dev/null || true)"
+  tmp="$(team_tmp_root 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   if [ -n "$tmp" ] && [ "$p" = "$tmp" ]; then
     printf 'bash %s/tests/tmp-hygiene.sh --status 看清单，再 --sweep 回收（只回收归属可证的根）' "$skill_dir"
   else
@@ -4333,7 +4334,7 @@ team_capacity_line() {
   local zram_note=""
   [ "$zram_pct" -gt 0 ] && zram_note="，zram 用 ${zram_pct}%${zram_phys:+/物理 ${zram_phys}MB}"
   local -a paths=("$@")
-  [ "${#paths[@]}" -gt 0 ] || paths=("$(team_tmp_root 2>/dev/null || true)" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")
+  [ "${#paths[@]}" -gt 0 ] || paths=("$(team_tmp_root 2>/dev/null || true)" "${TEAM_MAIN_ROOT:-$PWD}/${TEAM_WORKTREES_DIR:-.worktrees}")   # 留：查不到=空答案（不是故障）
   local disk="" p t a it iff id seen=" " srcnote note
   for p in "${paths[@]}"; do
     [ -n "$p" ] || continue
@@ -4428,7 +4429,7 @@ team_report_is_task() { # <file> <id>
         # 语义对齐说明：原 grep 模式里的 $id 未转义（regex 元字符被当通配符）—— id 只可能来自
         # 「已知任务前缀」（字母数字与 . - _），转义后与旧行为等价，且更严（通配误配的旧歪路被堵死）。
         local _first="" _esc
-        IFS= read -r _first < "$f" 2>/dev/null || true
+        IFS= read -r _first < "$f" 2>/dev/null || true   # 留：查不到=空答案（不是故障）
         if [ -n "${_TEAM_ID_ESC[$id]+x}" ]; then _esc="${_TEAM_ID_ESC[$id]}"
         else _esc="$(team_regex_escape "$id")"; _TEAM_ID_ESC[$id]="$_esc"; fi
         if [[ "$_first" =~ ^#[[:space:]]+${_esc}([[:space:]]|·|:|$) ]]; then
@@ -4529,7 +4530,7 @@ team_pending_counts() { # → "inbox reports todo wip review blocked stopped mee
   # 未读会议轮次（D2）：函数只在完整 CLI 上下文里定义（只 source common.sh 的夹具退回 0，待办形状不变）
   local meetings=0
   if command -v team_meetings_unread_count >/dev/null 2>&1; then
-    meetings="$(team_meetings_unread_count 2>/dev/null || true)"
+    meetings="$(team_meetings_unread_count 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
     case "$meetings" in ''|*[!0-9]*) meetings=0 ;; esac
   fi
   printf '%s %s %s %s %s %s %s %s\n' "$inbox" "$(team_reports_pending)" "$todo" "$wip" "$review" "$blocked" "$stopped" "$meetings"
@@ -4552,11 +4553,11 @@ team_pending_text() { # <counts> → 人类可读摘要（空字符串 = 无待�
     # common.sh 的旧夹具）或读不到任何死因 → 退回裸计数（死因永远不许把巡逻弄挂）。
     local deaths=""
     if command -v team_stopped_deaths_text >/dev/null 2>&1; then
-      deaths="$(team_stopped_deaths_text 2>/dev/null || true)"
+      deaths="$(team_stopped_deaths_text 2>/dev/null || true)"   # 留：本机可能没这项能力，按回退走
     fi
     parts+=("停了的 agent ${stopped}${deaths}")
   fi
-  [ "${meetings:-0}" -gt 0 ] 2>/dev/null && parts+=("未读会议 ${meetings}")
+  [ "${meetings:-0}" -gt 0 ] && parts+=("未读会议 ${meetings}")
   [ "${#parts[@]}" -eq 0 ] && return 0
   local out="" p
   for p in "${parts[@]}"; do out="${out}${out:+ · }$p"; done
@@ -4577,7 +4578,7 @@ team_pending_nudge_key() { # <counts|空=现读> → "pending:v1:<name,…>"（�
   local values=("$inbox" "$reports" "$todo" "$wip" "$review" "$blocked" "$stopped" "${meetings:-0}")
   local out="" i
   for i in 0 1 2 3 4 5 6 7; do
-    if [ "${values[$i]:-0}" -gt 0 ] 2>/dev/null; then out="${out:+$out,}${names[$i]}"; fi
+    if [ "${values[$i]:-0}" -gt 0 ]; then out="${out:+$out,}${names[$i]}"; fi
   done
   printf 'pending:v1:%s\n' "${out:-none}"
 }
@@ -4612,7 +4613,7 @@ team_nudge() { # <摘要文本> [<叫醒键>]
   # 叫醒语也走投递守卫（delivery-guard）：PM 输入框里有草稿时入队，不粘字。
   # nudges.log / watchdog.nudge 的 durable 记录（state 文件名别名期不动，D22）已经在上面写完了，所以排队不会丢消息。
   if team_pm_alive; then
-    team_send_guarded "$(team_pm_target)" "$msg" nudge --from pulse >/dev/null 2>&1 || true
+    team_send_guarded "$(team_pm_target)" "$msg" nudge --from pulse >/dev/null 2>&1 || team_warn "叫醒语投递失败（PM 是活的，但这条路没走通）：$TEAM_CLI outbox list 看队列（nudges.log 已记）"
     [ "${TEAM_SEND_OUTCOME:-}" = "queued" ] && team_dim "  PM 输入框里有草稿：叫醒语已入队（$TEAM_CLI outbox list），清空后自动投递"
   fi
   return 0
@@ -4652,12 +4653,12 @@ team_assignment_running_proof() { # A complete *past* record alone cannot identi
       TEAM_ASSIGN_DIAGNOSTIC='interrupted pending launch/assignment nonce mismatch'; return 1
     fi
   fi
-  if ! IFS=' ' read -r nonce pid rest < "$TEAM_STATE_DIR/dispatch-$seat.spawn" 2>/dev/null ||
+  if ! IFS=' ' read -r nonce pid rest < "$TEAM_STATE_DIR/dispatch-$seat.spawn" 2>/dev/null ||   # 留：查不到=空答案（不是故障）
      [ "$nonce" != "${TEAM_ASSIGN[launch_nonce]}" ] || ! [[ "$pid" =~ ^[0-9]+$ ]] || [ "$pid" -le 1 ]; then
     TEAM_ASSIGN_DIAGNOSTIC='current launch proof missing/assignment nonce mismatch'; return 1
   fi
-  read -r pane rest <<< "$(team_pane_facts "$TEAM_SESSION:${TEAM_ASSIGN[window]}" 2>/dev/null || true)"
-  if [ "$pane" != "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+  read -r pane rest <<< "$(team_pane_facts "$TEAM_SESSION:${TEAM_ASSIGN[window]}" 2>/dev/null || true)"   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
+  if [ "$pane" != "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then   # 留：进程/窗口可能刚消失（竞态），调用方按空值处理
     TEAM_ASSIGN_DIAGNOSTIC='current pane PID does not match committed launch proof'; return 1
   fi
 }
@@ -4819,7 +4820,7 @@ team_board_has() { # <id> → 0=表里有这一行
       return
     fi
   fi
-  [ -n "$(team_board_row_direct "$1" 2>/dev/null || true)" ]
+  [ -n "$(team_board_row_direct "$1" 2>/dev/null || true)" ]   # 留：查不到=空答案（不是故障）
 }
 
 # 只写一列（不做任何校验）。未知 id 时**不写文件**并返回 1 —— F29 之前 awk 永远「成功」，
@@ -4863,7 +4864,7 @@ team_review_verdict() { # <ID> → PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN|none|missin
   fi
   local f="$TEAM_DOCS_ABS/reviews/$1.md" v=""
   [ -f "$f" ] || { printf 'missing\n'; return 0; }
-  v="$(grep -m1 -oE '判定: \*\*[A-Za-z]+\*\*' "$f" 2>/dev/null | tr -d '*' | sed 's/^判定: //' || true)"
+  v="$(grep -m1 -oE '判定: \*\*[A-Za-z]+\*\*' "$f" | tr -d '*' | sed 's/^判定: //' || true)"   # 留：没有判定行=空（grep 的 1 不是故障）
   printf '%s\n' "${v:-none}"
   return 0
 }
@@ -4894,7 +4895,7 @@ team_brief_field() { # <任务书> <字段名> → 值（没有该字段 → 空
   [ -f "$f" ] || return 0
   awk -v key="$key" '$0 ~ ("^[[:space:]]*" key ":") {
       sub("^[[:space:]]*" key ":[[:space:]]*", ""); sub(/[[:space:]]*#.*$/, "");
-      gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$f" 2>/dev/null || true
+      gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$f" 2>/dev/null || true   # 留：查不到=空答案（不是故障）
   return 0
 }
 
@@ -4949,7 +4950,7 @@ _team_phase_cache_load() {
       if (v!="explore" && v!="propose" && v!="apply" && v!="verify" && v!="archive") v=""
       print id "\x1f" v "\x1f" exact
       nextfile
-    }' "$d"/*.md 2>/dev/null || true)
+    }' "$d"/*.md 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   return 0
 }
 
@@ -4988,7 +4989,7 @@ team_brief_field_raw() { # <任务书> <字段名> → 每行一个匹配行的�
   awk -v key="$key" '$0 ~ ("^[[:space:]]*" key ":") {
       sub("^[[:space:]]*" key ":[[:space:]]*", "");
       sub(/[[:space:]]+#.*$/, "");
-      gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "$f" 2>/dev/null || true
+      gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' "$f" 2>/dev/null || true   # 留：查不到=空答案（不是故障）
   return 0
 }
 
@@ -5006,7 +5007,7 @@ team_task_token_ok() { # <值> <前缀（报错用）> → 0=形状合法
 team_task_change_value() { # <任务书>
   local f="$1" vals n val lead rest why
   vals="$(team_brief_field_raw "$f" change)"
-  n="$(printf '%s\n' "$vals" | grep -c . || true)"
+  n="$(printf '%s\n' "$vals" | grep -c . || true)"   # 留：无匹配=0，负数也是答案
   [ "${n:-0}" -eq 0 ] && { printf -- '-\n'; return 0; }
   if [ "$n" -gt 1 ]; then
     printf 'change: 有 %s 行（%s）—— 只接受一个 change id（[A-Za-z0-9][A-Za-z0-9._-]*）或 `-`；一个任务最多属于一个 change，只留一行\n' \
@@ -5035,7 +5036,7 @@ team_task_change_value() { # <任务书>
 team_task_deltas_suggestion() { # <任务书> → 一行 `<cap>[, <cap>…]` 或 `-`
   local f="$1" vals val rest tok out="" all=1
   vals="$(team_brief_field_raw "$f" deltas)"
-  if [ "$(printf '%s\n' "$vals" | grep -c . || true)" != "1" ]; then printf '%s\n' "-"; return 0; fi
+  if [ "$(printf '%s\n' "$vals" | grep -c . || true)" != "1" ]; then printf '%s\n' "-"; return 0; fi   # 留：无匹配=0，负数也是答案
   val="$vals"
   [ "$val" = "-" ] && { printf '%s\n' "-"; return 0; }
   rest="$val"
@@ -5055,7 +5056,7 @@ team_task_deltas_suggestion() { # <任务书> → 一行 `<cap>[, <cap>…]` 或
 team_task_deltas() { # <任务书>
   local f="$1" vals n val rest tok why
   vals="$(team_brief_field_raw "$f" deltas)"
-  n="$(printf '%s\n' "$vals" | grep -c . || true)"
+  n="$(printf '%s\n' "$vals" | grep -c . || true)"   # 留：无匹配=0，负数也是答案
   [ "${n:-0}" -eq 0 ] && { printf '*\n'; return 0; }
   if [ "$n" -gt 1 ]; then
     printf 'deltas: 有 %s 行（%s）—— 只留一行，逗号分隔 capability\n' \
@@ -5167,8 +5168,8 @@ team_task_anchor() { # <任务书>
 team_proposal_verdict() { # <change>
   local f="$TEAM_DOCS_ABS/reviews/$1-proposal.md" v
   [ -f "$f" ] || { printf 'missing\n'; return 0; }
-  v="$(grep -m1 -oE '(verdict|判定): \*\*[A-Za-z_-]+\*\*' "$f" 2>/dev/null | tr -d '*' \
-       | sed -E 's/^(verdict|判定): //' | tr '[:lower:]' '[:upper:]' || true)"
+  v="$(grep -m1 -oE '(verdict|判定): \*\*[A-Za-z_-]+\*\*' "$f" | tr -d '*' \
+       | sed -E 's/^(verdict|判定): //' | tr '[:lower:]' '[:upper:]' || true)"   # 留：无匹配=0，负数也是答案
   printf '%s\n' "${v:-none}"
   return 0
 }
@@ -5190,7 +5191,7 @@ team_committed_report() {
     case "$base" in *-closure*|*-summary*|*-milestone*) continue ;; esac
     printf '%s\n' "$p"
     return 0
-  done < <(git -C "$TEAM_MAIN_ROOT" ls-tree -r --name-only "$rev" -- "$TEAM_DOCS_DIR/reports/" 2>/dev/null || true)
+  done < <(git -C "$TEAM_MAIN_ROOT" ls-tree -r --name-only "$rev" -- "$TEAM_DOCS_DIR/reports/" 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   return 1
 }
 
@@ -5317,24 +5318,24 @@ team_branch_content_merge_state() { # <分支> [<保护分支>]
   if ! git -C "$root" rev-parse --verify --quiet "$br^{commit}" >/dev/null 2>&1; then
     printf 'nobranch\t分支 %s 解析不到 commit\n' "$br"; return 0
   fi
-  base="$(git -C "$root" merge-base "$into" "$br" 2>/dev/null || true)"
+  base="$(git -C "$root" merge-base "$into" "$br" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   if [ -z "$base" ]; then
     printf 'unmerged\t分支 %s 与 %s 没有共同祖先（分叉点不存在）\n' "$br" "$into"; return 0
   fi
-  btip="$(git -C "$root" rev-parse --short "$br" 2>/dev/null || true)"
-  ptip="$(git -C "$root" rev-parse --short "$into" 2>/dev/null || true)"
+  btip="$(git -C "$root" rev-parse --short "$br" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
+  ptip="$(git -C "$root" rev-parse --short "$into" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   # --no-renames：改名的老路径也要留在「改过的路径」集合里，逐路径比较才不会漏（默认的改名检测会把它藏起来）
   while IFS= read -r -d '' p; do [ -n "$p" ] && changed+=("$p"); done \
-    < <(git -C "$root" diff --name-only -z --no-renames "$base" "$br" 2>/dev/null || true)
+    < <(git -C "$root" diff --name-only -z --no-renames "$base" "$br" 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   n_all="${#changed[@]}"
   if [ "$n_all" -eq 0 ]; then
     printf 'empty\t分支 %s 相对分叉点 %s 没有任何改动（%s..分支 %s 个提交）—— 没东西可并，也绝不算已合并\n' \
-      "$br" "${base:0:9}" "$into" "$(git -C "$root" rev-list --count "$into..$br" 2>/dev/null || printf '?')"
+      "$br" "${base:0:9}" "$into" "$(git -C "$root" rev-list --count "$into..$br" 2>/dev/null || printf '?')"   # 留：查不到=空答案（不是故障）
     return 0
   fi
   for p in "${changed[@]}"; do spec+=(":(literal)$p"); done
   while IFS= read -r -d '' p; do [ -n "$p" ] && missing+=("$p"); done \
-    < <(git -C "$root" diff --name-only -z --no-renames "$br" "$into" -- "${spec[@]}" 2>/dev/null || true)
+    < <(git -C "$root" diff --name-only -z --no-renames "$br" "$into" -- "${spec[@]}" 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   n_diff="${#missing[@]}"
   if [ "$n_diff" -eq 0 ]; then
     printf 'merged\t分支改过的 %s 条路径，%s 现在的内容就是分支那一版\n' "$n_all" "$into"
@@ -5373,12 +5374,12 @@ team_done_evidence() { # <ID> [<content_merge>] → 0=有证据（stdout 一行�
     none)    detail="存在，但没有「判定: **…**」这一行（不能当作已复验的证据）" ;;
     *)       detail="存在但判定是 $verdict（FAIL/TIMEOUT 不算证据）" ;;
   esac
-  branch="$(team_resolve_branch "$id" "" 2>/dev/null || true)"
+  branch="$(team_resolve_branch "$id" "" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   tip=""
   if [ -n "$branch" ]; then
-    tip="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"
+    tip="$(git -C "$TEAM_MAIN_ROOT" rev-parse --verify --quiet "$branch^{commit}" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   fi
-  if [ -n "$tip" ] && git -C "$TEAM_MAIN_ROOT" merge-base --is-ancestor "$tip" "$TEAM_PROTECTED_BRANCH" 2>/dev/null; then
+  if [ -n "$tip" ] && git -C "$TEAM_MAIN_ROOT" merge-base --is-ancestor "$tip" "$TEAM_PROTECTED_BRANCH" 2>/dev/null; then   # 留：查不到=空答案（不是故障）
     # M9.6：祖先还不够 —— 刚建出来、一个提交都没有的分支 tip 同样是祖先（git 分不出「合并了」和「没动过」）。
     # 这条路线再要求分支的提交里有一份报告：报告是交付物，空分支交不出来。
     if rep="$(team_committed_report "$id" "$tip")"; then
@@ -5446,7 +5447,7 @@ team_task_open_reason() { # <ID> [<content_merge>] → 0=已结束 / 1=还没结
   case "$st" in
     done|closed|dropped) printf '看板状态 %s\n' "$st"; return 0 ;;
   esac
-  if ev="$(team_done_evidence "$id" "${2:-0}" 2>/dev/null)"; then printf '%s\n' "$ev"; return 0; fi
+  if ev="$(team_done_evidence "$id" "${2:-0}" 2>/dev/null)"; then printf '%s\n' "$ev"; return 0; fi   # 留：查不到=空答案（不是故障）
   # 没结束：把 team_done_evidence 的明细（每行 "  - …"）压成一行 —— 不另写一套判据，免得两处漂移
   detail="$(printf '%s\n' "$ev" | sed -n 's/^  - /；/p' | tr -d '\n')"
   printf '看板状态 %s%s\n' "${st:-（BOARD 里没有这一行）}" "${detail:-（没有交付证据）}"
@@ -5481,7 +5482,7 @@ team_change_tasks() { # <change id> → 每行 "<ID>\t<phase>\t<agent>\t<brief �
       else if (key == "agent")         { if (agent == "") agent = v }
       else if (key == "change")        { nchg++; chg = v }
     }
-    END { flush() }' "$dir"/*.md 2>/dev/null || true
+    END { flush() }' "$dir"/*.md 2>/dev/null || true   # 留：查不到=空答案（不是故障）
 }
 
 # 未结束的任务（判据 = team_task_open_reason，与 done 闸门/叠任务守卫同源，不另立一套）
@@ -5544,7 +5545,7 @@ team_change_checklist_blockers() { # <change id> → 0=没有未勾项 / 1=有�
     if [ "${#title}" -gt 60 ]; then title="${title:0:60}…"; fi
     n=$((n + 1))
     if [ "$n" -le 3 ]; then out="${out}${out:+ · }tasks.md:${no}「${title}」"; fi
-  done < <(grep -nE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\][[:space:]]*' "$f" 2>/dev/null || true)
+  done < <(grep -nE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\][[:space:]]*' "$f" 2>/dev/null || true)   # 留：查不到=空答案（不是故障）
   [ "$n" -gt 0 ] || return 0
   [ "$n" -gt 3 ] && out="${out} · 另有 $((n - 3)) 项"
   printf 'checklist · %s 项未勾 · %s\n' "$n" "$out"
@@ -5556,7 +5557,7 @@ team_change_checklist_blockers() { # <change id> → 0=没有未勾项 / 1=有�
 team_change_readiness() { # <change id> [<排除的任务 id>（归档任务自己）]
   local id="$1" skip="${2:-}" rows n=0 rc=0
   rows="$(team_change_tasks "$id")"
-  [ -n "$rows" ] && n="$(printf '%s\n' "$rows" | grep -c . || true)"
+  [ -n "$rows" ] && n="$(printf '%s\n' "$rows" | grep -c . || true)"   # 留：无匹配=0，负数也是答案
   if [ "${n:-0}" -eq 0 ]; then
     printf '没有任务指向 change %s（就绪 = 至少一个任务，且除归档任务自己外全部结束）\n' "$id"
     return 1
@@ -5643,7 +5644,7 @@ team_task_evidence_line() { # <ID> [<分支>]
   phase="$(team_task_phase "$id")"
   change="$(team_task_change "$id")"
   if [ -n "$phase" ]; then
-    if pev="$(team_done_phase_evidence "$id" "$phase" "$change" 2>/dev/null)"; then
+    if pev="$(team_done_phase_evidence "$id" "$phase" "$change" 2>/dev/null)"; then   # 留：查不到=空答案（不是故障）
       printf '%s\n' "$pev"; return 0
     fi
   fi
@@ -5754,7 +5755,7 @@ team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
   if team_board_has "$1"; then
     if [ "$allow_dup" != "1" ]; then
       local prev pst ptitle
-      prev="$(team_board_row "$1" 2>/dev/null || true)"
+      prev="$(team_board_row "$1" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
       pst="$(team_board_field "$prev" status)"
       ptitle="$(team_board_field "$prev" task)"
       team_err "BOARD 里已经有 $1（状态 ${pst:-?} · 「${ptitle}」）：没有改动"
@@ -5794,7 +5795,7 @@ team_board_add() { # <id> <title> <agent> <branch> <deps> [allow-dup:0|1]
   team_scan_invalidate board   # M50：写完再读（同进程）必须读到新行
   # 显式允许的重复：审计里留一条（谁在什么时候往同一个 ID 加了第二行、当时几行）
   if [ "$dup_prev" = "1" ]; then
-    local dupline; dupline="$(team_board_duplicate_ids | grep -F "$1 ×" | head -1 || true)"
+    local dupline; dupline="$(team_board_duplicate_ids | grep -F "$1 ×" | head -1 || true)"   # 留：无匹配=0，负数也是答案
     team_wlog "board add $1 --allow-dup：显式新增同 ID 行（${dupline:-同 ID 多行}；标题「$2」）"
   fi
 }
@@ -5808,7 +5809,7 @@ team_render() { # <template-file> [KEY=VALUE ...]
   # 所以这里显式关掉它，替换完再恢复。
   local tmpl="$1"; shift
   local out kv k v had_pr=0
-  if shopt -q patsub_replacement 2>/dev/null; then had_pr=1; shopt -u patsub_replacement; fi
+  if shopt -q patsub_replacement 2>/dev/null; then had_pr=1; shopt -u patsub_replacement; fi   # 留：本机可能没这项能力，按回退走
   out="$(cat "$tmpl")"
   for kv in "$@"; do
     k="${kv%%=*}"; v="${kv#*=}"
@@ -5956,7 +5957,7 @@ team__board_status() { # <id> → _R = 状态列（M50 进程内变体）
     fi
   fi
   local row
-  row="$(team_board_row_direct "$1" 2>/dev/null || true)"
+  row="$(team_board_row_direct "$1" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   if [ -n "$row" ]; then _R="$(team_board_field "$row" status)"; else _R=""; fi
   return 0
 }
@@ -6297,7 +6298,7 @@ team_agent_cmd_first_word() { # <launch|notify> <模板> [<agent>]
 team_pi_bin_path() {
   local bin="${TEAM_PI_BIN:-pi}" p
   case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
-  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  p="$(command -v "$bin" | head -1)"
   if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
 }
 
@@ -6308,7 +6309,7 @@ team_agent_bin_path() { # → 绝对路径（在 PATH 里）或原样首词
   if [ -z "$bin" ] && [ -n "$cmd" ]; then bin="$(team_agent_cmd_first_word launch "$cmd")"; fi
   if [ -z "$bin" ]; then team_pi_bin_path; return 0; fi
   case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
-  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  p="$(command -v "$bin" | head -1)"
   if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
 }
 
@@ -6324,9 +6325,9 @@ team_agent_bin_path() { # → 绝对路径（在 PATH 里）或原样首词
 team_magic_context_version() {
   local settings="${TEAM_PI_SETTINGS_FILE:-$HOME/.pi/agent/settings.json}" pkg
   [ -f "$settings" ] || return 0
-  grep -q 'pi-magic-context' "$settings" 2>/dev/null || return 0
+  grep -q 'pi-magic-context' "$settings" || return 0
   pkg="$(dirname "$settings")/npm/node_modules/@cortexkit/pi-magic-context/package.json"
-  sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pkg" 2>/dev/null | head -1
+  sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pkg" 2>/dev/null | head -1   # 留：本机可能没这项能力，按回退走
   # M26 实测踩到：包目录不存在时上面这条管道返回 sed 的退出码 2，而 CLI 是 set -euo pipefail ——
   # `mc_ver="$(team_magic_context_version)"` 会把整个 doctor 从表中间掐断（输出停在那行、rc=2）。
   # 这个函数的契约就是「检测不到 → 空」，补上 return 0 兑现它。
@@ -6351,7 +6352,8 @@ team_plugin_list() { # → 每行「包名<TAB>级别」；空 = 这个项目没
   while IFS=$'\t' read -r f lvl; do
     [ -f "$f" ] || continue
     # settings.json 的 packages 数组：先压平成一行，再取方括号里的条目（不引入 jq / python）
-    printf '%s' "$(tr -d '\n' < "$f" 2>/dev/null || true)" \
+    # 留：文件刚判过 -f，读失败=空（不让 set -e 掐断 doctor）
+    printf '%s' "$(tr -d '\n' < "$f" || true)" \
       | sed -n 's/.*"packages"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
       | tr ',' '\n' | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p' \
       | while IFS= read -r p || [ -n "$p" ]; do   # `|| [ -n "$p" ]`：最后一行没有结尾换行时 read 会返回非 0
@@ -6366,7 +6368,7 @@ team_plugin_list() { # → 每行「包名<TAB>级别」；空 = 这个项目没
 team_openspec_bin_path() {
   local bin="${TEAM_OPENSPEC_BIN:-openspec}" p
   case "$bin" in /*) printf '%s\n' "$bin"; return 0 ;; esac
-  p="$(command -v "$bin" 2>/dev/null | head -1)"
+  p="$(command -v "$bin" | head -1)"
   if [ -n "$p" ]; then printf '%s\n' "$p"; else printf '%s\n' "$bin"; fi
 }
 
