@@ -640,6 +640,16 @@ if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
     exit "$SMOKE_LOCK_RC"
   fi
 fi
+_smoke_lock_drop_run_record() { # 只删**自己那条**登记（登记的主人与它的生死必须同一刻起算，见下面 P339 注释）
+  [ "${SMOKE_LOCK_RECORD:-0}" = "1" ] || return 0
+  local t="${SMOKE_LOCK_RECORD_TARGET:-${SMOKE_LOCK:-/nonexistent}}"
+  # 两处都试：记录主场（伴生锁边上）与发布路径边上（旧式持有者标记那条路）。收尾这一下必须无条件
+  # 生效：被杀/中断的子孙如果只清了其中一处，留下的那条会让「登记随运行退出消失」变假（P339 的现场
+  # 就是其中之一：TERM 落在 trap 装好之前，两条都没人删）。
+  gate_lock_remove_run "$t" "$$"
+  if [ "$t" != "${SMOKE_LOCK:-/nonexistent}" ]; then gate_lock_remove_run "${SMOKE_LOCK:-/nonexistent}" "$$"; fi
+  return 0
+}
 if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
   # P281：持有者记录只由**真的持有 flock 的那个进程**写、也只有它删（嵌套运行不得覆写、不得删）；
   # 每个参与的运行登记自己的一条 <lock>.runs/<pid>.run，退出时删自己那条。**opt-out 的运行也登记**
@@ -680,11 +690,16 @@ if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
     # 身份从持有者记录里读（P0 写的）——不存在「自述持有者」的问题：P0 真的握着 fd 8/9。
     :
   fi
+  # P339：登记的**生命周期**从它「可见」的那一刻起就归本进程。原来 EXIT trap（cleanup）装在这一段之后
+  # 约 700 行处（临时根、指纹、段落守卫都在中间），TERM/INT 落在这段前导里，那条登记就再没人删 ——
+  # 外面看到的正是「§34b⑫ 时红时绿」：同一个现场只改「什么时候发 TERM」就 5/5 留下 vs 5/5 消失。
+  # 所以先武装一个只删自己那条的最小 trap，cleanup 装好后接手（它调同一个函数，幂等）。
+  SMOKE_LOCK_RECORD=1
+  trap '_smoke_lock_drop_run_record' EXIT
   gate_lock_register_run "$SMOKE_LOCK_RECORD_TARGET" "$$" "$SMOKE_LOCK_KIND" smoke.sh "$SMOKE_LOCK_SEAT" "$SMOKE_LOCK_WT" \
     "$SMOKE_LOCK_STARTED" "$SMOKE_LOCK_EXP" "$SMOKE_LOCK_BND" "$SMOKE_LOCK_SECS" "${SMOKE_LOCK_NO_LOCK:-0}" \
     "${SMOKE_LOCK_ANCESTOR:--}" "$(section_guard_heartbeat_path "$$")" \
     "${SMOKE_LOCK_IDENTITY:--}" "${SMOKE_LOCK_DEV_INO:--}"
-  SMOKE_LOCK_RECORD=1
   [ "${SMOKE_LOCK_QUEUED:-0}" = "1" ] && printf '轮到本套了（排过队）\n'
   # P66 自检出口：排队守卫的自检需要一个**真的排到队、然后按给定退出码结束**的子进程 —— 否则它
   # 只能跑完整套门禁（递归，而且每次门禁多跑几分钟）。只在已经是队列子进程（wrapped）且显式给了
@@ -693,6 +708,9 @@ if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
     ''|*[!0-9]*) ;;
     *)
       if [ "${TEAM_SMOKE_FIXTURE:-0}" = "1" ]; then
+        # P339：这个出口**故意**把登记留下（§34b② 要读「顶层运行也在 .runs/ 登记自己那条」）——
+        # 与队列父进程的 SMOKE_LOCK_KEEP_RECORD=1 是同一个决定，所以在这里把它交给「无人收尾」。
+        SMOKE_LOCK_RECORD=0
         printf '自检出口：本进程作为队列子进程到此为止（SMOKE_LOCK_SELFTEST_CHILD=%s）\n' "$SMOKE_LOCK_SELFTEST_CHILD"
         exit "$SMOKE_LOCK_SELFTEST_CHILD"
       fi
@@ -1376,14 +1394,11 @@ cleanup() {
     esac
   fi
   # P281：只删**自己写的那一条**；持有者记录只有真的持有 flock 的那个进程才删（嵌套运行不得删别人的；
-  # F4：自述持有者但没写成的那一个也不许删）。
+  # F4：自述持有者但没写成的那一个也不许删）。P339：登记本身由**登记可见时武装的那个 trap** 已经删过
+  # 一遍（`_smoke_lock_drop_run_record`，两处都试），这里调同一个函数（幂等），只额外收目录与持有者记录。
   if [ "${SMOKE_LOCK_RECORD:-0}" = "1" ]; then
     local _lrt="${SMOKE_LOCK_RECORD_TARGET:-${SMOKE_LOCK:-/nonexistent}}"
-    # 只删**自己 pid 的那条**（记录里别人的登记绝不碰）——两处都试：记录主场（伴生锁边上）与
-    # 发布路径边上。收尾这一下必须无条件生效：被杀/中断的子孙如果只清了其中一处，留下的那条会
-    # 让「登记随运行退出消失」的判据变假（实测：选段副本被 TERM 时漏过一条）。
-    gate_lock_remove_run "$_lrt" "$$"
-    if [ "$_lrt" != "${SMOKE_LOCK:-}" ]; then gate_lock_remove_run "${SMOKE_LOCK:-/nonexistent}" "$$"; fi
+    _smoke_lock_drop_run_record
     [ "${SMOKE_LOCK_HOLDER_WRITTEN:-0}" = "1" ] && gate_lock_remove_holder "$_lrt"
     rmdir "$_lrt.runs" 2>/dev/null || true
     rmdir "${SMOKE_LOCK:-/nonexistent}.runs" 2>/dev/null || true
@@ -16950,8 +16965,11 @@ if [ -n "$P281NL_REC" ]; then
   kill -TERM "$(gate_lock_record_get "$P281NL_REC" pid)" 2>/dev/null || true
 fi
 wait "$P281NL_JOB" 2>/dev/null || true
+# P339：确定性的时点就是上面这一句 —— `wait` 返回 = 那个登记它的进程已经被回收，它的 EXIT trap 在退出
+# 之前删掉了登记。所以这里**不是**等它「慢慢清理」：留在下面的只是有界的容差（rm 与 ls 之间的文件系统
+# 抖动，5s），而不是 300s 的「再等等看」。原来的 300s 只是把这条例外红拖成五分钟、把形状藏起来。
 P281NL_GONE=0
-for _i in $(seq 1 1500); do
+for _i in $(seq 1 25); do
   [ -z "$(ls -A "$(gate_lock_companion_path "$P281_NLLOCK").runs"/*.run 2>/dev/null || true)" ] && { P281NL_GONE=1; break; }
   sleep 0.2
 done
