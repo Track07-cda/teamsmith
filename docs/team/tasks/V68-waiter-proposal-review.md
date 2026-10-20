@@ -5,7 +5,7 @@ agent: verify
 phase: verify
 category: analysis
 change: -
-anchor: verification#The hard timeout covers the gate run, not the queue
+specs: verification#The hard timeout covers the gate run, not the queue
 deltas: -
 branch: task/V68-waiter-proposal-review
 
