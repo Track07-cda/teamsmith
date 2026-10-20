@@ -146,6 +146,13 @@ export interface DataResult {
   blocks?: PanelBlocks
   /** Blocks whose source failed, timed out or is unreadable in this snapshot (rendered as `—`). */
   degraded?: BlockName[]
+  /**
+   * P331: the paste's temp root — the `temp_root` the **capacity** block puts in its payload. It is
+   * kept out of `data.capacity` on purpose: that block degrades to `—` while the project has no
+   * `capacity.log` (a fresh `team init` project, and the log is history written by patrol ticks),
+   * and the paste still needs the root there. Nothing renders it; no other block's payload is kept.
+   */
+  tempRoot?: string
   /** Why each degraded block is degraded (diagnostics; never rendered as data). */
   errors?: Partial<Record<BlockName, string>>
   error?: string
@@ -249,6 +256,20 @@ interface BlockOutcome {
   ok: boolean
   value?: unknown
   error?: string
+  /** P331: the `temp_root` a non-zero `capacity` exit nevertheless printed (see `DataResult.tempRoot`). */
+  tempRoot?: string
+}
+
+/** The `temp_root` in the JSON a child printed before exiting non-zero, or undefined. */
+function tempRootOf(raw: string): string | undefined {
+  const text = raw.trim()
+  if (!text) return undefined
+  try {
+    const root = (JSON.parse(text) as { temp_root?: unknown } | null)?.temp_root
+    return typeof root === 'string' && root ? root : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** One block, one child, one timeout. Never throws and never blocks the loop. */
@@ -310,7 +331,15 @@ function runBlock(
       if (settled) return
       const tail = err.trim().split('\n').filter(Boolean).slice(-2).join(' · ')
       if (code !== 0) {
-        done({ ok: false, error: `rc=${code ?? '?'}${tail ? `: ${tail}` : ''}` })
+        // P331: the capacity block prints its JSON and exits 1 while the project has no
+        // `capacity.log` yet. The paste's temp root rides that payload and is not a capacity
+        // figure, so it survives the failure — one string, and only from this block. `ok: false`
+        // keeps the block itself degraded in the frame and in `--json`.
+        done({
+          ok: false,
+          error: `rc=${code ?? '?'}${tail ? `: ${tail}` : ''}`,
+          tempRoot: name === 'capacity' ? tempRootOf(out) : undefined,
+        })
         return
       }
       const raw = out.trim()
@@ -385,6 +414,8 @@ interface BlockState {
   error?: string
   /** The request key the cached value was built for (`reply_list` cursor / `reply_body` number). */
   key?: string
+  /** P331: the temp root a degraded capacity build printed (see `DataResult.tempRoot`). */
+  tempRoot?: string
 }
 
 const PANEL_BLOCK_NAMES: readonly BlockName[] = [
@@ -489,7 +520,11 @@ export function createPanelCache(opts: DataOptions): PanelCache {
       applyBlock(data, name, s.value)
     }
     mergeActivity(data, activity)
-    return { ok: true, data, activity, blocks, degraded, errors }
+    // The paste's temp root: the live capacity block while it is fresh, else the string a degraded
+    // capacity payload carried (fresh project: no capacity.log). A capacity block that is merely
+    // not built yet leaves it undefined, and the paste writes nothing — never a guessed root.
+    const tempRoot = (data.capacity as PanelData['capacity'] | undefined)?.temp_root ?? state.capacity?.tempRoot
+    return { ok: true, data, activity, blocks, degraded, errors, ...(tempRoot ? { tempRoot } : {}) }
   }
 
   function build(name: BlockName, key: string): Promise<void> {
@@ -502,10 +537,13 @@ export function createPanelCache(opts: DataOptions): PanelCache {
         s.value = outcome.value
         s.at = Date.now()
         s.error = undefined
+        s.tempRoot = undefined
       } else {
         // A block that failed is not dressed in last week's number: it renders `—` until the
         // next successful build (the design's stale-data trade-off, made explicit).
         s.error = outcome.error || 'failed'
+        // P331: the one fact that outlives the failure is the paste's temp root (capacity only).
+        s.tempRoot = outcome.tempRoot
       }
     })
   }

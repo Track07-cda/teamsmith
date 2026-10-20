@@ -89,7 +89,8 @@ export async function readClipboard(run: ClipboardRunner): Promise<ClipboardRead
  * The temporary path the paste writes: `<resolved temp root>/teamsmith-paste-<uuid>.<ext>`.
  *
  * P309: the directory is **given** by the caller — the same `team_tmp_root` answer the rest of the
- * tool prints (`capacity.temp_root` in the panel data). Deriving it here again would be a second
+ * tool prints (`capacity.temp_root` in the panel data, taken even when that block degrades to `—`
+ * for want of a capacity log, P331). Deriving it here again would be a second
  * implementation of the resolution order (`process.env.TMPDIR || tmpdir()` was exactly that), and
  * two answers is how the paste file ends up outside the root `--status`/`--sweep` judge.
  */

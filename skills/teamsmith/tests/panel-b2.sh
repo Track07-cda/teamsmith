@@ -714,7 +714,22 @@ EOXC
   keys C-v; sleep 1.5
   cap_to reason
   file="$(pasted_file)"
-  assert_has "$tmp/clipboard/reason.txt" "$file" "B4 理由行里有图片路径"
+  # 理由行里要有**整条**路径 —— 但路径比一行宽时产品会折行画出（P309 起临时根就比 120 列面板宽：夹具这条
+  # 156 列 > 可用的 116 列），逐行 grep 整条路径会把一条真的存在的事实判红。所以先把**理由框自己那几行**
+  # （标题行之后连续的 `│ ` 行，止于第一行别的东西）按画出的顺序拼回一行，再在这段文字里找整条路径：框外
+  # 的行不进这段文字，别处的路径顶替不了；路径为空时这条直接红，不会退化成 `grep -F ''` 的通真。
+  reason_text() { # <capture> → 待命原因框里被画的完整文本（拼成一行）
+    awk '/待命原因/{inbox=1; next}
+         inbox && /^│ /{sub(/^│ /,""); sub(/^> /,""); sub(/^ +/,""); out=out $0; next}
+         inbox{exit}
+         END{printf "%s", out}' "$1"
+  }
+  if [ -z "$file" ]; then
+    bad "B4 理由行里有图片路径（理由模式没有文件落地：路径为空）"
+  else
+    printf '%s' "$(reason_text "$tmp/clipboard/reason.txt")" > "$tmp/clipboard/reason.joined"
+    assert_has "$tmp/clipboard/reason.joined" "$file" "B4 理由行里有图片路径"
+  fi
   assert_eq "B4 理由模式仍不写 state/draft.md" "$(draft)" "half a thought"
 
   # ⑥ 只读扫描：C-v 不调用任何 team 动作（数据读者不算动作）

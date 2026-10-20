@@ -814,7 +814,11 @@ async function main(): Promise<void> {
       if (!read) return { kind: 'none' as const, value: '' }
       if (read.kind === 'text') return { kind: 'text' as const, value: read.text }
       // P309: the paste path uses the resolved temp root the data layer reports (no second resolution).
-      const file = writePasteFile(read.bytes, read.mime, cache.snapshot().data?.capacity?.temp_root)
+      // P331: `tempRoot` also carries the root a **degraded** capacity block printed — that block
+      // renders `—` while the project has no `capacity.log` yet, which is every fresh `team init`
+      // project (the log is history written by patrol ticks). The root is not a capacity figure, so
+      // losing the figure must not lose the paste.
+      const file = writePasteFile(read.bytes, read.mime, cache.snapshot().tempRoot)
       if (!file) return { kind: 'none' as const, value: '' }
       return { kind: 'path' as const, value: file }
     },
