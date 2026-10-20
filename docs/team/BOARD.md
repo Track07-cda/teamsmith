@@ -514,7 +514,7 @@
 | P325 | Propose smaller CI execution without losing behavior coverage | dev-bob | - | P322 | done |
 | V65 | Independently verify packaged npm entries and selector contract | verify | - | P321 | done |
 | V66 | Independently verify keep reclaim and actual container scene collection | dev | - | P324 | done |
-| P326 | Apply behavior-focused-ci: floor declaration, NUL path chain, probe de-duplication, docs and spec alignment | dev | - | P325 | wip |
+| P326 | Apply behavior-focused-ci: floor declaration, NUL path chain, probe de-duplication, docs and spec alignment | dev | - | P325 | done |
 | P327 | Make panel-b2 real: replace fixed sleeps with bounded waits, wire it into a gate section | dev3 | - | P318 | blocked |
 | P328 | Guard inventory (read-only): classify archived changes and name <=5 retirements | dev-bob | - | - | done |
 | P330 | Delete the never-invoked fixtures (P328 action 3), four hard constraints | dev-bob | - | P328 | done |
@@ -524,7 +524,7 @@
 | V68 | Independent static review of waiter-heartbeat proposal and minimal verification plan | verify | - | P332 | done |
 | V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | done |
 | V70 | CI减重复的独立静态审阅与已有失败归因 | dev2 | - | - | done |
-| V71 | CI减重复返修的独立行为复核 | dev2 | - | - | wip |
+| V71 | CI减重复返修的独立行为复核 | dev2 | - | - | done |
 | P333 | 空豁免清单不该打印「无法裁决」那次 SKIP | dev3 | - | - | todo |
 | P334 | 门禁的私有 tmux 锚点不许活过本轮 | dev3 | - | - | todo |
 | P335 | PM启动失败诊断里两个空答案 | dev-bob | - | - | done |
