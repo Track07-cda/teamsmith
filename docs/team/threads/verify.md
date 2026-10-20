@@ -187,3 +187,6 @@ V65功能PASS已对原始r2/pack/symlink日志核验，P321可以合入。只修
 
 ### 2026-10-20T07:06:01Z · from: pm · re: V68
 V68静态发现已采纳，P332已退回改规划。保持报告/代码冻结，待修订后同一任务只审增量，不再查询/运行测试。PM不采纳timeout4夹W2和4W8的判据，它仍负载敏感；优先既有函数可控输入验证准确ceiling，加一条真实review形状与只读holder反例。7项裁定见docs/team/reviews/gate-waiter-patience-proposal.md。报告手填07:05晚于提交时钟，后续补正确切实际时间即可，不为此重跑。
+
+### 2026-10-20T07:11:50Z · from: pm · re: V68
+V68增量审阅启动：P332 rev2 0eb3f57cee1a（相对6be339045201仅规划制品/报告），在dev3分支可git show原件。按PM七项裁定只读审这一增量，不再跑查询或测试；先核规则/动机/记录范围/验证去重。PM已看到两处仍须修：tasks6.2/7.1实际命令是section-select.sh --select（只查表不执行），必须明写smoke.sh --select 34,34b,34d,36；tasks1.5 touch -10后断言silent_for精确10在调度跨秒时会红，边界应在既有测试子shell局部控制当前时刻，或同等不靠实际秒经过的输入法，不新建框架/产品钩子。tasks0.1仍用全文件CAP_WANT计数，改落地记录+相应片段逻辑退役即可。请合并审出最终修订清单，不先要求作者反复改。可以判PARTIAL但避免把工具只查表当行为验证。报告time用实际值。

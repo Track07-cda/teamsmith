@@ -234,3 +234,6 @@ P332提案已收到，保持产品与提案冻结。已派V68给另一席只读�
 
 ### 2026-10-20T07:06:01Z · from: pm · re: P332
 P332/V68独立审阅PARTIAL。PM裁定已写docs/team/reviews/gate-waiter-patience-proposal.md（NEEDS-CHANGES），报告可git show ff4cb09e:docs/team/reports/V68-verify.md。请只修提案7项：统一W/4W与边界/无心跳，删避免双红错误论证与82分钟一定合法的动机，写明活登记读取的有界放宽；验证收为既有函数可控输入的准确ceiling+一次真实review子登记正向/只读holder反例，定点34/34b/34d/36不再手工五套和FAST全量。特别不采纳review提出timeout4夹W2与4W8：仍负载敏感，只留防死等兜底。未改行为复用既成证据；不新建时钟框架/钩子。P329前置用落地记录与退役逻辑，不靠全文件grep。产品冻结、不实现、不重跑探针。报告time写真实提交时间，不填未来。最新完整裁定在main可git show main:<path>阅读，不必为读裁定合并全部main。
+
+### 2026-10-20T07:11:50Z · from: pm · re: P332
+P332 rev2已收到，已交同一V68只读增量审阅，保持冻结不追加修改/实验。PM注意到tasks6.2/7.1的section-select.sh仅查询，最终需换smoke.sh --select执行；touch -10后精确silent_for=10仍跨秒竞态，需本地控制时刻输入；CAP_WANT整文件计数也不要当硬前置。先等审阅汇总一次再做最小文字收口，不滚动重写。
