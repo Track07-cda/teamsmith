@@ -7,7 +7,6 @@
 |---|---|---|
 | `skills/teamsmith/tests/smoke.sh` | agent:dev2 | P324 临时独占文件，仅改两个回收探针的环境前缀，其余内容冻结；交付后归还 dev |
 | `.github/workflows/gates.yml`、`ci/collect-scene.sh` | agent:dev2 | P324 临时借用，只修临时根接线与现场收集；冻结交付后归还 PM，P325 只有提案写权 |
-| `skills/teamsmith/tests/panel-b2.sh` 的 clipboard 理由框路径断言 | agent:dev2 | P331 临时借用，仅修复折行读取，完整路径与落盘断言保留；候选冻结后归还 dev，期间 P327 不改此文件 |
 | `skills/teamsmith/tests/**`（除上面临时借用项） | agent:dev | 测试与门禁脚本 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |

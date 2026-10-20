@@ -1,12 +1,14 @@
 # V69 · 独立验证 P331：降级容量块里的临时根、落盘字节与完整路径
 
-task: V69   status: delivered   time: 2026-10-20T07:18Z   agent: dev-bob   phase: verify   change: `-`
+task: V69   status: delivered   time: 2026-10-20T07:18Z（初稿在 `950ac8af`；`f538c276` 的纯报告勘误增量按 PM 要求只做静态核对，见 §七）   agent: dev-bob   phase: verify   change: `-`
 specs: panel#`C-v` pastes a clipboard image as a temporary file path
 branch: `task/V69-paste-repair-review`（local 模式；本分支只放这份报告，未 push）
-受检: `950ac8af`（产品 `6c749518` · 理由框断言 `6f516b42` · 作者报告 `950ac8af`）
+受检: `f538c276` = 产品/测试面与 `950ac8af` 逐字节相同（`git diff --quiet 950ac8af f538c276 -- skills/ openspec/` → 相同），
+增量只有作者报告 `docs/team/reports/P331-dev2.md`；`950ac8af` = 产品 `6c749518` · 理由框断言 `6f516b42` · 报告
 红侧基线: `b57db390^`（`2502625b`）里的 `panel.js`
-独立克隆: `/var/tmp/v69-dev-bob-1792480240-11848/tree`（`git clone --no-hardlinks` → `checkout 950ac8af`，
-树干净；作者树与主检出一个字节没动）
+独立克隆: `/var/tmp/v69-dev-bob-1792480240-11848/tree`（`git clone --no-hardlinks` → `checkout 950ac8af`；
+`f538c276` 不改代码，所以按 PM 的「沿用固定克隆、不重启验证」继续用它做 §七 的静态核对）
+（作者树与主检出一个字节没动）
 
 ## 判定：PASS —— 可合入
 
@@ -23,12 +25,13 @@ branch: `task/V69-paste-repair-review`（local 模式；本分支只放这份报
 - **外部输出逐字节没变**：同一项目、同一参数下旧/新 bundle 的 `--json`（831 字节）与 `--print`（30 行）
   在归一化时钟后 `diff` 为空，`tempRoot` 一次都没出现在输出里。
 
-无 BLOCKED。两条缺口与三条边界在 §八、§十，都不是本候选引入的，也不阻止合入。
+无 BLOCKED。§八 的三条缺口与 §十 的边界都不是本候选引入的，也不阻止合入。对 `f538c276` 的判定不变：这次增量
+只改作者报告（产品/测试面逐字节相同），§二–§六 的读数对它继续成立。
 
 ## 一 · 源码最终 diff：只有 capacity 的 `temp_root` 穿过了失败
 
-受检范围 `b57db390^..950ac8af` 一共改了 6 个文件，产品面只有两个源文件 + 重建的 bundle（另外是三行
-注释与夹具、作者报告）：
+受检范围 `b57db390^..950ac8af` 一共改了 6 个文件（`f538c276` 又加了作者报告 41 删 20 行，代码面不变）：
+产品面只有两个源文件 + 重建的 bundle，另外是三行注释、夹具与作者报告。
 
 ```
 $ git diff --stat b57db390^ 950ac8af
@@ -217,22 +220,38 @@ $ sed 's/^why//' reason.joined | wc -c
   它依赖两件事，记在 §十：标题是中文、输入面是 boxed（comfortable 密度）。两种前提不成立时结果是**红**，
   不是假绿。
 
-## 七 · 作者报告里 `/tmp` → `/var/tmp` 的改写（按任务书要求只核对历史，不重跑代码）
+## 七 · 报告那处 `/tmp` → `/var/tmp` 改写：作者的勘误 `f538c276` 已改正，与我的静态核对逐项一致
 
-`f21b3e97`（第一版）的现场是 `W=/tmp/p331-dev2-uKMrEq`，并带具体读数：`avail_mb 4930`、`free_inodes
-3192312`、剪贴板 PNG `sha256 59edf555…529e15`。`950ac8af`（修订版）把它写成
+我最早看到的是 `950ac8af` 的版本：它把第一轮写成 `W=/var/tmp/p331-dev2-uKMrEq`，读数却一个没换
+（`avail_mb 4930`、`free_inodes 3192312`、`sha256 59edf555…529e15`，与 `f21b3e97` 里 `/tmp` 那次完全
+相同），还新加了一句「`/tmp` 下那次同形实验已删」——那次实验在两版报告里都没有记录。所以当时它只能按
+「同一次运行换了路径前缀」读，不能当新实验。
 
-> 两轮，都在 `$HOME` 之外、`/var/tmp` 下 …… 第一轮 `W=/var/tmp/p331-dev2-uKMrEq`（返修前记录，`/tmp` 下那次
-> 同形实验已删）
+评审期间作者提交了纯报告勘误 `f538c276`（报告自述写于 07:10:29Z）。按 PM 的要求本节只做静态核对，
+不重启任何验证：
 
-但**读数一个没换**：还是 `avail_mb 4930`、`free_inodes 3192312`、`sha256 59edf555…529e15`。所以那一块是
-`f21b3e97` 的 **`/tmp` 那次运行换了路径前缀**，不是新实验；「两轮都在 `/var/tmp` 下」这句在第一轮上不成立，
-而括号里新出现的「`/tmp` 下那次同形实验」在两版报告里都没有任何记录，且树已删，无法核对。
+```
+$ git diff --stat 950ac8af f538c276
+ docs/team/reports/P331-dev2.md | 61 ++++++++++++++++++++++++++++--------------
+$ git diff --quiet 950ac8af f538c276 -- skills/ openspec/ && echo IDENTICAL
+IDENTICAL（产品、测试、规格一个字节没变）
+```
 
-这条改写对我的判定**只影响取证口径**：真环境证据只按第二轮（`W=/var/tmp/p331-dev2-r2-NTs6CT`、
-`sha256 2b2b9bff…2bacfc`，是新增的独立读数）看，而第二轮**没有记录它跑的是哪个提交/bundle**，所以它仍只是
-背景证据，不是本候选的判据；本候选的证据是 §二–§六，全部在受检 ref 上可复现。作者报告措辞失真这件事本身
-由 PM 处置（任务书已列为在办），我不改他的文件。
+勘误把 §一 拆成两个现场表：**A** = `/tmp/p331-dev2-uKMrEq`（第一版修复：①② 的因果对照 + 第一版修好后在
+同一个根里再验一次），**B** = `/var/tmp/p331-dev2-r2-NTs6CT`（收窄后的修复，③）；A 的读数按原样恢复
+（`8501` / `26840` / `5`、`4930`、`3192312`），与我对照 `f21b3e97` 得到的结论逐项对上，路径前缀不再被改写。
+它还自己写明两个现场已在收尾时按具体路径删掉、数字**无法再从盘上复核**；这一点我核过：
+
+```
+$ ls -d /tmp/p331-dev2-uKMrEq /var/tmp/p331-dev2-r2-NTs6CT /var/tmp/p331-pre-panel.js
+ls: cannot access '/tmp/p331-dev2-uKMrEq': No such file or directory
+ls: cannot access '/var/tmp/p331-dev2-r2-NTs6CT': No such file or directory
+ls: cannot access '/var/tmp/p331-pre-panel.js': No such file or directory
+```
+
+仍然开着的缺口（对 `f538c276` 有效）：现场 B 只写「收窄后的修复」，**没有记录它跑的是哪个提交/bundle**，
+所以真环境证据仍只是背景，不是本候选的判据。本候选的判据是 §二–§六，而 `f538c276` 的产品与测试面与
+`950ac8af` 逐字节相同（上面的 `git diff --quiet`），所以那些运行对本 ref 继续有效。
 
 ## 八 · 缺口（登记给 PM，本次不新开用例）
 
@@ -269,7 +288,7 @@ $ git diff --check && git status --short
 
 ## 十 · 边界
 
-- 没有操作真实桌面剪贴板、没有复演作者的真环境实验（任务书边界）；§七 只读 git 历史。
+- 没有操作真实桌面剪贴板、没有复演作者的真环境实验（任务书边界）；§七 只读 git 历史与两份报告的 diff。
 - 没有重跑 26/27/28/38 整批，也没有接门禁；§五 用 `--print` 的逐行同一性替代「其它段会不会变红」。
 - 夹具真跑覆盖 Wayland；X11 分支仍是夹具的假 `xclip`。
 - 理由框读取的两个前提：标题字面量是中文 `待命原因`、输入面是 boxed（`density=comfortable`）；前提不成立时

@@ -520,9 +520,9 @@
 | P330 | Delete the never-invoked fixtures (P328 action 3), four hard constraints | dev-bob | - | P328 | done |
 | P329 | Three subtractions: §58 inline flips, the cap comment lie, duplicate seat-dir derivation (P328 actions 1/2/4) | dev-bob | - | P330 | todo |
 | V67 | Independently re-scan whether every fixture P330 deleted is truly unreachable | verify | - | P330 | done |
-| P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | review |
+| P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | done |
 | V68 | Independent static review of waiter-heartbeat proposal and minimal verification plan | verify | - | P332 | wip |
-| V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | wip |
+| V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | done |
 
 ## 当前里程碑
 
