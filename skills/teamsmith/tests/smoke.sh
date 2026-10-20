@@ -238,6 +238,27 @@ elif [ -n "$SELECT_MODE_REQ" ]; then
     FULL|NONE|RUN) ;;
     *) printf 'smoke: 选段输出没有 decision=FULL|NONE|RUN：\n%s\n' "$SELECT_OUT" >&2; exit 2 ;;
   esac
+  # P327：「本轮直接点到」的段 = 原因列表里只要有一条不是「地板 / 前导段 / needs 拉进来 / coupled」。
+  # 原因列表是逗号分隔的（`floor, needs:63` / `skills/…/App.tsx, needs:38` / `floor, skills/…/panel-b2.sh`），
+  # 所以判据是**逐条**看，不是看开头：--floor 单跑不算直接点到，--floor --paths 点到写信面就算。
+  # 慢夹具（tests/panel-b2.sh，单次全场景 431 s 实测）靠这条凭据决定要不要跟着 §38 跑：选段是每次
+  # 普通推送的入口（CI 走 `--floor --paths <改动路径>`），让 7 分钟挂进去就是把地板按后门拉长。
+  SELECT_DIRECT_KEYS=""
+  while IFS=$'\t' read -r _sel_k _sel_why; do
+    [ -n "$_sel_k" ] || continue
+    IFS=',' read -r -a _sel_parts <<<"$_sel_why"
+    _sel_direct=0
+    for _sel_p in "${_sel_parts[@]}"; do
+      _sel_p="${_sel_p# }"
+      case "$_sel_p" in
+        ''|floor|prologue|needs:*|coupled:*) ;;
+        *) _sel_direct=1; break ;;
+      esac
+    done
+    [ "$_sel_direct" = "1" ] && SELECT_DIRECT_KEYS="${SELECT_DIRECT_KEYS}${SELECT_DIRECT_KEYS:+ }$_sel_k"
+  done < <(printf '%s\n' "$SELECT_OUT" | sed -n 's/^reason=\([^ ]*\) ← \(.*\)$/\1\t\2/p')
+  unset _sel_k _sel_why _sel_parts _sel_p _sel_direct
+  export SELECT_DIRECT_KEYS
   if [ "$SELECT_DECISION" = "NONE" ]; then
     printf '\n\033[1m== 选段 ==\033[0m decision=NONE —— 没有段落需要运行（no section needs to run）\n'
     printf '%s\n' "$SELECT_OUT" | sed -n 's/^reason=/  /p'
@@ -18925,6 +18946,30 @@ fi
 
 # 38-g（P316 退役）：负载实验与面板前提旋钮都随「性能只参考、不阻塞」一起删除；
 # 参考读数由门禁之外的两个参考打印器输出，不经门禁。
+
+# 38-h P327：写信面（草稿 / 键位 / 多行 / 粘贴 / 编辑器接力 / 回执）的真 pty 夹具 tests/panel-b2.sh。
+# 它守的是 V33（ctrl+u 又复活）、P20（剪贴板探测顺序）、P249（幽灵草稿 / 假装清空）三次已点名事故，
+# 而在此之前它**不在任何门禁段里**（P318 的 finding）：那批事故墓碑挂在一个从不执行的夹具上。
+# 单次全场景 431 s（本机实测；V75 两轮 482 / 483 s）。地板按**段**分粒度，分不出这一个夹具，所以让路
+# 判断放在这条腿自己身上（凭据是选段块导出的 SELECT_DIRECT_KEYS：reason 是改动路径或 `selected`）：
+#   * 完整门禁（不带选段参数）、decision=FULL 的兜底 ———————————— 跑；
+#   * --select 38 / --paths 点到写信面源码或这个夹具（含 --floor --paths）— 跑；
+#   * --floor 没点到 38、或 38 只是被别人 needs 拉进来 ———————————— 具名 SKIP（不让地板变长）。
+# FAST 下照旧跳：真 tmux 场地 + 真 bundle，FAST 只跑纯逻辑段。
+P327_SUITE="${P327_SUITE:-$SKILL_DIR/tests/panel-b2.sh}"
+p327_direct() { case " ${SELECT_DIRECT_KEYS:-} " in *" 38 "*) return 0 ;; esac; return 1; }
+if [ ! -f "$P327_SUITE" ]; then
+  bad "38-h 缺 tests/panel-b2.sh（写信面的 pty 夹具）"
+elif [ "$FAST" = "1" ]; then
+  fast_skip "38-h·panel-b2-写信面" "panel-b2.sh 要真 tmux 场地 + 真 bundle（单次全场景约 7 分钟）；FAST 只跑纯逻辑段"
+elif [ "$SELECT_MODE" = "1" ] && [ "$SELECT_DECISION" = "RUN" ] && ! p327_direct; then
+  cond_skip "38-h·panel-b2-写信面" "本轮没有直接点到 38（地板 / needs 带进来的；单次全场景 431 s 不进地板，改写信面源码或本夹具时才跑）"
+else
+  live_mark
+  bash "$P327_SUITE" --all >"$TMP/p327-panel-b2.log" 2>&1
+  p327rc=$?
+  p38_verdict "38-h" "$TMP/p327-panel-b2.log" "$p327rc" "panel-b2.sh 写信面（11 场景）"
+fi
 
 section "39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）"
 # headless 夹具（tests/install-shape.sh）——不依赖 tmux/真进程，FAST 照跑：它自己起临时仓库、
