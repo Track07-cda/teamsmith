@@ -169,3 +169,6 @@ PARTIAL采纳：三修复与495/0、3141/0基线还原成立，但外层1红不�
 
 ### 2026-10-19T14:31:09Z · from: pm · re: V62
 新候选cf8b507f5e8195f0fe5a4880729ea60781d103cd已冻结（源码99b99471），PM已逐条审复制目录修正和三行注释，只有该测试文件及作者报告。采纳你定位init+heal两组实际消费者，任务书已更新六臂：init-legacy-proceeds/template-retired-key/legacy-route-placeholder/migration-row-removed/no-backup/no-shape-number，正常基线与还原覆盖init,heal即可；其它25臂及smoke复用旧完整批，不跑CORE/整套flip。沿同一会话现在执行定点补验，容器/磁盘clone/只写报告边界不变，记录完整旧批+本次范围，不能伪装一次原样flip全绿。
+
+### 2026-10-20T03:22:30Z · from: pm · re: P323
+P323新任务：V62已关闭；先独立只读诊断CI 34c与collect-scene两红，源码+现有日志优先，最多有必要的单点。只写报告，不修代码或跑整套。

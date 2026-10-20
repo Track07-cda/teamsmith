@@ -200,3 +200,6 @@ V19 第五轮：新候选已冻结 aaffe5add59743809a44822ab77f0370da16b980（�
 先做什么：先看这一段（本线程最新一条）与 `git status`，确认打断前后的状态；再按任务书继续 V59。回到同一会话：`team resume --agent dev3`；后台作业先 `team bg list`。
 ### 2026-10-19T14:28:41Z · from: pm · re: P320
 V62三处修复已独立成立，CORE基线/还原3141/0，但外层仍1红：复制清单用extensions，真目录extension，缺扩展导致init-legacy bootstrap错误拒绝。任务书已追加唯一授权：只把task-model-routing.sh既有复制集合目录名纠正（删除错误复数项，不新增兜底、守卫或选择器），另补报告。当前c5c85855树干净，保留原改动，不拉P316/P317。只做语法/diff/账本检查，小提交后冻结；V62同一席位补受影响init三臂，不再重复全31臂或全量。
+
+### 2026-10-20T03:22:30Z · from: pm · re: P321
+P321新任务：旧P320已完成；先看新任务书/本线程、git status/log，再从main新分支。只修npm入口及已存在的信号契约，测试仅借signal-gate/install-shape；不改common/CI/版本，不复跑全量。
