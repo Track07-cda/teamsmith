@@ -22209,22 +22209,29 @@ if ! command -v perl >/dev/null 2>&1; then
   bad "没有 perl：P159 信号纪律 lint 跑不了（装上 perl 才能跑这条门禁）"
 else
   # P176 · P222：signal-lint 的豁免清单（signal-lint-legacy.txt）与 §31 的 M28 清单**同一契约**：它冻结的
-  # 也是**内部面**历史包（docs/team/reports/**）。清单本身是产品文件，不在就报红；清单**每一条都落在内部
-  # 面、且都确实不在这棵检出里**时改用空清单跑（RED 命中照判、产品文件的判定照旧，lint 的牙全在），并把
-  # 「豁免清单这一册账在检出里无法裁决」如实记一次前提跳过、点名证据层。清单里只要有一条产品面路径、或
-  # 清单里有一条文件**在位**，就照旧用原清单跑 —— 那时缺的是**产品**文件、或这一册账其实可裁决，两条都
-  # 必须照旧判（两条牙齿与影子见 §36⑩）。
+  # 也是**内部面**历史包（docs/team/reports/**）。清单本身是产品文件，不在就报红；清单**至少有一条登记、
+  # 每一条都落在内部面、且都确实不在这棵检出里**时改用空清单跑（RED 命中照判、产品文件的判定照旧，lint 的牙
+  # 全在），并把「豁免清单这一册账在检出里无法裁决」如实记一次前提跳过、点名证据层。清单里只要有一条产品面
+  # 路径、或清单里有一条文件**在位**，就照旧用原清单跑 —— 那时缺的是**产品**文件、或这一册账其实可裁决，两条
+  # 都照旧判（两条牙齿与影子见 §36⑩）。P333：**空清单不算「无法裁决」**——零条登记时没有一条豁免需要裁决，
+  # 照旧带空清单跑（等于按完整扫描面判），但不再打印那行前提跳过。
   assert_file "$SKILL_DIR/tests/signal-lint-legacy.txt" "58：signal-lint 豁免清单存在"
   P159_LEGACY_ARGS=()
   if [ -f "$SKILL_DIR/tests/signal-lint-legacy.txt" ]; then
     P159_LEGACY_ALL_INTERNAL=1
+    P159_LEGACY_ENTRIES=0
     while IFS= read -r _p159l; do
       case "$_p159l" in ''|'#'*) continue ;; esac
       read -r _p159sha _p159cnt _p159p _p159rest <<<"$_p159l"
       [ -n "${_p159p:-}" ] || continue
+      P159_LEGACY_ENTRIES=$((P159_LEGACY_ENTRIES + 1))
       checkout_surface_path "$_p159p" || { P159_LEGACY_ALL_INTERNAL=0; break; }
     done < "$SKILL_DIR/tests/signal-lint-legacy.txt"
-    if [ "$P159_LEGACY_ALL_INTERNAL" = 1 ] \
+    # P333：登记条数是**这一册账自己的**前提，不并进 checkout_registered_paths_absent 的契约（它现在的返回值
+    # 被 §19 与 checkout-shape-probe.sh 的两条断言依赖）。零条登记时上面的循环一次也没数到条目，这里就不走
+    # 前提跳过 —— 空集谈不上「注册的路径逐条不在」。
+    if [ "$P159_LEGACY_ENTRIES" -ge 1 ] \
+       && [ "$P159_LEGACY_ALL_INTERNAL" = 1 ] \
        && checkout_registered_paths_absent "$CHECKOUT_REPO_ROOT" "$SKILL_DIR/tests/signal-lint-legacy.txt"; then
       : > "$TMP/p159-legacy-unjudgeable.txt"
       P159_LEGACY_ARGS=(--legacy "$TMP/p159-legacy-unjudgeable.txt")

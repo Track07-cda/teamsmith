@@ -743,14 +743,31 @@ phas "⑨ 清单含产品路径 → M28 照旧带清单跑（不是跳过）" "$
 P_PO10="$(scratch_tree po10 product-only)"
 nest "$P_PO10" "$T/nest-po10.log" --select 58 && P_PO10_RC=0 || P_PO10_RC=$?
 peq "⑩ 产品面树 --select 58 退出 0（豁免清单不再假红）" "$P_PO10_RC" "0"
-phas "⑩ 产品面：signal-lint 的豁免清单按前提跳过并点名证据层" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log")" "SKIP（条件不满足） 58 lint 真树"
-phas "⑩ 产品面：跳过点名的前提是豁免清单的冻结对象（docs/team/reports/*/pkg/**）" \
-  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log")" "豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在"
+# P333：清单**零条**登记时这册账没有要裁决的条目（空集谈不上「注册的路径逐条不在」），§58 照旧带空清单跑
+# lint（判的是完整扫描面），但不再打那条前提跳过、也不再声称证据层缺席。下面两条断言原先钉的正是那句被删的
+# SKIP 与它点名的证据层 —— 期望翻成「不打这句话」，而跳过分支的正向影子见本节末尾的 po10shadow。
+peq "⑩ 产品面：清单零条登记不算「无法裁决」——§58 不打那条前提跳过" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log" | grep -c '^  SKIP（条件不满足） 58 lint' || true)" "0"
+pnot "⑩ 产品面：空清单不再说「豁免清单注册的路径逐条不在（冻结的证据层）」" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log")" "豁免清单注册的路径逐条不在（冻结的证据层）"
 phas "⑩ 产品面：lint 照跑（不是把 58 整条记成跳过）" \
   "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log")" "✓ 58 lint 真树：仓库脚本/夹具没有按名字或模式选进程"
 peq "⑩ 产品面：--select 58 的红数为 0" \
   "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10.log" | grep -c '^  ✗ ' || true)" "0"
+
+# P333 影子（退役的是「空清单也算无法裁决」，不是「无法裁决」这条路）：上面那棵树是**零条**登记；这一棵给它
+# 一条「落在内部面、且不在这棵树里」的登记 —— 那才是这一册账在检出里无法裁决，§58 必须照旧打那条 SKIP 并
+# 点名证据层。清单里的历史条目全部剔除，只留用例自己声明的这一条（P226：scratch 树不吃环境里的账本归档）。
+P_PO10SH="$(scratch_tree po10shadow internal)"
+{ sed '/^[^#]/d' "$P_PO10SH/skills/teamsmith/tests/signal-lint-legacy.txt"
+  printf '0000000000000000000000000000000000000000000000000000000000000000  1  docs/team/reports/P333-fixture/pkg/absent.sh  # fixture：内部面证据层里的历史包（不在检出里）\n'; } \
+  > "$P_PO10SH/skills/teamsmith/tests/signal-lint-legacy.txt"
+nest "$P_PO10SH" "$T/nest-po10shadow.log" --select 58 && P_PO10SH_RC=0 || P_PO10SH_RC=$?
+peq "⑩ 影子：一条登记且都不在 → --select 58 退出 0" "$P_PO10SH_RC" "0"
+phas "⑩ 影子：一条登记且都不在 → §58 照旧打那条前提跳过" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10shadow.log")" "SKIP（条件不满足） 58 lint 真树"
+phas "⑩ 影子：跳过点名的前提是豁免清单的冻结对象（docs/team/reports/*/pkg/**）" \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$T/nest-po10shadow.log")" "豁免清单注册的路径逐条不在（冻结的证据层） docs/team/reports/*/pkg/** 在检出里不存在"
 
 # ⑩ 内部树 + 清单里的文件都在（运行在 ⑨b：同一棵合成证据树、两册清单都按同一条文件重写）→ §58 照旧逐条
 # 核对、打印 LEGACY，**不**按证据层缺席跳过（P222 的反向控制；产品面的跳过分支在上面）。P326：这一次
