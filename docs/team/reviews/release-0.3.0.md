@@ -29,4 +29,14 @@ CI确已启动，受测产品提交是`bf368cebce456a6843eb8b132cfcd9624eb61a07`
 
 从公开标签重新clone、核实提交与干净状态后打包，285文件、2779331字节。npm暂存元数据回读确认版本0.3.0、tag latest、access public，SHA1与公开标签打包结果均为`bc5c357e86c7718b8804ca2dc4e47e62c3dc893c`。暂存ID：`068dadcd-170d-4dd0-9b46-92b4c1ed2926`。
 
-**GitHub代码已公开；npm只已暂存，尚未正式发布。** 检查时npm正式latest仍为0.2.0，暂存记录在服务端校验中。等待用户在npm完成2FA批准，之后再核对正式registry的版本、tarball哈希并实装验证；不代用户批准，不把暂存算上线。性能精简和吞错清理仍未合并，保持发布范围隔离。
+2026-10-20 用户通知npm发布完成，PM随后从官方registry实际回读：`teamsmith@0.3.0`存在、`latest=0.3.0`，SHA1及SHA512都与暂存包一致。暂存查询404不作为失败判据，以正式registry版本和哈希为准。
+
+在新的隔离prefix/cache中实际执行 `npm install --global --prefix <isolated-prefix> --cache <isolated-cache> teamsmith@0.3.0 --registry=https://registry.npmjs.org`，安装成功；从空目录调用安装后的CLI，`team version`输出`teamsmith 0.3.0`，`team help`返回0。没有升级全局安装或其他项目。
+
+### 实装发现的发布包缺口：信号命令入口未随npm包交付
+
+完整文件比对**不通过**，不是“安装后全部与Git标签相同”。280个普通技能文件、CLI入口与install.sh逐字节一致；panel/.gitignore缺失属于npm不交付的开发文件。但Git标签内四个120000软链接`pkill`、`killall`、`pgrep`、`pidof`在npm安装中也全部缺失，npm不会把这些软链接打进tarball。
+
+PM只做命令解析，没有发信号：用Git标签的shim目录置于PATH最前时，四个名字都解析到闸门入口；用安装包的shim目录时，四个名字都落到`/usr/bin/`。`common.sh`的`team_tmux_shim_exports`直接把这个目录加到启动PATH，没有另行创建入口。因此npm安装路径的命令拦截与Git安装路径不等价，不能因为help/version成功而称运行时防护通过。其他普通文件未发现内容漂移；尚未判定该缺口最早出现的版本。
+
+**0.3.0已正式发布，但实装发现上述打包缺陷，尚不能无保留收口。** 已公开版本不能原位覆盖。建议用独立0.3.1最小补丁补齐可随npm交付的四个入口，并在已有安装测试中验证实际拦截；不扩大成新安全系统或新测试框架，也不混入P316/P317。新补丁发布尚未获得授权，没有撤回/弃用0.3.0、没有移动公开标签，也没有改用户项目或全局安装。性能精简和吞错清理仍未合并。
