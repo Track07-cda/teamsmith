@@ -1,7 +1,7 @@
 # V77 · P337 的独立验收（轻量）：一条登记的对齐，判据仍是源码
 
 task: V77
-agent: dev-bob
+agent: dev
 phase: verify
 category: verify
 change: -
@@ -28,4 +28,4 @@ branch: task/V77-loop-inventory-verify
 
 ## 边界与交付
 
-只读代码、只写 `docs/team/reports/V77-dev-bob.md` 与自己的线程；不改实现、不合并、不 push。结论先写 PASS/PARTIAL/FAIL。local 模式。
+只读代码、只写 `docs/team/reports/V77-dev.md` 与自己的线程；不改实现、不合并、不 push。结论先写 PASS/PARTIAL/FAIL。local 模式。
