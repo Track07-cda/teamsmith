@@ -520,6 +520,7 @@
 | P330 | Delete the never-invoked fixtures (P328 action 3), four hard constraints | dev-bob | - | P328 | wip |
 | P329 | Waiter patience follows the holder heartbeat, not a budget projection (P328 action 2 + 1 + 4) | dev-bob | - | P330 | todo |
 | V67 | Independently re-scan whether every fixture P330 deleted is truly unreachable | verify | - | P330 | wip |
+| P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | todo |
 
 ## 当前里程碑
 
