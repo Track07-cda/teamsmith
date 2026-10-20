@@ -5,7 +5,9 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
-| `skills/teamsmith/tests/**` | agent:dev | 测试与门禁脚本（本阶段只在此处动刀） |
+| `skills/teamsmith/tests/signal-gate.sh`、`skills/teamsmith/tests/install-shape.sh` | agent:dev3 | P321 临时借用，仅修现有信号与真实 npm 安装断言；交付冻结后归还 dev，P316 不再追加改动 |
+| `package.json` | agent:dev3 | P321 临时、仅必要的打包文件清单；不改版本/依赖/生命周期脚本，交付后归还 PM |
+| `skills/teamsmith/tests/**`（除上面临时借用项） | agent:dev | 测试与门禁脚本 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
 | `skills/teamsmith/scripts/**`、`extension/**`、`panel/**`、`SKILL.md`、`references/**`、`templates/**` | apply 阶段任务书**明授**的 agent（默认 PM） | 实现；未获授权 → `BLOCKED:` 交回 PM |
