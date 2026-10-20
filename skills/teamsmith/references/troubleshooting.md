@@ -1120,9 +1120,12 @@ second time).
   pass `--allow-dup` for new rows; remember that `reviews/<ID>.md` and the pending-report heuristic are keyed by
   the id too, so both rows share one review namespace, and the detail view opens the same document for both.
 
-The fixtures that pin this are `tests/panel-b3.sh board` (two rows with one id: one cursor, both reachable,
-both walks) and `tests/smoke.sh` §4c (refusal, `--allow-dup`, the three visible reports); `tests/flip-m48.sh`
-proves both go red when the row identity / the check is removed.
+The gate pins this in `tests/smoke.sh` §4c (`bash skills/teamsmith/tests/smoke.sh --select 4c`):
+`M48：重复 ID 被拒（非 0）`, `M48：被拒时 BOARD 逐字节未变`, `M48：--allow-dup 显式允许写入`,
+`M48：assign 后行数不变（不是又加一行）`, `M48：assign 后 T1.1 仍是两行（没有顺手改历史数据）`, and the three visible
+reports (`board ls`, `team digest`, `team doctor`); each goes red when the row identity or the check is
+removed. The console half — two rows with one id sharing one cursor, both reachable, both walks — is pinned
+only by `tests/panel-b3.sh board`, which the gate does not run: no gate section carries it.
 
 ## 24. The performance suite refuses to call itself the "reference environment" — the trust boundary (M66 → M69 → M73)
 

@@ -5,10 +5,6 @@
 #   anchor = while 原文行（checked 的锚点：与源码逐字符子串比较；换了写法 → 红并点名 file:line）
 # 范围：tests/*.sh + tests/lib/*.sh 的**自身** while+sleep 循环；heredoc/字符串里拼出来的
 # 脚本（如 container-tmux.sh 写进容器的 inner 脚本、嵌入的 python/awk）不在扫描面内。
-flip-m37.sh	120	cap="$m37_i" -lt 50	while [ "$m37_i" -lt 50 ] && { [ -z "$(m37_child_of "$SESS:m37w")" ] || [ -z "$(m37_child_of "$SESS:m37-lit")" ]; }; do
-flip-p217.sh	169	cap="$i" -lt 3000	  while [ "$i" -lt 3000 ]; do
-flip-p210.sh	133	cap="$p210_i" -lt 50	while [ "$p210_i" -lt 50 ] && [ "$(tmux list-panes -t "$SESS:p210dead" -F '#{pane_dead}' 2>/dev/null | head -1)" != "1" ]; do
-flip-p210.sh	138	cap="$p210_j" -lt 20	while [ "$p210_j" -lt 20 ]; do
 flip-m4.3.sh	94	cap="$i" -lt $((n * 4))	  while [ "$i" -lt $((n * 4)) ]; do
 flip-m7.2.sh	198	bound=夹具的停止位文件（采集器随调用方写 stop 一起退出）	    while [ ! -f "$stop" ]; do
 flip-m7.2.sh	225	cap="$i" -lt 60	  while [ "$i" -lt 60 ]; do
