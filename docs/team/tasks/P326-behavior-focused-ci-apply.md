@@ -10,6 +10,15 @@ deltas: verification
 branch: task/P326-behavior-focused-ci
 deps: P324 已并入 main（`gates.yml` / `smoke.sh` 写权已归回）；P325 rev 2 的 PM 预审判 **ACCEPTED**（`docs/team/reviews/behavior-focused-ci-proposal.md`）
 
+## V71 增量复核后的最后一轮收口（最新，覆盖上节与之冲突处）
+
+V71（`docs/team/reports/V71-dev2.md`）判增量 **PARTIAL**：11c、`workflow-entry` 三条行为、轻量检查、probe 合并、选择器映射、main 成果保留**均已成立并实测**，不用重做。只做下面两件，别扩面：
+
+1. **必修（承接缺口）**：`36⑨` 的调用条件看的是 `$REPO/.github/workflows/gates.yml`，而 `$REPO` 是套件自建的夹具项目（顶层只有 `AGENTS.md docs .git .gitignore .pi README.md .worktrees`），所以门禁里它**每次都走 `cond_skip`**、只有单独 `--tree` 才跑。采用 V71 的推荐修法：调用点改传 `--tree "$CHECKOUT_REPO_ROOT"`，`-f` 条件也看同一棵树（`workflow-entry.sh` 自己会把 workflow 拷进它的临时仓库，**不需要**往夹具项目里拷 `.github`）。产品面检出确实没有 CI 源码时仍如实 skip，不许伪造成通过。
+2. **必修（报告事实）**：报告两处把 M35 豁免退役归因给 P330，无证据——V71 核到 P330 的实现提交（`a62ab6bb`）只删 `skills/teamsmith/tests/**`，碰不到 `docs/team/reports/**`；且这条豁免注册那天就没有对象（现行 main 历史里该证据包从未存在，只出现在更早的旧历史 `938e5ea2`）。把那两句改成这个事实，或删掉归因；**退役本身保留**（lint 规则未放宽、扫描面不变）。
+
+跑法：修完只跑 `--select 36`（须能看到 36⑨ 真的执行而不是 skip；若你的树里 CI 源码在，就是真跑）+ 一次 `workflow-entry.sh --tree` + 轻量收口；**不跑容器、floor、probe、矩阵、C4**。改完冻结，交 V71 同一席位定点复看这两处差异，不再开第二个验收轮次。
+
 ## 本次返修收口（优先于下文）
 
 PM已审 `6ef3c1ca`（实现相对 `94ee8cfd` 未变）：11c仍14/1，未达到可交独立行为验收的状态。仅收以下差异，不重开方案：

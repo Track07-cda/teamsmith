@@ -346,3 +346,6 @@ P326读最新任务书顶节“本次返修收口”。PM核6ef3c1ca实现未变
 
 ### 2026-10-20T08:28:32Z · from: pm · re: P326
 P326返修已收：11c真因查清（§11b遗留sleep 600的活PM→running:），修法用私有夹具已有make_pm_idle，保留原产品断言；PM已回读/var/tmp/p326-11c3与11c4原始stdout，342/0与running:<pid>两处对得上。第四次未带--keep的取证缺口已如实入报告，PM不要求补跑；V71独立复核会用自己的--keep现场。当前保持冻结：等V71增量结论，不要再跑测试、不要改代码、不要补造现场。若V71退回必修项，我会按汇总清单一次派给你。
+
+### 2026-10-20T08:43:50Z · from: pm · re: P326
+V71增量判PARTIAL：11c/workflow-entry/轻量检查/probe合并/映射/main成果保留全部成立，不重做。只两件：①36⑨承接——调用条件错看$REPO(夹具项目没有.github)，改传--tree "$CHECKOUT_REPO_ROOT"且-f看同一棵树，不往夹具里拷.github，真缺CI源码照旧skip；②报告两处把M35退役归因P330无证据（P330只删tests/**，该豁免注册当天就无对象），改成事实或删归因，退役保留。只跑--select 36(要看到36⑨真跑)+一次workflow-entry --tree+轻量收口；不跑容器/floor/probe/矩阵/C4。改完冻结，交V71同席位定点看这两处差异。
