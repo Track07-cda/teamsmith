@@ -518,7 +518,7 @@
 | P327 | Make panel-b2 real: replace fixed sleeps with bounded waits, wire it into a gate section | dev3 | - | P318 | blocked |
 | P328 | Guard inventory (read-only): classify archived changes and name <=5 retirements | dev-bob | - | - | done |
 | P330 | Delete the never-invoked fixtures (P328 action 3), four hard constraints | dev-bob | - | P328 | wip |
-| P329 | Waiter patience follows the holder heartbeat, not a budget projection (P328 action 2 + 1 + 4) | dev-bob | - | P330 | todo |
+| P329 | Three subtractions: §58 inline flips, the cap comment lie, duplicate seat-dir derivation (P328 actions 1/2/4) | dev-bob | - | P330 | todo |
 | V67 | Independently re-scan whether every fixture P330 deleted is truly unreachable | verify | - | P330 | wip |
 | P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | wip |
 
@@ -531,3 +531,4 @@
 | # | 事项 | 影响 | 处理 |
 |---|---|---|---|
 | — | — | — | — |
+| P332 | A legitimate long gate run must not make waiters fail: `expected` has been 0 since P316 (needs a verification delta) | - | - | P326 | todo |
