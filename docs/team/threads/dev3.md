@@ -228,3 +228,6 @@ b56fe460已审：四wrapper/package字节不变，分类/后端未改，重复�
 1. 改动只落在这四个文件：`signal-gate.sh`、`team-bg-stop.sh`、`panel-b2.sh`、`panel-p21.sh`（D-3 那一处）。`smoke.sh`、`section-paths.tsv`、`section-select.sh` 归 P326，一个字不许动。
 2. 每次删除必须在报告里写明「它不满足哪一条必要性判据」+「它守的行为现在由谁守」；写不出接管者的不许删（D-2 已有的处理是「留 + 正向对照」）。
 3. 收口证据：三条既有断侧的红/绿原始输出（`signal-gate --break=pass`、`team-bg-stop --break=no-identity`、D-3 的新红侧），加上**一条「被删重复的幸存断言仍会红」**的对照（证明删掉的是重复，不是唯一守门人）。跑选段前先 `section-select.sh --paths` 取段号，别为了证明没坏跑整套。
+
+### 2026-10-20T06:56:40Z · from: pm · re: P332
+P332提案已收到，保持产品与提案冻结。已派V68给另一席只读审阅规则一致性与必要验证：初见delta W/4W冲突、design避免双红的论证在waited>W时不成立、tasks墙钟带和重复全量需收敛。等独立意见后统一退修，不要先行实现或重跑任何实验。
