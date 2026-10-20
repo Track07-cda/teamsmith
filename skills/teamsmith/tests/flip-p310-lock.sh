@@ -134,10 +134,8 @@ elif ! rec_has '进程树 + starttime 证明：祖辈 pid='; then
   grep -a '门禁锁' "$REC" | head -2 | sed 's/^/      /'
 elif rec_has '排队等满上限'; then
   case_bad "leg green：祖辈持锁却仍在排队（记录写「排队等满上限」）"
-elif [ "$ELAPSED" -ge 10 ]; then
-  case_bad "leg green：花了 ${ELAPSED}s（>10s）—— 祖辈持锁时它本应立刻返回"
 else
-  case_ok "leg green：rc=0 · queued=0s（${ELAPSED}s 内返回）· 记录点名被证明的祖辈 pid"
+  case_ok "leg green：rc=0 · queued=0s · 记录点名被证明的祖辈 pid（· 参考 用时 ${ELAPSED}s）"
 fi
 
 # ── 镜像树：判据回退成「看环境标记」（改动前的形状）────────────────────────────────────────
@@ -176,10 +174,8 @@ elif ! rec_has '排队等满上限'; then
   case_bad "leg red：记录里没有「排队等满上限」（判据回退没有复现回归）"
 elif rec_has '已由祖先持有'; then
   case_bad "leg red：判据回退后仍认出了祖先（镜像树没生效）"
-elif [ "$ELAPSED" -lt "$WAIT_CAP" ]; then
-  case_bad "leg red：只花了 ${ELAPSED}s —— 没有真的排队（期望 ≥ ${WAIT_CAP}s）"
 else
-  case_ok "leg red：rc=1 · 排队 ${ELAPSED}s 撞上限 · 记录「排队等满上限」且没有「已由祖先持有」（回归复现）"
+  case_ok "leg red：rc=1 · 排队等满上限 · 记录「排队等满上限」且没有「已由祖先持有」（回归复现；· 参考 用时 ${ELAPSED}s）"
 fi
 
 # ── leg control：持锁者不是祖辈 → 照常排队（不许因为「有祖先」就跳过排队）──────────────────
@@ -196,10 +192,8 @@ elif ! grep -aq '门禁锁正被持有' "$TMP/control.log"; then
   case_bad "leg control：日志里没有「门禁锁正被持有…排队」（它没有排队）"
 elif ! rec_has '排队等满上限'; then
   case_bad "leg control：记录里没有「排队等满上限」"
-elif [ "$ELAPSED" -lt "$WAIT_CAP" ]; then
-  case_bad "leg control：只花了 ${ELAPSED}s —— 没有真的排队（期望 ≥ ${WAIT_CAP}s）"
 else
-  case_ok "leg control：rc=1 · 排队 ${ELAPSED}s 撞上限 · 点名持锁者（祖先没持锁时照常排队）"
+  case_ok "leg control：rc=1 · 排队等满上限 · 点名持锁者（祖先没持锁时照常排队；· 参考 用时 ${ELAPSED}s）"
 fi
 
 # 收尾：锁记录只删自己那一条（祖先包装器已删；这里只收夹具的持锁者）

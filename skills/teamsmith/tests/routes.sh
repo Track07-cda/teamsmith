@@ -737,15 +737,28 @@ mr_walk_b() {
       *)             finding "promise：$key 的探针 id「$probe」没有实现（覆盖表与实现脱节）"; bad=1 ;;
     esac
   done < "$rows"
+  # P316 · V61：`TEAM_BG_STOP_GRACE` 的 schema 注释**没有点名任何 team 命令**，所以上面的
+  # schema 驱动循环永远走不到它 —— 那两腿此前是死代码（旋钮怎么改都没人红）。按现有机制补一次
+  # 点名调用（不新造覆盖来源）：旋钮承诺「TERM 之后等这么多秒再 KILL」，由两条腿的效果差来守。
+  mr_promise_bg_stop_grace TEAM_BG_STOP_GRACE || bad=1
   [ "$bad" = "1" ] && return 1
   return 0
 }
 
 # -- the promise probes -----------------------------------------------------------------------------
-# P159：宽限旋钮的探针。作业是夹具自己 spawn 的**新会话组头**（pgid == pid）且 **trap "" TERM**
-# （SIG_IGN 会被 exec 继承，组里那个 sleep 也一样）——于是只有 KILL 能收掉它，"先 TERM、等宽限、
-# 再 KILL" 这条承诺真的会发生。两次跑只差 config.sh 里手改的那个值：0 必须**不等待**（< 3s），
-# 2 必须**等够**（≥ 2s）。判的是效果（进程死了 + 账本 signal=TERM,KILL + 用时差），不看退出码。
+# P159 的宽限承诺（P316 · V63/V64 返修）。V63 实测过上一版的反例：把实现固定成 grace=2，两条断言照样绿 ——
+# 因为上一版两腿用的是两个**不同的作业**，那只说明「两种作业结局不同」，说明不了「配置值决定等多久」。
+# 现在：
+#   ① 真实进程腿（保留，P159 原证据）：忽略 TERM 的真作业（`trap "" TERM`，SIG_IGN 被 exec 继承）+
+#      配置 0 → 只能 KILL：账本 signal=TERM,KILL、进程真的被收掉。
+#   ② 逻辑腿：在测试侧**局部加载 `team_bg_stop` 本身**，替换它的计时/信号/存活判定，以及记录判定、
+#      账本与输出这几处依赖（全部换成局部替身），把等待累加成**逻辑秒数**、把信号记成**顺序**；
+#      **同一份作业状态**跑三遍，只改配置值：
+#        · 配置 0 + 会自己死的作业 → **0 逻辑等待**、直接 TERM,KILL（固定成 grace=2 会等 2s → 红）
+#        · 配置 2 + 同一作业       → 先 TERM、它在窗口内自己死 → **不升级**
+#        · 配置 2 + 不响应的作业   → 等满配置的宽限（逻辑时间**精确等于 2**）再 KILL
+#      逻辑时间是计数的，不受机器负载影响，所以这三条不需要性能阈值。不钉 sleep 次数、不钉内部 ticks 算法
+#      （只按 sleep 的参数累加秒数），没有产品钩子，也没有通用时钟框架。
 mr_bg_ignore_term_job() { # <fixture> <id> → 起作业、写记录；MR_BG_PID/MR_BG_PGID/MR_BG_START
   local d="$1" id="$2" st rest
   setsid bash -c 'trap "" TERM; sleep 300 & echo $! > "$1"; wait' _ "$d/$id-child.pid" >/dev/null 2>&1 &
@@ -764,41 +777,113 @@ mr_bg_ignore_term_job() { # <fixture> <id> → 起作业、写记录；MR_BG_PID
   return 0
 }
 
-mr_promise_bg_stop_grace() { # <KEY>
-  local key="$1" d t0 t1 spent
+# 宽限的逻辑替身（V64）：作业状态只在本进程里记着，`kill -KILL` 之后它**确实已死**（不扛 SIGKILL）；
+# `team_bg_pid_alive` 读的唯一依据是这份替身状态，与真实 .job 记录无关（这里不假装测了文件载入）。
+# 值由 env 给出（`TEAM_BG_STOP_GRACE`），这个局部函数不重写 config.sh —— 载入不在本探针的验证范围。
+mr_grace_logic() { # <fixture> <grace> <alive-after-term-s> → stdout: "<逻辑等待秒> <信号顺序> <rc>"
+  local d="$1" grace="$2" alive_for="$3"
+  ( cd "$d" && env -u TMUX -u TMUX_PANE -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+      TEAM_BG_STOP_GRACE="$grace" MR_ALIVE_FOR="$alive_for" PATH="$SHIM:$PATH" TEAM_PI_BIN=/bin/true \
+      TEAM_MEETINGS_DIR="$d/.meetings" TEAM_PI_AGENT_DIR="$d/.pi-agent" \
+      bash -c '
+        set -uo pipefail
+        . "$1/scripts/lib/cmd-bg.sh" >/dev/null 2>&1 || { echo "0 none source-failed"; exit 0; }
+        G_WAITED=0; G_SIGS=""; G_TERMED=0; G_W_TERM=""; G_W_KILL=""
+        sleep() {   # 只累加参数秒数，不睡
+          case "${1:-}" in ""|*[!0-9.]*) return 0 ;; esac
+          G_WAITED="$(awk -v a="$G_WAITED" -v b="$1" "BEGIN { printf \"%.2f\", a + b }")"
+        }
+        kill() {    # 记信号顺序与「TERM 之后又等了多久」；KILL 让替身作业**真的死**
+          local a
+          for a in "$@"; do
+            case "$a" in
+              -TERM|TERM|-15|15) G_SIGS="${G_SIGS:+$G_SIGS,}TERM"; G_TERMED=1; G_W_TERM="$G_WAITED" ;;
+              -KILL|KILL|-9|9)   G_SIGS="${G_SIGS:+$G_SIGS,}KILL"; G_W_KILL="$G_WAITED"; G_TERMED=2 ;;
+            esac
+          done
+          return 0
+        }
+        # 替身作业状态：0 = 还没收到 TERM（活着）；1 = 收到 TERM、过 MR_ALIVE_FOR 逻辑秒后自己死；
+        # 2 = 已被 SIGKILL（立刻已死，不再复活 —— 扛 KILL 的替身会掩盖产品「KILL 之后仍在等」的错误）。
+        team_bg_pid_alive() {
+          case "$G_TERMED" in
+            2) return 1 ;;
+            0) return 0 ;;
+          esac
+          awk -v w="$G_WAITED" -v lim="${MR_ALIVE_FOR:-0}" "BEGIN { exit !(w + 0 < lim + 0) }"
+        }
+        team_bg_dir() { printf "%s\n" "$PWD/.pi/team/state/bg"; }
+        team_bg_check_record() { TEAM_BG_PID=999999; TEAM_BG_PGID=999999; TEAM_BG_CMD="sleep 300"; TEAM_BG_VERDICT=holds; return 0; }
+        team_bg_ledger() { :; }
+        team_info() { :; }; team_dim() { :; }; team_err() { :; }; team_warn() { :; }
+        # 受测函数的返回值**不会被 printf 覆盖**：意外非零就照原样交给调用者（唯一判断在这一个 if 上）。
+        if team_bg_stop gl >/dev/null 2>&1; then rc=0; else rc=$?; fi
+        GAP="$(awk -v a="${G_W_TERM:-0}" -v b="${G_W_KILL:-${G_W_TERM:-0}}" "BEGIN { printf \"%.2f\", b - a }")"
+        printf "%s %s %s\n" "$GAP" "${G_SIGS:-none}" "$rc"
+      ' _ "$skill" 2>"$d/grace-logic.err"
+  )
+}
+
+mr_promise_bg_stop_grace() { # <KEY>mr_promise_bg_stop_grace() { # <KEY>
+  local key="$1" d
   d="$(new_fixture promise-bg-stop-grace)" || return 1
   # ① 宽限 0：TERM 之后**不等待**，直接 KILL
   printf 'TEAM_BG_STOP_GRACE=0\n' >> "$d/.pi/team/config.sh"
   mr_bg_ignore_term_job "$d" grace0 || { finding "promise（$key）：作业夹具起不来"; return 1; }
-  t0="$(date +%s)"; mr_run "$d" bg stop grace0; t1="$(date +%s)"; spent=$((t1 - t0))
+  mr_run "$d" bg stop grace0
   if kill -0 "$MR_BG_PID" 2>/dev/null; then
     kill -KILL "$MR_BG_PID" 2>/dev/null || true
     finding "promise（$key）：宽限 0 时忽略 TERM 的作业没有被 KILL 收掉（rc=$MR_RC，$(first_line "$MR_OUT")）"
     return 1
   fi
-  if [ "$spent" -ge 3 ]; then
-    finding "promise（$key）：宽限 0 却等了 ${spent}s（旋钮没生效）"
-    return 1
-  fi
+  # P316：不判「等了几秒」；宽限 0 的语义由账本 signal=TERM,KILL（下面）+ 进程已被收掉守。
   if ! grep -q 'stop id=grace0 signal=TERM,KILL result=stopped' "$d/.pi/team/state/bg.log" 2>/dev/null; then
     finding "promise（$key）：账本没有记下 TERM→KILL 的升级（$(first_line "$(cat "$d/.pi/team/state/bg.log" 2>/dev/null)"）)"
     return 1
   fi
-  ok "promise（$key）：宽限 0 → 忽略 TERM 的作业被立刻 KILL（账本 signal=TERM,KILL，用时 ${spent}s）"
-  # ② 宽限 2：同样的作业要等够 2s 才升级 —— 旋钮真的改变等待
-  sed -i 's/^TEAM_BG_STOP_GRACE=0$/TEAM_BG_STOP_GRACE=2/' "$d/.pi/team/config.sh"
-  mr_bg_ignore_term_job "$d" grace2 || { finding "promise（$key）：第二个作业夹具起不来"; return 1; }
-  t0="$(date +%s)"; mr_run "$d" bg stop grace2; t1="$(date +%s)"; spent=$((t1 - t0))
-  if kill -0 "$MR_BG_PID" 2>/dev/null; then
-    kill -KILL "$MR_BG_PID" 2>/dev/null || true
-    finding "promise（$key）：宽限 2 时作业没有被 KILL 收掉（rc=$MR_RC，$(first_line "$MR_OUT")）"
+  ok "promise（$key）：宽限 0 → 忽略 TERM 的作业被立刻 KILL（账本 signal=TERM,KILL）"
+  # ② 逻辑腿：**同一份作业状态**，只改配置 0/2，看「TERM→KILL 之间的逻辑等待」与「信号顺序」。
+  local r0 rc0 r2a rc2a r2b rc2b
+  mr_grace_logic "$d" 0 0.3  >"$tmp/grace-logic-0.txt" 2>&1    # 配置 0 + 会响应的作业
+  mr_grace_logic "$d" 2 0.3  >"$tmp/grace-logic-2a.txt" 2>&1   # 配置 2 + 同一个会响应的作业
+  mr_grace_logic "$d" 2 99   >"$tmp/grace-logic-2b.txt" 2>&1   # 配置 2 + 不响应的作业（要等满窗口才升级）
+  read -r r0 sig0 rc0   <"$tmp/grace-logic-0.txt"  || true
+  read -r r2a sig2a rc2a <"$tmp/grace-logic-2a.txt" || true
+  read -r r2b sig2b rc2b <"$tmp/grace-logic-2b.txt" || true
+  # 受测函数必须自己返回 0；替身里没有第二层判断，意外非零会走到这里（V64：不许被 printf 吞掉）。
+  local want
+  for want in "0:${rc0:-缺}" "2a:${rc2a:-缺}" "2b:${rc2b:-缺}"; do
+    case "$want" in
+      *:0) ;;
+      *) finding "promise（$key）：逻辑腿 ${want%%:*} 的 team_bg_stop 返回了 ${want#*:}（期望 0；原始 stderr：$(first_line "$(cat "$d/grace-logic.err" 2>/dev/null)")）"
+         return 1 ;;
+    esac
+  done
+  local miss=""
+  case "${r0:-}"  in ''|*[!0-9.]*) miss="wait0" ;; esac
+  case "${r2a:-}" in ''|*[!0-9.]*) miss="${miss:+$miss,}wait2a" ;; esac
+  case "${r2b:-}" in ''|*[!0-9.]*) miss="${miss:+$miss,}wait2b" ;; esac
+  case "${sig0:-}"  in TERM|TERM,KILL) ;; *) miss="${miss:+$miss,}sig0" ;; esac
+  case "${sig2a:-}" in TERM|TERM,KILL) ;; *) miss="${miss:+$miss,}sig2a" ;; esac
+  case "${sig2b:-}" in TERM|TERM,KILL) ;; *) miss="${miss:+$miss,}sig2b" ;; esac
+  if [ -n "$miss" ]; then
+    finding "promise（$key）：逻辑腿没有给出读数（缺 ${miss}；0:[${r0:-} ${sig0:-}] 2a:[${r2a:-} ${sig2a:-}] 2b:[${r2b:-} ${sig2b:-}]）"
     return 1
   fi
-  if [ "$spent" -lt 2 ]; then
-    finding "promise（$key）：宽限 2 却只等了 ${spent}s（旋钮没生效）"
-    return 1
-  fi
-  ok "promise（$key）：宽限 2 → 先 TERM、等 ${spent}s 后 KILL（旋钮改变等待）"
+  # 配置 0 ⇒ 先 TERM 再立刻 KILL，二者之间**零等待**。实现若固定成 grace=2，这里会等出 2s（V63 的反例）。
+  [ "$sig0" = "TERM,KILL" ] \
+    || { finding "promise（$key）：配置 0 却没升级成 KILL（信号顺序 [$sig0]）"; return 1; }
+  awk -v w="$r0" 'BEGIN { exit !(w + 0 == 0) }' \
+    || { finding "promise（$key）：配置 0 却在 TERM→KILL 之间等了 ${r0}s —— 「0 = 不等待」没被遵守"; return 1; }
+  # 配置 2 + 会响应的作业 ⇒ 作业在窗口内自己死，不升级。
+  [ "$sig2a" = "TERM" ] \
+    || { finding "promise（$key）：配置 2 下作业在窗口内自己退了却仍升级（信号顺序 [$sig2a]）"; return 1; }
+  # 配置 2 + 不响应的作业 ⇒ **等满配置的宽限**（逻辑时间，精确等于 2）再升级。
+  [ "$sig2b" = "TERM,KILL" ] \
+    || { finding "promise（$key）：配置 2 下不响应的作业没有升级成 KILL（信号顺序 [$sig2b]）"; return 1; }
+  awk -v w="$r2b" 'BEGIN { exit !(w + 0 == 2) }' \
+    || { finding "promise（$key）：配置 2 的 TERM→KILL 等待是 ${r2b}s，不是配置的完整宽限 2s"; return 1; }
+  ok "promise（$key）：同一作业状态下配置 0/2 给出不同等待（0 → 立即 KILL；2 → 等满 2.00s；会响应的作业不升级）"
   return 0
 }
 

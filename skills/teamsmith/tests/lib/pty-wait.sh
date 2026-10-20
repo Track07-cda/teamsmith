@@ -39,41 +39,15 @@
 #   PTY_TRACE=0            print every wait/cleanup decision to stderr (fixture diagnostics)
 #   PTY_SELFTEST_BREAK=""  self-test only (`--self-test`): sabotage one rule so the guard test
 #                          can go red (early / nosettle / noclockmask / unguarded / noscene /
-#                          noext / alwaysext / noskip / alwaysskip / pipeshadow)
+#                          noext / alwaysext / pipeshadow)
 #
-# P48 `pty-fixture-load-premise` (panel#The project-settings pty fixture judges under a machine
-# premise; the gate rule is verification#The correctness gate judges correctness only): the horizon
-# above is a **failure detector, never a judgment**. Time is the machine's dimension, so a machine
-# that cannot deliver a frame must not turn into a red. Two in-run instruments, both bounded:
-#
-#   PTY_STALL_ROUNDS=8   the progress window, in rounds. A wait is extended only while the masked
-#                        capture changed within the last this many rounds AND at least this many
-#                        rounds have been observed — a horizon below the window (the fixture's own
-#                        site overrides at 6/8 rounds) is never extended and a scene that stopped
-#                        painting gets no extension at all, so the extension can never hide a
-#                        static failure. Measured basis: a round costs ~0.6-0.85 s, so 8 rounds is
-#                        ~5-7 s of identical masked frames.
-#   PTY_EXT_FACTOR=3     the extension ceiling: at most this many times the base horizon (bounded
-#                        cost: a red can never take more than 3 x ~26 s per wait, and the scenario
-#                        stops at the first unattributable exhaustion)
-#
-# At that ceiling the wait asks the caller's premise hook and decides:
-#   still painting  OR  pty_premise_over returns 0 (the machine's own readings are over their
-#   ceilings) -> a **visible SKIP**: one line naming the wait, its rounds, its elapsed time, the
-#   M59 scene report and the reason (the readings). The wait returns 3, sets PTY_SKIPPED=1 and
-#   runs the caller's pty_on_skip when it defines one (the fixtures stop that scenario there);
-#   a static scene with the readings under their ceilings -> the ordinary failure (rc 1) with the
-#   M59 scene, so a real regression always reds on a healthy machine. A skip is never reported as
-#   a pass and never as a failure by this file.
-#
-# The caller may define (both optional; absent = "the machine is under its premise"):
-#   pty_premise_over   0 when the machine is over its premise (attributed -> SKIP), 1 otherwise
-#   pty_premise_reason prints the one-line reason the SKIP line carries (loadavg/cores/probe)
-#   pty_on_skip        called after a skip is printed (the pty fixtures exit their scenario with 4)
-# PTY_INJECT_NEEDLE=""   fixture/self-test only: an extra needle that can never appear, appended to
-#                        every wait — the "the state never arrives" shape the exhaustion tests need.
-# Wait verdict: 0 green | 1 red (the M59 failure scene) | 3 visible SKIP (machine, not code) | 2
-# setup (pty_cap missing).
+# P316（用户裁定第二条：性能只能是参考指标，不能阻塞）：**没有负载前提、没有 SKIP**。
+# 等待视界是**失败探测器**（防死等），不是性能判定：
+#   PTY_WAIT_ITERS=100    基础视界（每轮 ~0.6-0.85 s → ~60-85 s）；到点以后仍**在绘制**的现场
+#                         继续延长（PTY_EXT_FACTOR=5 → 最多 ~300-425 s），静态现场到点就停。
+#   耗尽一律**红**：一行「没等到「X」（轮数 n/N，耗时约 Xs；最后一次状态：…；缺：…）」+ M59 现场，
+#   rc=1。**没有 rc=3**：机器忙不再是「没结论」的出口。
+# Wait verdict: 0 green | 1 red (the M59 failure scene) | 2 setup (pty_cap missing).
 #
 # Constants, bands and how to re-derive them (design.md §3/§4; the raw table is
 # docs/team/reports/P48-dev3.md):
@@ -88,18 +62,16 @@
 #                        {probe,storm,burn} (owned load, owned targets, private roots).
 set -uo pipefail
 
-PTY_WAIT_ITERS="${PTY_WAIT_ITERS:-40}"
+PTY_WAIT_ITERS="${PTY_WAIT_ITERS:-100}"
 PTY_WAIT_PAUSE="${PTY_WAIT_PAUSE:-0.35}"
 PTY_SETTLE_PAUSE="${PTY_SETTLE_PAUSE:-0.25}"
 PTY_CLEANUP_ITERS="${PTY_CLEANUP_ITERS:-4}"
 PTY_SCENE_LINES="${PTY_SCENE_LINES:-12}"
 PTY_STALL_ROUNDS="${PTY_STALL_ROUNDS:-8}"
-PTY_EXT_FACTOR="${PTY_EXT_FACTOR:-3}"
+PTY_EXT_FACTOR="${PTY_EXT_FACTOR:-5}"
 PTY_INJECT_NEEDLE="${PTY_INJECT_NEEDLE:-}"
 PTY_TRACE="${PTY_TRACE:-0}"
 PTY_KEYS_SENT="${PTY_KEYS_SENT:-0}"
-PTY_SKIPPED="${PTY_SKIPPED:-0}"
-PTY_WAIT_PAINTING="${PTY_WAIT_PAINTING:-}"
 PTY_WAIT_CEILING="${PTY_WAIT_CEILING:-}"
 PTY_FAIL_STREAK="${PTY_FAIL_STREAK:-0}"
 PTY_WAIT_FAILED="${PTY_WAIT_FAILED:-0}"
@@ -197,51 +169,24 @@ _pty_painting_recent() {
   [ "$(( $1 - $2 ))" -le "$stall" ]
 }
 
-# _pty_premise_over — the caller's hook, with the two self-test sabotages: `noskip` makes an
-# over-premise exhaustion fail anyway (the guard test must catch a skip that stopped happening) and
-# `alwaysskip` skips even under the premise (the guard test must catch a skip that swallows a red).
-_pty_premise_over() {
-  [ "${PTY_SELFTEST_BREAK:-}" = "alwaysskip" ] && return 0
-  [ "${PTY_SELFTEST_BREAK:-}" = "noskip" ] && return 1
-  declare -F pty_premise_over >/dev/null 2>&1 || return 1
-  pty_premise_over
-}
-_pty_premise_reason() {
-  if declare -F pty_premise_reason >/dev/null 2>&1; then pty_premise_reason
-  else printf '机器读数超前提'; fi
-}
-
-# pty_skip_line — the one visible line a skip prints. It names the wait, its rounds against the
-# ceiling, the elapsed time, whether the scene was still painting, what was missing (the M59
-# report) and the caller's reason (the readings). stdout, so the gate's log carries it.
-pty_skip_line() {
-  local painting='场景已静止'
-  [ "${PTY_WAIT_PAINTING:-no}" = "yes" ] && painting='场景仍在绘制'
-  printf '  \033[33mSKIP\033[0m 等待耗尽但归因于机器（既不是通过也不是失败）：%s · 轮数 %s/%s · 耗时约 %ss · %s · %s · 归因：%s\n' \
-    "${PTY_WAIT_LABEL:-?}" "${PTY_WAIT_ROUNDS:-?}" "${PTY_WAIT_CEILING:-?}" "${PTY_WAIT_SECONDS:-?}" \
-    "$painting" "${PTY_WAIT_REPORT:-}" "$(_pty_premise_reason)"
-}
-
 # pty_wait_frame <outfile|-> <label> <needle...> → 0 when a settled frame carries every needle
 # (absent ones prefixed with `!`). The latest capture is written to <outfile> every round so the
 # caller's assertion can show what was on screen. The horizon is a failure detector: it is extended
 # (bounded, PTY_EXT_FACTOR) while the scene is still painting, and at the ceiling the verdict is
-# attributed — the machine (visible SKIP, rc 3, PTY_SKIPPED=1) or the code (the M59 failure scene,
-# rc 1, which the caller's bad() classifies as isolated vs cascade).
+# always a failure (the M59 scene, rc 1, "没等到 X") — P316 removed the machine-attributed SKIP.
 pty_wait_frame() {
   local out="$1" label="$2"; shift 2
   declare -F pty_cap >/dev/null 2>&1 || { printf 'pty-wait: pty_cap is not defined\n' >&2; return 2; }
-  local base="${PTY_WAIT_ITERS:-40}" extf="${PTY_EXT_FACTOR:-3}"
-  case "$base" in ''|*[!0-9]*) base=40 ;; esac
+  local base="${PTY_WAIT_ITERS:-100}" extf="${PTY_EXT_FACTOR:-5}"
+  case "$base" in ''|*[!0-9]*) base=100 ;; esac
   [ "$base" -ge 1 ] || base=1
-  case "$extf" in ''|*[!0-9]*) extf=3 ;; esac
+  case "$extf" in ''|*[!0-9]*) extf=5 ;; esac
   [ "$extf" -ge 1 ] || extf=1
   [ "${PTY_SELFTEST_BREAK:-}" = "noext" ] && extf=1
   local ceiling=$(( base * extf ))
   local extra="${PTY_INJECT_NEEDLE:-}"
   local i=0 a last_masked='' masked last_change=0 t0="$SECONDS"
   PTY_WAIT_FAILED=0
-  PTY_SKIPPED=0
   while [ "$i" -lt "$ceiling" ]; do
     i=$((i + 1))
     a="$(pty_cap)"
@@ -250,7 +195,7 @@ pty_wait_frame() {
       PTY_WAIT_ROUNDS="$i"; PTY_WAIT_CEILING="$ceiling"
       # The trace line keeps the pre-P48 shape (`rounds=$i`): panel-p21.sh's own M59 assertion
       # (`wait picker … rounds=[0-9]+ settled=1`) pins it, and the ceiling already appears in the
-      # exhaustion report and the skip line. A diagnostics line is no place to break a pin.
+      # exhaustion report. A diagnostics line is no place to break a pin.
       [ "${PTY_TRACE:-0}" = "1" ] && pty_trace "wait $label rounds=$i settled=1"
       return 0
     fi
@@ -270,12 +215,9 @@ pty_wait_frame() {
   PTY_WAIT_PAINTING="no"
   _pty_painting_recent "$i" "$last_change" && PTY_WAIT_PAINTING="yes"
   PTY_WAIT_REPORT="$(_pty_report_missing "$a" "$@" ${extra:+"$extra"})"
-  if [ "$PTY_WAIT_PAINTING" = "yes" ] || _pty_premise_over; then
-    PTY_SKIPPED=1
-    pty_skip_line
-    if declare -F pty_on_skip >/dev/null 2>&1; then pty_on_skip; fi
-    return 3
-  fi
+  # P316：耗尽就是「没等到」——一行点名等待/轮数/耗时/最后一次状态，再给 M59 现场；没有机器维度。
+  printf '  \033[33m没等到\033[0m %s：%s/%s 轮（耗时约 %ss；最后一次状态：%s；缺：%s）\n' \
+    "$label" "$i" "$ceiling" "$((SECONDS - t0))" "${PTY_WAIT_PAINTING:-no}" "${PTY_WAIT_REPORT:-?}"
   pty_wait_scene "$label" "$i" "$((SECONDS - t0))" "$a" "$@" ${extra:+"$extra"}
   return 1
 }
@@ -424,10 +366,9 @@ pty_selftest() {
   . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tmp-root.sh"
   st_dir="$(tmp_root_create pty-wait-selftest)" || return 3
   trap 'tmp_root_reap_all' EXIT
-  local _PASS=0 _FAIL=0 _SKIP=0
+  local _PASS=0 _FAIL=0
   _st_ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; _PASS=$((_PASS + 1)); pty_fail_reset; }
   _st_bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; _FAIL=$((_FAIL + 1)); }
-  _st_skip() { printf '  \033[33mSKIP\033[0m %s\n' "$1"; _SKIP=$((_SKIP + 1)); pty_fail_reset; }
 
   # The fake pane: a settings view; a picker paints one line per capture (max 4); the title clock
   # ticks every capture so only the masked comparison can settle. Keys mutate the app state:
@@ -606,38 +547,7 @@ pty_selftest() {
     _st_bad "静态场景被延长或没红（rc=$stat_rc rounds=$stat_rounds；断点=${PTY_SELFTEST_BREAK:-无}）"
   fi
 
-  # ── 判据⑤：耗尽那一刻的归因 —— 超前提是可见 SKIP（不是失败），前提之下仍是红 ──
-  # 注入的前提钩子（真实夹具里由 panel-p21.sh 提供；这里换成一个可切换的自检读数）。
-  _pty_selftest_premise="under"
-  pty_premise_over() { [ "${_pty_selftest_premise:-under}" = "over" ]; }
-  pty_premise_reason() {
-    printf '注入读数：探针 999ms > 顶 120ms（loadavg %s · %s 核）' \
-      "$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')" "$(nproc 2>/dev/null || echo '?')"
-  }
-  local skip_rc red_rc
-  _st_reset view
-  _pty_selftest_premise="over"
-  PTY_WAIT_ITERS=6 PTY_STALL_ROUNDS=2 PTY_WAIT_PAUSE=0.01 PTY_SETTLE_PAUSE=0.01 \
-    pty_wait_frame "$st_dir/skip.txt" "超前提的等待" "这条目永远不来" > "$st_dir/skip.out" 2> "$st_dir/skip.err"
-  skip_rc=$?
-  if [ "$skip_rc" -eq 3 ] && [ "${PTY_SKIPPED:-0}" = "1" ] \
-     && grep -q 'SKIP' "$st_dir/skip.out" && grep -q '超前提的等待' "$st_dir/skip.out" \
-     && grep -q '999ms' "$st_dir/skip.out" && grep -q '这条目永远不来' "$st_dir/skip.out"; then
-    _st_skip "超前提：rc=3 + PTY_SKIPPED=1 + 一行可见 SKIP（点名等待/轮数/耗时/现场/读数）→ 记为 skip，不是失败"
-  else
-    _st_bad "超前提没有给出可见 SKIP（rc=$skip_rc PTY_SKIPPED=${PTY_SKIPPED:-}；断点=${PTY_SELFTEST_BREAK:-无}）"
-  fi
-  _st_reset view
-  _pty_selftest_premise="under"
-  PTY_WAIT_ITERS=6 PTY_STALL_ROUNDS=2 PTY_WAIT_PAUSE=0.01 PTY_SETTLE_PAUSE=0.01 \
-    pty_wait_frame "$st_dir/red.txt" "前提之内的等待" "这条目永远不来" 2> "$st_dir/red.err"
-  red_rc=$?
-  if [ "$red_rc" -eq 1 ] && [ "${PTY_SKIPPED:-0}" = "0" ] && grep -q '等待超时' "$st_dir/red.err"; then
-    _st_ok "前提之内：同一个静态现场仍是红（rc=1 + M59 现场）—— SKIP 不是逃逸门"
-  else
-    _st_bad "前提之内的耗尽没有红（rc=$red_rc PTY_SKIPPED=${PTY_SKIPPED:-}；断点=${PTY_SELFTEST_BREAK:-无}）"
-  fi
-
+  # ── 判据⑤（P316 退役）：原「超前提 → 可见 SKIP」不再存在；耗尽一律红，见判据④的静态场景。
   # ── 判据⑥：长帧（>128 KiB）的两向 —— 命中不能被 SIGPIPE 吃掉，缺失必须照缺报（P127）──
   # P124 的最小复现：帧 120607 B > 管道缓冲（64 KiB），needle 在最前面；旧写法
   # `printf '%s\n' "$c" | grep -qF` 命中即退 → 写端 SIGPIPE → pipefail 下 rc=141 → 假「没出现」。
@@ -666,7 +576,7 @@ pty_selftest() {
     _st_bad "长帧缺失没有照缺报（rc=$long_miss_rc；断点=${PTY_SELFTEST_BREAK:-无}）"
   fi
 
-  printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d  SKIP %d\n' "$_PASS" "$_FAIL" "$_SKIP"
+  printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d\n' "$_PASS" "$_FAIL"
   [ "$_FAIL" -eq 0 ] && exit 0
   exit 1
 }

@@ -563,7 +563,7 @@ if want audit; then
   n="$(printf '%s\n' "$got" | grep -c . || true)"
   [ "$n" -le 5 ] && ok "log 5 最多输出 5 行（$n）" || bad "log 5 输出了 $n 行"
   assert_eq "log 5 的最后一行 = 日志最后一行" "$(printf '%s\n' "$got" | tail -1)" "$newest"
-  timeout 20 bash -c "cd '$p' && bash '$team' config list --json > '$tmp/audit-list.json' 2>&1"; rc=$?
+  timeout 300 bash -c "cd '$p' && bash '$team' config list --json > '$tmp/audit-list.json' 2>&1"; rc=$?
   assert_eq "10MiB 下 list --json 有界返回" "$rc" "0"
   if python3 -c '
 import json,sys

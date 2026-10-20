@@ -89,7 +89,7 @@ unset TEAM_TMP_RUN_ID TEAM_TMP_LEDGER 2>/dev/null || true
 [ -n "${SMOKE_TMP_RUN_ID:-}" ] || export SMOKE_TMP_RUN_ID="smoke-$$-$(date +%s)"
 # shellcheck source=tests/lib/tmp-root.sh
 . "$SKILL_DIR/tests/lib/tmp-root.sh"
-# P70（change: gate-section-accounting）：每段自述 + 硬预算 + 现场。
+# P70（change: gate-section-accounting）：每段自述 + 挂住上限 + 现场（P316：时间只记录、不判定）。
 # shellcheck source=tests/lib/section-guard.sh
 . "$SKILL_DIR/tests/lib/section-guard.sh"
 # P281（change: gate-lock-hygiene）：门禁共享锁的记录格式与读写（与 cmd-review.sh 共用同一份实现）。
@@ -265,7 +265,7 @@ fi
 
 # ── P98 · 分段账本（change: gate-runtime-budget；只记录，不判定）─────────────────────────
 # 每段收口**一行**（与 P70 的段自述合并成同一条）：
-#   `#N id · 用时 Ns · ✓P ✗F SKIPk · ticks T`
+#   `#N id · 参考 用时 Ns · ✓P ✗F SKIPk · ticks T`
 #   * 用时/ticks 来自 P70 的看门狗记账（**唯一时钟**：收口行与 sections.tsv 同源，账本不再各量一次）；
 #   * ✓/✗/SKIP 是这段的增量（账本侧在关段前经 SG_CLOSE_COUNTS 注入，行由 guard 打）；
 #   * 行**不**缩进、**不**携带门禁红标 `  \033[31m✗\033[0m`（flip-m33 数的是那个字节序列），
@@ -302,7 +302,7 @@ smoke_slowest_summary() { # 最慢 N 段（默认 5；SMOKE_SLOWEST_N 只在夹�
   printf '\n\033[1m== 最慢 %s 段 ==\033[0m\n' "$n"
   printf '%s\n' "$SMOKE_SEC_ROWS" | sed '/^$/d' | sort -t'|' -k3,3gr | head -n "$n" | \
   while IFS='|' read -r idx id sec p f s tk; do
-    printf '  \033[2m#%s\033[0m %s · 用时 %ss · ✓%s ✗%s SKIP%s · ticks %s\n' "$idx" "$id" "$sec" "$p" "$f" "$s" "$tk"
+    printf '  \033[2m#%s\033[0m %s · 参考 用时 %ss · ✓%s ✗%s SKIP%s · ticks %s\n' "$idx" "$id" "$sec" "$p" "$f" "$s" "$tk"
   done
   return 0
 }
@@ -556,7 +556,7 @@ if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
     SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
     SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
     IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
-      < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" "$SKILL_DIR/tests/section-budgets.tsv")
+      < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316：预算表退役；expected/bound 为 0/0
     SMOKE_LOCK_STARTED="$(date +%s)"
     # 记录只在**持有者**手里写（P281 的 F4：不许覆写另一个活着进程的记录）。真被拒（同一把锁上有
     # 另一个活着的持有者记录）本身就是「互斥断了」的形状 —— 交给下面的入场检查点名并停跑。
@@ -634,7 +634,7 @@ if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
   SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
   SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
   IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
-    < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" "$SKILL_DIR/tests/section-budgets.tsv")
+    < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316：预算表退役；expected/bound 为 0/0
   SMOKE_LOCK_STARTED="$(date +%s)"
   SMOKE_LOCK_KIND="${SMOKE_LOCK_KIND:-top}"
   # 嵌套运行的期限对齐到**生它的那一段**。返修轮次 1 · F1：祖辈的 deadline 从**祖辈记录里公布的
@@ -763,7 +763,7 @@ section() {
   SMOKE_SEC_OPEN_KEY="${1%% · *}"; SMOKE_SEC_OPEN_ID="$1"
   SMOKE_SEC_P0=$PASS; SMOKE_SEC_F0=$FAIL; SMOKE_SEC_S0=$SKIP_N
   SMOKE_LAST_SECTION="$1"
-  section_guard_begin "$1"       # P70：开这一段（打印唯一的开跑行：== #N id == ISO · 预算 Ns）
+  section_guard_begin "$1"       # P70：开这一段（打印唯一的开跑行：== #N id == ISO）
 }
 ok()  { section_guard_check; printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() {
@@ -868,7 +868,7 @@ REPO="$TMP/repo"
 FAKE="$TMP/fake-bin"
 mkdir -p "$REPO" "$FAKE"
 # P70：阈值表在 skill 树里（只读）；计时记录 sections.tsv / 开跑行 sections.log 在 $TMP。
-section_guard_init "$TMP" --budgets "$SKILL_DIR/tests/section-budgets.tsv"
+section_guard_init "$TMP"   # P316：没有预算表；每段一个 30 分钟挂住上限（默认 1800s，防死等）
 
 # ── P158 · 运行指纹：门禁自证「我判的那棵树在跑动中没被改」──────────────────────────────────
 # 事故（D79）：`fast-full-capture` 跑动期间 PM 在同一棵树里合并了 P147 → 该次运行报 ✗138 ✓，
@@ -1660,16 +1660,17 @@ fi
 
 # ---------------------------------------------------------------- 0e. P70 段落自述（change: gate-section-accounting）
 # 每段自述/硬预算/现场的守门断言（纯逻辑 + 模块自检，不碰 tmux、不碰真项目）。
-section "0e · 段落自述：看门狗 / 预算表 / 循环清单（P70）"
+section "0e · 段落自述：看门狗 / 循环清单（P70 · P316）"
 # ① 看门狗在岗、但不在作业表里（M33 哨兵同形：12b-i 的裸 wait 不能被它卡住）
 P70_WD_PID="$(awk -F'\t' 'NR==1{print $1}' "$SG_WATCHDOG_PIDFILE" 2>/dev/null || true)"
 assert_eq "P70 看门狗：活着但不在作业表里（双重 fork）" \
   "$(jobs -p | wc -l | tr -d ' ')|$(_sg_pid_alive "$P70_WD_PID" && printf alive || printf dead)" "0|alive"
 assert_eq "P70 看门狗：心跳指向当前段落（#${SG_SEC_NO}）" \
   "$(awk -F'|' '{print $1}' "$SG_HEARTBEAT" 2>/dev/null)" "$SG_SEC_NO"
-# ② 模块自检：五形状（挂住的子进程 / 忽略 TERM 的子进程 / 纯内建自旋 / 自旋且关掉 TERM / 干净）
+# ② 模块自检：四种挂住形状（挂住 / 忽略 TERM / 纯自旋 / 自旋且关 TERM）+ 干净路径 + 心跳边界 + 红侧翻转。
+#    P316：band / 小数带那两形状随预算表退役；「挂住停跑」的形状全留。
 if TMPDIR="$TMP" bash "$SKILL_DIR/tests/lib/section-guard.sh" --self-test >"$TMP/p70-sg-self.log" 2>&1; then
-  ok "P70 模块自检五形状全绿（$(grep -ac '✓' "$TMP/p70-sg-self.log" || true) 条断言）"
+  ok "P70 模块自检全绿（$(grep -ac '✓' "$TMP/p70-sg-self.log" || true) 条断言）"
 else
   bad "P70 模块自检有失败"; grep -a '✗' "$TMP/p70-sg-self.log" | head -8 | sed 's/^/      /'
 fi
@@ -1689,58 +1690,14 @@ else
   bad "P70 破环翻转：sed 没改到 _sg_check_trip（夹具失效）"
 fi
 
-# ③ 预算表 + 循环清单：干净树绿 + 四个翻转红（全在 scratch 副本里动，真实树不碰）
+# ③ 循环清单：干净树绿 + 四个翻转红（全在 scratch 副本里动，真实树不碰）
 P70_CK="$TMP/p70-check"; rm -rf "$P70_CK"; mkdir -p "$P70_CK/lib"
 # P313 · V58 F2-b：拷贝面 = `--loop-check` 的**完整扫描面**（`tests/*.sh` + `tests/lib/*.sh`），
-# 不是「够这几条断言用」的那几份。以前只拷 section-guard/smoke/lib/*，tmp-hygiene.sh 不在副本里 →
-# 它的循环从不在门禁里核对：真树 rc=1（1748/1755 未登记）而门禁恒绿。现在少拷一个文件也会红
-# （清单里的文件不在扫描面 = bad），所以下面那一条「往 tmp-hygiene.sh 里塞未登记的循环」才是真的。
-cp "$SKILL_DIR"/tests/*.sh "$SKILL_DIR"/tests/section-budgets.tsv "$SKILL_DIR"/tests/loop-inventory.tsv "$P70_CK/"
-cp "$SKILL_DIR"/tests/lib/*.sh "$SKILL_DIR"/tests/lib/loop-scan.awk "$P70_CK/lib/"
-bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p70-budget-green.log" 2>&1; P70_RC=$?
-assert_eq "P70 预算检查：干净树绿（$(sed -n 's/^ok: 预算表覆盖 \(.*\) 个 section.*/\1/p' "$TMP/p70-budget-green.log") 个 section）" "$P70_RC" "0"
+# 不是「够这几条断言用」的那几份。少拷一个文件也会红（清单里的文件不在扫描面 = bad）。
+cp "$SKILL_DIR"/tests/*.sh "$SKILL_DIR/tests/loop-inventory.tsv" "$P70_CK/"
+cp "$SKILL_DIR"/tests/lib/*.sh "$SKILL_DIR/tests/lib/loop-scan.awk" "$P70_CK/lib/"
 bash "$P70_CK/section-guard.sh" --loop-check >"$TMP/p70-loop-green.log" 2>&1; P70_RC=$?
 assert_eq "P70 循环清单：干净树绿（$(sed -n 's/^ok: 扫描 \(.*\)$/\1/p' "$TMP/p70-loop-green.log")）" "$P70_RC" "0"
-# 翻转①：把一条预算降到「实测带×系数」以下 → 必须点名该段并红
-P70_LOW_ID="$(awk -F'\t' '!/^#/ && $4 ~ /^[0-9.]+$/ && ($4+0) >= 20 { print $1; exit }' "$P70_CK/section-budgets.tsv")"
-if [ -n "$P70_LOW_ID" ]; then
-  awk -F'\t' -v id="$P70_LOW_ID" 'BEGIN{FS="\t"; OFS="\t"} /^#/ { print; next } $1 == id { $3 = 1 } { print }' \
-    "$P70_CK/section-budgets.tsv" > "$P70_CK/b.new" && mv "$P70_CK/b.new" "$P70_CK/section-budgets.tsv"
-  bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p70-budget-low.log" 2>&1; P70_RC=$?
-  assert_eq "P70 翻转（预算）：降到带以下 → 红" "$P70_RC" "1"
-  assert_has "$TMP/p70-budget-low.log" "$P70_LOW_ID" "P70 翻转（预算）：点名被降的段落"
-  cp "$SKILL_DIR/tests/section-budgets.tsv" "$P70_CK/section-budgets.tsv"
-  bash "$P70_CK/section-guard.sh" --budget-check >/dev/null 2>&1; P70_RC=$?
-  assert_eq "P70 翻转（预算）还原：绿" "$P70_RC" "0"
-else
-  bad "P70 翻转（预算）：找不到有实测带的段落（表坏了？）"
-fi
-# 翻转①b（P314）：band 掉到**已记录的实测**以下 → 必须红并点名该段与实测值。
-#   现实缺陷形状：§40 的带停在 P223 的 20.00s，而本机实测 31–51s —— 每次跑都打「超带」，却没人被拦。
-#   守卫是 `--budget-check` 的 `band_s == max(host,container,ci)`：表里的带不许落后于自己的实测列。
-P314_BID="40 · 临时根纪律（P53：TMPDIR / owned 家族 / 泄漏断言 / lint）"
-P314_MAX="$(awk -F'\t' -v id="$P314_BID" '!/^#/ && $1 == id { m = 0; for (i = 4; i <= 8; i += 2) { if ($i ~ /^[0-9.]+$/ && $i + 0 > m) m = $i + 0 } printf "%.2f", m; exit }' "$P70_CK/section-budgets.tsv")"
-if [ -n "$P314_MAX" ]; then
-  awk -F'\t' -v id="$P314_BID" 'BEGIN{FS="\t";OFS="\t"} /^#/ { print; next } $1 == id { $2 = "20.00" } { print }' \
-    "$P70_CK/section-budgets.tsv" > "$P70_CK/b.new" && mv "$P70_CK/b.new" "$P70_CK/section-budgets.tsv"
-  bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p314-budget-stale.log" 2>&1; P70_RC=$?
-  assert_eq "P314 翻转（band 过期）：§40 的 band 改回 20.00 → 红" "$P70_RC" "1"
-  assert_has "$TMP/p314-budget-stale.log" "$P314_BID" "P314 翻转（band 过期）：点名 §40"
-  assert_has "$TMP/p314-budget-stale.log" "band_s=20.00 ≠ max(host/container/ci)=$P314_MAX" "P314 翻转（band 过期）：点名实测值 $P314_MAX"
-  cp "$SKILL_DIR/tests/section-budgets.tsv" "$P70_CK/section-budgets.tsv"
-  bash "$P70_CK/section-guard.sh" --budget-check >/dev/null 2>&1; P70_RC=$?
-  assert_eq "P314 翻转（band 过期）还原：绿" "$P70_RC" "0"
-else
-  bad "P314 翻转（band 过期）：预算表里找不到 §40 的行"
-fi
-# 翻转②：删掉一条 section 行（未登记的段落不得默默无界）→ 必须点名并红
-P70_MISS_ID="$(awk -F'\t' '!/^#/ && NF { print $1; exit }' "$P70_CK/section-budgets.tsv")"
-awk -F'\t' -v id="$P70_MISS_ID" 'BEGIN{FS="\t"} /^#/ { print; next } $1 == id { next } { print }' \
-  "$P70_CK/section-budgets.tsv" > "$P70_CK/b.new" && mv "$P70_CK/b.new" "$P70_CK/section-budgets.tsv"
-bash "$P70_CK/section-guard.sh" --budget-check >"$TMP/p70-budget-miss.log" 2>&1; P70_RC=$?
-assert_eq "P70 翻转（缺行）：删掉段落行 → 红" "$P70_RC" "1"
-assert_has "$TMP/p70-budget-miss.log" "$P70_MISS_ID" "P70 翻转（缺行）：点名缺行的段落"
-cp "$SKILL_DIR/tests/section-budgets.tsv" "$P70_CK/section-budgets.tsv"
 # 翻转③：加一个未登记的 while+sleep → 循环清单必须点名 file:line
 printf '#!/usr/bin/env bash\nx=0\nwhile :; do sleep 1; x=$((x+1)); done\n' > "$P70_CK/evil-fixture.sh"
 bash "$P70_CK/section-guard.sh" --loop-check >"$TMP/p70-loop-evil.log" 2>&1; P70_RC=$?
@@ -1750,8 +1707,6 @@ rm -f "$P70_CK/evil-fixture.sh"
 bash "$P70_CK/section-guard.sh" --loop-check >/dev/null 2>&1; P70_RC=$?
 assert_eq "P70 翻转（循环）还原：绿" "$P70_RC" "0"
 # 翻转③b（P313 · V58 F2-b）：往扫描面里的 tmp-hygiene.sh 塞一个未登记的 while+sleep → 必须红并点名。
-# 这条只在「副本真的包含 tmp-hygiene.sh」时才有意义：拷贝面缩回旧样子时，同样这行会往不存在的文件里写
-# （红），而清单里的 tmp-hygiene.sh 也会因不在扫描面而红 —— 两个方向都拦得住。
 printf '\n# p313-flip：未登记的循环\nwhile :; do sleep 1; done\n' >> "$P70_CK/tmp-hygiene.sh"
 bash "$P70_CK/section-guard.sh" --loop-check >"$TMP/p313-loop-held.log" 2>&1; P70_RC=$?
 assert_eq "P313 翻转（盲区）：tmp-hygiene.sh 里塞未登记的 while+sleep → 红" "$P70_RC" "1"
@@ -1760,51 +1715,57 @@ cp "$SKILL_DIR/tests/tmp-hygiene.sh" "$P70_CK/tmp-hygiene.sh"
 bash "$P70_CK/section-guard.sh" --loop-check >/dev/null 2>&1; P70_RC=$?
 assert_eq "P313 翻转（盲区）还原：绿" "$P70_RC" "0"
 
-# ④ gate-guard 的第四向：时长比较只许在段落守卫里（D33 的边界；翻了必须红）
-#   夹具自己要把两个“标记字面量”（测量套件的点名、时长比较）写进 scratch smoke.sh —— 拼开写，
-#   否则守卫会先抓到夹具自己（自指假红，M58 之后的老坑）。
+# ④ gate-guard：门禁面没有 $elapsed 形态的阈值比较、参考打印器没有 2/4 退出（翻了必须红）
 P70_PF="per"; P70_PF="${P70_PF}f.sh"
+P70_PC="panel"; P70_PC="${P70_PC}-cpu.sh"
 P70_GG="$TMP/p70-gg"; rm -rf "$P70_GG"; mkdir -p "$P70_GG/lib"
-cp "$SKILL_DIR/tests/gate-guard.sh" "$SKILL_DIR/tests/smoke.sh" "$SKILL_DIR/tests/panel-knobs.sh" \
-   "$SKILL_DIR/tests/$P70_PF" "$P70_GG/"
-cp "$SKILL_DIR/tests/lib/section-guard.sh" "$P70_GG/lib/"
+cp "$SKILL_DIR/tests/gate-guard.sh" "$SKILL_DIR/tests/smoke.sh" \
+   "$SKILL_DIR/tests/$P70_PF" "$SKILL_DIR/tests/$P70_PC" "$P70_GG/"
+cp "$SKILL_DIR"/tests/lib/*.sh "$P70_GG/lib/"
 bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-green.log" 2>&1; P70_RC=$?
-assert_eq "P70 gate-guard 第四向：干净副本绿" "$P70_RC" "0"
+assert_eq "P70 gate-guard：干净副本绿" "$P70_RC" "0"
 printf '\nif [ "$elapsed" -'"g"'t 5 ]; then :; fi\n' >> "$P70_GG/smoke.sh"
 bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-flip.log" 2>&1; P70_RC=$?
-assert_eq "P70 gate-guard 第四向翻转：smoke.sh 塞回时长比较 → 红" "$P70_RC" "1"
-assert_has "$TMP/p70-gg-flip.log" "时长阈值比较" "P70 gate-guard 第四向翻转：点名原因"
+assert_eq "P70 gate-guard 翻转①：smoke.sh 塞回墙钟比较 → 红" "$P70_RC" "1"
+assert_has "$TMP/p70-gg-flip.log" "墙钟阈值比较" "P70 gate-guard 翻转①：点名原因"
 cp "$SKILL_DIR/tests/smoke.sh" "$P70_GG/smoke.sh"
+# 翻转②（行为面）：参考打印器长出一个判定型退出码 → 红（「太慢」不许再变成失败）。
+# 呈现契约（「· 参考」标记）不在这里翻：V61 指出那是措辞、不是行为证据，已从守卫里删掉。
+printf '\nif [ "${SOMETHING:-0}" = 1 ]; then exit 2; fi\n' >> "$P70_GG/$P70_PF"
+bash "$P70_GG/gate-guard.sh" >"$TMP/p70-gg-flip2.log" 2>&1; P70_RC=$?
+assert_eq "P70 gate-guard 翻转②：参考打印器多一个 exit 2 → 红" "$P70_RC" "1"
+assert_has "$TMP/p70-gg-flip2.log" "判定型退出码" "P70 gate-guard 翻转②：点名原因"
+cp "$SKILL_DIR/tests/$P70_PF" "$P70_GG/$P70_PF"
 bash "$P70_GG/gate-guard.sh" >/dev/null 2>&1; P70_RC=$?
-assert_eq "P70 gate-guard 第四向还原：绿" "$P70_RC" "0"
+assert_eq "P70 gate-guard 还原：绿" "$P70_RC" "0"
 
-# ⑤ 夹具旋钮只在 TEAM_SMOKE_FIXTURE=1 下生效；否则打印忽略行（环境不能悄悄拆掉边界）
+# ⑤ 挂住上限旋钮只在 TEAM_SMOKE_FIXTURE=1 下生效；否则打印忽略行（环境不能悄悄拆掉边界）
 mkdir -p "$TMP/p70-knob-off" "$TMP/p70-knob-on"
 p70_knob_probe() { # <输出文件> <run tmp> <env 前置...>：用模块自己的 init 读旋钮（不跑套件）
   local out="$1" dir="$2"; shift 2
   env "$@" bash -c '
     . "$1/tests/lib/section-guard.sh"
-    section_guard_init "$2" --budgets "$1/tests/section-budgets.tsv"
-    printf "override=[%s]\n" "$SG_BUDGET_OVERRIDE"
-    section_guard_budget_for "0c · 静态检查（函数结尾的 set -e 陷阱）"
-    printf "stuck-budget=%s source=%s\n" "$SG_BUDGET" "$SG_BUDGET_SOURCE"
-    section_guard_budget_for "1 · doctor（未初始化应失败）"
-    printf "other-budget=%s source=%s\n" "$SG_BUDGET" "$SG_BUDGET_SOURCE"
+    section_guard_init "$2"
+    printf "override=[%s]\n" "$SG_HANG_CAP_OVERRIDE"
+    section_guard_hang_cap_for "0c · 静态检查（函数结尾的 set -e 陷阱）"
+    printf "stuck-cap=%s source=%s\n" "$SG_HANG_CAP" "$SG_HANG_CAP_SOURCE"
+    section_guard_hang_cap_for "1 · doctor（未初始化应失败）"
+    printf "other-cap=%s source=%s\n" "$SG_HANG_CAP" "$SG_HANG_CAP_SOURCE"
   ' _ "$SKILL_DIR" "$dir" >"$out" 2>&1
 }
-p70_knob_probe "$TMP/p70-knob-off.log" "$TMP/p70-knob-off" -u TEAM_SMOKE_FIXTURE TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=3
+p70_knob_probe "$TMP/p70-knob-off.log" "$TMP/p70-knob-off" -u TEAM_SMOKE_FIXTURE TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_HANG_CAP=3
 assert_has "$TMP/p70-knob-off.log" "忽略它" "P70 旋钮（夹具关）：打印忽略行"
 assert_has "$TMP/p70-knob-off.log" "override=[]" "P70 旋钮（夹具关）：不生效"
-assert_has "$TMP/p70-knob-off.log" "source=table" "P70 旋钮（夹具关）：预算来自表"
-p70_knob_probe "$TMP/p70-knob-on.log" "$TMP/p70-knob-on" TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=3
-assert_has "$TMP/p70-knob-on.log" "stuck-budget=3 source=fixture" "P70 旋钮（夹具开）：被点名的段用注入预算"
-assert_has "$TMP/p70-knob-on.log" "other-budget=$(awk -F'\t' '$1=="1 · doctor（未初始化应失败）"{print $3}' "$SKILL_DIR/tests/section-budgets.tsv") source=table" \
-  "P70 旋钮（夹具开）：别的段照旧用表"
+assert_has "$TMP/p70-knob-off.log" "stuck-cap=1800 source=default" "P70 旋钮（夹具关）：用默认挂住上限"
+p70_knob_probe "$TMP/p70-knob-on.log" "$TMP/p70-knob-on" TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_HANG_CAP=3
+assert_has "$TMP/p70-knob-on.log" "stuck-cap=3 source=fixture" "P70 旋钮（夹具开）：被点名的段用注入的挂住上限"
+assert_has "$TMP/p70-knob-on.log" "other-cap=1800 source=default" "P70 旋钮（夹具开）：别的段用默认挂住上限"
 
-# ---------------------------------------------------------------- 0f. P70 超时段落：点名 + 停跑 + 现场
-# 嵌套 smoke 用 FAST + 自己的 TMPDIR（不排队、不碰真项目）；stuck knob 在 0c 段注入一个忽略 TERM 的
-# 子进程，预算覆盖成 3s —— 看门狗必须点名 #3、写现场、套件 exit 2（安全点路径）。
-section "0f · 超时段落：点名 + 停跑 + 现场（P70）"
+# ---------------------------------------------------------------- 0f. P70 挂住停跑：点名 + 现场
+# 嵌套 smoke 用 FAST + 自己的 TMPDIR（不排队、不碰真项目）；stuck knob 在 0c 段注入一个挂住的子进程，
+# 挂住上限覆盖成 3s —— 看门狗必须点名 #3、写现场、套件 exit 2（安全点路径）。P316：上限只表达「挂住」，
+# 不表达「慢」；段用时只记录。
+section "0f · 挂住停跑：点名 + 现场（P70 · P316）"
 if [ "${P70_NESTED:-0}" = "1" ]; then
   printf '  (嵌套运行：跳过 P70 自述夹具，避免递归)\n'
 else
@@ -1812,33 +1773,35 @@ else
   ( cd "$SKILL_DIR" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
       -u TEAM_DOCS_DIR -u TEAM_TMP_KEEP -u TEAM_SMOKE_KEEP -u SMOKE_LOCK_WRAPPED -u TEAM_SMOKE_LOCK \
       P70_NESTED=1 TMPDIR="$P70_STUCK_ROOT" TEAM_SMOKE_FAST=1 TEAM_SMOKE_FIXTURE=1 \
-      TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=3 TEAM_SMOKE_PROGRESS_INTERVAL=1 \
+      TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_HANG_CAP=3 TEAM_SMOKE_PROGRESS_INTERVAL=1 \
       TEAM_SMOKE_GUARD_POLL=0.2 bash "$SKILL_DIR/tests/smoke.sh" </dev/null ) >"$TMP/p70-stuck.log" 2>&1
   P70_STUCK_RC=$?
-  assert_eq "P70 超时：嵌套套件 exit 2（安全点路径）" "$P70_STUCK_RC" "2"
-  assert_eq "P70 超时：输出里恰好一条点名超时的行" \
-    "$(grep -ac '段落 #3（0c · 静态检查（函数结尾的 set -e 陷阱））超时' "$TMP/p70-stuck.log" || true)" "1"
-  assert_has "$TMP/p70-stuck.log" "预算 3s" "P70 超时：点名行带预算"
+  assert_eq "P70 挂住：嵌套套件 exit 2（安全点路径）" "$P70_STUCK_RC" "2"
+  assert_eq "P70 挂住：输出里恰好一条点名挂住的行" \
+    "$(grep -ac '段落 #3（0c · 静态检查（函数结尾的 set -e 陷阱））挂住' "$TMP/p70-stuck.log" || true)" "1"
+  assert_has "$TMP/p70-stuck.log" "挂住上限 3s" "P70 挂住：点名行带上限"
+  assert_has "$TMP/p70-stuck.log" "没有进度" "P70 挂住：点名行的判据是「没有进度」（不是「跑了多久」）"
+  assert_has "$TMP/p70-stuck.log" "ticks 0" "P70 挂住：点名行带上 ticks（注入段的进度证据为零）"
   if tail -25 "$TMP/p70-stuck.log" | grep -q '段落 #3'; then
-    ok "P70 超时：点名行在 tail -25 里（复验记录能看到）"
+    ok "P70 挂住：点名行在 tail -25 里（复验记录能看到）"
   else
-    bad "P70 超时：点名行不在 tail -25 里"
+    bad "P70 挂住：点名行不在 tail -25 里"
   fi
-  assert_not "$TMP/p70-stuck.log" "== 结果 ==" "P70 超时：没有结果行"
-  assert_not "$TMP/p70-stuck.log" "== #4 " "P70 超时：后面没有别的段落开跑"
+  assert_not "$TMP/p70-stuck.log" "== 结果 ==" "P70 挂住：没有结果行"
+  assert_not "$TMP/p70-stuck.log" "== #4 " "P70 挂住：后面没有别的段落开跑"
   if grep -qE 'SKIP.*(0c|#3)' "$TMP/p70-stuck.log"; then
-    bad "P70 超时：超时被报成 SKIP"
+    bad "P70 挂住：挂住被报成 SKIP"
   else
-    ok "P70 超时：超时不是 SKIP（不是把机器判绿）"
+    ok "P70 挂住：挂住不是 SKIP（不是把机器判绿）"
   fi
   if grep -aq '已运行' "$TMP/p70-stuck.log"; then
-    ok "P70 超时：超时前有进度自述（$(grep -ac '已运行' "$TMP/p70-stuck.log" || true) 行）"
+    ok "P70 挂住：挂住前有进度自述（$(grep -ac '已运行' "$TMP/p70-stuck.log" || true) 行）"
   else
-    bad "P70 超时：没有进度自述"
+    bad "P70 挂住：没有进度自述"
   fi
   P70_STUCK_SCENE="$(ls -d "$P70_STUCK_ROOT"/.teamsmith-smoke-scene.* 2>/dev/null | head -1 || true)"
   if [ -n "$P70_STUCK_SCENE" ] && [ -s "$P70_STUCK_SCENE/summary.txt" ]; then
-    ok "P70 超时：现场存在（${P70_STUCK_SCENE#$TMP/}）"
+    ok "P70 挂住：现场存在（${P70_STUCK_SCENE#$TMP/}）"
     case "$P70_STUCK_SCENE" in
       "$P70_STUCK_ROOT"/.teamsmith-smoke-scene.*) ok "P70 现场：TMPDIR 相对 + 点开头" ;;
       *) bad "P70 现场：路径不在 TMPDIR 下或不是点开头（$P70_STUCK_SCENE）" ;;
@@ -1848,8 +1811,9 @@ else
       *) ok "P70 现场：在 run 自己的临时根之外（清理带不走）" ;;
     esac
     assert_has "$P70_STUCK_SCENE/summary.txt" "id: 0c · 静态检查" "P70 现场：点名段落 id"
-    assert_has "$P70_STUCK_SCENE/summary.txt" "budget: 3s" "P70 现场：点名预算"
-    assert_match "$P70_STUCK_SCENE/summary.txt" "last progress: [0-9]+s" "P70 现场：带最后一次进度读数"
+    assert_has "$P70_STUCK_SCENE/summary.txt" "cap: 3s" "P70 现场：点名挂住上限"
+    assert_match "$P70_STUCK_SCENE/summary.txt" "stalled for: [0-9]+s" "P70 现场：带「多久没有进度」的读数"
+    assert_match "$P70_STUCK_SCENE/summary.txt" "ticks: [0-9]+" "P70 现场：带 ticks（进度证据）"
     assert_has "$P70_STUCK_SCENE/summary.txt" "sleep 0.2" "P70 现场：子孙树里有挂住的子进程"
     # P313：注入的心跳**响应** TERM，所以宽限内它就退了，现场不需要升级。这条反向断言是「有人把
     # `trap "" TERM` 放回夹具」的守卫（放宽限 → 现场必然记 escalation → 这里变红）；真要升级时现场
@@ -1859,9 +1823,9 @@ else
     assert_eq "P70 现场：部分计时记录有前两段的行" \
       "$(awk 'NR>1' "$P70_STUCK_SCENE/sections.tsv.partial" 2>/dev/null | wc -l | tr -d ' ')" "2"
   else
-    bad "P70 超时：没有现场目录"
+    bad "P70 挂住：没有现场目录"
   fi
-  assert_eq "P70 超时：嵌套 run 的临时根已回收（只剩现场）" \
+  assert_eq "P70 挂住：嵌套 run 的临时根已回收（只剩现场）" \
     "$(ls -d "$P70_STUCK_ROOT"/teamsmith-smoke[.-]* 2>/dev/null | wc -l | tr -d ' ')" "0"
 fi
 
@@ -2331,9 +2295,9 @@ p180_shadow2 "-S 经 ../../ 绕一圈" "tmux -S /tmp/tmux-$(id -u)/../tmux-$(id 
 p180_shadow2 "-L 私有名（不是本轮那个 socket）" "tmux -L p180-other kill-server" "$P180_OWN"
 p180_shadow2 "command tmux -S 共享默认 socket" "command tmux -S $P180_DEF_SOCK kill-server" "$P180_OWN"
 # —— ⑰ 不挂死（M36 的教训）：值类选项缺值不许让证明循环原地打转（timeout 5 是绊线）——
-timeout 5 bash -c '. "$1"; tmux_iso_prove --tmpdir' _ "$SKILL_DIR/tests/lib/tmux-iso.sh" >/dev/null 2>&1
+timeout 300 bash -c '. "$1"; tmux_iso_prove --tmpdir' _ "$SKILL_DIR/tests/lib/tmux-iso.sh" >/dev/null 2>&1
 assert_eq "P180 边界：tmux_iso_prove --tmpdir（缺值）→ bad-option 立刻返回，不挂死" "$?" "1"
-timeout 5 bash -c '. "$1"; tmux_iso_argv_parse --argv' _ "$SKILL_DIR/tests/lib/tmux-iso.sh" >/dev/null 2>&1
+timeout 300 bash -c '. "$1"; tmux_iso_argv_parse --argv' _ "$SKILL_DIR/tests/lib/tmux-iso.sh" >/dev/null 2>&1
 assert_eq "P180 边界：tmux_iso_argv_parse 无参数 → 立刻返回，不挂死" "$?" "0"
 # ---------------------------------------------------------------- 0i. P158 运行指纹（树在跑动中被改 → 无效）
 # 事故（D79）：`fast-full-capture` 跑动期间 PM 在**同一棵树**里合并了 P147 → 那次运行报 ✗138，红全落在
@@ -2538,7 +2502,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   tmux set-window-option -t "$M11_SESS:pi" automatic-rename off 2>/dev/null || true
   tmux respawn-pane -k -t "$M11_SESS:pi" \
     "cd '$M11L' && bash '$SKILL_DIR/scripts/team' bootstrap --agents dev --session $M11_SESS --no-pulse --task-models 'routine=deepseek/deepseek-flash analysis=xai/grok-4.6 verify=kimi-coding/k3-256k' --pm-model 'deepseek/deepseek-flash' >'$TMP/m11-live.log' 2>&1; echo \$? >'$TMP/m11-live.rc'; exec sleep 300"
-  for i in $(seq 1 80); do [ -s "$TMP/m11-live.rc" ] && break; sleep 0.25; done
+  for i in $(seq 1 1200); do [ -s "$TMP/m11-live.rc" ] && break; sleep 0.25; done
   assert_eq "M11 ⑥（真沙盒）：bootstrap 退出码 0" "$(tr -dc 0-9 < "$TMP/m11-live.rc" 2>/dev/null)" "0"
   assert_has "$M11L/.pi/team/config.sh" 'TEAM_PM_WINDOW="pm"' "M11 ⑥（真沙盒）：配置写约定 pm（不是窗口碰巧的名字）"
   assert_eq "M11 ⑥（真沙盒）：窗口真的被改名成 pm" \
@@ -3010,8 +2974,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # M7.5：不再固定 sleep 2.5 赌假 pi 起没起来（那是在赌机器速度）—— 有界轮询它的参数日志
   # （最多 10s）；超时后面的断言照样报红，只是失败信息里已经有足够现场。
   S6_WAIT=0
-  while [ "$S6_WAIT" -lt 100 ] && [ ! -s "$TMP/pi-args.log" ]; do sleep 0.1; S6_WAIT=$((S6_WAIT + 1)); done
-  [ "$S6_WAIT" -ge 100 ] && printf '    现场（有界轮询 10s 内没等到假 pi 的参数日志）：窗口=[%s] dispatch 尾=[%s]\n' \
+  while [ "$S6_WAIT" -lt 3000 ] && [ ! -s "$TMP/pi-args.log" ]; do sleep 0.1; S6_WAIT=$((S6_WAIT + 1)); done
+  [ "$S6_WAIT" -ge 3000 ] && printf '    现场（没等到假 pi 的参数日志，上限 300s）：窗口=[%s] dispatch 尾=[%s]\n' \
     "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr '\n' ',')" "$(tail -2 "$TMP/dispatch.log" 2>/dev/null | tr '\n' '|')"
   if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx dev; then ok "tmux 窗口 $SESSION:dev 已创建"; else bad "tmux 窗口未创建"; fi
   assert_file "$TMP/pi-args.log" "假 pi 被拉起（记录了参数）"
@@ -3649,9 +3613,9 @@ if [ -n "$JS_RUNNER" ]; then
   fi
   if command -v mkfifo >/dev/null 2>&1; then
     rm -f "$TMP/agentlog-fifo.log"; mkfifo "$TMP/agentlog-fifo.log"
-    timeout 20 "$JS_RUNNER" "$SKILL_DIR/scripts/monitor.mjs" --root "$REPO" --only dev \
+    timeout 300 "$JS_RUNNER" "$SKILL_DIR/scripts/monitor.mjs" --root "$REPO" --only dev \
       --log-glob "$TMP/agentlog-fifo.log" --json >"$TMP/mon-fifo.json" 2>&1
-    assert_eq "F2 FIFO 不挂死（20s 内返回）" "$?" "0"
+    assert_eq "F2 FIFO 不挂死（没等到返回即红，上限 300s）" "$?" "0"
     assert_has "$TMP/mon-fifo.json" '"available": false' "F2 FIFO → available=false"
     rm -f "$TMP/agentlog-fifo.log"
   fi
@@ -4746,7 +4710,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   }
   m37_wait_shape() { # <session:window> <命令行里必须出现的标记> [十分之一秒数] → 0=已成型
     local i=0 args
-    while [ "$i" -lt "${3:-50}" ]; do
+    while [ "$i" -lt "${3:-3000}" ]; do
       args="$(m37_pane_args "$1")"
       case "$args" in *"$2"*) return 0 ;; esac
       sleep 0.1; i=$((i + 1))
@@ -4789,7 +4753,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   if m37_wait_child "$m37_bash_target"; then
     ok "6k ① 夹具现场：$(m37_shape "$m37_bash_target")（agent 子进程 $(m37_child_of "$m37_bash_target")）"
   else
-    bad "6k ① 夹具：5s 内没看到 agent 子进程（$(m37_shape "$m37_bash_target")）"
+    bad "6k ① 夹具：没等到 agent 子进程（上限 300s）（$(m37_shape "$m37_bash_target")）"
   fi
   m37_assert_verdict "6k ① 字面形状（bash 父 + agent 子）判活" "$m37_bash_target" "alive"
 
@@ -4804,7 +4768,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   if m37_wait_child "$M37_W_AGENT_T"; then
     ok "6k ② 夹具现场（事故形状）：$(m37_shape "$M37_W_AGENT_T")（agent 子进程 $(m37_child_of "$M37_W_AGENT_T")）"
   else
-    bad "6k ② 夹具：5s 内没看到 agent 子进程（$(m37_shape "$M37_W_AGENT_T")）"
+    bad "6k ② 夹具：没等到 agent 子进程（上限 300s）（$(m37_shape "$M37_W_AGENT_T")）"
   fi
   m37_assert_verdict "6k ② 事故形状（交互 bash + set +m）判活" "$M37_W_AGENT_T" "alive"
   # CLI 表面（digest / pulse 的「停了的 agent」）读的是同一份判据
@@ -4820,7 +4784,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   if m37_wait_shape "$M37_W_START_T" "$M37_START_MARK"; then
     ok "6k ④ 夹具现场：$(m37_shape "$M37_W_START_T")（命令行已成型，含 $M37_START_MARK）"
   else
-    bad "6k ④ 夹具：5s 内没等到窗口成型（命令行里没出现 $M37_START_MARK；现场 args=[$(m37_pane_args "$M37_W_START_T")]）"
+    bad "6k ④ 夹具：没等到窗口成型（上限 300s）（命令行里没出现 $M37_START_MARK；现场 args=[$(m37_pane_args "$M37_W_START_T")]）"
   fi
   m37_assert_verdict "6k ④ 启动中的 harness（命令行里有 agent 路径但没有 agent 进程）判停" "$M37_W_START_T" "stopped"
   # ⑤ 窗口名写错/窗口消失时必须判停 —— tmux 的 display-message 会静默回退到**当前窗口**，
@@ -4837,7 +4801,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   if m37_wait_shape "$M37_W_AGENT_T" "$M37_PLAIN_MARK"; then
     ok "6k ③ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（bash 里没有 agent 子进程，命令行已成型）"
   else
-    bad "6k ③ 夹具：5s 内没等到窗口成型（命令行里没出现 $M37_PLAIN_MARK；现场 args=[$(m37_pane_args "$M37_W_AGENT_T")]）"
+    bad "6k ③ 夹具：没等到窗口成型（上限 300s）（命令行里没出现 $M37_PLAIN_MARK；现场 args=[$(m37_pane_args "$M37_W_AGENT_T")]）"
   fi
   m37_assert_verdict "6k ③ 对照（bash 里没有 agent 子进程）判停" "$M37_W_AGENT_T" "stopped"
   assert_eq "6k ③ 对照：待办把它算成「停了的 agent 1」" "$(m37_stopped_count)" "1"
@@ -4855,7 +4819,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     M37_BARE_CHILD="$(m37_child_of "$M37_W_AGENT_T")"
     ok "6k ⑥ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（pane 命令行=[$(m37_pane_args "$M37_W_AGENT_T")]；agent 子进程=[${M37_BARE_CHILD:-无}]）"
   else
-    bad "6k ⑥ 夹具：5s 内 pane_current_command 没变成 bash（现场 $(m37_shape "$M37_W_AGENT_T")）"
+    bad "6k ⑥ 夹具：没等到 pane_current_command 变成 bash（上限 300s）（现场 $(m37_shape "$M37_W_AGENT_T")）"
   fi
   m37_assert_verdict "6k ⑥ P210：裸 shell（argv 带 agent 路径、没有 agent 子进程）判停" "$M37_W_AGENT_T" "stopped"
   assert_eq "6k ⑥ P210：裸 shell 的 pane_current_command 确实是 bash（判据不是靠前台名过的）" \
@@ -4881,7 +4845,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     if kill -0 "$M37_CORPSE_PID" 2>/dev/null; then M37_CORPSE_ALIVE="还在"; else M37_CORPSE_ALIVE="不在了（过期的号）"; fi
     ok "6k ⑦ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（pane_pid=$M37_CORPSE_PID $M37_CORPSE_ALIVE）"
   else
-    bad "6k ⑦ 夹具：5s 内没等到遗体（现场 $(m37_shape "$M37_W_AGENT_T")）"
+    bad "6k ⑦ 夹具：没等到遗体（上限 300s）（现场 $(m37_shape "$M37_W_AGENT_T")）"
   fi
   m37_assert_verdict "6k ⑦ P210：遗体 pane（pane_dead=1，pane_pid 是过期的号）判停" "$M37_W_AGENT_T" "stopped"
   case "$(m37_bash 'team_seat_condition "$1"' "$M37_AGENT")" in
@@ -4900,7 +4864,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     M37_SHAPE_CHILD="$(m37_child_of "$M37_W_AGENT_T")"
     ok "6k ⑧ 夹具现场：$(m37_shape "$M37_W_AGENT_T")（pane 命令行=[$(m37_pane_args "$M37_W_AGENT_T")]；agent 子进程=[${M37_SHAPE_CHILD:-无}]）"
   else
-    bad "6k ⑧ 夹具：5s 内 pane 命令行里没出现 $M37_STUB（现场 args=[$(m37_pane_args "$M37_W_AGENT_T")]）"
+    bad "6k ⑧ 夹具：没等到 pane 命令行里出现 $M37_STUB（现场 args=[$(m37_pane_args "$M37_W_AGENT_T")]）"
   fi
   m37_assert_verdict "6k ⑧ P217：pane_pid 自己就在跑 agent（argv[1] 就是 agent、没有 agent 子进程）判活" \
     "$M37_W_AGENT_T" "alive"
@@ -5617,7 +5581,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   pm_state_until() { # <case 模式…> [最多等秒] → 0=等到了；最后状态留在 PM_STATE_LAST
     # 多个模式是「或」关系（每个模式单独做 case 匹配：模式里的 | 在变量展开后不会被当成分隔符，
     # 所以 `pm_state_until 'unknown:tmux' 'idle:*' 10` 而不是 'unknown:tmux|idle:*'）。
-    local secs="${!#:-10}" i=0 ticks p
+    local secs="${!#:-300}" i=0 ticks p
     ticks=$(( secs * 4 ))
     PM_STATE_LAST=""
     while [ "$i" -lt "$ticks" ]; do
@@ -5631,7 +5595,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     return 1
   }
   pm_state_until_not() { # <case 模式> [最多等秒] → 0=状态不再是该模式
-    local avoid="$1" secs="${2:-10}" i=0 ticks
+    local avoid="$1" secs="${2:-300}" i=0 ticks
     ticks=$(( secs * 4 ))
     PM_STATE_LAST=""
     while [ "$i" -lt "$ticks" ]; do
@@ -5643,7 +5607,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     return 1
   }
   wait_session_gone() { # <session> [最多等秒]
-    local s="${1:-}" secs="${2:-5}" i=0 ticks
+    local s="${1:-}" secs="${2:-300}" i=0 ticks
     ticks=$(( secs * 20 ))
     while [ "$i" -lt "$ticks" ]; do
       tmux has-session -t "$s" 2>/dev/null || return 0
@@ -5653,7 +5617,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     return 1
   }
   wait_window_gone() { # <窗口名> [最多等秒]（沿用本段的 $SESSION）
-    local n="${1:-}" secs="${2:-5}" i=0 ticks
+    local n="${1:-}" secs="${2:-300}" i=0 ticks
     ticks=$(( secs * 20 ))
     while [ "$i" -lt "$ticks" ]; do
       tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$n" || return 0
@@ -5682,7 +5646,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     # 启动命令后，在负载下这次假 idle 稳定复现）。判据：连续三次采样（间隔 0.5s，覆盖 ≥1s）都是
     # idle:*，且每次都看到前台命令是真正的 shell。
     local i=0 st="" cmd="" n=0
-    while [ "$i" -lt 40 ]; do
+    while [ "$i" -lt 600 ]; do
       st="$(pm_state_now 2>/dev/null || true)"
       cmd="$(tmux display-message -p -t "$SESSION:$PMW" '#{pane_current_command}' 2>/dev/null || true)"
       case "$st" in idle:*)
@@ -5698,7 +5662,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
       i=$((i + 1))
     done
     PM_STATE_LAST="$st"
-    bad "make_pm_idle：等了 20s 窗口也没稳定在空提示符（最后状态 ${st:-?}，前台命令 [${cmd:-}]）"
+    bad "make_pm_idle：没等到窗口稳定在空提示符（上限 300s；最后状态 ${st:-?}，前台命令 [${cmd:-}]）"
   }
 
   start_fake_pm() { # 直接模拟“PM 正在跑”，避免依赖 up 的时序
@@ -5706,7 +5670,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     # 空目标 = 当前 pane（会把调用者自己打掉）——这正是 v1.11.3 事故的直接原因
     [ -n "$p" ] || { bad "start_fake_pm：拿不到 pane（$SESSION:$PMW 不存在），跳过以免误伤"; return 1; }
     tmux respawn-pane -k -t "$p" "exec $FAKE/pi-sleep --pm" >/dev/null 2>&1 || true
-    pm_state_until 'running:*' 10 || bad "start_fake_pm：等了 10s 假 PM 也没被认成 running:*（最后看到：${PM_STATE_LAST:-?}）"
+    pm_state_until 'running:*' 300 || bad "start_fake_pm：没等到假 PM 被认成 running:*（上限 300s；最后看到：${PM_STATE_LAST:-?}）"
   }
   kill_all_windows() {
     tmux list-windows -t "$SESSION" -F '#{window_id}' 2>/dev/null \
@@ -5785,10 +5749,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
 
   # 3b) PM 归属校验：窗口被「不属于本项目」的进程占着时，不算 PM、也不许覆盖
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd /tmp && exec bash -lc 'sleep 300'" >/dev/null 2>&1 || true
-  if pm_state_until 'foreign:*' 10; then
+  if pm_state_until 'foreign:*' 300; then
     ok "别的项目的进程占着 PM 窗口 → 判定为 foreign（不算 PM）（$PM_STATE_LAST）"
   else
-    bad "别的项目的进程占着 PM 窗口：等了 10s 也没判成 foreign:*（最后看到：${PM_STATE_LAST:-?}）"
+    bad "别的项目的进程占着 PM 窗口：没等到 foreign:*（上限 300s；最后看到：${PM_STATE_LAST:-?}）"
   fi
   MAINROOT_STATE="$(. "$SKILL_DIR/scripts/lib/common.sh"; team_load_config; team_cwd_in_project /tmp && echo yes || echo no)"
   assert_eq "cwd 归属判定：/tmp 不属于本项目" "$MAINROOT_STATE" "no"
@@ -5928,7 +5892,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # （pm_state_now 的定义在 §11b 的 helpers 里——M9.7 把它上移，供有界轮询复用。）
   # 造「新建的 session + 空的 pm 窗口」：这就是环境重启后的现场，也是 M6.5 的确定性复现。
   tmux kill-session -t "$SESSION" 2>/dev/null || true
-  wait_session_gone "$SESSION" 5 || bad "M6.5 ① 夹具：5s 内 session $SESSION 还在（「session 完全不在」的前提没成立）"
+  wait_session_gone "$SESSION" 300 || bad "M6.5 ① 夹具：没等到 session $SESSION 消失（上限 300s）（「session 完全不在」的前提没成立）"
   $TEAM up >"$TMP/m65-up-fresh.log" 2>&1 && ok "M6.5 ①：session 完全不在时 up 退出码 0" || { bad "M6.5 ①：up 失败"; cat "$TMP/m65-up-fresh.log"; }
   assert_has "$TMP/m65-up-fresh.log" "PM 已启动" "M6.5 ①：空 session 里 up 真的启动了 PM（旧实现说「PM 在运行（tmux）」却什么也没跑）"
   assert_not "$TMP/m65-up-fresh.log" "PM 在运行（tmux）" "M6.5 ①：不再把 tmux 自己报成运行中的 PM"
@@ -5944,10 +5908,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 老规则（窗口在 + 前台不是 shell）在这里就会输出 `running:tmux`；新规则必须报 unknown/idle
   # 且 up 真的把 PM 拉起来（argv 日志里出现 -c 与 @pm-prompt.md）。
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec tmux wait-for teamsmith-m65-never" >/dev/null 2>&1 || true
-  if pm_state_until 'unknown:tmux' 'idle:*' 10; then
+  if pm_state_until 'unknown:tmux' 'idle:*' 300; then
     ok "M6.5 ①b：前台是 tmux 的窗口不算 PM（$PM_STATE_LAST）"
   else
-    bad "M6.5 ①b：期望 unknown:tmux/idle:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+    bad "M6.5 ①b：没等到 unknown:tmux/idle:*（上限 300s；最后看到 ${PM_STATE_LAST:-?}"
   fi
   $TEAM pulse status >"$TMP/m65-wd-tmux.log" 2>&1 || true
   assert_not "$TMP/m65-wd-tmux.log" "在运行" "M6.5 ①b：pulse status 不把 tmux 报成「PM 在运行」"
@@ -5961,10 +5925,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   M65_PID="$(cat "$REPO/.pi/team/state/pm.pid" 2>/dev/null | tr -dc '0-9')"
   # ② 记录的 pid 是证据本身：杀掉它 → 必须立刻不再算存活
   kill -9 "$M65_PID" 2>/dev/null || true
-  if pm_state_until_not 'running:*' 10; then
+  if pm_state_until_not 'running:*' 300; then
     ok "M6.5 ②：记录的 pid 死了 → 不再算存活（$PM_STATE_LAST）"
   else
-    bad "M6.5 ②：记录的 pid 已被杀，等了 10s 仍报 $PM_STATE_LAST"
+    bad "M6.5 ②：记录的 pid 已被杀，没等到状态翻转（上限 300s；仍报 $PM_STATE_LAST"
   fi
   $TEAM pulse status >"$TMP/m65-wd-dead.log" 2>&1 || true
   assert_not "$TMP/m65-wd-dead.log" "在运行" "M6.5 ②：pulse status 不再宣称 PM 在运行"
@@ -5972,10 +5936,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   tmux new-session -d -s "$SESSION" -n "$PMW" -c "$REPO" 2>/dev/null || true
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec sleep 300" >/dev/null 2>&1 || true
-  if pm_state_until 'unknown:*' 10; then
+  if pm_state_until 'unknown:*' 300; then
     ok "M6.5 ③：本项目里的非 PM 进程 → unknown:*（$PM_STATE_LAST）"
   else
-    bad "M6.5 ③：期望 unknown:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+    bad "M6.5 ③：没等到 unknown:*（上限 300s；最后看到 ${PM_STATE_LAST:-?}"
   fi
   $TEAM pulse status >"$TMP/m65-wd-unknown.log" 2>&1 || true
   assert_not "$TMP/m65-wd-unknown.log" "在运行" "M6.5 ③：pulse status 不把非 PM 进程当成运行中的 PM"
@@ -5989,10 +5953,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   assert_has "$TMP/m65-pm-args-delta.log" "pm-prompt.md" "M6.5 ③：这一轮真的用 @ 提示词文件拉起 PM"
   # ④ 外来进程（cwd 不在本项目）占着 pm 窗口：foreign:*，不算存活，up 默认拒绝覆盖
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd /tmp && exec sleep 300" >/dev/null 2>&1 || true
-  if pm_state_until 'foreign:*' 10; then
+  if pm_state_until 'foreign:*' 300; then
     ok "M6.5 ④：别的项目的进程 → foreign:*（$PM_STATE_LAST）"
   else
-    bad "M6.5 ④：期望 foreign:*，等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+    bad "M6.5 ④：没等到 foreign:*（上限 300s；最后看到 ${PM_STATE_LAST:-?}"
   fi
   case "$(pm_state_now)" in
     running:*) bad "M6.5 ④：外来进程被当成运行中的 PM" ;;
@@ -6005,10 +5969,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # ④b 窗口里的进程就是配置的 agent（人工启动的 PM）→ running（不是 unknown）
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec $FAKE/pi-sleep --manual-pm" >/dev/null 2>&1 || true
   rm -f "$REPO/.pi/team/state/pm.pid"    # 拿掉「我们启动过」这个证据，只留窗口证据
-  if pm_state_until 'running:*' 10; then
+  if pm_state_until 'running:*' 300; then
     ok "M6.5 ④b：人工在窗口里启动的 agent 被认成 running（$PM_STATE_LAST）"
   else
-    bad "M6.5 ④b：人工启动的 agent 没被认出（等了 10s 最后看到 ${PM_STATE_LAST:-?}）"
+    bad "M6.5 ④b：没认出人工启动的 agent（上限 300s；最后看到 ${PM_STATE_LAST:-?}）"
   fi
   # ⑤ M6.3 F30：wrapper agent（脚本最后 exec 掉自己）必须被报为已启动，证据 = spawn。
   # 旧实现只认「窗口里的进程 == 配置的 agent 可执行文件」：exec 换掉进程映像后永远认不出来，
@@ -6017,7 +5981,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   printf '#!/bin/sh\nexec sleep 300\n' > "$M63_WRAP"; chmod +x "$M63_WRAP"
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$M63_WRAP\"|" "$REPO/.pi/team/config.sh"
   tmux kill-session -t "$SESSION" 2>/dev/null || true   # 从「场地不在」开始，up 自己要建
-  wait_session_gone "$SESSION" 5 || bad "F30 夹具：5s 内 session $SESSION 还在（「场地不在」的前提没成立）"
+  wait_session_gone "$SESSION" 300 || bad "F30 夹具：没等到 session $SESSION 消失（上限 300s）（「场地不在」的前提没成立）"
   rm -f "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
   $TEAM up >"$TMP/m63-f30-up.log" 2>&1 || true
   assert_has "$TMP/m63-f30-up.log" "PM 已启动" "F30：wrapper agent 被报为已启动（不再误报「看不到 agent 进程」）"
@@ -6034,10 +5998,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 没有我们的 pid 记录时，窗口里的 sleep（cwd 在本项目）依旧不算 PM：非 shell 不是证据
   tmux respawn-pane -k -t "$SESSION:$PMW" "cd $REPO && exec sleep 300" >/dev/null 2>&1 || true
   rm -f "$REPO/.pi/team/state/pm.pid" "$REPO/.pi/team/state/pm.pid.proof" "$REPO/.pi/team/state/pm.pid.spawn"
-  if pm_state_until 'unknown:*' 10; then
+  if pm_state_until 'unknown:*' 300; then
     ok "F30：别人放的 sleep 只是 unknown（$PM_STATE_LAST）"
   else
-    bad "F30：期望 unknown:sleep（非 shell 不是证据），等了 10s 最后看到 ${PM_STATE_LAST:-?}"
+    bad "F30：没等到 unknown:sleep（非 shell 不是证据；上限 300s；最后看到 ${PM_STATE_LAST:-?}"
   fi
   sed -i "s|^TEAM_PI_BIN=.*|TEAM_PI_BIN=\"$FAKE/pi-sleep\"|" "$REPO/.pi/team/config.sh"
   # 收尾：把 PM 拉回来，后面的段落（11c 起）按原来的现场跑
@@ -6133,10 +6097,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   STARTS_BEFORE="$(start_count)"
   M72_PID="$(tr -dc '0-9' < "$REPO/.pi/team/state/pm.pid" 2>/dev/null || true)"
   if [ -n "$M72_PID" ]; then kill -9 "$M72_PID" 2>/dev/null || true; fi
-  if pm_state_until_not 'running:*' 10; then
+  if pm_state_until_not 'running:*' 300; then
     ok "代理进程退出后不再是 running（$PM_STATE_LAST）"
   else
-    bad "代理进程被杀后，等了 10s 仍报 running（$PM_STATE_LAST）"
+    bad "代理进程被杀后，没等到状态翻转（上限 300s；仍报 running（$PM_STATE_LAST）"
   fi
   TEAM_PULSE_REBUILD_TMUX=1 $TEAM watch --once >"$TMP/m72-tick4.log" 2>&1 || true
   assert_match "$TMP/m72-tick4.log" "已拉起" "代理退出后下一拍把它拉起来"
@@ -6213,7 +6177,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 那次尝试其实已经把进程起来了（respawn 在「等证据」之前），只是来不及写下 pm.pid ——
   # 下一拍必须靠**窗口证据**认出它，而不是再拉一次（没有记录 ≠ 没有 PM；再拉一次就是重复启动）
   i=0
-  while [ "$i" -lt 30 ] && [ "$(( $(start_count) - STARTS_BEFORE ))" -lt 1 ]; do sleep 0.1; i=$((i + 1)); done
+  while [ "$i" -lt 3000 ] && [ "$(( $(start_count) - STARTS_BEFORE ))" -lt 1 ]; do sleep 0.1; i=$((i + 1)); done
   assert_eq "失败的一拍确实已经把进程起来了（argv 落盘）" "$(( $(start_count) - STARTS_BEFORE ))" "1"
   $TEAM watch --once >"$TMP/m72-tick7.log" 2>&1 || true
   assert_not "$TMP/m72-tick7.log" "已拉起" "窗口里已有 PM → 下一拍不再拉起（即使没有 pm.pid 证据）"
@@ -6398,7 +6362,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 而 roster 的存活判定是采样式的。有界轮询 roster 本身（最多 5s），超时就把最后看到的现场打出来。
   R_WAIT=0
   R_T0="$(date +%s)"
-  while [ "$R_WAIT" -lt 20 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
+  while [ "$R_WAIT" -lt 1500 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
   [ "$R_WAIT" -ge 20 ] && printf '    现场（有界轮询 %ss 内 roster 没看到「pi 已退出」）：窗口=[%s] pane=[%s]\n' \
     "$(( $(date +%s) - R_T0 ))" \
     "$(tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | tr '\n' ',')" \
@@ -6410,7 +6374,7 @@ elif [ "$HAVE_TMUX" = "1" ]; then
 
   # pulse 不该替 PM 做决定：跑一轮巡检，dev 仍未被续跑
   tmux kill-window -t "$SESSION:dev" 2>/dev/null || true
-  wait_window_gone dev 5 || bad "§11c 夹具：5s 内 dev 窗口还在（「窗口仍不在」的前提没成立）"
+  wait_window_gone dev 300 || bad "§11c 夹具：没等到 dev 窗口消失（上限 300s）（「窗口仍不在」的前提没成立）"
   # F28：只读命令不许毁掉崩溃 agent 的持久记录（否则 resume 会「没东西可续」）
   EQ_STATE_BEFORE="$(state_fp)"
   $TEAM ps >"$TMP/ps-crash.log" 2>&1 || true
@@ -7011,21 +6975,21 @@ elif [ "${HAVE_TMUX:-0}" = "1" ]; then
   ( cd "$P8E" && exec $TEAM watch --interval 3600 ) >"$TMP/p8-loop1.log" 2>&1 &
   P8_LOOP1=$!
   P8_LOCKPID=""
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 1200); do
     P8_LOCKPID="$(cat "$P8E/.pi/team/state/watchdog.pid" 2>/dev/null || true)"
     [ -n "$P8_LOCKPID" ] && kill -0 "$P8_LOCKPID" 2>/dev/null && break
     kill -0 "$P8_LOOP1" 2>/dev/null || break
     sleep 0.25
   done
   if ! { [ -n "$P8_LOCKPID" ] && kill -0 "$P8_LOCKPID" 2>/dev/null; }; then
-    bad "P8 锁测试：第一个 watch 循环 10s 内没握住锁（见 $TMP/p8-loop1.log）"
+    bad "P8 锁测试：没等到第一个 watch 循环握住锁（上限 300s；见 $TMP/p8-loop1.log）"
   fi
-  ( cd "$P8E" && timeout 30 $TEAM watch --interval 3600 ) >"$TMP/p8-loop2.log" 2>&1
+  ( cd "$P8E" && timeout 300 $TEAM watch --interval 3600 ) >"$TMP/p8-loop2.log" 2>&1
   P8_RC2=$?
   kill "$P8_LOOP1" 2>/dev/null || true
-  for _ in $(seq 1 20); do kill -0 "$P8_LOOP1" 2>/dev/null || break; sleep 0.25; done
+  for _ in $(seq 1 1200); do kill -0 "$P8_LOOP1" 2>/dev/null || break; sleep 0.25; done
   kill -9 "$P8_LOOP1" 2>/dev/null || true; wait "$P8_LOOP1" 2>/dev/null || true
-  if kill -0 "$P8_LOOP1" 2>/dev/null; then bad "P8 锁测试：watch 循环 TERM+5s 后仍未退出"; else ok "watch 循环被 TERM 收掉（trap 不再吞信号）"; fi
+  if kill -0 "$P8_LOOP1" 2>/dev/null; then bad "P8 锁测试：watch 循环收到 TERM 后没等到退出（上限 300s）"; else ok "watch 循环被 TERM 收掉（trap 不再吞信号）"; fi
   assert_eq "第二个 watch 循环被拒（同一把 watchdog.pid 锁）" "$P8_RC2" "1"
 
   # 形状 A：旧配置（窗口解析名仍是 watchdog）—— 命令照旧打在旧窗口上
@@ -11142,7 +11106,7 @@ m98_wake()       { m98_lib team_pending_text; }                        # team_wa
 m98_actionable() { m98_lib team_reports_pending_list --actionable; }   # 可行动清单（计数的那一份）
 m98_list_all()   { m98_lib team_reports_pending_list; }                # digest [3] 的那一份（含草稿）
 m98_wait_log() { # <文件> <模式> [秒]：有界轮询（M9.7：不赌固定 sleep 采样过渡态）
-  local f="$1" pat="$2" i=0 max="$(( ${3:-20} * 10 ))"
+  local f="$1" pat="$2" i=0 max="$(( ${3:-300} * 10 ))"
   while [ "$i" -lt "$max" ]; do grep -q -- "$pat" "$f" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done
   return 1
 }
@@ -11235,15 +11199,15 @@ M98B_WDLOG="$M98B/.pi/team/state/watchdog.log"
 M98MON=$!
 # P10 起面板是 Ink 进程（panel.js），tick 是它每次派生的 `team watch --once` 子进程：
 # 所以「磁盘代码变了」这件事由**新起的 tick 进程**自动生效，不需要（也不应该）重启面板循环。
-if m98_wait_log "$TMP/m98-monitor.log" "teamsmith pulse" 20; then ok "M9.8-⑥：夹具面板进程起来了（已渲染）"
+if m98_wait_log "$TMP/m98-monitor.log" "teamsmith pulse" 300; then ok "M9.8-⑥：夹具面板进程起来了（已渲染）"
 else bad "M9.8-⑥：夹具面板进程没起来"; fi
-if m98_wait_log "$M98B_WDLOG" "无待办" 20; then ok "M9.8-⑥：第一拍 5 份看板 done → 无待办（不叫醒）"
+if m98_wait_log "$M98B_WDLOG" "无待办" 300; then ok "M9.8-⑥：第一拍 5 份看板 done → 无待办（不叫醒）"
 else bad "M9.8-⑥：第一拍没有写出「无待办」（基线不对：$(tail -1 "$M98B_WDLOG" 2>/dev/null)）"; fi
 assert_not "$M98B_WDLOG" "代码快照过期" "M9.8-⑥控制组：代码没变时不重启面板循环"
 printf '\nteam_reports_pending_list() { printf "DRIFT\tDRIFT\t/tmp/drift.md\n"; }\n' >> "$M98COPY/scripts/lib/cmd-status.sh"
-if m98_wait_log "$M98B_WDLOG" "待复验 1" 25; then
+if m98_wait_log "$M98B_WDLOG" "待复验 1" 300; then
   ok "M9.8-⑥：磁盘代码变了 → 下一拍 tick 用**磁盘上的代码**重判（日志里出现「待复验 1」）"
-else bad "M9.8-⑥：磁盘代码变了 25s 仍按旧代码判定（「待复验 1」没出现）—— 唤醒理由会比 digest 旧"; fi
+else bad "M9.8-⑥：没等到「待复验 1」（上限 300s）—— 唤醒理由会比 digest 旧"; fi
 assert_not "$M98B_WDLOG" "代码快照过期" "M9.8-⑥：判定每次 tick 都是新进程（面板循环不必为自己重启）"
 kill -0 "$M98MON" 2>/dev/null && ok "M9.8-⑥：巡检循环还在跑（窗口不被拆掉）" || bad "M9.8-⑥：巡检进程没了"
 kill "$M98MON" 2>/dev/null || true
@@ -12052,11 +12016,11 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # 不是契约超时 —— 负载下单次固定 sleep 会假红（F-V16-10 的同族形状；26-m 回响实测红过一次：
   # 标题带停在 `待命 off`）。统一改成**有界轮询**：等的是条件（标题带 / 回显 / 帧 / 心跳），
   # 不是「1.5s 内必须完成」；超时仍然红，并把最后一帧原样打出来。
-  # 预算 10s 的来历（V16 实测）：一帧典型 1.24–1.6s（安静）/ 4.1s（loadavg 7–8），动作回响还要再
-  # 加一个 `team standby` 子进程 —— 10s ≈ 最坏观测的 2.4 倍。TEAM_SMOKE_PANEL_POLL_SECS 只给翻转
-  # 演练用（把预算调小 → 这些断言必须红，证明轮询不是「永远绿」）。
-  P10_POLL_SECS="${TEAM_SMOKE_PANEL_POLL_SECS:-10}"
-  case "$P10_POLL_SECS" in ''|*[!0-9]*) P10_POLL_SECS=10 ;; esac
+  # 视界 300s 是**防死等**（P316：时间只记录、不判定）：一帧在负载机上实测 1.2–5.2s 都有过，300s 只是
+  # 「这么久还没出现就不是慢、是没发生」。TEAM_SMOKE_PANEL_POLL_SECS 只给翻转演练用（调小 → 这些断言
+  # 必须红，证明轮询不是「永远绿」）。
+  P10_POLL_SECS="${TEAM_SMOKE_PANEL_POLL_SECS:-300}"
+  case "$P10_POLL_SECS" in ''|*[!0-9]*) P10_POLL_SECS=300 ;; esac
   # 轮询实际等了多久：写在文件里而不是变量里 —— helper 被 `$(…)` 调用（子 shell），
   # 在里面赋值不会传回父 shell（M20 第一版就在 `set -u` 下把整轮门禁打停在 26-m）。
   P10_WAIT_MS_FILE="$TMP/p10-wait-ms"
@@ -12098,10 +12062,12 @@ elif [ "$HAVE_TMUX" = "1" ]; then
     || bad "26-m 真 pane：起面板窗口失败"
   tmux resize-window -t "$P10_SCOPE:$P10_W1" -x 120 -y 29 2>/dev/null || true
   # M20：等首帧（有界轮询）——原来 sleep 4 + resize + sleep 3 是固定等待，负载下还没画完就 capture。
-  if P10_CAP="$(p10_wait_pane "$P10_SCOPE:$P10_W1" '巡检' 20)"; then
-    ok "26-m 真 pane（120x29）：首帧渲染出标题带（项目/巡检周期，有界轮询 ≤20s，实际 $(p10_wait_ms)ms）"
+  # P316 · V61 F2：这里曾写死 20s（视界与文案各说一套）。统一用 P10_POLL_SECS 这一个视界：
+  # 到点只说明「没等到真实 UI 状态」，不是「帧太慢」。
+  if P10_CAP="$(p10_wait_pane "$P10_SCOPE:$P10_W1" '巡检' "$P10_POLL_SECS")"; then
+    ok "26-m 真 pane（120x29）：首帧渲染出标题带（项目/巡检周期，有界轮询 ≤${P10_POLL_SECS}s，实际 $(p10_wait_ms)ms）"
   else
-    bad "26-m 真 pane：20s 内没渲染出标题带（pane=$(tmux capture-pane -p -t "$P10_SCOPE:$P10_W1" 2>/dev/null | wc -c) 字节）"
+    bad "26-m 真 pane：没等到标题带渲染（上限 ${P10_POLL_SECS}s；这是状态没出现，不是帧慢）"
   fi
   assert_eq "26-m 真 pane：capture 里 0 个 ESC 字节" "$(printf '%s' "$P10_CAP" | tr -cd '\033' | wc -c | tr -d ' ')" "0"
   # M47 翻转证据：Ink 7 的 `is-in-ci` 启发式把任何 CI 环境当**非交互**，而非交互模式只写 <Static>
@@ -12112,10 +12078,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   tmux kill-session -t "$P10_CI_SESS" 2>/dev/null || true
   tmux new-session -d -s "$P10_CI_SESS" -x 120 -y 29 -c "$P10R" -n panel \
     "$(p10_panel_cmd "$P10_LEFT_LOG" 1 "CI=1")" 2>/dev/null || true
-  if P10_CI_CAP="$(p10_wait_pane "$P10_CI_SESS:panel" 'teamsmith pulse' 20)"; then
-    ok "26-m CI=1：TTY 里的面板照常渲染（Ink 的 CI 启发式不会吃掉整帧；有界轮询 $(p10_wait_ms)ms）"
+  if P10_CI_CAP="$(p10_wait_pane "$P10_CI_SESS:panel" 'teamsmith pulse' "$P10_POLL_SECS")"; then
+    ok "26-m CI=1：TTY 里的面板照常渲染（Ink 的 CI 启发式不会吃掉整帧；有界轮询 ≤${P10_POLL_SECS}s，实际 $(p10_wait_ms)ms）"
   else
-    bad "26-m CI=1：20s 内没渲染出面板标题（pane=$(tmux capture-pane -p -t "$P10_CI_SESS:panel" 2>/dev/null | wc -c) 字节）"
+    bad "26-m CI=1：没等到面板标题渲染（上限 ${P10_POLL_SECS}s；这是状态没出现，不是帧慢）"
   fi
   tmux kill-session -t "$P10_CI_SESS" 2>/dev/null || true
   if printf '%s' "$P10_CAP" | grep -qF 'LEFT-MARKER'; then
@@ -12187,10 +12153,10 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   tmux kill-session -t "$P10_W2" 2>/dev/null || true
   tmux new-session -d -s "$P10_W2" -x 60 -y 8 -c "$P10R" -n panel "$(p10_panel_cmd - 2)" 2>/dev/null || true
   # M20：等首帧（有界轮询）——原来 sleep 4 后 capture，负载下可能一行都没画完。
-  if P10_TINY="$(p10_wait_pane "$P10_W2:panel" 'teamsmith' 20)"; then
-    ok "26-m 真 pane（60x8）：首帧渲染出来了（有界轮询 ≤20s，实际 $(p10_wait_ms)ms）"
+  if P10_TINY="$(p10_wait_pane "$P10_W2:panel" 'teamsmith' "$P10_POLL_SECS")"; then
+    ok "26-m 真 pane（60x8）：首帧渲染出来了（有界轮询 ≤${P10_POLL_SECS}s，实际 $(p10_wait_ms)ms）"
   else
-    bad "26-m 真 pane（60x8）：20s 内没渲染出首帧（先不测宽度）"
+    bad "26-m 真 pane（60x8）：没等到首帧渲染（上限 ${P10_POLL_SECS}s；这是状态没出现，不是帧慢）（先不测宽度）"
   fi
   P10_TINY_ROWS="$(printf '%s\n' "$P10_TINY" | grep -c .)"
   P10_TINY_W="$(printf '%s\n' "$P10_TINY" | python3 -c 'import sys,unicodedata
@@ -12211,10 +12177,10 @@ print(m)' 2>/dev/null || echo 999)"
     "cd '$P10R' && HOME='$P10_HOME' TEAM_PI_AGENT_DIR='$P10_HOME/.pi/agent' TEAM_STATE_DIR='$P10_TICK_STATE' TEAM_PULSE_INTERVAL=2 bash '$SKILL_DIR/scripts/team' monitor --no-pulse --interval 1" 2>/dev/null || true
   # M20：先证明面板出了帧（有界轮询），再断言「没写 capacity.log」——否则「没写」可能只是因为
   # 面板根本没起来（假绿）。
-  if P10_TICK_LIVE="$(p10_wait_pane "$P10_W3:panel" '巡检' 20)"; then
-    if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 仍然写了 capacity.log"; else ok "26-m tick：--no-pulse 不写 capacity.log（面板还活着：$(printf '%s' "$P10_TICK_LIVE" | grep -c .) 行，有界轮询 $(p10_wait_ms)ms）"; fi
+  if P10_TICK_LIVE="$(p10_wait_pane "$P10_W3:panel" '巡检' "$P10_POLL_SECS")"; then
+    if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 仍然写了 capacity.log"; else ok "26-m tick：--no-pulse 不写 capacity.log（面板还活着：$(printf '%s' "$P10_TICK_LIVE" | grep -c .) 行，有界轮询 ≤${P10_POLL_SECS}s，实际 $(p10_wait_ms)ms）"; fi
   else
-    if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 写了 capacity.log，且面板 20s 内没出帧"; else bad "26-m tick：面板 20s 内没出帧 → 「--no-pulse 没写 capacity.log」无法判定（不算绿）"; fi
+    if [ -e "$P10_TICK_STATE/capacity.log" ]; then bad "26-m tick：--no-pulse 写了 capacity.log，且没等到面板出帧（上限 ${P10_POLL_SECS}s）"; else bad "26-m tick：没等到面板出帧（上限 ${P10_POLL_SECS}s）→ 「--no-pulse 没写 capacity.log」无法判定（不算绿）"; fi
   fi
   tmux kill-session -t "$P10_W3" 2>/dev/null || true
   rm -rf "$P10_TICK_STATE"; mkdir -p "$P10_TICK_STATE"
@@ -13398,11 +13364,8 @@ PYC
 assert_eq "28-i 读者：200 KiB 报告退出 0" "$P28I_BIG_RC" "0"
 assert_eq "28-i 读者：200 KiB 报告截断到 128 KiB 并带 truncated 标记" "$P28I_BIG_CHK" "ok"
 P28I_SECS="$(awk -v a="$P28I_T0" -v b="$P28I_T1" 'BEGIN { printf "%.3f", b - a }')"
-if awk -v s="$P28I_SECS" 'BEGIN { exit !(s < 1.0) }'; then
-  ok "28-i 读者：200 KiB 报告在一秒内返回（${P28I_SECS}s）"
-else
-  bad "28-i 读者：200 KiB 报告用了 ${P28I_SECS}s（>1s）"
-fi
+# P316：时间只作参考读数（退出码与截断才是行为判定，见上一行）。
+printf '  \033[2m· 参考 28-i 读者：200 KiB 报告用时 %ss\033[0m\n' "$P28I_SECS"
 
 # 8.1：渲染子集——标题去标记、围栏原样、表格按显示宽度对齐、子集外的构造原样保留
 python3 - "$TMP/p28i-render.json" <<'PYR'
@@ -14757,7 +14720,7 @@ assert_not_file "$M36_STUB_CALLS" "⑤b (e) 拒绝时桩没被叫（保留失败
 assert_has "$M36_LOG3" "retention=failed" "⑤b (e) 拒绝行也自述 retention=failed"
 # FIFO：跳过而不是挂住（timeout 10 当绊线），判定/退出码不变
 M36_LOG4="$M36_D/tmux-calls-4.log"; : > "$M36_LOG4"; rm -rf "$M36_LOG4.forensics"; mkfifo "$M36_LOG4.forensics"
-M36_OUT="$(m36_flog "$M36_LOG4" timeout 10 tmux kill-server 2>&1)"; M36_RC=$?
+M36_OUT="$(m36_flog "$M36_LOG4" timeout 300 tmux kill-server 2>&1)"; M36_RC=$?
 assert_eq "⑤b (e) FIFO 保留目标：不挂住、拒绝照旧 exit 64（124=挂死回归）" "$([ "$M36_RC" = 124 ] && echo HANG || echo "$M36_RC")" "64"
 assert_has_echo "$M36_OUT" "$M36_LOG4.forensics" "⑤b (e) FIFO 形态的 ✗ 诊断也点名保留路径"
 assert_has "$M36_LOG4" "retention=failed" "⑤b (e) FIFO 形态的调用行自述 retention=failed"
@@ -14775,7 +14738,7 @@ assert_file "$M36_LOG3.forensics" "⑤b (e) 恢复后保留付本重新出现"
 m36_edge() { # <期望 argc> <期望 argv> <tmux args…>
   local want_c="$1" want="$2" rc; shift 2
   : > "$M36_STUB_CALLS"
-  m36_probe timeout 10 tmux "$@" >/dev/null 2>&1; rc=$?
+  m36_probe timeout 300 tmux "$@" >/dev/null 2>&1; rc=$?
   assert_eq "边界[$*]：10s 内返回（124=挂死回归）" "$([ "$rc" = 124 ] && echo HANG || echo ok)" "ok"
   assert_eq "边界[$*]：argv 逐字节透传到下游" "$(sed -n 's/^STUB argc=[0-9]* argv=//p' "$M36_STUB_CALLS" 2>/dev/null)" "$want"
   assert_eq "边界[$*]：参数个数" "$(sed -n 's/^STUB argc=\([0-9]*\) argv=.*/\1/p' "$M36_STUB_CALLS" 2>/dev/null)" "$want_c"
@@ -14792,12 +14755,12 @@ assert_has "$M36_LOG" 'argv=-L m36priv kill-server' "⑥ 日志记原始完整 a
 m36_edge 3 "-S $M36_D/privsock ls" -S "$M36_D/privsock" ls
 m36_edge 5 "send-keys -t $M36_OWN hello world two  spaces" send-keys -t "$M36_OWN" "hello world" "two  spaces"
 : > "$M36_STUB_CALLS"
-m36_probe timeout 10 tmux >/dev/null 2>&1; M36_RC=$?
+m36_probe timeout 300 tmux >/dev/null 2>&1; M36_RC=$?
 assert_eq "边界[无参数]：10s 内返回（124=挂死回归）" "$([ "$M36_RC" = 124 ] && echo HANG || echo ok)" "ok"
 assert_eq "边界[无参数]：也透传到下游（桩被叫到）" "$([ -s "$M36_STUB_CALLS" ] && echo yes || echo no)" "yes"
 # FIFO 日志目标：直接跳过记录、不阻塞调用（日志是账本不是命门）
 mkfifo "$M36_D/f"; : > "$M36_STUB_CALLS"
-timeout 10 env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
+timeout 300 env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR -u TEAM_ALLOW_DESTRUCTIVE_TMUX -u TEAM_TMUX_REAL \
   TEAM_TMUX_CALLS_LOG="$M36_D/f" PATH="$M36_PATH" tmux ls >/dev/null 2>&1; M36_RC=$?
 assert_eq "⑥ 日志目标是 FIFO：不阻塞（10s 内返回）" "$([ "$M36_RC" = 124 ] && echo HANG || echo ok)" "ok"
 assert_eq "⑥ FIFO 时调用照常透传" "$(sed -n 's/^STUB argc=[0-9]* argv=//p' "$M36_STUB_CALLS")" "ls"
@@ -15068,12 +15031,12 @@ EOF
   else bad "worker 窗口的 env 没落盘（gateprobe 没跑起来）"; fi
   # 夹具自己在窗口里打的 tmux ls 应被 shim 记进 fixture 的 state 日志（有界轮询，不赌固定 sleep）
   M36_W=0
-  while [ "$M36_W" -lt 25 ]; do grep -q 'argv=ls' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
+  while [ "$M36_W" -lt 1500 ]; do grep -q 'argv=ls' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
   assert_has "$REPO/.pi/team/state/tmux-calls.log" "argv=ls" "⑪ worker 窗口里的 ad-hoc tmux 调用被记进 state/tmux-calls.log"
   assert_has "$REPO/.pi/team/state/tmux-calls.log" "act=" "⑪ 窗口日志带动作字段"
   # CLI 自己的破坏性调用：allowed-owned（不是 explicit-flag、更不是 override）
   M36_W=0
-  while [ "$M36_W" -lt 25 ]; do grep -q 'act=allowed-owned' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
+  while [ "$M36_W" -lt 1500 ]; do grep -q 'act=allowed-owned' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
   assert_has "$REPO/.pi/team/state/tmux-calls.log" "act=allowed-owned" "⑪ CLI 自己的破坏性调用记 act=allowed-owned（M67 R2）"
   assert_has "$REPO/.pi/team/state/tmux-calls.log" "argv=kill-window -t $SESSION:gatevictim" "⑪ 记下的目标就是 CLI 自己的命名对象"
   assert_not "$REPO/.pi/team/state/tmux-calls.log" "act=explicit-flag" "⑪ CLI 自己不带 token（never explicit-flag）"
@@ -16423,15 +16386,7 @@ p34_field() { sed -n "s/$1/\\1/p" "$(p34_record)" 2>/dev/null | head -1; }
 p34_hold 7
 P34_RC=0; p34_review "$P34D/a.log" 5 60 '[ "${SMOKE_LOCK_WRAPPED:-0}" = "1" ] || flock -w 60 "$TEAM_SMOKE_LOCK" true; sleep 3' || P34_RC=$?
 p34_release
-P34_Q="$(p34_field '.*queued=\([0-9]*\)s.*')"; P34_R="$(p34_field '.*ran=\([0-9]*\)s.*')"
 assert_eq "34① 排队 + 运行 > 上限 仍判 PASS（rc）" "$P34_RC" "0"
-if [ -n "$P34_Q" ] && [ -n "$P34_R" ] && [ "$((P34_Q + P34_R))" -gt 5 ]; then
-  ok "34① 排队不计入硬超时：queued ${P34_Q}s + ran ${P34_R}s > limit 5s，判定仍 PASS"
-else
-  bad "34① 记账不对（queued=${P34_Q:-无} ran=${P34_R:-无}）—— 记录：$(p34_field '闸门计时.*')"
-fi
-[ "${P34_R:-0}" -ge 2 ] && [ "${P34_R:-0}" -le 5 ] && ok "34① ran 是门禁实际运行秒数（${P34_R}s，3s 门禁 + 启动）" \
-  || bad "34① ran 不对（${P34_R:-无}s）"
 # 门禁没有在锁上白等：它自己也知道锁已被祖先持有（否则就是自己和自己排队 → M49 的 TIMEOUT）
 grep -aq 'SMOKE_LOCK_WRAPPED' "$P34D/a.log" && ok "34① review 把 wrapped 标记交给了门禁（子套件不再二次排队）" \
   || bad "34① 门禁没有收到 wrapped 标记（嵌套时会自锁）"
@@ -16446,13 +16401,7 @@ assert_eq "34② 排队超上限 → 非 0" "$P34_RC" "1"
 assert_has "$(p34_record)" '判定: **FAIL**' "34② 判定是 FAIL"
 assert_has "$(p34_record)" '门禁没有运行' "34② 记录写明门禁没有运行"
 assert_has "$(p34_record)" 'cmd=p34-holder' "34② 记录点名持锁者（夹具的 holder 记录）"
-# P281：旧形状的持有者记录没有 expected → 上限退回 TEAM_SMOKE_LOCK_WAIT（行为判据：实测排队秒数）
-P34_Q2="$(p34_field '.*queued=\([0-9]*\)s.*')"
-if [ -n "$P34_Q2" ] && [ "$P34_Q2" -le 3 ]; then
-  ok "34② 没有 expected 的旧持有者仍按 TEAM_SMOKE_LOCK_WAIT 判（W=2s，实测排队 ${P34_Q2}s）"
-else
-  bad "34② 旧持有者的上限不是 TEAM_SMOKE_LOCK_WAIT（queued=${P34_Q2:-无}）"
-fi
+# P281：旧形状的持有者记录没有 expected → 字段写 ?（P316：排队秒数不再判定，只留记录形状）
 assert_has "$(p34_record)" 'expected=?' "34② 旧记录缺的字段写 ?（不编数字）"
 assert_eq "34② 排队超限不产生 TIMEOUT 判定" "$(grep -c '判定: \*\*TIMEOUT\*\*' "$(p34_record)" || true)" "0"
 assert_eq "34② team_review_verdict 仍解析出 FAIL" "$(p34_verdict)" "FAIL"
@@ -16468,14 +16417,11 @@ assert_eq "34③ team_review_verdict 仍解析出 TIMEOUT" "$(p34_verdict)" "TIM
 #    （见 p34_ancestor_review），不是可继承的环境标记 —— P288（F4 的正确修法）让套件拿到锁就 unset
 #    了那个标记，旧判据于是把嵌套 review 排到自己祖先**前头**（等满上限 / 段预算超时）。这条腿必须
 #    真的是祖辈：包装器取两把锁、写自己的记录，再把 review 当子进程跑。
-P34_T0=$(date +%s)
 P34_RC=0; p34_ancestor_review "$P34D/d.log" 20 5 'sleep 1' || P34_RC=$?
-P34_T1=$(date +%s)
 assert_eq "34④ 祖辈持锁 → rc=0" "$P34_RC" "0"
 assert_has "$(p34_record)" '已由祖先持有' "34④ 记录写明已由祖先持有（不二次排队）"
 assert_has "$(p34_record)" '进程树 + starttime 证明：祖辈 pid=' "34④ 记录点名被证明的祖辈 pid（不是环境标记）"
 assert_not "$(p34_record)" 'SMOKE_LOCK_WRAPPED' "34④ 记录不再拿可继承的环境标记当判据"
-assert_eq "34④ 不排队：锁被祖辈占着也立刻返回（实测 $((P34_T1 - P34_T0))s）" "$([ $((P34_T1 - P34_T0)) -lt 8 ] && echo yes || echo no)" "yes"
 assert_eq "34④ team_review_verdict 仍解析出 PASS" "$(p34_verdict)" "PASS"
 # ④b P310 的对照：**祖先存在但没持锁**（持锁者是兄弟）→ 必须照常排队。不许因为「有祖先」就跳过排队。
 p34_hold 20
@@ -16528,26 +16474,17 @@ p34_hold2() { # <秒> <expected> <started 前多少秒>：写新格式的持有�
     "$P34_STARTED" "$2" 2400 3 0 - -
 }
 p34_hold2 3 400 10
-P34_T0="$(date +%s)"
 P34_RC=0; p34_review "$P34D/g.log" 30 200 'sleep 1' || P34_RC=$?
-P34_T1="$(date +%s)"
 p34_release
 assert_eq "34⑦ 持有者公布了 expected → 排到队后照常判 PASS（rc）" "$P34_RC" "0"
 assert_has "$P34D/g.log" "TEAM_SMOKE_LOCK_WAIT=200s" "34⑦ 等待者打印下限（TEAM_SMOKE_LOCK_WAIT）"
 P34_REM="$(sed -n 's/.*remaining=\([0-9][0-9]*\)s.*/\1/p' "$P34D/g.log" | head -1)"
 P34_CAP="$(sed -n 's/.*cap=\([0-9][0-9]*\)s.*/\1/p' "$P34D/g.log" | head -1)"
 if [ -n "$P34_REM" ] && [ -n "$P34_CAP" ]; then
-  # 期望值运行时算：打印落在 [T0,T1] 之间 ⇒ remaining ∈ [400−(T1−started), 400−(T0−started)]
-  P34_REM_HI=$(( 400 - (P34_T0 - P34_STARTED) ))
-  P34_REM_LO=$(( 400 - (P34_T1 - P34_STARTED) ))
+  # P316：只用**同一次打印**的 remaining 做算式对账（不夹时间窗，不判排队快慢）。
   P34_CAP_WANT=$(( P34_REM + 60 ))
   [ "$P34_CAP_WANT" -lt 200 ] && P34_CAP_WANT=200
   [ "$P34_CAP_WANT" -gt 800 ] && P34_CAP_WANT=800
-  if [ "$P34_REM" -ge "$P34_REM_LO" ] && [ "$P34_REM" -le "$P34_REM_HI" ]; then
-    ok "34⑦ remaining 按记录里的 started 算（实测 ${P34_REM}s ∈ [${P34_REM_LO},${P34_REM_HI}]，expected=400）"
-  else
-    bad "34⑦ remaining 与记录里的 started 对不上（实测 ${P34_REM}s，期望落在 [${P34_REM_LO},${P34_REM_HI}]）—— 队列行：$(grep -a '门禁锁正被持有' "$P34D/g.log" | head -1)"
-  fi
   assert_eq "34⑦ cap = clamp(remaining+60, W, 4W)，同一 remaining 算出来的（期望 ${P34_CAP_WANT}s）" "$P34_CAP" "$P34_CAP_WANT"
 else
   bad "34⑦ 队列行没打印算式里的 remaining/cap（实测 remaining=${P34_REM:-无} cap=${P34_CAP:-无}）"
@@ -16743,110 +16680,9 @@ assert_eq "34b⑦ 还原登记 → 字段齐了（绿）" \
   "$(p281_missing "$(grep -a '排队超限' "$P281D/w-green2.log" | head -1)")" ""
 p281_clean
 
-# ── ⑧ P281 红侧 ②：嵌套运行超预算 → 一行点名 + 现场 + exit 2 + 登记消失 + 锁可再取 ──────────
-# 现场：`flock --close` 的持有者进程 fork 出一个**真入口**嵌套运行（所以它真在持有者进程树里，
-# 且 `$PPID` 就是持有者 pid）；该运行的 §0c 段永不返回，期限 3s。到点由它自己的看门狗点名 + 停跑。
-# 红侧：去掉期限（表里 §0c 是 60s）→ 8s 内无声占着：三条断言（点名行 / 登记消失 / 锁可再取）全红。
-P281N="$TMP/p281-nested"; P281_NLOCK="$P281N/lock"; rm -rf "$P281N"; mkdir -p "$P281N"
-cat > "$P281N/nested-run.sh" <<P281NEOF
-#!/usr/bin/env bash
-# 现场构造：本脚本由 flock 的持有者进程 fork 出来（\$PPID 就是持有者 pid）→ 真·嵌套运行。
-. "$SKILL_DIR/scripts/lib/gate-lock.sh"
-# 返修轮次 1 · F1：祖辈的 heartbeat 公布在**记录里**（环境变量这条路径在调用处被 -u 清掉 —— 正是 V43 的形状：
-# 套件自己的夹具就惯于清它，旧实现于是无声退回自己的表预算）。\${P281_ANCESTOR_HB:--} = 记录里公布的心跳文件。
-gate_lock_record_write "$P281_NLOCK.holder" "\$PPID" top "p281-flock" dev "$P281N" "\$(date +%s)" 600 2400 3 0 - "\${P281_ANCESTOR_HB:--}"
-exec bash "$SKILL_DIR/tests/smoke.sh" --select 0c
-P281NEOF
-p281n_run() { # <日志> <段预算秒|-> [<祖辈心跳文件|->] [record|env]（默认 record：公布在记录里）
-  local -a be=() he=() re=()
-  local out="$1" bud="$2" hb="${3:-}" via="${4:-record}"
-  [ "$bud" != "-" ] && be=(TEAM_SMOKE_SECTION_BUDGET="$bud")
-  if [ -n "$hb" ] && [ "$hb" != "-" ]; then
-    if [ "$via" = "env" ]; then he=(SMOKE_ANCESTOR_HEARTBEAT="$hb"); else re=(P281_ANCESTOR_HB="$hb"); fi
-  fi
-  ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
-      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
-      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
-      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT \
-      -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_BUDGET -u TEAM_SMOKE_GUARD_POLL \
-      -u TEAM_SMOKE_PROGRESS_INTERVAL -u TEAM_SMOKE_FIXTURE -u SMOKE_ANCESTOR_HEARTBEAT \
-      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_LOCK_MARKER -u SMOKE_LOCK \
-      TEAM_SMOKE_LOCK="$P281_NLOCK" TEAM_SMOKE_LOCK_WAIT=5 TMPDIR="$P281N" \
-      TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_GUARD_POLL=0.2 TEAM_SMOKE_PROGRESS_INTERVAL=1 \
-      ${be[@]+"${be[@]}"} ${he[@]+"${he[@]}"} ${re[@]+"${re[@]}"} \
-      flock --close -x "$P281_NLOCK" bash "$P281N/nested-run.sh" ) >"$out" 2>&1
-}
-P281N_RC=0; p281n_run "$P281N/green.log" 3 || P281N_RC=$?
-assert_eq "34b⑧ 嵌套运行超预算 → exit 2（安全点路径）" "$P281N_RC" "2"
-assert_match "$P281N/green.log" '段落 #3（0c · 静态检查（函数结尾的 set -e 陷阱））超时：预算 3s' "34b⑧ 一行点名段号 + id + 预算"
-assert_match "$P281N/green.log" '超时：预算 3s，实际 [0-9]+s' "34b⑧ 一行点名实际用时"
-assert_has "$P281N/green.log" "全量门禁互斥：嵌套运行（祖辈 pid=" "34b⑧ 它自述是嵌套运行（不排队、只登记）"
-assert_eq "34b⑧ 登记随它退出消失" "$(ls -A "$P281_NLOCK.runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
-assert_eq "34b⑧ 登记随它退出消失（伴生锁边上那条也是）" \
-  "$(ls -A "$(gate_lock_companion_path "$P281_NLOCK").runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
-P281N_SCENE="$(ls -d "$P281N"/.teamsmith-smoke-scene.* 2>/dev/null | head -1 || true)"
-if [ -n "$P281N_SCENE" ] && [ -s "$P281N_SCENE/summary.txt" ]; then
-  ok "34b⑧ 现场存在（${P281N_SCENE#$TMP/}）"
-else
-  bad "34b⑧ 超预算的嵌套运行没有留现场"
-fi
-if flock -n "$P281_NLOCK" true 2>/dev/null; then
-  ok "34b⑧ 嵌套结束后私有锁可被立刻取到（「释放」的可观测判据）"
-else
-  bad "34b⑧ 嵌套结束后私有锁仍被占着"
-fi
-# 期限对齐祖辈（task 2.2）：祖辈公布的武装段剩余预算 → min(自己的表预算, 祖辈剩余)
-# 表里 §0c 是 60s；心跳说「刚武装、还剩 5s」→ 期限应当是 5s 而不是 60s（且开跑行注明来源）
-# 返修轮次 1 · F1：这个心跳**只在记录里公布**（调用处的 env 白名单继续 -u SMOKE_ANCESTOR_HEARTBEAT）。
-P281_HB="$P281N/hb"
-printf '3|%s|5|0|0|0c · 静态检查\n' "$(date +%s)" > "$P281_HB"
-P281N_RC=0; p281n_run "$P281N/hb.log" - "$P281_HB" || P281N_RC=$?
-assert_eq "34b⑧ 期限来自祖辈**记录里公布的**心跳 → exit 2（安全点路径）" "$P281N_RC" "2"
-assert_has "$P281N/hb.log" "（嵌套运行：对齐祖辈剩余预算）" "34b⑧ 开跑行注明预算来自祖辈剩余"
-assert_match "$P281N/hb.log" '超时：预算 [1-5]s' "34b⑧ 预算取自祖辈剩余（≤5s），不是自己的表预算"
-assert_not "$P281N/hb.log" "预算 60s" "34b⑧ 表里的 60s 预算没有被用（对齐真的生效）"
-assert_eq "34b⑧ 登记随它退出消失（对齐那一轮）" \
-  "$(ls -A "$(gate_lock_companion_path "$P281_NLOCK").runs" 2>/dev/null | wc -l | tr -d ' ')" "0"
-# 对照（旧通道）：记录里没有心跳（-）但环境变量带了 → 仍然对齐（旧写入者兼容）
-P281N_RC=0; p281n_run "$P281N/hb-env.log" - "$P281_HB" env || P281N_RC=$?
-assert_has "$P281N/hb-env.log" "（嵌套运行：对齐祖辈剩余预算）" "34b⑧ 旧通道（环境变量）仍被接受（只作兜底）"
-# 红侧（F1）：记录里没有可读的祖辈心跳 → 退回**自己的**表预算，但必须可见（一行点名）
-P281N_RC=0; p281n_run "$P281N/hb-missing.log" 3 - || P281N_RC=$?
-assert_eq "34b⑧ 红侧：读不到祖辈心跳 → 仍按时结束（exit 2）" "$P281N_RC" "2"
-assert_has "$P281N/hb-missing.log" "没有可读的祖辈心跳" "34b⑧ 红侧：开跑行点名「没有可读的祖辈心跳」（不无声）"
-assert_match "$P281N/hb-missing.log" '超时：预算 3s' "34b⑧ 红侧：退回自己的表预算（夹具覆盖 3s）而不是对齐"
-assert_not "$P281N/hb-missing.log" "对齐祖辈剩余预算" "34b⑧ 红侧：没有可读心跳时不许声称对齐"
-# 红侧：不给期限 → 无声占着
-p281n_run "$P281N/red.log" - & P281N_RED=$!
-sleep 8
-if grep -aq '超时：预算' "$P281N/red.log"; then
-  bad "34b⑧ 红侧：去掉期限后居然点名了（守卫没被证到）"
-else
-  ok "34b⑧ 红侧：去掉期限 → 8s 内一行点名都没有（无声占着）"
-fi
-assert_eq "34b⑧ 红侧：登记还在（没有人收尾）" \
-  "$(ls -A "$(gate_lock_companion_path "$P281_NLOCK").runs" 2>/dev/null | wc -l | tr -d ' ')" "1"
-if flock -n "$P281_NLOCK" true 2>/dev/null; then
-  bad "34b⑧ 红侧：锁居然可再取（说明嵌套已经结束）"
-else
-  ok "34b⑧ 红侧：锁仍被占着（「释放」判据分得出两者）"
-fi
-# 收尾：只对**我们自己登记/启动的 pid** 发信号（D37：不按名字、不按进程组）
-for _f in "$(gate_lock_companion_path "$P281_NLOCK").runs"/*.run; do
-  [ -f "$_f" ] && kill -TERM "$(gate_lock_record_get "$_f" pid)" 2>/dev/null || true
-done
-kill -TERM "$(gate_lock_record_get "$P281_NLOCK.holder" pid)" 2>/dev/null || true
-wait "$P281N_RED" 2>/dev/null || true
-P281N_OK=0
-for _i in $(seq 1 30); do
-  if flock -n "$P281_NLOCK" true 2>/dev/null; then P281N_OK=1; break; fi
-  sleep 0.2
-done
-unset _i _f
-[ "$P281N_OK" = "1" ] && ok "34b⑧ 收尾：红侧现场已收干净（锁可再取）" \
-                     || bad "34b⑧ 收尾：红侧现场没收干净（锁仍被占）—— 后面的段会受影响"
-rm -rf "$P281N" 2>/dev/null || true
-
+# ── ⑧ P281 红侧 ②（P316 退役）：嵌套运行与祖辈的**预算对齐**随每段预算表一起删除。
+#    它守的「嵌套运行不排队、只登记」「登记随退出消失」「锁可再取」三条行为由 §34④ 的祖辈持锁证明、
+#    §34b⑨ 的 cap/席位检查与 §34c/§34d 的锁身份检查继续守。
 # ── ⑨ P281 红侧 ③：单层运行的排队语义不变 + 上限算式（钉住唯一实现）──────────────────────
 # 既有 §34 ①–⑥ / §34b ①–⑤ 的判定一条没改（逐条对照 diff 的结论在报告里）；这里只加**新增对照**：
 # 旧写入者（记录里没有 expected）仍按 TEAM_SMOKE_LOCK_WAIT 判；新写入者按 clamp(remaining+60, W, 4W) 判。
@@ -16935,15 +16771,15 @@ P281O2="$TMP/p281-orphan2"; rm -rf "$P281O2"; mkdir -p "$P281O2"
 ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
     -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
     -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
-    -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_BUDGET \
+    -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_HANG_CAP \
     -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_LOCK_MARKER \
     TEAM_SMOKE_LOCK="$SMOKE_LOCK" TEAM_SMOKE_LOCK_WAIT=5 TMPDIR="$P281O2" \
-    TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=90 \
+    TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_HANG_CAP=90 \
     TEAM_SMOKE_GUARD_POLL=0.2 TEAM_SMOKE_PROGRESS_INTERVAL=1 \
     bash "$SKILL_DIR/tests/smoke.sh" --select 0c ) >"$P281O2/out.log" 2>&1 &
 P281_O2_JOB=$!
 P281_O2_REC=""
-for _i in $(seq 1 80); do
+for _i in $(seq 1 3000); do
   P281_O2_REC="$(grep -l "ancestor=$$" "$SMOKE_LOCK_COMPANION.runs"/*.run 2>/dev/null | head -1 || true)"
   [ -n "$P281_O2_REC" ] && break
   sleep 0.1
@@ -16953,7 +16789,7 @@ if [ -n "$P281_O2_REC" ]; then
   ok "34b⑪(b) 真实嵌套运行已登记（${P281_O2_REC##*/}，ancestor=$$）—— §35 开段时的收口检查应当点名它"
   assert_has "$P281_O2_REC" "kind=nested" "34b⑪(b) 那条登记自述 kind=nested"
 else
-  bad "34b⑪(b) 真实嵌套运行 8s 内没登记（后面的收口证据不成立）"
+  bad "34b⑪(b) 真实嵌套运行没等到登记（上限 300s；后面的收口证据不成立）"
 fi
 
 # ── ⑫ P281 返修轮次 1 · F2：opt-out（TEAM_SMOKE_NO_LOCK=1）的运行也落一条记录（no_lock=1）───────
@@ -16964,10 +16800,10 @@ P281NL_REC=""
 ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
     -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
     -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
-    -u TEAM_SMOKE_FAST -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_BUDGET \
+    -u TEAM_SMOKE_FAST -u TEAM_SMOKE_STUCK_SECTION -u TEAM_SMOKE_SECTION_HANG_CAP \
     -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD -u SMOKE_LOCK_MARKER -u SMOKE_LOCK \
     TEAM_SMOKE_NO_LOCK=1 TEAM_SMOKE_LOCK="$P281_NLLOCK" TMPDIR="$P281NL" \
-    TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_BUDGET=90 \
+    TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_HANG_CAP=90 \
     TEAM_SMOKE_GUARD_POLL=0.2 TEAM_SMOKE_PROGRESS_INTERVAL=2 \
     bash "$SKILL_DIR/tests/smoke.sh" --select 0c ) >"$P281NL/out.log" 2>&1 &
 P281NL_JOB=$!
@@ -16996,7 +16832,7 @@ if [ -n "$P281NL_REC" ]; then
 fi
 wait "$P281NL_JOB" 2>/dev/null || true
 P281NL_GONE=0
-for _i in $(seq 1 40); do
+for _i in $(seq 1 1500); do
   [ -z "$(ls -A "$(gate_lock_companion_path "$P281_NLLOCK").runs"/*.run 2>/dev/null || true)" ] && { P281NL_GONE=1; break; }
   sleep 0.2
 done
@@ -17426,7 +17262,7 @@ p287d_del() { # <标签> <break 阶段> <日志>
   p287d_run "$td" "$log" 3 "$brk" & local pid=$!
   # 等持有者真起来（伴生锁记录出现 = 两把锁都拿到了）+ 段落 #3 开跑（现场是「运行中」而不是「开跑前」）
   local i=0
-  while [ "$i" -lt 200 ]; do
+  while [ "$i" -lt 6000 ]; do
     if [ -s "$(p287d_companion "$td").holder" ] && grep -aq '== #3' "$log" 2>/dev/null; then break; fi
     sleep 0.05; i=$((i + 1))
   done
@@ -17466,7 +17302,7 @@ p287d_swap() { # <标签> <形状 rm|mv> <break 阶段> <日志>
   rm -rf "$td"; mkdir -p "$td"
   p287d_run "$td" "$log" 3 "$brk" & local pid=$!
   local i=0 comp; comp="$(p287d_companion "$td")"
-  while [ "$i" -lt 200 ]; do
+  while [ "$i" -lt 6000 ]; do
     if [ -s "$comp.holder" ] && grep -aq '== #3' "$log" 2>/dev/null; then break; fi
     sleep 0.05; i=$((i + 1))
   done
@@ -17709,7 +17545,7 @@ p287r TEAM_SMOKE_LOCK="$P287R_LOCK" TEAM_SMOKE_LOCK_WAIT=5 TEAM_GATES='sleep 10'
       bash "$SKILL_DIR/scripts/team" review T7 --dir "$P287R/repo" --branch main >"$P287D/rev.log" 2>&1 &
 P287R_JOB=$!
 P287R_ARMED=0
-for _i in $(seq 1 600); do
+for _i in $(seq 1 3000); do
   if [ -s "$P287R_CMP.holder" ]; then P287R_ARMED=1; break; fi   # 记录出现 = 两把锁都拿到了、门禁要起了
   sleep 0.1
 done
@@ -17739,35 +17575,24 @@ rm -rf "$(p287d_td g)" "$(p287d_td gs)" "$(p287d_td s1)" "$(p287d_td s2)" "$(p28
       "$(p287d_td e1)" "$(p287d_td e2)" "$(p287d_td clean)" "$(p287d_td wait)" 2>/dev/null || true
 fi
 
-section "35 · 门禁只判正确性：性能判定守卫 + 旋钮完整性（M58 · perf-suite-split）"
-# 用户决定 D33：性能判定与正确性门禁分开（规格：openspec/changes/perf-suite-split）。本段是**纯逻辑**，
-# FAST 与全量都跑，不起 tmux / node / 任何测量：
-#   ① 双向机械守卫（tests/gate-guard.sh）：门禁本体里不得残留任何性能判定标记（帧预算/份额常量、旧判定
-#      函数、注入旋钮、时长比较）或测量夹具的点名；性能套件必须带着那组命名单源标记（「偷懒式搬迁」：
-#      从门禁删了但没落地 → 红）；旋钮完整性助手必须在岗且走 premise-only 模式。
-#   ② 旋钮完整性（tests/panel-knobs.sh，时间无关的 d-realpath）：三个面板旋钮在夹具开关关着时被忽略
-#      并打印，premise 行只反映真读数；不判任何时长。
-# 翻转（apply 报告里真跑过）：把判定塞回本文件 → 守卫红；从性能套件移除标记 → 守卫红；还原 → 绿。
+section "35 · 门禁只判正确性：参考读数守卫（P316）"
+# 用户裁定（第二条）：性能只能是参考指标，不能阻塞。本段是**纯逻辑**（FAST 与全量都跑，不起进程）：
+#   tests/gate-guard.sh 三向：① 门禁面没有「$elapsed 与 -gt/-ge/-lt/-le 相邻」这一种阈值比较；
+#   ② 门禁不点名测量夹具；③ 两个参考打印器没有判定型退出码（exit 2/4）。
+# ① 只覆盖一种写法：等待函数参数里的秒数它看不见（V61 F2 的三处 20s 就是这样漏掉的），所以本段不把
+# 它当「门禁里没有时间判据」的证明；那条由 §26-m 的三个调用点本身（统一用 P10_POLL_SECS）负责。
+# 翻转在 §0e④（墙钟比较回流必须红）。
 if [ -f "$SKILL_DIR/tests/gate-guard.sh" ]; then
   if bash "$SKILL_DIR/tests/gate-guard.sh" >"$TMP/p35-guard.log" 2>&1; then
-    ok "35 守卫：门禁无性能判定标记、无测量夹具点名；旋钮助手与性能套件标记两侧都在"
+    ok "35 守卫：门禁面没有 \$elapsed 形态的阈值比较、不点名测量夹具；参考打印器无 2/4 退出"
   else
     bad "35 守卫：$(sed -n 's/^bad: //p' "$TMP/p35-guard.log" | head -1)"
     sed -n 's/^bad: /      /p' "$TMP/p35-guard.log" | head -6
   fi
 else
-  bad "35 守卫：缺 tests/gate-guard.sh（门禁的性能判定守卫没了）"
+  bad "35 守卫：缺 tests/gate-guard.sh（门禁的时间判据守卫没了）"
 fi
-if [ -f "$SKILL_DIR/tests/panel-knobs.sh" ]; then
-  if bash "$SKILL_DIR/tests/panel-knobs.sh" >"$TMP/p35-knobs.log" 2>&1; then
-    ok "35 旋钮完整性（时间无关）：$(sed -n 's/^== 结果 == //p' "$TMP/p35-knobs.log" | tail -1)"
-  else
-    bad "35 旋钮完整性：$(sed -n 's/^== 结果 == //p' "$TMP/p35-knobs.log" | tail -1)"
-    grep -a '✗' "$TMP/p35-knobs.log" | head -4 | sed 's/^/      /'
-  fi
-else
-  bad "35 旋钮完整性：缺 tests/panel-knobs.sh（旋钮不得漏进真路径的检查没了）"
-fi
+
 # ---------------------------------------------------------------- 36. 选段与分段账本自检（P98 · gate-runtime-budget）
 # 纯逻辑（不起 tmux / 不跑真进程），FAST 与全量都跑。钉四件事：
 #   ① `section-select.sh --check` 绿；四种腐烂（缺行 / 模式变窄 / 未知 needs / 声明豁免类）都红且点名；
@@ -17853,7 +17678,7 @@ p98_nest_verdict() { # <期望 0 的断言标题> <rc> <嵌套日志> → ok / �
 p98_ledger() {
   local out
   out="$(sed 's/\x1b\[[0-9;]*m//g' "$1" | awk '
-    /^#[0-9]+ / && /· 用时 [0-9]+s · ✓[0-9]+ ✗[0-9]+ SKIP[0-9]+ · ticks [0-9]+$/ {
+    /^#[0-9]+ / && /· 参考 用时 [0-9]+s · ✓[0-9]+ ✗[0-9]+ SKIP[0-9]+ · ticks [0-9]+$/ {
       p = ""; f = ""; k = ""
       for (i = 1; i <= NF; i++) {
         if ($i ~ /^✓[0-9]+$/) p = $i
@@ -18072,12 +17897,12 @@ grep -q '^sleep 1$' "$P98_SLOW/tests/smoke.sh" || bad "36③ 慢段变体没打�
 P98_NEST_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT" p98_nest "$P98_SLOW" "$TMP/p98-slow.log" --select 0c
 P98_SLOW_RC=$?
 p98_nest_verdict "36③ 故意变慢的段照旧绿（退出码 0）" "$P98_SLOW_RC" "$TMP/p98-slow.log"
-P98_SLOW_SEC="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-slow.log" | awk '/^#[0-9]+ 0c / { for (i = 1; i < NF; i++) if ($i == "用时" && $(i+1) ~ /^[0-9]+s$/) { s = $(i+1); sub(/s$/, "", s); print s; exit } }')"
-if awk -v s="$P98_SLOW_SEC" 'BEGIN { exit (s + 0 >= 0.9) ? 0 : 1 }'; then
-  ok "36③ 慢段的收口行报出真实秒数（${P98_SLOW_SEC}s ≥ 0.9s）"
-else
-  bad "36③ 慢段的收口行没反映睡眠（读到 [${P98_SLOW_SEC}]）"
-fi
+P98_SLOW_LINE="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-slow.log" | awk '/^#[0-9]+ 0c / { print; exit }')"
+P98_SLOW_SEC="$(printf '%s' "$P98_SLOW_LINE" | awk '{ for (i = 1; i < NF; i++) if ($i == "用时" && $(i+1) ~ /^[0-9]+s$/) { s = $(i+1); sub(/s$/, "", s); print s; exit } }')"
+# P316：时间只作参考读数 —— 断言的是**记录器在工作**（收口行带「· 参考 用时 Ns」这个形状），
+# 不是「秒数必须 ≥ 0.9」（那是拿机器速度当判据）。
+assert_match "$TMP/p98-slow.log" '· 参考 用时 [0-9]+s ·' "36③ 慢段的收口行把用时标成参考读数（形状）"
+printf '  \033[2m· 参考 36③ 慢段用时 %ss\033[0m\n' "${P98_SLOW_SEC:-?}"
 # 夹具旋钮：SMOKE_SLOWEST_N 只在 TEAM_SMOKE_FIXTURE=1 下生效，裸设必须打印忽略
 P98_NEST_ENV="SMOKE_SLOWEST_N=2" p98_nest "$SKILL_DIR" "$TMP/p98-knob-off.log" --select 0b
 assert_has "$TMP/p98-knob-off.log" "忽略 SMOKE_SLOWEST_N=2" "36③ 裸设 SMOKE_SLOWEST_N 被忽略并打印"
@@ -18187,13 +18012,13 @@ assert_has "$TMP/p98-locksel-green.log" "== 选段结果 ==" "36⑤ 选段结果
 flock --close -x "$P98_LS/lock" sleep 20 & P98_LS_HOLD=$!
 # P115/D33/P62：等锁**真的被拿住**再看状态（flock -n 探锁失败 = 被持有），不拿 0.4s 墙钟赌它起来了。
 P98_LS_HELD=0
-for _i in $(seq 1 50); do
+for _i in $(seq 1 3000); do
   if ! flock -n "$P98_LS/lock" true 2>/dev/null; then P98_LS_HELD=1; break; fi
   kill -0 "$P98_LS_HOLD" 2>/dev/null || break
   sleep 0.1
 done
 unset _i
-[ "$P98_LS_HELD" = "1" ] || bad "36⑤ 夹具：持锁者 5s 内没拿住锁（后面的排队断言不成立）"
+[ "$P98_LS_HELD" = "1" ] || bad "36⑤ 夹具：没等到持锁者拿住锁（上限 300s；后面的排队断言不成立）"
 printf '%s pid=%s cmd=p98-locksel-holder\n' "$(date -Is)" "$P98_LS_HOLD" > "$P98_LS/lock.holder"
 P98_LS_RC2=0; p98_locksel "$TMP/p98-locksel-red.log" 1 || P98_LS_RC2=$?
 kill "$P98_LS_HOLD" 2>/dev/null; wait "$P98_LS_HOLD" 2>/dev/null || true
@@ -18351,11 +18176,11 @@ done
 unset P117_K
 # P120 合成形状（不增嵌套跑成本）：同一判定出口的两个方向都必须对 —— 真红优先于环境归因，环境侧
 # 才走可见 SKIP 并点名深 caller TMPDIR。合成日志直接喂判定，不去动真嵌套 run。
-printf '  ✗ tmux 隔离：私有 socket 没生效（期望 /x/tmux-1000/default，TMUX_TMPDIR=/x）\n#8 3b · 合成 · 用时 1s · ✓1 ✗7 SKIP0 · ticks 1\n' > "$TMP/p117-syn-mixed.log"
+printf '  ✗ tmux 隔离：私有 socket 没生效（期望 /x/tmux-1000/default，TMUX_TMPDIR=/x）\n#8 3b · 合成 · 参考 用时 1s · ✓1 ✗7 SKIP0 · ticks 1\n' > "$TMP/p117-syn-mixed.log"
 P117_MV="$( ( p117_green_verdict 3b "$TMP/p117-syn-mixed.log" 1 ) 2>&1 || true )"
 assert_has_echo "$P117_MV" "✗" "36⑦ 合成（环境红 + 键自身真红）：判定出口照旧红"
 assert_not_echo "$P117_MV" "SKIP（条件不满足）" "36⑦ 合成（环境红 + 键自身真红）：真红没有被环境归因吞掉"
-printf '  ✗ tmux 隔离：私有 socket 没生效（期望 /x/tmux-1000/default，TMUX_TMPDIR=/x）\n#8 3b · 合成 · 用时 1s · ✓7 ✗0 SKIP0 · ticks 1\n' > "$TMP/p117-syn-env.log"
+printf '  ✗ tmux 隔离：私有 socket 没生效（期望 /x/tmux-1000/default，TMUX_TMPDIR=/x）\n#8 3b · 合成 · 参考 用时 1s · ✓7 ✗0 SKIP0 · ticks 1\n' > "$TMP/p117-syn-env.log"
 P117_SV="$( ( p117_green_verdict 3b "$TMP/p117-syn-env.log" 1 ) 2>&1 || true )"
 assert_has_echo "$P117_SV" "SKIP（条件不满足）" "36⑦ 合成（环境红 + 收口行 ✗0）：判定出口是可见 SKIP（不判红）"
 assert_has_echo "$P117_SV" "深 caller TMPDIR" "36⑦ 合成（环境红 + 收口行 ✗0）：归因点名深 caller TMPDIR"
@@ -18608,20 +18433,14 @@ if [ -f "$SKILL_DIR/tests/panel-choices.sh" ]; then
 else
   bad "38-a 缺 tests/panel-choices.sh"
 fi
-# 38-b/38-f 的判定表（P48）：夹具的退出码就是机器前提的出口。
-#   0 → 全绿（照旧）｜ 1 → 断言失败（照旧）｜ 3 → 搭建失败（照旧）
-#   4 → 夹具可见 SKIP（机器超前提）：打印夹具自己的 SKIP 行（含原因与读数）与结果行，门禁退出码不变
-#        —— 跳过的场景**绝不能**被印成全绿。
+# 38-b/38-f 的判定表：0 绿 ｜ 1 有失败 ｜ 3 搭建失败 ｜ 其它 = 意外退出码。
+# P316 删掉了 rc=4 的机器出口（没有负载前提，也没有「没结论」的 SKIP）。
 p38_verdict() { # <tag> <log> <rc> <what>
   local tag="$1" log="$2" rc="$3" what="$4" summary line
   summary="$(grep -a '== 结果 ==' "$log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')"
   case "$rc" in
     0)
       ok "$tag $what 全绿（$summary）"
-      tail -1 "$log" | sed 's/^/      /' ;;
-    4)
-      line="$(grep -a 'SKIP' "$log" | head -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^ *//')"
-      cond_skip "$tag $what" "${line:-夹具报告了跳过（rc=4）但日志里没有 SKIP 行}"
       tail -1 "$log" | sed 's/^/      /' ;;
     1)
       bad "$tag $what 有失败"
@@ -18636,7 +18455,6 @@ p38_verdict() { # <tag> <log> <rc> <what>
   esac
 }
 # 38-b pty 夹具：panel-p21.sh choices（真 bundle + 私有 tmux server + argv 记录的 wrapper）——FAST 显式跳过。
-# P48：退出码 4 = 机器超前提的可见 SKIP（夹具自己的 SKIP 行带原因与读数），门禁不因此变红。
 if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
   if [ "$FAST" = "1" ]; then
     fast_skip "38-b·panel-p21-choices" "panel-p21.sh choices 要真 tmux 场地 + 真 bundle（慢段 ~2.5 分钟）"
@@ -18787,66 +18605,9 @@ else
   bad "38-f 缺 tests/panel-p21.sh"
 fi
 
-# 38-g P48 的两条便宜钉（纯逻辑/自有子进程，**FAST 照跑**）：
-#   ① 负载实验的安全规矩（verification#A load experiment signals only the processes it started）：
-#      tests/load-experiment.sh --guard-test —— 自有目标可冻结可释放、TERM/INT 中途被杀不留 T、
-#      非自有/模式形状/空/自身目标在发信号前即被拒（exit 2，目标状态不变）、私有临时根与 socket 名
-#      互不相同。它只 spawn 自己的 sleep，不碰任何别人的进程。
-#   ② 前提旋钮不得漏进真路径（panel#The project-settings pty fixture judges under a machine premise）：
-#      panel-p21.sh 的 premise-only 模式（TEAM_P21_PREMISE_ONLY=1）—— 夹具开关关着时注入的读数
-#      必须被忽略并打印，前提行必须带真 loadavg/真核数、不得出现注入值，且它不建 tmux、不判时长。
-#      前置红面：把夹具里的忽略分支删掉 → ②变红；把 freeze 的归属检查删掉 → ①变红（报告里有）。
-if [ -f "$SKILL_DIR/tests/load-experiment.sh" ]; then
-  if bash "$SKILL_DIR/tests/load-experiment.sh" --guard-test >"$TMP/p48-load-guard.log" 2>&1; then
-    ok "38-g① load-experiment.sh --guard-test 全绿（$(grep -a '== 结果 ==' "$TMP/p48-load-guard.log" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/.*== 结果 == //' | tr -s ' ')；只对自己 spawn 的进程发信号）"
-  else
-    bad "38-g① load-experiment.sh --guard-test 有失败"
-    grep -a '✗' "$TMP/p48-load-guard.log" | head -6 | sed 's/^/      /'
-  fi
-else
-  bad "38-g① 缺 tests/load-experiment.sh"
-fi
-if [ -f "$SKILL_DIR/tests/panel-p21.sh" ]; then
-  P48_REAL_CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 0)"
-  P48_REAL_LOAD="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?')"
-  ( cd "$SKILL_DIR/.." && env -u TEAM_SMOKE_FIXTURE \
-      TEAM_P21_PREMISE_PROBE_MS=999 TEAM_P21_PREMISE_LOAD_FACTOR=0.01 TEAM_P21_PREMISE_ONLY=1 \
-      timeout 30 bash "$SKILL_DIR/tests/panel-p21.sh" choices ) >"$TMP/p48-premise-only.log" 2>&1
-  p38po=$?
-  if [ "$p38po" = "0" ]; then
-    ok "38-g② premise-only 模式退出 0（不建 tmux、不判时长）"
-  else
-    bad "38-g② premise-only 模式退出 $p38po（期望 0）"
-    tail -3 "$TMP/p48-premise-only.log" | sed 's/^/      /'
-  fi
-  for kv in 'TEAM_P21_PREMISE_PROBE_MS=999' 'TEAM_P21_PREMISE_LOAD_FACTOR=0.01'; do
-    if grep -qF "忽略 $kv" "$TMP/p48-premise-only.log"; then
-      ok "38-g② 注入的旋钮被忽略并打印：$kv"
-    else
-      bad "38-g② 没有看到「忽略 $kv」行"
-    fi
-  done
-  if [ "$P48_REAL_CORES" -gt 0 ] && grep -qF "逻辑核 ${P48_REAL_CORES}" "$TMP/p48-premise-only.log" \
-     && grep -qF "loadavg_1m ${P48_REAL_LOAD}" "$TMP/p48-premise-only.log"; then
-    ok "38-g② 前提行是真读数（loadavg_1m ${P48_REAL_LOAD} · 逻辑核 ${P48_REAL_CORES}）"
-  else
-    bad "38-g② 前提行不是真读数（期望 loadavg_1m ${P48_REAL_LOAD}、逻辑核 ${P48_REAL_CORES}）"
-    grep -a '前提' "$TMP/p48-premise-only.log" | head -2 | sed 's/^/      /'
-  fi
-  if grep -qF '代码无关探针 999ms' "$TMP/p48-premise-only.log"; then
-    bad "38-g② 前提行里出现了注入的探针读数（旋钮漏进了真路径！）"
-  else
-    ok "38-g② 前提行里没有注入值"
-  fi
-  if grep -qE 'SKIP|✗' "$TMP/p48-premise-only.log"; then
-    bad "38-g② premise-only 模式出现了 SKIP/失败行（它不该判任何东西）"
-    grep -aE 'SKIP|✗' "$TMP/p48-premise-only.log" | head -3 | sed 's/^/      /'
-  else
-    ok "38-g② premise-only 模式没有判任何东西（无 SKIP、无 ✗）"
-  fi
-else
-  bad "38-g② 缺 tests/panel-p21.sh"
-fi
+# 38-g（P316 退役）：负载实验与面板前提旋钮都随「性能只参考、不阻塞」一起删除；
+# 参考读数由门禁之外的两个参考打印器输出，不经门禁。
+
 section "39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）"
 # headless 夹具（tests/install-shape.sh）——不依赖 tmux/真进程，FAST 照跑：它自己起临时仓库、
 # 自己剥 TEAM_*/TMUX 身份，含五组翻转红侧（每组的绿侧用同一份判据在真实树上跑）。
@@ -19340,7 +19101,7 @@ P55AG2
       bad "§40 夹具：kill 前的 pgid 安全检查失败（$_w pid=$_pid pgid=$_pgid my=$_my）"
       return 1
     fi
-    while [ "$i" -lt 25 ]; do
+    while [ "$i" -lt 1500 ]; do
       [ "$(tmux list-panes -t "$SESSION:$_w" -F '#{pane_dead}' 2>/dev/null | head -1)" = "1" ] && return 0
       sleep 0.2; i=$((i + 1))
     done
@@ -19358,7 +19119,7 @@ P55AG2
   assert_eq "P55 ①：PM 窗口没有窗口级 remain-on-exit（D2：PM/pulse 窗口绝不设）" \
     "$(tmux show-options -w -v -t "$SESSION:pm" remain-on-exit 2>/dev/null)" ""
   P55_W=0
-  while [ "$P55_W" -lt 30 ]; do
+  while [ "$P55_W" -lt 1000 ]; do
     { tmux capture-pane -p -S - -t "$SESSION:$P55_A" 2>/dev/null || true; } | grep -q 'P55-MARK-5' && break
     sleep 0.3; P55_W=$((P55_W + 1))
   done
@@ -19402,7 +19163,7 @@ P55AG2
   printf 'window=p55exit\n' > "$REPO/.pi/team/state/p55exit.env"
   printf 'window=p55none\n' > "$REPO/.pi/team/state/p55none.env"
   P55_W=0
-  while [ "$P55_W" -lt 20 ]; do
+  while [ "$P55_W" -lt 1000 ]; do
     P55_RENV bash "$SKILL_DIR/scripts/team" roster 2>/dev/null | grep -q '在跑' && break
     sleep 0.3; P55_W=$((P55_W + 1))
   done
@@ -19539,7 +19300,7 @@ P55PY
        bash "$SKILL_DIR/scripts/team" dispatch "$P55_Z" "$P55_ZID" "$P55_ZBRIEF" >"$TMP/p55z-dispatch.log" 2>&1
   then ok "P55 ⑥：短命 agent 派单成功"; else bad "P55 ⑥：短命 agent 派单失败"; fi
   P55_W=0
-  while [ "$P55_W" -lt 20 ]; do
+  while [ "$P55_W" -lt 600 ]; do
     [ -s "$REPO/.pi/team/state/dispatch-$P55_Z.exit" ] && break
     sleep 0.5; P55_W=$((P55_W + 1))
   done
@@ -19584,7 +19345,7 @@ P55PY
        >"$TMP/p55-teardown.log" 2>&1
   then ok "P55 ⑧：teardown 拆掉遗体窗口"; else bad "P55 ⑧：teardown 失败"; fi
   P55_W=0
-  while [ "$P55_W" -lt 25 ]; do
+  while [ "$P55_W" -lt 1000 ]; do
     tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -qx "$P55_A" || break
     sleep 0.2; P55_W=$((P55_W + 1))
   done
@@ -22587,8 +22348,7 @@ fi
 # 与 tests/lib/model-policy.sh；`--flip` 的变异器是 tests/lib/model-routing-flips.py。S1–S3 那三轮复验
 # 跑的都是默认组全量，但**没有任何门禁段**在跑它（P238 坑 2 实测：smoke.sh 与选段表都不含这些文件）——
 # 于是改坏路由代码只能靠人手工跑才被发现。这一段把它登记进闸门。
-# 分档（判据 = 全量门禁能咬住路由回归 · FAST 的成本不失控；两档的实测时长写在报告里、寓意写进
-# section-budgets.tsv 的 provenance）：
+# 分档（判据 = 全量门禁能咬住路由回归 · FAST 的成本不失控；两档的实测时长写在报告里）：
 #   * FAST：除 boundary 与 P261 的 heal/adopt/updatecheck（真 tmux 会话 + 拉起假 PM 进程，与 boundary 同族）
 #     之外的 12 组；
 #   * 全量：16 组全跑。`--flip` 变异套件在 §61b（同属前门，但它证的是「夹具有没有牙齿」）。
@@ -22775,35 +22535,18 @@ fi
 
 section "14d · P70 本套自述对账（段落账目 + 无误判）"
 P70_S_STARTS="$(grep -c '^== #[0-9][0-9]* ' "$SG_LOG" 2>/dev/null || true)"
-P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+ · 预算 [0-9]+s' "$SG_LOG" 2>/dev/null || true)"
-P70_S_CLOSES="$(grep -cE '^#[0-9]+ .* 用时 [0-9]+s · ✓[0-9]+ ✗[0-9]+ SKIP[0-9]+ · ticks [0-9]+$' "$SG_LOG" 2>/dev/null || true)"
+P70_S_SHAPED="$(grep -cE '^== #[0-9]+ .+ == [0-9]{4}-[0-9]{2}-[0-9]{2}T[^ ]+$' "$SG_LOG" 2>/dev/null || true)"
+P70_S_CLOSES="$(grep -cE '^#[0-9]+ .* · 参考 用时 [0-9]+s · ✓[0-9]+ ✗[0-9]+ SKIP[0-9]+ · ticks [0-9]+$' "$SG_LOG" 2>/dev/null || true)"
 P70_S_ROWS="$(awk 'NR>1' "$SG_TIMING" | wc -l | tr -d ' ')"
-assert_eq "P70 对账：开跑行都带 #N + ISO 时间 + 预算" "$P70_S_SHAPED" "$P70_S_STARTS"
+assert_eq "P70 对账：开跑行都带 #N + ISO 时间" "$P70_S_SHAPED" "$P70_S_STARTS"
 assert_eq "P70 对账：当前段已开跑、上一段已收（starts = closes + 1）" "$P70_S_STARTS" "$((P70_S_CLOSES + 1))"
 assert_eq "P70 对账：sections.tsv 每段一行（rows = closes）" "$P70_S_ROWS" "$P70_S_CLOSES"
 assert_eq "P70 对账：#N 从 1 起严格递增无缺口" \
   "$(awk 'BEGIN { want = 1 } match($0, /^== #([0-9]+) /) { n = substr($0, RSTART + 4, RLENGTH - 5) + 0; if (n != want) { print "gap@" n; exit } want++ } END { print want - 1 }' "$SG_LOG")" \
   "$P70_S_STARTS"
-assert_not_file "$SG_MARKER" "P70 对账：本套没有触发过超时"
+assert_not_file "$SG_MARKER" "P70 对账：本套没有触发过挂住停跑"
 [ -d "$SG_SCENE" ] && bad "P70 对账：干净跑留下了现场" || ok "P70 对账：没有现场目录（干净跑不该建）"
-# 进度自述只在超过间隔的段出现（段内跑完却打进度行 = 自述成了判决 → 红）。
-# P281 返修轮次 1：这条断言背后有**两把钟** —— 进度行里的「已运行 Ns」是看门狗进程读的钟，
-# 段账本里的用时是跑段的那一端在收口时读的钟。看门狗在负载高时会被调度推迟（本机实测 ~3s），
-# 于是它可能在段**已经收口之后**才打印那一行（行里说 60s、账本里 57s —— §34b 长到 ~57s 之后就撞上了）。
-# 允许一个小的调度偏差；偏差之外的早打印照旧红（自述成判决的形状：段跑了十几秒却打了 60s 的行）。
-P70_PROG_SLACK=5
-P70_PROG_BAD=0
-while IFS= read -r P70_N; do
-  [ -n "$P70_N" ] || continue
-  P70_E="$(awk -F'\t' -v n="$P70_N" 'NR>1 && $1 == n { print $4; exit }' "$SG_TIMING")"
-  [ -n "$P70_E" ] || continue
-  case "$P70_E" in *[!0-9]*) continue ;; esac
-  if [ "$P70_E" -lt "$(( SG_PROGRESS_INTERVAL - P70_PROG_SLACK ))" ]; then
-    bad "P70 对账：段落 #$P70_N 用时 ${P70_E}s < 间隔 ${SG_PROGRESS_INTERVAL}s（容忍 ${P70_PROG_SLACK}s 调度偏差），却有进度行"
-    P70_PROG_BAD=1
-  fi
-done < <(grep -oE '^… 段落 #[0-9]+' "$SG_LOG" 2>/dev/null | grep -oE '[0-9]+$' | sort -u)
-[ "$P70_PROG_BAD" = "0" ] && ok "P70 对账：没有「段内完成却打进度行」的段（间隔 ${SG_PROGRESS_INTERVAL}s ± ${P70_PROG_SLACK}s 调度偏差）"
+# P316：进度行只记录（它带 ticks/已运行秒数），不再用「段用时 < 间隔」去判它是否成了判决。
 
 section "15 · 完成"
 printf '   （全流程已在 0–14 节覆盖）\n'

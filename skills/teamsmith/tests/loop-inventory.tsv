@@ -5,92 +5,92 @@
 #   anchor = while 原文行（checked 的锚点：与源码逐字符子串比较；换了写法 → 红并点名 file:line）
 # 范围：tests/*.sh + tests/lib/*.sh 的**自身** while+sleep 循环；heredoc/字符串里拼出来的
 # 脚本（如 container-tmux.sh 写进容器的 inner 脚本、嵌入的 python/awk）不在扫描面内。
-flip-m37.sh	113	cap="$m37_i" -lt 50	while [ "$m37_i" -lt 50 ] && { [ -z "$(m37_child_of "$SESS:m37w")" ] || [ -z "$(m37_child_of "$SESS:m37-lit")" ]; }; do
-flip-p217.sh	157	cap="$i" -lt 40	while [ "$i" -lt 40 ]; do
-flip-p210.sh	130	cap="$p210_i" -lt 50	while [ "$p210_i" -lt 50 ] && [ "$(tmux list-panes -t "$SESS:p210dead" -F '#{pane_dead}' 2>/dev/null | head -1)" != "1" ]; do
-flip-p210.sh	135	cap="$p210_j" -lt 20	while [ "$p210_j" -lt 20 ]; do
-flip-m4.3.sh	86	cap="$i" -lt $((n * 4))	while [ "$i" -lt $((n * 4)) ]; do
-flip-m7.2.sh	190	bound=夹具的停止位文件（采集器随调用方写 stop 一起退出）	while [ ! -f "$stop" ]; do
-flip-m7.2.sh	217	cap="$i" -lt 60	while [ "$i" -lt 60 ]; do
-flip-p171.sh	108	cap="$i" -lt 3000	while [ "$i" -lt 3000 ]; do
-load-experiment.sh	128	cap=$(( $(date +%s) - start )) -lt "$secs"	while [ $(( $(date +%s) - start )) -lt "$secs" ]; do
-panel-b3.sh	144	cap="$i" -le "${B3_FILE_ITERS:-20}"	while [ "$i" -le "${B3_FILE_ITERS:-20}" ]; do
-panel-b3.sh	158	cap="$i" -le "${B3_ARGS_ITERS:-30}"	while [ "$i" -le "${B3_ARGS_ITERS:-30}" ]; do
-panel-b3.sh	173	cap="$i" -le "${B3_CAP_ITERS:-30}"	while [ "$i" -le "${B3_CAP_ITERS:-30}" ]; do
-panel-cpu.sh	311	bound=sub_end 计算出的截止时间（到点自己退出）	while :; do
-panel-p21.sh	1728	cap="$_i" -le 15	while [ "$_i" -le 15 ]; do
-pm-box-real.sh	168	cap="$i" -lt "$READY_TRIES"	while [ "$i" -lt "$READY_TRIES" ]; do
-smoke.sh	493	bound=持有者公布的排队上限 lock_cap（到点 break 进超限分支）+ TEAM_SMOKE_LOCK_WAIT 下限	  while :; do
-smoke.sh	1220	bound=停止位文件 SMOKE_TMP_STOP + 主 shell 寿命（M33 哨兵的文件握手）	  while [ ! -e "$SMOKE_TMP_STOP" ]; do
-smoke.sh	2868	cap="$S6_WAIT" -lt 100	  while [ "$S6_WAIT" -lt 100 ] && [ ! -s "$TMP/pi-args.log" ]; do sleep 0.1; S6_WAIT=$((S6_WAIT + 1)); done
-smoke.sh	3619	cap="$_i" -lt 60	  _i=0; while [ "$_i" -lt 60 ] && [ ! -f "$ADAPTER_DONE" ]; do sleep 0.5; _i=$((_i + 1)); done
-smoke.sh	3858	cap="$B4_ROUND" -le 5	  while [ "$B4_ROUND" -le 5 ]; do
-smoke.sh	3865	cap="$B4_WAIT" -lt 40	    while [ "$B4_WAIT" -lt 40 ] && ! grep -qF "exit code 7" "$TMP/m43-b4-$B4_ROUND.log"; do sleep 0.05; B4_WAIT=$((B4_WAIT + 1)); done
-smoke.sh	3872	cap="$B4_WAIT" -lt 40	      while [ "$B4_WAIT" -lt 40 ]; do
-smoke.sh	4156	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done
-smoke.sh	4165	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
-smoke.sh	4266	cap="$PM_TICKS" -lt 3	  while [ "$PM_TICKS" -lt 3 ]; do
-smoke.sh	4462	cap="$M82_WAIT" -lt 60	  while [ "$M82_WAIT" -lt 60 ] && [ ! -s "$TMP/m82-bare-ran.log" ]; do sleep 0.25; M82_WAIT=$((M82_WAIT + 1)); done
-smoke.sh	4568	cap="$i" -lt "${2:-50}"	    local i=0; while [ "$i" -lt "${2:-50}" ]; do [ -n "$(m37_child_of "$1")" ] && return 0; sleep 0.1; i=$((i + 1)); done
-smoke.sh	4576	cap="$i" -lt "${4:-50}"	    local i=0; while [ "$i" -lt "${4:-50}" ]; do
-smoke.sh	4601	cap="$i" -lt "${3:-50}"	    while [ "$i" -lt "${3:-50}" ]; do
-smoke.sh	5331	cap="$M25_CWAIT" -lt 60	    while [ "$M25_CWAIT" -lt 60 ]; do
-smoke.sh	5353	cap="$M25_WAIT" -lt 120	    while [ "$M25_WAIT" -lt 120 ]; do
-smoke.sh	5452	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
-smoke.sh	5466	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
-smoke.sh	5477	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
-smoke.sh	5487	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
-smoke.sh	5514	cap="$i" -lt 40	    while [ "$i" -lt 40 ]; do
-smoke.sh	5545	cap="$i" -lt 100	    while [ "$i" -lt 100 ]; do
-smoke.sh	5557	cap="$i" -lt "$tries"	    while [ "$i" -lt "$tries" ]; do
-smoke.sh	5566	cap="$i" -lt "$max"	    while [ "$i" -lt "$max" ]; do [ -f "$f" ] && [ -s "$f" ] && return 0; sleep 1; i=$((i+1)); done
-smoke.sh	5661	cap="$WD_LOGS_WAIT" -lt 40	  while [ "$WD_LOGS_WAIT" -lt 40 ]; do
-smoke.sh	5929	cap="$i" -lt 60	  while [ "$i" -lt 60 ]; do
-smoke.sh	6045	cap="$i" -lt 30	  while [ "$i" -lt 30 ] && [ "$(( $(start_count) - STARTS_BEFORE ))" -lt 1 ]; do sleep 0.1; i=$((i + 1)); done
-smoke.sh	6144	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ "$(p36_lines)" -gt "$base" ] && return 0; sleep 0.1; i=$((i + 1)); done
-smoke.sh	6153	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ -z "$(p36_same_cwd_pids)" ] && return 0; sleep 0.2; i=$((i + 1)); done
-smoke.sh	6230	cap="$R_WAIT" -lt 20	  while [ "$R_WAIT" -lt 20 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
-smoke.sh	6712	cap="$i" -lt "$ticks"	  while [ "$i" -lt "$ticks" ]; do
-smoke.sh	10968	cap="$i" -lt "$max"	  while [ "$i" -lt "$max" ]; do grep -q -- "$pat" "$f" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done
-smoke.sh	11890	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
-smoke.sh	11904	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
-smoke.sh	14872	cap="$M36_W" -lt 100	  while [ "$M36_W" -lt 100 ] && [ ! -f "$M36_D/env-worker.done" ]; do sleep 0.2; M36_W=$((M36_W + 1)); done
-smoke.sh	14890	cap="$M36_W" -lt 25	  while [ "$M36_W" -lt 25 ]; do grep -q 'argv=ls' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
-smoke.sh	14895	cap="$M36_W" -lt 25	  while [ "$M36_W" -lt 25 ]; do grep -q 'act=allowed-owned' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
-smoke.sh	14928	cap="$M36_W" -lt 100	  while [ "$M36_W" -lt 100 ] && [ ! -f "$M36_D/env-pm.done" ]; do sleep 0.2; M36_W=$((M36_W + 1)); done
-smoke.sh	15115	cap="$M40_W" -lt 60	  while [ "$M40_W" -lt 60 ]; do
-smoke.sh	15133	cap="$M40_LOGS_WAIT" -lt 40	  while [ "$M40_LOGS_WAIT" -lt 40 ]; do
-smoke.sh	15160	cap="$M40_W" -lt 100	  while [ "$M40_W" -lt 100 ] && [ ! -f "$M40_D/8c-worker.done" ]; do sleep 0.2; M40_W=$((M40_W + 1)); done
-smoke.sh	16892	cap="$i" -lt 600	  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 600 ]; do
-smoke.sh	17116	cap="$i" -lt "$n"	  while [ "$i" -lt "$n" ]; do
-smoke.sh	17129	cap="$i" -lt 200	  while [ "$i" -lt 200 ]; do
-smoke.sh	17169	cap="$i" -lt 200	  while [ "$i" -lt 200 ]; do
-smoke.sh	18726	cap="$i" -lt 25	    while [ "$i" -lt 25 ]; do
-smoke.sh	18744	cap="$P55_W" -lt 30	  while [ "$P55_W" -lt 30 ]; do
-smoke.sh	18788	cap="$P55_W" -lt 20	  while [ "$P55_W" -lt 20 ]; do
-smoke.sh	18925	cap="$P55_W" -lt 20	  while [ "$P55_W" -lt 20 ]; do
-smoke.sh	18970	cap="$P55_W" -lt 25	  while [ "$P55_W" -lt 25 ]; do
-tmp-hygiene.sh	1696	cap="$_i" -lt 50	while [ "$_i" -lt 50 ] && ! grep -q '^ROOT=' "$kr_out" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
-tmp-hygiene.sh	1790	cap="$_j" -lt 50	while [ "$_j" -lt 50 ] && kill -0 "$orphan" 2>/dev/null; do sleep 0.1; _j=$((_j + 1)); done
-tmp-hygiene.sh	1842	cap="$_w" -lt 40	while [ "$_w" -lt 40 ]; do
-tmp-hygiene.sh	1849	cap="$_w" -lt 40	while [ "$_w" -lt 40 ]; do
-lib/bounded-spin.sh	75	cap="$cap_s"	while _bs_parent_alive "$parent"; do
-lib/pty-wait.sh	229	cap="$i" -lt "$ceiling"	while [ "$i" -lt "$ceiling" ]; do
-lib/pty-wait.sh	360	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do
-lib/pty-wait.sh	384	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do
-lib/section-guard.sh	390	bound=停止位文件/owner 寿命（双重 fork 看门狗：裸 wait 不认它）	while :; do
-lib/section-guard.sh	438	cap="$i" -lt $(( SG_SUITE_GRACE * 5 ))	while [ "$i" -lt $(( SG_SUITE_GRACE * 5 )) ]; do
-lib/section-guard.sh	444	cap="$i" -lt 25	while [ "$i" -lt 25 ]; do
-lib/section-guard.sh	454	bound=子孙清空或 SG_DESC_GRACE 次尝试后转 KILL	while :; do
-lib/section-guard.sh	532	cap="$round" -lt "$cap"	while [ "$round" -lt "$cap" ]; do
-lib/section-guard.sh	663	cap="$i" -lt 40	while [ "$i" -lt 40 ]; do
-lib/tmp-root.sh	204	cap="$i" -lt $((grace * 5))	while [ "$i" -lt $((grace * 5)) ]; do
-lib/tmp-root.sh	441	cap="$_i" -lt 50	while [ "$_i" -lt 50 ]; do
-lib/tmp-root.sh	452	cap="$_i" -lt 100	while [ "$_i" -lt 100 ] && kill -0 "$term_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
-lib/tmp-root.sh	478	cap="$_i" -lt 50	while [ "$_i" -lt 50 ]; do
-lib/tmp-root.sh	488	cap="$_i" -lt 25	while [ "$_i" -lt 25 ] && kill -0 "$fg_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
-flip-p158.sh	109	cap="$i" -lt 500	while [ "$i" -lt 500 ] && [ -z "$fp" ]; do
-perf.sh	200	bound=持有者公布的排队上限 cap（缺则 TEAM_PERF_LOCK_WAIT），到点 exit 3（没结论）	  while :; do
-tmux-identity-leak.sh	368	cap="$i" -lt 300	  while [ "$i" -lt 300 ] && [ ! -f "$TMP/$name.done" ]; do sleep 0.1; i=$((i + 1)); done
-tmux-identity-leak.sh	436	cap="$_i" -lt 80	    _i=0; while [ "$_i" -lt 80 ] && [ ! -f "$TMP/win-env.log.done" ]; do sleep 0.1; _i=$((_i + 1)); done
-tmux-identity-leak.sh	475	cap="$_i" -lt 120	    _i=0; while [ "$_i" -lt 120 ] && [ ! -f "$TMP/win-kill.done" ]; do sleep 0.1; _i=$((_i + 1)); done
+flip-m37.sh	120	cap="$m37_i" -lt 50	while [ "$m37_i" -lt 50 ] && { [ -z "$(m37_child_of "$SESS:m37w")" ] || [ -z "$(m37_child_of "$SESS:m37-lit")" ]; }; do
+flip-p217.sh	169	cap="$i" -lt 3000	  while [ "$i" -lt 3000 ]; do
+flip-p210.sh	133	cap="$p210_i" -lt 50	while [ "$p210_i" -lt 50 ] && [ "$(tmux list-panes -t "$SESS:p210dead" -F '#{pane_dead}' 2>/dev/null | head -1)" != "1" ]; do
+flip-p210.sh	138	cap="$p210_j" -lt 20	while [ "$p210_j" -lt 20 ]; do
+flip-m4.3.sh	94	cap="$i" -lt $((n * 4))	  while [ "$i" -lt $((n * 4)) ]; do
+flip-m7.2.sh	198	bound=夹具的停止位文件（采集器随调用方写 stop 一起退出）	    while [ ! -f "$stop" ]; do
+flip-m7.2.sh	225	cap="$i" -lt 60	  while [ "$i" -lt 60 ]; do
+flip-p171.sh	108	cap="$i" -lt 3000	    while [ "$i" -lt 3000 ]; do
+panel-b3.sh	144	cap="$i" -le "${B3_FILE_ITERS:-600}"	  while [ "$i" -le "${B3_FILE_ITERS:-600}" ]; do
+panel-b3.sh	158	cap="$i" -le "${B3_ARGS_ITERS:-600}"	  while [ "$i" -le "${B3_ARGS_ITERS:-600}" ]; do
+panel-b3.sh	173	cap="$i" -le "${B3_CAP_ITERS:-600}"	  while [ "$i" -le "${B3_CAP_ITERS:-600}" ]; do
+panel-cpu.sh	248	bound=sub_end 计算出的截止时间（到点自己退出）	  while :; do
+panel-p21.sh	1813	cap="$_i" -le 15	  while [ "$_i" -le 15 ]; do
+pm-box-real.sh	175	cap="$i" -lt "$READY_TRIES"	while [ "$i" -lt "$READY_TRIES" ]; do
+smoke.sh	503	bound=持有者公布的排队上限 lock_cap（到点 break 进超限分支）+ TEAM_SMOKE_LOCK_WAIT 下限	  while :; do
+smoke.sh	1277	bound=停止位文件 SMOKE_TMP_STOP + 主 shell 寿命（M33 哨兵的文件握手）	  while [ ! -e "$SMOKE_TMP_STOP" ]; do
+smoke.sh	2977	cap="$S6_WAIT" -lt 3000	  while [ "$S6_WAIT" -lt 3000 ] && [ ! -s "$TMP/pi-args.log" ]; do sleep 0.1; S6_WAIT=$((S6_WAIT + 1)); done
+smoke.sh	3731	cap="$_i" -lt 60	  _i=0; while [ "$_i" -lt 60 ] && [ ! -f "$ADAPTER_DONE" ]; do sleep 0.5; _i=$((_i + 1)); done
+smoke.sh	3970	cap="$B4_ROUND" -le 5	  while [ "$B4_ROUND" -le 5 ]; do
+smoke.sh	3977	cap="$B4_WAIT" -lt 40	    while [ "$B4_WAIT" -lt 40 ] && ! grep -qF "exit code 7" "$TMP/m43-b4-$B4_ROUND.log"; do sleep 0.05; B4_WAIT=$((B4_WAIT + 1)); done
+smoke.sh	3984	cap="$B4_WAIT" -lt 40	      while [ "$B4_WAIT" -lt 40 ]; do
+smoke.sh	4268	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done
+smoke.sh	4277	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
+smoke.sh	4378	cap="$PM_TICKS" -lt 3	  while [ "$PM_TICKS" -lt 3 ]; do
+smoke.sh	4574	cap="$M82_WAIT" -lt 60	  while [ "$M82_WAIT" -lt 60 ] && [ ! -s "$TMP/m82-bare-ran.log" ]; do sleep 0.25; M82_WAIT=$((M82_WAIT + 1)); done
+smoke.sh	4680	cap="$i" -lt "${2:-50}"	    local i=0; while [ "$i" -lt "${2:-50}" ]; do [ -n "$(m37_child_of "$1")" ] && return 0; sleep 0.1; i=$((i + 1)); done
+smoke.sh	4688	cap="$i" -lt "${4:-50}"	    local i=0; while [ "$i" -lt "${4:-50}" ]; do
+smoke.sh	4713	cap="$i" -lt "${3:-3000}"	    while [ "$i" -lt "${3:-3000}" ]; do
+smoke.sh	5461	cap="$M25_CWAIT" -lt 60	    while [ "$M25_CWAIT" -lt 60 ]; do
+smoke.sh	5486	cap="$M25_WAIT" -lt 120	    while [ "$M25_WAIT" -lt 120 ]; do
+smoke.sh	5587	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
+smoke.sh	5601	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
+smoke.sh	5612	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
+smoke.sh	5622	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
+smoke.sh	5649	cap="$i" -lt 600	    while [ "$i" -lt 600 ]; do
+smoke.sh	5680	cap="$i" -lt 100	    while [ "$i" -lt 100 ]; do
+smoke.sh	5692	cap="$i" -lt "$tries"	    while [ "$i" -lt "$tries" ]; do
+smoke.sh	5701	cap="$i" -lt "$max"	    while [ "$i" -lt "$max" ]; do [ -f "$f" ] && [ -s "$f" ] && return 0; sleep 1; i=$((i+1)); done
+smoke.sh	5796	cap="$WD_LOGS_WAIT" -lt 40	  while [ "$WD_LOGS_WAIT" -lt 40 ]; do
+smoke.sh	6064	cap="$i" -lt 60	  while [ "$i" -lt 60 ]; do
+smoke.sh	6180	cap="$i" -lt 3000	  while [ "$i" -lt 3000 ] && [ "$(( $(start_count) - STARTS_BEFORE ))" -lt 1 ]; do sleep 0.1; i=$((i + 1)); done
+smoke.sh	6279	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ "$(p36_lines)" -gt "$base" ] && return 0; sleep 0.1; i=$((i + 1)); done
+smoke.sh	6288	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ -z "$(p36_same_cwd_pids)" ] && return 0; sleep 0.2; i=$((i + 1)); done
+smoke.sh	6365	cap="$R_WAIT" -lt 1500	  while [ "$R_WAIT" -lt 1500 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
+smoke.sh	6854	cap="$i" -lt "$ticks"	  while [ "$i" -lt "$ticks" ]; do
+smoke.sh	11110	cap="$i" -lt "$max"	  while [ "$i" -lt "$max" ]; do grep -q -- "$pat" "$f" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done
+smoke.sh	12032	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
+smoke.sh	12046	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
+smoke.sh	15016	cap="$M36_W" -lt 100	  while [ "$M36_W" -lt 100 ] && [ ! -f "$M36_D/env-worker.done" ]; do sleep 0.2; M36_W=$((M36_W + 1)); done
+smoke.sh	15034	cap="$M36_W" -lt 1500	  while [ "$M36_W" -lt 1500 ]; do grep -q 'argv=ls' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
+smoke.sh	15039	cap="$M36_W" -lt 1500	  while [ "$M36_W" -lt 1500 ]; do grep -q 'act=allowed-owned' "$REPO/.pi/team/state/tmux-calls.log" 2>/dev/null && break; sleep 0.2; M36_W=$((M36_W + 1)); done
+smoke.sh	15072	cap="$M36_W" -lt 100	  while [ "$M36_W" -lt 100 ] && [ ! -f "$M36_D/env-pm.done" ]; do sleep 0.2; M36_W=$((M36_W + 1)); done
+smoke.sh	15259	cap="$M40_W" -lt 60	  while [ "$M40_W" -lt 60 ]; do
+smoke.sh	15277	cap="$M40_LOGS_WAIT" -lt 40	  while [ "$M40_LOGS_WAIT" -lt 40 ]; do
+smoke.sh	15304	cap="$M40_W" -lt 100	  while [ "$M40_W" -lt 100 ] && [ ! -f "$M40_D/8c-worker.done" ]; do sleep 0.2; M40_W=$((M40_W + 1)); done
+smoke.sh	16977	cap="$i" -lt 600	  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 600 ]; do
+smoke.sh	17252	cap="$i" -lt "$n"	  while [ "$i" -lt "$n" ]; do
+smoke.sh	17265	cap="$i" -lt 6000	  while [ "$i" -lt 6000 ]; do
+smoke.sh	17305	cap="$i" -lt 6000	  while [ "$i" -lt 6000 ]; do
+smoke.sh	19104	cap="$i" -lt 1500	    while [ "$i" -lt 1500 ]; do
+smoke.sh	19122	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
+smoke.sh	19166	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
+smoke.sh	19303	cap="$P55_W" -lt 600	  while [ "$P55_W" -lt 600 ]; do
+smoke.sh	19348	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
+tmp-hygiene.sh	1696	cap="$_i" -lt 50	  while [ "$_i" -lt 50 ] && ! grep -q '^ROOT=' "$kr_out" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
+tmp-hygiene.sh	1790	cap="$_j" -lt 50	    local _j=0; while [ "$_j" -lt 50 ] && kill -0 "$orphan" 2>/dev/null; do sleep 0.1; _j=$((_j + 1)); done
+tmp-hygiene.sh	1842	cap="$_w" -lt 40	  while [ "$_w" -lt 40 ]; do
+tmp-hygiene.sh	1849	cap="$_w" -lt 40	  while [ "$_w" -lt 40 ]; do
+lib/bounded-spin.sh	75	cap="$cap_s"	  while _bs_parent_alive "$parent"; do
+lib/pty-wait.sh	190	cap="$i" -lt "$ceiling"	  while [ "$i" -lt "$ceiling" ]; do
+lib/pty-wait.sh	318	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	  while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do
+lib/pty-wait.sh	342	cap="$i" -le "${PTY_CLEANUP_ITERS:-4}"	  while [ "$i" -le "${PTY_CLEANUP_ITERS:-4}" ]; do
+lib/section-guard.sh	421	bound=停止位文件/owner 寿命（双重 fork 看门狗：裸 wait 不认它）	  while :; do
+lib/section-guard.sh	476	cap="$i" -lt $(( SG_SUITE_GRACE * 5 ))	  while [ "$i" -lt $(( SG_SUITE_GRACE * 5 )) ]; do
+lib/section-guard.sh	482	cap="$i" -lt 25	  while [ "$i" -lt 25 ]; do
+lib/section-guard.sh	492	bound=子孙清空或 SG_DESC_GRACE 次尝试后转 KILL	  while :; do
+lib/section-guard.sh	611	cap="$round" -lt "$cap"	  while [ "$round" -lt "$cap" ]; do
+lib/section-guard.sh	651	cap="$_n" -lt 40	        while [ "$_n" -lt 40 ]; do section_guard_check; sleep 0.1; _n=$((_n + 1)); done
+lib/section-guard.sh	716	cap="$i" -lt 40	  while [ "$i" -lt 40 ]; do
+lib/tmp-root.sh	303	cap="$i" -lt $((grace * 5))	  while [ "$i" -lt $((grace * 5)) ]; do
+lib/tmp-root.sh	567	cap="$_i" -lt 50	  while [ "$_i" -lt 50 ]; do
+lib/tmp-root.sh	578	cap="$_i" -lt 100	    while [ "$_i" -lt 100 ] && kill -0 "$term_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
+lib/tmp-root.sh	604	cap="$_i" -lt 50	  while [ "$_i" -lt 50 ]; do
+lib/tmp-root.sh	614	cap="$_i" -lt 25	    while [ "$_i" -lt 25 ] && kill -0 "$fg_pid" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
+flip-p158.sh	137	cap="$i" -lt 500	  while [ "$i" -lt 500 ] && [ -z "$fp" ]; do
+perf.sh	174	bound=持有者公布的排队上限 cap（缺则 TEAM_PERF_LOCK_WAIT），到点 exit 3（没结论）	  while :; do
+tmux-identity-leak.sh	389	cap="$i" -lt 300	  while [ "$i" -lt 300 ] && [ ! -f "$TMP/$name.done" ]; do sleep 0.1; i=$((i + 1)); done
+tmux-identity-leak.sh	459	cap="$_i" -lt 80	    _i=0; while [ "$_i" -lt 80 ] && [ ! -f "$TMP/win-env.log.done" ]; do sleep 0.1; _i=$((_i + 1)); done
+tmux-identity-leak.sh	499	cap="$_i" -lt 120	    _i=0; while [ "$_i" -lt 120 ] && [ ! -f "$TMP/win-kill.done" ]; do sleep 0.1; _i=$((_i + 1)); done

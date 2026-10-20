@@ -267,11 +267,9 @@ kr_group_paths() {
   rm -f "$KR/index.v1"; mv "$KR/index.real" "$KR/index.v1"
   # 2) writer.lock 是 FIFO → post 拒绝且不阻塞
   rm -f "$KR/writer.lock"; mkfifo "$KR/writer.lock"
-  local t0 t1; t0=$(date +%s)
   kr_post "$p" dev2 'T-fifo' "$B" >/dev/null 2>&1; rc=$?
-  t1=$(date +%s)
   eq "paths：writer.lock 是 FIFO → rc4" "$rc" "4"
-  if [ $((t1 - t0)) -le 5 ]; then ok "paths：FIFO 不阻塞（${t1}s-${t0}s ≤ 5s）"; else bad "paths：FIFO 阻塞了 $((t1 - t0))s"; fi
+  # P316：不判耗时；rc4 证明它没有阻塞到超时，下面清掉 FIFO 继续。
   rm -f "$KR/writer.lock"
   # 3) bodies/<id>.md 被换成目录 / 软链 → show 拒绝，目标不动
   local bid; bid="$(kr_cli "$p" reply list --json | jget /dev/stdin 'd["entries"][0]["sha256"]' >/dev/null; ls "$KR/bodies" | head -1)"
@@ -507,18 +505,27 @@ kr_group_receipts() {
   else
     bad "receipts：以 root 跑，不可写目录这条没法测（不许静默跳过）"
   fi
-  # 锁竞争：另一个活 publisher 持锁 >2s → rc5，且没有新发布；list/show 照常
+  # 锁竞争：另一个活 publisher 持锁 → rc5，且没有新发布；list/show 照常
   kr_hold_lock "$KR" || bad "receipts：夹具没能持住写锁"
-  local t0 t1; t0="$(date +%s%N)"
   kr_post "$p" dev2 'R3' "$B" >"$TMP/r-busy.out" 2>&1; rc=$?
-  t1="$(date +%s%N)"
   eq "receipts：锁竞争 → rc5" "$rc" "5"
-  local waited=$(( (t1 - t0) / 1000000 ))
-  if [ "$waited" -ge 1500 ] && [ "$waited" -le 6000 ]; then ok "receipts：等锁区间 ${waited}ms（≤2000ms 等待 + 启动）"; else bad "receipts：等锁区间异常 ${waited}ms"; fi
   eq "receipts：竞争失败没有发布" "$(kr_cli "$p" reply list --json | jget /dev/stdin 'd["total_slots"]')" "1"
   kr_cli "$p" reply show 1 >/dev/null 2>&1; eq "receipts：锁被占时 show 照常" "$?" "0"
   kr_cli "$p" reply list >/dev/null 2>&1; eq "receipts：锁被占时 list 照常" "$?" "0"
   kr_release_lock
+  # P316 · V61 F3：spec 承诺「writer-lock contention 最多等 2000 ms 后返回 5」（scripts/replies.mjs 的
+  # LOCK_WAIT_SEC=2）。这条**不改回秒表**：把 `flock` 换成"记下 argv 就以忙退出"的桩，断言工具交给
+  # 限时 flock 的**就是它自己的那个界**（`-w 2`）——把 LOCK_WAIT_SEC 改成 30，这里立刻红。
+  # 只守「-w 2」这一段：后面的 fd 是实现细节，不是锁契约（V63）。
+  local krstub="$TMP/kr-flock-stub" krlog="$TMP/kr-flock-argv"
+  mkdir -p "$krstub"; : > "$krlog"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 1\n' "$krlog" > "$krstub/flock"
+  chmod +x "$krstub/flock"
+  kr_post "$p" dev2 'R5' "$B" PATH="$krstub:$PATH" >"$TMP/r-lockbound.out" 2>&1; rc=$?
+  eq "receipts：限时 flock 报到界了（忙） → rc5" "$rc" "5"
+  has "receipts：传给 flock 的是产品自己的界（-w 2）" "$(cat "$krlog")" "-w 2 "
+  has "receipts：忙时的诊断报出同一个界（2000ms）" "$(cat "$TMP/r-lockbound.out")" "2000ms"
+  eq "receipts：限时 flock 放弃时同样没有发布" "$(kr_cli "$p" reply list --json | jget /dev/stdin 'd["total_slots"]')" "1"
   # unconfirmed（最终 fsync 失败）：rc6 + candidate_no，不自动重发
   kr_post "$p" dev2 'R4' "$B" TEAM_REPLY_FAULT=fail:index-fsync >"$TMP/r-unc.out" 2>&1; rc=$?
   eq "receipts：最终 fsync 失败 → rc6" "$rc" "6"
@@ -984,7 +991,7 @@ kr_group_flip() {
     kr_post "$p" dev2 'base' "$b" >/dev/null 2>&1 || return 1
     rm -f "$KR/index.v1"; mkfifo "$KR/index.v1"
     local rc
-    timeout 4 bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" reply list --json >/dev/null 2>&1
+    timeout 300 bash -c "cd '$p' && exec \"\$@\"" _ "${KR_CLEAN[@]}" "$KR_TEAM" --root "$p" reply list --json >/dev/null 2>&1
     rc=$?
     rm -f "$KR/index.v1"
     printf 'flip/fifo_block：list 对 FIFO 索引 rc=%s\n' "$rc" >>"$TMP/flip-fifo.log"

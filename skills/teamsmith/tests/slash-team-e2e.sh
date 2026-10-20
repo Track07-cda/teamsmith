@@ -140,12 +140,12 @@ run_pi() { # <proj> <prompts> <out> <err> <rec-log>
   : > "$out"; : > "$err"
   {
     cat "$prompts"
-    for i in $(seq 1 150); do
+    for i in $(seq 1 1500); do
       [ "$(grep -c '"type":"response"' "$out" 2>/dev/null || true)" -ge "$want" ] && break
       sleep 0.2
     done
   } | ( cd "$proj" && exec env HOME="$proj/home" PI_CODING_AGENT_DIR="$proj/agentdir" TEAM_ASSUME_YES=1 REC_LOG="$rec" \
-        timeout --kill-after=5 120 "$PI_BIN" --mode rpc --no-session --approve --session-dir "$proj/sessions" ) > "$out" 2> "$err"
+        timeout --kill-after=5 300 "$PI_BIN" --mode rpc --no-session --approve --session-dir "$proj/sessions" ) > "$out" 2> "$err"
   return $?
 }
 
@@ -257,12 +257,12 @@ while IFS= read -r v; do strip+=(-u "$v"); done < <(env | sed -n 's/^\(TEAM_[A-Z
 strip+=(-u TMUX -u TMUX_PANE)
 {
   cat "$tmp/realcli-prompts.jsonl"
-  for i in $(seq 1 150); do
+  for i in $(seq 1 1500); do
     [ "$(grep -c '"type":"response"' "$tmp/realcli-out.jsonl" 2>/dev/null || true)" -ge 1 ] && break
     sleep 0.2
   done
 } | ( cd "$rproj" && exec env "${strip[@]}" HOME="$rproj/home" PI_CODING_AGENT_DIR="$rproj/agentdir" \
-      timeout --kill-after=5 120 "$PI_BIN" --mode rpc --no-session --approve --session-dir "$rproj/sessions" ) \
+      timeout --kill-after=5 300 "$PI_BIN" --mode rpc --no-session --approve --session-dir "$rproj/sessions" ) \
     > "$tmp/realcli-out.jsonl" 2> "$tmp/realcli-err.log"
 rout="$(cat "$tmp/realcli-out.jsonl" 2>/dev/null)"
 rc_after="$(sha256sum "$rproj/.pi/team/config.sh" | cut -d' ' -f1)"

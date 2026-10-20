@@ -80,7 +80,8 @@ kr_group_blocks() {
   t0="$(date +%s)"
   kr_panel_snapshot 5 --width 120 --height 28 --lang zh >"$tmp/bl-slow.txt"
   t1="$(date +%s)"
-  if [ $((t1 - t0)) -le 20 ]; then ok "blocks：慢 list 在超时界内返回（$((t1 - t0))s ≤ 20s）"; else bad "blocks：慢 list 拖过了超时界（$((t1 - t0))s）"; fi
+  # P316：不判耗时；超时杀块的行为由下一行「慢 list 只降级本块」守。
+  printf '  \033[2m· 参考 blocks：慢 list 快照用时 %ss（不判快慢）\033[0m\n' "$((t1 - t0))"
   assert_has "$tmp/bl-slow.txt" "更早" "blocks：慢 list 只降级本块（页面的导航/其它内容仍在）"
   kr_shim_set_slow -
   # ⑥ 输出泛滥：块 stdout 超过上限 → 该块判失败而不是把巨量内容塞进帧

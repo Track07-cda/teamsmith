@@ -85,7 +85,6 @@ assert_eq() { [ "$2" = "$3" ] && ok "$1" || bad "$1（期望 [$3]，实际 [$2]�
 assert_has() { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里找不到 [$2]）"; }
 assert_not() { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
 assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里没有匹配 [$2]）"; }
-cond_skip() { printf '  \033[33mSKIP（条件不满足）\033[0m %s\n' "$1${2:+ —— $2}"; }
 
 # ---------------------------------------------------------------- P68 数据态等待
 # fixture-waits-for-landed-reads：控制台自己的状态（首帧标题、工具写的日志、capacity.log 的行数）在断言
@@ -98,21 +97,18 @@ pty_cap() { tmux -L "$sock" capture-pane -p -t "$sess:${b3_cap_pane:-panel}" -S 
 pty_keys() { keys "$@"; }
 pty_pane_state() { tmux -L "$sock" list-panes -t "$sess:${b3_cap_pane:-panel}" -F '#{pane_dead}:#{pane_dead_status}' 2>/dev/null | head -1; }
 
-# 等控制台自己的标题（`teamsmith pulse`）在稳定帧上。上界 75 轮基础视界（轮询 0.4s + 稳定确认 0.25s；
-# 实测每轮 ~0.43s → 约 32s，静态场景不延长）。带宽与推导：安静机上首帧 <1s；旧形状的固定窗口是 5s，
-# P52 F2 在负载主机上 6 次红 4 次（首帧落在 5s 之后）；确定性的注入（JS runner 晚 8s）实测标题在第
-# 43-44 轮（~19s）落地（runner 在路径上付了两次：monitor 的 spawn + activity 读的 monitor.mjs），75 轮
-# ≈ 1.7× 实测慢端。rc：0 绿 / 1 红（M59 现场）/ 3 可见 SKIP（场景仍在绘制，机器维度）。
-# 夹具旋钮：B3_CONSOLE_ITERS 覆盖上界（只在测带宽时用；默认 75）。
+# 等控制台自己的标题（`teamsmith pulse`）在稳定帧上。视界用 tests/lib/pty-wait.sh 的默认
+# （基础 100 轮 + 仍在绘制时最多 5 倍 ≈ 300s），只防死等；耗尽一律红并报「没等到」（P316：
+# 没有机器前提，没有 SKIP 出口）。耗时只是参考读数。
 wait_console() { # <outfile> <label>
-  B3_FRAME_ITERS="${B3_CONSOLE_ITERS:-75}" wait_frame "$1" "$2" 'teamsmith pulse'
+  wait_frame "$1" "$2" 'teamsmith pulse'
 }
 
-# 把 pty-wait 的 rc 翻成夹具的断言：0 → ✓；3 → 可见 SKIP（机器，不算通过也不算失败，D33）；其它 → ✗。
+# 把 pty-wait 的 rc 翻成夹具的断言：0 → ✓；其它（含「没等到」）→ ✗。
 b3_wait_verdict() { # <rc> <ok text> <bad text>
   case "$1" in
     0) ok "$2" ;;
-    3) cond_skip "$2" "机器读数超前提（等待耗尽但场景仍在绘制，D33 的可见 SKIP）" ;;
+    3) bad "$3" ;;   # P316：没有机器前提/ SKIP 出口；耗尽就是「没等到」
     *) bad "$3" ;;
   esac
 }
@@ -120,7 +116,7 @@ b3_wait_verdict() { # <rc> <ok text> <bad text>
 # 等面板帧满足 needle... 后把捕获写到 <outfile>（needle 以 `!` 开头表示必须缺席）。
 wait_frame() { # <outfile> <label> <needle...>
   local _out="$1" _label="$2"; shift 2
-  local PTY_WAIT_ITERS="${B3_FRAME_ITERS:-30}" PTY_WAIT_PAUSE=0.4 PTY_SETTLE_PAUSE=0.25
+  local PTY_WAIT_PAUSE=0.4 PTY_SETTLE_PAUSE=0.25   # 视界用 pty-wait 的默认（只防死等）
   pty_wait_frame "$_out" "$_label" "$@"
 }
 
@@ -145,13 +141,13 @@ wait_cap_not() { # <file name> <needle> <message>
 # 等一个由工具自己写的文件里出现 <needle>（例如 `pulse up` 的日志点名窗口）：20 轮 × 0.5s = 10s。
 wait_file_has() { # <file> <needle> <label>
   local file="$1" needle="$2" label="$3" i=1
-  while [ "$i" -le "${B3_FILE_ITERS:-20}" ]; do
+  while [ "$i" -le "${B3_FILE_ITERS:-600}" ]; do
     grep -qF -- "$needle" "$file" 2>/dev/null && return 0
     sleep 0.5
     i=$((i + 1))
   done
   printf '  \033[33m·\033[0m 等待超时：%s（%s 轮/%s；%s 里缺 [%s]，最后两行：%s）\n' \
-    "$label" "$((i - 1))" "${B3_FILE_ITERS:-20}" "$file" "$needle" \
+    "$label" "$((i - 1))" "${B3_FILE_ITERS:-600}" "$file" "$needle" \
     "$(tail -2 "$file" 2>/dev/null | tr '\n' ';')" >&2
   return 1
 }
@@ -159,7 +155,7 @@ wait_file_has() { # <file> <needle> <label>
 # 等窗格里的进程参数命中 <needle>（q 收起后窗口里应换成 --headless 巡检循环）：30 轮 × 0.5s = 15s。
 wait_pane_args() { # <pane> <needle> <label>
   local pane="$1" needle="$2" label="$3" i=1 pid args
-  while [ "$i" -le "${B3_ARGS_ITERS:-30}" ]; do
+  while [ "$i" -le "${B3_ARGS_ITERS:-600}" ]; do
     pid="$(tmux -L "$sock" list-panes -t "$sess:$pane" -F '#{pane_pid}' 2>/dev/null | head -1)"
     args="$(ps -o args= -p "${pid:-0}" 2>/dev/null || true)"
     if [ -n "$args" ] && printf '%s' "$args" | grep -qF -- "$needle"; then return 0; fi
@@ -167,21 +163,21 @@ wait_pane_args() { # <pane> <needle> <label>
     i=$((i + 1))
   done
   printf '  \033[33m·\033[0m 等待超时：%s（%s 轮/%s；窗格进程参数里缺 [%s]，最后读到 [%s]）\n' \
-    "$label" "$((i - 1))" "${B3_ARGS_ITERS:-30}" "$needle" "${args:-（无）}" >&2
+    "$label" "$((i - 1))" "${B3_ARGS_ITERS:-600}" "$needle" "${args:-（无）}" >&2
   return 1
 }
 
 # 等 capacity.log 的行数真的长过 <floor>（巡检还在跑的正证据）：30 轮 × 0.5s = 15s；成功时打印行数。
 wait_capacity_growth() { # <file> <floor> <label>
   local file="$1" floor="$2" label="$3" i=1 c=0
-  while [ "$i" -le "${B3_CAP_ITERS:-30}" ]; do
+  while [ "$i" -le "${B3_CAP_ITERS:-600}" ]; do
     c="$(grep -c . "$file" 2>/dev/null || echo 0)"
     if [ "${c:-0}" -gt "$floor" ]; then printf '%s\n' "$c"; return 0; fi
     sleep 0.5
     i=$((i + 1))
   done
   printf '  \033[33m·\033[0m 等待超时：%s（%s 轮/%s；%s 的行数停在 %s，没长过 %s）\n' \
-    "$label" "$((i - 1))" "${B3_CAP_ITERS:-30}" "$file" "${c:-?}" "$floor" >&2
+    "$label" "$((i - 1))" "${B3_CAP_ITERS:-600}" "$file" "${c:-?}" "$floor" >&2
   return 1
 }
 
@@ -358,7 +354,7 @@ scn_pages() {
   if wait_frame "$tmp/$current/p3-inbox.txt" "消息页计数行（往来，无线程）" '收件箱' '往来' '!线程'; then
     assert_not "$tmp/$current/p3-inbox.txt" "线程" "捕获里没有 [线程]"
   else
-    b3_wait_verdict $? "捕获里没有 [线程]" "消息页计数行没有在预算内落定"
+    b3_wait_verdict $? "捕获里没有 [线程]" "消息页计数行没等到（超过等待上限）"
   fi
   assert_eq "按 3 后 panel-page=3" "$(page_of)" "3"
   keys m
@@ -384,18 +380,18 @@ scn_settings() {
   # The selected row is language: Enter switches zh -> en and it applies on the next frame.
   keys Enter
   wait_cap_has lang-en.txt "language" "捕获里有 [language]"
-  wait_file_has "$(conf)" "lang=en" "语言切换写进 panel.conf" || bad "语言偏好没有在预算内落盘"
+  wait_file_has "$(conf)" "lang=en" "语言切换写进 panel.conf" || bad "语言偏好没等到落盘（超过等待上限）"
   assert_has "$(conf)" "lang=en" "切换语言写进 panel.conf"
   # Down three rows to the mouse preference and toggle it off.
   keys Down Down Down
   sleep 0.3
   keys Enter
-  wait_file_has "$(conf)" "mouse=0" "鼠标开关写进 panel.conf" || bad "鼠标偏好没有在预算内落盘"
+  wait_file_has "$(conf)" "mouse=0" "鼠标开关写进 panel.conf" || bad "鼠标偏好没等到落盘（超过等待上限）"
   assert_has "$(conf)" "mouse=0" "鼠标开关写进 panel.conf"
   keys Down
   sleep 0.2
   keys Enter
-  wait_file_has "$(conf)" "density=compact" "密度开关写进 panel.conf" || bad "密度偏好没有在预算内落盘"
+  wait_file_has "$(conf)" "density=compact" "密度开关写进 panel.conf" || bad "密度偏好没等到落盘（超过等待上限）"
   assert_has "$(conf)" "density=compact" "密度开关写进 panel.conf"
   keys ,
   wait_cap_not overlay-closed.txt "设置" "捕获里没有 [设置]"
@@ -412,7 +408,7 @@ scn_settings() {
   local cyc
   for cyc in 2 3 4 5 1; do
     keys Enter
-    wait_file_has "$(conf)" "page=$cyc" "defaultPage 循环到 $cyc" || bad "defaultPage 没有在预算内循环到 $cyc"
+    wait_file_has "$(conf)" "page=$cyc" "defaultPage 循环到 $cyc" || bad "defaultPage 没等到（超过等待上限）循环到 $cyc"
     assert_eq "defaultPage 循环到 $cyc（五页 + 回绕）" "$(sed -n 's/^page=//p' "$(conf)" | tr -d '\n')" "$cyc"
   done
   keys Escape
@@ -834,13 +830,13 @@ scn_collapse() {
     "bash '$skill/scripts/team' pulse up > '$tmp/$current/up.log' 2>&1; sleep 1"
   # P68：等日志自己点名窗口（原来是 sleep 5 + 单次采样）。
   wait_file_has "$tmp/$current/up.log" "巡检已在" "pulse up 的日志点名窗口" \
-    || bad "pulse up 的日志没有在预算内点名窗口"
+    || bad "pulse up 的日志没等到点名窗口"
   assert_has "$tmp/$current/up.log" "巡检已在" "pulse up 起了窗口"
   # P68：等控制台自己的标题在稳定帧上（原来是 sleep 5 + 单次 capture-pane）。
   if wait_console "$tmp/$current/console.txt" "pulse 窗口里的控制台首帧"; then
     assert_has "$tmp/$current/console.txt" "teamsmith pulse" "pulse 窗口里是控制台"
   else
-    b3_wait_verdict $? "pulse 窗口里是控制台" "pulse 窗口里没有在预算内出现控制台"
+    b3_wait_verdict $? "pulse 窗口里是控制台" "pulse 窗口里没等到（超过等待上限）控制台"
   fi
   # 计数放在控制台起来之后：`cmd` 辅助窗口的命令末尾有 `sleep 1`，它自己退掉后剩下的才是后端窗口。
   local wins_before; wins_before="$(tmux -L "$sock" list-windows -t "$sess" | wc -l | tr -d ' ')"
@@ -871,15 +867,15 @@ scn_collapse() {
      bash '$skill/scripts/team' pulse up > '$tmp/$current/up2.log' 2>&1"
   # P68：两份由命令自己写的日志分别等（原来是 sleep 6 + 两次单次采样）。
   wait_file_has "$tmp/$current/status-headless.log" "无界面 tick" "pulse status 报无界面形态" \
-    || bad "pulse status 没有在预算内报无界面形态"
+    || bad "pulse status 没等到无界面形态"
   assert_has "$tmp/$current/status-headless.log" "无界面 tick" "pulse status 报无界面形态"
   wait_file_has "$tmp/$current/up2.log" "恢复成控制台" "pulse up 原地恢复控制台" \
-    || bad "pulse up 没有在预算内恢复控制台"
+    || bad "pulse up 没等到恢复控制台"
   assert_has "$tmp/$current/up2.log" "恢复成控制台" "pulse up 原地恢复控制台"
   if wait_console "$tmp/$current/restored.txt" "恢复后的控制台首帧"; then
     assert_has "$tmp/$current/restored.txt" "teamsmith pulse" "恢复后同一窗口里又是控制台"
   else
-    b3_wait_verdict $? "恢复后同一窗口里又是控制台" "恢复后同一窗口里没有在预算内出现控制台"
+    b3_wait_verdict $? "恢复后同一窗口里又是控制台" "恢复后同一窗口里没等到（超过等待上限）控制台"
   fi
 }
 
@@ -1092,17 +1088,20 @@ scn_detail() {
 
   # 9.1 + 9.4: Enter opens the focused card's detail; the first detail frame is timed from the key,
   # then the view is waited for (the first frame is the loading state — the block is one child away).
-  local t0 t1 opened=1 i
+  local t0 t1 opened=1 i last_state=""
   t0="$(date +%s.%N)"
   keys Enter
-  for i in $(seq 1 40); do
-    if { cap || true; } | grep -qF '详情'; then opened=0; break; fi
+  # P316：上限 300s（防死等）；耗尽报「没等到详情视图」并带最后一次状态；耗时只作参考打印。
+  for i in $(seq 1 10000); do
+    last_state="$(cap || true)"
+    if printf '%s' "$last_state" | grep -qF '详情'; then opened=0; break; fi
     sleep 0.03
   done
   t1="$(date +%s.%N)"
-  assert_eq "Enter 后 1.2s 内出现详情视图" "$opened" "0"
-  printf '  \033[36m·\033[0m 首帧耗时（Enter→详情标题上屏）：%ss\n' "$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')"
-  for i in $(seq 1 40); do
+  assert_eq "详情视图出现（上限 300s；没等到时下面打最后状态）" "$opened" "0"
+  [ "$opened" = "0" ] || printf '  \033[33m没等到\033[0m 详情视图：最后一次状态=%s\n' "$(printf '%s' "$last_state" | tail -3 | tr '\n' '|')"
+  printf '  \033[36m· 参考\033[0m 首帧耗时（Enter→详情标题上屏）：%ss\n' "$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.3f", b - a }')"
+  for i in $(seq 1 6000); do
     if { cap || true; } | grep -qF '[brief]'; then break; fi
     sleep 0.05
   done

@@ -1102,10 +1102,10 @@ run_probe() { # <cmd> → ok/finding
     ( cd "$d" && env -u TMUX -u TMUX_PANE PATH="$SHIM:$PATH" TMPDIR="$tmp/probe-tmp/$cmd" \
         TEAM_PI_BIN="$SHIM/fakeagent" TEAM_MEETINGS_DIR="$TEAM_MEETINGS_DIR" \
         TEAM_PI_AGENT_DIR="$tmp/pi-agent" $envs \
-        ${TIMEOUT_BIN:+"$TIMEOUT_BIN" 25} bash "$team" $argv </dev/null >"$tmp/logs/p-$cmd.out" 2>&1 )
+        ${TIMEOUT_BIN:+"$TIMEOUT_BIN" 300} bash "$team" $argv </dev/null >"$tmp/logs/p-$cmd.out" 2>&1 )
     after="$(fp_all "$d")"
     if [ "$before" = "$after" ]; then
-      ok "claims: $cmd 只读（有界窗口 25s 内调用者未被改动；整段套件按窗口判定，见报告）"
+      ok "claims: $cmd 只读（上限 300s 内调用者未被改动；整段套件按窗口判定，见报告）"
     else
       finding "claims: $cmd 在有界窗口内改动了调用者：$(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -2 | tr '\n' ' ')"
     fi

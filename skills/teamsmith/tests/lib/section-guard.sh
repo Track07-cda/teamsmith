@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# section-guard.sh — 门禁的**每段自述 + 硬预算 + 现场**（change: gate-section-accounting · 实现：P70）
+# section-guard.sh — 门禁的**每段自述 + 挂住上限 + 现场**（change: gate-section-accounting · 实现：P70；
+# P316 按用户裁定改成「时间只记录、不判定」）
 #
 # 被 `tests/smoke.sh` source（也支持 `bash tests/lib/section-guard.sh --self-test` 自检）。
-# 契约见 `openspec/changes/gate-section-accounting/specs/verification/spec.md`：
-#   * 每段开跑前打印 `== #<N> <id> == <ISO-8601> · 预算 <B>s`；结束时打印**唯一**的收口行
-#     `#<N> <id> · 用时 <S>s · <✓/✗/SKIP 增量> · ticks <T>`（stdout 与 sections.log 逐字节一致；
+#   * 每段开跑前打印 `== #<N> <id> == <ISO-8601>`；结束时打印**唯一**的收口行
+#     `#<N> <id> · 参考 用时 <S>s · <✓/✗/SKIP 增量> · ticks <T>`（stdout 与 sections.log 逐字节一致；
 #     增量由 P98 账本经 SG_CLOSE_COUNTS 注入，没有账本时是 `-`）；
 #     每段一行进 `<run tmp>/sections.tsv`（`no id start elapsed_s ticks`）。
-#   * 每段有一个来自 `tests/section-budgets.tsv` 的硬预算（表里没有 → 有界默认值，并在开跑行里说明）；
-#     第一段超预算 → **停跑**：看门狗打印一行点名该段（`#<N>` + id + 预算 + 实际用时）、写现场、
-#     然后才发信号；套件在自己的安全点看到 trip 标记 → exit 2。
+#   * 每段只有一个**挂住上限**（默认 1800s，防死等）：**cap 秒内没有进度**（心跳里的 ticks 没变）→
+#     **停跑**，看门狗打印「段落 #N（id）挂住：已 <cap>s 没有进度（…）」，写现场，然后才发信号。
+#     判据是「有没有动」，不是「跑了多久」：慢但一直在推进的段不会被停（V61 F1）。
 #   * 看门狗是**双重 fork**（不进作业表：裸 `wait` 不会被它卡住），只对进程树里的子孙发信号，
 #     **绝不** `kill -- -$pgid`（门禁的进程组里有 team review / CI / 启动它的席位）。
-#   * 超预算 = **存活检测**，不是性能判定：段内只要在预算内跑完，机器再慢也绿（D33 保持）。
+#   * 没有性能判定：机器再慢，只要段在动（ticks / 挂住上限之内）就是绿（D33 + 用户裁定）。
 #   * 夹具旋钮只在 `TEAM_SMOKE_FIXTURE=1` 下生效，否则**打印忽略行**（环境不能悄悄拆掉边界）。
 #
 # 现场（trip 时）：`${TMPDIR:-/tmp}/.teamsmith-smoke-scene.<pid>/`，点开头、在 run 自己的临时根**之外**
@@ -40,9 +40,8 @@ SG_TRIPPED=0
 SG_SEC_NO=0
 SG_SEC_ID=""
 SG_SEC_START=""
-SG_BUDGET=""
-SG_BAND=""
-SG_BUDGET_SOURCE=""
+SG_HANG_CAP=""
+SG_HANG_CAP_SOURCE=""
 SG_ARMED_EPOCH=0
 SG_ARMED_SECONDS=0
 SG_TICKS=0
@@ -51,7 +50,6 @@ SG_OWNER_PID="$$"
 SG_OWNER_START=""
 SG_BASE="$(team_tmp_root)"
 SG_RUN_TMP=""
-SG_BUDGETS=""
 SG_TIMING=""
 SG_LOG=""
 SG_HEARTBEAT=""
@@ -64,33 +62,19 @@ SG_POLL=1
 SG_DESC_GRACE=6
 SG_SUITE_GRACE=2
 SG_PROGRESS_INTERVAL=60
-SG_DEFAULT_BUDGET=900
+SG_HANG_CAP_DEFAULT=1800
 SG_FIXTURE="${TEAM_SMOKE_FIXTURE:-0}"
 SG_STUCK_SECTION=""
-SG_BUDGET_OVERRIDE=""
+SG_HANG_CAP_OVERRIDE=""
 SG_FAST="${TEAM_SMOKE_FAST:-0}"
 SG_LOCK_NOTE=""
 SG_CLOSE_COUNTS=""   # P98 账本：本段收口行里的 ✓/✗/SKIP 增量（关段前注入；空 → 行里打 `-`）
-SG_NESTED=0          # P281：本 run 是不是**证明得了祖辈持锁**的嵌套运行（只有嵌套运行才对齐祖辈期限）
-SG_ANCESTOR_HEARTBEAT=""   # P281：祖辈公布的心跳文件（读它拿到 armed_epoch + budget）
 
 _sg_now() { date +%s; }
 
 # P281：心跳文件的路径**只在这里拼一次**（门禁锁的记录要公布它，嵌套运行要靠它找祖辈的武装段）
 section_guard_heartbeat_path() { # [<owner pid>] → <TMPDIR>/.teamsmith-smoke-heartbeat.<pid>
   printf '%s\n' "$(team_tmp_root)/.teamsmith-smoke-heartbeat.${1:-$$}"
-}
-
-# P281：祖辈当前武装段的到期时刻（armed_epoch + budget）；读不到/未武装 → 空
-_sg_ancestor_deadline() {
-  local hb="${SG_ANCESTOR_HEARTBEAT:-}" line no armed budget
-  [ -n "$hb" ] && [ -r "$hb" ] || return 1
-  line="$(head -1 "$hb" 2>/dev/null || true)"
-  case "$line" in ''|disarm*) return 1 ;; esac
-  IFS='|' read -r no armed budget _ _ _ <<<"$line"
-  case "${armed:-}" in ''|*[!0-9]*) return 1 ;; esac
-  case "${budget:-}" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s\n' "$(( armed + budget ))"
 }
 
 _sg_proc_start() { # /proc/<pid>/stat 的 starttime：pid 复用安全的判据
@@ -122,7 +106,7 @@ _sg_pid_running() { # <pid> → 0 = 存在且不是僵尸
 
 # ---------------------------------------------------------------- 初始化
 # section_guard_init <run tmp> [--poll <s>] [--progress <s>] [--suite-grace <s>]
-#                              [--desc-grace <n>] [--default-budget <s>] [--budgets <file>]
+#                              [--desc-grace <n>] [--hang-cap <s>]
 section_guard_init() {
   SG_RUN_TMP="${1:-}"; shift || true
   while [ $# -gt 0 ]; do
@@ -131,8 +115,7 @@ section_guard_init() {
       --progress)        SG_PROGRESS_INTERVAL="${2:-60}"; shift 2 ;;
       --suite-grace)     SG_SUITE_GRACE="${2:-2}"; shift 2 ;;
       --desc-grace)      SG_DESC_GRACE="${2:-6}"; shift 2 ;;
-      --default-budget)  SG_DEFAULT_BUDGET="${2:-900}"; shift 2 ;;
-      --budgets)         SG_BUDGETS="${2:-}"; shift 2 ;;
+      --hang-cap)        SG_HANG_CAP_DEFAULT="${2:-1800}"; shift 2 ;;
       *) printf 'section-guard: 不认识的参数 %s\n' "$1" >&2; return 2 ;;
     esac
   done
@@ -148,7 +131,6 @@ section_guard_init() {
   SG_WATCHDOG_PIDFILE="$SG_BASE/.teamsmith-smoke-guard.pid.$SG_OWNER_PID"
   SG_TIMING="$SG_RUN_TMP/sections.tsv"
   SG_LOG="$SG_RUN_TMP/sections.log"
-  [ -n "$SG_BUDGETS" ] || SG_BUDGETS="${SG_SKILL_DIR:-}/tests/section-budgets.tsv"
   _sg_parse_knobs
   if [ ! -s "$SG_TIMING" ]; then
     printf 'no\tid\tstart\telapsed_s\tticks\n' > "$SG_TIMING" 2>/dev/null || true
@@ -164,23 +146,23 @@ _sg_knob_note() { # <name> <value>：非夹具路径下的忽略行（旋钮不�
 _sg_parse_knobs() {
   local k v
   SG_STUCK_SECTION=""
-  SG_BUDGET_OVERRIDE=""
+  SG_HANG_CAP_OVERRIDE=""
   SG_POLL="${SG_POLL:-1}"
   SG_PROGRESS_INTERVAL="${SG_PROGRESS_INTERVAL:-60}"
   if [ "${SG_FIXTURE:-0}" = "1" ]; then
     SG_STUCK_SECTION="${TEAM_SMOKE_STUCK_SECTION:-}"
-    SG_BUDGET_OVERRIDE="${TEAM_SMOKE_SECTION_BUDGET:-}"
+    SG_HANG_CAP_OVERRIDE="${TEAM_SMOKE_SECTION_HANG_CAP:-}"
     [ -n "${TEAM_SMOKE_PROGRESS_INTERVAL:-}" ] && SG_PROGRESS_INTERVAL="$TEAM_SMOKE_PROGRESS_INTERVAL"
     [ -n "${TEAM_SMOKE_GUARD_POLL:-}" ] && SG_POLL="$TEAM_SMOKE_GUARD_POLL"
     return 0
   fi
-  for k in TEAM_SMOKE_STUCK_SECTION TEAM_SMOKE_SECTION_BUDGET TEAM_SMOKE_PROGRESS_INTERVAL TEAM_SMOKE_GUARD_POLL SMOKE_PROGRESS_INTERVAL; do
+  for k in TEAM_SMOKE_STUCK_SECTION TEAM_SMOKE_SECTION_HANG_CAP TEAM_SMOKE_PROGRESS_INTERVAL TEAM_SMOKE_GUARD_POLL SMOKE_PROGRESS_INTERVAL; do
     case "$k" in
-      TEAM_SMOKE_STUCK_SECTION)     v="${TEAM_SMOKE_STUCK_SECTION:-}" ;;
-      TEAM_SMOKE_SECTION_BUDGET)    v="${TEAM_SMOKE_SECTION_BUDGET:-}" ;;
-      TEAM_SMOKE_PROGRESS_INTERVAL) v="${TEAM_SMOKE_PROGRESS_INTERVAL:-}" ;;
-      TEAM_SMOKE_GUARD_POLL)        v="${TEAM_SMOKE_GUARD_POLL:-}" ;;
-      SMOKE_PROGRESS_INTERVAL)      v="${SMOKE_PROGRESS_INTERVAL:-}" ;;
+      TEAM_SMOKE_STUCK_SECTION)      v="${TEAM_SMOKE_STUCK_SECTION:-}" ;;
+      TEAM_SMOKE_SECTION_HANG_CAP)   v="${TEAM_SMOKE_SECTION_HANG_CAP:-}" ;;
+      TEAM_SMOKE_PROGRESS_INTERVAL)  v="${TEAM_SMOKE_PROGRESS_INTERVAL:-}" ;;
+      TEAM_SMOKE_GUARD_POLL)         v="${TEAM_SMOKE_GUARD_POLL:-}" ;;
+      SMOKE_PROGRESS_INTERVAL)       v="${SMOKE_PROGRESS_INTERVAL:-}" ;;
     esac
     [ -n "$v" ] && _sg_knob_note "$k" "$v"
   done
@@ -190,35 +172,17 @@ _sg_parse_knobs() {
 }
 
 # ---------------------------------------------------------------- 预算表
-# section_guard_budget_for <id> → 设置 SG_BUDGET / SG_BAND / SG_BUDGET_SOURCE
-section_guard_budget_for() {
-  local id="$1" row=""
-  if [ -n "$SG_BUDGETS" ] && [ -r "$SG_BUDGETS" ]; then
-    row="$(awk -F'\t' -v id="$id" '
-      /^[[:space:]]*#/ { next }
-      $1 == id { print $2 "\t" $3; found = 1; exit }
-      END { if (!found) exit 1 }
-    ' "$SG_BUDGETS" 2>/dev/null || true)"
-  fi
-  # 行必须在、band 可以是 "-"（没测过），budget 必须是正整数
-  case "$row" in
-    *$'\t'*) SG_BAND="${row%%	*}"; SG_BUDGET="${row##*	}" ;;
-    *)       SG_BAND=""; SG_BUDGET="" ;;
-  esac
-  case "${SG_BUDGET:-x}" in ''|*[!0-9]*) row="" ;; esac
-  if [ -n "$row" ]; then
-    SG_BUDGET_SOURCE="table"
-  else
-    SG_BAND=""
-    SG_BUDGET="$SG_DEFAULT_BUDGET"
-    SG_BUDGET_SOURCE="default"
-  fi
-  # 夹具的预算覆盖：只作用于被点名的 stuck 段；没点名就作用于每段（自检/夹具用）
-  if [ "${SG_FIXTURE:-0}" = "1" ] && [ -n "$SG_BUDGET_OVERRIDE" ]; then
-    case "${SG_BUDGET_OVERRIDE:-x}" in *[!0-9]*) ;; *)
+# section_guard_hang_cap_for <id> → 设置 SG_HANG_CAP / SG_HANG_CAP_SOURCE（常量，防死等；不是性能预算）
+section_guard_hang_cap_for() {
+  local id="$1"
+  SG_HANG_CAP="$SG_HANG_CAP_DEFAULT"
+  SG_HANG_CAP_SOURCE="default"
+  # 夹具覆盖：只作用于被点名的 stuck 段；没点名就作用于每段（自检/夹具用）
+  if [ "${SG_FIXTURE:-0}" = "1" ] && [ -n "$SG_HANG_CAP_OVERRIDE" ]; then
+    case "${SG_HANG_CAP_OVERRIDE:-x}" in *[!0-9]*) ;; *)
       if [ -z "$SG_STUCK_SECTION" ] || _sg_id_matches "$SG_STUCK_SECTION" "$id"; then
-        SG_BUDGET="$SG_BUDGET_OVERRIDE"
-        SG_BUDGET_SOURCE="fixture"
+        SG_HANG_CAP="$SG_HANG_CAP_OVERRIDE"
+        SG_HANG_CAP_SOURCE="fixture"
       fi
       ;;
     esac
@@ -243,7 +207,7 @@ section_guard_write_heartbeat() {
   fi
   SG_ELAPSED=$(( SECONDS - SG_ARMED_SECONDS ))
   printf '%s|%s|%s|%s|%s|%s\n' \
-    "$SG_SEC_NO" "$SG_ARMED_EPOCH" "$SG_BUDGET" "$SG_ELAPSED" "$SG_TICKS" "$SG_SEC_ID" \
+    "$SG_SEC_NO" "$SG_ARMED_EPOCH" "$SG_HANG_CAP" "$SG_ELAPSED" "$SG_TICKS" "$SG_SEC_ID" \
     > "$SG_HEARTBEAT" 2>/dev/null || true
   return 0
 }
@@ -295,30 +259,7 @@ section_guard_on_term() { # 看门狗对我们的 TERM：trip → exit 2；否�
 
 # ---------------------------------------------------------------- 段落开闭
 _sg_start_line() {
-  local src=""
-  case "$SG_BUDGET_SOURCE" in
-    default)  src="（默认：预算表没有这段）" ;;
-    fixture)  src="（夹具覆盖）" ;;
-    ancestor) src="（嵌套运行：对齐祖辈剩余预算）" ;;
-    # 返修轮次 1 · F1：读不到祖辈公布的 heartbeat → 退回自己的表预算。退回必须**可见**，
-    # 不许无声占着（V43 的 F1：旧实现只把环境变量当来源，环境一清就静默退回）。
-    nested-fallback)         src="（嵌套运行：没有可读的祖辈心跳 → 按本段预算）" ;;
-    fixture-nested-fallback) src="（夹具覆盖；嵌套运行：没有可读的祖辈心跳 → 按本段预算）" ;;
-  esac
-  printf '== #%s %s == %s · 预算 %ss%s' "$SG_SEC_NO" "$SG_SEC_ID" "$SG_SEC_START" "$SG_BUDGET" "$src"
-}
-
-# _sg_band_over <elapsed> <band> → 0 当且仅当 band 是数字且 elapsed 超过它（**记录**，不是判定）。
-# band 是小数也必须比 —— 表的 110/112 行是 `0.02 … 44.00`（P108 F2：旧的 `case ''|*[!0-9]*`
-# 整数守卫把带小数点的带全落进空分支，规范承诺的「超过实测带打一行警告」对它们永不可达）。
-# 空 / `-` = 表里没有实测带 → 不比较；非数字（表坏了）由 `section-guard.sh --budget-check` 点名。
-_sg_band_over() {
-  local elapsed="$1" band="${2:-}"
-  case "$band" in
-    ''|-) return 1 ;;          # 没有实测带（表里写「-」）→ 不比较
-    *[!0-9.]*) return 1 ;;     # 非数字（表坏了，由 --budget-check 点名）→ 不比较
-  esac
-  awk -v a="$elapsed" -v b="$band" 'BEGIN { exit !(a + 0 > b + 0) }'
+  printf '== #%s %s == %s' "$SG_SEC_NO" "$SG_SEC_ID" "$SG_SEC_START"
 }
 
 _sg_close_current() {
@@ -329,16 +270,13 @@ _sg_close_current() {
   SG_ELAPSED="$elapsed"   # P98 账本读回：收口行与 sections.tsv 用同一个数，不再各量一次
   counts="${SG_CLOSE_COUNTS:--}"; SG_CLOSE_COUNTS=""
   # 唯一收口行（gate-section-accounting × gate-runtime-budget 的合并形态）：P70 的用时/ticks 与
-  # P98 账本的增量同形同一行。stdout 与 sections.log 逐字节一致；行不带门禁红标、不缩进。
-  printf '\033[2m#%s\033[0m %s · 用时 %ss · %s · ticks %s\n' \
+  # P98 账本的增量同形同一行。用时是**参考读数**（P316：时间不参与绿/红）。stdout 与 sections.log
+  # 逐字节一致；行不带门禁红标、不缩进。
+  printf '\033[2m#%s\033[0m %s · 参考 用时 %ss · %s · ticks %s\n' \
     "$SG_SEC_NO" "$SG_SEC_ID" "$elapsed" "$counts" "$SG_TICKS"
-  printf '#%s %s · 用时 %ss · %s · ticks %s\n' \
+  printf '#%s %s · 参考 用时 %ss · %s · ticks %s\n' \
     "$SG_SEC_NO" "$SG_SEC_ID" "$elapsed" "$counts" "$SG_TICKS" >> "$SG_LOG" 2>/dev/null || true
   printf '%s\t%s\t%s\t%s\t%s\n' "$SG_SEC_NO" "$SG_SEC_ID" "$SG_SEC_START" "$elapsed" "$SG_TICKS" >> "$SG_TIMING" 2>/dev/null || true
-  if _sg_band_over "$elapsed" "${SG_BAND:-}"; then
-    printf '  \033[33m⚠\033[0m #%s 用时 %ss，超过实测带 %ss（这是记录，不是判定）\n' \
-      "$SG_SEC_NO" "$elapsed" "$SG_BAND"
-  fi
   # P281：本段收口后，本夹具登记过的嵌套运行还不许活着（只对自己登记过的 pid 发信号，D37）
   section_guard_check_orphans "${SG_LOCK_NOTE:-}"
   SG_ARMED=0
@@ -364,44 +302,27 @@ section_guard_begin() { # <id>：收上一段 → 开这一段（含夹具注入
   SG_ARMED_EPOCH="$(_sg_now)"
   SG_ARMED_SECONDS="$SECONDS"
   SG_TICKS=0
-  section_guard_budget_for "$id"
-  # P281：嵌套运行的期限 = min(自己的表预算, 祖辈武装段的剩余)。到点走**既有** trip 路径
-  # （点名段号 + 预算 + 实际、写现场、停跑）——不许无声占着（EXP2 那次 1h16m 的形状）。
-  if [ "${SG_NESTED:-0}" = "1" ]; then
-    local adl rem
-    adl="$(_sg_ancestor_deadline 2>/dev/null || true)"
-    if [ -n "$adl" ]; then
-      rem=$(( adl - $(_sg_now) ))
-      [ "$rem" -lt 0 ] && rem=0
-      if [ "$rem" -lt "$SG_BUDGET" ]; then SG_BUDGET="$rem"; SG_BUDGET_SOURCE="ancestor"; fi
-    else
-      # F1：祖辈心跳读不到 → 退回**自己的**表预算，但必须可见（开跑行的来源里说清楚）。
-      case "${SG_BUDGET_SOURCE:-default}" in
-        fixture) SG_BUDGET_SOURCE="fixture-nested-fallback" ;;
-        *)       SG_BUDGET_SOURCE="nested-fallback" ;;
-      esac
-    fi
-  fi
+  section_guard_hang_cap_for "$id"
   SG_ARMED=1
   section_guard_write_heartbeat
   line="$(_sg_start_line)"
   printf '\n\033[1m%s\033[0m\n' "$line"
   printf '%s\n' "$line" >> "$SG_LOG" 2>/dev/null || true
-  # 夹具注入：被点名的段落永不返回（预算到点必须点名 + 停跑 + 留现场）
+  # 夹具注入：被点名的段落永不返回（挂住上限到点必须点名 + 停跑 + 留现场）
   if [ "${SG_FIXTURE:-0}" = "1" ] && [ -n "$SG_STUCK_SECTION" ] && _sg_id_matches "$SG_STUCK_SECTION" "$id"; then
-    printf '  \033[35m[fixture]\033[0m 注入永不返回的段落（%s，预算 %ss）\n' "$id" "$SG_BUDGET"
+    printf '  \033[35m[fixture]\033[0m 注入永不返回的段落（%s，挂住上限 %ss）\n' "$id" "$SG_HANG_CAP"
     local stuck_log="$SG_RUN_TMP/fixture-stuck-$SG_SEC_NO.log"
-    printf 'fixture 注入：段落 #%s（%s）永不返回（预算 %ss）\n' "$SG_SEC_NO" "$id" "$SG_BUDGET" > "$stuck_log" 2>/dev/null || true
+    printf 'fixture 注入：段落 #%s（%s）永不返回（挂住上限 %ss）\n' "$SG_SEC_NO" "$id" "$SG_HANG_CAP" > "$stuck_log" 2>/dev/null || true
     # P313：这个「永不返回」是**夹具造的现场**，不是永不退出的进程。旧形状
     #   `bash -c 'trap "" TERM; while :; do date +%s >> $log; sleep 0.2; done'`
     # 在被打断的运行里会永久泄漏（现场：78 个孤儿合计持有 11.98 GB 已删除文件）。现在由
-    # lib/bounded-spin.sh 一处实现三条边界：父进程没了就退、到点（段落预算 + 120s 宽限）就退
-    # 并留一行、写目标被删就退。cap 永远大于段落预算 → 合法运行不会被它截断。
+    # lib/bounded-spin.sh 一处实现三条边界：父进程没了就退、到点（挂住上限 + 120s 宽限）就退
+    # 并留一行、写目标被删就退。cap 永远大于挂住上限 → 合法运行不会被它截断。
     # 它**响应** TERM（P313 的硬要求：看门/轮询进程不再 `trap "" TERM`）。因此段落 0f 的现场
     # 不会记 `escalation:` —— 段 0f 反过来断言「没有升级」，那条断言就是「有人把忽略 TERM 放回来」
     # 的守卫；「真要升级时现场照写」由自检的 F1 夹具（P110）负责。
     local _sg_spin_lib; _sg_spin_lib="$(_sg_spin_lib_path)"
-    local _sg_spin_cap=$(( SG_BUDGET + 120 ))
+    local _sg_spin_cap=$(( SG_HANG_CAP + 120 ))
     [ -f "$_sg_spin_lib" ] || printf '  \033[31m✗\033[0m 夹具：缺 %s（心跳循环起不来）\n' "$_sg_spin_lib"
     bash -c 'lib="$1"; shift; . "$lib"; bounded_spin "$@"' _ "$_sg_spin_lib" \
       0.2 "$_sg_spin_cap" "$(( _sg_spin_cap * 64 + 65536 ))" "$stuck_log" "$BASHPID" &
@@ -439,7 +360,7 @@ section_guard_arm() {
     sleep 0.02
   done
   if [ ! -s "$SG_WATCHDOG_PIDFILE" ]; then
-    printf '  \033[31m✗\033[0m section-guard：看门狗没起来（%s）—— 本套**没有**每段硬预算\n' "$SG_WATCHDOG_PIDFILE"
+    printf '  \033[31m✗\033[0m section-guard：看门狗没起来（%s）—— 本套**没有**挂住上限\n' "$SG_WATCHDOG_PIDFILE"
   fi
   return 0
 }
@@ -487,26 +408,42 @@ _sg_descendants() { # <pid> <exclude> → 叶子优先
 section_guard_watchdog() {
   local me="$BASHPID"
   printf '%s\t%s\n' "$me" "$(_sg_proc_start "$me" 2>/dev/null || true)" > "$SG_WATCHDOG_PIDFILE" 2>/dev/null || true
-  local line no armed budget elapsed ticks id now last_seen=0 last_progress=0
+  local line no armed cap elapsed ticks id now last_progress=0
+  # P316 · V61 F1：停跑的判据是**没有进度**，不是「武装后过了多久」。进度证据就是心跳里已有的 ticks
+  # （ok()/bad()/等待轮每轮都会 +1 并重写心跳）：ticks 变了就刷新 last_moved。仍在推进的段不会因为
+  # 慢而被判成挂住；真卡死的形状（自检的四个 stub、0f 注入段）根本不 tick，照样在 cap 到点时停跑。
+  # 不新增进度协议、不新增看门狗：还是这一个循环、这一份心跳。
+  local last_ticks="" last_moved=0
+  # 这两个状态**按段归属**（P316 · V63 F2）：心跳里带段号与武装代次，换段/换代次时必须重置，
+  # 否则上一段的 ticks 与 last_moved 会被带进下一段（新段可能一开跑就带着旧基线，或长期不算它自己的进度）。
+  # 只重置这两个既有变量：不新增守卫、不新增进度协议、不改心跳格式。
+  local seen_sec="" seen_arm=""
   while :; do
     [ -e "$SG_STOP" ] && break
     _sg_pid_alive "$SG_OWNER_PID" "$SG_OWNER_START" || break
     line="$(cat "$SG_HEARTBEAT" 2>/dev/null || true)"
     case "$line" in ''|disarm*) sleep "$SG_POLL"; continue ;; esac
-    IFS='|' read -r no armed budget elapsed ticks id <<<"$line"
-    case "${no:-x}${armed:-x}${budget:-x}" in *[!0-9]*) sleep "$SG_POLL"; continue ;; esac
+    IFS='|' read -r no armed cap elapsed ticks id <<<"$line"
+    case "${no:-x}${armed:-x}${cap:-x}" in *[!0-9]*) sleep "$SG_POLL"; continue ;; esac
     now="$(_sg_now)"
     case "${elapsed:-0}" in ''|*[!0-9]*) elapsed=0 ;; esac
-    [ "${elapsed}" -gt "$last_seen" ] && last_seen="$elapsed"
+    case "${ticks:-0}" in ''|*[!0-9]*) ticks=0 ;; esac
+    # 换段或换武装代次 → 基线跟着换段（同一个变量，重新起算）。
+    if [ "$no|$armed" != "$seen_sec|$seen_arm" ]; then
+      seen_sec="$no"; seen_arm="$armed"
+      last_ticks="$ticks"; last_moved="$now"
+    elif [ "$ticks" != "$last_ticks" ]; then
+      last_ticks="$ticks"; last_moved="$now"
+    fi
     case "${SG_PROGRESS_INTERVAL:-60}" in ''|*[!0-9]*) SG_PROGRESS_INTERVAL=60 ;; esac
     if [ "$SG_PROGRESS_INTERVAL" -gt 0 ] \
        && [ "$(( now - armed ))" -ge "$SG_PROGRESS_INTERVAL" ] \
        && [ "$(( now - last_progress ))" -ge "$SG_PROGRESS_INTERVAL" ]; then
-      _sg_progress_line "$no" "$id" "$(( now - armed ))" "$budget"
+      _sg_progress_line "$no" "$id" "$(( now - armed ))" "$cap"
       last_progress=$now
     fi
-    if [ "$(( now - armed ))" -ge "$budget" ]; then
-      _sg_trip "$no" "$id" "$armed" "$budget" "$ticks" "$last_seen" "$now"
+    if [ "$(( now - last_moved ))" -ge "$cap" ]; then
+      _sg_trip "$no" "$id" "$armed" "$cap" "$ticks" "$(( now - last_moved ))" "$now"
       break
     fi
     sleep "$SG_POLL"
@@ -517,23 +454,23 @@ section_guard_watchdog() {
 }
 
 _sg_progress_line() {
-  local no="$1" id="$2" elapsed="$3" budget="$4" slow=""
+  local no="$1" id="$2" elapsed="$3" cap="$4" slow=""
   slow="$(awk -F'\t' 'NR > 1 && $4 ~ /^[0-9]+$/ { printf "%s\t#%s %s\n", $4, $1, $2 }' "$SG_TIMING" 2>/dev/null \
     | sort -rn 2>/dev/null | head -3 | cut -f2 | tr '\n' ' ' || true)"
-  printf '  \033[2m… 段落 #%s（%s）已运行 %ss（预算 %ss）%s\033[0m\n' \
-    "$no" "$id" "$elapsed" "$budget" "${slow:+；最慢：$slow}"
-  printf '… 段落 #%s（%s）已运行 %ss（预算 %ss）%s\n' \
-    "$no" "$id" "$elapsed" "$budget" "${slow:+；最慢：$slow}" >> "$SG_LOG" 2>/dev/null || true
+  printf '  \033[2m… 段落 #%s（%s）已运行 %ss（挂住上限 %ss）%s\033[0m\n' \
+    "$no" "$id" "$elapsed" "$cap" "${slow:+；最慢：$slow}"
+  printf '… 段落 #%s（%s）已运行 %ss（挂住上限 %ss）%s\n' \
+    "$no" "$id" "$elapsed" "$cap" "${slow:+；最慢：$slow}" >> "$SG_LOG" 2>/dev/null || true
   return 0
 }
 
-_sg_trip() { # <no> <id> <armed> <budget> <ticks> <last_seen> <now>
-  local no="$1" id="$2" armed="$3" budget="$4" ticks="$5" last_seen="$6" now="$7"
+_sg_trip() { # <no> <id> <armed> <cap> <ticks> <stalled_for> <now>
+  local no="$1" id="$2" armed="$3" cap="$4" ticks="$5" stalled="$6" now="$7"
   local elapsed="$(( now - armed ))" i=0
-  printf '\n  \033[31m✗\033[0m 段落 #%s（%s）超时：预算 %ss，实际 %ss，最后进度 %ss → 停跑（exit 2），现场 %s\n' \
-    "$no" "$id" "$budget" "$elapsed" "$last_seen" "$SG_SCENE"
+  printf '\n  \033[31m✗\033[0m 段落 #%s（%s）挂住：已 %ss 没有进度（挂住上限 %ss；段落已运行 %ss，ticks %s）→ 停跑（exit 2），现场 %s\n' \
+    "$no" "$id" "$stalled" "$cap" "$elapsed" "$ticks" "$SG_SCENE"
   : > "$SG_MARKER" 2>/dev/null || true
-  _sg_scene_write "$no" "$id" "$budget" "$elapsed" "$last_seen" "$ticks" "$armed"
+  _sg_scene_write "$no" "$id" "$cap" "$elapsed" "$stalled" "$ticks" "$armed"
   _sg_stop_children "$no"
   # 给套件一个**有界**的机会自己走到安全点退出（exit 2）；它不走才 TERM/KILL
   while [ "$i" -lt $(( SG_SUITE_GRACE * 5 )) ]; do
@@ -611,17 +548,17 @@ _sg_recent_files() { # <root> <min_epoch> <max>：窗口内动过的文件，**�
     | sort -rn | head -n "$3" | cut -f2-
 }
 
-_sg_scene_write() { # <no> <id> <budget> <elapsed> <last_seen> <ticks> <armed>
-  local no="$1" id="$2" budget="$3" elapsed="$4" last_seen="$5" ticks="$6" armed="$7"
+_sg_scene_write() { # <no> <id> <cap> <elapsed> <stalled_for> <ticks> <armed>
+  local no="$1" id="$2" cap="$3" elapsed="$4" stalled="$5" ticks="$6" armed="$7"
   mkdir -p "$SG_SCENE/logs" 2>/dev/null || return 0
   {
-    printf 'section: #%s\nid: %s\nbudget: %ss\nelapsed: %ss\nlast progress: %ss\nticks: %s\n' \
-      "$no" "$id" "$budget" "$elapsed" "$last_seen" "$ticks"
+    printf 'section: #%s\nid: %s\ncap: %ss\nelapsed: %ss\nstalled for: %ss\nticks: %s\n' \
+      "$no" "$id" "$cap" "$elapsed" "$stalled" "$ticks"
     printf 'watchdog pid: %s\n' "${BASHPID:-?}"
     printf 'suite pid: %s\n' "$SG_OWNER_PID"
     printf 'mode: FAST=%s fixture=%s\n' "${SG_FAST:-0}" "${SG_FIXTURE:-0}"
-    printf 'knobs: stuck=%s budget_override=%s progress=%s poll=%s\n' \
-      "${SG_STUCK_SECTION:-}" "${SG_BUDGET_OVERRIDE:-}" "$SG_PROGRESS_INTERVAL" "$SG_POLL"
+    printf 'knobs: stuck=%s hang_cap_override=%s progress=%s poll=%s\n' \
+      "${SG_STUCK_SECTION:-}" "${SG_HANG_CAP_OVERRIDE:-}" "$SG_PROGRESS_INTERVAL" "$SG_POLL"
     printf 'lock: %s\n' "$([ -n "$SG_LOCK_NOTE" ] && printf '%s holder=%s' "$SG_LOCK_NOTE" "$(cat "$SG_LOCK_NOTE.holder" 2>/dev/null || true)" || printf '（无）')"
     printf 'machine: nproc=%s loadavg=%s run_tmp=%s\n' \
       "$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '?')" \
@@ -695,7 +632,7 @@ _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
   local rc=0
   (
     export TMPDIR="$dir"
-    section_guard_init "$dir/run-tmp" --poll 0.2 --progress 300 --suite-grace 1 --desc-grace 2 --default-budget 2
+    section_guard_init "$dir/run-tmp" --poll 0.2 --progress 300 --suite-grace 1 --desc-grace 2 --hang-cap 2
     section_guard_arm
     section_guard_begin "selftest-$name"
     wait
@@ -705,8 +642,14 @@ _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
       stubborn)   bash -c 'trap "" TERM; while :; do sleep 0.2; done' ;;
       spin)       while :; do :; done ;;
       deadspin)   trap '' TERM; while :; do :; done ;;
-      clean)      SG_BAND=0; SG_ARMED_EPOCH="$(( $(date +%s) - 5 ))" ;;
-      decimal)    SG_BAND=0.19; SG_ARMED_EPOCH="$(( $(date +%s) - 5 ))" ;;
+      clean)      : ;;
+      # P316 · V61 F1：慢但**一直在动**的段。每 0.1s 走一次真实进度路径（section_guard_check，
+      # 也就是 ok()/等待轮每轮做的那件事），总时长远超 cap（2s）。旧实现按「武装后经过多久」判，
+      # 这一形状会被误判成挂住并停跑；按「cap 内没有进度」判，它必须照常跑完。
+      progressing)
+        local _n=0
+        while [ "$_n" -lt 40 ]; do section_guard_check; sleep 0.1; _n=$((_n + 1)); done
+        ;;
     esac
     section_guard_check
     section_guard_finish
@@ -725,7 +668,7 @@ _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
     if [ -n "$scene" ] && [ -s "$scene/summary.txt" ]; then
       st_ok "$name：现场存在且有摘要（${scene#$ST_ROOT/}）"
       grep -qF "selftest-$name" "$scene/summary.txt" && st_ok "$name：现场点名该段" || st_bad "$name：现场没点名该段"
-      grep -qF '超时' "$dir/out.log" && st_ok "$name：stdout 有一行点名超时" || st_bad "$name：stdout 没有点名超时"
+      grep -qF '挂住' "$dir/out.log" && st_ok "$name：stdout 有一行点名挂住" || st_bad "$name：stdout 没有点名挂住"
       grep -qF 'SECTION_DONE' "$dir/out.log" && st_bad "$name：套件居然跑完了整段" || st_ok "$name：套件没有跑完整段"
     else
       st_bad "$name：没有现场（期望有）"
@@ -741,18 +684,6 @@ _sg_selftest_case() { # <name> <shape> <want:0|2|!0> <want_scene:0|1>
       || st_bad "$name：run 临时根删掉后现场也丢了"
   fi
   grep -qF 'BARE_WAIT_RETURNED' "$dir/out.log" && st_ok "$name：裸 wait 没被看门狗卡住" || st_bad "$name：裸 wait 没返回"
-  if [ "$shape" = "clean" ]; then
-    grep -qF '超过实测带' "$dir/out.log" && st_ok "$name：整数 band 超过时打一行警告（记录，不是判定）" \
-                                          || st_bad "$name：超过实测带没有警告行"
-  fi
-  if [ "$shape" = "decimal" ]; then
-    grep -qF '超过实测带 0.19s' "$dir/out.log" \
-      && st_ok "$name：小数 band（0.19）超过时也打警告（P108 F2）" \
-      || st_bad "$name：小数 band 超过时没有警告行（规范承诺对 110/112 行不可达）"
-    grep -qF '这是记录，不是判定' "$dir/out.log" \
-      && st_ok "$name：小数 band 的警告仍是记录、不是判定（D33）" \
-      || st_bad "$name：小数 band 的警告丢了「记录，不是判定」"
-  fi
   local i pidfile
   for i in $(seq 1 25); do
     pidfile="$(ls "$dir"/.teamsmith-smoke-guard.pid.* 2>/dev/null | head -1 || true)"
@@ -914,7 +845,7 @@ _sg_selftest_orphan() {
   return 0
 }
 
-# 红侧翻转：把实现变异回旧形状（f2 = 整数守卫；f1 = 「子孙忽略 TERM」措辞）。
+# 红侧翻转：把实现变异回旧形状（f1 = 「子孙忽略 TERM」措辞）。
 # 这是「破坏实现 → 守卫测试必须红」的前半：变异后的副本由 _sg_selftest_flips 跑。
 _sg_skill_dir() { # 本库所属的 skill 树（变异副本靠它拿到真正的解析器）
   if [ -n "${TEAM_SG_SKILL_DIR:-}" ]; then printf '%s' "$TEAM_SG_SKILL_DIR"; return 0; fi
@@ -927,20 +858,9 @@ _sg_spin_lib_path() {
   printf '%s' "$(_sg_skill_dir)/tests/lib/bounded-spin.sh"
 }
 
-_sg_selftest_mutate() { # <src> <dst> <f2|f1|f3|f4|f5> → 0 = 变异落地
+_sg_selftest_mutate() { # <src> <dst> <f1|f3|f4|f5> → 0 = 变异落地
   local src="$1" dst="$2" kind="$3"
   case "$kind" in
-    f2) awk '
-      /^_sg_band_over\(\) \{/ { inband = 1 }
-      inband && /^  case "\$band" in/ {
-        print "  case \"$band\" in   # P110_F2 红侧：旧整数守卫（小数落空分支）"
-        print "    \047\047|*[!0-9]*) return 1 ;;"
-        print "  esac"
-        skipping = 1; inband = 0; next
-      }
-      skipping { if ($0 == "  esac") skipping = 0; next }
-      { print }
-    ' "$src" > "$dst" ;;
     f1) sed 's/的 grace 用尽（仍有子孙存活）→ 已/的子孙忽略 TERM → 已/g' "$src" > "$dst" ;;
     # P313：心跳循环的三条边界。变异的是 lib/bounded-spin.sh（一个文件、三条各自可辨的行）。
     f3) sed 's|^  while _bs_parent_alive "\$parent"; do$|  while :; do   # P313-F3 红侧：父进程检查被拿掉|' "$src" > "$dst" ;;
@@ -956,27 +876,14 @@ _sg_selftest_mutate() { # <src> <dst> <f2|f1|f3|f4|f5> → 0 = 变异落地
 }
 
 # 两个红侧翻转（只在完整自检里跑；`--self-test <形状>` 只跑形状，避免递归）：
-#   F2：小数值 band 的警告 —— 变异回整数守卫 → decimal 夹具必须红；
+# 两个红侧翻转（只在完整自检里跑；`--self-test <形状>` 只跑形状，避免递归）：
 #   F1：grace 用尽的归因 —— 变异回「子孙忽略 TERM」→ f1 夹具必须红。
+# （P316：band 小数警告的 F2 红侧随 band 一起退役。）
 # 变异副本跑在自己的私有 TMPDIR 下，跑完连根删掉（失败也不留现场）。
 _sg_selftest_flips() {
   local dir="$ST_ROOT/flips" self mut rc out
   self="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-  mkdir -p "$dir/f2-tmp" "$dir/f1-tmp"
-  # --- F2 ---
-  mut="$dir/f2-legacy-guard.sh"; out="$dir/f2-mutated.log"
-  if _sg_selftest_mutate "$self" "$mut" f2; then
-    TEAM_SG_SKILL_DIR="$(_sg_skill_dir)" TMPDIR="$dir/f2-tmp" bash "$mut" --self-test decimal >"$out" 2>&1; rc=$?
-    [ "$rc" -ne 0 ] && st_ok "F2 红侧：还原成整数守卫 → decimal 夹具红（rc=$rc）" \
-                    || st_bad "F2 红侧：还原成整数守卫后 decimal 夹具仍绿（守卫没被证到）"
-    grep -qF '超过实测带' "$out" && st_bad "F2 红侧：整数守卫下居然打了「超过实测带」行" \
-                                  || st_ok "F2 红侧：整数守卫下没有「超过实测带」警告行（规范承诺回到不可达）"
-    grep -qF '小数 band 超过时没有警告行' "$out" \
-      && st_ok "F2 红侧：红的是那条夹具断言本身（不是别的原因）" \
-      || st_bad "F2 红侧：红的原因不是「小数 band 没有警告行」"
-  else
-    st_bad "F2 红侧：变异没落到 _sg_band_over（夹具失效）"
-  fi
+  mkdir -p "$dir/f1-tmp"
   # --- F1 ---
   mut="$dir/f1-legacy-wording.sh"; out="$dir/f1-mutated.log"
   if _sg_selftest_mutate "$self" "$mut" f1; then
@@ -1024,7 +931,7 @@ _sg_selftest() {
   local only=()
   for arg in "$@"; do
     case "$arg" in
-      --help|-h) printf '用法：bash %s --self-test [形状…]\n        形状：clean stuck stubborn spin deadspin decimal orphan f1（不带形状 = 全部 + 红侧翻转）\n' "${BASH_SOURCE[0]}"; return 0 ;;
+      --help|-h) printf '用法：bash %s --self-test [形状…]\n        形状：clean stuck stubborn spin deadspin orphan f1（不带形状 = 全部 + 红侧翻转）\n' "${BASH_SOURCE[0]}"; return 0 ;;
       -*) printf 'section-guard: 自检不认识的参数 %s\n' "$arg" >&2; return 2 ;;
       *) only+=("$arg"); want_all=0 ;;
     esac
@@ -1042,21 +949,21 @@ _sg_selftest() {
   SG_FIXTURE=1
   TEAM_SMOKE_FIXTURE=1
   if [ "$want_all" = "1" ]; then
-    shapes="clean stuck stubborn spin deadspin decimal orphan"
+    shapes="clean progressing stuck stubborn spin deadspin orphan"
   else
     shapes="${only[*]}"
   fi
   for shape in $shapes; do
     case "$shape" in
       clean)    _sg_selftest_case clean     clean     0  0 ;;
+      progressing) _sg_selftest_case progressing progressing 0 0 ;;
       stuck)    _sg_selftest_case stuck     stuck     2  1 ;;
       stubborn) _sg_selftest_case stubborn  stubborn  2  1 ;;
       spin)     _sg_selftest_case spin      spin      2  1 ;;
       deadspin) _sg_selftest_case deadspin  deadspin  '!0' 1 ;;
-      decimal)  _sg_selftest_case decimal   decimal   0  0 ;;
       orphan)   _sg_selftest_orphan ;;
       f1)       _sg_selftest_f1 ;;
-      *)        st_bad "自检：不认识的形状「$shape」（可用：clean stuck stubborn spin deadspin decimal orphan f1）"; break ;;
+      *)        st_bad "自检：不认识的形状「$shape」（可用：clean progressing stuck stubborn spin deadspin orphan f1）"; break ;;
     esac
   done
   # 现场尾巴的收集顺序 = mtime 降序，不是 find 的目录顺序（容器实测：目录顺序把挂住的夹具日志

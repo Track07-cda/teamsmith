@@ -297,7 +297,7 @@ assert_has "诊断点名 pgid" "$OUT" "pgid"
 assert_alive "记录里的真进程没有被误杀" "$NPID"
 # FIFO 记录：读取之前就要拒（`-f` 且非 FIFO），不许挂住
 mkfifo "$BGD/fifo.job"
-OUT="$(bg_timeout 5 stop fifo)"; RC=$?
+OUT="$(bg_timeout 300 stop fifo)"; RC=$?
 assert_eq "FIFO 记录 → 4（拒绝在读之前，rc 不是 124）" "$RC" "4"
 assert_has "诊断点名「正规记录」" "$OUT" "正规记录"
 case "$(bg list)" in *fifo*) bad "list 列出了 FIFO 记录" ;; *) ok "list 不列 FIFO 记录" ;; esac

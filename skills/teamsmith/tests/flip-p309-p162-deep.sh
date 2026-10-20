@@ -103,13 +103,13 @@ printf '\n\033[1m── leg red：删掉显式深路径的副本 → 0h 必须�
 R_RC="$(p309p162_nest "$MUT" "$TMP/red.log")"
 R_LINE="$(sec_line "$TMP/red.log")"
 R_FAIL="$(sec_fail "$TMP/red.log")"
-R_STUCK="$(plain "$TMP/red.log" | grep -ac '超时：预算' || true)"
+R_STUCK="$(plain "$TMP/red.log" | grep -ac '挂住' || true)"
 if [ "$R_RC" = "0" ]; then
   case_bad "leg red：副本 rc=0 —— 0h 在新写法之外仍然绿（红侧不承重：断言可能是白删的）"
 elif [ "${R_STUCK:-0}" = "0" ] && [ "${R_FAIL:-0}" = "0" ]; then
-  case_bad "leg red：副本失败了，但既不是段超时也不是段内失败（rc=$R_RC）：$R_LINE"
+  case_bad "leg red：副本失败了，但既不是段挂住也不是段内失败（rc=$R_RC）：$R_LINE"
 else
-  case_ok "leg red：rc=$R_RC · 0h 不再绿（段超时 ${R_STUCK:-0} 条 · 段内 ✗${R_FAIL:-无收口行（被超时停跑）}）"
+  case_ok "leg red：rc=$R_RC · 0h 不再绿（段挂住 ${R_STUCK:-0} 条 · 段内 ✗${R_FAIL:-无收口行（被挂住停跑）}）"
 fi
 
 printf '\n'

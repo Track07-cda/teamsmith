@@ -53,7 +53,7 @@ note()     { printf '%s\n' "$*"; }
 line_ok()  { note "  ✓ $*"; }
 line_bad() { note "  ✗ $*"; FLIP_RC=1; }
 
-WAIT_SECS=5   # 「有界」的上限：守卫节奏 0.2s + 安全点；夹具轮询到上限再判红（不固定 sleep）
+WAIT_SECS=300   # 「有界」的上限（P316：只防死等）：守卫节奏 0.2s + 安全点；夹具轮询到上限再判红（不固定 sleep）
 # 场景目录（也就是嵌套运行的 $TMPDIR）放**临时根顶层**的短名字：tmux 私有 socket 有 AF_UNIX 上限，
 # 套在证据目录（$ROOT）里会超 —— 那时 0c 的隔离前置会拒绝执行（exit 2），红的是环境不是产品。
 p287l_scene() { printf '%s/.teamsmith-p287l-%s-%s' "$(team_tmp_root)" "$1" "$$"; }

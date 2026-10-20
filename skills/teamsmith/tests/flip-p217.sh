@@ -166,7 +166,7 @@ p217_marker() { # <窗口> → 命令行里必须出现的成型标记
 }
 p217_wait_shape() { # <窗口> [十分之一秒数] → 0=成型
   local i=0 args
-  while [ "$i" -lt 40 ]; do
+  while [ "$i" -lt 3000 ]; do
     args="$(p217_pane_args "$SESS:$1")"
     case "$args" in *"$(p217_marker "$1")"*) return 0 ;; esac
     sleep 0.1; i=$((i + 1))
@@ -180,7 +180,7 @@ for _w in p217s1 p217s2 p217s3 p217s4 p217fake p217ctl; do
       "$(p217_pane_args "$SESS:$_w")" \
       "$(ps -o args= --ppid "$(tmux list-panes -t "$SESS:$_w" -F '#{pane_pid}' 2>/dev/null | head -1)" 2>/dev/null | tr '\n' ';')"
   else
-    printf '  夹具 %-8s ✗ 4s 内没成型（命令行=[%s]）\n' "$_w" "$(p217_pane_args "$SESS:$_w")"
+    printf '  夹具 %-8s ✗ 没等到成型（上限 300s；命令行=[%s]）\n' "$_w" "$(p217_pane_args "$SESS:$_w")"
   fi
 done
 

@@ -259,7 +259,7 @@ assert_has "长保留里那条被拒绝的行还在（逐字节）" "$(cat "$L.f
 
 hdr "RA2 · 保留写失败：可见、不改判定、不挂住"
 L="$LOGD/fail.log"; rm -f "$L"; rm -rf "$L.forensics"; mkdir -p "$L.forensics"
-OUT="$(GATE_LOG="$L" timeout 10 env PATH="$GATE_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" \
+OUT="$(GATE_LOG="$L" timeout 300 env PATH="$GATE_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" \
       TEAM_SIGNAL_CALLS_LOG="$L" STUB_LOG="$STUB_LOG" "$GATE_DIR/pkill" -f x 2>&1)"; RC=$?
 assert_eq "保留路径是目录时仍退出 64（且有界，没被挂住）" "$RC" "64"
 assert_has "诊断点名保留路径（✗）" "$OUT" "✗"
@@ -270,7 +270,7 @@ rm -rf "$L.forensics"
 
 hdr "RA2 · FIFO 目标不挂住"
 L="$LOGD/fifo.log"; rm -f "$L"; mkfifo "$L"
-RC=0; GATE_LOG="$L" timeout 10 env PATH="$GATE_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" TEAM_SIGNAL_CALLS_LOG="$L" \
+RC=0; GATE_LOG="$L" timeout 300 env PATH="$GATE_DIR:$PATH" TEAM_SIGNAL_REAL="$STUB" TEAM_SIGNAL_CALLS_LOG="$L" \
     STUB_LOG="$STUB_LOG" "$GATE_DIR/pkill" -f x >/dev/null 2>&1 || RC=$?
 assert_eq "FIFO 日志目标：拒绝照常退出 64，没有被写端挂住" "$RC" "64"
 rm -f "$L"

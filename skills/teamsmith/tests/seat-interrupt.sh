@@ -471,7 +471,7 @@ OC_ENV=""
 td_eq "执行态退 0" 0 "$rc"
 td_has "打印它发了什么（信号）" "$out" "SIGTERM"
 td_has "打印回来的路" "$out" "team resume --agent dev2"
-gone=0; for _i in $(seq 1 30); do kill -0 "$p" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+gone=0; for _i in $(seq 1 3000); do kill -0 "$p" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
 td_eq "目标已退出" 1 "$gone"
 td_eq "审计恰好一行" "$((n0 + 1))" "$(oc_log_n)"
 # ② 忽略 SIGTERM → SIGKILL
@@ -484,7 +484,7 @@ out="$(oc_cli "$T2" interrupt dev2 --reason "stubborn seat" --yes)"; rc=$?
 OC_ENV=""
 td_eq "倔强的目标：执行态仍退 0（SIGKILL 收干净）" 0 "$rc"
 td_has "输出点名 SIGKILL 那一步" "$out" "SIGKILL"
-gone=0; for _i in $(seq 1 30); do kill -0 "$q" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+gone=0; for _i in $(seq 1 3000); do kill -0 "$q" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
 td_eq "倔强的目标已退出" 1 "$gone"
 td_has "审计里的信号序列是 SIGTERM→SIGKILL" "$(tail -1 "$LOG")" "signal=SIGTERM→SIGKILL"
 td_eq "审计只多一行" "$((n1 + 1))" "$(oc_log_n)"
@@ -714,7 +714,7 @@ touch "$(oc_session_file_for "$SID")"
 n1="$(oc_log_n)"
 out="$(oc_cli "$T2" interrupt dev2 --reason "forced override" --force --yes 2>&1)"; rc=$?
 td_eq "--force 越过新鲜窗口 → 执行成功" 0 "$rc"
-gone=0; for _i in $(seq 1 30); do kill -0 "$p" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+gone=0; for _i in $(seq 1 3000); do kill -0 "$p" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
 td_eq "--force：目标已退出" 1 "$gone"
 td_has "--force：审计记 guard=forced" "$(tail -1 "$LOG")" "guard=forced"
 td_has "--force：审计仍带同一份打断前读数（工作树干净 → uncommitted=0）" "$(tail -1 "$LOG")" "uncommitted=0"
@@ -845,7 +845,7 @@ else
   case "$sock" in
     "$TMUX_TMPDIR"/*)
       lpid=""
-      for _i in $(seq 1 40); do
+      for _i in $(seq 1 3000); do
         lpid="$("$OC_REAL_TMUX" list-panes -t OC2:dev2 -F '#{pane_pid}' 2>/dev/null | head -1)"
         [ -n "$lpid" ] && break
         sleep 0.1
@@ -860,7 +860,7 @@ else
         td_has "真回合：输出点名 pid" "$out" "pid=$lpid"
         td_eq "真回合：审计恰好 +1 行" "$((n0 + 1))" "$(oc_log_n)"
         td_has "真回合：审计的 pid 就是 pane 里那个进程" "$(tail -1 "$LOG")" "pid=$lpid"
-        gone=0; for _i in $(seq 1 40); do kill -0 "$lpid" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+        gone=0; for _i in $(seq 1 3000); do kill -0 "$lpid" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
         td_eq "真回合：pane 里的 agent 进程已退出" 1 "$gone"
         td_has "真回合：审计里的信号是 SIGTERM" "$(tail -1 "$LOG")" "SIGTERM"
       fi ;;

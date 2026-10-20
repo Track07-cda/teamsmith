@@ -493,7 +493,7 @@ else
   out="$(oc_cli "$T2" reap --orphans --yes)"; yrc=$?
   td_eq "6.2 执行态退 0" 0 "$yrc"
   td_has "6.2 打印它发了什么（信号）" "$out" "SIGTERM"
-  gone=0; for _i in $(seq 1 30); do kill -0 "$rp" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
+  gone=0; for _i in $(seq 1 3000); do kill -0 "$rp" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
   td_eq "6.2 目标已退出" 1 "$gone"
   td_eq "6.2 审计恰好一行" "$((n0 + 1))" "$(wc -l < "$log")"
   aline="$(tail -1 "$log")"

@@ -11,23 +11,10 @@
 # Every scenario runs in a private tmux server and a fresh git project initialised with the real
 # `team init`; the panel runs the **real** CLI through a logging wrapper (`argv.log`), so "the
 # console writes only through the owning command" is checked against real argv, not a stub.
-# Exit: 0 every selected scenario green, 1 at least one assertion failed, 3 setup failure,
-#       4 a scenario was visibly SKIPPED (see the premise below): no failure, no conclusion.
+# Exit: 0 every selected scenario green, 1 at least one assertion failed, 3 setup failure.
 #
-# P48 / D33 — `panel#The project-settings pty fixture judges under a machine premise` (the gate
-# rule is `verification#The correctness gate judges correctness only`): the wait horizons stay
-# failure detectors, never judgments. Every scenario prints a **premise line** before its first
-# assertion (real `loadavg_1m`/`loadavg_5m`, the logical core count and a **code-independent probe**
-# — `python3 -c pass` + `bash -c true` + `git rev-parse`, in ms), and when a wait runs out of its
-# (progress-extended) horizon the engine attributes the verdict from the machine's own readings:
-# still painting / probe over its ceiling / load over the coarse guard -> one visible SKIP line and
-# the scenario stops there (fixture exit 4, the gate stays 0); a static scene with the readings
-# under their ceilings -> the ordinary red with its M59 scene (a regression is a code verdict).
-# Constants and their measured bands: probe ceiling 120 ms (measured 12-34 ms across loadavg
-# 8.4-42.4 on 32 cores), coarse load guard 2.0 x cores (the highest measured green load is 1.33 x
-# cores) — both sit **outside** the band where this fixture judges. Re-derivation recipe:
-# `tests/load-experiment.sh {storm,burn,probe}` (the safe harness: owned load, owned targets) +
-# design.md §3/§4;  the raw calibration table is in docs/team/reports/P48-dev3.md.
+# P316（用户裁定第二条：性能只能是参考指标，不能阻塞）：**没有负载前提、没有 SKIP 出口**。
+# 等待上限只防死等；耗尽一律红并报「没等到 X」（含最后一次状态）。机器忙不再是「没结论」。
 #
 # P68 / fixture-waits-for-landed-reads — 数据态等待（requirement「A fixture observes a data-derived state
 # before it asserts it」）：视图行、席位行、组标题这类**断言对象本身**从异步的 settings 读来，断言前必须
@@ -38,16 +25,11 @@
 #
 # Fixture knobs (honoured **only** under `TEAM_SMOKE_FIXTURE=1`; otherwise printed as ignored and
 # the real reading is used — the panel-cpu.sh precedent):
-#   TEAM_P21_PREMISE_PROBE_MS=<ms>       inject the probe reading; over its ceiling the fixture also
 #                                        injects the "the state never arrives" stall, so the
 #                                        exhaustion path is reachable on a quiet host
-#   TEAM_P21_PREMISE_LOADAVG=<n>         inject loadavg_1m
-#   TEAM_P21_PREMISE_LOAD_FACTOR=<f>     inject the coarse entry guard's factor
-#   TEAM_P21_PREMISE_PROBE_CEIL_MS=<ms>  inject the probe ceiling
 #   TEAM_P21_STALL_ROUNDS=<n>            inject the progress window (PTY_STALL_ROUNDS)
 #   TEAM_P21_STALL=1                     inject a needle that never appears (the exhaustion shape
 #                                        on a healthy machine: it must stay a red, not a skip)
-#   TEAM_P21_PREMISE_ONLY=1              print the premise line + the ignore notices, build no tmux
 #                                        and judge nothing, exit 0 (the gate's knob-integrity check)
 set -uo pipefail
 
@@ -60,17 +42,8 @@ _keep_arg="${TEAM_P21_KEEP:-0}"
 _trace_arg="${TEAM_P21_TRACE:-}"
 _js_arg="${TEAM_P21_JS:-}"
 _js_panel="${TEAM_P21_PANEL:-}"
-# P48: the premise knobs (and the fixture switch itself) are saved before the identity wipe, which
-# would otherwise unset every TEAM_* — including TEAM_SMOKE_FIXTURE, the only switch that makes an
-# injected reading count.
-_smoke_fixture_arg="${TEAM_SMOKE_FIXTURE:-0}"
-_premise_probe_arg="${TEAM_P21_PREMISE_PROBE_MS:-}"
-_premise_load_arg="${TEAM_P21_PREMISE_LOADAVG:-}"
-_premise_factor_arg="${TEAM_P21_PREMISE_LOAD_FACTOR:-}"
-_premise_ceil_arg="${TEAM_P21_PREMISE_PROBE_CEIL_MS:-}"
-_premise_stall_arg="${TEAM_P21_STALL_ROUNDS:-}"
-_stall_arg="${TEAM_P21_STALL:-}"
-_premise_only_arg="${TEAM_P21_PREMISE_ONLY:-0}"
+# 诊断旋钮在身份清洗之前保存（清洗会把所有 TEAM_* 一起 unset）。
+_trace_arg="${TEAM_P21_TRACE:-}"
 while IFS='=' read -r _v _; do
   case "$_v" in TEAM_*) unset "$_v" 2>/dev/null || true ;; esac
 done < <(env)
@@ -93,7 +66,6 @@ keep="${_keep_arg:-0}"
 tmp="$(tmp_root_create panel-p21)" || exit 3
 PASS=0
 FAIL=0
-SKIP=0
 ROOT=""
 state=""
 current=""
@@ -122,112 +94,6 @@ assert_has() { grep -qF -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里�
 assert_not() { grep -qF -- "$2" "$1" 2>/dev/null && bad "$3（不该出现 [$2]）" || ok "$3"; }
 assert_match() { grep -qE -- "$2" "$1" 2>/dev/null && ok "$3" || bad "$3（$1 里没有匹配 [$2]）"; }
 
-# ── 前提（P48 / D33，panel#The project-settings pty fixture judges under a machine premise）────
-# 视界是失败探测器：等待耗尽那一刻由 tests/lib/pty-wait.sh 调 pty_premise_over（下面）按机器读数
-# 归因 —— 超前提 → 一行可见 SKIP 并把当前场景停在原地（整体退出 4）；静态场景 + 前提之内 → 红。
-# 前提本身在**入口不判定**（只有粗闸门跳过整体超载的机器），所以前提行只是把真读数打出来。
-P21_PREMISE_PROBE_CEIL_MS_DEFAULT=120
-P21_PREMISE_LOAD_FACTOR_DEFAULT=2.0
-P21_PREMISE_REASON=""
-P21_NOTICED=""
-p21_fixture_on() { [ "${_smoke_fixture_arg:-0}" = "1" ]; }
-p21_notice() { # 每个旋钮只打一次忽略行（同一个值会被几个读数点重复请求）
-  case " ${P21_NOTICED:-} " in *" $1 "*) return 0 ;; esac
-  P21_NOTICED="${P21_NOTICED:-} $1"
-  printf '  忽略 %s=%s（只有 TEAM_SMOKE_FIXTURE=1 时夹具旋钮才生效；真实路径读真值）\n' "$1" "$2" >&2
-}
-p21_cores() { nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0'; }
-p21_load5() { cut -d' ' -f2 /proc/loadavg 2>/dev/null || printf '?'; }
-p21_load1() {
-  if [ -n "${_premise_load_arg:-}" ]; then
-    if p21_fixture_on; then printf '%s\n' "$_premise_load_arg"; return 0; fi
-    p21_notice TEAM_P21_PREMISE_LOADAVG "$_premise_load_arg"
-  fi
-  cut -d' ' -f1 /proc/loadavg 2>/dev/null || printf '?'
-}
-# 代码无关探针（P44 的 probe.sh 口径）：只起进程，永远不碰面板；5 轮均值，毫秒。
-p21_probe_ms() {
-  local n=5 i t0
-  t0="$(date +%s%3N)"
-  for i in $(seq 1 "$n"); do
-    python3 -c 'pass' >/dev/null 2>&1
-    bash -c 'true' >/dev/null 2>&1
-    git -C "$tree" rev-parse --quiet HEAD >/dev/null 2>&1
-  done
-  printf '%s\n' $(( ($(date +%s%3N) - t0) / n ))
-}
-p21_probe_reading() {
-  if [ -n "${_premise_probe_arg:-}" ]; then
-    if p21_fixture_on; then printf '%s\n' "$_premise_probe_arg"; return 0; fi
-    p21_notice TEAM_P21_PREMISE_PROBE_MS "$_premise_probe_arg"
-  fi
-  p21_probe_ms
-}
-p21_factor() {
-  if [ -n "${_premise_factor_arg:-}" ]; then
-    if p21_fixture_on; then printf '%s\n' "$_premise_factor_arg"; return 0; fi
-    p21_notice TEAM_P21_PREMISE_LOAD_FACTOR "$_premise_factor_arg"
-  fi
-  printf '%s\n' "$P21_PREMISE_LOAD_FACTOR_DEFAULT"
-}
-p21_probe_ceil() {
-  if [ -n "${_premise_ceil_arg:-}" ]; then
-    if p21_fixture_on; then printf '%s\n' "$_premise_ceil_arg"; return 0; fi
-    p21_notice TEAM_P21_PREMISE_PROBE_CEIL_MS "$_premise_ceil_arg"
-  fi
-  printf '%s\n' "$P21_PREMISE_PROBE_CEIL_MS_DEFAULT"
-}
-p21_load_threshold() { awk -v c="$(p21_cores)" -v f="$(p21_factor)" 'BEGIN { printf "%.2f", f * c }'; }
-p21_premise_line() { # <场景名>：真读数 + 两个顶（只打，不判）
-  local label="${1:-?}" load1 load5 cores probe factor ceil
-  load1="$(p21_load1)"; load5="$(p21_load5)"; cores="$(p21_cores)"
-  probe="$(p21_probe_reading)"; factor="$(p21_factor)"; ceil="$(p21_probe_ceil)"
-  printf '== 前提 %s：loadavg_1m %s / loadavg_5m %s · 逻辑核 %s · 代码无关探针 %sms（顶 %sms）· 粗闸门 %s = %s×%s 核 ==\n' \
-    "$label" "$load1" "$load5" "$cores" "$probe" "$ceil" \
-    "$(p21_load_threshold)" "$factor" "$cores"
-}
-# 入口粗闸门：0 = 前提之内（照跑）/ 1 = 负载超顶（在第一个等待之前 SKIP 整个场景）。
-# 它故意取在实测绿带**之外**（最高实测绿 1.33×核），只是别在严重过载的宿主上白烧几分钟，
-# 不是「绿/红交叉点」（P44 的结论：负载平均没有实测交叉点）。
-p21_entry_guard() {
-  local load1 cores thr
-  load1="$(p21_load1)"; cores="$(p21_cores)"; thr="$(p21_load_threshold)"
-  case "$cores" in ''|*[!0-9]*) return 0 ;; esac
-  [ "$cores" -gt 0 ] || return 0
-  if awk -v l="$load1" -v t="$thr" 'BEGIN { exit !(l <= t) }'; then return 0; fi
-  return 1
-}
-p21_entry_skip_line() {
-  printf '  \033[33mSKIP\033[0m 入口粗闸门：loadavg_1m %s > %s（%s×%s 核）—— 场景 %s 在第一个等待之前就停下（无失败、无结论，exit 4）\n' \
-    "$(p21_load1)" "$(p21_load_threshold)" "$(p21_factor)" "$(p21_cores)" "${1:-?}"
-}
-# 引擎在耗尽那一刻调的两个钩子（tests/lib/pty-wait.sh）：超前提 → 引擎打 SKIP 行并调 pty_on_skip。
-pty_on_skip() { exit 4; }
-pty_premise_over() { # 0 = 机器超前提（归因给机器）/ 1 = 前提之内（代码判决）
-  local load1 cores probe ceil thr factor
-  load1="$(p21_load1)"; cores="$(p21_cores)"; probe="$(p21_probe_reading)"
-  ceil="$(p21_probe_ceil)"; factor="$(p21_factor)"; thr="$(p21_load_threshold)"
-  P21_PREMISE_REASON="loadavg_1m ${load1} vs 粗闸门 ${thr}（${factor}×${cores} 核）；探针 ${probe}ms vs 顶 ${ceil}ms"
-  case "$probe" in ''|*[!0-9]*) probe=0 ;; esac
-  case "$ceil" in ''|*[!0-9]*) ceil=120 ;; esac
-  [ "$probe" -le "$ceil" ] || return 0
-  case "$cores" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$cores" -gt 0 ] || return 1
-  awk -v l="$load1" -v t="$thr" 'BEGIN { exit !(l > t) }' && return 0
-  return 1
-}
-pty_premise_reason() { printf '%s' "${P21_PREMISE_REASON:-（没有读数）}"; }
-
-# ── 前提自述模式（M58/panel-knobs 的先例 + P48）：只打前提行与每个注入旋钮的忽略行，不建 tmux、
-# 不起面板、不判任何时长 —— 门禁每轮用它证明「旋钮不得漏进真路径」（时间无关）。
-if [ "${_premise_only_arg:-0}" = "1" ]; then
-  _only_sections=("$@")
-  [ "${#_only_sections[@]}" -gt 0 ] || _only_sections=(premise-only)
-  for _only_s in "${_only_sections[@]}"; do p21_premise_line "$_only_s"; done
-  printf 'panel-p21: premise-only 模式（裸读数 + 旋钮忽略声明；除代码无关探针外没有起进程、没有建 tmux、没有判定；exit 0）\n'
-  exit 0
-fi
-
 if ! command -v tmux >/dev/null 2>&1; then printf 'panel-p21: tmux is required\n' >&2; exit 3; fi
 if [ -z "$js" ]; then printf 'panel-p21: no node/bun runtime\n' >&2; exit 3; fi
 [ -f "$panel" ] || { printf 'panel-p21: no bundle at %s\n' "$panel" >&2; exit 3; }
@@ -238,23 +104,9 @@ if [ -z "$js" ]; then printf 'panel-p21: no node/bun runtime\n' >&2; exit 3; fi
 . "$here/lib/pty-wait.sh"
 # shellcheck source=lib/model-policy.sh
 . "$here/lib/model-policy.sh"   # P232：完整派单记录构造器（S1 的共享夹具）
-# Fixture-wide knobs. PTY_WAIT_ITERS is a failure-detector horizon, never spent on a green run (a
-# green wait returns on the first settled frame, usually rounds 1-3); per-wait overrides use local.
+# 等待视界只防死等：默认由 tests/lib/pty-wait.sh 给（基础 100 轮、仍在绘制时最多 5 倍）。
 PTY_TRACE="${_trace_arg:-0}"
 PTY_SCENE_DIR=""
-# P48: 延长窗口与上限由夹具钉住（默认 8 / 3）；夹具旋钮只在 TEAM_SMOKE_FIXTURE=1 下覆盖。
-# 注入读数超顶时同时注入「状态永不到来」的针：那是夹具在模拟「这台机器交不出这一帧」，
-# 让耗尽路径在安静机上可达（真路径下没有针，也没有注入）。
-PTY_STALL_ROUNDS=8
-PTY_EXT_FACTOR=3
-if p21_fixture_on; then
-  case "${_premise_stall_arg:-}" in ''|*[!0-9]*) ;; *) PTY_STALL_ROUNDS="$_premise_stall_arg" ;; esac
-  case "${_premise_probe_arg:-}" in
-    ''|*[!0-9]*) ;;
-    *) [ "$_premise_probe_arg" -gt "$(p21_probe_ceil)" ] && PTY_INJECT_NEEDLE='◊P48-注入：状态永不到来◊' ;;
-  esac
-  [ "${_stall_arg:-0}" = "1" ] && PTY_INJECT_NEEDLE='◊P48-注入：状态永不到来◊'
-fi
 
 SECTIONS=("$@")
 [ "${#SECTIONS[@]}" -gt 0 ] || SECTIONS=(settings groups wheel choices choices-schema write conflict categories policy readonly)
@@ -307,7 +159,7 @@ start_panel() {
 
 wait_panel() {
   # The panel's first frame must be settled too (the first paint also arrives line by line).
-  local PTY_WAIT_ITERS=80 PTY_WAIT_PAUSE=0.25 PTY_SETTLE_PAUSE=0.3
+  local PTY_WAIT_PAUSE=0.25 PTY_SETTLE_PAUSE=0.3
   if pty_wait_frame - "面板首帧（$current）" 'teamsmith pulse'; then
     sleep 0.5
     return 0
@@ -334,16 +186,16 @@ wait_editor() { # <tray title> [body marker]
 # Wait for the current frame to carry <text>; writes settle asynchronously. The latest capture is
 # written to the assertion's file every round, so a failure shows exactly what was on screen.
 wait_cap() { # <name> <text>
-  local PTY_WAIT_ITERS=30 PTY_WAIT_PAUSE=0.4
+  local PTY_WAIT_PAUSE=0.4
   pty_wait_frame "$tmp/$current/$1.txt" "回执 $1" "$2"
 }
 # P68/fixture-waits-for-landed-reads：数据态等待。断言一行**从异步 settings 读来的数据**之前，先等
 # 那一行自己（值也在）出现在稳定帧上；骨架帧、固定 sleep + 单次采样都不算证据。上界 30 轮基础视界
 # （≈20s，静态场景不延长）与它的实测延迟带见文件头；耗尽时 pty-wait.sh 打一行归因（等待名 + 缺的
-# 标记 + 轮数），由 bad() 按机器读数分派红/SKIP。捕获仍写到 $tmp/$current/<name>.txt 供断言复用。
+# 标记 + 轮数）。捕获仍写到 $tmp/$current/<name>.txt 供断言复用。
 wait_row() { # <name> <label> <needle...>
   local _name="$1" _label="$2"; shift 2
-  local PTY_WAIT_ITERS=30 PTY_WAIT_PAUSE=0.4
+  local PTY_WAIT_PAUSE=0.4
   pty_wait_frame "$tmp/$current/$_name.txt" "数据态：$_label" "$@"
 }
 
@@ -403,12 +255,12 @@ open_view() {
   keys Down Down Down Down Down
   sleep 0.5
   keys Enter
-  local PTY_WAIT_ITERS=40 PTY_WAIT_PAUSE=0.4
+  local PTY_WAIT_PAUSE=0.4
   if pty_wait_frame - "设置视图（marker=$marker）" "$marker"; then
     sleep 0.4
     return 0
   fi
-  bad "项目设置视图没有在预算内出现数据（marker=$marker）"
+  bad "项目设置视图没等到（超过等待上限）数据（marker=$marker）"
   return 1
 }
 
@@ -797,7 +649,7 @@ EOF2
   filter_to TEAM_ZZZ_TEST
   # P68：等那一行（值也在）出现在稳定帧上，不用固定 sleep 采样。
   wait_row scratch-key "scratch 视图里的 TEAM_ZZZ_TEST 行" 'TEAM_ZZZ_TEST' '未设 · 默认 zzz-default' \
-    || bad "scratch CLI 新增的键行没有在预算内出现"
+    || bad "scratch CLI 新增的键行没等到（超过等待上限）"
   assert_match "$tmp/$current/scratch-key.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "scratch CLI 新增的键出现在视图里（不重建 panel.js；无标签→回退裸键）"
   # P266（设计表 248）：同一张 scratch schema 里再添一行**带标记**的新键 → 它不进渲染（隐藏规则读标记，
   # 不是 bundle 里写死的四个键名；这一行是 fixture 里从没出现过的名字）。
@@ -807,7 +659,7 @@ EOF2
   filter_clear
   filter_to TEAM_GATES
   wait_row scratch-class "scratch 视图里的 TEAM_GATES 行（类改成不可改）" '门禁命令' 'true · 不可改' \
-    || bad "scratch CLI 改过的类行没有在预算内出现"
+    || bad "scratch CLI 改过的类行没等到（超过等待上限）"
   assert_match "$tmp/$current/scratch-class.txt" '门禁命令 +true · 不可改' "scratch CLI 改过的类跟着变（bundle 没有第二张键表）"
   assert_has "$tmp/$current/scratch-class.txt" "这个值要改项目配置文件 .pi/team/config.sh" "scratch CLI 的 refuse 提示行仍是那句普通路线"
   if focus_row '门禁命令 +true · 不可改'; then keys Enter; else bad "P266：没能把焦点移到 scratch 的 refuse 行"; fi
@@ -946,7 +798,7 @@ JSON
   filter_to TEAM_NOTIFY_TMUX
   # P68：断言那一行本身之前先等数据态（未设 bool 行 + 它的默认值）落定。
   wait_row bool-row "未设 bool 行显示「未设 · 默认 1」" '走 tmux 投递' '未设 · 默认 1' \
-    || bad "未设的 bool 行没有在预算内显示默认值"
+    || bad "未设的 bool 行没等到显示默认值"
   assert_match "$tmp/$current/bool-row.txt" '走 tmux 投递 +未设 · 默认 1' "未设的 bool 行显示 未设 · 默认 1"
   gap0="$(argv_count)"
   keys Enter
@@ -991,7 +843,7 @@ JSON
   # P68：等那一行真的显示刚写下的规范值（accept 后的 settle 重读落定），再按 Enter ——
   # 选择器是一次成形的快照（D43），不等读就会从旧块开（CI 那三条红就是这个形状）。
   wait_row bool-set-row "写入后的 bool 行显示新值 0" '走 tmux 投递' '0 · 立即生效' \
-    || bad "写入后的设置行没有在预算内显示新值"
+    || bad "写入后的设置行没等到显示新值"
   keys Enter
   wait_picker TEAM_NOTIFY_TMUX '关（0） · 当前' || bad "bool 选择器第二次没有打开"
   cap_to bool-set
@@ -1012,9 +864,9 @@ PY2
   filter_to TEAM_NOTIFY_TMUX
   # P68（本变更的主目标）：等那一行**本身**显示手改后的值（视图打开时那次强制读落定）再按 Enter。
   # 等待名把被等的状态写清楚；耗尽时引擎打一行 `等待超时：数据态：…（缺 [走 tmux 投递 true · 立即生效]）`，
-  # bad() 再按机器读数分派红/SKIP。骨架标记（分组标题）与固定 sleep 都不再是证据。
+  # 骨架标记（分组标题）与固定 sleep 都不再是证据。
   wait_row bool-spelling-row "设置行显示手改后的值 true" '走 tmux 投递' 'true · 立即生效' \
-    || bad "手改后的设置行没有在预算内显示新值"
+    || bad "手改后的设置行没等到显示新值"
   keys Enter
   wait_picker TEAM_NOTIFY_TMUX 'true · 当前' || bad "非规范 bool 的选择器没有打开"
   cap_to bool-spelling
@@ -1049,7 +901,7 @@ PY2
   # ── (3) 未设键：编辑器开在「保持未设」上，接受 = 取消（不写、不留审计、不留临时文件）；再接受 300 = 直写 ──
   filter_to TEAM_DEFER_TTL
   wait_row defer-row "未设 seconds 行显示「未设 · 默认 300」" '排队过期时间' '未设 · 默认 300' \
-    || bad "未设键的行没有在预算内显示默认值"
+    || bad "未设键的行没等到显示默认值"
   assert_match "$tmp/$current/defer-row.txt" '排队过期时间 +未设 · 默认 300' "未设键的行显示 未设 · 默认 300"
   local defer_sha defer_audit
   defer_sha="$(sha "$(cfg)")"; defer_audit="$(audit_lines)"
@@ -1333,7 +1185,7 @@ EOF2
   open_view
   filter_to TEAM_ZZZ_MODE
   wait_row zzz-row "scratch 新增 enum 键的行（裸键 + red 默认）" 'TEAM_ZZZ_MODE' '未设 · 默认 red' \
-    || bad "scratch CLI 新增的 enum 键行没有在预算内出现"
+    || bad "scratch CLI 新增的 enum 键行没等到（超过等待上限）"
   assert_has "$tmp/$current/zzz-row.txt" "TEAM_ZZZ_MODE" "scratch CLI 新增的 enum 键出现在视图里（无标签→回退裸键）"
   assert_has "$tmp/$current/zzz-row.txt" "未设 · 默认 red" "新键的默认值来自 schema"
   keys Enter
@@ -1360,7 +1212,7 @@ PY
   open_view
   filter_to TEAM_ZZZ_MODE
   wait_row zzz-row2 "第二次起的面板仍显示 scratch 新增键" 'TEAM_ZZZ_MODE' \
-    || bad "第二次起的面板没有用 scratch CLI（新键不在预算内出现）"
+    || bad "第二次起的面板没有用 scratch CLI（新键没等到（超过等待上限））"
   assert_has "$tmp/$current/zzz-row2.txt" "TEAM_ZZZ_MODE" "第二次起的面板仍用 scratch CLI（新键还在）"
   keys Enter
   wait_editor TEAM_ZZZ_MODE "没有选项集" || bad "去掉 constraints 后没有打开自由输入"
@@ -1550,7 +1402,7 @@ scn_policy() {
   # ① 类别行：未来策略 + 「新任务」徽章 + 命令行点名 set-task-model
   filter_to 类别
   wait_row policy-cat "类别 routine 行（策略模型 + 新任务徽章）" '下一次派任务会用的模型' '类别 routine' 'kimi-coding/k3-256k' \
-    || bad "类别行没有在预算内出现"
+    || bad "类别行没等到（超过等待上限）"
   # 视图的快照行、命令行提示行都跟着**焦点**走：先把光标移到类别行，再看这一行的两半（M49）。
   if focus_row '› 类别 routine'; then :; else bad "没能把焦点移到类别 routine 行"; fi
   cap_to policy-cat
@@ -1559,7 +1411,7 @@ scn_policy() {
   # ② 策略 ≠ 实际：dev 的只读行显示**记录**里的模型，行里不出现策略模型
   filter_to dev
   wait_row policy-dev "dev 的只读派单行" '正在运行的任务实际使用的模型' 'xai/grok-4.6' \
-    || bad "dev 的派单行没有在预算内出现"
+    || bad "dev 的派单行没等到（超过等待上限）"
   if focus_row '› dev '; then :; else bad "没能把焦点移到 dev 的派单行"; fi
   cap_to policy-dev
   assert_match "$tmp/$current/policy-dev.txt" 'dev +xai/grok-4.6 · 不可改' "记录模型逐字显示（不是策略模型）"
@@ -1568,7 +1420,7 @@ scn_policy() {
   # ③ 没有记录的席位：不借策略模型
   filter_to verify
   wait_row policy-verify "verify 的「还没有派过任务」行" 'verify' '这个席位还没有派过任务' \
-    || bad "无记录席位行没有在预算内出现"
+    || bad "无记录席位行没等到（超过等待上限）"
   assert_not "$tmp/$current/policy-verify.txt" "kimi-coding/k3-256k" "无记录席位行不借未来策略的模型"
   # ③b P266（设计表的红侧第二格）：同一个席位换成一份「存在、但读不出来」的记录（旧格式：版本不是 1）
   # → 说法换成另一句。面板从读侧的 record_present 事实选措辞（无文件 = 没派过；有文件 = 读不出来），
@@ -1577,7 +1429,7 @@ scn_policy() {
   reopen_view
   filter_to verify
   wait_row policy-unreadable "record_present=true：有记录但读不出来" 'verify' '这个席位派过任务，但它的记录读不出来' \
-    || bad "「读不出来」的席位行没有在预算内出现"
+    || bad "「读不出来」的席位行没等到（超过等待上限）"
   assert_not "$tmp/$current/policy-unreadable.txt" "还没有派过任务" "P266：有记录但读不出来时不说「还没派过任务」（两个原因分得开）"
   assert_not "$tmp/$current/policy-unreadable.txt" "legacy/unknown assignment_version" "P266：命令的诊断字符串不上屏"
   local pol_json_verify
@@ -1701,7 +1553,7 @@ scn_categories() {
   reopen_view
   filter_to dev
   wait_row cat-kept "删类别后 dev 的派单行仍在" 'xai/grok-4.6' '会话 sid-dev-232' \
-    || bad "删类别后派单行没有在预算内出现"
+    || bad "删类别后派单行没等到（超过等待上限）"
   assert_match "$tmp/$current/cat-kept.txt" 'dev +xai/grok-4.6 · 不可改' "删类别后记录模型仍是记录里的值"
   assert_has "$tmp/$current/cat-kept.txt" "会话 sid-dev-232" "删类别后会话号原样"
   filter_to 类别
@@ -1724,7 +1576,7 @@ scn_categories() {
   # 诊断行按 头…尾 换行（不截断路线）：命令原文可能跨两行，所以断言的是路线的**词**都在屏幕上
   # （升级命令名 + 它的参数），而不是一整串连续子串。
   wait_row legacy-diagnosis "遗留配置的迁移诊断" '旧设置需要升级' '含退休键' 'upgrade-models' \
-    || bad "遗留配置的迁移诊断没有在预算内出现"
+    || bad "遗留配置的迁移诊断没等到（超过等待上限）"
   assert_has "$tmp/$current/legacy-diagnosis.txt" "upgrade-models" "诊断给出 CLI 升级命令（命令名可见）"
   assert_has "$tmp/$current/legacy-diagnosis.txt" "--task-models" "诊断给出升级命令的参数（不被截掉）"
   assert_has "$tmp/$current/legacy-diagnosis.txt" "--dry-run" "诊断给出升级命令的预览步骤（不被截掉）"
@@ -2090,26 +1942,26 @@ scn_groups() {
   # ③ 类徽章是词 + tone（D4）：三类各过滤一行；词在，tone = 调色板里该类的 tone，值必须是 text tone。
   filter_to TEAM_MODEL_LIMITS
   wait_row tone-apply "apply 徽章行" '模型并发上限' '立即生效' \
-    || bad "apply 行没有在预算内出现"
+    || bad "apply 行没等到（超过等待上限）"
   cap_e_to tone-apply-e
   assert_match "$tmp/$current/tone-apply.txt" '模型并发上限 +.*立即生效' "apply 行的徽章词仍在（颜色不是唯一通道）"
   assert_badge_tone "$tmp/$current/tone-apply-e.txt" '模型并发上限' '立即生效' 'text' "apply 徽章 = 普通文本 tone"
   filter_to TEAM_PULSE_INTERVAL
   wait_row tone-restart "restart 徽章行" '巡检周期' '需重启' \
-    || bad "restart 行没有在预算内出现"
+    || bad "restart 行没等到（超过等待上限）"
   cap_e_to tone-restart-e
   assert_match "$tmp/$current/tone-restart.txt" '巡检周期 +.*需重启' "restart 行的徽章词仍在"
   assert_badge_tone "$tmp/$current/tone-restart-e.txt" '巡检周期' '需重启' 'warn' "restart 徽章 = warn tone"
   filter_to TEAM_PROJECT
   wait_row tone-refuse "refuse 徽章行" '项目名' 'root · 不可改' \
-    || bad "refuse 行没有在预算内出现"
+    || bad "refuse 行没等到（超过等待上限）"
   cap_e_to tone-refuse-e
   assert_match "$tmp/$current/tone-refuse.txt" '项目名 +root · 不可改' "refuse 行的徽章词仍在"
   assert_badge_tone "$tmp/$current/tone-refuse-e.txt" '项目名' '不可改' 'dim' "refuse 徽章 = dim tone"
   # ④ 可见降级：schema 不认识的键落在「未分组」，且「未分组」在席位块之前（走到列表末尾看）。
   filter_to TEAM_HAND_ADDED
   wait_row hand-added "未分组里的手加未知键行" 'TEAM_HAND_ADDED' 'hand · 不认识' \
-    || bad "未知键的行没有在预算内出现"
+    || bad "未知键的行没等到（超过等待上限）"
   assert_match "$tmp/$current/hand-added.txt" 'TEAM_HAND_ADDED +hand · 不认识' "未知键的行仍在（没有消失）"
   assert_has "$tmp/$current/hand-added.txt" "TEAM_HAND_ADDED：这个设置在文件里" "未知键仍按原始键点名"
   [ "$(cap_line_heading "$tmp/$current/hand-added.txt" '未分组')" -gt 0 ] \
@@ -2155,12 +2007,12 @@ EOF2
   open_view
   filter_to TEAM_ZZZ_TEST
   wait_row zzz-group "scratch 新增键落在 workflow 域标题下" '工作流与门禁' 'TEAM_ZZZ_TEST' \
-    || bad "新键的域标题/行没有在预算内出现"
+    || bad "新键的域标题/行没等到（超过等待上限）"
   assert_has "$tmp/$current/zzz-group.txt" "工作流与门禁" "schema 新增键落在它声明的 workflow 域下（bundle 未重建）"
   assert_match "$tmp/$current/zzz-group.txt" 'TEAM_ZZZ_TEST +未设 · 默认 zzz-default' "新键的行完整（值/默认来自 schema）"
   filter_to TEAM_GATES
   wait_row gates-moved "TEAM_GATES 跟到 meeting 域标题下" '跨项目会议' '门禁命令' \
-    || bad "TEAM_GATES 的新域标题/行没有在预算内出现"
+    || bad "TEAM_GATES 的新域标题/行没等到（超过等待上限）"
   assert_has "$tmp/$current/gates-moved.txt" "跨项目会议" "TEAM_GATES 的 token 改成 meeting 后跟到新标题下（bundle 里没有键→域表）"
   assert_match "$tmp/$current/gates-moved.txt" '门禁命令 +true · 立即生效' "同一行仍按 schema 渲染（标签/值/徽章）"
   assert_eq "三次运行之间 bundle 逐字节不变" "$(sha "$panel")" "$bundle_sha"
@@ -2179,7 +2031,7 @@ PY
   open_view
   filter_to TEAM_GATES
   wait_row gates-fallback "畸形 schema 行落在「未分组」里" '未分组' '门禁命令' \
-    || bad "降级组的行没有在预算内出现"
+    || bad "降级组的行没等到（超过等待上限）"
   unset P21_CLI
   assert_has "$tmp/$current/gates-fallback.txt" "未分组" "第 10 列缺失的 schema 行落在可见的降级组里（不消失）"
   assert_match "$tmp/$current/gates-fallback.txt" '门禁命令 +true · 立即生效' "降级组里的行仍完整（标签/值/徽章）"
@@ -2344,15 +2196,9 @@ PY
 printf '\033[1m== panel-p21 · 项目设置视图（P22） ==\033[0m\n'
 for s in "${SECTIONS[@]}"; do
   mkdir -p "$tmp/$s"
-  # P48：每个场景在自己的子 shell 里跑。等待耗尽且归因于机器时 pty_on_skip 直接 exit 4，只结束
-  # 这个场景（后面的场景照跑）；父 shell 的 EXIT 清扫有自己的 BASHPID 守卫，不会被重复触发。
+  # 每个场景在自己的子 shell 里跑（父 shell 的 EXIT 清扫有自己的 BASHPID 守卫，不会被重复触发）。
   (
     trap - EXIT INT TERM
-    p21_premise_line "$s"          # 前提行：每个场景第一个断言之前（真读数；只打不判）
-    if ! p21_entry_guard; then      # 粗闸门：超顶就在第一个等待之前停下这个场景
-      p21_entry_skip_line "$s"
-      exit 4
-    fi
     case "$s" in
       settings) scn_settings ;;
       groups) scn_groups ;;
@@ -2371,15 +2217,13 @@ for s in "${SECTIONS[@]}"; do
   rc=$?
   case "$rc" in
     0) ;;
-    3) exit 3 ;;                                          # 搭建失败（server_up/未知场景）照旧
-    4) SKIP=$((SKIP + 1)) ;;                              # 可见 SKIP：无失败、无结论
+    3) exit 3 ;;                                          # 搭建失败（server_up/未知场景）
     *) ;;                                                 # 1 = 断言失败，最后按 FAIL 退出
   esac
 done
 
 PASS="$(p21_count_of "$_p21_count/ok")"
 FAIL="$(p21_count_of "$_p21_count/bad")"
-printf '\n\033[1m== 结果 ==\033[0m  ✓ %s  ✗ %s  SKIP %s\n' "$PASS" "$FAIL" "$SKIP"
+printf '\n\033[1m== 结果 ==\033[0m  ✓ %s  ✗ %s\n' "$PASS" "$FAIL"
 [ "$FAIL" -gt 0 ] && exit 1
-[ "$SKIP" -gt 0 ] && exit 4
 exit 0
