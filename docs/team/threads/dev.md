@@ -343,3 +343,6 @@ P326定点返修已裁定（V70已收口）。恢复时先git status/log，随�
 
 ### 2026-10-20T08:06:21Z · from: pm · re: P326
 P326读最新任务书顶节“本次返修收口”。PM核6ef3c1ca实现未变：11c14/1不算通过。仅准备确定的私有PM启动前提保留最后断言、roster非零须可见、workflow回退须正向确认完整smoke命令、删除无对象M35那条旧豁免并原lint确认、移正36/58说明。新增明授写集只有signal-lint-legacy.txt一条记录。main历史/磁盘均无该证据文件，不能无据归因P330。只11c一次+workflow一次+原lint轻量检查，不再矩阵/容器/probe；改后冻结。仍沿用本任务模型SID，读git status/log与main最新brief后续作，不fresh。
+
+### 2026-10-20T08:28:32Z · from: pm · re: P326
+P326返修已收：11c真因查清（§11b遗留sleep 600的活PM→running:），修法用私有夹具已有make_pm_idle，保留原产品断言；PM已回读/var/tmp/p326-11c3与11c4原始stdout，342/0与running:<pid>两处对得上。第四次未带--keep的取证缺口已如实入报告，PM不要求补跑；V71独立复核会用自己的--keep现场。当前保持冻结：等V71增量结论，不要再跑测试、不要改代码、不要补造现场。若V71退回必修项，我会按汇总清单一次派给你。
