@@ -5,7 +5,8 @@ agent: dev3
 phase: apply
 category: code
 change: -
-anchor: openspec/specs/verification/spec.md#The gate judges behaviour only, and never reports a skip as a pass
+specs: verification#The gate judges behaviour only, and never reports a skip as a pass
+anchor: none (infra) — 门禁自己建的私有终端锚点的寿命，不改产品行为
 deltas: -
 branch: task/P334-anchor-lifetime
 deps: P326 与 P333 已并入 main（`smoke.sh` 单写者纪律，不得并发写）

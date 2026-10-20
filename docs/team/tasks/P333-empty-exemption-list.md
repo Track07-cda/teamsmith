@@ -5,7 +5,8 @@ agent: dev3
 phase: apply
 category: code
 change: -
-anchor: openspec/specs/verification/spec.md#The gate judges behaviour only, and never reports a skip as a pass
+specs: verification#The gate judges behaviour only, and never reports a skip as a pass
+anchor: none (infra) — 门禁里一行假提示与跳过计数的措辞，不改任何产品行为
 deltas: -
 branch: task/P333-empty-exemption-list
 deps: P326 已并入 main（`smoke.sh` 单写者纪律）
