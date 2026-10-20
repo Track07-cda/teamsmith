@@ -5,7 +5,8 @@ agent: dev-bob
 phase: apply
 category: code
 change: -
-anchor: pm-lifecycle#A PM that is starting is a state, not a missing PM
+specs: pm-lifecycle#A PM that is starting is a state, not a missing PM
+anchor: none (infra) — 诊断行的读数与重定向措辞，不改任何状态机或启动契约
 deltas: -
 branch: task/P335-launch-diag-tail
 
