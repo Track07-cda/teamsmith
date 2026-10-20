@@ -516,6 +516,7 @@
 | V66 | Independently verify keep reclaim and actual container scene collection | dev | - | P324 | done |
 | P326 | Apply behavior-focused-ci: floor declaration, NUL path chain, probe de-duplication, docs and spec alignment | dev | - | P325 | wip |
 | P327 | Make panel-b2 real: replace fixed sleeps with bounded waits, wire it into a gate section | dev3 | - | P318 | todo |
+| P328 | Guard inventory (read-only): classify archived changes and name <=5 retirements | dev-bob | - | - | todo |
 
 ## 当前里程碑
 
