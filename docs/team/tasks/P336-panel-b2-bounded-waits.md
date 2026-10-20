@@ -1,7 +1,7 @@
 # P336 · 写信面夹具：把固定 sleep 换成状态等待（写集只有 panel-b2.sh 一个文件）
 
 task: P336
-agent: dev3
+agent: dev
 phase: apply
 category: code
 change: -
@@ -38,6 +38,6 @@ branch: task/P336-panel-b2-bounded-waits
 
 ## 边界
 
-- 写集：`skills/teamsmith/tests/panel-b2.sh`、`docs/team/reports/P336-dev3.md`。**不碰 `smoke.sh` / `section-paths.tsv`**（那是 P327 的写集）。
+- 写集：`skills/teamsmith/tests/panel-b2.sh`、`docs/team/reports/P336-dev.md`。**不碰 `smoke.sh` / `section-paths.tsv`**（那是 P327 的写集）。
 - 不碰产品实现、不新增夹具/等待库/门禁段、不改任何时限与预算。
 - 净零：这条只把「等时间」换成「等状态」，没有新增检查器；接线由 P327 负责。
