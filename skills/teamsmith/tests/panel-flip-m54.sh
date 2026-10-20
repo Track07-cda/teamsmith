@@ -7,7 +7,7 @@
 # Each flip edits the panel sources, rebuilds the committed bundle, runs one `panel-p21.sh` scenario
 # and asserts it goes red, then restores the sources, rebuilds and asserts green plus the bundle
 # byte-identical. The worked build needs `panel/scripts/node_modules` (bun); without it the flip
-# reports the rebuild as a setup failure (exit 3), like flip-p22.sh.
+# reports the rebuild as a setup failure (exit 3).
 #
 # F-B     — the bundle's `choices` reader is disabled (the console keeps its own option table) → the
 #           picker never opens → the choices scenario red.

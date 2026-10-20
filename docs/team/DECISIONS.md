@@ -609,7 +609,7 @@ socket 路径超 AF_UNIX 107 字节（深 TMPDIR ✓）→ 私有 server 绑不�
 
 **我做的静态审计**（只读 ✓）：
 - 所有 `kill-server`/`kill-session` 的夹具：要么整段跑在**容器**里 ✓（`container-tmux.sh` ✓），要么用**私有 socket** ✓
-  （`TMUX_TMPDIR` ✓ 或 `tmux -L "$SOCK"` ✓）；`flip-m17.sh`/`flip-m45.sh` 虽不含 `TMUX_TMPDIR` ✓，但它们用 `-L "$SOCK"` ✓（我的第一版判据把它们误判为"无隔离" ✗ → 已核实 ✓）。
+  （`TMUX_TMPDIR` ✓ 或 `tmux -L "$SOCK"` ✓）；`flip-m17.sh`/`flip-m45.sh` 虽不含 `TMUX_TMPDIR` ✓，但它们用 `-L "$SOCK"` ✓（P330 已按 P328 动作 3 删掉这两个从不被调用的翻转包；这句话现在只能当历史读，因为它们已不在树上）（我的第一版判据把它们误判为"无隔离" ✗ → 已核实 ✓）。
 - 所有绝对路径 `/usr/bin/tmux` 的出现 ✓：全部在**夹具自己的 shim** 里 ✓ 且**强制** `-L "$SOCK"` ✓ → 打不到默认 socket ✓。
 - 产品/夹具里**唯一**的"按模式选进程"是 `tests/smoke.sh:4141-4142` 的 `pkill -CONT/-TERM -f "m25-control-read.sh"` ✓
   （模式只命中那个脚本名 ✓，不会命中 tmux server ✓）→ 属 P159 的 lint 范围 ✓，不是本次凶手 ✓。
