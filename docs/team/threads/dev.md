@@ -349,3 +349,6 @@ P326返修已收：11c真因查清（§11b遗留sleep 600的活PM→running:）�
 
 ### 2026-10-20T08:43:50Z · from: pm · re: P326
 V71增量判PARTIAL：11c/workflow-entry/轻量检查/probe合并/映射/main成果保留全部成立，不重做。只两件：①36⑨承接——调用条件错看$REPO(夹具项目没有.github)，改传--tree "$CHECKOUT_REPO_ROOT"且-f看同一棵树，不往夹具里拷.github，真缺CI源码照旧skip；②报告两处把M35退役归因P330无证据（P330只删tests/**，该豁免注册当天就无对象），改成事实或删归因，退役保留。只跑--select 36(要看到36⑨真跑)+一次workflow-entry --tree+轻量收口；不跑容器/floor/probe/矩阵/C4。改完冻结，交V71同席位定点看这两处差异。
+
+### 2026-10-20T11:37:10Z · from: pm · re: P336
+V75（另一席位）判 FAIL，证据在 docs/team/reports/V75-verify.md：你的候选在 PATH 不带 tmux shim 时两次全场景 ✓163 ✗4，四条红全在 scenario_keys，因为相邻 send-keys 落进同一次 stdin read 被 Ink 当粘贴吞了；main 里连发 0 处、你 20 处。它机械补回 0.4s 暂停后 ✓23 ✗0 两次，所以不是断言问题。返修口径写在任务书末节：给连发按键补短暂停（能等状态就等状态，不能就最短固定暂停+注释说明为什么），验收必须在不带 shim 的环境连跑两次全绿；其余已确认成立的部分不重做。
