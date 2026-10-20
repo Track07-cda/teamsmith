@@ -525,7 +525,7 @@
 | V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | done |
 | V70 | CI减重复的独立静态审阅与已有失败归因 | dev2 | - | - | done |
 | V71 | CI减重复返修的独立行为复核 | dev2 | - | - | wip |
-| P333 | §58 不许在空豁免清单上跳过主判定 | dev3 | - | - | todo |
+| P333 | 空豁免清单不该打印「无法裁决」那次 SKIP | dev3 | - | - | todo |
 | P334 | 门禁的私有 tmux 锚点不许活过本轮 | dev3 | - | - | todo |
 | P335 | PM启动失败诊断里两个空答案 | dev-bob | - | - | wip |
 
