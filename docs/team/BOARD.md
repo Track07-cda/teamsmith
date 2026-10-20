@@ -499,7 +499,7 @@
 | P315 | Attribute the release gate reds (introduced now or pre-existing) | dev | - | - | done |
 | P316 | Delete the tests that only pass on an idle machine | dev | - | - | done |
 | P317 | Clear unnamed error swallowing, starting with common.sh | dev2 | - | - | done |
-| P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | wip |
+| P318 | Review existing tests in rounds and remove over-testing (round 1) | dev3 | - | - | done |
 | V60 | Independent review of the common.sh error-handling cleanup | verify | - | P317 | done |
 | P319 | Diagnose only the five failing release behavior groups | dev3 | - | - | done |
 | V61 | Independently review performance as reference and necessary behavior coverage | verify | - | P316 | done |
@@ -520,7 +520,7 @@
 | P330 | Delete the never-invoked fixtures (P328 action 3), four hard constraints | dev-bob | - | P328 | wip |
 | P329 | Waiter patience follows the holder heartbeat, not a budget projection (P328 action 2 + 1 + 4) | dev-bob | - | P330 | todo |
 | V67 | Independently re-scan whether every fixture P330 deleted is truly unreachable | verify | - | P330 | wip |
-| P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | todo |
+| P331 | Panel paste: does the file actually land on a fresh project (product vs fixture) | dev2 | - | P318 | wip |
 
 ## 当前里程碑
 
