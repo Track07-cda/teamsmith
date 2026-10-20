@@ -3396,9 +3396,21 @@ team_pm_launch_diag() { # <原因> [<渲染出的命令>] → 诊断文件路径
     # 窗口输出：优先用 harness **在 CLI 退出那一刻** 自己抓的那份（pm-launch-tail.txt）——
     # CLI 退出后容器的 shell 启动链有可能清屏，事后从外面 capture 可能只拿到一片空。
     # 「只有空白」不算抓到了（见 team_pane_tail_normalize 的注释）：这时从外面重抓（带同样的有界重试）。
-    local tailf pane src
-    tailf="$(team_pm_launch_tail_file)"; pane=""; src=""
-    printf 'pane   : %s（%s 字节）\n' "$tailf" "$(wc -c < "$tailf" 2>/dev/null | tr -dc '0-9' || echo 0)"   # 留：查不到=空答案（不是故障）
+    local tailf pane src tail_bytes
+    tailf="$(team_pm_launch_tail_file)"; pane=""; src=""; tail_bytes=""
+    # 先判存在再读数：`wc -c < <不存在的文件>` 是 **shell** 自己报错（`2>/dev/null` 写在 `<` 之后，
+    # 处理这个重定向时还没生效），而 `wc` 没跑、管道里的 `tr` 照样退出 0 —— `|| echo 0` 于是不触发，
+    # 字节数印成空白。读者看到的是「一条来路不明的 shell 报错 + 一个空数字」，像诊断自己坏了。
+    if [ -f "$tailf" ]; then
+      tail_bytes="$(wc -c < "$tailf" | tr -dc '0-9')"
+      if [ -n "$tail_bytes" ]; then
+        printf 'pane   : %s（%s 字节）\n' "$tailf" "$tail_bytes"
+      else
+        printf 'pane   : %s（读不出字节数：判了存在之后、读之前文件被移走或不可读）\n' "$tailf"
+      fi
+    else
+      printf 'pane   : %s（未写出：harness 还没落这份尾屏）\n' "$tailf"
+    fi
     if [ -s "$tailf" ] && grep -q '[^[:space:]]' "$tailf"; then
       src="CLI 退出那一刻，harness 自抓"
       pane="$(team_pane_tail_normalize < "$tailf")"
