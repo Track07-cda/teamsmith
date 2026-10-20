@@ -121,13 +121,20 @@ assert_has "夹具前提：诱饵 B 的 argv[0] 里带模式串" "$(tr '\0' ' ' 
 STUB="$TMP/stub"
 cat > "$STUB" <<'STUB_EOF'
 #!/usr/bin/env bash
-printf 'STUB argc=%s argv=%s\n' "$#" "$*" >> "${STUB_LOG:?}"
+printf 'STUB argc=%s argv=%s tool=%s\n' "$#" "$*" "$(basename "$0")" >> "${STUB_LOG:?}"
+[ -n "${STUB_OUT:-}" ] && printf '%s\n' "$STUB_OUT"
+[ -n "${STUB_ERR:-}" ] && printf '%s\n' "$STUB_ERR" >&2
 if [ -n "${STUB_KILL_PIDS:-}" ]; then
   for _sp in $STUB_KILL_PIDS; do kill -TERM "$_sp" 2>/dev/null || true; done
 fi
 exit "${STUB_EXIT:-0}"
 STUB_EOF
 chmod +x "$STUB"
+# 选择器的同名后端（真身的替身）：P167/P321 的 pgrep/pidof 只按**自己的名字**在闸门目录之外解析，
+# 所以它们必须在闸门目录**之后**紧跟一份同名的 argv 记录桩（真身永远是桩，夹具里不跑真选择器）。
+# ps/fuser 的同名替身赔在同一目录：证明只读工具仍在闸门之外（不拦、不记行）。
+SEL_SHIM="$TMP/selector-shim"; mkdir -p "$SEL_SHIM"
+for _t in pgrep pidof ps fuser; do cp "$STUB" "$SEL_SHIM/$_t"; chmod +x "$SEL_SHIM/$_t"; done
 # 「真身不可解析」那条腿的 PATH 兜底：$REAL_SHIM/pkill → 桩。
 # **为什么必须有它**（2026-10-02 见证跑实测）：那一条腿故意给 TEAM_SIGNAL_REAL 一个不存在的路径，
 # 闸门于是回落到 PATH 扫描找「第一个不是自己的同名文件」—— 绿侧拒绝在前（不解析），但红侧
@@ -143,8 +150,8 @@ if [ "$BREAK" = "pass" ]; then
   GATE_DIR="$TMP/shim-break"
   mkdir -p "$GATE_DIR"
   cp -a "$SKILL_DIR/scripts/shim/signal-gate" "$GATE_DIR/signal-gate"
-  ln -sf signal-gate "$GATE_DIR/pkill"
-  ln -sf signal-gate "$GATE_DIR/killall"
+  # 真实入口从 P321 起是普通文件 wrapper（npm 带不了软链）—— 红侧副本也照真实形状拷四个入口
+  for _t in pkill killall pgrep pidof; do cp -a "$SKILL_DIR/scripts/shim/$_t" "$GATE_DIR/$_t"; done
   sed -i 's/^_act="refused"$/_act="pass"/' "$GATE_DIR/signal-gate"
   if grep -qx '_act="pass"' "$GATE_DIR/signal-gate"; then
     printf '红侧：闸门副本的判定行已改成放行（%s）\n' "$GATE_DIR/signal-gate"
@@ -152,7 +159,9 @@ if [ "$BREAK" = "pass" ]; then
     printf '✗ 红侧不成立：sed 没改到判定行（%s）\n' "$GATE_DIR/signal-gate" >&2; exit 2
   fi
 fi
-[ -x "$GATE_DIR/pkill" ] && [ -x "$GATE_DIR/killall" ] || { printf '✗ 闸门入口不可执行：%s\n' "$GATE_DIR" >&2; exit 2; }
+for _t in pkill killall pgrep pidof; do
+  [ -x "$GATE_DIR/$_t" ] || { printf '✗ 闸门入口不可执行：%s/%s\n' "$GATE_DIR" "$_t" >&2; exit 2; }
+done
 
 LOGD="$TMP/logs"; mkdir -p "$LOGD"
 # 红侧：桩按夹具记录过的诱饵 pid 收掉它们（于是 decoys-alive 也红）；真身永远是桩。
@@ -165,6 +174,26 @@ p159_gate() { # <tool> <args...> → 闸门的 stdout/stderr/rc 由调用方接
       "$GATE_DIR/$_tool" "$@"
 }
 gate_lines() { wc -l < "$1" 2>/dev/null | tr -dc '0-9'; }
+# 选择器调用：与 p159_gate 同形的显式钉子，但 PATH 里紧跟闸门目录的是**同名**选择器桩。
+# stdout/stderr 分开收（拒绝要把 stdout 留空），三样都从环境显式钉，不用调用者的值。
+sel_run() { # <tool> <args…> → SEL_RC / SEL_OUT / SEL_ERR
+  local _tool="$1"; shift
+  SEL_OUT="$(env PATH="$GATE_DIR:$SEL_SHIM:$PATH" TEAM_SIGNAL_CALLS_LOG="${GATE_LOG:-$LOGD/gate.log}" \
+      STUB_LOG="${STUB_LOG:-$LOGD/stub.log}" STUB_EXIT="${STUB_EXIT:-0}" STUB_OUT="${STUB_OUT:-}" \
+      STUB_ERR="${STUB_ERR:-}" STUB_KILL_PIDS="${STUB_KILL_PIDS:-}" \
+      "$GATE_DIR/$_tool" "$@" 2>"$TMP/sel.err")"
+  SEL_RC=$?
+  SEL_ERR="$(cat "$TMP/sel.err" 2>/dev/null)"
+}
+# 拒绝形态的**分类**判据：退出码与空 stdout（每个不同输入各测一次）。诊断插值的文案与记录行的模板
+# 对所有形态走的是同一份代码路径（P321 的 V65 复核意见：每形态再验一遍不增加独立行为），因此那两列
+# 只在下面轮转段的两次**代表调用**（pgrep / pidof）上各验一次 —— 不另开开关、不增加调用。
+refuse_sel() { # <说明> <tool> <args…> → SEL_RC / SEL_OUT / SEL_ERR（供代表调用就验）
+  local _label="$1" _tool="$2"; shift 2
+  sel_run "$_tool" "$@"
+  assert_eq "$_label 退出 64" "$SEL_RC" "64"
+  assert_eq "$_label 的 stdout 留空" "$SEL_OUT" ""
+}
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 hdr "RA1 · 模式选择一律拒，且两个诱饵都活着"
@@ -274,6 +303,174 @@ RC=0; GATE_LOG="$L" timeout 300 env PATH="$GATE_DIR:$PATH" TEAM_SIGNAL_REAL="$ST
     STUB_LOG="$STUB_LOG" "$GATE_DIR/pkill" -f x >/dev/null 2>&1 || RC=$?
 assert_eq "FIFO 日志目标：拒绝照常退出 64，没有被写端挂住" "$RC" "64"
 rm -f "$L"
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════
+# P167/P321 · 选择器入口（pgrep / pidof）：已归档的 boundary 契约 —— 只有整 argv 的极窄形态放行，
+# 其余一律 exit 64、stdout 留空、同名真身零调用；放行形式的 argv/stdout/stderr/状态都来自真身。
+# 红侧仍由 --break=pass 提供：判定被改成放行后，这里的 exit-64/空 stdout/零调用断言逐条变红
+# （「被拒的替换不交出 pid」那一腿把半成品也证伪：桩一放行就会交出 424242）。
+hdr "P167/P321 · PID 产出的选择形态全部拒（空 stdout、后端零调用、日志 tool= 正确）"
+SEL_GROUP="4242"; SEL_PARENT="5353"
+SEL_LOG="$LOGD/sel-refuse.log"; GATE_LOG="$SEL_LOG"; STUB_LOG="$LOGD/stub-sel-refuse.log"
+rm -f "$SEL_LOG" "$SEL_LOG.forensics" "$STUB_LOG"
+for _form in "pgrep -f $MARKER" "pgrep --full $MARKER" "pgrep -f$MARKER" "pgrep -x sleep" "pgrep sleep" \
+             "pgrep -u 1000" "pgrep -U 1000" "pgrep -G 1000" "pidof sleep" "pidof -s sleep"; do
+  read -r -a _fargs <<< "$_form"
+  refuse_sel "$_form" "${_fargs[@]}"
+  unset _fargs
+done
+assert_eq "十种选择形态都没有落到同名后端上" "$(cat "$STUB_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_eq "调用日志：十次调用十行 refused" "$(grep -c 'act=refused' "$SEL_LOG")" "10"
+
+hdr "P167/P321 · 显式 group/parent 与三种整命令计数：语义原样保留"
+GATE_LOG="$LOGD/sel-pass.log"; STUB_LOG="$LOGD/stub-sel-pass.log"; rm -f "$GATE_LOG" "$STUB_LOG"
+STUB_OUT="77 78"; STUB_ERR="sel-err-note"; STUB_EXIT=3
+sel_run pgrep -g "$SEL_GROUP"
+assert_eq "pgrep -g <GROUP> 的退出码来自同名后端（3）" "$SEL_RC" "3"
+assert_eq "pgrep -g <GROUP> 的 stdout 逐字节来自后端" "$SEL_OUT" "77 78"
+assert_eq "pgrep -g <GROUP> 的 stderr 逐字节来自后端" "$SEL_ERR" "sel-err-note"
+assert_has "pgrep -g <GROUP> 的原样 argv 落到同名后端" "$(cat "$STUB_LOG")" "STUB argc=2 argv=-g $SEL_GROUP tool=pgrep"
+assert_has "pgrep -g <GROUP> 的日志行记 act=pass · tool=pgrep" "$(tail -n 1 "$GATE_LOG")" "act=pass · tool=pgrep"
+STUB_OUT=""; STUB_ERR=""; STUB_EXIT=0
+sel_run pgrep -P "$SEL_PARENT"
+assert_eq "pgrep -P <PARENT> 的退出码来自同名后端（0）" "$SEL_RC" "0"
+assert_has "pgrep -P <PARENT> 的原样 argv 落到同名后端" "$(tail -n 1 "$STUB_LOG")" "STUB argc=2 argv=-P $SEL_PARENT tool=pgrep"
+: > "$STUB_LOG"
+for _resp in "0 1" "2 0"; do
+  read -r _out _rc <<< "$_resp"
+  for _spell in "-fc /tmp/p164-fixture/pi-sleep" "-f -c /tmp/p164-fixture/pi-sleep" "-c -f /tmp/p164-fixture/pi-sleep"; do
+    read -r -a _cargs <<< "$_spell"
+    STUB_OUT="$_out"; STUB_ERR=""; STUB_EXIT="$_rc"
+    sel_run pgrep "${_cargs[@]}"
+    assert_eq "pgrep $_spell · 响应 $_out/$_rc：退出码原样保留" "$SEL_RC" "$_rc"
+    assert_eq "pgrep $_spell · 响应 $_out/$_rc：stdout 原样保留" "$SEL_OUT" "$_out"
+    assert_has "pgrep $_spell · 响应 $_out/$_rc：argv 逐字节到后端" "$(tail -n 1 "$STUB_LOG")" "STUB argc=${#_cargs[@]} argv=$_spell tool=pgrep"
+    assert_has "pgrep $_spell · 响应 $_out/$_rc：日志行 act=pass" "$(tail -n 1 "$GATE_LOG")" "act=pass · tool=pgrep"
+    unset _cargs
+  done
+done
+assert_eq "放行调用不建长保留文件（pass 不保留）" "$([ -e "$GATE_LOG.forensics" ] && echo present || echo absent)" "absent"
+STUB_OUT=""; STUB_ERR=""; STUB_EXIT=0
+
+hdr "P167/P321 · 隐式/部分匹配与额外谓词都不能放宽（判据是整个 argv）"
+GATE_LOG="$LOGD/sel-narrow.log"; STUB_LOG="$LOGD/stub-sel-narrow.log"; rm -f "$GATE_LOG" "$STUB_LOG"
+refuse_sel "pgrep -g 0（隐式组）" pgrep -g 0
+refuse_sel "pgrep -P 0（隐式父）" pgrep -P 0
+refuse_sel "pgrep -g 1,2（列表）" pgrep -g 1,2
+refuse_sel "pgrep -P -1（负数）" pgrep -P -1
+refuse_sel "pgrep -g（缺值）" pgrep -g
+refuse_sel "pgrep -P ''（空值）" pgrep -P ""
+refuse_sel "pgrep -P 12 -v（额外谓词）" pgrep -P 12 -v
+refuse_sel "pgrep -v -g 12（反转）" pgrep -v -g 12
+refuse_sel "pgrep -g 12 sleep（名字 + ID）" pgrep -g 12 sleep
+refuse_sel "pgrep -P 12 -u 1000（再选用户）" pgrep -P 12 -u 1000
+refuse_sel "pgrep --parent=12（未支持的拼写）" pgrep --parent=12
+refuse_sel "pgrep -fc（缺模式）" pgrep -fc
+refuse_sel "pgrep -fc ''（空模式）" pgrep -fc ""
+refuse_sel "pgrep -fc -sleep（模式像旗标）" pgrep -fc -sleep
+refuse_sel "pgrep -fc sleep -l（计数 + 列表）" pgrep -fc sleep -l
+refuse_sel "pgrep -fcl sleep（粘连旗标）" pgrep -fcl sleep
+refuse_sel "pgrep --teamsmith-allow-pattern sleep（带内 token）" pgrep --teamsmith-allow-pattern sleep
+refuse_sel "pidof --help sleep（多参数）" pidof --help sleep
+assert_eq "十八种窄化形态都没有落到同名后端上" "$(cat "$STUB_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+hdr "P167/P321 · 只读信息词走各自的同名真身，旧 pkill pin 不接线"
+PK_WITNESS="$TMP/pkill-witness"; cp "$STUB" "$PK_WITNESS"; chmod +x "$PK_WITNESS"
+PK_LOG="$LOGD/pkill-witness.log"; rm -f "$PK_LOG"
+GATE_LOG="$LOGD/sel-info.log"; STUB_LOG="$LOGD/stub-sel-info.log"; rm -f "$GATE_LOG" "$STUB_LOG"
+STUB_EXIT=5
+for _t in pgrep pidof; do
+  for _tok in --help -h -V --version; do
+    SEL_OUT="$(env PATH="$GATE_DIR:$SEL_SHIM:$PATH" TEAM_SIGNAL_REAL="$PK_WITNESS" TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" \
+        STUB_LOG="$STUB_LOG" STUB_EXIT=5 "$GATE_DIR/$_t" "$_tok" 2>"$TMP/sel.err")"; SEL_RC=$?
+    assert_eq "$_t $_tok 的退出码来自同名真身（5）" "$SEL_RC" "5"
+    assert_has "$_t $_tok 的原样 argv 落到同名真身" "$(tail -n 1 "$STUB_LOG")" "STUB argc=1 argv=$_tok tool=$_t"
+    assert_has "$_t $_tok 的日志行记 act=pass · tool=$_t" "$(tail -n 1 "$GATE_LOG")" "act=pass · tool=$_t"
+  done
+done
+assert_eq "旧 pkill pin 一次都没被调用（不把诊断路由成信号工具）" "$(cat "$PK_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
+sel_run pgrep -P "$SEL_PARENT"
+assert_eq "同一 pin 下 pgrep -P <PARENT> 仍然走自己的同名真身" "$SEL_RC" "5"
+assert_has "pin 下 pgrep -P 的 argv 落到 pgrep 桩" "$(tail -n 1 "$STUB_LOG")" "STUB argc=2 argv=-P $SEL_PARENT tool=pgrep"
+assert_eq "pin 下 pkill 桩仍是零调用" "$(cat "$PK_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+hdr "P167/P321 · 拒绝不看 pin，也不看继承的环境"
+GATE_LOG="$LOGD/sel-grant.log"; STUB_LOG="$LOGD/stub-sel-grant.log"; rm -f "$GATE_LOG" "$STUB_LOG"
+for _leg in direct child; do
+  for _form in "pgrep -f $MARKER" "pidof sleep"; do
+    read -r -a _fargs <<< "$_form"
+    if [ "$_leg" = "direct" ]; then
+      SEL_OUT="$(env PATH="$GATE_DIR:$SEL_SHIM:$PATH" TEAM_SIGNAL_REAL="$TMP/no-such-real" TEAM_ALLOW_PATTERN_KILL=1 \
+          TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" STUB_LOG="$STUB_LOG" "$GATE_DIR/${_fargs[0]}" "${_fargs[@]:1}" 2>/dev/null)"; SEL_RC=$?
+    else
+      SEL_OUT="$(env PATH="$GATE_DIR:$SEL_SHIM:$PATH" TEAM_SIGNAL_REAL="$TMP/no-such-real" TEAM_ALLOW_PATTERN_KILL=1 \
+          TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" STUB_LOG="$STUB_LOG" \
+          bash -c '"$@"' _ "$GATE_DIR/${_fargs[0]}" "${_fargs[@]:1}" 2>/dev/null)"; SEL_RC=$?
+    fi
+    assert_eq "$_leg 腿的 $_form 拒绝仍退出 64" "$SEL_RC" "64"
+    assert_eq "$_leg 腿的 $_form 拒绝 stdout 留空" "$SEL_OUT" ""
+    unset _fargs
+  done
+done
+assert_eq "不可用 pin + 继承授权下同名后端零调用" "$(cat "$STUB_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_eq "那份日志里没有 pass/refused 之外的动作" "$(grep -cv 'act=\(pass\|refused\)' "$GATE_LOG" || true)" "0"
+
+hdr "P167/P321 · 被拒的替换不交出 pid"
+GATE_LOG="$LOGD/sel-subst.log"; STUB_LOG="$LOGD/stub-sel-subst.log"; rm -f "$GATE_LOG" "$STUB_LOG"
+KILL_LOG="$LOGD/subst-kill.log"; rm -f "$KILL_LOG"
+env PATH="$GATE_DIR:$SEL_SHIM:/usr/bin:/bin" TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" STUB_LOG="$STUB_LOG" \
+    STUB_OUT=424242 KILL_LOG="$KILL_LOG" \
+    bash -c 'kill() { printf "%s\n" "$#" >> "$KILL_LOG"; }
+             kill $(pgrep -f "$1")
+             kill $(pidof sleep)' _ "$MARKER" >/dev/null 2>&1
+assert_eq "kill \$(pgrep -f …) 与 kill \$(pidof sleep) 都给记录 kill 送 0 个参数" \
+  "$(paste -sd, "$KILL_LOG" 2>/dev/null)" "0,0"
+assert_eq "替换里的两个选择器都没有落到同名后端上" "$(cat "$STUB_LOG" 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_eq "两次被拒的替换各自留一行 refused" "$(grep -c 'act=refused' "$GATE_LOG")" "2"
+STUB_OUT=""
+
+hdr "P167/P321 · 选择器的拒绝走同一份记录，也熬得过主日志轮转"
+L="$LOGD/sel-rot.log"; rm -f "$L" "$L.forensics"
+GATE_LOG="$L"; STUB_LOG="$LOGD/stub-sel-rot.log"; rm -f "$STUB_LOG"
+refuse_sel "轮转前的 pgrep 拒绝" pgrep -f "$MARKER"
+# 代表调用①（pgrep）：诊断插值的文案与记录行模板 —— 28 个不同输入共用这两列，只在这里验
+assert_has "代表调用（pgrep）的理由点名工具与完整 argv" "$SEL_ERR" "pgrep -f $MARKER"
+assert_has "代表调用（pgrep）的日志行记 act=refused · tool=pgrep" "$(tail -n 1 "$L")" "act=refused · tool=pgrep"
+refuse_sel "轮转前的 pidof 拒绝" pidof sleep
+# 代表调用②（pidof）：同一模板的第二种 tool= 插值
+assert_has "代表调用（pidof）的理由点名工具与完整 argv" "$SEL_ERR" "pidof sleep"
+assert_has "代表调用（pidof）的日志行记 act=refused · tool=pidof" "$(tail -n 1 "$L")" "act=refused · tool=pidof"
+assert_eq "两条拒绝行逐字节进了 .forensics" "$(cmp -s "$L.forensics" <(sed -n '1,2p' "$L") && echo same || echo differ)" "same"
+awk 'BEGIN { for (i = 0; i < 2099; i++) printf "2026-01-01T00:00:00+00:00 · act=pass · tool=pgrep · argv=--help · pid=1 ppid=1 cwd=/tmp\n" }' >> "$L"
+STUB_EXIT=0; sel_run pgrep --help
+assert_has "轮转后主日志首行是累积的 rotation 标记" "$(sed -n 1p "$L")" " · rotation · dropped=1102"
+assert_eq "标记 + 1000 条调用行" "$(gate_lines "$L")" "1001"
+assert_has "pgrep 的拒绝行仍在 .forensics 里（逐字节）" "$(cat "$L.forensics")" "act=refused · tool=pgrep · argv=-f $MARKER"
+assert_has "pidof 的拒绝行仍在 .forensics 里（逐字节）" "$(cat "$L.forensics")" "act=refused · tool=pidof · argv=sleep"
+
+hdr "P167/P321 · 选择器的拒绝：保留写失败可见、不改判定、不挂住"
+L="$LOGD/sel-fail.log"; rm -f "$L"; rm -rf "$L.forensics"; mkdir -p "$L.forensics"
+GATE_LOG="$L"; sel_run pgrep -f "$MARKER"
+assert_eq "保留路径是目录时选择器拒绝仍退出 64" "$SEL_RC" "64"
+assert_has "诊断点名保留路径（✗）" "$SEL_ERR" "✗"
+assert_has "诊断点名 .forensics 路径" "$SEL_ERR" "$L.forensics"
+assert_has "本行带 retention=failed" "$(cat "$L")" "retention=failed"
+assert_has "本行仍带 act=refused · tool=pgrep" "$(cat "$L")" "act=refused · tool=pgrep"
+rm -rf "$L.forensics"
+
+hdr "P167/P321 · 闸门之外的只读工具照旧直通，不记行"
+GATE_LOG="$LOGD/sel-other.log"; STUB_LOG="$LOGD/stub-sel-other.log"; rm -f "$GATE_LOG" "$STUB_LOG"
+STUB_OUT="ps-out"; STUB_EXIT=1
+OUT="$(env PATH="$SEL_SHIM:/usr/bin:/bin" TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" STUB_LOG="$STUB_LOG" \
+      STUB_OUT="ps-out" STUB_EXIT=1 ps -p 12 2>/dev/null)"; RC=$?
+assert_eq "ps -p 12 的退出码来自同名替身（1）" "$RC" "1"
+assert_eq "ps -p 12 的 stdout 原样（闸门不拦）" "$OUT" "ps-out"
+OUT="$(env PATH="$SEL_SHIM:/usr/bin:/bin" TEAM_SIGNAL_CALLS_LOG="$GATE_LOG" STUB_LOG="$STUB_LOG" \
+      STUB_OUT="ps-out" STUB_EXIT=0 fuser /tmp/p321-file 2>/dev/null)"; RC=$?
+assert_eq "fuser 的退出码来自同名替身（0）" "$RC" "0"
+assert_eq "两次只读工具调用没有给信号闸门记行" "$(gate_lines "$GATE_LOG" 2>/dev/null || echo 0)" "0"
+assert_has "ps 的 argv 原样落到同名替身" "$(cat "$STUB_LOG")" "STUB argc=2 argv=-p 12 tool=ps"
+STUB_OUT=""; STUB_EXIT=0
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 if [ "$BREAK" = "pass" ]; then

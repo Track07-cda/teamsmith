@@ -1,1 +1,10 @@
-signal-gate
+#!/usr/bin/env bash
+# teamsmith · 信号闸门的入口之一（pkill / killall / pgrep / pidof 共用一个实现）
+#
+# 为什么是普通文件而不是软链：npm 的 tarball 不携带 120000 软链 —— 0.3.0 的包里这四个名字全部缺失，
+# 安装后 PATH 解析到 /usr/bin 的系统命令（docs/team/reviews/release-0.3.0.md）。本文件只做一件事：
+# 把自己的**名字**和调用者的原始 argv 原样交给同目录的共享实现 signal-gate —— 判定与记录只有一份，
+# 不是四份闸门。
+set -u
+_self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+exec "$(dirname "$_self")/signal-gate" "$(basename "$0")" "$@"

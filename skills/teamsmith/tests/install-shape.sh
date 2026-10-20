@@ -484,7 +484,77 @@ chk_prefix_install() { # <tree>：npm 私有 prefix 安装后与 bash 入口一�
   if ! diff <("$prefix/bin/team" help 2>&1) <(bash "$t/skills/teamsmith/scripts/team" help 2>&1) >/dev/null; then
     printf 'prefix 的 help 与 bash 入口不一致\n'; return 1
   fi
-  printf '私有 prefix 安装后 version/help 与 bash 入口一致（%s/bin/team）\n' "$prefix"
+  # P321：安装物还得带上信号闸门的四个入口。npm 的 tarball **不携带 120000 软链** —— 0.3.0 的包里
+  # pkill/killall/pgrep/pidof 四个名字全部缺失，装完全部落到 /usr/bin（docs/team/reviews/release-0.3.0.md）。
+  # 判据不看名字在不在：在**安装物**的 gated PATH 里用同名 argv 记录桩验拒绝/放行（不发任何信号）。
+  chk_prefix_signal_entries "$prefix" || return 1
+  printf '私有 prefix 安装后 version/help 与 bash 入口一致，四个信号入口在且判定生效（%s/bin/team）\n' "$prefix"
+  return 0
+}
+
+chk_prefix_signal_entries() { # <prefix>：安装物的 pkill/killall/pgrep/pidof 在、解析到安装目录、判定生效
+  local prefix="$1" shim backends stub wlog log t form out rc line fargs missing=""
+  shim="$prefix/lib/node_modules/teamsmith/skills/teamsmith/scripts/shim"
+  backends="$tmp/prefix-signal-backends"; rm -rf "$backends"; mkdir -p "$backends"
+  stub="$backends/.witness"
+  cat > "$stub" <<'WITNESS'
+#!/usr/bin/env bash
+printf 'WITNESS tool=%s argc=%s argv=%s\n' "$(basename "$0")" "$#" "$*" >> "${WITNESS_LOG:?}"
+[ -n "${WITNESS_OUT:-}" ] && printf '%s\n' "$WITNESS_OUT"
+[ -n "${WITNESS_ERR:-}" ] && printf '%s\n' "$WITNESS_ERR" >&2
+exit "${WITNESS_EXIT:-0}"
+WITNESS
+  chmod +x "$stub"
+  for t in pkill killall pgrep pidof; do ln -sf .witness "$backends/$t"; done
+  for t in pkill killall pgrep pidof; do
+    [ -f "$shim/$t" ] && [ -x "$shim/$t" ] || missing="${missing:+$missing }$t"
+  done
+  if [ -n "$missing" ]; then
+    printf '安装包没有携带信号闸门入口（npm 丢 120000 软链的历史形状）：%s\n' "$missing"; return 1
+  fi
+  for t in pkill killall pgrep pidof; do
+    line="$(PATH="$shim:$backends:/usr/bin:/bin" command -v "$t" 2>/dev/null)"
+    if [ "$line" != "$shim/$t" ]; then
+      printf 'gated PATH 里 %s 解析到 [%s]，不是安装包的入口\n' "$t" "$line"; return 1
+    fi
+  done
+  log="$tmp/prefix-signal-calls.log"; rm -f "$log" "$log.forensics"
+  wlog="$tmp/prefix-signal-witness.log"; rm -f "$wlog"
+  # 拒绝：exit 64、stdout 留空、同名后端一次也没被执行
+  for form in "pkill -f marker" "killall sleep" "pgrep -f marker" "pgrep sleep" "pidof sleep"; do
+    read -r -a fargs <<< "$form"
+    out="$(env -u TEAM_SIGNAL_REAL PATH="$shim:$backends:/usr/bin:/bin" TEAM_SIGNAL_CALLS_LOG="$log" \
+          WITNESS_LOG="$wlog" "$shim/${fargs[0]}" "${fargs[@]:1}" 2>/dev/null)"; rc=$?
+    if [ "$rc" != "64" ] || [ -n "$out" ]; then
+      printf '安装包入口 [%s] 应拒绝（64 + 空 stdout），实际 rc=%s stdout=[%s]\n' "$form" "$rc" "$out"; return 1
+    fi
+    unset fargs
+  done
+  if [ -s "$wlog" ]; then
+    printf '拒绝路径执行了同名后端：%s\n' "$(head -2 "$wlog" | tr '\n' ' ')"; return 1
+  fi
+  # 放行：--help 与显式 -P 的原样 argv / stdout / stderr / 非零状态都来自同名后端
+  out="$(env -u TEAM_SIGNAL_REAL PATH="$shim:$backends:/usr/bin:/bin" TEAM_SIGNAL_CALLS_LOG="$log" \
+        WITNESS_LOG="$wlog" WITNESS_EXIT=3 WITNESS_OUT=sel-out WITNESS_ERR=sel-err \
+        "$shim/pgrep" --help 2>"$tmp/prefix-signal.err")"; rc=$?
+  if [ "$rc" != "3" ] || [ "$out" != "sel-out" ] || [ "$(cat "$tmp/prefix-signal.err")" != "sel-err" ]; then
+    printf 'pgrep --help 没有原样透传：rc=%s stdout=[%s] stderr=[%s]\n' "$rc" "$out" "$(cat "$tmp/prefix-signal.err")"
+    return 1
+  fi
+  grep -qF 'WITNESS tool=pgrep argc=1 argv=--help' "$wlog" \
+    || { printf 'pgrep --help 的 argv 没落到同名后端：[%s]\n' "$(cat "$wlog")"; return 1; }
+  out="$(env -u TEAM_SIGNAL_REAL PATH="$shim:$backends:/usr/bin:/bin" TEAM_SIGNAL_CALLS_LOG="$log" \
+        WITNESS_LOG="$wlog" WITNESS_EXIT=0 WITNESS_OUT=42 \
+        "$shim/pgrep" -P 12 2>/dev/null)"; rc=$?
+  if [ "$rc" != "0" ] || [ "$out" != "42" ]; then
+    printf 'pgrep -P 12 没有原样透传：rc=%s stdout=[%s]\n' "$rc" "$out"; return 1
+  fi
+  grep -qF 'WITNESS tool=pgrep argc=2 argv=-P 12' "$wlog" \
+    || { printf 'pgrep -P 12 的 argv 没落到 pgrep 后端：[%s]\n' "$(cat "$wlog")"; return 1; }
+  grep -qF 'act=pass · tool=pgrep' "$log" \
+    || { printf '安装包入口的日志没有 act=pass · tool=pgrep：[%s]\n' "$(cat "$log")"; return 1; }
+  grep -qF 'act=refused · tool=pidof' "$log" \
+    || { printf '安装包入口的拒绝日志没有 tool=pidof：[%s]\n' "$(cat "$log")"; return 1; }
   return 0
 }
 
@@ -694,7 +764,7 @@ if want pack; then
   else
     check_holds "声明面：一个 bin 键（team → bin/team.mjs）+ files 带 bin/" chk_pack_manifest "$tree"
     check_holds "打包清单：bin/team.mjs + 两个 SKILL.md + install.sh，不含账本" chk_pack_walk "$tree"
-    check_holds "私有 prefix 安装：version/help 与 bash 入口一致" chk_prefix_install "$tree"
+    check_holds "私有 prefix 安装：version/help 与四个信号入口都来自安装物" chk_prefix_install "$tree"
   fi
 fi
 
@@ -883,6 +953,14 @@ PYPACKF
     ft="$tmp/f-pack2"; scratch_tree "$ft"; rm -f "$ft/bin/team.mjs"
     check_holds "⑤b 对照：真实树打包清单齐全" chk_pack_walk "$tree"
     check_breaks "⑤b 翻转：bin 目标文件不在（package 不完整）" chk_pack_walk "$ft"
+    # ⑥ P321：把四个信号入口改回 0.3.0 的软链形状 —— npm 的 tarball 丢掉它们，安装判据必须红
+    ft="$tmp/f-pack-symlink"; scratch_tree "$ft"
+    for _fs in pkill killall pgrep pidof; do
+      rm -f "$ft/skills/teamsmith/scripts/shim/$_fs"
+      ln -s signal-gate "$ft/skills/teamsmith/scripts/shim/$_fs"
+    done
+    check_holds "⑥ 对照：真实树的私有 prefix 安装带四个可执行信号入口" chk_prefix_install "$tree"
+    check_breaks "⑥ 翻转：入口退回 0.3.0 的软链形状（npm 的 tarball 不携带软链）" chk_prefix_install "$ft"
   fi
   # ⑦ P59：安装步的信任提示行 —— 去掉它 → 判据红；让它在 --no-skills 下出现 → 判据红
   ft="$tmp/f-trustline"; scratch_tree "$ft"
