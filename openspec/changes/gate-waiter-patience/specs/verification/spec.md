@@ -31,9 +31,11 @@ gone, or a silence of at least `TEAM_SMOKE_LOCK_WAIT` — the cap SHALL be `TEAM
 before, so a stalled holder is waited out for at most `TEAM_SMOKE_LOCK_WAIT`. The waiter SHALL re-evaluate this on
 every round of its poll and SHALL print both bounds together with the heartbeat's state; when the cap is exceeded
 the failure SHALL name the holder and say whether the heartbeat had been silent or had never been published.
-`expected` and `bound` SHALL stay in the record and be printed, and they MUST NOT decide patience. A moving
-heartbeat MUST NOT extend the wait past `4 × TEAM_SMOKE_LOCK_WAIT`, so no cap can make a waiter wait without a
-bound.
+Whenever the cap is exceeded, the failure text SHALL also say in one line which kind of run holds the lock (`top`
+or `nested`), which seat and worktree it belongs to, how long it has run, and its `expected` bound — so that a
+nested fixture run reads as a nesting artefact rather than as a broken gate. `expected` and `bound` SHALL stay in
+the record and be printed, and they MUST NOT decide patience. A moving heartbeat MUST NOT extend the wait past
+`4 × TEAM_SMOKE_LOCK_WAIT`, so no cap can make a waiter wait without a bound.
 
 #### Scenario: A long queue does not consume the run budget
 

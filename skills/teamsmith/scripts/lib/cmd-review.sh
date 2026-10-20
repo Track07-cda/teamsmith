@@ -1034,6 +1034,7 @@ $(printf '%s\n' "$ignored_list" | head -5)
   # G1（P26）：门禁锁的排队阶段与记账。queue_state: none（门禁没跑）/ held（祖先持有）/ queued（本
   # 次自己排队）/ noqueue（没有 flock，降级）/ cap（排队超上限，门禁没跑）。
   local queue_state="none" queue_marker="" queued_elapsed="" queue_holder="" used_lock="" lock_cap=""
+  local lock_note=""
   if [ "$no_gates" = "1" ]; then
     verdict="SKIPPED"; gates_marker="none"
     gates_out="（--no-gates：PM 选择人工看 diff；**没有跑过任何门禁**，本记录不是 PASS 证据）"
@@ -1092,10 +1093,12 @@ $(printf '%s\n' "$ignored_list" | head -5)
     local lock_comp; lock_comp="$(gate_lock_companion_path "$lock")"
     local lock_dev_ino="" lock_cap_hit=0 lock_broken="" gate_rc=0
     local queue_started gate_end marker_epoch
-    # P281：排队上限不再是「一律 W」——持有者公布了 expected 就按
-    #   cap = clamp(remaining + 60s, W, 4×W)   （remaining = expected − (now − started)）
-    # 算，并打印算式与三个数；记录里没有 expected（旧写入者 / 读不到）→ 退回 W（一字不改）。
-    local lock_wait cap_remaining cap_expected cap_started
+    # P281：排队上限不再是「一律 W」——它跟着**持有者的心跳**（change: gate-waiter-patience · P338）：
+    #   心跳还在动（任一活登记公布的心跳文件 < W 秒前更新）→ 4×W（硬顶）；
+    #   心跳停了 / 没有可用心跳（旧记录、`heartbeat=-`、文件不在）→ W（与今天一字不改）。
+    # 每轮**现算**（不缓存排队时的读数）：心跳停了，上限当轮就落回 W。
+    # `expected`/`bound` 仍写在记录里、仍被点名，但**不再决定耐心**（P316 之后没有生产者）。
+    local lock_wait lock_pat lock_silent
     lock_cap="${TEAM_SMOKE_LOCK_WAIT:-1800}"
     case "$lock_cap" in ''|*[!0-9]*) lock_cap=1800 ;; esac
     lock_wait="$lock_cap"
@@ -1139,15 +1142,17 @@ $(printf '%s\n' "$ignored_list" | head -5)
           fi
           lock_waited_id="$lock_probe_id"
         fi
-        # 上限按持有者公布的 expected 算（P281 的算式与文案一字不改）；拿到锁的那一轮也要重算过
-        IFS=$'\t' read -r lock_cap cap_remaining cap_expected cap_started \
-          < <(gate_lock_cap_pair "$lock" "$lock_wait")
+        # 耐心跟着持有者的心跳（change: gate-waiter-patience · P338）：心跳还在动 → 4W，停了 / 没有
+        # 可用心跳（旧记录、`heartbeat=-`、文件不在）→ W（与今天一字不改）。**每轮现算**，不缓存。
+        IFS=$'\t' read -r lock_cap lock_pat lock_silent _ \
+          < <(gate_lock_patience_pair "$lock" "$lock_wait")
         case "$lock_cap" in ''|*[!0-9]*) lock_cap="$lock_wait" ;; esac
+        lock_note="$(gate_lock_patience_note "$lock_pat" "$lock_silent")"
         if [ "$lock_reported" = "0" ]; then
           lock_reported=1
           lock_role="$([ "$lock_probe" = "1" ] && printf '发布路径（兼容声明）' || printf '伴生锁（运行互斥）')"
           queue_holder="$(gate_lock_describe_pair "$lock")"
-          team_info "门禁锁正被持有（${queue_holder}）；排队，最多等 ${lock_cap}s（算式：remaining=${cap_remaining}s + 60s → cap=${lock_cap}s，下限 TEAM_SMOKE_LOCK_WAIT=${lock_wait}s，上限 4×=$(( lock_wait * 4 ))s；TEAM_SMOKE_LOCK_WAIT 可调）"
+          team_info "门禁锁正被持有（${queue_holder}）；排队，最多等 ${lock_cap}s（${lock_note}；下限 TEAM_SMOKE_LOCK_WAIT=${lock_wait}s，上限 4×=$(( lock_wait * 4 ))s；TEAM_SMOKE_LOCK_WAIT 可调）"
         fi
         if [ "$lock_probe" = "1" ]; then lock_waited_path="$lock"; else lock_waited_path="$lock_comp"; fi
         [ -n "$lock_waited_id" ] || lock_waited_id="$(gate_lock_path_identity "$lock_waited_path" 2>/dev/null || true)"
@@ -1252,11 +1257,11 @@ $(printf '%s\n' "$ignored_list" | head -5)
       queued_elapsed=$(( gate_end - queue_started ))
       [ "$queued_elapsed" -lt 0 ] && queued_elapsed=0
       queue_holder="$(gate_lock_describe_pair "$lock")"   # 撞上限时**重读**：等的这段时间持有者可能换了
-      gates_out="（门禁锁排队超过上限 ${lock_cap}s：**门禁没有运行**。持锁者：${queue_holder}。这不是对代码的判定 —— 等持锁者结束，或抬 TEAM_SMOKE_LOCK_WAIT 后重跑。）"
+      gates_out="（门禁锁排队超过上限 ${lock_cap}s：**门禁没有运行**。持锁者：${queue_holder}。${lock_note}这不是对代码的判定 —— 等持锁者结束，或抬 TEAM_SMOKE_LOCK_WAIT 后重跑。）"
       gate_elapsed=""
       used_timeout=0
       used_lock="$lock"
-      team_err "门禁锁排队超过上限 ${lock_cap}s → 门禁没有运行（持锁者：${queue_holder}）"
+      team_err "门禁锁排队超过上限 ${lock_cap}s → 门禁没有运行（持锁者：${queue_holder}；${lock_note}）"
     fi
     grace="${TEAM_REVIEW_TIMEOUT_GRACE:-2}"
     case "$grace" in ''|*[!0-9]*) grace=2 ;; esac

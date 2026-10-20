@@ -167,7 +167,8 @@ perf_lock_or_continue() {
   local comp; comp="$(perf_lock_companion "$lock")"
   mkdir -p "$(dirname "$lock")" 2>/dev/null || true
   : >>"$lock" 2>/dev/null || { note "锁文件 $lock 建不了 → 不串行"; return 0; }
-  # 有界轮询取两把锁（每轮重算上限：持有者公布的 expected 优先，缺则 wait_s）——
+  # 有界轮询取两把锁（每轮重算上限：跟着持有者心跳 —— 心跳在动则 4×wait_s，否则 wait_s；性能锁的
+  # 持有者记录不公布心跳，所以这里实际总是 wait_s）——
   # 上限到点留下可读的一句（性能套件的退出码是 0/3：读到了 / 建立失败或拿不到锁 = 没结论（P316 起没有判定码 2/4））。
   local rc=0 t0 queued=0 cap wait_used=0
   t0="$(date +%s)"
@@ -177,7 +178,7 @@ perf_lock_or_continue() {
     if [ "$rc" = "2" ]; then
       note "锁文件 $lock 建不了 → 不串行"; return 0
     fi
-    IFS=$'\t' read -r cap _ _ _ < <(gate_lock_cap_pair "$lock" "$wait_s")
+    IFS=$'\t' read -r cap _ _ _ < <(gate_lock_patience_pair "$lock" "$wait_s")
     case "$cap" in ''|*[!0-9]*) cap="$wait_s" ;; esac
     if [ "$queued" = "0" ]; then
       queued=1

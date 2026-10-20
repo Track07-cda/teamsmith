@@ -534,16 +534,18 @@ if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
     else
       SMOKE_LOCK_WAIT_PATH="$SMOKE_LOCK_COMPANION"; SMOKE_LOCK_WAIT_ROLE="伴生锁（运行互斥）"
     fi
-    # P281：上限按持有者公布的 expected 算（D3）：cap = clamp(remaining + 60, W, 4W)；记录里没有
-    # expected（旧写入者 / 读不到）→ 退回今天的 W（一字不改）。等待者必须打印算式与三个数。
-    IFS=$'\t' read -r SMOKE_LOCK_CAP SMOKE_LOCK_REMAINING SMOKE_LOCK_EXPECTED _ \
-      < <(gate_lock_cap_pair "$SMOKE_LOCK" "$SMOKE_LOCK_WAIT")
+    # 等待的耐心跟着持有者的心跳（change: gate-waiter-patience · P338）：心跳还在动 → 上限 4W；心跳
+    # 停了 / 没有可用心跳（旧记录、`heartbeat=-`、文件不在）→ 上限仍是 W（与今天一字不改）。
+    # **每轮从这里现算**（排队本来就是 1 s 一轮）：心跳停了，上限当轮就落回 W —— 不缓存排队时的读数。
+    IFS=$'\t' read -r SMOKE_LOCK_CAP SMOKE_LOCK_PAT SMOKE_LOCK_SILENT SMOKE_LOCK_HB \
+      < <(gate_lock_patience_pair "$SMOKE_LOCK" "$SMOKE_LOCK_WAIT")
     case "$SMOKE_LOCK_CAP" in ''|*[!0-9]*) SMOKE_LOCK_CAP="$SMOKE_LOCK_WAIT" ;; esac
     if [ "$SMOKE_LOCK_QUEUED" = "0" ]; then
       SMOKE_LOCK_QUEUED=1
-      printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（算式：remaining=%ss + 60s → cap=%ss，下限 TEAM_SMOKE_LOCK_WAIT=%ss，上限 4×=%ss；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
+      printf '另一套全量 smoke 正在跑（%s）；本套排队，最多等 %ss（%s；下限 TEAM_SMOKE_LOCK_WAIT=%ss，上限 4×=%ss；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
         "$(gate_lock_describe_pair "$SMOKE_LOCK")" "$SMOKE_LOCK_CAP" \
-        "$SMOKE_LOCK_REMAINING" "$SMOKE_LOCK_CAP" "$SMOKE_LOCK_WAIT" "$(( SMOKE_LOCK_WAIT * 4 ))"
+        "$(gate_lock_patience_note "$SMOKE_LOCK_PAT" "$SMOKE_LOCK_SILENT")" \
+        "$SMOKE_LOCK_WAIT" "$(( SMOKE_LOCK_WAIT * 4 ))"
     fi
     # 换了一把等在别的路径上：重新记起点（身份在下一轮开头判）
     if [ "$SMOKE_LOCK_WAIT_PATH" != "$SMOKE_LOCK_WAITED_PATH" ]; then
@@ -552,9 +554,12 @@ if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
     fi
     SMOKE_LOCK_ELAPSED=$(( $(date +%s) - SMOKE_LOCK_T0 ))
     if [ "$SMOKE_LOCK_ELAPSED" -ge "$SMOKE_LOCK_CAP" ]; then
-      # P66：没有运行 = FAIL 的语义一字不改（一行点名持有者 + 「本套没有运行」+ exit 2）
-      printf '排队超限：等满 %ss 仍拿不到门禁锁 %s（持锁者：%s）→ 本套**没有运行**（这不是对代码的判定；等持锁者结束，或抬高 TEAM_SMOKE_LOCK_WAIT 后重跑；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
-        "$SMOKE_LOCK_ELAPSED" "$SMOKE_LOCK_WAIT_PATH" "$(gate_lock_describe_pair "$SMOKE_LOCK")" >&2
+      # P66：没有运行 = FAIL 的语义一字不改（一行点名持有者 + 「本套没有运行」+ exit 2）；
+      # 只多一句**为什么**耐心就是这个上限（心跳停了 / 没有可用心跳 / 到了硬顶）
+      printf '排队超限：等满 %ss（上限 %ss）仍拿不到门禁锁 %s（持锁者：%s；%s）→ 本套**没有运行**（这不是对代码的判定；等持锁者结束，或抬高 TEAM_SMOKE_LOCK_WAIT 后重跑；TEAM_SMOKE_NO_LOCK=1 可跳过排队）\n' \
+        "$SMOKE_LOCK_ELAPSED" "$SMOKE_LOCK_CAP" "$SMOKE_LOCK_WAIT_PATH" \
+        "$(gate_lock_describe_pair "$SMOKE_LOCK")" \
+        "$(gate_lock_patience_note "$SMOKE_LOCK_PAT" "$SMOKE_LOCK_SILENT")" >&2
       exit 2
     fi
     sleep 1
@@ -564,7 +569,7 @@ if [ "$SMOKE_LOCK_NEEDS_QUEUE" = "1" ]; then
     SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
     SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
     IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
-      < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316 之后没有生产者 → expected=0，cap 退回 W
+      < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # 诊断字段：P316 之后仍是 0，等待者的耐心不看它（只看心跳，见 gate_lock_patience）
     SMOKE_LOCK_STARTED="$(date +%s)"
     # 记录只在**持有者**手里写（P281 的 F4：不许覆写另一个活着进程的记录）。真被拒（同一把锁上有
     # 另一个活着的持有者记录）本身就是「互斥断了」的形状 —— 交给下面的入场检查点名并停跑。
@@ -642,7 +647,7 @@ if [ "$SMOKE_LOCK_HELD" = "1" ] || [ "$SMOKE_LOCK_NO_LOCK" = "1" ]; then
   SMOKE_LOCK_SEAT="$(gate_lock_seat_of_dir "$PWD")"
   SMOKE_LOCK_WT="$(gate_lock_worktree_of_dir "$PWD")"
   IFS=$'\t' read -r SMOKE_LOCK_EXP SMOKE_LOCK_BND SMOKE_LOCK_SECS \
-    < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # P316 之后没有生产者 → expected=0，cap 退回 W
+    < <(gate_lock_expected "${BASH_SOURCE[0]:-$0}" /dev/null)   # 诊断字段：P316 之后仍是 0，等待者的耐心不看它（只看心跳，见 gate_lock_patience）
   SMOKE_LOCK_STARTED="$(date +%s)"
   SMOKE_LOCK_KIND="${SMOKE_LOCK_KIND:-top}"
   # 嵌套运行的期限对齐到**生它的那一段**。返修轮次 1 · F1：祖辈的 deadline 从**祖辈记录里公布的
@@ -16732,13 +16737,88 @@ p281_clean
 #    它守的「嵌套运行不排队、只登记」「登记随退出消失」「锁可再取」三条行为由 §34④ 的祖辈持锁证明、
 #    §34b⑨ 的席位检查与 §34c/§34d 的锁身份检查继续守。
 # ── ⑨ P281 红侧 ③：单层运行的排队语义不变 + 席位推导只有一份──────────────
-# 既有 §34 ①–⑥ / §34b ①–⑤ 的判定一条没改；这里只加**新增对照**：旧写入者（记录里没有 expected）
-# 仍按 TEAM_SMOKE_LOCK_WAIT 判（上限算式今天剩下的唯一一条**真**行为）。
+# 既有 §34 ①–⑥ / §34b ①–⑤ 的判定一条没改；这里只加**新增对照**：旧写入者（记录里既没有心跳字段、
+# 也没有 expected）仍按 TEAM_SMOKE_LOCK_WAIT 判 —— 新规则里「旧记录行为逐字不变」的那一条。
 : > "$P281_LOCK"; rm -rf "$P281_LOCK.runs"
 printf '%s pid=%s cmd=legacy-holder\n' "$(date -Is)" "$$" > "$P281_LOCK.holder"
-assert_eq "34b⑨ 旧持有者（没有 expected）→ 上限仍是 TEAM_SMOKE_LOCK_WAIT" \
-  "$(gate_lock_cap "$P281_LOCK" 1800 | cut -f1)" "1800"
+assert_eq "34b⑨ 旧持有者（没有心跳字段，也没有 expected）→ 上限仍是 TEAM_SMOKE_LOCK_WAIT" \
+  "$(gate_lock_patience "$P281_LOCK" 1800 | cut -f1)" "1800"
 rm -f "$P281_LOCK.holder" 2>/dev/null || true
+
+# ── ⑨b change: gate-waiter-patience（P338）：心跳耐心的**分支表**（钉住时刻，不测秒）──────────
+# 判据全是**喂值**：`gate_lock_patience` 是纯函数 `(记录内容, 现在时刻, W) → ceiling/state/silent`；
+# 测试子 shell 里局部覆写 `gate_lock_now` 把时刻钉住，心跳 mtime 用**绝对值**写（`touch -d @<epoch>`），
+# 于是 `silent_for`、边界 `== W` 与硬顶 `4 × W` 都是等号断言，不靠「等了第几秒才退出」。
+# 表头前提：记录里的 `started` 一律回填到 120 s 之前（旧算式在 started=现在 时会落 4W，翻转看不出来）。
+P338_HB="$P281D/p338-hb"; P338_PIN=1790000000
+p338_scene() { # <heartbeat 字段值> [<mtime 相对 PIN 的秒数；不给 = 不建文件>]：新格式活记录（pid=$$）
+  rm -f "$P281_LOCK.holder"; rm -rf "$P281_LOCK.runs"
+  gate_lock_write_holder "$P281_LOCK" "$$" top "p338-holder" dev "$P281D" \
+    "$(( P338_PIN - 120 ))" 400 2400 3 0 - "$1"
+  if [ -n "${2:-}" ]; then touch -d "@$(( P338_PIN + $2 ))" "$P338_HB"; fi
+}
+p338_pat() { # <wait> [<现在时刻>] → "ceiling<TAB>state<TAB>silent_for<TAB>heartbeat"（时刻钉住）
+  ( p338_now="${2:-$P338_PIN}"; gate_lock_now() { printf '%s\n' "$p338_now"; }; gate_lock_patience "$P281_LOCK" "$1" )
+}
+p338_line() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:--}"; }
+
+# ① 旧形状记录（根本不是新格式：没有 heartbeat 字段）→ none + W（与今天逐字相同）
+rm -f "$P281_LOCK.holder"; rm -rf "$P281_LOCK.runs"
+printf '%s pid=%s cmd=p338-legacy\n' "$(date -Is)" "$$" > "$P281_LOCK.holder"
+assert_eq "34b⑨b 旧形状记录（没有 heartbeat 字段）→ state=none、上限仍是 W" \
+  "$(p338_pat 100)" "$(p338_line 100 none -)"
+# ② 记录了心跳路径，但文件不在 → none + W（不假装有进展）
+p338_scene "$P281D/p338-gone"; rm -f "$P281D/p338-gone"
+assert_eq "34b⑨b heartbeat= 指向不存在的文件 → state=none、上限 W" \
+  "$(p338_pat 100)" "$(p338_line 100 none -)"
+# ③ 记录明确写了 `heartbeat=-`（新格式，但持有者自述不公布心跳）→ 与旧记录同一条路：none + W。
+#    `team review` 的持有者记录就是这一形状；这条以前只有「没有该字段」与「文件不在」两个现场。
+p338_scene "-"
+assert_eq "34b⑨b heartbeat=- （记录明说不公布心跳）→ state=none、上限 W" \
+  "$(p338_pat 100)" "$(p338_line 100 none -)"
+# ④ **可用窗口内部**的采样点（`silent = W-1`：不是最外的 0、也不是边界 W）→ live + 4W。
+#    保留一条窗口内部的样本，是因为把边界**内移**时只有它能分辨（V78 第二轮 F2 的实测：没有这条时把边界
+#    内移 10 秒，12 条全绿）。最外那一点（`silent=0`）由 ⑭ 的真实路径与第 2 轮（`silent=10`）覆盖。
+p338_scene "$P338_HB" -99
+assert_eq "34b⑨b 心跳 mtime=W-1 秒前（窗口内部）→ state=live、上限 4×W、silent_for=W-1" \
+  "$(p338_pat 100)" "$(p338_line 400 live 99 "$P338_HB")"
+# ⑤ **恰好边界** silent_for == W → 归 stalled（边界只属一侧）
+touch -d "@$(( P338_PIN - 100 ))" "$P338_HB"
+assert_eq "34b⑨b 心跳 mtime 恰好 W 秒前（边界）→ state=stalled、上限 W、silent_for=W" \
+  "$(p338_pat 100)" "$(p338_line 100 stalled 100 "$P338_HB")"
+# ⑥ 硬顶就是**准确值** 4×W（不用「第几秒退出」证）
+p338_scene "$P338_HB" 0
+assert_eq "34b⑨b 新鲜心跳 + W=1000 → 上限正好 4000（硬顶 4×W）" \
+  "$(p338_pat 1000 | cut -f1)" "4000"
+# ⑧ **每轮重算，不是排队时缓存**（V68 的 G3）：同一份等待状态（已等 150 s）喂三个不同的「现在时刻」，
+#    中间让心跳更新一次 —— 后一次给出**更晚**的截止；心跳不再更新的那个时刻必须判卡死。
+#    「排队时缓存」的实现在这 12 条上被哪几条抓住、每条红在哪个字段（V78 第二轮把两种缓存变异打在这里的
+#    实测，不是推断）：**边界那条**（⑤）与**第 2 轮那两条**红在 `state`/`ceiling` —— 缓存留着上一次读到的
+#    mtime，第 2 轮仍看见第 1 轮那 120 s 的静默，于是 `stalled`/`W` 而不是 `live`/`4W`；**第 3 轮那条红在
+#    `silent_for`**（缓存值 120，实测该是 100），它的 `state`/`ceiling` 碰巧仍对。判据落在三个字段上，
+#    不落在任何一句文案上。「stalled 时这一轮就该结束」只断言一次（第 3 轮）—— 第 1 轮与它同一判断、
+#    只是换了数字，已按 V78 的冗余裁定删掉。
+P338_W=100; P338_E=150
+p338_scene "$P338_HB" 0; touch -d "@$(( P338_PIN - 120 ))" "$P338_HB"
+IFS=$'\t' read -r P338_C1 P338_S1 P338_Q1 _ < <(p338_pat "$P338_W" "$P338_PIN")
+P338_D1=$(( P338_PIN - P338_E + P338_C1 ))
+assert_eq "34b⑨b 每轮重算 · 第 1 轮（心跳停了 120 s、已等 150 s）→ 判卡死、上限 W" \
+  "$P338_C1/$P338_S1/$P338_Q1" "100/stalled/120"
+touch -d "@$(( P338_PIN + 140 ))" "$P338_HB"        # 心跳又动了（内容更新）
+IFS=$'\t' read -r P338_C2 P338_S2 P338_Q2 _ < <(p338_pat "$P338_W" "$(( P338_PIN + 150 ))")
+P338_D2=$(( P338_PIN + 150 - P338_E + P338_C2 ))
+assert_eq "34b⑨b 每轮重算 · 第 2 轮（同一份等待状态、更晚的时刻、心跳刚动过）→ live + 4W" \
+  "$P338_C2/$P338_S2/$P338_Q2" "400/live/10"
+assert_eq "34b⑨b 每轮重算 · 第 2 轮继续等（已等 150 s < 硬顶 400 s）" \
+  "$([ "$P338_E" -lt "$P338_C2" ] && printf 继续等 || printf 超限)" "继续等"
+assert_eq "34b⑨b 每轮重算 · 后一次给出的截止比前一次晚（$P338_D2 > $P338_D1）" \
+  "$([ "$P338_D2" -gt "$P338_D1" ] && printf 更晚 || printf 没有更晚)" "更晚"
+IFS=$'\t' read -r P338_C3 P338_S3 P338_Q3 _ < <(p338_pat "$P338_W" "$(( P338_PIN + 140 + P338_W ))")
+assert_eq "34b⑨b 每轮重算 · 第 3 轮（心跳不再更新、从它最后一动起又过了 W）→ 判卡死、上限落回 W（缓存的 4W 会在这里继续放行）" \
+  "$P338_C3/$P338_S3/$P338_Q3" "100/stalled/100"
+assert_eq "34b⑨b 每轮重算 · 第 3 轮就该结束（已等 150 s >= 上限 100 s）" \
+  "$([ "$P338_E" -ge "$P338_C3" ] && printf 超限 || printf 继续等)" "超限"
+rm -f "$P281_LOCK.holder" "$P338_HB" 2>/dev/null || true; rm -rf "$P281_LOCK.runs" 2>/dev/null || true
 # 席位按**运行时目录**解析，不取窗口名。推导只有一份（common.sh 的 team_seat_from_paths）：这里断言的
 # 是「锁记录与 team notify 调的是**同一个函数**」—— 同一组目录两边给出同一个结果；解析不出时各自的
 # 语义照旧不同（锁记录写 `?`：它是诊断证据、必须写成功；notify 给空、由调用方拒绝，见 §47 1.4）。
@@ -16963,6 +17043,83 @@ p281f_release
 rm -f "$P281_FLOCK.holder" 2>/dev/null || true
 rm -rf "$P281F" 2>/dev/null || true
 
+# ── ⑭ change: gate-waiter-patience（P338）：真实排队路径 —— 心跳新鲜的长跑不被误杀，心跳停跳的被点名 ─
+# 现场沿用本段既有的形状（`flock --close` 持有者 + 私有锁 + 私有 TMPDIR + 与 `p66_run` 同形的入口），
+# **不新建夹具**；判据是 §34b⑨b 的喂值断言，这里只钉两条那里拿不到的东西：
+#   ① 心跳是从**任意**活登记读到的（持有者记录写 `heartbeat=-`，真正在动的是子运行那条登记）：心跳在动
+#      → 等待者越过 W 仍不被误杀，持有者释放后拿到锁（rc=0）。只读 `.holder` 的实现在这里必红。
+#   ② 心跳停跳的持有者 → 一行 `排队超限` 点名它，并说出**心跳已停 Ns**（rc=2，本套没有运行）。
+# 真实路径的时间读数只作参考：「等过了 W」靠的是「持有者比 W 晚释放、而等待者拿着锁回来了」这个单向界，
+# 不是「睡两秒再断言等了至少两秒」。§34b①/⑦ 的 rc=2 / 点名 / 没有运行 / FAIL 不是 TIMEOUT 由既成断言守，
+# 这里不复制。
+P338D="$TMP/p338"; P338_LOCK="$P338D/lock"; P338_CMP="$(gate_lock_companion_path "$P338_LOCK")"
+rm -rf "$P338D"; mkdir -p "$P338D"; : > "$P338_LOCK"; : > "$P338_CMP"
+P338_RSH=""; P338_HBW=""; P338_GATE=""
+p338_hold() { # <秒> <记录公布的心跳字段> [<正在动的心跳文件>]：真持有者（握**伴生锁**）+ 新格式记录
+  rm -f "$P338_CMP.holder"; rm -rf "$P338_CMP.runs"
+  flock --close -x "$P338_CMP" sleep "$1" & P338_RSH=$!
+  sleep 0.4
+  gate_lock_write_holder "$P338_CMP" "$P338_RSH" top "p338-holder" dev "$P338D" \
+    "$(( $(date +%s) - 120 ))" 400 2400 3 0 - "$2"
+  if [ -n "${3:-}" ]; then
+    printf 'hb\n' > "$3"
+    ( while :; do printf 'hb %s\n' "$(date +%s%N)" > "$3" 2>/dev/null || exit 0; sleep 0.2; done ) &
+    P338_HBW=$!
+  fi
+}
+p338_release() { # 只 wait 自己那几个 pid（裸 wait 会等到别人留的长命后台作业）
+  [ -n "$P338_HBW" ] && { kill "$P338_HBW" 2>/dev/null; wait "$P338_HBW" 2>/dev/null; P338_HBW=""; }
+  [ -n "$P338_GATE" ] && { kill "$P338_GATE" 2>/dev/null; wait "$P338_GATE" 2>/dev/null; P338_GATE=""; }
+  [ -n "$P338_RSH" ] && { kill "$P338_RSH" 2>/dev/null; wait "$P338_RSH" 2>/dev/null; P338_RSH=""; }
+  rm -f "$P338_CMP.holder" 2>/dev/null
+  rm -rf "$P338_CMP.runs" 2>/dev/null
+  return 0
+}
+p338_waiter() { # <日志> <上限秒> <子进程退出码>：真入口（与 p66_run 同形，换成 ⑭ 的私有锁）
+  ( cd "$TMP" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_ROOT_SOURCE -u TEAM_ROOT_WAS -u TEAM_PROJECT \
+      -u TEAM_SESSION -u TEAM_SESSION_FROM -u TEAM_STATE_DIR -u TEAM_DOCS_DIR -u TEAM_CONFIG_FILE \
+      -u TEAM_GATES -u TEAM_VCS -u TEAM_WORKTREES_DIR -u TEAM_SKILL_DIR -u TEAM_ALLOW_FOREIGN_IDENTITY \
+      -u TEAM_SMOKE_FAST -u TEAM_SMOKE_NO_LOCK -u TEAM_SMOKE_LOCK -u TEAM_SMOKE_LOCK_WAIT \
+      -u SMOKE_LOCK_WRAPPED -u SMOKE_LOCK_QUEUED -u SMOKE_LOCK_SELFTEST_CHILD \
+      TEAM_SMOKE_LOCK="$P338_LOCK" TEAM_SMOKE_LOCK_WAIT="$2" TMPDIR="$P338D" \
+      TEAM_SMOKE_FIXTURE=1 SMOKE_LOCK_SELFTEST_CHILD="$3" \
+      bash "$SKILL_DIR/tests/smoke.sh" ) >"$1" 2>&1
+}
+
+# ① 心跳在动（而且只有子运行那条登记公布它）：W=2、持有者 6 s 后释放 —— 比 W 晚、比硬顶 8 s 早
+p338_hold 6 - "$P338D/hb-live"
+sleep 60 & P338_GATE=$!          # 持有者进程树里的那个「门禁子运行」：它登记一条、公布正在动的心跳
+gate_lock_register_run "$P338_CMP" "$P338_GATE" nested "p338-nested" dev "$P338D" \
+  "$(( $(date +%s) - 60 ))" 400 2400 3 0 "$P338_RSH" "$P338D/hb-live"
+P338_RC=0; p338_waiter "$P338D/live.log" 2 0 || P338_RC=$?
+p338_release
+assert_eq "34b⑭ 心跳在动 → 等待者越过 W 也没被误杀（持有者比 W 晚释放，它仍拿到了锁：rc=0）" "$P338_RC" "0"
+assert_has "$P338D/live.log" "另一套全量 smoke 正在跑" "34b⑭ 它确实排过队（不是没排队就直接拿到）"
+assert_has "$P338D/live.log" "心跳仍在动" "34b⑭ 排队行说出上限来自活心跳（来自子登记，不是持有者记录）"
+assert_has "$P338D/live.log" "上限 4×=8s" "34b⑭ 排队行同时打印两条上限（W=2 与 4×=8）"
+assert_not "$P338D/live.log" "排队超限" "34b⑭ 心跳在动时不报排队超限"
+assert_has "$P338D/live.log" "自检出口" "34b⑭ 它拿到锁后走到了子进程出口（真的取到锁）"
+
+# ② 心跳停跳（mtime 写在 60 s 前、不再更新）：W=2 → 一行点名 + 说出心跳已停，rc=2，本套没有运行
+p338_hold 20 "$P338D/hb-stale"
+touch -d "@$(( $(date +%s) - 60 ))" "$P338D/hb-stale"
+P338_RC=0; p338_waiter "$P338D/stale.log" 2 0 || P338_RC=$?
+p338_release
+assert_eq "34b⑭ 心跳停跳 → exit 2（约定的那个：不是 1、不静默）" "$P338_RC" "2"
+assert_match "$P338D/stale.log" '排队超限：等满 [0-9]+s' "34b⑭ 一行说明是排队超限，并报出等了多久"
+assert_match "$P338D/stale.log" "排队超限.*cmd=p338-holder" "34b⑭ 那一行点名持有者"
+assert_has "$P338D/stale.log" "心跳已停" "34b⑭ 那一行说出**为什么**耐心只剩 W（心跳已停 Ns）"
+assert_has "$P338D/stale.log" "没有运行" "34b⑭ 说明本套没有运行（不是对代码的判定）"
+assert_not "$P338D/stale.log" "自检出口" "34b⑭ 它一次都没拿到锁"
+
+# ③ 持有者自述不公布心跳（`heartbeat=-`，`team review` 的持有者记录就是这个形状）：失败行必须说清
+#    是「没有可用心跳」，不是「心跳停了」—— 两种卡死原因对看日志的人是两件事（delta 明写这一句）。
+p338_hold 20 -
+P338_RC=0; p338_waiter "$P338D/none.log" 2 0 || P338_RC=$?
+p338_release
+assert_eq "34b⑭ 没有可用心跳（heartbeat=-）→ exit 2" "$P338_RC" "2"
+assert_has "$P338D/none.log" "没有可用心跳" "34b⑭ 失败行说「没有可用心跳」（不是「心跳已停」）"
+assert_not "$P338D/none.log" "心跳已停" "34b⑭ 两种卡死原因不混为一谈"
 section "34c · 命名面：运行条目点开头或带 ns，平铺家族够不着（P287 · verification#A fixture's temp root…）"
 if [ "$FAST" = "1" ]; then
   # 本段起**嵌套的真入口运行**（真 tmux / 真进程 / 真锁）—— FAST 不起真进程，按惯例跳过并打印

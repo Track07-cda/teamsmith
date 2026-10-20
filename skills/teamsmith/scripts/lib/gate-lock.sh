@@ -5,7 +5,7 @@
 # 定义一次）。契约文本在 `openspec/specs/verification/spec.md`：
 #   * The gate lock's holder record names its kind, its owner, its elapsed time and its bound
 #   * A nested run does not queue on the machine lock, and its work stays inside the section that spawned it
-#   * The hard timeout covers the gate run, not the queue（上限算式）
+#   * The hard timeout covers the gate run, not the queue（排队上限跟随持有者心跳）
 #
 # 两个位置、一个写者规则：
 #   `<lock>.holder`            只有**真的持有 flock 的那个进程**写它、也只有它删它（收尾时）。
@@ -98,6 +98,11 @@ GATE_LOCK_FD=9                # 伴生锁（运行互斥）的 fd
 # <路径> → dev:ino（读不到 → 非 0）。GNU stat 优先，BSD/macOS 兜底（仓里既有写法）。
 gate_lock_path_identity() {
   stat -c '%d:%i' "$1" 2>/dev/null || stat -f '%d:%i' "$1" 2>/dev/null
+}
+
+# <路径> → mtime 的 epoch 秒（读不到 → 非 0）。同一个两平台写法：心跳是 mtime，内容不必解析。
+gate_lock_path_mtime() {
+  stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null
 }
 
 # <pid> <路径> → "<fd>\t<link>"：该进程第一个指向 <路径>（或 "<路径> (deleted)"）的描述符
@@ -390,12 +395,12 @@ gate_lock_describe_pair() {
   gate_lock_describe "$src"
 }
 
-# <发布路径> <wait> → gate_lock_cap 的同一行，但记录优先读伴生锁边上的那份（旧写入者的退回发布路径）
-gate_lock_cap_pair() {
+# <发布路径> <wait> → gate_lock_patience 的同一行，但记录优先读伴生锁边上的那份（旧写入者的退回发布路径）
+gate_lock_patience_pair() {
   local pub="$1" src kind
   IFS=$'\t' read -r src kind < <(gate_lock_record_source "$pub")
   [ -n "$src" ] || src="$pub"
-  gate_lock_cap "$src" "$2"
+  gate_lock_patience "$src" "$2"
 }
 
 gate_lock_describe() { # <lock> → 一行：活着的记录逐个列出；陈旧条目标 `stale` 并忽略
@@ -461,20 +466,55 @@ gate_lock_heartbeat_of_pid_pair() { # <发布路径> <祖辈 pid>
   gate_lock_heartbeat_of_pid "$src" "$2"
 }
 
-# ---------------------------------------------------------------- 上限算式（D3）
-# cap = clamp(remaining + 60, W, 4W)，remaining = expected − (now − started)
-# 记录里没有 expected（旧写入者 / 读不到）→ 退回今天的 W（一字不改）。
-gate_lock_cap() { # <lock> <wait> → "cap<TAB>remaining<TAB>expected<TAB>started"（未知的写 `-`）
-  local lock="$1" wait="$2" expected started remaining cap now
-  expected="$(gate_lock_record_get "$(gate_lock_holder_file "$lock")" expected)"
-  started="$(gate_lock_record_get "$(gate_lock_holder_file "$lock")" started)"
-  case "$expected" in ''|'-'|*[!0-9]*) printf '%s\t-\t-\t-\n' "$wait"; return 0 ;; esac
-  case "$started" in ''|'-'|*[!0-9]*)  printf '%s\t-\t%s\t-\n' "$wait" "$expected"; return 0 ;; esac
-  now="$(gate_lock_now)"; remaining=$(( expected - (now - started) ))
-  cap=$(( remaining + 60 ))
-  [ "$cap" -lt "$wait" ] && cap="$wait"
-  [ "$cap" -gt "$(( wait * 4 ))" ] && cap="$(( wait * 4 ))"
-  printf '%s\t%s\t%s\t%s\n' "$cap" "$remaining" "$expected" "$started"
+# ---------------------------------------------------------------- 等待者的耐心（跟随心跳，不是预算投影）
+# change: gate-waiter-patience（P338）。上限每轮**按现场重算**，判据只有等待者自己的已等时长：
+#   live     本锁某条活登记公布的心跳文件 < W 秒前还在动  → 上限 4 × W（硬顶，再久也不等）
+#   stalled  公布了，但已经 >= W 秒没动（边界归这一侧）  → 上限 W（持有者按卡死处理）
+#   none     没有活登记公布心跳 / 公布的是 `-` / 路径上的文件不在 → 上限 W（旧记录：与今天一字不改）
+# 心跳取**本锁所有活登记里最新的那一条**（`<lock>.holder` 与 `<lock>.runs/*.run`）：顶层 smoke.sh 的
+# 持有者记录公布的是取锁包装器的路径（那个文件没人写），真正在动的是子套件自己那条登记；`team review`
+# 的持有者记录直接写 `heartbeat=-`，它跑的门禁只在子登记里公布心跳。只读 `.holder` 两种真实形状都
+# 读不到，等于没改（design §3）。
+# 读取**不校验**登记与当前持有者的祖先关系：一条遗留但仍活着的登记还能把上限顶到 4W —— 本 change
+# 明写接受这条有界放宽（默认值下最坏 2 小时），不在实现里补认证。
+gate_lock_heartbeat_newest() { # <lock> → "path<TAB>mtime"（没有可用心跳 → 非 0，无输出）
+  local lock="$1" f hb mt best_path="" best_mt=""
+  for f in "$(gate_lock_holder_file "$lock")" "$(gate_lock_runs_dir "$lock")"/*.run; do
+    [ -f "$f" ] || continue
+    gate_lock_record_live "$f" || continue
+    hb="$(gate_lock_record_get "$f" heartbeat)"
+    case "$hb" in ''|'-') continue ;; esac
+    mt="$(gate_lock_path_mtime "$hb")" || continue
+    [ -n "$mt" ] || continue
+    case "$mt" in *[!0-9]*) continue ;; esac
+    if [ -z "$best_mt" ] || [ "$mt" -gt "$best_mt" ]; then best_path="$hb"; best_mt="$mt"; fi
+  done
+  [ -n "$best_mt" ] || return 1
+  printf '%s\t%s\n' "$best_path" "$best_mt"
+}
+
+gate_lock_patience() { # <lock> <wait> → "ceiling<TAB>state<TAB>silent_for<TAB>heartbeat"
+  local lock="$1" wait="$2" newest hb mt now silent
+  # 唯一的时钟来源是既有的 gate_lock_now（测试可以在子 shell 里局部覆写它把时刻钉住）
+  newest="$(gate_lock_heartbeat_newest "$lock" 2>/dev/null || true)"
+  if [ -z "$newest" ]; then printf '%s\tnone\t-\t-\n' "$wait"; return 0; fi
+  hb="${newest%%$'\t'*}"; mt="${newest#*$'\t'}"
+  now="$(gate_lock_now)"
+  silent=$(( now - mt )); [ "$silent" -lt 0 ] && silent=0
+  if [ "$silent" -ge "$wait" ]; then
+    printf '%s\tstalled\t%s\t%s\n' "$wait" "$silent" "$hb"
+  else
+    printf '%s\tlive\t%s\t%s\n' "$(( wait * 4 ))" "$silent" "$hb"
+  fi
+}
+
+# <state> <silent_for> → 一句话说明上限来自哪里（排队行与失败行共用同一份措辞，只有这一处）
+gate_lock_patience_note() {
+  case "$1" in
+    live)    printf '心跳仍在动（%ss 前更新）\n' "$2" ;;
+    stalled) printf '心跳已停 %ss\n' "$2" ;;
+    *)       printf '没有可用心跳\n' ;;
+  esac
 }
 
 # ---------------------------------------------------------------- 席位 / 工作树（team notify 同一条规则）

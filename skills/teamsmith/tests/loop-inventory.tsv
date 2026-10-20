@@ -15,7 +15,7 @@ panel-b3.sh	173	cap="$i" -le "${B3_CAP_ITERS:-600}"	  while [ "$i" -le "${B3_CAP
 panel-cpu.sh	248	bound=sub_end 计算出的截止时间（到点自己退出）	  while :; do
 panel-p21.sh	1813	cap="$_i" -le 15	  while [ "$_i" -le 15 ]; do
 pm-box-real.sh	175	cap="$i" -lt "$READY_TRIES"	while [ "$i" -lt "$READY_TRIES" ]; do
-smoke.sh	503	bound=持有者公布的排队上限 lock_cap（到点 break 进超限分支）+ TEAM_SMOKE_LOCK_WAIT 下限	  while :; do
+smoke.sh	503	bound=等待者的耐心上限 lock_cap（每轮跟着持有者心跳现算：活 4W / 停或没有 W；到点 break 进超限分支）	  while :; do
 smoke.sh	1277	bound=停止位文件 SMOKE_TMP_STOP + 主 shell 寿命（M33 哨兵的文件握手）	  while [ ! -e "$SMOKE_TMP_STOP" ]; do
 smoke.sh	2977	cap="$S6_WAIT" -lt 3000	  while [ "$S6_WAIT" -lt 3000 ] && [ ! -s "$TMP/pi-args.log" ]; do sleep 0.1; S6_WAIT=$((S6_WAIT + 1)); done
 smoke.sh	3731	cap="$_i" -lt 60	  _i=0; while [ "$_i" -lt 60 ] && [ ! -f "$ADAPTER_DONE" ]; do sleep 0.5; _i=$((_i + 1)); done
@@ -44,7 +44,7 @@ smoke.sh	6064	cap="$i" -lt 60	  while [ "$i" -lt 60 ]; do
 smoke.sh	6180	cap="$i" -lt 3000	  while [ "$i" -lt 3000 ] && [ "$(( $(start_count) - STARTS_BEFORE ))" -lt 1 ]; do sleep 0.1; i=$((i + 1)); done
 smoke.sh	6279	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ "$(p36_lines)" -gt "$base" ] && return 0; sleep 0.1; i=$((i + 1)); done
 smoke.sh	6288	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ -z "$(p36_same_cwd_pids)" ] && return 0; sleep 0.2; i=$((i + 1)); done
-smoke.sh	6392	cap="$R_WAIT" -lt "$R_MAX"	  while [ "$R_WAIT" -lt "$R_MAX" ]; do
+smoke.sh	6365	cap="$R_WAIT" -lt 1500	  while [ "$R_WAIT" -lt 1500 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
 smoke.sh	6854	cap="$i" -lt "$ticks"	  while [ "$i" -lt "$ticks" ]; do
 smoke.sh	11110	cap="$i" -lt "$max"	  while [ "$i" -lt "$max" ]; do grep -q -- "$pat" "$f" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done
 smoke.sh	12032	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
@@ -56,6 +56,7 @@ smoke.sh	15072	cap="$M36_W" -lt 100	  while [ "$M36_W" -lt 100 ] && [ ! -f "$M36
 smoke.sh	15259	cap="$M40_W" -lt 60	  while [ "$M40_W" -lt 60 ]; do
 smoke.sh	15277	cap="$M40_LOGS_WAIT" -lt 40	  while [ "$M40_LOGS_WAIT" -lt 40 ]; do
 smoke.sh	15304	cap="$M40_W" -lt 100	  while [ "$M40_W" -lt 100 ] && [ ! -f "$M40_D/8c-worker.done" ]; do sleep 0.2; M40_W=$((M40_W + 1)); done
+smoke.sh	17067	bound=心跳写入器（§34b⑭ 的现场）：由 p338_release kill 收尾，自己不结束	( while :; do printf 'hb %s\n'
 smoke.sh	16977	cap="$i" -lt 600	  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 600 ]; do
 smoke.sh	17252	cap="$i" -lt "$n"	  while [ "$i" -lt "$n" ]; do
 smoke.sh	17265	cap="$i" -lt 6000	  while [ "$i" -lt 6000 ]; do

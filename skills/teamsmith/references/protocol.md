@@ -659,7 +659,8 @@ carries an illegal token, so the read side and the write side can never disagree
 The full gate — `openspec validate … && bash skills/teamsmith/tests/smoke.sh` — spends the machine's tmux servers,
 node/bun processes and login shells, so it is serialised on **one gate lock**
 (`${TEAM_SMOKE_LOCK:-${TMPDIR:-/tmp}/teamsmith-smoke.lock}`, wait capped by `TEAM_SMOKE_LOCK_WAIT`, default
-1800 s). Use `TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections only; measured in the low minutes
+1800 s — extended to `4 ×` that while the run it waits for keeps publishing heartbeats, see below). Use
+`TEAM_SMOKE_FAST=1` for in-batch self-tests (pure-logic sections only; measured in the low minutes
 on a loaded 32-core box, not the seconds it once was - P100's F6) and the **full** suite for delivery and review.
 
 **The gate lock is a pair: a published path (compatibility) and a companion (the mutex).** The published path is
@@ -706,8 +707,10 @@ the run was handed — or by a live record naming it: environment variables alon
 also be a **strict** ancestor of the claiming suite (a section-selected run adds one more process layer, so the
 locker is the grandparent there and the parent in the direct case, and both are covered). The holder record names its kind (`top`/`nested`), its
 seat and its worktree (derived from the runtime directory by the same rule as `team notify`'s sender, never from
-a tmux window name; unresolvable fields are written `?`, not guessed), its start time, its expected duration and
-its bound (the section table's Σband / Σbudget over the sections that run will execute), and the waiter prints
+a tmux window name; unresolvable fields are written `?`, not guessed), its start time, and the `expected` /
+`bound` pair (the section table's Σband / Σbudget over the sections that run will execute — since P316 retired
+that table the pair is a **diagnostic** field: it is still written and still printed, and it decides nothing),
+and the waiter prints
 that record when it starts queueing and again when it hits its cap. Only the process that really holds the lock
 writes and removes the holder record — and it writes only when that record is absent, stale (its process is gone)
 or already names that same pid: the inherited `SMOKE_LOCK_MARKER` file is a hint, not a proof, so a descendant
@@ -734,11 +737,20 @@ blocked on is unlinked and rebuilt while it waits, it prints one line with both 
 on, what is on the path now) and goes on waiting on the path — never silently on a dead inode, which is how a
 waiter ends up "holding" a lock nobody else can see.
 
-**The queue cap follows the holder's published expected duration.** When the holder record publishes `started`
-and `expected`, the waiter's cap is `clamp(remaining + 60 s, TEAM_SMOKE_LOCK_WAIT, 4 × TEAM_SMOKE_LOCK_WAIT)`
-with `remaining = expected − (now − started)`, and the waiter prints that arithmetic together with the three
-numbers; when the record publishes no `expected` (an older writer, or an unreadable record) the cap stays
-`TEAM_SMOKE_LOCK_WAIT` exactly as before. The verdict token set (`PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN`), the
+**The queue cap follows the holder's heartbeat; the published `expected` no longer decides it.** Every round of
+the poll re-reads the lock's **live** records — `<companion>.holder` *and* `<companion>.runs/<pid>.run` — and
+takes the newest published heartbeat file that is still there. The holder record alone is not enough: a
+top-level suite's holder record names the locking wrapper's heartbeat path, which nobody writes, and a
+review's holder record carries `heartbeat=-` while the suite that review spawned registers a heartbeat that
+does move. While the newest heartbeat's last movement is less than `TEAM_SMOKE_LOCK_WAIT` ago the waiter keeps
+waiting, with the cap at `4 × TEAM_SMOKE_LOCK_WAIT`; when no usable heartbeat exists — an older writer, a
+record whose `heartbeat=` is `-`, a published path whose file is gone, or a silence of `TEAM_SMOKE_LOCK_WAIT`
+or more — the cap stays `TEAM_SMOKE_LOCK_WAIT` exactly as before, so a stalled holder is waited out for at most
+`TEAM_SMOKE_LOCK_WAIT`. The queue line prints both bounds together with the heartbeat's state, and the failure
+line says whether the heartbeat had been silent or had never been published. The read is not authenticated
+against the current holder's ancestry: a leftover registration that is still alive can hold the cap at `4 ×`
+while the real holder is stuck — accepted on purpose, and bounded at two hours by default. The verdict token
+set (`PASS|FAIL|TIMEOUT|SKIPPED|UNKNOWN`), the
 `queued Ns / ran Ns / limit Ns` accounting and the rule that a queue overrun is `FAIL` (never `TIMEOUT`) with
 the holder named are all unchanged. `team review` takes the same pair, in the same order, in its own process,
 and runs the project's gate with the lock descriptors closed: its gate record still separates `queued` from
