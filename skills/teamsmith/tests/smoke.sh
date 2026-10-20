@@ -16861,18 +16861,34 @@ assert_eq "34b⑨ 反向对照：窗口名报 verify，记录里仍是 cwd 的�
 assert_eq "34b⑨ 工作树字段是 cwd 的 toplevel" \
   "$(gate_lock_worktree_of_dir "$P281_SEAT_DIR")" "$(cd "$P281_SEAT_DIR" && pwd -P)"
 # 2.1 反向：锁被一个**活着但不是祖辈**的进程持有 → 证明不成立 → 照旧排队（fail closed）
+# 持有者要持到**等待者被回收**为止，而不是持一个猜出来的秒数。原来那条 `flock … sleep 5` 是一条
+# 窗口：它要盖住的真实过程是「等待者的前导 —— 从启动到第一次取锁」，实测空闲时 1.6s、整段 2.7s
+# （3 遍），窗口必须比它还长；前导一慢（高负载、机器忙）窗口就先到期，等待者于是**拿到了锁**、
+# exit 0，本节两条断言假红（V79 §5.2 在 loadavg 26.9 时实测）。判据换成确定性条件：
+#   · 就绪 = `flock` 的子进程开始执行 —— 它只在**拿到锁之后**才跑（--close：锁 fd 不进子进程）；
+#   · 放行 = 本段在 `wait` 返回之后写一个放行文件。等待者自己的 1s 上限决定它 exit 2，
+#          持有者不参与计时，前导多慢都不影响判定。
+# 两处等待的上限只用来防死等：耗尽时报「没等到 X」（= 挂住），不判快慢、不随负载加秒。
 : > "$P281_LOCK"; rm -rf "$P281_LOCK.runs"; rm -f "$P281_LOCK.holder"
 sleep 30 & P281_NOTANC=$!
-flock --close -x "$P281_LOCK" sleep 5 & P281_REALHOLD=$!
-sleep 0.4
+P281_HOLD_READY="$P281D/hold-ready"; P281_HOLD_RELEASE="$P281D/hold-release"
+rm -f "$P281_HOLD_READY" "$P281_HOLD_RELEASE"
+flock --close -x "$P281_LOCK" bash -c ': > "$2"; for i in $(seq 1 1200); do [ -e "$1" ] && break; sleep 0.1; done' \
+  _ "$P281_HOLD_RELEASE" "$P281_HOLD_READY" & P281_REALHOLD=$!
+for i in $(seq 1 600); do [ -e "$P281_HOLD_READY" ] && break; sleep 0.05; done
+if [ ! -e "$P281_HOLD_READY" ]; then
+  bad "34b⑨ 没等到持有者拿到 $P281_LOCK（30s 上限）→ 下面三条读数无效（这是「挂住」，不是「慢」）"
+fi
 gate_lock_write_holder "$P281_LOCK" "$P281_NOTANC" top smoke.sh dev "$P281D" \
   "$(( $(date +%s) - 100 ))" 10 600 1 0 - -
 P281_RC=0; p281_waiter "$P281D/w-notanc.log" 1 || P281_RC=$?
+: > "$P281_HOLD_RELEASE"          # 等待者已经被回收（wait 返回）：现在才放行持有者
+wait "$P281_REALHOLD" 2>/dev/null || true
 assert_eq "34b⑨ 锁被活着但不是祖辈的进程持有 → 证明不成立 → 照旧排队（exit 2）" "$P281_RC" "2"
 assert_not "$P281D/w-notanc.log" "嵌套运行（祖辈" "34b⑨ 证明不成立时不放行（不打印嵌套行）"
 assert_has "$P281D/w-notanc.log" "排队超限" "34b⑨ 它照旧排队并撞上限"
-kill "$P281_NOTANC" "$P281_REALHOLD" 2>/dev/null || true
-wait 2>/dev/null || true
+kill "$P281_NOTANC" 2>/dev/null || true
+wait "$P281_NOTANC" 2>/dev/null || true
 rm -f "$P281_LOCK.holder" 2>/dev/null || true
 
 # ── ⑪ P281（task 2.3）：生它的那一段收口后仍活着的嵌套运行 → 一行点名，且只杀**登记过的** pid ────
