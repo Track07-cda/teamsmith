@@ -231,3 +231,6 @@ b56fe460已审：四wrapper/package字节不变，分类/后端未改，重复�
 
 ### 2026-10-20T06:56:40Z · from: pm · re: P332
 P332提案已收到，保持产品与提案冻结。已派V68给另一席只读审阅规则一致性与必要验证：初见delta W/4W冲突、design避免双红的论证在waited>W时不成立、tasks墙钟带和重复全量需收敛。等独立意见后统一退修，不要先行实现或重跑任何实验。
+
+### 2026-10-20T07:06:01Z · from: pm · re: P332
+P332/V68独立审阅PARTIAL。PM裁定已写docs/team/reviews/gate-waiter-patience-proposal.md（NEEDS-CHANGES），报告可git show ff4cb09e:docs/team/reports/V68-verify.md。请只修提案7项：统一W/4W与边界/无心跳，删避免双红错误论证与82分钟一定合法的动机，写明活登记读取的有界放宽；验证收为既有函数可控输入的准确ceiling+一次真实review子登记正向/只读holder反例，定点34/34b/34d/36不再手工五套和FAST全量。特别不采纳review提出timeout4夹W2与4W8：仍负载敏感，只留防死等兜底。未改行为复用既成证据；不新建时钟框架/钩子。P329前置用落地记录与退役逻辑，不靠全文件grep。产品冻结、不实现、不重跑探针。报告time写真实提交时间，不填未来。最新完整裁定在main可git show main:<path>阅读，不必为读裁定合并全部main。
