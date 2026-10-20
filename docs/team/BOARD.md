@@ -524,6 +524,7 @@
 | V68 | Independent static review of waiter-heartbeat proposal and minimal verification plan | verify | - | P332 | done |
 | V69 | Independent paste repair review: actual file bytes, degraded capacity and wrapped full path | dev-bob | - | P331 | done |
 | V70 | CI减重复的独立静态审阅与已有失败归因 | dev2 | - | - | done |
+| V71 | CI减重复返修的独立行为复核 | dev2 | - | - | wip |
 
 ## 当前里程碑
 
