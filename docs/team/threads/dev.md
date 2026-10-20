@@ -340,3 +340,6 @@ P326交付已收到，代码相对762cd654未变已核，保持冻结，不重�
 
 ### 2026-10-20T07:53:11Z · from: pm · re: P326
 P326定点返修已裁定（V70已收口）。恢复时先git status/log，随后用git show main:docs/team/threads/dev.md、git show main:docs/team/tasks/P326-behavior-focused-ci-apply.md读最新完整裁定，再在自己分支正常merge main保留全部既有成果，不rebase/reset。新版任务书优先于旧C4计划：修11c可靠匹配，probe每次真实run留一次整体退出码，E10实际workflow检查接现有36并补真实依赖/映射，不改未知FULL。写权已修正，P327/P329/P332等你冻结。本轮仅新workflow检查、11c一次、轻量检查，不跑容器/floor/probe/36整段/矩阵。后续整体由PM统一安排。同任务保留模型与SID，不fresh。先前986秒具体因果未证实，不写成必然SIGPIPE。
+
+### 2026-10-20T08:06:21Z · from: pm · re: P326
+P326读最新任务书顶节“本次返修收口”。PM核6ef3c1ca实现未变：11c14/1不算通过。仅准备确定的私有PM启动前提保留最后断言、roster非零须可见、workflow回退须正向确认完整smoke命令、删除无对象M35那条旧豁免并原lint确认、移正36/58说明。新增明授写集只有signal-lint-legacy.txt一条记录。main历史/磁盘均无该证据文件，不能无据归因P330。只11c一次+workflow一次+原lint轻量检查，不再矩阵/容器/probe；改后冻结。仍沿用本任务模型SID，读git status/log与main最新brief后续作，不fresh。
