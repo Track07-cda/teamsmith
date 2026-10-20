@@ -10,6 +10,23 @@ deltas: verification
 branch: task/P326-behavior-focused-ci
 deps: P324 已并入 main（`gates.yml` / `smoke.sh` 写权已归回）；P325 rev 2 的 PM 预审判 **ACCEPTED**（`docs/team/reviews/behavior-focused-ci-proposal.md`）
 
+## V70 后的定点返修（最新裁定，优先于下文原始验收计划）
+
+V70 为静态审阅交付，不是本变更行为验收通过。依据 `docs/team/reports/V70-dev2.md`，本轮仅做以下差异：
+
+- 先读最新线程和 git status/log；保留既有工作。在自己的任务分支正常 merge main（不 rebase/重置），带入 P318 的真实 §58 修复与 P331；依据是这两处具体字节变化，不是要求追齐几十笔账本提交。
+- 明授 `smoke.sh` 的11c轮询修复：先完整取得 roster 输出并判断真实返回码，再用 Bash 内部匹配，不再把生产者接到 `grep -q`。保持原15条产品断言和有界退出，不把真实续跑行为移出floor；不靠1500改25或“5秒内”换绿。不可靠管道是静态确认的缺陷，但本次986秒是否由SIGPIPE引起尚无逐轮退出码证据，不写成已复现根因。
+- probe 的同树同状态合并保持。**每次真实 nest 调用保留一次整体退出码断言**，不再把同一 `$?` 反复冒充每个段的结果；各段自身的判据继续按其行读取。不可照抄V70“删掉5条”而把整个run的失败也漏掉。
+- CI路径没有真实承接者，不能空补映射。允许将已运行过的E10实际workflow命令/argv检查固化为一个小型 `tests/workflow-entry.sh`，由现有36段调用并可单独执行；只复用现有E10的有效基点与特殊字符、无效基点回退、底层执行失败传播三类行为，不另造解析框架、测试矩阵或门禁段。把该脚本与 `gates.yml` 映射到36，补齐必要拷贝依赖；产品面检出不含CI源码时按既有缺前提语义如实披露，不伪造通过。**净零**：用上述实际入口检查替代probe合并后重复的整批退出码检查，本轮不新增通用检查器。
+- `--paths` 与 `--floor --paths` 的未知路径/无有效基点 FULL 兜底均不改，不给 `.github/**` 加豁免，不把FULL改成floor。
+- 修SKILL残留的performance red lines，核对verification delta的Migration：退役4个premise场景，保留的通用不可判定语义正确指回既有要求。仅此文字对齐，不改选择器契约。tasks按实际修改，不把未跑到的36写成绿。
+
+写集在下文基础上仅扩大：11c、36调用与必要依赖声明、`tests/workflow-entry.sh`、36行patterns、上述delta文字勘误。OWNERSHIP已同步。不得改P318/P331文件，也不新增时间阈值、产品测试钩子或第二套等待框架。
+
+本轮只跑新workflow检查、修复后的11c现有选段一次及轻量语法/声明/规格检查；原C1/C2已成立且不受差异影响的证据复用。**不再跑容器、floor整体、36整段、checkout-shape-probe整套或路由变异**。新workflow检查直接复用已有E10，不为它再建变异矩阵。复核固定树的具体入口由PM随后统一安排；最终整体验收仍只安排一次、真实clone、外部45分钟停止，不把floor与floor+paths各跑一次，也不声称此前截断批次通过。
+
+返修后冻结代码与报告，独立验证改变部分。按现有模型与SID恢复，不重新选模型。
+
 ## 这是哪一步
 
 `openspec/changes/behavior-focused-ci/` 的 **apply**。提案（rev 2，`90a1be402610`）已由 PM 审过并附六条条件；本任务按提案的 A/B/C/D 四张单落地，**不是重新设计**。规格文本改动只允许 `openspec/changes/behavior-focused-ci/specs/verification/spec.md` 自己（它已写好），实现不得改写它的意图。

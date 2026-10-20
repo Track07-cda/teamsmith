@@ -337,3 +337,6 @@ P326 C4收口已核：07:34:19Z结束2699s/rc143，确实按45min停，PM截止j
 
 ### 2026-10-20T07:40:36Z · from: pm · re: P326
 P326交付已收到，代码相对762cd654未变已核，保持冻结，不重跑/不缩地板/不追加修正。报告已交V70。11c的“循环同模式1500次不命中、之后写文件单次通过”尚不能靠缩次数解释，已让独立席位静态核pipefail+grep-q早退/SIGPIPE等具体机制；目前是假说不是结论。必要agent续跑行为不因慢改名自检。workflow自身未映射导致FULL亦交独立审阅给最小修正，不能简单豁免/削弱未知路径fallback。
+
+### 2026-10-20T07:53:11Z · from: pm · re: P326
+P326定点返修已裁定（V70已收口）。恢复时先git status/log，随后用git show main:docs/team/threads/dev.md、git show main:docs/team/tasks/P326-behavior-focused-ci-apply.md读最新完整裁定，再在自己分支正常merge main保留全部既有成果，不rebase/reset。新版任务书优先于旧C4计划：修11c可靠匹配，probe每次真实run留一次整体退出码，E10实际workflow检查接现有36并补真实依赖/映射，不改未知FULL。写权已修正，P327/P329/P332等你冻结。本轮仅新workflow检查、11c一次、轻量检查，不跑容器/floor/probe/36整段/矩阵。后续整体由PM统一安排。同任务保留模型与SID，不fresh。先前986秒具体因果未证实，不写成必然SIGPIPE。

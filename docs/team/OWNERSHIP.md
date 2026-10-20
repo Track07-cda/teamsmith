@@ -5,9 +5,9 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
-| `skills/teamsmith/tests/smoke.sh` | agent:dev2 | P324 临时独占文件，仅改两个回收探针的环境前缀，其余内容冻结；交付后归还 dev |
-| `.github/workflows/gates.yml`、`ci/collect-scene.sh` | agent:dev2 | P324 临时借用，只修临时根接线与现场收集；冻结交付后归还 PM，P325 只有提案写权 |
-| `skills/teamsmith/tests/**`（除上面临时借用项） | agent:dev | 测试与门禁脚本 |
+| `skills/teamsmith/tests/**` | agent:dev | P326 当前写者；含 smoke.sh、probe、选择器与实际workflow入口检查。P327/P329/P332后续实现等其冻结移交，不并发写 |
+| `.github/workflows/gates.yml` | agent:dev（P326 临时） | 仅任务书明授的CI入口，不提高60分钟上限；冻结交付后归还PM |
+| `ci/collect-scene.sh` | PM | P324已合入，临时写权收回；当前无实现任务改此文件 |
 | `docs/team/reports/**`、`docs/team/threads/**` | agent:* | 报告与线程（只写自己的报告文件） |
 | `docs/team/tasks/**`、`docs/team/BOARD.md`、`docs/team/ROADMAP.md`、`docs/team/DECISIONS.md`、`docs/team/OWNERSHIP.md` | PM | 任务书与看板 |
 | `skills/teamsmith/scripts/**`、`extension/**`、`panel/**`、`SKILL.md`、`references/**`、`templates/**` | apply 阶段任务书**明授**的 agent（默认 PM） | 实现；未获授权 → `BLOCKED:` 交回 PM |
