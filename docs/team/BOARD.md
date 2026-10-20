@@ -548,6 +548,7 @@
 | P343 | §51 routes 与 §41 窗格留存两条红归因 | dev3 | dev2 | - | done | todo |
 | V82 | P327独立验收：夹具接线 | verify | - | - | done |
 | P344 | 两处夹具缺陷与grep -q同族清扫 | dev3 | - | - | wip |
+| P345 | CI时长方案：切片并行 vs 地板瘦身 | dev2 | - | - | wip |
 
 ## 当前里程碑
 
