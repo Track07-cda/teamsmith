@@ -19050,19 +19050,45 @@ fi
 #   * --select 38 / --paths 点到写信面源码或这个夹具（含 --floor --paths）— 跑；
 #   * --floor 没点到 38、或 38 只是被别人 needs 拉进来 ———————————— 具名 SKIP（不让地板变长）。
 # FAST 下照旧跳：真 tmux 场地 + 真 bundle，FAST 只跑纯逻辑段。
+# 38-h / 38-i 共用这一个判据：本轮是否**直接点到** 38（原因列表里有一条不是 floor / 前导段 /
+# needs 拉进来 / coupled）。两条慢腿（panel-b2 431 s、panel-b3 211 s）都靠它决定要不要跟着 §38 跑。
+p38_direct() { case " ${SELECT_DIRECT_KEYS:-} " in *" 38 "*) return 0 ;; esac; return 1; }
 P327_SUITE="${P327_SUITE:-$SKILL_DIR/tests/panel-b2.sh}"
-p327_direct() { case " ${SELECT_DIRECT_KEYS:-} " in *" 38 "*) return 0 ;; esac; return 1; }
 if [ ! -f "$P327_SUITE" ]; then
   bad "38-h 缺 tests/panel-b2.sh（写信面的 pty 夹具）"
 elif [ "$FAST" = "1" ]; then
   fast_skip "38-h·panel-b2-写信面" "panel-b2.sh 要真 tmux 场地 + 真 bundle（单次全场景约 7 分钟）；FAST 只跑纯逻辑段"
-elif [ "$SELECT_MODE" = "1" ] && [ "$SELECT_DECISION" = "RUN" ] && ! p327_direct; then
+elif [ "$SELECT_MODE" = "1" ] && [ "$SELECT_DECISION" = "RUN" ] && ! p38_direct; then
   cond_skip "38-h·panel-b2-写信面" "本轮没有直接点到 38（地板 / needs 带进来的；单次全场景 431 s 不进地板，改写信面源码或本夹具时才跑）"
 else
   live_mark
   bash "$P327_SUITE" --all >"$TMP/p327-panel-b2.log" 2>&1
   p327rc=$?
   p38_verdict "38-h" "$TMP/p327-panel-b2.log" "$p327rc" "panel-b2.sh 写信面（11 场景）"
+fi
+
+# 38-i P349：控制台表面（看板 / 详情 / 页面 / 折叠 / 鼠标 / 滚轮 / resize / q 收起）的真 pty 夹具
+# tests/panel-b3.sh —— pulse-console B3 的 pty 那一半（P14 真按键、P123 折叠车道、P125 并排档三列小框、
+# SGR 鼠标直驱与 tmux 全链路、q 收起后巡检仍在跑）。在此之前**没有任何门禁段跑它**：P348 §5 的 finding，
+# V85 复核「`--paths` 点到它给 decision=RUN，选中的段却一条都不跑它」——那批事故墓碑挂在一个不执行的夹具上。
+# 单次全场景 211 s（P352 在 loadavg 7.9–12.2 / 32 核上实测；P349 复测见报告）。地板按**段**分粒度，分不出
+# 这一个夹具，所以让路判断与 38-h 同一个 p38_direct 判据：
+#   * 完整门禁（不带选段参数）、decision=FULL 的兜底 ———————————— 跑；
+#   * --select 38 / --paths 点到控制台表面源码或这个夹具（含 --floor --paths）— 跑；
+#   * --floor 没点到 38、或 38 只是被别人 needs 拉进来 ———————————— 具名 SKIP（不让地板变长）。
+# FAST 下照旧跳：真 tmux 场地 + 真 bundle，FAST 只跑纯逻辑段。
+P349_SUITE="${P349_SUITE:-$SKILL_DIR/tests/panel-b3.sh}"
+if [ ! -f "$P349_SUITE" ]; then
+  bad "38-i 缺 tests/panel-b3.sh（控制台表面的 pty 夹具，12 场景）"
+elif [ "$FAST" = "1" ]; then
+  fast_skip "38-i·panel-b3-控制台表面" "panel-b3.sh 要真 tmux 场地 + 真 bundle（单次全场景 211 s）；FAST 只跑纯逻辑段"
+elif [ "$SELECT_MODE" = "1" ] && [ "$SELECT_DECISION" = "RUN" ] && ! p38_direct; then
+  cond_skip "38-i·panel-b3-控制台表面" "本轮没有直接点到 38（地板 / needs 带进来的；单次全场景 211 s 不进地板，改控制台表面源码或本夹具时才跑）"
+else
+  live_mark
+  bash "$P349_SUITE" --all >"$TMP/p349-panel-b3.log" 2>&1
+  p349rc=$?
+  p38_verdict "38-i" "$TMP/p349-panel-b3.log" "$p349rc" "panel-b3.sh 控制台表面（12 场景）"
 fi
 
 section "39 · npm CLI 与项目 skill 安装（P40：包装器 / 冲突表 / doctor 行）"
