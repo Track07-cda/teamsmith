@@ -62,6 +62,7 @@ smoke.sh	19122	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
 smoke.sh	19596	cap="$P55_W" -lt "$P55_WMAX"	  while [ "$P55_W" -lt "$P55_WMAX" ]; do
 smoke.sh	19303	cap="$P55_W" -lt 600	  while [ "$P55_W" -lt 600 ]; do
 smoke.sh	19348	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
+smoke.sh	22875	cap="$P238_FLIP_ELAPSED" -ge 7200	  while kill -0 "$P238_FLIP_PID" 2>/dev/null; do
 tmp-hygiene.sh	1696	cap="$_i" -lt 50	  while [ "$_i" -lt 50 ] && ! grep -q '^ROOT=' "$kr_out" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
 tmp-hygiene.sh	1790	cap="$_j" -lt 50	    local _j=0; while [ "$_j" -lt 50 ] && kill -0 "$orphan" 2>/dev/null; do sleep 0.1; _j=$((_j + 1)); done
 tmp-hygiene.sh	1842	cap="$_w" -lt 40	  while [ "$_w" -lt 40 ]; do

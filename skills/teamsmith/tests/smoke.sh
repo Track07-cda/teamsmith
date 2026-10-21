@@ -22863,14 +22863,39 @@ elif [ "$FAST" = "1" ]; then
 else
   live_mark
   P238_FLIP_RC=0
-  bash "$P238_SUITE" --flip >"$TMP/p238-routing-flip.log" 2>&1 || P238_FLIP_RC=$?
+  P238_FLIP_CAP=7200   # 防死等：这个上界只回答「它没动」，不回答「它慢」（P316 的挂住判据读的是**进度**）
+  # 进度证据（2026-10-21 的发布门禁实测）：这一整套变异矩阵要几十分钟，而它只在每条臂结束时写一行
+  # `CONTROL`/`FAIL`。整段阻塞调用时本段**一个 tick 都没有**，看门狗的挂住上限（1800s）到点就把一次
+  # 合法的长跑停掉 —— 全量门禁因此永远跑不完（0.3.1 的冻结验收就是这样被停的）。
+  # 所以放后台跑，把**它的日志在长**当作本段的进度：日志长一行就 section_guard_check 一次。
+  bash "$P238_SUITE" --flip >"$TMP/p238-routing-flip.log" 2>&1 &
+  P238_FLIP_PID=$!
+  P238_FLIP_LINES=0
+  P238_FLIP_ELAPSED=0
+  while kill -0 "$P238_FLIP_PID" 2>/dev/null; do
+    sleep 1
+    P238_FLIP_ELAPSED=$((P238_FLIP_ELAPSED + 1))
+    if [ "$P238_FLIP_ELAPSED" -ge 7200 ]; then break; fi   # 硬上界：只回答「它没动」，不回答「它慢」
+    P238_FLIP_NOW="$(wc -l <"$TMP/p238-routing-flip.log" 2>/dev/null | tr -dc '0-9')"
+    if [ -n "$P238_FLIP_NOW" ] && [ "$P238_FLIP_NOW" != "$P238_FLIP_LINES" ]; then
+      P238_FLIP_LINES="$P238_FLIP_NOW"
+      section_guard_check
+    fi
+  done
+  wait "$P238_FLIP_PID" 2>/dev/null || P238_FLIP_RC=$?
+  if [ "$P238_FLIP_ELAPSED" -ge 7200 ]; then
+    kill "$P238_FLIP_PID" 2>/dev/null || true
+    bad "61b 路由翻转变异没等到结果：已 ${P238_FLIP_CAP}s 仍在跑（挂住，不是慢）—— 见 $TMP/p238-routing-flip.log 尾部"
+  fi
   P238_FLIP_SUM="$(grep -a '^RESULT ' "$TMP/p238-routing-flip.log" | tail -1)"
   P238_ARMS="$(grep -ac '^CONTROL .*source_restored=' "$TMP/p238-routing-flip.log" || true)"
-  if [ "$P238_FLIP_RC" -eq 0 ]; then
-    ok "61b 路由翻转变异：$P238_ARMS 条臂按名变红并还原（$P238_FLIP_SUM）"
-  else
-    bad "61b 路由翻转变异有失败（rc=$P238_FLIP_RC；$P238_FLIP_SUM）"
-    grep -a '^FAIL ' "$TMP/p238-routing-flip.log" | head -12 | sed 's/^/      /'
+  if [ "$P238_FLIP_ELAPSED" -lt 7200 ]; then   # 到上界那条红已经点过名，不要再判一次 rc
+    if [ "$P238_FLIP_RC" -eq 0 ]; then
+      ok "61b 路由翻转变异：$P238_ARMS 条臂按名变红并还原（$P238_FLIP_SUM）"
+    else
+      bad "61b 路由翻转变异有失败（rc=$P238_FLIP_RC；$P238_FLIP_SUM）"
+      grep -a '^FAIL ' "$TMP/p238-routing-flip.log" | head -12 | sed 's/^/      /'
+    fi
   fi
 fi
 
