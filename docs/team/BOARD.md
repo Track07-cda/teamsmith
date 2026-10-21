@@ -556,6 +556,7 @@
 | V84 | P344独立验收：夹具缺陷与同族判定 | verify | - | - | wip |
 | V85 | P348独立验收：第3轮精简 | dev | - | - | wip |
 | P349 | 接线 panel-b3（排队） | dev3 | - | - | todo |
+| P350 | 产品侧两处grep -q与pipefail | dev3 | - | - | wip |
 
 ## 当前里程碑
 
