@@ -56,14 +56,18 @@ cleanup() {
   fi
   # 真私有 server：先证明 socket 私有了再收（收尾路径不许 exit）
   if [ -n "${OC_REAL_TMUX:-}" ] && [ "${OC_LIVE_UP:-0}" = "1" ]; then
+    # P310/P357：私有 socket 目录在临时根**之外**（tmp_root_socket_dir），所以它是第二个自有目录。
     PATH="${REAL_PATH:-$PATH}" tmux_iso_guard_soft "seat-interrupt" "收尾：销毁本轮私有 server" \
-      --tmpdir "${TMUX_TMPDIR:-}" --own-root "$TMP" --caller-tmpdir "$OC_CALLER_TMUX_TMPDIR" \
+      --tmpdir "${TMUX_TMPDIR:-}" --own-root "$TMP" --own-root "${TMUX_TMPDIR:-}" \
+      --caller-tmpdir "$OC_CALLER_TMUX_TMPDIR" \
       && env -u TMUX -u TMUX_PANE TMUX_TMPDIR="${TMUX_TMPDIR:-}" "$OC_REAL_TMUX" kill-server 2>/dev/null || true
   fi
   tmp_root_reap_all
   # 收尾自检（PM 2026-10-16 的提醒）：根没被回收就**大声报错并退非 0** —— 静默泄漏是实缺陷，
   # 不是「小事」：一次 1.6 GB，残留还会让 --sweep 的「占用」判据与磁盘预算失真。
-  if [ -e "$TMP" ]; then
+  # P357：例外只有一条 —— 外层（门禁的 `--keep`）明确声明保留时，留下的是**现场**而不是泄漏：
+  # 保留开关属于发起它的那一层（P324），嵌套 run 里对它的回收判定不许翻成红。
+  if [ -e "$TMP" ] && [ "${TEAM_TMP_KEEP:-0}" != "1" ]; then
     printf '\n\033[31m✗ 收尾：临时根没有回收（%s）\033[0m\n' "$TMP" >&2
     printf '   契约：tests/lib/tmp-root.sh 的 tmp_root_reap_all（台账基 = 创建时的 $(team_tmp_root)）\n' >&2
     exit 1
@@ -808,7 +812,9 @@ section "hygiene · 收尾清理：跑完不留根（PM 2026-10-16 的提醒）"
 # 这一组用**隔离的基**跑同一个脚本，把「跑完不留根」本身变成断言：
 HB="$TMP/hyg-base"; rm -rf "$HB"; mkdir -p "$HB"
 HG_RC=0
-TMPDIR="$HB" bash "$SELF_DIR/seat-interrupt.sh" --select plan >"$TMP/hyg-green.log" 2>&1 || HG_RC=$?
+# P357/P324：保留开关属于发起它的那一层 —— 门禁的 `--keep` 说的是**它自己**那个根，不能被这两个
+# 用完就扔的隔离基继承（继承了就一条断言都测不出来：绿侧退 1、泄漏旋钮不再打印）。
+TMPDIR="$HB" env -u TEAM_TMP_KEEP bash "$SELF_DIR/seat-interrupt.sh" --select plan >"$TMP/hyg-green.log" 2>&1 || HG_RC=$?
 td_eq "绿：被跑的那一轮自己退 0（它自己的收尾自检也过了）" 0 "$HG_RC"
 td_has "绿：那一轮真的跑了组（结果行在）" "$(cat "$TMP/hyg-green.log")" "== 结果 =="
 td_eq "绿：隔离基里没有留下任何根" "0" "$(ls -d "$HB"/teamsmith-* 2>/dev/null | wc -l | tr -d ' ')"
@@ -817,7 +823,8 @@ td_eq "绿：它的 run 台账 / pid 记录也撤了" "0" "$(ls -d "$HB"/.teamsm
 # → 根留下 → 夹具的收尾自检必须大声报错并退非 0（静默泄漏正是要防的那个缺陷类）。
 HB2="$TMP/hyg-base-leak"; rm -rf "$HB2"; mkdir -p "$HB2"
 HG2_RC=0
-o="$(TMPDIR="$HB2" TEAM_SMOKE_FIXTURE=1 TEAM_TMP_HYGIENE_FLIP=leak bash "$SELF_DIR/seat-interrupt.sh" --select plan 2>&1)" || HG2_RC=$?
+o="$(TMPDIR="$HB2" env -u TEAM_TMP_KEEP TEAM_SMOKE_FIXTURE=1 TEAM_TMP_HYGIENE_FLIP=leak \
+     bash "$SELF_DIR/seat-interrupt.sh" --select plan 2>&1)" || HG2_RC=$?
 td_ne "红：坏收尾的那一轮退非 0" 0 "$HG2_RC"
 td_has "红：库的泄漏旋钮确实生效（静默不回收）" "$o" "FLIP(leak)"
 td_has "红：收尾自检点名「临时根没有回收」" "$o" "临时根没有回收"
@@ -834,8 +841,11 @@ if [ -z "$OC_REAL_TMUX" ]; then
 else
   PATH="$REAL_PATH"                     # 隔离前置要真 tmux（桩只回答三个只读查询）
   export PATH
+  # P357：第二个自有目录 = 私有 socket 目录（P310 起它不挂临时根下）。只给 $TMP 时前置永远不成立，
+  # 于是这一组自 P309 起从没真正跑过（夹具自己只打一行红、不计进结果）。
   if ! tmux_iso_guard_soft "seat-interrupt" "live 组：建本轮私有 server" \
-       --tmpdir "$TMUX_TMPDIR" --own-root "$TMP" --caller-tmpdir "$OC_CALLER_TMUX_TMPDIR"; then
+       --tmpdir "$TMUX_TMPDIR" --own-root "$TMP" --own-root "$TMUX_TMPDIR" \
+       --caller-tmpdir "$OC_CALLER_TMUX_TMPDIR"; then
     skip "隔离前置不成立（私有 socket 没证明）——真回合那一段跳过（绝不碰非私有 server）"
   else
   "$OC_REAL_TMUX" new-session -d -s OC2 -n dev2 -c "$WT" \

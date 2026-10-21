@@ -1031,7 +1031,9 @@ kr_group_skip_path() {
   fi
   # 子进程里跑 bounded + flip：必须点名跳过、没有 ✗、退出 0（可见跳过 ≠ 静默通过，也 ≠ 红）
   local out="$TMP/skip-path.out" rc
-  TEAM_REPLY_NO_PROC_IO=1 timeout 900 bash "$SELF_DIR/key-replies.sh" --select bounded,flip >"$out" 2>&1; rc=$?
+  # P357/P324：嵌套子进程跑的是**用完就扔**的隔离基，门禁的 `--keep` 说的是它自己那个根。继承了保留
+  # 开关时子进程末行会变成「保留临时根：…」而不是结果行 —— 那条断言测的「跑完整轮」就永远不成立。
+  TEAM_REPLY_NO_PROC_IO=1 env -u TEAM_TMP_KEEP timeout 900 bash "$SELF_DIR/key-replies.sh" --select bounded,flip >"$out" 2>&1; rc=$?
   # 实质判据有两条：子进程跑完了整轮（末行是结果行且 ✗0）且没有红行。失败时**重跑一次带 trace**
   # 只为取证（不是掩盖红：红照旧判红，只是把成因写进断言与证据包）。
   local last
@@ -1040,7 +1042,7 @@ kr_group_skip_path() {
     *"✗0"*) ok "skip-path：缺观测器时子进程跑完整轮且 ✗0（末行：${last}）" ;;
     *)
       local trace="$TMP/skip-path-trace.out"
-      TEAM_REPLY_NO_PROC_IO=1 timeout 600 bash -x "$SELF_DIR/key-replies.sh" --select bounded,flip >"$trace" 2>&1
+      TEAM_REPLY_NO_PROC_IO=1 env -u TEAM_TMP_KEEP timeout 600 bash -x "$SELF_DIR/key-replies.sh" --select bounded,flip >"$trace" 2>&1
       kr_ev_save "$trace" "skip-path-failure-trace.txt"
       bad "skip-path：子进程没跑完整轮（末行=[${last:-<空>}]，rc=$rc，子进程日志长度=$(stat -c %s "$out" 2>/dev/null || echo 0)）—— 带 trace 的重跑见证据包 skip-path-failure-trace.txt；trace 尾部=[$(tail -3 "$trace" 2>/dev/null | tr '\n' ' ' | cut -c1-200)]"
       ;;
