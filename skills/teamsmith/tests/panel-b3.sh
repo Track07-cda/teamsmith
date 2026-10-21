@@ -330,6 +330,98 @@ print(",".join(ids))
 PYL
 }
 
+# ---------------------------------------------------------------- 看板页在场（判行为，不判列宽）
+# 120 列的并排档里，空车道按规格折成三列小框（openspec/specs/panel/spec.md「three-column frame」），
+# 框里放不下 `已放弃` 这样的标签，所以「某个车道标签在帧上」不能当「看板页在场」的判据（P125 换形态后
+# 它就恒假，P351 归因）。改判产品自己的两条行为：
+#   ① 展开车道的头（`▾ 待办`）只在看板页画 —— 这一帧是不是看板页；
+#   ② 目标表按图例顺序给出六条车道 —— 六条车道在不在（车道顺序由规格写死）。
+# 车道清单来自产品自己的 `--snapshot --targets`（点击目标就是「这条车道在这里」的承诺），跑在同一个
+# 夹具状态上，所以它判的是这一版的布局行为，不是某一档的列宽。前提：夹具的看板里至少还有一条展开的
+# 车道（默认就是这样——空车道才折，而 `todo` 有卡片），车道头的字才在帧上。
+board_anchor="▾ 待办"
+board_lane_order="todo,wip,review,done,blocked,dropped"
+
+board_lane_list() { # <outfile> → 按图例顺序去重的 lane-fold 车道名
+  "$js" "$panel" --snapshot --targets --root "$ROOT" --state-dir "$state" --team-cli "$stub" \
+    --lang zh --theme dark --width 120 --height 32 --page 4 >"$1" 2>/dev/null
+  python3 - "$1" <<'PYL'
+import json, sys
+
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception as e:  # 读不出的 dump 必须让断言红，不能当成「六条车道都在」
+    print(f"<unreadable: {e}>")
+    raise SystemExit
+seen = []
+for t in data:
+    a = t.get("action") or {}
+    if a.get("kind") == "lane-fold" and a.get("lane") not in seen:
+        seen.append(a.get("lane"))
+print(",".join(seen))
+PYL
+}
+
+board_anchor_hits() { # <capture file> → 帧上展开车道头的处数（读不到按 0，断言随之红）
+  local n
+  n="$(grep -cF -- "$board_anchor" "$1" 2>/dev/null)"
+  printf '%s\n' "${n:-0}"
+}
+
+assert_board_page() { # <capture file> <label>
+  local lanes hits
+  lanes="$(board_lane_list "$tmp/$current/board-lanes.json")"
+  hits="$(board_anchor_hits "$1")"
+  if [ "$hits" -ge 1 ] && [ "$lanes" = "$board_lane_order" ]; then
+    ok "$2（帧上是看板页：车道头 ${hits} 处；六条车道按图例顺序：${lanes}）"
+  else
+    bad "$2（帧上车道头 ${hits} 处、期望 ≥1；车道目标 [${lanes}]、期望 [${board_lane_order}]）"
+  fi
+}
+
+assert_not_board_page() { # <capture file> <label>
+  local hits
+  hits="$(board_anchor_hits "$1")"
+  if [ "$hits" -eq 0 ]; then
+    ok "$2（帧上没有看板页的车道头）"
+  else
+    bad "$2（帧上出现看板页的车道头 ${hits} 处）"
+  fi
+}
+
+# 6.1 的点击坐标从帧里取：行 = 画着那张卡的那一行，列 = 那张卡的 id 所在的显示列。P125 把未折叠
+# 车道 19→22 列之后，写死的 25 落到卡片内边距那一列，点击就不再落在卡片上；从帧里取坐标的断言判的
+# 是「画出来的这张卡片点得中」，换一版宽度分配也成立。取不到就打印空，由下面的断言红（不回落常数）。
+card_point() { # <capture file> <card id> → "col row"（显示列/行，1-based）
+  python3 - "$1" "$2" <<'PYX'
+import re, sys
+
+WIDE = [(0x1100,0x115f),(0x2e80,0x303e),(0x3041,0x33ff),(0x3400,0x4dbf),(0x4e00,0x9fff),(0xa000,0xa4cf),(0xac00,0xd7a3),(0xf900,0xfaff),(0xfe10,0xfe19),(0xfe30,0xfe6f),(0xff00,0xff60),(0xffe0,0xffe6)]
+
+def cells(text):
+    out = []
+    for ch in text:
+        out.append(ch)
+        if any(a <= ord(ch) <= b for a, b in WIDE):
+            out.append("")
+    return out
+
+rows = [re.sub(r"\x1b\[[0-9;]*m", "", l.rstrip("\n")) for l in open(sys.argv[1], encoding="utf-8")]
+needle = sys.argv[2]
+for row, r in enumerate(rows, 1):
+    c = cells(r)  # 每个显示列一个元素（宽字符的第二列是空串），下标 + 1 就是显示列
+    for i in range(len(c) - len(needle) + 1):
+        if "".join(c[i:i + len(needle)]) != needle:
+            continue
+        before = c[i - 1] if i else ""
+        after = c[i + len(needle)] if i + len(needle) < len(c) else ""
+        if (before and before.isalnum()) or (after and after.isdigit()):  # 不是 P140 这类更长的 id
+            continue
+        print(i + 1, row)
+        raise SystemExit
+PYX
+}
+
 # ---------------------------------------------------------------- scenarios
 
 scn_pages() {
@@ -508,14 +600,14 @@ scn_workdetail() {
   # 工作页刚把它走到 V14，所以看板页打开的也是 V14 —— 验证的是「返回原页」，不是 id。
   keys 4; sleep 1
   wcap board
-  assert_has "$(wfile board)" "已放弃" "B5 切到看板页"
+  assert_board_page "$(wfile board)" "B5 切到看板页"
   assert_eq "B5 焦点状态两页共用（看板页也在 V14）" "$(focused_id "$(wfile board)")" "V14"
   keys Enter; sleep 1.4
   wcap board-detail
   assert_has "$(wfile board-detail)" "详情 V14" "B5 看板页 enter 打开焦点卡详情"
   keys Escape; sleep 0.8
   wcap board-back
-  assert_has "$(wfile board-back)" "已放弃" "B5 esc 回到看板页"
+  assert_board_page "$(wfile board-back)" "B5 esc 回到看板页"
   assert_eq "B5 看板页返回后 panel-page=4" "$(page_of)" "4"
   assert_eq "B5 看板页返回后焦点仍是 V14" "$(focused_id "$(wfile board-back)")" "V14"
 
@@ -891,18 +983,18 @@ scn_board() {
   keys 4
   sleep 1
   bcap p4
-  assert_has "$(bfile p4)" "已放弃" "按 4 切到看板页（六车道在场）"
+  assert_board_page "$(bfile p4)" "按 4 切到看板页（六车道在场）"
   assert_eq "按 4 后 panel-page=4" "$(page_of)" "4"
   start_panel
   bcap relaunch
-  assert_has "$(bfile relaunch)" "已放弃" "重启后仍在看板页（panel-page 记忆）"
+  assert_board_page "$(bfile relaunch)" "重启后仍在看板页（panel-page 记忆）"
   assert_eq "重启后 panel-page 仍是 4" "$(page_of)" "4"
   # 4.2: an out-of-range file falls back to the default page, never an error.
   printf '9\n' > "$(page_file)"
   start_panel
   bcap oob
   assert_has "$(bfile oob)" "项目进度" "panel-page=9 时回落到默认页（总览）"
-  assert_not "$(bfile oob)" "已放弃" "panel-page=9 时没有渲染看板页"
+  assert_not_board_page "$(bfile oob)" "panel-page=9 时没有渲染看板页"
   # 5.3: the focus is keyed by entry id — a reorder keeps it, a removal falls back inside the lane.
   board_a="$tmp/$current/board-a.json"
   board_b="$tmp/$current/board-b.json"
@@ -1043,9 +1135,14 @@ PYC
 
   # 6.1: a click on a card focuses it — in the injected instance's own bytes, the focus cursor has
   # to move onto the clicked card (the start of the frame puts it on the first card of `todo`).
+  # P352: 坐标从帧里取（行 = 画着 P14 的那一行，列 = 它的 id 所在的显示列）—— P125 把未折叠车道
+  # 19→22 列之后，写死的 25 落到卡片内边距那一列，点击就不再是「点卡片」。
+  read -r click_col click_row < <(card_point "$(bfile lane-first)" P14)
+  printf '  \033[36m· 夹具\033[0m 6.1 的点击点取自 lane-first 帧：row=%s col=%s（P14 的 id 列）\n' \
+    "${click_row:-（取不到）}" "${click_col:-（取不到）}"
   B3_STUB_DONE=20 python3 "$pty_direct" --js "$js" --panel "$panel" --root "$ROOT" --state-dir "$state" \
     --team-cli "$stub" --out "$tmp/$current/click-card.bin" --expect-enable yes \
-    --click-col 25 --click-row 4 --cols 120 --rows 32 >"$tmp/$current/click-card.log" 2>&1
+    --click-col "${click_col:-0}" --click-row "${click_row:-0}" --cols 120 --rows 32 >"$tmp/$current/click-card.log" 2>&1
   assert_eq "直驱 pty：卡片点击注入成功（6.1）" "$?" "0"
   click_moved="$(python3 - "$tmp/$current/click-card.bin" <<'PYM'
 import re, sys
@@ -1084,7 +1181,7 @@ scn_detail() {
   other_before="$(cd "$ROOT" && find .pi/team/state -type f ! -name draft.md ! -name panel.conf ! -name panel-page | sort | xargs -r md5sum | md5sum)"
   start_panel
   dcap board
-  assert_has "$(dfile board)" "已放弃" "夹具：控制台停在看板页（六车道在场）"
+  assert_board_page "$(dfile board)" "夹具：控制台停在看板页（六车道在场）"
 
   # 9.1 + 9.4: Enter opens the focused card's detail; the first detail frame is timed from the key,
   # then the view is waited for (the first frame is the loading state — the block is one child away).
@@ -1110,7 +1207,7 @@ scn_detail() {
   assert_has "$(dfile open)" "[brief]" "第一个文件 tab 默认打开"
   assert_has "$(dfile open)" "fixture brief" "详情视图渲染了 brief 的正文"
   assert_has "$(dfile open)" "verbatim fence body" "围栏代码块正文原样上屏"
-  assert_not "$(dfile open)" "已放弃" "详情视图替换了看板块（替换块不留内容）"
+  assert_not_board_page "$(dfile open)" "详情视图替换了看板块（替换块不留内容）"
 
   # 9.2: ←/→ switch files, ↑/↓ scroll the document.
   keys Right
@@ -1132,7 +1229,7 @@ scn_detail() {
   keys q
   sleep 0.8
   dcap back-q
-  assert_has "$(dfile back-q)" "已放弃" "q 返回看板页"
+  assert_board_page "$(dfile back-q)" "q 返回看板页"
   assert_not "$(dfile back-q)" "详情 V14" "q 之后详情视图关闭"
   local pane_pid args
   pane_pid="$(tmux -L "$sock" list-panes -t "$sess:panel" -F '#{pane_pid}' | head -1)"
@@ -1147,7 +1244,7 @@ scn_detail() {
   keys Escape
   sleep 0.8
   dcap back-esc
-  assert_has "$(dfile back-esc)" "已放弃" "Esc 返回看板页"
+  assert_board_page "$(dfile back-esc)" "Esc 返回看板页"
   assert_not "$(dfile back-esc)" "详情 V14" "Esc 之后详情视图关闭"
 
   # P249: a preview's artifacts switch with ←/→, ↑/↓ scrolls the document and q returns to the work
