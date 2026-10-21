@@ -552,9 +552,9 @@
 | P346 | CI地板切片并行（排队） | dev2 | - | - | wip |
 | V83 | P342独立验收：取样范围收窄 | verify | - | - | done |
 | P347 | 给豁免配证伪者（V83 F1） | dev-bob | - | - | done |
-| P348 | 测试精简第3轮 | dev-bob | - | - | wip |
+| P348 | 测试精简第3轮 | dev-bob | - | - | done |
 | V84 | P344独立验收：夹具缺陷与同族判定 | verify | - | - | wip |
-| V85 | P348独立验收：第3轮精简 | dev | - | - | wip |
+| V85 | P348独立验收：第3轮精简 | dev | - | - | done |
 | P349 | 接线 panel-b3（排队） | dev3 | - | - | todo |
 | P350 | 产品侧两处grep -q与pipefail | dev3 | - | - | todo |
 | V86 | P346独立验收：切片无损 | dev-bob | - | - | todo |
