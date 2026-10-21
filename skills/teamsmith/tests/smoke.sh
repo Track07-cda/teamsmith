@@ -22882,14 +22882,24 @@ else
       section_guard_check
     fi
   done
-  wait "$P238_FLIP_PID" 2>/dev/null || P238_FLIP_RC=$?
-  if [ "$P238_FLIP_ELAPSED" -ge 7200 ]; then
+  # 到上界时**必须先收子进程再 wait**：子进程不退出时阻塞的 wait 永远不返回，上界等于没写（V90 F1）。
+  # 用「还活着没有」而不是「跑了几秒」判超时，也是为了不漏掉「恰好在同一秒正常退出」的合法结束（V90 F2）。
+  P238_FLIP_TIMED_OUT=0
+  if kill -0 "$P238_FLIP_PID" 2>/dev/null; then
+    P238_FLIP_TIMED_OUT=1
     kill "$P238_FLIP_PID" 2>/dev/null || true
-    bad "61b 路由翻转变异没等到结果：已 ${P238_FLIP_CAP}s 仍在跑（挂住，不是慢）—— 见 $TMP/p238-routing-flip.log 尾部"
+    for _p238_grace in 1 2 3 4 5; do
+      kill -0 "$P238_FLIP_PID" 2>/dev/null || break
+      sleep 1
+    done
+    kill -9 "$P238_FLIP_PID" 2>/dev/null || true
   fi
+  wait "$P238_FLIP_PID" 2>/dev/null || P238_FLIP_RC=$?
   P238_FLIP_SUM="$(grep -a '^RESULT ' "$TMP/p238-routing-flip.log" | tail -1)"
   P238_ARMS="$(grep -ac '^CONTROL .*source_restored=' "$TMP/p238-routing-flip.log" || true)"
-  if [ "$P238_FLIP_ELAPSED" -lt 7200 ]; then   # 到上界那条红已经点过名，不要再判一次 rc
+  if [ "$P238_FLIP_TIMED_OUT" = "1" ]; then
+    bad "61b 路由翻转变异没等到结果：已 ${P238_FLIP_CAP}s 仍在跑（挂住，不是慢）—— 见 $TMP/p238-routing-flip.log 尾部"
+  else
     if [ "$P238_FLIP_RC" -eq 0 ]; then
       ok "61b 路由翻转变异：$P238_ARMS 条臂按名变红并还原（$P238_FLIP_SUM）"
     else
