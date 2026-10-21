@@ -48,3 +48,19 @@ V86（`docs/team/reports/V86-dev.md`）确认切片无损（自己重写哈希�
 
 改完跑一次 `--select <管这些文件的段>` + `--check`，贴读数；交 V86 同一席位定点复看这四处差异。
 
+## 第三轮（F2 的裁定：不要缓存，直接把代价写清）
+
+V86 第二轮判 **FAIL**，只有 F2 不成立（F1/F3/F4 已过）。它的分析我采纳：`docker buildx … --cache-to type=gha` 写在 `run:` 步骤里**拿不到** `ACTIONS_RUNTIME_TOKEN` / `ACTIONS_CACHE_URL` / `ACTIONS_RESULTS_URL`（runner 只把它们注入 Node/Container action，不进脚本步骤；Docker 文档自己建议用 helper action 去导出）。后果是导入侧静默冷构建、导出侧第 1 片直接非零退出——也就是说第一次真跑大概是「第 1 片红在导出、其余三片冷构建」。
+
+**裁定：去掉缓存。** 理由是我们的成本账：
+
+- 一次构建 59 s，四片 = **约 4 分钟计费**；相对 45 分钟的墙钟，这 4 分钟不值得为它引入凭据依赖或第三方 action。
+- 制品分发要把 **1290 MB** 搬四趟；`crazy-max/ghaction-github-runtime` 这类 helper 为省 4 分钟引入一个第三方 action 的供应链面——都不划算。
+
+要做的：
+
+1. 删掉 `--cache-from/--cache-to` 与相关注释，回到每片一次普通构建。
+2. 把注释改成**实测代价**：「四片各构建一次，约 4 分钟计费（镜像 1290 MB，一次 59 s）；没有缓存，因为 `run:` 步骤拿不到 Actions 缓存凭据，而为了 4 分钟引入第三方 helper 不划算」。
+3. 顺带把 V86 点的 `gates.yml:308` 那句旧注释改对（它上一轮就点过）。
+4. 跑同一批复验（`--check` + 一次选段），冻结后交 verify 做第三轮定点复看：只看这三处。
+
