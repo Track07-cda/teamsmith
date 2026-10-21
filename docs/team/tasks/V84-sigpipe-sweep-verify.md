@@ -1,0 +1,30 @@
+# V84 · P344 的独立验收：两处夹具缺陷修对了，同族清扫的判定站得住吗
+
+task: V84
+agent: verify
+phase: verify
+category: verify
+change: -
+specs: verification#The gate judges behaviour only, and never reports a skip as a pass
+anchor: none (infra) — 夹具缺陷与同族判定
+deltas: -
+branch: task/V84-sigpipe-sweep-verify
+
+## 受检
+
+候选 `de497f52`（代码面 `899ab6f3`，`routes.sh` +8/3、`smoke.sh` +35/−50），报告 `docs/team/reports/P344-dev3.md`。
+
+两处修正：`§51` 的走查不再靠「环境碰巧没导出 `TMPDIR`」决定测哪一支，而是**同时给出两个源**并断言产品选了 `TMPDIR` 那支（顺带把优先级钉住）；`§41 ④` 的等待循环不再把名册管进 `grep -q`（`pipefail` 下 `grep` 早退给上游 SIGPIPE，管道返回 141，循环从没 break 过）。
+
+它同时报了一个 **BLOCKED**：同族里另有 5 处「会」但不在它的写集——3 处在面板夹具（`cap()` 的 `capture-pane -S -400`）、2 处在产品码（`common.sh:5234` 已实测复现 141、`cmd-status.sh:158` 是边界）。
+
+## 要回答的四件事
+
+1. **§51 真的不再依赖环境**：确认它现在显式给两个源、断言点名 `TMPDIR` 那条；在**默认环境**与**导出 `TMPDIR`** 两种环境下各跑一次 `--select 51`，两次都必须绿（这是本次的根因场景）；再确认产品若把优先级反过来（私有副本里改 `team_tmp_root_source` 的顺序）→ 那条断言必须红。
+2. **§41 ④ 的等待不再假失败**：读新写法，确认它是「先落变量再匹配」；在私有副本里把等待改成「永不 break」→ 必须红并点名；`--select 41` 一次必须绿。
+3. **同族判定站得住**：它给了一张逐条判定表（238 行管道末尾 `grep -q`，3 处改、其余按生产者形状判「不会」、5 处 BLOCKED）。**抽 6 条**（含 2 条被判「不会」的、2 条被改的、2 条 BLOCKED 的）自己复核它的判定理由是否成立；判「不会」的理由里有「生产者单次小写」「生产者状态被 `|| true` 吸收」「中间级过滤后不超过管道容量」三类，逐类至少抽一条。
+4. **BLOCKED 的 5 处**：核对它说的事实（尤其 `common.sh:5234` 是否真能复现 141——它说实测复现了），并给出你的判断：哪几处是产品缺陷（要修）、哪几处是夹具（可修可不修）、哪几处其实无害。
+
+## 边界与交付
+
+只读代码、只在 `/var/tmp` 私有副本里造破坏、只写 `docs/team/reports/V84-verify.md` 与自己的线程；不改实现、不合并、不 push。不跑整套。跑前 `ps` 确认没有别人的 `smoke.sh`。结论先写 PASS/PARTIAL/FAIL，并把「同族判定是否成立」单独给一句结论。local 模式。
