@@ -34,6 +34,31 @@ name: gates
 # project ledger's P130 report; the matrix itself is small enough to state here: a push touching only
 # `docs/**` is ignored, and any of `skills/**`, `openspec/**`, `ci/**`, `.github/**`, `bin/**`,
 # `install.sh`, `package.json`, `README.md` or `LICENSE` triggers a run.
+#
+# P346 · shard parallelism (the 60-minute wall clock). The floor alone measures 121 sections /
+# 5322 s (88.7 min), so one job cannot finish the gate inside its 60-minute budget. The floor is
+# therefore cut into `matrix.slice` shards: `shard(key) = cksum(key) % N` — the shard of a section
+# depends only on its key, so inserting a row into `section-paths.tsv` never moves other sections
+# between shards (position rotation would make "shard 2" mean a different set on every push).
+# **N has exactly one source: this matrix's length** (`strategy.job-total`); the command line below
+# reads `${{ matrix.slice }}/${{ strategy.job-total }}` and no other place restates it.
+# Coverage is unchanged, and that is asserted rather than promised, in three layers:
+#   ① `section-select.sh --slice k/N` — every shard recomputes its own set from the same rule;
+#   ② `section-select.sh --check` — for N ∈ {2,3,4,5,6,8,12} the shards are an exact partition of
+#      the floor (no gap, no duplicate, no empty shard) and the rule depends only on the key;
+#   ③ the `coverage` job below — it downloads the key list each shard **actually wrote**, compares
+#      it byte-for-byte with its own recompute, and asserts the union is exactly the floor. A shard
+#      that failed, was cancelled or silently narrowed turns that job red by name.
+# Cost (measured, not modelled): the four shards' estimated wall clocks are 23 / 35 / 19 / 45 min
+# (per-shard reading of the 2026-10-20 17:08 full-run section ledger, 5324 s total), so the matrix
+# finishes in **19–45 min** rather than 88.7 min. The thinnest shard is shard 4: 45.4 min against
+# the 60-minute ceiling leaves **11.5 min of headroom** — it owns both of the two most expensive
+# sections (§51 = 1023 s and §38 = 767 s). If that headroom disappears, change the matrix length
+# (5 shards costs ~+45 % billed minutes); do not tune the sharding rule, which must stay a pure
+# function of the key. The shards together also re-run the needs closure and the prologue N times
+# (~+33 % billed minutes at N=4; wall clock is the slowest shard, billing is the sum), and each shard
+# builds the gate image once — ~4 billed minutes for four shards, with no cache (the build step
+# explains why caching is not worth a credential dependency here).
 on:
   push:
     branches: [main]
@@ -44,21 +69,38 @@ on:
 permissions:
   contents: read
 
+# P346: the concurrency group stays on the **workflow** (one run per ref queueing behind the
+# previous one). Do not move it into the gate job: a per-job group would put the N matrix
+# instances into one group, and GitHub keeps only "1 running + 1 pending" per group — the other
+# shards would be cancelled silently, which is exactly what the coverage job exists to catch.
 concurrency:
   group: gates-${{ github.ref }}
   cancel-in-progress: false
 
-# P324：gate 步与收集步共用一个**显式**临时根。这里钉一个值，gate 步把它传给容器并在跑门禁之前建出来，
-# 收集步拿同一个值当拷贝源 —— 两边不再各自猜一个路径。
-env:
-  TEAM_CI_TMP_ROOT: /var/tmp/teamsmith-ci-tmp
-
 jobs:
   gates:
+    # Reader-facing shard number: the run page shows "gates (shard 2/4)" before any log is opened.
+    name: gates (shard ${{ matrix.slice }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     # The correctness suite takes ~10 minutes in the container and the image build a few; P130 moved
-    # the perf suite into this same job (see below), so the budget covers both suites + one build.
+    # the perf suite into this same job (see below), so the budget covers both suites + this shard's
+    # one image build (P346: four shards = four builds, ~59 s each, no cache — see the build step).
+    # P346 keeps the 60-minute ceiling unchanged: sharding makes the gate fit under it, it does not
+    # raise it.
     timeout-minutes: 60
+    strategy:
+      # A red shard must not cancel its siblings: the reader needs to see which sections are red and
+      # which shards were fine, and the coverage job names the gap either way.
+      fail-fast: false
+      matrix:
+        # The only declaration of N (see the header). Add or remove a value here to change the shard
+        # count; nothing else in this file or in the selector restates it.
+        slice: [1, 2, 3, 4]
+    env:
+      # P324：gate 步与收集步共用一个**显式**临时根。这里钉一个值，gate 步把它传给容器并在跑门禁之前建出来，
+      # 收集步拿同一个值当拷贝源 —— 两边不再各自猜一个路径。
+      # P346：每片一份根（容器内那把机器锁默认也在 $TMPDIR 下 → 自动每片一把，互相不排队）。
+      TEAM_CI_TMP_ROOT: /var/tmp/teamsmith-ci-tmp/s${{ matrix.slice }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -69,6 +111,20 @@ jobs:
 
       # Self-contained: no registry credentials, no floating image tag. ci/Containerfile pins
       # tmux 3.7b, node 24.19.0, bun 1.3.14, pi 0.86.0 and openspec 1.8.0 (see its header).
+      #
+      # P346/F2 — the measured prices of the three ways to avoid N builds, and why this file pays for
+      # the builds anyway (D-ruling 2026-10-21, after the V86 review):
+      #   * **four builds**: 59 s each, so ~4 billed minutes per run (the image is 1290 MB — measured
+      #     with `podman image inspect --format {{.Size}}` on ci/Containerfile);
+      #   * **artifact distribution**: moves those 1290 MB four times — dearer than the build it saves;
+      #   * **Actions layer cache**: `--cache-from/--cache-to type=gha` inside a `run:` step does NOT
+      #     receive `ACTIONS_RUNTIME_TOKEN` / `ACTIONS_CACHE_URL` / `ACTIONS_RESULTS_URL` — the runner
+      #     injects those only into Node/Container actions, and Docker's own docs point at a helper
+      #     action to export them. So the import would silently fall back to a cold build and the
+      #     export would fail the one shard that writes it: a credential dependency plus a broken
+      #     first run, to save ~4 minutes of a 45-minute wall clock.
+      # So: no cache, one plain build per shard. If the build ever becomes the dominant cost, the fix
+      # is a helper action that exports the cache correctly — not a cache flag inside this block.
       - name: Build the gate image
         run: docker build -f ci/Containerfile -t teamsmith-gates:ci .
 
@@ -85,6 +141,14 @@ jobs:
       # the container faithful to a native run in that one POSIX corner; nothing else changes.
       - name: Gates (pinned container)
         id: gates
+        env:
+          # P346: the shard coordinate is evaluated by GitHub here, not inside the run block —
+          # `workflow-entry.sh` (§36 ⑨) substitutes exactly two expressions (event.before / sha) and
+          # fails loudly on any other `${{ … }}` left in this block.
+          SHARD_SLICE: ${{ matrix.slice }}/${{ strategy.job-total }}
+          # Where the container drops this shard's key list (the coverage job's input). Outside the
+          # checkout: the workspace mount stays read-only, this directory is the explicit exchange.
+          SHARD_EXCHANGE_DIR: ${{ runner.temp }}/gate-shard-exchange
         run: |
           # ── P326/B：变动的路径在**宿主侧**算，NUL 分隔读进 bash 数组，作为容器命令的**参数**交进去。──
           # 为什么不走「文件 / 按行读」：路径本身可以含换行，而 git 的默认列表会把引号与反斜杠 C 转义
@@ -92,6 +156,8 @@ jobs:
           # 工作区是只读挂载，所以也不能把路径写进 checkout 让容器去读。
           # 基点不可解析（workflow_dispatch 没有 before、全零、或不在仓里）→ 一条 ::warning:: + 空数组 →
           # 跑全套：未声明路径或不可解析基点一律落到「多跑」，从不落到「少跑」。
+          # P346：这条「跑全套」在分片下也一样是**多跑**——每片跑全集的 1/N（`--slice` 不带决策），
+          # 不是 N 片各跑一遍整套。
           PATHS=()
           BASE="${{ github.event.before }}"
           TIP="${{ github.sha }}"
@@ -108,25 +174,50 @@ jobs:
           # `smoke.sh --keep` 让套件把现场留下（默认失败也删，那行提示不是事实）。
           # P223：`--keep` 真生效的判据在 smoke 自己的 §40（它以前被机器锁的 re-exec 吃掉，
           # 两次 CI 红的工件里就只剩一个锁文件）——这里只负责留下容器。
-          # P324：容器拿到的是**显式**临时根（`TMPDIR` = 上面那个 `TEAM_CI_TMP_ROOT`），并且在跑门禁之前
+          # P324：容器拿到的是**显式**临时根（`TMPDIR` = 上面那个每片一份的值），并且在跑门禁之前
           # 由这一步建出来（显式选的根必须已存在且可写，解析器不替它建）—— 收集步拷的就是这一个目录。
           # P326/B：普通推送跑「产品基线 ∪ 这次改动点到的段」（`--floor --paths "$@"`）；没有可解析基点时
           # 退回全套（命令与改动前逐字一致）。仍是唯一的阻塞步、无 FAST、无 continue-on-error，
           # 披露行（decision= / 未跑清单 / == 选段结果 ==）由套件自己打印 —— 选段运行不冒充全套门禁。
+          # P346：两条命令都带 `--slice "$SHARD_SLICE"`（由 GitHub 求值后经环境进来，见上面的 env），
+          # 容器把本片 own 的 key 清单写到 /artifacts，名子带片号 —— coverage 作业照它对账。
           mkdir -p .ci-artifacts
-          docker rm -f teamsmith-gates-run >/dev/null 2>&1 || true
+          EXCHANGE="${SHARD_EXCHANGE_DIR:-$PWD/.ci-artifacts/shard-exchange}"
+          mkdir -p "$EXCHANGE"
+          CNAME="teamsmith-gates-run-s${SHARD_SLICE%%/*}"
+          docker rm -f "$CNAME" >/dev/null 2>&1 || true
           if [ "${#PATHS[@]}" -gt 0 ]; then
-            docker run --name teamsmith-gates-run --pid=host \
-              --user "$(id -u):$(id -g)" -e HOME=/tmp -e TMPDIR="$TEAM_CI_TMP_ROOT" \
-              -v "$PWD:/work:ro" -w /work \
+            docker run --name "$CNAME" --pid=host \
+              --user "$(id -u):$(id -g)" -e HOME=/tmp -e TMPDIR="$TEAM_CI_TMP_ROOT" -e SHARD_SLICE="$SHARD_SLICE" \
+              -v "$PWD:/work:ro" -v "$EXCHANGE:/artifacts" -w /work \
               teamsmith-gates:ci \
-              bash -c 'mkdir -p "$TMPDIR" && openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh --floor --keep </dev/null --paths "$@"' _ "${PATHS[@]}"
+              bash -c 'set -u; shopt -s nullglob; mkdir -p "$TMPDIR"; openspec validate --all --strict || exit $?; bash skills/teamsmith/tests/smoke.sh --floor --keep </dev/null --slice "$SHARD_SLICE" --paths "$@"; rc=$?; n=0; for f in "$TMPDIR"/*.keys; do cp "$f" "/artifacts/shard-${SHARD_SLICE%%/*}.keys"; n=$((n + 1)); done; [ "$n" -gt 0 ] || printf "::warning::shard %s wrote no key list (%s/*.keys)\n" "$SHARD_SLICE" "$TMPDIR" >&2; exit "$rc"' _ "${PATHS[@]}"
           else
-            docker run --name teamsmith-gates-run --pid=host \
-              --user "$(id -u):$(id -g)" -e HOME=/tmp -e TMPDIR="$TEAM_CI_TMP_ROOT" \
-              -v "$PWD:/work:ro" -w /work \
+            docker run --name "$CNAME" --pid=host \
+              --user "$(id -u):$(id -g)" -e HOME=/tmp -e TMPDIR="$TEAM_CI_TMP_ROOT" -e SHARD_SLICE="$SHARD_SLICE" \
+              -v "$PWD:/work:ro" -v "$EXCHANGE:/artifacts" -w /work \
               teamsmith-gates:ci \
-              bash -c 'mkdir -p "$TMPDIR" && openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh --keep </dev/null'
+              bash -c 'set -u; shopt -s nullglob; mkdir -p "$TMPDIR"; openspec validate --all --strict || exit $?; bash skills/teamsmith/tests/smoke.sh --keep --slice "$SHARD_SLICE" </dev/null; rc=$?; n=0; for f in "$TMPDIR"/*.keys; do cp "$f" "/artifacts/shard-${SHARD_SLICE%%/*}.keys"; n=$((n + 1)); done; [ "$n" -gt 0 ] || printf "::warning::shard %s wrote no key list (%s/*.keys)\n" "$SHARD_SLICE" "$TMPDIR" >&2; exit "$rc"' _ 
+          fi
+          GATE_RC=$?
+          exit "$GATE_RC"
+
+      # P346: which sections this shard owned, as a run-page annotation. It is the shard's own
+      # selection echoed back (not a host-side recompute) — a reader can tell a shard failure apart
+      # from a whole-gate failure without opening the log, and the coverage job reads the status
+      # file to say which shard went missing.
+      - name: Show this shard's own sections
+        if: always()
+        env:
+          SHARD_EXCHANGE_DIR: ${{ runner.temp }}/gate-shard-exchange
+        run: |
+          mkdir -p "$SHARD_EXCHANGE_DIR"
+          printf '%s\n' "${{ steps.gates.outcome }}" > "$SHARD_EXCHANGE_DIR/shard-${{ matrix.slice }}.status"
+          KEYFILE="$SHARD_EXCHANGE_DIR/shard-${{ matrix.slice }}.keys"
+          if [ -s "$KEYFILE" ]; then
+            echo "::notice::shard ${{ matrix.slice }}/${{ strategy.job-total }} — $(wc -l < "$KEYFILE" | tr -d ' ') sections owned: $(tr '\n' ' ' < "$KEYFILE")"
+          else
+            echo "::warning::shard ${{ matrix.slice }}/${{ strategy.job-total }} wrote no own-key list (the gate stopped before selecting)"
           fi
 
       - name: Collect the failure scene
@@ -143,15 +234,29 @@ jobs:
           #   * 打印找过的路径 + 每个现场族的文件数/字节数；
           #   * 现场族低于阈值 → 这一步红（打印它找过的路径）；gate 绿时不收集（没东西要带），
           #     但容器照旧收掉。
-          bash ci/collect-scene.sh --container teamsmith-gates-run --tmp-root "$TEAM_CI_TMP_ROOT" \
+          # P346：容器名与临时根都带片号，各片互不干扰。
+          bash ci/collect-scene.sh --container "teamsmith-gates-run-s${{ matrix.slice }}" --tmp-root "$TEAM_CI_TMP_ROOT" \
             --out .ci-artifacts --gate-outcome "$GATES_OUTCOME"
 
       - name: Upload the failure scene
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: gate-failure-scene
+          name: gate-failure-scene-s${{ matrix.slice }}
           path: .ci-artifacts
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # P346: this shard's own-key list — the coverage job's only input. Uploaded unconditionally
+      # (a failed shard still tells coverage which sections it was responsible for; a cancelled one
+      # uploads nothing, and coverage then names the gap instead of quietly shrinking N).
+      - name: Upload this shard's own-key list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-shard-report-${{ matrix.slice }}
+          path: ${{ runner.temp }}/gate-shard-exchange
           include-hidden-files: true
           retention-days: 7
           if-no-files-found: ignore
@@ -160,8 +265,11 @@ jobs:
       # merge gate. It used to be a second job, and each of the two jobs built the same pinned image
       # again, so every run paid two `docker build`s (the quota burn D54 records). Option ① (merge it
       # into this job) was chosen over option ② (keep two jobs + a GHCR-cached image): one runner, one
-      # build, no registry credentials or permissions, no `docker pull` that can go stale or fail and
-      # silently turn back into a second build. The price — correctness and perf now run sequentially
+      # build **per job**, no registry credentials or permissions, no `docker pull` that can go stale
+      # or fail and silently turn back into a second build. P346 note: the gate job is now a matrix, so
+      # a run does N builds (one per shard, ~59 s each = ~4 billed minutes at N=4) — the "one build"
+      # property is per job, not per run, and there is no layer cache (the build step says why).
+      # The price — correctness and perf now run sequentially
       # in one job, so a correctness hang consumes this job's timeout before perf starts — is
       # acceptable: perf numbers are recorded by the release-time run and perf gates nothing (the perf
       # suite's own verdicts are non-blocking by design). §B.
@@ -172,8 +280,11 @@ jobs:
       # non-blocking: the step shows red with an annotation, later steps run, and the job/workflow
       # conclusion is untouched. The correctness step above has no such tolerance — it stays the hard
       # gate, and the ledger's static checks assert exactly that this stays so.
+      # P346: only the first shard runs it — the perf numbers are one reference reading, not N; a
+      # per-shard copy would pay N extra image-less runs on N different VMs and print N diverging
+      # numbers that gate nothing.
       - name: Performance suite (pinned container, non-blocking)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.slice == 1 }}
         continue-on-error: true
         run: |
           docker run --rm --pid=host \
@@ -181,3 +292,58 @@ jobs:
             -v "$PWD:/work:ro" -w /work \
             teamsmith-gates:ci \
             bash -c 'bash skills/teamsmith/tests/perf.sh --in-container --tree /work'
+
+  # P346 · the coverage job — the load-bearing assertion of shard parallelism.
+  #
+  # `--slice k/N` (each shard recomputes from the rule) and `--check` (static: the rule partitions
+  # the floor for every N) can only prove the rule is not broken today. Neither can prove that N
+  # shards **actually ran**: a matrix loses shards through fail-fast, quota, cancellation or a
+  # silent narrowing, and that is the only way this scheme can lose coverage. So this job takes the
+  # lists the shards wrote while they ran and:
+  #   * compares each one byte-for-byte with its own recompute (a silently narrowed shard is red);
+  #   * asserts the union is exactly the floor ∪ changed paths; a missing section gets its own
+  #     ::error:: unless a whole shard is missing — then its share is one shard-level annotation plus
+  #     one line listing that shard's keys (64 annotations for one cancelled shard were noise);
+  #   * is red whenever the matrix was not `success` — "1 of 4 cancelled" can never read as a pass.
+  # The changed-path base is re-derived here on purpose: this job does not trust the shards' argv
+  # (that would make "what it ran" unchecked). If the two derivations ever diverge, this job goes
+  # red — it cannot go green by accident.
+  coverage:
+    name: coverage (each shard's own keys == floor)
+    needs: [gates]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download each shard's own-key list
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gate-shard-report-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/gate-shard-exchange
+
+      - name: Assert the shards' own keys partition the floor
+        env:
+          GATES_RESULT: ${{ needs.gates.result }}
+        run: |
+          PATHS=()
+          BASE="${{ github.event.before }}"
+          TIP="${{ github.sha }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "::notice::changed-path base is unresolvable (base=${BASE:-<none>}) — the shards sliced the full suite"
+          else
+            while IFS= read -r -d '' p; do PATHS+=("$p"); done < <(git diff --name-only -z "$BASE" "$TIP")
+          fi
+          ARGS=()
+          [ "${#PATHS[@]}" -eq 0 ] || ARGS=(--paths "${PATHS[@]}")
+          bash skills/teamsmith/tests/slice-coverage.sh \
+            --keys-dir "${{ runner.temp }}/gate-shard-exchange" \
+            --matrix-file .github/workflows/gates.yml \
+            --shards-result "$GATES_RESULT" \
+            "${ARGS[@]}"

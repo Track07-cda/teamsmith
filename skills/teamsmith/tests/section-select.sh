@@ -3,6 +3,7 @@
 #
 #   section-select.sh --paths <路径>…            路径 → decision=FULL|NONE|RUN
 #   section-select.sh --floor [--paths <路径>…]  产品地板 ∪ 路径选集（一次回答「基线 + 这次改动」）
+#   section-select.sh --slice <k>/<N>           按片切（与 --floor/--paths/不带决策正交）：own 与借来的分列
 #   section-select.sh --select <key>[,<key>…]   显式选段（+ 前导 + needs 闭包），可重复
 #   section-select.sh --check                   自检映射表与门禁源码（表腐烂 / 段读了没声明的路径 → 红）
 #   section-select.sh --list                    列出映射表（key<TAB>id<TAB>patterns<TAB>needs<TAB>basis）
@@ -20,6 +21,15 @@
 #          → 没有段需要跑
 #   RUN  = 给的路径每条都被某些行声明 → 这些 key + 前导段 + needs 闭包，按源序
 #   FULL = 至少一条路径没有任何行声明、也不在豁免类 → 跑全套（兜底不可绕过）
+#
+# 分片（P346 · CI 的分片并行）：片号 = cksum(key) % N —— 规则**只看 key**，不看它在表里的位置：按位置
+# 轮转会让「第 k 片」随行的增删指不同的段（表里插一行，它之后每一段都换片），于是「重跑第 2 片」可能
+# 跑的是另一批段。N 由调用方给（CI 的唯一来源是 workflow 矩阵长度），本脚本不猜也不给默认值。
+# 切片后的运行集 = own（本片自己的 key）∪ 前导段 ∪ needs/耦合闭包：闭包里不属于本片的那些就是
+# **为 needs 从别片借来的段**，打印时单列（reason 里的 `needs:<key>` / `coupled:<key>` 就是来历）。
+# 给了 --out 时另写一份 <out>.keys（own，源序，每行一个 key）供 CI 的 coverage 作业收集 ——
+# **借来的段不在里面**：那是重复覆盖，不是这一片的份额。兜底的「全套」（未声明路径 / 基点不可解析）
+# 也按片切（打印 base=all），否则矩阵里每一片都要跑整套。
 #
 # 地板（P326 · change: behavior-focused-ci）：表头 `# gate-self-check: <key…>` 点名「主体是门禁自己的机制」
 # 的段，**没被点名的段就是产品基线**（默认方向 = 在基线里）。`--floor` 的 key 集合 = 前导段 ∪ 产品基线段
@@ -47,6 +57,7 @@ section_select_ns() { team_project_ns 2>/dev/null || printf 'nosig-00000000\n'; 
 ROOT=""
 MODE=""
 COPY_OUT=""
+SLICE_K=0; SLICE_N=0     # --slice k/N（0/0 = 没给）
 PATHS=()
 SEL_KEYS=()
 die() { printf 'section-select: %s\n' "$*" >&2; exit 2; }
@@ -58,6 +69,21 @@ while [ $# -gt 0 ]; do
     --floor)
       [ -z "$MODE" ] || [ "$MODE" = "paths" ] || [ "$MODE" = "floor" ] || die "--floor 与 --$MODE 不同用"
       MODE="floor"; shift ;;
+    --slice)
+      shift; [ $# -gt 0 ] || die "--slice 需要 k/N"
+      [ "$SLICE_N" -eq 0 ] || die "--slice 只能给一次"
+      case "$1" in
+        */*) _sk="${1%%/*}"; _sn="${1#*/}" ;;
+        *)   die "分片要写成 k/N（收到 $1）" ;;
+      esac
+      case "$_sk" in ''|*[!0-9]*) die "分片 k 必须是正整数（收到 $1）" ;; esac
+      case "$_sn" in ''|*[!0-9]*) die "分片 N 必须是正整数（收到 $1）" ;; esac
+      [ "${#_sk}" -le 9 ] && [ "${#_sn}" -le 9 ] || die "分片 k/N 的数字太长（收到 $1）"
+      SLICE_K=$((10#$_sk)); SLICE_N=$((10#$_sn)); unset _sk _sn
+      [ "$SLICE_N" -ge 1 ] || die "分片要 1 ≤ k ≤ N 且 N ≥ 1：N=$SLICE_N（收到 $1）"
+      [ "$SLICE_K" -ge 1 ] || die "分片要 1 ≤ k ≤ N：k=$SLICE_K（收到 $1）"
+      [ "$SLICE_K" -le "$SLICE_N" ] || die "分片 k=$SLICE_K 超出 N=$SLICE_N（要 1 ≤ k ≤ N）"
+      shift ;;
     --paths)
       shift; [ $# -gt 0 ] || die "--paths 需要至少一条路径"
       [ -z "$MODE" ] || [ "$MODE" = "paths" ] || [ "$MODE" = "floor" ] || die "--paths 与 --$MODE 不同用"
@@ -82,11 +108,19 @@ while [ $# -gt 0 ]; do
     *) die "未知参数 $1（用法见 --help）" ;;
   esac
 done
+# 分片与三种基线决策正交（--floor / --paths / 不带决策=全集）；--select 与三种自检模式不吃它 ——
+# 显式选集与「从基线里切一份」是两个不同的决定，混用时读者无法说清「第 k 片」指的是谁的份额。
+if [ "${SLICE_N:-0}" -gt 0 ]; then
+  case "$MODE" in
+    ''|floor|paths) [ -n "$MODE" ] || MODE="all" ;;
+    *) die "--slice 只与 --floor / --paths / 不带决策（全集）同用（当前是 --$MODE）" ;;
+  esac
+fi
 [ -n "$MODE" ] || { usage >&2; exit 2; }
 if [ -n "$COPY_OUT" ]; then
   case "$MODE" in
-    paths|select|floor) ;;
-    *) die "--out 只与 --paths/--select/--floor 同用（当前是 --$MODE）" ;;
+    paths|select|floor|all) ;;
+    *) die "--out 只与 --paths/--select/--floor/--slice 同用（当前是 --$MODE）" ;;
   esac
 fi
 
@@ -371,11 +405,94 @@ sort_run_by_source() { # 按源码行号把 RUN_KEY/RUN_WHY 插入排序（选�
     fi
   done
 }
+# ── 分片（P346）────────────────────────────────────────────────────────────────────
+# 片号 = cksum(key) % N。下标是**显式传入但不参与**的：规则只许看 key（按位置轮转会让「第 k 片」随行的
+# 增删漂移）。--check ⑨ 用「同一个 key 换一个下标必须留在同一片」钉死这条。
+declare -A CRC_CACHE=()
+key_crc() { # <key> → 十进制 CRC（POSIX cksum，纯 ASCII 输入，跨机器一致）
+  local k="$1" v
+  if [ -n "${CRC_CACHE[$k]:-}" ]; then printf '%s' "${CRC_CACHE[$k]}"; return 0; fi
+  v="$(printf '%s' "$k" | cksum)" || return 1
+  v="${v%% *}"
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  CRC_CACHE[$k]="$v"
+  printf '%s' "$v"
+}
+slice_of_key() { # <key> <基线下标（不参与规则）> <N> → 0..N-1
+  local k="$1" idx="$2" n="$3" c
+  : "$idx"
+  case "$n" in ''|*[!0-9]*) die "分片数 N 必须是正整数（收到 [$n]）" ;; esac
+  [ "$n" -ge 1 ] || die "分片数 N 必须 ≥ 1（收到 $n）"
+  c="$(key_crc "$k")" || die "算不出段 key [$k] 的分片哈希（cksum 失败）"
+  printf '%s' "$(( c % n ))"
+}
+
+SLICE_BASE=""          # floor / paths / all（仅用于披露行）
+SLICE_KEYS_FILE=""      # 给了 --out 时：<out>.keys 的路径
+BASE_KEY=(); BASE_WHY=(); BASE_N=0
+OWN_KEY=(); OWN_N=0
+
+key_is_own() { # <key>
+  local i
+  for ((i = 0; i < OWN_N; i++)); do [ "${OWN_KEY[i]}" = "$1" ] && return 0; done
+  return 1
+}
+base_from_run() { # 把切片前的决策集（RUN_*）存成 BASE_*，然后清空 RUN_*
+  local i
+  BASE_KEY=(); BASE_WHY=(); BASE_N=$RUN_N
+  for ((i = 0; i < RUN_N; i++)); do BASE_KEY+=("${RUN_KEY[i]}"); BASE_WHY+=("${RUN_WHY[i]}"); done
+  reset_run
+}
+slice_run_set() { # 前提：BASE_* 就绪、SLICE_K/SLICE_N 已校验 → 填 OWN_* 与 RUN_*
+  local i k sh
+  OWN_KEY=(); OWN_N=0
+  for ((i = 0; i < BASE_N; i++)); do
+    k="${BASE_KEY[i]}"
+    sh="$(slice_of_key "$k" "$i" "$SLICE_N")" || exit 2
+    [ "$sh" = "$((SLICE_K - 1))" ] || continue
+    OWN_KEY+=("$k"); OWN_N=$((OWN_N + 1))
+    add_key "$k" "${BASE_WHY[i]}, slice"
+  done
+  add_prologue
+  add_coupled
+  sort_run_by_source
+}
+write_slice_keys() { # 给了 --out 才写：<out>.keys（own，源序，每行一个 key）
+  local f i
+  SLICE_KEYS_FILE=""
+  [ -n "$COPY_OUT" ] || return 0
+  f="$COPY_OUT.keys"
+  { for ((i = 0; i < OWN_N; i++)); do printf '%s\n' "${OWN_KEY[i]}"; done; } > "$f" \
+    || { printf 'section-select: 写不了本片 key 清单：%s\n' "$f" >&2; return 1; }
+  SLICE_KEYS_FILE="$f"
+  return 0
+}
+finish() { # 决策算完（RUN_* = 未切片的决策集）→ 需要时切片 → 打印（必要时写副本与 .keys）
+  if [ "${SLICE_N:-0}" -gt 0 ]; then
+    base_from_run
+    slice_run_set
+  fi
+  print_run
+}
+
 print_run() {
   local i
   [ -z "$COPY_OUT" ] || emit_copy "$COPY_OUT" || exit 2
+  if [ "${SLICE_N:-0}" -gt 0 ]; then write_slice_keys || exit 2; fi
   printf 'decision=RUN\n'
   printf 'sections=%s\n' "$S_N"
+  if [ "${SLICE_N:-0}" -gt 0 ]; then
+    printf 'slice=%s/%s\n' "$SLICE_K" "$SLICE_N"
+    printf 'base=%s\n' "${SLICE_BASE:-?}"
+    printf 'own=%s\n' "$OWN_N"
+    printf 'borrowed=%s\n' "$((RUN_N - OWN_N))"
+    [ -z "${SLICE_KEYS_FILE:-}" ] || printf 'keys-file=%s\n' "$SLICE_KEYS_FILE"
+    for ((i = 0; i < OWN_N; i++)); do printf 'own-key=%s\n' "${OWN_KEY[i]}"; done
+    for ((i = 0; i < RUN_N; i++)); do
+      key_is_own "${RUN_KEY[i]}" && continue
+      printf 'borrowed-key=%s\n' "${RUN_KEY[i]}"
+    done
+  fi
   printf 'keys=%s\n' "$RUN_N"
   for ((i = 0; i < RUN_N; i++)); do printf 'reason=%s ← %s\n' "${RUN_KEY[i]}" "${RUN_WHY[i]}"; done
   for ((i = 0; i < RUN_N; i++)); do printf '%s\t%s\n' "${RUN_KEY[i]}" "${RUN_WHY[i]}"; done
@@ -506,11 +623,24 @@ print_full() {
   for p in "${CL_UNCLAIMED[@]}"; do printf 'reason=%s ← 没有任何行声明它（也不在豁免类）\n' "$p"; done
   printf 'reason=兜底：跑全套（多跑总是安全，少跑不是）\n'
 }
+# 兜底的「跑全套」：切片时它也要**按片切**（base=all）—— 否则矩阵里每一片都得跑整套，并行等于没做；
+# 不切片时行为逐字不变（decision=FULL，由 smoke 自己跑全套）。
+do_full() {
+  local i
+  if [ "${SLICE_N:-0}" -gt 0 ]; then
+    SLICE_BASE="all"
+    reset_run
+    for ((i = 0; i < S_N; i++)); do add_key "${S_KEY[i]}" "all"; done
+    finish
+    return 0
+  fi
+  print_full
+}
 
 # ── --paths ─────────────────────────────────────────────────────────────────────────────
 do_paths() {
   local p
-  claim_paths || { print_full; return 0; }
+  claim_paths || { do_full; return 0; }
   if [ "$RUN_N" -eq 0 ]; then
     printf 'decision=NONE\n'
     printf 'sections=%s\n' "$S_N"
@@ -519,34 +649,63 @@ do_paths() {
     printf 'reason=没有段落需要运行（no section needs to run）\n'
     return 0
   fi
+  SLICE_BASE="paths"
   add_prologue
   add_coupled
   sort_run_by_source
-  print_run
+  finish
   return 0
 }
 
 # ── --floor ────────────────────────────────────────────────────────────────────────────
 # 地板 = 表里**没被 `# gate-self-check:` 点名的每一个段**（默认方向：新段自动在基线里）。
 # 行不在 → 每个段都在地板里（安全方向）；行在却一个 key 都没有 / 每个段都被点名 → 空地板 → die。
-do_floor() {
-  local i k FLOOR=()
-  if [ "$P_SELF_DECLARED" = 1 ] && [ -z "$P_SELF_KEYS" ]; then
-    die "--floor：空地板 —— gate-self-check 行（$TSV:${P_SELF_LNS[*]}）在但没点名任何段；空行不许退化成「只跑前导段」"
-  fi
+# 地板的**声明集**：表里没被 `# gate-self-check:` 点名的每一行 key（--floor 与 --check ⑨ 的唯一来源）。
+declared_floor_keys() {
+  local i
   for ((i = 0; i < T_N; i++)); do
     case " $P_SELF_KEYS " in
       *" ${T_KEY[i]} "*) ;;
-      *) FLOOR+=("${T_KEY[i]}") ;;
+      *) printf '%s\n' "${T_KEY[i]}" ;;
     esac
   done
-  [ "${#FLOOR[@]}" -gt 0 ] || die "--floor：空地板 —— $T_N 个段全被 gate-self-check 行点名，没有产品基线段可跑"
-  if [ "${#PATHS[@]}" -gt 0 ]; then claim_paths || { print_full; return 0; }; fi
-  for k in "${FLOOR[@]}"; do add_key "$k" "floor"; done
+}
+build_floor_run() { # [soft]：填 RUN_* = 地板 ∪ 前导 ∪ 闭包；soft = 空地板时返回 1 而不是 die
+  local k soft="${1:-}" FLOOR=()
+  if [ "$P_SELF_DECLARED" = 1 ] && [ -z "$P_SELF_KEYS" ]; then
+    [ "$soft" = "soft" ] && return 1
+    die "--floor：空地板 —— gate-self-check 行（$TSV:${P_SELF_LNS[*]}）在但没点名任何段；空行不许退化成「只跑前导段」"
+  fi
+  while IFS= read -r k; do FLOOR+=("$k"); done < <(declared_floor_keys)
+  if [ "${#FLOOR[@]}" -eq 0 ]; then
+    [ "$soft" = "soft" ] && return 1
+    die "--floor：空地板 —— $T_N 个段全被 gate-self-check 行点名，没有产品基线段可跑"
+  fi
   add_prologue
+  for k in "${FLOOR[@]}"; do add_key "$k" "floor"; done
   add_coupled
   sort_run_by_source
-  print_run
+  return 0
+}
+
+do_floor() {
+  SLICE_BASE="floor"
+  if [ "${#PATHS[@]}" -gt 0 ]; then
+    claim_paths || { do_full; return 0; }
+    SLICE_BASE="paths"
+  fi
+  build_floor_run
+  finish
+  return 0
+}
+
+# ── --all（不带决策 = 全集；只由 --slice 进来）─────────────────────────────────────────────
+do_all() {
+  local i
+  SLICE_BASE="all"
+  reset_run
+  for ((i = 0; i < S_N; i++)); do add_key "${S_KEY[i]}" "all"; done
+  finish
   return 0
 }
 
@@ -806,6 +965,107 @@ do_check() {
     [ "$sc_bad" -eq 0 ] && cok "gate-self-check 行有效（$sc_n 个 key：各自命中一行、无重复、不含前导段）"
   fi
 
+  # ⑨ 分片（P346）：分片必须是地板的**精确划分**，且规则**只看 key**。具体 N 不在这一层：
+  #    它抓的是「哈希退化成全落一片」与「按位置轮转」这两类形状；它证明不了「CI 真的跑了每一片」——
+  #    那是 coverage 作业的事（它拿到的是各片真跑时的清单，不是这里的重算）。
+  local sh_n=0 sh_i sh_sh sh_a sh_b sh_k FLOOR_N2=0
+  local -a SH_NS=(2 3 4 5 6 8 12) SH_FK=() SH_CNT=()
+  # 基线取地板的**声明集**（表里没被 gate-self-check 点名的行）：这就是「地板」的定义，不必为它
+  # 展开耦合组（那要逐段 bash -n，秒级）；--floor 的运行集是这份声明再并前导与闭包。
+  while IFS= read -r sh_k; do SH_FK+=("$sh_k"); done < <(declared_floor_keys)
+  FLOOR_N2=${#SH_FK[@]}
+  if [ "$FLOOR_N2" -eq 0 ]; then
+    cbad "分片：地板为空（表里每一行都被 gate-self-check 点名）—— 分片无从断言"
+  else
+    # ① 对每个 N：每段恰好进一片（计数和 == 地板段数）、每片都非空
+    local -a PER_N=()
+    for sh_n in "${SH_NS[@]}"; do
+      SH_CNT=()
+      for ((sh_i = 0; sh_i < sh_n; sh_i++)); do SH_CNT[sh_i]=0; done
+      for ((sh_i = 0; sh_i < FLOOR_N2; sh_i++)); do
+        sh_k="${SH_FK[sh_i]}"
+        sh_sh="$(slice_of_key "$sh_k" "$sh_i" "$sh_n")" || { PER_N+=("N=$sh_n：key $sh_k 算不出片号"); continue; }
+        case "$sh_sh" in
+          ''|*[!0-9]*) PER_N+=("N=$sh_n：key $sh_k 的片号不是数字（[$sh_sh]）"); continue ;;
+        esac
+        if [ "$sh_sh" -ge "$sh_n" ]; then PER_N+=("N=$sh_n：key $sh_k 的片号 $sh_sh 越界"); continue; fi
+        SH_CNT[sh_sh]=$(( SH_CNT[sh_sh] + 1 ))
+      done
+      for ((sh_i = 0; sh_i < sh_n; sh_i++)); do
+        [ "${SH_CNT[sh_i]}" -gt 0 ] || PER_N+=("N=$sh_n：第 $((sh_i + 1)) 片是空的（分片退化）")
+      done
+      local sh_sum=0
+      for ((sh_i = 0; sh_i < sh_n; sh_i++)); do sh_sum=$((sh_sum + SH_CNT[sh_i])); done
+      [ "$sh_sum" -eq "$FLOOR_N2" ] || PER_N+=("N=$sh_n：各片合计 $sh_sum ≠ 地板 $FLOOR_N2 段（有重复或遗漏）")
+    done
+    if [ "${#PER_N[@]}" -eq 0 ]; then
+      cok "分片是地板的精确划分（N=${SH_NS[*]}：$FLOOR_N2 段，每片非空、无重复、无遗漏）"
+    else
+      cbad "分片不是地板的精确划分：${PER_N[0]}$( [ "${#PER_N[@]}" -gt 1 ] && printf '（共 %s 处，首条如上）' "${#PER_N[@]}" )"
+    fi
+    # ② 规则只看 key：同一个 key 在**任意**基线下标上片号都必须相同。
+    #   参照点固定为 0 号位，**不是**镜像位置：以 `idx ↔ 末位-idx` 对称方式混进来的位置污染
+    #   （V86 的变异 C）会同时满足镜像比较，只在「所有下标 vs 同一个参照」下露出来。
+    #   覆盖面（这三条就是这条断言的全部比较范围，ok 行照抄）：
+    #     (a) 表首 key 在**全部**基线下标 × 全部 N 上与 0 号位同片 —— 128 × 7 = 896 次比较；
+    #     (b) 另 3 个 key（表中 / 表末 / 表倒数第二）各比首尾两点 × 全部 N；
+    #     (c) 表里每个 key 各比首尾两点（N=4）。
+    #   为什么不是「3 个 key × 全部下标」：`--check` 被 §36 调用 17 次，每次多 2000 次 fork 就是
+    #   §36 多 5 分钟（实测 3-key 版本：§36 8→16 分钟）。全位置比较保住一条 key 就够抓实现层的位置泄漏。
+    local -a POS_BAD=()
+    local sh_ref sh_span=0 sh_n1=4
+    if [ "$FLOOR_N2" -gt 0 ]; then
+      sh_k="${SH_FK[0]}"
+      for sh_n in "${SH_NS[@]}"; do
+        sh_ref="$(slice_of_key "$sh_k" 0 "$sh_n")" || { POS_BAD+=("N=$sh_n：key $sh_k 算不出片号"); continue; }
+        case "$sh_ref" in ''|*[!0-9]*) POS_BAD+=("N=$sh_n：key $sh_k 的片号不是数字（[$sh_ref]）"); continue ;; esac
+        for ((sh_i = 1; sh_i < FLOOR_N2; sh_i++)); do
+          sh_b="$(slice_of_key "$sh_k" "$sh_i" "$sh_n")" || { POS_BAD+=("N=$sh_n：key $sh_k 算不出片号"); continue; }
+          sh_span=$(( sh_span + 1 ))
+          [ "$sh_ref" = "$sh_b" ] || POS_BAD+=("N=$sh_n：key $sh_k 在 0 号位是第 $((sh_ref + 1)) 片、在第 $sh_i 位却是第 $((sh_b + 1)) 片")
+        done
+      done
+    fi
+    local -a POS_OTHERS=()
+    [ "$FLOOR_N2" -lt 2 ] || POS_OTHERS+=("${SH_FK[$((FLOOR_N2 / 2))]}")
+    [ "$FLOOR_N2" -lt 3 ] || POS_OTHERS+=("${SH_FK[$((FLOOR_N2 - 1))]}")
+    [ "$FLOOR_N2" -lt 4 ] || POS_OTHERS+=("${SH_FK[$((FLOOR_N2 - 2))]}")
+    for sh_n in "${SH_NS[@]}"; do
+      for sh_k in "${POS_OTHERS[@]}"; do
+        sh_ref="$(slice_of_key "$sh_k" 0 "$sh_n")" || { POS_BAD+=("N=$sh_n：key $sh_k 算不出片号"); continue; }
+        sh_b="$(slice_of_key "$sh_k" "$((FLOOR_N2 - 1))" "$sh_n")" || { POS_BAD+=("N=$sh_n：key $sh_k 算不出片号"); continue; }
+        [ "$sh_ref" = "$sh_b" ] || POS_BAD+=("N=$sh_n：key $sh_k 在第 0 位是第 $((sh_ref + 1)) 片、在末位却是第 $((sh_b + 1)) 片")
+      done
+    done
+    if [ "$FLOOR_N2" -gt 1 ]; then
+      for ((sh_i = 0; sh_i < FLOOR_N2; sh_i++)); do
+        sh_k="${SH_FK[sh_i]}"
+        sh_ref="$(slice_of_key "$sh_k" 0 "$sh_n1")" || { POS_BAD+=("N=$sh_n1：key $sh_k 算不出片号"); continue; }
+        sh_b="$(slice_of_key "$sh_k" "$((FLOOR_N2 - 1))" "$sh_n1")" || { POS_BAD+=("N=$sh_n1：key $sh_k 算不出片号"); continue; }
+        [ "$sh_ref" = "$sh_b" ] || POS_BAD+=("N=$sh_n1：key $sh_k 在第 0 位是第 $((sh_ref + 1)) 片、在末位却是第 $((sh_b + 1)) 片")
+      done
+    fi
+    if [ "${#POS_BAD[@]}" -eq 0 ]; then
+      cok "分片只依赖 key：(a) 表首 key 在全部 $FLOOR_N2 个基线下标 × ${#SH_NS[@]} 个 N 上与 0 号位同片（$sh_span 次比较）；(b) 另 ${#POS_OTHERS[@]} 个 key 各比首尾两点 × ${#SH_NS[@]} 个 N；(c) 每个 key 各比首尾两点（N=$sh_n1）—— 片号都不变，不等同于「所有 key × 所有位置」全比"
+    else
+      cbad "分片依赖了段在表里的位置（按位置轮转会让「第 k 片」随行的增删漂移）：${POS_BAD[0]}"
+    fi
+    # ③ 表里每一行的 key 都能被哈希（不是只在地板里）
+    local -a HASH_BAD=()
+    for ((sh_i = 0; sh_i < T_N; sh_i++)); do
+      for sh_n in "${SH_NS[@]}"; do
+        sh_sh="$(slice_of_key "${T_KEY[sh_i]}" "$sh_i" "$sh_n")" || { HASH_BAD+=("key ${T_KEY[sh_i]}（N=$sh_n）算不出片号"); break; }
+        case "$sh_sh" in ''|*[!0-9]*) HASH_BAD+=("key ${T_KEY[sh_i]}（N=$sh_n）的片号不是数字（[$sh_sh]）"); break ;; esac
+        [ "$sh_sh" -lt "$sh_n" ] || { HASH_BAD+=("key ${T_KEY[sh_i]}（N=$sh_n）的片号 $sh_sh 越界"); break; }
+      done
+    done
+    if [ "${#HASH_BAD[@]}" -eq 0 ]; then
+      cok "表里每一行的 key 都能被哈希（$T_N 个 key × ${#SH_NS[@]} 个 N 都在 0..N-1 内）"
+    else
+      cbad "有 key 哈希不到合法片号：${HASH_BAD[0]}"
+    fi
+  fi
+
   printf '== 选段自检 ==  ok %d  bad %d  SKIP %d\n' "$CHECK_OK" "$CHECK_BAD" "$CHECK_SKIP"
   [ "$CHECK_BAD" -eq 0 ] || return 1
   return 0
@@ -815,6 +1075,7 @@ do_check() {
 case "$MODE" in
   paths)          load_table; load_suite; do_paths ;;
   floor)          load_table; load_suite; do_floor ;;
+  all)            load_table; load_suite; do_all ;;
   select)         load_table; load_suite; do_select ;;
   list)           load_table; do_list ;;
   check)          load_table; load_suite; do_check ;;

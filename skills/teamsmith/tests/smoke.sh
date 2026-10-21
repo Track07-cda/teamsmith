@@ -118,10 +118,11 @@ export SMOKE_CALLER_HAD_TMUX
 unset TMUX TMUX_PANE 2>/dev/null || true
 SMOKE_CALLER_TMUX_TMPDIR="${TMUX_TMPDIR:-/tmp}"   # 调用者原本的 socket 目录（自检里当「默认 server」用）
 KEEP="${TEAM_SMOKE_KEEP:-0}"
-# P98：参数 = --keep / --paths <路径>… / --select <key>[,<key>…] / --floor [--paths <路径>…]；不认识的参数**拒绝**（不静默忽略：
+# P98：参数 = --keep / --paths <路径>… / --select <key>[,<key>…] / --floor [--paths <路径>…] / --slice <k>/<N>；不认识的参数**拒绝**（不静默忽略：
 # 「以为传了选段、其实跑了全套或什么都没跑」是同一种危险）。选择决定在拿机器锁之前算（见下）。
 SELECT_MODE_REQ=""
 SELECT_ARGS=()
+SELECT_SLICE=""        # P346：--slice k/N（与三种基线决策正交；只有它是「不带决策」的唯一入口）
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep) KEEP=1; shift ;;
@@ -141,13 +142,20 @@ while [ $# -gt 0 ]; do
       shift
       while [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; do SELECT_ARGS+=("$1"); shift; done
       [ "${#SELECT_ARGS[@]}" -gt 0 ] || { printf 'smoke: --paths 需要至少一条路径\n' >&2; exit 2; } ;;
+    --slice)
+      [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "floor" ] || [ "$SELECT_MODE_REQ" = "paths" ] \
+        || { printf 'smoke: --slice 与 --%s 不同用\n' "$SELECT_MODE_REQ" >&2; exit 2; }
+      shift
+      [ $# -gt 0 ] || { printf 'smoke: --slice 需要 k/N\n' >&2; exit 2; }
+      [ -z "$SELECT_SLICE" ] || { printf 'smoke: --slice 只能给一次\n' >&2; exit 2; }
+      SELECT_SLICE="$1"; shift ;;
     --select)
       [ -z "$SELECT_MODE_REQ" ] || [ "$SELECT_MODE_REQ" = "select" ] \
         || { printf 'smoke: --select 与 --%s 不同用\n' "$SELECT_MODE_REQ" >&2; exit 2; }
       SELECT_MODE_REQ="select"; shift
       [ $# -gt 0 ] || { printf 'smoke: --select 需要 key\n' >&2; exit 2; }
       SELECT_ARGS+=("$1"); shift ;;
-    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--break=<阶段>] [--paths <路径>… | --select <key>[,<key>…] | --floor [--paths <路径>…]]）\n' "$1" >&2; exit 2 ;;
+    *) printf 'smoke: 未知参数 %s（用法：smoke.sh [--keep] [--break=<阶段>] [--slice <k>/<N>] [--paths <路径>… | --select <key>[,<key>…] | --floor [--paths <路径>…]]）\n' "$1" >&2; exit 2 ;;
   esac
 done
 
@@ -213,7 +221,7 @@ smoke_select_tail() {
 if [ "$SMOKE_SEL_IS_CHILD" = "1" ]; then
   # 选段子进程：过滤已由父进程做过（段正文没动），这里只声明「这是选段运行」
   SELECT_MODE=1; SELECT_DECISION="${SMOKE_SEL_CHILD_DECISION:-RUN}"
-elif [ -n "$SELECT_MODE_REQ" ]; then
+elif [ -n "$SELECT_MODE_REQ" ] || [ -n "$SELECT_SLICE" ]; then
   SELECT_BIN="$SKILL_DIR/tests/section-select.sh"
   [ -f "$SELECT_BIN" ] || { printf 'smoke: 选段需要 %s（缺它就不能用 --paths/--select/--floor）\n' "$SELECT_BIN" >&2; exit 2; }
   # 过滤副本由选择器一次生成（唯一剪贴实现）：它写进 --out 前先 bash -n 校验，不能解析就在
@@ -223,9 +231,15 @@ elif [ -n "$SELECT_MODE_REQ" ]; then
   SELECT_COPY="$(team_tmp_root)/teamsmith-select.$(team_project_ns).$$.sh"
   rm -f "$SELECT_COPY"
   # P326：--floor 自己不吃参数（路径仍走既有的 --paths），所以只有「有路径」时才补一个 --paths。
-  SELECT_INVOKE=("--$SELECT_MODE_REQ")
+  SELECT_INVOKE=()
+  SELECT_TAIL=()
+  [ -z "$SELECT_MODE_REQ" ] || SELECT_INVOKE+=("--$SELECT_MODE_REQ")
   [ "$SELECT_MODE_REQ" = "floor" ] && [ "${#SELECT_ARGS[@]}" -gt 0 ] && SELECT_INVOKE+=(--paths)
-  if ! SELECT_OUT="$(bash "$SELECT_BIN" "${SELECT_INVOKE[@]}" "${SELECT_ARGS[@]}" --out "$SELECT_COPY" </dev/null 2>&1)"; then
+  # P346：--slice 与三种基线决策正交；只给 --slice（不带决策）= 全集按片切（CI 在基点不可解析时的兜底）。
+  # 位置必须放在路径**之后**：选择器的 `--paths` 只吃紧跟在它后面的非 `--` 参数，插在中间会把路径读成
+  # 未知参数（实测：`--paths --slice 2/4 <path>` → 「未知参数 <path>」，选段被拒、rc=2）。
+  [ -z "$SELECT_SLICE" ] || SELECT_TAIL=(--slice "$SELECT_SLICE")
+  if ! SELECT_OUT="$(bash "$SELECT_BIN" "${SELECT_INVOKE[@]}" "${SELECT_ARGS[@]}" "${SELECT_TAIL[@]}" --out "$SELECT_COPY" </dev/null 2>&1)"; then
     printf '%s\n' "$SELECT_OUT" >&2
     printf 'smoke: 选段被拒（副本不能解析 / 表或源码结构问题）—— 什么都没跑\n' >&2
     exit 2
@@ -251,7 +265,7 @@ elif [ -n "$SELECT_MODE_REQ" ]; then
     for _sel_p in "${_sel_parts[@]}"; do
       _sel_p="${_sel_p# }"
       case "$_sel_p" in
-        ''|floor|prologue|needs:*|coupled:*) ;;
+        ''|floor|all|slice|prologue|needs:*|coupled:*) ;;
         *) _sel_direct=1; break ;;
       esac
     done
@@ -275,6 +289,17 @@ elif [ -n "$SELECT_MODE_REQ" ]; then
   done
   unset _k
   smoke_select_header
+  # P346：分片运行要说清「这是第几片、从哪份基线切的、有多少段是为 needs/耦合从别片借来的」——
+  # 否则读者会把「运行 45/135 段」读成「有人裁掉了 90 段」。
+  _sel_slice="$(printf '%s\n' "$SELECT_OUT" | sed -n 's/^slice=//p' | head -1)"
+  if [ -n "$_sel_slice" ]; then
+    printf '  分片 %s（基线 %s）· own %s 段 · 从别片借来 %s 段 —— 借来的段照跑，own 清单才是本片份额\n' \
+      "$_sel_slice" \
+      "$(printf '%s\n' "$SELECT_OUT" | sed -n 's/^base=//p' | head -1)" \
+      "$(printf '%s\n' "$SELECT_OUT" | sed -n 's/^own=//p' | head -1)" \
+      "$(printf '%s\n' "$SELECT_OUT" | sed -n 's/^borrowed=//p' | head -1)"
+  fi
+  unset _sel_slice
   if [ "$SELECT_DECISION" = "RUN" ]; then
     # 副本已经在上面由选择器生成并 bash -n 校验过（段正文逐字节原样；前导与收尾原样保留）
     if [ ! -s "$SELECT_COPY" ]; then
