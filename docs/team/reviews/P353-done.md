@@ -1,0 +1,4 @@
+- 2026-10-21T05:15:01Z · `team close P353 --status done` · FORCED：PM 显式覆盖（理由：只读普查（analysis）：报告已由 PM 提交进 main，处置拆成 P354（删11个/保留5个）与既有的 P349（接线）；本任务无产品写集、不需要复验。）
+  -   - ① 复验记录 docs/team/reviews/P353.md：不存在
+  -   - ② 分支是否已并入 main：task/P353-never-run-audit（ef29e2f55）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
