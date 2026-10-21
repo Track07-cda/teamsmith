@@ -63,7 +63,7 @@ smoke.sh	17265	cap="$i" -lt 6000	  while [ "$i" -lt 6000 ]; do
 smoke.sh	17305	cap="$i" -lt 6000	  while [ "$i" -lt 6000 ]; do
 smoke.sh	19104	cap="$i" -lt 1500	    while [ "$i" -lt 1500 ]; do
 smoke.sh	19122	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
-smoke.sh	19166	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
+smoke.sh	19596	cap="$P55_W" -lt "$P55_WMAX"	  while [ "$P55_W" -lt "$P55_WMAX" ]; do
 smoke.sh	19303	cap="$P55_W" -lt 600	  while [ "$P55_W" -lt 600 ]; do
 smoke.sh	19348	cap="$P55_W" -lt 1000	  while [ "$P55_W" -lt 1000 ]; do
 tmp-hygiene.sh	1696	cap="$_i" -lt 50	  while [ "$_i" -lt 50 ] && ! grep -q '^ROOT=' "$kr_out" 2>/dev/null; do sleep 0.1; _i=$((_i + 1)); done
