@@ -1535,13 +1535,17 @@ mr_refusals() {
   RC_EXTRA=()
 
   # ⑲ P309：显式选定的临时根不存在 → 修法：mkdir -p <根>（兑现：建完就放行；不许换用别的根）
+  # P344：源由这条走查**自己**决定，不许靠「调用者的环境里碰巧没导出 TMPDIR」。产品的文档化优先级
+  # 是 TMPDIR > TEAM_TMP_ROOT（唯一实现在 common.sh/team_tmp_root_source），所以两条腿都显式给出来，
+  # 断言拒绝行点名的就是 TMPDIR 那条腿（source=tmpdir）：优先级反过来、或换成别的根，这里当场红
+  # （「跑完路线仍被拒」也会红）。TEAM_TMP_ROOT 腿的「谁来建 + 可粘贴的 mkdir」由 §40 的 P314 走查钉着。
   d="$(new_fixture refuse-tmp-root)"; RC_DIR="$d"
   rc_board "$d" P1 "P1 fixture"
   b="$(rc_brief "$d" P1 - "none (infra) — fixture" -)"; RC_BRIEF="$b"
   br="$(rc_canon "$d" P1)"; rc_wt "$d" dev "$br"
-  RC_EXTRA=("TEAM_TMP_ROOT=$d/explicit-root")
+  RC_EXTRA=("TMPDIR=$d/tmpdir-root" "TEAM_TMP_ROOT=$d/explicit-root")
   RC_CMD=(dispatch dev P1 "$b" --print)
-  rc_case tmp-root-mkdir '临时根不可用' '修法：mkdir -p ' 'apply:cmd' same clear
+  rc_case tmp-root-mkdir '临时根不可用：.*（source=tmpdir）' '修法：mkdir -p ' 'apply:cmd' same clear
   RC_EXTRA=()
 }
 

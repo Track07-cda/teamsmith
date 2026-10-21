@@ -18225,10 +18225,26 @@ assert_eq "36③ 最慢段汇总行数 == min(5, 跑了的段数)" \
   "$(awk -v n="$P98_SEL_N" 'BEGIN{print (n>5)?5:n}')"
 assert_has "$TMP/p98-nest-run.log" "账本自查：" "36③ 账本自查行在（报告不是判定）"
 if tail -25 "$TMP/p98-nest-run.log" | grep -qF '这次没跑的段'; then ok "36③ 未跑清单在尾部 25 行里（team review 记的就是尾部）"; else bad "36③ 未跑清单不在尾部 25 行里"; fi
-if sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep -E '^#[0-9]+ ' | grep -qF "$SMOKE_RED_MARK"; then
+# P344（同族清扫）：旧写法是 `sed … | grep -E '^#[0-9]+ ' | grep -qF …`。末级 `grep -qF` 命中即退，中间
+# 那级 grep 还在写后面的收口行 → 它吃 SIGPIPE；本套件是 `set -o pipefail`，整条管道于是变 141（实测见
+# P344 报告：200 条收口行时 44/60 次），红标检查会把「带了红标」误读成「没带」。现在把收口行先落成文件，
+# 判据读文件（与 routes.sh 的同一纪律）。
+#
+# 但落文件只治了管道，没治**匹配串**：`SMOKE_RED_MARK` 自带 ANSI（`  \033[31m✗\033[0m`），而文件里的 ANSI
+# 已被 `sed` 去掉了 —— 拿带 ANSI 的串去 grep 去色后的文件永远不命中，这条断言于是**两版都是死的**
+# （V84 第二轮点出）。所以匹配串也必须过同一道去色，并配一条**正向对照**：把真标记去色后写进合成行，
+# 匹配器必须认出来。对照红 = 仪表死了（无论收口行干净与否都报绿），这时不能拿「绿」当证据。
+P98_RED_PLAIN="$(printf '%s' "$SMOKE_RED_MARK" | sed 's/\x1b\[[0-9;]*m//g')"
+printf '%s带红标的合成行\n' "$SMOKE_RED_MARK" | sed 's/\x1b\[[0-9;]*m//g' > "$TMP/p98-mark-control.txt"
+sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep -E '^#[0-9]+ ' > "$TMP/p98-close-lines.txt" 2>/dev/null || true
+if [ ! -s "$TMP/p98-close-lines.txt" ]; then
+  bad "36③ 收口行抽取为空（没有一行 ^#N）—— 红标检查因此没有前提"
+elif ! grep -qF -- "$P98_RED_PLAIN" "$TMP/p98-mark-control.txt"; then
+  bad "36③ 红标匹配器是死的（正向对照没命中：$P98_RED_PLAIN 在带真标记的行里没找到）"
+elif grep -qF -- "$P98_RED_PLAIN" "$TMP/p98-close-lines.txt"; then
   bad "36③ 收口行带了门禁红标（会污染 flip-m33 的红标计数）"
 else
-  ok "36③ 收口行不带门禁红标（flip-m33 数的就是那串）"
+  ok "36③ 收口行不带门禁红标（匹配器已由正向对照证明活着）"
 fi
 # 最后一段的收口行必须在结果行之前，且账本自查行自我声明「一致」
 P98_LAST_CLOSE_L="$(sed 's/\x1b\[[0-9;]*m//g' "$TMP/p98-nest-run.log" | grep -nE '^#[0-9]+ ' | tail -1 | cut -d: -f1)"
@@ -18479,10 +18495,15 @@ if grep -q 'P117 红侧：还原旧剪贴器' "$P117_SHADOW/tests/section-select
   fi
   P98_NEST_ENV="TEAM_SMOKE_MARKER_ROOT=$P98_MARKER_ROOT" p98_nest "$P117_SHADOW" "$TMP/p117-early.log" --select 14
   P117_EARLY_RC=$?
+  # P344（同族清扫）：旧写法 `! sed … | grep -q '^== #'`。本套件 `set -o pipefail`：grep 一命中就退，
+  # sed 吃 SIGPIPE → 管道 141 → `!` 把 141 翻成 true —— 一个**假绿**（「零段头」这一条其实没验）。
+  # 先把去色后的日志落成文件，再用 `!` 判文件上的匹配。
+  sed 's/\x1b\[[0-9;]*m//g' "$TMP/p117-early.log" > "$TMP/p117-early-plain.txt" 2>/dev/null || true
   if [ "$P117_EARLY_RC" -eq 2 ] \
      && grep -qF '副本不能解析' "$TMP/p117-early.log" \
      && grep -qF '什么都没跑' "$TMP/p117-early.log" \
-     && ! sed 's/\x1b\[[0-9;]*m//g' "$TMP/p117-early.log" | grep -q '^== #'; then
+     && [ -s "$TMP/p117-early-plain.txt" ] \
+     && ! grep -q '^== #' "$TMP/p117-early-plain.txt"; then
     ok "36⑦ 坏副本在跑任何段之前被拒（rc=2、点名、零段头）"
   else
     bad "36⑦ 坏副本没有早拒（rc=$P117_EARLY_RC）：$(tail -3 "$TMP/p117-early.log" | tr '\n' ' ')"
@@ -19566,11 +19587,22 @@ P55AG2
   printf 'window=p55live\ntask=T9.56\n' > "$REPO/.pi/team/state/p55live.env"
   printf 'window=p55exit\n' > "$REPO/.pi/team/state/p55exit.env"
   printf 'window=p55none\n' > "$REPO/.pi/team/state/p55none.env"
-  P55_W=0
-  while [ "$P55_W" -lt 1000 ]; do
-    P55_RENV bash "$SKILL_DIR/scripts/team" roster 2>/dev/null | grep -q '在跑' && break
+  P55_W=0; P55_WMAX=200; P55_ROSTER=""; P55_RRC=0; P55_HIT=0; P55_T0="$(date +%s)"
+  # P344（与 P326 在 11c 修的同一族）：不把生产者接给 `grep -q`。命中即关管 → `bash team roster`
+  # 的后续写盘吃 SIGPIPE → 套件是 `set -o pipefail`，于是「读到了」也被读成 141，`&& break` **一次
+  # 都不成立**（P343 实测 8/8 次 rc=141），循环白转到上界。现在先落一整份输出（连同它自己的退出
+  # 码），再用 bash 自己的匹配判定。上界只防死等：200 轮 × 0.3s = 60s，必须**短于**被等对象的寿命
+  # （本段的假 agent 是 `sleep 300`）——上界与被等对象的寿命相等时，窗口会在断言读之前自己关掉。
+  while [ "$P55_W" -lt "$P55_WMAX" ]; do
+    P55_ROSTER="$(P55_RENV bash "$SKILL_DIR/scripts/team" roster 2>/dev/null)"; P55_RRC=$?
+    if [ "$P55_RRC" -eq 0 ]; then
+      case "$P55_ROSTER" in *'在跑'*) P55_HIT=1; break ;; esac
+    fi
     sleep 0.3; P55_W=$((P55_W + 1))
   done
+  if [ "$P55_HIT" != 1 ]; then
+    bad "P55 ④ 夹具前提：$P55_WMAX 轮（$(( $(date +%s) - P55_T0 ))s）内 roster 没报出「在跑」（末次退出码 $P55_RRC，末次输出末行：$(printf '%s\n' "$P55_ROSTER" | tail -1)）—— 四态断言因此没有前提"
+  fi
   P55_RENV bash "$SKILL_DIR/scripts/team" roster >"$TMP/p55-roster.log" 2>&1
   assert_match "$TMP/p55-roster.log" "^p55live +● .*在跑" "P55 ④：roster 四态 ① running（证明成立）"
   assert_match "$TMP/p55-roster.log" "^p55exit +○ .*已退出" "P55 ④：roster 四态 ② exited（窗口/pane 活着，没有 agent）"
