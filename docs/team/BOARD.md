@@ -549,7 +549,7 @@
 | V82 | P327独立验收：夹具接线 | verify | - | - | done |
 | P344 | 两处夹具缺陷与grep -q同族清扫 | dev3 | - | - | wip |
 | P345 | CI时长方案：切片并行 vs 地板瘦身 | dev2 | - | - | done |
-| P346 | CI地板切片并行（排队） | dev2 | - | - | todo |
+| P346 | CI地板切片并行（排队） | dev2 | - | - | wip |
 | V83 | P342独立验收：取样范围收窄 | verify | - | - | done |
 | P347 | 给豁免配证伪者（V83 F1） | dev-bob | - | - | done |
 | P348 | 测试精简第3轮 | dev-bob | - | - | wip |
