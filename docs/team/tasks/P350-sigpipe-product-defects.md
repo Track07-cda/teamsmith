@@ -1,7 +1,7 @@
 # P350 · 产品里那两处 `grep -q` + `pipefail`：先落变量再匹配（V84 判定的真缺陷）
 
 task: P350
-agent: dev3
+agent: dev-bob
 phase: apply
 category: code
 change: -
@@ -28,4 +28,4 @@ deps: 与 P346/P349 不冲突（它们改 `tests/**`），本任务只改 `scrip
 
 ## 边界
 
-写集：`skills/teamsmith/scripts/lib/common.sh`、`skills/teamsmith/scripts/lib/cmd-status.sh`、`docs/team/reports/P350-dev3.md`。不改测试、不改别的 lib。
+写集：`skills/teamsmith/scripts/lib/common.sh`、`skills/teamsmith/scripts/lib/cmd-status.sh`、`docs/team/reports/P350-dev-bob.md`。不改测试、不改别的 lib。
