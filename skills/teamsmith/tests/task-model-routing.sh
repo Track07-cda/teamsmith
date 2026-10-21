@@ -1392,12 +1392,29 @@ fi
 
 if has flip; then
   CORE='policy,machine,init,config,upgrade,dispatch,resume,transaction,limits,preview,sid-readers,pm,heal,adopt,updatecheck,boundary'
+  # P358：臂预算。`flip_run` 只能给**所有臂一个值**（每条臂跑哪些组由变异体决定，耗时差一个量级），
+  # 所以这个值是**最慢那条臂**的上限，不是典型值：`template-shadow` 把 identity guard 整个拆掉之后，
+  # boundary 组 29 类故障模板 × 4 种模式全部走到真派单 —— 变异树实测 842s（2026-10-21，P358；同一条
+  # 命令的绿基线 411s）。原来的 900s 只剩 6% 余量，机器一忙就必然撞上（发布那轮 fail=2 → fail=1 的
+  # 漂移就是这里来的）。取实测 × 2 = 1800s，与整段 7200s 同一个口径：**它只回答「它没动」，不回答
+  # 「它慢」**。整段的上限归 §61b 那条段（smoke.sh 的 7200s），不因这里而变。
+  FLIP_ARM_BUDGET=1800
+  # 撞上限只是 rc=124（1 是「它自己判红」）。超时必须是一条**点名**的红：只留 rc=124 就把「哪条臂、
+  # 用满多少秒」留给下一个人去猜，那正是同一类问题的下一次复发（P358）。
+  flip_arm_budget_red() { # <tag> <elapsed-seconds>
+    FAIL=$((FAIL+1))
+    printf 'FAIL flip-%s-arm-budget 臂 %s 用满臂预算 %ss（实跑 %ss）仍未出结果 —— 这是「它没跑完」，不是「它红了」\n' \
+      "$1" "$1" "$FLIP_ARM_BUDGET" "$2"
+  }
   # One green baseline and one green restoration of the whole slice; each red arm has its own copy.
   flip_run() {
-    local tag="$1" tree="$2" groups="$3" rc=0
-    TEAM_ROUTING_TREE="$tree" TEAM_ROUTING_EVIDENCE="$TMP/flip-evidence/$tag" timeout 900 bash "$here/task-model-routing.sh" --select "$groups" > "$TMP/flip-$tag.log" 2>&1 || rc=$?
-    printf 'CONTROL %s rc=%s log=%s\n' "$tag" "$rc" "$TMP/flip-$tag.log"
+    local tag="$1" tree="$2" groups="$3" rc=0 started ended
+    started="$(date +%s)"
+    TEAM_ROUTING_TREE="$tree" TEAM_ROUTING_EVIDENCE="$TMP/flip-evidence/$tag" timeout "$FLIP_ARM_BUDGET" bash "$here/task-model-routing.sh" --select "$groups" > "$TMP/flip-$tag.log" 2>&1 || rc=$?
+    ended="$(date +%s)"
+    printf 'CONTROL %s rc=%s elapsed=%ss budget=%ss log=%s\n' "$tag" "$rc" "$((ended - started))" "$FLIP_ARM_BUDGET" "$TMP/flip-$tag.log"
     tail -4 "$TMP/flip-$tag.log"
+    [ "$rc" != 124 ] || flip_arm_budget_red "$tag" "$((ended - started))"
     FLIP_RC="$rc"
   }
   flip_run baseline "$TREE" "$CORE"
