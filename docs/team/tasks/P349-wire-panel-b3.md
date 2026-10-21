@@ -1,7 +1,7 @@
 # P349 · 接线：`panel-b3.sh` 也不在任何门禁段里（第二个这样的夹具）
 
 task: P349
-agent: dev3
+agent: dev2
 phase: apply
 category: code
 change: -
@@ -9,7 +9,7 @@ specs: verification#The gate judges behaviour only, and never reports a skip as 
 anchor: none (infra) — 夹具接线
 deltas: -
 branch: task/P349-wire-panel-b3
-deps: P346 已并入 main（它改 `smoke.sh` / `section-select.sh`；单写者）
+deps: P346 已并入 main（`--slice` 与段表都在了；`smoke.sh` / `section-paths.tsv` 现在空出）。**注意**：接线后这段必须在 `--slice` 下也被正确分片（切片键是段 key 的哈希，不动段 key 就不用改规则）。
 
 ## 事实（P348 第 3 轮报出，`docs/team/reports/P348-dev-bob.md` §5）
 
