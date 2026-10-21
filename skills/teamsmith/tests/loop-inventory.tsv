@@ -44,7 +44,7 @@ smoke.sh	6064	cap="$i" -lt 60	  while [ "$i" -lt 60 ]; do
 smoke.sh	6180	cap="$i" -lt 3000	  while [ "$i" -lt 3000 ] && [ "$(( $(start_count) - STARTS_BEFORE ))" -lt 1 ]; do sleep 0.1; i=$((i + 1)); done
 smoke.sh	6279	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ "$(p36_lines)" -gt "$base" ] && return 0; sleep 0.1; i=$((i + 1)); done
 smoke.sh	6288	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do [ -z "$(p36_same_cwd_pids)" ] && return 0; sleep 0.2; i=$((i + 1)); done
-smoke.sh	6365	cap="$R_WAIT" -lt 1500	  while [ "$R_WAIT" -lt 1500 ] && ! $TEAM roster 2>/dev/null | grep -qF "pi 已退出"; do sleep 0.2; R_WAIT=$((R_WAIT + 1)); done
+smoke.sh	6449	cap="$R_WAIT" -lt "$R_MAX"	  while [ "$R_WAIT" -lt "$R_MAX" ]; do
 smoke.sh	6854	cap="$i" -lt "$ticks"	  while [ "$i" -lt "$ticks" ]; do
 smoke.sh	11110	cap="$i" -lt "$max"	  while [ "$i" -lt "$max" ]; do grep -q -- "$pat" "$f" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done
 smoke.sh	12032	cap="$i" -lt "$ticks"	    while [ "$i" -lt "$ticks" ]; do
