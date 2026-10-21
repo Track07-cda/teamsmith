@@ -21,8 +21,8 @@
 # spawn、pid 记录在案，收尾**只按记录的 pid** 发信号；真实仓库 state/ 的反向守卫做成**白名单** ——
 # 只看「夹具的产品代码可能写到」的那族路径（当前就是闸门自己的日志族 `signal-calls.log*`，逐条从
 # 代码列在下面 FIXTURE_WRITE_WATCH 的注释里）；活着的 PM 运行时每拍都在写别的车道（巡检的
-# capacity.log 等），那不是夹具的事，**不进判据**（P171 的现场同源）。跑动中写入的各面红侧在
-# tests/flip-p171.sh。
+# capacity.log 等），那不是夹具的事，**不进判据**（P171 的现场同源）。跑动中写入的各面红侧曾由
+# tests/flip-p171.sh 固定（P354 已删该夹具；证据见 docs/team/reports/P171-dev.md）。
 set -uo pipefail
 
 SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,7 +82,8 @@ assert_gone() { kill -0 "$2" 2>/dev/null && bad "$1（pid $2 还活着）" || ok
 # tmp_root_create 的私有根里，每个调用点都显式钉 TEAM_SIGNAL_CALLS_LOG/TEAM_SIGNAL_REAL。
 # 判据取**内容哈希**（不是大小/时间戳）：同长度的改写也看得见；目录不在 → 记 absent（连「凭空建出
 # state/」也算变化）。覆盖与不覆盖的边界，报告里逐条写；受看面的形状由段尾 watch-shape 探针在合成
-# 树上钉住（不许扩成「整个 state/」，也不许缩成空转），跑动中写入的各面在 tests/flip-p171.sh。
+# 树上钉住（不许扩成「整个 state/」，也不许缩成空转）；跑动中写入的各面曾由 tests/flip-p171.sh
+# 固定（P354 已删该夹具；证据见 docs/team/reports/P171-dev.md）。
 FIXTURE_WRITE_WATCH='signal-calls.log*'
 REAL_STATE="$REPO_ROOT/.pi/team/state"
 # 两个函数都先**跟随软链**把根解成真路径：`find "<软链>"` 默认不走命令行上的软链（只报软链自己，
@@ -519,7 +520,8 @@ assert_eq "真实仓库 state/ 受看面（产品日志 signal-calls.log*）前�
 # 形状探针（P171 的正向对照）：在合成树上钉住白名单的**形状** —— 受看那一族进快照；活运行时的车道
 # （capacity.log/panel.log/dev.env/bg/bg.log/inbox-watch/sub 里的文件）一律不进。任何「放宽成整个
 # state/」或「受看面写成不存在的名字（空转）」的改动在这里当场变红，不必等一次真跑；跑动中写入的
-# 各面（受看面红 / 活车道绿 / 整份快照变异红 / 签名红 / runner 车道绿）在 tests/flip-p171.sh。
+# 各面（受看面红 / 活车道绿 / 整份快照变异红 / 签名红 / runner 车道绿）曾由 tests/flip-p171.sh
+# 固定（P354 已删该夹具；证据见 docs/team/reports/P171-dev.md）。
 WATCH_PROBE="$TMP/watch-shape"; rm -rf "$WATCH_PROBE"
 mkdir -p "$WATCH_PROBE/bg" "$WATCH_PROBE/sub" "$WATCH_PROBE/inbox-watch"
 : > "$WATCH_PROBE/signal-calls.log"; : > "$WATCH_PROBE/signal-calls.log.forensics"
