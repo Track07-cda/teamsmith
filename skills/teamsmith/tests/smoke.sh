@@ -6092,8 +6092,9 @@ else
 fi
 
 # ---------------------------------------------------------------- 11b3. 启动在飞行中（M7.2）
-# 根因（逐拍采样见 tests/flip-m7.2.sh）：从 respawn 到「拿到启动证据」之间，PM 窗口里是一个正在跑
-# 启动命令的 shell —— 项目内、非 agent，team_pm_state 只能报 unknown。没有「正在启动」这个状态时，
+# 根因（逐拍采样见 tests/flip-m7.2.sh —— 该夹具已在 P354 退役，证据见 docs/team/reports/M7.2-dev2.md）：
+# 从 respawn 到「拿到启动证据」之间，PM 窗口里是一个正在跑启动命令的 shell —— 项目内、非 agent，
+# team_pm_state 只能报 unknown。没有「正在启动」这个状态时，
 # **另一拍**会把它当成「没有 PM」再拉起一次：respawn-pane **杀掉刚起来的 PM**，配额把一次启动
 # 记成两次（实测：1 个活 PM、2 行 pm-restarts.log、24 行 agent argv = 第一个 PM 被写了一半就杀了）。
 # 这里钉住新规则：启动在飞行中 = 一个状态（不重复拉起、不计数），且同一拍里的说法必须自洽。
@@ -6132,7 +6133,8 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   # ① 真正的一场比赛：第一拍在后台拉起 PM；pane 一换进程（= respawn 已发生）就立刻打第二拍。
   #    注意：**真实**启动的「正在启动」窗口有多宽取决于 spawn 文件何时落盘（可能只几十 ms），
   #    所以这里只钉与时间无关的结果（不重复拉起/不计数/不动 pane/只起一个）；
-  #    「starting 这个状态本身」由下面 ③ 用确定性的标记现场钉死（真实路径的窗口见 tests/flip-m7.2.sh）。
+  #    「starting 这个状态本身」由下面 ③ 用确定性的标记现场钉死（真实路径的窗口曾由 tests/flip-m7.2.sh
+  #    现场钉住，该夹具已在 P354 退役；证据见 docs/team/reports/M7.2-dev2.md）。
   rm -f "$REPO/.pi/team/state/pm-restarts.log" "$REPO/.pi/team/state/pm-start-attempts.log" \
         "$TMP/m72-tick1.log" "$TMP/m72-tick2.log"
   make_pm_idle
@@ -9292,7 +9294,7 @@ else
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S7 shutdown removes the registry file" "12b-pi 会话结束删注册（不骗发送方）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS reverse guard" "12b-pi 反向守卫：真实仓库 state/ 未被触碰"
   # M46：跳过留痕 / 注册清痕 / 继承的 TEAM_STATE_DIR 不许指向别的项目（harness M46-S14–S16；
-  # 翻转证据见 tests/flip-m46.sh）
+  # 翻转的现场曾由 tests/flip-m46.sh 固定，该夹具已在 P354 退役；证据见 docs/team/reports/M46-dev3.md）
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S14 a session-name mismatch leaves exactly one .skip record" \
     "12b-pi M46：会话名不符时跳过也要在**本项目**留痕（<key>.skip）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S14 the real CLI reports the delivery degradation in \`team status\`" \
@@ -9303,7 +9305,8 @@ else
     "12b-pi M46：继承的 TEAM_STATE_DIR 指向别的项目 → 拒绝（M40 的 state 面）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS M46-S17 an inherited TEAM_CONFIG_FILE pointing at another project is ignored" \
     "12b-pi M46：继承的 TEAM_CONFIG_FILE 指向别的项目 → 忽略（会话名来自本项目配置）"
-  # P28：字节真值的 offset / 证据化的缩容与收敛 / 过期门槛 / 账本契约（harness S18–S21；翻转见 tests/flip-p25.sh）
+  # P28：字节真值的 offset / 证据化的缩容与收敛 / 过期门槛 / 账本契约（harness S18–S21；翻转见 tests/flip-p25.sh ——
+  # 该夹具已在 P354 退役，变异 A/B 的现场与读数在 docs/team/reports/P25-dev2.md）
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S18 the baseline is the spool byte size" \
     "12b-pi P28：字节裁切的 spool 行不再把 offset 推过文件末尾（baseline = 文件字节数）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S18 idle ticks after a byte-clipped line add no spool shrink" \
@@ -9327,7 +9330,8 @@ else
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S21c the wake line reads n=2 and total grows by exactly two" \
     "12b-pi P28：真投递的 wake n=2、total +2"
   # P81（wake-delivery-idempotence）：写前日志 / 至多一次 / fail-closed / 源行点名（harness S25*/S26；
-  # 翻转证据见 tests/flip-p71.sh）。这一组用轮询（不依赖 watcher 前提），两种前提下都必须逐条 PASS。
+  # 翻转证据见 tests/flip-p71.sh —— 该夹具已在 P354 退役，红/绿/四条变异的读数在 docs/team/reports/P89-dev.md）。
+  # 这一组用轮询（不依赖 watcher 前提），两种前提下都必须逐条 PASS。
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25j the journal is start → read → intent → sent" \
     "12b-pi P81：投递日志按 start → read → intent → sent 的顺序落盘（一行一条记录）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S25j a stale line writes no journal record" \
@@ -9382,7 +9386,8 @@ else
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the running extension wakes the session (zero model calls)" \
     "12b-pi 端到端：真 CLI 投递 → 监视扩展唤醒（零模型调用）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS reverse guard" "12b-pi 反向守卫：真实仓库 state/ 未被触碰"
-  # M43：外部截断/重写 spool 的重放保真（harness S11–S13；翻转证据见 tests/flip-m43.sh）
+  # M43：外部截断/重写 spool 的重放保真（harness S11–S13；翻转证据见 tests/flip-m43.sh ——
+  # 该夹具已在 P354 退役，现场与读数在 docs/team/reports/M43-dev.md）
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 external truncate+rewrite does not redeliver" \
     "12b-pi M43：外部截断+重写不再重放已投递行"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S11 total is not inflated" \
@@ -12361,8 +12366,9 @@ fi
 # 契约来源：openspec/changes/pulse-console/specs/panel/spec.md「Frame assembly is asynchronous,
 # cached and never blocks input」+ tasks.md B1（0.1/1.1–1.6）。
 # 分段：27-a 块协议（一帧多块、坏块只坏自己）/ 27-b 源坏 → 只降级那一块 / 27-c 快速读者与旧读者同值 /
-#      27-d 装配红线 + 渲染路径无同步 spawn。真进程部分（按键失真、60s CPU）是
-#      tests/panel-keyprobe.sh 与性能套件里的面板测量（报告里贴日志），smoke 只钉可判定的。
+#      27-d 装配红线 + 渲染路径无同步 spawn。真进程部分（60s CPU）由性能套件的面板测量覆盖
+#      （报告里贴日志）；**按键失真那半边今天没有活守门人** —— tests/panel-keyprobe.sh 已在 P354
+#      退役（缺口写在 tests/README.md），面板 pty 面要等 P349 把 panel-b3 接进门禁后才有人守。
 section "27 · 面板异步数据层（pulse-console B1：块协议 / 块隔离 / 快速读者等价 / 装配时间）"
 
 P27R="$TMP/p27-repo"
@@ -18888,8 +18894,9 @@ fi
 
 # 38-d 静默回归钉（M65/D11，FAST 照跑）：交互路径不许再出现「打开前先读一次」的 awaited API，
 # 且唯一带读取窗口判据的行为夹具还在。38-b（真 pty）只在完整门禁跑；这两条便宜钉保证有人把
-# 「开行前先读一次」加回来、或把读取窗口断言删掉时 FAST 也会红。行为面的红侧在
-# panel-flip-m54.sh 的 W-A（断掉无读取 → choices 变红）。
+# 「开行前先读一次」加回来、或把读取窗口断言删掉时 FAST 也会红。今天 38-d 的红侧是段内这几条 grep
+# 与 panel-choices.sh 的 F-A/F-D（38-a 每轮实跑）；原本点名的 W-A（断掉无读取 → choices 变红）随
+# panel-flip-m54.sh 在 P354 退役，这一面今天没有活翻转（见 docs/team/reports/M55-dev3.md）。
 if [ -f "$SKILL_DIR/scripts/panel/src/App.tsx" ]; then
   if grep -qE '(^|[^A-Za-z])refreshSettings\(' "$SKILL_DIR/scripts/panel/src/App.tsx"; then
     bad "38-d 交互路径又出现 awaited 读取（App.tsx 调了 refreshSettings）"

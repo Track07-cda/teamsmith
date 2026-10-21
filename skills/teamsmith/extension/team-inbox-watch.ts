@@ -449,8 +449,9 @@ function forcedWatchErrno(): string {
 function writeDegradedRecord(root: string, target: string, info: {
   errno: string; watches: string; pollMs: number; forced: boolean
 }): void {
-  // 变量名故意不叫 dir：flip-m46 包用 `}): void {\n  const dir = watchDir(root)` 当 writeSkipRecord 的注射锚点，
-  // 这里重名会让那个锚点变成 2 处（既有翻转包会 exit 2）——不动的包不该被新代码抵掉。
+  // 变量名故意不叫 dir：P354 之前 flip-m46 的翻转包用 `}): void {\n  const dir = watchDir(root)` 当
+  // writeSkipRecord 的注射锚点，重名会让那个锚点变成 2 处（那个包会 exit 2）。那个包已在 P354 退役、
+  // 今天没有执行者；它守的 M46 行为由 §12b-pi 的 M46-S14…S17 活着守着。
   const wdir = watchDir(root)
   const key = targetKey(target)
   try { mkdirSync(wdir, { recursive: true }) } catch { return }
@@ -596,7 +597,8 @@ function readNewLines(file: string, offset: number): ReadResult {
       // 行中起步 = 碎片（被 clamp 截住的旧行的尾巴）：跳到它自己的换行为止，绝不投递（B1.2）
       const start = midLine ? win.indexOf(0x0a) + 1 : 0
       const resync = start
-      const advance = end + 1   // P28/B1：字节真值（flip-p25.sh 的 mutant A/B 把这一行换成解码→再编码的长度）
+      const advance = end + 1   // P28/B1：字节真值（曾由 flip-p25.sh 的 mutant A/B 把这一行换成解码→再编码的长度来
+                                // 翻转，该夹具 P354 已退役；这条不变量今天由 §12b-pi S18–S21 守）
       const lines: string[] = []
       let from = start
       for (let i = start; i <= end; i++) {
