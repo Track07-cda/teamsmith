@@ -557,7 +557,7 @@
 | V85 | P348独立验收：第3轮精简 | dev | - | - | wip |
 | P349 | 接线 panel-b3（排队） | dev3 | - | - | todo |
 | P350 | 产品侧两处grep -q与pipefail | dev3 | - | - | todo |
-| V86 | P346独立验收：切片无损 | dev-bob | - | - | wip |
+| V86 | P346独立验收：切片无损 | dev-bob | - | - | todo |
 
 ## 当前里程碑
 
