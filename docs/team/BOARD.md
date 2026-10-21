@@ -558,7 +558,7 @@
 | P349 | 接线 panel-b3（排队） | dev3 | - | - | todo |
 | P350 | 产品侧两处grep -q与pipefail | dev-bob | - | - | wip |
 | V86 | P346独立验收：切片无损 | dev | - | - | wip |
-| V87 | P350独立验收：产品两处管道 | dev2 | - | - | wip |
+| V87 | P350独立验收：产品两处管道 | dev2 | - | - | todo |
 
 ## 当前里程碑
 
