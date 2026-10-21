@@ -1,7 +1,7 @@
 # V86 · P346 的独立验收：切片真的无损吗，并集断言真的有牙吗
 
 task: V86
-agent: dev-bob
+agent: dev
 phase: verify
 category: verify
 change: -
@@ -26,4 +26,4 @@ branch: task/V86-shard-parallel-verify
 
 ## 边界
 
-只读代码、只在 `/var/tmp` 私有副本里造破坏、只写 `docs/team/reports/V86-dev-bob.md` 与自己的线程；不改实现、不合并、不 push、**不触发远程 CI**。跑选段可以（FAST 档），但不要跑整套。结论先写 PASS/PARTIAL/FAIL，并对「45.4 分是否可接受 / N 该不该改」给一句建议。local 模式。
+只读代码、只在 `/var/tmp` 私有副本里造破坏、只写 `docs/team/reports/V86-dev.md` 与自己的线程；不改实现、不合并、不 push、**不触发远程 CI**。跑选段可以（FAST 档），但不要跑整套。结论先写 PASS/PARTIAL/FAIL，并对「45.4 分是否可接受 / N 该不该改」给一句建议。local 模式。
