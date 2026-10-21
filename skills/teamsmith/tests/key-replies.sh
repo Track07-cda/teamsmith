@@ -213,8 +213,8 @@ kr_group_input() {
   # 相同的合法输入再发一次 → 两条不同编号
   kr_post "$p" dev2 '完整结论与取舍' "$B" >/dev/null; rc=$?
   local lst; lst="$(kr_cli "$p" reply list --json)"
-  eq "input：重复提交不合并（两条）" "$(jget "$lst" 'len(d["entries"])')" "2"
-  eq "input：编号严格递增" "$(jget "$lst" 'd["entries"][0]["no"]')" "2"
+  # P348 合并（两条 → 一条）："两条记录"与"编号递增到 2"是同一份快照的两个面，合成一个谓词不会少判什么。
+  jok "$lst" 'len(d["entries"])==2 and d["entries"][0]["no"]==2' && ok "input：重复提交不合并（两条）、编号严格递增（最新 = 2）" || bad "input：重复提交/编号不对（$lst）"
   # label 边界
   printf 'x\n' >"$B"
   kr_post "$p" '' 'T' "$B" >/dev/null 2>&1; eq "input：缺 --from → rc2" "$?" "2"
@@ -378,8 +378,8 @@ kr_group_original() {
   kr_cli "$p" reply show 1 --raw >"$TMP/orig-out.md" 2>"$TMP/orig-raw.err"; rc=$?
   eq "original：raw 导出 rc=0" "$rc" "0"
   if cmp -s "$B" "$TMP/orig-out.md"; then ok "original：raw 与输入逐字节相同（CRLF/尾换行）"; else bad "original：raw 与输入不同"; fi
-  local h1 h2; h1="$(sha256sum "$B" | cut -d' ' -f1)"; h2="$(sha256sum "$TMP/orig-out.md" | cut -d' ' -f1)"
-  eq "original：两份 sha256 一致" "$h2" "$h1"
+  # P348 删：原来这里还有一条「两份 sha256 一致」——`cmp -s` 已经比过每一个字节，sha 只是同一事实的另一种数法；
+  # 字节相同 ⇒ sha 相同，没有一种破坏能让 sha 红而 cmp 绿。
   local js; js="$(kr_cli "$p" reply show 1 --json)"
   jok "$js" 'd["text_kind"]=="safe-display" and d["bytes"]>0 and len(d["sha256"])==64' && ok "original：JSON 标明显示表示并带原文长度/哈希" || bad "original：JSON 结构不对（$js）"
   not_has "original：JSON 的显示文本不含 OSC" "$(jget "$js" 'd["display_text"]')" "$(printf '\033]0;t\007')"
@@ -446,8 +446,9 @@ kr_group_concurrency() {
   wait "$w1" 2>/dev/null; wait "$w2" 2>/dev/null
   eq "concurrency：两个真进程都 rc=0" "$(cat "$TMP/c1.rc")/$(cat "$TMP/c2.rc")" "0/0"
   local lst; lst="$(kr_cli "$p" reply list --json)"
-  eq "concurrency：两条记录" "$(jget "$lst" 'len(d["entries"])')" "2"
-  eq "concurrency：编号互不相同且连续" "$(jget "$lst" 'sorted(e["no"] for e in d["entries"])')" "[1, 2]"
+  # P348 合并（两条 → 一条）：同一次快照的条数与编号集合。
+  jok "$lst" 'len(d["entries"])==2 and sorted(e["no"] for e in d["entries"])==[1, 2]' \
+    && ok "concurrency：两条记录、编号互不相同且连续（[1, 2]）" || bad "concurrency：条数/编号不对（$lst）"
   eq "concurrency：并发读快照数 >0" "$([ "$reads" -gt 0 ] && echo yes || echo no)" "yes"
   eq "concurrency：并发读没看到未提交的半条" "$partial" "0"
   # 两份原文都能取回
@@ -510,8 +511,10 @@ kr_group_receipts() {
   kr_post "$p" dev2 'R3' "$B" >"$TMP/r-busy.out" 2>&1; rc=$?
   eq "receipts：锁竞争 → rc5" "$rc" "5"
   eq "receipts：竞争失败没有发布" "$(kr_cli "$p" reply list --json | jget /dev/stdin 'd["total_slots"]')" "1"
-  kr_cli "$p" reply show 1 >/dev/null 2>&1; eq "receipts：锁被占时 show 照常" "$?" "0"
-  kr_cli "$p" reply list >/dev/null 2>&1; eq "receipts：锁被占时 list 照常" "$?" "0"
+  kr_cli "$p" reply show 1 >/dev/null 2>&1; local busy_show=$?
+  kr_cli "$p" reply list >/dev/null 2>&1; local busy_list=$?
+  # P348 合并（两条 → 一条）：两个命令两个退出码一起比，任一半走样都红。
+  eq "receipts：锁被占时 show/list 照常（都 rc=0）" "$busy_show/$busy_list" "0/0"
   kr_release_lock
   # P316 · V61 F3：spec 承诺「writer-lock contention 最多等 2000 ms 后返回 5」（scripts/replies.mjs 的
   # LOCK_WAIT_SEC=2）。这条**不改回秒表**：把 `flock` 换成"记下 argv 就以忙退出"的桩，断言工具交给
@@ -583,7 +586,7 @@ kr_group_interrupt() {
   kr_post "$p" dev2 'K4' "$B" >/dev/null 2>&1; rc=$?
   eq "interrupt：完整坏槽时 post 拒绝（rc4）而不是截断" "$rc" "4"
   eq "interrupt：坏槽字节未被改写（sha 不变）" "$(sha256sum "$KR/index.v1" | cut -d' ' -f1)" "$bad_hash"
-  eq "interrupt：坏槽尺寸未变" "$(stat -c %s "$KR/index.v1")" "$before_size"
+  # P348 删：原来还断言「坏槽尺寸未变」—— 整文件 sha 未变已经蕴含尺寸未变（截断一定改 sha）。
   kr_ev_note "interrupt baseline_hash=$before_hash corrupt_hash=$bad_hash"
 }
 
@@ -616,12 +619,13 @@ kr_group_paging() {
     [ "$cursor" = "None" ] && break
     if [ "$pages" -gt 10 ]; then bad "paging：cursor 链没在 10 页内结束"; break; fi
   done
-  local norm; norm="$(printf '%s' "$seen" | tr ' ' '\n' | grep -E '^[0-9]+$' | tr '\n' ' ')"
+  local norm; norm="$(printf '%s' "$seen" | tr ' ' '\n' | grep -E '^[0-9]+$' | tr '\n' ' ' | sed -e 's/  */ /g' -e 's/^ //' -e 's/ $//')"
+  local want_chain; want_chain="$(seq 123 -1 1 | tr '\n' ' ' | sed 's/ $//')"
   eq "paging：3 页覆盖 123→1" "$pages" "3"
-  eq "paging：每个编号恰出现一次且降序" "$(printf '%s' "$norm" | tr -s ' ' '\n' | grep -c .)" "123"
-  eq "paging：链的起点是 123" "$(printf '%s' "$norm" | awk '{print $1}')" "123"
-  eq "paging：链的终点是 1" "$(printf '%s' "$norm" | awk '{print $NF}')" "1"
-  eq "paging：无重复编号（去重后仍是 123）" "$(printf '%s' "$norm" | tr ' ' '\n' | grep . | sort -u | wc -l | tr -d ' ')" "123"
+  # P348 合并（四条 → 一条）：原来说「条数 123」「起点 123」「终点 1」「去重后仍 123」四条，
+  # 合起来才等于「恰好一遍」；直接与期望链 123 122 … 1 逐字比一次，四条的事实全在里面（而且更强：
+  # 顺带钉住降序与无跳号，四条里任何一条独有的破坏都会让这一条红）。
+  eq "paging：链恰好是 123 122 … 1（无重复、无缺失、降序）" "$norm" "$want_chain"
   # 坏页仍前进：把某一整页（编号 24..73 是第 2 页）打坏
   local KR="$p/.pi/team/state/key-replies" n
   for n in $(seq 74 123); do :; done
@@ -672,8 +676,9 @@ kr_group_bounded() {
   local KR="$p/.pi/team/state/key-replies"
   printf 'ZZZZ' | dd of="$KR/index.v1" bs=1 seek=$((100000 * 4096 - 100)) conv=notrunc status=none
   local sj; sj="$(kr_cli "$p" __panel-data --block reply_summary)"
-  eq "bounded：坏最新槽 summary=unavailable" "$(jget "$sj" 'd["state"]')" "unavailable"
-  eq "bounded：坏最新不退回旧标题" "$(jget "$sj" 'd.get("entry")')" "None"
+  # P348 合并（两条 → 一条）：同一次机器出口的两个面（状态 + 没有退回旧标题）。
+  jok "$sj" 'd["state"]=="unavailable" and d.get("entry") is None' \
+    && ok "bounded：坏最新槽 summary=unavailable 且不退回旧标题" || bad "bounded：坏最新槽的处理不对（$sj）"
   # 读取量的观测器：内核自述的 /proc/<pid>/io（rchar/syscr）+ /proc/<pid>/fd{,info}（进程真正打开过
   # 哪些路径、以什么 flags 打开）。无编译器依赖 —— 门禁镜像按 M47 故意 purge 掉 build-essential，
   # 所以旧版 LD_PRELOAD shim 在那里永远编不出来（V27 的 M3）。观测器不可用（hidepid 等）时**点名跳过**。

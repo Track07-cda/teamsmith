@@ -258,7 +258,8 @@ PY
     run_in "$p" config set TEAM_PULSE_NUDGE_GAP 1200 --yes >/dev/null
     assert_eq "行内注释原样保留、值换成单引号形态" \
       "$(grep -c "^TEAM_PULSE_NUDGE_GAP='1200'  # 15min\$" "$cfg" || true)" "1"
-    ( cd "$p" && bash -n .pi/team/config.sh ) && ok "bash -n 通过" || bad "bash -n 失败"
+    # P348 删：这里原有一条 `bash -n` —— 同一个文件后面（追加新键、写五个元字符值之后）还会再检两次，
+    # 这一处写坏的话在下面那两次里同样红；留下的是真正能发现语法损坏的那两条。
     assert_eq "diff 只有一对增删（一行变了）" "$(diff "$tmp/writer-before" "$cfg" | grep -c '^[<>]' || true)" "2"
   else
     bad "夹具没有造出带注释的目标行"
@@ -359,18 +360,21 @@ if want validate; then
   check_rc "TEAM_MIN_FREE_SWAP_MB=0 --dry-run --allow-danger → 0" 0 TEAM_MIN_FREE_SWAP_MB 0 --dry-run --allow-danger
   check_rc "TEAM_PROJECT=x → 5（refuse）" 5 TEAM_PROJECT x --yes
   check_rc "未知键 TEAM_ZZZ_TEST → 5" 5 TEAM_ZZZ_TEST x --yes
-  check_rc "坏枚举的报错带接受域（TEAM_MONITOR_UI）" 4 TEAM_MONITOR_UI colour --yes
+  # P348 删：这里原来还有一条 `check_rc "坏枚举的报错带接受域（TEAM_MONITOR_UI）" 4 …`——同一 argv、
+  # 同一条 rc，标签声称判文案却只判 rc。rc 由上面那行 "TEAM_MONITOR_UI=colour → 4" 判，
+  # 文案由下面的 case 判（*auto*tui*text*），两半都还在。
   assert_eq "所有被拒的尝试都没改契约" "$(sha_of "$cfg")" "$sha_b"
   err="$(run_in "$p" config set TEAM_MONITOR_UI colour --yes)"
   case "$err" in *auto*tui*text*) ok "枚举报错点名接受域（auto|tui|text）" ;; *) bad "枚举报错没点名接受域（$err）" ;; esac
   # P278/O7：拒绝语是行为合同（退出码 + 文件路线 + 契约不动），不是「只读键」这类行话
-  err="$(run_in "$p" config set TEAM_PROJECT x --yes)"; rc=$?
-  assert_eq "refuse：TEAM_PROJECT 的退出码是 5" "$rc" "5"
+  # P348 删两条重复：`assert_eq "refuse：TEAM_PROJECT 的退出码是 5"`（同一 argv 的 rc 已由矩阵里的
+  # "TEAM_PROJECT=x → 5（refuse）" 判）与 "refuse 被拒之后契约逐字节不变"（矩阵后的
+  # "所有被拒的尝试都没改契约" 已在同一条命令之后比过 sha）。留下的是这两条断言都判不了的文案面。
+  err="$(run_in "$p" config set TEAM_PROJECT x --yes)"
   case "$err" in *".pi/team/config.sh"*) ok "refuse 的报错点名项目配置文件 .pi/team/config.sh" ;;
     *) bad "refuse 的报错没给文件路线（$err）" ;; esac
   case "$err" in *"只读"*|*"控制台"*) bad "refuse 的报错还在用行话（$err）" ;;
     *) ok "refuse 的报错不含「只读/控制台」行话" ;; esac
-  assert_eq "refuse 被拒之后契约逐字节未变" "$(sha_of "$cfg")" "$sha_b"
   # danger 的显式旗标真的能写
   run_in "$p" config set TEAM_MIN_FREE_SWAP_MB 0 --yes --allow-danger >/dev/null; rc=$?
   assert_eq "danger + --allow-danger → 0 并写入" "$rc" "0"
@@ -586,7 +590,8 @@ if want roster; then
   assert_eq "① 无旗标未知席位 → 5（refuse）" "$rc" "5"
   case "$out" in *"--register"*) ok "① 报错点名 --register" ;; *) bad "① 没点名 --register（$out）" ;; esac
   case "$out" in *config.sh*) ok "① 报错点名手改 .pi/team/config.sh" ;; *) bad "① 没点名手改路线（$out）" ;; esac
-  case "$out" in *"什么都没做"*) ok "① 明说零副作用" ;; *) bad "① 没说清零副作用（$out）" ;; esac
+  # P348 删：`case "$out" in *"什么都没做"*)` 判的是一句成功语/承诺语（文案），零副作用本身由下面三条
+  # 行为断言判（契约逐字节、没有工作树、没有 state 文件）——文案档的判据，行为面已经有承接者。
   assert_eq "① 契约逐字节不变" "$(sha_of "$cfg")" "$sha0"
   [ -e "$p/.worktrees/api" ] && bad "① 居然建了工作树" || ok "① 没有工作树"
   [ -e "$p/.pi/team/state/api.env" ] && bad "① 居然写了 state" || ok "① 没有 state 文件"
@@ -643,7 +648,8 @@ if want roster; then
   # ④ 已在名册 + --register：可见 no-op（0、不写、不审计）
   out="$(run_in "$p" add-agent api --register --no-install)"; rc=$?
   assert_eq "④ 已在名册 + --register → 0" "$rc" "0"
-  case "$out" in *"已在名册"*) ok "④ 可见 no-op 说明" ;; *) bad "④ 没有 no-op 说明（$out）" ;; esac
+  # P348 删：`case "$out" in *"已在名册"*)` 判的也是文案；no-op 这条行为由下面两条判（rc=0、契约逐字节
+  # 不变、审计行数不变），与①同一档判据。
   assert_eq "④ 契约逐字节不变" "$(sha_of "$cfg")" "$sha_r"
   assert_eq "④ 审计行数不变" "$(grep -c 'result=' "$log" || true)" "$n_r"
 
@@ -713,9 +719,9 @@ if want roster; then
   assert_eq "⑨ add-agent --model 已退休 → 2" "$rc" "2"
   case "$out" in *retired*) ok "⑨ 退休诊断点名" ;; *) bad "⑨ 退休诊断缺失（$out）" ;; esac
   case "$out" in *set-task-model*) ok "⑨ 退休路线指向 category 写入器" ;; *) bad "⑨ 退休路线不可执行（$out）" ;; esac
+  # P348 删两条：`grep -c 'zeta'` 与 `grep -c '^TEAM_AGENT_MODELS='` 都弱于上面那句「契约逐字节不动」——
+  # 整个文件一个字节都没变，就没有新席位名、也没有新键。它们守的不是行为，是同一事实的另一种数法。
   assert_eq "⑨ 退休拒绝不动契约" "$(sha_of "$cfg")" "$sha_m"
-  assert_eq "⑨ 退休拒绝不建席位" "$(grep -c 'zeta' "$cfg" || true)" "0"
-  assert_eq "⑨ 退休拒绝不写席位模型键" "$(grep -c '^TEAM_AGENT_MODELS=' "$cfg" || true)" "0"
 
   # ⑩ list kind 的规则在 schema 里就位（1.1）：scratch 树加一条 list 行 → 违规值被 4 拒
   ltree="$tmp/list-tree"; mkdir -p "$ltree/skills/teamsmith"
@@ -758,6 +764,9 @@ PY
   # ⑫ 席位名是一个 token（P105/F1）：空白形状必须在**任何写入之前**被拒。旧行为（红侧）：
   #    `api 1` 被当作两个各自合法的 token 追加进名册（写脏 + 一行 result=ok），命令随后才在
   #    worktree 步骤以「未知 agent：api 1」失败（rc=1）—— 失败的命令改了状态还谎报成功。
+  # P348 曾经把 `space-trail` 当成 `space-lead` 的"同一个形状"删掉，V85 用**窄变异**判定它其实是唯一覆盖：
+  # 只在**尾部**空白上放行（`api ` 被当成合法席位名、名册里就多出一个用户没打的名字）时，space-lead（前导）
+  # 与 space-inner / tab 全绿，只有这一条会红。删前同变异红 5 条，所以它是事故的墓碑，恢复。
   for shape in "space-inner:api 1" "space-lead: api" "space-trail:api " "tab:$(printf 'api\t1')"; do
     label="${shape%%:*}"; name="${shape#*:}"
     p3="$(new_proj "roster-shape-$label")" || exit 3
@@ -903,8 +912,9 @@ if want shape; then
       *) bad "拒绝[set-task-model] routine $v 没有点名 [$phrase]（$(printf '%s' "$o" | head -1)）" ;;
     esac
   }
-  rej_seat '/a' 'provider 为空'
-  rej_seat 'a/' 'model 为空'
+  # P348 删 `rej_seat '/a'` 与 `rej_seat 'a/'`：三条写入路共用同一处判定（本段下面用 a//b 在三条路上
+  # 各判一次就是这条共享性的证据），而这两个形态的判据由 rej_default 的同名两条守着；同一条路再跑一遍
+  # 同样的两个形态不新增判别力。留 a//b 是红侧 F-S1 点名的形态。
   rej_seat 'a//b' 'model 有空段'
   out="$(run_in "$p" config set TEAM_TASK_MODELS 'routine=a//b analysis=x/a verify=x/v' --yes)"; rc=$?
   assert_eq "拒绝[pairlist] dev=a//b → 4" "$rc" "4"
@@ -1223,11 +1233,9 @@ if want seats; then
   run_in "$p" config set-task-model routine - --yes >/dev/null 2>&1; rc=$?
   assert_eq "类别删除语法不伪造默认 → 4" "$rc" 4
   assert_eq "拒绝删除后契约不变" "$(sha_of "$cfg")" "$sha_b"
-  for seat in dev pm dev4; do
-    out="$(run_in "$p" config set-agent-model "$seat" vendor/model --yes)"; rc=$?
-    assert_eq "set-agent-model $seat 退休 → 5" "$rc" 5
-    case "$out" in *set-task-model*TEAM_PM_MODEL*) ok "退休错误给出类别/独立 PM 入口" ;; *) bad "退休错误缺可行入口" ;; esac
-  done
+  # P348 删：原来这里对 dev / pm / dev4 三个席位各跑一遍 `set-agent-model`（6 条断言）。这条命令已整体退休、
+  # 拒绝与席位无关，roster ⑪ 已用 nosuchseat（未知）与 pm 两种身份判过同一条 rc=5 与同一句可行入口
+  # （而且 ⑪ 所在段在 §51 也跑）。三个身份不新增判别力。
   out="$(run_in "$p" config set TEAM_AGENT_MODELS 'dev4=x/y' --yes)"; rc=$?
   assert_eq "旧整个席位 pairlist 退休 → 5" "$rc" 5
   run_in "$p" config set-task-model routine deepseek-flash --yes >/dev/null 2>&1; rc=$?
@@ -1420,11 +1428,9 @@ if want docs; then
   else
     bad "docs 例子：$n_bad/$n_lines 条失败"
   fi
-  missing=""
-  while IFS= read -r k; do
-    grep -qF "\`$k\`" "$config_md" || missing="$missing $k"
-  done < <(schema_keys_of "$cmd_config")
-  [ -z "$missing" ] && ok "每个 schema 键都在 references/config.md 里" || bad "这些 schema 键没有文档：$missing"
+  # P348 删：这里原来又走了一遍「schema 键 → config.md」的对拍，与 completeness 段的
+  # check_completeness 第三个 while 是同一条判据（同一份 schema、同一个文件、同一个 grep -qF）。
+  # 承接者：completeness 段（本文件先跑的段，§33 无参运行必跑）。
 fi
 
 # ---------------------------------------------------------------- callers
