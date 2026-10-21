@@ -544,13 +544,14 @@
 | V80 | P340独立验收：确定性等待 | verify | - | - | done |
 | P341 | 同段剩下的两处起跑时刻假设 | dev3 | - | - | done |
 | V81 | P341独立验收：两处窗口 | verify | - | - | done |
-| P342 | 账本泄漏判据把发布证据误判 | dev-bob | - | - | wip |
+| P342 | 账本泄漏判据把发布证据误判 | dev-bob | - | - | done |
 | P343 | §51 routes 与 §41 窗格留存两条红归因 | dev3 | dev2 | - | done | todo |
 | V82 | P327独立验收：夹具接线 | verify | - | - | done |
 | P344 | 两处夹具缺陷与grep -q同族清扫 | dev3 | - | - | wip |
 | P345 | CI时长方案：切片并行 vs 地板瘦身 | dev2 | - | - | done |
 | P346 | CI地板切片并行（排队） | dev2 | - | - | todo |
-| V83 | P342独立验收：取样范围收窄 | verify | - | - | wip |
+| V83 | P342独立验收：取样范围收窄 | verify | - | - | done |
+| P347 | 给豁免配证伪者（V83 F1） | dev-bob | - | - | done |
 
 ## 当前里程碑
 
