@@ -1,0 +1,30 @@
+# V85 · P348 的独立验收：第 3 轮精简有没有减掉必要覆盖
+
+task: V85
+agent: dev
+phase: verify
+category: verify
+change: -
+specs: verification#The gate judges behaviour only, and never reports a skip as a pass
+anchor: none (infra) — 测试精简
+deltas: -
+branch: task/V85-test-round3-verify
+
+## 受检
+
+候选 `bedf9e0a`（`d2118a43` config-cli、`18ad0d18` key-replies），报告 `docs/team/reports/P348-dev-bob.md`。它报的读数：`config-cli.sh` 运行时断言 350 → 326（−24，13 处）、`key-replies.sh` 212 → 203（−9，7 处，其中 4 处合并）；`panel-b3.sh` **一条没删**（它不在任何门禁段里）。选段 ✓153 ✗0。
+
+## 要回答的三件事
+
+1. **删掉的每一条都找到了接管者**：逐条核报告里的「原文 → 处置 → 谁接管」。抽 6 条（含 2 条「合并」、2 条「删重复调用」、2 条「删文案档断言」）自己验证接管者真的存在且真会咬人——**能把接管者改坏让它红，比读一遍更可信**（至少对其中 2 条做实际变异）。
+2. **没有一条「必要」被删**：按三条判据（契约面 / 点名过的事故 / 哑失效）挑出你觉得最可能踩线的 3 条，说明你的判断。
+3. **`panel-b3.sh` 的处置**：它报「不在任何门禁段里」，核这个事实（`section-select --paths` 指到它、`section-paths.tsv` 里有没有行声明它）；若确实不跑，给出你的建议（接线 / 删掉 / 保留但不接）。
+
+## 另外两处它只报不改的
+
+- 它说 main 的 `--loop-check` 是红的（`smoke.sh:6449` 与清单第 30 行不符）。**PM 已经修了**（`915f0512`），请确认现在 `section-guard.sh --loop-check` 在 main 与候选上都是绿（86/86），若候选树上仍红就点名。
+- 它说 `smoke.sh` §62 的注释写「整段约 1.8 分钟」而实测 12 分 08 秒。核这个数字（不必跑整段，从它的报告与段内各子步读数判断即可），并说明这类「注释里的时间」该改成什么（表达挂住上限，还是干脆不写时间）。
+
+## 边界
+
+只读代码、只在 `/var/tmp` 私有副本里造破坏、只写 `docs/team/reports/V85-dev.md` 与自己的线程；不改实现、不合并、不 push。不跑整套。结论先写 PASS/PARTIAL/FAIL。local 模式。
