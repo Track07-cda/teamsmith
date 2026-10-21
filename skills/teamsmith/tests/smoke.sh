@@ -858,7 +858,7 @@ if [ -n "$SMOKE_INVOKE_ROOT" ]; then
 fi
 
 # 「真实账本」的夹具痕迹扫描（M7.2 纪律）——所有隔离断言共用同一口径：
-#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，恰排**三条流量记录**（都按确切路径）。
+#   扫 <root>/docs/team/inbox 与 <root>/.pi/team/state，排**三条流量记录**（按确切路径）与**一处取样范围**（按前缀）。
 # 排除之一：.pi/team/state/bg/**（M30 实测）——team_bg_run 把后台作业的 stdout 存进 state/bg/<id>.log，
 # 门禁自己的 stdout（含各段夹具的名字）就在里面 —— 不排它，下一次门禁的 M16/M98 隔离断言会把「按提示词
 # 把门禁放后台跑」判成夹具泄漏（假红：同一棵树、同一套断言，只因上一次的作业日志还在）。
@@ -873,6 +873,15 @@ fi
 # `docs/team/inbox/bg/` 与 `.pi/team/state/nested/bg/` 也静默掉 —— 那两处是真账本，必须被点名。
 # 同名兄弟（tmux-calls.log.1 / tmux-calls.log.forensics.1）、子目录里的同名文件、任何别处的 bg/ 目录都仍是
 # 真泄漏（12b-j / M16 钉住）。
+# 排除之四（P342）：`.pi/team/state/release-*/**` ——**发布证据目录**。0.3.0 发布时留在那里的门禁日志
+# （release-030/container-full.log、public-ci.log）内容里必然带夹具的会话名与断言标记：那是「**关于**一次
+# 夹具运行的日志」，不是「夹具自己写进账本的东西」。它是**取样范围**问题（判据扫到了不该算账本的文件），
+# 不是隔离破了，所以收窄取样，而不是加内容匹配——按内容猜「这行像日志」正是会出假阴的地方。
+# 这条按**前缀**豁免：只有 `<root>/.pi/team/state/release-<名字>/` 下面的文件被跳过；前缀锚在确切路径，
+# 所以 `docs/team/inbox/release-x/`、`.pi/team/state/nested/release-x/` 仍是真账本、仍被点名，
+# `release-scan-current.log` 这类同前缀的**文件**（不在 release-* 目录里）也照旧算账本。
+# 残余风险点名：真有夹具往 `release-*/` 里写东西，这条判据不会再抓它——由评审与发布复核兜（发布证据目录
+# 里只该出现发布复核自己写下的日志）。
 real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去重）
   local pats="$1" root="${2%/}" d
   { for d in "$root/docs/team/inbox" "$root/.pi/team/state"; do
@@ -882,7 +891,14 @@ real_ledger_hits() { # <grep -E 模式> <root> → 命中的文件（排序去�
     | awk -v audit="$root/.pi/team/state/tmux-calls.log" \
           -v forensics="$root/.pi/team/state/tmux-calls.log.forensics" \
           -v jobs="$root/.pi/team/state/bg/" \
-          '$0 != audit && $0 != forensics && index($0, jobs) != 1' \
+          -v releases="$root/.pi/team/state/release-" '
+        # P342：发布证据目录 <root>/.pi/team/state/release-<名字>/ —— 前缀命中且**目录名后面还有路径分量**
+        # （即它确实是那个目录下的文件；同前缀的文件名 release-scan-current.log 不算）。
+        function in_release_dir(p) {
+          if (index(p, releases) != 1) return 0
+          return index(substr(p, length(releases) + 1), "/") > 0
+        }
+        $0 != audit && $0 != forensics && index($0, jobs) != 1 && !in_release_dir($0)' \
     | sort -u || true
 }
 
@@ -14282,6 +14298,31 @@ assert_eq "M16 隔离对照：inbox/bg/ 里的痕迹必须被抓到（bg 排除�
 assert_eq "M16 隔离对照：三条真痕迹腿恰三条命中（state/bg/、审计日志与长保留付本仍不在清单里）" \
   "$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_NEG" | wc -l | tr -d ' ')" "3"
 rm -rf "$M16_NEG"
+# P342/P347（V83 F1）：**发布证据目录豁免的边界**。P342 给扫描器加了一条按目录前缀的豁免
+# （`.pi/team/state/release-<名字>/`）；这里用同一个扫描器、一个合成根直接钉住它的四条边：
+#   ① 同前缀的普通账本**文件**（release-scan.log）必须被点名 —— 豁免是**目录前缀**，不是「路径里含 release-」；
+#   ② 前缀没锚上的同名目录（nested/release-x/）必须被点名；
+#   ③ 发布证据目录里的文件（release-030/a.log）不命中；
+#   ④ 普通账本（plain.log）仍被点名（豁免没有把判断关掉）。
+# 之所以要有这组：V83 实测过把豁免放宽成「路径里含 release- 就跳过」，当时没有任何段会红。
+# 合成根的名字不带 release，否则「放宽」那侧的变红会全部由根路径造成，钉不住文件路径本身的边界。
+M16_SCOPE="$TMP/m16-scope-probe"; rm -rf "$M16_SCOPE"
+mkdir -p "$M16_SCOPE/.pi/team/state/nested/release-x" "$M16_SCOPE/.pi/team/state/release-030"
+for m16_f in "state/release-scan.log" "state/nested/release-x/a.log" "state/release-030/a.log" "state/plain.log"; do
+  printf 'M16A phantom\n' > "$M16_SCOPE/.pi/team/$m16_f"
+done
+M16_SCOPE_HITS="$(real_ledger_hits 'M16[.A-E]|nomatch-ses' "$M16_SCOPE")"
+assert_eq "M16 隔离对照·P342：同前缀的普通账本文件 release-scan.log 必须被点名（豁免是目录前缀，不是「含 release-」）" \
+  "$(printf '%s\n' "$M16_SCOPE_HITS" | grep -c 'state/release-scan\.log$' || true)" "1"
+assert_eq "M16 隔离对照·P342：nested/release-x/a.log 必须被点名（前缀没锚上就不是发布证据目录）" \
+  "$(printf '%s\n' "$M16_SCOPE_HITS" | grep -c 'nested/release-x/a\.log$' || true)" "1"
+assert_eq "M16 隔离对照·P342：发布证据目录 release-030/a.log 不命中（取样范围，不是账本痕迹）" \
+  "$(printf '%s\n' "$M16_SCOPE_HITS" | grep -c 'state/release-030/a\.log$' || true)" "0"
+assert_eq "M16 隔离对照·P342：普通账本 plain.log 仍被点名（豁免没有把判断关掉）" \
+  "$(printf '%s\n' "$M16_SCOPE_HITS" | grep -c 'state/plain\.log$' || true)" "1"
+assert_eq "M16 隔离对照·P342：release-* 边界腿恰三条命中（只有发布证据目录那一条静默）" \
+  "$(printf '%s\n' "$M16_SCOPE_HITS" | wc -l | tr -d ' ')" "3"
+rm -rf "$M16_SCOPE"
 # ---------------------------------------------------------------- 31. tmux 接触面（M28）
 # 五次 tmux server 全灭事故 → 两条护栏在这里钉死：
 #   31a 裸 tmux 调用 lint（纯逻辑，FAST 也跑）：tests/** 与 docs/team/reports/*/pkg/** 里凡会改变
