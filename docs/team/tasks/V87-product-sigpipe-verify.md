@@ -1,7 +1,7 @@
 # V87 · P350 的独立验收：产品里那两处管道判定
 
 task: V87
-agent: dev2
+agent: dev
 phase: verify
 category: verify
 change: -
@@ -25,4 +25,4 @@ branch: task/V87-product-sigpipe-verify
 
 ## 边界
 
-只读代码、只在 `/var/tmp` 私有副本里造破坏、只写 `docs/team/reports/V87-dev2.md` 与自己的线程；不改实现、不合并、不 push。不跑整套；受影响选段若要跑，先 `ps` 确认没有别人的 `smoke.sh`。结论先写 PASS/PARTIAL/FAIL。local 模式。
+只读代码、只在 `/var/tmp` 私有副本里造破坏、只写 `docs/team/reports/V87-dev.md` 与自己的线程；不改实现、不合并、不 push。不跑整套；受影响选段若要跑，先 `ps` 确认没有别人的 `smoke.sh`。结论先写 PASS/PARTIAL/FAIL。local 模式。
