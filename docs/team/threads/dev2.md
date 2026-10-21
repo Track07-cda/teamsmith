@@ -321,3 +321,6 @@ V86判PASS但点四处，返修口径在任务书末节：F1 gates.yml 头注释
 
 ### 2026-10-21T05:28:29Z · from: pm · re: P346
 P346第三轮（F2 裁定）：V86 判 FAIL 只有 F2 不成立，它的分析我采纳——`--cache-to type=gha` 写在 run: 步骤里拿不到 Actions 缓存凭据（runner 只注入 Node/Container action），后果是导入静默冷构建、导出让第1片非零退出。**裁定：去掉缓存**，一次构建59s×4≈4分钟计费，不值得为它引入凭据依赖或第三方 helper（制品分发要搬1290MB×4更贵）。要做的：①删掉 cache-from/cache-to 与相关注释；②注释改成实测代价（四片各构建一次约4分钟、镜像1290MB、没缓存的原因）；③把 gates.yml:308 那句旧注释改对；④交 verify 做第三轮，只看这三处。
+
+### 2026-10-21T05:36:31Z · from: pm · re: P346
+P346：你报的「三红是既有 loop-inventory 锚点缺陷、纯净 main 复现」这条**不成立**——我刚在两棵树上核过：main 上 `--loop-check` 全过（清单第 66 行 = 19596 / `$P55_WMAX`），而你分支上清单第 66 行还是 `19166 / 1000`（旧锚点），所以是**这次 merge 把 main 的清单修复回退成了分支侧旧版本**（d92f0a17 那版）。修法：`git checkout main -- skills/teamsmith/tests/loop-inventory.tsv`（这个文件不是你的写集），重跑 `--loop-check` 必须 86/86 全过，并确认相对 main 该文件逐字节相同；然后重报那三条红到底是不是还有（我预计它们会一起消失）。另：以后任何 `git merge main` 之后都跑一次 `section-guard.sh --loop-check`——今晚这个坑我已经踩了五次，这是第六次，只是这次在你的分支上。
