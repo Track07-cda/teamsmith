@@ -555,7 +555,7 @@
 | P348 | 测试精简第3轮 | dev-bob | - | - | done |
 | V84 | P344独立验收：夹具缺陷与同族判定 | verify | - | - | done |
 | V85 | P348独立验收：第3轮精简 | dev | - | - | done |
-| P349 | 接线 panel-b3 | dev2 | - | - | wip |
+| P349 | 接线 panel-b3 | dev2 | - | - | done |
 | P350 | 产品侧两处grep -q与pipefail | dev-bob | - | - | done |
 | V86 | P346独立验收：切片无损 | dev | - | - | done |
 | V87 | P350独立验收：产品两处管道 | dev | - | - | done |
@@ -567,7 +567,7 @@
 | V89 | P354独立验收：13个真跑不到吗 | dev | - | - | done |
 | P355 | 收尾9行假指针 | dev3 | - | - | done |
 | V90 | §61b进度接线验收（发布阻塞） | verify | - | - | done |
-| V91 | P349独立验收：接线 | dev | - | - | wip |
+| V91 | P349独立验收：接线 | dev | - | - | done |
 
 ## 当前里程碑
 
