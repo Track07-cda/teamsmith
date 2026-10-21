@@ -144,18 +144,22 @@ team_report_seat_live() { # <id> <报告路径> → 0 = 归属席位在跑（in-
 # （squash 合并且没有别的改动时正是这个形状：内容相同、却没有共同提交）。
 # 窗口外/部分 squash 会落回诚实的「领先 N」；文档里写明这是启发式（references/workflows.md）。
 team_branch_squash_merged() { # <worktree> → 0=内容已在保护分支里
-  local wt="${1:-}" tree lookback="${TEAM_SQUASH_LOOKBACK:-200}"
+  local wt="${1:-}" tree lookback="${TEAM_SQUASH_LOOKBACK:-200}" trees=""
   [ -d "$wt" ] || return 1
   case "$lookback" in ''|*[!0-9]*) lookback=200 ;; esac
   tree="$(git -C "$wt" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
   [ -n "$tree" ] || return 1
   # M50：保护分支的 tree 清单一个纪元读一次（原来每个工作树一次 git log）
+  # P350：两条腿都**先落变量再匹配**。`printf … | grep -qx` / `git log … | grep -qx` 的右端一命中就
+  # 退出，左端还在写的那段拿到 SIGPIPE（141），CLI 顶层的 `set -o pipefail` 于是把「已在清单里」判成
+  # 「不在」——已 squash 合并的分支被报成「领先 N」。判据仍是同一行精确匹配，只是不再经过管道。
   if team_scan_cache_on; then
     _team_prot_trees_load
-    printf '%s\n' "$_TEAM_PROT_TREES" | grep -qx "$tree"
-    return
+    trees="$_TEAM_PROT_TREES"
+  else
+    trees="$(git -C "$wt" log --format=%T --max-count="$lookback" "$TEAM_PROTECTED_BRANCH" 2>/dev/null || true)"   # 留：查不到=空答案（不是故障）
   fi
-  git -C "$wt" log --format=%T --max-count="$lookback" "$TEAM_PROTECTED_BRANCH" 2>/dev/null | grep -qx "$tree"
+  grep -qx "$tree" <<< "$trees"
 }
 
 # 这个 worktree 是不是「已 squash 合并、且没有别的未收尾信号」：脏工作区/真的未 push 优先说了算。

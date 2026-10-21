@@ -5224,15 +5224,20 @@ team_committed_report() {
 
 # 阶段专属交付证据：stdout = 一行「找到了什么」（成立）或「差什么、去哪找」（不成立）；0=成立。
 team_done_phase_evidence() { # <ID> <phase> <change>
-  local id="$1" phase="$2" change="$3" f rel v d spec_root ready_why
+  local id="$1" phase="$2" change="$3" f rel v d spec_root ready_why heads
   rel="$TEAM_DOCS_DIR/reviews/$id.md"
   case "$phase" in
     explore)
       f="$TEAM_DOCS_ABS/DECISIONS.md"
       # 「PM 接受记录」= DECISIONS.md 里一个**标题条目**点名任务 id。正文里顺带提一句不算：
       # 旧条目的正文经常提到别的任务 id，那会变成「提过就算接受」——把守卫放宽。
-      if [ -f "$f" ] && grep -E '^#{1,6}[[:space:]]' "$f" \
-           | grep -qE "(^|[^[:alnum:]_])$(team_regex_escape "$id")([^[:alnum:]_]|$)"; then
+      # P350：标题流**先落变量再匹配**。`grep … | grep -q` 的右端一命中就退出，左端还在写的那段拿到
+      # SIGPIPE（141），CLI 顶层的 `set -o pipefail` 于是把「命中」判成「没命中」——标题流一长
+      # （约 16 KB，或同一份 DECISIONS.md 里点名条目前面还有一大段标题）这个判定就是必错的。
+      # 判据不变：仍是「标题行里有这个 id、且两侧不是字母数字下划线」，只是不再经过管道。
+      heads=""
+      if [ -f "$f" ] && heads="$(grep -E '^#{1,6}[[:space:]]' "$f")" \
+           && grep -qE "(^|[^[:alnum:]_])$(team_regex_escape "$id")([^[:alnum:]_]|$)" <<< "$heads"; then
         printf 'PM 接受记录 %s（标题点名 %s）\n' "$TEAM_DOCS_DIR/DECISIONS.md" "$id"; return 0
       fi
       v="$(team_review_verdict "$id")"
