@@ -547,13 +547,13 @@
 | P342 | 账本泄漏判据把发布证据误判 | dev-bob | - | - | done |
 | P343 | §51 routes 与 §41 窗格留存两条红归因 | dev3 | dev2 | - | done | todo |
 | V82 | P327独立验收：夹具接线 | verify | - | - | done |
-| P344 | 两处夹具缺陷与grep -q同族清扫 | dev3 | - | - | wip |
+| P344 | 两处夹具缺陷与grep -q同族清扫 | dev3 | - | - | done |
 | P345 | CI时长方案：切片并行 vs 地板瘦身 | dev2 | - | - | done |
 | P346 | CI地板切片并行（排队） | dev2 | - | - | wip |
 | V83 | P342独立验收：取样范围收窄 | verify | - | - | done |
 | P347 | 给豁免配证伪者（V83 F1） | dev-bob | - | - | done |
 | P348 | 测试精简第3轮 | dev-bob | - | - | done |
-| V84 | P344独立验收：夹具缺陷与同族判定 | verify | - | - | wip |
+| V84 | P344独立验收：夹具缺陷与同族判定 | verify | - | - | done |
 | V85 | P348独立验收：第3轮精简 | dev | - | - | done |
 | P349 | 接线 panel-b3（排队） | dev3 | - | - | todo |
 | P350 | 产品侧两处grep -q与pipefail | dev-bob | - | - | done |
