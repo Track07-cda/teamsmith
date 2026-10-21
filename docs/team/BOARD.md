@@ -559,7 +559,7 @@
 | P350 | 产品侧两处grep -q与pipefail | dev-bob | - | - | done |
 | V86 | P346独立验收：切片无损 | dev | - | - | done |
 | V87 | P350独立验收：产品两处管道 | dev | - | - | done |
-| P351 | panel-b3那8条红归因（接线前） | dev | - | - | wip |
+| P351 | panel-b3那8条红归因（接线前） | dev | - | - | done |
 
 ## 当前里程碑
 
