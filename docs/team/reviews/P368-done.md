@@ -1,0 +1,4 @@
+- 2026-10-22T12:55:42Z · `team close P368 --status done` · FORCED：PM 显式覆盖（理由：夹具按新契约更新并已并入 main；独立验收 V99 判 PASS（含「从 13c 子集去掉即可见红」的反证），PM 在 main 上实跑 22/0。）
+  -   - ① 复验记录 docs/team/reviews/P368.md：不存在
+  -   - ② 分支是否已并入 main：task/P368-bg-ledger-fixture（38ee09b73）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 apply 的交付证据：apply 与代码任务同规则（① 判定 PASS 的复验记录 / ② 已并入 main）；没有额外的阶段证据
