@@ -576,6 +576,7 @@
 | P361 | handover技能打进包并由init安装 | dev3 | - | - | done |
 | V93 | P361独立验收：技能打包 | verify | - | - | done |
 | P362 | 按证据勾两份change任务清单 | dev3 | - | - | wip |
+| P363 | 通知落进PM收件箱（提案） | dev2 | - | - | wip |
 
 ## 当前里程碑
 
