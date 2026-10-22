@@ -39,7 +39,16 @@
 #     按**全局选项**跳过 —— 变更调用照旧被识别（token 不能把调用藏起来），但 token **不是**隔离证据
 #     （带 token 没有 -L/-S/私有 TMPDIR 仍然红）；带私有 `-L` 的一条照旧净。
 #
-#   扫描范围：skills/teamsmith/tests/** 与 docs/team/reports/*/pkg/** 的脚本类文件（日志/patch 不扫）。
+#   扫描范围：skills/teamsmith/tests/** 与 docs/team/reports/*/pkg/** 的脚本类文件（日志/patch 不扫 ——
+#   `.log`/`.out` 本来就不在 @EXTS 里，靠**后缀**而不是靠目录名排除）。
+#
+#   P359：排除只对**生成物目录**（`__pycache__` / `node_modules`）生效，`logs` / `snapshots` 两段**不再排除**。
+#   按路径段排除的后果是「任何叫 logs 的目录下的脚本永远不会被这条纪律扫到，而且不打印任何跳过理由」——
+#   正是「跳过被当成通过」：`tests/logs/probe.sh` 里写一条裸 `tmux kill-server`，改前判「干净（扫描 69 个脚本）」，
+#   和没有这个文件时逐字节相同。量过真树：105 个候选脚本里被 `logs`/`snapshots` 两段排除的是 **0** 个
+#   （`tests/snapshots/` 只有 .txt 面板快照，`docs/team/reports/*/logs/` 里只有 .log/.out/.reds/.transcript，
+#   两者都不在 @EXTS），所以去掉这两段对默认范围的 `--list` 是逐字节无变化的；将来有脚本落进这种目录，
+#   它就该被扫、该被判，而不是被一个目录名静默吞掉。
 #
 #   用法：
 #     perl tests/tmux-lint.pl [--root DIR]… [--list] [--quiet]   # 默认扫上面两个范围
@@ -108,7 +117,8 @@ for my $root (@ROOTS) {
         wanted   => sub {
             my $p = $File::Find::name;
             return if -d $p;
-            return if $p =~ m{/(__pycache__|node_modules|logs|snapshots)/};
+            # P359：只排除生成物目录。目录名不是证据 —— `logs`/`snapshots` 曾在这里静默吞掉整个子树。
+            return if $p =~ m{/(__pycache__|node_modules)/};
             my ($ext) = $p =~ /(\.[A-Za-z0-9]+)$/;
             return unless defined $ext && $EXTS{lc $ext};
             push @FILES, abs_path($p);
