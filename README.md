@@ -26,6 +26,7 @@ Design rationale: [references/philosophy.md](skills/teamsmith/references/philoso
 |---|---|
 | [`teamsmith`](skills/teamsmith/SKILL.md) | See above. Former name: `pi-team` (the `skills/pi-team` compatibility symlink was removed — old absolute paths must be updated) |
 | [`teamsmith-init`](skills/teamsmith-init/SKILL.md) | The new-project entry point: settles the setup questions with the user, then runs the one command that writes config, the `docs/team/` skeleton and the protocol section |
+| [`handover`](skills/handover/SKILL.md) | Cutting a long session over to a fresh one: land the state on disk, write a pointer-only `docs/team/HANDOVER.md`, then stand the old session down. For when compaction keeps the size right but the session's *shape* degrades |
 
 The maintainers build teamsmith *with* teamsmith, and their ledger — board, task briefs, reports, reviews, decisions —
 lives in `docs/team/` of their own checkout. That ledger is deliberately **not** part of the distributed package: what
@@ -56,14 +57,14 @@ than replaced (`--force` replaces only an entry recognised as this skill).
 ### As a Pi package (no global CLI)
 
 ```bash
-pi install git:git@github.com:Track07-cda/teamsmith@v0.3.2      # user level: every project
-pi install -l git:git@github.com:Track07-cda/teamsmith@v0.3.2   # project level: recorded in .pi/settings.json
+pi install git:git@github.com:Track07-cda/teamsmith@v0.3.3      # user level: every project
+pi install -l git:git@github.com:Track07-cda/teamsmith@v0.3.3   # project level: recorded in .pi/settings.json
 ```
 
 - **Pin a released tag**: `@v<version>`, the version `team version` prints. Latest tag:
   `git tag --sort=-v:refname | head -1`.
-- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v0.3.2`) uses your SSH key and works
-  whether or not you have a token; the shorthand `git:github.com/Track07-cda/teamsmith@v0.3.2` takes the HTTPS
+- The `git@github.com:` form (or `ssh://git@github.com/Track07-cda/teamsmith@v0.3.3`) uses your SSH key and works
+  whether or not you have a token; the shorthand `git:github.com/Track07-cda/teamsmith@v0.3.3` takes the HTTPS
   route, so it works anonymously on the public repository and asks for credentials if your access is private.
 - The clone lands in `~/.pi/agent/git/<host>/<path>` (user level) or `.pi/git/<host>/<path>` (project level); the
   skill directory — the `<skill>` used in every command below — is `<clone>/skills/teamsmith`.

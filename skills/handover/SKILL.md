@@ -1,6 +1,6 @@
 ---
 name: handover
-description: Hand over a long-running session to a fresh one without losing the project: write a pointer-only HANDOVER.md (pointers, never copied specs), record the questions the user asked and never got answered and the side effects the agent caused, then stand the old session down so the document cannot go stale. Triggered by the user: the user says "handover" / 「交接」.
+description: Hand over a long-running session to a fresh one without losing the project — write a pointer-only HANDOVER.md (pointers, never copied specs), record the questions the user asked and never got answered and the side effects the agent caused, then stand the old session down so the document cannot go stale. Triggered by the user saying handover or 交接.
 license: MIT
 metadata:
   version: "0.1.0"
