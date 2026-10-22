@@ -526,11 +526,12 @@ WITNESS
   # 这里补的正是那个缺失的证伪者：装完必须在 prefix/bin 里解析到**这个包**的入口。
   for t in pkill killall pgrep pidof; do
     local resolved
+    if [ ! -e "$prefix/bin/$t" ]; then
+      printf '安装后 prefix/bin 里没有 %s —— npm 的 bin 字段没列它（用户会落到 /usr/bin）\n' "$t"; return 1
+    fi
     resolved="$(readlink -f "$prefix/bin/$t" 2>/dev/null || true)"
     case "$resolved" in
       "$prefix"/lib/node_modules/teamsmith/*) : ;;
-      "")
-        printf '安装后 prefix/bin 里没有 %s —— npm 的 bin 字段没列它（用户会落到 /usr/bin）\n' "$t"; return 1 ;;
       *)
         printf '安装后 prefix/bin/%s 指向 [%s]，不是这个包里的入口\n' "$t" "$resolved"; return 1 ;;
     esac
