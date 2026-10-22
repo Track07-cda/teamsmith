@@ -581,6 +581,7 @@
 | V94 | P362独立验收：勾得对不对 | verify | - | - | done |
 | P366 | 容器里的3红1挂（含/proc噪声） | dev3 | - | - | wip |
 | P367 | panel-choices缺SKILL.md + 选段表13行缺needs | dev3 | - | - | wip |
+| V95 | P366独立验收：噪声关闭与归因 | verify | - | - | wip |
 
 ## 当前里程碑
 
