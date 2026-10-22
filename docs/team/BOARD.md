@@ -579,9 +579,9 @@
 | P363 | 通知落进PM收件箱（提案） | dev2 | - | - | done |
 | P364 | A1：指针行与一份计数 | dev3 | - | - | todo |
 | V94 | P362独立验收：勾得对不对 | verify | - | - | done |
-| P366 | 容器里的3红1挂（含/proc噪声） | dev3 | - | - | wip |
+| P366 | 容器里的3红1挂（含/proc噪声） | dev3 | - | - | done |
 | P367 | panel-choices缺SKILL.md + 选段表13行缺needs | dev3 | - | - | wip |
-| V95 | P366独立验收：噪声关闭与归因 | verify | - | - | wip |
+| V95 | P366独立验收：噪声关闭与归因 | verify | - | - | done |
 
 ## 当前里程碑
 
