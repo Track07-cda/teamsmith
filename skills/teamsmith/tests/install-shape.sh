@@ -162,6 +162,28 @@ drift_skill_copy() { # <tree> <repo> → DRIFT_VER = 漂移版本；自检不过
 }
 DRIFT_VER=""
 
+# P361：技能名的真源 —— 源里有几个技能，而不是代码里写死的数字。口径与产品 team_skill_inventory 同一条：
+# 真实目录（不是软链）+ 有 SKILL.md + frontmatter 的 name 与目录名一致。装上第四个技能时，下面所有「数了几个」
+# 的断言跟着源清单走（写死的 2 会先红一次再被改掉 —— P361 就是这么暴的）。
+skill_md_name_of() { # <skill 目录> → frontmatter 的 name（与产品 team_skill_md_name 同一读法）
+  awk '
+    /^---[[:space:]]*$/ { n++; if (n == 2) exit 0; next }
+    n == 1 && /^name:[[:space:]]*/ {
+      sub(/^name:[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit 0
+    }
+  ' "$1/SKILL.md" 2>/dev/null
+}
+src_skill_names() { # <tree>：源里真实存在的技能名（一项一行，排序）
+  local t="$1" d n
+  for d in "$t"/skills/*/; do
+    [ -d "$d" ] || continue
+    [ -L "${d%/}" ] && continue
+    n="$(basename "$d")"
+    [ "$(skill_md_name_of "$d")" = "$n" ] || continue
+    printf '%s\n' "$n"
+  done | sort
+}
+
 # 假 pi：doctor 的其它行不该由宿主环境决定（本节只测 install 行）
 FAKE_PI="$tmp/fake-pi"
 mkdir -p "$FAKE_PI"
@@ -255,6 +277,67 @@ chk_unknown_survives() { # <tree> <已在 .pi/skills/teamsmith 放了未识别�
   after="$(files_hash "$dest")"
   if [ "$before" != "$after" ]; then printf '--force 把未识别的条目动了\n'; return 1; fi
   printf '拒绝且连 --force 都不删（rc=%s，sha 不变）\n' "$rc"
+  return 0
+}
+
+# ── P361 · 技能源口径：**谁是源**由发现回答，**少了谁**只能由声明回答 ──
+chk_skill_sources_ok() { # <tree> <repo>：源完整 → 全部装上、没有 miss、没有不合法裁决
+  local t="$1" p="$2" out rc want got
+  out="$(init_proj "$t" "$p")"; rc=$?
+  if [ "$rc" -ne 0 ]; then printf 'init rc=%s（完整的源不该有裁决）\n' "$rc"; return 1; fi
+  case "$out" in
+    *'  miss  '*) printf '源完整却报了 miss：[%s]\n' "$(printf '%s' "$out" | grep -F '  miss  ' | head -1)"; return 1 ;;
+    *不合法*) printf '源完整却裁了「不合法」：[%s]\n' "$(printf '%s' "$out" | grep -F '不合法' | head -1)"; return 1 ;;
+  esac
+  want="$(src_skill_names "$t" | tr '\n' ' ')"; got="$(ls -1A "$p/.pi/skills" 2>/dev/null | sort | tr '\n' ' ')"
+  if [ "$got" != "$want" ]; then printf '.pi/skills/ 与源清单不一致：装成 [%s]，源里 [%s]\n' "$got" "$want"; return 1; fi
+  printf '源里 %s 个技能全部装上（%s），没有 miss / 不合法\n' "$(printf '%s' "$want" | wc -w | tr -d ' ')" "$want"
+  return 0
+}
+
+chk_skill_bad_name_reported() { # <tree> <repo>：frontmatter 的 name 与目录名不符 → 非 0 并点名两个名字
+  local t="$1" p="$2" out rc
+  out="$(init_proj "$t" "$p")"; rc=$?
+  if [ "$rc" -eq 0 ]; then printf 'name 不符却 rc=0\n'; return 1; fi
+  case "$out" in *不合法*) ;; *) printf '没裁「不合法」：%s\n' "$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1 ;; esac
+  case "$out" in *handover-x*) ;; *) printf '没点名 SKILL.md 里的错名字 handover-x\n'; return 1 ;; esac
+  case "$out" in *'/skills/handover '*) ;; *) printf '没点名源目录 skills/handover\n'; return 1 ;; esac
+  printf 'rc=%s，点名源目录 skills/handover 与错名字 handover-x\n' "$rc"
+  return 0
+}
+
+chk_skill_no_note() { # <tree> <repo>：声明面完整 → 全部装上且**没有** note 行（未登记分支不该被触发）
+  local t="$1" p="$2" out rc want got
+  out="$(init_proj "$t" "$p")"; rc=$?
+  if [ "$rc" -ne 0 ]; then printf 'init rc=%s（声明面完整不该有裁决）\n' "$rc"; return 1; fi
+  case "$out" in
+    *'  note  '*) printf '声明面完整却报了未登记：[%s]\n' "$(printf '%s' "$out" | grep -F '  note  ' | head -1)"; return 1 ;;
+  esac
+  want="$(src_skill_names "$t" | tr '\n' ' ')"; got="$(ls -1A "$p/.pi/skills" 2>/dev/null | sort | tr '\n' ' ')"
+  if [ "$got" != "$want" ]; then printf '.pi/skills/ 与源清单不一致：装成 [%s]，源里 [%s]\n' "$got" "$want"; return 1; fi
+  printf '没有 note 行，%s 个技能全部装上（%s）\n' "$(printf '%s' "$want" | wc -w | tr -d ' ')" "$want"
+  return 0
+}
+
+chk_skill_unregistered_reported() { # <tree> <repo>：源里有、声明里没有 → 照装（rc=0）并点名它是未登记
+  local t="$1" p="$2" out rc want got
+  out="$(init_proj "$t" "$p")"; rc=$?
+  if [ "$rc" -ne 0 ]; then printf '未登记只是「照装并喊一声」，不该 rc=%s\n' "$rc"; return 1; fi
+  case "$out" in *'  note  handover '*) ;; *) printf '没有可见地说 handover 未登记：%s\n' "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"; return 1 ;; esac
+  want="$(src_skill_names "$t" | tr '\n' ' ')"; got="$(ls -1A "$p/.pi/skills" 2>/dev/null | sort | tr '\n' ' ')"
+  if [ "$got" != "$want" ]; then printf '未登记的技能没被装上：装成 [%s]，源里 [%s]\n' "$got" "$want"; return 1; fi
+  printf 'rc=0，点名 note handover，%s 个技能全部照装（%s）\n' "$(printf '%s' "$want" | wc -w | tr -d ' ')" "$want"
+  return 0
+}
+
+chk_skill_missing_reported() { # <tree> <repo>：源里少一个技能 → 不崩（rc=0）且可见地点名少了谁
+  local t="$1" p="$2" out rc n_n m_n
+  out="$(init_proj "$t" "$p")"; rc=$?
+  if [ "$rc" -ne 0 ]; then printf '少一个技能源就 rc=%s（安装不该崩）\n' "$rc"; return 1; fi
+  case "$out" in *'  miss  handover（源 '*) ;; *) printf '没有可见地说少了 handover：%s\n' "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"; return 1 ;; esac
+  n_n="$(src_skill_names "$t" | wc -l | tr -d ' ')"; m_n="$(ls -1A "$p/.pi/skills" 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$n_n" != "$m_n" ]; then printf '装了 %s 个，源里 %s 个\n' "$m_n" "$n_n"; return 1; fi
+  printf 'rc=0，点名 miss handover，其余 %s 个照装\n' "$m_n"
   return 0
 }
 
@@ -471,18 +554,21 @@ PYMANI
 chk_pack_walk() { # <tree>：npm pack --dry-run 清单齐全且不含账本
   local t="$1" json="$tmp/pack-walk.json"
   ( cd "$t" && npm pack --dry-run --json >"$json" 2>/dev/null ) || { printf 'npm pack --dry-run 失败\n'; return 1; }
-  python3 - "$json" <<'PYPACK'
+  python3 - "$json" "$(src_skill_names "$t" | tr '\n' ' ')" <<'PYPACK'
 import json, sys
 data = json.load(open(sys.argv[1]))
 files = [f["path"] for f in data[0]["files"]]
-want = ["bin/team.mjs", "skills/teamsmith/SKILL.md", "skills/teamsmith-init/SKILL.md", "install.sh"]
+names = sys.argv[2].split()
+if not names:
+    print("源里一个技能都没找到"); sys.exit(1)
+want = ["bin/team.mjs", "install.sh"] + ["skills/%s/SKILL.md" % n for n in names]
 missing = [p for p in want if p not in files]
 forbidden = [p for p in files if p.startswith(("docs/team/", ".pi/", "openspec/")) or "node_modules" in p]
 if missing:
     print("缺：" + "、".join(missing)); sys.exit(1)
 if forbidden:
     print("不该在包里：" + "、".join(forbidden[:3])); sys.exit(1)
-print("清单齐全（%d 项）且不含账本/node_modules" % len(files))
+print("清单齐全（%d 项，含 %d 个技能的 SKILL.md）且不含账本/node_modules" % (len(files), len(names)))
 PYPACK
 }
 
@@ -674,9 +760,13 @@ if want install; then
   p="$tmp/p-link"; git_new "$p"; assert_isolated "$tree" "$p"
   out="$(init_proj "$tree" "$p")"; rc=$?
   assert_eq "init 退出码 0" "$rc" "0"
-  assert_eq "输出逐 skill 一条 link 行" "$(printf '%s' "$out" | grep -cE '^  link  .*/\.pi/skills/(teamsmith|teamsmith-init) → ' || true)" "2"
-  assert_link_to "$p/.pi/skills/teamsmith" "$tree/skills/teamsmith" ".pi/skills/teamsmith 是指向运行树的软链"
-  assert_link_to "$p/.pi/skills/teamsmith-init" "$tree/skills/teamsmith-init" ".pi/skills/teamsmith-init 是指向兄弟目录的软链"
+  n_src="$(src_skill_names "$tree" | wc -l | tr -d ' ')"
+  [ "$n_src" -ge 3 ] || fail_setup "源里只找到 $n_src 个技能（期望至少 teamsmith / teamsmith-init / handover 三个）：$(src_skill_names "$tree" | tr '\n' ' ')"
+  assert_eq "输出逐 skill 一条 link 行（源里 $n_src 个技能：$(src_skill_names "$tree" | tr '\n' ' '))" \
+    "$(printf '%s' "$out" | grep -cE '^  link  .*/\.pi/skills/[A-Za-z0-9._-]+ → ' || true)" "$n_src"
+  while IFS= read -r s_name; do
+    assert_link_to "$p/.pi/skills/$s_name" "$tree/skills/$s_name" ".pi/skills/$s_name 是指向源 $s_name 的软链"
+  done < <(src_skill_names "$tree")
   # P59：装完打一行信任提示（.pi/skills/ 是 Pi 的信任资源 → 第一次跑 pi 会问；三条出路）
   check_holds "P59 装完一行信任提示（触发资源 + 三条出路）" chk_trust_hint "$out"
   case "$out" in *"link  $p/.pi/skills/teamsmith → $tree/skills/teamsmith"*) ok "link 行是逐 skill 一行（含目标与源）" ;;
@@ -689,7 +779,8 @@ if want install; then
   assert_eq "第二次 init 后目标不变" "$(readlink -f "$p/.pi/skills/teamsmith")" "$t1"
   assert_eq "第二次 init 后兄弟目标不变" "$(readlink -f "$p/.pi/skills/teamsmith-init")" "$t2"
   check_holds "P59 重跑（skip）仍然打那一行" chk_trust_hint "$out2"
-  assert_eq ".pi/skills/ 里仍然只有两条" "$(ls -1A "$p/.pi/skills" | wc -l)" "2"
+  assert_eq ".pi/skills/ 里的名字与源清单一致（$n_src 个：$(src_skill_names "$tree" | tr '\n' ' ')）" \
+    "$(ls -1A "$p/.pi/skills" | sort | tr '\n' ' ')" "$(src_skill_names "$tree" | tr '\n' ' ')"
   out3="$(init_proj "$tree" "$p" --copy)"; rc3=$?
   assert_eq "--copy 对着已有软链退出 0（skip，不是覆盖）" "$rc3" "0"
   assert_eq "--copy 后仍是同一软链目标" "$(readlink -f "$p/.pi/skills/teamsmith")" "$t1"
@@ -716,6 +807,14 @@ if want install; then
   assert_not_file "$p/.pi/skills/teamsmith/scripts/panel/node_modules" "--copy 排除了 node_modules/"
   assert_not_file "$p/.pi/skills/teamsmith/.git" "--copy 排除了 .git/"
   assert_not_file "$p/.pi/skills/teamsmith-init/scripts/panel/node_modules" "--copy 的兄弟条目也排除 node_modules/"
+  # P361：每个源技能都得是「真目录 + 逐字节 + 自己认得出自己」（判定入口是 SKILL.md 的 name:）
+  for s_name in $(src_skill_names "$tree"); do
+    [ -d "$p/.pi/skills/$s_name" ] && [ ! -L "$p/.pi/skills/$s_name" ] \
+      && ok "--copy 的 $s_name 是真目录（不是软链）" || bad "--copy 的 $s_name 不是真目录"
+    assert_eq "--copy 的 $s_name/SKILL.md 与源逐字节相等" \
+      "$(cmp -s "$tree/skills/$s_name/SKILL.md" "$p/.pi/skills/$s_name/SKILL.md" && echo same || echo differ)" "same"
+    assert_eq "--copy 的 $s_name/SKILL.md 的 name: 等于目录名" "$(skill_md_name_of "$p/.pi/skills/$s_name")" "$s_name"
+  done
 
   # ④ linked worktree：装到主工作树，不装到 worktree
   p="$tmp/p-wt"; git_new "$p"; init_proj "$tree" "$p" --no-skills >/dev/null
@@ -802,7 +901,7 @@ if want pack; then
     skip "本机没有 npm：打包清单与 prefix 安装都跳过（可见 SKIP，不是静默通过）"
   else
     check_holds "声明面：team + 四个信号入口都指向包内 shim + files 带 bin/" chk_pack_manifest "$tree"
-    check_holds "打包清单：bin/team.mjs + 两个 SKILL.md + install.sh，不含账本" chk_pack_walk "$tree"
+    check_holds "打包清单：bin/team.mjs + 每个源的 SKILL.md + install.sh，不含账本" chk_pack_walk "$tree"
     check_holds "私有 prefix 安装：version/help 与四个信号入口都来自安装物" chk_prefix_install "$tree"
   fi
 fi
@@ -1097,6 +1196,45 @@ PYEXT
   pf="$tmp/f-ext-doctor-red"; git_new "$pf"; init_proj "$ft" "$pf" >/dev/null 2>&1; rm -f "$pf/.pi/extensions/team.ts"
   check_holds "⑧b 对照：真实树报扩展缺失" chk_ext_doctor_missing "$tree" "$pg"
   check_breaks "⑧b 翻转：/team 的 doctor 行被静默" chk_ext_doctor_missing "$ft" "$pf"
+  # ⑩ P361：源的 frontmatter name 与目录名不符 → 安装必须红并**点名**（读数 4 的红侧①）
+  ft="$tmp/f-skill-name"; scratch_tree "$ft"
+  python3 - "$ft/skills/handover/SKILL.md" <<'PYNAME'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+if "\nname: handover\n" not in s:
+    print("handover/SKILL.md 里找不到 name: handover"); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace("\nname: handover\n", "\nname: handover-x\n", 1))
+PYNAME
+  pg="$tmp/f-skill-name-green"; git_new "$pg"
+  pf="$tmp/f-skill-name-red"; git_new "$pf"
+  check_holds "⑩ 对照：真实树的源都合法、全部装上" chk_skill_sources_ok "$tree" "$pg"
+  check_breaks "⑩ 翻转：handover 的 name: 改成 handover-x" chk_skill_sources_ok "$ft" "$pf"
+  check_holds "⑩ 红侧点名：非 0 且点名源目录与错名字" chk_skill_bad_name_reported "$ft" "$pf"
+  # ⑪ P361：源里整个少一个技能 → 不崩（rc=0），并且**可见地**说出少了一个（读数 4 的红侧②）
+  ft="$tmp/f-skill-missing"; scratch_tree "$ft"; rm -rf "$ft/skills/handover"
+  pg="$tmp/f-skill-missing-green"; git_new "$pg"
+  pf="$tmp/f-skill-missing-red"; git_new "$pf"
+  check_holds "⑪ 对照：真实树没有 miss 行" chk_skill_sources_ok "$tree" "$pg"
+  check_breaks "⑪ 翻转：源里删掉 handover 整个目录" chk_skill_sources_ok "$ft" "$pf"
+  check_holds "⑪ 红侧点名：rc=0 且可见地说少了 handover" chk_skill_missing_reported "$ft" "$pf"
+  # ⑫ P361：声明面漏登记 → 源里的技能**照装**，但必须喊出来（未登记分支的抗体；V93 实测它原先没人钉）
+  ft="$tmp/f-skill-unregistered"; scratch_tree "$ft"
+  python3 - "$ft/skills/teamsmith/scripts/lib/cmd-init.sh" <<'PYDECL'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = "team_skill_declared() { printf '%s\\n' teamsmith teamsmith-init handover; return 0; }"
+if old not in s:
+    print("声明面形状变了，夹具需要跟着改：" + repr([l for l in s.splitlines() if "team_skill_declared()" in l]))
+    sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, old.replace(" handover;", ";"), 1))
+PYDECL
+  pg="$tmp/f-skill-unregistered-green"; git_new "$pg"
+  pf="$tmp/f-skill-unregistered-red"; git_new "$pf"
+  check_holds "⑫ 对照：真实树声明面完整、没有 note 行" chk_skill_no_note "$tree" "$pg"
+  check_breaks "⑫ 翻转：声明面删掉 handover（源里还有）" chk_skill_no_note "$ft" "$pf"
+  check_holds "⑫ 红侧点名：rc=0 且可见地说 handover 未登记、照装" chk_skill_unregistered_reported "$ft" "$pf"
   # ⑥ 真实树没被夹具动过：git status 指纹前后一致
   porcelain_after="$(cd "$tree" && git status --porcelain | sha256sum)"
   assert_eq "⑥ 夹具没碰真实树（git status 指纹不变）" "$porcelain_after" "$porcelain_before"

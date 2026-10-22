@@ -92,7 +92,7 @@ cmd.bootstrap.arg.--task-models	类别到模型的映射；新项目没有默认
 cmd.bootstrap.arg.--pm-model	PM 自己用的模型；PM 从不借用 worker 的模型。
 cmd.bootstrap.arg.--print	只诊断并打印计划，什么都不写。
 cmd.init.title	写契约与文档骨架
-cmd.init.what	写项目契约和文档骨架，并把 skill 复制进项目（放在 `.pi/skills`），这样机器上的 skill 升级时项目照旧能用。它是 `team bootstrap` 里不碰工作树、不碰窗口的那一步。
+cmd.init.what	写项目契约和文档骨架，并把随包发布的 skill 都复制进项目（放在 `.pi/skills`），这样机器上的 skill 升级时项目照旧能用。它是 `team bootstrap` 里不碰工作树、不碰窗口的那一步。
 cmd.init.when	当你想要一个已初始化、但还没有席位在跑的项目时用它；只修契约和骨架时也用它。
 cmd.init.example	team init --no-skills --agents "dev verify" --task-models "code=provider/model"
 cmd.init.read	随 skill 一起发布的模板

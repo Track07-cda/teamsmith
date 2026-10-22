@@ -5,6 +5,24 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v0.3.3（2026-10-22）
+
+小版本：**新增一个技能**，已有项目跑一次 `team init`（或 `team bootstrap`）就会把它装进 `.pi/skills/`。
+
+- **新技能 `handover`**：长会话的**形状**会退化（有的模型在长上下文里不再输出思考，开始照着对话的表面作答），
+  压上下文治不了，只能换新会话。这个技能规定怎么换：先把只存在于对话里的状态落到磁盘，再写一份 ≤60 行的
+  指针式 `docs/team/HANDOVER.md`（不复制规格、不总结对话），自检三个问题，然后旧会话**停手**；接手的会话先
+  重算几个数、磁盘优先，再开工。
+- **`team init` 的技能安装改成「发现驱动 + 声明面」**：包内 `skills/` 下每个「真实目录 + `SKILL.md` 的
+  `name:` 与目录名一致」都是源，以后再加技能不用改代码；另有一份很小的声明面（`team_skill_declared`）专门
+  回答「少了谁」—— 源里少一个技能时安装**不会崩**，但会打出 `miss` 行点名它；源里有技能没登记时照装并打
+  `note`；源的 `name:` 与目录名不符时**判红并点名**（目录与错名字）。三个方向都有夹具的红侧
+  （`tests/install-shape.sh` 的 ⑩/⑪）。
+- 夹具不再写死「两个技能」：`install-shape.sh` 与 `smoke.sh` 的数量、名字断言都改成与源清单比对
+  （`src_skill_names` / `skill_src_names`），`npm pack` 清单也逐个核对每个源的 `SKILL.md`。
+- `tests/skill-load.mjs` 的路由判据从「命中 teamsmith 的固定关键词表」改成「description 里必须点名技能自己」
+  —— 固定词表会把兄弟技能判死，改名忘改描述仍会红。
+
 ## v0.3.2（2026-10-22）
 
 **npm 安装的人必须升级（0.3.0 与 0.3.1 都受影响）。**

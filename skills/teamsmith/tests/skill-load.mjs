@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const skillDir = resolve(process.argv[2] ?? join(here, '..'))
-// P16 拆分后两个 skill 共用这份加载器：期望的 name 就是目录名（teamsmith / teamsmith-init）。
+// P16 拆分起，skills/ 下的每个 skill 共用这份加载器：期望的 name 就是目录名（teamsmith / teamsmith-init / handover）。
 const expectedName = basename(skillDir)
 
 const candidates = [
@@ -44,7 +44,11 @@ const skill = result.skills[0]
 if (skill) {
   if (skill.name !== expectedName) problems.push(`name 不是 ${expectedName}：${skill.name}`)
   if (!skill.description || skill.description.length > 1024) problems.push(`description 长度非法或缺失`)
-  if (!/teamsmith|多 Agent|团队/.test(skill.description)) problems.push('description 缺少触发语境关键词')
+  // P361：路由词汇必须先点名技能自己 —— 换成泛用关键词表（teamsmith|多 Agent|团队）会把 handover
+  // 这类兄弟 skill 判死；「描述里有自己的名字」对每个技能都成立，且改名忘改描述时会红。
+  if (!skill.description.includes(expectedName)) {
+    problems.push(`description 没有点名技能自己（${expectedName}）：调用者靠这段描述路由`)
+  }
   if (!skill.baseDir) problems.push('缺少 baseDir（相对路径无法解析）')
 }
 if (result.diagnostics.length) problems.push(...result.diagnostics.map(d => `诊断：${JSON.stringify(d)}`))

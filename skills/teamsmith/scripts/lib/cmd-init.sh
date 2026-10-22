@@ -4,8 +4,9 @@
 # 调用点：`team init` 的最后一步，以及 `team bootstrap`（同一实现，两个调用点；bootstrap 在
 # config.sh 已存在时也要跑它 —— 这就是老项目的升级路径）。
 #
-# 源按**名字**取，绝不扫荡 skills/ 下的目录：teamsmith = 正在运行的 CLI 自己的 skill 目录
-# （$TEAM_SKILL_DIR），teamsmith-init = 它的兄弟目录。复制布局里只带一个就只装一个，并说出来。
+# 源按**名字**解析到 `$TEAM_SKILL_DIR` 的兄弟目录（绝不扫描全局 skill 目录）：teamsmith = 正在运行的 CLI
+# 自己的 skill 目录，teamsmith-init / handover = 它的兄弟目录。复制布局里只带一部分就只装一部分，并**说出来**
+# （P361：`missing` / `unregistered` / `broken` 三种可见性，见下面 team_skill_inventory 的注释）。
 #
 # 冲突表（与 openspec/changes/npm-cli-and-project-init/design.md §3 逐格一致；tests/install-shape.sh 走）：
 #   dest 状态                            默认（link）                 --force
@@ -32,10 +33,74 @@ team_project_extension_target() {
   return 0
 }
 
-team_skill_sources() { # → 每行 "<name>\t<src>"，只列真实存在的源
-  local parent; parent="$(dirname "$TEAM_SKILL_DIR")"
-  if [ -d "$TEAM_SKILL_DIR" ]; then printf 'teamsmith\t%s\n' "$TEAM_SKILL_DIR"; fi
-  if [ -d "$parent/teamsmith-init" ]; then printf 'teamsmith-init\t%s\n' "$parent/teamsmith-init"; fi
+# ---------------------------------------------------------------- P361 · 技能源：解析 + 发现 + 声明面
+# **谁是源**由发现回答：`$TEAM_SKILL_DIR` 的兄弟目录里，只有「真实目录（不是软链）+ 有 SKILL.md +
+# frontmatter 的 name 与目录名一致」才算一个可安装的技能 —— 以后再加一个技能不用改代码。
+# **少了谁**只能由声明回答：一个目录整个消失时，树上没有任何痕迹可供推导。所以另有一份声明面
+# （team_skill_declared），只承担发现做不到的两件事，两个方向都由 tests/install-shape.sh 钉住（含红侧）：
+#   ① 声明了、源不在 → 明说 `miss`（不是静默少装一个）；
+#   ② 源在、没声明   → 明说 `note`（照装，但喊出来；声明面因此不会悄悄漂移）。
+# 三处布局都要对：包内 skills/（检出 / npm 包）、~/.agents/skills（全局软链）、项目本地 .pi/skills（副本）。
+# 软链布局下兄弟目录也是软链（install.sh 建的），所以「真实目录」只约束**发现**那一条，不约束名字解析。
+team_skill_declared() { printf '%s\n' teamsmith teamsmith-init handover; return 0; }
+
+team_skill_parent() { dirname "$TEAM_SKILL_DIR"; }
+
+team_skill_real_parent() { # 运行目录可能是软链：技能源的真树在链接背后，兄弟目录要在那里对得上
+  dirname "$(readlink -f "$TEAM_SKILL_DIR" 2>/dev/null || printf '%s' "$TEAM_SKILL_DIR")"
+}
+
+# 只有「包自己的 skills/」里，兄弟目录才全是我们的技能：全局 ~/.agents/skills 下还躺着别的产品的 skill
+# （archify、kimi-webbridge…），按兄弟目录发现会把它们一起装进别人的项目。判据 = 包根有 teamsmith 的 package.json。
+team_skill_own_tree() {
+  local root; root="$(dirname "$(team_skill_parent)")"
+  [ -f "$root/package.json" ] || return 1
+  grep -qE '"name"[[:space:]]*:[[:space:]]*"teamsmith"' "$root/package.json"
+}
+
+team_skill_src_for() { # <name> → 该技能的源目录（不存在就空）：先看运行目录的兄弟，再看软链背后的真树
+  local name="$1" c
+  for c in "$(team_skill_parent)/$name" "$(team_skill_real_parent)/$name"; do
+    if [ -d "$c" ]; then printf '%s\n' "$c"; return 0; fi
+  done
+  return 0
+}
+
+team_skill_inventory() { # → 每行 "<kind>\t<name>\t<detail>"；kind = ok | missing | broken | unregistered
+  local declared name src found d
+  declared="$(team_skill_declared)"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    src="$(team_skill_src_for "$name")"
+    if [ -z "$src" ]; then printf 'missing\t%s\t%s\n' "$name" "$(team_skill_parent)/$name"; continue; fi
+    if [ ! -f "$src/SKILL.md" ]; then printf 'broken\t%s\t%s\n' "$name" "$src 没有 SKILL.md"; continue; fi
+    found="$(team_skill_md_name "$src")"
+    if [ "$found" != "$name" ]; then
+      printf 'broken\t%s\t%s\n' "$name" "$src 的 SKILL.md 里 name: 是 [${found:-<空>}]"
+      continue
+    fi
+    printf 'ok\t%s\t%s\n' "$name" "$src"
+  done <<< "$declared"
+  team_skill_own_tree || return 0
+  for d in "$(team_skill_parent)"/*/; do
+    [ -d "$d" ] || continue
+    [ -L "${d%/}" ] && continue   # install.sh 的 M7.3：skills/ 下的软链是兼容别名，不是技能
+    name="$(basename "$d")"
+    printf '%s\n' "$declared" | grep -qxF -- "$name" && continue
+    if [ ! -f "$d/SKILL.md" ]; then printf 'broken\t%s\t%s\n' "$name" "${d%/} 没有 SKILL.md"; continue; fi
+    found="$(team_skill_md_name "$d")"
+    if [ "$found" != "$name" ]; then
+      printf 'broken\t%s\t%s\n' "$name" "${d%/} 的 SKILL.md 里 name: 是 [${found:-<空>}]"
+      continue
+    fi
+    printf 'ok\t%s\t%s\n' "$name" "${d%/}"
+    printf 'unregistered\t%s\t%s\n' "$name" "${d%/}"
+  done
+  return 0
+}
+
+team_skill_sources() { # → 每行 "<name>\t<src>"，只列真实存在且合法的源
+  team_skill_inventory | awk -F'\t' '$1 == "ok" { printf "%s\t%s\n", $2, $3 }'
   return 0
 }
 
@@ -232,14 +297,25 @@ team_init_install_skills() { # [--copy|--link] [--no-skills] [--force] → 0 全
     return 0
   fi
 
-  local sources; sources="$(team_skill_sources)"
+  # P361：三件发现做不到的事先说出来（都不静默）：少了谁 / 谁是未登记的新技能 / 谁的源不合法。
+  local inventory kind vname detail bad=0
+  inventory="$(team_skill_inventory)"
+  while IFS=$'\t' read -r kind vname detail; do
+    case "$kind" in
+      missing) printf '  miss  %s（源 %s 不在：随包发布的技能少装了一个）\n' "$vname" "$detail" ;;
+      unregistered) printf '  note  %s 是 skills/ 下未登记的技能（%s）：照装\n' "$vname" "$detail" ;;
+      broken) team_err "技能源不合法：$detail —— 目录名与 frontmatter 的 name 必须一致"; bad=1 ;;
+    esac
+  done <<< "$inventory"
+
+  local sources; sources="$(printf '%s\n' "$inventory" | awk -F'\t' '$1 == "ok" { printf "%s\t%s\n", $2, $3 }')"
   if [ -z "$sources" ]; then
-    team_err "找不到可安装的 skill 源（$TEAM_SKILL_DIR 和它的兄弟 teamsmith-init 都不在）"
+    team_err "找不到可安装的 skill 源（$TEAM_SKILL_DIR 与它软链背后的 skills/ 里没有合格的技能目录）"
     return 1
   fi
 
   mkdir -p "$target" || { team_err "建不了 $target"; return 1; }
-  local rc=0 name src dest cur src_real found
+  local rc=$bad name src dest cur src_real found
   while IFS=$'\t' read -r name src; do
     [ -n "$name" ] || continue
     dest="$target/$name"

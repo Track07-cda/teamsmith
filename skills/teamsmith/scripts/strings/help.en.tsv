@@ -106,7 +106,7 @@ cmd.bootstrap.arg.--task-models	the category to model map; a fresh project has n
 cmd.bootstrap.arg.--pm-model	the model the PM itself runs on; the PM never borrows a worker model.
 cmd.bootstrap.arg.--print	diagnose and print the plan without writing anything.
 cmd.init.title	write the contract and the document skeleton
-cmd.init.what	Writes the project contract and the document skeleton, and copies the skill into the project (under `.pi/skills`) so the project keeps working when the machine's skill is upgraded. It is the step of `team bootstrap` that does not touch worktrees or windows.
+cmd.init.what	Writes the project contract and the document skeleton, and copies the skills into the project (under `.pi/skills`) so the project keeps working when the machine's skills are upgraded. It is the step of `team bootstrap` that does not touch worktrees or windows.
 cmd.init.when	Use it when you want a project that is initialised but has no seats running yet, or when you are repairing only the contract and the skeleton.
 cmd.init.example	team init --no-skills --agents "dev verify" --task-models "code=provider/model"
 cmd.init.read	the templates that ship with the skill

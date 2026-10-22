@@ -34,6 +34,26 @@ if [ "${SMOKE_SEL_CHILD:-0}" = "1" ] && [ -n "${SMOKE_SEL_SKILL_DIR:-}" ] \
 fi
 # P16：初始化指引是兄弟 skill（本仓库 skills/teamsmith-init；安装后 ~/.agents/skills/ 里并排的两条软链）。
 SKILL_INIT_DIR="$(cd -P "$SKILL_DIR/.." && pwd)/teamsmith-init"
+# P361：技能源清单的真源 —— 包内 skills/ 下每个**真实目录**，且 SKILL.md 的 name: 与目录名一致。
+# 凡是要「遍历所有随包技能」的地方（0b 的解析器加载、14b 的文档扫描、装技能的计数断言）都走这里：
+# 写死名字的代价实测了两次 —— 夹具数「两个」时第三个技能对两边都不可见；§0b 写死 `handover` 时，
+# 只拷两个技能目录的检出形状（checkout-shape-probe 的 scratch 树）会红。**别再加名字，走清单。**
+SKILL_SRC_PARENT="$(cd -P "$SKILL_DIR/.." && pwd)"   # = <repo>/skills（P361：源清单就在这一层）
+skill_src_names() {
+  local d n
+  for d in "$SKILL_SRC_PARENT"/*/; do
+    [ -d "$d" ] || continue
+    [ -L "${d%/}" ] && continue
+    n="$(basename "$d")"
+    [ "$(sed -n 's/^name:[[:space:]]*//p' "$d/SKILL.md" 2>/dev/null | head -1)" = "$n" ] && printf '%s\n' "$n"
+  done | sort
+}
+skill_src_dirs() { # → 每个源技能的绝对目录（一行一个，顺序同 skill_src_names）
+  local n
+  while IFS= read -r n; do
+    [ -n "$n" ] && printf '%s/%s\n' "$SKILL_SRC_PARENT" "$n"
+  done <<< "$(skill_src_names)"
+}
 TEAM="bash $SKILL_DIR/scripts/team"
 # P235：新鲜项目的 init/bootstrap 必须给显式的类别映射 + 独立 PM 模型（工具不再猜席位/默认模型）。
 # 夹具一律用这一对；断言要看真实值的用例自己覆盖。
@@ -1560,8 +1580,10 @@ assert_eq "M33 哨兵：后台哨兵活着，但不在作业表里（裸 wait �
 # ---------------------------------------------------------------- 0b. skill 合法性（pi 自己的解析器）
 section "0b · skill 可被 pi 解析器加载"
 if [ -n "$JS_RUNNER" ]; then
-  # P16：两个 skill 都必须是合法可加载的（解析器期望的 name = 目录名）。
-  for P16_SD in "$SKILL_DIR" "$SKILL_INIT_DIR"; do
+  # P16：每个 skill 都必须是合法可加载的（解析器期望的 name = 目录名）。
+  # P361：清单从源派生（skill_src_dirs）—— 检出形状只带一部分技能时，扫的就是它带着的那几个。
+  while IFS= read -r P16_SD; do
+    [ -n "$P16_SD" ] || continue
     P16_SL="$TMP/skill-load-$(basename "$P16_SD").log"
     $JS_RUNNER "$SKILL_DIR/tests/skill-load.mjs" "$P16_SD" >"$P16_SL" 2>&1
     P16_RC=$?
@@ -1574,7 +1596,7 @@ if [ -n "$JS_RUNNER" ]; then
     else
       bad "skill-load 失败（$(basename "$P16_SD")）"; cat "$P16_SL"
     fi
-  done
+  done <<< "$(skill_src_dirs)"
 else
   printf '  (跳过：没有可用的 JS 运行时)\n'
 fi
@@ -2641,14 +2663,18 @@ assert_has "$REPO/docs/team/PROTOCOL.md" "references/openspec.md" "PROTOCOL.md �
 assert_file "$REPO/docs/team/threads/README.md" "写入 threads/README"
 assert_has "$REPO/AGENTS.md" "<!-- teamsmith:begin -->" "AGENTS.md 注入协议段"
 assert_has "$REPO/.gitignore" ".worktrees/" ".gitignore 忽略 worktree"
-# P40：init 的安装步 —— 两条软链装进项目 .pi/skills/，.gitignore 跟着忽略它
+# P40：init 的安装步 —— 源里每个技能一条软链装进项目 .pi/skills/，.gitignore 跟着忽略它
 # （本仓已跟踪的 .pi/skills/openspec-* 不受影响：忽略行不会 untrack 已跟踪文件）
-assert_eq "P40 init 装了项目 skill：.pi/skills/teamsmith → 运行树" \
-  "$(readlink -f "$REPO/.pi/skills/teamsmith" 2>/dev/null || echo missing)" "$SKILL_DIR"
-assert_eq "P40 init 装了兄弟条目 teamsmith-init" \
-  "$(readlink -f "$REPO/.pi/skills/teamsmith-init" 2>/dev/null || echo missing)" "$SKILL_INIT_DIR"
+# P361：数量与名字跟着源清单走（skill_src_names），不再写死「两条」
+while IFS= read -r P40_S; do
+  [ -n "$P40_S" ] || continue
+  assert_eq "P40 init 装了项目 skill：.pi/skills/$P40_S → 源" \
+    "$(readlink -f "$REPO/.pi/skills/$P40_S" 2>/dev/null || echo missing)" \
+    "$(readlink -f "$SKILL_SRC_PARENT/$P40_S" 2>/dev/null || echo missing)"
+done <<< "$(skill_src_names)"
 assert_has "$REPO/.gitignore" ".pi/skills/" "P40 .gitignore 忽略项目 skill 安装目录"
-assert_eq "P40 .pi/skills/ 里恰好两条" "$(ls -1A "$REPO/.pi/skills" | wc -l)" "2"
+assert_eq "P40 .pi/skills/ 里的名字与源清单一致（$(skill_src_names | tr '\n' ' ')）" \
+  "$(ls -1A "$REPO/.pi/skills" | sort | tr '\n' ' ')" "$(skill_src_names | tr '\n' ' ')"
 
 # 隔离自检（关键）：team 必须把自己当成临时仓库 + 本测试 session
 ISOLATE="$($TEAM paths 2>/dev/null || true)"
@@ -2709,10 +2735,11 @@ else ok "模板全部渲染（无 {{ 残留）"; fi
 # 幂等：再 init 一次不应重复追加协议段
 $TEAM init --session "$SESSION" --agents "dev verify" --vcs local --gates "true" --docs docs/team "${P235_MODELS[@]}" >"$TMP/init-again.log" 2>&1
 assert_eq "AGENTS.md 协议段幂等（只出现一次）" "$(grep -cF '<!-- teamsmith:begin -->' "$REPO/AGENTS.md")" "1"
-# P40：第二次 init 不重装、不覆盖 —— 两个 skill 都报 skip（逐 skill 一行）
-assert_eq "P40 第二次 init 对两个 skill 都报 skip" \
-  "$(grep -cE '^  skip  .*/\.pi/skills/(teamsmith|teamsmith-init)（' "$TMP/init-again.log" || true)" "2"
-assert_eq "P40 第二次 init 后 .pi/skills/ 仍然只有两条" "$(ls -1A "$REPO/.pi/skills" | wc -l)" "2"
+# P40：第二次 init 不重装、不覆盖 —— 源里每个技能都报 skip（逐 skill 一行）
+assert_eq "P40 第二次 init 对每个技能都报 skip（$(skill_src_names | wc -l | tr -d ' ') 条）" \
+  "$(grep -cE '^  skip  .*/\.pi/skills/[A-Za-z0-9._-]+（' "$TMP/init-again.log" || true)" "$(skill_src_names | wc -l | tr -d ' ')"
+assert_eq "P40 第二次 init 后 .pi/skills/ 仍与源清单一致" \
+  "$(ls -1A "$REPO/.pi/skills" | sort | tr '\n' ' ')" "$(skill_src_names | tr '\n' ' ')"
 
 # 必需依赖（D10）的确定性夹具：magic-context 用假 settings + 假包，OpenSpec 用假 CLI + 假 spec 目录。
 # 都在 $TMP 下、用绝对路径 —— 本机装没装都不影响断言。
@@ -7212,8 +7239,12 @@ doc_stale_hits() { # <skill 目录>
   done
 }
 
-# P16：扫描范围是两个 skill 的读者面（拆分前只有日常 skill）。
-REAL_HITS="$(doc_stale_hits "$SKILL_DIR"; doc_stale_hits "$SKILL_INIT_DIR")"
+# P16/P361：扫描范围是每个随包 skill 的读者面（清单从源派生：以后加技能自动进来）。
+REAL_HITS=""
+while IFS= read -r SC_SD; do
+  [ -n "$SC_SD" ] || continue
+  REAL_HITS="$REAL_HITS$(doc_stale_hits "$SC_SD")"
+done <<< "$(skill_src_dirs)"
 if [ -n "$REAL_HITS" ]; then
   bad "真树里有已删命令的用法：$(printf '%s' "$REAL_HITS" | head -1)"
 else
@@ -9912,7 +9943,9 @@ real_skill_count() { # 仓库里**真实**（非软链）的 skill 目录数 —
   done
   printf '%s' "$n"
 }
-assert_eq "仓库里真实（非软链）的 skill 目录数 = 2（teamsmith + teamsmith-init）" "$(real_skill_count)" "2"
+# P361：数量跟着源清单走（第三个技能是 handover）；real_skill_count 与 skill_src_names 互为交叉核对
+assert_eq "仓库里真实（非软链）的 skill 目录数 = 源清单数（$(skill_src_names | tr '\n' ' ')）" \
+  "$(real_skill_count)" "$(skill_src_names | wc -l | tr -d ' ')"
 # M22：仓库不再自带软链别名（`skills/pi-team` 已 git rm）—— 安装器「跳过软链」的守卫改用
 # 段末的 M22 夹具继续守，这里只钉住「仓库里没有旧入口」这个事实。
 if [ -e "$SRC_ROOT/skills/pi-team" ] || [ -L "$SRC_ROOT/skills/pi-team" ]; then

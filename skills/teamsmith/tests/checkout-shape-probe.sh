@@ -99,8 +99,16 @@ scratch_tree() { # <名字> <product-only|internal|mixed>
     cp -a "$x" "$d/$b"
   done
   cp -a "$REAL_ROOT/openspec/specs" "$d/openspec/specs"
-  cp -a "$REAL_ROOT/skills/teamsmith" "$d/skills/teamsmith"
-  cp -a "$REAL_ROOT/skills/teamsmith-init" "$d/skills/teamsmith-init"
+  # P361：拷贝集合从源派生 —— 真实目录 + SKILL.md 的 name 与目录名一致（与产品 team_skill_inventory、
+  # 夹具 skill_src_names 同一口径）。写死两个名字时，第三个技能缺席会让嵌套 run 的 §0b 判红（V93 实测
+  # ok126/bad21），而那并不是被检树的问题，是探针自己的形状不合规。以后加技能不必再改这里。
+  for x in "$REAL_ROOT"/skills/*/; do
+    [ -d "$x" ] || continue
+    [ -L "${x%/}" ] && continue
+    b="$(basename "$x")"
+    [ "$(sed -n 's/^name:[[:space:]]*//p' "$x/SKILL.md" 2>/dev/null | head -1)" = "$b" ] || continue
+    cp -a "$x" "$d/skills/$b"
+  done
   if [ "$mode" = "internal" ] || [ "$mode" = "mixed" ]; then
     # 公开导出树里没有 AGENTS.md / SCOPE.md / .pi / openspec/changes / docs/team/reports：有就拷，没有就
     # 建最小骨架（内部/混合树的控制会自己判断这棵树里有没有可判的内部材料，没有就可见 skip）。
