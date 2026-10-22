@@ -497,11 +497,36 @@ export default function (pi: ExtensionAPI) {
       ...(awaiting ? [awaiting] : []),
       `unpushed=${unpushed}${upstream ? '' : '(no-upstream)'}`,
     ].join(' · ')
+    // turn-notice-in-pm-inbox（A1）：settle 的**旁路**记账入口。记录行照旧走 `__inbox-write`；指针行由
+    // `__notify-settle` 从同一行派生、写进 pm.md（不写明细）。指针是旁路：它的失败只进扩展日志，不回退
+    // 打字、不抑制已经入队的敲门、不改变退出。每个退出点给出**闭集**里的一类（design §6）：suspended /
+    // merged / dedup / turn-unfinished / write-failed / notify-off / no-pane / pm-not-running /
+    // pm-window-missing / enqueue-failed；成功交给投递守卫后是 enqueued（≠ 已送达）。
+    const cli = join(skillDir(), 'scripts/team')
+    let lineFile = ''
+    let writeOut = ''
+    let identity = '-'
+    const settleSkipped = (outcome: string, withRecord: boolean): void => {
+      const args = [cli, '--root', root, '__notify-settle', '--agent', agent, '--outcome', outcome, '--task', proven ? id : '-', '--identity', identity]
+      if (withRecord && lineFile) args.push('--record-from-file', lineFile)
+      try {
+        const out = execFileSync('bash', args, { encoding: 'utf8', timeout: 5000 })
+        log(`settle ${outcome} ${String(out).trim()}`, cfg)
+      } catch (error) {
+        log(`settle ${outcome} failed (the pointer is a side channel, the knock is untouched): ${String(error)}`, cfg)
+      } finally {
+        if (lineFile) {
+          try { rmSync(lineFile, { force: true }) } catch { /* ignore */ }
+          lineFile = ''
+        }
+      }
+    }
     // 未完成的回合 + 本轮内有过生命周期事件 = 内部重启/压缩的产物，不是交付：不发简报、不敲门。
     // 未完成但**没有**生命周期事件（Esc / 错误）仍然告诉 PM，只是绝不带摘要（不编造「最后消息」）。
     if (!completed && lifecycleDuringTurn) {
       log(`skip settle (${lifecycleDuringTurn} 期间的 settle，回合未完成 → 不是交付) ${summary}`, cfg)
       lifecycleDuringTurn = ''
+      settleSkipped('skipped:turn-unfinished', false)
       return
     }
     lifecycleDuringTurn = ''
@@ -524,17 +549,17 @@ export default function (pi: ExtensionAPI) {
     }
     if (isDuplicate(key, cfg.dedupSec, stateDir)) {
       log(`dedup settle #${count} ${summary}`, cfg)
+      settleSkipped('skipped:dedup', false)
       return
     }
 
     const line = `${new Date().toISOString()} ${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? ` :: ${last}` : ''}`
     // turn-notice-merge（写入侧合并 + 明细）：判定「扩展末尾的同类 run 还是新起一行」在 CLI 的收件箱
     // 写入口里（每收件人一把锁 + 先明细后合并），扩展只消费写入结果 —— 只有写下**新行**才入队 knock。
-    const cli = join(skillDir(), 'scripts/team')
-    const lineFile = join(stateDir, `notify-line-${process.pid}-${Date.now()}.txt`)
-    let writeOut = ''
+    const linePath = join(stateDir, `notify-line-${process.pid}-${Date.now()}.txt`)
     try {
-      writeFileSync(lineFile, line)
+      writeFileSync(linePath, line)
+      lineFile = linePath
       writeOut = execFileSync(
         'bash',
         [cli, '--root', root, '__inbox-write', '--agent', agent, '--from-file', lineFile],
@@ -544,14 +569,13 @@ export default function (pi: ExtensionAPI) {
     } catch (error) {
       writeOut = ''
       log(`inbox write failed: ${String(error)}`, cfg)
-    } finally {
-      try { rmSync(lineFile, { force: true }) } catch { /* ignore */ }
     }
     const writeState = /^state=([a-z]+)/m.exec(writeOut)?.[1] ?? ''
     if (writeState !== 'new') {
       // 扩展既有 run（state=extended）的 settle 不入队、不敲字：计数抖动看得见但不叫醒。
       // 写盘失败（异常 / state=failed）也不叫醒 —— 与手工路径的「写失败不得授权唤醒」同一条规则。
       log(`no knock (inbox write state=${writeState || 'failed'})`, cfg)
+      settleSkipped(writeState === 'extended' ? 'skipped:merged' : 'skipped:write-failed', writeState === 'extended')
       return
     }
 
@@ -561,6 +585,7 @@ export default function (pi: ExtensionAPI) {
     // 「任务未完成 + 窗口不在」那一档，不由这条通知兜。
     if (suspended) {
       log('no knock (suspended records only)', cfg)
+      settleSkipped('skipped:suspended', true)
       return
     }
     const firstEvent = /^first=(\S+)/m.exec(writeOut)?.[1] ?? ''
@@ -568,8 +593,18 @@ export default function (pi: ExtensionAPI) {
     // knock 的去重身份 = **行身份**（席位 + 合并键 + 首事件时间）：两条文本逐字相同但不同的行不会互吞，
     // 同一 run 的重复 settle 也绝不会二次敲门（此时它连条目都不入队）。席位是 mergeKey 的第一个分量。
     const lineIdentity = `line|${mergeKey}|${firstEvent}`
+    identity = lineIdentity
 
-    if (!cfg.notifyTmux || !window) return
+    if (!cfg.notifyTmux) {
+      log('no knock (tmux notify disabled) inbox only', cfg)
+      settleSkipped('skipped:notify-off', true)
+      return
+    }
+    if (!window) {
+      log('no knock (no tmux pane) inbox only', cfg)
+      settleSkipped('skipped:no-pane', true)
+      return
+    }
     const target = `${cfg.session}:${cfg.pmWindow}`
     try {
       // 安全：只有当 PM 窗口里真的在跑 pi 时才敲键盘。
@@ -577,10 +612,12 @@ export default function (pi: ExtensionAPI) {
       const paneCmd = run('tmux', ['display-message', '-p', '-t', target, '#{pane_current_command}'])
       if (!paneCmd || /^(bash|sh|zsh|fish|dash|ash|ksh|nu)$/.test(paneCmd)) {
         log(`skip tmux notify (pm not running: pane=${paneCmd || 'missing'}) inbox only`, cfg)
+        settleSkipped('skipped:pm-not-running', true)
         return
       }
     } catch {
       /* PM 窗口不在：只留收件箱 */
+      settleSkipped('skipped:pm-window-missing', true)
       return
     }
     // 敲门不再自己 send-keys：交给 teamsmith 的投递守卫 + 延后队列（delivery-guard）。
@@ -598,8 +635,10 @@ export default function (pi: ExtensionAPI) {
         { encoding: 'utf8', timeout: 5000 },
       )
       log(`knock queued (${String(out).trim() || 'entry written'})`, cfg)
+      settleSkipped('enqueued', true)
     } catch (error) {
       log(`knock enqueue failed — inbox line kept, NOT falling back to typing: ${String(error)}`, cfg)
+      settleSkipped('skipped:enqueue-failed', true)
     } finally {
       try { rmSync(tmp, { force: true }) } catch { /* ignore */ }
     }

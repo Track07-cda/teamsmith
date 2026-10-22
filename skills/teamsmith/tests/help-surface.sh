@@ -812,7 +812,7 @@ check_coverage() {
   [ "$aw" = "0" ] && ok "每个别名都打印主命令的页并点名该别名"
 
   # O2 · the dispatcher's internal entries are a closed set, declared in one place (here)
-  local internal="__inbox-write __panel-data"
+  local internal="__inbox-write __notify-settle __panel-data"
   local found want nm extra="" miss="" n
   found="$(team_internal_labels)"
   want="$(printf '%s\n' $internal | sort -u)"

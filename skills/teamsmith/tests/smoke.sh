@@ -5075,6 +5075,95 @@ $TEAM notify pm "pm 是合法收件人" >/dev/null 2>&1 && ok "notify pm 仍然�
 rm -f "$REPO/docs/team/inbox/devv.md"
 $TEAM inbox --ack >/dev/null 2>&1
 
+# ── turn-notice-in-pm-inbox（P364 · A1 写入面）：指针行 / 一份计数 / --detail ───────────────────────
+# 专用夹具仓库（与主夹具的收件箱、ack 基线、明细互不干扰）。判据全部走真 CLI：指针行由写入侧
+# 从记录行派生，记录行逐字节不变，一次交付只让待办 +1。
+P364R="$TMP/p364repo"; rm -rf "$P364R"; mkdir -p "$P364R"
+( cd "$P364R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+p364() { ( cd "$P364R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR "$@" ); }
+p364 $TEAM init --session "teamsmith-smoke-p364-$$" --agents dev,dev2 --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" >"$TMP/p364-init.log" 2>&1 \
+  && ok "P364 夹具仓库 init 成功" || bad "P364 夹具仓库 init 失败（见 $TMP/p364-init.log）"
+assert_eq "P364 隔离：team paths 的 main_root 就是 P364 夹具仓库" \
+  "$(p364 $TEAM paths 2>/dev/null | sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p')" "$P364R"
+# 库函数面（键相等 / 计数断言用）：与 CLI 同一套 lib、同一份配置
+p364_fn() { # <在夹具仓库里执行的一小段（已加载配置）>
+  ( cd "$P364R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$1" )
+}
+P364_R1='2026-10-22T05:42:38.123Z ⚠ 未提交 3 个文件 · [auto] agent:dev · P362 · branch=task/P362-x · uncommitted=3 · unpushed=1(no-upstream) · task=P362 tip=1a2b3c4d5e6f :: ALLDONE feature implemented'
+P364_R2='2026-10-22T05:43:00.456Z ⚠ 未提交 4 个文件 · [auto] agent:dev · P362 · branch=task/P362-x · uncommitted=4 · unpushed=2(no-upstream) · task=P362 tip=1a2b3c4d5e6f :: next event'
+printf '%s\n' "$P364_R1" > "$TMP/p364-r1.txt"
+printf '%s\n' "$P364_R2" > "$TMP/p364-r2.txt"
+p364 $TEAM __inbox-write --agent dev --from-file "$TMP/p364-r1.txt" >"$TMP/p364-w1.log" 2>&1
+assert_has "$TMP/p364-w1.log" "state=new" "P364：首事件写下新行（state=new）"
+cp "$P364R/docs/team/inbox/dev.md" "$TMP/p364-rec-before.txt"
+p364 $TEAM __notify-settle --agent dev --outcome enqueued --record-from-file "$TMP/p364-r1.txt" --task P362 >"$TMP/p364-s1.log" 2>&1; P364_RC=$?
+assert_eq "P364：settle 的旁路入口退出码恒 0" "$P364_RC" "0"
+assert_has "$TMP/p364-s1.log" "pointer=ok" "P364：settle 打印 pointer=ok"
+assert_eq "R2 指针是旁路：记录行逐字节不变（指针开/关同一结果）" \
+  "$(cmp -s "$TMP/p364-rec-before.txt" "$P364R/docs/team/inbox/dev.md" && echo same || echo changed)" "same"
+P364_PTR="$(tail -n 1 "$P364R/docs/team/inbox/pm.md")"
+assert_eq "指针行形状（字段顺序写死：身份 · 任务 · knock · see · 修订戳）" "$P364_PTR" \
+  "- 2026-10-22T05:42:38.123Z [auto] agent:dev · P362 · knock=enqueued · see=docs/team/inbox/dev.md · task=P362 tip=1a2b3c4d5e6f"
+assert_not_echo "$P364_PTR" " :: " "指针行不带末消息摘要（pm.md 的行数是 PM 的待办数）"
+assert_not_echo "$P364_PTR" "branch=" "指针行不带事件级的 branch="
+assert_not_echo "$P364_PTR" "uncommitted=" "指针行不带事件级的 uncommitted="
+assert_not_echo "$P364_PTR" "unpushed=" "指针行不带事件级的 unpushed="
+assert_not_echo "$P364_PTR" "⚠" "指针行不带 ⚠ 未提交 前缀"
+P364_REC="$(tail -n 1 "$P364R/docs/team/inbox/dev.md")"
+assert_not_echo "$P364_REC" "knock=" "记录行不带 knock=（指针字段不回流）"
+assert_not_echo "$P364_REC" "see=" "记录行不带 see=（指针字段不回流）"
+assert_eq "指针行与记录行同一个合并键（缺 task= 戳就退化成两条）" \
+  "$(p364_fn 'team_notify_line_key "$(tail -n 1 docs/team/inbox/pm.md)"')" \
+  "$(p364_fn 'team_notify_line_key "$(tail -n 1 docs/team/inbox/dev.md)"')"
+# 同 run 的第二个事件：记录行合并成 ×2，指针行也合并成一行 —— 但 knock= 保留首事件的取值
+p364 $TEAM __inbox-write --agent dev --from-file "$TMP/p364-r2.txt" >"$TMP/p364-w2.log" 2>&1
+assert_has "$TMP/p364-w2.log" "state=extended" "P364：同 run 的第二事件扩展既有行（state=extended）"
+cp "$P364R/docs/team/inbox/dev.md" "$TMP/p364-rec-before2.txt"
+p364 $TEAM __notify-settle --agent dev --outcome skipped:merged --record-from-file "$TMP/p364-r2.txt" --task P362 >"$TMP/p364-s2.log" 2>&1
+assert_has "$TMP/p364-s2.log" "pointer=ok" "P364：扩展事件的 settle 也写指针（pointer=ok）"
+assert_eq "R2 扩展事件也不动记录行（合并只发生在指针自己的文件里）" \
+  "$(cmp -s "$TMP/p364-rec-before2.txt" "$P364R/docs/team/inbox/dev.md" && echo same || echo changed)" "same"
+P364_PTR2="$(tail -n 1 "$P364R/docs/team/inbox/pm.md")"
+assert_eq "R4 knock= 是 run 级字段：扩展事件不改写首事件的 enqueued" \
+  "$(printf '%s' "$P364_PTR2" | grep -o 'knock=[^ ]*')" "knock=enqueued"
+assert_has_echo "$P364_PTR2" "×2 first=2026-10-22T05:42:38.123Z last=2026-10-22T05:43:00.456Z" "指针行合并成一个 run（×2 first= last=）"
+assert_eq "P364：同一个 run 在 pm.md 里只占一行" "$(wc -l < "$P364R/docs/team/inbox/pm.md" | tr -d ' ')" "1"
+assert_eq "P364/R5：明细每个事件一条（指针不进明细，×N 仍等于记录数）" \
+  "$(grep -c '^- ' "$P364R/.pi/team/state/notify.log")" "2"
+# 一份计数：一次交付让待办 +1（席位自己那份记录不计数），指针行才是 PM 的未读
+assert_eq "R7：指针行让 PM 的未读从 0 变 1" "$(p364_fn 'team_inbox_new pm')" "1"
+assert_eq "R6：席位自己的 auto 记录不算它自己的未读流量" "$(p364_fn 'team_inbox_new dev')" "0"
+assert_has_echo "$(p364_fn 'team_pending_text')" "未读通知 1" "R6：待办里的未读通知 = 1（不是 2）"
+assert_not_echo "$(p364_fn 'team_pending_text')" "未读通知 2" "R6：待办没有把同一次交付数两遍"
+# 判据不是「文件名是 pm」的特例：别的席位之间同样成立（别人发来的 auto 行 + 手工行照旧计数）
+printf '%s\n' '- 2026-10-22T05:45:00.000Z [auto] agent:dev · P362 · branch=task/P362-x · uncommitted=0 · unpushed=0' >> "$P364R/docs/team/inbox/dev2.md"
+printf '%s\n' '- 2026-10-22T05:46:00.000Z [manual] agent:dev · 手工问一句' >> "$P364R/docs/team/inbox/dev2.md"
+assert_eq "R6：判据不是「文件名是 pm」的特例（别人发来的 auto 行 + 手工行都照旧计数）" "$(p364_fn 'team_inbox_new dev2')" "2"
+# R12：×N 指针行按**它自己的合并键**对账（按文件席位取记录会报假缺口）
+p364 $TEAM inbox pm --detail >"$TMP/p364-detail-pm.log" 2>&1; P364_RC=$?
+assert_eq "R12：team inbox pm --detail 退出码 0（×N 指针行不是缺口）" "$P364_RC" "0"
+assert_has "$TMP/p364-detail-pm.log" "记录 2/2 OK" "R12：指针行的 ×2 按自己的键对账（agent:dev · delivered）"
+assert_not "$TMP/p364-detail-pm.log" "缺口" "R12：指针行不报缺口"
+# R10：pm.md 不可写 → pointer=failed、退出码仍 0、记录行照旧落盘
+P364_R3='2026-10-22T05:47:00.000Z [auto] agent:dev2 · P364 · branch=task/P364-y · uncommitted=0 · unpushed=0 · task=P364 tip=abcdef123456 :: second seat delivered'
+printf '%s\n' "$P364_R3" > "$TMP/p364-r3.txt"
+p364 $TEAM __inbox-write --agent dev2 --from-file "$TMP/p364-r3.txt" >/dev/null 2>&1
+chmod 444 "$P364R/docs/team/inbox/pm.md"
+p364 $TEAM __notify-settle --agent dev2 --outcome enqueued --record-from-file "$TMP/p364-r3.txt" --task P364 >"$TMP/p364-s3.log" 2>&1; P364_RC=$?
+chmod 644 "$P364R/docs/team/inbox/pm.md"
+assert_eq "R10：指针写失败不改变退出码（旁路写）" "$P364_RC" "0"
+assert_has "$TMP/p364-s3.log" "pointer=failed" "R10：指针写失败被点名（pointer=failed）"
+assert_eq "R10：指针写失败时 pm.md 一行没多（不谎报已经落盘）" "$(wc -l < "$P364R/docs/team/inbox/pm.md" | tr -d ' ')" "1"
+assert_eq "R10：指针写失败不影响记录行落盘" "$(grep -c 'task=P364 tip=abcdef123456' "$P364R/docs/team/inbox/dev2.md")" "1"
+# 没有记录行的 settle（dedup / turn-unfinished / write-failed）不写指针：没有东西可以指
+p364 $TEAM __notify-settle --agent dev2 --outcome skipped:dedup >"$TMP/p364-s4.log" 2>&1
+assert_has "$TMP/p364-s4.log" "pointer=none" "P364：没有记录行的 settle 不写指针（pointer=none）"
+# 读了并按 --ack 标记 → PM 的未读归零（一条 run 回答一次）
+p364 $TEAM inbox pm --ack >/dev/null 2>&1
+assert_eq "P364：--ack 之后 PM 的未读归零" "$(p364_fn 'team_inbox_new pm')" "0"
+
 # ----------------------------------------- 7b. digest 警告未入账的复验/报告记录（M31）
 section "7b · digest 警告未入账的复验/报告记录（M31）"
 # 专用夹具仓库（M16/M14 同款纪律）：这里的「干净」是真干净。主夹具仓库在 4b 留下了
@@ -7692,6 +7781,10 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
   rmSync(inbox, { force: true })
   rmSync(join(root, '.pi/team/state/notify-dedup'), { force: true })
   rmSync(join(root, '.pi/team/state/notify.log'), { force: true })
+  // turn-notice-in-pm-inbox（P364 A1）：PM 的指针行也从这个干净的现场开始
+  const pmInbox = join(root, 'docs/team/inbox/pm.md')
+  rmSync(pmInbox, { force: true })
+  const pmLines = () => existsSync(pmInbox) ? readFileSync(pmInbox, 'utf8').trim().split('\n').filter(Boolean) : []
   const prefix = 'All gates are green. I delivered the parser fix; the remaining work on this branch is'
   const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text }] } }] } })
   const recs = () => existsSync(join(root, '.pi/team/state/notify.log'))
@@ -7700,10 +7793,25 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
   const ls = readFileSync(inbox, 'utf8').trim().split('\n')
   if (ls.length !== 1 || !ls[0].includes('×3')) { console.error(`FAIL: F17 同 run 的三条简报应当合成一行 ×3（实际 ${ls.length} 行：${ls[0] ?? ''}）`); process.exit(20) }
   if (recs() !== 3) { console.error(`FAIL: F17 三条简报的原始记录没有全进明细（${recs()} 条）`); process.exit(22) }
+  // P364 A1：同 run 的三个事件在 PM 的收件箱里是**一行 ×3 指针** —— 由写入侧从记录行派生（不带摘要与
+  // 事件级字段），扩展在本夹具里没有 tmux → outcome = skipped:no-pane。
+  {
+    const pl = pmLines()
+    if (pl.length !== 1) { console.error(`FAIL: P364 指针行：pm.md 应为 1 行（实际 ${pl.length}）`); process.exit(40) }
+    if (!pl[0].includes('agent:dev')) { console.error(`FAIL: P364 指针行没点名发送者（${pl[0]}）`); process.exit(41) }
+    if (!pl[0].includes('knock=skipped:no-pane')) { console.error(`FAIL: P364 指针行没记下叫醒结果（${pl[0]}）`); process.exit(42) }
+    if (!pl[0].includes('see=docs/team/inbox/dev.md')) { console.error(`FAIL: P364 指针行没指回记录（${pl[0]}）`); process.exit(43) }
+    if (!pl[0].includes('×3')) { console.error(`FAIL: P364 指针行没合并成 ×3（${pl[0]}）`); process.exit(44) }
+    if (pl[0].includes(' :: ') || pl[0].includes('branch=') || pl[0].includes('uncommitted=') || pl[0].includes('⚠')) {
+      console.error(`FAIL: P364 指针行带了摘要/事件级字段/⚠ 前缀（${pl[0]}）`); process.exit(45)
+    }
+  }
   await handler({}, ctxN(prefix + ' the retry path.'))     // 字节相同的一条：仍然要抑制
   const ls2 = readFileSync(inbox, 'utf8').trim().split('\n')
   if (ls2.length !== 1 || !ls2[0].includes('×3')) { console.error(`FAIL: F17 重复的同一条没有被去重（${ls2.length} 行）`); process.exit(21) }
   if (recs() !== 3) { console.error(`FAIL: F17 被去重的重复条进了明细（${recs()} 条）`); process.exit(23) }
+  // 去重的 settle 没有记录行可指 → 一行指针都不写（DEDUP 不是一次新的通知）
+  if (pmLines().length !== 1) { console.error(`FAIL: P364 去重的 settle 写了指针（pm.md ${pmLines().length} 行）`); process.exit(46) }
 }
 // M40：继承来的 TEAM_ROOT 指到**工作树**（agent 工作树里有 config.sh 副本）也不许改变账本落点：回合通知
 // 必须照旧写主工作树的收件箱。旧实现 env 优先 → cwd 被判成「不在 worktrees 之下」→ 整个通知静默不发
@@ -7796,7 +7904,10 @@ const emit = async (name, ...args) => { for (const fn of handlers[name] ?? []) a
 const inbox = join(root, 'docs/team/inbox/dev.md')
 const dedup = join(root, '.pi/team/state/notify-dedup')
 const knockLog = process.env.EXT_TMUX_LOG
-const reset = () => { rmSync(inbox, { force: true }); rmSync(dedup, { force: true }); writeFileSync(knockLog, '') }
+// turn-notice-in-pm-inbox（P364 A1）：每个 E 用例也从空的 PM 收件箱开始（指针行的现场）。
+const pmInbox = join(root, 'docs/team/inbox/pm.md')
+const pmLines = () => existsSync(pmInbox) ? readFileSync(pmInbox, 'utf8').trim().split('\n').filter(Boolean) : []
+const reset = () => { rmSync(inbox, { force: true }); rmSync(pmInbox, { force: true }); rmSync(dedup, { force: true }); writeFileSync(knockLog, '') }
 const cx = (list) => ({ cwd: wt, sessionManager: { getEntries: () => list.map(m => ({ message: m })) } })
 const lines = () => existsSync(inbox) ? readFileSync(inbox, 'utf8').trim().split('\n').filter(Boolean) : []
 const knocks = () => readFileSync(knockLog, 'utf8').split('\n').filter(l => l.includes('send-keys')).length
@@ -7812,6 +7923,7 @@ await emit('session_compact', { type: 'session_compact', reason: 'threshold' }, 
 await emit('agent_settled', {}, cx([earlier, midTurn]))
 if (lines().length !== 0) fail('E1：内部生命周期中的 settle 仍写了收件箱')
 if (knocks() !== 0) fail('E1：内部生命周期中的 settle 仍在敲 PM 窗口')
+if (pmLines().length !== 0) fail('E1：回合未完成的 settle 写了指针行（turn-unfinished 没有记录可指）')
 console.log('E1 回合内重启/压缩：没有收件箱行、没有敲门')
 
 // E2（对照组）：同一回合里压缩过，但回合真的完成 → 照常一行 + 敲门（不许过度抑制）
@@ -7824,6 +7936,24 @@ if (ls.length !== 1) fail(`E2：完成的回合应当只有一行（实际 ${ls.
 if (!ls[0].includes('[auto]')) fail('E2：完成的回合应带 [auto] 标签')
 if (!ls[0].includes('M43-DONE genuine turn end')) fail('E2：完成的回合应带它的最终文本')
 if (knocks() < 1) fail('E2：完成的回合应敲 PM 窗口（对照组）')
+// P364 A1：交付在 PM 的收件箱里留下一条**指针行**，并记下这次叫醒的结果
+{
+  const pl = pmLines()
+  if (pl.length !== 1) fail(`E2：交付应在 pm.md 留下 1 行指针（实际 ${pl.length}）`)
+  if (!pl[0].includes('knock=enqueued')) fail(`E2：指针行没有记下 enqueued（${pl[0]}）`)
+  if (!pl[0].includes('see=docs/team/inbox/dev.md')) fail(`E2：指针行没指回记录（${pl[0]}）`)
+}
+// R4：同 run 的扩展事件（state=extended → skipped:merged）不得改写 run 级字段 knock=，也不得再敲一次
+{
+  const k_before = knocks()
+  const finalAns2 = { role: 'assistant', stopReason: 'stop', content: [{ text: 'M43-DONE second event, same run' }] }
+  await emit('agent_settled', {}, cx([midTurn, finalAns2]))
+  const pl = pmLines()
+  if (pl.length !== 1) fail(`R4：同 run 的扩展事件应并入一行（pm.md 现有 ${pl.length} 行）`)
+  if (!pl[0].includes('knock=enqueued')) fail(`R4：扩展事件把 run 级 knock= 改写成了 skipped:merged（${pl[0]}）`)
+  if (!pl[0].includes('×2')) fail(`R4：同 run 的扩展事件没有合并成 ×2（${pl[0]}）`)
+  if (knocks() !== k_before) fail('R4：扩展事件又敲了一次 PM 窗口（计数抖动不得叫醒）')
+}
 console.log('E2 压缩过但已完成：一行 + 敲门（对照组）')
 
 // E3：被中断（Esc/错误）且没有生命周期事件 → 仍然告诉 PM，但绝不带摘要文本
@@ -7834,6 +7964,13 @@ ls = lines()
 if (ls.length !== 1) fail(`E3：被中断的回合仍应告诉 PM（期望 1 行，实际 ${ls.length}）`)
 if (!ls[0].includes('[auto·interrupted]')) fail('E3：被中断的回合必须显式标记，不能冒充交付')
 if (ls[0].includes('EARLIER-DELIVERED-TEXT') || ls[0].includes("I'll start by reading")) fail('E3：不许拿未完成回合的文本当摘要')
+// P364 A1：中断也是要告诉 PM 的事 → 指针行同样落盘（它照样会叫醒）
+{
+  const pl = pmLines()
+  if (pl.length !== 1) fail(`E3：中断应在 pm.md 留下 1 行指针（实际 ${pl.length}）`)
+  if (!pl[0].includes('[auto·interrupted]')) fail(`E3：指针行丢了状态类（${pl[0]}）`)
+  if (!pl[0].includes('knock=enqueued')) fail(`E3：指针行没有记下这次叫醒（${pl[0]}）`)
+}
 console.log('E3 被中断：一行、显式标记、没有编造的摘要')
 
 // E4：session_start(reload) 也算内部生命周期 → 未完成的 settle 同样不发
@@ -7842,6 +7979,7 @@ await emit('before_agent_start', { type: 'before_agent_start', prompt: 'go' }, c
 await emit('session_start', { type: 'session_start', reason: 'reload' }, cx([]))
 await emit('agent_settled', {}, cx([midTurn]))
 if (lines().length !== 0) fail('E4：reload 之后的未完成 settle 仍写了收件箱')
+if (pmLines().length !== 0) fail('E4：reload 打断的 settle 写了指针行')
 console.log('E4 reload 打断的回合：没有收件箱行')
 console.log('ext-e-ok')
 EOF

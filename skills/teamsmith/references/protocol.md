@@ -78,6 +78,27 @@ Guards and limitations:
   records in `state/notify.log`, bounded by `TEAM_NOTIFY_DETAIL_MAX` and rotated once). A different key, a manual
   notice in between, or a record write that failed starts a new line; a byte-identical briefing inside
   `TEAM_NOTIFY_DEDUP_SEC` is still suppressed outright.
+- **A notice also lands where the PM reads it** (change `turn-notice-in-pm-inbox`): when the resolved sender is not
+  the PM, the same settle writes a second, **independent** line — a pointer — into `docs/team/inbox/pm.md`:
+  `<ISO> [<tag>] agent:<seat> · <ID> · knock=enqueued|skipped:<class> · see=docs/team/inbox/<seat>.md`, plus
+  `task=<ID> tip=<hex>` when the record carries the revision stamp and `awaiting=<ids>` for a suspension. It is
+  derived by the writing side from the record line (same merge key, same merger, no second "what is the same run"
+  implementation) and it does **not** append to the detail file, so a run's `×N` still equals its record count. It
+  carries no last-message summary, no `branch=`/`uncommitted=`/`unpushed=` and no `⚠ 未提交` prefix: it says where to
+  look, and the PM's line count is the PM's pending count. `knock=` is a **run-scoped** field like `×N` and
+  `first=`: extending a run keeps the value its first event wrote, because only that event could have woken the PM.
+  `enqueued` means "handed to the delivery guard", never "delivered" (`state/outbox/delivered.log` says that). A
+  failed pointer write is logged by the extension and changes nothing else: it does not delay, suppress or duplicate
+  the knock, and the record line is already on disk. The record line itself stays byte-identical — the pointer is a
+  second, independent write, not a rewrite.
+- **One notice is counted once**: an auto-class line whose `agent:` names the inbox file's own seat is that seat's
+  record, not its unread traffic (`team_inbox_new` and `team_inbox_since` share the one predicate), so one delivery
+  adds exactly one to the PM's pending count — the pointer line — and a seat no longer sees its own `[auto]` lines as
+  new mail. Historical `[auto]` lines are not counted after the upgrade and are **not** backfilled with pointers: a
+  pointer records where a notice landed and what the knock did, and neither is observable for a notice written before
+  the pointer existed. `team inbox <seat> --all` still shows them. `--detail` reconciles a merged line's `×N`
+  against the records of **that line's own key** (its first component is the sender), so a `×N` pointer line in
+  `pm.md` is not reported as a gap.
 - **A notice names the revision it describes** (R2/P139; width and branch proof fixed by P160): the durable inbox
   line and the knock payload carry `task=<ID> tip=<12-hex>` — the **first twelve hex characters of the branch tip,
   truncated by the sender itself** (`git rev-parse HEAD | cut -c1-12`; the extension's `TIP_WIDTH`), never a Git

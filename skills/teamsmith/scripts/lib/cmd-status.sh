@@ -28,16 +28,24 @@ team_inbox_ack_set() { # <agent> <行数>：只写 sidecar（原子替换），�
   printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$dir/$1.inbox"
 }
 
-team_inbox_new() { # <agent> → 未 ack 的行数
-  local total acked; total="$(team_inbox_total "$1")"; acked="$(team_inbox_acked "$1")"
-  # 文件被截短/重建（acked > total）时 ack 基线失效：把剩下的行当未读重新展示一次。
-  # 不这样，一条新消息会因为旧的 ack 计数比文件行数大而**永远看不见**（F26 的 live 现场）。
-  case "$acked" in ''|*[!0-9]*) acked=0 ;; esac
-  [ "$acked" -gt "$total" ] && acked=0
-  [ "$total" -gt "$acked" ] && printf '%s\n' "$((total - acked))" || printf '0\n'
+# turn-notice-in-pm-inbox · 「一条通知只数一次」的判据（唯一实现，team_inbox_new / team_inbox_since 共用）：
+# 一条 auto 类行（[auto] / [auto·suspended] / [auto·interrupted]）的 `agent:<name>` 等于**这个收件箱文件
+# 自己的席位名**时，它是该席位的**记录**（历史/明细），不是它的未读流量；否则它是流量（[manual]/
+# [draft]/[nudge]/pulse 行，以及 pm.md 里的指针行 —— 指针的 agent: 是发送者）。
+# 不写成「文件名是 pm」的特例：判据只看行与文件席位，别的席位之间同样成立。
+team_inbox_line_is_record() { # <文件席位> <行> → 0 = 该席位自己的记录
+  local seat="$1" line="$2" body tag ag
+  body="${line#- }"
+  case "$body" in *' ['*) ;; *) return 1 ;; esac
+  tag="${body#*\[}"; tag="${tag%%\]*}"
+  case "$tag" in auto|'auto·suspended'|'auto·interrupted') ;; *) return 1 ;; esac
+  case "$body" in *agent:*) ;; *) return 1 ;; esac
+  ag="${body#*agent:}"; ag="${ag%% *}"
+  [ "$ag" = "$seat" ]
 }
 
-team_inbox_since() { # <agent> → 未 ack 的行
+# 未 ack 的**原始**行（不筛记录）：ack 基线记的是行数，所以必须按行取完再筛。
+team_inbox_raw_since() { # <agent> → 未 ack 的行
   local f start total
   f="$(team_inbox_file "$1")"
   [ -f "$f" ] || return 0
@@ -46,6 +54,26 @@ team_inbox_since() { # <agent> → 未 ack 的行
   total="$(team_inbox_total "$1")"
   [ "$start" -gt "$total" ] && start=0          # 与 team_inbox_new 的失效基线保持一致
   [ "$start" -gt 0 ] && tail -n +"$((start + 1))" "$f" || cat "$f"
+}
+
+team_inbox_since() { # <agent> → 未 ack 的行（不含该席位自己的 auto 记录）
+  local seat="$1" line
+  team_inbox_raw_since "$seat" | while IFS= read -r line; do
+    team_inbox_line_is_record "$seat" "$line" && continue
+    printf '%s\n' "$line"
+  done
+}
+
+team_inbox_new() { # <agent> → 未 ack 的**流量**行数（记录不计数：一次交付让待办 +1 而不是 +2）
+  local total acked n
+  total="$(team_inbox_total "$1")"; acked="$(team_inbox_acked "$1")"
+  # 文件被截短/重建（acked > total）时 ack 基线失效：把剩下的行当未读重新展示一次。
+  # 不这样，一条新消息会因为旧的 ack 计数比文件行数大而**永远看不见**（F26 的 live 现场）。
+  case "$acked" in ''|*[!0-9]*) acked=0 ;; esac
+  [ "$acked" -gt "$total" ] && acked=0
+  n="$(team_inbox_since "$1" | wc -l | tr -d ' ')"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s\n' "$n"
 }
 
 # worker 存活判据（team_agent_live / team_agent_window_exists）在 common.sh —— digest 的「停了的 agent」
@@ -1047,18 +1075,40 @@ team_inbox_detail() { # <agent> → 0 = 当前代记录完整；1 = 有缺口（
     printf '  读取：%s（缺失）\n' "$detail"
   fi
   [ -f "$rot_file" ] && printf '  上一代：%s\n' "$rot_file"
-  # 当前代里属于这个席位的原始记录（键解析给出席位；非 auto 行/轮转头不算记录）
-  local -a RECS=()
+  # 当前代的原始记录按**各自的合并键**计数（键的第一个分量就是发送者）。
+  # turn-notice-in-pm-inbox：合并行的 ×N 必须与**该行自己的键**的记录比，不能按文件席位取：pm.md 里
+  # 的指针行属于发送者（键是 dev|delivered|P362|-），按文件席位取会把每一条 ×N 指针行都判成缺口。
+  # 缺口判据（缺文件、被轮转出去）一字不松。
+  local -a RKEYS=()
+  local -A KC=() SHOWN=()
+  local runs_n
   if [ -f "$detail" ]; then
     while IFS= read -r line; do
       case "$line" in '- '*) ;; *) continue ;; esac
       k="$(team_notify_line_key "$line" 2>/dev/null || true)"
-      case "$k" in "$agent"'|'*) RECS+=("$line") ;; esac
+      [ -n "$k" ] || continue
+      RKEYS+=("$k"); KC["$k"]=$(( ${KC["$k"]:-0} + 1 ))
     done < "$detail"
   fi
-  recs_n="${#RECS[@]}"
-  printf '  该席位的原始记录：%s 条\n' "$recs_n"
-  for r in "${RECS[@]:-}"; do [ -n "$r" ] && printf '    %s\n' "$r"; done
+  # 列出的键 = 本文件里出现的键（合并行与单事件行都算）∪ 文件席位自己的键
+  # （后一半让「行被删/被轮转出去」时原始记录仍然可读，与旧行为一致）。
+  if [ -f "$f" ]; then
+    while IFS= read -r line; do
+      k="$(team_notify_line_key "$line" 2>/dev/null || true)"
+      [ -n "$k" ] && SHOWN["$k"]=1
+    done < "$f"
+  fi
+  for k in "${RKEYS[@]:-}"; do
+    [ -n "$k" ] || continue
+    [ "${k%%|*}" = "$agent" ] && SHOWN["$k"]=1
+  done
+  recs_n=0; runs_n=0
+  for k in "${!SHOWN[@]}"; do runs_n=$((runs_n + 1)); recs_n=$((recs_n + ${KC["$k"]:-0})); done
+  printf '  原始记录：%s 条（%s 个 run；键的第一个分量是发送者）\n' "$recs_n" "$runs_n"
+  for k in $(printf '%s\n' "${!SHOWN[@]}" | LC_ALL=C sort); do
+    printf '    agent:%s · %s · %s · awaiting=%s → %s 条\n' \
+      "${k%%|*}" "$(printf '%s' "$k" | cut -d'|' -f2)" "$(printf '%s' "$k" | cut -d'|' -f3)" "$(printf '%s' "$k" | cut -d'|' -f4)" "${KC["$k"]:-0}"
+  done
   printf '  合并行核对：\n'
   if [ -f "$f" ]; then
     while IFS= read -r line; do
@@ -1068,18 +1118,14 @@ team_inbox_detail() { # <agent> → 0 = 当前代记录完整；1 = 有缺口（
       merged_n=$((merged_n + 1))
       n="$(team_notify_line_events "$line")"
       k="$(team_notify_line_key "$line" 2>/dev/null || true)"
-      count=0
-      for r in "${RECS[@]:-}"; do
-        [ -n "$r" ] || continue
-        [ "$(team_notify_line_key "$r" 2>/dev/null || true)" = "$k" ] && count=$((count + 1))
-      done
+      count="${KC["$k"]:-0}"
       pair="$(team_notify_line_iso "$line")/$(team_notify_line_iso_last "$line")"
       if [ "$count" -ge "$n" ]; then
         printf '    ×%s first=%s last=%s → 记录 %s/%s OK\n' "$n" "${pair%%/*}" "${pair#*/}" "$count" "$n"
       else
         gap_n=$((gap_n + 1))
-        printf '    ×%s first=%s last=%s → 记录 %s/%s **缺口**：state/notify.log 当前代只有 %s 条；更早的记录在 state/notify.log.1\n' \
-          "$n" "${pair%%/*}" "${pair#*/}" "$count" "$n" "$count"
+        printf '    ×%s first=%s last=%s → 记录 %s/%s **缺口**（键 agent:%s · %s）；state/notify.log 当前代只有 %s 条；更早的记录在 state/notify.log.1\n' \
+          "$n" "${pair%%/*}" "${pair#*/}" "$count" "$n" "${k%%|*}" "$(printf '%s' "$k" | cut -d'|' -f2)" "$count"
         rc=1
       fi
     done < "$f"
