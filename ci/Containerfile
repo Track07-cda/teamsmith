@@ -12,7 +12,8 @@
 #   tmux 3.7b       built from source: `#{bracket_paste_flag}` only exists in tmux >= 3.7, and the
 #                   delivery guard's bracketed-paste probe needs it (see M47 report; trixie ships
 #                   3.5a). Same version as the developer machines.
-#   node 24.19.0    the JS runtime the panel converges on (engines: >= 20)
+#   node 24.22.1    the JS runtime the panel converges on (engines: >= 20); fixed the October 2026
+#                   Node security set (Brotli decoder OOB write / TLS hostname bypasses)
 #   bun 1.3.14      the version that reproduces the committed scripts/panel/panel.js byte-for-byte
 #                   (smoke 26-a rebuilds it and compares)
 #   pi 0.86.0       tests/skill-load.mjs imports pi's own skill parser (dist/core/skills.js)
@@ -63,7 +64,7 @@ RUN curl -fsSL "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/t
  && [ "$(tmux -V)" = "tmux ${TMUX_VERSION}" ]
 
 # --- node + bun (pinned tarballs) ----------------------------------------------------------
-ARG NODE_VERSION=24.19.0
+ARG NODE_VERSION=24.22.1
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" -o /tmp/node.tar.xz \
  && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
  && rm /tmp/node.tar.xz \
