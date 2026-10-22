@@ -511,11 +511,15 @@ fi
 if want flip-drop-pm; then
   section "flip F-A · 从 known 里去掉独立 PM 模型 → known 断言必须红且点名独立 PM；恢复 → 绿"
   ft="$tmp/flip-drop-pm"
+  # P367：flip 树是**源技能目录的整份拷贝**（照源派生），不再手写拷贝清单 —— 清单已经漏过两次：
+  # P315 漏 extension/、P361 之后 `team init` 又要求技能源带 SKILL.md 且 frontmatter name 与目录名
+  # 一致（`cmd-init.sh:76`，拒绝在 `:307/:313`）。两次的形状一样：清单落后于 init 的要求 → init 先拒源，
+  # F-A/F-D 想看的诊断根本没机会出现，红侧变假红。整份拷贝之后，翻转只在副本里改要翻的那个文件。
+  # 目标目录**先建**、源写成 `"$skill/."`：拷进来的必须是**真目录**（`cp -a "$skill" dir/` 在 $skill 是
+  # 软链时会把软链原样搬过来，随后 python 补丁就顺着软链写进真树 —— P367 用软链变体树做过一次红侧，
+  # 实测就是这么把真树的 cmd-config.sh 改脏的）。
   mkdir -p "$ft/skills/teamsmith"
-  cp -a "$skill/scripts" "$ft/skills/teamsmith/scripts"
-  # P315：`team init` 现在要装 `/team` 扩展（源 = <skill>/extension/team.ts），夹具的拷贝集合要跟上；
-  # 少拷一层时 `new_proj` 里的 init 直接退出、走查拿不到结论，红侧就是假红。
-  cp -a "$skill/templates" "$skill/references" "$skill/extension" "$ft/skills/teamsmith/"
+  cp -a "$skill/." "$ft/skills/teamsmith/"
   python3 - "$ft/skills/teamsmith/scripts/lib/cmd-config.sh" <<'PYPATCH'
 import sys
 p = sys.argv[1]
@@ -553,10 +557,10 @@ fi
 if want flip-suggest; then
   section "flip F-D · 建议值落在最小之外（30 < 60）→ 走查必须红且点名；恢复 → 绿"
   ft="$tmp/flip-suggest"
+  # P367：与 F-A 同理 —— 整份拷贝源技能目录（含 SKILL.md），不维护第二份拷贝清单；目标目录先建，
+  # 保证翻转树里是真目录（理由见 F-A 那段）。
   mkdir -p "$ft/skills/teamsmith"
-  cp -a "$skill/scripts" "$ft/skills/teamsmith/scripts"
-  # P315：与 F-A 同理 —— `team init` 要 extension/team.ts 才能装完，少拷一层就是夹具坏掉（走查 rc=3）。
-  cp -a "$skill/templates" "$skill/references" "$skill/extension" "$ft/skills/teamsmith/"
+  cp -a "$skill/." "$ft/skills/teamsmith/"
   flip_cfg="$ft/skills/teamsmith/scripts/lib/cmd-config.sh"
   cp -a "$cmd_config" "$flip_cfg"
   python3 - "$flip_cfg" <<'PY'
