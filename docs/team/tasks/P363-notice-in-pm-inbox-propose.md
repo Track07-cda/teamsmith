@@ -7,7 +7,7 @@ category: analysis
 change: turn-notice-in-pm-inbox
 specs: notify-and-inbox#A turn-end notification appends one inbox line and knocks once
 anchor: none (infra) — change 自带 delta
-deltas: notify-and-inbox/spec.md
+deltas: notify-and-inbox
 branch: task/P363-notice-in-own-inbox-propose
 
 ## 用户报的缺陷（PM 已复现，证据在下面，不要重新论证"是不是问题"）
