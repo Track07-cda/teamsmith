@@ -584,9 +584,9 @@
 | V95 | P366独立验收：噪声关闭与归因 | verify | - | - | done |
 | V96 | P364独立验收：指针行与一份计数 | verify | - | - | done |
 | V97 | P367独立验收：flip树与写穿缺陷 | dev | - | - | done |
-| P365 | A2：敲门结果账与digest点名 | dev2 | - | - | wip |
+| P365 | A2：敲门结果账与digest点名 | dev2 | - | - | done |
 | P368 | bg-ledger两条断言假设旧计数 | dev3 | - | - | wip |
-| V98 | P365独立验收：结果账与digest | verify | - | - | wip |
+| V98 | P365独立验收：结果账与digest | verify | - | - | done |
 
 ## 当前里程碑
 
