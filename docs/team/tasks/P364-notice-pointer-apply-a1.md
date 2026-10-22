@@ -1,7 +1,7 @@
 # P364 · apply A1：记录行拆两步 + PM 指针行 + 一份计数
 
 task: P364
-agent: dev3
+agent: dev2
 phase: apply
 category: code
 change: turn-notice-in-pm-inbox
