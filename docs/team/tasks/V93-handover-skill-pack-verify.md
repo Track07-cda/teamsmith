@@ -42,3 +42,23 @@ branch: task/V93-handover-skill-pack-verify
 
 只读代码、破坏只在 `/var/tmp` 私有副本、只写 `docs/team/reports/V93-verify.md` 与自己的线程；不改实现、不合并、
 不 push。**不要跑整套门禁**（`install-shape` 与 smoke 选段足够）。结论先写 PASS/PARTIAL/FAIL。
+
+## 第二轮（定点复看，只验返修的两处差异；候选 `95edbecc` / 实现 `ab32b30e`）
+
+作者按你的 F1/F2 改了：`skill_src_dirs()`（由 `skill_src_names` 派生）驱动 b 的加载循环与 14b 的扫描面；
+`scratch_tree` 的拷贝集合按同一口径（真实目录 + `SKILL.md` 的 `name:` == 目录名）派生；补了 `note` 分支的断言
+（源里有、声明里没有 → 红并点名）。他自跑读数：install-shape 163/0、smoke 选段 149/0、**轮廓探针 147/0**、
+`--select 60` 42/0、`--loop-check` 全过、`--check` 12/0。
+
+**只做四件：**
+
+1. **探针自己再跑一次**（约 11 分钟，这是本轮唯一的承重读数）：必须 `ok 147 bad 0`。跑前 `ps` 确认没有别人的 `smoke.sh`。
+2. **两处差异真的从源派生**：`git diff 3bb984a7 95edbecc -- skills/teamsmith/tests/` 逐条看；并用
+   `grep -n '"$SKILL_HANDOVER_DIR"\|SKILL_HANDOVER_DIR' skills/teamsmith/tests/*.sh skills/teamsmith/scripts/lib/*.sh`
+   确认没有别处还在写死这个名字（声明面 `team_skill_declared` 里允许有，那是**声明**不是派生）。
+3. **`note` 分支现在有牙**：把 `handover` 从 `team_skill_declared` 删掉 → 必须**红并点名**（你上一轮实测是 57/0 全绿）；
+   还原必须绿。
+4. **没有顺手削弱**：`--copy` 三技能逐字节、`--no-skills` 一个不装、`npm pack` 带 `handover`——若这几条你上一轮已经验过
+   且这两处差异没碰它们，说明「复用上轮证据」即可，不必重跑。
+
+结论只写 PASS 或 FAIL。仍不跑整套门禁。
