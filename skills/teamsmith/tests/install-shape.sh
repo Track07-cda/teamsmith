@@ -432,22 +432,30 @@ chk_init_docs_fact() { # <tree>
   return 0
 }
 
-chk_pack_manifest() { # <tree>：声明面 —— 恰好一个 bin 键，files 带着 bin/
+chk_pack_manifest() { # <tree>：声明面 —— team + 四个信号入口，files 带着 bin/
   python3 - "$1/package.json" <<'PYMANI'
 import json, sys
 p = json.load(open(sys.argv[1]))
 binmap = p.get("bin") or {}
 files = p.get("files") or []
 problems = []
-if list(binmap.keys()) != ["team"]:
-    problems.append("bin 键不是恰好一个 team：%r" % (list(binmap.keys()),))
+# P360：0.3.1 的 bin 只有 team，`npm i -g` 因此不给 pkill/killall/pgrep/pidof 建链接，
+# 用户敲这些名字落到 /usr/bin——闸门在 npm 路线上等于不存在。声明面必须含这四个名字。
+want = ["team", "pkill", "killall", "pgrep", "pidof"]
+if list(binmap.keys()) != want:
+    problems.append("bin 键不是 team + 四个信号入口：%r" % (list(binmap.keys()),))
 elif binmap["team"].lstrip("./") != "bin/team.mjs":
     problems.append("bin.team 指向 %r（要 bin/team.mjs）" % binmap["team"])
+else:
+    for name in ("pkill", "killall", "pgrep", "pidof"):
+        want_t = "skills/teamsmith/scripts/shim/" + name
+        if binmap.get(name, "").lstrip("./") != want_t:
+            problems.append("bin.%s 指向 %r（要 %s）" % (name, binmap.get(name), want_t))
 if "bin/" not in files:
     problems.append("files 白名单里没有 bin/：%r" % (files,))
 if problems:
     print("；".join(problems)); sys.exit(1)
-print("bin 一项 + files 带 bin/（%r）" % (binmap["team"],))
+print("bin 五项（team + 四个信号入口，均指向包内文件）+ files 带 bin/")
 PYMANI
 }
 
@@ -512,6 +520,21 @@ WITNESS
   if [ -n "$missing" ]; then
     printf '安装包没有携带信号闸门入口（npm 丢 120000 软链的历史形状）：%s\n' "$missing"; return 1
   fi
+  # P360（0.3.1 实测漏网）：**包里带着**不等于**装上能用** —— `npm i -g` 只在 package.json 的 `bin`
+  # 里列了谁才在 prefix/bin 里建链接。0.3.1 的 bin 只有 team，于是用户 `pkill` 落到 /usr/bin，
+  # 闸门在 npm 路线上等于不存在；而上面两条断言只查了「包内文件在不在」，两次复验都没抓住。
+  # 这里补的正是那个缺失的证伪者：装完必须在 prefix/bin 里解析到**这个包**的入口。
+  for t in pkill killall pgrep pidof; do
+    local resolved
+    resolved="$(readlink -f "$prefix/bin/$t" 2>/dev/null || true)"
+    case "$resolved" in
+      "$prefix"/lib/node_modules/teamsmith/*) : ;;
+      "")
+        printf '安装后 prefix/bin 里没有 %s —— npm 的 bin 字段没列它（用户会落到 /usr/bin）\n' "$t"; return 1 ;;
+      *)
+        printf '安装后 prefix/bin/%s 指向 [%s]，不是这个包里的入口\n' "$t" "$resolved"; return 1 ;;
+    esac
+  done
   for t in pkill killall pgrep pidof; do
     line="$(PATH="$shim:$backends:/usr/bin:/bin" command -v "$t" 2>/dev/null)"
     if [ "$line" != "$shim/$t" ]; then

@@ -5,6 +5,21 @@
 > `SKILL.md`/`references/**`/`templates/**`/`extension/**` 在 Pi 里输入 `/reload`（或 `/pi-team-reload`）即生效；
 > 判断自己是不是旧的：`team mark-loaded`（开局记一次）→ `team version --check`。
 
+## v0.3.2（2026-10-22）
+
+**npm 安装的人必须升级（0.3.0 与 0.3.1 都受影响）。**
+
+0.3.1 修好了「四个信号入口随包发布」这件事，但 `package.json` 的 `bin` 字段仍然只列了 `team`——
+而 `npm install -g` 只给 `bin` 里列出的名字建链接。于是**装完之后 `pkill` / `killall` / `pgrep` / `pidof`
+仍然解析到 `/usr/bin`，防误杀的信号闸门在 npm 路线上等于不存在**（包里的 shim 文件在，但没人指向它们）。
+用 Git 检出安装或跑 `install.sh` 的人不受影响。
+
+这一版把四个名字加进 `bin`（都指向包内的 shim），并在安装面夹具里补上那个缺失的证伪者：
+`npm i -g --prefix …` 之后，`prefix/bin/{pkill,killall,pgrep,pidof}` 必须**解析到安装包内部**，
+否则判红。这一条以前没有，所以两次独立复验都漏过去了——它们只检查了「包内文件在不在」。
+
+除此之外与 0.3.1 完全相同。`0.3.1` 已在 npm 上标记为 deprecated。
+
 ## v0.3.1（2026-10-21）
 
 补丁版：**没有破坏性变化、没有默认行为切换、没有新依赖**。这一版修的是 0.3.0 发出后才暴露的六件事。
