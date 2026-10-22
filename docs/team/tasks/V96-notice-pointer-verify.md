@@ -7,7 +7,7 @@ category: verify
 change: turn-notice-in-pm-inbox
 specs: notify-and-inbox#A turn-end notification appends one inbox line and knocks once
 anchor: none (infra) — change 自带 delta
-deltas: notify-and-inbox
+deltas: -
 branch: task/V96-notice-pointer-verify
 
 ## 受检
