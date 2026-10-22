@@ -570,7 +570,7 @@
 | V91 | P349独立验收：接线 | dev | - | - | done |
 | P357 | 发布门禁4条红归因 | dev3 | - | - | done |
 | P358 | §61b臂预算1800s | dev3 | - | - | done |
-| P359 | lint把/logs/整段跳过 | dev2 | - | - | wip |
+| P359 | lint把/logs/整段跳过 | dev2 | - | - | done |
 | V92 | P359独立验收：扫描盲区 | dev | - | - | done |
 | P360 | npm bin 漏列四个入口（0.3.2） | dev3 | - | - | wip |
 
