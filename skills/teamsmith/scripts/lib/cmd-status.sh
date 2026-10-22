@@ -76,6 +76,58 @@ team_inbox_new() { # <agent> → 未 ack 的**流量**行数（记录不计数�
   printf '%s\n' "$n"
 }
 
+# ---------------------------------------------------------------- turn-notice-in-pm-inbox（A2）
+# digest 的「未敲门」与「指针缺失」两行（design §5）。
+#   未敲门 = PM 收件箱里**尚未 ack** 的指针行的 `knock=skipped:<类>`（一条 run 一行）；读了并按 --ack
+#            标记就归零 —— 它是「还没被回答」的量，不需要第二个已读通道。
+#   指针缺失 = 结果账**当前代**里 pointer=failed 的条数：这一档不会随阅读消失（pm.md 里本来就没有那行）。
+# 两行都**只显示**：不进 team_pending_text、不进任何叫醒判据（挂起只记录不叫醒是用户的裁定，
+# 一条不会自己消失的故障也不该每一拍都把 PM 叫醒一次）。
+TEAM_KNOCK_SKIPPED_CLASSES=" suspended merged dedup turn-unfinished write-failed notify-off no-pane pm-not-running pm-window-missing enqueue-failed "
+
+team_knock_class_known() { # <类> → 0 = 在闭集里
+  case "$TEAM_KNOCK_SKIPPED_CLASSES" in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+# 读侧遇到闭集外的类**原样打印**（归在 `其它（<类> <n>）` 里）—— 不吞、不改写、不丢。
+team_inbox_skipped_knock_summary() { # → "<N>\t<suspended 1 · 其它（something-new 1）>"；0 条 → 什么都不打印
+  local line cls i total=0 hit part out=''
+  local classes=() counts=()
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in *'knock=skipped:'*) ;; *) continue ;; esac
+    cls="${line#*knock=skipped:}"; cls="${cls%% *}"
+    [ -n "$cls" ] || cls='-'
+    total=$((total + 1))
+    hit=0
+    for i in "${!classes[@]}"; do
+      if [ "${classes[$i]}" = "$cls" ]; then counts[$i]=$(( ${counts[$i]} + 1 )); hit=1; break; fi
+    done
+    [ "$hit" = 1 ] || { classes+=("$cls"); counts+=(1); }
+  done < <(team_inbox_raw_since pm)
+  [ "$total" -gt 0 ] || return 0
+  for i in "${!classes[@]}"; do
+    if team_knock_class_known "${classes[$i]}"; then
+      part="${classes[$i]} ${counts[$i]}"
+    else
+      part="其它（${classes[$i]} ${counts[$i]}）"
+    fi
+    out="${out}${out:+ · }$part"
+  done
+  printf '%s\t%s\n' "$total" "$out"
+}
+
+team_knock_ledger_path() { printf '%s/notify-knock.log\n' "$(team_state_dir)"; }
+
+team_knock_pointer_failed_count() { # → 当前代的 pointer=failed 条数（轮转出去的那一代不计）
+  local f n
+  f="$(team_knock_ledger_path)"
+  [ -f "$f" ] || { printf '0\n'; return 0; }
+  n="$(grep -c '^- .*pointer=failed' "$f" 2>/dev/null || true)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s\n' "$n"
+}
+
 # worker 存活判据（team_agent_live / team_agent_window_exists）在 common.sh —— digest 的「停了的 agent」
 # （team_pending_counts）与 roster / resume / 面板 agents 块必须共用同一份判据（M37）。
 
@@ -911,6 +963,19 @@ team_cmd_digest() {
     fi
   done
   [ "$any" -eq 0 ] && team_dim "  （无）"
+  # turn-notice-in-pm-inbox（A2）：敲门被跳过的通知、以及没写进 PM 收件箱的指针 —— 两行只为回答
+  # 「为什么我没收到通知」；为 0 不打印，也不进待办计数（叫醒判据在 team_pending_text）。
+  local skipped pfailed
+  skipped="$(team_inbox_skipped_knock_summary || true)"
+  if [ -n "$skipped" ]; then
+    printf '  未敲门 %s 条已记录的通知没有叫醒 PM（%s）—— 见 %s/inbox/pm.md 的 knock= 字段\n' \
+      "${skipped%%$'\t'*}" "${skipped#*$'\t'}" "$TEAM_DOCS_DIR"
+  fi
+  pfailed="$(team_knock_pointer_failed_count || true)"
+  case "$pfailed" in ''|*[!0-9]*) pfailed=0 ;; esac
+  if [ "$pfailed" -gt 0 ]; then
+    printf '  指针缺失 %s 条通知没有写进 PM 收件箱（pointer-write-failed；state/notify-knock.log 当前代，更早的代不计）\n' "$pfailed"
+  fi
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"
 

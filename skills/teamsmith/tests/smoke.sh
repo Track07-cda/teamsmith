@@ -5164,6 +5164,122 @@ assert_has "$TMP/p364-s4.log" "pointer=none" "P364：没有记录行的 settle �
 p364 $TEAM inbox pm --ack >/dev/null 2>&1
 assert_eq "P364：--ack 之后 PM 的未读归零" "$(p364_fn 'team_inbox_new pm')" "0"
 
+# ── turn-notice-in-pm-inbox（P365 · A2）：结果账 state/notify-knock.log 与 digest 的两行 ──────
+# 专用夹具仓库：账本、PM 收件箱、ack 基线与前面的段落互不干扰（P364 同款纪律）。
+# 判据走真 CLI：每次 settle 一行账（先指针、后账本），digest 从**未 ack 的指针行**与账本当前代读两行。
+P365R="$TMP/p365repo"; rm -rf "$P365R"; mkdir -p "$P365R"
+( cd "$P365R" && git init -q -b main && git config user.email smoke@teamsmith && git config user.name smoke \
+    && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+p365() { ( cd "$P365R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR -u TEAM_PROJECT -u TEAM_SESSION -u TEAM_STATE_DIR \
+            TEAM_NOTIFY_LOG="$TMP/p365-notify.log" "$@" ); }
+p365 $TEAM init --session "teamsmith-smoke-p365-$$" --agents dev,dev2 --vcs local --gates true --docs docs/team "${P235_MODELS[@]}" >"$TMP/p365-init.log" 2>&1 \
+  && ok "P365 夹具仓库 init 成功" || bad "P365 夹具仓库 init 失败（见 $TMP/p365-init.log）"
+assert_eq "P365 隔离：team paths 的 main_root 就是 P365 夹具仓库" \
+  "$(p365 $TEAM paths 2>/dev/null | sed -n 's/.*"main_root": "\([^"]*\)".*/\1/p')" "$P365R"
+p365_fn() { # <在夹具仓库里执行的一小段（已加载配置）>
+  ( cd "$P365R" && env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_SKILL_DIR \
+      bash -c '. "'"$SKILL_DIR"'/scripts/lib/common.sh"; for _f in "'"$SKILL_DIR"'"/scripts/lib/cmd-*.sh; do . "$_f" 2>/dev/null || true; done; team_load_config >/dev/null 2>&1; '"$1" )
+}
+P365_LEDGER="$P365R/.pi/team/state/notify-knock.log"
+P365_R1='2026-10-22T07:00:00.000Z ⚠ 未提交 2 个文件 · [auto] agent:dev · P362 · branch=task/P362-x · uncommitted=2 · unpushed=1(no-upstream) · task=P362 tip=1a2b3c4d5e6f :: delivered one'
+P365_R1B='2026-10-22T07:01:00.000Z [auto] agent:dev · P362 · branch=task/P362-x · uncommitted=0 · unpushed=0 · task=P362 tip=1a2b3c4d5e6f :: delivered two'
+P365_R2='2026-10-22T07:02:00.000Z [auto·suspended] agent:dev2 · P363 · branch=task/P363-y · uncommitted=1 · awaiting=job-a'
+P365_R3='2026-10-22T07:03:00.000Z [auto] agent:dev2 · P364 · branch=task/P364-y · uncommitted=0'
+P365_R4='2026-10-22T07:04:00.000Z [auto·interrupted] agent:dev2 · P365 · branch=task/P365-y · uncommitted=1'
+P365_R5='2026-10-22T07:05:00.000Z [auto] agent:dev · P367 · branch=task/P367-z · uncommitted=0 · task=P367 tip=abcdef123456 :: pointer fails'
+printf '%s\n' "$P365_R1"  > "$TMP/p365-r1.txt"
+printf '%s\n' "$P365_R1B" > "$TMP/p365-r1b.txt"
+printf '%s\n' "$P365_R2"  > "$TMP/p365-r2.txt"
+printf '%s\n' "$P365_R3"  > "$TMP/p365-r3.txt"
+printf '%s\n' "$P365_R4"  > "$TMP/p365-r4.txt"
+printf '%s\n' "$P365_R5"  > "$TMP/p365-r5.txt"
+p365 $TEAM __inbox-write --agent dev --from-file "$TMP/p365-r1.txt" >"$TMP/p365-w1.log" 2>&1
+assert_has "$TMP/p365-w1.log" "state=new" "P365 夹具：首事件写下记录行（state=new）"
+p365 $TEAM __notify-settle --agent dev --outcome enqueued --record-from-file "$TMP/p365-r1.txt" --task P362 --identity 'line|dev|delivered|P362|-|2026-10-22T07:00:00.000Z' >"$TMP/p365-s1.log" 2>&1; P365_RC=$?
+assert_eq "P365：结果账入口退出码恒 0（旁路写）" "$P365_RC" "0"
+assert_has "$TMP/p365-s1.log" "pointer=ok" "P365：首次 settle 打印 pointer=ok"
+assert_has "$TMP/p365-s1.log" "ledger=ok" "P365：首次 settle 打印 ledger=ok"
+# 同 run 的第二个事件：记录行扩展（state=extended）→ outcome=skipped:merged，仍是**一行账**
+p365 $TEAM __inbox-write --agent dev --from-file "$TMP/p365-r1b.txt" >"$TMP/p365-w1b.log" 2>&1
+assert_has "$TMP/p365-w1b.log" "state=extended" "P365 夹具：同 run 第二事件扩展记录行（state=extended）"
+p365 $TEAM __notify-settle --agent dev --outcome skipped:merged --record-from-file "$TMP/p365-r1b.txt" --task P362 >"$TMP/p365-s1b.log" 2>&1
+# 另外三个提交路径：挂起 / 关掉 tmux 通知 / 一个闭集外的类
+p365 $TEAM __inbox-write --agent dev2 --from-file "$TMP/p365-r2.txt" >/dev/null 2>&1
+p365 $TEAM __notify-settle --agent dev2 --outcome skipped:suspended --record-from-file "$TMP/p365-r2.txt" --task P363 >"$TMP/p365-s2.log" 2>&1
+p365 $TEAM __inbox-write --agent dev2 --from-file "$TMP/p365-r3.txt" >/dev/null 2>&1
+p365 $TEAM __notify-settle --agent dev2 --outcome skipped:notify-off --record-from-file "$TMP/p365-r3.txt" --task P364 >"$TMP/p365-s3.log" 2>&1
+p365 $TEAM __inbox-write --agent dev2 --from-file "$TMP/p365-r4.txt" >/dev/null 2>&1
+p365 $TEAM __notify-settle --agent dev2 --outcome skipped:something-new --record-from-file "$TMP/p365-r4.txt" --task P365 >"$TMP/p365-s4.log" 2>&1
+# 没有记录行的 settle（dedup / turn-unfinished / write-failed）也记一行：pointer=none、class=-
+p365 $TEAM __notify-settle --agent dev2 --outcome skipped:dedup --task P366 >"$TMP/p365-s5.log" 2>&1
+assert_has "$TMP/p365-s5.log" "pointer=none" "P365：没有记录行的 settle 不写指针（pointer=none）"
+assert_has "$TMP/p365-s5.log" "ledger=ok" "P365：没有记录行的 settle 仍然记账"
+# ① 五个真实 outcome 各一行账（字段顺序写死：seat · task · class · outcome · pointer · identity）
+assert_eq "P365：六个 settle 各一行账（一次 settle 一条，合并/挂起/去重都不漏）" "$(grep -c '^- ' "$P365_LEDGER")" "6"
+grep 'task=P362 · class=delivered · outcome=enqueued' "$P365_LEDGER" > "$TMP/p365-l-enq.log" 2>/dev/null || true
+assert_match "$TMP/p365-l-enq.log" '^- [0-9T:.-]+Z seat=dev · task=P362 · class=delivered · outcome=enqueued · pointer=ok · identity=line\|' \
+  "P365：enqueued 的账行字段顺序与行身份（ISO · seat · task · class · outcome · pointer · identity）"
+grep 'outcome=skipped:merged' "$P365_LEDGER" > "$TMP/p365-l-merged.log" 2>/dev/null || true
+assert_match "$TMP/p365-l-merged.log" 'seat=dev · task=P362 · class=delivered · outcome=skipped:merged · pointer=ok' \
+  "P365：合并进既有 run 的事件记 skipped:merged（不是没记）"
+grep 'outcome=skipped:suspended' "$P365_LEDGER" > "$TMP/p365-l-susp.log" 2>/dev/null || true
+assert_match "$TMP/p365-l-susp.log" 'seat=dev2 · task=P363 · class=suspended · outcome=skipped:suspended · pointer=ok' \
+  "P365：挂起记 skipped:suspended，状态类从记录行的 tag 派生（class=suspended）"
+grep 'outcome=skipped:notify-off' "$P365_LEDGER" > "$TMP/p365-l-off.log" 2>/dev/null || true
+assert_match "$TMP/p365-l-off.log" 'seat=dev2 · task=P364 · class=delivered · outcome=skipped:notify-off · pointer=ok' \
+  "P365：TEAM_NOTIFY_TMUX=0 记 skipped:notify-off"
+grep 'outcome=skipped:dedup' "$P365_LEDGER" > "$TMP/p365-l-dedup.log" 2>/dev/null || true
+assert_match "$TMP/p365-l-dedup.log" 'seat=dev2 · task=P366 · class=- · outcome=skipped:dedup · pointer=none · identity=-' \
+  "P365：没有记录行的 settle 用 pointer=none / class=- / identity=- 记账"
+# ② 闭集外的类**原样**落账，读侧（digest）也原样打印 —— 不吞不丢
+assert_has "$P365_LEDGER" "outcome=skipped:something-new" "P365：闭集外的类原样落账"
+# ③ digest 的两行：3 条未敲门（挂起 / notify-off / 闭集外）——一条 run 一条
+p365 $TEAM digest >"$TMP/p365-digest1.log" 2>&1 || bad "P365：digest 失败"
+assert_has "$TMP/p365-digest1.log" "未敲门 3 条已记录的通知没有叫醒 PM（suspended 1 · notify-off 1 · 其它（something-new 1））" \
+  "P365：未敲门按类分组（闭集外的类显示成 其它（原样））"
+assert_not "$TMP/p365-digest1.log" "指针缺失" "P365：还没有指针失败时不打印「指针缺失」"
+# 两行**只显示**：不进待办计数（不进 team_pending_text → 不进叫醒理由）
+assert_not_echo "$(p365_fn 'team_pending_text')" "未敲门" "P365：未敲门不进待办计数（挂起只记录不叫醒的裁定不被显示层推翻）"
+assert_not_echo "$(p365_fn 'team_pending_text')" "指针缺失" "P365：指针缺失不进待办计数（不会每一拍都叫醒一次）"
+# ④ R10：PM 收件箱不可写 → 指针失败被点名，而且账本带得上 pointer=failed
+p365 $TEAM __inbox-write --agent dev --from-file "$TMP/p365-r5.txt" >/dev/null 2>&1
+chmod 444 "$P365R/docs/team/inbox/pm.md"
+p365 $TEAM __notify-settle --agent dev --outcome enqueued --record-from-file "$TMP/p365-r5.txt" --task P367 >"$TMP/p365-s6.log" 2>&1; P365_RC=$?
+chmod 644 "$P365R/docs/team/inbox/pm.md"
+assert_eq "P365/R10：指针写失败不改变退出码" "$P365_RC" "0"
+assert_has "$TMP/p365-s6.log" "pointer=failed" "P365/R10：指针写失败被点名"
+assert_has "$P365_LEDGER" "task=P367 · class=delivered · outcome=enqueued · pointer=failed" "P365/R10：先指针后账本 —— 账行带得上 pointer=failed"
+p365 $TEAM digest >"$TMP/p365-digest2.log" 2>&1 || bad "P365：digest（指针失败）失败"
+assert_has "$TMP/p365-digest2.log" "指针缺失 1 条通知没有写进 PM 收件箱（pointer-write-failed；state/notify-knock.log 当前代，更早的代不计）" \
+  "P365：指针缺失从账本当前代读出并点名文件"
+assert_has "$TMP/p365-digest2.log" "未敲门 3 条已记录的通知没有叫醒 PM" "P365：两行各自独立（指针失败不改「未敲门」的读数）"
+# ⑤ R9：读了并按 --ack 标记 → 「未敲门」消失；「指针缺失」不随阅读消失（它没有可读可 ack 的行）
+p365 $TEAM inbox pm --ack >/dev/null 2>&1
+p365 $TEAM digest >"$TMP/p365-digest3.log" 2>&1 || bad "P365：digest（ack 后）失败"
+assert_not "$TMP/p365-digest3.log" "未敲门" "P365/R9：ack 之后「未敲门」消失（它数的是尚未被回答的指针行）"
+assert_has "$TMP/p365-digest3.log" "指针缺失 1 条通知没有写进 PM 收件箱" "P365/R9：指针缺失仍然在（账本不随 ack 变）"
+# ⑥ 有界：把上限调小（测试内）→ 产生 .1，账本本身不超上限，轮转在扩展日志里点名
+rm -f "$P365_LEDGER" "$P365_LEDGER.1" "$TMP/p365-notify.log"
+for _i in 1 2 3 4; do
+  p365 env TEAM_NOTIFY_DETAIL_MAX=2 $TEAM __notify-settle --agent dev --outcome skipped:dedup --task "P37$_i" >/dev/null 2>&1
+done
+assert_file "$P365_LEDGER.1" "P365：越界后产生一代 .1（只留一代）"
+assert_eq "P365：账本当前代不超过上限（2 条记录 + 1 行轮转头）" "$(wc -l < "$P365_LEDGER" | tr -d ' ')" "3"
+assert_eq "P365：当前代的记录数就是上限" "$(grep -c '^- ' "$P365_LEDGER")" "2"
+head -n 1 "$P365_LEDGER" > "$TMP/p365-rot-head.log"
+assert_match "$TMP/p365-rot-head.log" '^# rotation .* moved=2 path=.*/state/notify-knock\.log\.1$' \
+  "P365：轮转头点名时间、被移动的条数与 .1 路径"
+assert_eq "P365：被轮转出去的那一代就是老的两条" "$(grep -c '^- ' "$P365_LEDGER.1")" "2"
+assert_has "$TMP/p365-notify.log" "notify knock rotated" "P365：轮转在扩展日志里点名（不是静默丢）"
+# 轮转之后「指针缺失」只算当前代：老的那代不计（账本的窗口就是它自己）
+p365 $TEAM digest >"$TMP/p365-digest4.log" 2>&1 || true
+assert_not "$TMP/p365-digest4.log" "指针缺失" "P365：轮转后旧的 pointer=failed 不再计入（当前代才是账本的窗口）"
+# ⑦ 两行都可以清掉：清账本 + ack 后，两行一起消失
+rm -f "$P365_LEDGER" "$P365_LEDGER.1"
+p365 $TEAM digest >"$TMP/p365-digest5.log" 2>&1 || true
+assert_not "$TMP/p365-digest5.log" "未敲门" "P365：清掉之后「未敲门」不再打印"
+assert_not "$TMP/p365-digest5.log" "指针缺失" "P365：清掉之后「指针缺失」不再打印"
+
 # ----------------------------------------- 7b. digest 警告未入账的复验/报告记录（M31）
 section "7b · digest 警告未入账的复验/报告记录（M31）"
 # 专用夹具仓库（M16/M14 同款纪律）：这里的「干净」是真干净。主夹具仓库在 4b 留下了
@@ -7784,6 +7900,11 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
   // turn-notice-in-pm-inbox（P364 A1）：PM 的指针行也从这个干净的现场开始
   const pmInbox = join(root, 'docs/team/inbox/pm.md')
   rmSync(pmInbox, { force: true })
+  // P365 A2：结果账同理 —— 从空的现场开始，下面逐条断言「一次 settle 一行」与字段
+  const ledgerPath = join(root, '.pi/team/state/notify-knock.log')
+  rmSync(ledgerPath, { force: true })
+  const ledger = () => existsSync(ledgerPath)
+    ? readFileSync(ledgerPath, 'utf8').split('\n').filter(l => l.startsWith('- ')) : []
   const pmLines = () => existsSync(pmInbox) ? readFileSync(pmInbox, 'utf8').trim().split('\n').filter(Boolean) : []
   const prefix = 'All gates are green. I delivered the parser fix; the remaining work on this branch is'
   const ctxN = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text }] } }] } })
@@ -7806,12 +7927,36 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
       console.error(`FAIL: P364 指针行带了摘要/事件级字段/⚠ 前缀（${pl[0]}）`); process.exit(45)
     }
   }
+  // P365 A2 / R8：每个 settle 都进结果账（这里没有 tmux → skipped:no-pane），指针成功、
+  // 状态类从记录行的 tag 派生（[auto] → delivered），行身份是 line|<席位|类|任务|awaiting>|<首事件 ISO>。
+  {
+    const lg = ledger()
+    if (lg.length !== 3) { console.error(`FAIL: P365 结果账：三个 settle 应各记一行（实际 ${lg.length}：${lg.join(' | ')}）`); process.exit(47) }
+    if (!lg.every(l => l.includes('seat=dev') && l.includes('class=delivered') && l.includes('pointer=ok') && l.includes('identity=line|'))) {
+      console.error(`FAIL: P365 结果账：settle 的公共字段不对（${lg.join(' | ')}）`); process.exit(48)
+    }
+    // 三个同 run 事件：首事件没敲（no-pane），后两个并入既有 run（skipped:merged）—— 三种 outcome
+    // 各自都要有账，不能只记首事件。
+    if (!lg[0].includes('outcome=skipped:no-pane') || !lg[1].includes('outcome=skipped:merged') || !lg[2].includes('outcome=skipped:merged')) {
+      console.error(`FAIL: P365 结果账：三个事件的 outcome 序列不对（${lg.map(l => (/outcome=(\S+)/.exec(l) ?? [])[1]).join(',')}）`); process.exit(51)
+    }
+  }
   await handler({}, ctxN(prefix + ' the retry path.'))     // 字节相同的一条：仍然要抑制
   const ls2 = readFileSync(inbox, 'utf8').trim().split('\n')
   if (ls2.length !== 1 || !ls2[0].includes('×3')) { console.error(`FAIL: F17 重复的同一条没有被去重（${ls2.length} 行）`); process.exit(21) }
   if (recs() !== 3) { console.error(`FAIL: F17 被去重的重复条进了明细（${recs()} 条）`); process.exit(23) }
   // 去重的 settle 没有记录行可指 → 一行指针都不写（DEDUP 不是一次新的通知）
   if (pmLines().length !== 1) { console.error(`FAIL: P364 去重的 settle 写了指针（pm.md ${pmLines().length} 行）`); process.exit(46) }
+  // P365 A2：被去重的那次 settle 仍然是**一次 settle** —— 账本要给它一行（pointer=none、identity=-），
+  // 否则「为什么今天没收到通知」在账本里是个洞。
+  {
+    const lg = ledger()
+    if (lg.length !== 4) { console.error(`FAIL: P365 结果账：去重的 settle 也应当记账（实际 ${lg.length} 行）`); process.exit(49) }
+    const last = lg[3]
+    if (!last.includes('outcome=skipped:dedup') || !last.includes('pointer=none') || !last.includes('identity=-')) {
+      console.error(`FAIL: P365 结果账：去重那一行的字段不对（${last}）`); process.exit(50)
+    }
+  }
 }
 // M40：继承来的 TEAM_ROOT 指到**工作树**（agent 工作树里有 config.sh 副本）也不许改变账本落点：回合通知
 // 必须照旧写主工作树的收件箱。旧实现 env 优先 → cwd 被判成「不在 worktrees 之下」→ 整个通知静默不发
@@ -11443,6 +11588,28 @@ assert_has "$TMP/m98-a-watch.log" "无待办" "M9.8-①：这一拍明确说「�
 assert_not "$TMP/m98-a-watch.log" "有待办" "M9.8-①：没有把看板 done 的报告当成待办"
 m98 $TEAM digest >"$TMP/m98-a-digest.log" 2>&1 || true
 assert_has "$TMP/m98-a-digest.log" "已按看板跳过 5 份报告" "M9.8-①：digest 点名它们为什么没被列（不静默丢）"
+
+# P365/A2（tasks 2.2.3 的守卫）：digest 的「未敲门」「指针缺失」两行**只显示** —— 不进 team_pending_text、
+# 不进唤醒理由。否则「挂起只记录不叫醒」（用户 2026-10-14 裁定）会被显示层反悔，而一个不会自己消失的
+# 指针故障会每一拍都把 PM 叫醒一次。红侧：把这两行接进 team_pending_text → 下面那条「唤醒理由为空」变红。
+printf '%s\n' '2026-10-22T07:10:00.000Z [auto] agent:dev · P368 · branch=task/P368-x · uncommitted=0 · task=P368 tip=0123456789ab :: skipped knock fixture' > "$TMP/m98-a2-rec.txt"
+m98 $TEAM __inbox-write --agent dev --from-file "$TMP/m98-a2-rec.txt" >/dev/null 2>&1
+m98 $TEAM __notify-settle --agent dev --outcome skipped:suspended --record-from-file "$TMP/m98-a2-rec.txt" --task P368 >/dev/null 2>&1
+printf '%s\n' '- 2026-10-22T07:11:00Z seat=dev · task=P368 · class=- · outcome=enqueued · pointer=failed · identity=-' > "$M98/.pi/team/state/notify-knock.log"
+m98 $TEAM digest >"$TMP/m98-a2-digest.log" 2>&1 || true
+assert_has "$TMP/m98-a2-digest.log" "未敲门 1 条已记录的通知没有叫醒 PM（suspended 1）" "P365：未敲门在 digest [2] 里可见（不再只在 /tmp 日志里）"
+assert_has "$TMP/m98-a2-digest.log" "指针缺失 1 条通知没有写进 PM 收件箱" "P365：指针缺失在 digest [2] 里可见（读账本当前代）"
+# 唤醒理由仍然只有那条**指针行本身**（一次交付 +1，A1 的判据）；「未敲门」不许再加一份 —— 精确等号，
+# 多出任何一个类别都会红。
+assert_eq "P365：未敲门不进唤醒计数（唤醒理由只有那一条未读通知）" "$(m98_wake)" "未读通知 1"
+m98 $TEAM inbox pm --ack >/dev/null 2>&1
+m98 $TEAM digest >"$TMP/m98-a2-digest2.log" 2>&1 || true
+assert_not "$TMP/m98-a2-digest2.log" "未敲门" "P365：ack 之后未敲门消失（数的是尚未被回答的指针行）"
+assert_has "$TMP/m98-a2-digest2.log" "指针缺失 1 条通知没有写进 PM 收件箱" "P365：指针缺失不随 ack 消失（它没有可读可 ack 的行）"
+assert_eq "P365：指针缺失不进唤醒计数（没有待办时唤醒理由为空）" "$(m98_wake)" ""
+m98 $TEAM watch --once >"$TMP/m98-a2-watch.log" 2>&1 || true
+assert_has "$TMP/m98-a2-watch.log" "无待办" "P365：一个不会自己消失的指针故障不会每一拍都叫醒 PM"
+rm -f "$M98/.pi/team/state/notify-knock.log"
 
 # ② 1 份真待复验 → 叫醒（计数 = digest [3] 可行动清单的行数）
 m98_add M98F

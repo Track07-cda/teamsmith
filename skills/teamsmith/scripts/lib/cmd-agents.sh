@@ -1863,8 +1863,10 @@ team_notify_detail_events() { # <明细文件> → 事件行数（轮转头不�
 }
 
 # 先明细：一行一事件（内容 = 该事件单发形状的收件箱行）。越界 → 轮转一代到 <file>.1 + 新代轮转头。
-team_notify_detail_append() { # <事件行> <明细文件> → 0 = 已落盘；1 = 失败（调用方写 detail=unavailable）
-  local content="$1" file="$2" dir max count
+# 第 3 参只影响轮转在扩展日志里的名字：结果账（notify-knock.log）与明细共用这一个轮转器与同一个上界，
+# 但两件东西不是一回事，日志里点错名字会让下一次查现场的人找错文件。
+team_notify_detail_append() { # <事件行> <文件> [轮转日志里的名字=detail] → 0 = 已落盘；1 = 失败（调用方写 detail=unavailable）
+  local content="$1" file="$2" label="${3:-detail}" dir max count
   dir="$(dirname "$file")"
   mkdir -p "$dir" || return 1
   max="$(team_notify_detail_max)"
@@ -1872,7 +1874,7 @@ team_notify_detail_append() { # <事件行> <明细文件> → 0 = 已落盘；1
   if [ "$count" -ge "$max" ]; then
     mv -f "$file" "$file.1" || return 1
     printf '%s\n' "# rotation $(team_timestamp) moved=${count} path=${file}.1" > "$file" || return 1
-    team_notify_log_line "notify detail rotated: moved=${count} to=${file}.1"
+    team_notify_log_line "notify ${label} rotated: moved=${count} to=${file}.1"
   fi
   printf -- '- %s\n' "$content" >> "$file" 2>/dev/null || return 1
   return 0
@@ -1901,6 +1903,32 @@ team_inbox_rewrite_last() { # <收件箱文件> <新尾行> → 0 = 已重写；
 #      过期瞬间（PM 要判断这些时读的是 see= 指的那份记录）；
 #   ③ 插入 `knock=<outcome> · see=docs/team/inbox/<seat>.md`；
 #   ④ 删 ` :: <末消息>` 尾巴（摘要在记录行与敲门载荷里各有一份；pm.md 的行数是 PM 的待办数）。
+# 记录行的状态类（design §6 的 class= 字段）：[auto] → delivered、[auto·suspended] → suspended、
+# [auto·interrupted] → interrupted；其余（没有记录行 / 非 auto 行）是 `-`。
+# 与 team_inbox_line_is_record / 合并键共用同一套 tag 拼写，不另立一份。
+team_notify_line_class() { # <记录行> → delivered|suspended|interrupted|-
+  local body tag
+  body="${1#- }"
+  case "$body" in *'['*) ;; *) printf '%s\n' '-' ; return 0 ;; esac
+  tag="${body#*\[}"; tag="${tag%%\]*}"
+  case "$tag" in
+    auto) printf '%s\n' delivered ;;
+    'auto·suspended') printf '%s\n' suspended ;;
+    'auto·interrupted') printf '%s\n' interrupted ;;
+    *) printf '%s\n' '-' ;;
+  esac
+}
+
+# 结果账（turn-notice-in-pm-inbox · A2）：一行一次 settle —— 项目内那个跨 ack、跨轮转之后还能回答
+# 「今天 skipped 了几次、为什么」的地方。与 state/notify.log 同一个轮转器与同一个上界（不新增配置键）。
+team_notify_knock_ledger_path() { printf '%s/notify-knock.log\n' "$(team_state_dir)"; }
+
+team_notify_knock_ledger_append() { # <seat> <task> <class> <outcome> <pointer> <identity> → 0 = 已落盘
+  local line
+  line="$(team_timestamp) seat=$1 · task=$2 · class=$3 · outcome=$4 · pointer=$5 · identity=$6"
+  team_notify_detail_append "$line" "$(team_notify_knock_ledger_path)" knock
+}
+
 team_notify_pointer_line() { # <记录行> <outcome> → 指针行（解析不成立 → rc 1）
   local body="$1" outcome="$2"
   local iso rest tag seat tok head f task_f='' aw_f='' det_f=''
@@ -2045,9 +2073,12 @@ team_cmd_inbox_write() {
 
 # 内部命令（扩展消费；不进 help）：一次 settle 的旁路记账入口。
 # --agent <seat> --outcome <enqueued|skipped:<类>> [--record-from-file <行文件>] [--identity <id>] [--task <ID>]
-# A1 只做**指针腿**：有记录行 → 从它派生指针行并写进 PM 的收件箱（持 pm 的收件箱锁）；没有记录行 →
-# 什么都不写（没有东西可以指）。旁路写：无论成败都退出 0，把结果打印成 pointer=ok|failed|none。
-# --identity / --task 是结果账（A2）的字段；本刀接受并校验形状，不让一个拼错的旗标静默地什么都不做。
+# 两步，顺序写死（design §4）：
+#   (a) 指针腿：有记录行 → 从它派生指针行并写进 PM 的收件箱（持 pm 的收件箱锁）；没有记录行 →
+#       什么都写（没有东西可以指）。
+#   (b) 结果账：每一次 settle 一行 → state/notify-knock.log（与明细同一个轮转器与上界）。它必须在
+#       指针尝试**之后**写，才带得上 pointer=failed —— 反过来只能记一个假值或二次改写。
+# 两次写都是旁路：无论成败都退出 0，把结果打印成 pointer=ok|failed|none 与 ledger=ok|failed。
 team_cmd_notify_settle() {
   local agent='' outcome='' src='' identity='-' task='-'
   while [ $# -gt 0 ]; do
@@ -2073,20 +2104,27 @@ team_cmd_notify_settle() {
     skipped:?*) ;;
     *) team_usage_die "__notify-settle: --outcome 只有 enqueued 与 skipped:<类> 两种形状（收到 $outcome）" ;;
   esac
-  # 发送者是 PM 自己时没有「指针」：PM 的收件箱就是记录的落点。
-  if [ "$agent" = pm ] || [ -z "$src" ] || [ ! -f "$src" ]; then printf 'pointer=none\n'; return 0; fi
-  local record pointer
-  record="$(head -n 1 "$src")"
-  if ! pointer="$(team_notify_pointer_line "$record" "$outcome")" || [ -z "$pointer" ]; then
-    team_notify_log_line "notify pointer derivation failed: seat=$agent outcome=$outcome"
-    printf 'pointer=failed\n'
-    return 0
+  local record pointer='none' cls='-'
+  # 发送者是 PM 自己时没有「指针」：PM 的收件箱就是记录的落点（账照样记，它是一个 settle）。
+  if [ "$agent" != pm ] && [ -n "$src" ] && [ -f "$src" ]; then
+    record="$(head -n 1 "$src")"
+    cls="$(team_notify_line_class "$record")"
+    local pointer_line
+    if ! pointer_line="$(team_notify_pointer_line "$record" "$outcome")" || [ -z "$pointer_line" ]; then
+      team_notify_log_line "notify pointer derivation failed: seat=$agent outcome=$outcome"
+      pointer=failed
+    elif team_inbox_write_pointer_line "$pointer_line"; then
+      pointer=ok
+    else
+      team_notify_log_line "notify pointer write failed: seat=$agent outcome=$outcome task=$task identity=$identity"
+      pointer=failed
+    fi
   fi
-  if team_inbox_write_pointer_line "$pointer"; then
-    printf 'pointer=ok\n'
+  if team_notify_knock_ledger_append "$agent" "$task" "$cls" "$outcome" "$pointer" "$identity"; then
+    printf 'pointer=%s\nledger=ok\n' "$pointer"
   else
-    team_notify_log_line "notify pointer write failed: seat=$agent outcome=$outcome task=$task identity=$identity"
-    printf 'pointer=failed\n'
+    team_notify_log_line "notify knock ledger write failed: seat=$agent outcome=$outcome pointer=$pointer"
+    printf 'pointer=%s\nledger=failed\n' "$pointer"
   fi
   return 0
 }

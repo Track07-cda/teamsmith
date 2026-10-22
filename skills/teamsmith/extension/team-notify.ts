@@ -571,6 +571,14 @@ export default function (pi: ExtensionAPI) {
       log(`inbox write failed: ${String(error)}`, cfg)
     }
     const writeState = /^state=([a-z]+)/m.exec(writeOut)?.[1] ?? ''
+    // 行身份 = 敲门自己的去重身份，也是结果账（A2）的 identity= 字段：席位是 mergeKey 的第一个分量；
+    // 两条文本逐字相同但不同的行不会互吞，同一 run 的重复 settle 也绝不会二次敲门（此时它连条目都不入队）。
+    // `new` 与 `extended` 都算「这一行写了」—— extended 是把事件并进已有那一行；只有写盘失败才没有行身份。
+    if (writeState === 'new' || writeState === 'extended') {
+      const firstEvent = /^first=(\S+)/m.exec(writeOut)?.[1] ?? ''
+      const mergeKey = /^key=(\S*)/m.exec(writeOut)?.[1] ?? ''
+      identity = `line|${mergeKey}|${firstEvent}`
+    }
     if (writeState !== 'new') {
       // 扩展既有 run（state=extended）的 settle 不入队、不敲字：计数抖动看得见但不叫醒。
       // 写盘失败（异常 / state=failed）也不叫醒 —— 与手工路径的「写失败不得授权唤醒」同一条规则。
@@ -588,12 +596,6 @@ export default function (pi: ExtensionAPI) {
       settleSkipped('skipped:suspended', true)
       return
     }
-    const firstEvent = /^first=(\S+)/m.exec(writeOut)?.[1] ?? ''
-    const mergeKey = /^key=(\S*)/m.exec(writeOut)?.[1] ?? ''
-    // knock 的去重身份 = **行身份**（席位 + 合并键 + 首事件时间）：两条文本逐字相同但不同的行不会互吞，
-    // 同一 run 的重复 settle 也绝不会二次敲门（此时它连条目都不入队）。席位是 mergeKey 的第一个分量。
-    const lineIdentity = `line|${mergeKey}|${firstEvent}`
-    identity = lineIdentity
 
     if (!cfg.notifyTmux) {
       log('no knock (tmux notify disabled) inbox only', cfg)
@@ -622,7 +624,7 @@ export default function (pi: ExtensionAPI) {
     }
     // 敲门不再自己 send-keys：交给 teamsmith 的投递守卫 + 延后队列（delivery-guard）。
     // 为什么：扩展原来直接 `send-keys -l` + Enter，人正在 PM 输入框里写草稿时会把草稿粘走
-    // （D20 的原始事故）。入队时带上 knock 自己的**行身份**（lineIdentity），两层抑制不会打架。
+    // （D20 的原始事故）。入队时带上 knock 自己的**行身份**（identity，与结果账的 identity= 同一个值），两层抑制不会打架。
     // 失败只记日志：绝不回退到打字（那会悄悄重建同一个 bug）。
     const notice = `${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? `\n> ${last}` : ''}`
     const tmp = join(stateDir, `knock-${process.pid}-${Date.now()}.txt`)
@@ -631,7 +633,7 @@ export default function (pi: ExtensionAPI) {
       const out = execFileSync(
         'bash',
         [cli, '--root', root, 'outbox', 'enqueue', '--kind', 'knock', '--target', target,
-         '--from', agent, '--dedup', lineIdentity, '--from-file', tmp],
+         '--from', agent, '--dedup', identity, '--from-file', tmp],
         { encoding: 'utf8', timeout: 5000 },
       )
       log(`knock queued (${String(out).trim() || 'entry written'})`, cfg)
