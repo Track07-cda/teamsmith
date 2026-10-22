@@ -12,8 +12,10 @@ branch: task/P367-fixture-and-table-fixes
 
 ## 依据（P366 的归因，`docs/team/reports/P366-dev3.md`）
 
-1. **`38-a panel-choices.sh` 红不是整套独有**：宿主与容器各跑 `--select 38,57` 都是同三条红；夹具直跑（更早的树）
-   同样 `✓2 ✗3`。根因：**flip 树没有 `SKILL.md`**，于是 `team init` 在 `cmd-init.sh:307/313` 直接拒绝源。
+1. **`38-a panel-choices.sh` 红不是整套独有**：宿主与容器各跑 `--select 38,57` 都是同三条红；夹具直跑同样 `✓2 ✗3`。
+   根因：**flip 树没有 `SKILL.md`**，于是 `team init` 在 `cmd-init.sh:307/313` 直接拒绝源。
+   **出处已由 V95 查明：P361（`b3c91bcf`）落地前同一条命令是 `✓5 ✗0`** —— 是 P361 新增的「技能源必须带 `SKILL.md`」
+   这道门把这个夹具判死，而 P361 一次没动 `tests/panel-choices.sh`。所以这是**回归**，不是老坏。
 2. **`13` 行缺 `needs: 5`**：`--select 13` 会红，`--select 5,13` 是 `✓67 ✗0`；项目自带的逐键审计工具同样判
    `bad 13`。这不是本次改动引入，但**表本身错了**，红是它的正确反应。
 
