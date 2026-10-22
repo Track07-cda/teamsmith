@@ -575,6 +575,7 @@
 | P360 | npm bin 漏列四个入口（0.3.2） | dev3 | - | - | done |
 | P361 | handover技能打进包并由init安装 | dev3 | - | - | done |
 | V93 | P361独立验收：技能打包 | verify | - | - | done |
+| P362 | 按证据勾两份change任务清单 | dev3 | - | - | wip |
 
 ## 当前里程碑
 
