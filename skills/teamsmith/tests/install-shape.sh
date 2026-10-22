@@ -501,7 +501,7 @@ chk_prefix_install() { # <tree>：npm 私有 prefix 安装后与 bash 入口一�
 }
 
 chk_prefix_signal_entries() { # <prefix>：安装物的 pkill/killall/pgrep/pidof 在、解析到安装目录、判定生效
-  local prefix="$1" shim backends stub wlog log t form out rc line fargs missing=""
+  local prefix="$1" shim backends stub wlog log t form out rc line fargs missing="" link want resolved
   shim="$prefix/lib/node_modules/teamsmith/skills/teamsmith/scripts/shim"
   backends="$tmp/prefix-signal-backends"; rm -rf "$backends"; mkdir -p "$backends"
   stub="$backends/.witness"
@@ -523,19 +523,25 @@ WITNESS
   # P360（0.3.1 实测漏网）：**包里带着**不等于**装上能用** —— `npm i -g` 只在 package.json 的 `bin`
   # 里列了谁才在 prefix/bin 里建链接。0.3.1 的 bin 只有 team，于是用户 `pkill` 落到 /usr/bin，
   # 闸门在 npm 路线上等于不存在；而上面两条断言只查了「包内文件在不在」，两次复验都没抓住。
-  # 这里补的正是那个缺失的证伪者：装完必须在 prefix/bin 里解析到**这个包**的入口。
+  # 这里补的正是那个缺失的证伪者：装完必须在 prefix/bin 里解析到**这个包的**那个 shim。
+  # 两类形状分开判、一起点名（P360 红侧实测：`readlink -f` 对不存在的最后一级会原样吐出路径而不是空，
+  # 所以「在不在」必须先自己判，否则「bin 字段没列它们」那条永远打不出来；判据是解析到**这个包的**那个 shim，
+  # 所以指向包外、指向包内别的文件、悬空软链都落进 foreign）。
+  local miss_bin="" foreign=""
   for t in pkill killall pgrep pidof; do
-    local resolved
-    if [ ! -e "$prefix/bin/$t" ]; then
-      printf '安装后 prefix/bin 里没有 %s —— npm 的 bin 字段没列它（用户会落到 /usr/bin）\n' "$t"; return 1
-    fi
-    resolved="$(readlink -f "$prefix/bin/$t" 2>/dev/null || true)"
-    case "$resolved" in
-      "$prefix"/lib/node_modules/teamsmith/*) : ;;
-      *)
-        printf '安装后 prefix/bin/%s 指向 [%s]，不是这个包里的入口\n' "$t" "$resolved"; return 1 ;;
-    esac
+    link="$prefix/bin/$t"
+    want="$(readlink -f "$shim/$t" 2>/dev/null || true)"
+    if [ ! -e "$link" ] && [ ! -L "$link" ]; then miss_bin="${miss_bin:+$miss_bin }$t"; continue; fi
+    resolved="$(readlink -f "$link" 2>/dev/null || true)"
+    [ "$resolved" = "$want" ] && continue
+    foreign="${foreign:+$foreign }$t→[${resolved:-<解析不出>}]（要 $want）"
   done
+  if [ -n "$miss_bin" ]; then
+    printf '安装后 prefix/bin 里没有 %s —— npm 没为这些名字建链接（bin 字段没列它们，或列的目标不是包内文件）；用户敲这些名字会落到 /usr/bin\n' "$miss_bin"; return 1
+  fi
+  if [ -n "$foreign" ]; then
+    printf '安装后 prefix/bin 的入口没有落在包内 shim：%s\n' "$foreign"; return 1
+  fi
   for t in pkill killall pgrep pidof; do
     line="$(PATH="$shim:$backends:/usr/bin:/bin" command -v "$t" 2>/dev/null)"
     if [ "$line" != "$shim/$t" ]; then
@@ -786,7 +792,7 @@ if want pack; then
   if ! command -v npm >/dev/null 2>&1; then
     skip "本机没有 npm：打包清单与 prefix 安装都跳过（可见 SKIP，不是静默通过）"
   else
-    check_holds "声明面：一个 bin 键（team → bin/team.mjs）+ files 带 bin/" chk_pack_manifest "$tree"
+    check_holds "声明面：team + 四个信号入口都指向包内 shim + files 带 bin/" chk_pack_manifest "$tree"
     check_holds "打包清单：bin/team.mjs + 两个 SKILL.md + install.sh，不含账本" chk_pack_walk "$tree"
     check_holds "私有 prefix 安装：version/help 与四个信号入口都来自安装物" chk_prefix_install "$tree"
   fi
