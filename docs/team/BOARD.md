@@ -587,6 +587,7 @@
 | P365 | A2：敲门结果账与digest点名 | dev2 | - | - | done |
 | P368 | bg-ledger两条断言假设旧计数 | dev3 | - | - | wip |
 | V98 | P365独立验收：结果账与digest | verify | - | - | done |
+| V99 | P368独立验收：夹具按新契约 | dev | - | - | wip |
 
 ## 当前里程碑
 
