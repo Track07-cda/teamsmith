@@ -573,8 +573,8 @@
 | P359 | lint把/logs/整段跳过 | dev2 | - | - | done |
 | V92 | P359独立验收：扫描盲区 | dev | - | - | done |
 | P360 | npm bin 漏列四个入口（0.3.2） | dev3 | - | - | done |
-| P361 | handover技能打进包并由init安装 | dev3 | - | - | wip |
-| V93 | P361独立验收：技能打包 | verify | - | - | wip |
+| P361 | handover技能打进包并由init安装 | dev3 | - | - | done |
+| V93 | P361独立验收：技能打包 | verify | - | - | done |
 
 ## 当前里程碑
 
