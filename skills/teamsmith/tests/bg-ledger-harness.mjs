@@ -853,17 +853,24 @@ const groupMerge = async () => {
   }
 
   // ⑨ 行计数读者：合并行算一行；被后续事件扩展后仍是已读
+  //    turn-notice-in-pm-inbox（A1）之后本席位自己的记录行**不计流量**（一次交付让待办 +1 而不是 +2），
+  //    所以未读只能从**指针行**（docs/team/inbox/pm.md，agent: 是发送者）量：三条同键事件 = 一条指针行、
+  //    ack 之后再来一条同键事件仍并进那一行 → 仍然已读。合并语义（×N 与首末窗口）在记录行与指针行
+  //    两处同时验，所以这条仍然守着「合并」本身，而不是 A1 之前的计数。
   {
     const b = makeBase('merge-readers')
     resetNotify(b.base)
     for (const t of ['one', 'two', 'three']) await notify.settle(b.wt, 'stop', `MERGE-READERS ${t}`)
-    const before = inboxNewCount(b.base)
-    runCliRc(b.base, ['inbox', 'dev', '--ack'])
+    const before = inboxNewCount(b.base, 'pm')
+    runCliRc(b.base, ['inbox', 'pm', '--ack'])
     await notify.settle(b.wt, 'stop', 'MERGE-READERS four')
-    const after = inboxNewCount(b.base)
+    const after = inboxNewCount(b.base, 'pm')
+    const recLine = inboxAll(b.base)[0] ?? ''
+    const pmLine = inboxAll(b.base, 'pm')[0] ?? ''
     check('merge: line-counting readers count a merged line once',
-      before === 1 && after === 0 && /×4/.test(inboxAll(b.base)[0] ?? ''),
-      `before=${before} after=${after} :: ${inboxAll(b.base)[0] ?? ''}`)
+      before === 1 && after === 0 && inboxAll(b.base).length === 1 && inboxAll(b.base, 'pm').length === 1 &&
+      /×4 first=\S+ last=\S+/.test(recLine) && /×4 first=\S+ last=\S+/.test(pmLine),
+      `before=${before} after=${after} :: pm=${pmLine} || dev=${recLine}`)
   }
 
   // ⑩ 陈旧判据在合并行上读最后一条的 tip（更早的事件从明细里判）
@@ -954,16 +961,20 @@ const groupDetail = async () => {
   }
 
   // ⑥ 只读：不 ack、未读数不变
+  //    A1 之后本席位自己的记录行不计流量，所以未读用**同一个文件里的一条 [manual] 流量行**来量：
+  //    `--detail` 读的是记录，它不能把这条流量行 ack 掉（否则 before=1 → after=0 立刻红）。
   {
     const b = makeBase('detail-readonly')
     resetNotify(b.base)
     await notify.settle(b.wt, 'stop', 'READONLY one')
     await notify.settle(b.wt, 'stop', 'READONLY two')
+    runCliRc(b.base, ['notify', 'dev', 'READONLY manual notice'])
     const before = inboxNewCount(b.base)
     // --detail 在有缺口时**按契约非零退出**：夹具用 rc 宽容的调用（否则破坏树会把 harness 自身搞崩）
     runCliRc(b.base, ['inbox', 'dev', '--detail'])
     const after = inboxNewCount(b.base)
-    check('detail: detail reading does not acknowledge', before === 1 && after === 1, `before=${before} after=${after}`)
+    check('detail: detail reading does not acknowledge', before === 1 && after === 1,
+      `before=${before} after=${after} :: ${inboxAll(b.base).at(-1) ?? ''}`)
   }
 }
 

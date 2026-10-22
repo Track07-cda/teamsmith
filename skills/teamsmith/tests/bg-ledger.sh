@@ -252,11 +252,12 @@ if selects flip; then
     fi
   }
 
-  # ① 措辞回退：把挂起默认改回退休句 → 旧措辞零命中必须红
-  M1="$(flip_mut wording-rollback "$BG_EXT" 's#End your turn after starting; the completion wake-up#Harvest it with team_bg_wait before you end your turn#')"
-  flip_premise wording-rollback "$M1" 'Harvest it with team_bg_wait before you end your turn' has
-  run_harness flip-wording wording "$M1" "$NOTIFY_EXT"
-  expect_red flip-wording "wording: the retired duty wording is gone from every registered text" "$TMP/h-flip-green.log"
+  # ① （已退休，2026-10-22 P368）措辞回退的红侧：它断言的用例
+  #    「wording: the retired duty wording is gone from every registered text」由 P264（4cd5827e，门禁瘦身，
+  #    独立复验 V39 PASS）连同整批 text-class 断言一起删掉了。用例没了，这条破坏就再无人应答：
+  #    它在 flip 组里恒红「破坏后夹具仍然全绿」，而 wording 组实际只剩一条行为用例（完成叫醒点名两个 id）。
+  #    按净零纪律用一个活的红侧（⑲，merge 组的行计数读者）换掉一个死的。不恢复被删的措辞断言：
+  #    那是 P264 已裁定并独立复验过的删除，不属于本任务。
 
   # ② 删 start 行 → start 落盘断言必须红
   M2="$(flip_mut start-line "$BG_EXT" 's#appendLedger(root, `start id=${id} pid=${job.pid}`)#void 0 /* flip: start line removed */#')"
@@ -405,6 +406,16 @@ if selects flip; then
   flip_premise wake-suspended "$F18" 'if (suspended && false) {' has
   run_harness flip-wake-suspended wake "$BG_EXT" "$M18"
   expect_red flip-wake-suspended "wake: a suspended line never wakes" "$TMP/h-flip-green-notify.log"
+
+  # ⑲ P368 · merge 组的第二条红侧（行计数读者）：让**指针腿**不再合并（每个事件另起一行）
+  #    —— 一个 run 就在 pm.md 里变成三条待办，而契约是「一条合并行只算一行」。只改指针腿是因为
+  #    记录腿的合并由本组前面的用例钉住（一次全关合并会让 ② 先红、harness 在首个失败处退出，
+  #    就根本走不到 ⑨）；指针腿是 ⑨ 量的那条流量。
+  M19="$(flip_tree merge-off)"
+  F19="$(flip_tree_sed merge-off scripts/lib/cmd-agents.sh "s|^  team_inbox_write_with_lock pm \"\$content\" \"\$file\" '-' >/dev/null\$|  printf -- '- %s\\\\n' \"\$content\" >> \"\$file\"   # P368FLIP pointer leg does not merge|")"
+  flip_premise merge-off "$F19" 'P368FLIP pointer leg does not merge' has
+  run_harness flip-merge-off merge "$BG_EXT" "$M19"
+  expect_red flip-merge-off "merge: line-counting readers count a merged line once" "$TMP/h-flip-green-notify.log"
 
   # 还原后绿：pristine 树重跑一遍（上面所有破坏都只写 scratch 副本）
   section "flip · 还原后绿（pristine 树重跑）"

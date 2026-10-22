@@ -8193,10 +8193,15 @@ elif [ -z "$TS_RUNNER" ]; then
 elif [ -f "$SKILL_DIR/tests/bg-ledger.sh" ]; then
   # 13c 折进（P237 §4.3）：A 刀的 wording/ledger 两组与 P236 的 suspend-shape/owner-scope 同入口同跑
   # —— 工具面口径与账本两类行从这里进主门禁（此前只在独立入口里跑）。
+  # P368：merge/detail 两组此前**不在**子集里，原因是承接缺口而不是判定：这两组属于 P251
+  # turn-notice-merge，落地晚于 P237 §4.3 的折进（当时入口里还没有这两个组），此后 P251 的验收
+  # 只跑了独立入口，于是合并语义与明细读面从未进过门禁 —— A1 改了计数判据之后它们悄悄变红，
+  # 门禁与 V96 都没看见。子集就在这里补齐；下面两条按**用例名**断言它们真的跑了（去掉子集里的
+  # 这两个键 → 这两条 ✗，本段变红，不会静默少跑）。
   P236_RC=0
-  bash "$SKILL_DIR/tests/bg-ledger.sh" --select wording,ledger,suspend-shape,owner-scope >"$TMP/p236-owner.log" 2>&1 || P236_RC=$?
+  bash "$SKILL_DIR/tests/bg-ledger.sh" --select wording,ledger,suspend-shape,owner-scope,merge,detail >"$TMP/p236-owner.log" 2>&1 || P236_RC=$?
   if [ "$P236_RC" -eq 0 ]; then
-    ok "P236/P237 车道合同入口：wording+ledger+suspend-shape+owner-scope 全绿（$(grep -ac '✓' "$TMP/p236-owner.log" || true) 条断言）"
+    ok "P236/P237 车道合同入口：wording+ledger+suspend-shape+owner-scope+merge+detail 全绿（$(grep -ac '✓' "$TMP/p236-owner.log" || true) 条断言）"
   else
     bad "P236/P237 车道合同入口有失败（rc=$P236_RC）"
     grep -a '✗' "$TMP/p236-owner.log" | head -8 | sed 's/^/      /'
@@ -8209,6 +8214,9 @@ elif [ -f "$SKILL_DIR/tests/bg-ledger.sh" ]; then
   assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev2)" "空席位（dev2）不被别人的作业打成挂起"
   assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a seat with no job of its own is not suspended by another seat’s job (dev3)" "第二个非拥有者席位（dev3）同样不被别人的作业打成挂起"
   assert_has "$TMP/p236-owner.plain.log" "✓ owner-scope: a live record with a missing, relative or unresolvable cwd does not suspend (fail-closed)" "缺 cwd / 解析失败的畸形记录不判挂起"
+  # P368：合并语义（×N 与行计数读者）与明细读面（--detail 不 ack）从独立入口折进本段。
+  assert_has "$TMP/p236-owner.plain.log" "✓ merge: line-counting readers count a merged line once" "P251 合并行在行计数读者里只算一行（merge 组折进 13c）"
+  assert_has "$TMP/p236-owner.plain.log" "✓ detail: detail reading does not acknowledge" "P251 明细读面只读不 ack（detail 组折进 13c）"
 else
   bad "13c 缺 tests/bg-ledger.sh（P236 的挂起归属入口）"
 fi
