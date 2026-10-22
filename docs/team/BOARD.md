@@ -585,6 +585,7 @@
 | V96 | P364独立验收：指针行与一份计数 | verify | - | - | done |
 | V97 | P367独立验收：flip树与写穿缺陷 | dev | - | - | done |
 | P365 | A2：敲门结果账与digest点名 | dev2 | - | - | wip |
+| P368 | bg-ledger两条断言假设旧计数 | dev3 | - | - | wip |
 
 ## 当前里程碑
 
