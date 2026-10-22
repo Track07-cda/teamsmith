@@ -2844,7 +2844,12 @@ team_orphan_read_environ() { # <pid> → 环境文本；读不到 → 非 0
   local f
   f="$(team_orphan_proc_dir "${1:-}")/environ"
   [ -r "$f" ] || return 1
-  tr '\0' '\n' < "$f" || return 1
+  # P366：`[ -r ]`（access(2)）与真正的读**不是同一道门**。容器 `--pid=host` 下两者差得很远（实测一次全扫：
+  # access 答「可读」600 条，其中 599 条真读被拒），宿主上也有同形状的进程（非 dumpable 的同 uid 进程）。
+  # 读放在子 shell 里、把内核/shell 的报错收进**这条判定本身**：读不到 → rc≠0（身份未知，调用方跳过、
+  # 不猜身份），stdout/stderr 一个字节都不多；读得到时 stdout 与改动前逐字节相同（子 shell 只透传，
+  # 不缓冲、不改写）。诊断由**返回值**承担，不许让 shell 的报错顶替读数。
+  ( tr '\0' '\n' < "$f" ) 2>/dev/null || return 1
   return 0
 }
 
