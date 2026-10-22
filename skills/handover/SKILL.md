@@ -1,6 +1,6 @@
 ---
 name: handover
-description: Cut a long-running agent session over to a fresh one without losing the project — writes a pointer-only handover document (no duplicated specs, no transcript summary), records the questions the user asked and the agent has not answered, records side effects the agent caused, then stands the old session down so the document cannot go stale. Use when the user says "handover", "交接", "hand over the session", "handoff", "start a new session", or when a session has run long enough that compaction is visibly changing behaviour (a model that stopped emitting reasoning, answers getting shorter or more generic, an agent re-deriving facts it already knew).
+description: Hand over a long-running session to a fresh one without losing the project: write a pointer-only HANDOVER.md (pointers, never copied specs), record the questions the user asked and never got answered and the side effects the agent caused, then stand the old session down so the document cannot go stale. Triggered by the user: the user says "handover" / 「交接」.
 license: MIT
 metadata:
   version: "0.1.0"
@@ -8,13 +8,9 @@ metadata:
 
 # handover · cut over the session, do not copy it
 
-A long session stays *sized* fine under context compaction, but it does not stay *shaped* fine: the model still
-sees that the conversation is long and that earlier turns were rewritten. Some models degrade there — they stop
-emitting reasoning, or start answering from the shape of the transcript instead of from the disk. No amount of
-compaction fixes that; only a new session does. This skill is how the old session hands its state to the new one.
-
-**A handover is a cut-over, not a copy.** The document must be short, must point at what already exists on disk,
-and the old session must stop working the moment it is written.
+The user decides when this happens; do not propose a handover on your own. When it does, the job is a
+**cut-over, not a summary** — a new session is the only thing that gives a fresh shape, so the document must be
+short, must point at what already exists on disk, and the old session must stop the moment it is written.
 
 ## Step 1 · Land the state (this is the gate)
 
