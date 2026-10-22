@@ -575,10 +575,10 @@
 | P360 | npm bin 漏列四个入口（0.3.2） | dev3 | - | - | done |
 | P361 | handover技能打进包并由init安装 | dev3 | - | - | done |
 | V93 | P361独立验收：技能打包 | verify | - | - | done |
-| P362 | 按证据勾两份change任务清单 | dev3 | - | - | wip |
+| P362 | 按证据勾两份change任务清单 | dev3 | - | - | done |
 | P363 | 通知落进PM收件箱（提案） | dev2 | - | - | done |
 | P364 | A1：指针行与一份计数 | dev3 | - | - | wip |
-| V94 | P362独立验收：勾得对不对 | verify | - | - | wip |
+| V94 | P362独立验收：勾得对不对 | verify | - | - | done |
 
 ## 当前里程碑
 

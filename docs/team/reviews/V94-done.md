@@ -1,0 +1,4 @@
+- 2026-10-22T08:33:12Z · `team close V94 --status done` · FORCED：PM 显式覆盖（理由：verify 阶段的交付物就是复验记录 docs/team/reviews/V94.md（判定 PASS，已并入 main）；该任务的被检对象 P362 已按同一记录关单。）
+  -   - ① 复验记录 docs/team/reviews/V94.md：存在，但没有「判定: **…**」这一行（不能当作已复验的证据）
+  -   - ② 分支是否已并入 main：分支 task/V94-tick-checklists-verify 解析不到 commit
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/V94.md（用 ① 的 team review 生成，判定 PASS）
