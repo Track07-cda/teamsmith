@@ -105,6 +105,15 @@ inbox_hash() { # <仓库>：真实仓库收件箱指纹（M7.2 的反向守卫�
       | while IFS= read -r f; do sha256sum "$f"; done | sha256sum | awk '{print $1}'
   )
 }
+# P360 实测（2026-10-22）：指纹比对在**活着的项目**上必然红 —— 收件箱由投递机制与巡检持续写入，
+# 跟夹具一点关系都没有（那条红在我自己跑的三次里出现两次，另一次恰好在投递间隙）。判据的本意是
+# 「夹具不许往真账本喂幻影待办」，所以判它自己留下的痕迹：本轮私有临时根路径出现在真实收件箱里。
+inbox_fixture_leaks() { # <仓库> <本轮私有根>：真实收件箱里出现本轮夹具路径的行数
+  ( cd "$1" 2>/dev/null || return 0
+    find docs/team/inbox -type f 2>/dev/null | sort \
+      | while IFS= read -r f; do grep -hF -- "${2:-/nonexistent}" "$f" 2>/dev/null; done | wc -l | tr -d ' '
+  )
+}
 
 # ── 版本锚点（P218）：唯一来源 = 那棵树自己的 common.sh（TEAM_VERSION），本文件里不出现版本字面量 ──
 # 现场（P214）：这四处改坏副本的 sed 原来写死成当时的版本号（`1.42.0`）；版本改成 0.1.0 后 sed 空转 → 副本没被改坏 →
@@ -1094,7 +1103,9 @@ PYEXT
 fi
 
 # ---------------------------------------------------------------- 结果
-assert_eq "反向守卫（M7.2）：整轮夹具没往真实仓库收件箱写一个字节" "$(inbox_hash "$tree")" "$inbox_before"
+# 判「夹具自己的痕迹」而不是「文件有没有被任何进程写过」：活着的项目里收件箱一直在长。
+assert_eq "反向守卫（M7.2）：真实仓库收件箱里没有本轮夹具路径的痕迹" \
+  "$(inbox_fixture_leaks "$tree" "$tmp")" "0"
 printf '\n\033[1m== 结果 ==\033[0m  ✓ %d  ✗ %d  SKIP %d\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ] && exit 0
 exit 1
