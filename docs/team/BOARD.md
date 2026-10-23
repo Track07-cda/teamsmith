@@ -592,7 +592,7 @@
 | P370 | 通知存全文 apply | dev2 | - | - | done |
 | V100 | P370独立验收：全文与asks | verify | - | - | done |
 | P371 | 勾两份通知类清单 | dev3 | - | - | done |
-| V101 | bfc独立复验（6.1-6.4） | verify | - | - | wip |
+| V101 | bfc独立复验（6.1-6.4） | verify | - | - | done |
 | P372 | gwp 3.8：缓存反例 | dev2 | - | - | done |
 | P373 | 补六条没被改坏过的红侧 | dev | - | - | done |
 | V102 | turn-notice独立复验（5.1-5.4） | dev-bob | - | - | done |
