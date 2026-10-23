@@ -33,3 +33,22 @@ branch: task/V100-notice-fulltext-verify
 
 只读代码、破坏只在 `/var/tmp` 私有副本、只写 `docs/team/reports/V100-verify.md` 与自己的线程。不跑整套；
 `--select 7,13,13b,25` 与自造场景足够。结论先写 PASS/PARTIAL/FAIL，单列「必须修」与「未验」。
+
+## 第二轮（定点复看，只验你点的两处 + 一条连带；候选 `c1a3f4d0`）
+
+作者按你 §9/§10 改了：① 三处形状比对现在比**三份真样品**（缺一份 = 红，不是 `continue`）；② `TEAM_INBOX_MAX_CHARS`
+的新语义（预览长度）落到四面：`cmd-config.sh` schema、`templates/config.sh.tmpl`、`references/config.md`、以及面板中英
+`label_TEAM_INBOX_MAX_CHARS`（含按钉住工具链重建 `panel.js`）。它自报变异树上 `--select 12b-pi` = `✓472 ✗2`（正是那两条）。
+
+**只做四件：**
+
+1. **`--select 12b-pi` 在候选上必须绿**（你上一轮实测 `✓470 ✗1`）；贴读数与 rc。
+2. **三份样品各有真写入者**：静态核 `grep -n 'p370-marker-(knock|spool|wake)\.txt'`，三个名字各有「写」与「读」两侧；
+   再自己造一次「删掉 spool 样品」→ 必须**红并点名缺哪一份**（不是静默 continue）。
+3. **四面描述一致**：schema 描述、`config.md`、模板注释、面板中英标签四处的措辞都表达「预览长度」且互相不矛盾；
+   面板若改了源码，`panel.js` 必须是按钉住工具链重建的（`--select 26-a` 的沙盒重建逐字节比对）。
+4. **没有顺手改语义**：`git diff main <候选> -- skills/teamsmith/scripts/lib/cmd-agents.sh` 里，`TEAM_INBOX_MAX_CHARS`
+   仍只作用于**预览**（记录侧无预算）——贴那一处 diff 证明。
+
+结论只写 PASS 或 FAIL。仍不跑整套；`--select 12b-pi,13b,26-a` 与自造场景足够。
+
