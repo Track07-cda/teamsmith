@@ -592,6 +592,7 @@
 | P370 | 通知存全文 apply | dev2 | - | - | done |
 | V100 | P370独立验收：全文与asks | verify | - | - | done |
 | P371 | 勾两份通知类清单 | dev3 | - | - | wip |
+| V101 | bfc独立复验（6.1-6.4） | verify | - | - | wip |
 
 ## 当前里程碑
 
