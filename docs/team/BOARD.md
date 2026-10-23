@@ -589,6 +589,7 @@
 | V98 | P365独立验收：结果账与digest | verify | - | - | done |
 | V99 | P368独立验收：夹具按新契约 | dev | - | - | done |
 | P369 | 通知存全文（提案） | dev-bob | - | - | done |
+| P370 | 通知存全文 apply | dev2 | - | - | wip |
 
 ## 当前里程碑
 
