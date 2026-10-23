@@ -31,7 +31,8 @@ A2 是结果账与显示面。拆开是因为 A1 自己就是一次可交付的�
 - [x] 1.1.1 `team_inbox_write_locked` 拆出 `team_inbox_merge_or_append <recipient> <content> <file> <detail|->`：
   `detail=-` 表示不写明细；返回与今天同形的 `state=`/`first=`/`key=`。记录行那条腿的调用参数完全不变。
   ↳ 证据（P371）：`scripts/lib/cmd-agents.sh:1981` `team_inbox_merge_or_append() { # <recipient> <行> <文件> <明细|-> → state=new|extended first=<ISO> key=<键>`；两条腿的行为断言是 `smoke.sh:5099`（`state=new`）与 `smoke.sh:5122`（`state=extended`）。
-- [ ] 1.1.2 红侧：`--select 13` 的 F17 断言（同 run 三事件 → 一行 `×3` + `state/notify.log` 三条）不改一字仍绿；
+- [x] 1.1.2 红侧：`--select 13` 的 F17 断言（同 run 三事件 → 一行 `×3` + `state/notify.log` 三条）不改一字仍绿；
+  - 2026-10-23 红侧实测（P373，`docs/team/reports/P373-dev.md` §1）：改坏 → 贴出的红行原文 → 还原 → 绿。
   把 `detail=-` 误接到记录行 → `×3` 与明细数分家 → 该断言红。
   ↳ 缺（P371）（红侧没做，整条不勾）：前半句有据 —— §13 的 F17 一字未改仍绿（P364 报告 §4、P365 报告 §1 两次选段都是 `13 · notify 扩展 · ✓1 ✗0`）；但「把 `detail=-` 误接到记录行 → 该断言红」这次破坏**没有任何在案实测**（P364 报告 §3 的三次变异是 R2/R4/R6）。要做到才算：真改一处 → §13 的退出码非 0 → `git checkout` 还原 → 同一段再绿，读数进报告。
 
@@ -63,7 +64,8 @@ A2 是结果账与显示面。拆开是因为 A1 自己就是一次可交付的�
 - [x] 1.4.2 `scripts/team` 的分派表加一行；`tests/help-surface.sh` 的内部命令白名单（`__inbox-write __panel-data`）
   与覆盖断言加 `__notify-settle`。
   ↳ 证据（P371）：`scripts/team:105` `__notify-settle) team_cmd_notify_settle "$@" ;;  # 内部：settle 的旁路记账入口…`；`tests/help-surface.sh:815` `local internal="__inbox-write __notify-settle __panel-data"`。
-- [ ] 1.4.3 红侧：命令未注册 → help-surface 的覆盖断言红；`pm.md` 不可写（只读文件）→ 打印 `pointer=failed`、
+- [x] 1.4.3 红侧：命令未注册 → help-surface 的覆盖断言红；`pm.md` 不可写（只读文件）→ 打印 `pointer=failed`、
+  - 2026-10-23 红侧实测（P373，`docs/team/reports/P373-dev.md` §1）：改坏 → 贴出的红行原文 → 还原 → 绿。
   退出 0、且记录行仍在。
   ↳ 缺（P371）（前半条没做，整条不勾）：后半条有真断言在跑（`smoke.sh:5149-5159` 的四条 R10 断言：`pointer=failed`、退出码 0、`pm.md` 一行没多、记录行照旧落盘）；**缺**「命令未注册 → help-surface 的覆盖断言红」这次破坏 —— 没有任何在案报告记录过把 `scripts/team:105` 那一行删掉再跑 help-surface。要做到才算：删那一行 → help-surface 的 O2 覆盖断言非 0 → 还原 → 绿。
 
@@ -75,7 +77,8 @@ A2 是结果账与显示面。拆开是因为 A1 自己就是一次可交付的�
 - [x] 1.5.2 顺序：记录行（`__inbox-write`，不变）→ 敲门判定与入队（不变）→ `__notify-settle`。指针失败只进扩展日志，
   **不**回退打字、**不**抑制已经入队的敲门、**不**改变退出。
   ↳ 证据（P371）：`team-notify.ts` 的顺序是 记录行（`writeState` 已定）→ 敲门判定与 `outbox enqueue` → 收尾的 `settleSkipped('enqueued', true)`；`settleSkipped` 的 `catch` 只 `log(...)`（原文：`the pointer is a side channel, the knock is untouched`），没有任何回退打字或改变退出的路径。
-- [ ] 1.5.3 红侧 R1/R8：删掉那一次 `__notify-settle` 调用 → `pm.md` 无指针行 → 夹具红；把一个分支的 outcome 写成
+- [x] 1.5.3 红侧 R1/R8：删掉那一次 `__notify-settle` 调用 → `pm.md` 无指针行 → 夹具红；把一个分支的 outcome 写成
+  - 2026-10-23 红侧实测（P373，`docs/team/reports/P373-dev.md` §1）：改坏 → 贴出的红行原文 → 还原 → 绿。
   别的类 → 该类的断言红。
   ↳ 缺（P371）（两个破坏都没做，整条不勾）：R8 只做了一半 —— P365 报告 §5 的 M1「不写账本」→ ✓149 ✗16；**缺** R1「删掉那一次 `__notify-settle` 调用 → `pm.md` 无指针行 → 夹具红」与「把一个分支的 outcome 写成别的类 → 该类的断言红」，两者都无在案实测。要做到才算：在 `team-notify.ts` 里各改一处 → `§13` 的退出码非 0（`smoke.sh:7966-7999` 的 40–51 号 FAIL 之一）→ 还原 → 绿。
 
@@ -97,7 +100,8 @@ A2 是结果账与显示面。拆开是因为 A1 自己就是一次可交付的�
 - [x] 1.7.1 合并行的 `×N` 改成与**该行合并键**的记录比（键的第一个分量就是发送者）；「该席位的原始记录」那一行改成
   按文件里实际出现的键列出并点名席位。缺口判据（缺文件、被轮转出去）不放松。
   ↳ 证据（P371）：`cmd-status.sh:1190-1235` 的 `--detail` 用 `team_notify_line_key` 收集当前代的键（`RKEYS`/`KC`/`SHOWN`），合并行按**该行自己的键**计数并打印 `键 agent:%s · %s · %s · awaiting=%s`；缺口分支（`count < n` → 报「缺口」并 `rc=1`）一字未松。
-- [ ] 1.7.2 红侧 R12：回到按文件席位取记录 → `team inbox pm --detail` 对一条 `×N` 指针行报缺口 → 红。
+- [x] 1.7.2 红侧 R12：回到按文件席位取记录 → `team inbox pm --detail` 对一条 `×N` 指针行报缺口 → 红。
+  - 2026-10-23 红侧实测（P373，`docs/team/reports/P373-dev.md` §1）：改坏 → 贴出的红行原文 → 还原 → 绿。
   ↳ 缺（P371）：断言在跑（`smoke.sh:5146-5148` 的三条 R12 断言：退出码 0、`记录 2/2 OK`、`不报缺口`），但「回到按文件席位取记录 → 报缺口」这次破坏没有在案实测。要做到才算：把 `--detail` 的计数键改回文件席位 → 对一条 `×N` 指针行打印「缺口」且 `rc=1` → 还原 → 绿。
 
 ### 1.8 生效文档

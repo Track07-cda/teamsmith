@@ -102,7 +102,8 @@ A 声明 `change: notice-fulltext-and-asks`、`deltas: notify-and-inbox`（delta
   `Inbox summary chars` → `Preview chars`（en ≤ 22 格）。改完按钉住的工具链重建：
   `cd skills/teamsmith/scripts/panel && bun install --frozen-lockfile && bash build.sh`，并跑 §28 的键集合走查与
   §26-a 的沙盒重建逐字节比对 —— 手改 `panel.js` 必红。
-- [ ] 4.5 死默认：`common.sh:1125` 的 `TEAM_INBOX_MAX_CHARS="${TEAM_INBOX_MAX_CHARS:-150}"` 今天没有 shell 读者。
+- [x] 4.5 死默认：`common.sh:1125` 的 `TEAM_INBOX_MAX_CHARS="${TEAM_INBOX_MAX_CHARS:-150}"` 今天没有 shell 读者。
+  - 2026-10-23 死默认已删（提交 `P373`）：`--select 13` ✓、`--select 33` ✓、`config set 300` 仍生效。
   唯一读者是 `extension/team-notify.ts:279`，而它用 `readCfg` 直接解析 `.pi/team/config.sh`、不看环境。
   现场（P369 跑过）：`grep -rn 'INBOX_MAX_CHARS' skills/teamsmith/ | grep -v panel.js` → 扩展 1 处、schema 1 处、
   `TEAM_CONFIG_FLAT_KEYS` 1 处、`templates/config.sh.tmpl` 的默认值、docs 3 处、面板标签 2 处 —— **没有一处是 shell 逻辑**。
