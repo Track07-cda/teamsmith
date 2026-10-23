@@ -44,3 +44,23 @@ PM 复跑过它的结构性主张，要求你在 design 的理由段把措辞改
 写集：`skills/teamsmith/extension/team-notify.ts`、`skills/teamsmith/scripts/lib/cmd-agents.sh`、
 `skills/teamsmith/scripts/lib/cmd-status.sh`、必要时 `skills/teamsmith/tests/smoke.sh` 与 `tests/bg-ledger*.{sh,mjs}`、报告。
 不改产品其它面、不新增配置键、不碰面板。
+
+## 返修（V100 判 PARTIAL 之后；只做这三件，不重开设计）
+
+V100（`docs/team/reports/V100-verify.md`）判 PARTIAL：**五条产品面全部成立**（4 KB 全文 4096 B 与原文 `cmp` 逐字节相同；
+短消息三处都不加 `truncated=`；71680 B → 留 65536 B + `hard-limit` 且**字段区无 `full=`**；`asks` 四条现场读 `1/2/缺/缺`；
+别人的契约未动）。要改的是它**自己新增的那条门禁断言**，另加一条文档项：
+
+1. **（必修）样品文件名不一致，于是 bash 那一层从未参与比对**：spool 样品被写进 `$TMP/p370-marker.txt`（`smoke.sh:9789`），
+   而形状循环只读 `$TMP/p370-marker-spool.txt`（`smoke.sh:9979`），循环对缺失文件是 `continue` —— 也就是说这条断言
+   宣称比对「三处实现（TS×2、bash×1）」，实际只比了两处。`--select 12b-pi` 实测 `✓470 ✗1`，唯一红正是你写的那条
+   护栏 `✗ P370 2.1.1：至少两处样品参与了比对（不是空转）（期望 [yes]，实际 [no(1)]）`——**它自己是好的，是你的
+   文件名错了**。修法：统一成一个名字，并**把循环对缺失样品的 `continue` 改成红**（缺一个就不算比对过；这正是
+   「跳过不是通过」那条纪律）。三个样品必须各有真写入者，断言里点出「三处参与」而不是「至少两处」。
+2. **（必修）`TEAM_INBOX_MAX_CHARS` 的语义变了，声明面要跟着变**：它原来是「收件箱正文截断长度」，现在是「预览长度」。
+   `cmd-config.sh` 的 schema 描述、`references/config.md`、以及**面板的中英标签**（`label_TEAM_INBOX_MAX_CHARS`）都要
+   改成新语义——按仓里的规矩，改描述语要动四面（schema / 模板 / config.md / 面板标签），缺一处就是连带红。
+3. **（记录）** 报告里补一句：`--select 12b-pi` 现在必须绿（改前 `✓470 ✗1`）。
+
+改完交 V100 同一席位做第二轮定点复看：只看这三件 + 一次 `--select 12b-pi`、`--select 13b`（样品来源）与面板标签那两组断言。
+

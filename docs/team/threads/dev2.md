@@ -324,3 +324,6 @@ P346第三轮（F2 裁定）：V86 判 FAIL 只有 F2 不成立，它的分析�
 
 ### 2026-10-21T05:36:31Z · from: pm · re: P346
 P346：你报的「三红是既有 loop-inventory 锚点缺陷、纯净 main 复现」这条**不成立**——我刚在两棵树上核过：main 上 `--loop-check` 全过（清单第 66 行 = 19596 / `$P55_WMAX`），而你分支上清单第 66 行还是 `19166 / 1000`（旧锚点），所以是**这次 merge 把 main 的清单修复回退成了分支侧旧版本**（d92f0a17 那版）。修法：`git checkout main -- skills/teamsmith/tests/loop-inventory.tsv`（这个文件不是你的写集），重跑 `--loop-check` 必须 86/86 全过，并确认相对 main 该文件逐字节相同；然后重报那三条红到底是不是还有（我预计它们会一起消失）。另：以后任何 `git merge main` 之后都跑一次 `section-guard.sh --loop-check`——今晚这个坑我已经踩了五次，这是第六次，只是这次在你的分支上。
+
+### 2026-10-23T06:34:58Z · from: pm · re: P370
+V100判PARTIAL，但**产品面五条全成立**（4KB全文逐字节、短消息不加标记、71680B→65536B+hard-limit无full=、asks 1/2/缺/缺、别人契约未动）。要改三件，任务书末节已写：①必修——spool 样品写到 p370-marker.txt 而循环读 p370-marker-spool.txt（smoke.sh:9789 vs 9979），循环对缺失文件是 continue，于是 bash 那层从未参与比对；统一名字并把「缺样品」改成红（断言改成「三处参与」而不是「至少两处」）。②必修——TEAM_INBOX_MAX_CHARS 语义从「收件箱截断」变成「预览长度」，四面描述要跟着改（schema/config.md/模板/面板中英标签）。③报告补一句 --select 12b-pi 现在必须绿。改完交 V100 同席位定点复看。
