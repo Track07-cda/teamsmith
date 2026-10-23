@@ -20,7 +20,7 @@
 ## 1 · 7.1 定点执行（不是查表）
 
 ```bash
-# /home/yikdata/.../.worktrees/dev3
+# $HOME/Documents/syncthing/Work/Projects/pm-skills/.worktrees/dev3
 TMPDIR=/var/tmp/v103/tmp/7-1 TEAM_SMOKE_LOCK=/var/tmp/v103/lock/7-1.lock TEAM_SMOKE_LOCK_WAIT=1800 \
   bash skills/teamsmith/tests/smoke.sh --select 34,34b,34d,36
 ```
