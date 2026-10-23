@@ -7,7 +7,7 @@ category: analysis
 change: notice-fulltext-and-asks
 specs: notify-and-inbox#A turn-end notification appends one inbox line and knocks once
 anchor: none (infra) — change 自带 delta
-deltas: notify-and-inbox/spec.md
+deltas: notify-and-inbox
 branch: task/P369-notice-fulltext-propose
 
 ## 用户的裁定（不要重新论证）
