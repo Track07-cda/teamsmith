@@ -183,10 +183,14 @@ A2 是结果账与显示面。拆开是因为 A1 自己就是一次可交付的�
 
 ## 5 · verify（独立席位，非 A1/A2 作者）
 
-- [ ] 5.1 在自己的克隆上定点**执行**（不是查表）：`--select 7,13,25`，贴结果行与新增断言原文；不复用 apply 的日志。
-- [ ] 5.2 反向对照只做两条（其余由 §3 表在 apply 阶段完成，不重复）：R4（合并取首事件的 `knock=`）与 R6（记录判据）
+- [x] 5.1 在自己的克隆上定点**执行**（不是查表）：`--select 7,13,25`，贴结果行与新增断言原文；不复用 apply 的日志。
+  - 2026-10-23 V102 独立执行：`--select 7,13,25` 在其自有副本 `✓245 ✗0`、rc=0（无「本次运行无效」）。
+- [x] 5.2 反向对照只做两条（其余由 §3 表在 apply 阶段完成，不重复）：R4（合并取首事件的 `knock=`）与 R6（记录判据）
+  - 2026-10-23 V102 两条反向对照：R4（合并取新事件 `knock=`）与 R6（指针行改写记录行）都真红、还原后同一选段再绿。
   —— 这两条是「run 级字段」与「一份计数」的唯一控制。
-- [ ] 5.3 `openspec validate --all --strict`、`bash skills/teamsmith/tests/spec-refs.sh --check` 与 `--flips`、
+- [x] 5.3 `openspec validate --all --strict`、`bash skills/teamsmith/tests/spec-refs.sh --check` 与 `--flips`、
+  - 2026-10-23 V102：`openspec validate --all --strict`、`spec-refs --check`、`--flips`、账本禁令、`git diff --check` 全绿；另按本条点名的四项回归跑 `--select 12f,51` `✓55 ✗0`（1488 s，其中 §51 自嵌套 §33 `✓331 ✗0`）。
   `git diff --check`；确认没有回归：`§25` 的手工通知计数、`§12f` 的段头字面量、`§13` 的扩展字节断言、
   `§51` 的内部命令白名单。
-- [ ] 5.4 复验记录写 `docs/team/reviews/turn-notice-in-pm-inbox.md`；**只有复验通过且用户确认后** PM 才归档。
+- [x] 5.4 复验记录写 `docs/team/reviews/turn-notice-in-pm-inbox.md`；**只有复验通过且用户确认后** PM 才归档。
+  - 2026-10-23 V102：`docs/team/reviews/turn-notice-in-pm-inbox.md` 落盘（P371 §结论第 4 条指出的缺口因此闭合）。
