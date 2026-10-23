@@ -174,3 +174,89 @@ $ cd /var/tmp/v102-priv && bash skills/teamsmith/tests/smoke.sh --select 12f,51 
   唯一覆盖的判据要看逐条变异，不在本复验的分工里。
 - 沿用 V98 的已知未验项：扩展 `suspended` 分支的 `identity=` 只有静态证据，没有行为级断言。
 - 本记录**不做归档**，也不改任何清单条目：`openspec archive` 与勾选是 PM 在用户确认后的动作。
+
+## 定点补验（V104）
+
+- 判定: **PASS**
+- task: V104 · 席位 dev-bob · phase verify · 受检 `074722c4`
+- 补的是什么：V99 的结论仍成立，本单只补『同席位』这个纪律缺口 —— V99 的执行席位 `dev` 后来做了本
+  change 的 `P373`，同一席位在同一 change 里既实现又复验；不重开 V99 验过的东西（它验的是 P368 的夹具
+  契约，与 P373 的红侧是两件事）。
+
+现场：私有副本 `/var/tmp/v104/priv`（`git clone --shared -b task/V104-p368-spot`，HEAD `074722c4`，两轮
+运行前后 `git status --porcelain --untracked-files=all` 都是 0 个文件）；夹具仓库 `/var/tmp/v104/fix`
+（先剥掉调用者的 `TEAM_*` 与 `TMUX*` 再跑 CLI，`team paths` 解析出 `main_root=/var/tmp/v104/fix` 之后才
+造现场）；日志 `/var/tmp/v104/logs/`。没有跑整套，没有跑容器。
+
+### 1 · P368 的核心主张在本提交上再成立一次
+
+```
+$ cd /var/tmp/v104/priv && bash skills/teamsmith/tests/bg-ledger.sh --select merge,detail
+bg-ledger：23 passed, 0 failed                        # exit 0，16.7s
+```
+
+构成：`merge` 组 13 条、`detail` 组 7 条、夹具自证 3 条（`team paths` 指向夹具仓库、真项目 `state/` 与
+`inbox` 零夹具标记 + 前后快照一致）。P368 的验收记录写的是 22 passed，我这里 23 —— 差的这一条是 P368
+合入之后才有的用例，两处数字不一致仅登记备查，「绿」这个结论不受影响。
+
+### 2 · 从 §13c 的子集里去掉 merge/detail：可见地红，并且点名
+
+变异只有一行（`skills/teamsmith/tests/smoke.sh:8362`，只发生在私有副本里）：
+
+```diff
+-  bash "$SKILL_DIR/tests/bg-ledger.sh" --select wording,ledger,suspend-shape,owner-scope,merge,detail >"$TMP/p236-owner.log" 2>&1 || P236_RC=$?
++  bash "$SKILL_DIR/tests/bg-ledger.sh" --select wording,ledger,suspend-shape,owner-scope >"$TMP/p236-owner.log" 2>&1 || P236_RC=$?
+```
+
+```
+$ bash skills/teamsmith/tests/smoke.sh --select 13c                     # exit 1
+  ✗ P251 合并行在行计数读者里只算一行（merge 组折进 13c）（…/p236-owner.plain.log 中找不到 [✓ merge: line-counting readers count a merged line once]）
+  ✗ P251 明细读面只读不 ack（detail 组折进 13c）（…/p236-owner.plain.log 中找不到 [✓ detail: detail reading does not acknowledge]）
+#12 13c · 团队后台车道（M27/M30）：拉起链注入 / 收割契约 / 账本 / worktree 侧 · 参考 用时 32s · ✓65 ✗2 SKIP0 · ticks 67
+账本自查： 12 段收口 · 增量 ✓461 ✗2 SKIP0 ｜ 结果行 ✓461 ✗2 —— 一致
+== 选段结果 ==  ✓ 461  ✗ 2
+```
+
+两处要读的细节：
+
+- 红的形状是**按用例名的两条 ✗ 并点名缺的组与那条用例原文**，不是「入口 rc 变了」——入口自己的
+  `P236_RC` 仍是 0（被删掉的是子集，不是入口），这两条按名断言就是唯一把它抓住的东西，也正是 P368
+  补的那道控制。删两个键，全绿段里只有这两条变红（整轮 12 段只有这 2 条 ✗）。
+- 计数对照：受检树上段内是 `✓67`，变异后 `✓65` —— 少的正是这两条，没有别的断言被牵连。
+
+还原与绿侧：`cp -p` 备份回原地，`cmp` 逐字节相同，`git status --porcelain --untracked-files=all | wc -l`
+= 0，再跑：
+
+```
+$ bash skills/teamsmith/tests/smoke.sh --select 13c                     # exit 0
+  ✓ P236/P237 车道合同入口：wording+ledger+suspend-shape+owner-scope+merge+detail 全绿（56 条断言）
+  ✓ P251 合并行在行计数读者里只算一行（merge 组折进 13c）
+  ✓ P251 明细读面只读不 ack（detail 组折进 13c）
+#12 13c · 团队后台车道（M27/M30）：拉起链注入 / 收割契约 / 账本 / worktree 侧 · 参考 用时 46s · ✓67 ✗0 SKIP0 · ticks 67
+== 选段结果 ==  ✓ 463  ✗ 0
+```
+
+两轮输出里「本次运行无效」都是 0 次：破坏与还原都发生在两次运行**之间**，没有打断任何一轮的运行指纹。
+
+### 3 · A1 计数契约的两个读数（造现场，逐档读）
+
+夹具 `docs/team/inbox/` 两个文件，三档现场，读数取自 `team digest` 的 `[2] 待处理通知`、`team inbox
+<席>` 与 `team inbox --all`：
+
+| 现场 | 文件里有什么 | `dev` 未读 | `pm` 未读 |
+|---|---|---|---|
+| ① | `dev.md` 只有 1 行 `[auto] agent:dev` 记录行 | **0**（`[2]` 打印「（无）」；`team inbox dev` 无输出；`--all` 里那行在，文件确为 1 行） | 0 |
+| ② | 再加 1 行 `pm.md` 指针行 `[auto] agent:dev · P368 · knock=enqueued · see=docs/team/inbox/dev.md · task=P368 tip=38ee09b73abc` | **0** | **1**（`pm（PM 自己的收件箱） · 1 条新`） |
+| ③ | 再加 1 行 `dev.md` 的 `[manual] agent:pm`（对照：流量行） | **1**（只列出 manual 那条，记录行仍不计数） | 1 |
+
+即：`[auto] agent:<本席>` 的记录行不让该席位未读 +1，而 `pm.md` 里的指针行（`agent:` 是发送者）让它 +1。
+
+### 4 · 边界
+
+- V99 的结论仍成立，本单只补『同席位』这个纪律缺口，没有重开它验过或没验过的东西（整套、容器、其余
+  R 项都不在本单）。
+- `--select 13c` 带进来 12 段（0/0b/0c/0d/2/4/5/3b/6/6f/6i/13c），其余 123 个键没跑；本记录不代替归档前
+  的那一次整套。
+- 门禁锁排队：第一轮运行时机器级门禁锁由 verify 席位的整套运行持有（`/tmp/.teamsmith-smoke.lock.machine.holder`：
+  `pid=1292624 kind=top agent=verify bound=4500`），本单把「破坏 → 跑 → 还原 → 再跑」串成一条链式作业，
+  只吃一次排队（整条作业 771.9s，其中两段自报 32s / 46s）。
