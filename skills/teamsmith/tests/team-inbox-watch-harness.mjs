@@ -378,6 +378,16 @@ if (only('S4')) {
   const body = lastText()
   check('S4 long payload is truncated in the wake (no payload dump)', !body.includes('TAIL-MARKER') && body.includes('…'),
     `len=${body.length}`)
+  // notice-fulltext-and-asks（P370 B）：wake 这一层**自己**剪、自己说（160 字的剪断常常把 spool 层那个标记
+  // 剪掉）—— 必须看得见 `truncated=preview:<shown>/<total>B` 与指向 durable 收件箱的 `full=`。
+  {
+    const wakeLine = body.split('\n').find(l => l.startsWith('- ') && l.includes('…')) ?? ''
+    const m = /truncated=preview:(\d+)\/(\d+)B full=(\S+)/.exec(wakeLine)
+    const preview = process.env.TEAM_INBOX_WATCH_PREVIEW
+    check('S4 the wake names its own cut and where the whole text is',
+      !!m && Number(m[1]) > 0 && Number(m[1]) < Number(m[2]) && /\/inbox\/pm\.md$/.test(m[3]),
+      `${m ? `shown=${m[1]} total=${m[2]} full=${m[3]}` : 'no marker'} preview=${preview} :: ${wakeLine}`)
+  }
   const before2 = sent.length
   for (let i = 0; i < 8; i++) appendWake('say', 'dev', 'pm', `many ${i}`)
   await sleep(600)
@@ -1053,6 +1063,29 @@ const degradedFiles = () => (existsSync(WATCH_DIR) ? readdirSync(WATCH_DIR).filt
   await shutdown()
   process.env.TEAM_INBOX_WATCH_POLL_MS = '3600000'
 }
+
+// ── S27（P370 B）· wake 层自己写截断标记：**轮询路径**（不依赖 fs.watch）────────────
+// 为什么要有这一条：S4 走 watcher，前提不可用时只能可见 SKIP；而「预览被剪就说出来」是产品的行为，
+// 不该随机器能力变成空跑。这里用 100ms 轮询把同一条行为再判一次（两种前提下都真跑）。
+process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
+if (only('S27')) {
+  await resetState()
+  await sessionStart()
+  const before = sent.length          // sent 是跨用例的累积数组：只看**这一拍新增**的那条
+  appendWake('knock', 'dev', 'pm', `${'X'.repeat(400)}TAIL-MARKER`)
+  const woke = await waitFor(() => sent.length > before)
+  const body = lastText()
+  const m = /truncated=preview:(\d+)\/(\d+)B full=(\S+)/.exec(body)
+  check('S27 the wake names its own cut and where the whole text is',
+    woke && !!m && Number(m[1]) > 0 && Number(m[1]) < Number(m[2]) && /\/inbox\/pm\.md$/.test(m[3]) && !body.includes('TAIL-MARKER'),
+    `${m ? `shown=${m[1]} total=${m[2]} full=${m[3]}` : 'no marker'} preview=${process.env.TEAM_INBOX_WATCH_PREVIEW} :: ${body.replace(/\n/g, ' | ').slice(0, 220)}`)
+  const before2 = sent.length
+  appendWake('say', 'pm', 'pm', 'S27 short line with no cut')
+  await waitFor(() => sent.length > before2)
+  check('S27 a preview that was not cut carries no marker', sent.length > before2 && !lastText().includes('truncated='),
+    lastText().replace(/\n/g, ' | ').slice(0, 220))
+}
+process.env.TEAM_INBOX_WATCH_POLL_MS = '100'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // P81 · wake-delivery-idempotence：投递日志 / 至多一次 / fail-closed / 源行点名

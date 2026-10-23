@@ -5280,6 +5280,51 @@ p365 $TEAM digest >"$TMP/p365-digest5.log" 2>&1 || true
 assert_not "$TMP/p365-digest5.log" "未敲门" "P365：清掉之后「未敲门」不再打印"
 assert_not "$TMP/p365-digest5.log" "指针缺失" "P365：清掉之后「指针缺失」不再打印"
 
+# ── notice-fulltext-and-asks（P370 C）：指针行复制 asks= / digest 的「待回答」一行 ─────────────
+# 判据：范围 = 未 ack 的**指针行**里 asks>=1 的那些，一条 run 算一条（不按事件数），ack 后归零；
+# 只显示 —— 不进 team_pending_text（那行通知本身已经在唤醒判据里，再加一条等于对同一件事敲两次）。
+P370_A='2026-10-22T09:00:00.000Z [auto] agent:dev · P370 · branch=task/P370-x · uncommitted=0 · task=P370 tip=0123456789ab · asks=1 :: 两点请裁决：① 合并 ② 分支'
+P370_B='2026-10-22T09:01:00.000Z [auto] agent:dev · P370 · branch=task/P370-x · uncommitted=0 · task=P370 tip=0123456789ab · asks=1 :: 同一个 run 的第二个事件'
+P370_C='2026-10-22T09:02:00.000Z [auto] agent:dev2 · P371 · branch=task/P371-y · uncommitted=0 · task=P371 tip=abcdef123456 · asks=2 :: 另外两件也等你确认'
+printf '%s\n' "$P370_A" > "$TMP/p370-a.txt"
+printf '%s\n' "$P370_B" > "$TMP/p370-b.txt"
+printf '%s\n' "$P370_C" > "$TMP/p370-c.txt"
+p365 $TEAM __inbox-write --agent dev --from-file "$TMP/p370-a.txt" >/dev/null 2>&1
+p365 $TEAM __notify-settle --agent dev --outcome enqueued --record-from-file "$TMP/p370-a.txt" --task P370 >/dev/null 2>&1
+assert_eq "P370：记录行带 asks=（事件级字段在字段区里）" \
+  "$(printf '%s' "$(tail -n 1 "$P365R/docs/team/inbox/dev.md")" | grep -o 'asks=[0-9]*')" "asks=1"
+assert_eq "P370：指针行复制了 asks=（PM 读的是 pm.md）" \
+  "$(printf '%s' "$(tail -n 1 "$P365R/docs/team/inbox/pm.md")" | grep -o 'asks=[0-9]*')" "asks=1"
+p365 $TEAM digest >"$TMP/p370-digest1.log" 2>&1 || bad "P370：digest 失败"
+assert_has "$TMP/p370-digest1.log" "待回答 1 条完成消息里有待你回答的问题（agent:dev · P370 · asks=1）" \
+  "P370：digest 点名未答的完成消息（发送者 · 任务 · 计数）"
+assert_has "$TMP/p370-digest1.log" "team inbox pm 读原文" "P370：这一行给出读全文的命令"
+assert_not_echo "$(p365_fn 'team_pending_text')" "待回答" "P370：待回答只显示、不进唤醒判据（不把同一件事敲两次）"
+# 同 run 的第二个事件（×2）仍然只算**一条**：按事件数算的实现会读到 2
+p365 $TEAM __inbox-write --agent dev --from-file "$TMP/p370-b.txt" >/dev/null 2>&1
+p365 $TEAM __notify-settle --agent dev --outcome skipped:merged --record-from-file "$TMP/p370-b.txt" --task P370 >/dev/null 2>&1
+assert_has_echo "$(tail -n 1 "$P365R/docs/team/inbox/pm.md")" "×2" "P370 夹具：同 run 的第二个事件并进同一行指针"
+p365 $TEAM digest >"$TMP/p370-digest2.log" 2>&1 || true
+assert_has "$TMP/p370-digest2.log" "待回答 1 条完成消息" "P370：合并 run（×2）只算一条（按事件数算会红）"
+# 另一个席位的第二条：点名最多 3 条，顺序就是文件顺序
+p365 $TEAM __inbox-write --agent dev2 --from-file "$TMP/p370-c.txt" >/dev/null 2>&1
+p365 $TEAM __notify-settle --agent dev2 --outcome enqueued --record-from-file "$TMP/p370-c.txt" --task P371 >/dev/null 2>&1
+p365 $TEAM digest >"$TMP/p370-digest3.log" 2>&1 || true
+assert_has "$TMP/p370-digest3.log" "待回答 2 条完成消息里有待你回答的问题（agent:dev · P370 · asks=1；agent:dev2 · P371 · asks=2）" \
+  "P370：两条未答的完成消息各自点名（含各自的 asks 计数）"
+# 没有 asks 的指针行不算：加一条普通指针，计数不变、名单里也不该出现它
+printf '%s\n' '2026-10-22T09:03:00.000Z [auto] agent:dev2 · P372 · branch=task/P372-z · uncommitted=0 · task=P372 tip=1234567890ab :: 纯汇报' > "$TMP/p370-d.txt"
+p365 $TEAM __inbox-write --agent dev2 --from-file "$TMP/p370-d.txt" >/dev/null 2>&1
+p365 $TEAM __notify-settle --agent dev2 --outcome enqueued --record-from-file "$TMP/p370-d.txt" --task P372 >/dev/null 2>&1
+p365 $TEAM digest >"$TMP/p370-digest4.log" 2>&1 || true
+assert_has "$TMP/p370-digest4.log" "待回答 2 条完成消息" "P370：多一条无问的指针不改计数"
+grep '待回答' "$TMP/p370-digest4.log" > "$TMP/p370-asked4.log" 2>/dev/null || true
+assert_not "$TMP/p370-asked4.log" "P372" "P370：没有 asks 的指针行不进「待回答」名单"
+# ack 之后归零（与「未敲门」同一个已读通道）
+p365 $TEAM inbox pm --ack >/dev/null 2>&1
+p365 $TEAM digest >"$TMP/p370-digest5.log" 2>&1 || true
+assert_not "$TMP/p370-digest5.log" "待回答" "P370：--ack 之后「待回答」归零（数的是还没被回答的量）"
+
 # ----------------------------------------- 7b. digest 警告未入账的复验/报告记录（M31）
 section "7b · digest 警告未入账的复验/报告记录（M31）"
 # 专用夹具仓库（M16/M14 同款纪律）：这里的「干净」是真干净。主夹具仓库在 4b 留下了
@@ -7958,6 +8003,84 @@ if (!lines[0].includes('agent:dev')) { console.error('FAIL: agent 名推断错�
     }
   }
 }
+// ── notice-fulltext-and-asks（P370 A/C）· 记录存全文 / 硬上限具名 / asks 可数 ────────────────────
+// 判据全部走真扩展 + 真 CLI：先前实现在算出末消息的那一行就 `tail(messageText, maxChars)` 裁掉，
+// 于是收件箱行与 state/notify.log 明细在**写入时**就丢了内容，而文本里的 `…` 与模型自己写的省略号
+// 无法区分（P365 现场：PM 收到的交付末尾「两点请裁决：①…②…」被截掉，通知没说它被截掉）。
+{
+  const stateDir = join(root, '.pi/team/state')
+  const detailFile = join(stateDir, 'notify.log')
+  const pmInbox = join(root, 'docs/team/inbox/pm.md')
+  const reset = () => { for (const f of [inbox, pmInbox, detailFile, join(stateDir, 'notify-dedup')]) rmSync(f, { force: true }) }
+  const ctxOf = (text) => ({ cwd: wt, sessionManager: { getEntries: () => [{ message: { role: 'assistant', stopReason: 'stop', content: [{ text }] } }] } })
+  const recLines = () => existsSync(inbox) ? readFileSync(inbox, 'utf8').split('\n').filter(l => l.startsWith('- ')) : []
+  const pmLines = () => existsSync(pmInbox) ? readFileSync(pmInbox, 'utf8').split('\n').filter(l => l.startsWith('- ')) : []
+  const details = () => existsSync(detailFile) ? readFileSync(detailFile, 'utf8').split('\n').filter(l => l.startsWith('- ')) : []
+  const fieldOf = (line) => line.split(' :: ')[0] ?? line
+  const bodyOf = (line) => line.split(' :: ')[1] ?? ''
+  const bytes = (s) => Buffer.byteLength(s, 'utf8')
+  const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exit(60) }
+  let seq = 0
+  // 每个用例前插一条手工行，把合并 run 断开（否则同 run 的事件会并成 ×N，读到的只是最后一次的值）
+  const settle = async (text) => {
+    writeFileSync(inbox, `- ${new Date().toISOString()} [manual] agent:dev · P370 separator ${++seq}\n`, { flag: 'a' })
+    await handler({}, ctxOf(text))
+    return { rec: recLines().at(-1) ?? '', ptr: pmLines().at(-1) ?? '' }
+  }
+
+  // ① 全文：一条 4 KB 级交付，收件箱行与明细都**一个字节都不少**
+  reset()
+  const msg4k = 'HEAD-4K-' + 'x'.repeat(4071) + '-TAIL-4K'      // 4087 B，纯 ASCII（字数 = 字节数）
+  let r = await settle(msg4k)
+  if (bodyOf(r.rec) !== msg4k) fail(`P370 ①：记录行没有存全文（${bytes(bodyOf(r.rec))}B ≠ ${bytes(msg4k)}B）`)
+  if (bodyOf(details().at(-1) ?? '') !== msg4k) fail('P370 ①：notify.log 明细没有存全文')
+  if (fieldOf(r.rec).includes('truncated=')) fail('P370 ①：4 KB 的正常消息不该触发任何截断标记')
+  if (fieldOf(r.rec).includes('asks=')) fail('P370 ①：没有裁决标记的消息不该带 asks=')
+  console.log(`P370 ①全文：record=${bytes(bodyOf(r.rec))}B detail=${bytes(bodyOf(details().at(-1) ?? ''))}B head=${JSON.stringify(bodyOf(r.rec).slice(0, 40))} tail=${JSON.stringify(bodyOf(r.rec).slice(-40))}`)
+
+  // ② 硬上限：200000 B → 正好留 65536 B，字段区具名，且**不带** full=（那份原文不在任何地方）
+  reset()
+  const huge = 'h'.repeat(200000)
+  r = await settle(huge)
+  if (bytes(bodyOf(r.rec)) !== 65536) fail(`P370 ②：200000B 的末消息应当只留 65536 字节（实际 ${bytes(bodyOf(r.rec))}B）`)
+  if (!fieldOf(r.rec).includes('truncated=hard-limit:65536/200000B')) fail(`P370 ②：硬上限没有具名（${fieldOf(r.rec)}）`)
+  if (fieldOf(r.rec).includes('full=')) fail('P370 ②：硬上限标记带了 full=（原文不存在，定位是谎言）')
+  const dh = details().at(-1) ?? ''
+  if (bodyOf(dh) !== bodyOf(r.rec) || !fieldOf(dh).includes('truncated=hard-limit:65536/200000B')) {
+    fail('P370 ②：明细记录的切法与标记与记录行不一致')
+  }
+  console.log(`P370 ②硬上限：kept=${bytes(bodyOf(r.rec))}B of ${bytes(huge)}B field=${JSON.stringify(fieldOf(r.rec).split(' · ').at(-1))}`)
+  // 字符边界：30000 个「中」（90000 B）→ 留 65535 B（21845 个完整字符），不写出半个 UTF-8 序列
+  const cjk = '中'.repeat(30000)
+  r = await settle(cjk)
+  if (bodyOf(r.rec) !== '中'.repeat(21845)) fail(`P370 ②：多字节消息的切点不在字符边界上（${bytes(bodyOf(r.rec))}B）`)
+  if (!fieldOf(r.rec).includes('truncated=hard-limit:65535/90000B')) fail(`P370 ②：多字节的 kept 字节数不对（${fieldOf(r.rec)}）`)
+  // 上限必须高到**不碰正常消息**：20 KB 照旧全文（把上限改成 16 KiB 的实现会在这里红）
+  const msg20k = 'k'.repeat(20480)
+  r = await settle(msg20k)
+  if (bodyOf(r.rec) !== msg20k || fieldOf(r.rec).includes('truncated=')) fail('P370 ②：20 KB 的正常消息被剪了（上限低到碰正常消息）')
+
+  // ③ asks：闭集标记 + 末尾 400 字窗口 + 最长优先/不重叠 + ASCII 折叠；缺席即不写字段
+  const askCases = [
+    ['两点请裁决：① 合并？② 分支？', '1'],
+    ['收尾：请你确认，请确认', '2'],
+    ['请你确认一下，另外等你拍板', '2'],
+    ['这样行吗？那这样呢？还有别的问题吗？', ''],
+    ['请裁决。' + 'x'.repeat(500) + ' 后面都是纯汇报，没有别的事。', ''],
+    ['Done. Please Confirm the merge.', '1'],
+  ]
+  const seen = []
+  for (const [text, want] of askCases) {
+    r = await settle(text)
+    const got = /asks=(\d+)/.exec(fieldOf(r.rec))?.[1] ?? ''
+    const gotPtr = /asks=(\d+)/.exec(fieldOf(r.ptr))?.[1] ?? ''
+    if (got !== want) fail(`P370 ③：记录行 asks 期望 ${want || '缺'}、实际 ${got || '缺'}（${text}）`)
+    if (gotPtr !== want) fail(`P370 ③：指针行 asks 期望 ${want || '缺'}、实际 ${gotPtr || '缺'}（${text}）`)
+    if (!want && (r.rec.includes('asks=0') || r.ptr.includes('asks=0'))) fail('P370 ③：不许写 asks=0（缺席与空值是两个不同的值）')
+    seen.push(`${want || '缺'}`)
+  }
+  console.log(`P370 ③asks：${askCases.length} 条用例读数 ${seen.join('/')}（1/2/2/缺/缺/1）`)
+}
 // M40：继承来的 TEAM_ROOT 指到**工作树**（agent 工作树里有 config.sh 副本）也不许改变账本落点：回合通知
 // 必须照旧写主工作树的收件箱。旧实现 env 优先 → cwd 被判成「不在 worktrees 之下」→ 整个通知静默不发
 // （M40 实测：主工作树收件箱 0 行）。这条既是扩展自己的守卫，也是「dispatch 窗口身份 = 目标目录」的对照。
@@ -8033,7 +8156,7 @@ EOF
   chmod +x "$TMP/ext-shim/tmux"
   : > "$TMP/ext-tmux.log"
   cat > "$TMP/ext-e-test.mjs" <<'EOF'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 const [, , ext, root, wt] = process.argv
 process.env.TMUX_PANE = 'smoke-fake-pane'        // 有 pane 才会走“敲门”那条路
@@ -8126,6 +8249,42 @@ await emit('agent_settled', {}, cx([midTurn]))
 if (lines().length !== 0) fail('E4：reload 之后的未完成 settle 仍写了收件箱')
 if (pmLines().length !== 0) fail('E4：reload 打断的 settle 写了指针行')
 console.log('E4 reload 打断的回合：没有收件箱行')
+
+// E5（notice-fulltext-and-asks · P370）：长交付 → 记录行存**全文**，而敲门载荷是「有界预览 + 标记 + full=」
+//   每一处剪**自己**写出剪了多少、原文在哪（敲门的 full= 用持锁写入侧回报的行号）
+{
+  reset()
+  const longBody = 'P370-E5-' + 'q'.repeat(3000) + '-END'
+  const draftDir = join(root, '.pi/team/state/draft')
+  const beforeDrafts = existsSync(draftDir) ? readdirSync(draftDir) : []
+  await emit('agent_settled', {}, cx([{ role: 'assistant', stopReason: 'stop', content: [{ text: longBody }] }]))
+  const rec = lines().at(-1) ?? ''
+  if ((rec.split(' :: ')[1] ?? '') !== longBody) fail(`E5：记录行没有存全文（只有 ${(rec.split(' :: ')[1] ?? '').length} 字）`)
+  // 载荷走了 outbox：「TUI 没开 bracketed paste」时多行内容会落成 draft 文件（既有行为），单行时直接打。
+  // 两种形状都找一遍 —— 找到的那一份就是 PM 会看到的文字。
+  const walk = (d) => { try { return readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]) } catch { return [] } }
+  const candidates = []
+  if (existsSync(draftDir)) for (const f of readdirSync(draftDir)) if (!beforeDrafts.includes(f)) candidates.push(join(draftDir, f))
+  candidates.push(...walk(join(root, '.pi/team/state/outbox')))
+  const payload = candidates.map(f => { try { return readFileSync(f, 'utf8') } catch { return '' } }).find(t => t.includes('truncated=preview:')) ?? ''
+  if (!payload) fail('E5：找不到带截断标记的敲门载荷（剪了却不说）')
+  const m = /truncated=preview:(\d+)\/(\d+)B full=(\S+):(\d+)/.exec(payload)
+  if (!m) fail(`E5：载荷里的标记形状不对（${payload.slice(0, 300)}）`)
+  const [, shown, total, file, linenum] = m
+  const totalBytes = Buffer.byteLength(longBody, 'utf8')
+  if (Number(total) !== totalBytes) fail(`E5：标记的 <total> 不是全文的字节数（${total} ≠ ${totalBytes}）`)
+  if (!(Number(shown) > 0 && Number(shown) < Number(total))) fail(`E5：<shown>/<total> 不是「留下一部分」（${shown}/${total}）`)
+  // R4：按 full=<path>:<line> 真的打出那一行来，` :: ` 之后必须就是全文（行号错位=假定位）
+  const target = existsSync(file) ? file : join(root, file)
+  const pointed = readFileSync(target, 'utf8').split('\n')[Number(linenum) - 1] ?? ''
+  if ((pointed.split(' :: ')[1] ?? '') !== longBody) fail(`E5：full=${file}:${linenum} 没有指到那条全文记录`)
+  // 摘要行带标记，而引用行仍是有界预览（以省略号收尾）
+  const quoted = payload.split('\n').find(l => l.startsWith('> ')) ?? ''
+  if (!quoted) fail('E5：载荷里没有引用行（> …）')
+  if (!quoted.endsWith('\u2026')) fail(`E5：引用的预览行没有以省略号收尾（${JSON.stringify(quoted.slice(-20))}）`)
+  if (quoted.length > 160) fail(`E5：预览行超出预算（${quoted.length} 字）`)
+  console.log(`E5 长交付：记录 ${totalBytes}B 全文 / 载荷预览 ${shown}/${total}B / full=${file}:${linenum} 可解析 / 预览 ${quoted.length} 字`)
+}
 console.log('ext-e-ok')
 EOF
   if env PATH="$TMP/ext-shim:$PATH" EXT_TMUX_LOG="$TMP/ext-tmux.log" \
@@ -8137,6 +8296,7 @@ EOF
   assert_has "$TMP/ext-e.log" "E1 回合内重启/压缩：没有收件箱行、没有敲门" "E1：存在压缩的未完成回合不发简报、不敲门"
   assert_has "$TMP/ext-e.log" "E2 压缩过但已完成：一行 + 敲门（对照组）" "E2：同回合压缩但已完成 → 照常通知（不过度抑制）"
   assert_has "$TMP/ext-e.log" "E3 被中断：一行、显式标记、没有编造的摘要" "E3：被中断的回合显式标记且不编造摘要"
+  assert_has "$TMP/ext-e.log" "E5 长交付：" "P370：长交付的记录行存全文，敲门载荷是有界预览 + 标记 + 可解析的 full="
   assert_has "$TMP/ext-e.log" "E4 reload 打断的回合：没有收件箱行" "E4：reload 打断的回合不发简报"
 else
   printf '  (跳过扩展 E 测试：node 未启用类型剥离，且没有 bun/tsx)\n'
@@ -9612,6 +9772,27 @@ else
 fi
 piw_reset
 
+# ⑪ notice-fulltext-and-asks（P370 B）：预览被剪时 spool 行的**第 7 个字段**是发送方自己写的标记
+#    —— `preview` 字段仍然是「≤ 700 字节的最长整字符前缀」（既有契约），标记必须在这个字段**外**；
+#    没剪时第 7 字段为空（一个字节都不加）。
+ob_reset; piw_reset
+piw_reg p370-dev "$SESSION:dev" dev
+P370_PAY="xy$(printf '红%.0s' $(seq 1 300))"
+ob_run $TEAM say dev "$P370_PAY" >"$TMP/p370-say.log" 2>&1 || true
+assert_has "$TMP/p370-say.log" "pi 监视通道" "P370 ⑪：走 pi 通道（spool 行就是发送方的产物）"
+assert_eq "P370 ⑪：剪断的 spool 行有 7 个字段（标记是独立字段）" \
+  "$(LC_ALL=C awk -F'\t' 'NR==1 {print NF}' "$PIW/p370-dev.wake")" "7"
+assert_eq "P370 ⑪：preview 字段里没有标记（仍是纯前缀 698 B）" \
+  "$(LC_ALL=C awk -F'\t' 'NR==1 {print (($5 ~ /truncated=/) ? "has-marker" : length($5))}' "$PIW/p370-dev.wake")" "698"
+LC_ALL=C awk -F'\t' 'NR==1 {print $7}' "$PIW/p370-dev.wake" > "$TMP/p370-marker-spool.txt"
+assert_has "$TMP/p370-marker-spool.txt" "truncated=preview:698/902B full=docs/team/inbox/dev.md" \
+  "P370 ⑪：标记写出剪了多少（UTF-8 字节，同单位）与原文在哪（durable 收件箱）"
+assert_has "$REPO/docs/team/inbox/dev.md" "$P370_PAY" "P370 ⑪：durable 收件箱里仍是全文（剪的只是预览那份）"
+ob_run $TEAM say dev "p370 short no cut" >/dev/null 2>&1 || true
+assert_eq "P370 ⑪：没剪时第 7 字段为空（没剪就一个字节都不加）" \
+  "$(LC_ALL=C awk -F'\t' 'END {print ($7 == "" ? "empty" : $7)}' "$PIW/p370-dev.wake")" "empty"
+piw_reset
+
 # ⑨ 真扩展夹具（假 Pi 宿主 + 真 CLI 端到端）：注册 / 监视唤醒 / 合并 / 基线 / 清场 / 账本
 # M53/B4：夹具现在先量前提（一次真 fs.watch）——前提不可用时**只**把 watcher 用例标成可见 SKIP，
 # 轮询兜底与 CLI 侧的用例照跑照判。所以这一段的具名断言按前提分两支，且分成两类：
@@ -9727,8 +9908,15 @@ else
     "12b-pi P81：唤醒文本的 id 能在 delivered.log 里一一定位（端到端）"
   if [ "$M53_IW_OK" = "1" ]; then
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S1 session_start creates exactly one .reg" "12b-pi 扩展写就绪注册（发送方的判据）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 the wake names its own cut and where the whole text is" \
+    "P370：watcher 路径上 wake 层也自己写标记（与 S27 的轮询路径同一条行为）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S2 wake is a custom team-inbox message with triggerTurn+followUp" "12b-pi 唤醒用的是 sendMessage(followUp+triggerTurn)"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S4 long payload is truncated in the wake (no payload dump)" "12b-pi 唤醒只带截断预览（不带 payload 全文）"
+  # P370（S27）：watcher 前提无关的同一条行为 —— 轮询路径上真跑真判，跳不过去
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S27 the wake names its own cut and where the whole text is" \
+    "P370：wake 层自己写标记（被剪了就说出 shown/total 与 full=；轮询路径，不靠 watcher）"
+  assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S27 a preview that was not cut carries no marker" \
+    "P370：没剪时 wake 行一个字节都不加"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S7 shutdown removes the registry file" "12b-pi 会话结束删注册（不骗发送方）"
   assert_has "$TMP/piw-harness.log" "TEAM-IW-CASE PASS S10 the running extension wakes the session (zero model calls)" \
     "12b-pi 端到端：真 CLI 投递 → 监视扩展唤醒（零模型调用）"
@@ -9777,6 +9965,29 @@ else
   fi
   assert_has "$TMP/piw-strict.log" "TEAM-IW-CASE FAIL S2 " "12b-pi/M53 严格模式点名 S2"
   assert_has "$TMP/piw-strict.log" "TEAM-IW-HARNESS FAIL" "12b-pi/M53 严格模式的总结行是 FAIL"
+
+  # P370 2.1.1：三处实现（TS ×2、bash ×1）必须产出**同一个字符串形状**，而三份样品都在**本段**造：
+  #   spool 层 ← ⑪ 的 spool 第 7 字段；wake 层 ← 上面 harness 的 S4 日志行；敲门层 ← 同一个扩展在一次性
+  #   项目里跑一次（tests/team-notify-knock-marker.mjs）。
+  # 缺一份样品就是红，不许 `continue`：那会让这条断言退化成「造出几份比几份」—— V100 正是这样抓到它
+  # 只比了两处（spool 样品被写进另一个文件名，bash 那一层从未参与）。
+  $TS_RUNNER "$SKILL_DIR/tests/team-notify-knock-marker.mjs" "$SKILL_DIR/extension/team-notify.ts" \
+    >"$TMP/p370-marker-knock.txt" 2>"$TMP/p370-knock-err.log" || true
+  grep 'TEAM-IW-CASE PASS S27 the wake names its own cut' "$TMP/piw-harness.log" 2>/dev/null \
+    | grep -o 'truncated=preview:[0-9][0-9]*/[0-9][0-9]*B full=[^ ]*' | tail -1 >"$TMP/p370-marker-wake.txt" || true
+  p370_shape() { # <含标记的文件> → 遮掉数字与路径后的形状（文件缺失或没有标记 → 空）
+    grep -o 'truncated=preview:[0-9][0-9]*/[0-9][0-9]*B full=[^ ]*' "$1" 2>/dev/null \
+      | tail -1 | sed -E 's/[0-9]+/N/g; s#full=.*#full=P#'
+  }
+  P370_KNOCK_S="$(p370_shape "$TMP/p370-marker-knock.txt")"
+  P370_SPOOL_S="$(p370_shape "$TMP/p370-marker-spool.txt")"
+  P370_WAKE_S="$(p370_shape "$TMP/p370-marker-wake.txt")"
+  assert_eq "P370 2.1.1：敲门层（TS）有样品" "$([ -n "$P370_KNOCK_S" ] && echo yes || echo no)" "yes"
+  assert_eq "P370 2.1.1：spool 层（bash）有样品" "$([ -n "$P370_SPOOL_S" ] && echo yes || echo no)" "yes"
+  assert_eq "P370 2.1.1：wake 层（TS）有样品" "$([ -n "$P370_WAKE_S" ] && echo yes || echo no)" "yes"
+  assert_eq "P370 2.1.1：三处写的是同一个形状（敲门 = spool = wake）" \
+    "$([ -n "$P370_KNOCK_S" ] && [ "$P370_KNOCK_S" = "$P370_SPOOL_S" ] && [ "$P370_SPOOL_S" = "$P370_WAKE_S" ] && echo yes || echo "no knock=[$P370_KNOCK_S] spool=[$P370_SPOOL_S] wake=[$P370_WAKE_S]")" "yes"
+  assert_eq "P370 2.1.1：遮掉数字与路径后的形状就是规格那一串" "$P370_KNOCK_S" "truncated=preview:N/NB full=P"
 fi
 
 # 不留注册：后面的段落（teardown / panel / …）不许被这条通道接管

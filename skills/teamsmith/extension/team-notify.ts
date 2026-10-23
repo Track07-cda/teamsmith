@@ -293,9 +293,76 @@ function senderFromDir(cwd: string, wtPrefix: string, roster: string[]): string 
   return roster.find(name => name === first) ?? first
 }
 
-function tail(line: string, max: number): string {
-  const flat = line.replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+/** 空白折叠成一行（收件箱是按行读的文件，这一条是既有契约）。**不是截断**：只把换行/制表折成空格，
+ *  一个字符都不丢 —— 记录路径（收件箱行、`state/notify.log` 明细）存的就是它的结果。 */
+function flatten(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim()
+}
+
+/** 记录的硬上限（常量，**不是**配置键）：它是给畸形输出（例如整段日志被当成末消息）的最后一道闸，
+ *  不是一个调参口 —— 用户明确要求「不要设置限制」，给一个能关掉的旋钮等于把这道闸变成偏好。
+ *  64 KiB 是本仓实测末消息最大值（7280 B）的九倍，正常消息碰不到它。 */
+const RECORD_HARD_LIMIT = 65536
+
+/** `asks` 的判据窗口：扁平化后末消息的**最后 400 个字符**（约 2–4 句中文）。窗口之外的标记不算 ——
+ *  否则正文中间的「请确认」会把一条纯汇报数成待裁决。 */
+const ASK_WINDOW = 400
+
+/** `asks` 的**闭集**（与 `openspec/specs/notify-and-inbox` 的规格正文逐字同源：中文 22 条 + 英文 7 条）。
+ *  加标记要改规格，不许在这里临时加一句 —— 它是「这是不是在问我」的判据，不是关键词搜索。 */
+const ASK_MARKERS = [
+  '请裁决', '待你裁决', '等你裁决', '请你裁决', '请裁定', '请定夺', '请示下',
+  '请你确认', '需要你确认', '待你确认', '等你确认', '请确认一下', '请确认',
+  '请你决定', '需要你决定', '需要你定', '待你拍板', '等你拍板', '请你拍板',
+  '是否需要我', '要我继续', '要不要我',
+  'please confirm', 'please decide', 'awaiting your decision', 'your call', 'need your approval',
+  'needs your call', 'do you want me to',
+]
+
+/** ASCII 大小写折叠（规格判据：`Please Confirm` 算一个标记）。只折 ASCII —— 中文没有大小写。 */
+function foldAscii(text: string): string {
+  return text.replace(/[A-Z]/g, c => c.toLowerCase())
+}
+
+/** 最长优先（同一位置先试最长的标记，`请你确认` 不会再被计成一次 `请确认`）、从左到右、不重叠。 */
+const ASK_MARKERS_FOLDED = ASK_MARKERS.map(foldAscii).sort((a, b) => b.length - a.length)
+
+function countAsks(flat: string): number {
+  if (!flat) return 0
+  const window = flat.length > ASK_WINDOW ? flat.slice(-ASK_WINDOW) : flat
+  const hay = foldAscii(window)
+  let i = 0
+  let n = 0
+  while (i < hay.length) {
+    const hit = ASK_MARKERS_FOLDED.find(m => hay.startsWith(m, i))
+    if (hit) {
+      n++
+      i += hit.length
+    } else {
+      i++
+    }
+  }
+  return n
+}
+
+function byteLen(text: string): number {
+  return Buffer.byteLength(text, 'utf8')
+}
+
+/** 按 UTF-8 字节取前缀，且**退到字符边界**（逐码点累加；等价于 spool 侧 `head -c` + `iconv -c` 的
+ *  「丢字节、不引入 U+FFFD」惯用法）。返回留下来的文本与实际字节数，以及原文的字节数。 */
+function clipBytes(text: string, maxBytes: number): { kept: string; keptBytes: number; totalBytes: number } {
+  const totalBytes = byteLen(text)
+  if (totalBytes <= maxBytes) return { kept: text, keptBytes: totalBytes, totalBytes }
+  let kept = ''
+  let keptBytes = 0
+  for (const ch of text) {
+    const b = byteLen(ch)
+    if (keptBytes + b > maxBytes) break
+    kept += ch
+    keptBytes += b
+  }
+  return { kept, keptBytes, totalBytes }
 }
 
 /** P160 F3 · 任务标识的证据：<ID> 必须在 state/<sender>.env 的 task=、看板行或任务书里真的存在
@@ -458,15 +525,32 @@ export default function (pi: ExtensionAPI) {
     // 最后一条 assistant 消息才是「本轮的最后消息」；只有**完成了的回合**才允许当摘要（M4.3 E）。
     // 旧实现在回合未完成时从末尾往前找第一条有文本的消息 —— 于是一轮长工具调用里的开头那句
     // （"I'll start by reading the required files in order."）被当成结论报给 PM，读起来像「agent 停了」。
+    //
+    // notice-fulltext-and-asks：这里算出的是**记录用的全文**（只做空白折叠，不套任何显示预算），
+    // 外加两个字段区标记：`asks=<n>`（末尾 400 字的闭集标记）与 `truncated=hard-limit:…`（病态输入）。
+    // 预览（敲门 / spool / wake）在各自的层里剪、各自自带标记 —— 记录路径不再剪任何东西。
     let last = ''
     let completed = false
+    let asksField = ''
+    let hardField = ''
     try {
       const entries = ctx.sessionManager.getEntries() as Array<{ message?: { role?: string; stopReason?: string; content?: unknown } }>
       for (let i = entries.length - 1; i >= 0; i--) {
         const message = entries[i]?.message
         if (message?.role !== 'assistant') continue
         completed = isCompletedTurn(String(message.stopReason ?? ''))
-        if (completed) last = tail(messageText(message.content), cfg.maxChars)
+        if (completed) {
+          const full = flatten(messageText(message.content))
+          // asks 在硬上限**之前**判：计数是「这个席位说了什么」的属性，副本才是「留了多少」——
+          // 被闸剪掉尾巴的消息仍然要告诉 PM「它问了你一件事，但那段文字没留下来」。
+          const asks = countAsks(full)
+          if (asks > 0) asksField = ` · asks=${asks}`
+          const cut = clipBytes(full, RECORD_HARD_LIMIT)
+          last = cut.kept
+          // 硬上限的标记**不带** `full=`：这段原文从没落过盘，标一个不存在的定位等于说谎。
+          // 「没有 full=」就是读者区分「原文没了」与「原文在别处」的唯一记号。
+          if (cut.totalBytes > cut.keptBytes) hardField = ` · truncated=hard-limit:${cut.keptBytes}/${cut.totalBytes}B`
+        }
         break
       }
     } catch {
@@ -553,7 +637,7 @@ export default function (pi: ExtensionAPI) {
       return
     }
 
-    const line = `${new Date().toISOString()} ${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? ` :: ${last}` : ''}`
+    const line = `${new Date().toISOString()} ${dirtyFlag}${tag} ${summary}${revStamp}${asksField}${hardField}${completed && last ? ` :: ${last}` : ''}`
     // turn-notice-merge（写入侧合并 + 明细）：判定「扩展末尾的同类 run 还是新起一行」在 CLI 的收件箱
     // 写入口里（每收件人一把锁 + 先明细后合并），扩展只消费写入结果 —— 只有写下**新行**才入队 knock。
     const linePath = join(stateDir, `notify-line-${process.pid}-${Date.now()}.txt`)
@@ -626,7 +710,23 @@ export default function (pi: ExtensionAPI) {
     // 为什么：扩展原来直接 `send-keys -l` + Enter，人正在 PM 输入框里写草稿时会把草稿粘走
     // （D20 的原始事故）。入队时带上 knock 自己的**行身份**（identity，与结果账的 identity= 同一个值），两层抑制不会打架。
     // 失败只记日志：绝不回退到打字（那会悄悄重建同一个 bug）。
-    const notice = `${dirtyFlag}${tag} ${summary}${revStamp}${completed && last ? `\n> ${last}` : ''}`
+    // 打字的那一份是**预览**（有界）；它被剪时自己说出剪了多少、原文在哪（设计 §4）。
+    // `<shown>`/`<total>` 都是 UTF-8 字节数（`wc -c` 读到的同一对数字）；`full=` 指向记录行 ——
+    // 行号由**持锁的写入侧**（`__inbox-write` 的 `lineno=`）给出，扩展不用自己算的数。
+    // 行号缺失（写盘侧没给）时省略 `:<n>`，但那一位只在写盘失败时才会缺，而写盘失败本来就不敲门。
+    // `<shown>` 数的是**留下来的那段前缀**（省略号是「这里省略了」的记号，不是正文）—— 这样它与 spool
+    // 层的读数同口径，且永远有 shown ≤ total（把 U+2026 的三个字节算进去的话，纯 ASCII 消息会出现 shown > total）。
+    const clipped = completed && last.length > cfg.maxChars
+    const kept = clipped ? last.slice(0, cfg.maxChars - 1) : last
+    const previewText = clipped ? `${kept}…` : last
+    let previewMark = ''
+    if (clipped) {
+      const inboxFile = `${cfg.docsDir}/inbox/${agent}.md`
+      const written = Number(/^lineno=(\d+)/m.exec(writeOut)?.[1] ?? '')
+      const locator = Number.isInteger(written) && written > 0 ? `${inboxFile}:${written}` : inboxFile
+      previewMark = ` · truncated=preview:${byteLen(kept)}/${byteLen(last)}B full=${locator}`
+    }
+    const notice = `${dirtyFlag}${tag} ${summary}${revStamp}${asksField}${completed && last ? `${previewMark}\n> ${previewText}` : ''}`
     const tmp = join(stateDir, `knock-${process.pid}-${Date.now()}.txt`)
     try {
       writeFileSync(tmp, notice)

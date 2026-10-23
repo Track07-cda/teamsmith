@@ -117,6 +117,45 @@ team_inbox_skipped_knock_summary() { # → "<N>\t<suspended 1 · 其它（someth
   printf '%s\t%s\n' "$total" "$out"
 }
 
+# notice-fulltext-and-asks · digest 的「待回答」一行（design §6）：
+#   范围 = PM 收件箱里**未 ack 的指针行**中 asks>=1 的那些 —— 与「未敲门」读同一个来源
+#   （team_inbox_raw_since pm），**一条 run 算一条**（指针行本来就是合并后的一行，不按事件数算）。
+#   指针行的判据 = 带 run 级字段 knock=（pm.md 里只有指针行带它；手写/别人的行不会被误数）。
+#   只显示：不进 team_pending_text —— 那行通知本身已经在唤醒判据里，再加一条理由等于对同一件事
+#   敲两次（与「未敲门」「指针缺失」两行同一口径）。为 0 时什么都不打印。
+#   点名最多 3 条，剩下的压成「… 另 N 条」：这一行是索引，全文在 pm.md 的那一行上。
+team_inbox_asks_summary() { # → "<N>\t<agent:x · P1 · asks=1；…>"；0 条 → 什么都不打印
+  local line head seat av task after total=0
+  local items=() i out=''
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    head="${line%% :: *}"
+    case "$head" in *'knock='*) ;; *) continue ;; esac
+    av=''
+    case "$head" in *'asks='*) av="${head#*asks=}"; av="${av%% *}" ;; esac
+    case "$av" in ''|*[!0-9]*) continue ;; esac
+    [ "$av" -ge 1 ] || continue
+    case "$head" in *'agent:'*) ;; *) continue ;; esac
+    seat="${head#*agent:}"; seat="${seat%% *}"
+    [ -n "$seat" ] || continue
+    task=''
+    case "$head" in *'task='*) task="${head#*task=}"; task="${task%% *}" ;; esac
+    if [ -z "$task" ]; then
+      after="${head#*agent:$seat }"; after="${after#· }"; task="${after%% · *}"
+    fi
+    [ -n "$task" ] || task='-'
+    total=$((total + 1))
+    items+=("agent:$seat · $task · asks=$av")
+  done < <(team_inbox_raw_since pm)
+  [ "$total" -gt 0 ] || return 0
+  for i in "${!items[@]}"; do
+    [ "$i" -ge 3 ] && break
+    out="${out}${out:+；}${items[$i]}"
+  done
+  [ "$total" -gt 3 ] && out="${out}；… 另 $((total - 3)) 条"
+  printf '%s\t%s\n' "$total" "$out"
+}
+
 team_knock_ledger_path() { printf '%s/notify-knock.log\n' "$(team_state_dir)"; }
 
 team_knock_pointer_failed_count() { # → 当前代的 pointer=failed 条数（轮转出去的那一代不计）
@@ -975,6 +1014,12 @@ team_cmd_digest() {
   case "$pfailed" in ''|*[!0-9]*) pfailed=0 ;; esac
   if [ "$pfailed" -gt 0 ]; then
     printf '  指针缺失 %s 条通知没有写进 PM 收件箱（pointer-write-failed；state/notify-knock.log 当前代，更早的代不计）\n' "$pfailed"
+  fi
+  # notice-fulltext-and-asks：一条完成消息的末尾在问 PM 要裁决时，它自己带 asks=<n>；这里只把它数给 PM 看。
+  local asked; asked="$(team_inbox_asks_summary || true)"
+  if [ -n "$asked" ]; then
+    printf '  待回答 %s 条完成消息里有待你回答的问题（%s）—— team inbox pm 读原文\n' \
+      "${asked%%$'\t'*}" "${asked#*$'\t'}"
   fi
   local ign; ign="$(team_reports_ignored || true)"
   [ -n "$ign" ] && team_dim "  忽略的非任务报告：$(printf '%s' "$ign" | tr '\n' ' ')（里程碑/结项类；要计为任务就让它出现在 BOARD 里）"

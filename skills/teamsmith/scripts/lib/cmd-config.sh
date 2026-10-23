@@ -126,7 +126,7 @@ TEAM_ZRAM_WARN_PCT|apply|pct|0,100|plain|85|-||70,80,85,90|delivery
 TEAM_AGENT_MEM_MB|apply|mb|1,|plain|6144|-||2048,4096,6144|delivery
 TEAM_NOTIFY_TMUX|apply|bool||plain|1|-|||delivery
 TEAM_NOTIFY_DEDUP_SEC|apply|seconds|0,|plain|20|-|||delivery
-TEAM_INBOX_MAX_CHARS|apply|int|1,|plain|150|-||100,150,300|delivery
+TEAM_INBOX_MAX_CHARS|apply|int|1,|plain|150|预览字数：敲门载荷里引用末消息的字数上限；收件箱行与 state/notify.log 存全文||100,150,300|delivery
 TEAM_NOTIFY_DETAIL_MAX|apply|int|1,|plain|2048|state/notify.log 的事件上界：越界轮转到 state/notify.log.1（只留一代）||512,2048,8192|delivery
 TEAM_NOTIFY_LOG|apply|path|file,opt|plain|/tmp/teamsmith-notify.log|-|||delivery
 TEAM_DEFER_TTL|apply|seconds|0,|plain|300|0 = 投递队列入队即过期||60,300,900|delivery

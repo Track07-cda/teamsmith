@@ -158,7 +158,7 @@ empty panel reported as success.
 | `TEAM_AGENT_MEM_MB` | `6144` | empirical footprint of one agent, used by `team ps` for its "how many more fit" estimate |
 | `TEAM_NOTIFY_TMUX` | `1` | `0` = write the inbox only, never type into the PM window |
 | `TEAM_NOTIFY_DEDUP_SEC` | `20` | deduplication window (seconds); `0` = no deduplication |
-| `TEAM_INBOX_MAX_CHARS` | `150` | truncation length of the agent's last message inside a briefing |
+| `TEAM_INBOX_MAX_CHARS` | `150` | **preview only**: how many characters of the agent's last message a knock quotes. The record line in `docs/team/inbox/<seat>.md` and the `state/notify.log` detail keep the **whole** message; a cut preview says so in-line (`truncated=preview:<shown>/<total>B full=<file>[:<line>]`) |
 | `TEAM_NOTIFY_LOG` | `/tmp/<project>-teamsmith-notify.log` | extension debug log (look here when notifications misbehave) |
 | `TEAM_NOTIFY_DETAIL_MAX` | `2048` | events a turn-end notification's detail file (`state/notify.log`) may hold before it is rotated to `state/notify.log.1` (one generation kept; a rotation is named in the extension log) |
 | `TEAM_DEFER_TTL` | `300` | delivery guard: seconds a queued message may wait before it is moved to `state/outbox/held/` (holding never types anything; the payload is already in the recipient's inbox). A backstop, not the first symptom: an untrusted geometry holds immediately and three trusted-empty drains with no progress hold as `queue-stalled` |

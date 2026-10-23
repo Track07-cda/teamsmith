@@ -335,7 +335,9 @@ paste path.
 What the session receives is a **pointer**: `[teamsmith] inbox wake: N new team message(s)`, one line per
 message (`[kind] from <who> → <inbox>.md :: <truncated preview>`) and where to read the full text. Bursts merge
 into one message, previews are truncated (`TEAM_INBOX_WATCH_PREVIEW`, default 160 chars), and the spool itself
-is bounded (`TEAM_INBOX_WATCH_MAX_BYTES`, default 128 KiB: head dropped, tail kept). A session restart
+is bounded (`TEAM_INBOX_WATCH_MAX_BYTES`, default 128 KiB: head dropped, tail kept). A preview that was cut says
+so on its own line — `… truncated=preview:<shown>/<total>B full=<inbox file>[:<line>]` — so a reader can always
+tell a truncated preview from a short message and go read the whole thing (the inbox file keeps the full text). A session restart
 re-baselines the spool, so lines written before it started never wake anybody — the pulse's pending check is
 the fallback and its semantics are unchanged.
 

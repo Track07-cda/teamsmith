@@ -344,7 +344,7 @@ export const en = {
   label_TEAM_AGENT_MEM_MB: 'Seat memory cap',
   label_TEAM_NOTIFY_TMUX: 'tmux delivery',
   label_TEAM_NOTIFY_DEDUP_SEC: 'Notify dedup window',
-  label_TEAM_INBOX_MAX_CHARS: 'Inbox summary chars',
+  label_TEAM_INBOX_MAX_CHARS: 'Preview chars',
   label_TEAM_NOTIFY_LOG: 'Notify debug log',
   label_TEAM_NOTIFY_DETAIL_MAX: 'Notify detail bound',
   label_TEAM_DEFER_TTL: 'Queued delivery TTL',

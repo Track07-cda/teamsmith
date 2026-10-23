@@ -1931,7 +1931,7 @@ team_notify_knock_ledger_append() { # <seat> <task> <class> <outcome> <pointer> 
 
 team_notify_pointer_line() { # <记录行> <outcome> → 指针行（解析不成立 → rc 1）
   local body="$1" outcome="$2"
-  local iso rest tag seat tok head f task_f='' aw_f='' det_f=''
+  local iso rest tag seat tok head f task_f='' aw_f='' ask_f='' det_f=''
   iso="${body%% *}"
   case "$iso" in ''|*[!0-9TZ:.-]*) return 1 ;; esac
   rest="${body#"$iso" }"
@@ -1958,6 +1958,10 @@ team_notify_pointer_line() { # <记录行> <outcome> → 指针行（解析不�
     case "$f" in
       task=*) task_f="$f" ;;
       awaiting=*) aw_f="$f" ;;
+      # notice-fulltext-and-asks：`asks=` 是**事件级**字段（跟 branch=/tip= 同类），但它是 PM 唯一可行动
+      # 的信号，所以在这里被有意复制 —— PM 读的是 pm.md，不是 worker 的收件箱。branch=/uncommitted=/unpushed=
+      # 仍然不复制（它们只描述 last= 那一刻的快照）。
+      asks=*) ask_f="$f" ;;
       'detail=unavailable') det_f="$f" ;;
       *) : ;;   # branch=/uncommitted=/unpushed= 与未识别字段：事件级，不属于指针
     esac
@@ -1965,6 +1969,7 @@ team_notify_pointer_line() { # <记录行> <outcome> → 指针行（解析不�
   printf '%s [%s] agent:%s · %s · knock=%s · see=%s/inbox/%s.md' \
     "$iso" "$tag" "$seat" "$tok" "$outcome" "$TEAM_DOCS_DIR" "$seat"
   [ -n "$task_f" ] && printf ' · %s' "$task_f"
+  [ -n "$ask_f" ] && printf ' · %s' "$ask_f"
   [ -n "$aw_f" ] && printf ' · %s' "$aw_f"
   [ -n "$det_f" ] && printf ' · %s' "$det_f"
   printf '\n'
@@ -2000,8 +2005,14 @@ team_inbox_merge_or_append() { # <recipient> <行> <文件> <明细|-> → state
   if [ "$state" = new ]; then
     printf -- '- %s\n' "$newcontent" >> "$file" || return 1
   fi
-  # 写入结果协议（单行一段，扩展用 ^first=/^key= 解析）：state=new|extended
-  printf 'state=%s\nfirst=%s\nkey=%s\n' "$state" "$first" "${key:--}"
+  # 写入结果协议（单行一段，扩展用 ^state=/^first=/^key=/^lineno= 解析）：state=new|extended
+  # notice-fulltext-and-asks：`lineno=` = 这次写入之后那条记录在文件里的**1 基行号**（追加与截尾重写两条腿
+  # 都是「文件的最后一行」）。为什么由写入侧给：敲门载荷的 `full=<文件>:<行>` 必须resolveable，
+  # 而行号只有持锁的临界区里数才不会与并发追加错位（扩展自己算的数会错位 → 假定位）。
+  local lineno
+  lineno="$(LC_ALL=C wc -l < "$file" 2>/dev/null | tr -d ' ' || true)"
+  case "$lineno" in ''|*[!0-9]*) lineno=0 ;; esac
+  printf 'state=%s\nfirst=%s\nkey=%s\nlineno=%s\n' "$state" "$first" "${key:--}" "$lineno"
   return 0
 }
 
@@ -2067,7 +2078,7 @@ team_cmd_inbox_write() {
   [ -n "$agent" ] || team_usage_die "__inbox-write: 需要 --agent <席位>"
   if [ -z "$src" ] || [ ! -f "$src" ]; then team_usage_die "__inbox-write: 需要 --from-file <行文件>"; fi
   local content; content="$(head -n 1 "$src")"
-  if [ -z "$content" ]; then printf 'state=failed\nfirst=-\nkey=-\n'; return 1; fi
+  if [ -z "$content" ]; then printf 'state=failed\nfirst=-\nkey=-\nlineno=0\n'; return 1; fi
   team_inbox_write_line "$agent" "$content"
 }
 

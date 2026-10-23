@@ -342,7 +342,7 @@ export const zh = {
   label_TEAM_AGENT_MEM_MB: '席位内存上限',
   label_TEAM_NOTIFY_TMUX: '走 tmux 投递',
   label_TEAM_NOTIFY_DEDUP_SEC: '通知去重窗口',
-  label_TEAM_INBOX_MAX_CHARS: '收件箱摘要字数',
+  label_TEAM_INBOX_MAX_CHARS: '预览字数',
   label_TEAM_NOTIFY_LOG: '通知调试日志',
   label_TEAM_NOTIFY_DETAIL_MAX: '通知明细条数上限',
   label_TEAM_DEFER_TTL: '排队过期时间',

@@ -294,6 +294,22 @@ function oneLine(raw: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, Math.max(1, max - 1))}…` : flat
 }
 
+/** notice-fulltext-and-asks：唤醒文本里那一行预览**自己**说出「剪了、剪了多少、原文在哪」（design §4）。
+ *  为什么不能继承 spool 层那个标记：160 字的剪断常常正好把上一层的标记剪掉（它排在最前一个预览的末尾），
+ *  于是两层的读者都看不到「被剪了」—— 谁剪谁写。
+ *  `<shown>`/`<total>` 都是 UTF-8 字节数：`<total>` 是**它拿到的那份 spool 预览**的字节数（不是收件箱里
+ *  全文的字节数 —— 那一层已经剪过了）；`<shown>` 是留下来的那段前缀（省略号是记号，不是正文）。
+ *  `locator` = 仍然存着全文的那份收件箱文件；没有可指的文件时为空串（只报剪了多少，不编造路径）。
+ *  没剪 → 一个字节都不加（设计 §7 的逐字节不变性）。 */
+function markedPreview(raw: string, max: number, locator: string): string {
+  const flat = raw.replace(/\s+/g, ' ').trim()
+  const total = Buffer.byteLength(flat, 'utf8')
+  if (flat.length <= max) return flat
+  const kept = flat.slice(0, Math.max(1, max - 1))
+  const shown = Buffer.byteLength(kept, 'utf8')
+  return `${kept}… truncated=preview:${shown}/${total}B${locator ? ` full=${locator}` : ''}`
+}
+
 function appendLedger(root: string, line: string): void {
   try {
     mkdirSync(stateDir(root), { recursive: true })
@@ -694,6 +710,7 @@ type SpoolLine = {
   from: string
   durable: string
   preview: string
+  marker: string       // 第 7 字段：发送方那一层自己的截断标记（没有 = 未剪 / 旧行）
 }
 
 function parseSpoolLine(raw: string): SpoolLine {
@@ -707,6 +724,7 @@ function parseSpoolLine(raw: string): SpoolLine {
     from: (f[2] ?? '').trim() || '-',
     durable: (f[3] ?? '').trim() || '-',
     preview: f[4] ?? '',
+    marker: f[6] ?? '',
   }
 }
 
@@ -744,6 +762,9 @@ function journalMaterial(rec: { fields: Map<string, string> }, identity: string)
     from: rec.fields.get('from') ?? '-',
     durable: rec.fields.get('durable') ?? '-',
     preview: rec.fields.get('preview') ?? '',
+    // 投递日志的 read 记录不存第 7 字段（它已经被空格分隔的 key=value 格式吃掉了）：崩溃恢复重投时
+    // 标记由**这一层自己**重算（见 markedPreview），它只需要 durable 就能给出定位。
+    marker: '',
   }
 }
 
@@ -1016,11 +1037,19 @@ export default function (pi: ExtensionAPI) {
    *  指针 + 截断预览，绝不带 payload 全文；身份是有界的（发送方的 id 或整行 sha1 摘要）。 */
   const wakeText = (seq: number, lines: SpoolLine[], meta: WakeMeta): string => {
     const sendTs = new Date().toISOString()
+    /** 标记的 `full=` 指哪份文件：`durable` 字段点名的那个收件箱行（条目头部就是真相）；没有 durable
+     *  （knock/nudge）时退回**发送方那一层**写在标记字段/预览里的 `full=`（knock 载荷自带它）；
+     *  两者都没 → 空串：只报剪了多少，不编造一个不存在的文件。 */
+    const locatorOf = (l: SpoolLine): string => {
+      if (l.durable && l.durable !== '-') return `${docsDir(root)}/inbox/${l.durable}.md`
+      const m = /full=([^ ]+)/.exec(l.marker || '') ?? /full=([^ ]+)/.exec(l.preview || '')
+      return m ? m[1] : ''
+    }
     const rows = lines.map(l => {
       const from = l.from && l.from !== '-' ? ` from ${l.from}` : ''
       const where = l.durable && l.durable !== '-' ? ` → ${l.durable}.md` : ''
       const src = l.src > 0 ? new Date(l.src).toISOString() : '(no timestamp)'
-      const preview = oneLine(l.preview || '(empty)', previewLimit())
+      const preview = markedPreview(l.preview || '(empty)', previewLimit(), locatorOf(l))
       return `- [${l.kind}]${from}${where} :: ${preview}  (src ${src} · id ${l.identity})`
     })
     const shown = rows.slice(0, MAX_LISTED)

@@ -68,10 +68,12 @@ if (completed) last = tail(messageText(message.content), cfg.maxChars)   // tail
 同一条 requirement 标题（`A turn-end notification appends one inbox line and knocks once`，为它加指针行）。
 若本 change 也写一条该标题的 MODIFIED：
 
-- 以**基线**文本为底 → 归档本 change 会把指针行的整段契约替换掉（静默删除别人的规格）；
-- 以**该 pending 文本**为底 → 归档顺序反过来时本 change 的新增句又会被覆盖。
+- 以**基线**文本为底 → 归档本 change 时 `openspec archive` 会**拦住**「丢掉当前规格里已有场景」的 MODIFIED 块并逐条
+  点名被丢掉的场景，所以**场景**丢不掉；丢的是**散文** —— 指针行那条 requirement 的散文会被基线版替换，而且**没有
+  任何报错**（PM 在提案审阅里复跑过，命令与读数见 `design.md` §0）；
+- 以**该 pending 文本**为底 → 顺序反过来时本 change 的新增句被覆盖，同样只发生在散文层面、同样无报错。
 
-`spec-refs.sh` 对「同一条 requirement 有两份 pending 版本」没有裁决规则，两种顺序都有一种会丢文本。所以本 change
+`spec-refs.sh` 对「同一条 requirement 有两份 pending 版本」没有裁决规则，两种顺序都会在**散文**上静默丢一份。所以本 change
 **只新增两条 requirement**（全文/预览标记、`asks`），不改任何既有条目的一个字：契约是**并集**，归档顺序因此不影响
 结果，`wake 的 truncated preview` 那条语义也就从根本上没有被碰过。
 

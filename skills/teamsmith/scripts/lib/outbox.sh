@@ -1259,6 +1259,31 @@ team_inbox_watch_clip() { # <text> [<max-bytes=700>] → stdout
   printf '%s' "$cut" | LC_ALL=C sed 's/[^ -~]*$//'
 }
 
+# notice-fulltext-and-asks · 预览被剪时**每一层自己说出「剪了、剪了多少、原文在哪」**（design §4）。
+# 标记是 spool 行的**第 7 个 Tab 字段**，不塞进 preview 字段：后者必须仍然是「≤ 界的最长整字符
+# 前缀」（既有契约），把标记塞进去两边都不成立。老读者只看前 5–6 个字段（team-inbox-watch.ts
+# 按 f[4]/f[5] 取）—— 多一个字段不炸，且**没有第 7 字段的旧行不得被当成「被剪了」**。
+# `full=` 的取值顺序：durable 指向的收件箱文件（条目头部就是真相）→ 载荷里自带的 `full=`
+# （knock 的载荷在扩展那一层被剪时就写了自己那个定位，它指向 worker 收件箱的那一行）。
+# 两者都没有的形状是「durable=- 且载荷没带定位」（nudge、或短到扩展都没剪的敲门）：此时只写
+# `<shown>/<total>`，不编造一个不存在的文件 —— 那份正文在发送方自己的日志里（唤醒文本的尾句点名了它）。
+team_inbox_watch_cut_marker() { # <原载荷（已扁平）> <剪后的预览> <durable> → stdout（没剪 → 空）
+  local payload="$1" preview="$2" durable="$3" total shown locator
+  [ "$preview" != "$payload" ] || return 0
+  total="$(printf '%s' "$payload" | LC_ALL=C wc -c | tr -d ' ')"
+  shown="$(printf '%s' "$preview" | LC_ALL=C wc -c | tr -d ' ')"
+  case "$total$shown" in *[!0-9]*|'') return 0 ;; esac
+  locator=''
+  if [ -n "$durable" ] && [ "$durable" != '-' ]; then
+    locator="full=${TEAM_DOCS_DIR}/inbox/${durable}.md"
+  else
+    locator="$(printf '%s' "$payload" | tr ' ' '\n' | LC_ALL=C awk '/^full=/ { print; exit }')"
+  fi
+  printf 'truncated=preview:%s/%sB' "$shown" "$total"
+  [ -n "$locator" ] && printf ' %s' "$locator"
+  return 0
+}
+
 # 顺序不能反：spool 行存在 ⟹ 收件箱里已经有这条（唤醒不会指向空气）。
 # durable 的判定（条目头部是契约，不靠正文逐字匹配 —— 重复的相同消息不会被误吞）：
 #   inbox + inbox-written=1 → 发送方已经写过了（名字可能是 `-` ：它的记录在自家日志里，如 nudges.log）
@@ -1268,7 +1293,7 @@ team_inbox_watch_clip() { # <text> [<max-bytes=700>] → stdout
 # 返回 0 = 已投递；1 = 投不出去（条目留在队列里重试，绝不假装投过）。
 team_inbox_watch_deliver() { # <entry> <kind> <from> <key> <route-inbox> <payload> → 0 已投递 / 1 投不出去
   local e="$1" kind="$2" from="$3" key="$4" route_inbox="$5" payload="$6"
-  local dir req_ib="" durable="-" preview
+  local dir req_ib="" durable="-" preview clipped marker
   dir="$(team_inbox_watch_dir)"
   mkdir -p "$dir" || return 1
   req_ib="$(team_outbox_header "$e" inbox)"
@@ -1287,10 +1312,13 @@ team_inbox_watch_deliver() { # <entry> <kind> <from> <key> <route-inbox> <payloa
   # 预览有界（700 字节）：spool 行保持小（并发 `>>` 的自追加写尽量落在一次 write 里；扩展侧还会按
   # TEAM_INBOX_WATCH_PREVIEW 再截一次字符数）。正文全文在收件箱/发送方日志里，不在这里。
   # P28/B6：按**字符**边界裁（`cut -c` 在任何 locale 下都按字节，会把多字节字符截半）。
-  preview="$(team_inbox_watch_clip "$preview" 700)"
+  clipped="$(team_inbox_watch_clip "$preview" 700)"
+  marker="$(team_inbox_watch_cut_marker "$preview" "$clipped" "$durable")"
+  preview="$clipped"
   # P81：第 6 字段 = 发送方自己的 durable 记录名（outbox 条目名，与 state/outbox/delivered.log 的 name
   # 列同一个串）—— 接收方的唤醒文本与投递日志用它点名「这是哪一条」；老读者按 5 字段照读。
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(team_epoch_ms)" "$kind" "${from:--}" "$durable" "$preview" "$(basename "$e")" >> "$dir/$key.wake" || return 1
+  # 第 7 字段 = 本层自己的截断标记（见 team_inbox_watch_cut_marker）；没剪就是空字段。
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(team_epoch_ms)" "$kind" "${from:--}" "$durable" "$preview" "$(basename "$e")" "$marker" >> "$dir/$key.wake" || return 1
   return 0
 }
 

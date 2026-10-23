@@ -299,9 +299,13 @@ Honest edges (documented, not hidden):
   captures a pane, advances a drain observation or retries a delivery.
 
 If a notification really did get glued (e.g. the whitespace-only case), the mitigations from before still apply:
-answer with a short sentence right after reading it, lower the volume with `TEAM_INBOX_MAX_CHARS`, or set
-`TEAM_NOTIFY_TMUX=0` and read `team digest` yourself — or run that session on a built-in Pi launch path, where
-the box is not part of the delivery channel at all.
+answer with a short sentence right after reading it, set `TEAM_NOTIFY_TMUX=0` and read `team digest` yourself — or
+run that session on a built-in Pi launch path, where the box is not part of the delivery channel at all.
+
+`TEAM_INBOX_MAX_CHARS` is **not** one of them: it only shortens the preview a knock quotes. The record line in
+`docs/team/inbox/<seat>.md` and the detail in `state/notify.log` keep the whole message, so lowering it removes no
+text from the inbox and no text from the disk — read what is already there and `team inbox <seat> --ack` it away,
+and the volume that matters (events per day) is bounded by `TEAM_NOTIFY_DETAIL_MAX`, not by this key.
 
 ## 4. `team dispatch` refuses to dispatch
 
