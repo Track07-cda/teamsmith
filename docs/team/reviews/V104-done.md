@@ -1,0 +1,4 @@
+- 2026-10-23T10:20:23Z · `team close V104 --status done` · FORCED：PM 显式覆盖（理由：定点补验 PASS：P368 主张复现、13c 去掉即红、A1 计数三档现场；记录已追加进 reviews/turn-notice-in-pm-inbox.md。）
+  -   - ① 复验记录 docs/team/reviews/V104.md：不存在
+  -   - ② 分支是否已并入 main：task/V104-p368-spot（60f677150）的提交还不在里面（squash 合并不会让分支 tip 变成祖先）
+  -   - ③ 阶段 verify 的交付证据：verify 的交付就是复验记录 docs/team/reviews/V104.md（用 ① 的 team review 生成，判定 PASS）
