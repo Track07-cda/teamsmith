@@ -129,9 +129,11 @@
 
 ## 6 · 最终一次运行 + 报告
 
-- [ ] 6.1 `openspec validate --all --strict`（21 项）、`bash skills/teamsmith/tests/spec-refs.sh --check`、
+- [x] 6.1 `openspec validate --all --strict`（21 项）、`bash skills/teamsmith/tests/spec-refs.sh --check`、
+  - 2026-10-23 PM 读数：`openspec validate --all --strict` 23/0；`spec-refs.sh --check` rc=0、judged 118 references、**undeclared 0**；`git status --short` 空（干净）。
   `git diff --check && git status --short`。 — **未勾：证据不全。** `openspec validate --all --strict` 21/21 与 `git diff --check` 在 `P338-dev-bob.md` §7 有读数；`spec-refs.sh --check` 与 `git status --short` 在 P338/V78 的记录里**没有**，缺这两条。
-- [ ] 6.2 定点**执行**（不是查表）：`bash skills/teamsmith/tests/smoke.sh --select 34,34b,34d,36`。这四段覆盖了
+- [x] 6.2 定点**执行**（不是查表）：`bash skills/teamsmith/tests/smoke.sh --select 34,34b,34d,36`。这四段覆盖了
+  - 2026-10-23 PM 执行（干净冻结树 `6f23252a`）：`--select 34,34b,34d,36` → **rc=0**、**1327 s**，**34d 首次在新代码上实跑**；日志 `~/.cache/close033/logs/6-2.log`。
   产品面里**所有**断言排队行/记录的段（34 `smoke.sh:16461-16491`、34b `:16688-16708`、34d `:17383-17527`、
   36 `:17655-18071`）。`section-select.sh` 只用来**查表**（`--list`/`--select` 打印 `decision=RUN`/`keys=N` 就退出，
   一段都不跑），不能当执行证据；`--paths` 也缩不窄（它把 `smoke.sh` 本身算成 17 个键、四份文件合计 46 个键 =

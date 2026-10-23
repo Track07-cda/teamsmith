@@ -88,7 +88,8 @@ A 的表上做。每张单跑完自己的定点证据即可，不要求每步全
 
 ## 5 · 最终一次固定环境整体运行（交付门槛）
 
-- [ ] 5.1 在钉死镜像里跑一次 `smoke.sh --floor --paths <本 change 触碰的路径> --keep </dev/null`：它同时是基线的实测
+- [x] 5.1 在钉死镜像里跑一次 `smoke.sh --floor --paths <本 change 触碰的路径> --keep </dev/null`：它同时是基线的实测
+  - 2026-10-23 读数（PM，钉死镜像，干净冻结树 `6f23252a`）：`--floor --paths skills/teamsmith/extension/team-notify.ts --keep` → **rc=0**、128/135 段、`✓4525 ✗0 SKIP17`、账本一致、**5882 s**；现场留在宿主 `~/.cache/close033/logs/51.log`。
   墙钟（`design.md` §3.4）、合并后断言的合跑（§4.2）、披露检查。记录：退出码、`decision=`、运行/未跑的段数、尾部 25 行、
   总时长。**不**把它说成全量门禁；§61b 与其他重段明确不在其中。
   **（2026-10-20 未勾：本机容器 `029915307b75` 从 06:49:20Z 跑到 07:34:18Z 被 `podman stop` 收口 —— rc=143、2699 s、
@@ -120,7 +121,8 @@ A 的表上做。每张单跑完自己的定点证据即可，不要求每步全
 - [x] 7.5 **文字勘误**：`SKILL.md` 里残留的「performance red lines」句改成读数语义；delta 的 `**Migration**` 改成
   **四条** premise 场景退役，并点名「a skipped fixture is never reported as a passing one」的承接者
   （`verification#A gate that cannot judge says so`）。
-- [ ] 7.6 §36 整段**没有**在本轮跑（PM 明令不跑整段）；36⑨ 的证据只有 `workflow-entry.sh` 的独立运行与其三次翻转。
+- [x] 7.6 §36 整段**没有**在本轮跑（PM 明令不跑整段）；36⑨ 的证据只有 `workflow-entry.sh` 的独立运行与其三次翻转。
+  - 2026-10-23 PM 补跑：`--select 36` → **rc=0**、**1059 s**（日志 `~/.cache/close033/logs/76.log`）。
   整段（含 36⑧ 探针）的读数仍属最终整体那一轮。 — **未勾**：这条写的「§36 未跑」后来被同一轮返修取代 —— §7.3c 跑过两次 `--select 36`，最后一次 `✓121 ✗0 SKIP3`；但「整段读数属于最终整体那一轮」（条目 5.1）仍未发生，所以按当时的事实留空。
 
 ## 6 · verify（独立席位，非 apply 作者）
