@@ -11,7 +11,8 @@ A2 是结果账与显示面。拆开是因为 A1 自己就是一次可交付的�
 - [x] 0.1 `git merge main`；确认 propose 的 delta 已被 PM 在 `docs/team/reviews/turn-notice-in-pm-inbox-proposal.md`
   里判 ACCEPTED。读完 `design.md` §1–§10 再动手；发现规格自相矛盾 → `BLOCKED:` 交回 PM，**不自行改 delta**。
   ↳ 证据（P371）：`docs/team/reviews/turn-notice-in-pm-inbox-proposal.md` 第 3 行「状态: **ACCEPTED**」；A1/A2 的实现提交已在 main（`git log --oneline main | grep notify` → `e035c57e`、`d9e219b2`）。
-- [ ] 0.2 改前现场（命令与输出尾部进报告）：`docs/team/inbox/pm.md` 的行数与 `[auto]` 行数；
+- [x] 0.2 改前现场（命令与输出尾部进报告）：`docs/team/inbox/pm.md` 的行数与 `[auto]` 行数；
+  - 2026-10-22 PM 实测并已落在 `proposal.md:9-11`：`pm.md` **3 行全部 `[manual]`**、历史 `[auto]` 仅 2 行；同日 `dev3.md` 新增 8 行 `[auto]`，`verify.md` 新增 4 行；样本 `P362 05:42:38Z` 写在 `dev3.md`、同刻 PM 投递日志有 `sent seq=1275`——「通知在，但不在 PM 读的地方」。
   `grep -c '\[auto' docs/team/inbox/*.md` 的形状；`team digest`（`[2]` 段原文）；`team inbox pm --detail` 的输出；
   `state/notify.log` 的记录数；一次 `team __inbox-write` 的返回三行。
   ↳ 缺（P371）：只留住了一半。在案的有 `proposal.md` 的 Why 表（`pm.md` 3 行全 `[manual]`、历史 `[auto]` 2 行、`dev3.md` 8 行 `[auto]`）与 P364 报告 §2 的 settle 前后现场（`state/notify.log` 不存在 → 1 行、`__inbox-write` 的 `state=/first=/key=` 三行）；**缺** `team digest` 的 `[2]` 段原文与 `team inbox pm --detail` 的现场输出。要做到才算：报告里能贴出这两条命令改前的原样输出 —— 改动已并入 main，今天只能从账本追溯，所以这一条留给 PM 裁定（以 proposal 的读数替代，还是接受这个缺口）。
