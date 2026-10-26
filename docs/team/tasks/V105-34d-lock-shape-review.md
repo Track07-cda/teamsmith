@@ -34,3 +34,15 @@ Work in your own clean clone on disk. Do not modify the candidate or main.
 Write only `docs/team/reports/V105-verify.md` and your own thread. Start with PASS, PARTIAL or FAIL. Separate required fixes from observations. If the candidate itself is defective, do not repair it; report the exact failing input and assertion.
 
 No full gate, no container run, no new fixtures or guards, no push, no archive.
+
+## Second round: focused F1 recheck
+
+Candidate after rework: `5ff4b1de` (`7ce7fec5` is the code change; `7d2d561b` merges current main; `5ff4b1de` adds the report). The candidate's `smoke.sh` is byte-identical to `7ce7fec5`.
+
+The first review's private-lock and two shape-mutation results stand. Do not repeat the whole first round. Verify only the F1 repair and that it did not break those results:
+
+1. In your own clean clone, run ordinary `--select 34d` without setting `TEAM_SMOKE_LOCK`. It must be green, and the output must actually contain both new default-name assertions (default basename and exact default companion). A `TEAM_SMOKE_NO_LOCK=1` run is not accepted as the reachability proof.
+2. Run `--select 34d` again with a private `TEAM_SMOKE_LOCK=<private>/7-1.lock`. It must be green and the derived companion must be `.7-1.lock.machine`.
+3. In a private copy, change the default lock name. On an ordinary run, the new literal assertions must fail and name the mismatch while the input-derived assertions still pass. Restore and confirm green.
+4. Inspect the delta from `f62c14fc` to the candidate: the previous companion-shape assertions must remain present, and the only new behavior must be the explicit `unset` default checks plus the current-path consistency check. Reuse the first round's two passing shape mutations; do not rerun them unless this delta touches them.
+5. Append a `## Second round` section to your existing report; keep the original PARTIAL section verbatim. Give the final PASS or FAIL first, then the commands and result tails. Run the same static checks as round one; no full suite.
