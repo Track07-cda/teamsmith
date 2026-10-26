@@ -603,9 +603,9 @@
 | P376 | PM窗口创建失败不再假报成功 | dev | - | - | done |
 | V106 | PM窗口真假独立复核 | verify | - | - | done |
 | P377 | 61b唯一失败臂定点诊断 | dev | - | - | done |
-| P378 | npm全局信号入口污染 | dev-bob | - | - | wip |
+| P378 | npm全局信号入口污染 | dev-bob | - | - | done |
 | V107 | 61b单臂修复独立复核 | verify | - | - | done |
-| V108 | npm命令范围独立复核 | dev | - | - | wip |
+| V108 | npm命令范围独立复核 | dev | - | - | done |
 
 ## 当前里程碑
 
