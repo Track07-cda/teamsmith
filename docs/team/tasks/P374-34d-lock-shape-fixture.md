@@ -37,3 +37,17 @@ assert_eq "34d 2.1 默认路径 → 伴生锁（同行同目录、basename + .ma
 ## 边界
 
 写集：`skills/teamsmith/tests/smoke.sh`（只那两条断言）、报告。不改产品（`gate-lock.sh` 的推导是对的）、不加段、不改别的断言。
+
+## V105 rework: make the default-name assertion reachable
+
+V105 (`docs/team/reports/V105-verify.md`) is **PARTIAL**, not PASS. The private-lock repair is correct, but the new default-name literal assertion never runs in an ordinary gate invocation: `smoke.sh` exports a resolved default `TEAM_SMOKE_LOCK` before the section body, so the section's `if [ -z "${TEAM_SMOKE_LOCK:-}" ]` condition is always false.
+
+Make only this bounded repair on the same branch:
+
+1. Keep the input-derived companion-path assertions. Replace the environment-conditional default-name check with an explicit subshell that unsets `TEAM_SMOKE_LOCK` before calling the existing default-path function. Assert both the default basename (`teamsmith-smoke.lock`) and its exact companion name (`.teamsmith-smoke.lock.machine`) unconditionally. Do not rely on whether the caller set the variable, and do not introduce another input-resolution rule.
+2. Make the earlier "unset default path" branch a real assertion too, rather than comparing the same function call twice or falling into an informational `ok` every time.
+3. Run ordinary `--select 34d` without setting `TEAM_SMOKE_LOCK` and show the new literal assertion actually executes. Also run the private-lock case. Do not use `TEAM_SMOKE_NO_LOCK=1` as the only proof: it is a separate no-lock path and does not prove the ordinary gate path.
+4. In a private copy, change the default lock name: the new default-name assertion must fail on an ordinary run and name the mismatch. Restore and confirm green. Keep V105's two passing shape mutations (missing leading dot and companion moved to tmp root) intact.
+5. Finish `docs/team/reports/P374-dev.md`: include the original V103 failure, the V105 PARTIAL finding, both input readings, and the mutation results. Do not rewrite history or claim the first candidate passed V105.
+
+No product implementation changes, no new section, no full suite. The second review is a focused V105 recheck, not a new task or a full re-verification.
