@@ -12,7 +12,7 @@ branch: task/V106-pm-window-truth-review
 
 ## Candidate
 
-`de39538c` on `task/P376-pm-window-create-truth` (implementation `fa691596`, behavioral test `3b563c41`). Report: `docs/team/reports/P376-dev.md`.
+`544c0e45` on `task/P376-pm-window-create-truth` (implementation `fa691596`, behavioral test `3b563c41`). Report: `docs/team/reports/P376-dev.md`. The earlier `de39538c` differs only in the report; `cmd-watch.sh` and `smoke.sh` are byte-identical.
 
 The fix is intended to make `team up` return non-zero and name the failed PM-window creation instead of printing `✓ 创建 PM 窗口 …` after `team_tmux_new_window` failed. The success path must remain unchanged.
 
