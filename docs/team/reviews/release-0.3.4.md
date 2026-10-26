@@ -30,7 +30,22 @@ Main user-facing changes since `v0.3.3`:
 
 ## Release blockers found after preparation
 
-1. **npm global command pollution.** The candidate's `package.json` still exposes four signal commands through npm's global `bin`. An isolated install followed by a PATH-prefixed ordinary `pgrep` reproduced Teamsmith's gate outside a team session (rc=64). The existing specification `init-skill#The CLI ships as one npm bin entry and the package carries what it runs` already requires exactly one `bin`; `P378` restores that boundary and keeps the shims inside PM/worker sessions.
-2. **One flip-arm failure in the frozen full gate.** `P377` is reproducing only `init-legacy-proceeds-bootstrap` and reading its actual `bootstrap` output. The other four similarly named inner `FAIL` lines are expected by their flip checks and are not five separate product defects.
+1. **npm global command pollution — fixed and independently verified.** `P378` removed the four signal names from global `bin`; `V108` independently proved the ordinary shell now uses system commands while managed PM/worker exports still resolve to the package shims. Upgrade from the old five-bin package removes the old links. Merged as `86278477`.
+2. **One flip-arm failure in the frozen full gate — fixed and independently verified.** `P377` showed that the mutant scratch is not an installable skill source, so bootstrap still failed for an unrelated reason and the old named refusal assertion could not fire. The flip now targets the refusal-route outputs and the `--print` return-code path. `V107` reproduced the mutant and both controls, PASS. Merged as `d5843fbc`.
+
+## Final candidate and proposed acceptance
+
+Final main candidate: **`51a6a36a`**, version **0.3.4**, working tree clean.
+
+- `openspec validate --all --strict`: **19 passed / 0 failed**.
+- `spec-refs --check`: **121 judged, 0 undeclared**.
+- `section-select.sh --check`: **12 ok / 0 bad**.
+- `section-guard.sh --loop-check`: **all green**.
+- `ledger-ban`: **0 hits**.
+- Final affected smoke selection on merged main (`--select 11f,39`): **83 passed / 0 failed / 0 skips**, 7 sections closed, rc=0, 185.8s.
+- Final `release-check.sh`: **28 passed / 2 failed / 0 skipped**; the two failures are only that `v0.3.4` has not yet been created and HEAD is ahead of `v0.3.3`. Version, public-face scan, ledger ban and all three installation routes pass.
+- Final `release-check.sh --self-test`: **A 4/4, B 4/4**.
+
+The full frozen-container run on `d8a21c03` remains the baseline: **5058 passed / 1 failed** over 134 sections. Since then the only product/test changes are `P377` (one flip case) and `P378` (package bin plus installation assertions), each independently verified, plus the final affected selection above. I propose using the **baseline full run + independent targeted verification + final affected selection** as the composite acceptance evidence instead of spending another four hours on an unchanged full suite. This requires the user's explicit acceptance before tagging and pushing.
 
 No tag, public push or npm publish has been performed for 0.3.4.
