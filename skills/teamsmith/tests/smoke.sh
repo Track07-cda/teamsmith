@@ -18184,16 +18184,34 @@ else
 P287D="$TMP/p287-id"; rm -rf "$P287D"; mkdir -p "$P287D"
 # 2.1 纯函数单测（P303 的留空项）：伴生锁路径推导 —— 同行同目录、basename + `.machine`、点开头。
 # 两种输入：默认路径（未设 TEAM_SMOKE_LOCK）与私有 TEAM_SMOKE_LOCK —— 断言推导结果本身，不依赖真运行。
+#
+# P374/V105：段体执行时 TEAM_SMOKE_LOCK **一定非空**（smoke.sh 取锁前就把解析出的发布路径 export 回来了），
+# 所以「调用者没设」只能靠显式 unset 的子 shell 重新问一次产品函数；默认名这条常量因此无条件被断言，
+# 不再只在 TEAM_SMOKE_NO_LOCK=1 那条独立路径上可达。
 P287D_DEF="$(gate_lock_default_path)"
-if [ -z "${TEAM_SMOKE_LOCK:-}" ]; then
-  assert_eq "34d 2.1 默认路径（未设 TEAM_SMOKE_LOCK）" "$(gate_lock_default_path)" "$P287D_DEF"
-else
-  ok "34d 2.1 默认路径那一条：外层设了 TEAM_SMOKE_LOCK=$TEAM_SMOKE_LOCK → 按同一规矩换输入（避免误判）"
-fi
+P287D_DEF_DEFAULT="$(unset TEAM_SMOKE_LOCK; gate_lock_default_path)"
+assert_eq "34d 2.1 未设 TEAM_SMOKE_LOCK → 默认发布路径的名字是 teamsmith-smoke.lock" \
+  "$(basename "$P287D_DEF_DEFAULT")" "teamsmith-smoke.lock"
+assert_eq "34d 2.1 未设 TEAM_SMOKE_LOCK → 伴生锁就是同目录的 .teamsmith-smoke.lock.machine" \
+  "$(gate_lock_companion_path "$P287D_DEF_DEFAULT")" \
+  "$(dirname "$P287D_DEF_DEFAULT")/.teamsmith-smoke.lock.machine"
+assert_eq "34d 2.1 本次发布路径 = TEAM_SMOKE_LOCK（外面没给就是刚算出的默认值）" \
+  "$P287D_DEF" "${TEAM_SMOKE_LOCK:-$P287D_DEF_DEFAULT}"
 # P309：锁的发布路径**不跟着临时根搬**（跨版本串行：新旧两版必须取同一把锁），所以这里对着锁自己的
 # 目录算伴生路径 —— 断言说的是「同行同目录、basename + .machine」，不是「在临时根下」。
-assert_eq "34d 2.1 默认路径 → 伴生锁（同行同目录、basename + .machine）" \
-  "$(gate_lock_companion_path "$P287D_DEF")" "$(dirname "$P287D_DEF")/.teamsmith-smoke.lock.machine"
+# P374：期望值必须从**同一输入**派生。外层可以用 TEAM_SMOKE_LOCK 换成私有的发布路径（V103 实测
+# `7-1.lock`），伴生锁随之改名成 `.7-1.lock.machine`；把默认名写死成字面量只会给出假红。所以这里
+# 断言的是**规则**：同目录、点开头、名字 = 点 + basename(发布路径) + `.machine`（默认名那条常量另由上面
+# 两条无条件的字面量断言钉住，私有锁跑法下也能对上）。
+P287D_DEF_CMP="$(gate_lock_companion_path "$P287D_DEF")"
+assert_eq "34d 2.1 发布路径 → 伴生锁同目录（同行同目录，不跟着临时根搬）" \
+  "$(dirname "$P287D_DEF_CMP")" "$(dirname "$P287D_DEF")"
+case "${P287D_DEF_CMP##*/}" in
+  .*.machine)
+    assert_eq "34d 2.1 发布路径 → 伴生锁名 = 点 + basename(发布路径) + .machine" \
+      "${P287D_DEF_CMP##*/}" ".$(basename "$P287D_DEF").machine" ;;
+  *) bad "34d 2.1 伴生锁名不是「点开头 + .machine 结尾」：$P287D_DEF_CMP" ;;
+esac
 P287D_PRIV="$P287D/priv.lock"
 P287D_PRIV_DEF="$(TEAM_SMOKE_LOCK="$P287D_PRIV"; export TEAM_SMOKE_LOCK; gate_lock_default_path)"
 assert_eq "34d 2.1 私有 TEAM_SMOKE_LOCK 形状 → 默认路径取它" "$P287D_PRIV_DEF" "$P287D_PRIV"
