@@ -271,185 +271,57 @@ fail the gate. A tree without markers MUST stay green.
 - **WHEN** the gate's marker check runs
 - **THEN** all three produce no hit and the check stays green
 
-### Requirement: The correctness gate judges correctness only
-
-The project's correctness gate — `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh`, the
-pair configured in `TEAM_GATES` and run by `team review` — SHALL contain no wall-clock or CPU-share performance
-red line. No assertion in it may fail because a correct operation took longer than a threshold, and no fixture it
-runs (transitively) may make such a judgment; slower-but-correct behaviour MUST stay green. The gate's sources
-SHALL carry a pure-logic guard that fails when a perf judgment marker (a frame-budget comparison, a CPU-share
-comparison, or an invocation of the measuring fixtures) reappears in the gate or disappears from the performance
-suite. The one shared gate lock and its accounting (`TEAM_SMOKE_LOCK`, `TEAM_SMOKE_LOCK_WAIT`, the
-`queued`/`ran`/`limit` record) are unchanged, and the gate keeps the time-independent knob-integrity check of
-`panel#Frame assembly is asynchronous, cached and never blocks input`.
-
-A fixture that waits for a real process to reach a state SHALL treat its wait horizon as a **failure detector,
-never as a judgment**: when the horizon runs out, the verdict MUST be attributed from evidence collected at that
-moment — whether the scene is still changing, and the machine's own readings (`loadavg_1m`/`loadavg_5m`, the
-logical core count, and a code-independent probe that measures how long this machine needs to start processes).
-A machine over the premise MUST produce a **visible SKIP** for that wait and the rest of its scenario: the line
-names the wait, its elapsed time and the readings, the run's summary counts it as a skip, it is never reported as
-a pass and never as a failure, and the gate still exits 0 — a fixture that cannot be judged SHALL say so instead
-of turning the machine into a red. A machine under the premise whose scene is static MUST still fail: a
-regression is a code verdict and the premise MUST NOT become an escape. While the scene is still changing the
-fixture SHALL be allowed to extend its polling beyond the base horizon (a bounded factor) so a merely slow
-machine is still judged rather than skipped. The readings MUST be real on the real path — an injection knob is
-honored only under the fixture switch, and the injected values are printed as ignored — and the numbers that
-decide SHALL be calibrated from measurement with their measured bands stated next to the fixture. Nothing here
-adds a wall-clock or CPU-share red line: the horizons themselves are unchanged, and no assertion may fail
-because a correct operation was slow.
-
-A section's per-section hard budget (`verification#Every gate section accounts for itself, and a stuck section is
-named`) is a **liveness detector, not a performance judgment**, and the promise above holds inside it: the budget
-is derived from a recorded measured band with a stated factor and floor, it MUST NOT be tightened below that band,
-a section that finishes inside its bound MUST stay green however slow the machine is, and the only thing its clock
-can decide is that the section did not terminate — a trip names the section and is always a red, never a skip and
-never a silent pass. The timing record the gate writes is not a verdict: no other assertion in the gate may
-compare a measured duration to a threshold, and the pure-logic guard SHALL keep that true (a duration comparison
-reappearing outside the guard module, beside the frame-budget/CPU-share markers, turns it red).
-
-#### Scenario: A slow-but-correct console keeps the correctness gate green
-
-- **GIVEN** the assembly-delay fixture knob set in fixture mode
-  (`TEAM_SMOKE_FIXTURE=1 TEAM_SMOKE_FRAME_DELAY_MS=2600`), which makes every sampled frame exceed the 2000 ms
-  budget
-- **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs
-- **THEN** it exits 0 with no failing assertion, and its output contains no frame-budget or CPU-share judgment —
-  the same knob on the pre-split gate is the red side of that flip
-
-#### Scenario: A wall-clock judgment cannot come back unnoticed
-
-- **GIVEN** the correctness gate's sources
-- **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs
-- **THEN** its guard asserts that the gate's files carry no frame-budget/CPU-share marker and invoke no measuring
-  fixture, and that the performance suite carries the same marker — reintroducing the old judgment into the gate,
-  or deleting it from the suite, makes the guard red
-
-#### Scenario: The knob-integrity check stays in the gate, without a measurement
-
-- **GIVEN** the fixture knobs set with the fixture switch off
-- **WHEN** the gate runs the panel fixture's premise-only mode
-- **THEN** the gate asserts the ignore notices for every injected knob and that the premise line carries the real
-  load and core count, and it judges no duration
-
-#### Scenario: A machine over the premise skips visibly, and the gate is not red
-
-- **GIVEN** the pty fixture's premise readings injected over their ceiling under the fixture switch
-  (`TEAM_SMOKE_FIXTURE=1 TEAM_P21_PREMISE_PROBE_MS=999`), i.e. the machine reads as unable to deliver a frame in
-  the fixture's budget
-- **WHEN** `bash skills/teamsmith/tests/panel-p21.sh choices` runs and `TEAM_SMOKE_FAST=1 bash
-  skills/teamsmith/tests/smoke.sh </dev/null` runs the section that drives it (§38-b)
-- **THEN** the fixture exits `4`, prints a `SKIP` line naming the wait that hit its horizon, its elapsed time,
-  the probe value and the load, counts the skip in its summary, and reports no failure — and the gate's section
-  prints the same reason and still exits 0, so no review verdict turns red for it
-
-#### Scenario: The premise is not an escape from a real regression
-
-- **GIVEN** a scratch tree whose panel sources lost the wheel consumption the `wheel` scenario and the gate's
-  §38-e structural pin assert (a real regression), the bundle rebuilt there, and the machine readings under
-  their premise
-- **WHEN** `bash skills/teamsmith/tests/panel-p21.sh wheel` runs against that tree
-- **THEN** the wheel assertions fail (not skip), the fixture exits `1`, and the failure names the assertion — the
-  same run against the unmodified tree is green, which is the flip
-
-#### Scenario: A skipped fixture is never reported as a passing one
-
-- **GIVEN** the over-premise injection of the first scenario
-- **WHEN** the gate's section for the pty fixture runs
-- **THEN** its line reads `SKIP` with the reason and the readings, the all-green line for that section does not
-  appear, the run's skip count is non-zero, and the gate's output tail that `team review` records carries the
-  same line
-
-#### Scenario: The premise's readings stay real on the real path
-
-- **GIVEN** `TEAM_P21_PREMISE_PROBE_MS=999` (and the other premise knobs) set with the fixture switch **off**
-- **WHEN** the pty fixture runs
-- **THEN** its premise line carries the real load, core count and probe value, the injected values are printed as
-  ignored, and the verdict comes from the real readings — the same promise the knob-integrity scenario makes for
-  the panel's measurement knobs
-
-#### Scenario: A section that is slowed on purpose still stays green under its bound
-
-- **GIVEN** the correctness gate's sources and `TEAM_SMOKE_FIXTURE=1` with the assembly-delay knob of the first
-  scenario set, which slows the section that drives the pty fixture in this run
-- **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` runs
-- **THEN** it exits 0, every section's start line carries its budget and its closing line carries the elapsed
-  time, and no timeout line appears — the slower section's duration is recorded, not judged
-
-### Requirement: The performance suite is separate, self-describing and non-blocking
-
-`bash skills/teamsmith/tests/perf.sh` (fronted by `team perf`) SHALL judge the panel's performance red lines — the
-interactive first frame (under the unchanged 2000 ms budget), the uncached frame assembly line (the unchanged
-2000 ms budget) and the steady-state pane CPU (under the unchanged 1 % of one core) — with the premise factors
-(0.75 / 0.25), the median-of-five/samples-of-three rules, the visible SKIP and the thresholds exactly as they are
-today. It SHALL print an **environment self-description** before its verdicts: whether it runs on the host or in a
-container, the visible logical cores, the CPU quota when one is set, the load average, the JS runtime and tmux
-versions, and the revision under test. A verdict line SHALL carry the measured numbers it rests on.
-
-Its exit status SHALL distinguish the outcomes: **0** every judgment ran and was green, **2** at least one
-judgment was red, **4** no red but at least one judgment visibly skipped (or the environment lacks a tool or an
-engine a measurement needs — the reason and the measured values printed), **3** a setup failure. A skip MUST NOT be
-reported as green, and a red MUST NOT be hidden behind another judgment's skip. It SHALL be runnable on the host
-and inside the pinned `ci/Containerfile` image (`team perf --container`, or the equivalent documented container
-invocation), and it SHALL take its own lock (`TEAM_PERF_LOCK`) so two performance runs do not overlap. It MUST NOT
-take the correctness gate's lock and MUST NOT be invoked by the correctness gate or by `team review`: a failing
-performance run never changes a review verdict.
-
-#### Scenario: A slow frame is red with its numbers
-
-- **GIVEN** the suite's fixture switch and an injected first-frame delay
-- **WHEN** `bash skills/teamsmith/tests/perf.sh` runs
-- **THEN** it exits 2, the failing judgment prints its median and the samples behind it, and the summary names
-  that judgment red
-
-#### Scenario: A busy machine skips visibly instead of passing
-
-- **GIVEN** an injected load reading above the premise factor, with a delay that would otherwise be red
-- **WHEN** the suite runs
-- **THEN** the affected judgment prints `SKIP` with the measured values and the load, the suite exits 4 (no
-  conclusion) and its own exit status is not 0 — the run is never presented as green
-
-#### Scenario: The environment self-description is printed with the verdicts
-
-- **WHEN** the suite runs, on the host and (once) in the pinned image
-- **THEN** the output names the environment (host/container), the visible cores, the CPU quota or its absence,
-  the load average, the runtime and tmux versions, and the revision, and each judgment's line carries its measured
-  numbers
-
-#### Scenario: The suite is not part of a review
-
-- **GIVEN** a checkout whose performance suite would be red
-- **WHEN** `team review <ID> --dir <checkout>` runs the gates
-- **THEN** the verdict comes from the correctness gate alone, and `docs/team/reviews/<ID>.md` contains no
-  performance judgment
-
-#### Scenario: Two performance runs serialize instead of measuring each other
-
-- **GIVEN** one performance run holding `TEAM_PERF_LOCK`
-- **WHEN** a second `bash skills/teamsmith/tests/perf.sh` starts with `flock` available
-- **THEN** it prints the holder and queues (bounded by a wait cap) instead of measuring concurrently, and the
-  correctness gate's lock was never taken by either run
-
 ### Requirement: CI runs the two gates separately and performance does not block
 
 The CI workflow SHALL run the correctness gate and the performance suite as separate steps or jobs with
 independent conclusions and logs, and a failing performance run MUST NOT turn the correctness conclusion red or
-block a merge. The performance suite SHALL be run once before a release, in the pinned image, and its measured
-numbers SHALL be recorded in the release checklist.
+block a merge. The correctness step SHALL run the **product floor** — every section the table does not declare a
+gate self-check (`verification#A changed-path list selects the sections to run, or the full suite`) — together
+with the sections the push's own changed paths claim, so what the project delivers is judged on every run while a
+heavy or structural self-check runs when its own sources change or in a full run — including a fixture
+meta-mutation (the routing flip matrix) whose subject is the fixture's teeth rather than delivered behaviour, and
+whose recorded cost is 4946 s, which is why it may not sit in the ordinary entry. The workflow SHALL obtain the
+changed paths from the push's base and tip as a **NUL-separated listing** (`git diff --name-only -z`, read into a
+bash array) and pass them as arguments to the suite (the existing `--paths`), never through a per-line file and
+never re-derived inside the container: a path may itself contain a newline, and git's default listing C-escapes
+quotes and backslashes. The workspace mount is read-only, so the paths travel as arguments rather than as a file
+written into the checkout. An unclaimed path or an unresolvable base SHALL give the full suite rather than a
+narrower run. The performance suite SHALL be run once before a release, in the pinned image, and the reference
+numbers it prints SHALL be recorded in that release's record.
 
 #### Scenario: The workflow carries two independent conclusions
 
 - **WHEN** `.github/workflows/gates.yml` is read
-- **THEN** the correctness command is the unchanged
-  `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh </dev/null`, the performance command
-  is a separate step inside the same pinned image, and that step is tolerated (`continue-on-error: true`) so its
-  red is visible in the log without failing the correctness conclusion
+- **THEN** the correctness step runs `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh
+  --floor --keep </dev/null --paths "$@"` inside the pinned image with the push's changed paths as that command's
+  own arguments, with no FAST and no `continue-on-error`, the performance command is a separate step inside the
+  same pinned image, and that step is tolerated (`continue-on-error: true`) so its failure is visible in the log
+  without failing the correctness conclusion
+
+#### Scenario: A path with a newline, a quote or a backslash survives the hand-in
+
+- **GIVEN** a scratch checkout with a tracked file whose name contains a double quote and a backslash, and a tree
+  with a file whose name contains a newline
+- **WHEN** the workflow's changed-path step is run against a push that touched it, and the selector is asked for
+  that path
+- **THEN** the path arrives byte-for-byte (the selector answers `RUN` or `FULL` for the path the tree really has,
+  not a quoted or escaped variant), the section that declares it is selected, and a shape that read the paths
+  line-by-line instead loses the newline case and breaks on the escaped one
+
+#### Scenario: The correctness step says what it ran and what it left out
+
+- **GIVEN** a push whose changed paths claim one product row and no gate self-check, and the run of the previous
+  scenario
+- **WHEN** the last 25 lines of its output are read
+- **THEN** they carry the selection header (`decision=`, the number of sections run and the keys it did not run),
+  the selected-run token `== 选段结果 ==`, and no `smoke 全绿` — the floor run is disclosed as a selection and is
+  never presented as the full gate
 
 #### Scenario: The pre-release run is named
 
-- **WHEN** the release checklist (`docs/team/PUBLISH.md`) is read
-- **THEN** it names the performance command to run before a release and the place its measured numbers are
-  recorded
+- **WHEN** the project's release checklist and the release records it requires are read
+- **THEN** the checklist names the performance reading command to run before a release (the pinned image) and
+  the release record is where its printed numbers are pasted
 
 ### Requirement: The two gates are discoverable, and the doctor names the next step
 
@@ -663,13 +535,12 @@ The wait SHALL be bounded and SHALL follow the counted-wait discipline of the ga
 (`skills/teamsmith/tests/lib/pty-wait.sh` is the model): it polls in counted rounds, carries a cap, and names
 **which data-derived state** was expected in its attribution — not only that a wait expired — alongside the wait
 itself and the rounds it used. When the wait runs out the fixture MUST NOT make the assertion and MUST NOT report
-that scenario green. Whether the exhaustion is a **failure** or a **visible SKIP** is decided by
-`verification#The correctness gate judges correctness only`: a scene that stays static while the machine's
-readings are under their premise is a regression and stays red, and a machine over the premise takes the visible
-skip — never a pass.
+that scenario green: the exhaustion is a **failure** that names the wait and the state it waited for — never a
+machine-attributed skip (`verification#The correctness gate judges correctness only, and a duration is a reading`), so a busy machine cannot
+turn a regression into a skip.
 
 The bound MUST NOT be a wall-clock or CPU-share performance red line
-(`verification#The correctness gate judges correctness only`, D33's rule): a read that lands slowly but inside the
+(`verification#The correctness gate judges correctness only, and a duration is a reading`, D33's rule): a read that lands slowly but inside the
 bound MUST stay green, and no assertion in the fixture may fail because a correct read was slow. The bound SHALL
 be recorded where the fixture lives together with the measured latency band it is derived from.
 
@@ -694,16 +565,14 @@ fixture is about to assert has landed.
 - **GIVEN** the same scratch fixture with the settings read delayed past the wait's cap, or never completing
 - **WHEN** the scenario runs
 - **THEN** one attribution line names the wait and the state it waited for, the derived state is not asserted,
-  the scenario is not green, and the exit status is not 0; on a machine under the premise the scene is static and
-  the run is a **failure**, and where the machine reads over the premise it is the visible `SKIP` of
-  `verification#The correctness gate judges correctness only` — in neither case a timeout reported as a pass
+  the scenario is not green, and the exit status is not 0 — an exhausted wait is a failure however busy the machine
+  is, never a skip and never a timeout reported as a pass
 
 #### Scenario: The collapse scene's single sample becomes a bounded observation
 
 - **GIVEN** `bash skills/teamsmith/tests/panel-b3.sh collapse` and a console whose first frame lands later than
   the fixed window the scene samples today — a delayed bundle injected through the fixture's own `TEAM_B3_PANEL`
-  hook, or the loaded host on which 4 of 6 runs were red
-- **WHEN** the scene runs
+  hook, or the loaded host on which 4 of 6 runs were red- **WHEN** the scene runs
 - **THEN** it observes the console's own title (`teamsmith pulse`) on a settled frame by polling inside a bound
   and is green, while the pre-change shape — `sleep 5` then one `capture-pane`, and `sleep 6` then one capture for
   the restore — is red with `pulse 窗口里是控制台` and `恢复后同一窗口里又是控制台` unmet; the scene's other
@@ -714,36 +583,37 @@ fixture is about to assert has landed.
 
 - **GIVEN** the fixtures' sources after this change
 - **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` and the gate's guard
-  (`verification#The correctness gate judges correctness only`) run
+  (`verification#The correctness gate judges correctness only, and a duration is a reading`) run
 - **THEN** no assertion in these fixtures compares an elapsed time or a CPU share to a threshold — the waits'
   caps are liveness bounds recorded with their measured band — and a run in which the read landed slowly inside
   the bound is green; a fixture that turned such a bound into a duration verdict is the red side of that flip
 
 ### Requirement: A measuring fixture measures a fixed tree, not the caller's worktree
 
-A fixture whose number is a verdict — `skills/teamsmith/tests/panel-cpu.sh`, driven by
-`tests/panel-cpu-premise.sh` and the performance suite — SHALL measure a **fixed measurement target**: a neutral
+A fixture whose number is a reference reading — `skills/teamsmith/tests/panel-cpu.sh`, which the performance suite
+drives — SHALL measure a **fixed measurement target**: a neutral
 reference project the fixture fixes itself, not the caller's current worktree. The tree under test, whose console
 bundle the run reports as the revision under test, SHALL stay the tree the fixture was invoked against, so that
 the code being judged and the data being measured are two separate, named things.
 
 The output SHALL name both: the project root that was measured and the console bundle that was run. This is
 separate from the performance suite's environment self-description
-(`verification#The performance suite is separate, self-describing and non-blocking`), which names the environment
+(`verification#The performance suite is separate, self-describing, and its numbers are reference-only`), which names the environment
 and the revision under test; this requirement fixes and names the **measurement target**. Invoking the same
-command from two different worktrees SHALL measure the same project root and reach the same conclusion — the
+command from two different worktrees SHALL measure the same project root — the
 caller's working directory MUST NOT change what is measured, and a checkout's own accumulated data (its
-`state/`, its worktrees, its reports) MUST NOT be what the number describes.
+`state/`, its worktrees, its reports) MUST NOT be what the number describes. What the numbers do is unchanged:
+they are readings of a fixed target, and two runs of the same bundle are not promised to print identical values.
 
 #### Scenario: Two worktrees, one measured target
 
 - **GIVEN** a large checkout (this repository's worktree, with its accumulated state) and a fresh project with
   almost no data, and the same console bundle under test
 - **WHEN** `bash skills/teamsmith/tests/panel-cpu.sh` runs with default arguments from each
-- **THEN** both runs measure the fixture's fixed project root, name it in their output, and reach the same
-  conclusion — both green, both red, or both visibly skipped with the same attribution; the pre-change shape
-  measures the caller's tree instead — measured as 3683 ms from a large checkout against 391 ms from a fresh
-  project, one of the two past the fixture's ~3 s polling budget and therefore red — the red side of this flip
+- **THEN** both runs measure the fixture's fixed project root and name it in their output, so the same bundle is
+  measured against the same data; the pre-change shape measures the caller's tree instead — measured as 3683 ms
+  from a large checkout against 391 ms from a fresh project — which is the flip, and the number is a reading either
+  way, never a verdict
 
 #### Scenario: The measured root and the revision under test are named
 
@@ -1128,148 +998,6 @@ name but drops the namespace, and a third copy that computes the base inline bes
 - **WHEN** `bash skills/teamsmith/tests/tmp-hygiene.sh --lint` runs on the tree this change lands in
 - **THEN** it exits 0 and prints how many templates it checked
 
-### Requirement: A load experiment signals only the processes it started
-
-A test, fixture or calibration that applies a machine-side perturbation (a `SIGSTOP`/`SIGCONT` freeze, a CPU-share
-throttle, a whole-machine load) SHALL target only processes it started itself: it records the owner it spawned
-(or the PIDs it spawned) and MUST refuse every target outside that set, printing the refusal and exiting non-zero
-**before** any signal is sent — selecting a signal target by command line, name or any other host-wide pattern
-MUST NOT be used, because such a pattern's boundary can never be shown to exclude another seat's process (the
-2026-09-22 incident: a `pgrep`-based pattern froze the panel of the PM's P42 verification fixture). Every
-`SIGSTOP` SHALL be paired with a release: the script MUST carry a `CONT` trap for `EXIT`, `INT` and `TERM` that
-resumes every PID it actually stopped, and its hold SHALL be interruptible, so a script killed mid-freeze leaves
-no process in state `T`. Whole-machine load SHALL come from processes the experiment owns and can reclaim (spin
-processes, `stress-ng`, …), never from freezing another seat's processes, and the experiment's fixtures SHALL use
-their own temporary root and their own tmux socket/server name so two seats' experiments coexist. A guard test
-SHALL exercise all of it: the owned target freezes and is released, a `TERM` mid-hold resumes it, and a target the
-experiment did not start (and a pattern-shaped target) is refused with nothing signalled.
-
-#### Scenario: A target the experiment did not start is refused before any signal
-
-- **GIVEN** an experiment that spawned its own fixture (its owner PID recorded) and a second process of the same
-  shape started outside that subtree
-- **WHEN** the experiment's freeze script is asked to stop the second process's PID
-- **THEN** it exits non-zero, prints that the target is neither the owner nor one of its descendants, the second
-  process's state is unchanged (`ps -o stat=` shows no `T`), and the same script with its own owner's PID stops
-  and then resumes it
-
-#### Scenario: A pattern-shaped target is refused, because no pattern can be proven to exclude another seat
-
-- **GIVEN** the same script and a target given as a command-line pattern (for example
-  `panel.js.*--root /tmp/panel-p21`) or an empty target list
-- **WHEN** it runs
-- **THEN** it exits non-zero with a printed reason and signals nothing — there is no code path that selects
-  targets by matching host-wide process names
-
-#### Scenario: A freeze that is killed mid-hold leaves nothing stopped
-
-- **GIVEN** the experiment's own fixture frozen by the script
-- **WHEN** the script receives `TERM` (and, in a second run, `INT`) while the freeze is still on
-- **THEN** it resumes every PID it stopped before exiting — a `T` left behind is a failure — and its own guard
-  test asserts this for both signals
-
-#### Scenario: Whole-machine load is owned load, and the fixtures stay private
-
-- **GIVEN** an experiment asked for whole-machine load while another seat's fixture is running
-- **WHEN** the load starts and both experiments run to completion
-- **THEN** the load comes from processes the experiment itself started, it signalled no process outside its own
-  set, and its fixtures used their own temporary root and tmux socket name, so the other seat's run is unaffected
-
-### Requirement: Every gate section accounts for itself, and a stuck section is named
-
-A run of `skills/teamsmith/tests/smoke.sh` SHALL account for itself section by section. Before a section's body
-runs, the run SHALL print one start line carrying, in this order, the token `#<N>` with the run's monotone section
-number (the first section is `#1`, one number per section, no gaps), the section's id as the sources spell it, an
-ISO-8601 start timestamp, and the budget the section runs under as `<B>s` (for example
-`== #7 4c · 看板重复 ID（M48）… == 2026-09-22T12:34:56+00:00 · 预算 120s`). When a section finishes, the run SHALL
-print a closing line carrying the same `#<N>` and its elapsed time in seconds, and SHALL append the section to a
-machine-readable timing record (a header line and one row per started section: number, id, ISO-8601 start,
-elapsed seconds, progress ticks) in the run's temp root.
-
-Every section SHALL run under a **hard per-section budget**, and the run SHALL stop at the first section that
-exceeds it. The budgets SHALL come from one committed table (`skills/teamsmith/tests/section-budgets.tsv`) whose
-derivation is recorded in the file: the measured band for that section — the worst observed time on the reference
-host and in the pinned gate container, with the load of each measurement (the CI column is recorded beside them
-once a CI run has produced it) — multiplied by a stated factor, with a stated floor. Every section in the sources SHALL have a row; a section the table does not list yet SHALL still get
-the bounded default (never no bound) and its start line SHALL say the budget came from the default. The run SHALL
-also self-report while it runs, so that a run an outer clock kills is still attributable: while a section is in
-progress, one bounded progress line SHALL be printed every `SMOKE_PROGRESS_INTERVAL` seconds (default 60) carrying
-that section's `#<N>`, its id, how long it has been running and the slowest sections so far, and a section that
-closes above its recorded band SHALL print one warning line. Neither line is a verdict: the progress report MUST
-NOT stop a run or turn a section red — the per-section budget is the only clock that can — and the outer timeouts
-(`TEAM_REVIEW_TIMEOUT`, the CI job's) remain the outermost backstops.
-
-When a section exceeds its budget the run MUST stop and report it as a **red that names the section**: the line
-SHALL carry `#<N>`, the section's id, its budget and its elapsed time, the run SHALL write the section's scene
-(below), and the run SHALL exit non-zero with status 2. No later section may run, no result line may be printed,
-and the timeout MUST NOT be reported as a skip, as a pass, or as a run that continued — a timeout is never an
-attribution that turns the machine into a green.
-
-The watchdog that enforces the budgets SHALL be a child that is not in the suite's job table (a bare `wait` in the
-suite MUST return without waiting for it), SHALL be reclaimed when the run ends normally, SHALL poll with a
-bounded interval, and MUST NOT signal a process group: it stops the stuck section's descendants and the suite
-itself, escalating `TERM` to `KILL`, so that a caller that shares the suite's process group (`team review`, the CI
-step, the session that started the gate) is never signalled. The suite SHALL also check the trip at its own safe
-points (a section boundary and every assertion), so that a section whose child was killed cannot quietly continue.
-The fixture knobs (`TEAM_SMOKE_STUCK_SECTION`, `TEAM_SMOKE_SECTION_BUDGET`, `TEAM_SMOKE_PROGRESS_INTERVAL`,
-`TEAM_SMOKE_GUARD_POLL`) SHALL be honoured only under the fixture switch (`TEAM_SMOKE_FIXTURE=1`) and SHALL be
-printed as ignored otherwise, so an inherited environment cannot weaken the bounds.
-
-The scene SHALL be written **before** the stop signals and SHALL outlive the run: it SHALL be a dot-prefixed
-directory under the resolved temp root (`${TMPDIR:-/tmp}`), outside the run's own temp root, so the suite's normal
-cleanup (and its failure path, which deletes the temp root) cannot take it, and so the CI's existing collection
-(`docker cp <container>:/tmp/.`) carries it out unchanged. It SHALL hold, bounded in lines and bytes: the section's
-number, id, budget and elapsed time; the last progress reading; the suite's descendant process tree and a bounded
-process-table snapshot; the tail of every fixture log the run wrote under its temp root during that section; the
-last lines of every pane on the run's private tmux server when one exists; and the partial timing record. A normal
-run SHALL NOT create it.
-
-#### Scenario: A section that never returns is named, stops the run, and leaves a scene
-
-- **GIVEN** a nested `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` whose fixture switch is on,
-  whose stuck-section knob names an early section, and whose budget override is a few seconds
-- **WHEN** that run executes the named section, which does not return
-- **THEN** the run exits 2, its output carries one line naming that section's `#<N>`, its id, its budget and its
-  elapsed time, no result line and no later section appear, and the line is within the last lines of the output
-  (the tail `team review` records)
-- **AND** a timeout line is not accompanied by any `SKIP` attribution for that section, and the run's exit status
-  is not 0
-
-#### Scenario: The scene survives the run and carries the section's evidence
-
-- **GIVEN** the timed-out run of the previous scenario, whose stuck command is a sleeping process that ignores
-  `TERM`
-- **WHEN** the run has ended and its temp root is gone (the default, no `--keep`)
-- **THEN** the scene directory still exists under `${TMPDIR:-/tmp}`, its summary names the section and the
-  budget, and its process evidence names the stuck command (the watchdog's `KILL` escalation is recorded)
-- **AND** the scene carries the last progress reading and the tail of the fixture log the section had written, so
-  the incident can be read without a rerun
-
-#### Scenario: A normal run is unaffected, and every section is accounted for
-
-- **GIVEN** a clean tree and `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` (no fixture knob)
-- **WHEN** it runs
-- **THEN** it exits 0, no timeout line and no scene directory appear, each section printed exactly one start line
-  with a strictly increasing `#<N>` and a budget and one closing line with its elapsed time, and the timing record
-  has exactly one row per section that started
-
-#### Scenario: The budget table has a measured basis, and a weakened budget is red
-
-- **GIVEN** `bash skills/teamsmith/tests/section-guard.sh --budget-check` over the committed sources and table
-- **WHEN** it runs on the clean tree, and then in a scratch tree whose table entry for one section is lowered
-  below its recorded band × the stated factor (and, in a second scratch tree, whose table loses one section's row)
-- **THEN** the clean tree is green, verifying for every row that the budget is at least the recorded band times
-  the factor and at least the floor and that the measurement's provenance (host, container and revision) is
-  recorded, while both scratch trees are red and name the offending section — restoring either makes it green
-
-#### Scenario: A run that an outer clock kills can still say where it was
-
-- **GIVEN** the fixture switch on, a small progress interval, and a section that runs longer than that interval
-- **WHEN** the run is in that section
-- **THEN** progress lines carry the section's `#<N>`, its id, its running elapsed time and the slowest sections so
-  far, and none of them stops the run or turns anything red — the budget remains the only clock that can
-- **AND** a section that finishes inside the interval prints no progress line for itself
-
 ### Requirement: Every wait in the gate is bounded and attributes at its cap
 
 A wait in the gate's sources (`skills/teamsmith/tests/**` and the fixtures those sources drive) that waits for a
@@ -1283,7 +1011,7 @@ An unbounded `while` loop that sleeps SHALL NOT exist in the gate's sources.
 The gate SHALL carry a static check over its own sources: the `while`+`sleep` loops are inventoried in one place
 with the cap each one carries or the structure that bounds it (a stop file, a deadline, the owner's lifetime), and
 an uninventoried loop, or an inventoried loop that lost its cap, turns the check red. `tests/lib/pty-wait.sh`'s
-settled-frame discipline and its premise/attribution semantics are the model for a bounded wait and are unchanged
+settled-frame discipline and its attribution-at-the-cap semantics are the model for a bounded wait and are unchanged
 by this requirement.
 
 #### Scenario: An unbounded poll loop cannot appear unnoticed
@@ -1355,9 +1083,15 @@ actually starts from 1 and obeys the same rule.
 ### Requirement: A changed-path list selects the sections to run, or the full suite
 
 `skills/teamsmith/tests/section-paths.tsv` SHALL be the one place a path→section claim lives, with comment
-header lines documenting the exempt path class, the prologue keys and the matcher's semantics, and one row
+header lines documenting the exempt path class, the prologue keys, the matcher's semantics and the **gate
+self-checks** (one `# gate-self-check:` line naming the keys of the sections whose subject is the gate's own
+machinery — including a fixture meta-mutation whose purpose is to prove another section's assertions bite: that
+is a statement about the fixture, not about what the project delivers),
+and one row
 per section carrying the section's key, its id as the sources spell it, the repo-relative patterns it
-covers, the keys of the sections that must run before it, and the basis of the claim. `bash
+covers, the keys of the sections that must run before it, and the basis of the claim. Every section that line
+does not name is part of the **product floor** — the sections that judge what the project delivers — and the
+floor is the default, so a section nobody declared is in it. `bash
 skills/teamsmith/tests/section-select.sh --paths <path>…` SHALL answer with `decision=FULL|NONE|RUN` and
 exit 0 without running the suite and without calling git (the caller supplies the paths, for example from
 `git diff --name-only <base>...HEAD`):
@@ -1370,11 +1104,21 @@ exit 0 without running the suite and without calling git (the caller supplies th
 - **`FULL`** — at least one given path is claimed by no row and is not exempt: the answer names those paths
   and prescribes the full suite (running more is always safe; running too little is not).
 
+`bash skills/teamsmith/tests/section-select.sh --floor [--paths <path>…]` SHALL answer the
+same way with one addition: the selection always carries the prologue, every floor section and the closure of
+their `needs` keys, with the path-claimed keys added when paths are given — so a client can ask for “the product
+plus whatever this change touches” in one decision. The paths are the existing `--paths` interface and nothing
+else: there is no per-line file reader, because a path may itself contain a newline, and the caller still
+supplies them (the selector calls no git). A floor with no product section SHALL exit non-zero naming the empty
+floor rather than running the prologue alone.
+
 With `--check` the selector SHALL verify its own basis in pure logic: every section in the gate's sources
 has exactly one row and every row's key resolves to exactly one section; a literal pattern (one without a
 wildcard) exists in the tree, except for a specifically attributed absent internal prerequisite in a product-only
 checkout under `verification#A gate that cannot judge says so`; the exempt class is claimed by no row; every `needs` key exists and
-refers to a section that appears earlier in the sources; and a real-tree path token named inside a section's
+refers to a section that appears earlier in the sources; the `gate-self-check` header names keys that each
+resolve to exactly one row, repeats none, and names no prologue key (a key the line does not name is a floor
+section, so a misspelt or stale key would quietly move a self-check into CI or a product section out of it); and a real-tree path token named inside a section's
 own text (under the documented normalizer for the suite's path variables) is covered by that row's
 patterns — a section that reads a path it does not declare is red and names the token and its line. An
 unknown key, a path outside the repository, or a malformed row SHALL exit non-zero with the reason and run
@@ -1389,10 +1133,11 @@ NOT remove mapping rows, narrow their patterns, exempt product paths, skip token
 the skip attributions and account for them rather than converting their exit 0 into evidence that the missing
 files were checked successfully.
 
-`bash skills/teamsmith/tests/smoke.sh --paths <path>…` and `bash skills/teamsmith/tests/smoke.sh --select
+`bash skills/teamsmith/tests/smoke.sh --paths <path>…`, `bash skills/teamsmith/tests/smoke.sh --floor
+[--paths <path>…]` and `bash skills/teamsmith/tests/smoke.sh --select
 <key>[,<key>…]` SHALL run the selection: the prologue, the selected sections and their `needs` closure, in
 source order, with the unselected sections not executed; an unknown key exits non-zero and runs nothing. A
-run without either flag SHALL behave exactly as before (every section runs) — the full suite stays the
+run without any of these flags SHALL behave exactly as before (every section runs) — the full suite stays the
 default and the delivery/review/archive gate, and a selection is a batch filter that never changes what a
 selected section asserts. Checkout-prerequisite attributions obey the same rules in selected and full runs;
 the selected-run disclosure and result-token rules remain unchanged.
@@ -1456,6 +1201,24 @@ the selected-run disclosure and result-token rules remain unchanged.
   the clean export retains the same selection decisions/closure as the corresponding internal tree and all
   generated copies pass `bash -n`
 
+#### Scenario: The floor is every section nobody declared a gate self-check
+
+- **GIVEN** the clean tree, then a scratch copy of the table whose `gate-self-check` line loses one key, and a
+  second copy whose line gains a key that no row carries
+- **WHEN** `bash skills/teamsmith/tests/section-select.sh --floor` runs in the clean tree and in each copy, and
+  `--check` runs on both copies
+- **THEN** the clean tree's floor lists every section except the ones the line names, the first copy's floor gains
+  exactly that section (the declaration is the only way out of the floor), and the second copy's `--check` exits
+  non-zero naming the unknown key — restoring the line makes each green again
+
+#### Scenario: A floor and a changed path answer in one decision
+
+- **WHEN** `bash skills/teamsmith/tests/section-select.sh --floor --paths
+  skills/teamsmith/tests/section-select.sh` runs, and then `--floor --paths ci/some-new-thing`
+- **THEN** the first decision is `RUN` and its keys are the floor plus the `36` row and its `needs` closure, the
+  second is `FULL` (an unclaimed path still prescribes the whole suite, floor or not), and neither invocation runs
+  a section
+
 ### Requirement: A selected run says what it did not run
 
 A run that selects sections SHALL NOT be mistakable for a full run: before its first section it SHALL print
@@ -1492,7 +1255,7 @@ The correctness gate SHALL distinguish a product-only checkout, which deliberate
 
 Only a check whose named prerequisite is one of those deliberately absent internal surfaces SHALL skip on a product-only checkout. Each such attribution MUST print `SKIP（条件不满足）`, the affected check and missing prerequisite, be counted as a skip rather than a pass, and reach the gate's output and per-section/run accounting. Missing product files, unavailable required tools, a failed executed assertion, and corruption of a present internal surface MUST retain their existing failure/degradation rules; the checkout classification MUST NOT swallow them. An executed check's verdict MUST rest on evidence the subject itself carries: when the call's command word is the wrapped command itself (`tmux`), an isolation wrapper defined in one file MUST NOT certify a mutation call made by another file, while a dedicated wrapper name defined alongside the caller MAY keep its directory-level meaning; a check MUST NOT be reported as satisfied on evidence the subject does not have. A run with prerequisite skips and no failures SHALL exit 0, without claiming the skipped checks passed; a real failure alongside skips MUST still exit non-zero.
 
-The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its command and blocking failure semantics.
+The same correctness command SHALL run on both shapes, with no second public suite. The product's static checks, skill loading, published-spec validation, container-build checks and every ledger-independent fixture MUST remain eligible exactly as before (including the existing FAST/full and tool-premise rules). A fixture that provisions its own ledger MUST still run in the product-only checkout. For an internal checkout, every pre-existing assertion MUST still execute with its original verdict and at least its pre-change per-section pass count under identical run settings; replacing an existing assertion with a new one MUST NOT satisfy that coverage comparison. CI's correctness step MUST retain its blocking failure semantics, and it SHALL run the product floor the way `verification#CI runs the two gates separately and performance does not block` states: a failing applicable product assertion in that step fails the job, and the selection it makes is disclosed in the output tail rather than presented as the full gate.
 
 #### Scenario: The release export skips only unavailable internal checks
 
@@ -1557,8 +1320,9 @@ The same correctness command SHALL run on both shapes, with no second public sui
 #### Scenario: The public workflow remains a blocking correctness check
 
 - **WHEN** `.github/workflows/gates.yml` is read and its correctness container command is run on an independent product-only checkout
-- **THEN** the command remains `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh --keep </dev/null`, without FAST or correctness `continue-on-error`, and succeeds when all applicable checks succeed
+- **THEN** the command is `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh --floor --keep </dev/null --paths "$@"` with the changed paths as its own arguments, without FAST or correctness `continue-on-error`, and it succeeds when all applicable checks succeed
 - **AND** a failing applicable product assertion makes that same command fail; performance remains a separate non-blocking conclusion
+- **AND** a changed-path list naming a fixture meta-mutation's own sources adds that self-check, one naming only product routing sources adds §61 and not the matrix, and the same command with no resolvable base runs the full suite instead of a narrower selection
 
 ### Requirement: The gate lock's holder record names its kind, its owner, its elapsed time and its bound
 
@@ -1773,4 +1537,214 @@ refuse by name instead (why: `skills/teamsmith/references/troubleshooting.md`, a
 - **WHEN** `team doctor`, `--status` and the console's data read report it
 - **THEN** each names the resolved path, says the directory does not exist yet and which existing ancestor's
   filesystem was judged, invents no figure, creates nothing, and no dispatch is refused for it
+
+### Requirement: The correctness gate judges correctness only, and a duration is a reading
+
+The project's correctness gate — `openspec validate --all --strict && bash skills/teamsmith/tests/smoke.sh`, the
+pair configured in `TEAM_GATES` and run by `team review` — SHALL contain no wall-clock or CPU-share performance
+red line. No assertion in it may fail because a correct operation took longer than a threshold, and no fixture it
+runs (transitively) may make such a judgment; slower-but-correct behaviour MUST stay green. The gate's sources
+SHALL carry a pure-logic guard that fails when a duration comparison against a threshold reappears in the gate's
+sources, when the gate names a measuring fixture, or when a reading script gains a judging exit code (`2`/`4`). The one shared gate lock and its accounting (`TEAM_SMOKE_LOCK`, `TEAM_SMOKE_LOCK_WAIT`, the
+`queued`/`ran`/`limit` record) are unchanged, and the gate keeps the time-independent knob-integrity check of
+`panel#Frame assembly is asynchronous, cached and never blocks input`.
+
+A fixture that waits for a real process to reach a state SHALL treat its wait horizon as a **failure detector,
+never as a judgment**: when the horizon runs out, the verdict MUST be attributed from evidence collected at that
+moment — whether the scene is still changing — and an exhausted wait is a **failure** that names the wait and the
+state it waited for. There is no load premise and no machine-attributed `SKIP` exit: a busy machine cannot turn a
+red into a skip, so a skip cannot hide a regression, and a scene whose wait runs out is never reported as a pass.
+While the scene is still changing the fixture SHALL be allowed to extend its polling beyond the base horizon (a
+bounded factor) so a merely slow machine is still judged. A knob that paces or injects a wait is honoured only
+under the fixture switch, and the injected values are printed as ignored; the numbers behind a horizon are
+recorded as documentation next to the fixture. Nothing here adds a wall-clock or CPU-share red line: no assertion
+may fail because a correct operation was slow.
+
+A section's per-section hang cap (`verification#Every gate section accounts for itself, and a section that stops
+making progress is named`) is a **liveness detector, not a performance judgment**, and the promise above holds
+inside it: the cap is
+one constant with a stated default, it trips on the absence of progress rather than on elapsed time, a section
+that finishes inside its cap MUST stay green however slow the machine is, and the only thing its clock can decide
+is that the section stopped making progress — a trip names the section and is always a red, never a skip and
+never a silent pass. The timing record the gate writes is not a verdict: no other assertion in the gate may
+compare a measured duration to a threshold, and the pure-logic guard SHALL keep that true (a duration comparison
+reappearing in the gate's sources, beside the markers above, turns it red).
+#### Scenario: A duration judgment cannot come back unnoticed
+
+- **GIVEN** the correctness gate's sources and a scratch copy of the tree whose `smoke.sh` gains a wall-clock
+  comparison (`[ "$elapsed" -gt 5 ] && bad …`), then a second copy whose section body names
+  `skills/teamsmith/tests/perf.sh`
+- **WHEN** `bash skills/teamsmith/tests/gate-guard.sh` runs in the clean tree and in each copy
+- **THEN** the clean tree is green, and each copy is red naming the file it found the marker in — restoring the
+  file makes that copy green again
+
+#### Scenario: A reading script cannot gain a judging exit code
+
+- **GIVEN** the clean tree and a scratch copy of `skills/teamsmith/tests/perf.sh` that exits `2` when a reading
+  comes out high
+- **WHEN** `bash skills/teamsmith/tests/gate-guard.sh` runs in each
+- **THEN** the clean tree is green and the copy is red naming the judging exit code — the reference readings
+  cannot turn into a failure
+
+#### Scenario: A correct operation that takes longer is recorded, not judged
+
+- **GIVEN** a scratch copy of the tree whose §0c body gains `sleep 25` before its existing assertions (a non-zero
+  cost that is still a correct operation), the section running under the constant default hang cap
+- **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh --select 0c` runs there
+- **THEN** it exits 0 with no failing assertion, the section's closing line records the elapsed time as a
+  reference reading, and no timeout line appears
+
+#### Scenario: The fixture knobs are ignored outside the fixture switch
+
+- **GIVEN** `TEAM_SMOKE_SECTION_HANG_CAP` (and the other section-guard knobs) set with the fixture switch **off**
+- **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh --select 0e` runs
+- **THEN** every injected knob has an ignore line printed, the section runs under the constant default cap, and
+  the run's accounting shows the default source rather than the injected value
+
+### Requirement: The performance suite is separate, self-describing, and its numbers are reference-only
+
+`bash skills/teamsmith/tests/perf.sh` (fronted by `team perf`) SHALL **measure and print reference readings** —
+the interactive first frame (median of three independent spawns), the uncached frame assembly line (median of five
+fixture-repo runs) and the steady-state pane CPU (median of a three-way split of one sampling window) — and it
+SHALL NOT judge them: no threshold, no load premise, no `SKIP` conclusion, and no exit status that a measured
+number can move. It SHALL print an **environment self-description** before its readings: whether it runs on the
+host or in the pinned image (a host run is labelled "not the reference environment"), the visible logical cores,
+the CPU quota when one is set, the load average, the JS runtime and tmux versions, and the revision under test.
+Each reading line SHALL carry the numbers it rests on.
+
+Its exit status SHALL carry only setup outcomes: **0** the readings were printed, **3** a setup failure (a
+required tool or the panel bundle is missing, or a `--in-container` run cannot prove it runs in the pinned image)
+or the performance lock could not be taken. There is no `2` and no `4`: a slow reading, a busy machine or a missing
+engine never turns the suite red and never blocks anything. It SHALL be runnable on the host and inside the pinned
+`ci/Containerfile` image (`team perf --container`, or the equivalent documented container invocation), and it SHALL
+take its own lock (`TEAM_PERF_LOCK`) so two readings do not overlap, printing one line when exclusivity was broken
+rather than changing the exit status. It MUST NOT take the correctness gate's lock and MUST NOT be invoked by the
+correctness gate or by `team review`: a performance reading never changes a review verdict.
+
+#### Scenario: A slow reading is printed, not failed
+
+- **GIVEN** `TEAM_PERF_LOADAVG` and `TEAM_PERF_CORES` injected to describe a machine that would once have been
+  judged over the premise (`TEAM_PANEL_CPU_LOADAVG` / `TEAM_PANEL_CPU_CORES` are stripped, as retired knobs)
+- **WHEN** `bash skills/teamsmith/tests/perf.sh --host` runs
+- **THEN** it exits 0, every reading line carries its measured number, and the environment block names the injected
+  load and core count — no `SKIP`, no red verdict and no `2`/`4` exit
+
+#### Scenario: The environment self-description is printed with the readings
+
+- **WHEN** the suite runs, on the host and (once) in the pinned image
+- **THEN** the output names the environment (host/container or the explicit "not the reference environment" label),
+  the visible cores, the CPU quota or its absence, the load average, the runtime and tmux versions, and the
+  revision, and each reading line carries its measured numbers
+
+#### Scenario: The suite is not part of a review
+
+- **GIVEN** a checkout whose performance readings would be far above the reference numbers
+- **WHEN** `team review <ID> --dir <checkout>` runs the gates
+- **THEN** the verdict comes from the correctness gate alone, and `docs/team/reviews/<ID>.md` contains no
+  performance reading
+
+#### Scenario: Two performance runs serialize instead of measuring each other
+
+- **GIVEN** one performance run holding `TEAM_PERF_LOCK`
+- **WHEN** a second `bash skills/teamsmith/tests/perf.sh` starts with `flock` available
+- **THEN** it prints the holder and queues (bounded by a wait cap) instead of measuring concurrently, and the
+  correctness gate's lock was never taken by either run
+
+### Requirement: Every gate section accounts for itself, and a section that stops making progress is named
+
+A run of `skills/teamsmith/tests/smoke.sh` SHALL account for itself section by section. Before a section's body
+runs, the run SHALL print one start line carrying, in this order, the token `#<N>` with the run's monotone section
+number (the first section is `#1`, one number per section, no gaps), the section's id as the sources spell it, and
+an ISO-8601 start timestamp (for example `== #7 4c · 看板重复 ID（M48）… == 2026-09-22T12:34:56+00:00`). When a
+section finishes, the run SHALL print a closing line carrying the same `#<N>`, its elapsed time in seconds
+tokenised as a reference reading (`· 参考 用时 <n>s`) rather than a verdict, and the section's pass/fail/skip
+counts; it SHALL also append the section to a machine-readable timing record (a header line and one row per
+started section: number, id, ISO-8601 start, elapsed seconds, progress ticks) in the run's temp root.
+
+Every section SHALL run under a **hang cap**, and the run SHALL stop at the first section that stops making
+progress under it. The cap is **one constant** with a stated default (1800 s) — a liveness bound, not a budget
+derived from a measured band, because time decides nothing in the gate (`verification#The correctness gate judges
+correctness only`) — and it trips when a section's progress ticks have not moved for the cap, not when a
+section's elapsed time passes it. The run SHALL self-report while it runs, so that a run an outer clock kills is
+still attributable: while a section is in progress, one bounded progress line SHALL be printed every
+`SMOKE_PROGRESS_INTERVAL` seconds (default 60) carrying that section's `#<N>`, its id, how long it has been
+running, the cap and the slowest sections so far. The progress report MUST NOT stop a run or turn a section red —
+the hang cap is the only clock that can — and the outer timeouts (`TEAM_REVIEW_TIMEOUT`, the CI job's) remain the
+outermost backstops.
+
+When a section stops making progress under its cap the run MUST stop and report it as a **red that names the
+section**: the line SHALL carry `#<N>`, the section's id, its cap, the stalled time and its elapsed time, the run
+SHALL write the section's scene (below), and the run SHALL exit non-zero with status 2. No later section may run,
+no result line may be printed, and the trip MUST NOT be reported as a skip, as a pass, or as a run that continued —
+a trip is never an attribution that turns the machine into a green.
+
+The watchdog that enforces the cap SHALL be a child that is not in the suite's job table (a bare `wait` in the
+suite MUST return without waiting for it), SHALL be reclaimed when the run ends normally, SHALL poll with a
+bounded interval, and MUST NOT signal a process group: it stops the stuck section's descendants and the suite
+itself, escalating `TERM` to `KILL`, so that a caller that shares the suite's process group (`team review`, the CI
+step, the session that started the gate) is never signalled. The suite SHALL also check the trip at its own safe
+points (a section boundary and every assertion), so that a section whose child was killed cannot quietly continue.
+The fixture knobs (`TEAM_SMOKE_STUCK_SECTION`, `TEAM_SMOKE_SECTION_HANG_CAP`, `TEAM_SMOKE_PROGRESS_INTERVAL`,
+`TEAM_SMOKE_GUARD_POLL`) SHALL be honoured only under the fixture switch (`TEAM_SMOKE_FIXTURE=1`) and SHALL be
+printed as ignored otherwise (naming the injected value and the `override=[]` that took effect), so an inherited
+environment cannot weaken the bound.
+
+The scene SHALL be written **before** the stop signals and SHALL outlive the run: it SHALL be a dot-prefixed
+directory under the **resolved temp root** — the one `scripts/lib/common.sh`'s `team_tmp_root` answers (`TMPDIR`
+first, then `TEAM_TMP_ROOT`, then the on-disk default) — and outside the run's own temp root, so the suite's
+normal cleanup (and its failure path, which deletes the temp root) cannot take it. Getting it out of a container
+is the collection step's contract, not the suite's: the CI names the scene as one of its families to
+`ci/collect-scene.sh`, which stages it out of the stopped container and fails the step when no family arrived
+(the step's prefix table and staging path own the mechanics, so a change to the temp root or to the collector
+does not need a second copy of that rule here). It SHALL hold, bounded in lines and bytes: the section's
+number, id, cap and elapsed time; the last progress reading; the suite's descendant process tree and a bounded
+process-table snapshot; the tail of every fixture log the run wrote under its temp root during that section; the
+last lines of every pane on the run's private tmux server when one exists; and the partial timing record. A normal
+run SHALL NOT create it.
+
+#### Scenario: A section that never returns is named, stops the run, and leaves a scene
+
+- **GIVEN** a nested `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` whose fixture switch is on,
+  whose stuck-section knob names an early section, and whose hang-cap override is a few seconds
+- **WHEN** that run executes the named section, which does not return
+- **THEN** the run exits 2, its output carries one line naming that section's `#<N>`, its id, its cap and its
+  elapsed time, no result line and no later section appear, and the line is within the last lines of the output
+  (the tail `team review` records)
+- **AND** a timeout line is not accompanied by any `SKIP` attribution for that section, and the run's exit status
+  is not 0
+
+#### Scenario: The scene survives the run and carries the section's evidence
+
+- **GIVEN** the timed-out run of the previous scenario, whose stuck command is a sleeping process that ignores
+  `TERM`
+- **WHEN** the run has ended and its temp root is gone (the default, no `--keep`)
+- **THEN** the scene directory still exists under the resolved temp root, its summary names the section and the
+  cap, and its process evidence names the stuck command (the watchdog's `KILL` escalation is recorded)
+- **AND** the scene carries the last progress reading and the tail of the fixture log the section had written, so
+  the incident can be read without a rerun
+
+#### Scenario: A normal run is unaffected, and every section is accounted for
+
+- **GIVEN** a clean tree and `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh </dev/null` (no fixture knob)
+- **WHEN** it runs
+- **THEN** it exits 0, no trip line and no scene directory appear, each section printed exactly one start line
+  with a strictly increasing `#<N>` and one closing line with its elapsed time and counts, and the timing record
+  has exactly one row per section that started
+
+#### Scenario: The cap is a constant, and a knob cannot weaken it outside the fixture switch
+
+- **GIVEN** `TEAM_SMOKE_STUCK_SECTION=0c TEAM_SMOKE_SECTION_HANG_CAP=3` set with the fixture switch **off**, then
+  the same pair with `TEAM_SMOKE_FIXTURE=1`
+- **WHEN** `TEAM_SMOKE_FAST=1 bash skills/teamsmith/tests/smoke.sh --select 0e` runs in each setting
+- **THEN** the first run prints the ignore line for each injected knob and reports `stuck-cap=1800
+  source=default`, while the second reports `stuck-cap=3 source=fixture` for the named section and
+  `other-cap=1800 source=default` for another one — there is no committed budget table to weaken
+
+#### Scenario: A run that an outer clock kills can still say where it was
+
+- **GIVEN** the fixture switch on, a small progress interval, and a section that runs longer than that interval
+- **WHEN** the run is in that section
+- **THEN** progress lines carry the section's `#<N>`, its id, its running elapsed time, its cap and the slowest
+  sections so far, and none of them stops the run or turns anything red — the cap remains the only clock that can
+- **AND** a section that finishes inside the interval prints no progress line for itself
 
