@@ -12,7 +12,7 @@ branch: task/V107-routing-bootstrap-flip-review
 
 ## Candidate
 
-`42064b9d` on `task/P377-routing-bootstrap-flip` (test change `ca112db6`). Report: `docs/team/reports/P377-dev.md`.
+`d7bdcbbc` on `task/P377-routing-bootstrap-flip` (test change `ca112db6`). Report: `docs/team/reports/P377-dev.md`. The earlier `42064b9d` differs only by the report timestamp; the test file is byte-identical.
 
 The frozen 0.3.4 full gate had exactly one outer failure: `flip-init-legacy-proceeds-bootstrap`. The author reports that the mutation scratch lacks `SKILL.md` and sibling skills, so bootstrap still exits 1 for an unrelated installation error. The old flip assertion expected `FAIL init-legacy-bootstrap-refused`, which therefore never appeared. The repair retargets the flip to `FAIL init-legacy-bootstrap-derived`, `FAIL init-legacy-bootstrap-startup-route`, and `FAIL init-legacy-print-refused`.
 
