@@ -524,30 +524,27 @@ chk_init_docs_fact() { # <tree>
   return 0
 }
 
-chk_pack_manifest() { # <tree>：声明面 —— team + 四个信号入口，files 带着 bin/
+chk_pack_manifest() { # <tree>：声明面 —— 唯一的 bin entry 是 team，files 带着 bin/
   python3 - "$1/package.json" <<'PYMANI'
 import json, sys
 p = json.load(open(sys.argv[1]))
 binmap = p.get("bin") or {}
 files = p.get("files") or []
 problems = []
-# P360：0.3.1 的 bin 只有 team，`npm i -g` 因此不给 pkill/killall/pgrep/pidof 建链接，
-# 用户敲这些名字落到 /usr/bin——闸门在 npm 路线上等于不存在。声明面必须含这四个名字。
-want = ["team", "pkill", "killall", "pgrep", "pidof"]
+# P378：0.3.2–0.3.3 把 pkill/killall/pgrep/pidof 加进 bin，`npm i -g` 于是在用户的全局 prefix/bin
+# 里建这四个链接——Teamsmith 之外的一个普通终端敲 `pgrep -f …` 都会进闸门并 exit 64。闸门本来就由
+# `team_tmux_shim_exports` 注入 PM/worker 窗口的 PATH，全局命令名一个都不需要（init-skill 规格：
+# 「exactly one bin entry, team」）。
+want = ["team"]
 if list(binmap.keys()) != want:
-    problems.append("bin 键不是 team + 四个信号入口：%r" % (list(binmap.keys()),))
+    problems.append("bin 键不是只有 team：%r" % (list(binmap.keys()),))
 elif binmap["team"].lstrip("./") != "bin/team.mjs":
     problems.append("bin.team 指向 %r（要 bin/team.mjs）" % binmap["team"])
-else:
-    for name in ("pkill", "killall", "pgrep", "pidof"):
-        want_t = "skills/teamsmith/scripts/shim/" + name
-        if binmap.get(name, "").lstrip("./") != want_t:
-            problems.append("bin.%s 指向 %r（要 %s）" % (name, binmap.get(name), want_t))
 if "bin/" not in files:
     problems.append("files 白名单里没有 bin/：%r" % (files,))
 if problems:
     print("；".join(problems)); sys.exit(1)
-print("bin 五项（team + 四个信号入口，均指向包内文件）+ files 带 bin/")
+print("bin 只有 team→bin/team.mjs（四个信号入口不占全局命令名）+ files 带 bin/")
 PYMANI
 }
 
@@ -587,16 +584,77 @@ chk_prefix_install() { # <tree>：npm 私有 prefix 安装后与 bash 入口一�
   if ! diff <("$prefix/bin/team" help 2>&1) <(bash "$t/skills/teamsmith/scripts/team" help 2>&1) >/dev/null; then
     printf 'prefix 的 help 与 bash 入口不一致\n'; return 1
   fi
+  # P378：npm 只应给 `team` 建链接 —— 四个信号入口靠窗口前缀注入，不能占用户的全局命令名。
+  chk_prefix_bin_scope "$prefix" || return 1
   # P321：安装物还得带上信号闸门的四个入口。npm 的 tarball **不携带 120000 软链** —— 0.3.0 的包里
   # pkill/killall/pgrep/pidof 四个名字全部缺失，装完全部落到 /usr/bin（docs/team/reviews/release-0.3.0.md）。
   # 判据不看名字在不在：在**安装物**的 gated PATH 里用同名 argv 记录桩验拒绝/放行（不发任何信号）。
   chk_prefix_signal_entries "$prefix" || return 1
-  printf '私有 prefix 安装后 version/help 与 bash 入口一致，四个信号入口在且判定生效（%s/bin/team）\n' "$prefix"
+  printf '私有 prefix 安装后 version/help 与 bash 入口一致；prefix/bin 只有 team；四个 shim 在包内且判定生效（%s/bin/team）\n' "$prefix"
+  return 0
+}
+
+chk_prefix_bin_scope() { # <prefix>：npm 只给 team 建链接；四个信号入口由窗口前缀注入，不占全局命令名
+  local prefix="$1" pkg skill shim t missing="" shadowed="" got sys notsys="" probe want_n ok_n val
+  pkg="$prefix/lib/node_modules/teamsmith"
+  skill="$pkg/skills/teamsmith"
+  shim="$skill/scripts/shim"
+  # ① 包里仍带着四个入口：撤掉的是 npm 的全局链接，不是闸门本身
+  for t in pkill killall pgrep pidof; do
+    [ -f "$shim/$t" ] && [ -x "$shim/$t" ] || missing="${missing:+$missing }$t"
+  done
+  if [ -n "$missing" ]; then
+    printf '安装包里没有可执行的信号闸门入口：%s\n' "$missing"; return 1
+  fi
+  # ② 用户的全局 prefix/bin 里只有 team
+  if [ ! -x "$prefix/bin/team" ]; then
+    printf '安装后 prefix/bin 里没有可执行的 team（实际：[%s]）\n' "$(ls -1A "$prefix/bin" 2>/dev/null | tr '\n' ' ')"; return 1
+  fi
+  for t in pkill killall pgrep pidof; do
+    if [ -e "$prefix/bin/$t" ] || [ -L "$prefix/bin/$t" ]; then shadowed="${shadowed:+$shadowed }$t"; fi
+  done
+  if [ -n "$shadowed" ]; then
+    printf '安装后 prefix/bin 里有 %s —— npm 又把信号闸门做成了全局命令（Teamsmith 之外的普通终端敲这些名字会进闸门、exit 64）；它们只应由 team_tmux_shim_exports 注入 PM/worker 窗口的 PATH\n' "$shadowed"
+    return 1
+  fi
+  # ③ 普通 shell：prefix/bin 放在 PATH 最前，pkill/pgrep 仍解析到系统可执行（不是包内 shim）
+  for t in pkill pgrep; do
+    got="$(PATH="$prefix/bin:/usr/bin:/bin" command -v "$t" 2>/dev/null)"
+    sys="$(PATH=/usr/bin:/bin command -v "$t" 2>/dev/null)"
+    case "$got" in
+      "$pkg"/*|"$prefix"/*)
+        printf '普通 shell 里 %s 解析到安装包内 [%s] —— 全局遮蔽还在\n' "$t" "$got"; return 1 ;;
+    esac
+    if [ -n "$sys" ] && [ "$got" != "$sys" ]; then
+      printf '普通 shell 里 %s 解析到 [%s]，不是系统可执行 [%s]\n' "$t" "${got:-<解析不出>}" "$sys"; return 1
+    fi
+    [ -n "$sys" ] || notsys="${notsys:+$notsys }$t"
+  done
+  # ④ 管理会话：窗口前缀（team_tmux_shim_exports）仍把四个名字解析到包内的 shim
+  probe="$(env -u TEAM_ROOT -u TEAM_MAIN_ROOT -u TEAM_PROJECT -u TEAM_SESSION \
+        TEAM_SKILL_DIR="$skill" TEAM_STATE_DIR="$tmp/managed-session-state" bash -c '
+    . "$1/skills/teamsmith/scripts/lib/common.sh"
+    eval "$(team_tmux_shim_exports)"
+    for t in pkill killall pgrep pidof; do printf "%s=%s\n" "$t" "$(command -v "$t" 2>/dev/null)"; done
+  ' _ "$pkg" 2>&1)" || {
+    printf '从安装包渲染 team_tmux_shim_exports 失败：%s\n' "$(printf '%s' "$probe" | tail -2 | tr '\n' ' ')"; return 1
+  }
+  want_n=0; ok_n=0
+  for t in pkill killall pgrep pidof; do
+    want_n=$((want_n + 1))
+    val="$(printf '%s\n' "$probe" | sed -n "s/^$t=//p")"
+    if [ "$val" = "$shim/$t" ]; then ok_n=$((ok_n + 1)); else
+      printf '窗口前缀下 %s 解析到 [%s]，不是包内 shim [%s]\n' "$t" "${val:-<解析不出>}" "$shim/$t"
+    fi
+  done
+  [ "$ok_n" -eq "$want_n" ] || return 1
+  printf 'prefix/bin 只有 team；普通 shell 的 pkill/pgrep 仍是系统可执行%s；窗口前缀把四个名字解析回包内 shim\n' \
+    "${notsys:+（本机没有系统的 $notsys，只断言「不是包内入口」）}"
   return 0
 }
 
 chk_prefix_signal_entries() { # <prefix>：安装物的 pkill/killall/pgrep/pidof 在、解析到安装目录、判定生效
-  local prefix="$1" shim backends stub wlog log t form out rc line fargs missing="" link want resolved
+  local prefix="$1" shim backends stub wlog log t form out rc line fargs missing=""
   shim="$prefix/lib/node_modules/teamsmith/skills/teamsmith/scripts/shim"
   backends="$tmp/prefix-signal-backends"; rm -rf "$backends"; mkdir -p "$backends"
   stub="$backends/.witness"
@@ -615,28 +673,8 @@ WITNESS
   if [ -n "$missing" ]; then
     printf '安装包没有携带信号闸门入口（npm 丢 120000 软链的历史形状）：%s\n' "$missing"; return 1
   fi
-  # P360（0.3.1 实测漏网）：**包里带着**不等于**装上能用** —— `npm i -g` 只在 package.json 的 `bin`
-  # 里列了谁才在 prefix/bin 里建链接。0.3.1 的 bin 只有 team，于是用户 `pkill` 落到 /usr/bin，
-  # 闸门在 npm 路线上等于不存在；而上面两条断言只查了「包内文件在不在」，两次复验都没抓住。
-  # 这里补的正是那个缺失的证伪者：装完必须在 prefix/bin 里解析到**这个包的**那个 shim。
-  # 两类形状分开判、一起点名（P360 红侧实测：`readlink -f` 对不存在的最后一级会原样吐出路径而不是空，
-  # 所以「在不在」必须先自己判，否则「bin 字段没列它们」那条永远打不出来；判据是解析到**这个包的**那个 shim，
-  # 所以指向包外、指向包内别的文件、悬空软链都落进 foreign）。
-  local miss_bin="" foreign=""
-  for t in pkill killall pgrep pidof; do
-    link="$prefix/bin/$t"
-    want="$(readlink -f "$shim/$t" 2>/dev/null || true)"
-    if [ ! -e "$link" ] && [ ! -L "$link" ]; then miss_bin="${miss_bin:+$miss_bin }$t"; continue; fi
-    resolved="$(readlink -f "$link" 2>/dev/null || true)"
-    [ "$resolved" = "$want" ] && continue
-    foreign="${foreign:+$foreign }$t→[${resolved:-<解析不出>}]（要 $want）"
-  done
-  if [ -n "$miss_bin" ]; then
-    printf '安装后 prefix/bin 里没有 %s —— npm 没为这些名字建链接（bin 字段没列它们，或列的目标不是包内文件）；用户敲这些名字会落到 /usr/bin\n' "$miss_bin"; return 1
-  fi
-  if [ -n "$foreign" ]; then
-    printf '安装后 prefix/bin 的入口没有落在包内 shim：%s\n' "$foreign"; return 1
-  fi
+  # P378：这里**不再**要求 prefix/bin 里有这四个链接（那正是要撤掉的全局遮蔽）；链接形状由
+  # chk_prefix_bin_scope 反向钉住。本函数只证明「包里的闸门文件还在、判定没被削弱」。
   for t in pkill killall pgrep pidof; do
     line="$(PATH="$shim:$backends:/usr/bin:/bin" command -v "$t" 2>/dev/null)"
     if [ "$line" != "$shim/$t" ]; then
@@ -900,9 +938,9 @@ if want pack; then
   if ! command -v npm >/dev/null 2>&1; then
     skip "本机没有 npm：打包清单与 prefix 安装都跳过（可见 SKIP，不是静默通过）"
   else
-    check_holds "声明面：team + 四个信号入口都指向包内 shim + files 带 bin/" chk_pack_manifest "$tree"
+    check_holds "声明面：bin 只有 team→bin/team.mjs + files 带 bin/" chk_pack_manifest "$tree"
     check_holds "打包清单：bin/team.mjs + 每个源的 SKILL.md + install.sh，不含账本" chk_pack_walk "$tree"
-    check_holds "私有 prefix 安装：version/help 与四个信号入口都来自安装物" chk_prefix_install "$tree"
+    check_holds "私有 prefix 安装：version/help 一致、prefix/bin 不遮蔽信号命令、包内 shim 仍生效" chk_prefix_install "$tree"
   fi
 fi
 
@@ -1091,13 +1129,25 @@ PYPACKF
     ft="$tmp/f-pack2"; scratch_tree "$ft"; rm -f "$ft/bin/team.mjs"
     check_holds "⑤b 对照：真实树打包清单齐全" chk_pack_walk "$tree"
     check_breaks "⑤b 翻转：bin 目标文件不在（package 不完整）" chk_pack_walk "$ft"
+    # ⑤c P378：把四个信号入口加回 bin → npm 又在全局 prefix/bin 里遮蔽这四个命令，安装判据必须红
+    ft="$tmp/f-pack-bin-global"; scratch_tree "$ft"
+    python3 - "$ft/package.json" <<'PYPACKBIN'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for name in ("pkill", "killall", "pgrep", "pidof"):
+    d["bin"][name] = "./skills/teamsmith/scripts/shim/" + name
+json.dump(d, open(p, "w"), indent=2)
+PYPACKBIN
+    check_holds "⑤c 对照：真实树安装后 prefix/bin 只有 team，普通 shell 的 pkill/pgrep 仍是系统可执行" chk_prefix_install "$tree"
+    check_breaks "⑤c 翻转：四个信号入口加回 bin（npm 又全局遮蔽这四个命令）" chk_prefix_install "$ft"
     # ⑥ P321：把四个信号入口改回 0.3.0 的软链形状 —— npm 的 tarball 丢掉它们，安装判据必须红
     ft="$tmp/f-pack-symlink"; scratch_tree "$ft"
     for _fs in pkill killall pgrep pidof; do
       rm -f "$ft/skills/teamsmith/scripts/shim/$_fs"
       ln -s signal-gate "$ft/skills/teamsmith/scripts/shim/$_fs"
     done
-    check_holds "⑥ 对照：真实树的私有 prefix 安装带四个可执行信号入口" chk_prefix_install "$tree"
+    check_holds "⑥ 对照：真实树的安装物带着四个可执行信号入口且判定生效" chk_prefix_install "$tree"
     check_breaks "⑥ 翻转：入口退回 0.3.0 的软链形状（npm 的 tarball 不携带软链）" chk_prefix_install "$ft"
   fi
   # ⑦ P59：安装步的信任提示行 —— 去掉它 → 判据红；让它在 --no-skills 下出现 → 判据红

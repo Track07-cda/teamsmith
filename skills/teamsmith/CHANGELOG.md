@@ -9,6 +9,19 @@
 
 补丁版：**没有破坏性配置迁移、没有新依赖**。这一版主要修通知可靠性，以及三处会让使用者误判状态的缺陷。
 
+### 安装面：npm 不再遮蔽系统命令
+
+- **`package.json` 的 `bin` 只剩 `team`**：0.3.2 曾把 `pkill` / `killall` / `pgrep` / `pidof` 也列进 `bin`，
+  想让 npm 安装的人也有信号闸门；代价是 `npm i -g` 在用户的全局 `prefix/bin` 里建了这四个链接 ——
+  **Teamsmith 之外的普通终端**敲 `pgrep -f …` 或 `pkill …` 也会落进闸门并以 64 退出。
+  现在这四条全局链接撤掉：安装后 `prefix/bin` 里只有 `team`，普通 shell 解析到系统的同名可执行文件。
+- **闸门本身没变，也没有变弱**：四个 shim 文件仍随包发布（`files` 仍含 `skills/`），PM / worker 窗口的启动命令
+  照旧由 `team_tmux_shim_exports` 把 `scripts/shim` 放到 `PATH` 最前，所以**窗口里**这四个名字仍然是闸门。
+  安装面夹具（`tests/install-shape.sh`）现在正向钉住「`prefix/bin` 只有 `team`、普通 shell 不遮蔽、包内 shim 仍在、
+  窗口前缀解析回包内 shim」，并用一个翻转（把四个名字加回 `bin`）证明这条判据会红。
+- **升级**：`npm i -g teamsmith@<新版>` 会把旧版留下的四条链接删掉（npm 11 实测：装完 `prefix/bin` 只剩 `team`）；
+  用 Git 检出或 `install.sh` 的人本来就没有这些链接，无需动作。
+
 ### 通知与交付
 
 - **通知不再依赖一次敲门是否成功**：每次回合结算同时给 PM 的收件箱写一条指针行，包含任务、状态、
