@@ -1490,7 +1490,16 @@ if has flip; then
         init-legacy-proceeds)
           check flip-init-legacy-proceeds-plain grep -q '^FAIL init-legacy-plain-refused$' "$TMP/flip-$mutation.log"
           check flip-init-legacy-proceeds-force grep -q '^FAIL init-legacy-force-refused$' "$TMP/flip-$mutation.log"
-          check flip-init-legacy-proceeds-bootstrap grep -q '^FAIL init-legacy-bootstrap-refused$' "$TMP/flip-$mutation.log" ;;
+          # P377：**非 --print** 的 bootstrap 在变异 scratch 上不能按 rc 判红。scratch 只拷
+          # scripts/references/templates/extension（不看 SKILL.md、也不带 teamsmith-init / handover），
+          # 不是可安装的 skill 源：闸门一拆，bootstrap 过了策略闸门就在装 skill 处 rc=1
+          # （`✗ 技能源不合法：… 没有 SKILL.md`）。于是 `init-legacy-bootstrap-refused`（只看
+          # rc≠0）在变异体上假绿、在**控制与变异两侧都绿**，这条臂点不到名（0.3.4 冻结门的唯一红）。
+          # 闸门被拆掉后同一路径上**真的消失**的是拒绝输出里的推导路线 —— 用它做命名断言；
+          # rc 侧的翻转由不装 skill 的 --print 路径证明（变异体 rc=0 → 拒绝断言红）。
+          check flip-init-legacy-proceeds-bootstrap grep -q '^FAIL init-legacy-bootstrap-derived$' "$TMP/flip-$mutation.log"
+          check flip-init-legacy-proceeds-bootstrap-startup grep -q '^FAIL init-legacy-bootstrap-startup-route$' "$TMP/flip-$mutation.log"
+          check flip-init-legacy-proceeds-print grep -q '^FAIL init-legacy-print-refused$' "$TMP/flip-$mutation.log" ;;
         template-retired-key)
           check flip-template-retired-key-specific grep -q '^FAIL init-fresh-no-retired-key$' "$TMP/flip-$mutation.log" ;;
         migration-row-removed)
