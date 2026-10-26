@@ -380,7 +380,17 @@ team_cmd_up() {
     team_tmux set-option -t "$TEAM_SESSION" destroy-unattached off >/dev/null 2>&1 || true
   fi
   if ! team_pm_window_exists; then
-    team_tmux_new_window "$TEAM_SESSION" "$TEAM_PM_WINDOW" || true
+    # V60 R2：这里曾经是 `|| true` + 无条件的成功行 —— 窗口没建出来（tmux 起不来 / 路径不可用）时
+    # 用户看到的是「✓ 创建 PM 窗口」，接着 up 按「窗口存在」的样子往下走。失败就用 rc 说话：
+    # 点名目标、保留 tmux 自己的诊断（不重定向），不打印成功行、也不继续。
+    local pm_win_rc=0
+    team_tmux_new_window "$TEAM_SESSION" "$TEAM_PM_WINDOW" || pm_win_rc=$?
+    if [ "$pm_win_rc" != "0" ]; then
+      team_err "创建 PM 窗口失败（$TEAM_SESSION:$TEAM_PM_WINDOW，tmux new-window rc=$pm_win_rc；上面是 tmux 的诊断）：窗口不存在，PM 没有起来"
+      team_dim "  修法：确认 tmux server 可用（tmux ls）后重跑 $TEAM_CLI up；窗口在、里面是空的：up 会重启 PM" >&2
+      team_up_backup_note
+      return 1
+    fi
     team_ok "创建 PM 窗口 $TEAM_SESSION:$TEAM_PM_WINDOW"
   fi
 

@@ -6287,6 +6287,17 @@ elif [ "$HAVE_TMUX" = "1" ]; then
   esac
   M65_PID="$(cat "$REPO/.pi/team/state/pm.pid" 2>/dev/null | tr -dc '0-9')"
   if [ -n "$M65_PID" ] && kill -0 "$M65_PID" 2>/dev/null; then ok "M6.5 ①：state/pm.pid 记录了活着的 PM pid"; else bad "M6.5 ①：state/pm.pid 缺失或指向死进程（[$M65_PID]）"; fi
+  # ①c P376：PM 窗口建不出来时**不许报成功**（V60 R2：`|| true` 之后一行无条件打「✓ 创建 PM 窗口」，
+  # 窗口根本不存在）。现场 = TMUX_TMPDIR 指向**普通文件**：真 tmux 直接报错起不了 server，也不会回退
+  # 默认 socket，所以这条探针碰不到本轮的私有现场。TMUX/TMUX_PANE 要摘掉 —— 有它们在时 tmux 用那条
+  # socket，TMUX_TMPDIR 根本不参与判定（「人在窗口外跑 team up」本来就没有 TMUX）。
+  printf 'not a directory\n' > "$TMP/p376-notadir"
+  ( cd "$REPO" && env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$TMP/p376-notadir" $TEAM up ) >"$TMP/up-badtmux.log" 2>&1; RC_BADTMUX=$?
+  assert_eq "P376：PM 窗口建不出来时 up 退非 0（失败不许看起来成功）" \
+    "$([ "$RC_BADTMUX" -ne 0 ] && echo nonzero || echo zero)" "nonzero"
+  assert_not "$TMP/up-badtmux.log" "创建 PM 窗口 $SESSION:$PMW" "P376：窗口没建出来时不打印成功行"
+  assert_has "$TMP/up-badtmux.log" "创建 PM 窗口失败（$SESSION:$PMW" "P376：失败行点名目标窗口"
+  assert_has "$TMP/up-badtmux.log" "$TMP/p376-notadir" "P376：失败保留 tmux 自己的诊断（坏路径原样上屏）"
   # ①b 复现 PM 报告的确切格子（thread 第 2/3 条）：cwd 在项目内 + 前台进程名是 `tmux`。
   # 老规则（窗口在 + 前台不是 shell）在这里就会输出 `running:tmux`；新规则必须报 unknown/idle
   # 且 up 真的把 PM 拉起来（argv 日志里出现 -c 与 @pm-prompt.md）。
