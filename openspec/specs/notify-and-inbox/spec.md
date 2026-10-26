@@ -14,6 +14,24 @@ The Pi notify extension SHALL record a turn-end notification as one line in `doc
 run already at the end of that file; the same summary MUST be deduplicated inside `TEAM_NOTIFY_DEDUP_SEC` (default 20 s) so a
 repeated settle does not spam the PM. The inbox is a local artifact and MUST be gitignored.
 
+The settle SHALL also write one **pointer line** for that notice into the PM's inbox
+(`docs/team/inbox/pm.md`) whenever the resolved sender is not the PM, so that a notice does not exist only in a file
+no reader of the notice opens. The pointer line SHALL name the sender, the task identifier and the state class, the
+record it points at (`see=docs/team/inbox/<agent>.md`) and the outcome of the knock
+(`knock=enqueued` or `knock=skipped:<class>`); `enqueued` means the notice was handed to the delivery guard and MUST
+NOT be read as delivered, and a skipped outcome names exactly one class of the closed set
+`notify-and-inbox#A notice whose knock was skipped is recorded with its reason and named by digest` defines. It
+SHALL be derived from the line the sender records, so that both carry the same merge key, and it MUST NOT carry the
+last-message summary, the `branch=`/`uncommitted=`/`unpushed=` fields or the `⚠ 未提交` prefix — it is a pointer,
+and the PM's line count is the PM's pending count. The record line itself, its merge, its
+detail record and its knock payload MUST stay byte-identical to what the rules of this requirement produce: the
+pointer is a second, independent write. A pointer line MUST NOT append to the detail file, so a run's `×N` still
+equals its record count. `knock=` is a run-scoped field like `×N` and `first=`: extending a run SHALL keep the value
+the run's first event wrote, and the extending event MUST NOT rewrite it. A failed pointer write MUST NOT suppress,
+delay or duplicate the knock, MUST NOT be reported as if the PM's inbox held the line, and SHALL leave a
+`pointer=failed` record in the notice ledger
+(`notify-and-inbox#A notice whose knock was skipped is recorded with its reason and named by digest`).
+
 Consecutive turn-end notifications from one seat that describe the same run SHALL be summarised in one line instead
 of appending a new one. Two notifications describe the same run when their merge keys are equal: the key is the tuple
 (seat, task, state class, `awaiting` set), where the seat is the resolved sender, the task is the line's `<ID>` token
@@ -103,6 +121,13 @@ A merged line is one line to every line-counting reader: `team digest`'s pending
 count it once, and `team inbox --ack` marks that one line read — a later event extending an already-read line does
 not make it unread again. `[manual]`, `[draft]` and `[nudge]` notifications and the pulse's own inbox lines are not
 turn-end events: they never merge, never enter the detail file, and their wake behaviour is unchanged.
+
+One notice is counted once across the two files. A turn-end line whose `agent:` token names the inbox file's own seat
+is that seat's **record** and MUST NOT be counted as unread traffic of that file, while the pointer line in the PM's
+inbox is counted — so one settle adds exactly one to the pending count, never two, and `team_inbox_new`'s predicate
+is the single implementation the digest's pending count, the panel's inbox block and `team inbox`'s unread listing
+share. An upgrade SHALL NOT synthesise pointer lines for record copies already on disk: a pointer written after the
+fact would invent a delivery and a knock outcome nobody observed.
 
 When the raw event could not be appended to the detail file, the settle SHALL NOT extend an existing run — a count
 no record explains would hide the event — and SHALL append a line whose field block carries `detail=unavailable`,
@@ -341,6 +366,51 @@ same-key event SHALL start a new line, so the missing record stays visible and t
   names the failed write, a following same-key event starts another new line rather than absorbing the marker, and
   no event is hidden behind a count no record explains — an implementation that merges anyway is caught here
 
+#### Scenario: A settle leaves a pointer line where the PM reads
+
+- **GIVEN** a seat worktree settling a delivered turn with `TEAM_NOTIFY_TMUX=0`
+- **WHEN** the settle runs
+- **THEN** `docs/team/inbox/<agent>.md` gains its one line as before, and `docs/team/inbox/pm.md` gains one pointer
+  line carrying `agent:<agent>`, the task identifier, `knock=skipped:notify-off` and `see=docs/team/inbox/<agent>.md`
+
+#### Scenario: The pointer line is not a second record
+
+- **GIVEN** the same settle
+- **WHEN** both inboxes and the detail file are read
+- **THEN** the PM's line carries no `:: ` summary, no `branch=`/`uncommitted=`/`unpushed=` field and no `⚠ 未提交`
+  prefix, `state/notify.log` holds exactly one record, and the record line is byte-identical to the line the
+  single-event shape produces — an implementation that rewrites the record line or records the event twice is caught
+  here
+
+#### Scenario: Same run, one pointer line
+
+- **GIVEN** three same-key settles from one seat
+- **WHEN** the settles run
+- **THEN** `docs/team/inbox/pm.md` holds exactly one pointer line carrying `×3` with `first=` and `last=`, its merge key
+  equals the record line's, `team inbox pm --detail` reconciles both, and `state/notify.log` still holds three records
+  — an implementation that appends a pointer line per event, or that also records the pointer as detail, is caught here
+
+#### Scenario: The extending event does not rewrite the run's knock
+
+- **GIVEN** a run whose first event enqueued a knock and two further same-key events that enqueue nothing
+- **WHEN** the run is read
+- **THEN** the pointer line still carries `knock=enqueued` while `state/outbox/` holds exactly one entry for the run
+
+#### Scenario: One settle adds one to the pending count, never two
+
+- **GIVEN** no unacknowledged lines for the seat or for the PM
+- **WHEN** a delivered settle runs
+- **THEN** the pending notification total is 1, the PM's inbox reports one unread line, the seat's own file reports
+  none, and `team inbox pm --ack` clears that one
+
+#### Scenario: A skipped knock is named on the pointer line, and a failed pointer write is not hidden
+
+- **GIVEN** a suspended settle and, separately, a settle whose PM inbox cannot be written
+- **WHEN** the settles run
+- **THEN** the first writes a pointer line carrying `knock=skipped:suspended` with no outbox entry, and the second
+  still enqueues its knock, writes no pointer line, and leaves a `pointer=failed` record in the notice ledger that
+  `team digest` names
+
 #### Scenario: A notice appended while a run is being extended is not lost
 
 - **GIVEN** a merge path held inside its critical section by the fixture's control and a manual notification appended
@@ -348,6 +418,8 @@ same-key event SHALL start a new line, so the missing record stays visible and t
 - **WHEN** the merge completes
 - **THEN** the manual line is present and byte-identical, the run's line is readable, the file contains no partial
   line, and the append path and the merge path did not lose each other's write
+
+---
 
 ### Requirement: `--from-file` delivers the summary byte for byte
 
@@ -1139,7 +1211,9 @@ path and the number of events moved. Every rotation SHALL also be named in the e
 
 `team inbox <agent> --detail` SHALL print the current generation's raw records for that agent together with the path
 it read and whether that generation is post-rotation, and for every merged line of that agent it SHALL compare the
-line's `×N` count with the records it found. The command MUST NOT print an empty or partial listing as if the record
+line's `×N` count with the records of that line's own merge key — a pointer line in the PM's inbox carries the
+sender's key, not the file's seat, and MUST be reconciled against the sender's records instead of being reported as
+a gap. The command MUST NOT print an empty or partial listing as if the record
 were complete: when a merged line's records are unavailable — the file is missing, or a rotation has taken earlier
 events out of the current generation — it SHALL name the gap and `state/notify.log.1` and exit non-zero. The flag is
 read-only: it SHALL NOT change the unread count and SHALL NOT acknowledge a line.
@@ -1176,6 +1250,13 @@ read-only: it SHALL NOT change the unread count and SHALL NOT acknowledge a line
   in the rotated case — the command exits non-zero, and it never prints an empty listing as if the records were
   complete
 
+#### Scenario: A pointer line's records are its own run's
+
+- **GIVEN** the PM's inbox holding a merged pointer line for a seat's three-event run
+- **WHEN** `team inbox pm --detail` runs
+- **THEN** it matches the line's `×3` against that run's three records (the line's own merge key, not the file's seat),
+  reports no gap and exits zero — while a line whose records really are missing still names the gap and exits non-zero
+
 #### Scenario: Detail reading does not acknowledge
 
 - **GIVEN** an unread merged line and its records in `state/notify.log`
@@ -1188,4 +1269,85 @@ read-only: it SHALL NOT change the unread count and SHALL NOT acknowledge a line
 - **WHEN** it is written
 - **THEN** `docs/team/inbox/<agent>.md` gains no extra line from it and `state/outbox/` gains no entry — the record
   is evidence a reader can fetch, never a wake
+
+---
+
+### Requirement: A notice whose knock was skipped is recorded with its reason and named by digest
+
+Every settle that resolved a sender SHALL append exactly one record to `state/notify-knock.log` — the durable,
+project-internal answer to "why was the PM not woken". The extension's own log (`TEAM_NOTIFY_LOG`, `/tmp` by
+default) MAY stay as a debug log but MUST NOT be the only place a skipped knock is recorded. The record SHALL be one
+`- <ISO>` line carrying the seat, the task identifier (or `-`), the state class (or `-`), the knock outcome, the
+pointer result and the notice identity (`line|<merge key>|<first event time>`, or `-` when no line was written).
+
+The outcome SHALL be `enqueued` or `skipped:<class>`, and the classes SHALL be closed: `suspended` (a designed state
+that wakes nobody), `merged` (the event folded into an already announced run), `dedup` (dropped inside
+`TEAM_NOTIFY_DEDUP_SEC`), `turn-unfinished` (an unfinished turn with a lifecycle event), `write-failed` (the durable
+inbox line could not be written), `notify-off` (`TEAM_NOTIFY_TMUX=0`), `no-pane` (the sender has no tmux pane),
+`pm-not-running` (the PM pane does not run the CLI), `pm-window-missing` (the PM window is absent) and
+`enqueue-failed` (the delivery guard did not take the entry). Every path that ends without an enqueued knock SHALL
+map to exactly one class, and a reader MUST print an unknown class verbatim rather than dropping it. A settle
+rejected before a sender is resolved is not a notice and SHALL NOT be recorded.
+
+The file SHALL be bounded by `TEAM_NOTIFY_DETAIL_MAX` records: when an append would take it past the bound, the file
+SHALL be moved to `state/notify-knock.log.1` — one rotated generation, replacing an earlier one — and the new file
+SHALL begin with exactly one header line naming the rotation time, the rotated path and the number of records moved;
+every rotation SHALL also be named in the extension's log.
+
+`team digest`'s pending-notification section SHALL name, when non-zero, both of these, and neither MUST change any
+count that decides a wake-up:
+
+- the notices recorded in the PM's inbox whose knock was skipped, counted from the PM's **unacknowledged pointer
+  lines** by their `knock=skipped:<class>` — one per run, grouped by class — so the line clears when the PM reads and
+  acknowledges those lines, not through a second acknowledgement channel;
+- the notices the pointer write could not deliver, counted from the current generation of the ledger
+  (`pointer=failed`), naming the file and the fact that older generations are not counted.
+
+The display SHALL stay out of the patrol's pending reason and out of every wake decision: a suspension is a designed
+state that wakes nobody, and a pointer failure that cannot clear MUST NOT wake the PM once per tick. A pointer
+failure does not lose the notice on its own — the knock path is independent of the pointer, so the PM is woken by the
+knock when there is one.
+
+#### Scenario: A suspension is recorded and named, and wakes nobody
+
+- **GIVEN** a suspended settle and no other pending work
+- **WHEN** the settle runs and then `team digest` reads the pending counts
+- **THEN** `state/notify-knock.log` gains one line with `outcome=skipped:suspended`, `state/outbox/` gains no entry,
+  `docs/team/inbox/pm.md` holds a pointer line carrying `knock=skipped:suspended`, and the digest's skipped line
+  names `suspended 1` while the patrol's pending reason is unchanged
+
+#### Scenario: Reading clears the skipped count
+
+- **GIVEN** the same suspension, with the digest naming `suspended 1`
+- **WHEN** `team inbox pm --ack` runs and then the digest runs again
+- **THEN** the skipped line no longer names that notice — its pointer line is read — while the ledger keeps the record
+
+#### Scenario: Every path that does not knock carries one class
+
+- **GIVEN** settles that are dropped inside the dedup window, folded into an already announced run, refused by
+  `TEAM_NOTIFY_TMUX=0`, and whose PM pane holds a shell
+- **WHEN** the ledger is read
+- **THEN** it holds one line per settle with `outcome=skipped:dedup`, `skipped:merged`, `skipped:notify-off` and
+  `skipped:pm-not-running` respectively, and no settle is missing or carries two classes
+
+#### Scenario: An unknown class is printed, not swallowed
+
+- **GIVEN** a ledger line whose class is `skipped:something-new`
+- **WHEN** the digest reads it
+- **THEN** the class appears in the output verbatim and the line is not silently dropped
+
+#### Scenario: The ledger is bounded and names its rotation
+
+- **GIVEN** a bound of two records and four settles
+- **WHEN** the fourth record is written
+- **THEN** the current file begins with a header naming the rotation time, `state/notify-knock.log.1` and the number
+  of records moved, the rotated file holds the older generation, and the extension's log names the rotation
+
+#### Scenario: A pointer failure is named from the ledger
+
+- **GIVEN** a settle whose pointer write failed
+- **WHEN** the digest runs
+- **THEN** it names one notice that did not reach the PM's inbox, read from the current generation of
+  `state/notify-knock.log`, the knock entry for that settle exists in `state/outbox/`, and the pointer-failure line
+  contributes nothing to the pending reason
 
