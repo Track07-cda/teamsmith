@@ -42,3 +42,22 @@ By contrast, `slash-team-e2e.sh` and the `host` route use the current host Pi. T
 ## Delivery
 
 Report `docs/team/reports/P380-dev3.md` with exact commands, versions and output. If a latest-Pi behavior change requires a larger judge redesign than this task can safely carry, write `BLOCKED:` with the evidence and the smallest next step; do not hide it behind an old-version fallback. No merge, push or publish.
+
+## Rework required by V109 (2026-10-27)
+
+V109 reproduced a blocking parser defect in **both** version resolvers:
+
+- `ci/resolve-pi-version.sh`
+- `skills/teamsmith/tests/fixtures/delivery-truth-real/run-case.sh`
+
+Both currently run `tr -d '[:space:]'` **before** matching the version. If npm returns `1.4.0` plus a notice on another line, all lines are joined and the resolver rejects a valid answer. This breaks the exact latest-runtime path this task is meant to provide.
+
+Required fix: select a complete version line first, then trim whitespace from that selected line (or use an equivalent structured parse). Do not merge all registry output before matching. Apply the same correction in both locations.
+
+Required additional evidence before re-delivery:
+
+1. A realistic npm stub/output containing `1.4.0` followed by an npm notice/warning line must return exactly `1.4.0` with rc=0 in **both** paths. Show the old implementation failing the same input and the repaired implementation passing it.
+2. A multi-line answer with no valid version line must still fail loudly; registry failure must remain non-zero and must not create a scene.
+3. Re-run `workflow-entry.sh`, `delivery-truth.sh --section judge --mutations`, the resolver's success/failure checks and the static checks. Do not rerun the full gate.
+
+Keep the rest of the candidate frozen except these parser fixes and the report. V109 will perform a focused second-round review.
