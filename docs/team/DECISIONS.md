@@ -1954,3 +1954,11 @@ dev2: bash /tmp/leakprobe/probe.sh                          运行 1h33m（S 状
 - **处置**：从 `26c9b855` 恢复文件、重做 append、提交 `6e03fd8a`；报告与裁定都在。
 - **规矩**：`restore --source=<ref>` 的语义是「让工作树里的这条路径变成 `<ref>` 里的样子」；`<ref>` 里没有它就等于删除。跨分支取文件前先 `git cat-file -e <ref>:<path>`；只想 append 到分支上已有的文件时，用 `git show <branch>:<path>` 读、或在分支工作树里直接编辑，不要用 `restore --source=main`。
 - **代价**：一笔废提交 + 一次恢复；没有丢内容（分支历史里一直都在），也没有影响任何席位的工作。
+
+### D203 · P379 门禁精简探索二审接受，但不批准实现（2026-10-27）
+
+接受 `d54b7692fe07` 的探索修订：普通推送不能以「61b 不在地板」推成「61b 不跑」；routing fixture 经 changed paths 选回 61b 后，实测推算最慢片为 112–131 分钟。成本感知分片是后续提案的优先候选，但单独使用仍让 ordinary/selector 类达到 31.2 分钟，且不能解决 61b 单段 112 分钟。
+
+PM 用同一选段器和冻结成本表独立重算五类路径，键数、总成本、hash/LPT 最慢片均与修订报告一致； nightly 的完整矩阵按 15 个作业及每作业 setup/baseline 计价，不再采用 15 分钟或四作业的错误口径。38/63 的拆分数字仍是 provisional，63 的真实 mouse 红由 P383 独立修复。
+
+影响：探索阶段完成，后续可写 OpenSpec 提案；本裁定不授权 section 拆分、61b 条件化、断言过滤/删除、工作流或 CI 排期改动。任何 apply 仍需提案评审 ACCEPTED 和独立验证。
