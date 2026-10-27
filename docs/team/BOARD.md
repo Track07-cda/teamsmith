@@ -607,9 +607,9 @@
 | V107 | 61b单臂修复独立复核 | verify | - | - | done |
 | V108 | npm命令范围独立复核 | dev | - | - | done |
 | P379 | 门禁耗时拆解与精简方案 | dev2 | - | - | review |
-| P380 | 真实测试运行时使用最新pi | dev3 | - | - | wip |
+| P380 | 真实测试运行时使用最新pi | dev3 | - | - | review |
 | P381 | 通知的git探测不污染Pi输入框 | dev-bob | - | - | review |
-| V109 | 最新pi运行时独立复核 | verify | - | - | wip |
+| V109 | 最新pi运行时独立复核 | verify | - | - | review |
 | P382 | 公开CI账本夹具数字UID失败 | dev | - | - | review |
 | P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | wip |
 
