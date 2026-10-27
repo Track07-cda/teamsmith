@@ -610,7 +610,7 @@
 | P380 | 真实测试运行时使用最新pi | dev3 | - | - | wip |
 | P381 | 通知的git探测不污染Pi输入框 | dev-bob | - | - | review |
 | V109 | 最新pi运行时独立复核 | verify | - | - | wip |
-| P382 | 公开CI账本夹具数字UID失败 | dev | - | - | wip |
+| P382 | 公开CI账本夹具数字UID失败 | dev | - | - | review |
 | P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | wip |
 
 ## 当前里程碑
