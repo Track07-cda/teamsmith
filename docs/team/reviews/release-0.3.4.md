@@ -48,4 +48,16 @@ Final main candidate: **`51a6a36a`**, version **0.3.4**, working tree clean.
 
 The full frozen-container run on `d8a21c03` remains the baseline: **5058 passed / 1 failed** over 134 sections. Since then the only product/test changes are `P377` (one flip case) and `P378` (package bin plus installation assertions), each independently verified, plus the final affected selection above. I propose using the **baseline full run + independent targeted verification + final affected selection** as the composite acceptance evidence instead of spending another four hours on an unchanged full suite. This requires the user's explicit acceptance before tagging and pushing.
 
-No tag, public push or npm publish has been performed for 0.3.4.
+## Release execution
+
+The user accepted the composite acceptance route and authorized release on 2026-10-27: the baseline full run, independent targeted verification for every later fix, and the final affected selection.
+
+Before pushing, the release commit on `main` must not carry `[skip ci]`: this push contains earlier product commits, and GitHub evaluates only the tip message for skip behavior. This record is therefore the intentional non-skipping release commit; the `v0.3.4` tag is moved to it after the final check.
+
+Final pre-push checks on the tagged release commit:
+
+- `release-check.sh`: **30 passed / 0 failed / 0 skipped**;
+- `release-check.sh --self-test`: **A 4/4, B 4/4**;
+- product/test/package paths are byte-identical to the independently reviewed candidate `51a6a36a`; later commits are documentation and the P379 read-only exploration brief only.
+
+No npm publish has been performed yet. Public `main` and the single `v0.3.4` tag are pushed only after these checks; npm uses a staged publish and the user's web 2FA approval.
