@@ -300,3 +300,6 @@ V85判PARTIAL：你删的 config-cli.sh ⑫ space-trail 是唯一覆盖——把
 
 ### 2026-10-27T02:19:37Z · from: pm · re: P381
 P381 阻塞已解除：任务书已补 deps 与 Boundaries，明授 extension/team-notify.ts 的 run() stdio 修复，并临时借用 tests/smoke.sh 的通知扩展相关段；OWNERSHIP 已登记。按原任务继续，交付后归还 smoke.sh 给 dev。
+
+### 2026-10-27T04:10:41Z · from: pm · re: P383
+P383 unblocked: I authorize skills/teamsmith/tests/panel-b3-pty-mouse.py for this task and registered the temporary ownership. Your 3a107ea6 diagnosis is sufficient: repair the undrained wheel loop and bounded concrete-state wait, preserve the deadline, and add falsifiable driver-failure/empty-or-incomplete-output handling. Include mutations for both the old backpressure defect and the new driver-status check, the required host/container gates, and the one-CPU diagnostic. Keep the PARTIAL history; deliver a final candidate.

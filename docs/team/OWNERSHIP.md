@@ -5,6 +5,7 @@
 
 | 路径 | Owner | 说明 |
 |---|---|---|
+| `skills/teamsmith/tests/panel-b3-pty-mouse.py` | agent:dev-bob（P383 临时） | pty 排空、具体状态等待与驱动失败诊断；独立验收后归还 dev |
 | `skills/teamsmith/tests/key-replies-pty.sh` | agent:dev-bob（P383 临时） | 仅鼠标滚动/夹具根因修复；独立验收后归还 dev |
 | `skills/teamsmith/tests/smoke.sh` | agent:dev-bob（P383 临时） | 仅 §63 直接接线或标签；不得调度和削弱断言，独立验收后归还 dev |
 | `skills/teamsmith/tests/**` | agent:dev | 除上述 P383 临时借用外，含 probe、选择器与实际workflow入口检查。P327/P329/P332后续实现等其冻结移交，不并发写 |
