@@ -1,4 +1,4 @@
-# Handover · 2026-10-27T02:48Z
+# Handover · 2026-10-27T02:50Z
 > Trust the disk and your own re-derivation, not the previous session's prose.
 > Every line says where it lives if it is not here.
 
@@ -14,7 +14,7 @@ Header: base main tip `58b8e25b` (this handover sync adds one docs commit) · re
 - `P379` gate simplification · explore delivered · `task/P379-gate-simplification-explore` @ `aa03cf6e` · report `docs/team/reports/P379-dev2.md` on the branch; PM review is next, no implementation approved.
 - `P380` latest-Pi runtime · apply delivered · `task/P380-pi-latest-test-runtime` @ `779d9d32` · **needs rework after V109 second-round FAIL**; do not merge.
 - `V109` independent review · verify · `task/V109-pi-latest-runtime-review` @ `81a56088` · second-round FAIL: first two defects fixed, but both workflow branches still swallow a non-zero `pi --version` exit status when it prints a valid version.
-- `P381` notify stderr leak · apply · `task/P381-notify-git-stderr-leak` @ `df6339c1` · real default no-upstream latest-Pi case and independent verification pending.
+- `P381` notify stderr leak · delivered · `task/P381-notify-git-stderr-leak` @ `9d7b6482` · real Pi 1.4.0 default no-upstream case now receives the second say; independent verification is next (`docs/team/reports/P381-dev-bob.md`).
 - Details and acceptance boundaries → `docs/team/BOARD.md`, the task briefs, and `docs/team/OPEN-ITEMS.md`.
 
 ## 3 Asked and unanswered
@@ -23,7 +23,7 @@ Header: base main tip `58b8e25b` (this handover sync adds one docs commit) · re
 
 ## 4 Waiting on the user anyway
 - `docs/team/OPEN-ITEMS.md` §2: no release after the current fixes is authorized yet; ask only after verified evidence.
-- Ordering: diagnose the failed public CI; fix `P380` so the `pi --version` exit status is preserved and verified; rerun `V109`; then verify and merge `P381`; only then review the delivered `P379` exploration before any implementation.
+- Ordering: diagnose the failed public CI; fix `P380` so the `pi --version` exit status is preserved and rerun `V109`; independently verify the delivered `P381`; only then review the delivered `P379` exploration before any implementation.
 
 ## 5 Side effects I caused
 - `.pi/team/config.sh`: all five seat categories now `openai/gpt-6.1-terra:max`; PM default now `kimi-coding/k3.1-pro:max`. PM was **not restarted**; current session remains its existing identity.
