@@ -43,3 +43,15 @@ Recheck only the changed points and any directly affected evidence:
 4. Re-run `workflow-entry.sh`, `delivery-truth.sh --section judge --mutations`, the parser checks and the static checks. Reuse your first-round image/readback evidence if the image did not change; state precisely what you did and did not rerun.
 
 Give the final PASS/PARTIAL/FAIL first, with exact commands and output tails. Keep the P381 product defect separate; it is not part of this candidate.
+
+## Third round after Rework 4
+
+The new frozen candidate is **`47df9a76d5ef0519ef890e3175c596718d7fa355`**, whose implementation parent is `6004e822d4a2cc0c3ee0c7d397742b9510f99e49`; the tip adds the Rework 4 report. It supersedes `779d9d32`. Preserve the first- and second-round FAIL records verbatim and append `## Third round`; put this round's PASS/PARTIAL/FAIL at the start of that section. The PM is starting a fresh verifier session because the previous session exceeds its model window; the task, candidate history and evidence all remain on disk.
+
+Recheck the changed points independently, using your own clean clone and controlled commands rather than only the author's runner:
+
+1. Reproduce the old defect first: `bash ci/check-pi-version.sh 1.4.0 "$(pi --version)"` with a controlled `pi` that prints `1.4.0` and exits 42 still prints a successful comparison and returns 0. Then execute the **actual extracted command prefix from each workflow branch** at the new candidate. Both must stop before comparison, name the failure, return 42 and omit the success line. Only successfully obtained output may reach the checker; mismatch rc=3 and equal rc=0 must remain intact.
+2. `workflow-entry.sh` ④ must now total 21 green / 0 bad. Independently mutate each branch back to the inline command-substitution shape and confirm branch-named red results. Confirm the new status-shadow really lets the exit-42 case through when the status guard is removed; a green assertion that does not execute this contrast is not evidence.
+3. Check the same class in `ci/build-image.sh`: a controlled engine/runtime that prints the expected version and exits 42 must produce a named non-zero refusal before comparison and preserve the printed runtime output. Successful readback and version mismatch behavior must remain unchanged. You may reuse the existing fake-engine route; no new image build is required if the image itself is unchanged.
+4. Re-run `workflow-entry.sh`, `delivery-truth.sh --section judge --mutations`, affected parser/static checks and `git diff --check`. Verify yourself that `git diff af73b9e808ca..47df9a76 -- skills/teamsmith/tests/fixtures/ skills/teamsmith/scripts/` is empty before reusing the earlier real-runtime A–E evidence; otherwise rerun the affected runtime case. No full gate and no GitHub rerun.
+5. Complete the previously blocked ledger check on this final candidate with the real names file: `bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"`. Record `names=ok`, `user=resolved`, hit count and rc. A missing names file or SKIP is not a pass.

@@ -223,3 +223,6 @@ V90 第二轮定点复看：候选见任务书末节（HEAD 值已填）。你�
 
 ### 2026-10-23T07:14:30Z · from: pm · re: V100
 V100第二轮定点复看：候选 c1a3f4d0。作者按你 §9/§10 改了三件（三份真样品缺一即红、TEAM_INBOX_MAX_CHARS 四面描述含面板重建、报告补 12b-pi 必须绿）。只做四件：①--select 12b-pi 必须绿（上轮 ✓470 ✗1）；②三个 marker 名各有写读两侧，删掉 spool 样品必须红并点名；③四面描述一致且 panel.js 是按钉住工具链重建的（--select 26-a）；④记录侧仍无预算（贴 cmd-agents.sh 那处 diff）。任务书末节已写。
+
+### 2026-10-27T03:22:16Z · from: pm · re: V109
+V109 third round is frozen at 47df9a76d5ef0519ef890e3175c596718d7fa355 (implementation 6004e822d4a2cc0c3ee0c7d397742b9510f99e49). The main-checkout V109 brief now requires independent exit-42 contrasts on both workflow branches, the build-image sibling, all prior red sides, and the real-names ledger check. Preserve both earlier FAIL sections and append Third round.
