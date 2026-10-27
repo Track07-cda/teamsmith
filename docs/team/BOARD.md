@@ -613,7 +613,8 @@
 | P382 | 公开CI账本夹具数字UID失败 | dev | - | - | review |
 | P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | wip |
 | P384 | README三Skill安装表述 | dev3 | - | - | review |
-| P385 | Agent Self-Reminder探索 | dev2 | - | - | todo |
+| P385 | Agent Self-Reminder探索 | dev2 | - | - | wip |
+| V110 | P383 pty修复独立复核 | verify | - | - | todo |
 
 ## 当前里程碑
 
