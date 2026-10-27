@@ -61,3 +61,15 @@ Required additional evidence before re-delivery:
 3. Re-run `workflow-entry.sh`, `delivery-truth.sh --section judge --mutations`, the resolver's success/failure checks and the static checks. Do not rerun the full gate.
 
 Keep the rest of the candidate frozen except these parser fixes and the report. V109 will perform a focused second-round review.
+
+## Second blocking finding from V109 (2026-10-27)
+
+`workflow-entry.sh` ④ is currently a string check, not a falsifiable behavior check. V109 removed the two actual version comparisons/rejections from a private workflow and the fixture still returned `ok 9 bad 0`; a real container with `PI_EXPECT_VERSION=0.0.0` could therefore still return 0 while the fixture claimed comparison had happened.
+
+Required correction: make ④ execute the comparison, not merely observe that strings such as `pi --version` and `$PI_EXPECT_VERSION` occur in the command. The simplest acceptable shape is a small `ci/check-pi-version.sh` used by both workflow run branches; the fixture invokes that same script with a controlled `pi` result and proves:
+
+- actual version equals expected → rc=0;
+- actual version differs → named non-zero rejection (the current workflow uses rc=3);
+- removing or bypassing the comparison makes ④ fail instead of still printing `ok 9 bad 0`.
+
+Do not add a framework or a second parallel implementation of the comparison. If you keep the check inline instead, the fixture must execute the actual extracted comparison in an isolated stub environment with the same red/green evidence. The old string-only assertion must be replaced, not retained as additional false confidence.
