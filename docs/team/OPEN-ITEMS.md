@@ -10,5 +10,6 @@
 
 ## Waiting on the user
 
-- No unanswered direct user question at handover. The user explicitly invoked the handover skill; this file is the continuity record, not a request for another confirmation.
-- A future release after these fixes is not authorized yet; ask only after the current work has verified evidence.
+- PM asked whether to authorize **P381 only as a local squash merge** (option A, recommended) or leave it unmerged for a later batch (option B). No answer has arrived; no merge has been executed. The preview is `git merge --squash task/P381-notify-git-stderr-leak` followed by the recorded P381 commit, with pre/post-merge checks and no push.
+- Since that question, P382 and P380 also became technically merge-ready, but no authorization has been requested or assumed for them. Required order for the next decisions: P381 first; P382 independently; V109 records-only; then P380 with `comment-fix.patch`. P379's exploration report is also records-only and can follow without approving implementation.
+- Push, public-CI retry, npm release and any post-0.3.4 release remain unauthorized. Ask only with verified evidence and an exact next command.
