@@ -1,8 +1,8 @@
-# Handover · 2026-10-27T02:40Z
+# Handover · 2026-10-27T02:48Z
 > Trust the disk and your own re-derivation, not the previous session's prose.
 > Every line says where it lives if it is not here.
 
-Header: base main tip `c3a0b16f` (this handover adds one docs commit) · released `v0.3.4` · session `PI_MODEL=k3.1-pro` · `01a0ae2c-c402-7393-930e-9b70eea19cc4` · triggered by the user invoking the `handover` skill.
+Header: base main tip `58b8e25b` (this handover sync adds one docs commit) · released `v0.3.4` · session `PI_MODEL=k3.1-pro` · `01a0ae2c-c402-7393-930e-9b70eea19cc4` · triggered by the user invoking the `handover` skill; synchronized with the new delivery/review messages below.
 
 ## 1 State
 - `main` was clean before this document; current tip = `git rev-parse --short HEAD`.
@@ -11,19 +11,19 @@ Header: base main tip `c3a0b16f` (this handover adds one docs commit) · release
 - Active changes: none unarchived (`openspec list`); archived specs = 19 capabilities.
 
 ## 2 In flight
-- `P379` gate simplification · explore · `task/P379-gate-simplification-explore` @ `517277f0` · report not yet on main; background `p379-measure` to harvest → `docs/team/BOARD.md`.
-- `P380` latest-Pi runtime · apply delivered · `task/P380-pi-latest-test-runtime` @ `779d9d32` · waiting for `V109` second round; first-round FAIL is recorded.
-- `V109` independent review · verify · `task/V109-pi-latest-runtime-review` @ `681a9e2a` · second round pending on `779d9d32`; do not use the superseded `ffb378f0`.
+- `P379` gate simplification · explore delivered · `task/P379-gate-simplification-explore` @ `aa03cf6e` · report `docs/team/reports/P379-dev2.md` on the branch; PM review is next, no implementation approved.
+- `P380` latest-Pi runtime · apply delivered · `task/P380-pi-latest-test-runtime` @ `779d9d32` · **needs rework after V109 second-round FAIL**; do not merge.
+- `V109` independent review · verify · `task/V109-pi-latest-runtime-review` @ `81a56088` · second-round FAIL: first two defects fixed, but both workflow branches still swallow a non-zero `pi --version` exit status when it prints a valid version.
 - `P381` notify stderr leak · apply · `task/P381-notify-git-stderr-leak` @ `df6339c1` · real default no-upstream latest-Pi case and independent verification pending.
 - Details and acceptance boundaries → `docs/team/BOARD.md`, the task briefs, and `docs/team/OPEN-ITEMS.md`.
 
 ## 3 Asked and unanswered
-- No unanswered direct user question. The user invoked `handover`; the continuation requirements are in `OPEN-ITEMS.md`.
+- No unanswered direct user question. The user invoked `handover`; the continuation requirements and the new V109 FAIL are in `OPEN-ITEMS.md`.
 - Do not treat public CI as green: `OPEN-ITEMS.md` §1 is the outstanding release follow-up, not a user confirmation request.
 
 ## 4 Waiting on the user anyway
 - `docs/team/OPEN-ITEMS.md` §2: no release after the current fixes is authorized yet; ask only after verified evidence.
-- Ordering: diagnose the failed public CI first, then finish `V109`, then verify and merge `P381`, then review the `P379` exploration before any implementation.
+- Ordering: diagnose the failed public CI; fix `P380` so the `pi --version` exit status is preserved and verified; rerun `V109`; then verify and merge `P381`; only then review the delivered `P379` exploration before any implementation.
 
 ## 5 Side effects I caused
 - `.pi/team/config.sh`: all five seat categories now `openai/gpt-6.1-terra:max`; PM default now `kimi-coding/k3.1-pro:max`. PM was **not restarted**; current session remains its existing identity.
@@ -33,7 +33,7 @@ Header: base main tip `c3a0b16f` (this handover adds one docs commit) · release
 
 ## 6 Next three commands
 1. `bash skills/teamsmith/scripts/team digest`
-2. `bash skills/teamsmith/scripts/team resume --dry-run`
+2. `git -C .worktrees/verify show 81a56088:docs/team/reports/V109-verify.md | sed -n '189,230p'`
 3. `GH_TOKEN=$(cat .github-pat) gh run view 40433391806 --repo Track07-cda/teamsmith --json status,conclusion,jobs`
 
 ## 7 What this session learned that no file contains
