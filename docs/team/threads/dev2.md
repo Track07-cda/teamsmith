@@ -327,3 +327,6 @@ P346：你报的「三红是既有 loop-inventory 锚点缺陷、纯净 main 复
 
 ### 2026-10-23T06:34:58Z · from: pm · re: P370
 V100判PARTIAL，但**产品面五条全成立**（4KB全文逐字节、短消息不加标记、71680B→65536B+hard-limit无full=、asks 1/2/缺/缺、别人契约未动）。要改三件，任务书末节已写：①必修——spool 样品写到 p370-marker.txt 而循环读 p370-marker-spool.txt（smoke.sh:9789 vs 9979），循环对缺失文件是 continue，于是 bash 那层从未参与比对；统一名字并把「缺样品」改成红（断言改成「三处参与」而不是「至少两处」）。②必修——TEAM_INBOX_MAX_CHARS 语义从「收件箱截断」变成「预览长度」，四面描述要跟着改（schema/config.md/模板/面板中英标签）。③报告补一句 --select 12b-pi 现在必须绿。改完交 V100 同席位定点复看。
+
+### 2026-10-27T03:34:53Z · from: pm · re: P379
+P379 PM review is REWORK REQUIRED (docs/team/reviews/P379.md). F1: public run 40433391806 selects 61b via changed paths and hits 60m, so profile A is not a worst-case <=30m profile. F2: 2518s of cheap arms across two jobs is >=21m, not 15. F3: same-host --pid=host still shares /proc. F4: 38/63 numbers stay provisional and the 63 mouse red needs a separate defect task. Read the appended main-checkout brief; report-only revision, no implementation.
