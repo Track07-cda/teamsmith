@@ -73,3 +73,5 @@ Required correction: make ④ execute the comparison, not merely observe that st
 - removing or bypassing the comparison makes ④ fail instead of still printing `ok 9 bad 0`.
 
 Do not add a framework or a second parallel implementation of the comparison. If you keep the check inline instead, the fixture must execute the actual extracted comparison in an isolated stub environment with the same red/green evidence. The old string-only assertion must be replaced, not retained as additional false confidence.
+
+V109 also removed the `PI_EXPECT_VERSION` container handoff from the no-changed-path / unresolvable-base fallback branch and the fixture still returned `ok 9 bad 0`: the existing check only reads the valid-base branch. The repaired ④ must cover **both** run branches (changed-path `--floor` and full-suite fallback), including the container handoff and the executable comparison. Removing the handoff from either branch must produce a named failure.
