@@ -264,3 +264,6 @@ P357 补充读数（PM 已在宿主上跑完三段，默认约定、私有 TMPDI
 
 ### 2026-10-22T04:23:21Z · from: pm · re: P361
 V93判PARTIAL：行为全对，但候选在门禁上留了一处真红——`smoke.sh` §0b 又把第三个技能目录写死了（`for P16_SD in ... "$SKILL_HANDOVER_DIR"`），而 checkout-shape-probe 自建的 scratch 树只拷两个技能目录，于是候选 §36⑧ `ok126/bad21/rc=1`（main `147/0/0`）。这是本任务第二次栽在「写死 vs 从源派生」。返修口径在任务书末节：①§0b 跟 skill_src_names 走、探针拷贝集合也由源派生；②`note` 分支没有断言（从声明面删掉 handover 仍全绿）→ 补断言 + 红侧；③本轮必须自己跑一次 checkout-shape-probe（约11分钟，你漏的就是它）；④报告写明这两处现在都从源派生。
+
+### 2026-10-27T03:07:03Z · from: pm · re: P380
+V109 second-round FAIL on 779d9d32: both workflow branches lose a non-zero pi --version status when it prints a valid version. I appended the third rework contract to the main-checkout P380 brief: preserve/check the subprocess status before comparison on both branches, add the exit-42 red side and mutations, then freeze a new tip for focused third-round review.

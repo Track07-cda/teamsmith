@@ -75,3 +75,15 @@ Required correction: make ④ execute the comparison, not merely observe that st
 Do not add a framework or a second parallel implementation of the comparison. If you keep the check inline instead, the fixture must execute the actual extracted comparison in an isolated stub environment with the same red/green evidence. The old string-only assertion must be replaced, not retained as additional false confidence.
 
 V109 also removed the `PI_EXPECT_VERSION` container handoff from the no-changed-path / unresolvable-base fallback branch and the fixture still returned `ok 9 bad 0`: the existing check only reads the valid-base branch. The repaired ④ must cover **both** run branches (changed-path `--floor` and full-suite fallback), including the container handoff and the executable comparison. Removing the handoff from either branch must produce a named failure.
+
+## Third blocking finding from V109 second round (2026-10-27)
+
+The second-round review of `779d9d32156ebd6d490342f62ee3d2d22a04c78e` is **FAIL**. Both workflow branches currently pass `"$(pi --version)"` directly as an argument to `ci/check-pi-version.sh`. That command substitution's exit status is lost: a controlled `pi` that prints `1.4.0` and then exits 42 makes the existing workflow prefix print a successful comparison and continue with rc=0. This is a controlled counterexample, not a claim that real Pi has been observed failing this way.
+
+Required correction in **both** the changed-path and full-suite fallback branches: read `pi --version` separately, preserve and check that command's own non-zero status before calling `ci/check-pi-version.sh`, and only compare output obtained successfully. Do not use `|| true`, do not hide the failing status behind the comparison result, and keep the existing mismatch rc=3 behaviour unchanged.
+
+Required additional evidence before re-delivery:
+
+1. Extend `workflow-entry.sh` ④ on both branches with a controlled `pi` that prints a valid expected version and exits 42. The actual workflow path must reject it with a named non-zero result and must not print the successful comparison or continue into the gate. A mutation that removes or bypasses the new subprocess-status check must make ④ fail with a branch-named assertion.
+2. Keep the existing equal rc=0, mismatch rc=3, handoff-removal and deleted-comparison red sides green on both branches. Re-run `workflow-entry.sh`, the affected static checks and `git diff --check`; do not run the full gate.
+3. Preserve the earlier parser and real-runtime evidence. Append the exact new candidate tip, commands and output to `docs/team/reports/P380-dev3.md` as Rework 4. Keep every unrelated path frozen. V109 will do a focused third-round review only after the PM confirms the new freeze pointer.
