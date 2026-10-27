@@ -33,7 +33,7 @@ Write `docs/team/reports/V109-verify.md`, starting with PASS, PARTIAL or FAIL. S
 
 ## Second round after rework
 
-Candidate after the first-round findings: `ffb378f0` (implementation `af73b9e8`, with the parser rework `69369593`). The first-round FAIL and its evidence remain in your report; append a `## Second round` section, do not rewrite it.
+Candidate after the first-round findings: **`779d9d32`** (includes implementation `af73b9e8`, parser rework `69369593`, and the final both-routes test update `00363e27`). The earlier `ffb378f0` was frozen before the final test/report commit and is superseded; use `779d9d32` for the second round. The first-round FAIL and its evidence remain in your report; append a `## Second round` section, do not rewrite it.
 
 Recheck only the changed points and any directly affected evidence:
 
