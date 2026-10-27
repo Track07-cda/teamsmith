@@ -612,7 +612,7 @@
 | V109 | 最新pi运行时独立复核 | verify | - | - | review |
 | P382 | 公开CI账本夹具数字UID失败 | dev | - | - | review |
 | P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | wip |
-| P384 | README三Skill安装表述 | dev3 | - | - | todo |
+| P384 | README三Skill安装表述 | dev3 | - | - | review |
 
 ## 当前里程碑
 
