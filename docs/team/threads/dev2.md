@@ -330,3 +330,685 @@ V100判PARTIAL，但**产品面五条全成立**（4KB全文逐字节、短消�
 
 ### 2026-10-27T03:34:53Z · from: pm · re: P379
 P379 PM review is REWORK REQUIRED (docs/team/reviews/P379.md). F1: public run 40433391806 selects 61b via changed paths and hits 60m, so profile A is not a worst-case <=30m profile. F2: 2518s of cheap arms across two jobs is >=21m, not 15. F3: same-host --pid=host still shares /proc. F4: 38/63 numbers stay provisional and the 63 mouse red needs a separate defect task. Read the appended main-checkout brief; report-only revision, no implementation.
+
+### 2026-10-27T10:00:50Z · from: user · re: P385
+# Teamsmith — Agent Self-Reminder 需求说明
+
+**文档版本：** v0.1
+**目标项目：** teamsmith
+**参考基线：** v0.3.4
+**需求类型：** 新增 Agent 自主定时唤醒能力
+**优先级：** P1
+**状态：** 待 PM Agent 分析与提案评审
+
+---
+
+## 1. 背景与动机
+
+teamsmith 目前已经具备一套相对完善的多 Agent 生命周期管理和异步协调机制：
+
+- PM Agent 负责项目管理、任务分派、独立验证与交付。
+- Worker Agent 在独立的 tmux Window 和 Git Worktree 中运行。
+- Pulse 定期检查项目待办，并按需唤醒 PM。
+- Inbox / Outbox 负责 Agent 之间的消息持久化、通知与安全投递。
+- `team-inbox-watch.ts` 已支持通过 Pi Extension API 向 Agent 注入消息，触发新一轮推理。
+- Agent 可以停止运行，并在后续通过 teamsmith 的机制恢复工作。
+
+然而，目前缺少一种能力：
+
+**Agent 能够主动为自己创建一个未来的提醒事项，并在指定时刻收到由系统自动注入的消息，从而恢复推理并继续执行工作。**
+
+现有 Pulse 主要根据项目的当前待办状态决定是否唤醒 PM，不支持 Agent 显式登记一个具有未来触发时间的待办。
+
+这限制了一些需要延迟执行的工作场景。
+
+例如：
+
+1. PM 分派任务后，决定 20 分钟后检查任务进展。
+2. Agent 发现某项外部操作需要等待，安排 10 分钟后重新检查。
+3. PM 暂时没有可以立即执行的工作，但计划在指定时间继续某项活动。
+4. Agent 根据一次检查的结果，决定下一次检查的时间。
+5. Agent 需要在未来某个时刻重新评估一个尚未满足的条件。
+
+当前可以使用第三方 Pi Extension（如 `pi-schedule-prompt`）实现部分功能，但独立插件与 teamsmith 已有的 Agent 生命周期、消息投递、任务归属和恢复机制之间缺少统一的契约。
+
+因此，希望为 teamsmith 增加原生 Agent Self-Reminder 能力。
+
+## 2. 目标
+
+### 2.1 核心目标
+
+允许 Agent 通过工具自主创建、查询、取消定时提醒。
+
+提醒应当：
+
+1. 由 Agent 在执行任务期间主动创建，不要求用户手工配置。
+2. 指定未来的绝对时间或相对延迟。
+3. 持久化到 teamsmith 管理的项目运行时状态中。
+4. 在到期时通过 Pi 消息机制通知目标 Agent。
+5. 触发目标 Agent 的新一轮模型推理。
+6. 支持 Agent 在被唤醒后继续执行工具调用、协调任务或创建新的提醒。
+7. 与 teamsmith 已有的 Agent 生命周期和消息投递机制兼容。
+
+### 2.2 设计原则
+
+**A. Reminder 是延迟消息，不是新的 Agent Runtime。**
+
+Reminder 负责确定何时需要继续工作，而不是自行管理 Agent 的完整生命周期。
+
+**B. 优先复用已有机制。**
+
+应该优先复用 Pulse、Inbox / Outbox、inbox-watch 和 PM 恢复机制。
+
+不应无必要地新增独立 Scheduler Daemon、消息代理、数据库或第二套投递系统。
+
+**C. Agent 自主决策，系统可靠执行。**
+
+是否需要创建提醒、何时提醒、提醒内容是什么，由 Agent 决定。
+
+到期检测、消息投递、失败处理和审计不依赖模型持续运行。
+
+**D. 状态持久化与可恢复。**
+
+Pi 退出、Session 暂停或 teamsmith 组件重启，不应直接导致已登记提醒消失。
+
+**E. 不破坏现有安全边界。**
+
+Reminder 不应绕过 teamsmith 现有的身份、任务归属、消息投递、Standby 和 Agent 启动约束。
+
+## 3. 范围
+
+### 3.1 第一阶段：MVP（必须实现）
+
+- PM Agent 自主创建一次性提醒。
+- 绝对时间与相对延迟。
+- 提醒列表和取消。
+- 提醒持久化。
+- 到期自动向 PM 注入模型可见消息。
+- 提醒触发后开始新一轮推理。
+- PM 退出后在符合现有恢复条件时自动恢复。
+- 过期提醒的恢复处理。
+- 幂等与重复投递防护。
+- CLI、Extension Tool 和基本审计。
+- 与现有 Pulse / Standby / Inbox 机制兼容。
+
+### 3.2 第二阶段：后续扩展
+
+- Worker Agent 自主创建发给自身的提醒。
+- Reminder 与 Task 生命周期的深度绑定。
+- 周期性提醒与 Cron 表达式。
+- 更复杂的提醒替换、暂停、恢复。
+- 提醒在 teamsmith Monitor / Panel 中的完整可视化。
+- 基于条件的提醒，例如某个文件、任务状态或外部事件发生变化。
+
+MVP 设计必须避免阻碍这些扩展，但不要求提前实现。
+
+### 3.3 非目标
+
+第一阶段不包含：
+
+- 给人类用户发送桌面通知、邮件或即时消息。
+- 替代 Linux Cron 或 systemd timers。
+- 开发通用工作流引擎。
+- 跨项目的定时任务调度。
+- 自由指定任意其他 Agent 为提醒接收者。
+- 将 Reminder 直接作为 Shell 命令执行器。
+- 保证模型在严格实时截止时刻开始推理。
+- 在 tmux Server 和 Pulse 都已停止的情况下，实现完全独立的常驻调度服务。
+
+## 4. 功能需求
+
+### FR-01 Agent 创建提醒
+
+**优先级：P0**
+
+Agent 必须能够通过结构化工具创建提醒。
+
+建议工具名称：
+
+`team_remind`
+
+示例调用：
+
+```json
+{
+  "action": "add",
+  "after": "20m",
+  "key": "check-task-progress",
+  "message": "检查当前分派任务的执行进展，识别阻塞并决定下一步操作。"
+}
+```
+
+绝对时间形式：
+
+```json
+{
+  "action": "add",
+  "at": "2026-10-28T09:00:00+08:00",
+  "key": "morning-review",
+  "message": "检查昨日遗留工作，更新项目状态并安排下一步。"
+}
+```
+
+要求：
+
+- `at` 和 `after` 二选一。
+- `at` 使用带明确时区偏移的 ISO 8601 时间。
+- `after` 支持简单相对时间，例如 `30s`、`5m`、`2h`。
+- `message` 为未来投递给模型的提醒内容。
+- `key` 可选，用于防止重复创建同一个逻辑提醒。
+- 创建成功后返回 Reminder ID、实际触发时间及状态。
+- 不合法或已过去的时间必须给出明确反馈。
+- 不允许无限制创建提醒；应有可配置的数量和内容长度限制。
+
+MVP 默认只允许 PM 为自身创建提醒，目标身份由当前运行上下文确定，不应接受任意伪造的项目或 Agent 身份。
+
+### FR-02 查询与取消提醒
+
+**优先级：P0**
+
+提供工具和 CLI：
+
+```text
+team remind add ...
+team remind list
+team remind show <id>
+team remind cancel <id>
+```
+
+Agent Tool 至少支持：
+
+```json
+{"action": "list"}
+```
+
+```json
+{"action": "cancel", "id": "reminder-id"}
+```
+
+要求：
+
+- 能查询所有尚未完成的提醒。
+- 能查看提醒的时间、内容、状态和归属。
+- 能查询已经触发的提醒历史。
+- 取消操作必须是幂等的。
+- 已进入投递流程的提醒，不能虚假保证能够撤回；必须返回实际状态。
+- 所有修改操作应保留审计记录。
+
+CLI 和 Extension Tool 必须操作同一套持久化状态，不能维护两个独立任务列表。
+
+### FR-03 到期触发
+
+**优先级：P0**
+
+提醒到达触发时间后，teamsmith 自动生成一条发送给目标 Agent 的消息。
+
+消息应包含：
+
+- Reminder ID。
+- 原计划触发时间。
+- 实际触发时间。
+- 提醒内容。
+- 是否属于过期补发。
+- 必要的任务上下文定位信息。
+
+建议消息形式：
+
+```text
+[teamsmith reminder]
+
+ID: rem-xxxx
+Scheduled: 2026-10-28T09:00:00+08:00
+Status: due
+
+Reminder:
+检查昨日遗留工作，更新项目状态并安排下一步。
+
+This is a scheduled reminder created by this agent.
+Review the current project state before continuing.
+```
+
+要求：
+
+- 必须通过 Pi 支持的消息机制通知模型并触发新一轮推理。
+- 优先复用已有 `team-inbox-watch.ts` 和 Outbox。
+- 不允许直接使用 `tmux send-keys` 向可能含有用户草稿的输入框强行写入消息。
+- 如果模型正在执行其他任务，应遵循现有消息排队机制，而不是强制中断当前推理。
+- 不得假设原先的项目状态、Task 状态和外部条件在触发时仍然有效。
+
+### FR-04 触发时效
+
+**优先级：P0**
+
+现有 Pulse 的完整巡检周期默认较长，不适合作为精细定时提醒的唯一时间分辨率。
+
+要求：
+
+- 在 Pulse 正常运行、目标 Agent 不处于禁止唤醒状态时，到期提醒应当在合理的时间内进入投递流程。
+- MVP 建议目标：到期后 30 秒内完成入队；实际模型开始推理的时间受 Pi 忙碌状态、恢复启动及资源限制影响。
+- 不允许通过把所有完整项目巡检无条件提高到数秒一次的方式实现。
+- 可以在现有 Pulse 内增加轻量的到期检查或下一次触发时间管理。
+- 不应为 Reminder 另起一套与 Pulse 并行的常驻生命周期管理服务。
+
+具体计时方案由 Explore / Propose 阶段评估。
+
+### FR-05 持久化与恢复
+
+**优先级：P0**
+
+Reminder 必须使用 teamsmith 的项目级运行时状态目录保存。
+
+推荐位置：
+
+```text
+.pi/team/state/reminders/
+```
+
+要求：
+
+- 提醒创建成功后必须已完成持久化。
+- Pi Session 重启后能够恢复未触发提醒。
+- Pulse 重启后能够恢复定时状态。
+- PM 退出时提醒仍然存在。
+- 当 Pulse 恢复运行时，需要检测已经过期但尚未投递的提醒。
+- 过期提醒不得静默丢弃。
+- 对过期提醒应进行受控补发，并明确标记其已过期。
+- 大量积压提醒应当限量处理，避免瞬时触发大量推理请求。
+- 如果 PM 需要重新启动，必须遵守 teamsmith 现有的 PM 恢复、身份检查和重启配额规则。
+
+提醒状态属于运行时数据，不应默认纳入 Git 版本管理，也不应直接修改 `BOARD.md` 或 `DECISIONS.md`。
+
+必须明确：Pulse 自身没有运行时，系统不保证提醒在原定时间触发；恢复后应按上述规则处理。
+
+### FR-06 Standby 兼容
+
+**优先级：P0**
+
+当前 `team standby on` 表示 PM 主动停止接受自动唤醒。
+
+MVP 必须遵循这个语义。
+
+- Standby 期间，Reminder 到期不能直接绕过 Standby 唤醒 PM。
+- 已到期 Reminder 保留为待处理状态。
+- Standby 解除后，系统重新评估这些提醒并进行受控投递。
+- Reminder 的检测、入队顺序必须避免通过 Outbox 绕过 Standby 的检查。
+
+未来可以另行设计：
+
+```text
+team standby until <time>
+```
+
+用于“暂时休眠，到指定时间自动恢复”。
+
+但这不属于当前 MVP，不应通过偷偷改变现有 Standby 语义实现。
+
+### FR-07 Reminder 与 Agent 生命周期
+
+**优先级：P0**
+
+Reminder 必须绑定明确的项目与 Agent 身份。
+
+最少需要记录：
+
+- Project identity
+- Owner seat（MVP 为 PM）
+- Reminder ID
+- Created time
+- Due time
+- Message
+- Status
+- 可选关联 Task ID / Key
+
+必须遵守 teamsmith 已有的基于工作目录和项目配置的身份判定原则。
+
+不得允许来自其他项目的环境变量或外部路径将提醒注册到错误项目中。
+
+未来 Worker 支持时，还必须处理：
+
+- Worker Session 重启。
+- Worker 切换 Task。
+- Task 完成或被取消。
+- Worker 被移除。
+- 原 Session ID 被替换。
+
+MVP 不要求实现 Worker Reminder，但数据模型与接口不应预设“所有 Reminder 永远属于 PM”。
+
+### FR-08 重复触发与可靠投递
+
+**优先级：P0**
+
+提醒触发需要具备明确的状态机与幂等规则。
+
+建议区分以下状态或等价概念：
+
+| 状态 | 含义 |
+|---|---|
+| scheduled | 已持久化，等待触发 |
+| due | 已到期，等待进入投递流程 |
+| queued | 已交给持久化投递队列 |
+| delivered | Pi 已接受提醒消息 |
+| held / failed | 投递受阻或失败，需要恢复处理 |
+| cancelled | 提醒已取消 |
+
+状态名称和具体模型可以调整，但必须保证以下区别：
+
+**到期 ≠ 已入队 ≠ Pi 接受消息 ≠ Agent 完成提醒所要求的工作。**
+
+要求：
+
+- 重复执行到期扫描，不应重复创建同一提醒的投递记录。
+- 同一个有效 `key` 在同一 Owner 范围内应具有明确的幂等语义。
+- 重试、取消、重新创建必须有清晰的契约。
+- 投递过程崩溃后必须能够判断当前状态，并提供恢复路径。
+- 对无法确定是否已被 Pi 接受的消息，不应盲目重投。
+- 应复用已有 Outbox / inbox-watch 的消息身份和去重能力。
+- 无法实现端到端严格 exactly-once 时，应明确实际保证，而不是虚假宣称可靠执行恰好一次。
+
+### FR-09 Agent 自主安排后续提醒
+
+**优先级：P0**
+
+Agent 被 Reminder 唤醒后，必须允许再次创建 Reminder。
+
+例如：
+
+```text
+09:00 Agent 检查外部任务
+      ↓
+任务尚未完成
+      ↓
+Agent 创建 09:15 Reminder
+      ↓
+当前回合结束
+      ↓
+09:15 Agent 被再次唤醒
+      ↓
+继续检查
+```
+
+系统不能仅因为本轮推理来自 Reminder，就禁止再次安排提醒。
+
+但必须防止无限自唤醒循环：
+
+- 拒绝不合理的过去时间或零间隔提醒。
+- 设置最小提醒间隔。
+- 限制单位时间内创建和触发提醒的数量。
+- 支持稳定 Key 防止重复注册。
+- 对异常高频自唤醒提供明确日志或保护措施。
+
+防护规则应尽可能简单、可解释、可测试。
+
+### FR-10 可观测性与审计
+
+**优先级：P1**
+
+用户和 PM 应能够明确区分：
+
+- 有哪些 Reminder 正在等待。
+- 哪些 Reminder 已到期。
+- 哪些已经进入投递队列。
+- 哪些已被 Pi 接受。
+- 哪些因 Standby、Agent 不可用或投递失败而阻塞。
+- 哪些已经取消。
+
+最小 CLI 输出示例：
+
+```text
+$ team remind list
+
+ID        OWNER  DUE                  STATUS
+rem-001   pm     2026-10-28 09:00     scheduled
+rem-002   pm     2026-10-28 09:15     held
+rem-003   pm     2026-10-28 10:00     scheduled
+```
+
+状态数据与审计日志应尽可能复用 teamsmith 现有的运行时布局和记录习惯。
+
+MVP 不要求修改 TUI，但不应设计出 Panel 日后无法读取的私有或不透明格式。
+
+## 5. 推荐架构边界
+
+下面是推荐的职责分配，并非最终实施方案的强制规定。
+
+| 组件 | 职责 |
+|---|---|
+| `team_remind` Extension Tool | 向模型暴露创建、查询、取消能力 |
+| `team remind` CLI | Reminder 的统一管理入口 |
+| Reminder Store | 保存时间、归属、状态和审计数据 |
+| Pulse | 到期判断与 PM 恢复协调 |
+| Outbox | 持久化消息投递 |
+| inbox-watch | 将到期提醒传递给 Pi 模型并触发推理 |
+
+### 5.1 避免重复建设
+
+不得无必要地：
+
+- 建立第二套 Agent 消息系统。
+- 建立第二套 PM 恢复系统。
+- 在 Reminder 中直接实现与 Pulse 重复的生命周期逻辑。
+- 引入新的数据库依赖。
+- 将调度状态仅保存在 Extension 的内存定时器中。
+
+### 5.2 不侵入正常 Agent 工作流
+
+Reminder 的存在不能改变普通 Agent 的核心行为：
+
+- Worker 正常完成任务后的通知流程不变。
+- PM 对 Worker 的调度与独立验证流程不变。
+- Standby 默认行为不变。
+- 无 Reminder 的项目不应承担显著额外运行负担。
+- 默认不产生额外模型 Token 消耗。
+
+### 5.3 扩展加载
+
+teamsmith 当前的 Extension 采用定向注入模式，而不是所有用户 Pi Session 自动加载全部组件。
+
+新增 Extension Tool 必须遵循这一设计。
+
+它应只出现在能够正确识别项目、拥有合法身份、具备 Reminder 权限的 Pi Session 中。
+
+MVP 应明确实现 PM 的 Extension 加载及可用性检查，并确保 `team doctor` 或等价诊断能发现加载缺失。
+
+## 6. 核心验收场景
+
+以下场景应转化为可自动运行的测试，尽可能纳入现有 Smoke / Integration Test。
+
+### AC-01 基本创建与触发
+
+**Given** PM 正常运行，Pulse 已启动。
+**When** PM 创建一条 1 分钟后的 Reminder。
+**Then** Reminder 持久化成功；到期后系统向 PM 注入提醒消息，并触发新一轮推理。
+
+### AC-02 Agent 主动创建
+
+**Given** PM 正在执行普通项目任务。
+**When** 模型自主判断需要延迟检查，并调用 `team_remind`。
+**Then** 不需要用户确认即可创建合法 Reminder，并返回可查询的 ID。
+
+### AC-03 PM 停止后恢复
+
+**Given** PM 创建一条未来 Reminder。
+**When** PM 进程结束，但 Pulse 仍正常运行。
+**Then** Reminder 到期后，在现有恢复策略允许的前提下，Pulse 能够恢复 PM 并交付提醒。
+
+### AC-04 Pulse 重启
+
+**Given** Reminder 已持久化，但尚未到期。
+**When** Pulse 被停止并重新启动。
+**Then** Reminder 不丢失，仍然能够被检测和触发。
+
+### AC-05 过期补发
+
+**Given** Reminder 到期时 Pulse 未运行。
+**When** Pulse 后续恢复运行。
+**Then** 系统识别过期 Reminder，并按照补发规则执行；不得静默删除或无限重复发送。
+
+### AC-06 Standby
+
+**Given** PM 已进入 Standby。
+**When** Reminder 到期。
+**Then** 不触发自动唤醒；解除 Standby 后，Reminder 仍然可被发现与处理。
+
+### AC-07 忙碌中的 Agent
+
+**Given** PM 正在进行一轮尚未结束的推理。
+**When** Reminder 到期。
+**Then** 不强行中断当前回合，不污染用户输入草稿；消息通过受控队列等待后续处理。
+
+### AC-08 重复触发
+
+**Given** 某 Reminder 已进入投递流程。
+**When** Pulse 多次执行到期检查，或在关键阶段重启。
+**Then** 不产生无控制的重复投递，且状态可追溯。
+
+### AC-09 连续自主唤醒
+
+**Given** Agent 因 Reminder 被唤醒。
+**When** Agent 判断仍需等待，并创建下一条合法 Reminder。
+**Then** 新 Reminder 正常注册，并可以在未来继续唤醒模型。
+
+### AC-10 取消
+
+**Given** Reminder 尚未进入投递流程。
+**When** Agent 或用户通过 CLI 取消。
+**Then** 到期时不应再次触发该 Reminder。
+
+### AC-11 身份隔离
+
+**Given** 系统中存在不同 teamsmith 项目。
+**When** 某个项目的 Agent 创建 Reminder。
+**Then** Reminder 仅绑定该项目，不允许跨项目错误投递或操作。
+
+### AC-12 回归兼容
+
+**Given** 现有项目未使用 Reminder。
+**When** 运行普通 dispatch、notify、review、standby、pulse 与恢复流程。
+**Then** 现有功能行为保持兼容，既有测试继续通过。
+
+## 7. 非功能要求
+
+### 7.1 性能
+
+- Reminder 空闲时应有极低资源开销。
+- 到期检查不调用 LLM。
+- 不依赖高频全量扫描项目文件。
+- 应利用已有 Pulse 运行环境，避免新增不必要的常驻进程。
+- 对大量 Reminder 应采用有界处理，避免 CPU、I/O 和模型请求突发。
+
+### 7.2 安全
+
+- Reminder 创建与修改必须验证项目身份。
+- 不得通过提醒内容执行任意 Shell 命令。
+- Reminder 消息本身只能作为模型可见的任务上下文，后续工具行为仍受原有授权边界约束。
+- 不得绕过 Standby、PM 恢复配额和现有权限机制。
+- 必须限定提醒文本与存储资源的使用上限。
+
+### 7.3 一致性
+
+- 创建成功即意味着提醒已可靠写入项目状态。
+- CLI 与 Extension 使用统一的状态来源。
+- 持久化写入必须处理并发及进程意外终止。
+- 对消息投递的不确定状态应保留足够证据用于恢复和诊断。
+
+### 7.4 兼容性
+
+- 保持 teamsmith 现有最低环境依赖要求，除非技术论证确实需要调整。
+- 不影响当前 Pi Session 启动参数及正常 Extension 加载方式。
+- 不应要求已有项目重新初始化才能继续使用原有功能。
+- 新增配置项应有安全默认值。
+
+## 8. PM Agent 需要重点调查的技术问题
+
+进入开发前，Explore / Propose 阶段必须形成明确结论：
+
+1. **时间调度机制**：如何在不改变原有完整 Pulse 巡检频率的前提下，实现较短延迟的 Reminder 触发？
+2. **消息投递复用**：能否完整复用当前 Outbox / inbox-watch？是否需要增加专门的 Reminder 消息类型？
+3. **投递确认边界**：如何区分成功入队、成功交给 Pi、Pi 已接受消息，以及模型实际执行？
+4. **PM 恢复时序**：PM 退出后，Reminder 触发、PM 拉起和消息投递如何协调，避免丢失或重复？
+5. **Standby 语义**：怎样确保到期 Reminder 不经由现有 Outbox 路径绕过 Standby？
+6. **扩展加载**：如何确保 PM 可以调用 `team_remind`，同时不让普通 Pi Session 或未授权 Worker 意外获得该工具？
+7. **存储与并发**：如何利用现有 `state/` 约定进行持久化、原子更新和去重？
+8. **Worker 扩展性**：MVP 仅支持 PM 的情况下，如何避免未来 Worker Reminder 需要推翻现有数据模型？
+
+对可能影响既有行为的技术取舍，需要在提案中写明理由、替代方案和影响范围。
+
+## 9. 交付要求与 Definition of Done
+
+PM Agent 应按照 teamsmith 现有 OpenSpec 工作流实施，不应直接跳过方案评审进入编码。
+
+### 阶段一：Explore
+
+- 检查现有 Pulse、Inbox / Outbox、inbox-watch、PM 生命周期实现。
+- 判断最合适的集成点。
+- 识别与 Standby、消息去重、Agent 恢复的潜在冲突。
+- 给出简洁的架构备选与取舍建议。
+
+### 阶段二：Propose
+
+- 建立 OpenSpec Change。
+- 将本需求转化为可验证的 Delta Specs。
+- 给出 API、状态机、存储模型和恢复语义。
+- 明确技术范围、兼容性和回归风险。
+- 经 PM 正式评审为 ACCEPTED 后才能进入 Apply。
+
+### 阶段三：Apply
+
+- 实现 Reminder 持久化和统一管理接口。
+- 实现 Agent Tool。
+- 实现到期检测与消息投递。
+- 与 PM 恢复及 Standby 集成。
+- 编写自动化测试和必要文档。
+
+### 阶段四：Verify
+
+- 由独立于实现者的 Agent 执行验证。
+- 覆盖第 6 节全部适用验收场景。
+- 执行现有 Smoke Test 和 OpenSpec 严格校验。
+- 由 PM 在独立 Checkout 上复核证据。
+- 对需要真实 Pi / tmux 环境的场景提供可复现的集成测试。
+
+### 阶段五：Archive
+
+- 完成代码交付与 Review。
+- 更新用户文档和相关 Skill 指导。
+- 确认 OpenSpec Change 符合归档条件。
+- 经现有流程要求的确认后归档。
+
+最终交付应包含：
+
+- 可用的 Agent Reminder Tool。
+- 可用的 `team remind` CLI。
+- 与现有 Pulse 和消息系统集成的实现。
+- 持久化和恢复能力。
+- 自动化测试。
+- 用户文档。
+- OpenSpec 规格与独立验证记录。
+
+## 10. 产品验收标准
+
+本需求是否成功，不以“是否有一个能在指定时间调用回调函数的 Timer”为判断依据。
+
+真正的验收标准是：
+
+> 一个 teamsmith PM Agent 在执行项目工作时，可以自主决定未来需要再次处理的事项，调用工具登记 Reminder，然后正常结束当前回合；当时间到达时，teamsmith 能够在遵守生命周期、Standby、投递安全与资源限制的前提下，将提醒消息送入对应 Pi Agent，并使其继续推理和工作。
+
+整个过程不要求用户保持交互，也不要求模型持续运行或不断进行轮询。
+
+**最终目标：让 Agent 拥有可靠的、受 teamsmith 管理的未来行动触发能力。**
+
+---
+
+## 附：给 PM Agent 的执行指令
+
+请将本文作为需求输入，而不是已经批准的技术设计。
+
+首先检查当前仓库状态、现有规格及实际实现，特别是 Pulse、Inbox / Outbox、inbox-watch、PM 恢复、Standby 和 Extension 加载机制。
+
+优先考虑最小侵入式的原生实现，不要因为存在第三方 `pi-schedule-prompt` 就直接将其作为运行时依赖，也不要在没有必要的情况下重建 Scheduler。
+
+请严格按照 teamsmith 现有的 Explore → Propose → Apply → Verify → Archive 工作流推进。
+
+先完成需求澄清、架构调查、OpenSpec 变更提案与正式评审，再分派实现任务。对需求中允许技术选择的部分自行作出合理决策并记录依据；遇到真正影响产品边界或既有语义的重大取舍，再提交用户裁决。
+
+优先交付一个可靠、简洁、可测试的 PM Self-Reminder MVP，而不是功能庞大的通用调度框架。
