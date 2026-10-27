@@ -9,7 +9,15 @@ specs: notify-and-inbox#A turn-end notification appends one inbox line and knock
 anchor: none (infra) — product defect exposed by the latest-Pi runtime verification
 deltas: -
 branch: task/P381-notify-git-stderr-leak
+deps: P379（只读分析，不改 smoke.sh）；P380 只读其证据运行器，不合并其文件
 
+## Boundaries（本任务的实现写集）
+
+- `skills/teamsmith/extension/team-notify.ts`：允许修改 `run()` 的 stdio 接线及必要注释；不得改通知投递、上游/未推送判定或 PM/worker 启动逻辑。
+- `skills/teamsmith/tests/smoke.sh`：**临时借用**，仅允许修改通知扩展/git stderr 泄漏相关段（§13 及其必要的现有断言）；P381 交付并验收后归还 dev。其它测试文件不得修改。
+- `docs/team/reports/P381-dev-bob.md`：本任务报告。
+
+除上述路径外不得改产品、规格、CI 或其它测试；P380 的运行时改造仍由 V109 独立复核，不在本任务合并。
 ## Evidence
 
 P380's real Pi 1.4.0 delivery-truth run found that a task branch without an upstream cannot receive the second `say`: the editor stays `BUSY`, `second_received=0`. The cause is `skills/teamsmith/extension/team-notify.ts` `run()`:
