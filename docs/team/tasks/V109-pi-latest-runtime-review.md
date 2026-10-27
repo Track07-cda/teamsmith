@@ -30,3 +30,16 @@ Use your own clean clone and private directories. Do not alter main or the candi
 ## Delivery
 
 Write `docs/team/reports/V109-verify.md`, starting with PASS, PARTIAL or FAIL. Separate runtime-freshness verdict from the independently handled product defect. Include exact commands and output tails, and state any coverage you did not exercise (especially GitHub Actions itself). Do not merge, push or publish.
+
+## Second round after rework
+
+Candidate after the first-round findings: `ffb378f0` (implementation `af73b9e8`, with the parser rework `69369593`). The first-round FAIL and its evidence remain in your report; append a `## Second round` section, do not rewrite it.
+
+Recheck only the changed points and any directly affected evidence:
+
+1. Both resolvers now select a complete version line before trimming. Re-run your real/stub `1.4.0 + notice` cases against both `ci/resolve-pi-version.sh` and `run-case.sh`; old behavior must be red, new behavior must print exactly `1.4.0` with rc=0. No-version and registry-failure cases must remain loud and must not create a scene.
+2. `workflow-entry.sh` ④ now calls the same executable `ci/check-pi-version.sh` and runs it in a sandbox with a controlled `pi`. Verify equal expected/observed returns 0, mismatch returns named non-zero, and the shadow with the comparison removed lets the mismatch through. Repeat the two workflow mutations from your first round (delete the comparison, delete only the fallback handoff): both must now be red. `check_pi_branch` must run for both changed-path and full-suite branches.
+3. Inspect the new `ci/check-pi-version.sh`: it must reject non-concrete expected values, select complete observed version lines, and return 3 for a mismatch. It must not silently fall back or accept `latest` as the expected value.
+4. Re-run `workflow-entry.sh`, `delivery-truth.sh --section judge --mutations`, the parser checks and the static checks. Reuse your first-round image/readback evidence if the image did not change; state precisely what you did and did not rerun.
+
+Give the final PASS/PARTIAL/FAIL first, with exact commands and output tails. Keep the P381 product defect separate; it is not part of this candidate.
