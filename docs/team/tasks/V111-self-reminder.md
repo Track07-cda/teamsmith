@@ -54,3 +54,24 @@ git status --short
 ```
 
 Commit with Conventional Commits + V111 + `Agent: dev3`, leave the branch clean, and notify PM of the verdict. PM will reconcile P385 and this review before deciding whether a Propose brief is warranted.
+
+## Second round: final Standby semantics and automatic exit (2026-10-28)
+
+The revised P385 candidate is **`0791c7f5c29e`**; read its report with `git show 0791c7f5c29e:docs/team/reports/P385-dev2.md`, especially §§9–11. Preserve your original NEEDS-CHANGES review and add a second-round verdict at the top and bottom of `docs/team/reports/V111-dev3.md`. Your previous session exceeds the model window, so this is a fresh same-task review using the branch/report on disk.
+
+The user has now settled the product semantics in D204; do not reopen them as an A/B/C question:
+
+- Standby may be entered immediately.
+- PM-owned Reminders may wake PM during Standby, whether created by the PM Agent or the user through CLI.
+- An actual Reminder wake automatically clears Standby and ordinary work may resume; due/queued/failed delivery without a wake does not clear it.
+- A batch clears once, with Reminder ID/source audit. Worker reminders remain future scope.
+
+Review whether P385 is now technically ready for Propose under those rules:
+
+1. Check that the narrow Standby recovery exception is limited to due PM-owned Reminders and that ordinary pending work cannot wake until an actual Reminder wake clears Standby. Ordinary Outbox behavior must remain unchanged.
+2. Challenge the proposed `agent run + custom message with exact Reminder ID` observation as the definition of “actual wake”. Use the recorded idle/busy/settled-abort probe evidence and Pi public events to determine what it proves and what it misses. It must not be presented as model completion or a universal exactly-once receipt.
+3. Challenge the generation/compare-and-clear design for automatic Standby off: manual off, re-on before observation/off, batch handling, crash before/after observation, pending off and marker deletion, unknown session/identity, and cross-process Bash/Node locking. Identify any concrete counterexample that must be settled in Propose. Do not demand strict no-wake semantics the user has explicitly removed.
+4. Reconcile the revised single-store/direct-watcher design with your original findings: no mandatory Outbox/spool copy, one authoritative resend record, bounded history/floor, tool identity/doctor limitations, and no second scheduler runtime. State whether any original blocker remains.
+5. Give a focused verdict: **ACCEPT FOR PROPOSE**, **NEEDS-CHANGES**, or **REJECT-APPROACH**, with the exact remaining proposal questions and verification requirements. This is not an implementation approval or final spec review.
+
+Only `docs/team/reports/V111-dev3.md` may change. Run the same light OpenSpec/spec-refs/ledger/diff checks; no live team experiment, product/spec/change writes, full gate, merge, push or release. Commit with V111 + `Agent: dev3` and notify PM.
