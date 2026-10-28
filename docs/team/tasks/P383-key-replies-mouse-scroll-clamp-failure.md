@@ -51,3 +51,24 @@ Do not change the CI workflow, section floor/schedules, OpenSpec, other tests, t
 ## Delivery
 
 Commit the minimal fix and `docs/team/reports/P383-dev-bob.md`. Lead with the root cause and what it changed; include exact tree/image/runtime identities, commands, output tails, before/after and mutation evidence, the final selected-gate counts, and any remaining boundary. Independent verification follows separately.
+
+## V110 rework: counted progress and exhaustion attribution (2026-10-28)
+
+V110's independent report at `0360ba015b9f` is **FAIL on the wait contract, PASS on the observed wheel behavior**. PM review `docs/team/reviews/P383.md` adopts that verdict. Preserve candidate `75048792750f`'s drain/frame/barrier/product behavior and append a new focused fix; do not revert the useful repair. Your previous session exceeds the model window, so recover this same task fresh from its branch and on-disk evidence.
+
+The blocker is existing `openspec/specs/verification/spec.md`:
+
+- “A fixture observes a data-derived state before it asserts it” requires counted polling, a cap, the expected data-derived state and rounds in attribution, plus a recorded bound and measured latency band.
+- “Every wait in the gate is bounded and attributes at its cap” requires every round to refresh the running section's progress reading and exhaustion to print the wait name, `<n>/<cap>` and last reading before a non-green return.
+
+The new `panel-b3-pty-mouse.py` readiness, wheel-barrier-open and barrier-close loops currently only check the shared 25-second monotonic deadline. V110's unmodified-driver nonexistent-ready-marker probe returned 2 correctly but printed neither rounds/cap nor the actual last frame. Fix all three loops, not just that example.
+
+Required implementation and evidence:
+
+1. Use one small counted-wait mechanism inside the existing driver (or an existing shared helper where genuinely reusable), not a new framework. Each wait has a named state, counted rounds and an explicit cap. Every round updates the section's existing progress channel with the latest actual reading; a final redirected log alone is not enough. Keep the original overall 25-second deadline and do not increase it.
+2. At either count-cap or shared-deadline exhaustion, fail with the wait name, `<n>/<cap>`, expected state and a useful last reading/frame summary. Empty output, a dead driver or no observation must remain a failure, never an absence-assertion pass or SKIP. Document cap values and the measured latency band/rationale in the fixture and final report; the bound is a failure detector, not a performance assertion.
+3. Add permanent falsifiable checks in the already-authorized key-replies/section wiring for the new accounting. Include V110's absent-readiness case where the actual last frame already contains `#38`, plus barrier-open and barrier-close exhaustion. Show per-round progress advancing and the final `<n>/<cap>`/last-reading attribution. In scratch mutations, removing round counting, progress refresh or final attribution must turn a named check red; restoring the candidate must turn it green.
+4. Re-run the prior behavioral evidence: host `key-replies-pty.sh --all`, host `panel-b3.sh workdetail mouse wheel board detail fold`, pinned-image `key-replies-pty.sh --all`, pinned-image `smoke.sh --select 63`, and the one-CPU mouse diagnostic. Preserve the no-drain, driver-failure, empty/truncated-frame and real 40th-wheel product mutation red sides. Use the same verified image id `91fa9dab310641a6f4dca892520a31a3cd9d3699fb34919c468ad22d929df793` and host-bind-mounted logs.
+5. Run `openspec validate --all --strict`, individual `bash -n` checks, Python compile, `section-select.sh --check`, real-names `ledger-ban.sh` and `git diff --check`. Do not change OpenSpec, extend the deadline, weaken assertions, reschedule CI, run the full gate or claim GitHub Actions.
+
+Authorized write set remains the existing P383 files: `panel-b3-pty-mouse.py`, `key-replies-pty.sh`, only directly necessary §63 wiring in `smoke.sh`, and `docs/team/reports/P383-dev-bob.md`. Append a V110-rework section with the new candidate tip, exact commands, counts, latency basis, progress/exhaustion outputs and all red/green mutations; preserve the earlier PARTIAL and delivery history. Commit with Conventional Commits + P383 + `Agent: dev-bob`, leave the branch clean, and notify PM for focused V110 re-review. No merge, push or release.

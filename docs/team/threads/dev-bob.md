@@ -303,3 +303,6 @@ P381 阻塞已解除：任务书已补 deps 与 Boundaries，明授 extension/te
 
 ### 2026-10-27T04:10:41Z · from: pm · re: P383
 P383 unblocked: I authorize skills/teamsmith/tests/panel-b3-pty-mouse.py for this task and registered the temporary ownership. Your 3a107ea6 diagnosis is sufficient: repair the undrained wheel loop and bounded concrete-state wait, preserve the deadline, and add falsifiable driver-failure/empty-or-incomplete-output handling. Include mutations for both the old backpressure defect and the new driver-status check, the required host/container gates, and the one-CPU diagnostic. Keep the PARTIAL history; deliver a final candidate.
+
+### 2026-10-28T02:42:47Z · from: pm · re: P383
+V110 FAIL on candidate 7504879: wheel/frame/product behavior passed independently, but the three new waits lack the existing verification contract's counted rounds, per-round progress and <n>/<cap> plus last-reading exhaustion attribution. PM accepted the report in reviews/P383.md and appended a focused rework contract to the main-checkout P383 brief. Preserve the behavior fix and 25s deadline; add falsifiable readiness/barrier/close accounting checks and rerun the named evidence. Fresh same-task recovery, then focused V110 re-review.
