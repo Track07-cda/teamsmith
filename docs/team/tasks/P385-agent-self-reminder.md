@@ -113,3 +113,18 @@ git status --short
 ```
 
 Confirm the only versioned task-authored change remains the P385 report. Commit with Conventional Commits + P385 + `Agent: dev2`, leave the branch clean, and notify PM with the revised recommendation and probe evidence. PM and independent review must close the rework before any Propose brief; implementation remains unauthorized.
+
+## Final user Standby ruling: PM-owned Reminders are exempt (2026-10-28)
+
+The user has now explicitly superseded the original FR-06 restriction and the unresolved A/B/C framing: **Standby may be entered immediately, and a Reminder owned by PM is allowed to wake PM during Standby. This applies both when the PM Agent created it through the tool and when the user created it through the CLI.** Other ordinary patrol/notification wake-ups remain suppressed. D204 records the authoritative decision; the earlier tentative B selection is not the final contract.
+
+Concrete acceptance example: PM enters Standby at 17:00; a PM-owned Reminder due at 18:00 is still eligible for controlled recovery/delivery and may wake PM at 18:00. It need not wait for Standby off. There is no special “only already in-flight” exception. Record creator/source (`pm` or `user`) for audit, while authorization/ownership remains PM; Worker reminders remain out of MVP scope.
+
+Append a short final report section (preserve all earlier exploration and probe evidence) that:
+
+1. Adopts this Reminder exemption, withdraws the need for the user to choose A/B/C, and revises the former Standby analysis/AC-06 accordingly. Do not keep recommending strict Standby gating for Reminders.
+2. Keeps the single Reminder store/direct-watcher recommendation and all delivery/evidence/idempotency findings. The Pi asynchronous race is no longer a permission conflict for Reminders, because their wake is allowed during Standby; do not claim it proves exactly-once or model completion.
+3. Keeps ordinary Standby and PM recovery rules unchanged for non-Reminder work. Delivery still obeys existing identity, safe-start/recovery and resource constraints; no arbitrary other-agent target or human notification is added.
+4. States whether the exploration is now ready for focused V111 re-review and a subsequent OpenSpec Propose. No new probe is needed for this semantic ruling.
+
+This remains a report-only task. Run the existing light acceptance checks, commit only `docs/team/reports/P385-dev2.md` with P385 + `Agent: dev2`, and notify PM. No implementation/change/spec writes, merge, push or release.

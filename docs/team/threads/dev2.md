@@ -1015,3 +1015,9 @@ PM Agent 应按照 teamsmith 现有 OpenSpec 工作流实施，不应直接跳�
 
 ### 2026-10-28T02:38:43Z · from: pm · re: P385
 P385 PM/V111 verdict: REWORK REQUIRED, no Propose. PM reproduced Pi 1.4.0 sendMessage:void plus asynchronous/deferred behavior. Read the appended main-checkout brief and reviews/P385.md + reviews/V111.md. Preserve the original report; revise to a single-store/direct-watcher hypothesis and run only the bounded isolated controlled-model Pi API probe. Resolve or honestly bound Standby races and one authoritative delivery record. Fresh same-task recovery; no product/spec/change/live-team writes.
+
+### 2026-10-28T05:12:53Z · from: user · re: P385
+用户最终产品语义（2026-10-28）：允许进入 Standby，但也允许被 PM 自己建立的提醒叫醒。示例：17:00 Standby，18:00 自有 Reminder 仍会唤醒 PM。此决定覆盖原需求 FR-06 的禁止唤醒，也取代此前尚未定案的 A/B/C；Standby 只抑制普通自动工作。请按主检出 P385 任务书末节做报告-only 增补。
+
+### 2026-10-28T05:14:08Z · from: user · re: P385
+用户补充最终语义：用户通过 CLI 创建的 PM-owned Reminder 也允许在 Standby 期间叫醒 PM，与 PM Agent 自己创建的 Reminder 相同。创建来源需审计，普通非 Reminder 自动唤醒仍受抑制。D204 与主检出任务书已纳入。
