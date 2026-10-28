@@ -1,4 +1,6 @@
-# Open items · 2026-10-27 handover
+# Open items · 2026-10-28 recovery
+
+Runtime recovery (2026-10-28): the user closed tmux and rebooted the system. All five seats and Pulse were stopped; the task branches, delivered reports and host-side evidence remained on disk. PM restarted Pulse and resumed only the two genuinely unfinished verification tasks, V110 and V111, with their recorded task/model/session identities. Delivered P382, P385 and P383 were deliberately not resumed. No merge, push, release or repeated completed gate was triggered by recovery. Previous sessions' background-completion wake-ups did not survive reboot; the resumed workers must inspect their persisted job logs/evidence before harvesting or rerunning anything.
 
 ## Waiting on workers / verification (no user decision needed)
 
