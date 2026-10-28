@@ -611,11 +611,12 @@
 | P381 | 通知的git探测不污染Pi输入框 | dev-bob | - | - | review |
 | V109 | 最新pi运行时独立复核 | verify | - | - | review |
 | P382 | 公开CI账本夹具数字UID失败 | dev | - | - | review |
-| P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | wip |
+| P383 | Key-replies mouse scroll clamp failure | dev-bob | - | - | review |
 | P384 | README三Skill安装表述 | dev3 | - | - | review |
 | P385 | Agent Self-Reminder探索 | dev2 | - | - | review |
-| V110 | P383 pty修复独立复核 | verify | - | - | wip |
+| V110 | P383 pty修复独立复核 | verify | - | - | review |
 | V111 | Self-Reminder架构独立复核 | dev3 | - | - | wip |
+| P386 | 63嵌套摘要计数修正 | dev | - | - | todo |
 
 ## 当前里程碑
 
