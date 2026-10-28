@@ -1021,3 +1021,6 @@ P385 PM/V111 verdict: REWORK REQUIRED, no Propose. PM reproduced Pi 1.4.0 sendMe
 
 ### 2026-10-28T05:14:08Z · from: user · re: P385
 用户补充最终语义：用户通过 CLI 创建的 PM-owned Reminder 也允许在 Standby 期间叫醒 PM，与 PM Agent 自己创建的 Reminder 相同。创建来源需审计，普通非 Reminder 自动唤醒仍受抑制。D204 与主检出任务书已纳入。
+
+### 2026-10-28T05:19:59Z · from: user · re: P385
+用户继续明确（2026-10-28）：Reminder 在 Standby 中实际唤醒 PM 后，退出 Standby。请把“实际唤醒时自动解除 Standby；仅到期/入队或投递失败但未唤醒不提前解除；记录 reminder ID/source 审计；同批唤醒只解除一次”纳入 P385 最终报告增补。普通自动工作在唤醒后也恢复。

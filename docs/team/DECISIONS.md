@@ -1959,7 +1959,9 @@ dev2: bash /tmp/leakprobe/probe.sh                          运行 1h33m（S 状
 
 用户最终明确：允许立即进入 Standby，同时允许被 **PM 自己创建的 Reminder** 叫醒；随后补充：**用户创建的 Reminder 也同样允许叫醒**。因此 MVP 的豁免单位是 PM 名下的 Reminder，创建来源可以是 PM Agent 工具或用户 CLI，需记录来源用于审计；Worker/其他 Agent 仍不能任意指定接收者。
 
-示例：17:00 进入 Standby，18:00 到期的 PM 自有或用户创建的 Reminder 仍会恢复/唤醒 PM。Standby 继续抑制普通巡检通知和其他自动工作，不再要求 Reminder 等待 Standby 解除，也不区分“未来到期”与“已在 Pi 在途”是否可醒。
+示例：17:00 进入 Standby，18:00 到期的 PM 自有或用户创建的 Reminder 仍会恢复/唤醒 PM。用户随后明确：**Reminder 实际唤醒 PM 后，自动退出 Standby**，普通自动工作随之恢复。仅到期、入队或投递尝试但未实际唤醒时，不提前解除 Standby；唤醒审计记录 Reminder ID 与创建来源，同批唤醒只解除一次。
+
+Standby 继续抑制普通巡检通知和其他自动工作，不再要求 Reminder 等待 Standby 解除，也不区分“未来到期”与“已在 Pi 在途”是否可醒。
 
 该决定覆盖原始需求 FR-06 的“Reminder 不得唤醒 Standby PM”限制，并取代此前未最终确认的 A/B/C 选项；B 未被采纳为最终语义。它消除了 Pi 延迟消息是否可越过 Reminder 禁止期的设计阻塞，但不改变投递去重、故障证据、恢复配额或普通 Standby 行为。后续 OpenSpec delta 必须写明这一例外和修订后的 AC-06；本决定只批准继续 Explore/Propose，不授权实现或发布。
 
