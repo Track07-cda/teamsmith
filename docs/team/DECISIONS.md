@@ -1972,3 +1972,11 @@ Standby 继续抑制普通巡检通知和其他自动工作，不再要求 Remin
 PM 用同一选段器和冻结成本表独立重算五类路径，键数、总成本、hash/LPT 最慢片均与修订报告一致； nightly 的完整矩阵按 15 个作业及每作业 setup/baseline 计价，不再采用 15 分钟或四作业的错误口径。38/63 的拆分数字仍是 provisional，63 的真实 mouse 红由 P383 独立修复。
 
 影响：探索阶段完成，后续可写 OpenSpec 提案；本裁定不授权 section 拆分、61b 条件化、断言过滤/删除、工作流或 CI 排期改动。任何 apply 仍需提案评审 ACCEPTED 和独立验证。
+
+### D205 · 接受 Self-Reminder 探索方向，进入规划-only 提案（2026-10-28）
+
+P385 最终探索 `0791c7f5c29e` 经 V111 第二轮独立复核 `543b447a642d` 为 ACCEPT FOR PROPOSE，PM 接受进入 P387 提案。采用的首选方向是单一项目级 Reminder store、现有 Pulse 内轻量到期入队、PM watcher 直接向 Pi 投递；不强制复制到普通 Outbox/spool，不新增 scheduler daemon，不把完整巡检提高为高频，也不把 `sendMessage` 返回当作接受或完成。
+
+D204 的 Standby/自动退出语义是已决产品边界，不再重议。V111 留下的三项具体设计门槛随提案强制审查：唤醒与更新 Standby 代际的线性化；同批只自动退出一次且跨重启成立；停跑 PM 仅因 Reminder 恢复且普通待办不得借通用启动提示提前执行。还需定稿单一重发权威、历史/floor、两种 Pulse 形状、工具身份和简单资源界限。
+
+影响：只允许 P387 写 `agent-self-reminder` 的 OpenSpec change artifacts 和报告。提案仍需 PM 正式评审 ACCEPTED，且实质性规格另经独立审阅后才可 Apply；本决定不授权产品实现、真实提醒、合并、推送或发布。

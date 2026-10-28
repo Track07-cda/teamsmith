@@ -615,8 +615,9 @@
 | P384 | README三Skill安装表述 | dev3 | - | - | review |
 | P385 | Agent Self-Reminder探索 | dev2 | - | - | review |
 | V110 | P383 pty修复独立复核 | verify | - | - | review |
-| V111 | Self-Reminder架构独立复核 | dev3 | - | - | wip |
+| V111 | Self-Reminder架构独立复核 | dev3 | - | - | review |
 | P386 | 63嵌套摘要计数修正 | dev | - | - | todo |
+| P387 | Agent Self-Reminder OpenSpec提案 | dev2 | - | - | wip |
 
 ## 当前里程碑
 
