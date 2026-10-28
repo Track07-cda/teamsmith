@@ -619,7 +619,7 @@
 | P386 | 63嵌套摘要计数修正 | dev | - | - | todo |
 | P387 | Agent Self-Reminder OpenSpec提案 | dev2 | - | - | review |
 | V112 | Self-Reminder提案独立评审 | dev3 | - | - | review |
-| P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | wip |
+| P388 | Agent Self-Reminder MVP实现 | dev-bob | - | - | blocked |
 
 ## 当前里程碑
 
