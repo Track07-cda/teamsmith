@@ -1980,3 +1980,11 @@ P385 最终探索 `0791c7f5c29e` 经 V111 第二轮独立复核 `543b447a642d` �
 D204 的 Standby/自动退出语义是已决产品边界，不再重议。V111 留下的三项具体设计门槛随提案强制审查：唤醒与更新 Standby 代际的线性化；同批只自动退出一次且跨重启成立；停跑 PM 仅因 Reminder 恢复且普通待办不得借通用启动提示提前执行。还需定稿单一重发权威、历史/floor、两种 Pulse 形状、工具身份和简单资源界限。
 
 影响：只允许 P387 写 `agent-self-reminder` 的 OpenSpec change artifacts 和报告。提案仍需 PM 正式评审 ACCEPTED，且实质性规格另经独立审阅后才可 Apply；本决定不授权产品实现、真实提醒、合并、推送或发布。
+
+### D206 · Self-Reminder 提案正式 ACCEPTED，允许本地任务分支 Apply（2026-10-28）
+
+P387 候选 `f9edff1a6c90c755a147089a3be4cc008baa9b2a` 经 V112 独立实质评审 `c3eb9e8bcde1` 为 ACCEPT，PM 正式评审 `docs/team/reviews/agent-self-reminder-proposal.md` 为 **ACCEPTED**。PM 独立复验 OpenSpec 20/20、规格引用/账本/diff 和一次性副本试归档；V112 另核对 13 个 MODIFIED requirements 与 45 条旧场景保留。
+
+接受的边界不被绿检掩盖：不可证明的 intent→G2→Pi 顺序保留 G2，实际唤醒在该情形可能不自动退出；缺 `flock` 的旧环境在迁移后不能修改 Standby；一个在途 unknown 批次会让后续批次等待观察或显式整批确认。C1 的无 Reminder 成本措辞由 Apply 顺手澄清。
+
+影响：P388 可由不同作者在包含该提案的本地任务分支实现，之后由非实现者独立 Verify。仍不允许 protected merge/push、live 团队状态迁移/重启、真实模型自主行为调用、真实归档或发布；这些分别需要后续授权。
