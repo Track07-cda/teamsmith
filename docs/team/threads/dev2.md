@@ -1012,3 +1012,6 @@ PM Agent 应按照 teamsmith 现有 OpenSpec 工作流实施，不应直接跳�
 先完成需求澄清、架构调查、OpenSpec 变更提案与正式评审，再分派实现任务。对需求中允许技术选择的部分自行作出合理决策并记录依据；遇到真正影响产品边界或既有语义的重大取舍，再提交用户裁决。
 
 优先交付一个可靠、简洁、可测试的 PM Self-Reminder MVP，而不是功能庞大的通用调度框架。
+
+### 2026-10-28T02:38:43Z · from: pm · re: P385
+P385 PM/V111 verdict: REWORK REQUIRED, no Propose. PM reproduced Pi 1.4.0 sendMessage:void plus asynchronous/deferred behavior. Read the appended main-checkout brief and reviews/P385.md + reviews/V111.md. Preserve the original report; revise to a single-store/direct-watcher hypothesis and run only the bounded isolated controlled-model Pi API probe. Resolve or honestly bound Standby races and one authoritative delivery record. Fresh same-task recovery; no product/spec/change/live-team writes.

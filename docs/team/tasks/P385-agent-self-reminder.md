@@ -69,3 +69,47 @@ git status --short
 ```
 
 Confirm `openspec list` still has no `agent-self-reminder` change and that the only task-authored file is the report. Commit with Conventional Commits + P385 + `Agent: dev2`, leave the branch clean, and notify PM with the recommendation and any true blocker. PM will judge the exploration; no proposal or implementation is authorized by this brief.
+
+## PM/V111 rework: single-store design and isolated Pi API feasibility (2026-10-28)
+
+PM review `docs/team/reviews/P385.md` is **REWORK REQUIRED**. Independent review V111 at `c341d96694fc` found blocking counterevidence; read it with `git show c341d96694fc:docs/team/reports/V111-dev3.md`. PM reproduced the central fact on installed Pi 1.4.0: `sendMessage` returns `void`, its internal `sendCustomMessage` is asynchronous, errors are caught separately, and delivery can be deferred during `agent_settled`. The original report's `sent = Pi accepted` and mandatory Outbox design are not accepted. **Do not start Propose.**
+
+Preserve the original report and append a dated rework section. Your previous session exceeds the model window, so this is a fresh same-task recovery: use branch `task/P385-agent-self-reminder`, inspect its existing report and `$HOME/.cache/P385/` evidence, and continue without deleting or rewriting history. The only new versioned file change allowed is `docs/team/reports/P385-dev2.md`.
+
+### Architecture corrections to work out
+
+1. Withdraw “every Reminder must cross Outbox/spool” and `sent = accepted`. Evaluate as the leading hypothesis: Pulse's lightweight tick persists a due-to-queued transition and ordering in the **single Reminder store** even while PM is stopped; existing PM recovery remains the only recovery path; PM's inbox-watch reads that durable queue and uses Pi directly. Ordinary Outbox and its `--now` behavior remain unchanged. Compare this against any materially simpler alternative, but do not keep duplicate delivery/status authorities merely for symmetry.
+2. Define one authoritative intent/unknown/positive-observation record per stable Reminder ID. Explain how it reuses watcher logic without letting store and journal independently decide resend. Cover floor compaction, long-held items, historical query/retention and atomic batch intent before any batched send. API-call return, custom-message observation, run start and completed work must have distinct names and evidence.
+3. Resolve or honestly bound Standby races at enqueue, intent and Pi's asynchronous/deferred execution. A pre-call Standby check is insufficient by itself. Any cross-process serialization must use a project-stable lock path independent of caller `TMPDIR`; do not claim a Bash/Node lock interoperates without evidence. If Pi cannot expose a suitable boundary, give the exact interleaving and semantic alternatives rather than promising cancellation or exactly-once delivery.
+4. Address V111's tool/diagnostic/history findings: no unregister API, exposure-hidden and per-call identity checks, doctor's inability to query another session's in-memory tools, and bounded terminal/audit history rather than only a cap on active reminders. Re-estimate implementation only after this simplification; do not invent a smaller number without evidence.
+
+### Bounded isolated Pi API probe
+
+Before calling the revised design feasible, run a small **scratch-only** probe against installed Pi 1.4.0 using an existing controlled/fake-model harness where possible. Keep all scripts, fixture sessions, logs and raw event traces under `$HOME/.cache/P385/probe/`. Do not install dependencies, spend external model tokens, modify Pi or teamsmith, or touch the live team/Pulse/Outbox. A fixture-owned private tmux/socket is allowed only inside the existing harness; never message another real team window.
+
+The probe must answer with timestamped raw evidence:
+
+- For `pi.sendMessage(..., { triggerTurn: true })`, what is the observed order of the API call returning, custom-message/session observation, `before_agent_start` with `messageType: custom`, and the controlled backend receiving a model request? Use a unique Reminder-like ID in `customType`/`details` and test whether public event data can correlate that exact ID.
+- Run idle, genuinely busy, and a call made from `agent_settled`/deferred execution. Show which cases merely queue/defer and which actually start a run. `ctx.isIdle()` alone is not proof of acceptance.
+- Use the controlled backend to make the post-message model request fail. Distinguish message acceptance/run start from model failure; record whether any public extension event exposes asynchronous send failure. A synchronous `try/catch` around a void call is not evidence.
+- Determine whether `before_agent_start` or another documented public event provides a usable positive boundary for a Reminder ID, what it proves, and what remains unknowable if it never arrives. This probe does not authorize changing Standby or implementing a watcher; it supplies evidence for the report's design choice.
+
+If a needed observation cannot be produced with the public API, record that limitation and the smallest real counterexample. Do not patch Pi internals to manufacture a success and do not turn the probe into a Reminder implementation.
+
+### Revised report and acceptance
+
+The appended report must lead with the revised recommendation, cite probe raw logs/commands and V111 findings, state exactly which Standby/delivery guarantees are now proven or still open, and give a PM decision: ready for Propose, or blocked on a genuine user/Pi semantic boundary. Preserve AC-01…AC-12 coverage and the no-second-runtime/no-high-frequency-full-patrol constraints. If a user trade-off is necessary, present concrete alternatives with a recommendation; otherwise do not manufacture a question.
+
+Run from the final report candidate and record actual output:
+
+```bash
+openspec validate --all --strict
+openspec list   # still no agent-self-reminder change
+bash skills/teamsmith/tests/spec-refs.sh --check
+bash skills/teamsmith/tests/ledger-ban.sh --names-file "$(git rev-parse --path-format=absolute --git-common-dir)/../.pi/team/forbidden-names.txt"
+bash skills/teamsmith/tests/section-select.sh --paths docs/team/reports/P385-dev2.md
+git diff --check
+git status --short
+```
+
+Confirm the only versioned task-authored change remains the P385 report. Commit with Conventional Commits + P385 + `Agent: dev2`, leave the branch clean, and notify PM with the revised recommendation and probe evidence. PM and independent review must close the rework before any Propose brief; implementation remains unauthorized.
