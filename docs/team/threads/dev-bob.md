@@ -306,3 +306,6 @@ P383 unblocked: I authorize skills/teamsmith/tests/panel-b3-pty-mouse.py for thi
 
 ### 2026-10-28T02:42:47Z · from: pm · re: P383
 V110 FAIL on candidate 7504879: wheel/frame/product behavior passed independently, but the three new waits lack the existing verification contract's counted rounds, per-round progress and <n>/<cap> plus last-reading exhaustion attribution. PM accepted the report in reviews/P383.md and appended a focused rework contract to the main-checkout P383 brief. Preserve the behavior fix and 25s deadline; add falsifiable readiness/barrier/close accounting checks and rerun the named evidence. Fresh same-task recovery, then focused V110 re-review.
+
+### 2026-10-28T13:25:40Z · from: pm · re: P388
+P388 baseline panel blocker: PM confirmed both the missing OutboxListBlock fields and that team_panel_outbox_list_json also omits the actual impediment data. I appended authorization to the main-checkout P388 brief for one separate small commit: add the optional types, emit real data via the existing team_panel_impediments_json/single scan for empty and nonempty queues, and add a behavioral outbox_list regression. Do not make a type-only fix or skip tsc. Continue the remaining P388 controlled integration evidence after this independent baseline fix.

@@ -71,3 +71,16 @@ git diff --check
 Run the accepted controlled-integration and relevant existing smoke selections with exact commands/output, then run the full `bash skills/teamsmith/tests/smoke.sh` once on the settled tree as the delivery gate, in the background with complete host-side logs and an unchanged tree throughout. If panel source changed, first run `bun install --frozen-lockfile && bash build.sh` in `skills/teamsmith/scripts/panel` and prove the committed bundle reproduces. Any red, timeout or unrun required scenario must be reported honestly and fixed or returned as BLOCKED; never convert it to SKIP/pass or delete coverage to make the gate green.
 
 The report leads with what is implemented and what remains unverified. Include exact commits, affected files, commands/counts, controlled Pi/runtime identities, race/fault evidence, full-gate fingerprint/result, config/panel surfaces, and explicit not-run real-model/protected-migration/public-CI boundaries. Notify PM only after the final tree/report are committed and clean. A different agent will independently Verify; no merge, push, real archive or release.
+
+## Baseline panel defect authorized as a separate small fix (2026-10-28)
+
+Your recovered-session report identified a real baseline blocker at `f9edff1a`: `panel/src/layout.ts` consumes `OutboxListBlock.impeded/impediments`, while `panel/src/types.ts` omits them and pinned `tsc` reports four TS2339 errors. PM also checked the producer: `team_panel_outbox_list_json` in `cmd-watch.sh` does not emit those fields either. A type-only edit would therefore hide a real data/display gap.
+
+Because this blocks P388's required panel build/typecheck and touches files you already own, fix it in **one separate, small P388 commit**, not as a Reminder spec change:
+
+- Add the optional `impeded` / `impediments` fields to `OutboxListBlock` using the existing `Impediment` type.
+- Make `team_panel_outbox_list_json` emit the real fields by reusing the existing `team_panel_impediments_json` / single impediment-scan implementation, for both empty and nonempty queues. Do not add a second scanner, read a pane, drain the queue, or fabricate zero when diagnostics are unavailable.
+- Add a focused behavioral regression proving `team __panel-data --block outbox_list` carries the actual count/reason/entry and the queue-list rendering can consume it; preserve unavailable diagnostics and existing entries. A bundle/typecheck-only green is not enough.
+- Rebuild the committed bundle with the pinned toolchain and rerun pinned `tsc`, the relevant delivery-truth/panel selections and the later full gate. Keep the baseline before-evidence and the new after-evidence in the P388 report as an independent baseline fix.
+
+No canonical-spec or broader Outbox behavior change is authorized. If the producer cannot reuse the existing scan without changing semantics, stop with evidence rather than expanding the scope.
