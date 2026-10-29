@@ -39,3 +39,9 @@ Nonblocking boundaries also remain: FAST §6 proves printed prompt assertions bu
 P391 must append the proposal correction, then V113 performs a focused second review. The formal verdict stays REWORK REQUIRED until that evidence is accepted. No live init/reload, Apply, protected merge/push or release is authorized.
 
 Additional live evidence (2026-10-29): the user's screenshot shows PM writing a temporary reply file, posting it, then repeating the answer. v0.3.4 and current PM template still show `--stdin < <file>`, while protocol §4b already supports a one-command heredoc. A heredoc alignment was considered, but the user then explicitly chose a different final workflow in D213: marker-based normal Pi replies captured by an extension, with the marker removed from Pulse and Pi display. **That heredoc correction is withdrawn and must not be Applied.** P391's key-reply portion waits for P394; its formal review remains REWORK REQUIRED.
+
+## V113 second round — six corrections accepted, D213 integration still blocking
+
+V113 second-round report `4ae2700d6bee` accepts every first-round correction on P391 candidate `07266efaf617`: valid reference destinations, migration.md ownership and bootstrap correction, real flip section commands, complete capacity destination, all required SKILL preservation surfaces, and real-project ledger names. It independently reproduced change/all validation 20/20, disposable archive 19/19, spec-refs/ledger/diff checks and 0/24 Apply tasks.
+
+PM adopts that result. The overall proposal remains **NEEDS-CHANGES / blocked**, now solely because its PM reply edit points and acceptance still describe the superseded explicit-post workflow. D213/D214 require marker-based Pi capture with final cleanup and an accepted transient stream flash. P391 may not Apply until the P394 replacement proposal is accepted and these instruction/delta tasks are reconciled. No heredoc substitute is allowed.
